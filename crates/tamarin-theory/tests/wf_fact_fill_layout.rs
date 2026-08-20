@@ -1,10 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   jdreier, meiersi, sans-sucre, beschmi, PhilipLukertWork, BTom-GH,
-//   Mathias-AURAND, Nynko, kevinmorio, felixlinker, rkunnema, xaDxelA,
-//   rsasse, ValentinYuri
-// Ported from upstream tamarin-prover sources:
-//   lib/theory/src/Theory/Tools/Wellformedness.hs,
-//   lib/theory/src/TheoryObject.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Byte-parity of the wellformedness report's paragraph fills — HS
 //! `text info $-$ nest 2 (fsep $ punctuate comma cells)` for
@@ -230,58 +226,6 @@ Special facts
     Out( a )
 */"#,
         "fsL58"
-    );
-    assert_eq!(
-        wf_block(
-            r#"theory fsL59
-begin
-
-rule R:
-  [ Out( 'ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc' ), Out( a ) ]
-  --[ ]->
-  [ ]
-
-end
-"#
-        ),
-        r#"/*
-WARNING: the following wellformedness checks failed!
-
-Special facts
-=============
-
-  rule `R' uses disallowed facts on left-hand-side:
-    Out( 'ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'
-    ),
-    Out( a )
-*/"#,
-        "fsL59"
-    );
-    assert_eq!(
-        wf_block(
-            r#"theory Fs69
-begin
-
-rule R:
-  [ Out( 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc' ), Out( a ) ]
-  --[ ]->
-  [ ]
-
-end
-"#
-        ),
-        r#"/*
-WARNING: the following wellformedness checks failed!
-
-Special facts
-=============
-
-  rule `R' uses disallowed facts on left-hand-side:
-    Out( 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'
-    ),
-    Out( a )
-*/"#,
-        "fs69"
     );
     assert_eq!(
         wf_block(

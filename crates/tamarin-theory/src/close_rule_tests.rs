@@ -1,6 +1,11 @@
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
+
 use super::*;
-use crate::fact::Fact;
+use crate::fact::{apply_subst_fact, Fact};
 use tamarin_parser::{Formula, DUMMY_LOCATION};
+use tamarin_term::subst::apply_vterm;
 use tamarin_term::vterm::var_term;
 
 /// KCL07's signature (examples/csf26-ac/fast/KCL07.spthy) plus a Seed
@@ -178,8 +183,8 @@ fn lemma_guarded_is_invariant_to_hs_ltrue_conjunct() {
         typ: None,
         location: DUMMY_LOCATION,
     };
-    let gen_at = Formula {
-        kind: p::FormulaKind::Atom(p::Atom::Action(
+    let gen_at = Formula::atom(
+        p::Atom::Action(
             p::Fact {
                 persistent: false,
                 name: "Generated_0".to_string(),
@@ -188,11 +193,11 @@ fn lemma_guarded_is_invariant_to_hs_ltrue_conjunct() {
                 location: DUMMY_LOCATION,
             },
             p::Term::Var(x.clone()),
-        )),
-        location: DUMMY_LOCATION,
-    };
-    let k_at = Formula {
-        kind: p::FormulaKind::Atom(p::Atom::Action(
+        ),
+        DUMMY_LOCATION,
+    );
+    let k_at = Formula::atom(
+        p::Atom::Action(
             p::Fact {
                 persistent: false,
                 name: "K".to_string(),
@@ -201,35 +206,22 @@ fn lemma_guarded_is_invariant_to_hs_ltrue_conjunct() {
                 location: DUMMY_LOCATION,
             },
             p::Term::Var(y.clone()),
-        )),
-        location: DUMMY_LOCATION,
-    };
+        ),
+        DUMMY_LOCATION,
+    );
     let binders = vec![v, x, y];
-    let ours = Formula {
-        kind: p::FormulaKind::Not(Box::new(Formula {
-            kind: p::FormulaKind::Exists(
-                binders.clone(),
-                Box::new(Formula {
-                    kind: p::FormulaKind::And(Box::new(gen_at.clone()), Box::new(k_at.clone())),
-                    location: DUMMY_LOCATION,
-                }),
-            ),
-            location: DUMMY_LOCATION,
-        })),
-        location: DUMMY_LOCATION,
-    };
+    let ours = Formula::not(
+        Formula::exists(
+            binders.clone(),
+            gen_at.clone().and(k_at.clone()),
+            DUMMY_LOCATION,
+        ),
+        DUMMY_LOCATION,
+    );
     let hs_shaped = Formula::not(
         Formula::exists(
             binders,
-            Formula::r#true(DUMMY_LOCATION)
-                .and(Formula {
-                    kind: gen_at.kind.clone(),
-                    location: DUMMY_LOCATION,
-                })
-                .and(Formula {
-                    kind: k_at.kind.clone(),
-                    location: DUMMY_LOCATION,
-                }),
+            Formula::r#true(DUMMY_LOCATION).and(gen_at).and(k_at),
             DUMMY_LOCATION,
         ),
         DUMMY_LOCATION,
@@ -285,26 +277,19 @@ fn structural_lemma_closes_dotted_and_cross_sort_binders() {
     assert!(rule.rule.new_vars.is_empty(), "HS newRules passes []");
 }
 
-/// Locate the Maude binary (`MAUDE_PATH` env override, else the common
-/// install paths).  `None` skips the Maude-backed test below.
-fn maude_bin_path() -> Option<String> {
-    std::env::var("MAUDE_PATH").ok().or_else(|| {
-        for c in ["/usr/local/bin/maude", "maude"] {
-            if std::path::Path::new(c).exists() {
-                return Some(c.to_string());
-            }
-        }
-        None
-    })
-}
-
 /// End-to-end verdict pin through the structural path: on the KCL07
 /// signature the ef3f0468 oracle reports `Function xorr has the NDC
 /// property.` on stderr, so `check_close_intr_rule` must tag `xorr`
 /// and NDC-mark every xorr destructor rule in the returned cache.
 #[test]
 fn check_close_intr_rule_tags_xorr_on_kcl07_signature() {
-    let Some(mp) = maude_bin_path() else { return };
+    // The resolution policy lives in [`crate::test_maude::maude_path`]. That
+    // policy covers a `MAUDE_PATH` that points nowhere, and it covers a
+    // machine with no maude at all. This test calls that one helper so that a
+    // private copy of the policy here cannot drift from it.
+    let Some(mp) = crate::test_maude::maude_path() else {
+        return;
+    };
     let (_guard, sig, _probe) = xorr_parent();
     let maude = tamarin_term::maude_proc::MaudeHandle::start(&mp, sig)
         .expect("maude starts on the KCL07 signature");

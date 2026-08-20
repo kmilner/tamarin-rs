@@ -1,24 +1,20 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, and other minor contributors (see upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   src/Web/Handler.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Integration tests for the STUBBED routes.
 //!
 //! This file mixes:
 //!   - Live route assertions (compared against Haskell fixtures)
-//!   - Genuine stubs that still return {alert} or 501
+//!   - Genuine stubs, which answer a 200 `{alert}` envelope
 //!
 //! Coverage matrix:
-//!   - GET  /thy/trace/<idx>/intdot/*path                 LIVE — HTML shell page
 //!   - GET  /thy/trace/<idx>/graph/*path                  LIVE — SVG or DOT fallback
-//!   - GET  /thy/trace/<idx>/interactive-graph-def/*path  LIVE — text/plain DOT
 //!   - POST /thy/trace/<idx>/edit/*path                   ({alert})
 //!   - GET  /thy/trace/<idx>/del/path/*path               LIVE — returns {redirect}
 //!   - GET  /thy/trace/<idx>/next/<section>/*path         LIVE — text/plain URL
 //!   - GET  /thy/trace/<idx>/prev/<section>/*path         LIVE — text/plain URL
-//!   - POST /thy/trace/<idx>/get_and_append/<name>        ({alert})
-//!   - GET  /thy/trace/<idx>/autoproveAll/...             LIVE — returns {redirect}
+//!   - POST /thy/trace/<idx>/get_and_append/<name>        LIVE — returns {alert}
 //!   - GET  /thy/trace/<idx>/verify/lemma/<x>             LIVE — returns {html,title}
 //!   - GET  /thy/trace/<idx>/verify/proof/<x>             LIVE — returns {redirect}
 //!   - GET  /thy/equiv/<idx>/...                          ({alert}; Haskell: 404 HTML — needs ClosedDiffTheory)
@@ -30,33 +26,11 @@ use common::*;
 // ---------------------------------------------------------------------
 // Graph routes — LIVE (DOT pipeline).
 //
-// `intdot` returns the HS `intdotLayout` HTML shell page (a
-// `<dot-graph-viz>` pointing at the `json` graph route);
-// `interactive-graph-def` returns the raw DOT source; `graph` returns
-// SVG (or DOT fallback when `dot` is missing).  `intdot` is
-// system-agnostic (HS `getInteractiveDotGraphR` only does `withTheory`),
-// so it returns the shell for any valid idx+path.
+// `graph` renders the system's SVG through `dot`.  It falls back to the DOT
+// source when the binary is missing.  `routes_graph.rs` compares the other two
+// routes against the oracle's bytes.  Those two routes are `intdot`'s shell
+// page and `interactive-graph-def`'s DOT document.
 // ---------------------------------------------------------------------
-#[tokio::test]
-async fn test_intdot_returns_html_shell() {
-    let s = start_server_with_theory("issue193.spthy").await;
-    let res = s
-        .client
-        .get(s.url("/thy/trace/1/intdot/lemma/debug"))
-        .send()
-        .await
-        .expect("send");
-    assert_eq!(res.status(), 200);
-    let body = res.text().await.expect("text");
-    // HS returns the shell page regardless of whether the path has a
-    // system — the `<dot-graph-viz>` fetches the DOT lazily.
-    assert!(
-        body.contains("<dot-graph-viz"),
-        "intdot must return the HTML shell; got: {}",
-        &body[..body.len().min(200)]
-    );
-}
-
 #[tokio::test]
 async fn test_graph_returns_image_or_dot() {
     // A proof node — the paths `thyPathSystem` draws.  A lemma / help / rules
@@ -69,35 +43,29 @@ async fn test_graph_returns_image_or_dot() {
         .await
         .expect("send");
     assert_eq!(res.status(), 200);
-    let ct = res.headers().get("content-type").cloned();
+    let ct = content_type(&res);
     let body = res.text().await.expect("text");
-    let ct_str = ct.as_ref().map(|v| v.to_str().unwrap_or("")).unwrap_or("");
-    // Accept either SVG or DOT fallback — both are valid responses.
-    assert!(
-        ct_str.starts_with("image/svg+xml") || ct_str.starts_with("text/plain"),
-        "unexpected content-type: {:?}",
-        ct_str,
-    );
-    assert!(
-        body.contains("<svg") || body.contains("digraph"),
-        "graph response should contain svg or digraph; got {}",
-        &body[..body.len().min(200)],
-    );
-}
-
-#[tokio::test]
-async fn test_interactive_graph_def_returns_dot_text() {
-    // As above: a proof node is what this route draws.
-    let s = start_server_with_theory("issue193.spthy").await;
-    let res = s
-        .client
-        .get(s.url("/thy/trace/1/interactive-graph-def/proof/debug"))
-        .send()
-        .await
-        .expect("send");
-    assert_eq!(res.status(), 200);
-    let body = res.text().await.expect("text");
-    assert!(body.contains("digraph"));
+    // The presence of `dot` decides which of the two answers the server sends.
+    // The content type and the body must therefore agree.  `image/svg+xml`
+    // carries dot's SVG.  The fallback carries the DOT document that
+    // `interactive-graph-def` also serves.
+    if ct.starts_with("image/svg+xml") {
+        assert!(
+            body.contains("<svg") && body.contains("</svg>"),
+            "svg content type must carry dot's rendered image; got {}",
+            &body[..body.len().min(200)],
+        );
+    } else {
+        assert!(
+            ct.starts_with("text/plain"),
+            "the only other answer is the DOT fallback; got CT={ct}",
+        );
+        assert!(
+            body.starts_with("digraph \"G\" {\n"),
+            "the fallback must be the DOT document itself; got {}",
+            &body[..body.len().min(200)],
+        );
+    }
 }
 
 #[tokio::test]
@@ -118,7 +86,7 @@ async fn test_edit_stub_returns_alert() {
 // ---------------------------------------------------------------------
 // /del/path/lemma/<name> — LIVE
 //
-// Haskell `getDeleteStepR` (`src/Web/Handler.hs:1587-1604`) uses
+// Haskell `getDeleteStepR` (`src/Web/Handler.hs:1681-1698`) uses
 // `modifyTheory` → allocates a new idx and returns
 // `{redirect: /thy/trace/<newIdx>/overview/lemma/<name>}`.
 // We mirror the SHAPE (new idx + same lemma path); Haskell's exact
@@ -172,13 +140,11 @@ async fn test_del_path_unsupported_returns_alert() {
         .await
         .expect("send");
     assert_eq!(res.status(), 200);
-    let v: serde_json::Value = res.json().await.expect("decode");
-    assert_eq!(json_top_keys(&v), one_key_set("alert"));
-    let alert = v.get("alert").and_then(|x| x.as_str()).unwrap_or("");
-    assert!(
-        alert.contains("delete the given theory path"),
-        "alert text should mention deletion failure; got {:?}",
-        alert,
+    // This is the oracle's body, byte for byte.  The alert allocates no
+    // theory, so its bytes do not depend on the capture session's history.
+    assert_eq!(
+        res.text().await.expect("text"),
+        haskell_capture("del_path_bad.json")
     );
 }
 
@@ -207,12 +173,7 @@ async fn test_next_main_lemma_matches_haskell() {
     assert!(ct.starts_with("text/plain"), "got CT={}", ct);
     let body = res.text().await.expect("read body");
 
-    let captured = haskell_capture("next.txt");
-    assert_eq!(
-        body.trim_end(),
-        captured.trim_end(),
-        "next/main/lemma must match Haskell verbatim"
-    );
+    assert_eq!(body, haskell_capture("next.txt"));
 }
 
 #[tokio::test]
@@ -227,19 +188,14 @@ async fn test_prev_main_lemma_matches_haskell() {
         .expect("send");
     assert_eq!(res.status(), 200);
     let body = res.text().await.expect("read body");
-    let captured = haskell_capture("prev.txt");
-    assert_eq!(
-        body.trim_end(),
-        captured.trim_end(),
-        "prev/main/lemma must match Haskell verbatim"
-    );
+    assert_eq!(body, haskell_capture("prev.txt"));
 }
 
 #[tokio::test]
 async fn test_next_normal_help_to_message_matches_haskell() {
     // Haskell `next "normal" = nextThyPath` walks Help → Message.
     // Other section strings (like `main`) are no-ops per
-    // `next _ = const id` (`src/Web/Handler.hs:1452-1455`).  This
+    // `next _ = const id` (`src/Web/Handler.hs:1546-1549`).  This
     // test exercises the `normal` arm; the `main` no-op is covered
     // by `test_next_main_help_is_noop_matches_haskell`.
     let s = start_server_with_theory("issue193.spthy").await;
@@ -270,50 +226,7 @@ async fn test_next_main_help_is_noop_matches_haskell() {
         .expect("send");
     assert_eq!(res.status(), 200);
     let body = res.text().await.expect("read");
-    let captured = haskell_capture("next_help.txt");
-    assert_eq!(
-        body.trim_end(),
-        captured.trim_end(),
-        "next/main/help must match Haskell verbatim (no-op when section not normal/smart)"
-    );
-}
-
-// ---------------------------------------------------------------------
-// /autoproveAll/<extractor>/<bound>/*path — LIVE
-// ---------------------------------------------------------------------
-#[tokio::test]
-async fn test_autoprove_all_returns_redirect_envelope() {
-    let s = start_server_with_theory("issue193.spthy").await;
-    let res = s
-        .client
-        .get(s.url("/thy/trace/1/autoproveAll/idfs/0/proof/debug"))
-        .send()
-        .await
-        .expect("send");
-    assert_eq!(res.status(), 200);
-
-    let v: serde_json::Value = res.json().await.expect("decode");
-    let rust_keys = json_top_keys(&v);
-    let haskell_keys = haskell_capture_keys("autoprove_all.json");
-    assert_eq!(
-        rust_keys, haskell_keys,
-        "autoproveAll envelope keys must match Haskell; rust={:?}, haskell={:?}",
-        rust_keys, haskell_keys
-    );
-
-    let redir = v.get("redirect").and_then(|t| t.as_str()).unwrap_or("");
-    // SHAPE check: /thy/trace/<NEW>/overview/proof/<lastLemma>/...
-    // For issue193 the only lemma is `debug`.
-    assert!(
-        redir.contains("/overview/proof/debug"),
-        "autoproveAll redirect should point at debug proof view; got {:?}",
-        redir
-    );
-    assert!(
-        !redir.starts_with("/thy/trace/1/"),
-        "autoproveAll must allocate a fresh idx; got {:?}",
-        redir
-    );
+    assert_eq!(body, haskell_capture("next_help.txt"));
 }
 
 // ---------------------------------------------------------------------
@@ -333,19 +246,14 @@ async fn test_verify_lemma_returns_html_envelope() {
         .await
         .expect("send");
     assert_eq!(res.status(), 200);
-    let v: serde_json::Value = res.json().await.expect("decode");
-
-    let rust_keys = json_top_keys(&v);
-    let haskell_keys = haskell_capture_keys("verify.json");
-    assert_eq!(
-        rust_keys, haskell_keys,
-        "verify/lemma keys must match Haskell {{html,title}}; rust={:?}, haskell={:?}",
-        rust_keys, haskell_keys
+    // `verify/lemma` falls through to the help view.  The envelope is
+    // therefore the oracle's `main/help` envelope.  The test compares the
+    // complete envelope, except for the header's load stamp.
+    assert_page_matches_capture(
+        &res.text().await.expect("text"),
+        "verify.json",
+        "issue193.spthy",
     );
-    let title = v.get("title").and_then(|t| t.as_str()).unwrap_or("");
-    let html = v.get("html").and_then(|t| t.as_str()).unwrap_or("");
-    assert!(!title.is_empty());
-    assert!(!html.is_empty());
 }
 
 #[tokio::test]
@@ -358,32 +266,24 @@ async fn test_verify_proof_returns_redirect_envelope() {
         .await
         .expect("send");
     assert_eq!(res.status(), 200);
-    let v: serde_json::Value = res.json().await.expect("decode");
+    // This is the oracle's body, byte for byte.  `editProof` uses
+    // `replaceTheory` at the same idx, so the redirect names theory 1.  There
+    // is no fresh allocation, and these bytes are therefore independent of the
+    // capture session's history.
     assert_eq!(
-        json_top_keys(&v),
-        one_key_set("redirect"),
-        "verify/proof must be {{redirect}} per Haskell editProof success path",
-    );
-    let redir = v.get("redirect").and_then(|t| t.as_str()).unwrap_or("");
-    assert!(
-        redir.contains("/overview/proof/debug"),
-        "verify redirect should point at the proof view; got {:?}",
-        redir
-    );
-    // Haskell's editProof uses replaceTheory at the SAME idx (no
-    // fresh allocation).  Match exactly.
-    assert!(
-        redir.starts_with("/thy/trace/1/"),
-        "verify/proof must reuse the source idx (replaceTheory); got {:?}",
-        redir
+        res.text().await.expect("text"),
+        haskell_capture("verify_proof.json")
     );
 }
 
 #[tokio::test]
 async fn test_equiv_overview_stub_returns_alert() {
-    // Diff theories aren't yet ported (needs `ClosedDiffTheory`).
-    // Haskell returns 404 HTML; we return {alert} — still a
-    // documented divergence to align when diff support lands.
+    // The port does not support diff theories, because that needs
+    // `ClosedDiffTheory`.  Haskell answers its Not Found page.  The capture of
+    // that page is `haskell-responses/equiv_overview.json`, and it is the one
+    // capture that no assertion can consume.  This port answers `{alert}`
+    // instead.  That is a documented divergence, to align when diff support
+    // lands.
     let s = start_server_with_theory("issue193.spthy").await;
     let res = s
         .client

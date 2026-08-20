@@ -1,10 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   rkunnema, meiersi, jdreier, charlie-j, ValentinYuri, racoucho1u,
-//   and other minor contributors (see upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/theory/src/Theory/Text/Parser/Macro.hs,
-//   lib/theory/src/Theory/Text/Parser/Term.hs,
-//   lib/theory/src/Theory/Text/Parser/Token.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Parity for `macro`'s three rejections.
 //!
@@ -12,45 +8,67 @@
 //! ways: a GHC `error` on a `reservedBuiltins` name (line 34-35), a GHC
 //! `error` on two equal arguments (line 37-38), and a parsec `fail` on a name
 //! the signature already carries — `userDefinedFunSyms` (user +
-//! enabled-theory symbols) or `macroNames` (line 43-44).  The port models the
-//! two `error`s with the non-backtrackable [`ParseError::Abort`] and the
-//! `fail` with [`ParseError::Custom`], both carrying HS's message verbatim.
+//! enabled-theory symbols) or `macroNames` (line 43-44).  The port reports
+//! them as [`ParseError::UsedReservedBuiltin`],
+//! [`ParseError::DuplicateMacroArg`] and
+//! [`ParseError::ConflictingDeclarations`] (context
+//! [`ParseContext::Macro`]) — the variants carry the offending spans, not
+//! HS's message bytes (those end-to-end renderings are pinned in
+//! `crates/tamarin-prover/tests/macro_conflicts.rs`).
 //!
-//! Every message below is the one the pinned Haskell oracle (Git revision
-//! ef3f0468) prints for the same theory, minus the `HasCallStack` block GHC
-//! appends to an `error` and the `tamarin-prover: ` prefix its top-level
-//! handler adds; every accepted theory loads with exit 0 there.
-//!
-//! The `fail` positions are pinned too — they are the ones the oracle's frame
-//! carries.  The oracle ALSO prints the expectation set parsec had
-//! accumulated when the `fail` fired (the macro body's trailing `.`-index
-//! attempt plus every enabled operator level's label); the port's `Custom`
-//! variant carries a message only, so that set is no longer observable and no
-//! longer pinned.
+//! WHICH theories are rejected (and which load) is pinned to the Haskell
+//! oracle (Git revision ef3f0468); every accepted theory loads with exit 0
+//! there.  Positions are the port's own: the conflict spans the macro
+//! declaration, the duplicate-argument rejection spans the two argument
+//! sites.
 
+use tamarin_parser::parser::ParseContext;
 use tamarin_parser::{parse_theory, ParseError};
 
-/// The message of the [`ParseError::Custom`] `src` fails with — HS's
-/// `fail`ed string — together with its `(line, column)`.
+/// The `(name, first_at, second_at)` of the macro-context
+/// [`ParseError::ConflictingDeclarations`] `src` fails with, positions
+/// flattened to `(line, col)`.  `first_at` is `None` when the earlier owner
+/// has no declaration site: a seeded symbol, or one of the `NoEq` symbols an
+/// equational theory opens.  A symbol a `builtins:` entry merged points back
+/// at that entry's name.
 #[track_caller]
-fn custom(src: &str) -> (String, u32, u32) {
+fn conflict(src: &str) -> (String, Option<(u32, u32)>, (u32, u32)) {
     let e = parse_theory(src, &[]).expect_err("the probes below must all fail to parse");
-    let at = *e.location();
-    let ParseError::Custom { message, .. } = e else {
-        panic!("expected a `fail`-style error, got {e:?}");
+    let ParseError::ConflictingDeclarations {
+        name,
+        context: ParseContext::Macro,
+        first_at,
+        second_at,
+    } = e
+    else {
+        panic!("expected the macro-conflict variant, got {e:?}");
     };
-    (message, at.line, at.col)
+    (
+        name,
+        first_at.map(|at| (at.line, at.col)),
+        (second_at.line, second_at.col),
+    )
 }
 
-/// The message of the [`ParseError::Abort`] `src` aborts with — the string
-/// HS's GHC `error` carries.
+/// The `(arg, first_at, second_at)` of the [`ParseError::DuplicateMacroArg`]
+/// `src` fails with — `arg` is the second occurrence's rendered variable,
+/// the positions the two argument sites, flattened to `(line, col)`.
 #[track_caller]
-fn abort(src: &str) -> String {
+fn dup_arg(src: &str) -> (String, (u32, u32), (u32, u32)) {
     let e = parse_theory(src, &[]).expect_err("the probes below must all fail to parse");
-    match e {
-        ParseError::Abort { message, .. } => message,
-        other => panic!("{src:?} failed as a recoverable error, not an abort: {other:?}"),
-    }
+    let ParseError::DuplicateMacroArg {
+        arg,
+        first_at,
+        second_at,
+    } = e
+    else {
+        panic!("{src:?}: expected the duplicate-argument rejection, got {e:?}");
+    };
+    (
+        arg,
+        (first_at.line, first_at.col),
+        (second_at.line, second_at.col),
+    )
 }
 
 /// A theory whose single item is `macros: <decl>`.
@@ -58,30 +76,46 @@ fn macro_theory(decl: &str) -> String {
     format!("theory MacroT begin\nmacros: {decl}\nend\n")
 }
 
-/// Each of the nine `reservedBuiltins` (Term.hs:74-86) aborts the parse with
-/// the `error` of Macro.hs:34-35 — `show` on the `ByteString` name puts a
-/// second pair of quotes inside the backticks.
+/// The `f` of the macro-context [`ParseError::UsedReservedBuiltin`] `src`
+/// fails with.
+#[track_caller]
+fn reserved(src: &str) -> String {
+    let e = parse_theory(src, &[]).expect_err("the probes below must all fail to parse");
+    let ParseError::UsedReservedBuiltin {
+        f,
+        context: ParseContext::Macro,
+        ..
+    } = e
+    else {
+        panic!("{src:?}: expected the reserved-builtin rejection, got {e:?}");
+    };
+    f
+}
+
+/// Each of the nine `reservedBuiltins` (Parser/Term.hs:74-85) is rejected —
+/// HS's GHC `error` of Parser/Macro.hs:34-35, the port's
+/// [`ParseError::UsedReservedBuiltin`] naming the macro.
 #[test]
-fn reserved_builtin_macro_name_aborts() {
+fn reserved_builtin_macro_name_is_rejected() {
     for name in [
         "mun", "one", "exp", "mult", "inv", "pmult", "em", "zero", "xor",
     ] {
         assert_eq!(
-            abort(&macro_theory(&format!("{name}(x) = x"))),
-            format!("`\"{name}\"` is a reserved function name for builtins."),
+            reserved(&macro_theory(&format!("{name}(x) = x"))),
+            name,
             "case {name}"
         );
     }
 }
 
-/// The reserved-name abort fires right after the identifier, so it beats
+/// The reserved-name rejection fires right after the identifier, so it beats
 /// everything the rest of the macro could raise: a malformed argument list, a
-/// missing body, the duplicate-argument abort of Macro.hs:37-38, and the
-/// name conflict the owning builtin's own symbol would otherwise produce
-/// (Macro.hs:43-44).  It does not depend on any builtin being enabled.
+/// missing body, the duplicate-argument rejection of
+/// Theory/Text/Parser/Macro.hs:37-38, and the name conflict the owning
+/// builtin's own symbol would otherwise produce (Parser/Macro.hs:43-44).  It
+/// does not depend on any builtin being enabled.
 #[test]
-fn reserved_name_abort_precedes_every_later_macro_failure() {
-    let expected = "`\"exp\"` is a reserved function name for builtins.";
+fn reserved_name_rejection_precedes_every_later_macro_failure() {
     for src in [
         macro_theory("exp("),
         macro_theory("exp(x, x) = x"),
@@ -90,29 +124,33 @@ fn reserved_name_abort_precedes_every_later_macro_failure() {
         "theory MacroT begin\nbuiltins: diffie-hellman\nmacros: exp(x) = x\nend\n".to_string(),
         "theory MacroT begin\nbuiltins: bilinear-pairing\nmacros: exp(x) = x\nend\n".to_string(),
     ] {
-        assert_eq!(abort(&src), expected, "case {src:?}");
+        assert_eq!(reserved(&src), "exp", "case {src:?}");
     }
 }
 
-/// Two arguments that are the same full `LVar` abort with the `error` of
-/// Macro.hs:37-38.  The check sits between the argument list and the `=`, so
-/// it fires without a body, and a prefixless binder is `LSortMsg`
-/// (Token.hs:424-433) — `m(x, x:msg)` is a duplicate.
+/// Two arguments that are the same full `LVar` are rejected — HS's `error`
+/// of Parser/Macro.hs:37-38, the port's [`ParseError::DuplicateMacroArg`]
+/// labelling both argument sites.  The check sits between the argument list
+/// and the `=`, so it fires without a body, and a prefixless binder is
+/// `LSortMsg` (Token.hs:424-433) — `m(x, x:msg)` is a duplicate.
 #[test]
-fn duplicate_macro_arguments_abort() {
-    let expected = "\"m\" have two arguments with the same name.";
-    for decl in [
-        "m(x, x) = x",
-        "m(x, x:msg) = x",
-        "m(x:msg, x) = x",
-        "m(x:pub, x:pub) = x",
-        "m(x.1, y, x.1) = x",
+fn duplicate_macro_arguments_are_rejected() {
+    for (decl, arg, first, second) in [
+        ("m(x, x) = x", "x", (2, 11), (2, 14)),
+        ("m(x, x:msg) = x", "x:msg", (2, 11), (2, 14)),
+        ("m(x:msg, x) = x", "x", (2, 11), (2, 18)),
+        ("m(x:pub, x:pub) = x", "x:pub", (2, 11), (2, 18)),
+        ("m(x.1, y, x.1) = x", "x.1", (2, 11), (2, 19)),
         // `commaSep`'s trailing comma is consumed before the check.
-        "m(x, x,) = x",
+        ("m(x, x,) = x", "x", (2, 11), (2, 14)),
         // No `=` and no body: the arguments are all HS has parsed.
-        "m(x, x)",
+        ("m(x, x)", "x", (2, 11), (2, 14)),
     ] {
-        assert_eq!(abort(&macro_theory(decl)), expected, "case {decl}");
+        assert_eq!(
+            dup_arg(&macro_theory(decl)),
+            (arg.to_string(), first, second),
+            "case {decl}"
+        );
     }
 }
 
@@ -149,34 +187,56 @@ fn parsec_failures_are_not_aborts() {
     }
 }
 
+/// A macro with no body raises no rejection of its own: `term` claims the
+/// next identifier as the body variable, and that identifier is the theory's
+/// `end`.  The item alternation then runs out of input, so the failure is the
+/// missing-`end` one at EOF rather than anything `macro` reports.
+#[test]
+fn a_bodyless_macro_swallows_end_and_dies_at_the_item_position() {
+    let e = parse_theory("theory MacroCF begin\nmacros: m(x) = \nend\n", &[])
+        .expect_err("must fail to parse");
+    let ParseError::UnexpectedKeyword {
+        found,
+        expected,
+        at,
+    } = &e
+    else {
+        panic!("expected the missing-keyword variant, got {e:?}");
+    };
+    assert_eq!(*found, None);
+    assert_eq!(expected, &["end".to_string()]);
+    assert_eq!((at.line, at.col), (4, 1));
+}
+
 /// A macro named after a user-declared function conflicts
 /// (`userDefinedFunSyms` via `stFunSyms`, Term/Maude/Signature.hs:163-164).
 #[test]
 fn macro_conflicts_with_user_function() {
     assert_eq!(
-        custom("theory MacroCF begin\nfunctions: f/1\nmacros: f(x) = x\nend\n"),
-        ("Conflicting name for macro f".to_string(), 4, 1)
+        conflict("theory MacroCF begin\nfunctions: f/1\nmacros: f(x) = x\nend\n"),
+        ("f".to_string(), Some((2, 12)), (3, 9))
     );
 }
 
 /// A macro named after an EARLIER macro conflicts: each parsed macro is
-/// registered under `macroNames` before the next one parses (Macro.hs:46).
+/// registered under `macroNames` before the next one parses (Parser/Macro.hs:46).
 #[test]
 fn macro_conflicts_with_earlier_macro() {
     assert_eq!(
-        custom("theory MacroCM begin\nmacros: m(x) = x, m(y) = y\nend\n"),
-        ("Conflicting name for macro m".to_string(), 3, 1)
+        conflict("theory MacroCM begin\nmacros: m(x) = x, m(y) = y\nend\n"),
+        ("m".to_string(), Some((2, 9)), (2, 19))
     );
 }
 
 /// A macro named after an enabled builtin's symbol conflicts: `builtins:
 /// hashing` merges `h/1` into `stFunSyms` (Term/Builtin/Signature.hs:75-77),
-/// which `userDefinedFunSyms` includes.
+/// which `userDefinedFunSyms` includes.  `first_at` points at the `builtins:`
+/// entry that merged the symbol.
 #[test]
 fn macro_conflicts_with_enabled_builtin_symbol() {
     assert_eq!(
-        custom("theory MacroCH begin\nbuiltins: hashing\nmacros: h(x) = x\nend\n"),
-        ("Conflicting name for macro h".to_string(), 4, 1)
+        conflict("theory MacroCH begin\nbuiltins: hashing\nmacros: h(x) = x\nend\n"),
+        ("h".to_string(), Some((2, 11)), (3, 9))
     );
 }
 
@@ -186,8 +246,8 @@ fn macro_conflicts_with_enabled_builtin_symbol() {
 #[test]
 fn macro_conflicts_with_seeded_pair_symbol() {
     assert_eq!(
-        custom("theory MacroCP begin\nmacros: fst(x) = x\nend\n"),
-        ("Conflicting name for macro fst".to_string(), 3, 1)
+        conflict("theory MacroCP begin\nmacros: fst(x) = x\nend\n"),
+        ("fst".to_string(), None, (2, 9))
     );
 }
 
@@ -197,8 +257,10 @@ fn macro_conflicts_with_seeded_pair_symbol() {
 #[test]
 fn macro_conflicts_with_dh_theory_symbol() {
     assert_eq!(
-        custom("theory MacroCD begin\nbuiltins: diffie-hellman\nmacros: DH_neutral(x) = x\nend\n"),
-        ("Conflicting name for macro DH_neutral".to_string(), 4, 1)
+        conflict(
+            "theory MacroCD begin\nbuiltins: diffie-hellman\nmacros: DH_neutral(x) = x\nend\n"
+        ),
+        ("DH_neutral".to_string(), None, (3, 9))
     );
     // Without the builtin the name is free (oracle loads the theory, exit 0).
     parse_theory(
@@ -213,10 +275,10 @@ fn macro_conflicts_with_dh_theory_symbol() {
 #[test]
 fn macro_conflicts_under_bilinear_pairing() {
     assert_eq!(
-        custom(
+        conflict(
             "theory MacroCBP begin\nbuiltins: bilinear-pairing\nmacros: DH_neutral(x) = x\nend\n"
         ),
-        ("Conflicting name for macro DH_neutral".to_string(), 4, 1)
+        ("DH_neutral".to_string(), None, (3, 9))
     );
 }
 
@@ -225,8 +287,8 @@ fn macro_conflicts_under_bilinear_pairing() {
 #[test]
 fn macro_conflicts_with_nat_theory_symbol() {
     assert_eq!(
-        custom("theory MacroCN begin\nbuiltins: natural-numbers\nmacros: tone(x) = x\nend\n"),
-        ("Conflicting name for macro tone".to_string(), 4, 1)
+        conflict("theory MacroCN begin\nbuiltins: natural-numbers\nmacros: tone(x) = x\nend\n"),
+        ("tone".to_string(), None, (3, 9))
     );
     parse_theory("theory MacroCNC begin\nmacros: tone(x) = x\nend\n", &[])
         .expect("tone macro parses without natural-numbers");
@@ -237,8 +299,8 @@ fn macro_conflicts_with_nat_theory_symbol() {
 #[test]
 fn macro_conflicts_with_user_ac_symbol() {
     assert_eq!(
-        custom("theory MacroCA begin\nfunctions: f/2 [AC]\nmacros: f(x) = x\nend\n"),
-        ("Conflicting name for macro f".to_string(), 4, 1)
+        conflict("theory MacroCA begin\nfunctions: f/2 [AC]\nmacros: f(x) = x\nend\n"),
+        ("f".to_string(), Some((2, 12)), (3, 9))
     );
 }
 
@@ -246,8 +308,8 @@ fn macro_conflicts_with_user_ac_symbol() {
 #[test]
 fn a_second_ac_symbol_does_not_shadow_the_conflict() {
     assert_eq!(
-        custom("theory MacroCA2 begin\nfunctions: f/2 [AC], g/2 [AC]\nmacros: f(x) = x\nend\n"),
-        ("Conflicting name for macro f".to_string(), 4, 1)
+        conflict("theory MacroCA2 begin\nfunctions: f/2 [AC], g/2 [AC]\nmacros: f(x) = x\nend\n"),
+        ("f".to_string(), Some((2, 12)), (3, 9))
     );
 }
 
@@ -255,84 +317,70 @@ fn a_second_ac_symbol_does_not_shadow_the_conflict() {
 /// open — `multiset`, `xor`, and all of them at once.
 #[test]
 fn enabled_theory_levels_do_not_change_the_conflict() {
-    for (src, line) in [
-        (
-            "theory MacroCMS begin\nbuiltins: multiset\nfunctions: f/1\nmacros: f(x) = x\nend\n",
-            5,
-        ),
-        (
-            "theory MacroCX begin\nbuiltins: xor\nfunctions: f/1\nmacros: f(x) = x\nend\n",
-            5,
-        ),
-        (
-            "theory MacroCALL begin\n\
-             builtins: diffie-hellman, xor, multiset, natural-numbers\n\
-             functions: f/1\nmacros: f(x) = x\nend\n",
-            5,
-        ),
+    for src in [
+        "theory MacroCMS begin\nbuiltins: multiset\nfunctions: f/1\nmacros: f(x) = x\nend\n",
+        "theory MacroCX begin\nbuiltins: xor\nfunctions: f/1\nmacros: f(x) = x\nend\n",
+        "theory MacroCALL begin\n\
+         builtins: diffie-hellman, xor, multiset, natural-numbers\n\
+         functions: f/1\nmacros: f(x) = x\nend\n",
     ] {
         assert_eq!(
-            custom(src),
-            ("Conflicting name for macro f".to_string(), line, 1),
+            conflict(src),
+            ("f".to_string(), Some((3, 12)), (4, 9)),
             "case {src:?}"
         );
     }
 }
 
-/// The conflict message and its position do not depend on the macro body's
-/// last lexeme: an application's `)` (Term.hs:94), a nullary symbol matched
-/// by `nullaryApp`'s `symbol` (Term.hs:158-163), a sort-suffixed variable
+/// The conflict and its span do not depend on the macro body's last lexeme:
+/// an application's `)` (Theory/Text/Parser/Term.hs:94), a nullary symbol matched
+/// by `nullaryApp`'s `symbol` (Theory/Text/Parser/Term.hs:158-163), a sort-suffixed variable
 /// (Token.hs:413-418), a public-name literal, an explicit `.1` index, and a
-/// grouping `(x)` all report at the item position after the macro list.
+/// grouping `(x)` all report the same macro-declaration span.
 #[test]
 fn body_shape_does_not_change_the_conflict() {
     assert_eq!(
-        custom("theory T begin\nbuiltins: hashing\nfunctions: f/1\nmacros: f(x) = h(x)\nend\n"),
-        ("Conflicting name for macro f".to_string(), 5, 1)
+        conflict("theory T begin\nbuiltins: hashing\nfunctions: f/1\nmacros: f(x) = h(x)\nend\n"),
+        ("f".to_string(), Some((3, 12)), (4, 9))
     );
     assert_eq!(
-        custom("theory T begin\nfunctions: c/0, f/1\nmacros: f(x) = c\nend\n"),
-        ("Conflicting name for macro f".to_string(), 4, 1)
+        conflict("theory T begin\nfunctions: c/0, f/1\nmacros: f(x) = c\nend\n"),
+        ("f".to_string(), Some((2, 17)), (3, 9))
     );
     for decl in ["f(x) = x:pub", "f(x) = 'a'", "f(x) = x.1", "f(x) = (x)"] {
         assert_eq!(
-            custom(&format!(
+            conflict(&format!(
                 "theory T begin\nfunctions: f/1\nmacros: {decl}\nend\n"
             )),
-            ("Conflicting name for macro f".to_string(), 4, 1),
+            ("f".to_string(), Some((2, 12)), (3, 9)),
             "case {decl}"
         );
     }
 }
 
 /// The same for bodies whose last lexeme IS a variable's identifier: a
-/// `$`-prefixed variable, `binaryAlgApp`'s trailing `arg2` (Term.hs:109-121),
+/// `$`-prefixed variable, `binaryAlgApp`'s trailing `arg2` (Theory/Text/Parser/Term.hs:109-121),
 /// and a variable separated from the next token by a comment.
 #[test]
 fn a_variable_final_body_reports_the_same_conflict() {
-    for thy in [
-        "theory T begin\nfunctions: f/1\nmacros: f(x) = $y\nend\n",
-        "theory T begin\nfunctions: g/2, f/1\nmacros: f(x) = g{x}x\nend\n",
-        "theory T begin\nfunctions: f/1\nmacros: f(x) = x /* trailing */\nend\n",
+    for (thy, first) in [
+        (
+            "theory T begin\nfunctions: f/1\nmacros: f(x) = $y\nend\n",
+            (2, 12),
+        ),
+        (
+            "theory T begin\nfunctions: g/2, f/1\nmacros: f(x) = g{x}x\nend\n",
+            (2, 17),
+        ),
+        (
+            "theory T begin\nfunctions: f/1\nmacros: f(x) = x /* trailing */\nend\n",
+            (2, 12),
+        ),
     ] {
         assert_eq!(
-            custom(thy),
-            ("Conflicting name for macro f".to_string(), 4, 1),
+            conflict(thy),
+            ("f".to_string(), Some(first), (3, 9)),
             "case {thy:?}"
         );
-    }
-}
-
-/// Non-conflicting macros still parse (oracle loads all of these, exit 0):
-/// a fresh name, and the arguments HS's `nub` over full `LVar`s
-/// (name+sort+index, Macro.hs:37) keeps apart by sort or index.
-#[test]
-fn non_conflicting_macros_parse() {
-    for src in [
-        "theory MacroOK begin\nmacros: m(x) = x\nend\n",
-        "theory MacroBS begin\nmacros: m(x, x:pub) = x\nend\n",
-        "theory MacroBI begin\nmacros: m(x.1, x) = x\nend\n",
-    ] {
-        parse_theory(src, &[]).unwrap_or_else(|e| panic!("{src:?} failed: {e}"));
     }
 }

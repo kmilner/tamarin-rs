@@ -22,7 +22,6 @@ tamarin-accountability = { workspace = true }
 axum = { version = "0.7", default-features = false, features = ["http1", "json", "tokio", "matched-path", "tracing", "form", "query", "multipart"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "net", "sync", "time", "fs"] }
 tower-http = { version = "0.5", features = ["fs", "trace", "cors"] }
-tower = { version = "0.4", features = ["util"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 parking_lot = "0.12"

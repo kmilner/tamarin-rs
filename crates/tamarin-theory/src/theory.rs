@@ -1,12 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   rkunnema, jdreier, meiersi, and other minor contributors (see
-//   upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/theory/src/Items/LemmaItem.hs, lib/theory/src/Rule.hs,
-//   lib/theory/src/Theory/Constraint/Solver/Reduction.hs,
-//   lib/theory/src/Theory/Model/Rule.hs,
-//   lib/theory/src/Theory/Proof.hs,
-//   lib/theory/src/Theory/Sapic/Term.hs, lib/theory/src/TheoryObject.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Top-level `Theory` data type — port of `TheoryObject.Theory` and
 //! `Items.TheoryItem.TheoryItem`.
@@ -44,8 +38,9 @@ pub struct OpenProtoRule {
     /// represents the un-narrowed E-rule; when this disjunction is
     /// non-empty, `solve_rule_constraints` adds it as a SplitG goal
     /// in the eq-store so the variant choice is enumerated lazily
-    /// per Haskell's `solveRuleConstraints` (Reduction.hs:766-774).
-    /// Mirrors `RuleACConstrs = Disj LNSubstVFresh` (Rule.hs:925-934, see line 926).
+    /// per Haskell's `solveRuleConstraints` (Reduction.hs:789-797).
+    /// Mirrors `RuleACConstrs = Disj LNSubstVFresh`
+    /// (Theory/Model/Rule.hs:1009).
     pub variant_substs: Vec<tamarin_term::subst_vfresh::LNSubstVFresh>,
     /// The abstracted form of `rule` for the SplitG path (Haskell
     /// `variantsProtoRule` returns this in the `ProtoRuleAC`'s
@@ -67,6 +62,26 @@ pub struct OpenProtoRule {
     /// populated by `ProofContext::new`'s `annotate_loop_breakers`
     /// pass.
     pub loop_breakers: Vec<crate::rule::PremIdx>,
+    /// This rule is a product of the `--auto-sources` variant unfold
+    /// (`unfoldRuleVariants`, lib/theory/src/Rule.hs:63-79): `rule` holds one
+    /// AC variant named `<orig>___VARIANT_<i>` while HS's `cprRuleE` half
+    /// keeps the ORIGINAL rule, so the two names differ and
+    /// `equalUpToTerms` (Theory/Model/Rule.hs:960-968) is False on the name
+    /// alone — `openProtoRule` (lib/theory/src/Rule.hs:52-59) then always
+    /// yields its non-empty `[ruAC]` branch for such a rule.  The renderer
+    /// reads this flag where it mirrors that branch choice
+    /// (`pretty_theory::rule_open_ac_nonempty`).
+    pub unfolded_variant: bool,
+    /// HS's `cprRuleE` half, kept only when the `--auto-sources` close made
+    /// `rule` diverge from it: `addActionClosedProtoRule` adds AUTO actions
+    /// to `cprRuleAC` only (lib/theory/src/Rule.hs:95-99) and
+    /// `unfoldRuleVariants` carries the ORIGINAL rule as every variant's
+    /// `cprRuleE` (lib/theory/src/Rule.hs:63-79, see line 76).  Consumers of
+    /// HS's `getProtoRuleEs` (`S.toList . S.fromList . map oprRuleE`,
+    /// ClosedTheory.hs:87-89) — partial evaluation — must read this half:
+    /// it carries no AUTO actions, and the Set round-trip collapses the
+    /// per-variant duplicates.  `None` whenever `rule` still IS the E-half.
+    pub rule_e: Option<Box<ProtoRuleE>>,
 }
 
 impl OpenProtoRule {
@@ -76,6 +91,8 @@ impl OpenProtoRule {
             variant_substs: Vec::new(),
             abstracted_rule: None,
             loop_breakers: Vec::new(),
+            unfolded_variant: false,
+            rule_e: None,
         }
     }
 
@@ -304,10 +321,7 @@ pub struct Options {
     /// Consulted by the load paths that run the once-per-theory
     /// `close_rule::check_close_intr_rule` pass.
     pub deduction_chain_check: bool,
-    /// Auto-generated `default` heuristic used to discharge proofs when
-    /// no explicit heuristic is supplied.
-    pub default_heuristic: Option<String>,
-    /// Lemmas the user requested to prove via `--prove=NAME`.
+    /// HS `_lemmasToProve`: lemma names the user requested via `--prove=NAME`.
     pub lemmas_to_prove: Vec<String>,
 }
 
@@ -322,7 +336,6 @@ impl Default for Options {
             asynchronous_channels: false,
             compress_events: false,
             deduction_chain_check: true,
-            default_heuristic: None,
             lemmas_to_prove: Vec::new(),
         }
     }
@@ -529,27 +542,135 @@ impl<R, R2, P, P2> DiffTheory<R, R2, P, P2> {
 mod tests {
     use super::*;
 
+    /// A theory over simple stand-in type parameters.  The accessors are
+    /// generic over `R`/`P`/`S`.  The item payloads therefore do not have to
+    /// be real rules or proofs.
+    type TestTheory = Theory<i32, (), char>;
+
+    fn lemma(name: &str) -> Lemma<()> {
+        Lemma {
+            name: name.to_string(),
+            modulo: None,
+            attributes: Vec::new(),
+            trace_quantifier: TraceQuantifier::AllTraces,
+            formula: tamarin_parser::ast::Formula::r#true(tamarin_parser::DUMMY_LOCATION),
+            proof: (),
+            plaintext: String::new(),
+        }
+    }
+
+    fn restriction(name: &str) -> OpenRestriction {
+        OpenRestriction::new(
+            name,
+            tamarin_parser::ast::Formula::r#true(tamarin_parser::DUMMY_LOCATION),
+        )
+    }
+
+    fn lnmacro(name: &str) -> LNMacro {
+        LNMacro {
+            name: name.to_string(),
+            args: Vec::new(),
+            body: tamarin_term::vterm::var_term(LVar::new("x", tamarin_term::lterm::LSort::Msg, 0)),
+        }
+    }
+
+    /// Every accessor is a `filter_map` over one `TheoryItem` arm.  A
+    /// copy-pasted arm makes one accessor return another accessor's items,
+    /// and nothing reports the mistake.  The `items` vector below holds one
+    /// item of each kind and keeps their order.  Each accessor must therefore
+    /// return exactly its own items.  `macros()` must also flatten its item's
+    /// list and not count the item.
     #[test]
-    fn empty_theory_has_no_items() {
-        let s = SignaturePure::empty(false);
-        let t: Theory = Theory::new("Foo", s);
+    fn accessors_select_only_their_own_item_kind() {
+        let mut t: TestTheory = Theory::new("Foo", SignaturePure::empty(false));
         assert_eq!(t.name, "Foo");
         assert_eq!(t.items.len(), 0);
         assert_eq!(t.rules().count(), 0);
-        assert_eq!(t.lemmas().count(), 0);
+
+        t.add_item(TheoryItem::Rule(7))
+            .add_item(TheoryItem::Lemma(lemma("L")))
+            .add_item(TheoryItem::Restriction(restriction("R")))
+            .add_item(TheoryItem::Macros(vec![lnmacro("m1"), lnmacro("m2")]))
+            .add_item(TheoryItem::Translation('t'));
+
+        assert_eq!(t.rules().copied().collect::<Vec<_>>(), vec![7]);
+        assert_eq!(
+            t.lemmas().map(|l| l.name.as_str()).collect::<Vec<_>>(),
+            vec!["L"]
+        );
+        assert_eq!(
+            t.restrictions()
+                .map(|r| r.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["R"]
+        );
+        assert_eq!(t.predicates().count(), 0);
+        assert_eq!(
+            t.macros().map(|m| m.name.as_str()).collect::<Vec<_>>(),
+            vec!["m1", "m2"],
+            "`macros()` flattens the item's macro list"
+        );
+        assert_eq!(t.lookup_lemma("L").map(|l| l.name.as_str()), Some("L"));
+        assert_eq!(t.lookup_lemma("R"), None, "a restriction is not a lemma");
+        assert_eq!(
+            t.lookup_restriction("R").map(|r| r.name.as_str()),
+            Some("R")
+        );
+        assert_eq!(t.lookup_restriction("L"), None);
+    }
+
+    /// HS `addLemma` and `addRestriction` (TheoryObject.hs:453-465) refuse a
+    /// name that is already present, and they report the refusal.  `addRules`
+    /// has no such check.  It always appends.
+    #[test]
+    fn add_lemma_and_add_restriction_refuse_a_duplicate_name() {
+        let mut t: TestTheory = Theory::new("Foo", SignaturePure::empty(false));
+        assert!(t.add_lemma(lemma("L")));
+        assert!(!t.add_lemma(lemma("L")), "second `L` must be refused");
+        assert!(t.add_lemma(lemma("L2")));
+        assert!(t.add_restriction(restriction("R")));
+        assert!(!t.add_restriction(restriction("R")));
+
+        // `add_lemmas` and `add_restrictions` fold the singular form.  They
+        // skip the entries whose names clash.  They add the new entries in
+        // order.
+        t.add_lemmas([lemma("L"), lemma("L3")]);
+        t.add_restrictions([restriction("R"), restriction("R2")]);
+        assert_eq!(
+            t.lemmas().map(|l| l.name.as_str()).collect::<Vec<_>>(),
+            vec!["L", "L2", "L3"]
+        );
+        assert_eq!(
+            t.restrictions()
+                .map(|r| r.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["R", "R2"]
+        );
+
+        // `add_rules` removes no duplicates.  It adds both copies after the
+        // items that are already present.
+        t.add_rules([7, 7]);
+        assert_eq!(t.rules().copied().collect::<Vec<_>>(), vec![7, 7]);
     }
 
     #[test]
-    fn options_default_is_all_false() {
+    fn options_default_flags() {
         let o = Options::default();
         assert!(!o.trans_progress);
         assert!(!o.compress_events);
+        // `--no-ndc` opts out; the check is on by default.
+        assert!(o.deduction_chain_check);
         assert!(o.lemmas_to_prove.is_empty());
     }
 
+    /// An unproven lemma carries no proof text and no parsed tree.  The
+    /// pretty-printer reads `raw`.  The web and JSON paths read `tree`.  A
+    /// placeholder in either field makes the code print a proof that the
+    /// prover never found.
     #[test]
     fn proof_skeleton_unproven_is_empty() {
         let p = ProofSkeleton::unproven();
         assert!(p.raw.is_empty());
+        assert!(p.tree.is_none());
     }
 }

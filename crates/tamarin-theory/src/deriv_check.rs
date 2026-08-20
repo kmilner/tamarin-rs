@@ -1,21 +1,11 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   jdreier, meiersi, kevinmorio, rkunnema, arcz, Azurios-git,
-//   PhilipLukertWork, yavivanov, beschmi, rsasse, racoucho1u,
-//   Hong-Thai, Nynko, ValentinYuri, felixlinker, BTom-GH, and other
-//   minor contributors (see upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/term/src/Term/LTerm.hs, lib/theory/src/Prover.hs,
-//   lib/theory/src/Rule.hs, lib/theory/src/Theory/Model/Fact.hs,
-//   lib/theory/src/Theory/Model/Rule.hs,
-//   lib/theory/src/Theory/Text/Parser/Term.hs,
-//   lib/theory/src/Theory/Tools/IntruderRules.hs,
-//   lib/theory/src/Theory/Tools/MessageDerivationChecks.hs,
-//   src/Main/TheoryLoader.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Dynamic message-derivation check.
 //!
-//! Mirrors HS's `Theory.Tools.MessageDerivationChecks.checkVariableDeducability`
-//! (lib/theory/src/Theory/Tools/MessageDerivationChecks.hs:35-50).  For each
+//! Mirrors HS's `Theory.Tools.MessageDerivationChecks.checkVariableDeducibility`
+//! (lib/theory/src/Theory/Tools/MessageDerivationChecks.hs:36-50).  For each
 //! protocol rule, asks the prover: "given that the intruder has access to all
 //! of this rule's premise terms, can it derive each of the rule's free
 //! variables?"  When a variable IS bound by some premise fact but cannot
@@ -23,7 +13,7 @@
 //! is unreachable / requires private knowledge), HS flags it as an
 //! "unintended pattern match".
 //!
-//! How HS does it (verbatim — see `MessageDerivationChecks.hs:35-50,181-188`):
+//! How HS does it (see `MessageDerivationChecks.hs:36-50,170-188`):
 //!
 //!   For each rule R indexed by idx:
 //!     1. Drop ALL rules/lemmas/restrictions from the theory, carrying over
@@ -37,9 +27,11 @@
 //!        variant that gets no construction/destruction rule, leaving the term
 //!        opaque exactly as the private application would be.  See
 //!        `synthesise_probe_theory` for the full citation.
-//!     2. Add a single generated rule:
-//!          rule Generated_<idx>:
-//!            [ Fr(~v1), Fr(~v2), ... ]                  // each free var of R
+//!     2. Add a single generated rule (HS names it `StandRule (show idx)`):
+//!          rule <idx>:
+//!            [ Fr(v1), Fr(v2), ... ]                     // each free var of R,
+//!                                                        // keeping its own sort
+//!                                                        // (only nat → fresh)
 //!            --[ Generated_<idx>(v1, v2, ...) ]->        // sole action
 //!            [ Out(t1), Out(t2), ... ]                   // R's premise terms
 //!     3. Add one exists-trace lemma per free var v.  HS's `landFormula`
@@ -105,13 +97,13 @@ pub fn check_message_derivation(
     // (lib/theory/src/Theory/Text/Parser/Term.hs::nullaryApp); RS
     // does the same resolution at elaborate-time, but the deriv-check
     // walks the un-elaborated parser AST so it needs an explicit
-    // deny-list.  See `MessageDerivationChecks.hs:35-47, see line 39` (HS uses
+    // deny-list.  See `MessageDerivationChecks.hs:36-50, see line 40` (HS uses
     // `originalRules = map (applyMacroInProtoRule ...)`).
-    let nullary_funs = collect_all_nullary_fun_names(parsed);
+    let nullary_funs = crate::elaborate::nullary_fun_names(&parsed.items);
 
     // Theory-level `macros:` declarations.  HS expands these into every
     // protocol rule via `applyMacroInProtoRule (theoryMacros thy)`
-    // (MessageDerivationChecks.hs:35-47, see line 39) BEFORE collecting free vars / building
+    // (MessageDerivationChecks.hs:36-50, see line 40) BEFORE collecting free vars / building
     // the probe.  The caller hands us the RAW parsed theory (theory macros
     // un-expanded), so we must expand them here ourselves; otherwise a rule
     // whose body uses a macro that introduces fresh vars (e.g.
@@ -140,7 +132,7 @@ pub fn check_message_derivation(
             continue;
         }
         // HS applies theory macros before the deriv check
-        // (MessageDerivationChecks.hs:35-47, see line 39 -- `originalRules = map
+        // (MessageDerivationChecks.hs:36-50, see line 40 -- `originalRules = map
         // (applyMacroInProtoRule (theoryMacros thy)) $ theoryRules thy`).
         // Mirror that here: first expand theory-level `macros:` into the
         // rule's premise/action/conclusion facts (the only parts the deriv
@@ -201,10 +193,10 @@ pub fn check_message_derivation(
         // to RS's `NodeStatus::Solved` for exists-trace lemmas.
         //
         // HS-faithful structure: `closeTheoryWithMaude` is called ONCE
-        // per probe theory (HS `MessageDerivationChecks.hs:40-44`
+        // per probe theory (HS `MessageDerivationChecks.hs:41-43`
         // calls `closeTheoryWithMaude` once per modified theory; then
         // `proveTheory` walks the N lemmas reusing the closed theory's
-        // sources/cache — `Prover.hs:260-279`).  `prove_probe` mirrors
+        // sources/cache — `CloseRule.hs:144-155`).  `prove_probe` mirrors
         // this: build the `ProofContext` + run `ensure_saturated()` ONCE
         // per probe, then iterate the per-variable lemmas reusing it.
         let outcome = match prove_probe(
@@ -223,16 +215,16 @@ pub fn check_message_derivation(
         // Fold the probe's debug-only timing/count into the running totals.
         total_prove += outcome.prove_time;
         var_count += outcome.var_count;
-        let undecidable = outcome.undecidable;
         if dbg_timing {
             eprintln!(
-                "[deriv-timing] rule={} synth={:.3}s nvars={} total_prove={:.3}s",
+                "[deriv-timing] rule={} synth={:.3}s nvars={} prove={:.3}s",
                 rule.name,
                 synth_dt.as_secs_f64(),
                 free_vars.len(),
-                total_prove.as_secs_f64(),
+                outcome.prove_time.as_secs_f64(),
             );
         }
+        let undecidable = outcome.undecidable;
         if !undecidable.is_empty() {
             per_rule.push((rule.name.clone(), undecidable));
         }
@@ -253,7 +245,7 @@ pub fn check_message_derivation(
 /// Expand theory-level `macros:` into a rule's premise / action / conclusion
 /// facts and its `let { }` block — the parts the deriv check inspects.  Mirror
 /// of HS `applyMacroInProtoRule (theoryMacros thy)`
-/// (MessageDerivationChecks.hs:35-47, see line 39).
+/// (MessageDerivationChecks.hs:36-50, see line 40).
 fn apply_theory_macros_to_rule(rule: &p::Rule, macros: &[p::Macro]) -> p::Rule {
     let mut r = rule.clone();
     for f in &mut r.premises {
@@ -281,35 +273,6 @@ fn protocol_rules(thy: &p::Theory) -> impl Iterator<Item = &p::Rule> {
     })
 }
 
-/// HS-faithful counterpart to `nullaryApp` (parser-state-driven
-/// 0-arity function-symbol lookup, `Theory/Text/Parser/Term.hs`).
-/// Combines (a) user-declared `functions: name/0` and (b) the 0-arity
-/// constants any enabled `builtins:` declaration brings in (signing's
-/// `true`, DH's `1`, etc.).
-fn collect_all_nullary_fun_names(thy: &p::Theory) -> std::collections::BTreeSet<String> {
-    let mut out: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-    for it in &thy.items {
-        match it {
-            p::TheoryItem::Functions(decls) => {
-                for d in decls {
-                    if d.arg_types.is_empty() {
-                        out.insert(d.name.clone());
-                    }
-                }
-            }
-            p::TheoryItem::Builtins(names) => {
-                for n in names {
-                    for c in crate::elaborate::builtin_nullary_constants(n.kind) {
-                        out.insert(c);
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-    out
-}
-
 /// All variables that appear anywhere in a rule's premise / action /
 /// conclusion terms, deduped and returned sorted by HS `LVar` Ord
 /// (idx, then sort, then name) — matching HS `frees`/`S.toList`, which
@@ -318,11 +281,11 @@ fn collect_all_nullary_fun_names(thy: &p::Theory) -> std::collections::BTreeSet<
 /// return.)  EXCLUDING:
 ///   - `Pub`-sort vars (`$x`) — RS drops these up-front as a sound
 ///     optimization.  HS keeps them in `freeVars` (its `freesInThyRules`,
-///     MessageDerivationChecks.hs:168-172, filters out only `LSortNode`,
+///     MessageDerivationChecks.hs:157-161, filters out only `LSortNode`,
 ///     not `LSortPub`) and generates a `KU($x)` lemma for each; but the
 ///     intruder knows every public name, so those lemmas are ALWAYS
 ///     TraceFound and the pub var is never reported.  (`deleteGlobals`,
-///     MessageDerivationChecks.hs:190-191, does drop Pub vars, but only
+///     MessageDerivationChecks.hs:179-180, does drop Pub vars, but only
 ///     inside the generated rule/action, not from the reported var list.)
 ///   - `Node`-sort vars (`#i`) — timepoints, not message vars.  HS's
 ///     `freesInThyRules` filters these out (the only sort it drops).
@@ -385,7 +348,7 @@ fn collect_rule_free_vars(
         }
     }
     // HS-faithful: sort by (idx, sort, name) to match HS's `LVar Ord`
-    // (LTerm.hs:522-524: `compare x3 y3 <> compare x2 y2 <> compare x1 y1`
+    // (LTerm.hs:545-548: `compare x3 y3 <> compare x2 y2 <> compare x1 y1`
     //  where x3=idx, x2=sort, x1=name).  HS uses `frees . L.get oprRuleE` →
     // `S.toList` which returns elements in ascending LVar Ord.
     out.sort_by(|a, b| {
@@ -412,7 +375,7 @@ fn sort_ord(s: &p::SortHint) -> u8 {
 }
 
 /// HS `lvarToLnterm`: retype an LSortNat var to LSortFresh; otherwise keep
-/// the var's sort unchanged (MessageDerivationChecks.hs:216-218).
+/// the var's sort unchanged (Theory/Model/Fact.hs:331-333).
 fn nat_to_fresh_var(v: &p::VarSpec) -> p::VarSpec {
     let mut nv = v.clone();
     if matches!(
@@ -491,7 +454,7 @@ fn collect_term_vars(t: &p::Term, out: &mut Vec<p::VarSpec>) {
 ///     <copy of original signature: builtins, functions, equations, macros>
 ///
 ///     rule Probe_<idx>:
-///       [ Fr(~v) for each free Fresh-sort var ]
+///       [ Fr(v) for each free var, keeping its sort (only nat → fresh) ]
 ///       --[ Generated_<idx>(v1, v2, ...) ]->
 ///       [ Out(t) for each premise term in R ]
 ///
@@ -499,9 +462,8 @@ fn collect_term_vars(t: &p::Term, out: &mut Vec<p::VarSpec>) {
 ///       "Ex v1 v2 ... #t0 #t1. Generated_<idx>(...) @ #t0 & KU(v) @ #t1"
 /// ```
 ///
-/// ...one per free var...  (two distinct timepoints; the knowledge
-/// predicate is `KU`, not `K` — consistent with the module header
-/// and the inline comment in the body.)
+/// ...one per free var, each with two distinct timepoints and the
+/// intruder-knowledge predicate `KU` (not `K`).
 // (name,sort,idx)->probe-var rename map; keyed lookup only;
 // std kept (byte-inert) — iteration order never reaches output.
 #[allow(clippy::disallowed_types)]
@@ -522,21 +484,24 @@ fn synthesise_probe_theory(
     // HS keeps the maude signature PRIVATE for the deriv-check probe.  Two HS
     // operations look like they make symbols public, but neither affects the
     // verdict:
-    //   * `makeFunsPublic` (MessageDerivationChecks.hs:35-47, see line 43,100-101) is just
+    //   * `makeFunsPublic` (MessageDerivationChecks.hs:36-50, see line 46; definition at
+    //     MessageDerivationChecks.hs:104-105) is just
     //     `L.set thySignature (toSignaturePure sig)` — it sets the OPEN theory's
     //     *pure* signature, which `closeTheoryWithMaude sig ...`
-    //     (MessageDerivationChecks.hs:35-47, see line 41, Prover.hs:171-178) immediately
+    //     (MessageDerivationChecks.hs:36-50, see line 42, CloseRule.hs:56-64) immediately
     //     OVERWRITES with the ORIGINAL `SignatureWithMaude sig` (the 5th field
     //     of the `Theory` record).  Intruder-rule generation runs off that
-    //     original maude signature (`closeRuleCache ... sig ...`, Rule.hs:144),
+    //     original maude signature (`closeRuleCache ... sig ...`,
+    //     CloseRule.hs:391-402, called at CloseRule.hs:70),
     //     so destructor/constructor rules see the symbols as Private exactly as
     //     in the real theory.  `makeFunsPublic` is a misnomer that touches only
     //     pretty/storage state, never the verdict.
-    //   * `replacePrivate` (MessageDerivationChecks.hs:35-47, see line 46,94-98) rewrites a
+    //   * `replacePrivate` (MessageDerivationChecks.hs:36-50, see line 49; definition at
+    //     MessageDerivationChecks.hs:97-102) rewrites a
     //     private NoEq head on the Out terms to a Public-headed variant of the
     //     SAME name/arity.  That variant is never inserted into `stFunSyms`/
     //     `stRules`, so it gets no construction rule (constructionRules iterates
-    //     `stFunSyms`, IntruderRules.hs:217-219) and no destruction rule (stRules
+    //     `stFunSyms`, IntruderRules.hs:218-221) and no destruction rule (stRules
     //     is keyed on the original private symbol; the variant matches nothing).
     //     The intruder can coerce the whole opaque application KD→KU but cannot
     //     peel a sub-variable out of it — behaviorally identical to leaving the
@@ -561,7 +526,7 @@ fn synthesise_probe_theory(
             _ => {}
         }
     }
-    // HS `generateRule` (MessageDerivationChecks.hs:181-182) keeps each free
+    // HS `generateRule` (MessageDerivationChecks.hs:170-171) keeps each free
     // var's ORIGINAL sort: premises = `freesToFresh . deleteGlobals` and
     // `freesToFresh = map (freshFact . lvarToLnterm)` where `lvarToLnterm`
     // only retypes LSortNat → LSortFresh (everything else stays as-is).
@@ -613,7 +578,7 @@ fn synthesise_probe_theory(
         })
         .collect();
     // HS `generateAction vars idx = protoFact Persistent ("Generated_" ++
-    // show idx) (...)` (MessageDerivationChecks.hs:184-185, see line 185) — the Generated fact
+    // show idx) (...)` (MessageDerivationChecks.hs:173-174, see line 174) — the Generated fact
     // is Persistent.  For a ProtoFact the multiplicity rides in the tag, and
     // both the probe rule's action and the lemma's action atom are built from
     // this same `action`, so they stay mutually consistent.  Match HS exactly.
@@ -655,7 +620,7 @@ fn synthesise_probe_theory(
     probe.items.push(p::TheoryItem::Rule(probe_rule));
 
     // Build one lemma per free var.  HS's `landFormula` gives each
-    // conjoined fact its OWN timepoint (MessageDerivationChecks.hs:202-203):
+    // conjoined fact its OWN timepoint (MessageDerivationChecks.hs:186-188):
     //   `Generated_<idx>(...) @ #t0  ∧  KU(v) @ #t1`
     // Two DIFFERENT timepoints — asking "is there ever a time the
     // intruder knows v AND a (possibly different) time Generated fires?"
@@ -664,7 +629,7 @@ fn synthesise_probe_theory(
     let action_atom = |action: p::Fact, t: p::Term| -> p::Formula {
         p::Formula::atom(p::Atom::Action(action, t), DUMMY_LOCATION)
     };
-    for (k, _v) in free_vars.iter().enumerate() {
+    for k in 0..free_vars.len() {
         // Lemma named by free-var INDEX (not name) so same-named vars don't
         // collide; prove_probe re-derives the same name from the index.
         let lemma_name = format!("deriv_check_{}_{}", idx, k);
@@ -685,7 +650,8 @@ fn synthesise_probe_theory(
         };
         let gen_at = action_atom(action.clone(), p::Term::Var(t0.clone()));
         let ku_fact = p::Fact {
-            // KU is Persistent per factTagMultiplicity (Model/Fact.hs:355-360, see line 356);
+            // KU is Persistent per factTagMultiplicity (Theory/Model/Fact.hs:382-388,
+            // see line 386);
             // keep the "for special names, persistent == tag multiplicity"
             // invariant so GFact equality with parsed KU facts is faithful.
             persistent: true,
@@ -734,8 +700,8 @@ struct ProbeOutcome {
 /// context.
 ///
 /// Mirrors HS's `closeTheoryWithMaude` (called once per modified theory
-/// in `MessageDerivationChecks.hs:40-44`) followed by `proveTheory`'s
-/// per-lemma walk (`Prover.hs:260-279`).  Returns `None` on elaboration
+/// in `MessageDerivationChecks.hs:41-43`) followed by `proveTheory`'s
+/// per-lemma walk (`CloseRule.hs:144-155`).  Returns `None` on elaboration
 /// failure (caller continues to the next probe rule); otherwise returns
 /// a `ProbeOutcome` whose `undecidable` lists the variable names whose
 /// lemma did NOT find a trace (= non-derivable variables).
@@ -786,7 +752,7 @@ fn prove_probe(
     // Probes have no `[sources]`-tagged lemmas, so no typing
     // assumptions — but `ensure_saturated()` still must run to compute
     // the source-case cache exactly as HS's `closeTheoryWithMaude`
-    // does once per modified theory (Prover.hs:170-251).
+    // does once per modified theory (CloseRule.hs:56-70).
     ctx.ensure_saturated();
 
     let mut undecidable = Vec::new();
@@ -844,7 +810,7 @@ fn prove_probe(
         }
         if !ok {
             // HS reports `show LVar` (sortPrefix ++ body) for the
-            // undecidable variable (MessageDerivationChecks.hs:122-138, see line 138,156).
+            // undecidable variable (MessageDerivationChecks.hs:131-133, see line 133).
             // Shared with the wellformedness checker's identical renderer.
             undecidable.push(crate::check_terms::show_lvar(v));
         }
@@ -861,7 +827,7 @@ fn format_deriv_report(per_rule: &[(String, Vec<String>)]) -> Vec<WfError> {
     if per_rule.is_empty() {
         return Vec::new();
     }
-    // HS `reportVars` (Theory/Tools/MessageDerivationChecks.hs:122-127)
+    // HS `reportVars` (Theory/Tools/MessageDerivationChecks.hs:117-122)
     //   `[(underlineTopic "Message Derivation Checks",
     //     text $ "The variables of the following rule(s) ... pattern matching.\n\n" ++ errors)]`
     // The renderer in HS (`prettyWfErrorReport`) lays the topic + body
@@ -899,25 +865,29 @@ mod tests {
     use super::*;
     use tamarin_parser::parse_theory;
 
-    /// Resolve a maude binary: `$MAUDE_PATH`, then a portable candidate list
-    /// (bare `maude` resolves via `PATH`). Returns `None` only if the list is
-    /// exhausted, so the Maude-backed tests no-op rather than fail when maude
-    /// is unavailable.
-    fn maude_bin() -> Option<String> {
-        if let Ok(p) = std::env::var("MAUDE_PATH") {
-            return Some(p);
-        }
-        for c in ["/usr/local/bin/maude", "/usr/bin/maude", "maude"] {
-            if c == "maude" || std::path::Path::new(c).exists() {
-                return Some(c.to_string());
-            }
-        }
-        None
+    use crate::test_maude::maude_path;
+
+    /// A pair-signature handle.  The result is `None` only when
+    /// [`maude_path`] resolves nothing.  That case is the documented
+    /// `TAM_ALLOW_NO_MAUDE` skip.  A maude that resolves but does not start
+    /// is the same misconfiguration as a `MAUDE_PATH` that points at nothing.
+    /// So this function panics.  It does not silently skip every maude-backed
+    /// test in this file.
+    fn maude() -> Option<MaudeHandle> {
+        Some(start_maude(
+            &maude_path()?,
+            tamarin_term::maude_sig::pair_maude_sig(),
+        ))
     }
 
-    fn maude() -> Option<MaudeHandle> {
-        let p = maude_bin()?;
-        MaudeHandle::start(&p, tamarin_term::maude_sig::pair_maude_sig()).ok()
+    /// See [`maude`] for why a failed start is a panic, not a skip.
+    fn start_maude(path: &str, sig: tamarin_term::maude_sig::MaudeSig) -> MaudeHandle {
+        MaudeHandle::start(path, sig).unwrap_or_else(|e| {
+            panic!(
+                "maude at {path} failed to start: {e:?} — every maude-backed \
+                 test here would otherwise skip silently"
+            )
+        })
     }
 
     #[test]
@@ -972,16 +942,15 @@ mod tests {
     /// Start a Maude handle whose signature is elaborated from `src` (so the
     /// theory's own `functions:`/`equations:` symbols — including a private
     /// destructor — are present), exactly as the real driver does via
-    /// `elaborated.signature.maude_sig` (run.rs).  Returns `None` if Maude
-    /// is unavailable.
+    /// `elaborated.signature.maude_sig` (run.rs).  The function skips on the
+    /// same terms as [`maude`].
     fn maude_for(src: &str) -> Option<(p::Theory, MaudeHandle)> {
-        let p = maude_bin()?;
+        let p = maude_path()?;
         let thy = parse_theory(src, &[]).expect("parse");
         // `elaborate` installs the per-theory user-funs guards internally.
         let elaborated = crate::elaborate::elaborate(&thy).expect("elaborate");
         let sig = elaborated.signature.maude_sig.clone();
-        let handle = MaudeHandle::start(&p, sig).ok()?;
-        Some((thy, handle))
+        Some((thy, start_maude(&p, sig)))
     }
 
     // The privacy of a function symbol is load-bearing for the deriv-check

@@ -1,6 +1,14 @@
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
+
 use super::*;
 use tamarin_term::builtin::msg_var;
 
+/// `Fact::arity` counts the terms. `fact_tag_arity` reads the arity from the
+/// tag. For a protocol fact the arity comes from the `Proto` payload. For
+/// every built-in tag the arity is a fixed 1 (HS `factTagArity`,
+/// Theory/Model/Fact.hs).
 #[test]
 fn proto_fact_arity() {
     let f = proto_fact(
@@ -10,6 +18,22 @@ fn proto_fact_arity() {
     );
     assert_eq!(f.arity(), 2);
     assert_eq!(fact_tag_arity(&f.tag), 2);
+    // The function reads the arity from the tag, and not from a term list.
+    assert_eq!(
+        fact_tag_arity(&FactTag::Proto(Multiplicity::Linear, "P", 3)),
+        3
+    );
+    for t in [
+        FactTag::Fresh,
+        FactTag::Out,
+        FactTag::In,
+        FactTag::Ku,
+        FactTag::Kd,
+        FactTag::Ded,
+        FactTag::Term,
+    ] {
+        assert_eq!(fact_tag_arity(&t), 1, "built-in tag {t:?} must be unary");
+    }
 }
 
 #[test]
@@ -19,22 +43,31 @@ fn equality_ignores_annotations() {
     assert_eq!(a, b);
 }
 
+/// `is_linear` and `is_persistent` partition every tag (HS
+/// `factTagMultiplicity`, Theory/Model/Fact.hs:383-388). A `Proto` tag carries
+/// its own multiplicity. KU and KD are Persistent. Every other tag is Linear.
+/// The test asserts both directions. A predicate that degenerates to a
+/// constant therefore cannot pass the test.
 #[test]
 fn linear_vs_persistent() {
     let lin = proto_fact(Multiplicity::Linear, "P", vec![]);
     let per = proto_fact(Multiplicity::Persistent, "Q", vec![]);
-    assert!(lin.is_linear());
-    assert!(per.is_persistent());
-}
-
-#[test]
-fn k_fact_categorisation() {
-    assert!(ku_fact(msg_var("x", 0)).is_ku());
-    assert!(kd_fact(msg_var("x", 0)).is_kd());
+    assert!(lin.is_linear() && !lin.is_persistent());
+    assert!(per.is_persistent() && !per.is_linear());
+    for k in [ku_fact(msg_var("x", 0)), kd_fact(msg_var("x", 0))] {
+        assert!(k.is_persistent() && !k.is_linear(), "{k:?} must be K-fact");
+    }
+    for f in [
+        fresh_fact(msg_var("x", 0)),
+        out_fact(msg_var("x", 0)),
+        in_fact(msg_var("x", 0)),
+    ] {
+        assert!(f.is_linear() && !f.is_persistent(), "{f:?} must be linear");
+    }
 }
 
 /// `lvarToLnterm` re-sorts NAT variables to FRESH ones — the surprising bit
-/// of the HS definition (Fact.hs:331-333), since only fresh-sorted variables
+/// of the HS definition (Theory/Model/Fact.hs:331-333), since only fresh-sorted variables
 /// can be bound by the `Fr`-premise `freesToFresh` builds around them.
 #[test]
 fn lvar_to_lnterm_resorts_nat_to_fresh() {
@@ -67,8 +100,8 @@ fn trivial_ku_fact_predicates() {
 // =========================================================================
 // Haskell-faithfulness invariants.
 //
-// Fact.hs:128:  `data Multiplicity = Persistent | Linear`
-// Fact.hs:132:  `data FactTag = ProtoFact ... | FreshFact | OutFact |
+// Theory/Model/Fact.hs:133:  `data Multiplicity = Persistent | Linear`
+// Theory/Model/Fact.hs:137:  `data FactTag = ProtoFact ... | FreshFact | OutFact |
 //                              InFact | KUFact | KDFact | DedFact |
 //                              TermFact`
 //
@@ -78,12 +111,12 @@ fn trivial_ku_fact_predicates() {
 // injective-fact code assumes.
 // =========================================================================
 
-/// Multiplicity: `Persistent < Linear` from Fact.hs:128-129.
+/// Multiplicity: `Persistent < Linear` from Theory/Model/Fact.hs:133-134.
 #[test]
 fn multiplicity_ord_matches_haskell_declaration() {
     assert!(
         Multiplicity::Persistent < Multiplicity::Linear,
-        "Persistent must sort before Linear (Fact.hs:128)"
+        "Persistent must sort before Linear (Theory/Model/Fact.hs:133)"
     );
 }
 
@@ -100,7 +133,7 @@ fn fact_tag_ord_proto_sorts_before_builtins() {
     let fresh = FactTag::Fresh;
     assert!(
         proto < fresh,
-        "Proto must sort before Fresh (Haskell decl order Fact.hs:132)"
+        "Proto must sort before Fresh (Haskell decl order Theory/Model/Fact.hs:137)"
     );
     assert!(fresh < FactTag::Out);
     assert!(FactTag::Out < FactTag::In);

@@ -1,10 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, rsasse, jdreier, rkunnema, and other minor contributors (see
-//   upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/theory/src/Theory/Text/Parser/Rule.hs,
-//   lib/theory/src/Theory/Text/Parser/Token.hs,
-//   lib/utils/src/Data/Color.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Parity for the `color=`/`colour=` rule-attribute value.
 //!
@@ -13,13 +9,14 @@
 //! and validates it with `hexToRGB` (Data/Color.hs:149-155), which only
 //! matches a SIX-character code; `parseColor` (Parser/Rule.hs:81-85) turns a
 //! `Nothing` into `fail ("Color code " ++ show hc ++ " could not be parsed to
-//! RGB")`, which the port reports as a [`ParseError::Custom`] with the same
-//! message.  A lexing failure short of that keeps its expectation set.
+//! RGB")`, which the port reports as [`ParseError::MalformedHexColor`]
+//! spanning the value.  A lexing failure short of that keeps its expectation
+//! set.
 //!
-//! Every message, position and expectation set below is the pinned Haskell
-//! oracle's (Git revision ef3f0468) for the same theory; every accepted
-//! theory loads with exit 0 there and renders the attribute as lowercase
-//! `color=#<code>`.
+//! WHICH values are rejected is pinned to the Haskell oracle (Git revision
+//! ef3f0468), as are the lexing positions and expectation sets below; every
+//! accepted theory loads with exit 0 there and renders the attribute as
+//! lowercase `color=#<code>`.
 
 use tamarin_parser::ast::{RuleAttr, TheoryItem};
 use tamarin_parser::{parse_theory, ParseError, RuleAttrKind};
@@ -28,19 +25,17 @@ fn color_theory(value: &str) -> String {
     format!("theory T begin\n\nrule R1[color={value}]: [ ] --> [ ]\n\nend\n")
 }
 
-/// Asserts `color=<value>` is rejected by `hexToRGB` with HS's message, at
-/// `line`:`col`.
+/// Asserts `color=<value>` is rejected by `hexToRGB`
+/// ([`ParseError::MalformedHexColor`] naming `code`), at `line`:`col` — the
+/// start of the offending value.
 #[track_caller]
 fn assert_bad_rgb(value: &str, code: &str, line: u32, col: u32) {
     let e = parse_theory(&color_theory(value), &[]).expect_err("must fail to parse");
     let at = *e.location();
-    let ParseError::Custom { message, .. } = &e else {
+    let ParseError::MalformedHexColor { msg, .. } = &e else {
         panic!("expected the `hexToRGB` rejection, got {e:?}");
     };
-    assert_eq!(
-        message,
-        &format!("Color code \"{code}\" could not be parsed to RGB")
-    );
+    assert_eq!(msg, &format!("`{code}` could not be parsed to RGB"));
     assert_eq!((at.line, at.col), (line, col));
 }
 
@@ -69,7 +64,12 @@ fn assert_lex_expected(value: &str, line: u32, col: u32, found: &str, expected: 
 
 /// The stored `Color` attribute of the accepted theory with `color=<value>`.
 fn accepted_code(value: &str) -> String {
-    let thy = parse_theory(&color_theory(value), &[]).expect("theory should parse");
+    stored_code(&color_theory(value))
+}
+
+/// The single `Color` attribute of `src`'s single rule.
+fn stored_code(src: &str) -> String {
+    let thy = parse_theory(src, &[]).expect("theory should parse");
     let rule = thy
         .items
         .iter()
@@ -101,30 +101,46 @@ fn six_digit_codes_are_accepted() {
     assert_eq!(accepted_code("FF00FF"), "FF00FF");
 }
 
-/// Three digits lex fine but fail `hexToRGB`: the rejection sits after the
-/// code, at the `]`.
+/// `ruleAttribute` offers the British spelling first (Theory/Text/Parser/Rule.hs:72-73),
+/// and it stores the same attribute.  The oracle loads
+/// `rule R1[colour=ff00ff]` at exit 0.  It renders that attribute as
+/// `color=#ff00ff`.  That is the spelling the corpus uses
+/// (examples/eurosp19-eccDAA/ISOIEC_20008_2013_2_ECC_DAA.fixed.spthy).
+#[test]
+fn the_british_spelling_stores_the_same_attribute() {
+    assert_eq!(
+        stored_code("theory T begin\n\nrule R1[colour=ff00ff]: [ ] --> [ ]\n\nend\n"),
+        "ff00ff"
+    );
+    assert_eq!(
+        stored_code("theory T begin\n\nrule R1[colour='#ff00ff']: [ ] --> [ ]\n\nend\n"),
+        "ff00ff"
+    );
+}
+
+/// Three digits lex fine but fail `hexToRGB`; the rejection spans the code.
 #[test]
 fn three_digit_code_fails_hex_to_rgb() {
-    assert_bad_rgb("f0f", "f0f", 3, 18);
+    assert_bad_rgb("f0f", "f0f", 3, 15);
 }
 
 /// Seven digits likewise.
 #[test]
 fn seven_digit_code_fails_hex_to_rgb() {
-    assert_bad_rgb("ff00ff0", "ff00ff0", 3, 22);
+    assert_bad_rgb("ff00ff0", "ff00ff0", 3, 15);
 }
 
-/// Whitespace between the code and the next token moves the rejection to the
-/// post-whitespace position (`lexeme`'s trailing whiteSpace consumed input).
+/// Whitespace between the code and the next token does not move the report
+/// off the code (HS's `lexeme` reports past the whitespace).
 #[test]
-fn whitespace_after_short_code_moves_the_position() {
-    assert_bad_rgb("f0f ", "f0f", 3, 19);
+fn whitespace_after_short_code_keeps_the_position() {
+    assert_bad_rgb("f0f ", "f0f", 3, 15);
 }
 
-/// A quoted short code is rejected at the token after the closing `'`.
+/// A quoted short code is rejected at the value, quotes included.
 #[test]
-fn quoted_short_code_is_rejected_after_the_quote() {
-    assert_bad_rgb("'ff00'", "ff00", 3, 21);
+fn quoted_short_code_is_rejected_at_the_value() {
+    assert_bad_rgb("'ff00'", "ff00", 3, 15);
 }
 
 /// No code at all: `many1 hexDigit` fails at its first char, and the
@@ -160,17 +176,38 @@ fn empty_quotes_expect_hash_or_digit() {
     assert_lex_expected("''", 3, 16, "'", &["\"#\"", "hexadecimal digit"]);
 }
 
-/// A quoted code with a bad tail fails at the closing-quote `symbol`, with
-/// `many1 hexDigit`'s pending label ahead of it (parsec's merge keeps the
-/// earlier-accumulated message first).
+/// Inside quotes and after a `#`, both prefix alternatives are spent.  Only
+/// the digit label remains, at the closing quote.
 #[test]
-fn quoted_bad_tail_expects_digit_or_quote() {
-    assert_lex_expected("'ff00zz'", 3, 20, "z", &["hexadecimal digit", "\"'\""]);
+fn quoted_hash_without_digits_expects_a_digit() {
+    assert_lex_expected("'#'", 3, 17, "'", &["hexadecimal digit"]);
+}
+
+/// A quoted code with a bad tail fails at the un-closed opening quote: the
+/// digit run stops at `z`, so the closing `'` is never found —
+/// [`ParseError::UnterminatedDelimiter`] pointing at both.
+#[test]
+fn quoted_bad_tail_is_an_unterminated_quote() {
+    let e = parse_theory(&color_theory("'ff00zz'"), &[]).expect_err("must fail to parse");
+    let ParseError::UnterminatedDelimiter {
+        opening,
+        opening_at,
+        found,
+        found_at,
+        ..
+    } = &e
+    else {
+        panic!("expected the unterminated-delimiter variant, got {e:?}");
+    };
+    assert_eq!(opening, "'");
+    assert_eq!((opening_at.line, opening_at.col), (3, 15));
+    assert_eq!(found.as_deref(), Some("zz"));
+    assert_eq!((found_at.line, found_at.col), (3, 20));
 }
 
 /// An unquoted bad tail: the digit run stops at `z`, the code is short, and
-/// the `hexToRGB` rejection lands at that char.
+/// the `hexToRGB` rejection reports the digits it did read.
 #[test]
-fn unquoted_bad_tail_fails_hex_to_rgb_at_the_bad_char() {
-    assert_bad_rgb("ff00zz", "ff00", 3, 19);
+fn unquoted_bad_tail_fails_hex_to_rgb() {
+    assert_bad_rgb("ff00zz", "ff00", 3, 15);
 }

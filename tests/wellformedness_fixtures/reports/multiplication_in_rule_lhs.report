@@ -1,0 +1,18 @@
+# source: oracle ef3f0468, plain load
+# omits: Message Derivation Checks (Maude-backed, spliced later by the production callers)
+/*
+WARNING: the following wellformedness checks failed!
+
+Multiplication restriction of rules
+===================================
+
+  The following rule is not multiplication restricted:
+    rule (modulo E) Bad:
+       [ Fr( ~x ), In( (a*b) ) ] --> [ Out( <~x, (a*b)> ) ]
+  
+  After replacing reducible function symbols in lhs with variables:
+    rule (modulo E) Bad:
+       [ Fr( ~x ), In( (a*b) ) ] --> [ Out( <~x, (a*b)> ) ]
+  
+    Terms with multiplication:  (a*b)
+*/

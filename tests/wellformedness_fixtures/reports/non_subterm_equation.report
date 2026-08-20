@@ -1,0 +1,13 @@
+# source: oracle ef3f0468, plain load
+/*
+WARNING: the following wellformedness checks failed!
+
+Subterm Convergence Warning
+===========================
+
+  User-defined equations must be convergent and have the finite variant property. The following equations are not subterm convergent. If you are sure that the set of equations is nevertheless convergent and has the finite variant property, you can ignore this warning and continue 
+
+    f(x, y) = g(y)
+   
+ For more information, please refer to the manual : https://tamarin-prover.com/manual/master/book/010_modeling-issues.html 
+*/

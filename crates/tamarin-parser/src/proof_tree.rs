@@ -1,12 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, rkunnema, jdreier, PhilipLukertWork, and other minor
-//   contributors (see upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/term/src/Term/LTerm.hs,
-//   lib/theory/src/Theory/Constraint/System/Constraints.hs,
-//   lib/theory/src/Theory/Constraint/System/Guarded.hs,
-//   lib/theory/src/Theory/Text/Parser/Proof.hs,
-//   lib/theory/src/Theory/Text/Parser/Token.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Structured parser for the proof skeleton attached to a lemma.
 //!
@@ -66,9 +60,7 @@ pub fn parse_proof_tree(raw: &str) -> Result<ParsedProofTree, ProofTreeParseErro
     let mut p = TreeParser {
         lx: Lexer::new(raw),
     };
-    p.lx.skip_ws();
     let tree = p.proof_skeleton()?;
-    p.lx.skip_ws();
     // Any trailing junk is tolerated — likely the outer `qed` from a
     // higher-level case block.  HS proofSkeleton consumes proper `qed`
     // inside interProof; anything left is fine for our purposes (caller's
@@ -122,7 +114,7 @@ impl<'a> TreeParser<'a> {
         }
     }
 
-    /// HS `proofSkeleton` (Proof.hs:98-115).
+    /// HS `proofSkeleton` (Theory/Text/Parser/Proof.hs:98-115).
     fn proof_skeleton(&mut self) -> Result<ParsedProofTree, ProofTreeParseError> {
         self.lx.skip_ws();
         // solvedProof: `SOLVED`
@@ -144,8 +136,9 @@ impl<'a> TreeParser<'a> {
         let m = self.proof_method()?;
         // HS: `cases <- (sepBy oneCase "next" <* "qed") <|>
         //               ((return . (,) "") <$> proofSkeleton)`
-        // (Proof.hs:111-112).  `oneCase` starts with `case <ident>`, so
-        // a `case` token here means the case-block branch.  Otherwise HS
+        // (Theory/Text/Parser/Proof.hs:111-112).  `oneCase` starts with
+        // `case <ident>`, so a `case` token here means the case-block
+        // branch.  Otherwise HS
         // *requires* a recursive `proofSkeleton` (the inline single-child
         // subproof, named ""); there is NO childless-leaf branch — an
         // interProof method must be followed by a child.
@@ -178,7 +171,7 @@ impl<'a> TreeParser<'a> {
         })
     }
 
-    /// HS `oneCase` (Proof.hs:98-115, see line 115):
+    /// HS `oneCase` (Theory/Text/Parser/Proof.hs:98-115, see line 115):
     ///   `(,) <$> ("case" *> identifier) <*> proofSkeleton`
     fn one_case(&mut self) -> Result<(String, ParsedProofTree), ProofTreeParseError> {
         self.require_kw("case")?;
@@ -187,7 +180,7 @@ impl<'a> TreeParser<'a> {
         Ok((name, sub))
     }
 
-    /// HS `proofMethod` (Proof.hs:76-85).
+    /// HS `proofMethod` (Theory/Text/Parser/Proof.hs:76-85).
     fn proof_method(&mut self) -> Result<ParsedMethod, ProofTreeParseError> {
         self.lx.skip_ws();
         if self.try_kw("sorry") {
@@ -209,8 +202,9 @@ impl<'a> TreeParser<'a> {
             return Ok(ParsedMethod::Unfinishable);
         }
         // SOLVED is intentionally NOT a proofMethod: HS `proofMethod`
-        // (Proof.hs:76-85) never lists it; it is handled only at the
-        // skeleton level (`solvedProof`, Proof.hs:102-103) — see the
+        // (Theory/Text/Parser/Proof.hs:76-85) never lists it; it is handled
+        // only at the skeleton level (`solvedProof`,
+        // Theory/Text/Parser/Proof.hs:102-103) — see the
         // `SOLVED` branch of `proof_skeleton`.
         if self.try_kw("solve") {
             // `solve( <goal-text> )`.  HS parses an inner `goal`; we
@@ -318,10 +312,14 @@ impl<'a> TreeParser<'a> {
 ///
 /// We structurally recognise (in the order the code tries them) Action
 /// (`Fact(...) @ #t`), Premise (`Fact(...) ▶<n> #t`), Disj
-/// (`gf1 ∥ gf2 ∥ ...` — HS `disjSplitGoal`, Proof.hs:39-72, see line 61), Chain
-/// (`(#i,n) ~~> (#j,m)` — HS `chainGoal`, Proof.hs:39-72, see line 59), Split
-/// (`splitEqs(N)` — HS `eqSplitGoal`, Proof.hs:70-72), then Subterm
-/// (`<a> ⊏ <b>` — HS `stSplitGoal`, Proof.hs:63-66).  Anything else
+/// (`gf1 ∥ gf2 ∥ ...` — HS `disjSplitGoal`,
+/// Theory/Text/Parser/Proof.hs:39-72, see line 61), Chain
+/// (`(#i,n) ~~> (#j,m)` — HS `chainGoal`,
+/// Theory/Text/Parser/Proof.hs:39-72, see line 59), Split
+/// (`splitEqs(N)` — HS `eqSplitGoal`, Theory/Text/Parser/Proof.hs:70-72),
+/// then Subterm
+/// (`<a> ⊏ <b>` — HS `stSplitGoal`, Theory/Text/Parser/Proof.hs:63-66).
+/// Anything else
 /// lands in `GoalSpec::Raw` and the walker falls back to the
 /// auto-prover.
 pub fn parse_goal_spec(raw: &str) -> GoalSpec {
@@ -377,7 +375,8 @@ fn try_disj_split(text: &str) -> Option<GoalSpec> {
     // and binding-B instantiations of the same IH-body 5-alt disj),
     // the shape-only `disj_alts_match` can't distinguish them.  HS
     // parses each alt as a full `Guarded` with concrete LVar
-    // identities (Proof.hs:39-72, see line 61), enabling structural match in
+    // identities (Theory/Text/Parser/Proof.hs:39-72, see line 61), enabling
+    // structural match in
     // sys.goals.  We can't easily reconstruct those identities, but
     // we CAN capture each alt's normalized text and use it as a
     // tie-breaker when shape matching is ambiguous.  See
@@ -501,7 +500,7 @@ fn strip_outer_parens(s: &str) -> &str {
 /// `.`.
 ///
 /// Note: a bound var with a non-zero LVar index renders as
-/// `name.idx` (HS `LVar` Show, LTerm.hs:529-532, via
+/// `name.idx` (HS `LVar` Show, LTerm.hs:550-557, via
 /// `ppVars = fsep . map (text . show)`, Guarded.hs:824-866, see line 862), e.g.
 /// `∀ x #i.1 #j.`.  So a `.` that is immediately followed by an ASCII
 /// digit is a var-index suffix, NOT the body terminator — we must
@@ -539,8 +538,9 @@ fn count_quant_vars(after_qua: &str) -> usize {
 /// HS reference: `chainGoal = ChainG <$> (try (nodeConc <* opChain))
 /// <*> nodePrem` (Theory/Text/Parser/Proof.hs:39-72, see line 59) where
 /// `nodeConc/nodePrem = parens ((,) <$> nodevar <*> (comma *> natural))`
-/// (Proof.hs:33-36).  The operator `~~>` is the HS pretty rendering
-/// (Constraints.hs:269-270).
+/// (Theory/Text/Parser/Proof.hs:29-31,34-36).  The operator `~~>` is the HS
+/// pretty rendering
+/// (Constraints.hs:275-276).
 ///
 /// We extract the time-var ROOT name (stripping any trailing `.N`
 /// freshen-suffix that HS's pretty-printer can emit) and the natural
@@ -568,7 +568,7 @@ fn try_chain_split(text: &str) -> Option<GoalSpec> {
 ///
 /// HS reference: `stSplitGoal` (Theory/Text/Parser/Proof.hs:63-66)
 /// parses `try (termp <* opSubterm) >>= ...`, where `opSubterm` is the
-/// `⊏` operator (renderer at Constraints.hs:281-282).
+/// `⊏` operator (renderer at Constraints.hs:287-288).
 ///
 /// We split on the FIRST top-level `⊏` and trim both sides.  The text
 /// is kept raw — the matcher canonicalises against the runtime
@@ -652,7 +652,8 @@ fn find_top_level_char(s: &str, needle: char) -> Option<usize> {
 }
 
 /// Parse a `(#name[.idx], N)` (or `(name[.idx], N)`) pair as used by
-/// HS `nodeConc / nodePrem` (Proof.hs:33-36).  Returns the time-var
+/// HS `nodeConc / nodePrem` (Theory/Text/Parser/Proof.hs:29-31,34-36).
+/// Returns the time-var
 /// ROOT name (stripping any `.idx` freshen suffix) plus the natural N.
 fn parse_node_idx_pair(s: &str) -> Option<(String, u32)> {
     let trimmed = s.trim();

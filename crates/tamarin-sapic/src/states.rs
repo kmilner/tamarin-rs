@@ -1,13 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   charlie-j, rkunnema, arcz, BTom-GH, jdreier, kevinmorio, Hong-Thai,
-//   racoucho1u, Mathias-AURAND, and other minor contributors (see
-//   upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/sapic/src/Sapic.hs, lib/sapic/src/Sapic/States.hs,
-//   lib/term/src/Term/Maude/Process.hs,
-//   lib/theory/src/Items/OptionItem.hs,
-//   lib/theory/src/Theory/Sapic/Process.hs,
-//   lib/theory/src/Theory/Text/Parser/Signature.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Port of `Sapic.States` from `lib/sapic/src/Sapic/States.hs`.
 //!
@@ -27,7 +20,7 @@
 //!      translation emits the `L_PureState`/`L_CellLocked` linear facts
 //!      instead of the classical `Insert`/`IsIn`/`Lock` actions.
 //!
-//! This mirrors `annotatePureStates` exactly (States.hs:192-235).
+//! This mirrors `annotatePureStates` exactly (States.hs:192-196).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -86,8 +79,9 @@ fn get_all_states(
         Process::Comb(ProcessCombinator::Lookup(t, _), _, l, r) => {
             let (bl, fl) = get_all_states(l, bound_names);
             let (br, fr) = get_all_states(r, bound_names);
-            let mut bound: BTreeSet<SapicTerm> = bl.union(&br).cloned().collect();
-            let mut free: BTreeSet<SapicTerm> = fl.union(&fr).cloned().collect();
+            let (mut bound, mut free) = (bl, fl);
+            bound.extend(br);
+            free.extend(fr);
             if is_bound(bound_names, t) {
                 bound.insert(t.clone());
             } else {
@@ -96,12 +90,11 @@ fn get_all_states(
             (bound, free)
         }
         Process::Comb(_, _, l, r) => {
-            let (bl, fl) = get_all_states(l, bound_names);
+            let (mut bound, mut free) = get_all_states(l, bound_names);
             let (br, fr) = get_all_states(r, bound_names);
-            (
-                bl.union(&br).cloned().collect(),
-                fl.union(&fr).cloned().collect(),
-            )
+            bound.extend(br);
+            free.extend(fr);
+            (bound, free)
         }
     }
 }
@@ -120,8 +113,9 @@ fn add_states_channels(p: AnnotatedProc) -> AnnotatedProc {
     //   (M.lookup stateChannelName initState)`.
     // `avoidPreciseVars` stores `idx+1` per name, taking the max; so the seed
     // is `max { idx+1 | (StateChannel, idx) ∈ varsProc p }` (0 if none).
-    let init_state_chan = vars_proc(&p)
+    let init_state_chan = crate::typing::vars_proc(&p)
         .into_iter()
+        .map(|sv| sv.var)
         .filter(|v| v.name == STATE_CHANNEL_NAME)
         .map(|v| v.idx + 1)
         .max()
@@ -239,7 +233,7 @@ fn new_states(
     declarables: &[SapicTerm],
     state_map: &StateMap,
 ) -> (Vec<(LVar, SapicTerm)>, StateMap) {
-    let mut declared: Vec<(LVar, SapicTerm)> = Vec::new();
+    let mut declared: Vec<(LVar, SapicTerm)> = Vec::with_capacity(declarables.len());
     let mut map = state_map.clone();
     for v in declarables {
         // `newvar <- freshLVar stateChannelName LSortMsg` — fast counter.
@@ -249,9 +243,11 @@ fn new_states(
             idx: fresh.fresh_ident(),
         };
         map.insert(v.clone(), AnVar(newvar));
-        // HS conses: `newStates p declarables ((newvar, v):declared) newMap`
-        declared.insert(0, (newvar, v.clone()));
+        declared.push((newvar, v.clone()));
     }
+    // HS conses: `newStates p declarables ((newvar, v):declared) newMap`, so
+    // the returned list is in reverse declarable order.
+    declared.reverse();
     (declared, map)
 }
 
@@ -266,30 +262,29 @@ fn exists_attacker_unpure(p: &AnnotatedProc, bound_names: &BTreeSet<LVar>) -> bo
             next.insert(v.var);
             exists_attacker_unpure(pl, &next)
         }
-        // insert t; unlock t  (pure write pattern) — skip the pair, recurse.
-        Process::Action(SapicAction::Insert(t, _), _, body) if matches!(&**body, Process::Action(SapicAction::Unlock(t2), _, _) if t == t2) => {
-            if let Process::Action(SapicAction::Unlock(_), _, pl) = &**body {
-                exists_attacker_unpure(pl, bound_names)
-            } else {
-                unreachable!()
+        // `insert t; unlock t` (the pure write pattern) skips the pair; any
+        // other lone insert on an unbound identifier raises the warning.
+        Process::Action(SapicAction::Insert(t, _), _, body) => {
+            if let Process::Action(SapicAction::Unlock(t2), _, pl) = &**body {
+                if t == t2 {
+                    return exists_attacker_unpure(pl, bound_names);
+                }
             }
+            !is_bound(bound_names, t) || exists_attacker_unpure(body, bound_names)
         }
-        // lock t; lookup t as _ in .. else 0  (pure read pattern) — recurse.
-        Process::Action(SapicAction::Lock(t), _, body)
-            if matches!(&**body,
-                Process::Comb(ProcessCombinator::Lookup(t2, _), _, _, r)
-                    if t == t2 && matches!(&**r, Process::Null(_))) =>
-        {
-            if let Process::Comb(ProcessCombinator::Lookup(_, _), _, pl, _) = &**body {
-                exists_attacker_unpure(pl, bound_names)
-            } else {
-                unreachable!()
+        // `lock t; lookup t as _ in .. else 0` (the pure read pattern) skips to
+        // the lookup body; any other lone lock on an unbound identifier warns.
+        Process::Action(SapicAction::Lock(t), _, body) => {
+            if let Process::Comb(ProcessCombinator::Lookup(t2, _), _, pl, r) = &**body {
+                if t == t2 && matches!(&**r, Process::Null(_)) {
+                    return exists_attacker_unpure(pl, bound_names);
+                }
             }
+            !is_bound(bound_names, t) || exists_attacker_unpure(body, bound_names)
         }
-        // Any lone action on an unbound identifier raises the warning.
-        Process::Action(SapicAction::Insert(t, _), _, _) if !is_bound(bound_names, t) => true,
-        Process::Action(SapicAction::Lock(t), _, _) if !is_bound(bound_names, t) => true,
-        Process::Action(SapicAction::Unlock(t), _, _) if !is_bound(bound_names, t) => true,
+        Process::Action(SapicAction::Unlock(t), _, body) => {
+            !is_bound(bound_names, t) || exists_attacker_unpure(body, bound_names)
+        }
         Process::Comb(ProcessCombinator::Lookup(t, _), _, _, r)
             if matches!(&**r, Process::Null(_)) && !is_bound(bound_names, t) =>
         {
@@ -308,38 +303,45 @@ fn exists_attacker_unpure(p: &AnnotatedProc, bound_names: &BTreeSet<LVar>) -> bo
 /// insert (the initialisation) for this state.
 fn is_pure_state(p: &AnnotatedProc, target: &SapicTerm, lone_insert: bool) -> (bool, bool) {
     match p {
-        // insert t; unlock t  — skip the pure write pair.
-        Process::Action(SapicAction::Insert(t, _), _, body) if matches!(&**body, Process::Action(SapicAction::Unlock(t2), _, _) if t == t2) => {
-            if let Process::Action(SapicAction::Unlock(_), _, pl) = &**body {
-                is_pure_state(pl, target, lone_insert)
-            } else {
-                unreachable!()
+        // `insert t; unlock t` — skip the pure write pair.  Otherwise a lone
+        // insert on the target: a second lone insert anywhere ⇒ not pure.
+        Process::Action(SapicAction::Insert(t, _), _, body) => {
+            if let Process::Action(SapicAction::Unlock(t2), _, pl) = &**body {
+                if t == t2 {
+                    return is_pure_state(pl, target, lone_insert);
+                }
             }
-        }
-        // lock t; lookup t as _ in .. else 0 — skip the pure read pair.
-        Process::Action(SapicAction::Lock(t), _, body)
-            if matches!(&**body,
-                Process::Comb(ProcessCombinator::Lookup(t2, _), _, _, r)
-                    if t == t2 && matches!(&**r, Process::Null(_))) =>
-        {
-            if let Process::Comb(ProcessCombinator::Lookup(_, _), _, pl, _) = &**body {
-                is_pure_state(pl, target, lone_insert)
-            } else {
-                unreachable!()
+            if t != target {
+                return is_pure_state(body, target, lone_insert);
             }
-        }
-        // lone insert on target: a second lone insert anywhere ⇒ not pure.
-        Process::Action(SapicAction::Insert(t, _), _, pl) if t == target => {
-            let (pure_, lone) = is_pure_state(pl, target, lone_insert);
+            let (pure_, lone) = is_pure_state(body, target, lone_insert);
             if lone {
                 (false, lone)
             } else {
                 (pure_, lone)
             }
         }
-        // lone lock/unlock on target ⇒ not pure.
-        Process::Action(SapicAction::Lock(t), _, _) if t == target => (false, false),
-        Process::Action(SapicAction::Unlock(t), _, _) if t == target => (false, false),
+        // `lock t; lookup t as _ in .. else 0` — skip the pure read pair.
+        // Otherwise a lone lock on the target ⇒ not pure.
+        Process::Action(SapicAction::Lock(t), _, body) => {
+            if let Process::Comb(ProcessCombinator::Lookup(t2, _), _, pl, r) = &**body {
+                if t == t2 && matches!(&**r, Process::Null(_)) {
+                    return is_pure_state(pl, target, lone_insert);
+                }
+            }
+            if t == target {
+                return (false, false);
+            }
+            is_pure_state(body, target, lone_insert)
+        }
+        // lone unlock on target ⇒ not pure.
+        Process::Action(SapicAction::Unlock(t), _, body) => {
+            if t == target {
+                (false, false)
+            } else {
+                is_pure_state(body, target, lone_insert)
+            }
+        }
         Process::Action(_, _, pl) => is_pure_state(pl, target, lone_insert),
         // Parallel: pure only if both pure and not both lone; lone = either lone.
         Process::Comb(ProcessCombinator::Parallel, _, pl, pr) => {
@@ -391,9 +393,7 @@ fn annotate_each_pure_states(p: AnnotatedProc, pure_states: &BTreeSet<SapicTerm>
             match &ac {
                 // new StateChannel (an.is_state_channel is Some): if the cell is
                 // pure, mark pure_state and add cid to pureStates for the body;
-                // otherwise HS does NOT recurse into the body.  The clone is needed
-                // because `an` is consumed by `..an` below.  A `New(_)` with no
-                // state channel recurses into the body unchanged (default `_ =>` arm).
+                // otherwise HS does NOT recurse into the body.
                 SapicAction::New(_) => {
                     if let Some(cid) = &an.is_state_channel {
                         let cid = cid.clone();
@@ -418,33 +418,10 @@ fn annotate_each_pure_states(p: AnnotatedProc, pure_states: &BTreeSet<SapicTerm>
                         Process::Action(ac, an, Box::new(body2))
                     }
                 }
-                SapicAction::Unlock(t) => {
-                    let is_pure = pure_states.contains(t);
-                    let body2 = annotate_each_pure_states(*body, pure_states);
-                    let an2 = if is_pure {
-                        ProcessAnnotation {
-                            pure_state: true,
-                            ..an
-                        }
-                    } else {
-                        an
-                    };
-                    Process::Action(ac, an2, Box::new(body2))
-                }
-                SapicAction::Lock(t) => {
-                    let is_pure = pure_states.contains(t);
-                    let body2 = annotate_each_pure_states(*body, pure_states);
-                    let an2 = if is_pure {
-                        ProcessAnnotation {
-                            pure_state: true,
-                            ..an
-                        }
-                    } else {
-                        an
-                    };
-                    Process::Action(ac, an2, Box::new(body2))
-                }
-                SapicAction::Insert(t, _) => {
+                // HS's three `Unlock t` / `Lock t` / `Insert t _` guards
+                // (States.hs:219-233) share one body: mark `pureState` when the
+                // cell is pure, and recurse either way.
+                SapicAction::Unlock(t) | SapicAction::Lock(t) | SapicAction::Insert(t, _) => {
                     let is_pure = pure_states.contains(t);
                     let body2 = annotate_each_pure_states(*body, pure_states);
                     let an2 = if is_pure {
@@ -464,106 +441,6 @@ fn annotate_each_pure_states(p: AnnotatedProc, pure_states: &BTreeSet<SapicTerm>
             }
         }
     }
-}
-
-/// `varsProc`: every SAPIC variable that occurs anywhere in `p` (HS
-/// `varsProc = foldMap singleton`, Process.hs:361-362).  Used only to seed the
-/// `StateChannel` fresh counter; we return the underlying `LVar`s.
-fn vars_proc(p: &AnnotatedProc) -> Vec<LVar> {
-    let mut out: BTreeSet<LVar> = BTreeSet::new();
-    fn term_vars(t: &SapicTerm, out: &mut BTreeSet<LVar>) {
-        for sv in frees_sapic_term(t) {
-            out.insert(sv.var);
-        }
-    }
-    fn fact_vars(f: &tamarin_theory::sapic::SapicLNFact, out: &mut BTreeSet<LVar>) {
-        for t in f.terms.iter() {
-            term_vars(t, out);
-        }
-    }
-    fn go(p: &AnnotatedProc, out: &mut BTreeSet<LVar>) {
-        match p {
-            Process::Null(_) => {}
-            Process::Action(a, _, body) => {
-                match a {
-                    SapicAction::New(v) => {
-                        out.insert(v.var);
-                    }
-                    SapicAction::Event(f) => fact_vars(f, out),
-                    SapicAction::ChOut { chan, msg } => {
-                        if let Some(c) = chan {
-                            term_vars(c, out);
-                        }
-                        term_vars(msg, out);
-                    }
-                    SapicAction::ChIn {
-                        chan,
-                        msg,
-                        match_vars,
-                    } => {
-                        if let Some(c) = chan {
-                            term_vars(c, out);
-                        }
-                        term_vars(msg, out);
-                        for v in match_vars {
-                            out.insert(v.var);
-                        }
-                    }
-                    SapicAction::Insert(a, b) => {
-                        term_vars(a, out);
-                        term_vars(b, out);
-                    }
-                    SapicAction::Delete(t) | SapicAction::Lock(t) | SapicAction::Unlock(t) => {
-                        term_vars(t, out)
-                    }
-                    SapicAction::ProcessCall(_, ts) => {
-                        for t in ts {
-                            term_vars(t, out);
-                        }
-                    }
-                    SapicAction::Msr {
-                        prems, acts, concs, ..
-                    } => {
-                        for f in prems.iter().chain(acts).chain(concs) {
-                            fact_vars(f, out);
-                        }
-                    }
-                    SapicAction::Rep => {}
-                }
-                go(body, out);
-            }
-            Process::Comb(c, _, l, r) => {
-                match c {
-                    ProcessCombinator::Lookup(t, v) => {
-                        term_vars(t, out);
-                        out.insert(v.var);
-                    }
-                    ProcessCombinator::Let {
-                        left,
-                        right,
-                        match_vars,
-                    } => {
-                        term_vars(left, out);
-                        term_vars(right, out);
-                        for v in match_vars {
-                            out.insert(v.var);
-                        }
-                    }
-                    ProcessCombinator::CondEq(a, b) => {
-                        term_vars(a, out);
-                        term_vars(b, out);
-                    }
-                    ProcessCombinator::Cond(_)
-                    | ProcessCombinator::Parallel
-                    | ProcessCombinator::Ndc => {}
-                }
-                go(l, out);
-                go(r, out);
-            }
-        }
-    }
-    go(p, &mut out);
-    out.into_iter().collect()
 }
 
 #[cfg(test)]

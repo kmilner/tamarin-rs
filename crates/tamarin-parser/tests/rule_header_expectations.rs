@@ -1,15 +1,13 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, rsasse, jdreier, and other minor contributors (see upstream git
-//   history)
-// Ported from upstream tamarin-prover sources:
-//   lib/theory/src/Theory/Text/Parser/Rule.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Parity for the `expected` set a rule header leaves behind.
 //!
-//! `protoRuleInfo` (Rule.hs:100-107) is
+//! `protoRuleInfo` (Parser/Rule.hs:100-107) is
 //! `symbol "rule" *> optional moduloE *> identifier *> ruleAttributesp *> colon`,
 //! and `ruleAttributesp = option mempty (fold <$> list ruleAttribute)`
-//! (Rule.hs:97-98).  When no `[…]` follows the name, `option` returns without
+//! (Parser/Rule.hs:97-98).  When no `[…]` follows the name, `option` returns without
 //! consuming, so parsec keeps its `Expect "\"[\""` and merges it into the
 //! colon's failure — the set reads `"[" or ":"`.  A present attribute list
 //! consumes, which discards that expectation and leaves `":"` alone.
@@ -77,12 +75,8 @@ fn a_consumed_attribute_list_drops_the_bracket_expectation() {
 
 /// An EMPTY `[]` counts as consumed, exactly as it does for `functions:`
 /// attribute lists: HS `ruleAttributesp`'s `list p = brackets (commaSep p)`
-/// (Rule.hs:97-98, Token.hs) admits zero elements, so the header continues to
+/// (Theory/Text/Parser/Rule.hs:97-98, Token.hs) admits zero elements, so the header continues to
 /// the colon and a complete rule with `[]` loads at exit 0.
-///
-/// KNOWN FAILURE — `Parser::rule_attributes` enters its attribute loop
-/// unconditionally after the `[` and has no immediate-`]` exit, so it reports
-/// `UnknownRuleAttribute { attribute: "" }` and rejects a legal rule.
 #[test]
 fn an_empty_attribute_list_is_consumed_like_a_non_empty_one() {
     assert_expected(
@@ -98,7 +92,7 @@ fn an_empty_attribute_list_is_consumed_like_a_non_empty_one() {
 
 #[test]
 fn junk_after_the_colon_expects_let_or_the_premise_bracket() {
-    // `option emptySubst letBlock` precedes the premise list (Rule.hs:131):
+    // `option emptySubst letBlock` precedes the premise list (Parser/Rule.hs:131):
     // the failed non-consuming probe leaves `Expect "\"let\""` at the same
     // offset as the premise `[` failure, and both are reported.
     let e = parse_theory("theory T begin\nrule X: garbage here\nend\n", &[])

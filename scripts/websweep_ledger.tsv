@@ -1,0 +1,141 @@
+# Documented web-parity residue, applied mechanically by web_parity.sh
+# (apply_web_ledger) AFTER the crawl rows land. A DIFF/MISSING_* row whose file
+# has a matching entry is rewritten to status LEDGERED and reported under this
+# entry's class; a DIFF/MISSING_* row with NO entry is an undocumented
+# divergence and FAILS the gate's verdict.
+#
+# Columns (tab-separated):
+#   path	class	symptom	note
+#
+#   path     relative to CORPUS_ROOT (tamarin-prover/examples/), matched
+#            EXACTLY against column 1 of the results TSV - the same spelling
+#            websweep_residual.txt uses.
+#   symptom  which row statuses this entry excuses:
+#              DIFF | MISSING_RS | MISSING_HS   exactly that status
+#              any                              all three (file-wide)
+#              none                             excuses NOTHING; the entry only
+#                                               documents a path that belongs to
+#                                               the residue crawl set
+#            An `any` entry shadows every narrower entry for the same path, so
+#            give each entry the narrowest symptom its evidence supports: a
+#            file-wide entry for a documented DIFF would silently swallow a
+#            brand-new MISSING_RS beside it.
+#   note     free prose, no tabs. Carry the evidence: how many rows the entry
+#            excused when it was written, and in which sweep.
+#
+# web_parity.sh reports entries that excuse nothing, and each report fails the
+# verdict - an entry that excuses nothing today is a mask waiting for the file
+# to regress under it:
+#   LEDGER-STALE      the file WAS compared this run and no row of it matched
+#                     the entry. The residue is gone (or changed symptom): drop
+#                     or re-classify the entry.
+#   LEDGER-SHADOWED   a narrower entry sits under an `any` entry for the same
+#                     path, so it can never match.
+#   LEDGER-UNMATCHED  the path is not in the corpus at all. Checked against
+#                     CORPUS_ROOT rather than against this run, so it is
+#                     reported however small the run's ALLOWLIST is.
+# Entries whose path this run simply did not crawl are counted, not reported:
+# a 2-file smoke run must not read as 77 dead entries. `none` entries are
+# exempt from STALE by construction.
+# A malformed line (wrong column count, unknown symptom, duplicate path+symptom)
+# aborts the gate BEFORE it crawls anything.
+#
+# Classes:
+#   witness-index  Identical proof states rendered with different internal
+#                  counter values - fresh-variable witness indices,
+#                  goal-creation numbers, term-abbreviation picks - on AC-heavy
+#                  theories. Cosmetic: never reaches proof scripts, proof
+#                  structure or verdicts. Upstream numbering/eq-store class,
+#                  tamarin-prover issue #874.
+#   proof-path     The two autoproofs reach the same verdict along DIFFERENT
+#                  case paths, so the site maps harvested from the proved
+#                  theory carry different node URLs and pair as MISSING_*
+#                  rather than as page divergence. Same underlying numbering
+#                  class as witness-index, seen through the URL space.
+#   watch          No divergence observed at the baseline. The entry exists so
+#                  the path stays enumerated with the rest of the residue set;
+#                  it excuses nothing, so any divergence on these files fails
+#                  the gate.
+#
+# Baseline: scripts/results/websweep_ef3f0468_cert_20260805.tsv (submodule pin
+# ef3f0468, 86 files / 69,615 rows). Every symptom and count below is read off
+# that sweep; the 77 paths are the set websweep_residual.txt enumerates.
+accountability/masters-thesis-morio/CentralizedMonitor.spthy	witness-index	DIFF	15 pages at cert_20260805
+ake/bilinear/Joux.spthy	witness-index	DIFF	8 pages at cert_20260805
+ake/bilinear/Joux_EphkRev.spthy	witness-index	DIFF	5 pages at cert_20260805
+ake/bilinear/RYY.spthy	witness-index	DIFF	2 pages at cert_20260805
+ake/bilinear/Scott.spthy	witness-index	DIFF	125 pages at cert_20260805
+ake/bilinear/Scott_EphkRev.spthy	witness-index	DIFF	4 pages at cert_20260805
+ake/dh/DHKEA_NAXOS_C_eCK_PFS_partially_matching.spthy	witness-index	DIFF	3 pages at cert_20260805
+ake/dh/NAXOS_eCK.spthy	witness-index	DIFF	17 pages at cert_20260805
+ake/dh/NAXOS_eCK_PFS.spthy	witness-index	DIFF	4 pages at cert_20260805
+ake/dh/UM_one_pass_fix.spthy	witness-index	DIFF	4 pages at cert_20260805
+ake/dh/UM_three_pass.spthy	witness-index	DIFF	32 pages at cert_20260805
+ake/dh/UM_three_pass_combined_fixed.spthy	witness-index	DIFF	25 pages at cert_20260805
+csf12/DH2_original.spthy	witness-index	DIFF	123 pages at cert_20260805
+csf12/JKL_TS2_2008_KI_wPFS.spthy	witness-index	DIFF	5 pages at cert_20260805
+csf12/KEA_plus.spthy	witness-index	DIFF	1 page at cert_20260805
+csf12/KEA_plus_AdvKey-fix.spthy	witness-index	DIFF	6 pages at cert_20260805
+csf12/KEA_plus_KCI_hwPFS.spthy	witness-index	DIFF	2 pages at cert_20260805
+csf12/KEA_plus_KI_KCI.spthy	witness-index	DIFF	2 pages at cert_20260805
+csf12/KEA_plus_hwPFS.spthy	witness-index	DIFF	1 page at cert_20260805
+csf12/NAXOS_eCK.spthy	witness-index	DIFF	4 pages at cert_20260805
+csf12/STS_MAC.spthy	witness-index	DIFF	5 pages at cert_20260805
+csf12/STS_MAC_fix1.spthy	witness-index	DIFF	46 pages at cert_20260805
+csf12/STS_MAC_fix2.spthy	witness-index	DIFF	6 pages at cert_20260805
+csf12/SignedDH_PFS.spthy	witness-index	DIFF	2 pages at cert_20260805
+csf12/UM_wPFS.spthy	witness-index	DIFF	4 pages at cert_20260805
+csf17/commitment-protocol.spthy	witness-index	DIFF	4 pages at cert_20260805
+csf17/counter-protocol.spthy	witness-index	DIFF	4 pages at cert_20260805
+csf17/iso-iec9798-modified.spthy	witness-index	DIFF	5 pages at cert_20260805
+csf17/keylessssl-modified.spthy	witness-index	DIFF	4 pages at cert_20260805
+csf18-alethea/alethea_selectionphase_malS.spthy	witness-index	DIFF	64 pages at cert_20260805
+csf18-alethea/alethea_votingphase_malS.spthy	watch	none	crawled clean at cert_20260805
+csf18-alethea/alethea_votingphase_malS_abstain.spthy	watch	none	crawled clean at cert_20260805
+csf18-xor/chaum_offline_anonymity.spthy	witness-index	DIFF	2 pages at cert_20260805
+csf19-wrapping/gcm.spthy	witness-index	DIFF	4 pages at cert_20260805
+csf19-wrapping/siv.spthy	witness-index	DIFF	7 pages at cert_20260805
+csf20-disputeResolution/mixvote_ShHm.spthy	watch	none	crawled clean at cert_20260805
+csf23-subterms/ParserTests.spthy	witness-index	DIFF	1 page at cert_20260805
+experiments/JKL_TS2_2008-KI.spthy	witness-index	DIFF	5 pages at cert_20260805
+experiments/MTI_C0_eCK.spthy	witness-index	DIFF	4 pages at cert_20260805
+experiments/SignedDH_test_no_builtin.spthy	witness-index	DIFF	2 pages at cert_20260805
+features/auto-sources/spore/SpliceAS.spthy	watch	none	not crawled at cert_20260805
+features/auto-sources/tamarin-repo/loops/RFID_Simple-without-SL.spthy	watch	none	crawled clean at cert_20260805
+features/auto-sources/tamarin-repo/related_work/TPM_DKRS_CSF11/Envelope.spthy	witness-index	DIFF	1 page at cert_20260805
+features/auto-sources/tamarin-repo/related_work/TPM_DKRS_CSF11/TPM_Exclusive_Secrets.spthy	watch	none	crawled clean at cert_20260805
+features/multiset/NumberSubtermTests.spthy	witness-index	DIFF	1 page at cert_20260805
+features/multiset/counter.spthy	watch	none	crawled clean at cert_20260805
+features/noise/secrecy_4_passiveINpsk1.spthy	witness-index	DIFF	71 pages at cert_20260805
+features/noise/secrecy_4_passiveINpsk1_proof.spthy	witness-index	DIFF	71 pages at cert_20260805
+idbased/BP_IBS_4.spthy	proof-path	MISSING_HS	48 URLs at cert_20260805
+idbased/BP_IBS_4.spthy	proof-path	MISSING_RS	48 URLs at cert_20260805
+idbased/BP_IBS_4.spthy	witness-index	DIFF	129 pages at cert_20260805
+loops/Minimal_Create_Use_Destroy.spthy	watch	none	crawled clean at cert_20260805
+loops/Minimal_Loop_Example.spthy	watch	none	crawled clean at cert_20260805
+post17/chaum_unforgeability.spthy	witness-index	DIFF	4 pages at cert_20260805
+regression/diff/issue223.spthy	witness-index	DIFF	4 pages at cert_20260805
+regression/trace/issue216.spthy	witness-index	DIFF	4 pages at cert_20260805
+regression/trace/issue515.spthy	witness-index	DIFF	4 pages at cert_20260805
+related_work/StatVerif_ARR_CSF11/StatVerif_GM_Contract_Signing.spthy	witness-index	DIFF	4 pages at cert_20260805
+related_work/TPM_DKRS_CSF11/Envelope.spthy	witness-index	DIFF	1 page at cert_20260805
+related_work/TPM_DKRS_CSF11/TPM_Exclusive_Secrets.spthy	watch	none	crawled clean at cert_20260805
+related_work/YubiSecure_KS_STM12/Yubikey_and_YubiHSM_multiset.spthy	watch	none	crawled clean at cert_20260805
+related_work/YubiSecure_KS_STM12/Yubikey_multiset.spthy	witness-index	DIFF	40 pages at cert_20260805
+sapic/fast/SCADA/opc_ua_secure_conversation.spthy	witness-index	DIFF	149 pages at cert_20260805
+sapic/fast/Yubikey/Yubikey.spthy	witness-index	DIFF	1 page at cert_20260805
+sapic/fast/feature-locations/AC.spthy	watch	none	crawled clean at cert_20260805
+sapic/fast/feature-locations/AC_counter_with_attack.spthy	watch	none	crawled clean at cert_20260805
+sapic/fast/feature-locations/OTP.spthy	witness-index	DIFF	14 pages at cert_20260805
+sapic/fast/feature-xor/CH07.spthy	witness-index	DIFF	204 pages at cert_20260805
+sapic/fast/feature-xor/CRxor.spthy	witness-index	DIFF	2 pages at cert_20260805
+sapic/fast/statVerifLeftRight/stateverif_left_right.spthy	watch	none	crawled clean at cert_20260805
+sp14/Joux.spthy	witness-index	DIFF	4 pages at cert_20260805
+sp14/Joux_EphkRev.spthy	witness-index	DIFF	1 page at cert_20260805
+sp14/Scott.spthy	witness-index	DIFF	4 pages at cert_20260805
+sp14/Scott_EphkRev.spthy	witness-index	DIFF	4 pages at cert_20260805
+thesis-LaraSchmid-evoting/chapter3_Alethea/alethea_sel_SmHh.spthy	witness-index	DIFF	4 pages at cert_20260805
+thesis-LaraSchmid-evoting/chapter3_Alethea/alethea_vot_ShHh.spthy	witness-index	DIFF	1 page at cert_20260805
+thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/MPAuth_VC.spthy	witness-index	DIFF	6 pages at cert_20260805
+wireguard/wireguard.spthy	witness-index	DIFF	80 pages at cert_20260805
+wisec21-5G-handover/inter-5G/EPS_to_5GS_over_N26/5G_handover.spthy	watch	none	crawled clean at cert_20260805

@@ -20,8 +20,9 @@
 #                        RS can't match → kept out of parity_corpus.txt.
 #   --auto-sources       routed (RS generates the sources lemma); the spore /
 #                        AUTO_SOURCES_CASE_STUDIES rows below are corpus MATCHes.
-#   --stop-on-trace=...  dfs (default) and seqdfs are routed in prove-mode;
-#                        bfs/sorry/none error as unported.
+#   --stop-on-trace=...  all five values (dfs/seqdfs/bfs/sorry/none) are
+#                        routed in prove-mode; the non-default ones are
+#                        oracle-pinned by the chan_stop_* cli_refs rows.
 #   in-file `heuristic: o "..."` oracles need NO entry here — RS routes the
 #                        in-file heuristic + has oracle_ranking, so those files
 #                        already work bare.
@@ -88,3 +89,39 @@ accountability/csf21-acc-unbounded/mixnets/message-tracing/dmn-message-tracing-f
 #accountability/csf21-acc-unbounded/mixnets/message-tracing/dmn-message-tracing-first-3.spthy	--stop-on-trace=seqdfs
 #accountability/csf21-acc-unbounded/mixnets/message-tracing/dmn-message-tracing-first-4.spthy	--stop-on-trace=seqdfs
 #accountability/csf21-acc-unbounded/mixnets/message-tracing/dmn-message-tracing-first-5.spthy	--stop-on-trace=seqdfs
+
+# ---- `-D` preprocessor coverage ---------------------------------------------
+# 32 corpus theories carry `#ifdef`, and with no `-D` on the command line EVERY
+# gate took the SAME branch in all 32 — the taken-branch code, the `#else`
+# arms, the transitive `#define` and the flag CONJUNCTION were never once
+# compared against the oracle.  These rows define flags for four of them so the
+# other branch is what the gates prove.  The value must be ATTACHED (`-D=A`,
+# never `-D A`): the same argv feeds the HASKELL binary too, whose cmdargs
+# `flagOpt` (TheoryLoader.hs:132-137) reads a detached value as a positional
+# input file.
+#
+# Coverage each row buys, and why these four:
+#   define.spthy   purpose-built parser fixture.  `-D=A -D=B -D=C` takes the
+#                  plain `#ifdef A` arm, DROPS the `#ifdef not A` arm
+#                  (negation), takes the `#ifdef B` arm over its `#else`,
+#                  fires the `#define D` NESTED inside the taken `#ifdef C`
+#                  arm, and through it the `#ifdef D` and `#ifdef D & C`
+#                  (conjunction) arms — every flag-formula shape the parser
+#                  implements, in one file whose lemmas are one step each.
+#   HPagree        one flag consumed by TWO separate blocks (the human-model
+#                  selector and the guideline restrictions further down); the
+#                  in-file RESULTS header records this exact configuration
+#                  (both `NoOverwrite`/`DoClaimBeforeSend` action facts are
+#                  present) at 13/8/8 steps.
+#   Google2Step_EA the `infallible` arm of a three-way selector, documented at
+#                  7/7/7 steps.
+#   OTPoverSMS_EA  the `untrained` arm of the SAME three-way selector, so the
+#                  pair pins both sides of a mutually exclusive choice;
+#                  documented at 6/4/4 steps.
+# All four are cheap by the authors' own step counts, which is why they were
+# picked over the sp14 / esorics23 `#ifdef` theories (bilinear pairing, and a
+# 14k-line model with 200+ blocks).
+testParser/define.spthy	-D=A -D=B -D=C
+thesis-LaraSchmid-evoting/chapter5_HumanErrors/HPagree.spthy	-D=ruleBased
+thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/Google2Step_EA.spthy	-D=infallible
+thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/OTPoverSMS_EA.spthy	-D=untrained

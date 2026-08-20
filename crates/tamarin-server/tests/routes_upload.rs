@@ -73,13 +73,11 @@ async fn test_post_index_with_empty_field_shows_alert() {
         .expect("send");
     assert_eq!(res.status(), 200);
     let body = res.text().await.expect("read");
-    // The Rust port surfaces "No theory file given." via a
-    // <p class="message"> banner.
+    // This is the empty-upload branch of HS `postRootR`.  The port renders it
+    // as a `<p class="message">` banner before the index page.
     assert!(
-        body.contains("No theory file given.")
-            || body.contains("upload failed")
-            || body.contains("Theory loading failed"),
-        "expected an upload-error message; body={}",
+        body.contains(r#"<body><p class="message">No theory file given.</p>"#),
+        "expected the empty-upload banner at the top of the index; body={}",
         body
     );
 }
@@ -103,11 +101,18 @@ async fn test_post_index_with_garbage_source_shows_alert() {
         .expect("send");
     assert_eq!(res.status(), 200);
     let body = res.text().await.expect("read");
+    // The banner carries the failure from the loader word for word: the
+    // `name:line:col: description` line plus the variant's notes.  The port
+    // escapes them for HTML and keeps their newlines (see
+    // `handlers::root::html_escape`).  The banner shows them under the name
+    // of the uploaded file.
     assert!(
-        body.contains("Theory loading failed")
-            || body.contains("parse error")
-            || body.contains("elaboration error"),
-        "expected parse/elaborate error message in banner; body=\n{}",
+        body.contains(
+            "<body><p class=\"message\">Theory loading failed:\n\
+             garbage.spthy:1:1: Unexpected keyword\n\
+             expected keyword `theory`, but found `this`</p>"
+        ),
+        "expected the parse error in the upload banner; body=\n{}",
         body
     );
 }

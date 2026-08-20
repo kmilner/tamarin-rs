@@ -1,12 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, felixlinker, jdreier, rkunnema, racoucho1u, beschmi,
-//   rsasse, symphorien, PhilipLukertWork, felixonmars, yavivanov,
-//   katrielalex, robert.kunnemann@cased.de, xaDxelA, and other minor
-//   contributors (see upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/theory/src/Theory/Constraint/Solver/Contradictions.hs,
-//   lib/theory/src/Theory/Constraint/Solver/ProofMethod.hs,
-//   lib/theory/src/Theory/Proof.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Proof-skeleton printer + Haskell `--output=` extractor for
 //! cross-checking that our proof trees structurally match
@@ -70,9 +64,10 @@ fn render_node(node: &ProofNode, indent: usize, out: &mut String) {
     let pad = "  ".repeat(indent);
     // Terminal-method handling: Sorry/Finished and SolveGoal/Simplify
     // /Induction with no children are leaves.  Haskell's prettyProof
-    // emits `by <method>` as a single line for leaves whose method is
-    // not Finished (Proof.hs:1064-1066), so we mirror that here — emit
-    // *just* the leaf line, skipping the separate method-keyword line.
+    // emits `by <method>` as a single line for every leaf except
+    // `Finished Solved`, which prints bare (Theory/Proof.hs:1064-1066), so we
+    // mirror that here — emit *just* the leaf line, skipping the separate
+    // method-keyword line.
     if node.children.is_empty() {
         match &node.method {
             ProofMethod::Finished(MethodResult::Contradictory(c)) => {
@@ -82,7 +77,7 @@ fn render_node(node: &ProofNode, indent: usize, out: &mut String) {
                 out.push_str(" */\n");
             }
             ProofMethod::Finished(MethodResult::Solved) => {
-                // Mirror HS `prettyProofMethod` (ProofMethod.hs:1174-1187, see line 1177):
+                // Mirror HS `prettyProofMethod` (ProofMethod.hs:1174-1186, see line 1176):
                 //   `keyword_ "SOLVED" <-> lineComment_ "trace found"`.
                 out.push_str(&pad);
                 out.push_str("SOLVED // trace found\n");
@@ -147,7 +142,7 @@ fn render_node(node: &ProofNode, indent: usize, out: &mut String) {
     // On exists-trace lemmas only the trace-found path survives: when a
     // node's status rolls up to Solved (TraceFound), siblings that closed
     // Contradictory are elided.  In Haskell this pruning is done *before*
-    // printing, by `cutOnSolved*` -> `extractSolved` (Proof.hs:879-882,
+    // printing, by `cutOnSolved*` -> `extractSolved` (Theory/Proof.hs:879-882,
     // 920-923), which rebuilds the tree keeping one label per level;
     // `prettyProof` itself prints whatever tree it is handed.
     //
@@ -155,7 +150,7 @@ fn render_node(node: &ProofNode, indent: usize, out: &mut String) {
     // We keep only the FIRST Solved child and drop other
     // Contradictory/Sorry siblings.  All-traces proofs (status =
     // Contradictory) keep every branch.
-    let children_to_render: Vec<(String, &ProofNode)> = if node.status == NodeStatus::Solved {
+    let children_to_render: Vec<(&str, &ProofNode)> = if node.status == NodeStatus::Solved {
         // Find the first Solved child; render only that one.
         match node
             .children
@@ -163,18 +158,18 @@ fn render_node(node: &ProofNode, indent: usize, out: &mut String) {
             .find(|(_, c)| c.status == NodeStatus::Solved)
         {
             Some((name, child)) => {
-                // Haskell's `extractSolved` (`Theory/Proof.hs:921-923`)
+                // Haskell's `extractSolved` (`Theory/Proof.hs:880-882`)
                 // keeps the survivor's label verbatim — including any
                 // `_case_N` dedup suffix appended by `uniqueListBy`
-                // (ProofMethod.hs:91-103, applied at :308) when the goal
+                // (ProofMethod.hs:90-102, applied at :307) when the goal
                 // originally had multiple cases sharing a rule name.
                 // Pass the name through unchanged.
-                vec![(name.clone(), child)]
+                vec![(name.as_str(), child)]
             }
-            None => node.children.iter().map(|(n, c)| (n.clone(), c)).collect(),
+            None => node.children.iter().map(|(n, c)| (n.as_str(), c)).collect(),
         }
     } else {
-        node.children.iter().map(|(n, c)| (n.clone(), c)).collect()
+        node.children.iter().map(|(n, c)| (n.as_str(), c)).collect()
     };
     // After elision, a singleton empty-key child is still Linear.
     if children_to_render.len() == 1 && children_to_render[0].0.is_empty() {
@@ -225,7 +220,7 @@ fn contradiction_label(
 ) -> String {
     use crate::constraint::solver::contradictions::Contradiction as K;
     // Strings are abbreviated mirrors of Haskell `prettyContradiction`
-    // (Contradictions.hs:437-455, see line 438+); see the case there for each variant.
+    // (Contradictions.hs:487-506); see the case there for each variant.
     // A few variants drop Haskell's interpolated detail (e.g. Haskell's
     // `"node " ++ show j ++ " after last node " ++ show i` becomes
     // `"node after last"`, `"non-injective facts " ++ show cex` becomes
@@ -393,9 +388,9 @@ fn normalize_haskell_line(raw: &str) -> Option<String> {
     if t.is_empty() {
         return None;
     }
-    // Drop block-comment fragments.  `by contradiction /* ... */` is
-    // fine — it doesn't start with `/*` or `*`, and isn't exactly `*/`.
-    if t.starts_with("/*") || t.starts_with("*") || t == "*/" {
+    // Drop block-comment fragments (`/* …`, `* …`, `*/`).  `by
+    // contradiction /* ... */` is fine — it starts with neither `/*` nor `*`.
+    if t.starts_with("/*") || t.starts_with('*') {
         return None;
     }
     // Tokenize.
@@ -408,12 +403,8 @@ fn normalize_haskell_line(raw: &str) -> Option<String> {
     if t == "simplify" {
         return Some(format!("{}simplify", pad));
     }
-    if let Some(rest) = t.strip_prefix("solve(") {
-        // Drop the goal payload — keep just `solve`.
-        let _ = rest;
-        return Some(format!("{}solve", pad));
-    }
-    if t.starts_with("solve ") {
+    // Drop the goal payload — keep just `solve`.
+    if t.starts_with("solve(") || t.starts_with("solve ") {
         return Some(format!("{}solve", pad));
     }
     if let Some(rest) = t.strip_prefix("case ") {
@@ -433,19 +424,20 @@ fn normalize_haskell_line(raw: &str) -> Option<String> {
     }
     // UNFINISHABLE leaf (reducible operator in subterm).  Haskell's
     // `prettyProof` prepends `by ` to this non-Solved finished leaf
-    // (ppCases ps [] at Proof.hs:1054-1075, see line 1065) and `prettyProofMethod` emits
-    // `keyword_ "UNFINISHABLE" <-> lineComment_ "reducible operator in
-    // subterm"` (ProofMethod.hs:1174-1187, see line 1179).  Our `render` emits the same
-    // line, so preserve it verbatim instead of dropping it.
+    // (ppCases ps [] at Theory/Proof.hs:1054-1075, see line 1065) and
+    // `prettyProofMethod` emits `keyword_ "UNFINISHABLE" <-> lineComment_
+    // "reducible operator in subterm"` (ProofMethod.hs:1174-1186, see line
+    // 1178).  Our `render` emits the same line, so preserve it verbatim
+    // instead of dropping it.
     if t.starts_with("UNFINISHABLE") || t.starts_with("by UNFINISHABLE") {
         return Some(format!(
             "{}by UNFINISHABLE // reducible operator in subterm",
             pad
         ));
     }
-    if t == "SOLVED" || t.starts_with("SOLVED") || t == "by SOLVED" {
+    if t.starts_with("SOLVED") || t == "by SOLVED" {
         // HS pretty-prints `keyword_ "SOLVED" <-> lineComment_ "trace found"`
-        // (ProofMethod.hs:1174-1187, see line 1177), so the raw line is `SOLVED // trace found`.
+        // (ProofMethod.hs:1174-1186, see line 1176), so the raw line is `SOLVED // trace found`.
         // Our `render` emits the same suffix; preserve it here so the diff
         // matches verbatim instead of treating the cosmetic comment as a
         // divergence.
@@ -518,10 +510,11 @@ pub fn first_divergence(ours: &str, theirs: &str) -> Option<(usize, String, Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::constraint::solver::contradictions::Contradiction;
+    use crate::constraint::system::System;
+    use std::collections::BTreeMap;
 
-    #[test]
-    fn extract_simple_two_lemma_proof() {
-        let s = r#"theory T begin
+    const TWO_LEMMA_PROOF: &str = r#"theory T begin
 lemma foo:
   all-traces
   "..."
@@ -543,14 +536,171 @@ next
   SOLVED
 qed
 end"#;
-        let foo = extract_from_haskell(s, "foo").unwrap();
-        assert!(foo.contains("simplify"));
-        assert!(foo.contains("by contradiction /* from formulas */"));
-        let bar = extract_from_haskell(s, "bar").unwrap();
-        assert!(bar.contains("simplify"));
-        assert!(bar.contains("solve"));
-        assert!(bar.contains("case A"));
-        assert!(bar.contains("case B"));
-        assert!(bar.contains("qed"));
+
+    /// The test compares the complete output of the extractor.  It does not
+    /// use `contains`.  The extractor must start at the first proof line of
+    /// the named lemma.  It must stop at the end of that same proof.  The
+    /// single-step proof of `foo` has no `qed`, so the scope stack is what
+    /// ends it.  The extractor must also drop the header and guarded-formula
+    /// block, and strip `solve(<goal>)` down to `solve` on its own.
+    #[test]
+    fn extract_simple_two_lemma_proof() {
+        assert_eq!(
+            extract_from_haskell(TWO_LEMMA_PROOF, "foo").unwrap(),
+            "simplify\nby contradiction /* from formulas */\n"
+        );
+        assert_eq!(
+            extract_from_haskell(TWO_LEMMA_PROOF, "bar").unwrap(),
+            "simplify\n\
+             solve\n\
+             \x20 case A\n\
+             \x20 by contradiction /* cyclic */\n\
+             next\n\
+             \x20 case B\n\
+             \x20 SOLVED\n\
+             qed\n"
+        );
+        // A lemma that is not in the file has no skeleton.
+        assert_eq!(extract_from_haskell(TWO_LEMMA_PROOF, "missing"), None);
+    }
+
+    fn node(method: ProofMethod, status: NodeStatus, children: &[(&str, ProofNode)]) -> ProofNode {
+        ProofNode {
+            method,
+            sys: System::empty(),
+            children: children
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.clone()))
+                .collect::<BTreeMap<_, _>>(),
+            status,
+            annotated: true,
+        }
+    }
+
+    fn leaf(method: ProofMethod, status: NodeStatus) -> ProofNode {
+        node(method, status, &[])
+    }
+
+    /// One tree that exercises the three layout rules of `render`.  A
+    /// branching method wraps its children in `case`/`next`/`qed`.  A single
+    /// child with an empty key is a Linear continuation, and `render` prints
+    /// it inline with no `case`/`qed` wrapper.  Each kind of leaf closure has
+    /// its own line form.
+    #[test]
+    fn render_emits_cases_next_qed_and_inlines_linear_children() {
+        let root = node(
+            ProofMethod::Induction,
+            NodeStatus::Contradictory,
+            &[
+                (
+                    "empty_trace",
+                    node(
+                        ProofMethod::Simplify,
+                        NodeStatus::Contradictory,
+                        &[(
+                            "",
+                            leaf(
+                                ProofMethod::Finished(MethodResult::Contradictory(Some(
+                                    Contradiction::Cyclic,
+                                ))),
+                                NodeStatus::Contradictory,
+                            ),
+                        )],
+                    ),
+                ),
+                (
+                    "non_empty_trace",
+                    node(
+                        ProofMethod::Simplify,
+                        NodeStatus::Sorry,
+                        &[(
+                            "",
+                            leaf(
+                                ProofMethod::Sorry(Some("bound reached".into())),
+                                NodeStatus::Sorry,
+                            ),
+                        )],
+                    ),
+                ),
+            ],
+        );
+        assert_eq!(
+            render(&root),
+            "induction\n\
+             \x20 case empty_trace\n\
+             \x20 simplify\n\
+             \x20 by contradiction /* cyclic */\n\
+             next\n\
+             \x20 case non_empty_trace\n\
+             \x20 simplify\n\
+             \x20 by sorry /* bound reached */\n\
+             qed\n"
+        );
+    }
+
+    /// Exists-trace pruning.  Once a node's status is `Solved`, `render`
+    /// keeps only the first Solved child.  It drops the branches that closed
+    /// contradictorily.  This mirrors HS `extractSolved`, which prunes before
+    /// it prints.  Without the pruning, the skeleton would carry `case_1` and
+    /// a `next`, and every exists-trace diff would report a difference that
+    /// is not real.
+    #[test]
+    fn render_elides_non_solved_siblings_under_a_solved_node() {
+        let root = node(
+            ProofMethod::Simplify,
+            NodeStatus::Solved,
+            &[
+                (
+                    "case_1",
+                    leaf(
+                        ProofMethod::Finished(MethodResult::Contradictory(None)),
+                        NodeStatus::Contradictory,
+                    ),
+                ),
+                (
+                    "case_2",
+                    leaf(
+                        ProofMethod::Finished(MethodResult::Solved),
+                        NodeStatus::Solved,
+                    ),
+                ),
+            ],
+        );
+        assert_eq!(
+            render(&root),
+            "simplify\n\
+             \x20 case case_2\n\
+             \x20 SOLVED // trace found\n\
+             qed\n"
+        );
+    }
+
+    /// `first_divergence` compares leaf closures up to their reason.  A
+    /// `cyclic` reason against a `from formulas` reason is not a divergence.
+    /// The function reports every other line difference with its 1-based
+    /// line number.  It uses `<EOF>` for the shorter side.
+    #[test]
+    fn first_divergence_ignores_closure_reasons_only() {
+        let ours = "simplify\nby contradiction /* cyclic */\n";
+        assert_eq!(
+            first_divergence(ours, "simplify\nby contradiction /* from formulas */\n"),
+            None
+        );
+        assert_eq!(
+            first_divergence(ours, "simplify\nby sorry\n"),
+            Some((
+                2,
+                "by contradiction /* cyclic */".to_string(),
+                "by sorry".to_string()
+            ))
+        );
+        assert_eq!(
+            first_divergence(ours, "simplify\n"),
+            Some((
+                2,
+                "by contradiction /* cyclic */".to_string(),
+                "<EOF>".to_string()
+            ))
+        );
     }
 }

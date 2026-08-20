@@ -1,19 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, jdreier, kevinmorio, beschmi, rkunnema, arcz,
-//   PhilipLukertWork, yavivanov, rsasse, Azurios-git, Hong-Thai, Nynko,
-//   felixlinker, charlie-j, and other minor contributors (see upstream
-//   git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/term/src/Term/LTerm.hs, lib/term/src/Term/Maude/Types.hs,
-//   lib/term/src/Term/Positions.hs,
-//   lib/term/src/Term/Substitution/SubstVFresh.hs,
-//   lib/term/src/Term/Unification.hs, lib/theory/src/Rule.hs,
-//   lib/theory/src/Theory/Model/Rule.hs,
-//   lib/theory/src/Theory/Sapic/Process.hs,
-//   lib/theory/src/Theory/Sapic/Term.hs,
-//   lib/theory/src/Theory/Tools/IntruderRules.hs,
-//   lib/utils/src/Utils/Misc.hs, src/Main/Mode/Intruder.hs,
-//   src/Main/TheoryLoader.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Port of `Theory.Tools.IntruderRules` from
 //! `lib/theory/src/Theory/Tools/IntruderRules.hs` — covers the
@@ -106,7 +93,7 @@ pub fn special_intruder_rules(diff: bool) -> Vec<IntrRuleAC> {
 }
 
 /// `natIntruderRules` — direct port of
-/// `Theory.Tools.IntruderRules.natIntruderRules` (IntruderRules.hs:113-120):
+/// `Theory.Tools.IntruderRules.natIntruderRules` (IntruderRules.hs:116-122):
 /// when the natural-numbers plugin is enabled, ONE constructor
 ///
 /// ```text
@@ -291,7 +278,7 @@ pub fn destruction_rules(
     out
 }
 
-/// `showFunSymName` (Term.hs:286-296) — the plain-name rendering used for
+/// `showFunSymName` (Term/Term.hs:286-296) — the plain-name rendering used for
 /// intruder rule names and case names: user symbols print their own name; the
 /// builtin AC/C operators print their `*SymString` names.  Note `Union`
 /// renders as HS's `munSymString` ("mun"), NOT `unionSymString` ("union") —
@@ -459,7 +446,7 @@ fn private_constructor_rules(
 /// `unifyRaw` (Term/Unification.hs:288-306) inspects them.  AC/C
 /// applications with fewer than two arguments are [`TermShape::Opaque`]:
 /// HS states "we assume here that terms of the form mult(t) never occur"
-/// (Term/Unification.hs:299), so their unification behaviour is unpinned
+/// (Term/Unification.hs:299-301), so their unification behaviour is unpinned
 /// and no reject may rest on them.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum TermShape {
@@ -505,7 +492,7 @@ impl TermShape {
         }
     }
 
-    /// No substitution `σ` that `isRenamingPerRule` (Rule.hs:1163, 1187)
+    /// No substitution `σ` that `isRenamingPerRule` (Theory/Model/Rule.hs:1163,1188)
     /// accepts can equate two terms of these shapes, so an equation between
     /// them forces the enclosing check to `False`.
     ///
@@ -548,7 +535,7 @@ struct FactShape {
 impl FactShape {
     /// Some zipped term pair of the two facts cannot be equated.  The zip
     /// truncates, mirroring HS `matchFacts`' `zipWith Equal t1 t2`
-    /// (Rule.hs:1168-1169).
+    /// (Theory/Model/Rule.hs:1168-1169).
     fn clashes_with(&self, other: &FactShape) -> bool {
         self.terms
             .iter()
@@ -576,8 +563,8 @@ impl FactShape {
 /// Every reject is a necessary condition of the check it guards: a pair the
 /// fingerprints reject is one on which
 /// [`equal_duplicate_rule_up_to_renaming`] (HS `equalDuplicateRuleUpToRenaming`,
-/// Rule.hs:1178-1179) resp. [`equal_subset_rule_up_to_renaming`] (HS
-/// `equalSubsetRuleUpToRenaming`, Rule.hs:1182-1198) provably answers
+/// Theory/Model/Rule.hs:1178-1179) resp. [`equal_subset_rule_up_to_renaming`] (HS
+/// `equalSubsetRuleUpToRenaming`, Theory/Model/Rule.hs:1182-1198) provably answers
 /// `False`, so the survivor set and its order are exactly those of the
 /// unguarded loop.  The three shape facts the rejects rest on are:
 ///  1. HS `unifyRaw` (Term/Unification.hs:288-306) fails on a top-symbol
@@ -614,9 +601,9 @@ impl RuleFingerprint {
     /// Necessary condition for `equal_duplicate_rule_up_to_renaming(r1, r2)`,
     /// with `self` the fingerprint of `r1` and `other` that of `r2`.
     ///
-    /// `renameAvoiding` (Rule.hs:1179) only renames variables, so `r2`'s
+    /// `renameAvoiding` (Theory/Model/Rule.hs:1179) only renames variables, so `r2`'s
     /// fingerprint describes the renamed-apart rule too.  HS
-    /// `equalRuleUpToRenamingIgnoringNames` (Rule.hs:1157-1170) folds
+    /// `equalRuleUpToRenamingIgnoringNames` (Theory/Model/Rule.hs:1157-1169) folds
     /// `matchFacts` over `zip (pr1++co1++ac1) (pr2++co2++ac2)`, failing on a
     /// fact-tag mismatch and otherwise extending the equation set by
     /// `zipWith Equal t1 t2`; both zips truncate, and so do these.
@@ -629,7 +616,8 @@ impl RuleFingerprint {
 
     /// Necessary condition for `equal_subset_rule_up_to_renaming(r1, r2)`,
     /// with `self` the fingerprint of `r1` and `other` that of `r2`.  Two
-    /// parts, mirroring HS `equalSubsetRuleUpToRenaming` (Rule.hs:1182-1198):
+    /// parts, mirroring HS `equalSubsetRuleUpToRenaming`
+    /// (Theory/Model/Rule.hs:1182-1198):
     ///  * `unifyLNFactEqs [Equal (head co2) (head co1)]` is empty — HS's
     ///    `[] -> False` — unless both rules have a conclusion, their tags and
     ///    term counts agree and their zipped terms do not clash;
@@ -691,7 +679,7 @@ impl RuleFingerprint {
 /// [`special_intruder_rules`], is never routed through here.
 ///
 /// Stage 1's subsumption arm depends on it: HS `equalSubsetRuleUpToRenaming`
-/// forces `head co2` / `head co1` (Rule.hs:1184) and so `error`s on a
+/// forces `head co2` / `head co1` (Theory/Model/Rule.hs:1184) and so `error`s on a
 /// conclusion-free rule, whereas [`equal_subset_rule_up_to_renaming`] returns
 /// `false` there — which reads as "not subsumed" and silently keeps a rule HS
 /// would have refused to process.  The `debug_assert!` below makes that state
@@ -757,7 +745,7 @@ fn minimize_intruder_rules(
 }
 
 /// Set-subset check: every distinct element of `a` is `==` to some element of
-/// `b`.  Mirrors Haskell's `subsetOf` (Utils/Misc.hs:87-88):
+/// `b`.  Mirrors Haskell's `subsetOf` (Utils/Misc.hs:90-92):
 /// `subsetOf xs ys = (S.fromList xs) `S.isSubsetOf` (S.fromList ys)` —
 /// `S.fromList` deduplicates BOTH arguments, so multiplicity is ignored on both
 /// sides.  This is a SET subset, not a multiset/list subset.
@@ -765,7 +753,7 @@ fn is_subset_of(a: &[crate::fact::LNFact], b: &[crate::fact::LNFact]) -> bool {
     a.iter().all(|fa| b.iter().any(|fb| fa == fb))
 }
 
-/// `isDoublePremiseRule` (IntruderRules.hs:201-206).
+/// `isDoublePremiseRule` (IntruderRules.hs:203-208).
 ///
 /// Drops destructor rules whose first premise is `KD(t)` where `t` is a
 /// msg-var, conclusions are ground, no private function symbols appear
@@ -822,7 +810,8 @@ fn is_double_premise_rule(r: &IntrRuleAC) -> bool {
 
 /// `multisetIntruderRules` — port of Haskell's
 /// `Theory.Tools.IntruderRules.multisetIntruderRules`
-/// (`lib/theory/src/Theory/Tools/IntruderRules.hs:327-333`):
+/// (`lib/theory/src/Theory/Tools/IntruderRules.hs:386-392`, with
+/// `mkDUnionRule` at 394-398 and `mkCUnionRule` at 439-443):
 ///
 /// ```haskell
 /// multisetIntruderRules = [mkDUnionRule [x_var, y_var] x_var,
@@ -1092,7 +1081,7 @@ pub fn construction_rules(
 // rules therefore arrive at the rule cache fully processed.
 // =============================================================================
 
-/// `isPrivateFunction` (Term.hs:203-205): top-level function symbol is Private.
+/// `isPrivateFunction` (Term/Term.hs:224-226): top-level function symbol is Private.
 pub fn is_private_function(t: &LNTerm) -> bool {
     use tamarin_term::function_symbols::{NoEqSym, Privacy};
     use tamarin_term::term::Term;
@@ -1525,9 +1514,9 @@ fn variants_intruder_with(
     let cleaned: Vec<LNSubstVFresh> = raw_substs
         .into_iter()
         .map(|pairs| {
-            // HS-faithful `removeRenamings` (Maude/Types.hs:123-127, see line 130): HS's
+            // HS-faithful `removeRenamings` (Maude/Types.hs:133-157, see line 144): HS's
             // `msubstToLSubstVFresh bindings substMaude` — applied to EVERY
-            // variant subst inside `variantsViaMaude` (Process.hs:304-309, see line 312,
+            // variant subst inside `variantsViaMaude` (Term/Maude/Process.hs:260-272, see line 271,
             // `map (msubstToLSubstVFresh bindings) <$> parseVariantsReply`) —
             // ends with `removeRenamings $ substFromListVFresh slist`, dropping
             // each entry whose image is a bare fresh Var with no other role in
@@ -1539,7 +1528,7 @@ fn variants_intruder_with(
             // `x0 --> #1` (a fresh witness); `removeRenamings` collapses it to
             // the EMPTY subst, so `freshToFreeAvoiding {}` is the identity and
             // the variant rule equals the base rule — which the `ruvariant /= ru`
-            // guard (IntruderRules.hs:288-314, see line 297) then drops.  Without this step the
+            // guard (IntruderRules.hs:354-360, see line 356) then drops.  Without this step the
             // identity variants leak through as `{x0 -> x.N}`, yielding the two
             // extra base-case rules (+1 `d_inv` `KD(x)->KD(inv(x))` and
             // +1 `d_exp`) that over-produce 53 rules instead of HS's 51.
@@ -1652,7 +1641,7 @@ fn variants_intruder_with(
             }
         }
 
-        // Drop rules with single product-conclusion (HS lines 303-305).
+        // Drop rules with single product-conclusion (IntruderRules.hs:362-364).
         let conc_terms: Vec<&LNTerm> = ruvariant
             .conclusions
             .iter()
@@ -1963,7 +1952,7 @@ pub fn equal_subset_rule_up_to_renaming(
 
 // =============================================================================
 // `normRule'` — port of `Theory.Tools.IntruderRules.normRule'`
-// (IntruderRules.hs:316-321).
+// (IntruderRules.hs:376-380).
 //
 // HS shape:
 // ```haskell
@@ -1983,12 +1972,10 @@ pub fn equal_subset_rule_up_to_renaming(
 // =============================================================================
 /// `normRule'` — normalise every term in an intruder rule via Maude.
 ///
-/// Mirrors HS `normRule'` (IntruderRules.hs). Retained as a standalone
-/// reusable mirror of `normRule'`; it is intentionally not on the
-/// `variants_intruder` hot path, which inlines normalisation via
-/// `maude.reduce` rather than going through this function.
-// Intentionally retained: faithful HS port; no production caller — only
-// the in-file test below exercises it.
+/// Mirrors HS `normRule'` (IntruderRules.hs:376-380).  Retained as a faithful
+/// standalone port with no production caller — only the in-file test below
+/// exercises it; `variants_intruder` inlines normalisation via `maude.reduce`
+/// instead of routing through here.
 #[allow(dead_code)]
 pub(crate) fn norm_rule(
     maude: &tamarin_term::maude_proc::MaudeHandle,
@@ -2013,7 +2000,7 @@ pub(crate) fn norm_rule(
 // =============================================================================
 // `dhIntruderRules` — port of
 // `Theory.Tools.IntruderRules.dhIntruderRules`
-// (IntruderRules.hs:230-283).
+// (IntruderRules.hs:290-342).
 //
 // HS shape:
 // ```haskell
@@ -2092,7 +2079,7 @@ fn intr_mk_empty(_: LNFact) -> Vec<LNFact> {
 }
 
 /// `dhIntruderRules` — compute the intruder rules for the Diffie-Hellman
-/// theory.  Direct mirror of HS `dhIntruderRules` (IntruderRules.hs:230-283).
+/// theory.  Direct mirror of HS `dhIntruderRules` (IntruderRules.hs:290-342).
 ///
 /// Returns 5 constructor rules (`_exp`, `_inv`, `_DH_neutral`, `_one`,
 /// `_mult`) plus the variants-expansion of 2 destructor rules
@@ -2100,7 +2087,7 @@ fn intr_mk_empty(_: LNFact) -> Vec<LNFact> {
 /// `DH_neutral` are only really applied in `diff` mode — in trace mode
 /// all such constraints are solved directly — but the constructors
 /// always appear in the message theory (mirrors HS comment at
-/// IntruderRules.hs:235-237).
+/// IntruderRules.hs:294-296).
 ///
 /// # Role: cache REGENERATOR (not the production runtime path)
 ///
@@ -2111,16 +2098,17 @@ fn intr_mk_empty(_: LNFact) -> Vec<LNFact> {
 /// ```
 /// The production theory-load path
 /// (`Main.TheoryLoader.addMessageDeductionRuleVariants`,
-/// TheoryLoader.hs:776-791) parses the CACHED file via
+/// TheoryLoader.hs:881-901) parses the CACHED file via
 /// `mkDhIntruderVariants` — see [`crate::intruder_variants::mk_dh_intruder_variants`].
 ///
 /// In production the Rust port likewise takes the cached-file path
 /// (see `constraint::solver::context::ProofContext::new_with_restrictions`,
 /// the `intruder_variants::mk_dh_intruder_variants` call); this
-/// function is retained as the regenerator and is exercised by the
-/// bridge test
-/// `intruder_variants::tests::bridge_runtime_generator_matches_cached_file_on_counts_and_names`,
-/// which flags drift between today's Maude and the cached file.
+/// function stays here as the regenerator.  The test
+/// `intruder_rules::tests::dh_intruder_rules_emits_five_constructors_and_some_destructors`
+/// exercises it.  The asserts `rules.len() == 51`, `n_exp == 45` and
+/// `n_inv == 1` in that test report any drift between today's Maude and the
+/// cached file.
 pub fn dh_intruder_rules(
     diff: bool,
     maude: &tamarin_term::maude_proc::MaudeHandle,
@@ -2132,16 +2120,16 @@ pub fn dh_intruder_rules(
     };
 
     // `x_var_0 = varTerm (LVar "x" LSortMsg 0)` etc.
-    // IntruderRules.hs:247-248.
+    // IntruderRules.hs:306-307.
     let x_var_0 = var_term(LVar::new("x", LSort::Msg, 0));
     let x_var_1 = var_term(LVar::new("x", LSort::Msg, 1));
 
     // HS `expRule mkInfo kudFact mkAction`
     //   = Rule mkInfo [kudFact x_var_0, kuFact x_var_1] [kudFact (fAppExp ...)] (mkAction ...) []
-    // IntruderRules.hs:250-256.
+    // IntruderRules.hs:309-315.
     let exp_rule = |info: IntrRuleACInfo,
                     kud_fact: fn(LNTerm) -> LNFact,
-                    mk_action: &dyn Fn(LNFact) -> Vec<LNFact>|
+                    mk_action: fn(LNFact) -> Vec<LNFact>|
      -> IntrRuleAC {
         let bfact = kud_fact(x_var_0.clone());
         let efact = ku_fact(x_var_1.clone());
@@ -2151,10 +2139,10 @@ pub fn dh_intruder_rules(
         Rule::new(info, vec![bfact, efact], vec![concfact], acts)
     };
 
-    // HS `multRule` — IntruderRules.hs:258-264.
+    // HS `multRule` — IntruderRules.hs:317-323.
     let mult_rule = |info: IntrRuleACInfo,
                      kud_fact: fn(LNTerm) -> LNFact,
-                     mk_action: &dyn Fn(LNFact) -> Vec<LNFact>|
+                     mk_action: fn(LNFact) -> Vec<LNFact>|
      -> IntrRuleAC {
         let bfact = kud_fact(x_var_0.clone());
         let efact = ku_fact(x_var_1.clone());
@@ -2164,10 +2152,10 @@ pub fn dh_intruder_rules(
         Rule::new(info, vec![bfact, efact], vec![concfact], acts)
     };
 
-    // HS `invRule` — IntruderRules.hs:266-271.
+    // HS `invRule` — IntruderRules.hs:325-330.
     let inv_rule = |info: IntrRuleACInfo,
                     kud_fact: fn(LNTerm) -> LNFact,
-                    mk_action: &dyn Fn(LNFact) -> Vec<LNFact>|
+                    mk_action: fn(LNFact) -> Vec<LNFact>|
      -> IntrRuleAC {
         let bfact = kud_fact(x_var_0.clone());
         let conc = inv(x_var_0.clone());
@@ -2176,10 +2164,10 @@ pub fn dh_intruder_rules(
         Rule::new(info, vec![bfact], vec![concfact], acts)
     };
 
-    // HS `oneRule` — IntruderRules.hs:273-277.
+    // HS `oneRule` — IntruderRules.hs:332-336.
     let one_rule = |info: IntrRuleACInfo,
                     kud_fact: fn(LNTerm) -> LNFact,
-                    mk_action: &dyn Fn(LNFact) -> Vec<LNFact>|
+                    mk_action: fn(LNFact) -> Vec<LNFact>|
      -> IntrRuleAC {
         let conc = one_const::<tamarin_term::vterm::Lit<tamarin_term::lterm::Name, LVar>>();
         let concfact = kud_fact(conc);
@@ -2187,10 +2175,10 @@ pub fn dh_intruder_rules(
         Rule::new(info, vec![], vec![concfact], acts)
     };
 
-    // HS `dhNeutralRule` — IntruderRules.hs:279-283.
+    // HS `dhNeutralRule` — IntruderRules.hs:338-342.
     let dh_neutral_rule = |info: IntrRuleACInfo,
                            kud_fact: fn(LNTerm) -> LNFact,
-                           mk_action: &dyn Fn(LNFact) -> Vec<LNFact>|
+                           mk_action: fn(LNFact) -> Vec<LNFact>|
      -> IntrRuleAC {
         let conc = dh_neutral::<tamarin_term::vterm::Lit<tamarin_term::lterm::Name, LVar>>();
         let concfact = kud_fact(conc);
@@ -2198,42 +2186,36 @@ pub fn dh_intruder_rules(
         Rule::new(info, vec![], vec![concfact], acts)
     };
 
-    // Shared `mkInfo`/action plumbing (`intr_constr_info` etc.).
-    let constr_info = intr_constr_info;
-    let destr_info = intr_destr_info;
-    let mk_singleton: &dyn Fn(LNFact) -> Vec<LNFact> = &intr_mk_singleton;
-    let mk_empty: &dyn Fn(LNFact) -> Vec<LNFact> = &intr_mk_empty;
-
     let constrs: Vec<IntrRuleAC> = vec![
         // expRule  (ConstrRule "_exp" (NoEq expSym))        kuFact return
         exp_rule(
-            constr_info(EXP_SYM_STRING, FunSym::NoEq(exp_sym())),
+            intr_constr_info(EXP_SYM_STRING, FunSym::NoEq(exp_sym())),
             ku_fact,
-            mk_singleton,
+            intr_mk_singleton,
         ),
         // invRule  (ConstrRule "_inv" (NoEq invSym))        kuFact return
         inv_rule(
-            constr_info(INV_SYM_STRING, FunSym::NoEq(inv_sym())),
+            intr_constr_info(INV_SYM_STRING, FunSym::NoEq(inv_sym())),
             ku_fact,
-            mk_singleton,
+            intr_mk_singleton,
         ),
         // dhNeutralRule (ConstrRule "_DH_neutral" (NoEq dhNeutralSym)) kuFact return
         dh_neutral_rule(
-            constr_info(DH_NEUTRAL_SYM_STRING, FunSym::NoEq(dh_neutral_sym())),
+            intr_constr_info(DH_NEUTRAL_SYM_STRING, FunSym::NoEq(dh_neutral_sym())),
             ku_fact,
-            mk_singleton,
+            intr_mk_singleton,
         ),
         // oneRule  (ConstrRule "_one" (NoEq oneSym))        kuFact return
         one_rule(
-            constr_info(ONE_SYM_STRING, FunSym::NoEq(one_sym())),
+            intr_constr_info(ONE_SYM_STRING, FunSym::NoEq(one_sym())),
             ku_fact,
-            mk_singleton,
+            intr_mk_singleton,
         ),
         // multRule (ConstrRule "_mult" (AC Mult))           kuFact return
         mult_rule(
-            constr_info(MULT_SYM_STRING, FunSym::Ac(AcSym::Mult)),
+            intr_constr_info(MULT_SYM_STRING, FunSym::Ac(AcSym::Mult)),
             ku_fact,
-            mk_singleton,
+            intr_mk_singleton,
         ),
     ];
 
@@ -2242,14 +2224,14 @@ pub fn dh_intruder_rules(
     // the BUILD-time narrowing call, which expects the identity variant
     // and ground-conc variants to be DROPPED.
     let exp_destr = exp_rule(
-        destr_info(EXP_SYM_STRING, vec![FunSym::NoEq(exp_sym())]),
+        intr_destr_info(EXP_SYM_STRING, vec![FunSym::NoEq(exp_sym())]),
         kd_fact,
-        mk_empty,
+        intr_mk_empty,
     );
     let inv_destr = inv_rule(
-        destr_info(INV_SYM_STRING, vec![FunSym::NoEq(inv_sym())]),
+        intr_destr_info(INV_SYM_STRING, vec![FunSym::NoEq(inv_sym())]),
         kd_fact,
-        mk_empty,
+        intr_mk_empty,
     );
 
     let mut destr_variants: Vec<IntrRuleAC> = Vec::new();
@@ -2264,7 +2246,7 @@ pub fn dh_intruder_rules(
 
 // =============================================================================
 // `bpIntruderRules` — port of
-// `Theory.Tools.IntruderRules.bpIntruderRules` (IntruderRules.hs:384-437).
+// `Theory.Tools.IntruderRules.bpIntruderRules` (IntruderRules.hs:449-478).
 //
 // HS shape:
 // ```haskell
@@ -2289,10 +2271,10 @@ pub fn dh_intruder_rules(
 // NOTE the asymmetries vs `dhIntruderRules`:
 //   * `pmultRule`'s conclusion is `pmult(x_var_1, x_var_0)` — the args
 //     are SWAPPED relative to the premise order (HS `fAppPMult (x_var_1,
-//     x_var_0)`, IntruderRules.hs:384-413, see line 404).
+//     x_var_0)`, IntruderRules.hs:464-470, see line 469).
 //   * `emapRule` uses `kud` (the KU/KD-fact constructor) for BOTH
 //     premises (`bfact = kud x0`, `efact = kud x1`), not `kuFact` for the
-//     second (IntruderRules.hs:410-411).
+//     second (IntruderRules.hs:475-476).
 //
 // # Role: runtime BP generator for the `variants` command ONLY
 //
@@ -2305,7 +2287,7 @@ pub fn dh_intruder_rules(
 // must keep using the cached file.
 // =============================================================================
 /// `bpIntruderRules` — compute the bilinear-pairing intruder rules at
-/// runtime.  Direct mirror of HS `bpIntruderRules` (IntruderRules.hs:384-437).
+/// runtime.  Direct mirror of HS `bpIntruderRules` (IntruderRules.hs:449-478).
 ///
 /// Returns 2 constructor rules (`_pmult`, `_em`) plus the
 /// variants-expansion of the `_pmult` destructor (via plain
@@ -2322,16 +2304,16 @@ pub fn bp_intruder_rules(
     use tamarin_term::builtin::{emap, pmult};
     use tamarin_term::function_symbols::{pmult_sym, CSym, EMAP_SYM_STRING, PMULT_SYM_STRING};
 
-    // `x_var_0 = varTerm (LVar "x" LSortMsg 0)` etc. (IntruderRules.hs:396-397).
+    // `x_var_0 = varTerm (LVar "x" LSortMsg 0)` etc. (IntruderRules.hs:461-462).
     let x_var_0 = var_term(LVar::new("x", LSort::Msg, 0));
     let x_var_1 = var_term(LVar::new("x", LSort::Msg, 1));
 
-    // HS `pmultRule mkInfo kud mkAction` (IntruderRules.hs:399-405).
+    // HS `pmultRule mkInfo kud mkAction` (IntruderRules.hs:464-470).
     //   prems = [kud x0, kuFact x1]; conc = kud (pmult(x1, x0)).
     // The conclusion args are SWAPPED: `fAppPMult (x_var_1, x_var_0)`.
     let pmult_rule = |info: IntrRuleACInfo,
                       kud_fact: fn(LNTerm) -> LNFact,
-                      mk_action: &dyn Fn(LNFact) -> Vec<LNFact>|
+                      mk_action: fn(LNFact) -> Vec<LNFact>|
      -> IntrRuleAC {
         let bfact = kud_fact(x_var_0.clone());
         let efact = ku_fact(x_var_1.clone());
@@ -2341,11 +2323,11 @@ pub fn bp_intruder_rules(
         Rule::new(info, vec![bfact, efact], vec![concfact], acts)
     };
 
-    // HS `emapRule mkInfo kud mkAction` (IntruderRules.hs:407-413).
+    // HS `emapRule mkInfo kud mkAction` (IntruderRules.hs:472-478).
     //   prems = [kud x0, kud x1] (BOTH via kud); conc = kud (em(x0, x1)).
     let emap_rule = |info: IntrRuleACInfo,
                      kud_fact: fn(LNTerm) -> LNFact,
-                     mk_action: &dyn Fn(LNFact) -> Vec<LNFact>|
+                     mk_action: fn(LNFact) -> Vec<LNFact>|
      -> IntrRuleAC {
         let bfact = kud_fact(x_var_0.clone());
         let efact = kud_fact(x_var_1.clone());
@@ -2355,33 +2337,27 @@ pub fn bp_intruder_rules(
         Rule::new(info, vec![bfact, efact], vec![concfact], acts)
     };
 
-    // Shared `mkInfo`/action plumbing (`intr_constr_info` etc.).
-    let constr_info = intr_constr_info;
-    let destr_info = intr_destr_info;
-    let mk_singleton: &dyn Fn(LNFact) -> Vec<LNFact> = &intr_mk_singleton;
-    let mk_empty: &dyn Fn(LNFact) -> Vec<LNFact> = &intr_mk_empty;
-
     // Constructor rules: `pmultRule (ConstrRule "_pmult" (NoEq pmultSym))
     // kuFact return` and `emapRule (ConstrRule "_em" (C EMap)) kuFact return`.
     let constrs: Vec<IntrRuleAC> = vec![
         pmult_rule(
-            constr_info(PMULT_SYM_STRING, FunSym::NoEq(pmult_sym())),
+            intr_constr_info(PMULT_SYM_STRING, FunSym::NoEq(pmult_sym())),
             ku_fact,
-            mk_singleton,
+            intr_mk_singleton,
         ),
         emap_rule(
-            constr_info(EMAP_SYM_STRING, FunSym::C(CSym::EMap)),
+            intr_constr_info(EMAP_SYM_STRING, FunSym::C(CSym::EMap)),
             ku_fact,
-            mk_singleton,
+            intr_mk_singleton,
         ),
     ];
 
     // pmult destructor variants — `variantsIntruder hnd id True diff`
     // (like DH `exp`).
     let pmult_destr = pmult_rule(
-        destr_info(PMULT_SYM_STRING, vec![FunSym::NoEq(pmult_sym())]),
+        intr_destr_info(PMULT_SYM_STRING, vec![FunSym::NoEq(pmult_sym())]),
         kd_fact,
-        mk_empty,
+        intr_mk_empty,
     );
     let mut all = constrs;
     all.extend(variants_intruder(maude, true, diff, &pmult_destr));
@@ -2389,9 +2365,9 @@ pub fn bp_intruder_rules(
     // em destructor variants — `bpVariantsIntruder diff hnd`
     // (canonicalised + KD→KU post-process).
     let emap_destr = emap_rule(
-        destr_info(EMAP_SYM_STRING, vec![FunSym::C(CSym::EMap)]),
+        intr_destr_info(EMAP_SYM_STRING, vec![FunSym::C(CSym::EMap)]),
         kd_fact,
-        mk_empty,
+        intr_mk_empty,
     );
     all.extend(bp_variants_intruder(diff, maude, &emap_destr));
 
@@ -2462,7 +2438,7 @@ fn bp_variants_intruder(
 
     let variants = variants_intruder_with(maude, &minimize_variants, true, diff, ru);
 
-    // KD→KU post-process (IntruderRules.hs:424-429): if the first premise
+    // KD→KU post-process (IntruderRules.hs:489-494): if the first premise
     // is a KD-fact whose single arg is a bare Var, rewrite that premise's
     // tag KD→KU (keeping the same args/annotations); else the symmetric
     // case where the SECOND premise is the bare-Var KD-fact.

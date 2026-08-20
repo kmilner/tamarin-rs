@@ -1,12 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   racoucho1u, meiersi, rkunnema, and other minor contributors (see
-//   upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/theory/src/Theory/Constraint/Solver/ProofMethod.hs,
-//   lib/theory/src/Theory/Constraint/System.hs,
-//   lib/theory/src/Theory/Text/Parser/Tactics.hs,
-//   lib/theory/src/Theory/Text/Parser/Token.hs,
-//   lib/theory/src/TheoryObject.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Structured tactics and their pretty-printing.
 //!
@@ -15,7 +9,7 @@
 //!     (lib/theory/src/Theory/Constraint/System.hs:439-504)
 //!   - parser:     `Theory.Text.Parser.Tactics`
 //!     (lib/theory/src/Theory/Text/Parser/Tactics.hs:60-115)
-//!   - pretty:     `prettyTactic` (lib/theory/src/TheoryObject.hs:881-909)
+//!   - pretty:     `prettyTactic` (lib/theory/src/TheoryObject.hs:924-942)
 //!
 //! The Rust parser captures the raw tactic body verbatim; this module
 //! re-parses that body into the same structure HS keeps (presort char +
@@ -109,7 +103,7 @@ impl Tactic {
         }
     }
 
-    /// Render via the ported HS `prettyTactic` (TheoryObject.hs:881-909).
+    /// Render via the ported HS `prettyTactic` (TheoryObject.hs:924-942).
     pub fn render(&self) -> String {
         let mut out = String::new();
         // `tactic: <name>` $-$ `presort: <char>`
@@ -149,7 +143,7 @@ fn render_block(kw: &str, b: &PrioBlock) -> String {
     out
 }
 
-/// HS `prettify` (TheoryObject.hs:904-909): split on whitespace (`words`),
+/// HS `prettify` (TheoryObject.hs:947-952): split on whitespace (`words`),
 /// then concatenate tokens with operator tokens (`|`, `&`, `not`)
 /// rendered with their canonical spacing and all other tokens joined
 /// with no separator.
@@ -501,9 +495,12 @@ prio:\n\
         assert_eq!(t.prios.len(), 1);
         assert_eq!(t.prios[0].ranking, "id");
         let r = t.render();
-        assert!(
-            r.contains("regex\".*!K.\\(\\(.*~r0\\.1.*\" | regex\".*!K.\\(\\(.*~r0.*\" | regex\".*!K.\\(~r.*\""),
-            "got: {r}"
+        assert_eq!(
+            r,
+            "tactic: helping\npresort: s\nprio: {id}\n  \
+             regex\".*!K.\\(\\(.*~r0\\.1.*\" | \
+             regex\".*!K.\\(\\(.*~r0.*\" | \
+             regex\".*!K.\\(~r.*\""
         );
     }
 

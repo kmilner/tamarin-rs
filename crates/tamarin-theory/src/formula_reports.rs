@@ -1,11 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   jdreier, meiersi, sans-sucre, beschmi, PhilipLukertWork, BTom-GH,
-//   Mathias-AURAND, Nynko, kevinmorio, rkunnema, felixlinker, rsasse,
-//   xaDxelA, ValentinYuri
-// Ported from upstream tamarin-prover sources:
-//   lib/theory/src/Theory/Text/Parser.hs,
-//   lib/theory/src/Theory/Tools/Wellformedness.hs,
-//   lib/utils/src/Extension/Prelude.hs, src/Main/TheoryLoader.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Port of HS `formulaReports` (Wellformedness.hs:996-1015) — the
 //! wellformedness pass over every lemma / restriction formula.
@@ -240,14 +235,19 @@ mod tests {
                     .find(|l| l.starts_with("  Lemma") || l.starts_with("  Restriction"))
                     .expect("body names its item");
                 (
-                    if e.topic == "Formula terms" { "T" } else { "Q" },
+                    e.topic.as_str(),
                     item.split_whitespace().nth(1).expect("item name"),
                 )
             })
             .collect();
         assert_eq!(
             got,
-            vec![("T", "`lB'"), ("Q", "`lD'"), ("T", "`rA'"), ("Q", "`rC'")]
+            vec![
+                ("Formula terms", "`lB'"),
+                (QUANTIFIER_TOPIC, "`lD'"),
+                ("Formula terms", "`rA'"),
+                (QUANTIFIER_TOPIC, "`rC'"),
+            ]
         );
     }
 

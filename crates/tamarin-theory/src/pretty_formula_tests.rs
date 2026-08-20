@@ -1,6 +1,9 @@
-use tamarin_parser::DUMMY_LOCATION;
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 use super::*;
+use tamarin_parser::DUMMY_LOCATION;
 
 fn v(name: &str, sort: p::SortHint) -> p::VarSpec {
     p::VarSpec {
@@ -94,17 +97,18 @@ fn forall_with_action() {
         body,
         DUMMY_LOCATION,
     );
-    let s = pretty_formula(&f);
-    assert!(s.contains("\u{2200}"));
-    // HS-faithful: `Name( args )` with internal spaces.
-    assert!(s.contains("F( ni )"));
-    assert!(s.contains("@ #i"));
-    assert!(s.contains("\u{21D2}"));
+    // The output follows HS.  `Name( args )` keeps the internal spaces, and
+    // `ppImp` puts parentheses on both sides of the `⇒`.  The expected bytes
+    // come from the oracle (Git revision ef3f0468).
+    assert_eq!(
+        pretty_formula(&f),
+        "\u{2200} ni #i. (F( ni ) @ #i) \u{21D2} (\u{22A5})"
+    );
 }
 
 #[test]
 fn long_quantifier_varlist_wraps() {
-    // HS `ppVars = fsep . map (text . show)` (Formula.hs:471-511, see line 508): a long
+    // HS `ppVars = fsep . map (text . show)` (Theory/Model/Formula.hs:503-511, see line 511): a long
     // bound-var list wraps across lines, the continuation aligned after
     // the `∃ ` prefix (column 2, the `<>` nesting offset).  Build an
     // existential with enough vars to overflow the ribbon, body `⊥`.
@@ -207,6 +211,11 @@ fn user_ac_symbol_nullary_renders_bare_name() {
     assert_eq!(term_to_doc(&ast, &[]).render(), "add");
 }
 
+/// HS `prettyTerm` renders an AC operand list with the operator between the
+/// arguments.  It puts the complete application in parentheses
+/// (Term/Term.hs:305-309).  `a XOR b` is therefore `(a⊕b)`, with no spaces and
+/// with the outer parentheses kept.  The expected bytes come from the oracle
+/// (Git revision ef3f0468).
 #[test]
 fn binop_xor() {
     let t = p::Term::BinOp(
@@ -214,8 +223,7 @@ fn binop_xor() {
         Box::new(p::Term::Var(v("a", p::SortHint::Untagged))),
         Box::new(p::Term::Var(v("b", p::SortHint::Untagged))),
     );
-    let s = pretty_term(&t);
-    assert!(s.contains("\u{2295}"));
+    assert_eq!(pretty_term(&t), "(a\u{2295}b)");
 }
 
 #[test]
@@ -231,9 +239,10 @@ fn guarded_negation_shortcut() {
         .into(),
         body: std::sync::Arc::new(Guarded::Disj(vec![].into())),
     };
-    let s = pretty_guarded(&g);
-    assert!(s.starts_with("\u{00AC}"));
-    assert!(s.contains("#i < #j"));
+    // The expected bytes come from the oracle (Git revision ef3f0468).  The
+    // `∀` without binders over `⊥` prints as the negated guard alone.  It
+    // never prints as an `⇒ ⊥`.
+    assert_eq!(pretty_guarded(&g), "\u{00AC}(#i < #j)");
 }
 
 /// Build the parser Term `<'1', g1> ++ <'2', g2> ++ <'3', g3>` where the

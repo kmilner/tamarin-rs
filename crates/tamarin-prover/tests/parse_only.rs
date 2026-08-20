@@ -1,11 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   rkunnema, meiersi, jdreier, kevinmorio, racoucho1u,
-//   PhilipLukertWork, and other minor contributors (see upstream git
-//   history)
-// Ported from upstream tamarin-prover sources:
-//   lib/theory/src/OpenTheory.hs, lib/theory/src/TheoryObject.hs,
-//   lib/theory/src/Theory/Proof.hs, lib/theory/src/Theory/Sapic/Process.hs,
-//   src/Main/Mode/Batch.hs, src/Main/TheoryLoader.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! `--parse-only` end-to-end byte pins.
 //!
@@ -878,6 +873,96 @@ end
 "#,
         r#"[Theory Minimal] Theory loaded
 [Theory WithInclude] Theory loaded
+"#,
+    );
+}
+
+/// Legacy `axiom` items: parsed as restrictions and echoed as `restriction`,
+/// with HS's `Debug.Trace` deprecation warning on stderr ahead of the
+/// `Theory loaded` markers (Theory/Text/Parser/Restriction.hs:88-92).  The
+/// traced value is a shared CAF, so THREE axioms across TWO files still print
+/// the line exactly once; a real `restriction` never prints it.
+#[test]
+fn legacy_axiom_deprecation_warning_once_per_process() {
+    assert_transcript(
+        "legacy_axiom",
+        &[
+            (
+                "ax1.spthy",
+                r#"theory AxOne
+begin
+
+axiom Ax1: "All x #i. A(x) @ i ==> F"
+
+restriction R1: "All x #i. B(x) @ i ==> F"
+
+axiom Ax2: "All x #i. C(x) @ i ==> F"
+
+rule R: [ ] --[ A('x') ]-> [ ]
+
+end
+"#,
+            ),
+            (
+                "ax2.spthy",
+                r#"theory AxTwo
+begin
+
+axiom Bx1: "All x #i. D(x) @ i ==> F"
+
+rule S: [ ] --[ D('y') ]-> [ ]
+
+end
+"#,
+            ),
+        ],
+        &["ax1.spthy", "ax2.spthy"],
+        r#"theory AxOne
+
+begin
+
+// Function signature and definition of the equational theory E
+
+functions: fst/1, pair/2, snd/1
+equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
+
+restriction Ax1:
+  "∀ x #i. (A( x ) @ #i) ⇒ (⊥)"
+  // safety formula
+
+restriction R1:
+  "∀ x #i. (B( x ) @ #i) ⇒ (⊥)"
+  // safety formula
+
+restriction Ax2:
+  "∀ x #i. (C( x ) @ #i) ⇒ (⊥)"
+  // safety formula
+
+rule (modulo E) R:
+   [ ] --[ A( 'x' ) ]-> [ ]
+
+end
+theory AxTwo
+
+begin
+
+// Function signature and definition of the equational theory E
+
+functions: fst/1, pair/2, snd/1
+equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
+
+restriction Bx1:
+  "∀ x #i. (D( x ) @ #i) ⇒ (⊥)"
+  // safety formula
+
+rule (modulo E) S:
+   [ ] --[ D( 'y' ) ]-> [ ]
+
+end
+"#,
+        r#"Deprecation Warning: using 'axiom' is retired notation, replace all uses of 'axiom' by 'restriction'.
+[Theory AxOne] Theory loaded
+[Theory AxTwo] Theory loaded
 "#,
     );
 }

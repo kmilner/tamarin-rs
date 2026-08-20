@@ -10,7 +10,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use tamarin_parser::parse_theory;
-use tamarin_theory::elaborate::{elaborate, elaborate_with_diagnostics};
+use tamarin_theory::elaborate::elaborate_with_diagnostics;
 
 mod common;
 use common::{collect_spthy, corpus_root};
@@ -81,7 +81,6 @@ fn main() {
                 }
             }
             Err(e) => {
-                let _ = elaborate(&p); // for stats parity
                 let key = first_phrase(&e.message);
                 *errors_by_kind.entry(key).or_insert(0) += 1;
             }

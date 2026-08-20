@@ -1,3 +1,7 @@
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
+
 use super::*;
 
 #[test]
@@ -104,7 +108,7 @@ fn implicit_sig_includes_pair_and_inv() {
 // Maude-bridge command order and term canonicalization.
 // =========================================================================
 
-/// FunctionSymbols.hs:
+/// FunctionSymbols.hs:138:
 ///     data ACSym = Union | Mult | Xor | NatPlus | ACfct ACfctSym
 #[test]
 fn ac_sym_ord_matches_haskell_declaration() {
@@ -431,7 +435,7 @@ fn no_eq_sym_ord_follows_the_haskell_tuple_field_chain() {
     );
 }
 
-/// FunctionSymbols.hs:
+/// FunctionSymbols.hs:125:
 ///     data NDCstate = IsNDC | NotNDC | IsNDCDiff | IsNDCBoth
 #[test]
 fn ndc_state_ord_matches_haskell_declaration() {
@@ -460,10 +464,10 @@ fn constructability_ord_matches_haskell_declaration() {
 /// FunctionSymbols.hs:150-153:
 ///     data FunSym = NoEq NoEqSym | AC ACSym | C CSym | List
 ///
-/// `NoEq` comes FIRST.  This ordering matters because BTreeSet<FunSym>
-/// signatures iterate in this order when constructing Maude bridge
-/// commands.  If `List` or `C` came before `NoEq`, Maude would see
-/// declarations in an inconsistent order vs Haskell.
+/// `NoEq` comes first.  This order matters because `BTreeSet<FunSym>`
+/// signatures iterate in it when they construct Maude bridge commands.  If
+/// `List` or `C` came before `NoEq`, Maude would see the declarations in an
+/// order that does not agree with Haskell.
 #[test]
 fn fun_sym_ord_matches_haskell_declaration() {
     let no_eq = FunSym::NoEq(pair_sym());
@@ -474,30 +478,4 @@ fn fun_sym_ord_matches_haskell_declaration() {
     assert!(ac < c, "AC < C");
     assert!(c < list, "C < List");
     assert!(no_eq < list, "transitive: NoEq < List");
-}
-
-/// Sanity-check: BTreeSet<FunSym> iterates in declaration order.
-/// This is the contract the Maude bridge relies on for
-/// deterministic signature emission.
-#[test]
-fn fun_sym_btreeset_iterates_in_declaration_order() {
-    let mut s: std::collections::BTreeSet<FunSym> = Default::default();
-    s.insert(FunSym::List);
-    s.insert(FunSym::C(CSym::EMap));
-    s.insert(FunSym::Ac(AcSym::Union));
-    s.insert(FunSym::NoEq(pair_sym()));
-    let kinds: Vec<&str> = s
-        .iter()
-        .map(|f| match f {
-            FunSym::NoEq(_) => "NoEq",
-            FunSym::Ac(_) => "AC",
-            FunSym::C(_) => "C",
-            FunSym::List => "List",
-        })
-        .collect();
-    assert_eq!(
-        kinds,
-        vec!["NoEq", "AC", "C", "List"],
-        "BTreeSet<FunSym> must iterate in Haskell decl order"
-    );
 }

@@ -1,0 +1,72 @@
+theory CliFlagsBasic
+
+begin
+
+// Function signature and definition of the equational theory E
+
+functions: fst/1, pair/2, snd/1
+equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
+
+rule (modulo E) Gen:
+   [ Fr( ~k ) ] --[ Gen( ~k ) ]-> [ St( ~k ), Out( ~k ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) Use:
+   [ St( ~k ), In( x ) ] --[ Use( ~k, x ) ]-> [ ]
+
+  /* has exactly the trivial AC variant */
+
+lemma reach:
+  exists-trace "∃ k x #i. Use( k, x ) @ #i"
+/*
+guarded formula characterizing all satisfying traces:
+"∃ k x #i. (Use( k, x ) @ #i)"
+*/
+simplify
+solve( St( ~k ) ▶₀ #i )
+  case Gen
+  SOLVED // trace found
+qed
+
+lemma leaks:
+  all-traces "∀ k #i. (Gen( k ) @ #i) ⇒ (¬(∃ #j. K( k ) @ #j))"
+/*
+guarded formula characterizing all counter-examples:
+"∃ k #i. (Gen( k ) @ #i) ∧ ∃ #j. (K( k ) @ #j)"
+*/
+by sorry
+
+/*
+WARNING: the following wellformedness checks failed!
+
+Check presence of the --prove/--lemma arguments in theory
+=========================================================
+
+  --> '' from arguments do(es) not correspond to a specified lemma in the theory 
+*/
+
+/*
+Generated from:
+Tamarin version 1.13.0
+Maude version 3.5.1
+Git revision: ef3f0468f6f12b81f43289aa64f5d1b9e53eaf59, branch: HEAD
+Compiled at: 2026-07-31 12:54:17.256348115 UTC
+*/
+
+end
+
+==============================================================================
+summary of summaries:
+
+analyzed: /home/kamilner/tamarin-rs-2/crates/tamarin-prover/tests/fixtures/cli_flags_basic.spthy
+
+  processing time: 0.11s
+  
+  WARNING: 1 wellformedness check failed!
+           The analysis results might be wrong!
+  
+  reach (exists-trace): verified (3 steps)
+  leaks (all-traces): analysis incomplete (1 steps)
+
+==============================================================================

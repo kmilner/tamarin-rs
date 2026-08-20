@@ -13,16 +13,41 @@
 #                 two manifests semantically (web_normalize.py) → per-url rows.
 #
 # Env: FILE_TIMEOUT (per-file cap, 300s), READY_TIMEOUT (server-boot wait, 90s),
-#      HS_PORT (3021), RS_PORT (3022), CORPUS_ROOT (tamarin-prover/examples/), ALLOWLIST
-#      (one relpath/line; default = seed list below), RESULTS_TSV, MAX_NODES
+#      HS_PORT (3021), RS_PORT (3022), CORPUS_ROOT (tamarin-prover/examples/),
+#      ALLOWLIST (REQUIRED: one relpath/line, or the literal `seed` for the
+#      built-in 2-file smoke list), RESULTS_TSV, MAX_NODES
 #      (400), CACHE, DIFFDIR, HS_PATH, RS_PATH, MAUDE_PATH, DERIVCHECK_TIMEOUT
 #      (both servers, 30s), SERVER_MEM_KB (per-server address-space cap,
-#      24 GiB), TAM_RS_NO_AUTO_BUILD.
-# Output TSV (6 col): file  url  status  hs_http  rs_http  kind
-#   status ∈ MATCH | DIFF | MISSING_RS | MISSING_HS | SKIP_*
+#      24 GiB), TAM_RS_NO_AUTO_BUILD, WEB_LEDGER (residue ledger, or the
+#      literal `none`), FAIL_ON_CAPPED.
+# Output TSV (7 col): file  url  status  hs_http  rs_http  kind  class
+#   status ∈ MATCH | LEDGERED | DIFF | MISSING_RS | MISSING_HS | CAPPED_* | SKIP_*
+#   class  = the ledger class of a LEDGERED row, `-` on every other row
+#
+# The verdict fails on DIVERGENCE and on VACUITY:
+#   UNDOCUMENTED  a DIFF/MISSING_* row that no entry of the residue ledger
+#                 (websweep_ledger.tsv) excuses. Documented residue is rewritten
+#                 to LEDGERED by apply_web_ledger below, so whatever still reads
+#                 DIFF/MISSING_* afterwards is new — a server regression.
+#   LEDGER,       a ledger entry that excused nothing — STALE or SHADOWED for a
+#   LEDGER-       file this run compared, UNMATCHED for a path that has left the
+#   UNMATCHED     corpus. Either way a mask waiting for a file to regress
+#                 under it.
+#   SKIPPED,      a file whose panes were never compared, or that contributed no
+#   NO-COMPARE    comparison row at all. A crawl that never happened is
+#                 indistinguishable from a crawl that matched when all you read
+#                 is the summary.
+# CAPPED_* rows (web_crawl.py truncated a crawl at MAX_NODES proof nodes) are
+# always printed on the verdict line, so a truncated sweep cannot read as a
+# complete one; they fail the run only under FAIL_ON_CAPPED=1.
 set -u
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
+# Shared gate plumbing (gate_common.sh): maude resolver, the oracle
+# fingerprint recipe.  (The OOM guards here live inside boot_crawl, per
+# server, with their own SERVER_MEM_KB cap.)
+[ -r "$script_dir/gate_common.sh" ] || { echo "web_parity: missing $script_dir/gate_common.sh (owns the shared gate helpers)" >&2; exit 2; }
+. "$script_dir/gate_common.sh"
 
 FILE_TIMEOUT="${FILE_TIMEOUT:-300}"
 READY_TIMEOUT="${READY_TIMEOUT:-90}"
@@ -33,6 +58,8 @@ CACHE="${CACHE:-$script_dir/.web_hs_cache}"
 RESULTS_TSV="${RESULTS_TSV:-/tmp/web_parity.tsv}"
 MAX_NODES="${MAX_NODES:-400}"
 DIFFDIR="${DIFFDIR:-/tmp/web_parity_diffs}"
+LEDGER="${WEB_LEDGER:-$script_dir/websweep_ledger.tsv}"
+LEDGER_REPORTS=0
 mkdir -p "$CACHE"
 
 # Crawl-plan version handshake.  The cache key is sha256(theory) alone, so it
@@ -78,7 +105,25 @@ find_hs_bin() {
 }
 HS_PATH="${HS_PATH:-$(find_hs_bin)}" || { echo "no HS binary" >&2; exit 2; }
 RS_PATH="${RS_PATH:-$repo_root/target/release/tamarin-rs}"
-MAUDE_PATH="${MAUDE_PATH:-$(command -v maude)}"
+# Both servers probe `maude` by name; resolve one (MAUDE_PATH > PATH >
+# linuxbrew, hard fail otherwise) and put its directory on PATH for them.
+MAUDE_PATH=$(resolve_maude) || exit 2
+maude_on_path "$MAUDE_PATH"
+
+# Oracle-binary fingerprint, gate_common's hs_fingerprint (the same size.mtime
+# recipe the flag sweeps key their caches on).  The HS manifest cache is content-keyed on
+# sha256(theory) ALONE, which cannot see WHICH oracle produced the manifest: a
+# rebuilt HS binary keeps being answered out of manifests crawled by the
+# previous one, and the gate then certifies the port against a binary that no
+# longer exists.  The fingerprint is not folded into the cache FILENAME because
+# pane_byte_check.sh derives that name itself, from sha256(theory) alone —
+# changing it here would orphan every lookup that script makes.  It is stamped
+# in a sidecar beside the manifest and checked exactly like the crawl-plan
+# version below: a manifest from another oracle is re-crawled, not reused —
+# and pane_byte_check.sh checks the same sidecar, SKIPping what it cannot
+# re-crawl.
+hs_fingerprint "$HS_PATH" \
+    || { echo "cannot fingerprint HS binary '$HS_PATH'" >&2; exit 2; }
 
 # Auto-build RS (opt out with TAM_RS_NO_AUTO_BUILD=1).
 if [ -z "${TAM_RS_NO_AUTO_BUILD:-}" ]; then
@@ -89,16 +134,84 @@ fi
 [ -x "$RS_PATH" ] || { echo "no RS binary at $RS_PATH" >&2; exit 2; }
 
 # --- file list ---
+# ALLOWLIST is mandatory. It used to fall back to the seed list whenever it was
+# unset OR named a file that did not exist, so a typo in the path turned a
+# corpus-wide certification into a 2-file smoke test that still printed a
+# summary and DONE_WEB_PARITY — the run narrowed silently and read as a pass.
+# The seed list is still reachable, but only by asking for it.
 seed_list() {
     cat <<EOF
 Tutorial.spthy
 csf26-ac/fast/counter.spthy
 EOF
 }
+# Blank lines and `#` comments are dropped here, in the ONE place the row count
+# and the crawl loop both read, so the two cannot disagree about how many files
+# the run covers.  websweep_ledger.tsv is not a file list: fed in as ALLOWLIST
+# its rows resolve to no theory and the run fails on SKIPPED, loudly.
 filelist() {
-    if [ -n "${ALLOWLIST:-}" ] && [ -f "${ALLOWLIST:-}" ]; then cat "$ALLOWLIST"
-    else seed_list; fi
+    if [ "${ALLOWLIST:-}" = seed ]; then seed_list; return; fi
+    grep -v '^[[:space:]]*#' "$ALLOWLIST" | grep .
 }
+if [ -z "${ALLOWLIST:-}" ]; then
+    echo "ALLOWLIST is required: a file of corpus-relative theory paths, one per" >&2
+    echo "line, or ALLOWLIST=seed for the built-in 2-file smoke list." >&2
+    exit 2
+fi
+if [ "$ALLOWLIST" != seed ] && [ ! -r "$ALLOWLIST" ]; then
+    echo "ALLOWLIST '$ALLOWLIST' is not a readable file" >&2
+    exit 2
+fi
+
+# --- residue ledger ---
+# Checked BEFORE the crawl: a ledger the gate cannot parse would otherwise be
+# discovered an hour later, at the one moment the run's findings depend on it.
+# A missing ledger is an error rather than "no residue documented", which would
+# fail every documented row as a fresh divergence; WEB_LEDGER=none says so
+# explicitly, and then every DIFF/MISSING_* row is undocumented by definition.
+if [ "$LEDGER" != none ] && [ ! -r "$LEDGER" ]; then
+    echo "WEB_LEDGER '$LEDGER' is not a readable file (WEB_LEDGER=none runs" >&2
+    echo "without one, and then every DIFF/MISSING_* row fails the verdict)" >&2
+    exit 2
+fi
+check_ledger() {
+    [ "$LEDGER" = none ] && return 0
+    awk -F'\t' -v f="$LEDGER" '
+      /^[[:space:]]*#/ || /^[[:space:]]*$/ { next }
+      {
+        if (NF < 3 || $1 == "" || $2 == "" || $3 == "") {
+          printf "%s:%d: need path<TAB>class<TAB>symptom[<TAB>note]\n", f, FNR > "/dev/stderr"
+          bad = 1; next
+        }
+        if ($3 !~ /^(any|none|DIFF|MISSING_RS|MISSING_HS)$/) {
+          printf "%s:%d: symptom \"%s\" is not any|none|DIFF|MISSING_RS|MISSING_HS\n", \
+                 f, FNR, $3 > "/dev/stderr"
+          bad = 1
+        }
+        if (($1 SUBSEP $3) in seen) {
+          printf "%s:%d: %s %s is listed twice — only one entry could ever match\n", \
+                 f, FNR, $1, $3 > "/dev/stderr"
+          bad = 1
+        }
+        seen[$1 SUBSEP $3] = 1
+      }
+      END { exit (bad ? 2 : 0) }' "$LEDGER"
+}
+check_ledger || { echo "web_parity: malformed ledger '$LEDGER'" >&2; exit 2; }
+
+# An entry whose theory is not in the corpus AT ALL can never be reported stale
+# by the post-run pass (it produces no rows in any run, however large), so it
+# would sit in the ledger forever. That is a property of the ledger, not of this
+# run's ALLOWLIST, so it is checked here against CORPUS_ROOT and reported even
+# on a 2-file smoke run.
+ledger_dead=0
+if [ "$LEDGER" != none ]; then
+    while IFS= read -r p; do
+        [ -f "$CORPUS_ROOT/$p" ] && continue
+        echo "LEDGER-UNMATCHED: $p is not in the corpus under $CORPUS_ROOT — drop its entry" >&2
+        ledger_dead=$((ledger_dead + 1))
+    done < <(grep -v '^[[:space:]]*#' "$LEDGER" | cut -f1 | grep . | sort -u)
+fi
 
 # Boot a server, wait until it answers on / , run the crawl, then kill it
 # (whole process group, to reap maude children).  Args: bin port workdir out.
@@ -152,7 +265,7 @@ one_file() {
         || CRAWL_EXTRA_ARGS="--allow-no-lemmas"
     export CRAWL_EXTRA_ARGS
     local key; key=$(sha256sum "$f" | cut -d' ' -f1)
-    local hs_manifest="$CACHE/$key.hs.json"
+    local hs_manifest="$CACHE/$key.hs.json" hs_fp_file="$CACHE/$key.hs.fp"
     local wd; wd=$(mktemp -d)
     mkdir -p "$wd/thy"; cp "$f" "$wd/thy/"
     # Oracle staging — three upstream resolution modes, all relative to the
@@ -179,19 +292,32 @@ one_file() {
         cp "$(dirname "$f")/$__q" "$wd/thy/$__q"
     done < <(grep -E 'heuristic' "$f" | grep -oE '"[^"]+"' | tr -d '"' | sort -u)
 
-    # Phase 1: HS (cached, and only while the cached crawl plan is current)
+    # Phase 1: HS (cached, and only while the cached crawl plan AND the oracle
+    # that produced the manifest are the current ones).  A manifest with no
+    # fingerprint sidecar was crawled before the stamp existed, by an oracle
+    # nothing recorded — indistinguishable from one crawled by a stale binary,
+    # so it is re-crawled rather than trusted.
     if [ -f "$hs_manifest" ]; then
         local hs_plan; hs_plan=$(cached_plan_version "$hs_manifest")
         if [ "$hs_plan" != "$PLAN_VERSION" ]; then
             echo "  stale HS manifest (crawl plan ${hs_plan:-?} != $PLAN_VERSION) — re-crawling" >&2
-            rm -f "$hs_manifest"
+            rm -f "$hs_manifest" "$hs_fp_file"
+        fi
+    fi
+    if [ -f "$hs_manifest" ]; then
+        local hs_fp=''
+        [ -f "$hs_fp_file" ] && read -r hs_fp < "$hs_fp_file"
+        if [ "$hs_fp" != "$HS_FP" ]; then
+            echo "  stale HS manifest (oracle ${hs_fp:-unstamped} != $HS_FP) — re-crawling" >&2
+            rm -f "$hs_manifest" "$hs_fp_file"
         fi
     fi
     if [ ! -f "$hs_manifest" ]; then
         if ! MAUDE_PATH="$MAUDE_PATH" boot_crawl "$HS_PATH" "$HS_PORT" "$wd" "$hs_manifest" hs; then
-            rm -f "$hs_manifest"; rm -rf "$wd"
+            rm -f "$hs_manifest" "$hs_fp_file"; rm -rf "$wd"
             printf '%s\t-\tSKIP_HS_FAIL\t-\t-\t-\n' "$rel"; return 0
         fi
+        printf '%s\n' "$HS_FP" > "$hs_fp_file"
     fi
     # Phase 2: RS
     local rs_manifest="$wd/rs.json"
@@ -199,18 +325,103 @@ one_file() {
         rm -rf "$wd"
         printf '%s\t-\tSKIP_RS_FAIL\t-\t-\t-\n' "$rel"; return 0
     fi
-    # diff
+    # diff. Both crawls succeeded, so an empty or absent parity.tsv means the
+    # differ itself fell over — which used to emit no rows for the file at all,
+    # a file that silently left the run rather than a file that matched.
     python3 "$script_dir/web_diff.py" "$hs_manifest" "$rs_manifest" \
         "$wd/parity.tsv" "$DIFFDIR/$rel" >/dev/null 2>&1
+    if [ ! -s "$wd/parity.tsv" ]; then
+        rm -rf "$wd"
+        printf '%s\t-\tSKIP_DIFF_FAIL\t-\t-\t-\n' "$rel"; return 0
+    fi
     # prefix each row with the file
     awk -F'\t' -v r="$rel" '{print r"\t"$0}' "$wd/parity.tsv"
     rm -rf "$wd"
 }
 
-echo "web_parity: HS=$HS_PATH" >&2
+# apply_web_ledger <results.tsv>
+#   Applied to the whole run AFTER the rows land, not per file: an entry is
+#   stale or shadowed only relative to everything the run saw.
+#   Every row gains a 7th column — the ledger class of a LEDGERED row, `-`
+#   elsewhere — so the TSV has one shape whether or not a ledger is in use.
+#   A DIFF/MISSING_* row is rewritten to LEDGERED when an entry for its file
+#   matches: the file-wide `any` entry first, then the entry naming exactly this
+#   status. MATCH/SKIP_*/CAPPED_* rows are never ledgerable — an entry documents
+#   a divergence that WAS observed, and those rows observed agreement, a failure
+#   to compare, or a truncation.
+#   Entries that excused nothing are reported on stderr and counted into
+#   LEDGER_REPORTS, which the verdict folds in:
+#     LEDGER-STALE     its file WAS compared and no row of it matched.
+#     LEDGER-SHADOWED  a narrower entry under an `any` entry for the same path;
+#                      it can never match, so it can never go stale either.
+#   An entry whose file this run did not compare is out of scope, not dead: it
+#   is counted on one line rather than reported, so a 2-file smoke run does not
+#   read as 77 rotten entries. The one out-of-scope case that IS always dead —
+#   a path that has left the corpus — is caught before the crawl, against
+#   CORPUS_ROOT (ledger_dead above).
+apply_web_ledger() {
+    local out=$1 led=$LEDGER rep
+    LEDGER_REPORTS=0
+    [ "$led" = none ] && led=/dev/null
+    rep=$(mktemp) || return 1
+    if awk -F'\t' -v OFS='\t' -v ledger="$led" '
+      BEGIN {
+        while ((getline line < ledger) > 0) {
+          if (line ~ /^[[:space:]]*#/ || line ~ /^[[:space:]]*$/) continue
+          split(line, a, "\t")
+          if (a[3] == "" || a[3] == "none") continue
+          cls[a[1] SUBSEP a[3]] = a[2]
+        }
+      }
+      $3 == "MATCH" || $3 == "DIFF" || $3 == "MISSING_RS" || $3 == "MISSING_HS" \
+        { compared[$1] = 1 }
+      {
+        if ($3 == "DIFF" || $3 == "MISSING_RS" || $3 == "MISSING_HS") {
+          k = $1 SUBSEP "any"
+          if (!(k in cls)) k = $1 SUBSEP $3
+          if (k in cls) { hit[k] = 1; $3 = "LEDGERED"; print $0, cls[k]; next }
+        }
+        print $0, "-"
+      }
+      END {
+        for (k in cls) {
+          if (k in hit) continue
+          split(k, kk, SUBSEP)
+          if (!(kk[1] in compared)) { oos++; continue }
+          if (kk[2] != "any" && (kk[1] SUBSEP "any") in cls)
+            print "LEDGER-SHADOWED: " kk[1] " " kk[2] " can never match — the" \
+                  " file-wide `any` entry takes every row" > "/dev/stderr"
+          else
+            print "LEDGER-STALE: " kk[1] " " kk[2] " excused nothing this run" \
+                  " — drop or re-classify its entry" > "/dev/stderr"
+        }
+        if (oos > 0)
+          printf "ledger: %d entry/entries out of scope for this run (their files were not compared)\n", \
+                 oos > "/dev/stderr"
+      }' "$out" 2> "$rep" > "$out.ledgered"; then
+        mv "$out.ledgered" "$out"
+    else
+        # The rows keep their DIFF/MISSING_* status, so the verdict still fails
+        # on them — but a run whose ledger never ran must say so rather than
+        # report the residue as undocumented and leave the cause offscreen.
+        rm -f "$out.ledgered"
+        echo "LEDGER-ERROR: the ledger pass failed — no row was ledgered" >> "$rep"
+    fi
+    cat "$rep" >&2
+    # Only the LEDGER-* reports are findings; the out-of-scope tally is not.
+    LEDGER_REPORTS=$(grep -c '^LEDGER-' "$rep")
+    rm -f "$rep"
+}
+
+echo "web_parity: HS=$HS_PATH  fp=$HS_FP" >&2
 echo "web_parity: RS=$RS_PATH  maude=$MAUDE_PATH" >&2
-: > "$RESULTS_TSV"
+echo "web_parity: ledger=$LEDGER" >&2
+mkdir -p "$(dirname "$RESULTS_TSV")"
+: > "$RESULTS_TSV" || { echo "cannot write RESULTS_TSV '$RESULTS_TSV'" >&2; exit 2; }
 N=$(filelist | grep -c .)
+# Zero files is the whole-run form of comparing nothing: no rows, an empty
+# summary, and a DONE line that looks exactly like a clean sweep.
+[ "$N" -gt 0 ] || { echo "ALLOWLIST '$ALLOWLIST' has no entries — nothing to crawl" >&2; exit 2; }
 i=0
 while IFS= read -r rel; do
     [ -n "$rel" ] || continue
@@ -218,7 +429,50 @@ while IFS= read -r rel; do
     one_file "$rel" >> "$RESULTS_TSV"
 done < <(filelist | grep .)
 
+apply_web_ledger "$RESULTS_TSV"
+
 echo "=== SUMMARY ===" >&2
 awk -F'\t' '{c[$3]++} END{for(k in c) printf "  %-14s %d\n", k, c[k]}' "$RESULTS_TSV" >&2
+awk -F'\t' '$3 == "LEDGERED" {c[$7]++}
+            END{for(k in c) printf "  ledgered[%s] %d\n", k, c[k]}' "$RESULTS_TSV" >&2
 echo "  files: $N   results: $RESULTS_TSV   diffs: $DIFFDIR" >&2
-echo "DONE_WEB_PARITY" >&2
+
+# Verdict — divergence AND vacuity (see the header note).
+#   undoc      a DIFF/MISSING_* row the ledger pass did not excuse: the port and
+#              the oracle disagree somewhere nobody has written down.
+#   skipped    a file whose panes were never compared.
+#   cmpfiles   files that produced a COMPARISON row. A file present only through
+#              a SKIP_* or CAPPED_* row contributed no comparison, so counting
+#              distinct files in column 1 would let it pass for one.
+#   LEDGER_*   entries that excuse nothing (see apply_web_ledger) and entries
+#              whose theory has left the corpus (ledger_dead, checked up front).
+undoc=$(awk -F'\t' '$3 == "DIFF" || $3 == "MISSING_RS" || $3 == "MISSING_HS"' \
+        "$RESULTS_TSV" | grep -c .)
+skipped=$(awk -F'\t' '$3 ~ /^SKIP_/' "$RESULTS_TSV" | grep -c .)
+capped=$(awk -F'\t' '$3 ~ /^CAPPED_/' "$RESULTS_TSV" | grep -c .)
+cmpfiles=$(awk -F'\t' '$3 == "MATCH" || $3 == "LEDGERED" || $3 == "DIFF" ||
+                       $3 == "MISSING_RS" || $3 == "MISSING_HS" {print $1}' \
+           "$RESULTS_TSV" | sort -u | grep -c .)
+bad=''
+if [ "$undoc" -gt 0 ]; then
+    bad="UNDOCUMENTED=$undoc"
+    echo "  $undoc undocumented divergence row(s) — ledger them or fix the port:" >&2
+    awk -F'\t' '$3 == "DIFF" || $3 == "MISSING_RS" || $3 == "MISSING_HS"' \
+        "$RESULTS_TSV" | head -20 >&2
+fi
+[ "$skipped" -gt 0 ] && bad="${bad:+$bad }SKIPPED=$skipped"
+if [ "$cmpfiles" -ne "$N" ]; then
+    bad="${bad:+$bad }NO-COMPARE=$((N - cmpfiles))/$N"
+    echo "  $cmpfiles of $N files produced a comparison row — the rest compared nothing" >&2
+fi
+[ "$LEDGER_REPORTS" -gt 0 ] && bad="${bad:+$bad }LEDGER=$LEDGER_REPORTS"
+[ "$ledger_dead" -gt 0 ] && bad="${bad:+$bad }LEDGER-UNMATCHED=$ledger_dead"
+if [ "$capped" -gt 0 ]; then
+    echo "  $capped crawl(s) truncated at MAX_NODES=$MAX_NODES — those files were" >&2
+    echo "  compared only down to the cap:" >&2
+    awk -F'\t' '$3 ~ /^CAPPED_/ {print "    " $1 "\t" $3}' "$RESULTS_TSV" | head -20 >&2
+    [ "${FAIL_ON_CAPPED:-0}" = 1 ] && bad="${bad:+$bad }CAPPED=$capped"
+fi
+[ "$skipped" -gt 0 ] && awk -F'\t' '$3 ~ /^SKIP_/' "$RESULTS_TSV" | head -20 >&2
+echo "DONE_WEB_PARITY verdict=${bad:-OK} capped=$capped" >&2
+[ -z "$bad" ]

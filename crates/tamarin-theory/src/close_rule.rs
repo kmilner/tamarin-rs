@@ -1,12 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   kevinmorio, jdreier, meiersi, arcz, rkunnema, yavivanov, Nynko,
-//   rsasse, Hong-Thai, felixlinker, Azurios-git, PhilipLukertWork, and
-//   other minor contributors (see upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/theory/src/CloseRule.hs, lib/theory/src/Theory/Model/Fact.hs,
-//   lib/theory/src/Theory/Text/Parser/Rule.hs,
-//   lib/theory/src/Theory/Text/Parser/Token.hs,
-//   src/Main/TheoryLoader.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! No-deconstruction-chain (NDC) check — port of the NDC parts of HS
 //! `CloseRule.hs` (`prettyNDCcheck` / `applyNDCcheck` / `ndcCheck` /
@@ -55,7 +49,6 @@ use tamarin_term::function_symbols::{FunSym, NdcState, Privacy};
 use tamarin_term::lterm::{HasFrees, LNTerm, LSort, LVar};
 use tamarin_term::maude_proc::MaudeHandle;
 use tamarin_term::rewriting::Equal;
-use tamarin_term::subst::apply_vterm;
 use tamarin_term::subst_vfresh::LNSubstVFresh;
 use tamarin_term::term::Term;
 
@@ -63,7 +56,7 @@ use crate::constraint::solver::context::IntrRuleCache;
 use crate::fact::{Fact, FactTag, LNFact, Multiplicity};
 use crate::guarded::Guarded;
 use crate::rule::{
-    get_conc_fact, get_deconstr_rule_kd_prem, get_deconstr_rule_prems_tail,
+    apply_subst_rule, get_conc_fact, get_deconstr_rule_kd_prem, get_deconstr_rule_prems_tail,
     get_destr_rule_function, IntrRuleAC, IntrRuleACInfo,
 };
 
@@ -288,20 +281,6 @@ fn msg_to_fresh_terms(t: &LNTerm) -> LNTerm {
     }
 }
 
-/// Apply a free substitution to every term of a fact, keeping tag and
-/// annotations.
-fn apply_subst_fact(
-    sigma: &tamarin_term::subst::Subst<tamarin_term::lterm::Name, LVar>,
-    f: &LNFact,
-) -> LNFact {
-    let terms: Vec<LNTerm> = f
-        .terms
-        .iter()
-        .map(|t| apply_vterm(sigma, t.clone()))
-        .collect();
-    Fact::fresh_annotated(f.tag, f.annotations.clone(), terms)
-}
-
 /// HS `newRules` (CloseRule.hs:257-262): the `Out0` source rule for one
 /// decomposition `s`, built as a value.  Premises `Fr` each free variable
 /// of `s`'s terms (`pre = freesToFresh . varFresh`: Msg vars retyped
@@ -474,7 +453,7 @@ fn collect_var_specs(t: &p::Term, out: &mut Vec<p::VarSpec>) {
 /// i.e. ¬∃ vars #t0 #t1. Generated_0(varD s) @ #t0 ∧ K(fact_term) @ #t1
 /// — with `aLemma`'s arguments NOT Msg→Fresh-retyped (only
 /// `lvarToLnterm`'s Nat→Fresh), and `kLogFact = protoFact Linear "K"`
-/// (Fact.hs:302-303).  Built over the parser-AST formula layer (the
+/// (Theory/Model/Fact.hs:302-303).  Built over the parser-AST formula layer (the
 /// `Guarded` leaf type) via `lnterm_to_parser` and converted by the same
 /// `formula_to_guarded` the load path applies to user lemmas.
 ///
@@ -708,26 +687,6 @@ impl<'a> BoundToOneCache<'a> {
                     .collect::<Vec<_>>(),
             )
         })
-    }
-}
-
-/// Apply a free substitution to every fact (and new-var term) of a rule.
-fn apply_subst_rule(
-    sigma: &tamarin_term::subst::Subst<tamarin_term::lterm::Name, LVar>,
-    r: &IntrRuleAC,
-) -> IntrRuleAC {
-    let app_facts =
-        |fs: &[LNFact]| -> Vec<LNFact> { fs.iter().map(|f| apply_subst_fact(sigma, f)).collect() };
-    IntrRuleAC {
-        info: r.info.clone(),
-        premises: app_facts(&r.premises),
-        conclusions: app_facts(&r.conclusions),
-        actions: app_facts(&r.actions),
-        new_vars: r
-            .new_vars
-            .iter()
-            .map(|t| apply_vterm(sigma, t.clone()))
-            .collect(),
     }
 }
 

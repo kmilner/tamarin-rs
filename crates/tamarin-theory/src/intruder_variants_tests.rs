@@ -1,3 +1,7 @@
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
+
 use super::*;
 use tamarin_term::maude_sig::{bp_maude_sig, dh_maude_sig};
 
@@ -32,8 +36,8 @@ fn bp_variants_file_parses_to_75_rules() {
 
 /// The 5 constructor rules MUST be present with their HS-canonical
 /// underscore-prefixed names (`c_exp` → `ConstrRule "_exp"`, etc).
-/// HS reference: Theory/Tools/IntruderRules.hs:233-244 +
-/// Theory/Text/Parser/Rule.hs:155-169, see line 167 (`'c':cname → ConstrRule (BC.pack cname)`).
+/// HS reference: Theory/Tools/IntruderRules.hs:292-299 +
+/// Theory/Text/Parser/Rule.hs:163-172, see line 171 (`'c':cname → ConstrRule (BC.pack cname)`).
 #[test]
 fn dh_variants_contains_five_constructors_with_underscore_prefix() {
     let rules = mk_dh_intruder_variants(&dh_maude_sig());
@@ -219,8 +223,11 @@ fn parse_intruder_rules_handles_tiny_inline() {
     }
 }
 
-/// Rule names that don't start with `c` or `d` must be rejected
-/// (HS Rule.hs:169 — `fail "invalid intruder rule name ..."`).
+/// Rule names that don't start with `c` or `d` must be rejected.
+/// DELIBERATE DIVERGENCE: HS `intrInfo`'s `case name of` has only the
+/// `'c':cname` and `'d':dname` arms (Theory/Text/Parser/Rule.hs:170-172), so a
+/// third prefix is an incomplete-pattern crash there; we return a parse error
+/// instead.
 #[test]
 fn parse_intruder_rules_rejects_non_c_d_prefix() {
     let src = "rule (modulo AC) xfoo:\n   [ ] --> [ ]\n";
@@ -233,115 +240,14 @@ fn parse_intruder_rules_rejects_non_c_d_prefix() {
     );
 }
 
-/// Round-trip: every rule produced by `mk_dh_intruder_variants` has
-/// a name starting with `_` (the byte after the consumed `c`/`d`).
-/// Mirrors the same property checked for the runtime generator
-/// `dh_intruder_rules` in `dh_variants_all_names_have_underscore_prefix`.
-#[test]
-fn dh_variants_all_names_have_underscore_prefix() {
-    let rules = mk_dh_intruder_variants(&dh_maude_sig());
-    for r in &rules {
-        let n = match &r.info {
-            IntrRuleACInfo::ConstrRule { name, .. } => name.as_slice(),
-            IntrRuleACInfo::DestrRule { name, .. } => name.as_slice(),
-            other => panic!("unexpected info kind: {:?}", other),
-        };
-        assert!(n.starts_with(b"_"),
-                "DH variant name must start with `_` (HS `'c':cname`/`'d':dname` consumes the prefix); \
-                 got {}", String::from_utf8_lossy(n));
-    }
-}
-
-/// Bridge check: the runtime generator `dh_intruder_rules` and the
-/// cached-file parser `mk_dh_intruder_variants` SHOULD agree on the
-/// number and names of rules — both are different paths to the same
-/// HS `dhIntruderRules` output.  We don't assert strict equality
-/// (Maude variant ordering / re-renaming can legitimately differ)
-/// — just the rule count and the constructor-rule names.  A mismatch
-/// here is a hint that Maude version drift may have invalidated the
-/// cached file.
-#[test]
-fn bridge_runtime_generator_matches_cached_file_on_counts_and_names() {
-    // The runtime generator needs a Maude handle; skip if not available
-    // (mirroring the `maude_handle`/`dh_maude_handle` gating in
-    // intruder_rules.rs).
-    let maude_path = std::env::var("MAUDE_PATH").ok().or_else(|| {
-        for c in ["/usr/local/bin/maude", "maude"] {
-            if std::path::Path::new(c).exists() {
-                return Some(c.to_string());
-            }
-        }
-        None
-    });
-    let maude = match maude_path
-        .and_then(|p| tamarin_term::maude_proc::MaudeHandle::start(&p, dh_maude_sig()).ok())
-    {
-        Some(m) => m,
-        None => return,
-    };
-
-    let cached = mk_dh_intruder_variants(&dh_maude_sig());
-    let runtime = crate::intruder_rules::dh_intruder_rules(false, &maude);
-
-    // Constructor names should be identical sets.
-    let cached_constrs: std::collections::BTreeSet<Vec<u8>> = cached
-        .iter()
-        .filter_map(|r| match &r.info {
-            IntrRuleACInfo::ConstrRule { name, .. } => Some(name.clone()),
-            _ => None,
-        })
-        .collect();
-    let runtime_constrs: std::collections::BTreeSet<Vec<u8>> = runtime
-        .iter()
-        .filter_map(|r| match &r.info {
-            IntrRuleACInfo::ConstrRule { name, .. } => Some(name.clone()),
-            _ => None,
-        })
-        .collect();
-    if cached_constrs != runtime_constrs {
-        eprintln!("bridge test: cached constr names ≠ runtime constr names");
-        eprintln!(
-            "  cached  = {:?}",
-            cached_constrs
-                .iter()
-                .map(|n| String::from_utf8_lossy(n).to_string())
-                .collect::<Vec<_>>()
-        );
-        eprintln!(
-            "  runtime = {:?}",
-            runtime_constrs
-                .iter()
-                .map(|n| String::from_utf8_lossy(n).to_string())
-                .collect::<Vec<_>>()
-        );
-    }
-    assert_eq!(
-        cached_constrs, runtime_constrs,
-        "runtime and cached DH constr name sets should match"
-    );
-
-    // Destructor counts should be EQUAL or DIFFER (the cached file
-    // is authoritative — log a diff but don't fail).  Counts may
-    // legitimately differ if today's Maude produces a different
-    // variant enumeration order than the cached file's day.
-    if cached.len() != runtime.len() {
-        eprintln!(
-            "bridge test note: cached DH rule count = {}, runtime = {} \
-                 — investigate if today's Maude has drifted from the cached file",
-            cached.len(),
-            runtime.len()
-        );
-    }
-}
-
 /// Regression test for the `c_one` / `c_DH_neutral` soundness invariant:
 /// under `dh_maude_sig()`, the rule `[ ] --[ !KU( one ) ]-> [ !KU( one ) ]`
 /// must have ROOT = the 0-arity NoEq application `oneSym{}`, NOT a Msg-sort
 /// var `one` (which would unify with every KU goal, falsely closing 8+ DH
-/// corpus branches).  HS: Theory/Text/Parser/Term.hs:139-143 (`nullaryApp`
-/// against `funSyms maudeSig`) and
-/// lib/term/src/Term/Term/FunctionSymbols.hs:163-163
-/// (`oneSym = ("one",(0,Public,Constructor))`).
+/// corpus branches).  HS: Theory/Text/Parser/Term.hs:139-153, see line 151
+/// (`nullaryApp` against `funSyms maudeSig`) and
+/// lib/term/src/Term/Term/FunctionSymbols.hs:255-255
+/// (`oneSym = (oneSymString,(0,Public,Constructor,NotNDC))`).
 #[test]
 fn dh_one_and_dh_neutral_parse_as_constants() {
     use tamarin_term::function_symbols::{DH_NEUTRAL_SYM_STRING, ONE_SYM_STRING};

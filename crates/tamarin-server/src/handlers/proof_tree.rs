@@ -1,23 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   jdreier, meiersi, racoucho1u, beschmi, charlie-j, rkunnema, rsasse,
-//   felixlinker, kevinmorio, PhilipLukertWork, yavivanov, arcz,
-//   BTom-GH, Nick Moore, ValentinYuri, addap, katrielalex, felixonmars,
-//   and other minor contributors (see upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/term/src/Term/Maude/Parser.hs, lib/theory/src/ClosedTheory.hs,
-//   lib/theory/src/Lemma.hs, lib/theory/src/Prover.hs,
-//   lib/theory/src/Rule.hs,
-//   lib/theory/src/Theory/Constraint/Solver/ProofMethod.hs,
-//   lib/theory/src/Theory/Constraint/System.hs,
-//   lib/theory/src/Theory/Constraint/System/Constraints.hs,
-//   lib/theory/src/Theory/Model/Rule.hs,
-//   lib/theory/src/Theory/Proof.hs,
-//   lib/theory/src/Theory/Text/Parser.hs,
-//   lib/theory/src/Theory/Text/Parser/Lemma.hs,
-//   lib/theory/src/Theory/Text/Parser/Rule.hs,
-//   lib/utils/src/Control/Monad/Disj/Class.hs,
-//   lib/utils/src/Text/PrettyPrint/Class.hs, src/Main/TheoryLoader.hs,
-//   src/Web/Theory.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Live proof-tree state — mirror of Haskell's `IncrementalProof` +
 //! `applyProverAtPath`.
@@ -163,7 +146,7 @@ impl ProofState {
         ndc_cache: Option<&tamarin_theory::constraint::solver::context::IntrRuleCache>,
     ) -> Result<Self, String> {
         // Effective cut strategy — HS `closeTheory` precedence
-        // (TheoryLoader.hs:640-666): the CLI `--stop-on-trace` wins;
+        // (TheoryLoader.hs:742, :759-762): the CLI `--stop-on-trace` wins;
         // the theory's `configuration:` block is consulted only when
         // the flag is absent.  Steers the session's autoprove
         // (`runAutoProver`'s `apCut`) and the shared web context.
@@ -186,7 +169,7 @@ impl ProofState {
         let _user_funs_guard = tamarin_theory::elaborate::set_user_funs_from_collected(&user_funs);
         let mut typed =
             elaborate(parser_theory).map_err(|e| format!("elaborate: {}", e.message))?;
-        // Oracle-path base (HS Parser.hs:304): a `heuristic: o "./oracle-…"`
+        // Oracle-path base (HS Theory/Text/Parser.hs:309): a `heuristic: o "./oracle-…"`
         // resolves against the theory file's directory
         // (`hs_take_directory(in_file)` in prove.rs), both in the session
         // built below and in raw-solve replay rankings.
@@ -196,7 +179,7 @@ impl ProofState {
             MaudeHandle::start(maude_path, sig).map_err(|e| format!("maude start: {:?}", e))?;
         let rules: Vec<OpenProtoRule> = typed.rules().cloned().collect();
         // Build the ProofContext WITH the theory's restrictions, mirroring
-        // HS `closeRuleCache`'s `safetyRestrictions` (Rule.hs:155-156) and the
+        // HS `closeRuleCache`'s `safetyRestrictions` (CloseRule.hs:425-426) and the
         // `--prove` path (`prove.rs` `ProverSession::new`, which builds the
         // context via `new_with_restrictions`).  Without the restrictions the
         // precomputed source cases (`ctx.full_sources`, surfaced on the web
@@ -205,13 +188,17 @@ impl ProofState {
         // initial per-lemma proof snippets are unaffected — they render the
         // root system (which already installs restrictions via
         // `formula_to_system`) and never graft precomputed sources.
-        let ctx_restrictions: Vec<Guarded> = typed
+        // `formula_to_guarded` is a pure function of the formula (its fresh
+        // supply is seeded from that formula alone), so the ONE conversion here
+        // is reused both for the context and, cloned, for every lemma's
+        // `formula_to_system` below.
+        let restrictions_g: Vec<Guarded> = typed
             .restrictions()
             .filter_map(|r| formula_to_guarded(&r.formula).ok())
             .collect();
         // --- Close-time skeleton replay (HS `checkAndExtendProver
-        // (sorryProver Nothing)`, Prover.hs:174-185 → `checkProof`,
-        // Proof.hs:449-469). ---------------------------------------------
+        // (sorryProver Nothing)`, Theory/Proof.hs:624-630 → `checkProof`,
+        // Theory/Proof.hs:447-467). ---------------------------------------
         // A theory that ships WITH in-file proof scripts must show the
         // CHECKED script on load, not a bare `by sorry`: HS re-executes
         // each stored method against the start system at theory-close
@@ -273,10 +260,11 @@ impl ProofState {
                 if lemma.proof.tree.is_none() {
                     continue;
                 }
-                // `max_steps` mirrors the CLI (`budget =
-                // usize::MAX`, run.rs); in check-and-extend mode
-                // it is only consumed by `run_proof_search`
-                // fall-throughs, which never fire.
+                // Unbounded (`usize::MAX`) like the CLI's non-target
+                // replay: check-and-extend is HS's `sorryProver` pass,
+                // which carries no AutoProver and hence no `--bound`;
+                // the `run_proof_search` fall-throughs that would
+                // consume a bound never fire in this mode anyway.
                 match tamarin_theory::prove::check_and_extend_lemma_in_session(
                     session,
                     &lemma.name,
@@ -310,7 +298,7 @@ impl ProofState {
             maude,
             None,
             rules,
-            ctx_restrictions,
+            restrictions_g.clone(),
             &forced_injective_facts,
             ndc_cache.cloned(),
         );
@@ -353,7 +341,7 @@ impl ProofState {
                         &typed.tactic,
                     );
                 // Oracle paths resolve against the theory file's directory
-                // (HS `oraclePath = workDir </> relPath`, System.hs:574-575)
+                // (HS `oraclePath = workDir </> relPath`, System.hs:573-574)
                 // — same prefixing the batch session applies
                 // (prove.rs `resolve_heuristic`); without it the dmn
                 // family's `heuristic: o "./oracle-…"` exec fails cwd-relative.
@@ -382,21 +370,15 @@ impl ProofState {
                 Ok(g) => g,
                 Err(_) => continue,
             };
-            // Convert restrictions.
-            let mut restrictions: Vec<Guarded> = Vec::new();
-            for r in typed.restrictions() {
-                if let Ok(rg) = formula_to_guarded(&r.formula) {
-                    restrictions.push(rg);
-                }
-            }
             let tq = match lemma.trace_quantifier {
                 TraceQuantifier::AllTraces => tamarin_parser::ast::TraceQuantifier::AllTraces,
                 TraceQuantifier::ExistsTrace => tamarin_parser::ast::TraceQuantifier::ExistsTrace,
             };
             // HS `getProofContext` / `lemmaSourceKind` (ClosedTheory.hs:97-138, see line 116,
-            // Lemma.hs:38-41): a `sources` lemma is proved under RAW sources;
+            // lib/theory/src/Lemma.hs:38-41): a `sources` lemma is proved under RAW sources;
             // every other lemma under REFINED sources.  `mkSystem` builds the
-            // initial system with `pcSourceKind ctxt` (Prover.hs:319-326), and
+            // initial system with `pcSourceKind ctxt` (CloseRule.hs:167-176,
+            // see line 175), and
             // the system's `sSourceKind` shows in the sequent as
             // `allowed cases: raw|refined`.
             let source_kind = if lemma
@@ -408,7 +390,7 @@ impl ProofState {
             } else {
                 SourceKind::RefinedSources
             };
-            let mut sys = formula_to_system(restrictions, source_kind, tq, false, &g);
+            let mut sys = formula_to_system(restrictions_g.clone(), source_kind, tq, false, &g);
             // Reuse lemmas from earlier in the theory.
             let mut reuse: Vec<Guarded> = Vec::new();
             for prior in typed.lemmas() {
@@ -432,7 +414,7 @@ impl ProofState {
             sys.insert_lemmas(reuse);
             // Root method is the unproven `sorry` (no reason) until the
             // user (or autoprover) applies a method.  Mirrors HS
-            // `unproven = sorry Nothing` (Proof.hs:255-256), which
+            // `unproven = sorry Nothing` (Theory/Proof.hs:255-256), which
             // `prettyProofMethod` renders as a plain `sorry`.
             let root = ProofNode {
                 method: ProofMethod::Sorry(None),
@@ -539,7 +521,7 @@ impl ProofState {
     /// Graft `subtree` into the lemma's proof tree at `path`, replacing
     /// whatever subproof currently sits there; the REST of the tree is
     /// untouched.  Mirrors HS `focus path prover`
-    /// (`lib/theory/src/Theory/Proof.hs:604-612`): the prover result is
+    /// (`lib/theory/src/Theory/Proof.hs:602-612`): the prover result is
     /// spliced back at `path` via `modifyAtPath`, and `focus [] prover =
     /// prover` makes the empty path replace the whole proof — our
     /// `path == []` arm.  Errors mirror `modifyAtPath`'s `Nothing` (the
@@ -578,15 +560,17 @@ impl ProofState {
     /// tree at the moment of fork, then evolves independently.
     pub fn fork(&self) -> Self {
         let src = self.by_lemma.lock();
-        let mut clone: BTreeMap<String, LemmaProofState> = BTreeMap::new();
-        for (k, v) in src.iter() {
-            clone.insert(
-                k.clone(),
-                LemmaProofState {
-                    root: v.root.clone(),
-                },
-            );
-        }
+        let clone: BTreeMap<String, LemmaProofState> = src
+            .iter()
+            .map(|(k, v)| {
+                (
+                    k.clone(),
+                    LemmaProofState {
+                        root: v.root.clone(),
+                    },
+                )
+            })
+            .collect();
         ProofState {
             ctx: self.ctx.clone(),
             by_lemma: Arc::new(Mutex::new(clone)),
@@ -621,7 +605,7 @@ impl ProofState {
             ctx.heuristic = s.heuristic.clone();
         }
         // Oracle argv[1] (HS `runProcess oraclePath [lemmaName]`,
-        // ProofMethod.hs:598-623, see line 607): oracle scripts branch on the lemma name
+        // ProofMethod.hs:597-622, see line 607): oracle scripts branch on the lemma name
         // (e.g. oracle-dmn-basic), so an empty name selects the wrong
         // branch and the ranking silently degenerates to the pre-sort.
         ctx.lemma_name = lemma.to_string();
@@ -635,12 +619,14 @@ impl ProofState {
     ) -> Option<tamarin_theory::constraint::system::System> {
         let by_lemma = self.by_lemma.lock();
         let lp = by_lemma.get(lemma)?;
-        let node = navigate(&lp.root, path)?;
+        let node = navigate_at(&lp.root, path)?;
         Some(node.sys.clone())
     }
 }
 
-fn navigate<'a>(node: &'a ProofNode, path: &[String]) -> Option<&'a ProofNode> {
+/// Walk `path`'s case names down from `node` (the node itself for an empty
+/// path); `None` when a segment names no child.
+pub fn navigate_at<'a>(node: &'a ProofNode, path: &[String]) -> Option<&'a ProofNode> {
     let mut cur = node;
     for seg in path {
         cur = cur.children.get(seg)?;
@@ -648,13 +634,7 @@ fn navigate<'a>(node: &'a ProofNode, path: &[String]) -> Option<&'a ProofNode> {
     Some(cur)
 }
 
-/// Public alias for the internal `navigate` — used by other handlers
-/// that need to inspect a node at a specific proof path.
-pub fn navigate_at<'a>(node: &'a ProofNode, path: &[String]) -> Option<&'a ProofNode> {
-    navigate(node, path)
-}
-
-/// Port of HS `getProofPaths` (`Web/Theory.hs:2116-2120`):
+/// Port of HS `getProofPaths` (`Web/Theory.hs:2209-2213`):
 ///
 /// ```haskell
 /// getProofPaths proof = ([], psMethod . root $ proof) : go proof
@@ -671,23 +651,26 @@ pub fn navigate_at<'a>(node: &'a ProofNode, path: &[String]) -> Option<&'a Proof
 /// enumerate the navigable proof positions in order.
 pub fn get_proof_paths(root: &ProofNode) -> Vec<(Vec<String>, ProofMethod)> {
     let mut out = vec![(Vec::new(), root.method.clone())];
-    out.extend(proof_paths_go(root));
+    proof_paths_go(root, &mut Vec::new(), &mut out);
     out
 }
 
-fn proof_paths_go(node: &ProofNode) -> Vec<(Vec<String>, ProofMethod)> {
-    let mut out = Vec::new();
+/// `go` of [`get_proof_paths`], carrying the root-relative prefix down instead
+/// of prepending each label on the way back up.
+fn proof_paths_go(
+    node: &ProofNode,
+    prefix: &mut Vec<String>,
+    out: &mut Vec<(Vec<String>, ProofMethod)>,
+) {
     for (lbl, child) in &node.children {
-        out.push((vec![lbl.clone()], child.method.clone()));
-        for (mut p, m) in proof_paths_go(child) {
-            p.insert(0, lbl.clone());
-            out.push((p, m));
-        }
+        prefix.push(lbl.clone());
+        out.push((prefix.clone(), child.method.clone()));
+        proof_paths_go(child, prefix, out);
+        prefix.pop();
     }
-    out
 }
 
-/// Port of HS `isInterestingMethod` (`Web/Theory.hs:1875-1879`): the proof
+/// Port of HS `isInterestingMethod` (`Web/Theory.hs:1968-1972`): the proof
 /// methods that `nextSmartThyPath`/`prevSmartThyPath` stop on — an open
 /// `Sorry` leaf, or a `Finished` `Solved`/`Unfinishable` terminal.
 pub fn is_interesting_method(m: &ProofMethod) -> bool {
@@ -779,8 +762,8 @@ pub fn render_proof_tree_html(idx: usize, lemma: &str, root: &ProofNode) -> Stri
 }
 
 /// Render the per-path sub-proof snippet.  Mirrors Haskell's
-/// `subProofSnippet` (`src/Web/Theory.hs:513-611`; the methods section follows
-/// `prettyApplicableProofMethods`, `Web/Theory.hs:513-611, see line 540`).  Emits:
+/// `subProofSnippet` (`src/Web/Theory.hs:519-617`; the methods section follows
+/// `prettyApplicableProofMethods`, `Web/Theory.hs:519-617, see line 546`).  Emits:
 ///
 ///   1. The Applicable Proof Methods section — delegated to
 ///      `write_applicable_methods`.  It emits the numbered method links
@@ -804,7 +787,7 @@ pub fn render_sub_proof_snippet(
     // entity-escaped + span-marked and postprocessed once.  Build HtmlDoc mode
     // for the whole pane (so the sequent + method keywords render spanned).
     let _html = tamarin_theory::pretty_hpj::HtmlDocGuard::enable();
-    // HS `subProofSnippet` (`Web/Theory.hs:524-525`): an unannotated node
+    // HS `subProofSnippet` (`Web/Theory.hs:530-531`): an unannotated node
     // (`psInfo == Nothing` — a close-time-replay divergence kept verbatim
     // via `noSystemPrf`) has NO constraint system to render; HS emits the
     // single fallback line instead of the methods/sequent/sub-case blocks:
@@ -840,7 +823,7 @@ pub fn render_sub_proof_snippet(
         // HS `refDotInteractiveDynamicPath` → `<dynamic-graph graphSrc=…>`
         // pointing at `InteractiveDotGraphR` = the `intdot` route (the HTML
         // shell that in turn fetches `interactive-graph-def`), NOT the raw
-        // DOT route directly (`Web/Theory.hs:174-177`).
+        // DOT route directly (`Web/Theory.hs:180-181`).
         let src = format!(
             "/thy/trace/{idx}/intdot/proof/{lemma}{path}",
             idx = idx,
@@ -871,7 +854,7 @@ pub fn render_sub_proof_snippet(
             "<h4>Case {}</h4>",
             tamarin_theory::pretty_hpj::escape_html_entities(case_name)
         ));
-        // HS `refSubCase` (`Web/Theory.hs:608-611`): an unannotated child
+        // HS `refSubCase` (`Web/Theory.hs:612-617`): an unannotated child
         // (`psInfo == Nothing`) gets `text "no proof state available"`
         // instead of the static-graph reference.
         if !child.annotated {
@@ -893,7 +876,7 @@ pub fn render_sub_proof_snippet(
     tamarin_theory::pretty_hpj::postprocess_html(&parts.join("\n"))
 }
 
-/// Mirror of Haskell `nonEmptyGraph` (`System.hs`):
+/// Mirror of Haskell `nonEmptyGraph` (`System.hs:1926-1930`):
 ///
 /// ```text
 /// nonEmptyGraph sys = not $
@@ -905,7 +888,7 @@ pub fn render_sub_proof_snippet(
 /// i.e. the dotted graph is non-empty iff ANY of: nodes, unsolved
 /// action atoms, unsolved chains, edges, or less-atoms is present.
 /// `unsolvedActionAtoms` / `unsolvedChains` are the unsolved-status
-/// `ActionG` / `ChainG` goals (`System.hs:1568-1572,1601-1605`).
+/// `ActionG` / `ChainG` goals (`System.hs:1567-1571,1600-1604`).
 fn has_graph_content(sys: &System) -> bool {
     if !sys.nodes.is_empty() || !sys.edges.is_empty() || !sys.less_atoms.is_empty() {
         return true;
@@ -927,11 +910,11 @@ fn write_applicable_methods(
     use tamarin_theory::pretty_hpj::{self as hpj, Doc};
     // The ranking used at this proof depth (HS `subProofSnippet`:
     // `ranking = useHeuristic heuristic (length proofPath)`,
-    // `Web/Theory.hs:600-602`).  Round-robin over the heuristic list
+    // `Web/Theory.hs:606-608`).  Round-robin over the heuristic list
     // exactly as `rank_goals_with_inner` (goals.rs) does, defaulting to
     // `SmartRanking False` when no heuristic is configured.
     let ranking = ranking_for_depth(ctx, depth);
-    // Match Haskell `rankProofMethods` (`ProofMethod.hs:520-535`):
+    // Match Haskell `rankProofMethods` (`ProofMethod.hs:519-534`):
     //   stoppingMethod = Finished <$> isFinished ctxt sys
     //   in execMethods $ maybe proofMethods ((:[]) . (,"")) stoppingMethod
     // When `isFinished` yields a verdict the WHOLE method list is replaced
@@ -948,8 +931,8 @@ fn write_applicable_methods(
     // rendered by `prettyPM` as a trailing `// <expl>` line comment.
     let methods: Vec<(ProofMethod, String)> = match is_finished(ctx, sys) {
         Some(r) => vec![(ProofMethod::Finished(r), String::new())],
-        // HS-faithful WHNF-depth applicability (Web/Theory.hs:540-546 via
-        // ProofMethod.hs:751-756): never forces the SolveGoal fan-out —
+        // HS-faithful WHNF-depth applicability (Web/Theory.hs:546-552 via
+        // ProofMethod.hs:282-299, see line 298): never forces the SolveGoal fan-out —
         // see `is_applicable_for_display`.  Must stay in lockstep with
         // `apply_method_and_redirect`'s index filter (method numbering).
         None => candidate_methods_with_expl(sys, ctx, depth)
@@ -962,7 +945,7 @@ fn write_applicable_methods(
             .collect(),
     };
     if methods.is_empty() {
-        // Mirror Haskell `prettyApplicableProofMethods` (`Web/Theory.hs:540-542`):
+        // Mirror Haskell `prettyApplicableProofMethods` (`Web/Theory.hs:546-548`):
         //   [] | finishedSubterms ctxt sys -> "Constraint System is Solved"
         //   []                             -> "Constraint System is Unfinishable"
         // We only reach here when `is_finished` returned `None` (the
@@ -977,7 +960,7 @@ fn write_applicable_methods(
         }
         return;
     }
-    // HS `subProofSnippet` (`Web/Theory.hs:544-545`):
+    // HS `subProofSnippet` (`Web/Theory.hs:550-551`):
     //   withTag "h3" [] (text "Applicable Proof Methods:" <-> comment_ (goalRankingName ranking))
     // `comment_` wraps the ranking name in an `hl_comment` span (identity in
     // plain mode); the name text is entity-escaped by `Doc::text`.
@@ -987,7 +970,7 @@ fn write_applicable_methods(
     out.push(format!("<h3>{h3}</h3>"));
     // HS `preformatted (Just "methods") (numbered' $ zipWith prettyPM [1..] pms)`
     // = `withTag "div" [("class","preformatted methods")] …` (no `<pre>`).
-    // Mirror Haskell `Web.Theory.subProofSnippet` (`Web/Theory.hs:593-596`):
+    // Mirror Haskell `Web.Theory.subProofSnippet` (`Web/Theory.hs:599-603`):
     // each ranked method N (1-based) emits
     //   <a class="internal-link proof-method"
     //      href="/thy/trace/<idx>/main/method/<lemma>/<N>/<sub>">label</a>
@@ -997,7 +980,7 @@ fn write_applicable_methods(
     // landing on our `/main/method/...` route which dispatches to
     // `apply_method_and_redirect` and returns a `{redirect}`.
     // HS lays the whole list out as ONE HtmlDoc (`numbered' $ zipWith
-    // prettyPM [1..] pms`, Web/Theory.hs:513-611, see line 546): each item is
+    // prettyPM [1..] pms`, Web/Theory.hs:519-617, see line 552): each item is
     // `flushRight nW (show i) <> ". " <> (link (prettyProofMethod m) <->
     // lineComment_ expl)` — so the method text wraps (a) at HTML-ENTITY
     // fill widths (renderHtmlDoc), (b) beside-shifted by the `N. ` prefix
@@ -1009,7 +992,7 @@ fn write_applicable_methods(
     // `</a>` boundary.  (Continuation-line indent bytes and the blank line
     // `numbered'` inserts between items are whitespace the parity gate
     // canonicalizes; the break POSITIONS are what must match.)
-    // HS `numbered' $ zipWith prettyPM [1..] pms` (Web/Theory.hs:513-611, see line 546):
+    // HS `numbered' $ zipWith prettyPM [1..] pms` (Web/Theory.hs:519-617, see line 552):
     //   pp (i, d) = text (flushRight nW (show i)) <> text ". " <> d
     //   d        = withTag "a" [("class",…),("href",…)] (prettyProofMethod m)
     //              <-> (if null expl then emptyDoc else lineComment_ expl)
@@ -1054,7 +1037,7 @@ fn write_applicable_methods(
 
 /// Emit the `a.`/`b.`/`[o.]`/`s.` autoprove menu links that trail the
 /// numbered method list — a faithful port of HS `subProofSnippet`'s
-/// `autoProverLinks` (`Web/Theory.hs:547-591`), in HS order a, b, [o], s.
+/// `autoProverLinks` (`Web/Theory.hs:553-597`), in HS order a, b, [o], s.
 /// Each `AutoProverR tidx cut bound oracleBool path` renders as
 ///   /thy/trace/<idx>/autoprove/<cut>/<bound>/<oracleBool>/<path>
 /// with cut ∈ {idfs=CutDFS, characterize=CutNothing}; `AutoProverAllR`
@@ -1072,7 +1055,7 @@ fn write_autoprove_links(
     let l = lemma_esc;
     let p = url_path;
     let bound = 5; // HS `fromMaybe 5 (apBound ti.autoProver)` — default depth bound.
-                   // HS `autoProverLinks` (Web/Theory.hs:557-591) wraps each link's visible
+                   // HS `autoProverLinks` (Web/Theory.hs:563-597) wraps each link's visible
                    // text in `keyword_` — an `hl_keyword` span in HtmlDoc mode, plain text
                    // otherwise.  `kw` renders that span under the active guard.  The line is
                    // assembled by `hsep` (single-space separators); the `b.`/`s.` suffixes are
@@ -1113,7 +1096,7 @@ fn write_autoprove_links(
 
 /// The `GoalRanking` used at proof `depth`, mirroring HS `useHeuristic
 /// (Heuristic rankings) depth = rankings !! (depth mod n)`
-/// (ProofMethod.hs:581-590) — the same selection `rank_goals_with_inner`
+/// (ProofMethod.hs:580-589) — the same selection `rank_goals_with_inner`
 /// performs (goals.rs).  Defaults to `SmartRanking False`.
 fn ranking_for_depth(ctx: &ProofContext, depth: usize) -> GoalRanking {
     ctx.heuristic
@@ -1129,11 +1112,11 @@ fn ranking_for_depth(ctx: &ProofContext, depth: usize) -> GoalRanking {
         .unwrap_or(GoalRanking::Smart(false))
 }
 
-/// HS `usesOracle` (lib/theory/src/Theory/Constraint/System.hs:537-544):
+/// HS `usesOracle` (lib/theory/src/Theory/Constraint/System.hs:536-537):
 /// `all isOracleRanking rs`, where `isOracleRanking` is True for
 /// `OracleRanking`, `OracleSmartRanking` AND `InternalTacticRanking`
 /// (our `GoalRanking::Tactic`).  Gates the "o. autoprove ... until oracle
-/// returns nothing" menu entry (src/Web/Theory.hs:549-550), so it must
+/// returns nothing" menu entry (src/Web/Theory.hs:555-556), so it must
 /// also fire for `[heuristic={tactic}]` lemmas.  `all` over an empty
 /// ranking list would be vacuously true; guard with `!h.is_empty()`.
 fn uses_oracle(ctx: &ProofContext) -> bool {
@@ -1185,19 +1168,16 @@ fn render_node(out: &mut String, idx: usize, lemma: &str, path: &[String], node:
         // Solve links — list the unsolved goals at this node, capped
         // at 8 so the UI doesn't blow up on systems with many open
         // goals.
-        let mut shown = 0usize;
-        // Haskell's `goalNr` is 1-based on UNSOLVED goals; we mirror that
-        // with a running counter incremented per unsolved goal (identical
-        // to a `take(i+1).filter(unsolved).count()` recount, but O(n)).
-        let mut nr = 0usize;
-        for (g, st) in node.sys.goals.iter() {
-            if st.solved {
-                continue;
-            }
-            nr += 1;
-            if shown >= 8 {
-                break;
-            }
+        // Haskell's `goalNr` is 1-based over the UNSOLVED goals only.
+        for (i, (g, _)) in node
+            .sys
+            .goals
+            .iter()
+            .filter(|(_, st)| !st.solved)
+            .take(8)
+            .enumerate()
+        {
+            let nr = i + 1;
             let goal_label = goal_summary(g);
             out.push_str(&action_link(
                 idx,
@@ -1206,13 +1186,12 @@ fn render_node(out: &mut String, idx: usize, lemma: &str, path: &[String], node:
                 &format!("solve/{}", nr),
                 &format!("[solve {}: {}]", nr, html_escape(&goal_label)),
             ));
-            shown += 1;
         }
         out.push_str("</span>");
     }
     out.push_str("</div>");
     // Children indented underneath.  Mirror Haskell's
-    // `<h4>case <name></h4>` per child shape (Web/Theory.hs:605-611),
+    // `<h4>case <name></h4>` per child shape (Web/Theory.hs:612-617),
     // wrapped in a single `<div class="proof-children">` so the indent
     // reads consistently.
     if !node.children.is_empty() {
@@ -1228,7 +1207,7 @@ fn render_node(out: &mut String, idx: usize, lemma: &str, path: &[String], node:
 }
 
 /// Port of Haskell's `prettyProofMethod`
-/// (`lib/theory/src/Theory/Constraint/Solver/ProofMethod.hs:1174-1187`).
+/// (`lib/theory/src/Theory/Constraint/Solver/ProofMethod.hs:1173-1186`).
 pub fn method_label(m: &ProofMethod) -> String {
     // Delegate to the byte-faithful `--prove` renderer (HS `prettyProofMethod`)
     // so the interactive method labels carry the same fact spacing
@@ -1287,10 +1266,10 @@ fn goal_summary(g: &Goal) -> String {
                 np.0.idx
             )
         }
-        // Mirror Haskell `prettyGoal` (`Constraints.hs:279-280`):
+        // Mirror Haskell `prettyGoal` (`Constraints.hs:285-286`):
         //   prettyGoal (SplitG x) = "splitEqs" <> parens (show (unSplitId x))
         Goal::Split(s) => format!("splitEqs({})", s.0),
-        // Mirror Haskell `prettyGoal` (`Constraints.hs:275-278`):
+        // Mirror Haskell `prettyGoal` (`Constraints.hs:281-283`):
         //   DisjG (Disj [])  -> text "Disj" <-> operator_ "(⊥)"   (`<->` = `<+>` inserts a space)
         //   DisjG (Disj gfs) -> punctuate "  ∥" (map (parens . prettyGuarded) gfs)
         Goal::Disj(d) => {
@@ -1312,29 +1291,57 @@ fn goal_summary(g: &Goal) -> String {
 mod tests {
     use super::*;
 
+    /// Absolute maude locations probed when `MAUDE_PATH` is unset.
+    const MAUDE_CANDIDATES: [&str; 4] = [
+        "/usr/local/bin/maude",
+        "/opt/homebrew/bin/maude",
+        "/usr/bin/maude",
+        "/home/linuxbrew/.linuxbrew/bin/maude",
+    ];
+
+    /// The maude the maude-backed tests in this module run against.
+    ///
+    /// Resolution order: `$MAUDE_PATH`, then [`MAUDE_CANDIDATES`], then a
+    /// `$PATH` walk.  Resolving nothing is a MISCONFIGURATION, not a reason
+    /// to skip: a silent `None` makes every maude-backed test here report
+    /// green having built nothing.  Panic instead, unless
+    /// `TAM_ALLOW_NO_MAUDE=1` explicitly asks for the silent skip.
     fn maude_path() -> Option<String> {
         if let Ok(p) = std::env::var("MAUDE_PATH") {
+            assert!(
+                std::path::Path::new(&p).exists(),
+                "MAUDE_PATH={p} does not exist; unset it to fall back to \
+                 {MAUDE_CANDIDATES:?}, or point it at a real maude"
+            );
             return Some(p);
         }
-        for c in [
-            "/usr/local/bin/maude",
-            "/opt/homebrew/bin/maude",
-            "/usr/bin/maude",
-            "maude",
-        ] {
-            if std::path::Path::new(c).exists() {
-                return Some(c.to_string());
+        if let Some(c) = MAUDE_CANDIDATES
+            .iter()
+            .find(|c| std::path::Path::new(c).exists())
+        {
+            return Some((*c).to_string());
+        }
+        if let Some(path) = std::env::var_os("PATH") {
+            for dir in std::env::split_paths(&path) {
+                let cand = dir.join("maude");
+                if cand.exists() {
+                    return Some(cand.to_string_lossy().into_owned());
+                }
             }
         }
+        assert_eq!(
+            std::env::var("TAM_ALLOW_NO_MAUDE").as_deref(),
+            Ok("1"),
+            "no maude found: set MAUDE_PATH, put maude on $PATH, or set \
+             TAM_ALLOW_NO_MAUDE=1 to skip the maude-backed tests here — \
+             skipping silently would report green having run nothing"
+        );
         None
     }
 
-    #[test]
-    fn build_state_for_trivial_theory() {
-        let mp = match maude_path() {
-            Some(p) => p,
-            None => return,
-        };
+    /// The theory that the two `ProofState` tests below use.  It has one
+    /// rule and one exists-trace lemma.  The function closes it against `mp`.
+    fn trivial_proof_state(mp: &str) -> ProofState {
         let src = r#"
 theory T begin
 rule Setup: [Fr(~k)] --[Setup(~k)]-> [Out(~k)]
@@ -1343,7 +1350,16 @@ lemma trivial: exists-trace
 end
 "#;
         let pt = tamarin_parser::parse_theory(src, &[]).expect("parse");
-        let state = ProofState::new(&pt, &mp, None, "", None).expect("build state");
+        ProofState::new(&pt, mp, None, "", None).expect("build state")
+    }
+
+    #[test]
+    fn build_state_for_trivial_theory() {
+        let mp = match maude_path() {
+            Some(p) => p,
+            None => return,
+        };
+        let state = trivial_proof_state(&mp);
         // Should have one lemma initialised.
         let root = state.get_root("trivial").expect("trivial root");
         assert!(matches!(root.method, ProofMethod::Sorry(_)));
@@ -1356,15 +1372,7 @@ end
             Some(p) => p,
             None => return,
         };
-        let src = r#"
-theory T begin
-rule Setup: [Fr(~k)] --[Setup(~k)]-> [Out(~k)]
-lemma trivial: exists-trace
-  "Ex k #i. Setup(k) @ #i"
-end
-"#;
-        let pt = tamarin_parser::parse_theory(src, &[]).expect("parse");
-        let state = ProofState::new(&pt, &mp, None, "", None).expect("build state");
+        let state = trivial_proof_state(&mp);
         // Apply simplify at the root.
         let path: Vec<String> = Vec::new();
         let r = state.apply_at_path("trivial", &path, ProofMethod::Simplify);
@@ -1397,8 +1405,14 @@ end
         assert!(parse_method(&["bogus".into()], &sys).is_none());
     }
 
+    /// The complete document that [`render_proof_tree_html`] emits for an
+    /// open, childless root.  The document holds the `<h2>` header and the
+    /// method line with its status badge.  It also holds the two goal-free
+    /// action links, because the node is `Sorry`/`Open`.  Each link addresses
+    /// this node's own proof path, which is empty.  A system with unsolved
+    /// goals adds `[solve N: …]` links here.
     #[test]
-    fn render_smoke_test() {
+    fn render_proof_tree_html_for_an_open_root() {
         let root = ProofNode {
             method: ProofMethod::Sorry(None),
             sys: tamarin_theory::constraint::system::System::empty(),
@@ -1406,9 +1420,21 @@ end
             status: NodeStatus::Open,
             annotated: true,
         };
-        let html = render_proof_tree_html(1, "L", &root);
-        assert!(html.contains("Proof of"));
-        assert!(html.contains("L"));
+        assert_eq!(
+            render_proof_tree_html(1, "L", &root),
+            concat!(
+                "<h2>Proof of <code>L</code></h2>\n",
+                "<div class=\"proof-node\">",
+                "<span class=\"proof-method\">sorry</span> ",
+                "<span class=\"proof-status\" style=\"color:#136a8a\">\u{25cb} open</span>",
+                " <span class=\"proof-actions\">",
+                "<a class=\"ajax-action proof-step\" \
+                 href=\"/thy/trace/1/proof-step/L/simplify\">[simplify]</a> ",
+                "<a class=\"ajax-action proof-step\" \
+                 href=\"/thy/trace/1/proof-step/L/induction\">[induction]</a> ",
+                "</span></div>",
+            )
+        );
     }
 
     // --- HS-parity pretty-printing regression tests --------------------
@@ -1417,8 +1443,8 @@ end
 
     #[test]
     fn sorry_method_label_has_no_initial_comment() {
-        // HS `unproven = sorry Nothing` (Proof.hs:255-256) renders via
-        // `prettyProofMethod (Sorry Nothing)` (ProofMethod.hs:1180-1181)
+        // HS `unproven = sorry Nothing` (Theory/Proof.hs:255-256) renders via
+        // `prettyProofMethod (Sorry Nothing)` (ProofMethod.hs:1179-1180)
         // as a plain `sorry` (no `/* ... */` reason).  Confirmed against
         // the repo HS prover: an unproven lemma prints `by sorry`.
         assert_eq!(method_label(&ProofMethod::Sorry(None)), "sorry");
@@ -1431,7 +1457,8 @@ end
     fn empty_disj_goal_summary_has_space() {
         use tamarin_theory::constraint::constraints::{Disj, Goal};
         // HS `prettyGoal (DisjG (Disj [])) = text "Disj" <-> operator_ "(⊥)"`
-        // (Constraints.hs:273-288, see line 275).  `<->` = HughesPJ `<+>` (Class.hs:172-187, see line 176),
+        // (Constraints.hs:273-288, see line 281).  `<->` = HughesPJ `<+>`
+        // (Text/PrettyPrint/Class.hs:172-187, see line 176),
         // which inserts a single space: `Disj (⊥)`.
         assert_eq!(goal_summary(&Goal::Disj(Disj(vec![]))), "Disj (\u{22A5})");
     }

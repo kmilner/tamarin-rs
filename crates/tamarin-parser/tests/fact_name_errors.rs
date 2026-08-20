@@ -1,13 +1,10 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, rsasse, jdreier, rkunnema, and other minor contributors (see
-//   upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/theory/src/Theory/Text/Parser/Fact.hs,
-//   lib/theory/src/Theory/Text/Parser/Token.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Parity for the lowercase-fact-name rejection.
 //!
-//! HS `fact'` (Fact.hs:39-50, see line 46) raises `fail "facts must start
+//! HS `fact'` (Parser/Fact.hs:39-50, see line 46) raises `fail "facts must start
 //! with upper-case letters"` right after `identifier` consumed the name.  The
 //! port raises [`ParseError::FactNameMustStartWithUppercase`] carrying the
 //! offending name, positioned at the name itself rather than at the token the

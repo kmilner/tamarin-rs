@@ -1,10 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, beschmi, jdreier, PhilipLukertWork, addap, rsasse,
-//   charlie-j, and other minor contributors (see upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/term/src/Term/LTerm.hs, lib/term/src/Term/Term.hs,
-//   lib/term/src/Term/Term/Classes.hs, lib/term/src/Term/Term/Raw.hs,
-//   lib/term/src/Term/VTerm.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Port of `Term.Term.Raw` from `lib/term/src/Term/Term/Raw.hs`.
 //!
@@ -34,20 +30,17 @@ pub enum DiffType {
 /// because [`Term::App`] expects AC-normalised argument lists.
 ///
 /// Children of [`Term::App`] are held in an `Arc<[_]>` so that cloning a
-/// `Term` is O(1) (one atomic refcount bump on `Arc<[_]>`) instead of a
-/// recursive deep clone.  This mirrors GHC's structural sharing of term
-/// subtrees: a `Term` in Haskell is a pointer-sized value that is shared
-/// across many sites by reference, never deep-copied.  Profiling shows
-/// that with the prior `Vec<Term<A>>` children, ~50% of solver CPU was
-/// spent in `Term::clone` / `mi_malloc` / `mi_free` on the hot path
-/// `subst_system_once → Goal::clone → Fact::clone → Vec::clone →
-/// Term::clone`.  The `Arc<[_]>` form makes that O(1).
+/// `Term` is O(1) (one atomic refcount bump) instead of a recursive deep
+/// clone.  This mirrors GHC's structural sharing of term subtrees: a
+/// `Term` in Haskell is a pointer-sized value shared across many sites by
+/// reference, never deep-copied.  It keeps the solver's hottest allocation
+/// path (`subst_system_once → Goal::clone → Fact::clone → Term::clone`)
+/// off the allocator.
 ///
-/// Reading (`args.iter()`, `args.len()`, `args[i]`, `&args[..]`) is
-/// unchanged because `Arc<[_]>` derefs to `[_]`.  Construction sites
-/// convert via `vec.into()` (or `Arc::from(vec)`); destructure-and-
-/// consume patterns use `args.iter().cloned()` (each child clone is
-/// itself O(1)).
+/// Reading (`args.iter()`, `args.len()`, `args[i]`, `&args[..]`) works
+/// because `Arc<[_]>` derefs to `[_]`.  Construction sites convert via
+/// `vec.into()` (or `Arc::from(vec)`); destructure-and-consume patterns
+/// use `args.iter().cloned()` (each child clone is itself O(1)).
 #[derive(Debug, Clone)]
 pub enum Term<A> {
     Lit(A),
@@ -61,9 +54,10 @@ pub enum Term<A> {
 // deep recursive walk.  The std `Ord for Arc` does NOT short-circuit on pointer
 // identity (only `PartialEq` does), which is why `cmp`/`partial_cmp` are
 // hand-written here.  Correctness: `Arc::ptr_eq ⇒ true` means the same
-// allocation ⇒ identical contents, so the result equals the previous derived,
+// allocation ⇒ identical contents, so the answer equals the purely
 // content-based one; on a pointer mismatch we fall back to the full structural
-// comparison.  Variant order (Lit < App) and field order are preserved exactly.
+// comparison.  Variant order (Lit < App) and field order match the derived
+// impls exactly.
 impl<A: PartialEq> PartialEq for Term<A> {
     #[inline]
     fn eq(&self, other: &Self) -> bool {
@@ -214,12 +208,17 @@ const FAPP_AC_EMPTY_MSG: &str = "Term.fAppAC: empty argument list";
 ///
 /// GHC has no `Result` to return here: `error` throws, and with nothing
 /// catching it the runtime prints `tamarin-prover: ` ++ `displayException`
-/// (message + `HasCallStack` frame) on stderr and exits 1.  `f_app_ac`'s
-/// callers reach into every layer of the port and cannot carry a `Result`
-/// either, so the port raises a panic whose payload carries exactly the text
-/// GHC would print; the binary's panic hook recognises it via
-/// [`hs_error_text`] and reproduces the stream and exit code.
-fn hs_error(message: &str, call_site: String) -> ! {
+/// (message + `HasCallStack` frame) on stderr and exits 1.  The `error`s this
+/// stands in for sit below the port's error-returning layers, in code whose
+/// callers cannot carry a `Result` (`Term.fAppAC`, Raw.hs:120;
+/// `Main.Console.testProcess`' maude abort, Console.hs:147), so the port
+/// raises a panic whose payload carries exactly the text GHC would print; the
+/// binary's panic hook recognises it via [`hs_error_text`] and reproduces the
+/// stream and exit code.
+///
+/// `call_site` is the frame's `src/<path>:<line>:<column> in <package>:<module>`
+/// text, hardcoded from the oracle build at each raise site.
+pub fn hs_error(message: &str, call_site: String) -> ! {
     panic!("{HS_ERROR_MARKER}{message}\nCallStack (from HasCallStack):\n  error, called at {call_site}");
 }
 
@@ -331,17 +330,18 @@ pub fn count_proper_subterms<A: PartialEq>(needle: &Term<A>, haystack: &Term<A>)
 
 // =============================================================================
 // "Protected" subterms (auto-sources).
-// NB (HS Term.hs:229-230, see line 235): anything but a pair or an AC symbol is "protected".
+// NB (HS Term/Term.hs:254-255): anything but a pair or an AC symbol is "protected".
 // =============================================================================
 
 /// `True` iff the term's top symbol is an AC operator. Port of HS `isAC`
-/// (Term.hs:208-210).
+/// (Term/Term.hs:229-231).
 pub fn is_ac<A>(t: &Term<A>) -> bool {
     matches!(t, Term::App(FunSym::Ac(_), _))
 }
 
-/// `True` iff the term is a pair `<_,_>`. Port of HS `isPair` (Term.hs:164-166,
-/// `viewTerm2 -> FPair _ _`): top symbol is the binary `pair` constructor.
+/// `True` iff the term is a pair `<_,_>`. Port of HS `isPair`
+/// (Term/Term.hs:185-187, `viewTerm2 -> FPair _ _`): top symbol is the binary
+/// `pair` constructor.
 pub fn is_pair<A>(t: &Term<A>) -> bool {
     match t {
         Term::App(FunSym::NoEq(s), args) => {
@@ -352,15 +352,15 @@ pub fn is_pair<A>(t: &Term<A>) -> bool {
 }
 
 /// `True` iff the term is a DH product `_*_`. Port of HS `isProduct`
-/// (Term.hs:179-181, `viewTerm2 -> FMult _`): top symbol is the AC
+/// (Term/Term.hs:200-202, `viewTerm2 -> FMult _`): top symbol is the AC
 /// multiplication operator.
 pub fn is_product<A>(t: &Term<A>) -> bool {
     matches!(t, Term::App(FunSym::Ac(AcSym::Mult), _))
 }
 
 /// `True` iff the term is a well-formed inverse `inv(_)`. Port of HS `isInverse`
-/// (Term.hs:174-176, `viewTerm2 -> FInv _`): the unary `inv` operator applied to one
-/// argument.
+/// (Term/Term.hs:195-197, `viewTerm2 -> FInv _`): the unary `inv` operator
+/// applied to one argument.
 pub fn is_inverse<A>(t: &Term<A>) -> bool {
     match t {
         Term::App(FunSym::NoEq(s), args) => {
@@ -372,7 +372,7 @@ pub fn is_inverse<A>(t: &Term<A>) -> bool {
 
 /// All "protected" subterms of `t`: subterms whose top symbol is a function
 /// that is neither a pair nor an AC operator. Port of HS `allProtSubterms`
-/// (Term.hs:239-251) — pre-order, descending through pairs/AC operators.
+/// (Term/Term.hs:260-265) — pre-order, descending through pairs/AC operators.
 pub fn all_prot_subterms<A: Clone>(t: &Term<A>) -> Vec<Term<A>> {
     match t {
         Term::App(_, args) if is_pair(t) || is_ac(t) => {
@@ -428,7 +428,7 @@ pub trait TermSize {
     fn size(&self) -> usize;
 }
 
-// Port of `instance Sized a => Sized (Term a)` (Term/Term/Raw.hs:231-235, see line 235).
+// Port of `instance Sized a => Sized (Term a)` (Term/Term/Raw.hs:247-248).
 impl<A: TermSize> TermSize for Term<A> {
     fn size(&self) -> usize {
         match self {
@@ -476,6 +476,25 @@ impl TermSize for &str {
 mod tests {
     use super::*;
     use crate::function_symbols::{exp_sym, pair_sym, AcSym, CSym, FunSym};
+
+    /// The pinned submodule's `lib/term/src/Term/Term/Raw.hs`, embedded at
+    /// build time.
+    const RAW_HS: &str = include_str!("../../../tamarin-prover/lib/term/src/Term/Term/Raw.hs");
+
+    /// [`FAPP_AC_EMPTY_SITE`] is pasted verbatim into a `HasCallStack` frame
+    /// the port must emit byte-for-byte, and the stderr tests for that frame
+    /// compare the port against bytes captured from the port — so they agree
+    /// with a stale coordinate.  Read it back out of the pinned source.
+    #[test]
+    fn fapp_ac_empty_site_is_the_pinned_call_site() {
+        let (idx, line) = RAW_HS
+            .lines()
+            .enumerate()
+            .find(|(_, l)| l.contains(FAPP_AC_EMPTY_MSG))
+            .expect("no `fAppAC` empty-list `error` in the pinned Raw.hs");
+        let col = line.find("error").expect("no `error` token") + 1;
+        assert_eq!(FAPP_AC_EMPTY_SITE, format!("{}:{}", idx + 1, col));
+    }
 
     fn nat(n: u64) -> Term<u64> {
         lit(n)
@@ -532,17 +551,18 @@ mod tests {
         assert_eq!(all_prot_subterms(&nat(5)), Vec::<Term<u64>>::new());
     }
 
+    /// An Xor that is already flat, inside another Xor, gives exactly one Xor
+    /// over the union of the arguments.  The constructor sorts that union
+    /// again.  It merges the new argument into the flattened list.  It does
+    /// not add the new argument after that list.
     #[test]
-    fn ac_flattening_is_idempotent() {
+    fn ac_flattening_absorbs_a_nested_same_symbol_app() {
         let t1 = f_app_ac(AcSym::Xor, vec![nat(1), nat(2), nat(3)]);
-        let t2 = f_app_ac(AcSym::Xor, vec![t1.clone(), nat(0)]);
-        // Should be a single Xor with [0,1,2,3].
-        match t2 {
-            Term::App(FunSym::Ac(AcSym::Xor), ts) => {
-                assert_eq!(ts.len(), 4);
-            }
-            _ => panic!(),
-        }
+        let t2 = f_app_ac(AcSym::Xor, vec![t1, nat(0)]);
+        assert_eq!(
+            t2,
+            unsafe_f_app(FunSym::Ac(AcSym::Xor), vec![nat(0), nat(1), nat(2), nat(3)])
+        );
     }
 
     #[test]
@@ -592,20 +612,99 @@ mod tests {
         assert_eq!(count_subterms(&y, &outer), 1);
     }
 
+    /// [`replace_subterm`] applies `f` to the complete term first.  It then
+    /// descends into the result of `f`.  So it also visits the new subterms
+    /// that a rewrite introduces.  It never visits the original children of a
+    /// node that `f` replaced.
+    ///
+    /// A bottom-up traversal visits the children first and applies `f` last.
+    /// That order gives the same result for an `f` that changes only leaves.
+    /// So the `f` here maps an `exp` node onto a `pair` of two new leaves.
+    /// The top-down order rewrites the top node.  It then increments the two
+    /// leaves it has just introduced.  It never sees the original `1` and
+    /// `2`.  [`replace_proper_subterm`] runs the same descent, but it does
+    /// not apply `f` at the root.
     #[test]
-    fn replace_subterm_top_down() {
-        let t = f_app_no_eq(pair_sym(), vec![nat(1), nat(2)]);
+    fn replace_subterm_is_top_down() {
+        let t = f_app_no_eq(exp_sym(), vec![nat(1), nat(2)]);
         let mut f = |t: Term<u64>| match t {
             Term::Lit(n) => Term::Lit(n + 10),
+            Term::App(s, _) if s == FunSym::NoEq(exp_sym()) => {
+                f_app_no_eq(pair_sym(), vec![nat(7), nat(8)])
+            }
             other => other,
         };
-        let r = replace_subterm(&mut f, t);
-        match r {
-            Term::App(_, ts) => {
-                assert_eq!(&*ts, &[nat(11), nat(12)]);
-            }
-            _ => panic!(),
+        assert_eq!(
+            replace_subterm(&mut f, t.clone()),
+            f_app_no_eq(pair_sym(), vec![nat(17), nat(18)])
+        );
+        // `replace_proper_subterm` skips the root.  The `exp` node stays.
+        // Each child goes to the full top-down `replace_subterm`.
+        assert_eq!(
+            replace_proper_subterm(&mut f, t),
+            f_app_no_eq(exp_sym(), vec![nat(11), nat(12)])
+        );
+    }
+
+    /// The hand-written `PartialEq`/`Ord`/`PartialOrd`/`Hash` on [`Term`]
+    /// contain an `Arc::ptr_eq` fast path.  So they must still give exactly
+    /// the answers of the derived, purely structural implementations.  That
+    /// means three things.  `Lit` comes before `App`, which is the
+    /// declaration order.  That order puts constants before applications in
+    /// every `f_app_ac`/`f_app_c` argument sort.  Inside `App`, the symbol
+    /// comes before the arguments.  The answer is the same whether or not the
+    /// two argument slices are the same allocation.
+    #[test]
+    fn term_ord_is_structural_whether_or_not_args_are_shared() {
+        use std::cmp::Ordering;
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        fn hash_of(t: &Term<u64>) -> u64 {
+            let mut h = DefaultHasher::new();
+            t.hash(&mut h);
+            h.finish()
         }
+        // `Lit` sorts before `App`, for any payloads.
+        let big_lit = nat(u64::MAX);
+        let app = f_app_no_eq(pair_sym(), vec![nat(0), nat(0)]);
+        assert!(big_lit < app);
+        assert_eq!(app.cmp(&big_lit), Ordering::Greater);
+        assert_eq!(big_lit.partial_cmp(&app), Some(Ordering::Less));
+        assert!(big_lit != app);
+        // Inside `App`, the symbol has priority over the arguments.  `exp` is
+        // less than `pair` in `NoEqSym` order.  So `exp(9,9)` sorts below
+        // `pair(0,0)`.
+        assert!(exp_sym() < pair_sym());
+        let exp_big = f_app_no_eq(exp_sym(), vec![nat(9), nat(9)]);
+        let pair_small = f_app_no_eq(pair_sym(), vec![nat(0), nat(0)]);
+        assert!(exp_big < pair_small);
+        // Here are two argument slices: one shared, one built separately.
+        // `shared` is a clone, so it holds the same `Arc` and the pointer
+        // fast path applies.  `rebuilt` is an equal slice at a different
+        // address, so the fast path does not apply and the structural walk
+        // gives the answer.  All three answers must be the same.
+        let shared = app.clone();
+        let rebuilt = f_app_no_eq(pair_sym(), vec![nat(0), nat(0)]);
+        if let (Term::App(_, a), Term::App(_, b), Term::App(_, c)) = (&app, &shared, &rebuilt) {
+            assert!(Arc::ptr_eq(a, b));
+            assert!(!Arc::ptr_eq(a, c));
+        } else {
+            panic!("expected three applications");
+        }
+        for other in [&shared, &rebuilt] {
+            assert_eq!(&app, other);
+            assert_eq!(app.cmp(other), Ordering::Equal);
+            assert_eq!(app.partial_cmp(other), Some(Ordering::Equal));
+            // `Hash` must agree with that `Eq`.  `Hash` uses the content, so
+            // the term with the shared pointer and the rebuilt term give the
+            // same hash.
+            assert_eq!(hash_of(&app), hash_of(other));
+        }
+        // The comparison still finds a different argument through the
+        // fast-path guard.
+        let differing = f_app_no_eq(pair_sym(), vec![nat(0), nat(1)]);
+        assert_ne!(app, differing);
+        assert_eq!(app.cmp(&differing), Ordering::Less);
     }
 
     // =========================================================================
@@ -655,15 +754,6 @@ mod tests {
             }
             _ => panic!(),
         }
-    }
-
-    /// `f_app_ac` panics on empty argument list — matching Haskell's
-    /// `fAppAC` which is undefined on []. Empty AC terms are nonsensical
-    /// (there's no identity element at the term layer).
-    #[test]
-    #[should_panic(expected = "empty argument list")]
-    fn ac_panics_on_empty_args() {
-        let _: Term<u64> = f_app_ac(AcSym::Mult, vec![]);
     }
 
     /// Lit::Con < Lit::Var: constants sort before variables.

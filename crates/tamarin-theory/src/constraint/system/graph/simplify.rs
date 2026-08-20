@@ -1,0 +1,699 @@
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
+
+//! Port of `Theory.Constraint.System.Graph.Simplification` —
+//! drops transitive `Less`-atoms and hides "transfer" nodes
+//! (irecv/isend/coerce/fresh chains, or rule nodes with no actions
+//! and at most one premise/conclusion).
+//!
+//! See `lib/theory/src/Theory/Constraint/System/Graph/Simplification.hs`.
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use super::render_system::RenderSystem;
+use crate::constraint::constraints::{Edge, Goal, LessAtom, NodeId, Reason};
+use crate::constraint::system::System;
+use crate::fact::FactTag;
+use crate::rule::{
+    is_coerce_rule_info, is_irecv_rule_info, is_isend_rule_info, RuleACInst, RuleInfo,
+};
+use tamarin_term::lterm::{sort_of_lnterm, LNTerm, LSort};
+
+// ---------------------------------------------------------------------
+// Compression (compressSystem)
+// ---------------------------------------------------------------------
+
+/// Mirror of Haskell `compressSystem` (Simplification.hs:42-46).
+/// Drops entailed less-atoms, then tries to hide each node in turn.
+pub fn compress_system(mut sys: RenderSystem) -> RenderSystem {
+    sys = drop_entailed_ord_constraints(sys);
+    // Haskell: `foldl' (flip tryHideNodeId) se (frees (sLessAtoms, sNodes))`
+    // where `frees = sortednub . freesList` — a SINGLE sorted, deduplicated
+    // pass over the free vars of the (less-atoms, nodes) tuple.  The only
+    // Node-sort frees come from the node-id keys and the less-atom
+    // endpoints (rule instances carry term vars, not node vars), so we
+    // gather both into one sorted+deduplicated set and fold once.  We do
+    // NOT include `last_atom` (it is not part of Haskell's tuple) and we
+    // never double-visit a node id.  `BTreeSet<NodeId>` reproduces
+    // `sortednub`, since `LVar`'s `Ord` is Haskell-faithful (idx, sort,
+    // name).
+    let mut frees: BTreeSet<NodeId> = BTreeSet::new();
+    for la in &sys.less_atoms {
+        frees.insert(la.smaller);
+        frees.insert(la.larger);
+    }
+    for (id, _) in sys.nodes.iter() {
+        frees.insert(*id);
+    }
+    for v in frees {
+        sys = try_hide_node_id(&v, sys);
+    }
+    sys
+}
+
+/// Drop `LessAtom`s that are implied by the edge relation.
+fn drop_entailed_ord_constraints(mut sys: RenderSystem) -> RenderSystem {
+    // Build adjacency from `rawEdgeRel` = edges ++ unsolvedChains
+    // (Simplification.hs:33-38, see line 37 / System.hs:1613-1616).
+    let adj = build_raw_edge_adjacency(&sys);
+    // HS `entailed (LessAtom from to _) = to `S.member` reachableSet [from] edges`
+    // (Simplification.hs:33-38, see line 38).  `Dag.reachableSet [from]` ALWAYS
+    // contains the start node `from` itself (DAG/Simple.hs:72-78: `visit` inserts
+    // `x` before recursing), so a REFLEXIVE atom (`from == to`) is unconditionally
+    // entailed — hence dropped from the display graph.  `reachable` below is
+    // strict-path (returns false for `from == to`), so the reflexive case must be
+    // added explicitly to match HS; otherwise a `#t1 < #t1` born from a
+    // `#t1 < #t2` less-atom collapsed under a `t2 = t1` subst survives here and
+    // renders as a spurious dashed self-loop that HS never draws.
+    sys.content_mut()
+        .less_atoms
+        .retain(|la| la.smaller != la.larger && !reachable(&adj, &la.smaller, &la.larger));
+    sys
+}
+
+/// `(from, to)` node pairs of unsolved chain goals — mirror of
+/// `unsolvedChains` (System.hs:1601-1605) projected to node ids via
+/// `nodeConcNode *** nodePremNode`.
+fn unsolved_chain_pairs(sys: &System) -> Vec<(NodeId, NodeId)> {
+    sys.goals
+        .iter()
+        .filter_map(|(g, st)| {
+            if st.solved {
+                return None;
+            }
+            if let Goal::Chain(src, tgt) = g {
+                Some((src.0, tgt.0))
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// Adjacency for `rawEdgeRel sys = edges ++ unsolvedChains sys`
+/// (System.hs:1613-1616).
+fn build_raw_edge_adjacency(sys: &System) -> BTreeMap<NodeId, Vec<NodeId>> {
+    let mut adj: BTreeMap<NodeId, Vec<NodeId>> = BTreeMap::new();
+    for e in &sys.edges {
+        adj.entry(e.src.0).or_default().push(e.tgt.0);
+    }
+    for (from, to) in unsolved_chain_pairs(sys) {
+        adj.entry(from).or_default().push(to);
+    }
+    adj
+}
+
+fn reachable(adj: &BTreeMap<NodeId, Vec<NodeId>>, from: &NodeId, to: &NodeId) -> bool {
+    if from == to {
+        return false;
+    }
+    let mut stack: Vec<NodeId> = vec![*from];
+    let mut visited: BTreeSet<NodeId> = BTreeSet::new();
+    visited.insert(*from);
+    while let Some(cur) = stack.pop() {
+        if let Some(nbrs) = adj.get(&cur) {
+            for nb in nbrs {
+                if nb == to {
+                    return true;
+                }
+                if visited.insert(*nb) {
+                    stack.push(*nb);
+                }
+            }
+        }
+    }
+    false
+}
+
+// ---------------------------------------------------------------------
+// tryHideNodeId — `Simplification.hs:85-152`
+// ---------------------------------------------------------------------
+
+fn try_hide_node_id(v: &NodeId, sys: RenderSystem) -> RenderSystem {
+    if v.sort != LSort::Node {
+        return sys;
+    }
+    // Mirror Haskell guards on `notOccursIn`:
+    //   - unsolved chains (any goal Chain mentioning v)
+    //   - sFormulas (Guarded constraints mentioning v)
+    if mentioned_in_unsolved_chains(v, &sys) {
+        return sys;
+    }
+    if mentioned_in_formulas(v, &sys.formulas) {
+        return sys;
+    }
+    // Try hideRule first if v has a node entry, else hideAction.  Either way
+    // the `Err` arm carries the untouched system back, so both are kept.
+    let node_rule = sys.nodes.iter().find(|(id, _)| id == v).cloned();
+    let attempt = match node_rule {
+        Some((_, ru)) => try_hide_rule(v, ru, sys),
+        None => try_hide_action(v, sys),
+    };
+    let (Ok(out) | Err(out)) = attempt;
+    out
+}
+
+fn mentioned_in_unsolved_chains(v: &NodeId, sys: &System) -> bool {
+    sys.goals.iter().any(|(g, st)| {
+        if st.solved {
+            return false;
+        }
+        if let Goal::Chain(src, tgt) = g {
+            &src.0 == v || &tgt.0 == v
+        } else {
+            false
+        }
+    })
+}
+
+fn mentioned_in_formulas(v: &NodeId, formulas: &[std::sync::Arc<crate::guarded::Guarded>]) -> bool {
+    formulas.iter().any(|g| guarded_mentions_node(v, g))
+}
+
+fn guarded_mentions_node(v: &NodeId, g: &crate::guarded::Guarded) -> bool {
+    use crate::guarded::Guarded;
+    match g {
+        Guarded::Conj(items) | Guarded::Disj(items) => {
+            items.iter().any(|x| guarded_mentions_node(v, x))
+        }
+        Guarded::GGuarded { guards, body, .. } => {
+            // HS `foldFrees` over the `Foldable (Guarded s c)` instance folds
+            // BOTH the guard atoms and the body (Guarded.hs:259-263), so a
+            // free node-sort var occurring only in a guard atom must count.
+            guards.iter().any(|a| atom_mentions_node(v, a)) || guarded_mentions_node(v, body)
+        }
+        Guarded::Atom(at) => atom_mentions_node(v, at),
+    }
+}
+
+fn atom_mentions_node(v: &NodeId, at: &crate::guarded_types::GAtom) -> bool {
+    use crate::guarded_types::{BVar, GAtom, GTerm};
+    let mentions_term = |t: &GTerm| -> bool {
+        if let GTerm::Var(BVar::Free(spec)) = t {
+            // HS `notOccursIn proj = not $ getAny $ foldFrees (Any . (v ==))
+            // (proj se)` (Simplification.hs:95-96) folds FULL `LVar` equality
+            // (name AND idx AND sort) over the formula's free vars. Comparing
+            // the NAME ONLY spuriously matches a different index — e.g. node
+            // `#vr.4` matched a formula mentioning `#vr` (idx 0), wrongly
+            // rejecting `#vr.4` from compression and keeping a transfer node
+            // (`d_0_snd`) HS hides. Match name AND idx (both are node-sort
+            // here: `v` is a NodeId and only node vars can equal it).
+            return *spec.name == *v.name && spec.idx == v.idx;
+        }
+        false
+    };
+    match at {
+        GAtom::Action(_, t) => mentions_term(t),
+        GAtom::Last(t) => mentions_term(t),
+        GAtom::Eq(a, b) | GAtom::Less(a, b) | GAtom::LessMset(a, b) | GAtom::Subterm(a, b) => {
+            mentions_term(a) || mentions_term(b)
+        }
+        GAtom::Pred(_) => false,
+    }
+}
+
+// ---------------------------------------------------------------------
+// hideAction — `Simplification.hs:99-122`
+// ---------------------------------------------------------------------
+
+fn try_hide_action(v: &NodeId, sys: RenderSystem) -> Result<RenderSystem, RenderSystem> {
+    // Collect KU action atoms at v.
+    let ku_actions: Vec<(NodeId, crate::fact::LNFact)> = sys
+        .goals
+        .iter()
+        .filter_map(|(g, st)| {
+            if st.solved {
+                return None;
+            }
+            if let Goal::Action(n, fa) = g {
+                if n == v && matches!(fa.tag, FactTag::Ku) && !fa.terms.is_empty() {
+                    return Some((*n, fa.clone()));
+                }
+            }
+            None
+        })
+        .collect();
+    if ku_actions.is_empty() {
+        return Err(sys);
+    }
+    // All KU terms must be pair, inverse, pub, or nat — otherwise bail.
+    if !ku_actions
+        .iter()
+        .all(|(_, fa)| fa.terms.first().is_some_and(eligible_term))
+    {
+        return Err(sys);
+    }
+    // Other restrictions: no standard action atoms mentioning v;
+    // no last-atom = v; no edges referencing v.
+    if sys.goals.iter().any(|(g, st)| {
+        if st.solved {
+            return false;
+        }
+        if let Goal::Action(n, fa) = g {
+            n == v && !matches!(fa.tag, FactTag::Ku)
+        } else {
+            false
+        }
+    }) {
+        return Err(sys);
+    }
+    if sys.last_atom.as_ref() == Some(v) {
+        return Err(sys);
+    }
+    if sys.edges.iter().any(|e| &e.src.0 == v || &e.tgt.0 == v) {
+        return Err(sys);
+    }
+    // Self-loop check: lNews must not have i == j.
+    let l_ins: Vec<LessAtom> = sys
+        .less_atoms
+        .iter()
+        .filter(|la| &la.larger == v)
+        .cloned()
+        .collect();
+    let l_outs: Vec<LessAtom> = sys
+        .less_atoms
+        .iter()
+        .filter(|la| &la.smaller == v)
+        .cloned()
+        .collect();
+    let l_news: Vec<LessAtom> = l_ins
+        .iter()
+        .flat_map(|i| {
+            l_outs.iter().map(move |o| LessAtom {
+                smaller: i.smaller,
+                larger: o.larger,
+                reason: o.reason,
+            })
+        })
+        .collect();
+    if l_news.iter().any(|la| la.smaller == la.larger) {
+        return Err(sys);
+    }
+    // Apply.
+    let mut new_sys = sys;
+    new_sys
+        .content_mut()
+        .less_atoms
+        .retain(|la| !l_ins.iter().any(|x| x == la) && !l_outs.iter().any(|x| x == la));
+    for la in l_news {
+        if !new_sys.less_atoms.iter().any(|x| x == &la) {
+            new_sys.content_mut().less_atoms.push(la);
+        }
+    }
+    // Remove KU action goals at v.
+    new_sys.goals_mut().retain(|(g, _)| match g {
+        Goal::Action(n, fa) => !(n == v && matches!(fa.tag, FactTag::Ku)),
+        _ => true,
+    });
+    Ok(new_sys)
+}
+
+/// Mirror Haskell `eligibleTerm`:
+///   isPair m  || isInverse m  || sortOfLNTerm m == LSortPub  || == LSortNat
+fn eligible_term(t: &LNTerm) -> bool {
+    tamarin_term::term::is_pair(t)
+        || tamarin_term::term::is_inverse(t)
+        || sort_of_lnterm(t) == LSort::Pub
+        || sort_of_lnterm(t) == LSort::Nat
+}
+
+// ---------------------------------------------------------------------
+// hideRule — `Simplification.hs:124-152`
+// ---------------------------------------------------------------------
+
+fn try_hide_rule(
+    v: &NodeId,
+    ru: RuleACInst,
+    sys: RenderSystem,
+) -> Result<RenderSystem, RenderSystem> {
+    // Eligible-rule check: must be one of irecv/isend/coerce/fresh,
+    // OR have zero actions and at most-one premise + at most-one conclusion.
+    if !rule_eligible(&ru) {
+        return Err(sys);
+    }
+    // Edges in (where v is the target) and out (where v is the source).
+    let e_ins: Vec<Edge> = sys
+        .edges
+        .iter()
+        .filter(|e| &e.tgt.0 == v)
+        .cloned()
+        .collect();
+    let e_outs: Vec<Edge> = sys
+        .edges
+        .iter()
+        .filter(|e| &e.src.0 == v)
+        .cloned()
+        .collect();
+    if e_ins.len() != ru.premises.len() {
+        return Err(sys);
+    }
+    if e_outs.len() != ru.conclusions.len() {
+        return Err(sys);
+    }
+    // Constructed pass-through edges.
+    let e_news: Vec<Edge> = e_ins
+        .iter()
+        .flat_map(|ei| {
+            e_outs.iter().map(move |eo| Edge {
+                src: ei.src,
+                tgt: eo.tgt,
+            })
+        })
+        .collect();
+    if e_news.iter().any(|e| e.src.0 == e.tgt.0) {
+        return Err(sys);
+    }
+    // No last-atom, no less-atom, no unsolved-action involving v.
+    if sys.last_atom.as_ref() == Some(v) {
+        return Err(sys);
+    }
+    if sys
+        .less_atoms
+        .iter()
+        .any(|la| &la.smaller == v || &la.larger == v)
+    {
+        return Err(sys);
+    }
+    if sys.goals.iter().any(|(g, st)| {
+        if st.solved {
+            return false;
+        }
+        if let Goal::Action(n, _) = g {
+            n == v
+        } else {
+            false
+        }
+    }) {
+        return Err(sys);
+    }
+    // Apply.
+    let mut new_sys = sys;
+    new_sys
+        .content_mut()
+        .edges
+        .retain(|e| !e_ins.iter().any(|x| x == e) && !e_outs.iter().any(|x| x == e));
+    for e in e_news {
+        if !new_sys.edges.iter().any(|x| x == &e) {
+            new_sys.content_mut().edges.push(e);
+        }
+    }
+    // Node removal can LOWER the node-component max, so invalidate the
+    // node cache.  The full cache is not maintained on this display-only
+    // simplify path.
+    new_sys.invalidate_node_max_cache();
+    new_sys.nodes_mut().retain(|(id, _)| id != v);
+    Ok(new_sys)
+}
+
+fn rule_eligible(ru: &RuleACInst) -> bool {
+    // HS `eligibleRule` (Simplification.hs:148-152):
+    //   any ($ ru) [isISendRule, isIRecvRule, isCoerceRule, isFreshRule]
+    //   || ( null (get rActs ru) && all (\l -> length (get l ru) <= 1) [rPrems, rConcs] )
+    // The `isFooRule` disjunction and the `null rActs && <=1 prem/conc` fallback
+    // are INDEPENDENT — the fallback applies to EVERY rule, not just proto rules.
+    // In particular an intruder destructor such as `d_0_snd` (no actions, one
+    // premise, one conclusion) is eligible via the fallback even though it is
+    // not isend/irecv/coerce; HS hides it (bridging its single in/out edge),
+    // so RS must too.
+    let is_special = match &ru.info {
+        RuleInfo::Intr(i) => {
+            is_irecv_rule_info(i) || is_isend_rule_info(i) || is_coerce_rule_info(i)
+        }
+        RuleInfo::Proto(p) => {
+            // isFreshRule treats only the Fresh proto-rule as fresh.
+            p.name == crate::rule::ProtoRuleName::Fresh
+        }
+    };
+    is_special || (ru.actions.is_empty() && ru.premises.len() <= 1 && ru.conclusions.len() <= 1)
+}
+
+// ---------------------------------------------------------------------
+// simplifySystem — `Simplification.hs:53-57` + 61-74
+// ---------------------------------------------------------------------
+
+/// Simplification levels — port of `SimplificationLevel`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum SimplificationLevel {
+    SL0,
+    SL1,
+    SL2,
+    SL3,
+}
+
+/// Mirror of Haskell `simplifySystem`:
+///   SL2 = transitiveReduction sys False
+///   SL3 = transitiveReduction sys True
+///   else identity.
+pub fn simplify_system(level: SimplificationLevel, sys: RenderSystem) -> RenderSystem {
+    match level {
+        SimplificationLevel::SL2 => transitive_reduction(sys, false),
+        SimplificationLevel::SL3 => transitive_reduction(sys, true),
+        _ => sys,
+    }
+}
+
+/// Transitive reduction of `sLessAtoms`.  Mirror of
+/// `Simplification.hs:61-74`.
+///
+/// `total_red = True`  -> retain only `(x,y) ∈ transRed sLess`
+/// `total_red = False` -> retain `(x,y) ∈ transRed sLess` OR reason ∈ {Formula, Adversary}
+///
+/// Module-private, as in HS: `Simplification.hs` exports only
+/// `simplifySystem` and `compressSystem`.
+fn transitive_reduction(sys: RenderSystem, total_red: bool) -> RenderSystem {
+    // Haskell: `oldLesses = rawLessRel sys`, used for BOTH `Dag.cyclic`
+    // and `Dag.transRed` (Simplification.hs:61-74).  `rawLessRel se =
+    // getLessRel sLessAtoms ++ rawEdgeRel se` (System.hs:1621-1622), and
+    // `rawEdgeRel = edges ++ unsolvedChains` (System.hs:1613-1616).
+    let mut old_lesses: Vec<(NodeId, NodeId)> = sys
+        .less_atoms
+        .iter()
+        .map(|la| (la.smaller, la.larger))
+        .collect();
+    for e in &sys.edges {
+        old_lesses.push((e.src.0, e.tgt.0));
+    }
+    old_lesses.extend(unsolved_chain_pairs(&sys));
+    // If there's a cycle in the combined graph we bail, matching Haskell's
+    // `Dag.cyclic` guard (Simplification.hs:61-74).
+    if tamarin_utils::dag::cyclic(&old_lesses) {
+        return sys;
+    }
+    // `Dag.transRed` of the (now acyclic) combined relation.  The transitive
+    // reduction of a DAG is unique and `kept` is only consulted via
+    // `contains`, so collecting the `Relation` into a set is the faithful
+    // shape here.
+    let kept: BTreeSet<(NodeId, NodeId)> = tamarin_utils::dag::trans_red(&old_lesses)
+        .into_iter()
+        .collect();
+    let mut sys = sys;
+    sys.content_mut().less_atoms.retain(|la| {
+        let p = (la.smaller, la.larger);
+        if total_red {
+            kept.contains(&p)
+        } else {
+            kept.contains(&p) || matches!(la.reason, Reason::Formula | Reason::Adversary)
+        }
+    });
+    sys
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::constraint::system::System;
+    use crate::fact::{fresh_fact, in_fact, out_fact};
+    use crate::rule::{
+        ConcIdx, IntrRuleACInfo, PremIdx, ProtoRuleACInstInfo, ProtoRuleName, Rule, RuleAttributes,
+        RuleInfo,
+    };
+    use tamarin_term::lterm::{LSort, LVar};
+    use tamarin_term::term::Term;
+    use tamarin_term::vterm::Lit;
+
+    fn nid(name: &str, idx: u64) -> NodeId {
+        LVar::new(name, LSort::Node, idx)
+    }
+
+    #[test]
+    fn simplify_sl0_is_identity() {
+        let mut sys = System::empty();
+        // SL2 and SL3 drop the redundant `a < c`.  This test checks that SL0
+        // keeps it.  The test also compares each atom completely, including
+        // its reason tag.  The tag selects the colour of the rendered edge.
+        // A pass that rewrote the reasons but kept the count would be an
+        // identity by length only.
+        sys.content_mut()
+            .less_atoms
+            .push(LessAtom::new(nid("a", 0), nid("b", 0), Reason::Fresh));
+        sys.content_mut()
+            .less_atoms
+            .push(LessAtom::new(nid("a", 0), nid("c", 0), Reason::Fresh));
+        sys.content_mut().less_atoms.push(LessAtom::new(
+            nid("b", 0),
+            nid("c", 0),
+            Reason::Adversary,
+        ));
+        let orig = sys.clone();
+        let out = simplify_system(SimplificationLevel::SL0, RenderSystem::from_prover(sys));
+        assert_eq!(orig.less_atoms.as_slice(), out.less_atoms.as_slice());
+    }
+
+    #[test]
+    fn simplify_sl3_drops_transitive_edge() {
+        // a < b < c plus the redundant a < c -- SL3 should drop a < c.
+        let mut sys = System::empty();
+        sys.content_mut()
+            .less_atoms
+            .push(LessAtom::new(nid("a", 0), nid("b", 0), Reason::Fresh));
+        sys.content_mut()
+            .less_atoms
+            .push(LessAtom::new(nid("b", 0), nid("c", 0), Reason::Fresh));
+        sys.content_mut()
+            .less_atoms
+            .push(LessAtom::new(nid("a", 0), nid("c", 0), Reason::Fresh));
+        let out = simplify_system(SimplificationLevel::SL3, RenderSystem::from_prover(sys));
+        assert_eq!(
+            out.less_atoms.len(),
+            2,
+            "SL3 should drop the redundant edge: {:?}",
+            out.less_atoms
+        );
+        for la in &out.less_atoms {
+            assert!(!(la.smaller == nid("a", 0) && la.larger == nid("c", 0)));
+        }
+    }
+
+    #[test]
+    fn simplify_sl2_keeps_formula_edge() {
+        // a < b < c plus the redundant a < c with Reason::Formula:
+        // SL2 keeps the formula edge but SL3 drops it.
+        let mut sys = System::empty();
+        sys.content_mut()
+            .less_atoms
+            .push(LessAtom::new(nid("a", 0), nid("b", 0), Reason::Fresh));
+        sys.content_mut()
+            .less_atoms
+            .push(LessAtom::new(nid("b", 0), nid("c", 0), Reason::Fresh));
+        sys.content_mut()
+            .less_atoms
+            .push(LessAtom::new(nid("a", 0), nid("c", 0), Reason::Formula));
+        let out2 = simplify_system(
+            SimplificationLevel::SL2,
+            RenderSystem::from_prover(sys.clone()),
+        );
+        assert_eq!(out2.less_atoms.len(), 3, "SL2 retains Formula edges");
+        let out3 = simplify_system(SimplificationLevel::SL3, RenderSystem::from_prover(sys));
+        assert_eq!(out3.less_atoms.len(), 2, "SL3 drops Formula edges too");
+    }
+
+    /// `#i.1 Source -> #i.2 <middle> -> #i.3 Sink`, compressed.  Both ends
+    /// carry an action, so `eligibleRule` rejects them.  Only the middle node
+    /// is ever a candidate for hiding.  The edges matter as much as the
+    /// rules.  `tryHideRule` stops unless the counts of the in and out edges
+    /// equal the counts of the premises and conclusions
+    /// (Simplification.hs:125-152).  An isolated node therefore survives,
+    /// whatever its rule looks like.
+    fn compressed_chain(middle: RuleACInst) -> (RenderSystem, [NodeId; 3]) {
+        let kvar: LNTerm = Term::Lit(Lit::Var(LVar::new("k", LSort::Fresh, 0)));
+        let end = |name: &'static str, prems: Vec<crate::fact::LNFact>| {
+            Rule::new(
+                RuleInfo::Proto(ProtoRuleACInstInfo {
+                    name: ProtoRuleName::Stand(name),
+                    attributes: RuleAttributes::empty(),
+                    loop_breakers: Vec::new(),
+                }),
+                prems,
+                vec![out_fact(kvar.clone())],
+                vec![out_fact(kvar.clone())],
+            )
+        };
+        let ids = [nid("i", 1), nid("i", 2), nid("i", 3)];
+        let mut sys = System::empty();
+        sys.add_node(ids[0], end("Source", vec![fresh_fact(kvar.clone())]));
+        sys.add_node(ids[1], middle);
+        sys.add_node(ids[2], end("Sink", vec![in_fact(kvar.clone())]));
+        sys.content_mut().edges.push(Edge {
+            src: (ids[0], ConcIdx(0)),
+            tgt: (ids[1], PremIdx(0)),
+        });
+        sys.content_mut().edges.push(Edge {
+            src: (ids[1], ConcIdx(0)),
+            tgt: (ids[2], PremIdx(0)),
+        });
+        (compress_system(RenderSystem::from_prover(sys)), ids)
+    }
+
+    /// A proto rule named `Transfer` with one premise, one conclusion and no
+    /// action of its own, plus `acts`.  This rule is the middle of
+    /// [`compressed_chain`].
+    fn transfer_rule(acts: Vec<crate::fact::LNFact>) -> RuleACInst {
+        let kvar: LNTerm = Term::Lit(Lit::Var(LVar::new("k", LSort::Fresh, 0)));
+        Rule::new(
+            RuleInfo::Proto(ProtoRuleACInstInfo {
+                name: ProtoRuleName::Stand("Transfer"),
+                attributes: RuleAttributes::empty(),
+                loop_breakers: Vec::new(),
+            }),
+            vec![in_fact(kvar.clone())],
+            vec![out_fact(kvar)],
+            acts,
+        )
+    }
+
+    #[test]
+    fn compress_hides_simple_proto_node() {
+        let (out, [n1, n2, n3]) = compressed_chain(transfer_rule(Vec::new()));
+        assert!(
+            out.nodes.iter().all(|(id, _)| id != &n2),
+            "Transfer node should have been hidden: {:?}",
+            out.nodes.iter().map(|(id, _)| id).collect::<Vec<_>>()
+        );
+        // One bridging edge i:1 -> i:3 replaces the two edges that the hidden
+        // node sat on.
+        assert!(
+            out.edges.iter().any(|e| e.src.0 == n1 && e.tgt.0 == n3),
+            "Expected i:1 -> i:3 edge in: {:?}",
+            out.edges
+                .iter()
+                .map(|e| (&e.src.0, &e.tgt.0))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn compress_preserves_node_with_actions() {
+        // This is the same chain as `compress_hides_simple_proto_node`.  Its
+        // middle node differs only because it carries an action.
+        // `eligibleRule`'s `null (get rActs ru)` is the single bit under
+        // test.  The edge-count condition therefore cannot explain the
+        // survival of the node.
+        let kvar: LNTerm = Term::Lit(Lit::Var(LVar::new("k", LSort::Fresh, 0)));
+        let (out, [_, n2, _]) = compressed_chain(transfer_rule(vec![out_fact(kvar)]));
+        assert!(
+            out.nodes.iter().any(|(id, _)| id == &n2),
+            "an action must keep the node: {:?}",
+            out.nodes.iter().map(|(id, _)| id).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn compress_hides_coerce_node() {
+        // A coerce rule is eligible through the `isCoerceRule` disjunct.  The
+        // compression therefore hides it, and its own action row does not
+        // matter.
+        let kvar: LNTerm = Term::Lit(Lit::Var(LVar::new("k", LSort::Fresh, 0)));
+        let coerce = Rule::new(
+            RuleInfo::Intr(IntrRuleACInfo::Coerce),
+            vec![in_fact(kvar.clone())],
+            vec![out_fact(kvar)],
+            Vec::new(),
+        );
+        let (out, [_, n2, _]) = compressed_chain(coerce);
+        assert!(
+            out.nodes.iter().all(|(id, _)| id != &n2),
+            "Coerce node should have been hidden"
+        );
+    }
+}

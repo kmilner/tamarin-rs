@@ -1,18 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, PhilipLukertWork, rkunnema, felixlinker, beschmi, jdreier,
-//   racoucho1u, rsasse, yavivanov, robert.kunnemann@cased.de, xaDxelA,
-//   and other minor contributors (see upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/term/src/Term/LTerm.hs,
-//   lib/term/src/Term/Substitution/SubstVFree.hs,
-//   lib/term/src/Term/Substitution/SubstVFresh.hs,
-//   lib/theory/src/Theory/Constraint/Solver/ProofMethod.hs,
-//   lib/theory/src/Theory/Constraint/System.hs,
-//   lib/theory/src/Theory/Constraint/System/Constraints.hs,
-//   lib/theory/src/Theory/Constraint/System/Guarded.hs,
-//   lib/theory/src/Theory/Model/Atom.hs,
-//   lib/theory/src/Theory/Tools/EquationStore.hs,
-//   lib/theory/src/Theory/Tools/SubtermStore.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Port of `Term.LTerm.renamePrecise` applied to a `System`.
 //!
@@ -79,7 +67,7 @@ pub fn rename_precise_system(sys: &mut System) {
 
     // HS-faithful: HS's `instance HasFrees (Map k v)` uses
     // `M.foldrWithKey` which walks the map keyed by `Ord k` ascending
-    // (Term/LTerm.hs:829-836).  Rust's `sys.nodes` is a `Vec<(NodeId,
+    // (Term/LTerm.hs:905-914, see line 907).  Rust's `sys.nodes` is a `Vec<(NodeId,
     // RuleACInst)>` in insertion order — that order is NOT the same as
     // NodeId-ascending.  Without this sort, the walk visits a newly-grafted
     // source-case Gen_Step (high pre-rename idx but inserted last) AFTER
@@ -105,7 +93,7 @@ pub fn rename_precise_system(sys: &mut System) {
     // is the identity.  Snapshotted before any later field can flip the flag,
     // enabling the Phase 2 step-1 identity fast path.
     let nodes_identity = !state.changed;
-    // HS-faithful: `instance HasFrees (S.Set a)` (Term/LTerm.hs:824-827)
+    // HS-faithful: `instance HasFrees (S.Set a)` (Term/LTerm.hs:898-903, see line 900)
     // walks the set via `foldMap (foldFrees f)` — i.e. ascending Ord
     // order.  HS's `_sEdges` / `_sLessAtoms` / `_sSubtermStore` fields
     // are `S.Set` (System.hs:385-388 + SubtermStore.hs:546-548) and HS
@@ -240,7 +228,7 @@ pub fn rename_precise_system(sys: &mut System) {
     }
     // HS-faithful: `_sGoals` is `M.Map Goal GoalStatus` (System.hs:383-401, see line 393),
     // walked via `HasFrees (M.Map k v) = M.foldrWithKey combine`
-    // (Term/LTerm.hs:829-836) in ascending key order (`Ord Goal`).
+    // (Term/LTerm.hs:905-914, see line 907) in ascending key order (`Ord Goal`).
     // `goal_cmp` matches HS's derived `Ord Goal`
     // (System/Constraints.hs:156-168); see
     // `goal_cmp_tag_order_matches_haskell_declaration` test in goals.rs.
@@ -313,7 +301,7 @@ pub fn rename_precise_system(sys: &mut System) {
     // 1. Nodes — id + rule.
     //
     // HS-faithful: `mapFrees (M.Map NodeId RuleACInst)`
-    // = `fmap M.fromList . mapFrees f . M.toList` (Term/LTerm.hs:832-838, see line 836).
+    // = `fmap M.fromList . mapFrees f . M.toList` (Term/LTerm.hs:905-914, see line 914).
     // `M.fromList` builds a Map keyed by Ord NodeId, so post-rename the
     // entries land in ascending NEW NodeId order.  Without this sort,
     // RS's `Vec<(NodeId, _)>` keeps the pre-rename insertion order — which
@@ -393,11 +381,10 @@ pub fn rename_precise_system(sys: &mut System) {
     // after the in-place rename.  See `subst_system_once`'s comment for
     // detailed rationale.
     // HS `mapFrees (S.Set LessAtom)`: sort + dedup post-rename
-    // (Term/LTerm.hs:825-830, see line 827 `fmap S.fromList . mapFrees f . S.toList`).
+    // (Term/LTerm.hs:898-903, see line 903 `fmap S.fromList . mapFrees f . S.toList`).
     let mut new_less: Vec<crate::constraint::constraints::LessAtom> =
         Vec::with_capacity(sys.less_atoms.len());
-    for la in std::mem::take(&mut sys.content_mut_untracked().less_atoms) {
-        let mut la = la;
+    for mut la in std::mem::take(&mut sys.content_mut_untracked().less_atoms) {
         la.smaller = map_var(la.smaller);
         la.larger = map_var(la.larger);
         new_less.push(la);
@@ -413,11 +400,10 @@ pub fn rename_precise_system(sys: &mut System) {
         std::sync::Arc::unwrap_or_clone(std::mem::take(&mut sys.content_mut_untracked().goals));
     let apply_term = |t: LNTerm| -> LNTerm { term_view.apply(t) };
     let apply_fact = |fa: crate::fact::LNFact| -> crate::fact::LNFact {
-        // Var→var rename is a frees-changing rebuild:
-        // recompute the bloom from the renamed terms — NEVER copy `fa`'s.
+        // Var→var rename is a frees-changing rebuild, so the fact must be
+        // rebuilt through the computing constructor `fresh_annotated`, which
+        // derives the bloom from the renamed terms — never copy `fa`'s stale one.
         let terms: Vec<LNTerm> = fa.terms.iter().cloned().map(&apply_term).collect();
-        // Computing constructor — recomputes the bloom from the renamed terms
-        // internally (never copies `fa`'s stale bloom).
         crate::fact::Fact::fresh_annotated(fa.tag, fa.annotations, terms)
     };
     let mut new_goals: Vec<(Goal, crate::constraint::system::GoalStatus)> =
@@ -443,7 +429,7 @@ pub fn rename_precise_system(sys: &mut System) {
         new_goals.push((g2, st));
     }
     // HS-faithful: `mapFrees (M.Map Goal GoalStatus)`
-    // = `fmap M.fromList . mapFrees f . M.toList` (Term/LTerm.hs:832-838, see line 836).
+    // = `fmap M.fromList . mapFrees f . M.toList` (Term/LTerm.hs:905-914, see line 914).
     // `M.fromList` builds a Map keyed by Ord Goal, so post-rename the
     // entries land in ascending NEW Goal order.
     //
@@ -459,7 +445,7 @@ pub fn rename_precise_system(sys: &mut System) {
     //
     // HS-faithful: `_sFormulas` / `_sSolvedFormulas` / `_sLemmas` are
     // `S.Set LNGuarded`. `mapFrees (S.Set a) = fmap S.fromList . mapFrees
-    // f . S.toList` (Term/LTerm.hs:825-830, see line 827) — rebuilds the set after mapping,
+    // f . S.toList` (Term/LTerm.hs:898-903, see line 903) — rebuilds the set after mapping,
     // so post-rename entries are sorted by NEW Ord Guarded AND
     // collision-deduped.  Mirror by sorting+deduping after the in-place
     // rename: post-rename two formulas that became equal collapse.
@@ -469,9 +455,9 @@ pub fn rename_precise_system(sys: &mut System) {
             // COW: only the formulas whose leaves actually change are rebuilt;
             // `Some(nf)` is byte-identical to the eager `subst_guarded`, and a
             // no-effect (identity) rename leaves `*f` untouched.  The
-            // sort+dedup below stays UNCONDITIONAL — HS's `S.fromList` rebuild
-            // runs even under an identity rename, and intervening passes may
-            // have left the Vec unsorted.
+            // sort+dedup below runs even when the COW loop rebuilt nothing —
+            // HS's `S.fromList` rebuild happens under an identity rename too,
+            // and intervening passes may have left the Vec unsorted.
             for f in v.iter_mut() {
                 if let Some(nf) = subst_guarded_cow(f, sub) {
                     *f = std::sync::Arc::new(nf);
@@ -583,10 +569,7 @@ pub fn rename_precise_system(sys: &mut System) {
 /// *content* always hash to the same bucket even when their interned name
 /// pointers differ (a rare non-canonical literal name vs the pooled copy) —
 /// this is what keeps the dedup correct and the `--prove` output byte-identical.
-/// Only `Eq` is optimised: `lvar_fast_eq` short-circuits on the interned name
-/// POINTER, skipping the byte-wise `str` compare that dominated `import`'s
-/// confirming-eq self time, and falls back to the exact content compare when
-/// the pointers differ — so the equality RELATION is exactly `LVar`'s.
+/// Only `Eq` is optimised, via `lvar_fast_eq` — same relation as `LVar`'s derive.
 #[derive(Clone)]
 struct VarKey(LVar);
 
@@ -833,35 +816,42 @@ mod tests {
         LVar::new(name, LSort::Node, idx)
     }
 
+    use crate::constraint::constraints::{LessAtom, Reason};
+
+    fn less_sys(i_a: u64, i_b: u64) -> System {
+        let mut sys = System::empty();
+        sys.content_mut().less_atoms.push(LessAtom::new(
+            node("i", i_a),
+            node("i", i_b),
+            Reason::Fresh,
+        ));
+        sys
+    }
+
     #[test]
-    fn rename_idempotent_on_empty_system() {
+    fn rename_leaves_a_variable_free_system_untouched() {
         let mut sys = System::empty();
         rename_precise_system(&mut sys);
         assert_eq!(sys, System::empty());
     }
 
+    /// Two systems that differ only in their node-id indices must compare
+    /// equal after the rename.  A second pass must change nothing.  The test
+    /// needs both halves.  Without them the canonical form that `process` and
+    /// `Simplify` compare against is not a fixpoint.
     #[test]
     fn rename_normalises_node_ids() {
-        // Two systems that differ only by node-id indices should compare
-        // equal after rename_precise_system.
-        use crate::constraint::constraints::{LessAtom, Reason};
-
-        let mk_sys = |i_a: u64, i_b: u64| -> System {
-            let mut sys = System::empty();
-            sys.content_mut().less_atoms.push(LessAtom::new(
-                node("i", i_a),
-                node("i", i_b),
-                Reason::Fresh,
-            ));
-            sys
-        };
-        let mut a = mk_sys(0, 5);
-        let mut b = mk_sys(7, 99);
+        let mut a = less_sys(0, 5);
+        let mut b = less_sys(7, 99);
         rename_precise_system(&mut a);
         rename_precise_system(&mut b);
-        assert_eq!(a.less_atoms[0].smaller, b.less_atoms[0].smaller);
-        assert_eq!(a.less_atoms[0].larger, b.less_atoms[0].larger);
-        // The two distinct node names should still differ.
+        assert_eq!(a, b);
+        // The rename must not collapse distinct source vars onto one name.
         assert_ne!(a.less_atoms[0].smaller, a.less_atoms[0].larger);
+        // The rename is idempotent.  A second rename of a canonical system
+        // changes nothing.
+        let once = a.clone();
+        rename_precise_system(&mut a);
+        assert_eq!(a, once);
     }
 }

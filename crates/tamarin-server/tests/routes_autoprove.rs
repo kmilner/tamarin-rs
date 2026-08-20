@@ -1,21 +1,16 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   arcz, meiersi, jdreier, cascremers, felixlinker, rsasse,
-//   Kanakanajm, beschmi, Divya19gupta, addap, BTom-GH,
-//   PhilipLukertWork, YannColomb, xaDxelA, Mathias-AURAND, symphorien,
-//   racoucho1u, Esslingen-Security-Privacy, kevinmorio, and other minor
-//   contributors (see upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   src/Web/Handler.hs, src/Web/Theory.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Integration tests that exercise the prover-driving endpoints: the
 //! autoprove routes and `main/method`'s single-step apply.
 //!
-//! These tests run the actual Rust solver via `prove_lemma` and so
+//! These tests drive the real Rust solver through the handlers, so they
 //! need a working `maude` binary: `MAUDE_PATH` if set, else a common
-//! location probed by `start_server_with_theory`, else `maude` on PATH.  They are tagged with the small
-//! `issue193.spthy` fixture because it has only one trivial
-//! exists-trace lemma (`debug`) that the solver dispatches in well
-//! under a second.
+//! location probed by `start_server_with_theory`, else `maude` on PATH.
+//! Most use the small `issue193.spthy` fixture, whose single trivial
+//! exists-trace lemma (`debug`) the solver dispatches in well under a
+//! second.
 
 mod common;
 
@@ -33,59 +28,59 @@ use common::*;
 //   - anything else → 404 HTML (Haskell's behaviour)
 // See `parse_bool_path_piece` in `src/handlers/theory.rs`.
 
+/// The three autoprove routes.  The test replays the capture script's own
+/// sequence (`tests/capture_haskell_fixtures.sh`) on the same fixture.  That
+/// sequence is: autoprove theory 1, then autoprove the proved snapshot that
+/// the first call allocated, then autoproveAll on theory 1 again.  Each
+/// response is the oracle's body, byte for byte.  The comparison includes the
+/// allocated index, because `modifyTheory` assigns the next free index on
+/// both sides.  It also includes the proof path, which both sides reach when
+/// they walk `nextSmartThyPath` over the freshly autoproved tree.
+///
+/// The middle call autoproves a theory that is already proved.  It still
+/// answers a redirect to a fresh index, and never an alert.  Upstream runs the
+/// prover again over a tree that has nothing left to do.
 #[tokio::test]
-async fn test_autoprove_returns_redirect_envelope() {
+async fn test_autoprove_redirect_bodies_match_haskell() {
     let s = start_server_with_theory("issue193.spthy").await;
 
-    // The `debug` lemma is exists-trace + trivial; Rust autoprove
-    // should redirect to the proof view on success.
-    let url = s.url("/thy/trace/1/autoprove/idfs/0/False/proof/debug");
-    let res = s.client.get(&url).send().await.expect("send autoprove");
+    // The `debug` lemma is exists-trace and trivial.
+    let res = s
+        .client
+        .get(s.url("/thy/trace/1/autoprove/idfs/0/False/proof/debug"))
+        .send()
+        .await
+        .expect("send autoprove");
     assert_eq!(res.status(), 200, "autoprove should return 200");
-
     let ct = content_type(&res);
     assert!(
         ct.starts_with("application/json"),
         "autoprove must reply JSON, got {}",
         ct
     );
-
-    let v: serde_json::Value = res.json().await.expect("decode json");
-    let rust_keys = json_top_keys(&v);
-    let haskell_keys = haskell_capture_keys("autoprove.json");
     assert_eq!(
-        rust_keys, haskell_keys,
-        "autoprove envelope keys must match Haskell; rust={:?}, haskell={:?}",
-        rust_keys, haskell_keys
+        res.text().await.expect("text"),
+        haskell_capture("autoprove.json"),
     );
 
-    let redir = v.get("redirect").and_then(|t| t.as_str()).unwrap_or("");
-
-    // SHAPE assertions (not byte equality — Haskell's
-    // `nextSmartThyPath` produces e.g.
-    // `/thy/trace/2/overview/proof/debug/_/ONE/ONE` for issue193
-    // because the solver's tree has a `ONE` case after autoprove.
-    // Our Rust solver returns only a status, so we land at the root
-    // (`/_`), but both share the same prefix and the same
-    // "NEW idx" semantics.  The frontend dispatcher works on both.
-    assert!(
-        redir.starts_with("/thy/trace/"),
-        "redirect should start at /thy/trace/...; got {:?}",
-        redir
-    );
-    assert!(
-        redir.contains("/overview/proof/debug"),
-        "redirect should point at the new-idx proof view for lemma `debug`; got {:?}",
-        redir
-    );
-    // Most importantly: Haskell's behaviour is to allocate a NEW idx
-    // for the post-autoprove snapshot — the URL must NOT reuse idx 1
-    // (the pre-autoprove theory).  Same property holds in our port.
-    assert!(
-        !redir.starts_with("/thy/trace/1/"),
-        "autoprove should allocate a fresh idx (not reuse 1); got {:?}",
-        redir
-    );
+    for (url, capture) in [
+        (
+            "/thy/trace/2/autoprove/idfs/0/False/proof/debug",
+            "autoprove_on_proven.json",
+        ),
+        (
+            "/thy/trace/1/autoproveAll/idfs/0/proof/debug",
+            "autoprove_all.json",
+        ),
+    ] {
+        let res = s.client.get(s.url(url)).send().await.expect("send");
+        assert_eq!(res.status(), 200, "{url}");
+        assert_eq!(
+            res.text().await.expect("text"),
+            haskell_capture(capture),
+            "{url}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -121,22 +116,11 @@ async fn test_autoprove_on_bad_path_returns_alert() {
         .await
         .expect("send autoprove-rules");
     assert_eq!(res.status(), 200);
-    let v: serde_json::Value = res.json().await.expect("decode");
+    // This is the oracle's body, byte for byte.  The alert allocates no
+    // theory, so its bytes do not depend on the capture session's history.
     assert_eq!(
-        json_top_keys(&v),
-        one_key_set("alert"),
-        "autoprove on non-lemma path should be {{alert}}"
-    );
-
-    // The captured Haskell alert is exactly
-    // "Can't run the autoprover () on the given theory path!" — we
-    // emit the same string for byte-equal comparison.
-    let captured = haskell_capture("autoprove_on_rules.json");
-    let captured_v: serde_json::Value = serde_json::from_str(&captured).expect("parse captured");
-    assert_eq!(
-        v.get("alert").and_then(|x| x.as_str()),
-        captured_v.get("alert").and_then(|x| x.as_str()),
-        "alert text must match Haskell verbatim",
+        res.text().await.expect("text"),
+        haskell_capture("autoprove_on_rules.json"),
     );
 }
 
@@ -193,7 +177,7 @@ async fn test_method_out_of_range_index_alerts_match_haskell() {
 #[tokio::test]
 async fn test_autoprove_with_missing_idx_returns_404_html() {
     // Match Haskell: bad theory idx returns 404 HTML (see
-    // `withTheory` / `notFound` in `src/Web/Handler.hs:660-666`).
+    // `withTheory` / `notFound` in `src/Web/Handler.hs:662-672`).
     let s = start_server_with_theory("issue193.spthy").await;
     let url = s.url("/thy/trace/99/autoprove/idfs/0/False/proof/debug");
     let res = s.client.get(&url).send().await.expect("send");
@@ -216,23 +200,18 @@ async fn test_autoprove_on_unknown_lemma_returns_alert() {
     let url = s.url("/thy/trace/1/autoprove/idfs/0/False/proof/notALemma");
     let res = s.client.get(&url).send().await.expect("send");
     assert_eq!(res.status(), 200);
-    let v: serde_json::Value = res.json().await.expect("decode");
+    // These bytes come from a probe against the oracle.  No capture holds
+    // them, because the capture script never asks for a lemma that does not
+    // exist.  This test therefore pins the bytes here.
     assert_eq!(
-        json_top_keys(&v),
-        one_key_set("alert"),
-        "unknown-lemma autoprove must be {{alert}}"
-    );
-    let alert = v.get("alert").and_then(|x| x.as_str()).unwrap_or("");
-    assert!(
-        alert.contains("Sorry") && alert.contains("autoprover"),
-        "alert text should match the Haskell shape; got {:?}",
-        alert
+        res.text().await.expect("text"),
+        "{\"alert\":\"Sorry, but the autoprover () failed!\"}",
     );
 }
 // Web-parity regression: after autoprove, `main/proof/<lemma>` must render
 // the "Applicable Proof Methods" + sequent snippet from the grown tree's
 // retained per-node systems — not an empty "Constraint System is Solved".
-// Guards the `set_keep_sys(true)` that `tamarin_server::init_process_globals`
+// Guards the `SysRetention::KeepAll` that `tamarin_server::init_process_globals`
 // applies for every server, the harness's included.
 #[tokio::test]
 async fn test_autoprove_proof_view_retains_systems() {

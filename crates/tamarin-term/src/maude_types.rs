@@ -1,10 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, beschmi, and other minor contributors (see upstream git
-//   history)
-// Ported from upstream tamarin-prover sources:
-//   lib/term/src/Term/Maude/Types.hs, lib/term/src/Term/Term/Raw.hs,
-//   lib/theory/src/Theory/Constraint/System/Guarded.hs,
-//   lib/utils/src/Control/Monad/Bind.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Port of `Term.Maude.Types`.
 //!
@@ -97,7 +93,7 @@ impl ConvCtx {
 /// however, *does* support a `Msg`-sorted constant directly: the emitted
 /// theory declares `op c : Nat -> Msg` and `MaudeConst(i, LSort::Msg)`
 /// prints as `c(i)`.  So to faithfully mirror HS's
-/// `sortOfSkol (SkConst v) = lvarSort v` (Guarded.hs:805-808) — where a
+/// `sortOfSkol (SkConst v) = lvarSort v` (Guarded.hs:809-810) — where a
 /// skolemized free variable keeps its *own* sort, which may be `Msg` —
 /// we carry a `Msg`-sorted skolem as a `NameTag::Pub` `Name` whose id
 /// begins with this sentinel, and recognise it here so that
@@ -137,7 +133,7 @@ pub fn lterm_to_mterm_global(t: &LNTerm, ctx: &mut ConvCtx) -> MTerm {
             let new_args: Vec<MTerm> = args.iter().map(|a| lterm_to_mterm_global(a, ctx)).collect();
             // Smart constructor so AC args are flattened+sorted and C/EMap
             // args sorted by MaudeLit order, matching HS `lTermToMTerm`
-            // (Term/Maude/Types.hs:57-73, see line 72) `go (FApp o as) = fApp o <$> ...`,
+            // (Term/Maude/Types.hs:74-85, see line 82) `go (FApp o as) = fApp o <$> ...`,
             // where `fApp (AC s) = fAppAC` (flatten+sort) and
             // `fApp (C s) = fAppC` (sort) per Raw.hs:111-131.  The raw
             // `Term::App` constructor would instead leave AC/em args in the
@@ -198,11 +194,11 @@ pub fn mterm_to_lnterm(
             //
             // Known Rust-side compensation, NOT yet traced to its upstream
             // encoding cause.  This diverges from HS `mTermToLNTerm`'s
-            // `importLit` (Term/Maude/Types.hs:74-93, see line 89), whose `lookupBinding`
+            // `importLit` (Term/Maude/Types.hs:94-106, see line 103), whose `lookupBinding`
             // (Bind.hs:115-117, see line 117) is strict in the full `MaudeLit` sort
             // (data MaudeLit = MaudeVar Integer LSort, deriving Ord —
-            // Types.hs:42-45): on a sort-miss HS would mint a FRESH `LVar`
-            // at the widened sort (importBinding, Bind.hs:134-141), never
+            // Term/Maude/Types.hs:42-45): on a sort-miss HS would mint a FRESH `LVar`
+            // at the widened sort (importBinding, Bind.hs:134-140), never
             // recovering the original.  Given identical Maude output the
             // strict lookup should always hit (the forward encoder
             // import_lit and the sort parser are byte-equivalent to HS), so
@@ -237,7 +233,7 @@ pub fn mterm_to_lnterm(
             // Application via the smart constructors so AC/C normalisation
             // is preserved.  Mirrors HS `mTermToLNTerm`'s
             //   `go (FApp o as) = fApp o <$> mapM (go . viewTerm) as`
-            // (Term/Maude/Types.hs:74-93, see line 88): `fApp` dispatches to `fAppAC`
+            // (Term/Maude/Types.hs:94-106, see line 102): `fApp` dispatches to `fAppAC`
             // (flatten+sort) for AC symbols AND `fAppC` (sort) for C
             // symbols (`em`/EMap).  Crucially the sort happens AFTER the
             // child args have been back-converted from `MaudeVar`s to the
@@ -272,7 +268,7 @@ pub fn substitute_lookup_var(ctx: &ConvCtx, sort: LSort, idx: u64) -> Option<LVa
     // The sort-tolerant fallback in `lookup_canonical_var_lit` is a known
     // Rust-side compensation, NOT yet traced to its upstream cause.  It
     // diverges from HS `msubstToLSubstVFresh`/`VFree`'s `lookupVar s i =
-    // lookupBinding (MaudeVar i s)` (Types.hs:139-143, 159-163), which is
+    // lookupBinding (MaudeVar i s)` (Term/Maude/Types.hs:153-157, 173-177), which is
     // strict in the full `MaudeLit` sort and `error`s on a miss — there is no
     // any-sort fallback.  Kept to preserve current corpus parity until the
     // upstream cause is traced; do not change the fallback without a full
@@ -316,7 +312,6 @@ pub fn lookup_canonical_var_lit(ctx: &ConvCtx, sort: LSort, idx: u64) -> Option<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vterm::var_term;
 
     #[test]
     fn skolem_msg_constant_sorts_as_msg() {
@@ -340,37 +335,39 @@ mod tests {
             id: NameId::new("k"),
         };
         assert_eq!(sort_of_name(&fresh), LSort::Fresh);
-        // And the emitted Maude constant uses the `c` (Msg) symbol.
+        // The emitted Maude constant also uses the `c` (Msg) symbol.  It does
+        // not use the `p` (Pub) symbol that the carrier tag would give.
         let t: LNTerm = Term::Lit(Lit::Con(msg_skol));
         let mut ctx = ConvCtx::new();
         let mt = lterm_to_mterm_global(&t, &mut ctx);
         let wire = String::from_utf8(crate::maude_print::pp_mterm(&mt)).unwrap();
-        assert!(
-            wire.starts_with("c("),
-            "expected Msg constant `c(..)`, got {wire}"
-        );
+        assert_eq!(wire, "c(0)");
+        let real: LNTerm = Term::Lit(Lit::Con(real_pub));
+        let mt = lterm_to_mterm_global(&real, &mut ctx);
+        let wire = String::from_utf8(crate::maude_print::pp_mterm(&mt)).unwrap();
+        assert_eq!(wire, "p(1)");
     }
 
+    /// A variable survives the `LNTerm -> MTerm -> LNTerm` round trip and
+    /// keeps its identity.  The forward pass registers the inverse binding,
+    /// and the backward pass reads that binding.  The code therefore mints no
+    /// new `name_hint` variable, and it leaves `next` unchanged.
     #[test]
     fn round_trip_var() {
         let v = LVar::new("x", LSort::Msg, 0);
-        let t: LNTerm = var_term(v);
-        let _ = t;
-        // Direct construction with the lit literal so we don't need to
-        // construct an LNTerm from an LVar via var_term (which expects
-        // a variable type matching the LNTerm var type).
-        let lit_v = Lit::Var(v);
-        let t2: LNTerm = Term::Lit(lit_v.clone());
+        let t: LNTerm = Term::Lit(Lit::Var(v));
         let mut ctx = ConvCtx::new();
-        let mt = lterm_to_mterm_global(&t2, &mut ctx);
+        let mt = lterm_to_mterm_global(&t, &mut ctx);
+        assert_eq!(mt, Term::Lit(MaudeLit::MaudeVar(0, LSort::Msg)));
         let mut next = 0;
-        let back = mterm_to_lnterm(&mt, &mut ctx, "x", &mut next);
-        assert_eq!(t2, back);
+        let back = mterm_to_lnterm(&mt, &mut ctx, "z", &mut next);
+        assert_eq!(t, back);
+        assert_eq!(next, 0, "the binding was reused, not re-minted");
     }
 
     /// Pins the load-bearing sort-tolerant DOMAIN fallback in
     /// `substitute_lookup_var`.  HS `lookupVar s i = lookupBinding
-    /// (MaudeVar i s)` (Term/Maude/Types.hs:139-143) is strict and would
+    /// (MaudeVar i s)` (Term/Maude/Types.hs:153-157) is strict and would
     /// `error` on a sort-miss; the Rust fallback instead recovers the
     /// original LVar by (idx, ANY sort).  This test locks the CURRENT Rust
     /// behavior so any change to that fallback is caught and re-validated
@@ -394,7 +391,7 @@ mod tests {
 
     /// Pins the load-bearing sort-tolerant RANGE fallback used by
     /// `mterm_to_lnterm` via `lookup_canonical_var_lit`.  HS `importLit`
-    /// (Term/Maude/Types.hs:74-93, see line 89) is strict on the full sort and on a miss
+    /// (Term/Maude/Types.hs:94-106, see line 103) is strict on the full sort and on a miss
     /// mints a FRESH `LVar` at the widened sort; the Rust fallback instead
     /// recovers the original LVar identity.  Locks current Rust behavior.
     #[test]
@@ -441,17 +438,16 @@ mod tests {
         let mut next = 100;
         let back = mterm_to_lnterm(&mt, &mut ctx, "x", &mut next);
 
-        // Expected: em(x.9, x.10) — args sorted idx-first.
-        let expected: LNTerm = crate::term::f_app_c(
-            CSym::EMap,
-            vec![Term::Lit(Lit::Var(x9)), Term::Lit(Lit::Var(x10))],
+        // Expected: em(x.9, x.10), with the arguments sorted by index first.
+        // The expectation uses the raw constructor and not `f_app_c`.  It
+        // therefore cannot inherit the same argument sorting that this test
+        // checks.
+        assert_eq!(
+            back,
+            crate::term::unsafe_f_app(
+                FunSym::C(CSym::EMap),
+                vec![Term::Lit(Lit::Var(x9)), Term::Lit(Lit::Var(x10))],
+            )
         );
-        assert_eq!(back, expected);
-        // And concretely: first arg is x.9, not x.10.
-        if let Term::App(_, args) = &back {
-            assert_eq!(args[0], Term::Lit(Lit::Var(LVar::new("x", LSort::Msg, 9))));
-        } else {
-            panic!("expected an App");
-        }
     }
 }

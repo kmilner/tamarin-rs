@@ -29,11 +29,12 @@ tamarin-export = { path = "crates/tamarin-export", version = "1.13.0" }
 tamarin-parser = { path = "crates/tamarin-parser", version = "1.13.0" }
 tamarin-server = { path = "crates/tamarin-server", version = "1.13.0" }
 
-sha2 = "0.10"
+sha2 = "0.11"
 base64 = "0.22"
 indexmap = "2"
 proptest = "1"
 rayon = "1"
+clap = { version = "4.5", features = ["derive"] }
 rustc-hash = "2"
 
 # Workspace-wide lint policy.  These clippy lints are `allow`ed
@@ -85,3 +86,9 @@ strip = false
 inherits = "release"
 lto = false
 codegen-units = 16
+# This is on, unlike in the release profile that this profile inherits.  The
+# CI test job is the only place where the workspace's `debug_assert!`s run at
+# all, because the documented local gate is `--release`.  Those assertions
+# include differential guards such as `compose_vfresh`'s empty-s1 fast path
+# check.  A measurement shows no cost.  The suite is unchanged at 1553 passing.
+debug-assertions = true

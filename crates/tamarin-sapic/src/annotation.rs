@@ -1,8 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   rkunnema, arcz, charlie-j, and other minor contributors (see
-//   upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/sapic/src/Sapic/Annotation.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Port of `Sapic.Annotation` from `lib/sapic/src/Sapic/Annotation.hs`.
 //!
@@ -44,8 +42,8 @@ pub struct ProcessAnnotation<V> {
     /// Variable identifying the state cell associated with this op.
     pub state_channel: Option<AnVar<V>>,
     /// Term marking the binding of a state-channel.  HS `isStateChannel ::
-    /// Maybe SapicTerm` (Annotation.hs:48-60, see line 59): the cell identifier this fresh
-    /// `new StateChannel:channel` was introduced for.
+    /// Maybe SapicTerm` (sapic/src/Sapic/Annotation.hs:48-60, see line 59): the
+    /// cell identifier this fresh `new StateChannel:channel` was introduced for.
     pub is_state_channel: Option<SapicTerm>,
 }
 
@@ -103,12 +101,12 @@ impl<V: Clone> ProcessAnnotation<V> {
     }
 
     /// Combine two annotations, matching Haskell's
-    /// `Semigroup (ProcessAnnotation v)` (Annotation.hs:76-86).
+    /// `Semigroup (ProcessAnnotation v)` (sapic/src/Sapic/Annotation.hs:76-86).
     ///
     /// The `AnVar` fields (`lock`, `unlock`, `secret_channel`,
     /// `state_channel`) are combined via `Maybe`'s `<>`, whose inner `AnVar`
-    /// `<>` is right-biased (`(<>) _ b = b`, Annotation.hs:43-44), so when
-    /// both are `Some` the *right* value wins (`other.X.or(self.X)`).
+    /// `<>` is right-biased (`(<>) _ b = b`, sapic/src/Sapic/Annotation.hs:43-44),
+    /// so when both are `Some` the *right* value wins (`other.X.or(self.X)`).
     /// `destructor_equation`/`is_state_channel` use Haskell `mayMerge`
     /// (left-biased on `Just`/`Just`), so they keep the *left* value
     /// (`self.X.or(other.X)`). `pure_state` is OR'ed; `else_branch` is taken
@@ -147,8 +145,9 @@ impl<V: Clone> GoodAnnotation for ProcessAnnotation<V> {
 /// `V` (typically `tamarin_term::lterm::LVar`).
 pub type AnnotatedProcess<V> = Process<ProcessAnnotation<V>, SapicLVar>;
 
-/// `toAnProcess`: lift a parsed process into a translation annotation by
-/// wrapping the parsed annotation in `ProcessAnnotation`.
+/// `toAnProcess` (sapic/src/Sapic/Annotation.hs:135-139): lift a parsed process into a
+/// translation annotation by wrapping the parsed annotation in
+/// `ProcessAnnotation`.
 pub fn to_annotated<V: Clone>(
     p: Process<ProcessParsedAnnotation, SapicLVar>,
 ) -> Process<ProcessAnnotation<V>, SapicLVar> {
@@ -183,8 +182,9 @@ pub fn to_annotated<V: Clone>(
 }
 
 /// Drop the translation annotations and recover the parsed-stage form.
-// Intentionally retained: faithful HS port of `toProcess`; the symmetric
-// inverse of `to_annotated`, no non-test caller yet.
+// Intentionally retained: faithful port of HS `toProcess`
+// (sapic/src/Sapic/Annotation.hs:141-144), the symmetric inverse of
+// `to_annotated`; no non-test caller yet.
 pub fn to_parsed<V>(
     p: Process<ProcessAnnotation<V>, SapicLVar>,
 ) -> Process<ProcessParsedAnnotation, SapicLVar> {
@@ -228,12 +228,35 @@ mod tests {
         assert_eq!(c.lock.map(|AnVar(v)| v), Some(v2));
     }
 
+    /// `toAnProcess` / `toProcess` must carry the parsed annotation at every
+    /// node kind.  They must not set it back to the default.  Each node here
+    /// holds a distinct `ProcessParsedAnnotation` that is not the default
+    /// value.  A lift that dropped `parsing_ann` therefore shows up as an
+    /// inequality.  A `to_parsed` that read the annotation of the wrong node
+    /// shows up the same way.  Neither one can default to a match.
     #[test]
     fn round_trip_to_annotated_and_back() {
-        let parsed: Process<ProcessParsedAnnotation, SapicLVar> =
-            Process::Null(ProcessParsedAnnotation::default());
+        let named = |n: &str| ProcessParsedAnnotation {
+            process_names: vec![n.to_string()],
+            location: Some(tamarin_term::lterm::pub_term(n)),
+            ..Default::default()
+        };
+        let parsed: Process<ProcessParsedAnnotation, SapicLVar> = Process::Comb(
+            tamarin_theory::sapic::ProcessCombinator::Parallel,
+            named("comb"),
+            Box::new(Process::Action(
+                tamarin_theory::sapic::SapicAction::Rep,
+                named("act"),
+                Box::new(Process::Null(named("left"))),
+            )),
+            Box::new(Process::Null(named("right"))),
+        );
         let annotated: Process<ProcessAnnotation<V>, SapicLVar> = to_annotated(parsed.clone());
-        let back = to_parsed(annotated);
-        assert_eq!(parsed, back);
+        // The lift wraps the parsed annotation, and does not replace it.  The
+        // parsed part is reachable unchanged at the root.  The translation
+        // fields start at their default values.
+        assert_eq!(annotated.annotation().parsing_ann, named("comb"));
+        assert!(annotated.annotation().lock.is_none());
+        assert_eq!(to_parsed(annotated), parsed);
     }
 }

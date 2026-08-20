@@ -1,9 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   jdreier, meiersi, rkunnema, beschmi, PhilipLukertWork, rsasse,
-//   yavivanov, and other minor contributors (see upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/term/src/Term/Term.hs, lib/term/src/Term/Term/Raw.hs,
-//   lib/theory/src/Theory/Model/Rule.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Byte-pins the pair arm of HS `prettyTerm` and the `Ord` that arranges
 //! pair-headed AC operands, both observed on the `rule (modulo E)` echo.
@@ -18,7 +15,7 @@
 //! `[t1, t2]` (`fAppPair`, Term/Term.hs:163), so comparing `<a, z>` with
 //! `<a, b, c>` pits `z` against `pair(b, c)` at position 2, where
 //! `LIT _ < FAPP _ _` (Term/Term/Raw.hs:72-74) puts `<a, z>` first in the
-//! sorted `++` chain (`fAppAC`, Term/Term/Raw.hs:118-122).
+//! sorted `++` chain (`fAppAC`, Term/Term/Raw.hs:118-129, see line 123).
 //!
 //! Expected strings are the pinned oracle's bytes (Git revision ef3f0468) for
 //! the same theories, plain no-prove render.

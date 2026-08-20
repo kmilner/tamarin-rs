@@ -1,3 +1,7 @@
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
+
 use super::*;
 
 #[test]
@@ -32,8 +36,8 @@ fn empty_signature_has_no_rules() {
 }
 
 /// HS `addFunSym`/`addMacroSym` route through the monoid `<>`
-/// (Signature.hs:152-159), which rebuilds from `mempty`
-/// (eqConvergent=False, line 145) and so RESETS eqConvergent to false.
+/// (Term/Maude/Signature.hs:170-178), which rebuilds from `mempty`
+/// (eqConvergent=False, line 153) and so RESETS eqConvergent to false.
 ///
 /// Probed against the real prover (v1.13.0): a `functions:` block placed
 /// AFTER an `equations [convergent]:` block prints `equations:` (the
@@ -41,7 +45,7 @@ fn empty_signature_has_no_rules() {
 /// `equations [convergent]:`.  `add_ctxt_st_rule` must NOT reset, since
 /// elaborate.rs sets eq_convergent before the rule loop (mirroring the HS
 /// parser's explicit re-set AFTER `foldl addCtxtStRule`,
-/// Theory/Text/Parser/Signature.hs:226-227).
+/// Theory/Text/Parser/Signature.hs:241-242).
 #[test]
 fn add_fun_sym_resets_eq_convergent() {
     use crate::function_symbols::{Constructability, NoEqSym, Privacy};
@@ -123,7 +127,7 @@ fn add_fun_sym_routes_ac_symbols() {
     assert!(!sig.has_no_ac_operators());
 }
 
-/// HS `ppFunSymb`/`showAttrs` (Signature.hs:273-293): attributes are
+/// HS `ppFunSymb`/`showAttrs` (Term/Maude/Signature.hs:273-292): attributes are
 /// bracketed after a LEADING space, free symbols print
 /// `[private,constructor]` where AC symbols print only `[private]`, and the
 /// NDC attributes come last.
@@ -245,7 +249,7 @@ fn merge_keeps_the_lhs_flags_with_their_rules() {
     assert!(!merged.st_lhs_all_ac_c_free());
 }
 
-/// HS `joinNDCinSig` (Signature.hs:236-246) is a record update over
+/// HS `joinNDCinSig` (Term/Maude/Signature.hs:236-246) is a record update over
 /// `stFunSyms`/`stACFunSyms` that does NOT re-run `maudeSig`, so every
 /// derived cache keeps its pre-join NDC states — and `ndc` participates in
 /// `NoEqSym`/`AcFctSym` `Eq`/`Ord`, so those are DIFFERENT symbols, not the
@@ -256,8 +260,8 @@ fn merge_keeps_the_lhs_flags_with_their_rules() {
 ///   * `fun_syms` (and `no_eq_fun_syms`/`ac_user_fun_syms`/the
 ///     irreducible+reducible sets read off it) keep `NotNdc`;
 ///   * `user_defined_st_fun_syms` (HS `userDefinedSTFunSyms`,
-///     Signature.hs:166-167) reads the joined `st_fun_syms` for its free
-///     half but the stale `acUserFunSyms` (Signature.hs:160-161) for its AC
+///     Term/Maude/Signature.hs:166-167) reads the joined `st_fun_syms` for its free
+///     half but the stale `acUserFunSyms` (Term/Maude/Signature.hs:160-161) for its AC
 ///     half, so with one name carried by both a free and an `[AC]` symbol
 ///     the two halves disagree about NDC.
 #[test]

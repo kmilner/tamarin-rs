@@ -1,13 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   rkunnema, meiersi, beschmi, charlie-j, and other minor contributors
-//   (see upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/sapic/src/Sapic/Basetranslation.hs,
-//   lib/term/src/Term/Maude/Process.hs,
-//   lib/theory/src/Theory/Sapic/Pattern.hs,
-//   lib/theory/src/Theory/Sapic/Process.hs,
-//   lib/theory/src/Theory/Text/Parser/Sapic.hs,
-//   lib/theory/src/Theory/Text/Parser/Term.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Parser-AST → theory-AST process converter.
 //!
@@ -33,6 +26,7 @@ use std::collections::BTreeSet;
 use tamarin_parser::ast as p;
 use tamarin_term::lterm::{LSort, LVar};
 use tamarin_theory::elaborate::{fact_to_sapic_fact, term_to_sapic_term};
+use tamarin_theory::macro_expand::map_formula_terms;
 use tamarin_theory::sapic::{
     PlainProcess, Process, ProcessCombinator, ProcessParsedAnnotation, SapicAction, SapicLVar,
 };
@@ -214,7 +208,7 @@ pub(crate) fn map_free_terms(
 /// (Theory/Text/Parser/Term.hs:151,158-163), so a declared 0-arity name in a
 /// term position resolves against the signature at parse time and BEATS any
 /// process binder of the same name — `new c` / `lookup t as c` bind an `LVar`
-/// named `c` (both take `sapicvar`, Sapic.hs:87,236), yet every later `c` in a
+/// named `c` (both take `sapicvar`, Parser/Sapic.hs:87,236), yet every later `c` in a
 /// term or `Cond` formula is the constant `fApp c []`.  Such an `FApp` leaf
 /// contributes nothing to `freesList` and is outside the domain of any
 /// `Subst Name LVar`, so HS neither counts nor rewrites it.
@@ -305,34 +299,17 @@ pub(crate) fn fold_free_vars(formula: &p::Formula, f: &mut dyn FnMut(&p::VarSpec
     cf(&mut bound, f, formula);
 }
 
-fn term(t: &p::Term) -> Result<tamarin_theory::sapic::SapicTerm, ConvertError> {
+pub(crate) fn term(t: &p::Term) -> Result<tamarin_theory::sapic::SapicTerm, ConvertError> {
     term_to_sapic_term(t)
         .ok_or_else(|| ConvertError::new("could not convert SAPIC term (pattern term?)"))
-}
-
-/// Public alias of [`term`] for the inlining pass (process-call arguments).
-pub(crate) fn convert_term(t: &p::Term) -> Result<tamarin_theory::sapic::SapicTerm, ConvertError> {
-    term(t)
 }
 
 fn fact(f: &p::Fact) -> Result<tamarin_theory::sapic::SapicLNFact, ConvertError> {
     fact_to_sapic_fact(f).map_err(|e| ConvertError::new(e.message))
 }
 
-/// Public alias of [`action`] for the inlining pass.
-pub(crate) fn convert_action(a: &p::SapicAction) -> Result<SapicAction<SapicLVar>, ConvertError> {
-    action(a)
-}
-
-/// Public alias of [`combinator`] for the inlining pass.
-pub(crate) fn convert_combinator(
-    c: &p::ProcessComb,
-) -> Result<ProcessCombinator<SapicLVar>, ConvertError> {
-    combinator(c)
-}
-
 /// Convert a parser action into a theory `SapicAction<SapicLVar>`.
-fn action(a: &p::SapicAction) -> Result<SapicAction<SapicLVar>, ConvertError> {
+pub(crate) fn action(a: &p::SapicAction) -> Result<SapicAction<SapicLVar>, ConvertError> {
     match a {
         p::SapicAction::New(v) => Ok(SapicAction::New(varspec_to_sapic(v))),
         p::SapicAction::Event(f) => Ok(SapicAction::Event(fact(f)?)),
@@ -355,12 +332,12 @@ fn action(a: &p::SapicAction) -> Result<SapicAction<SapicLVar>, ConvertError> {
             })
         }
         // Mutable state: `insert t1 v` / `delete t`.  These map to the
-        // theory `SapicAction::{Insert,Delete}` (Process.hs:72-73), translated by
+        // theory `SapicAction::{Insert,Delete}` (Sapic/Process.hs:72-73), translated by
         // `baseTransAction` Insert/Delete (Basetranslation.hs:177-184).
         p::SapicAction::Insert(t1, t2) => Ok(SapicAction::Insert(term(t1)?, term(t2)?)),
         p::SapicAction::Delete(t) => Ok(SapicAction::Delete(term(t)?)),
         // Locks: `lock t` / `unlock t` → theory `SapicAction::{Lock,Unlock}`
-        // (Process.hs:74-75), annotated by `Sapic.Locks.annotateLocks` and
+        // (Sapic/Process.hs:74-75), annotated by `Sapic.Locks.annotateLocks` and
         // translated by `baseTransAction` Lock/Unlock (Basetranslation.hs:185-194).
         p::SapicAction::Lock(t) => Ok(SapicAction::Lock(term(t)?)),
         p::SapicAction::Unlock(t) => Ok(SapicAction::Unlock(term(t)?)),
@@ -370,8 +347,9 @@ fn action(a: &p::SapicAction) -> Result<SapicAction<SapicLVar>, ConvertError> {
         //   let f = fmap (fmap unpattern); g = fmap (fmap unpatternVar)
         //   if validMSR S.empty (l,a,r) then MSR (f l) (f a) (f r) (g phi) matchVars
         // i.e. match-vars come from the PREMISES only; every fact row is
-        // `unpattern`ed (the `=v` markers stripped) and the embedded restriction
-        // formulas carry through (parser-AST, like `Cond`).
+        // `unpattern`ed (the `=v` markers stripped), and the embedded
+        // restriction formulas get `unpatternVar` — their `=v` markers are
+        // stripped too, without contributing match-vars.
         p::SapicAction::Msr {
             prems,
             acts,
@@ -397,7 +375,7 @@ fn action(a: &p::SapicAction) -> Result<SapicAction<SapicLVar>, ConvertError> {
                 prems: prems_c,
                 acts: acts_c,
                 concs: concs_c,
-                rest: restrictions.clone(),
+                rest: restrictions.iter().map(formula_unpattern).collect(),
                 match_vars,
             })
         }
@@ -422,13 +400,21 @@ fn fact_unpattern(
     fact(&f2)
 }
 
+/// HS `g = fmap (fmap unpatternVar)` over an embedded restriction formula
+/// (Parser/Sapic.hs:158): strip every `=v` (`PatMatch`) marker from the
+/// formula's terms.  No match-vars are collected — HS takes `matchVars` from
+/// the premises only.
+fn formula_unpattern(f: &p::Formula) -> p::Formula {
+    map_formula_terms(f, &|t| strip_pat_match(t, &mut BTreeSet::new()))
+}
+
 /// Convert a parser combinator into a theory `ProcessCombinator<SapicLVar>`.
 ///
 /// Mirrors the SAPIC parser's combinator construction
 /// (`Theory.Text.Parser.Sapic`): `Parallel`/`Ndc` are nullary; `if t1 = t2`
 /// becomes `CondEq t1 t2`; `if frml` becomes `Cond frml`; `lookup`/`let`
 /// become `Lookup`/`Let`.
-fn combinator(c: &p::ProcessComb) -> Result<ProcessCombinator<SapicLVar>, ConvertError> {
+pub(crate) fn combinator(c: &p::ProcessComb) -> Result<ProcessCombinator<SapicLVar>, ConvertError> {
     match c {
         p::ProcessComb::Parallel => Ok(ProcessCombinator::Parallel),
         p::ProcessComb::Ndc => Ok(ProcessCombinator::Ndc),
@@ -442,13 +428,13 @@ fn combinator(c: &p::ProcessComb) -> Result<ProcessCombinator<SapicLVar>, Conver
         // `_restrict` (HS `liftedExpandFormula`), so we keep it un-expanded here.
         p::ProcessComb::Cond(p::Condition::Formula(f)) => Ok(ProcessCombinator::Cond(f.clone())),
         // `lookup t as v in .. else ..`.  HS `Lookup (SapicNTerm v) v`
-        // (Process.hs:95).
+        // (Sapic/Process.hs:95).
         p::ProcessComb::Lookup(t, v) => {
             Ok(ProcessCombinator::Lookup(term(t)?, varspec_to_sapic(v)))
         }
         // `let pat = value in P [else Q]`.  HS
         // `ProcessComb (Let (unpattern t1) t2 (extractMatchingVariables t1))`
-        // (Sapic.hs:268-269).  The parser-AST pattern `pat` may contain
+        // (Parser/Sapic.hs:268-269).  The parser-AST pattern `pat` may contain
         // `=t` (`PatMatch`) match markers; we split them out into `match_vars`
         // and `unpattern` the rest into the `left` term.
         p::ProcessComb::Let { pat, value } => {
@@ -478,16 +464,17 @@ fn convert_let_pattern(
 }
 
 /// Recursively strip `PatMatch` wrappers from a pattern term, recording each
-/// matched variable.  A `=v` matching a plain variable contributes `v` to the
-/// match-var set and unwraps to `v`; a `=t` over a compound term unwraps the
-/// inner term (its variables are still matched, mirroring HS's per-leaf
-/// `PatternMatch`).  Non-pattern subterms are returned unchanged.
+/// matched variable.  A `=v` contributes `v` to the match-var set (HS
+/// `extractMatchingVariables` collects the `PatternMatch` variables,
+/// Pattern.hs:92-96) and unwraps to `v`; the parser only puts the marker on a
+/// variable (`pattern_var_atom`), matching HS `sapicpatternvar`.  Non-pattern
+/// subterms are returned unchanged.
 fn strip_pat_match(t: &p::Term, match_vars: &mut BTreeSet<SapicLVar>) -> p::Term {
     match t {
         p::Term::PatMatch(inner) => {
-            // Collect every variable under the matched subterm.
-            collect_pattern_vars(inner, match_vars);
-            // `unpattern` the inner term (it may itself contain nested patterns).
+            if let p::Term::Var(v) = &**inner {
+                match_vars.insert(varspec_to_sapic(v));
+            }
             strip_pat_match(inner, match_vars)
         }
         p::Term::Pair(items) => p::Term::Pair(
@@ -517,24 +504,6 @@ fn strip_pat_match(t: &p::Term, match_vars: &mut BTreeSet<SapicLVar>) -> p::Term
             Box::new(strip_pat_match(b, match_vars)),
         ),
         other => other.clone(),
-    }
-}
-
-/// Collect every SAPIC variable occurring in a pattern term (used to populate
-/// the match-var set for a `=t` matched subterm).
-fn collect_pattern_vars(t: &p::Term, out: &mut BTreeSet<SapicLVar>) {
-    match t {
-        p::Term::Var(v) => {
-            out.insert(varspec_to_sapic(v));
-        }
-        p::Term::PatMatch(inner) => collect_pattern_vars(inner, out),
-        p::Term::Pair(items) => items.iter().for_each(|x| collect_pattern_vars(x, out)),
-        p::Term::App(_, args) => args.iter().for_each(|x| collect_pattern_vars(x, out)),
-        p::Term::AlgApp(_, a, b) | p::Term::Diff(a, b) | p::Term::BinOp(_, a, b) => {
-            collect_pattern_vars(a, out);
-            collect_pattern_vars(b, out);
-        }
-        _ => {}
     }
 }
 
@@ -629,8 +598,33 @@ mod tests {
             body: Box::new(evt),
         };
         let conv = convert_process(&top).unwrap();
-        // Outermost is New.
-        assert!(matches!(conv, Process::Action(SapicAction::New(_), _, _)));
+        // The complete spine converts. `New` carries the SAPIC type. The
+        // event fact comes next. Then comes the out with the nested `f(f(x))`
+        // payload.
+        let Process::Action(SapicAction::New(v), _, body) = conv else {
+            panic!("expected New at the top");
+        };
+        assert_eq!(v.var.name, "x");
+        assert_eq!(v.stype.as_deref(), Some("lol"));
+        let Process::Action(SapicAction::Event(fact), _, body) = *body else {
+            panic!("expected Event under the New");
+        };
+        assert_eq!(tamarin_theory::fact::fact_tag_name(&fact.tag), "Test");
+        assert_eq!(fact.terms.len(), 1);
+        let Process::Action(SapicAction::ChOut { chan, msg }, _, body) = *body else {
+            panic!("expected ChOut under the Event");
+        };
+        assert!(chan.is_none(), "`out(t)` has no explicit channel");
+        // `f(f(x))` has two nested applications over the bound variable.
+        use tamarin_term::vterm::{Lit, VTerm};
+        let VTerm::App(_, outer) = &msg else {
+            panic!("expected f(f(x)), got {msg:?}");
+        };
+        let VTerm::App(_, inner) = &outer[0] else {
+            panic!("expected the inner f(x)");
+        };
+        assert!(matches!(inner[0], VTerm::Lit(Lit::Var(_))));
+        assert!(matches!(*body, Process::Null(_)));
     }
 
     fn event(name: &str) -> p::Process {
@@ -646,35 +640,49 @@ mod tests {
         }
     }
 
+    /// Returns the event name that a converted `event N` child carries. The
+    /// tests use it to assert that a combinator keeps its two children in the
+    /// source order.
+    fn child_event_name(p: &PlainProcess) -> String {
+        let Process::Action(SapicAction::Event(f), _, _) = p else {
+            panic!("expected an event child, got {p:?}");
+        };
+        tamarin_theory::fact::fact_tag_name(&f.tag)
+    }
+
     #[test]
     fn convert_parallel_and_ndc() {
-        let par = p::Process::Comb {
-            comb: p::ProcessComb::Parallel,
-            left: Box::new(event("A")),
-            right: Box::new(event("B")),
-        };
-        assert!(matches!(
-            convert_process(&par).unwrap(),
-            Process::Comb(ProcessCombinator::Parallel, _, _, _)
-        ));
-        let ndc = p::Process::Comb {
-            comb: p::ProcessComb::Ndc,
-            left: Box::new(event("A")),
-            right: Box::new(event("B")),
-        };
-        assert!(matches!(
-            convert_process(&ndc).unwrap(),
-            Process::Comb(ProcessCombinator::Ndc, _, _, _)
-        ));
+        for (comb, want) in [
+            (p::ProcessComb::Parallel, ProcessCombinator::Parallel),
+            (p::ProcessComb::Ndc, ProcessCombinator::Ndc),
+        ] {
+            let src = p::Process::Comb {
+                comb,
+                left: Box::new(event("A")),
+                right: Box::new(event("B")),
+            };
+            let Process::Comb(got, _, l, r) = convert_process(&src).unwrap() else {
+                panic!("expected a combinator for {want:?}");
+            };
+            assert_eq!(got, want);
+            // The children convert. The left and right order does not change.
+            assert_eq!(child_event_name(&l), "A");
+            assert_eq!(child_event_name(&r), "B");
+        }
     }
 
     #[test]
     fn convert_replication_becomes_rep_action() {
         let rep = p::Process::Replication(Box::new(event("A")));
-        assert!(matches!(
-            convert_process(&rep).unwrap(),
-            Process::Action(SapicAction::Rep, _, _)
-        ));
+        // `!P` becomes `Rep`. The replicated body is the only child of `Rep`.
+        // The body must stay. The usual `0` must not replace it.
+        let Process::Action(SapicAction::Rep, _, body) = convert_process(&rep).unwrap() else {
+            panic!("expected a Rep action");
+        };
+        let Process::Action(SapicAction::Event(f), _, _) = *body else {
+            panic!("expected the replicated event as Rep's child");
+        };
+        assert_eq!(tamarin_theory::fact::fact_tag_name(&f.tag), "A");
     }
 
     #[test]
@@ -686,51 +694,84 @@ mod tests {
             typ: None,
             location: DUMMY_LOCATION,
         });
+        let b = p::Term::PubLit("b".into());
         let cond = p::Process::Comb {
-            comb: p::ProcessComb::Cond(p::Condition::Eq(a.clone(), a)),
+            comb: p::ProcessComb::Cond(p::Condition::Eq(a.clone(), b.clone())),
             left: Box::new(event("E")),
             right: Box::new(p::Process::Null),
         };
-        assert!(matches!(
-            convert_process(&cond).unwrap(),
-            Process::Comb(ProcessCombinator::CondEq(_, _), _, _, _)
-        ));
+        let Process::Comb(ProcessCombinator::CondEq(l, r), _, then, els) =
+            convert_process(&cond).unwrap()
+        else {
+            panic!("expected a CondEq combinator");
+        };
+        // Both sides of `t1 = t2` convert, and they keep their order. The then
+        // arm and the else arm stay on their own sides.
+        assert_eq!(l, term(&a).unwrap());
+        assert_eq!(r, term(&b).unwrap());
+        assert_eq!(child_event_name(&then), "E");
+        assert!(matches!(*els, Process::Null(_)));
     }
 
     #[test]
     fn convert_cond_formula() {
         // `if <formula> then E else 0` converts to ProcessCombinator::Cond.
+        // The combinator carries the parser-AST formula without any change.
+        // Predicate atoms stay un-expanded until `lift_rule_restrictions`.
+        let frml = p::Formula::atom(
+            p::Atom::Pred(p::Fact {
+                persistent: false,
+                name: "P".into(),
+                args: vec![p::Term::PubLit("c".into())],
+                annotations: vec![],
+                location: DUMMY_LOCATION,
+            }),
+            DUMMY_LOCATION,
+        );
         let cond = p::Process::Comb {
-            comb: p::ProcessComb::Cond(p::Condition::Formula(p::Formula::r#true(DUMMY_LOCATION))),
+            comb: p::ProcessComb::Cond(p::Condition::Formula(frml.clone())),
             left: Box::new(event("E")),
             right: Box::new(p::Process::Null),
         };
-        assert!(matches!(
-            convert_process(&cond).unwrap(),
-            Process::Comb(ProcessCombinator::Cond(_), _, _, _)
-        ));
+        let Process::Comb(ProcessCombinator::Cond(got), _, then, _) =
+            convert_process(&cond).unwrap()
+        else {
+            panic!("expected a Cond combinator");
+        };
+        assert_eq!(got, frml);
+        assert_eq!(child_event_name(&then), "E");
     }
 
     #[test]
     fn convert_lookup() {
+        let cell = p::Term::PubLit("x".into());
         let lookup = p::Process::Comb {
             comb: p::ProcessComb::Lookup(
-                p::Term::PubLit("x".into()),
+                cell.clone(),
                 p::VarSpec {
                     name: "v".into(),
                     idx: 0,
                     sort: p::SortHint::Untagged,
-                    typ: None,
+                    typ: Some("cellty".into()),
                     location: DUMMY_LOCATION,
                 },
             ),
             left: Box::new(event("E")),
             right: Box::new(p::Process::Null),
         };
-        assert!(matches!(
-            convert_process(&lookup).unwrap(),
-            Process::Comb(ProcessCombinator::Lookup(_, _), _, _, _)
-        ));
+        let Process::Comb(ProcessCombinator::Lookup(t, v), _, found, notfound) =
+            convert_process(&lookup).unwrap()
+        else {
+            panic!("expected a Lookup combinator");
+        };
+        assert_eq!(t, term(&cell).unwrap());
+        // `lookup t as v` binds `v` and keeps its SAPIC type. An untagged
+        // variable gets the msg sort.
+        assert_eq!(v.var.name, "v");
+        assert_eq!(v.var.sort, LSort::Msg);
+        assert_eq!(v.stype.as_deref(), Some("cellty"));
+        assert_eq!(child_event_name(&found), "E");
+        assert!(matches!(*notfound, Process::Null(_)));
     }
 
     // `map_free_terms` and `fold_free_vars` must agree on which leaves are
@@ -848,10 +889,272 @@ mod tests {
                 body: Box::new(p::Process::Null),
             }),
         };
+        let key = term(&p::Term::PubLit("k".into())).unwrap();
         let conv = convert_process(&ins).unwrap();
-        assert!(matches!(
-            conv,
-            Process::Action(SapicAction::Insert(_, _), _, _)
-        ));
+        let Process::Action(SapicAction::Insert(k, v), _, body) = conv else {
+            panic!("expected Insert at the top");
+        };
+        assert_eq!(k, key);
+        assert_eq!(v, term(&p::Term::PubLit("v".into())).unwrap());
+        // The `delete` below it also converts. It keeps its key term.
+        let Process::Action(SapicAction::Delete(dk), _, _) = *body else {
+            panic!("expected Delete under the Insert");
+        };
+        assert_eq!(dk, key);
+    }
+
+    // -- pattern (`=t`) splitting -------------------------------------------
+    //
+    // HS tags pattern variables at the leaf. The rule is `ltypedpatternlit =
+    // vlit sapicpatternvar` (Parser/Sapic.hs:52-53). A `sapicpatternvar` is an
+    // optional `=` in front of a single `sapicvar` (Token.hs:512-519). A
+    // pattern term is therefore a `SapicNTerm PatternSapicLVar`. Every
+    // variable in that term carries a `PatternBind` or `PatternMatch` tag.
+    // `unpattern = fmap (fmap unpatternVar)` drops the tags
+    // (Pattern.hs:54-60). `extractMatchingVariables pt = S.fromList $ foldMap
+    // (foldMap isPatternMatch) pt` (Pattern.hs:92-96) collects the matched
+    // ones. It is a foldMap over the complete term. The depth therefore does
+    // not matter, and the result is a set.
+
+    /// Builds `x` or `x:ty` as a parser-AST variable leaf. An untagged
+    /// variable gets the msg sort.
+    fn pvar(name: &str, typ: Option<&str>) -> p::Term {
+        p::Term::Var(p::VarSpec {
+            name: name.into(),
+            idx: 0,
+            sort: p::SortHint::Untagged,
+            typ: typ.map(Into::into),
+            location: DUMMY_LOCATION,
+        })
+    }
+
+    /// Builds the `SapicLVar` that [`pvar`] elaborates to. A `sapicvar` keeps
+    /// the `:type` annotation (Token.hs:506-510). A `PatternSapicLVar` wraps a
+    /// complete `SapicLVar` (Pattern.hs:42-44). The type is therefore part of
+    /// the `extractMatchingVariables` set element.
+    fn svar(name: &str, typ: Option<&str>) -> SapicLVar {
+        SapicLVar::new(LVar::new(name, LSort::Msg, 0), typ.map(Into::into))
+    }
+
+    fn pfact(name: &str, args: Vec<p::Term>) -> p::Fact {
+        p::Fact {
+            persistent: false,
+            name: name.into(),
+            args,
+            annotations: vec![],
+            location: DUMMY_LOCATION,
+        }
+    }
+
+    /// The `=t` marker.
+    fn pat_match(t: p::Term) -> p::Term {
+        p::Term::PatMatch(Box::new(t))
+    }
+
+    #[test]
+    fn msr_unpatterns_every_row_but_takes_match_vars_from_the_premises_only() {
+        // HS (Parser/Sapic.hs:155-161):
+        //   (l,a,r,phi) <- try $ genericRule sapicpatternvar (PatternBind <$> sapicnodevar)
+        //   let matchVars =  foldMap (foldMap extractMatchingVariables) l
+        //   let f = fmap (fmap unpattern)
+        //   ... then return (MSR (f l) (f a) (f r) (g phi) matchVars, mempty)
+        // The `matchVars` fold runs over `l` only. The code applies `f`
+        // (unpattern) to all three rows.
+        let deep = |leaf: p::Term| {
+            p::Term::App("h".into(), vec![p::Term::Pair(vec![leaf, pvar("y", None)])])
+        };
+        let prems = vec![pfact("In", vec![deep(pat_match(pvar("x", None)))])];
+        // HS never gives this code a `=` in the action rows or the conclusion
+        // rows. The `validMSR` guards `(_,[]) <- freesPatternFactList a` and
+        // `(_,[]) <- freesPatternFactList r` (Pattern.hs:79-89) fail the parse
+        // first. The pinned oracle also rejects such a source. The half that
+        // this test pins is the HS half. Whatever those rows contain, they add
+        // nothing to `matchVars`.
+        let acts = vec![pfact("Ev", vec![pat_match(pvar("z", None))])];
+        let concs = vec![pfact("Out", vec![pat_match(pvar("w", None))])];
+        let msr = p::Process::Action {
+            action: p::SapicAction::Msr {
+                prems,
+                acts,
+                concs,
+                restrictions: vec![],
+            },
+            body: Box::new(p::Process::Null),
+        };
+        let Process::Action(
+            SapicAction::Msr {
+                prems,
+                acts,
+                concs,
+                rest,
+                match_vars,
+            },
+            _,
+            _,
+        ) = convert_process(&msr).unwrap()
+        else {
+            panic!("expected an Msr action");
+        };
+        // The set holds the premise variables only. `z` and `w` are absent,
+        // although they carry `=`.
+        assert_eq!(match_vars, BTreeSet::from([svar("x", None)]));
+        // The conversion unpatterns every row. A `PatMatch` that survives
+        // makes `term_to_sapic_term` answer `None`, and then the conversion
+        // fails. The comparison against the marker-free terms therefore pins
+        // two things. It pins the removal of the markers, and it pins the rows
+        // that the removal reaches.
+        assert_eq!(
+            prems[0].terms.to_vec(),
+            vec![term(&deep(pvar("x", None))).unwrap()],
+            "the premise keeps its shape with the `=` marker removed"
+        );
+        assert_eq!(
+            acts[0].terms.to_vec(),
+            vec![term(&pvar("z", None)).unwrap()]
+        );
+        assert_eq!(
+            concs[0].terms.to_vec(),
+            vec![term(&pvar("w", None)).unwrap()]
+        );
+        assert!(rest.is_empty());
+    }
+
+    #[test]
+    fn msr_restrict_formulas_lose_their_markers_and_add_no_match_vars() {
+        // HS applies `g = fmap (fmap unpatternVar)` to the embedded
+        // restriction formulas (Parser/Sapic.hs:158-160): every `=` marker
+        // goes away, and `matchVars` still folds over the premises only.
+        // Skipping the `g` leaves a `PatMatch` inside the minted `Restr_…`
+        // fact's terms and kills elaboration — the end-to-end pin is
+        // `scripts/divergence_fixtures/sapic_msr_pattern_restrict`.
+        let ispec = p::VarSpec {
+            name: "i".into(),
+            idx: 0,
+            sort: p::SortHint::Node,
+            typ: None,
+            location: DUMMY_LOCATION,
+        };
+        // One template built twice — with the marker and without — so the
+        // wrapped leaf is the only delta under test.  `=x = x` at the top and
+        // a marker nested under a quantifier inside an action fact's
+        // argument, so the strip provably recurses.
+        let formulas = |wrap: fn(p::Term) -> p::Term| {
+            vec![
+                p::Formula::atom(
+                    p::Atom::Eq(wrap(pvar("x", None)), pvar("x", None)),
+                    DUMMY_LOCATION,
+                ),
+                p::Formula::forall(
+                    vec![ispec.clone()],
+                    p::Formula::atom(
+                        p::Atom::Action(
+                            pfact("Ev", vec![wrap(pvar("x", None))]),
+                            p::Term::Var(ispec.clone()),
+                        ),
+                        DUMMY_LOCATION,
+                    ),
+                    DUMMY_LOCATION,
+                ),
+            ]
+        };
+        let marked = formulas(pat_match);
+        let plain = formulas(|t| t);
+        let msr = p::Process::Action {
+            action: p::SapicAction::Msr {
+                prems: vec![pfact("In", vec![pvar("x", None)])],
+                acts: vec![],
+                concs: vec![pfact("Out", vec![pvar("x", None)])],
+                restrictions: marked,
+            },
+            body: Box::new(p::Process::Null),
+        };
+        let Process::Action(
+            SapicAction::Msr {
+                rest, match_vars, ..
+            },
+            _,
+            _,
+        ) = convert_process(&msr).unwrap()
+        else {
+            panic!("expected an Msr action");
+        };
+        assert_eq!(rest, plain, "both formulas come out marker-free");
+        assert!(
+            match_vars.is_empty(),
+            "a `=` inside `_restrict` contributes no match-var"
+        );
+    }
+
+    #[test]
+    fn let_and_chin_patterns_split_matched_leaves_out_of_the_bound_term() {
+        // HS builds `let` as `ProcessComb (Let (unpattern t1) t2
+        // (extractMatchingVariables t1)) mempty p' q` (Parser/Sapic.hs:268-269).
+        // HS builds `in(c,pt)` as `ChIn maybeChannel (unpattern pt)
+        // (extractMatchingVariables pt)` (Parser/Sapic.hs:113-114). Both sides
+        // use the same pair of Pattern.hs functions.
+        //
+        // `extractMatchingVariables` returns an `S.Set SapicLVar`. The two
+        // `=x:ty` leaves below therefore collapse to one element, and that
+        // element carries the `:ty` annotation. `y` is bound, not matched, so
+        // it stays out of the set.
+        let marked = p::Term::Pair(vec![
+            pat_match(pvar("x", Some("ty"))),
+            p::Term::Pair(vec![pvar("y", None), pat_match(pvar("x", Some("ty")))]),
+        ]);
+        let plain = p::Term::Pair(vec![
+            pvar("x", Some("ty")),
+            p::Term::Pair(vec![pvar("y", None), pvar("x", Some("ty"))]),
+        ]);
+        let want_vars = BTreeSet::from([svar("x", Some("ty"))]);
+
+        let lt = p::Process::Comb {
+            comb: p::ProcessComb::Let {
+                pat: marked.clone(),
+                value: p::Term::PubLit("v".into()),
+            },
+            left: Box::new(event("E")),
+            right: Box::new(p::Process::Null),
+        };
+        let Process::Comb(
+            ProcessCombinator::Let {
+                left,
+                right,
+                match_vars,
+            },
+            _,
+            _,
+            _,
+        ) = convert_process(&lt).unwrap()
+        else {
+            panic!("expected a Let combinator");
+        };
+        assert_eq!(left, term(&plain).unwrap(), "`unpattern t1`");
+        assert_eq!(match_vars, want_vars, "`extractMatchingVariables t1`");
+        // The right-hand side is a `sapicterm`, not a pattern. The conversion
+        // leaves it unchanged.
+        assert_eq!(right, term(&p::Term::PubLit("v".into())).unwrap());
+
+        let chin = p::Process::Action {
+            action: p::SapicAction::ChIn {
+                chan: Some(p::Term::PubLit("c".into())),
+                msg: marked,
+            },
+            body: Box::new(p::Process::Null),
+        };
+        let Process::Action(
+            SapicAction::ChIn {
+                chan,
+                msg,
+                match_vars,
+            },
+            _,
+            _,
+        ) = convert_process(&chin).unwrap()
+        else {
+            panic!("expected a ChIn action");
+        };
+        assert_eq!(chan, Some(term(&p::Term::PubLit("c".into())).unwrap()));
+        assert_eq!(msg, term(&plain).unwrap(), "`unpattern pt`");
+        assert_eq!(match_vars, want_vars, "`extractMatchingVariables pt`");
     }
 }

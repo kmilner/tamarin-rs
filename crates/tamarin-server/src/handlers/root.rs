@@ -1,8 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, cascremers, arcz, jdreier, and other minor contributors
-//   (see upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   src/Web/Hamlet.hs, src/Web/Handler.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Root + housekeeping handlers.
 
@@ -28,7 +26,7 @@ pub async fn get(State(state): State<Arc<AppState>>) -> Response {
 
 /// `POST /` — File upload (multipart `uploadedTheory`).
 pub async fn post(State(state): State<Arc<AppState>>, mut mp: Multipart) -> Response {
-    // Mirror Haskell `postRootR` (src/Web/Handler.hs:785-812): a missing
+    // Mirror Haskell `postRootR` (src/Web/Handler.hs:791-825): a missing
     // `uploadedTheory` field → "Post request failed."; an empty file →
     // "No theory file given."; a load error → "Theory loading failed:…";
     // success → "Loaded new theory!".
@@ -69,13 +67,13 @@ pub async fn post(State(state): State<Arc<AppState>>, mut mp: Multipart) -> Resp
                 tracing::info!(idx, file = %filename, "uploaded theory");
                 // Haskell appends a ` WARNING: ignoring the following
                 // wellformedness errors: …` suffix to this alert when the
-                // report is non-empty (Handler.hs:807-811).  The Rust port
+                // report is non-empty (Handler.hs:813-818).  The Rust port
                 // emits the bare message; the same report is still surfaced on
                 // the theory page (the `wf-warning` banner + the source/message
                 // `/* WARNING */` block, both from `entry.wf_report`).
                 alert_msg = Some("Loaded new theory!".into());
             }
-            // HS `postRootR` (src/Web/Handler.hs:785-817, see line 803):
+            // HS `postRootR` (src/Web/Handler.hs:791-825, see line 809):
             //   `setMessage $ "Theory loading failed:\n" <> toHtml (show err)`
             // — a NEWLINE separates the prefix from the error, not a space.
             // The '\n' survives both HS Blaze escaping and our `html_escape`
@@ -122,7 +120,7 @@ pub async fn robots() -> impl IntoResponse {
 /// `invalidArgs` (400) when it's missing; on success it returns
 /// `Canceled request!` as `text/plain`.
 ///
-/// See `getKillThreadR` in `src/Web/Handler.hs:1422-1440`.
+/// See `getKillThreadR` in `src/Web/Handler.hs:1517-1534`.
 ///
 /// We don't yet wire a `tokio_util::sync::CancellationToken` registry,
 /// so the "cancel" is a soft ack — but the 400-on-missing-path
@@ -165,7 +163,7 @@ fn render_index(state: &AppState) -> String {
     let theories_content = if theories.is_empty() {
         "<strong>No theories loaded!</strong><br>".to_string()
     } else {
-        // HS `theoryTpl` (Web/Hamlet.hs:116-139): one `<tr>` per theory.  The
+        // HS `theoryTpl` (Web/Hamlet.hs:116-134): one `<tr>` per theory.  The
         // `<thead>` emits four bare `<th>…</th>` (no `<tr>`), exactly as hamlet
         // renders it.
         let mut rows = String::new();
@@ -207,18 +205,6 @@ pub use tamarin_utils::pretty_html::escape_html_entities as html_escape;
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// HS `postRootR` (src/Web/Handler.hs:785-817, see line 803) separates the
-    /// "Theory loading failed:" prefix from the error body with a NEWLINE:
-    ///   `setMessage $ "Theory loading failed:\n" <> toHtml (show err)`.
-    /// We mirror that exact prefix (newline, not space).
-    #[test]
-    fn theory_load_error_prefix_uses_newline() {
-        let e = "parse error: boom";
-        let msg = format!("Theory loading failed:\n{}", e);
-        assert_eq!(msg, "Theory loading failed:\nparse error: boom");
-        assert!(!msg.starts_with("Theory loading failed: ")); // not a space
-    }
 
     /// `html_escape` must leave '\n' untouched so the newline in the
     /// load-error banner survives into the rendered page (HS Blaze escaping

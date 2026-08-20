@@ -1,4 +1,10 @@
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
+
 use super::*;
+
+use crate::test_maude::maude_path;
 
 #[test]
 fn default_parameters_match_haskell() {
@@ -8,38 +14,34 @@ fn default_parameters_match_haskell() {
     assert!(!p.show_saturation_steps);
 }
 
-#[test]
-fn empty_system_has_no_chains() {
-    let s = System::empty();
-    assert_eq!(unsolved_chain_constraints(&s), 0);
-}
-
+/// `unsolved_chain_constraints` counts exactly the open `Chain` goals.  It
+/// does not see a solved chain, and it does not see a non-chain goal.  This
+/// matches HS `openChainGoals`, which is the input of the `-c/--open-chains`
+/// budget.
 #[test]
 fn chain_goal_counted() {
     use crate::constraint::constraints::{Goal, NodeId};
     use crate::rule::{ConcIdx, PremIdx};
     use tamarin_term::lterm::{LSort, LVar};
     let mut s = System::empty();
+    assert_eq!(unsolved_chain_constraints(&s), 0);
     let n: NodeId = LVar::new("i", LSort::Node, 0);
     s.add_goal(Goal::Chain((n, ConcIdx(0)), (n, PremIdx(0))));
     assert_eq!(unsolved_chain_constraints(&s), 1);
+    // A non-chain goal does not count.
+    s.add_goal(Goal::Action(
+        n,
+        crate::fact::LNFact::new(crate::fact::FactTag::Out, vec![]),
+    ));
+    assert_eq!(unsolved_chain_constraints(&s), 1);
+    // A solved chain goal does not count either.
+    s.goals_mut()[0].1.solved = true;
+    assert_eq!(unsolved_chain_constraints(&s), 0);
 }
 
 // =========================================================================
 // precompute_sources: unique-source caching correctness
 // =========================================================================
-
-fn maude_path() -> Option<String> {
-    if let Ok(p) = std::env::var("MAUDE_PATH") {
-        return Some(p);
-    }
-    for c in ["/usr/local/bin/maude", "maude"] {
-        if std::path::Path::new(c).exists() {
-            return Some(c.to_string());
-        }
-    }
-    None
-}
 
 fn make_rule(name: &str, conc_tag: crate::fact::FactTag) -> crate::theory::OpenProtoRule {
     use crate::fact::Fact;
@@ -49,18 +51,32 @@ fn make_rule(name: &str, conc_tag: crate::fact::FactTag) -> crate::theory::OpenP
     crate::theory::OpenProtoRule::new(r)
 }
 
+/// A `ProofContext` over `rules` with the pair signature.  The result is
+/// `None` only when [`maude_path`] resolves nothing.  That case is the
+/// documented `TAM_ALLOW_NO_MAUDE` skip.  A maude that resolves but does not
+/// start is the same misconfiguration as a dangling `MAUDE_PATH`.  This
+/// function therefore panics.  A skip would leave every maude-backed test in
+/// this file unrun, and no message would report that.
 fn ctx_with_rules(
     rules: Vec<crate::theory::OpenProtoRule>,
 ) -> Option<crate::constraint::solver::context::ProofContext> {
-    let path = maude_path()?;
-    let h = tamarin_term::maude_proc::MaudeHandle::start(
-        &path,
-        tamarin_term::maude_sig::pair_maude_sig(),
-    )
-    .ok()?;
+    let h = start_maude(&maude_path()?, tamarin_term::maude_sig::pair_maude_sig());
     Some(crate::constraint::solver::context::ProofContext::new(
         h, rules,
     ))
+}
+
+/// See [`ctx_with_rules`] for why a failed start is a panic, not a skip.
+fn start_maude(
+    path: &str,
+    sig: tamarin_term::maude_sig::MaudeSig,
+) -> tamarin_term::maude_proc::MaudeHandle {
+    tamarin_term::maude_proc::MaudeHandle::start(path, sig).unwrap_or_else(|e| {
+        panic!(
+            "maude at {path} failed to start: {e:?} — every maude-backed \
+             test here would otherwise skip silently"
+        )
+    })
 }
 
 #[test]
@@ -85,8 +101,13 @@ fn precompute_sources_picks_single_producer() {
 #[test]
 fn precompute_sources_drops_multi_producer() {
     use crate::fact::{FactTag, Multiplicity};
-    let tag = FactTag::Proto(Multiplicity::Linear, "Bar", 0);
-    let rules = vec![make_rule("MakeBarA", tag), make_rule("MakeBarB", tag)];
+    let bar = FactTag::Proto(Multiplicity::Linear, "Bar", 0);
+    let foo = FactTag::Proto(Multiplicity::Linear, "Foo", 0);
+    let rules = vec![
+        make_rule("MakeBarA", bar),
+        make_rule("MakeBarB", bar),
+        make_rule("MakeFoo", foo),
+    ];
     let ctx = match ctx_with_rules(rules) {
         Some(c) => c,
         None => return,
@@ -95,22 +116,30 @@ fn precompute_sources_drops_multi_producer() {
     let entries: Vec<_> = ctx
         .unique_sources
         .iter()
-        .filter(|s| s.fact_tag == tag)
+        .filter(|s| s.fact_tag == bar)
         .collect();
     assert!(
         entries.is_empty(),
         "expected no entry for multi-producer tag, got {:?}",
         entries
     );
+    // Foo has a single producer in the same context.  So the empty result
+    // above cannot come from a cache that skipped every rule.
+    assert_eq!(
+        ctx.unique_sources
+            .iter()
+            .filter(|s| s.fact_tag == foo)
+            .count(),
+        1
+    );
 }
 
-/// `precompute_full_sources` is HS-faithful lazy — Sources are
-/// pushed with uncomputed `cases_cell`, materialised on first
-/// `cases(ctx)` call.  The per-tag-entry presence assertion still
-/// holds; the eager-case assertion does not.  Update or split this
-/// test when re-enabling saturate.
+/// `precompute_full_sources` pushes one lazy `Source` for each protocol-fact
+/// tag.  Each `Source` holds an uncomputed `cases_cell`.  The first
+/// `cases(ctx)` call computes that cell.  This is HS's `initialSource` thunk.
+/// The test pins both halves.  The per-tag entry exists, and a forced cell
+/// gives the cases of the producing rules.
 #[test]
-#[ignore = "expects eager cases; see lazy-precompute refactor"]
 fn precompute_full_sources_emits_per_tag_entries() {
     use crate::fact::{fresh_fact, Fact, FactTag, Multiplicity};
     use crate::rule::{ProtoRuleE, ProtoRuleEInfo, Rule};
@@ -120,11 +149,7 @@ fn precompute_full_sources_emits_per_tag_entries() {
         Some(p) => p,
         None => return,
     };
-    let h = tamarin_term::maude_proc::MaudeHandle::start(
-        &path,
-        tamarin_term::maude_sig::pair_maude_sig(),
-    )
-    .unwrap();
+    let h = start_maude(&path, tamarin_term::maude_sig::pair_maude_sig());
 
     let a_tag = FactTag::Proto(Multiplicity::Linear, "A", 1);
     let a_fact = Fact::new(a_tag, vec![msg_var("x", 0)]);
@@ -163,18 +188,24 @@ fn precompute_full_sources_emits_per_tag_entries() {
         ctx.full_sources.iter().map(|s| &s.goal).collect::<Vec<_>>()
     );
     let a_src = a_src.unwrap();
-    assert!(
-        !a_src.cases_or_empty().is_empty(),
-        "source for A should have at least one case (Init / Loop)"
-    );
+    // The cell is empty while nothing forces it.  That is what makes the
+    // precompute lazy.
+    assert!(a_src.cases_or_empty().is_empty());
+    // A forced cell lists the two rules that conclude `A(x)`.
+    let names: Vec<String> = a_src.cases(&ctx).into_iter().map(|(n, _)| n).collect();
+    assert_eq!(names, ["Init", "Loop"]);
 }
 
-/// Bilinear-pairing source: when `enableBP` is set, HS Sources.hs
-/// emits a `KU(em(t.1, t.2))` source.  Without this, BP-theory
-/// targets (Chen_Kudla, Joux, RYY, Scott, TAK1) miss the em
-/// source-case enumeration entirely.
+/// The bilinear-pairing source.  The test covers both directions of this
+/// expression in HS Sources.hs:
+/// `if enableBP msig then return $ fAppC EMap $ nMsgVars 2 else []`.
+/// A BP signature must emit this source.  Without it, the BP targets
+/// (Chen_Kudla, Joux, RYY, Scott, TAK1) miss the `KU(em(...))` source-case
+/// enumeration.  Any other signature must not emit it.  Such an emission
+/// would give every non-BP theory one extra KU source that does not belong
+/// there.
 #[test]
-fn precompute_full_sources_emits_em_when_bp_enabled() {
+fn precompute_full_sources_emits_em_only_when_bp_enabled() {
     use crate::constraint::constraints::Goal;
     use crate::fact::{fresh_fact, Fact, FactTag, Multiplicity};
     use crate::rule::{ProtoRuleE, ProtoRuleEInfo, Rule};
@@ -184,47 +215,43 @@ fn precompute_full_sources_emits_em_when_bp_enabled() {
         Some(p) => p,
         None => return,
     };
-    let h = tamarin_term::maude_proc::MaudeHandle::start(
-        &path,
-        tamarin_term::maude_sig::bp_maude_sig(),
-    )
-    .unwrap();
 
     // Minimal protocol so there's at least one proto rule (so
     // `precompute_full_sources` actually runs).
     let a_tag = FactTag::Proto(Multiplicity::Linear, "A", 1);
     let a_fact = Fact::new(a_tag, vec![msg_var("x", 0)]);
-    let init: ProtoRuleE = Rule::new(
-        ProtoRuleEInfo::standard("Init"),
-        vec![fresh_fact(msg_var("x", 0))],
-        vec![a_fact.clone()],
-        vec![],
-    );
-    let rules = vec![crate::theory::OpenProtoRule::new(init)];
-    let ctx = crate::constraint::solver::context::ProofContext::new(h, rules);
-    // Find the KU(em(...)) source.
-    let em_src = ctx.full_sources.iter().find(|s| match &s.goal {
-        Goal::Action(_, fa) => {
-            if fa.tag != FactTag::Ku || fa.terms.len() != 1 {
-                return false;
-            }
-            matches!(
-                &fa.terms[0],
-                tamarin_term::term::Term::App(
-                    tamarin_term::function_symbols::FunSym::C(
-                        tamarin_term::function_symbols::CSym::EMap
-                    ),
-                    _
-                )
-            )
-        }
-        _ => false,
-    });
-    assert!(
-        em_src.is_some(),
-        "expected a KU(em(...)) source for BP-enabled theory; got: {:?}",
-        ctx.full_sources.iter().map(|s| &s.goal).collect::<Vec<_>>()
-    );
+    let em_sources = |sig| {
+        let init: ProtoRuleE = Rule::new(
+            ProtoRuleEInfo::standard("Init"),
+            vec![fresh_fact(msg_var("x", 0))],
+            vec![a_fact.clone()],
+            vec![],
+        );
+        let rules = vec![crate::theory::OpenProtoRule::new(init)];
+        let ctx =
+            crate::constraint::solver::context::ProofContext::new(start_maude(&path, sig), rules);
+        ctx.full_sources
+            .iter()
+            .filter(|s| match &s.goal {
+                Goal::Action(_, fa) => {
+                    fa.tag == FactTag::Ku
+                        && fa.terms.len() == 1
+                        && matches!(
+                            &fa.terms[0],
+                            tamarin_term::term::Term::App(
+                                tamarin_term::function_symbols::FunSym::C(
+                                    tamarin_term::function_symbols::CSym::EMap
+                                ),
+                                _
+                            )
+                        )
+                }
+                _ => false,
+            })
+            .count()
+    };
+    assert_eq!(em_sources(tamarin_term::maude_sig::bp_maude_sig()), 1);
+    assert_eq!(em_sources(tamarin_term::maude_sig::pair_maude_sig()), 0);
 }
 
 #[test]

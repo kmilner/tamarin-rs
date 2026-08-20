@@ -1,8 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, sans-sucre, and other minor contributors (see upstream git
-//   history)
-// Ported from upstream tamarin-prover sources:
-//   lib/utils/src/Data/DAG/Simple.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Port of `Data.DAG.Simple` from `lib/utils/src/Data/DAG/Simple.hs`.
 //!
@@ -11,7 +9,8 @@
 //! `dfs_loop_breakers` is the live loop-breaker selector used by the
 //! constraint-solver context (`useAutoLoopBreakersAC`). `cyclic` and
 //! `trans_red` back the display-graph compression pass
-//! (`tamarin-server`'s `graph::simplify::transitive_reduction`); `trans_red`
+//! (`tamarin-theory`'s
+//! `constraint::system::graph::simplify::transitive_reduction`); `trans_red`
 //! in turn drives `toposort` (and thus `inverse`) and `reachable_set`. The
 //! remaining operations (`restrict`, `image`) are a faithful port of the
 //! rest of `Data.DAG.Simple` retained for completeness and have no live
@@ -270,14 +269,14 @@ mod tests {
 
     #[test]
     fn image_and_inverse() {
-        let r = rel(&[(1, 2), (1, 3), (2, 3)]);
-        let mut img = image(&1, &r);
-        img.sort();
-        assert_eq!(img, vec![2, 3]);
-        let inv = inverse(&r);
-        assert!(inv.contains(&(2, 1)));
-        assert!(inv.contains(&(3, 1)));
-        assert!(inv.contains(&(3, 2)));
+        // `image` and `inverse` both scan the relation from front to back, and
+        // both keep that order.  The DFS helpers below inline that same scan,
+        // so the order matters here.  The successors of `1` come back in the
+        // order the relation lists them, not sorted.
+        let r = rel(&[(1, 3), (1, 2), (2, 3)]);
+        assert_eq!(image(&1, &r), vec![3, 2]);
+        assert_eq!(image(&3, &r), Vec::<i32>::new());
+        assert_eq!(inverse(&r), vec![(3, 1), (2, 1), (3, 2)]);
     }
 
     #[test]
@@ -314,11 +313,21 @@ mod tests {
             let pb = order.iter().position(|x| x == b).unwrap();
             assert!(pa < pb, "{} should come before {} in {:?}", a, b, order);
         }
+        // `trans_red` enumerates index pairs over this order.  The exact
+        // permutation therefore reaches the reduced edge list, and not only
+        // the fact that the order is valid.  HS visits
+        // `map fst dag ++ map snd dag` and emits each vertex after its
+        // predecessors.  That puts 3 before 2.  The sorted order differs, and
+        // the validity check above would accept it just as well.
+        assert_eq!(order, vec![1, 3, 2, 4]);
     }
 
     #[test]
     fn loop_breakers_break_cycles() {
-        let r = rel(&[(1, 2), (2, 3), (3, 1), (3, 4)]);
+        // The graph holds two cycles, 1->2->3->1 and 2->3->4->2, that share
+        // the 2->3 edge.  The single breaker picked at the first back edge
+        // therefore cuts both cycles.
+        let r = rel(&[(1, 2), (2, 3), (3, 1), (3, 4), (4, 2)]);
         let breakers = dfs_loop_breakers(&r);
         assert!(!breakers.is_empty());
         let kept: Relation<i32> = restrict(&r, |x| !breakers.contains(x));
@@ -326,40 +335,67 @@ mod tests {
     }
 
     #[test]
-    fn loop_breakers_empty_for_acyclic() {
-        let r = rel(&[(1, 2), (2, 3)]);
-        assert_eq!(dfs_loop_breakers(&r), Vec::<i32>::new());
-    }
-
-    #[test]
-    fn loop_breakers_simple_cycle_breaks_one() {
-        // 1 -> 2 -> 1: breaking either makes it acyclic.
-        let breakers = dfs_loop_breakers(&rel(&[(1, 2), (2, 1)]));
-        assert_eq!(breakers.len(), 1);
-        assert!(breakers[0] == 1 || breakers[0] == 2);
-    }
-
-    #[test]
-    fn loop_breakers_three_cycle_breaks_one() {
-        // 1 -> 2 -> 3 -> 1.
-        assert_eq!(dfs_loop_breakers(&rel(&[(1, 2), (2, 3), (3, 1)])).len(), 1);
-    }
-
-    #[test]
-    fn loop_breakers_two_independent_cycles_break_both() {
-        let breakers = dfs_loop_breakers(&rel(&[(1, 2), (2, 1), (3, 4), (4, 3)]));
-        assert_eq!(breakers.len(), 2);
+    fn dfs_loop_breakers_pins_hs_selection_and_order() {
+        // The picked set reaches the printed output.  The vertices that come
+        // back, and their order, are therefore part of the port's contract.
+        // They are not an incidental choice.  HS emits the source of the back
+        // edge, stops the descent at that vertex, and shares one `visited` set
+        // across all roots.  That set only grows.
+        let cases: Vec<(&str, Relation<i32>, Vec<i32>)> = vec![
+            ("acyclic", rel(&[(1, 2), (2, 3)]), vec![]),
+            (
+                "2-cycle: the back-edge source is 2",
+                rel(&[(1, 2), (2, 1)]),
+                vec![2],
+            ),
+            (
+                "3-cycle: the back-edge source is 3",
+                rel(&[(1, 2), (2, 3), (3, 1)]),
+                vec![3],
+            ),
+            (
+                // The DFS never visits 4.  The back edge at 3 stops the
+                // descent before the DFS explores the other successors of 3.
+                "back edge suppresses the sibling successor",
+                rel(&[(1, 2), (2, 3), (3, 1), (3, 4)]),
+                vec![3],
+            ),
+            (
+                "two independent cycles, one breaker each",
+                rel(&[(1, 2), (2, 1), (3, 4), (4, 3)]),
+                vec![2, 4],
+            ),
+            (
+                // Both successors of 1 close a cycle back onto 1.  The
+                // emission order is therefore the order in which the
+                // successors appear in `rel`.  A reversed successor scan
+                // flips this row.
+                "sibling successors are descended in relation order",
+                rel(&[(1, 2), (1, 3), (2, 1), (3, 1)]),
+                vec![2, 3],
+            ),
+            (
+                // The root 3 re-enters the cycle {1,2}, which is already
+                // broken.  The shared `visited` set stops the descent, so the
+                // function emits no second breaker.
+                "later root re-entering a visited cycle",
+                rel(&[(1, 2), (2, 1), (3, 2)]),
+                vec![2],
+            ),
+        ];
+        for (label, r, want) in cases {
+            assert_eq!(dfs_loop_breakers(&r), want, "{}", label);
+        }
     }
 
     #[test]
     fn trans_red_removes_redundant_edges() {
         // 1 -> 2 -> 3, plus shortcut 1 -> 3
         let r = rel(&[(1, 2), (2, 3), (1, 3)]);
-        let red = trans_red(&r);
-        let red_set: BTreeSet<(i32, i32)> = red.iter().copied().collect();
-        // The reduction must drop (1,3) and keep (1,2),(2,3).
-        assert!(red_set.contains(&(1, 2)));
-        assert!(red_set.contains(&(2, 3)));
-        assert!(!red_set.contains(&(1, 3)));
+        // `trans_red` drops the shortcut (1,3), because 3 is already
+        // reachable.  The kept edges come back in HS's order.  `foldl' visit
+        // []` prepends each kept edge.  The processing order takes the longest
+        // gap first, and the output reverses that order.
+        assert_eq!(trans_red(&r), vec![(2, 3), (1, 2)]);
     }
 }

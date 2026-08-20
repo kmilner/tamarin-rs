@@ -1,0 +1,10 @@
+# source: oracle ef3f0468, plain load
+/*
+WARNING: the following wellformedness checks failed!
+
+Special facts
+=============
+
+  rule `Bad' uses disallowed facts on left-hand-side:
+    Out( x )
+*/

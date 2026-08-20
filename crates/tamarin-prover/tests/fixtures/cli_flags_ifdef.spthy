@@ -1,0 +1,20 @@
+// Purpose-built fixture for the `-D/--defines` CLI pin in tests/cli_e2e.rs.
+// The `#ifdef FOO` region adds a rule AND a lemma, so a `-D=FOO` that fails
+// to reach the pseudo-preprocessor is visible both in the echoed rules and
+// in the summary block.  `--parse-only` keeps the run maude-free and fast.
+theory CliFlagsIfdef
+begin
+
+rule Base:
+  [ Fr(~k) ] --[ Base(~k) ]-> [ Out(~k) ]
+
+#ifdef FOO
+rule Extra:
+  [ In(x) ] --[ Extra(x) ]-> [ ]
+
+lemma extra_exists:
+  exists-trace
+  "Ex x #i. Extra(x) @ #i"
+#endif
+
+end

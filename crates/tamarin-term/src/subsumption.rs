@@ -1,10 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, beschmi, felixonmars, and other minor contributors (see
-//   upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/term/src/Term/LTerm.hs,
-//   lib/term/src/Term/Rewriting/Definitions.hs,
-//   lib/term/src/Term/Subsumption.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Port of `Term.Subsumption` — subsumption ordering on terms.
 //!
@@ -95,7 +91,7 @@ pub(crate) fn eq_term_subs(
 
 // =============================================================================
 // `canonizeSubst` — port of `Term.Subsumption.canonizeSubst`
-// (Subsumption.hs:67-77).
+// (Subsumption.hs:67-76).
 //
 // ```haskell
 // canonizeSubst :: LNSubstVFresh -> LNSubstVFresh
@@ -118,7 +114,7 @@ pub(crate) fn eq_term_subs(
 //     `BTreeMap` iteration order).  `varOccurences` returns, for each
 //     range var, the SET of context paths (`Occurence = [String]`) in
 //     which it appears.  The context path for a var is built innermost-
-//     first by `foldFreesOcc` (LTerm.hs:744-748 + the `[a]` instance
+//     first by `foldFreesOcc` (LTerm.hs:782-785 + the `[a]` instance
 //     LTerm.hs:840-845, see line 843): the outer `[VTerm]` list prepends `show listIdx`,
 //     a `FApp (NoEq o)` prepends `unpack (fst o)` (the symbol name),
 //     and a `FApp (AC|C) o` prepends `show o` (the Haskell `Show` of
@@ -156,7 +152,7 @@ use std::collections::BTreeSet;
 type Occurence = Vec<String>;
 
 /// HS `show` of a non-`NoEq` `FunSym` used as a context label
-/// (`foldFreesOcc f (show o:c) as` for AC/C symbols, LTerm.hs:741-754, see line 748).
+/// (`foldFreesOcc f (show o:c) as` for AC/C symbols, LTerm.hs:782-786, see line 785).
 /// Mirrors the derived `Show` for `FunSym`/`ACSym`/`CSym`.
 fn show_funsym_ac_c(sym: &FunSym) -> String {
     match sym {
@@ -185,7 +181,7 @@ fn show_funsym_ac_c(sym: &FunSym) -> String {
 
 /// `foldFreesOcc (\c v -> [(v,c)]) c t` over a single term — collects
 /// `(var, context-path)` pairs.  Mirrors the `Term` instance
-/// (LTerm.hs:744-748):
+/// (LTerm.hs:782-785):
 ///
 /// ```haskell
 /// foldFreesOcc f c t = case viewTerm t of
@@ -196,7 +192,7 @@ fn show_funsym_ac_c(sym: &FunSym) -> String {
 ///
 /// **The NoEq vs AC/C asymmetry is load-bearing**: for a `NoEq` symbol the
 /// children `as :: [Term]` are folded via the `[a]` HasFrees instance
-/// (LTerm.hs:840-845, see line 843), which prepends each child's `show argIdx` to the
+/// (LTerm.hs:877-882, see line 880), which prepends each child's `show argIdx` to the
 /// context.  But for an AC/C symbol HS does `mconcat $ map
 /// (foldFreesOcc f (show o:c)) as` — a DIRECT map over the children with
 /// the SAME `(show o : c)` context, bypassing the `[a]` instance, so the
@@ -233,7 +229,7 @@ fn fold_frees_occ_term(t: &LNTerm, ctx: &Occurence, out: &mut Vec<(LVar, Occuren
 /// `varOccurences (rangeVFresh subst)` — for each range var, the SET of
 /// context paths in which it occurs.  The argument is the list of range
 /// terms in domain-key order; the outer `[VTerm]` list instance
-/// prepends `show listIdx` to each term's context (LTerm.hs:840-845, see line 843).
+/// prepends `show listIdx` to each term's context (LTerm.hs:877-882, see line 880).
 fn var_occurences(range_terms: &[LNTerm]) -> BTreeMap<LVar, BTreeSet<Occurence>> {
     let mut pairs: Vec<(LVar, Occurence)> = Vec::new();
     for (i, t) in range_terms.iter().enumerate() {
@@ -248,7 +244,7 @@ fn var_occurences(range_terms: &[LNTerm]) -> BTreeMap<LVar, BTreeSet<Occurence>>
 }
 
 /// `canonizeSubst` — canonical representative modulo renaming.
-/// Faithful port of HS `canonizeSubst` (Subsumption.hs:67-77).
+/// Faithful port of HS `canonizeSubst` (Subsumption.hs:67-76).
 pub fn canonize_subst(subst: &LNSubstVFresh) -> LNSubstVFresh {
     // `rangeVFresh subst = M.elems . svMap` — range terms in domain-key
     // (BTreeMap) order.
@@ -277,7 +273,7 @@ pub fn canonize_subst(subst: &LNSubstVFresh) -> LNSubstVFresh {
     }
 
     // `mapRangeVFresh (applyVTerm renaming) subst`.  `apply_vterm_map` is the
-    // `applyVTerm` HS canonizeSubst uses (Subsumption.hs:67-77): it dispatches
+    // `applyVTerm` HS canonizeSubst uses (Subsumption.hs:67-76): it dispatches
     // the `f_app_ac` / `f_app_c` / `f_app_no_eq` / `f_app_list` smart
     // constructors, so it **re-sorts AC/C operand lists** by the renamed `Ord
     // (Term a)`.  This matters: a renaming that reorders two operands of an AC

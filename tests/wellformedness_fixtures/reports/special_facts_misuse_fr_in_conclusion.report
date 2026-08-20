@@ -1,0 +1,17 @@
+# source: oracle ef3f0468, plain load
+# omits: Message Derivation Checks (Maude-backed, spliced later by the production callers)
+/*
+WARNING: the following wellformedness checks failed!
+
+Unbound variables
+=================
+
+  rule `Bad' has unbound variables: 
+    ~k
+
+Special facts
+=============
+
+  rule `Bad' uses disallowed facts on right-hand-side:
+    Fr( ~k )
+*/

@@ -1,8 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, beschmi, jdreier, PhilipLukertWork, rsasse, charlie-j, and
-//   other minor contributors (see upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/term/src/Term/LTerm.hs, lib/term/src/Term/Term.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Port of `prettyLNTerm`/`prettyTerm` from
 //! `lib/term/src/Term/Term.hs` (lines 298-327) and the `Show LVar` /
@@ -29,6 +27,7 @@
 //! - `impl Display for LNTerm` (technically on `Term<Lit<Name, LVar>>`).
 
 use std::fmt;
+use std::fmt::Write as _;
 use std::sync::{OnceLock, RwLock};
 
 use tamarin_utils::FastMap;
@@ -96,7 +95,7 @@ fn pp_term_lnterm(t: &Term<Lit<Name, LVar>>, out: &mut String) {
         }
         // Haskell `prettyTerm` matches full `NoEqSym` equality (incl.
         // privacy/constructability), e.g. `s == expSym` — not just the
-        // name+arity (Term.hs:310-313).
+        // name+arity (Term/Term.hs:310-313).
         Term::App(FunSym::NoEq(sym), ts) if ts.len() == 2 && *sym == exp_sym() => {
             pp_term_lnterm(&ts[0], out);
             out.push('^');
@@ -163,7 +162,7 @@ fn pp_term_lnterm(t: &Term<Lit<Name, LVar>>, out: &mut String) {
     }
 }
 
-/// HS `split` (Term.hs:323-324): `split (viewTerm2 -> FPair t1 t2) = t1 :
+/// HS `split` (Term/Term.hs:323-324): `split (viewTerm2 -> FPair t1 t2) = t1 :
 /// split t2; split t = [t]`.  ONLY the RIGHT spine of a pair is flattened —
 /// `pair(t1, t2)` yields `t1` then recurses into `t2`.  A LEFT-nested pair
 /// such as `pair(pair(a,b), c)` therefore renders as `<<a, b>, c>` (the left
@@ -186,17 +185,17 @@ fn pp_lit_lnterm(l: &Lit<Name, LVar>, out: &mut String) {
     }
 }
 
-/// Mirror of Haskell `instance Show LVar` (LTerm.hs:525-532).
+/// Mirror of Haskell `instance Show LVar` (LTerm.hs:550-557).
 pub fn pp_lvar(v: &LVar, out: &mut String) {
     out.push_str(sort_prefix(v.sort));
     if v.name.is_empty() {
-        out.push_str(&v.idx.to_string());
+        let _ = write!(out, "{}", v.idx);
     } else if v.idx == 0 {
         out.push_str(v.name);
     } else {
         out.push_str(v.name);
         out.push('.');
-        out.push_str(&v.idx.to_string());
+        let _ = write!(out, "{}", v.idx);
     }
 }
 
@@ -220,7 +219,7 @@ pub fn pp_name(n: &Name, out: &mut String) {
 }
 
 pub fn ac_op_symbol(op: AcSym) -> &'static str {
-    // Haskell `prettyTerm`'s AC arms (Term.hs:304-309).
+    // Haskell `prettyTerm`'s AC arms (Term/Term.hs:304-309).
     //   Mult => "*"; Xor => "⊕"; Union => "++"; NatPlus => "%+"
     // We use the unicode char for Xor since the rest of the UI
     // already passes UTF-8 around and the JS frontend renders it.
@@ -264,7 +263,7 @@ fn ac_fct_op_symbol_interned(name: &'static [u8]) -> &'static str {
 }
 
 /// The infix separator of a user-defined AC symbol: Haskell
-/// `ppTerms (" " ++ BC.unpack f ++ " ") 1 "(" ")" ts` (Term.hs:305) surrounds
+/// `ppTerms (" " ++ BC.unpack f ++ " ") 1 "(" ")" ts` (Term/Term.hs:305) surrounds
 /// the symbol name by spaces, so the spaces are part of the separator (unlike
 /// the builtin ops).  Interned so it can be handed out as `&'static str` like
 /// the fixed ones; the pool is bounded by the theory's user-defined AC names.
@@ -396,29 +395,31 @@ mod tests {
         assert_eq!(pretty_lnterm(&outer), "<<a, b>, c>");
     }
 
+    /// The four builtin AC operators render as HS `ppTerms <op> 1 "(" ")"`
+    /// (Term/Term.hs:304-309).  This gives one pair of parentheses around the
+    /// complete application.  The operator appears between the operands only.
+    /// There are no spaces, and no separator at the start or at the end.  The
+    /// arguments come out in AC-sorted order (`a` before `b`), whatever order
+    /// the caller passes them in.
     #[test]
-    fn pretty_xor_infix() {
+    fn pretty_builtin_ac_ops_render_infix() {
+        use crate::function_symbols::AcSym;
         let a = var("a", LSort::Msg);
         let b = var("b", LSort::Msg);
-        let t = f_app_ac(crate::function_symbols::AcSym::Xor, vec![a, b]);
-        // AC-normalised order: alphabetic — a, b
-        let rendered = pretty_lnterm(&t);
-        assert!(
-            rendered.starts_with('(') && rendered.ends_with(')'),
-            "got {}",
-            rendered
-        );
-        assert!(rendered.contains("\u{2295}"));
-    }
-
-    #[test]
-    fn pretty_mult_infix() {
-        let a = var("a", LSort::Msg);
-        let b = var("b", LSort::Msg);
-        let t = f_app_ac(crate::function_symbols::AcSym::Mult, vec![a, b]);
-        let rendered = pretty_lnterm(&t);
-        assert!(rendered.starts_with('(') && rendered.ends_with(')'));
-        assert!(rendered.contains('*'));
+        for (op, expected) in [
+            (AcSym::Mult, "(a*b)"),
+            (AcSym::Xor, "(a\u{2295}b)"),
+            (AcSym::Union, "(a++b)"),
+            (AcSym::NatPlus, "(a%+b)"),
+        ] {
+            let t = f_app_ac(op, vec![b.clone(), a.clone()]);
+            assert_eq!(pretty_lnterm(&t), expected, "{op:?}");
+        }
+        // With three operands the separator appears twice, and never at the
+        // edges.
+        let c = var("c", LSort::Msg);
+        let t = f_app_ac(AcSym::Mult, vec![c, b, a]);
+        assert_eq!(pretty_lnterm(&t), "(a*b*c)");
     }
 
     #[test]
@@ -427,6 +428,30 @@ mod tests {
         let x = var("x", LSort::Msg);
         let t = f_app_no_eq(exp_sym(), vec![g, x]);
         assert_eq!(pretty_lnterm(&t), "g^x");
+    }
+
+    /// `diff(a, b)` keeps its prefix spelling, with a space after the comma.
+    /// See the module doc above, and HS `prettyTerm`'s own `s == diffSym`
+    /// case.  The guard on the dedicated arm compares the complete `NoEqSym`,
+    /// so a public `diff/2` is a different symbol.  That symbol falls through
+    /// to the generic `NoEq` arm, which spells a 2-ary application the same
+    /// way.  Both assertions therefore check the one spelling.  They do not
+    /// check a difference between the two arms.
+    #[test]
+    fn pretty_diff_renders_prefix_with_spaced_args() {
+        let x = var("x", LSort::Msg);
+        let y = var("y", LSort::Msg);
+        let t = f_app_no_eq(diff_sym(), vec![x.clone(), y.clone()]);
+        assert_eq!(pretty_lnterm(&t), "diff(x, y)");
+        let public_diff = NoEqSym::new(
+            b"diff".to_vec(),
+            2,
+            Privacy::Public,
+            Constructability::Constructor,
+        );
+        assert_ne!(public_diff, diff_sym());
+        let generic = f_app_no_eq(public_diff, vec![x, y]);
+        assert_eq!(pretty_lnterm(&generic), "diff(x, y)");
     }
 
     #[test]
@@ -470,7 +495,7 @@ mod tests {
         let b = var("b", LSort::Msg);
         let t = f_app_ac(AcSym::AcFct(f), vec![a, b]);
         assert_eq!(pretty_lnterm(&t), "(a f b)");
-        // HS `FApp (AC (ACfct (f, _))) [] -> text (BC.unpack f)` (Term.hs:304):
+        // HS `FApp (AC (ACfct (f, _))) [] -> text (BC.unpack f)` (Term/Term.hs:304):
         // the bare name, no parens.  `f_app_ac` rejects an empty argument list
         // (HS `fAppAC` errors likewise), so the arm is reachable only by direct
         // construction.
@@ -516,7 +541,7 @@ mod tests {
     /// Bytes from the oracle on a theory declaring `f/2 [AC]`, `op/2 [AC]`,
     /// `opq/2 [AC]` and a rule emitting `f(~a,~b)`, `op(~a,~b)`, `opq(~a,~b)`;
     /// it renders them `(~a f ~b)`, `(~a op ~b)`, `(~a opq ~b)` (HS
-    /// `ppTerms (" " ++ BC.unpack f ++ " ") 1 "(" ")" ts`, Term.hs:305).
+    /// `ppTerms (" " ++ BC.unpack f ++ " ") 1 "(" ")" ts`, Term/Term.hs:305).
     #[test]
     fn ac_fct_separator_shared_across_threads() {
         use crate::function_symbols::{AcFctSym, AcSym, NdcState};
@@ -576,12 +601,37 @@ mod tests {
         assert_eq!(format!("{}", v2), "$foo.4");
     }
 
+    /// One sigil per `NameTag`, from HS `instance Show Name`
+    /// (LTerm.hs:235-240).  Four of the tags print a quoted form with their
+    /// own prefix character, and the prefix of `Pub` is empty.  `Abbrev`
+    /// prints the bare id with no sigil and no quotes.
     #[test]
     fn display_for_name() {
-        let n = Name::new(NameTag::Fresh, "kAB");
-        assert_eq!(format!("{}", n), "~'kAB'");
-        let n2 = Name::new(NameTag::Pub, "alice");
-        assert_eq!(format!("{}", n2), "'alice'");
+        for (tag, expected) in [
+            (NameTag::Fresh, "~'kAB'"),
+            (NameTag::Pub, "'kAB'"),
+            (NameTag::Node, "#'kAB'"),
+            (NameTag::Nat, "%'kAB'"),
+            (NameTag::Abbrev, "kAB"),
+        ] {
+            assert_eq!(format!("{}", Name::new(tag, "kAB")), expected, "{tag:?}");
+        }
+    }
+
+    /// `Display for LSort` carries the spelling of HS `sortSuffix` for every
+    /// sort.  It does not carry the constructor names of the derived
+    /// `Show LSort`.
+    #[test]
+    fn lsort_display_matches_sort_suffix() {
+        for s in [
+            LSort::Pub,
+            LSort::Fresh,
+            LSort::Msg,
+            LSort::Node,
+            LSort::Nat,
+        ] {
+            assert_eq!(s.to_string(), crate::lterm::sort_suffix(s));
+        }
     }
 
     #[test]

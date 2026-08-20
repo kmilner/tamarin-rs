@@ -52,5 +52,7 @@ pub mod subst_vfresh;
 pub mod subsumption;
 pub mod subterm_rule;
 pub mod term;
+#[cfg(test)]
+mod test_maude;
 pub mod unification;
 pub mod vterm;

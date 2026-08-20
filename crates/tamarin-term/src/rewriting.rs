@@ -1,8 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   beschmi, meiersi, felixonmars, and other minor contributors (see
-//   upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/term/src/Term/Rewriting/Definitions.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Port of `Term.Rewriting.Definitions` from
 //! `lib/term/src/Term/Rewriting/Definitions.hs`.
@@ -120,9 +118,17 @@ mod tests {
 
     #[test]
     fn match_short_circuits_on_no_match() {
+        // The Haskell `Monoid` instance short-circuits on either side.  A
+        // guard that checks only one side therefore fails this test.
         let a: Match<i32> = Match::match_with(1, 2);
-        let b: Match<i32> = Match::no_match();
-        assert!(matches!(a.append(b), Match::NoMatch));
+        assert!(matches!(
+            a.clone().append(Match::no_match()),
+            Match::NoMatch
+        ));
+        assert!(matches!(Match::no_match().append(a), Match::NoMatch));
+        // `matchOnlyIf False` is the other producer of the absorbing element.
+        assert!(matches!(Match::<i32>::only_if(false), Match::NoMatch));
+        assert_eq!(Match::<i32>::only_if(true).flatten(), Some(Vec::new()));
     }
 
     #[test]

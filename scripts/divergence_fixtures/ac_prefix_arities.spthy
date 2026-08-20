@@ -1,14 +1,18 @@
 /*
  * Prefix (and op{t1}t2) applications of a user-declared `[AC]` symbol:
- * `naryOpApp`'s arity check is gated on `NotAC` (Term.hs:98), so ANY
- * argument count parses:
+ * `naryOpApp`'s arity check is gated on `NotAC`
+ * (Theory/Text/Parser/Term.hs:98), so ANY argument count parses:
  *
  *   - f('a','b','c')  fAppAC flattens to the same term the infix chain
  *                     builds — ('a' f 'b' f 'c');
  *   - f('a')          `fAppAC _ [a] = a` (Term/Term/Raw.hs:118-121): the
  *                     singleton application collapses to its argument;
  *   - f{'x'}'y'       `binaryAlgApp`'s IsAC branch builds fAppAC too
- *                     (Term.hs:119-121) — ('x' f 'y').
+ *                     (Theory/Text/Parser/Term.hs:119-121) — ('x' f 'y').
+ *
+ * Compared slices: the whole `theory … end` echo, where the three spellings
+ * come back as terms, and the wf report block, which pins the run clean —
+ * an arity check that does fire lands there (see check.sh).
  */
 theory AcPrefixArities
 begin

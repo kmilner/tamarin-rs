@@ -1,13 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, felixlinker, beschmi, sans-sucre, PhilipLukertWork, and
-//   other minor contributors (see upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/term/src/Term/LTerm.hs, lib/term/src/Term/Term/Raw.hs,
-//   lib/term/src/Term/VTerm.hs, lib/theory/src/Rule.hs,
-//   lib/theory/src/Theory/Constraint/System/Constraints.hs,
-//   lib/theory/src/Theory/Model/Fact.hs,
-//   lib/theory/src/Theory/Model/Rule.hs,
-//   lib/theory/src/Theory/Tools/EquationStore.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Port of `Theory.Constraint.System.Constraints` —
 //! graph-constraint primitives (`Edge`, `LessAtom`), goal types
@@ -212,13 +205,15 @@ impl Goal {
 /// the payloads compare left to right.  Every payload comparison below
 /// delegates to an `Ord` that already mirrors its HS counterpart:
 ///
-/// - `LVar` — manual `Ord` = `(idx, sort, name)` (LTerm.hs:548-554).
+/// - `LVar` — manual `Ord` = `(idx, sort, name)` (LTerm.hs:546-548).
 /// - `LNFact` — manual `Ord` = tag then terms, annotations IGNORED, which is
-///   HS's manual `instance Ord (Fact t)` (Fact.hs:173-174), not a derived
+///   HS's manual `instance Ord (Fact t)` (Model/Fact.hs:173-174), not a derived
 ///   one; `FactTag`'s derived `Ord` matches HS's constructor and payload
-///   order (Fact.hs:137-148), as does `Multiplicity`'s (Fact.hs:133-134).
+///   order (Model/Fact.hs:137-148), as does `Multiplicity`'s
+///   (Model/Fact.hs:133-134).
 /// - `NodeConc` / `NodePrem` — `(LVar, ConcIdx/PremIdx)` tuples; the index
-///   newtypes derive `Ord` over their integer, as HS's do (Rule.hs:234-239).
+///   newtypes derive `Ord` over their integer, as HS's do
+///   (Model/Rule.hs:233-238).
 /// - `SplitId` — newtype over an integer, derived both sides
 ///   (EquationStore.hs:88-89).
 /// - `LNTerm` — `Lit < App`, then symbol then arguments, mirroring the
@@ -316,10 +311,14 @@ mod tests {
             LessAtom::new(node("i"), node("j"), Reason::Fresh),
             LessAtom::new(node("j"), node("k"), Reason::Formula),
         ];
-        let rel = get_less_rel(&atoms);
-        assert_eq!(rel.len(), 2);
-        assert_eq!(rel[0].0, node("i"));
-        assert_eq!(rel[1].1, node("k"));
+        // The test compares the complete projection.  The order of the pair
+        // inside an atom is the direction of the ordering edge.  The order
+        // of the atoms is the iteration order of the relation.  A check of
+        // two endpoints alone leaves both of these orders unchecked.
+        assert_eq!(
+            get_less_rel(&atoms),
+            vec![(node("i"), node("j")), (node("j"), node("k"))]
+        );
     }
 
     // HS's derived `Ord Goal` ranks by constructor first, in declaration
@@ -356,13 +355,13 @@ mod tests {
         }
 
         // Same-constructor tie-break: `ActionG` compares its `LVar` first, and
-        // `Ord LVar` is idx-major (LTerm.hs:548-554), so `#i.1` precedes
+        // `Ord LVar` is idx-major (LTerm.hs:546-548), so `#i.1` precedes
         // `#a.2` despite sorting after it by name.
         let lo = Goal::Action(LVar::new("i", LSort::Node, 1), fa.clone());
         let hi = Goal::Action(LVar::new("a", LSort::Node, 2), fa.clone());
         assert_eq!(cmp_goal(&lo, &hi), Ordering::Less);
         // Equal node ids fall through to the fact, which orders by tag then
-        // terms with annotations ignored (Fact.hs:173-174).
+        // terms with annotations ignored (Model/Fact.hs:173-174).
         let fresh = LNFact::new(FactTag::Fresh, vec![t.clone()]);
         let a_out = Goal::Action(node("i"), fa);
         let a_fresh = Goal::Action(node("i"), fresh);
@@ -384,12 +383,66 @@ mod tests {
         );
     }
 
+    /// Each `is_*` predicate matches its own variant and no other variant.
+    /// The failure mode is a copied `matches!` arm that names the
+    /// neighbouring variant.  HS ships exactly that bug in `isSubtermGoal`,
+    /// which is a copy of `isDisjGoal`.  See the note on
+    /// [`Goal::is_subterm`].
     #[test]
     fn goal_kind_predicates() {
-        let v = LVar::new("k", LSort::Msg, 0);
-        let f = crate::fact::LNFact::new(crate::fact::FactTag::Out, vec![]);
-        let g = Goal::Action(v, f);
-        assert!(g.is_action());
-        assert!(!g.is_premise());
+        use crate::fact::{FactTag, LNFact};
+        use crate::guarded::gtrue;
+        use crate::rule::{ConcIdx, PremIdx};
+        use crate::tools::equation_store::SplitId;
+        use tamarin_term::term::lit;
+        use tamarin_term::vterm::Lit;
+
+        let i = node("i");
+        let t = lit(Lit::Var(LVar::new("x", LSort::Msg, 0)));
+        let out = LNFact::new(FactTag::Out, vec![t.clone()]);
+        // The columns are in this order: action, premise, chain, split,
+        // disj, subterm.
+        let cases = [
+            ("Action", Goal::Action(i, out.clone()), [1, 0, 0, 0, 0, 0]),
+            (
+                "Chain",
+                Goal::Chain((i, ConcIdx(0)), (i, PremIdx(0))),
+                [0, 0, 1, 0, 0, 0],
+            ),
+            (
+                "Premise",
+                Goal::Premise((i, PremIdx(0)), out.clone()),
+                [0, 1, 0, 0, 0, 0],
+            ),
+            ("Split", Goal::Split(SplitId(0)), [0, 0, 0, 1, 0, 0]),
+            (
+                "Disj",
+                Goal::Disj(Disj::new(vec![gtrue()])),
+                [0, 0, 0, 0, 1, 0],
+            ),
+            (
+                "Subterm",
+                Goal::Subterm((t.clone(), t.clone())),
+                [0, 0, 0, 0, 0, 1],
+            ),
+        ];
+        for (name, g, want) in &cases {
+            let got = [
+                g.is_action(),
+                g.is_premise(),
+                g.is_chain(),
+                g.is_split(),
+                g.is_disj(),
+                g.is_subterm(),
+            ];
+            assert_eq!(got, want.map(|b| b == 1), "{name}");
+        }
+        // `is_standard_action` is the only predicate that does more than a
+        // variant match.  `KU(_)` action goals are the intruder-knowledge
+        // goals that the solver handles as a special case.  They are not
+        // standard.
+        assert!(Goal::Action(i, out).is_standard_action());
+        assert!(!Goal::Action(i, LNFact::new(FactTag::Ku, vec![t])).is_standard_action());
+        assert!(!Goal::Split(SplitId(0)).is_standard_action());
     }
 }

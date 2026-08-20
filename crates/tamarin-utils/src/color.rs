@@ -1,7 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi
-// Ported from upstream tamarin-prover sources:
-//   lib/utils/src/Data/Color.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Port of `Data.Color` from `lib/utils/src/Data/Color.hs`.
 //!
@@ -93,7 +92,7 @@ pub fn hsv_to_rgb(c: Hsv) -> Rgb {
     }
 }
 
-/// Drop saturation, keeping hue and value (used to render greyscale variants).
+/// `hsvToGray`: drop saturation, keeping hue and value.
 pub fn hsv_to_gray(c: Hsv) -> Hsv {
     Hsv {
         h: c.h,
@@ -145,10 +144,11 @@ pub fn hsv_to_hex(c: Hsv) -> String {
 //
 // Faithful `Color.hs` port. `light_color_groups` — with its helpers
 // `light_color_group_style`, `gen_color_groups` and `ColorParams` — is live in
-// `tamarin-server`'s dot renderer, which colours rule groups through this
-// palette; `hex_to_rgb` is live in `tamarin-theory::elaborate`; and
+// `tamarin-theory`'s `constraint::system::graph::color`, the `nodeColorMap`
+// palette both graph renderers colour rule groups through; `hex_to_rgb` is
+// live in `tamarin-theory::elaborate`; and
 // `rgb_to_hsv`/`hsv_to_rgb`/`rgb_to_hex`/`Rgb`/`Hsv` above are live in
-// `tamarin-sapic`/`tamarin-server`. The remaining `Color.hs` helpers
+// `tamarin-sapic` and `tamarin-theory`. The remaining `Color.hs` helpers
 // (`color_groups`/`color_group_style`, `hsv_to_hex`, `hsv_to_gray`,
 // `rgb_to_gray`) have no caller and are retained for completeness of the port.
 
@@ -267,6 +267,18 @@ mod tests {
     fn hex_to_rgb_rejects_bad_input() {
         assert!(hex_to_rgb("zzzzzz").is_none());
         assert!(hex_to_rgb("ff00").is_none());
+        assert!(hex_to_rgb("ff00000").is_none()); // seven chars
+                                                  // Six characters but seven bytes.  The
+                                                  // multibyte character straddles the
+                                                  // first byte pair.  HS pattern-matches
+                                                  // on a `String`, so HS answers a plain
+                                                  // `Nothing` here.  A byte slice of the
+                                                  // pairs would cut "é" in half and
+                                                  // panic instead.
+        assert!(hex_to_rgb("fé0000").is_none());
+        // Six bytes but five characters.  This is also not a six-character
+        // match.
+        assert!(hex_to_rgb("ffé00").is_none());
     }
 
     #[test]
@@ -275,16 +287,59 @@ mod tests {
     }
 
     #[test]
-    fn color_groups_correct_size_and_distinct() {
+    fn color_groups_index_layout() {
         let g = color_groups(0.0, &[3, 2, 4]);
-        assert_eq!(g.len(), 9);
-        let mut idxs: Vec<(usize, usize)> = g.iter().map(|(i, _)| *i).collect();
-        idxs.sort();
-        idxs.dedup();
-        assert_eq!(idxs.len(), 9);
-        // Hues should be in [0, 360).
+        let idxs: Vec<(usize, usize)> = g.iter().map(|(i, _)| *i).collect();
+        // The order is group-major and element-minor, with no gaps.  Callers
+        // zip against this order.
+        assert_eq!(
+            idxs,
+            vec![
+                (0, 0),
+                (0, 1),
+                (0, 2),
+                (1, 0),
+                (1, 1),
+                (2, 0),
+                (2, 1),
+                (2, 2),
+                (2, 3)
+            ]
+        );
+        // Hues stay in [0, 360).  `properFraction` wraps the zero-hue shift.
         for ((_, _), hsv) in &g {
             assert!(hsv.h >= 0.0 && hsv.h < 360.0);
+        }
+        // An empty layout contributes no entries.  An empty group inside a
+        // layout also contributes no entries.  Neither one divides by zero.
+        assert!(color_groups(0.0, &[]).is_empty());
+        let with_gap: Vec<(usize, usize)> =
+            color_groups(0.0, &[0, 1]).iter().map(|(i, _)| *i).collect();
+        assert_eq!(with_gap, vec![(1, 0)]);
+    }
+
+    #[test]
+    fn color_groups_style_constants_match_hs() {
+        // Hand-computed from HS `genColorGroups (colorGroupStyle 0)`.  The
+        // params of that style are scale=0.6, vBottom=0.75, vRange=0.2,
+        // sBottom=0.4, sRange=0:
+        //   toGroupHue g h        = (g + 0.5*(1-scale) + h*scale) / nGroups
+        //   toShiftedGroupHue g h = frac (toGroupHue g h + 1 - toGroupHue 0 0.5)
+        // With nGroups = 2 that makes toGroupHue 0 0.5 = 0.25.  The shift
+        // therefore lands the second element of the first group exactly on
+        // hue 0.
+        let g = color_groups(0.0, &[2, 1]);
+        let want = [
+            ((0, 0), 306.0, 0.4, 0.77), // 360 * (0.10 + 1 - 0.25)
+            ((0, 1), 0.0, 0.4, 0.80),   // 360 * (0.25 + 1 - 0.25) -> wraps to 0
+            ((1, 0), 126.0, 0.4, 0.87), // 360 * frac(0.60 + 1 - 0.25)
+        ];
+        assert_eq!(g.len(), want.len());
+        for ((got_idx, got), (idx, h, s, v)) in g.iter().zip(want) {
+            assert_eq!(*got_idx, idx);
+            assert!(approx_eq(got.h, h), "hue {:?}: {} != {}", idx, got.h, h);
+            assert!(approx_eq(got.s, s), "sat {:?}: {} != {}", idx, got.s, s);
+            assert!(approx_eq(got.v, v), "val {:?}: {} != {}", idx, got.v, v);
         }
     }
 }

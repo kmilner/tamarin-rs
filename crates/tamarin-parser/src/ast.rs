@@ -1,16 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   jdreier, beschmi, meiersi, PhilipLukertWork, felixlinker, rkunnema,
-//   BTom-GH, rsasse, and other minor contributors (see upstream git
-//   history)
-// Ported from upstream tamarin-prover sources:
-//   lib/term/src/Term/Term.hs, lib/theory/src/Items/LemmaItem.hs,
-//   lib/theory/src/Theory/Constraint/Solver/ProofMethod.hs,
-//   lib/theory/src/Theory/Constraint/System/Constraints.hs,
-//   lib/theory/src/Theory/Proof.hs,
-//   lib/theory/src/Theory/Text/Parser/Lemma.hs,
-//   lib/theory/src/Theory/Text/Parser/Proof.hs,
-//   lib/theory/src/Theory/Text/Parser/Rule.hs,
-//   lib/theory/src/Theory/Text/Parser/Signature.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Surface-syntax AST for `.spthy` files: the loose tree [`crate::parser`]
 //! produces and [`crate::wf`] (plus, downstream, `tamarin-theory`'s
@@ -89,22 +79,22 @@ pub struct Builtin {
 }
 
 impl PartialEq for Builtin {
+    // Everything but location, as with `VarSpec`.
     fn eq(&self, other: &Self) -> bool {
+        let Self { kind, location: _ } = self;
         let Self {
-            kind: _,
-            location: _,
-        } = self;
-        let Self {
-            kind: _,
+            kind: other_kind,
             location: _,
         } = other;
-        // Everything but location
-        self.kind == other.kind
+        kind == other_kind
     }
 }
 
 impl Eq for Builtin {}
 
+/// The legal `builtins:` names: one variant per HS `builtinsNames` row
+/// (Theory/Text/Parser/Signature.hs:78-86#builtinsNames).  The row ORDER lives
+/// in [`BuiltinKind::iter`], not in the variant order here.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum BuiltinKind {
     LocationsReport,
@@ -117,7 +107,6 @@ pub enum BuiltinKind {
     RevealingSigning,
     Hashing,
     DestPairing,
-    Pairing,
     DiffieHellman,
     BilinearPairing,
     Multiset,
@@ -145,12 +134,12 @@ impl BuiltinKind {
             "revealing-signing" => Some(Self::RevealingSigning),
             "hashing" => Some(Self::Hashing),
             "dest-pairing" => Some(Self::DestPairing),
-            "pairing" => Some(Self::Pairing),
             "diffie-hellman" => Some(Self::DiffieHellman),
             "bilinear-pairing" => Some(Self::BilinearPairing),
             "multiset" => Some(Self::Multiset),
             "xor" => Some(Self::Xor),
             "natural-numbers" => Some(Self::NaturalNumbers),
+            "reliable-channel" => Some(Self::ReliableChannel),
             _ => None,
         }
     }
@@ -167,7 +156,6 @@ impl BuiltinKind {
             Self::RevealingSigning => "revealing-signing",
             Self::Hashing => "hashing",
             Self::DestPairing => "dest-pairing",
-            Self::Pairing => "pairing",
             Self::DiffieHellman => "diffie-hellman",
             Self::BilinearPairing => "bilinear-pairing",
             Self::Multiset => "multiset",
@@ -177,9 +165,15 @@ impl BuiltinKind {
         }
     }
 
+    /// Every legal name, in `builtinsNames` row order: the two rows the list
+    /// carries itself (Theory/Text/Parser/Signature.hs:83-84) followed by
+    /// `builtinsDiffNames` (Theory/Text/Parser/Signature.hs:61-76).  That is
+    /// the order HS's own `expecting` list for an unrecognised `builtins:`
+    /// name is printed in, so it is oracle-pinned, not a free choice.
     pub fn iter() -> impl Iterator<Item = Self> {
         const BUILTINKINDS: [BuiltinKind; 16] = [
             BuiltinKind::LocationsReport,
+            BuiltinKind::ReliableChannel,
             BuiltinKind::DiffieHellman,
             BuiltinKind::BilinearPairing,
             BuiltinKind::Multiset,
@@ -194,7 +188,6 @@ impl BuiltinKind {
             BuiltinKind::RevealingSigning,
             BuiltinKind::Hashing,
             BuiltinKind::NaturalNumbers,
-            BuiltinKind::ReliableChannel,
         ];
         BUILTINKINDS.iter().copied()
     }
@@ -316,6 +309,16 @@ pub enum RestrictionAttr {
 }
 
 impl RestrictionAttr {
+    /// The attributes a `restriction`/`axiom` header accepts, in HS
+    /// `restrictionAttribute`'s order
+    /// (Theory/Text/Parser/Restriction.hs:69-74#restrictionAttribute).  The
+    /// list doubles as the "expected" set an unknown restriction attribute is
+    /// reported against, so it must name exactly what the `restriction`
+    /// parser accepts.
+    ///
+    /// HS's third row, `both` (`BothRestriction`,
+    /// Theory/Text/Parser/Restriction.hs:73), has no variant here: the port
+    /// rejects `restriction R [both]` where HS's diff parser accepts it.
     pub fn iter() -> impl Iterator<Item = Self> {
         const RESTRICTION_ATTRS: [RestrictionAttr; 2] =
             [RestrictionAttr::Left, RestrictionAttr::Right];
@@ -415,15 +418,26 @@ impl PartialEq for RuleAttr {
 }
 
 impl RuleAttr {
+    /// Every attribute a rule header accepts, in HS `ruleAttribute`'s order
+    /// (Theory/Text/Parser/Rule.hs:70-95#ruleAttribute).  The list is the
+    /// "expected" set an unknown rule attribute is reported against, so every
+    /// entry must be something the attribute loop accepts and every accepted
+    /// attribute must appear.
+    ///
+    /// `process=` is accepted and its value discarded (see
+    /// [`RuleAttrKind::Process`]).  The last entry is the prefix of an
+    /// external attribute (`extIdentifier`, Theory/Text/Parser/Rule.hs:92-95),
+    /// which is a name rather than a fixed keyword; HS's own `expecting` set
+    /// spells it `"x-"` too.
     pub fn expected() -> Vec<&'static str> {
         vec![
-            "color",
             "colour",
+            "color",
+            "process",
             "no_derivcheck",
             "role",
             "issapicrule",
-            "process",
-            "external attribute",
+            "x-",
         ]
     }
 }
@@ -436,7 +450,8 @@ pub enum RuleAttrKind {
     IsSapicRule,
     /// `process="..."` — the rendered `prettySapicTopLevel'` of a
     /// SAPIC-generated rule's subprocess.  HS's rule-attribute PARSER ignores
-    /// a user-written `process=` (`parseAndIgnore`, Parser/Rule.hs:68-93, see line 72), so this
+    /// a user-written `process=` (`parseAndIgnore`,
+    /// Theory/Text/Parser/Rule.hs:70-95#ruleAttribute, see line 74), so this
     /// variant is never produced by the parser; it is synthesised only by the
     /// SAPIC translation when it injects generated rules into the parsed theory
     /// (so the pretty-printer renders the `process="..."` attribute).
@@ -514,8 +529,18 @@ pub enum LemmaAttr {
 }
 
 impl LemmaAttr {
+    /// Every attribute a lemma header accepts, in HS `lemmaAttribute`'s order
+    /// (Theory/Text/Parser/Lemma.hs:39-53#lemmaAttribute).  The list is the
+    /// "expected" set an unknown lemma attribute is reported against, so every
+    /// entry must be something the attribute loop accepts and every accepted
+    /// attribute must appear.
+    ///
+    /// `typing` heads the list: it is HS's retired spelling of `sources`
+    /// (Theory/Text/Parser/Lemma.hs:41), still accepted, and still the first
+    /// name HS's own `expecting` set prints.
     pub fn expected() -> Vec<&'static str> {
         vec![
+            "typing",
             "sources",
             "reuse",
             "diff_reuse",
@@ -580,7 +605,7 @@ pub struct ParsedProofTree {
 }
 
 /// Parsed proof method.  Mirrors HS's `ProofMethod` enum (matched by
-/// `Theory.Text.Parser.Proof.proofMethod`, Proof.hs:76-85).  Plus
+/// `Theory.Text.Parser.Proof.proofMethod`, Text/Parser/Proof.hs:76-85).  Plus
 /// `Solved` for the `SOLVED` keyword leaf and `Other` for any token
 /// pattern intentionally left to the auto-prover fallback.
 #[derive(Debug, Clone, PartialEq)]
@@ -618,7 +643,7 @@ pub enum ParsedMethod {
 ///   - `Fact( ... ) @ #var`        →  ActionG
 ///   - `Fact( ... ) ▶<n> #var`     →  PremiseG (subscript-digit shows
 ///     the premise index)
-///   - `gf1 ∥ gf2 ∥ ...`           →  DisjG (Disj [guardedFormula])
+///   - `gf1 ∥ gf2 ∥ ...`           →  `DisjG (Disj [guardedFormula])`
 ///   - chain / subterm / splitEqs  →  Chain/Subterm/Split
 ///
 /// We build the cheap-to-recognise variants (Action, Premise, Disj);
@@ -655,8 +680,8 @@ pub enum GoalSpec {
     /// HS parses each disjunct as a full `Guarded` value bearing
     /// concrete LVar identities, then matches by structural equality
     /// against the open `Goal::Disj(...)` in `sys.goals` (HS
-    /// ProofMethod.hs:254-274, see line 259 `SolveGoal goal -> guard (goal `M.member`
-    /// L.get sGoals sys)`).
+    /// ProofMethod.hs:254-274#checkAndExecProofMethod, see line 258
+    /// `SolveGoal goal -> guard (goal `M.member` L.get sGoals sys)`).
     ///
     /// We can't reconstruct skeleton-text LVar indices reliably (they
     /// differ from runtime indices), so we capture each disjunct's
@@ -675,7 +700,7 @@ pub enum GoalSpec {
     /// `chainGoal = ChainG <$> (try (nodeConc <* opChain)) <*> nodePrem`
     /// (Theory/Text/Parser/Proof.hs:39-72, see line 59).  `nodeConc`/`nodePrem` parse
     /// `(<nodevar>, <natural>)` and the operator is `~~>` (HS
-    /// `prettyGoal (ChainG c p)` Constraints.hs:269-270).
+    /// `prettyGoal (ChainG c p)` Constraints.hs:275-276).
     ///
     /// We capture the time-var names (e.g. `i`, `j` from `#i`/`#j`)
     /// and the conclusion / premise indices.  The replay matcher
@@ -697,7 +722,7 @@ pub enum GoalSpec {
     ///   b <- termp
     ///   return $ SubtermG (a, b)
     /// ```
-    /// and the pretty-printer at Constraints.hs:281-282 emits
+    /// and the pretty-printer at Constraints.hs:287-288 emits
     /// `<term> ⊏ <term>` (U+228F).
     ///
     /// We keep both sides as raw text trimmed of outer whitespace; the
@@ -711,7 +736,7 @@ pub enum GoalSpec {
     ///   symbol_ "splitEqs"
     ///   parens $ (SplitG . SplitId . fromIntegral) <$> natural
     /// ```
-    /// and the pretty-printer at Constraints.hs:279-280 emits
+    /// and the pretty-printer at Constraints.hs:285-286 emits
     /// `splitEqs(<i64>)`.  The matcher looks up `Goal::Split(SplitId(N))`
     /// by exact id — split ids are stable identifiers minted by the
     /// equation store, not subject to LVar-style renaming.

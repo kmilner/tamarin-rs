@@ -29,7 +29,9 @@
 // `add` is the theory's only AC symbol: no builtin puts a term on the AC path
 // here, and no corpus theory declares an AC symbol inside a SAPIC process.
 //
-// Compared slice: the whole `theory … end` echo (see check.sh).
+// Compared slices: the whole `theory … end` echo (see check.sh), and the wf
+// report block, which pins the run clean — the wf pass walks the generated
+// restrictions, so a user-AC head reaches its checks as well.
 
 theory SapicUserAcRestr
 begin

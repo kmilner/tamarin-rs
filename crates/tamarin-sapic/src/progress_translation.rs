@@ -1,8 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   rkunnema, arcz, charlie-j, and other minor contributors (see
-//   upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/sapic/src/Sapic/ProgressTranslation.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Port of `Sapic.ProgressTranslation`
 //! (`lib/sapic/src/Sapic/ProgressTranslation.hs`).
@@ -49,14 +47,14 @@ fn rhs_p(pos: &[i64]) -> Pos {
 /// add a `Fr (varProgress child)` premise, a `ProgressFrom child` action, and
 /// thread the progress var into every rhs state fact — IF any rhs fact is a
 /// non-semi state AND `child ∈ domPF`.
-fn add_progress_from(dom_pf: &PosSet, child: &[i64], body: RuleBody) -> RuleBody {
+fn add_progress_from(dom_pf: &PosSet, child: &Pos, body: RuleBody) -> RuleBody {
     let (l, a, r, res) = body;
     let any_non_semi = r.iter().any(is_non_semi_state);
     if any_non_semi && dom_pf.contains(child) {
-        let vp = var_progress(&child.to_vec());
+        let vp = var_progress(child);
         let mut nl = vec![TransFact::Fr(vp)];
         nl.extend(l);
-        let mut na = vec![TransAction::ProgressFrom(child.to_vec())];
+        let mut na = vec![TransAction::ProgressFrom(child.clone())];
         na.extend(a);
         let nr: Vec<TransFact> = r.iter().map(|f| add_var_to_state(&vp, f)).collect();
         (nl, na, nr, res)
@@ -70,7 +68,7 @@ fn add_progress_from(dom_pf: &PosSet, child: &[i64], body: RuleBody) -> RuleBody
 /// next-position is `child` (an `LState`/`PState`), and `child` has an inverse.
 fn add_progress_to<F: Fn(&[i64]) -> Option<Pos>>(
     inv_pf: &F,
-    child: &[i64],
+    child: &Pos,
     body: RuleBody,
 ) -> RuleBody {
     let (l, a, r, res) = body;
@@ -78,13 +76,13 @@ fn add_progress_to<F: Fn(&[i64]) -> Option<Pos>>(
         matches!(
             fct,
             TransFact::State(kind, next_pos, _)
-                if next_pos.as_slice() == child
+                if next_pos == child
                     && matches!(kind, StateKind::PState | StateKind::LState)
         )
     };
     if r.iter().any(is_target_state) {
         if let Some(pos_from) = inv_pf(child) {
-            let mut na = vec![TransAction::ProgressTo(child.to_vec(), pos_from)];
+            let mut na = vec![TransAction::ProgressTo(child.clone(), pos_from)];
             na.extend(a);
             return (l, na, r, res);
         }
@@ -100,9 +98,10 @@ fn add_progress_items<F: Fn(&[i64]) -> Option<Pos>>(
     pos: &[i64],
     body: RuleBody,
 ) -> RuleBody {
+    let lhs = lhs_p(pos);
     let b = add_progress_to(inv_pf, &rhs_p(pos), body);
-    let b = add_progress_to(inv_pf, &lhs_p(pos), b);
-    add_progress_from(dom_pf, &lhs_p(pos), b)
+    let b = add_progress_to(inv_pf, &lhs, b);
+    add_progress_from(dom_pf, &lhs, b)
 }
 
 /// `extendVars domPF pos tx` (ProgressTranslation.hs:66-69): add `varProgress
@@ -214,7 +213,7 @@ fn res_progress_init() -> p::Restriction {
     }
 }
 
-/// `progressRestr anP restrictions` (ProgressTranslation.hs:156-178): append the
+/// `progressRestr anP restrictions` (ProgressTranslation.hs:156-177): append the
 /// per-from-position `Progress_<pos>_to_<...>` restrictions, then `progressInit`.
 pub fn progress_restr(
     an_proc: &AProc,
@@ -294,12 +293,12 @@ fn make_restriction(pos: &[i64], tos: &PosSet) -> p::Restriction {
     );
 
     // progressTo to = ∃ #t.2. ProgressTo_<to>( prog_<pos> ) @ #t.2
-    let progress_to = |to: &[i64]| -> p::Formula {
+    let progress_to = |to: &Pos| -> p::Formula {
         let act = p::Formula::atom(
             p::Atom::Action(
                 p::Fact {
                     persistent: false,
-                    name: format!("ProgressTo_{}", pretty_position(&to.to_vec())),
+                    name: format!("ProgressTo_{}", pretty_position(to)),
                     args: vec![pvar_term.clone()],
                     annotations: vec![],
                     location: DUMMY_LOCATION,
@@ -333,7 +332,7 @@ fn make_restriction(pos: &[i64], tos: &PosSet) -> p::Restriction {
 
 /// `bigOr` (ProgressTranslation.hs:174-176): right-nested disjunction.  The
 /// empty case never occurs (`tos` is always non-empty here).
-fn big_or(tos: &[&Pos], progress_to: &impl Fn(&[i64]) -> p::Formula) -> p::Formula {
+fn big_or(tos: &[&Pos], progress_to: &impl Fn(&Pos) -> p::Formula) -> p::Formula {
     match tos {
         [] => p::Formula::r#false(DUMMY_LOCATION),
         [to] => progress_to(to),

@@ -1,11 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   rkunnema, charlie-j, and other minor contributors (see upstream git
-//   history)
-// Ported from upstream tamarin-prover sources:
-//   lib/sapic/src/Sapic/Bindings.hs,
-//   lib/term/src/Term/Maude/Process.hs,
-//   lib/theory/src/Theory/Sapic/Process.hs,
-//   lib/theory/src/Theory/Sapic/Term.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Port of `Sapic.Bindings` from `lib/sapic/src/Sapic/Bindings.hs`.
 //!
@@ -88,7 +83,7 @@ pub fn bindings_comb(c: &ProcessCombinator<SapicLVar>) -> Vec<SapicLVar> {
 /// `accBindings`: every variable bound anywhere in `p` (with duplicates).
 ///
 /// Mirrors Haskell `accBindings = pfoldMap bindings` (Bindings.hs). `pfoldMap`
-/// (Process.hs:285-296) visits a `ProcessComb` *in-order*
+/// (Sapic/Process.hs:285-296) visits a `ProcessComb` *in-order*
 /// (`pfoldMap f pl <> f node <> pfoldMap f pr`) and a `ProcessAction`
 /// self-first (`f node <> pfoldMap f p`); `tamarin_theory::sapic::pfold_map`
 /// implements exactly that order, so the bound-variable sequence matches HS.
@@ -175,27 +170,15 @@ mod tests {
     }
 
     #[test]
-    fn channel_in_preserves_nub_order() {
-        // HS `bindingsAct` for `ChIn _ (pair y x) {}` is
-        // `nub (freesSapicTerm (pair y x)) \\ S.toList {}` = `[y, x]`
-        // (first-occurrence order), NOT the sorted `[x, y]`.
-        // freesSapicTerm = foldMap (:[]) (Theory/Sapic/Term.hs:131-132), nub keeps
-        // first-occurrence order (Sapic/Bindings.hs:21-26, see line 24).
-        use tamarin_term::builtin::pair;
-        let x = slv("x");
-        let y = slv("y");
-        let msg = pair(var_term(y.clone()), var_term(x.clone()));
-        let act: SapicAction<SapicLVar> = SapicAction::ChIn {
-            chan: None,
-            msg,
-            match_vars: BTreeSet::new(),
-        };
-        assert_eq!(bindings_act(&act), vec![y, x]);
-    }
-
-    #[test]
     fn channel_in_nub_dedups_first_occurrence() {
         // `pair(y, pair(x, y))` -> freesSapicTerm = [y, x, y]; nub -> [y, x].
+        // This one expectation checks both halves of HS
+        // `nub (freesSapicTerm t)`.  Without the `nub` the result keeps the
+        // trailing duplicate.  With a sorted set for the deduplication the
+        // result is `[x, y]` instead of `[y, x]`, which is the order of
+        // first occurrence.  freesSapicTerm = foldMap (:[])
+        // (Theory/Sapic/Term.hs:131-132), nub keeps the order of first
+        // occurrence (Sapic/Bindings.hs:21-26, see line 24).
         use tamarin_term::builtin::pair;
         let x = slv("x");
         let y = slv("y");
@@ -211,11 +194,37 @@ mod tests {
         assert_eq!(bindings_act(&act), vec![y, x]);
     }
 
+    /// `accBindings = pfoldMap bindings` takes its visit order from
+    /// `pfoldMap` (Sapic/Process.hs:285-296).  A `ProcessComb` visits in
+    /// order (`pfoldMap f pl <> f node <> pfoldMap f pr`).  A
+    /// `ProcessAction` visits itself first.  `capturedVariablesAt`
+    /// intersects against this sequence, and `Null` must add nothing to it.
     #[test]
-    fn null_process_binds_nothing() {
-        let p: Process<ProcessParsedAnnotation, SapicLVar> =
-            Process::null(ProcessParsedAnnotation::empty());
-        assert!(bindings(&p).is_empty());
-        assert!(acc_bindings(&p).is_empty());
+    fn acc_bindings_follows_pfold_map_order() {
+        let ann = ProcessParsedAnnotation::empty;
+        let new = |v: SapicLVar, body| Process::Action(SapicAction::New(v), ann(), Box::new(body));
+        let null = || Process::null(ann());
+        // The process is `new a; (new b; 0) lookup-else (new c; 0)`.  The
+        // lookup binds `d`.
+        let p: Process<ProcessParsedAnnotation, SapicLVar> = new(
+            slv("a"),
+            Process::Comb(
+                ProcessCombinator::Lookup(tamarin_term::vterm::var_term(slv("cell")), slv("d")),
+                ann(),
+                Box::new(new(slv("b"), null())),
+                Box::new(new(slv("c"), null())),
+            ),
+        );
+        let names: Vec<String> = acc_bindings(&p)
+            .iter()
+            .map(|v| v.var.name.to_string())
+            .collect();
+        // `a` comes first, because an action visits itself first.  Then come
+        // the left subtree, the combinator itself, and the right subtree.
+        // The order is not `a, d, b, c`.
+        assert_eq!(names, ["a", "b", "d", "c"]);
+        // A `Null` node binds nothing on either entry point.
+        assert!(bindings(&null()).is_empty());
+        assert!(acc_bindings(&null()).is_empty());
     }
 }

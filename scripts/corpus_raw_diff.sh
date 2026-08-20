@@ -34,6 +34,12 @@ set -uo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
+# Shared gate plumbing (gate_common.sh): OOM prologue, strip_env_lines, the
+# oracle fingerprint recipe the cache key carries.
+[ -r "$script_dir/gate_common.sh" ] || { echo "corpus_raw_diff: missing $script_dir/gate_common.sh (owns the shared gate helpers)" >&2; exit 2; }
+. "$script_dir/gate_common.sh"
+# OOM discipline: every prover child inherits the cap and dies alone.
+oom_prologue
 
 TIMEOUT="${TIMEOUT:-120}"
 RS_TIMEOUT="${RS_TIMEOUT:-30}"
@@ -84,10 +90,12 @@ if [ -z "$hs_path" ]; then
 fi
 
 # --- Build + locate the RS binary (the real prover, not the dump_proof example).
+# `tamarin-prover` is the PACKAGE; its only bin target is `tamarin-rs`, so
+# --bin tamarin-prover selects nothing and cargo errors out.
 if [ -z "${TAM_RS_NO_AUTO_BUILD:-}" ]; then
-    if ! cargo build --release --bin tamarin-prover \
+    if ! cargo build --release -p tamarin-prover \
             --manifest-path "$repo_root/Cargo.toml" >&2; then
-        echo "corpus_raw_diff.sh: cargo build --bin tamarin-prover failed" >&2
+        echo "corpus_raw_diff.sh: cargo build -p tamarin-prover failed" >&2
         exit 2
     fi
 fi
@@ -97,11 +105,16 @@ if [ ! -x "$rs_path" ]; then
     exit 2
 fi
 
-# --- Cache key: identical scheme to corpus_full_trace_diff.sh.
+# --- Cache key: identical scheme to corpus_full_trace_diff.sh, carrying the
+# oracle-binary fingerprint (gate_common's hs_fingerprint) so a rebuilt oracle
+# is a MISS, not a stale hit — the same __b suffix diff_proof_raw.sh salts in
+# and scripts/migrate_hs_cache_fp.sh rekeyed the older entries onto, so the
+# three tools exchange flagless entries again.
+hs_fingerprint "$hs_path"
 hs_cache_key() {
     local f="$1" lemma="$2" h
     h=$(sha256sum "$f" 2>/dev/null | cut -d' ' -f1)
-    printf '%s__%s__v%s.canon' "$h" "$lemma" "$CACHE_VERSION"
+    printf '%s__%s__v%s__b%s.canon' "$h" "$lemma" "$CACHE_VERSION" "$HS_FP_SALT"
 }
 
 # --- Lemma enumeration (same comment-stripping awk as corpus_full_trace_diff.sh).
@@ -140,13 +153,12 @@ lemmas_of() {
         | sed -E 's/^lemma[[:space:]]+([A-Za-z0-9_]+).*/\1/'
 }
 
-# --- Strip the only lines that legitimately differ between the two binaries.
-strip_env_lines() {
-    grep -v -e '^Git revision:' -e '^Compiled at:' -e '^[[:space:]]*processing time:' "$1"
-}
+# --- strip_env_lines (gate_common.sh): delete the only lines that
+# legitimately differ between the two binaries, keeping `analyzed:` visible
+# (the cache hit rewrites its path to this invocation's).
 export -f hs_cache_key lemmas_of strip_env_lines
 export HS_PATH="$hs_path" RS_PATH="$rs_path" TIMEOUT RS_TIMEOUT EXTRA_ENV \
-       HS_CANON_CACHE CACHE_VERSION NO_HS_CACHE DERIVCHECK_TIMEOUT HS_RTS
+       HS_CANON_CACHE CACHE_VERSION NO_HS_CACHE DERIVCHECK_TIMEOUT HS_RTS HS_FP_SALT
 
 # --- Per-lemma worker. Emits ONE machine-parseable line:
 #       <file>\t<lemma>\t<status>\t<hs_lines>\t<rs_lines>\t<diff>\t<hs_ms>\t<rs_ms>
@@ -179,7 +191,9 @@ worker() {
         hs_rc=$?
         hs_ms=$(( $(date +%s%3N) - hs_t0 ))
         if [ -n "$key" ]; then
-            if [ "$hs_rc" -eq 124 ]; then
+            # >=128 is a signal death (OOM's 137), which truncates stdout the
+            # same way the timeout does: marker, never the partial payload.
+            if [ "$hs_rc" -eq 124 ] || [ "$hs_rc" -ge 128 ]; then
                 : > "$key_timeout" 2>/dev/null || true
             elif [ -s "$hs_out" ]; then
                 # Never cache EMPTY HS output: empty means HS failed to start
@@ -191,11 +205,11 @@ worker() {
         fi
     fi
 
-    # HS timed out (cached marker or live run): the comparison is void, so do
-    # NOT run RS at all. The lemmas where HS times out are exactly the
-    # jcs18-class monsters where RS's 300s of unbounded search OOMs the
-    # machine (observed 17-43 GB RSS per worker, 2026-06-10).
-    if [ "$hs_rc" -eq 124 ]; then
+    # HS timed out or was signal-killed (cached marker or live run): the
+    # comparison is void, so do NOT run RS at all. The lemmas where HS times
+    # out are exactly the jcs18-class monsters where RS's 300s of unbounded
+    # search OOMs the machine (observed 17-43 GB RSS per worker, 2026-06-10).
+    if [ "$hs_rc" -eq 124 ] || [ "$hs_rc" -ge 128 ]; then
         printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$f" "$lemma" "SKIP_TIMEOUT" "0" "0" "-" "$hs_ms" "-"
         return 0
     fi
@@ -212,7 +226,8 @@ worker() {
     hs_lines=$(grep -c . "$tmp/hs.cmp"); hs_lines=${hs_lines// /}
     rs_lines=$(grep -c . "$tmp/rs.cmp"); rs_lines=${rs_lines// /}
 
-    if [ "$hs_rc" -eq 124 ] || [ "$rs_rc" -eq 124 ]; then
+    if [ "$hs_rc" -eq 124 ] || [ "$hs_rc" -ge 128 ] \
+       || [ "$rs_rc" -eq 124 ] || [ "$rs_rc" -ge 128 ]; then
         printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$f" "$lemma" "SKIP_TIMEOUT" "$hs_lines" "$rs_lines" "-" "$hs_ms" "$rs_ms"
         return 0
     fi

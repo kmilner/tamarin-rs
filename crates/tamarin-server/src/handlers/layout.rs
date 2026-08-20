@@ -1,9 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, jdreier, arcz, cascremers, rsasse, Kanakanajm, beschmi,
-//   felixlinker, addap, and other minor contributors (see upstream git
-//   history)
-// Ported from upstream tamarin-prover sources:
-//   src/Web/Hamlet.hs, src/Web/Types.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Page furniture: the two HTML frames a response is wrapped in and the
 //! Options menu both of them splice.
@@ -18,7 +15,7 @@ use axum::{http::StatusCode, response::Response};
 
 use super::html_with_status;
 
-/// Byte-faithful port of HS `defaultLayout'` (`src/Web/Types.hs:699-733`): the
+/// Byte-faithful port of HS `defaultLayout'` (`src/Web/Types.hs:699-736`): the
 /// `$newline never` frame Yesod's `defaultLayout` puts around a page's
 /// `setTitle` text and its widget markup.  The standalone graph shell is the
 /// one page with a frame of its own ([`intdot_shell_html`], HS `intdotLayout`).
@@ -64,7 +61,7 @@ pub(crate) const OPTIONS_MENU_ITEMS: &str =
 <li><a id=lvl3-toggle href=\"#\">Graph simplification L3</a></li>\
 </ul></li>";
 
-/// Byte-for-byte reproduction of `intdotLayout True` (`src/Web/Types.hs:795-825`)
+/// Byte-for-byte reproduction of `intdotLayout True` (`src/Web/Types.hs:795-824`)
 /// wrapping `popoutOptionsTpl True` (`src/Web/Types.hs:769-777`) and
 /// `optionsMenuItemTpl True` (`src/Web/Types.hs:749-763`).
 ///

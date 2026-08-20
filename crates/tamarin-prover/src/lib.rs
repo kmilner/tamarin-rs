@@ -6,7 +6,8 @@
 //! from integration tests without spawning a subprocess.
 
 pub mod cli;
+mod probe;
 pub mod run;
 
-pub use cli::{parse_args, Args, CliError, Subcommand};
-pub use run::{run, FileResult, LemmaResult, LemmaVerdict, RunError};
+pub use cli::{parse_args, Args, Subcommand};
+pub use run::{run, RunError};

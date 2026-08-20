@@ -1,9 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   Mathias-AURAND, jdreier, beschmi, cdumenil, meiersi, and other
-//   minor contributors (see upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/term/src/Term/SubtermRule.hs,
-//   lib/theory/src/Theory/Text/Parser/Signature.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Port of `Term.SubtermRule` from `lib/term/src/Term/SubtermRule.hs`.
 
@@ -85,7 +82,7 @@ pub fn find_all_subterms(l: &LNTerm, r: &LNTerm) -> Option<Vec<Position>> {
     }
 }
 
-/// `subterms args [] 1` (SubtermRule.hs:57-63, called at :67): for each top-level arg
+/// `subterms args [] 1` (SubtermRule.hs:59-65, called at :69): for each top-level arg
 /// `t`, find the positions where `t` occurs as a subterm of a SIBLING
 /// arg, each prefixed with that sibling's top-level index.  HS visits the
 /// remaining siblings (`zip [i..] ts`) before the already-processed ones
@@ -168,7 +165,7 @@ pub fn rrule_to_ctxt_st_rule(rule: &RRule<LNTerm>) -> Option<CtxtStRule> {
         ));
     }
     let positions = find_all_subterms(&rule.lhs, &rule.rhs)?;
-    // HS (SubtermRule.hs:52-55) matches `case sbtms of []:_ -> Nothing; [] ->
+    // HS (SubtermRule.hs:54-57) matches `case sbtms of []:_ -> Nothing; [] ->
     // Nothing; pos -> Just`. The `[]:_` arm rejects ONLY when the empty
     // position is at the HEAD of the list; an empty position later in the
     // list does not reject. The `is_empty()` guard above covers HS's `[]` arm,
@@ -205,12 +202,20 @@ mod tests {
         let needle = msg_var("x", 0);
         let inner = pair(needle.clone(), msg_var("y", 0));
         let outer = pair(needle.clone(), inner);
-        let positions = find_subterm(&outer, &needle);
-        assert_eq!(positions.len(), 2);
+        // The order is left-to-right and outermost-first.  The direct child at
+        // [0] comes before the nested occurrence at [1,0].  HS
+        // `findSubtermPrime` builds each position with a cons of the indices.
+        // It then applies `reverse` at the hit.  The recorded position
+        // therefore reads root→leaf.
+        assert_eq!(find_subterm(&outer, &needle), vec![vec![0i64], vec![1, 0]]);
     }
 
+    /// A ground RHS routes through `constantPositions` (SubtermRule.hs:67-71).
+    /// No argument occurs inside a sibling here.  `subterms` is therefore
+    /// empty, and HS falls back to `positions lhs`.  That is every position of
+    /// the LHS, and it includes the variable positions.
     #[test]
-    fn rrule_with_constant_rhs() {
+    fn rrule_with_constant_rhs_falls_back_to_all_lhs_positions() {
         use crate::builtin::true_const;
         use crate::lterm::Name;
         use crate::vterm::Lit;
@@ -218,10 +223,60 @@ mod tests {
         let rhs: LNTerm = true_const::<Lit<Name, _>>();
         let rule = RRule::new(lhs, rhs);
         let ctxt = rrule_to_ctxt_st_rule(&rule).unwrap();
-        assert!(!ctxt.rhs.positions.is_empty());
+        assert_eq!(
+            ctxt.rhs.positions,
+            vec![Vec::<i64>::new(), vec![0], vec![1]],
+            "no sibling-subterm found → `positions lhs`, not `positionsNonVar`"
+        );
     }
 
-    /// HS `rRuleToCtxtStRule` (SubtermRule.hs:52-55) rejects via the `[]:_`
+    /// HS `subterms` (SubtermRule.hs:59-65, called at :69) looks at each
+    /// top-level argument in turn.  For that argument it searches the siblings
+    /// that it has not processed yet first (`zip [i..] ts`).  It searches the
+    /// already-processed siblings only after that (`zip [0..] done`).  The two
+    /// halves carry different index bases.  The order of the concatenation is
+    /// the stored `StRhs` position order, which `strule_rewrites` walks.
+    #[test]
+    fn constant_positions_visit_remaining_siblings_before_processed_ones() {
+        use crate::function_symbols::{Constructability, NoEqSym, Privacy};
+        use crate::term::f_app_no_eq;
+        let h = NoEqSym::new(
+            b"h".to_vec(),
+            1,
+            Privacy::Public,
+            Constructability::Constructor,
+        );
+        let f = NoEqSym::new(
+            b"f".to_vec(),
+            3,
+            Privacy::Public,
+            Constructability::Constructor,
+        );
+        let c = NoEqSym::new(
+            b"c".to_vec(),
+            0,
+            Privacy::Public,
+            Constructability::Constructor,
+        );
+        let x = msg_var("x", 0);
+        let hx: LNTerm = f_app_no_eq(h, vec![x.clone()]);
+        // f(h(x), x, h(x)) = c
+        let lhs: LNTerm = f_app_no_eq(f, vec![hx.clone(), x, hx]);
+        let rule = RRule::new(lhs, f_app_no_eq(c, vec![]));
+        let ctxt = rrule_to_ctxt_st_rule(&rule).unwrap();
+        assert_eq!(
+            ctxt.rhs.positions,
+            vec![
+                vec![2i64], // arg 0's h(x) inside the remaining sibling 2
+                vec![2, 0], // arg 1's x inside the remaining sibling 2 …
+                vec![0, 0], // … before the same x inside the processed 0
+                vec![0],    // arg 2's h(x) inside the processed sibling 0
+            ],
+            "remaining siblings are visited before the already-processed ones"
+        );
+    }
+
+    /// HS `rRuleToCtxtStRule` (SubtermRule.hs:54-57) rejects via the `[]:_`
     /// arm only when the empty position is at the HEAD of the position list.
     /// For `h(x) = f(x, h(x))`, `findAllSubterms` yields `[[0], []]`: the
     /// empty position is SECOND, so HS keeps the rule (`pos -> Just`).

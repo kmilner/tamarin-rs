@@ -21,7 +21,8 @@
 //
 // No corpus theory puts two same-headed `pair` chains in one AC chain.
 //
-// Compared slice: the whole `theory … end` echo (see check.sh).
+// Compared slices: the whole `theory … end` echo (see check.sh), and the wf
+// report block, which pins the run clean — these shapes reach no wf check.
 
 theory PairEchoOrder
 begin

@@ -6,16 +6,19 @@
 #           theory  the `theory … end` echo (pretty_gate.sh's slice)
 # mode    match    the port must reproduce the captured oracle bytes
 #         diverge  the port must reproduce <name>.<slice>.rs.txt, which must
-#                  still differ from the captured oracle bytes
+#                  still differ from the captured oracle bytes.  mode is per
+#                  ROW, so every slice a `diverge` row lists has to diverge on
+#                  its own — a slice the two engines agree on reads as the
+#                  divergence having been fixed.
 # flags   extra prover flags, passed to BOTH engines
 #
 # name<TAB>slice<TAB>mode<TAB>flags
 mixed_ac_wf	wf,theory	match	--derivcheck-timeout=0
-pair_echo_order	theory	match	--derivcheck-timeout=0
+pair_echo_order	wf,theory	match	--derivcheck-timeout=0
 wf_user_ac_report	wf,theory	match	--derivcheck-timeout=0
-sapic_lowering	theory	match	--derivcheck-timeout=0
-sapic_user_ac	theory	match	--derivcheck-timeout=0
-sapic_nullary_cond	theory	match	--derivcheck-timeout=0
+sapic_lowering	wf,theory	match	--derivcheck-timeout=0
+sapic_user_ac	wf,theory	match	--derivcheck-timeout=0
+sapic_nullary_cond	wf,theory	match	--derivcheck-timeout=0
 sapic_formula_terms	wf,theory	match	--derivcheck-timeout=0
 formula_terms_offenders	wf,theory	match	--derivcheck-timeout=0
 wf_topic_interleave	wf	match	--derivcheck-timeout=0
@@ -26,6 +29,7 @@ ac_marker_collapse	theory	diverge	--derivcheck-timeout=0
 dual_declared_names	wf,theory	match	--derivcheck-timeout=0
 dual_declared_exp	wf,theory	match	--derivcheck-timeout=0
 dual_declared_equations	wf,theory	match	--derivcheck-timeout=0
-naryapp_arity_folds	theory	match	--derivcheck-timeout=0
-ac_prefix_arities	theory	match	--derivcheck-timeout=0
-positional_ac_prefix	theory	match	--derivcheck-timeout=0
+naryapp_arity_folds	wf,theory	match	--derivcheck-timeout=0
+ac_prefix_arities	wf,theory	match	--derivcheck-timeout=0
+positional_ac_prefix	wf,theory	match	--derivcheck-timeout=0
+sapic_msr_pattern_restrict	wf,theory	match	--derivcheck-timeout=0

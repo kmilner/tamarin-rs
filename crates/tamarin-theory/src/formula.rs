@@ -1,10 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   kevinmorio, meiersi, rkunnema, arcz, beschmi, jdreier, and other
-//   minor contributors (see upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/accountability/src/Accountability/Generation.hs,
-//   lib/theory/src/Theory/Model/Atom.hs,
-//   lib/theory/src/Theory/Model/Formula.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Port of `Theory.Model.Formula` from
 //! `lib/theory/src/Theory/Model/Formula.hs` — data type, basic builders, and
@@ -106,8 +102,8 @@ impl<S, H, C, V> ProtoFormula<S, H, C, V> {
 }
 
 // =============================================================================
-// Quantifier introduction (Formula.hs:347-360) + the whole-formula closures
-// `existFormula` / `forAllFormula` (Formula.hs:528-538)
+// Quantifier introduction (Theory/Model/Formula.hs:347-360) + the whole-formula closures
+// `existFormula` / `forAllFormula` (Theory/Model/Formula.hs:528-538)
 //
 // Intentionally retained: faithful, unit-tested mirror of the HS quantifier
 // machinery at those two anchors (`quantify`/`forAll`/`exists` and
@@ -121,8 +117,8 @@ impl<S, H, C, V> ProtoFormula<S, H, C, V> {
 type BLNTerm = VTerm<Name, BVar<LVar>>;
 
 /// HS `frees` on an `LNFormula`, i.e. its `HasFrees` instance
-/// (Formula.hs:321-326): `foldFrees f = foldMap (foldFrees f)`, where the
-/// `Foldable (ProtoFormula ...)` instance (Formula.hs:197-199) descends into the
+/// (Theory/Model/Formula.hs:321-326): `foldFrees f = foldMap (foldFrees f)`, where the
+/// `Foldable (ProtoFormula ...)` instance (Theory/Model/Formula.hs:197-199) descends into the
 /// atoms' terms and the `Foldable BVar` instance yields only `Free` variables —
 /// so bound De Bruijn indices contribute nothing and binder hints are ignored.
 /// Deduplicated and sorted, like [`tamarin_term::lterm::frees`].
@@ -187,7 +183,7 @@ fn map_atom_terms<T, U>(
 }
 
 /// The inner substitution of HS `quantify`, `mapLits (fmap (>>= subst i))`
-/// applied to one atom term (Formula.hs:349-352):
+/// applied to one atom term (Theory/Model/Formula.hs:349-352):
 /// replace the free occurrences of `x` by the De Bruijn index `i`, leaving
 /// every other literal — including already-bound indices — untouched.
 /// Applications are rebuilt with `f_app`, which re-normalises AC argument
@@ -205,12 +201,12 @@ fn subst_free_var(t: &BLNTerm, x: &LVar, i: u64) -> BLNTerm {
     }
 }
 
-/// HS `quantify x` (Formula.hs:347-352): turn the free variable `x` into a
+/// HS `quantify x` (Theory/Model/Formula.hs:347-352): turn the free variable `x` into a
 /// bound one, using the De Bruijn index of the binder that is about to be put
 /// in front of the formula.  The index counts the binders between the atom and
-/// that new binder, threaded by HS `mapAtoms` (Formula.hs:266-270) over
-/// `foldFormulaScope` (Formula.hs:158-173), whose `Qua` case recurses with
-/// `succ i` (Formula.hs:173).
+/// that new binder, threaded by HS `mapAtoms` (Theory/Model/Formula.hs:266-270) over
+/// `foldFormulaScope` (Theory/Model/Formula.hs:158-173), whose `Qua` case recurses with
+/// `succ i` (Theory/Model/Formula.hs:173).
 pub fn quantify(x: &LVar, fm: LNFormula) -> LNFormula {
     quantify_at(x, fm, 0)
 }
@@ -232,17 +228,17 @@ fn quantify_at(x: &LVar, fm: LNFormula, i: u64) -> LNFormula {
     }
 }
 
-/// HS `exists hint x` (Formula.hs:359-360): `Qua Ex hint . quantify x`.
+/// HS `exists hint x` (Theory/Model/Formula.hs:359-360): `Qua Ex hint . quantify x`.
 pub fn exists_var(hint: (String, LSort), x: &LVar, fm: LNFormula) -> LNFormula {
     ProtoFormula::exists(hint, quantify(x, fm))
 }
 
-/// HS `forAll hint x` (Formula.hs:355-356): `Qua All hint . quantify x`.
+/// HS `forAll hint x` (Theory/Model/Formula.hs:355-356): `Qua All hint . quantify x`.
 pub fn for_all_var(hint: (String, LSort), x: &LVar, fm: LNFormula) -> LNFormula {
     ProtoFormula::for_all(hint, quantify(x, fm))
 }
 
-/// HS `existFormula` (Formula.hs:532-534): exists-quantify every free variable
+/// HS `existFormula` (Theory/Model/Formula.hs:532-534): exists-quantify every free variable
 /// of the formula, each under its own name/sort hint.  `frees` is sorted, and
 /// the fold is a `foldl`, so the SMALLEST free variable ends up innermost.
 pub fn exist_formula(fm: LNFormula) -> LNFormula {
@@ -252,7 +248,7 @@ pub fn exist_formula(fm: LNFormula) -> LNFormula {
     })
 }
 
-/// HS `forAllFormula` (Formula.hs:536-538): as [`exist_formula`], with
+/// HS `forAllFormula` (Theory/Model/Formula.hs:536-538): as [`exist_formula`], with
 /// universal quantifiers.
 pub fn for_all_formula(fm: LNFormula) -> LNFormula {
     let vars = formula_frees(&fm);
@@ -261,10 +257,10 @@ pub fn for_all_formula(fm: LNFormula) -> LNFormula {
     })
 }
 
-// NOTE: Haskell `mapAtoms` (Formula.hs:266-270) is
+// NOTE: Haskell `mapAtoms` (Theory/Model/Formula.hs:266-270) is
 // `foldFormulaScope (\i a -> Ato $ f i a) ...`, i.e. its callback receives
 // the De Bruijn binder-depth `i` (threaded via `go (succ i)` at each `Qua`,
-// Formula.hs:173). The scope-aware machinery in the Rust port lives
+// Theory/Model/Formula.hs:173). The scope-aware machinery in the Rust port lives
 // elsewhere (depth-threaded rewrites in `guarded_types.rs`, macro
 // application in `macro_expand.rs::apply_macros_formula`), so no
 // depth-blind `mapAtoms` mirror is provided here.
@@ -281,22 +277,37 @@ mod tests {
         ProtoFormula::lfalse()
     }
 
+    /// Each builder tags the node with its own connective or quantifier.  The
+    /// four `Conn` builders are the same in every other way, and so are the
+    /// two `Qua` builders.  So the shape alone does not show a copy-paste
+    /// mistake between them.
     #[test]
-    fn build_a_simple_formula() {
-        // ∀ x:msg. true ∧ ¬false
-        let body: LNFormula = lftrue().and(lffalse().not());
-        let f: LNFormula = ProtoFormula::for_all(("x".into(), LSort::Msg), body);
-        if let ProtoFormula::Qua(q, _, _) = f {
-            assert_eq!(q, Quantifier::All);
-        } else {
-            panic!();
+    fn builders_tag_their_own_connective_and_quantifier() {
+        let hint = || ("x".to_string(), LSort::Msg);
+        let cases: [(LNFormula, Connective); 4] = [
+            (lftrue().and(lffalse()), Connective::And),
+            (lftrue().or(lffalse()), Connective::Or),
+            (lftrue().implies(lffalse()), Connective::Imp),
+            (lftrue().iff(lffalse()), Connective::Iff),
+        ];
+        for (f, want) in cases {
+            match f {
+                ProtoFormula::Conn(c, l, r) => {
+                    assert_eq!(c, want);
+                    assert_eq!(
+                        (*l, *r),
+                        (lftrue(), lffalse()),
+                        "operand order for {want:?}"
+                    );
+                }
+                other => panic!("expected Conn({want:?}), got {other:?}"),
+            }
         }
-    }
-
-    #[test]
-    fn implies_constructs_imp() {
-        let f: LNFormula = lftrue().implies(lffalse());
-        assert!(matches!(f, ProtoFormula::Conn(Connective::Imp, _, _)));
+        assert!(matches!(lftrue().not(), ProtoFormula::Not(b) if *b == lftrue()));
+        let all: LNFormula = ProtoFormula::for_all(hint(), lftrue());
+        assert!(matches!(all, ProtoFormula::Qua(Quantifier::All, h, _) if h == hint()));
+        let ex: LNFormula = ProtoFormula::exists(hint(), lftrue());
+        assert!(matches!(ex, ProtoFormula::Qua(Quantifier::Ex, h, _) if h == hint()));
     }
 
     /// `existFormula` quantifies every free variable, and `quantify` turns its
@@ -339,14 +350,14 @@ mod tests {
     // =========================================================================
     // Haskell-faithfulness invariants for Connective and Quantifier order.
     //
-    // Formula.hs:104-108: `data Connective = And | Or | Imp | Iff`
-    //                     `data Quantifier = All | Ex`
+    // Theory/Model/Formula.hs:106-108: `data Connective = And | Or | Imp | Iff`
+    // Theory/Model/Formula.hs:110-112: `data Quantifier = All | Ex`
     //
     // These orders matter for any BTreeMap<Connective,_> iteration and for
     // Haskell-faithful structural comparison / round-tripping of formulas.
     // =========================================================================
 
-    /// `Connective` Ord — `And < Or < Imp < Iff` from Formula.hs:104-105.
+    /// `Connective` Ord — `And < Or < Imp < Iff` from Theory/Model/Formula.hs:107.
     #[test]
     fn connective_ord_matches_haskell_declaration() {
         assert!(Connective::And < Connective::Or);
@@ -354,7 +365,7 @@ mod tests {
         assert!(Connective::Imp < Connective::Iff);
     }
 
-    /// `Quantifier` Ord — `All < Ex` from Formula.hs:108-109.
+    /// `Quantifier` Ord — `All < Ex` from Theory/Model/Formula.hs:111.
     ///
     /// The All<Ex order is required for Haskell-faithful structural /
     /// BTreeMap comparisons and round-tripping of formulas, matching the
@@ -365,7 +376,7 @@ mod tests {
     fn quantifier_ord_matches_haskell_declaration() {
         assert!(
             Quantifier::All < Quantifier::Ex,
-            "All MUST sort before Ex (Formula.hs:108)"
+            "All MUST sort before Ex (Theory/Model/Formula.hs:111)"
         );
     }
 }

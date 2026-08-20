@@ -2,8 +2,8 @@
   Regression theory for a Rust-port bug in `structural_match`
   (crates/tamarin-theory/src/constraint/solver/simplify.rs):
   `insert_implied_formulas_pass` matches a `[reuse]` lemma's antecedent
-  against concrete action facts to derive its consequence. A local
-  `term_lsort` helper classified every function-application term as
+  against concrete action facts to derive its consequence. The
+  matcher's sort check classified every function-application term as
   sort `Msg`, including natural-number literals like `tone()` (the
   internal `App` form of `%1`), so a Nat-sorted pattern variable
   (here `%idx`) failed to match a concrete `tone()` argument even

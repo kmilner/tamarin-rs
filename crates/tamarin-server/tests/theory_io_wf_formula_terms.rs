@@ -1,9 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   kevinmorio, meiersi, and other minor contributors (see upstream git
-//   history)
-// Ported from upstream tamarin-prover sources:
-//   lib/theory/src/Theory/Tools/Wellformedness.hs,
-//   src/Main/TheoryLoader.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! `Formula terms` (`checkTerms`) coverage of SAPIC-generated restrictions on
 //! the WEB load path — the twin of the batch `--prove` pin in
@@ -22,29 +19,18 @@
 //! for `tests/fixtures/sapic_else_branch_exp.spthy`; the web report renders
 //! through the same `format_wf_block` the batch output uses, and the block is
 //! byte-identical at the web render width.
-//!
-//! Maude-backed: skipped when no Maude binary is available.
 
 use std::path::PathBuf;
 
 use tamarin_server::theory_io;
 
-/// Locate the Maude binary (`MAUDE_PATH` env override, else the common
-/// install paths).  `None` skips the Maude-backed test below.
-fn maude_bin_path() -> Option<String> {
-    std::env::var("MAUDE_PATH").ok().or_else(|| {
-        for c in [
-            "/home/linuxbrew/.linuxbrew/bin/maude",
-            "/usr/local/bin/maude",
-            "/usr/bin/maude",
-        ] {
-            if std::path::Path::new(c).exists() {
-                return Some(c.to_string());
-            }
-        }
-        None
-    })
-}
+/// A path that cannot spawn.  The report below comes from the static
+/// wellformedness pass.  The load runs that pass before it needs a Maude
+/// handle.  The load therefore skips the best-effort Maude block, and the
+/// test is hermetic.  A run of this check under a real Maude gives the same
+/// bytes.  Nothing here skips for want of a binary.  A skip would pass
+/// without comparing anything.
+const NO_MAUDE: &str = "/nonexistent/maude-for-test";
 
 fn fixture() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -75,10 +61,6 @@ const EXPECTED_WF_BLOCK: &[&str] = &[
 
 #[test]
 fn web_load_reports_formula_terms_for_sapic_else_restriction() {
-    let Some(maude) = maude_bin_path() else {
-        eprintln!("no maude binary found; skipping");
-        return;
-    };
     // The process-wide setup `serve` applies, so the report renders at the web
     // width every HTTP response uses.
     tamarin_server::init_process_globals();
@@ -86,7 +68,7 @@ fn web_load_reports_formula_terms_for_sapic_else_restriction() {
     // the `--derivcheck-timeout=0` oracle probe (HS `compare derivChecks 0`
     // returns `Just []` on EQ, TheoryLoader.hs:578-579), so the report holds
     // the static checks only.
-    let entry = theory_io::load_from_path(&fixture(), &maude, 0).expect("fixture loads");
+    let entry = theory_io::load_from_path(&fixture(), NO_MAUDE, 0).expect("fixture loads");
 
     assert!(
         entry.wf_report.iter().any(|e| e.topic == "Formula terms"),

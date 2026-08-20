@@ -1,9 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, jdreier, and other minor contributors (see upstream git
-//   history)
-// Ported from upstream tamarin-prover sources:
-//   lib/utils/src/Text/PrettyPrint/Class.hs,
-//   lib/utils/src/Text/PrettyPrint/Html.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Port of `Text.PrettyPrint.Class` (and `Highlight`) from
 //! `lib/utils/src/Text/PrettyPrint/Class.hs`.
@@ -21,10 +18,12 @@
 //! This module is NOT used on the `--prove`/web-UI render path. The faithful,
 //! width-accurate HughesPJ port that the prover and web UI actually call lives
 //! in `tamarin-theory::pretty_hpj` (full HughesPJ with `render_with`). The only
-//! in-crate consumer of this module is `pretty_html`, which uses just `Doc`,
-//! `keyword`, `cat_with` and `render_with`. Since `pretty_html` itself has no
-//! live consumer, this module currently has no live caller; it is retained as
-//! the `Class.hs` port for the future HTML rendering path.
+//! in-crate consumer of this module is `pretty_html`, and only through its
+//! `Doc`-taking half (`render_html_doc`), which has no live caller — the one
+//! live `pretty_html` export, `escape_html_entities`, is a plain string
+//! function that never touches `Doc`. So nothing outside this crate reaches
+//! this module; it is retained as the `Class.hs` port for the future HTML
+//! rendering path.
 //!
 //! Highlight styling (`Comment`/`Keyword`/`Operator`) is carried as an enum
 //! tag on a `Doc` node; the plain-text renderer ignores it. The HTML renderer
@@ -189,10 +188,10 @@ impl Doc {
 
     /// `nest n d`: indent every line of `d` after the first by `n` spaces.
     pub fn nest(self, n: usize) -> Doc {
-        // Reached only when `self` is non-empty, so the result is non-empty.
         if self.is_empty() || n == 0 {
             self
         } else {
+            // Non-empty child, so the result is non-empty.
             Doc {
                 node: Node::Nest(n, Box::new(self.node)),
                 empty: false,
@@ -326,7 +325,8 @@ pub fn symbol(s: &str) -> Doc {
 }
 
 /// `numbered vsep ds`: prefix each `d` with a right-flushed index, then join the
-/// items with `vsep` interspersed between them (Class.hs:252-259):
+/// items with `vsep` interspersed between them
+/// (Text/PrettyPrint/Class.hs:252-259):
 ///   `foldr1 ($-$) $ intersperse vsep $ map pp $ zip [1..] ds`.
 /// `vsep` is a standalone document placed on its own "line" via `$-$`, not glued
 /// horizontally onto the items — so `numbered (text "")` yields blank separator
@@ -554,11 +554,30 @@ mod tests {
     }
 
     #[test]
-    fn fixed_width_text_pads_advertised_width() {
+    fn fixed_width_text_splits_at_the_advertised_width() {
         // 3 chars rendered, width-3 advertised: text only.
         assert_eq!(fixed_width_text(3, "abc").render(), "abc");
-        // 5 chars rendered but width-3 advertised: split into width-3 head plus zero-width tail.
+        assert_eq!(
+            format!("{:?}", fixed_width_text(3, "abc").node),
+            "Text(\"abc\")"
+        );
+        // The text renders 5 characters but declares a width of 3.  The call
+        // splits it into a head of width 3 and a tail of width zero.  The
+        // layout of this module works on whole lines, so `ZeroWidth` and
+        // `Text` render the same characters.  Only the node tree shows the
+        // split.  An assertion on `render` alone would also pass for a
+        // `fixed_width_text` that never splits.
         assert_eq!(fixed_width_text(3, "abcde").render(), "abcde");
+        assert_eq!(
+            format!("{:?}", fixed_width_text(3, "abcde").node),
+            "Cat(Text(\"abc\"), ZeroWidth(\"de\"))"
+        );
+        // `symbol` is `fixed_width_text 1`.  Everything after column 1 has
+        // width zero.
+        assert_eq!(
+            format!("{:?}", symbol("\u{2225}\u{2225}").node),
+            "Cat(Text(\"\u{2225}\"), ZeroWidth(\"\u{2225}\"))"
+        );
     }
 
     #[test]

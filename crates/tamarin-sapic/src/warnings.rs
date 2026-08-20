@@ -1,10 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   rkunnema, meiersi, and other minor contributors (see upstream git
-//   history)
-// Ported from upstream tamarin-prover sources:
-//   lib/sapic/src/Sapic/Exceptions.hs, lib/sapic/src/Sapic/Warnings.hs,
-//   lib/term/src/Term/LTerm.hs, lib/theory/src/Theory/Sapic/Term.hs,
-//   lib/theory/src/Theory/Tools/Wellformedness.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Port of `Sapic.Warnings` (`lib/sapic/src/Sapic/Warnings.hs`).
 //!
@@ -16,11 +12,11 @@
 //! `warnProcess p = map WFBoundTwice (capturedVariables p) <> toList (checkLocks p)`
 //! (Warnings.hs:17-21).  Each `WFerror` becomes a report pair
 //! `("Wellformedness-error in Process", show e)` (`toWfErrorReport`,
-//! Warnings.hs:23-26).
+//! Warnings.hs:24-27).
 //!
 //! Currently ported: the **bound-twice** check (`map WFBoundTwice
 //! (capturedVariables p)`).  `checkLocks` (the sibling lock-matching check) is
-//! NOT ported here — see the module-level note at [`warn_process`].
+//! NOT ported here — see the note on [`warn_process`].
 
 use tamarin_parser::wf::WfError;
 
@@ -29,7 +25,7 @@ use tamarin_theory::sapic::{GoodAnnotation, Process, SapicLVar};
 use crate::bindings::captured_variables;
 
 /// The fixed topic HS `toWfErrorReport` attaches to every SAPIC process error
-/// (Warnings.hs:24-27, see line 25).  Rendered verbatim (NOT underlined) by
+/// (Warnings.hs:24-27, see line 27).  Rendered verbatim (NOT underlined) by
 /// `prettyWfErrorReport` (Wellformedness.hs:118-125).
 pub const SAPIC_PROCESS_TOPIC: &str = "Wellformedness-error in Process";
 
@@ -53,9 +49,9 @@ pub fn warn_process<A: GoodAnnotation>(p: &Process<A, SapicLVar>) -> Vec<WfError
         .iter()
         .map(|v| {
             // `show (WFBoundTwice v) = "Variable bound twice: " ++ show v ++ "."`
-            // (Exceptions.hs:117-118).
+            // (Sapic/Exceptions.hs:117-118).
             let body = format!("Variable bound twice: {}.", show_sapic_lvar(v));
-            // `toWfErrorReport` (Warnings.hs:23-26) pairs each error with the
+            // `toWfErrorReport` (Warnings.hs:24-27) pairs each error with the
             // topic; `prettyWfErrorReport` (Wellformedness.hs:118-125) renders
             // a topic GROUP as `text topic $-$ nest 2 (vcat (intersperse "")
             // bodies)` — the topic header ONCE, then each body 2-space-indented
@@ -78,7 +74,7 @@ pub fn check_wellformedness<A: GoodAnnotation>(p: &Process<A, SapicLVar>) -> Vec
 
 /// `show (SapicLVar v stype)` (Theory/Sapic/Term.hs:108-110):
 /// `show v ++ maybe "" (":" ++)` — the HS-faithful `Show LVar`
-/// (LTerm.hs:526-533) with the optional `:type` suffix.
+/// (Term/LTerm.hs:550-557#show) with the optional `:type` suffix.
 fn show_sapic_lvar(v: &SapicLVar) -> String {
     let base = show_lvar(&v.var);
     match &v.stype {
@@ -87,7 +83,8 @@ fn show_sapic_lvar(v: &SapicLVar) -> String {
     }
 }
 
-/// `show (LVar v s i)` (Term/LTerm.hs:526-533):
+/// `show (LVar v s i)` (Term/LTerm.hs:550-557#show, prefix table
+/// Term/LTerm.hs:193-199#sortPrefix):
 /// `sortPrefix s ++ body`, where `body = show i` if the name is empty,
 /// `v` if `i == 0`, else `v ++ "." ++ show i`.
 fn show_lvar(v: &tamarin_term::lterm::LVar) -> String {
@@ -147,23 +144,49 @@ mod tests {
         assert!(check_wellformedness(&p).is_empty());
     }
 
+    /// The test covers every branch of HS `Show (SapicLVar)` and `Show LVar`
+    /// (Theory/Sapic/Term.hs:108-110, Term/LTerm.hs:550-557#show, prefix table
+    /// Term/LTerm.hs:193-199#sortPrefix).  The port splices the result without
+    /// change into the body of the `Variable bound twice: …` report.
     #[test]
-    fn single_binder_is_fine() {
-        // `new x` — no capture.
-        let p = new_action(msg_var("x"), null());
-        assert!(check_wellformedness(&p).is_empty());
-    }
-
-    #[test]
-    fn fresh_sorted_var_shows_with_tilde() {
-        // A fresh-sorted SapicLVar prints with the `~` prefix (HS Show LVar).
-        let v = SapicLVar::untyped(LVar::new("k", LSort::Fresh, 0));
-        assert_eq!(show_sapic_lvar(&v), "~k");
-    }
-
-    #[test]
-    fn typed_var_shows_with_type_suffix() {
-        let v = SapicLVar::new(LVar::new("m", LSort::Msg, 0), Some("bitstring".into()));
-        assert_eq!(show_sapic_lvar(&v), "m:bitstring");
+    fn show_sapic_lvar_matches_hs_show() {
+        let show = |name: &str, sort, idx, ty: Option<&str>| {
+            show_sapic_lvar(&SapicLVar::new(
+                LVar::new(name, sort, idx),
+                ty.map(str::to_string),
+            ))
+        };
+        for (label, got, want) in [
+            (
+                "msg sort has no prefix",
+                show("x", LSort::Msg, 0, None),
+                "x",
+            ),
+            ("fresh prefix", show("k", LSort::Fresh, 0, None), "~k"),
+            ("pub prefix", show("a", LSort::Pub, 0, None), "$a"),
+            ("node prefix", show("i", LSort::Node, 0, None), "#i"),
+            ("nat prefix", show("n", LSort::Nat, 0, None), "%n"),
+            // `i /= 0` appends `.i`.  A name that is empty renders the index
+            // alone.
+            ("nonzero index", show("x", LSort::Msg, 2, None), "x.2"),
+            ("indexed fresh", show("k", LSort::Fresh, 1, None), "~k.1"),
+            (
+                "empty name is the index",
+                show("", LSort::Msg, 7, None),
+                "7",
+            ),
+            (
+                "type suffix",
+                show("m", LSort::Msg, 0, Some("bitstring")),
+                "m:bitstring",
+            ),
+            (
+                "prefix, index and type together",
+                show("m", LSort::Fresh, 3, Some("lol")),
+                "~m.3:lol",
+            ),
+        ] {
+            assert_eq!(got, want, "{label}");
+        }
     }
 }

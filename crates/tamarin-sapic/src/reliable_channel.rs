@@ -1,7 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   rkunnema, charlie-j, xaDxelA, arcz
-// Ported from upstream tamarin-prover sources:
-//   lib/sapic/src/Sapic/ReliableChannelTranslation.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Port of `Sapic.ReliableChannelTranslation`
 //! (`lib/sapic/src/Sapic/ReliableChannelTranslation.hs`).
@@ -159,13 +158,10 @@ pub fn reliable_channel_trans_act(
             );
             Ok(Some((vec![body], tx2)))
         }
-        // Malformed reliable channel action: WFReliable.
-        // (The `'c'`/`'r'` arms above already consumed the well-formed cases;
-        // these remaining `Just`/`Nothing` channel cases are errors.)
-        SapicAction::ChOut { chan: Some(_), .. } | SapicAction::ChIn { chan: Some(_), .. } => {
-            Err("process not well-formed: reliable channel".to_string())
-        }
-        SapicAction::ChOut { chan: None, .. } | SapicAction::ChIn { chan: None, .. } => {
+        // `throwM WFReliable` for every remaining channel action
+        // (ReliableChannelTranslation.hs:75-78, four guards with one body): the
+        // `'c'`/`'r'` arms above already consumed the well-formed cases.
+        SapicAction::ChOut { .. } | SapicAction::ChIn { .. } => {
             Err("process not well-formed: reliable channel".to_string())
         }
         // Otherwise: fall through to the base translation.

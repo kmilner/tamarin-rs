@@ -1,0 +1,33 @@
+// cli_flags_chan.spthy plus an in-file `heuristic: i` header — the fixture
+// for the CLI-override pin in tests/cli_e2e.rs: `i` and `s` reach different
+// `secrecy` proofs here, so a `--heuristic=s` run diverging from the bare
+// run proves the flag overrode the header (HS `apDefaultHeuristic <|>
+// pcHeuristic`, Theory/Proof.hs:706-707).
+theory CliFlagsChanHeur
+begin
+
+heuristic: i
+
+builtins: symmetric-encryption
+
+rule Register:
+  [ Fr(~k) ] --[ Reg($A, ~k) ]-> [ !Key($A, ~k) ]
+
+rule Send:
+  [ !Key($A, ~k), Fr(~m) ] --[ Sent($A, ~m) ]-> [ Out(senc(~m, ~k)) ]
+
+rule Recv:
+  [ !Key($A, k), In(senc(m, k)) ] --[ Recv($A, m) ]-> [ ]
+
+rule Reveal:
+  [ !Key($A, ~k) ] --[ Rev($A) ]-> [ Out(~k) ]
+
+lemma secrecy:
+  all-traces
+  "All A m #i #j. Sent(A, m) @ i & K(m) @ j ==> Ex #r. Rev(A) @ r"
+
+lemma exec:
+  exists-trace
+  "Ex A m #i #j. Sent(A, m) @ i & Recv(A, m) @ j"
+
+end

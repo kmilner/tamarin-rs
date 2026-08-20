@@ -1,9 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, addap, and other minor contributors (see upstream git
-//   history)
-// Ported from upstream tamarin-prover sources:
-//   lib/utils/src/Extension/Data/Monoid.hs,
-//   lib/utils/src/Extension/Prelude.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Port of `Extension.Prelude` (and `Extension.Data.Monoid::MinMax`) from
 //! `lib/utils/src/Extension/Prelude.hs` and `Extension/Data/Monoid.hs`.
@@ -155,22 +152,20 @@ pub fn split_by<T: Clone, F: FnMut(&T) -> bool>(xs: &[T], mut p: F) -> Vec<Vec<T
     }
     let mut out: Vec<Vec<T>> = Vec::new();
     let mut cur: Vec<T> = Vec::new();
-    let mut had_separator = false;
+    let mut ended_on_separator = false;
     for x in xs {
         if p(x) {
             out.push(std::mem::take(&mut cur));
-            had_separator = true;
+            ended_on_separator = true;
         } else {
             cur.push(x.clone());
-            had_separator = false;
+            ended_on_separator = false;
         }
     }
     // Matches Haskell `unfoldr split`: a chunk is emitted before every
-    // separator and once more for the final (non-separator-terminated)
-    // remainder. The final partial chunk `cur` is emitted unless the input
-    // ended on a separator AND `cur` is empty, i.e. `!had_separator ||
-    // !cur.is_empty()`.
-    if !had_separator || !cur.is_empty() {
+    // separator, plus one final chunk for the remainder — which a trailing
+    // separator has already flushed, so it is skipped there.
+    if !ended_on_separator {
         out.push(cur);
     }
     out
@@ -279,6 +274,7 @@ pub fn flush_left(n: usize, s: &str) -> String {
 
 fn flush_by(sep: &str, n: usize, s: &str, right: bool) -> String {
     let s_len = s.chars().count();
+    // An empty `sep` would make HS's `cycle sep` diverge; pad nothing instead.
     if s_len >= n || sep.is_empty() {
         return s.to_string();
     }
@@ -466,6 +462,17 @@ mod tests {
     }
 
     #[test]
+    fn keep_first_masks_against_every_earlier_pick() {
+        // The relation "b is a multiple of a" is asymmetric, so the masking is
+        // directional.  The masks also outlive the pick that set them.  The 2
+        // sits three positions earlier than the 4 and drops it.  The 3 drops
+        // the 9 in the same way.  In both cases an intervening pick lies
+        // between them, and that pick does not mask the dropped value.
+        let xs = vec![2, 3, 5, 4, 9];
+        assert_eq!(keep_first(&xs, |a, b| b % a == 0), vec![2, 3, 5]);
+    }
+
+    #[test]
     fn pairs() {
         assert_eq!(swap((1, 'a')), ('a', 1));
         assert_eq!(sort_pair((3, 1)), (1, 3));
@@ -478,6 +485,19 @@ mod tests {
         assert_eq!(flush_left(5, "ab"), "ab   ");
         assert_eq!(flush_right_by("0", 4, "12"), "0012");
         assert_eq!(flush_right(2, "abcd"), "abcd"); // no truncation
+                                                    // The code cycles a multi-character
+                                                    // separator.  It cycles only as far
+                                                    // as the padding needs.  HS uses
+                                                    // `take (n - length s) (cycle sep)`.
+        assert_eq!(flush_right_by("ab", 5, "x"), "ababx");
+        assert_eq!(flush_left_by("ab", 5, "x"), "xabab");
+        // The width counts characters, not bytes.  "é" is one column and
+        // two bytes.
+        assert_eq!(flush_right(3, "é"), "  é");
+        assert_eq!(flush_right_by("é", 3, "x"), "ééx");
+        // HS `cycle ""` diverges.  The port adds no padding and does not hang.
+        assert_eq!(flush_right_by("", 5, "ab"), "ab");
+        assert_eq!(flush_left_by("", 5, "ab"), "ab");
     }
 
     #[test]

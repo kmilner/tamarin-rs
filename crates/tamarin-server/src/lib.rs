@@ -1,10 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, arcz, jdreier, cascremers, kevinmorio, beschmi, rsasse,
-//   Kanakanajm, addap, felixlinker, and other minor contributors (see
-//   upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   src/Main/Mode/Interactive.hs, src/Main/TheoryLoader.hs,
-//   src/Web/Dispatch.hs, src/Web/Types.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! HTTP server for the Tamarin prover (Rust port) interactive UI.
 //!
@@ -57,11 +53,13 @@
 // the `disallowed_macros` freeze is allowed for this file.
 #![allow(clippy::disallowed_macros)]
 
-pub mod graph;
 pub mod handlers;
 pub mod routes;
 pub mod state;
 pub mod theory_io;
+// `Web.Utils`' `abbrev` is reached only from the JSON graph handler; nothing
+// outside this crate names it.
+pub(crate) mod web_utils_abbrev;
 
 pub use routes::router;
 pub use state::{AppState, TheoryEntry, TheoryStore};
@@ -81,20 +79,28 @@ pub struct ServerConfig {
     pub frontend_dist: Option<PathBuf>,
     /// Path to the Maude binary.
     pub maude_path: String,
-    /// Proof-search step budget threaded to `prove_lemma` for API
-    /// compatibility. Currently a no-op: the solver bounds search by
-    /// ID-DFS depth + wall-clock deadline (HS-faithful), so this value
-    /// is accepted but ignored.
-    pub max_steps: usize,
     /// `--derivcheck-timeout` for the dynamic message-derivation checks
     /// run at theory load (HS interactive default 5s; 0 disables).  Set
     /// from the CLI flag by `interactive` setup.
     pub derivcheck_timeout: u32,
     /// CLI `--stop-on-trace` (None = flag absent).  Merged with each
     /// theory's in-file `configuration:` block at `ProofState::new` time
-    /// per HS `closeTheory` precedence (TheoryLoader.hs:640-666): the CLI
-    /// value wins; the block is consulted only when this is `None`.
+    /// per HS `closeTheory`'s `configStopOnTrace` (TheoryLoader.hs:759-763):
+    /// the CLI value wins; the block is consulted only when this is `None`.
     pub stop_on_trace: Option<tamarin_theory::constraint::solver::context::CutStrategy>,
+    /// CLI `--with-dot` — the GraphViz binary every graph render shells out
+    /// to, the bare `"dot"` (resolved through `$PATH`) when the flag is
+    /// absent.  That is HS `readOutputCommand`'s `OutDot` branch
+    /// (Environment.hs:41-45), whose string `dotToImg` invokes verbatim
+    /// (Web/Theory.hs:1494-1497).
+    pub dot_path: String,
+    /// CLI `--with-json` — when given, HS `readOutputCommand` switches to
+    /// `OutJSON` (Environment.hs:41-45, overriding `--with-dot`) and the
+    /// graph route renders through `jsonToImg`: the system's JSON graph is
+    /// written to a file and `<json-cmd> <img> <json>` produces the image
+    /// (`imgThyPath` → `renderGraphCode`, Web/Theory.hs:1404-1412, 1484-1491).
+    /// `None` = flag absent, the `dot` pipeline above.
+    pub json_path: Option<String>,
 }
 
 impl ServerConfig {
@@ -104,9 +110,10 @@ impl ServerConfig {
             data_dir,
             frontend_dist: None,
             maude_path,
-            max_steps: 500,
             derivcheck_timeout: 5,
             stop_on_trace: None,
+            dot_path: "dot".to_string(),
+            json_path: None,
         }
     }
 }
@@ -115,10 +122,10 @@ impl ServerConfig {
 ///
 /// Both statics default to what the `--prove` CLI wants, so a process that
 /// serves HTTP must opt out of those defaults BEFORE the first request —
-/// [`set_keep_sys`](tamarin_theory::constraint::solver::search::set_keep_sys)
-/// in particular before the first `autoprove` search, since a search that
-/// runs without it leaves every proof node's `System` dropped and the
-/// `/json/` and constraint-system panes render empty.
+/// the [`SysRetention`](tamarin_theory::constraint::solver::search::SysRetention)
+/// policy in particular before the first `autoprove` search, since a search
+/// that runs under the default leaves every proof node's `System` dropped and
+/// the `/json/` and constraint-system panes render empty.
 ///
 /// Every entry point that stands this server up calls this: [`serve`] and the
 /// `tests/common` harness.  Anything process-wide the server relies on belongs
@@ -131,8 +138,8 @@ pub fn init_process_globals() {
     // any rendering.  (Console-only `renderDoc` at 110 has no HTTP
     // analogue here.)
     tamarin_theory::pretty_hpj::set_display_width(
-        tamarin_theory::pretty_hpj::WEB_LINE_LENGTH,
-        tamarin_theory::pretty_hpj::WEB_RIBBON,
+        tamarin_theory::pretty_hpj::DEFAULT_LINE_LENGTH,
+        tamarin_theory::pretty_hpj::DEFAULT_RIBBON,
     );
 
     // Retain each proof node's constraint `System` after expansion.  The
@@ -141,7 +148,9 @@ pub fn init_process_globals() {
     // renders the annotated system + applicable proof methods at every
     // proof path — HS keeps a `Just System` on every `IncrementalProof`
     // node.
-    tamarin_theory::constraint::solver::search::set_keep_sys(true);
+    tamarin_theory::constraint::solver::search::set_sys_retention(
+        tamarin_theory::constraint::solver::search::SysRetention::KeepAll,
+    );
 }
 
 /// Start the server, blocking until shutdown.
@@ -156,10 +165,10 @@ pub async fn serve(
     let store = TheoryStore::default();
 
     // Eager-load every command-line theory.  Per-theory stdout reporting
-    // mirrors HS `loadTheories` (Web/Dispatch.hs:157-198): a non-empty
+    // mirrors HS `loadTheories` (Web/Dispatch.hs:160-212): a non-empty
     // wellformedness report is echoed via `ppInteractive`
-    // (Dispatch.hs:200-209), and a load failure prints the dashed
-    // `reportFailure` block (Dispatch.hs:191-198) and skips the theory.
+    // (Dispatch.hs:203-212), and a load failure prints the dashed
+    // `reportFailure` block (Dispatch.hs:194-201) and skips the theory.
     for p in &theory_paths {
         match theory_io::load_from_path(p, &cfg.maude_path, cfg.derivcheck_timeout) {
             Ok(entry) => {
@@ -196,9 +205,9 @@ pub async fn serve(
 
     let app = router(state.clone());
     let listener = tokio::net::TcpListener::bind(cfg.bind_addr).await?;
-    // HS ready message (Interactive.hs:68-166, see line 104, printed after all theories
-    // load, Dispatch.hs:149-209, see line 160) — note the trailing space after "at" and the
-    // indented URL line.
+    // HS ready message (Interactive.hs:125), printed by `loadTheories` after
+    // every theory has loaded (Dispatch.hs:160-164, see line 163) — note the
+    // trailing space after "at" and the indented URL line.
     println!(
         "Finished loading theories ... server ready at \n\n    http://{}\n",
         cfg.bind_addr,

@@ -1,27 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, jdreier, beschmi, rkunnema, PhilipLukertWork, charlie-j,
-//   BTom-GH, racoucho1u, felixlinker, rsasse, kevinmorio, ValentinYuri,
-//   Mathias-AURAND, sans-sucre, and other minor contributors (see
-//   upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/sapic/src/Sapic/Basetranslation.hs,
-//   lib/term/src/Term/Builtin/Signature.hs, lib/term/src/Term/LTerm.hs,
-//   lib/term/src/Term/Macro.hs, lib/term/src/Term/Maude/Parser.hs,
-//   lib/term/src/Term/Substitution/SubstVFree.hs,
-//   lib/term/src/Term/Term.hs,
-//   lib/term/src/Term/Term/FunctionSymbols.hs,
-//   lib/term/src/Term/Term/Raw.hs, lib/theory/src/Rule.hs,
-//   lib/theory/src/Theory.hs,
-//   lib/theory/src/Theory/Model/Restriction.hs,
-//   lib/theory/src/Theory/Sapic.hs,
-//   lib/theory/src/Theory/Text/Parser.hs,
-//   lib/theory/src/Theory/Text/Parser/Lemma.hs,
-//   lib/theory/src/Theory/Text/Parser/Let.hs,
-//   lib/theory/src/Theory/Text/Parser/Macro.hs,
-//   lib/theory/src/Theory/Text/Parser/Rule.hs,
-//   lib/theory/src/Theory/Text/Parser/Signature.hs,
-//   lib/theory/src/Theory/Text/Parser/Term.hs,
-//   lib/theory/src/Theory/Tools/Wellformedness.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Elaboration: parser AST → typed `Theory`.
 //!
@@ -79,9 +58,9 @@ thread_local! {
 use tamarin_term::lterm::{Name, NameTag};
 use tamarin_term::maude_sig::{
     asym_enc_dest_maude_sig, asym_enc_maude_sig, bp_maude_sig, dh_maude_sig, enable_diff_maude_sig,
-    hash_maude_sig, location_report_maude_sig, minimal_maude_sig, mset_maude_sig, nat_maude_sig,
-    pair_dest_maude_sig, pair_maude_sig, reveal_signature_maude_sig, signature_dest_maude_sig,
-    signature_maude_sig, sym_enc_dest_maude_sig, sym_enc_maude_sig, xor_maude_sig, MaudeSig,
+    hash_maude_sig, location_report_maude_sig, mset_maude_sig, nat_maude_sig, pair_dest_maude_sig,
+    reveal_signature_maude_sig, signature_dest_maude_sig, signature_maude_sig,
+    sym_enc_dest_maude_sig, sym_enc_maude_sig, xor_maude_sig, MaudeSig,
 };
 use tamarin_term::term::{f_app_no_eq, Term};
 use tamarin_term::vterm::{Lit, VTerm};
@@ -323,7 +302,8 @@ pub fn sapic_public_names_report(thy: &Theory) -> Vec<tamarin_parser::wf::WfErro
         _ => None,
     }) {
         // HS `showRuleCaseName ru = prettyProtoRuleName (ruleName ru)`
-        // (Rule.hs:1225-1227) = `prefixIfReserved n` for a `StandRule n`.
+        // (Theory/Model/Rule.hs:1338-1340) = `prefixIfReserved n` for a
+        // `StandRule n`.
         let case_name = crate::rule::prefix_if_reserved(r.name());
         let mut names: Vec<String> = Vec::new();
         for f in r
@@ -525,9 +505,9 @@ pub fn elaborate(parser_thy: &p::Theory) -> Result<Theory, ElabError> {
     // Apply macros at parser-AST level BEFORE predicate expansion.
     // Mirrors HS's parse-time application: lemmas are expanded by
     // `parseLemmaWithMacros` (Theory/Text/Parser.hs:97-105); rules by
-    // `closeProtoRule` (lib/theory/src/Rule.hs:96-98) before
+    // `closeProtoRule` (lib/theory/src/Rule.hs:82-86) before
     // variantsProtoRule runs; restrictions by `applyMacroInRestriction`
-    // (Theory/Model/Restriction.hs:163-165).  We apply at the parser-AST
+    // (Theory/Model/Restriction.hs:164-166).  We apply at the parser-AST
     // level so a single pass handles every term-bearing item before any
     // typed conversion (`term_to_lnterm` / `formula_to_guarded`) sees a
     // macro call.  Predicate-expand may itself substitute the inlined
@@ -657,14 +637,14 @@ pub struct CollectedUserFuns {
     /// A name declared `[AC]` twice with differing options keeps the least
     /// symbol by `Ord AcFctSym`, mirroring HS `lookupArity`'s `lookup` over
     /// the ascending `S.toList (userDefinedFunSyms maudeSig)`
-    /// (Theory/Text/Parser/Term.hs:62-72).
+    /// (Theory/Text/Parser/Term.hs:62-71).
     ac: BTreeMap<String, AcFctSym>,
     /// Names (any arity) of every `NoEq` symbol of the full signature — the
     /// non-`[AC]` user `functions:` declarations, each enabled builtin's
     /// `NoEq` contribution to `funSyms`, and the always-present pair
     /// signature (`minimalMaudeSig` is `pairFunSig` — `pair`/`fst`/`snd` —
     /// Term/Maude/Signature.hs:224-226).  Mirrors HS
-    /// `noEqFunSyms maudeSig` (Signature.hs:157-158); read by
+    /// `noEqFunSyms maudeSig` (Term/Maude/Signature.hs:156-157); read by
     /// [`CollectedUserFuns::prefix_resolves_to_user_ac`].
     noeq_names: BTreeSet<String>,
     /// NON-`[AC]` user `functions:` names marked `[NDC]`.
@@ -783,7 +763,7 @@ fn collect_user_funs(items: &[p::TheoryItem]) -> CollectedUserFuns {
                 }
                 // Every `NoEq` name the builtin folds into `funSyms` — the
                 // set `lookupArity` ranks ahead of the `ACfctUser` entries
-                // (Theory/Text/Parser/Term.hs:62-72), e.g. `exp` under
+                // (Theory/Text/Parser/Term.hs:62-71), e.g. `exp` under
                 // `builtins: diffie-hellman`.
                 for c in builtin_noeq_fun_names(n.kind) {
                     noeq_names.insert(c);
@@ -826,7 +806,7 @@ fn collect_user_funs(items: &[p::TheoryItem]) -> CollectedUserFuns {
 /// The set of 0-arity function-symbol names for a theory: every user
 /// `functions: f/0` declaration plus each enabled builtin's nullary constants.
 /// Mirrors HS's parser-state `nullaryApp` lookup (Theory/Text/Parser/Term.hs:
-/// 139-143), which resolves a bare `<name>` token to `FApp (NoEq <sym>) []`
+/// 158-163), which resolves a bare `<name>` token to `FApp (NoEq <sym>) []`
 /// rather than `Var <name>` when `<name>` is 0-arity in the signature.  The
 /// `_restrict` / SAPIC-`Cond` restriction lift (`rule_restriction`) needs this
 /// set to keep such constants inlined in the generated restriction formula
@@ -843,7 +823,9 @@ pub fn nullary_fun_names(items: &[p::TheoryItem]) -> BTreeSet<String> {
 /// destructor flags into `term_to_lnterm`'s symbol resolution — HS reads these
 /// from the per-theory signature via `lookupArity`.
 fn builtin_fun_attrs(builtin: BuiltinKind) -> Vec<(String, Privacy, Constructability)> {
-    let msig = builtin_sig(builtin);
+    let Some(msig) = builtin_sig(builtin) else {
+        return Vec::new();
+    };
     msig.st_fun_syms
         .iter()
         .filter_map(|s| {
@@ -873,7 +855,7 @@ fn builtin_fun_attrs(builtin: BuiltinKind) -> Vec<(String, Privacy, Constructabi
 /// hand-curated table) we guarantee the set we recognise matches HS's
 /// `funSyms`, e.g. `oneSymString = "one"` and
 /// `dhNeutralSymString = "DH_neutral"` for `dhFunSig`
-/// (lib/term/src/Term/Term/FunctionSymbols.hs:134-134,137,153,163,192).
+/// (lib/term/src/Term/Term/FunctionSymbols.hs:226,229,284).
 fn builtin_nullary_names_from_msig(msig: &MaudeSig) -> Vec<String> {
     msig.fun_syms
         .iter()
@@ -894,12 +876,13 @@ fn builtin_nullary_names_from_msig(msig: &MaudeSig) -> Vec<String> {
 /// installs the corresponding `*FunSig` into the parser-state MaudeSig,
 /// and `nullaryApp` then consults that signature.
 ///
-/// Returns an empty vector for unknown builtin names (HS would never
-/// reach this point: `enableBuiltin` is exhaustive over the parsed
-/// keywords; unknowns fail at the parser).
+/// Returns an empty vector for `reliable-channel`, the one builtin with
+/// no signature.
 pub fn builtin_nullary_constants(builtin: BuiltinKind) -> Vec<String> {
-    let msig = builtin_sig(builtin);
-    builtin_nullary_names_from_msig(&msig)
+    match builtin_sig(builtin) {
+        Some(msig) => builtin_nullary_names_from_msig(&msig),
+        None => Vec::new(),
+    }
 }
 
 /// The names (any arity) of every `NoEq` function symbol a given `builtins:`
@@ -908,10 +891,12 @@ pub fn builtin_nullary_constants(builtin: BuiltinKind) -> Vec<String> {
 /// `DH_neutral` for `diffie-hellman`, Term/Maude/Signature.hs:110-125) —
 /// read off the same `MaudeSig` as [`builtin_nullary_constants`].  These are
 /// the names `lookupArity` resolves as `NoEqUser` ahead of any `ACfctUser`
-/// entry (Theory/Text/Parser/Term.hs:62-72).  Empty for unknown names, as
-/// with [`builtin_nullary_constants`].
+/// entry (Theory/Text/Parser/Term.hs:62-71).  Empty for `reliable-channel`,
+/// as with [`builtin_nullary_constants`].
 fn builtin_noeq_fun_names(builtin: BuiltinKind) -> Vec<String> {
-    let msig = builtin_sig(builtin);
+    let Some(msig) = builtin_sig(builtin) else {
+        return Vec::new();
+    };
     msig.fun_syms
         .iter()
         .filter_map(|fs| match fs {
@@ -934,6 +919,16 @@ fn current_user_funs() -> Arc<CollectedUserFuns> {
 /// elaboration.  See `CollectedUserFuns::nullary` for the populating logic.
 pub(crate) fn is_user_nullary_fun(name: &str) -> bool {
     USER_FUNS.with(|c| c.borrow().nullary.contains(name))
+}
+
+/// The user-declared `[AC]` symbol names of the current elaboration,
+/// ascending by name — HS's `S.toList (stACFunSyms sig)`
+/// (Term/Maude/Signature.hs:98).  Callers that re-parse rendered term text
+/// hand this to `parse_term_str` so `acterm`
+/// (Theory/Text/Parser/Term.hs:166-172) recognises the INFIX spelling of
+/// those symbols; without it `(z add h(y))` is a parse error.
+pub(crate) fn current_user_ac_names() -> Vec<String> {
+    USER_FUNS.with(|c| c.borrow().ac.keys().cloned().collect())
 }
 
 /// Join of the `[NDC]` and `[NDC-diff]` attributes (HS `function`'s `joinNDC`).
@@ -981,11 +976,11 @@ impl CollectedUserFuns {
     /// user-declared `[AC]` symbol.  HS `lookupArity` resolves those
     /// spellings by a list lookup over `S.toList (userDefinedFunSyms
     /// maudeSig)` in which every `NoEqUser` sorts before every `ACfctUser`
-    /// (Theory/Text/Parser/Term.hs:62-72, constructor order of
+    /// (Theory/Text/Parser/Term.hs:62-71, constructor order of
     /// `UserDefinedSym`, Term/Term/FunctionSymbols.hs:146-147), so a name
     /// that is ALSO a `NoEq` symbol of the full signature resolves to that
     /// `NoEq` symbol, never the AC one.  The infix spelling bypasses
-    /// `lookupArity` (`acterm`, Term.hs:163-168): `BinOp::AcFct` readers do
+    /// `lookupArity` (`acterm`, Theory/Text/Parser/Term.hs:166-172): `BinOp::AcFct` readers do
     /// not consult this.
     fn prefix_resolves_to_user_ac(&self, name: &str) -> bool {
         self.ac.contains_key(name) && !self.noeq_names.contains(name)
@@ -1064,7 +1059,7 @@ impl CollectedUserFuns {
     /// The `AcFctSym` for a user-declared `[AC]` name, carrying the privacy /
     /// constructability / NDC flags read off ITS OWN declaration (HS
     /// `lookupArity` / `acterm` both hand back the whole `ACfctUser` tuple
-    /// stored in `stACFunSyms`, Theory/Text/Parser/Term.hs:62-72,163-168) —
+    /// stored in `stACFunSyms`, Theory/Text/Parser/Term.hs:62-71,166-172) —
     /// never the flags of a same-named `NoEq` declaration.
     ///
     /// The default-attribute fallback covers a name the bundle has no `[AC]`
@@ -1135,7 +1130,7 @@ impl Drop for UserFunsForTheoryGuard {
 /// intruder-variant files in `data/`).
 ///
 /// HS analogue: the parser-state MaudeSig consulted by `nullaryApp`
-/// (Theory/Text/Parser/Term.hs:139-143).  HS sets it via
+/// (Theory/Text/Parser/Term.hs:158-163).  HS sets it via
 /// `setState (mkStateSig msig)` at the top of `parseIntruderRules`
 /// (Theory/Text/Parser/Rule.hs:200-204).
 pub struct MaudeSigNullaryGuard {
@@ -1203,7 +1198,7 @@ fn elaborate_already_expanded(parser_thy: &p::Theory) -> Result<Theory, ElabErro
     // (= `[i | ProcessItem i <- ...]`, only top-level ProcessItems,
     // not ProcessDefItems), reaching the `True` assignment solely in
     // the single-process `[p]` branch; `[]` leaves the default False
-    // and `>=2` throws MoreThanOneProcess (Sapic.hs:48,85,87). Mirror
+    // and `>=2` throws MoreThanOneProcess (lib/sapic/src/Sapic.hs:48,85,87). Mirror
     // that: count only TopLevelProcess items, true iff exactly one.
     // Read downstream to gate SAPIC translation (run.rs, apply.rs).
     thy.is_sapic = parser_thy
@@ -1223,7 +1218,7 @@ fn elaborate_already_expanded(parser_thy: &p::Theory) -> Result<Theory, ElabErro
 
 fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), ElabError> {
     // Signature-conflict rules (HS `extendSig` / `function`,
-    // Theory/Text/Parser/Signature.hs:102-135, 200-222) are enforced at
+    // Theory/Text/Parser/Signature.hs:102-135, 200-225) are enforced at
     // parse time (`Parser::enable_builtin` / `Parser::function_decl`) — the
     // single point where theories are ingested — so the declarations
     // reaching here are conflict-free and the arms below only BUILD the
@@ -1233,8 +1228,10 @@ fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), Elab
             p::TheoryItem::Builtins(builtins) => {
                 let mut s = out.signature.maude_sig.clone();
                 for builtin in builtins {
-                    s = s.merge(builtin_sig(builtin.kind));
-                    // HS `builtinsNames` (Theory/Text/Parser/Signature.hs:78-83)
+                    if let Some(sig) = builtin_sig(builtin.kind) {
+                        s = s.merge(sig);
+                    }
+                    // HS `builtinsNames` (Theory/Text/Parser/Signature.hs:78-85)
                     // maps two builtins to translation options:
                     //   `reliable-channel` → `_transReliable`
                     //   `locations-report` → `_transReport`
@@ -1245,7 +1242,8 @@ fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), Elab
                     }
                     // NOTE: `diffie-hellman` already arrives with `enable_dh`
                     // set (its MaudeSig is `dh_maude_sig`, see
-                    // builtinsNames in Theory/Text/Parser/Signature.hs:57-74, see line 60),
+                    // builtinsDiffNames in
+                    // Theory/Text/Parser/Signature.hs:58-76, see line 62),
                     // and `merge` ORs `enable_dh`, so no explicit force is
                     // needed here.  `diff` is a header/CLI flag handled via
                     // `enable_diff_maude_sig`, never a `builtins:` entry.
@@ -1320,7 +1318,7 @@ fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), Elab
                     // Haskell's `equation` parser hard-fails with
                     // "Not a correct equation: ..." when an LHS=RHS pair
                     // cannot be converted to a CtxtStRule
-                    // (Theory/Text/Parser/Signature.hs:232-234).  Match
+                    // (Theory/Text/Parser/Signature.hs:245-249, see line 249).  Match
                     // that failure behaviour rather than silently dropping.
                     let (Some(l), Some(r)) = (term_to_lnterm(&eq.lhs), term_to_lnterm(&eq.rhs))
                     else {
@@ -1343,16 +1341,12 @@ fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), Elab
             p::TheoryItem::Macros(macros) => {
                 let mut ms = Vec::new();
                 for m in macros {
-                    let args: Vec<LVar> = m
-                        .args
-                        .iter()
-                        .map(|v| LVar::new(v.name.clone(), sort_of(&v.sort), v.idx))
-                        .collect();
+                    let args: Vec<LVar> = m.args.iter().map(varspec_to_lvar).collect();
                     // HS `macro` parses the body with `msetterm False llit`
-                    // (Macro.hs:41), which has no pattern-match (`=t`)
+                    // (Theory/Text/Parser/Macro.hs:39), which has no pattern-match (`=t`)
                     // production, so a body that converts to a `PatMatch`
                     // here would be a hard parse failure in HS — and
-                    // `addMacroSym` (Macro.hs:48) always runs for any parsed
+                    // `addMacroSym` (Theory/Text/Parser/Macro.hs:46) always runs for any parsed
                     // macro.  Returning an error therefore matches HS's
                     // parse-fail semantics: silently skipping would drop both
                     // the `LNMacro` push and the fun-sym registration.
@@ -1367,8 +1361,8 @@ fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), Elab
                         }
                     };
                     // Register macro fun-sym in MaudeSig — mirrors HS
-                    // `addMacroSym (op,(k,Private,Destructor))`
-                    // (Theory/Text/Parser/Macro.hs:29-49, see line 48) and
+                    // `addMacroSym (op,(k,Private,Destructor,NotNDC))`
+                    // (Theory/Text/Parser/Macro.hs:29-47, see line 46) and
                     // `macroToFunSym` (Term/Macro.hs:29-30, see line 30).  After parser-
                     // AST macro expansion (run in `elaborate()` above)
                     // call sites no longer reference the macro name, but
@@ -1402,8 +1396,9 @@ fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), Elab
                 // pretty_theory.rs) since the pretty-printer iterates the
                 // parser theory, not this elaborated one.  Their `_restrict`
                 // / lemma / restriction USES are already inlined upstream:
-                // `predicate_expand::expand_theory_formulas` (called below)
-                // substitutes predicate atoms in lemmas/restrictions, and
+                // `predicate_expand::expand_theory_formulas` (run by
+                // `elaborate` before `elaborate_items`) substitutes predicate
+                // atoms in lemmas/restrictions, and
                 // `rule_restriction::lift_rule_restrictions` (run in run.rs
                 // right after parse, mirroring HS `liftedAddProtoRule`)
                 // expands them inside `_restrict` formulas.  Building a typed
@@ -1540,8 +1535,8 @@ pub fn elaborate_lemma_attr(a: &p::LemmaAttr) -> LemmaAttr {
 
 /// Fold a parsed rule's attribute list into `RuleAttributes`, mirroring HS
 /// `ruleAttributesp = option mempty (fold <$> list ruleAttribute)`
-/// (`Theory/Text/Parser/Rule.hs:95-96`) and the per-attribute `ruleAttribute`
-/// parser (`Rule.hs:68-93`):
+/// (`Theory/Text/Parser/Rule.hs:97-98`) and the per-attribute `ruleAttribute`
+/// parser (`Theory/Text/Parser/Rule.hs:70-95`):
 ///   * `color=`/`colour=`  → `ruleColor` (`hexToRGB`);
 ///   * `process=`          → IGNORED (`parseAndIgnore`; the RS parser already
 ///                           drops it, so `RuleAttr::Process` never reaches here
@@ -1552,13 +1547,13 @@ pub fn elaborate_lemma_attr(a: &p::LemmaAttr) -> LemmaAttr {
 ///   * `issapicrule`       → `isSAPiCRule = True`;
 ///   * `x-<ext>`           → ignored.
 ///
-/// `fold` combines via the `RuleAttributes` `Semigroup` (Rule.hs:370-384):
+/// `fold` combines via the `RuleAttributes` `Semigroup` (Theory/Model/Rule.hs:382-396):
 /// later duplicates win on the `Option` fields (`preferRight`), bools `||`.
 ///
 /// This restores the SAPIC display attributes (role / color / issapicrule) onto
 /// the re-elaborated proving rules — HS's `toRule` bakes them straight into the
 /// `ProtoRuleE`, but the RS pipeline round-trips SAPIC rules through the parser
-/// AST (`apply_sapic`'s `synth_parsed_rule`) and re-elaborates the parser theory
+/// AST (`apply_sapic`'s `proto_rule_to_parsed`) and re-elaborates the parser theory
 /// for proving (`prove.rs`), so they must be re-read here.  Display-only: no
 /// solver / `--prove`-text path reads these fields (only the web graph renderer
 /// does), so populating them is `--prove`-inert.
@@ -1626,7 +1621,7 @@ fn rule_to_proto_rule_e(r: &p::Rule) -> Result<ProtoRuleE, ElabError> {
 /// then s1" (SubstVFree.hs).  `foldr1 compose [b1..bn]` is
 /// therefore equivalent to applying each binding as a SINGLETON
 /// substitution sequentially in REVERSE binding order ("bottom-up
-/// application semantics", Let.hs:22).  Consequences:
+/// application semantics", Theory/Text/Parser/Let.hs:22-24).  Consequences:
 ///   * backward references expand: binding i's RHS, once introduced
 ///     into the body at step i, is rewritten by the later-applied
 ///     steps j < i;
@@ -1864,6 +1859,15 @@ fn sort_of(s: &p::SortHint) -> LSort {
     }
 }
 
+/// A parse-time variable occurrence as the solver's `LVar`: the surface sort
+/// hint resolved through [`sort_of`], name and index carried over.  The
+/// SAPIC-typed variant wraps this in a `SapicLVar` with the `:type`
+/// annotation; the `VarSpec.typ` field has no `LVar` counterpart and is
+/// dropped here.
+pub(crate) fn varspec_to_lvar(v: &p::VarSpec) -> LVar {
+    LVar::new(&v.name, sort_of(&v.sort), v.idx)
+}
+
 /// Convert an `LNTerm` back to a parser-AST term. Used when we
 /// need to translate Maude-produced substitutions back into the
 /// parser-AST world (e.g. for `insert_implied_formulas`).
@@ -1924,7 +1928,7 @@ pub fn lnterm_to_term(t: &tamarin_term::lterm::LNTerm) -> p::Term {
                         // `p::BinOp::Exp` arm in `term_to_vterm` below).
                         // HS `viewTerm` exposes `exp(b,e)` as
                         // `FApp (NoEq s) [t1,t2] | s == expSym`, and
-                        // `prettyTerm` (Term/Term.hs:272-300, see line 274) renders that arm as
+                        // `prettyTerm` (Term/Term.hs:298-317, see line 310) renders that arm as
                         // `ppTerm t1 <> text "^" <> ppTerm t2` — infix `b^e`,
                         // uniformly at every nesting depth (the printer is
                         // recursive).  Without this round-trip the runtime
@@ -2041,10 +2045,7 @@ pub fn lnterm_to_term(t: &tamarin_term::lterm::LNTerm) -> p::Term {
                     };
                     p::Term::App(name, parser_args)
                 }
-                FunSym::List => {
-                    let name = "?".to_string();
-                    p::Term::App(name, parser_args)
-                }
+                FunSym::List => p::Term::App("?".to_string(), parser_args),
             }
         }
     }
@@ -2069,10 +2070,10 @@ pub fn lnterm_to_term(t: &tamarin_term::lterm::LNTerm) -> p::Term {
 ///
 /// Also canonicalises `C`-symbol applications: `em(a, b)` is
 /// commutative (not associative), so HS's `fAppC EMap [a, b]` sorts the
-/// two arguments (Raw.hs:132-133).  Mirror that here so the parser-AST
+/// two arguments (Term/Term/Raw.hs:133-134).  Mirror that here so the parser-AST
 /// display path matches HS — `em` args from let-block desugaring may
 /// arrive in source order, which can differ from canonical order.
-/// HS site: `Theory/Text/Parser/Term.hs:87-106, see line 103` / `Term/Term/Raw.hs:132-133`:
+/// HS site: `Theory/Text/Parser/Term.hs:87-106, see line 103` / `Term/Term/Raw.hs:133-134`:
 ///   `fAppC nacsym as = FAPP (C nacsym) (sort as)`
 pub fn canonicalize_ac_in_pterm(t: &p::Term) -> p::Term {
     with_user_fun_sets(|funs| canonicalize_ac_in_pterm_with(t, funs))
@@ -2131,7 +2132,13 @@ fn canonicalize_ac_in_pterm_with(t: &p::Term, funs: &CollectedUserFuns) -> p::Te
         | p::Term::NatOne
         | p::Term::DhNeutral => t.clone(),
         // `em(a, b)` — commutative C-symbol: sort the two args to match
-        // HS `fAppC EMap [a,b] = FAPP (C EMap) (sort [a,b])` (Raw.hs:132-133).
+        // HS `fAppC EMap [a,b] = FAPP (C EMap) (sort [a,b])`
+        // (Term/Term/Raw.hs:133-134).  Name-keyed with NO builtin gate, exactly
+        // like HS's `naryOpApp` arm (Theory/Text/Parser/Term.hs:103) and its
+        // `lookupArity` table, which always carries `emapSymString`
+        // (Theory/Text/Parser/Term.hs:65) — so a user `functions: em/2` sorts
+        // here too.  `term_to_vterm`'s `em` arm IS builtin-gated; see the
+        // DELIBERATE DIVERGENCE note there for why the two differ.
         p::Term::App(n, args) if n == "em" && args.len() == 2 => {
             let a2 = canonicalize_ac_in_pterm_with(&args[0], funs);
             let b2 = canonicalize_ac_in_pterm_with(&args[1], funs);
@@ -2236,8 +2243,8 @@ pub fn canonicalize_ac_in_atom(a: &p::Atom) -> p::Atom {
 /// Apply `canonicalize_ac_in_pterm` to every term in a parser-AST formula.
 ///
 /// HS-faithful: HS sorts AC arguments at parse time when building LNTerm via
-/// `fAppAC` (Term/Term/Raw.hs:118-122) over the *free* logical variables,
-/// using `Ord LVar` = (idx, sort, name) (LTerm.hs:522-524).  Our parser keeps
+/// `fAppAC` (Term/Term/Raw.hs:118-129) over the *free* logical variables,
+/// using `Ord LVar` = (idx, sort, name) (LTerm.hs:545-548).  Our parser keeps
 /// `BinOp` trees in written order; this walk re-establishes the canonical AC
 /// order on the free-variable parser AST so the subsequent guarded conversion
 /// (Free→Bound abstraction) preserves exactly what HS would have produced.
@@ -2249,7 +2256,7 @@ pub fn canonicalize_ac_in_formula(f: &p::Formula) -> p::Formula {
 
 /// Names of arity-1 NoEq function symbols in the (closed-theory) signature.
 /// Mirrors HS `lookupArity` reading the parser-state signature for
-/// `naryOpApp`'s `k == 1` tuple-folding (Theory/Text/Parser/Term.hs:58-93).
+/// `naryOpApp`'s `k == 1` tuple-folding (Theory/Text/Parser/Term.hs:88-96).
 // arity-1 no-eq function-name set; membership-only (.contains), never iterated;
 // std kept (byte-inert) — iteration order never reaches output.
 #[allow(clippy::disallowed_types)]
@@ -2278,8 +2285,8 @@ pub fn arity1_noeq_names(
 /// branch parses one tuple), so on theory ASTs this pass is a no-op; it is
 /// kept as belt-and-braces for ASTs from other producers (e.g. the parser's
 /// structural mode, which is arity-unaware and keeps `App("f", [a, b, c])`).
-/// Historically this was the shared root behind the alethea `h(<a,b>)`
-/// formula-rendering divergence AND the spurious "reducible function symbols
+/// Skipping the fold shows up twice: as the alethea `h(<a,b>)`
+/// formula-rendering divergence, and as a spurious "reducible function symbols
 /// are disallowed" wf warning (a unary `h` applied with surplus args looks
 /// to the wf check like an unknown reducible `h/n`).
 // arity-1 no-eq function-name set; membership-only (.contains), never iterated;
@@ -2354,7 +2361,7 @@ pub fn rewrite_arity1_formula(
 
 /// Right-fold a non-empty term list into a right-associative `pair(..)` chain:
 /// `[a, b, c]` → `pair(a, pair(b, c))`; `None` on an empty list.  Mirrors HS's
-/// `tupleterm`'s `chainr1 ... (curry fAppPair)` (Theory/Text/Parser/Term.hs:187-188)
+/// `tupleterm`'s `chainr1 ... (curry fAppPair)` (Theory/Text/Parser/Term.hs:210-212)
 /// — the shared fold behind the arity-1 surplus-argument tuple and the `<..>`
 /// tuple syntax.
 fn right_nest_pair<V>(items: Vec<VTerm<Name, V>>) -> Option<VTerm<Name, V>> {
@@ -2401,9 +2408,9 @@ where
             Some(Term::Lit(Lit::Con(n)))
         }
         p::Term::NumberOne => {
-            // HS `fAppOne = fAppNoEq oneSym []` (Term/Term.hs:126-127, see line 127); the
+            // HS `fAppOne = fAppNoEq oneSym []` (Term/Term.hs:146-148, see line 148); the
             // `"1"` keyword in the term parser dispatches to this
-            // (Theory/Text/Parser/Term.hs:123-148, see line 134).  Mirror exactly — emit
+            // (Theory/Text/Parser/Term.hs:138-153, see line 149).  Mirror exactly — emit
             // a 0-arity NoEq application of `oneSym`, NOT a public
             // constant.  Treating it as `Lit::Con(Pub,"1")` causes
             // source-case enumeration to mismatch HS's `c_one` rule.
@@ -2413,18 +2420,18 @@ where
             ))
         }
         p::Term::DhNeutral => {
-            // HS `fAppDHNeutral = fAppNoEq dhNeutralSym []` (Term/Term.hs:129-130, see line 130);
+            // HS `fAppDHNeutral = fAppNoEq dhNeutralSym []` (Term/Term.hs:150-151);
             // dispatched by `symbol "DH_neutral" *> pure fAppDHNeutral`
-            // (Theory/Text/Parser/Term.hs:123-148, see line 127).
+            // (Theory/Text/Parser/Term.hs:138-153, see line 142).
             Some(f_app_no_eq(
                 tamarin_term::function_symbols::dh_neutral_sym(),
                 vec![],
             ))
         }
         p::Term::NatOne => {
-            // HS `fAppNatOne = fAppNoEq natOneSym []` (Term/Term.hs); the
+            // HS `fAppNatOne = fAppNoEq natOneSym []` (Term/Term.hs:156-158); the
             // `1:nat` / `%1` keywords dispatch to this
-            // (Theory/Text/Parser/Term.hs:128-129).
+            // (Theory/Text/Parser/Term.hs:138-153, see line 143).
             Some(f_app_no_eq(
                 tamarin_term::function_symbols::nat_one_sym(),
                 vec![],
@@ -2564,7 +2571,7 @@ where
                 p::BinOp::NatPlus => Some(f_app_ac(AcSym::NatPlus, vec![aa, bb])),
                 // A user-declared `[AC]` symbol applied infix — ALWAYS the AC
                 // application (HS `acterm` builds `fAppACfct` straight from
-                // `stACFunSyms`, Theory/Text/Parser/Term.hs:163-168), even
+                // `stACFunSyms`, Theory/Text/Parser/Term.hs:166-172), even
                 // when a `NoEq` symbol shares the name and claims the prefix
                 // spelling.  It reads the same user-function signature for
                 // the symbol's privacy / constructability / NDC flags.
@@ -2611,8 +2618,7 @@ pub fn term_to_lnterm(t: &p::Term) -> Option<tamarin_term::lterm::LNTerm> {
                 .with_ndc(funs.user_fun_ndc(&v.name));
                 return Some(f_app_no_eq(sym, vec![]));
             }
-            let lv = LVar::new(v.name.clone(), sort_of(&v.sort), v.idx);
-            Some(Term::Lit(Lit::Var(lv)))
+            Some(Term::Lit(Lit::Var(varspec_to_lvar(v))))
         };
     with_user_fun_sets(|funs| term_to_vterm(t, &mk_var, funs))
 }
@@ -2623,7 +2629,8 @@ pub fn term_to_lnterm(t: &p::Term) -> Option<tamarin_term::lterm::LNTerm> {
 // Parallel to `term_to_lnterm`, but the literal/variable case preserves the
 // SAPIC type annotation (`VarSpec.typ`) into `SapicLVar.stype`.  Mirrors HS's
 // SAPIC term parser (`Theory.Text.Parser.Sapic.sapicterm = msetterm False
-// ltypedlit`, Sapic.hs:56), which builds `Term (Lit Name SapicLVar)` keeping
+// ltypedlit`, Theory/Text/Parser/Sapic.hs:56-57), which builds
+// `Term (Lit Name SapicLVar)` keeping
 // the `name:type` annotation on each typed variable.  Reuses the SAME
 // function-symbol / arity-1-fold / em / pair logic as `term_to_lnterm` (via
 // `term_to_vterm`) so the resulting term universe matches the protocol-rule
@@ -2653,8 +2660,10 @@ pub fn term_to_sapic_term(t: &p::Term) -> Option<crate::sapic::SapicTerm> {
             .with_ndc(funs.user_fun_ndc(&v.name));
             return Some(f_app_no_eq(sym, vec![]));
         }
-        let lv = LVar::new(v.name.clone(), sort_of(&v.sort), v.idx);
-        Some(Term::Lit(Lit::Var(SapicLVar::new(lv, v.typ.clone()))))
+        Some(Term::Lit(Lit::Var(SapicLVar::new(
+            varspec_to_lvar(v),
+            v.typ.clone(),
+        ))))
     };
     with_user_fun_sets(|funs| term_to_vterm(t, &mk_var, funs))
 }
@@ -2681,25 +2690,33 @@ pub fn fact_to_sapic_fact(f: &p::Fact) -> Result<crate::sapic::SapicLNFact, Elab
 // Builtin → MaudeSig
 // =============================================================================
 
-fn builtin_sig(builtin: BuiltinKind) -> MaudeSig {
+/// HS `builtinsNames` (Theory/Text/Parser/Signature.hs:78-86).
+/// `reliable-channel` is the one row that maps to `Nothing`
+/// (Theory/Text/Parser/Signature.hs:84): it enables a translation option but
+/// merges no signature.  `None` is NOT interchangeable with merging an empty
+/// or minimal signature: `MaudeSig::merge` is asymmetric in its right operand
+/// for the `fst`/`snd` constructor-vs-destructor pair (HS `unionExceptPairSym`,
+/// Term/Maude/Signature.hs:143-150), so merging `minimal_maude_sig` here would
+/// evict `dest-pairing`'s destructor `fst`/`snd` from a theory that declares
+/// both builtins.
+pub fn builtin_sig(builtin: BuiltinKind) -> Option<MaudeSig> {
     match builtin {
-        BuiltinKind::DiffieHellman => dh_maude_sig(),
-        BuiltinKind::BilinearPairing => bp_maude_sig(),
-        BuiltinKind::Multiset => mset_maude_sig(),
-        BuiltinKind::NaturalNumbers => nat_maude_sig(),
-        BuiltinKind::Xor => xor_maude_sig(),
-        BuiltinKind::SymmetricEncryption => sym_enc_maude_sig(),
-        BuiltinKind::AsymmetricEncryption => asym_enc_maude_sig(),
-        BuiltinKind::Signing => signature_maude_sig(),
-        BuiltinKind::RevealingSigning => reveal_signature_maude_sig(),
-        BuiltinKind::Hashing => hash_maude_sig(),
-        BuiltinKind::LocationsReport => location_report_maude_sig(),
-        BuiltinKind::DestSymmetricEncryption => sym_enc_dest_maude_sig(),
-        BuiltinKind::DestAsymmetricEncryption => asym_enc_dest_maude_sig(),
-        BuiltinKind::DestSigning => signature_dest_maude_sig(),
-        BuiltinKind::DestPairing => pair_dest_maude_sig(),
-        BuiltinKind::Pairing => pair_maude_sig(),
-        BuiltinKind::ReliableChannel => minimal_maude_sig(false),
+        BuiltinKind::DiffieHellman => Some(dh_maude_sig()),
+        BuiltinKind::BilinearPairing => Some(bp_maude_sig()),
+        BuiltinKind::Multiset => Some(mset_maude_sig()),
+        BuiltinKind::NaturalNumbers => Some(nat_maude_sig()),
+        BuiltinKind::Xor => Some(xor_maude_sig()),
+        BuiltinKind::SymmetricEncryption => Some(sym_enc_maude_sig()),
+        BuiltinKind::AsymmetricEncryption => Some(asym_enc_maude_sig()),
+        BuiltinKind::Signing => Some(signature_maude_sig()),
+        BuiltinKind::RevealingSigning => Some(reveal_signature_maude_sig()),
+        BuiltinKind::Hashing => Some(hash_maude_sig()),
+        BuiltinKind::LocationsReport => Some(location_report_maude_sig()),
+        BuiltinKind::DestSymmetricEncryption => Some(sym_enc_dest_maude_sig()),
+        BuiltinKind::DestAsymmetricEncryption => Some(asym_enc_dest_maude_sig()),
+        BuiltinKind::DestSigning => Some(signature_dest_maude_sig()),
+        BuiltinKind::DestPairing => Some(pair_dest_maude_sig()),
+        BuiltinKind::ReliableChannel => None,
     }
 }
 

@@ -1,9 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, jdreier, arcz, cascremers, rsasse, Kanakanajm, beschmi,
-//   felixlinker, addap, and other minor contributors (see upstream git
-//   history)
-// Ported from upstream tamarin-prover sources:
-//   src/Web/Types.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Parse the wildcard path segment after `/thy/trace/<idx>/<section>/`
 //! into a [`TheoryPath`], mirroring Haskell's `parseTheoryPath` in
@@ -177,7 +174,7 @@ fn parse_segs(segs: &[String]) -> Option<TheoryPath> {
         "add" => rest.first().map(|n| TheoryPath::Add(n.clone())),
         "delete" => rest.first().map(|n| TheoryPath::Delete(n.clone())),
         "proof" => {
-            // Mirror Haskell `parseProof` (`src/Web/Types.hs:417-456, see line 443`):
+            // Mirror Haskell `parseProof` (`src/Web/Types.hs:424-463, see line 450`):
             //   parseProof (y:ys) = Just (TheoryProof y ys)
             // i.e. the sub-path is taken AS-IS (after `unprefixUnderscore`
             // each segment).  We do NOT pop trailing empty segments:
@@ -191,7 +188,7 @@ fn parse_segs(segs: &[String]) -> Option<TheoryPath> {
             Some(TheoryPath::Proof { lemma, sub })
         }
         "method" => {
-            // Mirror Haskell `parseMethod` (`src/Web/Types.hs:417-456, see line 446`):
+            // Mirror Haskell `parseMethod` (`src/Web/Types.hs:424-463, see line 453`):
             //   parseMethod (y:z:zs) = safeRead z >>= Just . TheoryMethod y zs
             // i.e. the sub-path is taken AS-IS (after `unprefixUnderscore`
             // each segment) — including a single empty trailing
@@ -370,14 +367,39 @@ mod tests {
             matches!(p, TheoryPath::Method { lemma, idx, sub } if lemma == "Alice" && idx == 3 && sub == vec!["0"])
         );
     }
+    /// [`TheoryPath::render`] runs every segment through
+    /// [`prefix_with_underscore`].  An empty case name therefore appears in
+    /// the URL as `_`.  A case name that starts with `_` gets one more `_`.
+    /// The [`unprefix_underscore`] call in [`decode_segments`] removes that
+    /// prefix again.  A rendered path therefore parses back to the path it
+    /// came from.
     #[test]
-    fn render_roundtrip() {
+    fn render_prefixes_underscores_and_round_trips() {
         let p = TheoryPath::Proof {
             lemma: "X".into(),
-            sub: vec![],
+            sub: vec![String::new(), "_a".into()],
         };
-        let segs = p.render();
-        assert_eq!(segs, vec!["proof", "X"]);
+        assert_eq!(p.render(), vec!["proof", "X", "_", "__a"]);
+        for p in [
+            TheoryPath::Help,
+            TheoryPath::Lemma("_L".into()),
+            TheoryPath::Proof {
+                lemma: "X".into(),
+                sub: vec![],
+            },
+            TheoryPath::Proof {
+                lemma: "X".into(),
+                sub: vec![String::new(), "_a".into()],
+            },
+            TheoryPath::Method {
+                lemma: "X".into(),
+                idx: 3,
+                sub: vec![String::new()],
+            },
+        ] {
+            let url = p.render().join("/");
+            assert_eq!(parse(&url), Some(p.clone()), "{p:?} rendered as {url}");
+        }
     }
     /// `parseCases`'s `safeRead` reads `Int`, so the case indices are signed:
     /// `cases/raw/-1/1` parses (and then names no case in the handler, exactly

@@ -1,13 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, beschmi, jdreier, racoucho1u, PhilipLukertWork, and other
-//   minor contributors (see upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/term/src/Term/LTerm.hs,
-//   lib/term/src/Term/Term/FunctionSymbols.hs,
-//   lib/term/src/Term/Term/Raw.hs, lib/term/src/Term/VTerm.hs,
-//   lib/theory/src/Theory/Constraint/System/Guarded.hs,
-//   lib/theory/src/Theory/Model/Fact.hs,
-//   lib/theory/src/Theory/Text/Parser/Tactics.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! `show`-faithful renderers and the shared `checkFormula` engine for the
 //! Vacarme/noise tactic selectors (`dhreNoise`, `defaultNoise`,
@@ -51,7 +44,7 @@ use crate::guarded_types::{BVar, GAtom, GFact, GTerm};
 // =============================================================================
 
 /// HS `show LVar` (LTerm.hs:526-533): `sortPrefix s ++ body`.
-pub(crate) fn show_varspec(v: &p::VarSpec) -> String {
+fn show_varspec(v: &p::VarSpec) -> String {
     let mut s = String::new();
     write_varspec(v, &mut s);
     s
@@ -86,7 +79,7 @@ fn write_varspec(v: &p::VarSpec, out: &mut String) {
 
 /// HS `Show (Term a)` applied to `VTerm Name (BVar LVar)`
 /// (Term/Raw.hs:227-237 + the derived `Show (BVar v)`).
-pub(crate) fn show_gterm(t: &GTerm) -> String {
+fn show_gterm(t: &GTerm) -> String {
     let mut s = String::new();
     write_gterm(t, &mut s);
     s
@@ -129,7 +122,7 @@ fn write_gterm(t: &GTerm, out: &mut String) {
         GTerm::Number(n) => out.push_str(&n.to_string()),
         // `fAppOne` = `NoEq oneSym` with `oneSymString = "one"` and
         // `fAppNatOne` = `NoEq natOneSym` with `natOneSymString = "tone"`
-        // (FunctionSymbols.hs:134-134,144). `show (FApp (NoEq (s,_)) [])` = `s`
+        // (FunctionSymbols.hs:226,236,255,267). `show (FApp (NoEq (s,_)) [])` = `s`
         // (Term/Raw.hs:227-237, see line 231), so the two nullary symbols show differently.
         GTerm::NumberOne => out.push_str("one"),
         GTerm::NatOne => out.push_str("tone"),
@@ -327,7 +320,7 @@ fn write_name(n: &Name, out: &mut String) {
 }
 
 // =============================================================================
-// `show FactTag` (derived Show, Fact.hs:132-143) — used by isFactName
+// `show FactTag` (derived Show, Theory/Model/Fact.hs:136-149) — used by isFactName
 // =============================================================================
 
 /// HS derived `show FactTag`.  For `ProtoFact m n a` this is
@@ -421,12 +414,11 @@ fn formula_action_fact(g: &Guarded) -> Option<&GFact> {
 ///
 /// The returned `VarSpec`s are `show`n by the callers to build PCRE
 /// alternations like `(~n|~s|...)`.
-pub(crate) fn check_formula(oracle_type: &str, f: &Guarded) -> Vec<p::VarSpec> {
+fn check_formula(oracle_type: &str, f: &Guarded) -> Vec<p::VarSpec> {
     // rev = any guard fact-tag name =~ "Reveal"
     let mut tag_names = Vec::new();
     guard_fact_tag_names(f, &mut tag_names);
-    let rev = tag_names.iter().any(|n| n.contains("Reveal"));
-    if !rev {
+    if !tag_names.iter().any(|n| n.contains("Reveal")) {
         return Vec::new();
     }
 
@@ -558,9 +550,36 @@ mod tests {
         }
     }
 
+    /// `show LVar` is `sortPrefix s ++ body`.  Each sort has one prefix.  Msg
+    /// and Untagged have no prefix.  The `.idx` suffix appears only for an
+    /// index that is not zero.
     #[test]
-    fn show_varspec_fresh() {
+    fn show_varspec_covers_every_sort_prefix_and_the_index_suffix() {
+        let sorted = |sort, name: &str, idx| {
+            show_varspec(&p::VarSpec {
+                name: name.into(),
+                idx,
+                sort,
+                typ: None,
+                location: tamarin_parser::DUMMY_LOCATION,
+            })
+        };
         assert_eq!(show_varspec(&fresh("s")), "~s");
+        assert_eq!(sorted(p::SortHint::Pub, "a", 0), "$a");
+        assert_eq!(sorted(p::SortHint::Node, "i", 0), "#i");
+        assert_eq!(sorted(p::SortHint::Nat, "n", 0), "%n");
+        assert_eq!(sorted(p::SortHint::Msg, "m", 0), "m");
+        assert_eq!(sorted(p::SortHint::Untagged, "m", 0), "m");
+        // Sorts that the source spells as a suffix (`s:fresh`) use the same
+        // prefixes.
+        assert_eq!(
+            sorted(p::SortHint::Suffix(p::SuffixSort::Fresh), "s", 0),
+            "~s"
+        );
+        // An index that is not zero appends `.idx`.  A variable with no name
+        // shows the index alone.
+        assert_eq!(sorted(p::SortHint::Fresh, "s", 3), "~s.3");
+        assert_eq!(sorted(p::SortHint::Msg, "", 7), "7");
     }
 
     #[test]
@@ -574,6 +593,8 @@ mod tests {
         assert_eq!(show_gterm(&t), "exp('g',Free ~s)");
     }
 
+    /// The derived `Show [a]` puts the items in brackets.  It separates them
+    /// with a comma and no space.  It shows `[]` for an empty list.
     #[test]
     fn show_term_list_matches_exp_g() {
         let t = GTerm::BinOp(
@@ -581,14 +602,38 @@ mod tests {
             std::sync::Arc::new(GTerm::PubLit("g".into())),
             std::sync::Arc::new(GTerm::Var(BVar::Free(fresh("s")))),
         );
-        let shown = show_term_list(std::slice::from_ref(&t));
-        assert_eq!(shown, "[exp('g',Free ~s)]");
+        assert_eq!(
+            show_term_list(std::slice::from_ref(&t)),
+            "[exp('g',Free ~s)]"
+        );
+        assert_eq!(
+            show_term_list(&[t.clone(), GTerm::NatOne]),
+            "[exp('g',Free ~s),tone]"
+        );
+        assert_eq!(show_term_list(&[]), "[]");
     }
 
+    /// Every arm of the derived `Show FactTag`.  `isFactName` compares
+    /// against this string, and `jgnFactName` writes it out.  A constructor
+    /// with a wrong spelling therefore breaks both the tactic matching and
+    /// `--output-json`, and nothing reports an error.
     #[test]
-    fn show_fact_tag_proto() {
-        let t = FactTag::Proto(Multiplicity::Linear, "Foo", 2);
-        assert_eq!(show_fact_tag(&t), "ProtoFact Linear \"Foo\" 2");
+    fn show_fact_tag_covers_every_derived_show_arm() {
+        assert_eq!(
+            show_fact_tag(&FactTag::Proto(Multiplicity::Linear, "Foo", 2)),
+            "ProtoFact Linear \"Foo\" 2"
+        );
+        assert_eq!(
+            show_fact_tag(&FactTag::Proto(Multiplicity::Persistent, "Foo", 0)),
+            "ProtoFact Persistent \"Foo\" 0"
+        );
+        assert_eq!(show_fact_tag(&FactTag::Fresh), "FreshFact");
+        assert_eq!(show_fact_tag(&FactTag::Out), "OutFact");
+        assert_eq!(show_fact_tag(&FactTag::In), "InFact");
+        assert_eq!(show_fact_tag(&FactTag::Ku), "KUFact");
+        assert_eq!(show_fact_tag(&FactTag::Kd), "KDFact");
+        assert_eq!(show_fact_tag(&FactTag::Ded), "DedFact");
+        assert_eq!(show_fact_tag(&FactTag::Term), "TermFact");
     }
 
     /// Every applied-symbol arm of `Show (Term a)` (Term/Raw.hs:227-237):
@@ -652,14 +697,14 @@ mod tests {
     #[test]
     fn show_gterm_nat_one_is_tone() {
         // fAppNatOne = FApp (NoEq natOneSym) [] with natOneSymString = "tone"
-        // (FunctionSymbols.hs:144-144) => `show fAppNatOne == "tone"`.
+        // (FunctionSymbols.hs:236,267) => `show fAppNatOne == "tone"`.
         assert_eq!(show_gterm(&GTerm::NatOne), "tone");
     }
 
     #[test]
     fn show_gterm_number_one_is_one() {
         // fAppOne = FApp (NoEq oneSym) [] with oneSymString = "one"
-        // (FunctionSymbols.hs:134-134) => `show fAppOne == "one"`.
+        // (FunctionSymbols.hs:226,255) => `show fAppOne == "one"`.
         assert_eq!(show_gterm(&GTerm::NumberOne), "one");
     }
 

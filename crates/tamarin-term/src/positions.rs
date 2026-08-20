@@ -1,8 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   beschmi, jdreier, meiersi, and other minor contributors (see
-//   upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/term/src/Term/Positions.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Port of `Term.Positions` from `lib/term/src/Term/Positions.hs`.
 //!
@@ -165,60 +163,43 @@ pub fn deepest_prot_subterm<C: Ord + Clone, V: Ord + Clone>(
 /// `positions t`: every position in `t` (including the empty position at
 /// the root). AC nesting follows the right-leaning binary interpretation.
 pub fn positions<C, V>(t: &VTerm<C, V>) -> Vec<Position> {
-    fn go<C, V>(t: &VTerm<C, V>, out: &mut Vec<Position>, prefix: &mut Vec<i64>) {
-        out.push(prefix.clone());
-        if let Term::App(FunSym::Ac(_), args) = t {
-            let len = args.len();
-            for (i, a) in args.iter().enumerate() {
-                let saved = prefix.len();
-                prefix.extend_from_slice(&ac_position(i, len));
-                go(a, out, prefix);
-                prefix.truncate(saved);
-            }
-        } else if let Term::App(_, args) = t {
-            for (i, a) in args.iter().enumerate() {
-                prefix.push(i as i64);
-                go(a, out, prefix);
-                prefix.pop();
-            }
-        }
-    }
-    let mut out = Vec::new();
-    let mut prefix = Vec::new();
-    go(t, &mut out, &mut prefix);
-    out
+    collect_positions(t, false)
 }
 
 /// `positionsNonVar`: like `positions` but excludes positions where the
 /// subterm is a variable.
 pub fn positions_non_var<C, V>(t: &VTerm<C, V>) -> Vec<Position> {
-    fn go<C, V>(t: &VTerm<C, V>, out: &mut Vec<Position>, prefix: &mut Vec<i64>) {
+    collect_positions(t, true)
+}
+
+/// Pre-order walk emitting one position per node, skipping variable leaves
+/// when `skip_vars`.  AC nodes index their children through the right-leaning
+/// binary encoding ([`ac_position`]), every other node by argument index.
+fn collect_positions<C, V>(t: &VTerm<C, V>, skip_vars: bool) -> Vec<Position> {
+    fn go<C, V>(t: &VTerm<C, V>, skip_vars: bool, out: &mut Vec<Position>, prefix: &mut Vec<i64>) {
         match t {
-            Term::Lit(Lit::Var(_)) => {}
-            Term::Lit(Lit::Con(_)) => out.push(prefix.clone()),
-            Term::App(FunSym::Ac(_), args) => {
+            Term::Lit(Lit::Var(_)) if skip_vars => {}
+            Term::Lit(_) => out.push(prefix.clone()),
+            Term::App(sym, args) => {
                 out.push(prefix.clone());
+                let ac = matches!(sym, FunSym::Ac(_));
                 let len = args.len();
                 for (i, a) in args.iter().enumerate() {
                     let saved = prefix.len();
-                    prefix.extend_from_slice(&ac_position(i, len));
-                    go(a, out, prefix);
+                    if ac {
+                        prefix.extend_from_slice(&ac_position(i, len));
+                    } else {
+                        prefix.push(i as i64);
+                    }
+                    go(a, skip_vars, out, prefix);
                     prefix.truncate(saved);
-                }
-            }
-            Term::App(_, args) => {
-                out.push(prefix.clone());
-                for (i, a) in args.iter().enumerate() {
-                    prefix.push(i as i64);
-                    go(a, out, prefix);
-                    prefix.pop();
                 }
             }
         }
     }
     let mut out = Vec::new();
     let mut prefix = Vec::new();
-    go(t, &mut out, &mut prefix);
+    go(t, skip_vars, &mut out, &mut prefix);
     out
 }
 
@@ -303,6 +284,55 @@ mod tests {
         assert!(ps.contains(&vec![0i64]));
         assert!(ps.contains(&vec![1i64]));
         assert_eq!(ps.len(), 3);
+    }
+
+    /// The code addresses AC applications through the right-leaning binary
+    /// encoding `*[t1,t2,t3] ≡ t1 * (t2 * t3)` (`atPosMay`, Positions.hs:47-59;
+    /// `replacePos`, Positions.hs:76-80; `positions`, Positions.hs:109-122).
+    /// `0` selects the head, and `1` selects the tail multiset.  The k-th of n
+    /// arguments therefore sits at `1^k ++ [0]`.  The last one sits at `1^k`.
+    /// No argument sits at `[k]`.  [`positions`], [`at_pos`] and
+    /// [`replace_pos`] have to agree on this encoding, because a term's own
+    /// position list is what indexes into that term.  `constant_positions`
+    /// feeds these positions straight into `StRhs`, and `print_position`
+    /// turns them into `AUTO_*` fact names.
+    #[test]
+    fn ac_positions_use_right_leaning_binary_encoding() {
+        use crate::function_symbols::AcSym;
+        use crate::term::f_app_ac;
+        let a = msg_var("a", 0);
+        let b = msg_var("b", 0);
+        let c = msg_var("c", 0);
+        let t: LNTerm = f_app_ac(AcSym::Mult, vec![a.clone(), b.clone(), c.clone()]);
+        assert_eq!(
+            positions(&t),
+            vec![vec![], vec![0], vec![1, 0], vec![1, 1]],
+            "the three AC arguments live at [0], [1,0], [1,1] — NOT [0], [1], [2]"
+        );
+        // `at_pos` reads the same encoding back.  It also reads the
+        // intermediate tail multiset at [1].  That multiset is not an argument
+        // of the flat term.
+        assert_eq!(at_pos(&t, &[0]), Some(a.clone()));
+        assert_eq!(
+            at_pos(&t, &[1]),
+            Some(f_app_ac(AcSym::Mult, vec![b.clone(), c.clone()]))
+        );
+        assert_eq!(at_pos(&t, &[1, 0]), Some(b.clone()));
+        assert_eq!(at_pos(&t, &[1, 1]), Some(c));
+        // DIVERGENCE (port-captured, not oracle-derived).  The AC arm in RS
+        // ends in a catch-all `_ => None`.  HS `atPosMay` has no such arm.  It
+        // falls through to the generic `FApp _ as (i:ps)` equation
+        // (Positions.hs:55-58), so the oracle answers `Just c` here.  This
+        // difference is unreachable in practice.  `positions` never emits a
+        // bare index >= 2 for an AC node.
+        assert_eq!(at_pos(&t, &[2]), None);
+        // `replace_pos` descends the same encoding.  The AC smart constructor
+        // then flattens the rebuilt tail into its parent again.
+        let z = msg_var("z", 0);
+        assert_eq!(
+            replace_pos(&t, &z, &[1, 1]),
+            Some(f_app_ac(AcSym::Mult, vec![a, b, z]))
+        );
     }
 
     #[test]

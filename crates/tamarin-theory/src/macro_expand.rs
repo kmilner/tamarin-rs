@@ -1,48 +1,37 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   BTom-GH, jdreier, ValentinYuri, meiersi, rsasse, and other minor
-//   contributors (see upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/term/src/Term/Macro.hs, lib/theory/src/ClosedTheory.hs,
-//   lib/theory/src/Items/CaseTestItem.hs, lib/theory/src/Lemma.hs,
-//   lib/theory/src/Prover.hs, lib/theory/src/Rule.hs,
-//   lib/theory/src/Theory/Model/Fact.hs,
-//   lib/theory/src/Theory/Model/Formula.hs,
-//   lib/theory/src/Theory/Model/Restriction.hs,
-//   lib/theory/src/Theory/Model/Rule.hs,
-//   lib/theory/src/Theory/Sapic/Term.hs,
-//   lib/theory/src/Theory/Text/Parser.hs,
-//   lib/theory/src/Theory/Text/Parser/Macro.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Parser-AST level macro expansion.
 //!
-//! Port of `Term.Macro.applyMacros` (HS: lib/term/src/Term/Macro.hs:40-50)
+//! Port of `Term.Macro.applyMacros` (HS: lib/term/src/Term/Macro.hs:40-54)
 //! plus the call-sites that drive it:
 //!
-//!   - `applyMacroInRule`     — lib/theory/src/Theory/Model/Rule.hs:1032-1037
-//!   - `applyMacroInFact`     — lib/theory/src/Theory/Model/Fact.hs:301-303
-//!   - `applyMacroInFormula`  — lib/theory/src/Theory/Model/Formula.hs:311-313
+//!   - `applyMacroInRule`     — lib/theory/src/Theory/Model/Rule.hs:1115-1121
+//!   - `applyMacroInFact`     — lib/theory/src/Theory/Model/Fact.hs:323-326
+//!   - `applyMacroInFormula`  — lib/theory/src/Theory/Model/Formula.hs:314-316
 //!   - `applyMacroInLemma`    — lib/theory/src/Lemma.hs:83-88
-//!   - `applyMacroInRestriction` — lib/theory/src/Theory/Model/Restriction.hs:163-165
+//!   - `applyMacroInRestriction` — lib/theory/src/Theory/Model/Restriction.hs:164-166
 //!   - `closeProtoRule` calls applyMacroInRule BEFORE variantsProtoRule
-//!     — lib/theory/src/Rule.hs:96-98
+//!     — lib/theory/src/Rule.hs:82-87
 //!   - `parseLemmaWithMacros`  — lib/theory/src/Theory/Text/Parser.hs:97-105
 //!
 //! HS works at the typed `LNTerm` / `LNFact` / `LNFormula` level, with
 //! macro matching keyed on the `FunSym` (a `NoEq (name, (arity, Private,
-//! Destructor))` tuple — Macro.hs:29-30, see line 30).  RS parses lemma/restriction
+//! Destructor, NotNDC))` tuple — Term/Macro.hs:29-30, see line 30).  RS parses lemma/restriction
 //! formulas as `parser::ast::Formula` and only converts to `LNFormula`
 //! later (via `formula_to_guarded`), so the natural place to expand is
 //! the parser AST.  This is observationally faithful: every macro call
 //! site is rewritten to its body before either side's typed conversion
 //! runs.  The macro fun-syms themselves are still registered in MaudeSig
-//! (HS Parser/Macro.hs:29-49, see line 48 `addMacroSym`) so any unexpanded reference —
-//! and Maude — still see them.
+//! (HS Theory/Text/Parser/Macro.hs:29-47, see line 46 `addMacroSym`) so any unexpanded
+//! reference — and Maude — still see them.
 //!
 //! Recursion semantics mirror HS exactly:
-//!   - args are recursively expanded FIRST (Macro.hs:40-54, see line 46),
+//!   - args are recursively expanded FIRST (Term/Macro.hs:40-54, see line 46),
 //!   - then substitution into the body,
 //!   - then the EXPANDED body is recursively re-expanded
-//!     (Macro.hs:40-54, see line 48 `applyMacros macros (apply subst mout)`).
+//!     (Term/Macro.hs:40-54, see line 48 `applyMacros macros (apply subst mout)`).
 //!
 //! This handles chained / nested macros (e.g. `hashdec` calling `decrypt`
 //! in `examples/features/macros/MacroExample.spthy`).
@@ -61,9 +50,9 @@ pub fn apply_macros_term(macros: &[p::Macro], term: &p::Term) -> p::Term {
             let processed_args: Vec<p::Term> =
                 args.iter().map(|a| apply_macros_term(macros, a)).collect();
             // Match on (name, arity) — HS matches on FunSym which includes
-            // arity (Macro.hs:29-30, see line 30 `macroToFunSym (op,args,_) = NoEq (op,
-            // (length args, Private, Destructor))` ; matching macros are
-            // found via Macro.hs:53-54 `find (\m -> macroToFunSym m == f)`).
+            // arity (Term/Macro.hs:29-30, see line 30 `macroToFunSym (op,args,_) = NoEq (op,
+            // (length args, Private, Destructor, NotNDC))` ; matching macros are
+            // found via Term/Macro.hs:53-54 `find (\m -> macroToFunSym m == f)`).
             if let Some(m) = find_matching_macro(name, processed_args.len(), macros) {
                 // Build the param→arg substitution (by name).
                 let mut subst: BTreeMap<String, p::Term> = BTreeMap::new();
@@ -97,7 +86,7 @@ pub fn apply_macros_term(macros: &[p::Macro], term: &p::Term) -> p::Term {
         p::Term::PatMatch(inner) => p::Term::PatMatch(Box::new(apply_macros_term(macros, inner))),
         // A BARE identifier (no `$~#%` prefix, no `:sort` suffix, no `.idx`)
         // naming a 0-ary macro is a macro CALL: HS's `nullaryApp` parser
-        // alternative (Term.hs:143-148) runs before `plit` and matches any
+        // alternative (Theory/Text/Parser/Term.hs:151,158-163) runs before `plit` and matches any
         // arity-0 name in `funSyms ∪ macroNames`, so such an identifier
         // reaches HS's `applyMacros` as `fApp (NoEq (m,(0,..))) []`, never
         // as a variable.  RS's surface parser is signature-less and yields
@@ -116,7 +105,7 @@ pub fn apply_macros_term(macros: &[p::Macro], term: &p::Term) -> p::Term {
             }
             term.clone()
         }
-        // Literals: no recursion (HS Macro.hs:40-54, see line 51 `Lit l -> lit l`).
+        // Literals: no recursion (HS Term/Macro.hs:40-54, see line 51 `Lit l -> lit l`).
         p::Term::PubLit(_)
         | p::Term::FreshLit(_)
         | p::Term::NatLit(_)
@@ -128,11 +117,11 @@ pub fn apply_macros_term(macros: &[p::Macro], term: &p::Term) -> p::Term {
 }
 
 /// HS `findMatchingMacro f macros = find (\m -> macroToFunSym m == f)`
-/// (Macro.hs:53-54).  At parser-AST level a call-site has no FunSym
+/// (Term/Macro.hs:53-54).  At parser-AST level a call-site has no FunSym
 /// flags so we match by (name, arity) — equivalent for non-clashing
-/// macro names since `addMacroSym` rejects redefinitions and built-in
-/// fun-syms have known fixed arity (parser/Macro.hs:45-49 `case lookup
-/// op (stFunSyms ++ macroNames) -> fail`).
+/// macro names since the `macros` parser rejects a name already in the
+/// signature (Theory/Text/Parser/Macro.hs:43-44 `fail $ "Conflicting name
+/// for macro " ...`) and built-in fun-syms have known fixed arity.
 fn find_matching_macro<'a>(
     name: &str,
     arity: usize,
@@ -144,7 +133,7 @@ fn find_matching_macro<'a>(
 }
 
 /// Apply a name-keyed substitution to a parser term.  HS's typed
-/// `apply subst term` (Macro.hs:40-54, see line 48) becomes a structural name-keyed walk.
+/// `apply subst term` (Term/Macro.hs:40-54, see line 48) becomes a structural name-keyed walk.
 /// Shared with `predicate_expand` (whose `Subst` newtype wraps the same
 /// `BTreeMap<String, p::Term>`), so both stay in lockstep on capture /
 /// replacement semantics.
@@ -211,7 +200,9 @@ pub(crate) fn map_atom_terms(a: &p::Atom, g: &dyn Fn(&p::Term) -> p::Term) -> p:
 
 /// Shared structural walker: rebuild a formula, mapping `g` over every leaf
 /// term while cloning quantifier `VarSpec`s unchanged.  See [`map_fact_terms`].
-pub(crate) fn map_formula_terms(f: &p::Formula, g: &dyn Fn(&p::Term) -> p::Term) -> p::Formula {
+/// `pub` (not `pub(crate)`): tamarin-sapic's `formula_unpattern` walks with it
+/// too.
+pub fn map_formula_terms(f: &p::Formula, g: &dyn Fn(&p::Term) -> p::Term) -> p::Formula {
     use p::FormulaKind::*;
     let kind = match &f.kind {
         False => False,
@@ -244,14 +235,14 @@ pub(crate) fn map_formula_terms(f: &p::Formula, g: &dyn Fn(&p::Term) -> p::Term)
 }
 
 /// Apply macros to every term in a fact.  Mirrors HS `applyMacroInFact`
-/// (Fact.hs:301-303 `applyMacroInFact mcs (Fact tag annot terms) =
-/// Fact tag annot (map (applyMacros mcs) terms)`).
+/// (Theory/Model/Fact.hs:323-326 `applyMacroInFact mcs (Fact tag annot terms) =
+/// let mTerms = map (applyMacros mcs) terms in Fact tag annot mTerms`).
 pub fn apply_macros_fact(macros: &[p::Macro], f: &p::Fact) -> p::Fact {
     map_fact_terms(f, &|t| apply_macros_term(macros, t))
 }
 
 /// Apply macros to every term in a formula.  Mirrors HS
-/// `applyMacroInFormula` (Formula.hs:311-313) — `mapAtoms (... applyMacros
+/// `applyMacroInFormula` (Theory/Model/Formula.hs:314-316) — `mapAtoms (... applyMacros
 /// (lnMacrosToBNMacros macros))`.  In RS, parser-AST quantifiers carry
 /// `VarSpec`s with names; macro params have their declared names; the
 /// substitution-by-name suffices because the body is closed over the
@@ -263,9 +254,10 @@ pub fn apply_macros_formula(macros: &[p::Macro], f: &p::Formula) -> p::Formula {
 }
 
 /// Apply macros to all items in a theory.  Mirrors HS's call-sites:
-///   - rule prems/concs/acts (Rule.hs:1032-1037 + ClosedTheory.hs:322-323)
-///   - lemma formula (Lemma.hs:83-88, called from Parser.hs:97-105, see line 105)
-///   - restriction formula (Restriction.hs:163-165)
+///   - rule prems/concs/acts (Theory/Model/Rule.hs:1115-1121 + ClosedTheory.hs:322-323)
+///   - lemma formula (lib/theory/src/Lemma.hs:83-88, called from
+///     Theory/Text/Parser.hs:97-105, see line 105)
+///   - restriction formula (Theory/Model/Restriction.hs:164-166)
 ///   - embedded restriction in rule (treat as formula)
 ///   - rule let-block RHS (already inlined into the rule by
 ///     `apply_let_block` at elaborate time)
@@ -317,10 +309,11 @@ fn expand_items(macros: &[p::Macro], items: &mut [p::TheoryItem]) {
             }
             // CaseTest / AccLemma are `TranslationItem`s in HS, which
             // `closeTheoryItem` passes through verbatim with NO macro
-            // application (Prover.hs:170-251, see line 204 `TranslationItem`; added unmacroed
-            // via Parser.hs:153-157, see line 157,163 `liftedAddAccLemma`/`liftedAddCaseTest`).
+            // application (CloseRule.hs:82-90, see line 90 `TranslationItem`; added unmacroed
+            // via Theory/Text/Parser.hs:153-163, see line 157,163
+            // `liftedAddAccLemma`/`liftedAddCaseTest`).
             // They stay `SyntacticLNFormula` and are only `toLNFormula`'d
-            // during accountability translation (Items/CaseTestItem.hs:34-37),
+            // during accountability translation (Items/CaseTestItem.hs:33-37),
             // which does not run macros. So we deliberately do NOT expand them
             // (they fall into the `_ => {}` arm below).
             //
@@ -363,7 +356,7 @@ fn expand_rule(macros: &[p::Macro], r: &mut p::Rule) {
     // `variants` is the user-written explicit `variants ...` block (HS
     // OpenProtoRule's ruAC) and `left_right` is the diff `left ... right ...`
     // block (HS DiffProtoRule's sides). `applyMacroInProtoRule` /
-    // `applyMacroInDiffProtoRule` (ClosedTheory.hs:318-319, see line 319,323) only run
+    // `applyMacroInDiffProtoRule` (ClosedTheory.hs:318-323, see line 319,323) only run
     // applyMacroInRule on the main rule `ruE` and leave variants/sides intact,
     // so a macro call inside an explicit variant must survive unexpanded.
 }

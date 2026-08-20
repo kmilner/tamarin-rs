@@ -1,15 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   beschmi, jdreier, meiersi, rkunnema, addap, racoucho1u,
-//   PhilipLukertWork, rsasse, charlie-j, and other minor contributors
-//   (see upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/term/src/Term/LTerm.hs, lib/term/src/Term/Maude/Signature.hs,
-//   lib/term/src/Term/Term/FunctionSymbols.hs,
-//   lib/term/src/Term/Term/Raw.hs, lib/term/src/Term/VTerm.hs,
-//   lib/theory/src/Theory/Model/Formula.hs,
-//   lib/theory/src/Theory/Text/Parser/Term.hs,
-//   lib/theory/src/Theory/Text/Parser/Token.hs,
-//   lib/theory/src/Theory/Tools/Wellformedness.hs, src/Main/Console.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Faithful port of HS `checkTerms` (the "Formula terms" wellformedness
 //! check) from `lib/theory/src/Theory/Tools/Wellformedness.hs:960-985`,
@@ -49,7 +40,7 @@
 //! (`fAppAC`) and sorts the argument list for a C symbol (`fAppC`).  The
 //! sort key is the derived `Ord` of `Term (Lit Name (BVar LVar))`, and the
 //! ordering is re-established on the BOUND form: `quantify`
-//! (`Theory/Model/Formula.hs:347-351`) rewrites a free variable to
+//! (`Theory/Model/Formula.hs:347-352`) rewrites a free variable to
 //! `Bound i` through `mapLits` (`:288-291`), which rebuilds every node with
 //! `fApp` and therefore re-sorts it.  The outermost binder's pass runs last
 //! and sees every lit in its final form, so the term the checker inspects is
@@ -80,7 +71,7 @@ use crate::pretty_hpj::{fsep, punctuate, Doc};
 ///
 /// CAVEAT: this is a precomputed effective budget, NOT HS's own lineLength.
 /// We do not reproduce the outer warning-frame nesting in the `Doc`
-/// renderer, so if HS's `lineWidth` (Console.hs:227-239, see line 236) or the WARNING-frame
+/// renderer, so if HS's `lineWidth` (Console.hs:242-243) or the WARNING-frame
 /// indentation ever changes, this constant (used at both `render_with`
 /// call sites in `render_block` and by
 /// [`crate::formula_reports`]'s "Quantifier sorts" block, which HS lays out
@@ -154,14 +145,14 @@ struct Irreducible {
     ac: BTreeSet<AcSym>,
     /// Every user-declared `[AC]` symbol of the FULL signature, keyed by name.
     /// The INFIX spelling of such a symbol is always `fAppAC (ACfct …)` (HS
-    /// `acterm`, Theory/Text/Parser/Term.hs:163-168); the prefix and `op{a}b`
+    /// `acterm`, Theory/Text/Parser/Term.hs:166-172); the prefix and `op{a}b`
     /// spellings are too (`naryOpApp` `:104-105`, `binaryAlgApp` `:120-121`)
     /// UNLESS the name is also a `NoEq` symbol of the full signature — see
     /// [`Irreducible::prefix_ac_fct`] — so the checker's term view builds the
     /// same flattened, sorted AC node exactly where HS does.
     ac_fct_syms: BTreeMap<Vec<u8>, AcFctSym>,
     /// Names (any arity) of every NoEq symbol of the FULL signature — HS
-    /// `noEqFunSyms maudeSig` over `funSyms` (Term/Maude/Signature.hs:157-158).
+    /// `noEqFunSyms maudeSig` over `funSyms` (Term/Maude/Signature.hs:156-157).
     /// Read by [`Irreducible::prefix_ac_fct`].
     noeq_names: BTreeSet<Vec<u8>>,
     /// Names of all nullary NoEq symbols in the FULL signature.  Used to
@@ -213,7 +204,7 @@ impl Irreducible {
 
     /// Is the NoEq symbol applied under `name` with `arity` arguments
     /// irreducible?  HS's guard is ``o `S.member` irreducible``
-    /// (Wellformedness.hs:982) on the whole `FunSym`, so a NoEq head is
+    /// (Wellformedness.hs:984) on the whole `FunSym`, so a NoEq head is
     /// matched only against NoEq members of the irreducible set, keyed by
     /// (name, arity).  A user-declared `[AC]` symbol of the same name is the
     /// distinct `FunSym` `AC (ACfct (name, _))` and cannot satisfy that test
@@ -253,7 +244,7 @@ impl Irreducible {
     /// Term/Term/FunctionSymbols.hs:146-147), so a name that is ALSO a `NoEq`
     /// symbol of the full signature resolves to that `NoEq` symbol, never the
     /// AC one.  The infix spelling bypasses `lookupArity` (`acterm`,
-    /// Term.hs:163-168) and keeps using [`Self::ac_fct`].
+    /// Theory/Text/Parser/Term.hs:166-172) and keeps using [`Self::ac_fct`].
     fn prefix_ac_fct(&self, name: &str) -> Option<AcFctSym> {
         if self.noeq_names.contains(name.as_bytes()) {
             return None;
@@ -447,7 +438,8 @@ fn resolve_term(t: &Term, scope: &Scope, irr: &Irreducible, pos: TermPos) -> RTe
         // Bare numeric/`1`/`%1` literals: HS treats these as nullary
         // irreducible Public constructors.  The DH `1` is `oneSymString =
         // "one"` and the nat `%1` is `natOneSymString = "tone"`
-        // (FunctionSymbols.hs:134-134,144); both are arity-0 Public Constructors
+        // (FunctionSymbols.hs:226,236); both are arity-0 Public Constructors
+        // (`oneSym`/`natOneSym`, FunctionSymbols.hs:255,267)
         // and hence always `allowed`, so the head name is never rendered as
         // an offender — but we still use the HS-faithful names here.
         Term::Number(n) => RTerm::PubConst(n.to_string()),
@@ -517,7 +509,7 @@ fn resolve_term(t: &Term, scope: &Scope, irr: &Irreducible, pos: TermPos) -> RTe
                 BinOp::NatPlus => resolve_ac(AcSym::NatPlus, vec![ra, rb], irr),
                 // A user-declared `[AC]` symbol applied infix is ALWAYS the
                 // AC application (HS `acterm` builds `fAppACfct` straight
-                // from `stACFunSyms`, Theory/Text/Parser/Term.hs:163-168) —
+                // from `stACFunSyms`, Theory/Text/Parser/Term.hs:166-172) —
                 // even when a `NoEq` symbol shares the name and claims the
                 // prefix spelling, so this arm deliberately bypasses
                 // [`Irreducible::prefix_ac_fct`]'s NoEq-wins rule.
@@ -605,7 +597,7 @@ fn resolve_ac(sym: AcSym, args: Vec<RTerm>, irr: &Irreducible) -> RTerm {
 
 /// Build a C (commutative, non-associative) application node.  HS `fAppC`
 /// sorts the argument list: `fAppC nacsym as = FAPP (C nacsym) (sort as)`
-/// (Term/Term/Raw.hs:132-133).
+/// (Term/Term/Raw.hs:132-134).
 fn resolve_c(sym: CSym, mut args: Vec<RTerm>) -> RTerm {
     args.sort_by(cmp_rterm);
     RTerm::App(Head::C(sym), args)
@@ -658,11 +650,12 @@ fn resolve_var(v: &VarSpec, scope: &Scope, irr: &Irreducible, pos: TermPos) -> R
 /// Find the innermost binder matching `v` and return its De-Bruijn index.
 ///
 /// HS binds a use to its binder via full `LVar` equality — name AND sort AND
-/// idx (`quantify x = ... | v == x = Bound i`, Formula.hs:340-345; `LVar` `Eq`
+/// idx (`quantify x = ... | v == x = Bound i`, Theory/Model/Formula.hs:347-352; `LVar` `Eq`
 /// compares `idx`, sort and name, LTerm.hs:546-548). We reproduce this exactly
 /// on the sort-*kind*: the use's sort is concrete in HS, never approximate.
 /// The parser assigns every variable a concrete `LSort` before `quantify`
-/// runs (Formula.hs:114-119 `standardFormula msgvar nodevar`):
+/// runs (Theory/Text/Parser/Formula.hs:112-117, see line 114
+/// `standardFormula msgvar nodevar`):
 ///   - a message-position variable is parsed by `msgvar`
 ///     (`sortedLVar [LSortFresh, LSortPub, LSortNat, LSortMsg]`,
 ///     Token.hs:440-441), so an *untagged* message use takes the

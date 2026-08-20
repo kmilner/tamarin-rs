@@ -1,9 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, and other minor contributors (see upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/theory/src/Theory/Text/Parser/Signature.hs,
-//   lib/theory/src/Theory/Text/Parser/Term.hs,
-//   lib/theory/src/Theory/Text/Parser/Token.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Lexer for `.spthy` files.
 //!
@@ -11,8 +8,8 @@
 //! "skip whitespace, then peek/consume" operations rather than a separate
 //! token stream. This matches Parsec's style and is convenient for
 //! context-sensitive lexing (e.g. natural-number subscripts, formal
-//! comments `name{* ... *}`, hex colour codes, multi-character symbol
-//! choices like `++` vs `+`).
+//! comments `name{* ... *}`, multi-character symbol choices like `++`
+//! vs `+`).
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Pos {
@@ -261,7 +258,8 @@ impl<'a> Lexer<'a> {
     /// the reserved names `["in","let","rule","diff"]` (Token.hs:214-230, see line 225): a word equal
     /// to one of those is not a valid identifier, so we backtrack and return None.
     /// The `diff` term operator does NOT go through this — it is matched as a
-    /// keyword/symbol (HS `diffOp = symbol "diff" *> parens ...`, Term.hs:108-110).
+    /// keyword/symbol (HS `diffOp = symbol "diff" *> parens ...`,
+    /// Parser/Term.hs:123-125).
     pub fn identifier(&mut self) -> Option<String> {
         self.skip_ws();
         let save = self.pos;
@@ -579,7 +577,7 @@ impl<'a> Lexer<'a> {
     }
 
     /// Strict export-body character stream, mirroring Haskell `bodyChar` in the
-    /// `export` parser (Signature.hs:282-287): each char is taken verbatim except
+    /// `export` parser (Parser/Signature.hs:297-302): each char is taken verbatim except
     /// `\`, which must be followed by `\` or `"` (the second char is returned and
     /// the backslash dropped); a bare `"` terminates the body and any other `\x`
     /// fails the whole parse. Used for `export <tag>: "..."` blocks.
@@ -726,39 +724,6 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    /// Hex colour code (optionally prefixed with `#`, optionally single-quoted).
-    ///
-    /// Unlike the Haskell `symbol`-based parser (Token.hs:404-406), this does not
-    /// skip whitespace after the opening quote or after `#`, so `' #FF'` / `'# FF'`
-    /// are rejected here though Haskell accepts them. Real colour attributes are
-    /// always tight (e.g. `'#111111'`), so this whitespace divergence has no
-    /// practical effect.
-    pub fn hex_color(&mut self) -> Option<String> {
-        self.skip_ws();
-        let save = self.pos;
-        let quoted = self.eat('\'');
-        let _ = self.eat('#');
-        let mut s = String::new();
-        while let Some(c) = self.peek() {
-            if c.is_ascii_hexdigit() {
-                s.push(c);
-                self.bump();
-            } else {
-                break;
-            }
-        }
-        if quoted && !self.eat('\'') {
-            self.pos = save;
-            return None;
-        }
-        if s.is_empty() {
-            self.pos = save;
-            return None;
-        }
-        self.skip_ws();
-        Some(s)
-    }
-
     /// External identifier: `x-<ident>`.
     pub fn ext_identifier(&mut self) -> Option<String> {
         self.skip_ws();
@@ -767,8 +732,13 @@ impl<'a> Lexer<'a> {
             self.pos = save;
             return None;
         }
-        let id = self.identifier()?;
-        Some(format!("x-{}", id))
+        match self.identifier() {
+            Some(id) => Some(format!("x-{}", id)),
+            None => {
+                self.pos = save;
+                None
+            }
+        }
     }
 }
 
@@ -825,14 +795,37 @@ mod tests {
 
     #[test]
     fn double_quoted_with_escape() {
+        // The leading whitespace is a lexeme boundary.  `string_literal` skips
+        // that whitespace before it looks for the opening quote.
         let mut l = Lexer::new(r#" "abc \"x\" def" "#);
         assert_eq!(l.string_literal().as_deref(), Some(r#"abc "x" def"#));
+
+        // The literal fails and the lexer backtracks when the input ends
+        // before the closing quote.  The lexer must not read `"abc` as the
+        // string `abc`.
+        let mut l = Lexer::new("\"abc");
+        assert_eq!(l.string_literal(), None);
+        assert_eq!(l.pos(), Pos::ZERO, "cursor moved on failure");
     }
 
     #[test]
     fn single_quoted_basic() {
+        // The leading whitespace is a lexeme boundary.  `single_quoted` skips
+        // that whitespace before it looks for the opening quote.
         let mut l = Lexer::new(" 'foo'  ");
         assert_eq!(l.single_quoted().as_deref(), Some("foo"));
+
+        // `singleQuotedString = singleQuoted $ many1 (noneOf "'\n")`
+        // (Token.hs:452-453).  `many1` needs one body character, so `''`
+        // fails.  A newline or the end of the input before the closing quote
+        // leaves the literal unclosed.  Every failure backtracks.  Parsec
+        // wraps the lexeme in `try`, so the lexeme must leave the cursor for
+        // the enclosing alternative.
+        for src in ["''", "'unterminated", "'no\nclose'"] {
+            let mut l = Lexer::new(src);
+            assert_eq!(l.single_quoted(), None, "must reject {src:?}");
+            assert_eq!(l.pos(), Pos::ZERO, "cursor moved on failure: {src:?}");
+        }
     }
 
     #[test]
@@ -896,16 +889,68 @@ mod tests {
         //   `export foo: "a\nb"` => "unexpected n, expecting \"\\\\\" or \"\\\"\"".
         let mut l = Lexer::new("\"a\\nb\"");
         assert_eq!(l.export_body(), None);
+        assert_eq!(l.pos(), Pos::ZERO, "cursor moved on failure");
+
+        // `many bodyChar` never finds the closing `"` when the input ends.
+        // An escaped final quote also does not close the body.
+        for src in ["\"abc", "\"abc\\\""] {
+            let mut l = Lexer::new(src);
+            assert_eq!(l.export_body(), None, "must reject {src:?}");
+            assert_eq!(l.pos(), Pos::ZERO, "cursor moved on failure: {src:?}");
+        }
     }
 
-    // --- formal_comment: rejects a body-internal lone `*` ---
+    // --- formal_comment: every way the body can fail after `{*` ---
 
     #[test]
-    fn formal_comment_rejects_internal_lone_star() {
-        // HS `bodyChar` does `'*' -> mzero`; `text{* a*b *}` is a parse error.
-        // Confirmed against v1.13.0: "unexpected b, expecting \"*}\"".
-        let mut l = Lexer::new("text{* a*b *}");
-        assert_eq!(l.formal_comment(), None);
+    fn formal_comment_rejects_every_failing_body() {
+        // `many bodyChar <* string "*}"` (Token.hs:379) uses `bodyChar`
+        // (Token.hs:382-387).  After the lexer reads the opening `{*`, the
+        // body can fail in exactly three ways.  Upstream rejects each of the
+        // three inputs as well.  The messages below come from the pinned
+        // oracle on `theory T\nbegin\n\nnote{* ... \n\nend\n`:
+        //
+        //   `note{* a*b *}`       `'*' -> mzero` stops `many bodyChar`.  The
+        //                         required `string "*}"` then fails at the
+        //                         `*`:
+        //                         (line 4, column 9)
+        //                         unexpected "b" / expecting "*}"
+        //   `note{* a\qb *}`      the `'\\'` branch accepts only `\` or `*`:
+        //                         (line 4, column 10)
+        //                         unexpected "q" / expecting "\\" or "*"
+        //   `note{* unterminated` `anyChar` fails at the end of the input, so
+        //                         `string "*}"` fails too:
+        //                         (line 5, column 1)
+        //                         unexpected end of input / expecting "*}"
+        //
+        // A probe of this port, not the oracle, gives the `Pos::ZERO` half.
+        // HS wraps only `many1 letter <* string "{*"` in `try`
+        // (Token.hs:378).  A body failure is therefore a parsec failure that
+        // has consumed input.  The enclosing item alternation cannot backtrack
+        // past such a failure.  For that reason every oracle frame above
+        // points into the body.  This lexer rewinds to the start of the header
+        // instead.  `Parser::theory_item` then falls through to its keyword
+        // alternatives and reports at the item position.  All three inputs
+        // give `unexpected "{"` / `expecting letter or "{*"` (probed at this
+        // tip).  The assertions below record that rewind as the port's current
+        // behaviour.  Work that closes the divergence must update them
+        // deliberately.
+        for src in ["note{* a*b *}", r"note{* a\qb *}", "note{* unterminated"] {
+            let mut l = Lexer::new(src);
+            assert_eq!(l.formal_comment(), None, "must reject {src:?}");
+            assert_eq!(l.pos(), Pos::ZERO, "cursor moved on failure: {src:?}");
+        }
+
+        // The case the lexer accepts.  `\*` and `\\` are the two escapes that
+        // `bodyChar` takes.  The body keeps the escaped character and drops
+        // the backslash.  The oracle loads that theory and prints the item
+        // again as `note{* a*b\c *}`.  `prettyFormalComment` puts the stored
+        // body between `{*` and `*}` without any change.
+        let mut ok = Lexer::new(r"note{* a\*b\\c *}");
+        assert_eq!(
+            ok.formal_comment(),
+            Some(("note".to_string(), r" a*b\c ".to_string()))
+        );
     }
 
     // --- single_quoted: strips leading whitespace (lexeme open quote) ---

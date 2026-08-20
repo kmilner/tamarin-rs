@@ -1,3 +1,7 @@
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
+
 use super::*;
 use crate::builtin::{msg_var, pair, pk};
 use crate::lterm::LNTerm;
@@ -6,8 +10,16 @@ use crate::lterm::LNTerm;
 fn unify_two_distinct_variables() {
     let x: LNTerm = msg_var("x", 0);
     let y: LNTerm = msg_var("y", 0);
-    let s = unify_lnterm_no_ac(vec![Equal::new(x, y)]).unwrap();
-    assert!(!s.is_empty());
+    let s = unify_lnterm_no_ac(vec![Equal::new(x.clone(), y)]).unwrap();
+    // HS `unifyRaw` orients a var-var pair of the same sort by `Ord LVar`
+    // (Unification.hs:276).  The index and the sort are equal here, so the
+    // comparison falls to the name.  `unifyRaw` therefore eliminates the later
+    // name, and that name becomes the key.  A check that the substitution is
+    // not empty accepts either orientation.
+    assert_eq!(
+        s.to_list(),
+        vec![(crate::lterm::LVar::new("y", LSort::Msg, 0), x)]
+    );
 }
 
 #[test]
@@ -39,9 +51,18 @@ fn match_pattern_variable_against_constant_term() {
     // Match: term=pair(a,b), pattern=pair(x,y).
     let t: LNTerm = pair(msg_var("a", 0), msg_var("b", 0));
     let p: LNTerm = pair(msg_var("x", 0), msg_var("y", 0));
-    let problem = Match::match_with(t.clone(), p);
+    let problem = Match::match_with(t, p);
     let s = solve_match_lterm_no_ac(&|n| crate::lterm::sort_of_name(n), problem).unwrap();
-    assert_eq!(s.len(), 2);
+    // Each pattern variable is the key.  Each key maps to the subject term at
+    // its own argument position.  A count of the bindings alone does not see a
+    // swap of the two.
+    assert_eq!(
+        s.to_list(),
+        vec![
+            (crate::lterm::LVar::new("x", LSort::Msg, 0), msg_var("a", 0)),
+            (crate::lterm::LVar::new("y", LSort::Msg, 0), msg_var("b", 0)),
+        ]
+    );
 }
 
 #[test]
@@ -53,7 +74,7 @@ fn match_fails_on_different_arity() {
 }
 
 // -------------------------------------------------------------------
-// HS `unifyRaw` AC/C arms (Unification.hs:265-273): the AC arm fires
+// HS `unifyRaw` AC/C arms (Unification.hs:299-308): the AC arm fires
 // only when BOTH sides are AC apps with the SAME symbol; otherwise the
 // pair falls through to `_ -> mzero` (no unifier).  These pin that the AC
 // arm delays/NeedsAC only for same-symbol AC apps on both sides.
@@ -134,7 +155,7 @@ fn no_ac_same_ac_symbol_is_needs_ac() {
 
 // -------------------------------------------------------------------
 // `solve_match_lterm` 3-way outcome (HS `solveMatchLTerm`,
-// Unification.hs:200-216).  These pin the exact distinction that
+// Unification.hs:219-239).  These pin the exact distinction that
 // eliminates the LAK06 (28 879→0) / NAXOS / CRxor surplus Maude
 // `match`es: an AC-/C-headed subterm only forces a Maude fallback
 // when it appears AC-vs-AC; under a variable pattern, or facing a

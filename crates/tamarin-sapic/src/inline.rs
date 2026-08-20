@@ -1,13 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   rkunnema, meiersi, beschmi, charlie-j, and other minor contributors
-//   (see upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/sapic/src/Sapic/Basetranslation.hs,
-//   lib/sapic/src/Sapic/Bindings.hs,
-//   lib/term/src/Term/Maude/Process.hs,
-//   lib/theory/src/Theory/Sapic/Process.hs,
-//   lib/theory/src/Theory/Text/Parser/Sapic.hs,
-//   lib/theory/src/TheoryObject.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Process-call inlining.
 //!
@@ -48,7 +41,9 @@ use tamarin_theory::sapic::{
     PlainProcess, Process, ProcessCombinator, SapicAction, SapicLVar, SapicTerm,
 };
 
-use crate::convert::{convert_action, convert_combinator, convert_term, ConvertError};
+use crate::convert::{
+    action as convert_action, combinator as convert_combinator, term as convert_term, ConvertError,
+};
 
 /// A substitution mapping SAPIC parameter variables to argument terms.
 type SapicSubst = Subst<Name, SapicLVar>;
@@ -181,7 +176,7 @@ fn process_add_annotation(
     }
 }
 
-/// `applyM subst p` over an `LProcess` (Process.hs:411-424): apply `subst` to
+/// `applyM subst p` over an `LProcess` (Sapic/Process.hs:411-424): apply `subst` to
 /// every term, raising a capture error if a substituted parameter would be
 /// captured by an inner binder (`new` / `lookup` / single-var `in`).
 ///
@@ -214,14 +209,14 @@ fn in_domain(subst: &SapicSubst, v: &SapicLVar) -> bool {
     subst.image_of(v).is_some() || subst.image_of(&SapicLVar::untyped(v.var)).is_some()
 }
 
-/// `applyM` for `SapicAction` (Process.hs:392-408): substitute terms, raising
+/// `applyM` for `SapicAction` (Sapic/Process.hs:392-408): substitute terms, raising
 /// `CapturedNew` / `CapturedIn` on capture.
 fn apply_m_action(
     subst: &SapicSubst,
     ac: SapicAction<SapicLVar>,
 ) -> Result<SapicAction<SapicLVar>, ConvertError> {
     match ac {
-        // `New v` with `v ∈ dom subst` would be captured (Process.hs:393-395).
+        // `New v` with `v ∈ dom subst` would be captured (Sapic/Process.hs:395-398).
         SapicAction::New(v) => {
             if in_domain(subst, &v) {
                 return Err(ConvertError::new(format!(
@@ -237,7 +232,7 @@ fn apply_m_action(
             msg: subst_term(subst, &msg),
         }),
         // `ChIn` of a single captured var is captured unless its name starts
-        // with `pat_` (Process.hs:399-406).
+        // with `pat_` (Sapic/Process.hs:399-406).
         SapicAction::ChIn {
             chan,
             msg,
@@ -255,7 +250,7 @@ fn apply_m_action(
                 chan: chan.map(|t| subst_term(subst, &t)),
                 msg: subst_term(subst, &msg),
                 // HS `apply subst (ChIn mt t vs) = ChIn … (applyMatchVars subst vs)`
-                // (Process.hs:319-321, see line 320): each match var `v` is replaced by the
+                // (Sapic/Process.hs:319-321, see line 320): each match var `v` is replaced by the
                 // variables of its image `subst(v)` (or kept if undefined).  When
                 // inlining a call like `Q(h(a))` into `in(<y, =x>)`, the param
                 // match-var `x` becomes the vars of `h(a)` (= `{a}`) so that
@@ -294,7 +289,7 @@ fn apply_m_action(
     }
 }
 
-/// `applyM` for `ProcessCombinator` (Process.hs:382-389): `Lookup`'s bound var
+/// `applyM` for `ProcessCombinator` (Sapic/Process.hs:382-389): `Lookup`'s bound var
 /// being captured raises `CapturedLookup`.
 fn apply_m_comb(
     subst: &SapicSubst,
@@ -324,9 +319,9 @@ fn apply_m_comb(
             subst_term(subst, &b),
         )),
         // `Cond` carries an un-expanded parser-AST formula.  HS DOES substitute
-        // here: `apply subst (Cond fa) = Cond (apply subst fa)` (Process.hs:165),
+        // here: `apply subst (Cond fa) = Cond (apply subst fa)` (Sapic/Process.hs:165),
         // reached via the `ApplyM`/`Apply` ProcessCombinator instances
-        // (Process.hs:330-334,382).  So to be byte-faithful a call whose body begins
+        // (Sapic/Process.hs:330-334,382).  So to be byte-faithful a call whose body begins
         // with `if <formula>` mentioning a parameter (the call substitutes that
         // parameter into the formula's free vars) must rewrite the formula too —
         // exactly as the sibling Case-B `let`-elimination path does in
@@ -344,7 +339,7 @@ fn apply_m_comb(
     }
 }
 
-/// `applyMatchVars subst vs` (Process.hs:304-309): `fromList . concatMap
+/// `applyMatchVars subst vs` (Sapic/Process.hs:304-309): `fromList . concatMap
 /// extractVars . toList` where `extractVars v = maybe [v] varsVTerm (imageOf
 /// subst v)`.  A match var `v` is replaced by ALL the variables of its image
 /// `subst(v)`; an undefined `v` is kept.  Probes both the typed and untyped
@@ -428,10 +423,18 @@ mod tests {
                 assert_eq!(args.len(), 1);
                 // The wrapped body must carry processnames = ["P"].
                 assert_eq!(body.annotation().process_names, vec!["P".to_string()]);
-                // The body's out() arg must be the substituted 't', NOT x.
+                // The out() argument in the body must be the substituted 't',
+                // and not x.  It must also be the same term that the call site
+                // passed.  A substitution that drops the argument, or that
+                // binds the wrong formal parameter, therefore cannot pass this
+                // check with some other constant.
                 match *body {
                     Process::Action(SapicAction::ChOut { msg, .. }, _, _) => {
-                        assert!(matches!(msg, VTerm::Lit(Lit::Con(_))));
+                        assert_eq!(msg, args[0]);
+                        assert_eq!(
+                            msg,
+                            crate::convert::term(&pub_lit("t")).expect("'t' converts")
+                        );
                     }
                     other => panic!("expected ChOut body, got {other:?}"),
                 }

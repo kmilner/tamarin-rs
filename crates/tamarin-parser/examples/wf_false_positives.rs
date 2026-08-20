@@ -65,7 +65,7 @@ fn main() {
         // False positive: Tamarin had no warnings but our checker flagged something.
         let fp = tamarin_topics.is_empty() && !rust_topics.is_empty();
         if fp {
-            false_positives.push((path.clone(), rust_topics.clone()));
+            false_positives.push((path.clone(), rust_topics));
         }
         if i % 5 == 0 || fp {
             eprintln!(
@@ -81,7 +81,7 @@ fn main() {
         }
     }
 
-    println!("Scanned (parsed by both):  {}", scanned);
+    println!("Scanned (parsed by us):    {}", scanned);
     println!("Tamarin clean:             {}", tamarin_clean);
     println!("Rust flagged:              {}", rust_flagged);
     println!(

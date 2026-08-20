@@ -1,15 +1,20 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   rkunnema, charlie-j, beschmi, jdreier, meiersi, kevinmorio, arcz,
-//   PhilipLukertWork, rsasse, and other minor contributors (see
-//   upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/sapic/src/Sapic/Basetranslation.hs, lib/term/src/Term/Term.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Port of `Sapic.Basetranslation` (`lib/sapic/src/Sapic/Basetranslation.hs`):
 //!   - `baseInit`       (Basetranslation.hs:312-318)
 //!   - `baseTransNull`  (Basetranslation.hs:81-82)
-//!   - `baseTransAction` New (103) / Event (197) / plain ChOut (155) / null-chan
-//!   - `baseRestr`      (449-485) — the always-on `single_session` restriction.
+//!   - `baseTransAction` (94-214) — every `SapicAction` arm
+//!   - `baseTransComb`   (226-306) — every `ProcessCombinator` arm
+//!   - the hardcoded restrictions `baseRestr` (449-485) selects from:
+//!     `single_session` and `predicate_eq`/`predicate_not_eq` are built
+//!     directly as parser-AST restrictions, while `set_in`/`set_notin`,
+//!     `in_event` and `locking_<idx>` go through `parse_formula_str` on HS's
+//!     verbatim restriction text (as HS's own `toEx`/`parseRestriction` does).
+//!
+//! `baseRestr`'s selection logic itself lives in `translate`, which owns the
+//! process-shape predicates (`contains isLookup` etc.) it dispatches on.
 
 use std::collections::BTreeSet;
 
@@ -1230,8 +1235,13 @@ fn rename_lock_pos_atoms(f: &mut tamarin_parser::ast::Formula, idx: u64) {
     walk(f, idx);
 }
 
-/// `resLockingPure` (Basetranslation.hs:388-402): the two `locking1`/`locking2`
-/// restrictions used only in the pure-state case (state-channel optimisation).
+/// `resLockingPure` (Basetranslation.hs:388-402): the `locking1`/`locking2`
+/// restriction pair for the pure-state (state-channel-optimisation) case.
+///
+/// Upstream EXPORTS this but never calls it — `baseRestr` builds only the
+/// per-lock `resLocking` restrictions — so nothing reaches it here either.
+/// Kept as a faithful port so wiring it stays a one-line change if upstream
+/// ever does.
 pub fn res_locking_pure() -> Vec<tamarin_parser::ast::Restriction> {
     let locking1 = "All p l x #t1 pp lp #t2 #t3 . Lock(p,l,x)@t1 &  Lock(pp,lp,x)@t2\n\
                      & Unlock(p,l,x)@t3 & not(#t1=#t2)\n\
@@ -1347,12 +1357,21 @@ mod tests {
 
     #[test]
     fn condeq_unbound_var_errors() {
-        // tildex empty → a, b unbound → WFUnbound error.
+        // tildex is empty, so a and b are unbound.  The result is a
+        // WFUnbound error that names both of them.  The failure therefore
+        // comes from the unbound-variable check and not from another
+        // rejection.
         let an = ProcessAnnotation::<LVar>::empty();
         let p: Vec<i64> = vec![];
         let tx = BTreeSet::new();
         let c = ProcessCombinator::CondEq(svar("a"), svar("b"));
-        assert!(base_trans_comb(&c, &an, &p, &tx).is_err());
+        let err = base_trans_comb(&c, &an, &p, &tx).unwrap_err();
+        assert!(err.contains('a') && err.contains('b'), "got {err}");
+        // When both variables are bound, the same combinator translates.
+        let mut tx2 = BTreeSet::new();
+        tx2.insert(lv("a", 0));
+        tx2.insert(lv("b", 0));
+        assert!(base_trans_comb(&c, &an, &p, &tx2).is_ok());
     }
 
     /// A bare token naming a declared 0-arity function symbol is a CONSTANT in

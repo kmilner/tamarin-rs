@@ -1,16 +1,9 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, jdreier, rkunnema, beschmi, PhilipLukertWork, yavivanov,
-//   rsasse, Hong-Thai, charlie-j, ValentinYuri, and other minor
-//   contributors (see upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/term/src/Term/LTerm.hs, lib/theory/src/Rule.hs,
-//   lib/theory/src/Theory/Model/Restriction.hs,
-//   lib/theory/src/Theory/Model/Rule.hs,
-//   lib/theory/src/Theory/Text/Parser.hs,
-//   lib/theory/src/Theory/Text/Parser/Term.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Port of HS `liftedAddProtoRule` (Theory/Text/Parser.hs:166-193) +
-//! `fromRuleRestriction` / `rewrite` (Theory/Model/Restriction.hs:89-161).
+//! `fromRuleRestriction` / `rewrite` (Theory/Model/Restriction.hs:90-162).
 //!
 //! Expands the `_restrict(...)` embedded-restriction construct that the
 //! parser captures into `Rule.embedded_restrictions: Vec<Formula>`
@@ -42,7 +35,8 @@ use tamarin_parser::{ast as p, DUMMY_LOCATION};
 
 use crate::predicate_expand::{expand_formula, ExpandError};
 
-/// HS `varNow = LVar "NOW" LSortNode 0` (Restriction.hs:86-87, see line 87).  The implicit
+/// HS `varNow = LVar "NOW" LSortNode 0` (Theory/Model/Restriction.hs:87-88).
+/// The implicit
 /// timepoint variable bound by the generated `∀ … #NOW.` restriction.
 fn var_now() -> p::VarSpec {
     p::VarSpec {
@@ -54,7 +48,7 @@ fn var_now() -> p::VarSpec {
     }
 }
 
-/// HS `restrPrefix = "Restr_"` (Restriction.hs:129-130, see line 130).
+/// HS `restrPrefix = "Restr_"` (Theory/Model/Restriction.hs:130-131).
 const RESTR_PREFIX: &str = "Restr_";
 
 /// Run the `_restrict` lifting pass over a parsed theory in place.
@@ -68,7 +62,7 @@ const RESTR_PREFIX: &str = "Restr_";
 /// theory's `predicate:` declarations first (HS `liftedExpandFormula`).
 /// `let` bindings are applied to the rule body before lifting so the
 /// abstracted terms see their expansions (HS applies `let` at parse time,
-/// Rule.hs:131, before `liftedAddProtoRule`).
+/// Parser/Rule.hs:133, before `liftedAddProtoRule`).
 pub fn lift_rule_restrictions(thy: &mut p::Theory) -> Result<(), ExpandError> {
     // Collect predicate definitions once (declared before the rules).
     let predicates: Vec<p::Predicate> = thy
@@ -104,6 +98,64 @@ pub fn lift_rule_restrictions(thy: &mut p::Theory) -> Result<(), ExpandError> {
     }
     thy.items = new_items;
     Ok(())
+}
+
+/// Free variables of each rule's `_restrict` formulas, keyed by rule name.
+///
+/// HS keeps the (let-applied, predicate-unexpanded) `_restrict` formulas on
+/// the rule as `preRestriction` forever: the parser stores them
+/// (Parser/Rule.hs:135) and `liftedAddProtoRule`
+/// (Theory/Text/Parser.hs:166-193) appends the generated actions without
+/// clearing the field.  `HasFrees ProtoRuleEInfo`
+/// (Theory/Model/Rule.hs:491-498) folds over those formulas while `Apply
+/// ProtoRuleEInfo` is the identity (Theory/Model/Rule.hs:500-501), so every
+/// closed rule
+/// carries their frees, never substituted.  RS clears the parsed
+/// `embedded_restrictions` in [`lift_rule_restrictions`]; this helper — run
+/// BEFORE the lift — captures the same frees for the one downstream consumer
+/// whose bytes depend on them: partial evaluation's rename/dedup
+/// (`tools::abstract_interpretation`).
+///
+/// Variable conversion mirrors elaboration's rule-body conversion
+/// (`elaborate::sort_of`) so the collected frees share identity with the
+/// elaborated rule's variables.  Bare nullary constants — which HS resolves
+/// to 0-ary applications at parse time (`nullaryApp`) but the RS parser
+/// leaves as untagged vars — are resolved away first, exactly as
+/// `lift_one_rule` does before its own rewrite.
+pub fn restriction_frees_by_rule(
+    thy: &p::Theory,
+) -> BTreeMap<String, Vec<tamarin_term::lterm::LVar>> {
+    let nullary = crate::elaborate::nullary_fun_names(&thy.items);
+    let mut map: BTreeMap<String, Vec<tamarin_term::lterm::LVar>> = BTreeMap::new();
+    for item in &thy.items {
+        let p::TheoryItem::Rule(rule) = item else {
+            continue;
+        };
+        if rule.embedded_restrictions.is_empty() {
+            continue;
+        }
+        // Same let application as `lift_one_rule` (HS applies the let block
+        // to the restriction formulas at parse, Parser/Rule.hs:132-135).
+        let rule = if rule.let_block.is_empty() {
+            rule.clone()
+        } else {
+            crate::elaborate::apply_let_block(rule)
+        };
+        let mut frees: Vec<tamarin_term::lterm::LVar> = Vec::new();
+        for phi in &rule.embedded_restrictions {
+            let phi = resolve_nullary_constants(phi, &nullary);
+            for v in frees_list(&phi) {
+                let lv = crate::elaborate::varspec_to_lvar(&v);
+                if !frees.contains(&lv) {
+                    frees.push(lv);
+                }
+            }
+        }
+        if !frees.is_empty() {
+            map.insert(rule.name.clone(), frees);
+        }
+    }
+    map
 }
 
 /// Lift one rule's embedded restrictions.  Returns the generated
@@ -148,7 +200,8 @@ pub fn lift_one_rule(
         // keeps it inlined.  The RS parser leaves it as `Var{name, Untagged,
         // idx 0}`; resolve those to `App(name, [])` here (an argument-less
         // `FApp` has no free-variable-containing args, so `rewrite`'s
-        // abstraction clauses at Restriction.hs:98-111 never fire on it), so
+        // abstraction clauses at Theory/Model/Restriction.hs:99-112 never fire
+        // on it), so
         // a constant like `NormalReq` stays in the restriction formula
         // instead of becoming a fresh fact argument.
         let expanded = resolve_nullary_constants(&expanded, nullary);
@@ -166,9 +219,10 @@ pub fn lift_one_rule(
     Ok((restrictions, rule))
 }
 
-/// HS `fromRuleRestriction rname f` (Restriction.hs:140-161): produce the
+/// HS `fromRuleRestriction rname f` (Theory/Model/Restriction.hs:141-162):
+/// produce the
 /// generated restriction plus the action fact inserted into the rule.
-fn from_rule_restriction(r: &str, f: &p::Formula) -> (p::Restriction, p::Fact) {
+fn from_rule_restriction(rname: &str, f: &p::Formula) -> (p::Restriction, p::Fact) {
     // HS `rewrite f` returns `(rewritten formula, M.Map LVar Term)`.
     let (rewr_f, subst) = rewrite(f);
 
@@ -187,7 +241,7 @@ fn from_rule_restriction(r: &str, f: &p::Formula) -> (p::Restriction, p::Fact) {
         .cloned()
         .map(p::Term::Var)
         .collect();
-    let restr_fact = mk_fact(r, bvar_terms);
+    let restr_fact = mk_fact(rname, bvar_terms);
     // f'' = (Restr_<rname>(...) @ #NOW) ⇒ f'
     let now_term = p::Term::Var(var_now());
     let antecedent = p::Formula::atom(p::Atom::Action(restr_fact, now_term), f.location);
@@ -202,7 +256,7 @@ fn from_rule_restriction(r: &str, f: &p::Formula) -> (p::Restriction, p::Fact) {
         p::Formula::forall(quant_vars, f2, location)
     };
     let restriction = p::Restriction {
-        name: format!("{}{}", RESTR_PREFIX, r),
+        name: format!("{}{}", RESTR_PREFIX, rname),
         location: restr_formula.location,
         formula: restr_formula,
         attributes: Vec::new(),
@@ -221,14 +275,14 @@ fn from_rule_restriction(r: &str, f: &p::Formula) -> (p::Restriction, p::Fact) {
             None => p::Term::Var(v),
         })
         .collect();
-    let action = mk_fact(r, action_args);
+    let action = mk_fact(rname, action_args);
 
     (restriction, action)
 }
 
 /// Resolve every bare 0-arity constant token in a formula from `Var{name,
 /// Untagged, idx 0}` to `App(name, [])`, matching HS's parse-time `nullaryApp`
-/// resolution (Theory/Text/Parser/Term.hs:139-143).  `nullary` is the theory's
+/// resolution (Theory/Text/Parser/Term.hs:158-163).  `nullary` is the theory's
 /// 0-arity function-symbol set (user `functions: f/0` + enabled builtins'
 /// constants).  Applied to a restriction formula BEFORE `rewrite` so a constant
 /// is a `FApp` (kept inline) rather than a `Var` (abstracted into a fact arg).
@@ -253,7 +307,7 @@ fn resolve_nullary_term(t: &p::Term, nullary: &BTreeSet<String>) -> p::Term {
 }
 
 /// HS `mkFact = protoFactAnn Linear (restrPrefix ++ rname) S.empty`
-/// (Restriction.hs:140-161, see line 161): a linear fact named `Restr_<rname>`.
+/// (Theory/Model/Restriction.hs:162): a linear fact named `Restr_<rname>`.
 fn mk_fact(rname: &str, args: Vec<p::Term>) -> p::Fact {
     p::Fact {
         persistent: false,
@@ -265,7 +319,7 @@ fn mk_fact(rname: &str, args: Vec<p::Term>) -> p::Fact {
 }
 
 // =============================================================================
-// rewrite (HS Restriction.hs:89-127)
+// rewrite (HS Theory/Model/Restriction.hs:90-128)
 // =============================================================================
 
 /// A fresh-variable substitution: maps each minted fresh var (by key) to
@@ -274,7 +328,8 @@ fn mk_fact(rname: &str, args: Vec<p::Term>) -> p::Fact {
 type RewriteSubst = BTreeMap<(String, u64), p::Term>;
 
 /// HS `rewrite f = runState (evalFreshT (traverseFormulaAtom fAt' f) 0) M.empty`
-/// (Restriction.hs:91-127, see line 95): traverse every term of every atom, abstracting
+/// (Theory/Model/Restriction.hs:92-128, see line 96): traverse every term of
+/// every atom, abstracting
 /// subterms that contain free variables into fresh vars.  Returns the
 /// rewritten formula and the `{fresh ↦ original}` map.
 fn rewrite(f: &p::Formula) -> (p::Formula, RewriteSubst) {
@@ -391,7 +446,7 @@ fn rewrite_atom(a: &p::Atom, bound: &[VarKey], st: &mut RewriteState) -> p::Atom
     }
 }
 
-/// HS `fAt` (Restriction.hs:98-111): the per-term abstraction.
+/// HS `fAt` (Theory/Model/Restriction.hs:99-112): the per-term abstraction.
 ///   - `Var v`, v free            → substitute (fresh var)
 ///   - `Var _`, v bound           → keep
 ///   - `FApp _ as`, any free & no bound → substitute the WHOLE term
@@ -552,8 +607,8 @@ fn dedup_first(vs: Vec<p::VarSpec>) -> Vec<p::VarSpec> {
 }
 
 /// HS `LVar` Ord: `compare idx <> compare sort <> compare name`
-/// (LTerm.hs:522-524).  LSort order: Pub < Fresh < Msg < Node < Nat
-/// (LTerm.hs:161-166).
+/// (LTerm.hs:546-548).  LSort order: Pub < Fresh < Msg < Node < Nat
+/// (the derived `Ord`'s constructor order, LTerm.hs:165-170).
 fn cmp_lvar(a: &p::VarSpec, b: &p::VarSpec) -> std::cmp::Ordering {
     a.idx
         .cmp(&b.idx)
@@ -679,18 +734,53 @@ mod tests {
             other => panic!("expected eq(x,x), got {:?}", other),
         }
         // Restriction formula: ∀ x #NOW. (Restr_A_1(x) @ #NOW) ⇒ (x = true)
-        match &restr.formula.kind {
-            p::FormulaKind::Forall(vs, body) => {
-                // Two binders: the abstracted x (Msg) and #NOW (Node), in
-                // sorted order x then NOW.
-                assert_eq!(vs.len(), 2);
-                assert_eq!(vs[0].name, "x");
-                assert_eq!(vs[1].name, "NOW");
-                // Body is an implication.
-                assert!(matches!(body.kind, p::FormulaKind::Implies(_, _)));
-            }
-            other => panic!("expected forall, got {:?}", other),
-        }
+        let p::FormulaKind::Forall(vs, body) = &restr.formula.kind else {
+            panic!("expected forall, got {:?}", restr.formula);
+        };
+        // The formula has two binders.  They are the abstracted x (Msg) and
+        // #NOW (Node), in the sorted order x then NOW.
+        assert_eq!(vs.len(), 2);
+        assert_eq!((vs[0].name.as_str(), vs[0].sort), ("x", p::SortHint::Msg));
+        assert_eq!(
+            (vs[1].name.as_str(), vs[1].sort),
+            ("NOW", p::SortHint::Node)
+        );
+        // HS `f'' = (Action #NOW fact) ==> f'`.  The generated action is the
+        // antecedent, and the rewritten body is the consequent.  A swap of the
+        // two keeps the formula an `Implies`, but it inverts the meaning of
+        // the restriction.
+        let p::FormulaKind::Implies(ante, conseq) = &body.kind else {
+            panic!("expected implication, got {:?}", body);
+        };
+        assert_eq!(
+            **ante,
+            p::Formula::atom(
+                p::Atom::Action(
+                    p::Fact {
+                        persistent: false,
+                        name: "Restr_A_1".to_string(),
+                        args: vec![p::Term::Var(vs[0].clone())],
+                        annotations: Vec::new(),
+                        location: DUMMY_LOCATION,
+                    },
+                    p::Term::Var(vs[1].clone()),
+                ),
+                DUMMY_LOCATION,
+            )
+        );
+        // The consequent is the body of the predicate.  The complete `eq(x,x)`
+        // subterm becomes the fresh `x`.  The nullary constant `true` stays
+        // inline as a 0-ary application.  The code never abstracts it.
+        assert_eq!(
+            **conseq,
+            p::Formula::atom(
+                p::Atom::Eq(
+                    p::Term::Var(vs[0].clone()),
+                    p::Term::App("true".to_string(), Vec::new()),
+                ),
+                DUMMY_LOCATION,
+            )
+        );
     }
 
     #[test]
@@ -712,17 +802,26 @@ mod tests {
             matches!(i,
             p::TheoryItem::Rule(r) if r.name == "A")
         });
-        assert!(restr_pos.is_some(), "restriction not generated");
-        assert!(rule_pos.is_some(), "rule missing");
+        let restr_pos = restr_pos.expect("restriction not generated");
+        let rule_pos = rule_pos.expect("rule missing");
+        // HS adds the generated restrictions to the accumulated theory, and it
+        // adds the rule after them.  The restriction is therefore immediately
+        // before the rule.
+        assert_eq!(restr_pos + 1, rule_pos, "restriction must precede rule");
+        // The pass rewrites the rule action and clears the embedded
+        // restrictions.
+        let p::TheoryItem::Rule(r) = &thy.items[rule_pos] else {
+            panic!("item at {rule_pos} is not the rule");
+        };
+        assert!(r.embedded_restrictions.is_empty());
+        assert_eq!(r.actions.len(), 1);
+        assert_eq!(r.actions[0].name, "Restr_A_1");
+        // The action carries the original term, without abstraction.
+        assert_eq!(r.actions[0].args.len(), 1);
         assert!(
-            restr_pos.unwrap() < rule_pos.unwrap(),
-            "restriction must precede rule"
+            matches!(&r.actions[0].args[0], p::Term::App(n, args) if n == "eq" && args.len() == 2),
+            "action arg must be the original eq(x,x), got {:?}",
+            r.actions[0].args[0]
         );
-        // Rule action rewritten, embedded restrictions cleared.
-        if let p::TheoryItem::Rule(r) = &thy.items[rule_pos.unwrap()] {
-            assert!(r.embedded_restrictions.is_empty());
-            assert_eq!(r.actions.len(), 1);
-            assert_eq!(r.actions[0].name, "Restr_A_1");
-        }
     }
 }

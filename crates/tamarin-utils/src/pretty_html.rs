@@ -1,7 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, and other minor contributors (see upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/utils/src/Text/PrettyPrint/Html.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Port of `Text.PrettyPrint.Html` from `lib/utils/src/Text/PrettyPrint/Html.hs`.
 //!
@@ -158,17 +157,20 @@ mod tests {
 
     #[test]
     fn with_tag_includes_attrs() {
+        // The function escapes the attribute values.  It passes the inner body
+        // through without change, because the caller owns the safety of that
+        // body under this module's contract.
         assert_eq!(
-            with_tag("span", &[("class", "hl")], "x"),
-            "<span class=\"hl\">x</span>"
+            with_tag("span", &[("class", "hl"), ("title", "a\"b&c")], "<i>x</i>"),
+            "<span class=\"hl\" title=\"a&quot;b&amp;c\"><i>x</i></span>"
         );
     }
 
     #[test]
     fn closed_tag_self_closes() {
         assert_eq!(
-            closed_tag("img", &[("src", "a.png")]),
-            "<img src=\"a.png\"/>"
+            closed_tag("img", &[("src", "a.png"), ("alt", "<b>")]),
+            "<img src=\"a.png\" alt=\"&lt;b&gt;\"/>"
         );
     }
 

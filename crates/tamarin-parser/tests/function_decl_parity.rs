@@ -1,47 +1,46 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   rkunnema, BTom-GH, charlie-j, jdreier, ValentinYuri, racoucho1u,
-//   Mathias-AURAND, meiersi, and other minor contributors (see upstream
-//   git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/theory/src/Theory/Text/Parser.hs,
-//   lib/theory/src/Theory/Text/Parser/Macro.hs,
-//   lib/theory/src/Theory/Text/Parser/Signature.hs,
-//   lib/theory/src/Theory/Text/Parser/Token.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Parse-error parity for `functions:` declarations and for the theory's
 //! closing `end`.
 //!
-//! Every message, position and expectation set here is the pinned Haskell
-//! oracle's (Git revision ef3f0468) for the same theory, except where a
-//! comment marks a deliberate divergence.
+//! WHICH theories are rejected is pinned to the Haskell oracle (Git revision
+//! ef3f0468), as are the expectation sets and their positions, except where a
+//! comment marks a deliberate divergence.  The conflict and AC-arity
+//! positions are the port's own: the AC-arity error points at the offending
+//! declaration, the conflict at both declarations of the name.
 
+use tamarin_parser::parser::ParseContext;
 use tamarin_parser::{parse_theory, ParseError, TheoryItem};
 
-/// Asserts `src` is rejected by a `functions:` guard with HS's `fail`ed
-/// `message`, at `line`:`col`.
+/// Asserts `src` is rejected by a conflicting-declaration guard
+/// (Theory/Text/Parser/Signature.hs:200-217): the parse fails with
+/// [`ParseError::ConflictingDeclarations`] naming `name`, its `first_at` at
+/// `first` — `None` when the existing symbol is seeded and so has no
+/// declaration site — and its offending declaration at `second`.
 #[track_caller]
-fn assert_custom(src: &str, message: &str, line: u32, col: u32) {
+fn assert_conflict(src: &str, name: &str, first: Option<(u32, u32)>, second: (u32, u32)) {
     let e = parse_theory(src, &[]).expect_err("the probes below must all fail to parse");
-    let at = *e.location();
-    let ParseError::Custom { message: got, .. } = &e else {
-        panic!("expected a `fail`-style error, got {e:?}");
+    let ParseError::ConflictingDeclarations {
+        name: got,
+        context: ParseContext::Function,
+        first_at,
+        second_at,
+    } = &e
+    else {
+        panic!("expected the conflict variant, got {e:?}");
     };
-    assert_eq!(got, message);
-    assert_eq!((at.line, at.col), (line, col));
-}
-
-/// [`assert_custom`] for the conflicting-arities/options diagnostic
-/// (Signature.hs:212-217), whose message is the two `show`n option tuples.
-#[track_caller]
-fn assert_conflict(src: &str, existing: &str, requested: &str, name: &str, line: u32, col: u32) {
-    assert_custom(
-        src,
-        &format!(
-            "conflicting arities/options ({existing}) and ({requested}) for `{name}`. \
-             Please choose a different name for this function."
-        ),
-        line,
-        col,
+    assert_eq!(got, name);
+    assert_eq!(
+        first_at.map(|at| (at.line, at.col)),
+        first,
+        "first_at of {e:?}"
+    );
+    assert_eq!(
+        (second_at.line, second_at.col),
+        second,
+        "second_at of {e:?}"
     );
 }
 
@@ -75,112 +74,111 @@ fn assert_decl_expected(decl: &str, line: u32, col: u32, found: &str, expected: 
     );
 }
 
-/// HS `function` reaches the `IsAC` arity `fail` (Signature.hs:220) only
-/// through the `_` case of the conflict check at Signature.hs:212-217, so a
+/// HS `function` reaches the `IsAC` arity `fail` (Theory/Text/Parser/Signature.hs:220) only
+/// through the `_` case of the conflict check at Theory/Text/Parser/Signature.hs:212-217, so a
 /// name already in the signature reports THAT diagnostic instead.
 #[test]
 fn redeclaration_conflict_outranks_the_ac_arity_check() {
     assert_conflict(
         "theory AC4 begin\n\nfunctions: f/1, f/3 [AC]\n\nend\n",
-        "1,Public,Constructor,NotNDC",
-        "3,Public,Constructor,NotNDC",
         "f",
-        5,
-        1,
+        Some((3, 12)),
+        (3, 17),
     );
 
-    // Each component of the options tuple is the Haskell `show` of its
-    // constructor; the NDC slot is `joinNDC` of the two requested flags.
+    // The compared tuple carries every attribute — privacy, constructability
+    // and the NDC state — so an earlier declaration that differs in any of
+    // them conflicts too.
     assert_conflict(
         "theory C3 begin\n\nfunctions: f/1 [private], f/3 [AC]\n\nend\n",
-        "1,Private,Constructor,NotNDC",
-        "3,Public,Constructor,NotNDC",
         "f",
-        5,
-        1,
+        Some((3, 12)),
+        (3, 27),
     );
     assert_conflict(
         "theory C4 begin\n\nfunctions: f/1 [destructor], f/3 [AC]\n\nend\n",
-        "1,Public,Destructor,NotNDC",
-        "3,Public,Constructor,NotNDC",
         "f",
-        5,
-        1,
+        Some((3, 12)),
+        (3, 30),
     );
     assert_conflict(
         "theory C5 begin\n\nfunctions: f/1 [NDC], f/3 [AC]\n\nend\n",
-        "1,Public,Constructor,IsNDC",
-        "3,Public,Constructor,NotNDC",
         "f",
-        5,
-        1,
+        Some((3, 12)),
+        (3, 23),
     );
 
     // The lookup spans the whole parse, not just the current `functions:`
-    // block, and the position is wherever the attribute list left off.
+    // block; `second_at` is the later block's declaration.
     assert_conflict(
         "theory C9 begin\n\nfunctions: f/1\n\nfunctions: f/3 [AC]\n\nend\n",
-        "1,Public,Constructor,NotNDC",
-        "3,Public,Constructor,NotNDC",
         "f",
-        7,
-        1,
+        Some((3, 12)),
+        (5, 12),
     );
 
     // `pairMaudeSig` is the starting signature (Token.hs:260-261), so `pair`
-    // and the two projections are already declared.
+    // and the two projections are already declared.  They are seeded, not
+    // declared in the source, so there is no `first_at` to point at.
     assert_conflict(
         "theory C2 begin\n\nfunctions: pair/3 [AC]\n\nend\n",
-        "2,Public,Constructor,NotNDC",
-        "3,Public,Constructor,NotNDC",
         "pair",
-        5,
-        1,
+        None,
+        (3, 12),
     );
     assert_conflict(
         "theory D5 begin\n\nfunctions: fst/3 [AC], f/2 [AC]\n\nend\n",
-        "1,Public,Constructor,NotNDC",
-        "3,Public,Constructor,NotNDC",
         "fst",
-        3,
-        22,
+        None,
+        (3, 12),
     );
 
-    // Macros register as `(k, Private, Destructor, NotNDC)` (Macro.hs:46) and
-    // are searched after the free symbols.
+    // Macros register as `(k, Private, Destructor, NotNDC)` (Parser/Macro.hs:46) and
+    // are searched after the free symbols, so the macro's own site is
+    // `first_at`.
     assert_conflict(
         "theory C8 begin\n\nbuiltins: hashing\nmacros: m(x) = h(x)\nfunctions: m/3 [AC]\n\nend\n",
-        "1,Private,Destructor,NotNDC",
-        "3,Public,Constructor,NotNDC",
         "m",
-        7,
-        1,
+        Some((4, 9)),
+        (5, 12),
     );
 
     // A name NOT yet in the signature still gets the arity diagnostic, and the
     // trailing `f/1` never runs — the oracle stops at the first `[AC]`.
-    assert_custom(
-        "theory C7 begin\n\nfunctions: f/3 [AC], f/1\n\nend\n",
-        "conflicting arity : AC function must be binary",
-        3,
-        20,
-    );
+    let e = parse_theory("theory C7 begin\n\nfunctions: f/3 [AC], f/1\n\nend\n", &[])
+        .expect_err("must fail to parse");
+    let ParseError::WrongArityforACFunctionDeclaration {
+        name,
+        found_arity,
+        at,
+    } = &e
+    else {
+        panic!("expected the AC-arity variant, got {e:?}");
+    };
+    assert_eq!(name, "f");
+    assert_eq!(*found_arity, 3);
+    assert_eq!((at.line, at.col), (3, 12));
 
     // An `[AC]` symbol goes to `stACFunSyms`, not `stFunSyms`, so it leaves the
-    // name free for a later declaration (oracle exit 0 for both).
-    assert!(parse_theory("theory C begin\n\nfunctions: f/2 [AC], f/3\n\nend\n", &[]).is_ok());
-    assert!(parse_theory("theory C begin\n\nfunctions: f/2 [AC], f/2\n\nend\n", &[]).is_ok());
+    // name free for a later declaration.  `tests/dual_declared_names.rs`
+    // checks both orders, and the two symbols that each order keeps.
 }
 
-/// Signature.hs:213 exempts a `fst`/`snd` re-declaration at the pair
-/// projections' own shape, and :217 then returns the EXISTING symbol — so the
-/// arity check never runs and `[AC]` is dropped.  The oracle accepts
-/// `fst/1 [AC]` and `snd/1 [AC]` at exit 0 and prints the full theory.
+/// Parser/Signature.hs:213 exempts a `fst`/`snd` re-declaration at the pair
+/// projections' own shape, and :217 then returns the EXISTING symbol
+/// `NoEqUser (f, kp')` — so the arity check never runs, `[AC]` is dropped, and
+/// the whole requested option tuple gives way to the builtin pair projection's
+/// `(1, Public, Constructor, NotNDC)`.  The oracle accepts `fst/1 [AC]` and
+/// `snd/1 [AC]` at exit 0 and prints the full theory.
 #[test]
 fn pair_projection_redeclaration_short_circuits_the_ac_check() {
     for src in [
         "theory D1 begin\n\nfunctions: fst/1 [AC]\n\nend\n",
         "theory D2 begin\n\nfunctions: snd/1 [AC]\n\nend\n",
+        // Every other attribute is discarded the same way; the open theory's
+        // `function:` typing line therefore shows none of them.
+        "theory D1 begin\n\nfunctions: fst/1 [destructor, NDC, NDC-diff]\n\nend\n",
+        "theory D2 begin\n\nfunctions: snd/1 [destructor, NDC, NDC-diff]\n\nend\n",
     ] {
         let thy = parse_theory(src, &[]).expect("pair projection re-declaration is accepted");
         let Some(TheoryItem::Functions(decls)) = thy
@@ -190,29 +188,80 @@ fn pair_projection_redeclaration_short_circuits_the_ac_check() {
         else {
             panic!("no functions item in {src}");
         };
-        assert!(!decls[0].ac, "the `[AC]` attribute is dropped");
+        assert!(!decls[0].ac, "the `[AC]` attribute is dropped: {src}");
+        assert!(!decls[0].private, "privacy comes from `kp'`: {src}");
+        assert!(
+            !decls[0].destructor,
+            "constructability comes from `kp'`: {src}"
+        );
+        assert!(!decls[0].ndc, "the NDC state comes from `kp'`: {src}");
+        assert!(!decls[0].ndc_diff, "the NDC state comes from `kp'`: {src}");
     }
 
-    // The exemption tests name, arity AND privacy, so these still conflict.
+    // The exemption tests name, arity AND privacy, so these still conflict —
+    // against the seeded projection, which has no declaration site.
     assert_conflict(
         "theory D4 begin\n\nfunctions: fst/1 [private, AC]\n\nend\n",
-        "1,Public,Constructor,NotNDC",
-        "1,Private,Constructor,NotNDC",
         "fst",
-        5,
-        1,
+        None,
+        (3, 12),
     );
     assert_conflict(
         "theory D3 begin\n\nfunctions: fst/2 [AC]\n\nend\n",
-        "1,Public,Constructor,NotNDC",
-        "2,Public,Constructor,NotNDC",
         "fst",
-        5,
-        1,
+        None,
+        (3, 12),
     );
 }
 
-/// The expectation sets HS `functionType` (Signature.hs:150-161) merges at the
+/// `conflictingBuiltins` (Parser/Signature.hs:200-210) rejects a declaration
+/// of a name a `builtins:` entry reserved, at any option tuple but the
+/// builtin's own.  The symbol carries the `builtins:` entry that merged it, so
+/// `first_at` is that entry's name — not the seeded-symbol `None` of the
+/// probes above.
+///
+/// The oracle rejects `hashing`+`h/3` with ``` `h` conflicts with builtin(s)
+/// ["hashing"] ``` and `dest-pairing`+`fst/2` with the same shape for `fst`,
+/// whose destructor entry REPLACED the seeded constructor.
+#[test]
+fn a_builtins_entry_is_the_first_declaration_of_the_symbols_it_merges() {
+    assert_conflict(
+        "theory CF begin\nbuiltins: hashing\nfunctions: h/3\nend\n",
+        "h",
+        Some((2, 11)),
+        (3, 12),
+    );
+    assert_conflict(
+        "theory CS begin\nbuiltins: signing\nfunctions: sign/3\nend\n",
+        "sign",
+        Some((2, 11)),
+        (3, 12),
+    );
+    assert_conflict(
+        "theory CP begin\nbuiltins: dest-pairing\nfunctions: fst/2\nend\n",
+        "fst",
+        Some((2, 11)),
+        (3, 12),
+    );
+
+    // Same tuple: no conflict, and the theory loads (oracle exit 0).
+    parse_theory(
+        "theory CH begin\nbuiltins: hashing\nfunctions: h/1\nend\n",
+        &[],
+    )
+    .expect("a re-declaration at the builtin's own tuple is accepted");
+
+    // The `NoEq` symbols an equational theory opens are NOT in `stFunSyms`, so
+    // `functions:` may name them (oracle exit 0) even though `macros:` may not
+    // — `tests/macro_conflicts.rs` pins the macro side.
+    parse_theory(
+        "theory CD begin\nbuiltins: diffie-hellman\nfunctions: DH_neutral/2\nend\n",
+        &[],
+    )
+    .expect("a theory-level NoEq symbol leaves the name free for `functions:`");
+}
+
+/// The expectation sets HS `functionType` (Parser/Signature.hs:151-162) merges at the
 /// position where its sub-parsers stop.
 #[test]
 fn function_type_expectation_sets() {
@@ -271,7 +320,7 @@ fn function_type_expectation_sets() {
 /// so whatever follows is left unconsumed and discarded.
 ///
 /// DELIBERATE DIVERGENCE on `endd`/`endx`/`endrule …`.  HS's `symbol_ "end"`
-/// (Parser.hs:246-248) is `try (T.symbol spthy "end")` (Token.hs:272-273), a
+/// (Text/Parser.hs:243,245) is `try (T.symbol spthy "end")` (Token.hs:272-273), a
 /// plain `string` with no word boundary, so it PREFIX-matches the identifier
 /// and the remainder becomes ignored trailing input: the pinned oracle accepts
 /// `… endrule R2: [ ] --[ ]-> [ ]` at exit 0 and silently drops the rule.  This

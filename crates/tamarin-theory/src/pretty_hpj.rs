@@ -1,23 +1,12 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, arcz, ValentinYuri, jdreier, felixlinker, Nynko, and other
-//   minor contributors (see upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/term/src/Term/Substitution/SubstVFresh.hs,
-//   lib/term/src/Term/Term.hs,
-//   lib/theory/src/Theory/Constraint/Solver/ProofMethod.hs,
-//   lib/theory/src/Theory/Constraint/System/Dot.hs,
-//   lib/theory/src/Theory/Text/Pretty.hs,
-//   lib/utils/src/Control/Monad/Disj/Class.hs,
-//   lib/utils/src/Text/PrettyPrint/Class.hs,
-//   lib/utils/src/Text/PrettyPrint/Highlight.hs,
-//   lib/utils/src/Text/PrettyPrint/Html.hs, src/Main/Console.hs,
-//   src/Web/Handler.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! HughesPJ-faithful pretty-printer Doc engine.
 //!
 //! Port of the layout algorithm from
 //! `Text.PrettyPrint.HughesPJ` (pretty-1.1.3.6) — the non-annotated
-//! module used in production (HS `Class.hs:64-67, see line 67`/`:72`).
+//! module used in production (HS `Text/PrettyPrint/Class.hs:64-67, see line 67`/`:72`).
 //!
 //! The HS `Doc` is reduced to an RDoc with five constructors —
 //! `Empty`, `NilAbove`, `TextBeside`, `Nest`, `Union`, plus the
@@ -40,6 +29,10 @@
 
 use std::rc::Rc;
 
+// HS `flushRight` (`Extension/Prelude.hs:204-209`): left-pad with spaces to a
+// given character width, no truncation.
+use tamarin_utils::prelude_ext::flush_right;
+
 /// HS `lineWidth` from `src/Main/Console.hs`, threaded into HughesPJ's
 /// `lineLength` field.
 pub const LINE_LENGTH: usize = 110;
@@ -60,8 +53,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 ///   - the interactive web server renders every HTTP response at HS's
 ///     *web* width 100/67 — HughesPJ's default `style` used by `render`
 ///     (`getTheorySourceR` = `render . prettyClosedTheory`,
-///     `src/Web/Handler.hs:950-957, see line 956`) and by `renderHtmlDoc`
-///     (`Text/PrettyPrint/Html.hs:140-149, see line 151`).
+///     `src/Web/Handler.hs:1015-1022, see line 1021`) and by `renderHtmlDoc`
+///     (`Text/PrettyPrint/Html.hs:152-153`).
 ///
 /// Defaults to 110/73 so the CLI path is unchanged; the server calls
 /// [`set_display_width`] once at startup, before any rendering.  This is
@@ -71,14 +64,20 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 static DISPLAY_LINE_LENGTH: AtomicUsize = AtomicUsize::new(LINE_LENGTH);
 static DISPLAY_RIBBON: AtomicUsize = AtomicUsize::new(RIBBON);
 
-/// HS web display width: HughesPJ default `style` (100) with
-/// `round(100/1.5) = 67` ribbon.
-pub const WEB_LINE_LENGTH: usize = 100;
-pub const WEB_RIBBON: usize = 67;
+/// HughesPJ's own `style` default — `lineLength = 100`, ribbon
+/// `round(100/1.5) = 67`.
+///
+/// This is the width of every document HS renders WITHOUT threading
+/// `Main.Console`'s `lineWidth` through: the whole interactive web surface,
+/// and the dot / JSON graph serializers on both the web and the batch side.
+/// `LINE_LENGTH`/`RIBBON` above are the console width, which only the CLI's
+/// `renderDoc` installs.
+pub const DEFAULT_LINE_LENGTH: usize = 100;
+pub const DEFAULT_RIBBON: usize = 67;
 
 /// Override the bare-`render()` display width process-wide (see
 /// [`DISPLAY_LINE_LENGTH`]).  Called once by the interactive server with
-/// `(WEB_LINE_LENGTH, WEB_RIBBON)`.
+/// `(DEFAULT_LINE_LENGTH, DEFAULT_RIBBON)`.
 pub fn set_display_width(line_length: usize, ribbon: usize) {
     DISPLAY_LINE_LENGTH.store(line_length, Ordering::Relaxed);
     DISPLAY_RIBBON.store(ribbon, Ordering::Relaxed);
@@ -89,13 +88,13 @@ thread_local! {
     /// as its HTML-entity-escaped column count instead of its visible column
     /// count.  This mirrors HS's web render path, which builds every document
     /// through the `HtmlDoc Doc` transformer: its `Document (HtmlDoc d)`
-    /// instance (`Text/PrettyPrint/Html.hs:105-107`) runs `escapeHtmlEntities`
+    /// instance (`Text/PrettyPrint/Html.hs:102-104`) runs `escapeHtmlEntities`
     /// on every `text`/`char` token BEFORE the HughesPJ fill measures it, so a
     /// `<`/`>` costs 4 columns (`&lt;`/`&gt;`) and a `'` costs 5 (`&#39;`) when
     /// deciding line breaks.  The interactive server escapes AFTER rendering
     /// (`html_escape`), so without matching this accounting its `fsep`/`fcat`
-    /// wraps a pair-tuple `<…>` at a different column than HS (task #17 family
-    /// D — a space appears/disappears before a tuple's closing `>`).
+    /// wraps a pair-tuple `<…>` at a different column than HS (a space
+    /// appears/disappears before a tuple's closing `>`).
     ///
     /// This is presentation-only: it never affects proof search or verdicts,
     /// and it is scoped (via [`HtmlEntityWidthGuard`]) to the web
@@ -105,7 +104,7 @@ thread_local! {
 }
 
 /// Column width of `s` after HTML-entity escaping, matching HS
-/// `escapeHtmlEntities` (`Text/PrettyPrint/Html.hs:130-138`) and the server's
+/// `escapeHtmlEntities` (`Text/PrettyPrint/Html.hs:140-149`) and the server's
 /// `html_escape`: `<`/`>` → `&lt;`/`&gt;` (4), `&` → `&amp;` (5), `'` →
 /// `&#39;` (5), `"` → `&quot;` (6); every other codepoint counts as 1 column.
 fn html_entity_col_width(s: &str) -> usize {
@@ -145,7 +144,7 @@ thread_local! {
     /// When enabled:
     ///   * [`Doc::text`]/[`Doc::char`] run `escapeHtmlEntities` on their content
     ///     BEFORE it enters the layout, exactly as the `Document (HtmlDoc d)`
-    ///     instance (`Html.hs:102-105`) — so the stored bytes are already escaped
+    ///     instance (`Html.hs:102-104`) — so the stored bytes are already escaped
     ///     and the HughesPJ fill measures each token at its escaped-entity width
     ///     (`<`/`>` = 4, `&`/`'` = 5, `"` = 6).  This is a superset of the
     ///     width-only [`HtmlEntityWidthGuard`].
@@ -177,7 +176,7 @@ impl HtmlDocGuard {
     /// drop).  For plain-text side channels rendered while an enclosing
     /// page render holds an `enable()` guard — e.g. the oracle/tactic
     /// goal strings, which HS produces with the plain `render $
-    /// prettyGoal` regardless of the surrounding widget (ProofMethod.hs:598-623, see line 607):
+    /// prettyGoal` regardless of the surrounding widget (ProofMethod.hs:597-623, see line 606):
     /// HTML spans/entities in oracle stdin break the oracle's regexes.
     pub fn disable() -> Self {
         HtmlDocGuard(HTML_MODE.with(|c| c.replace(false)))
@@ -218,7 +217,7 @@ fn fill_width(s: &str) -> usize {
 // ============================================================================
 
 /// HS `Doc` from `pretty-1.1.3.6/Text/PrettyPrint/HughesPJ.hs` (the
-/// non-annotated module used in production, HS `Class.hs:64-67, see line 67`/`:72`)
+/// non-annotated module used in production, HS `Text/PrettyPrint/Class.hs:64-67, see line 67`/`:72`)
 /// — minus the `Above`/`Beside` lazy constructors (we eagerly reduce on
 /// build).
 #[derive(Clone)]
@@ -456,7 +455,7 @@ impl Doc {
     /// `fullRender`/`easyDisplay`): every `Union` takes its SECOND
     /// (fully-laid-out) branch — the one guaranteed free of `NoDoc` —
     /// every `Nest` is dropped, and every `NilAbove` (line break) becomes
-    /// exactly ONE space.  Used by HS `Dot.hs:371-373`'s `oneLineRender`
+    /// exactly ONE space.  Used by HS `System/Dot.hs:371-376, see line 374`'s `oneLineRender`
     /// to measure each record field's used width for `renderBalanced`.
     pub fn one_line_render(&self) -> String {
         // Iterative for the same stack-depth reason as `lay_loop`.
@@ -613,7 +612,7 @@ pub fn op_parens(d: Doc) -> Doc {
     operator_("(").beside(d).beside(operator_(")"))
 }
 
-/// HS `parens p = char '(' <> p <> char ')'` (`Class.hs:149-149`) — PLAIN parens
+/// HS `parens p = char '(' <> p <> char ')'` (`Text/PrettyPrint/Class.hs:149-149`) — PLAIN parens
 /// (no highlight), used e.g. around `(modulo AC)`.
 pub fn parens(d: Doc) -> Doc {
     Doc::char('(').beside(d).beside(Doc::char(')'))
@@ -621,20 +620,21 @@ pub fn parens(d: Doc) -> Doc {
 
 // -- Comments (HS Theory.Text.Pretty.hs:96-112) -------------------------------
 
-/// HS `lineComment_ s = comment $ text "//" <-> text s` (`Pretty.hs:96-100`).
+/// HS `lineComment_ s = comment $ text "//" <-> text s`
+/// (`Theory/Text/Pretty.hs:96-100`).
 pub fn line_comment_(s: &str) -> Doc {
     comment(Doc::text("//").beside_sp(Doc::text(s)))
 }
 
 /// HS `multiComment_ ls = comment $ fsep [text "/*", vcat (map text ls),
-/// text "*/"]` (`Pretty.hs:105-106`).
+/// text "*/"]` (`Theory/Text/Pretty.hs:105-106`).
 pub fn multi_comment_(lines: &[&str]) -> Doc {
     let body = vcat(lines.iter().map(|l| Doc::text(*l)).collect());
     comment(fsep(vec![Doc::text("/*"), body, Doc::text("*/")]))
 }
 
 /// HS `closedComment_ s = comment $ fsep [text "/*", text s, text "*/"]`
-/// (`Pretty.hs:111-112`).
+/// (`Theory/Text/Pretty.hs:111-112`).
 pub fn closed_comment_(s: &str) -> Doc {
     comment(fsep(vec![Doc::text("/*"), Doc::text(s), Doc::text("*/")]))
 }
@@ -642,12 +642,13 @@ pub fn closed_comment_(s: &str) -> Doc {
 // -- Keyword composites (HS Theory.Text.Pretty.hs:148-159) --------------------
 
 /// HS `kwModulo what thy = keyword_ what <-> parens (keyword_ "modulo" <->
-/// text thy)` (`Pretty.hs:148-152`).
+/// text thy)` (`Theory/Text/Pretty.hs:148-152`).
 pub fn kw_modulo(what: &str, thy: &str) -> Doc {
     keyword_(what).beside_sp(parens(keyword_("modulo").beside_sp(Doc::text(thy))))
 }
 
-/// HS `kwRuleModulo = kwModulo "rule"` (`Pretty.hs:154-156, see line 156`).
+/// HS `kwRuleModulo = kwModulo "rule"`
+/// (`Theory/Text/Pretty.hs:154-156, see line 156`).
 pub fn kw_rule_modulo(thy: &str) -> Doc {
     kw_modulo("rule", thy)
 }
@@ -847,8 +848,8 @@ fn above_nest(p: Doc, g: bool, k: isize, q: Doc) -> Doc {
         // Distributing eagerly into BOTH branches rebuilds `q` under every
         // Union alternative at construction time; for a union-rich doc (a
         // vcat of 18 ∃-substs over bilinear eCK terms, each a nest of
-        // sep/fsep unions) that is O(2^depth) — the task-#19 web OOM
-        // (8 GB, source-cases page, Chen_Kudla `Init_2`).  Mirror HS's
+        // sep/fsep unions) that is O(2^depth) — an 8 GB web OOM on the
+        // source-cases page (Chen_Kudla `Init_2`).  Mirror HS's
         // laziness exactly as `beside_inner`'s Union arm does: keep the
         // right branch a memoised thunk.
         Doc::Union(p1, p2) => {
@@ -943,7 +944,7 @@ pub fn fcat(ds: Vec<Doc>) -> Doc {
     fill(false, ds)
 }
 
-/// HS `ppTerms sepa n lead finish ts` (Term/Term.hs:288-290): an `fcat` of
+/// HS `ppTerms sepa n lead finish ts` (Term/Term.hs:319-321): an `fcat` of
 /// `text lead`, each element rendered and `nest(1)`'d (all but the last
 /// `sep`-suffixed), and `text finish`.  Shared by the pair (`<`/`, `/`>`)
 /// and AC-op (`(`/op/`)`) builders across the parser-AST, GTerm and SAPIC
@@ -971,7 +972,7 @@ pub fn fcat_bracketed<T>(
 }
 
 /// HS `ppFun f ts = text (f ++ "(") <> fsep (punctuate comma (map ppTerm ts))
-/// <> text ")"` (Term/Term.hs:295-296).  Shared by the parser-AST, GTerm and
+/// <> text ")"` (Term/Term.hs:326-327).  Shared by the parser-AST, GTerm and
 /// SAPIC function-application renderers — they differ only in the per-element
 /// `render` fn, so the common `text(name++"(") <> fsep(punctuate ',' …) <>
 /// text ")"` Doc shape lives here (HS `comma = char ','`).
@@ -987,7 +988,8 @@ pub fn fun_app_doc<T>(name: &str, args: &[&T], render: impl Fn(&T) -> Doc) -> Do
 ///   nestShort (length lead + 1) (text lead) (text finish) body
 ///   = sep [ text lead $$ nest n body, text finish ]`
 /// where `$$` is HughesPJ `above` and `n = length lead + 1`
-/// (Class.hs:218-223).  Shared by the formula, fact and SAPIC renderers.
+/// (Text/PrettyPrint/Class.hs:218-223).  Shared by the formula, fact and
+/// SAPIC renderers.
 pub fn nest_short_doc(lead: &str, finish: &str, body: Doc) -> Doc {
     let n = lead.chars().count() as isize + 1;
     let above = Doc::text(lead).above(body.nest(n));
@@ -1237,7 +1239,7 @@ fn get(w: isize, r: isize, d: Doc) -> Doc {
                 get(w, r, (*q).clone())
             }
         }
-        // CRITICAL (task #20 perf): a `LazyUnion` must NOT be `force()`d at
+        // CRITICAL (perf): a `LazyUnion` must NOT be `force()`d at
         // the match head — that RUNS the right-branch thunk (an
         // `aboveNest`/`fill` reconstruction over the remaining doc) even
         // when the flat branch fits, degenerating reduction to O(n²) on
@@ -1323,7 +1325,7 @@ fn fits(n: isize, d: &Doc) -> bool {
 
 /// HS `lay` — walk the reduced doc, accumulating output.
 ///
-/// ITERATIVE (task #20): the walk is a pure state machine — `lay` (at
+/// ITERATIVE: the walk is a pure state machine — `lay` (at
 /// line start, where `Nest` bumps the column and the first text emits the
 /// indent) vs `lay2` (mid-line, `Nest` inert) — so it is driven by a loop
 /// with a `line_start` flag instead of mutual recursion.  The recursive
@@ -1406,6 +1408,68 @@ pub fn punctuate(sep: Doc, ds: Vec<Doc>) -> Vec<Doc> {
         }
     }
     out
+}
+
+// ============================================================================
+// Numbered lists + blank-line vertical join (HS Class.hs `numbered`,
+// `numbered'`, `$--$`).
+// ============================================================================
+
+/// HS `$--$` (`Text/PrettyPrint/Class.hs:112-114`): vertical concatenation with an empty
+/// line in between — `caseEmptyDoc`-guarded `d1 $-$ text "" $-$ d2`, where
+/// Class's `$-$` is HughesPJ `$+$` (`Text/PrettyPrint/Class.hs:180`) = [`Doc::above_g`].
+/// The separator is [`Doc::text_hs`]`("")` so it survives as a blank line
+/// (indented under a surrounding `nest`).
+pub(crate) fn above_blank(d1: Doc, d2: Doc) -> Doc {
+    if matches!(d2, Doc::Empty) {
+        return d1;
+    }
+    if matches!(d1, Doc::Empty) {
+        return d2;
+    }
+    d1.above_g(Doc::text_hs("")).above_g(d2)
+}
+
+/// HS `numbered` (`Text/PrettyPrint/Class.hs:252-259`):
+/// `foldr1 ($-$) $ intersperse vsep $ map pp $ zip [1..] ds` with
+/// `pp (i, d) = text (flushRight nWidth (show i)) <> d` and
+/// `nWidth = length (show (length ds))`.  `[]` yields the empty doc.
+pub(crate) fn numbered(vsep: Doc, ds: Vec<Doc>) -> Doc {
+    if ds.is_empty() {
+        return Doc::Empty;
+    }
+    let n_width = ds.len().to_string().len();
+    let entries: Vec<Doc> = ds
+        .into_iter()
+        .enumerate()
+        .map(|(i, d)| Doc::text(flush_right(n_width, &(i + 1).to_string())).beside(d))
+        .collect();
+    // `foldr1 ($-$) (intersperse vsep entries)` — right fold over the
+    // interleaved list.
+    let n = entries.len();
+    let mut interleaved: Vec<Doc> = Vec::with_capacity(2 * n - 1);
+    for (i, e) in entries.into_iter().enumerate() {
+        if i > 0 {
+            interleaved.push(vsep.clone());
+        }
+        interleaved.push(e);
+    }
+    let mut acc = interleaved
+        .pop()
+        .expect("numbered: non-empty by construction");
+    for d in interleaved.into_iter().rev() {
+        acc = d.above_g(acc);
+    }
+    acc
+}
+
+/// HS `numbered'` (`Text/PrettyPrint/Class.hs:263-264`):
+/// `numbered (text "") . map (text ". " <>)`.
+pub(crate) fn numbered_prime(ds: Vec<Doc>) -> Doc {
+    numbered(
+        Doc::text_hs(""),
+        ds.into_iter().map(|d| Doc::text(". ").beside(d)).collect(),
+    )
 }
 
 // ============================================================================

@@ -1,10 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, rsasse, jdreier, rkunnema, and other minor contributors (see
-//   upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/theory/src/OpenTheory.hs, lib/theory/src/TheoryObject.hs,
-//   lib/theory/src/Theory/Text/Parser.hs,
-//   lib/theory/src/Theory/Text/Parser/Exceptions.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Parity for the duplicate-rule / duplicate-restriction guards
 //! `liftedAddProtoRule` (Theory/Text/Parser.hs:175-193) runs after each
@@ -15,36 +11,77 @@
 //!     guard and is appended a second time;
 //!   * each `_restrict` formula's minted `Restr_<rule>_<i>` restriction goes
 //!     through `addRestriction` (TheoryObject.hs:453-456) FIRST, which rejects
-//!     on an existing NAME alone.
+//!     on an existing NAME alone;
+//!   * an explicit `restriction` (or legacy `axiom`) item goes through the
+//!     same guard via `liftedAddRestriction` (Theory/Text/Parser.hs:129-134),
+//!     so it also rejects on any existing restriction name, minted ones
+//!     included.
 //!
 //! Both rejections are `throwM` → `fail (show e)` (Token.hs:210-211) with
 //! `show (DuplicateItem …)` (Parser/Exceptions.hs:38-40): a recoverable
-//! failure at the position after the rule, which the port reports as a
-//! [`ParseError::Custom`] carrying HS's message.  Every message and position
-//! below is the pinned Haskell oracle's (Git revision ef3f0468) for the same
-//! theory; every accepted theory loads with exit 0 there.
+//! failure, which the port reports as [`ParseError::ConflictingDeclarations`]
+//! (context [`ParseContext::Rule`] / [`ParseContext::Restriction`]) carrying
+//! both items' source spans.
+//!
+//! Which theories are rejected (and which load) is pinned to the Haskell
+//! oracle (Git revision ef3f0468); every accepted theory loads with exit 0
+//! there.
 
 use tamarin_parser::ast::TheoryItem;
+use tamarin_parser::parser::ParseContext;
 use tamarin_parser::{parse_theory, ParseError};
 
-/// The `fail`ed message of `src`'s parse error, with its `(line, column)`.
+/// The `(name, first_at, second_at)` of `src`'s duplicate-rule
+/// [`ParseError::ConflictingDeclarations`], positions flattened to
+/// `(line, col)`.
 #[track_caller]
-fn custom(src: &str) -> (String, u32, u32) {
-    check(parse_theory(src, &[]))
+fn dup_rule_err(src: &str) -> (String, (u32, u32), (u32, u32)) {
+    dup_rule_check(parse_theory(src, &[]))
 }
 
-/// [`custom`] for an already-run parse.
+/// [`dup_rule_err`] for an already-run parse.
 #[track_caller]
-fn check<T>(res: Result<T, ParseError>) -> (String, u32, u32) {
+fn dup_rule_check<T>(res: Result<T, ParseError>) -> (String, (u32, u32), (u32, u32)) {
     let e = match res {
         Ok(_) => panic!("the probes below must all fail to parse"),
         Err(e) => e,
     };
-    let at = *e.location();
-    let ParseError::Custom { message, .. } = e else {
-        panic!("expected a `fail`-style error, got {e:?}");
+    let ParseError::ConflictingDeclarations {
+        name,
+        context: ParseContext::Rule,
+        first_at,
+        second_at,
+    } = e
+    else {
+        panic!("expected the duplicate-rule variant, got {e:?}");
     };
-    (message, at.line, at.col)
+    let first_at = first_at.expect("a duplicate rule has a first site");
+    (
+        name,
+        (first_at.line, first_at.col),
+        (second_at.line, second_at.col),
+    )
+}
+
+/// The same for the duplicate-restriction context.
+#[track_caller]
+fn dup_restriction_err(src: &str) -> (String, (u32, u32), (u32, u32)) {
+    let e = parse_theory(src, &[]).expect_err("the probes below must all fail to parse");
+    let ParseError::ConflictingDeclarations {
+        name,
+        context: ParseContext::Restriction,
+        first_at,
+        second_at,
+    } = e
+    else {
+        panic!("expected the duplicate-restriction variant, got {e:?}");
+    };
+    let first_at = first_at.expect("a duplicate restriction has a first site");
+    (
+        name,
+        (first_at.line, first_at.col),
+        (second_at.line, second_at.col),
+    )
 }
 
 /// The names of the protocol-rule items in `src`'s parsed theory.
@@ -54,7 +91,7 @@ fn rule_names(src: &str) -> Vec<String> {
         .items
         .iter()
         .filter_map(|i| match i {
-            TheoryItem::Rule(r) => Some(r.name.clone().into()),
+            TheoryItem::Rule(r) => Some(r.name.clone()),
             _ => None,
         })
         .collect()
@@ -62,15 +99,15 @@ fn rule_names(src: &str) -> Vec<String> {
 
 /// Same name, different `color=` attribute: attributes are part of the
 /// `ProtoRuleE` the guard compares (`ru ==`, OpenTheory.hs:697), so this is a
-/// different rule and dies at the second rule's add — the failure sits at the
-/// next token (`end`), after the second rule's trailing `variants` attempt.
+/// different rule and dies at the second rule's add, with both rules' spans
+/// in the error.
 #[test]
 fn different_color_same_name_is_a_duplicate() {
     let src = "theory T begin\n\n\
                rule R1[color=ff0000]: [ ] --> [ ]\n\
                rule R1[color=00ff00]: [ ] --> [ ]\n\n\
                end\n";
-    assert_eq!(custom(src), ("duplicate rule: R1".to_string(), 6, 1));
+    assert_eq!(dup_rule_err(src), ("R1".to_string(), (3, 1), (4, 1)));
 }
 
 /// Same name, different conclusions.
@@ -80,12 +117,11 @@ fn different_body_same_name_is_a_duplicate() {
                rule R1: [ ] --> [ Out('a') ]\n\
                rule R1: [ ] --> [ Out('b') ]\n\n\
                end\n";
-    assert_eq!(custom(src), ("duplicate rule: R1".to_string(), 6, 1));
+    assert_eq!(dup_rule_err(src), ("R1".to_string(), (3, 1), (4, 1)));
 }
 
 /// The guard fires as soon as the second rule has parsed — mid-file, before a
-/// later parse error is ever reached: the position is that of the following
-/// `rule` keyword, not of the broken rule's own failure.
+/// later parse error is ever reached.
 #[test]
 fn duplicate_fires_before_a_later_parse_error() {
     let src = "theory T begin\n\n\
@@ -93,37 +129,43 @@ fn duplicate_fires_before_a_later_parse_error() {
                rule R1: [ ] --> [ Out('b') ]\n\n\
                rule Broken: [ ] --> [\n\
                end\n";
-    assert_eq!(custom(src), ("duplicate rule: R1".to_string(), 6, 1));
+    assert_eq!(dup_rule_err(src), ("R1".to_string(), (3, 1), (4, 1)));
 }
 
 /// A byte-identical duplicate passes `addOpenProtoRule`'s
 /// `maybe True (ru ==) …` guard and is appended AGAIN — both copies are
 /// items (and both render).  The corpus relies on this (e.g.
 /// examples/asiaccs20-POIDC/OIDC_CodeFlow_with_ClientSecret.spthy carries
-/// two identical `Get_pk` rules); the oracle loads this theory with exit 0
-/// and prints `rule (modulo E) R1` twice.
+/// two identical `Get_pk` rules, which is the shape of the second case).  The
+/// oracle loads both theories with exit 0.  It prints their
+/// `rule (modulo E) …` echo twice.
 #[test]
-fn identical_duplicate_is_accepted_and_appended_twice() {
-    let src = "theory T begin\n\n\
-               rule R1: [ ] --> [ ]\n\
-               rule R1: [ ] --> [ ]\n\n\
-               end\n";
-    assert_eq!(rule_names(src), ["R1", "R1"]);
-}
-
-/// The corpus shape: two identical rules with a premise and conclusion.
-#[test]
-fn corpus_shape_identical_duplicate_is_accepted() {
-    let src = "theory T begin\n\n\
-               rule Get_pk:\n    [ !Pk(A, pubkey) ]\n  -->\n    [ Out(pubkey) ]\n\n\
-               rule Get_pk:\n    [ !Pk(A, pubkey) ]\n  -->\n    [ Out(pubkey) ]\n\n\
-               end\n";
-    assert_eq!(rule_names(src), ["Get_pk", "Get_pk"]);
+fn identical_duplicates_are_accepted_and_appended_twice() {
+    for (case, name, src) in [
+        (
+            "empty rule",
+            "R1",
+            "theory T begin\n\n\
+             rule R1: [ ] --> [ ]\n\
+             rule R1: [ ] --> [ ]\n\n\
+             end\n",
+        ),
+        (
+            "corpus shape",
+            "Get_pk",
+            "theory T begin\n\n\
+             rule Get_pk:\n    [ !Pk(A, pubkey) ]\n  -->\n    [ Out(pubkey) ]\n\n\
+             rule Get_pk:\n    [ !Pk(A, pubkey) ]\n  -->\n    [ Out(pubkey) ]\n\n\
+             end\n",
+        ),
+    ] {
+        assert_eq!(rule_names(src), [name, name], "case {case}");
+    }
 }
 
 /// Two `_restrict`-carrying rules with the same name die at the RESTRICTION
 /// guard, before the rule-equality comparison: `liftedAddProtoRule` adds the
-/// expanded `Restr_<rule>_<i>` restrictions first (Parser.hs:177-179), and
+/// expanded `Restr_<rule>_<i>` restrictions first (Text/Parser.hs:177-179), and
 /// `addRestriction` rejects on the existing NAME even though both rules (and
 /// both restrictions) are byte-identical.
 #[test]
@@ -133,8 +175,8 @@ fn identical_restrict_duplicate_dies_at_the_restriction() {
                rule R1: [ ] --[ _restrict( All x #i #j. A(x) @ #i & A(x) @ #j ==> #i = #j ) ]-> [ Out('a') ]\n\n\
                end\n";
     assert_eq!(
-        custom(src),
-        ("duplicate restriction: Restr_R1_1".to_string(), 6, 1)
+        dup_restriction_err(src),
+        ("Restr_R1_1".to_string(), (3, 29), (4, 29))
     );
 }
 
@@ -148,9 +190,11 @@ fn user_restriction_blocks_restrict_expansion() {
                \"All x #i #j. B(x) @ #i & B(x) @ #j ==> #i = #j\"\n\n\
                rule R1: [ ] --[ _restrict( All x #i #j. A(x) @ #i & A(x) @ #j ==> #i = #j ) ]-> [ Out('a') ]\n\n\
                end\n";
+    // `first_at` is the user restriction's own span; `second_at` the minted
+    // restriction's origin, the `_restrict(…)` action.
     assert_eq!(
-        custom(src),
-        ("duplicate restriction: Restr_R1_1".to_string(), 8, 1)
+        dup_restriction_err(src),
+        ("Restr_R1_1".to_string(), (3, 1), (6, 29))
     );
 }
 
@@ -163,16 +207,20 @@ fn second_rule_with_restrict_is_a_duplicate_rule() {
                rule R1: [ ] --> [ Out('a') ]\n\
                rule R1: [ ] --[ _restrict( All x #i #j. A(x) @ #i & A(x) @ #j ==> #i = #j ) ]-> [ Out('a') ]\n\n\
                end\n";
-    assert_eq!(custom(src), ("duplicate rule: R1".to_string(), 6, 1));
+    assert_eq!(dup_rule_err(src), ("R1".to_string(), (3, 1), (4, 1)));
 }
 
 /// The guard spans `#include` fragments: HS runs one `addItems` accumulation
 /// across included files, so a rule in the fragment collides with a
-/// different same-named rule in the including file.  The error sits in the
-/// including file, at the token after its rule.
+/// different same-named rule in the including file.  `first_at` carries the
+/// included rule's position in the FRAGMENT's own coordinates (a known rough
+/// edge: the error does not record which file that span belongs to).
 #[test]
 fn duplicate_across_include_is_rejected() {
-    let dir = std::env::temp_dir().join("tamarin_parser_dup_rule_names");
+    let dir = std::env::temp_dir().join(format!(
+        "tamarin_parser_dup_rule_names_{}",
+        std::process::id()
+    ));
     std::fs::create_dir_all(&dir).expect("mkdir");
     std::fs::write(
         dir.join("frag.spthy"),
@@ -184,7 +232,80 @@ fn duplicate_across_include_is_rejected() {
                rule R1[color=00ff00]: [ ] --> [ ]\n\n\
                end\n";
     assert_eq!(
-        check(tamarin_parser::parse_theory_with_base(src, &[], Some(dir))),
-        ("duplicate rule: R1".to_string(), 7, 1)
+        dup_rule_check(tamarin_parser::parse_theory_with_base(
+            src,
+            &[],
+            Some(dir.clone())
+        )),
+        ("R1".to_string(), (1, 1), (5, 1))
     );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Two explicit restrictions under one name die at the second one's add —
+/// HS `addRestriction` rejects on the NAME alone (TheoryObject.hs:453-456).
+#[test]
+fn duplicate_explicit_restrictions_conflict() {
+    let src = "theory T begin\n\
+               restriction R: \"All x #i #j. A(x) @ #i & A(x) @ #j ==> #i = #j\"\n\
+               restriction R: \"All x #i #j. B(x) @ #i & B(x) @ #j ==> #i = #j\"\n\
+               rule Rl: [ ] --[ A('a') ]-> [ ]\n\
+               end\n";
+    assert_eq!(dup_restriction_err(src), ("R".to_string(), (2, 1), (3, 1)));
+}
+
+/// The legacy `axiom` spelling adds through the same guard
+/// (`liftedAddRestriction`, Theory/Text/Parser.hs:270), so it shares the
+/// restriction name space.
+#[test]
+fn axiom_and_restriction_share_one_name_space() {
+    let src = "theory T begin\n\
+               axiom R: \"All x #i #j. A(x) @ #i & A(x) @ #j ==> #i = #j\"\n\
+               restriction R: \"All x #i #j. B(x) @ #i & B(x) @ #j ==> #i = #j\"\n\
+               rule Rl: [ ] --[ A('a') ]-> [ ]\n\
+               end\n";
+    assert_eq!(dup_restriction_err(src), ("R".to_string(), (2, 1), (3, 1)));
+}
+
+/// The reverse of [`user_restriction_blocks_restrict_expansion`]: a minted
+/// `Restr_<rule>_<i>` name blocks a LATER explicit restriction, since the
+/// guard checks against ALL restrictions added so far.  `first_at` is the
+/// minted restriction's origin, the `_restrict(…)` formula.
+#[test]
+fn minted_restriction_blocks_a_later_explicit_one() {
+    let src = "theory T begin\n\
+               rule R1: [ ] --[ _restrict( All x #i #j. A(x) @ #i & A(x) @ #j ==> #i = #j ) ]-> [ Out('a') ]\n\
+               restriction Restr_R1_1: \"All x #i #j. B(x) @ #i & B(x) @ #j ==> #i = #j\"\n\
+               end\n";
+    assert_eq!(
+        dup_restriction_err(src),
+        ("Restr_R1_1".to_string(), (2, 29), (3, 1))
+    );
+}
+
+/// Lemmas and restrictions have separate name spaces (`lookupRestriction`
+/// searches restriction items only) — a lemma named like a minted
+/// restriction loads.  The oracle accepts this theory at exit 0.
+#[test]
+fn lemma_named_like_a_minted_restriction_is_accepted() {
+    let src = "theory T begin\n\
+               rule R1: [ ] --[ _restrict( All x #i #j. A(x) @ #i & A(x) @ #j ==> #i = #j ) ]-> [ Out('a') ]\n\
+               lemma Restr_R1_1: \"All x #i. A(x) @ #i ==> Ex #j. A(x) @ #j\"\n\
+               end\n";
+    parse_theory(src, &[]).expect("lemma and restriction name spaces are separate");
+}
+
+/// Side-attributed restrictions dedup PER SIDE in HS (`addRestrictionDiff`,
+/// Theory/Text/Parser.hs:546-558), which this port does not implement, and
+/// HS's non-diff grammar has no attribute list at all — so a `[left]`/
+/// `[right]` pair under one name stays accepted here (the diff corpus
+/// carries this shape in every jcs19-xor diff model).
+#[test]
+fn side_attributed_restrictions_are_not_deduplicated() {
+    let src = "theory T begin\n\
+               rule R: [ In(x) ] --[ Eq(x, x) ]-> [ ]\n\
+               restriction equality [right]: \"All x y #i. Eq(x, y) @ #i ==> x = y\"\n\
+               restriction equality [left]: \"All x y #i. Eq(x, y) @ #i ==> x = y\"\n\
+               end\n";
+    parse_theory(src, &[]).expect("side-attributed restrictions do not name-conflict");
 }

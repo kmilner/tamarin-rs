@@ -1,36 +1,67 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   arcz, rkunnema, kevinmorio, and other minor contributors (see
-//   upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/sapic/src/Sapic.hs, lib/sapic/src/Sapic/Warnings.hs,
-//   lib/theory/src/Theory/Text/Parser.hs, src/Main/TheoryLoader.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Wiring: run the SAPIC translation and inject the generated rules +
-//! restriction + heuristic into BOTH the parsed theory (so the pretty-printer
-//! renders them via the existing rule/restriction path — P0f) and the
-//! elaborated theory (so the solver + AC-variant pre-computation see them).
+//! restrictions + heuristic into BOTH the parsed theory (so the pretty-printer
+//! renders them via the existing rule/restriction path) and the elaborated
+//! theory (so the solver + AC-variant pre-computation see them).
 //!
-//! Mirrors the tail of HS `translate` (Sapic.hs:69-90):
+//! Mirrors the tail of HS `translate` (sapic/src/Sapic.hs:69-85):
 //!   - `foldM liftedAddProtoRule th  (map (`OpenProtoRule` []) eProtoRule)`
 //!   - `foldM liftedAddRestriction th1 rest`
 //!   - `addHeuristic [SapicRanking]` unless the user set one
-//!   - `_thyIsSapic = True`
 //!
-//! Scope: the CORE LINEAR subset (see `translate`/`base_translation`).
+//! HS's final `_thyIsSapic = True` has no counterpart here: `Theory::is_sapic`
+//! is already set while elaborating the parsed theory (elaborate.rs), and this
+//! module reads it as the gate that decides whether to translate at all.
 
 use tamarin_parser::ast as p;
-use tamarin_parser::parser::DUMMY_LOCATION;
 use tamarin_parser::wf::WfError;
 
 use tamarin_theory::elaborate::ElabError;
-use tamarin_theory::pretty_sapic::pretty_sapic_top_level;
-use tamarin_theory::pretty_theory::lnfact_to_parser;
-use tamarin_theory::rule::{ProtoRuleE, ProtoRuleName};
+use tamarin_theory::rule::ProtoRuleE;
+use tamarin_theory::sapic::PlainProcess;
 use tamarin_theory::theory::{OpenProtoRule, OpenRestriction, Theory, TheoryItem};
 
+use crate::convert::ConvertError;
 use crate::inline::{collect_process_defs, convert_process_with_defs};
 use crate::translate::{needs_in_ev_res, translate, TranslateOptions};
-use crate::typing::{type_and_rename_process, UserFunTyping};
+use crate::typing::{collect_user_fun_typings, type_and_rename_process};
+
+/// HS `Sapic.checkWellformedness` (Warnings.hs:37-38) over the UNTRANSLATED
+/// theory: locate the single top-level process, inline its process-definition
+/// calls, and warn-check the resulting `PlainProcess`.  The check runs AFTER
+/// inlining (HS inlines at parse time) but BEFORE `typeTheory` /
+/// `renameUnique`, so two binders sharing a name (e.g. `new x; new x`) are
+/// still alpha-identical and detected as captured.
+///
+/// `translateTheory` computes this report on the open theory before any
+/// translation step (TheoryLoader.hs:487-499, see line 497), so both the
+/// translating path ([`apply_sapic`]) and the `-m spthy` / `-m spthytyped`
+/// paths that skip translation report exactly these warnings.
+///
+/// Returns the report together with the inlined process the caller goes on to
+/// type and translate, or `None` when the theory carries no top-level process.
+/// The inlining error is handed back unwrapped: callers word it differently.
+pub fn sapic_pre_report(
+    parsed: &p::Theory,
+) -> Result<Option<(Vec<WfError>, PlainProcess)>, ConvertError> {
+    let top = parsed.items.iter().find_map(|i| match i {
+        p::TheoryItem::TopLevelProcess(proc) => Some(proc.clone()),
+        _ => None,
+    });
+    let Some(top) = top else {
+        return Ok(None);
+    };
+    // parser AST → theory AST, inlining process-definition calls
+    // (`let P = ..` / `P(args)`) with parameter substitution.  HS inlines at
+    // parse time (`Theory.Text.Parser.Sapic.actionprocess`); we do it here,
+    // resolving every `Call` against the theory's `ProcessDef`s.
+    let defs = collect_process_defs(parsed);
+    let plain = convert_process_with_defs(&top, &defs)?;
+    Ok(Some((crate::warnings::check_wellformedness(&plain), plain)))
+}
 
 /// Apply the SAPIC `process:` translation to a theory that contains exactly one
 /// top-level process.  A no-op for non-process theories (`elaborated.is_sapic`
@@ -42,8 +73,9 @@ use crate::typing::{type_and_rename_process, UserFunTyping};
 /// Returns the SAPIC-process wellformedness report (HS `Sapic.checkWellformedness`,
 /// Warnings.hs:37-38), which the caller PREPENDS to the overall report — HS
 /// computes it in `translateTheory` on the OpenTheory *before* translation, so
-/// it sorts before every other check (`preReport ++ postReport`,
-/// TheoryLoader.hs:448-460, see line 455/631).  Empty for a well-formed (or non-SAPIC) theory.
+/// it sorts before every other check (TheoryLoader.hs:487-499, see line 497;
+/// `preReport ++ postReport` at :730-732).  Empty for a well-formed (or
+/// non-SAPIC) theory.
 pub fn apply_sapic(
     parsed: &mut p::Theory,
     elaborated: &mut Theory,
@@ -53,35 +85,18 @@ pub fn apply_sapic(
         return Ok(Vec::new());
     }
 
-    // Locate the single top-level process in the parsed theory.
-    let top = parsed.items.iter().find_map(|i| match i {
-        p::TheoryItem::TopLevelProcess(proc) => Some(proc.clone()),
-        _ => None,
-    });
-    let Some(top) = top else {
-        // `is_sapic` was set but no TopLevelProcess found — defensive no-op.
+    // The single top-level process, inlined, plus its warning report — the
+    // report is returned to the caller and translation proceeds regardless
+    // (these are warnings, not hard errors).  `is_sapic` set with no
+    // `TopLevelProcess` is a defensive no-op.
+    let Some((wf_report, plain)) = sapic_pre_report(parsed).map_err(|e| ElabError {
+        message: format!("SAPIC translation: {}", e.message),
+    })?
+    else {
         return Ok(Vec::new());
     };
 
-    // parser AST → theory AST, inlining process-definition
-    // calls (`let P = ..` / `P(args)`) with parameter substitution.  HS inlines
-    // at parse time (`Theory.Text.Parser.Sapic.actionprocess`); we do it here,
-    // resolving every `Call` against the theory's `ProcessDef`s.
-    let defs = collect_process_defs(parsed);
-    let plain = convert_process_with_defs(&top, &defs).map_err(|e| ElabError {
-        message: format!("SAPIC translation: {}", e.message),
-    })?;
-
-    // HS `Sapic.checkWellformedness = concatMap (toWfErrorReport . warnProcess)
-    // . theoryProcesses` (Warnings.hs:37-38) runs on the parsed process —
-    // AFTER inlining (HS inlines at parse time) but BEFORE `typeTheory` /
-    // `renameUnique` — so two binders sharing a name (e.g. `new x; new x`) are
-    // still alpha-identical and detected as captured.  `plain` is exactly that
-    // process.  We collect the report and return it to the caller; translation
-    // proceeds regardless (these are warnings, not hard errors).
-    let wf_report = crate::warnings::check_wellformedness(&plain);
-
-    // P0e: typeTheory (renameUnique + type inference), using the elaborated
+    // `typeTheory` (renameUnique + type inference), using the elaborated
     // signature's MaudeSig (HS `initTEFromSig`).  The user `functions:` typing
     // declarations (`theoryFunctionTypingInfos`, e.g. `f(bitstring):bitstring`)
     // seed the function-typing environment so `typeWith` can back-propagate a
@@ -94,7 +109,7 @@ pub fn apply_sapic(
         })?;
 
     // translate → rules + restrictions.  `needs_in_ev_res = any
-    // lemmaNeedsInEvRes (theoryLemmas th)` (Sapic.hs:45-101, see line 101): gates the
+    // lemmaNeedsInEvRes (theoryLemmas th)` (sapic/src/Sapic.hs:45-101, see line 101): gates the
     // `EventEmpty`/`ChannelIn` actions + the `in_event` restriction.  HS
     // `theoryLemmas` = the (non-diff, non-accountability) `Lemma` items.
     let lemmas: Vec<p::Lemma> = parsed
@@ -155,11 +170,14 @@ pub fn apply_sapic(
     //                 the appended `Restr_*` actions are present).
     for (rule, restr_formulas) in &translation.rules {
         // Synthesise the parser-AST rule, carrying the embedded restrictions.
-        let mut parsed_rule = synth_parsed_rule(rule);
+        // `proto_rule_to_parsed` projects the elaborated E-rule back to parser
+        // facts and carries color / process / no_derivcheck / issapicrule /
+        // role exactly as HS's `toRule` produced them.
+        let mut parsed_rule = tamarin_theory::pretty_theory::proto_rule_to_parsed(rule);
         parsed_rule.embedded_restrictions = restr_formulas.clone();
 
         // HS `foldM liftedAddProtoRule th (map (`OpenProtoRule` []) eProtoRule)`
-        // (Sapic.hs:74): each generated rule goes through the same
+        // (sapic/src/Sapic.hs:75): each generated rule goes through the same
         // `addOpenProtoRule` name guard as a parsed rule (OpenTheory.hs:
         // 691-702) — it fails when the name is already bound to a DIFFERENT
         // rule, so a user rule named like a generated one (e.g. `rule Init`
@@ -170,7 +188,7 @@ pub fn apply_sapic(
         // existing `ElabError` channel.  (Generated rules never collide with
         // each other — their names encode unique process positions — and never
         // compare equal to a user rule: the parser drops `process=` attributes
-        // while `synth_parsed_rule` keeps them.)
+        // while `proto_rule_to_parsed` keeps them.)
         if let Some(prev) = parsed.items.iter().find_map(|i| match i {
             p::TheoryItem::Rule(r) if r.name == parsed_rule.name => Some(r),
             _ => None,
@@ -233,7 +251,8 @@ pub fn apply_sapic(
     }
 
     // `addHeuristic [SapicRanking]` unless a heuristic is already set
-    // (Sapic.hs:45-101, see line 82).  `SapicRanking` renders as `p`.  Add it to BOTH theories:
+    // (sapic/src/Sapic.hs:45-101, see line 82).  `SapicRanking` renders as `p`.
+    // Add it to BOTH theories:
     //   - `elaborated.heuristic` drives the rendered `heuristic: p` line; and
     //   - the `parsed` theory drives the PROVER's heuristic — `ProverSession`
     //     re-elaborates the parsed theory (`prove.rs:461`), so without the
@@ -253,24 +272,6 @@ pub fn apply_sapic(
     }
 
     Ok(wf_report)
-}
-
-/// Collect the user `functions:` typing declarations (HS
-/// `theoryFunctionTypingInfos`).  Every parsed `FunctionDecl` becomes a
-/// `FunctionTypingInfo` (Theory/Text/Parser.hs:254-257 `addFunctionTypingInfo`),
-/// so we map each to its `(name, arg_types, out_type)` triple.  Plain `f/2`
-/// declarations carry `Nothing` types (the `defaultFunctionType`), which the
-/// typing env already holds — so they are harmless overlays.
-fn collect_user_fun_typings(parsed: &p::Theory) -> Vec<UserFunTyping> {
-    let mut out = Vec::new();
-    for item in &parsed.items {
-        if let p::TheoryItem::Functions(decls) = item {
-            for d in decls {
-                out.push((d.name.clone(), d.arg_types.clone(), d.out_type.clone()));
-            }
-        }
-    }
-    out
 }
 
 /// Re-elaborate a `_restrict`-rewritten parser-AST rule body into a
@@ -306,63 +307,4 @@ fn reelaborate_rule_body(
         tamarin_theory::rule::Rule::new(original.info.clone(), prems, concs, acts)
             .with_new_vars(new_vars),
     )
-}
-
-/// Build the synthetic parsed-AST rule for a SAPIC-generated `ProtoRuleE`.
-/// The body (premises/actions/conclusions) is the elaborated E-rule converted
-/// back to parser facts; the attributes carry color / process / issapicrule /
-/// role exactly as HS's `toRule` produced them.
-fn synth_parsed_rule(rule: &ProtoRuleE) -> p::Rule {
-    let name = match &rule.info.name {
-        ProtoRuleName::Stand(n) => n.to_string(),
-        ProtoRuleName::Fresh => "Fresh".to_string(),
-    };
-    let attrs = synth_attrs(&rule.info.attributes);
-    p::Rule {
-        name,
-        modulo: None,
-        attributes: attrs,
-        let_block: Vec::new(),
-        premises: rule.premises.iter().map(lnfact_to_parser).collect(),
-        actions: rule.actions.iter().map(lnfact_to_parser).collect(),
-        conclusions: rule.conclusions.iter().map(lnfact_to_parser).collect(),
-        embedded_restrictions: Vec::new(),
-        variants: Vec::new(),
-        left_right: None,
-        location: DUMMY_LOCATION,
-    }
-}
-
-/// Render the elaborated `RuleAttributes` into the parser-AST attribute list,
-/// in HS's order: color, process, (no_derivcheck), issapicrule, role.  The
-/// pretty-printer's `rule_attribute_parts` re-orders to the canonical render
-/// order, so list order here is not load-bearing — but we keep it tidy.
-fn synth_attrs(attr: &tamarin_theory::rule::RuleAttributes) -> Vec<p::RuleAttr> {
-    let mut out: Vec<p::RuleAttrKind> = Vec::new();
-    if let Some(c) = &attr.color {
-        // `color=#rrggbb` — pretty_theory lowercases + strips the leading `#`,
-        // so pass the hex without the `#` here.
-        let hex = tamarin_utils::color::rgb_to_hex(*c);
-        out.push(p::RuleAttrKind::Color(
-            hex.trim_start_matches('#').to_string(),
-        ));
-    }
-    if let Some(proc) = &attr.process {
-        out.push(p::RuleAttrKind::Process(pretty_sapic_top_level(proc)));
-    }
-    if attr.ignore_deriv_checks {
-        out.push(p::RuleAttrKind::NoDerivCheck);
-    }
-    if attr.is_sapic_rule {
-        out.push(p::RuleAttrKind::IsSapicRule);
-    }
-    if let Some(r) = &attr.role {
-        out.push(p::RuleAttrKind::Role(r.clone()));
-    }
-    out.into_iter()
-        .map(|k| p::RuleAttr {
-            kind: k,
-            location: DUMMY_LOCATION,
-        })
-        .collect()
 }

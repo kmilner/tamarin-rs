@@ -1,20 +1,25 @@
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
+
 use super::*;
 use crate::constraint::system::System;
-
-#[test]
-fn empty_system_has_no_open_goals() {
-    let sys = System::empty();
-    assert!(open_goals(&sys).is_empty());
-}
+use crate::test_maude::maude_path;
 
 #[test]
 fn single_goal_returned() {
     let mut sys = System::empty();
+    assert!(
+        open_goals(&sys).is_empty(),
+        "precondition: nothing is open before a goal is added"
+    );
     let v = tamarin_term::lterm::LVar::new("k", tamarin_term::lterm::LSort::Msg, 0);
     let f = crate::fact::LNFact::new(crate::fact::FactTag::Out, vec![]);
-    sys.add_goal(Goal::Action(v, f));
+    let g = Goal::Action(v, f);
+    sys.add_goal(g.clone());
     let goals = open_goals(&sys);
     assert_eq!(goals.len(), 1);
+    assert_eq!(goals[0].goal, g, "the goal is carried through verbatim");
     assert_eq!(goals[0].usefulness, Usefulness::Useful);
 }
 
@@ -24,41 +29,75 @@ fn solved_goal_filtered() {
     let v = tamarin_term::lterm::LVar::new("k", tamarin_term::lterm::LSort::Msg, 0);
     let f = crate::fact::LNFact::new(crate::fact::FactTag::Out, vec![]);
     sys.add_goal(Goal::Action(v, f));
+    assert_eq!(
+        open_goals(&sys).len(),
+        1,
+        "precondition: open before solving"
+    );
     sys.goals_mut()[0].1.solved = true;
     assert!(open_goals(&sys).is_empty());
 }
 
+/// `is_open_in_sys` treats the empty disjunction as closed while it is still
+/// unsolved.  This mirrors HS `DisjG (Disj []) -> False` (Goals.hs:89).  The
+/// contradictions pass disposes of the empty disjunction, not goal solving.
+/// The `solved` flag stays false here, so the default arm `_ -> not solved`
+/// would report this goal open.  Only the empty-Disj arm keeps it out of
+/// `open_goals`.  The control case with a one-item Disj shows that the arm
+/// is specific to the empty disjunction.  The arm is not a filter for every
+/// Disj.
 #[test]
-fn dispatch_solve_disj_goal_routes() {
+fn empty_disj_goal_is_never_open() {
+    use crate::constraint::constraints::Disj;
+    use crate::guarded::{gtrue, Guarded};
+
+    let mut sys = System::empty();
+    sys.add_goal(Goal::Disj(Disj::<Guarded>::new(Vec::new())));
+    assert!(!sys.goals[0].1.solved);
+    assert!(open_goals(&sys).is_empty());
+
+    let mut sys = System::empty();
+    sys.add_goal(Goal::Disj(Disj::new(vec![gtrue()])));
+    assert!(!sys.goals[0].1.solved);
+    assert_eq!(open_goals(&sys).len(), 1);
+}
+
+/// `dispatch_solve_goal` marks the goal solved before it delegates.  This
+/// mirrors HS `solveGoal` (Goals.hs:201-213).  The solver that it delegates
+/// to can rewrite the terms of the goal through `solveFactEqs` or
+/// `substSystem`.  A mark after the solve would then miss the substituted
+/// key and leave the goal open.
+#[test]
+fn dispatch_solve_goal_marks_solved_then_routes() {
     use crate::constraint::solver::context::ProofContext;
     use crate::constraint::solver::reduction::{GoalCases, Reduction};
     use tamarin_term::maude_sig::pair_maude_sig;
 
-    let path = match std::env::var("MAUDE_PATH").ok().or_else(|| {
-        for c in ["/usr/local/bin/maude", "maude"] {
-            if std::path::Path::new(c).exists() {
-                return Some(c.to_string());
-            }
-        }
-        None
-    }) {
+    let path = match maude_path() {
         Some(p) => p,
         None => return,
     };
     let h = tamarin_term::maude_proc::MaudeHandle::start(&path, pair_maude_sig()).unwrap();
     let ctx = ProofContext::new(h, Vec::new());
-    let mut r = Reduction::new(&ctx, System::empty());
-    // Empty disjunction → contradictory.
+    let mut sys = System::empty();
+    // Nothing can satisfy an empty disjunction.  The Disj solver that this
+    // call must route to therefore answers `Contradictory`.
     let d = crate::constraint::constraints::Disj::<crate::guarded::Guarded>::new(Vec::new());
     let g = Goal::Disj(d);
+    sys.add_goal(g.clone());
+    let mut r = Reduction::new(&ctx, sys);
     let out = dispatch_solve_goal(&mut r, &g);
     assert!(matches!(out, GoalCases::Contradictory));
+    assert!(
+        r.sys.goals.iter().any(|(gg, st)| gg == &g && st.solved),
+        "the goal must be marked solved even on the contradictory route"
+    );
 }
 
 // =========================================================================
 // Haskell-faithfulness invariants for Goal-Ord.
 //
-// Haskell `data Goal` (Constraints.hs:155-168) declares variants in
+// Haskell `data Goal` (Constraints.hs:159-172) declares variants in
 // this exact order, and derives `Ord`:
 //
 //     data Goal = ActionG _ _
@@ -72,20 +111,20 @@ fn dispatch_solve_disj_goal_routes() {
 // So the constructor tag order is:
 //     Action < Chain < Premise < Split < Disj < Subterm
 //
-// The Rust `Goal` enum (constraints.rs) preserves this variant
-// order, so its derived structural order — if we had one — would be
-// the same.  But `goal_cmp` (this file) hand-codes a `tag` function,
-// and any divergence between that and the variant order would silently
-// sort goals differently than Haskell.
+// Rust's `Goal` (constraints.rs) derives no `Ord`; `goal_cmp`
+// (goals.rs) hand-codes the tag function, and it is the comparator
+// every goal sort in the solver goes through (pretty_system,
+// rename_precise, sources, reduction).  Any divergence between it and
+// the HS declaration order silently sorts goals differently than
+// Haskell.
 // =========================================================================
 
 /// Pin Haskell's Goal-Ord tag order: Action < Chain < Premise < Split
 /// < Disj < Subterm.
 ///
-/// This is the exact order from Constraints.hs:155-168.  When
-/// `goal_cmp` is wired into goal iteration (see file-level comment),
-/// the choice of Action's-first-Premise determines which goal the
-/// solver picks at each step, which determines the proof shape.
+/// This is the exact order from Constraints.hs:159-172.  `goal_cmp`
+/// orders every goal list the solver sorts, so this tag ranking decides
+/// which goal each step picks — and hence the proof shape.
 #[test]
 fn goal_cmp_tag_order_matches_haskell_declaration() {
     use crate::constraint::constraints::{Disj, NodeId, SplitId};
@@ -110,25 +149,31 @@ fn goal_cmp_tag_order_matches_haskell_declaration() {
         tamarin_term::builtin::msg_var("b", 0),
     ));
 
-    // The order from Constraints.hs:155-168 (deriving Ord):
+    // The order from Constraints.hs:159-172 (deriving Ord):
     //   ActionG < ChainG < PremiseG < SplitG < DisjG < SubtermG
     //
-    // **THIS IS THE CONTRACT.**  If Rust's `goal_cmp` differs, the
-    // BTreeMap-backed goal iteration in any Haskell-faithful wiring
-    // will sort differently from Haskell, causing proof-step
-    // divergences silently.
+    // **THIS IS THE CONTRACT.**  If Rust's `goal_cmp` differs, every
+    // goal sort that routes through it orders differently from
+    // Haskell, causing proof-step divergences silently.
     let order = [&action, &chain, &premise, &split, &disj, &sub];
     let names = ["Action", "Chain", "Premise", "Split", "Disj", "Subterm"];
     for i in 0..order.len() {
+        // Every variant compares Equal with itself.  The short-circuit on
+        // the tag must fall through to a payload comparison that agrees.
+        assert_eq!(
+            goal_cmp(order[i], order[i]),
+            Ordering::Equal,
+            "{} must compare Equal with itself",
+            names[i]
+        );
         for j in (i + 1)..order.len() {
             assert_eq!(
                 goal_cmp(order[i], order[j]),
                 Ordering::Less,
                 "Haskell Goal-Ord requires {} < {} \
-                     (Constraints.hs:155-168 declaration order).  \
+                     (Constraints.hs:159-172 declaration order).  \
                      goal_cmp put them in the wrong order — this WILL \
-                     cause silent proof divergence when goal_cmp is \
-                     wired into goal iteration.",
+                     cause silent proof divergence.",
                 names[i],
                 names[j]
             );
@@ -143,68 +188,39 @@ fn goal_cmp_tag_order_matches_haskell_declaration() {
     }
 }
 
-/// Pin tag-equality (every variant ordered with itself returns Equal).
-/// Within-variant comparison is structural and depends on inner-field
-/// ordering; here we just check the tag-equality short-circuit.
-#[test]
-fn goal_cmp_reflexive() {
-    use crate::constraint::constraints::SplitId;
-    use std::cmp::Ordering;
-    use tamarin_term::lterm::{LSort, LVar};
-
-    let action: Goal = Goal::Action(
-        LVar::new("k", LSort::Msg, 0),
-        crate::fact::LNFact::new(crate::fact::FactTag::Out, vec![]),
-    );
-    let split: Goal = Goal::Split(SplitId(7));
-    assert_eq!(goal_cmp(&action, &action), Ordering::Equal);
-    assert_eq!(goal_cmp(&split, &split), Ordering::Equal);
-}
-
-/// Pin that `Goal` enum variant declaration order in Rust matches
-/// Haskell's data-decl order.  This is the upstream invariant that
-/// `goal_cmp`'s tag function should respect.  If Rust's enum is
-/// reordered, both this AND `goal_cmp` must change together.
+/// Pin that `Goal`'s variant declaration order in Rust matches Haskell's
+/// data-decl order.  The test above pins `goal_cmp`'s hand-written tag
+/// function; this pins the enum that function shadows, so reordering one
+/// without the other fails here.  `Goal` derives no `Ord` and stable Rust
+/// cannot reflect over variants, so read the declaration out of the
+/// source — `discriminant` values are opaque and stay pairwise distinct
+/// under ANY reordering, which is why they cannot pin an order.
 #[test]
 fn rust_goal_enum_variant_order_matches_haskell() {
-    // We can't reflect over enum variants in stable Rust without a
-    // proc-macro, but we can pin the order via discriminant indices
-    // assigned by the compiler.  `Goal::Action(...)` is variant 0,
-    // `Goal::Chain` is 1, etc.  If someone reorders the enum, the
-    // discriminant values change and this test breaks.
-    use crate::constraint::constraints::{Disj, NodeId, SplitId};
-    use crate::fact::{FactTag, LNFact, Multiplicity};
-    use crate::rule::{ConcIdx, PremIdx};
-    use std::mem::discriminant;
-    use tamarin_term::lterm::{LSort, LVar};
-
-    let v: LVar = LVar::new("k", LSort::Msg, 0);
-    let n: NodeId = LVar::new("i", LSort::Node, 0);
-    let f: LNFact = LNFact::new(FactTag::Proto(Multiplicity::Linear, "F", 0), vec![]);
-
-    // Build one of each variant in Haskell's declaration order.
-    let variants = [
-        Goal::Action(v, f.clone()),
-        Goal::Chain((n, ConcIdx(0)), (n, PremIdx(0))),
-        Goal::Premise((n, PremIdx(0)), f.clone()),
-        Goal::Split(SplitId(0)),
-        Goal::Disj(Disj::<crate::guarded::Guarded>::new(vec![])),
-        Goal::Subterm((
-            tamarin_term::builtin::msg_var("a", 0),
-            tamarin_term::builtin::msg_var("b", 0),
-        )),
-    ];
-    // All discriminants must be distinct (sanity).
-    let discs: Vec<_> = variants.iter().map(discriminant).collect();
-    for i in 0..discs.len() {
-        for j in (i + 1)..discs.len() {
-            assert_ne!(
-                discs[i], discs[j],
-                "variants {} and {} share a discriminant!",
-                i, j
-            );
-        }
-    }
+    let src = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/constraint/constraints.rs"
+    ))
+    .expect("constraints.rs is readable");
+    let body = src
+        .split_once("pub enum Goal {")
+        .expect("Goal enum declaration present")
+        .1
+        .split_once("\n}")
+        .expect("Goal enum declaration closes")
+        .0;
+    let variants: Vec<&str> = body
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with("//") && !l.starts_with('#'))
+        .map(|l| l.split(['(', '{', ',', ' ']).next().unwrap_or(l))
+        .collect();
+    assert_eq!(
+        variants,
+        ["Action", "Chain", "Premise", "Split", "Disj", "Subterm"],
+        "Goal's variants must be declared in HS's `data Goal` order \
+         (Constraints.hs:159-172); `goal_cmp` ranks tags by that order"
+    );
 }
 
 // -- Tactic ranking tests -------------------------------------------------
@@ -418,7 +434,7 @@ fn is_nat_subterm_split_matches_haskell() {
     assert!(!is_nat_subterm_split(&Goal::Split(SplitId(0))));
 }
 
-// -- UsefulGoalNr ('c') derived Usefulness Ord (ProofMethod.hs:480-503, see line 485) ------
+// -- UsefulGoalNr ('c') derived Usefulness Ord (ProofMethod.hs:479-502, see line 484) ------
 
 /// HS `UsefulGoalNrRanking -> sortOn (\(_, (nr, useless)) -> (useless,
 /// nr))` sorts on the DERIVED `Ord Usefulness` (declaration order
@@ -437,15 +453,14 @@ fn useful_goal_nr_uses_derived_usefulness_ord() {
     };
     // LoopBreaker with the LARGER nr, ProbablyConstructible with the
     // smaller nr.  HS Usefulness Ord (LoopBreaker < ProbablyConstructible)
-    // must dominate the nr tiebreak.
+    // must dominate the nr tiebreak.  The test calls the shared production
+    // sorter `sort_useful_goal_nr`.  The `UsefulGoalNr` ranking arm and the
+    // tactic presort use that same sorter.  The test does not repeat the
+    // sort logic here.
     let lb = mk(5, Usefulness::LoopBreaker);
     let pc = mk(1, Usefulness::ProbablyConstructible);
     let mut ags = [pc.clone(), lb.clone()];
-    ags.sort_by(|a, b| {
-        a.usefulness
-            .cmp(&b.usefulness)
-            .then_with(|| a.seq.cmp(&b.seq))
-    });
+    sort_useful_goal_nr(&mut ags);
     // LoopBreaker (seq 5) ranks first despite the larger nr: HS
     // `Usefulness` Ord (LoopBreaker < ProbablyConstructible) dominates the
     // nr tiebreak, even though `tag_usefulness` collapses the two (below).
@@ -454,6 +469,11 @@ fn useful_goal_nr_uses_derived_usefulness_ord() {
         "LoopBreaker must rank before ProbablyConstructible"
     );
     assert_eq!(ags[1].seq, 1);
+    // With equal usefulness, the sorter still breaks ties by creation nr, in
+    // ascending order.
+    let mut same = [mk(9, Usefulness::Useful), mk(2, Usefulness::Useful)];
+    sort_useful_goal_nr(&mut same);
+    assert_eq!([same[0].seq, same[1].seq], [2, 9]);
     // And tag_usefulness genuinely WOULD collapse these two — proving the
     // distinction matters.
     assert_eq!(

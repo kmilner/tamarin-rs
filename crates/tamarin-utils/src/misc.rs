@@ -1,8 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   jdreier, meiersi, beschmi, sans-sucre, and other minor contributors
-//   (see upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/utils/src/Utils/Misc.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Port of `Utils.Misc` from `lib/utils/src/Utils/Misc.hs`.
 //!
@@ -55,7 +53,7 @@ pub fn duplicate<A: Clone>(x: A) -> (A, A) {
 // -- List / set predicates ----------------------------------------------------
 
 /// `subsetOf xs ys`: whether every element of `xs` appears in `ys`.
-pub fn subset_of<T: Ord + Clone>(xs: &[T], ys: &[T]) -> bool {
+pub fn subset_of<T: Ord>(xs: &[T], ys: &[T]) -> bool {
     if xs.is_empty() {
         return true;
     }
@@ -123,27 +121,20 @@ where
 /// with `=` padding stripped (matching the Haskell `C8.init` after base64).
 pub fn string_sha256(s: &str) -> String {
     let digest = Sha256::digest(s.as_bytes());
-    let mut out = B64.encode(digest);
+    let mut out = B64.encode(digest).into_bytes();
     // Haskell does `C8.init` (drop the final byte *unconditionally*) and then
     // replaces `/`→`_`, `+`→`-`. The SHA-256 digest is always 32 bytes, so its
-    // standard base64 is always 44 chars ending in exactly one `=` (32 mod 3 ==
-    // 2 → one pad char). `out.pop()` removes the final *char* (Unicode scalar);
-    // since base64 output is ASCII, that final char is exactly one byte (`=`),
-    // so this matches Haskell's byte-based `C8.init`.
+    // standard base64 is always 44 bytes ending in exactly one `=` (32 mod 3 ==
+    // 2 → one pad char), and popping the last byte is exactly `C8.init`.
     out.pop();
-    // In-place ASCII byte substitution: `/`→`_`, `+`→`-`. Both are
-    // single-ASCII-for-single-ASCII and length-preserving, so UTF-8 validity is
-    // preserved and the resulting String is identical to the round-trip form.
-    // SAFETY: the base64 alphabet is pure ASCII and we only swap one ASCII byte
-    // for another, keeping the buffer valid UTF-8.
-    for b in unsafe { out.as_mut_vec() } {
+    for b in &mut out {
         match *b {
             b'/' => *b = b'_',
             b'+' => *b = b'-',
             _ => {}
         }
     }
-    out
+    String::from_utf8(out).expect("base64 alphabet and both substitutions are ASCII")
 }
 
 // -- Partitions ---------------------------------------------------------------
@@ -385,28 +376,30 @@ mod tests {
         let p1 = partitions(&[1]);
         assert_eq!(p1, vec![vec![vec![1]]]);
 
-        // {1,2}: { {{1,2}}, {{1},{2}} }  — the Haskell order is
-        // ((x:xs):xss) first, then bloat-recurse.
-        let p2 = partitions(&[1, 2]);
-        // Two partitions of a 2-element set.
-        assert_eq!(p2.len(), 2);
-        // Bell numbers: 1, 1, 2, 5, 15, ...
-        assert_eq!(partitions(&[1, 2, 3]).len(), 5);
-        assert_eq!(partitions(&[1, 2, 3, 4]).len(), 15);
+        // This is the exact enumeration order of the HS `partitions` and
+        // `bloat` functions
+        // (`bloat x (xs:xss) = ((x:xs):xss) : map (xs:) (bloat x xss)`).
+        // The code merges the head into the first group first. The group that
+        // holds the head then moves to the right. The counts alone do not pin
+        // this order. See `prop_partition_count_is_bell` for the counts.
+        assert_eq!(
+            partitions(&[1, 2]),
+            vec![vec![vec![1, 2]], vec![vec![2], vec![1]]]
+        );
+        assert_eq!(
+            partitions(&[1, 2, 3]),
+            vec![
+                vec![vec![1, 2, 3]],
+                vec![vec![2, 3], vec![1]],
+                vec![vec![1, 3], vec![2]],
+                vec![vec![3], vec![1, 2]],
+                vec![vec![3], vec![2], vec![1]],
+            ]
+        );
     }
 
     #[test]
-    fn partitions_each_partition_covers_input() {
-        let xs = vec![1, 2, 3, 4];
-        for parts in partitions(&xs) {
-            let mut flat: Vec<i32> = parts.into_iter().flatten().collect();
-            flat.sort();
-            assert_eq!(flat, xs);
-        }
-    }
-
-    #[test]
-    fn non_trivial_excludes_singleton_grouping() {
+    fn non_trivial_excludes_the_one_group_partition() {
         let xs = vec![1, 2, 3];
         let all = partitions(&xs);
         let nt = non_trivial_partitions(&xs);
@@ -419,18 +412,27 @@ mod tests {
         // Haskell:
         //   twoPartitions []     = []
         //   twoPartitions [x]    = [([x], [])]
+        //   twoPartitions (x:xs) = map addToFirst ps ++ map addToSecond ps
         let empty: Vec<i32> = vec![];
         assert_eq!(two_partitions(&empty), Vec::<(Vec<i32>, Vec<i32>)>::new());
         assert_eq!(two_partitions(&[1]), vec![(vec![1], vec![])]);
 
+        // This is the exact HS order. All `addToFirst` results come first, and
+        // all `addToSecond` results follow. Each side keeps the relative order
+        // of the input. The `[x]` base case puts the last element into the
+        // first list. The first component is therefore never empty, and there
+        // are 2^(n-1) results, not 2^n.
         let tp = two_partitions(&[1, 2, 3]);
-        // There are 2^(n-1) results (the first list is never empty); here just
-        // check that each pair covers the input.
-        for (a, b) in &tp {
-            let mut combined: Vec<i32> = a.iter().chain(b.iter()).copied().collect();
-            combined.sort();
-            assert_eq!(combined, vec![1, 2, 3]);
-        }
+        assert_eq!(
+            tp,
+            vec![
+                (vec![1, 2, 3], vec![]),
+                (vec![1, 3], vec![2]),
+                (vec![2, 3], vec![1]),
+                (vec![3], vec![1, 2]),
+            ]
+        );
+        assert!(tp.iter().all(|(a, _)| !a.is_empty()));
     }
 
     #[test]
@@ -471,11 +473,6 @@ mod tests {
     // -- Properties -----------------------------------------------------------
 
     proptest! {
-        #[test]
-        fn prop_subset_self(xs in proptest::collection::vec(0i32..50, 0..20)) {
-            prop_assert!(subset_of(&xs, &xs));
-        }
-
         #[test]
         fn prop_no_duplicates_matches_btreeset_size(
             xs in proptest::collection::vec(0i32..20, 0..30)

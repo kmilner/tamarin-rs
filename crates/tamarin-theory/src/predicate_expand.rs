@@ -1,17 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   rkunnema, jdreier, Hong-Thai, meiersi, BTom-GH, yavivanov,
-//   kevinmorio, rsasse, xaDxelA, felixlinker, ValentinYuri, jWoc,
-//   charlie-j, racoucho1u, and other minor contributors (see upstream
-//   git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/term/src/Term/LTerm.hs, lib/term/src/Term/Term/Raw.hs,
-//   lib/theory/src/Items/CaseTestItem.hs,
-//   lib/theory/src/Theory/Model/Fact.hs,
-//   lib/theory/src/Theory/Syntactic/Predicate.hs,
-//   lib/theory/src/Theory/Text/Parser.hs,
-//   lib/theory/src/Theory/Text/Parser/Exceptions.hs,
-//   lib/theory/src/Theory/Text/Parser/Formula.hs,
-//   lib/theory/src/TheoryObject.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Port of `Theory.Syntactic.Predicate.expandFormula` —
 //! substitutes predicate-atom occurrences in a formula with the body
@@ -81,10 +70,10 @@ pub fn expand_theory_formulas(thy: &mut p::Theory) -> Result<(), ExpandError> {
             }
             // CaseTest / AccLemma are NOT predicate-expanded: HS adds them
             // verbatim via `liftedAddCaseTest` / `liftedAddAccLemma`
-            // (Theory/Text/Parser.hs:152-163), which call `addCaseTest` /
+            // (Theory/Text/Parser.hs:153-163), which call `addCaseTest` /
             // `addAccLemma` directly with NO `expandFormula` / `expandLemma`.
             // Only `liftedAddLemma` (→ `expandLemma`) and the restriction path
-            // (→ `expandRestriction`) expand (TheoryObject.hs:430-446). The
+            // (→ `expandRestriction`) expand (TheoryObject.hs:434-450). The
             // case-test / acc-lemma formulas stay `SyntacticLNFormula` with
             // their `Pred` sugar intact; the accountability translation
             // (`caseTestToPredicate`, Items/CaseTestItem.hs:33-37) consumes
@@ -185,15 +174,15 @@ fn strip_shadowed<'a>(subst: &'a Subst, vs: &[p::VarSpec]) -> std::borrow::Cow<'
 /// keyed by the WHOLE LVar — so a message var `a` (`LSortMsg`) and a
 /// timepoint binder `#a` (`LSortNode`) are DISTINCT variables that cannot
 /// capture each other.  At print time HS likewise opens binders with
-/// `freshLVar n s` (Formula.hs:271-283, see line 276) over a `FreshState` seeded by
-/// `avoidPrecise = avoidPreciseVars . frees` (LTerm.hs:681-690); the bound
+/// `freshLVar n s` (Theory/Model/Formula.hs:272-284, see line 279) over a `FreshState`
+/// seeded by `avoidPrecise = avoidPreciseVars . frees` (LTerm.hs:714-715); the bound
 /// `#a` is not free and the free `a` was abstracted to `x` before
 /// printing, so HS renders `#a` (idx 0).  Do NOT key capture by name
 /// alone: that makes RS treat a substituted `a` as colliding with `#a`
 /// and rename it `#a1`, a divergence from HS (`binding.spthy`).
 ///
 /// Residual print-name gap (rare): HS keeps the original binder hint name
-/// (De-Bruijn shift only, Predicate.hs:94-106) and re-renames bound vars
+/// (De-Bruijn shift only, Predicate.hs:96-105) and re-renames bound vars
 /// fresh at print time, yielding e.g. `z.1` when a free `z` (SAME sort) is
 /// in scope.  Our name-based rename mints a NEW base (`z`→`z1`), so the
 /// printed binder reads `z1` rather than `z.1` in that one same-sort
@@ -283,22 +272,28 @@ fn sort_key(s: p::SortHint) -> SortKey {
     }
 }
 
-/// Collect `(name, sort)` keys of every variable in a term.
-fn collect_term_vars_keyed(t: &p::Term, out: &mut std::collections::BTreeSet<(String, SortKey)>) {
+/// Visit every variable occurrence of a term; the two collectors below differ
+/// only in the key they record.
+fn for_each_term_var(t: &p::Term, f: &mut dyn FnMut(&p::VarSpec)) {
     match t {
-        p::Term::Var(v) => {
-            out.insert((v.name.clone(), sort_key(v.sort)));
-        }
+        p::Term::Var(v) => f(v),
         p::Term::App(_, args) | p::Term::Pair(args) => {
-            args.iter().for_each(|a| collect_term_vars_keyed(a, out))
+            args.iter().for_each(|a| for_each_term_var(a, f))
         }
         p::Term::AlgApp(_, a, b) | p::Term::Diff(a, b) | p::Term::BinOp(_, a, b) => {
-            collect_term_vars_keyed(a, out);
-            collect_term_vars_keyed(b, out);
+            for_each_term_var(a, f);
+            for_each_term_var(b, f);
         }
-        p::Term::PatMatch(inner) => collect_term_vars_keyed(inner, out),
+        p::Term::PatMatch(inner) => for_each_term_var(inner, f),
         _ => {}
     }
+}
+
+/// Collect `(name, sort)` keys of every variable in a term.
+fn collect_term_vars_keyed(t: &p::Term, out: &mut std::collections::BTreeSet<(String, SortKey)>) {
+    for_each_term_var(t, &mut |v| {
+        out.insert((v.name.clone(), sort_key(v.sort)));
+    });
 }
 
 /// Build the builtin `Smaller`/multiset-`(<)` expansion `∃ z. rhs = lhs ++ z`.
@@ -306,7 +301,8 @@ fn collect_term_vars_keyed(t: &p::Term, out: &mut std::collections::BTreeSet<(St
 /// Mirrors HS `builtinPredicates` (Theory/Syntactic/Predicate.hs:58-74):
 /// `Smaller(x, y) <=> hinted exists z (Ato (EqE (bvt y) (fAppUnion (fvt x, fvt z))))`,
 /// i.e. `∃ z. y = x ++ z` with `lhs = x`, `rhs = y`.  The multiset operator
-/// `x (<) y` parses to `Smaller [x, y]` (HS `smallerp`, Formula.hs:30-38), so
+/// `x (<) y` parses to `Smaller [x, y]` (HS `smallerp`,
+/// Theory/Text/Parser/Formula.hs:30-38), so
 /// the same expansion applies with `lhs = x`, `rhs = y`.  `z`'s name is picked
 /// capture-avoidingly: a use-site argument may itself mention `z`, which the
 /// bound `z` would otherwise capture.
@@ -363,21 +359,11 @@ fn fresh_name(base: &str, avoid: &std::collections::BTreeSet<String>) -> String 
     }
 }
 
+/// Collect the NAME of every variable in a term.  See [`for_each_term_var`].
 fn collect_term_vars(t: &p::Term, out: &mut std::collections::BTreeSet<String>) {
-    match t {
-        p::Term::Var(v) => {
-            out.insert(v.name.clone());
-        }
-        p::Term::App(_, args) | p::Term::Pair(args) => {
-            args.iter().for_each(|a| collect_term_vars(a, out))
-        }
-        p::Term::AlgApp(_, a, b) | p::Term::Diff(a, b) | p::Term::BinOp(_, a, b) => {
-            collect_term_vars(a, out);
-            collect_term_vars(b, out);
-        }
-        p::Term::PatMatch(inner) => collect_term_vars(inner, out),
-        _ => {}
-    }
+    for_each_term_var(t, &mut |v| {
+        out.insert(v.name.clone());
+    });
 }
 
 fn collect_atom_vars(a: &p::Atom, out: &mut std::collections::BTreeSet<String>) {
@@ -465,7 +451,7 @@ fn expand_atom(
                 None => {
                     // No user predicate matched.  HS appends the single
                     // builtin predicate `Smaller` whose fact tag is
-                    // `ProtoFact Linear "Smaller" 2` (Predicate.hs:50-67),
+                    // `ProtoFact Linear "Smaller" 2` (Predicate.hs:50-56),
                     // so it matches a use-site only when it is LINEAR (not
                     // persistent), named exactly `Smaller`, and arity 2.
                     if !fact.persistent && fact.name == "Smaller" && sub_args.len() == 2 {
@@ -475,7 +461,7 @@ fn expand_atom(
                     // HS `show (UndefinedPredicate facttag)`
                     // (Theory/Text/Parser/Exceptions.hs:33-34) =
                     //   "undefined predicate " ++ showFactTagArity facttag
-                    // and `showFactTagArity` (Theory/Model/Fact.hs:519-527) =
+                    // and `showFactTagArity` (Theory/Model/Fact.hs:556-557) =
                     //   (if persistent then "!" else "") ++ name ++ "/" ++ arity.
                     Err(ExpandError {
                         message: format!(
@@ -574,14 +560,20 @@ mod tests {
             .collect()
     }
 
+    /// The expansion replaces the use-site atom with the predicate's body.
+    /// It maps the declared parameter to the use-site argument.  The test
+    /// compares the bytes with the oracle (Git revision ef3f0468).  The
+    /// oracle renders this lemma as `∀ x. ∃ #i. A( x ) @ #i`.
     #[test]
     fn expand_simple_predicate() {
-        // P(x) <=> A(x) @ #i  (note: x is bound in the use-site, #i not).
         let preds = pred("P(x) <=> Ex #i. A(x) @ #i");
         let f = parse_formula_str("All x. P(x)").unwrap();
         let expanded = expand_formula(&f, &preds).unwrap();
-        // Should NO LONGER contain a Pred atom.
         assert!(!has_pred_atom(&expanded), "got {:?}", expanded);
+        assert_eq!(
+            crate::pretty_formula::pretty_formula(&expanded),
+            "\u{2200} x. \u{2203} #i. A( x ) @ #i"
+        );
     }
 
     #[test]
@@ -591,7 +583,7 @@ mod tests {
         let res = expand_formula(&f, &preds);
         // `UndefinedPred(x)` parses as a `Pred` atom; with no matching
         // predicate, expansion reports `UndefinedPredicate`.  HS renders it
-        // (Theory/Text/Parser/Exceptions.hs:33-34 + Fact.hs:519-527) as
+        // (Theory/Text/Parser/Exceptions.hs:33-34 + Theory/Model/Fact.hs:556-557) as
         // `undefined predicate <name>/<arity>` (leading `!` if persistent).
         // Probed against the v1.13.0 prover: `... ==> P(x)` reports
         // `undefined predicate P/1`.
@@ -616,7 +608,7 @@ mod tests {
     #[test]
     fn case_test_and_acc_lemma_keep_pred_atoms() {
         // HS adds case-tests / acc-lemmas verbatim (liftedAddCaseTest /
-        // liftedAddAccLemma, Theory/Text/Parser.hs:152-163) with NO
+        // liftedAddAccLemma, Theory/Text/Parser.hs:153-163) with NO
         // predicate expansion — their `Pred` sugar stays intact for the
         // accountability translation.  `expand_theory_formulas` must NOT
         // expand them; a regular lemma over the same predicate IS expanded.
@@ -651,10 +643,10 @@ mod tests {
                 }
                 p::TheoryItem::Lemma(l) => {
                     saw_reg = true;
-                    assert!(
-                        !has_pred_atom(&l.formula),
-                        "regular lemma must be expanded: {:?}",
-                        l.formula
+                    assert_eq!(
+                        crate::pretty_formula::pretty_formula(&l.formula),
+                        "\u{2200} x. \u{2203} #i. A( x ) @ #i",
+                        "regular lemma must carry the predicate's body"
                     );
                 }
                 _ => {}
@@ -680,6 +672,15 @@ mod tests {
             "variable capture: a quantifier still binds `z`: {:?}",
             expanded
         );
+        // The use-site `z` stays as `Act`'s first argument.  The renamed
+        // binder fills the second argument.  The rename makes a new base name
+        // (`z1`).  The oracle (Git revision ef3f0468) keeps the base name and
+        // allocates a new index instead.  It prints
+        // `∃ z.1 #i. Act( z, z.1 ) @ #i`.
+        assert_eq!(
+            crate::pretty_formula::pretty_formula(&expanded),
+            "\u{2203} z1 #i. Act( z, z1 ) @ #i"
+        );
     }
 
     #[test]
@@ -704,15 +705,21 @@ mod tests {
         assert!(!printed.contains("(<)"), "still emits (<): {}", printed);
     }
 
+    /// The builtin's bound `z` must not capture a use-site that mentions `z`
+    /// itself.  The expansion renames the binder.  The use-site `z` stays the
+    /// union's first operand.  The rename makes a new base name (`z1`).  The
+    /// oracle (Git revision ef3f0468) renders the same lemma with a new index
+    /// on the original base, `∃ z.1. y = (z++z.1)`.
     #[test]
     fn expand_lessmset_capture_avoids_z() {
-        // Use-site that mentions `z` must not be captured by the bound `z`.
         let preds: Vec<p::Predicate> = Vec::new();
         let f = parse_formula_str("z (<) y").unwrap();
         let expanded = expand_formula(&f, &preds).unwrap();
-        // The bound var is renamed away from `z` (HS would pick a fresh name);
-        // the use-site `z` survives in the union term.
         assert!(!has_lessmset_atom(&expanded), "got {:?}", expanded);
+        assert_eq!(
+            crate::pretty_formula::pretty_formula(&expanded),
+            "\u{2203} z1. y = (z++z1)"
+        );
     }
 
     fn has_lessmset_atom(f: &p::Formula) -> bool {

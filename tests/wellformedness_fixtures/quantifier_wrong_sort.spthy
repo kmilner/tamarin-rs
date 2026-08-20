@@ -1,6 +1,11 @@
-// Fixture: triggers `Formula terms`.
+// Fixture: triggers `Formula terms` — despite the file's name, NOT
+// `Quantifier sorts`, which `expected.txt` pins as a negative here.
 // `#i` is referenced inside `Setup(...) @ #i` but never bound by any
 // quantifier — it's a free temporal variable.
+// The oracle also reports ` Formula guardedness` for this lemma (a universal
+// quantifier with no toplevel implication).  That topic is post-elaboration
+// in the port, so `expected.txt` — which the parser-only harness also reads —
+// cannot pin it.
 theory QuantSort
 begin
 

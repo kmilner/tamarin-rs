@@ -1,3 +1,7 @@
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
+
 use super::*;
 
 // ---- error-model helpers ----
@@ -13,31 +17,50 @@ fn custom_err(src: &str, flags: &[&str]) -> (u32, u32, String) {
     }
 }
 
+/// The `(name, first_at, second_at)` of the
+/// [`ParseError::ConflictingDeclarations`] a conflicting declaration
+/// raises, positions flattened to `(line, col)`.  `first_at` is the earlier
+/// declaration's site — a `functions:`/`macros:` entry, or the `builtins:`
+/// entry that reserved the name — and `None` for a symbol the theory carries
+/// implicitly, which has no site to point at.
+fn conflict_err(src: &str) -> (String, Option<(u32, u32)>, (u32, u32)) {
+    match parse_theory(src, &[]).unwrap_err() {
+        ParseError::ConflictingDeclarations {
+            name,
+            context: ParseContext::Function,
+            first_at,
+            second_at,
+        } => (
+            name,
+            first_at.map(|at| (at.line, at.col)),
+            (second_at.line, second_at.col),
+        ),
+        other => panic!("unexpected variant: {other:?}"),
+    }
+}
+
 /// A non-binary `[AC]` declaration is HS `function`'s `fail "conflicting
-/// arity : AC function must be binary"` (Signature.hs:220), raised at the
-/// position `lexeme` left after the attribute list.  Positions pinned to the
-/// pinned oracle (ef3f0468).
+/// arity : AC function must be binary"` (Theory/Text/Parser/Signature.hs:220);
+/// the port reports it as [`ParseError::WrongArityforACFunctionDeclaration`]
+/// spanning the declaration itself.
 #[test]
 fn non_binary_ac_declaration_is_a_parse_error() {
+    let ac_arity_err = |src: &str| match parse_theory(src, &[]).unwrap_err() {
+        ParseError::WrongArityforACFunctionDeclaration {
+            name,
+            found_arity,
+            at,
+        } => (name, found_arity, (at.line, at.col)),
+        other => panic!("unexpected variant: {other:?}"),
+    };
     assert_eq!(
-        custom_err(
-            "theory AC3 begin\n\nfunctions: f/3 [AC]\n\nrule R: [ ] --[ ]-> [ ]\n\nend\n",
-            &[],
-        ),
-        (
-            5,
-            1,
-            "conflicting arity : AC function must be binary".to_string()
-        )
+        ac_arity_err("theory AC3 begin\n\nfunctions: f/3 [AC]\n\nrule R: [ ] --[ ]-> [ ]\n\nend\n"),
+        ("f".to_string(), 3, (3, 12))
     );
 
     assert_eq!(
-        custom_err("theory AC5 begin\n\nfunctions: f/3 [AC], g/1\n\nend\n", &[]),
-        (
-            3,
-            20,
-            "conflicting arity : AC function must be binary".to_string()
-        )
+        ac_arity_err("theory AC5 begin\n\nfunctions: f/3 [AC], g/1\n\nend\n"),
+        ("f".to_string(), 3, (3, 12))
     );
 
     // Arity 2 is accepted (and only then does the symbol become infix).
@@ -54,180 +77,118 @@ fn decl_probe_err(name: &str, body: &str) -> (u32, u32, String) {
 /// HS `function`'s check (1) (Theory/Text/Parser/Signature.hs:200-209): a
 /// name an enabled `builtins:` item reserved must be re-declared at exactly
 /// the builtin's `(arity, Privacy, Constructability, NDCstate)` tuple.  It
-/// runs BEFORE the conflicting-arities check (Signature.hs:212) and before
-/// the `[AC]` arity check (Signature.hs:220), so its message wins over both.
-/// Message text and position pinned to the pinned oracle (ef3f0468).
+/// runs BEFORE the conflicting-arities check
+/// (Theory/Text/Parser/Signature.hs:212) and before the `[AC]` arity check
+/// (Theory/Text/Parser/Signature.hs:220), so its diagnostic wins over both.
+/// The port reports it as [`ParseError::ConflictingDeclarations`] with
+/// `first_at` pointing at the `builtins:` entry that reserved the name.
 #[test]
 fn builtin_reserved_name_check_precedes_the_arity_and_ac_checks() {
-    // `[AC]` + arity 3 would otherwise be "AC function must be binary".
+    let probe =
+        |name: &str, body: &str| conflict_err(&format!("theory {name} begin\n\n{body}\n\nend\n"));
+    // `[AC]` + arity 3 would otherwise be the AC-arity variant.
     assert_eq!(
-        decl_probe_err("B1", "builtins: hashing\nfunctions: h/3 [AC]"),
-        (
-            6,
-            1,
-            "`h` conflicts with builtin(s) [\"hashing\"] \
-             (builtin: (1,Public,Constructor,NotNDC), requested: (3,Public,Constructor,NotNDC))"
-                .to_string()
-        )
+        probe("B1", "builtins: hashing\nfunctions: h/3 [AC]"),
+        ("h".to_string(), Some((3, 11)), (4, 12))
     );
-    // Same name declared twice would otherwise be "conflicting arities".
+    // Same name declared twice would otherwise be check (2)'s conflict,
+    // whose `first_at` points at the earlier declaration.
     assert_eq!(
-        decl_probe_err("B7", "builtins: hashing\nfunctions: h/1, h/3 [AC]"),
-        (
-            6,
-            1,
-            "`h` conflicts with builtin(s) [\"hashing\"] \
-             (builtin: (1,Public,Constructor,NotNDC), requested: (3,Public,Constructor,NotNDC))"
-                .to_string()
-        )
+        probe("B7", "builtins: hashing\nfunctions: h/1, h/3 [AC]"),
+        ("h".to_string(), Some((3, 11)), (4, 17))
     );
     // `fst` has no exemption in check (1): `dest-pairing` reserves it at
     // the DESTRUCTOR shape, so re-declaring the constructor is an error
-    // even though check (2) would wave it through (Signature.hs:213).
+    // even though check (2) would wave it through
+    // (Theory/Text/Parser/Signature.hs:213).
     assert_eq!(
-        decl_probe_err("E1", "builtins: dest-pairing\nfunctions: fst/1 [AC]"),
-        (
-            6,
-            1,
-            "`fst` conflicts with builtin(s) [\"dest-pairing\"] \
-             (builtin: (1,Public,Destructor,NotNDC), requested: (1,Public,Constructor,NotNDC))"
-                .to_string()
-        )
+        probe("E1", "builtins: dest-pairing\nfunctions: fst/1 [AC]"),
+        ("fst".to_string(), Some((3, 11)), (4, 12))
     );
-    // Every attribute reaches `requested`, including the two NDC flags.
-    for (attr, shown) in [
-        ("private", "(1,Private,Constructor,NotNDC)"),
-        ("destructor", "(1,Public,Destructor,NotNDC)"),
-        ("NDC", "(1,Public,Constructor,IsNDC)"),
-        ("NDC-diff", "(1,Public,Constructor,IsNDCDiff)"),
-    ] {
+    // Every attribute reaches `requested`, including the two NDC flags:
+    // each one moves the declaration off the builtin's tuple, so each one
+    // conflicts even at the builtin's own arity.
+    for attr in ["private", "destructor", "NDC", "NDC-diff"] {
         assert_eq!(
-            decl_probe_err("P", &format!("builtins: hashing\nfunctions: h/1 [{attr}]")),
-            (
-                6,
-                1,
-                format!(
-                    "`h` conflicts with builtin(s) [\"hashing\"] \
-                     (builtin: (1,Public,Constructor,NotNDC), requested: {shown})"
-                )
-            ),
+            probe("P", &format!("builtins: hashing\nfunctions: h/1 [{attr}]")),
+            ("h".to_string(), Some((3, 11)), (4, 12)),
             "attribute {attr}"
         );
     }
-    // `conflictingBuiltins` (Signature.hs:203) scans the WHOLE table in
-    // `builtinsNames` order, not just the builtins this theory enabled.
+    // A re-declaration at EXACTLY the builtin's tuple is accepted.
+    assert!(parse_theory(
+        "theory OK begin\n\nbuiltins: hashing\nfunctions: h/1\n\nend\n",
+        &[]
+    )
+    .is_ok());
+    // The check consults the ENABLED signature's tuple: `dest-symmetric-
+    // encryption` reserves `sdec` at the destructor shape, so the plain
+    // constructor re-declaration conflicts.
     assert_eq!(
-        decl_probe_err("P6", "builtins: asymmetric-encryption\nfunctions: pk/2"),
-        (
-            6,
-            1,
-            "`pk` conflicts with builtin(s) [\"asymmetric-encryption\",\"signing\",\
-             \"dest-asymmetric-encryption\",\"dest-signing\",\"revealing-signing\"] \
-             (builtin: (1,Public,Constructor,NotNDC), requested: (2,Public,Constructor,NotNDC))"
-                .to_string()
-        )
-    );
-    // The builtin tuple comes from the ENABLED signature, so the two
-    // `dest-*` rows report their destructor variants.
-    assert_eq!(
-        decl_probe_err(
+        probe(
             "P12",
             "builtins: dest-symmetric-encryption\nfunctions: sdec/2"
         ),
-        (
-            6,
-            1,
-            "`sdec` conflicts with builtin(s) [\"symmetric-encryption\",\
-             \"dest-symmetric-encryption\"] (builtin: (2,Public,Destructor,NotNDC), \
-             requested: (2,Public,Constructor,NotNDC))"
-                .to_string()
-        )
+        ("sdec".to_string(), Some((3, 11)), (4, 12))
     );
-    // `locations-report` is the only row with a private symbol and the only
-    // one HS lists first.
+    // `locations-report` reserves `rep` privately, so the public
+    // re-declaration conflicts.
     assert_eq!(
-        decl_probe_err("P9", "builtins: locations-report\nfunctions: rep/2"),
-        (
-            6,
-            1,
-            "`rep` conflicts with builtin(s) [\"locations-report\"] \
-             (builtin: (2,Private,Constructor,NotNDC), requested: (2,Public,Constructor,NotNDC))"
-                .to_string()
-        )
+        probe("P9", "builtins: locations-report\nfunctions: rep/2"),
+        ("rep".to_string(), Some((3, 11)), (4, 12))
+    );
+    // `first_at` is the entry that reserved THIS name, not the head of the
+    // `builtins:` list: `sign` comes from `signing`, the second entry, at
+    // column 20 rather than the column 11 every single-entry probe above
+    // reports.
+    assert_eq!(
+        probe("P32", "builtins: hashing, signing\nfunctions: sign/1"),
+        ("sign".to_string(), Some((3, 20)), (4, 12))
     );
 }
 
 /// The attribute list is not part of the diagnostic: a declaration written
-/// with an explicit `[…]` and one written without land on the same variant at
-/// the same position, carrying only the `fail` message.
+/// with an explicit `[…]` and one written without both report the conflict at
+/// the offending declaration.  An EMPTY `[]` counts as present.
 #[test]
 fn bracketed_and_unbracketed_declarations_report_the_same_conflict() {
     assert_eq!(
-        decl_probe_err("B2", "builtins: hashing\nfunctions: h/1, h/2"),
-        (
-            6,
-            1,
-            "`h` conflicts with builtin(s) [\"hashing\"] \
-             (builtin: (1,Public,Constructor,NotNDC), requested: (2,Public,Constructor,NotNDC))"
-                .to_string()
-        )
+        conflict_err("theory B2 begin\n\nbuiltins: hashing\nfunctions: h/1, h/2\n\nend\n"),
+        ("h".to_string(), Some((3, 11)), (4, 17))
     );
     assert_eq!(
-        decl_probe_err("P24", "builtins: hashing\nfunctions: h/3 []"),
-        (
-            6,
-            1,
-            "`h` conflicts with builtin(s) [\"hashing\"] \
-             (builtin: (1,Public,Constructor,NotNDC), requested: (3,Public,Constructor,NotNDC))"
-                .to_string()
-        )
+        conflict_err("theory P24 begin\n\nbuiltins: hashing\nfunctions: h/3 []\n\nend\n"),
+        ("h".to_string(), Some((3, 11)), (4, 12))
     );
 }
 
-/// HS `function`'s check (2) (Signature.hs:212-216) is a parse error too,
+/// HS `function`'s check (2) (Theory/Text/Parser/Signature.hs:212-216) is a
+/// parse error too,
 /// not something a later stage reports.  The macro row it can also match
-/// registers as `(k, Private, Destructor, NotNDC)` (Macro.hs:46).
-/// Message text and position pinned to the pinned oracle.
+/// registers as `(k, Private, Destructor, NotNDC)` (Theory/Text/Parser/Macro.hs:46).
+/// The port reports [`ParseError::ConflictingDeclarations`] with
+/// `first_at` pointing at the earlier declaration.
 #[test]
 fn conflicting_arities_is_a_parse_error() {
     assert_eq!(
-        custom_err("theory CONF1 begin\n\nfunctions: f/1, f/3\n\nend\n", &[]),
-        (
-            5,
-            1,
-            "conflicting arities/options (1,Public,Constructor,NotNDC) and \
-             (3,Public,Constructor,NotNDC) for `f`. Please choose a different name \
-             for this function."
-                .to_string()
-        )
+        conflict_err("theory CONF1 begin\n\nfunctions: f/1, f/3\n\nend\n"),
+        ("f".to_string(), Some((3, 12)), (3, 17))
     );
     // `reliable-channel` has no MaudeSig, so it reserves nothing and the
     // clash between the two user declarations is check (2)'s to report.
     assert_eq!(
-        decl_probe_err("P22", "builtins: reliable-channel\nfunctions: h/1, h/2"),
-        (
-            6,
-            1,
-            "conflicting arities/options (1,Public,Constructor,NotNDC) and \
-             (2,Public,Constructor,NotNDC) for `h`. Please choose a different name \
-             for this function."
-                .to_string()
-        )
+        conflict_err(
+            "theory P22 begin\n\nbuiltins: reliable-channel\nfunctions: h/1, h/2\n\nend\n"
+        ),
+        ("h".to_string(), Some((4, 12)), (4, 17))
     );
     assert_eq!(
-        decl_probe_err("P29", "macros: mh(x, y) = x\nfunctions: mh/2"),
-        (
-            6,
-            1,
-            "conflicting arities/options (2,Private,Destructor,NotNDC) and \
-             (2,Public,Constructor,NotNDC) for `mh`. Please choose a different name \
-             for this function."
-                .to_string()
-        )
+        conflict_err("theory P29 begin\n\nmacros: mh(x, y) = x\nfunctions: mh/2\n\nend\n"),
+        ("mh".to_string(), Some((3, 9)), (4, 12))
     );
 }
 
-/// HS `extendSig`'s own two checks (Signature.hs:107-119), raised at the
+/// HS `extendSig`'s own two checks (Theory/Text/Parser/Signature.hs:107-119), raised at the
 /// position the builtin's `symbol` lexeme reached.  Message text and position
 /// pinned to the pinned oracle.
 #[test]
@@ -294,7 +255,8 @@ fn builtins_item_rejects_conflicting_functions_and_macros() {
                 .to_string()
         )
     );
-    // `dest-pairing` is exempt (Signature.hs:121): replacing the seeded
+    // `dest-pairing` is exempt (Theory/Text/Parser/Signature.hs:121):
+    // replacing the seeded
     // `fst`/`snd` constructors with the destructor variants is its job.
     assert!(parse_theory("theory OK begin\n\nbuiltins: dest-pairing\n\nend\n", &[]).is_ok());
 }
@@ -379,7 +341,7 @@ fn reserved_word_at_a_declaration_position() {
     assert!(parse_theory("theory D\nbegin\n\nfunctions: diffuse/2\n\nend\n", &[]).is_ok());
 
     // A labelled grammar site reports its own label instead — HS `predicate …
-    // <?> "predicate declaration"` (Signature.hs:270-275) — pointing at the
+    // <?> "predicate declaration"` (Theory/Text/Parser/Signature.hs:270-275) — pointing at the
     // start of the offending token rather than at the reserved word's end.
     let e = parse_theory(
         "theory R8 begin\n\npredicates: diff(x) <=> x = x\n\nend\n",
@@ -408,7 +370,7 @@ fn reserved_word_at_a_declaration_position() {
 #[test]
 fn unterminated_theory_reports_the_missing_end_keyword() {
     for (body, line) in [
-        // `protoRule`'s `option [] $ symbol "variants" *> …` (Rule.hs:134).
+        // `protoRule`'s `option [] $ symbol "variants" *> …` (Theory/Text/Parser/Rule.hs:134).
         ("rule R: [ ] --[ ]-> [ ]", 5),
         // `commaSep1`'s trailing `comma` after a `builtins:` list.
         ("builtins: hashing", 5),
@@ -449,7 +411,8 @@ fn diff_probe_err(args: &str, flags: &[&str]) -> (u32, u32, String) {
     custom_err(&diff_probe(args), flags)
 }
 
-/// HS `diffOp` (Term.hs:123-135) parses `diff(...)` unconditionally and then
+/// HS `diffOp` (Theory/Text/Parser/Term.hs:123-135) parses `diff(...)`
+/// unconditionally and then
 /// `fail`s unless the signature's diff bit is on, so a `diff` term in a
 /// theory parsed without the flag is a parse error — not an ordinary user
 /// function.  The three `fail`s fire in HS's order (arity, then equations,
@@ -664,6 +627,17 @@ fn theory_with_builtins() {
         TheoryItem::Builtins(v) => {
             let kinds = v.iter().map(|b| b.kind).collect::<Vec<_>>();
             assert_eq!(kinds, vec![BuiltinKind::Hashing, BuiltinKind::Signing]);
+            // Each entry spans its own name and stops at the last character of
+            // the lexeme: `hyphen_identifier` replays the word to undo the
+            // trailing-whitespace skip `ident` already did, so `signing`'s
+            // span ends at 41 (before the space) and not at 42 (`end`).
+            let spans = v
+                .iter()
+                .map(|b| (b.location.col, b.location.start, b.location.end))
+                .collect::<Vec<_>>();
+            assert_eq!(spans, vec![(26, 25, 32), (35, 34, 41)]);
+            assert_eq!(&s[25..32], "hashing");
+            assert_eq!(&s[34..41], "signing");
         }
         x => panic!("expected builtins, got {:?}", x),
     }
@@ -680,9 +654,15 @@ fn simple_rule() {
     match &t.items[0] {
         TheoryItem::Rule(r) => {
             assert_eq!(r.name, "R");
-            assert_eq!(r.premises.len(), 1);
-            assert_eq!(r.actions.len(), 1);
-            assert_eq!(r.conclusions.len(), 1);
+            // Each of the three lists holds exactly one fact.  So only the
+            // names separate the premise, action and conclusion slots.  The
+            // test compares the names, not the lengths.
+            fn names(fs: &[Fact]) -> Vec<&str> {
+                fs.iter().map(|f| f.name.as_str()).collect()
+            }
+            assert_eq!(names(&r.premises), ["Fr"]);
+            assert_eq!(names(&r.actions), ["Foo"]);
+            assert_eq!(names(&r.conclusions), ["Out"]);
         }
         x => panic!("expected rule, got {:?}", x),
     }
@@ -697,7 +677,16 @@ fn lemma_with_quantifier() {
         "#;
     let t = parse_theory(s, &[]).unwrap();
     match &t.items[0] {
-        TheoryItem::Lemma(_) => {}
+        TheoryItem::Lemma(l) => {
+            assert_eq!(l.name, "secret");
+            // The parser gives the quoted body to the formula parser.  It
+            // does not keep the body as text.  The two binders `x` and `#i`
+            // and the `All` head must reach the AST.
+            match &l.formula.kind {
+                FormulaKind::Forall(vs, _) => assert_eq!(vs.len(), 2),
+                other => panic!("expected Forall, got {:?}", other),
+            }
+        }
         x => panic!("expected lemma, got {:?}", x),
     }
 }
@@ -707,6 +696,9 @@ fn comment_handling() {
     let s = "/* outer */ theory T // line\n begin /* x /* y */ z */ end";
     let t = parse_theory(s, &[]).unwrap();
     assert_eq!(t.name, "T");
+    // `/* */` and `//` are whitespace, not theory items.  Only the
+    // `name{* … *}` formal comment becomes a theory item.
+    assert!(t.items.is_empty(), "unexpected items: {:?}", t.items);
 }
 
 #[test]
@@ -715,15 +707,17 @@ fn term_application() {
     // head through `lookup_arity` and an undeclared `h` would backtrack
     // to a variable (oracle probes p05/p25 — unknown operators are parse
     // errors upstream).
-    let mut p = Parser::new("h(<a, b>, ~k)", &[], false);
-    p.resolve_prefix_apps = false;
-    let t = p.term(false).unwrap();
-    match t {
+    match parse_term_str("h(<a, b>, ~k)", &[]).unwrap() {
         Term::App(name, args) => {
             assert_eq!(name, "h");
-            assert_eq!(args.len(), 2);
+            // The nested tuple is one argument, not two.
+            assert!(
+                matches!(args.as_slice(), [Term::Pair(p), Term::Var(_)] if p.len() == 2),
+                "unexpected argument shape: {:?}",
+                args
+            );
         }
-        _ => panic!("expected App"),
+        other => panic!("expected App, got {:?}", other),
     }
 }
 
@@ -736,7 +730,8 @@ fn formula_string() {
     }
 }
 
-// HS `blatom` (Formula.hs:45-57) tries the term-relational atoms
+// HS `blatom` (Theory/Text/Parser/Formula.hs:45-57) tries the term-relational
+// atoms
 // (Subterm/Less/EqE) BEFORE the bare-fact `Pred` alternative, so an
 // uppercase function applied with a relational operator is an equality/
 // subterm atom, not a predicate. Verified against tamarin-prover 1.13.0:
@@ -817,37 +812,83 @@ fn type_p_only_capital_any_is_default() {
 // 1.13.0: `A(<>)` is a parse error; `A(<x>)` renders `A( x )`.
 #[test]
 fn empty_tuple_is_error_singleton_collapses() {
-    assert!(parse_term_str("<>").is_err(), "<> must be a parse error");
+    assert!(
+        parse_term_str("<>", &[]).is_err(),
+        "<> must be a parse error"
+    );
     // Singleton tuple collapses to the inner term.
-    match parse_term_str("<x>").unwrap() {
+    match parse_term_str("<x>", &[]).unwrap() {
         Term::Var(v) => assert_eq!(v.name, "x"),
         other => panic!("expected singleton to collapse to Var, got {:?}", other),
     }
     // Two-element tuple is a Pair.
-    match parse_term_str("<x, y>").unwrap() {
+    match parse_term_str("<x, y>", &[]).unwrap() {
         Term::Pair(items) => assert_eq!(items.len(), 2),
         other => panic!("expected Pair, got {:?}", other),
     }
 }
 
-// HS `factAnnotation` SolveFirst is `opUnion = symbol_ "++" <|> symbol_ "+"`
-// (Fact.hs:31-36, see line 32, Token.hs:551-552), so `[++]` is accepted like `[+]`.
+// HS `factAnnotation` (Theory/Text/Parser/Fact.hs:31-36, see line 33) maps
+// `opUnion` to SolveFirst, `opMinus` to SolveLast and `no_precomp` to
+// NoSources.  HS also defines `opUnion = symbol_ "++" <|> symbol_ "+"`
+// (Token.hs:551-552).  So the parser accepts `[++]` like `[+]`.
 // Verified against tamarin-prover 1.13.0: `Foo(~k)[++]` parses and renders
 // as `[+]`.
 #[test]
 fn fact_annotation_accepts_double_plus() {
-    let s = "theory T begin rule R: [ Fr(~k) ] --[ Foo(~k)[++] ]-> [ Out(~k) ] end";
-    let t = parse_theory(s, &[]).unwrap();
-    let rule = t
-        .items
+    use FactAnnotation::*;
+    for (written, expected) in [
+        ("[++]", vec![SolveFirst]),
+        ("[+]", vec![SolveFirst]),
+        ("[-]", vec![SolveLast]),
+        ("[no_precomp]", vec![NoSources]),
+        // `list` is comma-separated.  The annotations keep the source order.
+        ("[-,++,no_precomp]", vec![SolveLast, SolveFirst, NoSources]),
+        ("[]", vec![]),
+        ("", vec![]),
+    ] {
+        let s =
+            format!("theory T begin rule R: [ Fr(~k) ] --[ Foo(~k){written} ]-> [ Out(~k) ] end");
+        let t = parse_theory(&s, &[]).unwrap_or_else(|e| panic!("{written}: {e}"));
+        let rule = t
+            .items
+            .iter()
+            .find_map(|it| match it {
+                TheoryItem::Rule(r) => Some(r),
+                _ => None,
+            })
+            .expect("rule R");
+        assert_eq!(
+            rule.actions[0].annotations, expected,
+            "annotation {written}"
+        );
+    }
+}
+
+// ---- `read_until_next_top_level`: where a raw capture ends ----------------
+
+/// The raw text that `read_until_next_top_level` captured for the proof
+/// skeleton of the theory.  This function also asserts that the theory holds
+/// exactly one lemma.  A capture that stops early leaves the rest of the
+/// text, and the parser then reads that rest as more theory items.  So the
+/// lemma count is part of every check below.
+fn lemma_proof_raw(thy: &Theory) -> &str {
+    let mut lemmas = thy.items.iter().filter_map(|it| match it {
+        TheoryItem::Lemma(l) => Some(l),
+        _ => None,
+    });
+    let l = lemmas.next().expect("a lemma");
+    assert!(lemmas.next().is_none(), "expected exactly one lemma");
+    &l.proof.as_ref().expect("lemma has a proof skeleton").raw
+}
+
+/// Reports whether the parser split a top-level `test` CaseTest item out of
+/// the theory.  That is the symptom of a capture that stopped at a `test`
+/// token inside a proof body.
+fn has_casetest(thy: &Theory) -> bool {
+    thy.items
         .iter()
-        .find_map(|it| match it {
-            TheoryItem::Rule(r) => Some(r),
-            _ => None,
-        })
-        .expect("rule R");
-    let act = &rule.actions[0];
-    assert_eq!(act.annotations, vec![FactAnnotation::SolveFirst]);
+        .any(|it| matches!(it, TheoryItem::CaseTest(_)))
 }
 
 // Regression: `test` is a genuine top-level theory-item keyword (HS
@@ -856,7 +897,8 @@ fn fact_annotation_accepts_double_plus() {
 // Theory/Text/Parser.hs:230-393, see line 268) but is ALSO an ordinary message variable
 // name inside proof goals — e.g. `solve( Match( test, sid ) @ #i4 )` in
 // examples/ake/bilinear/Scott.spthy.  HS parses the proof skeleton
-// STRUCTURALLY (`solve <$> parens goal`, Proof.hs:76-85, see line 80), so a `test` inside
+// STRUCTURALLY (`solve <$> parens goal`, Theory/Text/Parser/Proof.hs:76-85,
+// see line 80), so a `test` inside
 // `solve( ... )` is a `parens`-nested term and can never begin a new
 // top-level item.  `read_until_next_top_level` reproduces that boundary
 // rule by only testing the top-level-keyword set at paren-depth 0; without
@@ -874,32 +916,16 @@ fn proof_skeleton_not_truncated_by_keyword_fact_arg() {
   qed
 end"#;
     let t = parse_theory(s, &[]).expect("keyword-named goal arg must parse");
-    let lemmas: Vec<_> = t
-        .items
-        .iter()
-        .filter(|it| matches!(it, TheoryItem::Lemma(_)))
-        .collect();
-    assert_eq!(lemmas.len(), 1, "expected exactly one lemma");
     assert!(
-        !t.items
-            .iter()
-            .any(|it| matches!(it, TheoryItem::CaseTest(_))),
-        "no CaseTest may be split out of the proof body"
+        !has_casetest(&t),
+        "no CaseTest may be split out of the body"
     );
-    let proof = match &lemmas[0] {
-        TheoryItem::Lemma(l) => l.proof.as_ref().expect("lemma has a proof skeleton"),
-        _ => unreachable!(),
-    };
+    let raw = lemma_proof_raw(&t);
     assert!(
-        proof.raw.contains("Match( test, sid )"),
-        "proof raw truncated at/before `test`: {:?}",
-        proof.raw
+        raw.contains("Match( test, sid )"),
+        "proof raw truncated at/before `test`: {raw:?}"
     );
-    assert!(
-        proof.raw.contains("qed"),
-        "proof raw missing `qed`: {:?}",
-        proof.raw
-    );
+    assert!(raw.contains("qed"), "proof raw missing `qed`: {raw:?}");
 }
 
 // The paren-depth guard must cover the full spread of message-argument
@@ -919,27 +945,13 @@ fn proof_skeleton_captures_mixed_sorted_indexed_and_keyword_args() {
   qed
 end"#;
     let t = parse_theory(s, &[]).expect("mixed-arg goal must parse");
-    let proof = match t
-        .items
-        .iter()
-        .find(|it| matches!(it, TheoryItem::Lemma(_)))
-        .expect("lemma")
-    {
-        TheoryItem::Lemma(l) => l.proof.as_ref().expect("proof skeleton"),
-        _ => unreachable!(),
-    };
+    assert!(!has_casetest(&t));
+    let raw = lemma_proof_raw(&t);
     assert!(
-        proof
-            .raw
-            .contains("Foo( ~k, $A, %n, k.1, test, rule, function )"),
-        "mixed-arg goal truncated: {:?}",
-        proof.raw
+        raw.contains("Foo( ~k, $A, %n, k.1, test, rule, function )"),
+        "mixed-arg goal truncated: {raw:?}"
     );
-    assert!(proof.raw.contains("qed"), "missing qed: {:?}", proof.raw);
-    assert!(!t
-        .items
-        .iter()
-        .any(|it| matches!(it, TheoryItem::CaseTest(_))));
+    assert!(raw.contains("qed"), "missing qed: {raw:?}");
 }
 
 // Dual check: the depth-0 boundary must still fire.  A genuine top-level
@@ -960,19 +972,10 @@ fn real_casetest_after_proof_still_recognized() {
     "Ex #i. Bar() @ #i"
 end"#;
     let t = parse_theory(s, &[]).expect("proof followed by CaseTest must parse");
-    let proof = match t
-        .items
-        .iter()
-        .find(|it| matches!(it, TheoryItem::Lemma(_)))
-        .expect("lemma")
-    {
-        TheoryItem::Lemma(l) => l.proof.as_ref().expect("proof skeleton"),
-        _ => unreachable!(),
-    };
+    let raw = lemma_proof_raw(&t);
     assert!(
-        proof.raw.contains("Foo( test, sid )") && proof.raw.contains("qed"),
-        "proof body truncated: {:?}",
-        proof.raw
+        raw.contains("Foo( test, sid )") && raw.contains("qed"),
+        "proof body truncated: {raw:?}"
     );
     let ct = t
         .items
@@ -1041,7 +1044,8 @@ end"#;
 // (Theory/Text/Parser/Proof.hs:98-115, see line 115) structurally, so the identifier after
 // `case` is the case NAME and can be any top-level keyword — case names come
 // from rule / source-case names, and `test` is the CaseTest keyword
-// (Accountability.hs:25-27, see line 26).  A rule named `test` prints its solved case as
+// (Theory/Text/Parser/Accountability.hs:25-27, see line 26).  A rule named
+// `test` prints its solved case as
 // `case test` at paren-depth 0 (unlike Scott's `test` which was inside
 // `solve( ... )`), so the paren-depth guard alone does not suppress it —
 // the case-label suppression below is also needed.
@@ -1059,29 +1063,17 @@ end"#;
     let t = parse_theory(s, &[]).expect("`case test` must not truncate the proof");
     // The bare `test` case label must NOT be split off as a CaseTest item.
     assert!(
-        !t.items
-            .iter()
-            .any(|it| matches!(it, TheoryItem::CaseTest(_))),
+        !has_casetest(&t),
         "case label `test` must not become a top-level CaseTest"
     );
-    let proof = match t
-        .items
-        .iter()
-        .find(|it| matches!(it, TheoryItem::Lemma(_)))
-        .expect("lemma")
-    {
-        TheoryItem::Lemma(l) => l.proof.as_ref().expect("proof skeleton"),
-        _ => unreachable!(),
-    };
+    let raw = lemma_proof_raw(&t);
     assert!(
-        proof.raw.contains("case test"),
-        "proof raw truncated at/before `case test`: {:?}",
-        proof.raw
+        raw.contains("case test"),
+        "proof raw truncated at/before `case test`: {raw:?}"
     );
     assert!(
-        proof.raw.contains("SOLVED") && proof.raw.contains("qed"),
-        "proof raw missing SOLVED/qed: {:?}",
-        proof.raw
+        raw.contains("SOLVED") && raw.contains("qed"),
+        "proof raw missing SOLVED/qed: {raw:?}"
     );
 }
 
@@ -1107,14 +1099,8 @@ fn multiple_case_labels_named_after_keywords_do_not_truncate() {
   qed
 end"#;
     let t = parse_theory(s, &[]).expect("keyword-named case labels must not truncate");
-    // Exactly one lemma, no stray Rule/Functions items split out of the body.
-    assert_eq!(
-        t.items
-            .iter()
-            .filter(|it| matches!(it, TheoryItem::Lemma(_)))
-            .count(),
-        1
-    );
+    // The parser splits no Rule or Functions items out of the body.
+    // `lemma_proof_raw` checks the lemma count.
     assert!(
         !t.items.iter().any(|it| matches!(it, TheoryItem::Rule(_))),
         "a `case rule` label must not be split into a top-level rule"
@@ -1125,27 +1111,11 @@ end"#;
             .any(|it| matches!(it, TheoryItem::Functions(_))),
         "a `case function` label must not be split into a top-level functions decl"
     );
-    let proof = match t
-        .items
-        .iter()
-        .find(|it| matches!(it, TheoryItem::Lemma(_)))
-        .expect("lemma")
-    {
-        TheoryItem::Lemma(l) => l.proof.as_ref().expect("proof skeleton"),
-        _ => unreachable!(),
-    };
+    let raw = lemma_proof_raw(&t);
     for label in ["case rule", "case lemma", "case function"] {
-        assert!(
-            proof.raw.contains(label),
-            "proof raw missing {label:?}: {:?}",
-            proof.raw
-        );
+        assert!(raw.contains(label), "proof raw missing {label:?}: {raw:?}");
     }
-    assert!(
-        proof.raw.contains("qed"),
-        "proof raw missing qed: {:?}",
-        proof.raw
-    );
+    assert!(raw.contains("qed"), "proof raw missing qed: {raw:?}");
 }
 
 // Dual check: the depth-0 boundary must still fire for a REAL top-level
@@ -1168,24 +1138,14 @@ fn keyword_after_proof_still_terminates_capture() {
     [ A(x) ] --[ Done(x) ]-> [ ]
 end"#;
     let t = parse_theory(s, &[]).expect("proof followed by a real rule must parse");
-    let proof = match t
-        .items
-        .iter()
-        .find(|it| matches!(it, TheoryItem::Lemma(_)))
-        .expect("lemma")
-    {
-        TheoryItem::Lemma(l) => l.proof.as_ref().expect("proof skeleton"),
-        _ => unreachable!(),
-    };
+    let raw = lemma_proof_raw(&t);
     assert!(
-        proof.raw.contains("case test") && proof.raw.contains("qed"),
-        "proof body truncated: {:?}",
-        proof.raw
+        raw.contains("case test") && raw.contains("qed"),
+        "proof body truncated: {raw:?}"
     );
     assert!(
-        !proof.raw.contains("rule two"),
-        "the following rule leaked into the proof capture: {:?}",
-        proof.raw
+        !raw.contains("rule two"),
+        "the following rule leaked into the proof capture: {raw:?}"
     );
     let rule = t
         .items
@@ -1223,9 +1183,10 @@ fn equation_lhs(src: &str) -> Term {
     panic!("theory must contain an equation");
 }
 
-// HS `functionAttribute` (Signature.hs:164-171) accepts `AC`, `NDC-diff` and
-// `NDC`; `function` (Signature.hs:183-225) folds them into the symbol's AC and
-// NDC state.
+// HS `functionAttribute` (Theory/Text/Parser/Signature.hs:164-171) accepts
+// `AC`, `NDC-diff` and `NDC`; `function`
+// (Theory/Text/Parser/Signature.hs:183-225) folds them into the symbol's AC
+// and NDC state.
 #[test]
 fn function_attributes_ac_ndc() {
     let t = parse_theory("theory T begin functions: a/2 [AC] end", &[]).unwrap();
@@ -1253,12 +1214,14 @@ fn function_attributes_ac_ndc() {
     assert!(e.private && e.destructor && !e.ac && !e.ndc && !e.ndc_diff);
 }
 
-// HS `acterm` (Term.hs:165-174): a binary `[AC]` symbol is also an infix,
+// HS `acterm` (Theory/Text/Parser/Term.hs:165-172): a binary `[AC]` symbol is
+// also an infix,
 // left-associative operator — the notation `prettyTerm` emits for such
 // terms.  The AST records the infix spelling as `BinOp::AcFct`, distinct
 // from the prefix `App`, because a name that is also a `NoEq` symbol of
 // the signature resolves NoEq when written prefix (`lookupArity`,
-// Term.hs:62-72) but stays the AC symbol when written infix.
+// Theory/Text/Parser/Term.hs:62-72) but stays the AC symbol when written
+// infix.
 #[test]
 fn ac_symbol_parses_infix_left_associative() {
     let src = "theory T begin functions: add/2 [AC] equations: x add y = z end";
@@ -1299,4 +1262,71 @@ fn ac_symbols_nest_in_name_order() {
 fn ac_infix_requires_a_preceding_declaration() {
     let src = "theory T begin equations: x add y = z end";
     assert!(parse_theory(src, &[]).is_err(), "`add` is not infix here");
+}
+
+// A `:` after a variable means different things inside and outside a SAPIC
+// process.  Rules/formulas use `msgvar`/`lvar` = `sortedLVar`, whose
+// `mkSuffixParser` reads `x:nat` as the NAT-SORTED `x` (Token.hs:407-432);
+// processes use `sapicvar` = `lvarNoSuffix` (prefix sorts only) plus
+// `option Nothing (colon *> typep)`, so the same text is the msg-sorted `x`
+// carrying the SAPIC TYPE `"nat"` (Token.hs:487-510).  `typep`'s `Any` is the
+// untyped placeholder.
+#[test]
+fn colon_suffix_is_a_sapic_type_in_a_process_and_a_sort_in_a_rule() {
+    fn process_let_binder(src: &str) -> VarSpec {
+        let thy = parse_theory(src, &[]).expect("parses");
+        for item in &thy.items {
+            if let TheoryItem::TopLevelProcess(Process::Comb {
+                comb: ProcessComb::Let {
+                    pat: Term::Var(v), ..
+                },
+                ..
+            }) = item
+            {
+                return v.clone();
+            }
+        }
+        panic!("no let binder in {src}");
+    }
+
+    let v = process_let_binder(
+        "theory T begin builtins: natural-numbers process: let x:nat = %c %+ %1 in 0 end",
+    );
+    assert_eq!(
+        (v.sort, v.typ.as_deref()),
+        (SortHint::Untagged, Some("nat"))
+    );
+    let v = process_let_binder("theory T begin process: let x:msg = y in 0 end");
+    assert_eq!(
+        (v.sort, v.typ.as_deref()),
+        (SortHint::Untagged, Some("msg"))
+    );
+    let v = process_let_binder("theory T begin process: let x:Any = y in 0 end");
+    assert_eq!((v.sort, v.typ.as_deref()), (SortHint::Untagged, None));
+    // The `%` PREFIX still sorts a process variable (`lvarNoSuffix` keeps every
+    // prefix parser), and a type may follow it.
+    let v = process_let_binder(
+        "theory T begin builtins: natural-numbers process: let %x:nat = %c in 0 end",
+    );
+    assert_eq!((v.sort, v.typ.as_deref()), (SortHint::Nat, Some("nat")));
+
+    // Same text in a rule: a sort suffix, no type.
+    let thy = parse_theory(
+        "theory T begin builtins: natural-numbers rule R: [ In(x:nat) ] --[ ]-> [ ] end",
+        &[],
+    )
+    .expect("parses");
+    let mut seen = None;
+    for item in &thy.items {
+        if let TheoryItem::Rule(r) = item {
+            if let Term::Var(v) = &r.premises[0].args[0] {
+                seen = Some(v.clone());
+            }
+        }
+    }
+    let v = seen.expect("rule premise variable");
+    assert_eq!(
+        (v.sort, v.typ.as_deref()),
+        (SortHint::Suffix(SuffixSort::Nat), None)
+    );
 }

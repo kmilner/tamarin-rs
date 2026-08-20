@@ -1,9 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   beschmi, jdreier, meiersi, PhilipLukertWork, charlie-j, rsasse,
-//   rkunnema, and other minor contributors (see upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/term/src/Term/Term.hs,
-//   lib/term/src/Term/Term/FunctionSymbols.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Port of `Term.Term.FunctionSymbols` from
 //! `lib/term/src/Term/Term/FunctionSymbols.hs`.
@@ -44,8 +41,8 @@ pub enum AcState {
 /// (`IsNdcDiff`), both, or neither.
 ///
 /// Variant order mirrors the Haskell declaration
-/// `IsNDC | NotNDC | IsNDCDiff | IsNDCBoth` — the derived `Ord` participates
-/// in symbol ordering.
+/// `IsNDC | NotNDC | IsNDCDiff | IsNDCBoth` (FunctionSymbols.hs:125) — the
+/// derived `Ord` participates in symbol ordering.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum NdcState {
     IsNdc,
@@ -367,7 +364,7 @@ pub fn show_acfct_sym(sym: &AcFctSym) -> String {
 /// AC (associative-commutative) function symbols.
 ///
 /// Variant order mirrors the Haskell declaration
-/// `Union | Mult | Xor | NatPlus | ACfct ACfctSym`.
+/// `Union | Mult | Xor | NatPlus | ACfct ACfctSym` (FunctionSymbols.hs:138).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum AcSym {
     Union,
@@ -490,7 +487,7 @@ pub const UNION_SYM_STRING: &[u8] = b"union";
 pub const EMAP_SYM_STRING: &[u8] = b"em";
 pub const PMULT_SYM_STRING: &[u8] = b"pmult";
 /// Display name of [`FunSym::List`].  HS has no `listSymString`:
-/// `showFunSymName`'s `List` arm spells the literal (Term.hs:296).
+/// `showFunSymName`'s `List` arm spells the literal (Term/Term.hs:296).
 pub const LIST_SYM_STRING: &[u8] = b"List";
 
 // -- Predefined NoEq symbols --------------------------------------------------

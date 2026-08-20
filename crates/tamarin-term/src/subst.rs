@@ -1,8 +1,6 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, rkunnema, beschmi, and other minor contributors (see
-//   upstream git history)
-// Ported from upstream tamarin-prover sources:
-//   lib/term/src/Term/Substitution/SubstVFree.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
 //! Port of `Term.Substitution.SubstVFree` (the *generic* part — no LTerm
 //! dependency yet) from `lib/term/src/Term/Substitution/SubstVFree.hs`.
@@ -205,10 +203,10 @@ pub fn apply_vterm_changed<C: Ord + Clone, V: Ord + Clone>(
 ///    full-rebuild path (only the `Arc` identity differs, which is invisible
 ///    to callers and to `--prove` output).
 ///
-/// Without these, applying the (idempotent) eq-store substitution across the
-/// whole constraint system on every solver step reallocated and re-sorted
-/// every node even when nothing changed — the dominant allocator in the
-/// alloc-bound theories (DH/classic/xor).
+/// They matter because the solver applies the (idempotent) eq-store
+/// substitution across the whole constraint system on every step; without
+/// the short-circuits that reallocates and re-AC-sorts every node even when
+/// nothing changed, dominating the allocator in DH/classic/xor theories.
 pub fn apply_vterm_map<C: Ord + Clone, V: Ord + Clone>(
     map: &BTreeMap<V, VTerm<C, V>>,
     t: VTerm<C, V>,
@@ -455,7 +453,7 @@ mod tests {
     /// `restrict` is a PURE KEY-FILTER (no chain-chase).
     ///
     /// Haskell `Theory.Tools.EquationStore.restrict` calls
-    /// `Subst.restrict` (SubstVFree.hs:160-161):
+    /// `Subst.restrict` (SubstVFree.hs:198-199):
     /// ```haskell
     /// restrict :: IsVar v => [v] -> Subst c v -> Subst c v
     /// restrict vs (Subst smap) = Subst (M.filterWithKey (\v _ -> v `elem` vs) smap)
@@ -480,8 +478,7 @@ mod tests {
             r.image_of(&"y"),
             Some(&var_term("z")),
             "restrict must NOT chain-chase: y → z stays as y → z, \
-                    not y → 1.  Chain-chase here breaks foo_eligibility \
-                    (see project_rust_foo_eligibility_saturate_overspec.md)."
+                    not y → 1.  Chain-chase here breaks foo_eligibility."
         );
         // z is filtered out entirely.
         assert_eq!(r.image_of(&"z"), None);
@@ -554,9 +551,8 @@ mod tests {
     /// If both bind `x`, the s1 binding wins in the final compose
     /// because compose iterates s2's bindings first (applying s1 into
     /// their values), then adds s1's own bindings that s2 doesn't
-    /// already bind.  But our Rust impl `compose` adds *s1*'s own
-    /// binding for x ONLY IF s2 doesn't have x.  Let's check what we
-    /// actually do, then PIN it.
+    /// already bind.  The Rust impl adds *s1*'s own binding for x ONLY
+    /// IF s2 doesn't have x; this test pins that.
     #[test]
     fn compose_overlapping_domain_s2_takes_precedence_via_apply_subst() {
         // s1 = {x → 1}; s2 = {x → 99}.

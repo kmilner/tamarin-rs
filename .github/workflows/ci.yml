@@ -23,6 +23,20 @@ jobs:
           submodules: true
       - run: rustup update stable --no-self-update && rustup default stable
       - run: cargo clippy --workspace --all-targets -- -D warnings
+      # Every HS line cite in crates/ comments must resolve against the pinned
+      # submodule (scripts/check_hs_cites.py — MISSING/AMBIGUOUS/RANGE/BLANK/
+      # COMMENT/SEELINE).  Ordinary PRs edit cites too, not just bumps, and
+      # nothing else fails on a drifted one.  Needs only the submodule; ~seconds.
+      - name: HS cite check
+        run: python3 scripts/check_hs_cites.py
+      # Every file that has a resolvable HS citation must also have the
+      # constant licence notice.  The script's --check exits 1 on a stale
+      # notice.  This step has the same trigger as the cite check above.  An
+      # ordinary PR can add a citation to a file that has none yet.  That
+      # makes the file stale, and nothing else detects it.  The step needs
+      # only the submodule, because the script resolves the citations.
+      - name: Licence header check
+        run: python3 scripts/gen_license_headers.py --check
 
   test:
     runs-on: ubuntu-latest
@@ -39,6 +53,15 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Install lld
         run: command -v ld.lld >/dev/null || (sudo apt-get update -qq && sudo apt-get install -y -qq lld)
+      # Graphviz: two tests run a real `dot`.  The first is the success-path
+      # self-test in probe_reports.rs (the GraphViz block of the `test` mode).
+      # The second is dot_tests.rs's lint of the DOT this port writes.  Both
+      # panic instead of a skip when `dot` cannot run, and TAM_ALLOW_NO_DOT=1
+      # opts out of the panic.  This step is therefore what keeps them from
+      # failing the job.  A runner image that stops shipping graphviz then
+      # fails the job instead of dropping both pins in silence.
+      - name: Install Graphviz
+        run: command -v dot >/dev/null || (sudo apt-get update -qq && sudo apt-get install -y -qq graphviz)
       # Same pinned Maude as the rs-parity job (see the comment there).
       - name: Install Maude 3.5.1
         run: |
@@ -50,12 +73,50 @@ jobs:
       # Without it they skip SILENTLY — their fallback probes check hardcoded
       # paths (/usr/local/bin, CWD), never $PATH — and the suite reports the
       # skipped tests as passes.
+      # PATH too: the port itself resolves a bare `maude` the way HS does
+      # (/usr/local/bin, /usr/bin, then $PATH) and does NOT read MAUDE_PATH,
+      # so tests that drive the real CLI paths — `--version`'s ensureMaude
+      # probe in run::tests::version_returns_zero — need maude reachable
+      # by name.
       # profile ci = release opt without fat-LTO links / serial codegen (see
       # Cargo.toml) — the release profile re-runs whole-graph LTO at every
       # test-binary link, which dwarfs everything else this job does.
-      - run: cargo test --profile ci --workspace
+      - run: export PATH="/opt/maude:$PATH" && cargo test --profile ci --workspace
         env:
           MAUDE_PATH: /opt/maude/maude
+      # Wellformedness fixture roster, port side (~2s; the step above has
+      # already built this example).  `cargo test` runs the same 21 fixtures
+      # through crates/tamarin-parser/tests/wellformedness.rs.  The one thing
+      # this runner adds is its EMPTY_RUST_EXPECTATION_ALLOWLIST, and that
+      # harness has no equivalent of it.  A fixture whose every expected topic
+      # is post-elaboration must appear in that list with a reason.  A listed
+      # fixture whose expectation set stops being empty must come off the
+      # list.  Without this check, a new post-elaboration-only fixture joins
+      # the roster while the tests/ harness still passes.  Such a fixture
+      # asserts nothing beyond "the file parses" on the port side.
+      #
+      # `--no-tamarin` is required, not a convenience.  The runner's third
+      # step shells out to the pinned `tamarin-prover`, which no CI job builds.
+      # The fixtures' differential against the oracle therefore stays a
+      # milestone gate.  Steps 1 and 2 need only the port and the committed
+      # tests/wellformedness_fixtures/expected.txt.
+      - name: Wellformedness fixture roster
+        run: cargo run --profile ci -p tamarin-parser --example wellformedness_fixtures -- --no-tamarin
+      # The corners no corpus theory reaches (~5s).  Only the port runs here:
+      # the oracle side is the committed capture under
+      # scripts/divergence_fixtures/expected/, so this needs the submodule
+      # (fixtures + the pin the check compares against) and maude — both
+      # already provisioned above — and no Haskell build.  The check refuses to
+      # run when expected/oracle_rev is not the current pin, so a submodule
+      # bump that lands without re-running capture.sh fails CI loudly.
+      - name: Divergence fixtures
+        run: |
+          # The port probes /usr/local/bin/maude and /usr/bin/maude, then lets
+          # $PATH resolve a bare `maude`; it does NOT read MAUDE_PATH.
+          export PATH="/opt/maude:$PATH"
+          cargo build --profile ci --bin tamarin-rs
+          # Absolute: check.sh runs the binary from the fixture directory.
+          RS_PATH="$PWD/target/ci/tamarin-rs" scripts/divergence_fixtures/check.sh
 
   rs-parity:
     runs-on: ubuntu-latest
@@ -83,6 +144,7 @@ jobs:
       # of main's outputs (scripts/ci_ref_fast.tsv over
       # scripts/parity_corpus_fast.txt).  On DIFF: reproduce locally with
       # scripts/rs_vs_rs_diff.sh.  After a DELIBERATE output change or a
-      # submodule bump, regenerate the reference on a trusted build of main:
-      #   scripts/rs_ref_check.sh generate
+      # submodule bump, regenerate the reference on a trusted build of main
+      # (generate refuses to run without a certifying oracle gate result):
+      #   scripts/rs_ref_check.sh generate --certified-by <gate-results>
       - run: scripts/rs_ref_check.sh check

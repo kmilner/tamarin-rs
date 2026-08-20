@@ -1,0 +1,9 @@
+# source: oracle ef3f0468, plain load
+/*
+WARNING: the following wellformedness checks failed!
+
+Lemma annotations
+=================
+
+  Lemma `exist_reuse': cannot reuse 'exists-trace' lemmas
+*/

@@ -55,8 +55,9 @@ pub fn run_tamarin(bin: &str, path: &Path, flags: &[String]) -> Option<BTreeSet<
     Some(extract_topics(&combined))
 }
 
-/// A wellformedness topic header is a line followed by a line of `=`
-/// characters whose length equals (or exceeds) the topic name.
+/// A wellformedness topic header is a non-blank line underlined by a line of
+/// nothing but `=` characters; banner sections that share that shape (the
+/// `theory …` / `analyzed:` / version headers) are filtered out by name.
 #[allow(dead_code)]
 pub fn extract_topics(s: &str) -> BTreeSet<String> {
     let mut out = BTreeSet::new();

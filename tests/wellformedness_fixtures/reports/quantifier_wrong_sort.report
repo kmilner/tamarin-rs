@@ -1,0 +1,24 @@
+# source: oracle ef3f0468, plain load
+/*
+WARNING: the following wellformedness checks failed!
+
+Formula terms
+=============
+
+  Lemma `weird' uses terms of the wrong form: `Free #i'
+  
+  The only allowed terms are public constants and bound node and
+  message variables. If you encounter free message variables, then
+  you might have forgotten a #-prefix. Sort prefixes can only be
+  dropped where this is unambiguous. Moreover, reducible function
+  symbols are disallowed.
+
+ Formula guardedness
+====================
+
+  Lemma `weird' cannot be converted to a guarded formula:
+    universal quantifier without toplevel implication
+      "∀ x. ∃ y. (Setup( x ) @ #i) ⇒ (y = x)"
+    in the formula
+      "∀ x. ∃ y. (Setup( x ) @ #i) ⇒ (y = x)"
+*/

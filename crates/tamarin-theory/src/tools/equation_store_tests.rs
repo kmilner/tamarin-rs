@@ -1,4 +1,9 @@
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
+
 use super::*;
+use crate::test_maude::maude_path;
 use tamarin_term::lterm::LSort;
 use tamarin_term::subst_vfresh::SubstVFresh;
 
@@ -55,8 +60,16 @@ fn add_disj_assigns_fresh_ids() {
 #[test]
 fn splits_sorted_by_size() {
     let mut s = EquationStore::empty();
-    let big = s.add_disj(vec![fresh_subst(), fresh_subst(), fresh_subst()]);
-    let small = s.add_disj(vec![fresh_subst()]);
+    // Distinct substs, or `add_disj`'s dedup would collapse `big` to one
+    // case and both disjunctions would tie on size.  `big` is added LAST,
+    // so it heads `conj`: the assertions below fail unless `splits` really
+    // reorders by size.
+    let small = s.add_disj(vec![fresh_subst_n(0)]);
+    let big = s.add_disj(vec![fresh_subst_n(1), fresh_subst_n(2), fresh_subst_n(3)]);
+    assert_eq!(
+        s.conj[0].split_id, big,
+        "conj is insertion-ordered, big first"
+    );
     let sorted = s.splits();
     assert_eq!(sorted[0], small);
     assert_eq!(sorted[1], big);
@@ -161,19 +174,6 @@ fn set_false_marks_store_false() {
     assert!(s.is_false());
 }
 
-fn maude_path() -> Option<String> {
-    if let Ok(p) = std::env::var("MAUDE_PATH") {
-        return Some(p);
-    }
-    let candidates = ["/usr/local/bin/maude", "/usr/bin/maude", "maude"];
-    for c in &candidates {
-        if std::path::Path::new(c).exists() {
-            return Some((*c).to_string());
-        }
-    }
-    None
-}
-
 #[test]
 fn rule_variants_added_as_disjunction() {
     let mut store = EquationStore::empty();
@@ -207,29 +207,41 @@ fn simp_empty_disj_makes_store_false() {
     assert!(store.is_false());
 }
 
+/// `simp` runs its passes to a fixpoint. HS does the same with the `changed`
+/// loop in `simp1`. A second run must therefore change nothing on a store that
+/// the first run already settled. The settled store must also still hold the
+/// disjunction. No pass may empty the store or make it false. A pass must not
+/// treat a satisfiable singleton as a contradiction.
 #[test]
-fn simp_idempotent_on_consistent_store() {
+fn simp_is_idempotent_on_a_consistent_store() {
     let mut store = EquationStore::empty();
-    let _ = store.add_disj(vec![fresh_subst()]);
-    let store = store.simp(|_, _| false);
-    assert!(!store.is_false());
-    assert!(!store.conj.is_empty());
+    let id = store.add_disj(vec![fresh_subst()]);
+    let once = store.simp(|_, _| false);
+    assert!(!once.is_false());
+    assert_eq!(once.split_size(id), Some(1), "the disjunction survives");
+    let twice = once.clone().simp(|_, _| false);
+    assert_eq!(twice, once, "simp must already be at its fixpoint");
 }
 
 #[test]
 fn simp_abstract_name_factors_common_constant() {
-    // Build a disjunction where every subst maps `x → 'foo'` (pub
-    // constant). simp_abstract_name should hoist that into the
-    // free substitution.
+    // Build a two-case disjunction where every subst maps `x → 'foo'` (pub
+    // constant) while disagreeing on `y`. simp_abstract_name should hoist
+    // the common `x` mapping into the free substitution and leave `y` alone.
+    // The cases must differ, or `add_disj`'s dedup would collapse them to
+    // one and the "common to every subst" condition would be vacuous.
     use tamarin_term::lterm::{Name, NameTag};
     use tamarin_term::term::Term;
     use tamarin_term::vterm::Lit;
+    let con = |n: &str| -> LNTerm { Term::Lit(Lit::Con(Name::new(NameTag::Pub, n.to_string()))) };
     let v = LVar::new("x", LSort::Msg, 0);
-    let foo: LNTerm = Term::Lit(Lit::Con(Name::new(NameTag::Pub, "foo".to_string())));
-    let s1 = LNSubstVFresh::from_list(vec![(v, foo.clone())]);
-    let s2 = LNSubstVFresh::from_list(vec![(v, foo.clone())]);
+    let y = LVar::new("y", LSort::Msg, 0);
+    let foo = con("foo");
+    let s1 = LNSubstVFresh::from_list(vec![(v, foo.clone()), (y, con("a"))]);
+    let s2 = LNSubstVFresh::from_list(vec![(v, foo.clone()), (y, con("b"))]);
     let mut store = EquationStore::empty();
-    let _ = store.add_disj(vec![s1, s2]);
+    let id = store.add_disj(vec![s1, s2]);
+    assert_eq!(store.split_size(id), Some(2), "both cases must survive");
     assert!(store.simp_abstract_name());
     // Free subst should now contain x → foo.
     let dom: Vec<&LVar> = store.subst.dom().collect();
@@ -238,13 +250,7 @@ fn simp_abstract_name_factors_common_constant() {
 
 #[test]
 fn add_eqs_xor_produces_disjunction() {
-    let path = match maude_path() {
-        Some(p) => p,
-        None => {
-            eprintln!("skipping: no maude");
-            return;
-        }
-    };
+    let Some(path) = maude_path() else { return };
     let sig = tamarin_term::maude_sig::xor_maude_sig();
     let h = tamarin_term::maude_proc::MaudeHandle::start(&path, sig).expect("start");
     // x XOR a =? b XOR y has multiple AC unifiers.
@@ -277,13 +283,7 @@ fn add_eqs_xor_produces_disjunction() {
 /// domain size are never permutations of each other and survive.
 #[test]
 fn remove_permutations_drops_renamed_variants() {
-    let path = match maude_path() {
-        Some(p) => p,
-        None => {
-            eprintln!("skipping: no maude");
-            return;
-        }
-    };
+    let Some(path) = maude_path() else { return };
     let sig = tamarin_term::maude_sig::pair_maude_sig();
     let h = tamarin_term::maude_proc::MaudeHandle::start(&path, sig).expect("start");
     use tamarin_term::function_symbols::{pair_sym, FunSym};
@@ -317,49 +317,16 @@ fn remove_permutations_drops_renamed_variants() {
     assert_eq!(kept, &vec![keep, wider]);
 }
 
-#[test]
-fn add_eqs_two_vars_via_maude() {
-    let path = match maude_path() {
-        Some(p) => p,
-        None => {
-            eprintln!("skipping: no maude");
-            return;
-        }
-    };
-    let sig = tamarin_term::maude_sig::pair_maude_sig();
-    let h = tamarin_term::maude_proc::MaudeHandle::start(&path, sig).expect("start");
-    // Unify x =? y — single mgu, no disjunction, just composes into subst.
-    let x = LVar::new("x", LSort::Msg, 0);
-    let y = LVar::new("y", LSort::Msg, 0);
-    use tamarin_term::term::Term;
-    use tamarin_term::vterm::Lit;
-    let tx: LNTerm = Term::Lit(Lit::Var(x));
-    let ty: LNTerm = Term::Lit(Lit::Var(y));
-    let mut store = EquationStore::empty();
-    let split = store
-        .add_eqs(&h, &[tamarin_term::rewriting::Equal { lhs: tx, rhs: ty }])
-        .expect("add_eqs");
-    // Single mgu → composed into subst, no new disjunction.
-    assert!(split.is_none());
-    assert!(!store.is_false());
-    // The free substitution must now bind one variable to the other.
-    assert!(
-        !store.subst.is_empty(),
-        "subst should be populated, got {:?}",
-        store.subst
-    );
-}
-
 // =========================================================================
 // Haskell-faithfulness invariants for `add_eqs`.
 //
-// These tests pin orientation choices in the eq-store that we missed
-// for weeks.  See `unification::haskell_invariants_tests` for the rationale.
+// These tests pin the eq-store's orientation choices.  See
+// `tamarin_term::unification::haskell_invariants_tests` for the rationale.
 // =========================================================================
 
 /// `add_eqs` for AC-free, same-sort var-var input must orient the
 /// resulting subst with LARGER-idx as KEY (Haskell `unifyRaw`
-/// convention, Unification.hs:235-243, see line 241).
+/// convention, Unification.hs:273-281, see line 276).
 ///
 /// This is the most important orientation invariant for downstream
 /// `restrict stableVars`: stable pattern vars (small idx) must stay
@@ -370,13 +337,7 @@ fn add_eqs_two_vars_via_maude() {
 /// silently appear in the corpus.**
 #[test]
 fn add_eqs_ac_free_var_var_uses_haskell_orientation() {
-    let path = match maude_path() {
-        Some(p) => p,
-        None => {
-            eprintln!("skipping: no maude");
-            return;
-        }
-    };
+    let Some(path) = maude_path() else { return };
     let sig = tamarin_term::maude_sig::pair_maude_sig();
     let h = tamarin_term::maude_proc::MaudeHandle::start(&path, sig).expect("start");
 
@@ -408,8 +369,7 @@ fn add_eqs_ac_free_var_var_uses_haskell_orientation() {
         store.subst.image_of(&e10).is_some(),
         "add_eqs MUST orient same-sort var-var with larger-idx (e.10) \
                  as KEY.  If this fails, foo_eligibility::eligibility and \
-                 friends will silently diverge from Haskell.  See \
-                 project_rust_lvar_ord_idx_first_landed.md."
+                 friends will silently diverge from Haskell."
     );
     assert!(
         store.subst.image_of(&t1).is_none(),
@@ -428,13 +388,7 @@ fn add_eqs_ac_free_var_var_uses_haskell_orientation() {
 /// distinct (the TLS_Handshake prem_idx_clash class).
 #[test]
 fn add_eqs_ac_free_var_var_does_not_introduce_witness() {
-    let path = match maude_path() {
-        Some(p) => p,
-        None => {
-            eprintln!("skipping: no maude");
-            return;
-        }
-    };
+    let Some(path) = maude_path() else { return };
     let sig = tamarin_term::maude_sig::pair_maude_sig();
     let h = tamarin_term::maude_proc::MaudeHandle::start(&path, sig).expect("start");
     let x = LVar::new("x", LSort::Msg, 0);
@@ -447,6 +401,11 @@ fn add_eqs_ac_free_var_var_does_not_introduce_witness() {
     let _ = store
         .add_eqs(&h, &[tamarin_term::rewriting::Equal { lhs: tx, rhs: ty }])
         .expect("add_eqs");
+    assert!(
+        !store.subst.is_empty(),
+        "same-sort var-var unification must bind one of the two vars — \
+         an empty subst makes the witness scan below vacuous"
+    );
 
     // Unifying two free Msg vars must yield a simple orientation
     // between x and y (HS-faithful var-var orient gives `{y → x}`),
@@ -484,13 +443,7 @@ fn add_eqs_ac_free_var_var_does_not_introduce_witness() {
 /// chain in `add_eqs_inner` (we apply `self.subst` to inputs first).
 #[test]
 fn add_eqs_idempotent_for_already_implied_eq() {
-    let path = match maude_path() {
-        Some(p) => p,
-        None => {
-            eprintln!("skipping: no maude");
-            return;
-        }
-    };
+    let Some(path) = maude_path() else { return };
     let sig = tamarin_term::maude_sig::pair_maude_sig();
     let h = tamarin_term::maude_proc::MaudeHandle::start(&path, sig).expect("start");
     let x = LVar::new("x", LSort::Msg, 0);
@@ -534,13 +487,7 @@ fn add_eqs_idempotent_for_already_implied_eq() {
 /// silently succeed.
 #[test]
 fn add_eqs_unsatisfiable_sets_store_false() {
-    let path = match maude_path() {
-        Some(p) => p,
-        None => {
-            eprintln!("skipping: no maude");
-            return;
-        }
-    };
+    let Some(path) = maude_path() else { return };
     let sig = tamarin_term::maude_sig::pair_maude_sig();
     let h = tamarin_term::maude_proc::MaudeHandle::start(&path, sig).expect("start");
     use tamarin_term::builtin::{msg_var, pair, pk};

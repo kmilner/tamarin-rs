@@ -1,12 +1,10 @@
-// Currently GPL 3.0 until granted permission by the following authors:
-//   meiersi, rsasse, jdreier, and other minor contributors (see upstream git
-//   history)
-// Ported from upstream tamarin-prover sources:
-//   lib/theory/src/Theory/Text/Parser/Formula.hs
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
 
-//! Parity for the formula-atom tail error — what HS's `blatom` alternation
-//! (Formula.hs:44-60) reports when no relational operator follows an atom's
-//! leading term.  Two regimes:
+//! Parity for the formula-atom tail error — what `blatom`'s alternation
+//! (Theory/Text/Parser/Formula.hs:44-60) reports when no relational operator
+//! follows an atom's leading term.  Two regimes:
 //!
 //! * A `nodevar`-consumable head (bare or `#`-prefixed identifier): the
 //!   un-`try`'d node-equality alternative consumes it, so `opEqual`'s failure
@@ -17,8 +15,8 @@
 //!   `subterm predicate` (, `multiset comparisson` — sic, only with the
 //!   multiset builtin) and `term equality`.
 //!
-//! Each position and expectation set below is the pinned oracle's for the
-//! same source (probed 2026-08-05, the whole matrix byte-identical).
+//! Every position and expectation set below is the pinned oracle's (Git
+//! revision ef3f0468) for the same source.
 
 use tamarin_parser::{parse_theory, ParseError};
 
@@ -47,7 +45,7 @@ fn assert_expected(src: &str, line: u32, col: u32, found: &str, expected: &[&str
 }
 
 #[test]
-fn a_bare_temporal_variable_atom_is_the_consumed_node_equality_frame() {
+fn a_bare_temporal_variable_atom_is_the_consumed_node_equality_set() {
     assert_expected(
         "theory A begin\nlemma L: \"All #i. #i\"\nend\n",
         2,
@@ -77,6 +75,8 @@ fn sigil_headed_atoms_keep_the_relational_alternative_labels() {
     );
 }
 
+/// `smallerp` fails before consuming unless the multiset signature bit is
+/// on, so only then does its `<?>` relabel join the set.
 #[test]
 fn the_multiset_builtin_adds_the_misspelled_comparisson_label() {
     assert_expected(
@@ -89,7 +89,7 @@ fn the_multiset_builtin_adds_the_misspelled_comparisson_label() {
 }
 
 #[test]
-fn a_nat_sigil_head_without_the_builtin_word_is_the_same_empty_failure() {
+fn a_nat_sigil_head_without_the_builtin_word_keeps_the_two_label_set() {
     assert_expected(
         "theory H begin\nbuiltins: natural-numbers\nlemma L: \"Ex x. %x\"\nend\n",
         3,
