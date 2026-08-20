@@ -141,7 +141,7 @@ pub(crate) fn surface_attrs(attr: &crate::rule::RuleAttributes) -> Vec<p::RuleAt
         // prettySapicTopLevel' f p ++ "\"")` (Theory/Model/Rule.hs:1324-1327).
         // Only the SAPIC translation fills this field — HS's attribute parser
         // `parseAndIgnore`s a user-written `process=`
-        // (Theory/Text/Parser/Rule.hs:69-95, see line 74), as does RS's.
+        // (Theory/Text/Parser/Rule.hs:70-95, see line 74), as does RS's.
         out.push(p::RuleAttrKind::Process(
             crate::pretty_sapic::pretty_sapic_top_level_attr(proc),
         ));

@@ -28,7 +28,9 @@ use tamarin_parser::{parse_theory, ParseError};
 /// The `(name, first_at, second_at)` of the macro-context
 /// [`ParseError::ConflictingDeclarations`] `src` fails with, positions
 /// flattened to `(line, col)`.  `first_at` is `None` when the earlier owner
-/// is a builtin with no declaration site.
+/// has no declaration site: a seeded symbol, or one of the `NoEq` symbols an
+/// equational theory opens.  A symbol a `builtins:` entry merged points back
+/// at that entry's name.
 #[track_caller]
 fn conflict(src: &str) -> (String, Option<(u32, u32)>, (u32, u32)) {
     let e = parse_theory(src, &[]).expect_err("the probes below must all fail to parse");
@@ -228,12 +230,13 @@ fn macro_conflicts_with_earlier_macro() {
 
 /// A macro named after an enabled builtin's symbol conflicts: `builtins:
 /// hashing` merges `h/1` into `stFunSyms` (Term/Builtin/Signature.hs:75-77),
-/// which `userDefinedFunSyms` includes.
+/// which `userDefinedFunSyms` includes.  `first_at` points at the `builtins:`
+/// entry that merged the symbol.
 #[test]
 fn macro_conflicts_with_enabled_builtin_symbol() {
     assert_eq!(
         conflict("theory MacroCH begin\nbuiltins: hashing\nmacros: h(x) = x\nend\n"),
-        ("h".to_string(), None, (3, 9))
+        ("h".to_string(), Some((2, 11)), (3, 9))
     );
 }
 

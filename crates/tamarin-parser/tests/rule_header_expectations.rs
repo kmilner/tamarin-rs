@@ -75,12 +75,8 @@ fn a_consumed_attribute_list_drops_the_bracket_expectation() {
 
 /// An EMPTY `[]` counts as consumed, exactly as it does for `functions:`
 /// attribute lists: HS `ruleAttributesp`'s `list p = brackets (commaSep p)`
-/// (Rule.hs:97-98, Token.hs) admits zero elements, so the header continues to
+/// (Theory/Text/Parser/Rule.hs:97-98, Token.hs) admits zero elements, so the header continues to
 /// the colon and a complete rule with `[]` loads at exit 0.
-///
-/// KNOWN FAILURE — `Parser::rule_attributes` enters its attribute loop
-/// unconditionally after the `[` and has no immediate-`]` exit, so it reports
-/// `UnknownRuleAttribute { attribute: "" }` and rejects a legal rule.
 #[test]
 fn an_empty_attribute_list_is_consumed_like_a_non_empty_one() {
     assert_expected(

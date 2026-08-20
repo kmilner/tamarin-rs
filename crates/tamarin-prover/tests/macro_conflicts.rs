@@ -167,3 +167,43 @@ fn conflicting_macro_name_exits_1() {
         0
     );
 }
+
+/// A macro named after a symbol a `builtins:` entry merged aborts the same
+/// way, and the "first declaration" label sits on that entry's name — the
+/// diagnostic quotes the `builtins:` line, not the `macros:` line alone.  HS
+/// prints only `Conflicting name for macro h` (Theory/Text/Parser/Macro.hs:44)
+/// with no first site; the label is the port's own.
+#[test]
+fn a_builtin_symbol_conflict_labels_the_builtins_entry() {
+    if !maude_available() {
+        eprintln!("skipping: maude not on path");
+        return;
+    }
+    let (code, stderr) = run_binary(
+        "builtin_symbol",
+        "theory MacroCH begin\nbuiltins: hashing\nmacros: h(x) = x\nend\n",
+    );
+    assert_eq!(code, 1);
+    assert_fatal_diagnostic(
+        &stderr,
+        &[
+            "conflicting macro declaration for `h`",
+            "first declaration of `h`",
+            "builtins: hashing",
+        ],
+    );
+    // The label is on line 2, where the entry is; the rejection on line 3.
+    let label_line = stderr
+        .lines()
+        .position(|l| l.contains("first declaration of `h`"))
+        .expect("the first-declaration label is rendered");
+    let builtins_line = stderr
+        .lines()
+        .position(|l| l.contains("builtins: hashing"))
+        .expect("the builtins entry is quoted");
+    assert_eq!(
+        label_line,
+        builtins_line + 1,
+        "the label must sit under the `builtins:` line:\n{stderr}"
+    );
+}

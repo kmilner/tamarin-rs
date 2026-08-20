@@ -1048,7 +1048,7 @@ fn user_ac_fun_names(thy: &Theory) -> AcSyms {
             }
             TheoryItem::Builtins(names) => {
                 for n in names {
-                    noeq.extend(crate::parser::builtin_noeq_sym_names(n));
+                    noeq.extend(crate::parser::builtin_noeq_sym_names(n.kind));
                 }
             }
             _ => {}
@@ -2332,7 +2332,7 @@ fn collect_nullary_fun_names(thy: &Theory) -> BTreeSet<String> {
 /// ends in a bare `show v`.  `p t` precedes the separator and `show v` is a
 /// single token, so the binder is the text past the LAST ` as `.  Every
 /// user-written rule yields `None`: HS's rule-attribute parser discards a
-/// written `process=` (`parseAndIgnore`, Parser/Rule.hs:68-93, see line 72),
+/// written `process=` (`parseAndIgnore`, Theory/Text/Parser/Rule.hs:70-95, see line 74),
 /// so [`RuleAttr::Process`] exists only on SAPIC-generated rules.
 fn lookup_binder_render(r: &Rule) -> Option<&str> {
     r.attributes.iter().find_map(|a| match a {

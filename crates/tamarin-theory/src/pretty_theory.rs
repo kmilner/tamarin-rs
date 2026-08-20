@@ -722,7 +722,10 @@ fn render_open_item(
         // Every `builtins:` entry appends `TranslationItem (SignatureBuiltin
         // name)` (Parser/Signature.hs:89-101, see line 97), rendered
         // `text "builtin " <-> text s` (TheoryObject.hs:843) = two spaces.
-        Builtins(names) => names.iter().map(|n| format!("builtin  {}", n)).collect(),
+        Builtins(names) => names
+            .iter()
+            .map(|n| format!("builtin  {}", n.kind))
+            .collect(),
         // Every `functions:` declaration appends `FunctionTypingInfo`
         // (Theory/Text/Parser.hs:259-262, TheoryObject.hs:492-493), rendered by the two
         // `prettyTranslationElement` typing cases (TheoryObject.hs:800-838).
@@ -1588,7 +1591,10 @@ mod open_print_opts_tests {
             def_idx: 0,
         };
         let dropped = [
-            p::TheoryItem::Builtins(vec!["multiset".to_string()]),
+            p::TheoryItem::Builtins(vec![p::Builtin {
+                kind: p::BuiltinKind::Multiset,
+                location: DUMMY_LOCATION,
+            }]),
             p::TheoryItem::Functions(vec![fdecl("h")]),
             p::TheoryItem::TopLevelProcess(p::Process::Null),
             p::TheoryItem::ProcessDef(p::ProcessDef {
@@ -2529,7 +2535,8 @@ pub fn web_macros(parsed: &p::Theory) -> Option<String> {
 ///
 /// Render order is the `catMaybes [color, process, no_derivcheck, issapicrule,
 /// role]` of `prettyRuleAttribute`.  HS's attribute parser `parseAndIgnore`s
-/// `process=` (Parser/Rule.hs:68-93, see line 72), so a user-written `process=` never sets
+/// `process=` (Theory/Text/Parser/Rule.hs:70-95, see line 74), so a
+/// user-written `process=` never sets
 /// `ruleProcess` and is never rendered; RS mirrors this by discarding `process=`
 /// at parse time.  [`p::RuleAttr::Process`] is synthesised only by the SAPIC
 /// translation on the rules it generates (`tamarin_sapic::apply`), matching
@@ -3759,13 +3766,7 @@ fn render_restriction_attributes(attrs: &[p::RestrictionAttr], out: &mut String)
     }
     out.push(' ');
     out.push('[');
-    let attr_strs: Vec<&str> = attrs
-        .iter()
-        .map(|a| match a {
-            p::RestrictionAttr::LeftRestriction => "left",
-            p::RestrictionAttr::RightRestriction => "right",
-        })
-        .collect();
+    let attr_strs: Vec<&str> = attrs.iter().map(|a| a.as_str()).collect();
     out.push_str(&attr_strs.join(", "));
     out.push(']');
 }

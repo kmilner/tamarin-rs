@@ -17,7 +17,7 @@ use tamarin_parser::{parse_theory, ParseError, TheoryItem};
 /// Asserts `src` is rejected by a conflicting-declaration guard
 /// (Theory/Text/Parser/Signature.hs:200-217): the parse fails with
 /// [`ParseError::ConflictingDeclarations`] naming `name`, its `first_at` at
-/// `first` — `None` when the existing symbol is a builtin with no
+/// `first` — `None` when the existing symbol is seeded and so has no
 /// declaration site — and its offending declaration at `second`.
 #[track_caller]
 fn assert_conflict(src: &str, name: &str, first: Option<(u32, u32)>, second: (u32, u32)) {
@@ -212,6 +212,53 @@ fn pair_projection_redeclaration_short_circuits_the_ac_check() {
         None,
         (3, 12),
     );
+}
+
+/// `conflictingBuiltins` (Parser/Signature.hs:200-210) rejects a declaration
+/// of a name a `builtins:` entry reserved, at any option tuple but the
+/// builtin's own.  The symbol carries the `builtins:` entry that merged it, so
+/// `first_at` is that entry's name — not the seeded-symbol `None` of the
+/// probes above.
+///
+/// The oracle rejects `hashing`+`h/3` with ``` `h` conflicts with builtin(s)
+/// ["hashing"] ``` and `dest-pairing`+`fst/2` with the same shape for `fst`,
+/// whose destructor entry REPLACED the seeded constructor.
+#[test]
+fn a_builtins_entry_is_the_first_declaration_of_the_symbols_it_merges() {
+    assert_conflict(
+        "theory CF begin\nbuiltins: hashing\nfunctions: h/3\nend\n",
+        "h",
+        Some((2, 11)),
+        (3, 12),
+    );
+    assert_conflict(
+        "theory CS begin\nbuiltins: signing\nfunctions: sign/3\nend\n",
+        "sign",
+        Some((2, 11)),
+        (3, 12),
+    );
+    assert_conflict(
+        "theory CP begin\nbuiltins: dest-pairing\nfunctions: fst/2\nend\n",
+        "fst",
+        Some((2, 11)),
+        (3, 12),
+    );
+
+    // Same tuple: no conflict, and the theory loads (oracle exit 0).
+    parse_theory(
+        "theory CH begin\nbuiltins: hashing\nfunctions: h/1\nend\n",
+        &[],
+    )
+    .expect("a re-declaration at the builtin's own tuple is accepted");
+
+    // The `NoEq` symbols an equational theory opens are NOT in `stFunSyms`, so
+    // `functions:` may name them (oracle exit 0) even though `macros:` may not
+    // — `tests/macro_conflicts.rs` pins the macro side.
+    parse_theory(
+        "theory CD begin\nbuiltins: diffie-hellman\nfunctions: DH_neutral/2\nend\n",
+        &[],
+    )
+    .expect("a theory-level NoEq symbol leaves the name free for `functions:`");
 }
 
 /// The expectation sets HS `functionType` (Parser/Signature.hs:151-162) merges at the

@@ -19,8 +19,10 @@ fn custom_err(src: &str, flags: &[&str]) -> (u32, u32, String) {
 
 /// The `(name, first_at, second_at)` of the
 /// [`ParseError::ConflictingDeclarations`] a conflicting declaration
-/// raises, positions flattened to `(line, col)`.  `first_at` is `None` when
-/// the earlier declaration is a builtin's (no declaration site to point at).
+/// raises, positions flattened to `(line, col)`.  `first_at` is the earlier
+/// declaration's site — a `functions:`/`macros:` entry, or the `builtins:`
+/// entry that reserved the name — and `None` for a symbol the theory carries
+/// implicitly, which has no site to point at.
 fn conflict_err(src: &str) -> (String, Option<(u32, u32)>, (u32, u32)) {
     match parse_theory(src, &[]).unwrap_err() {
         ParseError::ConflictingDeclarations {
@@ -78,8 +80,8 @@ fn decl_probe_err(name: &str, body: &str) -> (u32, u32, String) {
 /// runs BEFORE the conflicting-arities check
 /// (Theory/Text/Parser/Signature.hs:212) and before the `[AC]` arity check
 /// (Theory/Text/Parser/Signature.hs:220), so its diagnostic wins over both.
-/// The port reports it as [`ParseError::ConflictingDeclarations`]
-/// with no `first_at` (the builtin has no declaration site).
+/// The port reports it as [`ParseError::ConflictingDeclarations`] with
+/// `first_at` pointing at the `builtins:` entry that reserved the name.
 #[test]
 fn builtin_reserved_name_check_precedes_the_arity_and_ac_checks() {
     let probe =
@@ -87,13 +89,13 @@ fn builtin_reserved_name_check_precedes_the_arity_and_ac_checks() {
     // `[AC]` + arity 3 would otherwise be the AC-arity variant.
     assert_eq!(
         probe("B1", "builtins: hashing\nfunctions: h/3 [AC]"),
-        ("h".to_string(), None, (4, 12))
+        ("h".to_string(), Some((3, 11)), (4, 12))
     );
     // Same name declared twice would otherwise be check (2)'s conflict,
     // whose `first_at` points at the earlier declaration.
     assert_eq!(
         probe("B7", "builtins: hashing\nfunctions: h/1, h/3 [AC]"),
-        ("h".to_string(), None, (4, 17))
+        ("h".to_string(), Some((3, 11)), (4, 17))
     );
     // `fst` has no exemption in check (1): `dest-pairing` reserves it at
     // the DESTRUCTOR shape, so re-declaring the constructor is an error
@@ -101,7 +103,7 @@ fn builtin_reserved_name_check_precedes_the_arity_and_ac_checks() {
     // (Theory/Text/Parser/Signature.hs:213).
     assert_eq!(
         probe("E1", "builtins: dest-pairing\nfunctions: fst/1 [AC]"),
-        ("fst".to_string(), None, (4, 12))
+        ("fst".to_string(), Some((3, 11)), (4, 12))
     );
     // Every attribute reaches `requested`, including the two NDC flags:
     // each one moves the declaration off the builtin's tuple, so each one
@@ -109,7 +111,7 @@ fn builtin_reserved_name_check_precedes_the_arity_and_ac_checks() {
     for attr in ["private", "destructor", "NDC", "NDC-diff"] {
         assert_eq!(
             probe("P", &format!("builtins: hashing\nfunctions: h/1 [{attr}]")),
-            ("h".to_string(), None, (4, 12)),
+            ("h".to_string(), Some((3, 11)), (4, 12)),
             "attribute {attr}"
         );
     }
@@ -127,13 +129,21 @@ fn builtin_reserved_name_check_precedes_the_arity_and_ac_checks() {
             "P12",
             "builtins: dest-symmetric-encryption\nfunctions: sdec/2"
         ),
-        ("sdec".to_string(), None, (4, 12))
+        ("sdec".to_string(), Some((3, 11)), (4, 12))
     );
     // `locations-report` reserves `rep` privately, so the public
     // re-declaration conflicts.
     assert_eq!(
         probe("P9", "builtins: locations-report\nfunctions: rep/2"),
-        ("rep".to_string(), None, (4, 12))
+        ("rep".to_string(), Some((3, 11)), (4, 12))
+    );
+    // `first_at` is the entry that reserved THIS name, not the head of the
+    // `builtins:` list: `sign` comes from `signing`, the second entry, at
+    // column 20 rather than the column 11 every single-entry probe above
+    // reports.
+    assert_eq!(
+        probe("P32", "builtins: hashing, signing\nfunctions: sign/1"),
+        ("sign".to_string(), Some((3, 20)), (4, 12))
     );
 }
 
@@ -144,11 +154,11 @@ fn builtin_reserved_name_check_precedes_the_arity_and_ac_checks() {
 fn bracketed_and_unbracketed_declarations_report_the_same_conflict() {
     assert_eq!(
         conflict_err("theory B2 begin\n\nbuiltins: hashing\nfunctions: h/1, h/2\n\nend\n"),
-        ("h".to_string(), None, (4, 17))
+        ("h".to_string(), Some((3, 11)), (4, 17))
     );
     assert_eq!(
         conflict_err("theory P24 begin\n\nbuiltins: hashing\nfunctions: h/3 []\n\nend\n"),
-        ("h".to_string(), None, (4, 12))
+        ("h".to_string(), Some((3, 11)), (4, 12))
     );
 }
 
@@ -615,7 +625,19 @@ fn theory_with_builtins() {
     let t = parse_theory(s, &[]).unwrap();
     match &t.items[0] {
         TheoryItem::Builtins(v) => {
-            assert_eq!(v, &vec!["hashing".to_string(), "signing".into()])
+            let kinds = v.iter().map(|b| b.kind).collect::<Vec<_>>();
+            assert_eq!(kinds, vec![BuiltinKind::Hashing, BuiltinKind::Signing]);
+            // Each entry spans its own name and stops at the last character of
+            // the lexeme: `hyphen_identifier` replays the word to undo the
+            // trailing-whitespace skip `ident` already did, so `signing`'s
+            // span ends at 41 (before the space) and not at 42 (`end`).
+            let spans = v
+                .iter()
+                .map(|b| (b.location.col, b.location.start, b.location.end))
+                .collect::<Vec<_>>();
+            assert_eq!(spans, vec![(26, 25, 32), (35, 34, 41)]);
+            assert_eq!(&s[25..32], "hashing");
+            assert_eq!(&s[34..41], "signing");
         }
         x => panic!("expected builtins, got {:?}", x),
     }
