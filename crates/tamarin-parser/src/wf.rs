@@ -2653,7 +2653,7 @@ fn project_rule(r: &Rule, left: bool) -> Rule {
     }
     Rule {
         name: r.name.clone(),
-        modulo: r.modulo.clone(),
+        modulo: r.modulo,
         attributes: r.attributes.clone(),
         let_block: r.let_block.clone(),
         premises: r.premises.iter().map(|f| proj_fact(f, left)).collect(),

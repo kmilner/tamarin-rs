@@ -606,7 +606,7 @@ fn synthesise_probe_theory(
         .collect();
     let probe_rule = p::Rule {
         name: format!("Probe_{}", idx),
-        modulo: None,
+        modulo: p::ModuloKind::E,
         attributes: Vec::new(),
         let_block: Vec::new(),
         premises: fresh_premises,

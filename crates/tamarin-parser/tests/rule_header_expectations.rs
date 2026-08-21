@@ -15,7 +15,7 @@
 //! Each position and expectation below is the pinned oracle's for the same
 //! source.
 
-use tamarin_parser::{parse_theory, ParseError};
+use tamarin_parser::{parse_theory, ParseContext, ParseError};
 
 /// Asserts `src` fails with the [`ParseError::Expected`] bridge variant at
 /// `line`:`col` carrying exactly the `expected` labels.  `found` is `None`
@@ -130,4 +130,42 @@ fn a_name_failure_abutting_the_rule_letters_keeps_the_rule_header_labels() {
         Some("!"),
         &["identifier", "("],
     );
+}
+
+#[test]
+fn non_e_or_ac_modulo_is_rejected() {
+    let e = parse_theory("theory T begin\nrule (modulo X) R: [ ] --> [ ]\nend\n", &[])
+        .expect_err("unknown modulo kind must fail");
+    match e {
+        ParseError::UnknownItem {
+            item_kind,
+            unknown_item,
+            ..
+        } => {
+            assert_eq!(item_kind, ParseContext::ModuloKind);
+            assert_eq!(unknown_item, "X");
+        }
+        other => panic!("expected UnknownItem for modulo kind, got {other:?}"),
+    }
+}
+
+#[test]
+fn invalid_modulo_kind_reports_the_kind_token_location() {
+    let e = parse_theory(
+        "theory T begin\nrule (modulo NDC) R: [ ] --> [ ]\nend\n",
+        &[],
+    )
+    .expect_err("unknown modulo kind must fail");
+    match e {
+        ParseError::UnknownItem {
+            item_kind,
+            unknown_item,
+            at,
+        } => {
+            assert_eq!(item_kind, ParseContext::ModuloKind);
+            assert_eq!(unknown_item, "NDC");
+            assert_eq!((at.line, at.col), (2, 14));
+        }
+        other => panic!("expected UnknownItem for modulo kind, got {other:?}"),
+    }
 }

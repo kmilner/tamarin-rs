@@ -800,6 +800,32 @@ fn lemma_with_quantifier() {
     }
 }
 
+/// Once an accountability-lemma body consumed at least one case-test
+/// identifier, a misspelled `account(s)` keyword must be reported directly,
+/// rather than backtracking to normal-lemma trace-quantifier parsing.
+#[test]
+fn accountability_lemma_near_miss_reports_accounts_keyword_error() {
+    let src = "theory T begin\nlemma L: Reach acounts for \"Ex #i. A() @ #i\"\nend\n";
+    let e = parse_theory(src, &[]).unwrap_err();
+    match e {
+        ParseError::Expected {
+            found,
+            expected,
+            at,
+            when_parsing,
+        } => {
+            assert_eq!(found.as_deref(), Some("acounts"));
+            assert_eq!(
+                expected,
+                vec!["accounts".to_string(), "account".to_string()]
+            );
+            assert_eq!((at.line, at.col), (2, 16));
+            assert_eq!(when_parsing, ParseContext::Lemma);
+        }
+        other => panic!("unexpected variant: {other:?}"),
+    }
+}
+
 #[test]
 fn comment_handling() {
     let s = "/* outer */ theory T // line\n begin /* x /* y */ z */ end";
