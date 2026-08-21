@@ -98,8 +98,8 @@ fn builtin_reserved_name_check_precedes_the_arity_and_ac_checks() {
         probe(
             "B1",
             "builtins: hashing\nfunctions: h/3 [AC]",
-            ParseContext::Function,
-            ParseContext::Function
+            ParseContext::FunctionDeclaration,
+            ParseContext::FunctionDeclaration
         ),
         ("h".to_string(), Some((3, 11)), (4, 12))
     );
@@ -109,8 +109,8 @@ fn builtin_reserved_name_check_precedes_the_arity_and_ac_checks() {
         probe(
             "B7",
             "builtins: hashing\nfunctions: h/1, h/3 [AC]",
-            ParseContext::Function,
-            ParseContext::Function
+            ParseContext::FunctionDeclaration,
+            ParseContext::FunctionDeclaration
         ),
         ("h".to_string(), Some((3, 11)), (4, 17))
     );
@@ -122,8 +122,8 @@ fn builtin_reserved_name_check_precedes_the_arity_and_ac_checks() {
         probe(
             "E1",
             "builtins: dest-pairing\nfunctions: fst/1 [AC]",
-            ParseContext::Function,
-            ParseContext::Function
+            ParseContext::FunctionDeclaration,
+            ParseContext::FunctionDeclaration
         ),
         ("fst".to_string(), Some((3, 11)), (4, 12))
     );
@@ -135,8 +135,8 @@ fn builtin_reserved_name_check_precedes_the_arity_and_ac_checks() {
             probe(
                 "P",
                 &format!("builtins: hashing\nfunctions: h/1 [{attr}]"),
-                ParseContext::Function,
-                ParseContext::Function
+                ParseContext::FunctionDeclaration,
+                ParseContext::FunctionDeclaration
             ),
             ("h".to_string(), Some((3, 11)), (4, 12)),
             "attribute {attr}"
@@ -155,8 +155,8 @@ fn builtin_reserved_name_check_precedes_the_arity_and_ac_checks() {
         probe(
             "P12",
             "builtins: dest-symmetric-encryption\nfunctions: sdec/2",
-            ParseContext::Function,
-            ParseContext::Function,
+            ParseContext::FunctionDeclaration,
+            ParseContext::FunctionDeclaration,
         ),
         ("sdec".to_string(), Some((3, 11)), (4, 12))
     );
@@ -166,8 +166,8 @@ fn builtin_reserved_name_check_precedes_the_arity_and_ac_checks() {
         probe(
             "P9",
             "builtins: locations-report\nfunctions: rep/2",
-            ParseContext::Function,
-            ParseContext::Function
+            ParseContext::FunctionDeclaration,
+            ParseContext::FunctionDeclaration
         ),
         ("rep".to_string(), Some((3, 11)), (4, 12))
     );
@@ -179,8 +179,8 @@ fn builtin_reserved_name_check_precedes_the_arity_and_ac_checks() {
         probe(
             "P32",
             "builtins: hashing, signing\nfunctions: sign/1",
-            ParseContext::Function,
-            ParseContext::Function
+            ParseContext::FunctionDeclaration,
+            ParseContext::FunctionDeclaration
         ),
         ("sign".to_string(), Some((3, 20)), (4, 12))
     );
@@ -194,16 +194,16 @@ fn bracketed_and_unbracketed_declarations_report_the_same_conflict() {
     assert_eq!(
         conflict_err(
             "theory B2 begin\n\nbuiltins: hashing\nfunctions: h/1, h/2\n\nend\n",
-            ParseContext::Function,
-            ParseContext::Function
+            ParseContext::FunctionDeclaration,
+            ParseContext::FunctionDeclaration
         ),
         ("h".to_string(), Some((3, 11)), (4, 17))
     );
     assert_eq!(
         conflict_err(
             "theory P24 begin\n\nbuiltins: hashing\nfunctions: h/3 []\n\nend\n",
-            ParseContext::Function,
-            ParseContext::Function
+            ParseContext::FunctionDeclaration,
+            ParseContext::FunctionDeclaration
         ),
         ("h".to_string(), Some((3, 11)), (4, 12))
     );
@@ -220,8 +220,8 @@ fn conflicting_arities_is_a_parse_error() {
     assert_eq!(
         conflict_err(
             "theory CONF1 begin\n\nfunctions: f/1, f/3\n\nend\n",
-            ParseContext::Function,
-            ParseContext::Function
+            ParseContext::FunctionDeclaration,
+            ParseContext::FunctionDeclaration
         ),
         ("f".to_string(), Some((3, 12)), (3, 17))
     );
@@ -230,8 +230,8 @@ fn conflicting_arities_is_a_parse_error() {
     assert_eq!(
         conflict_err(
             "theory P22 begin\n\nbuiltins: reliable-channel\nfunctions: h/1, h/2\n\nend\n",
-            ParseContext::Function,
-            ParseContext::Function,
+            ParseContext::FunctionDeclaration,
+            ParseContext::FunctionDeclaration,
         ),
         ("h".to_string(), Some((4, 12)), (4, 17))
     );
@@ -239,7 +239,7 @@ fn conflicting_arities_is_a_parse_error() {
         conflict_err(
             "theory P29 begin\n\nmacros: mh(x, y) = x\nfunctions: mh/2\n\nend\n",
             ParseContext::Macro,
-            ParseContext::Function
+            ParseContext::FunctionDeclaration
         ),
         ("mh".to_string(), Some((3, 9)), (4, 12))
     );
@@ -253,8 +253,8 @@ fn builtins_item_rejects_conflicting_functions_and_macros() {
     assert_eq!(
         conflict_err(
             "theory P17 begin\n\nfunctions: h/2\nbuiltins: hashing\n\nend\n",
-            ParseContext::Function,
-            ParseContext::Function,
+            ParseContext::FunctionDeclaration,
+            ParseContext::FunctionDeclaration,
         ),
         ("h".to_string(), Some((3, 12)), (4, 11))
     );
@@ -262,7 +262,7 @@ fn builtins_item_rejects_conflicting_functions_and_macros() {
         conflict_err(
             "theory P28 begin\n\nmacros: h(x) = x\nbuiltins: hashing\n\nend\n",
             ParseContext::Macro,
-            ParseContext::Function,
+            ParseContext::FunctionDeclaration,
         ),
         ("h".to_string(), Some((3, 9)), (4, 11))
     );
@@ -272,8 +272,8 @@ fn builtins_item_rejects_conflicting_functions_and_macros() {
         conflict_err(
             "theory P26 begin\n\nbuiltins: symmetric-encryption, dest-symmetric-encryption\n\
              functions: sdec/2\n\nend\n",
-            ParseContext::Function,
-            ParseContext::Function,
+            ParseContext::FunctionDeclaration,
+            ParseContext::FunctionDeclaration,
         ),
         ("sdec".to_string(), Some((3, 11)), (3, 33))
     );
@@ -281,16 +281,16 @@ fn builtins_item_rejects_conflicting_functions_and_macros() {
     assert_eq!(
         conflict_err(
             "theory P30 begin\n\nbuiltins: symmetric-encryption, dest-symmetric-encryption\n\nend\n",
-            ParseContext::Function,
-            ParseContext::Function,
+            ParseContext::FunctionDeclaration,
+            ParseContext::FunctionDeclaration,
         ),
         ("sdec".to_string(), Some((3, 11)), (3, 33))
     );
     assert_eq!(
         conflict_err(
             "theory P31 begin\n\nbuiltins: signing, dest-signing\n\nend\n",
-            ParseContext::Function,
-            ParseContext::Function,
+            ParseContext::FunctionDeclaration,
+            ParseContext::FunctionDeclaration,
         ),
         ("verify".to_string(), Some((3, 11)), (3, 20))
     );
@@ -392,11 +392,13 @@ fn reserved_word_at_a_declaration_position() {
             found,
             expected,
             at,
+            when_parsing,
         } => {
             assert_eq!(found.as_deref(), Some("diff(x)"));
             assert_eq!(expected, vec!["predicate declaration".to_string()]);
             assert_eq!(at.line, 3);
             assert_eq!(at.col, 13);
+            assert_eq!(when_parsing, Some(ParseContext::PredicateDeclaration));
         }
         other => panic!("unexpected variant: {other:?}"),
     }
@@ -426,11 +428,13 @@ fn unterminated_theory_reports_the_missing_end_keyword() {
                 found,
                 expected,
                 at,
+                when_parsing,
             } => {
                 assert_eq!(found, None, "body: {body:?}");
                 assert_eq!(expected, vec!["end".to_string()], "body: {body:?}");
                 assert_eq!(at.line, line, "body: {body:?}");
                 assert_eq!(at.col, 1, "body: {body:?}");
+                assert_eq!(when_parsing, None);
             }
             other => panic!("unexpected variant: {other:?}"),
         }
@@ -563,11 +567,13 @@ fn bare_diff_token_is_a_parse_error() {
             found,
             expected,
             at,
+            when_parsing,
         } => {
             assert_eq!(found.as_deref(), Some(")"));
             assert_eq!(expected, vec!["term".to_string()]);
             assert_eq!(at.line, 5);
             assert_eq!(at.col, 30);
+            assert_eq!(when_parsing, Some(ParseContext::Term));
         }
         other => panic!("unexpected variant: {other:?}"),
     }
@@ -582,11 +588,13 @@ fn bare_diff_token_is_a_parse_error() {
             found,
             expected,
             at,
+            when_parsing,
         } => {
             assert_eq!(found.as_deref(), Some("{~a}~b"));
             assert_eq!(expected, vec!["term".to_string()]);
             assert_eq!(at.line, 5);
             assert_eq!(at.col, 37);
+            assert_eq!(when_parsing, Some(ParseContext::Term));
         }
         other => panic!("unexpected variant: {other:?}"),
     }
@@ -631,6 +639,7 @@ fn theory_keyword_error() {
             found,
             expected,
             at,
+            when_parsing,
         } => {
             assert_eq!(found.as_deref(), Some("theary"));
             assert_eq!(expected, vec!["theory".to_string()]);
@@ -638,6 +647,7 @@ fn theory_keyword_error() {
             assert_eq!(at.col, 1);
             assert_eq!(at.start, 0);
             assert_eq!(at.end, 6);
+            assert_eq!(when_parsing, None);
         }
         other => panic!("unexpected variant: {other:?}"),
     }
@@ -650,10 +660,16 @@ fn theory_keyword_error() {
 fn garbage_at_item_position_suggests_the_nearest_theory_items() {
     let e = parse_theory("theory Foo\nbegin\nrul R:\n[]-->[]\nend\n", &[]).unwrap_err();
     match &e {
-        ParseError::Expected { found, at, .. } => {
+        ParseError::Expected {
+            found,
+            at,
+            when_parsing,
+            ..
+        } => {
             assert_eq!(found.as_deref(), Some("rul"));
             assert_eq!(at.line, 3);
             assert_eq!(at.col, 1);
+            assert_eq!(*when_parsing, Some(ParseContext::TheoryItem));
         }
         other => panic!("unexpected variant: {other:?}"),
     }
@@ -672,11 +688,13 @@ fn formula_trailing_garbage_uses_structured_variant() {
             found,
             expected,
             at,
+            when_parsing,
         } => {
             assert_eq!(found.as_deref(), Some("junk"));
             assert_eq!(expected, vec!["end of input".to_string()]);
             assert_eq!(at.line, 1);
             assert_eq!(at.col, 7);
+            assert_eq!(when_parsing, Some(ParseContext::Formula));
         }
         other => panic!("unexpected variant: {other:?}"),
     }
@@ -690,11 +708,13 @@ fn term_trailing_garbage_uses_expected_end_of_input() {
             found,
             expected,
             at,
+            when_parsing,
         } => {
             assert_eq!(found.as_deref(), Some("junk"));
             assert_eq!(expected, vec!["end of input".to_string()]);
             assert_eq!(at.line, 1);
             assert_eq!(at.col, 3);
+            assert_eq!(when_parsing, Some(ParseContext::Term));
         }
         other => panic!("unexpected variant: {other:?}"),
     }

@@ -70,62 +70,127 @@ impl From<Pos> for Location {
 /// An enum to give `[ParseError]` variants context of where the error occured
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Copy)]
 pub enum ParseContext {
+    Formula,
+    Process,
+    HexColor,
     Equation,
     Restriction,
     Macro,
     Rule,
     Lemma,
-    Function,
+    FunctionDeclaration,
     Builtin,
     RestrictionAttribute,
     LemmaAttribute,
     RuleAttribute,
-    // Add more as necessary
+    Term,
+    FreshLiteral,
+    NatLiteral,
+    PublicLiteral,
+    Variable,
+    Identifier,
+    StringLiteral,
+    TheoryItem,
+    PreprocessorDirective,
+    TypeAnnotation,
+    PredicateDeclaration,
+    ExportBody,
+    // The context of an included file, with the path of the included file.
+    // Static lifetime to keep the enum copy.
+    IncludedFile(Option<&'static str>),
 }
 
 impl ParseContext {
     pub fn as_str(&self) -> &'static str {
         match self {
+            ParseContext::Formula => "formula",
+            ParseContext::Process => "process",
+            ParseContext::HexColor => "hex color",
             ParseContext::Equation => "equation",
+            ParseContext::Restriction => "restriction",
             ParseContext::Macro => "macro",
             ParseContext::Rule => "rule",
             ParseContext::Lemma => "lemma",
-            ParseContext::Restriction => "restriction",
-            ParseContext::Function => "function",
+            ParseContext::FunctionDeclaration => "function",
+            ParseContext::Builtin => "builtin",
             ParseContext::RestrictionAttribute => "restriction attribute",
             ParseContext::LemmaAttribute => "lemma attribute",
             ParseContext::RuleAttribute => "rule attribute",
-            ParseContext::Builtin => "builtin",
+            ParseContext::Term => "term",
+            ParseContext::FreshLiteral => "fresh literal",
+            ParseContext::NatLiteral => "nat literal",
+            ParseContext::PublicLiteral => "public literal",
+            ParseContext::Variable => "variable",
+            ParseContext::Identifier => "identifier",
+            ParseContext::StringLiteral => "string literal",
+            ParseContext::TheoryItem => "theory item",
+            ParseContext::PreprocessorDirective => "preprocessor directive",
+            ParseContext::TypeAnnotation => "type annotation",
+            ParseContext::PredicateDeclaration => "predicate declaration",
+            ParseContext::ExportBody => "export body",
+            ParseContext::IncludedFile(_) => "included file",
         }
     }
 
     pub fn as_str_plural(&self) -> &'static str {
         match self {
+            ParseContext::Formula => "formulas",
+            ParseContext::Process => "processes",
+            ParseContext::HexColor => "hex colors",
             ParseContext::Equation => "equations",
+            ParseContext::Restriction => "restrictions",
             ParseContext::Macro => "macros",
             ParseContext::Rule => "rules",
             ParseContext::Lemma => "lemmas",
-            ParseContext::Restriction => "restrictions",
-            ParseContext::Function => "functions",
+            ParseContext::FunctionDeclaration => "functions",
+            ParseContext::Builtin => "builtins",
             ParseContext::RestrictionAttribute => "restriction attributes",
             ParseContext::LemmaAttribute => "lemma attributes",
             ParseContext::RuleAttribute => "rule attributes",
-            ParseContext::Builtin => "builtins",
+            ParseContext::Term => "terms",
+            ParseContext::FreshLiteral => "fresh literals",
+            ParseContext::NatLiteral => "nat literals",
+            ParseContext::PublicLiteral => "public literals",
+            ParseContext::Variable => "variables",
+            ParseContext::Identifier => "identifiers",
+            ParseContext::StringLiteral => "string literals",
+            ParseContext::TheoryItem => "theory items",
+            ParseContext::PreprocessorDirective => "preprocessor directives",
+            ParseContext::TypeAnnotation => "type annotations",
+            ParseContext::PredicateDeclaration => "predicate declarations",
+            ParseContext::ExportBody => "export bodies",
+            ParseContext::IncludedFile(_) => "included files",
         }
     }
 
     pub fn as_str_with_article(&self) -> &'static str {
         match self {
+            ParseContext::Formula => "a formula",
+            ParseContext::Process => "a process",
+            ParseContext::HexColor => "a hex color",
             ParseContext::Equation => "an equation",
+            ParseContext::Restriction => "a restriction",
             ParseContext::Macro => "a macro",
             ParseContext::Rule => "a rule",
             ParseContext::Lemma => "a lemma",
-            ParseContext::Restriction => "a restriction",
-            ParseContext::Function => "a function",
+            ParseContext::FunctionDeclaration => "a function",
+            ParseContext::Builtin => "a builtin",
             ParseContext::RestrictionAttribute => "a restriction attribute",
             ParseContext::LemmaAttribute => "a lemma attribute",
             ParseContext::RuleAttribute => "a rule attribute",
-            ParseContext::Builtin => "a builtin",
+            ParseContext::Term => "a term",
+            ParseContext::FreshLiteral => "a fresh literal",
+            ParseContext::NatLiteral => "a nat literal",
+            ParseContext::PublicLiteral => "a public literal",
+            ParseContext::Variable => "a variable",
+            ParseContext::Identifier => "an identifier",
+            ParseContext::StringLiteral => "a string literal",
+            ParseContext::TheoryItem => "a theory item",
+            ParseContext::PreprocessorDirective => "a preprocessor directive",
+            ParseContext::TypeAnnotation => "a type annotation",
+            ParseContext::PredicateDeclaration => "a predicate declaration",
+            ParseContext::ExportBody => "an export body",
+            ParseContext::IncludedFile(_) => "an included file",
         }
     }
 
@@ -140,12 +205,28 @@ impl ParseContext {
             }
             ParseContext::LemmaAttribute => LemmaAttr::expected(),
             ParseContext::RuleAttribute => RuleAttr::expected(),
-            ParseContext::Equation
+            ParseContext::Formula
+            | ParseContext::Process
+            | ParseContext::HexColor
+            | ParseContext::Equation
             | ParseContext::Restriction
             | ParseContext::Macro
             | ParseContext::Rule
             | ParseContext::Lemma
-            | ParseContext::Function => vec![],
+            | ParseContext::FunctionDeclaration
+            | ParseContext::Term
+            | ParseContext::FreshLiteral
+            | ParseContext::NatLiteral
+            | ParseContext::PublicLiteral
+            | ParseContext::Variable
+            | ParseContext::Identifier
+            | ParseContext::StringLiteral
+            | ParseContext::TheoryItem
+            | ParseContext::PreprocessorDirective
+            | ParseContext::TypeAnnotation
+            | ParseContext::PredicateDeclaration
+            | ParseContext::ExportBody
+            | ParseContext::IncludedFile(_) => vec![],
         }
     }
 }
@@ -154,8 +235,8 @@ impl ParseContext {
 pub enum ParseError {
     UsedReservedKeyword {
         found: String,
-        at: Location,
         expected: Vec<String>,
+        at: Location,
     },
     IllegalDiffOperator {
         /// Was the diff flag set when parsing
@@ -226,31 +307,6 @@ pub enum ParseError {
         arity: usize,
         at: Location,
     },
-    BadFreshLiteral {
-        found: Option<String>,
-        expected: Vec<String>,
-        at: Location,
-    },
-    BadNatLiteral {
-        found: Option<String>,
-        expected: Vec<String>,
-        at: Location,
-    },
-    BadPublicLiteral {
-        found: Option<String>,
-        expected: Vec<String>,
-        at: Location,
-    },
-    ExpectedTerm {
-        found: Option<String>,
-        expected: Vec<String>,
-        at: Location,
-    },
-    ExpectedVariable {
-        found: Option<String>,
-        expected: Vec<String>,
-        at: Location,
-    },
     IoError {
         path: String,
         message: String,
@@ -262,6 +318,7 @@ pub enum ParseError {
         found: Option<String>,
         expected: Vec<String>,
         at: Location,
+        when_parsing: Option<ParseContext>,
     },
 }
 
@@ -277,11 +334,6 @@ impl ParseError {
     pub(crate) fn add_expected(&mut self, exp: impl Into<String>) {
         match self {
             ParseError::Expected { expected, .. }
-            | ParseError::BadFreshLiteral { expected, .. }
-            | ParseError::BadNatLiteral { expected, .. }
-            | ParseError::BadPublicLiteral { expected, .. }
-            | ParseError::ExpectedTerm { expected, .. }
-            | ParseError::ExpectedVariable { expected, .. }
             | ParseError::UsedReservedKeyword { expected, .. }
             | ParseError::UnclosedDelimiter { expected, .. } => {
                 let exp = exp.into();
@@ -313,11 +365,6 @@ impl ParseError {
             | ParseError::FactNameMustStartWithUppercase { at, .. }
             | ParseError::FreshFactCannotBePersistent { at }
             | ParseError::FactArityMismatch { at, .. }
-            | ParseError::BadFreshLiteral { at, .. }
-            | ParseError::BadNatLiteral { at, .. }
-            | ParseError::BadPublicLiteral { at, .. }
-            | ParseError::ExpectedTerm { at, .. }
-            | ParseError::ExpectedVariable { at, .. }
             | ParseError::IoError { at, .. }
             | ParseError::UnknownItem { at, .. }
             | ParseError::Expected { at, .. }
@@ -334,13 +381,9 @@ impl ParseError {
 
     pub(crate) fn into_found(self) -> Option<String> {
         match self {
-            ParseError::Expected { found, .. }
-            | ParseError::BadFreshLiteral { found, .. }
-            | ParseError::BadNatLiteral { found, .. }
-            | ParseError::BadPublicLiteral { found, .. }
-            | ParseError::ExpectedTerm { found, .. }
-            | ParseError::ExpectedVariable { found, .. }
-            | ParseError::UnclosedDelimiter { found, .. } => found,
+            ParseError::Expected { found, .. } | ParseError::UnclosedDelimiter { found, .. } => {
+                found
+            }
             ParseError::UnknownItem {
                 unknown_item: item, ..
             } => Some(item),
@@ -362,13 +405,9 @@ impl ParseError {
 
     pub fn found(&self) -> Option<&str> {
         match self {
-            ParseError::Expected { found, .. }
-            | ParseError::BadFreshLiteral { found, .. }
-            | ParseError::BadNatLiteral { found, .. }
-            | ParseError::BadPublicLiteral { found, .. }
-            | ParseError::ExpectedTerm { found, .. }
-            | ParseError::ExpectedVariable { found, .. }
-            | ParseError::UnclosedDelimiter { found, .. } => found.as_deref(),
+            ParseError::Expected { found, .. } | ParseError::UnclosedDelimiter { found, .. } => {
+                found.as_deref()
+            }
             ParseError::UnknownItem {
                 unknown_item: item, ..
             } => Some(item.as_str()),
@@ -390,12 +429,7 @@ impl ParseError {
 
     pub fn expected(&self) -> Option<Vec<String>> {
         let raw_expected = match self {
-            ParseError::BadFreshLiteral { expected, .. }
-            | ParseError::BadNatLiteral { expected, .. }
-            | ParseError::BadPublicLiteral { expected, .. }
-            | ParseError::ExpectedTerm { expected, .. }
-            | ParseError::ExpectedVariable { expected, .. }
-            | ParseError::UsedReservedKeyword { expected, .. }
+            ParseError::UsedReservedKeyword { expected, .. }
             | ParseError::Expected { expected, .. }
             | ParseError::UnclosedDelimiter { expected, .. } => Some(expected.clone()),
             ParseError::UnknownItem {
@@ -461,11 +495,6 @@ impl ParseError {
             }
             ParseError::FreshFactCannotBePersistent { .. } => "Fresh fact cannot be persistent",
             ParseError::FactArityMismatch { .. } => "Fact arity mismatch",
-            ParseError::BadFreshLiteral { .. } => "Bad fresh literal",
-            ParseError::BadNatLiteral { .. } => "Bad nat literal",
-            ParseError::BadPublicLiteral { .. } => "Bad public literal",
-            ParseError::ExpectedTerm { .. } => "Expected term",
-            ParseError::ExpectedVariable { .. } => "Expected variable",
             ParseError::IoError { .. } => "I/O error",
             ParseError::Expected { .. } => "Unexpected input",
             ParseError::ConflictingDeclarations { second_context, .. } => {
@@ -646,26 +675,14 @@ impl ParseError {
             ParseError::UndeclaredFunction { .. } => {
                 vec!["functions must be declared before use".to_string()]
             }
-            ParseError::BadFreshLiteral {
-                found, expected, ..
-            }
-            | ParseError::BadNatLiteral {
-                found, expected, ..
-            }
-            | ParseError::BadPublicLiteral {
-                found, expected, ..
-            }
-            | ParseError::ExpectedTerm {
-                found, expected, ..
-            }
-            | ParseError::ExpectedVariable {
+            ParseError::Expected {
                 found, expected, ..
             } => {
-                vec![format_found_expected_note(
-                    "token",
-                    found.as_deref(),
-                    expected,
-                )]
+                let list = format_expected_list(expected);
+                vec![match found {
+                    Some(found) => format!("expected {list}, but found `{found}`"),
+                    None => format!("expected {list}"),
+                }]
             }
             ParseError::UnclosedDelimiter {
                 opening,
@@ -712,15 +729,6 @@ impl ParseError {
             }
             ParseError::IoError { path, message, .. } => {
                 vec![format!("failed to read included file `{path}`: {message}")]
-            }
-            ParseError::Expected {
-                found, expected, ..
-            } => {
-                let list = format_expected_list(expected);
-                vec![match found {
-                    Some(found) => format!("expected {list}, but found `{found}`"),
-                    None => format!("expected {list}"),
-                }]
             }
             ParseError::ConflictingDeclarations { second_context, .. } => {
                 let tail = match second_context {

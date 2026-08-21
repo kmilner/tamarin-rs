@@ -107,7 +107,7 @@ fn nullary_applied_with_args_is_an_arity_error() {
 fn unary_empty_parens_is_a_term_error() {
     let src = "theory T\nbegin\n\nbuiltins: hashing\n\nrule r:\n  [ ] --> [ Out(h()) ]\n\nend\n";
     let e = parse_theory(src, &[]).expect_err("must fail to parse");
-    let ParseError::ExpectedTerm { found, at, .. } = &e else {
+    let ParseError::Expected { found, at, .. } = &e else {
         panic!("expected a term error, got {e:?}");
     };
     assert!(
@@ -124,7 +124,7 @@ fn unary_trailing_comma_is_a_term_error() {
     let src =
         "theory T\nbegin\n\nbuiltins: hashing\n\nrule r:\n  [ ] --> [ Out(h('a',)) ]\n\nend\n";
     let e = parse_theory(src, &[]).expect_err("must fail to parse");
-    let ParseError::ExpectedTerm { found, at, .. } = &e else {
+    let ParseError::Expected { found, at, .. } = &e else {
         panic!("expected a term error, got {e:?}");
     };
     assert!(

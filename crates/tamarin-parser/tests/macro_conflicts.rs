@@ -191,10 +191,12 @@ fn a_bodyless_macro_swallows_end_and_dies_at_the_item_position() {
         found,
         expected,
         at,
+        when_parsing,
     } = &e
     else {
         panic!("expected the missing-keyword variant, got {e:?}");
     };
+    assert_eq!(*when_parsing, None);
     assert_eq!(*found, None);
     assert_eq!(expected, &["end".to_string()]);
     assert_eq!((at.line, at.col), (4, 1));
@@ -207,7 +209,7 @@ fn macro_conflicts_with_user_function() {
     assert_eq!(
         conflict(
             "theory MacroCF begin\nfunctions: f/1\nmacros: f(x) = x\nend\n",
-            ParseContext::Function,
+            ParseContext::FunctionDeclaration,
             ParseContext::Macro
         ),
         ("f".to_string(), Some((2, 12)), (3, 9))
@@ -237,7 +239,7 @@ fn macro_conflicts_with_enabled_builtin_symbol() {
     assert_eq!(
         conflict(
             "theory MacroCH begin\nbuiltins: hashing\nmacros: h(x) = x\nend\n",
-            ParseContext::Function,
+            ParseContext::FunctionDeclaration,
             ParseContext::Macro
         ),
         ("h".to_string(), Some((2, 11)), (3, 9))
@@ -252,7 +254,7 @@ fn macro_conflicts_with_seeded_pair_symbol() {
     assert_eq!(
         conflict(
             "theory MacroCP begin\nmacros: fst(x) = x\nend\n",
-            ParseContext::Function,
+            ParseContext::FunctionDeclaration,
             ParseContext::Macro
         ),
         ("fst".to_string(), None, (2, 9))
@@ -317,7 +319,7 @@ fn macro_conflicts_with_user_ac_symbol() {
     assert_eq!(
         conflict(
             "theory MacroCA begin\nfunctions: f/2 [AC]\nmacros: f(x) = x\nend\n",
-            ParseContext::Function,
+            ParseContext::FunctionDeclaration,
             ParseContext::Macro
         ),
         ("f".to_string(), Some((2, 12)), (3, 9))
@@ -330,7 +332,7 @@ fn a_second_ac_symbol_does_not_shadow_the_conflict() {
     assert_eq!(
         conflict(
             "theory MacroCA2 begin\nfunctions: f/2 [AC], g/2 [AC]\nmacros: f(x) = x\nend\n",
-            ParseContext::Function,
+            ParseContext::FunctionDeclaration,
             ParseContext::Macro
         ),
         ("f".to_string(), Some((2, 12)), (3, 9))
@@ -349,7 +351,7 @@ fn enabled_theory_levels_do_not_change_the_conflict() {
          functions: f/1\nmacros: f(x) = x\nend\n",
     ] {
         assert_eq!(
-            conflict(src, ParseContext::Function, ParseContext::Macro),
+            conflict(src, ParseContext::FunctionDeclaration, ParseContext::Macro),
             ("f".to_string(), Some((3, 12)), (4, 9)),
             "case {src:?}"
         );
@@ -366,7 +368,7 @@ fn body_shape_does_not_change_the_conflict() {
     assert_eq!(
         conflict(
             "theory T begin\nbuiltins: hashing\nfunctions: f/1\nmacros: f(x) = h(x)\nend\n",
-            ParseContext::Function,
+            ParseContext::FunctionDeclaration,
             ParseContext::Macro
         ),
         ("f".to_string(), Some((3, 12)), (4, 9))
@@ -374,7 +376,7 @@ fn body_shape_does_not_change_the_conflict() {
     assert_eq!(
         conflict(
             "theory T begin\nfunctions: c/0, f/1\nmacros: f(x) = c\nend\n",
-            ParseContext::Function,
+            ParseContext::FunctionDeclaration,
             ParseContext::Macro
         ),
         ("f".to_string(), Some((2, 17)), (3, 9))
@@ -383,7 +385,7 @@ fn body_shape_does_not_change_the_conflict() {
         assert_eq!(
             conflict(
                 &format!("theory T begin\nfunctions: f/1\nmacros: {decl}\nend\n"),
-                ParseContext::Function,
+                ParseContext::FunctionDeclaration,
                 ParseContext::Macro
             ),
             ("f".to_string(), Some((2, 12)), (3, 9)),
@@ -412,7 +414,7 @@ fn a_variable_final_body_reports_the_same_conflict() {
         ),
     ] {
         assert_eq!(
-            conflict(thy, ParseContext::Function, ParseContext::Macro),
+            conflict(thy, ParseContext::FunctionDeclaration, ParseContext::Macro),
             ("f".to_string(), Some(first), (3, 9)),
             "case {thy:?}"
         );
