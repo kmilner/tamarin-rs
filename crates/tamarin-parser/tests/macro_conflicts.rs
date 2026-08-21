@@ -196,7 +196,7 @@ fn a_bodyless_macro_swallows_end_and_dies_at_the_item_position() {
     else {
         panic!("expected the missing-keyword variant, got {e:?}");
     };
-    assert_eq!(*when_parsing, None);
+    assert_eq!(*when_parsing, ParseContext::Theory);
     assert_eq!(*found, None);
     assert_eq!(expected, &["end".to_string()]);
     assert_eq!((at.line, at.col), (4, 1));

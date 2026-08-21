@@ -398,7 +398,7 @@ fn reserved_word_at_a_declaration_position() {
             assert_eq!(expected, vec!["predicate declaration".to_string()]);
             assert_eq!(at.line, 3);
             assert_eq!(at.col, 13);
-            assert_eq!(when_parsing, Some(ParseContext::PredicateDeclaration));
+            assert_eq!(when_parsing, ParseContext::PredicateDeclaration);
         }
         other => panic!("unexpected variant: {other:?}"),
     }
@@ -434,7 +434,7 @@ fn unterminated_theory_reports_the_missing_end_keyword() {
                 assert_eq!(expected, vec!["end".to_string()], "body: {body:?}");
                 assert_eq!(at.line, line, "body: {body:?}");
                 assert_eq!(at.col, 1, "body: {body:?}");
-                assert_eq!(when_parsing, None);
+                assert_eq!(when_parsing, ParseContext::Theory);
             }
             other => panic!("unexpected variant: {other:?}"),
         }
@@ -573,7 +573,7 @@ fn bare_diff_token_is_a_parse_error() {
             assert_eq!(expected, vec!["term".to_string()]);
             assert_eq!(at.line, 5);
             assert_eq!(at.col, 30);
-            assert_eq!(when_parsing, Some(ParseContext::Term));
+            assert_eq!(when_parsing, ParseContext::TermAtom);
         }
         other => panic!("unexpected variant: {other:?}"),
     }
@@ -594,7 +594,7 @@ fn bare_diff_token_is_a_parse_error() {
             assert_eq!(expected, vec!["term".to_string()]);
             assert_eq!(at.line, 5);
             assert_eq!(at.col, 37);
-            assert_eq!(when_parsing, Some(ParseContext::Term));
+            assert_eq!(when_parsing, ParseContext::TermAtom);
         }
         other => panic!("unexpected variant: {other:?}"),
     }
@@ -647,7 +647,7 @@ fn theory_keyword_error() {
             assert_eq!(at.col, 1);
             assert_eq!(at.start, 0);
             assert_eq!(at.end, 6);
-            assert_eq!(when_parsing, None);
+            assert_eq!(when_parsing, ParseContext::Theory);
         }
         other => panic!("unexpected variant: {other:?}"),
     }
@@ -669,7 +669,7 @@ fn garbage_at_item_position_suggests_the_nearest_theory_items() {
             assert_eq!(found.as_deref(), Some("rul"));
             assert_eq!(at.line, 3);
             assert_eq!(at.col, 1);
-            assert_eq!(*when_parsing, Some(ParseContext::TheoryItem));
+            assert_eq!(*when_parsing, ParseContext::TheoryItem);
         }
         other => panic!("unexpected variant: {other:?}"),
     }
@@ -694,7 +694,7 @@ fn formula_trailing_garbage_uses_structured_variant() {
             assert_eq!(expected, vec!["end of input".to_string()]);
             assert_eq!(at.line, 1);
             assert_eq!(at.col, 7);
-            assert_eq!(when_parsing, Some(ParseContext::Formula));
+            assert_eq!(when_parsing, ParseContext::Formula);
         }
         other => panic!("unexpected variant: {other:?}"),
     }
@@ -714,7 +714,7 @@ fn term_trailing_garbage_uses_expected_end_of_input() {
             assert_eq!(expected, vec!["end of input".to_string()]);
             assert_eq!(at.line, 1);
             assert_eq!(at.col, 3);
-            assert_eq!(when_parsing, Some(ParseContext::Term));
+            assert_eq!(when_parsing, ParseContext::Term);
         }
         other => panic!("unexpected variant: {other:?}"),
     }

@@ -66,6 +66,10 @@ impl From<Pos> for Location {
 /// An enum to give `[ParseError]` variants context of where the error occured
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Copy)]
 pub enum ParseContext {
+    TermAtom,
+    FormulaAtom,
+    ExportItem,
+    Theory,
     Formula,
     Process,
     HexColor,
@@ -99,6 +103,7 @@ pub enum ParseContext {
 impl ParseContext {
     pub fn as_str(&self) -> &'static str {
         match self {
+            ParseContext::Theory => "spthy theory",
             ParseContext::Formula => "formula",
             ParseContext::Process => "process",
             ParseContext::HexColor => "hex color",
@@ -125,6 +130,9 @@ impl ParseContext {
             ParseContext::PredicateDeclaration => "predicate declaration",
             ParseContext::ExportBody => "export body",
             ParseContext::IncludedFile(_) => "included file",
+            ParseContext::TermAtom => "atomic term",
+            ParseContext::FormulaAtom => "atomic formula",
+            ParseContext::ExportItem => "export item",
         }
     }
 
@@ -156,6 +164,10 @@ impl ParseContext {
             ParseContext::PredicateDeclaration => "predicate declarations",
             ParseContext::ExportBody => "export bodies",
             ParseContext::IncludedFile(_) => "included files",
+            ParseContext::Theory => "theories",
+            ParseContext::TermAtom => "atomic terms",
+            ParseContext::FormulaAtom => "atomic formulas",
+            ParseContext::ExportItem => "export items",
         }
     }
 
@@ -187,6 +199,10 @@ impl ParseContext {
             ParseContext::PredicateDeclaration => "a predicate declaration",
             ParseContext::ExportBody => "an export body",
             ParseContext::IncludedFile(_) => "an included file",
+            ParseContext::Theory => "a theory",
+            ParseContext::TermAtom => "an atomic term",
+            ParseContext::FormulaAtom => "an atomic formula",
+            ParseContext::ExportItem => "an export item",
         }
     }
 
@@ -205,6 +221,7 @@ impl ParseContext {
             | ParseContext::Process
             | ParseContext::HexColor
             | ParseContext::Equation
+            | ParseContext::Theory
             | ParseContext::Restriction
             | ParseContext::Macro
             | ParseContext::Rule
@@ -222,6 +239,9 @@ impl ParseContext {
             | ParseContext::TypeAnnotation
             | ParseContext::PredicateDeclaration
             | ParseContext::ExportBody
+            | ParseContext::TermAtom
+            | ParseContext::FormulaAtom
+            | ParseContext::ExportItem
             | ParseContext::IncludedFile(_) => vec![],
         }
     }
@@ -314,7 +334,7 @@ pub enum ParseError {
         found: Option<String>,
         expected: Vec<String>,
         at: Location,
-        when_parsing: Option<ParseContext>,
+        when_parsing: ParseContext,
     },
 }
 
@@ -492,16 +512,10 @@ impl ParseError {
             ParseError::FreshFactCannotBePersistent { .. } => "Fresh fact cannot be persistent",
             ParseError::FactArityMismatch { .. } => "Fact arity mismatch",
             ParseError::IoError { .. } => "I/O error",
-            ParseError::Expected {
-                when_parsing: None, ..
-            } => "Unexpected input",
-            ParseError::Expected {
-                when_parsing: Some(context),
-                ..
-            } => {
+            ParseError::Expected { when_parsing, .. } => {
                 return Cow::Owned(format!(
                     "Unexpected input when parsing {}",
-                    context.as_str()
+                    when_parsing.as_str()
                 ))
             }
             ParseError::ConflictingDeclarations { second_context, .. } => {
