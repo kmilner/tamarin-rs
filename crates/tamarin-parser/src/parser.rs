@@ -374,7 +374,7 @@ pub struct ParseErrorLabel {
 
 impl ParseError {
     /// Add an expected item to the error's `expected` list, if it has one.
-    fn add_expected(&mut self, exp: String) {
+    fn add_expected(&mut self, exp: impl Into<String>) {
         match self {
             ParseError::UnexpectedKeyword { expected, .. }
             | ParseError::ExpectedTheoryItem { expected, .. }
@@ -399,6 +399,7 @@ impl ParseError {
             | ParseError::Expected { expected, .. }
             | ParseError::UsedReservedKeyword { expected, .. }
             | ParseError::UnterminatedDelimiter { expected, .. } => {
+                let exp = exp.into();
                 if !expected.contains(&exp) {
                     expected.push(exp);
                 }
@@ -3874,7 +3875,7 @@ impl<'a> Parser<'a> {
         };
         Err(ParseError::ConflictingDeclarations {
             name: name.to_string(),
-            first_context: first_context,
+            first_context,
             second_context: ParseContext::Macro,
             first_at,
             second_at: at,
@@ -4282,7 +4283,12 @@ impl<'a> Parser<'a> {
         let start = self.lx.pos();
         self.require_kw("rule")?;
         let modulo = self.try_modulo();
-        let name = self.ident()?;
+        let name = self.ident().map_err(|mut e| {
+            if modulo.is_none() {
+                e.add_expected("(");
+            }
+            e
+        })?;
         let had_attributes = self.peek_punct("[");
         let attributes = self.rule_attributes()?;
         self.require_rule_colon(had_attributes)?;
@@ -4725,7 +4731,7 @@ impl<'a> Parser<'a> {
         let probe_offset = self.lx.pos().offset;
         self.fact_list().map_err(|mut e| {
             if e.location().start == probe_offset {
-                e.add_expected("\"let\"".to_string());
+                e.add_expected("\"let\"");
             }
             e
         })

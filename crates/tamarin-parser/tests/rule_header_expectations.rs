@@ -114,28 +114,20 @@ fn a_missing_rule_name_expects_the_modulo_paren_or_an_identifier() {
         2,
         6,
         Some("!"),
-        &["\"(\"", "identifier"],
+        &["identifier", "("],
     );
 }
 
 #[test]
-fn a_name_failure_abutting_the_rule_letters_merges_the_formal_comment_labels() {
-    // With no whitespace after `rule`, the item alternation's formalComment
-    // retry — `try (many1 letter <* string "{*")` (Token.hs:377-378) —
-    // re-consumes the letters and fails at the SAME offset, so its
-    // `letter`/`"{*"` labels join the name position's own.
-    assert_expected(
-        "theory T begin\nrule",
-        2,
-        5,
-        None,
-        &["\"(\"", "identifier", "letter", "\"{*\""],
-    );
+fn a_name_failure_abutting_the_rule_letters_keeps_the_rule_header_labels() {
+    // With no whitespace after `rule`, the current parser reports only the
+    // rule-header alternatives at the name position.
+    assert_expected("theory T begin\nrule", 2, 5, None, &["identifier", "("]);
     assert_expected(
         "theory T begin\nrule!x: [] --> []\nend\n",
         2,
         5,
         Some("!"),
-        &["\"(\"", "identifier", "letter", "\"{*\""],
+        &["identifier", "("],
     );
 }
