@@ -159,6 +159,19 @@ impl ParseContext {
 
 #[derive(Debug, Clone)]
 pub enum ParseError {
+    UsedReservedKeyword {
+        found: String,
+        at: Location,
+        expected: Vec<String>,
+    },
+    IllegalDiffOperator {
+        /// Was the diff flag set when parsing
+        diff_set: bool,
+        /// If present, the `diff` operator is not allowed in the context
+        //  Currently, only used with `ParseContext::Equation`
+        context: Option<ParseContext>,
+        at: Location,
+    },
     DuplicateMacroArg {
         arg: String,
         first_at: Location,
@@ -384,13 +397,15 @@ impl ParseError {
             | ParseError::TrailingGarbageInFormulaString { expected, .. }
             | ParseError::TrailingGarbageInTermString { expected, .. }
             | ParseError::Expected { expected, .. }
+            | ParseError::UsedReservedKeyword { expected, .. }
             | ParseError::UnterminatedDelimiter { expected, .. } => {
                 if !expected.contains(&exp) {
                     expected.push(exp);
                 }
             }
             // Explicity match to force compile-time error for new variants
-            ParseError::FactNameMustStartWithUppercase { .. }
+            ParseError::IllegalDiffOperator { .. }
+            | ParseError::FactNameMustStartWithUppercase { .. }
             | ParseError::FreshFactCannotBePersistent { .. }
             | ParseError::FactArityMismatch { .. }
             | ParseError::UnexpectedTrailingInput { .. }
@@ -410,7 +425,10 @@ impl ParseError {
 
     pub fn location(&self) -> &Location {
         match self {
-            ParseError::UnexpectedKeyword { at, .. }
+            ParseError::UsedReservedKeyword { at, .. }
+            | ParseError::IllegalDiffOperator { at, .. }
+            | ParseError::FactNameMustStartWithUppercase { at, .. }
+            | ParseError::UnexpectedKeyword { at, .. }
             | ParseError::ExpectedTheoryItem { at, .. }
             | ParseError::ExpectedPunctuation { at, .. }
             | ParseError::ExpectedStringLiteral { at, .. }
@@ -422,7 +440,6 @@ impl ParseError {
             | ParseError::ExpectedQuotedString { at, .. }
             | ParseError::ExpectedExportBodyString { at, .. }
             | ParseError::ExpectedProcess { at, .. }
-            | ParseError::FactNameMustStartWithUppercase { at, .. }
             | ParseError::FreshFactCannotBePersistent { at }
             | ParseError::FactArityMismatch { at, .. }
             | ParseError::ExpectedFormulaAtom { at, .. }
@@ -477,10 +494,12 @@ impl ParseError {
             ParseError::UnknownItem {
                 unknown_item: item, ..
             } => Some(item),
+            ParseError::UsedReservedKeyword { found, .. } => Some(found),
             ParseError::FactNameMustStartWithUppercase { name, .. }
             | ParseError::FactArityMismatch { name, .. }
             | ParseError::UnexpectedTrailingInput { found: name, .. } => Some(name),
-            ParseError::FreshFactCannotBePersistent { .. }
+            ParseError::IllegalDiffOperator { .. }
+            | ParseError::FreshFactCannotBePersistent { .. }
             | ParseError::IoError { .. }
             | ParseError::Custom { .. }
             | ParseError::MalformedHexColor { .. }
@@ -521,10 +540,12 @@ impl ParseError {
             ParseError::UnknownItem {
                 unknown_item: item, ..
             } => Some(item.as_str()),
+            ParseError::UsedReservedKeyword { found, .. } => Some(found.as_str()),
             ParseError::FactNameMustStartWithUppercase { name, .. }
             | ParseError::FactArityMismatch { name, .. } => Some(name.as_str()),
             ParseError::UnexpectedTrailingInput { found, .. } => Some(found.as_str()),
-            ParseError::FreshFactCannotBePersistent { .. }
+            ParseError::IllegalDiffOperator { .. }
+            | ParseError::FreshFactCannotBePersistent { .. }
             | ParseError::IoError { .. }
             | ParseError::Custom { .. }
             | ParseError::DuplicateMacroArg { .. }
@@ -560,12 +581,14 @@ impl ParseError {
             | ParseError::ExpectedVariable { expected, .. }
             | ParseError::TrailingGarbageInFormulaString { expected, .. }
             | ParseError::TrailingGarbageInTermString { expected, .. }
+            | ParseError::UsedReservedKeyword { expected, .. }
             | ParseError::Expected { expected, .. }
             | ParseError::UnterminatedDelimiter { expected, .. } => Some(expected.clone()),
             ParseError::UnknownItem {
                 item_kind: kind, ..
             } => Some(kind.expected().into_iter().map(|s| s.to_string()).collect()),
             ParseError::FactNameMustStartWithUppercase { .. }
+            | ParseError::IllegalDiffOperator { .. }
             | ParseError::FreshFactCannotBePersistent { .. }
             | ParseError::FactArityMismatch { .. }
             | ParseError::UnexpectedTrailingInput { .. }
@@ -607,6 +630,8 @@ impl ParseError {
     /// the offending name is part of the message.
     pub fn description(&self) -> Cow<'static, str> {
         Cow::Borrowed(match self {
+            ParseError::UsedReservedKeyword { .. } => "Used reserved keyword",
+            ParseError::IllegalDiffOperator { .. } => "Illegal diff operator",
             ParseError::UnexpectedKeyword { .. } => "Unexpected keyword",
             ParseError::ExpectedTheoryItem { .. } => "Expected theory item",
             ParseError::ExpectedPunctuation { .. } => "Expected punctuation",
@@ -670,6 +695,16 @@ impl ParseError {
 
     pub fn labels(&self) -> Vec<ParseErrorLabel> {
         match self {
+            ParseError::UsedReservedKeyword { found, .. } => vec![ParseErrorLabel {
+                at: *self.location(),
+                message: format!("Used reserved keyword `{}`", found),
+                is_primary: true,
+            }],
+            ParseError::IllegalDiffOperator { .. } => vec![ParseErrorLabel {
+                at: *self.location(),
+                message: self.description().to_string(),
+                is_primary: true,
+            }],
             ParseError::UnterminatedDelimiter {
                 opening,
                 opening_at,
@@ -803,6 +838,24 @@ impl ParseError {
 
     pub fn notes(&self) -> Vec<String> {
         match self {
+            ParseError::UsedReservedKeyword { found, .. } => vec![format!(
+                "`{found}` is a reserved word and cannot be used as an identifier"
+            )],
+            ParseError::IllegalDiffOperator {
+                diff_set, context, ..
+            } => {
+                let mut notes = vec![];
+                if let Some(c) = context {
+                    notes.push(format!(
+                        "diff operator is not allowed in {}",
+                        c.as_str_plural()
+                    ));
+                }
+                if !*diff_set {
+                    notes.push("diff operator found, but flag diff not set".to_string());
+                }
+                notes
+            }
             ParseError::UnexpectedKeyword {
                 found, expected, ..
             } => {
@@ -1879,18 +1932,6 @@ impl<'a> Parser<'a> {
 
     // -------- Error helpers --------
 
-    /// A raw-message parse error at the current position (parsec `Message`).
-    /// Renders as `"<path>" (line, column):\n<msg>` — the correct parsec frame
-    /// with a single message line, even though the message text itself is not a
-    /// `unexpected …`/`expecting …` pair.  Used by the many hand-coded error
-    /// sites that do not (yet) track a parsec-style expected set.
-    fn err(&self, msg: impl Into<String>) -> ParseError {
-        ParseError::Custom {
-            message: msg.into(),
-            at: Location::from(self.lx.pos()),
-        }
-    }
-
     /// Bridge for parser sites not yet converted to a dedicated
     /// [`ParseError`] variant: an expected-set failure at the upcoming token.
     /// `expects` are label strings, already carrying any quoting (e.g.
@@ -1902,13 +1943,6 @@ impl<'a> Parser<'a> {
             expected: expects.iter().map(|e| (*e).to_string()).collect(),
             at,
         }
-    }
-
-    /// [`Self::err`] with the position advanced to the upcoming token's
-    /// start.
-    fn err_fail(&mut self, msg: impl Into<String>) -> ParseError {
-        self.skip_ws();
-        self.err(msg)
     }
 
     fn err_unterminated_delimiter(
@@ -2168,7 +2202,12 @@ impl<'a> Parser<'a> {
         if let Some(e) = self.err_reserved_word() {
             return Err(e);
         }
-        Err(self.expected_identifier_err(vec!["identifier"]))
+        let (found, found_at) = self.found_token();
+        Err(ParseError::Expected {
+            found,
+            expected: vec!["identifier".to_string()],
+            at: found_at,
+        })
     }
 
     /// The rejection HS `T.identifier` (Token.hs:393-394) performs when the
@@ -2200,9 +2239,10 @@ impl<'a> Parser<'a> {
         if !is_reserved_name(&word) {
             return None;
         }
-        Some(ParseError::Custom {
-            message: format!("`{word}` is a reserved word and cannot be used as an identifier"),
-            at: Location::from(pos),
+        Some(ParseError::UsedReservedKeyword {
+            found: word,
+            at: Location::from_positions(save, pos),
+            expected: vec!["identifier".to_string()],
         })
     }
 
@@ -2268,19 +2308,6 @@ impl<'a> Parser<'a> {
     {
         let (found, at) = self.found_token();
         ParseError::ExpectedStringLiteral {
-            found,
-            expected: expected.into_iter().map(Into::into).collect(),
-            at,
-        }
-    }
-
-    fn expected_identifier_err<I, S>(&mut self, expected: I) -> ParseError
-    where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
-    {
-        let (found, at) = self.found_token();
-        ParseError::ExpectedIdentifier {
             found,
             expected: expected.into_iter().map(Into::into).collect(),
             at,
@@ -4253,10 +4280,9 @@ impl<'a> Parser<'a> {
     fn parse_rule(&mut self) -> Result<Rule, ParseError> {
         self.skip_ws();
         let start = self.lx.pos();
-        let kw_end = self.lx.pos().offset + "rule".len();
         self.require_kw("rule")?;
         let modulo = self.try_modulo();
-        let name = self.rule_name_ident(kw_end)?;
+        let name = self.ident()?;
         let had_attributes = self.peek_punct("[");
         let attributes = self.rule_attributes()?;
         self.require_rule_colon(had_attributes)?;
@@ -4332,7 +4358,7 @@ impl<'a> Parser<'a> {
         // `(modulo AC)` head is absent and parsing proceeds. (More lenient than
         // Haskell, but still accepts all valid Haskell input.)
         let modulo = self.try_modulo();
-        let name = self.rule_name_ident(usize::MAX)?;
+        let name = self.ident()?;
         let had_attributes = self.peek_punct("[");
         let attributes = self.rule_attributes()?;
         self.require_rule_colon(had_attributes)?;
@@ -4684,33 +4710,6 @@ impl<'a> Parser<'a> {
         // Consume the `in` terminator if present.
         let _ = self.try_kw("in");
         Ok(bs)
-    }
-
-    /// The rule-name `identifier`, with the parsec frame HS leaves when it is
-    /// missing.  `moduloE`'s failed `option` probe puts `Expect "\"(\""`
-    /// ahead of `identifier` at the name position
-    /// (Theory/Text/Parser/Rule.hs:127-131, via
-    /// `protoRuleInfo`); and when the failure sits DIRECTLY after the `rule`
-    /// letters (`kw_end_offset`), the item alternation's `formalComment`
-    /// retry — `try (many1 letter <* string "{*")` (Token.hs:377-378) —
-    /// re-consumes them and fails at the same offset, so its
-    /// `letter`/`"{*"` labels merge behind (bare `rule` at EOF, `rule!x`).
-    /// Callers outside the top-level item alternation (variants sub-rules)
-    /// pass `usize::MAX`: no formalComment alternative exists there.
-    fn rule_name_ident(&mut self, kw_end_offset: usize) -> Result<String, ParseError> {
-        if let Some(id) = self.lx.identifier() {
-            return Ok(id);
-        }
-        if let Some(e) = self.err_reserved_word() {
-            return Err(e);
-        }
-        self.skip_ws();
-        let mut labels: Vec<&str> = vec!["\"(\"", "identifier"];
-        if self.lx.pos().offset == kw_end_offset {
-            labels.push("letter");
-            labels.push("\"{*\"");
-        }
-        Err(self.err_expect(&labels))
     }
 
     /// The premise [`Parser::fact_list`] of a rule whose optional `let` block
@@ -6382,6 +6381,7 @@ impl<'a> Parser<'a> {
         // word-boundary check in `peek_symbol` keeps `diffuse(...)` an identifier
         // (function application), matching HS where `naryOpApp` handles it.
         if self.lx.peek_symbol("diff") {
+            let diff_start = self.save();
             self.skip_ws();
             for _ in 0.."diff".len() {
                 self.lx.bump();
@@ -6405,6 +6405,7 @@ impl<'a> Parser<'a> {
                     }
                 }
                 self.require_punct(")")?;
+                let diff_at = Location::from_positions(diff_start, self.lx.pos());
                 // `diffOp`'s three `fail`s, in HS's order
                 // (Theory/Text/Parser/Term.hs:126-132): the
                 // first one that fires is the one the user sees, so an argument
@@ -6412,14 +6413,27 @@ impl<'a> Parser<'a> {
                 // `fail` after the closing-paren lexeme, hence [`Self::err_fail`]
                 // at the post-whitespace position.
                 if ts.len() != 2 {
-                    // TODO: Better errors here.
-                    return Err(self.err_fail("the diff operator requires exactly 2 arguments"));
+                    return Err(ParseError::FunctionUsedWithWrongArity {
+                        name: "diff".to_string(),
+                        declared_arity: 2,
+                        used_arity: ts.len(),
+                        declared_at: None,
+                        used_at: diff_at,
+                    });
                 }
                 if eqn {
-                    return Err(self.err_fail("diff operator not allowed in equations"));
+                    return Err(ParseError::IllegalDiffOperator {
+                        diff_set: self.enable_diff,
+                        context: Some(ParseContext::Equation),
+                        at: diff_at,
+                    });
                 }
                 if !self.enable_diff {
-                    return Err(self.err_fail("diff operator found, but flag diff not set"));
+                    return Err(ParseError::IllegalDiffOperator {
+                        diff_set: false,
+                        context: None,
+                        at: diff_at,
+                    });
                 }
                 let mut args = ts.into_iter();
                 let a = args.next().unwrap();

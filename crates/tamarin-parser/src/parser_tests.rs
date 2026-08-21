@@ -6,13 +6,13 @@ use super::*;
 
 // ---- error-model helpers ----
 
-/// The `(line, column, message)` of the [`ParseError::Custom`] a `fail` site
-/// raises.  `Custom` is the bridge variant for the HS `fail`s this port
-/// reproduces verbatim, so the message text is the HS one and the position is
-/// the one `lexeme` left behind.
-fn custom_err(src: &str, flags: &[&str]) -> (u32, u32, String) {
-    match parse_theory(src, flags).unwrap_err() {
-        ParseError::Custom { message, at } => (at.line, at.col, message),
+fn reserved_keyword_err(src: &str) -> (u32, u32, String) {
+    match parse_theory(src, &[]).unwrap_err() {
+        ParseError::UsedReservedKeyword { found, at, .. } => (
+            at.line,
+            at.col,
+            format!("`{found}` is a reserved word and cannot be used as an identifier"),
+        ),
         other => panic!("unexpected variant: {other:?}"),
     }
 }
@@ -335,39 +335,39 @@ fn reserved_word_at_a_declaration_position() {
         (
             "theory D5\nbegin\n\nfunctions: diff/2\n\nend\n",
             4,
-            16,
+            12,
             "diff",
         ),
-        ("theory D9\nbegin\n\n#define diff\n\nend\n", 4, 13, "diff"),
+        ("theory D9\nbegin\n\n#define diff\n\nend\n", 4, 9, "diff"),
         (
             "theory R1\nbegin\n\nfunctions: let/2\n\nend\n",
             4,
-            15,
+            12,
             "let",
         ),
-        ("theory R2\nbegin\n\nfunctions: in/2\n\nend\n", 4, 14, "in"),
+        ("theory R2\nbegin\n\nfunctions: in/2\n\nend\n", 4, 12, "in"),
         (
             "theory R3\nbegin\n\nfunctions: rule/2\n\nend\n",
             4,
-            16,
+            12,
             "rule",
         ),
-        ("theory diff\nbegin\n\nend\n", 1, 12, "diff"),
+        ("theory diff\nbegin\n\nend\n", 1, 8, "diff"),
         (
             "theory R6\nbegin\n\nrule diff:\n  [ ] --> [ ]\n\nend\n",
             4,
-            10,
+            6,
             "diff",
         ),
         (
             "theory R7\nbegin\n\nlemma diff:\n  exists-trace \"Ex #i. F() @ #i\"\n\nend\n",
             4,
-            11,
+            7,
             "diff",
         ),
     ] {
         assert_eq!(
-            custom_err(src, &[]),
+            reserved_keyword_err(src),
             (
                 line,
                 col,
@@ -446,8 +446,33 @@ fn diff_probe(args: &str) -> String {
     )
 }
 
-fn diff_probe_err(args: &str, flags: &[&str]) -> (u32, u32, String) {
-    custom_err(&diff_probe(args), flags)
+fn diff_illegal_probe_err(args: &str, flags: &[&str]) -> (bool, Option<ParseContext>, (u32, u32)) {
+    match parse_theory(&diff_probe(args), flags).unwrap_err() {
+        ParseError::IllegalDiffOperator {
+            diff_set,
+            context,
+            at,
+        } => (diff_set, context, (at.line, at.col)),
+        other => panic!("unexpected variant: {other:?}"),
+    }
+}
+
+fn diff_arity_probe_err(args: &str, flags: &[&str]) -> (String, usize, usize, (u32, u32)) {
+    match parse_theory(&diff_probe(args), flags).unwrap_err() {
+        ParseError::FunctionUsedWithWrongArity {
+            name,
+            declared_arity,
+            used_arity,
+            used_at,
+            ..
+        } => (
+            name,
+            declared_arity,
+            used_arity,
+            (used_at.line, used_at.col),
+        ),
+        other => panic!("unexpected variant: {other:?}"),
+    }
 }
 
 /// HS `diffOp` (Theory/Text/Parser/Term.hs:123-135) parses `diff(...)`
@@ -460,12 +485,8 @@ fn diff_probe_err(args: &str, flags: &[&str]) -> (u32, u32, String) {
 #[test]
 fn diff_operator_without_the_diff_flag_is_a_parse_error() {
     assert_eq!(
-        diff_probe_err("(~a*~b), ~a", &[]),
-        (
-            7,
-            65,
-            "diff operator found, but flag diff not set".to_string()
-        )
+        diff_illegal_probe_err("(~a*~b), ~a", &[]),
+        (false, None, (7, 47))
     );
 
     // The arity check runs FIRST and hides the flag diagnostic, with or
@@ -473,14 +494,14 @@ fn diff_operator_without_the_diff_flag_is_a_parse_error() {
     // parses the empty and the over-long list happily, so all three counts
     // reach the same `fail`.
     for args in ["~a", "~a, ~b, ~a", ""] {
-        let expected_col = (47 + args.len() + 7) as u32;
         for flags in [&[][..], &["diff"][..]] {
             assert_eq!(
-                diff_probe_err(args, flags),
+                diff_arity_probe_err(args, flags),
                 (
-                    7,
-                    expected_col,
-                    "the diff operator requires exactly 2 arguments".to_string()
+                    "diff".to_string(),
+                    2,
+                    args.split(',').filter(|arg| !arg.is_empty()).count(),
+                    (7, 47),
                 ),
                 "args = {args:?}, flags = {flags:?}"
             );
@@ -490,12 +511,8 @@ fn diff_operator_without_the_diff_flag_is_a_parse_error() {
     // Nested: the INNER `diff` fails first, and its position (after the inner
     // closing paren, at the outer comma) is the one reported.
     assert_eq!(
-        diff_probe_err("diff(~a, ~b), ~b", &[]),
-        (
-            7,
-            64,
-            "diff operator found, but flag diff not set".to_string()
-        )
+        diff_illegal_probe_err("diff(~a, ~b), ~b", &[]),
+        (false, None, (7, 52))
     );
 }
 
@@ -505,12 +522,27 @@ fn diff_operator_without_the_diff_flag_is_a_parse_error() {
 fn diff_operator_is_rejected_in_equations() {
     for flags in [&[][..], &["diff"][..]] {
         assert_eq!(
-            custom_err(
+            match parse_theory(
                 "theory D\nbegin\n\nfunctions: f/1, g/1\nequations: diff(x, x) = x\n\n\
                  rule RA:\n  [ Fr(~a) ] --> [ Out( ~a ) ]\n\nend\n",
                 flags,
+            )
+            .unwrap_err()
+            {
+                ParseError::IllegalDiffOperator {
+                    diff_set,
+                    context,
+                    at,
+                } => {
+                    (diff_set, context, (at.line, at.col))
+                }
+                other => panic!("unexpected variant: {other:?}"),
+            },
+            (
+                flags.contains(&"diff"),
+                Some(ParseContext::Equation),
+                (5, 12)
             ),
-            (5, 23, "diff operator not allowed in equations".to_string()),
             "flags = {flags:?}"
         );
     }
