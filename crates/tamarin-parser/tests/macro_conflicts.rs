@@ -179,21 +179,6 @@ fn macro_arguments_differing_in_sort_or_index_are_distinct() {
     }
 }
 
-/// The parsec `fail`s stay recoverable errors — no abort is raised.
-#[test]
-fn parsec_failures_are_not_aborts() {
-    for src in [
-        "theory MacroCF begin\nfunctions: f/1\nmacros: f(x) = x\nend\n",
-        "theory MacroCF begin\nmacros: m(x) = \nend\n",
-    ] {
-        let e = parse_theory(src, &[]).expect_err("must fail to parse");
-        assert!(
-            !matches!(&e, ParseError::Abort { .. }),
-            "case {src:?} aborted: {e:?}"
-        );
-    }
-}
-
 /// A macro with no body raises no rejection of its own: `term` claims the
 /// next identifier as the body variable, and that identifier is the theory's
 /// `end`.  The item alternation then runs out of input, so the failure is the

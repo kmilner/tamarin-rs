@@ -867,7 +867,7 @@ impl<'a> Parser<'a> {
     ) -> ParseError {
         let opening = opening.into();
         let opening_at = Location::location_of(&Some(&opening), opening_at);
-        ParseError::UnterminatedDelimiter {
+        ParseError::UnclosedDelimiter {
             opening,
             opening_at,
             found_at,
@@ -2194,7 +2194,22 @@ impl<'a> Parser<'a> {
         let mut v = Vec::new();
         if !self.try_punct(close) {
             loop {
-                v.push(elem(self)?);
+                self.skip_ws();
+                let elem_start = self.save();
+                match elem(self) {
+                    Ok(item) => v.push(item),
+                    Err(_error) if self.save() == elem_start => {
+                        let (found, found_at) = self.found_token();
+                        return Err(self.err_unterminated_delimiter(
+                            opening,
+                            opening_at,
+                            found_at,
+                            found,
+                            vec![close.into()],
+                        ));
+                    }
+                    Err(error) => return Err(error),
+                }
                 if !self.try_punct(",") {
                     break;
                 }
@@ -3152,7 +3167,6 @@ impl<'a> Parser<'a> {
             Ok(msg)
         })() {
             Ok(msg) => return Ok((None, msg)),
-            Err(e @ ParseError::Abort { .. }) => return Err(e),
             Err(e) => e,
         };
         self.restore(probe);
@@ -3171,9 +3185,6 @@ impl<'a> Parser<'a> {
     /// expected set (when both carry one).  A GHC `error` (`Abort`) in the
     /// second branch escapes unmerged.
     fn merge_alt_errors(e1: ParseError, e2: ParseError) -> ParseError {
-        if matches!(e2, ParseError::Abort { .. }) {
-            return e2;
-        }
         match e2.location().start.cmp(&e1.location().start) {
             std::cmp::Ordering::Greater => e2,
             std::cmp::Ordering::Less => e1,
@@ -3556,7 +3567,7 @@ impl<'a> Parser<'a> {
                         match self.lx.peek() {
                             None => {
                                 let (found, found_at) = self.found_token();
-                                return Err(ParseError::UnterminatedDelimiter {
+                                return Err(ParseError::UnclosedDelimiter {
                                     found,
                                     expected: vec![r.to_string()],
                                     opening: l.to_string(),
@@ -3570,7 +3581,7 @@ impl<'a> Parser<'a> {
                             Some(ch) if ch == *r || ch == *l => {
                                 if ch != *r {
                                     let (found, found_at) = self.found_token();
-                                    return Err(ParseError::UnterminatedDelimiter {
+                                    return Err(ParseError::UnclosedDelimiter {
                                         found,
                                         expected: vec![r.to_string()],
                                         opening: l.to_string(),

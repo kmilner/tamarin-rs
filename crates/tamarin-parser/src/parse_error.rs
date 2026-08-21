@@ -252,7 +252,7 @@ pub enum ParseError {
         expected: Vec<String>,
         at: Location,
     },
-    UnterminatedDelimiter {
+    UnclosedDelimiter {
         opening: String,
         opening_at: Location,
         found: Option<String>,
@@ -343,19 +343,6 @@ pub enum ParseError {
         expected: Vec<String>,
         at: Location,
     },
-    /// Bridge for parser sites not yet converted to a dedicated variant: a
-    /// preformatted message at a location.
-    Custom {
-        message: String,
-        at: Location,
-    },
-    /// Bridge for the rejections HS raises as GHC `error`s inside parser
-    /// actions (`macro`'s and `equations`' rejections): not a backtrackable
-    /// parse failure — term-level backtracking propagates it verbatim.
-    Abort {
-        message: String,
-        at: Location,
-    },
 }
 
 #[derive(Debug, Clone)]
@@ -391,7 +378,7 @@ impl ParseError {
             | ParseError::TrailingGarbageInTermString { expected, .. }
             | ParseError::Expected { expected, .. }
             | ParseError::UsedReservedKeyword { expected, .. }
-            | ParseError::UnterminatedDelimiter { expected, .. } => {
+            | ParseError::UnclosedDelimiter { expected, .. } => {
                 let exp = exp.into();
                 if !expected.contains(&exp) {
                     expected.push(exp);
@@ -404,9 +391,7 @@ impl ParseError {
             | ParseError::FactArityMismatch { .. }
             | ParseError::UnexpectedTrailingInput { .. }
             | ParseError::UnknownItem { .. }
-            | ParseError::Custom { .. }
             | ParseError::ConflictingDeclarations { .. }
-            | ParseError::Abort { .. }
             | ParseError::IoError { .. }
             | ParseError::UsedReservedBuiltin { .. }
             | ParseError::FunctionUsedWithWrongArity { .. }
@@ -448,13 +433,11 @@ impl ParseError {
             | ParseError::TrailingGarbageInTermString { at, .. }
             | ParseError::UnknownItem { at, .. }
             | ParseError::Expected { at, .. }
-            | ParseError::Custom { at, .. }
             | ParseError::UsedReservedBuiltin { at, .. }
-            | ParseError::Abort { at, .. }
             | ParseError::UndeclaredFunction { at, .. }
             | ParseError::MalformedHexColor { at, .. }
             | ParseError::WrongArityforACFunctionDeclaration { at, .. }
-            | ParseError::UnterminatedDelimiter { found_at: at, .. } => at,
+            | ParseError::UnclosedDelimiter { found_at: at, .. } => at,
             ParseError::DuplicateMacroArg { second_at, .. } => second_at,
             ParseError::ConflictingDeclarations { second_at, .. } => second_at,
             ParseError::FunctionUsedWithWrongArity { used_at, .. } => used_at,
@@ -484,7 +467,7 @@ impl ParseError {
             | ParseError::TrailingGarbageInFormulaString { found, .. }
             | ParseError::TrailingGarbageInTermString { found, .. }
             | ParseError::Expected { found, .. }
-            | ParseError::UnterminatedDelimiter { found, .. } => found,
+            | ParseError::UnclosedDelimiter { found, .. } => found,
             ParseError::UnknownItem {
                 unknown_item: item, ..
             } => Some(item),
@@ -495,15 +478,13 @@ impl ParseError {
             ParseError::IllegalDiffOperator { .. }
             | ParseError::FreshFactCannotBePersistent { .. }
             | ParseError::IoError { .. }
-            | ParseError::Custom { .. }
             | ParseError::MalformedHexColor { .. }
             | ParseError::DuplicateMacroArg { .. }
             | ParseError::WrongArityforACFunctionDeclaration { .. }
             | ParseError::UsedReservedBuiltin { .. }
             | ParseError::UndeclaredFunction { .. }
             | ParseError::ConflictingDeclarations { .. }
-            | ParseError::FunctionUsedWithWrongArity { .. }
-            | ParseError::Abort { .. } => None,
+            | ParseError::FunctionUsedWithWrongArity { .. } => None,
         }
     }
 
@@ -530,7 +511,7 @@ impl ParseError {
             | ParseError::TrailingGarbageInFormulaString { found, .. }
             | ParseError::TrailingGarbageInTermString { found, .. }
             | ParseError::Expected { found, .. }
-            | ParseError::UnterminatedDelimiter { found, .. } => found.as_deref(),
+            | ParseError::UnclosedDelimiter { found, .. } => found.as_deref(),
             ParseError::UnknownItem {
                 unknown_item: item, ..
             } => Some(item.as_str()),
@@ -541,15 +522,13 @@ impl ParseError {
             ParseError::IllegalDiffOperator { .. }
             | ParseError::FreshFactCannotBePersistent { .. }
             | ParseError::IoError { .. }
-            | ParseError::Custom { .. }
             | ParseError::DuplicateMacroArg { .. }
             | ParseError::WrongArityforACFunctionDeclaration { .. }
             | ParseError::MalformedHexColor { .. }
             | ParseError::FunctionUsedWithWrongArity { .. }
             | ParseError::UndeclaredFunction { .. }
             | ParseError::UsedReservedBuiltin { .. }
-            | ParseError::ConflictingDeclarations { .. }
-            | ParseError::Abort { .. } => None,
+            | ParseError::ConflictingDeclarations { .. } => None,
         }
     }
 
@@ -577,7 +556,7 @@ impl ParseError {
             | ParseError::TrailingGarbageInTermString { expected, .. }
             | ParseError::UsedReservedKeyword { expected, .. }
             | ParseError::Expected { expected, .. }
-            | ParseError::UnterminatedDelimiter { expected, .. } => Some(expected.clone()),
+            | ParseError::UnclosedDelimiter { expected, .. } => Some(expected.clone()),
             ParseError::UnknownItem {
                 item_kind: kind, ..
             } => Some(kind.expected().into_iter().map(|s| s.to_string()).collect()),
@@ -586,8 +565,6 @@ impl ParseError {
             | ParseError::FreshFactCannotBePersistent { .. }
             | ParseError::FactArityMismatch { .. }
             | ParseError::UnexpectedTrailingInput { .. }
-            | ParseError::Custom { .. }
-            | ParseError::Abort { .. }
             | ParseError::IoError { .. }
             | ParseError::DuplicateMacroArg { .. }
             | ParseError::FunctionUsedWithWrongArity { .. }
@@ -636,7 +613,7 @@ impl ParseError {
             ParseError::ExpectedPreprocessorDirective { .. } => "Expected preprocessor directive",
             ParseError::ExpectedHexColor { .. } => "Expected hex color",
             ParseError::ExpectedQuotedString { .. } => "Expected quoted string",
-            ParseError::UnterminatedDelimiter { .. } => "Unterminated delimiter",
+            ParseError::UnclosedDelimiter { .. } => "Unterminated delimiter",
             ParseError::UnknownItem {
                 unknown_item,
                 item_kind,
@@ -666,8 +643,6 @@ impl ParseError {
             }
             ParseError::TrailingGarbageInTermString { .. } => "Trailing garbage in term string",
             ParseError::Expected { .. } => "Unexpected input",
-            ParseError::Custom { .. } => "Parse error",
-            ParseError::Abort { .. } => "Invalid input",
             ParseError::ConflictingDeclarations { second_context, .. } => {
                 return Cow::Owned(format!(
                     "Conflicting {} declaration",
@@ -699,7 +674,7 @@ impl ParseError {
                 message: self.description().to_string(),
                 is_primary: true,
             }],
-            ParseError::UnterminatedDelimiter {
+            ParseError::UnclosedDelimiter {
                 opening,
                 opening_at,
                 found,
@@ -815,13 +790,6 @@ impl ParseError {
                     is_primary: true,
                 }]
             }
-            ParseError::Custom { message, at } | ParseError::Abort { message, at } => {
-                vec![ParseErrorLabel {
-                    at: *at,
-                    message: message.clone(),
-                    is_primary: true,
-                }]
-            }
             _ => vec![ParseErrorLabel {
                 at: *self.location(),
                 message: self.description().to_string(),
@@ -932,7 +900,7 @@ impl ParseError {
                     expected,
                 )]
             }
-            ParseError::UnterminatedDelimiter {
+            ParseError::UnclosedDelimiter {
                 opening,
                 opening_at,
                 found,
@@ -989,9 +957,6 @@ impl ParseError {
                     Some(found) => format!("expected {list}, but found `{found}`"),
                     None => format!("expected {list}"),
                 }]
-            }
-            ParseError::Custom { message, .. } | ParseError::Abort { message, .. } => {
-                vec![message.clone()]
             }
             ParseError::ConflictingDeclarations { second_context, .. } => {
                 let tail = match second_context {

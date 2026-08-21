@@ -773,6 +773,24 @@ fn comment_handling() {
 }
 
 #[test]
+fn empty_unterminated_delimiter_reports_the_missing_closer() {
+    let error = parse_theory("theory T begin\nmacros: m(\n", &[]).unwrap_err();
+    assert!(
+        matches!(error, ParseError::UnclosedDelimiter { .. }),
+        "expected the missing macro-argument delimiter, got {error:?}"
+    );
+}
+
+#[test]
+fn empty_rule_premise_list_reports_the_unclosed_delimiter() {
+    let error = parse_theory("theory T begin rule x: [ --> [] end", &[]).unwrap_err();
+    assert!(
+        matches!(error, ParseError::UnclosedDelimiter { .. }),
+        "expected the missing rule premise-list delimiter, got {error:?}"
+    );
+}
+
+#[test]
 fn term_application() {
     // Structural mode ([`parse_term_str`]'s): a theory parse resolves the
     // head through `lookup_arity` and an undeclared `h` would backtrack

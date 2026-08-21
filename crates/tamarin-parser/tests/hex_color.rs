@@ -189,7 +189,7 @@ fn quoted_hash_without_digits_expects_a_digit() {
 #[test]
 fn quoted_bad_tail_is_an_unterminated_quote() {
     let e = parse_theory(&color_theory("'ff00zz'"), &[]).expect_err("must fail to parse");
-    let ParseError::UnterminatedDelimiter {
+    let ParseError::UnclosedDelimiter {
         opening,
         opening_at,
         found,
