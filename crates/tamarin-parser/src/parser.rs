@@ -767,17 +767,6 @@ pub struct Parser<'a> {
     /// Everywhere else HS's literal parser has no `=` alternative, so a `=`
     /// starts no term and falls through to the no-alternative error.
     allow_pat: bool,
-    /// The `expecting` labels a completed top-level item leaves behind at the
-    /// byte offset it stopped at, and that offset.
-    ///
-    /// parsec carries the error of a *consumed-ok* parse forward and merges it
-    /// into whatever the continuation reports at the same position, so an
-    /// item's trailing optional parsers (`option [] $ symbol "variants" …` at
-    /// the end of `protoRule`, Theory/Text/Parser/Rule.hs:134; `commaSep1`'s
-    /// `comma`) prepend
-    /// their labels to the next item-position error.  Consumed by
-    /// [`Parser::item_position_error`].
-    item_hangover: Option<(usize, &'static [&'static str])>,
     /// First occurrence of each protocol-rule name parsed so far, in item
     /// order — the lookup set HS `lookupOpenProtoRule` (OpenTheory.hs:679-682,
     /// a `find` over `theoryRules`, hence first occurrence wins) consults when
@@ -853,7 +842,6 @@ impl<'a> Parser<'a> {
             resolve_prefix_apps: true,
             sapic_var_types: false,
             allow_pat: false,
-            item_hangover: None,
             seen_rules: Vec::new(),
             seen_restriction_names: Vec::new(),
         }
@@ -1007,15 +995,6 @@ impl<'a> Parser<'a> {
             at,
             when_parsing: self.current_parse_context.get(),
         }
-    }
-
-    /// Record the `expecting` labels the item just parsed leaves at the offset
-    /// it stopped at (see [`Parser::item_hangover`]).  Called after the trailing
-    /// optional parser that produced them, so the current position IS that
-    /// offset.
-    fn set_item_hangover(&mut self, labels: &'static [&'static str]) {
-        self.skip_ws();
-        self.item_hangover = Some((self.lx.pos().offset, labels));
     }
 
     fn save(&self) -> Pos {
@@ -1293,12 +1272,6 @@ impl<'a> Parser<'a> {
     fn theory_item(&mut self) -> Result<TheoryItem, ParseError> {
         let _ctx = self.enter_parse_context(ParseContext::TheoryItem);
         self.skip_ws();
-        // Only the item immediately preceding an item-position error prepends
-        // its trailing labels, so each new item starts from a clean slate —
-        // but when NO alternative matches, the error position IS the previous
-        // item's stop position and its labels apply (offset-gated), so the
-        // fallthrough below restores the snapshot.
-        let prev_item_hangover = self.item_hangover.take();
 
         // Try preprocessor directives (start with `#`).
         if let Some(item) = self.try_preproc()? {
@@ -1371,16 +1344,6 @@ impl<'a> Parser<'a> {
             return self.process_def();
         }
 
-        // Accountability: `lemma X [accountability_attrs] ...` is matched by lemma_item.
-        // A lemmaAcc requires >=1 case-test ident before `accounts for` (HS
-        // `commaSep1`, Theory/Text/Parser/Accountability.hs:30-39, see line 36);
-        // the zero-ident form falls back to
-        // a normal lemma.
-
-        // No item alternative matched: reproduce parsec's merged item-position
-        // error (`addItems` `asum` <* `symbol_ "end"`), including the labels
-        // the previous item left at exactly this offset.
-        self.item_hangover = prev_item_hangover;
         Err(self.err_expect(TOP_LEVEL_ITEM_EXPECTS))
     }
 
@@ -1668,8 +1631,6 @@ impl<'a> Parser<'a> {
                 break;
             }
         }
-        // `commaSep1`'s trailing `comma` (Token.hs:353-355) fails here.
-        self.set_item_hangover(&["\",\""]);
         Ok(TheoryItem::Builtins(builtins))
     }
 
@@ -2103,24 +2064,13 @@ impl<'a> Parser<'a> {
         }
         self.require_punct(":")?;
         let mut decls = Vec::new();
-        let mut had_attrs;
         loop {
-            let (f, attrs) = self.function_decl()?;
-            had_attrs = attrs;
+            let f = self.function_decl()?;
             decls.push(f);
             if !self.try_punct(",") {
                 break;
             }
         }
-        // Two of the last declaration's parsers stopped here without consuming:
-        // `option [] $ list functionAttribute`
-        // (Theory/Text/Parser/Signature.hs:187), unless it
-        // did consume a `[…]`, and `commaSep1`'s trailing `comma`.
-        self.set_item_hangover(if had_attrs {
-            &["\",\""]
-        } else {
-            &["\"[\"", "\",\""]
-        });
         Ok(TheoryItem::Functions(decls))
     }
 
@@ -2352,7 +2302,7 @@ impl<'a> Parser<'a> {
     /// consumed a `[`; the caller needs it for the item hangover, and the two
     /// `fail`s below need it because parsec merges the `Expect "\"[\""` that
     /// `option [] $ list functionAttribute` leaves behind into them.
-    fn function_decl(&mut self) -> Result<(FunctionDecl, bool), ParseError> {
+    fn function_decl(&mut self) -> Result<FunctionDecl, ParseError> {
         self.skip_ws();
         let start = self.lx.pos();
         let name_start = start.offset;
@@ -2441,20 +2391,17 @@ impl<'a> Parser<'a> {
                 // requested attributes is what keeps `functions: fst/1
                 // [destructor]` printing as `function: fst (Any) : Any` in the
                 // open theory's typing lines (TheoryObject.hs:820-838).
-                return Ok((
-                    FunctionDecl {
-                        name,
-                        arg_types,
-                        out_type,
-                        private: prev.private,
-                        destructor: prev.destructor,
-                        ac: false,
-                        ndc: prev.ndc,
-                        ndc_diff: prev.ndc_diff,
-                        location,
-                    },
-                    had_attrs,
-                ));
+                return Ok(FunctionDecl {
+                    name,
+                    arg_types,
+                    out_type,
+                    private: prev.private,
+                    destructor: prev.destructor,
+                    ac: false,
+                    ndc: prev.ndc,
+                    ndc_diff: prev.ndc_diff,
+                    location,
+                });
             }
         }
         if ac {
@@ -2479,20 +2426,17 @@ impl<'a> Parser<'a> {
             // a set insert.
             self.insert_fun_sym(&name, requested);
         }
-        Ok((
-            FunctionDecl {
-                name,
-                arg_types,
-                out_type,
-                private,
-                destructor,
-                ac,
-                ndc,
-                ndc_diff,
-                location,
-            },
-            had_attrs,
-        ))
+        Ok(FunctionDecl {
+            name,
+            arg_types,
+            out_type,
+            private,
+            destructor,
+            ac,
+            ndc,
+            ndc_diff,
+            location,
+        })
     }
 
     /// One function attribute inside the `[...]` list.  Port of HS
@@ -2586,9 +2530,6 @@ impl<'a> Parser<'a> {
                 break;
             }
         }
-        // `commaSep1`'s trailing `comma` fails at the last right-hand side's
-        // stop position, ahead of the next item's labels.
-        self.set_item_hangover(&["\",\""]);
         Ok(TheoryItem::Equations { convergent, eqs })
     }
 
@@ -2666,10 +2607,6 @@ impl<'a> Parser<'a> {
                 break;
             }
         }
-        // `commaSep`'s trailing `comma` fails at the last body's stop
-        // position, ahead of the next item's labels — together with the
-        // body term's own hangovers (see [`Parser::term_carry`]).
-        self.set_item_hangover(&["\",\""]);
         Ok(TheoryItem::Macros(ms))
     }
 
@@ -2939,15 +2876,16 @@ impl<'a> Parser<'a> {
         // is not tested
         // here — the `c`/`d` split happens when the caller translates the
         // parser rule into an `IntrRuleAC`.
-        if r.modulo.as_deref() == Some("AC") {
-            Ok(TheoryItem::IntrRule(r))
-        } else {
-            // HS `addItems`'s rule alternative runs `liftedAddProtoRule` on
-            // each parsed rule (Theory/Text/Parser.hs:283-285) — intruder
-            // rules instead go through `addIntrRuleACs`, which `nub`-appends
-            // without any name guard (OpenTheory.hs:751-753).
-            self.guard_duplicate_rule(&r)?;
-            Ok(TheoryItem::Rule(r))
+        match r.modulo {
+            ModuloKind::AC => Ok(TheoryItem::IntrRule(r)),
+            ModuloKind::E => {
+                // HS `addItems`'s rule alternative runs `liftedAddProtoRule` on
+                // each parsed rule (Theory/Text/Parser.hs:283-285) — intruder
+                // rules instead go through `addIntrRuleACs`, which `nub`-appends
+                // without any name guard (OpenTheory.hs:751-753).
+                self.guard_duplicate_rule(&r)?;
+                Ok(TheoryItem::Rule(r))
+            }
         }
     }
 
@@ -3149,10 +3087,11 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_rule(&mut self) -> Result<Rule, ParseError> {
+        let _ctx = self.enter_parse_context(ParseContext::Rule);
         self.skip_ws();
         let start = self.lx.pos();
         self.require_kw("rule")?;
-        let modulo = self.try_modulo();
+        let modulo = self.try_modulo()?;
         let name = self.ident().map_err(|mut e| {
             if modulo.is_none() {
                 e.add_expected("(");
@@ -3185,18 +3124,6 @@ impl<'a> Parser<'a> {
             }
             vs
         } else {
-            // HS `option [] $ symbol "variants" *> commaSep1 protoRuleAC`
-            // (Theory/Text/Parser/Rule.hs:134) stops here without consuming,
-            // leaving its
-            // `Expect "\"variants\""` for the next error raised at this offset.
-            // Only `protoRule` has this trailing block; `diffRule`
-            // (Theory/Text/Parser/Rule.hs:120)
-            // ends in an `optionMaybe (symbol "left" *> …)` instead, so a diff
-            // theory's rules leave a different label that this port does not
-            // track.
-            if !self.is_diff {
-                self.set_item_hangover(&["\"variants\""]);
-            }
             vec![]
         };
         // Optional `left ... right ...` for diff rules
@@ -3208,6 +3135,7 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
+        let modulo = modulo.unwrap_or(ModuloKind::E);
         let location = Location::from_positions(start, end);
         Ok(Rule {
             name,
@@ -3225,6 +3153,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_rule_ac(&mut self) -> Result<Rule, ParseError> {
+        let _ctxt = self.enter_parse_context(ParseContext::Rule);
         let start = self.lx.pos();
         self.require_kw("rule")?;
         // HS `protoRuleACInfo`/`intrRule`
@@ -3233,7 +3162,7 @@ impl<'a> Parser<'a> {
         // This port relaxes that: `try_modulo` returns `None` when the
         // `(modulo AC)` head is absent and parsing proceeds. (More lenient than
         // Haskell, but still accepts all valid Haskell input.)
-        let modulo = self.try_modulo();
+        let modulo = self.try_modulo()?.unwrap_or(ModuloKind::E);
         let name = self.ident()?;
         let had_attributes = self.peek_punct("[");
         let attributes = self.rule_attributes()?;
@@ -3262,27 +3191,31 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn try_modulo(&mut self) -> Option<String> {
-        let save = self.save();
+    fn try_modulo(&mut self) -> Result<Option<ModuloKind>, ParseError> {
+        let start = self.save();
         if !self.try_punct("(") {
-            return None;
+            return Ok(None);
         }
-        if !self.try_kw("modulo") {
-            self.restore(save);
-            return None;
-        }
-        let id = match self.ident() {
-            Ok(s) => s,
-            Err(_) => {
-                self.restore(save);
-                return None;
+        self.require_kw("modulo")?;
+        let pre_modulo = self.save();
+        let id = self.ident()?;
+        let modulo = match id.as_str() {
+            "AC" => ModuloKind::AC,
+            "E" => ModuloKind::E,
+            other => {
+                let found_at = Location::location_of(&Some(other), pre_modulo);
+                return Err(ParseError::UnknownItem {
+                    item_kind: ParseContext::ModuloKind,
+                    unknown_item: other.to_string(),
+                    at: found_at,
+                });
             }
         };
-        if !self.try_punct(")") {
-            self.restore(save);
-            return None;
-        }
-        Some(id)
+        self.require_punct(")").map_err(|_| {
+            let (found, found_at) = self.found_token_until(|c| c.is_whitespace() || c == ')');
+            self.err_unterminated_delimiter("(", start, found_at, found, vec![")".into()])
+        })?;
+        Ok(Some(modulo))
     }
 
     /// The `colon` that closes a rule header (HS `protoRuleInfo` /
@@ -3642,7 +3575,7 @@ impl<'a> Parser<'a> {
         // Look ahead to decide between a normal lemma and an accountability lemma.
         // Accountability lemmas have the body `accounts for [..]` after the name.
         self.require_kw("lemma")?;
-        let _ = self.try_modulo();
+        let _ = self.try_modulo()?;
         let name = self.ident()?;
         let attrs = self.lemma_attributes()?;
         self.require_punct(":")?;
@@ -3720,6 +3653,14 @@ impl<'a> Parser<'a> {
                 let _ = self.ident();
                 idents.push(id);
                 if !self.try_punct(",") {
+                    // Normal lemmas use hyphenated trace quantifiers
+                    // (`all-traces` / `exists-trace`). If we just consumed
+                    // their first identifier chunk (`all` / `exists`) and the
+                    // next byte is `-`, this is not an accountability body.
+                    if self.lx.peek() == Some('-') {
+                        self.restore(save);
+                        return Ok(None);
+                    }
                     break;
                 }
             } else {
@@ -3736,9 +3677,12 @@ impl<'a> Parser<'a> {
             self.restore(save);
             return Ok(None);
         }
+        // Once at least one case-test identifier was consumed, stay committed
+        // to the accountability-lemma shape: a misspelled/missing account(s)
+        // keyword should report that keyword expectation directly rather than
+        // backtracking into normal-lemma trace-quantifier parsing.
         if !(self.try_kw("accounts") || self.try_kw("account")) {
-            self.restore(save);
-            return Ok(None);
+            return Err(self.err_expect(&["accounts", "account"]));
         }
         self.require_kw("for")?;
         let formula = self.double_quoted_formula()?;
@@ -4711,7 +4655,7 @@ impl<'a> Parser<'a> {
         self.restore(after_lhs);
         let mut labels: Vec<&str> = vec!["subterm predicate"];
         if self.sig_enable_mset {
-            labels.push("multiset comparisson");
+            labels.push("multiset comparison");
         }
         labels.push("term equality");
         self.err_expect(&labels)
@@ -5306,6 +5250,9 @@ impl<'a> Parser<'a> {
                 if !self.enable_diff {
                     return Err(ParseError::IllegalDiffOperator {
                         diff_set: false,
+                        // Context is `None` on purpose. Context being `Some`
+                        // indicates that `diff` is not allowed in the current
+                        // context, but here it is allowed, just not enabled.
                         context: None,
                         at: diff_at,
                     });

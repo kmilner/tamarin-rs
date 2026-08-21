@@ -337,10 +337,16 @@ impl RestrictionAttr {
 // Rules
 // =============================================================================
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum ModuloKind {
+    AC,
+    E,
+}
+
 #[derive(Debug, Clone)]
 pub struct Rule {
     pub name: String,
-    pub modulo: Option<String>, // E or AC
+    pub modulo: ModuloKind,
     pub attributes: Vec<RuleAttr>,
     pub let_block: Vec<LetBinding>,
     pub premises: Vec<Fact>,

@@ -66,6 +66,7 @@ impl From<Pos> for Location {
 /// An enum to give `[ParseError]` variants context of where the error occured
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Copy)]
 pub enum ParseContext {
+    ModuloKind,
     TermAtom,
     FormulaAtom,
     ExportItem,
@@ -133,6 +134,7 @@ impl ParseContext {
             ParseContext::TermAtom => "atomic term",
             ParseContext::FormulaAtom => "atomic formula",
             ParseContext::ExportItem => "export item",
+            ParseContext::ModuloKind => "modulo annotation",
         }
     }
 
@@ -168,6 +170,7 @@ impl ParseContext {
             ParseContext::TermAtom => "atomic terms",
             ParseContext::FormulaAtom => "atomic formulas",
             ParseContext::ExportItem => "export items",
+            ParseContext::ModuloKind => "modulo annotations",
         }
     }
 
@@ -203,6 +206,7 @@ impl ParseContext {
             ParseContext::TermAtom => "an atomic term",
             ParseContext::FormulaAtom => "an atomic formula",
             ParseContext::ExportItem => "an export item",
+            ParseContext::ModuloKind => "a modulo annotation",
         }
     }
 
@@ -243,6 +247,7 @@ impl ParseContext {
             | ParseContext::FormulaAtom
             | ParseContext::ExportItem
             | ParseContext::IncludedFile(_) => vec![],
+            ParseContext::ModuloKind => vec!["AC", "E"],
         }
     }
 }

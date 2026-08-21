@@ -1094,7 +1094,7 @@ mod tests {
 
         let stub = |name: &str| p::Rule {
             name: name.to_string(),
-            modulo: None,
+            modulo: p::ModuloKind::E,
             attributes: vec![],
             let_block: vec![],
             premises: vec![],

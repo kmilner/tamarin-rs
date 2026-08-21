@@ -3231,7 +3231,7 @@ pub fn proto_rule_to_parsed(r: &crate::rule::ProtoRuleE) -> p::Rule {
             crate::rule::ProtoRuleName::Stand(s) => s.to_string(),
             crate::rule::ProtoRuleName::Fresh => "Fresh".to_string(),
         },
-        modulo: None,
+        modulo: p::ModuloKind::E,
         attributes: crate::mult_restricted::surface_attrs(&r.info.attributes),
         let_block: Vec::new(),
         premises: lnfacts_to_parser(&r.premises),
@@ -4607,7 +4607,7 @@ mod manual_rule_variants_tests {
     fn parsed_rule(name: &str) -> p::TheoryItem {
         p::TheoryItem::Rule(p::Rule {
             name: name.to_string(),
-            modulo: None,
+            modulo: p::ModuloKind::E,
             attributes: vec![],
             let_block: vec![],
             premises: vec![],
