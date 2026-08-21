@@ -492,7 +492,18 @@ impl ParseError {
             ParseError::FreshFactCannotBePersistent { .. } => "Fresh fact cannot be persistent",
             ParseError::FactArityMismatch { .. } => "Fact arity mismatch",
             ParseError::IoError { .. } => "I/O error",
-            ParseError::Expected { .. } => "Unexpected input",
+            ParseError::Expected {
+                when_parsing: None, ..
+            } => "Unexpected input",
+            ParseError::Expected {
+                when_parsing: Some(context),
+                ..
+            } => {
+                return Cow::Owned(format!(
+                    "Unexpected input when parsing {}",
+                    context.as_str()
+                ))
+            }
             ParseError::ConflictingDeclarations { second_context, .. } => {
                 return Cow::Owned(format!(
                     "Conflicting {} declaration",
