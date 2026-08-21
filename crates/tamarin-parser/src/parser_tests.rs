@@ -76,13 +76,6 @@ fn non_binary_ac_declaration_is_a_parse_error() {
     assert!(parse_theory("theory AC begin\n\nfunctions: f/2 [AC]\n\nend\n", &[]).is_ok());
 }
 
-/// A `theory <NAME> begin … end` around a two-line body, the shape of the
-/// pinned `builtins:`/`functions:` probes: the body occupies lines 3 and 4, so
-/// every diagnostic below lands on `end` at line 6, column 1.
-fn decl_probe_err(name: &str, body: &str) -> (u32, u32, String) {
-    custom_err(&format!("theory {name} begin\n\n{body}\n\nend\n"), &[])
-}
-
 /// HS `function`'s check (1) (Theory/Text/Parser/Signature.hs:200-209): a
 /// name an enabled `builtins:` item reserved must be re-declared at exactly
 /// the builtin's `(arity, Privacy, Constructability, NDCstate)` tuple.  It
@@ -258,66 +251,48 @@ fn conflicting_arities_is_a_parse_error() {
 #[test]
 fn builtins_item_rejects_conflicting_functions_and_macros() {
     assert_eq!(
-        decl_probe_err("P17", "functions: h/2\nbuiltins: hashing"),
-        (
-            6,
-            1,
-            "Builtin 'hashing' conflicts with existing function(s) (same name, different \
-             arity or function options): [\"h\"]. Please remove these function definitions \
-             or use different names."
-                .to_string()
-        )
+        conflict_err(
+            "theory P17 begin\n\nfunctions: h/2\nbuiltins: hashing\n\nend\n",
+            ParseContext::Function,
+            ParseContext::Function,
+        ),
+        ("h".to_string(), Some((3, 12)), (4, 11))
     );
     assert_eq!(
-        decl_probe_err("P28", "macros: h(x) = x\nbuiltins: hashing"),
-        (
-            6,
-            1,
-            "Builtin 'hashing' conflicts with existing macro '[\"h\"]'".to_string()
-        )
+        conflict_err(
+            "theory P28 begin\n\nmacros: h(x) = x\nbuiltins: hashing\n\nend\n",
+            ParseContext::Macro,
+            ParseContext::Function,
+        ),
+        ("h".to_string(), Some((3, 9)), (4, 11))
     );
     // Per-name, in list order: the SECOND builtin sees what the first
     // merged, and the error sits at the end of that name's lexeme.
     assert_eq!(
-        custom_err(
+        conflict_err(
             "theory P26 begin\n\nbuiltins: symmetric-encryption, dest-symmetric-encryption\n\
              functions: sdec/2\n\nend\n",
-            &[],
+            ParseContext::Function,
+            ParseContext::Function,
         ),
-        (
-            4,
-            1,
-            "Builtin 'dest-symmetric-encryption' conflicts with existing function(s) \
-             (same name, different arity or function options): [\"sdec\"]. Please remove \
-             these function definitions or use different names."
-                .to_string()
-        )
+        ("sdec".to_string(), Some((3, 11)), (3, 33))
     );
     // A `dest-*` builtin therefore cannot follow its constructor twin.
     assert_eq!(
-        decl_probe_err(
-            "P30",
-            "builtins: symmetric-encryption, dest-symmetric-encryption\n"
+        conflict_err(
+            "theory P30 begin\n\nbuiltins: symmetric-encryption, dest-symmetric-encryption\n\nend\n",
+            ParseContext::Function,
+            ParseContext::Function,
         ),
-        (
-            6,
-            1,
-            "Builtin 'dest-symmetric-encryption' conflicts with existing function(s) \
-             (same name, different arity or function options): [\"sdec\"]. Please remove \
-             these function definitions or use different names."
-                .to_string()
-        )
+        ("sdec".to_string(), Some((3, 11)), (3, 33))
     );
     assert_eq!(
-        decl_probe_err("P31", "builtins: signing, dest-signing\n"),
-        (
-            6,
-            1,
-            "Builtin 'dest-signing' conflicts with existing function(s) (same name, \
-             different arity or function options): [\"verify\"]. Please remove these \
-             function definitions or use different names."
-                .to_string()
-        )
+        conflict_err(
+            "theory P31 begin\n\nbuiltins: signing, dest-signing\n\nend\n",
+            ParseContext::Function,
+            ParseContext::Function,
+        ),
+        ("verify".to_string(), Some((3, 11)), (3, 20))
     );
     // `dest-pairing` is exempt (Theory/Text/Parser/Signature.hs:121):
     // replacing the seeded

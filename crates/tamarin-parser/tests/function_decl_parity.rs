@@ -20,12 +20,19 @@ use tamarin_parser::{parse_theory, ParseError, TheoryItem};
 /// `first` — `None` when the existing symbol is seeded and so has no
 /// declaration site — and its offending declaration at `second`.
 #[track_caller]
-fn assert_conflict(src: &str, name: &str, first: Option<(u32, u32)>, second: (u32, u32)) {
+fn assert_conflict(
+    src: &str,
+    name: &str,
+    first: Option<(u32, u32)>,
+    second: (u32, u32),
+    expected_first_context: ParseContext,
+    expected_second_context: ParseContext,
+) {
     let e = parse_theory(src, &[]).expect_err("the probes below must all fail to parse");
     let ParseError::ConflictingDeclarations {
         name: got,
-        first_context: ParseContext::Function,
-        second_context: ParseContext::Function,
+        first_context,
+        second_context,
         first_at,
         second_at,
     } = &e
@@ -33,6 +40,8 @@ fn assert_conflict(src: &str, name: &str, first: Option<(u32, u32)>, second: (u3
         panic!("expected the conflict variant, got {e:?}");
     };
     assert_eq!(got, name);
+    assert_eq!(first_context, &expected_first_context);
+    assert_eq!(second_context, &expected_second_context);
     assert_eq!(
         first_at.map(|at| (at.line, at.col)),
         first,
@@ -85,6 +94,8 @@ fn redeclaration_conflict_outranks_the_ac_arity_check() {
         "f",
         Some((3, 12)),
         (3, 17),
+        ParseContext::Function,
+        ParseContext::Function,
     );
 
     // The compared tuple carries every attribute — privacy, constructability
@@ -95,18 +106,24 @@ fn redeclaration_conflict_outranks_the_ac_arity_check() {
         "f",
         Some((3, 12)),
         (3, 27),
+        ParseContext::Function,
+        ParseContext::Function,
     );
     assert_conflict(
         "theory C4 begin\n\nfunctions: f/1 [destructor], f/3 [AC]\n\nend\n",
         "f",
         Some((3, 12)),
         (3, 30),
+        ParseContext::Function,
+        ParseContext::Function,
     );
     assert_conflict(
         "theory C5 begin\n\nfunctions: f/1 [NDC], f/3 [AC]\n\nend\n",
         "f",
         Some((3, 12)),
         (3, 23),
+        ParseContext::Function,
+        ParseContext::Function,
     );
 
     // The lookup spans the whole parse, not just the current `functions:`
@@ -116,6 +133,8 @@ fn redeclaration_conflict_outranks_the_ac_arity_check() {
         "f",
         Some((3, 12)),
         (5, 12),
+        ParseContext::Function,
+        ParseContext::Function,
     );
 
     // `pairMaudeSig` is the starting signature (Token.hs:260-261), so `pair`
@@ -126,12 +145,16 @@ fn redeclaration_conflict_outranks_the_ac_arity_check() {
         "pair",
         None,
         (3, 12),
+        ParseContext::Function,
+        ParseContext::Function,
     );
     assert_conflict(
         "theory D5 begin\n\nfunctions: fst/3 [AC], f/2 [AC]\n\nend\n",
         "fst",
         None,
         (3, 12),
+        ParseContext::Function,
+        ParseContext::Function,
     );
 
     // Macros register as `(k, Private, Destructor, NotNDC)` (Parser/Macro.hs:46) and
@@ -142,6 +165,8 @@ fn redeclaration_conflict_outranks_the_ac_arity_check() {
         "m",
         Some((4, 9)),
         (5, 12),
+        ParseContext::Macro,
+        ParseContext::Function,
     );
 
     // A name NOT yet in the signature still gets the arity diagnostic, and the
@@ -206,12 +231,16 @@ fn pair_projection_redeclaration_short_circuits_the_ac_check() {
         "fst",
         None,
         (3, 12),
+        ParseContext::Function,
+        ParseContext::Function,
     );
     assert_conflict(
         "theory D3 begin\n\nfunctions: fst/2 [AC]\n\nend\n",
         "fst",
         None,
         (3, 12),
+        ParseContext::Function,
+        ParseContext::Function,
     );
 }
 
@@ -231,18 +260,24 @@ fn a_builtins_entry_is_the_first_declaration_of_the_symbols_it_merges() {
         "h",
         Some((2, 11)),
         (3, 12),
+        ParseContext::Function,
+        ParseContext::Function,
     );
     assert_conflict(
         "theory CS begin\nbuiltins: signing\nfunctions: sign/3\nend\n",
         "sign",
         Some((2, 11)),
         (3, 12),
+        ParseContext::Function,
+        ParseContext::Function,
     );
     assert_conflict(
         "theory CP begin\nbuiltins: dest-pairing\nfunctions: fst/2\nend\n",
         "fst",
         Some((2, 11)),
         (3, 12),
+        ParseContext::Function,
+        ParseContext::Function,
     );
 
     // Same tuple: no conflict, and the theory loads (oracle exit 0).

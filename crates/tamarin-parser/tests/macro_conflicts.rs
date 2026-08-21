@@ -32,18 +32,24 @@ use tamarin_parser::{parse_theory, ParseError};
 /// equational theory opens.  A symbol a `builtins:` entry merged points back
 /// at that entry's name.
 #[track_caller]
-fn conflict(src: &str) -> (String, Option<(u32, u32)>, (u32, u32)) {
+fn conflict(
+    src: &str,
+    expected_first_context: ParseContext,
+    expected_second_context: ParseContext,
+) -> (String, Option<(u32, u32)>, (u32, u32)) {
     let e = parse_theory(src, &[]).expect_err("the probes below must all fail to parse");
     let ParseError::ConflictingDeclarations {
         name,
-        first_context: ParseContext::Macro,
-        second_context: ParseContext::Macro,
+        first_context,
+        second_context,
         first_at,
         second_at,
     } = e
     else {
         panic!("expected the macro-conflict variant, got {e:?}");
     };
+    assert_eq!(first_context, expected_first_context);
+    assert_eq!(second_context, expected_second_context);
     (
         name,
         first_at.map(|at| (at.line, at.col)),
@@ -214,7 +220,11 @@ fn a_bodyless_macro_swallows_end_and_dies_at_the_item_position() {
 #[test]
 fn macro_conflicts_with_user_function() {
     assert_eq!(
-        conflict("theory MacroCF begin\nfunctions: f/1\nmacros: f(x) = x\nend\n"),
+        conflict(
+            "theory MacroCF begin\nfunctions: f/1\nmacros: f(x) = x\nend\n",
+            ParseContext::Function,
+            ParseContext::Macro
+        ),
         ("f".to_string(), Some((2, 12)), (3, 9))
     );
 }
@@ -224,7 +234,11 @@ fn macro_conflicts_with_user_function() {
 #[test]
 fn macro_conflicts_with_earlier_macro() {
     assert_eq!(
-        conflict("theory MacroCM begin\nmacros: m(x) = x, m(y) = y\nend\n"),
+        conflict(
+            "theory MacroCM begin\nmacros: m(x) = x, m(y) = y\nend\n",
+            ParseContext::Macro,
+            ParseContext::Macro
+        ),
         ("m".to_string(), Some((2, 9)), (2, 19))
     );
 }
@@ -236,7 +250,11 @@ fn macro_conflicts_with_earlier_macro() {
 #[test]
 fn macro_conflicts_with_enabled_builtin_symbol() {
     assert_eq!(
-        conflict("theory MacroCH begin\nbuiltins: hashing\nmacros: h(x) = x\nend\n"),
+        conflict(
+            "theory MacroCH begin\nbuiltins: hashing\nmacros: h(x) = x\nend\n",
+            ParseContext::Function,
+            ParseContext::Macro
+        ),
         ("h".to_string(), Some((2, 11)), (3, 9))
     );
 }
@@ -247,7 +265,11 @@ fn macro_conflicts_with_enabled_builtin_symbol() {
 #[test]
 fn macro_conflicts_with_seeded_pair_symbol() {
     assert_eq!(
-        conflict("theory MacroCP begin\nmacros: fst(x) = x\nend\n"),
+        conflict(
+            "theory MacroCP begin\nmacros: fst(x) = x\nend\n",
+            ParseContext::Function,
+            ParseContext::Macro
+        ),
         ("fst".to_string(), None, (2, 9))
     );
 }
@@ -259,7 +281,9 @@ fn macro_conflicts_with_seeded_pair_symbol() {
 fn macro_conflicts_with_dh_theory_symbol() {
     assert_eq!(
         conflict(
-            "theory MacroCD begin\nbuiltins: diffie-hellman\nmacros: DH_neutral(x) = x\nend\n"
+            "theory MacroCD begin\nbuiltins: diffie-hellman\nmacros: DH_neutral(x) = x\nend\n",
+            ParseContext::Builtin,
+            ParseContext::Macro,
         ),
         ("DH_neutral".to_string(), None, (3, 9))
     );
@@ -277,7 +301,9 @@ fn macro_conflicts_with_dh_theory_symbol() {
 fn macro_conflicts_under_bilinear_pairing() {
     assert_eq!(
         conflict(
-            "theory MacroCBP begin\nbuiltins: bilinear-pairing\nmacros: DH_neutral(x) = x\nend\n"
+            "theory MacroCBP begin\nbuiltins: bilinear-pairing\nmacros: DH_neutral(x) = x\nend\n",
+            ParseContext::Builtin,
+            ParseContext::Macro,
         ),
         ("DH_neutral".to_string(), None, (3, 9))
     );
@@ -288,7 +314,11 @@ fn macro_conflicts_under_bilinear_pairing() {
 #[test]
 fn macro_conflicts_with_nat_theory_symbol() {
     assert_eq!(
-        conflict("theory MacroCN begin\nbuiltins: natural-numbers\nmacros: tone(x) = x\nend\n"),
+        conflict(
+            "theory MacroCN begin\nbuiltins: natural-numbers\nmacros: tone(x) = x\nend\n",
+            ParseContext::Builtin,
+            ParseContext::Macro
+        ),
         ("tone".to_string(), None, (3, 9))
     );
     parse_theory("theory MacroCNC begin\nmacros: tone(x) = x\nend\n", &[])
@@ -300,7 +330,11 @@ fn macro_conflicts_with_nat_theory_symbol() {
 #[test]
 fn macro_conflicts_with_user_ac_symbol() {
     assert_eq!(
-        conflict("theory MacroCA begin\nfunctions: f/2 [AC]\nmacros: f(x) = x\nend\n"),
+        conflict(
+            "theory MacroCA begin\nfunctions: f/2 [AC]\nmacros: f(x) = x\nend\n",
+            ParseContext::Function,
+            ParseContext::Macro
+        ),
         ("f".to_string(), Some((2, 12)), (3, 9))
     );
 }
@@ -309,7 +343,11 @@ fn macro_conflicts_with_user_ac_symbol() {
 #[test]
 fn a_second_ac_symbol_does_not_shadow_the_conflict() {
     assert_eq!(
-        conflict("theory MacroCA2 begin\nfunctions: f/2 [AC], g/2 [AC]\nmacros: f(x) = x\nend\n"),
+        conflict(
+            "theory MacroCA2 begin\nfunctions: f/2 [AC], g/2 [AC]\nmacros: f(x) = x\nend\n",
+            ParseContext::Function,
+            ParseContext::Macro
+        ),
         ("f".to_string(), Some((2, 12)), (3, 9))
     );
 }
@@ -326,7 +364,7 @@ fn enabled_theory_levels_do_not_change_the_conflict() {
          functions: f/1\nmacros: f(x) = x\nend\n",
     ] {
         assert_eq!(
-            conflict(src),
+            conflict(src, ParseContext::Function, ParseContext::Macro),
             ("f".to_string(), Some((3, 12)), (4, 9)),
             "case {src:?}"
         );
@@ -341,18 +379,28 @@ fn enabled_theory_levels_do_not_change_the_conflict() {
 #[test]
 fn body_shape_does_not_change_the_conflict() {
     assert_eq!(
-        conflict("theory T begin\nbuiltins: hashing\nfunctions: f/1\nmacros: f(x) = h(x)\nend\n"),
+        conflict(
+            "theory T begin\nbuiltins: hashing\nfunctions: f/1\nmacros: f(x) = h(x)\nend\n",
+            ParseContext::Function,
+            ParseContext::Macro
+        ),
         ("f".to_string(), Some((3, 12)), (4, 9))
     );
     assert_eq!(
-        conflict("theory T begin\nfunctions: c/0, f/1\nmacros: f(x) = c\nend\n"),
+        conflict(
+            "theory T begin\nfunctions: c/0, f/1\nmacros: f(x) = c\nend\n",
+            ParseContext::Function,
+            ParseContext::Macro
+        ),
         ("f".to_string(), Some((2, 17)), (3, 9))
     );
     for decl in ["f(x) = x:pub", "f(x) = 'a'", "f(x) = x.1", "f(x) = (x)"] {
         assert_eq!(
-            conflict(&format!(
-                "theory T begin\nfunctions: f/1\nmacros: {decl}\nend\n"
-            )),
+            conflict(
+                &format!("theory T begin\nfunctions: f/1\nmacros: {decl}\nend\n"),
+                ParseContext::Function,
+                ParseContext::Macro
+            ),
             ("f".to_string(), Some((2, 12)), (3, 9)),
             "case {decl}"
         );
@@ -379,7 +427,7 @@ fn a_variable_final_body_reports_the_same_conflict() {
         ),
     ] {
         assert_eq!(
-            conflict(thy),
+            conflict(thy, ParseContext::Function, ParseContext::Macro),
             ("f".to_string(), Some(first), (3, 9)),
             "case {thy:?}"
         );
