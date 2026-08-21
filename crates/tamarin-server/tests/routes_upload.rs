@@ -109,8 +109,8 @@ async fn test_post_index_with_garbage_source_shows_alert() {
     assert!(
         body.contains(
             "<body><p class=\"message\">Theory loading failed:\n\
-             garbage.spthy:1:1: Unexpected keyword\n\
-             expected keyword `theory`, but found `this`</p>"
+             garbage.spthy:1:1: Unexpected input\n\
+             expected `theory`, but found `this`</p>"
         ),
         "expected the parse error in the upload banner; body=\n{}",
         body
