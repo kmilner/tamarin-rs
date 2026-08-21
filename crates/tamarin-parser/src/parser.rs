@@ -983,7 +983,7 @@ impl<'a> Parser<'a> {
 
     /// The error at a top-level *item* position when no item alternative
     /// matches: the full item-keyword set, with the suggestion machinery of
-    /// [`ParseError::ExpectedTheoryItem`] picking near-misses from it.
+    /// [`ParseError::Expected`] picking near-misses from it.
     fn item_position_error(&mut self) -> ParseError {
         self.expected_theory_item_err(TOP_LEVEL_ITEM_EXPECTS)
     }
@@ -1042,7 +1042,7 @@ impl<'a> Parser<'a> {
         } else {
             let found = self.lx.peek_until_ws();
             let at = Location::location_of(&found, self.lx.pos());
-            Err(ParseError::UnexpectedKeyword {
+            Err(ParseError::Expected {
                 found: found.map(|s| s.to_string()),
                 expected: vec![kw.to_string()],
                 at,
@@ -1184,7 +1184,7 @@ impl<'a> Parser<'a> {
         S: Into<String>,
     {
         let (found, at) = self.found_token();
-        ParseError::UnexpectedKeyword {
+        ParseError::Expected {
             found,
             expected: expected.into_iter().map(Into::into).collect(),
             at,
@@ -1193,7 +1193,7 @@ impl<'a> Parser<'a> {
 
     fn expected_theory_item_err(&mut self, expected: &[&str]) -> ParseError {
         let (found, at) = self.found_token();
-        ParseError::ExpectedTheoryItem {
+        ParseError::Expected {
             found,
             expected: expected.iter().map(|s| (*s).to_string()).collect(),
             at,
@@ -1206,7 +1206,7 @@ impl<'a> Parser<'a> {
         S: Into<String>,
     {
         let (found, at) = self.found_token();
-        ParseError::ExpectedPunctuation {
+        ParseError::Expected {
             found,
             expected: expected.into_iter().map(Into::into).collect(),
             at,
@@ -1219,7 +1219,7 @@ impl<'a> Parser<'a> {
         S: Into<String>,
     {
         let (found, at) = self.found_token();
-        ParseError::ExpectedStringLiteral {
+        ParseError::Expected {
             found,
             expected: expected.into_iter().map(Into::into).collect(),
             at,
@@ -1236,7 +1236,7 @@ impl<'a> Parser<'a> {
         I: IntoIterator<Item = S>,
         S: Into<String>,
     {
-        ParseError::UnknownPreprocessorDirective {
+        ParseError::Expected {
             found,
             expected: expected.into_iter().map(Into::into).collect(),
             at,
@@ -1542,7 +1542,7 @@ impl<'a> Parser<'a> {
         self.skip_ws();
         if !self.lx.eat_str("#include") {
             let (found, at) = self.found_token();
-            return Err(ParseError::ExpectedPreprocessorDirective {
+            return Err(ParseError::Expected {
                 found,
                 expected: vec!["#include".to_string()],
                 at,
@@ -1610,9 +1610,9 @@ impl<'a> Parser<'a> {
         sub.skip_ws();
         if !sub.lx.is_eof() {
             let (found, at) = sub.found_token();
-            return Err(ParseError::UnexpectedTrailingInput {
-                context: "included file".to_string(),
-                found: found.unwrap_or_else(|| "EOF".to_string()),
+            return Err(ParseError::Expected {
+                found,
+                expected: vec!["end of file".into()],
                 at,
             });
         }
@@ -3532,7 +3532,7 @@ impl<'a> Parser<'a> {
             return Ok(s);
         }
         let (found, at) = self.found_token();
-        Err(ParseError::ExpectedQuotedString {
+        Err(ParseError::Expected {
             found,
             expected: vec!["quoted string".to_string()],
             at,
@@ -3727,7 +3727,7 @@ impl<'a> Parser<'a> {
             }
             None => TraceQuantifier::AllTraces,
             Some(other) => {
-                return Err(ParseError::UnexpectedKeyword {
+                return Err(ParseError::Expected {
                     found: Some(other.into()),
                     expected: vec!["all-traces".into(), "exists-trace".into()],
                     at: Location::location_of(&Some(other), trace_q_pos),
@@ -4082,7 +4082,7 @@ impl<'a> Parser<'a> {
         // NOT the general string-literal escape decoding.
         let body = self.lx.export_body().ok_or_else(|| {
             let (found, at) = self.found_token();
-            ParseError::ExpectedExportBodyString {
+            ParseError::Expected {
                 found,
                 expected: vec!["export body string".to_string()],
                 at,
@@ -4302,7 +4302,7 @@ impl<'a> Parser<'a> {
         }
         self.restore(save2);
         let (found, at) = self.found_token();
-        Err(ParseError::ExpectedProcess {
+        Err(ParseError::Expected {
             found,
             expected: vec!["process".to_string()],
             at,
@@ -5991,7 +5991,7 @@ pub fn parse_formula_str(s: &str) -> Result<Formula, ParseError> {
     p.skip_ws();
     if !p.lx.is_eof() {
         let (found, at) = p.found_token();
-        return Err(ParseError::TrailingGarbageInFormulaString {
+        return Err(ParseError::Expected {
             found,
             expected: vec!["end of input".to_string()],
             at,
@@ -6035,7 +6035,7 @@ pub fn parse_term_str(s: &str, ac_fun_syms: &[String]) -> Result<Term, ParseErro
     p.skip_ws();
     if !p.lx.is_eof() {
         let (found, at) = p.found_token();
-        return Err(ParseError::TrailingGarbageInTermString {
+        return Err(ParseError::Expected {
             found,
             expected: vec!["end of input".to_string()],
             at,

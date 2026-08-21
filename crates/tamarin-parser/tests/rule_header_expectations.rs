@@ -98,7 +98,7 @@ fn junk_after_the_colon_expects_let_or_the_premise_bracket() {
     let e = parse_theory("theory T begin\nrule X: garbage here\nend\n", &[])
         .expect_err("must fail to parse");
     assert!(
-        matches!(&e, ParseError::ExpectedPunctuation { .. }),
+        matches!(&e, ParseError::Expected { .. }),
         "expected a punctuation error, got {e:?}"
     );
     let at = e.location();

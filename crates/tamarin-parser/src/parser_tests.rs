@@ -422,7 +422,7 @@ fn unterminated_theory_reports_the_missing_end_keyword() {
     ] {
         let e = parse_theory(&format!("theory PE begin\n\n{body}\n\n"), &[]).unwrap_err();
         match e {
-            ParseError::UnexpectedKeyword {
+            ParseError::Expected {
                 found,
                 expected,
                 at,
@@ -627,7 +627,7 @@ fn diff_operator_is_accepted_with_the_diff_flag() {
 fn theory_keyword_error() {
     let e = parse_theory("theary Foo\nbegin\nend\n", &[]).unwrap_err();
     match e {
-        ParseError::UnexpectedKeyword {
+        ParseError::Expected {
             found,
             expected,
             at,
@@ -650,7 +650,7 @@ fn theory_keyword_error() {
 fn garbage_at_item_position_suggests_the_nearest_theory_items() {
     let e = parse_theory("theory Foo\nbegin\nrul R:\n[]-->[]\nend\n", &[]).unwrap_err();
     match &e {
-        ParseError::ExpectedTheoryItem { found, at, .. } => {
+        ParseError::Expected { found, at, .. } => {
             assert_eq!(found.as_deref(), Some("rul"));
             assert_eq!(at.line, 3);
             assert_eq!(at.col, 1);
@@ -668,7 +668,7 @@ fn garbage_at_item_position_suggests_the_nearest_theory_items() {
 fn formula_trailing_garbage_uses_structured_variant() {
     let e = parse_formula_str("T & F junk").unwrap_err();
     match e {
-        ParseError::TrailingGarbageInFormulaString {
+        ParseError::Expected {
             found,
             expected,
             at,
@@ -677,6 +677,24 @@ fn formula_trailing_garbage_uses_structured_variant() {
             assert_eq!(expected, vec!["end of input".to_string()]);
             assert_eq!(at.line, 1);
             assert_eq!(at.col, 7);
+        }
+        other => panic!("unexpected variant: {other:?}"),
+    }
+}
+
+#[test]
+fn term_trailing_garbage_uses_expected_end_of_input() {
+    let e = parse_term_str("x junk", &[]).unwrap_err();
+    match e {
+        ParseError::Expected {
+            found,
+            expected,
+            at,
+        } => {
+            assert_eq!(found.as_deref(), Some("junk"));
+            assert_eq!(expected, vec!["end of input".to_string()]);
+            assert_eq!(at.line, 1);
+            assert_eq!(at.col, 3);
         }
         other => panic!("unexpected variant: {other:?}"),
     }

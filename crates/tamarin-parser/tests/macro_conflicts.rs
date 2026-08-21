@@ -187,7 +187,7 @@ fn macro_arguments_differing_in_sort_or_index_are_distinct() {
 fn a_bodyless_macro_swallows_end_and_dies_at_the_item_position() {
     let e = parse_theory("theory MacroCF begin\nmacros: m(x) = \nend\n", &[])
         .expect_err("must fail to parse");
-    let ParseError::UnexpectedKeyword {
+    let ParseError::Expected {
         found,
         expected,
         at,

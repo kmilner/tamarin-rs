@@ -394,7 +394,7 @@ fn theory_end_ignores_trailing_content_but_needs_a_word_boundary() {
     ] {
         let e = parse_theory(&format!("{body}{tail}"), &[]).expect_err("must fail to parse");
         assert!(
-            matches!(&e, ParseError::ExpectedTheoryItem { .. }),
+            matches!(&e, ParseError::Expected { .. }),
             "expected a theory-item error for {tail:?}, got {e:?}"
         );
         let at = e.location();

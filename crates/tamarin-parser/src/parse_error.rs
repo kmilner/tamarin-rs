@@ -190,11 +190,6 @@ pub enum ParseError {
         declared_at: Option<Location>,
         used_at: Location,
     },
-    UnexpectedKeyword {
-        found: Option<String>,
-        expected: Vec<String>,
-        at: Location,
-    },
     ConflictingDeclarations {
         name: String,
         first_context: ParseContext,
@@ -205,51 +200,6 @@ pub enum ParseError {
     WrongArityforACFunctionDeclaration {
         name: String,
         found_arity: usize,
-        at: Location,
-    },
-    ExpectedTheoryItem {
-        found: Option<String>,
-        expected: Vec<String>,
-        at: Location,
-    },
-    ExpectedPunctuation {
-        found: Option<String>,
-        expected: Vec<String>,
-        at: Location,
-    },
-    ExpectedStringLiteral {
-        found: Option<String>,
-        expected: Vec<String>,
-        at: Location,
-    },
-    ExpectedIdentifier {
-        found: Option<String>,
-        expected: Vec<String>,
-        at: Location,
-    },
-    ExpectedNaturalNumber {
-        found: Option<String>,
-        expected: Vec<String>,
-        at: Location,
-    },
-    UnknownPreprocessorDirective {
-        found: Option<String>,
-        expected: Vec<String>,
-        at: Location,
-    },
-    ExpectedPreprocessorDirective {
-        found: Option<String>,
-        expected: Vec<String>,
-        at: Location,
-    },
-    ExpectedHexColor {
-        found: Option<String>,
-        expected: Vec<String>,
-        at: Location,
-    },
-    ExpectedQuotedString {
-        found: Option<String>,
-        expected: Vec<String>,
         at: Location,
     },
     UnclosedDelimiter {
@@ -264,16 +214,6 @@ pub enum ParseError {
         unknown_item: String,
         at: Location,
     },
-    ExpectedExportBodyString {
-        found: Option<String>,
-        expected: Vec<String>,
-        at: Location,
-    },
-    ExpectedProcess {
-        found: Option<String>,
-        expected: Vec<String>,
-        at: Location,
-    },
     FactNameMustStartWithUppercase {
         name: String,
         at: Location,
@@ -284,11 +224,6 @@ pub enum ParseError {
     FactArityMismatch {
         name: String,
         arity: usize,
-        at: Location,
-    },
-    ExpectedFormulaAtom {
-        found: Option<String>,
-        expected: Vec<String>,
         at: Location,
     },
     BadFreshLiteral {
@@ -316,24 +251,9 @@ pub enum ParseError {
         expected: Vec<String>,
         at: Location,
     },
-    UnexpectedTrailingInput {
-        context: String,
-        found: String,
-        at: Location,
-    },
     IoError {
         path: String,
         message: String,
-        at: Location,
-    },
-    TrailingGarbageInFormulaString {
-        found: Option<String>,
-        expected: Vec<String>,
-        at: Location,
-    },
-    TrailingGarbageInTermString {
-        found: Option<String>,
-        expected: Vec<String>,
         at: Location,
     },
     /// Bridge for parser sites not yet converted to a dedicated variant: an
@@ -356,27 +276,12 @@ impl ParseError {
     /// Add an expected item to the error's `expected` list, if it has one.
     pub(crate) fn add_expected(&mut self, exp: impl Into<String>) {
         match self {
-            ParseError::UnexpectedKeyword { expected, .. }
-            | ParseError::ExpectedTheoryItem { expected, .. }
-            | ParseError::ExpectedPunctuation { expected, .. }
-            | ParseError::ExpectedStringLiteral { expected, .. }
-            | ParseError::ExpectedIdentifier { expected, .. }
-            | ParseError::ExpectedNaturalNumber { expected, .. }
-            | ParseError::UnknownPreprocessorDirective { expected, .. }
-            | ParseError::ExpectedPreprocessorDirective { expected, .. }
-            | ParseError::ExpectedHexColor { expected, .. }
-            | ParseError::ExpectedQuotedString { expected, .. }
-            | ParseError::ExpectedExportBodyString { expected, .. }
-            | ParseError::ExpectedProcess { expected, .. }
-            | ParseError::ExpectedFormulaAtom { expected, .. }
+            ParseError::Expected { expected, .. }
             | ParseError::BadFreshLiteral { expected, .. }
             | ParseError::BadNatLiteral { expected, .. }
             | ParseError::BadPublicLiteral { expected, .. }
             | ParseError::ExpectedTerm { expected, .. }
             | ParseError::ExpectedVariable { expected, .. }
-            | ParseError::TrailingGarbageInFormulaString { expected, .. }
-            | ParseError::TrailingGarbageInTermString { expected, .. }
-            | ParseError::Expected { expected, .. }
             | ParseError::UsedReservedKeyword { expected, .. }
             | ParseError::UnclosedDelimiter { expected, .. } => {
                 let exp = exp.into();
@@ -389,7 +294,6 @@ impl ParseError {
             | ParseError::FactNameMustStartWithUppercase { .. }
             | ParseError::FreshFactCannotBePersistent { .. }
             | ParseError::FactArityMismatch { .. }
-            | ParseError::UnexpectedTrailingInput { .. }
             | ParseError::UnknownItem { .. }
             | ParseError::ConflictingDeclarations { .. }
             | ParseError::IoError { .. }
@@ -407,30 +311,14 @@ impl ParseError {
             ParseError::UsedReservedKeyword { at, .. }
             | ParseError::IllegalDiffOperator { at, .. }
             | ParseError::FactNameMustStartWithUppercase { at, .. }
-            | ParseError::UnexpectedKeyword { at, .. }
-            | ParseError::ExpectedTheoryItem { at, .. }
-            | ParseError::ExpectedPunctuation { at, .. }
-            | ParseError::ExpectedStringLiteral { at, .. }
-            | ParseError::ExpectedIdentifier { at, .. }
-            | ParseError::ExpectedNaturalNumber { at, .. }
-            | ParseError::UnknownPreprocessorDirective { at, .. }
-            | ParseError::ExpectedPreprocessorDirective { at, .. }
-            | ParseError::ExpectedHexColor { at, .. }
-            | ParseError::ExpectedQuotedString { at, .. }
-            | ParseError::ExpectedExportBodyString { at, .. }
-            | ParseError::ExpectedProcess { at, .. }
             | ParseError::FreshFactCannotBePersistent { at }
             | ParseError::FactArityMismatch { at, .. }
-            | ParseError::ExpectedFormulaAtom { at, .. }
             | ParseError::BadFreshLiteral { at, .. }
             | ParseError::BadNatLiteral { at, .. }
             | ParseError::BadPublicLiteral { at, .. }
             | ParseError::ExpectedTerm { at, .. }
             | ParseError::ExpectedVariable { at, .. }
-            | ParseError::UnexpectedTrailingInput { at, .. }
             | ParseError::IoError { at, .. }
-            | ParseError::TrailingGarbageInFormulaString { at, .. }
-            | ParseError::TrailingGarbageInTermString { at, .. }
             | ParseError::UnknownItem { at, .. }
             | ParseError::Expected { at, .. }
             | ParseError::UsedReservedBuiltin { at, .. }
@@ -446,35 +334,19 @@ impl ParseError {
 
     pub(crate) fn into_found(self) -> Option<String> {
         match self {
-            ParseError::UnexpectedKeyword { found, .. }
-            | ParseError::ExpectedTheoryItem { found, .. }
-            | ParseError::ExpectedPunctuation { found, .. }
-            | ParseError::ExpectedStringLiteral { found, .. }
-            | ParseError::ExpectedIdentifier { found, .. }
-            | ParseError::ExpectedNaturalNumber { found, .. }
-            | ParseError::UnknownPreprocessorDirective { found, .. }
-            | ParseError::ExpectedPreprocessorDirective { found, .. }
-            | ParseError::ExpectedHexColor { found, .. }
-            | ParseError::ExpectedQuotedString { found, .. }
-            | ParseError::ExpectedExportBodyString { found, .. }
-            | ParseError::ExpectedProcess { found, .. }
-            | ParseError::ExpectedFormulaAtom { found, .. }
+            ParseError::Expected { found, .. }
             | ParseError::BadFreshLiteral { found, .. }
             | ParseError::BadNatLiteral { found, .. }
             | ParseError::BadPublicLiteral { found, .. }
             | ParseError::ExpectedTerm { found, .. }
             | ParseError::ExpectedVariable { found, .. }
-            | ParseError::TrailingGarbageInFormulaString { found, .. }
-            | ParseError::TrailingGarbageInTermString { found, .. }
-            | ParseError::Expected { found, .. }
             | ParseError::UnclosedDelimiter { found, .. } => found,
             ParseError::UnknownItem {
                 unknown_item: item, ..
             } => Some(item),
             ParseError::UsedReservedKeyword { found, .. } => Some(found),
             ParseError::FactNameMustStartWithUppercase { name, .. }
-            | ParseError::FactArityMismatch { name, .. }
-            | ParseError::UnexpectedTrailingInput { found: name, .. } => Some(name),
+            | ParseError::FactArityMismatch { name, .. } => Some(name),
             ParseError::IllegalDiffOperator { .. }
             | ParseError::FreshFactCannotBePersistent { .. }
             | ParseError::IoError { .. }
@@ -490,27 +362,12 @@ impl ParseError {
 
     pub fn found(&self) -> Option<&str> {
         match self {
-            ParseError::UnexpectedKeyword { found, .. }
-            | ParseError::ExpectedTheoryItem { found, .. }
-            | ParseError::ExpectedPunctuation { found, .. }
-            | ParseError::ExpectedStringLiteral { found, .. }
-            | ParseError::ExpectedIdentifier { found, .. }
-            | ParseError::ExpectedNaturalNumber { found, .. }
-            | ParseError::UnknownPreprocessorDirective { found, .. }
-            | ParseError::ExpectedPreprocessorDirective { found, .. }
-            | ParseError::ExpectedHexColor { found, .. }
-            | ParseError::ExpectedQuotedString { found, .. }
-            | ParseError::ExpectedExportBodyString { found, .. }
-            | ParseError::ExpectedProcess { found, .. }
-            | ParseError::ExpectedFormulaAtom { found, .. }
+            ParseError::Expected { found, .. }
             | ParseError::BadFreshLiteral { found, .. }
             | ParseError::BadNatLiteral { found, .. }
             | ParseError::BadPublicLiteral { found, .. }
             | ParseError::ExpectedTerm { found, .. }
             | ParseError::ExpectedVariable { found, .. }
-            | ParseError::TrailingGarbageInFormulaString { found, .. }
-            | ParseError::TrailingGarbageInTermString { found, .. }
-            | ParseError::Expected { found, .. }
             | ParseError::UnclosedDelimiter { found, .. } => found.as_deref(),
             ParseError::UnknownItem {
                 unknown_item: item, ..
@@ -518,7 +375,6 @@ impl ParseError {
             ParseError::UsedReservedKeyword { found, .. } => Some(found.as_str()),
             ParseError::FactNameMustStartWithUppercase { name, .. }
             | ParseError::FactArityMismatch { name, .. } => Some(name.as_str()),
-            ParseError::UnexpectedTrailingInput { found, .. } => Some(found.as_str()),
             ParseError::IllegalDiffOperator { .. }
             | ParseError::FreshFactCannotBePersistent { .. }
             | ParseError::IoError { .. }
@@ -534,26 +390,11 @@ impl ParseError {
 
     pub fn expected(&self) -> Option<Vec<String>> {
         let raw_expected = match self {
-            ParseError::UnexpectedKeyword { expected, .. }
-            | ParseError::ExpectedTheoryItem { expected, .. }
-            | ParseError::ExpectedPunctuation { expected, .. }
-            | ParseError::ExpectedStringLiteral { expected, .. }
-            | ParseError::ExpectedIdentifier { expected, .. }
-            | ParseError::ExpectedNaturalNumber { expected, .. }
-            | ParseError::UnknownPreprocessorDirective { expected, .. }
-            | ParseError::ExpectedPreprocessorDirective { expected, .. }
-            | ParseError::ExpectedHexColor { expected, .. }
-            | ParseError::ExpectedQuotedString { expected, .. }
-            | ParseError::ExpectedExportBodyString { expected, .. }
-            | ParseError::ExpectedProcess { expected, .. }
-            | ParseError::ExpectedFormulaAtom { expected, .. }
-            | ParseError::BadFreshLiteral { expected, .. }
+            ParseError::BadFreshLiteral { expected, .. }
             | ParseError::BadNatLiteral { expected, .. }
             | ParseError::BadPublicLiteral { expected, .. }
             | ParseError::ExpectedTerm { expected, .. }
             | ParseError::ExpectedVariable { expected, .. }
-            | ParseError::TrailingGarbageInFormulaString { expected, .. }
-            | ParseError::TrailingGarbageInTermString { expected, .. }
             | ParseError::UsedReservedKeyword { expected, .. }
             | ParseError::Expected { expected, .. }
             | ParseError::UnclosedDelimiter { expected, .. } => Some(expected.clone()),
@@ -564,7 +405,6 @@ impl ParseError {
             | ParseError::IllegalDiffOperator { .. }
             | ParseError::FreshFactCannotBePersistent { .. }
             | ParseError::FactArityMismatch { .. }
-            | ParseError::UnexpectedTrailingInput { .. }
             | ParseError::IoError { .. }
             | ParseError::DuplicateMacroArg { .. }
             | ParseError::FunctionUsedWithWrongArity { .. }
@@ -578,21 +418,24 @@ impl ParseError {
         // name are ranked by edit distance to the found token and cut to the
         // closest 3.  Grammar expectation sets pass through whole, in HS's
         // order.
+        let rank_expected = match self {
+            ParseError::Expected { expected, .. } => is_theory_item_expected(expected),
+            ParseError::UnknownItem { .. } => true,
+            _ => false,
+        };
         match self {
-            ParseError::ExpectedTheoryItem { .. } | ParseError::UnknownItem { .. } => {
-                Some(match self.found() {
-                    Some(found) => {
-                        let mut ranked: Vec<(usize, usize, String)> = raw_expected
-                            .into_iter()
-                            .enumerate()
-                            .map(|(idx, exp)| (edit_distance(found, &exp), idx, exp))
-                            .collect();
-                        ranked.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
-                        ranked.into_iter().take(3).map(|(_, _, exp)| exp).collect()
-                    }
-                    None => raw_expected.into_iter().take(3).collect(),
-                })
-            }
+            _ if rank_expected => Some(match self.found() {
+                Some(found) => {
+                    let mut ranked: Vec<(usize, usize, String)> = raw_expected
+                        .into_iter()
+                        .enumerate()
+                        .map(|(idx, exp)| (edit_distance(found, &exp), idx, exp))
+                        .collect();
+                    ranked.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+                    ranked.into_iter().take(3).map(|(_, _, exp)| exp).collect()
+                }
+                None => raw_expected.into_iter().take(3).collect(),
+            }),
             _ => Some(raw_expected),
         }
     }
@@ -603,16 +446,6 @@ impl ParseError {
         Cow::Borrowed(match self {
             ParseError::UsedReservedKeyword { .. } => "Used reserved keyword",
             ParseError::IllegalDiffOperator { .. } => "Illegal diff operator",
-            ParseError::UnexpectedKeyword { .. } => "Unexpected keyword",
-            ParseError::ExpectedTheoryItem { .. } => "Expected theory item",
-            ParseError::ExpectedPunctuation { .. } => "Expected punctuation",
-            ParseError::ExpectedStringLiteral { .. } => "Expected string literal",
-            ParseError::ExpectedIdentifier { .. } => "Expected identifier",
-            ParseError::ExpectedNaturalNumber { .. } => "Expected natural number",
-            ParseError::UnknownPreprocessorDirective { .. } => "Unknown preprocessor directive",
-            ParseError::ExpectedPreprocessorDirective { .. } => "Expected preprocessor directive",
-            ParseError::ExpectedHexColor { .. } => "Expected hex color",
-            ParseError::ExpectedQuotedString { .. } => "Expected quoted string",
             ParseError::UnclosedDelimiter { .. } => "Unterminated delimiter",
             ParseError::UnknownItem {
                 unknown_item,
@@ -623,25 +456,17 @@ impl ParseError {
                 // built per error rather than borrowed.
                 return Cow::Owned(format!("Unknown {} `{}`", item_kind.as_str(), unknown_item));
             }
-            ParseError::ExpectedExportBodyString { .. } => "Expected export body string",
-            ParseError::ExpectedProcess { .. } => "Expected process",
             ParseError::FactNameMustStartWithUppercase { .. } => {
                 "Fact name must start with uppercase"
             }
             ParseError::FreshFactCannotBePersistent { .. } => "Fresh fact cannot be persistent",
             ParseError::FactArityMismatch { .. } => "Fact arity mismatch",
-            ParseError::ExpectedFormulaAtom { .. } => "Expected formula atom",
             ParseError::BadFreshLiteral { .. } => "Bad fresh literal",
             ParseError::BadNatLiteral { .. } => "Bad nat literal",
             ParseError::BadPublicLiteral { .. } => "Bad public literal",
             ParseError::ExpectedTerm { .. } => "Expected term",
             ParseError::ExpectedVariable { .. } => "Expected variable",
-            ParseError::UnexpectedTrailingInput { .. } => "Unexpected trailing input",
             ParseError::IoError { .. } => "I/O error",
-            ParseError::TrailingGarbageInFormulaString { .. } => {
-                "Trailing garbage in formula string"
-            }
-            ParseError::TrailingGarbageInTermString { .. } => "Trailing garbage in term string",
             ParseError::Expected { .. } => "Unexpected input",
             ParseError::ConflictingDeclarations { second_context, .. } => {
                 return Cow::Owned(format!(
@@ -818,62 +643,10 @@ impl ParseError {
                 }
                 notes
             }
-            ParseError::UnexpectedKeyword {
-                found, expected, ..
-            } => {
-                vec![format_found_expected_note(
-                    "keyword",
-                    found.as_deref(),
-                    expected,
-                )]
-            }
             ParseError::UndeclaredFunction { .. } => {
                 vec!["functions must be declared before use".to_string()]
             }
-            ParseError::ExpectedTheoryItem { found, .. } => {
-                // Using the function on self instead of the field computes
-                // edit-distance for ExpectedTheoryItem. Not a pretty way to do this though.
-                let expected = self.expected().unwrap_or_default();
-                vec![format_found_expected_note(
-                    "theory item",
-                    found.as_deref(),
-                    &expected,
-                )]
-            }
-            ParseError::ExpectedPunctuation {
-                found, expected, ..
-            }
-            | ParseError::ExpectedStringLiteral {
-                found, expected, ..
-            }
-            | ParseError::ExpectedIdentifier {
-                found, expected, ..
-            }
-            | ParseError::ExpectedNaturalNumber {
-                found, expected, ..
-            }
-            | ParseError::UnknownPreprocessorDirective {
-                found, expected, ..
-            }
-            | ParseError::ExpectedPreprocessorDirective {
-                found, expected, ..
-            }
-            | ParseError::ExpectedHexColor {
-                found, expected, ..
-            }
-            | ParseError::ExpectedQuotedString {
-                found, expected, ..
-            }
-            | ParseError::ExpectedExportBodyString {
-                found, expected, ..
-            }
-            | ParseError::ExpectedProcess {
-                found, expected, ..
-            }
-            | ParseError::ExpectedFormulaAtom {
-                found, expected, ..
-            }
-            | ParseError::BadFreshLiteral {
+            ParseError::BadFreshLiteral {
                 found, expected, ..
             }
             | ParseError::BadNatLiteral {
@@ -886,12 +659,6 @@ impl ParseError {
                 found, expected, ..
             }
             | ParseError::ExpectedVariable {
-                found, expected, ..
-            }
-            | ParseError::TrailingGarbageInFormulaString {
-                found, expected, ..
-            }
-            | ParseError::TrailingGarbageInTermString {
                 found, expected, ..
             } => {
                 vec![format_found_expected_note(
@@ -942,9 +709,6 @@ impl ParseError {
                 vec![format!(
                     "fact `{name}` was used with arity {arity}, but it must have arity 1"
                 )]
-            }
-            ParseError::UnexpectedTrailingInput { context, found, .. } => {
-                vec![format!("unexpected trailing token `{found}` in {context}")]
             }
             ParseError::IoError { path, message, .. } => {
                 vec![format!("failed to read included file `{path}`: {message}")]
@@ -1003,6 +767,13 @@ impl std::fmt::Display for ParseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.message())
     }
+}
+
+fn is_theory_item_expected(expected: &[String]) -> bool {
+    expected.contains(&"\"heuristic\"".to_string())
+        && expected.contains(&"\"lemma\"".to_string())
+        && expected.contains(&"\"rule\"".to_string())
+        && expected.contains(&"\"end\"".to_string())
 }
 
 fn format_expected_list(expected: &[String]) -> String {
