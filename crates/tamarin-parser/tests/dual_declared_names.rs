@@ -68,7 +68,8 @@ fn a_noeq_first_arity_mismatch_conflicts() {
         .expect_err("the NoEq-first order conflicts");
     let ParseError::ConflictingDeclarations {
         name,
-        context: ParseContext::Function,
+        first_context: ParseContext::Function,
+        second_context: ParseContext::Function,
         first_at,
         second_at,
     } = e

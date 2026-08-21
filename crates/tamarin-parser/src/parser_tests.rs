@@ -23,18 +23,27 @@ fn custom_err(src: &str, flags: &[&str]) -> (u32, u32, String) {
 /// declaration's site — a `functions:`/`macros:` entry, or the `builtins:`
 /// entry that reserved the name — and `None` for a symbol the theory carries
 /// implicitly, which has no site to point at.
-fn conflict_err(src: &str) -> (String, Option<(u32, u32)>, (u32, u32)) {
+fn conflict_err(
+    src: &str,
+    expected_first_context: ParseContext,
+    expected_second_context: ParseContext,
+) -> (String, Option<(u32, u32)>, (u32, u32)) {
     match parse_theory(src, &[]).unwrap_err() {
         ParseError::ConflictingDeclarations {
             name,
-            context: ParseContext::Function,
+            first_context,
+            second_context,
             first_at,
             second_at,
-        } => (
-            name,
-            first_at.map(|at| (at.line, at.col)),
-            (second_at.line, second_at.col),
-        ),
+        } => {
+            assert_eq!(first_context, expected_first_context);
+            assert_eq!(second_context, expected_second_context);
+            (
+                name,
+                first_at.map(|at| (at.line, at.col)),
+                (second_at.line, second_at.col),
+            )
+        }
         other => panic!("unexpected variant: {other:?}"),
     }
 }
@@ -84,17 +93,32 @@ fn decl_probe_err(name: &str, body: &str) -> (u32, u32, String) {
 /// `first_at` pointing at the `builtins:` entry that reserved the name.
 #[test]
 fn builtin_reserved_name_check_precedes_the_arity_and_ac_checks() {
-    let probe =
-        |name: &str, body: &str| conflict_err(&format!("theory {name} begin\n\n{body}\n\nend\n"));
+    let probe = |name: &str, body: &str, first_context, second_context| {
+        conflict_err(
+            &format!("theory {name} begin\n\n{body}\n\nend\n"),
+            first_context,
+            second_context,
+        )
+    };
     // `[AC]` + arity 3 would otherwise be the AC-arity variant.
     assert_eq!(
-        probe("B1", "builtins: hashing\nfunctions: h/3 [AC]"),
+        probe(
+            "B1",
+            "builtins: hashing\nfunctions: h/3 [AC]",
+            ParseContext::Function,
+            ParseContext::Function
+        ),
         ("h".to_string(), Some((3, 11)), (4, 12))
     );
     // Same name declared twice would otherwise be check (2)'s conflict,
     // whose `first_at` points at the earlier declaration.
     assert_eq!(
-        probe("B7", "builtins: hashing\nfunctions: h/1, h/3 [AC]"),
+        probe(
+            "B7",
+            "builtins: hashing\nfunctions: h/1, h/3 [AC]",
+            ParseContext::Function,
+            ParseContext::Function
+        ),
         ("h".to_string(), Some((3, 11)), (4, 17))
     );
     // `fst` has no exemption in check (1): `dest-pairing` reserves it at
@@ -102,7 +126,12 @@ fn builtin_reserved_name_check_precedes_the_arity_and_ac_checks() {
     // even though check (2) would wave it through
     // (Theory/Text/Parser/Signature.hs:213).
     assert_eq!(
-        probe("E1", "builtins: dest-pairing\nfunctions: fst/1 [AC]"),
+        probe(
+            "E1",
+            "builtins: dest-pairing\nfunctions: fst/1 [AC]",
+            ParseContext::Function,
+            ParseContext::Function
+        ),
         ("fst".to_string(), Some((3, 11)), (4, 12))
     );
     // Every attribute reaches `requested`, including the two NDC flags:
@@ -110,7 +139,12 @@ fn builtin_reserved_name_check_precedes_the_arity_and_ac_checks() {
     // conflicts even at the builtin's own arity.
     for attr in ["private", "destructor", "NDC", "NDC-diff"] {
         assert_eq!(
-            probe("P", &format!("builtins: hashing\nfunctions: h/1 [{attr}]")),
+            probe(
+                "P",
+                &format!("builtins: hashing\nfunctions: h/1 [{attr}]"),
+                ParseContext::Function,
+                ParseContext::Function
+            ),
             ("h".to_string(), Some((3, 11)), (4, 12)),
             "attribute {attr}"
         );
@@ -127,14 +161,21 @@ fn builtin_reserved_name_check_precedes_the_arity_and_ac_checks() {
     assert_eq!(
         probe(
             "P12",
-            "builtins: dest-symmetric-encryption\nfunctions: sdec/2"
+            "builtins: dest-symmetric-encryption\nfunctions: sdec/2",
+            ParseContext::Function,
+            ParseContext::Function,
         ),
         ("sdec".to_string(), Some((3, 11)), (4, 12))
     );
     // `locations-report` reserves `rep` privately, so the public
     // re-declaration conflicts.
     assert_eq!(
-        probe("P9", "builtins: locations-report\nfunctions: rep/2"),
+        probe(
+            "P9",
+            "builtins: locations-report\nfunctions: rep/2",
+            ParseContext::Function,
+            ParseContext::Function
+        ),
         ("rep".to_string(), Some((3, 11)), (4, 12))
     );
     // `first_at` is the entry that reserved THIS name, not the head of the
@@ -142,7 +183,12 @@ fn builtin_reserved_name_check_precedes_the_arity_and_ac_checks() {
     // column 20 rather than the column 11 every single-entry probe above
     // reports.
     assert_eq!(
-        probe("P32", "builtins: hashing, signing\nfunctions: sign/1"),
+        probe(
+            "P32",
+            "builtins: hashing, signing\nfunctions: sign/1",
+            ParseContext::Function,
+            ParseContext::Function
+        ),
         ("sign".to_string(), Some((3, 20)), (4, 12))
     );
 }
@@ -153,11 +199,19 @@ fn builtin_reserved_name_check_precedes_the_arity_and_ac_checks() {
 #[test]
 fn bracketed_and_unbracketed_declarations_report_the_same_conflict() {
     assert_eq!(
-        conflict_err("theory B2 begin\n\nbuiltins: hashing\nfunctions: h/1, h/2\n\nend\n"),
+        conflict_err(
+            "theory B2 begin\n\nbuiltins: hashing\nfunctions: h/1, h/2\n\nend\n",
+            ParseContext::Function,
+            ParseContext::Function
+        ),
         ("h".to_string(), Some((3, 11)), (4, 17))
     );
     assert_eq!(
-        conflict_err("theory P24 begin\n\nbuiltins: hashing\nfunctions: h/3 []\n\nend\n"),
+        conflict_err(
+            "theory P24 begin\n\nbuiltins: hashing\nfunctions: h/3 []\n\nend\n",
+            ParseContext::Function,
+            ParseContext::Function
+        ),
         ("h".to_string(), Some((3, 11)), (4, 12))
     );
 }
@@ -171,19 +225,29 @@ fn bracketed_and_unbracketed_declarations_report_the_same_conflict() {
 #[test]
 fn conflicting_arities_is_a_parse_error() {
     assert_eq!(
-        conflict_err("theory CONF1 begin\n\nfunctions: f/1, f/3\n\nend\n"),
+        conflict_err(
+            "theory CONF1 begin\n\nfunctions: f/1, f/3\n\nend\n",
+            ParseContext::Function,
+            ParseContext::Function
+        ),
         ("f".to_string(), Some((3, 12)), (3, 17))
     );
     // `reliable-channel` has no MaudeSig, so it reserves nothing and the
     // clash between the two user declarations is check (2)'s to report.
     assert_eq!(
         conflict_err(
-            "theory P22 begin\n\nbuiltins: reliable-channel\nfunctions: h/1, h/2\n\nend\n"
+            "theory P22 begin\n\nbuiltins: reliable-channel\nfunctions: h/1, h/2\n\nend\n",
+            ParseContext::Function,
+            ParseContext::Function,
         ),
         ("h".to_string(), Some((4, 12)), (4, 17))
     );
     assert_eq!(
-        conflict_err("theory P29 begin\n\nmacros: mh(x, y) = x\nfunctions: mh/2\n\nend\n"),
+        conflict_err(
+            "theory P29 begin\n\nmacros: mh(x, y) = x\nfunctions: mh/2\n\nend\n",
+            ParseContext::Macro,
+            ParseContext::Function
+        ),
         ("mh".to_string(), Some((3, 9)), (4, 12))
     );
 }

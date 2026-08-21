@@ -48,7 +48,8 @@ fn dup_rule_check<T>(res: Result<T, ParseError>) -> (String, (u32, u32), (u32, u
     };
     let ParseError::ConflictingDeclarations {
         name,
-        context: ParseContext::Rule,
+        first_context: ParseContext::Rule,
+        second_context: ParseContext::Rule,
         first_at,
         second_at,
     } = e
@@ -69,7 +70,8 @@ fn dup_restriction_err(src: &str) -> (String, (u32, u32), (u32, u32)) {
     let e = parse_theory(src, &[]).expect_err("the probes below must all fail to parse");
     let ParseError::ConflictingDeclarations {
         name,
-        context: ParseContext::Restriction,
+        first_context: ParseContext::Restriction,
+        second_context: ParseContext::Restriction,
         first_at,
         second_at,
     } = e

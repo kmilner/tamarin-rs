@@ -24,7 +24,8 @@ fn assert_conflict(src: &str, name: &str, first: Option<(u32, u32)>, second: (u3
     let e = parse_theory(src, &[]).expect_err("the probes below must all fail to parse");
     let ParseError::ConflictingDeclarations {
         name: got,
-        context: ParseContext::Function,
+        first_context: ParseContext::Function,
+        second_context: ParseContext::Function,
         first_at,
         second_at,
     } = &e

@@ -36,7 +36,8 @@ fn conflict(src: &str) -> (String, Option<(u32, u32)>, (u32, u32)) {
     let e = parse_theory(src, &[]).expect_err("the probes below must all fail to parse");
     let ParseError::ConflictingDeclarations {
         name,
-        context: ParseContext::Macro,
+        first_context: ParseContext::Macro,
+        second_context: ParseContext::Macro,
         first_at,
         second_at,
     } = e

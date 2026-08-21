@@ -191,7 +191,8 @@ pub enum ParseError {
     },
     ConflictingDeclarations {
         name: String,
-        context: ParseContext,
+        first_context: ParseContext,
+        second_context: ParseContext,
         first_at: Option<Location>,
         second_at: Location,
     },
@@ -648,8 +649,11 @@ impl ParseError {
             ParseError::Expected { .. } => "Unexpected input",
             ParseError::Custom { .. } => "Parse error",
             ParseError::Abort { .. } => "Invalid input",
-            ParseError::ConflictingDeclarations { context, .. } => {
-                return Cow::Owned(format!("Conflicting {} declaration", context.as_str()))
+            ParseError::ConflictingDeclarations { second_context, .. } => {
+                return Cow::Owned(format!(
+                    "Conflicting {} declaration",
+                    second_context.as_str()
+                ))
             }
             ParseError::WrongArityforACFunctionDeclaration { .. } => {
                 "Non-binary AC function declaration"
@@ -711,15 +715,13 @@ impl ParseError {
             }
             ParseError::ConflictingDeclarations {
                 name,
-                context,
+                first_context,
+                second_context,
                 first_at,
                 second_at,
             } => {
-                let kind = context.as_str();
-                let msg = format!(
-                    "conflicting {kind} declaration for{}`{name}`",
-                    if first_at.is_none() { " builtin " } else { " " }
-                );
+                let kind = second_context.as_str();
+                let msg = format!("conflicting {kind} declaration for `{name}`",);
                 let mut lbls = vec![ParseErrorLabel {
                     at: *second_at,
                     message: msg,
@@ -728,7 +730,10 @@ impl ParseError {
                 if let Some(first_at) = first_at {
                     lbls.push(ParseErrorLabel {
                         at: *first_at,
-                        message: format!("first declaration of `{name}`"),
+                        message: format!(
+                            "first declaration of `{name}` as {}",
+                            first_context.as_str_with_article()
+                        ),
                         is_primary: false,
                     });
                 }
@@ -941,14 +946,14 @@ impl ParseError {
             ParseError::Custom { message, .. } | ParseError::Abort { message, .. } => {
                 vec![message.clone()]
             }
-            ParseError::ConflictingDeclarations { context, .. } => {
-                let tail = match context {
+            ParseError::ConflictingDeclarations { second_context, .. } => {
+                let tail = match second_context {
                     ParseContext::Macro => "unique",
                     _ => "unique or consistent",
                 };
                 vec![format!(
                     "{} declarations must be {}",
-                    context.as_str(),
+                    second_context.as_str(),
                     tail
                 )]
             }
@@ -1044,15 +1049,6 @@ fn edit_distance(a: &str, b: &str) -> usize {
 }
 
 impl std::error::Error for ParseError {}
-
-/// Haskell `show :: [String] -> String`: a bracketed, comma-separated list of
-/// double-quoted elements with no spaces — the rendering `function`'s and
-/// `extendSig`'s diagnostics embed (Theory/Text/Parser/Signature.hs:112-119,
-/// 204-207).  The elements are plain identifiers, so no escaping is needed.
-fn show_string_list(items: &[&str]) -> String {
-    let quoted: Vec<String> = items.iter().map(|s| format!("\"{s}\"")).collect();
-    format!("[{}]", quoted.join(","))
-}
 
 /// The merged `expecting` labels of the top-level item alternation, in HS's
 /// exact order and spelling.  This is the base set parsec accumulates from
@@ -2841,13 +2837,14 @@ impl<'a> Parser<'a> {
                 // differing entries is listed twice.
                 let clashes = Self::conflicting_builtin_names(syms, &self.fun_syms);
                 if !clashes.is_empty() {
-                    return Err(self.err_fail(format!(
-                        "Builtin '{}' conflicts with existing function(s) (same name, \
-                         different arity or function options): {}. Please remove these \
-                         function definitions or use different names.",
-                        builtin,
-                        show_string_list(&clashes)
-                    )));
+                    let (f, f_loc) = clashes[0];
+                    return Err(ParseError::ConflictingDeclarations {
+                        name: f.to_string(),
+                        first_context: ParseContext::Function,
+                        second_context: ParseContext::Function,
+                        first_at: f_loc,
+                        second_at: builtin_location,
+                    });
                 }
             }
             // `macroConflicts` (Theory/Text/Parser/Signature.hs:117-122): the
@@ -2859,11 +2856,14 @@ impl<'a> Parser<'a> {
             // all entries finds the same clashes.
             let macro_clashes = Self::conflicting_builtin_names(syms, &self.macro_syms);
             if !macro_clashes.is_empty() {
-                return Err(self.err_fail(format!(
-                    "Builtin '{}' conflicts with existing macro '{}'",
-                    builtin,
-                    show_string_list(&macro_clashes)
-                )));
+                let (f, f_loc) = macro_clashes[0];
+                return Err(ParseError::ConflictingDeclarations {
+                    name: f.to_string(),
+                    first_at: f_loc,
+                    first_context: ParseContext::Macro,
+                    second_at: builtin_location,
+                    second_context: ParseContext::Function,
+                });
             }
             self.reserved_builtin_names
                 .extend(syms.iter().map(|s| s.name.to_string()));
@@ -2929,13 +2929,13 @@ impl<'a> Parser<'a> {
     fn conflicting_builtin_names(
         syms: &[BuiltinFunSym],
         existing: &[(String, FunOptions)],
-    ) -> Vec<&'static str> {
+    ) -> Vec<(&'static str, Option<Location>)> {
         let mut clashes = Vec::new();
         for sym in syms {
             let wanted = FunOptions::of(sym, None);
             for (name, options) in existing {
                 if name == sym.name && *options != wanted {
-                    clashes.push(sym.name);
+                    clashes.push((sym.name, options.location));
                 }
             }
         }
@@ -3289,12 +3289,21 @@ impl<'a> Parser<'a> {
     /// signature: `lookup f (S.toList (stFunSyms sign) ++ S.toList (macroNames
     /// sign))` (Theory/Text/Parser/Signature.hs:212), which takes the FIRST
     /// match — free symbols before macros.
-    fn lookup_fun_options(&self, name: &str) -> Option<FunOptions> {
+    ///
+    /// Also returns the [`ParseContext`] of the declaration site, for diagnostics.
+    fn lookup_fun_options(&self, name: &str) -> Option<(FunOptions, ParseContext)> {
         // NO `ac_fun_syms` here: HS's `stACFunSyms` is a separate store, so a
         // user `[AC]` declaration never collides with a `NoEq`/macro one in
         // this check (see `tests/dual_declared_names.rs`).
+        // TODO: Why is [`AC`] excluded here. This makes for awkward lookup logic
+        // later where the caller needs to do the check anyway. See [`Self::macro_name_conflicts`]
+        // Also [`Self::app_decl_site`] does include it, so the logic is inconsistent.
         Self::first_declared_options(&self.fun_syms, name)
-            .or_else(|| Self::first_declared_options(&self.macro_syms, name))
+            .map(|opt| (opt, ParseContext::Function))
+            .or_else(|| {
+                Self::first_declared_options(&self.macro_syms, name)
+                    .map(|opt| (opt, ParseContext::Macro))
+            })
     }
 
     /// The declaration site backing a successful [`Self::lookup_arity`]
@@ -3309,9 +3318,9 @@ impl<'a> Parser<'a> {
                 self.ac_fun_syms
                     .iter()
                     .find(|(n, _)| n == id)
-                    .map(|(_, o)| *o)
+                    .map(|(_, o)| (*o, ParseContext::Function))
             })
-            .and_then(|o| o.location)
+            .and_then(|(o, _)| o.location)
     }
 
     /// HS `functionType` (Theory/Text/Parser/Signature.hs:150-161): either
@@ -3498,7 +3507,8 @@ impl<'a> Parser<'a> {
                 // static table, not just the builtins this theory enabled.
                 return Err(ParseError::ConflictingDeclarations {
                     name: name.clone(),
-                    context: ParseContext::Function,
+                    first_context: ParseContext::Function,
+                    second_context: ParseContext::Function,
                     first_at: b.location,
                     second_at: location,
                 });
@@ -3507,7 +3517,7 @@ impl<'a> Parser<'a> {
         // Check (2), Theory/Text/Parser/Signature.hs:212-217: the general
         // conflict against the
         // parse-time signature, macro names included.
-        if let Some(prev) = self.lookup_fun_options(&name) {
+        if let Some((prev, prev_context)) = self.lookup_fun_options(&name) {
             // Theory/Text/Parser/Signature.hs:213: `fst`/`snd` may be
             // re-declared at the pair
             // projections' own shape, tested by name, arity and privacy only.
@@ -3515,7 +3525,8 @@ impl<'a> Parser<'a> {
             if prev != requested && !pair_proj {
                 return Err(ParseError::ConflictingDeclarations {
                     name: name.clone(),
-                    context: ParseContext::Function,
+                    first_context: prev_context,
+                    second_context: ParseContext::Function,
                     first_at: prev.location,
                     second_at: location,
                 });
@@ -3816,17 +3827,28 @@ impl<'a> Parser<'a> {
         // A seeded symbol, or an enabled theory builtin, has no declaration
         // site — both still conflict, with `first_at` absent.  A symbol a
         // `builtins:` item merged points back at that item's name.
-        let first_at = match Self::first_declared_options(&self.fun_syms, name)
-            .or_else(|| Self::first_declared_options(&self.ac_fun_syms, name))
-            .or_else(|| Self::first_declared_options(&self.macro_syms, name))
-        {
-            Some(o) => o.location,
-            None if self.enabled_theory_noeq_syms().any(|s| s.name == name) => None,
+        // TODO: Use better lookup logic here. See [`Self::lookup_fun_options`] and [`Self::app_decl_site`]
+        // for comments.
+        let (first_at, first_context) = match Self::first_declared_options(&self.fun_syms, name)
+            .map(|o| (o.location, ParseContext::Function))
+            .or_else(|| {
+                Self::first_declared_options(&self.ac_fun_syms, name)
+                    .map(|o| (o.location, ParseContext::Function))
+            })
+            .or_else(|| {
+                Self::first_declared_options(&self.macro_syms, name)
+                    .map(|o| (o.location, ParseContext::Macro))
+            }) {
+            Some((loc, ctx)) => (loc, ctx),
+            None if self.enabled_theory_noeq_syms().any(|s| s.name == name) => {
+                (None, ParseContext::Builtin)
+            }
             None => return Ok(()),
         };
         Err(ParseError::ConflictingDeclarations {
             name: name.to_string(),
-            context: ParseContext::Macro,
+            first_context: first_context,
+            second_context: ParseContext::Macro,
             first_at,
             second_at: at,
         })
@@ -3953,7 +3975,8 @@ impl<'a> Parser<'a> {
             if let Some((_, loc)) = self.seen_restriction_names.iter().find(|(n, _)| n == &name) {
                 return Err(ParseError::ConflictingDeclarations {
                     name,
-                    context: ParseContext::Restriction,
+                    first_context: ParseContext::Restriction,
+                    second_context: ParseContext::Restriction,
                     first_at: Some(*loc),
                     second_at: location,
                 });
@@ -4076,7 +4099,8 @@ impl<'a> Parser<'a> {
             {
                 return Err(ParseError::ConflictingDeclarations {
                     name: restr_name,
-                    context: ParseContext::Restriction,
+                    first_context: ParseContext::Restriction,
+                    second_context: ParseContext::Restriction,
                     first_at: Some(*loc),
                     second_at: restr.location,
                 });
@@ -4101,7 +4125,8 @@ impl<'a> Parser<'a> {
                 // identifiers cannot start with `_`), so the name is verbatim.
                 let e = ParseError::ConflictingDeclarations {
                     name: r.name.clone(),
-                    context: ParseContext::Rule,
+                    second_context: ParseContext::Rule,
+                    first_context: ParseContext::Rule,
                     first_at: Some(first.location),
                     second_at: r.location,
                 };
