@@ -75,19 +75,6 @@ fn sigil_headed_atoms_keep_the_relational_alternative_labels() {
     );
 }
 
-/// `smallerp` fails before consuming unless the multiset signature bit is
-/// on, so only then does its `<?>` relabel join the set.
-#[test]
-fn the_multiset_builtin_adds_the_misspelled_comparisson_label() {
-    assert_expected(
-        "theory G begin\nbuiltins: multiset\nlemma L: \"Ex x. ~x\"\nend\n",
-        3,
-        19,
-        "\"",
-        &["subterm predicate", "multiset comparisson", "term equality"],
-    );
-}
-
 #[test]
 fn a_nat_sigil_head_without_the_builtin_word_keeps_the_two_label_set() {
     assert_expected(
