@@ -17,7 +17,7 @@
 
 use std::ops::Deref;
 
-use crate::parser::Location;
+use crate::parse_error::Location;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Theory {
