@@ -40,8 +40,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use tamarin_parser::ast as p;
 use tamarin_parser::wf::WfError;
+use tamarin_parser::{ast as p, DUMMY_LOCATION};
 use tamarin_term::function_symbols::{AcSym, FunSym};
 use tamarin_term::lterm::{sort_of_lnterm, HasFrees, LNTerm, LSort, LVar};
 use tamarin_term::maude_sig::MaudeSig;
@@ -126,11 +126,11 @@ pub fn mult_restricted_report(elab: &Theory, sig: &MaudeSig) -> Vec<WfError> {
 /// Also the attribute half of [`crate::pretty_theory::proto_rule_to_parsed`],
 /// the parser-AST projection of a synthesised rule.
 pub(crate) fn surface_attrs(attr: &crate::rule::RuleAttributes) -> Vec<p::RuleAttr> {
-    let mut out = Vec::new();
+    let mut out: Vec<p::RuleAttrKind> = Vec::new();
     if let Some(c) = &attr.color {
         // HS `text "color=" <> text (rgbToHex c)`; `rule_attribute_parts`
         // re-attaches the `#` that `rgbToHex` (Data/Color.hs:140-147) prefixes.
-        out.push(p::RuleAttr::Color(
+        out.push(p::RuleAttrKind::Color(
             tamarin_utils::color::rgb_to_hex(*c)
                 .trim_start_matches('#')
                 .to_string(),
@@ -141,21 +141,26 @@ pub(crate) fn surface_attrs(attr: &crate::rule::RuleAttributes) -> Vec<p::RuleAt
         // prettySapicTopLevel' f p ++ "\"")` (Theory/Model/Rule.hs:1324-1327).
         // Only the SAPIC translation fills this field — HS's attribute parser
         // `parseAndIgnore`s a user-written `process=`
-        // (Theory/Text/Parser/Rule.hs:69-95, see line 74), as does RS's.
-        out.push(p::RuleAttr::Process(
+        // (Theory/Text/Parser/Rule.hs:70-95, see line 74), as does RS's.
+        out.push(p::RuleAttrKind::Process(
             crate::pretty_sapic::pretty_sapic_top_level_attr(proc),
         ));
     }
     if attr.ignore_deriv_checks {
-        out.push(p::RuleAttr::NoDerivCheck);
+        out.push(p::RuleAttrKind::NoDerivCheck);
     }
     if attr.is_sapic_rule {
-        out.push(p::RuleAttr::IsSapicRule);
+        out.push(p::RuleAttrKind::IsSapicRule);
     }
     if let Some(r) = &attr.role {
-        out.push(p::RuleAttr::Role(r.clone()));
+        out.push(p::RuleAttrKind::Role(r.clone()));
     }
-    out
+    out.into_iter()
+        .map(|kind| p::RuleAttr {
+            kind,
+            location: DUMMY_LOCATION,
+        })
+        .collect()
 }
 
 // =============================================================================

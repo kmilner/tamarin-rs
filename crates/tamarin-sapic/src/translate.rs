@@ -594,14 +594,14 @@ fn lemma_needs_in_ev_res(lem: &tamarin_parser::ast::Lemma) -> bool {
 /// only special case is an `Action` atom on the `K` fact, which is `(True,
 /// False)` (a `K(..)@t` action is positive but not negative).
 fn is_pos_neg_formula(f: &tamarin_parser::ast::Formula) -> (bool, bool) {
-    use tamarin_parser::ast::Formula::*;
+    use tamarin_parser::ast::FormulaKind::*;
     fn and2(a: (bool, bool), b: (bool, bool)) -> (bool, bool) {
         (a.0 && b.0, a.1 && b.1)
     }
     fn swap(a: (bool, bool)) -> (bool, bool) {
         (a.1, a.0)
     }
-    match f {
+    match &f.kind {
         True | False => (true, true),
         Atom(a) => is_pos_neg_atom(a),
         Not(p) => swap(is_pos_neg_formula(p)),
@@ -642,7 +642,7 @@ mod tests {
     use super::*;
     use crate::convert::convert_process;
     use crate::typing::type_and_rename_process;
-    use tamarin_parser::ast as p;
+    use tamarin_parser::{ast as p, DUMMY_LOCATION};
 
     fn typing2_process() -> p::Process {
         let xspec = p::VarSpec {
@@ -650,12 +650,14 @@ mod tests {
             idx: 0,
             sort: p::SortHint::Untagged,
             typ: Some("lol".into()),
+            location: DUMMY_LOCATION,
         };
         let xref = p::Term::Var(p::VarSpec {
             name: "x".into(),
             idx: 0,
             sort: p::SortHint::Untagged,
             typ: None,
+            location: DUMMY_LOCATION,
         });
         let ffx = p::Term::App(
             "f".into(),
@@ -669,6 +671,7 @@ mod tests {
                     name: "Test".into(),
                     args: vec![xref],
                     annotations: vec![],
+                    location: DUMMY_LOCATION,
                 }),
                 body: Box::new(p::Process::Action {
                     action: p::SapicAction::ChOut {
@@ -720,20 +723,25 @@ mod tests {
     }
 
     fn action_atom(name: &str) -> p::Formula {
-        p::Formula::Atom(p::Atom::Action(
-            p::Fact {
-                persistent: false,
-                name: name.into(),
-                args: vec![],
-                annotations: vec![],
-            },
-            p::Term::Var(p::VarSpec {
-                name: "i".into(),
-                idx: 0,
-                sort: p::SortHint::Node,
-                typ: None,
-            }),
-        ))
+        p::Formula::atom(
+            p::Atom::Action(
+                p::Fact {
+                    persistent: false,
+                    name: name.into(),
+                    args: vec![],
+                    annotations: vec![],
+                    location: DUMMY_LOCATION,
+                },
+                p::Term::Var(p::VarSpec {
+                    name: "i".into(),
+                    idx: 0,
+                    sort: p::SortHint::Node,
+                    typ: None,
+                    location: DUMMY_LOCATION,
+                }),
+            ),
+            DUMMY_LOCATION,
+        )
     }
 
     /// `Conn Iff p q -> isPosNegFormula $ p .==>. q .&&. q .==>. p`
@@ -745,7 +753,7 @@ mod tests {
     /// `in_event` restriction.
     #[test]
     fn iff_polarity_follows_hs_fixity_parse() {
-        let iff = p::Formula::Iff(Box::new(action_atom("A")), Box::new(action_atom("K")));
+        let iff = p::Formula::iff(action_atom("A"), action_atom("K"));
         assert_eq!(is_pos_neg_formula(&iff), (false, true));
 
         let lem = p::Lemma {

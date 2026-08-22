@@ -507,6 +507,7 @@ fn goal_cmp_disj_var_sort_uses_lsort_ord() {
             idx: 0,
             sort,
             typ: None,
+            location: tamarin_parser::DUMMY_LOCATION,
         };
         let atom = GAtom::Last(GTerm::Var(BVar::Free(v)));
         Goal::Disj(Disj::new(vec![Guarded::Atom(atom)]))

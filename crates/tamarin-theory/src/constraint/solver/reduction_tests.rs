@@ -3,6 +3,7 @@
 //   scripts/gen_license_headers.py --authors <this file>
 
 use super::*;
+use tamarin_parser::DUMMY_LOCATION;
 use tamarin_term::maude_sig::pair_maude_sig;
 
 use crate::test_maude::maude_path;
@@ -910,6 +911,7 @@ fn insert_atom_action_creates_action_goal() {
             idx: 0,
             sort,
             typ: None,
+            location: DUMMY_LOCATION,
         })
     };
     let action = Atom::Action(
@@ -918,6 +920,7 @@ fn insert_atom_action_creates_action_goal() {
             annotations: Vec::new(),
             name: "Setup".into(),
             args: vec![mkvar("k", SortHint::Msg)],
+            location: tamarin_parser::DUMMY_LOCATION,
         },
         mkvar("i", SortHint::Node),
     );
@@ -943,6 +946,7 @@ fn insert_atom_less_creates_less_atom() {
             idx: 0,
             sort: SortHint::Node,
             typ: None,
+            location: DUMMY_LOCATION,
         })
     };
     let less = Atom::Less(mkvar("i"), mkvar("j"));
@@ -972,6 +976,7 @@ fn insert_atom_last_sets_last_atom() {
         idx: 0,
         sort: SortHint::Node,
         typ: None,
+        location: DUMMY_LOCATION,
     });
     let last = Atom::Last(v);
     assert!(r.insert_atom(&last));
@@ -1114,6 +1119,7 @@ fn neg_less_node_universal(i_name: &str, j_name: &str) -> Guarded {
             idx: 0,
             sort: SortHint::Node,
             typ: None,
+            location: DUMMY_LOCATION,
         })
     };
     let guard: GAtom = atom_to_gatom_free(&Atom::Less(mkvar(i_name), mkvar(j_name)));

@@ -2312,22 +2312,10 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         {
             Ok(thy) => thy,
             Err(e) => {
-                if let Some(g) = &e.ghc_error {
-                    // A GHC `error` raised inside the HS parser (e.g. `macro`'s
-                    // two rejections, Theory/Text/Parser/Macro.hs:34-38) never
-                    // reaches `handleError`: the exception escapes to GHC's
-                    // runtime, which writes `tamarin-prover: ` ++
-                    // `displayException` — message plus `HasCallStack` frame —
-                    // to stderr and exits 1.  No parsec frame, no `SourcePos`
-                    // header; the maude banner above has already printed.
-                    return Ok(ghc_exception(&g.display_exception()));
-                }
-                // HS batch: `handleError e@(ParserError _) = die $ show e`
-                // (Batch.hs:189-317, see line 235).  `die` writes `show e` — the raw
-                // parsec frame, with `inFile` as the `SourcePos` name — to
-                // stderr and exits with code 1.  No `error:` prefix and no
-                // `parse error in …:` wrapper (neither of which HS emits).
-                eprintln!("{}", e.with_source(in_file.clone()));
+                // All parse failures — including the rejections HS raises as
+                // GHC `error`s (`ParseError::Abort`) — render as a codespan
+                // diagnostic on stderr, exit code 1.
+                report_parser_error(e, in_file, &src);
                 return Ok(1);
             }
         };
@@ -2960,6 +2948,46 @@ fn print_overall_summary(file_results: &[FileResult], prove_mode: bool) {
         println!();
     }
     println!("{}", line);
+}
+
+/// Render a parse error as a codespan diagnostic on stderr: the error's
+/// labels become primary/secondary source spans, its notes the footer.
+fn report_parser_error(err: tamarin_parser::ParseError, src_name: &str, src_content: &str) {
+    use codespan_reporting::diagnostic::{Diagnostic, Label};
+    use codespan_reporting::files::SimpleFiles;
+    use codespan_reporting::term::{
+        self,
+        termcolor::{ColorChoice, StandardStream},
+    };
+
+    let mut files = SimpleFiles::new();
+    let file_id = files.add(src_name, src_content);
+
+    let labels: Vec<Label<usize>> = err
+        .labels()
+        .into_iter()
+        .map(|label| {
+            let range = label.at.start..label.at.end;
+            if label.is_primary {
+                Label::primary(file_id, range).with_message(label.message)
+            } else {
+                Label::secondary(file_id, range).with_message(label.message)
+            }
+        })
+        .collect();
+
+    let diagnostic = Diagnostic::error()
+        .with_message(err.message())
+        .with_labels(labels)
+        .with_notes(err.notes());
+
+    // `Auto` asks termcolor's environment check: colours unless `TERM` is
+    // unset or `dumb`, or `NO_COLOR` is set.
+    let writer = StandardStream::stderr(ColorChoice::Auto);
+    let config = codespan_reporting::term::Config::default();
+
+    term::emit_to_write_style(&mut writer.lock(), &config, &files, &diagnostic)
+        .expect("Failed to report parse errors.");
 }
 
 #[cfg(test)]

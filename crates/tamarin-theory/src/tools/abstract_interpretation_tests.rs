@@ -495,7 +495,7 @@ fn partial_evaluation_rule_multiplication_and_name_hints() {
 fn parsed_stub_rule(name: &str) -> p::Rule {
     p::Rule {
         name: name.to_string(),
-        modulo: None,
+        modulo: p::ModuloKind::E,
         attributes: vec![],
         let_block: vec![],
         premises: vec![],
@@ -504,6 +504,7 @@ fn parsed_stub_rule(name: &str) -> p::Rule {
         embedded_restrictions: vec![],
         variants: vec![],
         left_right: None,
+        location: tamarin_parser::DUMMY_LOCATION,
     }
 }
 

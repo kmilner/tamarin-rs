@@ -134,13 +134,13 @@ fn macro_in_lemma_formula_expands() {
         .unwrap();
     // The Action atom's fact's arg should be Var(x) (not App("m", [Var(x)])).
     fn check(f: &p::Formula) {
-        match f {
-            p::Formula::Exists(_, body) => check(body),
-            p::Formula::And(a, b) => {
+        match &f.kind {
+            p::FormulaKind::Exists(_, body) => check(body),
+            p::FormulaKind::And(a, b) => {
                 check(a);
                 check(b);
             }
-            p::Formula::Atom(p::Atom::Action(fact, _)) => {
+            p::FormulaKind::Atom(p::Atom::Action(fact, _)) => {
                 assert!(
                     matches!(&fact.args[0], p::Term::Var(v) if v.name == "x"),
                     "got {:?}",
@@ -235,14 +235,14 @@ fn case_test_formula_is_not_macro_expanded() {
         .expect("case test");
     // The Action atom's fact arg must remain App("idm", [Var("a")]).
     fn check(f: &p::Formula) -> bool {
-        match f {
-            p::Formula::Exists(_, body) | p::Formula::Forall(_, body) => check(body),
-            p::Formula::And(a, b)
-            | p::Formula::Or(a, b)
-            | p::Formula::Implies(a, b)
-            | p::Formula::Iff(a, b) => check(a) || check(b),
-            p::Formula::Not(g) => check(g),
-            p::Formula::Atom(p::Atom::Action(fact, _)) => {
+        match &f.kind {
+            p::FormulaKind::Exists(_, body) | p::FormulaKind::Forall(_, body) => check(body),
+            p::FormulaKind::And(a, b)
+            | p::FormulaKind::Or(a, b)
+            | p::FormulaKind::Implies(a, b)
+            | p::FormulaKind::Iff(a, b) => check(a) || check(b),
+            p::FormulaKind::Not(g) => check(g),
+            p::FormulaKind::Atom(p::Atom::Action(fact, _)) => {
                 matches!(fact.args.first(),
                         Some(p::Term::App(name, args)) if name == "idm" && args.len() == 1)
             }
@@ -281,14 +281,14 @@ fn acc_lemma_formula_is_not_macro_expanded() {
         })
         .expect("acc lemma");
     fn check(f: &p::Formula) -> bool {
-        match f {
-            p::Formula::Exists(_, body) | p::Formula::Forall(_, body) => check(body),
-            p::Formula::And(a, b)
-            | p::Formula::Or(a, b)
-            | p::Formula::Implies(a, b)
-            | p::Formula::Iff(a, b) => check(a) || check(b),
-            p::Formula::Not(g) => check(g),
-            p::Formula::Atom(p::Atom::Action(fact, _)) => {
+        match &f.kind {
+            p::FormulaKind::Exists(_, body) | p::FormulaKind::Forall(_, body) => check(body),
+            p::FormulaKind::And(a, b)
+            | p::FormulaKind::Or(a, b)
+            | p::FormulaKind::Implies(a, b)
+            | p::FormulaKind::Iff(a, b) => check(a) || check(b),
+            p::FormulaKind::Not(g) => check(g),
+            p::FormulaKind::Atom(p::Atom::Action(fact, _)) => {
                 matches!(fact.args.first(),
                         Some(p::Term::App(name, args)) if name == "idm" && args.len() == 1)
             }

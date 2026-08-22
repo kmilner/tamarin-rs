@@ -33,7 +33,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use tamarin_parser::ast as p;
+use tamarin_parser::{ast as p, BuiltinKind};
 use tamarin_term::function_symbols::{AcFctSym, Constructability, NdcState, NoEqSym, Privacy};
 use tamarin_term::lterm::LSort;
 use tamarin_term::lterm::LVar;
@@ -438,10 +438,10 @@ fn collect_process_pub_names(p: &crate::sapic::PlainProcess, out: &mut Vec<Strin
 /// parser-AST formula, in traversal order.  Serves `collect_process_pub_names`
 /// for the `Cond` combinator, whose condition never leaves the parser AST.
 fn collect_parser_formula_pub_names(f: &p::Formula, out: &mut Vec<String>) {
-    use tamarin_parser::ast::{Atom, Formula};
-    match f {
-        Formula::False | Formula::True => {}
-        Formula::Atom(a) => match a {
+    use tamarin_parser::ast::{Atom, FormulaKind::*};
+    match &f.kind {
+        False | True => {}
+        Atom(a) => match a {
             Atom::Eq(x, y) | Atom::Less(x, y) | Atom::LessMset(x, y) | Atom::Subterm(x, y) => {
                 collect_parser_term_pub_names(x, out);
                 collect_parser_term_pub_names(y, out);
@@ -459,12 +459,12 @@ fn collect_parser_formula_pub_names(f: &p::Formula, out: &mut Vec<String>) {
                 }
             }
         },
-        Formula::Not(x) => collect_parser_formula_pub_names(x, out),
-        Formula::And(x, y) | Formula::Or(x, y) | Formula::Implies(x, y) | Formula::Iff(x, y) => {
+        Not(x) => collect_parser_formula_pub_names(x, out),
+        And(x, y) | Or(x, y) | Implies(x, y) | Iff(x, y) => {
             collect_parser_formula_pub_names(x, out);
             collect_parser_formula_pub_names(y, out);
         }
-        Formula::Forall(_, x) | Formula::Exists(_, x) => {
+        Forall(_, x) | Exists(_, x) => {
             collect_parser_formula_pub_names(x, out);
         }
     }
@@ -755,17 +755,17 @@ fn collect_user_funs(items: &[p::TheoryItem]) -> CollectedUserFuns {
     for it in items {
         if let p::TheoryItem::Builtins(names) = it {
             for n in names {
-                if n == "bilinear-pairing" {
+                if let BuiltinKind::BilinearPairing = n.kind {
                     bp = true;
                 }
-                for c in builtin_nullary_constants(n) {
+                for c in builtin_nullary_constants(n.kind) {
                     nullary.insert(c.to_string());
                 }
                 // Every `NoEq` name the builtin folds into `funSyms` — the
                 // set `lookupArity` ranks ahead of the `ACfctUser` entries
                 // (Theory/Text/Parser/Term.hs:62-71), e.g. `exp` under
                 // `builtins: diffie-hellman`.
-                for c in builtin_noeq_fun_names(n) {
+                for c in builtin_noeq_fun_names(n.kind) {
                     noeq_names.insert(c);
                 }
                 // HS `naryOpApp` / `lookupArity` (Theory/Text/Parser/Term.hs:63-65,93)
@@ -779,7 +779,7 @@ fn collect_user_funs(items: &[p::TheoryItem]) -> CollectedUserFuns {
                 // term serialises with the default `tamXC..` prefix and Maude
                 // rejects it (`bad token`), so `get variants` returns empty and
                 // the rule wrongly reports "has no variants".
-                for (name, priv_, constr) in builtin_fun_attrs(n) {
+                for (name, priv_, constr) in builtin_fun_attrs(n.kind) {
                     if priv_ == Privacy::Private {
                         private.insert(name.clone());
                     }
@@ -822,8 +822,8 @@ pub fn nullary_fun_names(items: &[p::TheoryItem]) -> BTreeSet<String> {
 /// theory module is generated from).  Used to thread builtin privacy /
 /// destructor flags into `term_to_lnterm`'s symbol resolution — HS reads these
 /// from the per-theory signature via `lookupArity`.
-fn builtin_fun_attrs(name: &str) -> Vec<(String, Privacy, Constructability)> {
-    let Some(msig) = builtin_sig(name) else {
+fn builtin_fun_attrs(builtin: BuiltinKind) -> Vec<(String, Privacy, Constructability)> {
+    let Some(msig) = builtin_sig(builtin) else {
         return Vec::new();
     };
     msig.st_fun_syms
@@ -876,11 +876,10 @@ fn builtin_nullary_names_from_msig(msig: &MaudeSig) -> Vec<String> {
 /// installs the corresponding `*FunSig` into the parser-state MaudeSig,
 /// and `nullaryApp` then consults that signature.
 ///
-/// Returns an empty vector for unknown builtin names (HS would never
-/// reach this point: `enableBuiltin` is exhaustive over the parsed
-/// keywords; unknowns fail at the parser).
-pub fn builtin_nullary_constants(name: &str) -> Vec<String> {
-    match builtin_sig(name) {
+/// Returns an empty vector for `reliable-channel`, the one builtin with
+/// no signature.
+pub fn builtin_nullary_constants(builtin: BuiltinKind) -> Vec<String> {
+    match builtin_sig(builtin) {
         Some(msig) => builtin_nullary_names_from_msig(&msig),
         None => Vec::new(),
     }
@@ -892,10 +891,10 @@ pub fn builtin_nullary_constants(name: &str) -> Vec<String> {
 /// `DH_neutral` for `diffie-hellman`, Term/Maude/Signature.hs:110-125) —
 /// read off the same `MaudeSig` as [`builtin_nullary_constants`].  These are
 /// the names `lookupArity` resolves as `NoEqUser` ahead of any `ACfctUser`
-/// entry (Theory/Text/Parser/Term.hs:62-71).  Empty for unknown names, as
-/// with [`builtin_nullary_constants`].
-fn builtin_noeq_fun_names(name: &str) -> Vec<String> {
-    let Some(msig) = builtin_sig(name) else {
+/// entry (Theory/Text/Parser/Term.hs:62-71).  Empty for `reliable-channel`,
+/// as with [`builtin_nullary_constants`].
+fn builtin_noeq_fun_names(builtin: BuiltinKind) -> Vec<String> {
+    let Some(msig) = builtin_sig(builtin) else {
         return Vec::new();
     };
     msig.fun_syms
@@ -1226,19 +1225,19 @@ fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), Elab
     // signature.
     for item in items {
         match item {
-            p::TheoryItem::Builtins(names) => {
+            p::TheoryItem::Builtins(builtins) => {
                 let mut s = out.signature.maude_sig.clone();
-                for name in names {
-                    if let Some(sig) = builtin_sig(name) {
+                for builtin in builtins {
+                    if let Some(sig) = builtin_sig(builtin.kind) {
                         s = s.merge(sig);
                     }
                     // HS `builtinsNames` (Theory/Text/Parser/Signature.hs:78-85)
                     // maps two builtins to translation options:
                     //   `reliable-channel` → `_transReliable`
                     //   `locations-report` → `_transReport`
-                    match name.as_str() {
-                        "reliable-channel" => out.options.trans_reliable = true,
-                        "locations-report" => out.options.trans_report = true,
+                    match builtin.kind {
+                        BuiltinKind::ReliableChannel => out.options.trans_reliable = true,
+                        BuiltinKind::LocationsReport => out.options.trans_report = true,
                         _ => {}
                     }
                     // NOTE: `diffie-hellman` already arrives with `enable_dh`
@@ -1249,7 +1248,7 @@ fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), Elab
                     // needed here.  `diff` is a header/CLI flag handled via
                     // `enable_diff_maude_sig`, never a `builtins:` entry.
                     out.items.push(TheoryItem::Translation(
-                        TranslationElement::SignatureBuiltin(name.clone()),
+                        TranslationElement::SignatureBuiltin(builtin.kind.as_str().to_string()),
                     ));
                 }
                 out.signature.maude_sig = s;
@@ -1561,18 +1560,18 @@ pub fn elaborate_lemma_attr(a: &p::LemmaAttr) -> LemmaAttr {
 fn rule_attributes_from_parser(attrs: &[p::RuleAttr]) -> RuleAttributes {
     let mut out = RuleAttributes::empty();
     for a in attrs {
-        match a {
-            p::RuleAttr::Color(hex) => {
+        match &a.kind {
+            p::RuleAttrKind::Color(hex) => {
                 if let Some(rgb) = tamarin_utils::color::hex_to_rgb(hex) {
                     out.color = Some(rgb);
                 }
             }
-            p::RuleAttr::NoDerivCheck => out.ignore_deriv_checks = true,
-            p::RuleAttr::Role(s) => out.role = Some(s.clone()),
-            p::RuleAttr::IsSapicRule => out.is_sapic_rule = true,
+            p::RuleAttrKind::NoDerivCheck => out.ignore_deriv_checks = true,
+            p::RuleAttrKind::Role(s) => out.role = Some(s.clone()),
+            p::RuleAttrKind::IsSapicRule => out.is_sapic_rule = true,
             // `process=` (dropped by the parser) and external attributes carry
             // no `RuleAttributes` field — HS `parseAndIgnore` / `parseExternal`.
-            p::RuleAttr::Process(_) | p::RuleAttr::External(_, _) => {}
+            p::RuleAttrKind::Process(_) | p::RuleAttrKind::External(_, _) => {}
         }
     }
     out
@@ -1700,8 +1699,8 @@ fn subst_fact_in_place(f: &mut p::Fact, key: &p::Term, val: &p::Term) {
 }
 
 fn subst_formula_in_place(phi: &mut p::Formula, key: &p::Term, val: &p::Term) {
-    use p::Formula::*;
-    match phi {
+    use p::FormulaKind::*;
+    match &mut phi.kind {
         False | True => {}
         Atom(a) => subst_atom_in_place(a, key, val),
         Not(p) => subst_formula_in_place(p, key, val),
@@ -1890,6 +1889,7 @@ pub fn lnterm_to_term(t: &tamarin_term::lterm::LNTerm) -> p::Term {
                 idx: v.idx,
                 sort,
                 typ: None,
+                location: tamarin_parser::DUMMY_LOCATION,
             })
         }
         tamarin_term::term::Term::Lit(Lit::Con(name)) => {
@@ -2690,24 +2690,33 @@ pub fn fact_to_sapic_fact(f: &p::Fact) -> Result<crate::sapic::SapicLNFact, Elab
 // Builtin → MaudeSig
 // =============================================================================
 
-fn builtin_sig(name: &str) -> Option<MaudeSig> {
-    match name {
-        "diffie-hellman" => Some(dh_maude_sig()),
-        "bilinear-pairing" => Some(bp_maude_sig()),
-        "multiset" => Some(mset_maude_sig()),
-        "natural-numbers" => Some(nat_maude_sig()),
-        "xor" => Some(xor_maude_sig()),
-        "symmetric-encryption" => Some(sym_enc_maude_sig()),
-        "asymmetric-encryption" => Some(asym_enc_maude_sig()),
-        "signing" => Some(signature_maude_sig()),
-        "revealing-signing" => Some(reveal_signature_maude_sig()),
-        "hashing" => Some(hash_maude_sig()),
-        "locations-report" => Some(location_report_maude_sig()),
-        "dest-symmetric-encryption" => Some(sym_enc_dest_maude_sig()),
-        "dest-asymmetric-encryption" => Some(asym_enc_dest_maude_sig()),
-        "dest-signing" => Some(signature_dest_maude_sig()),
-        "dest-pairing" => Some(pair_dest_maude_sig()), // pair-with-destructors
-        _ => None,
+/// HS `builtinsNames` (Theory/Text/Parser/Signature.hs:78-86).
+/// `reliable-channel` is the one row that maps to `Nothing`
+/// (Theory/Text/Parser/Signature.hs:84): it enables a translation option but
+/// merges no signature.  `None` is NOT interchangeable with merging an empty
+/// or minimal signature: `MaudeSig::merge` is asymmetric in its right operand
+/// for the `fst`/`snd` constructor-vs-destructor pair (HS `unionExceptPairSym`,
+/// Term/Maude/Signature.hs:143-150), so merging `minimal_maude_sig` here would
+/// evict `dest-pairing`'s destructor `fst`/`snd` from a theory that declares
+/// both builtins.
+pub fn builtin_sig(builtin: BuiltinKind) -> Option<MaudeSig> {
+    match builtin {
+        BuiltinKind::DiffieHellman => Some(dh_maude_sig()),
+        BuiltinKind::BilinearPairing => Some(bp_maude_sig()),
+        BuiltinKind::Multiset => Some(mset_maude_sig()),
+        BuiltinKind::NaturalNumbers => Some(nat_maude_sig()),
+        BuiltinKind::Xor => Some(xor_maude_sig()),
+        BuiltinKind::SymmetricEncryption => Some(sym_enc_maude_sig()),
+        BuiltinKind::AsymmetricEncryption => Some(asym_enc_maude_sig()),
+        BuiltinKind::Signing => Some(signature_maude_sig()),
+        BuiltinKind::RevealingSigning => Some(reveal_signature_maude_sig()),
+        BuiltinKind::Hashing => Some(hash_maude_sig()),
+        BuiltinKind::LocationsReport => Some(location_report_maude_sig()),
+        BuiltinKind::DestSymmetricEncryption => Some(sym_enc_dest_maude_sig()),
+        BuiltinKind::DestAsymmetricEncryption => Some(asym_enc_dest_maude_sig()),
+        BuiltinKind::DestSigning => Some(signature_dest_maude_sig()),
+        BuiltinKind::DestPairing => Some(pair_dest_maude_sig()),
+        BuiltinKind::ReliableChannel => None,
     }
 }
 

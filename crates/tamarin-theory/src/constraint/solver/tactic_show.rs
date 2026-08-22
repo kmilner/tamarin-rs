@@ -546,6 +546,7 @@ mod tests {
             idx: 0,
             sort: p::SortHint::Fresh,
             typ: None,
+            location: tamarin_parser::DUMMY_LOCATION,
         }
     }
 
@@ -560,6 +561,7 @@ mod tests {
                 idx,
                 sort,
                 typ: None,
+                location: tamarin_parser::DUMMY_LOCATION,
             })
         };
         assert_eq!(show_varspec(&fresh("s")), "~s");

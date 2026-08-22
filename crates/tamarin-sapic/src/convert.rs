@@ -75,6 +75,7 @@ pub(crate) fn lvar_to_varspec(v: &LVar) -> p::VarSpec {
         idx: v.idx,
         sort: lsort_to_sort_hint(v.sort),
         typ: None,
+        location: tamarin_parser::DUMMY_LOCATION,
     }
 }
 
@@ -148,6 +149,7 @@ pub(crate) fn map_free_terms(
                     name: fa.name.clone(),
                     args: fa.args.iter().map(|x| rt(bound, f, x)).collect(),
                     annotations: fa.annotations.clone(),
+                    location: fa.location,
                 },
                 rt(bound, f, t),
             ),
@@ -157,6 +159,7 @@ pub(crate) fn map_free_terms(
                 name: fa.name.clone(),
                 args: fa.args.iter().map(|x| rt(bound, f, x)).collect(),
                 annotations: fa.annotations.clone(),
+                location: fa.location,
             }),
         }
     }
@@ -165,8 +168,8 @@ pub(crate) fn map_free_terms(
         f: &mut dyn FnMut(&p::VarSpec, &[String]) -> Option<p::Term>,
         formula: &p::Formula,
     ) -> p::Formula {
-        use p::Formula::*;
-        match formula {
+        use p::FormulaKind::*;
+        let kind = match &formula.kind {
             True => True,
             False => False,
             Atom(a) => Atom(ra(bound, f, a)),
@@ -193,7 +196,8 @@ pub(crate) fn map_free_terms(
                 bound.truncate(saved);
                 r
             }
-        }
+        };
+        p::Formula::new(kind, formula.location)
     }
     let mut bound = Vec::new();
     rf(&mut bound, f, formula)
@@ -272,8 +276,8 @@ pub(crate) fn fold_free_vars(formula: &p::Formula, f: &mut dyn FnMut(&p::VarSpec
         f: &mut dyn FnMut(&p::VarSpec, &[String]),
         formula: &p::Formula,
     ) {
-        use p::Formula::*;
-        match formula {
+        use p::FormulaKind::*;
+        match &formula.kind {
             True | False => {}
             Atom(a) => ca(bound, f, a),
             Not(g) => cf(bound, f, g),
@@ -547,6 +551,8 @@ pub fn convert_process(proc: &p::Process) -> Result<PlainProcess, ConvertError> 
 
 #[cfg(test)]
 mod tests {
+    use tamarin_parser::DUMMY_LOCATION;
+
     use super::*;
 
     #[test]
@@ -557,12 +563,14 @@ mod tests {
             idx: 0,
             sort: p::SortHint::Untagged,
             typ: Some("lol".into()),
+            location: DUMMY_LOCATION,
         };
         let xref = p::Term::Var(p::VarSpec {
             name: "x".into(),
             idx: 0,
             sort: p::SortHint::Untagged,
             typ: None,
+            location: DUMMY_LOCATION,
         });
         let ffx = p::Term::App(
             "f".into(),
@@ -581,6 +589,7 @@ mod tests {
                 name: "Test".into(),
                 args: vec![xref],
                 annotations: vec![],
+                location: DUMMY_LOCATION,
             }),
             body: Box::new(inner),
         };
@@ -625,6 +634,7 @@ mod tests {
                 name: name.into(),
                 args: vec![],
                 annotations: vec![],
+                location: DUMMY_LOCATION,
             }),
             body: Box::new(p::Process::Null),
         }
@@ -682,6 +692,7 @@ mod tests {
             idx: 0,
             sort: p::SortHint::Untagged,
             typ: None,
+            location: DUMMY_LOCATION,
         });
         let b = p::Term::PubLit("b".into());
         let cond = p::Process::Comb {
@@ -707,12 +718,16 @@ mod tests {
         // `if <formula> then E else 0` converts to ProcessCombinator::Cond.
         // The combinator carries the parser-AST formula without any change.
         // Predicate atoms stay un-expanded until `lift_rule_restrictions`.
-        let frml = p::Formula::Atom(p::Atom::Pred(p::Fact {
-            persistent: false,
-            name: "P".into(),
-            args: vec![p::Term::PubLit("c".into())],
-            annotations: vec![],
-        }));
+        let frml = p::Formula::atom(
+            p::Atom::Pred(p::Fact {
+                persistent: false,
+                name: "P".into(),
+                args: vec![p::Term::PubLit("c".into())],
+                annotations: vec![],
+                location: DUMMY_LOCATION,
+            }),
+            DUMMY_LOCATION,
+        );
         let cond = p::Process::Comb {
             comb: p::ProcessComb::Cond(p::Condition::Formula(frml.clone())),
             left: Box::new(event("E")),
@@ -738,6 +753,7 @@ mod tests {
                     idx: 0,
                     sort: p::SortHint::Untagged,
                     typ: Some("cellty".into()),
+                    location: DUMMY_LOCATION,
                 },
             ),
             left: Box::new(event("E")),
@@ -772,15 +788,20 @@ mod tests {
                 idx: 0,
                 sort: p::SortHint::Untagged,
                 typ: None,
+                location: DUMMY_LOCATION,
             })
         };
         // `Eq(c, k)` — `c` is declared 0-arity below, `k` is an ordinary var.
-        let f = p::Formula::Atom(p::Atom::Pred(p::Fact {
-            persistent: false,
-            name: "Eq".into(),
-            args: vec![leaf("c"), leaf("k")],
-            annotations: Vec::new(),
-        }));
+        let f = p::Formula::atom(
+            p::Atom::Pred(p::Fact {
+                persistent: false,
+                name: "Eq".into(),
+                args: vec![leaf("c"), leaf("k")],
+                annotations: Vec::new(),
+                location: DUMMY_LOCATION,
+            }),
+            DUMMY_LOCATION,
+        );
         let renamed = |f: &p::Formula| {
             map_free_terms(f, &mut |v, _bound| {
                 Some(p::Term::Var(p::VarSpec {
@@ -788,6 +809,7 @@ mod tests {
                     idx: v.idx + 1,
                     sort: v.sort,
                     typ: v.typ.clone(),
+                    location: DUMMY_LOCATION,
                 }))
             })
         };
@@ -811,14 +833,19 @@ mod tests {
                         idx: 1,
                         sort: p::SortHint::Untagged,
                         typ: None,
+                        location: DUMMY_LOCATION,
                     })
                 };
-                p::Formula::Atom(p::Atom::Pred(p::Fact {
-                    persistent: false,
-                    name: "Eq".into(),
-                    args: vec![g("c"), g("k")],
-                    annotations: Vec::new(),
-                }))
+                p::Formula::atom(
+                    p::Atom::Pred(p::Fact {
+                        persistent: false,
+                        name: "Eq".into(),
+                        args: vec![g("c"), g("k")],
+                        annotations: Vec::new(),
+                        location: DUMMY_LOCATION,
+                    }),
+                    DUMMY_LOCATION,
+                )
             });
         }
 
@@ -828,20 +855,25 @@ mod tests {
         assert_eq!(seen(&f), vec!["k".to_string()]);
         assert_eq!(
             renamed(&f),
-            p::Formula::Atom(p::Atom::Pred(p::Fact {
-                persistent: false,
-                name: "Eq".into(),
-                args: vec![
-                    leaf("c"),
-                    p::Term::Var(p::VarSpec {
-                        name: "k".into(),
-                        idx: 1,
-                        sort: p::SortHint::Untagged,
-                        typ: None,
-                    })
-                ],
-                annotations: Vec::new(),
-            }))
+            p::Formula::atom(
+                p::Atom::Pred(p::Fact {
+                    persistent: false,
+                    name: "Eq".into(),
+                    args: vec![
+                        leaf("c"),
+                        p::Term::Var(p::VarSpec {
+                            name: "k".into(),
+                            idx: 1,
+                            sort: p::SortHint::Untagged,
+                            typ: None,
+                            location: DUMMY_LOCATION,
+                        })
+                    ],
+                    annotations: Vec::new(),
+                    location: DUMMY_LOCATION,
+                }),
+                DUMMY_LOCATION
+            )
         );
     }
 
@@ -892,6 +924,7 @@ mod tests {
             idx: 0,
             sort: p::SortHint::Untagged,
             typ: typ.map(Into::into),
+            location: DUMMY_LOCATION,
         })
     }
 
@@ -909,6 +942,7 @@ mod tests {
             name: name.into(),
             args,
             annotations: vec![],
+            location: DUMMY_LOCATION,
         }
     }
 
@@ -998,6 +1032,7 @@ mod tests {
             idx: 0,
             sort: p::SortHint::Node,
             typ: None,
+            location: DUMMY_LOCATION,
         };
         // One template built twice — with the marker and without — so the
         // wrapped leaf is the only delta under test.  `=x = x` at the top and
@@ -1005,13 +1040,20 @@ mod tests {
         // argument, so the strip provably recurses.
         let formulas = |wrap: fn(p::Term) -> p::Term| {
             vec![
-                p::Formula::Atom(p::Atom::Eq(wrap(pvar("x", None)), pvar("x", None))),
-                p::Formula::Forall(
+                p::Formula::atom(
+                    p::Atom::Eq(wrap(pvar("x", None)), pvar("x", None)),
+                    DUMMY_LOCATION,
+                ),
+                p::Formula::forall(
                     vec![ispec.clone()],
-                    Box::new(p::Formula::Atom(p::Atom::Action(
-                        pfact("Ev", vec![wrap(pvar("x", None))]),
-                        p::Term::Var(ispec.clone()),
-                    ))),
+                    p::Formula::atom(
+                        p::Atom::Action(
+                            pfact("Ev", vec![wrap(pvar("x", None))]),
+                            p::Term::Var(ispec.clone()),
+                        ),
+                        DUMMY_LOCATION,
+                    ),
+                    DUMMY_LOCATION,
                 ),
             ]
         };

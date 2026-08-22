@@ -1048,7 +1048,7 @@ fn user_ac_fun_names(thy: &Theory) -> AcSyms {
             }
             TheoryItem::Builtins(names) => {
                 for n in names {
-                    noeq.extend(crate::parser::builtin_noeq_sym_names(n));
+                    noeq.extend(crate::parser::builtin_noeq_sym_names(n.kind));
                 }
             }
             _ => {}
@@ -1691,8 +1691,8 @@ fn collect_formula_facts<'a>(
     ac: &AcSyms,
     out: &mut Vec<(Fact, Vec<String>)>,
 ) {
-    match f {
-        Formula::Atom(Atom::Action(fa, _)) => {
+    match &f.kind {
+        FormulaKind::Atom(Atom::Action(fa, _)) => {
             let terms = fa
                 .args
                 .iter()
@@ -1700,13 +1700,16 @@ fn collect_formula_facts<'a>(
                 .collect();
             out.push((fa.clone(), terms));
         }
-        Formula::Atom(_) | Formula::True | Formula::False => {}
-        Formula::Not(a) => collect_formula_facts(a, binders, ac, out),
-        Formula::And(a, b) | Formula::Or(a, b) | Formula::Implies(a, b) | Formula::Iff(a, b) => {
+        FormulaKind::Atom(_) | FormulaKind::True | FormulaKind::False => {}
+        FormulaKind::Not(a) => collect_formula_facts(a, binders, ac, out),
+        FormulaKind::And(a, b)
+        | FormulaKind::Or(a, b)
+        | FormulaKind::Implies(a, b)
+        | FormulaKind::Iff(a, b) => {
             collect_formula_facts(a, binders, ac, out);
             collect_formula_facts(b, binders, ac, out);
         }
-        Formula::Forall(vars, body) | Formula::Exists(vars, body) => {
+        FormulaKind::Forall(vars, body) | FormulaKind::Exists(vars, body) => {
             let n = vars.len();
             for v in vars {
                 binders.push(v);
@@ -2329,11 +2332,14 @@ fn collect_nullary_fun_names(thy: &Theory) -> BTreeSet<String> {
 /// ends in a bare `show v`.  `p t` precedes the separator and `show v` is a
 /// single token, so the binder is the text past the LAST ` as `.  Every
 /// user-written rule yields `None`: HS's rule-attribute parser discards a
-/// written `process=` (`parseAndIgnore`, Parser/Rule.hs:68-93, see line 72),
+/// written `process=` (`parseAndIgnore`, Theory/Text/Parser/Rule.hs:70-95, see line 74),
 /// so [`RuleAttr::Process`] exists only on SAPIC-generated rules.
 fn lookup_binder_render(r: &Rule) -> Option<&str> {
     r.attributes.iter().find_map(|a| match a {
-        RuleAttr::Process(p) => p
+        RuleAttr {
+            kind: RuleAttrKind::Process(p),
+            location: _,
+        } => p
             .strip_prefix("lookup ")
             .and_then(|rest| rest.rsplit_once(" as "))
             .map(|(_, v)| v),
@@ -2477,10 +2483,15 @@ pub fn message_derivation_report(thy: &Theory) -> WfReport {
     let nullary_funs = collect_nullary_fun_names(thy);
     let mut per_rule: Vec<(String, Vec<String>)> = Vec::new();
     for r in theory_rules(thy) {
-        if r.attributes
-            .iter()
-            .any(|a| matches!(a, crate::ast::RuleAttr::NoDerivCheck))
-        {
+        if r.attributes.iter().any(|a| {
+            matches!(
+                a,
+                crate::ast::RuleAttr {
+                    kind: crate::ast::RuleAttrKind::NoDerivCheck,
+                    location: _
+                }
+            )
+        }) {
             continue;
         }
         let unbound = collect_rule_unbound_vars(r, &nullary_funs);
@@ -2637,11 +2648,12 @@ fn project_rule(r: &Rule, left: bool) -> Rule {
             name: f.name.clone(),
             args: f.args.iter().map(|a| proj_term(a, left)).collect(),
             annotations: f.annotations.clone(),
+            location: f.location,
         }
     }
     Rule {
         name: r.name.clone(),
-        modulo: r.modulo.clone(),
+        modulo: r.modulo,
         attributes: r.attributes.clone(),
         let_block: r.let_block.clone(),
         premises: r.premises.iter().map(|f| proj_fact(f, left)).collect(),
@@ -2650,6 +2662,7 @@ fn project_rule(r: &Rule, left: bool) -> Rule {
         embedded_restrictions: r.embedded_restrictions.clone(),
         variants: vec![],
         left_right: None,
+        location: r.location,
     }
 }
 

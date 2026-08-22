@@ -15,13 +15,14 @@
 
 pub mod ast;
 pub mod lexer;
+pub mod parse_error;
 pub mod parser;
 pub mod proof_tree;
 pub mod wf;
 
 pub use ast::*;
+pub use parse_error::{Location, ParseContext, ParseError, ParseErrorLabel, DUMMY_LOCATION};
 pub use parser::{
-    parse_intruder_rules, parse_theory, parse_theory_or_diff, parse_theory_with_base, GhcError,
-    Message, ParseError,
+    parse_intruder_rules, parse_theory, parse_theory_or_diff, parse_theory_with_base,
 };
 pub use proof_tree::parse_proof_tree;

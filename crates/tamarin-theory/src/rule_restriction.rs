@@ -31,7 +31,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use tamarin_parser::ast as p;
+use tamarin_parser::{ast as p, DUMMY_LOCATION};
 
 use crate::predicate_expand::{expand_formula, ExpandError};
 
@@ -44,6 +44,7 @@ fn var_now() -> p::VarSpec {
         idx: 0,
         sort: p::SortHint::Node,
         typ: None,
+        location: DUMMY_LOCATION,
     }
 }
 
@@ -206,6 +207,7 @@ pub fn lift_one_rule(
         let expanded = resolve_nullary_constants(&expanded, nullary);
         // HS `fromRuleRestriction (rname ++ "_" ++ show i) f`.
         let sub_name = format!("{}_{}", rname, idx);
+        // TODO: Give restriction/formula its own span and thread this through here?
         let (restr, action) = from_rule_restriction(&sub_name, &expanded);
         restrictions.push(restr);
         new_actions.push(action);
@@ -242,18 +244,20 @@ fn from_rule_restriction(rname: &str, f: &p::Formula) -> (p::Restriction, p::Fac
     let restr_fact = mk_fact(rname, bvar_terms);
     // f'' = (Restr_<rname>(...) @ #NOW) ⇒ f'
     let now_term = p::Term::Var(var_now());
-    let antecedent = p::Formula::Atom(p::Atom::Action(restr_fact, now_term));
-    let f2 = p::Formula::Implies(Box::new(antecedent), Box::new(rewr_f.clone()));
+    let antecedent = p::Formula::atom(p::Atom::Action(restr_fact, now_term), f.location);
+    let f2 = p::Formula::implies(antecedent, rewr_f.clone());
     // foldr forAll f'' (frees f''): bind ALL free vars of f'' (sorted,
     // dedup), outermost-first matching HS `foldr`.
     let quant_vars = frees_sorted(&f2);
     let restr_formula = if quant_vars.is_empty() {
         f2
     } else {
-        p::Formula::Forall(quant_vars, Box::new(f2))
+        let location = f2.location;
+        p::Formula::forall(quant_vars, f2, location)
     };
     let restriction = p::Restriction {
         name: format!("{}{}", RESTR_PREFIX, rname),
+        location: restr_formula.location,
         formula: restr_formula,
         attributes: Vec::new(),
     };
@@ -310,6 +314,7 @@ fn mk_fact(rname: &str, args: Vec<p::Term>) -> p::Fact {
         name: format!("{}{}", RESTR_PREFIX, rname),
         args,
         annotations: Vec::new(),
+        location: DUMMY_LOCATION,
     }
 }
 
@@ -354,6 +359,7 @@ impl RewriteState {
             idx,
             sort: p::SortHint::Msg,
             typ: None,
+            location: DUMMY_LOCATION,
         };
         self.subst.insert((v.name.clone(), v.idx), t.clone());
         p::Term::Var(v)
@@ -364,9 +370,9 @@ impl RewriteState {
 /// terms.  `bound` carries the variables (full identity) bound by enclosing
 /// quantifiers.
 fn rewrite_formula(f: &p::Formula, bound: &[VarKey], st: &mut RewriteState) -> p::Formula {
-    use p::Formula::*;
-    match f {
-        True | False => f.clone(),
+    use p::FormulaKind::*;
+    let new_kind: p::FormulaKind = match &f.kind {
+        k @ (True | False) => k.clone(),
         Atom(a) => Atom(rewrite_atom(a, bound, st)),
         Not(g) => Not(Box::new(rewrite_formula(g, bound, st))),
         And(a, b) => And(
@@ -399,6 +405,11 @@ fn rewrite_formula(f: &p::Formula, bound: &[VarKey], st: &mut RewriteState) -> p
             }
             Exists(vs.clone(), Box::new(rewrite_formula(body, &b2, st)))
         }
+    };
+
+    p::Formula {
+        kind: new_kind,
+        location: f.location,
     }
 }
 
@@ -415,6 +426,7 @@ fn rewrite_atom(a: &p::Atom, bound: &[VarKey], st: &mut RewriteState) -> p::Atom
                 name: fa.name.clone(),
                 args: fa.args.iter().map(|x| rewrite_term(x, bound, st)).collect(),
                 annotations: fa.annotations.clone(),
+                location: fa.location,
             };
             Action(fa2, rewrite_term(t, bound, st))
         }
@@ -427,6 +439,7 @@ fn rewrite_atom(a: &p::Atom, bound: &[VarKey], st: &mut RewriteState) -> p::Atom
                 name: fa.name.clone(),
                 args: fa.args.iter().map(|x| rewrite_term(x, bound, st)).collect(),
                 annotations: fa.annotations.clone(),
+                location: fa.location,
             };
             Pred(fa2)
         }
@@ -618,8 +631,8 @@ fn sort_rank(s: p::SortHint) -> u8 {
 }
 
 fn collect_frees_formula(f: &p::Formula, bound: &mut Vec<VarKey>, out: &mut Vec<p::VarSpec>) {
-    use p::Formula::*;
-    match f {
+    use p::FormulaKind::*;
+    match &f.kind {
         True | False => {}
         Atom(a) => collect_frees_atom(a, bound, out),
         Not(g) => collect_frees_formula(g, bound, out),
@@ -721,7 +734,7 @@ mod tests {
             other => panic!("expected eq(x,x), got {:?}", other),
         }
         // Restriction formula: ∀ x #NOW. (Restr_A_1(x) @ #NOW) ⇒ (x = true)
-        let p::Formula::Forall(vs, body) = &restr.formula else {
+        let p::FormulaKind::Forall(vs, body) = &restr.formula.kind else {
             panic!("expected forall, got {:?}", restr.formula);
         };
         // The formula has two binders.  They are the abstracted x (Msg) and
@@ -736,30 +749,37 @@ mod tests {
         // antecedent, and the rewritten body is the consequent.  A swap of the
         // two keeps the formula an `Implies`, but it inverts the meaning of
         // the restriction.
-        let p::Formula::Implies(ante, conseq) = &**body else {
+        let p::FormulaKind::Implies(ante, conseq) = &body.kind else {
             panic!("expected implication, got {:?}", body);
         };
         assert_eq!(
             **ante,
-            p::Formula::Atom(p::Atom::Action(
-                p::Fact {
-                    persistent: false,
-                    name: "Restr_A_1".to_string(),
-                    args: vec![p::Term::Var(vs[0].clone())],
-                    annotations: Vec::new(),
-                },
-                p::Term::Var(vs[1].clone()),
-            ))
+            p::Formula::atom(
+                p::Atom::Action(
+                    p::Fact {
+                        persistent: false,
+                        name: "Restr_A_1".to_string(),
+                        args: vec![p::Term::Var(vs[0].clone())],
+                        annotations: Vec::new(),
+                        location: DUMMY_LOCATION,
+                    },
+                    p::Term::Var(vs[1].clone()),
+                ),
+                DUMMY_LOCATION,
+            )
         );
         // The consequent is the body of the predicate.  The complete `eq(x,x)`
         // subterm becomes the fresh `x`.  The nullary constant `true` stays
         // inline as a 0-ary application.  The code never abstracts it.
         assert_eq!(
             **conseq,
-            p::Formula::Atom(p::Atom::Eq(
-                p::Term::Var(vs[0].clone()),
-                p::Term::App("true".to_string(), Vec::new()),
-            ))
+            p::Formula::atom(
+                p::Atom::Eq(
+                    p::Term::Var(vs[0].clone()),
+                    p::Term::App("true".to_string(), Vec::new()),
+                ),
+                DUMMY_LOCATION,
+            )
         );
     }
 

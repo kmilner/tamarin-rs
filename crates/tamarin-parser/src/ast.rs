@@ -15,6 +15,10 @@
 // Top-level theory
 // =============================================================================
 
+use std::ops::Deref;
+
+use crate::parse_error::Location;
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Theory {
     pub is_diff: bool,
@@ -25,7 +29,7 @@ pub struct Theory {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum TheoryItem {
-    Builtins(Vec<String>),
+    Builtins(Vec<Builtin>),
     Functions(Vec<FunctionDecl>),
     Equations {
         convergent: bool,
@@ -68,7 +72,128 @@ pub enum TheoryItem {
 // Functions / equations / macros / predicates / restrictions
 // =============================================================================
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
+pub struct Builtin {
+    pub kind: BuiltinKind,
+    pub location: Location,
+}
+
+impl PartialEq for Builtin {
+    // Everything but location, as with `VarSpec`.
+    fn eq(&self, other: &Self) -> bool {
+        let Self { kind, location: _ } = self;
+        let Self {
+            kind: other_kind,
+            location: _,
+        } = other;
+        kind == other_kind
+    }
+}
+
+impl Eq for Builtin {}
+
+/// The legal `builtins:` names: one variant per HS `builtinsNames` row
+/// (Theory/Text/Parser/Signature.hs:78-86#builtinsNames).  The row ORDER lives
+/// in [`BuiltinKind::iter`], not in the variant order here.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum BuiltinKind {
+    LocationsReport,
+    DestAsymmetricEncryption,
+    AsymmetricEncryption,
+    DestSymmetricEncryption,
+    SymmetricEncryption,
+    DestSigning,
+    Signing,
+    RevealingSigning,
+    Hashing,
+    DestPairing,
+    DiffieHellman,
+    BilinearPairing,
+    Multiset,
+    Xor,
+    NaturalNumbers,
+    ReliableChannel,
+}
+
+impl std::fmt::Display for BuiltinKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+impl BuiltinKind {
+    pub fn from_str(name: &str) -> Option<Self> {
+        match name {
+            "locations-report" => Some(Self::LocationsReport),
+            "dest-asymmetric-encryption" => Some(Self::DestAsymmetricEncryption),
+            "asymmetric-encryption" => Some(Self::AsymmetricEncryption),
+            "dest-symmetric-encryption" => Some(Self::DestSymmetricEncryption),
+            "symmetric-encryption" => Some(Self::SymmetricEncryption),
+            "dest-signing" => Some(Self::DestSigning),
+            "signing" => Some(Self::Signing),
+            "revealing-signing" => Some(Self::RevealingSigning),
+            "hashing" => Some(Self::Hashing),
+            "dest-pairing" => Some(Self::DestPairing),
+            "diffie-hellman" => Some(Self::DiffieHellman),
+            "bilinear-pairing" => Some(Self::BilinearPairing),
+            "multiset" => Some(Self::Multiset),
+            "xor" => Some(Self::Xor),
+            "natural-numbers" => Some(Self::NaturalNumbers),
+            "reliable-channel" => Some(Self::ReliableChannel),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::LocationsReport => "locations-report",
+            Self::DestAsymmetricEncryption => "dest-asymmetric-encryption",
+            Self::AsymmetricEncryption => "asymmetric-encryption",
+            Self::DestSymmetricEncryption => "dest-symmetric-encryption",
+            Self::SymmetricEncryption => "symmetric-encryption",
+            Self::DestSigning => "dest-signing",
+            Self::Signing => "signing",
+            Self::RevealingSigning => "revealing-signing",
+            Self::Hashing => "hashing",
+            Self::DestPairing => "dest-pairing",
+            Self::DiffieHellman => "diffie-hellman",
+            Self::BilinearPairing => "bilinear-pairing",
+            Self::Multiset => "multiset",
+            Self::Xor => "xor",
+            Self::NaturalNumbers => "natural-numbers",
+            Self::ReliableChannel => "reliable-channel",
+        }
+    }
+
+    /// Every legal name, in `builtinsNames` row order: the two rows the list
+    /// carries itself (Theory/Text/Parser/Signature.hs:83-84) followed by
+    /// `builtinsDiffNames` (Theory/Text/Parser/Signature.hs:61-76).  That is
+    /// the order HS's own `expecting` list for an unrecognised `builtins:`
+    /// name is printed in, so it is oracle-pinned, not a free choice.
+    pub fn iter() -> impl Iterator<Item = Self> {
+        const BUILTINKINDS: [BuiltinKind; 16] = [
+            BuiltinKind::LocationsReport,
+            BuiltinKind::ReliableChannel,
+            BuiltinKind::DiffieHellman,
+            BuiltinKind::BilinearPairing,
+            BuiltinKind::Multiset,
+            BuiltinKind::Xor,
+            BuiltinKind::SymmetricEncryption,
+            BuiltinKind::AsymmetricEncryption,
+            BuiltinKind::Signing,
+            BuiltinKind::DestPairing,
+            BuiltinKind::DestSymmetricEncryption,
+            BuiltinKind::DestAsymmetricEncryption,
+            BuiltinKind::DestSigning,
+            BuiltinKind::RevealingSigning,
+            BuiltinKind::Hashing,
+            BuiltinKind::NaturalNumbers,
+        ];
+        BUILTINKINDS.iter().copied()
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct FunctionDecl {
     pub name: String,
     pub arg_types: Vec<Option<String>>,
@@ -90,6 +215,43 @@ pub struct FunctionDecl {
     /// Theory/Text/Parser/Signature.hs:183-225): neither = `NotNDC`, `ndc`
     /// alone = `IsNDC`, `ndc_diff` alone = `IsNDCDiff`, both = `IsNDCBoth`.
     pub ndc_diff: bool,
+    pub location: Location,
+}
+
+impl PartialEq for FunctionDecl {
+    fn eq(&self, other: &Self) -> bool {
+        let Self {
+            name: _,
+            arg_types: _,
+            out_type: _,
+            private: _,
+            destructor: _,
+            ac: _,
+            ndc: _,
+            ndc_diff: _,
+            location: _,
+        } = self;
+        let Self {
+            name: _,
+            arg_types: _,
+            out_type: _,
+            private: _,
+            destructor: _,
+            ac: _,
+            ndc: _,
+            ndc_diff: _,
+            location: _,
+        } = other;
+        // Everything but location
+        self.name == other.name
+            && self.arg_types == other.arg_types
+            && self.out_type == other.out_type
+            && self.private == other.private
+            && self.destructor == other.destructor
+            && self.ac == other.ac
+            && self.ndc == other.ndc
+            && self.ndc_diff == other.ndc_diff
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -111,27 +273,80 @@ pub struct Predicate {
     pub formula: Formula,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct Restriction {
     pub name: String,
     pub formula: Formula,
     pub attributes: Vec<RestrictionAttr>,
+    pub location: Location,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+impl PartialEq for Restriction {
+    fn eq(&self, other: &Self) -> bool {
+        let Self {
+            name: _,
+            formula: _,
+            attributes: _,
+            location: _,
+        } = self;
+        let Self {
+            name: _,
+            formula: _,
+            attributes: _,
+            location: _,
+        } = other;
+        // Everything but location
+        self.name == other.name
+            && self.formula == other.formula
+            && self.attributes == other.attributes
+    }
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum RestrictionAttr {
-    LeftRestriction,
-    RightRestriction,
+    Left,
+    Right,
+}
+
+impl RestrictionAttr {
+    /// The attributes a `restriction`/`axiom` header accepts, in HS
+    /// `restrictionAttribute`'s order
+    /// (Theory/Text/Parser/Restriction.hs:69-74#restrictionAttribute).  The
+    /// list doubles as the "expected" set an unknown restriction attribute is
+    /// reported against, so it must name exactly what the `restriction`
+    /// parser accepts.
+    ///
+    /// HS's third row, `both` (`BothRestriction`,
+    /// Theory/Text/Parser/Restriction.hs:73), has no variant here: the port
+    /// rejects `restriction R [both]` where HS's diff parser accepts it.
+    pub fn iter() -> impl Iterator<Item = Self> {
+        const RESTRICTION_ATTRS: [RestrictionAttr; 2] =
+            [RestrictionAttr::Left, RestrictionAttr::Right];
+        RESTRICTION_ATTRS.iter().copied()
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Left => "left",
+            Self::Right => "right",
+        }
+    }
 }
 
 // =============================================================================
 // Rules
 // =============================================================================
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum ModuloKind {
+    AC,
+    E,
+}
+
+#[derive(Debug, Clone)]
 pub struct Rule {
     pub name: String,
-    pub modulo: Option<String>, // E or AC
+    pub modulo: ModuloKind,
     pub attributes: Vec<RuleAttr>,
     pub let_block: Vec<LetBinding>,
     pub premises: Vec<Fact>,
@@ -140,17 +355,109 @@ pub struct Rule {
     pub embedded_restrictions: Vec<Formula>,
     pub variants: Vec<Rule>,
     pub left_right: Option<(Box<Rule>, Box<Rule>)>,
+    pub location: Location,
+}
+
+impl PartialEq for Rule {
+    fn eq(&self, other: &Self) -> bool {
+        // Compilation error once we add new fields
+        let Rule {
+            name: _,
+            modulo: _,
+            attributes: _,
+            let_block: _,
+            premises: _,
+            actions: _,
+            conclusions: _,
+            embedded_restrictions: _,
+            variants: _,
+            left_right: _,
+            location: _,
+        } = self;
+        let Rule {
+            name: _,
+            modulo: _,
+            attributes: _,
+            let_block: _,
+            premises: _,
+            actions: _,
+            conclusions: _,
+            embedded_restrictions: _,
+            variants: _,
+            left_right: _,
+            location: _,
+        } = other;
+        // Everything but the location
+        self.name == other.name
+            && self.modulo == other.modulo
+            && self.attributes == other.attributes
+            && self.let_block == other.let_block
+            && self.premises == other.premises
+            && self.actions == other.actions
+            && self.conclusions == other.conclusions
+            && self.embedded_restrictions == other.embedded_restrictions
+            && self.variants == other.variants
+            && self.left_right == other.left_right
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct RuleAttr {
+    pub kind: RuleAttrKind,
+    pub location: Location,
+}
+
+impl PartialEq for RuleAttr {
+    fn eq(&self, other: &Self) -> bool {
+        // Compilation error once we add new fields
+        let RuleAttr {
+            kind: _,
+            location: _,
+        } = self;
+        let RuleAttr {
+            kind: _,
+            location: _,
+        } = other;
+        // Everything but the location
+        self.kind == other.kind
+    }
+}
+
+impl RuleAttr {
+    /// Every attribute a rule header accepts, in HS `ruleAttribute`'s order
+    /// (Theory/Text/Parser/Rule.hs:70-95#ruleAttribute).  The list is the
+    /// "expected" set an unknown rule attribute is reported against, so every
+    /// entry must be something the attribute loop accepts and every accepted
+    /// attribute must appear.
+    ///
+    /// `process=` is accepted and its value discarded (see
+    /// [`RuleAttrKind::Process`]).  The last entry is the prefix of an
+    /// external attribute (`extIdentifier`, Theory/Text/Parser/Rule.hs:92-95),
+    /// which is a name rather than a fixed keyword; HS's own `expecting` set
+    /// spells it `"x-"` too.
+    pub fn expected() -> Vec<&'static str> {
+        vec![
+            "colour",
+            "color",
+            "process",
+            "no_derivcheck",
+            "role",
+            "issapicrule",
+            "x-",
+        ]
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum RuleAttr {
+pub enum RuleAttrKind {
     Color(String),
     NoDerivCheck,
     Role(String),
     IsSapicRule,
     /// `process="..."` — the rendered `prettySapicTopLevel'` of a
     /// SAPIC-generated rule's subprocess.  HS's rule-attribute PARSER ignores
-    /// a user-written `process=` (`parseAndIgnore`, Parser/Rule.hs:68-93, see line 72), so this
+    /// a user-written `process=` (`parseAndIgnore`,
+    /// Theory/Text/Parser/Rule.hs:70-95#ruleAttribute, see line 74), so this
     /// variant is never produced by the parser; it is synthesised only by the
     /// SAPIC translation when it injects generated rules into the parsed theory
     /// (so the pretty-printer renders the `process="..."` attribute).
@@ -225,6 +532,32 @@ pub enum LemmaAttr {
     Left,
     Right,
     Hint(String),
+}
+
+impl LemmaAttr {
+    /// Every attribute a lemma header accepts, in HS `lemmaAttribute`'s order
+    /// (Theory/Text/Parser/Lemma.hs:39-53#lemmaAttribute).  The list is the
+    /// "expected" set an unknown lemma attribute is reported against, so every
+    /// entry must be something the attribute loop accepts and every accepted
+    /// attribute must appear.
+    ///
+    /// `typing` heads the list: it is HS's retired spelling of `sources`
+    /// (Theory/Text/Parser/Lemma.hs:41), still accepted, and still the first
+    /// name HS's own `expecting` set prints.
+    pub fn expected() -> Vec<&'static str> {
+        vec![
+            "typing",
+            "sources",
+            "reuse",
+            "diff_reuse",
+            "use_induction",
+            "hide_lemma",
+            "heuristic",
+            "output",
+            "left",
+            "right",
+        ]
+    }
 }
 
 /// Structured skeleton parse — mirrors HS's
@@ -316,7 +649,7 @@ pub enum ParsedMethod {
 ///   - `Fact( ... ) @ #var`        →  ActionG
 ///   - `Fact( ... ) ▶<n> #var`     →  PremiseG (subscript-digit shows
 ///     the premise index)
-///   - `gf1 ∥ gf2 ∥ ...`           →  DisjG (Disj [guardedFormula])
+///   - `gf1 ∥ gf2 ∥ ...`           →  `DisjG (Disj [guardedFormula])`
 ///   - chain / subterm / splitEqs  →  Chain/Subterm/Split
 ///
 /// We build the cheap-to-recognise variants (Action, Premise, Disj);
@@ -353,8 +686,8 @@ pub enum GoalSpec {
     /// HS parses each disjunct as a full `Guarded` value bearing
     /// concrete LVar identities, then matches by structural equality
     /// against the open `Goal::Disj(...)` in `sys.goals` (HS
-    /// ProofMethod.hs:254-274, see line 258 `SolveGoal goal -> guard (goal `M.member`
-    /// L.get sGoals sys)`).
+    /// ProofMethod.hs:254-274#checkAndExecProofMethod, see line 258
+    /// `SolveGoal goal -> guard (goal `M.member` L.get sGoals sys)`).
     ///
     /// We can't reconstruct skeleton-text LVar indices reliably (they
     /// differ from runtime indices), so we capture each disjunct's
@@ -531,12 +864,38 @@ pub enum Condition {
 // Facts
 // =============================================================================
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct Fact {
     pub persistent: bool,
     pub name: String,
     pub args: Vec<Term>,
     pub annotations: Vec<FactAnnotation>,
+    pub location: Location,
+}
+
+impl PartialEq for Fact {
+    fn eq(&self, other: &Self) -> bool {
+        // Compilation error once we add new fields
+        let Fact {
+            persistent: _,
+            name: _,
+            args: _,
+            annotations: _,
+            location: _,
+        } = self;
+        let Fact {
+            persistent: _,
+            name: _,
+            args: _,
+            annotations: _,
+            location: _,
+        } = other;
+        // Everything but the location
+        self.persistent == other.persistent
+            && self.name == other.name
+            && self.args == other.args
+            && self.annotations == other.annotations
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Hash)]
@@ -550,8 +909,94 @@ pub enum FactAnnotation {
 // Formulas
 // =============================================================================
 
+#[derive(Debug, Clone)]
+pub struct Formula {
+    pub kind: FormulaKind,
+    pub location: Location,
+}
+
+impl Formula {
+    pub fn new(kind: FormulaKind, location: Location) -> Self {
+        Self { kind, location }
+    }
+
+    pub fn and(self, other: Formula) -> Self {
+        let new_loc = Location::from_locations(self.location, other.location);
+        Formula::new(FormulaKind::And(Box::new(self), Box::new(other)), new_loc)
+    }
+
+    pub fn or(self, other: Formula) -> Self {
+        let new_loc = Location::from_locations(self.location, other.location);
+        Formula::new(FormulaKind::Or(Box::new(self), Box::new(other)), new_loc)
+    }
+
+    pub fn implies(self, other: Formula) -> Self {
+        let new_loc = Location::from_locations(self.location, other.location);
+        Formula::new(
+            FormulaKind::Implies(Box::new(self), Box::new(other)),
+            new_loc,
+        )
+    }
+
+    pub fn iff(self, other: Formula) -> Self {
+        let new_loc = Location::from_locations(self.location, other.location);
+        Formula::new(FormulaKind::Iff(Box::new(self), Box::new(other)), new_loc)
+    }
+
+    pub fn not(inner: Formula, start: Location) -> Self {
+        let new_loc = Location::from_locations(start, inner.location);
+        Formula::new(FormulaKind::Not(Box::new(inner)), new_loc)
+    }
+
+    pub fn forall(vars: Vec<VarSpec>, body: Formula, start: Location) -> Self {
+        let new_loc = Location::from_locations(start, body.location);
+        Formula::new(FormulaKind::Forall(vars, Box::new(body)), new_loc)
+    }
+
+    pub fn exists(vars: Vec<VarSpec>, body: Formula, start: Location) -> Self {
+        let new_loc = Location::from_locations(start, body.location);
+        Formula::new(FormulaKind::Exists(vars, Box::new(body)), new_loc)
+    }
+
+    pub fn atom(atom: Atom, location: Location) -> Self {
+        Formula::new(FormulaKind::Atom(atom), location)
+    }
+
+    pub fn r#false(location: Location) -> Self {
+        Formula::new(FormulaKind::False, location)
+    }
+
+    pub fn r#true(location: Location) -> Self {
+        Formula::new(FormulaKind::True, location)
+    }
+}
+
+impl Deref for Formula {
+    type Target = FormulaKind;
+
+    fn deref(&self) -> &Self::Target {
+        &self.kind
+    }
+}
+
+impl PartialEq for Formula {
+    fn eq(&self, other: &Self) -> bool {
+        // Compilation error once we add new fields
+        let Formula {
+            kind: _,
+            location: _,
+        } = self;
+        let Formula {
+            kind: _,
+            location: _,
+        } = other;
+        // Everything but the location
+        self.kind == other.kind
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
-pub enum Formula {
+pub enum FormulaKind {
     False,
     True,
     Atom(Atom),
@@ -645,12 +1090,56 @@ impl BinOp {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone)]
 pub struct VarSpec {
     pub name: String,
     pub idx: u64,
     pub sort: SortHint,
     pub typ: Option<String>, // SAPIC type annotation
+    pub location: Location,
+}
+
+impl PartialEq for VarSpec {
+    fn eq(&self, other: &Self) -> bool {
+        let Self {
+            name: _,
+            idx: _,
+            sort: _,
+            typ: _,
+            location: _,
+        } = self;
+        let Self {
+            name: _,
+            idx: _,
+            sort: _,
+            typ: _,
+            location: _,
+        } = other;
+        // Everything but location
+        self.name == other.name
+            && self.idx == other.idx
+            && self.sort == other.sort
+            && self.typ == other.typ
+    }
+}
+
+impl Eq for VarSpec {}
+
+impl std::hash::Hash for VarSpec {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        let Self {
+            name: _,
+            idx: _,
+            sort: _,
+            typ: _,
+            location: _,
+        } = self;
+        // Everything but location
+        self.name.hash(state);
+        self.idx.hash(state);
+        self.sort.hash(state);
+        self.typ.hash(state);
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -674,6 +1163,38 @@ pub enum SuffixSort {
     Fresh,
     Node,
     Nat,
+}
+
+impl SuffixSort {
+    fn as_str(&self) -> &'static str {
+        match self {
+            SuffixSort::Msg => "msg",
+            SuffixSort::Pub => "pub",
+            SuffixSort::Fresh => "fresh",
+            SuffixSort::Node => "node",
+            SuffixSort::Nat => "nat",
+        }
+    }
+}
+
+impl std::fmt::Display for VarSpec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.sort {
+            SortHint::Fresh => write!(f, "~{}", self.name)?,
+            SortHint::Pub => write!(f, "${}", self.name)?,
+            SortHint::Node => write!(f, "#{}", self.name)?,
+            SortHint::Nat => write!(f, "%{}", self.name)?,
+            SortHint::Msg | SortHint::Untagged => write!(f, "{}", self.name)?,
+            SortHint::Suffix(s) => write!(f, "{}:{}", self.name, s.as_str())?,
+        }
+        if self.idx != 0 {
+            write!(f, ".{}", self.idx)?;
+        }
+        if let Some(typ) = &self.typ {
+            write!(f, ":{typ}")?;
+        }
+        Ok(())
+    }
 }
 
 // =============================================================================

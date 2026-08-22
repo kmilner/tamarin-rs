@@ -3,7 +3,7 @@
 //   scripts/gen_license_headers.py --authors <this file>
 
 use super::*;
-use tamarin_parser::parse_theory;
+use tamarin_parser::{parse_theory, DUMMY_LOCATION};
 
 /// A bundle carrying one `<tag>_<set>` name in every set, so a test can
 /// tell which bundle is installed and which set a name came from.
@@ -245,18 +245,21 @@ fn canonicalize_ac_in_pterm_flattens_and_sorts() {
         name: "na".into(),
         sort: p::SortHint::Msg,
         idx: 0,
+        location: DUMMY_LOCATION,
     });
     let k = p::Term::Var(p::VarSpec {
         typ: None,
         name: "k".into(),
         sort: p::SortHint::Fresh,
         idx: 0,
+        location: DUMMY_LOCATION,
     });
     let nb = p::Term::Var(p::VarSpec {
         typ: None,
         name: "nb".into(),
         sort: p::SortHint::Fresh,
         idx: 0,
+        location: DUMMY_LOCATION,
     });
     let inner = p::Term::BinOp(p::BinOp::Xor, Box::new(na.clone()), Box::new(k.clone()));
     let outer = p::Term::BinOp(p::BinOp::Xor, Box::new(inner), Box::new(nb.clone()));
@@ -290,6 +293,7 @@ fn canonicalize_ac_in_pterm_sees_the_installed_ac_set_at_every_depth() {
             name: name.into(),
             sort: p::SortHint::Msg,
             idx: 0,
+            location: DUMMY_LOCATION,
         })
     };
     let op = p::BinOp::AcFct(tamarin_term::intern::intern_str("add"));
@@ -333,6 +337,7 @@ fn canonicalize_ac_in_pterm_sees_the_installed_ac_set_at_every_depth() {
         name: "F".into(),
         args: vec![wrapped],
         annotations: Vec::new(),
+        location: tamarin_parser::DUMMY_LOCATION,
     };
     assert_eq!(
         canonicalize_ac_in_pfact(&fact).args,
@@ -501,6 +506,7 @@ fn parser_var(name: &str, idx: u64, sort: p::SortHint) -> p::Term {
         idx,
         sort,
         typ: None,
+        location: DUMMY_LOCATION,
     })
 }
 

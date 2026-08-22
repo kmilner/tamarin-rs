@@ -2,57 +2,85 @@
 // of the tamarin-prover sources this file cites; list them with:
 //   scripts/gen_license_headers.py --authors <this file>
 
-//! Byte-pinned parse errors of `lookupArity`-driven prefix-application
-//! resolution (Theory/Text/Parser/Term.hs:62-105) and the term-path frames
-//! its backtrack leaves behind.
+//! Parse errors of `lookupArity`-driven prefix-application resolution
+//! (Theory/Text/Parser/Term.hs:62-105).
 //!
 //! HS resolves every prefix application through `lookupArity` over the
 //! signature built SO FAR and parses the arity the lookup returns; on any
 //! failure — unknown operator, arity mismatch, malformed argument list — the
-//! try-wrapped application backtracks and the name reparses as a variable,
-//! so the NEXT token breaks the enclosing grammar.  The user-visible frame is
-//! that consumed failure, merged with the variable's `letter or digit`/`"."`
-//! identifier hangovers and the enabled operator labels.
-//!
-//! Every expected string is the stderr frame the pinned Haskell oracle
-//! (Git revision ef3f0468) prints for the same bytes, minus the three
-//! `maude tool:` banner lines (probe files p02–p48 of the lookup-arity
-//! probe matrix; sources here are byte-identical to the probes).
+//! try-wrapped application backtracks and the name reparses as a variable, so
+//! the NEXT token breaks the enclosing grammar and the user sees that
+//! consumed failure's merged frame.  This port instead reports the failure
+//! directly at the application: [`ParseError::UndeclaredFunction`] for an
+//! unknown operator, [`ParseError::FunctionUsedWithWrongArity`] (carrying the
+//! declaration site) for an arity mismatch.  Which sources are rejected
+//! matches the pinned Haskell oracle (Git revision ef3f0468, probe files
+//! p02–p48 of the lookup-arity probe matrix; sources here are byte-identical
+//! to the probes); the variants and positions are the port's own.
 
-use tamarin_parser::parse_theory;
+use tamarin_parser::{parse_theory, ParseError};
 
-/// The frame `parse_theory` reports for `src`, rendered exactly as batch
-/// mode prints it (`ParseError::with_source(<file>)`).
-fn frame(src: &str, source_name: &str) -> String {
-    parse_theory(src, &[])
-        .unwrap_err()
-        .with_source(source_name)
-        .to_string()
+/// Asserts `src` fails with [`ParseError::UndeclaredFunction`] naming `name`,
+/// whose span starts at `line`:`col`.
+#[track_caller]
+fn assert_undeclared(src: &str, name: &str, line: u32, col: u32) {
+    let e = parse_theory(src, &[]).expect_err("the probes below must all fail to parse");
+    let ParseError::UndeclaredFunction { name: got, at } = &e else {
+        panic!("expected the undeclared-function variant, got {e:?}");
+    };
+    assert_eq!(got, name);
+    assert_eq!((at.line, at.col), (line, col), "position of {e:?}");
 }
 
-/// Arity mismatch in a rule's fact argument: `g/3` applied to two arguments.
-/// The application backtracks, `g` reparses as a variable, and `commaSep`'s
-/// comma plus `parens`' close fail at the `(` together with the variable's
-/// identifier hangovers.
+/// Asserts `src` fails with [`ParseError::FunctionUsedWithWrongArity`]:
+/// `name` declared at arity `declared` (`declared_at` starting at
+/// `declared_pos` when the declaration is the user's own, `None` for a
+/// builtin's), used at arity `used`, the use's span starting at `used_pos`.
+#[track_caller]
+fn assert_wrong_arity(
+    src: &str,
+    name: &str,
+    declared: usize,
+    used: usize,
+    declared_pos: Option<(u32, u32)>,
+    used_pos: (u32, u32),
+) {
+    let e = parse_theory(src, &[]).expect_err("the probes below must all fail to parse");
+    let ParseError::FunctionUsedWithWrongArity {
+        name: got,
+        declared_arity,
+        used_arity,
+        declared_at,
+        used_at,
+    } = &e
+    else {
+        panic!("expected the wrong-arity variant, got {e:?}");
+    };
+    assert_eq!(got, name);
+    assert_eq!((*declared_arity, *used_arity), (declared, used));
+    assert_eq!(
+        declared_at.map(|at| (at.line, at.col)),
+        declared_pos,
+        "declared_at of {e:?}"
+    );
+    assert_eq!((used_at.line, used_at.col), used_pos, "used_at of {e:?}");
+}
+
+/// Arity mismatch in a rule's fact argument: `g/3` applied to two arguments
+/// reports both the declaration and the use.
 #[test]
-fn arity_mismatch_backtracks_to_variable_frame() {
+fn arity_mismatch_reports_declaration_and_use() {
     let src =
         "theory T\nbegin\n\nfunctions: g/3\n\nrule r:\n  [ ] --> [ Out(g('a','b')) ]\n\nend\n";
-    assert_eq!(
-        frame(src, "p02_toofew.spthy"),
-        "\"p02_toofew.spthy\" (line 7, column 18):\nunexpected \"(\"\nexpecting letter or digit, \".\", \",\" or \")\""
-    );
+    assert_wrong_arity(src, "g", 3, 2, Some((4, 12)), (7, 17));
 }
 
-/// An UNDECLARED name applied prefix is `lookupArity`'s `fail "unknown
-/// operator …"` — same backtrack, same frame.
+/// An UNDECLARED name applied prefix is HS `lookupArity`'s `fail "unknown
+/// operator …"`; the port names the operator.
 #[test]
 fn undeclared_application_is_a_parse_error() {
     let src = "theory T\nbegin\n\nrule r:\n  [ ] --> [ Out(g('a')) ]\n\nend\n";
-    assert_eq!(
-        frame(src, "p05_undeclared.spthy"),
-        "\"p05_undeclared.spthy\" (line 5, column 18):\nunexpected \"(\"\nexpecting letter or digit, \".\", \",\" or \")\""
-    );
+    assert_undeclared(src, "g", 5, 17);
 }
 
 /// Use BEFORE declaration: `lookupArity` reads the signature built so far,
@@ -60,306 +88,269 @@ fn undeclared_application_is_a_parse_error() {
 #[test]
 fn use_before_declaration_is_a_parse_error() {
     let src = "theory T\nbegin\n\nrule r:\n  [ ] --> [ Out(g('a')) ]\n\nfunctions: g/1\n\nend\n";
-    assert_eq!(
-        frame(src, "p25_use_before_decl.spthy"),
-        "\"p25_use_before_decl.spthy\" (line 5, column 18):\nunexpected \"(\"\nexpecting letter or digit, \".\", \",\" or \")\""
-    );
+    assert_undeclared(src, "g", 5, 17);
 }
 
-/// A nullary symbol applied to arguments fails the arity check; the name is
-/// then claimed by `nullaryApp`'s `symbol` (Parser/Term.hs:158-163), which leaves NO
-/// identifier hangovers — only the fact-argument labels remain.
+/// A nullary symbol applied to arguments fails the arity check like any
+/// other declared symbol.
 #[test]
-fn nullary_applied_with_args_has_no_identifier_hangover() {
+fn nullary_applied_with_args_is_an_arity_error() {
     let src =
         "theory T\nbegin\n\nfunctions: f/0\n\nrule r:\n  [ ] --> [ Out(f('a','b')) ]\n\nend\n";
-    assert_eq!(
-        frame(src, "p07_nullary_args.spthy"),
-        "\"p07_nullary_args.spthy\" (line 7, column 18):\nunexpected \"(\"\nexpecting \",\" or \")\""
-    );
+    assert_wrong_arity(src, "f", 0, 2, Some((4, 12)), (7, 17));
 }
 
 /// `h()` for the unary hashing builtin: the `k == 1` branch parses ONE
-/// `tupleterm`, which requires an operand — the empty argument list
-/// backtracks the application.
+/// `tupleterm`, which requires an operand — the empty argument list fails
+/// where the term was expected.
 #[test]
-fn unary_empty_parens_backtracks() {
+fn unary_empty_parens_is_a_term_error() {
     let src = "theory T\nbegin\n\nbuiltins: hashing\n\nrule r:\n  [ ] --> [ Out(h()) ]\n\nend\n";
-    assert_eq!(
-        frame(src, "p15b_h_empty.spthy"),
-        "\"p15b_h_empty.spthy\" (line 7, column 18):\nunexpected \"(\"\nexpecting letter or digit, \".\", \",\" or \")\""
+    let e = parse_theory(src, &[]).expect_err("must fail to parse");
+    let ParseError::Expected { found, at, .. } = &e else {
+        panic!("expected a term error, got {e:?}");
+    };
+    assert!(
+        found.as_deref().unwrap_or("").starts_with(')'),
+        "offending token {found:?} should start with `)`"
     );
+    assert_eq!((at.line, at.col), (7, 19));
 }
 
 /// `h('a',)` — the `k == 1` branch's `tupleterm` is `chainr1`, which does
 /// NOT admit a trailing comma (unlike `commaSep` for other arities).
 #[test]
-fn unary_trailing_comma_backtracks() {
+fn unary_trailing_comma_is_a_term_error() {
     let src =
         "theory T\nbegin\n\nbuiltins: hashing\n\nrule r:\n  [ ] --> [ Out(h('a',)) ]\n\nend\n";
-    assert_eq!(
-        frame(src, "p27_unary_trailing.spthy"),
-        "\"p27_unary_trailing.spthy\" (line 7, column 18):\nunexpected \"(\"\nexpecting letter or digit, \".\", \",\" or \")\""
+    let e = parse_theory(src, &[]).expect_err("must fail to parse");
+    let ParseError::Expected { found, at, .. } = &e else {
+        panic!("expected a term error, got {e:?}");
+    };
+    assert!(
+        found.as_deref().unwrap_or("").starts_with(')'),
+        "offending token {found:?} should start with `)`"
     );
+    assert_eq!((at.line, at.col), (7, 23));
 }
 
-/// A malformed NESTED application (undeclared `k` inside a well-arity `g`)
-/// fails the whole outer application: the error sits at the OUTER `(` and
-/// the inner failure is discarded, exactly like parsec's `try`.
+/// A malformed NESTED application (undeclared `k` inside a well-arity `g`):
+/// the INNER failure is the reported error.  Parsec's `try` discards it and
+/// re-reports at the outer `(`; the port keeps the precise cause.
 #[test]
-fn nested_failure_reports_at_the_outer_application() {
+fn nested_failure_reports_the_inner_application() {
     let src =
         "theory T\nbegin\n\nfunctions: g/2\n\nrule r:\n  [ ] --> [ Out(g(k('x'),'b')) ]\n\nend\n";
-    assert_eq!(
-        frame(src, "p28_nested_bad.spthy"),
-        "\"p28_nested_bad.spthy\" (line 7, column 18):\nunexpected \"(\"\nexpecting letter or digit, \".\", \",\" or \")\""
-    );
+    assert_undeclared(src, "k", 7, 19);
 }
 
-/// Whitespace between the name and `(`: the `letter or digit` hangover sits
-/// at the name's end and the error position (post-whitespace) has moved past
-/// it, so only `"."` survives of the identifier's labels.
+/// Whitespace between the name and `(` does not move the report off the
+/// application.
 #[test]
-fn whitespace_before_paren_drops_letter_or_digit() {
+fn whitespace_before_paren_keeps_the_report() {
     let src =
         "theory T\nbegin\n\nfunctions: g/3\n\nrule r:\n  [ ] --> [ Out(g ('a','b')) ]\n\nend\n";
-    assert_eq!(
-        frame(src, "p48_ws_before_paren.spthy"),
-        "\"p48_ws_before_paren.spthy\" (line 7, column 19):\nunexpected \"(\"\nexpecting \".\", \",\" or \")\""
-    );
+    assert_wrong_arity(src, "g", 3, 2, Some((4, 12)), (7, 17));
 }
 
 /// `em` is ALWAYS in `lookupArity`'s list at arity 2 (appended after the
-/// macro names, Parser/Term.hs:65); under bilinear-pairing a 3-argument use fails
-/// the arity check and the DH operator labels (`^`, `*` — BP forces
-/// `enableDH`) join the frame.
+/// macro names, Parser/Term.hs:65); a 3-argument use under bilinear-pairing
+/// fails the arity check.  The builtin has no declaration site, so
+/// `declared_at` is absent.
 #[test]
-fn em_wrong_arity_under_bp_shows_dh_operator_labels() {
+fn em_wrong_arity_under_bp_has_no_declaration_site() {
     let src = "theory T\nbegin\n\nbuiltins: bilinear-pairing\n\nrule r:\n  [ ] --> [ Out(em('a','b','c')) ]\n\nend\n";
-    assert_eq!(
-        frame(src, "p17_em_bp3.spthy"),
-        "\"p17_em_bp3.spthy\" (line 7, column 19):\nunexpected \"(\"\nexpecting letter or digit, \".\", \"^\", \"*\", \",\" or \")\""
-    );
+    assert_wrong_arity(src, "em", 2, 3, None, (7, 17));
 }
 
-/// A declared `[AC]` symbol adds its own infix-operator label between the
-/// variable hangovers and the fact-argument labels (`acterm`'s per-symbol
-/// `chainl1` level, Parser/Term.hs:165-172).
+/// An undeclared application reports the same variant whatever operator
+/// levels the theory's builtins (or a user `[AC]` symbol) opened — HS's
+/// frame varies here, collecting one label per enabled `chainl1` level.
 #[test]
-fn user_ac_symbol_label_joins_the_frame() {
-    let src =
-        "theory T\nbegin\n\nfunctions: f/2 [AC]\n\nrule r:\n  [ ] --> [ Out(k('a')) ]\n\nend\n";
-    assert_eq!(
-        frame(src, "p33_ac_label.spthy"),
-        "\"p33_ac_label.spthy\" (line 7, column 18):\nunexpected \"(\"\nexpecting letter or digit, \".\", \"f\", \",\" or \")\""
-    );
+fn undeclared_application_reports_the_same_under_every_operator_level() {
+    for (case, src) in [
+        (
+            "user [AC] symbol",
+            "theory T\nbegin\n\nfunctions: f/2 [AC]\n\nrule r:\n  [ ] --> [ Out(k('a')) ]\n\nend\n",
+        ),
+        (
+            "xor",
+            "theory T\nbegin\n\nbuiltins: xor\n\nrule r:\n  [ ] --> [ Out(k('a')) ]\n\nend\n",
+        ),
+        (
+            "multiset",
+            "theory T\nbegin\n\nbuiltins: multiset\n\nrule r:\n  [ ] --> [ Out(k('a')) ]\n\nend\n",
+        ),
+        (
+            "natural-numbers",
+            "theory T\nbegin\n\nbuiltins: natural-numbers\n\nrule r:\n  [ ] --> [ Out(k('a')) ]\n\nend\n",
+        ),
+    ] {
+        let e = parse_theory(src, &[]).expect_err("must fail to parse");
+        let ParseError::UndeclaredFunction { name, at } = &e else {
+            panic!("case {case}: expected the undeclared-function variant, got {e:?}");
+        };
+        assert_eq!(name, "k", "case {case}");
+        assert_eq!((at.line, at.col), (7, 17), "case {case}");
+    }
 }
 
-/// `builtins: xor` opens the `XOR`/`⊕` chain level; both spellings' labels
-/// appear (Parser/Term.hs:187-192, Token.hs:554-556).
+/// The surrounding context — a tuple, grouping parens — does not change the
+/// report either (HS's frame carries the context's own close labels).
 #[test]
-fn xor_operator_labels_join_the_frame() {
-    let src = "theory T\nbegin\n\nbuiltins: xor\n\nrule r:\n  [ ] --> [ Out(k('a')) ]\n\nend\n";
-    assert_eq!(
-        frame(src, "p37_xor_label.spthy"),
-        "\"p37_xor_label.spthy\" (line 7, column 18):\nunexpected \"(\"\nexpecting letter or digit, \".\", \"XOR\", \"⊕\", \",\" or \")\""
-    );
-}
-
-/// `builtins: multiset` opens the `++`/`+` union level (Parser/Term.hs:195-200,
-/// Token.hs:550-552).
-#[test]
-fn multiset_operator_labels_join_the_frame() {
-    let src =
-        "theory T\nbegin\n\nbuiltins: multiset\n\nrule r:\n  [ ] --> [ Out(k('a')) ]\n\nend\n";
-    assert_eq!(
-        frame(src, "p38_mset_label.spthy"),
-        "\"p38_mset_label.spthy\" (line 7, column 18):\nunexpected \"(\"\nexpecting letter or digit, \".\", \"++\", \"+\", \",\" or \")\""
-    );
-}
-
-/// `builtins: natural-numbers` opens the `%+` level (Parser/Term.hs:203-208).
-#[test]
-fn nat_operator_label_joins_the_frame() {
-    let src = "theory T\nbegin\n\nbuiltins: natural-numbers\n\nrule r:\n  [ ] --> [ Out(k('a')) ]\n\nend\n";
-    assert_eq!(
-        frame(src, "p39_nat_label.spthy"),
-        "\"p39_nat_label.spthy\" (line 7, column 18):\nunexpected \"(\"\nexpecting letter or digit, \".\", \"%+\", \",\" or \")\""
-    );
-}
-
-/// Inside a tuple, the failed application's frame carries the tuple's own
-/// close label (`chainr1` comma + `angled`'s `>`).
-#[test]
-fn tuple_close_labels_join_the_frame() {
+fn surrounding_context_does_not_change_the_report() {
     let src = "theory T\nbegin\n\nfunctions: g/3\n\nrule r:\n  [ ] --> [ Out(<g('a','b'), 'c'>) ]\n\nend\n";
-    assert_eq!(
-        frame(src, "p34_tuple.spthy"),
-        "\"p34_tuple.spthy\" (line 7, column 19):\nunexpected \"(\"\nexpecting letter or digit, \".\", \",\" or \">\""
-    );
-}
+    assert_wrong_arity(src, "g", 3, 2, Some((4, 12)), (7, 18));
 
-/// Inside grouping parens there is no comma alternative — only the close.
-#[test]
-fn grouping_parens_frame_has_no_comma() {
     let src =
         "theory T\nbegin\n\nfunctions: g/3\n\nrule r:\n  [ ] --> [ Out((g('a','b'))) ]\n\nend\n";
-    assert_eq!(
-        frame(src, "p42_group_parens.spthy"),
-        "\"p42_group_parens.spthy\" (line 7, column 19):\nunexpected \"(\"\nexpecting letter or digit, \".\" or \")\""
-    );
+    assert_wrong_arity(src, "g", 3, 2, Some((4, 12)), (7, 18));
 }
 
-/// `op{t1}t2` (`binaryAlgApp`, Parser/Term.hs:109-121) requires arity 2; a `g/3`
-/// head backtracks the same way and the frame sits at the `{`.
+/// `op{t1}t2` (`binaryAlgApp`, Theory/Text/Parser/Term.hs:109-121) requires
+/// arity 2; a `g/3` head reports the same arity mismatch.
 #[test]
-fn algapp_arity_mismatch_backtracks() {
+fn algapp_arity_mismatch_is_an_arity_error() {
     let src = "theory T\nbegin\n\nfunctions: g/3\n\nrule r:\n  [ ] --> [ Out(g{'a'}'b') ]\n\nend\n";
-    assert_eq!(
-        frame(src, "p44_algapp_arity.spthy"),
-        "\"p44_algapp_arity.spthy\" (line 7, column 18):\nunexpected \"{\"\nexpecting letter or digit, \".\", \",\" or \")\""
-    );
+    assert_wrong_arity(src, "g", 3, 2, Some((4, 12)), (7, 17));
 }
 
 // ---------------------------------------------------------------------------
-// Formula contexts: `blatom`'s un-try'd node-equality alternative
-// (Parser/Formula.hs:56) consumes the atom's leading identifier as a `nodevar` and
-// its `opEqual` failure right after it is THE reported error.
+// Formula contexts: an atom's leading term parses through the same
+// application resolution, and a missing relational operator after a complete
+// term reports the relational expected set.
 // ---------------------------------------------------------------------------
 
-/// A lowercase applied name in a lemma: `fact` refuses it (lowercase), the
-/// term path backtracks to a variable, and the node-equality reparse puts the
-/// frame at the char after the name.
+/// A lowercase applied name in a lemma: `fact` refuses it (lowercase), and
+/// the term path reports the application as undeclared.
 #[test]
-fn formula_lowercase_application_frame() {
+fn formula_lowercase_application_is_undeclared() {
     let src = "theory T\nbegin\n\nrule r:\n  [ ] --> [ ]\n\nlemma L:\n  \"All x #i. p3(x) @ #i ==> F\"\n\nend\n";
-    assert_eq!(
-        frame(src, "p06_lemma_lower.spthy"),
-        "\"p06_lemma_lower.spthy\" (line 8, column 16):\nunexpected \"(\"\nexpecting letter or digit, \".\" or \"=\""
-    );
+    assert_undeclared(src, "p3", 8, 14);
 }
 
-/// Whitespace variant: the `letter or digit` hangover is dropped, `"."`
-/// survives at the post-whitespace position.
+/// Whitespace after the name does not move the report.
 #[test]
-fn formula_lowercase_application_frame_with_whitespace() {
+fn formula_lowercase_application_with_whitespace_is_undeclared() {
     let src = "theory T\nbegin\n\nrule r:\n  [ ] --> [ ]\n\nlemma L:\n  \"All x #i. p3 (x) @ #i ==> F\"\n\nend\n";
-    assert_eq!(
-        frame(src, "p23_lemma_ws.spthy"),
-        "\"p23_lemma_ws.spthy\" (line 8, column 17):\nunexpected \"(\"\nexpecting \".\" or \"=\""
-    );
+    assert_undeclared(src, "p3", 8, 14);
 }
 
-/// Even a DECLARED, well-arity application errors when used where a fact is
-/// needed: the node-equality reparse stops after the bare name, so the frame
-/// sits at the `(` — not at the `@`.
+/// Asserts `src` fails with the formula-atom tail error at `line`:`col` on a
+/// token starting with `found`, carrying exactly the `expected` labels — the
+/// error after a complete formula-atom term that no relational operator
+/// follows (head-dependent, HS `blatom`'s alternation).
+#[track_caller]
+fn assert_relational_expected(src: &str, line: u32, col: u32, found: &str, expected: &[&str]) {
+    let e = parse_theory(src, &[]).expect_err("must fail to parse");
+    assert!(
+        matches!(&e, ParseError::Expected { .. }),
+        "expected the `Expected` variant, got {e:?}"
+    );
+    let at = e.location();
+    assert_eq!((at.line, at.col), (line, col), "position of {e:?}");
+    let got = e.found().unwrap_or("");
+    assert!(
+        got.starts_with(found),
+        "offending token {got:?} should start with {found:?}"
+    );
+    assert_eq!(e.expected().unwrap_or_default(), expected);
+}
+
+/// A DECLARED, well-arity application where a fact is needed parses as a
+/// term; the un-`try`'d node-equality alternative then re-reads the HEAD and
+/// errors right after the identifier — at the `(`, even though the parsed
+/// atom continued past it.
 #[test]
 fn formula_declared_application_errors_after_the_name() {
     let src = "theory T\nbegin\n\nfunctions: g/1\n\nrule r:\n  [ ] --> [ ]\n\nlemma L:\n  \"All x #i. g(x) @ #i ==> F\"\n\nend\n";
-    assert_eq!(
-        frame(src, "p29_formula_declared.spthy"),
-        "\"p29_formula_declared.spthy\" (line 10, column 15):\nunexpected \"(\"\nexpecting letter or digit, \".\" or \"=\""
-    );
+    assert_relational_expected(src, 10, 15, "(", &["letter or digit", "\".\"", "\"=\""]);
 }
 
-/// A bare variable with no relational operator: same reparse, frame at the
-/// `@` (whitespace dropped the `letter or digit`).
+/// The same with the lowercase name DECLARED at the used arity: the
+/// application parses, and the report sits after the name.
 #[test]
-fn formula_bare_variable_frame() {
-    let src = "theory T\nbegin\n\nrule r:\n  [ ] --> [ ]\n\nlemma L:\n  \"All x #i. x @ #i ==> F\"\n\nend\n";
-    assert_eq!(
-        frame(src, "p35_bare_var_at.spthy"),
-        "\"p35_bare_var_at.spthy\" (line 8, column 16):\nunexpected \"@\"\nexpecting \".\" or \"=\""
-    );
+fn formula_lowercase_fact_declared_as_function_fails_after_the_name() {
+    let src = "theory T\nbegin\n\nfunctions: p3/1\n\nrule r:\n  [ ] --> [ ]\n\nlemma L:\n  \"All x #i. p3(x) @ #i ==> F\"\n\nend\n";
+    assert_relational_expected(src, 10, 16, "(", &["letter or digit", "\".\"", "\"=\""]);
 }
 
-/// A non-identifier-headed atom (`'a' @ …`): `nodevar` consumes nothing, so
-/// the empty failures merge instead — the `<?>` relabels of the try-wrapped
-/// relational alternatives that consumed the term.
+/// A bare variable with no relational operator: error at the `@`.  The
+/// whitespace after `x` spends the `letter or digit` hangover.
+#[test]
+fn formula_bare_variable_errors_at_the_relop_position() {
+    let src = "theory T\nbegin\n\nrule r:\n  [ ] --> [ ]\n\nlemma L:\n  \"All x #i. x @ #i ==> F\"\n\nend\n";
+    assert_relational_expected(src, 8, 16, "@", &["\".\"", "\"=\""]);
+}
+
+/// A non-identifier-headed atom (`'a' @ …`): `nodevar` cannot consume, so
+/// the `<?>` relabels of the relational alternatives survive.
 #[test]
 fn formula_nonidentifier_atom_unions_relational_labels() {
     let src = "theory T\nbegin\n\nrule r:\n  [ ] --> [ ]\n\nlemma L:\n  \"All x #i. 'a' @ #i ==> F\"\n\nend\n";
-    assert_eq!(
-        frame(src, "p40_nonident_atom.spthy"),
-        "\"p40_nonident_atom.spthy\" (line 8, column 18):\nunexpected \"@\"\nexpecting subterm predicate or term equality"
-    );
+    assert_relational_expected(src, 8, 18, "@", &["subterm predicate", "term equality"]);
 }
 
 /// An undeclared UPPERCASE application before a relational operator: the
-/// term-relational alternatives die at the `(`, the `Pred` fact alternative
-/// then wins, and the leftover `= y` breaks the formula at its closing
-/// quote — with the fact's `"["` annotation attempt and every formula
-/// operator's labels.
+/// term path resolves the head and reports it undeclared.  (HS's `Pred` fact
+/// alternative claims `P3(x)` instead, and the leftover `= y` breaks the
+/// formula at its closing quote.)
 #[test]
-fn formula_undeclared_uppercase_relop_becomes_pred_then_close_error() {
+fn formula_undeclared_uppercase_relop_is_undeclared() {
     let src = "theory T\nbegin\n\nrule r:\n  [ ] --> [ ]\n\nlemma L:\n  \"All x y #i. P3(x) = y ==> F\"\n\nend\n";
-    assert_eq!(
-        frame(src, "p46_upper_eq.spthy"),
-        "\"p46_upper_eq.spthy\" (line 8, column 22):\nunexpected \"=\"\nexpecting \"[\", \"&\", \"∧\", \"|\", \"∨\", \"==>\", \"⇒\", \"<=>\", \"⇔\" or \"\"\""
-    );
+    assert_undeclared(src, "P3", 8, 16);
 }
 
 // ---------------------------------------------------------------------------
 // `equations:` context (eqn = True)
 // ---------------------------------------------------------------------------
 
-/// Arity mismatch inside an equation: the backtracked variable is followed by
-/// `equalSign`'s failing `=`.
+/// Arity mismatch inside an equation reports the same variant.
 #[test]
-fn equation_arity_mismatch_frame() {
+fn equation_arity_mismatch_is_an_arity_error() {
     let src = "theory T\nbegin\n\nfunctions: g/2\n\nequations: g(x) = x\n\nend\n";
-    assert_eq!(
-        frame(src, "p21_eqn_arity.spthy"),
-        "\"p21_eqn_arity.spthy\" (line 6, column 13):\nunexpected \"(\"\nexpecting letter or digit, \".\" or \"=\""
-    );
+    assert_wrong_arity(src, "g", 2, 1, Some((4, 12)), (6, 12));
 }
 
-/// A reserved builtin name in an equation is a GHC `error`, not a parsec
-/// failure (Parser/Term.hs:90-92): the exception escapes every `try` and carries
-/// the `HasCallStack` frame of `naryOpApp`'s call site.
+/// A reserved builtin name in an equation is a GHC `error` in HS
+/// (Theory/Text/Parser/Term.hs:90-92): the exception escapes every `try`.
+/// The port reports [`ParseError::UsedReservedBuiltin`] in the equation
+/// context.
 #[test]
-fn equation_reserved_builtin_is_a_ghc_error() {
+fn equation_reserved_builtin_is_rejected() {
     let src = "theory T\nbegin\n\nequations: exp(x, y) = x\n\nend\n";
-    let e = parse_theory(src, &[]).unwrap_err();
-    let g = e.ghc_error.as_ref().expect("GHC error, not a parsec frame");
-    assert_eq!(
-        g.display_exception(),
-        "`\"exp\"` is a reserved function name for builtins.\n\
-         CallStack (from HasCallStack):\n  error, called at \
-         src/Theory/Text/Parser/Term.hs:92:9 in \
-         tamarin-prover-theory-1.13.0-8wixYaxm5uHCGl2uEzaKzP:Theory.Text.Parser.Term"
-    );
+    let e = parse_theory(src, &[]).expect_err("must fail to parse");
+    let ParseError::UsedReservedBuiltin { f, at, .. } = &e else {
+        panic!("expected the reserved-builtin variant, got {e:?}");
+    };
+    assert_eq!(f, "exp");
+    assert_eq!((at.line, at.col), (4, 12));
 }
 
 /// The check fires on the identifier alone — even a BARE reserved name in an
-/// equation operand aborts (naryOpApp runs before `nullaryApp`/`plit` for
-/// every identifier-headed atom).
+/// equation operand is rejected (naryOpApp runs before `nullaryApp`/`plit`
+/// for every identifier-headed atom).
 #[test]
-fn equation_bare_reserved_builtin_is_a_ghc_error() {
+fn equation_bare_reserved_builtin_is_rejected() {
     let src = "theory T\nbegin\n\nfunctions: f/1\n\nequations: f(x) = mun\n\nend\n";
-    let e = parse_theory(src, &[]).unwrap_err();
-    let g = e.ghc_error.as_ref().expect("GHC error, not a parsec frame");
-    assert_eq!(
-        g.display_exception(),
-        "`\"mun\"` is a reserved function name for builtins.\n\
-         CallStack (from HasCallStack):\n  error, called at \
-         src/Theory/Text/Parser/Term.hs:92:9 in \
-         tamarin-prover-theory-1.13.0-8wixYaxm5uHCGl2uEzaKzP:Theory.Text.Parser.Term"
-    );
+    let e = parse_theory(src, &[]).expect_err("must fail to parse");
+    let ParseError::UsedReservedBuiltin { f, at, .. } = &e else {
+        panic!("expected the reserved-builtin variant, got {e:?}");
+    };
+    assert_eq!(f, "mun");
+    assert_eq!((at.line, at.col), (6, 19));
 }
 
 // ---------------------------------------------------------------------------
-// `macros:` body — the term ends the ITEM, so the frame is the top-level
-// item alternation's, prefixed by the term's hangovers and the macro list's
-// comma.
+// `macros:` body
 // ---------------------------------------------------------------------------
 
+/// An undeclared application in a macro body reports the application itself
+/// (HS's backtrack ends the item instead, and the top-level item alternation
+/// reports at the leftover `(`).
 #[test]
-fn macro_body_application_frame_is_the_item_position_error() {
+fn macro_body_application_is_undeclared() {
     let src =
         "theory T\nbegin\n\nmacros: m(x) = k(x,'a')\n\nrule r:\n  [ ] --> [ Out(m('b')) ]\n\nend\n";
-    assert_eq!(
-        frame(src, "p36_macro_body.spthy"),
-        "\"p36_macro_body.spthy\" (line 4, column 17):\nunexpected \"(\"\nexpecting letter or digit, \".\", \",\", \"heuristic\", \"tactic\", \"builtins\", \"options\", \"functions\", \"function\", \"equations\", \"macros\", \"restriction\", \"axiom\", \"test\", \"lemma\", \"rule\", letter, top-level process, \"let\", \"equivLemma\", \"diffEquivLemma\", predicate block, export block, \"#ifdef\", \"#define\", \"#include\" or \"end\""
-    );
+    assert_undeclared(src, "k", 4, 16);
 }
