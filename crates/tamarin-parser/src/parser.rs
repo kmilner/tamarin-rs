@@ -1494,8 +1494,10 @@ impl<'a> Parser<'a> {
             .map(|p| p.display().to_string())
             .unwrap_or_else(|| "<unknown>".to_string())
             .leak();
-        let _ctx = self.enter_parse_context(ParseContext::IncludedFile(Some(sub_base_str)));
+        // Enter context in both parsers
         let mut sub = Parser::new(content, &[], self.is_diff);
+        let _ctx = sub.enter_parse_context(ParseContext::IncludedFile(Some(sub_base_str)));
+        let _ctx = self.enter_parse_context(ParseContext::IncludedFile(Some(sub_base_str)));
         // Thread parser state IN (HS `getState` before `parseFileWState`).
         sub.flags = self.flags.clone();
         sub.enable_diff = self.enable_diff;
