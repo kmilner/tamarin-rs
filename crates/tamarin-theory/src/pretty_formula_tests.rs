@@ -451,3 +451,156 @@ fn fact_annotations_render_in_ord_order() {
     };
     assert_eq!(fact_to_doc(&fa, &[]).render(), "F( a )[+, no_precomp]");
 }
+
+// =============================================================================
+// Locally-nameless printer
+// =============================================================================
+
+/// The AST printer's `Doc` for a formula, as the production renderers build
+/// it.
+fn ast_doc(f: &p::Formula) -> Doc {
+    formula_to_doc(f, &[], &mut avoid_precise_formula(f))
+}
+
+/// Every sample printed through the AST printer and through the
+/// locally-nameless printers, compared through both production wrappers
+/// and pinned to the oracle's `--parse-only` render of the lemma-header
+/// shape (probe `S0_printer_samples.spthy`).
+#[test]
+fn lnformula_doc_matches_ast_doc_on_samples() {
+    use crate::formula::{from_parser, to_lnformula};
+    use tamarin_parser::parser::parse_formula_str;
+
+    let samples: &[(&str, &[&str])] = &[
+        ("T", &["  all-traces \"⊤\""]),
+        ("F", &["  all-traces \"⊥\""]),
+        (
+            "(A(x) @ #i & B(x) @ #j) | C(x) @ #k",
+            &["  all-traces \"((A( x ) @ #i) ∧ (B( x ) @ #j)) ∨ (C( x ) @ #k)\""],
+        ),
+        (
+            "(not (D(x) @ #l) ==> E(x) @ #m) <=> C(x) @ #n",
+            &["  all-traces \"((¬(D( x ) @ #l)) ⇒ (E( x ) @ #m)) ⇔ (C( x ) @ #n)\""],
+        ),
+        (
+            "not (Ex x. A(x) @ #i)",
+            &["  all-traces \"¬(∃ x. A( x ) @ #i)\""],
+        ),
+        (
+            "All x y #i. A(x, y) @ #i",
+            &["  all-traces \"∀ x y #i. A( x, y ) @ #i\""],
+        ),
+        (
+            "All x. Ex #i. A(x) @ #i",
+            &["  all-traces \"∀ x. ∃ #i. A( x ) @ #i\""],
+        ),
+        // The inner binder shadows the outer one: `x` and `x.1`.
+        (
+            "All x. Ex x. A(x) @ #i",
+            &["  all-traces \"∀ x. ∃ x.1. A( x.1 ) @ #i\""],
+        ),
+        // Closed, the union is `[Bound 0, Bound 1]` = `y, x`; opening
+        // rebuilds it through `f_app`, which re-sorts under the display
+        // `LVar`s.
+        (
+            "All x y. (x + y) = z",
+            &["  all-traces \"∀ x y. (x++y) = z\""],
+        ),
+        // A predicate atom and one with a bound argument; `to_lnformula`
+        // is `None` for these.
+        ("All x. P(x, y)", &["  all-traces \"∀ x. P( x, y )\""]),
+        (
+            "All x. Ex y. P(x, y)",
+            &["  all-traces \"∀ x. ∃ y. P( x, y )\""],
+        ),
+        (
+            "All x #i #j. OnlyOnce(x) @ i & OnlyOnce(x) @ j ==> #i = #j",
+            &[
+                "  all-traces",
+                "  \"∀ x #i #j. ((OnlyOnce( x ) @ #i) ∧ (OnlyOnce( x ) @ #j)) ⇒ (#i = #j)\"",
+            ],
+        ),
+        // The `_restrict` lifting shape: `#NOW` and an `x.1` binder.
+        (
+            "All x #NOW x.1. Restr_C_2_1(x, x.1) @ NOW ==> x = x.1",
+            &["  all-traces \"∀ x #NOW x.1. (Restr_C_2_1( x, x.1 ) @ #NOW) ⇒ (x = x.1)\""],
+        ),
+        // Twelve conjuncts: the body wraps at the 110-column page width.
+        (
+            "All x #i1 #i2 #i3 #i4 #i5 #i6 #i7 #i8 #i9 #i10 #i11 #i12. \
+             A(x) @ #i1 & A(x) @ #i2 & A(x) @ #i3 & A(x) @ #i4 & A(x) @ #i5 & \
+             A(x) @ #i6 & A(x) @ #i7 & A(x) @ #i8 & A(x) @ #i9 & A(x) @ #i10 & \
+             A(x) @ #i11 & A(x) @ #i12 ==> F",
+            &[
+                "  all-traces",
+                "  \"∀ x #i1 #i2 #i3 #i4 #i5 #i6 #i7 #i8 #i9 #i10 #i11 #i12.",
+                "    ((((((((((((A( x ) @ #i1) ∧ (A( x ) @ #i2)) ∧ (A( x ) @ #i3)) ∧",
+                "             (A( x ) @ #i4)) ∧",
+                "            (A( x ) @ #i5)) ∧",
+                "           (A( x ) @ #i6)) ∧",
+                "          (A( x ) @ #i7)) ∧",
+                "         (A( x ) @ #i8)) ∧",
+                "        (A( x ) @ #i9)) ∧",
+                "       (A( x ) @ #i10)) ∧",
+                "      (A( x ) @ #i11)) ∧",
+                "     (A( x ) @ #i12)) ⇒",
+                "    (⊥)\"",
+            ],
+        ),
+    ];
+    for (src, expected_lines) in samples {
+        let expected = expected_lines.join("\n");
+        let f = parse_formula_str(src).unwrap();
+        let ln = from_parser(&f).unwrap();
+        assert_eq!(
+            lemma_header_line_doc("all-traces", ast_doc(&f)),
+            expected,
+            "AST printer on {src}"
+        );
+        assert_eq!(
+            lemma_header_line_doc("all-traces", syntactic_lnformula_doc(&ln)),
+            expected,
+            "syntactic_lnformula_doc on {src}"
+        );
+        assert_eq!(
+            doublequoted_nested_doc(syntactic_lnformula_doc(&ln), 2),
+            doublequoted_nested_doc(ast_doc(&f), 2),
+            "syntactic_lnformula_doc on {src}"
+        );
+        if let Some(plain) = to_lnformula(&ln) {
+            assert_eq!(
+                lemma_header_line_doc("all-traces", lnformula_doc(&plain)),
+                expected,
+                "lnformula_doc on {src}"
+            );
+            assert_eq!(
+                doublequoted_nested_doc(lnformula_doc(&plain), 2),
+                doublequoted_nested_doc(ast_doc(&f), 2),
+                "lnformula_doc on {src}"
+            );
+        }
+    }
+}
+
+/// `prettyAtom = prettyProtoAtom (const emptyDoc)` (Atom.hs:226-229): the
+/// sugar-free atom renders as the empty document.
+#[test]
+fn lnformula_doc_prints_unit2_syntactic_as_empty() {
+    let atom: LNFormula = ProtoFormula::Atom(ProtoAtom::Syntactic(Unit2));
+    assert_eq!(lnformula_doc(&atom).render(), "");
+    let conj: LNFormula =
+        ProtoFormula::ltrue().and(ProtoFormula::Atom(ProtoAtom::Syntactic(Unit2)));
+    assert_eq!(lnformula_doc(&conj).render(), "(⊤) ∧ ()");
+}
+
+/// A `Bound` index with no enclosing binder is HS `extractFree`'s error
+/// (Theory/Model/Formula.hs:481-482).
+#[test]
+#[should_panic(expected = "prettyFormula: illegal bound variable '0'")]
+fn lnformula_doc_panics_on_unbound_index() {
+    use tamarin_term::lterm::BVar;
+    use tamarin_term::vterm::var_term;
+
+    let f: LNFormula = ProtoFormula::Atom(ProtoAtom::Last(var_term(BVar::Bound(0))));
+    let _ = lnformula_doc(&f);
+}

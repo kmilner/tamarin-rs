@@ -11,8 +11,8 @@
 //! the closing of the parser AST into a [`SyntacticLNFormula`]
 //! ([`from_parser`], which HS does inside its formula parser,
 //! `Theory/Text/Parser/Formula.hs`) and the opening of a bound term against
-//! a binder scope ([`open_bound_term`], the substitution step of HS
-//! `openFormula`).
+//! a binder scope (`open_bound_term`, the substitution step of HS
+//! `openFormula`, used by the printer).
 //!
 //! The representation is locally nameless: bound variables are
 //! `BVar::Bound(de_bruijn_idx)`, free variables are `Free(v)`.
@@ -443,7 +443,7 @@ fn temporal_term(t: &p::Term) -> Result<BLNTerm, ElabError> {
 /// (Theory/Model/Formula.hs:481-484), whose error message is kept for an
 /// index past the scope.  The rebuild through [`map_lits`] re-sorts AC
 /// arguments under the opened `LVar`s, as HS's `fApp` does.
-pub fn open_bound_term(t: &BLNTerm, scope: &[LVar]) -> LNTerm {
+pub(crate) fn open_bound_term(t: &BLNTerm, scope: &[LVar]) -> LNTerm {
     map_lits(t, &mut |l| match l {
         Lit::Con(c) => Lit::Con(*c),
         Lit::Var(BVar::Free(v)) => Lit::Var(*v),

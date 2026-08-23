@@ -2,26 +2,41 @@
 // of the tamarin-prover sources this file cites; list them with:
 //   scripts/gen_license_headers.py --authors <this file>
 
-//! Pretty-printer for `tamarin_parser::ast::Formula` /
-//! `tamarin_theory::guarded::Guarded`.
+//! Pretty-printer for the three formula representations of the port:
+//! the parser AST `tamarin_parser::ast::Formula`, the solver's
+//! `tamarin_theory::guarded::Guarded` and the locally-nameless
+//! [`LNFormula`]/[`SyntacticLNFormula`].
 //!
-//! Ports of Haskell `prettyLNFormula`/`prettyGuarded` from
-//! `lib/theory/src/Theory/Model/Formula.hs:474-520, see line 519` and
-//! `lib/theory/src/Theory/Constraint/System/Guarded.hs:824-828, see line 828`.
+//! Ports of Haskell `prettyLNFormula`/`prettySyntacticLNFormula`
+//! (`lib/theory/src/Theory/Model/Formula.hs:474-525`) and `prettyGuarded`
+//! (`lib/theory/src/Theory/Constraint/System/Guarded.hs:824-828, see line 828`).
 //!
 //! Output uses Tamarin's interactive UI math glyphs:
 //!   `∀`, `∃`, `⇒`, `∧`, `∨`, `¬`, `⊤`, `⊥`, `@`, `<`, `=`, `⊏`,
 //!   `last(...)`.
 //!
-//! Term arguments inside facts/atoms come from
-//! `tamarin_parser::ast::Term`.  We render those locally rather than
-//! pulling in `tamarin-term::pretty::pretty_lnterm` because the parser
-//! AST and the post-elaboration `LNTerm` are different types.
+//! Term arguments inside facts/atoms are rendered from
+//! `tamarin_parser::ast::Term` by [`term_to_doc`].  The AST and `Guarded`
+//! paths carry that term type already; the locally-nameless path
+//! ([`lnformula_doc`], [`syntactic_lnformula_doc`]) opens each atom's bound
+//! variables against the binders in scope and projects the opened
+//! `LNTerm`s through `pretty_theory::lnterm_to_parser`, the same route every
+//! other internal term takes to this renderer.
 
 use tamarin_parser::ast as p;
+use tamarin_term::lterm::{LSort, LVar, Name};
+use tamarin_term::pretty::pp_lvar;
 use tamarin_utils::fresh::PreciseFreshState;
 
+use crate::atom::{ProtoAtom, SyntacticSugar, Unit2};
+use crate::fact::Fact;
+use crate::formula::{
+    formula_frees, open_bound_term, BLNTerm, Connective, LNFormula, ProtoFormula, Quantifier,
+    SugarTerms, SyntacticLNFormula,
+};
 use crate::guarded::{Guarded, Quant};
+use crate::pretty_hpj::{self as hpj, Doc};
+use crate::pretty_theory::{lnfact_to_parser, lnterm_to_parser};
 
 /// A scope entry: the binder's source name + sort, plus the *display* name
 /// used to render bound occurrences in the body.  HS-faithful: the display
@@ -102,9 +117,13 @@ pub fn pretty_formula_wrapped(f: &p::Formula, indent: usize) -> String {
 /// column 0 (the `nest 2` indent IS included in the output, like HS's
 /// `nest 2` rendered at the theory's column 0).
 pub fn lemma_header_line(quant: &str, f: &p::Formula) -> String {
-    use crate::pretty_hpj::{self as hpj, Doc};
     let mut state = avoid_precise_formula(f);
-    let formula_doc = formula_to_doc(f, &[], &mut state);
+    lemma_header_line_doc(quant, formula_to_doc(f, &[], &mut state))
+}
+
+/// The lemma-header shape of [`lemma_header_line`] around an already built
+/// formula `Doc`, whichever formula representation produced it.
+pub(crate) fn lemma_header_line_doc(quant: &str, formula_doc: Doc) -> String {
     // `doubleQuotes d = "\"" <> d <> "\""` (Text/PrettyPrint/Class.hs:148-148).
     let dq = Doc::text("\"").beside(formula_doc).beside(Doc::text("\""));
     // `sep [quant, dq]` then `nest 2`.
@@ -118,9 +137,14 @@ pub fn lemma_header_line(quant: &str, f: &p::Formula) -> String {
 /// `beside` so the formula's wrapped continuation lines indent to the
 /// formula's start column.
 pub fn formula_doublequoted_nested(f: &p::Formula, nest_n: usize) -> String {
-    use crate::pretty_hpj::Doc;
     let mut state = avoid_precise_formula(f);
-    let formula_doc = formula_to_doc(f, &[], &mut state);
+    doublequoted_nested_doc(formula_to_doc(f, &[], &mut state), nest_n)
+}
+
+/// The restriction-body shape of [`formula_doublequoted_nested`] around an
+/// already built formula `Doc`, whichever formula representation produced
+/// it.
+pub(crate) fn doublequoted_nested_doc(formula_doc: Doc, nest_n: usize) -> String {
     let dq = Doc::text("\"").beside(formula_doc).beside(Doc::text("\""));
     dq.nest(nest_n as isize).render()
 }
@@ -1006,6 +1030,193 @@ fn binop_to_doc(
     let r_doc = formula_to_doc_opparens(r, scope, state);
     // HS `op` here is `opLAnd`/`opLOr`/`opImp`/`opIff` = `operator_ "∧"` etc.
     hpj::sep(vec![l_doc.beside_sp(hpj::operator_(op)), r_doc])
+}
+
+// =============================================================================
+// Locally-nameless formulas — Doc-engine path
+// (HS `prettyLFormula`, Theory/Model/Formula.hs:474-514)
+// =============================================================================
+
+/// HS `prettyLNFormula` (Theory/Model/Formula.hs:518-520):
+/// `Precise.evalFresh (prettyLFormula prettyNAtom fm) (avoidPrecise fm)`.
+pub fn lnformula_doc(f: &LNFormula) -> Doc {
+    lformula_doc(f, &mut Vec::new(), &mut avoid_precise_lnformula(f))
+}
+
+/// HS `prettySyntacticLNFormula` (Theory/Model/Formula.hs:523-525): as
+/// [`lnformula_doc`], with `prettySyntacticNAtom` printing the `Pred` sugar.
+pub fn syntactic_lnformula_doc(f: &SyntacticLNFormula) -> Doc {
+    lformula_doc(f, &mut Vec::new(), &mut avoid_precise_lnformula(f))
+}
+
+/// HS `avoidPrecise = avoidPreciseVars . frees` (LTerm.hs:706-709, :714-715)
+/// on a locally-nameless formula: the free variables seed the per-name
+/// counters, so a binder whose name a free variable uses is displayed with
+/// a larger index.
+fn avoid_precise_lnformula<S: SugarTerms<BLNTerm>>(
+    f: &ProtoFormula<S, (String, LSort), Name, LVar>,
+) -> PreciseFreshState {
+    PreciseFreshState::avoid_precise(
+        formula_frees(f)
+            .into_iter()
+            .map(|v| (v.name.to_string(), v.idx)),
+    )
+}
+
+/// HS `prettyLFormula` (Theory/Model/Formula.hs:474-514) with the atom
+/// printer chosen by the sugar type through [`OpenAtomDoc`].  `scope` holds
+/// the display `LVar` of every enclosing binder, innermost last, which is
+/// what the `Bound` indices of an atom refer to.
+fn lformula_doc<S>(
+    f: &ProtoFormula<S, (String, LSort), Name, LVar>,
+    scope: &mut Vec<LVar>,
+    state: &mut PreciseFreshState,
+) -> Doc
+where
+    ProtoAtom<S, BLNTerm>: OpenAtomDoc,
+{
+    match f {
+        ProtoFormula::Atom(a) => a.open_doc(scope),
+        // `pp (TF True) = operator_ "⊤"` / `pp (TF False) = operator_ "⊥"`
+        // (Theory/Model/Formula.hs:485-486).
+        ProtoFormula::Tf(true) => hpj::operator_("\u{22A4}"),
+        ProtoFormula::Tf(false) => hpj::operator_("\u{22A5}"),
+        // `operator_ "¬" <> opParens p'` (Theory/Model/Formula.hs:488-490).
+        ProtoFormula::Not(p_) => {
+            hpj::operator_("\u{00AC}").beside(doc_op_parens(lformula_doc(p_, scope, state)))
+        }
+        // `sep [opParens p' <-> ppOp op, opParens q']`
+        // (Theory/Model/Formula.hs:493-501); `<->` is `<+>`.
+        ProtoFormula::Conn(c, l, r) => {
+            let op = match c {
+                Connective::And => "\u{2227}",
+                Connective::Or => "\u{2228}",
+                Connective::Imp => "\u{21D2}",
+                Connective::Iff => "\u{21D4}",
+            };
+            let l_doc = doc_op_parens(lformula_doc(l, scope, state));
+            let r_doc = doc_op_parens(lformula_doc(r, scope, state));
+            hpj::sep(vec![l_doc.beside_sp(hpj::operator_(op)), r_doc])
+        }
+        // `scopeFreshness $ do (vs, qua, fm') <- openFormulaPrefix fm; ...
+        // sep [ppQuant qua <> ppVars vs <> operator_ ".", nest 1 d']`
+        // (Theory/Model/Formula.hs:503-514).  `opForall`/`opExists` carry
+        // their trailing space (Theory/Text/Pretty.hs:177-178) and
+        // `ppVars = fsep . map (text . show)` makes the binder list
+        // breakable.
+        ProtoFormula::Qua(q, _, _) => {
+            let sym = match q {
+                Quantifier::All => "\u{2200} ",
+                Quantifier::Ex => "\u{2203} ",
+            };
+            state.scope_freshness(|state| {
+                let (hints, inner) = open_lnformula_prefix(f);
+                let depth = scope.len();
+                let var_docs: Vec<Doc> = hints
+                    .into_iter()
+                    .map(|(name, sort)| {
+                        // `freshLVar n s = LVar n s <$> freshIdent n`
+                        // (LTerm.hs:301-302), shown by `show LVar`
+                        // (LTerm.hs:550-557).
+                        let x = LVar::new(name, *sort, state.fresh_ident(name));
+                        scope.push(x);
+                        let mut s = String::new();
+                        pp_lvar(&x, &mut s);
+                        doc_text(s)
+                    })
+                    .collect();
+                let quant = hpj::operator_(sym)
+                    .beside(hpj::fsep(var_docs))
+                    .beside(hpj::operator_("."));
+                let body_doc = lformula_doc(inner, scope, state);
+                scope.truncate(depth);
+                hpj::sep(vec![quant, body_doc.nest(1)])
+            })
+        }
+    }
+}
+
+/// The binder hints HS `openFormulaPrefix` (Theory/Model/Formula.hs:296-309)
+/// opens in one block — the quantifier at `f` and every directly nested
+/// quantifier of the same kind, outermost first — and the body under them.
+fn open_lnformula_prefix<S>(
+    f: &ProtoFormula<S, (String, LSort), Name, LVar>,
+) -> (
+    Vec<&(String, LSort)>,
+    &ProtoFormula<S, (String, LSort), Name, LVar>,
+) {
+    let ProtoFormula::Qua(q, hint, body) = f else {
+        panic!("openFormulaPrefix: no outermost quantifier")
+    };
+    let mut hints = vec![hint];
+    let mut cur = body.as_ref();
+    while let ProtoFormula::Qua(q2, hint2, body2) = cur {
+        if q2 != q {
+            break;
+        }
+        hints.push(hint2);
+        cur = body2.as_ref();
+    }
+    (hints, cur)
+}
+
+/// The atom printer `prettyLFormula` is given: `prettyNAtom` for an
+/// [`LNFormula`] and `prettySyntacticNAtom` for a [`SyntacticLNFormula`]
+/// (Atom.hs:226-239).  The atom is opened against the enclosing binders'
+/// display `LVar`s before it is rendered.
+trait OpenAtomDoc {
+    fn open_doc(&self, scope: &[LVar]) -> Doc;
+}
+
+impl OpenAtomDoc for ProtoAtom<Unit2, BLNTerm> {
+    /// `prettyAtom = prettyProtoAtom (const emptyDoc)` (Atom.hs:226-229).
+    fn open_doc(&self, scope: &[LVar]) -> Doc {
+        opened_atom_doc(self, scope, |Unit2| Doc::empty())
+    }
+}
+
+impl OpenAtomDoc for ProtoAtom<SyntacticSugar<BLNTerm>, BLNTerm> {
+    /// `prettySyntacticNAtom`'s `prettyPred (Pred fa) = prettyNFact fa`
+    /// (Atom.hs:236-239), which is `atom_to_doc`'s `Pred` arm.
+    fn open_doc(&self, scope: &[LVar]) -> Doc {
+        opened_atom_doc(self, scope, |SyntacticSugar::Pred(fa)| {
+            atom_to_doc(&p::Atom::Pred(open_fact(fa, scope)), &[])
+        })
+    }
+}
+
+/// `ppAtom (fmap (mapLits (fmap extractFree)) a)` (Theory/Model/Formula.hs:484):
+/// the plain atoms are opened and handed to [`atom_to_doc`] as parser-AST
+/// atoms, whose arms are `prettyProtoAtom`'s (Atom.hs:212-224); the sugar
+/// goes to `sugar_doc`.  The projection through `lnterm_to_parser` and
+/// `lnfact_to_parser` is the one every other internal term takes into this
+/// renderer.  `atom_to_doc` gets an empty binder scope: after opening,
+/// every variable is a display `LVar` and renders as itself.
+fn opened_atom_doc<S>(
+    a: &ProtoAtom<S, BLNTerm>,
+    scope: &[LVar],
+    sugar_doc: impl FnOnce(&S) -> Doc,
+) -> Doc {
+    let pa = match a {
+        ProtoAtom::Syntactic(s) => return sugar_doc(s),
+        ProtoAtom::Action(t, fa) => p::Atom::Action(open_fact(fa, scope), open_term(t, scope)),
+        ProtoAtom::EqE(l, r) => p::Atom::Eq(open_term(l, scope), open_term(r, scope)),
+        ProtoAtom::Subterm(l, r) => p::Atom::Subterm(open_term(l, scope), open_term(r, scope)),
+        ProtoAtom::Less(l, r) => p::Atom::Less(open_term(l, scope), open_term(r, scope)),
+        ProtoAtom::Last(t) => p::Atom::Last(open_term(t, scope)),
+    };
+    atom_to_doc(&pa, &[])
+}
+
+/// Open a term's bound variables against `scope` and project it to the
+/// parser AST.
+fn open_term(t: &BLNTerm, scope: &[LVar]) -> p::Term {
+    lnterm_to_parser(&open_bound_term(t, scope))
+}
+
+/// [`open_term`] over every argument of a fact.
+fn open_fact(fa: &Fact<BLNTerm>, scope: &[LVar]) -> p::Fact {
+    lnfact_to_parser(&fa.map_ref(|t| open_bound_term(t, scope)))
 }
 
 // =============================================================================
