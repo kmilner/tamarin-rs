@@ -500,3 +500,101 @@ fn add_eqs_unsatisfiable_sets_store_false() {
         "constructor mismatch must set store to false"
     );
 }
+
+// =============================================================================
+// HasFrees instances
+// =============================================================================
+
+use tamarin_term::lterm::{frees_list, HasFrees};
+
+/// A variable named `n` distinguished by its index, so `Ord` follows the index
+/// (LTerm.hs:546-548) and a walk order is readable off the indices alone.
+fn hf_var(n: &str, idx: u64) -> LVar {
+    LVar::new(n, LSort::Msg, idx)
+}
+
+fn hf_term(n: &str, idx: u64) -> LNTerm {
+    tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(hf_var(n, idx)))
+}
+
+/// A one-entry fresh-range substitution `x.dom ~> y.range`.
+fn hf_subst(dom: u64, range: u64) -> LNSubstVFresh {
+    SubstVFresh::from_list(vec![(hf_var("x", dom), hf_term("y", range))])
+}
+
+/// Add 100 to the index of every variable the map reaches.  The rename is
+/// injective, so a field the map leaves alone keeps its own indices.
+fn hf_shifted<T: HasFrees>(t: T) -> T {
+    t.map_free(&mut |v: LVar| LVar::new(v.name, v.sort, v.idx + 100))
+}
+
+/// A disjunction whose substitutions are stored in the reverse of their `Ord`
+/// order, so the walk order tells the two apart.
+fn hf_disj() -> EqDisj {
+    EqDisj {
+        split_id: SplitId(5),
+        substs: vec![hf_subst(2, 8), hf_subst(1, 7)],
+    }
+}
+
+/// The disjunction walks its substitutions in ascending `Ord` order, the
+/// `S.toList` of HS's `S.Set LNSubstVFresh` (LTerm.hs:898-901), and each of
+/// them exposes its domain keys alone (SubstVFresh.hs:196-202).
+#[test]
+fn eq_disj_walks_its_substitution_domains_in_ord_order() {
+    assert_eq!(
+        frees_list(&hf_disj()),
+        vec![hf_var("x", 1), hf_var("x", 2)],
+        "sorted, and no range variable"
+    );
+}
+
+/// The map rewrites the domain keys where the substitutions stand, keeping the
+/// disjunction's insertion order, the ranges and the split id.
+#[test]
+fn eq_disj_map_keeps_insertion_order_the_ranges_and_the_split_id() {
+    let mapped = hf_shifted(hf_disj());
+    assert_eq!(mapped.split_id, SplitId(5));
+    assert_eq!(
+        mapped
+            .substs
+            .iter()
+            .map(|s| s.to_list())
+            .collect::<Vec<_>>(),
+        vec![
+            vec![(hf_var("x", 102), hf_term("y", 8))],
+            vec![(hf_var("x", 101), hf_term("y", 7))],
+        ]
+    );
+}
+
+/// `instance HasFrees EqStore` (EquationStore.hs:155-164): the free
+/// substitution — each entry's key before its value — then the conjunction in
+/// list order.  `next_split` holds no variable.
+#[test]
+fn eq_store_walks_the_substitution_then_the_conjunction() {
+    let store = EquationStore {
+        subst: LNSubst::from_list(vec![(hf_var("a", 1), hf_term("b", 2))]),
+        conj: vec![EqDisj {
+            split_id: SplitId(9),
+            substs: vec![hf_subst(3, 4)],
+        }],
+        next_split: SplitId(11),
+    };
+    assert_eq!(
+        frees_list(&store),
+        vec![hf_var("a", 1), hf_var("b", 2), hf_var("x", 3)]
+    );
+
+    let mapped = hf_shifted(store);
+    assert_eq!(
+        mapped.subst.to_list(),
+        vec![(hf_var("a", 101), hf_term("b", 102))]
+    );
+    assert_eq!(mapped.conj[0].split_id, SplitId(9));
+    assert_eq!(
+        mapped.conj[0].substs[0].to_list(),
+        vec![(hf_var("x", 103), hf_term("y", 4))]
+    );
+    assert_eq!(mapped.next_split, SplitId(11));
+}

@@ -31,7 +31,7 @@
 
 use std::collections::BTreeSet;
 
-use tamarin_term::lterm::{LNTerm, LVar, Name};
+use tamarin_term::lterm::{HasFrees, LNTerm, LVar, Name};
 use tamarin_term::subst::Subst;
 use tamarin_term::subst_vfresh::SubstVFresh;
 
@@ -299,6 +299,37 @@ pub struct EqDisj {
     pub substs: Vec<LNSubstVFresh>,
 }
 
+/// One element of HS's `_eqsConj :: Conj (SplitId, S.Set LNSubstVFresh)`
+/// (EquationStore.hs:116-121), walked through the pair instance
+/// (LTerm.hs:855-860).  The `SplitId` half contributes nothing and maps to
+/// itself (EquationStore.hs:91-94); the substitutions follow in ascending
+/// `Ord` order, which is the `S.toList` of the HS set (LTerm.hs:898-901); the
+/// port stores the disjunction as an insertion-ordered `Vec`, so the walk
+/// sorts a list of references to reach that order.  Each substitution then
+/// exposes its domain keys alone (SubstVFresh.hs:196-202), which keeps the
+/// witness indices of the ranges.
+///
+/// The map rewrites each substitution where it stands.  HS's set map
+/// re-establishes the set with `S.fromList` (LTerm.hs:903), where the port
+/// keeps the `Vec`'s insertion order, which the store's own passes probe by
+/// position (`simp_identify` reads `d.substs[0]`).
+impl HasFrees for EqDisj {
+    fn for_each_free(&self, f: &mut dyn FnMut(&LVar)) {
+        let mut substs: Vec<&LNSubstVFresh> = self.substs.iter().collect();
+        substs.sort();
+        for s in substs {
+            s.for_each_free(f);
+        }
+    }
+
+    fn map_free_with(self, f: &mut dyn FnMut(LVar) -> LVar, monotone: bool) -> Self {
+        EqDisj {
+            split_id: self.split_id,
+            substs: self.substs.map_free_with(f, monotone),
+        }
+    }
+}
+
 /// `orderedSubsts = sortOnMemo dropNameHintsLNSubstVFresh . S.toList`
 /// (EquationStore.hs:223-224): a disjunction's cases in canonical split
 /// order.  The single source of truth for case ordering — `perform_split`
@@ -346,6 +377,25 @@ pub struct EquationStore {
     /// Conjunction of disjunctions.
     pub conj: Vec<EqDisj>,
     pub next_split: SplitId,
+}
+
+/// `instance HasFrees EqStore` (EquationStore.hs:155-164): the free
+/// substitution, then the conjunction of disjunctions in list order
+/// (LTerm.hs:891-896).  `next_split` is a `SplitId`, whose instance folds to
+/// nothing and maps to itself (EquationStore.hs:91-94).
+impl HasFrees for EquationStore {
+    fn for_each_free(&self, f: &mut dyn FnMut(&LVar)) {
+        self.subst.for_each_free(f);
+        self.conj.for_each_free(f);
+    }
+
+    fn map_free_with(self, f: &mut dyn FnMut(LVar) -> LVar, monotone: bool) -> Self {
+        EquationStore {
+            subst: self.subst.map_free_with(f, monotone),
+            conj: self.conj.map_free_with(f, monotone),
+            next_split: self.next_split,
+        }
+    }
 }
 
 impl Default for EquationStore {

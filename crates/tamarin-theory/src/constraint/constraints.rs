@@ -6,15 +6,14 @@
 //! graph-constraint primitives (`Edge`, `LessAtom`), goal types
 //! (`Goal`), and small helpers.
 //!
-//! These types do not carry generic `Apply LNSubst` / `HasFrees`
-//! instances. The substitution layer is ported (`apply_vterm` in
-//! `tamarin_term::subst`, the `HasFrees` trait in
-//! `tamarin_term::lterm`); the solver applies substitutions to these
-//! constraints directly in `constraint::solver::reduction`
-//! (`subst_system` / `subst_system_once`, mirroring Haskell's
-//! `substSystem`).
+//! `Edge`, `LessAtom`, `Disj` and `Goal` carry the `HasFrees` instances
+//! Haskell declares for them; the trait itself lives in
+//! `tamarin_term::lterm`.  None of them carries a generic `Apply LNSubst`
+//! instance: the solver applies substitutions to these constraints directly
+//! in `constraint::solver::reduction` (`subst_system` / `subst_system_once`,
+//! mirroring Haskell's `substSystem`).
 
-use tamarin_term::lterm::{LNTerm, LVar};
+use tamarin_term::lterm::{HasFrees, LNTerm, LVar};
 
 use crate::fact::LNFact;
 use crate::guarded::Guarded;
@@ -40,6 +39,24 @@ pub type NodeConc = (NodeId, ConcIdx);
 pub struct Edge {
     pub src: NodeConc,
     pub tgt: NodePrem,
+}
+
+/// `instance HasFrees Edge` (Constraints.hs:110-115): the source conclusion
+/// before the target premise.  Only the node id of each end is a variable —
+/// the conclusion and premise indices are `Int`s, whose instance contributes
+/// nothing to the fold and maps to itself (LTerm.hs:820-823).
+impl HasFrees for Edge {
+    fn for_each_free(&self, f: &mut dyn FnMut(&LVar)) {
+        self.src.0.for_each_free(f);
+        self.tgt.0.for_each_free(f);
+    }
+
+    fn map_free_with(self, f: &mut dyn FnMut(LVar) -> LVar, monotone: bool) -> Self {
+        Edge {
+            src: (self.src.0.map_free_with(f, monotone), self.src.1),
+            tgt: (self.tgt.0.map_free_with(f, monotone), self.tgt.1),
+        }
+    }
 }
 
 /// Why two nodes are ordered. Used to attribute `LessAtom`s to their
@@ -110,6 +127,24 @@ impl PartialOrd for LessAtom {
     }
 }
 
+/// `instance HasFrees LessAtom` (Constraints.hs:145-150): the smaller node id
+/// then the larger one.  The reason tag holds no variable and is carried over
+/// by `pure`.
+impl HasFrees for LessAtom {
+    fn for_each_free(&self, f: &mut dyn FnMut(&LVar)) {
+        self.smaller.for_each_free(f);
+        self.larger.for_each_free(f);
+    }
+
+    fn map_free_with(self, f: &mut dyn FnMut(LVar) -> LVar, monotone: bool) -> Self {
+        LessAtom {
+            smaller: self.smaller.map_free_with(f, monotone),
+            larger: self.larger.map_free_with(f, monotone),
+            reason: self.reason,
+        }
+    }
+}
+
 /// Project the relation: just the `(smaller, larger)` pairs.
 /// Reachable only from its own unit test in production; kept as a mirror
 /// of the HS `getLessRel`-style projection (`to_edge` likewise).
@@ -136,6 +171,18 @@ pub struct Disj<T>(pub Vec<T>);
 impl<T> Disj<T> {
     pub fn new(items: Vec<T>) -> Self {
         Disj(items)
+    }
+}
+
+/// `instance HasFrees a => HasFrees (Disj a)` (LTerm.hs:884-889): the
+/// disjuncts in list order, through the `Vec` instance.
+impl<T: HasFrees> HasFrees for Disj<T> {
+    fn for_each_free(&self, f: &mut dyn FnMut(&LVar)) {
+        self.0.for_each_free(f);
+    }
+
+    fn map_free_with(self, f: &mut dyn FnMut(LVar) -> LVar, monotone: bool) -> Self {
+        Disj(self.0.map_free_with(f, monotone))
     }
 }
 
@@ -193,6 +240,55 @@ impl Goal {
             !matches!(fa.tag, crate::fact::FactTag::Ku)
         } else {
             false
+        }
+    }
+}
+
+/// `instance HasFrees Goal` (Constraints.hs:210-232): every variant folds and
+/// maps its payloads left to right — the timepoint before the fact of an
+/// `Action`, the node id of a `Premise`'s premise before its fact, the
+/// conclusion's node id before the premise's for a `Chain`, and both sides of
+/// a `Subterm` pair (LTerm.hs:855-860).  A `Premise`/`Chain` index is an
+/// `Int`, so only the node id of such a pair is a variable
+/// (LTerm.hs:820-823).  `Split` carries a `SplitId`, whose instance is `const
+/// mempty` / `pure` (EquationStore.hs:91-94).
+impl HasFrees for Goal {
+    fn for_each_free(&self, f: &mut dyn FnMut(&LVar)) {
+        match self {
+            Goal::Action(i, fa) => {
+                i.for_each_free(f);
+                fa.for_each_free(f);
+            }
+            Goal::Premise(p, fa) => {
+                p.0.for_each_free(f);
+                fa.for_each_free(f);
+            }
+            Goal::Chain(c, p) => {
+                c.0.for_each_free(f);
+                p.0.for_each_free(f);
+            }
+            Goal::Split(_) => {}
+            Goal::Disj(x) => x.for_each_free(f),
+            Goal::Subterm(p) => p.for_each_free(f),
+        }
+    }
+
+    fn map_free_with(self, f: &mut dyn FnMut(LVar) -> LVar, monotone: bool) -> Self {
+        match self {
+            Goal::Action(i, fa) => {
+                Goal::Action(i.map_free_with(f, monotone), fa.map_free_with(f, monotone))
+            }
+            Goal::Premise((n, i), fa) => Goal::Premise(
+                (n.map_free_with(f, monotone), i),
+                fa.map_free_with(f, monotone),
+            ),
+            Goal::Chain((cn, ci), (pn, pi)) => Goal::Chain(
+                (cn.map_free_with(f, monotone), ci),
+                (pn.map_free_with(f, monotone), pi),
+            ),
+            Goal::Split(i) => Goal::Split(i),
+            Goal::Disj(x) => Goal::Disj(x.map_free_with(f, monotone)),
+            Goal::Subterm(p) => Goal::Subterm(p.map_free_with(f, monotone)),
         }
     }
 }
@@ -444,5 +540,164 @@ mod tests {
         assert!(Goal::Action(i, out).is_standard_action());
         assert!(!Goal::Action(i, LNFact::new(FactTag::Ku, vec![t])).is_standard_action());
         assert!(!Goal::Split(SplitId(0)).is_standard_action());
+    }
+
+    // =========================================================================
+    // HasFrees instances
+    // =========================================================================
+
+    use tamarin_term::lterm::frees_list;
+
+    fn node_at(name: &str, idx: u64) -> NodeId {
+        LVar::new(name, LSort::Node, idx)
+    }
+
+    fn msg_var(name: &str, idx: u64) -> LVar {
+        LVar::new(name, LSort::Msg, idx)
+    }
+
+    fn msg_term(name: &str, idx: u64) -> LNTerm {
+        tamarin_term::term::lit(tamarin_term::vterm::Lit::Var(msg_var(name, idx)))
+    }
+
+    /// An `Out` fact whose two arguments carry a variable each, so a walk that
+    /// visits the fact shows both of them in argument order.
+    fn out_fact() -> crate::fact::LNFact {
+        crate::fact::LNFact::new(
+            crate::fact::FactTag::Out,
+            vec![msg_term("x", 5), msg_term("y", 6)],
+        )
+    }
+
+    /// A guarded atom over two free node leaves.
+    fn guarded_pair() -> Guarded {
+        use crate::guarded::{BVar, GAtom, GTerm};
+        let leaf = |name: &str, idx: u64| {
+            GTerm::Var(BVar::Free(tamarin_parser::ast::VarSpec {
+                name: name.into(),
+                idx,
+                sort: tamarin_term::lterm::LSort::Node,
+                typ: None,
+            }))
+        };
+        Guarded::Atom(GAtom::Less(leaf("g", 8), leaf("h", 9)))
+    }
+
+    /// Add 100 to the index of every variable the map reaches.  The rename is
+    /// injective, so a payload the map leaves alone keeps its own index and the
+    /// assertions can tell the two apart.
+    fn shifted<T: HasFrees>(t: T) -> T {
+        t.map_free(&mut |v: LVar| LVar::new(v.name, v.sort, v.idx + 100))
+    }
+
+    /// `instance HasFrees Edge` (Constraints.hs:110-115): source then target,
+    /// and the two indices are not variables.
+    #[test]
+    fn edge_visits_the_source_before_the_target() {
+        let e = Edge {
+            src: (node_at("i", 1), ConcIdx(2)),
+            tgt: (node_at("j", 3), PremIdx(4)),
+        };
+        assert_eq!(frees_list(&e), vec![node_at("i", 1), node_at("j", 3)]);
+        assert_eq!(
+            shifted(e),
+            Edge {
+                src: (node_at("i", 101), ConcIdx(2)),
+                tgt: (node_at("j", 103), PremIdx(4)),
+            }
+        );
+    }
+
+    /// `instance HasFrees LessAtom` (Constraints.hs:145-150): smaller then
+    /// larger, with the reason carried over.  `PartialEq LessAtom` ignores the
+    /// reason, so the fields are compared one by one.
+    #[test]
+    fn less_atom_visits_smaller_then_larger_and_keeps_the_reason() {
+        let la = LessAtom::new(node_at("i", 1), node_at("j", 2), Reason::InjectiveFacts);
+        assert_eq!(frees_list(&la), vec![node_at("i", 1), node_at("j", 2)]);
+        let mapped = shifted(la);
+        assert_eq!(mapped.smaller, node_at("i", 101));
+        assert_eq!(mapped.larger, node_at("j", 102));
+        assert_eq!(mapped.reason, Reason::InjectiveFacts);
+    }
+
+    /// `instance HasFrees a => HasFrees (Disj a)` (LTerm.hs:884-889): list
+    /// order in both directions, with no sorting of the disjuncts.
+    #[test]
+    fn disj_visits_its_items_in_list_order() {
+        let d = Disj::new(vec![node_at("b", 2), node_at("a", 1)]);
+        assert_eq!(frees_list(&d), vec![node_at("b", 2), node_at("a", 1)]);
+        assert_eq!(shifted(d).0, vec![node_at("b", 102), node_at("a", 101)]);
+    }
+
+    /// `instance HasFrees Goal`'s fold (Constraints.hs:210-218), one variant
+    /// per row and a variable of its own in every payload, so the sequence
+    /// pins which payload comes first.
+    #[test]
+    fn goal_visits_its_payloads_in_haskell_order() {
+        let cases: Vec<(Goal, Vec<LVar>)> = vec![
+            (
+                Goal::Action(node_at("i", 1), out_fact()),
+                vec![node_at("i", 1), msg_var("x", 5), msg_var("y", 6)],
+            ),
+            (
+                Goal::Premise((node_at("i", 1), PremIdx(7)), out_fact()),
+                vec![node_at("i", 1), msg_var("x", 5), msg_var("y", 6)],
+            ),
+            (
+                Goal::Chain((node_at("i", 1), ConcIdx(7)), (node_at("j", 2), PremIdx(8))),
+                vec![node_at("i", 1), node_at("j", 2)],
+            ),
+            (Goal::Split(SplitId(3)), vec![]),
+            (
+                Goal::Disj(Disj::new(vec![guarded_pair()])),
+                vec![node_at("g", 8), node_at("h", 9)],
+            ),
+            (
+                Goal::Subterm((msg_term("s", 3), msg_term("t", 4))),
+                vec![msg_var("s", 3), msg_var("t", 4)],
+            ),
+        ];
+        for (g, want) in cases {
+            assert_eq!(frees_list(&g), want, "{g:?}");
+        }
+    }
+
+    /// `instance HasFrees Goal`'s map (Constraints.hs:226-232): every payload
+    /// is rewritten, the premise and conclusion indices stay, and a `SplitG`
+    /// keeps its id.
+    #[test]
+    fn goal_map_free_rewrites_every_payload() {
+        let shifted_fact = crate::fact::LNFact::new(
+            crate::fact::FactTag::Out,
+            vec![msg_term("x", 105), msg_term("y", 106)],
+        );
+        assert_eq!(
+            shifted(Goal::Action(node_at("i", 1), out_fact())),
+            Goal::Action(node_at("i", 101), shifted_fact.clone())
+        );
+        assert_eq!(
+            shifted(Goal::Premise((node_at("i", 1), PremIdx(7)), out_fact())),
+            Goal::Premise((node_at("i", 101), PremIdx(7)), shifted_fact)
+        );
+        assert_eq!(
+            shifted(Goal::Chain(
+                (node_at("i", 1), ConcIdx(7)),
+                (node_at("j", 2), PremIdx(8))
+            )),
+            Goal::Chain(
+                (node_at("i", 101), ConcIdx(7)),
+                (node_at("j", 102), PremIdx(8))
+            )
+        );
+        assert_eq!(shifted(Goal::Split(SplitId(3))), Goal::Split(SplitId(3)));
+        assert_eq!(
+            frees_list(&shifted(Goal::Disj(Disj::new(vec![guarded_pair()])))),
+            vec![node_at("g", 108), node_at("h", 109)]
+        );
+        assert_eq!(
+            shifted(Goal::Subterm((msg_term("s", 3), msg_term("t", 4)))),
+            Goal::Subterm((msg_term("s", 103), msg_term("t", 104)))
+        );
     }
 }

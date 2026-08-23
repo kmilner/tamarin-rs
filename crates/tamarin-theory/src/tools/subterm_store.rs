@@ -16,7 +16,7 @@
 //! — are ported in `constraint::solver::simplify` rather than here.
 
 use tamarin_term::function_symbols::FunSym;
-use tamarin_term::lterm::LNTerm;
+use tamarin_term::lterm::{HasFrees, LNTerm, LVar};
 use tamarin_term::term::Term;
 use tamarin_utils::FastSet;
 
@@ -27,6 +27,25 @@ pub struct SubtermConstraint {
     pub big: LNTerm,
     /// Whether this constraint has already been propagated.
     pub propagated: bool,
+}
+
+/// One element of the `_posSubterms` / `_solvedSubterms` sets, which HS holds
+/// as `S.Set (LNTerm, LNTerm)` (SubtermStore.hs:90-96), so the walk is the
+/// pair instance (LTerm.hs:855-860): the small side then the big one.
+/// `propagated` is not part of the HS value and is carried over unchanged.
+impl HasFrees for SubtermConstraint {
+    fn for_each_free(&self, f: &mut dyn FnMut(&LVar)) {
+        self.small.for_each_free(f);
+        self.big.for_each_free(f);
+    }
+
+    fn map_free_with(self, f: &mut dyn FnMut(LVar) -> LVar, monotone: bool) -> Self {
+        SubtermConstraint {
+            small: self.small.map_free_with(f, monotone),
+            big: self.big.map_free_with(f, monotone),
+            propagated: self.propagated,
+        }
+    }
 }
 
 /// An always-sorted, deduplicated set of `(LNTerm, LNTerm)` pairs, standing in
@@ -172,6 +191,61 @@ impl SubtermStore {
             self.old_neg_subterms.insert(p.clone());
         }
     }
+}
+
+/// `instance HasFrees SubtermStore` (SubtermStore.hs:546-557): the negative
+/// subterms, then the positive ones, then the solved ones.  `contradictory`
+/// and `old_neg_subterms` are carried over by `pure` — HS states at
+/// SubtermStore.hs:95 that `oldNegSubterms` is the copy `apply`/`HasFrees`
+/// leave alone.
+///
+/// HS holds all three walked fields as `S.Set (LNTerm, LNTerm)`, so its fold
+/// sees them in ascending pair order (LTerm.hs:898-901).  `neg_subterms` is
+/// stored sorted, and the walk sorts references to the two `Vec`-backed
+/// fields by `(small, big)`.  The map rebuilds `neg_subterms` through
+/// [`SortedPairSet::rebuild_from`], which is the `S.fromList` of the HS set
+/// map (LTerm.hs:903); it rewrites `subterms` and `solved_subterms` where
+/// they stand, because the port keeps those two in insertion order and the
+/// subterm-store pane prints them in it (`pretty_system::pretty_subterm_store`).
+impl HasFrees for SubtermStore {
+    fn for_each_free(&self, f: &mut dyn FnMut(&LVar)) {
+        for p in self.neg_subterms.iter() {
+            p.for_each_free(f);
+        }
+        for c in sorted_by_pair(&self.subterms) {
+            c.for_each_free(f);
+        }
+        for c in sorted_by_pair(&self.solved_subterms) {
+            c.for_each_free(f);
+        }
+    }
+
+    fn map_free_with(self, f: &mut dyn FnMut(LVar) -> LVar, monotone: bool) -> Self {
+        let neg_subterms = SortedPairSet::rebuild_from(
+            self.neg_subterms
+                .into_iter()
+                .map(|p| p.map_free_with(&mut *f, monotone)),
+        );
+        let subterms = self.subterms.map_free_with(f, monotone);
+        let solved_subterms = self.solved_subterms.map_free_with(f, monotone);
+        SubtermStore {
+            subterms,
+            solved_subterms,
+            contradictory: self.contradictory,
+            neg_subterms,
+            old_neg_subterms: self.old_neg_subterms,
+        }
+    }
+}
+
+/// The constraints of `cs` ordered by `(small, big)`, the order HS's
+/// `S.Set (LNTerm, LNTerm)` enumerates the same pairs in
+/// (SubtermStore.hs:90-96).  `SubtermConstraint` carries a `propagated`
+/// marker that is not part of that pair and so is no `Ord` key.
+fn sorted_by_pair(cs: &[SubtermConstraint]) -> Vec<&SubtermConstraint> {
+    let mut out: Vec<&SubtermConstraint> = cs.iter().collect();
+    out.sort_by(|a, b| (&a.small, &a.big).cmp(&(&b.small, &b.big)));
+    out
 }
 
 /// `elemNotBelowReducible reducible inner outer` — port of Haskell's
@@ -520,5 +594,110 @@ mod tests {
             assert!(set.binary_search(&(a.clone(), b.clone())).is_ok());
             assert!(set.binary_search(&(c.clone(), a.clone())).is_ok());
         }
+    }
+
+    // =========================================================================
+    // HasFrees instances
+    // =========================================================================
+
+    use tamarin_term::lterm::frees_list;
+
+    /// A message variable named `x` distinguished by its index, so `Ord`
+    /// follows the index (LTerm.hs:546-548) and a walk order is readable off
+    /// the indices alone.
+    fn xv(idx: u64) -> LVar {
+        LVar::new("x", LSort::Msg, idx)
+    }
+
+    fn xt(idx: u64) -> LNTerm {
+        Term::Lit(Lit::Var(xv(idx)))
+    }
+
+    fn cst(small: u64, big: u64, propagated: bool) -> SubtermConstraint {
+        SubtermConstraint {
+            small: xt(small),
+            big: xt(big),
+            propagated,
+        }
+    }
+
+    /// Add 100 to the index of every variable the map reaches.  The rename is
+    /// injective, so a field the map leaves alone keeps its own indices.
+    fn shifted<T: HasFrees>(t: T) -> T {
+        t.map_free(&mut |v: LVar| LVar::new(v.name, v.sort, v.idx + 100))
+    }
+
+    /// A store whose every constraint carries its own variables, with the
+    /// positive and solved constraints pushed in the reverse of their
+    /// `(small, big)` order.
+    fn walk_store() -> SubtermStore {
+        SubtermStore {
+            subterms: vec![cst(6, 7, true), cst(2, 3, false)],
+            solved_subterms: vec![cst(9, 10, false), cst(4, 5, true)],
+            contradictory: true,
+            neg_subterms: SortedPairSet::rebuild_from(vec![(xt(11), xt(12))]),
+            old_neg_subterms: SortedPairSet::rebuild_from(vec![(xt(13), xt(14))]),
+        }
+    }
+
+    /// The port's element of the positive and solved subterm sets walks the
+    /// small side before the big one (LTerm.hs:855-860) and carries its
+    /// `propagated` marker through the map.
+    #[test]
+    fn subterm_constraint_visits_small_then_big_and_keeps_propagated() {
+        let c = cst(1, 2, true);
+        assert_eq!(frees_list(&c), vec![xv(1), xv(2)]);
+        assert_eq!(shifted(c), cst(101, 102, true));
+    }
+
+    /// `instance HasFrees SubtermStore`'s fold (SubtermStore.hs:548-549): the
+    /// negative subterms first — before the positive ones that hold smaller
+    /// variables — then the positive and the solved ones, each in `(small,
+    /// big)` order rather than the insertion order the fixture stores.
+    #[test]
+    fn subterm_store_walks_negative_subterms_first_and_each_field_sorted() {
+        assert_eq!(
+            frees_list(&walk_store()),
+            vec![
+                xv(11),
+                xv(12),
+                xv(2),
+                xv(3),
+                xv(6),
+                xv(7),
+                xv(4),
+                xv(5),
+                xv(9),
+                xv(10),
+            ]
+        );
+    }
+
+    /// The map (SubtermStore.hs:552-557) rewrites the three walked fields and
+    /// carries `contradictory` and `old_neg_subterms` over untouched.  The two
+    /// `Vec`-backed fields keep their insertion order and their `propagated`
+    /// markers; `neg_subterms` goes back through `SortedPairSet::rebuild_from`.
+    #[test]
+    fn subterm_store_map_keeps_storage_order_and_the_untouched_fields() {
+        let mapped = shifted(walk_store());
+        assert_eq!(
+            mapped.subterms,
+            vec![cst(106, 107, true), cst(102, 103, false)]
+        );
+        assert_eq!(
+            mapped.solved_subterms,
+            vec![cst(109, 110, false), cst(104, 105, true)]
+        );
+        assert_eq!(
+            &*mapped.neg_subterms,
+            &[(xt(111), xt(112))],
+            "the negative subterms are remapped"
+        );
+        assert_eq!(
+            &*mapped.old_neg_subterms,
+            &[(xt(13), xt(14))],
+            "oldNegSubterms is carried over by `pure`"
+        );
+        assert!(mapped.contradictory);
     }
 }
