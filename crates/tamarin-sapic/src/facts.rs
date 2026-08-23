@@ -361,14 +361,6 @@ pub fn var_mid(p: &ProcessPosition) -> LVar {
     )
 }
 
-/// `isState` (Facts.hs:158-160).
-// Intentionally retained: faithful HS port; no caller yet (the predicate is
-// inlined as `matches!(.., TransFact::State(..))` at the merge-with-state site).
-#[allow(dead_code)]
-pub(crate) fn is_state(f: &TransFact) -> bool {
-    matches!(f, TransFact::State(..))
-}
-
 /// `isNonSemiState` (Facts.hs:154-156): a non-semi `State` fact.
 pub fn is_non_semi_state(f: &TransFact) -> bool {
     matches!(f, TransFact::State(kind, _, _) if !kind.is_semi_state())

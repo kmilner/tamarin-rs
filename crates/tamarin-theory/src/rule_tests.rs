@@ -455,8 +455,6 @@ fn d_exp_pmult_emap_rule_classification() {
     assert!(is_d_pmult_rule(&dpmult));
     assert!(is_d_emap_rule(&dem));
     assert!(is_coerce_rule_inst(&coerce));
-    assert!(is_destr_rule(&dexp));
-    assert!(!is_destr_rule(&coerce));
 }
 
 #[test]

@@ -61,20 +61,6 @@ impl<I> Rule<I> {
         self
     }
 
-    /// `compareRulesUpToNewVars`: ordering ignoring `new_vars`.
-    /// Retained for port completeness (no current callers).
-    #[allow(dead_code)]
-    pub(crate) fn cmp_up_to_new_vars(&self, other: &Self) -> std::cmp::Ordering
-    where
-        I: Ord,
-    {
-        self.info
-            .cmp(&other.info)
-            .then_with(|| self.premises.cmp(&other.premises))
-            .then_with(|| self.conclusions.cmp(&other.conclusions))
-            .then_with(|| self.actions.cmp(&other.actions))
-    }
-
     /// Add an action fact, prepended, unless already present. Port of HS
     /// `addAction` (Theory/Model/Rule.hs:1108-1112): `if act elem acts then
     /// unchanged else
@@ -230,18 +216,6 @@ pub fn print_fact_position(ep: &ExtendedPosition) -> String {
 pub enum RuleInfo<P, I> {
     Proto(P),
     Intr(I),
-}
-
-impl<P, I> RuleInfo<P, I> {
-    /// `foldRuleInfo`: case-analyse the two arms.
-    /// Retained for port completeness (no current callers).
-    #[allow(dead_code)]
-    pub(crate) fn fold<C>(&self, proto: impl FnOnce(&P) -> C, intr: impl FnOnce(&I) -> C) -> C {
-        match self {
-            RuleInfo::Proto(p) => proto(p),
-            RuleInfo::Intr(i) => intr(i),
-        }
-    }
 }
 
 // =============================================================================
@@ -402,39 +376,6 @@ pub fn rule_ac_to_intr_rule_ac(r: RuleAC) -> Option<IntrRuleAC> {
 pub fn rule_ac_intr_to_rule_ac(r: IntrRuleAC) -> RuleAC {
     Rule {
         info: RuleInfo::Intr(r.info),
-        premises: r.premises,
-        conclusions: r.conclusions,
-        actions: r.actions,
-        new_vars: r.new_vars,
-    }
-}
-
-/// Retained for port completeness (no current callers); lifts an
-/// `IntrRuleAC` directly into the `RuleACInst` shape.
-#[allow(dead_code)]
-pub(crate) fn rule_ac_intr_to_rule_ac_inst(r: IntrRuleAC) -> RuleACInst {
-    Rule {
-        info: RuleInfo::Intr(r.info),
-        premises: r.premises,
-        conclusions: r.conclusions,
-        actions: r.actions,
-        new_vars: r.new_vars,
-    }
-}
-
-/// Retained for port completeness (no current callers).
-/// `someRuleACInst` lite: drop the AC variants from a `ProtoRuleAC`,
-/// producing a `RuleACInst`. The `variants` and `loop_breakers` are
-/// carried into the inst-info; `variants` is stripped because the
-/// instance form refers to one chosen variant.
-#[allow(dead_code)]
-pub(crate) fn proto_rule_ac_to_rule_ac_inst(r: ProtoRuleAC) -> RuleACInst {
-    Rule {
-        info: RuleInfo::Proto(ProtoRuleACInstInfo {
-            name: r.info.name,
-            attributes: r.info.attributes,
-            loop_breakers: r.info.loop_breakers,
-        }),
         premises: r.premises,
         conclusions: r.conclusions,
         actions: r.actions,
@@ -671,28 +612,6 @@ pub fn is_d_emap_rule<I>(rule: &Rule<RuleInfo<I, IntrRuleACInfo>>) -> bool {
 /// `isCoerceRule` for a `RuleACInst` / `RuleAC`.
 pub fn is_coerce_rule_inst<I>(rule: &Rule<RuleInfo<I, IntrRuleACInfo>>) -> bool {
     matches!(&rule.info, RuleInfo::Intr(IntrRuleACInfo::Coerce))
-}
-
-/// `isDestrRule`: destruction rule (DestrRule or IEquality).
-/// Retained for port completeness (no production callers; test-only).
-#[allow(dead_code)]
-pub(crate) fn is_destr_rule<I>(rule: &Rule<RuleInfo<I, IntrRuleACInfo>>) -> bool {
-    matches!(
-        &rule.info,
-        RuleInfo::Intr(IntrRuleACInfo::DestrRule { .. })
-            | RuleInfo::Intr(IntrRuleACInfo::IEquality)
-    )
-}
-
-/// `isSubtermRule` for a `Rule` shape — RHS is a true subterm of LHS,
-/// or IEquality. Mirrors Haskell's `Theory.Model.Rule.isSubtermRule`.
-/// Retained for port completeness (no current callers).
-#[allow(dead_code)]
-pub(crate) fn is_subterm_rule<I>(rule: &Rule<RuleInfo<I, IntrRuleACInfo>>) -> bool {
-    match &rule.info {
-        RuleInfo::Intr(info) => is_subterm_rule_info(info),
-        _ => false,
-    }
 }
 
 /// `getRemainingRuleApplications`: returns the chain budget for

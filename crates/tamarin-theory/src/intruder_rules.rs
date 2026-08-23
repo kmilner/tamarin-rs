@@ -1951,53 +1951,6 @@ pub fn equal_subset_rule_up_to_renaming(
 }
 
 // =============================================================================
-// `normRule'` — port of `Theory.Tools.IntruderRules.normRule'`
-// (IntruderRules.hs:376-380).
-//
-// HS shape:
-// ```haskell
-// normRule' :: IntrRuleAC -> WithMaude IntrRuleAC
-// normRule' (Rule i ps cs as nvs) = reader $ \hnd ->
-//     let normFactTerms = map (fmap (\t -> norm' t `runReader` hnd)) in
-//     let normTerms     = map (\t -> norm' t `runReader` hnd) in
-//     Rule i (normFactTerms ps) (normFactTerms cs) (normFactTerms as) (normTerms nvs)
-// ```
-//
-// Walks every fact-term + every new-var term through Maude-backed
-// `norm'`.  We use the lenient `tamarin_term::norm::norm` (returns
-// Result; on Maude error we fall back to the original term, matching
-// the lenient style of the rest of the port — Maude failures during
-// variant expansion are recoverable, and propagating them up would
-// abort theory load).
-// =============================================================================
-/// `normRule'` — normalise every term in an intruder rule via Maude.
-///
-/// Mirrors HS `normRule'` (IntruderRules.hs:376-380).  Retained as a faithful
-/// standalone port with no production caller — only the in-file test below
-/// exercises it; `variants_intruder` inlines normalisation via `maude.reduce`
-/// instead of routing through here.
-#[allow(dead_code)]
-pub(crate) fn norm_rule(
-    maude: &tamarin_term::maude_proc::MaudeHandle,
-    ru: &IntrRuleAC,
-) -> IntrRuleAC {
-    let norm_t =
-        |t: &LNTerm| -> LNTerm { tamarin_term::norm::norm(maude, t).unwrap_or_else(|_| t.clone()) };
-    let norm_fact = |f: &LNFact| -> LNFact {
-        // norm rebuild — frees can change; recompute the bloom.
-        let terms: Vec<LNTerm> = f.terms.iter().map(&norm_t).collect();
-        LNFact::fresh_annotated(f.tag, f.annotations.clone(), terms)
-    };
-    Rule {
-        info: ru.info.clone(),
-        premises: ru.premises.iter().map(&norm_fact).collect(),
-        conclusions: ru.conclusions.iter().map(&norm_fact).collect(),
-        actions: ru.actions.iter().map(&norm_fact).collect(),
-        new_vars: ru.new_vars.iter().map(&norm_t).collect(),
-    }
-}
-
-// =============================================================================
 // `dhIntruderRules` — port of
 // `Theory.Tools.IntruderRules.dhIntruderRules`
 // (IntruderRules.hs:290-342).

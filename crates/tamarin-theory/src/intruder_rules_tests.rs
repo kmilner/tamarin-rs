@@ -1310,31 +1310,3 @@ fn dh_intruder_rules_destructors_have_kd_shape() {
         assert!(d.new_vars.is_empty(), "destructor new_vars must be empty");
     }
 }
-
-/// `norm_rule` is the identity on a DH constructor rule whose
-/// terms are already in normal form (KU(x.0), KU(x.1), KU(exp(x.0, x.1))).
-/// Mirrors HS `normRule'` (IntruderRules.hs:376-380) — for already-normal
-/// terms, `norm'` returns the input.
-#[test]
-fn norm_rule_identity_on_already_normal_rule() {
-    let maude = match dh_maude_handle() {
-        Some(m) => m,
-        None => return,
-    };
-    let rules = dh_intruder_rules(false, &maude);
-    let exp_constr = rules
-        .iter()
-        .find(|r| match &r.info {
-            IntrRuleACInfo::ConstrRule { name, .. } => name.as_slice() == b"_exp",
-            _ => false,
-        })
-        .expect("_exp constructor rule must be present");
-    let normalised = norm_rule(&maude, exp_constr);
-    assert_eq!(
-        &normalised, exp_constr,
-        "norm_rule must be the identity on a rule whose terms are \
-             already in normal form (`x.0`, `x.1`, `exp(x.0, x.1)` — no \
-             reducible top-level shapes).  HS: `normRule' = mapTerms norm'`, \
-             and `norm' (x.0) = x.0`."
-    );
-}
