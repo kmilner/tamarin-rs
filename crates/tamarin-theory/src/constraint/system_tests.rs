@@ -829,3 +829,276 @@ fn formula_to_system_partitions_safety_restrictions() {
         "a non-safety restriction must not be asserted as a lemma"
     );
 }
+
+// =============================================================================
+// HasFrees
+// =============================================================================
+
+use crate::constraint::constraints::{Reason, SplitId};
+use crate::rule::{ConcIdx, PremIdx};
+use crate::tools::equation_store::EqDisj;
+use crate::tools::subterm_store::{SortedPairSet, SubtermConstraint};
+use tamarin_term::lterm::{frees_list, HasFrees, LNTerm};
+use tamarin_term::subst::Subst;
+use tamarin_term::subst_vfresh::SubstVFresh;
+use tamarin_term::term::Term;
+use tamarin_term::vterm::Lit;
+
+/// A node variable, distinguished from every other fixture variable by its
+/// index alone: `Ord LVar` compares the index first (LTerm.hs:546-548), so a
+/// visit sequence reads off as a list of indices.
+fn nvar(idx: u64) -> NodeId {
+    LVar::new("i", LSort::Node, idx)
+}
+
+fn mvar(idx: u64) -> LVar {
+    LVar::new("x", LSort::Msg, idx)
+}
+
+fn mterm(idx: u64) -> LNTerm {
+    Term::Lit(Lit::Var(mvar(idx)))
+}
+
+/// A rule instance whose single premise holds `t`, so a walk that reaches the
+/// rule shows `t`'s variables after the node id.
+fn rule_holding(t: LNTerm) -> RuleACInst {
+    crate::rule::Rule::new(
+        crate::rule::RuleInfo::Intr(crate::rule::IntrRuleACInfo::Coerce),
+        vec![LNFact::new(crate::fact::FactTag::Out, vec![t])],
+        Vec::new(),
+        Vec::new(),
+    )
+}
+
+fn subterm_constraint(small: u64, big: u64) -> SubtermConstraint {
+    SubtermConstraint {
+        small: mterm(small),
+        big: mterm(big),
+        propagated: true,
+    }
+}
+
+/// A `last(i.idx)` formula over one free node leaf.
+fn last_formula(idx: u64) -> Guarded {
+    use tamarin_parser::ast::{Atom, Term as PTerm, VarSpec};
+    use tamarin_term::lterm::LSort;
+    Guarded::Atom(crate::guarded::atom_to_gatom_free(&Atom::Last(PTerm::Var(
+        VarSpec {
+            name: "i".to_string(),
+            idx,
+            sort: LSort::Node,
+            typ: None,
+        },
+    ))))
+}
+
+/// A system carrying a distinct variable in every field of the Haskell record
+/// (System.hs:383-392).  Each multi-element field is filled in the REVERSE of
+/// its `Data.Set` / `Data.Map` order, so a walk that reads the stored `Vec`
+/// order instead of the container order comes out backwards.
+fn one_variable_per_field_system() -> System {
+    let mut s = System::empty();
+    s.content_mut().nodes = Arc::new(vec![
+        (nvar(20), rule_holding(mterm(21))),
+        (nvar(10), rule_holding(mterm(11))),
+    ]);
+    s.content_mut().edges = vec![
+        Edge {
+            src: (nvar(32), ConcIdx(0)),
+            tgt: (nvar(33), PremIdx(0)),
+        },
+        Edge {
+            src: (nvar(30), ConcIdx(0)),
+            tgt: (nvar(31), PremIdx(0)),
+        },
+    ];
+    s.content_mut().less_atoms = vec![
+        LessAtom::new(nvar(42), nvar(43), Reason::Fresh),
+        LessAtom::new(nvar(40), nvar(41), Reason::Fresh),
+    ];
+    s.content_mut().last_atom = Some(nvar(50));
+    {
+        let st = s.subterm_store_mut();
+        // The negative subterms carry the HIGHEST indices of the store, so the
+        // sequence tells `negSt <> st <> solvedSt` (SubtermStore.hs:548-549)
+        // apart from any index-ordered walk.
+        st.neg_subterms = SortedPairSet::rebuild_from(vec![(mterm(90), mterm(91))]);
+        st.old_neg_subterms = SortedPairSet::rebuild_from(vec![(mterm(98), mterm(99))]);
+        st.subterms = vec![subterm_constraint(72, 73), subterm_constraint(70, 71)];
+        st.solved_subterms = vec![subterm_constraint(80, 81)];
+    }
+    {
+        let es = s.eq_store_mut();
+        es.subst = Subst::from_list(vec![(mvar(102), mterm(103)), (mvar(100), mterm(101))]);
+        es.conj = vec![EqDisj {
+            split_id: SplitId(0),
+            substs: vec![
+                SubstVFresh::from_list(vec![(mvar(112), mterm(113))]),
+                SubstVFresh::from_list(vec![(mvar(110), mterm(111))]),
+            ],
+        }];
+    }
+    s.content_mut().formulas = vec![Arc::new(last_formula(121)), Arc::new(last_formula(120))];
+    s.content_mut().solved_formulas = vec![Arc::new(last_formula(130))];
+    s.content_mut().lemmas = vec![Arc::new(last_formula(140))];
+    s.content_mut().goals = Arc::new(vec![
+        (
+            Goal::Chain((nvar(160), ConcIdx(0)), (nvar(161), PremIdx(0))),
+            GoalStatus::default(),
+        ),
+        (
+            Goal::Action(
+                nvar(150),
+                LNFact::new(crate::fact::FactTag::Out, vec![mterm(151)]),
+            ),
+            GoalStatus::default(),
+        ),
+    ]);
+    s
+}
+
+/// `instance HasFrees System`'s fold (System.hs:1834-1847) over the record at
+/// System.hs:383-395: the ten variable-bearing fields in declaration order,
+/// each `Data.Set` / `Data.Map` field in its container order rather than in
+/// the port's insertion order.  `old_neg_subterms` and the domain-only rule
+/// for the equation store's disjunctions show up as the two gaps in the
+/// sequence.
+#[test]
+fn for_each_free_walks_fields_in_system_hs_order() {
+    let s = one_variable_per_field_system();
+    assert_eq!(
+        frees_list(&s),
+        vec![
+            // sNodes: ascending NodeId, each id before its rule's variables.
+            nvar(10),
+            mvar(11),
+            nvar(20),
+            mvar(21),
+            // sEdges: source before target, atoms in `Ord Edge` order.
+            nvar(30),
+            nvar(31),
+            nvar(32),
+            nvar(33),
+            // sLessAtoms: smaller before larger, atoms in `Ord LessAtom` order.
+            nvar(40),
+            nvar(41),
+            nvar(42),
+            nvar(43),
+            // sLastAtom.
+            nvar(50),
+            // sSubtermStore: negative, then positive, then solved; the two
+            // `Vec`-backed halves by `(small, big)`.  `old_neg_subterms`
+            // (x.98, x.99) is not walked.
+            mvar(90),
+            mvar(91),
+            mvar(70),
+            mvar(71),
+            mvar(72),
+            mvar(73),
+            mvar(80),
+            mvar(81),
+            // sEqStore: the free substitution's keys and ranges in ascending
+            // key order, then the disjunctions — each in `Ord LNSubstVFresh`
+            // order and contributing its DOMAIN only, so x.111 and x.113 are
+            // not walked.
+            mvar(100),
+            mvar(101),
+            mvar(102),
+            mvar(103),
+            mvar(110),
+            mvar(112),
+            // sFormulas, sSolvedFormulas, sLemmas: each store by `cmp_guarded`.
+            nvar(120),
+            nvar(121),
+            nvar(130),
+            nvar(140),
+            // sGoals: ascending `goal_cmp`, so the Action goal precedes the
+            // Chain one that is stored first.
+            nvar(150),
+            mvar(151),
+            nvar(160),
+            nvar(161),
+        ]
+    );
+}
+
+/// `instance HasFrees System`'s map (System.hs:1864-1877) rebuilds each
+/// `Vec`-backed field where it stands, where HS re-establishes the container
+/// with `S.fromList` / `M.fromList` (LTerm.hs:903, LTerm.hs:914).  The ranges
+/// of the equation store's disjunctions and `old_neg_subterms` are carried
+/// over untouched.
+#[test]
+fn map_free_keeps_storage_order_and_conj_ranges() {
+    let mapped = one_variable_per_field_system()
+        .map_free(&mut |v: LVar| LVar::new(v.name, v.sort, v.idx + 1000));
+    let node_ids: Vec<u64> = mapped.nodes.iter().map(|(id, _)| id.idx).collect();
+    assert_eq!(node_ids, vec![1020, 1010]);
+    let edge_srcs: Vec<u64> = mapped.edges.iter().map(|e| e.src.0.idx).collect();
+    assert_eq!(edge_srcs, vec![1032, 1030]);
+    let less: Vec<u64> = mapped.less_atoms.iter().map(|l| l.smaller.idx).collect();
+    assert_eq!(less, vec![1042, 1040]);
+    assert_eq!(
+        *mapped.formulas[0],
+        last_formula(1121),
+        "the formula store keeps its insertion order"
+    );
+    assert!(
+        matches!(mapped.goals[0].0, Goal::Chain(..)),
+        "the goal store keeps its insertion order"
+    );
+    let subterms: Vec<u64> = mapped
+        .subterm_store
+        .subterms
+        .iter()
+        .map(|c| match &c.small {
+            Term::Lit(Lit::Var(v)) => v.idx,
+            _ => unreachable!("the fixture stores variable terms"),
+        })
+        .collect();
+    assert_eq!(subterms, vec![1072, 1070]);
+    assert!(
+        mapped.subterm_store.subterms.iter().all(|c| c.propagated),
+        "the propagated marker is carried over"
+    );
+    assert_eq!(
+        mapped.subterm_store.old_neg_subterms,
+        SortedPairSet::rebuild_from(vec![(mterm(98), mterm(99))])
+    );
+    assert_eq!(
+        mapped.eq_store.conj[0].substs[0].to_list(),
+        vec![(mvar(1112), mterm(113))],
+        "a disjunction's substitution keeps its range"
+    );
+}
+
+/// The map's epilogue: both max-var-idx caches are invalidated (a rewrite may
+/// LOWER a maximum, and a stale-high cache would seed fresh indices above the
+/// ones Haskell picks) and every stamp is fresh, so no inherited no-op verdict
+/// survives.
+#[test]
+fn map_free_mints_stamps_and_invalidates_both_caches() {
+    use crate::constraint::solver::reduction::{bounds_max, bounds_max_uncached};
+    let s = one_variable_per_field_system();
+    // Populate both caches with the pre-map maximum, and set the marker.
+    let before = bounds_max(&s);
+    assert!(s.max_var_idx_cache.get().is_some());
+    assert!(s.node_max_cache.get().is_some());
+    s.record_subst_marker();
+    let content_stamp = s.content_stamp.get();
+    let subst_stamp = s.subst_stamp.get();
+
+    let mapped = s.map_free(&mut |v: LVar| LVar::new(v.name, v.sort, v.idx - 5));
+    assert!(mapped.max_var_idx_cache.get().is_none());
+    assert!(mapped.node_max_cache.get().is_none());
+    assert_ne!(mapped.content_stamp.get(), content_stamp);
+    assert_ne!(mapped.subst_stamp.get(), subst_stamp);
+    assert!(mapped.subst_applied_marker.get().is_none());
+
+    let uncached = bounds_max_uncached(&mapped);
+    assert!(uncached < before, "the rename lowers the maximum");
+    assert_eq!(
+        bounds_max(&mapped),
+        uncached,
+        "a stale cache would report {before}"
+    );
+}

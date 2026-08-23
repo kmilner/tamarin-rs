@@ -18,6 +18,7 @@ use crate::constraint::constraints::{Edge, Goal, LessAtom, NodeId};
 use crate::guarded::Guarded;
 use crate::rule::RuleACInst;
 use crate::tools::{EquationStore, SubtermStore};
+use tamarin_term::lterm::{HasFrees, LVar};
 
 // The pure `System` serializers, mirroring the Haskell children of
 // `Theory.Constraint.System`:
@@ -648,28 +649,47 @@ fn trace_goal_insert() -> bool {
 ///
 /// THE INVARIANT, stated once for all the order helpers: `sNodes` is an
 /// `M.Map NodeId RuleACInst` and `sEdges` / `sLessAtoms` are `Data.Set`s
-/// (System.hs:383-385), so every HS pass that walks them — through `M.toList`,
+/// (System.hs:383-385), `sFormulas` / `sSolvedFormulas` / `sLemmas` are
+/// `S.Set LNGuarded` and `sGoals` is an `M.Map Goal GoalStatus`
+/// (System.hs:389-392), so every HS pass that walks them — through `M.toList`,
 /// `M.elems` or `S.toList` — sees them in ascending key/element order.  RS
-/// stores all three as `Vec`s in INSERTION order, which carries no map/set
+/// stores all six as `Vec`s in INSERTION order, which carries no map/set
 /// semantics: `Reduction::set_nodes` keeps first-occurrence order because that
 /// is what decides which rule survives an id collision, and the display-only
 /// `compress_system` pass ([`mod@graph::simplify`]) appends its
 /// reconnected edges / less-atoms instead of re-inserting them in order.  A
 /// port site that needs the HS order therefore has to materialise it at the
-/// `M.toList` / `S.toList` boundary — through this function or through
-/// [`System::nodes_in_map_order`], [`System::edges_in_set_order`],
-/// [`System::less_atoms_in_set_order`].
+/// `M.toList` / `S.toList` boundary — through this function, through
+/// [`formulas_in_set_order`], or through [`System::nodes_in_map_order`],
+/// [`System::edges_in_set_order`], [`System::less_atoms_in_set_order`],
+/// [`System::goals_in_map_order`].
 ///
 /// The orders are the HS instances: `Ord NodeId` is `Ord LVar` = idx, then
 /// sort, then name (LTerm.hs:546-548); `Edge`'s derived `Ord` is `src` then
 /// `tgt` (Constraints.hs:79-83); `LessAtom`'s manual `Ord` is
-/// `(smaller, larger)`, ignoring the reason tag (Constraints.hs:126-130).
+/// `(smaller, larger)`, ignoring the reason tag (Constraints.hs:126-130);
+/// `Ord Guarded` is derived (Guarded.hs:121-129), mirrored by
+/// [`crate::guarded::cmp_guarded`]; `Ord Goal` is derived
+/// (Constraints.hs:159-172), mirrored by
+/// [`crate::constraint::solver::goals::goal_cmp`].
 ///
 /// Takes a slice rather than a `&System` so a call site holding only
 /// `&[(NodeId, RuleACInst)]` shares this one implementation.
 pub fn nodes_in_map_order(nodes: &[(NodeId, RuleACInst)]) -> Vec<&(NodeId, RuleACInst)> {
     let mut ordered: Vec<&(NodeId, RuleACInst)> = nodes.iter().collect();
     ordered.sort_by_key(|a| a.0);
+    ordered
+}
+
+/// One `S.Set LNGuarded` formula store in `S.toList` order — see
+/// [`nodes_in_map_order`] for the map/set-order invariant these helpers
+/// materialise.
+///
+/// Takes a slice so that `sFormulas`, `sSolvedFormulas` and `sLemmas` share
+/// this one implementation.
+pub fn formulas_in_set_order(formulas: &[Arc<Guarded>]) -> Vec<&Guarded> {
+    let mut ordered: Vec<&Guarded> = formulas.iter().map(|f| f.as_ref()).collect();
+    ordered.sort_by(|a, b| crate::guarded::cmp_guarded(a, b));
     ordered
 }
 
@@ -1160,6 +1180,58 @@ impl System {
         let mut ordered: Vec<&LessAtom> = self.less_atoms.iter().collect();
         ordered.sort();
         ordered
+    }
+
+    /// `sGoals` in `M.toList` order, i.e. ascending `Ord Goal` — see
+    /// [`nodes_in_map_order`].
+    pub fn goals_in_map_order(&self) -> Vec<&(Goal, GoalStatus)> {
+        let mut ordered: Vec<&(Goal, GoalStatus)> = self.goals.iter().collect();
+        ordered.sort_by(|a, b| crate::constraint::solver::goals::goal_cmp(&a.0, &b.0));
+        ordered
+    }
+
+    /// The `sNodes` half of [`HasFrees::for_each_free`] for a `System`: each
+    /// node id, then the free variables of the rule instance it maps to
+    /// (System.hs:1834-1835 over the record at System.hs:383).
+    ///
+    /// Split from [`for_each_free_rest`](Self::for_each_free_rest) — as
+    /// `bounds_max_nodes` is split from `bounds_max_rest`
+    /// (`constraint::solver::reduction`) — so `rename_precise_system` can read
+    /// its binding store between the two halves and learn whether the node
+    /// rename alone is the identity.
+    pub(crate) fn for_each_free_nodes(&self, f: &mut dyn FnMut(&LVar)) {
+        for (id, rule) in self.nodes_in_map_order() {
+            id.for_each_free(f);
+            rule.for_each_free(f);
+        }
+    }
+
+    /// The rest of [`HasFrees::for_each_free`] for a `System`: `sEdges`,
+    /// `sLessAtoms`, `sLastAtom`, `sSubtermStore`, `sEqStore`, `sFormulas`,
+    /// `sSolvedFormulas`, `sLemmas` and `sGoals`, in the field order of the
+    /// Haskell record (System.hs:1836-1844 over System.hs:384-392).
+    ///
+    /// The `Vec`-backed fields are walked through the container-order views,
+    /// which is the order the Haskell `Data.Set` / `Data.Map` folds see
+    /// (LTerm.hs:898-914).
+    pub(crate) fn for_each_free_rest(&self, f: &mut dyn FnMut(&LVar)) {
+        for e in self.edges_in_set_order() {
+            e.for_each_free(f);
+        }
+        for la in self.less_atoms_in_set_order() {
+            la.for_each_free(f);
+        }
+        self.last_atom.for_each_free(f);
+        self.subterm_store.for_each_free(f);
+        self.eq_store.for_each_free(f);
+        for store in [&self.formulas, &self.solved_formulas, &self.lemmas] {
+            for g in formulas_in_set_order(store) {
+                g.for_each_free(f);
+            }
+        }
+        for entry in self.goals_in_map_order() {
+            entry.for_each_free(f);
+        }
     }
 
     /// All `In`- and protocol-premise terms in the system, as
@@ -1774,6 +1846,90 @@ impl System {
         // the pre-clear max (stale-high ⇒ fresh idxs minted above HS's).
         // Invalidate so the next `bounds_max` recomputes post-clear.
         self.invalidate_max_var_idx_cache();
+        self
+    }
+}
+
+// =============================================================================
+// HasFrees
+// =============================================================================
+
+/// `instance HasFrees GoalStatus` (System.hs:1827-1830): a goal status holds
+/// no variable, so it folds to nothing and maps to itself.  The `sGoals` walk
+/// reaches it through the pair instance (LTerm.hs:855-860), which is how HS's
+/// `M.Map Goal GoalStatus` instance combines a key with its value
+/// (LTerm.hs:905-909).
+impl HasFrees for GoalStatus {
+    fn for_each_free(&self, _f: &mut dyn FnMut(&LVar)) {}
+
+    fn map_free_with(self, _f: &mut dyn FnMut(LVar) -> LVar, _monotone: bool) -> Self {
+        self
+    }
+}
+
+/// `instance HasFrees System` (System.hs:1832-1877).
+///
+/// The fold visits the thirteen fields of the Haskell record in declaration
+/// order (System.hs:383-395); the last three — `sNextGoalNr`, `sSourceKind`
+/// and `sDiffSystem` — hold no variable.  It is split in two halves,
+/// [`System::for_each_free_nodes`] and [`System::for_each_free_rest`], for the
+/// benefit of `rename_precise_system`.
+///
+/// The map rebuilds each `Vec`-backed field in its own STORAGE order, where
+/// HS re-establishes the container with `S.fromList` / `M.fromList`
+/// (LTerm.hs:903, LTerm.hs:914).  The port's insertion order is what the
+/// solver and the printer read back — `conjoin_system` appends to `formulas`,
+/// goal numbers follow the `goals` positions — so a re-sort here would move
+/// them.  A caller that wants the Haskell rebuild performs it itself, as
+/// `rename_precise_system` does.
+///
+/// `used_sources` and `sources_lemma_universals` have no Haskell counterpart
+/// and are carried over untouched, as is `side`.
+///
+/// The epilogue owns the derived state the rewritten fields invalidate: both
+/// max-var-idx caches (the map may LOWER a maximum) and every stamp, since a
+/// whole-system rewrite can inherit no verified-no-op verdict.  The equation
+/// store is rebuilt through `take_eq_store` / `set_eq_store`, the sanctioned
+/// write path for that field.
+impl HasFrees for System {
+    fn for_each_free(&self, f: &mut dyn FnMut(&LVar)) {
+        self.for_each_free_nodes(f);
+        self.for_each_free_rest(f);
+    }
+
+    fn map_free_with(mut self, f: &mut dyn FnMut(LVar) -> LVar, monotone: bool) -> Self {
+        let nodes = Arc::unwrap_or_clone(std::mem::take(&mut self.content.nodes));
+        self.content.nodes = Arc::new(
+            nodes
+                .into_iter()
+                .map(|(id, rule)| {
+                    (
+                        id.map_free_with(&mut *f, monotone),
+                        rule.map_free_with(&mut *f, monotone),
+                    )
+                })
+                .collect(),
+        );
+        self.content.edges =
+            std::mem::take(&mut self.content.edges).map_free_with(&mut *f, monotone);
+        self.content.less_atoms =
+            std::mem::take(&mut self.content.less_atoms).map_free_with(&mut *f, monotone);
+        self.content.last_atom = self.content.last_atom.map_free_with(&mut *f, monotone);
+        let subterm_store = Arc::unwrap_or_clone(std::mem::take(&mut self.content.subterm_store));
+        self.content.subterm_store = Arc::new(subterm_store.map_free_with(&mut *f, monotone));
+        let eq_store = Arc::unwrap_or_clone(self.take_eq_store());
+        self.set_eq_store(Arc::new(eq_store.map_free_with(&mut *f, monotone)));
+        self.content.formulas =
+            std::mem::take(&mut self.content.formulas).map_free_with(&mut *f, monotone);
+        self.content.solved_formulas =
+            std::mem::take(&mut self.content.solved_formulas).map_free_with(&mut *f, monotone);
+        self.content.lemmas =
+            std::mem::take(&mut self.content.lemmas).map_free_with(&mut *f, monotone);
+        let goals = Arc::unwrap_or_clone(std::mem::take(&mut self.content.goals));
+        self.content.goals = Arc::new(goals.map_free_with(&mut *f, monotone));
+        self.invalidate_node_max_cache();
+        self.invalidate_max_var_idx_cache();
+        self.mint_fresh_stamps();
         self
     }
 }

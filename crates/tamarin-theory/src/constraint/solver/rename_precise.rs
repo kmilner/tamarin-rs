@@ -17,10 +17,6 @@
 //! case maps and when the `Simplify` method compares `sys' /= cleanup sys`;
 //! note `M.fromListWith (error "case names not unique")` there *errors* on a
 //! duplicate case name rather than deduping.
-//!
-//! In Rust we don't have a single `mapFrees` typeclass that covers `System`,
-//! so we walk each field by hand. The walk-order mirrors
-//! `Reduction::subst_system_once` so any future cross-checks stay aligned.
 
 use tamarin_term::bind::Bindings;
 use tamarin_term::lterm::{HasFrees, LNTerm, LVar};
@@ -53,195 +49,26 @@ pub fn rename_precise_system(sys: &mut System) {
     let mut bindings = Bindings::new();
 
     // ----------------------------------------------------------------------
-    // Phase 1 — walk every free LVar in deterministic traversal order so the
-    // import-binding map is populated independent of how we apply later.
+    // Phase 1 — walk every free LVar in `instance HasFrees System`'s order so
+    // the import-binding map is populated independent of how we apply later.
     //
-    // HS-faithful order — matches `instance HasFrees System` field walk
-    // (System.hs:383-397 declaration order, traversed by foldFrees):
-    //   sNodes → sEdges → sLessAtoms → sLastAtom → sSubtermStore →
-    //   sEqStore → sFormulas → sSolvedFormulas → sLemmas → sGoals
-    //
-    // This MUST match HS's renamePrecise to keep per-name idx assignment
-    // in lockstep: formulas must be visited before goals so that a free
-    // LVar shared between a formula and a goal Disj is bound to the same
-    // fresh idx HS would assign, otherwise the two become distinct LVars.
+    // The walk MUST match HS's, because `bindings.import` allocates per-name
+    // idxs in VISIT order: formulas are visited before goals, so a free LVar
+    // shared between a formula and a goal `Disj` is bound to the same fresh
+    // idx HS assigns it, and the `Vec`-backed fields are visited in their
+    // `Data.Set` / `Data.Map` order rather than in insertion order.
     // ----------------------------------------------------------------------
-
-    // HS-faithful: HS's `instance HasFrees (Map k v)` uses
-    // `M.foldrWithKey` which walks the map keyed by `Ord k` ascending
-    // (Term/LTerm.hs:905-914, see line 907).  Rust's `sys.nodes` is a `Vec<(NodeId,
-    // RuleACInst)>` in insertion order — that order is NOT the same as
-    // NodeId-ascending.  Without this sort, the walk visits a newly-grafted
-    // source-case Gen_Step (high pre-rename idx but inserted last) AFTER
-    // pre-existing Check nodes — yet then `bindings.import` allocates per-name
-    // counters in *visit* order, so the newly-grafted Gen_Step gets the
-    // FIRST fresh "vr" slot if walked first / LAST if walked last.  For
-    // Helper_Loop_and_success this controls whether vr.0 ends up Check
-    // (HS pattern) or Gen_Step (the unsorted-walk pattern), which in turn flips
-    // impliedFormulas' sysActions iteration order and the Disj goal-nrs.
-    let mut nodes_sorted: Vec<&(
-        crate::constraint::constraints::NodeId,
-        crate::rule::RuleACInst,
-    )> = sys.nodes.iter().collect();
-    nodes_sorted.sort_by_key(|a| a.0);
-    for (id, rule) in nodes_sorted {
-        bindings.import(id, &mut fresh);
-        rule.for_each_free(&mut |v| {
-            bindings.import(v, &mut fresh);
-        });
-    }
+    sys.for_each_free_nodes(&mut |v| {
+        bindings.import(v, &mut fresh);
+    });
     // Nodes are the FIRST field walked, so `!bindings.changed()` here means every
     // node var (ids + rule vars) was bound to its own idx — the node rename
     // is the identity.  Snapshotted before any later field can flip the flag,
     // enabling the Phase 2 step-1 identity fast path.
     let nodes_identity = !bindings.changed();
-    // HS-faithful: `instance HasFrees (S.Set a)` (Term/LTerm.hs:898-903, see line 900)
-    // walks the set via `foldMap (foldFrees f)` — i.e. ascending Ord
-    // order.  HS's `_sEdges` / `_sLessAtoms` / `_sSubtermStore` fields
-    // are `S.Set` (System.hs:385-388 + SubtermStore.hs:546-548) and HS
-    // visits them sorted by their derived `Ord`.  RS's `Vec` is in
-    // insertion order, which DIVERGES from HS for `requiresKU`-driven
-    // Less-atom inserts whose new vk-LVars get appended later but sort
-    // earlier by `(smaller, larger)` than older atoms.  Sort copies here
-    // ONLY for the rename-precise walk so the per-name "vk" counter
-    // assigns canonical idxs in HS Set-order — matching HS's
-    // `evalFresh ... nothingUsed`-canonicalised numbering exactly —
-    // without touching the live `less_atoms` / `edges` Vec used
-    // elsewhere.
-    let mut edges_sorted: Vec<&crate::constraint::constraints::Edge> = sys.edges.iter().collect();
-    edges_sorted.sort();
-    for e in edges_sorted {
-        bindings.import(&e.src.0, &mut fresh);
-        bindings.import(&e.tgt.0, &mut fresh);
-    }
-    let mut less_sorted: Vec<&crate::constraint::constraints::LessAtom> =
-        sys.less_atoms.iter().collect();
-    less_sorted.sort();
-    for la in less_sorted {
-        bindings.import(&la.smaller, &mut fresh);
-        bindings.import(&la.larger, &mut fresh);
-    }
-    if let Some(la) = &sys.last_atom {
-        bindings.import(la, &mut fresh);
-    }
-    // HS `HasFrees SubtermStore` (SubtermStore.hs:546-548) walks
-    // `negSt <> st <> solvedSt`; each summand is a `S.Set` — sorted.
-    // `neg_subterms` (negSt) must be visited FIRST to match HS order.
-    // HS `neg_subterms` is `S.Set (LNTerm, LNTerm)` — sorted by pair Ord.
-    let mut neg_sorted: Vec<&(tamarin_term::lterm::LNTerm, tamarin_term::lterm::LNTerm)> =
-        sys.subterm_store.neg_subterms.iter().collect();
-    neg_sorted.sort();
-    for (s, b) in neg_sorted {
-        s.for_each_free(&mut |v| {
-            bindings.import(v, &mut fresh);
-        });
-        b.for_each_free(&mut |v| {
-            bindings.import(v, &mut fresh);
-        });
-    }
-    // SubtermConstraint isn't `Ord` in RS so sort by `(small, big)`
-    // which mirrors HS's derived ordering on the analogous field pair.
-    let mut sub_sorted: Vec<&crate::tools::subterm_store::SubtermConstraint> =
-        sys.subterm_store.subterms.iter().collect();
-    sub_sorted.sort_by(|a, b| (&a.small, &a.big).cmp(&(&b.small, &b.big)));
-    for c in sub_sorted {
-        c.small.for_each_free(&mut |v| {
-            bindings.import(v, &mut fresh);
-        });
-        c.big.for_each_free(&mut |v| {
-            bindings.import(v, &mut fresh);
-        });
-    }
-    let mut solved_sorted: Vec<&crate::tools::subterm_store::SubtermConstraint> =
-        sys.subterm_store.solved_subterms.iter().collect();
-    solved_sorted.sort_by(|a, b| (&a.small, &a.big).cmp(&(&b.small, &b.big)));
-    for c in solved_sorted {
-        c.small.for_each_free(&mut |v| {
-            bindings.import(v, &mut fresh);
-        });
-        c.big.for_each_free(&mut |v| {
-            bindings.import(v, &mut fresh);
-        });
-    }
-    // eq_store.subst: visit keys (dom) and values (range).  RS's
-    // `Subst` is `BTreeMap`-backed, so the borrowing `iter()` already
-    // yields pairs in ascending-key order — matches HS's `HasFrees
-    // (LSubst c) = foldFrees f . sMap` walking `M.Map LVar Term`
-    // ascending (SubstVFree.hs:220-221, see line 221).
-    for (k, t) in sys.eq_store.subst.iter() {
-        bindings.import(k, &mut fresh);
-        t.for_each_free(&mut |v| {
-            bindings.import(v, &mut fresh);
-        });
-    }
-    // eq_store.conj: HS-faithful `HasFrees (SubstVFresh n LVar)` only
-    // walks DOMAIN (keys), NOT values (SubstVFresh.hs:196-202).  This
-    // preserves the witness idxs in values — crucial for
-    // sort-discriminating across variants at perform_split.
-    //
-    // The outer container `Conj (SplitId, S.Set LNSubstVFresh)`
-    // (EquationStore.hs:116-121, see line 118) is a `Conj`-list (insertion order — match
-    // with RS's `Vec<EqDisj>`).  The INNER `S.Set LNSubstVFresh` is Ord
-    // ascending — sort to match.
-    for d in &sys.eq_store.conj {
-        let mut substs_sorted: Vec<
-            &tamarin_term::subst_vfresh::SubstVFresh<tamarin_term::lterm::Name, LVar>,
-        > = d.substs.iter().collect();
-        substs_sorted.sort();
-        for s in substs_sorted {
-            // Borrowing `dom()` walks the same BTreeMap keys in the same
-            // ascending order as `to_list()`, without cloning every
-            // (key, range-term) pair only to discard it.
-            for k in s.dom() {
-                bindings.import(k, &mut fresh);
-                // Note: value vars NOT imported (HS-faithful).
-            }
-        }
-    }
-    // HS-faithful: `_sFormulas` / `_sSolvedFormulas` / `_sLemmas` are
-    // `S.Set LNGuarded` (System.hs:390-392), walked via `HasFrees (S.Set
-    // a) = foldMap (foldFrees f)` in Ord-ascending.  RS's
-    // `Vec<Guarded>` is in insertion order — sort via the existing
-    // `cmp_guarded` helper (guarded.rs:67) which mirrors HS's derived
-    // `Ord Guarded` (Guarded.hs:121-129).
-    let mut formulas_sorted: Vec<&crate::guarded::Guarded> =
-        sys.formulas.iter().map(|f| f.as_ref()).collect();
-    formulas_sorted.sort_by(|a, b| crate::guarded::cmp_guarded(a, b));
-    for f in formulas_sorted {
-        guarded_for_each_free(f, &mut |v| {
-            bindings.import(v, &mut fresh);
-        });
-    }
-    let mut solved_formulas_sorted: Vec<&crate::guarded::Guarded> =
-        sys.solved_formulas.iter().map(|f| f.as_ref()).collect();
-    solved_formulas_sorted.sort_by(|a, b| crate::guarded::cmp_guarded(a, b));
-    for f in solved_formulas_sorted {
-        guarded_for_each_free(f, &mut |v| {
-            bindings.import(v, &mut fresh);
-        });
-    }
-    let mut lemmas_sorted: Vec<&crate::guarded::Guarded> =
-        sys.lemmas.iter().map(|f| f.as_ref()).collect();
-    lemmas_sorted.sort_by(|a, b| crate::guarded::cmp_guarded(a, b));
-    for f in lemmas_sorted {
-        guarded_for_each_free(f, &mut |v| {
-            bindings.import(v, &mut fresh);
-        });
-    }
-    // HS-faithful: `_sGoals` is `M.Map Goal GoalStatus` (System.hs:383-401, see line 393),
-    // walked via `HasFrees (M.Map k v) = M.foldrWithKey combine`
-    // (Term/LTerm.hs:905-914, see line 907) in ascending key order (`Ord Goal`).
-    // `goal_cmp` matches HS's derived `Ord Goal`
-    // (System/Constraints.hs:156-168); see
-    // `goal_cmp_tag_order_matches_haskell_declaration` test in goals.rs.
-    let mut goals_sorted: Vec<&(Goal, crate::constraint::system::GoalStatus)> =
-        sys.goals.iter().collect();
-    goals_sorted.sort_by(|a, b| crate::constraint::solver::goals::goal_cmp(&a.0, &b.0));
-    for (g, _) in goals_sorted {
-        goal_for_each_free(g, &mut |v| {
-            bindings.import(v, &mut fresh);
-        });
-    }
+    sys.for_each_free_rest(&mut |v| {
+        bindings.import(v, &mut fresh);
+    });
 
     // ----------------------------------------------------------------------
     // Phase 2 — apply the renaming map.
@@ -556,110 +383,6 @@ pub fn rename_precise_system(sys: &mut System) {
         .collect();
     sys.subterm_store_mut().neg_subterms =
         crate::tools::subterm_store::SortedPairSet::rebuild_from(mapped);
-}
-
-// =============================================================================
-// Helpers
-// =============================================================================
-
-fn goal_for_each_free(g: &Goal, f: &mut dyn FnMut(&LVar)) {
-    match g {
-        Goal::Action(i, fa) => {
-            f(i);
-            fa.for_each_free(f);
-        }
-        Goal::Premise(p, fa) => {
-            f(&p.0);
-            fa.for_each_free(f);
-        }
-        Goal::Chain(c, p) => {
-            f(&c.0);
-            f(&p.0);
-        }
-        Goal::Disj(d) => {
-            for item in &d.0 {
-                guarded_for_each_free(item, f);
-            }
-        }
-        Goal::Split(_) => {}
-        Goal::Subterm((a, b)) => {
-            a.for_each_free(f);
-            b.for_each_free(f);
-        }
-    }
-}
-
-/// Walk every free `LVar` of a `Guarded` formula. With DeBruijn bindings,
-/// `BVar::Bound` leaves carry no LVar identity and are auto-skipped; only
-/// `BVar::Free` leaves get visited.
-fn guarded_for_each_free(g: &crate::guarded::Guarded, f: &mut dyn FnMut(&LVar)) {
-    use crate::guarded::Guarded;
-    match g {
-        Guarded::Atom(a) => atom_for_each_free(a, f),
-        Guarded::Disj(xs) | Guarded::Conj(xs) => {
-            for x in xs.iter() {
-                guarded_for_each_free(x, f);
-            }
-        }
-        Guarded::GGuarded { guards, body, .. } => {
-            for a in guards.iter() {
-                atom_for_each_free(a, f);
-            }
-            guarded_for_each_free(body, f);
-        }
-    }
-}
-
-fn atom_for_each_free(a: &crate::guarded::GAtom, f: &mut dyn FnMut(&LVar)) {
-    use crate::guarded::GAtom;
-    match a {
-        GAtom::Eq(x, y) | GAtom::Less(x, y) | GAtom::LessMset(x, y) | GAtom::Subterm(x, y) => {
-            term_for_each_free(x, f);
-            term_for_each_free(y, f);
-        }
-        GAtom::Action(fa, t) => {
-            // HS `Traversable ProtoAtom` visits the timepoint BEFORE the
-            // fact: `traverse f (Action i fa) = Action <$> f i <*> traverse f fa`
-            // (Atom.hs).  renamePrecise allocates fresh per-name indices
-            // in visit order, so the timepoint must be walked first to
-            // match HS's idx assignment.
-            term_for_each_free(t, f);
-            for arg in fa.args.iter() {
-                term_for_each_free(arg, f);
-            }
-        }
-        GAtom::Last(t) => term_for_each_free(t, f),
-        GAtom::Pred(fa) => {
-            for arg in fa.args.iter() {
-                term_for_each_free(arg, f);
-            }
-        }
-    }
-}
-
-fn term_for_each_free(t: &crate::guarded::GTerm, f: &mut dyn FnMut(&LVar)) {
-    use crate::guarded::{BVar, GTerm};
-    match t {
-        GTerm::Var(BVar::Free(v)) => f(&crate::elaborate::varspec_to_lvar(v)),
-        GTerm::Var(BVar::Bound(_)) => {}
-        GTerm::PubLit(_)
-        | GTerm::FreshLit(_)
-        | GTerm::NatLit(_)
-        | GTerm::Number(_)
-        | GTerm::NumberOne
-        | GTerm::NatOne
-        | GTerm::DhNeutral => {}
-        GTerm::App(_, args) | GTerm::Pair(args) => {
-            for a in args.iter() {
-                term_for_each_free(a, f);
-            }
-        }
-        GTerm::AlgApp(_, a, b) | GTerm::Diff(a, b) | GTerm::BinOp(_, a, b) => {
-            term_for_each_free(a, f);
-            term_for_each_free(b, f);
-        }
-        GTerm::PatMatch(t) => term_for_each_free(t, f),
-    }
 }
 
 #[cfg(test)]
