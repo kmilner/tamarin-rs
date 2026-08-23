@@ -1460,14 +1460,6 @@ pub fn rewrite_arity1_fact(fa: &p::Fact, arity1: &std::collections::HashSet<Stri
     crate::macro_expand::map_fact_terms(fa, &|t| rewrite_arity1_term(t, arity1))
 }
 
-/// Apply [`rewrite_arity1_term`] to every term in a parser-AST atom.
-// arity-1 no-eq function-name set; membership-only (.contains), never iterated;
-// std kept (byte-inert) — iteration order never reaches output.
-#[allow(clippy::disallowed_types)]
-pub fn rewrite_arity1_atom(a: &p::Atom, arity1: &std::collections::HashSet<String>) -> p::Atom {
-    crate::macro_expand::map_atom_terms(a, &|t| rewrite_arity1_term(t, arity1))
-}
-
 /// Apply [`rewrite_arity1_term`] to every term in a parser-AST formula.
 /// See [`rewrite_arity1_term`] for the HS-faithfulness rationale.
 // arity-1 no-eq function-name set; membership-only (.contains), never iterated;

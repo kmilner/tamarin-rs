@@ -429,10 +429,6 @@ pub fn is_iequality_rule_info(info: &IntrRuleACInfo) -> bool {
     matches!(info, IntrRuleACInfo::IEquality)
 }
 
-pub fn is_fresh_rule_info(info: &ProtoRuleEInfo) -> bool {
-    info.name == ProtoRuleName::Fresh
-}
-
 /// `isACConstrRule`: the function symbol iff the rule is a construction rule
 /// for an AC symbol.
 pub fn is_ac_constr_rule<I>(rule: &Rule<RuleInfo<I, IntrRuleACInfo>>) -> Option<FunSym> {
@@ -535,29 +531,6 @@ pub fn get_conc_fact(rule: &IntrRuleAC) -> &LNFact {
         [fact] => fact,
         _ => panic!("getConcFact: intruder rules have exactly one conclusion"),
     }
-}
-
-/// `replaceMatchingRule` (Theory/Model/Rule.hs:873-878): replace a
-/// deconstruction rule by
-/// the version from `d` with the same name, premises, and conclusions (copying
-/// its chain limit); other rules are returned unchanged.
-///
-/// Intentionally retained: faithful mirror of HS `replaceMatchingRule`
-/// (Theory/Model/Rule.hs:873-878); no caller yet.
-pub fn replace_matching_rule(d: &[IntrRuleAC], rule: IntrRuleAC) -> IntrRuleAC {
-    if !matches!(rule.info, IntrRuleACInfo::DestrRule { .. }) {
-        return rule;
-    }
-    let name = intr_rule_name_string(&rule.info);
-    for d1 in d {
-        if intr_rule_name_string(&d1.info) == name
-            && d1.premises == rule.premises
-            && d1.conclusions == rule.conclusions
-        {
-            return d1.clone();
-        }
-    }
-    rule
 }
 
 /// `getRuleName` restricted to intruder-rule infos (used where only an
@@ -715,8 +688,8 @@ const RESERVED_RULE_NAMES: [&str; 7] = [
 ];
 
 // =============================================================================
-// Maude-backed unification helpers — port of `unifyRuleACInstEqs`,
-// `unifiableRuleACInsts`, `unifyLNFactEqs`, `unifiableLNFacts`.
+// Maude-backed unification helpers — port of `unifiableRuleACInsts`,
+// `unifyLNFactEqs`, `unifiableLNFacts`.
 // =============================================================================
 
 use tamarin_term::maude_proc::{MaudeError, MaudeHandle};
@@ -782,43 +755,10 @@ pub fn unifiable_ln_facts(
     maude.unifiable(&eqs)
 }
 
-/// `unifyRuleACInstEqs`: AC-unify a list of `RuleACInst` equalities.
-/// The Haskell version checks that `info`, premise count, and
-/// conclusion count match before delegating to fact unification on
-/// the zipped premises and conclusions.
-pub fn unify_rule_ac_inst_eqs(
-    maude: &MaudeHandle,
-    eqs: &[Equal<RuleACInst>],
-) -> Result<Vec<Vec<(LVar, LNTerm)>>, MaudeError> {
-    let unifiable = eqs.iter().all(|e| {
-        e.lhs.info == e.rhs.info
-            && e.lhs.premises.len() == e.rhs.premises.len()
-            && e.lhs.conclusions.len() == e.rhs.conclusions.len()
-    });
-    if !unifiable {
-        return Ok(Vec::new());
-    }
-    let mut fact_eqs = Vec::new();
-    for e in eqs {
-        for (a, b) in e.lhs.premises.iter().zip(e.rhs.premises.iter()) {
-            fact_eqs.push(Equal {
-                lhs: a.clone(),
-                rhs: b.clone(),
-            });
-        }
-        for (a, b) in e.lhs.conclusions.iter().zip(e.rhs.conclusions.iter()) {
-            fact_eqs.push(Equal {
-                lhs: a.clone(),
-                rhs: b.clone(),
-            });
-        }
-    }
-    unify_ln_fact_eqs(maude, &fact_eqs)
-}
-
 /// `unifiableRuleACInsts`: are two rule instances AC-unifiable?
 /// Routes through `maude.unifiable` for memoisation; the shape-
-/// mismatch fast-path mirrors `unify_rule_ac_inst_eqs`.
+/// mismatch fast-path rejects rules whose info, premise count or
+/// conclusion count differ before building any equalities.
 pub fn unifiable_rule_ac_insts(
     maude: &MaudeHandle,
     r1: &RuleACInst,

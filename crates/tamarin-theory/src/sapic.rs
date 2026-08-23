@@ -410,20 +410,9 @@ pub fn frees_sapic_fact(f: &Fact<SapicTerm>) -> Vec<SapicLVar> {
 // =============================================================================
 // Action / combinator predicates (mirroring Sapic.ProcessUtils)
 //
-// `is_lock`/`is_unlock`/`is_ch_in`/`is_ch_out`/`is_eq` are faithful ports of
-// the corresponding HS predicates (ProcessUtils.hs:54-72), which are generic
-// over the annotation and inspect only the action/combinator shape.
-//
-// `is_delete`/`is_lookup` are an INTENTIONALLY INCOMPLETE mirror: HS
-// `isDelete`/`isLookup` (ProcessUtils.hs:46-52) are specialised to
-// `Process (ProcessAnnotation LVar) v` and additionally require
-// `pureState=False`, i.e. they exclude optimized pure-state states. That
-// guard cannot be expressed here — these functions are generic over `Ann`,
-// and `tamarin-theory` cannot reference `ProcessAnnotation`'s `pure_state`
-// field without a dependency cycle (that type lives downstream in
-// `tamarin-sapic`). Callers that need the HS `pureState=False` semantics
-// (e.g. a future Sapic.Basetranslation port) MUST re-check `pure_state`
-// themselves rather than relying on these predicates alone.
+// `is_lock`/`is_unlock`/`is_eq` are faithful ports of the corresponding HS
+// predicates (ProcessUtils.hs:54-60,70-72), which are generic over the
+// annotation and inspect only the action/combinator shape.
 // =============================================================================
 
 pub fn is_lock<Ann, V>(p: &Process<Ann, V>) -> bool {
@@ -432,24 +421,8 @@ pub fn is_lock<Ann, V>(p: &Process<Ann, V>) -> bool {
 pub fn is_unlock<Ann, V>(p: &Process<Ann, V>) -> bool {
     matches!(p, Process::Action(SapicAction::Unlock(_), _, _))
 }
-pub fn is_ch_in<Ann, V>(p: &Process<Ann, V>) -> bool {
-    matches!(p, Process::Action(SapicAction::ChIn { .. }, _, _))
-}
-pub fn is_ch_out<Ann, V>(p: &Process<Ann, V>) -> bool {
-    matches!(p, Process::Action(SapicAction::ChOut { .. }, _, _))
-}
-/// Incomplete mirror of HS `isDelete`: matches the `Delete` action shape but
-/// omits the HS `pureState=False` guard (see module section note above).
-pub fn is_delete<Ann, V>(p: &Process<Ann, V>) -> bool {
-    matches!(p, Process::Action(SapicAction::Delete(_), _, _))
-}
 pub fn is_eq<Ann, V>(p: &Process<Ann, V>) -> bool {
     matches!(p, Process::Comb(ProcessCombinator::CondEq(_, _), _, _, _))
-}
-/// Incomplete mirror of HS `isLookup`: matches the `Lookup` combinator shape
-/// but omits the HS `pureState=False` guard (see module section note above).
-pub fn is_lookup<Ann, V>(p: &Process<Ann, V>) -> bool {
-    matches!(p, Process::Comb(ProcessCombinator::Lookup(_, _), _, _, _))
 }
 
 #[cfg(test)]

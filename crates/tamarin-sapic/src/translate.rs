@@ -508,8 +508,7 @@ pub fn translate(
     // HS `isLookup`/`isDelete` (ProcessUtils.hs:46-52) only count
     // `pureState=False` nodes — a pure-state lookup/delete uses the
     // `L_PureState`/`L_CellLocked` facts and needs NO set_in/set_notin
-    // restriction.  (`is_lookup`/`is_delete` in tamarin_theory are generic
-    // over the annotation, so we inline the `pure_state` guard here.)
+    // restriction, so both closures carry that guard.
     let is_lookup_non_pure = |proc: &Process<ProcessAnnotation<LVar>, SapicLVar>| -> bool {
         matches!(proc, Process::Comb(ProcessCombinator::Lookup(_, _), an, _, _) if !an.pure_state)
     };

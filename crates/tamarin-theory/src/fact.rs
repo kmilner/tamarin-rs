@@ -435,10 +435,6 @@ impl<T> Fact<T> {
     pub fn is_proto(&self) -> bool {
         matches!(self.tag, FactTag::Proto(_, _, _))
     }
-    // Intentionally retained: faithful HS port; no caller yet.
-    pub fn is_in_fact(&self) -> bool {
-        self.tag == FactTag::In
-    }
     pub fn is_k_fact(&self) -> bool {
         matches!(self.tag, FactTag::Ku | FactTag::Kd)
     }
@@ -496,17 +492,6 @@ pub fn is_nearly_trivial_ku_fact(
     ku_fact_term(fa).is_some_and(|t| tamarin_term::lterm::is_trivial_fun_sym_term(t, sym))
 }
 
-/// Mirrors Haskell `isNearlyTrivialACKUFact` (Theory/Model/Fact.hs:252-255): a KU-fact whose
-/// single term applies an AC operator to message variables only.
-///
-/// Intentionally retained: faithful mirror of HS `isNearlyTrivialACKUFact`
-/// (Theory/Model/Fact.hs:252-255); no caller yet — and none in HS either: the KU-goal filter
-/// that motivates it (`openGoals`/`is_open_in_sys`) tests the goal TERM directly
-/// via `is_trivial_ac_fun_sym_term`.
-pub fn is_nearly_trivial_ac_ku_fact(fa: &LNFact) -> bool {
-    ku_fact_term(fa).is_some_and(tamarin_term::lterm::is_trivial_ac_fun_sym_term)
-}
-
 // =============================================================================
 // Construction helpers (NFact / LNFact specialised)
 // =============================================================================
@@ -545,10 +530,6 @@ pub fn ku_fact(t: LNTerm) -> LNFact {
 pub fn kd_fact(t: LNTerm) -> LNFact {
     Fact::fresh(FactTag::Kd, vec![t])
 }
-// Intentionally retained: faithful HS port; no caller yet.
-pub fn ded_fact(t: LNTerm) -> LNFact {
-    Fact::fresh(FactTag::Ded, vec![t])
-}
 
 /// `kLogFact` from Haskell's `Theory/Model/Fact.hs:301-303`:
 ///   `kLogFact = protoFact Linear "K" . return`
@@ -560,9 +541,6 @@ pub fn ded_fact(t: LNTerm) -> LNFact {
 /// names), so action goals like `K(t) @ j` match ISend instances.
 pub fn k_log_fact(t: LNTerm) -> LNFact {
     Fact::fresh(FactTag::Proto(Multiplicity::Linear, "K", 1), vec![t])
-}
-pub fn term_fact(t: LNTerm) -> LNFact {
-    Fact::fresh(FactTag::Term, vec![t])
 }
 
 pub fn proto_fact(mult: Multiplicity, name: &str, terms: Vec<LNTerm>) -> LNFact {
@@ -598,19 +576,6 @@ pub fn proto_or_out_fact_view(fa: &LNFact) -> Option<Vec<LNTerm>> {
         },
         _ => None,
     }
-}
-
-pub fn proto_fact_ann(
-    mult: Multiplicity,
-    name: &str,
-    annotations: BTreeSet<FactAnnotation>,
-    terms: Vec<LNTerm>,
-) -> LNFact {
-    Fact::fresh_annotated(
-        FactTag::Proto(mult, tamarin_term::intern::intern_str(name), terms.len()),
-        annotations,
-        terms,
-    )
 }
 
 /// Mirrors Haskell `freesToFresh = map (freshFact . lvarToLnterm)`
