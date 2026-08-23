@@ -582,6 +582,96 @@ fn lnformula_doc_matches_ast_doc_on_samples() {
     }
 }
 
+/// A bare name under a `#`-binder, pinned to the oracle's `--parse-only`
+/// render of the probe `S0_bare_name_under_node_binder.spthy`: the right
+/// operand of a node equality is a `nodevar` and binds to the `#l` binder,
+/// while a fact argument is a `msgvar` that stays free and renames the
+/// binder to `#l.1`.  `ast` marks the samples the parser-AST printer
+/// renders like the oracle; on the others it resolves a bare name in a
+/// message position to the `#`-binder.
+#[test]
+fn lnformula_doc_bare_name_under_node_binder() {
+    use crate::formula::{from_parser, to_lnformula};
+    use tamarin_parser::parser::parse_formula_str;
+
+    let samples: &[(&str, &str, &[&str], bool)] = &[
+        (
+            "all-traces",
+            "All y z #k #l. Alive(y) @ k & Alive(z) @ l ==> #k = l",
+            &[
+                "  all-traces",
+                "  \"∀ y z #k #l. ((Alive( y ) @ #k) ∧ (Alive( z ) @ #l)) ⇒ (#k = #l)\"",
+            ],
+            true,
+        ),
+        (
+            "all-traces",
+            "All y z #k #l. Alive(y) @ k & Alive(z) @ l ==> k:node = l",
+            &[
+                "  all-traces",
+                "  \"∀ y z #k #l. ((Alive( y ) @ #k) ∧ (Alive( z ) @ #l)) ⇒ (#k = #l)\"",
+            ],
+            true,
+        ),
+        (
+            "all-traces",
+            "All y z #k #l.1. Alive(y) @ k & Alive(z) @ l.1 ==> #k = l.1",
+            &[
+                "  all-traces",
+                "  \"∀ y z #k #l. ((Alive( y ) @ #k) ∧ (Alive( z ) @ #l)) ⇒ (#k = #l)\"",
+            ],
+            true,
+        ),
+        (
+            "all-traces",
+            "All l #l. Alive(l) @ l ==> #l = l",
+            &["  all-traces \"∀ l #l.1. (Alive( l ) @ #l.1) ⇒ (#l.1 = #l.1)\""],
+            false,
+        ),
+        (
+            "all-traces",
+            "All #l. Alive(l) @ l ==> F",
+            &["  all-traces \"∀ #l.1. (Alive( l ) @ #l.1) ⇒ (⊥)\""],
+            false,
+        ),
+        (
+            "exists-trace",
+            "Ex #j1 #l1. Once('a') @ #j1 & Once('b') @ #l1 & #j1 < #l1 \
+             & (All a #k. Once(a) @ k ==> (#k = #j1 | #k = l1))",
+            &[
+                "  exists-trace",
+                "  \"∃ #j1 #l1.",
+                "    (((Once( 'a' ) @ #j1) ∧ (Once( 'b' ) @ #l1)) ∧ (#j1 < #l1)) ∧",
+                "    (∀ a #k. (Once( a ) @ #k) ⇒ ((#k = #j1) ∨ (#k = #l1)))\"",
+            ],
+            true,
+        ),
+    ];
+    for (quant, src, expected_lines, ast) in samples {
+        let expected = expected_lines.join("\n");
+        let f = parse_formula_str(src).unwrap();
+        let ln = from_parser(&f).unwrap();
+        let plain = to_lnformula(&ln).unwrap();
+        assert_eq!(
+            lemma_header_line_doc(quant, syntactic_lnformula_doc(&ln)),
+            expected,
+            "syntactic_lnformula_doc on {src}"
+        );
+        assert_eq!(
+            lemma_header_line_doc(quant, lnformula_doc(&plain)),
+            expected,
+            "lnformula_doc on {src}"
+        );
+        if *ast {
+            assert_eq!(
+                lemma_header_line_doc(quant, ast_doc(&f)),
+                expected,
+                "AST printer on {src}"
+            );
+        }
+    }
+}
+
 /// `prettyAtom = prettyProtoAtom (const emptyDoc)` (Atom.hs:226-229): the
 /// sugar-free atom renders as the empty document.
 #[test]

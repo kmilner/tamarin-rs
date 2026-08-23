@@ -345,8 +345,10 @@ pub fn to_lnformula(fm: &SyntacticLNFormula) -> Option<LNFormula> {
 /// Variable sorts follow the syntactic position, as HS's `msgvar`/`nodevar`
 /// parsers stamp them (Token.hs:440-448): the `@` operand of an action, both
 /// operands of `<` and the argument of `last` are `LSort::Node` whatever the
-/// hint says (`nodevarTerm`, Theory/Text/Parser/Formula.hs:59), and every
-/// other occurrence resolves its hint through `elaborate::sort_of`.  A
+/// hint says (`nodevarTerm`, Theory/Text/Parser/Formula.hs:59), so are both
+/// operands of an equality whose left operand is a node variable (`blatom`'s
+/// node equality, Theory/Text/Parser/Formula.hs:56), and every other
+/// occurrence resolves its hint through `elaborate::sort_of`.  A
 /// binder closes exactly the occurrences equal to its `LVar` in name, sort
 /// and index (HS `quantify`'s `v == x`, Theory/Model/Formula.hs:350-352), so
 /// `Ex ~k. Made(k)` leaves the message-sorted `k` free.  Terms go through
@@ -387,8 +389,14 @@ fn close_binders(
 }
 
 /// The atom alternatives of HS `blatom` (Theory/Text/Parser/Formula.hs:45-57).
+/// An equality whose left operand is a node variable is the "node equality"
+/// alternative (Theory/Text/Parser/Formula.hs:56): the "term equality"
+/// alternative (:51) reads its operands with `msgvar`, which does not
+/// accept a node variable, so both operands are `nodevarTerm`s and a bare
+/// name on the right is `LSort::Node`.
 fn atom_from_parser(a: &p::Atom) -> Result<ProtoAtom<SyntacticSugar<BLNTerm>, BLNTerm>, ElabError> {
     Ok(match a {
+        p::Atom::Eq(l, r) if is_node_var(l) => ProtoAtom::EqE(temporal_term(l)?, temporal_term(r)?),
         p::Atom::Eq(l, r) => ProtoAtom::EqE(free_term(l)?, free_term(r)?),
         p::Atom::Subterm(l, r) => ProtoAtom::Subterm(free_term(l)?, free_term(r)?),
         p::Atom::Less(l, r) => ProtoAtom::Less(temporal_term(l)?, temporal_term(r)?),
@@ -422,6 +430,10 @@ fn free_term(t: &p::Term) -> Result<BLNTerm, ElabError> {
 
 fn free_fact(fa: &p::Fact) -> Result<Fact<BLNTerm>, ElabError> {
     Ok(fact_to_lnfact(fa)?.map_ref(lift_free))
+}
+
+fn is_node_var(t: &p::Term) -> bool {
+    matches!(t, p::Term::Var(v) if sort_of(&v.sort) == LSort::Node)
 }
 
 /// HS `nodevarTerm = lit . Var <$> nodep` (Theory/Text/Parser/Formula.hs:59):
@@ -704,6 +716,30 @@ mod tests {
             ),
         );
         assert_eq!(parsed("Ex k m #k. G(<m, k>) @ k"), want);
+    }
+
+    /// `#k = l` is HS's node equality: the bare `l` is a `nodevar`, so the
+    /// `#l` binder closes it, while a message-term equality `k = l` keeps
+    /// the bare `l` as `Msg` (probe `S0_bare_name_under_node_binder.spthy`).
+    #[test]
+    fn from_parser_node_equality_binds_bare_right_operand() {
+        let want = ProtoFormula::for_all(
+            hint("k", LSort::Node),
+            ProtoFormula::for_all(
+                hint("l", LSort::Node),
+                ProtoFormula::Atom(ProtoAtom::EqE(bound(1), bound(0))),
+            ),
+        );
+        assert_eq!(parsed("All #k #l. #k = l"), want);
+        assert_eq!(parsed("All #k #l. k:node = l"), want);
+        let msg = ProtoFormula::for_all(
+            hint("l", LSort::Node),
+            ProtoFormula::Atom(ProtoAtom::EqE(
+                free("k", LSort::Msg, 0),
+                free("l", LSort::Msg, 0),
+            )),
+        );
+        assert_eq!(parsed("All #l. k = l"), msg);
     }
 
     /// Closing compares the whole `LVar`: a `~k` binder does not capture the
