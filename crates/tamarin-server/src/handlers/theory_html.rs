@@ -295,6 +295,7 @@ fn lemma_index(
                 idx,
                 lemma: &l.name,
                 tq: l.trace_quantifier,
+                sig: entry.typed_theory.signature.maude_sig(),
             };
             let path: Vec<String> = Vec::new();
             pp_prf(out, &cx, &path, &root, 0);
@@ -329,6 +330,10 @@ struct PpCtx<'a> {
     idx: usize,
     lemma: &'a str,
     tq: TraceQuantifier,
+    /// The theory's signature, whose user-declared `[AC]` symbol names the
+    /// method printer needs to re-parse an unannotated step's stored goal
+    /// text.
+    sig: &'a tamarin_term::maude_sig::MaudeSig,
 }
 
 /// HS `ProofStepColor` after `annotateLemmaProof` — the per-step highlight.
@@ -499,7 +504,7 @@ fn pp_step(
     // The `by ` is a plain `Doc::text` here purely to size the budget; it is
     // stripped back off and re-emitted as `keyword_ "by"` OUTSIDE the link.
     let rendered = {
-        let mut doc = tamarin_theory::pretty_theory::pretty_proof_method_doc(&node.method);
+        let mut doc = tamarin_theory::pretty_theory::pretty_proof_method_doc(&node.method, cx.sig);
         if by_prefix {
             doc = Doc::text("by ").beside(doc);
         }

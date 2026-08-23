@@ -588,8 +588,12 @@ fn exec_method_for(
     skel_children: &[(String, ParsedProofTree)],
 ) -> Option<(ProofMethod, Vec<(String, System)>)> {
     let dbg = tamarin_utils::env_gate!("TAM_DBG_REPLAY");
+    // The theory's `[AC]` symbol names, read once for the whole step: the
+    // stored-goal re-parse needs them to read a user AC symbol's infix
+    // spelling.
+    let ac_names = crate::elaborate::user_ac_names(&ctx.maude.maude_sig());
     // Fast path: parsed method resolves directly.
-    if let Some(method) = resolve_method(parsed, sys) {
+    if let Some(method) = resolve_method(parsed, sys, &ac_names) {
         if let Some(cases) = exec_proof_method(ctx, &method, sys) {
             if dbg {
                 let names: Vec<&str> = cases.iter().map(|(n, _)| n.as_str()).collect();
@@ -740,7 +744,7 @@ fn sort_cases(mut cases: Vec<(String, System)>) -> Vec<(String, System)> {
 ///
 /// For `SolveGoal`, this involves matching the parsed [`GoalSpec`]
 /// against an actual [`Goal`] in `sys.goals`.  See `match_goal`.
-fn resolve_method(parsed: &ParsedMethod, sys: &System) -> Option<ProofMethod> {
+fn resolve_method(parsed: &ParsedMethod, sys: &System, ac_names: &[String]) -> Option<ProofMethod> {
     match parsed {
         ParsedMethod::Sorry => Some(ProofMethod::Sorry(None)),
         ParsedMethod::Simplify => Some(ProofMethod::Simplify),
@@ -752,7 +756,7 @@ fn resolve_method(parsed: &ParsedMethod, sys: &System) -> Option<ProofMethod> {
             None
         }
         ParsedMethod::SolveGoal(spec, _raw) => {
-            let g = match_goal(spec, sys)?;
+            let g = match_goal(spec, sys, ac_names)?;
             Some(ProofMethod::SolveGoal(g))
         }
         ParsedMethod::SolvedLeaf
@@ -789,18 +793,19 @@ fn resolve_method(parsed: &ParsedMethod, sys: &System) -> Option<ProofMethod> {
 /// be wrong here — it accepts goals HS rejects, letting a
 /// structurally-distinct same-shape goal bind and re-derive a divergent
 /// subtree.
+///
+/// `ac_names` are the theory's user-declared `[AC]` symbol names, which the
+/// re-parse needs to read their infix spelling.
 fn fact_terms_match_exact(
     parsed_args: &[tamarin_parser::ast::Term],
     runtime_terms: &[tamarin_term::lterm::LNTerm],
+    ac_names: &[String],
 ) -> bool {
     if parsed_args.len() != runtime_terms.len() {
         return false;
     }
-    // The theory's `[AC]` symbol names, read once for the whole fact: the
-    // re-parse needs them to read a user AC symbol's infix spelling.
-    let ac_names = crate::elaborate::current_user_ac_names();
     parsed_args.iter().zip(runtime_terms.iter()).all(|(p, r)| {
-        match parse_arg_to_lnterm(p, &ac_names) {
+        match parse_arg_to_lnterm(p, ac_names) {
             // Canonical re-parse equals the runtime term exactly (M.member).
             Some(t) => &t == r,
             // Unparseable / unconvertible arg: we cannot establish exact
@@ -871,7 +876,9 @@ fn open_goals(sys: &System) -> impl Iterator<Item = &Goal> {
 /// fallback is reserved for [`GoalSpec::Raw`]), and the caller emits
 /// `sorry /* invalid proof step encountered */` over the verbatim stored
 /// subtree — HS `checkProof`'s `Nothing` branch (Theory/Proof.hs:456-467).
-fn match_goal(spec: &GoalSpec, sys: &System) -> Option<Goal> {
+///
+/// `ac_names` reaches the term re-parses through [`fact_terms_match_exact`].
+fn match_goal(spec: &GoalSpec, sys: &System, ac_names: &[String]) -> Option<Goal> {
     match spec {
         GoalSpec::Action {
             fact,
@@ -911,7 +918,7 @@ fn match_goal(spec: &GoalSpec, sys: &System) -> Option<Goal> {
                             && fa.terms.len() == fact.args.len()
                             && tag_persistent(&fa.tag) == fact.persistent
                             && (want_ku || !matches!(fa.tag, FactTag::Ku))
-                            && fact_terms_match_exact(&fact.args, &fa.terms)
+                            && fact_terms_match_exact(&fact.args, &fa.terms, ac_names)
                             && *i.name == **time_var
                             && i.idx == *time_idx as u64
                     }
@@ -937,7 +944,7 @@ fn match_goal(spec: &GoalSpec, sys: &System) -> Option<Goal> {
                             && fa.terms.len() == fact.args.len()
                             && tag_persistent(&fa.tag) == fact.persistent
                             && prem.0 == *prem_idx
-                            && fact_terms_match_exact(&fact.args, &fa.terms)
+                            && fact_terms_match_exact(&fact.args, &fa.terms, ac_names)
                             && *node.name == **time_var
                             && node.idx == *time_idx as u64
                     }
