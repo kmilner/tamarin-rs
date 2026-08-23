@@ -6265,6 +6265,7 @@ fn compute_rename_map(
     stable_vars: &std::collections::BTreeSet<tamarin_term::lterm::LVar>,
 ) -> RenameMap {
     use tamarin_term::lterm::{LSort, LVar};
+    use tamarin_utils::fresh::MonadFresh;
     let mut rename: RenameMap = RenameMap::default();
     // Step 1: stable vars bind to themselves.
     for v in stable_vars {
@@ -6285,7 +6286,7 @@ fn compute_rename_map(
             if rename.contains_key(v) {
                 return;
             }
-            let new_idx = fresh.fresh_ident();
+            let new_idx = fresh.fresh_ident("");
             let new_v = LVar {
                 name: "",
                 sort: v.sort,

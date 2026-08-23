@@ -24,7 +24,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use tamarin_utils::fresh::FastFreshState;
+use tamarin_utils::fresh::{FastFreshState, MonadFresh};
 
 use tamarin_term::lterm::{LSort, LVar};
 use tamarin_theory::sapic::{
@@ -240,7 +240,7 @@ fn new_states(
         let newvar = LVar {
             name: STATE_CHANNEL_NAME,
             sort: LSort::Msg,
-            idx: fresh.fresh_ident(),
+            idx: fresh.fresh_ident(""),
         };
         map.insert(v.clone(), AnVar(newvar));
         declared.push((newvar, v.clone()));

@@ -19,7 +19,7 @@ use std::collections::BTreeMap;
 use tamarin_utils::cow::cow_map_vec;
 
 use crate::function_symbols::FunSym;
-use crate::lterm::BVar;
+use crate::lterm::{BVar, HasFrees, LVar};
 use crate::term::{f_app, f_app_ac, f_app_c, f_app_list, f_app_no_eq, map_lits, Term};
 use crate::vterm::{Lit, VTerm};
 
@@ -149,6 +149,31 @@ where
             }
         }
         Subst { map: composed }
+    }
+}
+
+/// `instance Ord c => HasFrees (LSubst c)` (SubstVFree.hs:259-264).
+///
+/// The walk is the `M.Map` instance (LTerm.hs:905-909): each entry's key
+/// before its value, in ascending key order.  The map rebuilds every entry as
+/// a pair — key then value (LTerm.hs:855-860) — and goes back through
+/// `substFromList`, which drops any binding the map turned into `x ~> x`.
+impl<C: Ord + Clone> HasFrees for Subst<C, LVar> {
+    fn for_each_free(&self, f: &mut dyn FnMut(&LVar)) {
+        for (v, t) in self.map.iter() {
+            v.for_each_free(f);
+            t.for_each_free(f);
+        }
+    }
+
+    fn map_free_with(self, f: &mut dyn FnMut(LVar) -> LVar, monotone: bool) -> Self {
+        let mut pairs = Vec::with_capacity(self.map.len());
+        for (v, t) in self.map {
+            let v = v.map_free_with(f, monotone);
+            let t = t.map_free_with(f, monotone);
+            pairs.push((v, t));
+        }
+        Subst::from_list(pairs)
     }
 }
 
@@ -385,6 +410,42 @@ mod tests {
         let s: Subst<C, V> = Subst::empty();
         let t: VTerm<C, V> = f_app_no_eq(pair_sym(), vec![var_term("x"), const_term(1)]);
         assert_eq!(apply_vterm(&s, t.clone()), t);
+    }
+
+    /// `foldFrees f = foldFrees f . sMap` (SubstVFree.hs:261) through the
+    /// `M.Map` instance (LTerm.hs:905-909): ascending key order, and inside an
+    /// entry the key before its value.
+    #[test]
+    fn subst_folds_key_then_value_ascending() {
+        use crate::lterm::{frees_list, LSort};
+        let v = |n: &'static str, i: u64| LVar::new(n, LSort::Msg, i);
+        // `Ord LVar` compares the index first (LTerm.hs:546-548), so `b.0` is
+        // the smaller key even though `a` sorts before `b` by name.
+        let s: Subst<C, LVar> = Subst::from_list(vec![
+            (v("a", 1), var_term(v("x", 4))),
+            (v("b", 0), var_term(v("y", 3))),
+        ]);
+        assert_eq!(
+            frees_list(&s),
+            vec![v("b", 0), v("y", 3), v("a", 1), v("x", 4)]
+        );
+    }
+
+    /// `mapFrees f = (substFromList <$>) . mapFrees f . substToList`
+    /// (SubstVFree.hs:264): the rebuild goes back through `substFromList`, so
+    /// an entry the map turned into `x ~> x` disappears.
+    #[test]
+    fn subst_map_drops_identity_bindings() {
+        use crate::lterm::LSort;
+        let v = |n: &'static str, i: u64| LVar::new(n, LSort::Msg, i);
+        let s: Subst<C, LVar> = Subst::from_list(vec![
+            (v("x", 0), var_term(v("y", 1))),
+            (v("z", 2), const_term(7)),
+        ]);
+        // Every variable goes to `y.1`, which makes the first entry
+        // `y.1 ~> y.1` and leaves the second one `y.1 ~> 7`.
+        let mapped = s.map_free(&mut |_| v("y", 1));
+        assert_eq!(mapped.to_list(), vec![(v("y", 1), const_term(7))]);
     }
 
     #[test]

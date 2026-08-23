@@ -23,6 +23,7 @@ use crate::function_symbols::{AcSym, FunSym, Privacy};
 use crate::term::{Term, TermView};
 use crate::vterm::{const_term, Lit, VTerm};
 use tamarin_utils::cow::cow_map_vec;
+use tamarin_utils::fresh::MonadFresh;
 
 // =============================================================================
 // Sorts
@@ -649,6 +650,20 @@ impl<T: HasFrees> HasFrees for Option<T> {
     }
 }
 
+/// Free-variable traversal through a shared pointer, for the `HasFrees`
+/// containers whose elements the port stores behind an `Arc`.  The map takes
+/// the payload out when this handle is its sole owner and clones it when it
+/// is not.
+impl<T: HasFrees + Clone> HasFrees for std::sync::Arc<T> {
+    fn for_each_free(&self, f: &mut dyn FnMut(&LVar)) {
+        (**self).for_each_free(f);
+    }
+    fn map_free_with(self, f: &mut dyn FnMut(LVar) -> LVar, monotone: bool) -> Self {
+        let inner = std::sync::Arc::try_unwrap(self).unwrap_or_else(|shared| (*shared).clone());
+        std::sync::Arc::new(inner.map_free_with(f, monotone))
+    }
+}
+
 // =============================================================================
 // Renaming helpers
 // =============================================================================
@@ -660,7 +675,7 @@ impl<T: HasFrees> HasFrees for Option<T> {
 /// separately (`rename`, LTerm.hs:638-645) with bodies that differ only in the
 /// `elem … vars` test, which an empty list always answers `False`.
 #[inline]
-pub fn rename<T: HasFrees>(t: T, fresh: &mut tamarin_utils::fresh::FastFreshState) -> T {
+pub fn rename<T: HasFrees, M: MonadFresh>(t: T, fresh: &mut M) -> T {
     rename_ignoring(&[], t, fresh)
 }
 
@@ -669,11 +684,7 @@ pub fn rename<T: HasFrees>(t: T, fresh: &mut tamarin_utils::fresh::FastFreshStat
 /// for `rename` — the result is not guaranteed to be equal for terms that are
 /// equal modulo variable indices.
 #[inline]
-pub fn rename_ignoring<T: HasFrees>(
-    vars: &[LVar],
-    t: T,
-    fresh: &mut tamarin_utils::fresh::FastFreshState,
-) -> T {
+pub fn rename_ignoring<T: HasFrees, M: MonadFresh>(vars: &[LVar], t: T, fresh: &mut M) -> T {
     match bounds_var_idx(&t) {
         None => t,
         Some((min, max)) => {
@@ -732,6 +743,20 @@ mod tests {
         // Msg (LTerm.hs:266).  It is the one tag whose sort does not carry
         // the name of the tag.
         assert_eq!(sort_of_name(&Name::new(NameTag::Abbrev, "a")), LSort::Msg);
+    }
+
+    #[test]
+    fn arc_walks_and_maps_the_payload() {
+        use std::sync::Arc;
+        let v = LVar::new("x", LSort::Msg, 3);
+        let shared: Arc<LNTerm> = Arc::new(var_term(v));
+        assert_eq!(frees_list(&shared), vec![v]);
+        // A second handle forces the payload to be cloned before it is
+        // mapped, and leaves the original handle's term alone.
+        let other = Arc::clone(&shared);
+        let mapped = other.map_free(&mut |w| LVar::new(w.name, w.sort, w.idx + 1));
+        assert_eq!(*mapped, var_term(LVar::new("x", LSort::Msg, 4)));
+        assert_eq!(*shared, var_term(v));
     }
 
     #[test]

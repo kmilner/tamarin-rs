@@ -65,6 +65,30 @@ fn spawn_and_reduce_pair() {
     assert_eq!(h.stats().norm_count, 1, "the reduce really went to Maude");
 }
 
+/// `Reduction` runs over the FAST `FreshT` (Reduction.hs:118 with the
+/// re-export at Control/Monad/Fresh.hs:42), so the handle's single counter
+/// answers both class methods: `freshIdent` ignores the name and draws one
+/// (Control/Monad/Fresh/Class.hs:39), and `freshIdents k` reserves `k` and
+/// returns the first.
+#[test]
+fn maude_handle_fresh_idents_is_reserve_idxs() {
+    let path = match maude_path() {
+        Some(p) => p,
+        None => {
+            eprintln!("skipping: no maude");
+            return;
+        }
+    };
+    let h = MaudeHandle::start(&path, pair_maude_sig()).expect("start");
+    let mut m = &h;
+    assert_eq!(m.fresh_ident("x"), 0);
+    assert_eq!(m.fresh_ident("y"), 1);
+    assert_eq!(m.fresh_idents(4), 2);
+    // The draws all came from the one counter that `reserve_idxs` advances.
+    assert_eq!(h.fresh_counter_peek(), 6);
+    assert_eq!(h.reserve_idxs(1), 6);
+}
+
 #[test]
 fn unify_two_vars() {
     let path = match maude_path() {

@@ -11,7 +11,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::lterm::{LVar, Name};
+use crate::lterm::{HasFrees, LVar, Name};
 use crate::term::{Term, TermSize};
 use crate::vterm::{Lit, VTerm};
 
@@ -108,6 +108,29 @@ where
     }
     pub fn len(&self) -> usize {
         self.map.len()
+    }
+}
+
+/// `instance HasFrees (SubstVFresh n LVar)` (SubstVFresh.hs:196-202).
+///
+/// The range variables of a `SubstVFresh` count as fresh, so both methods see
+/// the DOMAIN keys only: the walk is `foldFrees f . M.keys . svMap`, and the
+/// map rewrites each key and carries its image over untouched, rebuilding
+/// through `substFromListVFresh` (which keeps every entry, including one the
+/// map turned into `x ~> x`).
+impl<C: Ord + Clone> HasFrees for SubstVFresh<C, LVar> {
+    fn for_each_free(&self, f: &mut dyn FnMut(&LVar)) {
+        for v in self.map.keys() {
+            v.for_each_free(f);
+        }
+    }
+
+    fn map_free_with(self, f: &mut dyn FnMut(LVar) -> LVar, monotone: bool) -> Self {
+        let mut pairs = Vec::with_capacity(self.map.len());
+        for (v, t) in self.map {
+            pairs.push((v.map_free_with(f, monotone), t));
+        }
+        SubstVFresh::from_list(pairs)
     }
 }
 
@@ -817,6 +840,27 @@ mod tests {
 
     fn lv(name: &str, idx: u64) -> LVar {
         LVar::new(name, LSort::Msg, idx)
+    }
+
+    /// `instance HasFrees (SubstVFresh n LVar)` (SubstVFresh.hs:196-202):
+    /// `foldFrees f . M.keys . svMap` sees the domain only, and `mapFrees`
+    /// rewrites the key of each entry while carrying its image over as it is.
+    #[test]
+    fn subst_vfresh_folds_domain_only_and_leaves_the_range() {
+        use crate::lterm::frees_list;
+        let s: LSubstVFresh<C> = SubstVFresh::from_list(vec![
+            (lv("x", 0), var_term(lv("r", 5))),
+            (lv("y", 1), var_term(lv("s", 6))),
+        ]);
+        assert_eq!(frees_list(&s), vec![lv("x", 0), lv("y", 1)]);
+        let mapped = s.map_free(&mut |w| LVar::new(w.name, w.sort, w.idx + 10));
+        assert_eq!(
+            mapped.to_list(),
+            vec![
+                (lv("x", 10), var_term(lv("r", 5))),
+                (lv("y", 11), var_term(lv("s", 6))),
+            ]
+        );
     }
 
     #[test]

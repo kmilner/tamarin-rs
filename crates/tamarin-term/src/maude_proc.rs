@@ -22,6 +22,7 @@ use crate::maude_print::{pp_mterm, pp_mterm_list, pp_theory};
 use crate::maude_sig::MaudeSig;
 use crate::maude_types::{lterm_to_mterm_global, mterm_to_lnterm, ConvCtx, MSubst, MTerm};
 use crate::rewriting::Equal;
+use tamarin_utils::fresh::MonadFresh;
 
 const PROMPT: &[u8] = b"Maude> ";
 
@@ -1478,6 +1479,21 @@ impl MaudeHandle {
             out.push(msubst_to_lnsubst_unify(ms, &mut variant_ctx)?);
         }
         Ok(out)
+    }
+}
+
+/// The solver's fresh supply.  HS `Reduction` is
+/// `StateT System (FreshT (DisjT (Reader ProofContext)))` (Reduction.hs:118)
+/// and `Control.Monad.Fresh` re-exports the FAST `FreshT`
+/// (Control/Monad/Fresh.hs:42), so the name is ignored and both methods draw
+/// from the one counter (Control/Monad/Fresh/Class.hs:38-41).
+impl MonadFresh for &MaudeHandle {
+    fn fresh_ident(&mut self, _name: &str) -> u64 {
+        self.reserve_idxs(1)
+    }
+
+    fn fresh_idents(&mut self, k: u64) -> u64 {
+        self.reserve_idxs(k)
     }
 }
 

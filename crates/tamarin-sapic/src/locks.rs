@@ -21,7 +21,7 @@
 //! index 0 (`lock`), the second index 1 (`lock.1`), etc.  This counter is
 //! independent of the per-name `renameUnique` counter.
 
-use tamarin_utils::fresh::FastFreshState;
+use tamarin_utils::fresh::{FastFreshState, MonadFresh};
 
 use tamarin_term::lterm::{LSort, LVar};
 use tamarin_theory::sapic::{Process, ProcessCombinator, SapicAction, SapicLVar, SapicTerm};
@@ -106,7 +106,7 @@ fn annotate_locks_go(
             let v = LVar {
                 name: "lock",
                 sort: LSort::Msg,
-                idx: fresh.fresh_ident(),
+                idx: fresh.fresh_ident(""),
             };
             let p1 = annotate_each_closest_unlock(&t, &v, *body)?;
             let p2 = annotate_locks_go(fresh, p1)?;
