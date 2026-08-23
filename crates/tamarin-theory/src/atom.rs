@@ -34,9 +34,8 @@ pub enum ProtoAtom<S, T> {
 pub type Atom<T> = ProtoAtom<Unit2, T>;
 pub type SyntacticAtom<T> = ProtoAtom<SyntacticSugar<T>, T>;
 
-/// Strip syntactic sugar, replacing it with `Unit2`.
-///
-/// No production caller; kept as parity/API surface.
+/// Strip syntactic sugar, replacing it with `Unit2` (HS `toAtom`,
+/// Atom.hs:200-206).
 pub fn to_atom<S, T>(a: ProtoAtom<S, T>) -> Atom<T> {
     match a {
         ProtoAtom::Action(t, fa) => ProtoAtom::Action(t, fa),

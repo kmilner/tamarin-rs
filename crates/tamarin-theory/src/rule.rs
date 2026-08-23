@@ -17,13 +17,11 @@
 //! with public fields plus accessor methods.
 
 use tamarin_term::function_symbols::{FunSym, NdcState};
-use tamarin_term::lterm::{HasFrees, LNTerm, LSort, LVar, Name};
-use tamarin_term::vterm::VTerm;
+use tamarin_term::lterm::{HasFrees, LNTerm, LVar, Name};
 use tamarin_utils::color::Rgb;
 
-use crate::atom::SyntacticSugar;
 use crate::fact::LNFact;
-use crate::formula::ProtoFormula;
+pub use crate::formula::SyntacticLNFormula;
 use crate::sapic::PlainProcess;
 
 // =============================================================================
@@ -288,10 +286,6 @@ pub enum ProtoRuleName {
     /// `tamarin_term::intern`): pointer-copy clone per rule instantiation.
     Stand(&'static str),
 }
-
-/// `SyntacticLNFormula` from `Theory.Model.Formula`.
-pub type SyntacticLNFormula =
-    ProtoFormula<SyntacticSugar<VTerm<Name, LVar>>, (String, LSort), Name, LVar>;
 
 /// Information for protocol rules modulo E (the equational theory).
 #[derive(Debug, Clone, PartialEq)]

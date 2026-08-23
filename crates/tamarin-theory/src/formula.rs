@@ -3,28 +3,29 @@
 //   scripts/gen_license_headers.py --authors <this file>
 
 //! Port of `Theory.Model.Formula` from
-//! `lib/theory/src/Theory/Model/Formula.hs` — data type, basic builders, and
-//! the quantifier-introduction helpers (`quantify`, `exists`, `forAll`,
-//! `existFormula`, `forAllFormula`).
+//! `lib/theory/src/Theory/Model/Formula.hs`: the formula data type with its
+//! `LNFormula`/`SyntacticLNFormula` instances, the basic builders, the
+//! sugar traversal ([`SugarTerms`]), free variables ([`formula_frees`]), the
+//! quantifier-introduction helpers (`quantify`, `exists`, `forAll`,
+//! `existFormula`, `forAllFormula`) and the sugar-stripping
+//! [`to_lnformula`].
 //!
-//! The Haskell version uses a locally-nameless representation: bound
-//! variables are `BVar::Bound(de_bruijn_idx)`, free variables are `Free(v)`.
+//! The representation is locally nameless: bound variables are
+//! `BVar::Bound(de_bruijn_idx)`, free variables are `Free(v)`.
 //!
 //! The pure transforms (`nnf`, `pullquants`, `prenex`, `pnf`,
-//! `simplifyFormula`) are not ported on THIS type. Formula.hs's
+//! `simplifyFormula`) are not ported on this type. Formula.hs's
 //! `shiftFreeIndices`/`simplifyFormula` (plus Generation.hs's
-//! `pullQuantifiers`/`mergeQuantifiers`, and a second `quantify`) ARE ported in
-//! `tamarin-accountability/src/formula.rs`, over a parallel locally-nameless
-//! type (`Fm`) whose leaves are `guarded_types` parser-AST atoms rather than
-//! this module's real-term `ProtoAtom`s — check there before porting a
-//! transform here. (The guarded-formula simplifier `simplifyGuarded` is a
-//! DIFFERENT HS function, ported as `simplify_guarded_with` in guarded.rs.)
-//! (Pretty-printing of the parser-AST formula representation lives in
-//! `pretty_formula.rs`; this `ProtoFormula` has no pretty-printer.)
+//! `pullQuantifiers`/`mergeQuantifiers`, and a second `quantify`) are ported
+//! in `tamarin-accountability/src/formula.rs`, over a parallel
+//! locally-nameless type (`Fm`) whose leaves are `guarded_types` parser-AST
+//! atoms rather than this module's real-term `ProtoAtom`s. (The
+//! guarded-formula simplifier `simplifyGuarded` is a different HS function,
+//! ported as `simplify_guarded_with` in guarded.rs.)
 
-use crate::atom::{ProtoAtom, Unit2};
+use crate::atom::{to_atom, ProtoAtom, SyntacticSugar, Unit2};
 use tamarin_term::lterm::{BVar, HasFrees, LSort, LVar, Name};
-use tamarin_term::term::Term;
+use tamarin_term::term::map_lits;
 use tamarin_term::vterm::{Lit, VTerm};
 
 /// Logical connectives.
@@ -65,8 +66,17 @@ pub enum ProtoFormula<S, H, C, V> {
 
 /// `Formula` after parsing: no syntactic sugar.
 pub type Formula<H, C, V> = ProtoFormula<Unit2, H, C, V>;
-pub type LFormula<C> = Formula<(String, tamarin_term::lterm::LSort), C, LVar>;
+pub type LFormula<C> = Formula<(String, LSort), C, LVar>;
 pub type LNFormula = LFormula<Name>;
+
+/// The term type of an [`LNFormula`] atom: variables are `BVar`s, so a term
+/// mentions both the enclosing binders' De Bruijn indices and free `LVar`s.
+pub type BLNTerm = VTerm<Name, BVar<LVar>>;
+
+/// HS `SyntacticLNFormula` (Theory/Model/Formula.hs:263): an [`LNFormula`]
+/// whose atoms may carry the parser's `Pred` sugar, with the sugar's fact
+/// over the same `BVar` terms as the plain atoms (Atom.hs:78-87).
+pub type SyntacticLNFormula = ProtoFormula<SyntacticSugar<BLNTerm>, (String, LSort), Name, LVar>;
 
 impl<S, H, C, V> ProtoFormula<S, H, C, V> {
     pub fn ltrue() -> Self {
@@ -102,27 +112,51 @@ impl<S, H, C, V> ProtoFormula<S, H, C, V> {
 }
 
 // =============================================================================
-// Quantifier introduction (Theory/Model/Formula.hs:347-360) + the whole-formula closures
-// `existFormula` / `forAllFormula` (Theory/Model/Formula.hs:528-538)
-//
-// Intentionally retained: faithful, unit-tested mirror of the HS quantifier
-// machinery at those two anchors (`quantify`/`forAll`/`exists` and
-// `existFormula`/`forAllFormula`); no caller yet — `close_rule` builds its
-// `Deduction` lemma as theory text.  Each item below names its own HS
-// counterpart.
+// Sugar traversal (Atom.hs:87-94), free variables (Theory/Model/Formula.hs:321-333),
+// quantifier introduction (Theory/Model/Formula.hs:347-360), the whole-formula
+// closures `existFormula` / `forAllFormula` (Theory/Model/Formula.hs:532-538)
+// and `toLNFormula` (Theory/Model/Formula.hs:369-373).
 // =============================================================================
 
-/// The term type of an [`LNFormula`] atom: variables are `BVar`s, so a term
-/// mentions both the enclosing binders' De Bruijn indices and free `LVar`s.
-type BLNTerm = VTerm<Name, BVar<LVar>>;
+/// The `Foldable` and `Functor` instances of a sugar type, which both
+/// `SyntacticSugar` and `Unit2` derive (Atom.hs:87-94) and which
+/// `ProtoAtom`'s own instances descend into at `Syntactic` (Atom.hs:121-136).
+/// The map keeps the term type, as every caller in this module does.
+pub trait SugarTerms<T>: Sized {
+    /// Visit every term held by the sugar, left to right.
+    fn for_each_term(&self, f: &mut dyn FnMut(&T));
+    /// Rebuild the sugar with every held term mapped.
+    fn map_terms(&self, f: &mut dyn FnMut(&T) -> T) -> Self;
+}
 
-/// HS `frees` on an `LNFormula`, i.e. its `HasFrees` instance
-/// (Theory/Model/Formula.hs:321-326): `foldFrees f = foldMap (foldFrees f)`, where the
-/// `Foldable (ProtoFormula ...)` instance (Theory/Model/Formula.hs:197-199) descends into the
-/// atoms' terms and the `Foldable BVar` instance yields only `Free` variables —
-/// so bound De Bruijn indices contribute nothing and binder hints are ignored.
-/// Deduplicated and sorted, like [`tamarin_term::lterm::frees`].
-pub fn formula_frees(fm: &LNFormula) -> Vec<LVar> {
+impl<T> SugarTerms<T> for Unit2 {
+    fn for_each_term(&self, _f: &mut dyn FnMut(&T)) {}
+    fn map_terms(&self, _f: &mut dyn FnMut(&T) -> T) -> Self {
+        Unit2
+    }
+}
+
+impl<T> SugarTerms<T> for SyntacticSugar<T> {
+    fn for_each_term(&self, f: &mut dyn FnMut(&T)) {
+        let SyntacticSugar::Pred(fa) = self;
+        fa.terms.iter().for_each(f);
+    }
+    fn map_terms(&self, f: &mut dyn FnMut(&T) -> T) -> Self {
+        let SyntacticSugar::Pred(fa) = self;
+        SyntacticSugar::Pred(fa.map_ref(f))
+    }
+}
+
+/// HS `frees` on an `LNFormula` or `SyntacticLNFormula`, i.e. their `HasFrees`
+/// instances (Theory/Model/Formula.hs:321-333): `foldFrees f = foldMap (foldFrees f)`,
+/// where the `Foldable (ProtoFormula ...)` instance (Theory/Model/Formula.hs:197-199)
+/// descends into the atoms' terms, sugar included, and the `Foldable BVar`
+/// instance yields only `Free` variables — so bound De Bruijn indices
+/// contribute nothing and binder hints are ignored. Deduplicated and sorted,
+/// like [`tamarin_term::lterm::frees`].
+pub fn formula_frees<S: SugarTerms<BLNTerm>>(
+    fm: &ProtoFormula<S, (String, LSort), Name, LVar>,
+) -> Vec<LVar> {
     let mut out = Vec::new();
     for_each_free_var(fm, &mut |v| out.push(*v));
     out.sort();
@@ -130,7 +164,10 @@ pub fn formula_frees(fm: &LNFormula) -> Vec<LVar> {
     out
 }
 
-fn for_each_free_var(fm: &LNFormula, f: &mut dyn FnMut(&LVar)) {
+fn for_each_free_var<S: SugarTerms<BLNTerm>>(
+    fm: &ProtoFormula<S, (String, LSort), Name, LVar>,
+    f: &mut dyn FnMut(&LVar),
+) {
     match fm {
         ProtoFormula::Atom(a) => for_each_atom_term(a, &mut |t| t.for_each_free(&mut *f)),
         ProtoFormula::Tf(_) => {}
@@ -145,8 +182,8 @@ fn for_each_free_var(fm: &LNFormula, f: &mut dyn FnMut(&LVar)) {
 
 /// The `Foldable (ProtoAtom s)` traversal order (Atom.hs:129-136): `Action`
 /// visits its time-point term before the fact's terms; the binary atoms visit
-/// left then right; `Syntactic` holds no term of the folded type.
-fn for_each_atom_term<T>(a: &ProtoAtom<Unit2, T>, f: &mut dyn FnMut(&T)) {
+/// left then right; `Syntactic` visits the sugar's terms.
+fn for_each_atom_term<S: SugarTerms<T>, T>(a: &ProtoAtom<S, T>, f: &mut dyn FnMut(&T)) {
     match a {
         ProtoAtom::Action(t, fa) => {
             f(t);
@@ -159,15 +196,16 @@ fn for_each_atom_term<T>(a: &ProtoAtom<Unit2, T>, f: &mut dyn FnMut(&T)) {
             f(r);
         }
         ProtoAtom::Last(t) => f(t),
-        ProtoAtom::Syntactic(_) => {}
+        ProtoAtom::Syntactic(s) => s.for_each_term(f),
     }
 }
 
-/// The `Functor (ProtoAtom s)` instance (Atom.hs:121-127), borrowing its input.
-fn map_atom_terms<T, U>(
-    a: &ProtoAtom<Unit2, T>,
-    f: &mut dyn FnMut(&T) -> U,
-) -> ProtoAtom<Unit2, U> {
+/// The `Functor (ProtoAtom s)` instance (Atom.hs:121-127) with the term type
+/// unchanged, borrowing its input.
+fn map_atom_terms<S: SugarTerms<T>, T>(
+    a: &ProtoAtom<S, T>,
+    f: &mut dyn FnMut(&T) -> T,
+) -> ProtoAtom<S, T> {
     match a {
         ProtoAtom::Action(t, fa) => {
             let t_new = f(t);
@@ -178,26 +216,7 @@ fn map_atom_terms<T, U>(
         ProtoAtom::Subterm(l, r) => ProtoAtom::Subterm(f(l), f(r)),
         ProtoAtom::Less(l, r) => ProtoAtom::Less(f(l), f(r)),
         ProtoAtom::Last(t) => ProtoAtom::Last(f(t)),
-        ProtoAtom::Syntactic(_) => ProtoAtom::Syntactic(Unit2),
-    }
-}
-
-/// The inner substitution of HS `quantify`, `mapLits (fmap (>>= subst i))`
-/// applied to one atom term (Theory/Model/Formula.hs:349-352):
-/// replace the free occurrences of `x` by the De Bruijn index `i`, leaving
-/// every other literal — including already-bound indices — untouched.
-/// Applications are rebuilt with `f_app`, which re-normalises AC argument
-/// order (`Bound` sorts before `Free`, so the order can change), exactly as
-/// HS `mapLits` does.
-fn subst_free_var(t: &BLNTerm, x: &LVar, i: u64) -> BLNTerm {
-    match t {
-        Term::Lit(Lit::Var(BVar::Free(v))) if v == x => {
-            tamarin_term::vterm::var_term(BVar::Bound(i))
-        }
-        Term::Lit(_) => t.clone(),
-        Term::App(sym, args) => {
-            tamarin_term::term::f_app(*sym, args.iter().map(|a| subst_free_var(a, x, i)).collect())
-        }
+        ProtoAtom::Syntactic(s) => ProtoAtom::Syntactic(s.map_terms(f)),
     }
 }
 
@@ -207,14 +226,31 @@ fn subst_free_var(t: &BLNTerm, x: &LVar, i: u64) -> BLNTerm {
 /// that new binder, threaded by HS `mapAtoms` (Theory/Model/Formula.hs:266-270) over
 /// `foldFormulaScope` (Theory/Model/Formula.hs:158-173), whose `Qua` case recurses with
 /// `succ i` (Theory/Model/Formula.hs:173).
-pub fn quantify(x: &LVar, fm: LNFormula) -> LNFormula {
+pub fn quantify<S: SugarTerms<BLNTerm>>(
+    x: &LVar,
+    fm: ProtoFormula<S, (String, LSort), Name, LVar>,
+) -> ProtoFormula<S, (String, LSort), Name, LVar> {
     quantify_at(x, fm, 0)
 }
 
-fn quantify_at(x: &LVar, fm: LNFormula, i: u64) -> LNFormula {
+fn quantify_at<S: SugarTerms<BLNTerm>>(
+    x: &LVar,
+    fm: ProtoFormula<S, (String, LSort), Name, LVar>,
+    i: u64,
+) -> ProtoFormula<S, (String, LSort), Name, LVar> {
     match fm {
         ProtoFormula::Atom(a) => {
-            let mapped = map_atom_terms(&a, &mut |t| subst_free_var(t, x, i));
+            // `mapLits (fmap (>>= subst i))` (Theory/Model/Formula.hs:349-352): the
+            // free occurrences of `x` become the index `i`; constants and
+            // already-bound indices are untouched, and the `f_app` rebuild
+            // inside `map_lits` re-sorts AC arguments (`Bound` sorts before
+            // `Free`).
+            let mapped = map_atom_terms(&a, &mut |t| {
+                map_lits(t, &mut |l| match l {
+                    Lit::Var(BVar::Free(v)) if v == x => Lit::Var(BVar::Bound(i)),
+                    other => other.clone(),
+                })
+            });
             ProtoFormula::Atom(mapped)
         }
         ProtoFormula::Tf(b) => ProtoFormula::Tf(b),
@@ -229,12 +265,20 @@ fn quantify_at(x: &LVar, fm: LNFormula, i: u64) -> LNFormula {
 }
 
 /// HS `exists hint x` (Theory/Model/Formula.hs:359-360): `Qua Ex hint . quantify x`.
-pub fn exists_var(hint: (String, LSort), x: &LVar, fm: LNFormula) -> LNFormula {
+pub fn exists_var<S: SugarTerms<BLNTerm>>(
+    hint: (String, LSort),
+    x: &LVar,
+    fm: ProtoFormula<S, (String, LSort), Name, LVar>,
+) -> ProtoFormula<S, (String, LSort), Name, LVar> {
     ProtoFormula::exists(hint, quantify(x, fm))
 }
 
 /// HS `forAll hint x` (Theory/Model/Formula.hs:355-356): `Qua All hint . quantify x`.
-pub fn for_all_var(hint: (String, LSort), x: &LVar, fm: LNFormula) -> LNFormula {
+pub fn for_all_var<S: SugarTerms<BLNTerm>>(
+    hint: (String, LSort),
+    x: &LVar,
+    fm: ProtoFormula<S, (String, LSort), Name, LVar>,
+) -> ProtoFormula<S, (String, LSort), Name, LVar> {
     ProtoFormula::for_all(hint, quantify(x, fm))
 }
 
@@ -255,6 +299,25 @@ pub fn for_all_formula(fm: LNFormula) -> LNFormula {
     vars.into_iter().fold(fm, |acc, v| {
         for_all_var((v.name.to_string(), v.sort), &v, acc)
     })
+}
+
+/// HS `toLNFormula` (Theory/Model/Formula.hs:369-373): strip the sugar with
+/// `toAtom` (Atom.hs:200-206); `None` if any atom carries sugar.
+pub fn to_lnformula(fm: &SyntacticLNFormula) -> Option<LNFormula> {
+    match fm {
+        ProtoFormula::Atom(ProtoAtom::Syntactic(_)) => None,
+        ProtoFormula::Atom(a) => Some(ProtoFormula::Atom(to_atom(a.clone()))),
+        ProtoFormula::Tf(b) => Some(ProtoFormula::Tf(*b)),
+        ProtoFormula::Not(p) => Some(ProtoFormula::Not(Box::new(to_lnformula(p)?))),
+        ProtoFormula::Conn(c, p, q) => Some(ProtoFormula::Conn(
+            *c,
+            Box::new(to_lnformula(p)?),
+            Box::new(to_lnformula(q)?),
+        )),
+        ProtoFormula::Qua(q, h, p) => {
+            Some(ProtoFormula::Qua(*q, h.clone(), Box::new(to_lnformula(p)?)))
+        }
+    }
 }
 
 // NOTE: Haskell `mapAtoms` (Theory/Model/Formula.hs:266-270) is
@@ -345,6 +408,76 @@ mod tests {
         };
         let bound = ProtoAtom::Last(var_term(BVar::Bound(1)));
         assert_eq!(*body, ProtoFormula::Atom(bound));
+    }
+
+    fn x_var() -> LVar {
+        LVar::new("x", LSort::Msg, 0)
+    }
+
+    /// `Pred(F(x))` as a sugared atom over `BVar` terms.
+    fn pred_atom(arg: BVar<LVar>) -> ProtoAtom<SyntacticSugar<BLNTerm>, BLNTerm> {
+        use crate::fact::{Fact, FactTag};
+        use tamarin_term::vterm::var_term;
+
+        ProtoAtom::Syntactic(SyntacticSugar::Pred(Fact::new(
+            FactTag::Term,
+            vec![var_term(arg)],
+        )))
+    }
+
+    /// `frees` descends into the sugar's fact (the `Foldable SyntacticSugar`
+    /// instance), so a variable that occurs only inside a `Pred` is free.
+    #[test]
+    fn formula_frees_includes_pred_terms() {
+        let fm: SyntacticLNFormula = ProtoFormula::Atom(pred_atom(BVar::Free(x_var())));
+        assert_eq!(formula_frees(&fm), vec![x_var()]);
+        let closed: SyntacticLNFormula = ProtoFormula::Atom(pred_atom(BVar::Bound(0)));
+        assert_eq!(formula_frees(&closed), Vec::<LVar>::new());
+    }
+
+    /// `quantify` maps through the sugar (the `Functor SyntacticSugar`
+    /// instance), so `exists` closes a variable that occurs inside a `Pred`.
+    #[test]
+    fn quantify_closes_pred_terms() {
+        let hint = ("x".to_string(), LSort::Msg);
+        let fm: SyntacticLNFormula = ProtoFormula::Atom(pred_atom(BVar::Free(x_var())));
+        let want: SyntacticLNFormula =
+            ProtoFormula::exists(hint.clone(), ProtoFormula::Atom(pred_atom(BVar::Bound(0))));
+        assert_eq!(exists_var(hint, &x_var(), fm), want);
+    }
+
+    /// `toLNFormula` is `Nothing` while any atom still carries sugar, however
+    /// deep it sits.
+    #[test]
+    fn to_lnformula_rejects_sugar() {
+        let pred: SyntacticLNFormula = ProtoFormula::Atom(pred_atom(BVar::Free(x_var())));
+        let fm: SyntacticLNFormula = ProtoFormula::for_all(
+            ("x".to_string(), LSort::Msg),
+            ProtoFormula::ltrue().and(pred.not()),
+        );
+        assert_eq!(to_lnformula(&fm), None);
+    }
+
+    /// `All #x. (x < y) ==> not(last(x))` over any sugar type: no atom uses
+    /// the sugar, so the same construction types as both formula forms.
+    fn plain_formula<S>() -> ProtoFormula<S, (String, LSort), Name, LVar> {
+        use tamarin_term::vterm::var_term;
+
+        let less = ProtoAtom::Less(var_term(BVar::Bound(0)), var_term(BVar::Free(x_var())));
+        let last = ProtoAtom::Last(var_term(BVar::Bound(0)));
+        ProtoFormula::for_all(
+            ("x".to_string(), LSort::Node),
+            ProtoFormula::Atom(less).implies(ProtoFormula::Atom(last).not()),
+        )
+    }
+
+    /// Plain atoms cross `toLNFormula` unchanged, only their sugar type
+    /// becomes `Unit2`; every formula constructor above them is kept.
+    #[test]
+    fn to_lnformula_strips_unit2_atoms() {
+        let fm: SyntacticLNFormula = plain_formula();
+        let want: LNFormula = plain_formula();
+        assert_eq!(to_lnformula(&fm), Some(want));
     }
 
     // =========================================================================

@@ -296,6 +296,17 @@ pub fn unsafe_f_app<A>(fsym: FunSym, args: Vec<Term<A>>) -> Term<A> {
     Term::App(fsym, args.into())
 }
 
+/// HS `fmapTerm` (Term/Term/Raw.hs:216-217), the `mapLits` of
+/// Theory/Model/Formula.hs:288-291: map every literal and rebuild each
+/// application through [`f_app`], so AC and C argument lists are flattened
+/// and re-sorted under the order of the new literals.
+pub fn map_lits<A, B: Ord + Clone>(t: &Term<A>, f: &mut dyn FnMut(&A) -> B) -> Term<B> {
+    match t {
+        Term::Lit(a) => lit(f(a)),
+        Term::App(sym, args) => f_app(*sym, args.iter().map(|a| map_lits(a, f)).collect()),
+    }
+}
+
 // =============================================================================
 // Subterm tests / counts
 // =============================================================================
@@ -825,5 +836,33 @@ mod tests {
         let plain =
             std::panic::catch_unwind(|| panic!("boom")).expect_err("the closure must panic");
         assert_eq!(hs_error_text(plain.as_ref()), None);
+    }
+
+    /// `map_lits` rebuilds every application with `f_app`, so swapping the
+    /// literals of an AC term re-sorts its operands instead of keeping the
+    /// mapped literals in their original positions.
+    #[test]
+    fn map_lits_rebuilds_ac_through_f_app() {
+        use crate::lterm::{LNTerm, LSort, LVar};
+        use crate::vterm::{var_term, Lit};
+
+        let x = LVar::new("x", LSort::Msg, 0);
+        let z = LVar::new("z", LSort::Msg, 0);
+        let prod: LNTerm = f_app(FunSym::Ac(AcSym::Mult), vec![var_term(x), var_term(z)]);
+        let Term::App(_, args) = &prod else {
+            panic!("expected an AC application");
+        };
+        assert_eq!(&args[..], &[var_term(x), var_term(z)]);
+
+        let swapped = map_lits(&prod, &mut |l| match l {
+            Lit::Var(v) if *v == x => Lit::Var(z),
+            Lit::Var(v) if *v == z => Lit::Var(x),
+            other => other.clone(),
+        });
+        let Term::App(_, args) = &swapped else {
+            panic!("expected an AC application");
+        };
+        assert_eq!(&args[..], &[var_term(x), var_term(z)]);
+        assert_eq!(swapped, prod);
     }
 }
