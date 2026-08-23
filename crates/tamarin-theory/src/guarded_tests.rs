@@ -1372,3 +1372,145 @@ fn treats_iff_as_two_implications() {
         "the two implications are conjoined, got {iff:?}"
     );
 }
+
+// =============================================================================
+// HasFrees for Guarded (Guarded.hs:272-277)
+// =============================================================================
+
+fn hf_var(name: &str, idx: u64, sort: LSort) -> p::VarSpec {
+    p::VarSpec {
+        name: name.into(),
+        idx,
+        sort,
+        typ: None,
+    }
+}
+
+fn hf_leaf(name: &str, idx: u64, sort: LSort) -> GTerm {
+    GTerm::Var(BVar::Free(hf_var(name, idx, sort)))
+}
+
+fn hf_fact(name: &str, args: Vec<GTerm>) -> GFact {
+    GFact {
+        persistent: false,
+        name: name.into(),
+        args: args.into(),
+        annotations: vec![],
+    }
+}
+
+fn hf_names(g: &Guarded) -> Vec<String> {
+    let mut out = Vec::new();
+    g.for_each_free(&mut |v| out.push(format!("{}.{}", v.name, v.idx)));
+    out
+}
+
+/// HS `Foldable`/`Traversable ProtoAtom` fold the timepoint of an `Action`
+/// before the fact (Atom.hs:130-131, 139-140).  All three Guarded walkers
+/// carry that order.
+#[test]
+fn action_atom_visits_timepoint_before_fact() {
+    let atom = GAtom::Action(
+        hf_fact("A", vec![hf_leaf("x", 1, LSort::Msg)]),
+        hf_leaf("i", 2, LSort::Node),
+    );
+    let g = Guarded::Atom(atom.clone());
+
+    assert_eq!(hf_names(&g), vec!["i.2", "x.1"]);
+
+    let mut collected = Vec::new();
+    crate::guarded_types::collect_free_atom(&atom, &mut collected);
+    assert_eq!(
+        collected
+            .iter()
+            .map(|v| v.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["i", "x"]
+    );
+
+    let mut mapped = Vec::new();
+    let _ = map_free_atom(&atom, &mut |v: &p::VarSpec| {
+        mapped.push(v.name.clone());
+        v.clone()
+    });
+    assert_eq!(mapped, vec!["i", "x"]);
+}
+
+/// `BVar::Bound` leaves are positional and carry no variable identity, so
+/// neither direction of the instance touches them (Guarded.hs:259-263 folds
+/// through the atoms only).
+#[test]
+fn bound_leaves_are_skipped() {
+    let g = Guarded::GGuarded {
+        qua: Quant::Ex,
+        vars: vec![GBinding {
+            name: "z".into(),
+            sort: LSort::Msg,
+        }]
+        .into(),
+        guards: vec![GAtom::Eq(
+            GTerm::Var(BVar::Bound(0)),
+            hf_leaf("y", 4, LSort::Msg),
+        )]
+        .into(),
+        body: std::sync::Arc::new(gtrue()),
+    };
+
+    assert_eq!(hf_names(&g), vec!["y.4"]);
+
+    let renamed = g
+        .clone()
+        .map_free(&mut |v| LVar::new("r", v.sort, v.idx + 10));
+    let Guarded::GGuarded { guards, vars, .. } = &renamed else {
+        panic!("map_free must keep the GGuarded shape")
+    };
+    assert_eq!(vars[0].name, "z", "the binder list stays verbatim");
+    assert_eq!(
+        guards[0],
+        GAtom::Eq(GTerm::Var(BVar::Bound(0)), hf_leaf("r", 14, LSort::Msg))
+    );
+}
+
+/// HS folds a `GGuarded`'s guard atoms before its body
+/// (`foldMap … as `mappend` b`, Guarded.hs:259-263).
+#[test]
+fn guards_visited_before_body() {
+    let g = Guarded::GGuarded {
+        qua: Quant::All,
+        vars: vec![].into(),
+        guards: vec![GAtom::Eq(
+            hf_leaf("g", 1, LSort::Msg),
+            hf_leaf("h", 2, LSort::Msg),
+        )]
+        .into(),
+        body: std::sync::Arc::new(Guarded::Conj(
+            vec![Guarded::Atom(GAtom::Last(hf_leaf("b", 3, LSort::Node)))].into(),
+        )),
+    };
+    assert_eq!(hf_names(&g), vec!["g.1", "h.2", "b.3"]);
+}
+
+/// `map_free_with` writes the mapped variable's name and index back into the
+/// leaf and keeps the leaf's own sort and SAPIC `typ`.
+#[test]
+fn map_free_keeps_the_leaf_sort_and_typ() {
+    let leaf = p::VarSpec {
+        name: "x".into(),
+        idx: 1,
+        sort: LSort::Fresh,
+        typ: Some("A".into()),
+    };
+    let g = Guarded::Atom(GAtom::Last(GTerm::Var(BVar::Free(leaf))));
+
+    let renamed = g.map_free(&mut |v| {
+        assert_eq!(v.sort, LSort::Fresh);
+        LVar::new("w", v.sort, 9)
+    });
+    let Guarded::Atom(GAtom::Last(GTerm::Var(BVar::Free(v)))) = &renamed else {
+        panic!("map_free must keep the atom shape")
+    };
+    assert_eq!(v.name, "w");
+    assert_eq!(v.idx, 9);
+    assert_eq!(v.sort, LSort::Fresh);
+    assert_eq!(v.typ.as_deref(), Some("A"));
+}

@@ -619,11 +619,14 @@ pub fn collect_free_atom(a: &GAtom, out: &mut Vec<p::VarSpec>) {
             collect_free_term(x, out);
             collect_free_term(y, out);
         }
+        // HS `Foldable ProtoAtom` folds the timepoint BEFORE the fact:
+        // `foldMap f (Action i fa) = f i `mappend` foldMap f fa`
+        // (Atom.hs:130-131).
         GAtom::Action(f, t) => {
+            collect_free_term(t, out);
             for arg in f.args.iter() {
                 collect_free_term(arg, out);
             }
-            collect_free_term(t, out);
         }
         GAtom::Last(t) => collect_free_term(t, out),
         GAtom::Pred(f) => {
@@ -679,7 +682,14 @@ pub fn map_free_atom<F: FnMut(&p::VarSpec) -> p::VarSpec>(a: &GAtom, f: &mut F) 
         GAtom::Less(x, y) => GAtom::Less(map_free_term(x, f), map_free_term(y, f)),
         GAtom::LessMset(x, y) => GAtom::LessMset(map_free_term(x, f), map_free_term(y, f)),
         GAtom::Subterm(x, y) => GAtom::Subterm(map_free_term(x, f), map_free_term(y, f)),
-        GAtom::Action(g, t) => GAtom::Action(map_free_fact(g, f), map_free_term(t, f)),
+        // HS `Traversable ProtoAtom` visits the timepoint BEFORE the fact:
+        // `traverse f (Action i fa) = Action <$> f i <*> traverse f fa`
+        // (Atom.hs:139-140).  Bind the timepoint first: Rust evaluates
+        // constructor arguments left to right.
+        GAtom::Action(g, t) => {
+            let t2 = map_free_term(t, f);
+            GAtom::Action(map_free_fact(g, f), t2)
+        }
         GAtom::Last(t) => GAtom::Last(map_free_term(t, f)),
         GAtom::Pred(g) => GAtom::Pred(map_free_fact(g, f)),
     }

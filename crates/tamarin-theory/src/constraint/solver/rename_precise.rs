@@ -640,13 +640,7 @@ fn atom_for_each_free(a: &crate::guarded::GAtom, f: &mut dyn FnMut(&LVar)) {
 fn term_for_each_free(t: &crate::guarded::GTerm, f: &mut dyn FnMut(&LVar)) {
     use crate::guarded::{BVar, GTerm};
     match t {
-        GTerm::Var(BVar::Free(v)) => {
-            f(&LVar {
-                name: tamarin_term::intern::intern_str(v.name.as_str()),
-                sort: v.sort,
-                idx: v.idx,
-            });
-        }
+        GTerm::Var(BVar::Free(v)) => f(&crate::elaborate::varspec_to_lvar(v)),
         GTerm::Var(BVar::Bound(_)) => {}
         GTerm::PubLit(_)
         | GTerm::FreshLit(_)

@@ -24,7 +24,7 @@ use crate::atom::{map_atom, Atom};
 use crate::formula::BLNTerm;
 use crate::guarded_types::cow_pair_arc;
 use tamarin_parser::ast as p;
-use tamarin_term::lterm::{sort_prefix, LNTerm, LSort};
+use tamarin_term::lterm::{sort_prefix, HasFrees, LNTerm, LSort, LVar};
 use tamarin_term::term::map_lits;
 use tamarin_term::vterm::Lit;
 use tamarin_utils::cow::{cow_map_arc, cow_map_vec, cow_pair};
@@ -2406,11 +2406,14 @@ pub fn for_each_free_var_in_guarded<F: FnMut(&p::VarSpec)>(g: &Guarded, f: &mut 
                 rec_term(x, f);
                 rec_term(y, f);
             }
+            // HS `Foldable ProtoAtom` folds the timepoint BEFORE the fact:
+            // `foldMap f (Action i fa) = f i `mappend` foldMap f fa`
+            // (Atom.hs:130-131).
             GAtom::Action(fa, t) => {
+                rec_term(t, f);
                 for arg in fa.args.iter() {
                     rec_term(arg, f);
                 }
-                rec_term(t, f);
             }
             GAtom::Last(t) => rec_term(t, f),
             GAtom::Pred(fa) => {
@@ -2678,6 +2681,41 @@ where
     // No bound-set tracking needed; the depth handed by the combinator is
     // irrelevant here since `map_free_atom` rewrites Free leaves in place.
     map_guarded_atoms(g, &mut |_d, a| map_free_atom(a, &mut f))
+}
+
+/// HS `instance HasFrees (Guarded (String, LSort) c LVar)`
+/// (Guarded.hs:272-277): `foldFrees f = foldMap (foldFrees f)` over the
+/// `Foldable` instance (Guarded.hs:259-263) and `mapFrees f =
+/// traverseGuarded (mapFrees f)` (Guarded.hs:265-270) — atoms in tree order,
+/// `GGuarded` guards before body, the binder list left alone.
+///
+/// The port's leaves are parser `VarSpec`s, so both directions cross
+/// [`crate::elaborate::varspec_to_lvar`], which reads the leaf's name, sort
+/// and index and interns the name.  `map_free_with` writes the mapped
+/// variable's name and index back into the leaf and keeps the leaf's own
+/// `sort` and `typ`, the convention of the freshening walks in `sources.rs`.
+///
+/// The `monotone` flag has no effect here: no `GTerm` constructor sorts its
+/// arguments, so the `Monotone` and the `Arbitrary` map rebuild the same
+/// tree.
+impl HasFrees for Guarded {
+    fn for_each_free(&self, f: &mut dyn FnMut(&LVar)) {
+        for_each_free_var_in_guarded(self, &mut |v: &p::VarSpec| {
+            f(&crate::elaborate::varspec_to_lvar(v))
+        });
+    }
+
+    fn map_free_with(self, f: &mut dyn FnMut(LVar) -> LVar, _monotone: bool) -> Self {
+        map_lvars_in_guarded(&self, |v: &p::VarSpec| {
+            let w = f(crate::elaborate::varspec_to_lvar(v));
+            p::VarSpec {
+                name: w.name.to_string(),
+                idx: w.idx,
+                sort: v.sort,
+                typ: v.typ.clone(),
+            }
+        })
+    }
 }
 
 // =============================================================================

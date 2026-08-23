@@ -3819,7 +3819,7 @@ fn freshen_system_some_inst(
         |g: &crate::guarded::Guarded,
          bindings: &mut BTreeMap<tamarin_term::lterm::LVar, tamarin_term::lterm::LVar>| {
             let _ = crate::guarded::map_lvars_in_guarded(g, |v: &tamarin_parser::ast::VarSpec| {
-                let lv = vspec_to_lvar(v);
+                let lv = crate::elaborate::varspec_to_lvar(v);
                 bindings.entry(lv).or_insert_with(|| {
                     let new_idx = maude.reserve_idxs(1);
                     tamarin_term::lterm::LVar {
@@ -4040,15 +4040,6 @@ fn freshen_system_some_inst(
     }
     out.mint_fresh_stamps();
     out
-}
-
-/// Project a `VarSpec` to an `LVar` for `someInst` import tracking.
-fn vspec_to_lvar(v: &tamarin_parser::ast::VarSpec) -> tamarin_term::lterm::LVar {
-    tamarin_term::lterm::LVar {
-        name: tamarin_term::intern::intern_str(v.name.as_str()),
-        sort: v.sort,
-        idx: v.idx,
-    }
 }
 
 /// One refineSubst arm produced by `refine_source_case_action` — the
@@ -6045,11 +6036,7 @@ fn guarded_walk_frees(
     }
     collect(g, &mut frees);
     for vs in &frees {
-        push(&tamarin_term::lterm::LVar {
-            name: tamarin_term::intern::intern_str(vs.name.as_str()),
-            sort: vs.sort,
-            idx: vs.idx,
-        });
+        push(&crate::elaborate::varspec_to_lvar(vs));
     }
 }
 
@@ -6463,11 +6450,7 @@ fn write_rule_to_key_excl_new_vars(
 
 /// Look up the renamed identity of a `Free` GTerm var and write it.
 fn write_gfree_var(v: &tamarin_parser::ast::VarSpec, rename: &RenameMap, out: &mut String) {
-    let lv = tamarin_term::lterm::LVar {
-        name: tamarin_term::intern::intern_str(v.name.as_str()),
-        sort: v.sort,
-        idx: v.idx,
-    };
+    let lv = crate::elaborate::varspec_to_lvar(v);
     let rv = rename.get(&lv).unwrap_or(&lv);
     // Encode the renamed identity (name + idx + sort) of a Free leaf.
     out.push('F');
