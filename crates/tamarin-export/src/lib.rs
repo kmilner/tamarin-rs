@@ -21,9 +21,10 @@
 //! Blockers, in dependency order:
 //! - Lemma and restriction formulas are stored as `tamarin_parser::ast::
 //!   Formula`, not `LNFormula` (`tamarin_theory::theory::Lemma::formula`,
-//!   `tamarin_theory::theory::OpenRestriction`), and no parser-AST →
-//!   `LNFormula` converter exists (`tamarin_theory::elaborate`).  Export
-//!   operates exclusively on `LNFormula`.
+//!   `tamarin_theory::theory::OpenRestriction`).  The parser-AST →
+//!   `SyntacticLNFormula` converter is `tamarin_theory::formula::from_parser`,
+//!   but no stored field holds its result.  Export operates exclusively on
+//!   `LNFormula`.
 //! - There is no `prettyLNFormula` over `ProtoFormula`
 //!   (`tamarin_theory::pretty_formula` renders the parser AST), yet Export
 //!   emits rewritten `LNFormula`s verbatim inside comment blocks.

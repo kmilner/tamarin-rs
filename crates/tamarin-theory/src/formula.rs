@@ -7,8 +7,12 @@
 //! `LNFormula`/`SyntacticLNFormula` instances, the basic builders, the
 //! sugar traversal ([`SugarTerms`]), free variables ([`formula_frees`]), the
 //! quantifier-introduction helpers (`quantify`, `exists`, `forAll`,
-//! `existFormula`, `forAllFormula`) and the sugar-stripping
-//! [`to_lnformula`].
+//! `existFormula`, `forAllFormula`), the sugar-stripping [`to_lnformula`],
+//! the closing of the parser AST into a [`SyntacticLNFormula`]
+//! ([`from_parser`], which HS does inside its formula parser,
+//! `Theory/Text/Parser/Formula.hs`) and the opening of a bound term against
+//! a binder scope ([`open_bound_term`], the substitution step of HS
+//! `openFormula`).
 //!
 //! The representation is locally nameless: bound variables are
 //! `BVar::Bound(de_bruijn_idx)`, free variables are `Free(v)`.
@@ -24,9 +28,13 @@
 //! ported as `simplify_guarded_with` in guarded.rs.)
 
 use crate::atom::{to_atom, ProtoAtom, SyntacticSugar, Unit2};
-use tamarin_term::lterm::{BVar, HasFrees, LSort, LVar, Name};
+use crate::elaborate::{fact_to_lnfact, sort_of, term_to_lnterm, ElabError};
+use crate::fact::Fact;
+use crate::predicate::smaller_fact;
+use tamarin_parser::ast as p;
+use tamarin_term::lterm::{BVar, HasFrees, LNTerm, LSort, LVar, Name};
 use tamarin_term::term::map_lits;
-use tamarin_term::vterm::{Lit, VTerm};
+use tamarin_term::vterm::{var_term, Lit, VTerm};
 
 /// Logical connectives.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -320,6 +328,135 @@ pub fn to_lnformula(fm: &SyntacticLNFormula) -> Option<LNFormula> {
     }
 }
 
+// =============================================================================
+// Closing the parser AST (Theory/Text/Parser/Formula.hs:44-77) and opening a
+// bound term for display (Theory/Model/Formula.hs:274-291, :481-484).
+// =============================================================================
+
+/// Build a [`SyntacticLNFormula`] from the parser's formula AST the way HS's
+/// formula parser builds one while parsing
+/// (Theory/Text/Parser/Formula.hs:44-77): every atom is lifted with all of
+/// its variables free (`blatom`'s `fmap (fmapTerm (fmap Free))`,
+/// Theory/Text/Parser/Formula.hs:44-45), and a quantifier closes its binders
+/// with `foldr (hinted q) f vs` (Theory/Text/Parser/Formula.hs:73-77) over
+/// `forAll`/`exists` (Theory/Model/Formula.hs:355-360), so the last binder
+/// of the list is the innermost one.
+///
+/// Variable sorts follow the syntactic position, as HS's `msgvar`/`nodevar`
+/// parsers stamp them (Token.hs:440-448): the `@` operand of an action, both
+/// operands of `<` and the argument of `last` are `LSort::Node` whatever the
+/// hint says (`nodevarTerm`, Theory/Text/Parser/Formula.hs:59), and every
+/// other occurrence resolves its hint through `elaborate::sort_of`.  A
+/// binder closes exactly the occurrences equal to its `LVar` in name, sort
+/// and index (HS `quantify`'s `v == x`, Theory/Model/Formula.hs:350-352), so
+/// `Ex ~k. Made(k)` leaves the message-sorted `k` free.  Terms go through
+/// [`term_to_lnterm`], which reads the thread-local user-function bundle and
+/// turns a bare nullary symbol into its application before any binder is
+/// considered (HS `nullaryApp`, Theory/Text/Parser/Term.hs:158-163).  A
+/// `(<)` atom becomes the `Smaller` predicate (`smallerp`,
+/// Theory/Text/Parser/Formula.hs:30-38); a SAPIC `=t` pattern term, which
+/// `term_to_lnterm` rejects, is an [`ElabError`].
+pub fn from_parser(f: &p::Formula) -> Result<SyntacticLNFormula, ElabError> {
+    match f {
+        p::Formula::True => Ok(ProtoFormula::Tf(true)),
+        p::Formula::False => Ok(ProtoFormula::Tf(false)),
+        p::Formula::Atom(a) => Ok(ProtoFormula::Atom(atom_from_parser(a)?)),
+        p::Formula::Not(q) => Ok(from_parser(q)?.not()),
+        p::Formula::And(l, r) => Ok(from_parser(l)?.and(from_parser(r)?)),
+        p::Formula::Or(l, r) => Ok(from_parser(l)?.or(from_parser(r)?)),
+        p::Formula::Implies(l, r) => Ok(from_parser(l)?.implies(from_parser(r)?)),
+        p::Formula::Iff(l, r) => Ok(from_parser(l)?.iff(from_parser(r)?)),
+        p::Formula::Forall(vs, body) => Ok(close_binders(for_all_var, vs, from_parser(body)?)),
+        p::Formula::Exists(vs, body) => Ok(close_binders(exists_var, vs, from_parser(body)?)),
+    }
+}
+
+/// HS `foldr (hinted q) f vs` (Theory/Text/Parser/Formula.hs:73-77): close
+/// the binders from the last to the first, each with the hint `hinted`
+/// (Theory/Model/Formula.hs:364-365) reads off the binder's `LVar`
+/// (Theory/Model/Formula.hs:227-228).
+fn close_binders(
+    q: fn((String, LSort), &LVar, SyntacticLNFormula) -> SyntacticLNFormula,
+    vs: &[p::VarSpec],
+    body: SyntacticLNFormula,
+) -> SyntacticLNFormula {
+    vs.iter().rev().fold(body, |acc, v| {
+        let x = LVar::new(&v.name, sort_of(&v.sort), v.idx);
+        q((x.name.to_string(), x.sort), &x, acc)
+    })
+}
+
+/// The atom alternatives of HS `blatom` (Theory/Text/Parser/Formula.hs:45-57).
+fn atom_from_parser(a: &p::Atom) -> Result<ProtoAtom<SyntacticSugar<BLNTerm>, BLNTerm>, ElabError> {
+    Ok(match a {
+        p::Atom::Eq(l, r) => ProtoAtom::EqE(free_term(l)?, free_term(r)?),
+        p::Atom::Subterm(l, r) => ProtoAtom::Subterm(free_term(l)?, free_term(r)?),
+        p::Atom::Less(l, r) => ProtoAtom::Less(temporal_term(l)?, temporal_term(r)?),
+        p::Atom::Action(fa, t) => ProtoAtom::Action(temporal_term(t)?, free_fact(fa)?),
+        p::Atom::Last(t) => ProtoAtom::Last(temporal_term(t)?),
+        p::Atom::Pred(fa) => ProtoAtom::Syntactic(SyntacticSugar::Pred(free_fact(fa)?)),
+        p::Atom::LessMset(l, r) => ProtoAtom::Syntactic(SyntacticSugar::Pred(smaller_fact(
+            free_term(l)?,
+            free_term(r)?,
+        ))),
+    })
+}
+
+/// `fmapTerm (fmap Free)` (Theory/Text/Parser/Formula.hs:45): every variable
+/// of the term as a free `BVar`.  The literal order is unchanged, so the
+/// `f_app` rebuild inside [`map_lits`] keeps the AC argument order.
+fn lift_free(t: &LNTerm) -> BLNTerm {
+    map_lits(t, &mut |l| match l {
+        Lit::Con(c) => Lit::Con(*c),
+        Lit::Var(v) => Lit::Var(BVar::Free(*v)),
+    })
+}
+
+fn free_term(t: &p::Term) -> Result<BLNTerm, ElabError> {
+    term_to_lnterm(t)
+        .map(|t| lift_free(&t))
+        .ok_or_else(|| ElabError {
+            message: "could not elaborate term in formula".to_string(),
+        })
+}
+
+fn free_fact(fa: &p::Fact) -> Result<Fact<BLNTerm>, ElabError> {
+    Ok(fact_to_lnfact(fa)?.map_ref(lift_free))
+}
+
+/// HS `nodevarTerm = lit . Var <$> nodep` (Theory/Text/Parser/Formula.hs:59):
+/// a variable in a temporal position is `LSort::Node` whatever its hint.
+/// The RS parser also accepts a non-variable term there, which converts
+/// like any other term.
+fn temporal_term(t: &p::Term) -> Result<BLNTerm, ElabError> {
+    match t {
+        p::Term::Var(v) => Ok(var_term(BVar::Free(LVar::new(&v.name, LSort::Node, v.idx)))),
+        _ => free_term(t),
+    }
+}
+
+/// Replace every bound index of `t` by the binder it refers to, given the
+/// enclosing binders innermost-last in `scope`: `Bound(0)` is the innermost
+/// binder, `Bound(i)` the one `i` binders further out.  This is HS
+/// `openFormula`'s `mapLits (subst x i)` (Theory/Model/Formula.hs:274-291)
+/// applied once per enclosing binder, followed by `extractFree`
+/// (Theory/Model/Formula.hs:481-484), whose error message is kept for an
+/// index past the scope.  The rebuild through [`map_lits`] re-sorts AC
+/// arguments under the opened `LVar`s, as HS's `fApp` does.
+pub fn open_bound_term(t: &BLNTerm, scope: &[LVar]) -> LNTerm {
+    map_lits(t, &mut |l| match l {
+        Lit::Con(c) => Lit::Con(*c),
+        Lit::Var(BVar::Free(v)) => Lit::Var(*v),
+        Lit::Var(BVar::Bound(i)) => {
+            let depth = usize::try_from(*i).ok().filter(|i| *i < scope.len());
+            let Some(depth) = depth else {
+                panic!("prettyFormula: illegal bound variable '{i}'")
+            };
+            Lit::Var(scope[scope.len() - 1 - depth])
+        }
+    })
+}
+
 // NOTE: Haskell `mapAtoms` (Theory/Model/Formula.hs:266-270) is
 // `foldFormulaScope (\i a -> Ato $ f i a) ...`, i.e. its callback receives
 // the De Bruijn binder-depth `i` (threaded via `go (succ i)` at each `Qua`,
@@ -478,6 +615,217 @@ mod tests {
         let fm: SyntacticLNFormula = plain_formula();
         let want: LNFormula = plain_formula();
         assert_eq!(to_lnformula(&fm), Some(want));
+    }
+
+    // =========================================================================
+    // from_parser / open_bound_term
+    // =========================================================================
+
+    use crate::fact::{FactTag, Multiplicity};
+    use tamarin_parser::parser::{parse_formula_str, parse_theory};
+    use tamarin_term::function_symbols::{AcSym, FunSym};
+    use tamarin_term::intern::intern_str;
+    use tamarin_term::term::{f_app_ac, f_app_no_eq, Term};
+    use tamarin_term::vterm::var_term;
+
+    fn parsed(src: &str) -> SyntacticLNFormula {
+        from_parser(&parse_formula_str(src).unwrap()).unwrap()
+    }
+
+    fn free(name: &str, sort: LSort, idx: u64) -> BLNTerm {
+        var_term(BVar::Free(LVar::new(name, sort, idx)))
+    }
+
+    fn bound(i: u64) -> BLNTerm {
+        var_term(BVar::Bound(i))
+    }
+
+    fn proto_fact<T>(name: &str, args: Vec<T>) -> Fact<T> {
+        Fact::new(
+            FactTag::Proto(Multiplicity::Linear, intern_str(name), args.len()),
+            args,
+        )
+    }
+
+    fn pred(name: &str, args: Vec<BLNTerm>) -> SyntacticLNFormula {
+        ProtoFormula::Atom(ProtoAtom::Syntactic(SyntacticSugar::Pred(proto_fact(
+            name, args,
+        ))))
+    }
+
+    fn hint(name: &str, sort: LSort) -> (String, LSort) {
+        (name.to_string(), sort)
+    }
+
+    fn parser_var(name: &str, sort: p::SortHint) -> p::Term {
+        p::Term::Var(p::VarSpec {
+            name: name.to_string(),
+            idx: 0,
+            sort,
+            typ: None,
+        })
+    }
+
+    /// `foldr (hinted q) f vs` puts the last binder innermost, so the
+    /// innermost binder is `Bound(0)` at the atom and the `@` operand stays a
+    /// free `Node` variable.
+    #[test]
+    fn from_parser_nests_binders_innermost_zero() {
+        let want = ProtoFormula::for_all(
+            hint("x", LSort::Msg),
+            ProtoFormula::exists(
+                hint("y", LSort::Msg),
+                ProtoFormula::Atom(ProtoAtom::Action(
+                    free("i", LSort::Node, 0),
+                    proto_fact("P", vec![bound(1), bound(0)]),
+                )),
+            ),
+        );
+        assert_eq!(parsed("All x. Ex y. P(x, y) @ #i"), want);
+    }
+
+    /// The `@` operand is `Node` whatever its hint, so it is closed by the
+    /// `#k` binder, while the `k` inside the fact is `Msg` and closed by the
+    /// message binder of the same name.
+    #[test]
+    fn from_parser_resolves_sort_by_position() {
+        let pair = f_app_no_eq(
+            tamarin_term::function_symbols::pair_sym(),
+            vec![bound(1), bound(2)],
+        );
+        let want = ProtoFormula::exists(
+            hint("k", LSort::Msg),
+            ProtoFormula::exists(
+                hint("m", LSort::Msg),
+                ProtoFormula::exists(
+                    hint("k", LSort::Node),
+                    ProtoFormula::Atom(ProtoAtom::Action(bound(0), proto_fact("G", vec![pair]))),
+                ),
+            ),
+        );
+        assert_eq!(parsed("Ex k m #k. G(<m, k>) @ k"), want);
+    }
+
+    /// Closing compares the whole `LVar`: a `~k` binder does not capture the
+    /// message-sorted `k` of the body.
+    #[test]
+    fn from_parser_leaves_other_sorted_name_free() {
+        let want = ProtoFormula::exists(
+            hint("k", LSort::Fresh),
+            pred("Made", vec![free("k", LSort::Msg, 0)]),
+        );
+        assert_eq!(parsed("Ex ~k. Made(k)"), want);
+    }
+
+    /// The inner binder closes the occurrence first, so the outer binder of
+    /// the same name finds nothing left to close.
+    #[test]
+    fn from_parser_inner_binder_shadows() {
+        let want = ProtoFormula::for_all(
+            hint("x", LSort::Msg),
+            ProtoFormula::for_all(hint("x", LSort::Msg), pred("P", vec![bound(0)])),
+        );
+        assert_eq!(parsed("All x. All x. P(x)"), want);
+    }
+
+    /// A bare identifier that names a nullary user symbol is that symbol's
+    /// application (HS `nullaryApp`), so a binder of the same name closes
+    /// nothing.
+    #[test]
+    fn from_parser_keeps_nullary_symbol_constant() {
+        let thy = parse_theory("theory T begin\nfunctions: zero/0\nend", &[]).unwrap();
+        let _guard = crate::elaborate::set_user_funs_for_theory(&thy);
+
+        let ProtoFormula::Qua(Quantifier::All, h, body) = parsed("All zero. P(zero)") else {
+            panic!("expected a universal quantifier");
+        };
+        assert_eq!(h, hint("zero", LSort::Msg));
+        let ProtoFormula::Atom(ProtoAtom::Syntactic(SyntacticSugar::Pred(fa))) = *body else {
+            panic!("expected a predicate atom");
+        };
+        match &fa.terms[..] {
+            [Term::App(FunSym::NoEq(sym), args)] => {
+                assert_eq!(sym.name, b"zero");
+                assert!(args.is_empty());
+            }
+            other => panic!("expected the nullary application, got {other:?}"),
+        }
+    }
+
+    /// `t (<) t` is the `Smaller` predicate (HS `smallerp`).
+    #[test]
+    fn from_parser_less_mset_is_smaller_pred() {
+        let f = p::Formula::Atom(p::Atom::LessMset(
+            parser_var("x", p::SortHint::Untagged),
+            parser_var("y", p::SortHint::Msg),
+        ));
+        let want = ProtoFormula::Atom(ProtoAtom::Syntactic(SyntacticSugar::Pred(smaller_fact(
+            free("x", LSort::Msg, 0),
+            free("y", LSort::Msg, 0),
+        ))));
+        assert_eq!(from_parser(&f).unwrap(), want);
+    }
+
+    /// A SAPIC `=t` pattern has no `LNTerm` form.
+    #[test]
+    fn from_parser_rejects_pat_match() {
+        let pat = p::Term::PatMatch(Box::new(parser_var("x", p::SortHint::Untagged)));
+        let in_term = p::Formula::Atom(p::Atom::Eq(
+            pat.clone(),
+            parser_var("y", p::SortHint::Untagged),
+        ));
+        let err = from_parser(&in_term).unwrap_err();
+        assert_eq!(err.message, "could not elaborate term in formula");
+        let in_fact = p::Formula::Atom(p::Atom::Pred(p::Fact {
+            persistent: false,
+            name: "F".to_string(),
+            args: vec![pat],
+            annotations: Vec::new(),
+        }));
+        assert!(from_parser(&in_fact).is_err());
+    }
+
+    /// Opening against the binders that `quantify` closed gives the original
+    /// term back, AC argument order included.
+    #[test]
+    fn open_bound_term_round_trips_quantify() {
+        let x = LVar::new("x", LSort::Msg, 0);
+        let y = LVar::new("y", LSort::Msg, 0);
+        let z = LVar::new("z", LSort::Msg, 0);
+        let original: LNTerm = f_app_ac(AcSym::Mult, vec![var_term(x), var_term(y), var_term(z)]);
+        let lifted = lift_free(&original);
+        let fm: LNFormula = ProtoFormula::Atom(ProtoAtom::Last(lifted));
+        // Outer binder `y`, inner binder `x`: `x` is `Bound(0)`, `y` `Bound(1)`.
+        let closed = for_all_var(
+            (y.name.to_string(), y.sort),
+            &y,
+            for_all_var((x.name.to_string(), x.sort), &x, fm),
+        );
+        let ProtoFormula::Qua(_, _, inner) = closed else {
+            panic!("expected the outer quantifier");
+        };
+        let ProtoFormula::Qua(_, _, body) = *inner else {
+            panic!("expected the inner quantifier");
+        };
+        let ProtoFormula::Atom(ProtoAtom::Last(term)) = *body else {
+            panic!("expected the atom");
+        };
+        assert_eq!(
+            term,
+            f_app_ac(
+                AcSym::Mult,
+                vec![bound(0), bound(1), lift_free(&var_term(z))]
+            )
+        );
+        assert_eq!(open_bound_term(&term, &[y, x]), original);
+    }
+
+    /// An index past the scope is HS `extractFree`'s error.
+    #[test]
+    #[should_panic(expected = "prettyFormula: illegal bound variable '1'")]
+    fn open_bound_term_panics_past_scope() {
+        let x = LVar::new("x", LSort::Msg, 0);
+        open_bound_term(&bound(1), &[x]);
     }
 
     // =========================================================================

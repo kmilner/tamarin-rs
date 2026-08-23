@@ -1402,13 +1402,12 @@ fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), Elab
                 // atoms in lemmas/restrictions, and
                 // `rule_restriction::lift_rule_restrictions` (run in run.rs
                 // right after parse, mirroring HS `liftedAddProtoRule`)
-                // expands them inside `_restrict` formulas.  Building a typed
-                // `theory::Predicate` here would need a parser-Formula →
-                // LNFormula converter that nothing consumes (the typed
-                // predicate item is read nowhere), so we do not synthesise
-                // dead state — HS keeps a `PredicateItem` only to feed its
-                // own closed-theory renderer, a role the RS parser-AST
-                // renderer already fills.
+                // expands them inside `_restrict` formulas.  The typed
+                // predicate item is read nowhere (HS keeps a `PredicateItem`
+                // only to feed its own closed-theory renderer, a role the RS
+                // parser-AST renderer fills), so no typed `theory::Predicate`
+                // is built here even though `formula::from_parser` can
+                // convert its body.
             }
             p::TheoryItem::Options(opts) => {
                 let mut o = out.options.clone();
@@ -1848,7 +1847,7 @@ fn collect_vars(t: &tamarin_term::lterm::LNTerm, out: &mut BTreeSet<LVar>) {
 // Term conversion: parser::Term → LNTerm
 // =============================================================================
 
-fn sort_of(s: &p::SortHint) -> LSort {
+pub(crate) fn sort_of(s: &p::SortHint) -> LSort {
     match s {
         p::SortHint::Fresh | p::SortHint::Suffix(p::SuffixSort::Fresh) => LSort::Fresh,
         p::SortHint::Pub | p::SortHint::Suffix(p::SuffixSort::Pub) => LSort::Pub,
