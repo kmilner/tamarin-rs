@@ -297,7 +297,7 @@ pub fn simple_injective_fact_instances(
     // atom (every other formula shape yields `[]`).  Bound variables in a
     // top-level atom are an implementation error in HS; we drop the
     // restriction instead of panicking.
-    fn extract_constraints(f: &crate::rule::SyntacticLNFormula) -> Vec<(LNTerm, LNTerm)> {
+    fn extract_constraints(f: &crate::formula::SyntacticLNFormula) -> Vec<(LNTerm, LNTerm)> {
         use crate::atom::ProtoAtom;
         use crate::formula::ProtoFormula;
         match f {

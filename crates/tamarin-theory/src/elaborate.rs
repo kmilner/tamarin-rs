@@ -1403,11 +1403,13 @@ fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), Elab
                 // `rule_restriction::lift_rule_restrictions` (run in run.rs
                 // right after parse, mirroring HS `liftedAddProtoRule`)
                 // expands them inside `_restrict` formulas.  The typed
-                // predicate item is read nowhere (HS keeps a `PredicateItem`
-                // only to feed its own closed-theory renderer, a role the RS
-                // parser-AST renderer fills), so no typed `theory::Predicate`
-                // is built here even though `formula::from_parser` can
-                // convert its body.
+                // predicate item is read nowhere: HS reads its
+                // `PredicateItem`s through `theoryPredicates` to expand each
+                // lemma and restriction as it is added
+                // (Theory/Text/Parser.hs:114, TheoryObject.hs:438-450) and
+                // to print them, and the port does both from the parser
+                // theory.  So no typed `theory::Predicate` is built here
+                // even though `formula::from_parser` can convert its body.
             }
             p::TheoryItem::Options(opts) => {
                 let mut o = out.options.clone();

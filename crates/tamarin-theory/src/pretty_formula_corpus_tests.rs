@@ -22,12 +22,10 @@ use std::time::{Duration, Instant};
 
 /// Examples beyond this test's budget, relative to the corpus root and
 /// reported as `skipped_listed`: the accountability lemmas of the mixvote
-/// multi-session family grow geometrically with the session count.  On the
-/// release binary `--parse-only` needs 24 s and 2.8 GB for session 4 and
-/// aborts with a stack overflow after 164 s and 5.3 GB on session 5; in
-/// this debug-profile test the largest session-4 lemma alone takes 52 s
-/// through the six renders below.  Neither file is in the prove or pretty
-/// gate corpus.
+/// multi-session family grow geometrically with the session count, so a
+/// session-4 lemma takes about a minute through the six renders below and
+/// session 5 overflows the stack.  Neither file is in the prove or pretty
+/// gate corpus (scripts/parity_corpus.txt).
 const BEYOND_BUDGET: &[&str] = &[
     "sapic/deprecated/csf21-acc-unbounded/mixvote/mixvote_SmHh-multi-session-4-fixed.spthy",
     "sapic/deprecated/csf21-acc-unbounded/mixvote/mixvote_SmHh-multi-session-5-fixed.spthy",
@@ -64,7 +62,9 @@ fn spthy_files(root: &Path) -> Vec<PathBuf> {
     files
 }
 
-/// SAPIC condition formulas and embedded-rule restrictions of a process.
+/// SAPIC condition formulas and embedded-rule restrictions of a process,
+/// AC-canonicalised as `pretty_sapic` renders them (pretty_sapic.rs `Msr`
+/// and `Cond` arms).
 fn process_formulas(proc_: &p::Process, label: &str, out: &mut Vec<Item>) {
     match proc_ {
         p::Process::Null | p::Process::Call { .. } => {}
@@ -73,7 +73,7 @@ fn process_formulas(proc_: &p::Process, label: &str, out: &mut Vec<Item>) {
                 for (i, f) in restrictions.iter().enumerate() {
                     out.push(Item {
                         label: format!("{label}/msr-restriction-{i}"),
-                        formula: f.clone(),
+                        formula: canon(f),
                     });
                 }
             }
@@ -83,7 +83,7 @@ fn process_formulas(proc_: &p::Process, label: &str, out: &mut Vec<Item>) {
             if let p::ProcessComb::Cond(p::Condition::Formula(f)) = comb {
                 out.push(Item {
                     label: format!("{label}/cond"),
-                    formula: f.clone(),
+                    formula: canon(f),
                 });
             }
             process_formulas(left, label, out);
@@ -92,19 +92,6 @@ fn process_formulas(proc_: &p::Process, label: &str, out: &mut Vec<Item>) {
         p::Process::Replication(body) | p::Process::AtAnnotation(body, _) => {
             process_formulas(body, label, out);
         }
-    }
-}
-
-/// The SAPIC formulas of `procs`, AC-canonicalised as `pretty_sapic`
-/// renders them (pretty_sapic.rs `Msr` and `Cond` arms).
-fn sapic_items(procs: &[(&p::Process, String)], out: &mut Vec<Item>) {
-    for (proc_, label) in procs {
-        let mut items = Vec::new();
-        process_formulas(proc_, label, &mut items);
-        out.extend(items.into_iter().map(|it| Item {
-            formula: canon(&it.formula),
-            ..it
-        }));
     }
 }
 
@@ -119,8 +106,7 @@ fn theory_formulas(parsed: &p::Theory, arity1: &dyn Fn(&p::Formula) -> p::Formul
     let macros = collect_macros(parsed);
     let predicates = collect_predicates(parsed);
     let header = |f: &p::Formula| canon(&arity1(&expand_predicates_for_display(f, &predicates)));
-    let mut out = Vec::new();
-    let mut header_items = |kind: &str, name: &str, f: &p::Formula| {
+    let header_items = |out: &mut Vec<Item>, kind: &str, name: &str, f: &p::Formula| {
         out.push(Item {
             label: format!("{kind} {name}"),
             formula: header(f),
@@ -132,17 +118,13 @@ fn theory_formulas(parsed: &p::Theory, arity1: &dyn Fn(&p::Formula) -> p::Formul
             });
         }
     };
+    let mut out = Vec::new();
     for item in &parsed.items {
         match item {
-            p::TheoryItem::Lemma(lem) => header_items("lemma", &lem.name, &lem.formula),
+            p::TheoryItem::Lemma(lem) => header_items(&mut out, "lemma", &lem.name, &lem.formula),
             p::TheoryItem::Restriction(r) | p::TheoryItem::LegacyAxiom(r) => {
-                header_items("restriction", &r.name, &r.formula)
+                header_items(&mut out, "restriction", &r.name, &r.formula)
             }
-            _ => {}
-        }
-    }
-    for item in &parsed.items {
-        match item {
             p::TheoryItem::AccLemma(al) => out.push(Item {
                 label: format!("acclemma {}", al.name),
                 formula: canon(&arity1(&al.formula)),
@@ -160,18 +142,15 @@ fn theory_formulas(parsed: &p::Theory, arity1: &dyn Fn(&p::Formula) -> p::Formul
                 }
             }
             p::TheoryItem::ProcessDef(pd) => {
-                sapic_items(&[(&pd.body, format!("let {}", pd.name))], &mut out)
+                process_formulas(&pd.body, &format!("let {}", pd.name), &mut out)
             }
             p::TheoryItem::TopLevelProcess(pr) | p::TheoryItem::DiffEquivLemma(pr) => {
-                sapic_items(&[(pr, "process".into())], &mut out)
+                process_formulas(pr, "process", &mut out)
             }
-            p::TheoryItem::EquivLemma(l, r) => sapic_items(
-                &[
-                    (l, "equivlemma-left".into()),
-                    (r, "equivlemma-right".into()),
-                ],
-                &mut out,
-            ),
+            p::TheoryItem::EquivLemma(l, r) => {
+                process_formulas(l, "equivlemma-left", &mut out);
+                process_formulas(r, "equivlemma-right", &mut out);
+            }
             _ => {}
         }
     }
@@ -195,9 +174,9 @@ struct FileReport {
 }
 
 /// Parse, lift the embedded restrictions, elaborate and collect the
-/// formulas of one file; a failure or panic in one of those pre-existing
-/// steps skips the file.  A diff-operator theory is parsed again with the
-/// `diff` define, the way `-D=diff` enables the operator on the CLI.
+/// formulas of one file; a failure or panic in one of those steps skips
+/// the file.  A diff-operator theory is parsed again with the `diff`
+/// define, the way `-D=diff` enables the operator on the CLI.
 fn file_phase(path: &Path, root: &Path) -> FileReport {
     let start = Instant::now();
     let mut rep = FileReport {
@@ -308,8 +287,9 @@ fn corpus_lnformula_doc_matches_ast_printer() {
     }
     let files = spthy_files(&root);
     let start = Instant::now();
-    // The parser and the Doc builders recurse along the input; the CLI
-    // renders on 64 MiB threads (run.rs), so the workers get the same.
+    // The parser and the Doc builders recurse along the input; the web
+    // server renders on 64 MiB tokio threads (run.rs), so the workers get
+    // the same.
     let pool = rayon::ThreadPoolBuilder::new()
         .stack_size(64 * 1024 * 1024)
         .build()
@@ -384,6 +364,15 @@ fn corpus_lnformula_doc_matches_ast_printer() {
     for (file, label, ast, ln) in &mismatches {
         eprintln!("MISMATCH {file}: {label}\n--- ast\n{ast}\n--- ln\n{ln}");
     }
+    // The comparison is a net only while it covers the tree: a change that
+    // makes the parser, the lifting or the elaboration reject files has to
+    // fail here instead of shrinking the comparison.  The tree has 11
+    // parser rejects in 1037 files.
+    assert!(
+        parsed * 20 >= files.len() * 19,
+        "only {parsed} of {} files reached the comparison",
+        files.len()
+    );
     assert!(formulas > 0, "no formulas compared");
     assert!(
         mismatches.is_empty(),

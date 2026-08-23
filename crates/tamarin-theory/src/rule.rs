@@ -21,7 +21,7 @@ use tamarin_term::lterm::{HasFrees, LNTerm, LVar, Name};
 use tamarin_utils::color::Rgb;
 
 use crate::fact::LNFact;
-pub use crate::formula::SyntacticLNFormula;
+use crate::formula::SyntacticLNFormula;
 use crate::sapic::PlainProcess;
 
 // =============================================================================

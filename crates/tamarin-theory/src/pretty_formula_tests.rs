@@ -582,6 +582,93 @@ fn lnformula_doc_matches_ast_doc_on_samples() {
     }
 }
 
+/// The atom shapes and binder scopes the samples above leave out, pinned
+/// to the oracle's `--parse-only` render of the probe
+/// `S0_tests_extra_samples.spthy` (`builtins: hashing, multiset`,
+/// `functions: zero/0`): sorted binders, a merged block of same-kind
+/// quantifiers with a shadowed name, the binder supply restored after each
+/// quantifier block, the `⊏`, `last` and `<` atoms, a pair, a hash and a
+/// nullary user symbol inside a fact, and a binder whose source index is not
+/// its display index.
+#[test]
+fn lnformula_doc_matches_ast_doc_on_atom_and_scope_samples() {
+    use crate::formula::{from_parser, to_lnformula};
+    use tamarin_parser::parser::{parse_formula_str, parse_theory};
+
+    let thy = parse_theory(
+        "theory T begin\nbuiltins: hashing, multiset\nfunctions: zero/0\nend",
+        &[],
+    )
+    .unwrap();
+    let _guard = crate::elaborate::set_user_funs_for_theory(&thy);
+
+    let samples: &[(&str, &[&str])] = &[
+        (
+            "All ~k $p #i. K(~k, $p) @ #i",
+            &["  all-traces \"∀ ~k $p #i. K( ~k, $p ) @ #i\""],
+        ),
+        (
+            "All x. All x. A(x) @ #i",
+            &["  all-traces \"∀ x x.1. A( x.1 ) @ #i\""],
+        ),
+        (
+            "All x. All y. P(x, y) @ #i",
+            &["  all-traces \"∀ x y. P( x, y ) @ #i\""],
+        ),
+        (
+            "(All x. A(x) @ #i) & (All x. B(x) @ #j)",
+            &["  all-traces \"(∀ x. A( x ) @ #i) ∧ (∀ x. B( x ) @ #j)\""],
+        ),
+        (
+            "All x. ((Ex y. A(y) @ #i) & (Ex y. B(y) @ #j)) ==> A(x) @ #k",
+            &[
+                "  all-traces",
+                "  \"∀ x. ((∃ y. A( y ) @ #i) ∧ (∃ y. B( y ) @ #j)) ⇒ (A( x ) @ #k)\"",
+            ],
+        ),
+        ("All x y. x << y", &["  all-traces \"∀ x y. x ⊏ y\""]),
+        ("All #i. last(#i)", &["  all-traces \"∀ #i. last(#i)\""]),
+        ("All #i #j. #i < #j", &["  all-traces \"∀ #i #j. #i < #j\""]),
+        (
+            "All x y. P(<x, y>, h(x)) @ #i",
+            &["  all-traces \"∀ x y. P( <x, y>, h(x) ) @ #i\""],
+        ),
+        (
+            "All x. P(x, zero) @ #i",
+            &["  all-traces \"∀ x. P( x, zero ) @ #i\""],
+        ),
+        (
+            "All x. A(x) @ #i ==> Ex x.1. B(x.1) @ #i",
+            &["  all-traces \"∀ x. (A( x ) @ #i) ⇒ (∃ x.1. B( x.1 ) @ #i)\""],
+        ),
+        (
+            "All x.1. A(x.1) @ #i ==> Ex x. B(x) @ #i",
+            &["  all-traces \"∀ x. (A( x ) @ #i) ⇒ (∃ x.1. B( x.1 ) @ #i)\""],
+        ),
+    ];
+    for (src, expected_lines) in samples {
+        let expected = expected_lines.join("\n");
+        let f = parse_formula_str(src).unwrap();
+        let ln = from_parser(&f).unwrap();
+        assert_eq!(
+            lemma_header_line_doc("all-traces", ast_doc(&f)),
+            expected,
+            "AST printer on {src}"
+        );
+        assert_eq!(
+            lemma_header_line_doc("all-traces", syntactic_lnformula_doc(&ln)),
+            expected,
+            "syntactic_lnformula_doc on {src}"
+        );
+        let plain = to_lnformula(&ln).unwrap();
+        assert_eq!(
+            lemma_header_line_doc("all-traces", lnformula_doc(&plain)),
+            expected,
+            "lnformula_doc on {src}"
+        );
+    }
+}
+
 /// A bare name under a `#`-binder, pinned to the oracle's `--parse-only`
 /// render of the probe `S0_bare_name_under_node_binder.spthy`: the right
 /// operand of a node equality is a `nodevar` and binds to the `#l` binder,
