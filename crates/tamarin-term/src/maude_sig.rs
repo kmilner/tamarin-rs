@@ -150,6 +150,17 @@ pub struct MaudeSig {
     /// so the two are membership-identical and the output is unchanged.
     pub irreducible_fun_syms_fast: tamarin_utils::FastSet<FunSym>,
     pub reducible_fun_syms_fast: tamarin_utils::FastSet<FunSym>,
+    /// The symbol a NAME resolves to, in the order HS `lookupArity` searches
+    /// (Theory/Text/Parser/Term.hs:62-72): the free symbols of `fun_syms`,
+    /// then its user-defined AC symbols (together HS `userDefinedFunSyms`,
+    /// Term/Maude/Signature.hs:162-164), then `macro_names`.  The first entry
+    /// of that order wins, and the built-in AC/C/`List` symbols — which carry
+    /// no name and are not part of `userDefinedFunSyms` — are absent.  Filled
+    /// by [`MaudeSig::refresh`] and read through [`MaudeSig::fun_sym_named`].
+    ///
+    /// [`MaudeSig::user_defined_fun_syms`] answers the same question by
+    /// building two `BTreeSet`s per call; a lookup here allocates nothing.
+    pub fun_syms_by_name: tamarin_utils::FastMap<&'static [u8], FunSym>,
 }
 
 impl MaudeSig {
@@ -230,6 +241,24 @@ impl MaudeSig {
         // `.contains()` answer is identical — only the cost differs.
         self.irreducible_fun_syms_fast = irreducible.iter().copied().collect();
         self.reducible_fun_syms_fast = reducible.iter().copied().collect();
+
+        // Name index, in the order HS `lookupArity` (Theory/Text/Parser/Term.hs:62-72)
+        // searches: `userDefinedFunSyms` — the free symbols of `fun_syms`
+        // before its user-defined AC ones, each half in the symbol's own order
+        // — then the macro names.  HS `lookup` takes the first match, so an
+        // entry already in the map is never overwritten.
+        let mut by_name: tamarin_utils::FastMap<&'static [u8], FunSym> =
+            tamarin_utils::FastMap::default();
+        for sym in all_funs
+            .iter()
+            .copied()
+            .chain(self.macro_names.iter().copied().map(FunSym::NoEq))
+        {
+            if let Some(name) = user_defined_name(sym) {
+                by_name.entry(name).or_insert(sym);
+            }
+        }
+        self.fun_syms_by_name = by_name;
         self.fun_syms = all_funs;
         self.irreducible_fun_syms = irreducible;
         self.reducible_fun_syms = reducible;
@@ -280,6 +309,28 @@ impl MaudeSig {
                 }
             })
             .collect()
+    }
+
+    /// The symbol HS `lookupArity` (Theory/Text/Parser/Term.hs:62-72) resolves
+    /// `name` to, or `None` where HS fails with `unknown operator`: the first
+    /// entry of `userDefinedFunSyms` (Term/Maude/Signature.hs:162-164) —
+    /// free symbols before user-defined AC symbols — and then of the macro
+    /// names.  HS's association list ends in a hard-coded `em/2` row that
+    /// belongs to no signature, so `em` is answered here only when the
+    /// signature itself declares it.
+    pub fn fun_sym_named(&self, name: &[u8]) -> Option<FunSym> {
+        self.fun_syms_by_name.get(name).copied()
+    }
+
+    /// The user-defined AC symbol of this name, read off `fun_syms` like HS
+    /// `acUserFunSyms` (Term/Maude/Signature.hs:160-161).
+    /// [`MaudeSig::fun_sym_named`] answers with the free symbol when one
+    /// shares the name, so a question about the AC symbol alone asks here.
+    pub fn ac_fct_sym_named(&self, name: &[u8]) -> Option<AcFctSym> {
+        self.fun_syms.iter().find_map(|f| match f {
+            FunSym::Ac(AcSym::AcFct(s)) if s.name == name => Some(*s),
+            _ => None,
+        })
     }
 
     /// HS `userDefinedFunSyms`: every free symbol of the signature plus every
@@ -363,10 +414,8 @@ impl MaudeSig {
     /// irreducible / reducible caches keep the pre-join NDC states — no
     /// `refresh()` here either.
     pub fn join_ndc_in_sig(mut self, fun_sym: FunSym, ndc_state: NdcState) -> Self {
-        let name = match fun_sym {
-            FunSym::NoEq(s) => s.name,
-            FunSym::Ac(AcSym::AcFct(s)) => s.name,
-            _ => return self,
+        let Some(name) = user_defined_name(fun_sym) else {
+            return self;
         };
         self.st_fun_syms = self
             .st_fun_syms
@@ -511,8 +560,21 @@ impl MaudeSig {
             reducible_fun_syms: BTreeSet::new(),
             irreducible_fun_syms_fast: tamarin_utils::FastSet::default(),
             reducible_fun_syms_fast: tamarin_utils::FastSet::default(),
+            fun_syms_by_name: tamarin_utils::FastMap::default(),
         };
         merged.refresh()
+    }
+}
+
+/// The name a symbol carries in HS `userDefinedFunSyms`
+/// (Term/Maude/Signature.hs:162-164): free and user-defined AC symbols have
+/// one, the built-in AC operators, the C symbols and `List` have none and are
+/// not part of that signature.
+fn user_defined_name(sym: FunSym) -> Option<&'static [u8]> {
+    match sym {
+        FunSym::NoEq(s) => Some(s.name),
+        FunSym::Ac(AcSym::AcFct(s)) => Some(s.name),
+        FunSym::Ac(_) | FunSym::C(_) | FunSym::List => None,
     }
 }
 

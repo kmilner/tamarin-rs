@@ -320,3 +320,160 @@ fn join_ndc_in_sig_leaves_every_derived_cache_stale() {
         .user_defined_st_fun_syms()
         .contains(&UserDefinedSym::AcFctUser(f_ac_ndc)));
 }
+
+/// A free and a user-defined AC symbol of one name: HS `lookupArity`
+/// (Theory/Text/Parser/Term.hs:62-72) takes the FIRST match of
+/// `S.toList (userDefinedFunSyms …)`, whose `NoEqUser` entries all precede its
+/// `ACfctUser` ones (FunctionSymbols.hs:146).
+#[test]
+fn fun_sym_named_prefers_noeq_over_ac() {
+    let f_free = NoEqSym::new(
+        b"f".to_vec(),
+        1,
+        Privacy::Public,
+        Constructability::Constructor,
+    );
+    let f_ac = AcFctSym::new(
+        b"f".to_vec(),
+        Privacy::Public,
+        Constructability::Constructor,
+        NdcState::NotNdc,
+    );
+    let sig = MaudeSig {
+        st_fun_syms: [f_free].into_iter().collect(),
+        st_ac_fun_syms: [f_ac].into_iter().collect(),
+        ..MaudeSig::default()
+    }
+    .refresh();
+    assert_eq!(sig.fun_sym_named(b"f"), Some(FunSym::NoEq(f_free)));
+    assert_eq!(sig.fun_sym_named(b"nosuch"), None);
+}
+
+/// `symmetric-encryption` and `dest-symmetric-encryption` both carry `sdec/2`,
+/// as a constructor and as a destructor; `unionExceptPairSym` keeps both
+/// (its exception is `fst`/`snd`).  Constructability is the fourth component
+/// of HS `NoEqSym` (FunctionSymbols.hs:132) and `Constructor < Destructor`
+/// (FunctionSymbols.hs:116), so the set order offers the constructor first.
+#[test]
+fn fun_sym_named_prefers_the_constructor_over_the_destructor() {
+    let sig = sym_enc_maude_sig().merge(sym_enc_dest_maude_sig());
+    assert!(sig.st_fun_syms.contains(&crate::builtin::sdec_dest_sym()));
+    assert_eq!(
+        sig.fun_sym_named(b"sdec"),
+        Some(FunSym::NoEq(crate::builtin::sdec_sym()))
+    );
+}
+
+/// `userDefinedFunSyms` reads the FULL `funSyms` (Term/Maude/Signature.hs:157-164),
+/// so an enabled theory's free symbols resolve like declared ones — while its
+/// AC operator `mult` (`AC Mult`, no name of its own) is not in the index at
+/// all, which is HS's `unknown operator` for that spelling.
+#[test]
+fn fun_sym_named_sees_theory_symbols_under_dh() {
+    use crate::function_symbols::{exp_sym, inv_sym, one_sym};
+    let sig = dh_maude_sig();
+    assert_eq!(sig.fun_sym_named(b"exp"), Some(FunSym::NoEq(exp_sym())));
+    assert_eq!(sig.fun_sym_named(b"inv"), Some(FunSym::NoEq(inv_sym())));
+    assert_eq!(sig.fun_sym_named(b"one"), Some(FunSym::NoEq(one_sym())));
+    assert_eq!(sig.fun_sym_named(b"mult"), None);
+}
+
+/// HS appends the macro names after the function symbols
+/// (Theory/Text/Parser/Term.hs:65), so a function symbol of the same name
+/// wins and a macro alone resolves.
+#[test]
+fn fun_sym_named_falls_back_to_a_macro_name() {
+    let g_fun = NoEqSym::new(
+        b"g".to_vec(),
+        2,
+        Privacy::Public,
+        Constructability::Constructor,
+    );
+    let g_macro = NoEqSym::new(
+        b"g".to_vec(),
+        1,
+        Privacy::Public,
+        Constructability::Constructor,
+    );
+    let m = NoEqSym::new(
+        b"m".to_vec(),
+        1,
+        Privacy::Public,
+        Constructability::Constructor,
+    );
+    let sig = MaudeSig {
+        st_fun_syms: [g_fun].into_iter().collect(),
+        macro_names: [g_macro, m].into_iter().collect(),
+        ..MaudeSig::default()
+    }
+    .refresh();
+    assert_eq!(sig.fun_sym_named(b"g"), Some(FunSym::NoEq(g_fun)));
+    assert_eq!(sig.fun_sym_named(b"m"), Some(FunSym::NoEq(m)));
+}
+
+/// The name index answers with the free symbol when one shares the name, so
+/// the AC symbol is asked for separately — HS `acUserFunSyms`
+/// (Term/Maude/Signature.hs:160-161) over the same derived `fun_syms`.
+#[test]
+fn ac_fct_sym_named_finds_the_ac_symbol_when_a_noeq_shares_the_name() {
+    let f_free = NoEqSym::new(
+        b"f".to_vec(),
+        1,
+        Privacy::Public,
+        Constructability::Constructor,
+    );
+    let f_ac = AcFctSym::new(
+        b"f".to_vec(),
+        Privacy::Public,
+        Constructability::Constructor,
+        NdcState::NotNdc,
+    );
+    let sig = MaudeSig {
+        st_fun_syms: [f_free].into_iter().collect(),
+        st_ac_fun_syms: [f_ac].into_iter().collect(),
+        ..MaudeSig::default()
+    }
+    .refresh();
+    assert_eq!(sig.fun_sym_named(b"f"), Some(FunSym::NoEq(f_free)));
+    assert_eq!(sig.ac_fct_sym_named(b"f"), Some(f_ac));
+    assert_eq!(sig.ac_fct_sym_named(b"nosuch"), None);
+}
+
+/// `join_ndc_in_sig` is a record update over the subterm-signature sets that
+/// does NOT re-run `maudeSig` (Term/Maude/Signature.hs:236-246), so the index
+/// and the AC lookup keep the pre-join NDC states, like every other derived
+/// cache; `refresh` is what carries the join into them.
+#[test]
+fn join_ndc_in_sig_leaves_the_index_unchanged() {
+    let f_free = NoEqSym::new(
+        b"f".to_vec(),
+        1,
+        Privacy::Public,
+        Constructability::Constructor,
+    );
+    let f_ac = AcFctSym::new(
+        b"f".to_vec(),
+        Privacy::Public,
+        Constructability::Constructor,
+        NdcState::NotNdc,
+    );
+    let sig = MaudeSig {
+        st_fun_syms: [f_free].into_iter().collect(),
+        st_ac_fun_syms: [f_ac].into_iter().collect(),
+        ..MaudeSig::default()
+    }
+    .refresh();
+    let joined = sig.join_ndc_in_sig(FunSym::NoEq(f_free), NdcState::IsNdc);
+    assert_eq!(joined.fun_sym_named(b"f"), Some(FunSym::NoEq(f_free)));
+    assert_eq!(joined.ac_fct_sym_named(b"f"), Some(f_ac));
+
+    let refreshed = joined.refresh();
+    assert_eq!(
+        refreshed.fun_sym_named(b"f"),
+        Some(FunSym::NoEq(f_free.with_ndc(NdcState::IsNdc)))
+    );
+    assert_eq!(
+        refreshed.ac_fct_sym_named(b"f"),
+        Some(f_ac.with_ndc(NdcState::IsNdc))
+    );
+}
