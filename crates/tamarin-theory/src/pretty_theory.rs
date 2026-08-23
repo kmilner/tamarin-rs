@@ -1265,7 +1265,7 @@ pub(crate) fn collect_macros(parsed: &p::Theory) -> Vec<p::Macro> {
 }
 
 /// Collect the theory's predicate declarations in source order.
-fn collect_predicates(parsed: &p::Theory) -> Vec<p::Predicate> {
+pub(crate) fn collect_predicates(parsed: &p::Theory) -> Vec<p::Predicate> {
     parsed
         .items
         .iter()
@@ -3635,7 +3635,10 @@ fn render_guarded_block(
 /// already succeeded (so every referenced predicate is defined and arities
 /// match); should expansion nonetheless error, fall back to the un-expanded
 /// formula rather than panic.
-fn expand_predicates_for_display(f: &p::Formula, predicates: &[p::Predicate]) -> p::Formula {
+pub(crate) fn expand_predicates_for_display(
+    f: &p::Formula,
+    predicates: &[p::Predicate],
+) -> p::Formula {
     crate::predicate_expand::expand_formula(f, predicates).unwrap_or_else(|_| f.clone())
 }
 
