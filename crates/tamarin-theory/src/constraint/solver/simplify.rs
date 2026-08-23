@@ -945,10 +945,7 @@ fn partial_atom_valuation_with(
             if tx == ty {
                 return Some(true);
             }
-            match maude.unify_at(
-                "partial_atom_valuation::Eq",
-                &[tamarin_term::rewriting::Equal { lhs: tx, rhs: ty }],
-            ) {
+            match maude.unify(&[tamarin_term::rewriting::Equal { lhs: tx, rhs: ty }]) {
                 Ok(uns) if uns.is_empty() => Some(false),
                 _ => None,
             }
@@ -1684,7 +1681,7 @@ fn try_match_all_guards(
             // `==` without a bound-var canonicalisation step.
             //
             // `normalize_witness_lvars_cow` collapses Maude-minted `~mw#N`
-            // witnesses — necessary because Rust's Maude `unify_at` mints
+            // witnesses — necessary because Rust's Maude `unify` mints
             // fresh witnesses per call, breaking structural Eq.  HS's
             // matchAction is pure matching (no witnesses).
             //

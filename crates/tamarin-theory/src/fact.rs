@@ -7,7 +7,7 @@
 //! Multiset-rewriting facts. This port covers the data type plus the
 //! tagging / construction / query API. The Maude-backed `unifyLNFactEqs`
 //! and `unifiableLNFacts` entry points live in `rule.rs` and call the
-//! live Maude unification bridge (`maude.unify_at`).
+//! live Maude unification bridge (`maude.unify`).
 
 use std::collections::BTreeSet;
 use std::sync::Arc;

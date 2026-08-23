@@ -722,7 +722,7 @@ pub fn unify_ln_fact_eqs(
         // No constraints → unique trivial unifier (empty substitution).
         return Ok(vec![Vec::new()]);
     }
-    maude.unify_at("unify_ln_fact_eqs", &term_eqs)
+    maude.unify(&term_eqs)
 }
 
 /// `unifiableLNFacts`: are two facts AC-unifiable?  Routes through

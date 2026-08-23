@@ -1767,7 +1767,7 @@ pub fn equal_rule_up_to_renaming_ignoring_names(
 
     let vars_r1 = rule_vars(r1);
     let vars_r2 = rule_vars(r2);
-    let unifs = match maude.unify_at("equal_rule_up_to_renaming", &term_eqs) {
+    let unifs = match maude.unify(&term_eqs) {
         Ok(u) => u,
         Err(_) => return false,
     };

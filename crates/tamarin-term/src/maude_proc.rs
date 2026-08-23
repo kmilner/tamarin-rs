@@ -103,32 +103,6 @@ pub struct MaudeStats {
     pub var_count: u64,
 }
 
-thread_local! {
-    /// Per-callsite Maude call counters.  Set `TAM_PROFILE_MAUDE=1` to
-    /// enable; query via `dump_callsite_profile()`.  Diagnostic only —
-    /// used to attribute Maude calls to their originating call site when
-    /// deciding where to focus optimisation effort.
-    static MAUDE_CALLSITE_COUNTS: std::cell::RefCell<std::collections::BTreeMap<&'static str, u64>>
-        = const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
-}
-
-#[doc(hidden)]
-pub fn _tally_callsite(label: &'static str) {
-    if tamarin_utils::env_gate!("TAM_PROFILE_MAUDE") {
-        MAUDE_CALLSITE_COUNTS.with(|m| *m.borrow_mut().entry(label).or_insert(0) += 1);
-    }
-}
-
-#[doc(hidden)]
-pub fn dump_callsite_profile() -> Vec<(String, u64)> {
-    MAUDE_CALLSITE_COUNTS.with(|m| {
-        m.borrow()
-            .iter()
-            .map(|(k, v)| ((*k).to_string(), *v))
-            .collect()
-    })
-}
-
 /// Hit/miss tallies, per Maude subprocess, against the session's shared
 /// memo caches (`SharedMaudeCaches`: `reduce`, `unifiable`, `reply`).  A
 /// hit is counted when the cache `get` succeeds; a miss when this process
@@ -832,7 +806,7 @@ impl MaudeHandle {
                 return Ok(hit);
             }
         }
-        let res = self.unify_at("unifiable::cache_miss", eqs)?;
+        let res = self.unify(eqs)?;
         let answer = !res.is_empty();
         let mut inner = self.inner.lock().unwrap();
         inner.cache_stats.unifiable_misses += 1;
@@ -863,16 +837,6 @@ impl MaudeHandle {
     fn is_ac_free(&self) -> bool {
         let g = self.inner.lock().unwrap();
         g.sig.has_no_ac_operators() && g.sig.st_rules.is_empty()
-    }
-
-    /// `unify` tagged with a `label` for the per-callsite profiler.
-    pub fn unify_at(
-        &self,
-        label: &'static str,
-        eqs: &[Equal<LNTerm>],
-    ) -> Result<Vec<Vec<(crate::lterm::LVar, LNTerm)>>, MaudeError> {
-        _tally_callsite(label);
-        self.unify(eqs)
     }
 
     /// Unify a list of equations modulo the theory, returning one
@@ -1247,7 +1211,6 @@ impl MaudeHandle {
         let cmd = pp_match_cmd(&pats, &subjs);
         let reply = inner.execute_memo(&cmd, |s| s.match_count += 1)?;
         drop(inner);
-        _tally_callsite("match_eqs");
         let msubsts = maude_parse::parse_match_reply(&reply)?;
         let mut out = Vec::with_capacity(msubsts.len());
         for ms in &msubsts {
@@ -1335,13 +1298,7 @@ impl MaudeHandle {
         let cmd = pp_match_cmd(&t1s, &t2s);
         let reply = inner.execute_memo(&cmd, |s| s.match_count += 1)?;
         drop(inner);
-        _tally_callsite("match_eqs_const_subject");
         let msubsts = maude_parse::parse_match_reply(&reply)?;
-        if msubsts.is_empty() {
-            _tally_callsite("match_eqs_const_subject::EMPTY");
-        } else {
-            _tally_callsite("match_eqs_const_subject::NONEMPTY");
-        }
         let mut out = Vec::with_capacity(msubsts.len());
         for ms in &msubsts {
             let lnsubst = msubst_to_lnsubst(ms, &mut ctx)?;
@@ -1463,7 +1420,6 @@ impl MaudeHandle {
         let cmd = pp_match_cmd(&pats, &subjs);
         let reply = inner.execute_memo(&cmd, |s| s.match_count += 1)?;
         drop(inner);
-        _tally_callsite("match_eqs_skolemize_both");
         let msubsts = maude_parse::parse_match_reply(&reply)?;
         let mut out = Vec::with_capacity(msubsts.len());
         for ms in &msubsts {

@@ -844,7 +844,7 @@ impl EquationStore {
         // neither passed nor needed.  (The single-unifier arm below still
         // re-bases its own witnesses via `freshen_witness_range`.)
         let unifiers = maude
-            .unify_at("eq_store::add_eqs", &ac_residuals)
+            .unify(&ac_residuals)
             .map_err(|e| AddEqsError::Maude(format!("{}", e)))?;
 
         if unifiers.is_empty() {
@@ -2563,7 +2563,7 @@ impl EquationStore {
                 // system-var lift (`reserve_idxs`), which mints
                 // differently-named witnesses that cannot collide by
                 // (name,sort,idx) with the "x"-named reply witnesses.
-                let unifiers = match aes_maude.unify_at("apply_eq_store::re_unify", &eqs) {
+                let unifiers = match aes_maude.unify(&eqs) {
                     Ok(u) => u,
                     Err(e) => return Err(AddEqsError::Maude(format!("{}", e))),
                 };
