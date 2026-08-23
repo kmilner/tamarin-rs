@@ -92,15 +92,6 @@ pub fn hsv_to_rgb(c: Hsv) -> Rgb {
     }
 }
 
-/// `hsvToGray`: drop saturation, keeping hue and value.
-pub fn hsv_to_gray(c: Hsv) -> Hsv {
-    Hsv {
-        h: c.h,
-        s: 0.0,
-        v: c.v,
-    }
-}
-
 /// `rgbToGray`: max channel intensity.
 pub fn rgb_to_gray(c: Rgb) -> f64 {
     c.r.max(c.g.max(c.b))
@@ -136,10 +127,6 @@ pub fn hex_to_rgb(s: &str) -> Option<Rgb> {
     })
 }
 
-pub fn hsv_to_hex(c: Hsv) -> String {
-    rgb_to_hex(hsv_to_rgb(c))
-}
-
 // -- Palette generation -------------------------------------------------------
 //
 // Faithful `Color.hs` port. `light_color_groups` — with its helpers
@@ -149,8 +136,7 @@ pub fn hsv_to_hex(c: Hsv) -> String {
 // live in `tamarin-theory::elaborate`; and
 // `rgb_to_hsv`/`hsv_to_rgb`/`rgb_to_hex`/`Rgb`/`Hsv` above are live in
 // `tamarin-sapic` and `tamarin-theory`. The remaining `Color.hs` helpers
-// (`color_groups`/`color_group_style`, `hsv_to_hex`, `hsv_to_gray`,
-// `rgb_to_gray`) have no caller and are retained for completeness of the port.
+// (`color_groups`/`color_group_style`, `rgb_to_gray`) have only test callers.
 
 #[derive(Debug, Clone, Copy)]
 pub struct ColorParams {
