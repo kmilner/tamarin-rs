@@ -1450,17 +1450,11 @@ fn colon_suffix_is_a_sapic_type_in_a_process_and_a_sort_in_a_rule() {
     let v = process_let_binder(
         "theory T begin builtins: natural-numbers process: let x:nat = %c %+ %1 in 0 end",
     );
-    assert_eq!(
-        (v.sort, v.typ.as_deref()),
-        (SortHint::Untagged, Some("nat"))
-    );
+    assert_eq!((v.sort, v.typ.as_deref()), (SortHint::Msg, Some("nat")));
     let v = process_let_binder("theory T begin process: let x:msg = y in 0 end");
-    assert_eq!(
-        (v.sort, v.typ.as_deref()),
-        (SortHint::Untagged, Some("msg"))
-    );
+    assert_eq!((v.sort, v.typ.as_deref()), (SortHint::Msg, Some("msg")));
     let v = process_let_binder("theory T begin process: let x:Any = y in 0 end");
-    assert_eq!((v.sort, v.typ.as_deref()), (SortHint::Untagged, None));
+    assert_eq!((v.sort, v.typ.as_deref()), (SortHint::Msg, None));
     // The `%` PREFIX still sorts a process variable (`lvarNoSuffix` keeps every
     // prefix parser), and a type may follow it.
     let v = process_let_binder(
@@ -1483,8 +1477,152 @@ fn colon_suffix_is_a_sapic_type_in_a_process_and_a_sort_in_a_rule() {
         }
     }
     let v = seen.expect("rule premise variable");
-    assert_eq!(
-        (v.sort, v.typ.as_deref()),
-        (SortHint::Suffix(SuffixSort::Nat), None)
+    assert_eq!((v.sort, v.typ.as_deref()), (SortHint::Nat, None));
+}
+
+// =============================================================================
+// The sort the parser stamps on every variable
+// =============================================================================
+
+/// The first argument of the first premise of the theory's single rule.
+fn rule_premise_term(src: &str) -> Term {
+    let thy = parse_theory(src, &[]).expect("parses");
+    for item in &thy.items {
+        if let TheoryItem::Rule(r) = item {
+            return r.premises[0].args[0].clone();
+        }
+    }
+    panic!("no rule in {src}");
+}
+
+/// `(name, idx, sort)` of every element of a tuple of variables.
+fn tuple_var_specs(t: &Term) -> Vec<(&str, u64, SortHint)> {
+    let Term::Pair(items) = t else {
+        panic!("expected a tuple, got {t:?}");
+    };
+    items
+        .iter()
+        .map(|i| match i {
+            Term::Var(v) => (v.name.as_str(), v.idx, v.sort),
+            other => panic!("expected a variable, got {other:?}"),
+        })
+        .collect()
+}
+
+/// The variable a term is, or a panic naming what it is instead.
+fn var_of(t: &Term) -> &VarSpec {
+    match t {
+        Term::Var(v) => v,
+        other => panic!("expected a variable, got {other:?}"),
+    }
+}
+
+/// A sigil names the sort and a bare identifier is message-sorted, as HS
+/// `sortedLVar`'s prefix arms do — the bare `LSortMsg -> pure ()` case
+/// (Token.hs:409-433, see lines 424-426).
+#[test]
+fn bare_variable_is_msg_sorted() {
+    let t = rule_premise_term(
+        "theory T begin builtins: natural-numbers \
+         rule R: [ In(<x, x.1, ~f, $p, #i, %n>) ] --[ ]-> [ ] end",
     );
+    assert_eq!(
+        tuple_var_specs(&t),
+        vec![
+            ("x", 0, SortHint::Msg),
+            ("x", 1, SortHint::Msg),
+            ("f", 0, SortHint::Fresh),
+            ("p", 0, SortHint::Pub),
+            ("i", 0, SortHint::Node),
+            ("n", 0, SortHint::Nat),
+        ]
+    );
+}
+
+/// HS `sortedLVar`'s suffix arm returns `LVar n s i` with `s` the suffix's
+/// sort, the same plain `LVar` the sigil arms build (Token.hs:409-421), so
+/// `x:fresh` and `~x` are one variable.
+#[test]
+fn sort_suffix_parses_to_the_plain_sort() {
+    let t = rule_premise_term(
+        "theory T begin builtins: natural-numbers \
+         rule R: [ In(<x:msg, x:fresh, x:pub, x:node, x:nat>) ] --[ ]-> [ ] end",
+    );
+    assert_eq!(
+        tuple_var_specs(&t),
+        vec![
+            ("x", 0, SortHint::Msg),
+            ("x", 0, SortHint::Fresh),
+            ("x", 0, SortHint::Pub),
+            ("x", 0, SortHint::Node),
+            ("x", 0, SortHint::Nat),
+        ]
+    );
+}
+
+/// `blatom`'s timepoint operands are read with `nodevar`, which stamps
+/// `LSortNode` on a bare identifier (Theory/Text/Parser/Formula.hs:44-59,
+/// Token.hs:443-448): the argument of `last`, the operand after `@`, both
+/// operands of `<`, and both operands of an equality whose left operand is a
+/// node variable — that last one being the "node equality" alternative, which
+/// is reached only because "term equality" reads its operands with `msgvar`
+/// and `msgvar` rejects a node variable.
+#[test]
+fn timepoint_positions_are_node_sorted() {
+    let sort_of = |src: &str| -> Vec<SortHint> {
+        match parse_formula_str(src).expect("parses") {
+            Formula::Atom(Atom::Action(_, t)) | Formula::Atom(Atom::Last(t)) => {
+                vec![var_of(&t).sort]
+            }
+            Formula::Atom(Atom::Less(l, r)) | Formula::Atom(Atom::Eq(l, r)) => {
+                vec![var_of(&l).sort, var_of(&r).sort]
+            }
+            other => panic!("expected one atom, got {other:?}"),
+        }
+    };
+    assert_eq!(sort_of("A(x) @ i"), vec![SortHint::Node]);
+    assert_eq!(sort_of("last(i)"), vec![SortHint::Node]);
+    assert_eq!(sort_of("i < j"), vec![SortHint::Node, SortHint::Node]);
+    assert_eq!(sort_of("#k = l"), vec![SortHint::Node, SortHint::Node]);
+    assert_eq!(sort_of("k:node = l"), vec![SortHint::Node, SortHint::Node]);
+    // The "term equality" alternative reads both operands with `msgvar`, so
+    // two bare names are message variables.
+    assert_eq!(sort_of("k = l"), vec![SortHint::Msg, SortHint::Msg]);
+}
+
+/// A quantifier binder is `try varp <|> nodep` with `varp = msgvar`
+/// (Theory/Text/Parser/Formula.hs:73-76), and an operand of an AC operator is
+/// a message term, so the `dif` binder and the `seq1` operand of
+/// examples/sapic/fast/SCADA/opc_ua_secure_conversation.spthy's
+/// `A_Counter_Increases` restriction are both message-sorted.  Both feed
+/// `Ord LVar`, which compares the sort second (LTerm.hs:546-548), so the
+/// printed operand order of `seq1 + dif` follows from them.
+#[test]
+fn bare_binder_and_bare_message_operand_are_msg_sorted() {
+    let f = parse_formula_str(
+        "All A B seq1 seq2 #i #j.(Seq_Sent(A, B, seq1) @ #i \
+         & Seq_Sent(A, B, seq2) @ #j & #i < #j ==> Ex dif. seq2 = seq1 + dif )",
+    )
+    .expect("parses");
+    let Formula::Forall(_, body) = &f else {
+        panic!("expected a universal quantifier, got {f:?}");
+    };
+    let Formula::Implies(_, concl) = body.as_ref() else {
+        panic!("expected an implication, got {body:?}");
+    };
+    let Formula::Exists(vs, eq) = concl.as_ref() else {
+        panic!("expected an existential quantifier, got {concl:?}");
+    };
+    assert_eq!(
+        (vs[0].name.as_str(), vs[0].idx, vs[0].sort),
+        ("dif", 0, SortHint::Msg)
+    );
+    let Formula::Atom(Atom::Eq(_, sum)) = eq.as_ref() else {
+        panic!("expected an equality, got {eq:?}");
+    };
+    let Term::BinOp(BinOp::Union, l, r) = sum else {
+        panic!("expected a multiset union, got {sum:?}");
+    };
+    assert_eq!(var_of(l).sort, SortHint::Msg);
+    assert_eq!(var_of(r).sort, SortHint::Msg);
 }

@@ -201,7 +201,7 @@ fn res_reliable() -> p::Restriction {
     let mvar = |name: &str| p::VarSpec {
         name: name.into(),
         idx: 0,
-        sort: p::SortHint::Untagged,
+        sort: p::SortHint::Msg,
         typ: None,
     };
     let send = p::Formula::Atom(p::Atom::Action(

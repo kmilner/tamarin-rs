@@ -90,13 +90,13 @@ pub fn apply_macros_term(macros: &[p::Macro], term: &p::Term) -> p::Term {
         // arity-0 name in `funSyms ∪ macroNames`, so such an identifier
         // reaches HS's `applyMacros` as `fApp (NoEq (m,(0,..))) []`, never
         // as a variable.  RS's surface parser is signature-less and yields
-        // `Var`, so resolve here.  Any sort/index decoration means HS's
-        // `symbol` match would have left trailing input and backtracked to
-        // `plit` — a genuine variable; leave those (and 0-ary FUNCTION
-        // names, which `term_to_lnterm`'s USER_NULLARY_FUNS branch lifts)
-        // untouched.
+        // the message-sorted `Var` a bare name parses to, so resolve here.
+        // Any sigil or index means HS's `symbol` match would have left
+        // trailing input and backtracked to `plit` — a genuine variable;
+        // leave those (and 0-ary FUNCTION names, which `term_to_lnterm`'s
+        // nullary branch lifts) untouched.
         p::Term::Var(v) => {
-            if v.idx == 0 && v.sort == p::SortHint::Untagged && v.typ.is_none() {
+            if v.idx == 0 && v.sort == p::SortHint::Msg && v.typ.is_none() {
                 if let Some(m) = find_matching_macro(&v.name, 0, macros) {
                     let expanded = subst_term_by_name(&m.body, &BTreeMap::new());
                     // Re-expand the EXPANDED body to handle nested macros.

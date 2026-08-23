@@ -307,7 +307,7 @@ fn smaller_expansion(lhs: &p::Term, rhs: &p::Term) -> p::Formula {
     let z = p::VarSpec {
         name: zname,
         idx: 0,
-        sort: p::SortHint::Untagged,
+        sort: p::SortHint::Msg,
         typ: None,
     };
     let z_term = p::Term::Var(z.clone());

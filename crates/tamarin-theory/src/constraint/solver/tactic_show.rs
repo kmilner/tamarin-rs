@@ -567,13 +567,6 @@ mod tests {
         assert_eq!(sorted(p::SortHint::Node, "i", 0), "#i");
         assert_eq!(sorted(p::SortHint::Nat, "n", 0), "%n");
         assert_eq!(sorted(p::SortHint::Msg, "m", 0), "m");
-        assert_eq!(sorted(p::SortHint::Untagged, "m", 0), "m");
-        // Sorts that the source spells as a suffix (`s:fresh`) use the same
-        // prefixes.
-        assert_eq!(
-            sorted(p::SortHint::Suffix(p::SuffixSort::Fresh), "s", 0),
-            "~s"
-        );
         // An index that is not zero appends `.idx`.  A variable with no name
         // shows the index alone.
         assert_eq!(sorted(p::SortHint::Fresh, "s", 3), "~s.3");

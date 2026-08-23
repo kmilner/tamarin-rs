@@ -1,13 +1,11 @@
 /*
- * A bare `l` under a `#l` binder.  Upstream sorts the occurrence by its
- * position (Theory/Text/Parser/Formula.hs:43-59#blatom): the right operand of
- * a node equality is a `nodevar` (Token.hs:444-448#nodevar) and binds to the
- * `#l` binder, while a fact argument is a `msgvar`
- * (Token.hs:440-441#msgvar), stays free as `l`, and pushes the binder to
- * `#l.1`.  The port gives a bare identifier no sort in the parser AST and
- * reads the two positions the other way round: the equality's right operand
- * stays free, which pushes the binder to `#l.1` and prints the operand
- * unsigiled, while a fact argument binds to the `#l` binder.
+ * A bare `l` under a `#l` binder.  The occurrence is sorted by its position
+ * (Theory/Text/Parser/Formula.hs:43-59#blatom): the right operand of a node
+ * equality is a `nodevar` (Token.hs:444-448#nodevar) and binds to the `#l`
+ * binder, while a fact argument is a `msgvar` (Token.hs:440-441#msgvar),
+ * stays free as `l`, and pushes the binder to `#l.1`.  No theory under
+ * tamarin-prover/examples writes a node equality whose right operand is
+ * bare, so this row is the guard on that reading.
  *
  * Compared slice: the `theory … end` echo, which carries the six lemma
  * formulas and the guarded formulas the solver receives (see check.sh).

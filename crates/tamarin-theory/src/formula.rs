@@ -34,7 +34,7 @@ use crate::predicate::smaller_fact;
 use tamarin_parser::ast as p;
 use tamarin_term::lterm::{BVar, HasFrees, LNTerm, LSort, LVar, Name};
 use tamarin_term::term::map_lits;
-use tamarin_term::vterm::{var_term, Lit, VTerm};
+use tamarin_term::vterm::{Lit, VTerm};
 
 /// Logical connectives.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -338,13 +338,9 @@ pub fn to_lnformula(fm: &SyntacticLNFormula) -> Option<LNFormula> {
 /// `forAll`/`exists` (Theory/Model/Formula.hs:355-360), so the last binder
 /// of the list is the innermost one.
 ///
-/// Variable sorts follow the syntactic position, as HS's `msgvar`/`nodevar`
-/// parsers stamp them (Token.hs:440-448): the `@` operand of an action, both
-/// operands of `<` and the argument of `last` are `LSort::Node` whatever the
-/// hint says (`nodevarTerm`, Theory/Text/Parser/Formula.hs:59), so are both
-/// operands of an equality whose left operand is a node variable (`blatom`'s
-/// node equality, Theory/Text/Parser/Formula.hs:56), and every other
-/// occurrence resolves its hint through `elaborate::sort_of`.  A
+/// Variable sorts come from the parser, which stamps them by syntactic
+/// position as HS's `msgvar`/`nodevar` do (Token.hs:440-448), and reach the
+/// `LVar` through `elaborate::sort_of`.  A
 /// binder closes exactly the occurrences equal to its `LVar` in name, sort
 /// and index (HS `quantify`'s `v == x`, Theory/Model/Formula.hs:350-352), so
 /// `Ex ~k. Made(k)` leaves the message-sorted `k` free.  Terms go through
@@ -385,19 +381,13 @@ fn close_binders(
 }
 
 /// The atom alternatives of HS `blatom` (Theory/Text/Parser/Formula.hs:45-57).
-/// An equality whose left operand is a node variable is the "node equality"
-/// alternative (Theory/Text/Parser/Formula.hs:56): the "term equality"
-/// alternative (:51) reads its operands with `msgvar`, which does not
-/// accept a node variable, so both operands are `nodevarTerm`s and a bare
-/// name on the right is `LSort::Node`.
 fn atom_from_parser(a: &p::Atom) -> Result<SyntacticAtom<BLNTerm>, ElabError> {
     Ok(match a {
-        p::Atom::Eq(l, r) if is_node_var(l) => ProtoAtom::EqE(temporal_term(l)?, temporal_term(r)?),
         p::Atom::Eq(l, r) => ProtoAtom::EqE(free_term(l)?, free_term(r)?),
         p::Atom::Subterm(l, r) => ProtoAtom::Subterm(free_term(l)?, free_term(r)?),
-        p::Atom::Less(l, r) => ProtoAtom::Less(temporal_term(l)?, temporal_term(r)?),
-        p::Atom::Action(fa, t) => ProtoAtom::Action(temporal_term(t)?, free_fact(fa)?),
-        p::Atom::Last(t) => ProtoAtom::Last(temporal_term(t)?),
+        p::Atom::Less(l, r) => ProtoAtom::Less(free_term(l)?, free_term(r)?),
+        p::Atom::Action(fa, t) => ProtoAtom::Action(free_term(t)?, free_fact(fa)?),
+        p::Atom::Last(t) => ProtoAtom::Last(free_term(t)?),
         p::Atom::Pred(fa) => ProtoAtom::Syntactic(SyntacticSugar::Pred(free_fact(fa)?)),
         p::Atom::LessMset(l, r) => ProtoAtom::Syntactic(SyntacticSugar::Pred(smaller_fact(
             free_term(l)?,
@@ -426,21 +416,6 @@ fn free_term(t: &p::Term) -> Result<BLNTerm, ElabError> {
 
 fn free_fact(fa: &p::Fact) -> Result<Fact<BLNTerm>, ElabError> {
     Ok(fact_to_lnfact(fa)?.map_ref(lift_free))
-}
-
-fn is_node_var(t: &p::Term) -> bool {
-    matches!(t, p::Term::Var(v) if sort_of(&v.sort) == LSort::Node)
-}
-
-/// HS `nodevarTerm = lit . Var <$> nodep` (Theory/Text/Parser/Formula.hs:59):
-/// a variable in a temporal position is `LSort::Node` whatever its hint.
-/// The RS parser also accepts a non-variable term there, which converts
-/// like any other term.
-fn temporal_term(t: &p::Term) -> Result<BLNTerm, ElabError> {
-    match t {
-        p::Term::Var(v) => Ok(var_term(BVar::Free(LVar::new(&v.name, LSort::Node, v.idx)))),
-        _ => free_term(t),
-    }
 }
 
 /// Replace every bound index of `t` by the binder it refers to, given the
@@ -785,7 +760,7 @@ mod tests {
     #[test]
     fn from_parser_less_mset_is_smaller_pred() {
         let f = p::Formula::Atom(p::Atom::LessMset(
-            parser_var("x", p::SortHint::Untagged),
+            parser_var("x", p::SortHint::Msg),
             parser_var("y", p::SortHint::Msg),
         ));
         let want = ProtoFormula::Atom(ProtoAtom::Syntactic(SyntacticSugar::Pred(smaller_fact(
@@ -798,11 +773,8 @@ mod tests {
     /// A SAPIC `=t` pattern has no `LNTerm` form.
     #[test]
     fn from_parser_rejects_pat_match() {
-        let pat = p::Term::PatMatch(Box::new(parser_var("x", p::SortHint::Untagged)));
-        let in_term = p::Formula::Atom(p::Atom::Eq(
-            pat.clone(),
-            parser_var("y", p::SortHint::Untagged),
-        ));
+        let pat = p::Term::PatMatch(Box::new(parser_var("x", p::SortHint::Msg)));
+        let in_term = p::Formula::Atom(p::Atom::Eq(pat.clone(), parser_var("y", p::SortHint::Msg)));
         let err = from_parser(&in_term).unwrap_err();
         assert_eq!(err.message, "could not elaborate term in formula");
         let in_fact = p::Formula::Atom(p::Atom::Pred(p::Fact {

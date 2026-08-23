@@ -55,38 +55,6 @@ divergence_shape() {
         grep -qF "Out( (y++tamXCAbar(a)) )" "$expected/$1.$2.rs.txt" \
             || { echo "    port side no longer keeps tamXCAbar(a) — expected \`Out( (y++tamXCAbar(a)) )\`" >&2; return 1; }
         ;;
-    s1_temporal_positions.theory)
-        # `last(...)`'s argument, the operand after `@` and both operands of
-        # `<` are timepoints upstream, so a bare identifier there stays free
-        # and the like-named binder is renamed apart.  The port gives the two
-        # one display name.
-        grep -qF "∀ x.1 y. (Alive( y ) @ #x) ⇒ (last(#x))"  "$expected/$1.$2.hs.txt" \
-            || { echo "    oracle side does not rename the message binder of last_bare — expected \`∀ x.1 y.\`" >&2; return 1; }
-        grep -qF "(¬(y = x))"                               "$expected/$1.$2.hs.txt" \
-            || { echo "    oracle side does not read the equality operand as a message variable — expected \`(¬(y = x))\`" >&2; return 1; }
-        grep -qF "(∃ z.1. (Alive( z.1 ) @ #x) ∧ (#x < #z))"  "$expected/$1.$2.hs.txt" \
-            || { echo "    oracle side does not rename the binder of less_bare — expected \`∃ z.1.\`" >&2; return 1; }
-        grep -qF "∀ x y. (Alive( y ) @ #x) ⇒ (last(#x))"    "$expected/$1.$2.rs.txt" \
-            || { echo "    port side does not bind last_bare's argument to the binder — expected \`∀ x y.\`" >&2; return 1; }
-        grep -qF "(¬(y = #x))"                              "$expected/$1.$2.rs.txt" \
-            || { echo "    port side does not bind the equality operand to the binder — expected \`(¬(y = #x))\`" >&2; return 1; }
-        grep -qF "(∃ z. (Alive( z ) @ #x) ∧ (#x < #z))"      "$expected/$1.$2.rs.txt" \
-            || { echo "    port side does not bind the less-than operand to the binder — expected \`∃ z.\`" >&2; return 1; }
-        ;;
-    s1_bare_name_node_binder.theory)
-        # The right operand of a node equality is a timepoint upstream and
-        # binds to the `#l` binder, while a fact argument is a message
-        # variable that stays free and pushes the binder to `#l.1`.  The port
-        # reads the two positions the other way round.
-        grep -qF "¬(#k = #l)"                            "$expected/$1.$2.hs.txt" \
-            || { echo "    oracle side does not bind the equality operand to the node binder — expected \`¬(#k = #l)\`" >&2; return 1; }
-        grep -qF "∀ #l.1. (Alive( l ) @ #l.1) ⇒ (⊥)"     "$expected/$1.$2.hs.txt" \
-            || { echo "    oracle side does not leave the fact argument free — expected \`∀ #l.1. (Alive( l ) @ #l.1)\`" >&2; return 1; }
-        grep -qF "¬(#k = l)"                             "$expected/$1.$2.rs.txt" \
-            || { echo "    port side does not print the equality operand unsigiled — expected \`¬(#k = l)\`" >&2; return 1; }
-        grep -qF "∀ #l. (Alive( #l ) @ #l) ⇒ (⊥)"        "$expected/$1.$2.rs.txt" \
-            || { echo "    port side does not bind the fact argument to the node binder — expected \`∀ #l. (Alive( #l ) @ #l)\`" >&2; return 1; }
-        ;;
     s1_ac_display_order.theory)
         # Upstream substitutes the freshened display variable into the body
         # before printing, so the AC arguments are re-sorted by the display

@@ -380,7 +380,7 @@ mod tests {
         let xref = p::Term::Var(p::VarSpec {
             name: param.to_string(),
             idx: 0,
-            sort: p::SortHint::Untagged,
+            sort: p::SortHint::Msg,
             typ: None,
         });
         p::ProcessDef {
@@ -388,7 +388,7 @@ mod tests {
             vars: Some(vec![p::VarSpec {
                 name: param.to_string(),
                 idx: 0,
-                sort: p::SortHint::Untagged,
+                sort: p::SortHint::Msg,
                 typ: None,
             }]),
             body: p::Process::Action {

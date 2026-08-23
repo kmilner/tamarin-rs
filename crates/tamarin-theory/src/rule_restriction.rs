@@ -277,12 +277,12 @@ fn from_rule_restriction(rname: &str, f: &p::Formula) -> (p::Restriction, p::Fac
 }
 
 /// Resolve every bare 0-arity constant token in a formula from `Var{name,
-/// Untagged, idx 0}` to `App(name, [])`, matching HS's parse-time `nullaryApp`
+/// Msg, idx 0}` to `App(name, [])`, matching HS's parse-time `nullaryApp`
 /// resolution (Theory/Text/Parser/Term.hs:158-163).  `nullary` is the theory's
 /// 0-arity function-symbol set (user `functions: f/0` + enabled builtins'
 /// constants).  Applied to a restriction formula BEFORE `rewrite` so a constant
 /// is a `FApp` (kept inline) rather than a `Var` (abstracted into a fact arg).
-/// The `Untagged`/`idx 0` gate mirrors the one in `term_to_lnterm`'s `mk_var`
+/// The `Msg`/`idx 0` gate mirrors the one in `term_to_lnterm`'s `mk_var`
 /// closure (elaborate.rs), which performs the same recovery for rule terms.
 fn resolve_nullary_constants(f: &p::Formula, nullary: &BTreeSet<String>) -> p::Formula {
     crate::macro_expand::map_formula_terms(f, &|t| resolve_nullary_term(t, nullary))
@@ -292,9 +292,7 @@ fn resolve_nullary_constants(f: &p::Formula, nullary: &BTreeSet<String>) -> p::F
 fn resolve_nullary_term(t: &p::Term, nullary: &BTreeSet<String>) -> p::Term {
     match t {
         p::Term::Var(v)
-            if matches!(v.sort, p::SortHint::Untagged)
-                && v.idx == 0
-                && nullary.contains(&v.name) =>
+            if v.sort == p::SortHint::Msg && v.idx == 0 && nullary.contains(&v.name) =>
         {
             p::Term::App(v.name.clone(), Vec::new())
         }

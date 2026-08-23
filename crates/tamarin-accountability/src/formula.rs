@@ -636,18 +636,9 @@ pub(crate) fn to_intermediate(fm: Fm) -> Fm {
 // p::Formula  ->  Fm  (close: named binders → De-Bruijn)
 // =============================================================================
 
-/// Resolve a binder's sort hint to its concrete base sort (a bare binder is
-/// `LSortMsg`), matching the concrete sorts HS's parser assigns.
-fn resolve_binder(v: &p::VarSpec) -> p::VarSpec {
-    let mut w = v.clone();
-    w.sort = normalise_msg_sort(v.sort);
-    w
-}
-
 /// Convert a parser-AST formula to locally-nameless form.  `scope` holds the
-/// enclosing binders (outer→inner, concrete-sorted); each atom is lifted with
-/// all-Free leaves, then closed against `scope`, then its remaining free
-/// variables get their concrete by-position sort.
+/// enclosing binders (outer→inner); each atom is lifted with all-Free leaves,
+/// then closed against `scope`.
 pub(crate) fn from_p_formula(f: &p::Formula) -> Fm {
     from_p(f, &[])
 }
@@ -658,8 +649,7 @@ fn from_p(f: &p::Formula, scope: &[p::VarSpec]) -> Fm {
         p::Formula::False => Fm::Tf(false),
         p::Formula::Atom(a) => {
             let ga = atom_to_gatom_free(a);
-            let ga = subst_free_atom_at_depth(&ga, &close_subst(scope), 0);
-            Fm::Ato(resolve_atom_sorts(&ga))
+            Fm::Ato(subst_free_atom_at_depth(&ga, &close_subst(scope), 0))
         }
         p::Formula::Not(p_) => Fm::Not(Box::new(from_p(p_, scope))),
         p::Formula::And(a, b) => Fm::Conn(
@@ -691,89 +681,13 @@ fn from_p_qua(quant: Quant, vs: &[p::VarSpec], body: &p::Formula, scope: &[p::Va
     // A collapsed `∀ x y z.` block is `Qua x (Qua y (Qua z ..))` in HS's
     // locally-nameless form: explode it to nested single binders (innermost
     // last).
-    let vs_resolved: Vec<p::VarSpec> = vs.iter().map(resolve_binder).collect();
     let mut new_scope = scope.to_vec();
-    new_scope.extend(vs_resolved.iter().cloned());
+    new_scope.extend(vs.iter().cloned());
     let mut result = from_p(body, &new_scope);
-    for v in vs_resolved.iter().rev() {
+    for v in vs.iter().rev() {
         result = Fm::Qua(quant, lvar_to_binding(v), Box::new(result));
     }
     result
-}
-
-/// Give every Free leaf its concrete by-position sort (HS's parser assigns
-/// `LSortNode` to temporal positions, `LSortMsg` to bare message positions).
-fn resolve_atom_sorts(a: &GAtom) -> GAtom {
-    match a {
-        GAtom::Eq(x, y) => GAtom::Eq(resolve_term_sorts(x, false), resolve_term_sorts(y, false)),
-        GAtom::Less(x, y) => GAtom::Less(resolve_term_sorts(x, true), resolve_term_sorts(y, true)),
-        GAtom::LessMset(x, y) => {
-            GAtom::LessMset(resolve_term_sorts(x, false), resolve_term_sorts(y, false))
-        }
-        GAtom::Subterm(x, y) => {
-            GAtom::Subterm(resolve_term_sorts(x, false), resolve_term_sorts(y, false))
-        }
-        GAtom::Action(f, t) => GAtom::Action(resolve_fact_sorts(f), resolve_term_sorts(t, true)),
-        GAtom::Last(t) => GAtom::Last(resolve_term_sorts(t, true)),
-        GAtom::Pred(f) => GAtom::Pred(resolve_fact_sorts(f)),
-    }
-}
-
-fn resolve_fact_sorts(f: &GFact) -> GFact {
-    GFact {
-        persistent: f.persistent,
-        name: f.name.clone(),
-        args: f
-            .args
-            .iter()
-            .map(|t| resolve_term_sorts(t, false))
-            .collect(),
-        annotations: f.annotations.clone(),
-    }
-}
-
-fn resolve_term_sorts(t: &GTerm, temporal: bool) -> GTerm {
-    match t {
-        GTerm::Var(BVar::Free(v)) => {
-            let mut w = v.clone();
-            w.sort = if temporal {
-                p::SortHint::Node
-            } else {
-                normalise_msg_sort(v.sort)
-            };
-            GTerm::Var(BVar::Free(w))
-        }
-        GTerm::Var(_)
-        | GTerm::PubLit(_)
-        | GTerm::FreshLit(_)
-        | GTerm::NatLit(_)
-        | GTerm::Number(_)
-        | GTerm::NumberOne
-        | GTerm::NatOne
-        | GTerm::DhNeutral => t.clone(),
-        GTerm::App(name, args) => GTerm::App(
-            name.clone(),
-            args.iter().map(|a| resolve_term_sorts(a, false)).collect(),
-        ),
-        GTerm::AlgApp(name, a, b) => GTerm::AlgApp(
-            name.clone(),
-            gt::ga(resolve_term_sorts(a, false)),
-            gt::ga(resolve_term_sorts(b, false)),
-        ),
-        GTerm::Pair(items) => {
-            GTerm::Pair(items.iter().map(|a| resolve_term_sorts(a, false)).collect())
-        }
-        GTerm::Diff(a, b) => GTerm::Diff(
-            gt::ga(resolve_term_sorts(a, false)),
-            gt::ga(resolve_term_sorts(b, false)),
-        ),
-        GTerm::BinOp(op, a, b) => GTerm::BinOp(
-            *op,
-            gt::ga(resolve_term_sorts(a, false)),
-            gt::ga(resolve_term_sorts(b, false)),
-        ),
-        GTerm::PatMatch(inner) => GTerm::PatMatch(gt::ga(resolve_term_sorts(inner, false))),
-    }
 }
 
 // =============================================================================
@@ -918,7 +832,7 @@ mod tests {
     /// structurally (binder names preserved, De-Bruijn indices resolved).
     #[test]
     fn case_test_round_trip() {
-        // Ex #i. A(x)@i, parser AST (x untagged bare, #i node binder).
+        // Ex #i. A(x)@i, parser AST (x message-sorted, #i node binder).
         let src = p::Formula::Exists(
             vec![node("i", 0)],
             Box::new(p::Formula::Atom(p::Atom::Action(
@@ -928,7 +842,7 @@ mod tests {
                     args: vec![p::Term::Var(p::VarSpec {
                         name: "x".into(),
                         idx: 0,
-                        sort: p::SortHint::Untagged,
+                        sort: p::SortHint::Msg,
                         typ: None,
                     })],
                     annotations: vec![],
@@ -937,15 +851,14 @@ mod tests {
             ))),
         );
         let fm = from_p_formula(&src);
-        // x is the only free var; it resolves to Msg.
+        // x is the only free var.
         let fv = frees(&fm);
         assert_eq!(fv.len(), 1);
         assert_eq!(fv[0].name, "x");
         assert_eq!(fv[0].sort, p::SortHint::Msg);
         // The round trip keeps the name and the node sort of the temporal
         // binder.  The De-Bruijn `Bound(0)` in the body resolves back to that
-        // same `#i`.  The only difference from `src` is the resolved sort of
-        // the free `x`.  So the test compares the complete formula, not only
+        // same `#i`.  So the test compares the complete formula, not only
         // its outermost constructor.  That comparison catches a binder that
         // is renamed to a generated name.  It also catches a dropped body,
         // and an index that resolves wrongly.

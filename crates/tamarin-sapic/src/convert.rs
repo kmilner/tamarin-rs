@@ -555,13 +555,13 @@ mod tests {
         let xspec = p::VarSpec {
             name: "x".into(),
             idx: 0,
-            sort: p::SortHint::Untagged,
+            sort: p::SortHint::Msg,
             typ: Some("lol".into()),
         };
         let xref = p::Term::Var(p::VarSpec {
             name: "x".into(),
             idx: 0,
-            sort: p::SortHint::Untagged,
+            sort: p::SortHint::Msg,
             typ: None,
         });
         let ffx = p::Term::App(
@@ -680,7 +680,7 @@ mod tests {
         let a = p::Term::Var(p::VarSpec {
             name: "a".into(),
             idx: 0,
-            sort: p::SortHint::Untagged,
+            sort: p::SortHint::Msg,
             typ: None,
         });
         let b = p::Term::PubLit("b".into());
@@ -736,7 +736,7 @@ mod tests {
                 p::VarSpec {
                     name: "v".into(),
                     idx: 0,
-                    sort: p::SortHint::Untagged,
+                    sort: p::SortHint::Msg,
                     typ: Some("cellty".into()),
                 },
             ),
@@ -749,8 +749,8 @@ mod tests {
             panic!("expected a Lookup combinator");
         };
         assert_eq!(t, term(&cell).unwrap());
-        // `lookup t as v` binds `v` and keeps its SAPIC type. An untagged
-        // variable gets the msg sort.
+        // `lookup t as v` binds `v` and keeps its SAPIC type. A bare
+        // variable is message-sorted.
         assert_eq!(v.var.name, "v");
         assert_eq!(v.var.sort, LSort::Msg);
         assert_eq!(v.stype.as_deref(), Some("cellty"));
@@ -770,7 +770,7 @@ mod tests {
             p::Term::Var(p::VarSpec {
                 name: n.into(),
                 idx: 0,
-                sort: p::SortHint::Untagged,
+                sort: p::SortHint::Msg,
                 typ: None,
             })
         };
@@ -809,7 +809,7 @@ mod tests {
                     p::Term::Var(p::VarSpec {
                         name: n.into(),
                         idx: 1,
-                        sort: p::SortHint::Untagged,
+                        sort: p::SortHint::Msg,
                         typ: None,
                     })
                 };
@@ -836,7 +836,7 @@ mod tests {
                     p::Term::Var(p::VarSpec {
                         name: "k".into(),
                         idx: 1,
-                        sort: p::SortHint::Untagged,
+                        sort: p::SortHint::Msg,
                         typ: None,
                     })
                 ],
@@ -884,13 +884,13 @@ mod tests {
     // ones. It is a foldMap over the complete term. The depth therefore does
     // not matter, and the result is a set.
 
-    /// Builds `x` or `x:ty` as a parser-AST variable leaf. An untagged
-    /// variable gets the msg sort.
+    /// Builds `x` or `x:ty` as a parser-AST variable leaf. A bare variable is
+    /// message-sorted.
     fn pvar(name: &str, typ: Option<&str>) -> p::Term {
         p::Term::Var(p::VarSpec {
             name: name.into(),
             idx: 0,
-            sort: p::SortHint::Untagged,
+            sort: p::SortHint::Msg,
             typ: typ.map(Into::into),
         })
     }

@@ -1034,7 +1034,7 @@ pub fn predicate_restrictions() -> Vec<tamarin_parser::ast::Restriction> {
     let mvar = |name: &str| p::VarSpec {
         name: name.into(),
         idx: 0,
-        sort: p::SortHint::Untagged,
+        sort: p::SortHint::Msg,
         typ: None,
     };
     let pred_at = |pname: &str| -> p::Formula {
@@ -1366,7 +1366,7 @@ mod tests {
             p::Term::Var(p::VarSpec {
                 typ: None,
                 name: name.into(),
-                sort: p::SortHint::Untagged,
+                sort: p::SortHint::Msg,
                 idx: 0,
             })
         };

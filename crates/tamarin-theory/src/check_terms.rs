@@ -378,34 +378,20 @@ fn collect_atom_terms(a: &Atom, scope: &Scope, irr: &Irreducible, out: &mut Vec<
     match a {
         // Action i fa  ->  i : factTerms fa   (temporal var THEN fact args)
         Atom::Action(fact, tp) => {
-            out.push(resolve_term(tp, scope, irr, TermPos::Temporal));
+            out.push(resolve_term(tp, scope, irr));
             for arg in &fact.args {
-                out.push(resolve_term(arg, scope, irr, TermPos::Message));
+                out.push(resolve_term(arg, scope, irr));
             }
         }
-        // EqE t s -> [t, s]
-        Atom::Eq(x, y) => {
-            out.push(resolve_term(x, scope, irr, TermPos::Message));
-            out.push(resolve_term(y, scope, irr, TermPos::Message));
+        // EqE t s -> [t, s], Subterm i j -> [i, j], Less i j -> [i, j], and
+        // the multiset-`(<)` ordering relation.
+        Atom::Eq(x, y) | Atom::Subterm(x, y) | Atom::Less(x, y) | Atom::LessMset(x, y) => {
+            out.push(resolve_term(x, scope, irr));
+            out.push(resolve_term(y, scope, irr));
         }
-        // Subterm i j -> [i, j]
-        Atom::Subterm(x, y) => {
-            out.push(resolve_term(x, scope, irr, TermPos::Message));
-            out.push(resolve_term(y, scope, irr, TermPos::Message));
-        }
-        // Less i j -> [i, j]  (temporal node vars)
-        Atom::Less(x, y) => {
-            out.push(resolve_term(x, scope, irr, TermPos::Temporal));
-            out.push(resolve_term(y, scope, irr, TermPos::Temporal));
-        }
-        // The multiset-`(<)` ordering relation: operands are message terms.
-        Atom::LessMset(x, y) => {
-            out.push(resolve_term(x, scope, irr, TermPos::Message));
-            out.push(resolve_term(y, scope, irr, TermPos::Message));
-        }
-        // Last i -> [i]  (temporal)
+        // Last i -> [i]
         Atom::Last(tp) => {
-            out.push(resolve_term(tp, scope, irr, TermPos::Temporal));
+            out.push(resolve_term(tp, scope, irr));
         }
         // Syntactic (predicate) atoms contribute no real terms
         // (HS `atomTerms (Syntactic _) = []`).
@@ -413,23 +399,13 @@ fn collect_atom_terms(a: &Atom, scope: &Scope, irr: &Irreducible, out: &mut Vec<
     }
 }
 
-/// The syntactic position of a term, which fixes the implicit sort of an
-/// untagged variable use (mirrors the parser's positional sort inference).
-#[derive(Clone, Copy, PartialEq)]
-enum TermPos {
-    /// Argument of `@`, `<`, `last` — implicitly a node (temporal) var.
-    Temporal,
-    /// A message-position term (fact arg, equality operand, ...).
-    Message,
-}
-
 // =============================================================================
 // Term resolution: parser AST -> RTerm (with De-Bruijn + signature lookup)
 // =============================================================================
 
-fn resolve_term(t: &Term, scope: &Scope, irr: &Irreducible, pos: TermPos) -> RTerm {
+fn resolve_term(t: &Term, scope: &Scope, irr: &Irreducible) -> RTerm {
     match t {
-        Term::Var(v) => resolve_var(v, scope, irr, pos),
+        Term::Var(v) => resolve_var(v, scope, irr),
         Term::PubLit(s) => RTerm::PubConst(s.clone()),
         Term::FreshLit(s) => RTerm::FreshConst(s.clone()),
         Term::NatLit(s) => RTerm::NatConst(s.clone()),
@@ -471,10 +447,7 @@ fn resolve_term(t: &Term, scope: &Scope, irr: &Irreducible, pos: TermPos) -> RTe
             // otherwise `fAppNoEq`.  It has NO `em` arm, so `em{a}b` is a NoEq
             // `em/2` application, NOT the C symbol `naryOpApp` builds for the
             // prefix spelling `em(a, b)`.
-            let args = vec![
-                resolve_term(a, scope, irr, TermPos::Message),
-                resolve_term(b, scope, irr, TermPos::Message),
-            ];
+            let args = vec![resolve_term(a, scope, irr), resolve_term(b, scope, irr)];
             match irr.prefix_ac_fct(name) {
                 Some(f) => resolve_ac(AcSym::AcFct(f), args, irr),
                 None => resolve_named(name, args, irr),
@@ -482,22 +455,16 @@ fn resolve_term(t: &Term, scope: &Scope, irr: &Irreducible, pos: TermPos) -> RTe
         }
         Term::Pair(items) => {
             // `<a, b, c>` is right-nested `pair(a, pair(b, c))`.
-            let resolved: Vec<RTerm> = items
-                .iter()
-                .map(|i| resolve_term(i, scope, irr, TermPos::Message))
-                .collect();
+            let resolved: Vec<RTerm> = items.iter().map(|i| resolve_term(i, scope, irr)).collect();
             build_pair(resolved, irr)
         }
         Term::Diff(a, b) => {
-            let args = vec![
-                resolve_term(a, scope, irr, TermPos::Message),
-                resolve_term(b, scope, irr, TermPos::Message),
-            ];
+            let args = vec![resolve_term(a, scope, irr), resolve_term(b, scope, irr)];
             resolve_named("diff", args, irr)
         }
         Term::BinOp(op, a, b) => {
-            let ra = resolve_term(a, scope, irr, TermPos::Message);
-            let rb = resolve_term(b, scope, irr, TermPos::Message);
+            let ra = resolve_term(a, scope, irr);
+            let rb = resolve_term(b, scope, irr);
             match op {
                 // `^` (exp) is a NoEq symbol; the rest are AC symbols.
                 BinOp::Exp => resolve_named("exp", vec![ra, rb], irr),
@@ -517,15 +484,12 @@ fn resolve_term(t: &Term, scope: &Scope, irr: &Irreducible, pos: TermPos) -> RTe
                 },
             }
         }
-        Term::PatMatch(inner) => resolve_term(inner, scope, irr, pos),
+        Term::PatMatch(inner) => resolve_term(inner, scope, irr),
     }
 }
 
 fn resolve_app(name: &str, args: &[Term], scope: &Scope, irr: &Irreducible) -> RTerm {
-    let resolved: Vec<RTerm> = args
-        .iter()
-        .map(|a| resolve_term(a, scope, irr, TermPos::Message))
-        .collect();
+    let resolved: Vec<RTerm> = args.iter().map(|a| resolve_term(a, scope, irr)).collect();
     // HS `naryOpApp` dispatches on the WRITTEN NAME before it dispatches on
     // the signature entry: an application spelled `em(…)` becomes
     // `fAppC EMap ts` whatever `lookupArity` found — the builtin `C EMap` of
@@ -619,60 +583,34 @@ fn build_pair(mut items: Vec<RTerm>, irr: &Irreducible) -> RTerm {
 /// scope) or `Free` (otherwise) — UNLESS the name is a declared nullary
 /// function symbol with no matching binder, in which case it is an
 /// irreducible `FApp name []` (HS resolves `f/0` to `FApp f []`).
-///
-/// A `Free` keeps the CONCRETE sort its syntactic position gives it in HS
-/// (see [`lookup_bound`]): the parser has no untagged `LVar`, so an untagged
-/// use is `LSortMsg` in a message position and `LSortNode` under `@`/`<`/
-/// `last`.  Both `Show LVar` (which prefixes `#` for `LSortNode`) and the
-/// `LVar` ordering read that sort, so it is resolved here rather than left
-/// as `SortHint::Untagged`.
-fn resolve_var(v: &VarSpec, scope: &Scope, irr: &Irreducible, pos: TermPos) -> RTerm {
-    if let Some(idx) = lookup_bound(v, scope, pos) {
+fn resolve_var(v: &VarSpec, scope: &Scope, irr: &Irreducible) -> RTerm {
+    if let Some(idx) = lookup_bound(v, scope) {
         return RTerm::Bound(idx);
     }
-    // Not bound: a bare untagged name that is a declared nullary funsym
+    // Not bound: a bare message-sorted name that is a declared nullary funsym
     // is an application (e.g. private `f/0` parsed as Var("f")).
-    if matches!(v.sort, SortHint::Untagged) && irr.nullary_named(&v.name) {
+    if v.sort == SortHint::Msg && irr.nullary_named(&v.name) {
         return resolve_named(&v.name, vec![], irr);
     }
-    let mut free = v.clone();
-    if matches!(free.sort, SortHint::Untagged) {
-        free.sort = match pos {
-            TermPos::Temporal => SortHint::Node,
-            TermPos::Message => SortHint::Msg,
-        };
-    }
-    RTerm::Free(free)
+    RTerm::Free(v.clone())
 }
 
 /// Find the innermost binder matching `v` and return its De-Bruijn index.
 ///
 /// HS binds a use to its binder via full `LVar` equality — name AND sort AND
 /// idx (`quantify x = ... | v == x = Bound i`, Theory/Model/Formula.hs:347-352; `LVar` `Eq`
-/// compares `idx`, sort and name, LTerm.hs:546-548). We reproduce this exactly
-/// on the sort-*kind*: the use's sort is concrete in HS, never approximate.
-/// The parser assigns every variable a concrete `LSort` before `quantify`
-/// runs (Theory/Text/Parser/Formula.hs:112-117, see line 114
-/// `standardFormula msgvar nodevar`):
-///   - a message-position variable is parsed by `msgvar`
-///     (`sortedLVar [LSortFresh, LSortPub, LSortNat, LSortMsg]`,
-///     Token.hs:440-441), so an *untagged* message use takes the
-///     `mkPrefixParser LSortMsg` arm (the bare `LSortMsg -> pure ()` case,
-///     Token.hs:424-426) and gets the concrete sort `LSortMsg` — hence
-///     `kind_of(SortHint::Untagged) == KIND_MSG` is exact, not approximate;
-///   - a temporal-position variable is parsed by `nodevar`
-///     (`LSortNode`, Token.hs:444-447), hence `KIND_NODE`.
+/// compares `idx`, sort and name, LTerm.hs:546-548). We reproduce this on the
+/// sort-*kind*, over the concrete `LSort` the parser gave each occurrence
+/// (Theory/Text/Parser/Formula.hs:112-117, see line 114
+/// `standardFormula msgvar nodevar`): a message-position variable comes from
+/// `msgvar`, whose bare arm is `LSortMsg` (Token.hs:424-426, 440-441), and a
+/// temporal-position one from `nodevar` (`LSortNode`, Token.hs:444-447).
 ///
-/// `quantify`'s `v == x` then compares sort exactly, so an untagged `x` binds
+/// `quantify`'s `v == x` then compares sort exactly, so a bare `x` binds
 /// only to a `LSortMsg` binder, never to a `~x`/`$x`/`%x`/`#x` binder of the
 /// same name+idx. The `idx` comparison likewise keeps `x.1` and `x.2` distinct.
-fn lookup_bound(v: &VarSpec, scope: &Scope, pos: TermPos) -> Option<u32> {
-    // The use's concrete sort-kind (Temporal positions are LSortNode; message
-    // positions take the use's sigil, or LSortMsg when untagged — see above).
-    let expected: u8 = match pos {
-        TermPos::Temporal => KIND_NODE,
-        TermPos::Message => kind_of(&v.sort),
-    };
+fn lookup_bound(v: &VarSpec, scope: &Scope) -> Option<u32> {
+    let expected: u8 = kind_of(&v.sort);
     // Search innermost (last) first.
     for (i, b) in scope.iter().enumerate().rev() {
         if b.name != v.name || b.idx != v.idx {
@@ -1004,10 +942,10 @@ mod tests {
     }
 
     #[test]
-    fn untagged_message_use_does_not_bind_to_node_binder() {
-        // An untagged message-position use `x` must NOT bind to a `#x` node
+    fn bare_message_use_does_not_bind_to_node_binder() {
+        // A bare message-position use `x` must NOT bind to a `#x` node
         // binder of the same name+idx: HS's `LVar` Eq compares sort, and the
-        // parser gives an untagged message use the concrete sort `LSortMsg`,
+        // parser gives a bare message use the concrete sort `LSortMsg`,
         // so `quantify`'s `v == x` fails and the use stays `Free x`.
         //
         // Verified against the v1.13.0 binary on
@@ -1021,7 +959,7 @@ mod tests {
         assert_eq!(report.len(), 1, "expected one Formula-terms block");
         assert!(
             report[0].message.contains("`Free x'"),
-            "untagged use must stay Free (not bind to #x), got:\n{}",
+            "bare use must stay Free (not bind to #x), got:\n{}",
             report[0].message
         );
     }
@@ -1174,7 +1112,7 @@ mod tests {
     }
 
     #[test]
-    fn untagged_free_variable_under_at_keeps_its_node_sort() {
+    fn bare_free_variable_under_at_keeps_its_node_sort() {
         // `@ i` is parsed by `nodevar`, so the free `i` is an `LSortNode`
         // `LVar` and `Show LVar` prefixes it with `#`.
         //

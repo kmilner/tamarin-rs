@@ -673,15 +673,13 @@ fn lnformula_doc_matches_ast_doc_on_atom_and_scope_samples() {
 /// render of the probe `S0_bare_name_under_node_binder.spthy`: the right
 /// operand of a node equality is a `nodevar` and binds to the `#l` binder,
 /// while a fact argument is a `msgvar` that stays free and renames the
-/// binder to `#l.1`.  `ast` marks the samples the parser-AST printer
-/// renders like the oracle; on the others it resolves a bare name in a
-/// message position to the `#`-binder.
+/// binder to `#l.1`.  All three printers render every sample alike.
 #[test]
 fn lnformula_doc_bare_name_under_node_binder() {
     use crate::formula::{from_parser, to_lnformula};
     use tamarin_parser::parser::parse_formula_str;
 
-    let samples: &[(&str, &str, &[&str], bool)] = &[
+    let samples: &[(&str, &str, &[&str])] = &[
         (
             "all-traces",
             "All y z #k #l. Alive(y) @ k & Alive(z) @ l ==> #k = l",
@@ -689,7 +687,6 @@ fn lnformula_doc_bare_name_under_node_binder() {
                 "  all-traces",
                 "  \"∀ y z #k #l. ((Alive( y ) @ #k) ∧ (Alive( z ) @ #l)) ⇒ (#k = #l)\"",
             ],
-            true,
         ),
         (
             "all-traces",
@@ -698,7 +695,6 @@ fn lnformula_doc_bare_name_under_node_binder() {
                 "  all-traces",
                 "  \"∀ y z #k #l. ((Alive( y ) @ #k) ∧ (Alive( z ) @ #l)) ⇒ (#k = #l)\"",
             ],
-            true,
         ),
         (
             "all-traces",
@@ -707,19 +703,16 @@ fn lnformula_doc_bare_name_under_node_binder() {
                 "  all-traces",
                 "  \"∀ y z #k #l. ((Alive( y ) @ #k) ∧ (Alive( z ) @ #l)) ⇒ (#k = #l)\"",
             ],
-            true,
         ),
         (
             "all-traces",
             "All l #l. Alive(l) @ l ==> #l = l",
             &["  all-traces \"∀ l #l.1. (Alive( l ) @ #l.1) ⇒ (#l.1 = #l.1)\""],
-            false,
         ),
         (
             "all-traces",
             "All #l. Alive(l) @ l ==> F",
             &["  all-traces \"∀ #l.1. (Alive( l ) @ #l.1) ⇒ (⊥)\""],
-            false,
         ),
         (
             "exists-trace",
@@ -731,10 +724,9 @@ fn lnformula_doc_bare_name_under_node_binder() {
                 "    (((Once( 'a' ) @ #j1) ∧ (Once( 'b' ) @ #l1)) ∧ (#j1 < #l1)) ∧",
                 "    (∀ a #k. (Once( a ) @ #k) ⇒ ((#k = #j1) ∨ (#k = #l1)))\"",
             ],
-            true,
         ),
     ];
-    for (quant, src, expected_lines, ast) in samples {
+    for (quant, src, expected_lines) in samples {
         let expected = expected_lines.join("\n");
         let f = parse_formula_str(src).unwrap();
         let ln = from_parser(&f).unwrap();
@@ -749,13 +741,11 @@ fn lnformula_doc_bare_name_under_node_binder() {
             expected,
             "lnformula_doc on {src}"
         );
-        if *ast {
-            assert_eq!(
-                lemma_header_line_doc(quant, ast_doc(&f)),
-                expected,
-                "AST printer on {src}"
-            );
-        }
+        assert_eq!(
+            lemma_header_line_doc(quant, ast_doc(&f)),
+            expected,
+            "AST printer on {src}"
+        );
     }
 }
 
@@ -780,4 +770,83 @@ fn lnformula_doc_panics_on_unbound_index() {
 
     let f: LNFormula = ProtoFormula::Atom(ProtoAtom::Last(var_term(BVar::Bound(0))));
     let _ = lnformula_doc(&f);
+}
+
+// =============================================================================
+// Display names bind by the whole variable identity
+// =============================================================================
+
+/// `avoidPrecise fm = avoidPreciseVars (frees fm)` (LTerm.hs:714-715) counts a
+/// body occurrence as free unless a binder closes it, and `quantify` closes
+/// only what equals its `LVar` in name, sort AND index (`v == x`,
+/// Theory/Model/Formula.hs:347-352).  A message-sorted `k` under a `~k` or a
+/// `$k` binder is therefore free, seeds the display supply for the name `k`,
+/// and pushes the binder's own display name to `k.1`.
+///
+/// Oracle bytes (pinned build): probe `S1_binder_sort_capture.spthy`.
+#[test]
+fn binder_does_not_capture_a_different_sort() {
+    use tamarin_parser::parser::parse_formula_str;
+
+    for (src, want) in [
+        ("Ex ~k #i. Made(k) @ i", "∃ ~k.1 #i. Made( k ) @ #i"),
+        ("Ex $k #i. Made(k) @ i", "∃ $k.1 #i. Made( k ) @ #i"),
+    ] {
+        let f = parse_formula_str(src).unwrap();
+        assert_eq!(pretty_formula(&f), want, "on {src}");
+        assert_eq!(ast_doc(&f).render(), want, "on {src}");
+    }
+}
+
+/// The argument of `last` and the operand after `@` are timepoints, so the
+/// bare `x` of `All x y. Alive(y) @ x ==> last(x)` is a node variable that no
+/// message binder closes: it stays free and renames the binder to `x.1`.
+///
+/// Oracle bytes (pinned build): fixture `s1_temporal_positions`.
+#[test]
+fn bare_binder_used_as_timepoint_is_renamed() {
+    use tamarin_parser::parser::parse_formula_str;
+
+    let f = parse_formula_str("All x y. Alive(y) @ x ==> last(x)").unwrap();
+    assert_eq!(
+        pretty_formula(&f),
+        "∀ x.1 y. (Alive( y ) @ #x) ⇒ (last(#x))"
+    );
+}
+
+/// The `dif` binder and the `seq1` operand of
+/// examples/sapic/fast/SCADA/opc_ua_secure_conversation.spthy's
+/// `A_Counter_Increases` restriction are both message-sorted variables at
+/// index 0, so `Ord LVar` (idx, sort, name — LTerm.hs:546-548) orders the
+/// union's operands by name and both printers write `(dif++seq1)`.
+///
+/// Oracle bytes (pinned build): probe `S1_ac_binder_operand_order.spthy`.
+#[test]
+fn existential_binder_keeps_ac_operand_order() {
+    use crate::elaborate::canonicalize_ac_in_formula;
+    use crate::guarded::formula_to_guarded;
+    use tamarin_parser::parser::parse_formula_str;
+
+    let want = "  \"∀ A B seq1 seq2 #i #j.\n    \
+        (((Seq_Sent( A, B, seq1 ) @ #i) ∧ (Seq_Sent( A, B, seq2 ) @ #j)) ∧\n     \
+        (#i < #j)) ⇒\n    (∃ dif. seq2 = (dif++seq1))\"";
+    let f = parse_formula_str(
+        "All A B seq1 seq2 #i #j.(Seq_Sent(A, B, seq1) @ #i \
+         & Seq_Sent(A, B, seq2) @ #j & #i < #j ==> Ex dif. seq2 = seq1 + dif )",
+    )
+    .unwrap();
+    assert_eq!(
+        formula_doublequoted_nested(&canonicalize_ac_in_formula(&f), 2),
+        want
+    );
+    // `formulaToGuarded` on the negation is what the solver stores and what
+    // the probe prints as the counter-example characterisation; the guard
+    // reorders the implication but keeps the union's operands.
+    let g = formula_to_guarded(&p::Formula::Not(Box::new(f))).expect("guarded conversion");
+    assert_eq!(
+        pretty_guarded_doublequoted(&g),
+        "\"∃ A B seq1 seq2 #i #j.\n  \
+         (Seq_Sent( A, B, seq1 ) @ #i) ∧ (Seq_Sent( A, B, seq2 ) @ #j)\n \
+         ∧\n  (#i < #j) ∧ (∀ dif. (seq2 = (dif++seq1)) ⇒ ⊥)\""
+    );
 }

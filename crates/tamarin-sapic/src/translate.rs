@@ -648,13 +648,13 @@ mod tests {
         let xspec = p::VarSpec {
             name: "x".into(),
             idx: 0,
-            sort: p::SortHint::Untagged,
+            sort: p::SortHint::Msg,
             typ: Some("lol".into()),
         };
         let xref = p::Term::Var(p::VarSpec {
             name: "x".into(),
             idx: 0,
-            sort: p::SortHint::Untagged,
+            sort: p::SortHint::Msg,
             typ: None,
         });
         let ffx = p::Term::App(

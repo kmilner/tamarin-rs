@@ -114,9 +114,9 @@ fn installed_bundle_resolves_every_attribute_in_term_to_lnterm() {
         other => panic!("expected an AC application, got {other:?}"),
     }
 
-    // `private` set + `nullary` set: a bare untagged name declared `/0`
+    // `private` set + `nullary` set: a bare name declared `/0`
     // becomes a 0-arity private constant, not a free variable.
-    match term_to_lnterm(&parser_var("sec", 0, p::SortHint::Untagged)).unwrap() {
+    match term_to_lnterm(&parser_var("sec", 0, p::SortHint::Msg)).unwrap() {
         Term::App(FunSym::NoEq(sym), args) => {
             assert!(args.is_empty());
             assert_eq!(sym.arity, 0);

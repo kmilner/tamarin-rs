@@ -172,7 +172,7 @@ pub fn term_to_gterm_free(t: &p::Term) -> GTerm {
         // `ginduct` rejects the formula as "not closed", and `[sources]`
         // lemmas silently lose their induction (proof explodes).
         p::Term::Var(v)
-            if matches!(v.sort, p::SortHint::Untagged)
+            if v.sort == p::SortHint::Msg
                 && v.idx == 0
                 && crate::elaborate::is_user_nullary_fun(&v.name) =>
         {
@@ -305,13 +305,10 @@ pub fn gatom_to_atom(a: &GAtom) -> p::Atom {
 // element of `vs` (innermost binder) maps to Bound 0, first element to
 // Bound (k-1).
 
-/// Normalise a parser `SortHint` to the concrete `LSort` that HS's formula
-/// parser would have assigned to the same *non-temporal* occurrence.
-///
-/// HS's `msgvar = sortedLVar [LSortFresh, LSortPub, LSortNat, LSortMsg]`
-/// assigns a bare (sigil-less) variable `LSortMsg` (the prefix parser for
-/// `LSortMsg` consumes no sigil), so our `Untagged` hint maps to `Msg`.
-/// `Suffix(X)` is the `:msg|:pub|…` form and folds onto its base sort.
+/// Fold a parser `SortHint` onto the concrete sort HS spells as an `LSort`:
+/// `Suffix(X)` is the `:msg|:pub|…` form of `X`, and a bare variable is
+/// `LSortMsg` (HS `msgvar = sortedLVar [LSortFresh, LSortPub, LSortNat,
+/// LSortMsg]`, whose `LSortMsg` prefix parser consumes no sigil).
 pub fn normalise_msg_sort(s: p::SortHint) -> p::SortHint {
     use p::{SortHint as S, SuffixSort as SS};
     match s {
@@ -328,37 +325,18 @@ pub fn normalise_msg_sort(s: p::SortHint) -> p::SortHint {
 /// `subst_free_term_at_depth(t, s, depth)` — for each Free leaf, look up
 /// `(lvar, db)` in `s`; if found, replace with `Bound(db + depth)`.
 ///
-/// HS faithfulness: HS's `substFreeAtom` uses `lookup x s` with full `LVar`
-/// `Eq` (name + idx + **sort**), and HS reaches `closeGuarded` only after the
-/// parser has assigned every occurrence a concrete sort *by syntactic
-/// position*: a variable in temporal position (`@t`, `last(t)`, `t < t`) is
-/// parsed by `nodevar` (always `LSortNode`), every other occurrence by
-/// `msgvar` (a bare name → `LSortMsg`).  Our parser instead defers and leaves
-/// bare names as `SortHint::Untagged`, so we reconstruct HS's per-occurrence
-/// sort here: callers pass `temporal = true` for occurrences in a temporal
-/// position, and we then match by (name, idx, resolved-sort).
-///
-/// This keeps the single-binder-per-name cases working (e.g. `Ex #i. P @ i`:
-/// the temporal `i` resolves to `Node`, matching the `#i` binder), while
-/// correctly *separating* two distinct binders that share a base name across
-/// sorts (e.g. `Ex k m #k. … <h, k> … @ k`: the msg-position `k` resolves to
-/// `Msg` and binds to the `k` binder, the temporal `@k` resolves to `Node`
-/// and binds to the `#k` binder).  When a body reference's resolved sort has
-/// no matching binder it stays Free, exactly as HS leaves it unguarded
-/// (e.g. `Made(k)` under an `Ex ~k.` binder).
+/// HS's `substFreeAtom` uses `lookup x s` with full `LVar` `Eq` (name + idx +
+/// **sort**), and every occurrence carries the sort its syntactic position
+/// gave it in the parser: a variable in temporal position (`@t`, `last(t)`,
+/// `t < t`) is `LSortNode`, every other occurrence is the sort its sigil or
+/// its bare spelling named.  Matching on all three separates two distinct
+/// binders that share a base name across sorts (e.g. `Ex k m #k. … <h, k> …
+/// @ k`: the message-position `k` binds to the `k` binder, the temporal `@k`
+/// to the `#k` binder).  When a body reference's sort has no matching binder
+/// it stays Free, exactly as HS leaves it unguarded (e.g. `Made(k)` under an
+/// `Ex ~k.` binder).
 pub fn subst_free_term_at_depth(t: &GTerm, s: &[(p::VarSpec, u32)], depth: u32) -> GTerm {
-    subst_free_term_at_depth_pos(t, s, depth, false)
-}
-
-/// Position-aware variant of [`subst_free_term_at_depth`]: `temporal` records
-/// whether this term occupies a temporal (timepoint) position in its atom.
-pub fn subst_free_term_at_depth_pos(
-    t: &GTerm,
-    s: &[(p::VarSpec, u32)],
-    depth: u32,
-    temporal: bool,
-) -> GTerm {
-    match subst_free_term_cow(t, s, depth, temporal) {
+    match subst_free_term_cow(t, s, depth) {
         Some(g) => g,
         None => t.clone(),
     }
@@ -369,22 +347,10 @@ pub fn subst_free_term_at_depth_pos(
 /// reuse the input `Arc`.  These `subst_free`/`subst_bound` paths never call
 /// `mk_gpair` (they only retag Var leaves Free↔Bound, never inserting a Pair),
 /// so `Pair` reuse is unconditional on "no child changed".
-fn subst_free_term_cow(
-    t: &GTerm,
-    s: &[(p::VarSpec, u32)],
-    depth: u32,
-    temporal: bool,
-) -> Option<GTerm> {
+fn subst_free_term_cow(t: &GTerm, s: &[(p::VarSpec, u32)], depth: u32) -> Option<GTerm> {
     match t {
         GTerm::Var(BVar::Free(v)) => {
-            // Resolve this occurrence's sort the way HS's parser would:
-            // temporal positions are parsed by `nodevar` (always `LSortNode`),
-            // every other occurrence by `msgvar` (bare name → `LSortMsg`).
-            let occ_sort = if temporal {
-                p::SortHint::Node
-            } else {
-                normalise_msg_sort(v.sort)
-            };
+            let occ_sort = normalise_msg_sort(v.sort);
             for (lv, db) in s {
                 if lv.name == v.name && lv.idx == v.idx && normalise_msg_sort(lv.sort) == occ_sort {
                     return Some(GTerm::Var(BVar::Bound(db + depth)));
@@ -400,36 +366,33 @@ fn subst_free_term_cow(
         | GTerm::NumberOne
         | GTerm::NatOne
         | GTerm::DhNeutral => None,
-        // Below a function/pair/operator, sub-terms are never in temporal
-        // position (HS parses them via the message-term parser), so descend
-        // with `temporal = false`.
         GTerm::App(n, args) => {
             subst_free_slice(args, s, depth).map(|new| GTerm::App(n.clone(), new))
         }
         GTerm::Pair(items) => subst_free_slice(items, s, depth).map(GTerm::Pair),
         GTerm::AlgApp(n, a, b) => cow_pair_arc(
             a,
-            subst_free_term_cow(a, s, depth, false),
+            subst_free_term_cow(a, s, depth),
             b,
-            subst_free_term_cow(b, s, depth, false),
+            subst_free_term_cow(b, s, depth),
         )
         .map(|(a, b)| GTerm::AlgApp(n.clone(), a, b)),
         GTerm::Diff(a, b) => cow_pair_arc(
             a,
-            subst_free_term_cow(a, s, depth, false),
+            subst_free_term_cow(a, s, depth),
             b,
-            subst_free_term_cow(b, s, depth, false),
+            subst_free_term_cow(b, s, depth),
         )
         .map(|(a, b)| GTerm::Diff(a, b)),
         GTerm::BinOp(op, a, b) => cow_pair_arc(
             a,
-            subst_free_term_cow(a, s, depth, false),
+            subst_free_term_cow(a, s, depth),
             b,
-            subst_free_term_cow(b, s, depth, false),
+            subst_free_term_cow(b, s, depth),
         )
         .map(|(a, b)| GTerm::BinOp(*op, a, b)),
         GTerm::PatMatch(inner) => {
-            subst_free_term_cow(inner, s, depth, false).map(|g| GTerm::PatMatch(ga(g)))
+            subst_free_term_cow(inner, s, depth).map(|g| GTerm::PatMatch(ga(g)))
         }
     }
 }
@@ -439,7 +402,7 @@ fn subst_free_slice(
     s: &[(p::VarSpec, u32)],
     depth: u32,
 ) -> Option<std::sync::Arc<[GTerm]>> {
-    cow_map_arc(args, |a| subst_free_term_cow(a, s, depth, false))
+    cow_map_arc(args, |a| subst_free_term_cow(a, s, depth))
 }
 
 /// `subst_free_fact_at_depth(f, s, depth)` — analogous for facts.
@@ -460,20 +423,14 @@ pub fn subst_free_fact_at_depth(f: &GFact, s: &[(p::VarSpec, u32)], depth: u32) 
 /// every term leaf in an atom. Mirrors HS `substFreeAtom` (with the i+j shift
 /// applied externally by the caller — pass `depth` for the j term).
 pub fn subst_free_atom_at_depth(a: &GAtom, s: &[(p::VarSpec, u32)], depth: u32) -> GAtom {
-    // `temporal = true` marks term positions parsed by HS via `nodevar`
-    // (always `LSortNode`): the `@`-timepoint of an action, the `last(t)`
-    // argument, and both operands of `<` (timepoint ordering).  Term equality
-    // (`EqE`), multiset comparison and subterm are message-term positions in
-    // HS (`termp`/`msetterm`), so an explicitly `#`-sigiled timepoint carries
-    // its own `Node` sort while a bare name stays message-sorted.
     match a {
         GAtom::Eq(x, y) => GAtom::Eq(
             subst_free_term_at_depth(x, s, depth),
             subst_free_term_at_depth(y, s, depth),
         ),
         GAtom::Less(x, y) => GAtom::Less(
-            subst_free_term_at_depth_pos(x, s, depth, true),
-            subst_free_term_at_depth_pos(y, s, depth, true),
+            subst_free_term_at_depth(x, s, depth),
+            subst_free_term_at_depth(y, s, depth),
         ),
         GAtom::LessMset(x, y) => GAtom::LessMset(
             subst_free_term_at_depth(x, s, depth),
@@ -485,9 +442,9 @@ pub fn subst_free_atom_at_depth(a: &GAtom, s: &[(p::VarSpec, u32)], depth: u32) 
         ),
         GAtom::Action(f, t) => GAtom::Action(
             subst_free_fact_at_depth(f, s, depth),
-            subst_free_term_at_depth_pos(t, s, depth, true),
+            subst_free_term_at_depth(t, s, depth),
         ),
-        GAtom::Last(t) => GAtom::Last(subst_free_term_at_depth_pos(t, s, depth, true)),
+        GAtom::Last(t) => GAtom::Last(subst_free_term_at_depth(t, s, depth)),
         GAtom::Pred(f) => GAtom::Pred(subst_free_fact_at_depth(f, s, depth)),
     }
 }

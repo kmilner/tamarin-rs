@@ -334,29 +334,6 @@ pub fn term_doc(t: &p::Term) -> crate::pretty_hpj::Doc {
     term_to_doc(t, &[])
 }
 
-/// Render a term that occupies a temporal (timepoint) position, mirroring
-/// HS's `nodevar`-parsed `@t` / `last(t)` / `t < t` operands.  Such a term is
-/// syntactically always a bare variable, so we resolve it with `temporal =
-/// true` (→ `Node`); any non-Var falls back to the ordinary renderer.
-fn temporal_term_to_doc(t: &p::Term, scope: &[Bind]) -> crate::pretty_hpj::Doc {
-    match t {
-        p::Term::Var(v) => {
-            let mut s = String::new();
-            pp_var_scoped_pos(v, scope, true, &mut s);
-            crate::pretty_hpj::Doc::text(s)
-        }
-        _ => term_to_doc(t, scope),
-    }
-}
-
-/// String-path counterpart of [`temporal_term_to_doc`].
-fn pp_temporal_term(t: &p::Term, scope: &[Bind], out: &mut String) {
-    match t {
-        p::Term::Var(v) => pp_var_scoped_pos(v, scope, true, out),
-        _ => pp_term(t, scope, out),
-    }
-}
-
 /// Pretty-print a parser-AST term standalone.
 pub fn pretty_term(t: &p::Term) -> String {
     let mut s = String::new();
@@ -569,19 +546,30 @@ fn avoid_precise_insert(state: &mut PreciseFreshState, name: &str, idx: u64) {
 }
 
 /// Walk a parser-AST formula collecting free-var (name, idx) pairs into a
-/// Precise state.  "Free" = used in an atom but not bound by an enclosing
-/// `Forall`/`Exists` with the same name.  Matches HS `frees fm` semantics
-/// for `LNFormula` — bound LVars are `BVar::Bound` and don't appear.
+/// Precise state.  "Free" = used in an atom and not closed by an enclosing
+/// `Forall`/`Exists` binder.  A binder closes an occurrence when the two
+/// agree in name, index AND sort, which is what HS's `quantify` captures
+/// with (`v == x` at `Eq LVar`, Theory/Model/Formula.hs:347-351): under
+/// `∀ x.` an occurrence of `x.1` or `#x` is a DIFFERENT variable and stays
+/// free.  Matches HS `frees fm` semantics for `LNFormula` — bound LVars are
+/// `BVar::Bound` and don't appear.
 fn avoid_precise_formula(f: &p::Formula) -> PreciseFreshState {
     let mut state = PreciseFreshState::nothing_used();
-    let mut bound: Vec<String> = Vec::new();
+    let mut bound: Vec<VarIdent> = Vec::new();
     collect_free_vars_formula(f, &mut bound, &mut state);
     state
 }
 
+/// The full identity of a variable: `(name, idx, sort)`.
+type VarIdent = (String, u64, p::SortHint);
+
+fn var_ident(v: &p::VarSpec) -> VarIdent {
+    (v.name.clone(), v.idx, v.sort)
+}
+
 fn collect_free_vars_formula(
     f: &p::Formula,
-    bound: &mut Vec<String>,
+    bound: &mut Vec<VarIdent>,
     state: &mut PreciseFreshState,
 ) {
     use p::Formula::*;
@@ -595,16 +583,14 @@ fn collect_free_vars_formula(
         }
         Forall(vs, body) | Exists(vs, body) => {
             let saved_len = bound.len();
-            for v in vs {
-                bound.push(v.name.clone());
-            }
+            bound.extend(vs.iter().map(var_ident));
             collect_free_vars_formula(body, bound, state);
             bound.truncate(saved_len);
         }
     }
 }
 
-fn collect_free_vars_atom(a: &p::Atom, bound: &[String], state: &mut PreciseFreshState) {
+fn collect_free_vars_atom(a: &p::Atom, bound: &[VarIdent], state: &mut PreciseFreshState) {
     use p::Atom::*;
     match a {
         Eq(l, r) | Less(l, r) | LessMset(l, r) | Subterm(l, r) => {
@@ -626,11 +612,11 @@ fn collect_free_vars_atom(a: &p::Atom, bound: &[String], state: &mut PreciseFres
     }
 }
 
-fn collect_free_vars_term(t: &p::Term, bound: &[String], state: &mut PreciseFreshState) {
+fn collect_free_vars_term(t: &p::Term, bound: &[VarIdent], state: &mut PreciseFreshState) {
     use p::Term::*;
     match t {
         Var(v) => {
-            if !bound.iter().any(|n| n == &v.name) {
+            if !bound.iter().any(|b| b == &var_ident(v)) {
                 avoid_precise_insert(state, &v.name, v.idx);
             }
         }
@@ -974,11 +960,10 @@ fn atom_to_doc(a: &p::Atom, scope: &[Bind]) -> crate::pretty_hpj::Doc {
             term_to_doc(r, scope),
         ]),
         // HS `Less u v -> text (show u) <-> opLess <-> text (show v)`
-        // (Atom.hs:212-224, see line 223) — `<->` is `<+>`, no break.  Both operands are
-        // timepoints (HS `nodevarTerm`), so resolve them temporally.
-        Less(l, r) => temporal_term_to_doc(l, scope)
+        // (Atom.hs:212-224, see line 223) — `<->` is `<+>`, no break.
+        Less(l, r) => term_to_doc(l, scope)
             .beside_sp(hpj::operator_("<"))
-            .beside_sp(temporal_term_to_doc(r, scope)),
+            .beside_sp(term_to_doc(r, scope)),
         // Multiset `(<)`.  HS has NO printer for this: `smallerp`
         // (Theory/Text/Parser/Formula.hs:30-38) parses `(<)` to
         // `Pred Smaller`, and `expandFormula` (Predicate.hs:82-93) rewrites
@@ -992,14 +977,13 @@ fn atom_to_doc(a: &p::Atom, scope: &[Bind]) -> crate::pretty_hpj::Doc {
             .beside_sp(Doc::text("(<)"))
             .beside_sp(term_to_doc(r, scope)),
         // HS `Action v fa -> prettyFact ppT fa <-> opAction <-> text (show v)`
-        // (Atom.hs:216-217).  Breakability lives inside `prettyFact`.  The
-        // `@`-timepoint is `nodevar`-parsed, so resolve it temporally.
+        // (Atom.hs:216-217).  Breakability lives inside `prettyFact`.
         Action(fa, t) => fact_to_doc(fa, scope)
             .beside_sp(hpj::operator_("@"))
-            .beside_sp(temporal_term_to_doc(t, scope)),
+            .beside_sp(term_to_doc(t, scope)),
         // HS `Last i -> operator_ "last" <> parens (text (show i))`
         // (Atom.hs:212-224, see line 224) — `<>` is no-space beside; `parens` is plain.
-        Last(t) => hpj::operator_("last").beside(hpj::parens(temporal_term_to_doc(t, scope))),
+        Last(t) => hpj::operator_("last").beside(hpj::parens(term_to_doc(t, scope))),
         // HS syntactic-sugar predicate: `prettyPred (Pred fa) = prettyNFact fa`.
         Pred(fa) => fact_to_doc(fa, scope),
     }
@@ -1204,58 +1188,8 @@ pub const RIBBON: usize = 73;
 /// (`Main/Console.hs:241-243, see line 243`).
 pub const LINE_LENGTH: usize = 110;
 
-/// Resolve an occurrence's display sort, mirroring HS's by-position parsing.
-///
-/// `temporal = true` marks a timepoint position (`@t`, `last(t)`, `t < t`),
-/// which HS parses via `nodevar` (always `LSortNode`).  Every other position
-/// is a message-term position (`msgvar`): a bare name is `LSortMsg`.  When the
-/// hint is `Untagged` we must *not* simply pick the innermost same-name binder
-/// (that conflates a msg-position `k` with a sibling `#k` timepoint binder);
-/// instead we look up the binder whose sort matches this occurrence's
-/// resolved sort, exactly as HS's `lookup`/`show` does after by-position
-/// sorting.  Falls back to innermost-name selection only when no
-/// sort-matching binder exists, preserving the single-binder cases.
-fn resolved_sort_pos(v: &p::VarSpec, scope: &[Bind], temporal: bool) -> p::SortHint {
-    if temporal {
-        return p::SortHint::Node;
-    }
-    if !matches!(v.sort, p::SortHint::Untagged) {
-        return v.sort;
-    }
-    // Untagged occurrence in a message-term position → HS resolves it to
-    // `LSortMsg`.  Prefer a binder whose (normalised) sort is `Msg`; if none,
-    // fall back to the innermost same-name binder (single-binder cases, where
-    // the lone binder's sort is what HS would have unified onto this ref).
-    let mut fallback: Option<p::SortHint> = None;
-    for b in scope.iter().rev() {
-        if b.0 == v.name {
-            if normalise_msg_hint(b.1) == p::SortHint::Msg {
-                return b.1;
-            }
-            if fallback.is_none() {
-                fallback = Some(b.1);
-            }
-        }
-    }
-    fallback.unwrap_or(v.sort)
-}
-
-/// Normalise a `SortHint` to its concrete base sort (`Untagged`→`Msg`,
-/// `Suffix(X)`→`X`), mirroring `guarded_types::normalise_msg_sort`.
-fn normalise_msg_hint(s: p::SortHint) -> p::SortHint {
-    use p::{SortHint as S, SuffixSort as SS};
-    match s {
-        S::Untagged | S::Suffix(SS::Msg) => S::Msg,
-        S::Suffix(SS::Pub) => S::Pub,
-        S::Suffix(SS::Fresh) => S::Fresh,
-        S::Suffix(SS::Node) => S::Node,
-        S::Suffix(SS::Nat) => S::Nat,
-        other => other,
-    }
-}
-
 /// Find the binding's display name, if any.  Match by the binder's FULL
-/// source identity (name, source-idx, resolved sort) against the scope,
+/// source identity (name, source-idx, sort) against the scope,
 /// innermost first.  Mirrors HS's De Bruijn lookup — a Bound var resolves
 /// to its binder's freshly-allocated LVar (whose `show` is
 /// `sortPrefix ++ name[.idx]`).
@@ -1289,34 +1223,20 @@ fn pp_var(v: &p::VarSpec, out: &mut String) {
     }
 }
 
-/// Variant that resolves an unsorted occurrence against a binding scope.
-/// When the (name, sort) matches a binder, emit the binder's *display*
-/// name (which may carry a `.<idx>` suffix per HS `show LVar`,
-/// LTerm.hs:550-557).  Otherwise emit the source name+idx as Free.
+/// Render an occurrence against a binding scope.  Resolve against the binder
+/// scope by FULL identity (name, idx, sort), for any idx — a body occurrence
+/// of a binder var may itself carry an index (e.g. the `x.1` fresh var minted
+/// by `rule_restriction`) — and emit the binder's *display* name (which may
+/// carry a `.<idx>` suffix per HS `show LVar`, LTerm.hs:550-557).  When no
+/// binder matches (the common case: free vars like `#vk.6`), render the
+/// source name+idx verbatim.
 fn pp_var_scoped(v: &p::VarSpec, scope: &[Bind], out: &mut String) {
-    pp_var_scoped_pos(v, scope, false, out)
-}
-
-/// Position-aware variant of [`pp_var_scoped`]: `temporal` marks a timepoint
-/// position so an `Untagged` ref resolves to `Node` (HS `nodevar`).
-fn pp_var_scoped_pos(v: &p::VarSpec, scope: &[Bind], temporal: bool, out: &mut String) {
-    let sort = resolved_sort_pos(v, scope, temporal);
-    // Resolve against the binder scope by FULL identity (name, idx, sort),
-    // for any idx — a body occurrence of a binder var may itself carry an
-    // index (e.g. the `x.1` fresh var minted by `rule_restriction`).  When
-    // no binder matches (the common case: free vars like `#vk.6`), fall
-    // through to render the source name+idx verbatim.
-    if let Some((bsort, display)) = lookup_display(&v.name, v.idx, sort, scope) {
+    if let Some((bsort, display)) = lookup_display(&v.name, v.idx, v.sort, scope) {
         out.push_str(sort_prefix_from_hint(bsort));
         out.push_str(&display);
         return;
     }
-    out.push_str(sort_prefix_from_hint(sort));
-    out.push_str(&v.name);
-    if v.idx > 0 {
-        out.push('.');
-        out.push_str(&v.idx.to_string());
-    }
+    pp_var(v, out);
 }
 
 pub fn sort_prefix_from_hint(s: p::SortHint) -> &'static str {
@@ -1348,9 +1268,9 @@ fn pp_atom(a: &p::Atom, scope: &[Bind], out: &mut String) {
             pp_term(r, scope, out);
         }
         Less(l, r) => {
-            pp_temporal_term(l, scope, out);
+            pp_term(l, scope, out);
             out.push_str(" < ");
-            pp_temporal_term(r, scope, out);
+            pp_term(r, scope, out);
         }
         // Multiset `(<)`: HS has no printer for it — `expandFormula`
         // rewrites it to `∃ z. r = l ++ z` before printing (see
@@ -1369,11 +1289,11 @@ fn pp_atom(a: &p::Atom, scope: &[Bind], out: &mut String) {
         Action(fa, t) => {
             pp_fact(fa, scope, out);
             out.push_str(" @ ");
-            pp_temporal_term(t, scope, out);
+            pp_term(t, scope, out);
         }
         Last(t) => {
             out.push_str("last(");
-            pp_temporal_term(t, scope, out);
+            pp_term(t, scope, out);
             out.push(')');
         }
         Pred(fa) => pp_fact(fa, scope, out),

@@ -1169,29 +1169,23 @@ fn avoid_precise_formula(f: &p::Formula) -> tamarin_utils::fresh::PreciseFreshSt
     fn walk_atom(a: &p::Atom, bound: &[VarKey], out: &mut Vec<VarKey>) {
         let mut keys = Vec::new();
         match a {
-            // `Eq` covers both `blatom` equality alternatives, and both
-            // `Subterm` sides and `LessMset`'s parse as message terms
-            // (Theory/Text/Parser/Formula.hs:44-58).
-            p::Atom::Eq(l, r) | p::Atom::LessMset(l, r) | p::Atom::Subterm(l, r) => {
-                term_var_keys(l, false, &mut keys);
-                term_var_keys(r, false, &mut keys);
-            }
-            // `nodevarTerm` positions: whatever sigil they were written with,
-            // the parser types these `LSortNode`.
-            p::Atom::Less(l, r) => {
-                term_var_keys(l, true, &mut keys);
-                term_var_keys(r, true, &mut keys);
+            p::Atom::Eq(l, r)
+            | p::Atom::LessMset(l, r)
+            | p::Atom::Subterm(l, r)
+            | p::Atom::Less(l, r) => {
+                term_var_keys(l, &mut keys);
+                term_var_keys(r, &mut keys);
             }
             p::Atom::Action(fa, t) => {
                 for arg in &fa.args {
-                    term_var_keys(arg, false, &mut keys);
+                    term_var_keys(arg, &mut keys);
                 }
-                term_var_keys(t, true, &mut keys);
+                term_var_keys(t, &mut keys);
             }
-            p::Atom::Last(t) => term_var_keys(t, true, &mut keys),
+            p::Atom::Last(t) => term_var_keys(t, &mut keys),
             p::Atom::Pred(fa) => {
                 for arg in &fa.args {
-                    term_var_keys(arg, false, &mut keys);
+                    term_var_keys(arg, &mut keys);
                 }
             }
         }
@@ -1244,10 +1238,9 @@ pub fn free_vars(g: &Guarded) -> BTreeSet<String> {
 /// n2`.  A binder `x.1` is therefore a DIFFERENT variable from an enclosing
 /// `x`, and `#x` a different variable from `x`.
 ///
-/// The sort component is the sort HS's parser assigns the occurrence, so it
-/// is resolved exactly as in `subst_free_term_cow` (guarded_types.rs):
-/// temporal positions are `Node`, every other occurrence folds through
-/// `normalise_msg_sort`.
+/// The sort component is the sort the parser assigned the occurrence, folded
+/// through `normalise_msg_sort` exactly as in `subst_free_term_cow`
+/// (guarded_types.rs).
 type VarKey = (String, u64, u8);
 
 /// Build the [`VarKey`] of a variable occurrence carrying `sort`.
@@ -1261,29 +1254,19 @@ fn var_key(name: &str, idx: u64, sort: p::SortHint) -> VarKey {
 
 /// Collect the identity of every variable leaf in a parser-AST term.  Used
 /// by `remaining_unguarded` for the pre-DeBruijn unguarded-variable check.
-///
-/// `temporal` marks a term in timepoint position (HS `nodevarTerm`, i.e. the
-/// `@`-argument of an action atom), whose variable is `LSortNode` whatever
-/// sigil it was written with.  Below a function symbol, pair or operator HS
-/// parses sub-terms with the message-term parser, so the flag does not
-/// descend — mirroring `subst_free_term_cow`.
-fn term_var_keys(t: &p::Term, temporal: bool, out: &mut Vec<VarKey>) {
+fn term_var_keys(t: &p::Term, out: &mut Vec<VarKey>) {
     match t {
-        p::Term::Var(v) => out.push(if temporal {
-            var_key(&v.name, v.idx, p::SortHint::Node)
-        } else {
-            var_key(&v.name, v.idx, v.sort)
-        }),
+        p::Term::Var(v) => out.push(var_key(&v.name, v.idx, v.sort)),
         p::Term::App(_, args) | p::Term::Pair(args) => {
             for a in args {
-                term_var_keys(a, false, out);
+                term_var_keys(a, out);
             }
         }
         p::Term::AlgApp(_, a, b) | p::Term::Diff(a, b) | p::Term::BinOp(_, a, b) => {
-            term_var_keys(a, false, out);
-            term_var_keys(b, false, out);
+            term_var_keys(a, out);
+            term_var_keys(b, out);
         }
-        p::Term::PatMatch(inner) => term_var_keys(inner, false, out),
+        p::Term::PatMatch(inner) => term_var_keys(inner, out),
         _ => {}
     }
 }
@@ -1815,14 +1798,14 @@ fn remaining_unguarded(xs: &[p::VarSpec], atoms: &[p::Atom]) -> Vec<usize> {
         xs.iter().map(|v| var_key(&v.name, v.idx, v.sort)).collect();
     for atom in &sorted_atoms {
         match atom {
-            // HS `frees (a, fa)` over `GAction a fa`: the fact's arguments are
-            // message positions, the timepoint is a temporal one.
+            // HS `frees (a, fa)` over `GAction a fa`: every variable of the
+            // fact and of the timepoint.
             p::Atom::Action(fact, t) => {
                 let mut frees = Vec::new();
                 for arg in &fact.args {
-                    term_var_keys(arg, false, &mut frees);
+                    term_var_keys(arg, &mut frees);
                 }
-                term_var_keys(t, true, &mut frees);
+                term_var_keys(t, &mut frees);
                 for k in frees {
                     unguarded.remove(&k);
                 }
@@ -1830,8 +1813,8 @@ fn remaining_unguarded(xs: &[p::VarSpec], atoms: &[p::Atom]) -> Vec<usize> {
             p::Atom::Eq(s, t) => {
                 let mut sv = Vec::new();
                 let mut tv = Vec::new();
-                term_var_keys(s, false, &mut sv);
-                term_var_keys(t, false, &mut tv);
+                term_var_keys(s, &mut sv);
+                term_var_keys(t, &mut tv);
                 let s_covered = sv.iter().all(|k| !unguarded.contains(k));
                 let t_covered = tv.iter().all(|k| !unguarded.contains(k));
                 if s_covered {
@@ -2549,12 +2532,12 @@ fn subst_gterm_cow(t: &GTerm, s: &VarSubst) -> Option<GTerm> {
                 // `term_to_gterm_free(t) == GTerm::Var(BVar::Free(v))` holds
                 // iff `t` is a `Var(spec)` with `spec == v` AND the nullary-fun
                 // guard does not fire (that guard lifts the leaf to `App`).  A
-                // replacement that normalises spelling (Untagged→Msg sort, or
-                // `typ` dropped) compares unequal and rebuilds, so the leaf
-                // canonicalisation of `term_to_gterm_free` is preserved.
+                // replacement that normalises spelling (a dropped `typ`)
+                // compares unequal and rebuilds, so the leaf canonicalisation
+                // of `term_to_gterm_free` is preserved.
                 Some(p::Term::Var(spec))
                     if spec == v
-                        && !(matches!(spec.sort, p::SortHint::Untagged)
+                        && !(spec.sort == p::SortHint::Msg
                             && spec.idx == 0
                             && crate::elaborate::is_user_nullary_fun(&spec.name)) =>
                 {

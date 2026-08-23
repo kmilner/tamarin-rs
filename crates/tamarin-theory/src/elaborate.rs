@@ -2600,18 +2600,13 @@ pub fn term_to_lnterm(t: &p::Term) -> Option<tamarin_term::lterm::LNTerm> {
     // LNTerm `Var` case: a bare identifier in surface syntax may denote a
     // 0-arity function symbol (e.g. `true` when `builtins: signing` is
     // enabled).  Haskell's `term` parser disambiguates this via `nullaryApp`
-    // against the maudeSig in parser state; our parser doesn't, so the lexer
-    // leaves it as `Var{name, sort: Untagged}`.  We recover the constant
-    // here.  Only fires for `Untagged` sort + idx 0 — a user can still bind a
-    // Msg-sort var named `true` if they explicitly annotate it (e.g.
-    // `true:msg`), and the parser would emit `Untagged` only for the bare
-    // form anyway.
+    // against the maudeSig in parser state; our parser doesn't, so it leaves
+    // the message-sorted variable the bare form parses to.  We recover the
+    // constant here, from the shape `nullaryApp` claims: a message-sorted
+    // name at idx 0.
     let mk_var =
         |v: &p::VarSpec, funs: &CollectedUserFuns| -> Option<tamarin_term::lterm::LNTerm> {
-            if matches!(v.sort, p::SortHint::Untagged)
-                && v.idx == 0
-                && funs.is_user_nullary_fun(&v.name)
-            {
+            if v.sort == p::SortHint::Msg && v.idx == 0 && funs.is_user_nullary_fun(&v.name) {
                 let sym = NoEqSym::new(
                     v.name.as_bytes().to_vec(),
                     0,
@@ -2645,11 +2640,12 @@ pub fn term_to_lnterm(t: &p::Term) -> Option<tamarin_term::lterm::LNTerm> {
 pub fn term_to_sapic_term(t: &p::Term) -> Option<crate::sapic::SapicTerm> {
     use crate::sapic::SapicLVar;
 
-    // SAPIC `Var` case: a bare untagged idx-0 identifier may be a 0-arity NoEq
-    // fun symbol (mirrors `term_to_lnterm`'s `nullaryApp` recovery, additionally
-    // gated on an un-annotated variable); otherwise a typed `SapicLVar`.
+    // SAPIC `Var` case: a bare message-sorted idx-0 identifier may be a 0-arity
+    // NoEq fun symbol (mirrors `term_to_lnterm`'s `nullaryApp` recovery,
+    // additionally gated on an un-annotated variable); otherwise a typed
+    // `SapicLVar`.
     let mk_var = |v: &p::VarSpec, funs: &CollectedUserFuns| -> Option<crate::sapic::SapicTerm> {
-        if matches!(v.sort, p::SortHint::Untagged)
+        if v.sort == p::SortHint::Msg
             && v.idx == 0
             && v.typ.is_none()
             && funs.is_user_nullary_fun(&v.name)

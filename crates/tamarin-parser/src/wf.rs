@@ -2808,10 +2808,10 @@ fn rhs_is_ground(t: &Term, nullary_funs: &BTreeSet<String>) -> bool {
     use Term::*;
     match t {
         Var(v) => {
-            // Untagged bare names that resolve to a nullary constant are
+            // Message-sorted bare names that resolve to a nullary constant are
             // variable-free; everything else (and any sigil-tagged var) is a
             // genuine free variable.
-            matches!(v.sort, SortHint::Untagged)
+            v.sort == SortHint::Msg
                 && (is_known_nullary_constant_name(&v.name) || nullary_funs.contains(&v.name))
         }
         App(_, args) | Pair(args) => args.iter().all(|a| rhs_is_ground(a, nullary_funs)),

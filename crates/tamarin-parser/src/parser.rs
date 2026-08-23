@@ -986,6 +986,14 @@ pub struct Parser<'a> {
     /// a pending `Expect "\".\""`.  Read by [`Self::note_var_dot_hangover`],
     /// which runs before any other `try_dot_index` call can intervene.
     dot_index_consumed: bool,
+    /// Whether [`Self::attach_sort_suffix`] consumed a `:sort` suffix for the
+    /// variable it last ran on.  HS's `sortedLVar` suffix arm ends in
+    /// `symbol_ (sortSuffix s)` (Token.hs:409-421), a lexeme of its own, so
+    /// the variable's `indexedIdentifier` hangovers are already behind the
+    /// parse when the suffix closes it.  Read by
+    /// [`Self::note_var_dot_hangover`], which runs immediately after every
+    /// `attach_sort_suffix` call.
+    sort_suffix_consumed: bool,
     /// Byte offset just past the identifier characters of the most recently
     /// consumed variable/application name (BEFORE the lexeme's trailing
     /// whitespace).  `T.identifier`'s trailing `many identLetter` fails there
@@ -1110,6 +1118,7 @@ impl<'a> Parser<'a> {
             sig_enable_nat: false,
             var_dot_hangover: false,
             dot_index_consumed: false,
+            sort_suffix_consumed: false,
             last_ident_end: None,
             var_hangover_ident_end: None,
             term_carry: None,
@@ -3021,29 +3030,16 @@ impl<'a> Parser<'a> {
         )
     }
 
-    /// The sort HS's `lvar` (Token.hs:409-437) gives a macro argument, i.e. the
-    /// `lvarSort` component of the `LVar` `nub` compares: an explicit prefix or
-    /// suffix names it, and a prefixless binder is `LSortMsg`
-    /// (Token.hs:424-433) — the sort [`SortHint::Untagged`] stands for here.
-    fn macro_arg_sort(v: &VarSpec) -> SuffixSort {
-        match v.sort {
-            SortHint::Msg | SortHint::Untagged => SuffixSort::Msg,
-            SortHint::Pub => SuffixSort::Pub,
-            SortHint::Fresh => SuffixSort::Fresh,
-            SortHint::Node => SuffixSort::Node,
-            SortHint::Nat => SuffixSort::Nat,
-            SortHint::Suffix(s) => s,
-        }
-    }
-
     /// HS `length args /= length (nub args)`
     /// (Theory/Text/Parser/Macro.hs:37): `nub`'s `Eq LVar`
     /// compares name, sort and index together (LTerm.hs:541-542), so two
-    /// arguments collide only when all three agree.
+    /// arguments collide only when all three agree.  The sort is the one
+    /// `lvar` gave the argument (Token.hs:409-437): an explicit prefix or
+    /// suffix names it, a prefixless binder is `LSortMsg`.
     fn has_duplicate_macro_arg(args: &[VarSpec]) -> bool {
-        let mut seen: Vec<(&str, u64, SuffixSort)> = Vec::with_capacity(args.len());
+        let mut seen: Vec<(&str, u64, SortHint)> = Vec::with_capacity(args.len());
         for a in args {
-            let key = (a.name.as_str(), a.idx, Self::macro_arg_sort(a));
+            let key = (a.name.as_str(), a.idx, a.sort);
             if seen.contains(&key) {
                 return true;
             }
@@ -4785,6 +4781,22 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// `nodevarTerm = lit . Var <$> nodep` (Theory/Text/Parser/Formula.hs:59):
+    /// a variable in a timepoint position takes `LSortNode` from its
+    /// position, since `nodevar` is the only parser that reads there
+    /// (Token.hs:443-448), whichever sigil the source spells.  This parser
+    /// also accepts a non-variable term in those positions (see
+    /// [`Self::fatom`]'s `<` arm), which is left as written.
+    fn node_sorted(t: Term) -> Term {
+        match t {
+            Term::Var(mut v) => {
+                v.sort = SortHint::Node;
+                Term::Var(v)
+            }
+            other => other,
+        }
+    }
+
     fn fatom(&mut self) -> Result<Formula, ParseError> {
         self.skip_ws();
         if self.try_kw("F") || self.try_punct("⊥") {
@@ -4823,14 +4835,14 @@ impl<'a> Parser<'a> {
             self.require_punct("(")?;
             let t = self.term(false)?;
             self.require_punct(")")?;
-            return Ok(Formula::Atom(Atom::Last(t)));
+            return Ok(Formula::Atom(Atom::Last(Self::node_sorted(t))));
         }
         // Try fact@t (action atom)
         let save_f = self.save();
         if let Ok(f) = self.fact() {
             if self.try_punct("@") {
                 let t = self.term(false)?;
-                return Ok(Formula::Atom(Atom::Action(f, t)));
+                return Ok(Formula::Atom(Atom::Action(f, Self::node_sorted(t))));
             }
             // HS `blatom` (Theory/Text/Parser/Formula.hs:45-57) tries the
             // term-relational atoms
@@ -4850,6 +4862,14 @@ impl<'a> Parser<'a> {
         let lhs = self.term(false)?;
         if self.try_punct("=") {
             let rhs = self.term(false)?;
+            // `blatom`'s "term equality" alternative reads both operands with
+            // `msgvar`, which rejects a node variable, so an equality whose
+            // left operand is one is the LAST alternative, "node equality"
+            // (Theory/Text/Parser/Formula.hs:51,56): `nodevarTerm` on both
+            // sides, which reads a bare right operand as a timepoint.
+            if matches!(&lhs, Term::Var(v) if v.sort == SortHint::Node) {
+                return Ok(Formula::Atom(Atom::Eq(lhs, Self::node_sorted(rhs))));
+            }
             return Ok(Formula::Atom(Atom::Eq(lhs, rhs)));
         }
         if self.try_punct("<<") || self.try_punct("⊏") {
@@ -4880,11 +4900,14 @@ impl<'a> Parser<'a> {
             // restricts both operands of `<` to
             // node/timepoint variables: `Less <$> try (nodevarTerm <* opLess)
             // <*> nodevarTerm`. This structural port intentionally accepts any
-            // `term` on both sides (parser-level permissiveness); the sort
-            // restriction is deferred to elaboration. Valid theories (which use
-            // timepoint vars with `<`) parse identically.
+            // `term` on both sides (parser-level permissiveness); a variable
+            // operand takes the timepoint sort `nodevarTerm` gives it. Valid
+            // theories (which use timepoint vars with `<`) parse identically.
             let rhs = self.term(false)?;
-            return Ok(Formula::Atom(Atom::Less(lhs, rhs)));
+            return Ok(Formula::Atom(Atom::Less(
+                Self::node_sorted(lhs),
+                Self::node_sorted(rhs),
+            )));
         }
         // No relational operator follows the term.  HS `blatom`'s remaining
         // alternatives (Theory/Text/Parser/Formula.hs:45-57): the `Pred` fact
@@ -5176,8 +5199,8 @@ impl<'a> Parser<'a> {
     /// variable's LAST lexeme was its `identifier` — i.e. no explicit
     /// `.<index>` was consumed (`option 0 (try (dot *> natural))`,
     /// Token.hs:395-400, whose one attempt is spent once it succeeds), no
-    /// `:sort` suffix follows (`sortedLVar`'s suffix branch ends in
-    /// `symbol_ (sortSuffix s)`, Token.hs:409-421), and the name is not one
+    /// `:sort` suffix follows ([`Parser::sort_suffix_consumed`],
+    /// Token.hs:409-421), and the name is not one
     /// `nullaryApp` claims instead of `plit` — an arity-0 symbol of
     /// `funSyms ∪ macroNames`, matched by `symbol`, not `indexedIdentifier`
     /// (Theory/Text/Parser/Term.hs:148,158-163).  The explicit-index case
@@ -5187,7 +5210,7 @@ impl<'a> Parser<'a> {
     /// that field is the just-parsed variable's.
     fn note_var_dot_hangover(&mut self, v: &VarSpec) {
         self.var_dot_hangover = !self.dot_index_consumed
-            && !matches!(v.sort, SortHint::Suffix(_))
+            && !self.sort_suffix_consumed
             && v.typ.is_none()
             && !self.is_nullary_sym(&v.name);
         // Where this variable's `letter or digit` identifier hangover sits —
@@ -5589,7 +5612,7 @@ impl<'a> Parser<'a> {
                     let v = VarSpec {
                         name: id,
                         idx,
-                        sort: SortHint::Untagged,
+                        sort: SortHint::Msg,
                         typ: None,
                     };
                     let v = self.attach_sort_suffix(v)?;
@@ -5655,7 +5678,7 @@ impl<'a> Parser<'a> {
                     return Ok(Term::AlgApp(id, Box::new(arg1), Box::new(arg2)));
                 }
             }
-            // Bare identifier: untagged variable. Optionally with index `.<n>`
+            // Bare identifier: message-sorted variable. Optionally with index `.<n>`
             // (only consumes `.` if followed by a digit) and optionally with
             // sort suffix `:msg|pub|fresh|node|nat` or a SAPIC type annotation.
             // Also the landing site of the application backtracks above, where
@@ -5668,7 +5691,7 @@ impl<'a> Parser<'a> {
             let v = VarSpec {
                 name: id,
                 idx,
-                sort: SortHint::Untagged,
+                sort: SortHint::Msg,
                 typ: None,
             };
             let v = self.attach_sort_suffix(v)?;
@@ -5808,9 +5831,12 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// HS `sortedLVar`'s suffix arm: `indexedIdentifier <* colon` followed by
+    /// one `sortSuffix`, returning `LVar n s i` with `s` the suffix's sort —
+    /// the same plain `LVar` the sigil arms build (Token.hs:409-433).
     fn attach_sort_suffix(&mut self, mut v: VarSpec) -> Result<VarSpec, ParseError> {
-        // Only sortless prefixes can have a suffix.
         // Suffix syntax: `<id>:msg`, `:pub`, `:fresh`, `:node`, `:nat`.
+        self.sort_suffix_consumed = false;
         let save = self.save();
         if self.try_punct(":") {
             // Inside a SAPIC process every variable comes from HS `sapicvar =
@@ -5829,25 +5855,18 @@ impl<'a> Parser<'a> {
             }
             // Distinguish suffix sort vs SAPIC type annotation.
             let snap = self.save();
-            if self.try_kw("msg") {
-                v.sort = SortHint::Suffix(SuffixSort::Msg);
-                return Ok(v);
-            }
-            if self.try_kw("pub") {
-                v.sort = SortHint::Suffix(SuffixSort::Pub);
-                return Ok(v);
-            }
-            if self.try_kw("fresh") {
-                v.sort = SortHint::Suffix(SuffixSort::Fresh);
-                return Ok(v);
-            }
-            if self.try_kw("node") {
-                v.sort = SortHint::Suffix(SuffixSort::Node);
-                return Ok(v);
-            }
-            if self.try_kw("nat") {
-                v.sort = SortHint::Suffix(SuffixSort::Nat);
-                return Ok(v);
+            for (kw, sort) in [
+                ("msg", SortHint::Msg),
+                ("pub", SortHint::Pub),
+                ("fresh", SortHint::Fresh),
+                ("node", SortHint::Node),
+                ("nat", SortHint::Nat),
+            ] {
+                if self.try_kw(kw) {
+                    v.sort = sort;
+                    self.sort_suffix_consumed = true;
+                    return Ok(v);
+                }
             }
             // Else SAPIC type annotation.
             self.restore(snap);
@@ -5893,7 +5912,10 @@ impl<'a> Parser<'a> {
                     }
                 }
             }
-            Some(c) if c.is_alphabetic() => SortHint::Untagged,
+            // HS `sortedLVar`'s `mkPrefixParser LSortMsg` arm is the bare
+            // `LSortMsg -> pure ()` case (Token.hs:424-426): a prefixless
+            // identifier is message-sorted.
+            Some(c) if c.is_alphabetic() => SortHint::Msg,
             _ => return Ok(None),
         };
         let pre_ident = self.save();
@@ -5923,32 +5945,14 @@ impl<'a> Parser<'a> {
         self.attach_sort_suffix(v)
     }
 
-    /// Parse a quantifier binder variable (`All`/`Ex` binder list), mirroring
-    /// HS `quantification`'s `many1 (try varp <|> nodep)` with `varp = msgvar`,
-    /// `nodep = nodevar` (Theory/Text/Parser/Formula.hs:64-77, see line 75,
-    /// Token.hs:440-447).  `msgvar` parses a
-    /// PREFIXLESS binder as `LSortMsg` (Token.hs:440-441 into 409-433, see line 426)
-    /// — there is no
-    /// inference step for formula binders.  RS's generic `var_spec` tags a
-    /// prefixless var as `Untagged` (a placeholder it resolves later for RULE
-    /// terms), which has no HS equivalent and sorts LAST under `Ord LVar`
-    /// `(idx, sort, name)` (LTerm.hs:546-548).  That placeholder leaked into the
-    /// guarded binding's `LSort`, flipping the display-time AC arg sort of an
-    /// existential binder against a free Msg operand of equal idx (`dif++seq`
-    /// → `seq++dif`), since `fAppAC`/`openGuarded` sort by that key
-    /// (Term/Raw.hs:118-122, Guarded.hs:364-373, see line 367).  Pin a prefixless binder to `Msg`
-    /// exactly as `msgvar` does; explicit `$`/`~`/`#`/`%`/suffix binders keep
-    /// their concrete sort.
-    fn quantifier_binder(&mut self) -> Result<VarSpec, ParseError> {
-        let mut v = self.var_spec()?;
-        if matches!(v.sort, SortHint::Untagged) {
-            v.sort = SortHint::Msg;
-        }
-        Ok(v)
-    }
-
     /// Parse a quantifier's binder list (`All`/`Ex` share this): a sequence of
-    /// `quantifier_binder`s terminated by `.`, which is consumed.
+    /// variables terminated by `.`, which is consumed.  HS
+    /// `quantification`'s `many1 (try varp <|> nodep)` with `varp = msgvar`,
+    /// `nodep = nodevar` (Theory/Text/Parser/Formula.hs:64-77, see line 75,
+    /// Token.hs:440-447): a prefixless binder is `LSortMsg`
+    /// (Token.hs:440-441 into 409-433, see line 426), and an explicit
+    /// `$`/`~`/`#`/`%` sigil or `:sort` suffix names the sort — which is what
+    /// [`Self::var_spec`] builds.
     fn quantifier_binders(&mut self) -> Result<Vec<VarSpec>, ParseError> {
         let mut vs = Vec::new();
         loop {
@@ -5956,7 +5960,7 @@ impl<'a> Parser<'a> {
             if self.lx.peek() == Some('.') {
                 break;
             }
-            let v = self.quantifier_binder()?;
+            let v = self.var_spec()?;
             vs.push(v);
         }
         self.require_punct(".")?;
