@@ -192,18 +192,14 @@ fn loop_status(b: bool) -> String {
 ///   oracle_ranking ::= ('o' | 'O') ('"' name '"')?
 ///   tactic_ranking ::= '{' [^}]* '}'
 ///   letter      ::= [a-zA-Z]
-pub fn parse_heuristic_str(s: &str, theory_file: &str) -> Vec<GoalRanking> {
-    parse_heuristic_str_with_tactics(s, theory_file, &[])
-}
-
-/// Like [`parse_heuristic_str`] but resolves `{name}` tactic rankings
-/// against the theory's tactic list (HS `chosenTactic`,
-/// ProofMethod.hs:493-495).  A `{.}` (no name) resolves to HS `defaultTactic`
-/// (`Tactic "default" (SmartRanking False) [] []`, System.hs:533-534).  An
-/// unknown `{name}` falls back to `Smart(false)` — lenient on purpose for
-/// the in-file `heuristic:` header and the web routes; the batch CLI path
-/// rejects invalid strings first (`prove::validate_cli_heuristic`), so this
-/// fallback is unreachable there.
+///
+/// `{name}` tactic rankings resolve against the theory's tactic list (HS
+/// `chosenTactic`, ProofMethod.hs:493-495).  A `{.}` (no name) resolves to HS
+/// `defaultTactic` (`Tactic "default" (SmartRanking False) [] []`,
+/// System.hs:533-534).  An unknown `{name}` falls back to `Smart(false)` —
+/// lenient on purpose for the in-file `heuristic:` header and the web routes;
+/// the batch CLI path rejects invalid strings first
+/// (`prove::validate_cli_heuristic`), so this fallback is unreachable there.
 pub fn parse_heuristic_str_with_tactics(
     s: &str,
     theory_file: &str,
@@ -518,17 +514,9 @@ impl std::error::Error for OracleError {}
 /// `isNoLargeSplitGoal` (`is_no_large_split_goal`), and `moveNatToEnd`
 /// (via `is_nat_subterm_split`, mirroring `isNatSubterm`) are all ported
 /// and wired in as live predicates in the decision tree below.
-pub fn rank_goals(sys: &System) -> Vec<AnnotatedGoal> {
-    // With `ctx = None` the ranking always resolves to `Smart(false)`
-    // (the oracle/tactic paths — the only `Err` sources — are
-    // unreachable), so this never errors.  Fall back to the unranked
-    // open-goal list rather than panicking, keeping this entry point
-    // panic-free public surface.
-    rank_goals_with(sys, None, 0).unwrap_or_else(|_| open_goals(sys))
-}
-
-/// Variant that takes a proof context for source-cache predicates
-/// and the current proof depth for round-robin heuristic scheduling.
+///
+/// Takes a proof context for source-cache predicates and the current proof
+/// depth for round-robin heuristic scheduling.
 ///
 /// Returns `Err(OracleError)` when an oracle script cannot be
 /// executed — callers must propagate this as a hard abort.
@@ -2109,21 +2097,11 @@ fn msg_premise(g: &Goal) -> Option<&tamarin_term::lterm::LNTerm> {
 
 /// Saturate-time openGoals view.  Haskell uses a single `openGoals`
 /// function for both `isFinished` and `solveAllSafeGoals`, so this is
-/// just an alias for `is_open_in_sys`.  Kept as a separate name so
-/// callers in saturate code make the intent explicit; if we ever need
-/// to diverge again, the seam is here.
-pub fn is_open_for_saturate(g: &Goal, sys: &System) -> bool {
-    // Standalone caller: build the always-before adjacency on the spot
-    // (mirrors `goal_usefulness` building `rawLessRel` for non-`open_goals`
-    // callers).  `open_goals` instead builds it once and shares it.
-    let ab_adj = sys.build_always_before_adj();
-    is_open_in_sys(g, sys, &ab_adj)
-}
-
-/// Like [`is_open_for_saturate`] but reuses a prebuilt always-before
-/// adjacency instead of rebuilding it per call.  The relation depends
-/// only on `sys` (not on `g`), so a caller scanning many goals against
-/// an unmutated system builds it once and threads it in.
+/// `is_open_in_sys` under a name that makes the intent explicit at the
+/// saturate call sites.  The prebuilt always-before adjacency is passed in
+/// rather than rebuilt per call: the relation depends only on `sys` (not on
+/// `g`), so a caller scanning many goals against an unmutated system builds
+/// it once and threads it in.
 pub fn is_open_for_saturate_with(
     g: &Goal,
     sys: &System,

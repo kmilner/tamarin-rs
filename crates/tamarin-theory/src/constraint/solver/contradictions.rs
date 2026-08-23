@@ -2357,26 +2357,15 @@ fn node_after_last(sys: &System, adj: &BTreeMap<NodeId, Vec<NodeId>>) -> Vec<Con
         .collect()
 }
 
-/// `maybeNonNormalTerms`: walk all node facts + new_vars in `sys`,
-/// returning every subterm that could be non-normal under some
-/// substitution.  Used by [`SubstNfChecker`] below.
-/// Mirrors Haskell's `Contradictions.maybeNonNormalTerms`
-/// (Contradictions.hs).
-pub fn maybe_non_normal_terms(
-    sys: &System,
-    irreducible: &tamarin_utils::FastSet<tamarin_term::function_symbols::FunSym>,
-) -> Vec<tamarin_term::lterm::LNTerm> {
-    // Reads ONLY `sys.nodes`; delegate to the slice form so a shared
-    // [`SubstNfChecker`] can pin an O(1) `Arc` snapshot of the nodes and
-    // force the identical walk lazily.
-    maybe_non_normal_terms_nodes(&sys.nodes, irreducible)
-}
-
-/// Nodes-slice form of [`maybe_non_normal_terms`].  The walk reads only
-/// the system's `nodes`, so pinning an `Arc<Vec<(NodeId, RuleACInst)>>`
-/// snapshot and calling this yields exactly the candidate set the eager
-/// whole-`System` walk produces.  The `BTreeSet` dedup is load-bearing
-/// for workload downstream — it must stay.
+/// `maybeNonNormalTerms`: walk all node facts + new_vars, returning every
+/// subterm that could be non-normal under some substitution.  Used by
+/// [`SubstNfChecker`] below.  Mirrors Haskell's
+/// `Contradictions.maybeNonNormalTerms` (Contradictions.hs).
+///
+/// The walk reads only the system's `nodes`, so a shared [`SubstNfChecker`]
+/// can pin an O(1) `Arc<Vec<(NodeId, RuleACInst)>>` snapshot and force the
+/// identical walk lazily.  The `BTreeSet` dedup is load-bearing for workload
+/// downstream — it must stay.
 pub fn maybe_non_normal_terms_nodes(
     nodes: &[(NodeId, crate::rule::RuleACInst)],
     irreducible: &tamarin_utils::FastSet<tamarin_term::function_symbols::FunSym>,

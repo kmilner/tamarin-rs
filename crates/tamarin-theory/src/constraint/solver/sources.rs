@@ -2124,13 +2124,13 @@ fn run_solve_all_safe_goals_disj_with_progress(
         // Pick a goal — mirrors the saturate goal-pick logic.
         // Saturate-time filter (Haskell `openGoals`) drops msg-var KD
         // ChainG so `split_allowed` correctly flips True when only
-        // auto-handled chains remain.  See `is_open_for_saturate` in
+        // auto-handled chains remain.  See `is_open_for_saturate_with` in
         // goals.rs for the rationale.
         //
         // Haskell-faithful Goal-Ord (Goals.hs:65-182, see line 67 `M.toList sGoals`).
-        // `is_open_for_saturate`'s always-before relation depends only on
+        // `is_open_for_saturate_with`'s always-before relation depends only on
         // `red.sys` (not the goal), and `red.sys` is unmutated across this
-        // filter, so build it once and thread it in via `_with`.
+        // filter, so build it once and thread it in.
         let sat_adj = red.sys.build_always_before_adj();
         let mut goals: Vec<(Goal, bool)> = red
             .sys
@@ -5423,9 +5423,9 @@ fn close_trivial_chains_in_graft(r: &mut crate::constraint::solver::reduction::R
         // compatible AND not a forbidden edge.  Snapshot the goal so
         // we can release the borrow on `r.sys` before mutating.
         //
-        // The `is_open_for_saturate` always-before relation depends only on
-        // `r.sys`, which is unmutated across this single `find_map` scan, so
-        // build it once here and thread it into the closure via `_with`.
+        // The `is_open_for_saturate_with` always-before relation depends only
+        // on `r.sys`, which is unmutated across this single `find_map` scan, so
+        // build it once here and thread it into the closure.
         // REBUILD per outer-loop iteration: `add_edge` below mutates `r.sys`,
         // changing the relation for the next iteration's scan. (The owned
         // `PrebuiltAdj` holds no borrow of `r.sys`, so it does not block the

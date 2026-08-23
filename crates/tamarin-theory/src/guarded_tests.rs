@@ -856,8 +856,8 @@ fn gconj_dedupes_syntactic_duplicates() {
 
 /// Dedup happens BEFORE the singleton unwrap: `gconj([a, a])` must be
 /// `a` itself, not the non-normal singleton `Conj([a])` that only a
-/// second application would unwrap.  `normalise_guarded` relies on
-/// this one-pass idempotence (mirrors HS `gconj`).
+/// second application would unwrap.  `normalise_guarded_cow` relies
+/// on this one-pass idempotence (mirrors HS `gconj`).
 #[test]
 fn gconj_duplicates_collapse_to_bare_item() {
     let a = g("last(#i)").unwrap();

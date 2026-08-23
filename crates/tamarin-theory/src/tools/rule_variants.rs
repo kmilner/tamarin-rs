@@ -1134,19 +1134,15 @@ fn contains_subterm(needle: &LNTerm, haystack: &LNTerm) -> bool {
 ///
 /// `maude` is only needed for path 2; for path 1 the check is purely
 /// syntactic.  The function requires a `MaudeHandle` for completeness.
-pub fn rule_has_no_variants_for_wf(maude: &MaudeHandle, rule: &ProtoRuleE) -> bool {
-    // `None` precomputed result ⇒ compute the reducible path here.
-    rule_has_no_variants_for_wf_with(maude, rule, None)
-}
-
-/// Like `rule_has_no_variants_for_wf`, but when the reducible-path result
-/// (`abstract_rule_and_variants(..) == Ok(None)`) is ALREADY known — e.g.
-/// it was computed once by `populate_rule_variants` and recorded on the
-/// rule's `OpenProtoRule` (`abstracted_rule`/`variant_substs`) — pass it
-/// as `reducible_has_no_variants` to skip the redundant Maude `get variants`
-/// query.  `populate_rule_variants` sets `abstracted_rule = Some(_)` exactly
-/// when `abstract_rule_and_variants` returned `Ok(Some(_))`, so the caller
-/// supplies `Some(opr.abstracted_rule.is_none() && opr.variant_substs.is_empty())`.
+///
+/// When the reducible-path result (`abstract_rule_and_variants(..) == Ok(None)`)
+/// is ALREADY known — e.g. `populate_rule_variants` computes it once and
+/// records it on the rule's `OpenProtoRule` (`abstracted_rule`/`variant_substs`)
+/// — pass it as `reducible_has_no_variants` to skip the redundant Maude
+/// `get variants` query.  `populate_rule_variants` sets
+/// `abstracted_rule = Some(_)` exactly when `abstract_rule_and_variants`
+/// returns `Ok(Some(_))`, so the caller supplies
+/// `Some(opr.abstracted_rule.is_none() && opr.variant_substs.is_empty())`.
 /// The syntactic (non-reducible) path is always recomputed here — it is
 /// cheap and makes no Maude call.
 pub fn rule_has_no_variants_for_wf_with(

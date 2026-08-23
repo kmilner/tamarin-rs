@@ -776,7 +776,7 @@ pub fn gconj(items: Vec<Guarded>) -> Guarded {
     // HS-faithful: mirror `gconj`'s `nub` BEFORE the `[gf] -> gf`
     // singleton unwrap, so the result is a fixpoint of `gconj` itself:
     // `gconj [a, a]` must be `a`, not the non-normal singleton `Conj [a]`
-    // that only a second application would unwrap.  `normalise_guarded`
+    // that only a second application would unwrap.  `normalise_guarded_cow`
     // relies on this one-pass idempotence.
     let mut deduped: Vec<Guarded> = Vec::with_capacity(out.len());
     for x in out {
@@ -1225,23 +1225,15 @@ pub fn subst_free_guarded(g: &Guarded, s: &[(p::VarSpec, u32)]) -> Guarded {
 /// `gconj` (their singleton unwrap is harmless because conjunctions are
 /// decomposed on insertion anyway); this requires `gconj` to be
 /// idempotent — see the note on `gconj`.
-pub fn normalise_guarded(g: &Guarded) -> Guarded {
-    // Route through the COW helper so borrow-callers get the same logic with
-    // no duplication; only cost vs the COW path is the top-level clone when
-    // nothing changed.
-    normalise_guarded_cow(g).unwrap_or_else(|| g.clone())
-}
-
-/// Copy-on-write variant of [`normalise_guarded`]: returns `None` when
-/// normalisation leaves `g` structurally unchanged (so an owning caller can
-/// reuse `g` by move with zero allocation), `Some(rebuilt)` otherwise.  The
-/// `Some` value is BYTE-IDENTICAL to `normalise_guarded(g)` — same
-/// flatten/dedup/order.  Mirrors the `subst_guarded_cow` /
+///
+/// Copy-on-write: returns `None` when normalisation leaves `g` structurally
+/// unchanged (so an owning caller can reuse `g` by move with zero
+/// allocation), `Some(rebuilt)` otherwise.  Mirrors the `subst_guarded_cow` /
 /// `cac_rec_guarded_cow` convention (recursion returns `None` when all
 /// children are unchanged).
 pub fn normalise_guarded_cow(g: &Guarded) -> Option<Guarded> {
     match g {
-        // `normalise_guarded`'s Atom arm is `g.clone()` → always unchanged.
+        // An atom carries no connectives to flatten → always unchanged.
         Guarded::Atom(_) => None,
         Guarded::Disj(items) => normalise_disj_list_cow(items).map(|v| Guarded::Disj(v.into())),
         Guarded::Conj(items) => {
@@ -1250,8 +1242,7 @@ pub fn normalise_guarded_cow(g: &Guarded) -> Option<Guarded> {
             // dedup / singleton-unwrap).  When no child changed AND `gconj`
             // is a structural no-op on the (already-normalised) children, the
             // whole node is unchanged.  Otherwise the rebuild is exactly
-            // `gconj(children)` — identical to the eager
-            // `gconj(items.iter().map(normalise_guarded).collect())`.
+            // `gconj(children)`.
             let mapped = cow_map_vec(items, normalise_guarded_cow);
             let children: &[Guarded] = mapped.as_deref().unwrap_or(&items[..]);
             if mapped.is_none() && gconj_is_structural_noop(children) {
@@ -1374,19 +1365,11 @@ fn flatten_dedup_disj(children: &[Guarded]) -> Vec<Guarded> {
 
 /// Normalise a formula for storage in the constraint system: full
 /// smart-constructor normal form, except that a TOP-LEVEL disjunction
-/// keeps its `Disj` constructor (via `normalise_disj_list`) so it stays
-/// in lockstep with its `Goal::Disj` twin.  Port of HS
-/// `normaliseStoredFormula` (150f5eba).
-pub fn normalise_stored_formula(g: &Guarded) -> Guarded {
-    normalise_stored_formula_cow(g).unwrap_or_else(|| g.clone())
-}
-
-/// Copy-on-write variant of [`normalise_stored_formula`]: `None` when
-/// unchanged, `Some(rebuilt)` (BYTE-IDENTICAL to
-/// `normalise_stored_formula(g)`) otherwise.  Like `normalise_stored_formula`,
-/// a TOP-LEVEL `Disj` keeps its constructor (via the constructor-preserving
+/// keeps its `Disj` constructor (via the constructor-preserving
 /// `normalise_disj_list_cow`) so it stays in lockstep with its `Goal::Disj`
-/// twin.
+/// twin.  Port of HS `normaliseStoredFormula` (150f5eba).
+///
+/// Copy-on-write: `None` when unchanged, `Some(rebuilt)` otherwise.
 pub fn normalise_stored_formula_cow(g: &Guarded) -> Option<Guarded> {
     match g {
         Guarded::Disj(items) => normalise_disj_list_cow(items).map(|v| Guarded::Disj(v.into())),
@@ -1394,11 +1377,10 @@ pub fn normalise_stored_formula_cow(g: &Guarded) -> Option<Guarded> {
     }
 }
 
-/// Owned fast path for [`normalise_stored_formula`]: consumes `g`, returning
-/// it by MOVE (zero allocation) when normalisation is a no-op, else the
-/// rebuilt tree.  For callers that own their input and immediately reassign
-/// it.  The returned value is BYTE-IDENTICAL to
-/// `normalise_stored_formula(&g)`.
+/// Owned fast path for [`normalise_stored_formula_cow`]: consumes `g`,
+/// returning it by MOVE (zero allocation) when normalisation is a no-op, else
+/// the rebuilt tree.  For callers that own their input and immediately
+/// reassign it.
 pub fn normalise_stored_formula_owned(g: Guarded) -> Guarded {
     match normalise_stored_formula_cow(&g) {
         Some(n) => n,
@@ -1872,15 +1854,11 @@ impl indexmap::Equivalent<(&'static str, u64)> for VarSubstKey<'_> {
 /// while preserving name and sort — every other LVar (real protocol vars,
 /// distinct named fresh values) keeps its identity, so the dedup doesn't
 /// over-merge legitimately-distinct implications.
-pub fn normalize_witness_lvars(g: &Guarded) -> Guarded {
-    normalize_witness_lvars_cow(g).unwrap_or_else(|| g.clone())
-}
-
-/// Copy-on-write core of [`normalize_witness_lvars`]: returns `None` when `g`
-/// carries no `x`-named witness var (the common case — `collect_witness_vars` finds
-/// nothing) OR when the witness substitution touches no leaf
-/// (`subst_guarded_cow` returns `None`), so a caller can reuse `g` by move/borrow
-/// instead of cloning.  `Some(_)` is byte-identical to the eager rebuild.
+///
+/// Copy-on-write: returns `None` when `g` carries no `x`-named witness var
+/// (the common case — `collect_witness_vars` finds nothing) OR when the
+/// witness substitution touches no leaf (`subst_guarded_cow` returns
+/// `None`), so a caller can reuse `g` by move/borrow instead of cloning.
 pub fn normalize_witness_lvars_cow(g: &Guarded) -> Option<Guarded> {
     let mut subst: VarSubst = VarSubst::default();
     collect_witness_vars(g, &mut subst);
@@ -1888,21 +1866,6 @@ pub fn normalize_witness_lvars_cow(g: &Guarded) -> Option<Guarded> {
         return None;
     }
     subst_guarded_cow(g, &subst)
-}
-
-/// Identity no-op on `Guarded`, kept so callers can express the intent of
-/// alpha-canonicalisation.  With HS-faithful DeBruijn bindings, alpha-equivalent
-/// formulas compare equal under structural `Eq` automatically — Bound vars carry
-/// no idx, so `Ex j:5. KU(s)@j:5` and `Ex j:6. KU(s)@j:6` both yield
-/// `GGuarded { vars: [(j, Node)], body: ... Bound(0) ... }` — so no rewriting is
-/// needed.  Called from `constraint::system` and `solver::reduction` to mark
-/// the spots where HS relied on its DeBruijn invariant.  `solver::simplify`
-/// deliberately skips it — see `implied_apply_canon_cow` in simplify.rs, which
-/// drops the call to save one identity `Guarded` clone.
-///
-/// Intentionally a no-op identity clone: faithful HS port marker.
-pub fn normalize_bound_lvars(g: &Guarded) -> Guarded {
-    g.clone()
 }
 
 /// Canonicalise AC-`BinOp` argument ordering inside a `Guarded` so two

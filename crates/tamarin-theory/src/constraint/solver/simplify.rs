@@ -1457,10 +1457,8 @@ fn insert_implied_formulas_pass(red: &mut Reduction) -> ChangeIndicator {
 /// already-canonical formula pays zero clones — the dedup only materialises
 /// (`into_owned`) a survivor.
 ///
-/// `normalize_bound_lvars` is currently an identity clone (the DeBruijn
-/// bound-var invariant already holds for formulas reaching dedup), so it is
-/// skipped here — byte-inert while that fn stays identity (the parity gate
-/// verifies).
+/// No bound-var canonicalisation: `Guarded` binders are DeBruijn, so `Bound`
+/// vars carry no idx and alpha-equivalent formulas already compare `==`.
 ///
 /// Comparison is in stored normal form (HS 150f5eba: `insertImpliedFormulas`
 /// normalises derived instances before the membership pre-check) — a raw
@@ -1681,11 +1679,11 @@ fn try_match_all_guards(
             // different FREE-var bindings (from different action-subject
             // matches) ARE structurally distinct, so HS keeps both.
             //
-            // Rust represents bound vars as `VarSpec` (free vars-shape),
-            // so `freshen_system` shifts bound-var idxs across iterations.
-            // `normalize_bound_lvars` simulates HS's DeBruijn invariant.
+            // Rust's `Guarded` binders are DeBruijn as well: `BVar::Bound`
+            // carries no idx, so alpha-equivalent formulas already compare
+            // `==` without a bound-var canonicalisation step.
             //
-            // `normalize_witness_lvars` collapses Maude-minted `~mw#N`
+            // `normalize_witness_lvars_cow` collapses Maude-minted `~mw#N`
             // witnesses — necessary because Rust's Maude `unify_at` mints
             // fresh witnesses per call, breaking structural Eq.  HS's
             // matchAction is pure matching (no witnesses).

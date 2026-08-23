@@ -1453,7 +1453,7 @@ impl<'ctx> Reduction<'ctx> {
                         // arm: `DisjG (normaliseDisjList (apply subst
                         // disj))`) — a subst that identifies two variables
                         // can make two alts equal; the formula twin's list
-                        // is deduplicated by `normalise_stored_formula`, so
+                        // is deduplicated by `normalise_stored_formula_cow`, so
                         // the goal key must be too or the twin stores
                         // desynchronise (gcm livelock class).
                         let new_alts = crate::guarded::normalise_disj_list(&new_alts);
@@ -1501,10 +1501,10 @@ impl<'ctx> Reduction<'ctx> {
                 // of iteration order.
                 //
                 // Comparison key: `canonical_goal_for_dedup` (mirrors
-                // HS's Map-key equality on Goal, which is structural Eq
-                // — but Rust's `VarSpec`-bound Disjs need
-                // `normalize_bound_lvars` to match HS's DeBruijn
-                // semantics, see system.rs::canonical_goal_for_dedup).
+                // HS's Map-key equality on Goal, which is structural Eq;
+                // `Guarded` binders are DeBruijn on both sides, so
+                // alpha-equivalent Disjs already compare `==` — see
+                // system.rs::canonical_goal_for_dedup).
                 let canon_g2 = crate::constraint::system::canonical_goal_for_dedup(&g2);
                 if let Some(i) = new_goal_keys.iter().position(|k| *k == *canon_g2) {
                     let st_old = &mut new_goals[i].1;
@@ -2419,7 +2419,7 @@ impl<'ctx> Reduction<'ctx> {
     ///   (`insertNegSubterm`); otherwise kept in `formulas`
     pub fn insert_formula(&mut self, g: Guarded) {
         // Normalise at the insertion boundary so the stored-formula state
-        // is ALWAYS in `normalise_stored_formula` normal form — the dedup
+        // is ALWAYS in `normalise_stored_formula_cow` normal form — the dedup
         // checks inside `insert_formula_inner` compare against the
         // (post-substitution, normalised) stored sets.  Port of HS
         // insertFormula entry normalisation (150f5eba).
@@ -2576,12 +2576,12 @@ impl<'ctx> Reduction<'ctx> {
                         ));
                     }
                     let eq_vs = &self.eq_vs_cache.as_ref().expect("just ensured").1;
-                    // COW canon.  `normalize_bound_lvars` is an identity clone
-                    // applied to BOTH sides of the `==`, so it never changes the
-                    // dedup boolean — drop it (matching the `implied_apply_canon`
-                    // twin in simplify.rs, which deliberately skips it).  The two
-                    // remaining stages reuse the borrowed input when they touch no
-                    // leaf, so an already-canonical formula pays zero clones.
+                    // COW canon.  No bound-var canonicalisation: `Guarded`
+                    // binders are DeBruijn, so `Bound` vars carry no idx and
+                    // alpha-equivalent formulas already compare `==` (matching
+                    // the `implied_apply_canon` twin in simplify.rs).  The two
+                    // stages reuse the borrowed input when they touch no leaf,
+                    // so an already-canonical formula pays zero clones.
                     // (Nested `fn` with an explicit lifetime so the returned `Cow`
                     // can borrow the input `f`; a closure cannot express that.)
                     fn apply_canon<'f>(

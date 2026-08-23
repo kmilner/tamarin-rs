@@ -608,20 +608,14 @@ impl std::ops::Deref for System {
 /// The comparison key `add_goal_with_loop_flag` (and `reduction.rs`'s goal
 /// scans) dedup goals by — the seam where a Disj canonicalisation would go.
 ///
-/// It is the IDENTITY: `normalize_bound_lvars` (guarded.rs) is a pure
-/// `g.clone()` and `Disj::new` is a plain wrapper (no reorder/dedup), so a
-/// `Disj` arm would rebuild a goal that is `==` the original.  Under
-/// `Goal: PartialEq`, `canonical_goal_for_dedup(a) == canonical_goal_for_dedup(b)`
-/// is therefore exactly `a == b`.  It borrows rather than clones, so the
-/// goal-insertion hot path allocates nothing; every caller uses the result
-/// only for an `==` comparison — the ORIGINAL goal is what gets stored.
-///
-/// IF `normalize_bound_lvars` ever becomes non-identity: give `Disj` an owned
-/// arm here, i.e.
-///     let canon_alts = d.0.iter().map(crate::guarded::normalize_bound_lvars).collect();
-///     std::borrow::Cow::Owned(Goal::Disj(crate::constraint::constraints::Disj::new(canon_alts)))
-/// so alpha-equivalent Disjs re-fired with different freshen-shifted bound
-/// idxs collapse the way HS's DeBruijn-bound Map key does.
+/// It is the IDENTITY: `Guarded` binders are DeBruijn, so `Bound` vars carry
+/// no idx and alpha-equivalent alternatives already compare `==`, and
+/// `Disj::new` is a plain wrapper (no reorder/dedup), so a `Disj` arm would
+/// rebuild a goal that is `==` the original.  Under `Goal: PartialEq`,
+/// `canonical_goal_for_dedup(a) == canonical_goal_for_dedup(b)` is therefore
+/// exactly `a == b`.  It borrows rather than clones, so the goal-insertion hot
+/// path allocates nothing; every caller uses the result only for an `==`
+/// comparison — the ORIGINAL goal is what gets stored.
 pub fn canonical_goal_for_dedup(g: &Goal) -> std::borrow::Cow<'_, Goal> {
     std::borrow::Cow::Borrowed(g)
 }

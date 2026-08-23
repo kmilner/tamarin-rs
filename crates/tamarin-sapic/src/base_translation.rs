@@ -1123,7 +1123,7 @@ pub fn in_event_restriction() -> tamarin_parser::ast::Restriction {
 }
 
 // =============================================================================
-// resLocking / resLockingPure (Basetranslation.hs:366-425)
+// resLocking (Basetranslation.hs:366-425)
 // =============================================================================
 
 /// `resLockingPOS` (Basetranslation.hs:368-376): the per-lock locking
@@ -1187,26 +1187,6 @@ fn rename_lock_pos_atoms(f: &mut tamarin_parser::ast::Formula, idx: u64) {
         }
     }
     walk(f, idx);
-}
-
-/// `resLockingPure` (Basetranslation.hs:388-402): the `locking1`/`locking2`
-/// restriction pair for the pure-state (state-channel-optimisation) case.
-///
-/// Upstream EXPORTS this but never calls it — `baseRestr` builds only the
-/// per-lock `resLocking` restrictions — so nothing reaches it here either.
-/// Kept as a faithful port so wiring it stays a one-line change if upstream
-/// ever does.
-pub fn res_locking_pure() -> Vec<tamarin_parser::ast::Restriction> {
-    let locking1 = "All p l x #t1 pp lp #t2 #t3 . Lock(p,l,x)@t1 &  Lock(pp,lp,x)@t2\n\
-                     & Unlock(p,l,x)@t3 & not(#t1=#t2)\n\
-                   ==> (t2 < t1) | (t3 < t2)";
-    let locking2 = "All p l x #t1 pp lp #t2 #t3 . Lock(p,l,x)@t1 &  Unlock(pp,lp,x)@t2\n\
-           & Unlock(p,l,x)@t3 & not(#t2=#t3)\n\
-           ==> (t3 < t2) | (t2 < t1)";
-    vec![
-        parse_restriction("locking1", locking1),
-        parse_restriction("locking2", locking2),
-    ]
 }
 
 #[cfg(test)]
