@@ -1200,9 +1200,8 @@ impl MaudeHandle {
     /// NOTE the opposite field order from `Equal` as used by callers
     /// that pass `Equal { lhs = pattern, rhs = subject }`: HS's `Equal`
     /// holds `(subject, pattern)`, and so does this routine. Callers
-    /// constructed from `matchFact`/`matchWith` (e.g. `sources.rs`,
-    /// `subsumption.rs::compare_term_subs`) MUST therefore put the
-    /// subject in `lhs` and the pattern in `rhs`.
+    /// constructed from `matchFact`/`matchWith` (e.g. `sources.rs`) MUST
+    /// therefore put the subject in `lhs` and the pattern in `rhs`.
     pub fn match_eqs(
         &self,
         eqs: &[Equal<LNTerm>],

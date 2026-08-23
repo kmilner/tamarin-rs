@@ -611,26 +611,22 @@ fn impl_guard_match_skolemizes_pattern_free_vars() {
     );
 }
 
-/// Directional regression for the `match_eqs` / `compare_term_subs`
-/// flipped-`Equal`-convention bug.
+/// Directional regression for the `match_eqs` `Equal` convention.
 ///
-/// HS `compareTermSubs t1 t2` (`Subsumption.hs:37-45`) returns `GT`
-/// when `t1` is strictly MORE SPECIFIC than `t2`, `LT` when more
-/// general. With `t1 = h(x)` (general) and `t2 = h(a)` (ground,
+/// HS `matchWith t p = DelayedMatches [(t, p)]` (Term/Rewriting/Definitions.hs:93)
+/// is `(subject, pattern)`, and `compareTermSubs t1 t2` (Subsumption.hs:37-45)
+/// relies on that order: with `t1 = h(x)` (general) and `t2 = h(a)` (ground,
 /// specific):
-///   - arm A = `t1 matchWith t2` = subject h(x) vs pattern h(a):
-///     h(x)'s free var sits in the SUBJECT (ground) slot, h(a) is
-///     the pattern with no vars ⇒ No match (empty).
-///   - arm B = `t2 matchWith t1` = subject h(a) vs pattern h(x):
-///     x --> a ⇒ matches.
-///   - check [] (_:_) = LT ⇒ `compareTermSubs(h(x),h(a)) = Just LT`
-///     and symmetrically `compareTermSubs(h(a),h(x)) = Just GT`.
+///   - `t1 matchWith t2` = subject h(x) vs pattern h(a): h(x)'s free var
+///     sits in the SUBJECT (ground) slot, h(a) is the pattern with no vars
+///     ⇒ No match (empty).
+///   - `t2 matchWith t1` = subject h(a) vs pattern h(x): x --> a ⇒ matches.
 ///
-/// Pins the directionality: arm A (`t1` matchWith `t2`) uses `Equal { lhs:
-/// t1, rhs: t2 }` (RS `Equal`'s HS-faithful subject,pattern order), not
-/// the pattern,subject order used by the `const_subject` sibling.
+/// Pins the directionality: `t matchWith p` is `Equal { lhs: t, rhs: p }`
+/// (RS `Equal`'s HS-faithful subject,pattern order), not the
+/// pattern,subject order used by the `const_subject` sibling.
 #[test]
-fn compare_term_subs_direction_matches_hs() {
+fn match_eqs_direction_matches_hs() {
     let path = match maude_path() {
         Some(p) => p,
         None => {
@@ -655,24 +651,27 @@ fn compare_term_subs_direction_matches_hs() {
     )));
     let t_gen = crate::term::Term::App(FunSym::NoEq(h_sym), vec![mk(x)].into()); // h(x) general
     let t_spec = crate::term::Term::App(FunSym::NoEq(h_sym), vec![a].into()); // h(a) specific
-                                                                              // general vs specific => general is LESS specific => Less.
-    assert_eq!(
-        crate::subsumption::compare_term_subs(&hnd, &t_gen, &t_spec).expect("cmp"),
-        Some(std::cmp::Ordering::Less),
-        "h(x) is more general than h(a); HS compareTermSubs gives Less"
+    let matches = |subject: &LNTerm, pattern: &LNTerm| {
+        hnd.match_eqs(&[Equal {
+            lhs: subject.clone(),
+            rhs: pattern.clone(),
+        }])
+        .expect("match")
+    };
+    // subject h(x), pattern h(a): the subject is ground to the matcher, so
+    // nothing binds and there is no match.
+    assert!(
+        matches(&t_gen, &t_spec).is_empty(),
+        "h(x) matchWith h(a) must not match: the subject's var cannot bind"
     );
-    // specific vs general => specific is MORE specific => Greater.
-    assert_eq!(
-        crate::subsumption::compare_term_subs(&hnd, &t_spec, &t_gen).expect("cmp"),
-        Some(std::cmp::Ordering::Greater),
-        "h(a) is more specific than h(x); HS compareTermSubs gives Greater"
+    // subject h(a), pattern h(x): x --> a.
+    assert!(
+        !matches(&t_spec, &t_gen).is_empty(),
+        "h(a) matchWith h(x) must match with x --> a"
     );
-    // Identical (modulo renaming) terms compare Equal (invariant).
+    // Terms equal modulo renaming match in both directions.
     let y = LVar::new("y", LSort::Msg, 1);
     let t_gen2 = crate::term::Term::App(FunSym::NoEq(h_sym), vec![mk(y)].into());
-    assert_eq!(
-        crate::subsumption::compare_term_subs(&hnd, &t_gen, &t_gen2).expect("cmp"),
-        Some(std::cmp::Ordering::Equal),
-        "h(x) and h(y) are equal modulo renaming => Equal"
-    );
+    assert!(!matches(&t_gen, &t_gen2).is_empty());
+    assert!(!matches(&t_gen2, &t_gen).is_empty());
 }

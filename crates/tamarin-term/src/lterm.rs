@@ -4,9 +4,8 @@
 
 //! Port of `Term.LTerm` data types from `lib/term/src/Term/LTerm.hs`:
 //! sorts, names, logical variables, simple predicates and convertors,
-//! the `BVar`/`BLVar`/`BLTerm` bound-variable wrappers, the `HasFrees`
-//! trait with `frees`/`occurs`/`bounds_var_idx`/`avoid`/`rename`, and
-//! `nat_to_fresh_vars`.
+//! the `BVar` bound-variable wrapper, and the `HasFrees` trait with
+//! `frees`/`bounds_var_idx`/`avoid`/`rename`.
 //!
 //! The `MonotoneFunction` split (AC-preserving vs. arbitrary updates) is
 //! ported as a `monotone: bool` flag rather than an enum: see
@@ -22,7 +21,7 @@ use std::cmp::Ordering;
 
 use crate::function_symbols::{AcSym, FunSym, Privacy};
 use crate::term::{Term, TermView};
-use crate::vterm::{const_term, var_term, Lit, VTerm};
+use crate::vterm::{const_term, Lit, VTerm};
 use tamarin_utils::cow::cow_map_vec;
 
 // =============================================================================
@@ -244,15 +243,6 @@ pub fn fresh_lvar(
 // Predicates on LNTerm
 // =============================================================================
 
-// Intentionally retained: faithful HS port of `sortOfLit` (LTerm.hs); no caller yet.
-#[allow(dead_code)]
-pub(crate) fn sort_of_lit(l: &Lit<Name, LVar>) -> LSort {
-    match l {
-        Lit::Con(n) => sort_of_name(n),
-        Lit::Var(v) => v.sort,
-    }
-}
-
 /// Most precise sort of an `LNTerm`.
 pub fn sort_of_lnterm(t: &LNTerm) -> LSort {
     sort_of_lterm(t, sort_of_name)
@@ -283,9 +273,6 @@ pub fn is_msg_var(t: &LNTerm) -> bool {
 }
 pub fn is_pub_var(t: &LNTerm) -> bool {
     is_var_of_sort(t, LSort::Pub)
-}
-pub fn is_nat_var(t: &LNTerm) -> bool {
-    is_var_of_sort(t, LSort::Nat)
 }
 pub fn is_fresh_var(t: &LNTerm) -> bool {
     is_var_of_sort(t, LSort::Fresh)
@@ -376,43 +363,6 @@ pub fn flattened_ac_terms<A>(sym: AcSym, t: &Term<A>) -> Vec<&Term<A>> {
     out
 }
 
-/// `freshToConst t`: replace every fresh-sort variable with a fresh-tagged
-/// constant carrying its name and index.
-///
-/// Intentionally retained: faithful HS port of `freshToConst` (LTerm.hs); no
-/// production caller yet (exercised only by the unit test below).
-#[allow(dead_code)]
-pub(crate) fn fresh_to_const(t: LNTerm) -> LNTerm {
-    match t {
-        Term::Lit(Lit::Var(ref v)) if v.sort == LSort::Fresh => variable_to_const(v),
-        Term::Lit(_) => t,
-        Term::App(f, args) => {
-            let mapped: Vec<LNTerm> = args.iter().cloned().map(fresh_to_const).collect();
-            Term::App(f, mapped.into())
-        }
-    }
-}
-
-/// `variableToConst v`: build a constant whose name encodes `v`'s sort,
-/// index, and name. Panics if `v.sort` is `LSort::Msg`, mirroring the
-/// Haskell `error "Invalid sort Msg"`.
-pub fn variable_to_const(v: &LVar) -> LNTerm {
-    // `sort_show` mirrors Haskell `show vsort` (derived `Show LSort`), which
-    // yields "LSortPub"/"LSortFresh"/"LSortNode"/"LSortNat" — NOT the bare
-    // Rust Debug names ("Pub"/"Fresh"/...).  See LTerm.hs:436-438
-    // (`variableToConst`/`toConstName`) and the `data LSort` declaration at
-    // LTerm.hs:165-170.
-    let (tag, sort_show) = match v.sort {
-        LSort::Fresh => (NameTag::Fresh, "LSortFresh"),
-        LSort::Pub => (NameTag::Pub, "LSortPub"),
-        LSort::Node => (NameTag::Node, "LSortNode"),
-        LSort::Nat => (NameTag::Nat, "LSortNat"),
-        LSort::Msg => panic!("variable_to_const: invalid sort Msg"),
-    };
-    let id = format!("constVar_{}_{}_{}", sort_show, v.idx, v.name);
-    const_term(Name::new(tag, id))
-}
-
 // =============================================================================
 // BVar — bound or free variable (for binders / formulas)
 // =============================================================================
@@ -436,36 +386,6 @@ impl<V> BVar<V> {
             BVar::Free(v) => v,
             BVar::Bound(i) => panic!("into_free: bound variable {}", i),
         }
-    }
-}
-
-pub(crate) type BLVar = BVar<LVar>;
-/// `BLTerm` — `NTerm<BLVar>`.
-pub(crate) type BLTerm = NTerm<BLVar>;
-
-// Intentionally retained: faithful HS ports of `freeLNTerm`/`freeTerm`
-// (LTerm.hs). Currently unwired — the macro path that consumes them lives in
-// `macro_expand.rs` (reimplemented on the parser AST).
-#[allow(dead_code)]
-pub(crate) fn free_lnterm(v: LVar) -> BLVar {
-    BVar::Free(v)
-}
-
-/// Convert an `LNTerm` to a term over `BVar<LVar>` — every variable becomes
-/// `Free`.
-#[allow(dead_code)]
-pub(crate) fn free_term(t: LNTerm) -> BLTerm {
-    match t {
-        Term::Lit(Lit::Var(v)) => crate::term::lit(Lit::Var(BVar::Free(v))),
-        Term::Lit(Lit::Con(c)) => crate::term::lit(Lit::Con(c)),
-        Term::App(f, args) => Term::App(
-            f,
-            args.iter()
-                .cloned()
-                .map(free_term)
-                .collect::<Vec<_>>()
-                .into(),
-        ),
     }
 }
 
@@ -529,17 +449,6 @@ pub fn frees<T: HasFrees>(t: &T) -> Vec<LVar> {
     out.sort();
     out.dedup();
     out
-}
-
-/// `occurs v t`: whether `v` is among `t`'s free variables.
-pub fn occurs<T: HasFrees>(v: &LVar, t: &T) -> bool {
-    let mut found = false;
-    t.for_each_free(&mut |w| {
-        if w == v {
-            found = true;
-        }
-    });
-    found
 }
 
 /// `boundsVarIdx t`: smallest and largest free variable indices in `t`.
@@ -806,34 +715,12 @@ pub fn rename_avoiding<S: HasFrees, T: HasFrees>(s: S, avoid_in: &T) -> S {
     rename(s, &mut fresh)
 }
 
-// Intentionally retained: faithful HS port of `natToFreshVars` (LTerm.hs).
-// Currently unwired — the nat→fresh logic on the parser AST in `deriv_check.rs`
-// supersedes this term-level version (exercised only by the unit test below).
-#[allow(dead_code)]
-pub(crate) fn nat_to_fresh_vars(t: LNTerm) -> LNTerm {
-    match t {
-        Term::Lit(Lit::Var(LVar {
-            name,
-            sort: LSort::Nat,
-            idx,
-        })) => var_term(LVar {
-            name,
-            sort: LSort::Fresh,
-            idx,
-        }),
-        Term::Lit(_) => t,
-        Term::App(f, args) => {
-            let mapped: Vec<LNTerm> = args.iter().cloned().map(nat_to_fresh_vars).collect();
-            Term::App(f, mapped.into())
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::function_symbols::pair_sym;
     use crate::term::f_app_no_eq;
+    use crate::vterm::var_term;
 
     #[test]
     fn name_sort_mapping() {
@@ -879,43 +766,6 @@ mod tests {
         // A different AC operator does not flatten the term.  The complete
         // term comes back as the single child.
         assert_eq!(flattened_ac_terms(AcSym::Xor, &outer), vec![&outer]);
-    }
-
-    #[test]
-    fn fresh_to_const_replaces_only_fresh_vars() {
-        let v_fresh: LNTerm = var_term(LVar::new("k", LSort::Fresh, 0));
-        let v_pub: LNTerm = var_term(LVar::new("p", LSort::Pub, 0));
-        let t: LNTerm = f_app_no_eq(pair_sym(), vec![v_fresh, v_pub.clone()]);
-        let r = fresh_to_const(t);
-        if let Term::App(_, ts) = &r {
-            // The fresh variable becomes the constant that `variableToConst`
-            // builds.  The id of that constant spells the sort as Haskell's
-            // `show LSort` does (LTerm.hs:436-438).  It is `LSortFresh`, not
-            // the bare `Fresh`.
-            assert_eq!(
-                ts[0],
-                const_term(Name::new(NameTag::Fresh, "constVar_LSortFresh_0_k"))
-            );
-            // The function does not change the pub variable.
-            assert_eq!(ts[1], v_pub);
-        } else {
-            panic!();
-        }
-        // The other sorts follow the same spelling rule.  The index sits
-        // between the sort and the name.
-        assert_eq!(
-            variable_to_const(&LVar::new("A", LSort::Pub, 7)),
-            const_term(Name::new(NameTag::Pub, "constVar_LSortPub_7_A"))
-        );
-    }
-
-    #[test]
-    fn nat_to_fresh_vars_swaps_sort() {
-        let t: LNTerm = var_term(LVar::new("n", LSort::Nat, 3));
-        let r = nat_to_fresh_vars(t);
-        // Only the sort changes.  The function carries over the name hint and
-        // the index.
-        assert_eq!(get_var(&r), Some(&LVar::new("n", LSort::Fresh, 3)));
     }
 
     #[test]

@@ -413,9 +413,6 @@ impl FunSym {
     pub fn is_c(&self) -> bool {
         matches!(self, FunSym::C(_))
     }
-    pub fn is_list(&self) -> bool {
-        matches!(self, FunSym::List)
-    }
 
     /// NDC state of the symbol, or `None` for the variants that carry no NDC
     /// field: the built-in AC operators, `C`, and `LIST`.  Kept in step with

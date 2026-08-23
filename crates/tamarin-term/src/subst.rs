@@ -20,7 +20,7 @@ use tamarin_utils::cow::cow_map_vec;
 
 use crate::function_symbols::FunSym;
 use crate::lterm::BVar;
-use crate::term::{f_app, f_app_ac, f_app_c, f_app_list, f_app_no_eq, lit, map_lits, Term};
+use crate::term::{f_app, f_app_ac, f_app_c, f_app_list, f_app_no_eq, map_lits, Term};
 use crate::vterm::{Lit, VTerm};
 
 /// A substitution mapping variables of type `V` to terms of type
@@ -157,20 +157,6 @@ fn equal_to_var<C, V: PartialEq>(t: &VTerm<C, V>, v: &V) -> bool {
     matches!(t, Term::Lit(Lit::Var(w)) if w == v)
 }
 
-/// `applyLit`: substitute a single literal.
-///
-/// Intentionally retained: faithful HS port of `applyLit` (SubstVFree.hs); no
-/// caller yet (the hot substitution path uses [`apply_vterm_map`]).
-pub fn apply_lit<C: Ord + Clone, V: Ord + Clone>(s: &Subst<C, V>, l: &Lit<C, V>) -> VTerm<C, V> {
-    match l {
-        Lit::Var(v) => match s.map.get(v) {
-            Some(t) => t.clone(),
-            None => lit(Lit::Var(v.clone())),
-        },
-        Lit::Con(c) => lit(Lit::Con(c.clone())),
-    }
-}
-
 /// `applyVTerm`: substitute through a whole term, re-AC-normalising.
 pub fn apply_vterm<C: Ord + Clone, V: Ord + Clone>(s: &Subst<C, V>, t: VTerm<C, V>) -> VTerm<C, V> {
     apply_vterm_map(&s.map, t)
@@ -249,9 +235,8 @@ fn apply_vterm_map_changed<C: Ord + Clone, V: Ord + Clone>(
     }
 }
 
-/// `applyLit` against a raw map, returning `Some` only when the literal is a
-/// domain variable (and thus replaced).  The borrowing counterpart of
-/// [`apply_lit`] used by the sharing recursion above.
+/// `applyLit` (SubstVFree.hs:100-102) against a raw map, returning `Some`
+/// only when the literal is a domain variable (and thus replaced).
 ///
 /// `from_map`/`from_list` drop trivial `x ~> x` entries and the unification
 /// accumulator never inserts one, so a found binding is always a genuine
