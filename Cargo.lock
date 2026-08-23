@@ -1259,6 +1259,8 @@ dependencies = [
 name = "tamarin-term"
 version = "1.13.0"
 dependencies = [
+ "hashbrown",
+ "rustc-hash",
  "tamarin-utils",
 ]
 

@@ -5,6 +5,8 @@
 //! - [`term`] ← `Term.Term.Raw` (raw term type + AC-normalising smart constructors)
 //! - [`vterm`] ← `Term.VTerm` (`Lit<C, V>` and helpers)
 //! - [`lterm`] ← `Term.LTerm` (sorts, names, LVar, BVar, HasFrees, rename)
+//! - [`bind`] ← `Control.Monad.Bind` over `LVar` keys, plus `Term.LTerm`'s
+//!   `someInst` and `renamePrecise`
 //! - [`pretty`] ← pretty-printing helpers (`prettyLNTerm`/`prettyTerm`)
 //! - [`subst`] ← `Term.Substitution.SubstVFree` (generic free substitution)
 //! - [`subst_vfresh`] ← `Term.Substitution.SubstVFresh` (fresh-range substitution)
@@ -32,6 +34,7 @@
 //!   (variant computation as a standalone module; the variant-unification
 //!   entry point Tamarin needs lives in [`maude_proc`])
 
+pub mod bind;
 pub mod builtin;
 pub mod function_symbols;
 pub mod intern;

@@ -22,6 +22,7 @@
 //! so we walk each field by hand. The walk-order mirrors
 //! `Reduction::subst_system_once` so any future cross-checks stay aligned.
 
+use tamarin_term::bind::Bindings;
 use tamarin_term::lterm::{HasFrees, LNTerm, LVar};
 use tamarin_term::subst::Subst;
 use tamarin_term::term::Term;
@@ -40,7 +41,7 @@ pub fn rename_precise_system(sys: &mut System) {
     // Rewrites every free LVar through a deterministic alpha-rename;
     // the resulting max-var-idx is almost always smaller.  The full
     // cache is invalidated after Phase 1, and only when some binding is
-    // a genuine remap (`state.changed`): an all-identity rename leaves
+    // a genuine remap (`bindings.changed()`): an all-identity rename leaves
     // every value byte-identical — Phase 2 then only re-sorts fields and
     // dedups EQUAL values (the HS `S.fromList` effects), neither of
     // which can change the max free-var idx, so the cache stays exact.
@@ -48,7 +49,8 @@ pub fn rename_precise_system(sys: &mut System) {
     // rewrite in Phase 2 step 1: an all-identity NODE rename (a weaker
     // condition, snapshotted as `nodes_identity` below) already leaves
     // the nodes byte-identical even when later fields are remapped.
-    let mut state = RenameState::new();
+    let mut fresh = PreciseFreshState::nothing_used();
+    let mut bindings = Bindings::new();
 
     // ----------------------------------------------------------------------
     // Phase 1 — walk every free LVar in deterministic traversal order so the
@@ -71,7 +73,7 @@ pub fn rename_precise_system(sys: &mut System) {
     // RuleACInst)>` in insertion order — that order is NOT the same as
     // NodeId-ascending.  Without this sort, the walk visits a newly-grafted
     // source-case Gen_Step (high pre-rename idx but inserted last) AFTER
-    // pre-existing Check nodes — yet then `state.import` allocates per-name
+    // pre-existing Check nodes — yet then `bindings.import` allocates per-name
     // counters in *visit* order, so the newly-grafted Gen_Step gets the
     // FIRST fresh "vr" slot if walked first / LAST if walked last.  For
     // Helper_Loop_and_success this controls whether vr.0 ends up Check
@@ -83,16 +85,16 @@ pub fn rename_precise_system(sys: &mut System) {
     )> = sys.nodes.iter().collect();
     nodes_sorted.sort_by_key(|a| a.0);
     for (id, rule) in nodes_sorted {
-        state.import(id);
+        bindings.import(id, &mut fresh);
         rule.for_each_free(&mut |v| {
-            state.import(v);
+            bindings.import(v, &mut fresh);
         });
     }
-    // Nodes are the FIRST field walked, so `!state.changed` here means every
+    // Nodes are the FIRST field walked, so `!bindings.changed()` here means every
     // node var (ids + rule vars) was bound to its own idx — the node rename
     // is the identity.  Snapshotted before any later field can flip the flag,
     // enabling the Phase 2 step-1 identity fast path.
-    let nodes_identity = !state.changed;
+    let nodes_identity = !bindings.changed();
     // HS-faithful: `instance HasFrees (S.Set a)` (Term/LTerm.hs:898-903, see line 900)
     // walks the set via `foldMap (foldFrees f)` — i.e. ascending Ord
     // order.  HS's `_sEdges` / `_sLessAtoms` / `_sSubtermStore` fields
@@ -109,18 +111,18 @@ pub fn rename_precise_system(sys: &mut System) {
     let mut edges_sorted: Vec<&crate::constraint::constraints::Edge> = sys.edges.iter().collect();
     edges_sorted.sort();
     for e in edges_sorted {
-        state.import(&e.src.0);
-        state.import(&e.tgt.0);
+        bindings.import(&e.src.0, &mut fresh);
+        bindings.import(&e.tgt.0, &mut fresh);
     }
     let mut less_sorted: Vec<&crate::constraint::constraints::LessAtom> =
         sys.less_atoms.iter().collect();
     less_sorted.sort();
     for la in less_sorted {
-        state.import(&la.smaller);
-        state.import(&la.larger);
+        bindings.import(&la.smaller, &mut fresh);
+        bindings.import(&la.larger, &mut fresh);
     }
     if let Some(la) = &sys.last_atom {
-        state.import(la);
+        bindings.import(la, &mut fresh);
     }
     // HS `HasFrees SubtermStore` (SubtermStore.hs:546-548) walks
     // `negSt <> st <> solvedSt`; each summand is a `S.Set` — sorted.
@@ -131,10 +133,10 @@ pub fn rename_precise_system(sys: &mut System) {
     neg_sorted.sort();
     for (s, b) in neg_sorted {
         s.for_each_free(&mut |v| {
-            state.import(v);
+            bindings.import(v, &mut fresh);
         });
         b.for_each_free(&mut |v| {
-            state.import(v);
+            bindings.import(v, &mut fresh);
         });
     }
     // SubtermConstraint isn't `Ord` in RS so sort by `(small, big)`
@@ -144,10 +146,10 @@ pub fn rename_precise_system(sys: &mut System) {
     sub_sorted.sort_by(|a, b| (&a.small, &a.big).cmp(&(&b.small, &b.big)));
     for c in sub_sorted {
         c.small.for_each_free(&mut |v| {
-            state.import(v);
+            bindings.import(v, &mut fresh);
         });
         c.big.for_each_free(&mut |v| {
-            state.import(v);
+            bindings.import(v, &mut fresh);
         });
     }
     let mut solved_sorted: Vec<&crate::tools::subterm_store::SubtermConstraint> =
@@ -155,10 +157,10 @@ pub fn rename_precise_system(sys: &mut System) {
     solved_sorted.sort_by(|a, b| (&a.small, &a.big).cmp(&(&b.small, &b.big)));
     for c in solved_sorted {
         c.small.for_each_free(&mut |v| {
-            state.import(v);
+            bindings.import(v, &mut fresh);
         });
         c.big.for_each_free(&mut |v| {
-            state.import(v);
+            bindings.import(v, &mut fresh);
         });
     }
     // eq_store.subst: visit keys (dom) and values (range).  RS's
@@ -167,9 +169,9 @@ pub fn rename_precise_system(sys: &mut System) {
     // (LSubst c) = foldFrees f . sMap` walking `M.Map LVar Term`
     // ascending (SubstVFree.hs:220-221, see line 221).
     for (k, t) in sys.eq_store.subst.iter() {
-        state.import(k);
+        bindings.import(k, &mut fresh);
         t.for_each_free(&mut |v| {
-            state.import(v);
+            bindings.import(v, &mut fresh);
         });
     }
     // eq_store.conj: HS-faithful `HasFrees (SubstVFresh n LVar)` only
@@ -191,7 +193,7 @@ pub fn rename_precise_system(sys: &mut System) {
             // ascending order as `to_list()`, without cloning every
             // (key, range-term) pair only to discard it.
             for k in s.dom() {
-                state.import(k);
+                bindings.import(k, &mut fresh);
                 // Note: value vars NOT imported (HS-faithful).
             }
         }
@@ -207,7 +209,7 @@ pub fn rename_precise_system(sys: &mut System) {
     formulas_sorted.sort_by(|a, b| crate::guarded::cmp_guarded(a, b));
     for f in formulas_sorted {
         guarded_for_each_free(f, &mut |v| {
-            state.import(v);
+            bindings.import(v, &mut fresh);
         });
     }
     let mut solved_formulas_sorted: Vec<&crate::guarded::Guarded> =
@@ -215,7 +217,7 @@ pub fn rename_precise_system(sys: &mut System) {
     solved_formulas_sorted.sort_by(|a, b| crate::guarded::cmp_guarded(a, b));
     for f in solved_formulas_sorted {
         guarded_for_each_free(f, &mut |v| {
-            state.import(v);
+            bindings.import(v, &mut fresh);
         });
     }
     let mut lemmas_sorted: Vec<&crate::guarded::Guarded> =
@@ -223,7 +225,7 @@ pub fn rename_precise_system(sys: &mut System) {
     lemmas_sorted.sort_by(|a, b| crate::guarded::cmp_guarded(a, b));
     for f in lemmas_sorted {
         guarded_for_each_free(f, &mut |v| {
-            state.import(v);
+            bindings.import(v, &mut fresh);
         });
     }
     // HS-faithful: `_sGoals` is `M.Map Goal GoalStatus` (System.hs:383-401, see line 393),
@@ -237,7 +239,7 @@ pub fn rename_precise_system(sys: &mut System) {
     goals_sorted.sort_by(|a, b| crate::constraint::solver::goals::goal_cmp(&a.0, &b.0));
     for (g, _) in goals_sorted {
         goal_for_each_free(g, &mut |v| {
-            state.import(v);
+            bindings.import(v, &mut fresh);
         });
     }
 
@@ -249,12 +251,11 @@ pub fn rename_precise_system(sys: &mut System) {
     // guarded formulas we use the parser-level `VarSubst`.
     // ----------------------------------------------------------------------
 
-    // `state.changed` covers EVERY field (Phase 1 walks them all), so a
+    // `bindings.changed()` covers EVERY field (Phase 1 walks them all), so a
     // false value proves the whole rename is the identity — see the
     // invalidation note at the top of this function.
-    let any_remap = state.changed;
-    let map = state.into_map();
-    if map.is_empty() {
+    let any_remap = bindings.changed();
+    if bindings.is_empty() {
         return;
     }
     if any_remap {
@@ -267,8 +268,9 @@ pub fn rename_precise_system(sys: &mut System) {
     }
 
     let term_subst: Subst<tamarin_term::lterm::Name, LVar> = Subst::from_list(
-        map.iter()
-            .map(|(old, new)| (old.0, Term::Lit(Lit::Var(*new)))),
+        bindings
+            .iter()
+            .map(|(old, new)| (old, Term::Lit(Lit::Var(new)))),
     );
     // Hashed leaf-lookup view over the pass-invariant rename subst
     // (`SubstView`): Phase 2 applies this ONE fixed var→var substitution to
@@ -277,12 +279,12 @@ pub fn rename_precise_system(sys: &mut System) {
     // byte-identical output.  (`from_list` above already drops identity
     // `x ~> x` entries, so the view's hit set matches the map's exactly.)
     let term_view = tamarin_term::subst::SubstView::new(&term_subst);
-    let formula_subst: VarSubst = map
+    let formula_subst: VarSubst = bindings
         .iter()
         .map(|(old, new)| {
             (
-                // `old.0.name` is an interned `&'static str` — zero-alloc key.
-                (old.0.name, old.0.idx),
+                // `old.name` is an interned `&'static str` — zero-alloc key.
+                (old.name, old.idx),
                 tamarin_parser::ast::Term::Var(tamarin_parser::ast::VarSpec {
                     name: new.name.to_string(),
                     idx: new.idx,
@@ -293,7 +295,7 @@ pub fn rename_precise_system(sys: &mut System) {
         })
         .collect();
 
-    let map_var = |v: LVar| -> LVar { map.get(&v).copied().unwrap_or(v) };
+    let map_var = |v: LVar| -> LVar { bindings.get(&v).unwrap_or(v) };
 
     // 1. Nodes — id + rule.
     //
@@ -559,125 +561,6 @@ pub fn rename_precise_system(sys: &mut System) {
 // =============================================================================
 // Helpers
 // =============================================================================
-
-/// Rename-map key wrapping the original `LVar`.
-///
-/// `Hash` delegates to `LVar`'s content-based derive, so two vars with equal
-/// *content* always hash to the same bucket even when their interned name
-/// pointers differ (a rare non-canonical literal name vs the pooled copy) —
-/// this is what keeps the dedup correct and the `--prove` output byte-identical.
-/// Only `Eq` is optimised, via `lvar_fast_eq` — same relation as `LVar`'s derive.
-#[derive(Clone)]
-struct VarKey(LVar);
-
-impl PartialEq for VarKey {
-    #[inline]
-    fn eq(&self, other: &Self) -> bool {
-        lvar_fast_eq(&self.0, &other.0)
-    }
-}
-impl Eq for VarKey {}
-impl std::hash::Hash for VarKey {
-    #[inline]
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.0.hash(state)
-    }
-}
-// Lets `contains_key`/`get` probe by `&LVar` (no clone) yet run the fast eq.
-// The probe hashes via `LVar`'s derive (identical to `VarKey::hash`), so the
-// probe lands in the same bucket the owned key was stored in.
-impl hashbrown::Equivalent<VarKey> for LVar {
-    #[inline]
-    fn equivalent(&self, key: &VarKey) -> bool {
-        lvar_fast_eq(self, &key.0)
-    }
-}
-
-/// Exactly `LVar`'s content equality, faster: interned names share one
-/// canonical pointer (intern guarantees content-equal ⇒ pointer-equal), so a
-/// pointer+len match confirms the name without the byte compare; anything else
-/// falls back to the full content compare, so the relation is unchanged.
-#[inline]
-fn lvar_fast_eq(a: &LVar, b: &LVar) -> bool {
-    // Destructure without `..` so a new `LVar` field forces an equality decision
-    // here, keeping this fast path in step with `LVar`'s derived Eq.
-    let LVar {
-        name: a_name,
-        sort: a_sort,
-        idx: a_idx,
-    } = a;
-    let LVar {
-        name: b_name,
-        sort: b_sort,
-        idx: b_idx,
-    } = b;
-    // idx (u64) first — most discriminating, cheapest — then sort, so a
-    // hash-collision mismatch is rejected before the name is touched.
-    if a_idx != b_idx || a_sort != b_sort {
-        return false;
-    }
-    (std::ptr::eq(a_name.as_ptr(), b_name.as_ptr()) && a_name.len() == b_name.len())
-        || a_name == b_name
-}
-
-/// The rename map: keyed by `VarKey` (content hash, fast pointer eq), hashed
-/// with the same `FxBuildHasher` as `FastMap`.  Iteration order is never
-/// observed — `into_map` feeds only `Subst::from_list` (a re-sorted `BTreeMap`)
-/// and a distinct-key `VarSubst` applied by lookup.
-type RenameMap = hashbrown::HashMap<VarKey, LVar, rustc_hash::FxBuildHasher>;
-
-struct RenameState {
-    fresh: PreciseFreshState,
-    map: RenameMap,
-    /// Set the first time a var is bound to a DIFFERENT idx than its
-    /// original.  `import` always preserves name+sort, so a fresh binding
-    /// is the identity exactly when its allocated idx equals the original;
-    /// `!changed` after a field's walk means the rename is the identity over
-    /// every var seen so far (used for the nodes-first fast path).
-    changed: bool,
-}
-
-impl RenameState {
-    fn new() -> Self {
-        RenameState {
-            fresh: PreciseFreshState::nothing_used(),
-            map: RenameMap::default(),
-            changed: false,
-        }
-    }
-    /// `importBinding`: idempotent — first call for `v` allocates a fresh
-    /// LVar keyed by `v.name`; later calls return the same binding.
-    fn import(&mut self, v: &LVar) {
-        // Probe by `&LVar` (no clone) via `VarKey`'s `Equivalent` impl, whose
-        // `eq` short-circuits on the interned name POINTER — skipping the
-        // byte-wise `str` compare that dominated `import`'s confirming-eq self
-        // time (`equal_same_length` in the profile) — with a content fallback
-        // that keeps the equality RELATION exactly `LVar`'s.  The hash is still
-        // content-based (see `VarKey`), so equal-content vars — even with
-        // different name pointers — dedup into one slot: output is identical.
-        if self.map.contains_key(v) {
-            return;
-        }
-        let idx = self.fresh.fresh_ident(v.name);
-        // Record whether this first binding remaps the idx (name+sort are
-        // always preserved), so an all-identity prefix leaves `changed` false.
-        if idx != v.idx {
-            self.changed = true;
-        }
-        // First occurrence only (rare): materialise the owned key.
-        self.map.insert(
-            VarKey(*v),
-            LVar {
-                name: v.name,
-                sort: v.sort,
-                idx,
-            },
-        );
-    }
-    fn into_map(self) -> RenameMap {
-        self.map
-    }
-}
 
 fn goal_for_each_free(g: &Goal, f: &mut dyn FnMut(&LVar)) {
     match g {
