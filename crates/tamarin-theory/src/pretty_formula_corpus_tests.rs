@@ -23,21 +23,11 @@ use crate::macro_expand::apply_macros_formula;
 use crate::pretty_sapic::render_sapic;
 use crate::pretty_theory::{collect_macros, collect_predicates, expand_predicates_for_display};
 use crate::sapic::to_lformula;
+use crate::test_corpus::{beyond_budget, corpus_root, parse_file, rel, spthy_files};
 use rayon::prelude::*;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
-
-/// Examples beyond this test's budget, relative to the corpus root and
-/// reported as `skipped_listed`: the accountability lemmas of the mixvote
-/// multi-session family grow geometrically with the session count, so a
-/// session-4 lemma takes minutes through the renders below and session 5
-/// overflows the stack.  Neither file is in the prove or pretty
-/// gate corpus (scripts/parity_corpus.txt).
-const BEYOND_BUDGET: &[&str] = &[
-    "sapic/deprecated/csf21-acc-unbounded/mixvote/mixvote_SmHh-multi-session-4-fixed.spthy",
-    "sapic/deprecated/csf21-acc-unbounded/mixvote/mixvote_SmHh-multi-session-5-fixed.spthy",
-];
 
 /// One formula to compare, tagged with where it came from.
 ///
@@ -53,31 +43,6 @@ struct Item {
     formula: p::Formula,
     pre: p::Formula,
     sapic: bool,
-}
-
-/// The examples tree, or the override in `CORPUS_ROOT`.
-fn corpus_root() -> PathBuf {
-    if let Ok(root) = std::env::var("CORPUS_ROOT") {
-        return PathBuf::from(root);
-    }
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tamarin-prover/examples")
-}
-
-/// `path` relative to the corpus root, as the listing and the report name it.
-fn rel<'a>(path: &'a Path, root: &Path) -> &'a Path {
-    path.strip_prefix(root).unwrap_or(path)
-}
-
-fn spthy_files(root: &Path) -> Vec<PathBuf> {
-    let mut files: Vec<PathBuf> = walkdir::WalkDir::new(root)
-        .into_iter()
-        .filter_map(Result::ok)
-        .filter(|e| e.file_type().is_file())
-        .map(|e| e.into_path())
-        .filter(|p| p.extension().is_some_and(|x| x == "spthy"))
-        .collect();
-    files.sort();
-    files
 }
 
 /// SAPIC condition formulas and embedded-rule restrictions of a process,
@@ -209,8 +174,7 @@ struct FileReport {
 
 /// Parse, lift the embedded restrictions, elaborate and collect the
 /// formulas of one file; a failure or panic in one of those steps skips
-/// the file.  A diff-operator theory is parsed again with the `diff`
-/// define, the way `-D=diff` enables the operator on the CLI.
+/// the file.
 fn file_phase(path: &Path, root: &Path) -> FileReport {
     let start = Instant::now();
     let mut rep = FileReport {
@@ -219,20 +183,11 @@ fn file_phase(path: &Path, root: &Path) -> FileReport {
         msig: std::sync::Arc::new(tamarin_term::maude_sig::MaudeSig::default()),
         elapsed: Duration::ZERO,
     };
-    if BEYOND_BUDGET.contains(&rel(path, root).to_string_lossy().as_ref()) {
+    if beyond_budget(path, root) {
         rep.outcome = Outcome::SkippedListed;
         return rep;
     }
-    let Ok(src) = std::fs::read_to_string(path) else {
-        return rep;
-    };
-    let base = path.parent().map(Path::to_path_buf);
-    let parsed = std::panic::catch_unwind(|| {
-        tamarin_parser::parser::parse_theory_with_base(&src, &[], base.clone())
-            .or_else(|_| tamarin_parser::parser::parse_theory_with_base(&src, &["diff"], base))
-            .ok()
-    });
-    let Ok(Some(mut parsed)) = parsed else {
+    let Some(mut parsed) = parse_file(path) else {
         return rep;
     };
     let lifted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

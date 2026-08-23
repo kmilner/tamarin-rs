@@ -684,3 +684,7 @@ mod tests {
         assert!(p.tree.is_none());
     }
 }
+
+#[cfg(test)]
+#[path = "stored_proof_corpus_tests.rs"]
+mod stored_proof_corpus_tests;
