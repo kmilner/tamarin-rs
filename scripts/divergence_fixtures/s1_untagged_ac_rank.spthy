@@ -1,0 +1,33 @@
+/*
+ * The operand order of an AC operator applied to one bare and one sorted
+ * variable.  Upstream builds the lemma formula over `LVar`s, where `Ord LVar`
+ * compares the sort after the index (LTerm.hs:546-548#compare) and the
+ * message sort precedes the natural sort (LTerm.hs:165-170#LSort), so `z`
+ * stands to the left of `%q`.  The port leaves the sort of a bare variable
+ * untagged in the parser AST and ranks untagged behind every tagged sort
+ * (`tamarin_theory::guarded::sort_hint_tag`), so it prints the two operands
+ * the other way round.  Both source spellings canonicalise to one order, so
+ * the two lemmas agree with each other on each side, and the guarded formula
+ * the solver receives carries the upstream order on both sides: the lemma
+ * echo is the one line the two engines write differently.
+ *
+ * Compared slice: the `theory … end` echo, which carries both lemma formulas
+ * (see check.sh).
+ */
+theory UntaggedAcRank
+begin
+
+builtins: multiset, natural-numbers
+
+rule A:
+  [ In(z) ] --[ Ev(z) ]-> [ Out(z) ]
+
+lemma bare_vs_nat:
+  exists-trace
+  "Ex %q z #i. Ev(z) @ i & z %+ %q = z"
+
+lemma bare_vs_nat_written_other_way:
+  exists-trace
+  "Ex %q z #i. Ev(z) @ i & %q %+ z = z"
+
+end

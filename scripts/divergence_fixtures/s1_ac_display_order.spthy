@@ -1,0 +1,37 @@
+/*
+ * The operand order of an AC operator under a binder the display renames.
+ * Upstream freshens the bound `~x` to `~x.1` and substitutes the display
+ * variable into the body before printing (reached from
+ * Theory/Model/Formula.hs:474-514#prettyLFormula, which opens the quantifier
+ * prefix through Theory/Model/Formula.hs:274-291#openFormula), and the
+ * rebuilt AC application re-sorts its arguments with the display index, which
+ * `Ord LVar` compares first (LTerm.hs:546-548#compare): `x` at index 0 stands
+ * to the left of `~x.1` at index 1.  The port orders the arguments once, with
+ * the variables as written, where the two indices are equal and the fresh
+ * sort precedes the message sort (LTerm.hs:165-170#LSort), and renames the
+ * binder afterwards.  The guarded formula the solver receives carries the
+ * display order on both sides, so the lemma echo is the one line the two
+ * engines write differently.  The divergence lives in the display-time
+ * variable supply rather than in the sort the parser records, so this row is
+ * `diverge`.
+ *
+ * Compared slice: the `theory … end` echo, which carries both lemma formulas
+ * (see check.sh).
+ */
+theory AcDisplayOrder
+begin
+
+builtins: multiset
+
+rule A:
+  [ Fr(~x), In(y) ] --[ B(~x + y), C(y) ]-> [ ]
+
+lemma nested_same_name:
+  all-traces
+  "All x #i. C(x) @ i ==> (Ex ~x #j. B(x + ~x) @ j)"
+
+lemma nested_same_name_written_sorted:
+  all-traces
+  "All x #i. C(x) @ i ==> (Ex ~x #j. B(~x + x) @ j)"
+
+end

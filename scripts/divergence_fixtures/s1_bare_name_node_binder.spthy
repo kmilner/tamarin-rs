@@ -1,0 +1,46 @@
+/*
+ * A bare `l` under a `#l` binder.  Upstream sorts the occurrence by its
+ * position (Theory/Text/Parser/Formula.hs:43-59#blatom): the right operand of
+ * a node equality is a `nodevar` (Token.hs:444-448#nodevar) and binds to the
+ * `#l` binder, while a fact argument is a `msgvar`
+ * (Token.hs:440-441#msgvar), stays free as `l`, and pushes the binder to
+ * `#l.1`.  The port gives a bare identifier no sort in the parser AST and
+ * reads the two positions the other way round: the equality's right operand
+ * stays free, which pushes the binder to `#l.1` and prints the operand
+ * unsigiled, while a fact argument binds to the `#l` binder.
+ *
+ * Compared slice: the `theory … end` echo, which carries the six lemma
+ * formulas and the guarded formulas the solver receives (see check.sh).
+ */
+theory BareNameNodeBinder
+begin
+
+rule A:
+  [ Fr(~x) ] --[ Alive(~x), Once(~x) ]-> [ ]
+
+lemma eq_rhs:
+  all-traces
+  "All y z #k #l. Alive(y) @ k & Alive(z) @ l ==> #k = l"
+
+lemma eq_rhs_suffix_lhs:
+  all-traces
+  "All y z #k #l. Alive(y) @ k & Alive(z) @ l ==> k:node = l"
+
+lemma eq_rhs_indexed:
+  all-traces
+  "All y z #k #l.1. Alive(y) @ k & Alive(z) @ l.1 ==> #k = l.1"
+
+lemma eq_both_binders:
+  all-traces
+  "All l #l. Alive(l) @ l ==> #l = l"
+
+lemma fact_arg:
+  all-traces
+  "All #l. Alive(l) @ l ==> F"
+
+lemma disjunction:
+  exists-trace
+  "Ex #j1 #l1. Once('a') @ #j1 & Once('b') @ #l1 & #j1 < #l1
+     & (All a #k. Once(a) @ k ==> (#k = #j1 | #k = l1))"
+
+end

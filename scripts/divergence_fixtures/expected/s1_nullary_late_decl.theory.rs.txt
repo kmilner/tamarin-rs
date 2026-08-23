@@ -1,0 +1,31 @@
+theory NullaryLateDecl
+
+begin
+
+// Function signature and definition of the equational theory E
+
+builtins: multiset
+functions: fst/1, pair/2, snd/1, zed/0
+equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
+
+rule (modulo E) A:
+   [ In( zw ) ] --[ Seen( zed ) ]-> [ Out( (zw++zed) ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) B:
+   [ In( zw ) ] --[ Seen2( zed ) ]-> [ Out( (zw++zed) ) ]
+
+  /* has exactly the trivial AC variant */
+
+lemma l1:
+  exists-trace "∃ x #i. Seen( x ) @ #i"
+/*
+guarded formula characterizing all satisfying traces:
+"∃ x #i. (Seen( x ) @ #i)"
+*/
+by sorry
+
+
+
+end
