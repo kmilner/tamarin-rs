@@ -139,10 +139,9 @@ pub enum GAtom {
 /// `matchingComm := <'1','g'^~ex>`) produces the nested form, while the
 /// `impliedFormulas` / LNTerm round-trip path produces the flat form.
 /// Keeping both defeats the structural `==` dedup in `insertFormula`
-/// (`solved_formulas` membership) and the goal-store
-/// `canonical_goal_for_dedup` merge — the re-derived formula no longer
-/// matches the substituted solved one, so it re-inserts an open Disj goal
-/// and the prover re-solves a disjunction HS already discharged
+/// (`solved_formulas` membership) and the goal-store merge — the re-derived
+/// formula does not match the substituted solved one, so it re-inserts an
+/// open Disj goal and the prover re-solves a disjunction HS already discharged
 /// (UM_three_pass `CK_secure_UM3` blow-up).  Canonicalise to the flat form
 /// by splicing a trailing `Pair`, exactly the identity HS gets for free
 /// from binary pairs.  Only the LAST element is spliced: a `Pair` in a
@@ -982,7 +981,7 @@ mod tests {
     /// reason is that RS's n-ary `Pair` stands for HS's right-nested binary
     /// `fAppPair`.  In HS, `<a, <b, c>>` and `<a, b, c>` are one term.  Two
     /// spellings of that term here would defeat the structural `==` that
-    /// `insertFormula` and `canonical_goal_for_dedup` rely on.  A `Pair` in a
+    /// `insertFormula` and the goal-store merge rely on.  A `Pair` in a
     /// non-tail position is a genuinely different term (`pair(pair(a,b),c)`).
     /// It must survive untouched.
     #[test]

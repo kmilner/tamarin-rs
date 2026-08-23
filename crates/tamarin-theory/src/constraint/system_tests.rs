@@ -690,6 +690,32 @@ fn add_goal_idempotent() {
     assert_eq!(s.goals.len(), 1);
 }
 
+/// `add_goal_with_loop_flag` dedups on `==` over the whole `Goal`.  Two
+/// independently built, structurally equal `Disj` goals therefore land in one
+/// slot: the second insertion ORs its `looping` flag into the stored status,
+/// keeps the smaller `nr`, and leaves the stored goal in place, while
+/// `next_goal_nr` still advances once per call (HS `insertGoalStatus`,
+/// Reduction.hs:516-523).
+#[test]
+fn add_goal_merges_structurally_equal_disj_goals() {
+    use crate::constraint::constraints::Disj;
+    use crate::guarded::{gtrue, Guarded};
+
+    let mut s = System::empty();
+    let disj = || Goal::Disj(Disj::<Guarded>::new(vec![gtrue()]));
+    s.add_goal_with_loop_flag(disj(), false);
+    s.add_goal_with_loop_flag(disj(), true);
+    assert_eq!(s.goals.len(), 1);
+    assert_eq!(s.goals[0].0, disj());
+    assert!(s.goals[0].1.looping);
+    assert_eq!(s.goals[0].1.nr, 0);
+    assert_eq!(s.next_goal_nr, 2);
+
+    // A different Disj is a different key.
+    s.add_goal_with_loop_flag(Goal::Disj(Disj::<Guarded>::new(Vec::new())), false);
+    assert_eq!(s.goals.len(), 2);
+}
+
 #[test]
 fn insert_lemma_flattens_top_level_conj() {
     let mut s = System::empty();

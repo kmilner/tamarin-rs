@@ -605,21 +605,6 @@ impl std::ops::Deref for System {
     }
 }
 
-/// The comparison key `add_goal_with_loop_flag` (and `reduction.rs`'s goal
-/// scans) dedup goals by — the seam where a Disj canonicalisation would go.
-///
-/// It is the IDENTITY: `Guarded` binders are DeBruijn, so `Bound` vars carry
-/// no idx and alpha-equivalent alternatives already compare `==`, and
-/// `Disj::new` is a plain wrapper (no reorder/dedup), so a `Disj` arm would
-/// rebuild a goal that is `==` the original.  Under `Goal: PartialEq`,
-/// `canonical_goal_for_dedup(a) == canonical_goal_for_dedup(b)` is therefore
-/// exactly `a == b`.  It borrows rather than clones, so the goal-insertion hot
-/// path allocates nothing; every caller uses the result only for an `==`
-/// comparison — the ORIGINAL goal is what gets stored.
-pub fn canonical_goal_for_dedup(g: &Goal) -> std::borrow::Cow<'_, Goal> {
-    std::borrow::Cow::Borrowed(g)
-}
-
 #[derive(Debug, Clone, Default, PartialEq, Eq, Ord, PartialOrd, Hash)]
 pub struct GoalStatus {
     /// Whether the goal is currently "loop-marked".
@@ -1485,11 +1470,11 @@ impl System {
     /// — so re-inserting a goal that was previously marked `solved` keeps
     /// it solved.
     ///
-    /// The key match is `==` on [`canonical_goal_for_dedup`].  For Disj goals
-    /// that is HS's Map-key match: both sides bind quantified vars by DeBruijn
-    /// index (RS's `BVar::Bound`, guarded_types.rs), so a Disj re-fired across
-    /// proof positions is structurally identical to the stored one and merges
-    /// into it instead of accumulating a second, `solved=false` copy.
+    /// The key match is `==` on the goal itself.  For Disj goals that is HS's
+    /// Map-key match: both sides bind quantified vars by DeBruijn index (RS's
+    /// `BVar::Bound`, guarded_types.rs), so a Disj re-fired across proof
+    /// positions is structurally identical to the stored one and merges into
+    /// it instead of accumulating a second, `solved=false` copy.
     pub fn add_goal_with_loop_flag(&mut self, g: Goal, looping: bool) {
         // HS `insertGoalStatus` (Reduction.hs:516-521) reads
         // `sNextGoalNr` then `succ`s it on EVERY call, including when
@@ -1510,14 +1495,8 @@ impl System {
             }
         }
         // One dedup scan feeds both the trace below and the merge/push
-        // decision.  `canon_g` BORROWS `g` (`Cow::Borrowed`), so the block
-        // scopes its borrow to end before `g` is moved into the goal store.
-        let slot_idx = {
-            let canon_g = canonical_goal_for_dedup(&g);
-            self.goals
-                .iter()
-                .position(|(existing, _)| *canonical_goal_for_dedup(existing) == *canon_g)
-        };
+        // decision.
+        let slot_idx = self.goals.iter().position(|(existing, _)| *existing == g);
         if trace_goal_insert() {
             let kindstr = match &g {
                 Goal::Action(i, fa) => format!("Action {:?} {:?}", i, fa),

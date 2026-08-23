@@ -1261,11 +1261,6 @@ impl<'ctx> Reduction<'ctx> {
         // (System.hs:1252-1282, see line 1282).
         let mut new_goals: Vec<(Goal, crate::constraint::system::GoalStatus)> =
             Vec::with_capacity(goals.len());
-        // Dedup keys, kept parallel to `new_goals`: precomputing each
-        // goal's `canonical_goal_for_dedup` once (rather than re-deriving
-        // it for every accumulated goal on every iteration) keeps the
-        // merge below from being quadratic in canonicalisation cost.
-        let mut new_goal_keys: Vec<Goal> = Vec::with_capacity(goals.len());
         // Change bit for the goal section's conditional cache
         // invalidation (`Cell` because several closures below set it
         // while the main loop also writes it).  Goal merges and
@@ -1500,13 +1495,11 @@ impl<'ctx> Reduction<'ctx> {
                 // its `min age1 age2` chooses the SMALLER nr regardless
                 // of iteration order.
                 //
-                // Comparison key: `canonical_goal_for_dedup` (mirrors
-                // HS's Map-key equality on Goal, which is structural Eq;
-                // `Guarded` binders are DeBruijn on both sides, so
-                // alpha-equivalent Disjs already compare `==` — see
-                // system.rs::canonical_goal_for_dedup).
-                let canon_g2 = crate::constraint::system::canonical_goal_for_dedup(&g2);
-                if let Some(i) = new_goal_keys.iter().position(|k| *k == *canon_g2) {
+                // Comparison key: the goal itself, mirroring HS's Map-key
+                // equality on Goal, which is structural Eq; `Guarded` binders
+                // are DeBruijn on both sides, so alpha-equivalent Disjs
+                // already compare `==`.
+                if let Some(i) = new_goals.iter().position(|(k, _)| *k == g2) {
                     let st_old = &mut new_goals[i].1;
                     let merged_solved = st_old.solved || st.solved;
                     let merged_looping = st_old.looping || st.looping;
@@ -1524,13 +1517,7 @@ impl<'ctx> Reduction<'ctx> {
                     st_old.looping = merged_looping;
                     st_old.nr = merged_nr;
                 } else {
-                    // `new_goal_keys` is a parallel comparison-key cache; the
-                    // ACTUAL goal stored is the original `g2` (into `new_goals`).
-                    // Materialise the owned key BEFORE moving `g2` — since
-                    // canonicalisation is the identity, this key `==` `g2`.
-                    let key = canon_g2.into_owned();
                     new_goals.push((g2, st));
-                    new_goal_keys.push(key);
                 }
             }
         }
@@ -3864,14 +3851,10 @@ impl<'ctx> Reduction<'ctx> {
             // unconditionally, keeping RS's `next_goal_nr` (and the
             // goalNrRanking tie-break) aligned with HS on every conjoin
             // that hits a shared goal.
-            // Then OR-in `solved` (combineGoalStatus) on the canonically
-            // matching slot.
+            // Then OR-in `solved` (combineGoalStatus) on the matching slot.
             self.sys.add_goal_with_loop_flag(g.clone(), st.looping);
             if st.solved {
-                let canon = crate::constraint::system::canonical_goal_for_dedup(g);
-                if let Some((_, slot)) = self.sys.goals_mut().iter_mut().find(|(eg, _)| {
-                    crate::constraint::system::canonical_goal_for_dedup(eg) == canon
-                }) {
+                if let Some((_, slot)) = self.sys.goals_mut().iter_mut().find(|(eg, _)| eg == g) {
                     slot.solved = true;
                 }
             }
