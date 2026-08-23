@@ -64,12 +64,8 @@ impl Fm {
 // =============================================================================
 
 /// Rank a `SortHint` to mirror HS `LSort` Ord.  A bare (`Untagged`) message
-/// variable is `LSortMsg`.
-///
-/// NOT interchangeable with `guarded::sort_hint_tag`/`cmp_varspec`: those
-/// rank `Untagged` LAST (99) so unresolved hints stay distinct, whereas here
-/// `Untagged` ranks AS `Msg` — `frees` must dedup a bare `x` against `x:msg`
-/// (HS compares real `LSort`s, where both are already `LSortMsg`).
+/// variable is `LSortMsg`, so `frees` dedups a bare `x` against `x:msg` the
+/// way HS dedups two `LSortMsg` variables.
 pub(crate) fn sort_rank(s: p::SortHint) -> u8 {
     use p::{SortHint::*, SuffixSort};
     match s {
@@ -82,8 +78,7 @@ pub(crate) fn sort_rank(s: p::SortHint) -> u8 {
 }
 
 /// HS `LVar` Ord: `compare idx <> compare sort <> compare name`.
-/// Compares via [`sort_rank`], so `Untagged` == `Msg` (see its doc for why
-/// this deliberately differs from `guarded::cmp_varspec`).
+/// Compares via [`sort_rank`], so `Untagged` ties with `Msg`.
 fn cmp_lvar(a: &p::VarSpec, b: &p::VarSpec) -> std::cmp::Ordering {
     a.idx
         .cmp(&b.idx)

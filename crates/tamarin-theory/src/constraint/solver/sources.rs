@@ -3827,16 +3827,15 @@ fn freshen_system_some_inst(
         |g: &crate::guarded::Guarded,
          bindings: &mut BTreeMap<tamarin_term::lterm::LVar, tamarin_term::lterm::LVar>| {
             let _ = crate::guarded::map_lvars_in_guarded(g, |v: &tamarin_parser::ast::VarSpec| {
-                if let Some(lv) = vspec_to_lvar(v) {
-                    bindings.entry(lv).or_insert_with(|| {
-                        let new_idx = maude.reserve_idxs(1);
-                        tamarin_term::lterm::LVar {
-                            name: lv.name,
-                            sort: lv.sort,
-                            idx: new_idx,
-                        }
-                    });
-                }
+                let lv = vspec_to_lvar(v);
+                bindings.entry(lv).or_insert_with(|| {
+                    let new_idx = maude.reserve_idxs(1);
+                    tamarin_term::lterm::LVar {
+                        name: lv.name,
+                        sort: lv.sort,
+                        idx: new_idx,
+                    }
+                });
                 v.clone()
             });
         };
@@ -4051,40 +4050,29 @@ fn freshen_system_some_inst(
     out
 }
 
-/// Shared `SortHint`/`SuffixSort` -> `LSort` mapping.  `Untagged` yields
-/// `None`; every other hint maps to its concrete sort.  Each of the three
-/// callers applies its own `Untagged` policy: `vspec_to_lvar` propagates the
-/// `None` (skipping the var), while `varspec_sort_to_lsort` and
-/// `parser_sort_to_lsort` (rename_precise) resolve it to `LSort::Msg`.
-pub(crate) fn sort_hint_to_lsort_opt(
-    s: &tamarin_parser::ast::SortHint,
-) -> Option<tamarin_term::lterm::LSort> {
+/// Shared `SortHint`/`SuffixSort` -> `LSort` mapping.  A bare name is
+/// message-sorted in HS, where `msgvar` reads it through `sortedLVar`'s empty
+/// `LSortMsg` prefix parser (Token.hs:424-433#mkPrefixParser,
+/// Token.hs:440-441#msgvar), so the untagged hint maps to `LSort::Msg`.
+pub(crate) fn sort_hint_to_lsort(s: &tamarin_parser::ast::SortHint) -> tamarin_term::lterm::LSort {
     use tamarin_parser::ast::{SortHint, SuffixSort};
     use tamarin_term::lterm::LSort;
-    Some(match s {
-        SortHint::Msg => LSort::Msg,
-        SortHint::Pub => LSort::Pub,
-        SortHint::Fresh => LSort::Fresh,
-        SortHint::Node => LSort::Node,
-        SortHint::Nat => LSort::Nat,
-        SortHint::Suffix(SuffixSort::Msg) => LSort::Msg,
-        SortHint::Suffix(SuffixSort::Pub) => LSort::Pub,
-        SortHint::Suffix(SuffixSort::Fresh) => LSort::Fresh,
-        SortHint::Suffix(SuffixSort::Node) => LSort::Node,
-        SortHint::Suffix(SuffixSort::Nat) => LSort::Nat,
-        SortHint::Untagged => return None,
-    })
+    match s {
+        SortHint::Msg | SortHint::Untagged | SortHint::Suffix(SuffixSort::Msg) => LSort::Msg,
+        SortHint::Pub | SortHint::Suffix(SuffixSort::Pub) => LSort::Pub,
+        SortHint::Fresh | SortHint::Suffix(SuffixSort::Fresh) => LSort::Fresh,
+        SortHint::Node | SortHint::Suffix(SuffixSort::Node) => LSort::Node,
+        SortHint::Nat | SortHint::Suffix(SuffixSort::Nat) => LSort::Nat,
+    }
 }
 
-/// Project a `VarSpec` to an `LVar` for `someInst` import tracking; returns
-/// `None` when the `SortHint` is `Untagged` (no determinable `LSort`).
-fn vspec_to_lvar(v: &tamarin_parser::ast::VarSpec) -> Option<tamarin_term::lterm::LVar> {
-    let sort = sort_hint_to_lsort_opt(&v.sort)?;
-    Some(tamarin_term::lterm::LVar {
+/// Project a `VarSpec` to an `LVar` for `someInst` import tracking.
+fn vspec_to_lvar(v: &tamarin_parser::ast::VarSpec) -> tamarin_term::lterm::LVar {
+    tamarin_term::lterm::LVar {
         name: tamarin_term::intern::intern_str(v.name.as_str()),
-        sort,
+        sort: sort_hint_to_lsort(&v.sort),
         idx: v.idx,
-    })
+    }
 }
 
 /// One refineSubst arm produced by `refine_source_case_action` — the
@@ -6083,18 +6071,12 @@ fn guarded_walk_frees(
     }
     collect(g, &mut frees);
     for vs in &frees {
-        let sort = varspec_sort_to_lsort(&vs.sort);
         push(&tamarin_term::lterm::LVar {
             name: tamarin_term::intern::intern_str(vs.name.as_str()),
-            sort,
+            sort: sort_hint_to_lsort(&vs.sort),
             idx: vs.idx,
         });
     }
-}
-
-fn varspec_sort_to_lsort(s: &tamarin_parser::ast::SortHint) -> tamarin_term::lterm::LSort {
-    // Same mapping as `vspec_to_lvar`, but `Untagged` resolves to `Msg`.
-    sort_hint_to_lsort_opt(s).unwrap_or(tamarin_term::lterm::LSort::Msg)
 }
 
 /// HS `foldFrees`-order walk of every free LVar in a System.  The HS
@@ -6264,17 +6246,17 @@ fn bool_key_str(b: bool) -> &'static str {
     }
 }
 
-/// `{:?}` of a parser `SortHint`: static strs for the fieldless variants,
-/// formatter fallback for the (rare) `Suffix` payload.
+/// The sort of a binder, spelled into the system key: static strs for the
+/// fieldless variants, formatter fallback for the (rare) `Suffix` payload.
+/// The untagged hint spells `Msg`, the sort it carries.
 fn push_sort_hint_dbg(out: &mut String, s: &tamarin_parser::ast::SortHint) {
     use tamarin_parser::ast::SortHint;
     match s {
-        SortHint::Msg => out.push_str("Msg"),
+        SortHint::Msg | SortHint::Untagged => out.push_str("Msg"),
         SortHint::Pub => out.push_str("Pub"),
         SortHint::Fresh => out.push_str("Fresh"),
         SortHint::Node => out.push_str("Node"),
         SortHint::Nat => out.push_str("Nat"),
-        SortHint::Untagged => out.push_str("Untagged"),
         SortHint::Suffix(x) => {
             use std::fmt::Write as _;
             let _ = write!(out, "Suffix({:?})", x);
@@ -6511,10 +6493,9 @@ fn write_rule_to_key_excl_new_vars(
 
 /// Look up the renamed identity of a `Free` GTerm var and write it.
 fn write_gfree_var(v: &tamarin_parser::ast::VarSpec, rename: &RenameMap, out: &mut String) {
-    let sort = varspec_sort_to_lsort(&v.sort);
     let lv = tamarin_term::lterm::LVar {
         name: tamarin_term::intern::intern_str(v.name.as_str()),
-        sort,
+        sort: sort_hint_to_lsort(&v.sort),
         idx: v.idx,
     };
     let rv = rename.get(&lv).unwrap_or(&lv);

@@ -55,16 +55,6 @@ divergence_shape() {
         grep -qF "Out( (y++tamXCAbar(a)) )" "$expected/$1.$2.rs.txt" \
             || { echo "    port side no longer keeps tamXCAbar(a) — expected \`Out( (y++tamXCAbar(a)) )\`" >&2; return 1; }
         ;;
-    s1_untagged_ac_rank.theory)
-        # A bare variable against a nat-sorted one under `%+`: upstream orders
-        # the operands by `Ord LVar`, which ranks the message sort before the
-        # natural sort; the port ranks a variable the parser left untagged
-        # behind every tagged sort.
-        grep -qF 'exists-trace "∃ %q z #i. (Ev( z ) @ #i) ∧ ((z%+%q) = z)"' "$expected/$1.$2.hs.txt" \
-            || { echo "    oracle side does not order the message-sorted operand first — expected \`((z%+%q) = z)\`" >&2; return 1; }
-        grep -qF 'exists-trace "∃ %q z #i. (Ev( z ) @ #i) ∧ ((%q%+z) = z)"' "$expected/$1.$2.rs.txt" \
-            || { echo "    port side does not rank the bare variable last — expected \`((%q%+z) = z)\`" >&2; return 1; }
-        ;;
     s1_temporal_positions.theory)
         # `last(...)`'s argument, the operand after `@` and both operands of
         # `<` are timepoints upstream, so a bare identifier there stays free

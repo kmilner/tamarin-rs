@@ -581,18 +581,16 @@ fn cmp_sort_hint(a: &p::SortHint, b: &p::SortHint) -> std::cmp::Ordering {
 fn sort_hint_tag(s: &p::SortHint) -> u8 {
     use p::SortHint::*;
     use p::SuffixSort;
+    // A bare name is message-sorted in HS: `msgvar` reads it through
+    // `sortedLVar`'s empty `LSortMsg` prefix parser
+    // (Token.hs:424-433#mkPrefixParser, Token.hs:440-441#msgvar), so an
+    // untagged hint ranks with `Msg`.
     match s {
-        Pub => 0,
-        Fresh => 1,
-        Msg => 2,
-        Node => 3,
-        Nat => 4,
-        Suffix(SuffixSort::Pub) => 0,
-        Suffix(SuffixSort::Fresh) => 1,
-        Suffix(SuffixSort::Msg) => 2,
-        Suffix(SuffixSort::Node) => 3,
-        Suffix(SuffixSort::Nat) => 4,
-        Untagged => 99, // no HS equivalent (sorted last)
+        Pub | Suffix(SuffixSort::Pub) => 0,
+        Fresh | Suffix(SuffixSort::Fresh) => 1,
+        Msg | Suffix(SuffixSort::Msg) | Untagged => 2,
+        Node | Suffix(SuffixSort::Node) => 3,
+        Nat | Suffix(SuffixSort::Nat) => 4,
     }
 }
 

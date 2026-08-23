@@ -799,10 +799,9 @@ fn term_for_each_free(t: &crate::guarded::GTerm, f: &mut dyn FnMut(&LVar)) {
     }
 }
 
-/// Thin wrapper over the shared `sort_hint_to_lsort_opt` mapping (`sources`),
-/// resolving `Untagged` to `LSort::Msg`.
+/// Thin wrapper over the shared `sort_hint_to_lsort` mapping (`sources`).
 fn parser_sort_to_lsort(s: tamarin_parser::ast::SortHint) -> tamarin_term::lterm::LSort {
-    super::sources::sort_hint_to_lsort_opt(&s).unwrap_or(tamarin_term::lterm::LSort::Msg)
+    super::sources::sort_hint_to_lsort(&s)
 }
 
 #[cfg(test)]

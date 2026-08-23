@@ -120,6 +120,39 @@ fn cmp_term_ties_the_prefix_pair_spelling_with_the_bracket_spelling() {
     assert_eq!(cmp_term(&prefix, &long), Less);
 }
 
+/// A bare name is message-sorted in HS, where `msgvar` reads it through
+/// `sortedLVar`'s empty `LSortMsg` prefix parser
+/// (Token.hs:424-433#mkPrefixParser, Token.hs:440-441#msgvar).  So an
+/// untagged hint ties with `Msg` in both variable orderings and takes `Msg`'s
+/// place in the `LSort` declaration order (Term/LTerm.hs:165-170): behind
+/// `Pub` and `Fresh`, ahead of `Node` and `Nat`.  The printed operand order of
+/// an AC application rides on this through `cmp_term`.
+#[test]
+fn a_bare_variable_ranks_as_msg() {
+    use std::cmp::Ordering::{Equal, Greater, Less};
+    let vs = |sort| p::VarSpec {
+        name: "x".into(),
+        idx: 0,
+        sort,
+        typ: None,
+    };
+    let bare = vs(p::SortHint::Untagged);
+    assert_eq!(cmp_varspec(&bare, &vs(p::SortHint::Msg)), Equal);
+    assert_eq!(cmp_varspec(&bare, &vs(p::SortHint::Pub)), Greater);
+    assert_eq!(cmp_varspec(&bare, &vs(p::SortHint::Fresh)), Greater);
+    assert_eq!(cmp_varspec(&bare, &vs(p::SortHint::Node)), Less);
+    assert_eq!(cmp_varspec(&bare, &vs(p::SortHint::Nat)), Less);
+
+    let b = |sort| GBinding {
+        name: "x".into(),
+        sort,
+    };
+    let bare = b(p::SortHint::Untagged);
+    assert_eq!(cmp_binding(&bare, &b(p::SortHint::Msg)), Equal);
+    assert_eq!(cmp_binding(&bare, &b(p::SortHint::Fresh)), Greater);
+    assert_eq!(cmp_binding(&bare, &b(p::SortHint::Nat)), Less);
+}
+
 #[test]
 fn gnot_true_is_false() {
     assert_eq!(gnot(&gtrue()), gfalse());
