@@ -400,81 +400,18 @@ fn collect_process_pub_names(p: &crate::sapic::PlainProcess, out: &mut Vec<Strin
                     collect_pub_names(left, out);
                     collect_pub_names(right, out);
                 }
-                // `Cond` stores its condition as an UN-elaborated parser-AST
-                // formula (see `ProcessCombinator::Cond`); HS stores an
-                // elaborated `SapicNFormula` whose `'c'` literals are `Name`s
-                // that `universeBi` collects.  Harvest the parser `PubLit`s —
-                // bare nullary-constant tokens stay `Var`/`App` in the parser
-                // AST and are correctly NOT collected (in HS they are `FApp`s,
-                // not `Name`s).
-                PC::Cond(f) => collect_parser_formula_pub_names(f, out),
+                // A condition is a `SapicNFormula`, so its `'c'` literals are
+                // the same `Name` constants `universeBi` collects everywhere
+                // else; a declared nullary symbol is an `App` and contributes
+                // nothing.
+                PC::Cond(f) => {
+                    crate::formula::for_each_formula_term(f, &mut |t| collect_pub_names(t, out))
+                }
                 PC::Parallel | PC::Ndc => {}
             },
         }
         Vec::<()>::new()
     });
-}
-
-/// Collect public-name constants (parser `PubLit`, HS `Name PubName`) from a
-/// parser-AST formula, in traversal order.  Serves `collect_process_pub_names`
-/// for the `Cond` combinator, whose condition never leaves the parser AST.
-fn collect_parser_formula_pub_names(f: &p::Formula, out: &mut Vec<String>) {
-    use tamarin_parser::ast::{Atom, Formula};
-    match f {
-        Formula::False | Formula::True => {}
-        Formula::Atom(a) => match a {
-            Atom::Eq(x, y) | Atom::Less(x, y) | Atom::LessMset(x, y) | Atom::Subterm(x, y) => {
-                collect_parser_term_pub_names(x, out);
-                collect_parser_term_pub_names(y, out);
-            }
-            Atom::Action(fa, t) => {
-                for x in &fa.args {
-                    collect_parser_term_pub_names(x, out);
-                }
-                collect_parser_term_pub_names(t, out);
-            }
-            Atom::Last(t) => collect_parser_term_pub_names(t, out),
-            Atom::Pred(fa) => {
-                for x in &fa.args {
-                    collect_parser_term_pub_names(x, out);
-                }
-            }
-        },
-        Formula::Not(x) => collect_parser_formula_pub_names(x, out),
-        Formula::And(x, y) | Formula::Or(x, y) | Formula::Implies(x, y) | Formula::Iff(x, y) => {
-            collect_parser_formula_pub_names(x, out);
-            collect_parser_formula_pub_names(y, out);
-        }
-        Formula::Forall(_, x) | Formula::Exists(_, x) => {
-            collect_parser_formula_pub_names(x, out);
-        }
-    }
-}
-
-/// Collect public-name constants from a parser-AST term (the `PubLit`
-/// variant), recursively.
-fn collect_parser_term_pub_names(t: &p::Term, out: &mut Vec<String>) {
-    use tamarin_parser::ast::Term as PT;
-    match t {
-        PT::PubLit(n) => out.push(n.clone()),
-        PT::Var(_)
-        | PT::FreshLit(_)
-        | PT::NatLit(_)
-        | PT::Number(_)
-        | PT::NumberOne
-        | PT::NatOne
-        | PT::DhNeutral => {}
-        PT::App(_, args) | PT::Pair(args) => {
-            for a in args {
-                collect_parser_term_pub_names(a, out);
-            }
-        }
-        PT::AlgApp(_, a, b) | PT::Diff(a, b) | PT::BinOp(_, a, b) => {
-            collect_parser_term_pub_names(a, out);
-            collect_parser_term_pub_names(b, out);
-        }
-        PT::PatMatch(inner) => collect_parser_term_pub_names(inner, out),
-    }
 }
 
 /// Elaborate a parser theory into a typed `Theory`. The signature

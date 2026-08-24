@@ -27,6 +27,7 @@ use tamarin_parser::ast as p;
 use tamarin_term::lterm::LVar;
 use tamarin_term::maude_sig::MaudeSig;
 use tamarin_theory::elaborate::{fact_to_sapic_fact, term_to_sapic_term};
+use tamarin_theory::formula::sapic_from_parser;
 // A variable literal of a SAPIC term and a SAPIC binder are the same reading
 // of a `VarSpec`, so both come from one definition.
 pub(crate) use tamarin_theory::elaborate::varspec_to_sapic;
@@ -64,8 +65,8 @@ pub(crate) fn lvar_to_varspec(v: &LVar) -> p::VarSpec {
 /// and their occurrences are left untouched; for a free `Var`, `f(varspec,
 /// bound)` returns `Some(term)` to replace the leaf or `None` to keep it
 /// unchanged, so the leaf set offered here is exactly the one
-/// [`fold_free_vars`] reports.  Shared traversal behind
-/// `let_destructors::subst_cond_formula` and `typing::rename_cond_formula`.
+/// [`fold_free_vars`] reports.  The traversal `typing::rename_cond_formula`
+/// runs.
 pub(crate) fn map_free_terms(
     formula: &p::Formula,
     f: &mut dyn FnMut(&p::VarSpec, &[String]) -> Option<p::Term>,
@@ -171,9 +172,8 @@ pub(crate) fn map_free_terms(
 
 /// Visit every FREE `Var` leaf of a parser-AST formula, calling `f(varspec,
 /// bound)` for each (quantifier-bound occurrences are skipped, tracking
-/// shadowing via the `bound` stack).  The traversal order is
-/// the depth-first, left-to-right order shared by
-/// `base_translation::formula_free_lvars` and `typing::cond_formula_free_lvars`.
+/// shadowing via the `bound` stack).  The traversal order is the depth-first,
+/// left-to-right order `typing::cond_formula_free_lvars` reports.
 pub(crate) fn fold_free_vars(formula: &p::Formula, f: &mut dyn FnMut(&p::VarSpec, &[String])) {
     fn ct(bound: &[String], f: &mut dyn FnMut(&p::VarSpec, &[String]), t: &p::Term) {
         match t {
@@ -372,12 +372,15 @@ pub(crate) fn combinator(
         p::ProcessComb::Cond(p::Condition::Eq(t1, t2)) => {
             Ok(ProcessCombinator::CondEq(term(t1, sig)?, term(t2, sig)?))
         }
-        // `if <formula> then .. else ..`.  HS `Cond (SapicNFormula v)`;
-        // the RS `Cond` carries the un-expanded parser-AST formula directly (see
-        // `ProcessCombinator::Cond` doc).  Predicate atoms inside the formula are
-        // expanded later, by `lift_rule_restrictions` over the embedded
-        // `_restrict` (HS `liftedExpandFormula`), so we keep it un-expanded here.
-        p::ProcessComb::Cond(p::Condition::Formula(f)) => Ok(ProcessCombinator::Cond(f.clone())),
+        // `if <formula> then .. else ..`.  HS parses the condition with
+        // `standardFormula sapicvar sapicnodevar`
+        // (Theory/Text/Parser/Sapic.hs:252-255), which is `sapic_from_parser`:
+        // the variables carry their SAPIC type tag and a timepoint operand is
+        // tagged `node`.  Predicate atoms stay sugar until
+        // `lift_rule_restrictions` expands them (HS `liftedExpandFormula`).
+        p::ProcessComb::Cond(p::Condition::Formula(f)) => Ok(ProcessCombinator::Cond(
+            sapic_from_parser(f, sig).map_err(|e| ConvertError::new(e.message))?,
+        )),
         // `lookup t as v in .. else ..`.  HS `Lookup (SapicNTerm v) v`
         // (Sapic/Process.hs:95).
         p::ProcessComb::Lookup(t, v) => Ok(ProcessCombinator::Lookup(
@@ -671,9 +674,10 @@ mod tests {
 
     #[test]
     fn convert_cond_formula() {
-        // `if <formula> then E else 0` converts to ProcessCombinator::Cond.
-        // The combinator carries the parser-AST formula without any change.
-        // Predicate atoms stay un-expanded until `lift_rule_restrictions`.
+        // `if <formula> then E else 0` converts to ProcessCombinator::Cond,
+        // whose payload is the locally-nameless SAPIC formula the condition
+        // parser builds.  A predicate atom stays `SyntacticSugar::Pred` until
+        // `lift_rule_restrictions` expands it.
         let frml = p::Formula::Atom(p::Atom::Pred(p::Fact {
             persistent: false,
             name: "P".into(),
@@ -690,7 +694,24 @@ mod tests {
         else {
             panic!("expected a Cond combinator");
         };
-        assert_eq!(got, frml);
+        let want = tamarin_theory::formula::ProtoFormula::Atom(
+            tamarin_theory::atom::ProtoAtom::Syntactic(tamarin_theory::atom::SyntacticSugar::Pred(
+                tamarin_theory::fact::Fact::new(
+                    tamarin_theory::fact::FactTag::Proto(
+                        tamarin_theory::fact::Multiplicity::Linear,
+                        "P",
+                        1,
+                    ),
+                    vec![tamarin_term::vterm::VTerm::Lit(
+                        tamarin_term::vterm::Lit::Con(tamarin_term::lterm::Name::new(
+                            tamarin_term::lterm::NameTag::Pub,
+                            "c",
+                        )),
+                    )],
+                ),
+            )),
+        );
+        assert_eq!(got, want);
         assert_eq!(child_event_name(&then), "E");
     }
 
@@ -725,17 +746,13 @@ mod tests {
         assert!(matches!(*notfound, Process::Null(_)));
     }
 
-    // `map_free_terms` and `fold_free_vars` must agree on which leaves are
-    // variables: the parser resolves a declared 0-arity name to an
-    // argument-less application (HS `nullaryApp`,
-    // Theory/Text/Parser/Term.hs:151,158-163), so such a leaf is neither
-    // counted by `freesList` nor reachable by `apply subst`.  A `Cond` formula
-    // reaching `typing::rename_cond_formula` with a `new c` / `lookup … as c`
-    // binder in the rename domain is the shape that separates the two.
+    /// A bare token naming a declared 0-arity symbol is an APPLICATION in a
+    /// condition, not a free variable: HS's term parser resolves it against
+    /// the signature while parsing (`nullaryApp`,
+    /// Theory/Text/Parser/Term.hs:151,158-163), so `freesList` never reports
+    /// it and a substitution never rewrites it.
     #[test]
-    fn nullary_leaf_is_neither_folded_nor_mapped() {
-        // `Eq(c, k)` — `c` is 0-arity in the second signature, `k` is an
-        // ordinary variable in both.
+    fn a_declared_nullary_symbol_in_a_condition_is_an_application_not_a_free_variable() {
         let cond = |decl: &str| {
             let thy =
                 tamarin_parser::parse_theory(&format!("theory T begin\n{decl}\nend"), &[]).unwrap();
@@ -743,52 +760,39 @@ mod tests {
                 .unwrap()
                 .signature
                 .maude_sig;
-            tamarin_parser::parser::parse_formula_str("Eq(c, k)", &msig).unwrap()
+            let f = tamarin_parser::parser::parse_formula_str("Eq(c, k)", &msig).unwrap();
+            sapic_from_parser(&f, &msig).unwrap()
         };
-        let renamed = |f: &p::Formula| {
-            map_free_terms(f, &mut |v, _bound| {
-                Some(p::Term::Var(p::VarSpec {
-                    name: v.name.clone(),
-                    idx: v.idx + 1,
-                    sort: v.sort,
-                    typ: v.typ.clone(),
-                }))
-            })
+        let names = |f: &tamarin_theory::sapic::SapicFormula| -> Vec<String> {
+            tamarin_theory::formula::formula_frees(f)
+                .iter()
+                .map(|v| v.var.name.to_string())
+                .collect()
         };
-        let seen = |f: &p::Formula| {
-            let mut out = Vec::new();
-            fold_free_vars(f, &mut |v, _bound| out.push(v.name.clone()));
-            out
-        };
-        let pred = |args: Vec<p::Term>| {
-            p::Formula::Atom(p::Atom::Pred(p::Fact {
-                persistent: false,
-                name: "Eq".into(),
-                args,
-                annotations: Vec::new(),
-            }))
-        };
-        let var = |n: &str, idx: u64| {
-            p::Term::Var(p::VarSpec {
-                name: n.into(),
-                idx,
-                sort: LSort::Msg,
-                typ: None,
-            })
-        };
-
-        // Undeclared, `c` is an ordinary variable, so both traversals reach
-        // it — this is what makes the assertions below discriminating.
-        let plain = cond("");
-        assert_eq!(seen(&plain), vec!["c".to_string(), "k".to_string()]);
-        assert_eq!(renamed(&plain), pred(vec![var("c", 1), var("k", 1)]));
-
-        let with_const = cond("functions: c/0");
-        assert_eq!(seen(&with_const), vec!["k".to_string()]);
+        // Undeclared, `c` is an ordinary variable, so both are free — this is
+        // what makes the assertion below discriminating.
+        assert_eq!(names(&cond("")), vec!["c".to_string(), "k".to_string()]);
         assert_eq!(
-            renamed(&with_const),
-            pred(vec![p::Term::App("c".into(), Vec::new()), var("k", 1)])
+            names(&cond("functions: c/0")),
+            vec!["k".to_string()],
+            "a declared nullary symbol is an application, not a variable"
         );
+    }
+
+    /// A quantifier binder in a condition is a `Bound` De Bruijn index, so it
+    /// is not a free variable and no substitution can reach it — HS's
+    /// `Foldable BVar` yields `Free` variables only
+    /// (Theory/Sapic/Term.hs:131-132#freesSapicTerm).
+    #[test]
+    fn a_bound_occurrence_in_a_condition_is_not_a_free_variable() {
+        let msig = msig();
+        let f = tamarin_parser::parser::parse_formula_str("Ex k. Eq(c, k)", &msig).unwrap();
+        let got = sapic_from_parser(&f, &msig).unwrap();
+        let frees: Vec<String> = tamarin_theory::formula::formula_frees(&got)
+            .iter()
+            .map(|v| v.var.name.to_string())
+            .collect();
+        assert_eq!(frees, vec!["c".to_string()]);
     }
 
     #[test]

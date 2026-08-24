@@ -324,19 +324,12 @@ fn apply_m_comb(
             subst_term(subst, &a),
             subst_term(subst, &b),
         )),
-        // `Cond` carries an un-expanded parser-AST formula.  HS DOES substitute
-        // here: `apply subst (Cond fa) = Cond (apply subst fa)` (Sapic/Process.hs:165),
-        // reached via the `ApplyM`/`Apply` ProcessCombinator instances
-        // (Sapic/Process.hs:330-334,382).  So to be byte-faithful a call whose body begins
-        // with `if <formula>` mentioning a parameter (the call substitutes that
-        // parameter into the formula's free vars) must rewrite the formula too —
-        // exactly as the sibling Case-B `let`-elimination path does in
-        // let_destructors.rs::subst_cond_formula.  We omit it here as a KNOWN
-        // gap: no in-scope corpus theory inlines a call whose body's leading
-        // `Cond` formula references a parameter, so the omission is currently
-        // output-inert.  If such a theory appears, route `Cond` through a
-        // subst_cond_formula-style rewrite (and re-gate) rather than the
-        // pass-through below.
+        // HS substitutes here: `apply subst (Cond fa) = Cond (apply subst fa)`
+        // (Sapic/Process.hs:165), reached via the `ApplyM`/`Apply`
+        // ProcessCombinator instances (Sapic/Process.hs:330-334,382).  This arm
+        // passes the formula through instead, so a call whose body begins with
+        // `if <formula>` mentioning a parameter keeps the callee's variable
+        // where HS puts the argument.
         ProcessCombinator::Cond(f) => Ok(ProcessCombinator::Cond(f)),
         // Parallel/Ndc carry no terms, so substitution is the identity.
         // Enumerated (no wildcard) so a new term-carrying variant must decide

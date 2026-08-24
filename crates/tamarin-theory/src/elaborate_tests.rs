@@ -756,3 +756,37 @@ fn let_block_end_to_end_elaborates() {
     assert_eq!(rules[0].rule.actions[0].terms.to_vec(), vec![k.clone()]);
     assert_eq!(rules[0].rule.conclusions[0].terms.to_vec(), vec![k]);
 }
+
+/// The public names of a `Cond` condition come from the formula's own `Name`
+/// literals, the same constants `universeBi` collects from a rule's facts
+/// (`publicNamesReport'`, Wellformedness.hs:463-483).  A declared nullary
+/// symbol is an application and contributes nothing.
+#[test]
+fn condition_public_names_are_harvested_from_the_internal_terms() {
+    use crate::sapic::{Process, ProcessCombinator, ProcessParsedAnnotation};
+
+    let names = |decl: &str, src: &str| -> Vec<String> {
+        let msig = theory_msig(&format!("theory T begin\n{decl}\nend"));
+        let f = tamarin_parser::parser::parse_formula_str(src, &msig).unwrap();
+        let proc = Process::Comb(
+            ProcessCombinator::Cond(crate::formula::sapic_from_parser(&f, &msig).unwrap()),
+            ProcessParsedAnnotation::empty(),
+            Box::new(Process::Null(ProcessParsedAnnotation::empty())),
+            Box::new(Process::Null(ProcessParsedAnnotation::empty())),
+        );
+        let mut out = Vec::new();
+        collect_process_pub_names(&proc, &mut out);
+        out
+    };
+
+    assert_eq!(
+        names("", "Eq(h('Foo'), 'bar')"),
+        vec!["Foo".to_string(), "bar".to_string()]
+    );
+    // A fresh literal is not public-sorted, and a declared 0-arity name is an
+    // application — neither joins the capitalization check.
+    assert_eq!(
+        names("functions: nil/0", "Eq(nil, ~k)"),
+        Vec::<String>::new()
+    );
+}

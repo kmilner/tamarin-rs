@@ -326,15 +326,13 @@ fn render_msr(
         let mut items: Vec<Doc> = acts.iter().map(sapic_fact_to_doc).collect();
         for phi in rest {
             // `ppRestr' fact = "_restrict(" <> ppRestr fact <> ")"`,
-            // `ppRestr = prettySyntacticLNFormula . toLFormula` — the flat
-            // single-line formula renderer (matches `Cond`'s formula path).
-            // HS's payload is a formula over signature-built `SapicTerm`s, so
-            // `fAppAC`/`fAppC` flattened and sorted every AC/C application at
-            // parse time and `prettyTerm` prints AC nodes infix; the RS payload
-            // is the parser AST in written order, so canonicalise first — same
-            // treatment `ProcessCombinator::Cond` gets, and this render feeds
-            // both the `process="..."` attribute and the SAPIC-derived rule
-            // names, which must agree.
+            // `ppRestr = prettySyntacticLNFormula . toLFormula`.  HS's payload
+            // is a formula over signature-built `SapicTerm`s, so `fAppAC`/
+            // `fAppC` flattened and sorted every AC/C application at parse
+            // time and `prettyTerm` prints AC nodes infix; the RS payload is
+            // the parser AST in written order, so canonicalise first — this
+            // render feeds both the `process="..."` attribute and the
+            // SAPIC-derived rule names, which must agree.
             let canonical = crate::elaborate::canonicalize_ac_in_formula(phi);
             let inner = crate::pretty_formula::pretty_formula(&canonical);
             items.push(Doc::text(format!("_restrict({inner})")));
@@ -422,26 +420,22 @@ fn pretty_sapic_comb(c: &ProcessCombinator<SapicLVar>) -> String {
             format!("if {}={}", pretty_sapic_term(t), pretty_sapic_term(t2))
         }
         // HS `prettySapicComb (Cond a) = "if "++ render (prettySyntacticSapicFormula a)`
-        // (Theory/Sapic/Process.hs:473-483, see line 476).  `prettySyntacticSapicFormula = prettySyntacticLNFormula
-        // . toLFormula` (Theory/Sapic/Term.hs:174-175); `toLFormula` just drops the SAPIC type
-        // tags (`SapicLVar → LVar`), keeping the syntactic structure (predicates
-        // intact, formula un-expanded).  The RS `Cond` carries the un-expanded
-        // parser-AST formula whose `VarSpec`s render WITHOUT type tags, so
-        // `pretty_formula` (the flat, single-line renderer) matches
-        // `render . prettySyntacticSapicFormula`.
-        //
-        // HS's payload is a formula over `SapicTerm`s built by the signature-aware
-        // term parser, so every AC application was flattened + sorted by `fAppAC`
-        // and every `C` application sorted by `fAppC` at parse time
-        // (`naryOpApp`, Theory/Text/Parser/Term.hs:88-105; Term/Term/Raw.hs:118-133),
-        // and `prettyTerm` then prints the AC node infix (Term/Term.hs:305).  The
-        // parser AST keeps the written order instead, so canonicalise here to
-        // reach the same operand order and the same infix spelling — this render
+        // (Theory/Sapic/Process.hs:473-483, see line 476).
+        // `prettySyntacticSapicFormula = prettySyntacticLNFormula . toLFormula`
+        // (Theory/Sapic/Term.hs:174-175) drops the SAPIC type tags and keeps
+        // the syntactic structure (predicates intact, formula un-expanded).
+        // The `render` is the inner one this module's header documents, so the
+        // formula wraps at the HughesPJ default width — and the same string
         // feeds BOTH the `process="..."` attribute and the SAPIC-derived rule
-        // names, which must agree.
+        // names, which the `filter isAlpha` of `stripNonAlphanumerical`
+        // (Sapic/Facts.hs:401) leaves unaffected by the break.
         ProcessCombinator::Cond(f) => {
-            let canonical = crate::elaborate::canonicalize_ac_in_formula(f);
-            format!("if {}", crate::pretty_formula::pretty_formula(&canonical))
+            format!(
+                "if {}",
+                render_sapic(crate::pretty_formula::syntactic_lnformula_doc(
+                    &crate::sapic::to_lformula(f)
+                ))
+            )
         }
         // HS `prettySapicComb (Lookup t v) = "lookup "++ p t ++ " as " ++ show v`
         // (Theory/Sapic/Process.hs:473-483, see line 482).  `show v` on an (untyped) `SapicLVar` is just the
@@ -581,6 +575,62 @@ mod tests {
         assert_eq!(pretty_sapic_top_level(&p), "0");
     }
 
+    /// The Maude signature of a one-line theory, for building a condition
+    /// from source text the way the SAPIC parser does.
+    fn sig_of(decl: &str) -> tamarin_term::maude_sig::MaudeSig {
+        let thy =
+            tamarin_parser::parse_theory(&format!("theory T begin\n{decl}\nend"), &[]).unwrap();
+        crate::elaborate::elaborate(&thy)
+            .unwrap()
+            .signature
+            .maude_sig
+    }
+
+    /// `if <formula>` as the process printer renders it, with `formula` read
+    /// against the signature `decl` declares.
+    fn cond_render(src: &str, decl: &str) -> String {
+        let sig = sig_of(decl);
+        let f = tamarin_parser::parser::parse_formula_str(src, &sig).unwrap();
+        let proc: PlainProcess = Process::Comb(
+            ProcessCombinator::Cond(crate::formula::sapic_from_parser(&f, &sig).unwrap()),
+            ProcessParsedAnnotation::empty(),
+            Box::new(Process::Null(ProcessParsedAnnotation::empty())),
+            Box::new(Process::Null(ProcessParsedAnnotation::empty())),
+        );
+        pretty_sapic_top_level(&proc)
+    }
+
+    /// A conditional renders its formula STANDALONE, so a conjunction wider
+    /// than the HughesPJ default page breaks and the second conjunct starts a
+    /// new line at column 0.
+    ///
+    /// Oracle bytes (pinned build, Git revision ef3f0468) for
+    /// `functions: aaaaaaaaaa/1, bbbbbbbbbb/1, cccccccccc/1` +
+    /// `predicates: Longer(xxxxxxxxxx, yyyyyyyyyy) <=> xxxxxxxxxx = yyyyyyyyyy` +
+    /// `in(<xxxxxxxxxx, yyyyyyyyyy, zzzzzzzzzz>); if Longer(aaaaaaaaaa(xxxxxxxxxx), bbbbbbbbbb(yyyyyyyyyy)) & Longer(cccccccccc(zzzzzzzzzz), aaaaaaaaaa(yyyyyyyyyy)) then …`
+    /// (fixture `sapic_cond_wrap`).
+    #[test]
+    fn cond_wraps_at_the_hughespj_default_width() {
+        let got = cond_render(
+            "Longer(aaaaaaaaaa(xxxxxxxxxx.1), bbbbbbbbbb(yyyyyyyyyy.1)) \
+             & Longer(cccccccccc(zzzzzzzzzz.1), aaaaaaaaaa(yyyyyyyyyy.1))",
+            "functions: aaaaaaaaaa/1, bbbbbbbbbb/1, cccccccccc/1",
+        );
+        assert_eq!(
+            got,
+            "if (Longer( aaaaaaaaaa(xxxxxxxxxx.1), bbbbbbbbbb(yyyyyyyyyy.1) )) ∧\n\
+             (Longer( cccccccccc(zzzzzzzzzz.1), aaaaaaaaaa(yyyyyyyyyy.1) ))"
+        );
+        // The derived rule name is `filter isAlpha` over the same string
+        // (Sapic/Facts.hs:401#stripNonAlphanumerical), so the break leaves it
+        // untouched.
+        let name: String = got.chars().filter(|c| c.is_alphabetic()).collect();
+        assert_eq!(
+            name,
+            "ifLongeraaaaaaaaaaxxxxxxxxxxbbbbbbbbbbyyyyyyyyyyLongercccccccccczzzzzzzzzzaaaaaaaaaayyyyyyyyyy"
+        );
+    }
+
     /// `if <formula>` renders its user-`[AC]` applications the way HS's
     /// signature-built `SapicTerm`s do: flattened, sorted, infix.
     ///
@@ -592,77 +642,21 @@ mod tests {
     ///   `process="if Eq( ('a' add 'b' add k.1), k.1 )"`.
     #[test]
     fn cond_renders_user_ac_flattened_sorted_and_infix() {
-        use tamarin_parser::ast as p;
-
-        let k = p::Term::Var(p::VarSpec {
-            typ: None,
-            name: "k".into(),
-            sort: LSort::Msg,
-            idx: 1,
-        });
-        let eq_cond = |args: Vec<p::Term>| {
-            let f = p::Formula::Atom(p::Atom::Pred(p::Fact {
-                persistent: false,
-                name: "Eq".into(),
-                args,
-                annotations: Vec::new(),
-            }));
-            let proc: PlainProcess = Process::Comb(
-                ProcessCombinator::Cond(f),
-                ProcessParsedAnnotation::empty(),
-                Box::new(Process::Null(ProcessParsedAnnotation::empty())),
-                Box::new(Process::Null(ProcessParsedAnnotation::empty())),
-            );
-            pretty_sapic_top_level(&proc)
-        };
-
-        let add = |a: p::Term, b: p::Term| {
-            p::Term::BinOp(
-                p::BinOp::AcFct(tamarin_term::intern::intern_str("add")),
-                Box::new(a),
-                Box::new(b),
-            )
-        };
-
-        // `<'g'^k.1, add(k.1, 'a')>` with `add` an ordinary function symbol:
-        // the application stays prefix, which is what makes the AC
-        // assertions below discriminating.
-        let pair_with = |second: p::Term| {
-            vec![
-                p::Term::Pair(vec![
-                    p::Term::BinOp(
-                        p::BinOp::Exp,
-                        Box::new(p::Term::PubLit("g".into())),
-                        Box::new(k.clone()),
-                    ),
-                    second,
-                ]),
-                k.clone(),
-            ]
-        };
+        // With `add` an ordinary function symbol the application stays
+        // prefix, which is what makes the AC assertions below discriminating.
         assert_eq!(
-            eq_cond(pair_with(p::Term::App(
-                "add".into(),
-                vec![k.clone(), p::Term::PubLit("a".into())],
-            ))),
+            cond_render("Eq(<'g'^k.1, add(k.1,'a')>, k.1)", "functions: add/2"),
             "if Eq( <'g'^k.1, add(k.1, 'a')>, k.1 )"
         );
-
-        // The `[AC]` symbol's node, in the non-canonical operand order the
-        // source spelling `add(k, 'a')` gives it.
         assert_eq!(
-            eq_cond(pair_with(add(k.clone(), p::Term::PubLit("a".into())))),
+            cond_render("Eq(<'g'^k.1, add(k.1,'a')>, k.1)", "functions: add/2 [AC]"),
             "if Eq( <'g'^k.1, ('a' add k.1)>, k.1 )"
         );
         // A nested chain flattens to three operands under one AC node.
-        let m2 = vec![
-            add(
-                k.clone(),
-                add(p::Term::PubLit("a".into()), p::Term::PubLit("b".into())),
-            ),
-            k.clone(),
-        ];
-        assert_eq!(eq_cond(m2), "if Eq( ('a' add 'b' add k.1), k.1 )");
+        assert_eq!(
+            cond_render("Eq(add(k.1, add('a','b')), k.1)", "functions: add/2 [AC]"),
+            "if Eq( ('a' add 'b' add k.1), k.1 )"
+        );
     }
 
     /// An MSR's embedded `_restrict(...)` renders its user-`[AC]` applications

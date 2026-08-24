@@ -20,6 +20,7 @@ use tamarin_term::lterm::{LSort, LVar, Name};
 use tamarin_term::vterm::{Lit, VTerm};
 use tamarin_utils::fresh::PreciseFreshState;
 
+use tamarin_theory::formula::{apply_rename, formula_frees};
 use tamarin_theory::sapic::PlainProcess;
 use tamarin_theory::sapic::{
     Process, ProcessCombinator, SapicAction, SapicLVar, SapicTerm, SapicType,
@@ -166,19 +167,20 @@ fn collect_comb_vars(
         // HS `varsProc = foldMap singleton` over the derived `Foldable (Process)`
         // folds the `v` occurrences inside `Cond (SapicNFormula v)` too — i.e.
         // the formula's FREE variables (bound `BVar` quantifier vars are not
-        // `v`).  Collect them so they seed the `renameUnique` avoidance set.
+        // `v`).  Collect them so they seed the `renameUnique` avoidance set and
+        // reach `type_process_def`'s formals, which print with their tag.
         ProcessCombinator::Cond(f) => {
-            for lv in cond_formula_free_lvars(f) {
-                out.insert(SapicLVar::untyped(lv));
+            for v in formula_frees(f) {
+                out.insert(v);
             }
         }
         ProcessCombinator::Parallel | ProcessCombinator::Ndc => {}
     }
 }
 
-/// Free `LVar`s of a parser-AST process formula — a `Cond` condition or an
-/// MSR's embedded `_restrict` (vars not bound by an enclosing quantifier).
-/// Used to seed the `renameUnique` avoidance set and as the rename domain.
+/// Free `LVar`s of an MSR's embedded `_restrict` formula (vars not bound by
+/// an enclosing quantifier).  Used to seed the `renameUnique` avoidance set
+/// and as the rename domain.
 fn cond_formula_free_lvars(f: &tamarin_parser::ast::Formula) -> Vec<LVar> {
     let mut out = Vec::new();
     crate::convert::fold_free_vars(f, &mut |v, _bound| {
@@ -187,12 +189,11 @@ fn cond_formula_free_lvars(f: &tamarin_parser::ast::Formula) -> Vec<LVar> {
     out
 }
 
-/// Rename the FREE variables of a parser-AST process formula (a `Cond`
-/// condition or an MSR's embedded `_restrict`) according to `subst`
-/// (`LVar → LVar`), mirroring the `ff = apply subst` argument HS threads into
-/// `mapTermsComb`/`mapTermsAction` (Sapic/Process.hs:155,165).  Quantifier-bound vars
-/// are left untouched (they are not in the subst domain — process renaming only
-/// renames process-bound variables).
+/// Rename the FREE variables of an MSR's embedded `_restrict` formula
+/// according to `subst` (`LVar → LVar`), mirroring the `ff = apply subst`
+/// argument HS threads into `mapTermsAction` (Sapic/Process.hs:155).
+/// Quantifier-bound vars are left untouched (they are not in the subst
+/// domain — process renaming only renames process-bound variables).
 fn rename_cond_formula(
     subst: &BTreeMap<LVar, LVar>,
     f: &tamarin_parser::ast::Formula,
@@ -314,8 +315,11 @@ fn rename_comb(
             ProcessCombinator::CondEq(rename_term(subst, a), rename_term(subst, b))
         }
         // HS `mapTermsComb (apply subst) ... (Cond fa) = Cond (apply subst fa)`
-        // (Sapic/Process.hs:165): rename the formula's free variables.
-        ProcessCombinator::Cond(f) => ProcessCombinator::Cond(rename_cond_formula(subst, f)),
+        // (Sapic/Process.hs:165), where `apply` on a `SapicLVar` renames the
+        // `LVar` and keeps the type tag (Theory/Sapic/Term.hs:115-117).
+        ProcessCombinator::Cond(f) => {
+            ProcessCombinator::Cond(apply_rename(f.clone(), &mut |v| rename_sv(subst, v)))
+        }
         other => other.clone(),
     }
 }

@@ -415,3 +415,44 @@ Compiled at: 2026-07-31 12:54:17.256348115 UTC
 end";
     assert_eq!(render(&parsed, &elaborated, &opts), expected);
 }
+
+/// A SAPIC condition's variables are `SapicLVar`s, so a process definition
+/// written without formals takes their type tags into `_pVars`
+/// (`pvars = S.toList (varsProc pr) \\ accBindings pr`, Sapic/Typing.hs:219,
+/// over `varsProc = foldMap Data.Set.singleton`,
+/// Theory/Sapic/Process.hs:361-362), and `-m=spthytyped` prints each formal
+/// with `show :: SapicLVar` (TheoryObject.hs:791-799,
+/// Theory/Sapic/Term.hs:108-110).  A timepoint operand of `<` is read by
+/// `sapicnodevar` and so carries `node`
+/// (Theory/Sapic/Term.hs:99-100#defaultSapicNodeType), while a predicate
+/// argument takes `sapicvar` and stays untagged.
+///
+/// Oracle bytes (pinned build, Git revision ef3f0468; fixture
+/// `sapic_cond_type_tag`).
+#[test]
+fn a_process_def_formal_from_a_condition_keeps_its_type_tag() {
+    let src = r#"theory T
+begin
+
+predicates: Eq(a, b) <=> a = b, Pred(a, b) <=> a = a
+
+let P = if Eq(x:foo, 'a') then out('yes') else out('no')
+let S = if #k < #l then out('yes') else out('no')
+let V = if Pred(#p, y) then out('yes') else out('no')
+
+process:
+  out('done')
+
+end
+"#;
+    let (parsed, elaborated) = build(src);
+    let opts = spthytyped_opts(&parsed, &elaborated);
+    let out = render(&parsed, &elaborated, &opts);
+    for line in [
+        "let  P (x.1:foo) = out('yes') if Eq( x.1, 'a' ) out('no')",
+        "let  S (#k.1:node,#l.1:node) = out('yes') if #k.1 < #l.1 out('no')",
+        "let  V (y.1,#p.1) = out('yes') if Pred( #p.1, y.1 ) out('no')",
+    ] {
+        assert!(out.contains(line), "missing `{line}` in:\n{out}");
+    }
+}

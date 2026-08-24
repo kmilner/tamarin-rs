@@ -17,17 +17,16 @@
 // with `map show`
 // (TheoryObject.hs:791-799#prettyTranslationElement), where
 // `show (SapicLVar v (Just t)) = show v ++ ":" ++ t`
-// (Theory/Sapic/Term.hs:108-110).  The port carries the condition as parser
-// formula and prints every formal untagged, so four of the five `let` lines
-// differ.
+// (Theory/Sapic/Term.hs:108-110).  Four of the five `let` lines below carry a
+// tag, so this row is what pins the tag all the way to the printed bytes.
 //
 // The tagging is POSITIONAL, and row `V` is the measurement of that:
 // `blatom` writes `nodevarTerm = lit . Var <$> nodep` for `last`'s argument,
 // an action's timepoint and both operands of `<`
 // (Theory/Text/Parser/Formula.hs:44-57#blatom), while a predicate atom takes
 // `fact (vlit (try varp <|> nodep))`, where `sapicvar` wins for every
-// spelling — so `#p` inside `Pred` stays untagged on BOTH engines and only
-// `S`, `T` and `U` carry `:node`.
+// spelling — so `#p` inside `Pred` stays untagged and only `S`, `T` and `U`
+// carry `:node`.
 //
 // Flags: `-m=spthytyped`, the one mode that prints a process definition's
 // formals.  No corpus theory is loaded in that mode, and no corpus condition

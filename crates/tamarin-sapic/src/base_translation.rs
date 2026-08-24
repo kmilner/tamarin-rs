@@ -21,7 +21,9 @@ use std::collections::BTreeSet;
 use tamarin_term::lterm::{LNTerm, LSort, LVar};
 use tamarin_term::vterm::{Lit, VTerm};
 
-use tamarin_theory::sapic::{ProcessPosition, SapicAction, SapicLVar, SapicTerm};
+use tamarin_theory::formula::formula_frees;
+use tamarin_theory::pretty_formula::syntactic_lnformula_to_parser;
+use tamarin_theory::sapic::{to_lformula, ProcessPosition, SapicAction, SapicLVar, SapicTerm};
 
 use crate::annotation::ProcessAnnotation;
 use crate::facts::{
@@ -660,19 +662,22 @@ pub fn base_trans_comb(
                 Some(tildex.clone()),
             ))
         }
-        // Cond f (Basetranslation.hs:234-242):
+        // Cond f' (Basetranslation.hs:234-242):
+        //   f <- toLFormula f'
         //   let freevars_f = fromList (freesList f)
         //   if freevars_f ⊆ tildex then
         //     ([([def_state], [], [def_state1 tildex], [f]),
         //       ([def_state], [], [def_state2 tildex], [Not f])],
         //      tildex, Just tildex)
         //   else throw (WFUnbound (freevars_f \\ tildex))
-        // The formula is the parser-AST `Cond` payload; the embedded restriction
-        // flows through `lift_rule_restrictions` (HS `liftedAddProtoRule`).
+        // The rule's restriction component is a parser-AST formula here, so
+        // each arm crosses back at this point; `lift_rule_restrictions`
+        // (HS `liftedAddProtoRule`) then expands its predicates.
         PC::Cond(f) => {
-            // `freesList f` as LVars (the formula's free message/timepoint vars),
-            // mapped to `LVar`s to compare against `tildex :: Set LVar`.
-            let freevars_f = formula_free_lvars(f);
+            let f = to_lformula(f);
+            // `fromList (freesList f)` — the formula's free message and
+            // timepoint variables, compared against `tildex :: Set LVar`.
+            let freevars_f: BTreeSet<LVar> = formula_frees(&f).into_iter().collect();
             if !freevars_f.is_subset(tildex) {
                 let unbound: Vec<LVar> = freevars_f.difference(tildex).copied().collect();
                 return Err(format!(
@@ -680,18 +685,17 @@ pub fn base_trans_comb(
                 ));
             }
             // then-arm carries `[f]`; else-arm carries `[Not f]`.
-            let not_f = tamarin_parser::ast::Formula::Not(Box::new(f.clone()));
             let body_then: RuleBody = (
                 vec![def_state(tildex)],
                 vec![],
                 vec![def_state1(tildex)],
-                vec![f.clone()],
+                vec![syntactic_lnformula_to_parser(&f)],
             );
             let body_else: RuleBody = (
                 vec![def_state(tildex)],
                 vec![],
                 vec![def_state2(tildex)],
-                vec![not_f],
+                vec![syntactic_lnformula_to_parser(&f.not())],
             );
             Ok((
                 vec![body_then, body_else],
@@ -912,18 +916,6 @@ fn let_else_restriction(
 /// materialises HS `prettyTerm`'s special shapes (infix `exp`, right-spine
 /// `pair` split, infix AC chains, `LIST(…)`).
 pub(crate) use tamarin_theory::pretty_theory::lnterm_to_parser as ln_term_to_parser;
-
-/// `fromList (freesList f)` for a parser-AST formula — the formula's FREE
-/// variables (vars not bound by an enclosing quantifier), as `LVar`s for the
-/// WFUnbound `⊆ tildex` check (HS Basetranslation.hs:226-306, see line 236).  Quantifier-bound
-/// vars are excluded; the special timepoint vars carry the `Node` sort.
-fn formula_free_lvars(f: &tamarin_parser::ast::Formula) -> BTreeSet<LVar> {
-    let mut out = BTreeSet::new();
-    crate::convert::fold_free_vars(f, &mut |v, _bound| {
-        out.insert(LVar::new(v.name.clone(), v.sort, v.idx));
-    });
-    out
-}
 
 /// `toLNFact (protoFact Linear "Eq" [t1, t2])` (Basetranslation.hs:226-306, see line 244): build
 /// the `Eq( t1, t2 )` linear fact over the type-erased terms.
@@ -1372,7 +1364,7 @@ mod tests {
             // `Eq(nil, k)` — the predicate atom the surface `if Eq(nil, k)`
             // parses to.
             let f = tamarin_parser::parser::parse_formula_str("Eq(nil, k)", &msig).unwrap();
-            ProcessCombinator::Cond(f)
+            ProcessCombinator::Cond(tamarin_theory::formula::sapic_from_parser(&f, &msig).unwrap())
         };
         let an = ProcessAnnotation::<LVar>::empty();
         let pos: Vec<i64> = vec![];
@@ -1395,13 +1387,50 @@ mod tests {
         assert_eq!(txr, Some(tx));
     }
 
+    /// A quantifier binder in a SAPIC condition is read by `sapicvar` and
+    /// carries no type tag (Theory/Text/Parser/Token.hs:506-510#sapicvar),
+    /// while a timepoint operand is read by `sapicnodevar` and is tagged
+    /// `node` (Theory/Text/Parser/Token.hs:522-525#sapicnodevar,
+    /// Theory/Sapic/Term.hs:99-100#defaultSapicNodeType).  `quantify`
+    /// compares the WHOLE variable (Theory/Model/Formula.hs:346-352), so the
+    /// binder closes nothing and the timepoint reaches the `⊆ tildex` check.
+    ///
+    /// Oracle (pinned build, Git revision ef3f0468) on
+    /// `in(x); event Foo(x); if (Ex #j. Foo(x)@#j) then out('yes') else out('no')`:
+    /// `tamarin-prover: The variable(s) #j are not bound.`, exit 1
+    /// (probe `S2_cond_quantified_timepoint`).
+    #[test]
+    fn a_quantified_timepoint_in_a_cond_is_not_bound_by_its_binder() {
+        let msig = tamarin_term::maude_sig::pair_maude_sig();
+        let cond = |src: &str| {
+            let f = tamarin_parser::parser::parse_formula_str(src, &msig).unwrap();
+            ProcessCombinator::Cond(tamarin_theory::formula::sapic_from_parser(&f, &msig).unwrap())
+        };
+        let an = ProcessAnnotation::<LVar>::empty();
+        let pos: Vec<i64> = vec![];
+        // tildex binds only `x`.
+        let mut tx = BTreeSet::new();
+        tx.insert(lv("x", 0));
+
+        // A message binder does close its occurrences — both the binder and
+        // the occurrence take `sapicvar`.  That is what makes the assertion
+        // below discriminating.
+        assert!(base_trans_comb(&cond("Ex y. Eq(y, x)"), &an, &pos, &tx).is_ok());
+
+        let err = base_trans_comb(&cond("Ex #j. Foo(x) @ #j"), &an, &pos, &tx).unwrap_err();
+        assert!(
+            err.contains("name: \"j\"") && err.contains("Node"),
+            "expected the timepoint to stay free, got {err}"
+        );
+    }
+
     // User-`[AC]` symbols must lower INFIX (`BinOp::AcFct`, left-folded), as
-    // HS `prettyTerm` renders them (Term/Term.hs:305): a prefix
-    // `App("add", …)` here reaches emitted bytes un-canonicalized via
-    // `subst_cond_formula` → `pretty_sapic_comb` (SAPIC `if` predicates),
-    // diverging from the oracle in both the rendered predicate and the
-    // derived rule/restriction names.  No corpus theory combines SAPIC with a
-    // user `[AC]` symbol, so this shape is only pinned here.
+    // HS `prettyTerm` renders them (Term/Term.hs:305): the lowering carries
+    // the translation's restriction bodies into emitted bytes, so a prefix
+    // `App("add", …)` here would diverge from the oracle in both the rendered
+    // predicate and the derived rule/restriction names.  No corpus theory
+    // combines SAPIC with a user `[AC]` symbol, so this shape is only pinned
+    // here.
     #[test]
     fn user_ac_terms_lower_infix() {
         use tamarin_term::function_symbols::{AcFctSym, Constructability, NdcState, Privacy};

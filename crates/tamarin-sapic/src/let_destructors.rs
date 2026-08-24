@@ -38,7 +38,7 @@ use tamarin_term::lterm::{LNTerm, LVar, Name};
 use tamarin_term::subst::{apply_vterm, Subst};
 use tamarin_term::subterm_rule::CtxtStRule;
 use tamarin_term::vterm::{Lit, VTerm};
-
+use tamarin_theory::formula::apply_subst;
 use tamarin_theory::sapic::{Process, ProcessCombinator, SapicLVar, SapicTerm};
 
 use crate::annotation::{AnnotatedProcess, ProcessAnnotation};
@@ -389,44 +389,15 @@ fn subst_comb(
         // a Case-B `let`-elimination (`let z = t in P`) must rewrite the free
         // variable `z` inside any downstream conditional's formula too — `z` is
         // a value bound by the `let`, not a process binder, so the `Cond`
-        // payload's `z` references the same `let`-bound value.  The RS `Cond`
-        // carries the un-expanded parser-AST formula, so we substitute over that
-        // formula's free variables, replacing each with the parser lowering of
-        // its image term.  (Quantifier-bound vars are left untouched, mirroring
-        // HS, which only substitutes the process-level `let`-bound variable.)
-        ProcessCombinator::Cond(f) => ProcessCombinator::Cond(subst_cond_formula(subst, &f)),
+        // payload's `z` references the same `let`-bound value.  A quantifier
+        // binder is a `Bound` De Bruijn index and is outside the substitution's
+        // domain, so it cannot capture a variable of the image.
+        ProcessCombinator::Cond(f) => ProcessCombinator::Cond(apply_subst(subst, f)),
         // Parallel/Ndc carry no terms, so substitution is the identity.
         // Enumerated (no wildcard) so a new term-carrying variant must decide
         // its substitution here.
         other @ (ProcessCombinator::Parallel | ProcessCombinator::Ndc) => other,
     }
-}
-
-/// Substitute a `let`-bound variable into a `Cond` parser-AST formula
-/// (HS `apply subst fa`, Sapic/Process.hs:165).  For each FREE `Var(v)` whose
-/// `SapicLVar` key (typed or untyped) is in `subst`'s domain, replace it with
-/// the parser-AST lowering of the image term; non-domain / quantifier-bound vars
-/// are kept unchanged.
-fn subst_cond_formula(
-    subst: &Subst<Name, SapicLVar>,
-    f: &tamarin_parser::ast::Formula,
-) -> tamarin_parser::ast::Formula {
-    use tamarin_parser::ast as p;
-    // For each FREE `Var`, its `let`-bound image lowered into the parser-AST term
-    // universe (via the LN form, so AC normal form / pub-literal rendering match
-    // HS).  `None` leaves the var unchanged (not in the subst domain).
-    crate::convert::map_free_terms(f, &mut |v: &p::VarSpec, _bound| {
-        let lv = LVar::new(v.name.clone(), v.sort, v.idx);
-        // The Case-B subst keys an untyped `SapicLVar` (and, when the bound var
-        // was typed, its typed variant too); a `Cond`-formula var is untyped, so
-        // probe the untyped key first, then the typed-erased path.
-        let img = subst
-            .image_of(&SapicLVar::untyped(lv))
-            .or_else(|| subst.image_of(&SapicLVar::new(lv, None)));
-        img.map(|t| {
-            crate::base_translation::ln_term_to_parser(&crate::base_translation::to_ln_term(t))
-        })
-    })
 }
 
 /// Lift an `LNTerm` (untyped) back to a SAPIC term (all variables untyped).
