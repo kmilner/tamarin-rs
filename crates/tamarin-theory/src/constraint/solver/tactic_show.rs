@@ -13,27 +13,23 @@
 //! These selectors build PCRE patterns from `map show <LVar>` and test
 //! `show <term> =~ ...`.  They use Haskell's `Show` instances, which are
 //! NOT the same as the user-facing pretty-printer:
-//!   - `show LVar`  : `sortPrefix s ++ body`  (LTerm.hs:526-533)
-//!   - `show Name`  : `~'n'` / `'n'` / `#'n'` / `%'n'` (LTerm.hs:231-235)
-//!   - `show (Term a)` (raw form, Term/Raw.hs:227-237):
-//!     ```text
-//!     Lit l                -> show l
-//!     FApp (NoEq (s,_)) [] -> s
-//!     FApp (NoEq (s,_)) as -> s ++ "(" ++ intercalate "," (map show as) ++ ")"
-//!     FApp (C EMap)     as -> "em" ++ "(" ++ ... ++ ")"
-//!     FApp List         as -> "LIST" ++ "(" ++ ... ++ ")"
-//!     FApp (AC o)       as -> show o ++ "(" ++ ... ++ ")"
-//!     ```
-//!     where `show o` is the AC constructor name (Union/Mult/Xor/NatPlus).
-//!   - `show (BVar v)` (derived, LTerm.hs:452-454): `Bound i` / `Free <show v>`.
+//!   - `show LVar`  : `sortPrefix s ++ body`  (LTerm.hs:550-557)
+//!   - `show Name`  : `~'n'` / `'n'` / `#'n'` / `%'n'` (LTerm.hs:235-240)
+//!   - `show (Term a)` (raw form, Term/Term/Raw.hs:227-237): prefix
+//!     applications whose arguments are separated by a bare comma, a `NoEq` or
+//!     user-`AC` symbol alone when it takes no arguments, and the derived
+//!     `ACSym` constructor name (Union/Mult/Xor/NatPlus) as the head of a
+//!     builtin AC application.  [`tamarin_term::term::show_term`] is that
+//!     instance over the internal term; `show_gterm` below is the same
+//!     rendering over the solver's parser-AST `GTerm`.
+//!   - `show (BVar v)` (derived, LTerm.hs:476-478): `Bound i` / `Free <show v>`.
 //!
 //! `show (Term (Lit Name (BVar LVar)))` (the `VTerm Name (BVar LVar)` used by
 //! `checkFormula`) therefore renders Var leaves as `Bound i` / `Free <lvar>`.
 
 use tamarin_parser::ast as p;
-use tamarin_term::function_symbols::{AcSym, CSym, FunSym};
-use tamarin_term::lterm::{sort_prefix, LNTerm, Name, NameTag};
-use tamarin_term::vterm::Lit;
+use tamarin_term::lterm::{sort_prefix, LNTerm};
+use tamarin_term::term::show_term;
 
 use crate::fact::{FactTag, Multiplicity};
 use crate::guarded::Guarded;
@@ -201,106 +197,10 @@ fn write_pair(items: &[GTerm], out: &mut String) {
 // isFactName, isInFactTerms
 // =============================================================================
 
-/// HS `Show (Term a)` applied to `LNTerm = VTerm Name LVar` (Term/Raw.hs:227-237).
+/// HS `Show (Term a)` applied to `LNTerm = VTerm Name LVar`
+/// (Term/Term/Raw.hs:227-237).
 pub fn show_lnterm(t: &LNTerm) -> String {
-    let mut s = String::new();
-    write_lnterm(t, &mut s);
-    s
-}
-
-fn write_lnterm(t: &LNTerm, out: &mut String) {
-    use tamarin_term::term::Term;
-    match t {
-        Term::Lit(Lit::Var(v)) => write_lvar(v, out),
-        Term::Lit(Lit::Con(n)) => write_name(n, out),
-        Term::App(sym, args) => match sym {
-            // FApp (NoEq (s,_)) [] -> s ; FApp (NoEq (s,_)) as -> s(a,..)
-            FunSym::NoEq(s) => {
-                let name = String::from_utf8_lossy(s.name);
-                out.push_str(&name);
-                if !args.is_empty() {
-                    write_args(args, out);
-                }
-            }
-            // FApp (C EMap) as -> "em"(..)
-            FunSym::C(CSym::EMap) => {
-                out.push_str("em");
-                write_args(args, out);
-            }
-            // FApp List as -> "LIST"(..)
-            FunSym::List => {
-                out.push_str("LIST");
-                write_args(args, out);
-            }
-            // FApp (AC (ACfct (s,_))) [] -> s ; FApp (AC (ACfct (s,_))) as ->
-            // s(..) ; FApp (AC o) as -> show o (..)
-            FunSym::Ac(o) => {
-                match o {
-                    AcSym::Union => out.push_str("Union"),
-                    AcSym::Mult => out.push_str("Mult"),
-                    AcSym::Xor => out.push_str("Xor"),
-                    AcSym::NatPlus => out.push_str("NatPlus"),
-                    AcSym::AcFct(s) => out.push_str(&String::from_utf8_lossy(s.name)),
-                }
-                // Only the user-defined AC symbols have a nullary arm
-                // (Term/Raw.hs:227-233) showing the bare name; the builtin AC
-                // operators always show a parenthesised argument list.
-                let nullary_acfct = args.is_empty() && matches!(o, AcSym::AcFct(_));
-                if !nullary_acfct {
-                    write_args(args, out);
-                }
-            }
-        },
-    }
-}
-
-/// The parenthesised, comma-separated argument list shared by every
-/// applied-symbol arm of [`write_lnterm`] (`(a1,a2,..)`, `()` when empty).
-fn write_args(args: &[LNTerm], out: &mut String) {
-    out.push('(');
-    for (i, a) in args.iter().enumerate() {
-        if i > 0 {
-            out.push(',');
-        }
-        write_lnterm(a, out);
-    }
-    out.push(')');
-}
-
-/// HS `show LVar` for the typed `LVar` (LTerm.hs:526-533).  Writes
-/// directly into `out`, avoiding a throwaway intermediate `String`;
-/// produces byte-identical output.
-fn write_lvar(v: &tamarin_term::lterm::LVar, out: &mut String) {
-    out.push_str(sort_prefix(v.sort));
-    if v.name.is_empty() {
-        out.push_str(&v.idx.to_string());
-    } else if v.idx == 0 {
-        out.push_str(v.name);
-    } else {
-        out.push_str(v.name);
-        out.push('.');
-        out.push_str(&v.idx.to_string());
-    }
-}
-
-/// HS `show Name` (LTerm.hs:235-240).  Writes directly into `out`,
-/// avoiding a throwaway intermediate `String`; byte-identical output.
-fn write_name(n: &Name, out: &mut String) {
-    match n.tag {
-        NameTag::Fresh => out.push('~'),
-        NameTag::Pub => {}
-        NameTag::Node => out.push('#'),
-        NameTag::Nat => out.push('%'),
-        // `show (Name AbbrevName n) = show n` (LTerm.hs:240) — the bare name
-        // id, with neither a sigil nor the quotes the other four tags carry.
-        NameTag::Abbrev => {
-            out.push_str(n.id.0);
-            return;
-        }
-    }
-    out.push('\'');
-    out.push_str(n.id.0);
-    out.push('\'');
+    show_term(t)
 }
 
 // =============================================================================
@@ -523,6 +423,7 @@ pub fn sys_reveal_shown(oracle_type: &str, formulas: &[std::sync::Arc<Guarded>])
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tamarin_term::function_symbols::AcSym;
     use tamarin_term::lterm::LSort;
 
     fn fresh(name: &str) -> p::VarSpec {

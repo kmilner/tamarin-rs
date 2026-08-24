@@ -35,8 +35,8 @@ use tamarin_utils::FastMap;
 use crate::function_symbols::{
     diff_sym, exp_sym, nat_one_sym, pair_sym, AcSym, CSym, FunSym, EMAP_SYM_STRING,
 };
-use crate::lterm::{sort_prefix, LSort, LVar, Name, NameTag};
-use crate::term::Term;
+use crate::lterm::{sort_prefix, BVar, LSort, LVar, Name, NameTag};
+use crate::term::{ShowLit, Term};
 use crate::vterm::Lit;
 
 /// Pretty-print an `LNTerm` to a `String`.
@@ -274,6 +274,45 @@ pub fn ac_fct_op_symbol(name: &str) -> &'static str {
 }
 
 // ---------------------------------------------------------------------
+// `ShowLit` impls — the literal half of HS `Show (Term a)`.
+// ---------------------------------------------------------------------
+
+/// HS `instance (Show v, Show c) => Show (Lit c v)` (Term/VTerm.hs:98-100) at
+/// `Lit Name LVar`, the literal of an `LNTerm`.  Both sides are the same
+/// `Show` instances the pretty-printer reuses for its leaves: `Show LVar`
+/// (LTerm.hs:550-557) and `Show Name` (LTerm.hs:235-240).
+impl ShowLit for Lit<Name, LVar> {
+    fn show_into(&self, out: &mut String) {
+        match self {
+            Lit::Var(v) => pp_lvar(v, out),
+            Lit::Con(n) => pp_name(n, out),
+        }
+    }
+}
+
+/// The same instance at `Lit Name (BVar LVar)`, the literal of a `BLTerm`.
+/// Its variable side is the derived `Show (BVar v)` (LTerm.hs:476-478):
+/// `Bound <i>` for a De Bruijn index, `Free <v>` for a free variable.  Neither
+/// payload takes parentheses — a De Bruijn index is never negative, and
+/// `Show LVar` is hand-written, so it ignores the precedence the derived
+/// instance passes it.
+impl ShowLit for Lit<Name, BVar<LVar>> {
+    fn show_into(&self, out: &mut String) {
+        match self {
+            Lit::Var(BVar::Bound(i)) => {
+                out.push_str("Bound ");
+                let _ = write!(out, "{}", i);
+            }
+            Lit::Var(BVar::Free(v)) => {
+                out.push_str("Free ");
+                pp_lvar(v, out);
+            }
+            Lit::Con(n) => pp_name(n, out),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------
 // Display impls — `format!("{}", &term)` just works.
 // ---------------------------------------------------------------------
 
@@ -331,7 +370,7 @@ mod tests {
         exp_sym, inv_sym, nat_one_sym, pair_sym, Constructability, NoEqSym, Privacy,
     };
     use crate::lterm::{fresh_term, pub_term, NameTag};
-    use crate::term::{f_app_ac, f_app_no_eq, lit};
+    use crate::term::{f_app_ac, f_app_c, f_app_no_eq, lit, show_term};
 
     fn var(name: &str, sort: LSort) -> Term<Lit<Name, LVar>> {
         lit(Lit::Var(LVar::new(name, sort, 0)))
@@ -640,5 +679,76 @@ mod tests {
         let v = LVar::new("", LSort::Msg, 7);
         let t: Term<Lit<Name, LVar>> = lit(Lit::Var(v));
         assert_eq!(pretty_lnterm(&t), "7");
+    }
+
+    // =====================================================================
+    // The `ShowLit` impls, through `show_term`.
+    // =====================================================================
+
+    /// The `BLTerm` literal type: `Lit Name (BVar LVar)`.
+    type BLit = Lit<Name, BVar<LVar>>;
+
+    fn bound(i: u64) -> Term<BLit> {
+        lit(Lit::Var(BVar::Bound(i)))
+    }
+
+    /// `show (Bound i)` is the derived `Show (BVar v)` (LTerm.hs:476-478):
+    /// the constructor name, a space, the index, no parentheses.  The whole
+    /// offender spelling of a wellformedness report is built from this arm —
+    /// the string here is the one pinned in
+    /// `scripts/divergence_fixtures/expected/formula_terms_offenders.wf.hs.txt`.
+    #[test]
+    fn show_writes_a_bound_variable_as_the_derived_constructor() {
+        assert_eq!(show_term(&bound(1)), "Bound 1");
+        let aaa = NoEqSym::new(
+            b"aaa".to_vec(),
+            2,
+            Privacy::Public,
+            Constructability::Constructor,
+        );
+        let offender: Term<BLit> = f_app_ac(
+            AcSym::Mult,
+            vec![
+                f_app_c(CSym::EMap, vec![bound(1), bound(2)]),
+                f_app_no_eq(aaa, vec![bound(2), bound(1)]),
+            ],
+        );
+        assert_eq!(
+            show_term(&offender),
+            "Mult(aaa(Bound 2,Bound 1),em(Bound 1,Bound 2))"
+        );
+    }
+
+    /// `show (Free v)` is the same derived instance; `Show LVar` is
+    /// hand-written (LTerm.hs:550-557), so its sort prefix follows the
+    /// constructor name with no parentheses around it.
+    #[test]
+    fn show_writes_a_free_variable_as_the_derived_constructor() {
+        let x: Term<BLit> = lit(Lit::Var(BVar::Free(LVar::new("x", LSort::Fresh, 0))));
+        assert_eq!(show_term(&x), "Free ~x");
+        let y: Term<BLit> = lit(Lit::Var(BVar::Free(LVar::new("y", LSort::Node, 4))));
+        assert_eq!(show_term(&y), "Free #y.4");
+        // At `Lit Name LVar` there is no `BVar` wrapper, so the same variable
+        // shows as the bare `Show LVar`.
+        let z: Term<Lit<Name, LVar>> = var("z", LSort::Msg);
+        assert_eq!(show_term(&z), "z");
+    }
+
+    /// `show Name` (LTerm.hs:235-240) quotes the name id and prefixes the
+    /// tag's sigil; the abbreviation tag carries neither.
+    #[test]
+    fn show_writes_a_name_with_its_tag_sigil() {
+        for (tag, expected) in [
+            (NameTag::Pub, "'n'"),
+            (NameTag::Fresh, "~'n'"),
+            (NameTag::Node, "#'n'"),
+            (NameTag::Nat, "%'n'"),
+            (NameTag::Abbrev, "n"),
+        ] {
+            let c: Term<Lit<Name, LVar>> = lit(Lit::Con(Name::new(tag, "n")));
+            assert_eq!(show_term(&c), expected);
+            let b: Term<BLit> = lit(Lit::Con(Name::new(tag, "n")));
+            assert_eq!(show_term(&b), expected);
+        }
     }
 }

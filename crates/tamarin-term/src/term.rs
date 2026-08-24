@@ -9,7 +9,8 @@
 //! are normalised by [`f_app`]: arguments are flattened across nested
 //! same-symbol applications and sorted into a canonical order.
 
-use crate::function_symbols::{AcFctSym, AcSym, CSym, FunSym, NoEqSym};
+use crate::function_symbols::{AcFctSym, AcSym, CSym, FunSym, NoEqSym, EMAP_SYM_STRING};
+use std::borrow::Cow;
 use std::sync::Arc;
 
 /// Diff annotation — whether the left or right interpretation of `diff` is
@@ -480,6 +481,67 @@ impl TermSize for &str {
 }
 
 // =============================================================================
+// `show`: Haskell's raw `Show (Term a)`
+// =============================================================================
+
+/// A term literal that renders through Haskell's `show`.
+///
+/// The `Show a` constraint of HS `instance Show a => Show (Term a)`
+/// (Term/Term/Raw.hs:227-237).
+pub trait ShowLit {
+    /// Append `show self` to `out`.
+    fn show_into(&self, out: &mut String);
+}
+
+/// HS `instance Show a => Show (Term a)` (Term/Term/Raw.hs:227-237).
+///
+/// Every application is prefix and its arguments are separated by a bare comma;
+/// a `NoEq` or user-`AC` symbol applied to no arguments writes its name alone.
+/// This is a different rendering from [`crate::pretty::pretty_lnterm`]: `pair`
+/// and `exp` applications keep their prefix form instead of turning into
+/// `<a, b>` and `a^b`, and each of the four builtin AC operators writes the
+/// `ACSym` constructor name its derived `Show` gives
+/// (Term/Term/FunctionSymbols.hs:138-139) instead of an infix operator.
+pub fn show_term<A: ShowLit>(t: &Term<A>) -> String {
+    let mut out = String::new();
+    write_show_term(t, &mut out);
+    out
+}
+
+fn write_show_term<A: ShowLit>(t: &Term<A>, out: &mut String) {
+    match t {
+        Term::Lit(l) => l.show_into(out),
+        Term::App(sym, args) => {
+            // `FApp (NoEq (s,_)) []` and `FApp (AC (ACfct (s,_))) []` are the
+            // two arms that stop at the symbol name; `C EMap`, `List` and the
+            // builtin AC operators write a parenthesised argument list whether
+            // or not it is empty.
+            let (name, bare_when_nullary): (Cow<'_, str>, bool) = match sym {
+                FunSym::NoEq(s) => (String::from_utf8_lossy(s.name), true),
+                FunSym::Ac(AcSym::AcFct(s)) => (String::from_utf8_lossy(s.name), true),
+                FunSym::C(CSym::EMap) => (String::from_utf8_lossy(EMAP_SYM_STRING), false),
+                FunSym::List => (Cow::Borrowed("LIST"), false),
+                FunSym::Ac(AcSym::Union) => (Cow::Borrowed("Union"), false),
+                FunSym::Ac(AcSym::Mult) => (Cow::Borrowed("Mult"), false),
+                FunSym::Ac(AcSym::Xor) => (Cow::Borrowed("Xor"), false),
+                FunSym::Ac(AcSym::NatPlus) => (Cow::Borrowed("NatPlus"), false),
+            };
+            out.push_str(&name);
+            if !(args.is_empty() && bare_when_nullary) {
+                out.push('(');
+                for (i, a) in args.iter().enumerate() {
+                    if i > 0 {
+                        out.push(',');
+                    }
+                    write_show_term(a, out);
+                }
+                out.push(')');
+            }
+        }
+    }
+}
+
+// =============================================================================
 // Tests
 // =============================================================================
 
@@ -864,5 +926,90 @@ mod tests {
         };
         assert_eq!(&args[..], &[var_term(x), var_term(z)]);
         assert_eq!(swapped, prod);
+    }
+
+    // =========================================================================
+    // `show_term` — the raw Haskell `Show (Term a)` form.
+    // =========================================================================
+
+    /// The literal type the `show_term` tests build over.
+    type ShowT = crate::vterm::VTerm<crate::lterm::Name, crate::lterm::LVar>;
+
+    fn show_msg_var(name: &str) -> ShowT {
+        use crate::lterm::{LSort, LVar};
+        crate::vterm::var_term(LVar::new(name, LSort::Msg, 0))
+    }
+
+    fn show_noeq(name: &[u8], arity: usize) -> NoEqSym {
+        use crate::function_symbols::{Constructability, Privacy};
+        NoEqSym::new(
+            name.to_vec(),
+            arity,
+            Privacy::Public,
+            Constructability::Constructor,
+        )
+    }
+
+    fn show_acfct(name: &[u8]) -> AcFctSym {
+        use crate::function_symbols::{Constructability, NdcState, Privacy};
+        AcFctSym::new(
+            name.to_vec(),
+            Privacy::Public,
+            Constructability::Constructor,
+            NdcState::NotNdc,
+        )
+    }
+
+    /// `FApp (NoEq (s,_)) [] -> BC.unpack s` and
+    /// `FApp (AC (ACfct (s,_))) [] -> BC.unpack s` (Term/Raw.hs:227-237, see
+    /// line 231): the two nullary arms write the name alone.
+    #[test]
+    fn show_term_writes_a_nullary_symbol_without_parentheses() {
+        let g: ShowT = f_app_no_eq(show_noeq(b"g", 0), vec![]);
+        assert_eq!(show_term(&g), "g");
+        let nil: ShowT = unsafe_f_app(FunSym::Ac(AcSym::AcFct(show_acfct(b"nil"))), vec![]);
+        assert_eq!(show_term(&nil), "nil");
+    }
+
+    /// `intercalate ","` (Term/Raw.hs:227-237, see line 232): no space follows
+    /// a comma, and each argument is itself shown, so the form nests.
+    #[test]
+    fn show_term_writes_comma_separated_arguments() {
+        let (x, y) = (show_msg_var("x"), show_msg_var("y"));
+        let inner = f_app_no_eq(show_noeq(b"h", 2), vec![x.clone(), y.clone()]);
+        assert_eq!(show_term(&inner), "h(x,y)");
+        let outer = f_app_no_eq(show_noeq(b"k", 3), vec![inner, x, f_app_list(vec![y])]);
+        assert_eq!(show_term(&outer), "k(h(x,y),x,LIST(y))");
+    }
+
+    /// `FApp (AC o) as -> show o ++ …` (Term/Raw.hs:227-237, see line 237)
+    /// writes the derived `ACSym` constructor name
+    /// (Term/Term/FunctionSymbols.hs:138-139); the `ACfct` arm (see line 234)
+    /// writes the user symbol's own name instead.
+    #[test]
+    fn show_writes_an_ac_head_by_its_constructor_name() {
+        let (x, y) = (show_msg_var("x"), show_msg_var("y"));
+        for (sym, name) in [
+            (AcSym::Union, "Union"),
+            (AcSym::Mult, "Mult"),
+            (AcSym::Xor, "Xor"),
+            (AcSym::NatPlus, "NatPlus"),
+        ] {
+            let t: ShowT = f_app_ac(sym, vec![x.clone(), y.clone()]);
+            assert_eq!(show_term(&t), format!("{}(x,y)", name));
+        }
+        let user: ShowT = f_app_acfct(show_acfct(b"xorr"), vec![x, y]);
+        assert_eq!(show_term(&user), "xorr(x,y)");
+    }
+
+    /// `pair` and `exp` are `NoEq` symbols, so `show` writes them prefix; the
+    /// `<a, b>` and `a^b` spellings belong to `prettyTerm`.
+    #[test]
+    fn show_writes_a_pairing_as_the_prefix_symbol() {
+        use crate::lterm::pub_term;
+        let p: ShowT = f_app_no_eq(pair_sym(), vec![pub_term("a"), pub_term("b")]);
+        assert_eq!(show_term(&p), "pair('a','b')");
+        let e: ShowT = f_app_no_eq(exp_sym(), vec![p, pub_term("c")]);
+        assert_eq!(show_term(&e), "exp(pair('a','b'),'c')");
     }
 }
