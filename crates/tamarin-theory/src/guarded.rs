@@ -1869,12 +1869,22 @@ fn unguarded_error(positions: &[usize], freshened: &[p::VarSpec]) -> GuardError 
 /// The atoms are lowered into the `GTerm` world one at a time
 /// ([`crate::guarded_types::blnatom_to_gatom`]), where
 /// [`formula_to_guarded`] canonicalises the whole formula up front.
-/// `convert` descends through every quantifier before it meets an atom, so
-/// each atom is all-`Free` when it is lowered — under the binders
-/// `open_formula_prefix` drew.  That is where the AC argument order of the
-/// two routes can part, since `Ord LVar` reads the index first
-/// (LTerm.hs:545-548); `crates/tamarin-theory/tests/guarded_from_internal.rs`
-/// measures the difference over the examples tree and lists it.
+/// `convert_ln` descends through every quantifier before it meets an atom, so
+/// each atom is all-`Free` when it is lowered, under the binders
+/// `open_formula_prefix` drew and with its AC arguments sorted under them:
+/// opening substitutes each drawn `LVar` through `map_lits` as HS's
+/// `openFormula` does through `mapLits`, whose `fAppAC` sorts
+/// (Theory/Model/Formula.hs:277-284, :288-291, Term/Term/Raw.hs:118-129), and
+/// the lowering's `canonicalize_ac_in_atom` re-establishes the same order over
+/// the parser AST ([`cmp_varspec`] is `Ord LVar`).  `Ord LVar` reads the index
+/// first (LTerm.hs:545-548), so a binder drawn at a non-zero index sorts where
+/// its name alone would not put it, and [`formula_to_guarded`], which sorts
+/// under the source variables, holds such a `++` chain in the other order;
+/// `crates/tamarin-theory/tests/guarded_from_internal.rs` lists every formula
+/// of the examples tree where the two orders part.  The order reaches the
+/// solver through the derived `PartialEq`/`Hash` on [`Guarded`] and not the
+/// printed formula, which re-sorts AC arguments under the names it opens the
+/// binders with (`sort_ac_args_for_display`, `pretty_formula.rs`).
 ///
 /// [`GuardError::subject_formula`] is a parser-AST formula, so this route
 /// leaves it unset and reports the message alone.

@@ -16,23 +16,31 @@
 //! the derived `Hash` beside it are what the solver's `stores_contains`
 //! membership and the implied-formula dedup key on.
 //!
-//! [`RESIDUE`] lists the formulas where the two routes disagree, with two
-//! causes:
+//! [`RESIDUE`] lists the formulas where the two routes disagree.  Every
+//! entry on it is a difference in the STORED value alone: the guarded
+//! printer re-sorts AC arguments under the names it opens the binders with,
+//! in both its Doc and its string form (`sort_ac_args_for_display`,
+//! pretty_formula.rs), and the test asserts that the two routes print every
+//! listed formula identically.  Two causes:
 //!
-//! * 32 of them differ in the ARGUMENT ORDER of a `++` chain.  HS's
-//!   `openFormulaPrefix` substitutes the freshened binders into the body
-//!   through `mapLits`, whose `fApp` re-sorts the AC arguments under the
-//!   drawn `LVar`s (Theory/Model/Formula.hs:279-284, Term/Term/Raw.hs:118-129),
+//! * 32 of them differ in the ARGUMENT ORDER of a `++` chain, and the
+//!   locally-nameless order is HS's.  `openFormulaPrefix` substitutes the
+//!   freshened binders into the body through `mapLits`, whose `fApp` sorts
+//!   the AC arguments under the drawn `LVar`s
+//!   (Theory/Model/Formula.hs:277-284, :288-291, Term/Term/Raw.hs:118-129),
 //!   and `Ord LVar` reads the index first (LTerm.hs:545-548); the parser-AST
-//!   route sorts once up front under the source variables and carries the
-//!   freshened names in the diagnostic alone.  Every one of these files binds
-//!   one name in two sibling quantifier prefixes, so the second prefix draws
-//!   `b3.1` where the source wrote `b3`.  All 32 are marked `canonical forms
-//!   agree`: `canonicalize_ac_in_guarded`, which every solver entry applies
-//!   (simplify.rs, reduction.rs), maps the two values together.  The pinned
-//!   oracle rejects all ten files at load — six on a parse error the port
-//!   does not raise, four on a Maude failure — so none of them is in the
-//!   prove or pretty gate corpus (scripts/parity_corpus.txt).
+//!   route sorts under the source variables and carries the freshened names
+//!   in the diagnostic alone.  Every one of these files binds one name in two
+//!   sibling quantifier prefixes, so the second prefix draws `b3.1` where the
+//!   source wrote `b3`.  All 32 are marked `canonical forms agree`: the
+//!   solver's substitution and dedup paths re-sort AC arguments before they
+//!   compare (`canonicalize_ac_in_guarded_cow`, simplify.rs and reduction.rs)
+//!   and map the two values together.  The pinned oracle rejects all ten
+//!   files at load — six on a parse error the port does not raise, and four
+//!   diff theories that reach Maude only under `-D=diff` and fail there — so
+//!   none of them is in the prove or pretty gate corpus
+//!   (scripts/parity_corpus.txt).  These 32 entries are a recorded
+//!   difference, not a failure.
 //! * one differs in the SURFACE SPELLING of a binary application: the parser
 //!   AST records `sdec{m}k` as `Term::AlgApp` and `sdec(m, k)` as
 //!   `Term::App`, while HS `binaryAlgApp` builds one `fAppNoEq` for both
@@ -354,6 +362,14 @@ fn corpus_guarded_agrees_across_the_locally_nameless_route() {
     }
     assert_corpus_covered(elaborated, files.len());
     assert!(formulas > 0, "no formulas compared");
+    for f in &findings {
+        assert_eq!(
+            f.ast, f.ln,
+            "the two routes print {} differently, so the difference is not \
+             confined to the stored value",
+            f.entry
+        );
+    }
     let mut entries: Vec<&str> = findings.iter().map(|f| f.entry.as_str()).collect();
     entries.sort();
     assert_eq!(entries, RESIDUE);
