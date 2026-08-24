@@ -880,7 +880,7 @@ pub fn apply_auto_sources(
     ndc_cache: Option<&crate::constraint::solver::context::IntrRuleCache>,
 ) -> bool {
     use crate::constraint::solver::context::ProofContext;
-    use crate::guarded::formula_to_guarded;
+    use crate::guarded::formula_to_guarded_parsed;
 
     // Both scratch contexts below share the caller's one rule list.
     let ndc_cache = ndc_cache.cloned();
@@ -888,7 +888,7 @@ pub fn apply_auto_sources(
     // Restrictions → guarded (mirrors ProverSession::build; skip on failure).
     let mut restrictions = Vec::new();
     for r in elaborated.restrictions() {
-        if let Ok(g) = formula_to_guarded(&r.formula) {
+        if let Ok(g) = formula_to_guarded_parsed(&r.formula, &elaborated.signature.maude_sig) {
             restrictions.push(g);
         }
     }
@@ -933,7 +933,7 @@ pub fn apply_auto_sources(
                 .iter()
                 .any(|a| matches!(a, crate::theory::LemmaAttr::Sources))
         })
-        .filter_map(|l| formula_to_guarded(&l.formula).ok())
+        .filter_map(|l| formula_to_guarded_parsed(&l.formula, &elaborated.signature.maude_sig).ok())
         .collect();
     let trigger = if typing_asms.is_empty() {
         // refined == raw

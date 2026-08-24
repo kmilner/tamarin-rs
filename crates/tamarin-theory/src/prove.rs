@@ -23,7 +23,7 @@ use crate::constraint::solver::context::{IntrRuleCache, ProofContext};
 use crate::constraint::solver::search::{run_proof_search, ProofNode};
 use crate::constraint::system::{formula_to_system, SourceKind};
 use crate::elaborate::elaborate;
-use crate::guarded::{formula_to_guarded, Guarded};
+use crate::guarded::{formula_to_guarded_parsed, Guarded};
 use crate::theory::OpenProtoRule;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -48,7 +48,7 @@ fn guard_error_doc(
     let sub = e
         .subject_formula
         .as_ref()
-        .map(crate::pretty_formula::pretty_formula)
+        .map(crate::pretty_formula::pretty_lnformula)
         .unwrap_or_else(|| full.clone());
     format!(
         "{}\n  \"{}\"\nin the formula\n  \"{}\"",
@@ -638,7 +638,7 @@ fn gather_reusable_lemmas(
         if hide_all || hidden.contains(&prior.name.as_str()) {
             continue;
         }
-        let rg = formula_to_guarded(&prior.formula)
+        let rg = formula_to_guarded_parsed(&prior.formula, &theory.signature.maude_sig)
             .map_err(|e| ProveError::Guarded(guard_error_doc(&e, &prior.formula)))?;
         reuse_lemmas.push(rg);
     }
@@ -687,7 +687,7 @@ fn gather_typing_assumptions(
             ) {
                 continue;
             }
-            let rg = formula_to_guarded(&prior.formula)
+            let rg = formula_to_guarded_parsed(&prior.formula, &theory.signature.maude_sig)
                 .map_err(|e| ProveError::Guarded(guard_error_doc(&e, &prior.formula)))?;
             typing_assumptions.push(rg);
             source_key.push(prior.name.clone());
@@ -871,7 +871,7 @@ impl ProverSession {
         // `ProveError::Guarded` instead of skipping.
         let mut restrictions: Vec<Guarded> = Vec::new();
         for r in theory.restrictions() {
-            let rg = formula_to_guarded(&r.formula)
+            let rg = formula_to_guarded_parsed(&r.formula, &theory.signature.maude_sig)
                 .map_err(|e| ProveError::Guarded(guard_error_doc(&e, &r.formula)))?;
             restrictions.push(rg);
         }
@@ -1064,7 +1064,7 @@ impl ProverSession {
     /// saturating key is cached.
     ///
     /// Runs on the caller's thread before the fan-out; re-installs the
-    /// user-fn-symbol thread-locals for its `formula_to_guarded` calls (same
+    /// user-fn-symbol thread-locals for its guarded-conversion calls (same
     /// rationale as `prove_lemma_in_session_mode`).  Returns the number of
     /// DISTINCT keys saturated — the count of `saturate_sources_with_simp`
     /// passes the pre-pass runs (one per distinct key rather than one per
@@ -1223,7 +1223,7 @@ fn prove_lemma_in_session_mode(
         .lookup_lemma(lemma_name)
         .ok_or_else(|| ProveError::LemmaNotFound(lemma_name.to_string()))?;
 
-    let g = formula_to_guarded(&lemma.formula)
+    let g = formula_to_guarded_parsed(&lemma.formula, &theory.signature.maude_sig)
         .map_err(|e| ProveError::Guarded(guard_error_doc(&e, &lemma.formula)))?;
 
     // Per-lemma source kind, mirroring HS `lemmaSourceKind`
@@ -1474,7 +1474,7 @@ pub fn prove_lemma_with_pool_file_heuristic(
         .lookup_lemma(lemma_name)
         .ok_or_else(|| ProveError::LemmaNotFound(lemma_name.to_string()))?;
 
-    let g = formula_to_guarded(&lemma.formula)
+    let g = formula_to_guarded_parsed(&lemma.formula, &theory.signature.maude_sig)
         .map_err(|e| ProveError::Guarded(guard_error_doc(&e, &lemma.formula)))?;
 
     // Per-lemma source kind (HS `lemmaSourceKind`,
@@ -1491,7 +1491,7 @@ pub fn prove_lemma_with_pool_file_heuristic(
     // through).  Mirror the fail-loud behaviour: propagate `ProveError`.
     let mut restrictions: Vec<Guarded> = Vec::new();
     for r in theory.restrictions() {
-        let rg = formula_to_guarded(&r.formula)
+        let rg = formula_to_guarded_parsed(&r.formula, &theory.signature.maude_sig)
             .map_err(|e| ProveError::Guarded(guard_error_doc(&e, &r.formula)))?;
         restrictions.push(rg);
     }

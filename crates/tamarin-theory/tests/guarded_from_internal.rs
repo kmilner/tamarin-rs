@@ -2,67 +2,22 @@
 // of the tamarin-prover sources this file cites; list them with:
 //   scripts/gen_license_headers.py --authors <this file>
 
-//! Corpus net for the two routes into a guarded formula: every lemma and
-//! restriction of every `.spthy` under the examples tree is converted from
-//! the parser AST `elaborate` stores (`formula_to_guarded`) and from the
-//! locally-nameless formula the same AST closes into
-//! (`formula_to_guarded_ln` over `from_parser` and `to_lnformula`), and the
-//! two `Result<Guarded, String>`s are compared.
+//! Corpus net for the parser-AST entry into a guarded formula: every lemma
+//! and restriction of every `.spthy` under the examples tree is converted
+//! with `formula_to_guarded_parsed` and with the two steps that wrapper
+//! performs — `from_parser` plus `to_lnformula`, then `formula_to_guarded`
+//! — and the two `Result<Guarded, String>`s are compared.
+//!
+//! What the comparison holds is the wrapper's totality: a formula the
+//! internal-formula lemma field has to hold reaches `LNFormula`, so neither
+//! `from_parser` nor `to_lnformula` turns a convertible formula into a
+//! guardedness error.  Both failures are reported as findings, and
+//! [`RESIDUE`] — the sorted list of them — is empty.
 //!
 //! The comparison is the derived structural `==`, never `cmp_guarded`:
-//! `cmp_guarded`'s AC arm flattens and re-sorts both sides, which is exactly
-//! the class of difference — the AC fold direction and the argument order a
-//! freshened binder can move — this net exists to catch.  The same `==` and
-//! the derived `Hash` beside it are what the solver's `stores_contains`
+//! `cmp_guarded`'s AC arm flattens and re-sorts both sides, where this `==`
+//! and the derived `Hash` beside it are what the solver's `stores_contains`
 //! membership and the implied-formula dedup key on.
-//!
-//! [`RESIDUE`] lists the formulas where the two routes disagree.  Every
-//! entry on it is a difference in the STORED value alone: the guarded
-//! printer re-sorts AC arguments under the names it opens the binders with,
-//! in both its Doc and its string form (`sort_ac_args_for_display`,
-//! pretty_formula.rs), and the test asserts that the two routes print every
-//! listed formula identically.  Two causes:
-//!
-//! * 32 of them differ in the ARGUMENT ORDER of a `++` chain, and the
-//!   locally-nameless order is HS's.  `openFormulaPrefix` substitutes the
-//!   freshened binders into the body through `mapLits`, whose `fApp` sorts
-//!   the AC arguments under the drawn `LVar`s
-//!   (Theory/Model/Formula.hs:277-284, :288-291, Term/Term/Raw.hs:118-129),
-//!   and `Ord LVar` reads the index first (LTerm.hs:545-548); the parser-AST
-//!   route sorts under the source variables and carries the freshened names
-//!   in the diagnostic alone.  Every one of these files binds one name in two
-//!   sibling quantifier prefixes, so the second prefix draws `b3.1` where the
-//!   source wrote `b3`.  All 32 are marked `canonical forms agree`: the
-//!   solver's substitution and dedup paths re-sort AC arguments before they
-//!   compare (`canonicalize_ac_in_guarded_cow`, simplify.rs and reduction.rs)
-//!   and map the two values together.  The pinned oracle rejects all ten
-//!   files at load — six on a parse error the port does not raise, and four
-//!   diff theories that reach Maude only under `-D=diff` and fail there — so
-//!   none of them is in the prove or pretty gate corpus
-//!   (scripts/parity_corpus.txt).  These 32 entries are a recorded
-//!   difference, not a failure.
-//! * one differs in the SURFACE SPELLING of a binary application: the parser
-//!   AST records `sdec{m}k` as `Term::AlgApp` and `sdec(m, k)` as
-//!   `Term::App`, while HS `binaryAlgApp` builds one `fAppNoEq` for both
-//!   (Theory/Text/Parser/Term.hs:109-121), so an internal term cannot say
-//!   which of them the source spells.  It is marked `braced spelling only`,
-//!   which [`spelling_normalised`] checks: rewriting the parser-AST route's
-//!   `AlgApp` nodes to the prefix `App` makes the two values equal, so the
-//!   head is the whole of the difference.  The two spellings share a
-//!   `cmp_term` key and a printed form (`prettyTerm` has no brace case,
-//!   Term/Term.hs:298-327), and the parser AST is their only source: every
-//!   term the solver builds out of an `LNTerm` goes through
-//!   `elaborate::lnterm_to_term`, which writes the prefix form.  This one is
-//!   on a gate-corpus file, and the head the guarded store carries is not
-//!   observable there: `loops/Typing_and_Destructors.spthy` matches the
-//!   pinned oracle under `--prove` and at load with either head.
-//!
-//! The braced head is kept on the parser-AST side rather than normalised
-//! away there, because HS holds the two spellings apart for a commutative
-//! symbol: `naryOpApp` maps `em(a, b)` to `fAppC EMap`, whose arguments it
-//! sorts (Theory/Text/Parser/Term.hs:103, Term/Term/Raw.hs:133-134), while
-//! `binaryAlgApp` has no `em` case and maps `em{a}b` to `fAppNoEq`
-//! (Theory/Text/Parser/Term.hs:109-121).
 
 use rayon::prelude::*;
 use std::path::{Path, PathBuf};
@@ -70,10 +25,7 @@ use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 use tamarin_parser::ast as p;
 use tamarin_theory::formula::{from_parser, to_lnformula};
-use tamarin_theory::guarded::{
-    canonicalize_ac_in_guarded, formula_to_guarded, formula_to_guarded_ln, ga, GAtom, GFact, GTerm,
-    Guarded,
-};
+use tamarin_theory::guarded::{formula_to_guarded, formula_to_guarded_parsed, Guarded};
 use tamarin_theory::pretty_formula::pretty_guarded;
 
 /// Examples beyond this test's budget, relative to the corpus root and
@@ -85,45 +37,10 @@ const BEYOND_BUDGET: &[&str] = &[
     "sapic/deprecated/csf21-acc-unbounded/mixvote/mixvote_SmHh-multi-session-5-fixed.spthy",
 ];
 
-/// Every formula of the tree on which the two routes disagree, sorted, with
-/// whether `canonicalize_ac_in_guarded` maps the two values together.  A
-/// diff theory elaborates a left and a right lemma of one name, so its
-/// entries appear twice.  The module header states the two causes.
-const RESIDUE: &[&str] = &[
-    "csf20-disputeResolution/mixvote_ShHh_RF.spthy: lemma `TimelyP' [canonical forms agree]",
-    "csf20-disputeResolution/mixvote_ShHh_RF.spthy: lemma `VoterC' [canonical forms agree]",
-    "csf20-disputeResolution/mixvote_ShHh_RF_functionalLHS.spthy: lemma `TimelyP' [canonical forms agree]",
-    "csf20-disputeResolution/mixvote_ShHh_RF_functionalLHS.spthy: lemma `TimelyP' [canonical forms agree]",
-    "csf20-disputeResolution/mixvote_ShHh_RF_functionalLHS.spthy: lemma `VoterC' [canonical forms agree]",
-    "csf20-disputeResolution/mixvote_ShHh_RF_functionalLHS.spthy: lemma `VoterC' [canonical forms agree]",
-    "csf20-disputeResolution/mixvote_ShHh_RF_functionalRHS.spthy: lemma `TimelyP' [canonical forms agree]",
-    "csf20-disputeResolution/mixvote_ShHh_RF_functionalRHS.spthy: lemma `TimelyP' [canonical forms agree]",
-    "csf20-disputeResolution/mixvote_ShHh_RF_functionalRHS.spthy: lemma `VoterC' [canonical forms agree]",
-    "csf20-disputeResolution/mixvote_ShHh_RF_functionalRHS.spthy: lemma `VoterC' [canonical forms agree]",
-    "csf20-disputeResolution/mixvote_ShHh_RF_reuseAsRestriction.spthy: lemma `TimelyP' [canonical forms agree]",
-    "csf20-disputeResolution/mixvote_ShHh_RF_reuseAsRestriction.spthy: lemma `VoterC' [canonical forms agree]",
-    "csf26-ac/multiset-UD/csf20-disputeResolution/mixvote_ShHh_RF.spthy: lemma `TimelyP' [canonical forms agree]",
-    "csf26-ac/multiset-UD/csf20-disputeResolution/mixvote_ShHh_RF.spthy: lemma `TimelyP' [canonical forms agree]",
-    "csf26-ac/multiset-UD/csf20-disputeResolution/mixvote_ShHh_RF.spthy: lemma `VoterC' [canonical forms agree]",
-    "csf26-ac/multiset-UD/csf20-disputeResolution/mixvote_ShHh_RF.spthy: lemma `VoterC' [canonical forms agree]",
-    "csf26-ac/multiset-UD/csf20-disputeResolution/mixvote_ShHh_RF_reuseAsRestriction.spthy: lemma `TimelyP' [canonical forms agree]",
-    "csf26-ac/multiset-UD/csf20-disputeResolution/mixvote_ShHh_RF_reuseAsRestriction.spthy: lemma `TimelyP' [canonical forms agree]",
-    "csf26-ac/multiset-UD/csf20-disputeResolution/mixvote_ShHh_RF_reuseAsRestriction.spthy: lemma `VoterC' [canonical forms agree]",
-    "csf26-ac/multiset-UD/csf20-disputeResolution/mixvote_ShHh_RF_reuseAsRestriction.spthy: lemma `VoterC' [canonical forms agree]",
-    "loops/Typing_and_Destructors.spthy: lemma `type_assertion' [braced spelling only]",
-    "thesis-LaraSchmid-evoting/chapter4_DisputeResolution/aletheaDR_ShHh_RF.spthy: lemma `DRvoterC' [canonical forms agree]",
-    "thesis-LaraSchmid-evoting/chapter4_DisputeResolution/aletheaDR_ShHh_RF.spthy: lemma `DRvoterT' [canonical forms agree]",
-    "thesis-LaraSchmid-evoting/chapter4_DisputeResolution/aletheaDR_ShHh_RF_functional_LHS.spthy: lemma `DRvoterC' [canonical forms agree]",
-    "thesis-LaraSchmid-evoting/chapter4_DisputeResolution/aletheaDR_ShHh_RF_functional_LHS.spthy: lemma `DRvoterC' [canonical forms agree]",
-    "thesis-LaraSchmid-evoting/chapter4_DisputeResolution/aletheaDR_ShHh_RF_functional_LHS.spthy: lemma `DRvoterT' [canonical forms agree]",
-    "thesis-LaraSchmid-evoting/chapter4_DisputeResolution/aletheaDR_ShHh_RF_functional_LHS.spthy: lemma `DRvoterT' [canonical forms agree]",
-    "thesis-LaraSchmid-evoting/chapter4_DisputeResolution/aletheaDR_ShHh_RF_functional_RHS.spthy: lemma `DRvoterC' [canonical forms agree]",
-    "thesis-LaraSchmid-evoting/chapter4_DisputeResolution/aletheaDR_ShHh_RF_functional_RHS.spthy: lemma `DRvoterC' [canonical forms agree]",
-    "thesis-LaraSchmid-evoting/chapter4_DisputeResolution/aletheaDR_ShHh_RF_functional_RHS.spthy: lemma `DRvoterT' [canonical forms agree]",
-    "thesis-LaraSchmid-evoting/chapter4_DisputeResolution/aletheaDR_ShHh_RF_functional_RHS.spthy: lemma `DRvoterT' [canonical forms agree]",
-    "thesis-LaraSchmid-evoting/chapter4_DisputeResolution/aletheaDR_ShHh_RF_reuseAsRestriction.spthy: lemma `DRvoterC' [canonical forms agree]",
-    "thesis-LaraSchmid-evoting/chapter4_DisputeResolution/aletheaDR_ShHh_RF_reuseAsRestriction.spthy: lemma `DRvoterT' [canonical forms agree]",
-];
+/// Every formula of the tree on which the wrapper and its two steps
+/// disagree.  Empty: `from_parser` and `to_lnformula` reach every lemma and
+/// restriction the elaborated theory holds.
+const RESIDUE: &[&str] = &[];
 
 /// The examples tree, or the override in `CORPUS_ROOT`.
 fn corpus_root() -> PathBuf {
@@ -161,10 +78,9 @@ enum Outcome {
 
 /// One formula on which the two routes disagree.
 struct Finding {
-    /// The [`RESIDUE`] line: where it is and whether the canonical forms
-    /// agree.
+    /// The [`RESIDUE`] line: where the disagreement is.
     entry: String,
-    ast: String,
+    parsed: String,
     ln: String,
 }
 
@@ -196,79 +112,10 @@ fn show(g: &Result<Guarded, String>) -> String {
     }
 }
 
-/// The guarded formula at the AC order every solver entry puts it in.
-fn canonical(g: &Result<Guarded, String>) -> Result<Guarded, String> {
-    match g {
-        Ok(g) => Ok(canonicalize_ac_in_guarded(g)),
-        Err(e) => Err(e.clone()),
-    }
-}
-
-/// Every braced binary application of `g` written in the prefix form the
-/// locally-nameless route produces.  `GTerm::AlgApp(n, a, b)` and
-/// `GTerm::App(n, [a, b])` are one `fAppNoEq` in an internal term (HS
-/// `binaryAlgApp`, Theory/Text/Parser/Term.hs:109-121), so two values that
-/// agree under this rewrite differ in the source spelling alone.
-fn spelling_normalised(g: &Guarded) -> Guarded {
-    fn term(t: &GTerm) -> GTerm {
-        match t {
-            GTerm::AlgApp(n, a, b) => GTerm::App(n.clone(), vec![term(a), term(b)].into()),
-            GTerm::App(n, args) => GTerm::App(n.clone(), args.iter().map(term).collect()),
-            GTerm::Pair(items) => GTerm::Pair(items.iter().map(term).collect()),
-            GTerm::Diff(a, b) => GTerm::Diff(ga(term(a)), ga(term(b))),
-            GTerm::BinOp(op, a, b) => GTerm::BinOp(*op, ga(term(a)), ga(term(b))),
-            GTerm::PatMatch(inner) => GTerm::PatMatch(ga(term(inner))),
-            GTerm::Var(_)
-            | GTerm::PubLit(_)
-            | GTerm::FreshLit(_)
-            | GTerm::NatLit(_)
-            | GTerm::Number(_)
-            | GTerm::NumberOne
-            | GTerm::NatOne
-            | GTerm::DhNeutral => t.clone(),
-        }
-    }
-    fn fact(f: &GFact) -> GFact {
-        GFact {
-            persistent: f.persistent,
-            name: f.name.clone(),
-            args: f.args.iter().map(term).collect(),
-            annotations: f.annotations.clone(),
-        }
-    }
-    fn atom(a: &GAtom) -> GAtom {
-        match a {
-            GAtom::Eq(x, y) => GAtom::Eq(term(x), term(y)),
-            GAtom::Less(x, y) => GAtom::Less(term(x), term(y)),
-            GAtom::LessMset(x, y) => GAtom::LessMset(term(x), term(y)),
-            GAtom::Subterm(x, y) => GAtom::Subterm(term(x), term(y)),
-            GAtom::Action(f, t) => GAtom::Action(fact(f), term(t)),
-            GAtom::Last(t) => GAtom::Last(term(t)),
-            GAtom::Pred(f) => GAtom::Pred(fact(f)),
-        }
-    }
-    match g {
-        Guarded::Atom(a) => Guarded::Atom(atom(a)),
-        Guarded::Conj(v) => Guarded::Conj(v.iter().map(spelling_normalised).collect()),
-        Guarded::Disj(v) => Guarded::Disj(v.iter().map(spelling_normalised).collect()),
-        Guarded::GGuarded {
-            qua,
-            vars,
-            guards,
-            body,
-        } => Guarded::GGuarded {
-            qua: *qua,
-            vars: vars.clone(),
-            guards: guards.iter().map(atom).collect(),
-            body: std::sync::Arc::new(spelling_normalised(body)),
-        },
-    }
-}
-
-/// Both routes on one formula: the parser AST as `elaborate` stores it, and
-/// the locally-nameless formula `from_parser` closes it into.  A formula
-/// that cannot reach `LNFormula` is itself a finding — the internal-formula
-/// lemma field has to hold every one of them.
+/// Both routes on one formula: `formula_to_guarded_parsed`, and the two
+/// steps it performs written out.  A formula that cannot reach `LNFormula`
+/// is itself a finding — the internal-formula lemma field has to hold every
+/// one of them.
 fn compare(
     label: &str,
     f: &p::Formula,
@@ -277,31 +124,23 @@ fn compare(
 ) -> Option<Finding> {
     let fail = |what: String| Finding {
         entry: at(&format!("{label}: {what}")),
-        ast: String::new(),
+        parsed: String::new(),
         ln: String::new(),
     };
-    let ast = formula_to_guarded(f).map_err(|e| e.message);
+    let parsed = formula_to_guarded_parsed(f, msig).map_err(|e| e.message);
     let ln = match from_parser(f, msig) {
         Err(e) => return Some(fail(format!("from_parser: {}", e.message))),
         Ok(syn) => match to_lnformula(&syn) {
             None => return Some(fail("to_lnformula: residual sugar".to_string())),
-            Some(plain) => formula_to_guarded_ln(&plain).map_err(|e| e.message),
+            Some(plain) => formula_to_guarded(&plain).map_err(|e| e.message),
         },
     };
-    if ast == ln {
+    if parsed == ln {
         return None;
     }
-    let spelling = matches!((&ast, &ln), (Ok(a), Ok(l)) if spelling_normalised(a) == *l);
-    let canon = if spelling {
-        "braced spelling only"
-    } else if canonical(&ast) == canonical(&ln) {
-        "canonical forms agree"
-    } else {
-        "canonical forms differ"
-    };
     Some(Finding {
-        entry: at(&format!("{label} [{canon}]")),
-        ast: show(&ast),
+        entry: at(label),
+        parsed: show(&parsed),
         ln: show(&ln),
     })
 }
@@ -407,7 +246,7 @@ fn assert_corpus_covered(elaborated: usize, files: usize) {
 }
 
 #[test]
-fn corpus_guarded_agrees_across_the_locally_nameless_route() {
+fn corpus_the_parsed_conversion_reaches_the_internal_formula() {
     let start = Instant::now();
     let Some((root, files, reports)) = corpus() else {
         return;
@@ -436,17 +275,16 @@ fn corpus_guarded_agrees_across_the_locally_nameless_route() {
     );
     for f in &findings {
         eprintln!(
-            "MISMATCH {}\n--- parser AST route\n{}\n--- locally-nameless route\n{}",
-            f.entry, f.ast, f.ln
+            "MISMATCH {}\n--- formula_to_guarded_parsed\n{}\n--- from_parser + formula_to_guarded\n{}",
+            f.entry, f.parsed, f.ln
         );
     }
     assert_corpus_covered(elaborated, files.len());
     assert!(formulas > 0, "no formulas compared");
     for f in &findings {
         assert_eq!(
-            f.ast, f.ln,
-            "the two routes print {} differently, so the difference is not \
-             confined to the stored value",
+            f.parsed, f.ln,
+            "the wrapper and its two steps disagree on {}",
             f.entry
         );
     }

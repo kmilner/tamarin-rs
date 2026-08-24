@@ -18,7 +18,7 @@
 //!   before any typed conversion
 //! - Rules — `parser::Rule` → `OpenProtoRule(ProtoRuleE, [])`
 //! - Lemmas / restrictions — the formula is intentionally retained as
-//!   parser AST (guarded conversion done lazily via `formula_to_guarded`),
+//!   parser AST (guarded conversion done lazily via `formula_to_guarded_parsed`),
 //!   after arity-1 tuple folding (`rewrite_arity1_*`) and AC/C
 //!   canonicalization (`canonicalize_ac_in_p*`)
 //!
@@ -46,7 +46,7 @@ use tamarin_term::maude_sig::{
 use tamarin_term::term::{f_app_no_eq, Term};
 use tamarin_term::vterm::{Lit, VTerm};
 
-use crate::guarded::formula_to_guarded;
+use crate::guarded::formula_to_guarded_parsed;
 use crate::rule::{ProtoRuleE, ProtoRuleEInfo, ProtoRuleName, Rule, RuleAttributes};
 use crate::signature::SignaturePure;
 use crate::theory::{
@@ -84,15 +84,16 @@ pub struct GuardDiagnostic {
 /// `examples/elaborate_all.rs`), NOT part of the prove pipeline, which
 /// produces the byte-exact WF report via
 /// [`crate::formula_reports::formula_reports`].  The two perform the same
-/// `formula_to_guarded` scan but format their output differently; keep them
-/// in sync if the guardedness check itself changes.
+/// guardedness scan but format their output differently; keep them in sync
+/// if the check itself changes.
 pub fn elaborate_with_diagnostics(
     parser_thy: &p::Theory,
 ) -> Result<(Theory, Vec<GuardDiagnostic>), ElabError> {
     let thy = elaborate(parser_thy)?;
+    let msig = &thy.signature.maude_sig;
     let mut diags = Vec::new();
     for l in thy.lemmas() {
-        if let Err(e) = formula_to_guarded(&l.formula) {
+        if let Err(e) = formula_to_guarded_parsed(&l.formula, msig) {
             diags.push(GuardDiagnostic {
                 topic: "Formula guardedness".into(),
                 item: format!("Lemma `{}'", l.name),
@@ -101,7 +102,7 @@ pub fn elaborate_with_diagnostics(
         }
     }
     for r in thy.restrictions() {
-        if let Err(e) = formula_to_guarded(&r.formula) {
+        if let Err(e) = formula_to_guarded_parsed(&r.formula, msig) {
             diags.push(GuardDiagnostic {
                 topic: "Formula guardedness".into(),
                 item: format!("Restriction `{}'", r.name),
@@ -110,153 +111,6 @@ pub fn elaborate_with_diagnostics(
         }
     }
     Ok((thy, diags))
-}
-
-/// Port of HS `checkGuarded` called inside `formulaReports`
-/// (Wellformedness.hs:988-1004).
-///
-/// For each lemma/restriction formula that fails `formulaToGuarded`,
-/// produce a `WfError` with:
-///   - topic `" Formula guardedness"` (leading space, matching HS
-///     `underlineTopic " Formula guardedness"` at Wellformedness.hs:999-1014, see line 1004)
-///   - message layout matching HS's `prettyWfErrorReport` + `checkGuarded`:
-///
-/// ```text
-///  Formula guardedness
-/// ====================
-///
-///   {header} cannot be converted to a guarded formula:
-///     {error_text}
-///       "{sub_formula}"
-///     in the formula
-///       "{full_formula}"
-/// ```
-///
-/// Indentation: 2 (prettyWfErrorReport nest 2) + 2 (checkGuarded nest 2
-/// err) + 2 (ppFormula nest 2) = 6 spaces for formula text.
-///
-/// HS `msum` semantics: in `formulaReports` the check order is
-/// `checkQuantifiers`, `checkTerms`, `checkGuarded` (Wellformedness.hs:1002-1004).
-/// Because `WfErrorReport = [WfError]`, the list monad's `msum` is
-/// `concat`, so all three checks run and their results are
-/// concatenated — there is NO "first wins" short-circuit, and
-/// `checkGuarded` always runs unconditionally for every
-/// lemma/restriction.  This function does the same: it runs the
-/// guardedness check unconditionally on every lemma/restriction.
-///
-/// The batch / web load pipelines instead go through
-/// [`crate::formula_reports::formula_reports`], which interleaves this arm
-/// with the other two per formula as HS's `msum` does; this entry point
-/// serves callers that want the `checkGuarded` findings alone.
-pub fn check_guarded_wf(parser_thy: &p::Theory) -> Vec<tamarin_parser::wf::WfError> {
-    // Apply macros so the WF check sees the expanded formulas, just as
-    // HS's `formulaReports` applies `applyMacroInFormula` before checking.
-    let mut thy_clone = parser_thy.clone();
-    crate::macro_expand::expand_theory_macros(&mut thy_clone);
-
-    // Expand `predicates:` use-sites BEFORE the guardedness check, mirroring
-    // HS: there the lemma/restriction formula is predicate-expanded at PARSE
-    // time (`liftedAddLemma`→`expandLemma`→`expandFormula`,
-    // Theory/Text/Parser.hs:145-147; `liftedAddRestriction`→`expandRestriction`,
-    // lines 132-134), so by the time `formulaReports.checkGuarded`
-    // (Wellformedness.hs:999-1014, see line 1004) reads `get lFormula l` / `get rstrFormula rstr`
-    // the `Pred` sugar is already gone and the formula is the inlined body.
-    // The guardedness conversion can only guard a quantified var that appears
-    // in an `Action`/`Eq`/`Less`/… atom — never one buried inside an opaque
-    // `Pred(...)` atom.  A predicate like `Exists(#time) <=> ∃ val. Action(val)
-    // @ time` means `∃ #t. Exists(#t)` expands to `∃ #t. ∃ val. Action(val) @
-    // #t`, where `#t` IS guarded by the action's timepoint.  Without this
-    // expansion the check sees the un-expanded `∃ #t. Exists(#t)` and falsely
-    // reports `#t` as unguarded.  Order matches `elaborate` (macros → predicates).
-    // An expansion error here (e.g. an undefined predicate) is surfaced
-    // elsewhere by the elaborate path; here we keep the macro-only form so the
-    // guardedness check still runs on what it can.
-    let _ = crate::predicate_expand::expand_theory_formulas(&mut thy_clone);
-
-    // Iterate lemmas and restrictions in HS `annFormulas` order — all lemmas
-    // in theory order, then all restrictions (`formulaReports`,
-    // Wellformedness.hs:1007-1014).
-    crate::formula_reports::ann_formulas(&thy_clone)
-        .into_iter()
-        .filter_map(|(header, formula)| check_guarded_entry(&header, formula))
-        .collect()
-}
-
-/// The `checkGuarded` finding for one annotated formula, if it fails
-/// `formulaToGuarded`.  `header` is HS's `"Lemma `n'"` / `"Restriction `n'"`;
-/// the formula must already be macro- and predicate-expanded (see
-/// [`check_guarded_wf`], which does both before calling this).  Split out so
-/// the combined per-formula pass in [`crate::formula_reports`] can interleave
-/// this arm with `checkQuantifiers` / `checkTerms` as HS's `msum` does.
-pub fn check_guarded_entry(
-    header: &str,
-    formula: &p::Formula,
-) -> Option<tamarin_parser::wf::WfError> {
-    use crate::pretty_formula::pretty_formula;
-    use tamarin_parser::wf::underline_topic;
-
-    let e = match formula_to_guarded(formula) {
-        Ok(_) => return None, // guard check passed
-        Err(e) => e,
-    };
-
-    // Render the formula text (the full formula).
-    let full_formula_text = pretty_formula(formula);
-
-    // Render the sub-formula text (the innermost failing quantifier,
-    // or the full formula if no sub-formula was tracked — which
-    // matches HS's `ppFormula fmOrig` for the top-level case).
-    let sub_formula_text = e
-        .subject_formula
-        .as_ref()
-        .map(pretty_formula)
-        .unwrap_or_else(|| full_formula_text.clone());
-
-    // Build the HS-faithful message block.
-    // Layout (indent levels):
-    //   2:  "{header} cannot be converted to a guarded formula:"
-    //   4:  "{error_text}"
-    //   6:  '"{sub_formula}"'     (if sub_formula != full_formula)
-    //   4:  "in the formula"
-    //   6:  '"{full_formula}"'
-    //
-    // The `underlineTopic` of " Formula guardedness" includes the
-    // trailing newline; we add one blank line before the body (from
-    // `$-$` in `ppTopic` of `prettyWfErrorReport`).
-    let topic = " Formula guardedness";
-    let mut msg = String::new();
-    msg.push_str(&underline_topic(topic));
-    msg.push('\n'); // blank line between header and body
-    msg.push_str("  "); // nest 2 (prettyWfErrorReport)
-    msg.push_str(header);
-    msg.push_str(" cannot be converted to a guarded formula:\n");
-
-    // Indent the error body by 4 spaces (nest 2 inside checkGuarded).
-    for line in e.message.lines() {
-        msg.push_str("    ");
-        msg.push_str(line);
-        msg.push('\n');
-    }
-
-    // If the sub-formula is different from the full formula (nested
-    // quantifier case), emit the sub-formula line (6 spaces).
-    // This mirrors HS's `noUnguardedVars` which includes `ppFormula f0`
-    // (the sub-formula) as part of the `d` doc, then `ppError` appends
-    // "in the formula" + full formula.
-    // When sub == full (top-level quantifier failure), HS still emits
-    // the formula once under the error text and once under "in the formula"
-    // — the same text appears twice.
-    msg.push_str("      "); // 6 spaces
-    msg.push('"');
-    msg.push_str(&sub_formula_text);
-    msg.push_str("\"\n");
-    msg.push_str("    in the formula\n");
-    msg.push_str("      "); // 6 spaces
-    msg.push('"');
-    msg.push_str(&full_formula_text);
-    msg.push_str("\"\n");
-
-    Some(tamarin_parser::wf::WfError::new(topic, msg))
 }
 
 /// Post-translation port of HS `publicNamesReport'` (Wellformedness.hs:463-484)
@@ -440,7 +294,7 @@ pub fn elaborate(parser_thy: &p::Theory) -> Result<Theory, ElabError> {
     // variantsProtoRule runs; restrictions by `applyMacroInRestriction`
     // (Theory/Model/Restriction.hs:164-166).  We apply at the parser-AST
     // level so a single pass handles every term-bearing item before any
-    // typed conversion (`term_to_lnterm` / `formula_to_guarded`) sees a
+    // typed conversion (`term_to_lnterm` / `from_parser`) sees a
     // macro call.  Predicate-expand may itself substitute the inlined
     // predicate body into use sites, and the body could contain macro
     // calls — so expand macros first.
@@ -467,7 +321,7 @@ pub fn elaborate(parser_thy: &p::Theory) -> Result<Theory, ElabError> {
     // re-establish the fold here, once, on the elaborated theory's
     // lemma/restriction formulas — after the signature is final so
     // `arity1_noeq_names` covers both user `functions: f/1` and builtin
-    // arity-1 NoEq symbols.  This makes `prove.rs`'s `formula_to_guarded`
+    // arity-1 NoEq symbols.  This makes `prove.rs`'s guarded-conversion
     // calls (lemma + reuse-lemma + restriction) carry the folded `h(<…>)`
     // shape into the goal, matching HS.  The display path folds the parser-AST
     // separately (pretty_theory.rs), and the fold is idempotent (an arity-1

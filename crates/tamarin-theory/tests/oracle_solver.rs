@@ -5,7 +5,7 @@
 //! What the cases here compare against the oracle:
 //! 1. The rule and lemma counts.  The test compares ours against the counts
 //!    in the oracle's `--parse-only` echo.
-//! 2. The quantifier structure of `formula_to_guarded`.  The test compares it
+//! 2. The quantifier structure of `formula_to_guarded_parsed`.  The test compares it
 //!    against the `∃`/`∀` prefixes of the same echo.
 //! 3. The per-lemma verdicts from `prove_lemma`.  The test compares them
 //!    against the oracle's `--prove` summary line.  The fixtures are all
@@ -27,7 +27,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use tamarin_parser::parse_theory;
-use tamarin_theory::guarded::{formula_to_guarded, Guarded, Quant};
+use tamarin_theory::guarded::{formula_to_guarded_parsed, Guarded, Quant};
 
 fn fixtures_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
@@ -520,7 +520,9 @@ fn fixture_lemma_system(name: &str) -> tamarin_theory::constraint::system::Syste
             _ => None,
         })
         .expect("lemma");
-    let g = formula_to_guarded(&lemma.formula).expect("guarded");
+    let elaborated = tamarin_theory::elaborate::elaborate(&theory).expect("elaborate");
+    let g = formula_to_guarded_parsed(&lemma.formula, &elaborated.signature.maude_sig)
+        .expect("guarded");
     formula_to_system(
         Vec::new(),
         SourceKind::RawSources,
@@ -697,7 +699,7 @@ fn oracle_lemma_echo<'a>(parse_only: &'a str, lemma: &str) -> &'a str {
         .unwrap_or_else(|| panic!("no source echo for lemma `{lemma}`:\n{parse_only}"))
 }
 
-/// The test checks `formula_to_guarded`'s quantifier structure against the
+/// The test checks `formula_to_guarded_parsed`'s quantifier structure against the
 /// oracle in three ways per fixture.  It pins our `(ex_blocks, ex_vars,
 /// all_blocks, all_vars)` census.  It pins the oracle's echo of the same
 /// lemma to its bytes.  It then checks our block counts against the glyph
@@ -780,7 +782,9 @@ fn guarded_quantifier_structure_matches_tamarin() {
                 _ => None,
             })
             .unwrap_or_else(|| panic!("{name}: lemma `{lemma}` present"));
-        let g = formula_to_guarded(&l.formula).expect("guarded conv");
+        let elaborated = tamarin_theory::elaborate::elaborate(&theory).expect("elaborate");
+        let g = formula_to_guarded_parsed(&l.formula, &elaborated.signature.maude_sig)
+            .expect("guarded conv");
         assert_eq!(
             count_quantifiers(&g),
             (*ex_blocks, *ex_vars, *all_blocks, *all_vars),
@@ -1507,7 +1511,7 @@ fn prove_lemma_tiny_setup_verdict_matches_tamarin() {
 }
 
 /// End-to-end: parse `tiny_setup.spthy` (whose lemma is
-/// `Ex k #i. Setup(k)@#i`), drive through formula_to_guarded +
+/// `Ex k #i. Setup(k)@#i`), drive through formula_to_guarded_parsed +
 /// formula_to_system + Induction → simplify, and verify the
 /// step-case branch contains a `Goal::Action(_, Setup(_))`.
 /// This exercises Ex-decomposition.
@@ -1734,9 +1738,11 @@ fn formula_to_system_pipes_parsed_lemmas() {
         let path = fixtures_dir().join(name);
         let src = std::fs::read_to_string(&path).expect("read");
         let theory = parse_theory(&src, &[]).expect("parse");
+        let elaborated = tamarin_theory::elaborate::elaborate(&theory).expect("elaborate");
         for it in &theory.items {
             if let tamarin_parser::ast::TheoryItem::Lemma(l) = it {
-                let g = formula_to_guarded(&l.formula).expect("guarded");
+                let g = formula_to_guarded_parsed(&l.formula, &elaborated.signature.maude_sig)
+                    .expect("guarded");
                 let sys = formula_to_system(
                     Vec::new(),
                     SourceKind::RawSources,
@@ -1868,7 +1874,7 @@ fn solve_premise_goal_against_fixture_matches_rule_count() {
     assert_eq!(r.sys.edges.len(), 1);
 }
 
-/// Cross-check our `formula_to_guarded` rejection messages against
+/// Cross-check our `formula_to_guarded_parsed` rejection messages against
 /// tamarin's. Both should reject `Ex k #i. (A(k)@#i) | (B(k)@#i)`
 /// with an "unguarded variable(s)" error, since the existential
 /// guard is a disjunction of actions rather than a conjunction.
@@ -1924,7 +1930,9 @@ end
             }
         })
         .expect("lemma");
-    let err = formula_to_guarded(&lemma.formula).expect_err("should fail");
+    let elaborated = tamarin_theory::elaborate::elaborate(&theory).expect("elaborate");
+    let err = formula_to_guarded_parsed(&lemma.formula, &elaborated.signature.maude_sig)
+        .expect_err("should fail");
     assert!(
         err.message.contains("unguarded variable"),
         "expected 'unguarded variable' in our error:\n{:?}",

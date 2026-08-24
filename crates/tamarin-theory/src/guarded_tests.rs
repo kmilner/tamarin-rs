@@ -7,8 +7,9 @@ use tamarin_parser::parser::parse_formula_str;
 use tamarin_term::maude_sig::pair_maude_sig;
 
 fn g(s: &str) -> Result<Guarded, GuardError> {
-    let f = parse_formula_str(s, &pair_maude_sig()).map_err(|e| err(format!("parse: {}", e)))?;
-    formula_to_guarded(&f)
+    let sig = pair_maude_sig();
+    let f = parse_formula_str(s, &sig).map_err(|e| err(format!("parse: {}", e)))?;
+    formula_to_guarded_parsed(&f, &sig)
 }
 
 /// An opened atom carries its free variables straight across.
@@ -194,8 +195,8 @@ fn gnot_false_is_true() {
 /// smart constructors apart.
 #[test]
 fn gnot_conj_becomes_disj() {
-    let a = g("Last(#i)").unwrap();
-    let b = g("Last(#j)").unwrap();
+    let a = g("last(#i)").unwrap();
+    let b = g("last(#j)").unwrap();
     let neg = gnot(&Guarded::Conj(vec![a.clone(), b.clone()].into()));
     match &neg {
         Guarded::Disj(items) => {
@@ -226,7 +227,7 @@ fn satisfied_by_empty_trace_handles_quants() {
     assert!(satisfied_by_empty_trace(&all).unwrap(), "∀ holds vacuously");
     let ex = g("Ex x #i. P(x)@#i").expect("guarded");
     assert!(!satisfied_by_empty_trace(&ex).unwrap(), "∃ needs an action");
-    let atom = g("Last(#i)").expect("guarded");
+    let atom = g("last(#i)").expect("guarded");
     assert!(
         satisfied_by_empty_trace(&atom).is_err(),
         "a quantifier-free atom is not doubly guarded"
@@ -799,7 +800,7 @@ fn gconj_of_only_gtrue_items_is_gtrue() {
 #[test]
 fn gconj_short_circuits_on_gfalse() {
     // Build a non-trivial atom by parsing a small formula.
-    let atom_g = g("Last(#i)").unwrap();
+    let atom_g = g("last(#i)").unwrap();
     // Any gfalse in the items short-circuits to gfalse.
     let g = gconj(vec![gtrue(), gfalse(), atom_g.clone()]);
     assert_eq!(
@@ -839,8 +840,8 @@ fn gdisj_short_circuits_on_gtrue() {
 /// (Haskell `Data.List.nub` keeps first occurrence).
 #[test]
 fn gconj_dedupes_syntactic_duplicates() {
-    let a = g("Last(#i)").unwrap();
-    let b = g("Last(#j)").unwrap();
+    let a = g("last(#i)").unwrap();
+    let b = g("last(#j)").unwrap();
     let out = gconj(vec![a.clone(), b.clone(), a.clone()]);
     // Expected: Conj([a, b]) — second occurrence of `a` dropped.
     match out {
@@ -859,7 +860,7 @@ fn gconj_dedupes_syntactic_duplicates() {
 /// this one-pass idempotence (mirrors HS `gconj`).
 #[test]
 fn gconj_duplicates_collapse_to_bare_item() {
-    let a = g("Last(#i)").unwrap();
+    let a = g("last(#i)").unwrap();
     let out = gconj(vec![a.clone(), a.clone()]);
     assert_eq!(out, a, "gconj must dedupe before the singleton unwrap");
 }
@@ -869,8 +870,8 @@ fn gconj_duplicates_collapse_to_bare_item() {
 /// SplitG variants double up.
 #[test]
 fn gdisj_dedupes_syntactic_duplicates() {
-    let a = g("Last(#i)").unwrap();
-    let b = g("Last(#j)").unwrap();
+    let a = g("last(#i)").unwrap();
+    let b = g("last(#j)").unwrap();
     let out = gdisj(vec![a.clone(), b.clone(), a.clone(), b.clone()]);
     match out {
         Guarded::Disj(items) => {
@@ -887,7 +888,7 @@ fn gdisj_dedupes_syntactic_duplicates() {
 /// pattern.
 #[test]
 fn gconj_singleton_unwraps() {
-    let a = g("Last(#i)").unwrap();
+    let a = g("last(#i)").unwrap();
     let out = gconj(vec![a.clone()]);
     assert_eq!(out, a, "singleton gconj must unwrap to the lone item");
 }
@@ -896,9 +897,9 @@ fn gconj_singleton_unwraps() {
 /// `concatMap` flatten.
 #[test]
 fn gconj_flattens_nested_conj_one_level() {
-    let a = g("Last(#i)").unwrap();
-    let b = g("Last(#j)").unwrap();
-    let c = g("Last(#k)").unwrap();
+    let a = g("last(#i)").unwrap();
+    let b = g("last(#j)").unwrap();
+    let c = g("last(#k)").unwrap();
     let inner = Guarded::Conj(vec![a.clone(), b.clone()].into());
     let out = gconj(vec![inner, c.clone()]);
     match out {
@@ -921,11 +922,11 @@ fn gconj_flattens_nested_conj_one_level() {
 /// single 5-alt Disj goal.
 #[test]
 fn gdisj_deeply_nested_disj_flattens_to_5_alts() {
-    let a = g("Last(#a)").unwrap();
-    let b = g("Last(#b)").unwrap();
-    let c = g("Last(#c)").unwrap();
-    let d = g("Last(#d)").unwrap();
-    let e = g("Last(#e)").unwrap();
+    let a = g("last(#a)").unwrap();
+    let b = g("last(#b)").unwrap();
+    let c = g("last(#c)").unwrap();
+    let d = g("last(#d)").unwrap();
+    let e = g("last(#e)").unwrap();
     // Build the left-leaning binary-Or chain
     // `Disj(Disj(Disj(Disj(a, b), c), d), e)`.
     let lvl1 = Guarded::Disj(vec![a.clone(), b.clone()].into());
@@ -957,11 +958,11 @@ fn gdisj_deeply_nested_disj_flattens_to_5_alts() {
 /// flatten $ getConj conj`.
 #[test]
 fn gconj_deeply_nested_conj_flattens() {
-    let a = g("Last(#a)").unwrap();
-    let b = g("Last(#b)").unwrap();
-    let c = g("Last(#c)").unwrap();
-    let d = g("Last(#d)").unwrap();
-    let e = g("Last(#e)").unwrap();
+    let a = g("last(#a)").unwrap();
+    let b = g("last(#b)").unwrap();
+    let c = g("last(#c)").unwrap();
+    let d = g("last(#d)").unwrap();
+    let e = g("last(#e)").unwrap();
     let lvl1 = Guarded::Conj(vec![a.clone(), b.clone()].into());
     let lvl2 = Guarded::Conj(vec![lvl1, c.clone()].into());
     let lvl3 = Guarded::Conj(vec![lvl2, d.clone()].into());
@@ -1003,7 +1004,7 @@ fn gnot_double_negation_is_identity() {
     assert_eq!(gnot(&gnot(&gtrue())), gtrue());
     assert_eq!(gnot(&gnot(&gfalse())), gfalse());
     // Atom case.
-    let a = g("Last(#i)").unwrap();
+    let a = g("last(#i)").unwrap();
     assert_eq!(
         gnot(&gnot(&a)),
         a,
@@ -1060,8 +1061,8 @@ fn gnot_flips_existential_to_universal() {
 #[test]
 fn gnot_distributes_over_disj() {
     // ¬(a ∨ b) = ¬a ∧ ¬b
-    let a = g("Last(#i)").unwrap();
-    let b = g("Last(#j)").unwrap();
+    let a = g("last(#i)").unwrap();
+    let b = g("last(#j)").unwrap();
     let or = Guarded::Disj(vec![a.clone(), b.clone()].into());
     let neg = gnot(&or);
     // Should be Conj([¬a, ¬b]) — both negated.
@@ -1296,18 +1297,20 @@ fn subst_gterm_cow_var_value_equality() {
 }
 
 // =============================================================================
-// The locally-nameless route
+// Opened binders
 // =============================================================================
 
-/// [`formula_to_guarded_ln`] on the formula text `g` converts through the
-/// parser AST: `from_parser` closes it into a `SyntacticLNFormula`,
-/// `to_lnformula` strips the sugar and the conversion reads the result.
-fn g_ln(s: &str) -> Result<Guarded, GuardError> {
+/// HS's formula parser reads a bare fact as `Syntactic . Pred`
+/// (Theory/Text/Parser/Formula.hs:51), which `to_lnformula` cannot strip
+/// (Theory/Model/Formula.hs:369-373).  A formula that reaches the conversion
+/// without predicate expansion is a [`GuardError`], where the expanded one
+/// converts.
+#[test]
+fn formula_to_guarded_parsed_reports_a_residual_predicate_atom() {
     let sig = pair_maude_sig();
-    let f = parse_formula_str(s, &sig).map_err(|e| err(format!("parse: {}", e)))?;
-    let syn = crate::formula::from_parser(&f, &sig).map_err(|e| err(e.message))?;
-    let plain = crate::formula::to_lnformula(&syn).ok_or_else(|| err("residual sugar"))?;
-    formula_to_guarded_ln(&plain)
+    let f = parse_formula_str("Ex x #i. A(x) @ #i & P(x)", &sig).expect("parse");
+    let e = formula_to_guarded_parsed(&f, &sig).expect_err("the predicate atom is sugar");
+    assert_eq!(e.message, "unexpanded predicate");
 }
 
 /// HS `noUnguardedVars` names the survivors of the prefix `openFormulaPrefix`
@@ -1316,9 +1319,9 @@ fn g_ln(s: &str) -> Result<Guarded, GuardError> {
 /// binder `x` at index 4.  The expected bytes are the pinned oracle's, as
 /// `tests/guarded_unguarded_freshening.rs` records them.
 #[test]
-fn ln_route_reports_the_unguarded_variable_under_its_freshened_name() {
+fn reports_the_unguarded_variable_under_its_freshened_name() {
     let e =
-        g_ln("Foo(x.3) @ #i ==> (All x z. (<x, z> = x) ==> F)").expect_err("x and z are unguarded");
+        g("Foo(x.3) @ #i ==> (All x z. (<x, z> = x) ==> F)").expect_err("x and z are unguarded");
     assert_eq!(
         e.message,
         "unguarded variable(s) 'x.4', 'z' in the subformula"
@@ -1331,14 +1334,14 @@ fn ln_route_reports_the_unguarded_variable_under_its_freshened_name() {
 /// guarded, because the equation's right-hand side is then the OUTER `x` and
 /// is covered.
 #[test]
-fn ln_route_opens_a_shadowed_binder_under_a_fresh_index() {
-    let e = g_ln("All x #NOW. Foo(x) @ #NOW ==> (All x z. (<x, z> = x) ==> F)")
+fn opens_a_shadowed_binder_under_a_fresh_index() {
+    let e = g("All x #NOW. Foo(x) @ #NOW ==> (All x z. (<x, z> = x) ==> F)")
         .expect_err("the inner x and z are unguarded");
     assert_eq!(
         e.message,
         "unguarded variable(s) 'x.1', 'z' in the subformula"
     );
-    let r = g_ln("All x #NOW. Foo(x) @ #NOW ==> (All x.1 z. (<x.1, z> = x) ==> F)")
+    let r = g("All x #NOW. Foo(x) @ #NOW ==> (All x.1 z. (<x.1, z> = x) ==> F)")
         .expect("x.1 and z are guarded by the pair equation");
     assert!(is_safety_formula(&r));
 }
@@ -1346,8 +1349,8 @@ fn ln_route_opens_a_shadowed_binder_under_a_fresh_index() {
 /// HS `convAll` accepts only `Conn Imp ante suc` beneath the prefix
 /// (Guarded.hs:546-563).
 #[test]
-fn ln_route_rejects_a_universal_without_a_toplevel_implication() {
-    let e = g_ln("All k #i. Setup(k) @ #i").expect_err("the body is an action, not an implication");
+fn rejects_a_universal_without_a_toplevel_implication() {
+    let e = g("All k #i. Setup(k) @ #i").expect_err("the body is an action, not an implication");
     assert_eq!(
         e.message,
         "universal quantifier without toplevel implication"
@@ -1358,13 +1361,10 @@ fn ln_route_rejects_a_universal_without_a_toplevel_implication() {
 /// (Guarded.hs:565-566), which at the entry polarity is what the written
 /// conjunction of them converts to.
 #[test]
-fn ln_route_treats_iff_as_two_implications() {
-    let iff =
-        g_ln("(Ex x #i. A(x) @ #i) <=> (Ex y #j. B(y) @ #j)").expect("both sides are guarded");
-    let spelled_out = g_ln(
-        "((Ex x #i. A(x) @ #i) ==> (Ex y #j. B(y) @ #j)) & \
-         ((Ex y #j. B(y) @ #j) ==> (Ex x #i. A(x) @ #i))",
-    )
+fn treats_iff_as_two_implications() {
+    let iff = g("(Ex x #i. A(x) @ #i) <=> (Ex y #j. B(y) @ #j)").expect("both sides are guarded");
+    let spelled_out = g("((Ex x #i. A(x) @ #i) ==> (Ex y #j. B(y) @ #j)) & \
+         ((Ex y #j. B(y) @ #j) ==> (Ex x #i. A(x) @ #i))")
     .expect("both sides are guarded");
     assert_eq!(iff, spelled_out);
     assert!(

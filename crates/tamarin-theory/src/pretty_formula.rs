@@ -1033,6 +1033,23 @@ pub fn lnformula_doc(f: &LNFormula) -> Doc {
     )
 }
 
+/// A page wider than any formula of the examples tree, so every `sep`,
+/// `fsep` and `fcat` of a formula `Doc` takes its flat branch and no break is
+/// inserted anywhere.  HughesPJ's `OneLineMode` (`Doc::one_line_render`) is a
+/// different string: it takes each `Union`'s line-breaking branch and turns
+/// every break into one space.
+const FLAT_WIDTH: usize = 1 << 40;
+
+/// [`lnformula_doc`] laid out flat — the string [`pretty_formula`] writes for
+/// the parser AST the formula was closed from
+/// (`corpus_lnformula_doc_matches_ast_printer` compares the two over the
+/// examples tree).  This is the quoted formula text of a guarded-conversion
+/// error, where HS renders the same `prettyLNFormula` Doc
+/// (`ppFormula`, Guarded.hs:477).
+pub fn pretty_lnformula(f: &LNFormula) -> String {
+    lnformula_doc(f).render_with(FLAT_WIDTH, FLAT_WIDTH)
+}
+
 /// HS `prettySyntacticLNFormula` (Theory/Model/Formula.hs:523-525): as
 /// [`lnformula_doc`], with `prettySyntacticNAtom`'s
 /// `prettyPred (Pred fa) = prettyNFact fa` (Atom.hs:236-239) printing the

@@ -196,7 +196,7 @@ pub struct Lemma<P = ProofSkeleton> {
     pub attributes: Vec<LemmaAttr>,
     pub trace_quantifier: TraceQuantifier,
     /// The lemma's formula, held in the parser's `Formula` form: both the
-    /// pretty-printers and `guarded::formula_to_guarded` start from that
+    /// pretty-printers and `guarded::formula_to_guarded_parsed` start from that
     /// form, so the guarded/`LNFormula` layers are derived on demand
     /// rather than stored here.
     pub formula: tamarin_parser::ast::Formula,

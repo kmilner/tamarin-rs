@@ -825,17 +825,18 @@ fn bare_binder_used_as_timepoint_is_renamed() {
 #[test]
 fn existential_binder_keeps_ac_operand_order() {
     use crate::elaborate::canonicalize_ac_in_formula;
-    use crate::guarded::formula_to_guarded;
+    use crate::guarded::formula_to_guarded_parsed;
     use tamarin_parser::parser::parse_formula_str;
     use tamarin_term::maude_sig::pair_maude_sig;
 
     let want = "  \"∀ A B seq1 seq2 #i #j.\n    \
         (((Seq_Sent( A, B, seq1 ) @ #i) ∧ (Seq_Sent( A, B, seq2 ) @ #j)) ∧\n     \
         (#i < #j)) ⇒\n    (∃ dif. seq2 = (dif++seq1))\"";
+    let sig = pair_maude_sig();
     let f = parse_formula_str(
         "All A B seq1 seq2 #i #j.(Seq_Sent(A, B, seq1) @ #i \
          & Seq_Sent(A, B, seq2) @ #j & #i < #j ==> Ex dif. seq2 = seq1 + dif )",
-        &pair_maude_sig(),
+        &sig,
     )
     .unwrap();
     assert_eq!(
@@ -845,7 +846,8 @@ fn existential_binder_keeps_ac_operand_order() {
     // `formulaToGuarded` on the negation is what the solver stores and what
     // the probe prints as the counter-example characterisation; the guard
     // reorders the implication but keeps the union's operands.
-    let g = formula_to_guarded(&p::Formula::Not(Box::new(f))).expect("guarded conversion");
+    let g =
+        formula_to_guarded_parsed(&p::Formula::Not(Box::new(f)), &sig).expect("guarded conversion");
     assert_eq!(
         pretty_guarded_doublequoted(&g),
         "\"∃ A B seq1 seq2 #i #j.\n  \

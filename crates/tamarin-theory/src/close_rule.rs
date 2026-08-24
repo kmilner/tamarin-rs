@@ -406,14 +406,17 @@ fn only_once_d_restriction_ast() -> p::Formula {
 /// values in theory order (`OnlyOnce` first).  The formulas are closed
 /// constants whose every binder is action-guarded, so the conversion
 /// cannot fail.
-fn deduction_restrictions(with_only_once_d: bool) -> Vec<Guarded> {
+fn deduction_restrictions(
+    sig: &tamarin_term::maude_sig::MaudeSig,
+    with_only_once_d: bool,
+) -> Vec<Guarded> {
     let mut asts = vec![only_once_restriction_ast()];
     if with_only_once_d {
         asts.push(only_once_d_restriction_ast());
     }
     asts.iter()
         .map(|f| {
-            crate::guarded::formula_to_guarded(f).unwrap_or_else(|e| {
+            crate::guarded::formula_to_guarded_parsed(f, sig).unwrap_or_else(|e| {
                 panic!(
                     "[ndc] deduction restriction failed guarded conversion: {}",
                     e.message
@@ -451,7 +454,7 @@ fn collect_var_specs(t: &p::Term, out: &mut Vec<p::VarSpec>) {
 /// `lvarToLnterm`'s Nat→Fresh), and `kLogFact = protoFact Linear "K"`
 /// (Theory/Model/Fact.hs:302-303).  Built over the parser-AST formula layer (the
 /// `Guarded` leaf type) via `lnterm_to_parser` and converted by the same
-/// `formula_to_guarded` the load path applies to user lemmas.
+/// `formula_to_guarded_parsed` the load path applies to user lemmas.
 ///
 /// Same-named binders stay distinct without renaming: binder resolution
 /// keys on (name, idx, sort) (guarded_types.rs `subst_free_term_cow`),
@@ -462,7 +465,11 @@ fn collect_var_specs(t: &p::Term, out: &mut Vec<p::VarSpec>) {
 /// own names with timepoints `"0"`/`"1"`; here the data binders keep
 /// first-occurrence order with `ndct`-named timepoints last — names and
 /// prefix order are hints only, invisible outside the synthetic search.
-fn deduction_lemma_guarded(s: &[LNFact], fact_term: &LNTerm) -> Guarded {
+fn deduction_lemma_guarded(
+    sig: &tamarin_term::maude_sig::MaudeSig,
+    s: &[LNFact],
+    fact_term: &LNTerm,
+) -> Guarded {
     let var_d: Vec<LVar> = tamarin_term::lterm::frees(&s.to_vec());
     // `lnterm_to_parser` carries a Msg variable's sort over as `LSort::Msg`
     // — the same concrete sort the parser pins on a prefixless quantifier
@@ -507,7 +514,7 @@ fn deduction_lemma_guarded(s: &[LNFact], fact_term: &LNTerm) -> Guarded {
     )));
     // Every binder occurs in one of the two Action guard atoms by
     // construction, so the conversion cannot fail on guardedness.
-    crate::guarded::formula_to_guarded(&ast).unwrap_or_else(|e| {
+    crate::guarded::formula_to_guarded_parsed(&ast, sig).unwrap_or_else(|e| {
         panic!(
             "[ndc] deduction lemma failed guarded conversion: {}",
             e.message
@@ -550,8 +557,12 @@ fn prove_deduction_theory(
     use crate::constraint::system::{formula_to_system, SourceKind};
 
     let rules = vec![deduction_rule(s)];
-    let restrictions = deduction_restrictions(with_only_once_d);
-    let g = deduction_lemma_guarded(s, fact_term);
+    // The synthetic theory's signature IS the parent's, which the handle
+    // carries: HS builds `modifiedTheory1/2` over `emptyThy`, whose
+    // signature is `toSignaturePure sig` (CloseRule.hs:242,247,252).
+    let sig = maude.maude_sig();
+    let restrictions = deduction_restrictions(&sig, with_only_once_d);
+    let g = deduction_lemma_guarded(&sig, s, fact_term);
     let ctx = ProofContext::new_with_injected_intruder_rules(
         maude.clone(),
         rules,

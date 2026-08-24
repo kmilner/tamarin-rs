@@ -1056,19 +1056,20 @@ pub fn gall(vars: Vec<GBinding>, guards: Vec<GAtom>, body: Guarded) -> Guarded {
 #[derive(Debug, Clone)]
 pub struct GuardError {
     pub message: String,
-    /// The parser-AST sub-formula at the point of failure, mirroring HS's
-    /// `f0` in `convert polarity f0@(Qua qua0 _ _)` — the innermost
-    /// quantifier that failed the guard check.  Used by callers to render
-    /// the HS-faithful:
+    /// The sub-formula at the point of failure — HS's `f0` in
+    /// `convert polarity f0@(Qua qua0 _ _)` (Guarded.hs:499), the innermost
+    /// quantifier whose guard check failed.  Callers quote it above the
+    /// whole formula, as HS's `ppError` does (Guarded.hs:477-479):
     ///   ```text
     ///   <error_text>
     ///     "<sub_formula>"
     ///   in the formula
     ///     "<full_formula>"
     ///   ```
-    /// block.  `None` means the error occurred outside a quantifier context
-    /// (shouldn't happen in practice but handled gracefully).
-    pub subject_formula: Option<tamarin_parser::ast::Formula>,
+    /// Its enclosing binders are already opened, so it prints on its own
+    /// through [`crate::pretty_formula::pretty_lnformula`].  `None` for a
+    /// failure outside a quantifier.
+    pub subject_formula: Option<crate::formula::LNFormula>,
 }
 
 impl std::fmt::Display for GuardError {
@@ -1083,100 +1084,6 @@ fn err(msg: impl Into<String>) -> GuardError {
         message: msg.into(),
         subject_formula: None,
     }
-}
-
-// =============================================================================
-// Conversion entry point
-// =============================================================================
-
-/// Convert a surface formula to its guarded form.
-pub fn formula_to_guarded(f: &p::Formula) -> Result<Guarded, GuardError> {
-    // HS-faithful: HS represents formula terms as LNTerm, where every AC head
-    // (`Mult`/`Union`/`Xor`/`NatPlus`) is stored as a flat, `fAppAC`-sorted
-    // argument list (Term/Term/Raw.hs:118-129).  The sort happens at PARSE
-    // time over the FREE logical variables, ordered by `Ord LVar` =
-    // (idx, sort, name) (LTerm.hs:545-548) — for freshly-parsed lemma vars
-    // (all idx 0) this is name-alphabetical, e.g. `x + z` stays `x++z` and
-    // `y + z` stays `y++z`.  `formulaToGuarded` then abstracts Free→Bound via
-    // a structural `fmap` (Guarded.hs:303-318) that preserves the AC arg
-    // positions.  Our parser stores formula terms as nested `BinOp(op, l, r)`
-    // trees in source order and never sorts them, so we canonicalise the AC
-    // chains over the FREE-variable parser AST FIRST (mirroring HS's
-    // parse-time `fAppAC` on free LVars), then convert to guarded form.
-    let canon = crate::elaborate::canonicalize_ac_in_formula(f);
-    // HS runs the whole conversion inside a `Precise.FreshT` seeded with
-    // `avoidPrecise fmOrig` (Guarded.hs:474), so every quantifier prefix it
-    // opens draws freshened binder names from ONE state threaded across the
-    // entire traversal.  Those freshened names are what the unguarded-variable
-    // diagnostic reports.
-    let mut fresh = avoid_precise_formula(&canon);
-    convert(false, &canon, &mut fresh)
-}
-
-/// HS `avoidPrecise fmOrig` (LTerm.hs:714-715) for a parser-AST formula:
-/// seeds `name -> maxIdx+1` over the formula's FREE variables, so the first
-/// `fresh_ident name` yields an index past every free occurrence.  The
-/// counter is keyed by the bare `lvarName` alone, sort- and index-blind
-/// (`avoidPreciseVars`, LTerm.hs:706-709), so one free `#x.2` pushes the
-/// supply for a message-sorted binder `x` all the way to `x.3`.
-///
-/// HS's `frees` runs on the locally-nameless `LNFormula`, where quantified
-/// occurrences are `BVar::Bound` and thus invisible.  Binders are still named
-/// here, so a scope stack of [`VarKey`]s stands in — keyed by the same full
-/// identity HS's `quantify` captures with (`v == x` at `Eq LVar`,
-/// Theory/Model/Formula.hs:347-351): under `∀ x.` an occurrence of `x.1` or
-/// `#x` is a DIFFERENT variable, stays free, and seeds the supply.
-fn avoid_precise_formula(f: &p::Formula) -> tamarin_utils::fresh::PreciseFreshState {
-    fn walk_formula(f: &p::Formula, bound: &mut Vec<VarKey>, out: &mut Vec<VarKey>) {
-        match f {
-            p::Formula::True | p::Formula::False => {}
-            p::Formula::Atom(a) => walk_atom(a, bound, out),
-            p::Formula::Not(g) => walk_formula(g, bound, out),
-            p::Formula::And(l, r)
-            | p::Formula::Or(l, r)
-            | p::Formula::Implies(l, r)
-            | p::Formula::Iff(l, r) => {
-                walk_formula(l, bound, out);
-                walk_formula(r, bound, out);
-            }
-            p::Formula::Forall(vs, body) | p::Formula::Exists(vs, body) => {
-                let saved = bound.len();
-                bound.extend(vs.iter().map(|v| var_key(&v.name, v.idx, v.sort)));
-                walk_formula(body, bound, out);
-                bound.truncate(saved);
-            }
-        }
-    }
-    fn walk_atom(a: &p::Atom, bound: &[VarKey], out: &mut Vec<VarKey>) {
-        let mut keys = Vec::new();
-        match a {
-            p::Atom::Eq(l, r)
-            | p::Atom::LessMset(l, r)
-            | p::Atom::Subterm(l, r)
-            | p::Atom::Less(l, r) => {
-                term_var_keys(l, &mut keys);
-                term_var_keys(r, &mut keys);
-            }
-            p::Atom::Action(fa, t) => {
-                for arg in &fa.args {
-                    term_var_keys(arg, &mut keys);
-                }
-                term_var_keys(t, &mut keys);
-            }
-            p::Atom::Last(t) => term_var_keys(t, &mut keys),
-            p::Atom::Pred(fa) => {
-                for arg in &fa.args {
-                    term_var_keys(arg, &mut keys);
-                }
-            }
-        }
-        out.extend(keys.into_iter().filter(|k| !bound.contains(k)));
-    }
-    let mut frees = Vec::new();
-    walk_formula(f, &mut Vec::new(), &mut frees);
-    tamarin_utils::fresh::PreciseFreshState::avoid_precise(
-        frees.into_iter().map(|(name, idx, _sort)| (name, idx)),
-    )
 }
 
 /// HS `bvarToLVar` (Guarded.hs:322-327): read an atom of a locally-nameless
@@ -1508,198 +1415,6 @@ pub fn subst_bound_guarded(g: &Guarded, s: &[(u32, p::VarSpec)]) -> Guarded {
     map_guarded_atoms(g, &mut |d, a| subst_bound_atom_at_depth(a, s, d))
 }
 
-// =============================================================================
-// Polarity-aware conversion
-// =============================================================================
-
-fn convert(
-    polarity: bool,
-    f: &p::Formula,
-    fresh: &mut tamarin_utils::fresh::PreciseFreshState,
-) -> Result<Guarded, GuardError> {
-    match f {
-        p::Formula::True => Ok(gtf(!polarity)),
-        p::Formula::False => Ok(gtf(polarity)),
-        p::Formula::Atom(a) => {
-            let ga = atom_to_gatom_free(a);
-            if polarity {
-                Ok(gnot_atom(&ga))
-            } else {
-                Ok(Guarded::Atom(ga))
-            }
-        }
-        p::Formula::Not(g) => convert(!polarity, g, fresh),
-        p::Formula::And(a, b) => {
-            let sub = vec![convert(polarity, a, fresh)?, convert(polarity, b, fresh)?];
-            if polarity {
-                Ok(gdisj(sub))
-            } else {
-                Ok(gconj(sub))
-            }
-        }
-        p::Formula::Or(a, b) => {
-            let sub = vec![convert(polarity, a, fresh)?, convert(polarity, b, fresh)?];
-            if polarity {
-                Ok(gconj(sub))
-            } else {
-                Ok(gdisj(sub))
-            }
-        }
-        p::Formula::Implies(a, b) => {
-            // p ⇒ q  is  ¬p ∨ q
-            let nag = convert(!polarity, a, fresh)?;
-            let cag = convert(polarity, b, fresh)?;
-            if polarity {
-                Ok(gconj(vec![nag, cag]))
-            } else {
-                Ok(gdisj(vec![nag, cag]))
-            }
-        }
-        p::Formula::Iff(a, b) => {
-            // p ↔ q  is  (p ⇒ q) ∧ (q ⇒ p)
-            let lhs = p::Formula::Implies(a.clone(), b.clone());
-            let rhs = p::Formula::Implies(b.clone(), a.clone());
-            let sub = vec![
-                convert(polarity, &lhs, fresh)?,
-                convert(polarity, &rhs, fresh)?,
-            ];
-            Ok(gconj(sub))
-        }
-        // The quantifier shape (Forall vs Exists) determines whether the
-        // body must be a top-level implication (`convert_all`) or a
-        // conjunction (`convert_ex`). Polarity only affects which
-        // quantifier label appears in the output and which polarity we
-        // recurse with for inner subformulas.
-        //
-        // We "open" consecutive same-quantifier prefixes (mirroring
-        // Haskell's `openFormulaPrefix`) so that `Ex x. Ex y. body`
-        // is treated as a single `Ex [x, y]. body` for guard checking.
-        p::Formula::Forall(_, _) | p::Formula::Exists(_, _) => {
-            let (xs, body) = open_quantifier_prefix(f);
-            // HS `openFormulaPrefix` draws each binder through `freshLVar n s`
-            // (Theory/Model/Formula.hs:296-309, LTerm.hs:301-302) BEFORE
-            // `noUnguardedVars` inspects the prefix, so a shadowed binder is
-            // reported under its freshened index.  `freshened` is that
-            // renaming, positionally parallel to `xs`; only the DIAGNOSTIC
-            // consumes it, because the body carried into
-            // `convert_all`/`convert_ex` keeps the source names that
-            // `remaining_unguarded` and `close_guarded` match on.
-            let freshened: Vec<p::VarSpec> = xs
-                .iter()
-                .map(|v| p::VarSpec {
-                    idx: fresh.fresh_ident(&v.name),
-                    ..v.clone()
-                })
-                .collect();
-            let same_qua = matches!(f, p::Formula::Forall(_, _));
-            let result = if same_qua {
-                let out_qua = if polarity { Quant::Ex } else { Quant::All };
-                convert_all(&xs, &freshened, body, polarity, out_qua, fresh)
-            } else {
-                let out_qua = if polarity { Quant::All } else { Quant::Ex };
-                convert_ex(&xs, &freshened, body, polarity, out_qua, fresh)
-            };
-            // HS: the error from `convEx`/`convAll` is decorated with
-            // `ppFormula f0` (the current quantifier sub-formula) by
-            // `noUnguardedVars` / the toplevel-implication check.
-            // We mirror by attaching `f.clone()` as `subject_formula`
-            // on the INNERMOST failure (guard: set only when not yet set,
-            // so the deepest quantifier sub-formula wins).
-            result.map_err(|mut e| {
-                if e.subject_formula.is_none() {
-                    e.subject_formula = Some(f.clone());
-                }
-                e
-            })
-        }
-    }
-}
-
-/// Open consecutive same-quantifier binders. `Forall x. Forall y.
-/// body` → `(vec![x, y], body)`. The first `Formula` argument must
-/// itself be a quantifier; we follow only matching kinds.
-fn open_quantifier_prefix(f: &p::Formula) -> (Vec<p::VarSpec>, &p::Formula) {
-    let mut vars = Vec::new();
-    let mut cur = f;
-    let kind = match f {
-        p::Formula::Forall(_, _) => 0,
-        p::Formula::Exists(_, _) => 1,
-        _ => return (vars, f),
-    };
-    loop {
-        match cur {
-            p::Formula::Forall(xs, body) if kind == 0 => {
-                vars.extend(xs.iter().cloned());
-                cur = body;
-            }
-            p::Formula::Exists(xs, body) if kind == 1 => {
-                vars.extend(xs.iter().cloned());
-                cur = body;
-            }
-            _ => break,
-        }
-    }
-    (vars, cur)
-}
-
-/// Body-is-conjunction case (existential-shaped). The body is split
-/// into guard atoms (action / equality) and remaining sub-formulas;
-/// each quantified variable must be bound by some guard atom.
-fn convert_ex(
-    xs: &[p::VarSpec],
-    freshened: &[p::VarSpec],
-    body: &p::Formula,
-    polarity: bool,
-    out_qua: Quant,
-    fresh: &mut tamarin_utils::fresh::PreciseFreshState,
-) -> Result<Guarded, GuardError> {
-    let (atoms, others) = split_conj_actions_eqs(body);
-    let unguarded = remaining_unguarded(xs, &atoms);
-    if !unguarded.is_empty() {
-        return Err(unguarded_error(&unguarded, freshened));
-    }
-    let mut converted = Vec::new();
-    for f in &others {
-        converted.push(convert(polarity, f, fresh)?);
-    }
-    let body_guarded = if polarity {
-        gdisj(converted)
-    } else {
-        gconj(converted)
-    };
-    Ok(close_guarded(out_qua, xs.to_vec(), atoms, body_guarded))
-}
-
-/// Body-is-implication case (universal-shaped). The antecedent is
-/// split into guard atoms and remaining sub-formulas; each
-/// quantified variable must be bound by some guard atom in the
-/// antecedent.
-fn convert_all(
-    xs: &[p::VarSpec],
-    freshened: &[p::VarSpec],
-    body: &p::Formula,
-    polarity: bool,
-    out_qua: Quant,
-    fresh: &mut tamarin_utils::fresh::PreciseFreshState,
-) -> Result<Guarded, GuardError> {
-    if let p::Formula::Implies(ante, succ) = body {
-        let (atoms, ante_others) = split_conj_actions_eqs(ante);
-        let unguarded = remaining_unguarded(xs, &atoms);
-        if !unguarded.is_empty() {
-            return Err(unguarded_error(&unguarded, freshened));
-        }
-        let mut sub = Vec::with_capacity(ante_others.len() + 1);
-        for f in &ante_others {
-            sub.push(convert(!polarity, f, fresh)?);
-        }
-        sub.push(convert(polarity, succ, fresh)?);
-        let body_guarded = if polarity { gconj(sub) } else { gdisj(sub) };
-        Ok(close_guarded(out_qua, xs.to_vec(), atoms, body_guarded))
-    } else {
-        Err(err("universal quantifier without toplevel implication"))
-    }
-}
-
 /// Mirror HS `closeGuarded :: Quantifier -> [LVar] -> [Atom] -> LGuarded -> LGuarded`.
 ///
 /// Takes named LVars `xs`, parser-AST atoms `atoms`, and an already-built
@@ -1738,29 +1453,6 @@ pub fn close_guarded(
         Quant::Ex => gex(vs, new_guards, new_body),
         Quant::All => gall(vs, new_guards, new_body),
     }
-}
-
-/// Split a conjunction of formulas, separating guard atoms (action /
-/// equality) from the remaining sub-formulas. Returns
-/// `(guard_atoms, other_subformulas)`.
-fn split_conj_actions_eqs(f: &p::Formula) -> (Vec<p::Atom>, Vec<p::Formula>) {
-    fn rec(f: &p::Formula, atoms: &mut Vec<p::Atom>, others: &mut Vec<p::Formula>) {
-        match f {
-            p::Formula::And(a, b) => {
-                rec(a, atoms, others);
-                rec(b, atoms, others);
-            }
-            p::Formula::Atom(p::Atom::Action(fact, t)) => {
-                atoms.push(p::Atom::Action(fact.clone(), t.clone()))
-            }
-            p::Formula::Atom(p::Atom::Eq(a, b)) => atoms.push(p::Atom::Eq(a.clone(), b.clone())),
-            other => others.push(other.clone()),
-        }
-    }
-    let mut atoms = Vec::new();
-    let mut others = Vec::new();
-    rec(f, &mut atoms, &mut others);
-    (atoms, others)
 }
 
 /// Compute which of `xs` are NOT bound by any of `atoms`, as POSITIONS in
@@ -1858,39 +1550,59 @@ fn unguarded_error(positions: &[usize], freshened: &[p::VarSpec]) -> GuardError 
 }
 
 // =============================================================================
-// Polarity-aware conversion from the locally-nameless formula
+// Conversion to a guarded formula
 // =============================================================================
 
-/// HS `formulaToGuarded` (Guarded.hs:471-479) at its own input type: the
-/// whole traversal runs inside one `Precise.FreshT` seeded with
-/// `avoidPrecise fmOrig`, so every quantifier prefix it opens draws its
-/// binders from a single supply.
+/// HS `formulaToGuarded` (Guarded.hs:471-479): the whole traversal runs
+/// inside one `Precise.FreshT` seeded with `avoidPrecise fmOrig`, so every
+/// quantifier prefix it opens draws its binders from a single supply.
 ///
 /// The atoms are lowered into the `GTerm` world one at a time
-/// ([`crate::guarded_types::blnatom_to_gatom`]), where
-/// [`formula_to_guarded`] canonicalises the whole formula up front.
-/// `convert_ln` descends through every quantifier before it meets an atom, so
-/// each atom is all-`Free` when it is lowered, under the binders
-/// `open_formula_prefix` drew and with its AC arguments sorted under them:
-/// opening substitutes each drawn `LVar` through `map_lits` as HS's
-/// `openFormula` does through `mapLits`, whose `fAppAC` sorts
-/// (Theory/Model/Formula.hs:277-284, :288-291, Term/Term/Raw.hs:118-129), and
-/// the lowering's `canonicalize_ac_in_atom` re-establishes the same order over
-/// the parser AST ([`cmp_varspec`] is `Ord LVar`).  `Ord LVar` reads the index
-/// first (LTerm.hs:545-548), so a binder drawn at a non-zero index sorts where
-/// its name alone would not put it, and [`formula_to_guarded`], which sorts
-/// under the source variables, holds such a `++` chain in the other order;
-/// `crates/tamarin-theory/tests/guarded_from_internal.rs` lists every formula
-/// of the examples tree where the two orders part.  The order reaches the
-/// solver through the derived `PartialEq`/`Hash` on [`Guarded`] and not the
-/// printed formula, which re-sorts AC arguments under the names it opens the
-/// binders with (`sort_ac_args_for_display`, `pretty_formula.rs`).
-///
-/// [`GuardError::subject_formula`] is a parser-AST formula, so this route
-/// leaves it unset and reports the message alone.
-pub fn formula_to_guarded_ln(f: &crate::formula::LNFormula) -> Result<Guarded, GuardError> {
+/// ([`crate::guarded_types::blnatom_to_gatom`]).  `convert_ln` descends
+/// through every quantifier before it meets an atom, so each atom is
+/// all-`Free` when it is lowered, under the binders `open_formula_prefix`
+/// drew and with its AC arguments sorted under them: opening substitutes each
+/// drawn `LVar` through `map_lits` as HS's `openFormula` does through
+/// `mapLits`, whose `fAppAC` sorts (Theory/Model/Formula.hs:277-284,
+/// :288-291, Term/Term/Raw.hs:118-129), and the lowering's
+/// `canonicalize_ac_in_atom` re-establishes the same order over the parser
+/// AST ([`cmp_varspec`] is `Ord LVar`).  `Ord LVar` reads the index first
+/// (LTerm.hs:545-548), so a binder drawn at a non-zero index sorts where its
+/// name alone would not put it — the argument order of a `++` chain under two
+/// sibling prefixes that bind one name follows the second prefix's `b3.1`.
+/// That order reaches the solver through the derived `PartialEq`/`Hash` on
+/// [`Guarded`], never the printed formula, which re-sorts AC arguments under
+/// the names it opens the binders with (`sort_ac_args_for_display`,
+/// `pretty_formula.rs`).
+pub fn formula_to_guarded(f: &crate::formula::LNFormula) -> Result<Guarded, GuardError> {
     let mut fresh = crate::formula::avoid_precise_lnformula(f);
     convert_ln(false, f, &mut fresh)
+}
+
+/// [`formula_to_guarded`] on a parser-AST formula, closed by
+/// [`crate::formula::from_parser`] and stripped of its sugar by
+/// [`crate::formula::to_lnformula`].  Both steps report a [`GuardError`], so
+/// a caller that cannot build the internal formula still renders the same
+/// block a guardedness failure renders.
+///
+/// Callers, with the sub-task that drops each: the closed lemma and
+/// restriction renderers and `is_safety_formula` (`pretty_theory.rs`, ST8 and
+/// ST9); `elaborate_with_diagnostics` (`elaborate.rs`, ST8 and ST9); the
+/// wellformedness guardedness arm (`formula_reports.rs`, ST11); the prove
+/// entry points (`prove.rs`, `auto_sources.rs`, `deriv_check.rs`, ST8 and
+/// ST9); the deduction restrictions and lemma (`close_rule.rs`, ST10); the
+/// web panes (`theory_html.rs`, `proof_tree.rs`, ST8 and ST9).  The
+/// `--parse-only` open renderers (`pretty_theory.rs`) print a different
+/// observable and go with the printer retarget in stage 4; the two
+/// stored-proof re-parse sites (`pretty_theory.rs`, which parse goal text
+/// against the signature they already hold) keep it until stage 9.
+pub fn formula_to_guarded_parsed(
+    f: &p::Formula,
+    sig: &tamarin_term::maude_sig::MaudeSig,
+) -> Result<Guarded, GuardError> {
+    let syn = crate::formula::from_parser(f, sig).map_err(|e| err(e.message))?;
+    let plain = crate::formula::to_lnformula(&syn).ok_or_else(|| err("unexpanded predicate"))?;
+    formula_to_guarded(&plain)
 }
 
 /// The binder `close_guarded` and `remaining_unguarded` match on, as
@@ -1965,7 +1677,7 @@ fn convert_ln(
         ProtoFormula::Qua(qua0, _, _) => {
             let (xs, _, body) = open_formula_prefix(f, fresh);
             let xs: Vec<p::VarSpec> = xs.iter().map(lvar_to_varspec).collect();
-            match qua0 {
+            let result = match qua0 {
                 Quantifier::All => {
                     let out_qua = if polarity { Quant::Ex } else { Quant::All };
                     convert_all_ln(&xs, &body, polarity, out_qua, fresh)
@@ -1974,7 +1686,18 @@ fn convert_ln(
                     let out_qua = if polarity { Quant::All } else { Quant::Ex };
                     convert_ex_ln(&xs, &body, polarity, out_qua, fresh)
                 }
-            }
+            };
+            // Both throws of this arm quote `ppFormula f0`, the quantifier
+            // sub-formula they were reached through (Guarded.hs:513, :562),
+            // and the exception carries that quote out unchanged — so the
+            // innermost quantifier is the one named, which the guard below
+            // reproduces by setting the field once.
+            result.map_err(|mut e| {
+                if e.subject_formula.is_none() {
+                    e.subject_formula = Some(f.clone());
+                }
+                e
+            })
         }
     }
 }

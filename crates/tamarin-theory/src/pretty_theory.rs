@@ -745,7 +745,7 @@ fn render_open_item(
         // `axiom` is the deprecated synonym parsed into a `RestrictionItem`
         // (`legacyAxiom` → `liftedAddRestriction`, Theory/Text/Parser.hs:270-272).
         Restriction(r) | LegacyAxiom(r) => {
-            vec![render_open_restriction(r, predicates, arity1)]
+            vec![render_open_restriction(r, predicates, arity1, msig)]
         }
         Predicates(preds) => preds
             .iter()
@@ -981,7 +981,7 @@ fn render_open_lemma(
     arity1: &std::collections::HashSet<String>,
     msig: &tamarin_term::maude_sig::MaudeSig,
 ) -> String {
-    let mut out = render_lemma_head(lem, &[], predicates, in_file, arity1);
+    let mut out = render_lemma_head(lem, &[], predicates, in_file, arity1, msig);
     out.push('\n');
     match lem.proof.as_ref().and_then(|ps| ps.tree.as_ref()) {
         Some(tree) => {
@@ -1009,6 +1009,7 @@ fn render_open_restriction(
     r: &p::Restriction,
     predicates: &[p::Predicate],
     arity1: &std::collections::HashSet<String>,
+    msig: &tamarin_term::maude_sig::MaudeSig,
 ) -> String {
     let original =
         crate::elaborate::canonicalize_ac_in_formula(&crate::elaborate::rewrite_arity1_formula(
@@ -1024,7 +1025,7 @@ fn render_open_restriction(
     render_restriction_attributes(&r.attributes, &mut out);
     out.push_str(":\n");
     out.push_str(&pf::formula_doublequoted_nested(&original, 2));
-    if is_safety_formula(&original) {
+    if is_safety_formula(&original, msig) {
         out.push_str("\n  ");
         out.push_str(&line_comment_("safety formula").render());
     }
@@ -3441,10 +3442,17 @@ fn render_parsed_lemma(
     predicates: &[p::Predicate],
     proved: &[ProvedLemma],
     in_file: &str,
-    _elab: &Theory,
+    elab: &Theory,
     arity1: &std::collections::HashSet<String>,
 ) -> String {
-    let mut out = render_lemma_head(lem, macros, predicates, in_file, arity1);
+    let mut out = render_lemma_head(
+        lem,
+        macros,
+        predicates,
+        in_file,
+        arity1,
+        &elab.signature.maude_sig,
+    );
 
     // Proof body — either the prover's result (if --prove ran) or
     // the lemma's stored skeleton.
@@ -3476,6 +3484,7 @@ fn render_lemma_head(
     predicates: &[p::Predicate],
     in_file: &str,
     arity1: &std::collections::HashSet<String>,
+    msig: &tamarin_term::maude_sig::MaudeSig,
 ) -> String {
     use crate::pretty_hpj::{self as hpj, Doc};
     let mut out = String::new();
@@ -3522,14 +3531,14 @@ fn render_lemma_head(
     // HS sorts AC arguments at parse time when building `LNTerm` via `fAppAC`
     // (Term/Term/Raw.hs:118-122); our parser keeps `BinOp` trees in written
     // order, so re-establish the canonical AC operand order on the formula
-    // before rendering the header (matches the guarded-block path, which
-    // already canonicalises inside `guarded::formula_to_guarded`).
+    // before rendering the header (matches the guarded-block path, where
+    // `from_parser`'s `f_app` sorts them).
     let canon_formula = crate::elaborate::canonicalize_ac_in_formula(&folded_formula);
     out.push_str(&pf::lemma_header_line(quant, &canon_formula));
     out.push('\n');
 
     // /* guarded formula characterizing ... */
-    out.push_str(&render_guarded_block(lem, macros, predicates, arity1));
+    out.push_str(&render_guarded_block(lem, macros, predicates, arity1, msig));
     out
 }
 
@@ -3580,6 +3589,7 @@ fn render_guarded_block(
     macros: &[p::Macro],
     predicates: &[p::Predicate],
     arity1: &std::collections::HashSet<String>,
+    msig: &tamarin_term::maude_sig::MaudeSig,
 ) -> String {
     let header = match &lem.trace_quantifier {
         p::TraceQuantifier::ExistsTrace => "guarded formula characterizing all satisfying traces:",
@@ -3601,7 +3611,7 @@ fn render_guarded_block(
     // `k == 1`, Parser/Term.hs:94-96) so the guarded form carries `h(<…>)` not
     // `h(…)`.  Same fold as the header path above.
     let expanded_formula = crate::elaborate::rewrite_arity1_formula(&expanded_formula, arity1);
-    let gf = match crate::guarded::formula_to_guarded(&expanded_formula) {
+    let gf = match crate::guarded::formula_to_guarded_parsed(&expanded_formula, msig) {
         Ok(g) => g,
         Err(e) => {
             // HS lib/theory/src/Lemma.hs:132-134: `multiComment (text "conversion to
@@ -3620,7 +3630,7 @@ fn render_guarded_block(
             let sub_text = e
                 .subject_formula
                 .as_ref()
-                .map(crate::pretty_formula::pretty_formula)
+                .map(crate::pretty_formula::pretty_lnformula)
                 .unwrap_or_else(|| full_text.clone());
             block.push_str("    \"");
             block.push_str(&sub_text);
@@ -3683,7 +3693,7 @@ fn render_parsed_restriction(
     r: &p::Restriction,
     macros: &[p::Macro],
     predicates: &[p::Predicate],
-    _elab: &Theory,
+    elab: &Theory,
     arity1: &std::collections::HashSet<String>,
 ) -> String {
     // HS `prettyRestriction` (TheoryObject.hs:889-900):
@@ -3752,7 +3762,7 @@ fn render_parsed_restriction(
     // else emptyDoc)` (TheoryObject.hs:889-901, see line 894), where
     // `safety = isSafetyFormula $ formulaToGuarded_ $ expandedFormula`
     // (TheoryObject.hs:901) — the predicate runs on the EXPANDED formula.
-    if is_safety_formula(&expanded) {
+    if is_safety_formula(&expanded, &elab.signature.maude_sig) {
         out.push_str("\n  ");
         out.push_str(&line_comment_("safety formula").render());
     }
@@ -3826,12 +3836,13 @@ fn render_predicate(pr: &p::Predicate, arity1: &std::collections::HashSet<String
 /// `isSafetyFormula gf0 = null (frees [gf0]) && noExistential gf0`
 /// (Guarded.hs:157-158): the guarded formula must be CLOSED *and* free of
 /// existential quantifiers.  `crate::guarded::is_safety_formula` is that exact
-/// predicate; this wrapper only supplies the `LNFormula → LNGuarded` step.
+/// predicate; this wrapper supplies the parser-AST closing and the
+/// `LNFormula → LNGuarded` step.
 /// HS's `formulaToGuarded_` `error`s out when the formula is not guardable
 /// (`either (error . render) id`, Guarded.hs:467) and takes the whole run down;
 /// an unguardable restriction here yields `false` (no annotation) instead.
-fn is_safety_formula(f: &p::Formula) -> bool {
-    match crate::guarded::formula_to_guarded(f) {
+fn is_safety_formula(f: &p::Formula, msig: &tamarin_term::maude_sig::MaudeSig) -> bool {
+    match crate::guarded::formula_to_guarded_parsed(f, msig) {
         Ok(g) => crate::guarded::is_safety_formula(&g),
         Err(_) => false,
     }
@@ -4174,7 +4185,7 @@ fn raw_solve_to_doc(raw: &str, msig: &tamarin_term::maude_sig::MaudeSig) -> crat
 /// arity-0 constants — HS's parser reads both from the signature in parser
 /// state (Theory/Text/Parser/Term.hs:158-174).
 fn raw_goal_to_doc(raw: &str, msig: &tamarin_term::maude_sig::MaudeSig) -> crate::pretty_hpj::Doc {
-    use crate::guarded::formula_to_guarded;
+    use crate::guarded::formula_to_guarded_parsed;
     use crate::pretty_hpj::Doc;
     use tamarin_parser::ast::GoalSpec;
     use tamarin_parser::parser::{parse_formula_str, parse_term_str};
@@ -4244,7 +4255,7 @@ fn raw_goal_to_doc(raw: &str, msig: &tamarin_term::maude_sig::MaudeSig) -> crate
         GoalSpec::Raw(_) => {
             match parse_formula_str(trimmed, msig)
                 .ok()
-                .and_then(|f| formula_to_guarded(&f).ok())
+                .and_then(|f| formula_to_guarded_parsed(&f, msig).ok())
             {
                 Some(g) => pf::disj_goal_to_doc(std::slice::from_ref(&g)),
                 None => Doc::text(trimmed),
@@ -4304,14 +4315,14 @@ fn parse_disjuncts_to_guarded(
     text: &str,
     msig: &tamarin_term::maude_sig::MaudeSig,
 ) -> Option<Vec<crate::guarded::Guarded>> {
-    use crate::guarded::formula_to_guarded;
+    use crate::guarded::formula_to_guarded_parsed;
     use tamarin_parser::parser::parse_formula_str;
     let parts = split_top_level_disj_par(text);
     let mut out = Vec::with_capacity(parts.len());
     for p in &parts {
         let inner = strip_one_outer_paren(p.trim());
         let f = parse_formula_str(inner, msig).ok()?;
-        let g = formula_to_guarded(&f).ok()?;
+        let g = formula_to_guarded_parsed(&f, msig).ok()?;
         out.push(g);
     }
     Some(out)

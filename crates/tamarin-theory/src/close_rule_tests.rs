@@ -59,6 +59,7 @@ fn ku(t: LNTerm) -> LNFact {
 /// here also exercises the parent-vs-synthetic guard-set equivalence
 /// the production path relies on.
 fn assert_structural_matches_text(
+    sig: &tamarin_term::maude_sig::MaudeSig,
     sig_text: &str,
     s: &[LNFact],
     fact_term: &LNTerm,
@@ -77,8 +78,8 @@ fn assert_structural_matches_text(
     let (text_rule, text_restrictions, text_lemma) =
         elaborate_deduction_theory_via_text(sig_text, &s2, &t2, with_only_once_d);
     let struct_rule = deduction_rule(&s2);
-    let struct_restrictions = deduction_restrictions(with_only_once_d);
-    let struct_lemma = deduction_lemma_guarded(&s2, &t2);
+    let struct_restrictions = deduction_restrictions(sig, with_only_once_d);
+    let struct_lemma = deduction_lemma_guarded(sig, &s2, &t2);
     // Whole-struct equality: premises/conclusions/actions, rule info
     // (name + attributes), and `new_vars` — the structural side's HS
     // `[]` (CloseRule.hs:257) must coincide with the text side's
@@ -126,6 +127,7 @@ fn structural_deduction_theory_matches_text_pipeline() {
     for (s, fact_term, label) in &cases {
         for ood in [true, false] {
             assert_structural_matches_text(
+                &sig,
                 &sig_text,
                 s,
                 fact_term,
@@ -210,9 +212,10 @@ fn lemma_guarded_is_invariant_to_hs_ltrue_conjunct() {
             Box::new(k_at),
         )),
     )));
+    let sig = tamarin_term::maude_sig::pair_maude_sig();
     assert_eq!(
-        crate::guarded::formula_to_guarded(&ours).expect("ours converts"),
-        crate::guarded::formula_to_guarded(&hs_shaped).expect("HS shape converts"),
+        crate::guarded::formula_to_guarded_parsed(&ours, &sig).expect("ours converts"),
+        crate::guarded::formula_to_guarded_parsed(&hs_shaped, &sig).expect("HS shape converts"),
     );
 }
 
@@ -233,7 +236,7 @@ fn structural_lemma_closes_dotted_and_cross_sort_binders() {
         kd(tamarin_term::builtin::pair(x0.clone(), x5.clone())),
         ku(n.clone()),
     ];
-    let g = deduction_lemma_guarded(&s, &n);
+    let g = deduction_lemma_guarded(&tamarin_term::maude_sig::pair_maude_sig(), &s, &n);
     assert!(
         crate::guarded::free_vars(&g).is_empty(),
         "every occurrence must resolve to a binder; free vars: {:?}",
@@ -505,10 +508,11 @@ fn elaborate_deduction_theory_via_text(
         1,
         "synthetic deduction theory carries exactly the Out0 rule"
     );
+    let msig = &elaborated.signature.maude_sig;
     let restrictions: Vec<Guarded> = elaborated
         .restrictions()
         .map(|r| {
-            crate::guarded::formula_to_guarded(&r.formula).unwrap_or_else(|e| {
+            crate::guarded::formula_to_guarded_parsed(&r.formula, msig).unwrap_or_else(|e| {
                 panic!(
                     "[ndc] synthetic deduction theory restriction {} is not guarded ({}); theory:\n{}",
                     r.name,
@@ -524,7 +528,7 @@ fn elaborate_deduction_theory_via_text(
             theory_snippet(&src)
         )
     });
-    let g = crate::guarded::formula_to_guarded(&lemma.formula).unwrap_or_else(|e| {
+    let g = crate::guarded::formula_to_guarded_parsed(&lemma.formula, msig).unwrap_or_else(|e| {
         panic!(
             "[ndc] synthetic deduction theory Deduction lemma is not guarded ({}); theory:\n{}",
             e.message,

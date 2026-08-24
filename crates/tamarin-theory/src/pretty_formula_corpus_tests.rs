@@ -39,15 +39,6 @@ const BEYOND_BUDGET: &[&str] = &[
     "sapic/deprecated/csf21-acc-unbounded/mixvote/mixvote_SmHh-multi-session-5-fixed.spthy",
 ];
 
-/// A page width beyond any formula of the tree, so every `sep`, `fsep` and
-/// `fcat` takes its flat branch and the render is the whole formula on one
-/// line with no break inserted anywhere.  This is the string
-/// [`pretty_formula`] writes; `Doc::one_line_render`, HughesPJ's
-/// `OneLineMode`, is a different one — it takes every `Union`'s
-/// line-breaking branch and turns each break into one space, including the
-/// `fcat` breaks a pair `<a, b>` and an AC application carry.
-const FLAT_WIDTH: usize = 1 << 40;
-
 /// One formula to compare, tagged with where it came from.
 ///
 /// `pre` is the formula before the printer's own preprocessing — for a

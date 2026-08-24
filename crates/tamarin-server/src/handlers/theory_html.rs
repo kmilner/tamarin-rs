@@ -1109,8 +1109,8 @@ pub(crate) fn compute_source_lists(
 /// `typAsms`, CloseRule.hs:117-119, fed to `refineWithSourceAsms`,
 /// Sources.hs:452-475) — empty for the raw list, and with no such lemma the
 /// refine is a plain relabel to `RefinedSource` (Sources.hs:458-459).
-/// `formula_to_guarded` resolves user fun symbols, so callers must hold the
-/// theory's user-fn guard.
+/// The guarded conversion resolves user fun symbols, so callers must hold
+/// the theory's user-fn guard.
 fn source_typ_asms(
     entry: &TheoryEntry,
     want_refined: bool,
@@ -1125,7 +1125,13 @@ fn source_typ_asms(
             matches!(l.trace_quantifier, TraceQuantifier::AllTraces)
                 && l.attributes.iter().any(|a| matches!(a, LemmaAttr::Sources))
         })
-        .filter_map(|l| tamarin_theory::guarded::formula_to_guarded(&l.formula).ok())
+        .filter_map(|l| {
+            tamarin_theory::guarded::formula_to_guarded_parsed(
+                &l.formula,
+                &entry.typed_theory.signature.maude_sig,
+            )
+            .ok()
+        })
         .collect()
 }
 

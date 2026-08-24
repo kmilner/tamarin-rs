@@ -109,9 +109,88 @@ pub fn formula_reports(thy: &p::Theory, sig: &MaudeSig) -> Vec<WfError> {
         // order (Wellformedness.hs:1002-1004).
         out.extend(check_quantifiers(&header, fm));
         out.extend(terms.check(&header, fm));
-        out.extend(crate::elaborate::check_guarded_entry(&header, fm));
+        // `checkGuarded` reads the internal formula the parser closed
+        // (`get lFormula l`, Wellformedness.hs:1009), so close it here.  A
+        // formula that does not reach `LNFormula` carries no guardedness
+        // finding: the predicate expansion above leaves no sugar behind, and
+        // `from_parser` reaches every lemma and restriction of the translated
+        // corpus (`tests/s3_translated_theory_probes.rs`).
+        if let Ok(syn) = crate::formula::from_parser(fm, sig) {
+            if let Some(plain) = crate::formula::to_lnformula(&syn) {
+                out.extend(check_guarded_entry(&header, &plain));
+            }
+        }
     }
     out
+}
+
+/// Port of HS `checkGuarded` (Wellformedness.hs:988-993): the finding for one
+/// annotated formula that fails `formulaToGuarded`.  `header` is HS's
+/// `"Lemma `n'"` / `"Restriction `n'"`.
+///
+/// Message layout, matching HS's `prettyWfErrorReport` + `checkGuarded`:
+///
+/// ```text
+///  Formula guardedness
+/// ====================
+///
+///   {header} cannot be converted to a guarded formula:
+///     {error_text}
+///       "{sub_formula}"
+///     in the formula
+///       "{full_formula}"
+/// ```
+///
+/// Indentation: 2 (`prettyWfErrorReport`'s `nest 2`) + 2 (`checkGuarded`'s
+/// `nest 2 err`) + 2 (`ppFormula`'s `nest 2`) = 6 spaces for formula text.
+fn check_guarded_entry(header: &str, formula: &crate::formula::LNFormula) -> Option<WfError> {
+    use crate::pretty_formula::pretty_lnformula;
+
+    let e = match crate::guarded::formula_to_guarded(formula) {
+        Ok(_) => return None,
+        Err(e) => e,
+    };
+
+    let full_formula_text = pretty_lnformula(formula);
+
+    // HS `ppFormula f0` (Guarded.hs:513, :562) quotes the innermost failing
+    // quantifier; `ppError`'s own `ppFormula fmOrig` (Guarded.hs:479) quotes
+    // the whole formula.  A failure outside a quantifier quotes the whole
+    // formula in both places.
+    let sub_formula_text = e
+        .subject_formula
+        .as_ref()
+        .map(pretty_lnformula)
+        .unwrap_or_else(|| full_formula_text.clone());
+
+    // The `underlineTopic` of " Formula guardedness" includes the trailing
+    // newline; the blank line after it is `ppTopic`'s `$-$` in
+    // `prettyWfErrorReport`.
+    let topic = " Formula guardedness";
+    let mut msg = String::new();
+    msg.push_str(&underline_topic(topic));
+    msg.push('\n');
+    msg.push_str("  ");
+    msg.push_str(header);
+    msg.push_str(" cannot be converted to a guarded formula:\n");
+
+    for line in e.message.lines() {
+        msg.push_str("    ");
+        msg.push_str(line);
+        msg.push('\n');
+    }
+
+    msg.push_str("      ");
+    msg.push('"');
+    msg.push_str(&sub_formula_text);
+    msg.push_str("\"\n");
+    msg.push_str("    in the formula\n");
+    msg.push_str("      ");
+    msg.push('"');
+    msg.push_str(&full_formula_text);
+    msg.push_str("\"\n");
+
+    Some(WfError::new(topic, msg))
 }
 
 /// Port of HS `checkQuantifiers` (Wellformedness.hs:948-957): every binder
