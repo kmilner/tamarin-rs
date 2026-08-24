@@ -2,12 +2,14 @@
 // of the tamarin-prover sources this file cites; list them with:
 //   scripts/gen_license_headers.py --authors <this file>
 
-//! Port of `Term.Substitution.SubstVFree` (the *generic* part — no LTerm
-//! dependency yet) from `lib/term/src/Term/Substitution/SubstVFree.hs`.
+//! Port of `Term.Substitution.SubstVFree` from
+//! `lib/term/src/Term/Substitution/SubstVFree.hs`.
 //!
 //! We model a substitution as a `BTreeMap<V, VTerm<C, V>>` and apply it via
 //! [`apply_vterm`], which preserves AC normal form by routing through the
-//! smart constructors in [`crate::term`].
+//! smart constructors in [`crate::term`].  The locally-nameless counterparts
+//! [`apply_bvterm`] and [`apply_bvar`] apply one to a term whose variables
+//! are [`BVar`]s.
 //!
 //! The Haskell `Apply` typeclass and the `LSubst`/`LNSubst` aliases live in
 //! later modules that depend on `LTerm`.
@@ -17,7 +19,8 @@ use std::collections::BTreeMap;
 use tamarin_utils::cow::cow_map_vec;
 
 use crate::function_symbols::FunSym;
-use crate::term::{f_app_ac, f_app_c, f_app_list, f_app_no_eq, lit, Term};
+use crate::lterm::BVar;
+use crate::term::{f_app, f_app_ac, f_app_c, f_app_list, f_app_no_eq, lit, map_lits, Term};
 use crate::vterm::{Lit, VTerm};
 
 /// A substitution mapping variables of type `V` to terms of type
@@ -263,6 +266,46 @@ fn apply_lit_map_changed<C: Ord + Clone, V: Ord + Clone>(
     }
 }
 
+/// HS's overlappable `Apply s (BVar v)` (SubstVFree.hs:293-295): a bound De
+/// Bruijn index is left alone, and a free variable is rewritten by the
+/// `Apply s v` instance the caller passes in — `Apply (Subst c v) v`
+/// (SubstVFree.hs:279-285) for a plain variable, `Apply (Subst Name LVar)
+/// SapicLVar` (Theory/Sapic/Term.hs:115-117) for a variable that carries a
+/// type tag the rewrite preserves.
+pub fn apply_bvar<V>(v: &BVar<V>, apply_free: &mut dyn FnMut(&V) -> V) -> BVar<V> {
+    match v {
+        BVar::Bound(i) => BVar::Bound(*i),
+        BVar::Free(v) => BVar::Free(apply_free(v)),
+    }
+}
+
+/// HS's overlapping `Apply (Subst c v) (VTerm c (BVar v))`
+/// (SubstVFree.hs:297-302): replace every free literal in the substitution's
+/// domain by its image, lifted back into `BVar` form with `fmapTerm (fmap
+/// Free)`.  A bound index is not in the domain, so a binder cannot capture an
+/// image variable.  The rebuild goes through [`f_app`], as HS's `bindTerm`
+/// (Term/Term/Raw.hs:219-221) does, so AC argument lists are flattened and
+/// re-sorted under the images.
+pub fn apply_bvterm<C: Ord + Clone, V: Ord + Clone>(
+    s: &Subst<C, V>,
+    t: &VTerm<C, BVar<V>>,
+) -> VTerm<C, BVar<V>> {
+    match t {
+        Term::Lit(Lit::Var(BVar::Free(v))) => match s.image_of(v) {
+            Some(image) => map_lits(image, &mut |l| match l {
+                Lit::Con(c) => Lit::Con(c.clone()),
+                Lit::Var(w) => Lit::Var(BVar::Free(w.clone())),
+            }),
+            None => t.clone(),
+        },
+        Term::Lit(_) => t.clone(),
+        Term::App(fsym, args) => f_app(
+            *fsym,
+            args.iter().map(|a| apply_bvterm(s, a)).collect::<Vec<_>>(),
+        ),
+    }
+}
+
 /// Pass-invariant hashed lookup view over a [`Subst`].
 ///
 /// [`apply_vterm_map_changed`] pays a `BTreeMap` descent per `Lit::Var`
@@ -413,6 +456,45 @@ mod tests {
         }
         assert_eq!(view.image_of(&"x"), s.image_of(&"x"));
         assert_eq!(view.image_of(&"w"), s.image_of(&"w"));
+    }
+
+    /// `applyBLLit` (SubstVFree.hs:299-301) replaces a `Free` literal in the
+    /// domain by its image, lifted back into `BVar` form; a `Bound` index and
+    /// a constant are literals it hands back untouched.
+    #[test]
+    fn apply_bvterm_replaces_free_lits_and_keeps_bound_indices() {
+        let s: Subst<C, V> = Subst::from_list(vec![(
+            "x",
+            f_app_no_eq(pair_sym(), vec![var_term("a"), const_term(2)]),
+        )]);
+        let inner: VTerm<C, BVar<V>> = f_app_no_eq(
+            pair_sym(),
+            vec![var_term(BVar::Bound(0)), var_term(BVar::Free("y"))],
+        );
+        let t: VTerm<C, BVar<V>> =
+            f_app_no_eq(pair_sym(), vec![var_term(BVar::Free("x")), inner.clone()]);
+        let image: VTerm<C, BVar<V>> =
+            f_app_no_eq(pair_sym(), vec![var_term(BVar::Free("a")), const_term(2)]);
+        assert_eq!(
+            apply_bvterm(&s, &t),
+            f_app_no_eq(pair_sym(), vec![image, inner])
+        );
+    }
+
+    /// `bindTerm` rebuilds every application through `fApp`
+    /// (Term/Term/Raw.hs:219-221), so an AC argument list is re-sorted under
+    /// the images instead of keeping the positions of the original arguments.
+    #[test]
+    fn apply_bvterm_resorts_ac_arguments_after_a_rewrite() {
+        // Stored AC-sorted as [Con 3, Var (Free "x")]; the image `Con 1` sorts
+        // in front of `Con 3`.
+        let t: VTerm<C, BVar<V>> =
+            f_app_ac(AcSym::Mult, vec![var_term(BVar::Free("x")), const_term(3)]);
+        let s: Subst<C, V> = Subst::from_list(vec![("x", const_term(1))]);
+        let Term::App(_, args) = apply_bvterm(&s, &t) else {
+            panic!("expected the AC application");
+        };
+        assert_eq!(&*args, &[const_term(1), const_term(3)][..]);
     }
 
     #[test]
