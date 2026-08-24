@@ -245,6 +245,51 @@ fn for_each_atom_term<S: SugarTerms<T>, T>(a: &ProtoAtom<S, T>, f: &mut dyn FnMu
     }
 }
 
+/// HS `formulaTerms` (Theory/Tools/Wellformedness.hs:918-920): the terms of
+/// every atom, in `foldFormula` order.  Its atom step is `atomTerms`
+/// (Theory/Tools/Wellformedness.hs:908-915), which yields NOTHING for a
+/// `Syntactic` atom, so this is a different traversal from the `Foldable`
+/// instance [`for_each_formula_term`] runs.
+pub(crate) fn formula_terms<S, H, C, V>(fm: &ProtoFormula<S, H, C, V>) -> Vec<&VTerm<C, BVar<V>>> {
+    let mut out = Vec::new();
+    collect_formula_terms(fm, &mut out);
+    out
+}
+
+fn collect_formula_terms<'a, S, H, C, V>(
+    fm: &'a ProtoFormula<S, H, C, V>,
+    out: &mut Vec<&'a VTerm<C, BVar<V>>>,
+) {
+    match fm {
+        ProtoFormula::Atom(a) => collect_atom_terms(a, out),
+        ProtoFormula::Tf(_) => {}
+        ProtoFormula::Not(p) => collect_formula_terms(p, out),
+        ProtoFormula::Conn(_, p, q) => {
+            collect_formula_terms(p, out);
+            collect_formula_terms(q, out);
+        }
+        ProtoFormula::Qua(_, _, p) => collect_formula_terms(p, out),
+    }
+}
+
+/// HS `atomTerms` (Theory/Tools/Wellformedness.hs:908-915): an `Action` gives
+/// its time-point term before the fact's terms, the binary atoms give left
+/// then right, and a `Syntactic` atom gives none.
+fn collect_atom_terms<'a, S, T>(a: &'a ProtoAtom<S, T>, out: &mut Vec<&'a T>) {
+    match a {
+        ProtoAtom::Action(t, fa) => {
+            out.push(t);
+            out.extend(fa.terms.iter());
+        }
+        ProtoAtom::EqE(l, r) | ProtoAtom::Subterm(l, r) | ProtoAtom::Less(l, r) => {
+            out.push(l);
+            out.push(r);
+        }
+        ProtoAtom::Last(t) => out.push(t),
+        ProtoAtom::Syntactic(_) => {}
+    }
+}
+
 /// HS `mapAtoms` (Theory/Model/Formula.hs:267-270): rebuild the formula with
 /// every atom replaced by `f`'s result.  `f` also receives the atom's De
 /// Bruijn depth — the number of binders between the formula's root and the

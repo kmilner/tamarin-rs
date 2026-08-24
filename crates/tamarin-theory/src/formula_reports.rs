@@ -92,11 +92,14 @@ pub(crate) fn ann_formulas(thy: &p::Theory) -> Vec<(String, &p::Formula)> {
 /// `irreducibleFunSyms` classification.
 pub fn formula_reports(thy: &p::Theory, sig: &MaudeSig) -> Vec<WfError> {
     // Both expansions mirror what HS's formulas have already undergone by
-    // the time `formulaReports` reads them (see the module docs): macros via
-    // `annFormulas`'s own `applyMacroInFormula`, predicates at parse time.
-    // A predicate-expansion error (e.g. an undefined predicate) is surfaced
-    // by the elaborate path; here we keep the macro-only form so the checks
-    // still run on what they can.
+    // the time `formulaReports` reads them: `annFormulas` applies
+    // `applyMacroInFormula` itself (Wellformedness.hs:1007-1014) and
+    // predicates are inlined at parse time.  They stay here — and not on the
+    // elaborated theory — until stage 6 stores the macro- and
+    // predicate-expanded formula on every item, SAPIC- and
+    // accountability-injected ones included.  A predicate-expansion error
+    // (e.g. an undefined predicate) is surfaced by the elaborate path; here
+    // the macro-only form is kept so the checks still run on what they can.
     let mut expanded = thy.clone();
     crate::macro_expand::expand_theory_macros(&mut expanded);
     let _ = crate::predicate_expand::expand_theory_formulas(&mut expanded);
@@ -104,21 +107,22 @@ pub fn formula_reports(thy: &p::Theory, sig: &MaudeSig) -> Vec<WfError> {
     let terms = TermChecker::new(sig);
     let mut out: Vec<WfError> = Vec::new();
     for (header, fm) in ann_formulas(&expanded) {
+        // All three arms read the internal formula HS's parser closed
+        // (`get lFormula l`, Wellformedness.hs:1009).  `from_parser` reaches
+        // every lemma and restriction of the translated corpus
+        // (`tests/s3_translated_theory_probes.rs`).
+        let Ok(syn) = crate::formula::from_parser(fm, sig) else {
+            continue;
+        };
         // HS `msum [checkQuantifiers, checkTerms, checkGuarded]` = `concat`:
         // every arm runs for every formula, findings concatenated in this
         // order (Wellformedness.hs:1002-1004).
-        out.extend(check_quantifiers(&header, fm));
-        out.extend(terms.check(&header, fm));
-        // `checkGuarded` reads the internal formula the parser closed
-        // (`get lFormula l`, Wellformedness.hs:1009), so close it here.  A
-        // formula that does not reach `LNFormula` carries no guardedness
-        // finding: the predicate expansion above leaves no sugar behind, and
-        // `from_parser` reaches every lemma and restriction of the translated
-        // corpus (`tests/s3_translated_theory_probes.rs`).
-        if let Ok(syn) = crate::formula::from_parser(fm, sig) {
-            if let Some(plain) = crate::formula::to_lnformula(&syn) {
-                out.extend(check_guarded_entry(&header, &plain));
-            }
+        out.extend(check_quantifiers(&header, &syn));
+        out.extend(terms.check(&header, &syn));
+        // A formula that keeps syntactic sugar carries no guardedness
+        // finding; the predicate expansion above leaves none behind.
+        if let Some(plain) = crate::formula::to_lnformula(&syn) {
+            out.extend(check_guarded_entry(&header, &plain));
         }
     }
     out
@@ -197,11 +201,11 @@ fn check_guarded_entry(header: &str, formula: &crate::formula::LNFormula) -> Opt
 /// whose sort is not `LSortMsg` / `LSortNode` / `LSortNat` is an offender, so
 /// quantifying over a fresh (`~x`) or public (`$x`) variable is flagged.
 ///
-/// The binders are collected by HS's `foldFormula` with
-/// `\_ binder rest -> binder : rest` over `const mappend` connectives, i.e.
-/// in document order, outermost binder first.
-fn check_quantifiers(header: &str, fm: &p::Formula) -> Option<WfError> {
-    let mut binders: Vec<&p::VarSpec> = Vec::new();
+/// The binders are the formula's `(String, LSort)` HINTS, collected by HS's
+/// `foldFormula` with `\_ binder rest -> binder : rest` over `const mappend`
+/// connectives, i.e. in document order, outermost binder first.
+fn check_quantifiers(header: &str, fm: &crate::formula::SyntacticLNFormula) -> Option<WfError> {
+    let mut binders: Vec<&(String, LSort)> = Vec::new();
     collect_binders(fm, &mut binders);
 
     // HS `show (name, sort)` of the `(String, LSort)` binder, with `LSort`'s
@@ -209,7 +213,9 @@ fn check_quantifiers(header: &str, fm: &p::Formula) -> Option<WfError> {
     // part of the binder pair, so `~n.1` shows as `("n",LSortFresh)`.
     let disallowed: Vec<String> = binders
         .iter()
-        .filter_map(|v| disallowed_sort_show(v.sort).map(|s| format!("(\"{}\",{})", v.name, s)))
+        .filter_map(|(name, sort)| {
+            disallowed_sort_show(*sort).map(|s| format!("(\"{}\",{})", name, s))
+        })
         .collect();
     if disallowed.is_empty() {
         return None;
@@ -251,24 +257,24 @@ fn disallowed_sort_show(sort: LSort) -> Option<&'static str> {
     }
 }
 
-/// Collect the formula's binders in HS `foldFormula` order — a quantifier
-/// contributes its own binder before its body's, and a connective its left
-/// operand's before its right's.
-fn collect_binders<'a>(fm: &'a p::Formula, out: &mut Vec<&'a p::VarSpec>) {
+/// Collect the formula's binder hints in HS `foldFormula` order — a
+/// quantifier contributes its own hint before its body's, and a connective
+/// its left operand's before its right's.  A source `All x y. …` closes into
+/// nested `Qua`s, so its binders come out left to right.
+fn collect_binders<'a>(
+    fm: &'a crate::formula::SyntacticLNFormula,
+    out: &mut Vec<&'a (String, LSort)>,
+) {
+    use crate::formula::ProtoFormula;
     match fm {
-        p::Formula::False | p::Formula::True | p::Formula::Atom(_) => {}
-        p::Formula::Not(f) => collect_binders(f, out),
-        p::Formula::And(l, r)
-        | p::Formula::Or(l, r)
-        | p::Formula::Implies(l, r)
-        | p::Formula::Iff(l, r) => {
+        ProtoFormula::Tf(_) | ProtoFormula::Atom(_) => {}
+        ProtoFormula::Not(f) => collect_binders(f, out),
+        ProtoFormula::Conn(_, l, r) => {
             collect_binders(l, out);
             collect_binders(r, out);
         }
-        // A multi-variable `All x y. …` is nested `Quant`s in HS, so the
-        // binders come out left to right, then the body's.
-        p::Formula::Forall(vs, body) | p::Formula::Exists(vs, body) => {
-            out.extend(vs.iter());
+        ProtoFormula::Qua(_, hint, body) => {
+            out.push(hint);
             collect_binders(body, out);
         }
     }

@@ -752,8 +752,7 @@ fn prove_probe(
         if !ok {
             // HS reports `show LVar` (sortPrefix ++ body) for the
             // undecidable variable (MessageDerivationChecks.hs:131-133, see line 133).
-            // Shared with the wellformedness checker's identical renderer.
-            undecidable.push(crate::check_terms::show_lvar(v));
+            undecidable.push(show_lvar(v));
         }
     }
 
@@ -762,6 +761,21 @@ fn prove_probe(
         prove_time,
         var_count,
     })
+}
+
+/// HS `Show LVar` (LTerm.hs:550-557): `sortPrefix s ++ body`, where body is
+/// the name (or, if `idx /= 0`, `name.idx`; if the name is empty, just the
+/// index).
+fn show_lvar(v: &p::VarSpec) -> String {
+    let prefix = tamarin_term::lterm::sort_prefix(v.sort);
+    let body = if v.name.is_empty() {
+        v.idx.to_string()
+    } else if v.idx == 0 {
+        v.name.clone()
+    } else {
+        format!("{}.{}", v.name, v.idx)
+    };
+    format!("{}{}", prefix, body)
 }
 
 fn format_deriv_report(per_rule: &[(String, Vec<String>)]) -> Vec<WfError> {
