@@ -360,7 +360,12 @@ fn subst_action(
             prems: prems.iter().map(|f| subst_fact(subst, f)).collect(),
             acts: acts.iter().map(|f| subst_fact(subst, f)).collect(),
             concs: concs.iter().map(|f| subst_fact(subst, f)).collect(),
-            rest,
+            // HS `mapTermsAction f ff fv (MSR l a r rest mv) = MSR .. (fmap ff
+            // rest) ..` (Sapic/Process.hs:155) reached through `apply subst`
+            // (Sapic/Process.hs:319-321): a `let`-bound value the embedded
+            // restriction mentions is rewritten there as it is in the fact
+            // rows.
+            rest: rest.into_iter().map(|f| apply_subst(subst, f)).collect(),
             match_vars,
         },
         A::Rep => A::Rep,
@@ -471,6 +476,71 @@ mod tests {
         };
         assert_eq!(msg, pub_name("t"), "h must be replaced by 't'");
         assert!(matches!(*body, Process::Null(_)));
+    }
+
+    /// HS `mapTermsAction .. (fmap ff rest) ..` (Sapic/Process.hs:155) under
+    /// `apply subst` (Sapic/Process.hs:319-321): a Case-B `let`-elimination
+    /// rewrites the `let`-bound variable inside an embedded MSR's
+    /// `_restrict` formula, not only inside its fact rows.
+    #[test]
+    fn let_elimination_substitutes_into_an_msr_restriction() {
+        use tamarin_theory::atom::ProtoAtom;
+        use tamarin_theory::formula::ProtoFormula;
+
+        let h = svar("h");
+        // `[ ] --[ Ev(h) ]-> [ ]` restricted by `h = 'b'`.
+        let ev = tamarin_theory::fact::Fact::new(
+            tamarin_theory::fact::FactTag::Proto(
+                tamarin_theory::fact::Multiplicity::Linear,
+                "Ev",
+                1,
+            ),
+            vec![var_term(h.clone())],
+        );
+        let restr = ProtoFormula::Atom(ProtoAtom::EqE(
+            VTerm::Lit(Lit::Var(tamarin_term::lterm::BVar::Free(h.clone()))),
+            VTerm::Lit(Lit::Con(Name::new(NameTag::Pub, "b"))),
+        ));
+        let msr = Process::Action(
+            SapicAction::Msr {
+                prems: Vec::new(),
+                acts: vec![ev],
+                concs: Vec::new(),
+                rest: vec![restr],
+                match_vars: BTreeSet::new(),
+            },
+            ann(),
+            Box::new(Process::Null(ann())),
+        );
+        // `let h = 't' in <msr>` — Case B drops the Let and substitutes `'t'`.
+        let lett = Process::Comb(
+            ProcessCombinator::Let {
+                left: var_term(h),
+                right: pub_name("t"),
+                match_vars: BTreeSet::new(),
+            },
+            ann(),
+            Box::new(msr),
+            Box::new(Process::Null(ann())),
+        );
+        let rules: BTreeSet<CtxtStRule> = BTreeSet::new();
+        let out = translate_let_destr(&rules, lett);
+        let Process::Action(SapicAction::Msr { acts, rest, .. }, _, _) = out else {
+            panic!("expected Let to be eliminated to the MSR");
+        };
+        assert_eq!(
+            acts[0].terms[0],
+            pub_name("t"),
+            "the action row is rewritten"
+        );
+        assert_eq!(
+            rest[0],
+            ProtoFormula::Atom(ProtoAtom::EqE(
+                VTerm::Lit(Lit::Con(Name::new(NameTag::Pub, "t"))),
+                VTerm::Lit(Lit::Con(Name::new(NameTag::Pub, "b"))),
+            )),
+            "and so is the embedded restriction"
+        );
     }
 
     #[test]

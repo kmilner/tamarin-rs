@@ -59,187 +59,6 @@ pub(crate) fn lvar_to_varspec(v: &LVar) -> p::VarSpec {
     }
 }
 
-/// Rebuild a parser-AST formula, mapping `f` over every FREE `Var` leaf.
-///
-/// Quantifier-bound names are tracked in a `bound` stack (respecting shadowing)
-/// and their occurrences are left untouched; for a free `Var`, `f(varspec,
-/// bound)` returns `Some(term)` to replace the leaf or `None` to keep it
-/// unchanged, so the leaf set offered here is exactly the one
-/// [`fold_free_vars`] reports.  The traversal `typing::rename_cond_formula`
-/// runs.
-pub(crate) fn map_free_terms(
-    formula: &p::Formula,
-    f: &mut dyn FnMut(&p::VarSpec, &[String]) -> Option<p::Term>,
-) -> p::Formula {
-    fn rt(
-        bound: &[String],
-        f: &mut dyn FnMut(&p::VarSpec, &[String]) -> Option<p::Term>,
-        t: &p::Term,
-    ) -> p::Term {
-        match t {
-            p::Term::Var(v) => {
-                if bound.iter().any(|n| n == &v.name) {
-                    return t.clone();
-                }
-                f(v, bound).unwrap_or_else(|| t.clone())
-            }
-            p::Term::App(n, args) => {
-                p::Term::App(n.clone(), args.iter().map(|a| rt(bound, f, a)).collect())
-            }
-            p::Term::Pair(items) => p::Term::Pair(items.iter().map(|a| rt(bound, f, a)).collect()),
-            p::Term::AlgApp(n, a, b) => p::Term::AlgApp(
-                n.clone(),
-                Box::new(rt(bound, f, a)),
-                Box::new(rt(bound, f, b)),
-            ),
-            p::Term::Diff(a, b) => {
-                p::Term::Diff(Box::new(rt(bound, f, a)), Box::new(rt(bound, f, b)))
-            }
-            p::Term::BinOp(op, a, b) => {
-                p::Term::BinOp(*op, Box::new(rt(bound, f, a)), Box::new(rt(bound, f, b)))
-            }
-            p::Term::PatMatch(inner) => p::Term::PatMatch(Box::new(rt(bound, f, inner))),
-            other => other.clone(),
-        }
-    }
-    fn ra(
-        bound: &[String],
-        f: &mut dyn FnMut(&p::VarSpec, &[String]) -> Option<p::Term>,
-        a: &p::Atom,
-    ) -> p::Atom {
-        use p::Atom::*;
-        match a {
-            Eq(l, r) => Eq(rt(bound, f, l), rt(bound, f, r)),
-            Less(l, r) => Less(rt(bound, f, l), rt(bound, f, r)),
-            LessMset(l, r) => LessMset(rt(bound, f, l), rt(bound, f, r)),
-            Subterm(l, r) => Subterm(rt(bound, f, l), rt(bound, f, r)),
-            Action(fa, t) => Action(
-                p::Fact {
-                    persistent: fa.persistent,
-                    name: fa.name.clone(),
-                    args: fa.args.iter().map(|x| rt(bound, f, x)).collect(),
-                    annotations: fa.annotations.clone(),
-                },
-                rt(bound, f, t),
-            ),
-            Last(t) => Last(rt(bound, f, t)),
-            Pred(fa) => Pred(p::Fact {
-                persistent: fa.persistent,
-                name: fa.name.clone(),
-                args: fa.args.iter().map(|x| rt(bound, f, x)).collect(),
-                annotations: fa.annotations.clone(),
-            }),
-        }
-    }
-    fn rf(
-        bound: &mut Vec<String>,
-        f: &mut dyn FnMut(&p::VarSpec, &[String]) -> Option<p::Term>,
-        formula: &p::Formula,
-    ) -> p::Formula {
-        use p::Formula::*;
-        match formula {
-            True => True,
-            False => False,
-            Atom(a) => Atom(ra(bound, f, a)),
-            Not(g) => Not(Box::new(rf(bound, f, g))),
-            And(a, b) => And(Box::new(rf(bound, f, a)), Box::new(rf(bound, f, b))),
-            Or(a, b) => Or(Box::new(rf(bound, f, a)), Box::new(rf(bound, f, b))),
-            Implies(a, b) => Implies(Box::new(rf(bound, f, a)), Box::new(rf(bound, f, b))),
-            Iff(a, b) => Iff(Box::new(rf(bound, f, a)), Box::new(rf(bound, f, b))),
-            Forall(vs, body) => {
-                let saved = bound.len();
-                for v in vs {
-                    bound.push(v.name.clone());
-                }
-                let r = Forall(vs.clone(), Box::new(rf(bound, f, body)));
-                bound.truncate(saved);
-                r
-            }
-            Exists(vs, body) => {
-                let saved = bound.len();
-                for v in vs {
-                    bound.push(v.name.clone());
-                }
-                let r = Exists(vs.clone(), Box::new(rf(bound, f, body)));
-                bound.truncate(saved);
-                r
-            }
-        }
-    }
-    let mut bound = Vec::new();
-    rf(&mut bound, f, formula)
-}
-
-/// Visit every FREE `Var` leaf of a parser-AST formula, calling `f(varspec,
-/// bound)` for each (quantifier-bound occurrences are skipped, tracking
-/// shadowing via the `bound` stack).  The traversal order is the depth-first,
-/// left-to-right order `typing::cond_formula_free_lvars` reports.
-pub(crate) fn fold_free_vars(formula: &p::Formula, f: &mut dyn FnMut(&p::VarSpec, &[String])) {
-    fn ct(bound: &[String], f: &mut dyn FnMut(&p::VarSpec, &[String]), t: &p::Term) {
-        match t {
-            p::Term::Var(v) if !bound.iter().any(|n| n == &v.name) => f(v, bound),
-            p::Term::App(_, args) | p::Term::Pair(args) => {
-                for a in args {
-                    ct(bound, f, a);
-                }
-            }
-            p::Term::AlgApp(_, a, b) | p::Term::Diff(a, b) | p::Term::BinOp(_, a, b) => {
-                ct(bound, f, a);
-                ct(bound, f, b);
-            }
-            p::Term::PatMatch(inner) => ct(bound, f, inner),
-            _ => {}
-        }
-    }
-    fn ca(bound: &[String], f: &mut dyn FnMut(&p::VarSpec, &[String]), a: &p::Atom) {
-        use p::Atom::*;
-        match a {
-            Eq(l, r) | Less(l, r) | LessMset(l, r) | Subterm(l, r) => {
-                ct(bound, f, l);
-                ct(bound, f, r);
-            }
-            Action(fa, t) => {
-                for arg in &fa.args {
-                    ct(bound, f, arg);
-                }
-                ct(bound, f, t);
-            }
-            Last(t) => ct(bound, f, t),
-            Pred(fa) => {
-                for arg in &fa.args {
-                    ct(bound, f, arg);
-                }
-            }
-        }
-    }
-    fn cf(
-        bound: &mut Vec<String>,
-        f: &mut dyn FnMut(&p::VarSpec, &[String]),
-        formula: &p::Formula,
-    ) {
-        use p::Formula::*;
-        match formula {
-            True | False => {}
-            Atom(a) => ca(bound, f, a),
-            Not(g) => cf(bound, f, g),
-            And(a, b) | Or(a, b) | Implies(a, b) | Iff(a, b) => {
-                cf(bound, f, a);
-                cf(bound, f, b);
-            }
-            Forall(vs, body) | Exists(vs, body) => {
-                let saved = bound.len();
-                for v in vs {
-                    bound.push(v.name.clone());
-                }
-                cf(bound, f, body);
-                bound.truncate(saved);
-            }
-        }
-    }
-    let mut bound = Vec::new();
-    cf(&mut bound, f, formula);
-}
-
 pub(crate) fn term(
     t: &p::Term,
     sig: &MaudeSig,
@@ -296,7 +115,10 @@ pub(crate) fn action(
         // i.e. match-vars come from the PREMISES only; every fact row is
         // `unpattern`ed (the `=v` markers stripped), and the embedded
         // restriction formulas get `unpatternVar` — their `=v` markers are
-        // stripped too, without contributing match-vars.
+        // stripped too, without contributing match-vars.  HS reads those
+        // formulas with `sapicpatternvar` and strips the pattern tag
+        // afterwards, so the marker goes before the locally-nameless formula
+        // is built and `sapic_from_parser` never meets a `PatMatch` term.
         p::SapicAction::Msr {
             prems,
             acts,
@@ -322,7 +144,13 @@ pub(crate) fn action(
                 prems: prems_c,
                 acts: acts_c,
                 concs: concs_c,
-                rest: restrictions.iter().map(formula_unpattern).collect(),
+                rest: restrictions
+                    .iter()
+                    .map(|f| {
+                        sapic_from_parser(&formula_unpattern(f), sig)
+                            .map_err(|e| ConvertError::new(e.message))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?,
                 match_vars,
             })
         }
@@ -940,9 +768,9 @@ mod tests {
         // HS applies `g = fmap (fmap unpatternVar)` to the embedded
         // restriction formulas (Parser/Sapic.hs:158-160): every `=` marker
         // goes away, and `matchVars` still folds over the premises only.
-        // Skipping the `g` leaves a `PatMatch` inside the minted `Restr_…`
-        // fact's terms and kills elaboration — the end-to-end pin is
-        // `scripts/divergence_fixtures/sapic_msr_pattern_restrict`.
+        // The strip runs BEFORE the locally-nameless formula is built, and
+        // the second assertion below is what pins that order — the end-to-end
+        // pin is `scripts/divergence_fixtures/sapic_msr_pattern_restrict`.
         let ispec = p::VarSpec {
             name: "i".into(),
             idx: 0,
@@ -972,7 +800,7 @@ mod tests {
                 prems: vec![pfact("In", vec![pvar("x", None)])],
                 acts: vec![],
                 concs: vec![pfact("Out", vec![pvar("x", None)])],
-                restrictions: marked,
+                restrictions: marked.clone(),
             },
             body: Box::new(p::Process::Null),
         };
@@ -986,11 +814,23 @@ mod tests {
         else {
             panic!("expected an Msr action");
         };
-        assert_eq!(rest, plain, "both formulas come out marker-free");
+        let want: Vec<_> = plain
+            .iter()
+            .map(|f| sapic_from_parser(f, &msig()).unwrap())
+            .collect();
+        assert_eq!(rest, want, "both formulas come out marker-free");
         assert!(
             match_vars.is_empty(),
             "a `=` inside `_restrict` contributes no match-var"
         );
+        // A marker that survives to the formula builder has no SAPIC term to
+        // read it as, so leaving out the strip fails the conversion.
+        for f in &marked {
+            assert!(
+                sapic_from_parser(f, &msig()).is_err(),
+                "a `=` marker must not reach the formula builder"
+            );
+        }
     }
 
     #[test]

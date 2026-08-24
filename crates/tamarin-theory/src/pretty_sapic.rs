@@ -297,7 +297,7 @@ fn render_msr(
     prems: &[crate::sapic::SapicLNFact],
     acts: &[crate::sapic::SapicLNFact],
     concls: &[crate::sapic::SapicLNFact],
-    rest: &[tamarin_parser::ast::Formula],
+    rest: &[crate::sapic::SapicFormula],
     match_vars: &std::collections::BTreeSet<SapicLVar>,
     printer: MsrPrinter,
 ) -> String {
@@ -325,17 +325,20 @@ fn render_msr(
         // map ppFact acts ++ map ppRestr' restr
         let mut items: Vec<Doc> = acts.iter().map(sapic_fact_to_doc).collect();
         for phi in rest {
-            // `ppRestr' fact = "_restrict(" <> ppRestr fact <> ")"`,
-            // `ppRestr = prettySyntacticLNFormula . toLFormula`.  HS's payload
-            // is a formula over signature-built `SapicTerm`s, so `fAppAC`/
-            // `fAppC` flattened and sorted every AC/C application at parse
-            // time and `prettyTerm` prints AC nodes infix; the RS payload is
-            // the parser AST in written order, so canonicalise first — this
-            // render feeds both the `process="..."` attribute and the
-            // SAPIC-derived rule names, which must agree.
-            let canonical = crate::elaborate::canonicalize_ac_in_formula(phi);
-            let inner = crate::pretty_formula::pretty_formula(&canonical);
-            items.push(Doc::text(format!("_restrict({inner})")));
+            // `ppRestr' fact = operator_ "_restrict(" <> ppRestr fact <>
+            // operator_ ")"` (Theory/Model/Rule.hs:1382#ppRestr') with
+            // `ppRes = prettySyntacticLNFormula . toLFormula`
+            // (Theory/Sapic/Print.hs:41-44#rulePrinter).  The formula is a Doc
+            // inside that composition, so a break it takes indents by the ten
+            // columns of the opening operator and the whole item takes part in
+            // the rule's layout, which the caller closes with `render_sapic`.
+            items.push(
+                hpj::operator_("_restrict(")
+                    .beside(crate::pretty_formula::syntactic_lnformula_doc(
+                        &crate::sapic::to_lformula(phi),
+                    ))
+                    .beside(hpj::operator_(")")),
+            );
         }
         hpj::fsep(vec![
             Doc::text("--["),
@@ -659,75 +662,93 @@ mod tests {
         );
     }
 
-    /// An MSR's embedded `_restrict(...)` renders its user-`[AC]` applications
-    /// the same way `if <formula>` does — the render feeds both the
-    /// `process="..."` attribute and the SAPIC-derived rule/restriction names.
-    ///
-    /// Oracle bytes (pinned build, Git revision ef3f0468) for
-    /// `builtins: xor` + `functions: add/2 [AC]` +
-    /// `in(k); [ ] --[ Ev(add(k,'a')), _restrict(add(k,'a') = k) ]-> [ ]; out('y')`:
-    ///   `process=" [ ] --[ Ev( ('a' add k.1) ), _restrict(('a' add k.1) = k.1) ]-> [ ];"`
-    #[test]
-    fn msr_restriction_renders_user_ac_flattened_sorted_and_infix() {
-        use tamarin_parser::ast as p;
-
-        let k = p::Term::Var(p::VarSpec {
-            typ: None,
-            name: "k".into(),
-            sort: LSort::Msg,
-            idx: 1,
-        });
-        let restr = |head: p::Term| p::Formula::Atom(p::Atom::Eq(head, k.clone()));
-        let add_prefix = p::Term::App("add".into(), vec![k.clone(), p::Term::PubLit("a".into())]);
-        let add_ac = p::Term::BinOp(
-            p::BinOp::AcFct(tamarin_term::intern::intern_str("add")),
-            Box::new(k.clone()),
-            Box::new(p::Term::PubLit("a".into())),
-        );
+    /// An embedded MSR as the process printer renders it: one `Ev(<arg>)`
+    /// action and one `_restrict(<restr>)`, both read against the signature
+    /// `decl` declares.
+    fn msr_render(arg: &str, restr: &str, decl: &str) -> String {
+        let sig = sig_of(decl);
+        let t = tamarin_parser::parser::parse_term_str(arg, &sig).unwrap();
+        let f = tamarin_parser::parser::parse_formula_str(restr, &sig).unwrap();
         let ev = crate::fact::Fact::new(
             crate::fact::FactTag::Proto(crate::fact::Multiplicity::Linear, "Ev", 1),
-            vec![tamarin_term::term::f_app_ac(
-                tamarin_term::function_symbols::AcSym::AcFct(
-                    tamarin_term::function_symbols::AcFctSym::new(
-                        b"add".to_vec(),
-                        Privacy::Public,
-                        Constructability::Constructor,
-                        tamarin_term::function_symbols::NdcState::NotNdc,
-                    ),
-                ),
-                vec![
-                    VTerm::Lit(Lit::Var(sv("k", 1, None))),
-                    VTerm::Lit(Lit::Con(tamarin_term::lterm::Name::new(
-                        tamarin_term::lterm::NameTag::Pub,
-                        "a",
-                    ))),
-                ],
-            )],
+            vec![crate::elaborate::term_to_sapic_term(&t, &sig).unwrap()],
         );
-        let msr = |rest: Vec<p::Formula>| {
-            let proc: PlainProcess = Process::Action(
-                SapicAction::Msr {
-                    prems: Vec::new(),
-                    acts: vec![ev.clone()],
-                    concs: Vec::new(),
-                    rest,
-                    match_vars: std::collections::BTreeSet::new(),
-                },
-                ProcessParsedAnnotation::empty(),
-                Box::new(Process::Null(ProcessParsedAnnotation::empty())),
-            );
-            pretty_sapic_top_level(&proc)
-        };
+        let proc: PlainProcess = Process::Action(
+            SapicAction::Msr {
+                prems: Vec::new(),
+                acts: vec![ev],
+                concs: Vec::new(),
+                rest: vec![crate::formula::sapic_from_parser(&f, &sig).unwrap()],
+                match_vars: std::collections::BTreeSet::new(),
+            },
+            ProcessParsedAnnotation::empty(),
+            Box::new(Process::Null(ProcessParsedAnnotation::empty())),
+        );
+        pretty_sapic_top_level(&proc)
+    }
 
+    /// An MSR's embedded `_restrict(...)` renders its user-`[AC]` applications
+    /// the way HS's signature-built `SapicTerm`s do: flattened, sorted, infix.
+    /// The render feeds both the `process="..."` attribute and the
+    /// SAPIC-derived rule/restriction names.
+    ///
+    /// Oracle bytes (pinned build, Git revision ef3f0468) for
+    /// `in(k); [ ] --[ Ev(add(k,'a')), _restrict(add(k,'a') = k) ]-> [ ]; out('y')`
+    /// with `functions: add/2 [AC]`:
+    ///   `process=" [ ] --[ Ev( ('a' add k.1) ), _restrict(('a' add k.1) = k.1) ]-> [ ];"`
+    /// and with `functions: add/2`:
+    ///   `process=" [ ] --[ Ev( add(k.1, 'a') ), _restrict(add(k.1, 'a') = k.1) ]-> [ ];"`
+    #[test]
+    fn msr_restriction_renders_user_ac_flattened_sorted_and_infix() {
         // With `add` an ordinary function symbol the application stays
-        // prefix — this is what makes the AC assertion below discriminating.
+        // prefix, which is what makes the AC assertion below discriminating.
         assert_eq!(
-            msr(vec![restr(add_prefix)]),
-            " [ ] --[ Ev( ('a' add k.1) ), _restrict(add(k.1, 'a') = k.1) ]-> [ ];"
+            msr_render("add(k.1,'a')", "add(k.1,'a') = k.1", "functions: add/2"),
+            " [ ] --[ Ev( add(k.1, 'a') ), _restrict(add(k.1, 'a') = k.1) ]-> [ ];"
         );
         assert_eq!(
-            msr(vec![restr(add_ac)]),
+            msr_render(
+                "add(k.1,'a')",
+                "add(k.1,'a') = k.1",
+                "functions: add/2 [AC]"
+            ),
             " [ ] --[ Ev( ('a' add k.1) ), _restrict(('a' add k.1) = k.1) ]-> [ ];"
+        );
+    }
+
+    /// The restriction item is the Doc composition `_restrict(` <> formula <>
+    /// `)`, so a break the formula takes indents by the ten columns of the
+    /// opening operator and the whole item lays out inside the rule.
+    ///
+    /// Oracle bytes (pinned build, Git revision ef3f0468) for
+    /// `functions: aaaaaaaaaa/1, bbbbbbbbbb/1, cccccccccc/1` +
+    /// `in(<xxxxxxxxxx, yyyyyyyyyy, zzzzzzzzzz>); [ ] --[ Ev(xxxxxxxxxx), _restrict( aaaaaaaaaa(xxxxxxxxxx) = bbbbbbbbbb(yyyyyyyyyy) & cccccccccc(zzzzzzzzzz) = aaaaaaaaaa(yyyyyyyyyy) ) ]-> [ ]; out('a')`
+    /// (fixture `sapic_msr_restrict_wrap`).
+    #[test]
+    fn msr_restrict_wraps_under_the_restrict_paren() {
+        let got = msr_render(
+            "xxxxxxxxxx.1",
+            "aaaaaaaaaa(xxxxxxxxxx.1) = bbbbbbbbbb(yyyyyyyyyy.1) \
+             & cccccccccc(zzzzzzzzzz.1) = aaaaaaaaaa(yyyyyyyyyy.1)",
+            "functions: aaaaaaaaaa/1, bbbbbbbbbb/1, cccccccccc/1",
+        );
+        assert_eq!(
+            got,
+            " [ ]\n\
+             --[\n\
+             Ev( xxxxxxxxxx.1 ),\n\
+             _restrict((aaaaaaaaaa(xxxxxxxxxx.1) = bbbbbbbbbb(yyyyyyyyyy.1)) \u{2227}\n\
+             \x20         (cccccccccc(zzzzzzzzzz.1) = aaaaaaaaaa(yyyyyyyyyy.1)))\n\
+             ]->\n\
+             \x20[ ];"
+        );
+        // The derived rule name is `filter isAlpha` over the same string
+        // (Sapic/Facts.hs:401#stripNonAlphanumerical), so the breaks leave it
+        // untouched.
+        let name: String = got.chars().filter(|c| c.is_alphabetic()).collect();
+        assert_eq!(
+            name,
+            "Evxxxxxxxxxxrestrictaaaaaaaaaaxxxxxxxxxxbbbbbbbbbbyyyyyyyyyycccccccccczzzzzzzzzzaaaaaaaaaayyyyyyyyyy"
         );
     }
 }

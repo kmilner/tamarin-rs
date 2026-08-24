@@ -131,8 +131,8 @@ fn collect_action_vars(
             // variable occurring ONLY in a restriction still shifts the fresh
             // indices minted for the rest of the process.
             for f in rest {
-                for lv in cond_formula_free_lvars(f) {
-                    out.insert(SapicLVar::untyped(lv));
+                for v in formula_frees(f) {
+                    out.insert(v);
                 }
             }
         }
@@ -176,40 +176,6 @@ fn collect_comb_vars(
         }
         ProcessCombinator::Parallel | ProcessCombinator::Ndc => {}
     }
-}
-
-/// Free `LVar`s of an MSR's embedded `_restrict` formula (vars not bound by
-/// an enclosing quantifier).  Used to seed the `renameUnique` avoidance set
-/// and as the rename domain.
-fn cond_formula_free_lvars(f: &tamarin_parser::ast::Formula) -> Vec<LVar> {
-    let mut out = Vec::new();
-    crate::convert::fold_free_vars(f, &mut |v, _bound| {
-        out.push(LVar::new(v.name.clone(), v.sort, v.idx));
-    });
-    out
-}
-
-/// Rename the FREE variables of an MSR's embedded `_restrict` formula
-/// according to `subst` (`LVar → LVar`), mirroring the `ff = apply subst`
-/// argument HS threads into `mapTermsAction` (Sapic/Process.hs:155).
-/// Quantifier-bound vars are left untouched (they are not in the subst
-/// domain — process renaming only renames process-bound variables).
-fn rename_cond_formula(
-    subst: &BTreeMap<LVar, LVar>,
-    f: &tamarin_parser::ast::Formula,
-) -> tamarin_parser::ast::Formula {
-    use tamarin_parser::ast as p;
-    crate::convert::map_free_terms(f, &mut |v, _bound| {
-        let key = LVar::new(v.name.clone(), v.sort, v.idx);
-        subst.get(&key).map(|nv| {
-            p::Term::Var(p::VarSpec {
-                name: nv.name.to_string(),
-                idx: nv.idx,
-                sort: v.sort,
-                typ: v.typ.clone(),
-            })
-        })
-    })
 }
 
 /// Rename a SAPIC term's variables according to `subst` (`LVar -> LVar`),
@@ -286,8 +252,13 @@ fn rename_action(
             // HS `mapTermsAction f ff fv (MSR l a r rest mv) = MSR .. (fmap ff
             // rest) ..` (Sapic/Process.hs:155) maps the embedded restriction formulas
             // with the SAME substitution as the fact rows, so the formula's free
-            // variables alpha-rename along with the rule body.
-            rest: rest.iter().map(|f| rename_cond_formula(subst, f)).collect(),
+            // variables alpha-rename along with the rule body.  `apply` on a
+            // `SapicLVar` renames the `LVar` and keeps the type tag
+            // (Theory/Sapic/Term.hs:115-117).
+            rest: rest
+                .iter()
+                .map(|f| apply_rename(f.clone(), &mut |v| rename_sv(subst, v)))
+                .collect(),
             match_vars: match_vars.iter().map(|v| rename_sv(subst, v)).collect(),
         },
         SapicAction::Rep => SapicAction::Rep,
@@ -990,17 +961,14 @@ mod tests {
     ///   `_restrict(k.1 = 'b')` — index 1, matching the renamed `Ev( k.1 )`.
     #[test]
     fn rename_unique_renames_msr_embedded_restriction() {
-        use tamarin_parser::ast as p;
+        use tamarin_theory::atom::ProtoAtom;
+        use tamarin_theory::formula::ProtoFormula;
 
-        let k = || {
-            p::Term::Var(p::VarSpec {
-                typ: None,
-                name: "k".into(),
-                sort: LSort::Msg,
-                idx: 0,
-            })
-        };
-        let restr = p::Formula::Atom(p::Atom::Eq(k(), p::Term::PubLit("b".into())));
+        // `k = 'b'`, with `k` the process variable the enclosing `new` binds.
+        let restr = ProtoFormula::Atom(ProtoAtom::EqE(
+            VTerm::Lit(Lit::Var(tamarin_term::lterm::BVar::Free(slv("k", 0, None)))),
+            VTerm::Lit(Lit::Con(Name::new(tamarin_term::lterm::NameTag::Pub, "b"))),
+        ));
         let ev = tamarin_theory::fact::Fact::new(
             tamarin_theory::fact::FactTag::Proto(
                 tamarin_theory::fact::Multiplicity::Linear,
@@ -1040,13 +1008,11 @@ mod tests {
             "Ev's argument must be k.1"
         );
         // ...and so did the embedded restriction.
-        let p::Formula::Atom(p::Atom::Eq(lhs, _)) = &rest[0] else {
-            panic!("expected an equality restriction");
-        };
-        let p::Term::Var(v) = lhs else {
-            panic!("expected a variable on the left");
-        };
-        assert_eq!((v.name.as_str(), v.idx), ("k", 1));
+        assert_eq!(
+            formula_frees(&rest[0]),
+            vec![slv("k", 1, None)],
+            "the restriction's only free variable must be k.1"
+        );
     }
 
     /// The `gAct Event` case (Typing.hs:145-150) records the event's inferred

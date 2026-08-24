@@ -288,6 +288,12 @@ fn apply_m_action(
             prems: prems.iter().map(|f| subst_fact(subst, f)).collect(),
             acts: acts.iter().map(|f| subst_fact(subst, f)).collect(),
             concs: concs.iter().map(|f| subst_fact(subst, f)).collect(),
+            // HS substitutes here too: `mapTermsAction .. (fmap ff rest) ..`
+            // (Sapic/Process.hs:155) under `apply subst`
+            // (Sapic/Process.hs:319-321).  This arm passes the formulas
+            // through instead, so a call whose body embeds an MSR whose
+            // `_restrict` mentions a parameter keeps the callee's variable
+            // where HS puts the argument.
             rest,
             match_vars,
         }),

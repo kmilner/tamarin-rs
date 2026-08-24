@@ -8,8 +8,7 @@
 // operator_ ")"` (Theory/Model/Rule.hs:1382#ppRestr').  Because the formula
 // is a Doc inside that composition rather than a finished string, the break
 // its conjunction takes (Theory/Model/Formula.hs:493-496) indents the second
-// conjunct by the ten columns of `_restrict(`.  The port flattens the formula
-// before it reaches the rule's layout and emits one line.
+// conjunct by the ten columns of `_restrict(`.
 //
 // The step is reprinted in the `process=` attribute of the rule it generates,
 // once modulo E and once modulo AC, so the shape appears twice.

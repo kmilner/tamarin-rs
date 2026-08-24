@@ -790,3 +790,39 @@ fn condition_public_names_are_harvested_from_the_internal_terms() {
         Vec::<String>::new()
     );
 }
+
+/// HS's `universeBi ru` (Wellformedness.hs:463-483#publicNamesReport') is a
+/// whole-value traversal of the generated rule, so it reaches the embedded
+/// MSR's restriction formulas as well as its fact rows — the end-to-end pin
+/// is `scripts/divergence_fixtures/sapic_pubname_in_restrict`.
+#[test]
+fn process_pub_names_reach_an_msr_embedded_restriction() {
+    use crate::sapic::{Process, ProcessParsedAnnotation, SapicAction};
+
+    let msig = theory_msig("theory T begin\nend");
+    let f = tamarin_parser::parser::parse_formula_str("Eq(h('Foo'), 'bar')", &msig).unwrap();
+    let out_fact = crate::fact::Fact::new(
+        crate::fact::FactTag::Proto(crate::fact::Multiplicity::Linear, "Out", 1),
+        vec![VTerm::Lit(Lit::Con(tamarin_term::lterm::Name::new(
+            tamarin_term::lterm::NameTag::Pub,
+            "baz",
+        )))],
+    );
+    let proc = Process::Action(
+        SapicAction::Msr {
+            prems: Vec::new(),
+            acts: Vec::new(),
+            concs: vec![out_fact],
+            rest: vec![crate::formula::sapic_from_parser(&f, &msig).unwrap()],
+            match_vars: std::collections::BTreeSet::new(),
+        },
+        ProcessParsedAnnotation::empty(),
+        Box::new(Process::Null(ProcessParsedAnnotation::empty())),
+    );
+    let mut got = Vec::new();
+    collect_process_pub_names(&proc, &mut got);
+    assert_eq!(
+        got,
+        vec!["baz".to_string(), "Foo".to_string(), "bar".to_string()]
+    );
+}

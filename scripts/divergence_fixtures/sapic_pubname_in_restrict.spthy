@@ -5,9 +5,8 @@
 // whole-value traversal, so it reaches the source subprocess the rule carries
 // in its `ruleProcess` attribute (Sapic/Facts.hs:376-388#toRule) and with it
 // the `_restrict` formula's terms.  `'Foo'` therefore clashes with the
-// `'foo'` of the `out`, and the oracle reports
-// `1. rule "Init":  name 'Foo', 'foo'`.  The port harvests the embedded MSR's
-// fact terms but not its restriction formulas, so it reports the run clean.
+// `'foo'` of the `out`, and the report names them:
+// `1. rule "Init":  name 'Foo', 'foo'`.
 //
 // Compared slice: the wf report block.  The `theory … end` echo agrees on
 // both engines — the report is the only place the harvest is visible — so

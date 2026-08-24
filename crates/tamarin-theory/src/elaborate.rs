@@ -332,8 +332,9 @@ fn collect_pub_names<V>(t: &VTerm<Name, V>, out: &mut Vec<String>) {
 /// constants from each node's terms — the `universeBi` reach over the source
 /// subprocess HS attaches to a generated rule.  HS's `universeBi` is
 /// field-exhaustive: it also descends into each node's
-/// `ProcessParsedAnnotation.location` term and into a `Cond` combinator's
-/// condition formula (both `Data` in HS), so those are harvested here too.
+/// `ProcessParsedAnnotation.location` term, into a `Cond` combinator's
+/// condition formula and into an `Msr` action's embedded `_restrict`
+/// formulas (all `Data` in HS), so those are harvested here too.
 /// Collection order within a rule differs from HS's (HS walks `rInfo` first,
 /// facts after) but is immaterial: `clashesOn` dedups by (spelling) with the
 /// surviving pair keyed only on (rule name, spelling), which is identical for
@@ -380,12 +381,24 @@ fn collect_process_pub_names(p: &crate::sapic::PlainProcess, out: &mut Vec<Strin
                     }
                 }
                 SA::Msr {
-                    prems, acts, concs, ..
+                    prems,
+                    acts,
+                    concs,
+                    rest,
+                    ..
                 } => {
                     for fa in prems.iter().chain(acts).chain(concs) {
                         for t in fa.terms.iter() {
                             collect_pub_names(t, out);
                         }
+                    }
+                    // An embedded `_restrict` formula is part of the source
+                    // subprocess the generated rule carries, so its `'c'`
+                    // literals are `Name` constants `universeBi` reaches.
+                    for f in rest {
+                        crate::formula::for_each_formula_term(f, &mut |t| {
+                            collect_pub_names(t, out)
+                        });
                     }
                 }
                 SA::Rep | SA::New(_) => {}

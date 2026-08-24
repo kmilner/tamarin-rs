@@ -569,8 +569,16 @@ pub fn base_trans_action(
             // conclusions: def_state' tx' : map TamarinFact r
             let mut conc_facts: Vec<TransFact> = vec![def_state_next(&tx2)];
             conc_facts.extend(r.into_iter().map(TransFact::TamarinFact));
-            // restrictions: the embedded `_restrict` formulas (parser-AST).
-            let body: RuleBody = (prems_facts, act_facts, conc_facts, rest.clone());
+            // restrictions: `map toLFormula res'` (Theory/Sapic/Term.hs:152-154
+            // drops the type tags).  The rule's restriction component is a
+            // parser-AST formula here, so each one crosses back at this
+            // point; `lift_rule_restrictions` (HS `liftedAddProtoRule`) then
+            // expands its predicates.
+            let restr: Vec<tamarin_parser::ast::Formula> = rest
+                .iter()
+                .map(|f| syntactic_lnformula_to_parser(&to_lformula(f)))
+                .collect();
+            let body: RuleBody = (prems_facts, act_facts, conc_facts, restr);
             Ok((vec![body], tx2))
         }
     }

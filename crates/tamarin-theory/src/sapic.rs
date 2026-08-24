@@ -197,9 +197,6 @@ impl GoodAnnotation for ProcessParsedAnnotation {
 // Process
 // =============================================================================
 
-// Note: only `PartialEq` (not `Eq`) — the `Msr` variant carries a
-// `tamarin_parser::ast::Formula` in its `rest` (embedded-restriction) field,
-// which is `PartialEq` but not `Eq`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SapicAction<V> {
     Rep,
@@ -224,14 +221,14 @@ pub enum SapicAction<V> {
         acts: Vec<SapicNFact<V>>,
         concs: Vec<SapicNFact<V>>,
         /// Embedded `_restrict(...)` formulas attached to the MSR's action row
-        /// (`[l]--[a restricting φ]->[r]`).  HS stores these as
-        /// `SapicNFormula v` (Theory/Sapic/Process.hs:81); the RS port carries
-        /// the un-expanded parser-AST [`tamarin_parser::ast::Formula`]
-        /// directly — the base translation (`baseTransAction` MSR,
-        /// Basetranslation.hs:200-203) keeps them as the rule's 4th
-        /// (restriction) component, which then flows through
-        /// `lift_rule_restrictions` (HS `liftedAddProtoRule`) unchanged.
-        rest: Vec<tamarin_parser::ast::Formula>,
+        /// (`[l]--[a restricting φ]->[r]`).  HS `iRest :: [SapicNFormula v]`
+        /// (Theory/Sapic/Process.hs:81): each is a locally-nameless formula
+        /// over the process's own variable type, with the parser's `Pred`
+        /// sugar left un-expanded — the base translation (`baseTransAction`
+        /// MSR, Basetranslation.hs:200-203) hands them to the rule's 4th
+        /// (restriction) component, where `lift_rule_restrictions`
+        /// (HS `liftedAddProtoRule`) expands the predicates.
+        rest: Vec<SapicNFormula<V>>,
         match_vars: BTreeSet<V>,
     },
 }
@@ -257,8 +254,6 @@ pub enum ProcessCombinator<V> {
     },
 }
 
-// Note: only `PartialEq` (not `Eq`) — an `Action` may carry a
-// `SapicAction::Msr`, whose `rest` field is `PartialEq` but not `Eq`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Process<Ann, V> {
     Null(Ann),

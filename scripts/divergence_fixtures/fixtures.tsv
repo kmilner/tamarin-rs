@@ -41,6 +41,6 @@ s1_sort_suffix	wf,theory	match	--derivcheck-timeout=0
 s1_nullary_late_decl	wf,theory	match	--derivcheck-timeout=0
 sapic_cond_wrap	theory	match	--derivcheck-timeout=0
 sapic_cond_type_tag	theory	match	-m=spthytyped --derivcheck-timeout=0
-sapic_msr_restrict_wrap	theory	diverge	--derivcheck-timeout=0
-sapic_pubname_in_restrict	wf	diverge	--derivcheck-timeout=0
+sapic_msr_restrict_wrap	theory	match	--derivcheck-timeout=0
+sapic_pubname_in_restrict	wf	match	--derivcheck-timeout=0
 sapic_cond_binder	wf,theory	match	--derivcheck-timeout=0
