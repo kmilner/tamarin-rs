@@ -966,127 +966,29 @@ fn rule_renames_under_precise(rule: &ProtoRuleE) -> bool {
     false
 }
 
-/// Apply HS-style `renamePrecise` to a rule + its variant disjunction
-/// substs.  Mirrors HS `Precise.evalFresh (renamePrecise x) Precise.nothingUsed`
-/// applied to a `Rule ProtoRuleACInfo` (variants live INSIDE info).
+/// Apply HS-style `renamePrecise` to a rule + its variant disjunction substs.
+/// Mirrors HS `Precise.evalFresh (renamePrecise x) Precise.nothingUsed`
+/// applied to a `Rule ProtoRuleACInfo`, whose variants live INSIDE info.
 ///
-/// HS traversal order (Theory/Model/Rule.hs:291-306 `HasFrees (Rule i)`;
-/// Theory/Model/Rule.hs:503-515
-/// `HasFrees ProtoRuleACInfo`; SubstVFresh.hs:196-202 `HasFrees SubstVFresh`):
+/// The pair hands the substitutions to the walk first because that is where
+/// HS reaches them: `HasFrees (Rule i)` folds `info` ahead of the premises,
+/// conclusions, actions and new variables (Theory/Model/Rule.hs:291-306), and
+/// `HasFrees ProtoRuleACInfo` (Theory/Model/Rule.hs:503-515) reaches the
+/// variant disjunction through it, beside a name, attributes and loop
+/// breakers that carry no variables.
 ///
-///   mapFrees (Rule i ps cs as nvs) =
-///     Rule <$> mapFrees i  -- variants Disj walked here (KEYS-ONLY)
-///          <*> mapFrees ps
-///          <*> mapFrees cs
-///          <*> mapFrees as
-///          <*> mapFrees nvs
-///
-/// Crucially:
-///   - HS's `HasFrees (SubstVFresh n LVar)` walks ONLY the domain (keys),
-///     never the range (`foldFrees f = foldFrees f . M.keys . svMap`).
-///   - HS's `mapFrees` for `SubstVFresh` likewise only RENAMES keys; the
-///     range terms are passed through unchanged (`mapDomain (v, t) = (,t) <$>
-///     mapFrees f v`).
-///
-/// Walking/renaming the subst RANGE (instead of keys-only) would
-/// introduce extra names into PreciseFreshState and rewrite range vars
-/// HS leaves alone, diverging downstream variable idxs and AC-sorted
-/// variant order (symptom on JKL_TS1_2004: `Sessk_reveal_case_3` vs HS
-/// `Sessk_reveal_case_4`).
-// var->var precise-rename map; keyed lookup only, never iterated;
-// std kept (byte-inert) — iteration order never reaches output.
-#[allow(clippy::disallowed_types)]
+/// `HasFrees (SubstVFresh n LVar)` (SubstVFresh.hs:196-202) sees the DOMAIN
+/// keys alone, in the fold and in the map, so a range term neither draws a
+/// per-name index nor gets rewritten.  Walking the range would feed extra
+/// names to the precise supply and rewrite variables HS leaves alone, moving
+/// downstream variable indices and the AC-sorted variant order (symptom on
+/// JKL_TS1_2004: `Sessk_reveal_case_3` against HS's `Sessk_reveal_case_4`).
 fn rename_precise_rule_with_variants(
     rule: ProtoRuleE,
     substs: Vec<LNSubstVFresh>,
 ) -> (ProtoRuleE, Vec<LNSubstVFresh>) {
-    use std::collections::HashMap;
-    use tamarin_term::lterm::HasFrees;
-    use tamarin_utils::fresh::PreciseFreshState;
-
-    let mut state = PreciseFreshState::nothing_used();
-    let mut map: HashMap<LVar, LVar> = HashMap::new();
-    let import = |v: &LVar, st: &mut PreciseFreshState, m: &mut HashMap<LVar, LVar>| {
-        if m.contains_key(v) {
-            return;
-        }
-        let idx = st.fresh_ident(v.name);
-        let new_v = LVar {
-            name: v.name,
-            sort: v.sort,
-            idx,
-        };
-        m.insert(*v, new_v);
-    };
-
-    // Phase 1: walk every free LVar in HS's `mapFrees (Rule ProtoRuleACInfo)`
-    // order. `HasFrees ProtoRuleACInfo` (Theory/Model/Rule.hs:503-515) walks
-    // the fields in declaration order (Theory/Model/Rule.hs:433-439):
-    // name|attr|variants|breakers; name/attr/breakers are empty
-    // (RuleAttributes, Theory/Model/Rule.hs:367-379), so effectively variants
-    // Disj first (KEYS-ONLY per SubstVFresh.hs:196-202).  THEN prems, concs,
-    // acts, new_vars (Theory/Model/Rule.hs:303-306).
-    for s in &substs {
-        for (k, _t) in s.to_list() {
-            import(&k, &mut state, &mut map);
-            // Range NOT walked: HS `HasFrees (SubstVFresh n LVar)` is
-            // keys-only.  Walking the range here introduces extra names
-            // and shifts per-name counters away from HS.
-        }
-    }
-    for f in rule
-        .premises
-        .iter()
-        .chain(&rule.conclusions)
-        .chain(&rule.actions)
-    {
-        for t in f.terms.iter() {
-            t.for_each_free(&mut |v| import(v, &mut state, &mut map));
-        }
-    }
-    for t in &rule.new_vars {
-        t.for_each_free(&mut |v| import(v, &mut state, &mut map));
-    }
-
-    if map.is_empty() {
-        return (rule, substs);
-    }
-
-    // Phase 2: apply the renaming map.
-    let map_var = |v: &LVar| -> LVar { map.get(v).copied().unwrap_or(*v) };
-    let map_term = |t: LNTerm| -> LNTerm { t.map_free(&mut |v| map_var(&v)) };
-    let map_facts = |fs: Vec<Fact<LNTerm>>| -> Vec<Fact<LNTerm>> {
-        fs.into_iter()
-            .map(|f| {
-                // Var rename — frees change; recompute the bloom.
-                let terms: Vec<LNTerm> = f.terms.iter().cloned().map(map_term).collect();
-                Fact::fresh_annotated(f.tag, f.annotations, terms)
-            })
-            .collect()
-    };
-
-    let new_premises = map_facts(rule.premises);
-    let new_conclusions = map_facts(rule.conclusions);
-    let new_actions = map_facts(rule.actions);
-    let new_nvs: Vec<LNTerm> = rule.new_vars.into_iter().map(map_term).collect();
-    let new_rule = crate::rule::Rule::new(rule.info, new_premises, new_conclusions, new_actions)
-        .with_new_vars(new_nvs);
-
-    // HS-faithful: SubstVFresh.hs:199-202 — `mapFrees` only renames the
-    // DOMAIN, leaving the range terms identical (`(,t) <$> mapFrees f v`).
-    let new_substs: Vec<LNSubstVFresh> = substs
-        .into_iter()
-        .map(|s| {
-            let pairs: Vec<(LVar, LNTerm)> = s
-                .to_list()
-                .into_iter()
-                .map(|(k, t)| (map_var(&k), t))
-                .collect();
-            LNSubstVFresh::from_list(pairs)
-        })
-        .collect();
-
-    (new_rule, new_substs)
+    let (substs, rule) = tamarin_term::bind::rename_precise((substs, rule));
+    (rule, substs)
 }
 
 /// `findPos`-style subterm check: returns true if `needle` appears
@@ -1281,5 +1183,24 @@ mod tests {
         // `commonSubst` is empty too, so `~k` survives verbatim in the body.
         assert_eq!(ac.premises, vec![prem]);
         assert_eq!(ac.conclusions, vec![conc]);
+    }
+
+    /// `renamePrecise` numbers each name from zero in the order the walk
+    /// reaches it, and the pair puts the variant substitutions ahead of the
+    /// rule body, so the substitution's domain key takes `x.0` and the
+    /// premise's variable follows at `x.1`.  The range of the substitution is
+    /// outside the walk, so the variable there keeps the index it came with.
+    #[test]
+    fn rename_precise_rule_visits_variant_keys_before_facts() {
+        let mvar = |idx| LVar::new("x", LSort::Msg, idx);
+        let mterm = |idx| -> LNTerm { Term::Lit(Lit::Var(mvar(idx))) };
+        let mut rule = empty_rule("R");
+        rule.premises = vec![Fact::new(FactTag::Out, vec![mterm(5)])];
+        let substs = vec![LNSubstVFresh::from_list(vec![(mvar(9), mterm(7))])];
+
+        let (renamed, renamed_substs) = rename_precise_rule_with_variants(rule, substs);
+
+        assert_eq!(renamed_substs[0].to_list(), vec![(mvar(0), mterm(7))]);
+        assert_eq!(renamed.premises[0].terms[0], mterm(1));
     }
 }

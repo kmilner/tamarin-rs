@@ -831,11 +831,11 @@ fn formula_to_system_partitions_safety_restrictions() {
 // HasFrees
 // =============================================================================
 
-use crate::constraint::constraints::{Reason, SplitId};
+use crate::constraint::constraints::{Disj, Reason, SplitId};
 use crate::rule::{ConcIdx, PremIdx};
 use crate::tools::equation_store::EqDisj;
 use crate::tools::subterm_store::{SortedPairSet, SubtermConstraint};
-use tamarin_term::lterm::{frees_list, HasFrees, LNTerm};
+use tamarin_term::lterm::{frees, frees_list, HasFrees, LNTerm};
 use tamarin_term::subst::Subst;
 use tamarin_term::subst_vfresh::SubstVFresh;
 use tamarin_term::term::Term;
@@ -1097,5 +1097,50 @@ fn map_free_mints_stamps_and_invalidates_both_caches() {
         bounds_max(&mapped),
         uncached,
         "a stale cache would report {before}"
+    );
+}
+
+/// `bounds_max` (reduction.rs) is a hand-written twin of this fold, kept for
+/// its static dispatch on the solver's hot path.  Lifting any one variable the
+/// instance walks above all the others lifts the twin's maximum with it, so
+/// the two cover the same fields.  A disjunction goal is the exception the
+/// twin makes on purpose: the variables under a disjunction do not raise the
+/// fresh-index floor.
+#[test]
+fn bounds_max_covers_every_field_except_disj_goals() {
+    use crate::constraint::solver::reduction::bounds_max_uncached;
+    const ABOVE_ALL: u64 = 10_000;
+    let walked = frees(&one_variable_per_field_system());
+    for v in &walked {
+        let bumped = one_variable_per_field_system().map_free(&mut |w: LVar| {
+            if w == *v {
+                LVar::new(w.name, w.sort, ABOVE_ALL)
+            } else {
+                w
+            }
+        });
+        assert_eq!(
+            bounds_max_uncached(&bumped),
+            ABOVE_ALL,
+            "the twin does not reach {v:?}"
+        );
+    }
+
+    let top = walked.last().expect("the fixture carries variables").idx;
+    let mut with_disj = one_variable_per_field_system();
+    let mut goals = (*with_disj.goals).clone();
+    goals.push((
+        Goal::Disj(Disj::new(vec![last_formula(ABOVE_ALL)])),
+        GoalStatus::default(),
+    ));
+    with_disj.content_mut().goals = Arc::new(goals);
+    assert!(
+        frees_list(&with_disj).contains(&nvar(ABOVE_ALL)),
+        "the instance reaches a disjunction goal's formulas"
+    );
+    assert_eq!(
+        bounds_max_uncached(&with_disj),
+        top,
+        "the twin skips a disjunction goal"
     );
 }

@@ -1332,7 +1332,7 @@ impl<'ctx> Reduction<'ctx> {
         // re-insert via `insert_action`-equivalent so the pair/inv/prod
         // auto-decomp fires retroactively.  This re-insert path is sound
         // only because `system_max_idx` walks goals/formulas/eq_store: an
-        // incomplete max-idx lets `freshen_system` assign colliding idxs
+        // incomplete max-idx lets `rename_system_above` assign colliding idxs
         // across grafted instances, conflating Maude witnesses in
         // chain-saturated graft cases.
         let mut to_insert_action: Vec<(
@@ -5067,24 +5067,25 @@ pub fn bounds_max_rest(sys: &System) -> u64 {
     max
 }
 
-/// Fresh-rename a `RuleACInst` so its free variables don't collide
-/// with anything below `avoid_max`.
+/// Freshen a `(RuleACInst, Option<Vec<LNSubstVFresh>>)` pair: one uniform
+/// index shift moves the rule's free variables and the substitutions' DOMAIN
+/// keys together, so the disjunction stays aligned with the renamed rule while
+/// its range terms — whose variables count as fresh (SubstVFresh.hs:196-202) —
+/// are carried over untouched, which is what keeps an AC-narrowed variant in
+/// HS's argument order (`Mult(lkI.N, lkR.N)`, not `Mult(lkI.X, lkR.Y)`).
+/// Mirrors HS `someRuleACInst = fmap extractInsts . rename`
+/// (Theory/Model/Rule.hs:1013-1028, see line 1017), where the variant
+/// disjunction sits inside the rule's info and `rename` (LTerm.hs:638-645)
+/// reaches it through `HasFrees`.
 ///
-/// **Haskell-faithful counter**: shifts use the MaudeHandle's global
-/// `fresh_counter` (mirrors `MonadFresh`).  Without a global counter,
-/// two sequential freshen_rule calls with the same `avoid_max` (e.g.
-/// during parallel source-case enumeration where the system isn't
-/// updated between calls) shift to identical idx ranges — producing
-/// the cross-call `~mw:Pub:N` / `~mw:Msg:N` collision class that
-/// breaks TESLA::authentic_reachable.  Drawing from the global
-/// counter guarantees every freshen produces a globally-unique idx
-/// range.
-/// Freshen a `(RuleACInst, Option<Vec<LNSubstVFresh>>)` pair, applying
-/// the same idx-shift to both the rule's free vars and the substs'
-/// domains+ranges. Mirrors Haskell's `someRuleACInst`'s use of
-/// `fmap extractInsts . rename` (Model/Rule.hs:1013-1028, see line 1017): the `rename` runs
-/// over the whole rule+constrs pair via `MonadFresh`, so the
-/// disjunction's vars stay aligned with the renamed rule.
+/// The shift is drawn from the MaudeHandle's counter, the port's `MonadFresh`
+/// for the solver.  Two calls made against one system — parallel source-case
+/// enumeration updates it only afterwards — see the same `avoid_max`, so a
+/// per-call counter would shift both rules into the same index range and
+/// produce the cross-call `~mw:Pub:N` / `~mw:Msg:N` collision that breaks
+/// TESLA::authentic_reachable.  `ensure_above` lifts the counter over the
+/// system's own indices before the shift; a pair with no free variable leaves
+/// it where it stands, as `rename` draws no index for one.
 fn freshen_rule_with_constrs(
     rule: RuleACInst,
     constrs: Option<Vec<tamarin_term::subst_vfresh::LNSubstVFresh>>,
@@ -5094,78 +5095,12 @@ fn freshen_rule_with_constrs(
     RuleACInst,
     Option<Vec<tamarin_term::subst_vfresh::LNSubstVFresh>>,
 ) {
-    use tamarin_term::lterm::{HasFrees, LVar};
-    // Combined bounds across rule + constrs.
-    //
-    // HS-faithful: `someRuleACInst` calls `rename` on the whole
-    // `Rule (ProtoInfo i)` where the variants Disj sits INSIDE info.
-    // `rename` uses `boundsVarIdx` (LTerm.hs:674-675), which folds via
-    // `HasFrees`. For `SubstVFresh n LVar` (SubstVFresh.hs:196-198),
-    // `foldFrees f = foldFrees f . M.keys . svMap` — DOMAIN only.
-    // Likewise `mapFrees` (line 199-202) maps the domain and leaves the
-    // range untouched.  Walking + shifting the range too
-    // produces different idxs on AC-narrowed variants vs HS
-    // (e.g. Mult(lkI.X, lkR.Y) sorted differently than HS's
-    // Mult(lkI.N, lkR.N)).
-    let mut min = u64::MAX;
-    let mut max = 0u64;
-    let mut any = false;
-    let mut acc = |v: &LVar| {
-        any = true;
-        if v.idx < min {
-            min = v.idx;
-        }
-        if v.idx > max {
-            max = v.idx;
-        }
-    };
-    rule.for_each_free(&mut acc);
-    if let Some(cs) = &constrs {
-        for s in cs {
-            for k in s.dom() {
-                acc(k);
-                // Range NOT walked (HS-faithful keys-only fold).
-            }
-        }
-    }
-    if !any {
-        return (rule, constrs);
+    let pair = (rule, constrs);
+    if tamarin_term::lterm::bounds_var_idx(&pair).is_none() {
+        return pair;
     }
     maude.ensure_above(avoid_max);
-    let span = max.saturating_sub(min).saturating_add(1);
-    let base = maude.reserve_idxs(span);
-    let shift = (base as i128) - (min as i128);
-    let shift_idx = |idx: u64| -> u64 { ((idx as i128) + shift) as u64 };
-    // HS `someRuleACInst` = `rename` (Theory/Model/Rule.hs:1013-1028, see line 1017,
-    // LTerm.hs:638-645, see line 639) is Monotone:
-    // the uniform index shift preserves AC arg order (`unsafefApp`).
-    let new_rule = rule.map_free_monotone(&mut |LVar { name, sort, idx }| LVar {
-        name,
-        sort,
-        idx: shift_idx(idx),
-    });
-    let new_constrs = constrs.map(|cs| {
-        cs.into_iter()
-            .map(|s| {
-                let pairs: Vec<_> = s
-                    .to_list()
-                    .into_iter()
-                    .map(|(k, v)| {
-                        let new_k = LVar {
-                            name: k.name,
-                            sort: k.sort,
-                            idx: shift_idx(k.idx),
-                        };
-                        // HS-faithful: SubstVFresh.hs:199-202 leaves range terms
-                        // unchanged — `(,t) <$> mapFrees f v` only maps domain.
-                        (new_k, v)
-                    })
-                    .collect();
-                tamarin_term::subst_vfresh::LNSubstVFresh::from_list(pairs)
-            })
-            .collect()
-    });
-    (new_rule, new_constrs)
+    tamarin_term::lterm::rename(pair, &mut &*maude)
 }
 
 fn freshen_rule(
@@ -5174,10 +5109,9 @@ fn freshen_rule(
     maude: &tamarin_term::maude_proc::MaudeHandle,
 ) -> RuleACInst {
     // Identical to `freshen_rule_with_constrs` with no constrs: a `None`
-    // constraints arg contributes nothing to the bounds fold and yields a
-    // `None` `new_constrs`, so the two share the exact same
-    // bounds/ensure_above/reserve_idxs/monotone-shift arithmetic.  Keep
-    // that one copy in lockstep by delegating here.
+    // contributes nothing to the pair's bounds and comes back `None`, so the
+    // two share one bounds check, one counter lift and one shift.  Keep that
+    // single copy in lockstep by delegating here.
     freshen_rule_with_constrs(rule, None, avoid_max, maude).0
 }
 

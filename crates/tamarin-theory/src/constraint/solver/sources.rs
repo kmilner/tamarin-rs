@@ -2672,7 +2672,7 @@ pub fn solve_with_source_cases_ctx(
 /// subterms (SubtermStore.hs:552-557) included — and leaves the ranges of the
 /// equation store's disjunctions alone, whose variables count as fresh
 /// (SubstVFresh.hs:196-202).
-fn freshen_system(sys: &System, avoid_max: u64) -> System {
+fn rename_system_above(sys: &System, avoid_max: u64) -> System {
     let shift = avoid_max.saturating_add(1);
     let out = rename_system_by(sys, i128::from(shift));
     // The map invalidates the node-component cache, because a rename can LOWER
@@ -2954,7 +2954,7 @@ pub fn solve_with_source_cases_action_with_ctx(
             // HS-faithful: stored case name is already final; use verbatim
             // (no `_`-splitting).  See note at the action-goal call site.
             let case_label = name.clone();
-            let renamed = freshen_system(&case_sys, avoid_max);
+            let renamed = rename_system_above(&case_sys, avoid_max);
             let abstract_renamed = {
                 let mut v = abstract_orig;
                 v.idx = v.idx.saturating_add(avoid_max.saturating_add(1));
@@ -3490,8 +3490,8 @@ fn refine_source_case_action(
     //
     // The whole refine (A.3 solve + per-arm fork/subst_system below)
     // runs under HS's `fs = avoid th` seed via `RefineFsScope`; the
-    // guard drops at function end, and someInst (`freshen_system_
-    // some_inst`) draws directly from `red_m` so it is floor-immune —
+    // guard drops at function end, and someInst (`some_inst_system`)
+    // draws directly from `red_m` so it is floor-immune —
     // matching HS where someInst runs in the LIVE Reduction, outside
     // refineSource's runReduction.
     // ---------------------------------------------------------------

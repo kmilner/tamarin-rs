@@ -659,7 +659,7 @@ fn shift_keeps_ac_arg_order() {
 }
 
 // =========================================================================
-// freshen_system
+// rename_system_above
 // =========================================================================
 
 /// The saturate-time shift is `rename` over `instance HasFrees System`
@@ -671,7 +671,7 @@ fn shift_keeps_ac_arg_order() {
 #[test]
 fn saturate_shift_moves_disj_and_subterm_goals_and_leaves_conj_ranges() {
     let sys = system_with_a_variable_per_field(mterm(11));
-    let out = freshen_system(&sys, 999);
+    let out = rename_system_above(&sys, 999);
 
     let expected: Vec<LVar> = frees_list(&sys)
         .into_iter()
@@ -714,7 +714,7 @@ fn saturate_shift_carries_the_node_component_cache() {
         .get()
         .expect("bounds_max populates the node component");
 
-    let out = freshen_system(&sys, 999);
+    let out = rename_system_above(&sys, 999);
     assert_eq!(out.node_max_cache.get(), Some(before + 1000));
     assert_eq!(bounds_max(&out), bounds_max_uncached(&out));
 }
