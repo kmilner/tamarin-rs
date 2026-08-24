@@ -732,7 +732,7 @@ fn render_open_item(
         | IntrRule(_)
         | DiffLemma(_) => Vec::new(),
         Rule(r) => vec![render_open_rule(r, arity1)],
-        Lemma(l) => vec![render_open_lemma(l, predicates, in_file, arity1, msig)],
+        Lemma(l) => vec![render_open_lemma(l, predicates, in_file, arity1, msig)?],
         // `axiom` is the deprecated synonym parsed into a `RestrictionItem`
         // (`legacyAxiom` → `liftedAddRestriction`, Theory/Text/Parser.hs:270-272).
         Restriction(r) | LegacyAxiom(r) => {
@@ -970,7 +970,7 @@ fn render_open_lemma(
     in_file: &str,
     arity1: &std::collections::HashSet<String>,
     msig: &tamarin_term::maude_sig::MaudeSig,
-) -> String {
+) -> Result<String, String> {
     // HS `expandLemma` (TheoryObject.hs:439-446) predicate-expands the lemma
     // formula at parse; the term parser folds surplus args of arity-1
     // functions into a pair (`naryOpApp` `k == 1`, Parser/Term.hs:94-96) —
@@ -991,14 +991,16 @@ fn render_open_lemma(
     );
     out.push('\n');
     match lem.proof.as_ref().and_then(|ps| ps.tree.as_ref()) {
-        Some(tree) => {
+        Some(parsed) => {
+            let tree = crate::elaborate::proof_tree_from_parsed(parsed, msig)
+                .map_err(|e| format!("in the proof of lemma `{}`: {}", lem.name, e.message))?;
             let mut body = String::new();
-            pp_open_proof(tree, &mut body, 0, msig);
+            pp_open_proof(&tree, &mut body, 0);
             out.push_str(&body);
         }
         None => out.push_str("by sorry"),
     }
-    out
+    Ok(out)
 }
 
 /// Open-print restriction — HS `prettyRestriction` (TheoryObject.hs:889-901)
@@ -1093,65 +1095,22 @@ fn open_process_doc(pr: &crate::sapic::PlainProcess) -> crate::pretty_hpj::Doc {
     }
 }
 
-/// The parsed proof-method Doc for the open skeleton echo — HS
-/// `prettyProofMethod` (ProofMethod.hs:1173-1187) over the methods the proof
-/// PARSER can produce (Parser/Proof.hs:75-85: reasons are always `Nothing`,
-/// so `sorry`/`contradiction` never carry comments).
-fn open_method_doc(
-    m: &tamarin_parser::ast::ParsedMethod,
-    msig: &tamarin_term::maude_sig::MaudeSig,
-) -> crate::pretty_hpj::Doc {
-    use crate::pretty_hpj::{keyword_, line_comment_, Doc};
-    use tamarin_parser::ast::ParsedMethod as PM;
-    match m {
-        PM::Sorry => keyword_("sorry"),
-        PM::Contradiction => keyword_("contradiction"),
-        PM::Simplify => keyword_("simplify"),
-        PM::Induction => keyword_("induction"),
-        // HS keeps `SolveGoal goal` structured and re-prints it via
-        // `prettyGoal`, so the stored layout is never echoed verbatim: the
-        // goal is converted and laid out by the same builder the live path
-        // uses, and the forms that carry no `Goal` value go through
-        // `raw_solve_to_doc`.
-        PM::SolveGoal(spec, raw) => match crate::elaborate::goal_from_parsed(spec, msig) {
-            Ok(g) => solve_step_doc(&g),
-            Err(_) => raw_solve_to_doc(raw, msig),
-        },
-        PM::SolvedLeaf => keyword_("SOLVED").beside_sp(line_comment_("trace found")),
-        PM::Unfinishable => {
-            keyword_("UNFINISHABLE").beside_sp(line_comment_("reducible operator in subterm"))
-        }
-        PM::Invalidated => line_comment_(
-            "proof may have been invalidated by editing a reuse lemma above. You should ",
-        ),
-        // Unrecognised method tokens: echo the captured text (parser
-        // fall-through; not produced for well-formed proofs).
-        PM::Other(s) => Doc::text(s.clone()),
-    }
-}
-
-/// Echo a PARSED proof skeleton — HS `prettyProof = prettyProofWith
+/// Echo a stored proof skeleton — HS `prettyProof = prettyProofWith
 /// (prettyProofMethod . psMethod) (const id)` (Theory/Proof.hs:1051-1075).
-/// Same case/next/qed assembly as the closed `pp_proof`, over the parsed
-/// tree.  Cases were stored via `M.fromList` (Parser/Proof.hs:112), so they
+/// Same case/next/qed assembly as the closed `pp_proof`, over the stored
+/// tree.  Cases were stored via `M.fromList` (Parser/Proof.hs:113), so they
 /// echo in SORTED name order regardless of source order (oracle-verified).
-fn pp_open_proof(
-    tree: &tamarin_parser::ast::ParsedProofTree,
-    out: &mut String,
-    depth: usize,
-    msig: &tamarin_term::maude_sig::MaudeSig,
-) {
-    use tamarin_parser::ast::ParsedMethod as PM;
+fn pp_open_proof(tree: &crate::theory::ProofTree, out: &mut String, depth: usize) {
+    use crate::constraint::solver::proof_method::{ProofMethod as PM, Result as MR};
     let base = depth * 2;
-    let mut cases: Vec<&(String, tamarin_parser::ast::ParsedProofTree)> =
-        tree.cases.iter().collect();
+    let mut cases: Vec<&(String, crate::theory::ProofTree)> = tree.cases.iter().collect();
     cases.sort_by(|a, b| a.0.cmp(&b.0));
     match cases.as_slice() {
         // `ppCases ps@(ProofStep (Finished Solved) _) [] = prettyStep ps`
         // (Theory/Proof.hs:1064) — no `by ` prefix on the SOLVED leaf.
-        [] if matches!(tree.method, PM::SolvedLeaf) => {
+        [] if matches!(tree.method, PM::Finished(MR::Solved)) => {
             out.push_str(&pf::step_line_with_unann(
-                open_method_doc(&tree.method, msig),
+                pp_step_doc(&tree.method, ""),
                 base,
                 true,
                 "",
@@ -1160,7 +1119,7 @@ fn pp_open_proof(
         // `ppCases ps [] = prettyCase ps (kwBy <> text " ") <> prettyStep ps`.
         [] => {
             out.push_str(&pf::step_line_with_unann(
-                open_method_doc(&tree.method, msig),
+                pp_step_doc(&tree.method, ""),
                 base,
                 true,
                 "by ",
@@ -1169,18 +1128,18 @@ fn pp_open_proof(
         // `ppCases ps [("", prf)] = prettyStep ps $-$ ppPrf prf`.
         [(label, child)] if label.is_empty() => {
             out.push_str(&pf::step_line_with_unann(
-                open_method_doc(&tree.method, msig),
+                pp_step_doc(&tree.method, ""),
                 base,
                 true,
                 "",
             ));
             out.push('\n');
             out.push_str(&"  ".repeat(depth));
-            pp_open_proof(child, out, depth, msig);
+            pp_open_proof(child, out, depth);
         }
         multi => {
             out.push_str(&pf::step_line_with_unann(
-                open_method_doc(&tree.method, msig),
+                pp_step_doc(&tree.method, ""),
                 base,
                 true,
                 "",
@@ -1198,7 +1157,7 @@ fn pp_open_proof(
                 out.push_str(name);
                 out.push('\n');
                 out.push_str(&pad);
-                pp_open_proof(child, out, depth + 1, msig);
+                pp_open_proof(child, out, depth + 1);
             }
             out.push('\n');
             out.push_str(&"  ".repeat(depth));
@@ -3815,24 +3774,13 @@ fn is_safety_formula_parsed(f: &p::Formula, msig: &tamarin_term::maude_sig::Maud
 /// - Multiple children                   → `<step>\n  case A\n  ...\nnext\n  case B\n  ...\nqed`
 ///
 /// Mirrors `Theory.Proof.prettyProofWith` (Theory/Proof.hs:1054-1075).
-///
-/// `sig` supplies the user-declared `[AC]` symbol names an unannotated
-/// (replayed) step's stored goal text is re-parsed with.
-pub fn pretty_proof_body(
-    node: &crate::constraint::solver::search::ProofNode,
-    sig: &tamarin_term::maude_sig::MaudeSig,
-) -> String {
+pub fn pretty_proof_body(node: &crate::constraint::solver::search::ProofNode) -> String {
     let mut out = String::new();
-    pp_proof(node, &mut out, 0, sig);
+    pp_proof(node, &mut out, 0);
     out
 }
 
-fn pp_proof(
-    node: &crate::constraint::solver::search::ProofNode,
-    out: &mut String,
-    depth: usize,
-    msig: &tamarin_term::maude_sig::MaudeSig,
-) {
+fn pp_proof(node: &crate::constraint::solver::search::ProofNode, out: &mut String, depth: usize) {
     use crate::constraint::solver::proof_method::{ProofMethod, Result as MR};
     // The step's first char lands at col `depth*2` (proof body uses
     // 2-space indent per nesting level).
@@ -3859,7 +3807,7 @@ fn pp_proof(
 
     match (&node.method, cases.as_slice()) {
         (ProofMethod::Finished(MR::Solved), []) => {
-            let doc = pp_step_doc(&node.method, "", msig);
+            let doc = pp_step_doc(&node.method, "");
             out.push_str(&pf::step_line_with_unann(doc, base, annotated, ""));
         }
         (_, []) => {
@@ -3879,11 +3827,11 @@ fn pp_proof(
             // the method's own wrapped continuation columns by the prefix
             // width and counts it toward the ribbon, so the method lines
             // stay byte-identical to HS.
-            let doc = pp_step_doc(&node.method, "", msig);
+            let doc = pp_step_doc(&node.method, "");
             out.push_str(&pf::step_line_with_unann(doc, base, annotated, "by "));
         }
         (_, [(label, child)]) if label.is_empty() => {
-            let doc = pp_step_doc(&node.method, "", msig);
+            let doc = pp_step_doc(&node.method, "");
             out.push_str(&pf::step_line_with_unann(doc, base, annotated, ""));
             out.push('\n');
             // HS `ppCases ps [("", prf)] = prettyStep ps $-$ ppPrf prf`
@@ -3894,10 +3842,10 @@ fn pp_proof(
             // we reproduce that here: write the same `depth`-level indent
             // before recursing into the child.
             out.push_str(&"  ".repeat(depth));
-            pp_proof(child, out, depth, msig);
+            pp_proof(child, out, depth);
         }
         (_, multi) => {
-            let doc = pp_step_doc(&node.method, "", msig);
+            let doc = pp_step_doc(&node.method, "");
             out.push_str(&pf::step_line_with_unann(doc, base, annotated, ""));
             for (i, (name, child)) in multi.iter().enumerate() {
                 if i > 0 {
@@ -3916,7 +3864,7 @@ fn pp_proof(
                 out.push_str(name);
                 out.push('\n');
                 out.push_str(&pad);
-                pp_proof(child, out, depth + 1, msig);
+                pp_proof(child, out, depth + 1);
             }
             out.push('\n');
             out.push_str(&"  ".repeat(depth));
@@ -3932,13 +3880,10 @@ fn pp_proof(
 /// web UI's applicable-methods list + proof snippet (`tamarin-server`), which
 /// must match `--prove`'s method text.  Rendered at the process display width
 /// (100 for the web); the semantic web gate normalises any wrapping away.
-/// `sig` supplies the user-declared `[AC]` symbol names a `RawSolve`
-/// method's stored goal text is re-parsed with.
 pub fn pretty_proof_method_inline(
     m: &crate::constraint::solver::proof_method::ProofMethod,
-    sig: &tamarin_term::maude_sig::MaudeSig,
 ) -> String {
-    pp_step_doc(m, "", sig).render()
+    pp_step_doc(m, "").render()
 }
 
 /// HS `prettyProofMethod m` as a Doc (ProofMethod.hs:1170-1186), for
@@ -3946,13 +3891,11 @@ pub fn pretty_proof_method_inline(
 /// "Applicable Proof Methods" list (`Web/Theory.hs:513-611, see line 546` `numbered' $
 /// zipWith prettyPM [1..] pms`), where the `N. ` prefix beside-shift and
 /// the trailing `// expl` line comment both participate in the HughesPJ
-/// fill decisions.  `sig` supplies the user-declared `[AC]` symbol names a
-/// `RawSolve` method's stored goal text is re-parsed with.
+/// fill decisions.
 pub fn pretty_proof_method_doc(
     m: &crate::constraint::solver::proof_method::ProofMethod,
-    sig: &tamarin_term::maude_sig::MaudeSig,
 ) -> crate::pretty_hpj::Doc {
-    pp_step_doc(m, "", sig)
+    pp_step_doc(m, "")
 }
 
 /// Build the proof-step method as a `pretty_hpj::Doc` so it can be
@@ -3966,7 +3909,6 @@ pub fn pretty_proof_method_doc(
 fn pp_step_doc(
     m: &crate::constraint::solver::proof_method::ProofMethod,
     prefix: &str,
-    msig: &tamarin_term::maude_sig::MaudeSig,
 ) -> crate::pretty_hpj::Doc {
     use crate::constraint::solver::proof_method::{ProofMethod as PM, Result as MR};
     use crate::pretty_hpj::Doc;
@@ -3975,18 +3917,6 @@ fn pp_step_doc(
     // string form is faithful.
     let body = match m {
         PM::SolveGoal(g) => solve_step_doc(g),
-        // A `RawSolve` is the display-only method kept for an unannotated
-        // (replayed) subtree (replay.rs `parsed_to_unannotated`).  HS's
-        // `noSystemPrf` (Theory/Proof.hs:447-467, see line 467 `mapProofInfo (\i -> (Just i,
-        // Nothing))`) keeps the STRUCTURED `ProofMethod` (`SolveGoal goal`)
-        // unchanged and re-renders it via `prettyProofMethod`
-        // (ProofMethod.hs:1174-1187) → `prettyGoal` (Constraints.hs:273-287),
-        // which RE-WRAPS the goal at the current `lineLength`/`ribbon`.  So
-        // the stored `.spthy` layout (e.g. an `∃ #j.\n  (body)` break, or a
-        // fact arg-list broken before `)`) must NOT be echoed verbatim: we
-        // re-parse the goal text into a structured Doc and lay it out through
-        // the same engine the live `SolveGoal` path uses, so HS reflows it inline.
-        PM::RawSolve(raw) => raw_solve_to_doc(raw, msig),
         // HS `prettyProofMethod` (ProofMethod.hs:1183-1186):
         //   Finished (Contradictory reason) ->
         //     sep [ keyword_ "contradiction"
@@ -4102,135 +4032,6 @@ fn solve_step_doc(g: &crate::constraint::constraints::Goal) -> crate::pretty_hpj
     crate::pretty_hpj::keyword_("solve(")
         .beside_sp(solve_goal_to_doc(g))
         .beside_sp(crate::pretty_hpj::keyword_(")"))
-}
-
-/// The same `solve( <goal> )` layout for a step whose goal is only text.
-///
-/// HS `noSystemPrf` (Theory/Proof.hs:447-467, see line 467) keeps the parsed
-/// `SolveGoal goal` structured, so `prettyProofMethod`/`prettyGoal` re-wraps
-/// it fresh; the structure is recovered from the raw `solve(...)` inner text
-/// and routed through the SAME builders the live-goal path uses, so the
-/// wrapping is byte-identical to HS regardless of how the stored `.spthy`
-/// was laid out.
-fn raw_solve_to_doc(raw: &str, msig: &tamarin_term::maude_sig::MaudeSig) -> crate::pretty_hpj::Doc {
-    crate::pretty_hpj::keyword_("solve(")
-        .beside_sp(raw_goal_to_doc(raw, msig))
-        .beside_sp(crate::pretty_hpj::keyword_(")"))
-}
-
-/// Re-render the goal text inside a `solve( ... )` (the part between the
-/// parens) as a Doc.  The goals `elaborate::goal_from_parsed` converts are
-/// rendered from their `Goal` value by `solve_goal_to_doc`, so what reaches
-/// here is a disjunction or a goal text nothing recognises.
-///
-/// HS `prettyGoal (DisjG (Disj gfs))` (Constraints.hs:281-284) lays each
-/// disjunct out with `prettyGuarded`, so the disjuncts are re-parsed into
-/// `Guarded` values and handed to the live-goal builder; anything that fails
-/// to re-parse renders as stored.  `msig` is the signature the stored text
-/// was rendered against, which the re-parse needs for the user `[AC]`
-/// symbols' infix spelling and the arity-0 constants — HS's parser reads
-/// both from the signature in parser state (Theory/Text/Parser/Term.hs:158-174).
-fn raw_goal_to_doc(raw: &str, msig: &tamarin_term::maude_sig::MaudeSig) -> crate::pretty_hpj::Doc {
-    use crate::guarded::formula_to_guarded_parsed;
-    use crate::pretty_hpj::Doc;
-    use tamarin_parser::ast::GoalSpec;
-    use tamarin_parser::parser::parse_formula_str;
-    use tamarin_parser::proof_tree::parse_goal_spec;
-
-    let trimmed = raw.trim();
-    if let GoalSpec::Disj { .. } = parse_goal_spec(trimmed) {
-        return match parse_disjuncts_to_guarded(trimmed, msig) {
-            Some(gfs) => pf::disj_goal_to_doc(&gfs),
-            None => Doc::text(trimmed),
-        };
-    }
-    // A lone guarded formula goal (e.g. a single quantified alt) parses
-    // here.  Try formula-to-guarded so it re-wraps like HS's `prettyGuarded`;
-    // else keep verbatim.
-    match parse_formula_str(trimmed, msig)
-        .ok()
-        .and_then(|f| formula_to_guarded_parsed(&f, msig).ok())
-    {
-        Some(g) => pf::disj_goal_to_doc(std::slice::from_ref(&g)),
-        None => Doc::text(trimmed),
-    }
-}
-
-/// Split the `solve(...)` disjunction text at top-level `∥`, re-parsing
-/// each disjunct as a guarded formula (HS `disjSplitGoal` parses each
-/// disjunct as a full `Guarded`, Theory/Text/Parser/Proof.hs:39-72, see line 61).  Returns
-/// `None` if any disjunct fails to parse (caller falls back to verbatim).
-fn parse_disjuncts_to_guarded(
-    text: &str,
-    msig: &tamarin_term::maude_sig::MaudeSig,
-) -> Option<Vec<crate::guarded::Guarded>> {
-    use crate::guarded::formula_to_guarded_parsed;
-    use tamarin_parser::parser::parse_formula_str;
-    let parts = split_top_level_disj_par(text);
-    let mut out = Vec::with_capacity(parts.len());
-    for p in &parts {
-        let inner = strip_one_outer_paren(p.trim());
-        let f = parse_formula_str(inner, msig).ok()?;
-        let g = formula_to_guarded_parsed(&f, msig).ok()?;
-        out.push(g);
-    }
-    Some(out)
-}
-
-/// Split `s` at top-level `∥` (U+2225), ignoring separators inside
-/// `()/[]/{}` brackets.  Mirrors the parser's `split_top_level_disj`
-/// (`proof_tree.rs`) so the disjunct boundaries match `parse_goal_spec`'s.
-fn split_top_level_disj_par(s: &str) -> Vec<String> {
-    const SEP: char = '\u{2225}';
-    let mut out = Vec::new();
-    let mut cur = String::new();
-    let mut depth: i32 = 0;
-    for c in s.chars() {
-        match c {
-            '(' | '[' | '{' => {
-                depth += 1;
-                cur.push(c);
-            }
-            ')' | ']' | '}' => {
-                depth -= 1;
-                cur.push(c);
-            }
-            _ if c == SEP && depth == 0 => out.push(std::mem::take(&mut cur)),
-            _ => cur.push(c),
-        }
-    }
-    out.push(cur);
-    out
-}
-
-/// Strip ONE balanced outer `(...)` layer if the whole string is wrapped
-/// in it; otherwise return the string unchanged.  Each disjunct in a
-/// `solve( (g1) ∥ (g2) )` carries its own `opParens` wrap (HS `map opParens`
-/// in `prettyGuarded`'s GDisj, Guarded.hs:824-866, see line 836), which `parse_formula_str`
-/// would otherwise re-wrap — strip it so the re-parsed guarded matches the
-/// live-goal `Guarded` (which has no outer-paren node).
-fn strip_one_outer_paren(s: &str) -> &str {
-    let s = s.trim();
-    let bytes = s.as_bytes();
-    if bytes.len() < 2 || bytes[0] != b'(' || bytes[bytes.len() - 1] != b')' {
-        return s;
-    }
-    let mut depth: i32 = 0;
-    for (i, c) in s.char_indices() {
-        match c {
-            '(' => depth += 1,
-            ')' => {
-                depth -= 1;
-                // A depth-0 close before the final char means the leading
-                // `(` does NOT match the trailing `)` — don't strip.
-                if depth == 0 && i != s.len() - 1 {
-                    return s;
-                }
-            }
-            _ => {}
-        }
-    }
-    &s[1..s.len() - 1]
 }
 
 /// Build a `pretty_hpj::Doc` for a non-DisjG `Goal`, mirroring HS
@@ -4637,30 +4438,48 @@ mod manual_rule_variants_tests {
 mod stored_proof_reparse_tests {
     use super::*;
 
-    /// A stored `solve( ... )` step is re-rendered by re-parsing its goal
-    /// text, and that re-parse reads a user `[AC]` symbol's INFIX spelling
-    /// only when the signature it is seeded with declares the symbol — HS's
-    /// `acterm` takes the same set from the signature in parser state
-    /// (Theory/Text/Parser/Term.hs:166-172).
+    /// A stored `solve( ... )` step is echoed from the `Goal` the proof
+    /// parser read, so its layout is the printer's and not the file's, and
+    /// the goal grammar reads a user `[AC]` symbol's INFIX spelling only when
+    /// the theory declares the symbol — HS's `acterm` takes the same set from
+    /// the signature in parser state (Theory/Text/Parser/Term.hs:166-172).
     #[test]
-    fn reparse_reads_user_ac_infix_from_the_signature() {
-        let thy =
-            tamarin_parser::parser::parse_theory("theory T begin\nfunctions: add/2 [AC]\nend", &[])
-                .unwrap();
-        let elaborated = crate::elaborate::elaborate(&thy).unwrap();
-        let msig = &elaborated.signature.maude_sig;
+    fn a_stored_goal_is_echoed_from_its_parsed_value() {
+        let src = |decl: &str| {
+            format!(
+                "theory T begin\n{decl}\nlemma L: exists-trace \"T\"\n\
+                 simplify\nsolve( !KU( (x add\n         y) ) @ #i )\n  by sorry\nend"
+            )
+        };
+        let lemma_of = |thy: &p::Theory| match thy.items.iter().find_map(|it| match it {
+            p::TheoryItem::Lemma(l) => Some(l.clone()),
+            _ => None,
+        }) {
+            Some(l) => l,
+            None => panic!("no lemma"),
+        };
+        // arity-1 set / predicates are irrelevant to the goal echo.
+        #[allow(clippy::disallowed_types)]
+        let arity1 = std::collections::HashSet::new();
 
-        let raw = "!KU( (x add\n         y) ) @ #i";
-        assert_eq!(
-            raw_solve_to_doc(raw, msig).render(),
-            "solve( !KU( (x add y) ) @ #i )",
+        let thy = tamarin_parser::parser::parse_theory(&src("functions: add/2 [AC]"), &[]).unwrap();
+        let msig = crate::elaborate::elaborate(&thy)
+            .unwrap()
+            .signature
+            .maude_sig;
+        let echo = render_open_lemma(&lemma_of(&thy), &[], "f.spthy", &arity1, &msig).unwrap();
+        assert!(
+            echo.contains("solve( !KU( (x add y) ) @ #i )"),
+            "the stored wrapping must not survive the echo: {echo}"
         );
+
         // Without the declaration the infix spelling is not a term, so the
-        // argument stays the stored text, wrapping and all.
-        assert_eq!(
-            raw_solve_to_doc(raw, &tamarin_term::maude_sig::pair_maude_sig()).render(),
-            "solve( !KU( (x add\n         y) ) @ #i )",
-        );
+        // goal grammar rejects it and the skeleton keeps no tree.
+        let thy = tamarin_parser::parser::parse_theory(&src("functions: add/2"), &[]).unwrap();
+        assert!(lemma_of(&thy)
+            .proof
+            .as_ref()
+            .is_some_and(|ps| ps.tree.is_none()));
     }
 }
 

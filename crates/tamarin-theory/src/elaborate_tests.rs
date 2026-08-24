@@ -1014,3 +1014,92 @@ end\n";
         ]
     );
 }
+
+/// The stored proof of a lemma reaches the solver as internal
+/// [`ProofMethod`](crate::constraint::solver::proof_method::ProofMethod)
+/// values: HS's `proofMethod` (Theory/Text/Parser/Proof.hs:75-85) builds them
+/// in the parser, and `proof_tree_from_parsed` builds them here, through the
+/// same converters the rest of the theory goes through.
+#[test]
+fn stored_proof_steps_convert_to_internal_goals() {
+    use crate::constraint::constraints::Goal;
+    use crate::constraint::solver::proof_method::ProofMethod;
+    use crate::rule::{ConcIdx, PremIdx};
+    use tamarin_term::function_symbols::{AcSym, FunSym};
+
+    let src = "theory T begin\n\
+                   functions: add/2 [AC], zero/0, h/1\n\
+                   rule R: [ ] --[ A( ) ]-> [ ]\n\
+                   lemma l:\n\
+                     exists-trace\n\
+                     \"\u{2203} #i. A( ) @ #i\"\n\
+                     solve( !KU( zero ) @ #vk.3 )\n\
+                     solve( F( (z add h(y)) ) @ #i )\n\
+                     solve( (#i.2, 0) ~~> (#j, 1) )\n\
+                     by sorry\n\
+                   end";
+    let parsed = parse_theory(src, &[]).unwrap();
+    let thy = elaborate(&parsed).expect("elaborate");
+    let lemma = thy.lemmas().next().expect("one lemma");
+    let step0 = lemma.proof.tree.as_ref().expect("a stored proof");
+
+    // A nullary user function inside a stored goal is an application, not a
+    // variable, and the timepoint keeps its index.
+    match &step0.method {
+        ProofMethod::SolveGoal(Goal::Action(i, fa)) => {
+            assert_eq!(i, &LVar::new("vk", LSort::Node, 3));
+            assert!(matches!(
+                fa.terms[0],
+                Term::App(FunSym::NoEq(ref s), _) if s.name == b"zero"
+            ));
+        }
+        other => panic!("expected an action goal, got {other:?}"),
+    }
+
+    // The theory's `[AC]` symbols reach the goal sub-parser, so the infix
+    // spelling of `add` is that AC application.
+    let step1 = &step0.cases[0].1;
+    match &step1.method {
+        ProofMethod::SolveGoal(Goal::Action(_, fa)) => match &fa.terms[0] {
+            Term::App(FunSym::Ac(AcSym::AcFct(sym)), args) => {
+                assert_eq!(String::from_utf8_lossy(sym.name), "add");
+                assert_eq!(args.len(), 2);
+            }
+            other => panic!("expected an AC application, got {other:?}"),
+        },
+        other => panic!("expected an action goal, got {other:?}"),
+    }
+
+    // Both endpoints of a chain goal keep their node index.
+    let step2 = &step1.cases[0].1;
+    assert_eq!(
+        step2.method,
+        ProofMethod::SolveGoal(Goal::Chain(
+            (LVar::new("i", LSort::Node, 2), ConcIdx(0)),
+            (LVar::new("j", LSort::Node, 0), PremIdx(1)),
+        ))
+    );
+    assert_eq!(step2.cases[0].1.method, ProofMethod::Sorry(None));
+}
+
+/// HS `guardedFormula` (Theory/Text/Parser/Formula.hs:122-127) `fail`s the
+/// parse when a disjunct of a stored goal is not guardable; here the
+/// conversion fails elaboration, and the message names the lemma.
+#[test]
+fn a_non_guardable_stored_disjunct_fails_elaboration() {
+    let src = "theory T begin\n\
+                   rule R: [ ] --[ A( ) ]-> [ ]\n\
+                   lemma unguarded:\n\
+                     exists-trace\n\
+                     \"\u{2203} #i. A( ) @ #i\"\n\
+                     solve( (\u{2200} x. \u{22A5}) \u{2225} (last(#t1)) )\n\
+                     by sorry\n\
+                   end";
+    let parsed = parse_theory(src, &[]).unwrap();
+    let err = elaborate(&parsed).expect_err("a non-guardable disjunct must fail");
+    assert!(
+        err.message.contains("lemma `unguarded`"),
+        "the message must name the lemma, got {:?}",
+        err.message
+    );
+}

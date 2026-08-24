@@ -13,6 +13,10 @@
 //! inside one becomes a `GoalSpec`.  The diff skeletons that do carry a
 //! tree are the bare `by sorry` ones.
 //!
+//! A `tree_none` of zero over the regular lemmas is what makes the strict
+//! grammar safe: every stored step is a method `proof_method` reads and
+//! every stored goal one `Parser::goal` accepts.
+//!
 //! The load and `--parse-only` sweeps that widen the net beyond the gate
 //! corpus run over the files this grep lists, so their list stays
 //! reproducible:
@@ -38,8 +42,6 @@ struct Census {
     tree_none: usize,
     /// Proof steps across the structured trees.
     steps: usize,
-    /// Steps whose method is `ParsedMethod::Other`.
-    other: usize,
     /// `solve(...)` steps by `GoalSpec` kind.
     action: usize,
     premise: usize,
@@ -47,11 +49,10 @@ struct Census {
     split: usize,
     disj: usize,
     subterm: usize,
-    raw: usize,
 }
 
 /// The column headers of [`Census::row`], in its order.
-const COLUMNS: &str = "  group    files skeletons tree_none    steps  other   action  premise    chain    split     disj  subterm      raw";
+const COLUMNS: &str = "  group    files skeletons tree_none    steps   action  premise    chain    split     disj  subterm";
 
 impl Census {
     fn add(&mut self, o: &Census) {
@@ -59,31 +60,27 @@ impl Census {
         self.skeletons += o.skeletons;
         self.tree_none += o.tree_none;
         self.steps += o.steps;
-        self.other += o.other;
         self.action += o.action;
         self.premise += o.premise;
         self.chain += o.chain;
         self.split += o.split;
         self.disj += o.disj;
         self.subterm += o.subterm;
-        self.raw += o.raw;
     }
 
     fn row(&self, group: &str) -> String {
         format!(
-            "  {group:7} {:6} {:9} {:9} {:8} {:6} {:8} {:8} {:8} {:8} {:8} {:8} {:8}",
+            "  {group:7} {:6} {:9} {:9} {:8} {:8} {:8} {:8} {:8} {:8} {:8}",
             self.files,
             self.skeletons,
             self.tree_none,
             self.steps,
-            self.other,
             self.action,
             self.premise,
             self.chain,
             self.split,
             self.disj,
             self.subterm,
-            self.raw,
         )
     }
 
@@ -97,18 +94,15 @@ impl Census {
 
     fn count_tree(&mut self, tree: &p::ParsedProofTree) {
         self.steps += 1;
-        match &tree.method {
-            p::ParsedMethod::Other(_) => self.other += 1,
-            p::ParsedMethod::SolveGoal(goal, _) => match goal {
+        if let p::ParsedMethod::SolveGoal(goal) = &tree.method {
+            match goal {
                 p::GoalSpec::Action { .. } => self.action += 1,
                 p::GoalSpec::Premise { .. } => self.premise += 1,
                 p::GoalSpec::Chain { .. } => self.chain += 1,
                 p::GoalSpec::Split { .. } => self.split += 1,
                 p::GoalSpec::Disj { .. } => self.disj += 1,
                 p::GoalSpec::Subterm { .. } => self.subterm += 1,
-                p::GoalSpec::Raw(_) => self.raw += 1,
-            },
-            _ => {}
+            }
         }
         for (_, sub) in &tree.cases {
             self.count_tree(sub);
@@ -238,13 +232,8 @@ fn corpus_stored_proof_census() {
         regular.tree_none, 0,
         "regular lemmas with an unparsed proof"
     );
-    assert_eq!(regular.other, 0, "regular lemmas with an unknown method");
     // No stored goal of a regular lemma is a subterm split.
     assert_eq!(regular.subterm, 0, "stored subterm goals");
-    // Every stored goal of a regular lemma is one the goal grammar or the
-    // disjunction splitter recognises; a `Raw` goal sends its step to the
-    // ranked-candidate slow path of `replay::exec_method_for`.
-    assert_eq!(regular.raw, 0, "unrecognised stored goals");
     for (kind, n) in [
         ("action", regular.action),
         ("premise", regular.premise),

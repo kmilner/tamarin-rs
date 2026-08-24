@@ -66,8 +66,6 @@
 
 use std::collections::BTreeMap;
 
-use tamarin_parser::ast::{DisjAlt, GoalSpec, ParsedMethod, ParsedProofTree};
-
 use crate::constraint::constraints::Goal;
 use crate::constraint::solver::context::ProofContext;
 use crate::constraint::solver::proof_method::{
@@ -76,6 +74,7 @@ use crate::constraint::solver::proof_method::{
 use crate::constraint::solver::search::{run_proof_search, NodeStatus, ProofNode};
 use crate::constraint::system::System;
 use crate::fact::fact_tag_name;
+use crate::theory::ProofTree;
 
 /// Drive a single lemma's skeleton.  Equivalent of HS
 /// `runProver (replaceSorryProver (runAutoProver autoProver)) ctxt 0
@@ -90,7 +89,7 @@ use crate::fact::fact_tag_name;
 pub fn replace_sorry_prove(
     ctx: &ProofContext,
     initial: System,
-    skeleton: &ParsedProofTree,
+    skeleton: &ProofTree,
     proof_bound: usize,
 ) -> ProofNode {
     replay_node(ctx, initial, skeleton, proof_bound, true)
@@ -112,7 +111,7 @@ pub fn replace_sorry_prove(
 pub fn check_and_extend(
     ctx: &ProofContext,
     initial: System,
-    skeleton: &ParsedProofTree,
+    skeleton: &ProofTree,
     proof_bound: usize,
 ) -> ProofNode {
     replay_node(ctx, initial, skeleton, proof_bound, false)
@@ -139,12 +138,8 @@ fn annotated_sorry(reason: Option<String>, sys: System) -> ProofNode {
 /// where `prf` is the original subtree passed through `noSystemPrf`
 /// (→ unannotated).  Mirrors that: a `Sorry` whose single `""` child is
 /// `parsed_to_unannotated(node, sys)`.
-fn invalid_step_node(
-    node: &ParsedProofTree,
-    sys: System,
-    msig: &tamarin_term::maude_sig::MaudeSig,
-) -> ProofNode {
-    let child = parsed_to_unannotated(node, sys.clone(), msig);
+fn invalid_step_node(node: &ProofTree, sys: System) -> ProofNode {
+    let child = parsed_to_unannotated(node, sys.clone());
     let mut children = BTreeMap::new();
     children.insert("".to_string(), child);
     ProofNode {
@@ -164,27 +159,13 @@ fn invalid_step_node(
 /// info to `(Just i, Nothing)` **recursively** so every node in the
 /// subtree has a `Nothing` system annotation (→ `/* unannotated */`).
 ///
-/// We mirror this by converting the `ParsedProofTree` to `ProofNode`
-/// with `annotated: false` throughout.  The `sys` placeholder is the
-/// parent's sys (unused in display but required by `ProofNode`).
-///
-/// Converts:
-/// - `Simplify`    → `ProofMethod::Simplify`
-/// - `Induction`   → `ProofMethod::Induction`
-/// - `Sorry`       → `ProofMethod::Sorry(None)`
-/// - `Contradiction` → `ProofMethod::Finished(Contradictory(None))`
-/// - `SolveGoal(spec, raw)` → `ProofMethod::SolveGoal(goal)`, or
-///   `ProofMethod::RawSolve(raw)` when `spec` carries no convertible goal
-/// - `SolvedLeaf`  → `ProofMethod::Finished(Solved)`
-/// - `Unfinishable` → `ProofMethod::Finished(Unfinishable)`
-/// - `Invalidated` → `ProofMethod::Invalidated`
-/// - `Other(s)`    → `ProofMethod::Sorry(Some(s))`
-fn parsed_to_unannotated(
-    node: &ParsedProofTree,
-    sys: System,
-    msig: &tamarin_term::maude_sig::MaudeSig,
-) -> ProofNode {
-    let method = parsed_method_to_display(&node.method, msig);
+/// We mirror this by converting the [`ProofTree`] to `ProofNode` with
+/// `annotated: false` throughout, keeping each node's stored `ProofMethod`
+/// — HS re-renders it with `prettyProofMethod` (ProofMethod.hs:1173-1187).
+/// The `sys` placeholder is the parent's sys (unused in display but
+/// required by `ProofNode`).
+fn parsed_to_unannotated(node: &ProofTree, sys: System) -> ProofNode {
+    let method = node.method.clone();
     let status = match &method {
         ProofMethod::Finished(MethodResult::Contradictory(_)) => NodeStatus::Contradictory,
         ProofMethod::Finished(MethodResult::Solved) => NodeStatus::Solved,
@@ -195,7 +176,7 @@ fn parsed_to_unannotated(
     let children: BTreeMap<String, ProofNode> = node
         .cases
         .iter()
-        .map(|(name, sub)| (name.clone(), parsed_to_unannotated(sub, sys.clone(), msig)))
+        .map(|(name, sub)| (name.clone(), parsed_to_unannotated(sub, sys.clone())))
         .collect();
     ProofNode {
         method,
@@ -203,35 +184,6 @@ fn parsed_to_unannotated(
         children,
         status,
         annotated: false,
-    }
-}
-
-/// Convert a `ParsedMethod` to the best display-only `ProofMethod`.
-/// Used exclusively by `parsed_to_unannotated` — not for exec.
-///
-/// A goal the elaborator converts becomes a `SolveGoal`, which
-/// `prettyProofMethod` (ProofMethod.hs:1174-1187) re-renders through
-/// `prettyGoal` exactly as HS's `noSystemPrf` does; the disjunction and
-/// unrecognised forms keep their stored text.
-fn parsed_method_to_display(
-    pm: &ParsedMethod,
-    msig: &tamarin_term::maude_sig::MaudeSig,
-) -> ProofMethod {
-    match pm {
-        ParsedMethod::Simplify => ProofMethod::Simplify,
-        ParsedMethod::Induction => ProofMethod::Induction,
-        ParsedMethod::Sorry => ProofMethod::Sorry(None),
-        ParsedMethod::Contradiction => ProofMethod::Finished(MethodResult::Contradictory(None)),
-        ParsedMethod::SolveGoal(spec, raw) => {
-            match crate::elaborate::goal_from_parsed(spec, msig) {
-                Ok(g) => ProofMethod::SolveGoal(g),
-                Err(_) => ProofMethod::RawSolve(raw.clone()),
-            }
-        }
-        ParsedMethod::SolvedLeaf => ProofMethod::Finished(MethodResult::Solved),
-        ParsedMethod::Unfinishable => ProofMethod::Finished(MethodResult::Unfinishable),
-        ParsedMethod::Invalidated => ProofMethod::Invalidated,
-        ParsedMethod::Other(s) => ProofMethod::Sorry(Some(s.clone())),
     }
 }
 
@@ -258,7 +210,7 @@ pub fn annotated_sorry_root(sys: System) -> ProofNode {
 fn finished_leaf(
     ctx: &ProofContext,
     sys: System,
-    node: &ParsedProofTree,
+    node: &ProofTree,
     matches_expected: impl Fn(&MethodResult) -> bool,
     method: MethodResult,
     status: NodeStatus,
@@ -275,7 +227,7 @@ fn finished_leaf(
         },
         _ => {
             if !auto_prove {
-                invalid_step_node(node, sys, &ctx.maude.maude_sig())
+                invalid_step_node(node, sys)
             } else {
                 run_proof_search(ctx, sys, proof_bound)
             }
@@ -289,7 +241,7 @@ fn finished_leaf(
 fn replay_node(
     ctx: &ProofContext,
     sys: System,
-    node: &ParsedProofTree,
+    node: &ProofTree,
     proof_bound: usize,
     auto_prove: bool,
 ) -> ProofNode {
@@ -297,7 +249,7 @@ fn replay_node(
     // `by sorry` leaf → invoke the auto-prover on `sys`.  HS:
     //   replace prf@(LNode (ProofStep (Sorry _) (Just se)) _) =
     //       fromMaybe prf $ runProver prover0 ctxt d se prf
-    if matches!(node.method, ParsedMethod::Sorry) && node.cases.is_empty() {
+    if matches!(node.method, ProofMethod::Sorry(_)) && node.cases.is_empty() {
         // HS check-and-extend keeps a stored `Sorry` leaf annotated
         // (Proof.hs: `sorryNode reason cs` → node carries
         // `Just sys`), so it renders as plain `by sorry`.
@@ -319,7 +271,11 @@ fn replay_node(
     // lemma `replaceSorryProver` then re-runs the auto-prover on that
     // annotated sorry (CloseRule.hs:57-71, see line 71 → TheoryLoader.hs:705-707, see line 706), exactly the
     // `run_proof_search` fall-through below.
-    if matches!(node.method, ParsedMethod::Contradiction) && node.cases.is_empty() {
+    if matches!(
+        node.method,
+        ProofMethod::Finished(MethodResult::Contradictory(_))
+    ) && node.cases.is_empty()
+    {
         // HS replay (checkProof, Theory/Proof.hs) preserves the skeleton's
         // STORED method verbatim — the parser builds `Finished (Contradictory
         // Nothing)` for `by contradiction`
@@ -354,7 +310,7 @@ fn replay_node(
     // `replaceSorryProver` then reproves it (CloseRule.hs:57-71, see line 71 →
     // TheoryLoader.hs:705-707, see line 706).  Skeleton's SOLVED is HS's claim; RS verifies
     // via its own solver.
-    if matches!(node.method, ParsedMethod::SolvedLeaf) && node.cases.is_empty() {
+    if matches!(node.method, ProofMethod::Finished(MethodResult::Solved)) && node.cases.is_empty() {
         return finished_leaf(
             ctx,
             sys,
@@ -369,7 +325,11 @@ fn replay_node(
 
     // `UNFINISHABLE` leaf — emit Finished(Unfinishable) if runtime
     // agrees, else fall back to auto-prover.
-    if matches!(node.method, ParsedMethod::Unfinishable) && node.cases.is_empty() {
+    if matches!(
+        node.method,
+        ProofMethod::Finished(MethodResult::Unfinishable)
+    ) && node.cases.is_empty()
+    {
         return finished_leaf(
             ctx,
             sys,
@@ -391,7 +351,7 @@ fn replay_node(
     // HS's setup the skeleton's children take precedence (they're
     // already there from the parse), and `unprovenLookAhead` produces
     // a Sorry that gets replaced by the auto-prover.
-    let (method, cases) = match exec_method_for(&node.method, &sys, ctx, &node.cases) {
+    let (method, cases) = match exec_method_for(&node.method, &sys, ctx) {
         Some(p) => p,
         None => {
             // Couldn't resolve OR the method didn't apply.  HS
@@ -400,9 +360,9 @@ fn replay_node(
             // where `prf` is the current node (method + children) passed
             // through `noSystemPrf` → `annotated = false`.  RS mirrors
             // this by creating a sorry with one child "" → the original
-            // ParsedProofTree converted to unannotated ProofNodes.
+            // stored subtree converted to unannotated ProofNodes.
             if !auto_prove {
-                return invalid_step_node(node, sys, &ctx.maude.maude_sig());
+                return invalid_step_node(node, sys);
             }
             return run_proof_search(ctx, sys, proof_bound);
         }
@@ -491,8 +451,7 @@ fn replay_node(
                 // lemma (extend sorries) and check-only replay keep drifted
                 // cases verbatim.  (KCL07 is a stale-stored-proof theory
                 // that exercises this drifted-case path.)
-                let placeholder =
-                    parsed_to_unannotated(sub_tree, sys.clone(), &ctx.maude.maude_sig());
+                let placeholder = parsed_to_unannotated(sub_tree, sys.clone());
                 children.insert(skel_name.clone(), placeholder);
                 any_sorry = true;
                 if push_path {
@@ -593,26 +552,22 @@ fn replay_node(
     }
 }
 
-/// Resolve a parsed method against `sys` and produce a (method, cases)
-/// pair if possible.  For `SolveGoal(GoalSpec::Raw(_))` (a `solve(...)`
-/// whose goal text neither the goal grammar nor the disjunction splitter
-/// recognises), we iterate over the candidate ProofMethods in
-/// heuristic-ranked order (same list `expand` in search.rs uses) and pick
-/// the first one whose resulting case-set is compatible with the skeleton's
-/// child case names.  This is the closest we can come to HS's behavior
-/// without a Goal value: HS parses the goal directly, but if our
-/// auto-prover would have picked the same goal in that state, the
-/// case-decomposition matches.
+/// Re-execute one stored proof step against `sys` and produce the
+/// (method, cases) pair it yields.
+///
+/// HS `checkAndExecProofMethod` (Theory/Proof.hs:447-467, see line 456) runs
+/// the stored `ProofMethod` itself; [`resolve_method`] is the `SolveGoal`
+/// half of that, binding the stored goal to the equal one among `sys`'s
+/// goals before `exec_proof_method` runs it.
 fn exec_method_for(
-    parsed: &ParsedMethod,
+    stored: &ProofMethod,
     sys: &System,
     ctx: &ProofContext,
-    skel_children: &[(String, ParsedProofTree)],
 ) -> Option<(ProofMethod, Vec<(String, System)>)> {
     let dbg = tamarin_utils::env_gate!("TAM_DBG_REPLAY");
-    // Fast path: parsed method resolves directly.
-    if let Some(method) = resolve_method(parsed, sys, &ctx.maude.maude_sig()) {
-        if let Some(cases) = exec_proof_method(ctx, &method, sys) {
+    let method = resolve_method(stored, sys)?;
+    match exec_proof_method(ctx, &method, sys) {
+        Some(cases) => {
             if dbg {
                 let names: Vec<&str> = cases.iter().map(|(n, _)| n.as_str()).collect();
                 eprintln!(
@@ -622,79 +577,18 @@ fn exec_method_for(
                     names
                 );
             }
-            return Some((method, sort_cases(cases)));
+            Some((method, sort_cases(cases)))
         }
-        if dbg {
-            eprintln!(
-                "[replay] direct {:?} → exec returned None",
-                method_kind(&method)
-            );
-        }
-        return None;
-    }
-    // Slow path: SolveGoal(GoalSpec::Raw(_)) — iterate candidates and
-    // pick the first SolveGoal whose case-set has at least one name in
-    // common with the skeleton's child names.  This is HS-faithful in
-    // spirit: HS parses the goal inside `solve(...)` directly to a Goal
-    // value via `goal` (Theory/Text/Parser/Proof.hs:38-72) and would always
-    // find it in `sys.goals`; a `Raw` goal text has no such value, so we
-    // approximate by trusting the heuristic ranking — for the patterns we
-    // hit in the target lemmas, the top-ranked goal IS the one HS parsed.
-    if !matches!(parsed, ParsedMethod::SolveGoal(GoalSpec::Raw(_), _)) {
-        return None;
-    }
-    let skel_names: Vec<&str> = skel_children.iter().map(|(s, _)| s.as_str()).collect();
-    if dbg {
-        let raw = match parsed {
-            ParsedMethod::SolveGoal(GoalSpec::Raw(r), _) => r.chars().take(120).collect::<String>(),
-            _ => String::new(),
-        };
-        eprintln!(
-            "[replay] raw-solve skel_names={:?} (raw text: {:?})",
-            skel_names, raw
-        );
-    }
-    // depth=0 for replay: replayed steps don't need round-robin since the
-    // skeleton already specifies the goal.
-    let candidates = crate::constraint::solver::search::candidate_methods(sys, ctx, 0);
-    let mut tried = 0usize;
-    // Cap candidate iteration to avoid pathological case-enumeration
-    // explosion (each `exec_proof_method` for a SolveGoal can be
-    // expensive — Maude calls, system clones, simplify loops).  32
-    // candidates is generous; HS's first-match-wins ranking typically
-    // hits at the top.
-    const MAX_CANDIDATES: usize = 32;
-    for m in candidates {
-        if !matches!(m, ProofMethod::SolveGoal(_)) {
-            continue;
-        }
-        tried += 1;
-        if tried > MAX_CANDIDATES {
-            break;
-        }
-        if let Some(cases) = exec_proof_method(ctx, &m, sys) {
-            if dbg && tried <= 8 {
-                let names: Vec<&str> = cases.iter().map(|(n, _)| n.as_str()).collect();
+        None => {
+            if dbg {
                 eprintln!(
-                    "[replay]   candidate#{} {:?} → {} cases {:?}",
-                    tried,
-                    method_kind(&m),
-                    cases.len(),
-                    names
+                    "[replay] direct {:?} → exec returned None",
+                    method_kind(&method)
                 );
             }
-            if cases_compatible(&cases, &skel_names) {
-                if dbg {
-                    eprintln!("[replay]   MATCH at candidate#{}", tried);
-                }
-                return Some((m, sort_cases(cases)));
-            }
+            None
         }
     }
-    if dbg {
-        eprintln!("[replay] raw-solve: no candidate matched");
-    }
-    None
 }
 
 fn method_kind(m: &ProofMethod) -> String {
@@ -705,7 +599,6 @@ fn method_kind(m: &ProofMethod) -> String {
         ProofMethod::Finished(_) => "Finished".into(),
         ProofMethod::Invalidated => "Invalidated".into(),
         ProofMethod::SolveGoal(g) => format!("SolveGoal({})", goal_kind(g)),
-        ProofMethod::RawSolve(_) => "RawSolve".into(),
     }
 }
 
@@ -720,35 +613,6 @@ fn goal_kind(g: &Goal) -> String {
     }
 }
 
-/// Match the produced case-name set against the skeleton's child case
-/// names.
-///
-/// HS's `checkProof` (Proof.hs) uses `mergeMapsWith
-/// unhandledCase noSystemPrf (go (d+1))` — it tolerates BOTH (a) cases
-/// the skeleton has but runtime doesn't produce (preserved as
-/// `noSystemPrf` — Sorry-style placeholders), and (b) cases the
-/// runtime produces but the skeleton doesn't have (handled by
-/// `unhandledCase = prover d` — auto-prover).
-///
-/// But that only applies AFTER the right candidate goal is picked.
-/// When choosing among ranked goal candidates for a `GoalSpec::Raw`
-/// goal whose formula we couldn't structurally parse, we need a
-/// STRICT match (every skel name in produced) to ensure we pick the
-/// correct goal — not just a same-name-prefix candidate.  Otherwise
-/// we'd accept an unrelated goal that happens to share a case name
-/// (e.g. `case_1`), leading to deeper-tree drift.
-fn cases_compatible(produced: &[(String, System)], skel: &[&str]) -> bool {
-    if skel.is_empty() {
-        return false;
-    }
-    if skel.len() == 1 && skel[0].is_empty() {
-        return produced.len() == 1;
-    }
-    let prod_names: std::collections::BTreeSet<&str> =
-        produced.iter().map(|(n, _)| n.as_str()).collect();
-    skel.iter().all(|s| prod_names.contains(s))
-}
-
 fn sort_cases(mut cases: Vec<(String, System)>) -> Vec<(String, System)> {
     // Mirror search.rs's alphabetical case sort: cases are visited in
     // alphabetical order so name-based skeleton matching is deterministic.
@@ -756,39 +620,29 @@ fn sort_cases(mut cases: Vec<(String, System)>) -> Vec<(String, System)> {
     cases
 }
 
-/// Resolve a parsed method to a runtime [`ProofMethod`] against `sys`.
+/// Resolve one stored [`ProofMethod`] against `sys`.
 ///
-/// For `SolveGoal`, this involves matching the parsed [`GoalSpec`]
-/// against an actual [`Goal`] in `sys.goals`.  See `match_goal`.
-fn resolve_method(
-    parsed: &ParsedMethod,
-    sys: &System,
-    msig: &tamarin_term::maude_sig::MaudeSig,
-) -> Option<ProofMethod> {
-    match parsed {
-        ParsedMethod::Sorry => Some(ProofMethod::Sorry(None)),
-        ParsedMethod::Simplify => Some(ProofMethod::Simplify),
-        ParsedMethod::Induction => Some(ProofMethod::Induction),
-        ParsedMethod::Contradiction => {
-            // Handled inline as a leaf above.  If we reach here it's
-            // because the skeleton has a `by contradiction` step
-            // followed by `case` blocks — malformed.  Fall back.
-            None
-        }
-        ParsedMethod::SolveGoal(spec, _raw) => {
-            let g = match_goal(spec, sys, msig)?;
-            Some(ProofMethod::SolveGoal(g))
-        }
-        ParsedMethod::SolvedLeaf
-        | ParsedMethod::Unfinishable
-        | ParsedMethod::Invalidated
-        | ParsedMethod::Other(_) => None,
+/// A `SolveGoal` binds the LIVE goal that [`goal_matches`] equates with the
+/// stored one, so the executed method carries the value `sys.goals` holds;
+/// the terminal methods are handled as leaves in [`replay_node`] and resolve
+/// to nothing here.
+fn resolve_method(stored: &ProofMethod, sys: &System) -> Option<ProofMethod> {
+    match stored {
+        ProofMethod::Sorry(_) => Some(ProofMethod::Sorry(None)),
+        ProofMethod::Simplify => Some(ProofMethod::Simplify),
+        ProofMethod::Induction => Some(ProofMethod::Induction),
+        ProofMethod::SolveGoal(g) => Some(ProofMethod::SolveGoal(match_goal(g, sys)?)),
+        // `Finished` is `by contradiction` / `SOLVED` / `UNFINISHABLE`, each
+        // handled as a leaf above; reaching here means the skeleton follows
+        // one with `case` blocks, which is malformed.  `Invalidated` executes
+        // nowhere (proof_method.rs `exec_proof_method`).
+        ProofMethod::Finished(_) | ProofMethod::Invalidated => None,
     }
 }
 
 /// The OPEN goals of `sys`, in `sGoals` creation order — the search space
-/// every [`match_goal`] arm ranges over, mirroring HS's `M.member`/`M.toList`
-/// over `sGoals`.
+/// [`match_goal`] ranges over, mirroring HS's `M.member`/`M.toList` over
+/// `sGoals`.
 fn open_goals(sys: &System) -> impl Iterator<Item = &Goal> {
     sys.goals
         .iter()
@@ -796,222 +650,45 @@ fn open_goals(sys: &System) -> impl Iterator<Item = &Goal> {
         .map(|(g, _)| g)
 }
 
-/// Find a [`Goal`] in `sys.goals` that matches the parsed [`GoalSpec`].
+/// Find the goal of `sys` that the stored `solve( ... )` step names.
 ///
-/// HS parses the `solve( ... )` text straight into a `Goal` value
-/// (`goal`, Theory/Text/Parser/Proof.hs:38-72) and looks it up with
-/// `guard (goal `M.member` L.get sGoals sys)` (ProofMethod.hs:253-258), i.e.
-/// by structural equality.  The five forms `elaborate::goal_from_parsed`
-/// converts are matched that way here.  A disjunction reaches this function
-/// as the shape-and-text signature the goal text yields, so its arm below
-/// stands in for that equality.
+/// HS looks the parsed `Goal` up with
+/// `guard (goal \`M.member\` L.get sGoals sys)` (ProofMethod.hs:253-258), i.e.
+/// by structural equality; [`goal_matches`] is that equality.  The LIVE goal
+/// is returned, so the executed method carries the value `sys.goals` holds.
 ///
 /// [`open_goals`] skips goals already marked solved, which is the one place
 /// this lookup ranges over less than HS's `sGoals`.
 ///
-/// `None` means the stored step names a goal this system does not have.  For
-/// every kind handled here `exec_method_for` then gives up (its raw-solve
-/// fallback is reserved for [`GoalSpec::Raw`]), and the caller emits
-/// `sorry /* invalid proof step encountered */` over the verbatim stored
-/// subtree — HS `checkProof`'s `Nothing` branch (Theory/Proof.hs:456-467).
-fn match_goal(
-    spec: &GoalSpec,
-    sys: &System,
-    msig: &tamarin_term::maude_sig::MaudeSig,
-) -> Option<Goal> {
-    match spec {
-        GoalSpec::Action(..)
-        | GoalSpec::Chain(..)
-        | GoalSpec::Premise(..)
-        | GoalSpec::Split(_)
-        | GoalSpec::Subterm(..) => {
-            let stored = crate::elaborate::goal_from_parsed(spec, msig).ok()?;
-            open_goals(sys).find(|g| **g == stored).cloned()
-        }
-        GoalSpec::Disj { alts, alt_texts } => {
-            // HS-faithful: HS parses the `solve(...)` text into a
-            // `DisjG (Disj [GuardedFormula])` value via
-            // `disjSplitGoal` (Theory/Text/Parser/Proof.hs:38-72, see line 61),
-            // then
-            // dispatches `SolveGoal goal` against `sys.goals` (HS
-            // ProofMethod.hs:258: `guard (goal \`M.member\` sGoals)`).
-            //
-            // Our skeleton parser only captures each alt's structural
-            // SIGNATURE (top-level shape — see `DisjAlt`), so the first
-            // filter keeps every open `Goal::Disj(d)` whose `d.0` list has
-            // the same length AND the same per-alt signature as the
-            // skeleton's `alts`.  See HS Theory/Text/Parser/Proof.hs:61.
-            //
-            // That signature is not always unique: the
-            // insertImpliedFormulas pass at a single IH can produce
-            // multiple alpha-distinct disjunctions (one per matching
-            // action-tuple), all with the same 5-NonQuant shape.  HS
-            // distinguishes them via the parsed Guarded's concrete
-            // LVar identities; RS uses the textual alt_texts captured
-            // by the skeleton parser as a tie-breaker.  See
-            // Yubikey::slightly_weaker_invariant at
-            // /non_empty_trace/case_1: both binding-(t1,t2) and
-            // binding-(t2,t1) IH-body disjs have shape NonQuant×5,
-            // but their alt[0] texts differ (`last(#t2)` vs
-            // `last(#t1)`).  Without alt-text disambiguation, RS
-            // picks the wrong disj — RS's insertion order is reversed
-            // vs HS, so matches[0] picks binding (t2,t1) where HS
-            // picks (t1,t2), which propagates `last_atom = #t1`
-            // instead of `last_atom = #t2`, triggering a false-positive
-            // Cyclic contradiction downstream.
-            let shape_matches: Vec<&Goal> = open_goals(sys)
-                .filter(|g| matches!(g, Goal::Disj(d) if disj_alts_match(alts, &d.0)))
-                .collect();
-            if shape_matches.is_empty() {
-                return None;
-            }
-            // Render each candidate disj's alts via `pretty_disj_alt` (a
-            // strict analogue of HS's `prettyGuarded`) and compare against
-            // skel `alt_texts`, both under the same normalization the parser
-            // applied (whitespace + `#` stripped).  Score each candidate by
-            // HOW MANY alts render exactly as stored and keep the best
-            // (ties → source order).
-            //
-            // Scoring rather than all-or-nothing because the stored text
-            // need not be in the runtime's normal form: HS re-parses each
-            // alt into a `Guarded` (Theory/Text/Parser/Proof.hs:38-72, see
-            // line 61) and the
-            // parse normalizes — `gconj`'s `nub` collapses a repeated
-            // conjunct (Guarded.hs:415-423), so a stored
-            // `… ⇒ (∀ #l. C @ #l ⇒ ⊥) ∧ (∀ #l. C @ #l ⇒ ⊥)` matches a
-            // runtime alt printing the conjunct once (ake/dh/UM_three_pass,
-            // `case_2/…/R_Activate_case_1`).  An all-or-nothing test rejects
-            // that candidate and falls through to source order, binding a
-            // DIFFERENT open disj and diverging.
-            let dbg = tamarin_utils::env_gate!("TAM_RS_DBG_MATCH_GOAL_DISJ");
-            if dbg {
-                let path = crate::constraint::solver::trace::case_path_string();
-                eprintln!(
-                    "[MATCH_GOAL_DISJ] path={} shape_matches={} skel.alt_texts={:?}",
-                    path,
-                    shape_matches.len(),
-                    alt_texts
-                );
-            }
-            if !alt_texts.iter().all(|s| s.is_empty()) {
-                let mut best: Option<(usize, &Goal)> = None;
-                for g in shape_matches.iter().copied() {
-                    let Goal::Disj(d) = g else { continue };
-                    let runtime_texts: Vec<String> =
-                        d.0.iter()
-                            .map(|a| normalize_disj_alt_text_for_match(&pretty_disj_alt(a)))
-                            .collect();
-                    // `disj_alts_match` already equated the lengths.
-                    let score = runtime_texts
-                        .iter()
-                        .zip(alt_texts.iter())
-                        .filter(|(r, w)| r == w)
-                        .count();
-                    if dbg {
-                        eprintln!(
-                            "[MATCH_GOAL_DISJ]   runtime_alts={:?} score={}/{}",
-                            runtime_texts,
-                            score,
-                            alt_texts.len()
-                        );
-                    }
-                    if !matches!(best, Some((b, _)) if score <= b) {
-                        best = Some((score, g));
-                    }
-                }
-                if let Some((score, g)) = best {
-                    if score > 0 {
-                        return Some(g.clone());
-                    }
-                }
-            }
-            // No alt rendered as stored (or no text info) — fall back to
-            // source order (creation order in `sGoals`).
-            Some(shape_matches[0].clone())
-        }
-        GoalSpec::Raw(_) => None,
-    }
+/// `None` means the stored step names a goal this system does not have, and
+/// the caller emits `sorry /* invalid proof step encountered */` over the
+/// verbatim stored subtree — HS `checkProof`'s `Nothing` branch
+/// (Theory/Proof.hs:456-467).
+fn match_goal(stored: &Goal, sys: &System) -> Option<Goal> {
+    open_goals(sys)
+        .find(|live| goal_matches(stored, live))
+        .cloned()
 }
 
-/// Compare the skeleton's per-alt signature against an open
-/// `Goal::Disj`'s alts (`Vec<Guarded>`).  Returns true iff the lists
-/// have the same length and each per-alt shape matches.
+/// HS `M.member` over `sGoals` (ProofMethod.hs:253-258): structural equality
+/// of the stored goal and a live one.
 ///
-/// HS reference: each `Guarded` in the open Disj is what HS would
-/// have produced from the same skeleton text via `guardedFormula`
-/// (Theory/Text/Parser/Formula.hs).  HS matches by structural EQ of
-/// the whole `Guarded` value; we relax to the shape signature so we
-/// don't have to rebuild LVar identities from skeleton text (whose
-/// var indices are different from the runtime System's).
-fn disj_alts_match(skel: &[DisjAlt], runtime: &[crate::guarded::Guarded]) -> bool {
-    if skel.len() != runtime.len() {
-        return false;
-    }
-    skel.iter()
-        .zip(runtime.iter())
-        .all(|(s, r)| disj_alt_shape_matches(s, r))
-}
-
-/// Render a single Guarded alt to its HS-faithful `prettyGuarded`
-/// representation.  Used by `match_goal`'s GoalSpec::Disj branch to
-/// disambiguate among multiple shape-matching disjs via alt-text
-/// equality.  See HS `prettyGuarded` (Guarded.hs:824-866).
-fn pretty_disj_alt(g: &crate::guarded::Guarded) -> String {
-    crate::pretty_formula::pretty_guarded(g)
-}
-
-/// Normalize a rendered alt text to the same canonical form as the
-/// skeleton parser's `normalize_disj_alt_text` (proof_tree.rs): strip
-/// all whitespace and `#` characters.  This bridges the HS-render's
-/// `last(#t2)` style and the parser's pre-stripped form.
-fn normalize_disj_alt_text_for_match(s: &str) -> String {
-    s.chars()
-        .filter(|c| !c.is_whitespace() && *c != '#')
-        .collect()
-}
-
-fn disj_alt_shape_matches(skel: &DisjAlt, g: &crate::guarded::Guarded) -> bool {
-    use crate::guarded::{Guarded, Quant};
-    match (skel, g) {
-        (
-            DisjAlt::All { n_vars },
-            Guarded::GGuarded {
-                qua: Quant::All,
-                vars,
-                ..
-            },
-        ) => *n_vars == vars.len(),
-        (
-            DisjAlt::Ex { n_vars },
-            Guarded::GGuarded {
-                qua: Quant::Ex,
-                vars,
-                ..
-            },
-        ) => *n_vars == vars.len(),
-        // `NonQuant` matches anything that isn't a top-level
-        // `GGuarded` — atoms, conjunctions, disjunctions, and the
-        // `∀[].A ⇒ ⊥` negation idiom (which HS pretty-prints as `¬A`
-        // but stores as a quantified Guarded).  For the negation
-        // idiom: the skeleton's text starts with `¬` (not `∀`), so
-        // the parser classified it `NonQuant`; we accept it matching
-        // a `GGuarded { qua: All, vars: [] }` here.  See
-        // Guarded.hs:858-859 for the negation rendering.
-        (
-            DisjAlt::NonQuant,
-            Guarded::GGuarded {
-                qua: Quant::All,
-                vars,
-                body,
-                ..
-            },
-        ) if vars.is_empty() => {
-            matches!(&**body, Guarded::Disj(v) if v.is_empty())
+/// A `Disj` compares its alternatives under `canonicalize_ac_in_guarded`, the
+/// projection of the port's [`Guarded`](crate::guarded::Guarded) onto HS's
+/// `LNGuarded` identity: a live alternative can carry an AC folding that its
+/// stored twin does not (see `guarded::canonicalize_ac_in_guarded` for how
+/// `rename_precise_system` unsorts an AC chain).
+fn goal_matches(stored: &Goal, live: &Goal) -> bool {
+    use crate::guarded::canonicalize_ac_in_guarded as canon;
+    match (stored, live) {
+        (Goal::Disj(a), Goal::Disj(b)) => {
+            a.0.len() == b.0.len()
+                && a.0
+                    .iter()
+                    .zip(b.0.iter())
+                    .all(|(x, y)| canon(x) == canon(y))
         }
-        (DisjAlt::NonQuant, Guarded::Atom(_))
-        | (DisjAlt::NonQuant, Guarded::Conj(_))
-        | (DisjAlt::NonQuant, Guarded::Disj(_)) => true,
-        _ => false,
+        _ => stored == live,
     }
 }
 

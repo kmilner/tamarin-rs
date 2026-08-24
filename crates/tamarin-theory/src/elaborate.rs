@@ -54,7 +54,7 @@ use crate::rule::{
 };
 use crate::signature::SignaturePure;
 use crate::theory::{
-    AccLemma, CaseTest, LNMacro, Lemma, LemmaAttr, OpenProtoRule, ProofSkeleton, Theory,
+    AccLemma, CaseTest, LNMacro, Lemma, LemmaAttr, OpenProtoRule, ProofSkeleton, ProofTree, Theory,
     TheoryItem, TraceQuantifier, TranslationElement,
 };
 
@@ -642,8 +642,19 @@ fn elaborate_items(
                     formula: item_formula(&l.formula, msig, "lemma")?,
                     original_formula: Some(item_formula(original, msig, "lemma")?),
                     proof: ProofSkeleton {
-                        raw: l.proof.as_ref().map(|p| p.raw.clone()).unwrap_or_default(),
-                        tree: l.proof.as_ref().and_then(|p| p.tree.clone()),
+                        tree: match l.proof.as_ref().and_then(|p| p.tree.as_ref()) {
+                            Some(t) => {
+                                Some(proof_tree_from_parsed(t, &out.signature.maude_sig).map_err(
+                                    |e| ElabError {
+                                        message: format!(
+                                            "in the proof of lemma `{}`: {}",
+                                            l.name, e.message
+                                        ),
+                                    },
+                                )?)
+                            }
+                            None => None,
+                        },
                     },
                     plaintext: l.plaintext.clone(),
                 };
@@ -1014,8 +1025,8 @@ pub fn fact_to_lnfact(f: &p::Fact, sig: &MaudeSig) -> Result<crate::fact::LNFact
 /// theory goes through, so a stored goal and a live one are built the same
 /// way.
 ///
-/// The disjunction and the unrecognised forms carry no terms to convert and
-/// are an error here; the replay matcher handles them from their text.
+/// A disjunct that `formula_to_guarded_parsed` rejects is an error here, as
+/// `guardedFormula`'s `fail` is in HS (Theory/Text/Parser/Formula.hs:122-127).
 pub fn goal_from_parsed(g: &p::GoalSpec, sig: &MaudeSig) -> Result<Goal, ElabError> {
     let term = |t: &p::Term| {
         term_to_lnterm(t, sig).ok_or_else(|| ElabError {
@@ -1036,10 +1047,58 @@ pub fn goal_from_parsed(g: &p::GoalSpec, sig: &MaudeSig) -> Result<Goal, ElabErr
         )),
         p::GoalSpec::Split(n) => Ok(Goal::Split(SplitId(*n))),
         p::GoalSpec::Subterm(small, big) => Ok(Goal::Subterm((term(small)?, term(big)?))),
-        p::GoalSpec::Disj { .. } | p::GoalSpec::Raw(_) => Err(ElabError {
-            message: "stored proof goal carries no terms to elaborate".to_string(),
-        }),
+        p::GoalSpec::Disj(alts) => {
+            let gfs: Result<Vec<_>, _> = alts
+                .iter()
+                .map(|f| {
+                    crate::guarded::formula_to_guarded_parsed(f, sig).map_err(|e| ElabError {
+                        message: format!(
+                            "could not convert a disjunct of a stored proof goal: {}",
+                            e.message
+                        ),
+                    })
+                })
+                .collect();
+            Ok(Goal::Disj(crate::constraint::constraints::Disj::new(gfs?)))
+        }
     }
+}
+
+/// The internal [`ProofMethod`](crate::constraint::solver::proof_method::ProofMethod)
+/// of one stored proof step — the value HS's `proofMethod`
+/// (Theory/Text/Parser/Proof.hs:75-85) builds directly.
+pub fn proof_method_from_parsed(
+    m: &p::ParsedMethod,
+    sig: &MaudeSig,
+) -> Result<crate::constraint::solver::proof_method::ProofMethod, ElabError> {
+    use crate::constraint::solver::proof_method::{ProofMethod, Result as MethodResult};
+    Ok(match m {
+        p::ParsedMethod::Sorry => ProofMethod::Sorry(None),
+        p::ParsedMethod::Simplify => ProofMethod::Simplify,
+        p::ParsedMethod::SolveGoal(spec) => ProofMethod::SolveGoal(goal_from_parsed(spec, sig)?),
+        p::ParsedMethod::Contradiction => ProofMethod::Finished(MethodResult::Contradictory(None)),
+        p::ParsedMethod::Induction => ProofMethod::Induction,
+        p::ParsedMethod::Invalidated => ProofMethod::Invalidated,
+        p::ParsedMethod::Unfinishable => ProofMethod::Finished(MethodResult::Unfinishable),
+        p::ParsedMethod::SolvedLeaf => ProofMethod::Finished(MethodResult::Solved),
+    })
+}
+
+/// A lemma's stored proof as the internal [`ProofTree`], the shape HS's
+/// `proofSkeleton` returns (Theory/Text/Parser/Proof.hs:98-115).
+pub fn proof_tree_from_parsed(
+    t: &p::ParsedProofTree,
+    sig: &MaudeSig,
+) -> Result<ProofTree, ElabError> {
+    let cases: Result<Vec<_>, _> = t
+        .cases
+        .iter()
+        .map(|(name, sub)| proof_tree_from_parsed(sub, sig).map(|sub| (name.clone(), sub)))
+        .collect();
+    Ok(ProofTree {
+        method: proof_method_from_parsed(&t.method, sig)?,
+        cases: cases?,
+    })
 }
 
 fn compute_new_vars(

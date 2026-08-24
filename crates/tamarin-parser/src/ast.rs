@@ -279,45 +279,37 @@ pub struct ParsedProofTree {
     pub cases: Vec<(String, ParsedProofTree)>,
 }
 
-/// Parsed proof method.  Mirrors HS's `ProofMethod` enum (matched by
-/// `Theory.Text.Parser.Proof.proofMethod`, Text/Parser/Proof.hs:76-85).  Plus
-/// `Solved` for the `SOLVED` keyword leaf and `Other` for any token
-/// pattern intentionally left to the auto-prover fallback.
+/// Parsed proof method.  Mirrors the `ProofMethod` values HS's
+/// `proofMethod` (Theory/Text/Parser/Proof.hs:75-85) produces, plus
+/// `SolvedLeaf` for the `SOLVED` keyword, which HS reads at the skeleton
+/// level (`solvedProof`, Theory/Text/Parser/Proof.hs:102-103).
 #[derive(Debug, Clone, PartialEq)]
 pub enum ParsedMethod {
-    /// `by sorry` or `sorry` (HS: `Sorry Nothing`).  This is the
-    /// placeholder `replaceSorryProver` replaces.
+    /// `sorry` (HS `Sorry Nothing`).  This is the placeholder
+    /// `replaceSorryProver` replaces.
     Sorry,
-    /// `by contradiction` (HS: `Finished (Contradictory Nothing)`).
+    /// `contradiction` (HS `Finished (Contradictory Nothing)`).
     Contradiction,
-    /// `simplify` (HS: `Simplify`).
+    /// `simplify` (HS `Simplify`).
     Simplify,
-    /// `induction` (HS: `Induction`).
+    /// `induction` (HS `Induction`).
     Induction,
-    /// `solve( <goal-text> )` (HS: `SolveGoal <parsed-goal>`).  We
-    /// capture the raw inner text plus a best-effort parsed `GoalSpec`.
-    /// The String is the raw text inside `solve( ... )`, preserved for
-    /// HS-faithful unannotated subtree display (see `replay.rs`).
-    SolveGoal(GoalSpec, String),
-    /// `SOLVED` (HS: `Finished Solved`).
+    /// `solve( <goal> )` (HS `SolveGoal <goal>`).
+    SolveGoal(GoalSpec),
+    /// `SOLVED` (HS `Finished Solved`).
     SolvedLeaf,
-    /// `UNFINISHABLE` (HS: `Finished Unfinishable`).
+    /// `UNFINISHABLE` (HS `Finished Unfinishable`).
     Unfinishable,
-    /// `INVALIDATED` (HS: `Invalidated`).
+    /// `INVALIDATED` (HS `Invalidated`).
     Invalidated,
-    /// Any proof-method token not matched by a structural variant;
-    /// intentionally replayed via the auto-prover.
-    Other(String),
 }
 
 /// The goal of a stored `solve( ... )` step.
 ///
-/// The five forms below are the ones [`crate::parser::parse_goal_str`]
-/// builds from HS's `goal` grammar (Theory/Text/Parser/Proof.hs:38-72); they
-/// mirror the HS `Goal` constructors (Constraints.hs:159-171) over surface
-/// terms instead of `LNTerm`s.  A disjunction-split goal is still recognised
-/// from its text (`Disj`), and any goal text neither path recognises is kept
-/// verbatim in `Raw`.
+/// [`crate::parser::parse_goal_str`] builds these from HS's `goal` grammar
+/// (Theory/Text/Parser/Proof.hs:38-72); they mirror the HS `Goal`
+/// constructors (Constraints.hs:159-171) over surface terms and formulas
+/// instead of `LNTerm`s and `LNGuarded`s.
 #[derive(Debug, Clone, PartialEq)]
 pub enum GoalSpec {
     /// `Fact( args... ) @ #i` — HS `ActionG LVar LNFact`.
@@ -330,37 +322,13 @@ pub enum GoalSpec {
     Premise((VarSpec, u64), Fact),
     /// `splitEqs(N)` — HS `SplitG SplitId`.
     Split(i64),
-    /// `gf1 ∥ gf2 ∥ ...` — HS `DisjG (Disj LNGuarded)`, recognised from the
-    /// goal text: `alts` is each disjunct's top-level shape and `alt_texts`
-    /// its normalised rendering, which together stand in for the `Guarded`
-    /// values HS parses.
-    Disj {
-        alts: Vec<DisjAlt>,
-        alt_texts: Vec<String>,
-    },
+    /// `gf1 ∥ gf2 ∥ ...` — HS `DisjG (Disj LNGuarded)`.  Each disjunct is a
+    /// `plainFormula`; HS's `guardedFormula`
+    /// (Theory/Text/Parser/Formula.hs:122-127) turns it into an `LNGuarded`,
+    /// which `tamarin_theory::elaborate::goal_from_parsed` does here.
+    Disj(Vec<Formula>),
     /// `<small> ⊏ <big>` — HS `SubtermG (LNTerm, LNTerm)`.
     Subterm(Term, Term),
-    /// Goal text neither the goal grammar nor the disjunction splitter
-    /// recognises.  The replay walker falls back to the auto-prover on it.
-    Raw(String),
-}
-
-/// Structural signature of one alt inside a `solve( a ∥ b ∥ … )` text.
-/// See [`GoalSpec::Disj`] for context.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DisjAlt {
-    /// `∀ x1 .. xN. …`  — universally quantified alt with `n_vars`
-    /// bound names.
-    All { n_vars: usize },
-    /// `∃ x1 .. xN. …`  — existentially quantified alt with `n_vars`
-    /// bound names.
-    Ex { n_vars: usize },
-    /// Atom, conjunction of atoms, or negated atom — anything that
-    /// does NOT begin with a top-level quantifier.  We don't try to
-    /// match deeper here; the count + shape mix is enough to
-    /// distinguish disjs that co-exist in `sys.goals` at any replay
-    /// point.
-    NonQuant,
 }
 
 // =============================================================================

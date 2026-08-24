@@ -250,26 +250,32 @@ pub struct LNMacro {
     pub body: tamarin_term::lterm::LNTerm,
 }
 
-/// Stored proof: either an unproven skeleton (raw text) or a
-/// completed proof tree. We keep this opaque in the typed AST.
+/// One node of a lemma's stored proof — HS `ProofSkeleton = Proof ()`, i.e.
+/// `LTree CaseName (ProofStep ())` (Theory/ProofSkeleton.hs:30,
+/// Theory/Proof.hs:187-192,238).
 ///
-/// `tree` is the structured parse of `raw`, produced by
-/// [`tamarin_parser::parse_proof_tree`].  Used by
-/// `prove::replace_sorry_prove` (the HS `replaceSorryProver` analogue,
-/// HS: Theory/Proof.hs:642-650) to walk the skeleton at proof-replay
-/// time and invoke the auto-prover only at `by sorry` leaves.
+/// `cases` keeps the source order of the `case` blocks; the printer sorts by
+/// name (HS stores them in an `M.fromList`, Theory/Text/Parser/Proof.hs:113)
+/// and replay looks each case up by name.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProofTree {
+    pub method: crate::constraint::solver::proof_method::ProofMethod,
+    pub cases: Vec<(String, ProofTree)>,
+}
+
+/// A lemma's stored proof.  `None` is a lemma written without one, which HS
+/// gives the one-node `unproven ()` skeleton
+/// (Theory/ProofSkeleton.hs:59-61); `prove::replace_sorry_prove` (HS
+/// `replaceSorryProver`, Theory/Proof.hs:641-650) walks the tree at
+/// proof-replay time and invokes the auto-prover only at `sorry` leaves.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProofSkeleton {
-    pub raw: String,
-    pub tree: Option<tamarin_parser::ast::ParsedProofTree>,
+    pub tree: Option<ProofTree>,
 }
 
 impl ProofSkeleton {
     pub fn unproven() -> Self {
-        ProofSkeleton {
-            raw: String::new(),
-            tree: None,
-        }
+        ProofSkeleton { tree: None }
     }
 }
 
@@ -673,15 +679,12 @@ mod tests {
         assert!(o.lemmas_to_prove.is_empty());
     }
 
-    /// An unproven lemma carries no proof text and no parsed tree.  The
-    /// pretty-printer reads `raw`.  The web and JSON paths read `tree`.  A
-    /// placeholder in either field makes the code print a proof that the
-    /// prover never found.
+    /// An unproven lemma carries no proof tree.  The printer, the web and
+    /// the JSON paths all read `tree`; a placeholder there makes the code
+    /// print a proof that the prover never found.
     #[test]
     fn proof_skeleton_unproven_is_empty() {
-        let p = ProofSkeleton::unproven();
-        assert!(p.raw.is_empty());
-        assert!(p.tree.is_none());
+        assert!(ProofSkeleton::unproven().tree.is_none());
     }
 }
 

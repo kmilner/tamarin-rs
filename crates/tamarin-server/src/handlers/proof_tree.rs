@@ -712,19 +712,14 @@ pub fn parse_method(
 
 /// Render the proof tree for a lemma as nested HTML — mirrors
 /// Haskell's `prettyProof`.
-pub fn render_proof_tree_html(
-    idx: usize,
-    lemma: &str,
-    root: &ProofNode,
-    sig: &tamarin_term::maude_sig::MaudeSig,
-) -> String {
+pub fn render_proof_tree_html(idx: usize, lemma: &str, root: &ProofNode) -> String {
     let mut out = String::new();
     out.push_str(&format!(
         "<h2>Proof of <code>{}</code></h2>\n",
         html_escape(lemma),
     ));
     let path: Vec<String> = Vec::new();
-    render_node(&mut out, idx, lemma, &path, root, sig);
+    render_node(&mut out, idx, lemma, &path, root);
     out
 }
 
@@ -982,7 +977,7 @@ fn write_applicable_methods(
         let link = hpj::with_tag(
             "a",
             &[("class", "internal-link proof-method"), ("href", &href)],
-            tamarin_theory::pretty_theory::pretty_proof_method_doc(m, &ctx.maude.maude_sig()),
+            tamarin_theory::pretty_theory::pretty_proof_method_doc(m),
         );
         let item = if expl.is_empty() {
             link
@@ -1100,21 +1095,14 @@ fn uses_oracle(ctx: &ProofContext) -> bool {
     })
 }
 
-fn render_node(
-    out: &mut String,
-    idx: usize,
-    lemma: &str,
-    path: &[String],
-    node: &ProofNode,
-    sig: &tamarin_term::maude_sig::MaudeSig,
-) {
+fn render_node(out: &mut String, idx: usize, lemma: &str, path: &[String], node: &ProofNode) {
     let url_path = encode_sub_path(path);
     out.push_str("<div class=\"proof-node\">");
     // Method line with status badge.
     let badge = status_badge(&node.status);
     out.push_str(&format!(
         "<span class=\"proof-method\">{}</span> {}",
-        html_escape(&method_label(&node.method, sig)),
+        html_escape(&method_label(&node.method)),
         badge,
     ));
     // Action links: depending on method/status, offer apply links.
@@ -1174,7 +1162,7 @@ fn render_node(
             let mut child_path = path.to_vec();
             child_path.push(case_name.clone());
             out.push_str(&format!("<h4>Case {}</h4>\n", html_escape(case_name)));
-            render_node(out, idx, lemma, &child_path, child, sig);
+            render_node(out, idx, lemma, &child_path, child);
         }
         out.push_str("</div>");
     }
@@ -1182,14 +1170,14 @@ fn render_node(
 
 /// Port of Haskell's `prettyProofMethod`
 /// (`lib/theory/src/Theory/Constraint/Solver/ProofMethod.hs:1173-1186`).
-pub fn method_label(m: &ProofMethod, sig: &tamarin_term::maude_sig::MaudeSig) -> String {
+pub fn method_label(m: &ProofMethod) -> String {
     // Delegate to the byte-faithful `--prove` renderer (HS `prettyProofMethod`)
     // so the interactive method labels carry the same fact spacing
     // (`!KU( ~ltk )`), LVar dots (`#vk.2`), and contradiction reasons as the
     // text proof.  The hand-rolled `goal_summary` below drops the fact
     // multiplicity `!`, the inner-paren spaces, and the LVar index dot, so it
     // is unsuitable here.
-    tamarin_theory::pretty_theory::pretty_proof_method_inline(m, sig)
+    tamarin_theory::pretty_theory::pretty_proof_method_inline(m)
 }
 
 fn status_badge(s: &NodeStatus) -> String {
@@ -1395,12 +1383,7 @@ end
             annotated: true,
         };
         assert_eq!(
-            render_proof_tree_html(
-                1,
-                "L",
-                &root,
-                &tamarin_term::maude_sig::minimal_maude_sig(false)
-            ),
+            render_proof_tree_html(1, "L", &root),
             concat!(
                 "<h2>Proof of <code>L</code></h2>\n",
                 "<div class=\"proof-node\">",
@@ -1426,13 +1409,7 @@ end
         // `prettyProofMethod (Sorry Nothing)` (ProofMethod.hs:1179-1180)
         // as a plain `sorry` (no `/* ... */` reason).  Confirmed against
         // the repo HS prover: an unproven lemma prints `by sorry`.
-        assert_eq!(
-            method_label(
-                &ProofMethod::Sorry(None),
-                &tamarin_term::maude_sig::minimal_maude_sig(false)
-            ),
-            "sorry"
-        );
+        assert_eq!(method_label(&ProofMethod::Sorry(None)), "sorry");
         // The fresh root built by ProofState::new must be Sorry(None).
         // (We only assert the label form here; building a full ProofState
         // requires Maude and is covered by build_state_for_trivial_theory.)

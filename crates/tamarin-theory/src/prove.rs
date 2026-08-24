@@ -1669,11 +1669,7 @@ pub fn prove_lemma_with_pool_file_heuristic(
     // pre-existing auto-prover-from-scratch behavior.
     if let Some(tree) = lemma.proof.tree.clone() {
         if tamarin_utils::env_gate!("TAM_DBG_REPLAY") {
-            eprintln!(
-                "[replay] firing skeleton replay for `{}` (raw {} bytes)",
-                lemma_name,
-                lemma.proof.raw.len()
-            );
+            eprintln!("[replay] firing skeleton replay for `{}`", lemma_name);
         }
         return Ok(crate::replay::replace_sorry_prove(
             &ctx,
@@ -1683,9 +1679,8 @@ pub fn prove_lemma_with_pool_file_heuristic(
         ));
     } else if tamarin_utils::env_gate!("TAM_DBG_REPLAY") {
         eprintln!(
-            "[replay] NO tree on `{}` (raw {} bytes) — falling through to auto-prover",
-            lemma_name,
-            lemma.proof.raw.len()
+            "[replay] NO tree on `{}` — falling through to auto-prover",
+            lemma_name
         );
     }
     let r = run_proof_search(&ctx, sys, proof_bound);

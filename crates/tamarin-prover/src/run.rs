@@ -2012,10 +2012,7 @@ impl TheoryPipeline<'_> {
                             tamarin_theory::constraint::solver::search::proof_status(&root),
                             exists_trace,
                         );
-                        let body = tamarin_theory::pretty_theory::pretty_proof_body(
-                            &root,
-                            elaborated.signature.maude_sig(),
-                        );
+                        let body = tamarin_theory::pretty_theory::pretty_proof_body(&root);
                         if want_traces {
                             for (path, sys) in
                                 tamarin_theory::constraint::solver::search::into_solved_systems(

@@ -366,14 +366,11 @@ fn title_for(entry: &crate::state::TheoryEntry, path: &path_parse::TheoryPath) -
                             // the newline to a space; the break
                             // position is what must match).
                             let _guard = tamarin_theory::pretty_hpj::HtmlEntityWidthGuard::enable();
-                            tamarin_theory::pretty_theory::pretty_proof_method_doc(
-                                &n.method,
-                                entry.typed_theory.signature.maude_sig(),
-                            )
-                            .render_with(
-                                tamarin_theory::pretty_hpj::DEFAULT_LINE_LENGTH,
-                                tamarin_theory::pretty_hpj::DEFAULT_RIBBON,
-                            )
+                            tamarin_theory::pretty_theory::pretty_proof_method_doc(&n.method)
+                                .render_with(
+                                    tamarin_theory::pretty_hpj::DEFAULT_LINE_LENGTH,
+                                    tamarin_theory::pretty_hpj::DEFAULT_RIBBON,
+                                )
                         })
                     })
                     .unwrap_or_else(|| "None".to_string());
@@ -448,10 +445,7 @@ fn render_theory_source(entry: &crate::state::TheoryEntry) -> String {
                 ps.get_root(&l.name)
                     .map(|root| tamarin_theory::pretty_theory::ProvedLemma {
                         name: l.name.clone(),
-                        proof_body: Some(tamarin_theory::pretty_theory::pretty_proof_body(
-                            &root,
-                            entry.typed_theory.signature.maude_sig(),
-                        )),
+                        proof_body: Some(tamarin_theory::pretty_theory::pretty_proof_body(&root)),
                     })
             })
             .collect(),
@@ -2000,14 +1994,13 @@ pub async fn proof_step(
     // shared ctx before ranking the re-rendered snippet (HS `getProofContext`).
     let mut ctx_guard = ps.ctx.lock();
     ps.install_lemma_settings(&mut ctx_guard, &lemma);
-    let sig = ctx_guard.maude.maude_sig();
     let mut html = crate::handlers::proof_tree::render_sub_proof_snippet(
         idx, &lemma, &case_path, node, &ctx_guard,
     );
     drop(ctx_guard);
     html.push_str("<hr><h3>Proof tree</h3>\n");
     html.push_str(&crate::handlers::proof_tree::render_proof_tree_html(
-        idx, &lemma, &root, &sig,
+        idx, &lemma, &root,
     ));
     let title = format!("Proof of {}", lemma);
     json_resp::html(title, html)

@@ -3,7 +3,7 @@
 //   scripts/gen_license_headers.py --authors <this file>
 
 use super::*;
-use crate::ast::{BinOp, FactAnnotation, Term};
+use crate::ast::{Atom, BinOp, FactAnnotation, Formula, GoalSpec, Term};
 use crate::parser::{parse_goal_str, Parser};
 use tamarin_term::lterm::LSort;
 
@@ -20,19 +20,6 @@ fn leaf_forms() {
         assert_eq!(t.method, method, "{src}");
         assert!(t.cases.is_empty(), "{src} must be childless: {:?}", t.cases);
     }
-}
-
-#[test]
-fn count_quant_vars_with_dotted_idx() {
-    // Bound vars with idx>0 render as `name.idx` (HS LVar Show).
-    // The `.idx` suffix must NOT terminate the count; only the
-    // body-terminator `.` (followed by ws/EOF) ends the var list.
-    assert_eq!(count_quant_vars("x y #i.1 #j."), 4);
-    assert_eq!(count_quant_vars("t.5 x."), 2);
-    // Trailing dotted var before the body terminator.
-    assert_eq!(count_quant_vars("#t #t.1."), 2);
-    // No dotted suffixes.
-    assert_eq!(count_quant_vars("a b c."), 3);
 }
 
 #[test]
@@ -57,14 +44,16 @@ fn induction_with_case_block() {
 
 #[test]
 fn identifier_stops_at_hyphen() {
-    // HS `identifier` (Token.hs:214-230, see line 224 `identLetter = alphaNum <|> oneOf
-    // "_"`) does NOT accept `-`, so a case name like `foo-bar` is
-    // tokenised as the identifier `foo`; the `-bar` is not part of the
-    // case name.  This locks in HS-faithful identifier termination.
-    let t = parse_proof_tree("induction case foo-bar by sorry qed", &bare_parser()).expect("parse");
+    // HS `identifier` (Token.hs:214-230, see line 224 `identLetter = alphaNum
+    // <|> oneOf "_"`) does NOT accept `-`, so `case foo-bar` names the case
+    // `foo` and leaves `-bar` where `proofSkeleton` expects a proof method,
+    // which no `proofMethod` alternative reads.  An underscore IS an
+    // `identLetter`, so the same shape with `_` parses and names one case.
+    assert!(parse_proof_tree("induction case foo-bar by sorry qed", &bare_parser()).is_err());
+    let t = parse_proof_tree("induction case foo_bar by sorry qed", &bare_parser()).expect("parse");
     assert_eq!(t.method, ParsedMethod::Induction);
     assert_eq!(t.cases.len(), 1);
-    assert_eq!(t.cases[0].0, "foo");
+    assert_eq!(t.cases[0].0, "foo_bar");
 }
 
 #[test]
@@ -308,7 +297,7 @@ fn nested_case_block() {
             qed
         ";
     let t = parse_proof_tree(src, &bare_parser()).expect("parse");
-    assert!(matches!(t.method, ParsedMethod::SolveGoal(_, _)));
+    assert!(matches!(t.method, ParsedMethod::SolveGoal(_)));
     assert_eq!(t.cases.len(), 2);
     assert_eq!(t.cases[0].0, "case_1");
     assert_eq!(t.cases[0].1.cases.len(), 2);
@@ -317,64 +306,79 @@ fn nested_case_block() {
     assert_eq!(t.cases[1].0, "case_2");
 }
 
+/// HS reads the goal of a `solve( ... )` step with `parens goal`
+/// (Theory/Text/Parser/Proof.hs:80), so text no alternative of `goal`
+/// accepts fails the whole skeleton parse.
 #[test]
-fn raw_goalspec_fallback() {
-    // Unknown gibberish goal-text — should fall back to
-    // GoalSpec::Raw.  All recognised forms (Action, Premise, Disj,
-    // Chain, Subterm, Split) need specific structural markers.
-    let src = "solve( garbage_no_marker ) by sorry";
-    let t = parse_proof_tree(src, &bare_parser()).expect("parse");
-    match &t.method {
-        ParsedMethod::SolveGoal(GoalSpec::Raw(_), _) => {}
-        other => panic!("expected Raw goal-spec, got {:?}", other),
-    }
+fn unparseable_goal_fails_the_tree_parse() {
+    assert!(parse_proof_tree("solve( garbage_no_marker ) by sorry", &bare_parser()).is_err());
 }
 
-/// `solve( (last(#t1)) ∥ (#t1 < #t2) )` has two non-quant alts.  The captured
-/// `alt_texts` are the tie-breaker that `tamarin_theory::replay::match_goal`
-/// uses when several `sys.goals` disjs have the same alt shape.  The parser
-/// must therefore emit them under the normalisation that the runtime side
-/// applies again in `normalize_disj_alt_text_for_match`.  That normalisation
-/// drops the outer parentheses.  It then removes every whitespace character
-/// and every `#` character.
+/// HS `proofMethod` (Theory/Text/Parser/Proof.hs:75-85) is an `asum` of seven
+/// keyword alternatives with no catch-all, so an unknown token fails.
+#[test]
+fn unknown_method_token_fails_the_tree_parse() {
+    assert!(parse_proof_tree("rule-equivalence by sorry", &bare_parser()).is_err());
+    assert!(parse_proof_tree("by ATTACK", &bare_parser()).is_err());
+}
+
+/// HS `disjSplitGoal` (Theory/Text/Parser/Proof.hs:61) is
+/// `sepBy1 guardedFormula (symbol "∥")`, so each alternative is a whole
+/// formula and the goal keeps them all.
 #[test]
 fn solve_disj_two_alts() {
     let src = "solve( (last(#t1)) \u{2225} (#t1 < #t2) ) by sorry";
     let t = parse_proof_tree(src, &bare_parser()).expect("parse");
     match &t.method {
-        ParsedMethod::SolveGoal(GoalSpec::Disj { alts, alt_texts }, _) => {
+        ParsedMethod::SolveGoal(GoalSpec::Disj(alts)) => {
             assert_eq!(alts.len(), 2);
-            assert!(matches!(alts[0], DisjAlt::NonQuant));
-            assert!(matches!(alts[1], DisjAlt::NonQuant));
-            assert_eq!(*alt_texts, vec!["last(t1)", "t1<t2"]);
+            assert!(matches!(alts[0], Formula::Atom(Atom::Last(_))));
+            assert!(matches!(alts[1], Formula::Atom(Atom::Less(_, _))));
         }
-        other => panic!("expected Disj goal-spec, got {:?}", other),
+        other => panic!("expected a disjunction goal, got {:?}", other),
     }
 }
 
+/// `sepBy1` accepts a single alternative.  The solver mints a `DisjG` goal
+/// only from a case split with two or more disjuncts, so no example file
+/// stores one; this is the only coverage of that language.
+#[test]
+fn solve_disj_one_alt() {
+    let t = parse_proof_tree("solve( (last(#t1)) ) by sorry", &bare_parser()).expect("parse");
+    match &t.method {
+        ParsedMethod::SolveGoal(GoalSpec::Disj(alts)) => {
+            assert_eq!(alts.len(), 1);
+            assert!(matches!(alts[0], Formula::Atom(Atom::Last(_))));
+        }
+        other => panic!("expected a disjunction goal, got {:?}", other),
+    }
+}
+
+/// Yubikey `slightly_weaker_invariant`'s first `solve(...)`: a `∀` alt with
+/// seven binders and an `∃` alt with five.
 #[test]
 fn solve_disj_quantified_alts() {
-    // Yubikey slightly_weaker_invariant first solve(...) — 2 alts:
-    // ∀-quantified with 7 vars, ∃-quantified with 5 vars.
     let src = "solve( (\u{2200} pid otc1 tc1 otc2 tc2 #t1 #t2. \
                           (last(#t1)) \u{2228} (last(#t2))) \u{2225} \
                           (\u{2203} #t1 #t2 a b c. (last(#t1))) ) by sorry";
     let t = parse_proof_tree(src, &bare_parser()).expect("parse");
     match &t.method {
-        ParsedMethod::SolveGoal(GoalSpec::Disj { alts, alt_texts: _ }, _) => {
+        ParsedMethod::SolveGoal(GoalSpec::Disj(alts)) => {
             assert_eq!(alts.len(), 2);
-            assert_eq!(alts[0], DisjAlt::All { n_vars: 7 });
-            assert_eq!(alts[1], DisjAlt::Ex { n_vars: 5 });
+            match (&alts[0], &alts[1]) {
+                (Formula::Forall(vs, _), Formula::Exists(ws, _)) => {
+                    assert_eq!(vs.len(), 7);
+                    assert_eq!(ws.len(), 5);
+                }
+                other => panic!("expected a ∀ alt then an ∃ alt, got {other:?}"),
+            }
         }
-        other => panic!("expected Disj goal-spec, got {:?}", other),
+        other => panic!("expected a disjunction goal, got {:?}", other),
     }
 }
 
-/// The inner solve of Yubikey `slightly_weaker_invariant` has 5 non-quant
-/// alts.  The binding-A and binding-B instantiations of this goal have the
-/// same 5-alt NonQuant shape.  Only `alt_texts` tells them apart.  Here
-/// alt[0] is `last(t2)`, and the other disj has `last(t1)`.  A nested alt
-/// keeps its inner parentheses.
+/// The inner `solve(...)` of Yubikey `slightly_weaker_invariant` has five
+/// alternatives, one of them a conjunction.
 #[test]
 fn solve_disj_five_alts() {
     let src = "solve( (last(#t2)) \u{2225} (last(#t1)) \u{2225} \
@@ -382,22 +386,14 @@ fn solve_disj_five_alts() {
                           (#t2 < #t1) \u{2225} (#t1 = #t2) ) by sorry";
     let t = parse_proof_tree(src, &bare_parser()).expect("parse");
     match &t.method {
-        ParsedMethod::SolveGoal(GoalSpec::Disj { alts, alt_texts }, _) => {
+        ParsedMethod::SolveGoal(GoalSpec::Disj(alts)) => {
             assert_eq!(alts.len(), 5);
-            for a in alts.iter() {
-                assert!(matches!(a, DisjAlt::NonQuant));
-            }
-            assert_eq!(
-                *alt_texts,
-                vec![
-                    "last(t2)",
-                    "last(t1)",
-                    "(t1<t2)\u{2227}(last(t3))",
-                    "t2<t1",
-                    "t1=t2",
-                ]
-            );
+            assert!(matches!(alts[0], Formula::Atom(Atom::Last(_))));
+            assert!(matches!(alts[1], Formula::Atom(Atom::Last(_))));
+            assert!(matches!(alts[2], Formula::And(_, _)));
+            assert!(matches!(alts[3], Formula::Atom(Atom::Less(_, _))));
+            assert!(matches!(alts[4], Formula::Atom(Atom::Eq(_, _))));
         }
-        other => panic!("expected Disj goal-spec, got {:?}", other),
+        other => panic!("expected a disjunction goal, got {:?}", other),
     }
 }

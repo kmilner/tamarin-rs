@@ -26,12 +26,11 @@
 //! See [`crate::ast::ParsedProofTree`] / [`crate::ast::ParsedMethod`]
 //! for the shape of the structured output; the `goal` inside a
 //! `solve( ... )` step is read by [`crate::parser::parse_goal_str`].
-//! Anything we can't recognise structurally (rare proof-method tokens,
-//! unusual goal formulas) is captured in `Other(text)` /
-//! `GoalSpec::Raw(text)` so the replay walker can fall back to the
-//! auto-prover.
+//! A token this grammar does not accept fails the parse, as it does in HS;
+//! the caller (parser.rs `try_proof_skeleton`) downgrades the failure to
+//! `tree: None`.
 
-use crate::ast::{DisjAlt, GoalSpec, ParsedMethod, ParsedProofTree};
+use crate::ast::{ParsedMethod, ParsedProofTree};
 use crate::lexer::{is_ident_char, Lexer};
 use crate::parser::Parser;
 
@@ -187,33 +186,19 @@ impl<'a> TreeParser<'a> {
         // Theory/Text/Parser/Proof.hs:102-103) — see the
         // `SOLVED` branch of `proof_skeleton`.
         if self.try_kw("solve") {
-            // `solve( <goal-text> )`.  HS parses an inner `goal`
-            // (Theory/Text/Parser/Proof.hs:80); we frame the parenthesised
-            // text and hand it to the same grammar, keeping the text for the
-            // forms [`parse_goal_spec`] still recognises.
+            // `solve( <goal> )`.  HS reads `parens goal`
+            // (Theory/Text/Parser/Proof.hs:80); the parenthesised text is
+            // framed here and handed to the same grammar.
             self.require_punct("(")?;
             let inner = self.read_balanced_paren()?;
             // `read_balanced_paren` consumed the matching `)`.
             let spec = crate::parser::parse_goal_str(&inner, self.parent)
-                .unwrap_or_else(|_| parse_goal_spec(&inner));
-            return Ok(ParsedMethod::SolveGoal(spec, inner));
+                .map_err(|e| self.err(format!("in solve( ... ): {}", e)))?;
+            return Ok(ParsedMethod::SolveGoal(spec));
         }
-        // Unrecognised token — capture the next identifier-like word
-        // so we can carry it through to `Other(...)`.
-        let save = self.lx.pos();
-        let mut word = String::new();
-        while let Some(c) = self.lx.peek() {
-            if c.is_whitespace() || c == '(' || c == ')' {
-                break;
-            }
-            word.push(c);
-            self.lx.bump();
-        }
-        if word.is_empty() {
-            self.lx.set_pos(save);
-            return Err(self.err("expected proof method"));
-        }
-        Ok(ParsedMethod::Other(word))
+        // HS `proofMethod` (Theory/Text/Parser/Proof.hs:75-85) has no
+        // catch-all alternative, so any other token fails the skeleton parse.
+        Err(self.err("expected proof method"))
     }
 
     // -------- helpers --------
@@ -302,187 +287,6 @@ impl<'a> TreeParser<'a> {
         }
         Ok(s)
     }
-}
-
-// =============================================================================
-// Goal-spec parser
-// =============================================================================
-
-/// Classify a `solve( ... )` goal text that [`crate::parser::parse_goal_str`]
-/// does not accept.
-///
-/// HS `disjSplitGoal = (DisjG . Disj) <$> sepBy1 guardedFormula (symbol "∥")`
-/// (Theory/Text/Parser/Proof.hs:61) parses each disjunct into a `Guarded`
-/// value; here each disjunct contributes its top-level shape and its
-/// normalised text, which the replay matcher uses in place of those values.
-/// Text that carries no top-level `∥` is kept verbatim in
-/// [`GoalSpec::Raw`] and the replay walker falls back to the auto-prover.
-pub fn parse_goal_spec(raw: &str) -> GoalSpec {
-    let trimmed = raw.trim();
-    let parts = split_top_level_disj(trimmed);
-    if parts.len() < 2 {
-        // `sepBy1` would read a lone `guardedFormula` as a one-disjunct
-        // `DisjG (Disj [gf])`.  The solver mints a `DisjG` goal only from a
-        // case split with two or more disjuncts, so that degenerate goal is
-        // never printed; requiring `∥` also keeps every other unrecognised
-        // goal text out of the `Disj` classification.
-        return GoalSpec::Raw(trimmed.to_string());
-    }
-    let alts: Vec<DisjAlt> = parts.iter().map(|p| classify_disj_alt(p)).collect();
-    // The shape signature alone does not separate two `DisjG` goals that the
-    // insertImpliedFormulas pass minted at one induction hypothesis: they
-    // share their alt count and every per-alt shape.  HS separates them by
-    // the concrete LVar identities inside each parsed `Guarded`; the
-    // normalised alt text carries the same distinction across the
-    // skeleton-vs-runtime boundary.  Yubikey::slightly_weaker_invariant at
-    // /non_empty_trace/case_1 is the case: alt[0] is `last(#t2)` in one and
-    // `last(#t1)` in the other.
-    let alt_texts: Vec<String> = parts
-        .iter()
-        .map(|p| {
-            let s = strip_outer_parens(p.trim()).trim().to_string();
-            normalize_disj_alt_text(&s)
-        })
-        .collect();
-    GoalSpec::Disj { alts, alt_texts }
-}
-
-/// Normalize a disj-alt's text for cross-renderer comparison.  Both
-/// sides are tamarin-style text: the HS skeleton renders alts via
-/// `prettyGuarded` (Guarded.hs:822-864) and the runtime side is rendered
-/// by `pretty_disj_alt`/`pretty_guarded` (the same HS `prettyGuarded`),
-/// producing text such as `last(#t2)` — NOT a Rust Debug
-/// `Var(Free(VarSpec{...}))` string.  The comparison only works because
-/// BOTH sides run through this identical whitespace + leading-`#`
-/// stripping, which reveals divergent var bindings via a simple
-/// substring/equality check.
-fn normalize_disj_alt_text(s: &str) -> String {
-    s.chars()
-        .filter(|c| !c.is_whitespace() && *c != '#')
-        .collect()
-}
-
-/// Split `s` at top-level `∥` characters (U+2225).  Ignores any `∥`
-/// that lives inside a `()/[]/<>/{}` bracket pair.
-fn split_top_level_disj(s: &str) -> Vec<String> {
-    const SEP: char = '\u{2225}';
-    let mut out = Vec::new();
-    let mut cur = String::new();
-    let mut depth: i32 = 0;
-    for c in s.chars() {
-        match c {
-            '(' | '[' | '{' => {
-                depth += 1;
-                cur.push(c);
-            }
-            ')' | ']' | '}' => {
-                depth -= 1;
-                cur.push(c);
-            }
-            // `<` / `>` are used for tuple syntax inside facts; we don't
-            // need to bracket-track them here because the `∥` separator
-            // never appears inside `<…>`.  Tracking them would break on
-            // `#t1 < #t2` which is a TIMEPOINT-LESS atom, not a tuple.
-            _ if c == SEP && depth == 0 => {
-                out.push(std::mem::take(&mut cur));
-            }
-            _ => cur.push(c),
-        }
-    }
-    out.push(cur);
-    out
-}
-
-/// Classify the shape of one disj-alt — its top-level quantifier, if
-/// any, plus the number of bound variables.  Strips any surrounding
-/// `(...)` so `(∀ x y. …)` and `∀ x y. …` classify identically.
-fn classify_disj_alt(raw: &str) -> DisjAlt {
-    let trimmed = strip_outer_parens(raw.trim());
-    // Look for a leading `∀` (U+2200) or `∃` (U+2203) after stripping
-    // any further whitespace.
-    let t = trimmed.trim_start();
-    if let Some(rest) = t.strip_prefix('\u{2200}') {
-        return DisjAlt::All {
-            n_vars: count_quant_vars(rest),
-        };
-    }
-    if let Some(rest) = t.strip_prefix('\u{2203}') {
-        return DisjAlt::Ex {
-            n_vars: count_quant_vars(rest),
-        };
-    }
-    DisjAlt::NonQuant
-}
-
-/// Strip ONE balanced layer of outer parens.  `"(x ∨ y)"` → `"x ∨ y"`;
-/// `"x ∨ y"` returns unchanged.  Only strips if the opening `(` at
-/// position 0 matches a closing `)` at the very end of the string with
-/// no intermediate depth-0 break.
-fn strip_outer_parens(s: &str) -> &str {
-    let bytes = s.as_bytes();
-    if bytes.len() < 2 || bytes[0] != b'(' || bytes[bytes.len() - 1] != b')' {
-        return s;
-    }
-    // Verify the opening `(` matches the FINAL `)` (no depth-drop in between).
-    let mut depth: i32 = 0;
-    for (i, c) in s.char_indices() {
-        match c {
-            '(' => depth += 1,
-            ')' => {
-                depth -= 1;
-                if depth == 0 {
-                    if i + c.len_utf8() == s.len() {
-                        // The first `(` closes at the last char — safe to strip.
-                        return &s[1..s.len() - 1];
-                    }
-                    return s; // Closes early — not a wrapping pair.
-                }
-            }
-            _ => {}
-        }
-    }
-    s
-}
-
-/// Count the number of identifier-like variable names appearing after
-/// a `∀` / `∃` and before the next `.`.  HS's quantifier list is
-/// `\\forall x1 x2 … xN.` — we count whitespace-separated tokens that
-/// look like identifiers (possibly with a leading `#` for nodevars or
-/// `~` for fresh-name vars).  Stops at the quantifier-body separator
-/// `.`.
-///
-/// Note: a bound var with a non-zero LVar index renders as
-/// `name.idx` (HS `LVar` Show, LTerm.hs:550-557, via
-/// `ppVars = fsep . map (text . show)`, Guarded.hs:824-866, see line 862), e.g.
-/// `∀ x #i.1 #j.`.  So a `.` that is immediately followed by an ASCII
-/// digit is a var-index suffix, NOT the body terminator — we must
-/// keep counting through it.  The real body terminator `.` is always
-/// followed by whitespace / `(` / EOF, never a digit.
-fn count_quant_vars(after_qua: &str) -> usize {
-    let mut n = 0usize;
-    let mut in_token = false;
-    let mut chars = after_qua.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '.' {
-            // `.idx` suffix on the current var token — consume the dot
-            // as part of the token and keep going.
-            if chars.peek().is_some_and(|d| d.is_ascii_digit()) {
-                in_token = true;
-                continue;
-            }
-            // Genuine quantifier-body terminator.
-            break;
-        }
-        if c == '#' || c == '~' || c == '$' || c == '%' || is_ident_char(c) {
-            if !in_token {
-                n += 1;
-                in_token = true;
-            }
-        } else {
-            in_token = false;
-        }
-    }
-    n
 }
 
 // =============================================================================

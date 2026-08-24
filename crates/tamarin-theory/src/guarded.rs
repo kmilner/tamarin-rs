@@ -1568,9 +1568,9 @@ pub fn formula_to_guarded(f: &crate::formula::LNFormula) -> Result<Guarded, Guar
 /// block a guardedness failure renders.
 ///
 /// Callers: the `--parse-only` open renderers (`pretty_theory.rs`,
-/// `is_safety_formula_parsed` among them), and the two stored-proof re-parse
-/// sites (`pretty_theory.rs`), which parse goal text against the signature
-/// they already hold.
+/// `is_safety_formula_parsed` among them), and the disjunction arm of
+/// `elaborate::goal_from_parsed`, which reads a stored goal's disjuncts
+/// against the theory's signature.
 pub fn formula_to_guarded_parsed(
     f: &p::Formula,
     sig: &tamarin_term::maude_sig::MaudeSig,

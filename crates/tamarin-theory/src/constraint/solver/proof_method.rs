@@ -51,14 +51,6 @@ pub enum ProofMethod {
     Induction,
     Finished(Result),
     Invalidated,
-    /// Display-only: `solve( <raw_inner> )`.  Used for HS-faithful
-    /// unannotated subtree display (replay.rs `parsed_to_unannotated`)
-    /// where we have the original skeleton text but no live Goal object.
-    /// HS `noSystemPrf` (Theory/Proof.hs:447-467, see line 467) clears the per-node system info
-    /// (`mapProofInfo (\i -> (Just i, Nothing))`); the ProofMethod itself
-    /// is preserved by the proof-tree node, not by `noSystemPrf`.  RS uses
-    /// raw inner text as the closest equivalent.
-    RawSolve(String),
 }
 
 /// `isFinished`: returns the appropriate `Result` if the system is in
@@ -179,7 +171,7 @@ pub fn is_applicable_for_display(ctx: &ProofContext, method: &ProofMethod, sys: 
             exec_proof_method(ctx, method, sys).is_some()
         }
         ProofMethod::Sorry(_) | ProofMethod::Finished(_) => true,
-        ProofMethod::Invalidated | ProofMethod::RawSolve(_) => false,
+        ProofMethod::Invalidated => false,
     }
 }
 
@@ -335,7 +327,6 @@ pub fn exec_proof_method(
             ProofMethod::Sorry(_) => "Sorry",
             ProofMethod::Finished(_) => "Finished",
             ProofMethod::Invalidated => "Invalidated",
-            ProofMethod::RawSolve(_) => "RawSolve",
             ProofMethod::Simplify => "Simplify",
             ProofMethod::Induction => "Induction",
             ProofMethod::SolveGoal(_) => "SolveGoal",
@@ -362,7 +353,7 @@ pub fn exec_proof_method(
 
     match method {
         ProofMethod::Sorry(_) | ProofMethod::Finished(_) => Some(Vec::new()),
-        ProofMethod::Invalidated | ProofMethod::RawSolve(_) => None,
+        ProofMethod::Invalidated => None,
         ProofMethod::Simplify => {
             // HS-faithful: `simplifySystem` (Simplify.hs:56-57) emits
             // its `traceExecM "simplifySystem"` ONCE per call; its
@@ -787,7 +778,6 @@ pub fn check_and_exec_proof_method(
             }
         }
         ProofMethod::Simplify | ProofMethod::Sorry(_) | ProofMethod::Invalidated => {}
-        ProofMethod::RawSolve(_) => return None,
     }
     exec_proof_method(ctx, method, sys)
 }
