@@ -826,3 +826,97 @@ fn process_pub_names_reach_an_msr_embedded_restriction() {
         vec!["baz".to_string(), "Foo".to_string(), "bar".to_string()]
     );
 }
+
+/// A case test's formula is a `SyntacticLNFormula` (Items/CaseTestItem.hs:27)
+/// added verbatim by `liftedAddCaseTest` (Theory/Text/Parser.hs:159-163), so
+/// a predicate atom reaches the elaborated item unexpanded;
+/// `caseTestToPredicate` strips the sugar at accountability-translation time
+/// (Items/CaseTestItem.hs:33-37).
+#[test]
+fn a_case_test_keeps_its_predicate_sugar() {
+    use crate::atom::{ProtoAtom, SyntacticSugar};
+    use crate::formula::ProtoFormula;
+
+    let src = "theory T begin\n\
+               predicates: Blamed(a) <=> Ex #i. Blame(a) @ #i\n\
+               rule R: [ In(x) ] --[ Blame(x) ]-> [ Out(x) ]\n\
+               test blamed: \"Blamed(a)\"\n\
+               end\n";
+    let thy = elaborate(&parse_theory(src, &[]).unwrap()).unwrap();
+    let ct = thy
+        .items
+        .iter()
+        .find_map(|i| match i {
+            TheoryItem::Translation(TranslationElement::CaseTest(ct)) => Some(ct),
+            _ => None,
+        })
+        .expect("case test");
+    match &ct.formula {
+        ProtoFormula::Atom(ProtoAtom::Syntactic(SyntacticSugar::Pred(fa))) => {
+            assert_eq!(crate::fact::fact_tag_name(&fa.tag), "Blamed");
+        }
+        other => panic!("expected an unexpanded predicate atom, got {other:?}"),
+    }
+}
+
+/// An accountability lemma's formula is a `SyntacticLNFormula`
+/// (Items/AccLemmaItem.hs:32) built by the formula parser, so elaboration
+/// closes each binder into a De Bruijn index carrying the binder's name and
+/// sort and lowers the terms to the internal representation.
+#[test]
+fn an_acc_lemma_stores_the_internal_formula() {
+    use crate::atom::ProtoAtom;
+    use crate::formula::{Connective, ProtoFormula, Quantifier};
+    use tamarin_term::lterm::BVar;
+
+    let src = "theory T begin\n\
+               rule R: [ In(x) ] --[ Blame(x), Fin() ]-> [ Out(x) ]\n\
+               test blamed: \"Ex #i. Blame('a') @ #i\"\n\
+               lemma acc: blamed accounts for \"All #i. Fin() @ #i ==> Ex #j. Blame('a') @ #j\"\n\
+               end\n";
+    let thy = elaborate(&parse_theory(src, &[]).unwrap()).unwrap();
+    let al = thy
+        .items
+        .iter()
+        .find_map(|i| match i {
+            TheoryItem::Translation(TranslationElement::AccLemma(al)) => Some(al),
+            _ => None,
+        })
+        .expect("acc lemma");
+    let body = match &al.formula {
+        ProtoFormula::Qua(Quantifier::All, hint, body) => {
+            assert_eq!(hint, &("i".to_string(), LSort::Node));
+            body
+        }
+        other => panic!("expected a universal quantifier, got {other:?}"),
+    };
+    let (lhs, rhs) = match &**body {
+        ProtoFormula::Conn(Connective::Imp, l, r) => (l, r),
+        other => panic!("expected an implication, got {other:?}"),
+    };
+    match &**lhs {
+        ProtoFormula::Atom(ProtoAtom::Action(t, fa)) => {
+            assert_eq!(t, &VTerm::Lit(Lit::Var(BVar::Bound(0))));
+            assert_eq!(crate::fact::fact_tag_name(&fa.tag), "Fin");
+        }
+        other => panic!("expected an action atom, got {other:?}"),
+    }
+    // The existential binder is the innermost one inside its own body, so
+    // its timepoint is index 0 again; `'a'` is a public-name constant.
+    match &**rhs {
+        ProtoFormula::Qua(Quantifier::Ex, hint, inner) => {
+            assert_eq!(hint, &("j".to_string(), LSort::Node));
+            match &**inner {
+                ProtoFormula::Atom(ProtoAtom::Action(t, fa)) => {
+                    assert_eq!(t, &VTerm::Lit(Lit::Var(BVar::Bound(0))));
+                    assert_eq!(
+                        fa.terms.to_vec(),
+                        vec![VTerm::Lit(Lit::Con(Name::new(NameTag::Pub, "a")))]
+                    );
+                }
+                other => panic!("expected an action atom, got {other:?}"),
+            }
+        }
+        other => panic!("expected an existential quantifier, got {other:?}"),
+    }
+}

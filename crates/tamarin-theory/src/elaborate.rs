@@ -794,7 +794,7 @@ fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), Elab
                 let acc = AccLemma {
                     name: a.name.clone(),
                     attributes: a.attributes.iter().map(elaborate_lemma_attr).collect(),
-                    formula: a.formula.clone(),
+                    formula: crate::formula::from_parser(&a.formula, &out.signature.maude_sig)?,
                     case_test_idents: a.case_test_idents.clone(),
                 };
                 out.items
@@ -803,7 +803,7 @@ fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), Elab
             p::TheoryItem::CaseTest(c) => {
                 let ct = CaseTest {
                     name: c.name.clone(),
-                    formula: c.formula.clone(),
+                    formula: crate::formula::from_parser(&c.formula, &out.signature.maude_sig)?,
                 };
                 out.items
                     .push(TheoryItem::Translation(TranslationElement::CaseTest(ct)));

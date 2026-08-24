@@ -14,6 +14,7 @@
 
 use tamarin_term::lterm::LVar;
 
+use crate::formula::SyntacticLNFormula;
 use crate::predicate::Predicate;
 use crate::restriction::ProtoRestriction;
 use crate::rule::ProtoRuleE;
@@ -222,7 +223,11 @@ pub struct DiffLemma<P = ProofSkeleton> {
 pub struct AccLemma {
     pub name: String,
     pub attributes: Vec<LemmaAttr>,
-    pub formula: tamarin_parser::ast::Formula,
+    /// HS `_aFormula` (Items/AccLemmaItem.hs:32).  The `Pred` sugar stays:
+    /// `liftedAddAccLemma` adds the lemma verbatim
+    /// (Theory/Text/Parser.hs:153-157), with neither predicate nor macro
+    /// expansion.
+    pub formula: SyntacticLNFormula,
     pub case_test_idents: Vec<String>,
 }
 
@@ -230,7 +235,12 @@ pub struct AccLemma {
 #[derive(Debug, Clone, PartialEq)]
 pub struct CaseTest {
     pub name: String,
-    pub formula: tamarin_parser::ast::Formula,
+    /// HS `_cFormula` (Items/CaseTestItem.hs:27).  The `Pred` sugar stays:
+    /// `liftedAddCaseTest` adds the case test verbatim
+    /// (Theory/Text/Parser.hs:159-163), and `caseTestToPredicate` strips it
+    /// with `toLNFormula` at accountability-translation time
+    /// (Items/CaseTestItem.hs:33-37).
+    pub formula: SyntacticLNFormula,
 }
 
 /// Macro definition (`name(args) = body`).
