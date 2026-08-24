@@ -2566,7 +2566,7 @@ impl<'ctx> Reduction<'ctx> {
                     // COW canon.  No bound-var canonicalisation: `Guarded`
                     // binders are DeBruijn, so `Bound` vars carry no idx and
                     // alpha-equivalent formulas already compare `==` (matching
-                    // the `implied_apply_canon` twin in simplify.rs).  The two
+                    // the `implied_apply_canon_cow` twin in simplify.rs).  The two
                     // stages reuse the borrowed input when they touch no leaf,
                     // so an already-canonical formula pays zero clones.
                     // (Nested `fn` with an explicit lifetime so the returned `Cow`

@@ -694,8 +694,8 @@ fn add_goal_idempotent() {
 /// independently built, structurally equal `Disj` goals therefore land in one
 /// slot: the second insertion ORs its `looping` flag into the stored status,
 /// keeps the smaller `nr`, and leaves the stored goal in place, while
-/// `next_goal_nr` still advances once per call (HS `insertGoalStatus`,
-/// Reduction.hs:516-523).
+/// `next_goal_nr` still advances once per call (HS `insertGoalStatus` and the
+/// `combineGoalStatus` it merges with, Reduction.hs:513-523).
 #[test]
 fn add_goal_merges_structurally_equal_disj_goals() {
     use crate::constraint::constraints::Disj;
