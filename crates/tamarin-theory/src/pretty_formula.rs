@@ -31,8 +31,8 @@ use tamarin_utils::fresh::PreciseFreshState;
 use crate::atom::{ProtoAtom, SyntacticAtom, SyntacticSugar, Unit2};
 use crate::fact::Fact;
 use crate::formula::{
-    formula_frees, open_bound_term, BLNTerm, Connective, LNFormula, LNProtoFormula, ProtoFormula,
-    Quantifier, SugarTerms, SyntacticLNFormula,
+    avoid_precise_lnformula, open_bound_term, BLNTerm, Connective, LNFormula, LNProtoFormula,
+    ProtoFormula, Quantifier, SyntacticLNFormula,
 };
 use crate::guarded::{Guarded, Quant};
 use crate::pretty_hpj::{self as hpj, Doc};
@@ -1043,18 +1043,6 @@ pub fn syntactic_lnformula_doc(f: &SyntacticLNFormula) -> Doc {
         &|SyntacticSugar::Pred(fa), scope| atom_to_doc(&p::Atom::Pred(open_fact(fa, scope)), &[]),
         &mut Vec::new(),
         &mut avoid_precise_lnformula(f),
-    )
-}
-
-/// HS `avoidPrecise = avoidPreciseVars . frees` (LTerm.hs:706-709, :714-715)
-/// on a locally-nameless formula: the free variables seed the per-name
-/// counters, so a binder whose name a free variable uses is displayed with
-/// a larger index.
-fn avoid_precise_lnformula<S: SugarTerms<BLNTerm>>(f: &LNProtoFormula<S>) -> PreciseFreshState {
-    PreciseFreshState::avoid_precise(
-        formula_frees(f)
-            .into_iter()
-            .map(|v| (v.name.to_string(), v.idx)),
     )
 }
 

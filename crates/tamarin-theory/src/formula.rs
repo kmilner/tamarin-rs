@@ -10,9 +10,10 @@
 //! `existFormula`, `forAllFormula`), the sugar-stripping [`to_lnformula`],
 //! the closing of the parser AST into a [`SyntacticLNFormula`]
 //! ([`from_parser`], which HS does inside its formula parser,
-//! `Theory/Text/Parser/Formula.hs`) and the opening of a bound term against
-//! a binder scope (`open_bound_term`, the substitution step of HS
-//! `openFormula`, used by the printer).
+//! `Theory/Text/Parser/Formula.hs`), the opening of a bound term against a
+//! binder scope (`open_bound_term`, the substitution step of HS
+//! `openFormula`, used by the printer) and the opening of a whole quantifier
+//! prefix ([`open_formula`], [`open_formula_prefix`]).
 //!
 //! The representation is locally nameless: bound variables are
 //! `BVar::Bound(de_bruijn_idx)`, free variables are `Free(v)`.
@@ -36,11 +37,12 @@ use crate::fact::Fact;
 use crate::predicate::smaller_fact;
 use crate::sapic::{default_sapic_node_type, SapicFormula, SapicLNFact, SapicLVar, SapicTerm};
 use tamarin_parser::ast as p;
-use tamarin_term::lterm::{BVar, LNTerm, LSort, LVar, Name};
+use tamarin_term::lterm::{fresh_lvar, BVar, LNTerm, LSort, LVar, Name};
 use tamarin_term::maude_sig::MaudeSig;
 use tamarin_term::subst::{apply_bvar, apply_bvterm, Subst};
 use tamarin_term::term::{map_lits, Term};
 use tamarin_term::vterm::{var_term, Lit, VTerm};
+use tamarin_utils::fresh::PreciseFreshState;
 
 /// Logical connectives.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -686,6 +688,116 @@ pub(crate) fn open_bound_term(t: &BLNTerm, scope: &[LVar]) -> LNTerm {
     })
 }
 
+// =============================================================================
+// Opening a quantifier prefix (Theory/Model/Formula.hs:272-309) against the
+// precise fresh supply HS seeds with `avoidPrecise` (LTerm.hs:706-715).
+// =============================================================================
+
+/// HS `avoidPrecise = avoidPreciseVars . frees` (LTerm.hs:706-709, :714-715)
+/// on a locally-nameless formula: the free variables seed the per-name
+/// counters, so a binder whose name a free variable uses is drawn with a
+/// larger index.
+pub(crate) fn avoid_precise_lnformula<S: SugarTerms<BLNTerm>>(
+    f: &LNProtoFormula<S>,
+) -> PreciseFreshState {
+    PreciseFreshState::avoid_precise(
+        formula_frees(f)
+            .into_iter()
+            .map(|v| (v.name.to_string(), v.idx)),
+    )
+}
+
+/// HS `openFormula` (Theory/Model/Formula.hs:272-286): when `f` is `Q v. f'`,
+/// the quantifier, a fresh `LVar` for the binder and the body with that
+/// variable put in the binder's place; `None` when `f` is not a quantifier.
+///
+/// HS returns the fresh draw as an unrun action, so a caller that rejects the
+/// quantifier takes nothing from the supply
+/// (Theory/Model/Formula.hs:305-307); here the caller decides before calling.
+pub fn open_formula<S, C>(
+    f: &ProtoFormula<S, (String, LSort), C, LVar>,
+    fresh: &mut PreciseFreshState,
+) -> Option<(Quantifier, LVar, ProtoFormula<S, (String, LSort), C, LVar>)>
+where
+    S: MapSugar<VTerm<C, BVar<LVar>>, VTerm<C, BVar<LVar>>, Mapped = S> + Clone,
+    C: Ord + Clone,
+{
+    match f {
+        ProtoFormula::Qua(qua, hint, body) => {
+            let (x, opened) = open_binder(hint, body, fresh);
+            Some((*qua, x, opened))
+        }
+        _ => None,
+    }
+}
+
+/// The action HS `openFormula` returns (Theory/Model/Formula.hs:279-284):
+/// `freshLVar` on the binder's name and sort ([`fresh_lvar`],
+/// LTerm.hs:300-302), then `mapAtoms (\i a -> fmap (mapLits (subst x i)) a)`
+/// over the body.  `i` is the atom's depth below the opened binder, and
+/// `subst` rewrites exactly the index `i`, so an index that belongs to an
+/// enclosing binder stays bound.
+fn open_binder<S, C>(
+    hint: &(String, LSort),
+    body: &ProtoFormula<S, (String, LSort), C, LVar>,
+    fresh: &mut PreciseFreshState,
+) -> (LVar, ProtoFormula<S, (String, LSort), C, LVar>)
+where
+    S: MapSugar<VTerm<C, BVar<LVar>>, VTerm<C, BVar<LVar>>, Mapped = S> + Clone,
+    C: Ord + Clone,
+{
+    let (name, sort) = hint;
+    let x = fresh_lvar(fresh, name, *sort);
+    let opened = map_atoms(body.clone(), &mut |i, a| {
+        map_atom(a, &mut |t| {
+            map_lits(t, &mut |l| match l {
+                Lit::Var(BVar::Bound(j)) if *j == i => Lit::Var(BVar::Free(x)),
+                other => other.clone(),
+            })
+        })
+    });
+    (x, opened)
+}
+
+/// HS `openFormulaPrefix` (Theory/Model/Formula.hs:293-309): open the
+/// outermost binder and every directly nested binder of the same quantifier,
+/// each with its own fresh `LVar`, and return them outermost first with the
+/// quantifier and the body beneath them.  A binder of the other quantifier
+/// ends the prefix and draws nothing.  HS's `error` for a formula that does
+/// not start with a quantifier is kept.
+pub fn open_formula_prefix<S, C>(
+    f: &ProtoFormula<S, (String, LSort), C, LVar>,
+    fresh: &mut PreciseFreshState,
+) -> (
+    Vec<LVar>,
+    Quantifier,
+    ProtoFormula<S, (String, LSort), C, LVar>,
+)
+where
+    S: MapSugar<VTerm<C, BVar<LVar>>, VTerm<C, BVar<LVar>>, Mapped = S> + Clone,
+    C: Ord + Clone,
+{
+    let Some((qua, x, mut body)) = open_formula(f, fresh) else {
+        panic!("openFormulaPrefix: no outermost quantifier")
+    };
+    let mut xs = vec![x];
+    loop {
+        let next = match &body {
+            ProtoFormula::Qua(qua2, hint, inner) if *qua2 == qua => {
+                Some(open_binder(hint, inner, fresh))
+            }
+            _ => None,
+        };
+        match next {
+            Some((x2, opened)) => {
+                xs.push(x2);
+                body = opened;
+            }
+            None => return (xs, qua, body),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1288,6 +1400,147 @@ mod tests {
             apply_rename(fm, &mut |v| LVar::new(v.name, v.sort, 7)),
             want
         );
+    }
+
+    // =========================================================================
+    // open_formula / open_formula_prefix
+    // =========================================================================
+
+    /// The freshened binder replaces the index that belongs to it and nothing
+    /// else: an index of an enclosing binder counts one level further out
+    /// under the opened quantifier and stays bound.
+    #[test]
+    fn open_formula_replaces_only_its_own_index() {
+        // All x. Ex y. x = y
+        let fm: LNFormula = ProtoFormula::for_all(
+            hint("x", LSort::Msg),
+            ProtoFormula::exists(
+                hint("y", LSort::Msg),
+                ProtoFormula::Atom(ProtoAtom::EqE(bound(1), bound(0))),
+            ),
+        );
+        let mut fresh = PreciseFreshState::nothing_used();
+        let (qua, x, body) = open_formula(&fm, &mut fresh).expect("the outermost quantifier");
+        assert_eq!(qua, Quantifier::All);
+        assert_eq!(x, LVar::new("x", LSort::Msg, 0));
+        let want: LNFormula = ProtoFormula::exists(
+            hint("y", LSort::Msg),
+            ProtoFormula::Atom(ProtoAtom::EqE(free("x", LSort::Msg, 0), bound(0))),
+        );
+        assert_eq!(body, want);
+
+        let tf: LNFormula = ProtoFormula::ltrue();
+        assert!(open_formula(&tf, &mut fresh).is_none());
+    }
+
+    /// The prefix is returned in binder order, outermost first, and every
+    /// binder's occurrences resolve to its own variable.
+    #[test]
+    fn open_formula_prefix_returns_the_binders_outermost_first() {
+        // All x y. x = y
+        let fm: LNFormula = ProtoFormula::for_all(
+            hint("x", LSort::Msg),
+            ProtoFormula::for_all(
+                hint("y", LSort::Msg),
+                ProtoFormula::Atom(ProtoAtom::EqE(bound(1), bound(0))),
+            ),
+        );
+        let mut fresh = PreciseFreshState::nothing_used();
+        let (xs, qua, body) = open_formula_prefix(&fm, &mut fresh);
+        assert_eq!(
+            xs,
+            vec![LVar::new("x", LSort::Msg, 0), LVar::new("y", LSort::Msg, 0)]
+        );
+        assert_eq!(qua, Quantifier::All);
+        assert_eq!(
+            body,
+            ProtoFormula::Atom(ProtoAtom::EqE(
+                free("x", LSort::Msg, 0),
+                free("y", LSort::Msg, 0)
+            ))
+        );
+    }
+
+    /// A binder of the other quantifier ends the prefix, and HS's guard
+    /// `q' == q` runs before the fresh draw, so that binder takes no index.
+    #[test]
+    fn open_formula_prefix_stops_at_a_different_quantifier() {
+        // All x. Ex y. x = y
+        let fm: LNFormula = ProtoFormula::for_all(
+            hint("x", LSort::Msg),
+            ProtoFormula::exists(
+                hint("y", LSort::Msg),
+                ProtoFormula::Atom(ProtoAtom::EqE(bound(1), bound(0))),
+            ),
+        );
+        let mut fresh = PreciseFreshState::nothing_used();
+        let (xs, qua, body) = open_formula_prefix(&fm, &mut fresh);
+        assert_eq!(xs, vec![LVar::new("x", LSort::Msg, 0)]);
+        assert_eq!(qua, Quantifier::All);
+        assert!(matches!(body, ProtoFormula::Qua(Quantifier::Ex, _, _)));
+        assert_eq!(fresh.fresh_ident("y"), 0);
+    }
+
+    /// Two binders of one prefix that share a name are drawn as `x` and
+    /// `x.1`, so the inner one keeps its own identity after opening.
+    #[test]
+    fn open_formula_prefix_freshens_a_shadowed_binder() {
+        // All x. All x. x = x
+        let fm: LNFormula = ProtoFormula::for_all(
+            hint("x", LSort::Msg),
+            ProtoFormula::for_all(
+                hint("x", LSort::Msg),
+                ProtoFormula::Atom(ProtoAtom::EqE(bound(1), bound(0))),
+            ),
+        );
+        let mut fresh = PreciseFreshState::nothing_used();
+        let (xs, _, body) = open_formula_prefix(&fm, &mut fresh);
+        assert_eq!(
+            xs,
+            vec![LVar::new("x", LSort::Msg, 0), LVar::new("x", LSort::Msg, 1)]
+        );
+        assert_eq!(
+            body,
+            ProtoFormula::Atom(ProtoAtom::EqE(
+                free("x", LSort::Msg, 0),
+                free("x", LSort::Msg, 1)
+            ))
+        );
+    }
+
+    /// The supply is the caller's and is not rolled back per prefix, so two
+    /// sibling prefixes that use one binder name get distinct indices.  HS's
+    /// guarded conversion opens its prefixes this way (`convEx`/`convAll`,
+    /// Guarded.hs:535-564); its printer wraps each prefix in `scopeFreshness`
+    /// instead (Theory/Model/Formula.hs:503-506).
+    #[test]
+    fn open_formula_draws_from_one_unscoped_supply() {
+        let prefix = || -> LNFormula {
+            ProtoFormula::exists(
+                hint("i", LSort::Node),
+                ProtoFormula::Atom(ProtoAtom::Last(bound(0))),
+            )
+        };
+        let mut fresh = PreciseFreshState::nothing_used();
+        let (left, _, _) = open_formula_prefix(&prefix(), &mut fresh);
+        let (right, _, _) = open_formula_prefix(&prefix(), &mut fresh);
+        assert_eq!(left, vec![LVar::new("i", LSort::Node, 0)]);
+        assert_eq!(right, vec![LVar::new("i", LSort::Node, 1)]);
+    }
+
+    /// `quantify` closes the variable `open_formula` drew, so putting the
+    /// binder back rebuilds the formula the opening started from.
+    #[test]
+    fn quantify_inverts_open_formula() {
+        // All x. x = z
+        let fm: LNFormula = ProtoFormula::for_all(
+            hint("x", LSort::Msg),
+            ProtoFormula::Atom(ProtoAtom::EqE(bound(0), free("z", LSort::Msg, 0))),
+        );
+        let mut fresh = avoid_precise_lnformula(&fm);
+        let (qua, x, body) = open_formula(&fm, &mut fresh).expect("the quantifier");
+        assert_eq!(qua, Quantifier::All);
+        assert_eq!(for_all_var((x.name.to_string(), x.sort), &x, body), fm);
     }
 
     // =========================================================================

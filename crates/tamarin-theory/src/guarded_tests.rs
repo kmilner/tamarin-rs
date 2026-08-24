@@ -11,6 +11,28 @@ fn g(s: &str) -> Result<Guarded, GuardError> {
     formula_to_guarded(&f)
 }
 
+/// An opened atom carries its free variables straight across.
+#[test]
+fn bvar_to_lvar_frees_an_opened_atom() {
+    use crate::atom::ProtoAtom;
+    use tamarin_term::lterm::{LSort, LVar};
+    use tamarin_term::vterm::var_term;
+    let i = LVar::new("i", LSort::Node, 0);
+    let a: Atom<BLNTerm> = ProtoAtom::Last(var_term(tamarin_term::lterm::BVar::Free(i)));
+    assert_eq!(bvar_to_lvar(&a), ProtoAtom::Last(var_term(i)));
+}
+
+/// HS `bvarToLVar`'s `boundError` (Guarded.hs:326-327): the atom must have
+/// every enclosing binder opened before it is read over plain `LVar`s.
+#[test]
+#[should_panic(expected = "bvarToLVar: left-over bound variable '2'")]
+fn bvar_to_lvar_rejects_a_left_over_bound_variable() {
+    use crate::atom::ProtoAtom;
+    use tamarin_term::vterm::var_term;
+    let a: Atom<BLNTerm> = ProtoAtom::Last(var_term(tamarin_term::lterm::BVar::Bound(2)));
+    bvar_to_lvar(&a);
+}
+
 #[test]
 fn ground_truth() {
     let r = g("T").unwrap();

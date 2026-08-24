@@ -20,9 +20,13 @@
 
 use std::collections::BTreeSet;
 
+use crate::atom::{map_atom, Atom};
+use crate::formula::BLNTerm;
 use crate::guarded_types::cow_pair_arc;
 use tamarin_parser::ast as p;
-use tamarin_term::lterm::{sort_prefix, LSort};
+use tamarin_term::lterm::{sort_prefix, LNTerm, LSort};
+use tamarin_term::term::map_lits;
+use tamarin_term::vterm::Lit;
 use tamarin_utils::cow::{cow_map_arc, cow_map_vec, cow_pair};
 
 pub use crate::guarded_types::{
@@ -1173,6 +1177,20 @@ fn avoid_precise_formula(f: &p::Formula) -> tamarin_utils::fresh::PreciseFreshSt
     tamarin_utils::fresh::PreciseFreshState::avoid_precise(
         frees.into_iter().map(|(name, idx, _sort)| (name, idx)),
     )
+}
+
+/// HS `bvarToLVar` (Guarded.hs:322-327): read an atom of a locally-nameless
+/// formula whose binders are all opened as an atom over plain `LVar`s.  A
+/// surviving `Bound` index is HS's `boundError`.
+pub fn bvar_to_lvar(a: &Atom<BLNTerm>) -> Atom<LNTerm> {
+    use tamarin_term::lterm::BVar;
+    map_atom(a, &mut |t| {
+        map_lits(t, &mut |l| match l {
+            Lit::Con(c) => Lit::Con(*c),
+            Lit::Var(BVar::Free(v)) => Lit::Var(*v),
+            Lit::Var(BVar::Bound(i)) => panic!("bvarToLVar: left-over bound variable '{i}'"),
+        })
+    })
 }
 
 /// Returns `true` if the formula is "safety": closed (no free vars)

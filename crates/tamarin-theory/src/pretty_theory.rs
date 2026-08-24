@@ -3276,6 +3276,27 @@ pub fn lnfact_to_parser(fa: &crate::fact::LNFact) -> p::Fact {
     }
 }
 
+/// `Atom<LNTerm>` → parser-AST `Atom`: [`lnterm_to_parser`] and
+/// [`lnfact_to_parser`] over the arms of HS `Atom` (Atom.hs:78-84,100), the
+/// atom-level twin of [`lnfact_to_parser`].
+///
+/// A `Syntactic` atom has no parser-AST form here: HS's `Unit2` sugar carries
+/// no fact (Atom.hs:92-94), and [`crate::formula::to_lnformula`] refuses an
+/// atom that still holds sugar, so an `LNFormula` holds none.
+pub fn lnatom_to_parser(a: &crate::atom::Atom<tamarin_term::lterm::LNTerm>) -> p::Atom {
+    use crate::atom::ProtoAtom;
+    match a {
+        ProtoAtom::Action(t, fa) => p::Atom::Action(lnfact_to_parser(fa), lnterm_to_parser(t)),
+        ProtoAtom::EqE(l, r) => p::Atom::Eq(lnterm_to_parser(l), lnterm_to_parser(r)),
+        ProtoAtom::Subterm(l, r) => p::Atom::Subterm(lnterm_to_parser(l), lnterm_to_parser(r)),
+        ProtoAtom::Less(l, r) => p::Atom::Less(lnterm_to_parser(l), lnterm_to_parser(r)),
+        ProtoAtom::Last(t) => p::Atom::Last(lnterm_to_parser(t)),
+        ProtoAtom::Syntactic(crate::atom::Unit2) => {
+            panic!("lnatom_to_parser: syntactic sugar in a plain atom")
+        }
+    }
+}
+
 /// `LNTerm` → parser-AST `Term`: the projection every printer of an `LNTerm`
 /// goes through, and the term-level twin of [`lnfact_to_parser`].
 ///
@@ -4779,6 +4800,62 @@ mod stored_proof_reparse_tests {
         assert_eq!(
             raw_solve_to_doc(raw, &tamarin_term::maude_sig::pair_maude_sig()).render(),
             "solve( !KU( (x add\n         y) ) @ #i )",
+        );
+    }
+}
+
+#[cfg(test)]
+mod lnatom_to_parser_tests {
+    use super::*;
+    use crate::atom::{Atom, ProtoAtom};
+    use crate::fact::{Fact, FactTag, Multiplicity};
+    use tamarin_term::intern::intern_str;
+    use tamarin_term::lterm::{LNTerm, LSort, LVar};
+    use tamarin_term::vterm::var_term;
+
+    fn pvar(name: &str, sort: LSort) -> p::Term {
+        p::Term::Var(p::VarSpec {
+            name: name.to_string(),
+            idx: 0,
+            sort,
+            typ: None,
+        })
+    }
+
+    /// HS writes an action atom as `Action t (Fact t)` (Atom.hs:78) and the
+    /// parser AST as `Action(Fact, Term)`, so the two operands swap places.
+    #[test]
+    fn lnatom_to_parser_keeps_the_action_timepoint_and_fact() {
+        let x: LNTerm = var_term(LVar::new("x", LSort::Msg, 0));
+        let i: LNTerm = var_term(LVar::new("i", LSort::Node, 0));
+        let fa = Fact::new(
+            FactTag::Proto(Multiplicity::Linear, intern_str("Ev"), 1),
+            vec![x],
+        );
+        let a: Atom<LNTerm> = ProtoAtom::Action(i, fa);
+        assert_eq!(
+            lnatom_to_parser(&a),
+            p::Atom::Action(
+                p::Fact {
+                    persistent: false,
+                    name: "Ev".to_string(),
+                    args: vec![pvar("x", LSort::Msg)],
+                    annotations: Vec::new(),
+                },
+                pvar("i", LSort::Node),
+            )
+        );
+    }
+
+    /// The binary atoms keep their left and right operand where they are.
+    #[test]
+    fn lnatom_to_parser_keeps_the_binary_operand_order() {
+        let i: LNTerm = var_term(LVar::new("i", LSort::Node, 0));
+        let j: LNTerm = var_term(LVar::new("j", LSort::Node, 0));
+        let a: Atom<LNTerm> = ProtoAtom::Less(i, j);
+        assert_eq!(
+            lnatom_to_parser(&a),
+            p::Atom::Less(pvar("i", LSort::Node), pvar("j", LSort::Node))
         );
     }
 }
