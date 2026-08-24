@@ -1585,11 +1585,7 @@ pub fn formula_to_guarded(f: &crate::formula::LNFormula) -> Result<Guarded, Guar
 /// a caller that cannot build the internal formula still renders the same
 /// block a guardedness failure renders.
 ///
-/// Callers, with the sub-task that drops each: the closed lemma renderer
-/// (`pretty_theory.rs`), `elaborate_with_diagnostics` (`elaborate.rs`), the
-/// prove entry points (`prove.rs`, `auto_sources.rs`, `deriv_check.rs`) and
-/// the web panes (`theory_html.rs`, `proof_tree.rs`) all read the lemma
-/// formula and go with ST9.  The `--parse-only` open renderers
+/// Callers, with the stage that drops each: the `--parse-only` open renderers
 /// (`pretty_theory.rs`, `is_safety_formula_parsed` among them) print a
 /// different observable and go with the printer retarget in stage 4; the two
 /// stored-proof re-parse sites (`pretty_theory.rs`, which parse goal text

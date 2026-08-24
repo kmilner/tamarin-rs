@@ -662,7 +662,7 @@ fn prove_probe(
     use crate::constraint::solver::search::{run_proof_search, NodeStatus};
     use crate::constraint::system::{formula_to_system, SourceKind};
     use crate::elaborate::elaborate;
-    use crate::guarded::formula_to_guarded_parsed;
+    use crate::guarded::formula_to_guarded;
     use crate::theory::OpenProtoRule;
 
     // Per-prove deadline gate: cap each variable's `run_proof_search` at
@@ -707,7 +707,7 @@ fn prove_probe(
             Some(l) => l,
             None => continue,
         };
-        let g = match formula_to_guarded_parsed(&lemma.formula, &elaborated.signature.maude_sig) {
+        let g = match formula_to_guarded(&lemma.formula) {
             Ok(g) => g,
             Err(_) => continue,
         };

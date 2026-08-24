@@ -23,7 +23,7 @@ use crate::constraint::solver::context::{IntrRuleCache, ProofContext};
 use crate::constraint::solver::search::{run_proof_search, ProofNode};
 use crate::constraint::system::{formula_to_system, SourceKind};
 use crate::elaborate::elaborate;
-use crate::guarded::{formula_to_guarded, formula_to_guarded_parsed, Guarded};
+use crate::guarded::{formula_to_guarded, Guarded};
 use crate::theory::OpenProtoRule;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -636,14 +636,12 @@ fn gather_reusable_lemmas(
         if hide_all || hidden.contains(&prior.name.as_str()) {
             continue;
         }
-        let rg = formula_to_guarded_parsed(&prior.formula, &theory.signature.maude_sig).map_err(
-            |e| {
-                ProveError::Guarded(guard_error_doc(
-                    &e,
-                    &crate::pretty_formula::pretty_formula(&prior.formula),
-                ))
-            },
-        )?;
+        let rg = formula_to_guarded(&prior.formula).map_err(|e| {
+            ProveError::Guarded(guard_error_doc(
+                &e,
+                &crate::pretty_formula::pretty_lnformula(&prior.formula),
+            ))
+        })?;
         reuse_lemmas.push(rg);
     }
     Ok(reuse_lemmas)
@@ -691,13 +689,12 @@ fn gather_typing_assumptions(
             ) {
                 continue;
             }
-            let rg = formula_to_guarded_parsed(&prior.formula, &theory.signature.maude_sig)
-                .map_err(|e| {
-                    ProveError::Guarded(guard_error_doc(
-                        &e,
-                        &crate::pretty_formula::pretty_formula(&prior.formula),
-                    ))
-                })?;
+            let rg = formula_to_guarded(&prior.formula).map_err(|e| {
+                ProveError::Guarded(guard_error_doc(
+                    &e,
+                    &crate::pretty_formula::pretty_lnformula(&prior.formula),
+                ))
+            })?;
             typing_assumptions.push(rg);
             source_key.push(prior.name.clone());
         }
@@ -1236,13 +1233,12 @@ fn prove_lemma_in_session_mode(
         .lookup_lemma(lemma_name)
         .ok_or_else(|| ProveError::LemmaNotFound(lemma_name.to_string()))?;
 
-    let g =
-        formula_to_guarded_parsed(&lemma.formula, &theory.signature.maude_sig).map_err(|e| {
-            ProveError::Guarded(guard_error_doc(
-                &e,
-                &crate::pretty_formula::pretty_formula(&lemma.formula),
-            ))
-        })?;
+    let g = formula_to_guarded(&lemma.formula).map_err(|e| {
+        ProveError::Guarded(guard_error_doc(
+            &e,
+            &crate::pretty_formula::pretty_lnformula(&lemma.formula),
+        ))
+    })?;
 
     // Per-lemma source kind, mirroring HS `lemmaSourceKind`
     // (lib/theory/src/Lemma.hs:38-41):
@@ -1492,13 +1488,12 @@ pub fn prove_lemma_with_pool_file_heuristic(
         .lookup_lemma(lemma_name)
         .ok_or_else(|| ProveError::LemmaNotFound(lemma_name.to_string()))?;
 
-    let g =
-        formula_to_guarded_parsed(&lemma.formula, &theory.signature.maude_sig).map_err(|e| {
-            ProveError::Guarded(guard_error_doc(
-                &e,
-                &crate::pretty_formula::pretty_formula(&lemma.formula),
-            ))
-        })?;
+    let g = formula_to_guarded(&lemma.formula).map_err(|e| {
+        ProveError::Guarded(guard_error_doc(
+            &e,
+            &crate::pretty_formula::pretty_lnformula(&lemma.formula),
+        ))
+    })?;
 
     // Per-lemma source kind (HS `lemmaSourceKind`,
     // lib/theory/src/Lemma.hs:38-41): RawSource

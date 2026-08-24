@@ -17,12 +17,9 @@
 //!   and predicate expansion (`predicate_expand::expand_theory_formulas`)
 //!   before any typed conversion
 //! - Rules — `parser::Rule` → `OpenProtoRule(ProtoRuleE, [])`
-//! - Lemmas — the formula is retained as parser AST (guarded conversion done
-//!   lazily via `formula_to_guarded_parsed`), after arity-1 tuple folding
-//!   (`rewrite_arity1_formula`)
-//! - Restrictions — the formula is converted to `LNFormula`
-//!   (`restriction_formula`), alongside the pre-macro formula HS keeps as
-//!   `_rstrOriginalFormula`
+//! - Lemmas and restrictions — the formula is converted to `LNFormula`
+//!   (`item_formula`), alongside the pre-macro formula HS keeps as
+//!   `_lOriginalFormula` / `_rstrOriginalFormula`
 //!
 //! It also provides the parser↔typed conversion helpers used above:
 //! `term_to_lnterm`/`lnterm_to_term` (LNTerm round-tripping) and the
@@ -49,7 +46,7 @@ use tamarin_term::term::{f_app_no_eq, Term};
 use tamarin_term::vterm::{Lit, VTerm};
 
 use crate::formula::LNFormula;
-use crate::guarded::{formula_to_guarded, formula_to_guarded_parsed};
+use crate::guarded::formula_to_guarded;
 use crate::restriction::Restriction;
 use crate::rule::{ProtoRuleE, ProtoRuleEInfo, ProtoRuleName, Rule, RuleAttributes};
 use crate::signature::SignaturePure;
@@ -94,10 +91,9 @@ pub fn elaborate_with_diagnostics(
     parser_thy: &p::Theory,
 ) -> Result<(Theory, Vec<GuardDiagnostic>), ElabError> {
     let thy = elaborate(parser_thy)?;
-    let msig = &thy.signature.maude_sig;
     let mut diags = Vec::new();
     for l in thy.lemmas() {
-        if let Err(e) = formula_to_guarded_parsed(&l.formula, msig) {
+        if let Err(e) = formula_to_guarded(&l.formula) {
             diags.push(GuardDiagnostic {
                 topic: "Formula guardedness".into(),
                 item: format!("Lemma `{}'", l.name),
@@ -323,39 +319,7 @@ pub fn elaborate(parser_thy: &p::Theory) -> Result<Theory, ElabError> {
     } else {
         None
     };
-    let mut thy = elaborate_already_expanded(&thy_clone, original_items.as_deref())?;
-
-    // HS folds surplus arguments of arity-1 function applications into a
-    // single right-associative pair at PARSE time (`naryOpApp` `k == 1`,
-    // Theory/Text/Parser/Term.hs:94-96 + `tupleterm` line 211-212:
-    // `chainr1 (msetterm ...) (curry fAppPair <$ comma)`), so the surface
-    // `h(a, b, c)` parses to `h(<a, b, c>)` = `h(fAppPair a (fAppPair b c))`.
-    // Because the fold happens at parse time, the lemma formula stored in HS's
-    // theory is ALREADY folded, and every downstream consumer (in particular
-    // `formulaToGuarded`, which builds the prover's initial constraint-system
-    // goal and thus the `solve( ... )` text printed in the proof body) sees
-    // the folded form.
-    //
-    // RS's term parser is arity-unaware and keeps `App("h", [a, b, c])`, so we
-    // re-establish the fold here, once, on the elaborated theory's lemma
-    // formulas — after the signature is final so `arity1_noeq_names` covers
-    // both user `functions: f/1` and builtin arity-1 NoEq symbols.  This makes
-    // `prove.rs`'s guarded-conversion calls (lemma + reuse-lemma) carry the
-    // folded `h(<…>)` shape into the goal, matching HS.  The display path
-    // folds the parser-AST separately (pretty_theory.rs), and the fold is
-    // idempotent (an arity-1 application with exactly one — already-paired —
-    // argument is left unchanged), so applying it on both sides is safe.
-    // A restriction needs no pass: `restriction_formula` converts it through
-    // `term_to_lnterm`, which folds.
-    let arity1 = arity1_noeq_names(thy.signature.maude_sig());
-    if !arity1.is_empty() {
-        for item in &mut thy.items {
-            if let TheoryItem::Lemma(l) = item {
-                l.formula = rewrite_arity1_formula(&l.formula, &arity1);
-            }
-        }
-    }
-    Ok(thy)
+    elaborate_already_expanded(&thy_clone, original_items.as_deref())
 }
 
 /// Whether the theory declares a macro, i.e. whether
@@ -649,8 +613,8 @@ fn elaborate_items(
                 let msig = &out.signature.maude_sig;
                 let restr = Restriction {
                     name: r.name.clone(),
-                    formula: restriction_formula(&r.formula, msig)?,
-                    original_formula: Some(restriction_formula(original, msig)?),
+                    formula: item_formula(&r.formula, msig, "restriction")?,
+                    original_formula: Some(item_formula(original, msig, "restriction")?),
                 };
                 out.items.push(TheoryItem::Restriction(restr));
             }
@@ -659,6 +623,11 @@ fn elaborate_items(
                 out.items.push(TheoryItem::Rule(OpenProtoRule::new(elab)));
             }
             p::TheoryItem::Lemma(l) => {
+                let original = match original_item {
+                    p::TheoryItem::Lemma(o) => &o.formula,
+                    _ => &l.formula,
+                };
+                let msig = &out.signature.maude_sig;
                 let lem: Lemma = Lemma {
                     name: l.name.clone(),
                     modulo: l.modulo.clone(),
@@ -667,7 +636,8 @@ fn elaborate_items(
                         p::TraceQuantifier::AllTraces => TraceQuantifier::AllTraces,
                         p::TraceQuantifier::ExistsTrace => TraceQuantifier::ExistsTrace,
                     },
-                    formula: l.formula.clone(),
+                    formula: item_formula(&l.formula, msig, "lemma")?,
+                    original_formula: Some(item_formula(original, msig, "lemma")?),
                     proof: ProofSkeleton {
                         raw: l.proof.as_ref().map(|p| p.raw.clone()).unwrap_or_default(),
                         tree: l.proof.as_ref().and_then(|p| p.tree.clone()),
@@ -730,15 +700,16 @@ fn elaborate_items(
     Ok(())
 }
 
-/// The formula HS's `liftedAddRestriction` stores: the surface formula closed
-/// by [`crate::formula::from_parser`] and stripped of its predicate sugar by
-/// `expandRestriction` (Theory/Text/Parser.hs:129-139,
-/// Theory/Model/Restriction.hs:70).  Predicate expansion already ran over the
-/// whole theory, so a surviving sugar atom is an elaboration error.
-fn restriction_formula(f: &p::Formula, sig: &MaudeSig) -> Result<LNFormula, ElabError> {
+/// The formula HS's `liftedAddLemma` / `liftedAddRestriction` store: the
+/// surface formula closed by [`crate::formula::from_parser`] and stripped of
+/// its predicate sugar by `expandLemma` / `expandRestriction`
+/// (Theory/Text/Parser.hs:129-152, TheoryObject.hs:430-446).  Predicate
+/// expansion already ran over the whole theory, so a surviving sugar atom is
+/// an elaboration error; `kind` names the item in it.
+fn item_formula(f: &p::Formula, sig: &MaudeSig, kind: &str) -> Result<LNFormula, ElabError> {
     let syn = crate::formula::from_parser(f, sig)?;
     crate::formula::to_lnformula(&syn).ok_or_else(|| ElabError {
-        message: "restriction formula carries an unexpanded predicate atom".to_string(),
+        message: format!("{kind} formula carries an unexpanded predicate atom"),
     })
 }
 

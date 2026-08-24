@@ -14,7 +14,7 @@
 
 use tamarin_term::lterm::LVar;
 
-use crate::formula::SyntacticLNFormula;
+use crate::formula::{LNFormula, SyntacticLNFormula};
 use crate::predicate::Predicate;
 use crate::restriction::Restriction;
 use crate::rule::ProtoRuleE;
@@ -190,11 +190,15 @@ pub struct Lemma<P = ProofSkeleton> {
     pub modulo: Option<String>,
     pub attributes: Vec<LemmaAttr>,
     pub trace_quantifier: TraceQuantifier,
-    /// The lemma's formula, held in the parser's `Formula` form: both the
-    /// pretty-printers and `guarded::formula_to_guarded_parsed` start from that
-    /// form, so the guarded/`LNFormula` layers are derived on demand
-    /// rather than stored here.
-    pub formula: tamarin_parser::ast::Formula,
+    /// `_lFormula` (Items/LemmaItem.hs:53) — the macro- and predicate-expanded
+    /// formula, which the solver converts to a guarded formula and the printer
+    /// shows in the `guarded formula characterizing ...` block.
+    pub formula: LNFormula,
+    /// `_lOriginalFormula` (Items/LemmaItem.hs:54) — the same formula before
+    /// macro application, which the printer quotes on the header line.  HS's
+    /// `applyMacroInLemma` fills it for every lemma of a closed theory, macros
+    /// or none (lib/theory/src/Lemma.hs:83-88, CloseRule.hs:85).
+    pub original_formula: Option<LNFormula>,
     pub proof: P,
     /// Verbatim source text (comments stripped) — HS `_lPlaintext`
     /// (`Items/LemmaItem.hs:48-58, see line 50`).  Carried through elaboration for the
@@ -557,7 +561,8 @@ mod tests {
             modulo: None,
             attributes: Vec::new(),
             trace_quantifier: TraceQuantifier::AllTraces,
-            formula: tamarin_parser::ast::Formula::True,
+            formula: crate::formula::ProtoFormula::ltrue(),
+            original_formula: None,
             proof: (),
             plaintext: String::new(),
         }

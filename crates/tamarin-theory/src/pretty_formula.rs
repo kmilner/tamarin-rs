@@ -106,6 +106,14 @@ pub fn pretty_formula_wrapped(f: &p::Formula, indent: usize) -> String {
     doc.render_at(hpj::LINE_LENGTH, hpj::RIBBON, indent)
 }
 
+/// The `Doc` of a parser-AST formula, seeded with the display names of its
+/// free variables the way HS's `prettyLNFormula` seeds `avoidPrecise`
+/// (Theory/Model/Formula.hs:518-520).
+pub(crate) fn formula_doc(f: &p::Formula) -> Doc {
+    let mut state = avoid_precise_formula(f);
+    formula_to_doc(f, &[], &mut state)
+}
+
 /// Render the lemma-header line, mirroring HS `prettyLemma`
 /// (lib/theory/src/Lemma.hs:119-122):
 ///   `nest 2 $ sep [ prettyTraceQuantifier, doubleQuotes (prettyLNFormula f) ]`
@@ -113,17 +121,11 @@ pub fn pretty_formula_wrapped(f: &p::Formula, indent: usize) -> String {
 /// (quant-keyword vs formula) flat-or-wrap decision, the formula's
 /// internal `sep`/`nest` wrapping, and the continuation-line indents are
 /// byte-identical to HS.  `quant` is the trace-quantifier keyword (e.g.
-/// `"all-traces"` / `"exists-trace"`).  The returned string begins at
+/// `"all-traces"` / `"exists-trace"`), `formula_doc` the quoted formula from
+/// whichever representation the caller holds.  The returned string begins at
 /// column 0 (the `nest 2` indent IS included in the output, like HS's
 /// `nest 2` rendered at the theory's column 0).
-pub fn lemma_header_line(quant: &str, f: &p::Formula) -> String {
-    let mut state = avoid_precise_formula(f);
-    lemma_header_line_doc(quant, formula_to_doc(f, &[], &mut state))
-}
-
-/// The lemma-header shape of [`lemma_header_line`] around an already built
-/// formula `Doc`, whichever formula representation produced it.
-pub(crate) fn lemma_header_line_doc(quant: &str, formula_doc: Doc) -> String {
+pub fn lemma_header_line_doc(quant: &str, formula_doc: Doc) -> String {
     // `doubleQuotes d = "\"" <> d <> "\""` (Text/PrettyPrint/Class.hs:148-148).
     let dq = Doc::text("\"").beside(formula_doc).beside(Doc::text("\""));
     // `sep [quant, dq]` then `nest 2`.
@@ -137,8 +139,7 @@ pub(crate) fn lemma_header_line_doc(quant: &str, formula_doc: Doc) -> String {
 /// `beside` so the formula's wrapped continuation lines indent to the
 /// formula's start column.
 pub fn formula_doublequoted_nested(f: &p::Formula, nest_n: usize) -> String {
-    let mut state = avoid_precise_formula(f);
-    doublequoted_nested_doc(formula_to_doc(f, &[], &mut state), nest_n)
+    doublequoted_nested_doc(formula_doc(f), nest_n)
 }
 
 /// The restriction-body shape of [`formula_doublequoted_nested`] around an

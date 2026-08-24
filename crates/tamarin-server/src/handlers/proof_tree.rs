@@ -42,7 +42,7 @@ use tamarin_theory::constraint::solver::search::{
 };
 use tamarin_theory::constraint::system::{formula_to_system, SourceKind, System};
 use tamarin_theory::elaborate::elaborate;
-use tamarin_theory::guarded::{formula_to_guarded, formula_to_guarded_parsed, Guarded};
+use tamarin_theory::guarded::{formula_to_guarded, Guarded};
 use tamarin_theory::pretty_system::pretty_non_graph_system;
 use tamarin_theory::theory::{LemmaAttr, OpenProtoRule, TraceQuantifier};
 
@@ -344,7 +344,7 @@ impl ProofState {
                 by_lemma.insert(lname, LemmaProofState { root });
                 continue;
             }
-            let g = match formula_to_guarded_parsed(&lemma.formula, &typed.signature.maude_sig) {
+            let g = match formula_to_guarded(&lemma.formula) {
                 Ok(g) => g,
                 Err(_) => continue,
             };
@@ -385,9 +385,7 @@ impl ProofState {
                 if !matches!(prior.trace_quantifier, TraceQuantifier::AllTraces) {
                     continue;
                 }
-                if let Ok(rg) =
-                    formula_to_guarded_parsed(&prior.formula, &typed.signature.maude_sig)
-                {
+                if let Ok(rg) = formula_to_guarded(&prior.formula) {
                     reuse.push(rg);
                 }
             }

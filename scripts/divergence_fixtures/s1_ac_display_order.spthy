@@ -1,19 +1,17 @@
 /*
  * The operand order of an AC operator under a binder the display renames.
- * Upstream freshens the bound `~x` to `~x.1` and substitutes the display
- * variable into the body before printing (reached from
+ * The bound `~x` is freshened to `~x.1` and the display variable substituted
+ * into the body before printing (reached from
  * Theory/Model/Formula.hs:474-514#prettyLFormula, which opens the quantifier
  * prefix through Theory/Model/Formula.hs:274-291#openFormula), and the
  * rebuilt AC application re-sorts its arguments with the display index, which
  * `Ord LVar` compares first (LTerm.hs:546-548#compare): `x` at index 0 stands
- * to the left of `~x.1` at index 1.  The port orders the arguments once, with
- * the variables as written, where the two indices are equal and the fresh
- * sort precedes the message sort (LTerm.hs:165-170#LSort), and renames the
- * binder afterwards.  The guarded formula the solver receives carries the
- * display order on both sides, so the lemma echo is the one line the two
- * engines write differently.  The divergence lives in the display-time
- * variable supply rather than in the sort the parser records, so this row is
- * `diverge`.
+ * to the left of `~x.1` at index 1.  The two lemmas write the two operands in
+ * the two possible orders and both echo `(x++~x.1)`, so the row pins that the
+ * written order does not reach the echo and that the display index — not the
+ * sort the parser records (LTerm.hs:165-170#LSort) — decides it.
+ *
+ * Mode `match`: the two engines agree on this shape.
  *
  * Compared slice: the `theory … end` echo, which carries both lemma formulas
  * (see check.sh).

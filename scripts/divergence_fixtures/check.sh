@@ -70,15 +70,6 @@ divergence_shape() {
         grep -qF "Out( (y++tamXCAbar(a)) )" "$expected/$1.$2.rs.txt" \
             || { echo "    port side no longer keeps tamXCAbar(a) — expected \`Out( (y++tamXCAbar(a)) )\`" >&2; return 1; }
         ;;
-    s1_ac_display_order.theory)
-        # Upstream substitutes the freshened display variable into the body
-        # before printing, so the AC arguments are re-sorted by the display
-        # index; the port orders them once, with the variables as written.
-        grep -qF "⇒ (∃ ~x.1 #j. B( (x++~x.1) ) @ #j)" "$expected/$1.$2.hs.txt" \
-            || { echo "    oracle side does not re-sort the AC arguments by the display index — expected \`B( (x++~x.1) )\`" >&2; return 1; }
-        grep -qF "⇒ (∃ ~x.1 #j. B( (~x.1++x) ) @ #j)" "$expected/$1.$2.rs.txt" \
-            || { echo "    port side does not order the AC arguments by the written sort — expected \`B( (~x.1++x) )\`" >&2; return 1; }
-        ;;
     s3_unguardable_wide_lemma.theory)
         # The echo hands the error Doc to renderDoc at 110 columns and HughesPJ's
         # default 1.5 ribbons, so the variable list breaks after 'thirdArgument'

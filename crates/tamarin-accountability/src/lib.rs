@@ -222,6 +222,21 @@ pub fn translate(parsed: &mut p::Theory, elaborated: &mut Theory) -> Result<(), 
         .collect();
     defined_preds.push(("Smaller".to_string(), 2, false));
 
+    // The predicate DEFINITIONS `expandLemma` substitutes into each generated
+    // lemma, in declaration order.  The case-test predicates are appended
+    // after the lemma loop, so — as in HS, where `liftedAddLemma` expands
+    // against `theoryPredicates thy` at the point of the add — they are not
+    // among them.
+    let declared_preds: Vec<p::Predicate> = parsed
+        .items
+        .iter()
+        .filter_map(|i| match i {
+            p::TheoryItem::Predicates(ps) => Some(ps.iter().cloned()),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+
     // Existing lemma names (HS `addLemma` guards on `lookupLemma`, which scans
     // `LemmaItem`s only — TheoryObject.hs:461-465); grows as generated lemmas
     // are appended.
@@ -258,11 +273,7 @@ pub fn translate(parsed: &mut p::Theory, elaborated: &mut Theory) -> Result<(), 
         for gen in generate_accountability_lemmas(&acc_data) {
             // HS `liftedAddLemma` first predicate-expands the lemma
             // (`expandLemma`, throws `UndefinedPredicate`), then rejects
-            // duplicate names (`DuplicateItem`).  The expansion itself is
-            // deferred here — the renderer (pretty_theory.rs:2058) and the
-            // proving session (built from `parsed`, whose `elaborate` runs
-            // `expand_theory_formulas`) both expand `Pred` atoms at
-            // consumption — but its error path must fire NOW, as in HS.
+            // duplicate names (`DuplicateItem`).
             if let Some(tag) = undefined_predicate(&gen.formula, &defined_preds) {
                 return Err(AccError::UndefinedPredicate(tag));
             }
@@ -274,6 +285,7 @@ pub fn translate(parsed: &mut p::Theory, elaborated: &mut Theory) -> Result<(), 
             inject_lemma(
                 parsed,
                 elaborated,
+                &declared_preds,
                 &acc.attributes,
                 &gen.name,
                 gen.quantifier,
@@ -344,22 +356,35 @@ fn render_fact(f: &p::Fact) -> String {
 }
 
 /// Append one generated lemma to both theories (HS `addLemma`, which appends at
-/// the end of the item list, TheoryObject.hs:461-465).  Rendering iterates the
-/// parser-AST theory; the prove loop iterates the elaborated theory.
+/// the end of the item list, TheoryObject.hs:461-465).  The elaborated lemma
+/// carries the internal formula `expandLemma` builds, predicate-expanded
+/// against `predicates` (Theory/Text/Parser.hs:141-152); the parser-AST theory
+/// the `--parse-only` and `-m msr` renderers walk keeps the surface form.  A
+/// formula the expansion or the signature rejects is added to neither theory.
 fn inject_lemma(
     parsed: &mut p::Theory,
     elaborated: &mut Theory,
+    predicates: &[p::Predicate],
     attributes: &[p::LemmaAttr],
     name: &str,
     quantifier: p::TraceQuantifier,
     formula: p::Formula,
 ) {
+    let expanded = tamarin_theory::predicate_expand::expand_formula(&formula, predicates)
+        .ok()
+        .and_then(|f| {
+            tamarin_theory::formula::from_parser(&f, &elaborated.signature.maude_sig).ok()
+        })
+        .and_then(|syn| tamarin_theory::formula::to_lnformula(&syn));
+    let Some(expanded) = expanded else {
+        return;
+    };
     let parsed_lemma = p::Lemma {
         name: name.to_string(),
         modulo: None,
         attributes: attributes.to_vec(),
         trace_quantifier: quantifier.clone(),
-        formula: formula.clone(),
+        formula,
         proof: None,
         // HS `skeletonLemma name "generation" ..` seeds `_lPlaintext` with
         // "generation" (ProofSkeleton.hs:63-64); never rendered by `--prove`.
@@ -375,7 +400,11 @@ fn inject_lemma(
             p::TraceQuantifier::AllTraces => t::TraceQuantifier::AllTraces,
             p::TraceQuantifier::ExistsTrace => t::TraceQuantifier::ExistsTrace,
         },
-        formula,
+        // The generated formula carries no macro call, so HS's close-time
+        // `applyMacroInLemma` leaves `_lOriginalFormula` equal to `_lFormula`
+        // (lib/theory/src/Lemma.hs:83-88, CloseRule.hs:85).
+        original_formula: Some(expanded.clone()),
+        formula: expanded,
         proof: t::ProofSkeleton::unproven(),
         plaintext: "generation".to_string(),
     };
@@ -635,4 +664,54 @@ fn term_is_free_var(t: &tamarin_theory::guarded_types::GTerm) -> bool {
 /// HS `isPubVar` (Term/LTerm.hs:328-331, see line 330): a variable of sort `LSortPub` (`$x`).
 fn is_pub_var(t: &p::Term) -> bool {
     matches!(t, p::Term::Var(v) if v.sort == LSort::Pub)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A case test carrying a user predicate, so every lemma
+    /// `generateAccountabilityLemmas` builds out of it carries the sugar too.
+    const SRC: &str = "theory AccPredLemma\n\
+begin\n\
+predicates:\n  IsBad(a) <=> a = 'bad'\n\
+rule L:\n  [ In( <x, a> ) ] --[ Log( x, a ) ]-> [ ]\n\
+test badLog:\n  \"Ex #i. Log(x, a)@i & IsBad(a)\"\n\
+lemma acc:\n  badLog account for \"All x a #i. Log(x, a)@i ==> not(IsBad(a))\"\n\
+end\n";
+
+    /// HS `translate` injects each generated lemma with `liftedAddLemma`
+    /// (lib/accountability/src/Accountability.hs:42-49), which
+    /// predicate-expands it through `expandLemma`
+    /// (Theory/Text/Parser.hs:141-152), so no `Pred` atom reaches the stored
+    /// `LNFormula`: `IsBad(a)` is inlined as `a = 'bad'`.
+    #[test]
+    fn generated_lemmas_are_predicate_expanded_at_injection() {
+        let mut parsed = tamarin_parser::parse_theory(SRC, &[]).expect("theory parses");
+        let mut elaborated =
+            tamarin_theory::elaborate::elaborate(&parsed).expect("theory elaborates");
+        translate(&mut parsed, &mut elaborated).expect("translation");
+        let shown: Vec<String> = elaborated
+            .lemmas()
+            .map(|l| {
+                format!(
+                    "{}: {}",
+                    l.name,
+                    tamarin_theory::pretty_formula::pretty_lnformula(&l.formula)
+                )
+            })
+            .collect();
+        assert!(
+            shown.len() > 1,
+            "the accountability lemma generates lemmas: {shown:?}"
+        );
+        assert!(
+            shown.iter().all(|s| !s.contains("IsBad")),
+            "a predicate atom survived injection: {shown:?}"
+        );
+        assert!(
+            shown.iter().any(|s| s.contains("a = 'bad'")),
+            "the predicate body is inlined: {shown:?}"
+        );
+    }
 }

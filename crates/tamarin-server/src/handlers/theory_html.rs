@@ -229,32 +229,20 @@ fn lemma_index(
     };
     let attrs = render_attrs(&l.attributes, &entry.typed_theory.in_file);
     // HS renders the quantifier + formula as `nest 2 (sep [tq, doubleQuotes
-    // (prettyLNFormula f)])` (Web/Theory.hs:309-313) through the
+    // (prettyLNFormula l._lFormula)])` (Web/Theory.hs:309-313) through the
     // HtmlDoc/HughesPJ engine: (1) AC argument lists (`++`/`*`/xor) are
     // stored AC-canonically (fAppAC flatten+sort, Term/Raw.hs:117-129);
     // (2) layout runs at the web width 100/67 (renderHtmlDoc,
     // Text/PrettyPrint/Html.hs:151-153); (3) fill widths are measured on
-    // entity-ESCAPED text (Html.hs:102-105).  `pretty_formula` alone kept
-    // source operand order and never wrapped, so `++`-operand order and
-    // the fcat break-spaces inside tuples/AC chains diverged (the alethea
-    // overview family).
-    // HS's theory stores every lemma predicate-EXPANDED (`liftedAddLemma` →
-    // `expandLemma`); the port's accountability `translate` injects its
-    // generated lemmas with `Pred` sugar intact, deferring expansion to
-    // consumers — apply it here exactly as the batch renderer does, or the
-    // acc-generated lemmas render `IsInvalid( a )` where HS shows the body.
-    // A no-op for ordinary lemmas (elaboration already expanded them).
-    let expanded = tamarin_theory::pretty_theory::expand_lemma_formula_for_display(
-        &entry.parser_theory,
-        &l.formula,
+    // entity-ESCAPED text (Html.hs:102-105).  The render runs under the
+    // active `HtmlDocGuard` (proof_state's), so operators become
+    // `hl_operator` spans and the formula text is entity-escaped, while the
+    // line-wrapping measures escaped fill-widths at DEFAULT_LINE_LENGTH /
+    // DEFAULT_RIBBON (the widths lib.rs installs).
+    let formula_hdr = tamarin_theory::pretty_formula::lemma_header_line_doc(
+        tq,
+        tamarin_theory::pretty_formula::lnformula_doc(&l.formula),
     );
-    let canon = tamarin_theory::elaborate::canonicalize_ac_in_formula(&expanded);
-    // `nest 2 (sep [prettyTraceQuantifier tq, doubleQuotes (prettyLNFormula f)])`
-    // — rendered under the active `HtmlDocGuard` (proof_state's), so operators
-    // become `hl_operator` spans and the formula text is entity-escaped, while
-    // the line-wrapping still measures escaped fill-widths at DEFAULT_LINE_LENGTH/
-    // DEFAULT_RIBBON (the widths lib.rs installs) exactly as HS `renderHtmlDoc`.
-    let formula_hdr = tamarin_theory::pretty_formula::lemma_header_line(tq, &canon);
     let n_url = url_path_escape(&l.name);
     use tamarin_theory::pretty_hpj as hpj;
     // HS `lemmaIndex` (Web/Theory.hs:308-320), a single Doc joined by `$-$`
@@ -1125,13 +1113,7 @@ fn source_typ_asms(
             matches!(l.trace_quantifier, TraceQuantifier::AllTraces)
                 && l.attributes.iter().any(|a| matches!(a, LemmaAttr::Sources))
         })
-        .filter_map(|l| {
-            tamarin_theory::guarded::formula_to_guarded_parsed(
-                &l.formula,
-                &entry.typed_theory.signature.maude_sig,
-            )
-            .ok()
-        })
+        .filter_map(|l| tamarin_theory::guarded::formula_to_guarded(&l.formula).ok())
         .collect()
 }
 

@@ -921,6 +921,53 @@ fn an_acc_lemma_stores_the_internal_formula() {
     }
 }
 
+/// A lemma stores two formulas: `_lFormula`, the macro-expanded one the solver
+/// and the guarded block read, and `_lOriginalFormula`, the pre-macro one HS's
+/// `applyMacroInLemma` records (lib/theory/src/Lemma.hs:83-88, applied to every
+/// lemma by `closeTheoryItem`, CloseRule.hs:85).  `liftedAddLemma`
+/// predicate-expands the lemma before it is stored
+/// (Theory/Text/Parser.hs:141-152), so the predicate atom is inlined in both
+/// while the macro call survives only in the original.  A lemma that calls no
+/// macro stores the same formula twice.
+#[test]
+fn lemma_stores_the_pre_macro_formula_as_its_original() {
+    let src = "theory T\n\
+begin\n\
+predicates:\n  IsPairOf(m, a, b) <=> m = <a, b>\n\
+macros:\n  tag(x) = <'t', x>, wrap(x, y) = tag(<x, y>)\n\
+rule A:\n  [ In( <x, y> ) ] --[ A( wrap(x, y) ) ]-> [ Out( tag(x) ) ]\n\
+lemma PlainLemma:\n  all-traces\n  \"All m #i. A( m ) @ #i ==> not( m = 'no' )\"\n\
+lemma MacroLemma:\n  exists-trace\n  \"Ex x y m #i. A( m ) @ #i & IsPairOf(m, x, y) & m = wrap(x, y)\"\n\
+end\n";
+    let thy = elaborate(&parse_theory(src, &[]).unwrap()).unwrap();
+    let shown = |f: &crate::formula::LNFormula| crate::pretty_formula::pretty_lnformula(f);
+    let ls: Vec<(&str, String, String)> = thy
+        .lemmas()
+        .map(|l| {
+            (
+                l.name.as_str(),
+                shown(l.original_formula.as_ref().expect("original formula")),
+                shown(&l.formula),
+            )
+        })
+        .collect();
+    assert_eq!(
+        ls,
+        vec![
+            (
+                "PlainLemma",
+                "∀ m #i. (A( m ) @ #i) ⇒ (¬(m = 'no'))".to_string(),
+                "∀ m #i. (A( m ) @ #i) ⇒ (¬(m = 'no'))".to_string(),
+            ),
+            (
+                "MacroLemma",
+                "∃ x y m #i. ((A( m ) @ #i) ∧ (m = <x, y>)) ∧ (m = wrap(x, y))".to_string(),
+                "∃ x y m #i. ((A( m ) @ #i) ∧ (m = <x, y>)) ∧ (m = <'t', x, y>)".to_string(),
+            ),
+        ]
+    );
+}
+
 /// A restriction stores two formulas: `_rstrFormula`, the macro-expanded one
 /// the solver and the `expanded formula:` block read, and
 /// `_rstrOriginalFormula`, the pre-macro one HS's `applyMacroInRestriction`

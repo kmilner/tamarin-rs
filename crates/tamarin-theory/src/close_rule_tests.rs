@@ -555,7 +555,6 @@ fn elaborate_deduction_theory_via_text(
         1,
         "synthetic deduction theory carries exactly the Out0 rule"
     );
-    let msig = &elaborated.signature.maude_sig;
     let restrictions: Vec<Guarded> = elaborated
         .restrictions()
         .map(|r| {
@@ -575,7 +574,7 @@ fn elaborate_deduction_theory_via_text(
             theory_snippet(&src)
         )
     });
-    let g = crate::guarded::formula_to_guarded_parsed(&lemma.formula, msig).unwrap_or_else(|e| {
+    let g = crate::guarded::formula_to_guarded(&lemma.formula).unwrap_or_else(|e| {
         panic!(
             "[ndc] synthetic deduction theory Deduction lemma is not guarded ({}); theory:\n{}",
             e.message,

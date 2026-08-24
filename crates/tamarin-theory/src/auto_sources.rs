@@ -16,13 +16,15 @@
 //! action labels so the lemma can refer to those input/output events.
 //!
 //! This module builds the lemma **formula** as a parser-AST [`p::Formula`]
-//! (the form RS stores and renders lemmas in), constructed to render
-//! byte-identically to HS's `prettyLNFormula` of the `LNFormula` it builds.
-//! The variable binders use HS's names (`x`, `m`/`m1..mn`, `i`, `j`).
+//! and closes it with [`crate::formula::from_parser`] for the elaborated
+//! lemma, constructed to render byte-identically to HS's `prettyLNFormula` of
+//! the `LNFormula` it builds.  The variable binders use HS's names (`x`,
+//! `m`/`m1..mn`, `i`, `j`).
 
 use crate::constraint::constraints::{NodeConc, NodePrem};
 use crate::constraint::system::System;
 use crate::fact::{proto_or_in_fact_view, proto_or_out_fact_view, FactTag, LNFact, Multiplicity};
+use crate::formula::LNFormula;
 use crate::rule::{print_fact_position, print_position, rule_name_string, ExtendedPosition};
 use crate::theory::{OpenProtoRule, TheoryItem};
 use tamarin_parser::ast as p;
@@ -573,14 +575,17 @@ pub fn add_auto_sources_lemma(
 }
 
 /// Build the AUTO source lemma item (HS `unprovenLemma lemmaName [SourceLemma]
-/// AllTraces formula`, OpenTheory.hs:138-538, see line 157).
-pub fn build_source_lemma(name: &str, formula: p::Formula) -> crate::theory::Lemma {
+/// AllTraces formula`, OpenTheory.hs:138-538, see line 157).  `unprovenLemma`
+/// seeds `_lOriginalFormula` with the same formula
+/// (Theory/ProofSkeleton.hs:59-61).
+pub fn build_source_lemma(name: &str, formula: LNFormula) -> crate::theory::Lemma {
     use crate::theory::{Lemma, LemmaAttr, TraceQuantifier};
     Lemma {
         name: name.to_string(),
         modulo: None,
         attributes: vec![LemmaAttr::Sources],
         trace_quantifier: TraceQuantifier::AllTraces,
+        original_formula: Some(formula.clone()),
         formula,
         proof: crate::theory::ProofSkeleton::unproven(),
         // HS `unprovenLemma` seeds `_lPlaintext` with "Unpr_inSkeleton"
@@ -880,7 +885,7 @@ pub fn apply_auto_sources(
     ndc_cache: Option<&crate::constraint::solver::context::IntrRuleCache>,
 ) -> bool {
     use crate::constraint::solver::context::ProofContext;
-    use crate::guarded::{formula_to_guarded, formula_to_guarded_parsed};
+    use crate::guarded::formula_to_guarded;
 
     // Both scratch contexts below share the caller's one rule list.
     let ndc_cache = ndc_cache.cloned();
@@ -933,7 +938,7 @@ pub fn apply_auto_sources(
                 .iter()
                 .any(|a| matches!(a, crate::theory::LemmaAttr::Sources))
         })
-        .filter_map(|l| formula_to_guarded_parsed(&l.formula, &elaborated.signature.maude_sig).ok())
+        .filter_map(|l| formula_to_guarded(&l.formula).ok())
         .collect();
     let trigger = if typing_asms.is_empty() {
         // refined == raw
@@ -1021,16 +1026,24 @@ pub fn apply_auto_sources(
     // elaborated theory (so the prove loop proves it) and the parsed theory
     // (so it renders).
     if !has_lemma_named(&elaborated.items, "AUTO_typing") {
-        elaborated.items.push(TheoryItem::Lemma(build_source_lemma(
-            "AUTO_typing",
-            result.formula.clone(),
-        )));
-        parsed
-            .items
-            .push(p::TheoryItem::Lemma(build_parsed_source_lemma(
-                "AUTO_typing",
-                result.formula,
-            )));
+        // `from_parser` reads the signature, so close the formula before the
+        // `&mut` push.  The generated formula carries neither predicate sugar
+        // nor a macro call, so `_lFormula` and `_lOriginalFormula` coincide.
+        // A formula the signature cannot close adds no lemma to either theory.
+        let closed = crate::formula::from_parser(&result.formula, &elaborated.signature.maude_sig)
+            .ok()
+            .and_then(|syn| crate::formula::to_lnformula(&syn));
+        if let Some(ln) = closed {
+            elaborated
+                .items
+                .push(TheoryItem::Lemma(build_source_lemma("AUTO_typing", ln)));
+            parsed
+                .items
+                .push(p::TheoryItem::Lemma(build_parsed_source_lemma(
+                    "AUTO_typing",
+                    result.formula,
+                )));
+        }
     }
     true
 }
@@ -1038,7 +1051,7 @@ pub fn apply_auto_sources(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pretty_formula::lemma_header_line;
+    use crate::pretty_formula::{formula_doc, lemma_header_line_doc};
 
     /// The `--auto-sources` unfold (`unfoldRuleVariants`,
     /// lib/theory/src/Rule.hs:63-79): a rule with a non-trivial variant
@@ -1190,7 +1203,7 @@ mod tests {
             p::Formula::True,
             term_input_form_with_outputs(in_name, out_name),
         );
-        let rendered = lemma_header_line("all-traces", &f);
+        let rendered = lemma_header_line_doc("all-traces", formula_doc(&f));
         let expected = "  all-traces\n  \"(⊤) ∧\n   (∀ x m #i.\n     (AUTO_IN_TERM_1_0_0_1_1__Rule_R( m, x ) @ #i) ⇒\n     ((∃ #j. (!KU( x ) @ #j) ∧ (#j < #i)) ∨\n      (∃ #j. (AUTO_OUT_TERM_1_0_0_1_1__Rule_R( m ) @ #j) ∧ (#j < #i))))\"";
         assert_eq!(rendered, expected);
     }

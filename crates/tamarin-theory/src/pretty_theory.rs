@@ -329,19 +329,11 @@ pub fn pretty_closed_theory(
     // rayon `par_iter().collect()` — parallel per-item render, sequential
     // string append.
     use rayon::prelude::*;
-    // Collect macros once (mirrors HS `applyMacroInRestriction` /
-    // `parseLemmaWithMacros`): the restriction/lemma renderers apply them to
-    // get the expanded formula.  Computed here (not per item) so it is not
-    // re-collected and cloned for every theory item.
+    // Collect macros once (mirrors HS `closeProtoRule`, which applies them to
+    // every rule of the closing theory, lib/theory/src/Rule.hs:82-86).
+    // Computed here (not per item) so it is not re-collected and cloned for
+    // every theory item.
     let macros: Vec<p::Macro> = collect_macros(parsed);
-    // Collect predicate declarations once.  HS `expandRestriction` /
-    // `expandLemma` (TheoryObject.hs:430-446) predicate-expand BOTH the
-    // main and original formulas of every restriction/lemma against the
-    // theory's predicates (which includes the builtin `Smaller`/multiset-
-    // `(<)`), so the displayed formula is always the expanded one.  The
-    // parse already succeeded, so every referenced predicate is defined;
-    // using the full set for display-time expansion is safe.
-    let predicates: Vec<p::Predicate> = collect_predicates(parsed);
     // Names of arity-1 NoEq function symbols.  Depends only on the
     // (immutable) elaborated signature, so compute it once here and thread
     // it through to every per-item renderer rather than recomputing (and
@@ -363,7 +355,6 @@ pub fn pretty_closed_theory(
                 item,
                 elab_rules[idx],
                 &macros,
-                &predicates,
                 elaborated,
                 proved,
                 in_file,
@@ -968,8 +959,7 @@ fn render_open_rule(parsed_rule: &p::Rule, arity1: &std::collections::HashSet<St
 }
 
 /// Open-print lemma (HS `prettyLemma prettyProof` inside `prettyOpenTheory`):
-/// the shared head (with `macros = &[]` — the parse-time guarded block is
-/// computed before macro application, oracle-verified) plus the PARSED proof
+/// the shared head over the parse-time `_lFormula` plus the PARSED proof
 /// skeleton (`by sorry` when none).
 // arity-1 no-eq function-name set; membership-only (.contains), never iterated;
 // std kept (byte-inert) — iteration order never reaches output.
@@ -981,7 +971,24 @@ fn render_open_lemma(
     arity1: &std::collections::HashSet<String>,
     msig: &tamarin_term::maude_sig::MaudeSig,
 ) -> String {
-    let mut out = render_lemma_head(lem, &[], predicates, in_file, arity1, msig);
+    // HS `expandLemma` (TheoryObject.hs:439-446) predicate-expands the lemma
+    // formula at parse; the term parser folds surplus args of arity-1
+    // functions into a pair (`naryOpApp` `k == 1`, Parser/Term.hs:94-96) —
+    // e.g. `h(H, x)` → `h(<H, x>)` — and `fAppAC` sorts AC arguments when the
+    // `LNTerm` is built (Term/Term/Raw.hs:118-122), where the parser AST keeps
+    // written order.  The fold runs BEFORE the AC sort so the canonicaliser
+    // sees the folded `h(<…>)` shape.
+    let header_formula =
+        crate::elaborate::canonicalize_ac_in_formula(&crate::elaborate::rewrite_arity1_formula(
+            &expand_predicates_for_display(&lem.formula, predicates),
+            arity1,
+        ));
+    let mut out = render_lemma_head(
+        lem,
+        in_file,
+        pf::formula_doc(&header_formula),
+        &render_open_guarded_block(lem, predicates, arity1, msig),
+    );
     out.push('\n');
     match lem.proof.as_ref().and_then(|ps| ps.tree.as_ref()) {
         Some(tree) => {
@@ -1286,18 +1293,12 @@ pub(crate) fn collect_predicates(parsed: &p::Theory) -> Vec<p::Predicate> {
         .collect()
 }
 
-/// Collect the theory's macros + predicates the way `pretty_closed_theory`
-/// does, so the per-item renderers below see the same expansion inputs.
-fn collect_macros_predicates(parsed: &p::Theory) -> (Vec<p::Macro>, Vec<p::Predicate>) {
-    (collect_macros(parsed), collect_predicates(parsed))
-}
-
 /// HS `prettyClosedProtoRule` over `theoryRules thy` (Web/Theory.hs:887-917, see line 894,898) —
 /// one rendered rule string per user protocol rule, in source order.  Reuses
 /// `render_rule` (the `--prove` theory-body rule printer) with the same
 /// macro/arity1/manual-variant setup `pretty_closed_theory` uses.
 pub fn web_proto_rules(parsed: &p::Theory, elaborated: &Theory) -> Vec<String> {
-    let (macros, _preds) = collect_macros_predicates(parsed);
+    let macros = collect_macros(parsed);
     let arity1 = arity1_noeq_names(elaborated);
     let manual_variants = contains_manual_rule_variants(parsed, elaborated, false);
     // Same positional `(name, occurrence)` pairing as `pretty_closed_theory`
@@ -2199,7 +2200,6 @@ fn render_parsed_item(
     item: &p::TheoryItem,
     elab_rule: Option<&crate::theory::OpenProtoRule>,
     macros: &[p::Macro],
-    predicates: &[p::Predicate],
     elab: &Theory,
     proved: &[ProvedLemma],
     in_file: &str,
@@ -2239,9 +2239,7 @@ fn render_parsed_item(
             })
         }
         IntrRule(_) => None,
-        Lemma(l) => Some(render_parsed_lemma(
-            l, macros, predicates, proved, in_file, elab, arity1,
-        )),
+        Lemma(l) => render_parsed_lemma(l, proved, in_file, elab),
         // HS treats the deprecated `axiom` keyword as a synonym for
         // `restriction` (`liftedAddRestriction`; the legacy `axiom`/`Axiom` is
         // parsed and rendered as a `restriction`). RS already elaborates
@@ -3429,25 +3427,27 @@ const ORACLE_RIBBON: usize = 67;
 // Lemma
 // =============================================================================
 
-// arity-1 no-eq function-name set; membership-only (.contains), never iterated;
-// std kept (byte-inert) — iteration order never reaches output.
-#[allow(clippy::disallowed_types)]
+/// HS `prettyLemma` (lib/theory/src/Lemma.hs:116-141) over the ELABORATED
+/// lemma the parsed item names.  `_lFormula` is the macro- and
+/// predicate-expanded formula elaboration stored and `_lOriginalFormula` the
+/// pre-macro one, so the header line quotes `fromMaybe expandedFormula
+/// ogFormula` (lib/theory/src/Lemma.hs:121) and the guarded block converts
+/// `_lFormula` (lib/theory/src/Lemma.hs:125).  The name and the attributes
+/// come from the parsed item, which is what the printer walks.  A parsed
+/// lemma with no elaborated twin renders nothing, as an unpaired rule does.
 fn render_parsed_lemma(
     lem: &p::Lemma,
-    macros: &[p::Macro],
-    predicates: &[p::Predicate],
     proved: &[ProvedLemma],
     in_file: &str,
     elab: &Theory,
-    arity1: &std::collections::HashSet<String>,
-) -> String {
+) -> Option<String> {
+    let el = elab.lookup_lemma(&lem.name)?;
+    let original = el.original_formula.as_ref().unwrap_or(&el.formula);
     let mut out = render_lemma_head(
         lem,
-        macros,
-        predicates,
         in_file,
-        arity1,
-        &elab.signature.maude_sig,
+        pf::lnformula_doc(original),
+        &render_guarded_block(el),
     );
 
     // Proof body — either the prover's result (if --prove ran) or
@@ -3459,28 +3459,23 @@ fn render_parsed_lemma(
     };
     out.push('\n');
     out.push_str(&body);
-    out
+    Some(out)
 }
 
 /// Everything of HS `prettyLemma` (lib/theory/src/Lemma.hs:116-141) BEFORE the proof body:
 /// the `lemma <name> [attrs]:` header, the `<quant> "<formula>"` line, and
-/// the `/* guarded formula ... */` comment block.  Shared by the closed
-/// renderer (`render_parsed_lemma`, which appends the prover's proof body)
-/// and the open `--parse-only` renderer (`render_open_lemma`, which appends
-/// the parsed proof skeleton and passes `macros = &[]` because the parse-time
-/// lemma's guarded characterization is computed BEFORE `applyMacroInLemma`
-/// runs — verified against the oracle: `--parse-only` prints `m1('a')`
-/// un-expanded inside the guarded block where the closed print shows `h('a')`).
-// arity-1 no-eq function-name set; membership-only (.contains), never iterated;
-// std kept (byte-inert) — iteration order never reaches output.
-#[allow(clippy::disallowed_types)]
+/// the `/* guarded formula ... */` comment block.  The name, the attributes
+/// and the trace quantifier come from the parsed item; `formula_doc` is the
+/// quoted formula of the quantifier line and `guarded_block` the comment,
+/// both built by the caller from the formula representation it holds.
+/// Shared by the closed renderer (`render_parsed_lemma`, which appends the
+/// prover's proof body) and the open `--parse-only` renderer
+/// (`render_open_lemma`, which appends the parsed proof skeleton).
 fn render_lemma_head(
     lem: &p::Lemma,
-    macros: &[p::Macro],
-    predicates: &[p::Predicate],
     in_file: &str,
-    arity1: &std::collections::HashSet<String>,
-    msig: &tamarin_term::maude_sig::MaudeSig,
+    formula_doc: crate::pretty_hpj::Doc,
+    guarded_block: &str,
 ) -> String {
     use crate::pretty_hpj::{self as hpj, Doc};
     let mut out = String::new();
@@ -3515,26 +3510,11 @@ fn render_lemma_head(
     // continuation indents are byte-identical to HS.  The `nest 2` indent
     // is included in the rendered output (HS renders it at theory col 0).
     let quant = quantifier_keyword(&lem.trace_quantifier);
-    // HS folds surplus args of arity-1 functions into a pair at parse time
-    // (`naryOpApp` `k == 1`, Parser/Term.hs:94-96) — e.g. `h(H, x)` → `h(<H, x>)` —
-    // so the rendered formula must do the same.  Apply BEFORE the AC sort so
-    // the canonicaliser sees the folded `h(<…>)` shape.
-    // `arity1` is computed once by the caller and threaded in.
-    // HS `expandLemma` (TheoryObject.hs:439-446) predicate-expands the lemma
-    // formula before it is stored/printed (e.g. multiset `(<)` → `∃ z. …`).
-    let expanded_formula = expand_predicates_for_display(&lem.formula, predicates);
-    let folded_formula = crate::elaborate::rewrite_arity1_formula(&expanded_formula, arity1);
-    // HS sorts AC arguments at parse time when building `LNTerm` via `fAppAC`
-    // (Term/Term/Raw.hs:118-122); our parser keeps `BinOp` trees in written
-    // order, so re-establish the canonical AC operand order on the formula
-    // before rendering the header (matches the guarded-block path, where
-    // `from_parser`'s `f_app` sorts them).
-    let canon_formula = crate::elaborate::canonicalize_ac_in_formula(&folded_formula);
-    out.push_str(&pf::lemma_header_line(quant, &canon_formula));
+    out.push_str(&pf::lemma_header_line_doc(quant, formula_doc));
     out.push('\n');
 
     // /* guarded formula characterizing ... */
-    out.push_str(&render_guarded_block(lem, macros, predicates, arity1, msig));
+    out.push_str(guarded_block);
     out
 }
 
@@ -3577,37 +3557,62 @@ fn quantifier_keyword(q: &p::TraceQuantifier) -> &'static str {
     }
 }
 
+/// HS `ppLNFormulaGuarded` (lib/theory/src/Lemma.hs:131-141) over the
+/// ELABORATED lemma's `_lFormula`.
+fn render_guarded_block(lem: &crate::theory::Lemma) -> String {
+    guarded_block_comment(
+        matches!(
+            lem.trace_quantifier,
+            crate::theory::TraceQuantifier::ExistsTrace
+        ),
+        crate::guarded::formula_to_guarded(&lem.formula),
+        || crate::pretty_formula::pretty_lnformula(&lem.formula),
+    )
+}
+
+/// [`render_guarded_block`] for the `--parse-only` renderer, over the parsed
+/// lemma's surface formula.  The parse-time lemma's guarded characterization
+/// is computed BEFORE `applyMacroInLemma` runs, so no macro is applied here —
+/// oracle-verified: `--parse-only` prints `m1('a')` un-expanded inside the
+/// guarded block where the closed print shows `h('a')`.  HS `expandLemma`
+/// (TheoryObject.hs:439-446) does predicate-expand at parse, and the arity-1
+/// surplus-argument fold (`naryOpApp` `k == 1`, Parser/Term.hs:94-96) happens
+/// in the term parser, so the guarded form carries `h(<…>)` not `h(…)`.
 // arity-1 no-eq function-name set; membership-only (.contains), never iterated;
 // std kept (byte-inert) — iteration order never reaches output.
 #[allow(clippy::disallowed_types)]
-fn render_guarded_block(
+fn render_open_guarded_block(
     lem: &p::Lemma,
-    macros: &[p::Macro],
     predicates: &[p::Predicate],
     arity1: &std::collections::HashSet<String>,
     msig: &tamarin_term::maude_sig::MaudeSig,
 ) -> String {
-    let header = match &lem.trace_quantifier {
-        p::TraceQuantifier::ExistsTrace => "guarded formula characterizing all satisfying traces:",
-        p::TraceQuantifier::AllTraces => "guarded formula characterizing all counter-examples:",
-    };
-    // HS `parseLemmaWithMacros` (Theory/Text/Parser.hs:97-105) applies macros
-    // to the lemma formula before converting to guarded form.  The guarded
-    // block displays the EXPANDED formula so that macro calls like
-    // `A( m(x) )` become `A( x )` (when `m(x) = x`).
-    let expanded_formula = if macros.is_empty() {
-        lem.formula.clone()
+    let expanded_formula = crate::elaborate::rewrite_arity1_formula(
+        &expand_predicates_for_display(&lem.formula, predicates),
+        arity1,
+    );
+    guarded_block_comment(
+        matches!(lem.trace_quantifier, p::TraceQuantifier::ExistsTrace),
+        crate::guarded::formula_to_guarded_parsed(&expanded_formula, msig),
+        || crate::pretty_formula::pretty_formula(&expanded_formula),
+    )
+}
+
+/// The `/* guarded formula characterizing ... */` comment of HS
+/// `ppLNFormulaGuarded` (lib/theory/src/Lemma.hs:131-141) around an already
+/// converted formula.  `full_text` writes the quoted whole formula of the
+/// failure branch, which the success branch never needs.
+fn guarded_block_comment(
+    exists_trace: bool,
+    gf: Result<crate::guarded::Guarded, crate::guarded::GuardError>,
+    full_text: impl FnOnce() -> String,
+) -> String {
+    let header = if exists_trace {
+        "guarded formula characterizing all satisfying traces:"
     } else {
-        crate::macro_expand::apply_macros_formula(macros, &lem.formula)
+        "guarded formula characterizing all counter-examples:"
     };
-    // HS `expandLemma` predicate-expands before guarded conversion, so
-    // `Pred` sugar and multiset `(<)` never reach `formulaToGuarded`.
-    let expanded_formula = expand_predicates_for_display(&expanded_formula, predicates);
-    // Fold surplus args of arity-1 functions into a pair (HS `naryOpApp`
-    // `k == 1`, Parser/Term.hs:94-96) so the guarded form carries `h(<…>)` not
-    // `h(…)`.  Same fold as the header path above.
-    let expanded_formula = crate::elaborate::rewrite_arity1_formula(&expanded_formula, arity1);
-    let gf = match crate::guarded::formula_to_guarded_parsed(&expanded_formula, msig) {
+    let gf = match gf {
         Ok(g) => g,
         Err(e) => {
             // HS lib/theory/src/Lemma.hs:132-134: `multiComment (text "conversion to
@@ -3622,7 +3627,7 @@ fn render_guarded_block(
                 block.push_str(line);
                 block.push('\n');
             }
-            let full_text = crate::pretty_formula::pretty_formula(&expanded_formula);
+            let full_text = full_text();
             let sub_text = e
                 .subject_formula
                 .as_ref()
@@ -3645,9 +3650,10 @@ fn render_guarded_block(
     // models the `"` as a real `Doc` `beside`, so HughesPJ's column-shift
     // puts continuation lines at the formula's start column (1) — exactly
     // like HS's `"\"" <> prettyGuarded <> "\""`.
-    let to_render = match &lem.trace_quantifier {
-        p::TraceQuantifier::ExistsTrace => gf,
-        p::TraceQuantifier::AllTraces => crate::guarded::gnot(&gf),
+    let to_render = if exists_trace {
+        gf
+    } else {
+        crate::guarded::gnot(&gf)
     };
     let quoted = pf::pretty_guarded_doublequoted(&to_render);
     format!("/*\n{}\n{}\n*/", header, quoted)
@@ -3670,16 +3676,6 @@ pub(crate) fn expand_predicates_for_display(
     predicates: &[p::Predicate],
 ) -> p::Formula {
     crate::predicate_expand::expand_formula(f, predicates).unwrap_or_else(|_| f.clone())
-}
-
-/// [`expand_predicates_for_display`] against every predicate `parsed`
-/// declares.  Pub for the web's `lemmaIndex` mirror: HS theories store
-/// lemmas already predicate-expanded (`liftedAddLemma` → `expandLemma`,
-/// TheoryObject.hs:430-446), while the port's accountability `translate`
-/// injects its generated lemmas with `Pred` sugar intact and defers the
-/// expansion to consumers — so every lemma-formula renderer must apply it.
-pub fn expand_lemma_formula_for_display(parsed: &p::Theory, f: &p::Formula) -> p::Formula {
-    expand_predicates_for_display(f, &collect_predicates(parsed))
 }
 
 /// HS `prettyRestriction` (TheoryObject.hs:889-901) over the ELABORATED
@@ -4884,6 +4880,63 @@ end\n";
                  // safety formula\n\n  \
                  /*\n  expanded formula:\n  \
                  \"∀ m x y #i. ((A( m ) @ #i) ∧ (m = <x, y>)) ⇒ (m = <'t', x, y>)\"\n  */",
+            ]
+        );
+    }
+}
+
+#[cfg(test)]
+mod closed_lemma_tests {
+    use super::*;
+
+    /// The fixture theory of `scripts/divergence_fixtures/s3_macro_lemma_header.spthy`,
+    /// cut to its lemmas: `MacroLemma` calls a macro and a predicate,
+    /// `PlainLemma` neither.
+    const SRC: &str = "theory S3MacroLemmaHeader\n\
+begin\n\
+predicates:\n  IsPairOf(m, a, b) <=> m = <a, b>\n\
+macros:\n  tag(x) = <'t', x>, wrap(x, y) = tag(<x, y>)\n\
+rule A:\n  [ In( <x, y> ) ] --[ A( wrap(x, y) ) ]-> [ Out( tag(x) ) ]\n\
+rule B:\n  [ In( z ) ] --[ B( z ) ]-> [ ]\n\
+lemma PlainLemma:\n  all-traces\n  \"All z #i. B( z ) @ #i ==> Ex #j. A( z ) @ #j\"\n\
+lemma MacroLemma:\n  exists-trace\n  \"Ex x y m #i. A( m ) @ #i & IsPairOf(m, x, y) & m = wrap(x, y)\"\n\
+end\n";
+
+    /// HS `prettyLemma` quotes `fromMaybe expandedFormula ogFormula` on the
+    /// header line and converts `expandedFormula` for the guarded block
+    /// (lib/theory/src/Lemma.hs:121, :125), and `applyMacroInLemma` fills
+    /// `ogFormula` with the pre-macro formula (lib/theory/src/Lemma.hs:83-88).
+    /// So the macro call `wrap(x, y)` stands in the header and its expansion
+    /// `<'t', x, y>` in the block, while the predicate atom `IsPairOf(m, x, y)`
+    /// is inlined in both — parse-time expansion, which `liftedAddLemma` runs
+    /// over the stored formula and its original alike
+    /// (Theory/Text/Parser.hs:141-152).
+    ///
+    /// Expected strings are the pinned oracle's bytes for the fixture
+    /// (`scripts/divergence_fixtures/expected/s3_macro_lemma_header.theory.hs.txt`).
+    #[test]
+    fn closed_lemma_header_uses_the_original_and_the_guarded_block_the_expanded() {
+        let parsed = tamarin_parser::parse_theory(SRC, &[]).expect("theory parses");
+        let elaborated = crate::elaborate::elaborate(&parsed).expect("theory elaborates");
+        let rendered: Vec<String> = parsed
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                p::TheoryItem::Lemma(l) => render_parsed_lemma(l, &[], "", &elaborated),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            rendered,
+            vec![
+                "lemma PlainLemma:\n  \
+                 all-traces \"∀ z #i. (B( z ) @ #i) ⇒ (∃ #j. A( z ) @ #j)\"\n\
+                 /*\nguarded formula characterizing all counter-examples:\n\
+                 \"∃ z #i. (B( z ) @ #i) ∧ ∀ #j. (A( z ) @ #j) ⇒ ⊥\"\n*/\nby sorry",
+                "lemma MacroLemma:\n  exists-trace\n  \
+                 \"∃ x y m #i. ((A( m ) @ #i) ∧ (m = <x, y>)) ∧ (m = wrap(x, y))\"\n\
+                 /*\nguarded formula characterizing all satisfying traces:\n\
+                 \"∃ x y m #i. (A( m ) @ #i) ∧ (m = <x, y>) ∧ (m = <'t', x, y>)\"\n*/\nby sorry",
             ]
         );
     }
