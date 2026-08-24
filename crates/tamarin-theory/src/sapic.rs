@@ -22,13 +22,14 @@
 
 use std::collections::BTreeSet;
 
-use tamarin_term::lterm::{LSort, LVar, Name};
+use tamarin_term::lterm::{BVar, LVar, Name};
 use tamarin_term::subst::Subst;
-use tamarin_term::vterm::VTerm;
+use tamarin_term::term::map_lits;
+use tamarin_term::vterm::{Lit, VTerm};
 
-use crate::atom::SyntacticSugar;
+use crate::atom::map_atom;
 use crate::fact::Fact;
-use crate::formula::ProtoFormula;
+use crate::formula::{map_atoms, SyntacticLNFormula, SyntacticNFormula};
 
 // =============================================================================
 // Position
@@ -105,9 +106,28 @@ pub type SapicNTerm<V> = VTerm<Name, V>;
 pub type SapicTerm = SapicNTerm<SapicLVar>;
 pub type SapicNFact<V> = Fact<SapicNTerm<V>>;
 pub type SapicLNFact = Fact<SapicTerm>;
-pub type SapicNFormula<V> = ProtoFormula<SyntacticSugar<SapicNTerm<V>>, (String, LSort), Name, V>;
-pub type SapicFormula =
-    ProtoFormula<SyntacticSugar<SapicNTerm<SapicLVar>>, (String, LSort), Name, SapicLVar>;
+/// HS `SapicNFormula v` (Theory/Sapic/Term.hs:73) — the same declaration as
+/// HS `SyntacticNFormula v` (Theory/Model/Formula.hs:264).
+pub type SapicNFormula<V> = SyntacticNFormula<V>;
+/// HS `SapicFormula` (Theory/Sapic/Term.hs:74).
+pub type SapicFormula = SapicNFormula<SapicLVar>;
+
+/// HS `toLFormula` (Theory/Sapic/Term.hs:152-154): replace each free
+/// variable by its `LVar`, dropping the type tag.  The four nested `fmap`s
+/// under `mapAtoms` reach the atom's terms, each term's literals, each
+/// literal's variable and the `BVar` inside it, so a bound De Bruijn index
+/// and the binder hints cross unchanged.
+pub fn to_lformula(f: &SapicFormula) -> SyntacticLNFormula {
+    map_atoms(f.clone(), &mut |_, a| {
+        map_atom(a, &mut |t| {
+            map_lits(t, &mut |l| match l {
+                Lit::Con(c) => Lit::Con(*c),
+                Lit::Var(BVar::Bound(i)) => Lit::Var(BVar::Bound(*i)),
+                Lit::Var(BVar::Free(v)) => Lit::Var(BVar::Free(v.to_lvar())),
+            })
+        })
+    })
+}
 
 // =============================================================================
 // Annotation
@@ -449,6 +469,7 @@ pub fn is_lookup<Ann, V>(p: &Process<Ann, V>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tamarin_term::lterm::LSort;
 
     #[test]
     fn position_helpers() {
@@ -478,6 +499,41 @@ mod tests {
         assert_eq!(typed.stype, Some("node".to_string()));
         assert_eq!(typed.to_lvar(), v);
         assert_ne!(typed, sv, "the type tag is part of the variable's identity");
+    }
+
+    /// `toLFormula` maps each free variable to its `LVar` through the atom,
+    /// the term, the literal and the `BVar`, so a tag disappears wherever it
+    /// sits, a bound index and its binder hint cross unchanged, and the
+    /// sugar's fact is reached like any other atom.
+    #[test]
+    fn to_lformula_drops_type_tags_and_keeps_bound_indices() {
+        use crate::atom::{ProtoAtom, SyntacticSugar};
+        use crate::fact::{Fact, FactTag};
+        use crate::formula::ProtoFormula;
+        use tamarin_term::vterm::var_term;
+
+        let y = LVar::new("y", LSort::Msg, 0);
+        let tagged = var_term(BVar::Free(SapicLVar::new(y, Some("foo".to_string()))));
+        fn pred<V>(t: VTerm<Name, BVar<V>>) -> SyntacticNFormula<V> {
+            ProtoFormula::Atom(ProtoAtom::Syntactic(SyntacticSugar::Pred(Fact::new(
+                FactTag::Term,
+                vec![t],
+            ))))
+        }
+        let hint = ("x".to_string(), LSort::Msg);
+        let fm: SapicFormula = ProtoFormula::exists(
+            hint.clone(),
+            ProtoFormula::Atom(ProtoAtom::EqE(var_term(BVar::Bound(0)), tagged.clone()))
+                .and(pred(tagged)),
+        );
+
+        let free = var_term(BVar::Free(y));
+        let want: SyntacticLNFormula = ProtoFormula::exists(
+            hint,
+            ProtoFormula::Atom(ProtoAtom::EqE(var_term(BVar::Bound(0)), free.clone()))
+                .and(pred(free)),
+        );
+        assert_eq!(to_lformula(&fm), want);
     }
 
     /// `<>` on the annotation works field by field, but each field behaves

@@ -1962,15 +1962,17 @@ pub fn term_to_lnterm(t: &p::Term, sig: &MaudeSig) -> Option<tamarin_term::lterm
 /// `parser::Term` → `SapicTerm`.  Returns `None` on a `PatMatch` term (the
 /// surface SAPIC action parser never places one in a plain term position).
 pub fn term_to_sapic_term(t: &p::Term, sig: &MaudeSig) -> Option<crate::sapic::SapicTerm> {
-    use crate::sapic::SapicLVar;
-
     let mk_var = |v: &p::VarSpec| -> Option<crate::sapic::SapicTerm> {
-        Some(Term::Lit(Lit::Var(SapicLVar::new(
-            varspec_to_lvar(v),
-            v.typ.clone(),
-        ))))
+        Some(Term::Lit(Lit::Var(varspec_to_sapic(v))))
     };
     term_to_vterm(t, sig, &mk_var)
+}
+
+/// A parse-time variable occurrence as a SAPIC variable: the `LVar` of
+/// [`varspec_to_lvar`] carrying the written `name:type` annotation, as HS's
+/// `sapicvar` reads one (Token.hs:506-510).
+pub fn varspec_to_sapic(v: &p::VarSpec) -> crate::sapic::SapicLVar {
+    crate::sapic::SapicLVar::new(varspec_to_lvar(v), v.typ.clone())
 }
 
 /// `parser::Fact` → `SapicNFact<SapicLVar>` (`Fact<SapicTerm>`).  Mirrors

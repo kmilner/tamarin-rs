@@ -28,15 +28,19 @@
 //! ported as `simplify_guarded_with` in guarded.rs.)
 
 use crate::atom::{map_atom, to_atom, MapSugar, ProtoAtom, SyntacticAtom, SyntacticSugar, Unit2};
-use crate::elaborate::{fact_to_lnfact, term_to_lnterm, ElabError};
+use crate::elaborate::{
+    fact_to_lnfact, fact_to_sapic_fact, term_to_lnterm, term_to_sapic_term, varspec_to_lvar,
+    varspec_to_sapic, ElabError,
+};
 use crate::fact::Fact;
 use crate::predicate::smaller_fact;
+use crate::sapic::{default_sapic_node_type, SapicFormula, SapicLNFact, SapicLVar, SapicTerm};
 use tamarin_parser::ast as p;
 use tamarin_term::lterm::{BVar, LNTerm, LSort, LVar, Name};
 use tamarin_term::maude_sig::MaudeSig;
 use tamarin_term::subst::{apply_bvar, apply_bvterm, Subst};
 use tamarin_term::term::{map_lits, Term};
-use tamarin_term::vterm::{Lit, VTerm};
+use tamarin_term::vterm::{var_term, Lit, VTerm};
 
 /// Logical connectives.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -91,6 +95,11 @@ pub type LNProtoFormula<S> = ProtoFormula<S, (String, LSort), Name, LVar>;
 /// whose atoms may carry the parser's `Pred` sugar, with the sugar's fact
 /// over the same `BVar` terms as the plain atoms (Atom.hs:78-87).
 pub type SyntacticLNFormula = LNProtoFormula<SyntacticSugar<BLNTerm>>;
+
+/// HS `SyntacticNFormula v` (Theory/Model/Formula.hs:264): a
+/// [`SyntacticLNFormula`] over a free-variable type of the caller's choice.
+pub type SyntacticNFormula<V> =
+    ProtoFormula<SyntacticSugar<VTerm<Name, BVar<V>>>, (String, LSort), Name, V>;
 
 impl<S, H, C, V> ProtoFormula<S, H, C, V> {
     pub fn ltrue() -> Self {
@@ -407,14 +416,106 @@ pub fn to_lnformula(fm: &SyntacticLNFormula) -> Option<LNFormula> {
 // bound term for display (Theory/Model/Formula.hs:274-291, :481-484).
 // =============================================================================
 
+/// The two variable parsers HS's formula grammar is parameterised over,
+/// `standardFormula varp nodep` (Theory/Text/Parser/Formula.hs:108-109),
+/// bundled with the term and fact converters that read a literal the same
+/// way `varp` does.  HS instantiates the grammar at `msgvar`/`nodevar` for
+/// the theory's own formulas (Theory/Text/Parser/Formula.hs:112-114) and at
+/// `sapicvar`/`sapicnodevar` for a SAPIC condition
+/// (Theory/Text/Parser/Sapic.hs:253-254); [`MsgVars`] and [`SapicVars`] are
+/// those two instantiations.
+pub trait FormulaVars {
+    /// The free-variable type of the formula the walk builds.
+    type Var: Ord + Clone;
+
+    /// `varp`: a quantifier binder, and the variable inside every term the
+    /// walk converts.
+    fn var(v: &p::VarSpec) -> Self::Var;
+
+    /// `nodep`: the variable `nodevarTerm` reads in a timepoint position
+    /// (Theory/Text/Parser/Formula.hs:59).
+    fn node_var(v: &p::VarSpec) -> Self::Var;
+
+    /// HS `hint` (Theory/Model/Formula.hs:134-135): the name and sort a
+    /// binder records for display.
+    fn hint(v: &Self::Var) -> (String, LSort);
+
+    /// The term converter, `None` on a term with no internal form.
+    fn term(t: &p::Term, sig: &MaudeSig) -> Option<VTerm<Name, Self::Var>>;
+
+    /// The fact converter, over the same terms.
+    fn fact(f: &p::Fact, sig: &MaudeSig) -> Result<Fact<VTerm<Name, Self::Var>>, ElabError>;
+}
+
+/// HS's `msgvar`/`nodevar` instantiation (Theory/Text/Parser/Formula.hs:112-114).
+/// Both parsers give an `LVar`, and the RS parser has already stamped the
+/// sort each of them would read (Token.hs:440-448), so [`FormulaVars::var`]
+/// and [`FormulaVars::node_var`] are the same reading of a `VarSpec`.
+pub struct MsgVars;
+
+impl FormulaVars for MsgVars {
+    type Var = LVar;
+
+    fn var(v: &p::VarSpec) -> LVar {
+        varspec_to_lvar(v)
+    }
+
+    fn node_var(v: &p::VarSpec) -> LVar {
+        varspec_to_lvar(v)
+    }
+
+    fn hint(v: &LVar) -> (String, LSort) {
+        (v.name.to_string(), v.sort)
+    }
+
+    fn term(t: &p::Term, sig: &MaudeSig) -> Option<LNTerm> {
+        term_to_lnterm(t, sig)
+    }
+
+    fn fact(f: &p::Fact, sig: &MaudeSig) -> Result<Fact<LNTerm>, ElabError> {
+        fact_to_lnfact(f, sig)
+    }
+}
+
+/// HS's `sapicvar`/`sapicnodevar` instantiation
+/// (Theory/Text/Parser/Sapic.hs:253-254).  `sapicvar` reads the written
+/// `name:type` annotation (Token.hs:506-510) and `sapicnodevar` stamps
+/// `defaultSapicNodeType` on a timepoint (Token.hs:522-525,
+/// Theory/Sapic/Term.hs:99-100).  A binder is `sapicvar`'s reading for every
+/// spelling: `many1 (try varp <|> nodep)`
+/// (Theory/Text/Parser/Formula.hs:75) reaches `sapicnodevar` only where
+/// `sapicvar` fails, and `lvarNoSuffix` accepts every sort's sigil
+/// (Token.hs:502-503).
+pub struct SapicVars;
+
+impl FormulaVars for SapicVars {
+    type Var = SapicLVar;
+
+    fn var(v: &p::VarSpec) -> SapicLVar {
+        varspec_to_sapic(v)
+    }
+
+    fn node_var(v: &p::VarSpec) -> SapicLVar {
+        SapicLVar::new(varspec_to_lvar(v), default_sapic_node_type())
+    }
+
+    fn hint(v: &SapicLVar) -> (String, LSort) {
+        (v.var.name.to_string(), v.var.sort)
+    }
+
+    fn term(t: &p::Term, sig: &MaudeSig) -> Option<SapicTerm> {
+        term_to_sapic_term(t, sig)
+    }
+
+    fn fact(f: &p::Fact, sig: &MaudeSig) -> Result<SapicLNFact, ElabError> {
+        fact_to_sapic_fact(f, sig)
+    }
+}
+
 /// Build a [`SyntacticLNFormula`] from the parser's formula AST the way HS's
 /// formula parser builds one while parsing
-/// (Theory/Text/Parser/Formula.hs:44-77): every atom is lifted with all of
-/// its variables free (`blatom`'s `fmap (fmapTerm (fmap Free))`,
-/// Theory/Text/Parser/Formula.hs:44-45), and a quantifier closes its binders
-/// with `foldr (hinted q) f vs` (Theory/Text/Parser/Formula.hs:73-77) over
-/// `forAll`/`exists` (Theory/Model/Formula.hs:355-360), so the last binder
-/// of the list is the innermost one.
+/// (Theory/Text/Parser/Formula.hs:44-77) — [`from_parser_with`] at
+/// [`MsgVars`].
 ///
 /// Variable sorts come from the parser, which stamps them by syntactic
 /// position as HS's `msgvar`/`nodevar` do (Token.hs:440-448).  A binder
@@ -427,47 +528,98 @@ pub fn to_lnformula(fm: &SyntacticLNFormula) -> Option<LNFormula> {
 /// Theory/Text/Parser/Formula.hs:30-38); a SAPIC `=t` pattern term, which
 /// `term_to_lnterm` rejects, is an [`ElabError`].
 pub fn from_parser(f: &p::Formula, sig: &MaudeSig) -> Result<SyntacticLNFormula, ElabError> {
+    from_parser_with::<MsgVars>(f, sig)
+}
+
+/// [`from_parser_with`] at [`SapicVars`]: HS `standardFormula sapicvar
+/// sapicnodevar` (Theory/Text/Parser/Sapic.hs:253-254), the formula a
+/// `Cond` combinator and an embedded `_restrict` carry.
+///
+/// A binder closes exactly the occurrences equal to its whole `SapicLVar`,
+/// type tag included (HS `quantify`'s `v == x`,
+/// Theory/Model/Formula.hs:350-352), so a binder written `#j` does not close
+/// the `@`-operand `#j` that `sapicnodevar` tagged `node` (probe
+/// `S2_cond_quantified_timepoint.spthy`).
+pub fn sapic_from_parser(f: &p::Formula, sig: &MaudeSig) -> Result<SapicFormula, ElabError> {
+    from_parser_with::<SapicVars>(f, sig)
+}
+
+/// The closing walk of HS's formula grammar
+/// (Theory/Text/Parser/Formula.hs:44-77): every atom is lifted with all of
+/// its variables free (`blatom`'s `fmap (fmapTerm (fmap Free))`,
+/// Theory/Text/Parser/Formula.hs:44-45), and a quantifier closes its binders
+/// with `foldr (hinted q) f vs` (Theory/Text/Parser/Formula.hs:73-77) over
+/// `forAll`/`exists` (Theory/Model/Formula.hs:355-360), so the last binder
+/// of the list is the innermost one.
+pub fn from_parser_with<F: FormulaVars>(
+    f: &p::Formula,
+    sig: &MaudeSig,
+) -> Result<SyntacticNFormula<F::Var>, ElabError> {
     match f {
         p::Formula::True => Ok(ProtoFormula::Tf(true)),
         p::Formula::False => Ok(ProtoFormula::Tf(false)),
-        p::Formula::Atom(a) => Ok(ProtoFormula::Atom(atom_from_parser(a, sig)?)),
-        p::Formula::Not(q) => Ok(from_parser(q, sig)?.not()),
-        p::Formula::And(l, r) => Ok(from_parser(l, sig)?.and(from_parser(r, sig)?)),
-        p::Formula::Or(l, r) => Ok(from_parser(l, sig)?.or(from_parser(r, sig)?)),
-        p::Formula::Implies(l, r) => Ok(from_parser(l, sig)?.implies(from_parser(r, sig)?)),
-        p::Formula::Iff(l, r) => Ok(from_parser(l, sig)?.iff(from_parser(r, sig)?)),
-        p::Formula::Forall(vs, body) => Ok(close_binders(for_all_var, vs, from_parser(body, sig)?)),
-        p::Formula::Exists(vs, body) => Ok(close_binders(exists_var, vs, from_parser(body, sig)?)),
+        p::Formula::Atom(a) => Ok(ProtoFormula::Atom(atom_from_parser::<F>(a, sig)?)),
+        p::Formula::Not(q) => Ok(from_parser_with::<F>(q, sig)?.not()),
+        p::Formula::And(l, r) => {
+            Ok(from_parser_with::<F>(l, sig)?.and(from_parser_with::<F>(r, sig)?))
+        }
+        p::Formula::Or(l, r) => {
+            Ok(from_parser_with::<F>(l, sig)?.or(from_parser_with::<F>(r, sig)?))
+        }
+        p::Formula::Implies(l, r) => {
+            Ok(from_parser_with::<F>(l, sig)?.implies(from_parser_with::<F>(r, sig)?))
+        }
+        p::Formula::Iff(l, r) => {
+            Ok(from_parser_with::<F>(l, sig)?.iff(from_parser_with::<F>(r, sig)?))
+        }
+        p::Formula::Forall(vs, body) => Ok(close_binders::<F>(
+            for_all_var,
+            vs,
+            from_parser_with::<F>(body, sig)?,
+        )),
+        p::Formula::Exists(vs, body) => Ok(close_binders::<F>(
+            exists_var,
+            vs,
+            from_parser_with::<F>(body, sig)?,
+        )),
     }
 }
 
 /// HS `foldr (hinted q) f vs` (Theory/Text/Parser/Formula.hs:73-77): close
 /// the binders from the last to the first, each with the hint that `hinted`
-/// (Theory/Model/Formula.hs:364-365) reads off the binder's `LVar`
-/// (Theory/Model/Formula.hs:227-228).
-fn close_binders(
-    q: fn((String, LSort), &LVar, SyntacticLNFormula) -> SyntacticLNFormula,
+/// (Theory/Model/Formula.hs:364-365) reads off the binder's variable
+/// (Theory/Model/Formula.hs:227-228 at an `LVar`, Theory/Sapic/Term.hs:111-112
+/// at a `SapicLVar`).
+fn close_binders<F: FormulaVars>(
+    q: fn((String, LSort), &F::Var, SyntacticNFormula<F::Var>) -> SyntacticNFormula<F::Var>,
     vs: &[p::VarSpec],
-    body: SyntacticLNFormula,
-) -> SyntacticLNFormula {
+    body: SyntacticNFormula<F::Var>,
+) -> SyntacticNFormula<F::Var> {
     vs.iter().rev().fold(body, |acc, v| {
-        let x = LVar::new(&v.name, v.sort, v.idx);
-        q((x.name.to_string(), x.sort), &x, acc)
+        let x = F::var(v);
+        q(F::hint(&x), &x, acc)
     })
 }
 
 /// The atom alternatives of HS `blatom` (Theory/Text/Parser/Formula.hs:45-57).
-fn atom_from_parser(a: &p::Atom, sig: &MaudeSig) -> Result<SyntacticAtom<BLNTerm>, ElabError> {
+fn atom_from_parser<F: FormulaVars>(
+    a: &p::Atom,
+    sig: &MaudeSig,
+) -> Result<SyntacticAtom<VTerm<Name, BVar<F::Var>>>, ElabError> {
     Ok(match a {
-        p::Atom::Eq(l, r) => ProtoAtom::EqE(free_term(l, sig)?, free_term(r, sig)?),
-        p::Atom::Subterm(l, r) => ProtoAtom::Subterm(free_term(l, sig)?, free_term(r, sig)?),
-        p::Atom::Less(l, r) => ProtoAtom::Less(free_term(l, sig)?, free_term(r, sig)?),
-        p::Atom::Action(fa, t) => ProtoAtom::Action(free_term(t, sig)?, free_fact(fa, sig)?),
-        p::Atom::Last(t) => ProtoAtom::Last(free_term(t, sig)?),
-        p::Atom::Pred(fa) => ProtoAtom::Syntactic(SyntacticSugar::Pred(free_fact(fa, sig)?)),
+        p::Atom::Eq(l, r) => ProtoAtom::EqE(free_term::<F>(l, sig)?, free_term::<F>(r, sig)?),
+        p::Atom::Subterm(l, r) => {
+            ProtoAtom::Subterm(free_term::<F>(l, sig)?, free_term::<F>(r, sig)?)
+        }
+        p::Atom::Less(l, r) => ProtoAtom::Less(node_term::<F>(l, sig)?, node_term::<F>(r, sig)?),
+        p::Atom::Action(fa, t) => {
+            ProtoAtom::Action(node_term::<F>(t, sig)?, free_fact::<F>(fa, sig)?)
+        }
+        p::Atom::Last(t) => ProtoAtom::Last(node_term::<F>(t, sig)?),
+        p::Atom::Pred(fa) => ProtoAtom::Syntactic(SyntacticSugar::Pred(free_fact::<F>(fa, sig)?)),
         p::Atom::LessMset(l, r) => ProtoAtom::Syntactic(SyntacticSugar::Pred(smaller_fact(
-            free_term(l, sig)?,
-            free_term(r, sig)?,
+            free_term::<F>(l, sig)?,
+            free_term::<F>(r, sig)?,
         ))),
     })
 }
@@ -475,23 +627,44 @@ fn atom_from_parser(a: &p::Atom, sig: &MaudeSig) -> Result<SyntacticAtom<BLNTerm
 /// `fmapTerm (fmap Free)` (Theory/Text/Parser/Formula.hs:45): every variable
 /// of the term as a free `BVar`.  The literal order is unchanged, so the
 /// `f_app` rebuild inside [`map_lits`] keeps the AC argument order.
-pub(crate) fn lift_free(t: &LNTerm) -> BLNTerm {
+pub(crate) fn lift_free<C: Ord + Clone, V: Ord + Clone>(t: &VTerm<C, V>) -> VTerm<C, BVar<V>> {
     map_lits(t, &mut |l| match l {
-        Lit::Con(c) => Lit::Con(*c),
-        Lit::Var(v) => Lit::Var(BVar::Free(*v)),
+        Lit::Con(c) => Lit::Con(c.clone()),
+        Lit::Var(v) => Lit::Var(BVar::Free(v.clone())),
     })
 }
 
-fn free_term(t: &p::Term, sig: &MaudeSig) -> Result<BLNTerm, ElabError> {
-    term_to_lnterm(t, sig)
+fn free_term<F: FormulaVars>(
+    t: &p::Term,
+    sig: &MaudeSig,
+) -> Result<VTerm<Name, BVar<F::Var>>, ElabError> {
+    F::term(t, sig)
         .map(|t| lift_free(&t))
         .ok_or_else(|| ElabError {
             message: "could not elaborate term in formula".to_string(),
         })
 }
 
-fn free_fact(fa: &p::Fact, sig: &MaudeSig) -> Result<Fact<BLNTerm>, ElabError> {
-    Ok(fact_to_lnfact(fa, sig)?.map_ref(lift_free))
+/// HS `nodevarTerm = lit . Var <$> nodep` (Theory/Text/Parser/Formula.hs:59):
+/// the three positions `blatom` reads with it — `last`'s argument (:46), an
+/// action's timepoint (:47) and both operands of `<` (:49) — take a bare
+/// variable through `nodep`.  The RS parser also accepts a non-variable term
+/// there (parser.rs's `<` arm), which converts like any other term.
+fn node_term<F: FormulaVars>(
+    t: &p::Term,
+    sig: &MaudeSig,
+) -> Result<VTerm<Name, BVar<F::Var>>, ElabError> {
+    match t {
+        p::Term::Var(v) => Ok(var_term(BVar::Free(F::node_var(v)))),
+        _ => free_term::<F>(t, sig),
+    }
+}
+
+fn free_fact<F: FormulaVars>(
+    fa: &p::Fact,
+    sig: &MaudeSig,
+) -> Result<Fact<VTerm<Name, BVar<F::Var>>>, ElabError> {
+    Ok(F::fact(fa, sig)?.map_ref(lift_free))
 }
 
 /// Replace every bound index of `t` by the binder it refers to, given the
@@ -861,6 +1034,136 @@ mod tests {
             annotations: Vec::new(),
         }));
         assert!(from_parser(&in_fact, &pair_maude_sig()).is_err());
+    }
+
+    // =========================================================================
+    // sapic_from_parser
+    // =========================================================================
+
+    fn sapic_parsed(src: &str) -> SapicFormula {
+        let msig = pair_maude_sig();
+        sapic_from_parser(&parse_formula_str(src, &msig).unwrap(), &msig).unwrap()
+    }
+
+    fn sapic_free(name: &str, sort: LSort, typ: Option<&str>) -> VTerm<Name, BVar<SapicLVar>> {
+        var_term(BVar::Free(SapicLVar::new(
+            LVar::new(name, sort, 0),
+            typ.map(str::to_string),
+        )))
+    }
+
+    fn sapic_bound(i: u64) -> VTerm<Name, BVar<SapicLVar>> {
+        var_term(BVar::Bound(i))
+    }
+
+    fn sapic_pred(name: &str, args: Vec<VTerm<Name, BVar<SapicLVar>>>) -> SapicFormula {
+        ProtoFormula::Atom(ProtoAtom::Syntactic(SyntacticSugar::Pred(proto_fact(
+            name, args,
+        ))))
+    }
+
+    /// `sapicvar` carries the written `name:type` into the binder and into
+    /// every term literal (Token.hs:506-510), and a binder closes the
+    /// occurrences equal to its whole `SapicLVar`, so the untagged `x` of the
+    /// same name and sort stays free.
+    #[test]
+    fn sapic_from_parser_keeps_the_written_type_tag() {
+        let want = ProtoFormula::exists(
+            hint("x", LSort::Msg),
+            sapic_pred("P", vec![sapic_bound(0), sapic_free("x", LSort::Msg, None)]),
+        );
+        assert_eq!(sapic_parsed("Ex x:foo. P(x:foo, x)"), want);
+    }
+
+    /// `nodevarTerm` reads its variable with `nodep = sapicnodevar`, which
+    /// stamps `defaultSapicNodeType` (Token.hs:522-525,
+    /// Theory/Sapic/Term.hs:99-100), in the three positions `blatom` writes
+    /// it: `last`'s argument, an action's timepoint and both operands of `<`
+    /// (Theory/Text/Parser/Formula.hs:46-49).
+    #[test]
+    fn sapic_from_parser_tags_a_timepoint_operand_node() {
+        let node = |n: &str| sapic_free(n, LSort::Node, Some("node"));
+        assert_eq!(
+            sapic_parsed("#k < #l"),
+            ProtoFormula::Atom(ProtoAtom::Less(node("k"), node("l")))
+        );
+        assert_eq!(
+            sapic_parsed("last(#m)"),
+            ProtoFormula::Atom(ProtoAtom::Last(node("m")))
+        );
+        assert_eq!(
+            sapic_parsed("Ev(x) @ #n"),
+            ProtoFormula::Atom(ProtoAtom::Action(
+                node("n"),
+                proto_fact("Ev", vec![sapic_free("x", LSort::Msg, None)])
+            ))
+        );
+    }
+
+    /// A predicate's arguments are read by `varp = sapicvar` alone
+    /// (`fact (vlit (try varp <|> nodep))`,
+    /// Theory/Text/Parser/Formula.hs:52, where `lvarNoSuffix` accepts every
+    /// sigil), so a timepoint argument carries no type tag.
+    #[test]
+    fn sapic_from_parser_leaves_a_predicate_argument_untagged() {
+        assert_eq!(
+            sapic_parsed("P(#p, y)"),
+            sapic_pred(
+                "P",
+                vec![
+                    sapic_free("p", LSort::Node, None),
+                    sapic_free("y", LSort::Msg, None)
+                ]
+            )
+        );
+    }
+
+    /// A quantifier binder is `sapicvar`'s untagged reading while the `@`
+    /// operand is `sapicnodevar`'s tagged one, and `quantify` compares the
+    /// whole `SapicLVar` (Theory/Model/Formula.hs:350-352), so the binder
+    /// closes nothing and the timepoint stays free.  The oracle rejects such
+    /// a condition (probe `S2_cond_quantified_timepoint.spthy`:
+    /// `The variable(s) #j are not bound.`).
+    #[test]
+    fn a_sapic_binder_does_not_close_a_tagged_timepoint_occurrence() {
+        let j = sapic_free("j", LSort::Node, Some("node"));
+        let want = ProtoFormula::exists(
+            hint("j", LSort::Node),
+            ProtoFormula::Atom(ProtoAtom::Action(
+                j.clone(),
+                proto_fact("Foo", vec![sapic_free("x", LSort::Msg, None)]),
+            )),
+        );
+        let got = sapic_parsed("Ex #j. Foo(x)@#j");
+        assert_eq!(got, want);
+        assert_eq!(
+            formula_frees(&got),
+            vec![
+                SapicLVar::untyped(LVar::new("x", LSort::Msg, 0)),
+                SapicLVar::new(LVar::new("j", LSort::Node, 0), Some("node".to_string())),
+            ]
+        );
+    }
+
+    /// The two instantiations of the closing walk agree once `toLFormula`
+    /// drops the tags.  A quantified timepoint is where they part company —
+    /// see `a_sapic_binder_does_not_close_a_tagged_timepoint_occurrence`.
+    #[test]
+    fn to_lformula_of_sapic_from_parser_equals_from_parser() {
+        for src in [
+            "All x. P(x) & x = 'a'",
+            "Ex y. Q(y) ==> last(#i)",
+            "#k < #l",
+            "x:foo = 'a'",
+            "All x:foo. P(x:foo)",
+            "Ex ~k. K(~k) @ #i & #i < #j",
+        ] {
+            assert_eq!(
+                crate::sapic::to_lformula(&sapic_parsed(src)),
+                parsed(src),
+                "{src}"
+            );
+        }
     }
 
     /// Opening against the binders that `quantify` closed gives the original
