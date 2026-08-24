@@ -25,7 +25,7 @@
 //!
 //! See [`crate::ast::ParsedProofTree`] / [`crate::ast::ParsedMethod`]
 //! for the shape of the structured output; the `goal` inside a
-//! `solve( ... )` step is read by [`crate::parser::parse_goal_str`].
+//! `solve( ... )` step is read by [`crate::parser::parse_parens_goal`].
 //! A token this grammar does not accept fails the parse, as it does in HS;
 //! the caller (parser.rs `try_proof_skeleton`) downgrades the failure to
 //! `tree: None`.
@@ -59,7 +59,7 @@ impl std::error::Error for ProofTreeParseError {}
 /// back to auto-prover at the top.
 ///
 /// `parent` is the theory parser the skeleton text came out of, whose symbol
-/// state [`crate::parser::parse_goal_str`] needs to read the goal inside a
+/// state [`crate::parser::parse_parens_goal`] needs to read the goal inside a
 /// `solve( ... )` step; HS's proof parser runs inside the theory parser and
 /// reads the same state (Theory/Text/Parser/Proof.hs:38-72).
 pub fn parse_proof_tree<'a>(
@@ -187,13 +187,18 @@ impl<'a> TreeParser<'a> {
         // `SOLVED` branch of `proof_skeleton`.
         if self.try_kw("solve") {
             // `solve( <goal> )`.  HS reads `parens goal`
-            // (Theory/Text/Parser/Proof.hs:80); the parenthesised text is
-            // framed here and handed to the same grammar.
-            self.require_punct("(")?;
-            let inner = self.read_balanced_paren()?;
-            // `read_balanced_paren` consumed the matching `)`.
-            let spec = crate::parser::parse_goal_str(&inner, self.parent)
+            // (Theory/Text/Parser/Proof.hs:80): the parentheses belong to the
+            // goal grammar, so the term parser decides where the closing `)`
+            // is and this lexer walks to the offset it stopped at, character
+            // by character to keep its line and column right.
+            self.lx.skip_ws();
+            let start = self.lx.pos().offset;
+            let (spec, len) = crate::parser::parse_parens_goal(self.lx.rest(), self.parent)
                 .map_err(|e| self.err(format!("in solve( ... ): {}", e)))?;
+            let end = start + len;
+            while self.lx.pos().offset < end {
+                self.lx.bump();
+            }
             return Ok(ParsedMethod::SolveGoal(spec));
         }
         // HS `proofMethod` (Theory/Text/Parser/Proof.hs:75-85) has no
@@ -222,15 +227,6 @@ impl<'a> TreeParser<'a> {
         }
     }
 
-    fn require_punct(&mut self, p: &str) -> Result<(), ProofTreeParseError> {
-        self.lx.skip_ws();
-        if self.lx.eat_str(p) {
-            Ok(())
-        } else {
-            Err(self.err(format!("expected `{}`", p)))
-        }
-    }
-
     /// Identifier with extended chars: HS's `identifier` accepts
     /// alphanum + `_` (Token.hs:214-230, see line 224 `identLetter = alphaNum <|> oneOf "_"`)
     /// and emits names like `Server_ReceiveOTP_NewSession_case_1`.
@@ -253,59 +249,6 @@ impl<'a> TreeParser<'a> {
             }
         }
         self.lx.skip_ws();
-        Ok(s)
-    }
-
-    /// Read raw text between an already-consumed `(` and its matching
-    /// `)`, accounting for nested parens.  A single-quoted string is copied
-    /// through without counting its brackets: HS `singleQuotedString`
-    /// (Token.hs:452-453) is `many1 (noneOf "'\n")`, so a `(` or `)` inside a
-    /// public or fresh name is part of the name.  Returns the inner text
-    /// (excluding the final `)` which is consumed).
-    fn read_balanced_paren(&mut self) -> Result<String, ProofTreeParseError> {
-        let mut s = String::new();
-        let mut depth: i32 = 1;
-        while depth > 0 {
-            match self.lx.peek() {
-                None => return Err(self.err("unterminated `(` in solve(...)")),
-                Some('\'') => {
-                    s.push('\'');
-                    self.lx.bump();
-                    loop {
-                        match self.lx.peek() {
-                            None | Some('\n') => break,
-                            Some('\'') => {
-                                s.push('\'');
-                                self.lx.bump();
-                                break;
-                            }
-                            Some(c) => {
-                                s.push(c);
-                                self.lx.bump();
-                            }
-                        }
-                    }
-                }
-                Some('(') => {
-                    s.push('(');
-                    self.lx.bump();
-                    depth += 1;
-                }
-                Some(')') => {
-                    depth -= 1;
-                    if depth == 0 {
-                        self.lx.bump();
-                        break;
-                    }
-                    s.push(')');
-                    self.lx.bump();
-                }
-                Some(c) => {
-                    s.push(c);
-                    self.lx.bump();
-                }
-            }
-        }
         Ok(s)
     }
 }

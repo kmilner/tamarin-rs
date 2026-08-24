@@ -305,7 +305,7 @@ pub enum ParsedMethod {
 
 /// The goal of a stored `solve( ... )` step.
 ///
-/// [`crate::parser::parse_goal_str`] builds these from HS's `goal` grammar
+/// [`crate::parser::parse_parens_goal`] builds these from HS's `goal` grammar
 /// (Theory/Text/Parser/Proof.hs:38-72); they mirror the HS `Goal`
 /// constructors (Constraints.hs:159-171) over surface terms and formulas
 /// instead of `LNTerm`s and `LNGuarded`s.

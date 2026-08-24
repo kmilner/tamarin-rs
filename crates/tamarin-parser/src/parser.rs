@@ -1068,10 +1068,11 @@ pub struct Parser<'a> {
     fact_annot_hangover: Option<usize>,
     /// Whether prefix applications resolve through [`Self::lookup_arity`]
     /// (HS `naryOpApp`/`binaryAlgApp`, Theory/Text/Parser/Term.hs:88-121).  True
-    /// for theory
-    /// parsing; [`parse_formula_str`]/[`parse_goal_str`] clear it because they
-    /// re-parse RENDERED text with no signature state, where every
-    /// application must be accepted structurally.
+    /// for theory parsing and for [`parse_parens_goal`], which runs inside the
+    /// theory parser's symbol state; [`parse_formula_str`] and
+    /// [`parse_intruder_rules`] clear it because they re-parse RENDERED text
+    /// whose heads their callers resolve, where every application must be
+    /// accepted structurally.
     resolve_prefix_apps: bool,
     /// Whether a `:` after a variable names a SAPIC TYPE rather than a sort
     /// suffix.  Set while parsing a SAPIC process (and a process definition's
@@ -5762,13 +5763,10 @@ impl<'a> Parser<'a> {
                         }
                     }
                 } else {
-                    // Structural mode ([`parse_goal_str`]): accept any
-                    // application shape, strictly comma-separated.  A head the
-                    // signature declares `[AC]` builds the AC application
-                    // (`naryOpApp`'s `IsAC` arm, Theory/Text/Parser/Term.hs:105),
-                    // so its prefix spelling carries the same term as its
-                    // infix one; every other head stays the plain application
-                    // its readers resolve against the signature.
+                    // Structural mode ([`parse_formula_str`],
+                    // [`parse_intruder_rules`]): accept any application shape,
+                    // strictly comma-separated, and leave the head for the
+                    // caller to resolve.
                     self.lx.bump();
                     self.skip_ws();
                     let mut ts = Vec::new();
@@ -5781,9 +5779,6 @@ impl<'a> Parser<'a> {
                             }
                         }
                         self.require_punct(")")?;
-                    }
-                    if matches!(self.lookup_arity(&id), Some(ArityRes::Ac)) {
-                        return Ok(self.ac_prefix_app(&id, ts));
                     }
                     return Ok(Term::App(id, ts));
                 }
@@ -6493,26 +6488,29 @@ pub fn parse_formula_str(s: &str, msig: &MaudeSig) -> Result<Formula, ParseError
     Ok(f)
 }
 
-/// Parse the goal of a stored `solve( ... )` step into the AST [`GoalSpec`].
+/// Parse the `( <goal> )` of a stored `solve` step at the head of `s`, and
+/// report the byte offset just past its closing `)`.
 ///
-/// The sub-parser is built like [`parse_formula_str`]'s: rendered goal text
-/// carries applications of symbols this fresh parser has no declarations for,
-/// so prefix applications are accepted structurally instead of resolved
-/// through `lookup_arity`.
+/// HS reads the step as `symbol "solve" *> parens goal`
+/// (Theory/Text/Parser/Proof.hs:80), one parser over one input; the offset
+/// lets the proof-skeleton parser resume where this one stopped.
 ///
 /// `parent` is the parser the stored text came out of, whose symbol state
 /// [`Parser::seed_from`] copies: HS's proof parser runs inside the theory
-/// parser and reads its `stSig` (Theory/Text/Parser/Proof.hs:38-72).
-pub fn parse_goal_str(s: &str, parent: &Parser<'_>) -> Result<GoalSpec, ParseError> {
+/// parser and reads its `stSig` (Theory/Text/Parser/Proof.hs:38-72), so an
+/// application head in the goal resolves through `lookupArity`
+/// (Theory/Text/Parser/Term.hs:88-105) against the theory's symbols exactly
+/// as one in a rule does.
+pub fn parse_parens_goal(s: &str, parent: &Parser<'_>) -> Result<(GoalSpec, usize), ParseError> {
     let mut p = Parser::new(s, &[], false);
     p.seed_from(parent);
-    p.resolve_prefix_apps = false;
+    p.require_punct("(")?;
     let g = p.goal()?;
     p.skip_ws();
-    if !p.lx.is_eof() {
-        return Err(p.err("trailing garbage in goal string"));
+    if !p.lx.eat_str(")") {
+        return Err(p.err("expected `)` after the goal"));
     }
-    Ok(g)
+    Ok((g, p.lx.pos().offset))
 }
 
 #[cfg(test)]

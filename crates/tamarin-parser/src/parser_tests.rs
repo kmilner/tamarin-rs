@@ -12,7 +12,7 @@ fn parse_formula_str_sig(s: &str) -> Result<Formula, ParseError> {
 }
 
 /// A parser carrying `msig`'s symbols, standing in for the theory parser
-/// [`parse_goal_str`] reads a stored proof's goals inside.
+/// [`parse_parens_goal`] reads a stored proof's goals inside.
 fn sig_parser(msig: &tamarin_term::maude_sig::MaudeSig) -> Parser<'static> {
     let mut p = Parser::new("", &[], false);
     p.seed_signature(msig);
@@ -22,7 +22,7 @@ fn sig_parser(msig: &tamarin_term::maude_sig::MaudeSig) -> Parser<'static> {
 /// The small side of the subterm goal `<src> ⊏ y`, which is where the goal
 /// grammar reads a term.
 fn goal_term(src: &str, msig: &tamarin_term::maude_sig::MaudeSig) -> Result<Term, ParseError> {
-    parse_goal_str(&format!("{src} \u{228F} y"), &sig_parser(msig)).map(|g| match g {
+    parse_parens_goal(&format!("({src} \u{228F} y)"), &sig_parser(msig)).map(|(g, _)| match g {
         GoalSpec::Subterm(small, _) => small,
         other => panic!("expected a subterm goal for {src}, got {other:?}"),
     })
@@ -883,15 +883,14 @@ fn comment_handling() {
     assert!(t.items.is_empty(), "unexpected items: {:?}", t.items);
 }
 
-/// The one argument of a subterm goal, read in structural mode
-/// ([`parse_goal_str`]'s): a theory parse resolves the head through
-/// `lookup_arity` and an undeclared `h` would backtrack to a variable
-/// (oracle probes p05/p25 — unknown operators are parse errors upstream).
+/// The one argument of a subterm goal.  The goal grammar reads it with the
+/// theory's symbols, so an arity-2 head takes a nested tuple as ONE of its
+/// two arguments.
 #[test]
 fn term_application() {
-    match goal_term("h(<a, b>, ~k)", &pair_maude_sig()).unwrap() {
+    match goal_term("pair(<a, b>, ~k)", &pair_maude_sig()).unwrap() {
         Term::App(name, args) => {
-            assert_eq!(name, "h");
+            assert_eq!(name, "pair");
             // The nested tuple is one argument, not two.
             assert!(
                 matches!(args.as_slice(), [Term::Pair(p), Term::Var(_)] if p.len() == 2),

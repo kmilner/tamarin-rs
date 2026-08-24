@@ -45,9 +45,9 @@ use tamarin_term::maude_sig::{
 use tamarin_term::term::{f_app_no_eq, Term};
 use tamarin_term::vterm::{Lit, VTerm};
 
-use crate::constraint::constraints::{Goal, SplitId};
+use crate::constraint::constraints::{Disj, Goal, SplitId};
 use crate::formula::LNFormula;
-use crate::guarded::formula_to_guarded;
+use crate::guarded::{formula_to_guarded, formula_to_guarded_parsed};
 use crate::restriction::Restriction;
 use crate::rule::{
     ConcIdx, PremIdx, ProtoRuleE, ProtoRuleEInfo, ProtoRuleName, Rule, RuleAttributes,
@@ -1044,18 +1044,18 @@ pub fn goal_from_parsed(g: &p::GoalSpec, sig: &MaudeSig) -> Result<Goal, ElabErr
         p::GoalSpec::Split(n) => Ok(Goal::Split(SplitId(*n))),
         p::GoalSpec::Subterm(small, big) => Ok(Goal::Subterm((term(small)?, term(big)?))),
         p::GoalSpec::Disj(alts) => {
-            let gfs: Result<Vec<_>, _> = alts
+            let gfs = alts
                 .iter()
                 .map(|f| {
-                    crate::guarded::formula_to_guarded_parsed(f, sig).map_err(|e| ElabError {
+                    formula_to_guarded_parsed(f, sig).map_err(|e| ElabError {
                         message: format!(
                             "could not convert a disjunct of a stored proof goal: {}",
                             e.message
                         ),
                     })
                 })
-                .collect();
-            Ok(Goal::Disj(crate::constraint::constraints::Disj::new(gfs?)))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(Goal::Disj(Disj::new(gfs)))
         }
     }
 }

@@ -516,7 +516,7 @@ fn exec_method_for(
                     names
                 );
             }
-            Some((method, sort_cases(cases)))
+            Some((method, cases))
         }
         None => {
             if dbg {
@@ -550,13 +550,6 @@ fn goal_kind(g: &Goal) -> String {
         Goal::Disj(_) => "Disj".into(),
         Goal::Subterm(_) => "Subterm".into(),
     }
-}
-
-fn sort_cases(mut cases: Vec<(String, System)>) -> Vec<(String, System)> {
-    // Mirror search.rs's alphabetical case sort: cases are visited in
-    // alphabetical order so name-based skeleton matching is deterministic.
-    cases.sort_by(|a, b| a.0.cmp(&b.0));
-    cases
 }
 
 /// Resolve one stored [`ProofMethod`] against `sys`.

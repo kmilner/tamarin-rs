@@ -4,7 +4,7 @@
 
 use super::*;
 use crate::ast::{Atom, BinOp, FactAnnotation, Formula, GoalSpec, Term};
-use crate::parser::{parse_goal_str, Parser};
+use crate::parser::{parse_parens_goal, ParseError, Parser};
 use tamarin_term::lterm::LSort;
 
 /// The three childless leaf forms that a printed proof can end in.  Each form
@@ -86,6 +86,13 @@ fn sig_parser(msig: &tamarin_term::maude_sig::MaudeSig) -> Parser<'static> {
     let mut p = Parser::new("", &[], false);
     p.seed_signature(msig);
     p
+}
+
+/// The goal grammar over bare goal text: [`parse_parens_goal`] reads the
+/// parentheses of the `solve( ... )` step, so the tests below wrap the goal
+/// in them and drop the consumed length.
+fn parse_goal_str(src: &str, parent: &Parser<'_>) -> Result<GoalSpec, ParseError> {
+    parse_parens_goal(&format!("({src})"), parent).map(|(g, _)| g)
 }
 
 /// Every goal shape below goes through the sub-parser entry point the
@@ -196,14 +203,11 @@ fn split_goal_reads_the_split_id() {
 /// spellings of `opSubterm` (Token.hs:574-576).
 #[test]
 fn subterm_goal_accepts_both_spellings() {
-    for src in ["x \u{228F} h(x)", "x << h(x)"] {
+    for src in ["x \u{228F} <y, z>", "x << <y, z>"] {
         match goal(src) {
             GoalSpec::Subterm(small, big) => {
                 assert!(matches!(&small, Term::Var(v) if v.name == "x"), "{src}");
-                assert!(
-                    matches!(&big, Term::App(n, a) if n == "h" && a.len() == 1),
-                    "{src}"
-                );
+                assert!(matches!(&big, Term::Pair(a) if a.len() == 2), "{src}");
             }
             other => panic!("expected a subterm goal for {src}, got {other:?}"),
         }
@@ -223,20 +227,20 @@ fn goal_reads_a_user_ac_argument_infix() {
             tamarin_term::function_symbols::Constructability::Constructor,
             tamarin_term::function_symbols::NdcState::NotNdc,
         ));
-    let g = parse_goal_str("F( (z add h(y)) ) @ #i", &sig_parser(&msig)).expect("parse");
+    let g = parse_goal_str("F( (z add fst(y)) ) @ #i", &sig_parser(&msig)).expect("parse");
     match g {
         GoalSpec::Action(_, fact) => match &fact.args[..] {
             [Term::BinOp(BinOp::AcFct(op), l, r)] => {
                 assert_eq!(*op, "add");
                 assert!(matches!(&**l, Term::Var(v) if v.name == "z"));
-                assert!(matches!(&**r, Term::App(n, _) if n == "h"));
+                assert!(matches!(&**r, Term::App(n, _) if n == "fst"));
             }
             other => panic!("expected one infix AC argument, got {other:?}"),
         },
         other => panic!("expected an action goal, got {other:?}"),
     }
     // Without the symbol in the signature the infix spelling is not a term.
-    assert!(parse_goal_str("F( (z add h(y)) ) @ #i", &bare_parser()).is_err());
+    assert!(parse_goal_str("F( (z add fst(y)) ) @ #i", &bare_parser()).is_err());
 }
 
 /// A hand-written proof spells a user `[AC]` symbol prefix, the way the rules
@@ -253,20 +257,48 @@ fn goal_reads_a_user_ac_argument_prefix() {
             tamarin_term::function_symbols::Constructability::Constructor,
             tamarin_term::function_symbols::NdcState::NotNdc,
         ));
-    let prefix = parse_goal_str("F( add(z, h(y)) ) @ #i", &sig_parser(&msig)).expect("parse");
-    let infix = parse_goal_str("F( (z add h(y)) ) @ #i", &sig_parser(&msig)).expect("parse");
+    let prefix = parse_goal_str("F( add(z, fst(y)) ) @ #i", &sig_parser(&msig)).expect("parse");
+    let infix = parse_goal_str("F( (z add fst(y)) ) @ #i", &sig_parser(&msig)).expect("parse");
     assert_eq!(prefix, infix);
     // Three arguments fold into the same chain the infix spelling writes.
     let flat = parse_goal_str("F( add(x, y, z) ) @ #i", &sig_parser(&msig)).expect("parse");
     let chain = parse_goal_str("F( ((x add y) add z) ) @ #i", &sig_parser(&msig)).expect("parse");
     assert_eq!(flat, chain);
     // A head the signature does not declare `[AC]` stays a plain application.
-    match parse_goal_str("F( h(z, y) ) @ #i", &sig_parser(&msig)).expect("parse") {
+    match parse_goal_str("F( pair(z, y) ) @ #i", &sig_parser(&msig)).expect("parse") {
         GoalSpec::Action(_, fact) => {
-            assert!(matches!(&fact.args[..], [Term::App(n, _)] if n == "h"));
+            assert!(matches!(&fact.args[..], [Term::App(n, _)] if n == "pair"));
         }
         other => panic!("expected an action goal, got {other:?}"),
     }
+}
+
+/// Every prefix application in a stored goal resolves through `lookupArity`
+/// (`naryOpApp`, Theory/Text/Parser/Term.hs:88-105), which the theory's own
+/// rules are read with: `exp` becomes the `^` term `prettyTerm` renders infix
+/// (Term/Term.hs:310) and an arity-1 head reads its parenthesised arguments
+/// as one tuple.  A head the signature has no row for is not a term.
+#[test]
+fn goal_resolves_a_prefix_head_through_the_signature() {
+    let dh = tamarin_term::maude_sig::dh_maude_sig();
+    match parse_goal_str("F( exp(a, b) ) @ #i", &sig_parser(&dh)).expect("parse") {
+        GoalSpec::Action(_, fact) => {
+            assert!(matches!(&fact.args[..], [Term::BinOp(BinOp::Exp, _, _)]));
+        }
+        other => panic!("expected an action goal, got {other:?}"),
+    }
+    let pair = tamarin_term::maude_sig::pair_maude_sig();
+    match parse_goal_str("F( fst(a, b) ) @ #i", &sig_parser(&pair)).expect("parse") {
+        GoalSpec::Action(_, fact) => match &fact.args[..] {
+            [Term::App(n, a)] => {
+                assert_eq!(n, "fst");
+                assert!(matches!(&a[..], [Term::Pair(t)] if t.len() == 2), "{a:?}");
+            }
+            other => panic!("expected one arity-1 application, got {other:?}"),
+        },
+        other => panic!("expected an action goal, got {other:?}"),
+    }
+    assert!(parse_goal_str("F( exp(a, b) ) @ #i", &sig_parser(&pair)).is_err());
 }
 
 /// `diff(a, b)` is a term only when the theory enables it, so the goal
@@ -430,10 +462,9 @@ fn solve_disj_five_alts() {
 
 /// A public name may hold a bracket: HS `singleQuotedString`
 /// (Token.hs:452-453) reads `many1 (noneOf "'\n")`, and `prettyGoal` prints
-/// the name back with the bracket inside the quotes.  Framing the text of a
-/// `solve( ... )` step therefore has to step over a quoted name instead of
-/// counting its brackets, or the goal is cut short and the whole skeleton
-/// fails to parse.
+/// the name back with the bracket inside the quotes.  The goal grammar reads
+/// the name whole, so the bracket does not close the `solve( ... )` step and
+/// the rest of the skeleton parses on.
 #[test]
 fn solve_goal_with_bracket_in_pub_name() {
     let t = parse_proof_tree("solve( A( 'a)b' ) @ #i ) by sorry", &bare_parser()).expect("parse");
