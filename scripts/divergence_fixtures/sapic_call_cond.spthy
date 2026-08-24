@@ -1,0 +1,40 @@
+// A process call whose argument has to reach the callee's conditional and the
+// callee's embedded restriction.
+//
+// Inlining a call substitutes the actual arguments for the formal parameters
+// over the whole definition body
+// (Theory/Text/Parser/Sapic.hs:293-312, through
+// Theory/Sapic/Process.hs:392-408#applyM).  The formula argument of
+// `mapTermsAction` reaches an embedded `_restrict`
+// (Theory/Sapic/Process.hs:155) and the one of `mapTermsComb` reaches an `if`
+// condition (Theory/Sapic/Process.hs:165), so `P(z)` puts `z` inside both.
+//
+// The conditional's rules therefore read `process="if Eq( z.1, 'a' )"` and are
+// named `ifEqza_0_11` and `ifEqza_1_11` after that string
+// (Sapic/Facts.hs:401#stripNonAlphanumerical), and the embedded restriction's
+// rule carries `_restrict( Q( w.1 ) )` over the `in`'s own variable.
+//
+// Mode `match`: the two engines agree on this shape.  No corpus theory calls a
+// definition whose body starts with a conditional, and no process under
+// tamarin-prover/examples carries an embedded `_restrict` at all, so no gate
+// row covers either substitution.
+//
+// Compared slices: the wf report block, which pins the run clean, AND the
+// `theory … end` echo, which carries the `process=` attribute of the rules and
+// the names derived from it.
+
+theory SapicCallCond
+begin
+
+predicates: Eq(a, b) <=> a = b
+          , Q(a) <=> a = a
+
+let P(y) = if Eq(y, 'a') then out('yes') else out('no')
+
+let R(v) = [ ] --[ Ev(v), _restrict( Q(v) ) ]-> [ ]; out('done')
+
+process:
+  ( ( in(z); P(z) )
+  | ( in(w); R(w) ) )
+
+end

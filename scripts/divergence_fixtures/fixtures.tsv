@@ -44,3 +44,4 @@ sapic_cond_type_tag	theory	match	-m=spthytyped --derivcheck-timeout=0
 sapic_msr_restrict_wrap	theory	match	--derivcheck-timeout=0
 sapic_pubname_in_restrict	wf	match	--derivcheck-timeout=0
 sapic_cond_binder	wf,theory	match	--derivcheck-timeout=0
+sapic_call_cond	wf,theory	match	--derivcheck-timeout=0

@@ -38,6 +38,7 @@ use tamarin_term::maude_sig::MaudeSig;
 use tamarin_term::subst::Subst;
 use tamarin_term::vterm::{Lit, VTerm};
 
+use tamarin_theory::formula::apply_subst;
 use tamarin_theory::sapic::{
     PlainProcess, Process, ProcessCombinator, SapicAction, SapicLVar, SapicTerm,
 };
@@ -288,13 +289,14 @@ fn apply_m_action(
             prems: prems.iter().map(|f| subst_fact(subst, f)).collect(),
             acts: acts.iter().map(|f| subst_fact(subst, f)).collect(),
             concs: concs.iter().map(|f| subst_fact(subst, f)).collect(),
-            // HS substitutes here too: `mapTermsAction .. (fmap ff rest) ..`
-            // (Sapic/Process.hs:155) under `apply subst`
-            // (Sapic/Process.hs:319-321).  This arm passes the formulas
-            // through instead, so a call whose body embeds an MSR whose
-            // `_restrict` mentions a parameter keeps the callee's variable
-            // where HS puts the argument.
-            rest,
+            // HS `mapTermsAction f ff fv (MSR l a r rest mv) = MSR .. (fmap
+            // ff rest) ..` (Sapic/Process.hs:155) with `ff = apply subst`
+            // (Sapic/Process.hs:319-321): the call's arguments replace the
+            // formal parameters inside an embedded `_restrict` as they do in
+            // the fact rows.  A quantifier binder is a `Bound` De Bruijn
+            // index, outside the substitution's domain, so it cannot capture
+            // a variable of an argument.
+            rest: rest.into_iter().map(|f| apply_subst(subst, f)).collect(),
             match_vars,
         }),
         SapicAction::Rep => Ok(SapicAction::Rep),
@@ -330,13 +332,14 @@ fn apply_m_comb(
             subst_term(subst, &a),
             subst_term(subst, &b),
         )),
-        // HS substitutes here: `apply subst (Cond fa) = Cond (apply subst fa)`
-        // (Sapic/Process.hs:165), reached via the `ApplyM`/`Apply`
-        // ProcessCombinator instances (Sapic/Process.hs:330-334,382).  This arm
-        // passes the formula through instead, so a call whose body begins with
-        // `if <formula>` mentioning a parameter keeps the callee's variable
-        // where HS puts the argument.
-        ProcessCombinator::Cond(f) => Ok(ProcessCombinator::Cond(f)),
+        // HS `mapTermsComb f ff fv (Cond fa) = Cond (ff fa)`
+        // (Sapic/Process.hs:165) with `ff = apply subst`
+        // (Sapic/Process.hs:330-334), reached from `applyM`'s fallthrough
+        // (Sapic/Process.hs:382-389): the call's arguments replace the formal
+        // parameters inside the conditional's formula.  A quantifier binder is
+        // a `Bound` De Bruijn index, outside the substitution's domain, so it
+        // cannot capture a variable of an argument.
+        ProcessCombinator::Cond(f) => Ok(ProcessCombinator::Cond(apply_subst(subst, f))),
         // Parallel/Ndc carry no terms, so substitution is the identity.
         // Enumerated (no wildcard) so a new term-carrying variant must decide
         // its substitution here.
@@ -445,6 +448,99 @@ mod tests {
             }
             other => panic!("expected ProcessCall action, got {other:?}"),
         }
+    }
+
+    fn msg_var(name: &str) -> p::VarSpec {
+        p::VarSpec {
+            name: name.to_string(),
+            idx: 0,
+            sort: LSort::Msg,
+            typ: None,
+        }
+    }
+
+    #[test]
+    fn inlines_call_substituting_a_parameter_into_a_conditional() {
+        // `let P(y) = if Eq(y,'a') then 0 else 0` called as `P('t')`: the
+        // argument replaces the formal parameter inside the condition's
+        // formula, so the inlined combinator is the one the callee's body
+        // would convert to with `'t'` written in place of `y`.
+        let cond_on = |t: p::Term| {
+            p::ProcessComb::Cond(p::Condition::Formula(p::Formula::Atom(p::Atom::Eq(
+                t,
+                pub_lit("a"),
+            ))))
+        };
+        let def = p::ProcessDef {
+            name: "P".into(),
+            vars: Some(vec![msg_var("y")]),
+            body: p::Process::Comb {
+                comb: cond_on(p::Term::Var(msg_var("y"))),
+                left: Box::new(p::Process::Null),
+                right: Box::new(p::Process::Null),
+            },
+        };
+        let mut defs: ProcessDefMap = BTreeMap::new();
+        defs.insert("P".to_string(), &def);
+        let call = p::Process::Call {
+            name: "P".into(),
+            args: vec![pub_lit("t")],
+        };
+        let sig = pair_maude_sig();
+        let Process::Action(SapicAction::ProcessCall(..), _, body) =
+            convert_process_with_defs(&call, &defs, &sig).unwrap()
+        else {
+            panic!("expected a ProcessCall action");
+        };
+        let Process::Comb(got, ..) = *body else {
+            panic!("expected a Comb node under the call marker");
+        };
+        assert_eq!(
+            got,
+            convert_combinator(&cond_on(pub_lit("t")), &sig).unwrap()
+        );
+    }
+
+    #[test]
+    fn inlines_call_substituting_a_parameter_into_an_embedded_restriction() {
+        // `let P(y) = [ ] --[ _restrict(Q(y)) ]-> [ ]` called as `P('t')`:
+        // the argument replaces the formal parameter inside the embedded
+        // restriction as it does in the fact rows.
+        let msr_on = |t: p::Term| p::SapicAction::Msr {
+            prems: vec![],
+            acts: vec![],
+            concs: vec![],
+            restrictions: vec![p::Formula::Atom(p::Atom::Pred(p::Fact {
+                persistent: false,
+                name: "Q".into(),
+                args: vec![t],
+                annotations: vec![],
+            }))],
+        };
+        let def = p::ProcessDef {
+            name: "P".into(),
+            vars: Some(vec![msg_var("y")]),
+            body: p::Process::Action {
+                action: msr_on(p::Term::Var(msg_var("y"))),
+                body: Box::new(p::Process::Null),
+            },
+        };
+        let mut defs: ProcessDefMap = BTreeMap::new();
+        defs.insert("P".to_string(), &def);
+        let call = p::Process::Call {
+            name: "P".into(),
+            args: vec![pub_lit("t")],
+        };
+        let sig = pair_maude_sig();
+        let Process::Action(SapicAction::ProcessCall(..), _, body) =
+            convert_process_with_defs(&call, &defs, &sig).unwrap()
+        else {
+            panic!("expected a ProcessCall action");
+        };
+        let Process::Action(got, ..) = *body else {
+            panic!("expected an action under the call marker");
+        };
+        assert_eq!(got, convert_action(&msr_on(pub_lit("t")), &sig).unwrap());
     }
 
     #[test]
