@@ -441,7 +441,7 @@ pub struct MaudeHandle {
     /// Used by:
     /// - `msubst_to_lnsubst_with_avoid` for Maude witness allocation.
     /// - `freshen_witness_range` (eq_store) for post-unification renames.
-    /// - `freshen_rule` / `freshen_system` (reduction) for rule shift.
+    /// - `freshen_rule` (reduction) for rule shift.
     ///
     /// Every consumer first calls `ensure_above(local_avoid_max)` to
     /// guarantee the counter is at least as high as the current system
@@ -555,10 +555,10 @@ impl MaudeHandle {
     }
 
     /// Atomically reserve `n` consecutive idxs from the global counter,
-    /// returning the FIRST one.  Used by `freshen_rule` /
-    /// `freshen_system` to shift a rule's or case's vars into a globally
-    /// unique range without per-call collisions.  Haskell's MonadFresh
-    /// equivalent: `freshIdents n` (replicates `freshIdent` n times).
+    /// returning the FIRST one.  Used by `freshen_rule` to shift a rule's
+    /// vars into a globally unique range without per-call collisions.
+    /// Haskell's MonadFresh equivalent: `freshIdents n` (replicates
+    /// `freshIdent` n times).
     pub fn reserve_idxs(&self, n: u64) -> u64 {
         if n == 0 {
             return self.fresh_counter.load(Ordering::SeqCst);

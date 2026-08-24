@@ -2799,218 +2799,30 @@ pub fn solve_with_source_cases_ctx(
     Some(out)
 }
 
-/// Fresh-rename every LVar in a system so its indices don't clash
-/// with `avoid_max`. Mirrors Haskell's `evalFresh ... rename`.
+/// `rename` (LTerm.hs:638-645) over a stored source case at saturate time:
+/// every free variable's index moves up by `avoid_max + 1`, so the renamed
+/// case shares no index with the live system it is grafted into.  Haskell
+/// draws `freshStart` from the fresh supply; saturation runs outside a
+/// `Reduction`, so the caller's bounds ceiling stands in for it.
 ///
-/// **Haskell-faithful counter**: the shift amount comes from the
-/// MaudeHandle's global `fresh_counter` (mirroring `MonadFresh`),
-/// not from `avoid_max + 1` alone.  Without a global counter, two
-/// freshen_system calls with the same `avoid_max` (e.g. precompute
-/// enumeration where the system isn't updated between calls) shift
-/// every var to the same idxs and produce cross-call collisions.
-/// Drawing from the global counter guarantees each freshen produces
-/// a globally-unique idx range.
-///
-/// Walks every LVar-bearing field of `System` and shifts each var's
-/// `idx` by the reserved base.  We can't use `HasFrees::map_free`
-/// directly because `System` doesn't implement it (it's a top-level
-/// solver type rather than a term-bearing one).  Doing this by hand
-/// keeps the dependency graph clean.
-fn freshen_system(
-    sys: &System,
-    avoid_max: u64,
-    maude: Option<&tamarin_term::maude_proc::MaudeHandle>,
-) -> System {
-    use tamarin_term::lterm::HasFrees;
-    // Find the system's max var idx — we need to reserve `max + 1`
-    // consecutive idxs from the global counter (so the shifted range
-    // [shift..shift+max] is uniquely reserved).
-    let shift: u64 = if let Some(h) = maude {
-        // Reserve enough idxs to cover EVERY var-bearing field that this
-        // function shifts below (nodes/edges/less/goals/last/eq-store/
-        // formulas/subterm-store).  Use `system_max_idx`, which walks all
-        // of them (matching HS `instance HasFrees System`), so a var
-        // living only in one of those fields can't shift past the
-        // reserved range.
-        let sys_max = system_max_idx(sys);
-        h.ensure_above(avoid_max);
-        h.reserve_idxs(sys_max.saturating_add(1))
-    } else {
-        avoid_max.saturating_add(1)
-    };
-    let shift_lvar = |v: &tamarin_term::lterm::LVar| {
-        let mut v2 = *v;
-        v2.idx = v2.idx.saturating_add(shift);
-        v2
-    };
-    // HS `matchToGoal` (Sources.hs:268-317, see line 307): `th = (evalFresh avoid goalTerm) . rename`.
-    // `rename` (LTerm.hs:638-645, see line 643) is Monotone — the uniform `shift_lvar` index
-    // bump preserves AC arg order (`unsafefApp`), so use `map_free_monotone`
-    // throughout this freshening.
-    let mut out = sys.clone();
-    out.content_mut_untracked().nodes = std::sync::Arc::new(
-        std::sync::Arc::unwrap_or_clone(std::mem::take(&mut out.content_mut_untracked().nodes))
-            .into_iter()
-            .map(|(id, ru)| {
-                (
-                    shift_lvar(&id),
-                    ru.map_free_monotone(&mut |v| shift_lvar(&v)),
-                )
-            })
-            .collect(),
-    );
-    // PROVEN uniform: `shift_lvar` adds the SAME `shift` to EVERY node
-    // var's idx (no `keep` set here), so the node-component max rises by
-    // exactly `shift`.  Bump instead of invalidating so the dominant node
-    // max survives the freshen.  The `out.node_max_cache` was copied from
-    // `sys` by the clone above, so it still reflects the pre-shift node
-    // component.  Guard on non-empty nodes: an empty node map has
-    // component 0 both before and after — bumping it would be wrong.
+/// The shift runs over `instance HasFrees System` (System.hs:1864-1877), so it
+/// reaches every field that instance walks — the goal store's disjunctions and
+/// subterm pairs (Constraints.hs:226-232) and the subterm store's negative
+/// subterms (SubtermStore.hs:552-557) included — and leaves the ranges of the
+/// equation store's disjunctions alone, whose variables count as fresh
+/// (SubstVFresh.hs:196-202).
+fn freshen_system(sys: &System, avoid_max: u64) -> System {
+    let shift = avoid_max.saturating_add(1);
+    let out = rename_system_by(sys, i128::from(shift));
+    // The map invalidates the node-component cache, because a rename can LOWER
+    // a maximum.  This one adds the same `shift` to every node var's idx, so
+    // the node max rises by exactly `shift` as long as one node var exists:
+    // re-seed the pre-shift value and bump it.  An empty node map has
+    // component 0 before and after, so it keeps the seeded value.
+    out.node_max_cache.set(sys.node_max_cache.get());
     if !out.nodes.is_empty() {
         out.bump_node_max_by_shift(shift);
     }
-    // The FULL max cache was also copied pre-shift by the clone, and the
-    // shift is NOT uniform over its whole domain (e.g. `Subterm` goal
-    // terms fall through the goal map's `other => other` arm below yet
-    // ARE counted by `bounds_max_rest`) — so the bump cannot be proven.
-    // Invalidate: a stale-LOW full max would let `avoid_fresh_state` on
-    // the freshened clone seed minted vars into the just-shifted range.
-    out.invalidate_max_var_idx_cache();
-    out.content_mut_untracked().edges = std::mem::take(&mut out.content_mut_untracked().edges)
-        .into_iter()
-        .map(|e| crate::constraint::constraints::Edge {
-            src: (shift_lvar(&e.src.0), e.src.1),
-            tgt: (shift_lvar(&e.tgt.0), e.tgt.1),
-        })
-        .collect();
-    out.content_mut_untracked().less_atoms =
-        std::mem::take(&mut out.content_mut_untracked().less_atoms)
-            .into_iter()
-            .map(|l| {
-                crate::constraint::constraints::LessAtom::new(
-                    shift_lvar(&l.smaller),
-                    shift_lvar(&l.larger),
-                    l.reason,
-                )
-            })
-            .collect();
-    out.content_mut_untracked().goals = std::sync::Arc::new(
-        std::sync::Arc::unwrap_or_clone(std::mem::take(&mut out.content_mut_untracked().goals))
-            .into_iter()
-            .map(|(g, st)| {
-                let g2 = match g {
-                    crate::constraint::constraints::Goal::Action(n, fa) => {
-                        crate::constraint::constraints::Goal::Action(
-                            shift_lvar(&n),
-                            fa.map_free_monotone(&mut |v| shift_lvar(&v)),
-                        )
-                    }
-                    crate::constraint::constraints::Goal::Premise(p, fa) => {
-                        crate::constraint::constraints::Goal::Premise(
-                            (shift_lvar(&p.0), p.1),
-                            fa.map_free_monotone(&mut |v| shift_lvar(&v)),
-                        )
-                    }
-                    crate::constraint::constraints::Goal::Chain(c, p) => {
-                        crate::constraint::constraints::Goal::Chain(
-                            (shift_lvar(&c.0), c.1),
-                            (shift_lvar(&p.0), p.1),
-                        )
-                    }
-                    other => other,
-                };
-                (g2, st)
-            })
-            .collect(),
-    );
-    if let Some(la) = out.content_mut_untracked().last_atom.take() {
-        out.content_mut_untracked().last_atom = Some(shift_lvar(&la));
-    }
-    // Formulas / solved-formulas / lemmas: shift parser-AST vars too.
-    // These can reference rule vars (after `subst_guarded` propagation)
-    // and Maude witnesses that ALSO live in nodes — if we don't shift
-    // them, the formulas end up referencing un-shifted vars that the
-    // grafted system's nodes no longer have.
-    let shift_parser_var = |v: &tamarin_parser::ast::VarSpec| -> tamarin_parser::ast::VarSpec {
-        let mut v2 = v.clone();
-        v2.idx = v2.idx.saturating_add(shift);
-        v2
-    };
-    // With DeBruijn bindings, only `BVar::Free` leaves carry idxs that
-    // need shifting; `Bound` and `GBinding` are positional and unaffected.
-    // `map_lvars_in_guarded` walks every Free leaf in the GAtoms.
-    let shift_g =
-        |g: &crate::guarded::Guarded| crate::guarded::map_lvars_in_guarded(g, shift_parser_var);
-    *out.formulas_mut_untracked() = out
-        .formulas
-        .iter()
-        .map(|g| std::sync::Arc::new(shift_g(g)))
-        .collect();
-    *out.solved_formulas_mut_untracked() = out
-        .solved_formulas
-        .iter()
-        .map(|g| std::sync::Arc::new(shift_g(g)))
-        .collect();
-    out.content_mut_untracked().lemmas = out
-        .lemmas
-        .iter()
-        .map(|g| std::sync::Arc::new(shift_g(g)))
-        .collect();
-    // Eq-store: shift both domain LVars and range terms.  This whole
-    // freshening is HS `rename` (Monotone), so range-term shifts preserve
-    // AC arg order — `map_free_monotone`.
-    {
-        let shifted_subst: Vec<_> = out
-            .eq_store
-            .subst
-            .to_list()
-            .iter()
-            .map(|(v, t)| {
-                let v2 = shift_lvar(v);
-                let t2 = (*t).clone().map_free_monotone(&mut |w| shift_lvar(&w));
-                (v2, t2)
-            })
-            .collect();
-        out.eq_store_mut().subst = tamarin_term::subst::Subst::from_list(shifted_subst);
-        for d in out.eq_store_mut().conj.iter_mut() {
-            for s in d.substs.iter_mut() {
-                let shifted: Vec<_> = s
-                    .to_list()
-                    .iter()
-                    .map(|(v, t)| {
-                        let v2 = shift_lvar(v);
-                        let t2 = (*t).clone().map_free_monotone(&mut |w| shift_lvar(&w));
-                        (v2, t2)
-                    })
-                    .collect();
-                *s = tamarin_term::subst_vfresh::SubstVFresh::from_list(shifted);
-            }
-        }
-    }
-    // Subterm-store: shift the LNTerm pairs (small/big).  Part of the same
-    // Monotone `rename` — preserve AC arg order.
-    {
-        let shift_st = |s: &crate::tools::subterm_store::SubtermConstraint|
-            -> crate::tools::subterm_store::SubtermConstraint {
-            crate::tools::subterm_store::SubtermConstraint {
-                small: s.small.clone().map_free_monotone(&mut |w| shift_lvar(&w)),
-                big: s.big.clone().map_free_monotone(&mut |w| shift_lvar(&w)),
-                propagated: s.propagated,
-            }
-        };
-        out.subterm_store_mut().subterms =
-            out.subterm_store.subterms.iter().map(shift_st).collect();
-        out.subterm_store_mut().solved_subterms = out
-            .subterm_store
-            .solved_subterms
-            .iter()
-            .map(shift_st)
-            .collect();
-    }
-    // Whole-system freshen: `out` is a var-shifted rewrite of a clone, so no
-    // inherited verified-no-op verdict can survive.  Mint fresh stamps + clear
-    // the marker.
-    out.mint_fresh_stamps();
     out
 }
 
@@ -3281,7 +3093,7 @@ pub fn solve_with_source_cases_action_with_ctx(
             // HS-faithful: stored case name is already final; use verbatim
             // (no `_`-splitting).  See note at the action-goal call site.
             let case_label = name.clone();
-            let renamed = freshen_system(&case_sys, avoid_max, ctx_opt.map(|c| &c.maude));
+            let renamed = freshen_system(&case_sys, avoid_max);
             let abstract_renamed = {
                 let mut v = abstract_orig;
                 v.idx = v.idx.saturating_add(avoid_max.saturating_add(1));
@@ -3443,11 +3255,11 @@ fn restrict_eq_store_to_stable_vars(
 
 /// `rename th0` (LTerm.hs:638-645) with the shift the caller has already
 /// computed: every free variable's index moves by `shift_amount` through
-/// `mapFrees (Monotone (incVar shift))`.  This is the rename `matchToGoal`
-/// performs on a whole source before matching it against the live goal
-/// (Sources.hs:307, `rename th0` under `avoid goalTerm`), so `shift_amount`
-/// is `freshStart - minVarIdx` over the SOURCE, not over the single case
-/// being renamed.
+/// `mapFrees (Monotone (incVar shift))`.  At runtime source dispatch this is
+/// the rename `matchToGoal` performs on a whole source before matching it
+/// against the live goal (Sources.hs:307, `rename th0` under `avoid
+/// goalTerm`), so `shift_amount` is `freshStart - minVarIdx` over the SOURCE,
+/// not over the single case being renamed.
 ///
 /// The shift is signed: it is negative whenever the source's stored indices
 /// sit above the fresh supply's seed, which is the normal case at runtime

@@ -662,3 +662,64 @@ fn shift_keeps_ac_arg_order() {
         "the monotone shift and the re-sorting one agree"
     );
 }
+
+// =========================================================================
+// freshen_system
+// =========================================================================
+
+/// The saturate-time shift is `rename` over `instance HasFrees System`
+/// (System.hs:1864-1877), so the goal store's disjunctions and subterm pairs
+/// move with everything else (Constraints.hs:226-232) and so do the subterm
+/// store's negative subterms (SubtermStore.hs:552-557).  The ranges of the
+/// equation store's disjunctions stay put: their variables count as fresh, so
+/// the instance maps the domain only (SubstVFresh.hs:196-202).
+#[test]
+fn saturate_shift_moves_disj_and_subterm_goals_and_leaves_conj_ranges() {
+    let sys = system_with_a_variable_per_field(mterm(11));
+    let out = freshen_system(&sys, 999);
+
+    let expected: Vec<LVar> = frees_list(&sys)
+        .into_iter()
+        .map(|v| LVar::new(v.name, v.sort, v.idx + 1000))
+        .collect();
+    assert_eq!(frees_list(&out), expected);
+
+    assert_eq!(
+        out.goals[1].0,
+        Goal::Disj(Disj::new(vec![last_formula(1170)])),
+        "a disjunction goal's formula moves with the system"
+    );
+    assert_eq!(
+        out.goals[2].0,
+        Goal::Subterm((mterm(1180), mterm(1181))),
+        "a subterm goal's pair moves with the system"
+    );
+    assert_eq!(
+        out.subterm_store.neg_subterms.to_vec(),
+        vec![(mterm(1090), mterm(1091))],
+        "the negative subterms move with the rest of the store"
+    );
+    assert_eq!(
+        out.eq_store.conj[0].substs[0].to_list(),
+        vec![(mvar(1110), mterm(111))],
+        "a disjunction's domain key moves and its range does not"
+    );
+}
+
+/// The map invalidates the node-component cache, and the wrapper re-establishes
+/// it from the pre-shift value: every node variable's index rises by the same
+/// shift, so the maximum over them does too.
+#[test]
+fn saturate_shift_carries_the_node_component_cache() {
+    use crate::constraint::solver::reduction::{bounds_max, bounds_max_uncached};
+    let sys = system_with_a_variable_per_field(mterm(11));
+    bounds_max(&sys);
+    let before = sys
+        .node_max_cache
+        .get()
+        .expect("bounds_max populates the node component");
+
+    let out = freshen_system(&sys, 999);
+    assert_eq!(out.node_max_cache.get(), Some(before + 1000));
+    assert_eq!(bounds_max(&out), bounds_max_uncached(&out));
+}
