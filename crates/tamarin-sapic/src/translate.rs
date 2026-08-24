@@ -29,6 +29,7 @@ use std::collections::BTreeSet;
 
 use tamarin_term::lterm::LVar;
 
+use tamarin_theory::formula::SyntacticLNFormula;
 use tamarin_theory::rule::ProtoRuleE;
 use tamarin_theory::sapic::{GoodAnnotation, PlainProcess, Process, ProcessPosition, SapicLVar};
 
@@ -345,12 +346,12 @@ fn get_unlock_positions(p: &Process<ProcessAnnotation<LVar>, SapicLVar>) -> Vec<
 
 /// The result of translating a single top-level process.
 pub struct Translation {
-    /// The generated rules, each paired with its embedded `_restrict` formulas
-    /// (parser-AST; non-empty only for `if <formula>` arms).  HS attaches these
-    /// as the rule's `_preRestriction`; the RS port keeps them alongside the
-    /// elaborated rule so `apply_sapic` can run the `_restrict` expansion
-    /// (`lift_rule_restrictions`, HS `liftedAddProtoRule`) over both theories.
-    pub rules: Vec<(ProtoRuleE, Vec<tamarin_parser::ast::Formula>)>,
+    /// The generated rules, each paired with its embedded `_restrict`
+    /// formulas.  HS attaches these as the rule's `_preRestriction`; the RS
+    /// port keeps them alongside the elaborated rule so `apply_sapic` can run
+    /// the `_restrict` expansion (`lift_rule_restrictions`, HS
+    /// `liftedAddProtoRule`) over both theories.
+    pub rules: Vec<(ProtoRuleE, Vec<SyntacticLNFormula>)>,
     pub restrictions: Vec<tamarin_parser::ast::Restriction>,
 }
 
@@ -474,7 +475,7 @@ pub fn translate(
     // restriction-by-name re-pair map; keyed lookup only, never iterated;
     // std kept (byte-inert) — iteration order never reaches output.
     #[allow(clippy::disallowed_types)]
-    let restr_by_name: std::collections::HashMap<String, Vec<tamarin_parser::ast::Formula>> = all
+    let restr_by_name: std::collections::HashMap<String, Vec<SyntacticLNFormula>> = all
         .iter()
         .filter(|r| !r.restr.is_empty())
         .map(|r| (crate::facts::rule_name(r), r.restr.clone()))
@@ -485,7 +486,7 @@ pub fn translate(
     } else {
         elaborated
     };
-    let rules: Vec<(ProtoRuleE, Vec<tamarin_parser::ast::Formula>)> = elaborated
+    let rules: Vec<(ProtoRuleE, Vec<SyntacticLNFormula>)> = elaborated
         .into_iter()
         .map(|r| {
             let name = match &r.info.name {

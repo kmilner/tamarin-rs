@@ -169,7 +169,12 @@ pub fn apply_sapic(
         // facts and carries color / process / no_derivcheck / issapicrule /
         // role exactly as HS's `toRule` produced them.
         let mut parsed_rule = tamarin_theory::pretty_theory::proto_rule_to_parsed(rule);
-        parsed_rule.embedded_restrictions = restr_formulas.clone();
+        // `lift_one_rule` reads parser-AST formulas, so the embedded
+        // restrictions cross back to the AST here.
+        parsed_rule.embedded_restrictions = restr_formulas
+            .iter()
+            .map(tamarin_theory::pretty_formula::syntactic_lnformula_to_parser)
+            .collect();
 
         // HS `foldM liftedAddProtoRule th (map (`OpenProtoRule` []) eProtoRule)`
         // (sapic/src/Sapic.hs:75): each generated rule goes through the same

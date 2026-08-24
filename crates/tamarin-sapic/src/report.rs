@@ -30,9 +30,12 @@
 
 use std::collections::BTreeSet;
 
-use tamarin_term::lterm::{LNTerm, LSort, LVar};
+use tamarin_term::lterm::{BVar, LNTerm, LSort, LVar};
 use tamarin_term::vterm::{Lit, VTerm};
 
+use tamarin_theory::atom::{ProtoAtom, SyntacticSugar};
+use tamarin_theory::fact::{Fact, FactTag, Multiplicity};
+use tamarin_theory::formula::ProtoFormula;
 use tamarin_theory::sapic::{Process, ProcessCombinator, SapicAction, SapicLVar, SapicTerm};
 
 use crate::annotation::ProcessAnnotation;
@@ -67,17 +70,16 @@ pub fn report_init(
     let rep = tamarin_term::term::f_app_no_eq(tamarin_term::builtin::rep_sym(), vec![xt, loct]);
     let concl = TransFact::Out(rep);
 
-    // restr: the syntactic predicate atom `Pred (Report( x, loc ))`, as a
-    // parser-AST formula so it flows through the `_restrict` expansion
-    // (`lift_one_rule`), which binds it to the user `Report` predicate.
-    let report_pred = tamarin_parser::ast::Formula::Atom(tamarin_parser::ast::Atom::Pred(
-        tamarin_parser::ast::Fact {
-            persistent: false,
-            name: "Report".to_string(),
-            args: vec![lvar_to_parser(&x), lvar_to_parser(&loc)],
-            annotations: Vec::new(),
-        },
-    ));
+    // restr: `Syntactic . Pred $ protoFact Linear "Report" [varTerm (Free x),
+    // varTerm (Free loc)]` (Report.hs:41).  The `_restrict` expansion
+    // (`lift_one_rule`) binds it to the user `Report` predicate.
+    let report_pred = ProtoFormula::Atom(ProtoAtom::Syntactic(SyntacticSugar::Pred(Fact::new(
+        FactTag::Proto(Multiplicity::Linear, "Report", 2),
+        vec![
+            VTerm::Lit(Lit::Var(BVar::Free(x))),
+            VTerm::Lit(Lit::Var(BVar::Free(loc))),
+        ],
+    ))));
 
     let report_rule = AnnotatedRule {
         process_name: Some("ReportRule".to_string()),
@@ -95,11 +97,6 @@ pub fn report_init(
     out.push(report_rule);
     out.extend(init_rules);
     (out, init_tx)
-}
-
-/// `LVar` → parser-AST `Term::Var` (message-sorted predicate argument).
-fn lvar_to_parser(v: &LVar) -> tamarin_parser::ast::Term {
-    tamarin_parser::ast::Term::Var(crate::convert::lvar_to_varspec(v))
 }
 
 // =============================================================================
@@ -291,14 +288,24 @@ mod tests {
         assert_eq!(rules[0].concs.len(), 1);
         assert!(rules[0].acts.is_empty());
         assert_eq!(rules[0].restr.len(), 1);
-        // The embedded restriction is a Pred(Report(...)) atom.
-        match &rules[0].restr[0] {
-            tamarin_parser::ast::Formula::Atom(tamarin_parser::ast::Atom::Pred(fa)) => {
-                assert_eq!(fa.name, "Report");
-                assert_eq!(fa.args.len(), 2);
-            }
-            other => panic!("expected Pred(Report(..)), got {other:?}"),
-        }
+    }
+
+    /// `protFact = Syntactic . Pred $ protoFact Linear "Report" [varTerm
+    /// (Free x), varTerm (Free loc)]` (Report.hs:41), over `x` and `loc` =
+    /// `LVar s LSortMsg 0` (Report.hs:37-39).  Both arguments are FREE
+    /// `BVar`s: the atom stands under no binder, so a `Bound` index there
+    /// would resolve against an empty scope.
+    #[test]
+    fn report_init_builds_the_report_predicate_over_free_bvars() {
+        let (rules, _) = report_init(&null(), vec![], BTreeSet::new());
+        let ProtoFormula::Atom(ProtoAtom::Syntactic(SyntacticSugar::Pred(fa))) = &rules[0].restr[0]
+        else {
+            panic!("expected Syntactic (Pred …), got {:?}", rules[0].restr[0]);
+        };
+        assert_eq!(fa.tag, FactTag::Proto(Multiplicity::Linear, "Report", 2));
+        assert!(fa.annotations.is_empty());
+        let free = |n: &str| VTerm::Lit(Lit::Var(BVar::Free(LVar::new(n, LSort::Msg, 0))));
+        assert_eq!(fa.terms.as_ref(), &[free("x"), free("loc")]);
     }
 
     #[test]

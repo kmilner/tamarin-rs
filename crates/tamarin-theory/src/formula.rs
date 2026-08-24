@@ -627,7 +627,7 @@ fn atom_from_parser<F: FormulaVars>(
 /// `fmapTerm (fmap Free)` (Theory/Text/Parser/Formula.hs:45): every variable
 /// of the term as a free `BVar`.  The literal order is unchanged, so the
 /// `f_app` rebuild inside [`map_lits`] keeps the AC argument order.
-pub(crate) fn lift_free<C: Ord + Clone, V: Ord + Clone>(t: &VTerm<C, V>) -> VTerm<C, BVar<V>> {
+pub fn lift_free<C: Ord + Clone, V: Ord + Clone>(t: &VTerm<C, V>) -> VTerm<C, BVar<V>> {
     map_lits(t, &mut |l| match l {
         Lit::Con(c) => Lit::Con(c.clone()),
         Lit::Var(v) => Lit::Var(BVar::Free(v.clone())),

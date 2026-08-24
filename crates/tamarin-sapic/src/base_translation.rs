@@ -21,8 +21,10 @@ use std::collections::BTreeSet;
 use tamarin_term::lterm::{LNTerm, LSort, LVar};
 use tamarin_term::vterm::{Lit, VTerm};
 
-use tamarin_theory::formula::formula_frees;
-use tamarin_theory::pretty_formula::syntactic_lnformula_to_parser;
+use tamarin_theory::atom::ProtoAtom;
+use tamarin_theory::formula::{
+    for_all_var, formula_frees, lift_free, ProtoFormula, SyntacticLNFormula,
+};
 use tamarin_theory::sapic::{to_lformula, ProcessPosition, SapicAction, SapicLVar, SapicTerm};
 
 use crate::annotation::ProcessAnnotation;
@@ -32,13 +34,12 @@ use crate::facts::{
 
 /// A single translation "rule body": `(prems, acts, concs, restr)`.
 /// HS `([TransFact],[TransAction],[TransFact],[SyntacticLNFormula])`; the
-/// 4th element carries the embedded restriction formulas (non-empty only for
-/// the `if <formula>` arms — `Cond`), as parser-AST formulas.
+/// 4th element carries the rule's embedded restriction formulas.
 pub type RuleBody = (
     Vec<TransFact>,
     Vec<TransAction>,
     Vec<TransFact>,
-    Vec<tamarin_parser::ast::Formula>,
+    Vec<SyntacticLNFormula>,
 );
 
 /// `baseTransNull` (Basetranslation.hs:81-82):
@@ -570,14 +571,8 @@ pub fn base_trans_action(
             let mut conc_facts: Vec<TransFact> = vec![def_state_next(&tx2)];
             conc_facts.extend(r.into_iter().map(TransFact::TamarinFact));
             // restrictions: `map toLFormula res'` (Theory/Sapic/Term.hs:152-154
-            // drops the type tags).  The rule's restriction component is a
-            // parser-AST formula here, so each one crosses back at this
-            // point; `lift_rule_restrictions` (HS `liftedAddProtoRule`) then
-            // expands its predicates.
-            let restr: Vec<tamarin_parser::ast::Formula> = rest
-                .iter()
-                .map(|f| syntactic_lnformula_to_parser(&to_lformula(f)))
-                .collect();
+            // drops the type tags).
+            let restr: Vec<SyntacticLNFormula> = rest.iter().map(to_lformula).collect();
             let body: RuleBody = (prems_facts, act_facts, conc_facts, restr);
             Ok((vec![body], tx2))
         }
@@ -678,9 +673,6 @@ pub fn base_trans_comb(
         //       ([def_state], [], [def_state2 tildex], [Not f])],
         //      tildex, Just tildex)
         //   else throw (WFUnbound (freevars_f \\ tildex))
-        // The rule's restriction component is a parser-AST formula here, so
-        // each arm crosses back at this point; `lift_rule_restrictions`
-        // (HS `liftedAddProtoRule`) then expands its predicates.
         PC::Cond(f) => {
             let f = to_lformula(f);
             // `fromList (freesList f)` — the formula's free message and
@@ -697,13 +689,13 @@ pub fn base_trans_comb(
                 vec![def_state(tildex)],
                 vec![],
                 vec![def_state1(tildex)],
-                vec![syntactic_lnformula_to_parser(&f)],
+                vec![f.clone()],
             );
             let body_else: RuleBody = (
                 vec![def_state(tildex)],
                 vec![],
                 vec![def_state2(tildex)],
-                vec![syntactic_lnformula_to_parser(&f.not())],
+                vec![f.not()],
             );
             Ok((
                 vec![body_then, body_else],
@@ -894,36 +886,20 @@ pub(crate) fn ln_term_vars(t: &LNTerm) -> BTreeSet<LVar> {
 }
 
 /// The else-arm restriction for a kept `let` (Basetranslation.hs:261-263):
-///   `faN = fold (hinted forAll) ((t1 = t2) ⇒ ⊥) freevars`
-/// = `∀ freevars. ¬(t1 = t2)`, rendered as a parser-AST formula so it flows
-/// through the existing restriction pipeline (HS keeps it as the rule's 4th
-/// (restriction) component).  `freevars` are quantified, in sorted order.
-fn let_else_restriction(
-    t1: &LNTerm,
-    t2: &LNTerm,
-    freevars: &BTreeSet<LVar>,
-) -> tamarin_parser::ast::Formula {
-    use tamarin_parser::ast as p;
-    let eq = p::Formula::Atom(p::Atom::Eq(ln_term_to_parser(t1), ln_term_to_parser(t2)));
-    // `Conn Imp (Ato (EqE t1 t2)) (TF False)` = `(t1 = t2) ⇒ False`.
-    let body = p::Formula::Implies(Box::new(eq), Box::new(p::Formula::False));
-    if freevars.is_empty() {
-        body
-    } else {
-        let vs: Vec<p::VarSpec> = freevars
-            .iter()
-            .map(crate::convert::lvar_to_varspec)
-            .collect();
-        p::Formula::Forall(vs, Box::new(body))
-    }
+///   `fa  = Conn Imp (Ato (EqE (fmapTerm (fmap Free) t1) (fmapTerm (fmap Free) t2))) (TF False)`
+///   `faN = fold (hinted forAll) fa freevars`
+/// = `∀ freevars. ((t1 = t2) ⇒ ⊥)`.  `fold` is `Data.Set.fold` (the module
+/// imports `Data.Set` unqualified, Basetranslation.hs:36), which is `foldr`
+/// over the ascending set, so the SMALLEST free variable carries the
+/// OUTERMOST binder.  `hinted forAll` takes the binder hint from the variable
+/// (`hint (LVar n s _) = (n, s)`, Theory/Model/Formula.hs:227-228).
+fn let_else_restriction(t1: &LNTerm, t2: &LNTerm, freevars: &BTreeSet<LVar>) -> SyntacticLNFormula {
+    let eq = ProtoFormula::Atom(ProtoAtom::EqE(lift_free(t1), lift_free(t2)));
+    let fa = eq.implies(ProtoFormula::lfalse());
+    freevars.iter().rev().fold(fa, |body, v| {
+        for_all_var((v.name.to_string(), v.sort), v, body)
+    })
 }
-
-/// `LNTerm` → parser-AST `Term`.  The SAPIC translation's restriction bodies
-/// and `if`-predicate conditions are parser-AST formulas, so they project their
-/// terms through the same lowering the theory printer uses — the one place that
-/// materialises HS `prettyTerm`'s special shapes (infix `exp`, right-spine
-/// `pair` split, infix AC chains, `LIST(…)`).
-pub(crate) use tamarin_theory::pretty_theory::lnterm_to_parser as ln_term_to_parser;
 
 /// `toLNFact (protoFact Linear "Eq" [t1, t2])` (Basetranslation.hs:226-306, see line 244): build
 /// the `Eq( t1, t2 )` linear fact over the type-erased terms.
@@ -1237,6 +1213,7 @@ pub fn res_locking_pure() -> Vec<tamarin_parser::ast::Restriction> {
 mod tests {
     use super::*;
     use tamarin_term::lterm::LSort;
+    use tamarin_theory::pretty_theory::lnterm_to_parser;
     use tamarin_theory::sapic::ProcessCombinator;
 
     fn lv(name: &str, idx: u64) -> LVar {
@@ -1395,6 +1372,63 @@ mod tests {
         assert_eq!(txr, Some(tx));
     }
 
+    /// `faN = fold (hinted forAll) fa freevars` (Basetranslation.hs:261-263).
+    /// `fold` is `Data.Set.fold` = `foldr` over the ASCENDING set, so the
+    /// smallest free variable is the last binder applied and therefore the
+    /// OUTERMOST one, while the largest sits next to the body and carries De
+    /// Bruijn index 0.
+    #[test]
+    fn let_else_restriction_binds_the_smallest_free_variable_outermost() {
+        use tamarin_term::function_symbols::{Constructability, NoEqSym, Privacy};
+        use tamarin_term::lterm::BVar;
+        use tamarin_term::term::f_app_no_eq;
+        use tamarin_term::vterm::var_term;
+        use tamarin_theory::formula::{Connective, Quantifier};
+
+        let x = lv("x", 0);
+        let y = lv("y", 0);
+        let pair = NoEqSym::new(
+            b"pair".to_vec(),
+            2,
+            Privacy::Public,
+            Constructability::Constructor,
+        );
+        // `<y, x>`: the two variables occur in the order that is NOT the set
+        // order, so the assertion below reads the binder depth and not the
+        // argument position.
+        let t1: LNTerm = f_app_no_eq(pair, vec![var_term(y), var_term(x)]);
+        let t2: LNTerm = tamarin_term::lterm::pub_term("c");
+        let fv: BTreeSet<LVar> = [x, y].into_iter().collect();
+
+        let f = let_else_restriction(&t1, &t2, &fv);
+
+        let ProtoFormula::Qua(Quantifier::All, outer, body) = &f else {
+            panic!("expected a universal binder, got {f:?}");
+        };
+        assert_eq!(outer, &("x".to_string(), LSort::Msg));
+        let ProtoFormula::Qua(Quantifier::All, inner, body) = body.as_ref() else {
+            panic!("expected a second universal binder, got {body:?}");
+        };
+        assert_eq!(inner, &("y".to_string(), LSort::Msg));
+        let ProtoFormula::Conn(Connective::Imp, lhs, rhs) = body.as_ref() else {
+            panic!("expected `(t1 = t2) ⇒ ⊥`, got {body:?}");
+        };
+        assert_eq!(**rhs, ProtoFormula::lfalse());
+        let ProtoFormula::Atom(ProtoAtom::EqE(a, b)) = lhs.as_ref() else {
+            panic!("expected the equality atom, got {lhs:?}");
+        };
+        // `y` is the inner binder, so it is `Bound(0)`; `x` is one binder
+        // further out.
+        assert_eq!(
+            *a,
+            f_app_no_eq(
+                pair,
+                vec![var_term(BVar::Bound(0)), var_term(BVar::Bound(1))]
+            )
+        );
+        assert_eq!(*b, lift_free(&t2));
+    }
+
     /// A quantifier binder in a SAPIC condition is read by `sapicvar` and
     /// carries no type tag (Theory/Text/Parser/Token.hs:506-510#sapicvar),
     /// while a timepoint operand is read by `sapicnodevar` and is tagged
@@ -1461,12 +1495,12 @@ mod tests {
             let tamarin_term::term::Term::App(_, args) = &t else {
                 panic!("f_app_acfct built a non-App term");
             };
-            let mut it = args.iter().map(ln_term_to_parser);
+            let mut it = args.iter().map(lnterm_to_parser);
             let first = it.next().unwrap();
             let expected = it.fold(first, |acc, a| {
                 tamarin_parser::ast::Term::BinOp(op, Box::new(acc), Box::new(a))
             });
-            assert_eq!(ln_term_to_parser(&t), expected);
+            assert_eq!(lnterm_to_parser(&t), expected);
         }
     }
 
@@ -1493,7 +1527,7 @@ mod tests {
         let leaf = |n: &str| TTerm::Lit(Lit::Var(lv(n, 0)));
         let pair = |a: LNTerm, b: LNTerm| f_app_no_eq(sym(b"pair", 2), vec![a, b]);
         let render =
-            |t: &LNTerm| tamarin_theory::pretty_formula::term_doc(&ln_term_to_parser(t)).render();
+            |t: &LNTerm| tamarin_theory::pretty_formula::term_doc(&lnterm_to_parser(t)).render();
 
         // `exp(a, b)` is the infix `a^b`, not a prefix application.
         let e = f_app_no_eq(sym(b"exp", 2), vec![leaf("a"), leaf("b")]);

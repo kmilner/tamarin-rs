@@ -13,6 +13,7 @@ use tamarin_term::vterm::{Lit, VTerm};
 use tamarin_utils::color::{hsv_to_rgb, rgb_to_hsv, Hsv, Rgb};
 
 use tamarin_theory::fact::{fresh_fact, in_fact, out_fact, proto_fact, LNFact, Multiplicity};
+use tamarin_theory::formula::SyntacticLNFormula;
 use tamarin_theory::pretty_sapic::pretty_sapic_top_level;
 use tamarin_theory::rule::{ProtoRuleE, ProtoRuleEInfo, ProtoRuleName, Rule, RuleAttributes};
 use tamarin_theory::sapic::{
@@ -499,10 +500,10 @@ pub struct AnnotatedRule<Ann> {
     pub acts: Vec<TransAction>,
     pub concs: Vec<TransFact>,
     /// Embedded restrictions (HS `restr :: [SyntacticLNFormula]`, Facts.hs:116-125, see line 123).
-    /// Carried as parser-AST formulas so they flow through the existing
-    /// `_restrict` expansion (`rule_restriction::lift_rule_restrictions`).
-    /// Non-empty only for `if <formula>` arms (the `Cond` combinator).
-    pub restr: Vec<tamarin_parser::ast::Formula>,
+    /// `apply_sapic` hands them to the `_restrict` expansion
+    /// (`rule_restriction::lift_one_rule`), which turns each into a
+    /// `Restr_<rule>_<i>` restriction plus an action on this rule.
+    pub restr: Vec<SyntacticLNFormula>,
     pub index: usize,
 }
 
