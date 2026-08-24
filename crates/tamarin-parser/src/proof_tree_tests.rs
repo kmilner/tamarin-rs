@@ -239,6 +239,36 @@ fn goal_reads_a_user_ac_argument_infix() {
     assert!(parse_goal_str("F( (z add h(y)) ) @ #i", &bare_parser()).is_err());
 }
 
+/// A hand-written proof spells a user `[AC]` symbol prefix, the way the rules
+/// of its theory do.  HS resolves that head through `lookupArity` and builds
+/// the AC application (`naryOpApp`'s `IsAC` arm,
+/// Theory/Text/Parser/Term.hs:105), so both spellings name one term.
+#[test]
+fn goal_reads_a_user_ac_argument_prefix() {
+    let mut msig = tamarin_term::maude_sig::pair_maude_sig();
+    msig.st_ac_fun_syms
+        .insert(tamarin_term::function_symbols::AcFctSym::new(
+            b"add".to_vec(),
+            tamarin_term::function_symbols::Privacy::Public,
+            tamarin_term::function_symbols::Constructability::Constructor,
+            tamarin_term::function_symbols::NdcState::NotNdc,
+        ));
+    let prefix = parse_goal_str("F( add(z, h(y)) ) @ #i", &sig_parser(&msig)).expect("parse");
+    let infix = parse_goal_str("F( (z add h(y)) ) @ #i", &sig_parser(&msig)).expect("parse");
+    assert_eq!(prefix, infix);
+    // Three arguments fold into the same chain the infix spelling writes.
+    let flat = parse_goal_str("F( add(x, y, z) ) @ #i", &sig_parser(&msig)).expect("parse");
+    let chain = parse_goal_str("F( ((x add y) add z) ) @ #i", &sig_parser(&msig)).expect("parse");
+    assert_eq!(flat, chain);
+    // A head the signature does not declare `[AC]` stays a plain application.
+    match parse_goal_str("F( h(z, y) ) @ #i", &sig_parser(&msig)).expect("parse") {
+        GoalSpec::Action(_, fact) => {
+            assert!(matches!(&fact.args[..], [Term::App(n, _)] if n == "h"));
+        }
+        other => panic!("expected an action goal, got {other:?}"),
+    }
+}
+
 /// `diff(a, b)` is a term only when the theory enables it, so the goal
 /// sub-parser carries the parent's `diff` bit.
 #[test]

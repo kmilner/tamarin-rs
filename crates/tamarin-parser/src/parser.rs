@@ -5763,7 +5763,12 @@ impl<'a> Parser<'a> {
                     }
                 } else {
                     // Structural mode ([`parse_goal_str`]): accept any
-                    // application shape, strictly comma-separated.
+                    // application shape, strictly comma-separated.  A head the
+                    // signature declares `[AC]` builds the AC application
+                    // (`naryOpApp`'s `IsAC` arm, Theory/Text/Parser/Term.hs:105),
+                    // so its prefix spelling carries the same term as its
+                    // infix one; every other head stays the plain application
+                    // its readers resolve against the signature.
                     self.lx.bump();
                     self.skip_ws();
                     let mut ts = Vec::new();
@@ -5776,6 +5781,9 @@ impl<'a> Parser<'a> {
                             }
                         }
                         self.require_punct(")")?;
+                    }
+                    if matches!(self.lookup_arity(&id), Some(ArityRes::Ac)) {
+                        return Ok(self.ac_prefix_app(&id, ts));
                     }
                     return Ok(Term::App(id, ts));
                 }
@@ -5932,26 +5940,37 @@ impl<'a> Parser<'a> {
             }
             ArityRes::Ac => {
                 let ts = self.sep_end_by(")", |p| p.msetterm(eqn))?;
-                let sym = intern_ac_name(id);
-                let mut it = ts.into_iter();
-                match (it.next(), it.next()) {
-                    (None, _) => Ok(Term::App(id.to_string(), Vec::new())),
-                    (Some(a), None) => {
-                        // The collapsed term IS the argument, but the atom's
-                        // last lexeme is this application's `)` — no variable
-                        // hangover survives even when the argument was one.
-                        self.var_dot_hangover = false;
-                        self.var_hangover_ident_end = None;
-                        Ok(a)
-                    }
-                    (Some(a), Some(b)) => {
-                        let mut t = Term::BinOp(BinOp::AcFct(sym), Box::new(a), Box::new(b));
-                        for x in it {
-                            t = Term::BinOp(BinOp::AcFct(sym), Box::new(t), Box::new(x));
-                        }
-                        Ok(t)
-                    }
+                Ok(self.ac_prefix_app(id, ts))
+            }
+        }
+    }
+
+    /// The argument list of a prefix application whose head the signature
+    /// declares `[AC]`, as the term HS `naryOpApp` builds for it: `fAppAC
+    /// (ACfct ...) ts` (Theory/Text/Parser/Term.hs:105), which the AST spells
+    /// as a left-folded chain of [`BinOp::AcFct`].  A single argument is the
+    /// term itself, as `fAppAC` over a one-element list flattens to it
+    /// (`fAppAC _ [a] = a`, Term/Term/Raw.hs:121), and an empty list leaves
+    /// the plain application.
+    fn ac_prefix_app(&mut self, id: &str, ts: Vec<Term>) -> Term {
+        let sym = intern_ac_name(id);
+        let mut it = ts.into_iter();
+        match (it.next(), it.next()) {
+            (None, _) => Term::App(id.to_string(), Vec::new()),
+            (Some(a), None) => {
+                // The collapsed term IS the argument, but the atom's last
+                // lexeme is this application's `)` — no variable hangover
+                // survives even when the argument was one.
+                self.var_dot_hangover = false;
+                self.var_hangover_ident_end = None;
+                a
+            }
+            (Some(a), Some(b)) => {
+                let mut t = Term::BinOp(BinOp::AcFct(sym), Box::new(a), Box::new(b));
+                for x in it {
+                    t = Term::BinOp(BinOp::AcFct(sym), Box::new(t), Box::new(x));
                 }
+                t
             }
         }
     }
