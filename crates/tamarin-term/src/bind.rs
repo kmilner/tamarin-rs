@@ -15,6 +15,7 @@
 
 use crate::lterm::{HasFrees, LVar};
 use tamarin_utils::fresh::{MonadFresh, PreciseFreshState};
+use tamarin_utils::FastMap;
 
 /// Binding-store key wrapping the bound `LVar`.
 ///
@@ -37,15 +38,6 @@ impl std::hash::Hash for VarKey {
     #[inline]
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.0.hash(state)
-    }
-}
-// Lets `get` probe by `&LVar` (no clone) yet run the fast eq.  The probe
-// hashes via `LVar`'s derive (identical to `VarKey::hash`), so it lands in the
-// bucket holding the owned key.
-impl hashbrown::Equivalent<VarKey> for LVar {
-    #[inline]
-    fn equivalent(&self, key: &VarKey) -> bool {
-        lvar_fast_eq(self, &key.0)
     }
 }
 
@@ -76,12 +68,11 @@ fn lvar_fast_eq(a: &LVar, b: &LVar) -> bool {
         || a_name == b_name
 }
 
-/// The store: keyed by [`VarKey`] (content hash, fast pointer eq), hashed with
-/// the same `FxBuildHasher` as `FastMap`.  Haskell's `Bindings` is a
-/// `Data.Map` (Control/Monad/Bind.hs:53-58); iteration order is never observed here —
-/// [`Bindings::iter`]'s only consumers build a `Subst` (a re-sorted
-/// `BTreeMap`) and a distinct-key substitution applied by lookup.
-type BindMap = hashbrown::HashMap<VarKey, LVar, rustc_hash::FxBuildHasher>;
+/// The store: keyed by [`VarKey`] (content hash, fast pointer eq).  Haskell's
+/// `Bindings` is a `Data.Map` (Control/Monad/Bind.hs:53-58); iteration order is
+/// never observed here — [`Bindings::iter`]'s only consumers build a `Subst`
+/// (a re-sorted `BTreeMap`) and a distinct-key substitution applied by lookup.
+type BindMap = FastMap<VarKey, LVar>;
 
 /// `Bindings LVar LVar` (Control/Monad/Bind.hs:53-58) — one binding per variable, allocated
 /// on first occurrence by [`Bindings::import`].
@@ -120,14 +111,13 @@ impl Bindings {
     /// first call for `v` draws an index from `fresh` under the hint `name` and
     /// binds `v` to it; later calls return that binding.
     fn import_named<M: MonadFresh>(&mut self, v: &LVar, name: &'static str, fresh: &mut M) -> LVar {
-        // Probe by `&LVar` (no clone) via `VarKey`'s `Equivalent` impl, whose
-        // `eq` short-circuits on the interned name POINTER — skipping the
-        // byte-wise `str` compare that dominated `import`'s confirming-eq self
-        // time (`equal_same_length` in the profile) — with a content fallback
-        // that keeps the equality RELATION exactly `LVar`'s.  The hash is still
-        // content-based (see `VarKey`), so equal-content vars — even with
-        // different name pointers — dedup into one slot: output is identical.
-        if let Some(bound) = self.map.get(v) {
+        // `LVar` is `Copy`, so the probe key costs a register copy.  Its `eq`
+        // short-circuits on the interned name POINTER — skipping the byte-wise
+        // `str` compare — with a content fallback that keeps the equality
+        // RELATION exactly `LVar`'s.  The hash is content-based (see
+        // `VarKey`), so equal-content vars — even with different name
+        // pointers — dedup into one slot.
+        if let Some(bound) = self.map.get(&VarKey(*v)) {
             return *bound;
         }
         let idx = fresh.fresh_ident(name);
@@ -141,7 +131,6 @@ impl Bindings {
             sort: v.sort,
             idx,
         };
-        // First occurrence only (rare): materialise the owned key.
         self.map.insert(VarKey(*v), bound);
         bound
     }
@@ -158,7 +147,7 @@ impl Bindings {
 
     /// `lookupBinding` (Control/Monad/Bind.hs:114-117).
     pub fn get(&self, v: &LVar) -> Option<LVar> {
-        self.map.get(v).copied()
+        self.map.get(&VarKey(*v)).copied()
     }
 
     pub fn is_empty(&self) -> bool {
