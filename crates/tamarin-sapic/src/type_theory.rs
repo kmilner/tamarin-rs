@@ -26,6 +26,7 @@ use std::collections::BTreeSet;
 
 use tamarin_parser::ast as p;
 use tamarin_term::function_symbols::FunSym;
+use tamarin_term::maude_sig::MaudeSig;
 use tamarin_term::term::f_app;
 use tamarin_term::vterm::{var_term, Lit, VTerm};
 
@@ -65,18 +66,11 @@ pub fn type_theory_env(
     parsed: &p::Theory,
     elaborated: &Theory,
 ) -> Result<TypeTheoryResult, ElabError> {
-    // Term conversion (`convert_process_with_defs`) resolves user function
-    // symbols through the thread-local bundle; install it here so callers
-    // need no separate guard (guards nest and restore on drop).
-    let _user_funs_guard = tamarin_theory::elaborate::set_user_funs_for_theory(parsed);
-
+    let msig = &elaborated.signature.maude_sig;
     let user_fun_typings = collect_user_fun_typings(parsed);
-    let mut env =
-        init_te_from_sig(&elaborated.signature.maude_sig, &user_fun_typings).map_err(|e| {
-            ElabError {
-                message: format!("SAPIC typing: {e}"),
-            }
-        })?;
+    let mut env = init_te_from_sig(msig, &user_fun_typings).map_err(|e| ElabError {
+        message: format!("SAPIC typing: {e}"),
+    })?;
 
     let defs = collect_process_defs(parsed);
 
@@ -88,11 +82,11 @@ pub fn type_theory_env(
     for item in &parsed.items {
         match item {
             p::TheoryItem::TopLevelProcess(proc) | p::TheoryItem::DiffEquivLemma(proc) => {
-                processes.push(type_one(&mut env, proc, &defs)?);
+                processes.push(type_one(&mut env, proc, &defs, msig)?);
             }
             p::TheoryItem::EquivLemma(p1, p2) => {
-                processes.push(type_one(&mut env, p1, &defs)?);
-                processes.push(type_one(&mut env, p2, &defs)?);
+                processes.push(type_one(&mut env, p1, &defs, msig)?);
+                processes.push(type_one(&mut env, p2, &defs, msig)?);
             }
             _ => {}
         }
@@ -103,7 +97,7 @@ pub fn type_theory_env(
     let mut typed_defs: Vec<(Option<Vec<SapicLVar>>, PlainProcess)> = Vec::new();
     for item in &parsed.items {
         if let p::TheoryItem::ProcessDef(pd) = item {
-            typed_defs.push(type_process_def(&mut env, pd, &defs)?);
+            typed_defs.push(type_process_def(&mut env, pd, &defs, msig)?);
         }
     }
 
@@ -138,8 +132,9 @@ fn type_one(
     env: &mut TypingEnvironment,
     proc: &p::Process,
     defs: &ProcessDefMap<'_>,
+    sig: &MaudeSig,
 ) -> Result<PlainProcess, ElabError> {
-    let plain = convert_process_with_defs(proc, defs).map_err(|e| ElabError {
+    let plain = convert_process_with_defs(proc, defs, sig).map_err(|e| ElabError {
         message: format!("SAPIC translation: {}", e.message),
     })?;
     type_and_rename_process_in(env, &plain).map_err(|e| ElabError {
@@ -168,8 +163,9 @@ fn type_process_def(
     env: &mut TypingEnvironment,
     pd: &p::ProcessDef,
     defs: &ProcessDefMap<'_>,
+    sig: &MaudeSig,
 ) -> Result<(Option<Vec<SapicLVar>>, PlainProcess), ElabError> {
-    let pr = convert_process_with_defs(&pd.body, defs).map_err(|e| ElabError {
+    let pr = convert_process_with_defs(&pd.body, defs, sig).map_err(|e| ElabError {
         message: format!("SAPIC translation: {}", e.message),
     })?;
     // The def's DECLARED formals (`_pVars`), which both the `pVars` seeding

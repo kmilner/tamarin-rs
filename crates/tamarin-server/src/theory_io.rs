@@ -227,20 +227,6 @@ pub fn load_from_source(
     // before `populate_rule_variants` below.  `user_set_heuristic` is true iff
     // a `heuristic:` item already populated `typed.heuristic` (HS
     // `addHeuristic` returns `Nothing` in that case).
-    //
-    // Install the user/builtin function-symbol name sets
-    // (`CollectedUserFuns`'s `private` / `destructor` / …) for the duration
-    // of BOTH the SAPIC translation AND the variant pre-computation below.
-    // That thread-local bundle drives `term_to_lnterm`'s symbol resolution
-    // (privacy / constructability); `elaborate()` sets it only for its own
-    // scope, so without re-installing it here the SAPIC-injected rules'
-    // builtin symbols (`rep` private, `check_rep` / `get_rep` destructors from
-    // `locations-report`) re-elaborate with the default public-constructor
-    // flags, serialising as `tamXC..` — which Maude rejects, leaving the rule
-    // with "no variants".  The guard must therefore stay alive across the
-    // `populate_rule_variants` call in the maude block below (it does: this
-    // binding lives to the end of the function).
-    let _sapic_funs_guard = tamarin_theory::elaborate::set_user_funs_for_theory(&parser_theory);
     // HS `Acc.checkWellformedness t` (translateTheory, TheoryLoader.hs:494-500, see line 497)
     // runs on the PRE-translation theory — before `apply_sapic` injects the
     // SAPIC-generated rules (mirrors run.rs's CLI-side placement).

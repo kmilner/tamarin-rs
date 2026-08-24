@@ -153,11 +153,12 @@ pub fn parse_intruder_rules(
 
     let mut out = Vec::with_capacity(parser_rules.len());
     for r in parser_rules {
-        let intr =
-            ast_rule_to_intr_rule_ac(&known_funs, &r).map_err(|message| IntrRuleParseError {
+        let intr = ast_rule_to_intr_rule_ac(&known_funs, msig, &r).map_err(|message| {
+            IntrRuleParseError {
                 ctxt_desc: ctxt_desc.to_string(),
                 message,
-            })?;
+            }
+        })?;
         out.push(intr);
     }
     Ok(out)
@@ -283,7 +284,11 @@ fn constr_name_func(name: &str) -> Result<Vec<&str>, String> {
 /// `True False` are HS hard-codes — see the FIXME in
 /// Theory/Text/Parser/Rule.hs ("Currently we (wrongly) always assume
 /// that we have a subterm rule").  Subterm=True / constant=False.
-fn ast_rule_to_intr_rule_ac(known_funs: &KnownFuns, r: &p::Rule) -> Result<IntrRuleAC, String> {
+fn ast_rule_to_intr_rule_ac(
+    known_funs: &KnownFuns,
+    msig: &MaudeSig,
+    r: &p::Rule,
+) -> Result<IntrRuleAC, String> {
     // HS `intrInfo` rejects non-c/d-prefixed names.  Mirror that here.
     let bytes = r.name.as_bytes();
     if bytes.is_empty() {
@@ -363,7 +368,7 @@ fn ast_rule_to_intr_rule_ac(known_funs: &KnownFuns, r: &p::Rule) -> Result<IntrR
         .premises
         .iter()
         .map(|f| {
-            elaborate::fact_to_lnfact(f)
+            elaborate::fact_to_lnfact(f, msig)
                 .map_err(|e| format!("intruder rule {}: premise: {}", r.name, e.message))
         })
         .collect::<Result<_, _>>()?;
@@ -371,7 +376,7 @@ fn ast_rule_to_intr_rule_ac(known_funs: &KnownFuns, r: &p::Rule) -> Result<IntrR
         .actions
         .iter()
         .map(|f| {
-            elaborate::fact_to_lnfact(f)
+            elaborate::fact_to_lnfact(f, msig)
                 .map_err(|e| format!("intruder rule {}: action: {}", r.name, e.message))
         })
         .collect::<Result<_, _>>()?;
@@ -379,7 +384,7 @@ fn ast_rule_to_intr_rule_ac(known_funs: &KnownFuns, r: &p::Rule) -> Result<IntrR
         .conclusions
         .iter()
         .map(|f| {
-            elaborate::fact_to_lnfact(f)
+            elaborate::fact_to_lnfact(f, msig)
                 .map_err(|e| format!("intruder rule {}: conclusion: {}", r.name, e.message))
         })
         .collect::<Result<_, _>>()?;

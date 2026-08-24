@@ -1195,20 +1195,11 @@ impl TheoryPipeline<'_> {
     /// report.
     ///
     /// Returns the translate-mode render options (`Some` iff `-m` is in
-    /// force) and the user-funs guard installed for the translation, which
-    /// the caller holds for the rest of the file's pipeline (the variant
-    /// pre-computation and the final render resolve user function symbols
-    /// through the same thread-local).  `Err` is a process exit code whose
-    /// message is already on stderr (the GHC-exception shape).
+    /// force).  `Err` is a process exit code whose message is already on
+    /// stderr (the GHC-exception shape).
     fn translate_theory(
         &mut self,
-    ) -> Result<
-        (
-            Option<tamarin_theory::pretty_theory::OpenPrintOpts>,
-            tamarin_theory::elaborate::UserFunsForTheoryGuard,
-        ),
-        i32,
-    > {
+    ) -> Result<Option<tamarin_theory::pretty_theory::OpenPrintOpts>, i32> {
         let translate_module = self.translate_module;
         // HS emits this marker at the top of `translateTheory`
         // (TheoryLoader.hs:487-502, see line 496).
@@ -1224,18 +1215,6 @@ impl TheoryPipeline<'_> {
         // `check_translated_theory`.  `user_set_heuristic` is
         // true iff a `heuristic:` item already populated `elaborated.heuristic`
         // (HS `addHeuristic` returns `Nothing` in that case).
-        // Install the user/builtin function-symbol flag sets (the
-        // `CollectedUserFuns` bundle) for the duration of SAPIC translation
-        // AND — via the caller, which holds the returned guard — the variant
-        // pre-computation and final render.  That thread-local drives
-        // `term_to_lnterm`'s symbol resolution (privacy / constructability);
-        // `elaborate()` sets it only for its own scope, so without
-        // re-installing it here the SAPIC-injected rules' builtin symbols
-        // (`rep` private, `check_rep` / `get_rep` destructors from
-        // `locations-report`) re-elaborate with the default
-        // public-constructor flags, serialising as `tamXC..` — which Maude
-        // rejects, leaving the rule with "no variants".
-        let sapic_funs_guard = tamarin_theory::elaborate::set_user_funs_for_theory(&self.parsed);
         // The translate-mode render's print options, one per module
         // (`prettyOpenTheoryByModule`, TheoryLoader.hs:783-801).  `Some` iff
         // `-m` is in force: `spthy` and `msr` are fixed, while `spthytyped`
@@ -1283,7 +1262,10 @@ impl TheoryPipeline<'_> {
                 // — the same inlined `PlainProcess` `apply_sapic` checks.
                 let mut wf: Vec<tamarin_parser::wf::WfError> = Vec::new();
                 if self.elaborated.is_sapic {
-                    match tamarin_sapic::apply::sapic_pre_report(&self.parsed) {
+                    match tamarin_sapic::apply::sapic_pre_report(
+                        &self.parsed,
+                        &self.elaborated.signature.maude_sig,
+                    ) {
                         Ok(Some((report, _))) => wf = report,
                         // `is_sapic` set with no `TopLevelProcess`.
                         Ok(None) => {}
@@ -1391,7 +1373,7 @@ impl TheoryPipeline<'_> {
             });
         }
 
-        Ok((print_opts, sapic_funs_guard))
+        Ok(print_opts)
     }
 
     /// HS `checkTranslatedTheory` (TheoryLoader.hs:553-615): the
@@ -2388,10 +2370,6 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             let elaborated = elaborate(&parsed).map_err(|e| {
                 RunError(format!("elaboration error in {}: {}", in_file, e.message))
             })?;
-            // Formula→guarded conversion inside the lemma/restriction
-            // renderers resolves user function symbols through this
-            // thread-local (same guard the closed path installs).
-            let _user_funs_guard = tamarin_theory::elaborate::set_user_funs_for_theory(&parsed);
             // Parsed `process:` / `let` bodies are converted to SAPIC
             // `PlainProcess` for the Doc-based `prettySapic'` port; the
             // conversion lives in `tamarin-sapic` (dependency direction).
@@ -2401,8 +2379,12 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             // then prints just `P(args)` for the marker (Theory/Sapic/Process.hs:496).
             let process_defs = tamarin_sapic::inline::collect_process_defs(&parsed);
             let conv = |proc: &tamarin_parser::ast::Process| {
-                tamarin_sapic::inline::convert_process_with_defs(proc, &process_defs)
-                    .map_err(|e| e.message)
+                tamarin_sapic::inline::convert_process_with_defs(
+                    proc,
+                    &process_defs,
+                    &elaborated.signature.maude_sig,
+                )
+                .map_err(|e| e.message)
             };
             let body = tamarin_theory::pretty_theory::pretty_open_theory(
                 &parsed,
@@ -2541,7 +2523,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             ndc_funs: Vec::new(),
         };
 
-        let (print_opts, _sapic_funs_guard) = match st.translate_theory() {
+        let print_opts = match st.translate_theory() {
             Ok(v) => v,
             Err(code) => return Ok(code),
         };
@@ -2588,9 +2570,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
                 // TheoryLoader.hs:783-801, followed by `withVersionAndReport`'s
                 // two trailing comment items, TheoryLoader.hs:636-660).  The doc
                 // is BUFFERED — Batch.hs:101-113 processes every file before any
-                // doc is printed or written.  `_sapic_funs_guard` is still held
-                // here, so formula→guarded conversion inside the lemma renderers
-                // resolves user symbols exactly as the parse-only path does.
+                // doc is printed or written.
                 //
                 // `translate_theory` fills the print options for every module
                 // it can return from (`spthy`/`msr` statically, `spthytyped`
@@ -2599,8 +2579,12 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
                 let wf_block = tamarin_theory::pretty_theory::format_wf_block(&st.wf_report);
                 let process_defs = tamarin_sapic::inline::collect_process_defs(&st.parsed);
                 let conv = |proc: &tamarin_parser::ast::Process| {
-                    tamarin_sapic::inline::convert_process_with_defs(proc, &process_defs)
-                        .map_err(|e| e.message)
+                    tamarin_sapic::inline::convert_process_with_defs(
+                        proc,
+                        &process_defs,
+                        &st.elaborated.signature.maude_sig,
+                    )
+                    .map_err(|e| e.message)
                 };
                 let body = tamarin_theory::pretty_theory::pretty_open_theory_by_module(
                     &st.parsed,

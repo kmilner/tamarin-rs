@@ -25,22 +25,15 @@ rule Seed:\n\
   [ ]\n\n\
 end\n";
 
-/// Parse + elaborate [`XORR_PARENT`]; returns the guard (hold it for
-/// the test's whole body — production holds the parent theory's guard
-/// around the NDC pass the same way), the parent `MaudeSig`, and the
+/// Parse + elaborate [`XORR_PARENT`]; returns the parent `MaudeSig` and the
 /// Probe action's five elaborated terms.
-fn xorr_parent() -> (
-    crate::elaborate::UserFunsForTheoryGuard,
-    tamarin_term::maude_sig::MaudeSig,
-    Vec<LNTerm>,
-) {
+fn xorr_parent() -> (tamarin_term::maude_sig::MaudeSig, Vec<LNTerm>) {
     let parsed = tamarin_parser::parse_theory(XORR_PARENT, &[]).expect("parent parses");
-    let guard = crate::elaborate::set_user_funs_for_theory(&parsed);
     let elab = crate::elaborate::elaborate(&parsed).expect("parent elaborates");
     let rule = elab.rules().next().expect("Seed rule present");
     let probe = rule.rule.actions[0].terms.to_vec();
     assert_eq!(probe.len(), 5, "Probe carries five terms");
-    (guard, elab.signature.maude_sig, probe)
+    (elab.signature.maude_sig, probe)
 }
 
 fn kd(t: LNTerm) -> LNFact {
@@ -107,7 +100,7 @@ fn assert_structural_matches_text(
 /// restriction sets (theory-1 with `OnlyOnceD`, theory-2 without).
 #[test]
 fn structural_deduction_theory_matches_text_pipeline() {
-    let (_guard, sig, probe) = xorr_parent();
+    let (sig, probe) = xorr_parent();
     let sig_text = crate::pretty_theory::render_signature(&sig);
     let (xorr2, xorr3, h_pair, fst_c, zeroo) =
         (&probe[0], &probe[1], &probe[2], &probe[3], &probe[4]);
@@ -281,7 +274,7 @@ fn check_close_intr_rule_tags_xorr_on_kcl07_signature() {
     let Some(mp) = crate::test_maude::maude_path() else {
         return;
     };
-    let (_guard, sig, _probe) = xorr_parent();
+    let (sig, _probe) = xorr_parent();
     let maude = tamarin_term::maude_proc::MaudeHandle::start(&mp, sig)
         .expect("maude starts on the KCL07 signature");
     let checked = check_close_intr_rule(&maude, None, true);
@@ -499,7 +492,6 @@ fn elaborate_deduction_theory_via_text(
             theory_snippet(&src)
         )
     });
-    let _user_funs_guard = crate::elaborate::set_user_funs_for_theory(&parsed);
     let elaborated = crate::elaborate::elaborate(&parsed).unwrap_or_else(|e| {
         panic!(
             "[ndc] synthetic deduction theory failed to elaborate ({}); theory:\n{}",

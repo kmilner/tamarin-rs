@@ -10,9 +10,7 @@
 //! through both production wrappers.
 
 use super::*;
-use crate::elaborate::{
-    canonicalize_ac_in_formula as canon, rewrite_arity1_formula, CollectedUserFuns,
-};
+use crate::elaborate::{canonicalize_ac_in_formula as canon, rewrite_arity1_formula};
 use crate::formula::{from_parser, to_lnformula};
 use crate::macro_expand::apply_macros_formula;
 use crate::pretty_theory::{collect_macros, collect_predicates, expand_predicates_for_display};
@@ -169,7 +167,7 @@ enum Outcome {
 struct FileReport {
     outcome: Outcome,
     items: Vec<Item>,
-    user_funs: CollectedUserFuns,
+    msig: std::sync::Arc<tamarin_term::maude_sig::MaudeSig>,
     elapsed: Duration,
 }
 
@@ -182,7 +180,7 @@ fn file_phase(path: &Path, root: &Path) -> FileReport {
     let mut rep = FileReport {
         outcome: Outcome::SkippedParse,
         items: Vec::new(),
-        user_funs: CollectedUserFuns::default(),
+        msig: std::sync::Arc::new(tamarin_term::maude_sig::MaudeSig::default()),
         elapsed: Duration::ZERO,
     };
     if BEYOND_BUDGET.contains(&rel(path, root).to_string_lossy().as_ref()) {
@@ -213,8 +211,7 @@ fn file_phase(path: &Path, root: &Path) -> FileReport {
         rep.outcome = Outcome::SkippedElab;
         return rep;
     };
-    rep.user_funs = crate::elaborate::collect_user_funs_for_theory(&parsed);
-    let _guard = crate::elaborate::set_user_funs_from_collected(&rep.user_funs);
+    rep.msig = std::sync::Arc::new(elab.signature.maude_sig.clone());
     let arity1_names = crate::elaborate::arity1_noeq_names(elab.signature.maude_sig());
     let arity1 = |f: &p::Formula| rewrite_arity1_formula(f, &arity1_names);
     rep.items = theory_formulas(&parsed, &arity1);
@@ -226,16 +223,14 @@ fn file_phase(path: &Path, root: &Path) -> FileReport {
 /// `(label, parser-AST render, locally-nameless render)` of one disagreement.
 type Mismatch = (String, String, String);
 
-/// Both printers on one formula through both production wrappers; the
-/// thread-local user-function bundle is the one the file's renderers run
-/// under.
-fn compare(item: &Item, user_funs: &CollectedUserFuns) -> Vec<Mismatch> {
-    let _guard = crate::elaborate::set_user_funs_from_collected(user_funs);
+/// Both printers on one formula through both production wrappers, against
+/// the signature the file's renderers run under.
+fn compare(item: &Item, msig: &tamarin_term::maude_sig::MaudeSig) -> Vec<Mismatch> {
     let f = &item.formula;
     let ast = formula_to_doc(f, &[], &mut avoid_precise_formula(f));
     let ast_header = lemma_header_line_doc("all-traces", ast.clone());
     let ast_nested = doublequoted_nested_doc(ast, 2);
-    let ln = match from_parser(f) {
+    let ln = match from_parser(f, msig) {
         Ok(ln) => ln,
         Err(e) => {
             return vec![(
@@ -322,7 +317,7 @@ fn corpus_lnformula_doc_matches_ast_printer() {
         work.par_iter()
             .map(|(i, item)| {
                 let t = Instant::now();
-                let found = compare(item, &reports[*i].user_funs);
+                let found = compare(item, &reports[*i].msig);
                 (*i, t.elapsed(), found)
             })
             .collect()

@@ -823,6 +823,7 @@ fn partial_atom_valuation_with(
     atom: &tamarin_parser::ast::Atom,
 ) -> Option<bool> {
     use tamarin_parser::ast::Atom;
+    let msig = maude.maude_sig();
     // `nonUnifiableNodes i j`: i and j must be distinct in every model.
     // Returns true iff both nodes are in the system *and* their rule
     // instances do not AC-unify.  Mirrors Haskell's helper of the same
@@ -936,8 +937,8 @@ fn partial_atom_valuation_with(
             // unknown — the equality may or may not hold once the
             // proof state is refined.
             let (Some(tx), Some(ty)) = (
-                crate::elaborate::term_to_lnterm(x),
-                crate::elaborate::term_to_lnterm(y),
+                crate::elaborate::term_to_lnterm(x, &msig),
+                crate::elaborate::term_to_lnterm(y, &msig),
             ) else {
                 return None;
             };
@@ -954,7 +955,7 @@ fn partial_atom_valuation_with(
         }
         Atom::Action(fa, t) => {
             let n = parser_node_id(t)?;
-            let lnfa = match crate::elaborate::fact_to_lnfact(fa) {
+            let lnfa = match crate::elaborate::fact_to_lnfact(fa, &msig) {
                 Ok(f) => f,
                 Err(_) => return None,
             };
@@ -1084,8 +1085,8 @@ fn partial_atom_valuation_with(
             use tamarin_term::lterm::{is_fresh_var, is_pub_var};
             use tamarin_term::term::Term as LTerm;
             use tamarin_term::vterm::Lit as LLit;
-            let small_lt = crate::elaborate::term_to_lnterm(small)?;
-            let big_lt = crate::elaborate::term_to_lnterm(big)?;
+            let small_lt = crate::elaborate::term_to_lnterm(small, &msig)?;
+            let big_lt = crate::elaborate::term_to_lnterm(big, &msig)?;
             // small ⊏ small  -> False  (trivially-false)
             if small_lt == big_lt {
                 return Some(false);
@@ -1624,6 +1625,7 @@ fn try_match_all_guards(
         out: &mut Vec<crate::guarded::Guarded>,
         out_canon: &mut Vec<(crate::guarded::Guarded, u64)>,
     ) {
+        let msig = maude.maude_sig();
         if guard_idx == guards.len() {
             // All Action guards matched.  Now decide what the implied
             // formula looks like.  Haskell's `impliedFormulas` wraps
@@ -1863,8 +1865,8 @@ fn try_match_all_guards(
                         // snd-sdec form): both sides become `snd(sdec(m,k))`
                         // semantically, but LHS uses `App` and RHS uses
                         // `AlgApp` — equality fails and gfalse never fires.
-                        let lhs_eq = crate::elaborate::term_to_lnterm(&s_subst);
-                        let rhs_eq = crate::elaborate::term_to_lnterm(&t_subst);
+                        let lhs_eq = crate::elaborate::term_to_lnterm(&s_subst, &msig);
+                        let rhs_eq = crate::elaborate::term_to_lnterm(&t_subst, &msig);
                         if let (Some(a), Some(b)) = (lhs_eq, rhs_eq) {
                             if a == b {
                                 rec(
@@ -1918,10 +1920,10 @@ fn try_match_all_guards(
                 // match, with the recursion-invariant `pattern_vars` set
                 // hoisted to `try_match_all_guards` (it depends only on
                 // `vars`).
-                let Some(pat_lnt) = crate::elaborate::term_to_lnterm(&pat_term) else {
+                let Some(pat_lnt) = crate::elaborate::term_to_lnterm(&pat_term, &msig) else {
                     return;
                 };
-                let Some(subj_lnt) = crate::elaborate::term_to_lnterm(&subj_term) else {
+                let Some(subj_lnt) = crate::elaborate::term_to_lnterm(&subj_term, &msig) else {
                     return;
                 };
                 let mut struct_subst = std::collections::BTreeMap::new();
@@ -2296,6 +2298,7 @@ fn match_atom_via_maude(
 ) -> Vec<crate::guarded::VarSubst> {
     use crate::guarded::VarSubst;
     use tamarin_parser::ast::Term as ATerm;
+    let msig = maude.maude_sig();
     let mut base_subst = VarSubst::default();
 
     // Time variable.  HS's `matchAction` (Guarded.hs:805-807) matches
@@ -2345,7 +2348,7 @@ fn match_atom_via_maude(
     // Maude in one call so cross-arg constraints unify together.
     let mut eqs = Vec::new();
     for (g_arg, sys_term) in g_fact.args.iter().zip(sys_args.iter()) {
-        let pat = match crate::elaborate::term_to_lnterm(g_arg) {
+        let pat = match crate::elaborate::term_to_lnterm(g_arg, &msig) {
             Some(p) => p,
             None => return Vec::new(),
         };
@@ -3891,6 +3894,7 @@ fn simp_injective_fact_eq_mon_pass(red: &mut Reduction) -> ChangeIndicator {
         tamarin_term::lterm::LNTerm,
         tamarin_term::lterm::LNTerm,
     )> = {
+        let msig = red.ctx.maude.maude_sig();
         let mut set = std::collections::BTreeSet::new();
         let all_fms = red
             .sys
@@ -3921,8 +3925,8 @@ fn simp_injective_fact_eq_mon_pass(red: &mut Reduction) -> ChangeIndicator {
                     let s = crate::guarded::gterm_to_term(s_g);
                     let t = crate::guarded::gterm_to_term(t_g);
                     if let (Some(sl), Some(tl)) = (
-                        crate::elaborate::term_to_lnterm(&s),
-                        crate::elaborate::term_to_lnterm(&t),
+                        crate::elaborate::term_to_lnterm(&s, &msig),
+                        crate::elaborate::term_to_lnterm(&t, &msig),
                     ) {
                         set.insert((sl, tl));
                     }

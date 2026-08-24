@@ -56,43 +56,10 @@ fn not_found() -> Response {
     StatusCode::NOT_FOUND.into_response()
 }
 
-/// A theory looked up from the store, with its user-declared function-symbol
-/// sets installed on the request thread for as long as the value is held.
-///
-/// HS reads a declared symbol's options from the signature in parser state, so
-/// its terms are born carrying them; the port reads them through thread-locals,
-/// which start empty on every axum worker (see
-/// [`TheoryEntry::install_user_funs`](crate::state::TheoryEntry::install_user_funs)).
-/// Binding the sets to the looked-up theory makes that a property of the
-/// handler boundary rather than of each renderer remembering: a handler cannot
-/// hold the entry without them.  Renderers that install again nest harmlessly —
-/// the guards restore in reverse order and each installs the same sets.
-///
-/// Not held across an `.await`: the sets belong to the thread, and a suspended
-/// task can resume on another one.
-struct LoadedTheory {
-    entry: crate::state::TheoryEntry,
-    _user_funs: tamarin_theory::elaborate::UserFunsForTheoryGuard,
-}
-
-impl std::ops::Deref for LoadedTheory {
-    type Target = crate::state::TheoryEntry;
-
-    fn deref(&self) -> &Self::Target {
-        &self.entry
-    }
-}
-
-/// The theory at `idx` with its user-fn sets installed (see [`LoadedTheory`]),
-/// or `None` for an index naming no theory — HS `withTheory`'s `notFound`
-/// (`src/Web/Handler.hs:662-672`).
-fn load_theory(state: &AppState, idx: usize) -> Option<LoadedTheory> {
-    let entry = state.store.get(idx)?;
-    let user_funs = entry.install_user_funs();
-    Some(LoadedTheory {
-        entry,
-        _user_funs: user_funs,
-    })
+/// The theory at `idx`, or `None` for an index naming no theory — HS
+/// `withTheory`'s `notFound` (`src/Web/Handler.hs:662-672`).
+fn load_theory(state: &AppState, idx: usize) -> Option<crate::state::TheoryEntry> {
+    state.store.get(idx)
 }
 
 // ---------------------------------------------------------------------
@@ -210,10 +177,6 @@ fn apply_method_and_redirect(
     // Without filtering here the numbering would drift on Sorry/no-op
     // candidates that the UI omits.
     let method = {
-        // `exec_proof_method` below resolves user fun symbols via
-        // thread-locals — install them (tokio workers start empty; see
-        // `ProofState::user_funs`).
-        let _user_funs_guard = src_ps.install_user_funs();
         let mut ctx_guard = src_ps.ctx.lock();
         // Install this lemma's per-lemma `use_induction`/`heuristic` into the
         // shared ctx BEFORE ranking, so the method-index → method mapping
@@ -466,10 +429,6 @@ fn title_for(entry: &crate::state::TheoryEntry, path: &path_parse::TheoryPath) -
 /// by the same pipeline `--prove` runs — via the shared `format_wf_block`,
 /// so it matches HS byte-for-byte (empty report ⇒ the "all successful" block).
 fn render_theory_source(entry: &crate::state::TheoryEntry) -> String {
-    // `pretty_closed_theory` AC-canonicalises parser-AST rule/lemma terms,
-    // which reads the user-fn thread-locals — empty on an axum worker thread.
-    // See `TheoryEntry::install_user_funs`.
-    let _user_funs_guard = entry.install_user_funs();
     let build = tamarin_theory::pretty_theory::BuildInfo {
         tamarin_version: env!("CARGO_PKG_VERSION").to_string(),
         maude_version: String::new(),
@@ -2039,8 +1998,6 @@ pub async fn proof_step(
     };
     // Install this lemma's per-lemma `use_induction`/`heuristic` into the
     // shared ctx before ranking the re-rendered snippet (HS `getProofContext`).
-    // Also the user-fn thread-locals — the snippet execs candidate methods.
-    let _user_funs_guard = ps.install_user_funs();
     let mut ctx_guard = ps.ctx.lock();
     ps.install_lemma_settings(&mut ctx_guard, &lemma);
     let sig = ctx_guard.maude.maude_sig();

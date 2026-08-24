@@ -26,9 +26,10 @@ fn build(input: &str) -> (p::Theory, Theory) {
 
 fn render(parsed: &p::Theory, elaborated: &Theory, opts: &OpenPrintOpts) -> String {
     let process_defs = collect_process_defs(parsed);
-    let conv =
-        |proc: &p::Process| convert_process_with_defs(proc, &process_defs).map_err(|e| e.message);
-    let _guard = tamarin_theory::elaborate::set_user_funs_for_theory(parsed);
+    let conv = |proc: &p::Process| {
+        convert_process_with_defs(proc, &process_defs, &elaborated.signature.maude_sig)
+            .map_err(|e| e.message)
+    };
     pretty_open_theory_by_module(
         parsed,
         elaborated,
@@ -219,11 +220,8 @@ end";
 #[test]
 fn msr_typing4_bytes() {
     let (mut parsed, mut elaborated) = build(TYPING4);
-    {
-        let _guard = tamarin_theory::elaborate::set_user_funs_for_theory(&parsed);
-        let wf = crate::apply::apply_sapic(&mut parsed, &mut elaborated, false).unwrap();
-        assert!(wf.is_empty());
-    }
+    let wf = crate::apply::apply_sapic(&mut parsed, &mut elaborated, false).unwrap();
+    assert!(wf.is_empty());
     let opts = OpenPrintOpts {
         typed: None,
         extra_function_items: Vec::new(),

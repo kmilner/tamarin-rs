@@ -831,7 +831,7 @@ fn parse_arg_to_lnterm(
     msig: &tamarin_term::maude_sig::MaudeSig,
 ) -> Option<tamarin_term::lterm::LNTerm> {
     let ast = parsed_term_of_arg(arg, msig)?;
-    crate::elaborate::term_to_lnterm(&ast)
+    crate::elaborate::term_to_lnterm(&ast, msig)
 }
 
 /// Recover a structured AST term from a skeleton fact argument.  The

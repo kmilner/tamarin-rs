@@ -20,10 +20,6 @@ use tamarin_theory::theory::{LemmaAttr, TraceQuantifier};
 
 /// Full overview/framing page (the one served at `/thy/trace/<idx>/overview/...`).
 pub fn overview_page(entry: &TheoryEntry, path: &TheoryPath) -> String {
-    // The west pane's lemma list and the centre pane both AC-canonicalise
-    // parser-AST terms, which reads the user-fn thread-locals — empty on an
-    // axum worker thread.  See `TheoryEntry::install_user_funs`.
-    let _user_funs_guard = entry.install_user_funs();
     let header_html = header(entry);
     let proof_state = proof_state(entry);
     let main_view = path_html(entry, path);
@@ -600,10 +596,6 @@ fn render_attrs(attrs: &[LemmaAttr], in_file: &str) -> String {
 
 /// Main pane: render the content for a given path.
 pub fn path_html(entry: &TheoryEntry, path: &TheoryPath) -> String {
-    // The rule / lemma / restriction renderers reached below AC-canonicalise
-    // parser-AST terms, which reads the user-fn thread-locals — empty on an
-    // axum worker thread.  See `TheoryEntry::install_user_funs`.
-    let _user_funs_guard = entry.install_user_funs();
     let typed = &entry.typed_theory;
     match path {
         TheoryPath::Help => help_html(entry),
@@ -803,11 +795,6 @@ pub fn proof_html(entry: &TheoryEntry, lemma: &str, sub: &[String]) -> String {
     if let Some(ps) = &entry.proof_state {
         if let Some(root) = ps.get_root(lemma) {
             if let Some(n) = crate::handlers::proof_tree::navigate_at(&root, sub) {
-                // `write_applicable_methods` execs every candidate method —
-                // solver code that resolves user fun symbols via
-                // thread-locals; install them for this render (tokio
-                // workers start empty — see `ProofState::user_funs`).
-                let _user_funs_guard = ps.install_user_funs();
                 // Install this lemma's per-lemma `use_induction`/`heuristic`
                 // into the shared ctx before ranking (HS `getProofContext`);
                 // otherwise the Applicable Proof Methods order + ranking name
@@ -1092,11 +1079,6 @@ pub(crate) fn compute_source_lists(
     let Some(ps) = &entry.proof_state else {
         return Vec::new();
     };
-    // Saturation (`s.cases(&ctx)` → `ensure_saturated`) and
-    // `refine_with_source_asms` run solver code; `formula_to_guarded` on
-    // the `[sources]`-lemma formulas resolves user fun symbols.  All via
-    // thread-locals — install them (see `ProofState::user_funs`).
-    let _user_funs_guard = ps.install_user_funs();
     let ctx = ps.ctx.lock();
     let typ_asms = source_typ_asms(entry, want_refined);
 
@@ -1181,9 +1163,6 @@ pub(crate) fn source_list_case(
 ) -> Option<tamarin_theory::constraint::system::System> {
     use tamarin_theory::constraint::system::SourceKind as SysSourceKind;
     let ps = entry.proof_state.as_ref()?;
-    // Same thread-locals the whole-list build needs (see
-    // [`compute_source_lists`]).
-    let _user_funs_guard = ps.install_user_funs();
     let ctx = ps.ctx.lock();
     let typ_asms = source_typ_asms(entry, want_refined);
     if want_refined && !typ_asms.is_empty() {

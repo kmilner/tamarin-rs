@@ -351,11 +351,6 @@ pub fn pretty_closed_theory(
     // to the open-as-closed renderer when `containsManualRuleVariants` holds,
     // which suppresses loop-breaker comments on trivial-AC-variant rules.
     let manual_variants = contains_manual_rule_variants(parsed, elaborated, auto_sources);
-    // Item renderers convert formulas (`formula_to_guarded` on lemmas /
-    // restrictions), whose term conversions read the thread-local
-    // `CollectedUserFuns` bundle — replicate the calling thread's sets onto
-    // each render worker (a stolen thread outside any guard has EMPTY sets).
-    let user_funs_snapshot = crate::elaborate::snapshot_user_funs();
     // Positional `(name, occurrence)` pairing of each parsed rule item with
     // its elaborated counterpart — see `pair_elaborated_rules`.
     let elab_rules = pair_elaborated_rules(&parsed.items, elaborated);
@@ -364,8 +359,6 @@ pub fn pretty_closed_theory(
         .par_iter()
         .enumerate()
         .map(|(idx, item)| {
-            let _user_funs_guard =
-                crate::elaborate::set_user_funs_from_collected(&user_funs_snapshot);
             render_parsed_item(
                 item,
                 elab_rules[idx],

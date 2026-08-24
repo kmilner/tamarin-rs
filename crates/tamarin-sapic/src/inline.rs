@@ -34,6 +34,7 @@ use std::collections::BTreeMap;
 use crate::base_translation::{subst_fact, subst_term};
 use tamarin_parser::ast as p;
 use tamarin_term::lterm::Name;
+use tamarin_term::maude_sig::MaudeSig;
 use tamarin_term::subst::Subst;
 use tamarin_term::vterm::{Lit, VTerm};
 
@@ -71,29 +72,30 @@ pub fn collect_process_defs(thy: &p::Theory) -> ProcessDefMap<'_> {
 pub fn convert_process_with_defs(
     proc: &p::Process,
     defs: &ProcessDefMap<'_>,
+    sig: &MaudeSig,
 ) -> Result<PlainProcess, ConvertError> {
     use tamarin_theory::sapic::ProcessParsedAnnotation;
     let ann = ProcessParsedAnnotation::empty();
     match proc {
         p::Process::Null => Ok(Process::Null(ann)),
         p::Process::Action { action: act, body } => Ok(Process::Action(
-            convert_action(act)?,
+            convert_action(act, sig)?,
             ann,
-            Box::new(convert_process_with_defs(body, defs)?),
+            Box::new(convert_process_with_defs(body, defs, sig)?),
         )),
         p::Process::Comb { comb, left, right } => {
-            let l = Box::new(convert_process_with_defs(left, defs)?);
-            let r = Box::new(convert_process_with_defs(right, defs)?);
-            let c = convert_combinator(comb)?;
+            let l = Box::new(convert_process_with_defs(left, defs, sig)?);
+            let r = Box::new(convert_process_with_defs(right, defs, sig)?);
+            let c = convert_combinator(comb, sig)?;
             Ok(Process::Comb(c, ann, l, r))
         }
         p::Process::Replication(body) => Ok(Process::Action(
             SapicAction::Rep,
             ann,
-            Box::new(convert_process_with_defs(body, defs)?),
+            Box::new(convert_process_with_defs(body, defs, sig)?),
         )),
-        p::Process::Call { name, args } => inline_call(name, args, defs),
-        p::Process::AtAnnotation(inner, _) => convert_process_with_defs(inner, defs),
+        p::Process::Call { name, args } => inline_call(name, args, defs, sig),
+        p::Process::AtAnnotation(inner, _) => convert_process_with_defs(inner, defs, sig),
     }
 }
 
@@ -103,6 +105,7 @@ fn inline_call(
     name: &str,
     args: &[p::Term],
     defs: &ProcessDefMap<'_>,
+    sig: &MaudeSig,
 ) -> Result<PlainProcess, ConvertError> {
     use tamarin_theory::sapic::ProcessParsedAnnotation;
 
@@ -113,7 +116,10 @@ fn inline_call(
         .ok_or_else(|| ConvertError::new(format!("process not defined: {name}")))?;
 
     // Convert the actual argument terms.
-    let sapic_args: Vec<SapicTerm> = args.iter().map(convert_term).collect::<Result<_, _>>()?;
+    let sapic_args: Vec<SapicTerm> = args
+        .iter()
+        .map(|a| convert_term(a, sig))
+        .collect::<Result<_, _>>()?;
 
     // Convert the formal parameters (HS `fromMaybe [] (get pVars p)`).
     let params: Vec<SapicLVar> = def
@@ -131,7 +137,7 @@ fn inline_call(
     }
 
     // Recursively inline the definition body (a def may call other defs).
-    let body = convert_process_with_defs(&def.body, defs)?;
+    let body = convert_process_with_defs(&def.body, defs, sig)?;
 
     // Build the parameter substitution with HS's `extend_sup` type-erasure
     // doubling (Theory/Text/Parser/Sapic.hs:299-306): a typed formal
@@ -371,6 +377,7 @@ fn apply_match_vars(
 mod tests {
     use super::*;
     use tamarin_term::lterm::LSort;
+    use tamarin_term::maude_sig::pair_maude_sig;
 
     fn pub_lit(s: &str) -> p::Term {
         p::Term::PubLit(s.to_string())
@@ -413,7 +420,7 @@ mod tests {
             name: "P".into(),
             args: vec![pub_lit("t")],
         };
-        let inlined = convert_process_with_defs(&call, &defs).unwrap();
+        let inlined = convert_process_with_defs(&call, &defs, &pair_maude_sig()).unwrap();
         match inlined {
             Process::Action(SapicAction::ProcessCall(n, args), _, body) => {
                 assert_eq!(n, "P");
@@ -430,7 +437,8 @@ mod tests {
                         assert_eq!(msg, args[0]);
                         assert_eq!(
                             msg,
-                            crate::convert::term(&pub_lit("t")).expect("'t' converts")
+                            crate::convert::term(&pub_lit("t"), &pair_maude_sig())
+                                .expect("'t' converts")
                         );
                     }
                     other => panic!("expected ChOut body, got {other:?}"),
@@ -447,7 +455,7 @@ mod tests {
             name: "Nope".into(),
             args: vec![],
         };
-        let err = convert_process_with_defs(&call, &defs).unwrap_err();
+        let err = convert_process_with_defs(&call, &defs, &pair_maude_sig()).unwrap_err();
         assert!(err.message.contains("process not defined"));
     }
 
@@ -461,7 +469,7 @@ mod tests {
             name: "P".into(),
             args: vec![],
         };
-        let err = convert_process_with_defs(&call, &defs).unwrap_err();
+        let err = convert_process_with_defs(&call, &defs, &pair_maude_sig()).unwrap_err();
         assert!(err.message.contains("expected 1 argument"));
     }
 }

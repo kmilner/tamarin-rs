@@ -2260,11 +2260,12 @@ impl<'ctx> Reduction<'ctx> {
     /// `false` if it was a shape with no `LNAtom` counterpart.
     pub fn insert_atom(&mut self, a: &tamarin_parser::ast::Atom) -> bool {
         use tamarin_parser::ast::Atom;
+        let msig = self.ctx.maude.maude_sig();
         match a {
             Atom::Eq(x, y) => {
                 let (Some(tx), Some(ty)) = (
-                    crate::elaborate::term_to_lnterm(x),
-                    crate::elaborate::term_to_lnterm(y),
+                    crate::elaborate::term_to_lnterm(x, &msig),
+                    crate::elaborate::term_to_lnterm(y, &msig),
                 ) else {
                     return false;
                 };
@@ -2375,7 +2376,7 @@ impl<'ctx> Reduction<'ctx> {
                 true
             }
             Atom::Action(fact, t) => {
-                let Ok(lnfact) = crate::elaborate::fact_to_lnfact(fact) else {
+                let Ok(lnfact) = crate::elaborate::fact_to_lnfact(fact, &msig) else {
                     return false;
                 };
                 let Some(n) = term_to_node_id(t) else {
@@ -2386,8 +2387,8 @@ impl<'ctx> Reduction<'ctx> {
             }
             Atom::Subterm(s, b) => {
                 let (Some(ts), Some(tb)) = (
-                    crate::elaborate::term_to_lnterm(s),
-                    crate::elaborate::term_to_lnterm(b),
+                    crate::elaborate::term_to_lnterm(s, &msig),
+                    crate::elaborate::term_to_lnterm(b, &msig),
                 ) else {
                     return false;
                 };
@@ -2892,9 +2893,10 @@ impl<'ctx> Reduction<'ctx> {
                                 .solved_formulas_mut()
                                 .push(std::sync::Arc::new(g.clone()));
                         }
+                        let msig = self.ctx.maude.maude_sig();
                         if let (Some(ts), Some(tb)) = (
-                            crate::elaborate::term_to_lnterm(s),
-                            crate::elaborate::term_to_lnterm(b),
+                            crate::elaborate::term_to_lnterm(s, &msig),
+                            crate::elaborate::term_to_lnterm(b, &msig),
                         ) {
                             self.sys.invalidate_max_var_idx_cache();
                             if self.sys.subterm_store_mut().add_neg(ts, tb) {

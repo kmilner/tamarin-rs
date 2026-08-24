@@ -546,7 +546,7 @@ fn lnformula_doc_matches_ast_doc_on_samples() {
     for (src, expected_lines) in samples {
         let expected = expected_lines.join("\n");
         let f = parse_formula_str(src, &pair_maude_sig()).unwrap();
-        let ln = from_parser(&f).unwrap();
+        let ln = from_parser(&f, &pair_maude_sig()).unwrap();
         assert_eq!(
             lemma_header_line_doc("all-traces", ast_doc(&f)),
             expected,
@@ -589,14 +589,16 @@ fn lnformula_doc_matches_ast_doc_on_samples() {
 fn lnformula_doc_matches_ast_doc_on_atom_and_scope_samples() {
     use crate::formula::{from_parser, to_lnformula};
     use tamarin_parser::parser::{parse_formula_str, parse_theory};
-    use tamarin_term::maude_sig::pair_maude_sig;
 
     let thy = parse_theory(
         "theory T begin\nbuiltins: hashing, multiset\nfunctions: zero/0\nend",
         &[],
     )
     .unwrap();
-    let _guard = crate::elaborate::set_user_funs_for_theory(&thy);
+    let msig = crate::elaborate::elaborate(&thy)
+        .unwrap()
+        .signature
+        .maude_sig;
 
     let samples: &[(&str, &[&str])] = &[
         (
@@ -644,8 +646,8 @@ fn lnformula_doc_matches_ast_doc_on_atom_and_scope_samples() {
     ];
     for (src, expected_lines) in samples {
         let expected = expected_lines.join("\n");
-        let f = parse_formula_str(src, &pair_maude_sig()).unwrap();
-        let ln = from_parser(&f).unwrap();
+        let f = parse_formula_str(src, &msig).unwrap();
+        let ln = from_parser(&f, &msig).unwrap();
         assert_eq!(
             lemma_header_line_doc("all-traces", ast_doc(&f)),
             expected,
@@ -726,7 +728,7 @@ fn lnformula_doc_bare_name_under_node_binder() {
     for (quant, src, expected_lines) in samples {
         let expected = expected_lines.join("\n");
         let f = parse_formula_str(src, &pair_maude_sig()).unwrap();
-        let ln = from_parser(&f).unwrap();
+        let ln = from_parser(&f, &pair_maude_sig()).unwrap();
         let plain = to_lnformula(&ln).unwrap();
         assert_eq!(
             lemma_header_line_doc(quant, syntactic_lnformula_doc(&ln)),

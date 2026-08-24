@@ -29,10 +29,6 @@ use tamarin_theory::pretty_theory::{format_wf_block, web_proto_rules, web_signat
 /// computation, not on term resolution).
 fn rule_echoes(src: &str) -> Vec<String> {
     let thy = parse_theory(src, &[]).expect("parse");
-    // The load pipelines render with the theory's user-function bundle
-    // installed (`set_user_funs_for_theory`), which the canonicalization the
-    // rule printer runs reads through.
-    let _guard = tamarin_theory::elaborate::set_user_funs_for_theory(&thy);
     let elaborated = elaborate(&thy).expect("elaborate");
     web_proto_rules(&thy, &elaborated)
         .into_iter()

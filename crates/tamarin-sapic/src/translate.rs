@@ -684,10 +684,10 @@ mod tests {
 
     #[test]
     fn translate_typing2_rule_names_and_restriction() {
-        let plain = convert_process(&typing2_process()).unwrap();
-        // No function-typing needed for the rule-count check; type over an
-        // empty signature (defaults all funs).
+        // No function-typing needed for the rule-count check; convert and
+        // type over an empty signature (defaults all funs).
         let sig = tamarin_term::maude_sig::MaudeSig::default();
+        let plain = convert_process(&typing2_process(), &sig).unwrap();
         let typed = type_and_rename_process(&sig, &[], &plain).unwrap();
         let st_rules = std::collections::BTreeSet::new();
         let tr = translate(&typed, false, &st_rules, TranslateOptions::default()).unwrap();

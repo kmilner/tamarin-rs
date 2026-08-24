@@ -464,8 +464,8 @@ fn synthesise_probe_theory(
     //     is keyed on the original private symbol; the variant matches nothing).
     //     The intruder can coerce the whole opaque application KD→KU but cannot
     //     peel a sub-variable out of it — behaviorally identical to leaving the
-    //     private application in place.  In RS, privacy is resolved by NAME at
-    //     elaborate time (elaborate.rs `set_user_funs_for_theory`), so there is
+    //     private application in place.  In RS, privacy is resolved by NAME
+    //     against the theory signature (elaborate.rs `head_sym`), so there is
     //     no per-occurrence public variant; emulating `replacePrivate` would
     //     resolve to the real public signature symbol and re-introduce the
     //     divergence.  So we mirror HS by doing NEITHER: keep privacy as-is.
@@ -679,7 +679,6 @@ fn prove_probe(
     let ms = (timeout.as_millis() as u64).max(1);
     let _deadline_guard = crate::constraint::solver::search::ProofDeadlineGuard::set_ms(ms);
 
-    let _user_funs_guard = crate::elaborate::set_user_funs_for_theory(probe);
     let elaborated = match elaborate(probe) {
         Ok(t) => t,
         Err(_) => return None,

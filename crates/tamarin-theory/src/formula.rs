@@ -33,6 +33,7 @@ use crate::fact::Fact;
 use crate::predicate::smaller_fact;
 use tamarin_parser::ast as p;
 use tamarin_term::lterm::{BVar, HasFrees, LNTerm, LSort, LVar, Name};
+use tamarin_term::maude_sig::MaudeSig;
 use tamarin_term::term::map_lits;
 use tamarin_term::vterm::{Lit, VTerm};
 
@@ -349,18 +350,18 @@ pub fn to_lnformula(fm: &SyntacticLNFormula) -> Option<LNFormula> {
 /// `(<)` atom becomes the `Smaller` predicate (`smallerp`,
 /// Theory/Text/Parser/Formula.hs:30-38); a SAPIC `=t` pattern term, which
 /// `term_to_lnterm` rejects, is an [`ElabError`].
-pub fn from_parser(f: &p::Formula) -> Result<SyntacticLNFormula, ElabError> {
+pub fn from_parser(f: &p::Formula, sig: &MaudeSig) -> Result<SyntacticLNFormula, ElabError> {
     match f {
         p::Formula::True => Ok(ProtoFormula::Tf(true)),
         p::Formula::False => Ok(ProtoFormula::Tf(false)),
-        p::Formula::Atom(a) => Ok(ProtoFormula::Atom(atom_from_parser(a)?)),
-        p::Formula::Not(q) => Ok(from_parser(q)?.not()),
-        p::Formula::And(l, r) => Ok(from_parser(l)?.and(from_parser(r)?)),
-        p::Formula::Or(l, r) => Ok(from_parser(l)?.or(from_parser(r)?)),
-        p::Formula::Implies(l, r) => Ok(from_parser(l)?.implies(from_parser(r)?)),
-        p::Formula::Iff(l, r) => Ok(from_parser(l)?.iff(from_parser(r)?)),
-        p::Formula::Forall(vs, body) => Ok(close_binders(for_all_var, vs, from_parser(body)?)),
-        p::Formula::Exists(vs, body) => Ok(close_binders(exists_var, vs, from_parser(body)?)),
+        p::Formula::Atom(a) => Ok(ProtoFormula::Atom(atom_from_parser(a, sig)?)),
+        p::Formula::Not(q) => Ok(from_parser(q, sig)?.not()),
+        p::Formula::And(l, r) => Ok(from_parser(l, sig)?.and(from_parser(r, sig)?)),
+        p::Formula::Or(l, r) => Ok(from_parser(l, sig)?.or(from_parser(r, sig)?)),
+        p::Formula::Implies(l, r) => Ok(from_parser(l, sig)?.implies(from_parser(r, sig)?)),
+        p::Formula::Iff(l, r) => Ok(from_parser(l, sig)?.iff(from_parser(r, sig)?)),
+        p::Formula::Forall(vs, body) => Ok(close_binders(for_all_var, vs, from_parser(body, sig)?)),
+        p::Formula::Exists(vs, body) => Ok(close_binders(exists_var, vs, from_parser(body, sig)?)),
     }
 }
 
@@ -380,17 +381,17 @@ fn close_binders(
 }
 
 /// The atom alternatives of HS `blatom` (Theory/Text/Parser/Formula.hs:45-57).
-fn atom_from_parser(a: &p::Atom) -> Result<SyntacticAtom<BLNTerm>, ElabError> {
+fn atom_from_parser(a: &p::Atom, sig: &MaudeSig) -> Result<SyntacticAtom<BLNTerm>, ElabError> {
     Ok(match a {
-        p::Atom::Eq(l, r) => ProtoAtom::EqE(free_term(l)?, free_term(r)?),
-        p::Atom::Subterm(l, r) => ProtoAtom::Subterm(free_term(l)?, free_term(r)?),
-        p::Atom::Less(l, r) => ProtoAtom::Less(free_term(l)?, free_term(r)?),
-        p::Atom::Action(fa, t) => ProtoAtom::Action(free_term(t)?, free_fact(fa)?),
-        p::Atom::Last(t) => ProtoAtom::Last(free_term(t)?),
-        p::Atom::Pred(fa) => ProtoAtom::Syntactic(SyntacticSugar::Pred(free_fact(fa)?)),
+        p::Atom::Eq(l, r) => ProtoAtom::EqE(free_term(l, sig)?, free_term(r, sig)?),
+        p::Atom::Subterm(l, r) => ProtoAtom::Subterm(free_term(l, sig)?, free_term(r, sig)?),
+        p::Atom::Less(l, r) => ProtoAtom::Less(free_term(l, sig)?, free_term(r, sig)?),
+        p::Atom::Action(fa, t) => ProtoAtom::Action(free_term(t, sig)?, free_fact(fa, sig)?),
+        p::Atom::Last(t) => ProtoAtom::Last(free_term(t, sig)?),
+        p::Atom::Pred(fa) => ProtoAtom::Syntactic(SyntacticSugar::Pred(free_fact(fa, sig)?)),
         p::Atom::LessMset(l, r) => ProtoAtom::Syntactic(SyntacticSugar::Pred(smaller_fact(
-            free_term(l)?,
-            free_term(r)?,
+            free_term(l, sig)?,
+            free_term(r, sig)?,
         ))),
     })
 }
@@ -405,16 +406,16 @@ fn lift_free(t: &LNTerm) -> BLNTerm {
     })
 }
 
-fn free_term(t: &p::Term) -> Result<BLNTerm, ElabError> {
-    term_to_lnterm(t)
+fn free_term(t: &p::Term, sig: &MaudeSig) -> Result<BLNTerm, ElabError> {
+    term_to_lnterm(t, sig)
         .map(|t| lift_free(&t))
         .ok_or_else(|| ElabError {
             message: "could not elaborate term in formula".to_string(),
         })
 }
 
-fn free_fact(fa: &p::Fact) -> Result<Fact<BLNTerm>, ElabError> {
-    Ok(fact_to_lnfact(fa)?.map_ref(lift_free))
+fn free_fact(fa: &p::Fact, sig: &MaudeSig) -> Result<Fact<BLNTerm>, ElabError> {
+    Ok(fact_to_lnfact(fa, sig)?.map_ref(lift_free))
 }
 
 /// Replace every bound index of `t` by the binder it refers to, given the
@@ -615,7 +616,7 @@ mod tests {
     /// [`parsed`] against a theory's own signature, for the sources whose
     /// meaning depends on a declaration.
     fn parsed_with(src: &str, msig: &tamarin_term::maude_sig::MaudeSig) -> SyntacticLNFormula {
-        from_parser(&parse_formula_str(src, msig).unwrap()).unwrap()
+        from_parser(&parse_formula_str(src, msig).unwrap(), msig).unwrap()
     }
 
     fn free(name: &str, sort: LSort, idx: u64) -> BLNTerm {
@@ -745,7 +746,6 @@ mod tests {
     fn from_parser_keeps_nullary_symbol_constant() {
         let thy = parse_theory("theory T begin\nfunctions: zero/0\nend", &[]).unwrap();
         let elab = crate::elaborate::elaborate(&thy).unwrap();
-        let _guard = crate::elaborate::set_user_funs_for_theory(&thy);
 
         let ProtoFormula::Qua(Quantifier::All, h, body) =
             parsed_with("All zero. P(zero)", &elab.signature.maude_sig)
@@ -776,7 +776,7 @@ mod tests {
             free("x", LSort::Msg, 0),
             free("y", LSort::Msg, 0),
         ))));
-        assert_eq!(from_parser(&f).unwrap(), want);
+        assert_eq!(from_parser(&f, &pair_maude_sig()).unwrap(), want);
     }
 
     /// A SAPIC `=t` pattern has no `LNTerm` form.
@@ -784,7 +784,7 @@ mod tests {
     fn from_parser_rejects_pat_match() {
         let pat = p::Term::PatMatch(Box::new(parser_var("x", LSort::Msg)));
         let in_term = p::Formula::Atom(p::Atom::Eq(pat.clone(), parser_var("y", LSort::Msg)));
-        let err = from_parser(&in_term).unwrap_err();
+        let err = from_parser(&in_term, &pair_maude_sig()).unwrap_err();
         assert_eq!(err.message, "could not elaborate term in formula");
         let in_fact = p::Formula::Atom(p::Atom::Pred(p::Fact {
             persistent: false,
@@ -792,7 +792,7 @@ mod tests {
             args: vec![pat],
             annotations: Vec::new(),
         }));
-        assert!(from_parser(&in_fact).is_err());
+        assert!(from_parser(&in_fact, &pair_maude_sig()).is_err());
     }
 
     /// Opening against the binders that `quantify` closed gives the original

@@ -4,75 +4,24 @@
 
 use super::*;
 use tamarin_parser::parse_theory;
+use tamarin_term::maude_sig::pair_maude_sig;
 
-/// A bundle carrying one `<tag>_<set>` name in every set, so a test can
-/// tell which bundle is installed and which set a name came from.
-fn tagged_user_funs(tag: &str) -> CollectedUserFuns {
-    let one = |kind: &str| BTreeSet::from([format!("{tag}_{kind}")]);
-    let ac_name = format!("{tag}_ac");
-    CollectedUserFuns {
-        unary: one("unary"),
-        private: one("private"),
-        destructor: one("destructor"),
-        ac: BTreeMap::from([(
-            ac_name.clone(),
-            AcFctSym::new(
-                ac_name.into_bytes(),
-                Privacy::Public,
-                Constructability::Constructor,
-                NdcState::NotNdc,
-            ),
-        )]),
-        noeq_names: one("noeq"),
-        ndc: one("ndc"),
-        ndc_diff: one("ndc_diff"),
-        bp: false,
-    }
+/// The signature every production caller of [`term_to_lnterm`] holds: the
+/// elaborated theory's own `MaudeSig`.
+fn theory_msig(src: &str) -> tamarin_term::maude_sig::MaudeSig {
+    elaborate(&parse_theory(src, &[]).unwrap())
+        .unwrap()
+        .signature
+        .maude_sig
 }
 
-#[test]
-fn user_funs_guards_restore_the_displaced_bundle_on_drop() {
-    let outer = tagged_user_funs("outer");
-    let inner = tagged_user_funs("inner");
-    assert!(
-        !with_user_fun_sets(|f| f.is_user_ac_fun("outer_ac")),
-        "thread starts with empty sets"
-    );
-
-    let outer_guard = set_user_funs_from_collected(&outer);
-    assert!(with_user_fun_sets(|f| f.is_user_ac_fun("outer_ac")));
-    {
-        let _inner_guard = set_user_funs_from_collected(&inner);
-        assert!(with_user_fun_sets(|f| f.is_user_ac_fun("inner_ac")));
-        assert!(!with_user_fun_sets(|f| f.is_user_ac_fun("outer_ac")));
-    }
-    // The nested guard's drop restores every set of the outer bundle.
-    assert!(with_user_fun_sets(|f| f.is_user_ac_fun("outer_ac")));
-    assert!(!with_user_fun_sets(|f| f.is_user_ac_fun("inner_ac")));
-    assert!(with_user_fun_sets(|f| f.is_user_unary_fun("outer_unary")));
-    assert_eq!(snapshot_user_funs().unary, outer.unary);
-    with_user_fun_sets(|f| {
-        assert_eq!(f.user_fun_privacy("outer_private"), Privacy::Private);
-        assert_eq!(
-            f.user_fun_constructability("outer_destructor"),
-            Constructability::Destructor
-        );
-        assert_eq!(f.user_fun_ndc("outer_ndc"), NdcState::IsNdc);
-        assert_eq!(f.user_fun_ndc("outer_ndc_diff"), NdcState::IsNdcDiff);
-    });
-
-    drop(outer_guard);
-    assert!(!with_user_fun_sets(|f| f.is_user_ac_fun("outer_ac")));
-    assert!(with_user_fun_sets(|f| f.unary.is_empty()));
-}
-
-/// The four spellings are read from a parsed rule, because the resolution
-/// they exercise is split between the two stages: the parser lowers the
-/// prefix `[AC]` head and the bare 0-arity name (`lookupArity`/`nullaryApp`,
+/// The spellings are read from a parsed rule, because the resolution they
+/// exercise is split between the two stages: the parser lowers the prefix
+/// `[AC]` head and the bare 0-arity name (`lookupArity`/`nullaryApp`,
 /// Theory/Text/Parser/Term.hs:62-72,158-163), and `term_to_lnterm` reads the
-/// declaration's attributes off the installed bundle.
+/// declaration's attributes off the signature.
 #[test]
-fn installed_bundle_resolves_every_attribute_in_term_to_lnterm() {
+fn term_to_lnterm_reads_every_attribute_from_the_signature() {
     use tamarin_term::function_symbols::{AcSym, FunSym};
 
     let src = "theory T begin\n\
@@ -81,7 +30,7 @@ fn installed_bundle_resolves_every_attribute_in_term_to_lnterm() {
                      [ ] --> [ Out(add(x, y)), Out(sec), Out(dec(x, y)), Out(nd(x, y)) ]\n\
                    end";
     let thy = parse_theory(src, &[]).unwrap();
-    let _guard = set_user_funs_for_theory(&thy);
+    let msig = theory_msig(src);
     let concs = &thy
         .items
         .iter()
@@ -95,7 +44,7 @@ fn installed_bundle_resolves_every_attribute_in_term_to_lnterm() {
 
     // `ac` set: a prefix application of an `[AC]` symbol lowers to an AC
     // application carrying the declaration's flags.
-    match term_to_lnterm(&arg(0)).unwrap() {
+    match term_to_lnterm(&arg(0), &msig).unwrap() {
         Term::App(FunSym::Ac(AcSym::AcFct(sym)), _) => {
             assert_eq!(String::from_utf8_lossy(sym.name), "add");
             assert_eq!(sym.privacy, Privacy::Public);
@@ -107,7 +56,7 @@ fn installed_bundle_resolves_every_attribute_in_term_to_lnterm() {
 
     // `private` set: a bare name declared `/0` is a 0-arity private
     // constant, not a free variable.
-    match term_to_lnterm(&arg(1)).unwrap() {
+    match term_to_lnterm(&arg(1), &msig).unwrap() {
         Term::App(FunSym::NoEq(sym), args) => {
             assert!(args.is_empty());
             assert_eq!(sym.arity, 0);
@@ -118,7 +67,7 @@ fn installed_bundle_resolves_every_attribute_in_term_to_lnterm() {
 
     // `destructor` set + `unary` set: the surplus arguments fold into one
     // pair, and the symbol is a destructor.
-    match term_to_lnterm(&arg(2)).unwrap() {
+    match term_to_lnterm(&arg(2), &msig).unwrap() {
         Term::App(FunSym::NoEq(sym), args) => {
             assert_eq!(sym.arity, 1);
             assert_eq!(args.len(), 1, "arity-1 fold should pair the arguments");
@@ -127,18 +76,100 @@ fn installed_bundle_resolves_every_attribute_in_term_to_lnterm() {
         other => panic!("expected a destructor application, got {other:?}"),
     }
 
-    // `ndc` set.
-    match term_to_lnterm(&arg(3)).unwrap() {
+    // `[NDC]`.
+    match term_to_lnterm(&arg(3), &msig).unwrap() {
         Term::App(FunSym::NoEq(sym), _) => assert_eq!(sym.ndc, NdcState::IsNdc),
         other => panic!("expected an NDC application, got {other:?}"),
     }
 }
 
-/// The arity-1 fold in `term_to_vterm` uses a hardcoded list of builtin
-/// names.  The list is deliberate, because a fold that takes the list from the signature regresses
-/// the corpus.  The fold is therefore only as good as the membership of the
-/// list.  Every name on the list must fold surplus comma-separated arguments
-/// into one right-associative pair.  This mirrors the `k == 1` branch of HS
+/// A name declared both `[AC]` and free carries TWO symbols with their own
+/// attributes (`stACFunSyms` and `stFunSyms`, Term/Maude/Signature.hs:97-98).
+/// `lookupArity`'s list search reaches the free one first, so the prefix
+/// spelling `f(a, b)` is the free symbol, while `acterm` builds the infix
+/// spelling `(a f b)` straight from `stACFunSyms`
+/// (Theory/Text/Parser/Term.hs:60-71,165-172).
+#[test]
+fn a_name_declared_twice_resolves_prefix_free_and_infix_ac() {
+    use tamarin_term::function_symbols::{AcSym, FunSym};
+
+    let src = "theory T begin\n\
+                   functions: f/2 [AC, destructor], f/2\n\
+                   rule R: [ ] --> [ Out(f(x, y)), Out((x f y)) ]\n\
+                   end";
+    let thy = parse_theory(src, &[]).unwrap();
+    let msig = theory_msig(src);
+    let concs = &thy
+        .items
+        .iter()
+        .find_map(|i| match i {
+            p::TheoryItem::Rule(r) => Some(r),
+            _ => None,
+        })
+        .unwrap()
+        .conclusions;
+
+    match term_to_lnterm(&concs[0].args[0], &msig).unwrap() {
+        Term::App(FunSym::NoEq(sym), args) => {
+            assert_eq!(String::from_utf8_lossy(sym.name), "f");
+            assert_eq!(args.len(), 2);
+            assert_eq!(sym.constructability, Constructability::Constructor);
+        }
+        other => panic!("expected the free application, got {other:?}"),
+    }
+    match term_to_lnterm(&concs[1].args[0], &msig).unwrap() {
+        Term::App(FunSym::Ac(AcSym::AcFct(sym)), _) => {
+            assert_eq!(String::from_utf8_lossy(sym.name), "f");
+            assert_eq!(sym.constructability, Constructability::Destructor);
+        }
+        other => panic!("expected the AC application, got {other:?}"),
+    }
+}
+
+/// `em(a, b)` is the bilinear-pairing C symbol (HS `naryOpApp`'s
+/// `o == emapSymString` arm, Theory/Text/Parser/Term.hs:102-103).  HS applies
+/// that arm with no builtin gate; the port gates it on the builtin, because
+/// the Maude operator `tamem` is declared only under `enableBP` and a term
+/// carrying it without the builtin crashes the first `get variants` query.
+/// Without the builtin, `em` is an ordinary free symbol.
+#[test]
+fn em_is_the_emap_symbol_only_under_bilinear_pairing() {
+    use tamarin_term::function_symbols::{CSym, FunSym};
+
+    let rule = "rule R: [ ] --> [ Out(em(x, y)) ]\n";
+    let term = |src: &str| {
+        parse_theory(src, &[])
+            .unwrap()
+            .items
+            .iter()
+            .find_map(|i| match i {
+                p::TheoryItem::Rule(r) => Some(r.conclusions[0].args[0].clone()),
+                _ => None,
+            })
+            .unwrap()
+    };
+
+    let bp_src = format!("theory T begin\nbuiltins: bilinear-pairing\n{rule}end");
+    match term_to_lnterm(&term(&bp_src), &theory_msig(&bp_src)).unwrap() {
+        Term::App(FunSym::C(CSym::EMap), args) => assert_eq!(args.len(), 2),
+        other => panic!("expected an EMap application, got {other:?}"),
+    }
+
+    let plain_src = format!("theory T begin\n{rule}end");
+    match term_to_lnterm(&term(&plain_src), &theory_msig(&plain_src)).unwrap() {
+        Term::App(FunSym::NoEq(sym), args) => {
+            assert_eq!(String::from_utf8_lossy(sym.name), "em");
+            assert_eq!(args.len(), 2);
+        }
+        other => panic!("expected a free application, got {other:?}"),
+    }
+}
+
+/// The arity-1 fold in `term_to_vterm` names the builtin unary symbols in a
+/// written-out list, because widening it to the whole signature regresses the
+/// corpus.  The fold is therefore only as good as the membership of that
+/// list.  Every name on it must fold surplus comma-separated arguments into
+/// one right-associative pair, mirroring the `k == 1` branch of HS
 /// `naryOpApp` (Theory/Text/Parser/Term.hs:94-96).  A builtin that genuinely
 /// takes several arguments must not fold.  The corpus exercises `h` alone.
 /// The other names (`inv`/`pk` and the revealing-signing and
@@ -150,8 +181,11 @@ fn hardcoded_unary_builtins_fold_surplus_arguments() {
 
     let a = parser_var("a", 0, LSort::Msg);
     let b = parser_var("b", 0, LSort::Msg);
-    let a_b_pair =
-        tamarin_term::builtin::pair(term_to_lnterm(&a).unwrap(), term_to_lnterm(&b).unwrap());
+    let msig = pair_maude_sig();
+    let a_b_pair = tamarin_term::builtin::pair(
+        term_to_lnterm(&a, &msig).unwrap(),
+        term_to_lnterm(&b, &msig).unwrap(),
+    );
     for name in [
         "h",
         "fst",
@@ -163,7 +197,7 @@ fn hardcoded_unary_builtins_fold_surplus_arguments() {
         "report",
     ] {
         let t = p::Term::App(name.into(), vec![a.clone(), b.clone()]);
-        match term_to_lnterm(&t).unwrap() {
+        match term_to_lnterm(&t, &msig).unwrap() {
             Term::App(FunSym::NoEq(sym), args) => {
                 assert_eq!(String::from_utf8_lossy(sym.name), name);
                 assert_eq!(sym.arity, 1, "{name}: the symbol stays arity-1");
@@ -178,7 +212,7 @@ fn hardcoded_unary_builtins_fold_surplus_arguments() {
     }
     // `senc` genuinely takes 2 arguments, so the fold must not change it.
     let senc = p::Term::App("senc".into(), vec![a, b]);
-    match term_to_lnterm(&senc).unwrap() {
+    match term_to_lnterm(&senc, &msig).unwrap() {
         Term::App(FunSym::NoEq(sym), args) => {
             assert_eq!(sym.arity, 2, "senc is not a unary builtin");
             assert_eq!(args.len(), 2);
@@ -205,7 +239,7 @@ fn diff_term_lowers_to_the_private_diff_symbol() {
     let y = parser_var("y", 0, LSort::Msg);
     let t = p::Term::Diff(Box::new(x), Box::new(y));
 
-    match term_to_lnterm(&t).unwrap() {
+    match term_to_lnterm(&t, &pair_maude_sig()).unwrap() {
         Term::App(FunSym::NoEq(sym), args) => {
             assert_eq!(args.len(), 2);
             assert_eq!(String::from_utf8_lossy(sym.name), "diff");
@@ -259,7 +293,7 @@ fn canonicalize_ac_in_pterm_flattens_and_sorts() {
     assert_eq!(canon, expected);
     // And the LNTerm-side via `term_to_lnterm` should produce the
     // flat sorted form (already byte-identical to HS).
-    let l = term_to_lnterm(&outer).unwrap();
+    let l = term_to_lnterm(&outer, &pair_maude_sig()).unwrap();
     assert_eq!(
         tamarin_term::pretty::pretty_lnterm(&l),
         "(~k\u{2295}~nb\u{2295}na)"
@@ -575,7 +609,7 @@ fn lnterm_to_term_inverts_term_to_lnterm() {
     ];
     for (label, surface, lnterm) in cases {
         assert_eq!(
-            term_to_lnterm(&surface).unwrap(),
+            term_to_lnterm(&surface, &pair_maude_sig()).unwrap(),
             lnterm,
             "{label}: term_to_lnterm"
         );

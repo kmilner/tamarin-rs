@@ -339,12 +339,10 @@ impl MaudeSig {
     /// Intentionally retained: faithful mirror of HS `userDefinedFunSyms`
     /// (Term/Maude/Signature.hs:163-164).  No call site in the port — HS calls
     /// it from the parser (Theory/Text/Parser/Macro.hs:43,
-    /// Theory/Text/Parser/Term.hs:65), whereas the port resolves operator
-    /// names from tables of its own: the infix `[AC]` levels off
-    /// `parser.rs::ac_fun_syms`, and `lookupArity`'s arity / privacy /
-    /// constructability / NDC off `elaborate.rs::CollectedUserFuns`.
-    /// [`MaudeSig::user_defined_st_fun_syms`] is the variant intruder-rule
-    /// generation uses.
+    /// Theory/Text/Parser/Term.hs:65), whereas the port answers the same
+    /// question through [`MaudeSig::fun_syms_by_name`], which allocates
+    /// nothing.  [`MaudeSig::user_defined_st_fun_syms`] is the variant
+    /// intruder-rule generation uses.
     pub fn user_defined_fun_syms(&self) -> UserDefinedSig {
         self.no_eq_fun_syms()
             .into_iter()

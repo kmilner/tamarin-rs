@@ -1723,17 +1723,9 @@ fn saturate_sources_with_simp_opt(
         // We build a per-task context with the pooled handle swapped
         // in via `ctx.with_swapped_maude(...)`.  The PooledMaude guard
         // releases back to the pool on drop at end of the closure.
-        // `refine_one_source` runs the solver (implied formulas, atom
-        // insertion), whose term conversions read the user-fun
-        // thread-locals — replicate the calling thread's sets onto each
-        // worker (a stolen thread outside any guard has EMPTY sets and
-        // would mis-elaborate user nullary/unary symbols).
-        let user_funs_snapshot = crate::elaborate::snapshot_user_funs();
         let per_source: Vec<(Vec<(Vec<String>, System)>, bool, usize)> = saturated_indexed
             .into_par_iter()
             .map(|(_i, src)| {
-                let _user_funs_guard =
-                    crate::elaborate::set_user_funs_from_collected(&user_funs_snapshot);
                 if let Some(pool) = &ctx.maude_pool {
                     let pooled = pool.acquire();
                     // Give the worker a FRESH counter (not the pooled handle's

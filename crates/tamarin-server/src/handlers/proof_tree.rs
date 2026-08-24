@@ -100,18 +100,6 @@ pub struct ProofState {
     /// every display / method-index site to override the shared ctx's
     /// `use_induction` + `heuristic` for the lemma being ranked.
     pub lemma_settings: Arc<BTreeMap<String, LemmaSearchSettings>>,
-    /// User-declared function-symbol name sets for this theory.
-    /// `term_to_lnterm` / `term_to_sapic_term` read a symbol's privacy,
-    /// constructability, NDC state and arity-1 fold through THREAD-LOCALS (HS
-    /// reads them from the signature in parser state, so its terms are born
-    /// carrying them).  The batch path installs them per proving thread
-    /// (prove.rs `_lemma_user_funs_guard`); web handlers run on arbitrary
-    /// tokio workers, so every handler that converts terms or executes solver
-    /// code MUST install a guard from this via `set_user_funs_from_collected`
-    /// first.  Without it a `[destructor]` symbol lowers as a constructor,
-    /// whose Maude operator (`tamXC…`) the theory module never declares, so
-    /// `get variants` comes back empty.
-    pub user_funs: Arc<tamarin_theory::elaborate::CollectedUserFuns>,
     /// Shared per-file prover session (batch `--prove`'s per-lemma-context
     /// factory).  The web `autoprove`/`autoproveAll` handlers run their
     /// searches through `prove_system_in_session`, which clones this
@@ -157,14 +145,6 @@ impl ProofState {
                 None => tamarin_theory::constraint::solver::context::CutStrategy::Dfs,
             },
         };
-        // Install the user-fn-symbol thread-locals for the WHOLE build —
-        // every term conversion below (restrictions, lemma formulas, reuse
-        // lemmas) reads the declared symbols' options through them.
-        // See the `user_funs` field docs.
-        let user_funs = std::sync::Arc::new(
-            tamarin_theory::elaborate::collect_user_funs_for_theory(parser_theory),
-        );
-        let _user_funs_guard = tamarin_theory::elaborate::set_user_funs_from_collected(&user_funs);
         let mut typed =
             elaborate(parser_theory).map_err(|e| format!("elaborate: {}", e.message))?;
         // Oracle-path base (HS Theory/Text/Parser.hs:309): a `heuristic: o "./oracle-…"`
@@ -427,19 +407,8 @@ impl ProofState {
             ctx: Arc::new(Mutex::new(ctx)),
             by_lemma: Arc::new(Mutex::new(by_lemma)),
             lemma_settings: Arc::new(lemma_settings),
-            user_funs,
             session,
         })
-    }
-
-    /// Install this theory's user-fn-symbol thread-locals on the CURRENT
-    /// thread.  Every handler that runs solver code (`exec_proof_method`,
-    /// `apply_at_path`, source saturation/refinement) or converts formulas
-    /// must hold the returned guard for the duration — web handlers run on
-    /// arbitrary tokio workers whose thread-locals start empty.  See the
-    /// `user_funs` field docs.
-    pub fn install_user_funs(&self) -> tamarin_theory::elaborate::UserFunsForTheoryGuard {
-        tamarin_theory::elaborate::set_user_funs_from_collected(&self.user_funs)
     }
 
     /// Apply a `ProofMethod` at `path` in the lemma's proof tree.
@@ -451,10 +420,6 @@ impl ProofState {
         path: &[String],
         method: ProofMethod,
     ) -> Result<NodeStatus, String> {
-        // `exec_proof_method` runs solver code that resolves user fun
-        // symbols via thread-locals — install them for this call (web
-        // handlers run on arbitrary tokio workers).
-        let _user_funs_guard = self.install_user_funs();
         let ctx_guard = self.ctx.lock();
         let mut by_lemma = self.by_lemma.lock();
         let lp = by_lemma
@@ -574,7 +539,6 @@ impl ProofState {
             by_lemma: Arc::new(Mutex::new(clone)),
             // Share the immutable per-lemma settings map (same theory).
             lemma_settings: self.lemma_settings.clone(),
-            user_funs: self.user_funs.clone(),
             // Share the prover session (same theory; per-lemma contexts
             // are cloned out of its template per search, so sharing is
             // mutation-free apart from the internal source cache).

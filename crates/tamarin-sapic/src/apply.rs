@@ -18,6 +18,7 @@
 
 use tamarin_parser::ast as p;
 use tamarin_parser::wf::WfError;
+use tamarin_term::maude_sig::MaudeSig;
 
 use tamarin_theory::elaborate::ElabError;
 use tamarin_theory::rule::ProtoRuleE;
@@ -46,6 +47,7 @@ use crate::typing::{collect_user_fun_typings, type_and_rename_process};
 /// The inlining error is handed back unwrapped: callers word it differently.
 pub fn sapic_pre_report(
     parsed: &p::Theory,
+    sig: &MaudeSig,
 ) -> Result<Option<(Vec<WfError>, PlainProcess)>, ConvertError> {
     let top = parsed.items.iter().find_map(|i| match i {
         p::TheoryItem::TopLevelProcess(proc) => Some(proc.clone()),
@@ -59,7 +61,7 @@ pub fn sapic_pre_report(
     // parse time (`Theory.Text.Parser.Sapic.actionprocess`); we do it here,
     // resolving every `Call` against the theory's `ProcessDef`s.
     let defs = collect_process_defs(parsed);
-    let plain = convert_process_with_defs(&top, &defs)?;
+    let plain = convert_process_with_defs(&top, &defs, sig)?;
     Ok(Some((crate::warnings::check_wellformedness(&plain), plain)))
 }
 
@@ -89,9 +91,10 @@ pub fn apply_sapic(
     // report is returned to the caller and translation proceeds regardless
     // (these are warnings, not hard errors).  `is_sapic` set with no
     // `TopLevelProcess` is a defensive no-op.
-    let Some((wf_report, plain)) = sapic_pre_report(parsed).map_err(|e| ElabError {
-        message: format!("SAPIC translation: {}", e.message),
-    })?
+    let Some((wf_report, plain)) = sapic_pre_report(parsed, &elaborated.signature.maude_sig)
+        .map_err(|e| ElabError {
+            message: format!("SAPIC translation: {}", e.message),
+        })?
     else {
         return Ok(Vec::new());
     };
@@ -224,7 +227,7 @@ pub fn apply_sapic(
         // LNFacts and pair it with the original `ProtoRuleE`'s info (which holds
         // the SAPIC attributes + name).  Re-elaborating the whole body keeps the
         // appended `Restr_*` actions byte-faithful to the parsed rule.
-        let elab_rule = reelaborate_rule_body(rule, &rewritten)?;
+        let elab_rule = reelaborate_rule_body(rule, &rewritten, &elaborated.signature.maude_sig)?;
         elaborated
             .items
             .push(TheoryItem::Rule(OpenProtoRule::new(elab_rule)));
@@ -278,22 +281,23 @@ pub fn apply_sapic(
 fn reelaborate_rule_body(
     original: &ProtoRuleE,
     rewritten: &p::Rule,
+    sig: &MaudeSig,
 ) -> Result<ProtoRuleE, ElabError> {
     use tamarin_theory::elaborate::fact_to_lnfact;
     let prems = rewritten
         .premises
         .iter()
-        .map(fact_to_lnfact)
+        .map(|f| fact_to_lnfact(f, sig))
         .collect::<Result<Vec<_>, _>>()?;
     let acts = rewritten
         .actions
         .iter()
-        .map(fact_to_lnfact)
+        .map(|f| fact_to_lnfact(f, sig))
         .collect::<Result<Vec<_>, _>>()?;
     let concs = rewritten
         .conclusions
         .iter()
-        .map(fact_to_lnfact)
+        .map(|f| fact_to_lnfact(f, sig))
         .collect::<Result<Vec<_>, _>>()?;
     let new_vars = crate::facts::compute_new_vars(&prems, &concs, &acts);
     Ok(

@@ -25,6 +25,7 @@ use std::collections::BTreeSet;
 
 use tamarin_parser::ast as p;
 use tamarin_term::lterm::LVar;
+use tamarin_term::maude_sig::MaudeSig;
 use tamarin_theory::elaborate::{fact_to_sapic_fact, term_to_sapic_term};
 use tamarin_theory::macro_expand::map_formula_terms;
 use tamarin_theory::sapic::{
@@ -241,23 +242,29 @@ pub(crate) fn fold_free_vars(formula: &p::Formula, f: &mut dyn FnMut(&p::VarSpec
     cf(&mut bound, f, formula);
 }
 
-pub(crate) fn term(t: &p::Term) -> Result<tamarin_theory::sapic::SapicTerm, ConvertError> {
-    term_to_sapic_term(t)
+pub(crate) fn term(
+    t: &p::Term,
+    sig: &MaudeSig,
+) -> Result<tamarin_theory::sapic::SapicTerm, ConvertError> {
+    term_to_sapic_term(t, sig)
         .ok_or_else(|| ConvertError::new("could not convert SAPIC term (pattern term?)"))
 }
 
-fn fact(f: &p::Fact) -> Result<tamarin_theory::sapic::SapicLNFact, ConvertError> {
-    fact_to_sapic_fact(f).map_err(|e| ConvertError::new(e.message))
+fn fact(f: &p::Fact, sig: &MaudeSig) -> Result<tamarin_theory::sapic::SapicLNFact, ConvertError> {
+    fact_to_sapic_fact(f, sig).map_err(|e| ConvertError::new(e.message))
 }
 
 /// Convert a parser action into a theory `SapicAction<SapicLVar>`.
-pub(crate) fn action(a: &p::SapicAction) -> Result<SapicAction<SapicLVar>, ConvertError> {
+pub(crate) fn action(
+    a: &p::SapicAction,
+    sig: &MaudeSig,
+) -> Result<SapicAction<SapicLVar>, ConvertError> {
     match a {
         p::SapicAction::New(v) => Ok(SapicAction::New(varspec_to_sapic(v))),
-        p::SapicAction::Event(f) => Ok(SapicAction::Event(fact(f)?)),
+        p::SapicAction::Event(f) => Ok(SapicAction::Event(fact(f, sig)?)),
         p::SapicAction::ChOut { chan, msg } => Ok(SapicAction::ChOut {
-            chan: chan.as_ref().map(term).transpose()?,
-            msg: term(msg)?,
+            chan: chan.as_ref().map(|c| term(c, sig)).transpose()?,
+            msg: term(msg, sig)?,
         }),
         p::SapicAction::ChIn { chan, msg } => {
             // The surface `in(c, pat)` parser stores the pattern with `=t`
@@ -266,9 +273,9 @@ pub(crate) fn action(a: &p::SapicAction) -> Result<SapicAction<SapicLVar>, Conve
             // message term and splits the matched variables out into `match_vars`.
             // We reuse the same `unpattern`/`extractMatchingVariables` helper used
             // for `let` patterns.
-            let (msg_unpat, match_vars) = convert_let_pattern(msg)?;
+            let (msg_unpat, match_vars) = convert_let_pattern(msg, sig)?;
             Ok(SapicAction::ChIn {
-                chan: chan.as_ref().map(term).transpose()?,
+                chan: chan.as_ref().map(|c| term(c, sig)).transpose()?,
                 msg: msg_unpat,
                 match_vars,
             })
@@ -276,13 +283,13 @@ pub(crate) fn action(a: &p::SapicAction) -> Result<SapicAction<SapicLVar>, Conve
         // Mutable state: `insert t1 v` / `delete t`.  These map to the
         // theory `SapicAction::{Insert,Delete}` (Sapic/Process.hs:72-73), translated by
         // `baseTransAction` Insert/Delete (Basetranslation.hs:177-184).
-        p::SapicAction::Insert(t1, t2) => Ok(SapicAction::Insert(term(t1)?, term(t2)?)),
-        p::SapicAction::Delete(t) => Ok(SapicAction::Delete(term(t)?)),
+        p::SapicAction::Insert(t1, t2) => Ok(SapicAction::Insert(term(t1, sig)?, term(t2, sig)?)),
+        p::SapicAction::Delete(t) => Ok(SapicAction::Delete(term(t, sig)?)),
         // Locks: `lock t` / `unlock t` → theory `SapicAction::{Lock,Unlock}`
         // (Sapic/Process.hs:74-75), annotated by `Sapic.Locks.annotateLocks` and
         // translated by `baseTransAction` Lock/Unlock (Basetranslation.hs:185-194).
-        p::SapicAction::Lock(t) => Ok(SapicAction::Lock(term(t)?)),
-        p::SapicAction::Unlock(t) => Ok(SapicAction::Unlock(term(t)?)),
+        p::SapicAction::Lock(t) => Ok(SapicAction::Lock(term(t, sig)?)),
+        p::SapicAction::Unlock(t) => Ok(SapicAction::Unlock(term(t, sig)?)),
         // Embedded MSR rule `[l]--[a]->[r]` (optionally with `restricting φ`).
         // HS (Parser/Sapic.hs:154-160):
         //   let matchVars = foldMap (foldMap extractMatchingVariables) l
@@ -302,16 +309,16 @@ pub(crate) fn action(a: &p::SapicAction) -> Result<SapicAction<SapicLVar>, Conve
             // Premises: unpattern + collect match-vars.
             let prems_c = prems
                 .iter()
-                .map(|f| fact_unpattern(f, Some(&mut match_vars)))
+                .map(|f| fact_unpattern(f, sig, Some(&mut match_vars)))
                 .collect::<Result<Vec<_>, _>>()?;
             // Actions / conclusions: unpattern only (no match-var collection).
             let acts_c = acts
                 .iter()
-                .map(|f| fact_unpattern(f, None))
+                .map(|f| fact_unpattern(f, sig, None))
                 .collect::<Result<Vec<_>, _>>()?;
             let concs_c = concs
                 .iter()
-                .map(|f| fact_unpattern(f, None))
+                .map(|f| fact_unpattern(f, sig, None))
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(SapicAction::Msr {
                 prems: prems_c,
@@ -330,6 +337,7 @@ pub(crate) fn action(a: &p::SapicAction) -> Result<SapicAction<SapicLVar>, Conve
 /// records each matched variable.  Mirrors `convert_let_pattern` but for a fact.
 fn fact_unpattern(
     f: &p::Fact,
+    sig: &MaudeSig,
     mut match_vars: Option<&mut BTreeSet<SapicLVar>>,
 ) -> Result<tamarin_theory::sapic::SapicLNFact, ConvertError> {
     let mut sink = BTreeSet::new();
@@ -339,7 +347,7 @@ fn fact_unpattern(
         .map(|t| strip_pat_match(t, match_vars.as_deref_mut().unwrap_or(&mut sink)))
         .collect();
     let f2 = p::Fact { args, ..f.clone() };
-    fact(&f2)
+    fact(&f2, sig)
 }
 
 /// HS `g = fmap (fmap unpatternVar)` over an embedded restriction formula
@@ -356,12 +364,15 @@ fn formula_unpattern(f: &p::Formula) -> p::Formula {
 /// (`Theory.Text.Parser.Sapic`): `Parallel`/`Ndc` are nullary; `if t1 = t2`
 /// becomes `CondEq t1 t2`; `if frml` becomes `Cond frml`; `lookup`/`let`
 /// become `Lookup`/`Let`.
-pub(crate) fn combinator(c: &p::ProcessComb) -> Result<ProcessCombinator<SapicLVar>, ConvertError> {
+pub(crate) fn combinator(
+    c: &p::ProcessComb,
+    sig: &MaudeSig,
+) -> Result<ProcessCombinator<SapicLVar>, ConvertError> {
     match c {
         p::ProcessComb::Parallel => Ok(ProcessCombinator::Parallel),
         p::ProcessComb::Ndc => Ok(ProcessCombinator::Ndc),
         p::ProcessComb::Cond(p::Condition::Eq(t1, t2)) => {
-            Ok(ProcessCombinator::CondEq(term(t1)?, term(t2)?))
+            Ok(ProcessCombinator::CondEq(term(t1, sig)?, term(t2, sig)?))
         }
         // `if <formula> then .. else ..`.  HS `Cond (SapicNFormula v)`;
         // the RS `Cond` carries the un-expanded parser-AST formula directly (see
@@ -371,17 +382,18 @@ pub(crate) fn combinator(c: &p::ProcessComb) -> Result<ProcessCombinator<SapicLV
         p::ProcessComb::Cond(p::Condition::Formula(f)) => Ok(ProcessCombinator::Cond(f.clone())),
         // `lookup t as v in .. else ..`.  HS `Lookup (SapicNTerm v) v`
         // (Sapic/Process.hs:95).
-        p::ProcessComb::Lookup(t, v) => {
-            Ok(ProcessCombinator::Lookup(term(t)?, varspec_to_sapic(v)))
-        }
+        p::ProcessComb::Lookup(t, v) => Ok(ProcessCombinator::Lookup(
+            term(t, sig)?,
+            varspec_to_sapic(v),
+        )),
         // `let pat = value in P [else Q]`.  HS
         // `ProcessComb (Let (unpattern t1) t2 (extractMatchingVariables t1))`
         // (Parser/Sapic.hs:268-269).  The parser-AST pattern `pat` may contain
         // `=t` (`PatMatch`) match markers; we split them out into `match_vars`
         // and `unpattern` the rest into the `left` term.
         p::ProcessComb::Let { pat, value } => {
-            let (left, match_vars) = convert_let_pattern(pat)?;
-            let right = term(value)?;
+            let (left, match_vars) = convert_let_pattern(pat, sig)?;
+            let right = term(value, sig)?;
             Ok(ProcessCombinator::Let {
                 left,
                 right,
@@ -398,10 +410,11 @@ pub(crate) fn combinator(c: &p::ProcessComb) -> Result<ProcessCombinator<SapicLV
 /// `unpattern = fmap (fmap unpatternVar)` drops the bind/match tag.
 fn convert_let_pattern(
     pat: &p::Term,
+    sig: &MaudeSig,
 ) -> Result<(tamarin_theory::sapic::SapicTerm, BTreeSet<SapicLVar>), ConvertError> {
     let mut match_vars: BTreeSet<SapicLVar> = BTreeSet::new();
     let unpatterned = strip_pat_match(pat, &mut match_vars);
-    let left = term(&unpatterned)?;
+    let left = term(&unpatterned, sig)?;
     Ok((left, match_vars))
 }
 
@@ -452,19 +465,19 @@ fn strip_pat_match(t: &p::Term, match_vars: &mut BTreeSet<SapicLVar>) -> p::Term
 /// Convert a parser process into a `PlainProcess`.  Each node carries an empty
 /// [`ProcessParsedAnnotation`]; names/back-substitution are filled in by later
 /// passes (`propagate_names`, `rename_unique`).
-pub fn convert_process(proc: &p::Process) -> Result<PlainProcess, ConvertError> {
+pub fn convert_process(proc: &p::Process, sig: &MaudeSig) -> Result<PlainProcess, ConvertError> {
     let ann = ProcessParsedAnnotation::empty();
     match proc {
         p::Process::Null => Ok(Process::Null(ann)),
         p::Process::Action { action: act, body } => Ok(Process::Action(
-            action(act)?,
+            action(act, sig)?,
             ann,
-            Box::new(convert_process(body)?),
+            Box::new(convert_process(body, sig)?),
         )),
         p::Process::Comb { comb, left, right } => {
-            let l = Box::new(convert_process(left)?);
-            let r = Box::new(convert_process(right)?);
-            let c = combinator(comb)?;
+            let l = Box::new(convert_process(left, sig)?);
+            let r = Box::new(convert_process(right, sig)?);
+            let c = combinator(comb, sig)?;
             Ok(Process::Comb(c, ann, l, r))
         }
         // `!P` parses to `ProcessAction Rep mempty P` in HS
@@ -473,7 +486,7 @@ pub fn convert_process(proc: &p::Process) -> Result<PlainProcess, ConvertError> 
         p::Process::Replication(body) => Ok(Process::Action(
             SapicAction::Rep,
             ann,
-            Box::new(convert_process(body)?),
+            Box::new(convert_process(body, sig)?),
         )),
         p::Process::Call { .. } => {
             // Process-call inlining requires the theory's process-definition
@@ -486,7 +499,7 @@ pub fn convert_process(proc: &p::Process) -> Result<PlainProcess, ConvertError> 
         }
         p::Process::AtAnnotation(inner, _) => {
             // Location annotation (`@ loc`) — drop the location and descend.
-            convert_process(inner)
+            convert_process(inner, sig)
         }
     }
 }
@@ -495,6 +508,14 @@ pub fn convert_process(proc: &p::Process) -> Result<PlainProcess, ConvertError> 
 mod tests {
     use super::*;
     use tamarin_term::lterm::LSort;
+    use tamarin_term::maude_sig::pair_maude_sig;
+
+    /// The signature a def-less conversion runs against: `minimalMaudeSig`
+    /// (`pairFunSig`, Term/Maude/Signature.hs:224-226), which every theory
+    /// carries.
+    fn msig() -> MaudeSig {
+        pair_maude_sig()
+    }
 
     #[test]
     fn convert_new_event_out_chain() {
@@ -535,7 +556,7 @@ mod tests {
             action: p::SapicAction::New(xspec),
             body: Box::new(evt),
         };
-        let conv = convert_process(&top).unwrap();
+        let conv = convert_process(&top, &msig()).unwrap();
         // The complete spine converts. `New` carries the SAPIC type. The
         // event fact comes next. Then comes the out with the nested `f(f(x))`
         // payload.
@@ -598,7 +619,7 @@ mod tests {
                 left: Box::new(event("A")),
                 right: Box::new(event("B")),
             };
-            let Process::Comb(got, _, l, r) = convert_process(&src).unwrap() else {
+            let Process::Comb(got, _, l, r) = convert_process(&src, &msig()).unwrap() else {
                 panic!("expected a combinator for {want:?}");
             };
             assert_eq!(got, want);
@@ -613,7 +634,8 @@ mod tests {
         let rep = p::Process::Replication(Box::new(event("A")));
         // `!P` becomes `Rep`. The replicated body is the only child of `Rep`.
         // The body must stay. The usual `0` must not replace it.
-        let Process::Action(SapicAction::Rep, _, body) = convert_process(&rep).unwrap() else {
+        let Process::Action(SapicAction::Rep, _, body) = convert_process(&rep, &msig()).unwrap()
+        else {
             panic!("expected a Rep action");
         };
         let Process::Action(SapicAction::Event(f), _, _) = *body else {
@@ -637,14 +659,14 @@ mod tests {
             right: Box::new(p::Process::Null),
         };
         let Process::Comb(ProcessCombinator::CondEq(l, r), _, then, els) =
-            convert_process(&cond).unwrap()
+            convert_process(&cond, &msig()).unwrap()
         else {
             panic!("expected a CondEq combinator");
         };
         // Both sides of `t1 = t2` convert, and they keep their order. The then
         // arm and the else arm stay on their own sides.
-        assert_eq!(l, term(&a).unwrap());
-        assert_eq!(r, term(&b).unwrap());
+        assert_eq!(l, term(&a, &msig()).unwrap());
+        assert_eq!(r, term(&b, &msig()).unwrap());
         assert_eq!(child_event_name(&then), "E");
         assert!(matches!(*els, Process::Null(_)));
     }
@@ -666,7 +688,7 @@ mod tests {
             right: Box::new(p::Process::Null),
         };
         let Process::Comb(ProcessCombinator::Cond(got), _, then, _) =
-            convert_process(&cond).unwrap()
+            convert_process(&cond, &msig()).unwrap()
         else {
             panic!("expected a Cond combinator");
         };
@@ -691,11 +713,11 @@ mod tests {
             right: Box::new(p::Process::Null),
         };
         let Process::Comb(ProcessCombinator::Lookup(t, v), _, found, notfound) =
-            convert_process(&lookup).unwrap()
+            convert_process(&lookup, &msig()).unwrap()
         else {
             panic!("expected a Lookup combinator");
         };
-        assert_eq!(t, term(&cell).unwrap());
+        assert_eq!(t, term(&cell, &msig()).unwrap());
         // `lookup t as v` binds `v` and keeps its SAPIC type. A bare
         // variable is message-sorted.
         assert_eq!(v.var.name, "v");
@@ -783,13 +805,13 @@ mod tests {
                 body: Box::new(p::Process::Null),
             }),
         };
-        let key = term(&p::Term::PubLit("k".into())).unwrap();
-        let conv = convert_process(&ins).unwrap();
+        let key = term(&p::Term::PubLit("k".into()), &msig()).unwrap();
+        let conv = convert_process(&ins, &msig()).unwrap();
         let Process::Action(SapicAction::Insert(k, v), _, body) = conv else {
             panic!("expected Insert at the top");
         };
         assert_eq!(k, key);
-        assert_eq!(v, term(&p::Term::PubLit("v".into())).unwrap());
+        assert_eq!(v, term(&p::Term::PubLit("v".into()), &msig()).unwrap());
         // The `delete` below it also converts. It keeps its key term.
         let Process::Action(SapicAction::Delete(dk), _, _) = *body else {
             panic!("expected Delete under the Insert");
@@ -883,7 +905,7 @@ mod tests {
             },
             _,
             _,
-        ) = convert_process(&msr).unwrap()
+        ) = convert_process(&msr, &msig()).unwrap()
         else {
             panic!("expected an Msr action");
         };
@@ -897,16 +919,16 @@ mod tests {
         // that the removal reaches.
         assert_eq!(
             prems[0].terms.to_vec(),
-            vec![term(&deep(pvar("x", None))).unwrap()],
+            vec![term(&deep(pvar("x", None)), &msig()).unwrap()],
             "the premise keeps its shape with the `=` marker removed"
         );
         assert_eq!(
             acts[0].terms.to_vec(),
-            vec![term(&pvar("z", None)).unwrap()]
+            vec![term(&pvar("z", None), &msig()).unwrap()]
         );
         assert_eq!(
             concs[0].terms.to_vec(),
-            vec![term(&pvar("w", None)).unwrap()]
+            vec![term(&pvar("w", None), &msig()).unwrap()]
         );
         assert!(rest.is_empty());
     }
@@ -958,7 +980,7 @@ mod tests {
             },
             _,
             _,
-        ) = convert_process(&msr).unwrap()
+        ) = convert_process(&msr, &msig()).unwrap()
         else {
             panic!("expected an Msr action");
         };
@@ -1008,15 +1030,15 @@ mod tests {
             _,
             _,
             _,
-        ) = convert_process(&lt).unwrap()
+        ) = convert_process(&lt, &msig()).unwrap()
         else {
             panic!("expected a Let combinator");
         };
-        assert_eq!(left, term(&plain).unwrap(), "`unpattern t1`");
+        assert_eq!(left, term(&plain, &msig()).unwrap(), "`unpattern t1`");
         assert_eq!(match_vars, want_vars, "`extractMatchingVariables t1`");
         // The right-hand side is a `sapicterm`, not a pattern. The conversion
         // leaves it unchanged.
-        assert_eq!(right, term(&p::Term::PubLit("v".into())).unwrap());
+        assert_eq!(right, term(&p::Term::PubLit("v".into()), &msig()).unwrap());
 
         let chin = p::Process::Action {
             action: p::SapicAction::ChIn {
@@ -1033,12 +1055,15 @@ mod tests {
             },
             _,
             _,
-        ) = convert_process(&chin).unwrap()
+        ) = convert_process(&chin, &msig()).unwrap()
         else {
             panic!("expected a ChIn action");
         };
-        assert_eq!(chan, Some(term(&p::Term::PubLit("c".into())).unwrap()));
-        assert_eq!(msg, term(&plain).unwrap(), "`unpattern pt`");
+        assert_eq!(
+            chan,
+            Some(term(&p::Term::PubLit("c".into()), &msig()).unwrap())
+        );
+        assert_eq!(msg, term(&plain, &msig()).unwrap(), "`unpattern pt`");
         assert_eq!(match_vars, want_vars, "`extractMatchingVariables pt`");
     }
 }

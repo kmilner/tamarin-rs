@@ -84,32 +84,6 @@ pub struct TheoryEntry {
     pub proof_state: Option<Arc<ProofState>>,
 }
 
-impl TheoryEntry {
-    /// Install this theory's user-declared function-symbol sets into the
-    /// calling thread's thread-locals, returning an RAII guard that restores
-    /// the previous values on drop.
-    ///
-    /// Request handlers run on axum worker threads, whose sets start EMPTY;
-    /// the renderers they reach read a declared symbol's privacy,
-    /// constructability, NDC state and arity-1 fold from those thread-locals
-    /// (`term_to_lnterm` / `term_to_sapic_term`).  Unset, a `[destructor]`
-    /// symbol lowers as a constructor, whose Maude operator the theory module
-    /// never declares.
-    ///
-    /// Uses the [`ProofState`]'s cached sets when the proof state is built,
-    /// and re-collects them from the parser theory otherwise.
-    ///
-    /// The per-theory handlers install this at their boundary, on the lookup
-    /// that puts the entry in hand (`handlers::theory::load_theory`); the
-    /// renderers reached from there install again and nest harmlessly.
-    pub fn install_user_funs(&self) -> tamarin_theory::elaborate::UserFunsForTheoryGuard {
-        match &self.proof_state {
-            Some(ps) => ps.install_user_funs(),
-            None => tamarin_theory::elaborate::set_user_funs_for_theory(&self.parser_theory),
-        }
-    }
-}
-
 #[derive(Clone, Debug)]
 pub enum TheoryOrigin {
     /// Loaded from a path on disk.
