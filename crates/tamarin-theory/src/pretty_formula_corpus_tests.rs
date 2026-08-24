@@ -11,9 +11,11 @@
 
 use super::*;
 use crate::elaborate::{canonicalize_ac_in_formula as canon, rewrite_arity1_formula};
-use crate::formula::{from_parser, to_lnformula};
+use crate::formula::{from_parser, sapic_from_parser, to_lnformula};
 use crate::macro_expand::apply_macros_formula;
+use crate::pretty_sapic::render_sapic;
 use crate::pretty_theory::{collect_macros, collect_predicates, expand_predicates_for_display};
+use crate::sapic::to_lformula;
 use rayon::prelude::*;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -29,10 +31,14 @@ const BEYOND_BUDGET: &[&str] = &[
     "sapic/deprecated/csf21-acc-unbounded/mixvote/mixvote_SmHh-multi-session-5-fixed.spthy",
 ];
 
-/// One formula to compare, tagged with where it came from.
+/// One formula to compare, tagged with where it came from.  `raw` is the
+/// formula as written, kept for the items a SAPIC process prints, whose
+/// internal form is built from the source text and not from `formula`'s
+/// AC-canonicalised copy.
 struct Item {
     label: String,
     formula: p::Formula,
+    raw: Option<p::Formula>,
 }
 
 /// The examples tree, or the override in `CORPUS_ROOT`.
@@ -61,8 +67,8 @@ fn spthy_files(root: &Path) -> Vec<PathBuf> {
 }
 
 /// SAPIC condition formulas and embedded-rule restrictions of a process,
-/// AC-canonicalised as `pretty_sapic` renders them (pretty_sapic.rs `Msr`
-/// and `Cond` arms).
+/// both as written and AC-canonicalised the way the `Msr` and `Cond` arms
+/// of `pretty_sapic` render them.
 fn process_formulas(proc_: &p::Process, label: &str, out: &mut Vec<Item>) {
     match proc_ {
         p::Process::Null | p::Process::Call { .. } => {}
@@ -72,6 +78,7 @@ fn process_formulas(proc_: &p::Process, label: &str, out: &mut Vec<Item>) {
                     out.push(Item {
                         label: format!("{label}/msr-restriction-{i}"),
                         formula: canon(f),
+                        raw: Some(f.clone()),
                     });
                 }
             }
@@ -82,6 +89,7 @@ fn process_formulas(proc_: &p::Process, label: &str, out: &mut Vec<Item>) {
                 out.push(Item {
                     label: format!("{label}/cond"),
                     formula: canon(f),
+                    raw: Some(f.clone()),
                 });
             }
             process_formulas(left, label, out);
@@ -108,11 +116,13 @@ fn theory_formulas(parsed: &p::Theory, arity1: &dyn Fn(&p::Formula) -> p::Formul
         out.push(Item {
             label: format!("{kind} {name}"),
             formula: header(f),
+            raw: None,
         });
         if !macros.is_empty() {
             out.push(Item {
                 label: format!("{kind} {name} (macros)"),
                 formula: header(&apply_macros_formula(&macros, f)),
+                raw: None,
             });
         }
     };
@@ -126,16 +136,19 @@ fn theory_formulas(parsed: &p::Theory, arity1: &dyn Fn(&p::Formula) -> p::Formul
             p::TheoryItem::AccLemma(al) => out.push(Item {
                 label: format!("acclemma {}", al.name),
                 formula: canon(&arity1(&al.formula)),
+                raw: None,
             }),
             p::TheoryItem::CaseTest(ct) => out.push(Item {
                 label: format!("casetest {}", ct.name),
                 formula: canon(&arity1(&ct.formula)),
+                raw: None,
             }),
             p::TheoryItem::Predicates(ps) => {
                 for pr in ps {
                     out.push(Item {
                         label: format!("predicate {}", pr.fact.name),
                         formula: arity1(&pr.formula),
+                        raw: None,
                     });
                 }
             }
@@ -220,6 +233,52 @@ fn file_phase(path: &Path, root: &Path) -> FileReport {
     rep
 }
 
+/// The corpus root, its `.spthy` files, the file-level phase over all of
+/// them and the pool that ran it.
+type Corpus = (PathBuf, Vec<PathBuf>, Vec<FileReport>, rayon::ThreadPool);
+
+/// Parse, lift, elaborate and collect the whole tree.  The parser and the
+/// Doc builders recurse along the input, and the web server renders on
+/// 64 MiB tokio threads (run.rs), so the workers get the same stacks.
+/// `None` when the root is missing and `TAM_ALLOW_NO_CORPUS=1` allows the
+/// skip.
+fn corpus_phase() -> Option<Corpus> {
+    let root = corpus_root();
+    if !root.is_dir() {
+        if std::env::var("TAM_ALLOW_NO_CORPUS").as_deref() == Ok("1") {
+            eprintln!("corpus: root {} missing, skipped", root.display());
+            return None;
+        }
+        panic!(
+            "corpus root {} missing; set TAM_ALLOW_NO_CORPUS=1 to skip",
+            root.display()
+        );
+    }
+    let files = spthy_files(&root);
+    let pool = rayon::ThreadPoolBuilder::new()
+        .stack_size(64 * 1024 * 1024)
+        .build()
+        .expect("rayon pool");
+    let reports: Vec<FileReport> = pool.install(|| {
+        files
+            .par_iter()
+            .map(|path| file_phase(path, &root))
+            .collect()
+    });
+    Some((root, files, reports, pool))
+}
+
+/// A comparison over the corpus is a net only while it covers the tree: a
+/// change that makes the parser, the lifting or the elaboration reject
+/// files has to fail here instead of shrinking the comparison.  The tree
+/// has 19 parser rejects in 1037 files.
+fn assert_corpus_covered(parsed: usize, files: usize) {
+    assert!(
+        parsed * 20 >= files * 19,
+        "only {parsed} of {files} files reached the comparison"
+    );
+}
+
 /// `(label, parser-AST render, locally-nameless render)` of one disagreement.
 type Mismatch = (String, String, String);
 
@@ -269,32 +328,10 @@ fn compare(item: &Item, msig: &tamarin_term::maude_sig::MaudeSig) -> Vec<Mismatc
 
 #[test]
 fn corpus_lnformula_doc_matches_ast_printer() {
-    let root = corpus_root();
-    if !root.is_dir() {
-        if std::env::var("TAM_ALLOW_NO_CORPUS").as_deref() == Ok("1") {
-            eprintln!("corpus: root {} missing, skipped", root.display());
-            return;
-        }
-        panic!(
-            "corpus root {} missing; set TAM_ALLOW_NO_CORPUS=1 to skip",
-            root.display()
-        );
-    }
-    let files = spthy_files(&root);
     let start = Instant::now();
-    // The parser and the Doc builders recurse along the input; the web
-    // server renders on 64 MiB tokio threads (run.rs), so the workers get
-    // the same.
-    let pool = rayon::ThreadPoolBuilder::new()
-        .stack_size(64 * 1024 * 1024)
-        .build()
-        .expect("rayon pool");
-    let reports: Vec<FileReport> = pool.install(|| {
-        files
-            .par_iter()
-            .map(|path| file_phase(path, &root))
-            .collect()
-    });
+    let Some((root, files, reports, pool)) = corpus_phase() else {
+        return;
+    };
     let count = |o: fn(&Outcome) -> bool| reports.iter().filter(|r| o(&r.outcome)).count();
     let parsed = count(|o| matches!(o, Outcome::Parsed));
     let skipped_listed = count(|o| matches!(o, Outcome::SkippedListed));
@@ -359,20 +396,134 @@ fn corpus_lnformula_doc_matches_ast_printer() {
     for (file, label, ast, ln) in &mismatches {
         eprintln!("MISMATCH {file}: {label}\n--- ast\n{ast}\n--- ln\n{ln}");
     }
-    // The comparison is a net only while it covers the tree: a change that
-    // makes the parser, the lifting or the elaboration reject files has to
-    // fail here instead of shrinking the comparison.  The tree has 11
-    // parser rejects in 1037 files.
-    assert!(
-        parsed * 20 >= files.len() * 19,
-        "only {parsed} of {} files reached the comparison",
-        files.len()
-    );
+    assert_corpus_covered(parsed, files.len());
     assert!(formulas > 0, "no formulas compared");
     assert!(
         mismatches.is_empty(),
         "{} mismatches; first: {:#?}",
         mismatches.len(),
         mismatches.iter().take(20).collect::<Vec<_>>()
+    );
+}
+
+/// A page width beyond any formula of the tree, so every `sep`, `fsep` and
+/// `fcat` takes its flat branch and the render is the whole formula on one
+/// line with no break inserted anywhere.  `Doc::one_line_render`, HughesPJ's
+/// `OneLineMode`, is a different string: it turns every break into exactly
+/// one space, including the `fcat` breaks a pair `<a, b>` and an AC
+/// application carry, where the flat layout has none.
+const FLAT_WIDTH: usize = 1 << 40;
+
+/// The two SAPIC assertions on one item, and whether the process printer's
+/// own width breaks the formula over more than one line.
+///
+/// A `Cond` and an embedded `_restrict` are parsed by `standardFormula
+/// sapicvar sapicnodevar` (Theory/Text/Parser/Sapic.hs:253-254), so
+/// [`sapic_from_parser`] is the instantiation that builds them, and the
+/// printer drops the type tags with `toLFormula` first
+/// (`prettySyntacticSapicFormula`, Theory/Sapic/Term.hs:174-175).  Dropping
+/// them has to land on the formula [`from_parser`] builds directly.  The
+/// render comparison is against [`pretty_formula`], which is always flat, so
+/// it runs at [`FLAT_WIDTH`] and compares content — AC operand order, atom
+/// shape, spelling — and not layout.
+fn compare_sapic(item: &Item, msig: &tamarin_term::maude_sig::MaudeSig) -> Result<bool, Mismatch> {
+    let raw = item
+        .raw
+        .as_ref()
+        .expect("a SAPIC item carries the formula as written");
+    let label = |what: &str| format!("{} [{what}]", item.label);
+    let sapic = match sapic_from_parser(raw, msig) {
+        Ok(f) => f,
+        Err(e) => return Err((label("sapic_from_parser"), String::new(), e.message)),
+    };
+    let ln = match from_parser(raw, msig) {
+        Ok(f) => f,
+        Err(e) => return Err((label("from_parser"), String::new(), e.message)),
+    };
+    let dropped = to_lformula(&sapic);
+    if dropped != ln {
+        return Err((
+            label("to_lformula"),
+            format!("{ln:?}"),
+            format!("{dropped:?}"),
+        ));
+    }
+    let doc = syntactic_lnformula_doc(&dropped);
+    let flat = doc.clone().render_with(FLAT_WIDTH, FLAT_WIDTH);
+    let ast = pretty_formula(&item.formula);
+    if flat != ast {
+        return Err((label("render"), ast, flat));
+    }
+    Ok(render_sapic(doc) != flat)
+}
+
+#[test]
+fn corpus_sapic_condition_render_matches_the_internal_printer() {
+    let start = Instant::now();
+    let Some((root, files, reports, pool)) = corpus_phase() else {
+        return;
+    };
+    let parsed = reports
+        .iter()
+        .filter(|r| matches!(r.outcome, Outcome::Parsed))
+        .count();
+    let work: Vec<(usize, &Item)> = reports
+        .iter()
+        .enumerate()
+        .flat_map(|(i, r)| {
+            r.items
+                .iter()
+                .filter(|it| it.raw.is_some())
+                .map(move |it| (i, it))
+        })
+        .collect();
+    let sapic_items = work.len();
+    let results: Vec<(usize, &Item, Result<bool, Mismatch>)> = pool.install(|| {
+        work.par_iter()
+            .map(|&(i, item)| (i, item, compare_sapic(item, &reports[i].msig)))
+            .collect()
+    });
+    let at = |i: usize, label: &str| format!("{}: {label}", rel(&files[i], &root).display());
+    let mismatches: Vec<String> = results
+        .iter()
+        .filter_map(|(i, _, r)| match r {
+            Err((label, expected, got)) => Some(format!(
+                "MISMATCH {}\n--- expected\n{expected}\n--- got\n{got}",
+                at(*i, label)
+            )),
+            Ok(_) => None,
+        })
+        .collect();
+    // The census, not an assertion: these are the items whose bytes move
+    // when the process printer renders the condition and each `_restrict`
+    // as a `Doc` at HS's own width instead of flat.
+    let wrapping: Vec<String> = results
+        .iter()
+        .filter_map(|(i, item, r)| match r {
+            Ok(true) => Some(at(*i, &item.label)),
+            _ => None,
+        })
+        .collect();
+    eprintln!(
+        "corpus sapic: files={} parsed={parsed} sapic_items={sapic_items} mismatches={} \
+         wrapping_items={} wall={:?}",
+        files.len(),
+        mismatches.len(),
+        wrapping.len(),
+        start.elapsed()
+    );
+    for item in &wrapping {
+        eprintln!("WRAPS {item}");
+    }
+    for m in &mismatches {
+        eprintln!("{m}");
+    }
+    assert_corpus_covered(parsed, files.len());
+    assert!(sapic_items > 0, "no SAPIC formulas compared");
+    assert!(
+        mismatches.is_empty(),
+        "{} mismatches; first: {}",
+        mismatches.len(),
+        mismatches[0]
     );
 }

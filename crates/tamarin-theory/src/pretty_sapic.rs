@@ -64,7 +64,7 @@ const SAPIC_RIBBON: usize = 67;
 /// Continuation lines carry the `nest`-driven indent verbatim — matching
 /// HS, which then string-concatenates the result with the surrounding action
 /// literals.
-fn render_sapic(d: Doc) -> String {
+pub(crate) fn render_sapic(d: Doc) -> String {
     d.render_with(SAPIC_LINE_LENGTH, SAPIC_RIBBON)
 }
 
