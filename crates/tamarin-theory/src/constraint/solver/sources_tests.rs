@@ -813,3 +813,48 @@ fn some_inst_system_keeps_the_seeded_vars_and_draws_in_hs_field_order() {
         vec![(mterm(98), mterm(99))]
     );
 }
+
+// =========================================================================
+// compute_rename_map
+// =========================================================================
+
+/// `renameDropNameHints` (Sources.hs:252-258) imports the system's variables
+/// in the order `instance HasFrees System` (System.hs:1832-1848) reaches
+/// them, which for a disjunction of the equation store is ascending
+/// `Ord LNSubstVFresh` — HS holds it as an `S.Set` (EquationStore.hs:116-121)
+/// and the set instance folds `S.toList` (LTerm.hs:898-901).  The port stores
+/// the disjunction as an insertion-ordered `Vec`, so a walk reading that
+/// `Vec` would hand the two substitutions' domain keys the opposite pair of
+/// indices, and two systems that differ only in insertion order would take
+/// different dedup keys.
+#[test]
+fn rename_map_walks_inner_conj_substs_in_ord_order() {
+    let mut sys = System::empty();
+    {
+        let es = sys.eq_store_mut();
+        es.conj = vec![EqDisj {
+            split_id: SplitId(0),
+            substs: vec![
+                SubstVFresh::from_list(vec![(mvar(2), mterm(3))]),
+                SubstVFresh::from_list(vec![(mvar(1), mterm(4))]),
+            ],
+        }];
+    }
+    let rename = compute_rename_map(&sys, &std::collections::BTreeSet::new());
+    assert_eq!(rename.get(&mvar(1)), Some(LVar::new("", LSort::Msg, 0)));
+    assert_eq!(rename.get(&mvar(2)), Some(LVar::new("", LSort::Msg, 1)));
+}
+
+/// The subterm store folds its negative subterms before its positive and
+/// solved ones (SubtermStore.hs:546-549), so a variable that occurs in a
+/// negative subterm alone is imported like any other and the dedup key
+/// carries its renamed identity.
+#[test]
+fn rename_map_counts_neg_subterms() {
+    let mut sys = System::empty();
+    sys.subterm_store_mut().neg_subterms =
+        SortedPairSet::rebuild_from(vec![(mterm(90), mterm(91))]);
+    let rename = compute_rename_map(&sys, &std::collections::BTreeSet::new());
+    assert_eq!(rename.get(&mvar(90)), Some(LVar::new("", LSort::Msg, 0)));
+    assert_eq!(rename.get(&mvar(91)), Some(LVar::new("", LSort::Msg, 1)));
+}

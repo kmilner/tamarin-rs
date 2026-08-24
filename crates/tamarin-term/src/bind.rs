@@ -103,6 +103,23 @@ impl Bindings {
     /// `LVar` that keeps `v`'s name and sort and takes its index from `fresh`
     /// under the name hint `v.name`; later calls return that same binding.
     pub fn import<M: MonadFresh>(&mut self, v: &LVar, fresh: &mut M) -> LVar {
+        self.import_named(v, v.name, fresh)
+    }
+
+    /// `renameDropNamehint` (Term/LTerm.hs:737-740): the same import under the
+    /// EMPTY name hint, so the binding keeps `v`'s sort and carries the empty
+    /// name.  Two variables that share an index and a sort but differ in name
+    /// stay two bindings, each with its own index, which is what lets a
+    /// comparison of the results ignore the name hints.
+    pub fn import_drop_namehint<M: MonadFresh>(&mut self, v: &LVar, fresh: &mut M) -> LVar {
+        self.import_named(v, "", fresh)
+    }
+
+    /// `importBinding mkR v name` (Control/Monad/Bind.hs:125-140) where `mkR`
+    /// builds an `LVar` from the hint and the drawn index under `v`'s sort: the
+    /// first call for `v` draws an index from `fresh` under the hint `name` and
+    /// binds `v` to it; later calls return that binding.
+    fn import_named<M: MonadFresh>(&mut self, v: &LVar, name: &'static str, fresh: &mut M) -> LVar {
         // Probe by `&LVar` (no clone) via `VarKey`'s `Equivalent` impl, whose
         // `eq` short-circuits on the interned name POINTER — skipping the
         // byte-wise `str` compare that dominated `import`'s confirming-eq self
@@ -113,14 +130,14 @@ impl Bindings {
         if let Some(bound) = self.map.get(v) {
             return *bound;
         }
-        let idx = fresh.fresh_ident(v.name);
-        // Record whether this first binding remaps the idx (name+sort are
+        let idx = fresh.fresh_ident(name);
+        // Record whether this first binding remaps the variable (the sort is
         // always preserved), so an all-identity prefix leaves `changed` false.
-        if idx != v.idx {
+        if idx != v.idx || name != v.name {
             self.changed = true;
         }
         let bound = LVar {
-            name: v.name,
+            name,
             sort: v.sort,
             idx,
         };
@@ -148,9 +165,9 @@ impl Bindings {
         self.map.is_empty()
     }
 
-    /// Whether any binding maps a variable to a different one.  `import`
-    /// preserves name and sort, so over imported bindings alone it says that
-    /// some variable takes a new index.
+    /// Whether any binding maps a variable to a different one.
+    /// [`Self::import`] preserves name and sort, so over the bindings it
+    /// allocated alone this says that some variable takes a new index.
     pub fn changed(&self) -> bool {
         self.changed
     }
