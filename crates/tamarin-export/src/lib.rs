@@ -18,20 +18,22 @@
 //! - `RuleTranslation` (815 lines — multiset rewriting → process calculus
 //!   translation)
 //!
+//! The formula surface Export reads is ported: `tamarin_theory::theory::Lemma`'s
+//! `formula` / `original_formula` and `tamarin_theory::restriction::Restriction`
+//! carry `LNFormula`, as HS's `ProtoLemma LNFormula` (Items/LemmaItem.hs:53-54)
+//! and `ProtoRestriction LNFormula` (Theory/Model/Restriction.hs:70) do, and
+//! `tamarin_theory::pretty_formula::lnformula_doc` is `prettyLNFormula`
+//! (Theory/Model/Formula.hs:518-520), the renderer of the formulas Export puts
+//! inside its comment blocks (Export.hs:1424-1425).
+//!
 //! Blockers, in dependency order:
-//! - Lemma and restriction formulas are stored as `tamarin_parser::ast::
-//!   Formula`, not `LNFormula` (`tamarin_theory::theory::Lemma::formula`,
-//!   `tamarin_theory::theory::OpenRestriction`).  The parser-AST →
-//!   `SyntacticLNFormula` converter is `tamarin_theory::formula::from_parser`,
-//!   but no stored field holds its result.  Export operates exclusively on
-//!   `LNFormula`.
-//! - There is no `prettyLNFormula` over `ProtoFormula`
-//!   (`tamarin_theory::pretty_formula` renders the parser AST), yet Export
-//!   emits rewritten `LNFormula`s verbatim inside comment blocks.
 //! - `simplifyFormula` / `pnf` / `nnf` / `pullquants` / `prenex` /
-//!   `shiftFreeIndices` are unported over `ProtoFormula`; `ppLemma`
-//!   (Export.hs:1466) and `flattenNestedQuantifiers` (Export.hs:1517-1535)
-//!   need them.
+//!   `shiftFreeIndices` (Theory/Model/Formula.hs:380-465) are unported over
+//!   `ProtoFormula`; `ppLemma` (Export.hs:1462-1469#ppLemma, see line 1469) and
+//!   `flattenNestedQuantifiers` (Export.hs:1517-1535) need them.
+//!   `tamarin_accountability::formula` ports `simplifyFormula` and
+//!   `shiftFreeIndices` over that crate's own locally-nameless `Fm`, which is a
+//!   `SyntacticLNFormula` over `guarded_types`, not a `ProtoFormula`.
 //! - About 1300 of Export.hs's lines (Export.hs:1705-2605 and :2922-3300) are
 //!   Export-specific `LNFormula → LNFormula` transforms and shape classifiers
 //!   with no analogue in the port.
