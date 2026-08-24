@@ -2667,12 +2667,10 @@ pub fn ginduct(g: &Guarded) -> Result<(Guarded, Guarded), String> {
 
 /// Apply a `VarSpec → VarSpec` transformation to every FREE variable
 /// reference in a `Guarded` formula.  Variables bound by an enclosing
-/// `GGuarded` are NOT passed to `f` — they stay verbatim.  The map body of
-/// this module's `HasFrees` instance and of the freshening walks in
-/// `sources.rs`, which shift free-var idxs in a system's stored formulas /
-/// solved_formulas / lemmas alongside the rest of it, mirroring Haskell's
-/// uniform `mapFrees` (Theory/Constraint/System.hs:1863-1877) which traverses
-/// ALL 13 system fields.
+/// `GGuarded` are NOT passed to `f` — they stay verbatim.  It is the map body
+/// of this module's `HasFrees` instance, through which a whole-system
+/// `mapFrees` (Theory/Constraint/System.hs:1863-1877) reaches the formulas,
+/// solved formulas and lemmas a `System` stores.
 pub fn map_lvars_in_guarded<F>(g: &Guarded, mut f: F) -> Guarded
 where
     F: FnMut(&p::VarSpec) -> p::VarSpec,
@@ -2694,7 +2692,8 @@ where
 /// [`crate::elaborate::varspec_to_lvar`], which reads the leaf's name, sort
 /// and index and interns the name.  `map_free_with` writes the mapped
 /// variable's name and index back into the leaf and keeps the leaf's own
-/// `sort` and `typ`, the convention of the freshening walks in `sources.rs`.
+/// `sort` and `typ`, so a rename leaves the surface spelling of the formula
+/// alone.
 ///
 /// The `monotone` flag has no effect here: no `GTerm` constructor sorts its
 /// arguments, so the `Monotone` and the `Arbitrary` map rebuild the same

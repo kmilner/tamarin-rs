@@ -3280,388 +3280,29 @@ fn rename_system_by(sys: &System, shift_amount: i128) -> System {
         })
 }
 
-/// HS-faithful `someInst`: per-var fresh allocation in HS's `mapFrees`
-/// traversal order.  Mirrors `someInst` (LTerm.hs:631-632) +
-/// `importBinding` (Bind.hs:128-140) under FastFresh:
+/// `evalBindT (someInst sysTh0) keepVarBindings` (Sources.hs:342-348): the
+/// source case about to be grafted into the live system takes a fresh index
+/// for every free variable whose binding the caller has not already fixed, so
+/// the graft shares only the goal's own variables with the live system.
 ///
-/// ```haskell
-/// someInst = mapFrees (Arbitrary $ \x ->
-///              importBinding (`LVar` lvarSort x) x (lvarName x))
-/// importBinding mkR k _ = lookupBinding k >>= \case
-///   Nothing -> do v <- mkR _ <$> freshIdent _; insert k v; return v
-///   Just v  -> return v
-/// ```
-///
-/// Each unique LVar in HS-traversal-order gets the NEXT idx from the
-/// global counter (FastFresh).  Vars in `keep` are bound identically
-/// (keepVarBindings).  Differs from `rename_system_by`, which moves every
-/// index by the same amount — `someInst` instead assigns distinct
-/// sequential idxs in traversal order, mirroring HS exactly.
-fn freshen_system_some_inst(
+/// `someInst` (LTerm.hs:627-632) is `mapFrees (Arbitrary importBinding)`, so
+/// the index a variable gets is decided by where `instance HasFrees System`
+/// (System.hs:1832-1877) first reaches it, and every index is drawn from the
+/// step's own `MonadFresh` — here the Maude handle whose counter the live
+/// `Reduction` threads.  `keep` is HS's `frees goal`, seeded into the store as
+/// identity bindings that `importBinding` finds and reuses instead of drawing
+/// (Control/Monad/Bind.hs:125-140).
+fn some_inst_system(
     sys: &System,
     keep: &std::collections::BTreeSet<tamarin_term::lterm::LVar>,
     maude: &tamarin_term::maude_proc::MaudeHandle,
 ) -> System {
-    use std::collections::BTreeMap;
-    use tamarin_term::lterm::HasFrees;
-
-    // Step 1: walk the system in HS-faithful order, building bindings.
-    //
-    // HS `mapFrees System` (System.hs:1863-1876) iterates fields in
-    // declaration order: sNodes, sEdges, sLessAtoms, sLastAtom,
-    // sSubtermStore, sEqStore, sFormulas, sSolvedFormulas, sLemmas,
-    // sGoals (skipping sNextGoalNr, sSourceKind, sDiffSystem which
-    // have no LVars).  Within each container, HS's HasFrees instances
-    // walk in container order (M.Map by key, Set by element Ord).
-    let mut bindings: BTreeMap<tamarin_term::lterm::LVar, tamarin_term::lterm::LVar> =
-        BTreeMap::new();
+    let mut bindings = tamarin_term::bind::Bindings::new();
     for v in keep {
         bindings.insert(*v, *v);
     }
-    let import_var =
-        |v: &tamarin_term::lterm::LVar,
-         bindings: &mut BTreeMap<tamarin_term::lterm::LVar, tamarin_term::lterm::LVar>| {
-            if bindings.contains_key(v) {
-                return;
-            }
-            let new_idx = maude.reserve_idxs(1);
-            let new_v = tamarin_term::lterm::LVar {
-                name: v.name,
-                sort: v.sort,
-                idx: new_idx,
-            };
-            bindings.insert(*v, new_v);
-        };
-
-    // sNodes: BTreeMap-equivalent iteration by NodeId order.  Rust's
-    // sys.nodes is Vec<(NodeId, RuleACInst)> insertion-ordered, so
-    // sort by NodeId to mimic HS's M.Map iteration.
-    let mut sorted_nodes: Vec<&(
-        crate::constraint::constraints::NodeId,
-        crate::rule::RuleACInst,
-    )> = sys.nodes.iter().collect();
-    sorted_nodes.sort_by_key(|a| a.0);
-    for (id, rule) in &sorted_nodes {
-        import_var(id, &mut bindings);
-        // HS Rule HasFrees order: info, premises, conclusions, actions,
-        // new_vars.  Rust's `info` (ProtoRuleACInstInfo) typically has
-        // no LVars (rule name + case info), so skipping is harmless;
-        // walk premises/conclusions/actions/new_vars explicitly to
-        // match HS exactly.
-        for p in &rule.premises {
-            p.for_each_free(&mut |v| import_var(v, &mut bindings));
-        }
-        for c in &rule.conclusions {
-            c.for_each_free(&mut |v| import_var(v, &mut bindings));
-        }
-        for a in &rule.actions {
-            a.for_each_free(&mut |v| import_var(v, &mut bindings));
-        }
-        for nv in &rule.new_vars {
-            nv.for_each_free(&mut |v| import_var(v, &mut bindings));
-        }
-    }
-    // sEdges: Set Edge → sort by Edge Ord
-    let mut sorted_edges: Vec<&crate::constraint::constraints::Edge> = sys.edges.iter().collect();
-    sorted_edges.sort();
-    for e in &sorted_edges {
-        import_var(&e.src.0, &mut bindings);
-        import_var(&e.tgt.0, &mut bindings);
-    }
-    // sLessAtoms: Set LessAtom → sort
-    let mut sorted_less: Vec<&crate::constraint::constraints::LessAtom> =
-        sys.less_atoms.iter().collect();
-    sorted_less.sort();
-    for l in &sorted_less {
-        import_var(&l.smaller, &mut bindings);
-        import_var(&l.larger, &mut bindings);
-    }
-    // sLastAtom
-    if let Some(la) = &sys.last_atom {
-        import_var(la, &mut bindings);
-    }
-    // sSubtermStore — HS-faithful Set walk in Ord order
-    // (SubtermStore.hs `Set SubtermD` for both pos and neg + S.Set Set).
-    // Mirror `rename_precise_system`'s Set-sorted subterm walk so per-name
-    // PreciseFresh counters / global FastFresh allocations land at the
-    // same idxs HS does.
-    let mut sub_sorted: Vec<&crate::tools::subterm_store::SubtermConstraint> =
-        sys.subterm_store.subterms.iter().collect();
-    sub_sorted.sort_by(|a, b| (&a.small, &a.big).cmp(&(&b.small, &b.big)));
-    for c in sub_sorted {
-        c.small.for_each_free(&mut |v| import_var(v, &mut bindings));
-        c.big.for_each_free(&mut |v| import_var(v, &mut bindings));
-    }
-    let mut solved_sub_sorted: Vec<&crate::tools::subterm_store::SubtermConstraint> =
-        sys.subterm_store.solved_subterms.iter().collect();
-    solved_sub_sorted.sort_by(|a, b| (&a.small, &a.big).cmp(&(&b.small, &b.big)));
-    for c in solved_sub_sorted {
-        c.small.for_each_free(&mut |v| import_var(v, &mut bindings));
-        c.big.for_each_free(&mut |v| import_var(v, &mut bindings));
-    }
-    // sEqStore: subst keys/values, then conj substs.
-    for (k, t) in sys.eq_store.subst.to_list() {
-        import_var(&k, &mut bindings);
-        t.for_each_free(&mut |v| import_var(v, &mut bindings));
-    }
-    // HS-faithful `mapFrees (SubstVFresh n LVar)` (SubstVFresh.hs:196-202):
-    // `foldFrees f = foldFrees f . M.keys` and `mapDomain (v,t) = (,t) <$>
-    // mapFrees f v` — so `someInst`/`rename` over a variant disj touch ONLY
-    // the DOMAIN keys; the range (witnesses) is left UNTOUCHED.  Walking the
-    // range here would re-freshen the variant-disj witnesses on every
-    // someInst, inflating them across saturate/conjoin iterations (e.g.
-    // Responder_secrecy: ~k.6 → ~k.31) and rotating the 3-way split via
-    // `Ord LNSubstVFresh`.  Match `rename_precise_system`'s eq-store walk
-    // and import keys only.
-    // HS-faithful: inner `S.Set LNSubstVFresh` walks Ord-ascending
-    // (`mapFrees (Set a) = fmap S.fromList . mapFrees f . S.toList`,
-    // LTerm.hs:898-903, see line 903).  RS's `Vec` is in insertion order — sort to match
-    // (mirroring `rename_precise_system`'s inner-Set sort).
-    for d in sys.eq_store.conj.iter() {
-        let mut substs_sorted: Vec<
-            &tamarin_term::subst_vfresh::SubstVFresh<
-                tamarin_term::lterm::Name,
-                tamarin_term::lterm::LVar,
-            >,
-        > = d.substs.iter().collect();
-        substs_sorted.sort();
-        for s in substs_sorted {
-            for (k, _t) in s.to_list() {
-                import_var(&k, &mut bindings);
-                // Range vars NOT imported (HS-faithful).
-            }
-        }
-    }
-    // sFormulas, sSolvedFormulas, sLemmas — walk frees in each Guarded.
-    // We reuse `map_lvars_in_guarded` as a side-effect walker: the
-    // callback receives every free VarSpec; we convert to LVar and import.
-    // The mapped output is discarded — we only care about the visit side
-    // effect.
-    let walk_guarded =
-        |g: &crate::guarded::Guarded,
-         bindings: &mut BTreeMap<tamarin_term::lterm::LVar, tamarin_term::lterm::LVar>| {
-            let _ = crate::guarded::map_lvars_in_guarded(g, |v: &tamarin_parser::ast::VarSpec| {
-                let lv = crate::elaborate::varspec_to_lvar(v);
-                bindings.entry(lv).or_insert_with(|| {
-                    let new_idx = maude.reserve_idxs(1);
-                    tamarin_term::lterm::LVar {
-                        name: lv.name,
-                        sort: lv.sort,
-                        idx: new_idx,
-                    }
-                });
-                v.clone()
-            });
-        };
-    // HS-faithful: `_sFormulas` / `_sSolvedFormulas` / `_sLemmas` are
-    // `S.Set LNGuarded`; HS walks them in Ord-ascending (Term/LTerm.hs:898-903, see line 900
-    // `foldMap (foldFrees f)`).  RS's `Vec<Guarded>` is in insertion order.
-    // Sort copies (mirroring `rename_precise_system`'s formula walk) so per-name
-    // counter assignment matches HS exactly.
-    let mut formulas_sorted: Vec<&crate::guarded::Guarded> =
-        sys.formulas.iter().map(|f| f.as_ref()).collect();
-    formulas_sorted.sort_by(|a, b| crate::guarded::cmp_guarded(a, b));
-    for g in formulas_sorted {
-        walk_guarded(g, &mut bindings);
-    }
-    let mut solved_formulas_sorted: Vec<&crate::guarded::Guarded> =
-        sys.solved_formulas.iter().map(|f| f.as_ref()).collect();
-    solved_formulas_sorted.sort_by(|a, b| crate::guarded::cmp_guarded(a, b));
-    for g in solved_formulas_sorted {
-        walk_guarded(g, &mut bindings);
-    }
-    let mut lemmas_sorted: Vec<&crate::guarded::Guarded> =
-        sys.lemmas.iter().map(|f| f.as_ref()).collect();
-    lemmas_sorted.sort_by(|a, b| crate::guarded::cmp_guarded(a, b));
-    for g in lemmas_sorted {
-        walk_guarded(g, &mut bindings);
-    }
-    // sGoals: M.Map Goal GoalStatus → sort by Goal (using goal_cmp).
-    let mut sorted_goals: Vec<&(
-        crate::constraint::constraints::Goal,
-        crate::constraint::system::GoalStatus,
-    )> = sys.goals.iter().collect();
-    sorted_goals.sort_by(|a, b| crate::constraint::solver::goals::goal_cmp(&a.0, &b.0));
-    for (g, _) in &sorted_goals {
-        match g {
-            crate::constraint::constraints::Goal::Action(n, fa) => {
-                import_var(n, &mut bindings);
-                fa.for_each_free(&mut |v| import_var(v, &mut bindings));
-            }
-            crate::constraint::constraints::Goal::Premise(p, fa) => {
-                import_var(&p.0, &mut bindings);
-                fa.for_each_free(&mut |v| import_var(v, &mut bindings));
-            }
-            crate::constraint::constraints::Goal::Chain(c, p) => {
-                import_var(&c.0, &mut bindings);
-                import_var(&p.0, &mut bindings);
-            }
-            crate::constraint::constraints::Goal::Disj(d) => {
-                for alt in &d.0 {
-                    walk_guarded(alt, &mut bindings);
-                }
-            }
-            crate::constraint::constraints::Goal::Subterm((small, big)) => {
-                small.for_each_free(&mut |v| import_var(v, &mut bindings));
-                big.for_each_free(&mut |v| import_var(v, &mut bindings));
-            }
-            crate::constraint::constraints::Goal::Split(_) => {}
-        }
-    }
-
-    // Step 2: apply bindings to produce the freshened system.
-    let lookup = |v: &tamarin_term::lterm::LVar| -> tamarin_term::lterm::LVar {
-        bindings.get(v).copied().unwrap_or(*v)
-    };
-    // For Guarded formulas (VarSpec-based), build a (name, idx) → new (name, idx) map.
-    // VarSpec sorts are preserved unchanged.
-    let vs_map: std::collections::BTreeMap<(String, u64), (String, u64)> = bindings
-        .iter()
-        .map(|(orig, new)| {
-            (
-                (orig.name.to_string(), orig.idx),
-                (new.name.to_string(), new.idx),
-            )
-        })
-        .collect();
-    let lookup_vs = |v: &tamarin_parser::ast::VarSpec| -> tamarin_parser::ast::VarSpec {
-        if let Some((new_name, new_idx)) = vs_map.get(&(v.name.clone(), v.idx)) {
-            tamarin_parser::ast::VarSpec {
-                name: new_name.clone(),
-                idx: *new_idx,
-                sort: v.sort,
-                typ: v.typ.clone(),
-            }
-        } else {
-            v.clone()
-        }
-    };
-
-    let mut out = sys.clone();
-    // NOT a uniform shift: every var is rebound to an INDEPENDENT fresh
-    // idx via `lookup` (someInst-style per-var renaming, plus a `keep`
-    // exclusion set), so the node max becomes an arbitrary new value.
-    // Cannot prove the bump — invalidate the node component (safe
-    // fallback).  The clone above copied `sys`'s stale value — for BOTH
-    // caches, so drop the full max too (a stale full max would mis-seed
-    // `avoid_fresh_state` on the freshened clone).
-    out.invalidate_node_max_cache();
-    out.invalidate_max_var_idx_cache();
-    out.content_mut_untracked().nodes = std::sync::Arc::new(
-        std::sync::Arc::unwrap_or_clone(std::mem::take(&mut out.content_mut_untracked().nodes))
-            .into_iter()
-            .map(|(id, ru)| (lookup(&id), ru.map_free(&mut |v| lookup(&v))))
-            .collect(),
-    );
-    out.content_mut_untracked().edges = std::mem::take(&mut out.content_mut_untracked().edges)
-        .into_iter()
-        .map(|e| crate::constraint::constraints::Edge {
-            src: (lookup(&e.src.0), e.src.1),
-            tgt: (lookup(&e.tgt.0), e.tgt.1),
-        })
-        .collect();
-    out.content_mut_untracked().less_atoms =
-        std::mem::take(&mut out.content_mut_untracked().less_atoms)
-            .into_iter()
-            .map(|l| {
-                crate::constraint::constraints::LessAtom::new(
-                    lookup(&l.smaller),
-                    lookup(&l.larger),
-                    l.reason,
-                )
-            })
-            .collect();
-    out.content_mut_untracked().goals = std::sync::Arc::new(
-        std::sync::Arc::unwrap_or_clone(std::mem::take(&mut out.content_mut_untracked().goals))
-            .into_iter()
-            .map(|(g, st)| {
-                let g2 = match g {
-                    crate::constraint::constraints::Goal::Action(n, fa) => {
-                        crate::constraint::constraints::Goal::Action(
-                            lookup(&n),
-                            fa.map_free(&mut |v| lookup(&v)),
-                        )
-                    }
-                    crate::constraint::constraints::Goal::Premise(p, fa) => {
-                        crate::constraint::constraints::Goal::Premise(
-                            (lookup(&p.0), p.1),
-                            fa.map_free(&mut |v| lookup(&v)),
-                        )
-                    }
-                    crate::constraint::constraints::Goal::Chain(c, p) => {
-                        crate::constraint::constraints::Goal::Chain(
-                            (lookup(&c.0), c.1),
-                            (lookup(&p.0), p.1),
-                        )
-                    }
-                    crate::constraint::constraints::Goal::Disj(d) => {
-                        let mapped: Vec<_> =
-                            d.0.into_iter()
-                                .map(|alt| crate::guarded::map_lvars_in_guarded(&alt, &lookup_vs))
-                                .collect();
-                        crate::constraint::constraints::Goal::Disj(
-                            crate::constraint::constraints::Disj(mapped),
-                        )
-                    }
-                    crate::constraint::constraints::Goal::Subterm((small, big)) => {
-                        crate::constraint::constraints::Goal::Subterm((
-                            small.map_free(&mut |v| lookup(&v)),
-                            big.map_free(&mut |v| lookup(&v)),
-                        ))
-                    }
-                    other @ crate::constraint::constraints::Goal::Split(_) => other,
-                };
-                (g2, st)
-            })
-            .collect(),
-    );
-    if let Some(la) = out.content_mut_untracked().last_atom.take() {
-        out.content_mut_untracked().last_atom = Some(lookup(&la));
-    }
-    *out.formulas_mut_untracked() = std::mem::take(out.formulas_mut_untracked())
-        .into_iter()
-        .map(|g| std::sync::Arc::new(crate::guarded::map_lvars_in_guarded(&g, &lookup_vs)))
-        .collect();
-    *out.solved_formulas_mut_untracked() = std::mem::take(out.solved_formulas_mut_untracked())
-        .into_iter()
-        .map(|g| std::sync::Arc::new(crate::guarded::map_lvars_in_guarded(&g, &lookup_vs)))
-        .collect();
-    out.content_mut_untracked().lemmas = std::mem::take(&mut out.content_mut_untracked().lemmas)
-        .into_iter()
-        .map(|g| std::sync::Arc::new(crate::guarded::map_lvars_in_guarded(&g, &lookup_vs)))
-        .collect();
-    for c in &mut out.subterm_store_mut().subterms {
-        c.small = c.small.clone().map_free(&mut |v| lookup(&v));
-        c.big = c.big.clone().map_free(&mut |v| lookup(&v));
-    }
-    for c in &mut out.subterm_store_mut().solved_subterms {
-        c.small = c.small.clone().map_free(&mut |v| lookup(&v));
-        c.big = c.big.clone().map_free(&mut |v| lookup(&v));
-    }
-    out.eq_store_mut().subst = {
-        let pairs: Vec<_> = out
-            .eq_store
-            .subst
-            .to_list()
-            .into_iter()
-            .map(|(v, t)| (lookup(&v), t.map_free(&mut |w| lookup(&w))))
-            .collect();
-        tamarin_term::subst::Subst::from_list(pairs)
-    };
-    // HS-faithful `mapFrees (SubstVFresh)` (SubstVFresh.hs:200-202):
-    // rewrite ONLY the domain keys; leave the range (witnesses) UNTOUCHED.
-    for disj in out.eq_store_mut().conj.iter_mut() {
-        for s in disj.substs.iter_mut() {
-            let pairs: Vec<_> = s
-                .to_list()
-                .into_iter()
-                .map(|(v, t)| (lookup(&v), t))
-                .collect();
-            *s = tamarin_term::subst_vfresh::SubstVFresh::from_list(pairs);
-        }
-    }
-    out.mint_fresh_stamps();
-    out
+    let mut fresh = maude;
+    tamarin_term::bind::some_inst(sys.clone(), &mut bindings, &mut fresh)
 }
 
 /// One refineSubst arm produced by `refine_source_case_action` — the
@@ -3866,7 +3507,7 @@ fn refine_source_case_action(
     //
     // BP-cluster safety (case vars colliding with live `vr.0`/`i1.0`
     // nodes at conjoinSystem→setNodes): conjoin only ever sees the
-    // post-`freshen_system_some_inst` case (step D), which renames
+    // post-`some_inst_system` case (step D), which renames
     // every non-keep var from the LIVE Reduction's counter (≥ live
     // max) — exactly HS's `someInst sysTh0` inside the live Reduction.
     // The refine intermediates at live-goal scale never reach setNodes.
@@ -4134,14 +3775,10 @@ fn refine_source_case_action(
         // Haskell's `someInst` draws from the ambient `MonadFresh` (in
         // `_applySource` this is the live Reduction's `sNextVarIdx`).  We
         // reset the MaudeHandle's global `Arc<AtomicU64>` counter to
-        // `avoid(live_sys) + 1` below, then `freshen_system_some_inst`
+        // `avoid(live_sys) + 1` below, then `some_inst_system`
         // draws fresh idxs from it per unique LVar in traversal order.
         // ---------------------------------------------------------------
         let keep_vars = collect_node_and_fact_frees(live_node, fa_live);
-        // HS-faithful `someInst`: traversal-order per-var fresh idx
-        // allocation, matching Haskell's `someInst` + `importBinding`
-        // (LTerm.hs:631-632 + Bind.hs:128-140).
-        //
         // HS `_applySource` (Sources.hs:344-350) runs `someInst sysTh0` in
         // the LIVE Reduction monad — the imports draw from the step's ONE
         // threaded FreshT counter, sequentially after whatever the step
@@ -4170,7 +3807,7 @@ fn refine_source_case_action(
                 red_m.fresh_counter_peek()
             );
         }
-        let freshened_case = freshen_system_some_inst(&refined_case, &keep_vars, red_m);
+        let freshened_case = some_inst_system(&refined_case, &keep_vars, red_m);
         let branch_counter = red_m.fresh_counter_peek();
         if tamarin_utils::env_gate!("TAM_RS_DBG_FOLD_DRAWS") {
             eprintln!(
@@ -4600,7 +4237,7 @@ fn apply_source_case_premise(
     // witness-idx (web conj: DIFF) rationale, and why BP-cluster
     // setNodes collisions (case vars vs live nodes) cannot occur:
     // conjoin only sees
-    // the post-`freshen_system_some_inst` case (step D), renamed from
+    // the post-`some_inst_system` case (step D), renamed from
     // the live Reduction's counter.
     let mut goal_max: u64 = 0;
     {
@@ -4835,7 +4472,7 @@ fn apply_source_case_premise(
                 red_m.fresh_counter_peek()
             );
         }
-        let freshened_case = freshen_system_some_inst(&refined_case, &keep_vars, red_m);
+        let freshened_case = some_inst_system(&refined_case, &keep_vars, red_m);
         if tamarin_utils::env_gate!("TAM_RS_DBG_FOLD_DRAWS") {
             eprintln!(
                 "[rs-fold] SOMEINST-PREMISE-DONE counter_after={}",
@@ -5722,7 +5359,7 @@ fn system_walk_frees(
     }
     // g: sFormulas (Set LNGuarded) — HS `Set` walks in ascending
     // `Ord LNGuarded`.  Use `cmp_guarded` (the codebase's HS-Ord
-    // comparator, as in `freshen_system_some_inst`) rather than a
+    // comparator, as in `some_inst_system`) rather than a
     // `Debug`-string sort: the derived-Debug rendering does NOT match
     // HS Ord (e.g. `LVar` renders name-before-idx, while HS `Ord LVar`
     // is idx-first), which would make the fresh-idx assignment order —
@@ -5749,7 +5386,7 @@ fn system_walk_frees(
     }
     // j: sGoals (Map Goal GoalStatus) — HS `Map` walks ascending
     // `Ord Goal`.  Use `goal_cmp` (HS-Ord, as in
-    // `freshen_system_some_inst`) rather than a `Debug`-string sort,
+    // `some_inst_system`) rather than a `Debug`-string sort,
     // which sorts goal variants alphabetically and vars name-first —
     // both diverging from HS Ord.
     let mut goals_sorted: Vec<&(

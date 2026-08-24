@@ -723,3 +723,93 @@ fn saturate_shift_carries_the_node_component_cache() {
     assert_eq!(out.node_max_cache.get(), Some(before + 1000));
     assert_eq!(bounds_max(&out), bounds_max_uncached(&out));
 }
+
+// =========================================================================
+// some_inst_system
+// =========================================================================
+
+/// `evalBindT (someInst sysTh0) keepVarBindings` (Sources.hs:342-348) draws
+/// one identifier per free variable it has not already bound, in the order
+/// `instance HasFrees System` (System.hs:1832-1877) reaches them: the nodes,
+/// the edges, the less atoms, the last atom, the subterm store — negative
+/// subterms first (SubtermStore.hs:546-557) — the equation store's
+/// substitution and then its disjunctions' domain keys
+/// (SubstVFresh.hs:196-202), the three formula stores and the goals.  A
+/// variable the store already binds to itself is returned unchanged and
+/// charged nothing (Control/Monad/Bind.hs:134-140).
+#[test]
+fn some_inst_system_keeps_the_seeded_vars_and_draws_in_hs_field_order() {
+    let path = match maude_path() {
+        Some(p) => p,
+        None => return,
+    };
+    let maude = start_maude(&path, tamarin_term::maude_sig::pair_maude_sig());
+    let sys = system_with_a_variable_per_field(mterm(11));
+    // The goal's own variables: the node the case is grafted onto and the
+    // term of its fact.
+    let keep: std::collections::BTreeSet<LVar> = [nvar(10), mvar(11)].into_iter().collect();
+
+    maude.reset_counter_to(500);
+    let out = some_inst_system(&sys, &keep, &maude);
+
+    let node = |idx: u64| nvar(idx);
+    let msg = |idx: u64| mvar(idx);
+    assert_eq!(
+        frees_list(&out),
+        vec![
+            // sNodes: the node id and the term of its rule's premise, both
+            // seeded, so the walk opens without a draw.
+            node(10),
+            msg(11),
+            // sEdges, sLessAtoms, sLastAtom.
+            node(500),
+            node(501),
+            node(502),
+            node(503),
+            node(504),
+            // sSubtermStore: the negative pair, then the positive one, then
+            // the solved one.
+            msg(505),
+            msg(506),
+            msg(507),
+            msg(508),
+            msg(509),
+            msg(510),
+            // sEqStore: the substitution's key and value, then the
+            // disjunction's domain key.
+            msg(511),
+            msg(512),
+            msg(513),
+            // sFormulas, sSolvedFormulas, sLemmas.
+            node(514),
+            node(515),
+            node(516),
+            // sGoals in ascending `Ord Goal`: the action goal's node and
+            // fact, the disjunction, the subterm pair.
+            node(517),
+            msg(518),
+            node(519),
+            msg(520),
+            msg(521),
+        ]
+    );
+    assert_eq!(
+        maude.fresh_counter_peek(),
+        522,
+        "one identifier per variable that is not seeded"
+    );
+    assert_eq!(
+        out.subterm_store.neg_subterms.to_vec(),
+        vec![(mterm(505), mterm(506))],
+        "the negative subterms are imported before the positive ones"
+    );
+    assert_eq!(
+        out.eq_store.conj[0].substs[0].to_list(),
+        vec![(mvar(513), mterm(111))],
+        "a disjunction's domain key is imported and its range is not"
+    );
+    assert_eq!(
+        out.subterm_store.old_neg_subterms.to_vec(),
+        vec![(mterm(98), mterm(99))]
+    );
+}
