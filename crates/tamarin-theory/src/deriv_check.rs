@@ -91,17 +91,6 @@ pub fn check_message_derivation(
     let dbg_timing = tamarin_utils::env_gate!("TAM_DBG_DERIV_TIMING");
     let t_total_start = std::time::Instant::now();
 
-    // Collect the names that should NOT be treated as variables:
-    //  * `functions: <name>/0` — user-declared 0-arity functions.
-    //  * Builtin 0-arity constants (signing's `true`, DH's `1`, etc.).
-    // HS-faithful: HS resolves these via `nullaryApp` at parse-time
-    // (lib/theory/src/Theory/Text/Parser/Term.hs::nullaryApp); RS
-    // does the same resolution at elaborate-time, but the deriv-check
-    // walks the un-elaborated parser AST so it needs an explicit
-    // deny-list.  See `MessageDerivationChecks.hs:36-50, see line 40` (HS uses
-    // `originalRules = map (applyMacroInProtoRule ...)`).
-    let nullary_funs = crate::elaborate::nullary_fun_names(&parsed.items);
-
     // Theory-level `macros:` declarations.  HS expands these into every
     // protocol rule via `applyMacroInProtoRule (theoryMacros thy)`
     // (MessageDerivationChecks.hs:36-50, see line 40) BEFORE collecting free vars / building
@@ -153,7 +142,7 @@ pub fn check_message_derivation(
         };
         let expanded = crate::elaborate::apply_let_block(macro_src);
         let rule = &expanded;
-        let free_vars = collect_rule_free_vars(rule, &nullary_funs);
+        let free_vars = collect_rule_free_vars(rule);
         if free_vars.is_empty() {
             continue;
         }
@@ -292,13 +281,7 @@ fn protocol_rules(thy: &p::Theory) -> impl Iterator<Item = &p::Rule> {
 ///     `freesInThyRules` filters these out (the only sort it drops).
 ///   - Suffix-sorted vars whose underlying sort is Pub or Node, for the
 ///     same reason.
-///   - Names that are actually 0-arity function calls (e.g. user-
-///     declared `true/0`, builtin `1`).  HS-faithful: `nullaryApp`
-///     resolves these to `App` not `Var` at parse-time.
-fn collect_rule_free_vars(
-    r: &p::Rule,
-    nullary_funs: &std::collections::BTreeSet<String>,
-) -> Vec<p::VarSpec> {
+fn collect_rule_free_vars(r: &p::Rule) -> Vec<p::VarSpec> {
     let mut out: Vec<p::VarSpec> = Vec::new();
     // HS `frees` keys on the full LVar (name AND sort AND idx), so `~ltk`
     // (fresh) and `ltk` (msg) are DISTINCT free vars — both become
@@ -311,9 +294,6 @@ fn collect_rule_free_vars(
                 out: &mut Vec<p::VarSpec>,
                 seen: &mut std::collections::BTreeSet<(String, LSort, u64)>| {
         if matches!(v.sort, LSort::Pub | LSort::Node) {
-            return;
-        }
-        if nullary_funs.contains(&v.name) {
             return;
         }
         let key = (v.name.clone(), v.sort, v.idx);

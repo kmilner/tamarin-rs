@@ -2403,19 +2403,11 @@ fn subst_gterm_cow(t: &GTerm, s: &VarSubst) -> Option<GTerm> {
                 // a hit whose replacement reproduces THIS exact leaf reports
                 // `None` so the caller reuses the input instead of rebuilding.
                 // `term_to_gterm_free(t) == GTerm::Var(BVar::Free(v))` holds
-                // iff `t` is a `Var(spec)` with `spec == v` AND the nullary-fun
-                // guard does not fire (that guard lifts the leaf to `App`).  A
-                // replacement that normalises spelling (a dropped `typ`)
-                // compares unequal and rebuilds, so the leaf canonicalisation
-                // of `term_to_gterm_free` is preserved.
-                Some(p::Term::Var(spec))
-                    if spec == v
-                        && !(spec.sort == LSort::Msg
-                            && spec.idx == 0
-                            && crate::elaborate::is_user_nullary_fun(&spec.name)) =>
-                {
-                    None
-                }
+                // iff `t` is a `Var(spec)` with `spec == v`.  A replacement
+                // that normalises spelling (a dropped `typ`) compares unequal
+                // and rebuilds, so the leaf canonicalisation of
+                // `term_to_gterm_free` is preserved.
+                Some(p::Term::Var(spec)) if spec == v => None,
                 Some(t) => Some(term_to_gterm_free(t)),
             }
         }

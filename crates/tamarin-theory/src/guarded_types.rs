@@ -162,23 +162,6 @@ pub fn mk_gpair(mut items: Vec<GTerm>) -> GTerm {
 /// HS equivalent: `lTermToBTerm` — `fmapTerm (fmap Free)`.
 pub fn term_to_gterm_free(t: &p::Term) -> GTerm {
     match t {
-        // A bare identifier that names a user-declared 0-arity function is a
-        // CONSTANT (nullary application), not a variable — mirror HS's
-        // `fAppNoEq sym []` and the nullary-fun branch of
-        // `elaborate::term_to_lnterm`'s `mk_var`.  Without
-        // this, a declared `true/0`/`false/0` used inside a formula (e.g.
-        // OIDC_Implicit's `Verified(...,true)` / `...,false)` restrictions,
-        // conjoined into a lemma's proof obligation) is lifted to a FREE
-        // variable, so `free_vars`/`is_closed` see a spurious free var,
-        // `ginduct` rejects the formula as "not closed", and `[sources]`
-        // lemmas silently lose their induction (proof explodes).
-        p::Term::Var(v)
-            if v.sort == LSort::Msg
-                && v.idx == 0
-                && crate::elaborate::is_user_nullary_fun(&v.name) =>
-        {
-            GTerm::App(v.name.as_str().into(), Vec::<GTerm>::new().into())
-        }
         p::Term::Var(v) => GTerm::Var(BVar::Free(v.clone())),
         p::Term::PubLit(s) => GTerm::PubLit(s.clone()),
         p::Term::FreshLit(s) => GTerm::FreshLit(s.clone()),

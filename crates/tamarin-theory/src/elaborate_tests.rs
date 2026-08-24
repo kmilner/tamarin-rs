@@ -12,7 +12,6 @@ fn tagged_user_funs(tag: &str) -> CollectedUserFuns {
     let ac_name = format!("{tag}_ac");
     CollectedUserFuns {
         unary: one("unary"),
-        nullary: one("nullary"),
         private: one("private"),
         destructor: one("destructor"),
         ac: BTreeMap::from([(
@@ -42,7 +41,6 @@ fn user_funs_guards_restore_the_displaced_bundle_on_drop() {
 
     let outer_guard = set_user_funs_from_collected(&outer);
     assert!(with_user_fun_sets(|f| f.is_user_ac_fun("outer_ac")));
-    assert!(is_user_nullary_fun("outer_nullary"));
     {
         let _inner_guard = set_user_funs_from_collected(&inner);
         assert!(with_user_fun_sets(|f| f.is_user_ac_fun("inner_ac")));
@@ -52,59 +50,52 @@ fn user_funs_guards_restore_the_displaced_bundle_on_drop() {
     assert!(with_user_fun_sets(|f| f.is_user_ac_fun("outer_ac")));
     assert!(!with_user_fun_sets(|f| f.is_user_ac_fun("inner_ac")));
     assert!(with_user_fun_sets(|f| f.is_user_unary_fun("outer_unary")));
-    assert_eq!(snapshot_user_funs().nullary, outer.nullary);
+    assert_eq!(snapshot_user_funs().unary, outer.unary);
+    with_user_fun_sets(|f| {
+        assert_eq!(f.user_fun_privacy("outer_private"), Privacy::Private);
+        assert_eq!(
+            f.user_fun_constructability("outer_destructor"),
+            Constructability::Destructor
+        );
+        assert_eq!(f.user_fun_ndc("outer_ndc"), NdcState::IsNdc);
+        assert_eq!(f.user_fun_ndc("outer_ndc_diff"), NdcState::IsNdcDiff);
+    });
 
     drop(outer_guard);
     assert!(!with_user_fun_sets(|f| f.is_user_ac_fun("outer_ac")));
-    assert!(!is_user_nullary_fun("outer_nullary"));
     assert!(with_user_fun_sets(|f| f.unary.is_empty()));
 }
 
-#[test]
-fn maude_sig_nullary_guard_replaces_only_the_nullary_set() {
-    let base = tagged_user_funs("base");
-    let _base_guard = set_user_funs_from_collected(&base);
-    {
-        let _nullary_guard = MaudeSigNullaryGuard::set(&xor_maude_sig());
-        // `xor` contributes the 0-arity constant `zero`, which displaces
-        // the installed nullary set outright.
-        assert!(is_user_nullary_fun("zero"));
-        assert!(!is_user_nullary_fun("base_nullary"));
-        // Every other set is carried over unchanged.
-        assert!(with_user_fun_sets(|f| f.is_user_ac_fun("base_ac")));
-        with_user_fun_sets(|f| {
-            assert!(f.is_user_unary_fun("base_unary"));
-            assert_eq!(f.user_fun_privacy("base_private"), Privacy::Private);
-            assert_eq!(
-                f.user_fun_constructability("base_destructor"),
-                Constructability::Destructor
-            );
-            assert_eq!(f.user_fun_ndc("base_ndc"), NdcState::IsNdc);
-            assert_eq!(f.user_fun_ndc("base_ndc_diff"), NdcState::IsNdcDiff);
-        });
-    }
-    assert!(!is_user_nullary_fun("zero"));
-    assert!(is_user_nullary_fun("base_nullary"));
-    assert!(with_user_fun_sets(|f| f.is_user_ac_fun("base_ac")));
-}
-
+/// The four spellings are read from a parsed rule, because the resolution
+/// they exercise is split between the two stages: the parser lowers the
+/// prefix `[AC]` head and the bare 0-arity name (`lookupArity`/`nullaryApp`,
+/// Theory/Text/Parser/Term.hs:62-72,158-163), and `term_to_lnterm` reads the
+/// declaration's attributes off the installed bundle.
 #[test]
 fn installed_bundle_resolves_every_attribute_in_term_to_lnterm() {
     use tamarin_term::function_symbols::{AcSym, FunSym};
 
     let src = "theory T begin\n\
                    functions: add/2 [AC], sec/0 [private], dec/1 [destructor], nd/2 [NDC]\n\
+                   rule R:\n\
+                     [ ] --> [ Out(add(x, y)), Out(sec), Out(dec(x, y)), Out(nd(x, y)) ]\n\
                    end";
     let thy = parse_theory(src, &[]).unwrap();
     let _guard = set_user_funs_for_theory(&thy);
-
-    let x = parser_var("x", 0, LSort::Msg);
-    let y = parser_var("y", 0, LSort::Msg);
+    let concs = &thy
+        .items
+        .iter()
+        .find_map(|i| match i {
+            p::TheoryItem::Rule(r) => Some(r),
+            _ => None,
+        })
+        .unwrap()
+        .conclusions;
+    let arg = |i: usize| concs[i].args[0].clone();
 
     // `ac` set: a prefix application of an `[AC]` symbol lowers to an AC
     // application carrying the declaration's flags.
-    let ac_app = p::Term::App("add".into(), vec![x.clone(), y.clone()]);
-    match term_to_lnterm(&ac_app).unwrap() {
+    match term_to_lnterm(&arg(0)).unwrap() {
         Term::App(FunSym::Ac(AcSym::AcFct(sym)), _) => {
             assert_eq!(String::from_utf8_lossy(sym.name), "add");
             assert_eq!(sym.privacy, Privacy::Public);
@@ -114,9 +105,9 @@ fn installed_bundle_resolves_every_attribute_in_term_to_lnterm() {
         other => panic!("expected an AC application, got {other:?}"),
     }
 
-    // `private` set + `nullary` set: a bare name declared `/0`
-    // becomes a 0-arity private constant, not a free variable.
-    match term_to_lnterm(&parser_var("sec", 0, LSort::Msg)).unwrap() {
+    // `private` set: a bare name declared `/0` is a 0-arity private
+    // constant, not a free variable.
+    match term_to_lnterm(&arg(1)).unwrap() {
         Term::App(FunSym::NoEq(sym), args) => {
             assert!(args.is_empty());
             assert_eq!(sym.arity, 0);
@@ -127,8 +118,7 @@ fn installed_bundle_resolves_every_attribute_in_term_to_lnterm() {
 
     // `destructor` set + `unary` set: the surplus arguments fold into one
     // pair, and the symbol is a destructor.
-    let folded = p::Term::App("dec".into(), vec![x.clone(), y.clone()]);
-    match term_to_lnterm(&folded).unwrap() {
+    match term_to_lnterm(&arg(2)).unwrap() {
         Term::App(FunSym::NoEq(sym), args) => {
             assert_eq!(sym.arity, 1);
             assert_eq!(args.len(), 1, "arity-1 fold should pair the arguments");
@@ -138,8 +128,7 @@ fn installed_bundle_resolves_every_attribute_in_term_to_lnterm() {
     }
 
     // `ndc` set.
-    let ndc_app = p::Term::App("nd".into(), vec![x, y]);
-    match term_to_lnterm(&ndc_app).unwrap() {
+    match term_to_lnterm(&arg(3)).unwrap() {
         Term::App(FunSym::NoEq(sym), _) => assert_eq!(sym.ndc, NdcState::IsNdc),
         other => panic!("expected an NDC application, got {other:?}"),
     }
@@ -277,13 +266,36 @@ fn canonicalize_ac_in_pterm_flattens_and_sorts() {
     );
 }
 
-// The prefix-`[AC]` arm reads the bundle the entry point snapshotted, so
-// the `[AC]` classification must reach NESTED `App` nodes as well as the
-// root — through the plain term entry and through the fact wrapper, which
-// takes the snapshot once for the whole fact.
+/// The AC canonicalisation must reach NESTED nodes as well as the root —
+/// through the plain term entry and through the fact wrapper.  The terms
+/// come from a parse, because the `[AC]` classification is the parser's
+/// (`lookupArity`'s `IsAC` case, Theory/Text/Parser/Term.hs:62-72,98-105).
 #[test]
-fn canonicalize_ac_in_pterm_sees_the_installed_ac_set_at_every_depth() {
+fn canonicalize_ac_flattens_a_nested_node() {
     use tamarin_parser::ast as p;
+    let src = |decl: &str| {
+        format!(
+            "theory T begin\n\
+             builtins: hashing\n\
+             {decl}\n\
+             rule R: [ ] --> [ Out(h(add(add(b, a), c))) ]\n\
+             end"
+        )
+    };
+    let conclusion = |decl: &str| {
+        let thy = parse_theory(&src(decl), &[]).unwrap();
+        thy.items
+            .iter()
+            .find_map(|i| match i {
+                p::TheoryItem::Rule(r) => Some(r.conclusions[0].clone()),
+                _ => None,
+            })
+            .unwrap()
+    };
+
+    // Declared `[AC]`: flattened, sorted (LVar order: same idx and sort, so
+    // by name) and re-folded right-leaning, one level below an ordinary
+    // `App`.
     let v = |name: &str| {
         p::Term::Var(p::VarSpec {
             typ: None,
@@ -293,50 +305,22 @@ fn canonicalize_ac_in_pterm_sees_the_installed_ac_set_at_every_depth() {
         })
     };
     let op = p::BinOp::AcFct(tamarin_term::intern::intern_str("add"));
-    // `h(add(add(b, a), c))`: the AC application sits one level below an
-    // ordinary `App`.
-    let nested = p::Term::App(
-        "add".into(),
-        vec![p::Term::App("add".into(), vec![v("b"), v("a")]), v("c")],
-    );
-    let wrapped = p::Term::App("h".into(), vec![nested.clone()]);
-    // Flattened, sorted (LVar order: same idx and sort, so by name) and
-    // re-folded right-leaning.
     let canon_ac = p::Term::BinOp(
         op,
         Box::new(v("a")),
         Box::new(p::Term::BinOp(op, Box::new(v("b")), Box::new(v("c")))),
     );
+    let want = p::Term::App("h".into(), vec![canon_ac]);
+    let ac_fact = conclusion("functions: add/2 [AC]");
+    assert_eq!(canonicalize_ac_in_pterm(&ac_fact.args[0]), want);
+    assert_eq!(canonicalize_ac_in_pfact(&ac_fact).args, vec![want]);
 
-    // With no bundle installed `add` is an ordinary function symbol.
-    assert_eq!(canonicalize_ac_in_pterm(&wrapped), wrapped);
-
-    let funs = CollectedUserFuns {
-        ac: BTreeMap::from([(
-            "add".to_string(),
-            AcFctSym::new(
-                b"add".to_vec(),
-                Privacy::Public,
-                Constructability::Constructor,
-                NdcState::NotNdc,
-            ),
-        )]),
-        ..CollectedUserFuns::default()
-    };
-    let _guard = set_user_funs_from_collected(&funs);
+    // Declared plain: `add` is an ordinary function symbol and the term is
+    // left as written.
+    let plain_fact = conclusion("functions: add/2");
     assert_eq!(
-        canonicalize_ac_in_pterm(&wrapped),
-        p::Term::App("h".into(), vec![canon_ac.clone()])
-    );
-    let fact = p::Fact {
-        persistent: false,
-        name: "F".into(),
-        args: vec![wrapped],
-        annotations: Vec::new(),
-    };
-    assert_eq!(
-        canonicalize_ac_in_pfact(&fact).args,
-        vec![p::Term::App("h".into(), vec![canon_ac])]
+        canonicalize_ac_in_pterm(&plain_fact.args[0]),
+        plain_fact.args[0]
     );
 }
 

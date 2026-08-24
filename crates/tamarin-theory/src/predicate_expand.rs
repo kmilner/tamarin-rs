@@ -499,6 +499,7 @@ fn subst_term(t: &p::Term, subst: &Subst) -> p::Term {
 mod tests {
     use super::*;
     use tamarin_parser::parser::parse_formula_str;
+    use tamarin_term::maude_sig::pair_maude_sig;
 
     fn pred(decl: &str) -> Vec<p::Predicate> {
         // Parse a tiny theory containing only `predicates: <decl>`.
@@ -521,7 +522,7 @@ mod tests {
     #[test]
     fn expand_simple_predicate() {
         let preds = pred("P(x) <=> Ex #i. A(x) @ #i");
-        let f = parse_formula_str("All x. P(x)").unwrap();
+        let f = parse_formula_str("All x. P(x)", &pair_maude_sig()).unwrap();
         let expanded = expand_formula(&f, &preds).unwrap();
         assert!(!has_pred_atom(&expanded), "got {:?}", expanded);
         assert_eq!(
@@ -533,7 +534,7 @@ mod tests {
     #[test]
     fn expand_undefined_predicate_errors() {
         let preds: Vec<p::Predicate> = Vec::new();
-        let f = parse_formula_str("All x. UndefinedPred(x)").unwrap();
+        let f = parse_formula_str("All x. UndefinedPred(x)", &pair_maude_sig()).unwrap();
         let res = expand_formula(&f, &preds);
         // `UndefinedPred(x)` parses as a `Pred` atom; with no matching
         // predicate, expansion reports `UndefinedPredicate`.  HS renders it
@@ -554,7 +555,7 @@ mod tests {
         // prover: `predicates: P(x) <=> ...` used as `P(a, b)` reports
         // `undefined predicate P/2` — NOT a bespoke "arity mismatch".
         let preds = pred("P(x) <=> Ex #i. A(x) @ #i");
-        let f = parse_formula_str("All a b. P(a, b)").unwrap();
+        let f = parse_formula_str("All a b. P(a, b)", &pair_maude_sig()).unwrap();
         let err = expand_formula(&f, &preds).expect_err("expected error");
         assert_eq!(err.message, "undefined predicate P/2");
     }
@@ -619,7 +620,7 @@ mod tests {
         // z: the binder is alpha-renamed, so no surviving quantifier binds
         // `z`.  (Without capture-avoidance the body would become Act(z, z).)
         let preds = pred("P(x) <=> Ex z #i. Act(x, z) @ #i");
-        let f = parse_formula_str("P(z)").unwrap();
+        let f = parse_formula_str("P(z)", &pair_maude_sig()).unwrap();
         let expanded = expand_formula(&f, &preds).unwrap();
         assert!(
             !binds_var_named(&expanded, "z"),
@@ -646,7 +647,7 @@ mod tests {
         //   ∀ x y #i. (Foo( x, y ) @ #i) ⇒ (∃ z. y = (x++z))
         // so a bare `x (<) y` expands to `∃ z. y = (x++z)`.
         let preds: Vec<p::Predicate> = Vec::new();
-        let f = parse_formula_str("x (<) y").unwrap();
+        let f = parse_formula_str("x (<) y", &pair_maude_sig()).unwrap();
         let expanded = expand_formula(&f, &preds).unwrap();
         // `LessMset` must be gone (no `(<)` reaches the pretty-printer).
         assert!(
@@ -667,7 +668,7 @@ mod tests {
     #[test]
     fn expand_lessmset_capture_avoids_z() {
         let preds: Vec<p::Predicate> = Vec::new();
-        let f = parse_formula_str("z (<) y").unwrap();
+        let f = parse_formula_str("z (<) y", &pair_maude_sig()).unwrap();
         let expanded = expand_formula(&f, &preds).unwrap();
         assert!(!has_lessmset_atom(&expanded), "got {:?}", expanded);
         assert_eq!(

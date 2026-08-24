@@ -3,6 +3,13 @@
 //   scripts/gen_license_headers.py --authors <this file>
 
 use super::*;
+use tamarin_term::maude_sig::pair_maude_sig;
+
+/// [`parse_formula_str`] against the signature HS `parseString` installs
+/// (`pairMaudeSig`, Theory/Text/Parser/Token.hs:250-258).
+fn parse_formula_str_sig(s: &str) -> Result<Formula, ParseError> {
+    parse_formula_str(s, &pair_maude_sig())
+}
 
 // ---- GHC call-site coordinates, read back out of the pinned source --------
 //
@@ -865,7 +872,7 @@ fn term_application() {
     // head through `lookup_arity` and an undeclared `h` would backtrack
     // to a variable (oracle probes p05/p25 — unknown operators are parse
     // errors upstream).
-    match parse_term_str("h(<a, b>, ~k)", &[]).unwrap() {
+    match parse_term_str("h(<a, b>, ~k)", &pair_maude_sig()).unwrap() {
         Term::App(name, args) => {
             assert_eq!(name, "h");
             // The nested tuple is one argument, not two.
@@ -881,7 +888,7 @@ fn term_application() {
 
 #[test]
 fn formula_string() {
-    let f = parse_formula_str("All x. P(x) ==> Q(x)").unwrap();
+    let f = parse_formula_str_sig("All x. P(x) ==> Q(x)").unwrap();
     match f {
         Formula::Forall(_, _) => {}
         _ => panic!("expected Forall"),
@@ -897,7 +904,7 @@ fn formula_string() {
 #[test]
 fn fatom_fact_lhs_of_relop_is_term_atom() {
     // Equality: `Foo(x) = Foo(y)` must be Atom::Eq(App,App), not Pred.
-    let f = parse_formula_str("Foo(x) = Foo(y)").unwrap();
+    let f = parse_formula_str_sig("Foo(x) = Foo(y)").unwrap();
     match f {
         Formula::Atom(Atom::Eq(Term::App(l, _), Term::App(r, _))) => {
             assert_eq!(l, "Foo");
@@ -906,7 +913,7 @@ fn fatom_fact_lhs_of_relop_is_term_atom() {
         other => panic!("expected Eq(App,App), got {:?}", other),
     }
     // Subterm: `A(x) << B(y)` must be Atom::Subterm, not Pred.
-    let f = parse_formula_str("A(x) << B(y)").unwrap();
+    let f = parse_formula_str_sig("A(x) << B(y)").unwrap();
     match f {
         Formula::Atom(Atom::Subterm(Term::App(l, _), Term::App(r, _))) => {
             assert_eq!(l, "A");
@@ -915,7 +922,7 @@ fn fatom_fact_lhs_of_relop_is_term_atom() {
         other => panic!("expected Subterm(App,App), got {:?}", other),
     }
     // A genuine predicate atom (no following relational op) stays Pred.
-    let f = parse_formula_str("P(x) & Q(y)").unwrap();
+    let f = parse_formula_str_sig("P(x) & Q(y)").unwrap();
     match f {
         Formula::And(a, _) => match *a {
             Formula::Atom(Atom::Pred(ref fa)) => assert_eq!(fa.name, "P"),
@@ -924,7 +931,7 @@ fn fatom_fact_lhs_of_relop_is_term_atom() {
         other => panic!("expected And, got {:?}", other),
     }
     // Implication after a predicate must NOT be misread as `=` (==> guard).
-    let f = parse_formula_str("P(x) ==> Q(y)").unwrap();
+    let f = parse_formula_str_sig("P(x) ==> Q(y)").unwrap();
     match f {
         Formula::Implies(a, _) => match *a {
             Formula::Atom(Atom::Pred(ref fa)) => assert_eq!(fa.name, "P"),
@@ -971,16 +978,16 @@ fn type_p_only_capital_any_is_default() {
 #[test]
 fn empty_tuple_is_error_singleton_collapses() {
     assert!(
-        parse_term_str("<>", &[]).is_err(),
+        parse_term_str("<>", &pair_maude_sig()).is_err(),
         "<> must be a parse error"
     );
     // Singleton tuple collapses to the inner term.
-    match parse_term_str("<x>", &[]).unwrap() {
+    match parse_term_str("<x>", &pair_maude_sig()).unwrap() {
         Term::Var(v) => assert_eq!(v.name, "x"),
         other => panic!("expected singleton to collapse to Var, got {:?}", other),
     }
     // Two-element tuple is a Pair.
-    match parse_term_str("<x, y>", &[]).unwrap() {
+    match parse_term_str("<x, y>", &pair_maude_sig()).unwrap() {
         Term::Pair(items) => assert_eq!(items.len(), 2),
         other => panic!("expected Pair, got {:?}", other),
     }
@@ -1570,7 +1577,7 @@ fn sort_suffix_parses_to_the_plain_sort() {
 #[test]
 fn timepoint_positions_are_node_sorted() {
     let sort_of = |src: &str| -> Vec<LSort> {
-        match parse_formula_str(src).expect("parses") {
+        match parse_formula_str_sig(src).expect("parses") {
             Formula::Atom(Atom::Action(_, t)) | Formula::Atom(Atom::Last(t)) => {
                 vec![var_of(&t).sort]
             }
@@ -1599,7 +1606,7 @@ fn timepoint_positions_are_node_sorted() {
 /// printed operand order of `seq1 + dif` follows from them.
 #[test]
 fn bare_binder_and_bare_message_operand_are_msg_sorted() {
-    let f = parse_formula_str(
+    let f = parse_formula_str_sig(
         "All A B seq1 seq2 #i #j.(Seq_Sent(A, B, seq1) @ #i \
          & Seq_Sent(A, B, seq2) @ #j & #i < #j ==> Ex dif. seq2 = seq1 + dif )",
     )
@@ -1625,4 +1632,202 @@ fn bare_binder_and_bare_message_operand_are_msg_sorted() {
     };
     assert_eq!(var_of(l).sort, LSort::Msg);
     assert_eq!(var_of(r).sort, LSort::Msg);
+}
+
+// ---- 0-arity symbols and the DH `exp` head ----
+
+/// The conclusion facts of the first rule of `src`.
+fn rule_conclusions(src: &str) -> Vec<Fact> {
+    parse_theory(src, &[])
+        .expect("parses")
+        .items
+        .iter()
+        .find_map(|it| match it {
+            TheoryItem::Rule(r) => Some(r.conclusions.clone()),
+            _ => None,
+        })
+        .expect("the theory declares a rule")
+}
+
+/// HS `nullaryApp` (Theory/Text/Parser/Term.hs:158-163) claims a bare
+/// identifier that is an arity-0 symbol of `funSyms maudeSig ∪ macroNames
+/// maudeSig`, so it is an application, not a variable.  A `.idx`, a `:sort`
+/// suffix, a SAPIC `:type`, a sigil, or a use ahead of the declaration all
+/// leave a variable.
+#[test]
+fn bare_nullary_symbol_parses_as_application() {
+    let concs = rule_conclusions(
+        "theory T begin\n\
+         builtins: signing, xor, diffie-hellman, natural-numbers\n\
+         functions: c/0\n\
+         macros: m() = 'x'\n\
+         rule R:\n\
+           [ ] --> [ Out(c), Out(true), Out(zero), Out(one), Out(tone), Out(m) ]\n\
+         end",
+    );
+    for (i, name) in ["c", "true", "zero", "one", "tone", "m"].iter().enumerate() {
+        assert!(
+            matches!(&concs[i].args[0], Term::App(n, a) if n == name && a.is_empty()),
+            "{name} is not a 0-arity application: {:?}",
+            concs[i].args[0]
+        );
+    }
+
+    // Anything past the bare identifier leaves `nullaryApp`'s `symbol` match
+    // incomplete, so the name reparses as `plit`'s variable.
+    let concs = rule_conclusions(
+        "theory T begin\n\
+         functions: c/0\n\
+         rule R:\n\
+           [ ] --> [ Out(c.1), Out(c:msg), Out(~c) ]\n\
+         end",
+    );
+    for (i, want) in [
+        (0usize, (1u64, LSort::Msg)),
+        (1, (0, LSort::Msg)),
+        (2, (0, LSort::Fresh)),
+    ] {
+        let v = var_of(&concs[i].args[0]);
+        assert_eq!((v.name.as_str(), v.idx, v.sort), ("c", want.0, want.1));
+    }
+
+    // A SAPIC `:type` annotation is the same: the lexeme continues past the
+    // symbol's name.
+    let thy = parse_theory(
+        "theory T begin\nfunctions: c/0\nprocess: out(c:ty)\nend",
+        &[],
+    )
+    .expect("parses");
+    let out = thy
+        .items
+        .iter()
+        .find_map(|it| match it {
+            TheoryItem::TopLevelProcess(p) => Some(p.clone()),
+            _ => None,
+        })
+        .expect("the theory declares a process");
+    let Process::Action {
+        action: SapicAction::ChOut { msg, .. },
+        ..
+    } = &out
+    else {
+        panic!("expected an out action, got {out:?}");
+    };
+    assert_eq!(var_of(msg).typ.as_deref(), Some("ty"));
+
+    // `lookupArity`/`nullaryApp` read the signature declared SO FAR, so a use
+    // ahead of the declaration is a variable.
+    let concs = rule_conclusions(
+        "theory T begin\n\
+         rule R:\n\
+           [ ] --> [ Out(c) ]\n\
+         functions: c/0\n\
+         end",
+    );
+    assert_eq!(var_of(&concs[0].args[0]).name, "c");
+}
+
+/// `nullaryApp` matches through `symbol`, which has no word boundary, so HS
+/// claims any identifier that merely STARTS with a 0-arity symbol's name and
+/// then fails on the rest.  This parser requires the whole identifier
+/// instead: probe `probes/S1_nullary_prefix.spthy` loads here and is a parse
+/// error upstream.
+#[test]
+fn nullary_symbol_matches_the_whole_identifier() {
+    let concs = rule_conclusions(
+        "theory T begin\n\
+         functions: c/0\n\
+         rule R:\n\
+           [ ] --> [ Out(cx) ]\n\
+         end",
+    );
+    assert_eq!(var_of(&concs[0].args[0]).name, "cx");
+}
+
+/// A prefix (or `op{a}b`) application whose head resolves to HS `expSym`
+/// builds the same node the `^` operator does, which is what makes
+/// `prettyTerm` render it infix (Term/Term.hs:310).  A redeclaration that is
+/// a different symbol keeps the application.
+#[test]
+fn prefix_exp_resolving_to_the_dh_symbol_is_binop_exp() {
+    let concs = rule_conclusions(
+        "theory T begin\n\
+         builtins: diffie-hellman\n\
+         rule R:\n\
+           [ ] --> [ Out(exp('a', 'b')), Out(exp{'a'}'b'), Out('a' ^ 'b') ]\n\
+         end",
+    );
+    for c in &concs {
+        assert!(
+            matches!(&c.args[0], Term::BinOp(BinOp::Exp, _, _)),
+            "expected an exponentiation node, got {:?}",
+            c.args[0]
+        );
+    }
+
+    // `functions: exp/2 [private]` is a different symbol.
+    let concs = rule_conclusions(
+        "theory T begin\n\
+         functions: exp/2 [private]\n\
+         rule R:\n\
+           [ ] --> [ Out(exp('a', 'b')) ]\n\
+         end",
+    );
+    assert!(
+        matches!(&concs[0].args[0], Term::App(n, a) if n == "exp" && a.len() == 2),
+        "expected an application, got {:?}",
+        concs[0].args[0]
+    );
+
+    // A lone `[AC]` declaration resolves to the AC symbol.
+    let concs = rule_conclusions(
+        "theory T begin\n\
+         functions: exp/2 [AC]\n\
+         rule R:\n\
+           [ ] --> [ Out(exp('a', 'b')) ]\n\
+         end",
+    );
+    assert!(
+        matches!(&concs[0].args[0], Term::BinOp(BinOp::AcFct(_), _, _)),
+        "expected an AC node, got {:?}",
+        concs[0].args[0]
+    );
+}
+
+/// The signature-free entry points seed the parser state as HS `mkStateSig`
+/// does (Theory/Text/Parser/Token.hs:175-176), so a re-parse of rendered text
+/// reads the same 0-arity constants and `[AC]` infix operators the theory
+/// parse did.
+#[test]
+fn structural_mode_resolves_nullary_names_from_the_signature() {
+    let mut msig = pair_maude_sig();
+    msig.st_fun_syms
+        .insert(tamarin_term::function_symbols::NoEqSym::new(
+            b"c".to_vec(),
+            0,
+            tamarin_term::function_symbols::Privacy::Public,
+            tamarin_term::function_symbols::Constructability::Constructor,
+        ));
+    msig.st_ac_fun_syms
+        .insert(tamarin_term::function_symbols::AcFctSym::new(
+            b"add".to_vec(),
+            tamarin_term::function_symbols::Privacy::Public,
+            tamarin_term::function_symbols::Constructability::Constructor,
+            tamarin_term::function_symbols::NdcState::NotNdc,
+        ));
+
+    assert!(
+        matches!(parse_term_str("c", &msig).unwrap(), Term::App(n, a) if n == "c" && a.is_empty())
+    );
+    assert!(matches!(
+        parse_term_str("(x add c)", &msig).unwrap(),
+        Term::BinOp(BinOp::AcFct(_), _, _)
+    ));
+    // Without the declarations both spellings stay what the bare grammar
+    // gives them.
+    assert!(matches!(
+        parse_term_str("c", &pair_maude_sig()).unwrap(),
+        Term::Var(_)
+    ));
+    assert!(parse_term_str("(x add c)", &pair_maude_sig()).is_err());
 }

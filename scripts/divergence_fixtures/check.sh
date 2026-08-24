@@ -64,26 +64,6 @@ divergence_shape() {
         grep -qF "⇒ (∃ ~x.1 #j. B( (~x.1++x) ) @ #j)" "$expected/$1.$2.rs.txt" \
             || { echo "    port side does not order the AC arguments by the written sort — expected \`B( (~x.1++x) )\`" >&2; return 1; }
         ;;
-    s1_nullary_late_decl.wf)
-        # `zed` is declared between the two rules, so upstream reads rule A's
-        # occurrence as an unbound message variable; the port reads it as the
-        # constant and reports the run clean.
-        grep -q "rule .A. has unbound variables" "$expected/$1.$2.hs.txt" \
-            || { echo "    oracle side does not report rule A's zed as unbound" >&2; return 1; }
-        grep -qF "/* All wellformedness checks were successful. */" "$expected/$1.$2.rs.txt" \
-            || { echo "    port side does not report the run clean" >&2; return 1; }
-        ;;
-    s1_nullary_late_decl.theory)
-        # The same reading in the echo: a message variable `zed` precedes `zw`
-        # in the multiset, the constant follows it.  The port writes the
-        # constant order in both rules.
-        grep -qF "Out( (zed++zw) )" "$expected/$1.$2.hs.txt" \
-            || { echo "    oracle side does not read rule A's zed as a variable — expected \`Out( (zed++zw) )\`" >&2; return 1; }
-        grep -qF -e "--[ Seen( zed ) ]-> [ Out( (zw++zed) ) ]" "$expected/$1.$2.rs.txt" \
-            || { echo "    port side does not order rule A's constant after zw — expected \`Out( (zw++zed) )\`" >&2; return 1; }
-        ! grep -qF "zed++zw" "$expected/$1.$2.rs.txt" \
-            || { echo "    port side reads a zed as a variable — no rule may print \`zed++zw\`" >&2; return 1; }
-        ;;
     *)  echo "    no documented shape for the $1.$2 divergence — add an arm here" >&2; return 1 ;;
     esac
     return 0

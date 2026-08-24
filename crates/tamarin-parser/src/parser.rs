@@ -10,7 +10,9 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
+use tamarin_term::function_symbols::{Constructability, NdcState, NoEqSym, Privacy};
 use tamarin_term::lterm::LSort;
+use tamarin_term::maude_sig::MaudeSig;
 
 use crate::ast::*;
 use crate::lexer::{is_ident_char, is_reserved_name, Lexer, Pos};
@@ -417,25 +419,22 @@ pub fn parse_theory_or_diff(input: &str, flags: &[&str]) -> Result<Theory, Parse
 ///     parseString [] ctxtDesc (setState (mkStateSig msig) >> many intrRule)
 ///   . T.unpack . TE.decodeUtf8
 /// ```
-/// HS threads a `MaudeSig` through parser state so the term parser knows
-/// which function symbols are builtin.  In this port the parser always
-/// recognises every builtin operator at the syntax level — semantic
-/// gating happens at elaboration — so the `MaudeSig` argument is
-/// captured only for diagnostic context.
+/// `msig` is the signature HS installs with `setState (mkStateSig msig)`
+/// (Theory/Text/Parser/Rule.hs:227, called from TheoryLoader.hs:860-876);
+/// [`Parser::seed_signature`] does the same here, so `nullaryApp` resolves
+/// the constants these machine-generated files use — `one` and `DH_neutral`
+/// in the cached DH file — instead of reading them as variables.
 ///
 /// The bodies are parsed using the existing `parse_rule_ac` path.
 /// The caller is responsible for translating the parser-AST rules into
 /// `IntrRuleAC` (incl. the `c_`/`d_` name dispatch HS `intrInfo` does
 /// at Theory/Text/Parser/Rule.hs:163-172).
-pub fn parse_intruder_rules(input: &str) -> Result<Vec<Rule>, ParseError> {
+pub fn parse_intruder_rules(msig: &MaudeSig, input: &str) -> Result<Vec<Rule>, ParseError> {
     let mut p = Parser::new(input, &[], false);
-    // HS `parseIntruderRules` seeds the parser state with the FULL enabled
-    // signature (`setState (mkStateSig msig)`, Theory/Text/Parser/Rule.hs:227,
-    // called from TheoryLoader.hs:860-876), so
-    // `lookupArity` resolves every symbol these machine-generated files use.
-    // This entry point has no signature argument — the caller resolves heads
-    // against `msig` afterwards (`KnownFuns`) — so accept applications
-    // structurally, which admits exactly the same rules.
+    p.seed_signature(msig);
+    // The caller resolves application heads against `msig` afterwards
+    // (`KnownFuns`), so accept them structurally, which admits exactly the
+    // same rules.
     p.resolve_prefix_apps = false;
     let mut rules = Vec::new();
     loop {
@@ -550,6 +549,17 @@ impl FunOptions {
             destructor: false,
             ndc: false,
             ndc_diff: false,
+        }
+    }
+
+    /// The options carried by a `NoEqSym` of a signature.
+    fn of_no_eq(sym: &NoEqSym) -> Self {
+        FunOptions {
+            arity: sym.arity,
+            private: sym.privacy == Privacy::Private,
+            destructor: sym.constructability == Constructability::Destructor,
+            ndc: matches!(sym.ndc, NdcState::IsNdc | NdcState::IsNdcBoth),
+            ndc_diff: matches!(sym.ndc, NdcState::IsNdcDiff | NdcState::IsNdcBoth),
         }
     }
 
@@ -855,14 +865,41 @@ fn intern_ac_name(name: &str) -> &'static str {
 /// Resolution of a prefix-application head — see [`Parser::lookup_arity`].
 #[derive(Clone, Copy, Debug)]
 enum ArityRes {
-    /// `NoEqUser` (or a macro name, or the appended `em` row): applications
-    /// carry this arity, checked by `naryOpApp`
-    /// (Theory/Text/Parser/Term.hs:97-100).
-    NoEq { arity: usize },
+    /// `NoEqUser` (or a macro name, or the appended `em` row): the whole
+    /// `(k, priv, cnstr, ndc)` tuple `lookupArity` hands back
+    /// (Theory/Text/Parser/Term.hs:66-67), of which `naryOpApp` checks the
+    /// arity (Theory/Text/Parser/Term.hs:97-100) and passes the rest into
+    /// `fAppNoEq`'s symbol.
+    NoEq { opts: FunOptions },
     /// `ACfctUser`: any argument count is accepted
     /// (`Theory/Text/Parser/Term.hs:98` gates the
     /// check on `NotAC`) and the application builds `fAppAC (ACfct …)`.
     Ac,
+}
+
+impl ArityRes {
+    /// Whether an application of `id` resolving this way builds HS `expSym`
+    /// — `("exp", (2, Public, Constructor, NotNDC))`
+    /// (Term/Term/FunctionSymbols.hs:245,251), the one `NoEq` symbol
+    /// `prettyTerm` renders infix as `t1^t2` (Term/Term.hs:310).  Both
+    /// application spellings emit [`BinOp::Exp`] for it, which is what the
+    /// `^` operator parses to, so the printers reach that rendering from
+    /// either source spelling.
+    fn is_dh_exp(self, id: &str) -> bool {
+        id == "exp"
+            && matches!(
+                self,
+                ArityRes::NoEq {
+                    opts: FunOptions {
+                        arity: 2,
+                        private: false,
+                        destructor: false,
+                        ndc: false,
+                        ndc_diff: false,
+                    }
+                }
+            )
+    }
 }
 
 pub struct Parser<'a> {
@@ -2183,6 +2220,47 @@ impl<'a> Parser<'a> {
             Ok(_) => {}
             Err(idx) => self.fun_syms.insert(idx, (name.to_string(), opts)),
         }
+    }
+
+    /// Take the whole parse-time signature from `sig` — HS `mkStateSig`
+    /// (Theory/Text/Parser/Token.hs:175-176), the state
+    /// `parseIntruderRules` installs before its rules
+    /// (Theory/Text/Parser/Rule.hs:223-228).
+    ///
+    /// It supplies the three tables the term parser reads: the free symbols
+    /// `lookupArity` and `nullaryApp` search
+    /// (Theory/Text/Parser/Term.hs:62-72,158-163), the `[AC]` names `acterm`
+    /// turns into infix operators (Theory/Text/Parser/Term.hs:165-174), and
+    /// the macro names both of the first two append.  The theory-level `NoEq`
+    /// symbols come with the enable flags, as they do in HS's `funSyms`
+    /// (Term/Maude/Signature.hs:110-125).
+    fn seed_signature(&mut self, sig: &MaudeSig) {
+        self.fun_syms.clear();
+        for f in &sig.st_fun_syms {
+            self.insert_fun_sym(&String::from_utf8_lossy(f.name), FunOptions::of_no_eq(f));
+        }
+        self.ac_fun_syms = sig
+            .st_ac_fun_syms
+            .iter()
+            .map(|a| String::from_utf8_lossy(a.name).into_owned())
+            .collect();
+        self.ac_fun_syms.sort();
+        self.ac_fun_syms.dedup();
+        self.macro_syms = sig
+            .macro_names
+            .iter()
+            .map(|m| {
+                (
+                    String::from_utf8_lossy(m.name).into_owned(),
+                    FunOptions::of_no_eq(m),
+                )
+            })
+            .collect();
+        self.sig_enable_dh = sig.enable_dh;
+        self.sig_enable_bp = sig.enable_bp;
+        self.sig_enable_xor = sig.enable_xor;
+        self.sig_enable_mset = sig.enable_mset;
+        self.sig_enable_nat = sig.enable_nat;
     }
 
     /// Identifier that may contain hyphens (e.g. `asymmetric-encryption`,
@@ -5252,35 +5330,30 @@ impl<'a> Parser<'a> {
     /// `fail "unknown operator ..."`, which the try-wrapped application
     /// converts into a backtrack.
     fn lookup_arity(&self, op: &str) -> Option<ArityRes> {
-        let mut best: Option<(usize, u8, u8, u8)> = None;
-        let mut arity = 0usize;
+        let mut best: Option<FunOptions> = None;
+        let mut consider = |o: FunOptions| {
+            if best.is_none_or(|b: FunOptions| o.ord_key() < b.ord_key()) {
+                best = Some(o);
+            }
+        };
         for (n, o) in &self.fun_syms {
             if n == op {
-                let k = o.ord_key();
-                if best.is_none_or(|b| k < b) {
-                    best = Some(k);
-                    arity = o.arity;
-                }
+                consider(*o);
             }
         }
         for s in self.enabled_theory_noeq_syms() {
             if s.name == op {
-                let o = FunOptions::of(s);
-                let k = o.ord_key();
-                if best.is_none_or(|b| k < b) {
-                    best = Some(k);
-                    arity = o.arity;
-                }
+                consider(FunOptions::of(s));
             }
         }
-        if best.is_some() {
-            return Some(ArityRes::NoEq { arity });
+        if let Some(opts) = best {
+            return Some(ArityRes::NoEq { opts });
         }
         if self.ac_fun_syms.iter().any(|n| n == op) {
             return Some(ArityRes::Ac);
         }
         if let Some((_, o)) = self.macro_syms.iter().find(|(n, _)| n == op) {
-            return Some(ArityRes::NoEq { arity: o.arity });
+            return Some(ArityRes::NoEq { opts: *o });
         }
         if op == "em" {
             // The appended `(emapSymString, (2,Public,Constructor,NotNDC))`
@@ -5288,7 +5361,9 @@ impl<'a> Parser<'a> {
             // (Theory/Text/Parser/Term.hs:102-103), which the readers resolve
             // from the `em`
             // application node; the arity check runs like any NoEq's.
-            return Some(ArityRes::NoEq { arity: 2 });
+            return Some(ArityRes::NoEq {
+                opts: FunOptions::plain(2),
+            });
         }
         None
     }
@@ -5610,16 +5685,7 @@ impl<'a> Parser<'a> {
                 };
                 self.restore(probe);
                 if is_lessmset {
-                    let idx = self.try_dot_index();
-                    let v = VarSpec {
-                        name: id,
-                        idx,
-                        sort: LSort::Msg,
-                        typ: None,
-                    };
-                    let v = self.attach_sort_suffix(v)?;
-                    self.note_var_dot_hangover(&v);
-                    return Ok(Term::Var(v));
+                    return self.bare_ident_term(id);
                 }
                 if self.resolve_prefix_apps {
                     // HS resolves the head through `lookupArity` and parses
@@ -5689,19 +5755,45 @@ impl<'a> Parser<'a> {
             // may have clobbered `last_ident_end` with a nested argument's, so
             // re-record this name's for `note_var_dot_hangover`.
             self.last_ident_end = Some(self.ident_end_from(save_id, &id));
-            let idx = self.try_dot_index();
-            let v = VarSpec {
-                name: id,
-                idx,
-                sort: LSort::Msg,
-                typ: None,
-            };
-            let v = self.attach_sort_suffix(v)?;
-            self.note_var_dot_hangover(&v);
-            return Ok(Term::Var(v));
+            return self.bare_ident_term(id);
         }
         self.restore(save_id);
         Err(self.err("expected term"))
+    }
+
+    /// The term a BARE identifier (no sigil) denotes once its optional
+    /// `.<index>` and `:sort` / `:type` suffix are read.
+    ///
+    /// HS's `term` tries `nullaryApp` ahead of the literal parser
+    /// (Theory/Text/Parser/Term.hs:139-153,158-163): an identifier that is an
+    /// arity-0 symbol of `funSyms maudeSig ∪ macroNames maudeSig` is the
+    /// application `fApp fs []`, whatever a same-named binder is in scope.
+    /// `nullaryApp` matches through `symbol`, so its alternative wins only
+    /// when the whole lexeme is the symbol's name — an index, a sort suffix
+    /// or a SAPIC type annotation leaves trailing input and the name reparses
+    /// as `plit`'s variable.  The lexeme is then the symbol's name rather
+    /// than an `indexedIdentifier`, so it leaves neither of the variable
+    /// hangovers [`Parser::note_var_dot_hangover`] records.
+    fn bare_ident_term(&mut self, id: String) -> Result<Term, ParseError> {
+        let idx = self.try_dot_index();
+        let v = VarSpec {
+            name: id,
+            idx,
+            sort: LSort::Msg,
+            typ: None,
+        };
+        let v = self.attach_sort_suffix(v)?;
+        if !self.dot_index_consumed
+            && !self.sort_suffix_consumed
+            && v.typ.is_none()
+            && self.is_nullary_sym(&v.name)
+        {
+            self.var_dot_hangover = false;
+            self.var_hangover_ident_end = None;
+            return Ok(Term::App(v.name, Vec::new()));
+        }
+        self.note_var_dot_hangover(&v);
+        Ok(Term::Var(v))
     }
 
     /// The variable after a pattern `=` — HS `sapicvar` via `sapicpatternvar`
@@ -5763,18 +5855,27 @@ impl<'a> Parser<'a> {
         self.lx.bump(); // the '(' the caller peeked
         self.skip_ws();
         match res {
-            ArityRes::NoEq { arity: 1 } => {
+            ArityRes::NoEq {
+                opts: FunOptions { arity: 1, .. },
+            } => {
                 let arg = self.tuple_contents(eqn)?;
                 self.require_punct(")")?;
                 Ok(Term::App(id.to_string(), vec![arg]))
             }
-            ArityRes::NoEq { arity } => {
+            ArityRes::NoEq { opts } => {
+                let arity = opts.arity;
                 let ts = self.sep_end_by(")", |p| p.msetterm(eqn))?;
                 if ts.len() != arity {
                     return Err(self.err(format!(
                         "operator `{id}' has arity {arity}, but here it is used with arity {}",
                         ts.len()
                     )));
+                }
+                if res.is_dh_exp(id) {
+                    let mut it = ts.into_iter();
+                    let a = it.next().expect("arity 2 checked above");
+                    let b = it.next().expect("arity 2 checked above");
+                    return Ok(Term::BinOp(BinOp::Exp, Box::new(a), Box::new(b)));
                 }
                 Ok(Term::App(id.to_string(), ts))
             }
@@ -5823,7 +5924,12 @@ impl<'a> Parser<'a> {
                 Box::new(arg1),
                 Box::new(arg2),
             )),
-            ArityRes::NoEq { arity: 2 } => {
+            ArityRes::NoEq {
+                opts: FunOptions { arity: 2, .. },
+            } => {
+                if res.is_dh_exp(id) {
+                    return Ok(Term::BinOp(BinOp::Exp, Box::new(arg1), Box::new(arg2)));
+                }
                 Ok(Term::AlgApp(id.to_string(), Box::new(arg1), Box::new(arg2)))
             }
             ArityRes::NoEq { .. } => {
@@ -6101,8 +6207,14 @@ enum FactOrRestr {
 /// entry point used to recover the AST from that text.  Errors on any trailing
 /// input after the formula.  All algebraic operators are enabled at parse time
 /// (see [`Parser::new`]); semantic gating is irrelevant here.
-pub fn parse_formula_str(s: &str) -> Result<Formula, ParseError> {
+///
+/// `msig` is the signature the text was rendered against, seeded as HS
+/// `parseString` seeds one (Theory/Text/Parser/Token.hs:250-258): it supplies
+/// the `[AC]` symbols' infix spelling and the arity-0 constants `nullaryApp`
+/// claims.
+pub fn parse_formula_str(s: &str, msig: &MaudeSig) -> Result<Formula, ParseError> {
     let mut p = Parser::new(s, &[], false);
+    p.seed_signature(msig);
     // Rendered formula text carries applications of symbols this fresh
     // parser has no declarations for — accept them structurally.
     p.resolve_prefix_apps = false;
@@ -6124,20 +6236,14 @@ pub fn parse_formula_str(s: &str) -> Result<Formula, ParseError> {
 /// time (see [`Parser::new`]); semantic gating is irrelevant here because
 /// we only need the operator/function shape.
 ///
-/// `ac_fun_syms` are the theory's user-declared `[AC]` symbol names, which
-/// [`Parser::acterm`] needs to recognise their INFIX spelling (`x add y`
-/// for `functions: add/2 [AC]`).  HS reads the same set from the parser
-/// state's signature (`stACFunSyms`, Theory/Text/Parser/Term.hs:165-174),
-/// so a caller with no signature in hand passes an empty slice and gets the
-/// builtin-operator grammar only.
-pub fn parse_term_str(s: &str, ac_fun_syms: &[String]) -> Result<Term, ParseError> {
+/// `msig` is the signature the text was rendered against, seeded as HS
+/// `parseString` seeds one (Theory/Text/Parser/Token.hs:250-258).  It gives
+/// [`Parser::acterm`] the INFIX spelling of the user-declared `[AC]` symbols
+/// (`x add y` for `functions: add/2 [AC]`, Theory/Text/Parser/Term.hs:165-174)
+/// and `nullaryApp` the arity-0 constants.
+pub fn parse_term_str(s: &str, msig: &MaudeSig) -> Result<Term, ParseError> {
     let mut p = Parser::new(s, &[], false);
-    // `acterm` nests one `chainl1` level per symbol in this list, in list
-    // order — HS's is `S.toList (stACFunSyms sig)`, i.e. ascending by name,
-    // which the theory-parsing path reproduces by sorting on insert.
-    p.ac_fun_syms = ac_fun_syms.to_vec();
-    p.ac_fun_syms.sort();
-    p.ac_fun_syms.dedup();
+    p.seed_signature(msig);
     // Rendered term text carries applications of symbols this fresh parser
     // has no declarations for — accept them structurally instead of
     // resolving through `lookup_arity`.

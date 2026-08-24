@@ -4,6 +4,7 @@
 
 use super::*;
 use tamarin_parser::parse_theory;
+use tamarin_term::lterm::LSort;
 
 fn parse(src: &str) -> p::Theory {
     parse_theory(src, &[]).expect("parse")

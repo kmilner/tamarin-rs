@@ -39,7 +39,6 @@
 use std::collections::BTreeMap;
 
 use tamarin_parser::ast as p;
-use tamarin_term::lterm::LSort;
 
 /// Apply all macros to a term, recursing into args first and re-expanding
 /// the body after substitution.  Mirrors HS `applyMacros` exactly
@@ -85,29 +84,9 @@ pub fn apply_macros_term(macros: &[p::Macro], term: &p::Term) -> p::Term {
             Box::new(apply_macros_term(macros, b)),
         ),
         p::Term::PatMatch(inner) => p::Term::PatMatch(Box::new(apply_macros_term(macros, inner))),
-        // A BARE identifier (no `$~#%` prefix, no `:sort` suffix, no `.idx`)
-        // naming a 0-ary macro is a macro CALL: HS's `nullaryApp` parser
-        // alternative (Theory/Text/Parser/Term.hs:151,158-163) runs before `plit` and matches any
-        // arity-0 name in `funSyms ∪ macroNames`, so such an identifier
-        // reaches HS's `applyMacros` as `fApp (NoEq (m,(0,..))) []`, never
-        // as a variable.  RS's surface parser is signature-less and yields
-        // the message-sorted `Var` a bare name parses to, so resolve here.
-        // Any sigil or index means HS's `symbol` match would have left
-        // trailing input and backtracked to `plit` — a genuine variable;
-        // leave those (and 0-ary FUNCTION names, which `term_to_lnterm`'s
-        // nullary branch lifts) untouched.
-        p::Term::Var(v) => {
-            if v.idx == 0 && v.sort == LSort::Msg && v.typ.is_none() {
-                if let Some(m) = find_matching_macro(&v.name, 0, macros) {
-                    let expanded = subst_term_by_name(&m.body, &BTreeMap::new());
-                    // Re-expand the EXPANDED body to handle nested macros.
-                    return apply_macros_term(macros, &expanded);
-                }
-            }
-            term.clone()
-        }
         // Literals: no recursion (HS Term/Macro.hs:40-54, see line 51 `Lit l -> lit l`).
-        p::Term::PubLit(_)
+        p::Term::Var(_)
+        | p::Term::PubLit(_)
         | p::Term::FreshLit(_)
         | p::Term::NatLit(_)
         | p::Term::Number(_)

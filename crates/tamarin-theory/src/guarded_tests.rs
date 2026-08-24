@@ -4,9 +4,10 @@
 
 use super::*;
 use tamarin_parser::parser::parse_formula_str;
+use tamarin_term::maude_sig::pair_maude_sig;
 
 fn g(s: &str) -> Result<Guarded, GuardError> {
-    let f = parse_formula_str(s).map_err(|e| err(format!("parse: {}", e)))?;
+    let f = parse_formula_str(s, &pair_maude_sig()).map_err(|e| err(format!("parse: {}", e)))?;
     formula_to_guarded(&f)
 }
 

@@ -616,47 +616,52 @@ mod tests {
             pretty_sapic_top_level(&proc)
         };
 
-        // `<'g'^k.1, add(k.1, 'a')>`: the AC application is written prefix and
-        // in the non-canonical operand order.
-        let m1 = vec![
-            p::Term::Pair(vec![
-                p::Term::BinOp(
-                    p::BinOp::Exp,
-                    Box::new(p::Term::PubLit("g".into())),
-                    Box::new(k.clone()),
-                ),
-                p::Term::App("add".into(), vec![k.clone(), p::Term::PubLit("a".into())]),
-            ]),
-            k.clone(),
-        ];
-        // `add(k.1, add('a', 'b'))`: a nested chain that flattens to three
-        // operands under one AC node.
-        let m2 = vec![
-            p::Term::App(
-                "add".into(),
-                vec![
-                    k.clone(),
-                    p::Term::App(
-                        "add".into(),
-                        vec![p::Term::PubLit("a".into()), p::Term::PubLit("b".into())],
-                    ),
-                ],
-            ),
-            k.clone(),
-        ];
+        let add = |a: p::Term, b: p::Term| {
+            p::Term::BinOp(
+                p::BinOp::AcFct(tamarin_term::intern::intern_str("add")),
+                Box::new(a),
+                Box::new(b),
+            )
+        };
 
-        // Without the theory's `[AC]` set installed `add` is an ordinary
-        // function symbol, so it stays prefix — this is what makes the
+        // `<'g'^k.1, add(k.1, 'a')>` with `add` an ordinary function symbol:
+        // the application stays prefix, which is what makes the AC
         // assertions below discriminating.
+        let pair_with = |second: p::Term| {
+            vec![
+                p::Term::Pair(vec![
+                    p::Term::BinOp(
+                        p::BinOp::Exp,
+                        Box::new(p::Term::PubLit("g".into())),
+                        Box::new(k.clone()),
+                    ),
+                    second,
+                ]),
+                k.clone(),
+            ]
+        };
         assert_eq!(
-            eq_cond(m1.clone()),
+            eq_cond(pair_with(p::Term::App(
+                "add".into(),
+                vec![k.clone(), p::Term::PubLit("a".into())],
+            ))),
             "if Eq( <'g'^k.1, add(k.1, 'a')>, k.1 )"
         );
 
-        let theory =
-            tamarin_parser::parse_theory("theory T begin functions: add/2 [AC] end", &[]).unwrap();
-        let _guard = crate::elaborate::set_user_funs_for_theory(&theory);
-        assert_eq!(eq_cond(m1), "if Eq( <'g'^k.1, ('a' add k.1)>, k.1 )");
+        // The `[AC]` symbol's node, in the non-canonical operand order the
+        // source spelling `add(k, 'a')` gives it.
+        assert_eq!(
+            eq_cond(pair_with(add(k.clone(), p::Term::PubLit("a".into())))),
+            "if Eq( <'g'^k.1, ('a' add k.1)>, k.1 )"
+        );
+        // A nested chain flattens to three operands under one AC node.
+        let m2 = vec![
+            add(
+                k.clone(),
+                add(p::Term::PubLit("a".into()), p::Term::PubLit("b".into())),
+            ),
+            k.clone(),
+        ];
         assert_eq!(eq_cond(m2), "if Eq( ('a' add 'b' add k.1), k.1 )");
     }
 
@@ -678,8 +683,13 @@ mod tests {
             sort: LSort::Msg,
             idx: 1,
         });
-        let add_k_a = p::Term::App("add".into(), vec![k.clone(), p::Term::PubLit("a".into())]);
-        let restr = p::Formula::Atom(p::Atom::Eq(add_k_a, k.clone()));
+        let restr = |head: p::Term| p::Formula::Atom(p::Atom::Eq(head, k.clone()));
+        let add_prefix = p::Term::App("add".into(), vec![k.clone(), p::Term::PubLit("a".into())]);
+        let add_ac = p::Term::BinOp(
+            p::BinOp::AcFct(tamarin_term::intern::intern_str("add")),
+            Box::new(k.clone()),
+            Box::new(p::Term::PubLit("a".into())),
+        );
         let ev = crate::fact::Fact::new(
             crate::fact::FactTag::Proto(crate::fact::Multiplicity::Linear, "Ev", 1),
             vec![tamarin_term::term::f_app_ac(
@@ -715,19 +725,14 @@ mod tests {
             pretty_sapic_top_level(&proc)
         };
 
-        // Without the theory's `[AC]` set installed `add` is an ordinary
-        // function symbol, so it stays prefix — this is what makes the
-        // assertion below discriminating.
+        // With `add` an ordinary function symbol the application stays
+        // prefix — this is what makes the AC assertion below discriminating.
         assert_eq!(
-            msr(vec![restr.clone()]),
+            msr(vec![restr(add_prefix)]),
             " [ ] --[ Ev( ('a' add k.1) ), _restrict(add(k.1, 'a') = k.1) ]-> [ ];"
         );
-
-        let theory =
-            tamarin_parser::parse_theory("theory T begin functions: add/2 [AC] end", &[]).unwrap();
-        let _guard = crate::elaborate::set_user_funs_for_theory(&theory);
         assert_eq!(
-            msr(vec![restr]),
+            msr(vec![restr(add_ac)]),
             " [ ] --[ Ev( ('a' add k.1) ), _restrict(('a' add k.1) = k.1) ]-> [ ];"
         );
     }

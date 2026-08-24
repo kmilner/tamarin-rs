@@ -181,7 +181,7 @@ fn match_action_goal_by_name_arity() {
         time_var: "t".into(),
         time_idx: 0,
     };
-    let matched = match_goal(&spec, &sys, &[]).expect("should match");
+    let matched = match_goal(&spec, &sys, &pair_maude_sig()).expect("should match");
     assert_eq!(matched, goal);
 }
 
@@ -205,7 +205,7 @@ fn no_match_returns_none() {
         time_var: "t".into(),
         time_idx: 0,
     };
-    assert!(match_goal(&spec, &sys, &[]).is_none());
+    assert!(match_goal(&spec, &sys, &pair_maude_sig()).is_none());
 }
 
 /// Variable-renaming-aware Action match: two same-fact-name Action
@@ -267,7 +267,7 @@ fn match_action_disambiguates_by_time_var_root() {
         time_var: "t2".into(),
         time_idx: 7,
     };
-    let matched = match_goal(&spec, &sys, &[]).expect("should match");
+    let matched = match_goal(&spec, &sys, &pair_maude_sig()).expect("should match");
     match matched {
         Goal::Action(i, _) => assert_eq!(
             i.name, "t2",
@@ -293,7 +293,7 @@ fn match_action_disambiguates_by_time_var_root() {
         time_var: "t1".into(),
         time_idx: 5,
     };
-    let matched2 = match_goal(&spec2, &sys, &[]).expect("should match");
+    let matched2 = match_goal(&spec2, &sys, &pair_maude_sig()).expect("should match");
     match matched2 {
         Goal::Action(i, _) => assert_eq!(i.name, "t1"),
         other => panic!("expected Action, got {:?}", other),
@@ -318,7 +318,7 @@ fn match_action_disambiguates_by_time_var_root() {
         time_idx: 9,
     };
     assert!(
-        match_goal(&spec_drift, &sys, &[]).is_none(),
+        match_goal(&spec_drift, &sys, &pair_maude_sig()).is_none(),
         "drifted timepoint idx must miss like HS `M.member`"
     );
 }
@@ -348,7 +348,7 @@ fn match_premise_disambiguates_by_time_var_root() {
         time_var: "v".into(),
         time_idx: 0,
     };
-    let matched = match_goal(&spec, &sys, &[]).expect("should match");
+    let matched = match_goal(&spec, &sys, &pair_maude_sig()).expect("should match");
     match matched {
         Goal::Premise((node, _), _) => assert_eq!(node.name, "v"),
         other => panic!("expected Premise, got {:?}", other),
@@ -375,7 +375,7 @@ fn match_chain_goal_by_var_and_idx() {
         tgt_var: "k".into(),
         prem_idx: 0,
     };
-    let matched = match_goal(&spec, &sys, &[]).expect("should match");
+    let matched = match_goal(&spec, &sys, &pair_maude_sig()).expect("should match");
     assert_eq!(matched, g_jk);
     // And the other side.
     let spec2 = GoalSpec::Chain {
@@ -384,7 +384,10 @@ fn match_chain_goal_by_var_and_idx() {
         tgt_var: "j".into(),
         prem_idx: 2,
     };
-    assert_eq!(match_goal(&spec2, &sys, &[]).expect("should match"), g_ij);
+    assert_eq!(
+        match_goal(&spec2, &sys, &pair_maude_sig()).expect("should match"),
+        g_ij
+    );
     // Wrong idx — no match.
     let bad = GoalSpec::Chain {
         src_var: "i".into(),
@@ -392,7 +395,7 @@ fn match_chain_goal_by_var_and_idx() {
         tgt_var: "j".into(),
         prem_idx: 2,
     };
-    assert!(match_goal(&bad, &sys, &[]).is_none());
+    assert!(match_goal(&bad, &sys, &pair_maude_sig()).is_none());
 }
 
 /// Subterm matcher — open Subterm goals are matched by canonical
@@ -423,19 +426,19 @@ fn match_subterm_goal_by_pretty_text() {
         big_raw: pretty_lnterm(&v(big)),
     };
     assert_eq!(
-        match_goal(&spec("x", "y"), &sys, &[]).expect("should match"),
+        match_goal(&spec("x", "y"), &sys, &pair_maude_sig()).expect("should match"),
         g1
     );
     assert_eq!(
-        match_goal(&spec("a", "b"), &sys, &[]).expect("should match"),
+        match_goal(&spec("a", "b"), &sys, &pair_maude_sig()).expect("should match"),
         g2
     );
     // Both sides must agree.  The halves of two different goals never
     // combine into a match.
-    assert!(match_goal(&spec("x", "b"), &sys, &[]).is_none());
+    assert!(match_goal(&spec("x", "b"), &sys, &pair_maude_sig()).is_none());
     // No text matches here.  The unique fallback is off, because there are
     // two Subterm goals.  `match_goal` therefore returns no match.
-    assert!(match_goal(&spec("p", "q"), &sys, &[]).is_none());
+    assert!(match_goal(&spec("p", "q"), &sys, &pair_maude_sig()).is_none());
 }
 
 /// Subterm matcher fallback — when skeleton text differs from
@@ -458,7 +461,7 @@ fn match_subterm_unique_fallback() {
         small_raw: "skel_small".into(),
         big_raw: "skel_big".into(),
     };
-    let matched = match_goal(&spec, &sys, &[]).expect("unique-fallback should match");
+    let matched = match_goal(&spec, &sys, &pair_maude_sig()).expect("unique-fallback should match");
     assert_eq!(matched, goal);
 }
 
@@ -472,13 +475,16 @@ fn match_split_goal_by_id() {
     sys.goals_mut().push((goal_a.clone(), Default::default()));
     sys.goals_mut().push((goal_b.clone(), Default::default()));
     let spec = GoalSpec::Split { split_id: 3 };
-    let matched = match_goal(&spec, &sys, &[]).expect("should match");
+    let matched = match_goal(&spec, &sys, &pair_maude_sig()).expect("should match");
     assert_eq!(matched, goal_b);
     let spec2 = GoalSpec::Split { split_id: 7 };
-    assert_eq!(match_goal(&spec2, &sys, &[]).expect("should match"), goal_a);
+    assert_eq!(
+        match_goal(&spec2, &sys, &pair_maude_sig()).expect("should match"),
+        goal_a
+    );
     // No id 99 in the system → None.
     let none = GoalSpec::Split { split_id: 99 };
-    assert!(match_goal(&none, &sys, &[]).is_none());
+    assert!(match_goal(&none, &sys, &pair_maude_sig()).is_none());
 }
 
 /// Disj matcher — two open Disj goals of different alt counts; the
@@ -528,13 +534,19 @@ fn match_disj_goal_by_alt_count() {
         alts: vec![DisjAlt::NonQuant, DisjAlt::NonQuant, DisjAlt::NonQuant],
         alt_texts: vec![String::new(), String::new(), String::new()],
     };
-    assert_eq!(match_goal(&spec3, &sys, &[]).expect("should match"), three);
+    assert_eq!(
+        match_goal(&spec3, &sys, &pair_maude_sig()).expect("should match"),
+        three
+    );
     // Spec with 2 NonQuant alts must pick the 2-alt goal.
     let spec2 = GoalSpec::Disj {
         alts: vec![DisjAlt::NonQuant, DisjAlt::NonQuant],
         alt_texts: vec![String::new(), String::new()],
     };
-    assert_eq!(match_goal(&spec2, &sys, &[]).expect("should match"), two);
+    assert_eq!(
+        match_goal(&spec2, &sys, &pair_maude_sig()).expect("should match"),
+        two
+    );
 }
 
 /// `normalize_disj_alt_text_for_match` is a hand-written mirror of the
@@ -624,7 +636,7 @@ fn match_disj_goal_prefers_alt_text_score_over_source_order() {
         alt_texts: want,
     };
     assert_eq!(
-        match_goal(&spec, &sys, &[]).expect("should match"),
+        match_goal(&spec, &sys, &pair_maude_sig()).expect("should match"),
         second,
         "alt-text score must beat source order"
     );

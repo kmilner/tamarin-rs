@@ -734,14 +734,35 @@ fn fresh_public_constants_message_format() {
 }
 
 /// A free variable literally named `True` IS reported as unbound — there
-/// is no builtin `True` nullary (only `true`), so HS does not suppress it.
-/// (Regression for removing `"True"` from `is_known_nullary_constant_name`.)
+/// is no builtin `True` nullary (only `true`), so the parser leaves it a
+/// variable.
 #[test]
 fn variable_named_true_is_unbound() {
     let t = parse("theory T begin rule R: [ ] --[ ]-> [ Out(True) ] end");
     assert!(
         topics(&check_theory(&t)).contains("Unbound variables"),
         "True must be reported as unbound"
+    );
+}
+
+/// A builtin's 0-arity constant is a symbol only while that builtin is
+/// enabled (`nullaryApp` searches `funSyms maudeSig`,
+/// Theory/Text/Parser/Term.hs:158-163), so the same bare name is a variable
+/// — and an unbound one — in a theory that does not enable it.
+#[test]
+fn bare_name_of_a_disabled_builtin_constant_is_a_variable() {
+    let t = parse("theory T begin rule R: [ ] --[ ]-> [ Out(<zero, true>) ] end");
+    assert!(
+        topics(&check_theory(&t)).contains("Unbound variables"),
+        "zero and true must be reported as unbound without xor and signing"
+    );
+    let t = parse(
+        "theory T begin builtins: xor, signing          rule R: [ ] --[ ]-> [ Out(<zero, true>) ] end",
+    );
+    assert!(
+        !topics(&check_theory(&t)).contains("Unbound variables"),
+        "with the builtins enabled both names are constants: {:?}",
+        check_theory(&t)
     );
 }
 

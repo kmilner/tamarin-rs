@@ -101,18 +101,16 @@ pub struct ProofState {
     /// `use_induction` + `heuristic` for the lemma being ranked.
     pub lemma_settings: Arc<BTreeMap<String, LemmaSearchSettings>>,
     /// User-declared function-symbol name sets for this theory.
-    /// `formula_to_guarded` / `term_to_gterm_free` / `term_to_lnterm` resolve
-    /// symbols through THREAD-LOCALS (HS resolves them at parse time via
-    /// `nullaryApp`, so its formulas are born resolved).  The batch path
-    /// installs them per proving thread (prove.rs `_lemma_user_funs_guard`);
-    /// web handlers run on arbitrary tokio workers, so every handler that
-    /// converts formulas or executes solver code MUST install a guard from
-    /// this via `set_user_funs_from_collected` first.  Without it a declared
-    /// nullary fun (`true/0`, `false/0`) lifts to a FREE VARIABLE: on
-    /// OIDC_Implicit that flipped `isSafetyFormula` for the two
-    /// `Verified(...,true/false)` restrictions, conjoining them into the
-    /// root formula instead of `sLemmas` — wrong sequent pane AND `ginduct`
-    /// failure (missing `induction` in Applicable Proof Methods).
+    /// `term_to_lnterm` / `term_to_sapic_term` read a symbol's privacy,
+    /// constructability, NDC state and arity-1 fold through THREAD-LOCALS (HS
+    /// reads them from the signature in parser state, so its terms are born
+    /// carrying them).  The batch path installs them per proving thread
+    /// (prove.rs `_lemma_user_funs_guard`); web handlers run on arbitrary
+    /// tokio workers, so every handler that converts terms or executes solver
+    /// code MUST install a guard from this via `set_user_funs_from_collected`
+    /// first.  Without it a `[destructor]` symbol lowers as a constructor,
+    /// whose Maude operator (`tamXC…`) the theory module never declares, so
+    /// `get variants` comes back empty.
     pub user_funs: Arc<tamarin_theory::elaborate::CollectedUserFuns>,
     /// Shared per-file prover session (batch `--prove`'s per-lemma-context
     /// factory).  The web `autoprove`/`autoproveAll` handlers run their
@@ -160,8 +158,8 @@ impl ProofState {
             },
         };
         // Install the user-fn-symbol thread-locals for the WHOLE build —
-        // every `formula_to_guarded` below (restrictions, lemma formulas,
-        // reuse lemmas) resolves nullary/unary user funs through them.
+        // every term conversion below (restrictions, lemma formulas, reuse
+        // lemmas) reads the declared symbols' options through them.
         // See the `user_funs` field docs.
         let user_funs = std::sync::Arc::new(
             tamarin_theory::elaborate::collect_user_funs_for_theory(parser_theory),

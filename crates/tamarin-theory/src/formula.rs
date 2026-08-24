@@ -343,10 +343,9 @@ pub fn to_lnformula(fm: &SyntacticLNFormula) -> Option<LNFormula> {
 /// `LVar` through `elaborate::sort_of`.  A
 /// binder closes exactly the occurrences equal to its `LVar` in name, sort
 /// and index (HS `quantify`'s `v == x`, Theory/Model/Formula.hs:350-352), so
-/// `Ex ~k. Made(k)` leaves the message-sorted `k` free.  Terms go through
-/// [`term_to_lnterm`], which reads the thread-local user-function bundle and
-/// turns a bare nullary symbol into its application before any binder is
-/// considered (HS `nullaryApp`, Theory/Text/Parser/Term.hs:158-163).  A
+/// `Ex ~k. Made(k)` leaves the message-sorted `k` free.  A bare 0-arity
+/// symbol is already an application when it arrives, so no binder of that
+/// name closes it (HS `nullaryApp`, Theory/Text/Parser/Term.hs:158-163).  A
 /// `(<)` atom becomes the `Smaller` predicate (`smallerp`,
 /// Theory/Text/Parser/Formula.hs:30-38); a SAPIC `=t` pattern term, which
 /// `term_to_lnterm` rejects, is an [`ElabError`].
@@ -605,11 +604,18 @@ mod tests {
     use tamarin_parser::parser::{parse_formula_str, parse_theory};
     use tamarin_term::function_symbols::{AcSym, FunSym};
     use tamarin_term::intern::intern_str;
+    use tamarin_term::maude_sig::pair_maude_sig;
     use tamarin_term::term::{f_app_ac, f_app_no_eq, Term};
     use tamarin_term::vterm::var_term;
 
     fn parsed(src: &str) -> SyntacticLNFormula {
-        from_parser(&parse_formula_str(src).unwrap()).unwrap()
+        parsed_with(src, &pair_maude_sig())
+    }
+
+    /// [`parsed`] against a theory's own signature, for the sources whose
+    /// meaning depends on a declaration.
+    fn parsed_with(src: &str, msig: &tamarin_term::maude_sig::MaudeSig) -> SyntacticLNFormula {
+        from_parser(&parse_formula_str(src, msig).unwrap()).unwrap()
     }
 
     fn free(name: &str, sort: LSort, idx: u64) -> BLNTerm {
@@ -738,9 +744,12 @@ mod tests {
     #[test]
     fn from_parser_keeps_nullary_symbol_constant() {
         let thy = parse_theory("theory T begin\nfunctions: zero/0\nend", &[]).unwrap();
+        let elab = crate::elaborate::elaborate(&thy).unwrap();
         let _guard = crate::elaborate::set_user_funs_for_theory(&thy);
 
-        let ProtoFormula::Qua(Quantifier::All, h, body) = parsed("All zero. P(zero)") else {
+        let ProtoFormula::Qua(Quantifier::All, h, body) =
+            parsed_with("All zero. P(zero)", &elab.signature.maude_sig)
+        else {
             panic!("expected a universal quantifier");
         };
         assert_eq!(h, hint("zero", LSort::Msg));

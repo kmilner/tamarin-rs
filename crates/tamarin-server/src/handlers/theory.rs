@@ -59,9 +59,9 @@ fn not_found() -> Response {
 /// A theory looked up from the store, with its user-declared function-symbol
 /// sets installed on the request thread for as long as the value is held.
 ///
-/// HS resolves a declared `[AC]` / nullary / unary symbol at PARSE time, so its
-/// terms are born resolved; the port resolves them through thread-locals, which
-/// start empty on every axum worker (see
+/// HS reads a declared symbol's options from the signature in parser state, so
+/// its terms are born carrying them; the port reads them through thread-locals,
+/// which start empty on every axum worker (see
 /// [`TheoryEntry::install_user_funs`](crate::state::TheoryEntry::install_user_funs)).
 /// Binding the sets to the looked-up theory makes that a property of the
 /// handler boundary rather than of each renderer remembering: a handler cannot

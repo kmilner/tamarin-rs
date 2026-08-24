@@ -1076,10 +1076,16 @@ pub fn predicate_restrictions() -> Vec<tamarin_parser::ast::Restriction> {
 /// Parse one of the hard-coded restriction strings (`parseRestriction`'s job in
 /// HS) and wrap it in a named `Restriction`.  Shared by all four hard-coded
 /// restriction builders so the parse+panic+wrap shape lives in one place.
+///
+/// HS `parseRestriction = parseString [] …` (Theory/Text/Parser/Restriction.hs:65-66)
+/// and `parseString` seeds the parser state with `pairMaudeSig`
+/// (Theory/Text/Parser/Token.hs:250-258), not the theory's signature, so
+/// these strings are read against the pair signature alone.
 fn parse_restriction(name: &str, src: &str) -> tamarin_parser::ast::Restriction {
     use tamarin_parser::ast as p;
-    let formula = tamarin_parser::parser::parse_formula_str(src)
-        .unwrap_or_else(|e| panic!("Error parsing hard-coded restriction {name}: {e:?}"));
+    let formula =
+        tamarin_parser::parser::parse_formula_str(src, &tamarin_term::maude_sig::pair_maude_sig())
+            .unwrap_or_else(|e| panic!("Error parsing hard-coded restriction {name}: {e:?}"));
     p::Restriction {
         name: name.to_string(),
         formula,
@@ -1356,47 +1362,34 @@ mod tests {
     /// `process="if Eq( nil, k.1 )"`.
     #[test]
     fn cond_nullary_constant_is_not_an_unbound_var() {
-        use tamarin_parser::ast as p;
-
-        let leaf = |name: &str| {
-            p::Term::Var(p::VarSpec {
-                typ: None,
-                name: name.into(),
-                sort: LSort::Msg,
-                idx: 0,
-            })
+        let cond = |decl: &str| {
+            let thy =
+                tamarin_parser::parse_theory(&format!("theory T begin\n{decl}\nend"), &[]).unwrap();
+            let msig = tamarin_theory::elaborate::elaborate(&thy)
+                .unwrap()
+                .signature
+                .maude_sig;
+            // `Eq(nil, k)` — the predicate atom the surface `if Eq(nil, k)`
+            // parses to.
+            let f = tamarin_parser::parser::parse_formula_str("Eq(nil, k)", &msig).unwrap();
+            ProcessCombinator::Cond(f)
         };
-        // `Eq(nil, k)` — the predicate atom the surface `if Eq(nil, k)` parses to.
-        let f = p::Formula::Atom(p::Atom::Pred(p::Fact {
-            persistent: false,
-            name: "Eq".into(),
-            args: vec![leaf("nil"), leaf("k")],
-            annotations: Vec::new(),
-        }));
-        let c = ProcessCombinator::Cond(f);
         let an = ProcessAnnotation::<LVar>::empty();
         let pos: Vec<i64> = vec![];
         // tildex binds only `k`.
         let mut tx = BTreeSet::new();
         tx.insert(lv("k", 0));
 
-        // Without the theory's 0-arity set installed `nil` is an ordinary
-        // variable and is (correctly) unbound — this is what makes the
-        // assertion below discriminating.
-        {
-            let empty = tamarin_parser::parse_theory("theory T begin end", &[]).unwrap();
-            let _guard = tamarin_theory::elaborate::set_user_funs_for_theory(&empty);
-            let err = base_trans_comb(&c, &an, &pos, &tx).unwrap_err();
-            assert!(
-                err.contains("nil"),
-                "expected WFUnbound over nil, got {err}"
-            );
-        }
+        // Undeclared, `nil` is an ordinary variable and is (correctly)
+        // unbound — this is what makes the assertion below discriminating.
+        let err = base_trans_comb(&cond(""), &an, &pos, &tx).unwrap_err();
+        assert!(
+            err.contains("nil"),
+            "expected WFUnbound over nil, got {err}"
+        );
 
-        let theory =
-            tamarin_parser::parse_theory("theory T begin functions: nil/0 end", &[]).unwrap();
-        let _guard = tamarin_theory::elaborate::set_user_funs_for_theory(&theory);
-        let (bodies, txl, txr) = base_trans_comb(&c, &an, &pos, &tx).unwrap();
+        let (bodies, txl, txr) =
+            base_trans_comb(&cond("functions: nil/0"), &an, &pos, &tx).unwrap();
         assert_eq!(bodies.len(), 2);
         assert_eq!(txl, tx);
         assert_eq!(txr, Some(tx));

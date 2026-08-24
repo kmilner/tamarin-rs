@@ -1,16 +1,14 @@
 /*
- * A 0-arity function symbol used before its declaration.  Upstream resolves a
- * bare identifier against the signature declared so far
+ * A 0-arity function symbol used before its declaration.  A bare identifier
+ * resolves against the signature declared SO FAR
  * (Theory/Text/Parser/Term.hs:158-163#nullaryApp,
  * Theory/Text/Parser/Term.hs:62-72#lookupArity), so rule A's `zed` is a
  * message variable — unbound, and ordered before `zw` in the multiset — while
- * rule B's `zed` is the declared constant and follows `zw`.  The port
- * collects the theory's function symbols before it elaborates any rule, so it
- * reads both as the constant and reports the run clean.
+ * rule B's `zed` is the declared constant and follows `zw`.
  *
  * Compared slices: the wf report block, which carries the unbound-variable
  * finding, and the `theory … end` echo, which carries the two multiset
- * orders (see check.sh).
+ * orders.
  */
 theory NullaryLateDecl
 begin

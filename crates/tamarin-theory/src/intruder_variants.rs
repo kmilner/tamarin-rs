@@ -137,26 +137,16 @@ impl std::error::Error for IntrRuleParseError {}
 /// parses `one` as a Msg-sort variable whose !KU-action unifies with
 /// every KU goal — adding a spurious `c_one` case to every source-case
 /// enumeration and falsely closing branches with `SOLVED // trace found`.
-///
-/// We mirror this here via [`MaudeSigNullaryGuard`], which pushes the
-/// 0-arity NoEq names from `msig` into the `USER_NULLARY_FUNS`
-/// thread-local (defined in elaborate.rs) read by `term_to_lnterm`'s
-/// `Var` branch, via `is_user_nullary_fun` (defined in elaborate.rs).
-/// The guard restores the prior state on drop.
+/// The port's `p::parse_intruder_rules` takes `msig` for the same reason.
 pub fn parse_intruder_rules(
     msig: &MaudeSig,
     ctxt_desc: &str,
     source: &str,
 ) -> Result<Vec<IntrRuleAC>, IntrRuleParseError> {
-    let parser_rules = p::parse_intruder_rules(source).map_err(|e| IntrRuleParseError {
+    let parser_rules = p::parse_intruder_rules(msig, source).map_err(|e| IntrRuleParseError {
         ctxt_desc: ctxt_desc.to_string(),
         message: e.to_string(),
     })?;
-
-    // Mirror HS `setState (mkStateSig msig)` — make the term-conversion
-    // pass below see the 0-arity NoEq names from `msig` so bare
-    // identifiers like `one` / `DH_neutral` are recognised as constants.
-    let _nullary_guard = elaborate::MaudeSigNullaryGuard::set(msig);
 
     // HS `knownFuns = S.toList (funSyms msig)`.
     let known_funs = KnownFuns::new(msig.fun_syms.iter().copied().collect());

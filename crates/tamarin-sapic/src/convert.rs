@@ -64,11 +64,9 @@ pub(crate) fn varspec_to_sapic(v: &p::VarSpec) -> SapicLVar {
 /// Quantifier-bound names are tracked in a `bound` stack (respecting shadowing)
 /// and their occurrences are left untouched; for a free `Var`, `f(varspec,
 /// bound)` returns `Some(term)` to replace the leaf or `None` to keep it
-/// unchanged.  Leaves that name a 0-arity function symbol are constants rather
-/// than variables (`is_nullary_fun_leaf`) and are skipped too, so the leaf set
-/// offered here is exactly the one [`fold_free_vars`] reports.  Shared traversal
-/// behind `let_destructors::subst_cond_formula` and
-/// `typing::rename_cond_formula`.
+/// unchanged, so the leaf set offered here is exactly the one
+/// [`fold_free_vars`] reports.  Shared traversal behind
+/// `let_destructors::subst_cond_formula` and `typing::rename_cond_formula`.
 pub(crate) fn map_free_terms(
     formula: &p::Formula,
     f: &mut dyn FnMut(&p::VarSpec, &[String]) -> Option<p::Term>,
@@ -80,7 +78,7 @@ pub(crate) fn map_free_terms(
     ) -> p::Term {
         match t {
             p::Term::Var(v) => {
-                if bound.iter().any(|n| n == &v.name) || is_nullary_fun_leaf(v) {
+                if bound.iter().any(|n| n == &v.name) {
                     return t.clone();
                 }
                 f(v, bound).unwrap_or_else(|| t.clone())
@@ -172,40 +170,15 @@ pub(crate) fn map_free_terms(
     rf(&mut bound, f, formula)
 }
 
-/// True when a bare parser-AST `Var` leaf actually denotes a 0-arity function
-/// symbol.  HS's term parser tries `nullaryApp` before the literal parser
-/// (Theory/Text/Parser/Term.hs:151,158-163), so a declared 0-arity name in a
-/// term position resolves against the signature at parse time and BEATS any
-/// process binder of the same name — `new c` / `lookup t as c` bind an `LVar`
-/// named `c` (both take `sapicvar`, Parser/Sapic.hs:87,236), yet every later `c` in a
-/// term or `Cond` formula is the constant `fApp c []`.  Such an `FApp` leaf
-/// contributes nothing to `freesList` and is outside the domain of any
-/// `Subst Name LVar`, so HS neither counts nor rewrites it.
-///
-/// The RS parser has no signature at hand and emits a `Var`, so the lookup
-/// happens here, through the shared SAPIC term elaborator —
-/// `term_to_sapic_term` reads the theory's own `functions:` declarations (and
-/// the enabled builtins' constants) and answers with an `App` for a declared
-/// 0-arity name.
-fn is_nullary_fun_leaf(v: &p::VarSpec) -> bool {
-    matches!(
-        term_to_sapic_term(&p::Term::Var(v.clone())),
-        Some(tamarin_term::vterm::VTerm::App(_, _))
-    )
-}
-
 /// Visit every FREE `Var` leaf of a parser-AST formula, calling `f(varspec,
 /// bound)` for each (quantifier-bound occurrences are skipped, tracking
-/// shadowing via the `bound` stack; leaves that name a 0-arity function symbol
-/// are constants, not variables, and are skipped too).  The traversal order is
+/// shadowing via the `bound` stack).  The traversal order is
 /// the depth-first, left-to-right order shared by
 /// `base_translation::formula_free_lvars` and `typing::cond_formula_free_lvars`.
 pub(crate) fn fold_free_vars(formula: &p::Formula, f: &mut dyn FnMut(&p::VarSpec, &[String])) {
     fn ct(bound: &[String], f: &mut dyn FnMut(&p::VarSpec, &[String]), t: &p::Term) {
         match t {
-            p::Term::Var(v) if !bound.iter().any(|n| n == &v.name) && !is_nullary_fun_leaf(v) => {
-                f(v, bound)
-            }
+            p::Term::Var(v) if !bound.iter().any(|n| n == &v.name) => f(v, bound),
             p::Term::App(_, args) | p::Term::Pair(args) => {
                 for a in args {
                     ct(bound, f, a);
@@ -733,28 +706,25 @@ mod tests {
     }
 
     // `map_free_terms` and `fold_free_vars` must agree on which leaves are
-    // variables: HS resolves a declared 0-arity name to `fApp c []` at parse
-    // time (Theory/Text/Parser/Term.hs:151,158-163), so such a leaf is neither
+    // variables: the parser resolves a declared 0-arity name to an
+    // argument-less application (HS `nullaryApp`,
+    // Theory/Text/Parser/Term.hs:151,158-163), so such a leaf is neither
     // counted by `freesList` nor reachable by `apply subst`.  A `Cond` formula
     // reaching `typing::rename_cond_formula` with a `new c` / `lookup … as c`
     // binder in the rename domain is the shape that separates the two.
     #[test]
     fn nullary_leaf_is_neither_folded_nor_mapped() {
-        let leaf = |n: &str| {
-            p::Term::Var(p::VarSpec {
-                name: n.into(),
-                idx: 0,
-                sort: LSort::Msg,
-                typ: None,
-            })
+        // `Eq(c, k)` — `c` is 0-arity in the second signature, `k` is an
+        // ordinary variable in both.
+        let cond = |decl: &str| {
+            let thy =
+                tamarin_parser::parse_theory(&format!("theory T begin\n{decl}\nend"), &[]).unwrap();
+            let msig = tamarin_theory::elaborate::elaborate(&thy)
+                .unwrap()
+                .signature
+                .maude_sig;
+            tamarin_parser::parser::parse_formula_str("Eq(c, k)", &msig).unwrap()
         };
-        // `Eq(c, k)` — `c` is declared 0-arity below, `k` is an ordinary var.
-        let f = p::Formula::Atom(p::Atom::Pred(p::Fact {
-            persistent: false,
-            name: "Eq".into(),
-            args: vec![leaf("c"), leaf("k")],
-            annotations: Vec::new(),
-        }));
         let renamed = |f: &p::Formula| {
             map_free_terms(f, &mut |v, _bound| {
                 Some(p::Term::Var(p::VarSpec {
@@ -770,52 +740,34 @@ mod tests {
             fold_free_vars(f, &mut |v, _bound| out.push(v.name.clone()));
             out
         };
-
-        // Without the theory's 0-arity set installed `c` is an ordinary
-        // variable, so both traversals reach it — this is what makes the
-        // assertions below discriminating.
-        {
-            let empty = tamarin_parser::parse_theory("theory T begin end", &[]).unwrap();
-            let _guard = tamarin_theory::elaborate::set_user_funs_for_theory(&empty);
-            assert_eq!(seen(&f), vec!["c".to_string(), "k".to_string()]);
-            assert_eq!(renamed(&f), {
-                let g = |n: &str| {
-                    p::Term::Var(p::VarSpec {
-                        name: n.into(),
-                        idx: 1,
-                        sort: LSort::Msg,
-                        typ: None,
-                    })
-                };
-                p::Formula::Atom(p::Atom::Pred(p::Fact {
-                    persistent: false,
-                    name: "Eq".into(),
-                    args: vec![g("c"), g("k")],
-                    annotations: Vec::new(),
-                }))
-            });
-        }
-
-        let theory =
-            tamarin_parser::parse_theory("theory T begin functions: c/0 end", &[]).unwrap();
-        let _guard = tamarin_theory::elaborate::set_user_funs_for_theory(&theory);
-        assert_eq!(seen(&f), vec!["k".to_string()]);
-        assert_eq!(
-            renamed(&f),
+        let pred = |args: Vec<p::Term>| {
             p::Formula::Atom(p::Atom::Pred(p::Fact {
                 persistent: false,
                 name: "Eq".into(),
-                args: vec![
-                    leaf("c"),
-                    p::Term::Var(p::VarSpec {
-                        name: "k".into(),
-                        idx: 1,
-                        sort: LSort::Msg,
-                        typ: None,
-                    })
-                ],
+                args,
                 annotations: Vec::new(),
             }))
+        };
+        let var = |n: &str, idx: u64| {
+            p::Term::Var(p::VarSpec {
+                name: n.into(),
+                idx,
+                sort: LSort::Msg,
+                typ: None,
+            })
+        };
+
+        // Undeclared, `c` is an ordinary variable, so both traversals reach
+        // it — this is what makes the assertions below discriminating.
+        let plain = cond("");
+        assert_eq!(seen(&plain), vec!["c".to_string(), "k".to_string()]);
+        assert_eq!(renamed(&plain), pred(vec![var("c", 1), var("k", 1)]));
+
+        let with_const = cond("functions: c/0");
+        assert_eq!(seen(&with_const), vec!["k".to_string()]);
+        assert_eq!(
+            renamed(&with_const),
+            pred(vec![p::Term::App("c".into(), Vec::new()), var("k", 1)])
         );
     }
 

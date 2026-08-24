@@ -2242,32 +2242,6 @@ pub fn public_names_report_from_pairs(pairs: Vec<(String, String)>) -> WfReport 
 // Unbound variables: vars in RHS / actions but not in LHS
 // =============================================================================
 
-/// Collect every name declared by `functions: <name>/0 ...` blocks at
-/// any depth in the theory.  HS-faithful: the parser registers these
-/// in its `funSig` so `nullaryApp` resolves bare `<name>` tokens to
-/// `FApp (NoEq <sym>) []` rather than `Var <name>`
-/// (`lib/theory/src/Theory/Text/Parser/Term.hs::nullaryApp`).  In the
-/// Rust port that resolution happens during elaboration, but WF runs
-/// on the un-elaborated parser AST — so any walker that classifies
-/// `Var name` as "really a variable" needs this set to deny-list the
-/// 0-arity user funs.  Built-in nullaries (`signing`'s `true`, DH's
-/// `1`, etc.) are NOT included here; they live in the builtin sig
-/// which is registered at elaborate-time.  Today we only need to
-/// shadow user-declared 0-arity funs (wireguard.spthy's `true/0`).
-fn collect_nullary_fun_names(thy: &Theory) -> BTreeSet<String> {
-    let mut out: BTreeSet<String> = BTreeSet::new();
-    for it in &thy.items {
-        if let TheoryItem::Functions(decls) = it {
-            for d in decls {
-                if d.arg_types.is_empty() {
-                    out.insert(d.name.clone());
-                }
-            }
-        }
-    }
-    out
-}
-
 /// The rendered variable a SAPIC `lookup t as v` combinator binds, for a rule
 /// whose top-level source process IS such a combinator — HS's
 /// `match v (Just (ProcessComb (Lookup _ v') _ _ _)) = v == slvar v'`
@@ -2294,10 +2268,8 @@ fn lookup_binder_render(r: &Rule) -> Option<&str> {
 /// Collect a rule's unbound variables (conclusion/action vars NOT in
 /// any premise / let-binding).  Returns the list in first-occurrence
 /// order, deduped, excluding pub-sort variables (which are implicitly
-/// adversary-known and so always bound) and excluding names declared
-/// as 0-arity functions (those are nullary function calls, not
-/// variables — HS resolves them via `nullaryApp` at parse-time).
-fn collect_rule_unbound_vars(r: &Rule, nullary_funs: &BTreeSet<String>) -> Vec<VarSpec> {
+/// adversary-known and so always bound).
+fn collect_rule_unbound_vars(r: &Rule) -> Vec<VarSpec> {
     // HS `unboundCheck` (Wellformedness.hs:493-512) runs on the
     // let-substituted, macro-applied `ProtoRuleE` (`thyProtoRules`).  So
     // `let m1 = <'1',$A,~Na> in ... Out(m1)` is INLINED to `Out(<'1',$A,~Na>)`
@@ -2340,21 +2312,6 @@ fn collect_rule_unbound_vars(r: &Rule, nullary_funs: &BTreeSet<String>) -> Vec<V
             if lookup_binder.is_some_and(|b| b == render_var(&v)) {
                 continue;
             }
-            if nullary_funs.contains(&v.name) {
-                continue;
-            }
-            // Builtin nullary constants (e.g. XOR's `zero`, DH's
-            // `DH_neutral`) parse as bare identifiers in the surface
-            // syntax but semantically denote 0-arity functions.  HS's
-            // parser binds them via `nullaryApp` so they never appear
-            // as variables in the rule AST; RS's parser still surfaces
-            // them as `Term::Var` and relies on this check to skip
-            // them when classifying "unbound".  Without this skip,
-            // rules like CRxor's `responder` (`Neq(na, zero)`) get
-            // bogus "has unbound variables: zero" warnings.
-            if is_known_nullary_constant_name(&v.name) {
-                continue;
-            }
             let key = (v.name.clone(), v.sort, v.idx);
             if bound.contains(&key) {
                 continue;
@@ -2384,10 +2341,9 @@ pub fn unbound_report(thy: &Theory) -> WfReport {
     // line gets 2 spaces and the variable list 2+2 = 4 spaces.  RS's
     // `format_wf_block` applies that group-level header + 2-space layout
     // (see below); each entry here carries ONLY its body (`snd err`).
-    let nullary_funs = collect_nullary_fun_names(thy);
     let mut out = Vec::new();
     for r in theory_rules(thy) {
-        let unbound = collect_rule_unbound_vars(r, &nullary_funs);
+        let unbound = collect_rule_unbound_vars(r);
         if !unbound.is_empty() {
             // HS `prettyVarList = fsep . punctuate comma . map prettyLVar`
             // (TheoryObject.hs:858-859): the same paragraph fill the sibling
@@ -2424,7 +2380,6 @@ pub fn unbound_report(thy: &Theory) -> WfReport {
 pub fn message_derivation_report(thy: &Theory) -> WfReport {
     // Aggregate (rule_name, [unbound_var_names]) pairs across the
     // theory, skipping rules with the `no_derivcheck` attribute.
-    let nullary_funs = collect_nullary_fun_names(thy);
     let mut per_rule: Vec<(String, Vec<String>)> = Vec::new();
     for r in theory_rules(thy) {
         if r.attributes
@@ -2433,7 +2388,7 @@ pub fn message_derivation_report(thy: &Theory) -> WfReport {
         {
             continue;
         }
-        let unbound = collect_rule_unbound_vars(r, &nullary_funs);
+        let unbound = collect_rule_unbound_vars(r);
         if unbound.is_empty() {
             continue;
         }
@@ -2648,10 +2603,7 @@ pub fn subterm_convergence_report(thy: &Theory) -> WfReport {
 
     // Collect all non-subterm-convergent equations across ALL `equations`
     // items (HS `thyEquations = S.toList (stRules sig)` merges every block's
-    // equations into one Set — so we do NOT skip per-block).  User-declared
-    // `/0` functions resolve to nullary constants (HS resolves them via the
-    // function signature at parse time, so they are variable-free).
-    let nullary_funs = collect_nullary_fun_names(thy);
+    // equations into one Set — so we do NOT skip per-block).
     let mut non_conv: Vec<(&Term, &Term)> = Vec::new();
     for it in &thy.items {
         let eqs = match it {
@@ -2659,7 +2611,7 @@ pub fn subterm_convergence_report(thy: &Theory) -> WfReport {
             _ => continue,
         };
         for eq in eqs {
-            if !is_subterm_convergent(&eq.lhs, &eq.rhs, &nullary_funs) {
+            if !is_subterm_convergent(&eq.lhs, &eq.rhs) {
                 non_conv.push((&eq.lhs, &eq.rhs));
             }
         }
@@ -2733,7 +2685,7 @@ fn pp_term_for_wf(t: &Term, ac: &AcSyms) -> String {
     wf_term_doc(t, ac).to_flat()
 }
 
-fn is_subterm_convergent(lhs: &Term, rhs: &Term, nullary_funs: &BTreeSet<String>) -> bool {
+fn is_subterm_convergent(lhs: &Term, rhs: &Term) -> bool {
     // HS `isSubtermConvergentCtxtRule` (SubtermRule.hs:108-112):
     //   | isConstant rhs = True
     //   | otherwise      = not (null (findSubterm lhs rhs))
@@ -2741,7 +2693,7 @@ fn is_subterm_convergent(lhs: &Term, rhs: &Term, nullary_funs: &BTreeSet<String>
     // i.e. ANY variable-free (ground) RHS is accepted, not just a fixed set
     // of reserved names (e.g. `f(x) = 'c'`, `f(x) = g('a','b')`, or a user
     // `c/0` constant), where `frees` collects only `LVar`s.
-    if rhs_is_ground(rhs, nullary_funs) {
+    if rhs_is_ground(rhs) {
         return true;
     }
     // Otherwise the RHS must literally appear as a subterm of the LHS.
@@ -2749,43 +2701,19 @@ fn is_subterm_convergent(lhs: &Term, rhs: &Term, nullary_funs: &BTreeSet<String>
 }
 
 /// True if `t` has no free variables, mirroring HS `isConstant term =
-/// null (frees term)` where `frees` collects only `LVar`s.  A bare
-/// identifier that names a nullary constant — a known builtin nullary
-/// (`true`/`zero`/…) or a user-declared `/0` function — is resolved by HS
-/// at parse time to a variable-free `FApp`, so we do NOT count it as a free
-/// variable; any other `Term::Var` is a genuine free variable.
-fn rhs_is_ground(t: &Term, nullary_funs: &BTreeSet<String>) -> bool {
+/// null (frees term)` where `frees` collects only `LVar`s.  A nullary
+/// constant is an argument-less `App`, which the term parser builds for a
+/// bare identifier naming an arity-0 symbol (`nullaryApp`,
+/// Theory/Text/Parser/Term.hs:158-163), so it holds no variable.
+fn rhs_is_ground(t: &Term) -> bool {
     use Term::*;
     match t {
-        Var(v) => {
-            // Message-sorted bare names that resolve to a nullary constant are
-            // variable-free; everything else (and any sigil-tagged var) is a
-            // genuine free variable.
-            v.sort == LSort::Msg
-                && (is_known_nullary_constant_name(&v.name) || nullary_funs.contains(&v.name))
-        }
-        App(_, args) | Pair(args) => args.iter().all(|a| rhs_is_ground(a, nullary_funs)),
-        AlgApp(_, a, b) | Diff(a, b) | BinOp(_, a, b) => {
-            rhs_is_ground(a, nullary_funs) && rhs_is_ground(b, nullary_funs)
-        }
-        PatMatch(inner) => rhs_is_ground(inner, nullary_funs),
+        Var(_) => false,
+        App(_, args) | Pair(args) => args.iter().all(rhs_is_ground),
+        AlgApp(_, a, b) | Diff(a, b) | BinOp(_, a, b) => rhs_is_ground(a) && rhs_is_ground(b),
+        PatMatch(inner) => rhs_is_ground(inner),
         PubLit(_) | FreshLit(_) | NatLit(_) | Number(_) | NumberOne | NatOne | DhNeutral => true,
     }
-}
-
-/// Names that the surface parser may render as bare identifiers but
-/// that semantically denote nullary constants (typically declared by
-/// `builtins:` or `functions: ... /0`). We treat them as constants
-/// for the purposes of subterm-convergence and free-variable checks.
-///
-/// These mirror the builtin nullary `NoEq` symbols HS resolves via
-/// `nullaryApp` against `funSyms maudeSig` (Parser/Term.hs:158-163):
-/// `trueSym = ("true",..)` (Builtin/Signature.hs:43-44, see line 44), and
-/// `zeroSym`/`oneSym`/`dhNeutralSym` (FunctionSymbols.hs).  There is no
-/// builtin `True`, so a genuine variable literally named `True` must NOT
-/// be suppressed here — HS would report it as unbound/underivable.
-fn is_known_nullary_constant_name(n: &str) -> bool {
-    matches!(n, "true" | "zero" | "one" | "DH_neutral")
 }
 
 fn contains_subterm(haystack: &Term, needle: &Term) -> bool {

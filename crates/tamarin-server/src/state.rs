@@ -90,11 +90,11 @@ impl TheoryEntry {
     /// the previous values on drop.
     ///
     /// Request handlers run on axum worker threads, whose sets start EMPTY;
-    /// the renderers they reach resolve a declared `[AC]` / nullary / unary
-    /// symbol through those thread-locals (`CollectedUserFuns::is_user_ac_fun` in
-    /// `canonicalize_ac_in_pterm`, `term_to_lnterm`, `term_to_gterm_free`).  An
-    /// unset `[AC]` symbol prints prefix (`add(x, z)`) instead of the infix
-    /// form HS's `prettyTerm` emits (`(x add z)`, Term/Term.hs:305).
+    /// the renderers they reach read a declared symbol's privacy,
+    /// constructability, NDC state and arity-1 fold from those thread-locals
+    /// (`term_to_lnterm` / `term_to_sapic_term`).  Unset, a `[destructor]`
+    /// symbol lowers as a constructor, whose Maude operator the theory module
+    /// never declares.
     ///
     /// Uses the [`ProofState`]'s cached sets when the proof state is built,
     /// and re-collects them from the parser theory otherwise.

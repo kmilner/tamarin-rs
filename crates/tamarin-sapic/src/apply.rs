@@ -149,14 +149,6 @@ pub fn apply_sapic(
         .flatten()
         .collect();
 
-    // The 0-arity function-symbol set the `if`-conditional restriction formulas
-    // resolve their bare constant tokens against (HS `nullaryApp`, resolved at
-    // parse time): user `functions: f/0` + enabled builtins' constants.  Threads
-    // into `lift_one_rule` so a comparison against a constant (`if IsNormal(a)`,
-    // `IsNormal(a) <=> a = NormalReq`) keeps `NormalReq` inlined in the generated
-    // restriction rather than abstracting it into a second fact argument.
-    let nullary = tamarin_theory::elaborate::nullary_fun_names(&parsed.items);
-
     // Inject each generated rule into BOTH theories, running the `_restrict`
     // expansion HS `liftedAddProtoRule` (Theory/Text/Parser.hs:175-193) performs
     // per rule: for each embedded restriction formula, mint a fresh action
@@ -211,10 +203,11 @@ pub fn apply_sapic(
 
         // `if <formula>` arm: expand the embedded restriction.
         let (gen_restrs, rewritten) =
-            tamarin_theory::rule_restriction::lift_one_rule(parsed_rule, &predicates, &nullary)
-                .map_err(|e| ElabError {
+            tamarin_theory::rule_restriction::lift_one_rule(parsed_rule, &predicates).map_err(
+                |e| ElabError {
                     message: format!("SAPIC _restrict expansion: {}", e.message),
-                })?;
+                },
+            )?;
 
         // Restrictions precede the rule in both theories.
         for r in &gen_restrs {

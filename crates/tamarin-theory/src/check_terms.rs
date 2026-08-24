@@ -26,11 +26,7 @@
 //!
 //! The reducible/irreducible classification is sourced from the REAL
 //! computed signature (`MaudeSig::irreducible_fun_syms`), exactly like HS's
-//! `irreducibleFunSyms maudeSig`.  Because nullary functions (e.g. a
-//! private `f/0`) parse as `Term::Var` in the surface AST, we resolve a
-//! bare `Var` whose name+arity matches a signature funsym into an
-//! application of that symbol before classifying it (so `K(f)` with
-//! `f/0 [private]` is an irreducible `FApp f []`, allowed — matching HS).
+//! `irreducibleFunSyms maudeSig`.
 //!
 //! # AC/C canonicalisation, and why it happens after De Bruijn assignment
 //!
@@ -55,7 +51,7 @@ use tamarin_parser::ast as p;
 use tamarin_parser::ast::{Atom, BinOp, Formula, Term, VarSpec};
 use tamarin_parser::wf::WfError;
 use tamarin_term::function_symbols::{AcFctSym, AcSym, CSym, FunSym, EMAP_SYM_STRING};
-use tamarin_term::lterm::{sort_prefix, LSort};
+use tamarin_term::lterm::sort_prefix;
 use tamarin_term::maude_sig::MaudeSig;
 
 use crate::pretty_hpj::{fsep, punctuate, Doc};
@@ -156,10 +152,6 @@ struct Irreducible {
     /// `noEqFunSyms maudeSig` over `funSyms` (Term/Maude/Signature.hs:156-157).
     /// Read by [`Irreducible::prefix_ac_fct`].
     noeq_names: BTreeSet<Vec<u8>>,
-    /// Names of all nullary NoEq symbols in the FULL signature.  Used to
-    /// resolve a bare `Var` whose name is a declared nullary funsym into an
-    /// application (mirrors HS resolving `f/0` to `FApp f []`).
-    nullary_names: BTreeSet<Vec<u8>>,
 }
 
 impl Irreducible {
@@ -177,16 +169,12 @@ impl Irreducible {
                 _ => {}
             }
         }
-        let mut nullary_names = BTreeSet::new();
         let mut noeq_names = BTreeSet::new();
         let mut ac_fct_syms = BTreeMap::new();
         for s in sig.fun_syms.iter() {
             match s {
                 FunSym::NoEq(n) => {
                     noeq_names.insert(n.name.to_vec());
-                    if n.arity == 0 {
-                        nullary_names.insert(n.name.to_vec());
-                    }
                 }
                 FunSym::Ac(AcSym::AcFct(f)) => {
                     ac_fct_syms.insert(f.name.to_vec(), *f);
@@ -199,7 +187,6 @@ impl Irreducible {
             ac,
             ac_fct_syms,
             noeq_names,
-            nullary_names,
         }
     }
 
@@ -225,11 +212,6 @@ impl Irreducible {
     /// Is the AC symbol `a` irreducible?
     fn is_ac_irreducible(&self, a: AcSym) -> bool {
         self.ac.contains(&a)
-    }
-
-    /// Is `name` a declared nullary funsym?
-    fn nullary_named(&self, name: &str) -> bool {
-        self.nullary_names.contains(name.as_bytes())
     }
 
     /// The user-declared `[AC]` symbol called `name`, if the signature has one.
@@ -406,7 +388,7 @@ fn collect_atom_terms(a: &Atom, scope: &Scope, irr: &Irreducible, out: &mut Vec<
 
 fn resolve_term(t: &Term, scope: &Scope, irr: &Irreducible) -> RTerm {
     match t {
-        Term::Var(v) => resolve_var(v, scope, irr),
+        Term::Var(v) => resolve_var(v, scope),
         Term::PubLit(s) => RTerm::PubConst(s.clone()),
         Term::FreshLit(s) => RTerm::FreshConst(s.clone()),
         Term::NatLit(s) => RTerm::NatConst(s.clone()),
@@ -581,19 +563,12 @@ fn build_pair(mut items: Vec<RTerm>, irr: &Irreducible) -> RTerm {
 }
 
 /// Resolve a variable USE to either a `Bound n` (if a matching binder is in
-/// scope) or `Free` (otherwise) — UNLESS the name is a declared nullary
-/// function symbol with no matching binder, in which case it is an
-/// irreducible `FApp name []` (HS resolves `f/0` to `FApp f []`).
-fn resolve_var(v: &VarSpec, scope: &Scope, irr: &Irreducible) -> RTerm {
-    if let Some(idx) = lookup_bound(v, scope) {
-        return RTerm::Bound(idx);
+/// scope) or `Free` (otherwise).
+fn resolve_var(v: &VarSpec, scope: &Scope) -> RTerm {
+    match lookup_bound(v, scope) {
+        Some(idx) => RTerm::Bound(idx),
+        None => RTerm::Free(v.clone()),
     }
-    // Not bound: a bare message-sorted name that is a declared nullary funsym
-    // is an application (e.g. private `f/0` parsed as Var("f")).
-    if v.sort == LSort::Msg && irr.nullary_named(&v.name) {
-        return resolve_named(&v.name, vec![], irr);
-    }
-    RTerm::Free(v.clone())
 }
 
 /// Find the innermost binder matching `v` and return its De-Bruijn index.

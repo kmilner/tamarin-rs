@@ -464,6 +464,7 @@ fn ast_doc(f: &p::Formula) -> Doc {
 fn lnformula_doc_matches_ast_doc_on_samples() {
     use crate::formula::{from_parser, to_lnformula};
     use tamarin_parser::parser::parse_formula_str;
+    use tamarin_term::maude_sig::pair_maude_sig;
 
     let samples: &[(&str, &[&str])] = &[
         ("T", &["  all-traces \"⊤\""]),
@@ -544,7 +545,7 @@ fn lnformula_doc_matches_ast_doc_on_samples() {
     ];
     for (src, expected_lines) in samples {
         let expected = expected_lines.join("\n");
-        let f = parse_formula_str(src).unwrap();
+        let f = parse_formula_str(src, &pair_maude_sig()).unwrap();
         let ln = from_parser(&f).unwrap();
         assert_eq!(
             lemma_header_line_doc("all-traces", ast_doc(&f)),
@@ -588,6 +589,7 @@ fn lnformula_doc_matches_ast_doc_on_samples() {
 fn lnformula_doc_matches_ast_doc_on_atom_and_scope_samples() {
     use crate::formula::{from_parser, to_lnformula};
     use tamarin_parser::parser::{parse_formula_str, parse_theory};
+    use tamarin_term::maude_sig::pair_maude_sig;
 
     let thy = parse_theory(
         "theory T begin\nbuiltins: hashing, multiset\nfunctions: zero/0\nend",
@@ -642,7 +644,7 @@ fn lnformula_doc_matches_ast_doc_on_atom_and_scope_samples() {
     ];
     for (src, expected_lines) in samples {
         let expected = expected_lines.join("\n");
-        let f = parse_formula_str(src).unwrap();
+        let f = parse_formula_str(src, &pair_maude_sig()).unwrap();
         let ln = from_parser(&f).unwrap();
         assert_eq!(
             lemma_header_line_doc("all-traces", ast_doc(&f)),
@@ -672,6 +674,7 @@ fn lnformula_doc_matches_ast_doc_on_atom_and_scope_samples() {
 fn lnformula_doc_bare_name_under_node_binder() {
     use crate::formula::{from_parser, to_lnformula};
     use tamarin_parser::parser::parse_formula_str;
+    use tamarin_term::maude_sig::pair_maude_sig;
 
     let samples: &[(&str, &str, &[&str])] = &[
         (
@@ -722,7 +725,7 @@ fn lnformula_doc_bare_name_under_node_binder() {
     ];
     for (quant, src, expected_lines) in samples {
         let expected = expected_lines.join("\n");
-        let f = parse_formula_str(src).unwrap();
+        let f = parse_formula_str(src, &pair_maude_sig()).unwrap();
         let ln = from_parser(&f).unwrap();
         let plain = to_lnformula(&ln).unwrap();
         assert_eq!(
@@ -781,12 +784,13 @@ fn lnformula_doc_panics_on_unbound_index() {
 #[test]
 fn binder_does_not_capture_a_different_sort() {
     use tamarin_parser::parser::parse_formula_str;
+    use tamarin_term::maude_sig::pair_maude_sig;
 
     for (src, want) in [
         ("Ex ~k #i. Made(k) @ i", "∃ ~k.1 #i. Made( k ) @ #i"),
         ("Ex $k #i. Made(k) @ i", "∃ $k.1 #i. Made( k ) @ #i"),
     ] {
-        let f = parse_formula_str(src).unwrap();
+        let f = parse_formula_str(src, &pair_maude_sig()).unwrap();
         assert_eq!(pretty_formula(&f), want, "on {src}");
         assert_eq!(ast_doc(&f).render(), want, "on {src}");
     }
@@ -800,8 +804,9 @@ fn binder_does_not_capture_a_different_sort() {
 #[test]
 fn bare_binder_used_as_timepoint_is_renamed() {
     use tamarin_parser::parser::parse_formula_str;
+    use tamarin_term::maude_sig::pair_maude_sig;
 
-    let f = parse_formula_str("All x y. Alive(y) @ x ==> last(x)").unwrap();
+    let f = parse_formula_str("All x y. Alive(y) @ x ==> last(x)", &pair_maude_sig()).unwrap();
     assert_eq!(
         pretty_formula(&f),
         "∀ x.1 y. (Alive( y ) @ #x) ⇒ (last(#x))"
@@ -820,6 +825,7 @@ fn existential_binder_keeps_ac_operand_order() {
     use crate::elaborate::canonicalize_ac_in_formula;
     use crate::guarded::formula_to_guarded;
     use tamarin_parser::parser::parse_formula_str;
+    use tamarin_term::maude_sig::pair_maude_sig;
 
     let want = "  \"∀ A B seq1 seq2 #i #j.\n    \
         (((Seq_Sent( A, B, seq1 ) @ #i) ∧ (Seq_Sent( A, B, seq2 ) @ #j)) ∧\n     \
@@ -827,6 +833,7 @@ fn existential_binder_keeps_ac_operand_order() {
     let f = parse_formula_str(
         "All A B seq1 seq2 #i #j.(Seq_Sent(A, B, seq1) @ #i \
          & Seq_Sent(A, B, seq2) @ #j & #i < #j ==> Ex dif. seq2 = seq1 + dif )",
+        &pair_maude_sig(),
     )
     .unwrap();
     assert_eq!(
