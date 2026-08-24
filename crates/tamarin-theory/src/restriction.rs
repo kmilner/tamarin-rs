@@ -27,39 +27,15 @@ pub enum RestrictionAttribute {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProtoRestriction<F> {
     pub name: String,
+    /// `_rstrFormula` — the macro- and predicate-expanded formula, which the
+    /// solver converts to a guarded formula and the printer shows in the
+    /// `expanded formula:` block.
     pub formula: F,
+    /// `_rstrOriginalFormula` — the same formula before macro application,
+    /// which the printer shows above that block.  HS's
+    /// `applyMacroInRestriction` fills it for every restriction of a closed
+    /// theory, macros or none (Theory/Model/Restriction.hs:164-166).
     pub original_formula: Option<F>,
 }
 
-impl<F> ProtoRestriction<F> {
-    pub fn new(name: impl Into<String>, formula: F) -> Self {
-        ProtoRestriction {
-            name: name.into(),
-            formula,
-            original_formula: None,
-        }
-    }
-}
-
 pub type Restriction = ProtoRestriction<LNFormula>;
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::formula::ProtoFormula;
-
-    /// `ProtoRestriction::new` is the sole constructor, and elaboration
-    /// (`elaborate.rs`) uses it.  It stores the name and the formula without
-    /// change, and it records no original surface formula.  `original_formula`
-    /// gates the arity-1 rewrite in `elaborate.rs`.  A constructor that filled
-    /// that field in advance would rewrite the body twice, and it would report
-    /// no error.
-    #[test]
-    fn build_restriction() {
-        let f: LNFormula = ProtoFormula::ltrue();
-        let r = Restriction::new("MyR", f.clone());
-        assert_eq!(r.name, "MyR");
-        assert_eq!(r.formula, f);
-        assert_eq!(r.original_formula, None);
-    }
-}

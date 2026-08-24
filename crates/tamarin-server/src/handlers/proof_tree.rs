@@ -42,7 +42,7 @@ use tamarin_theory::constraint::solver::search::{
 };
 use tamarin_theory::constraint::system::{formula_to_system, SourceKind, System};
 use tamarin_theory::elaborate::elaborate;
-use tamarin_theory::guarded::{formula_to_guarded_parsed, Guarded};
+use tamarin_theory::guarded::{formula_to_guarded, formula_to_guarded_parsed, Guarded};
 use tamarin_theory::pretty_system::pretty_non_graph_system;
 use tamarin_theory::theory::{LemmaAttr, OpenProtoRule, TraceQuantifier};
 
@@ -172,7 +172,7 @@ impl ProofState {
         // `formula_to_system` below.
         let restrictions_g: Vec<Guarded> = typed
             .restrictions()
-            .filter_map(|r| formula_to_guarded_parsed(&r.formula, &typed.signature.maude_sig).ok())
+            .filter_map(|r| formula_to_guarded(&r.formula).ok())
             .collect();
         // --- Close-time skeleton replay (HS `checkAndExtendProver
         // (sorryProver Nothing)`, Theory/Proof.hs:624-630 → `checkProof`,

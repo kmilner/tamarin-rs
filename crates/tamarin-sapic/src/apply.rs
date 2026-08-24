@@ -21,9 +21,10 @@ use tamarin_parser::wf::WfError;
 use tamarin_term::maude_sig::MaudeSig;
 
 use tamarin_theory::elaborate::ElabError;
+use tamarin_theory::restriction::Restriction;
 use tamarin_theory::rule::ProtoRuleE;
 use tamarin_theory::sapic::PlainProcess;
-use tamarin_theory::theory::{OpenProtoRule, OpenRestriction, Theory, TheoryItem};
+use tamarin_theory::theory::{OpenProtoRule, Theory, TheoryItem};
 
 use crate::convert::ConvertError;
 use crate::inline::{collect_process_defs, convert_process_with_defs};
@@ -159,7 +160,7 @@ pub fn apply_sapic(
     // insert the restrictions BEFORE the rule, and append the actions to the
     // rule.  We share the parser-AST lift (`lift_one_rule`) for both theories:
     //   - parsed:     the generated restrictions + rewritten parser rule;
-    //   - elaborated: the same restrictions (as `OpenRestriction`, parser-AST
+    //   - elaborated: the same restrictions (as `Restriction`, internal
     //                 formula) + the elaborated rewritten rule (the original
     //                 `ProtoRuleE` attributes/name with the rewritten body, so
     //                 the appended `Restr_*` actions are present).
@@ -219,13 +220,9 @@ pub fn apply_sapic(
 
         // Restrictions precede the rule in both theories.
         for r in &gen_restrs {
+            let restr = elaborate_restriction(r, &elaborated.signature.maude_sig)?;
             parsed.items.push(p::TheoryItem::Restriction(r.clone()));
-            elaborated
-                .items
-                .push(TheoryItem::Restriction(OpenRestriction::new(
-                    r.name.clone(),
-                    r.formula.clone(),
-                )));
+            elaborated.items.push(TheoryItem::Restriction(restr));
         }
 
         // Elaborated rule: re-elaborate the rewritten parser-rule body to
@@ -242,13 +239,9 @@ pub fn apply_sapic(
     // Inject the global restrictions (set_in/set_notin, predicate_eq/not_eq,
     // single_session) into both theories.
     for restr in &translation.restrictions {
+        let elab_restr = elaborate_restriction(restr, &elaborated.signature.maude_sig)?;
         parsed.items.push(p::TheoryItem::Restriction(restr.clone()));
-        elaborated
-            .items
-            .push(TheoryItem::Restriction(OpenRestriction::new(
-                restr.name.clone(),
-                restr.formula.clone(),
-            )));
+        elaborated.items.push(TheoryItem::Restriction(elab_restr));
     }
 
     // `addHeuristic [SapicRanking]` unless a heuristic is already set
@@ -273,6 +266,27 @@ pub fn apply_sapic(
     }
 
     Ok(wf_report)
+}
+
+/// Lower one generated restriction into the elaborated theory's
+/// [`Restriction`]: the formula is closed by `from_parser` and stripped of
+/// its predicate sugar, which `lift_one_rule` already inlined, and
+/// `original_formula` repeats it — HS's `applyMacroInRestriction` fills that
+/// field for every restriction of a closed theory
+/// (Theory/Model/Restriction.hs:164-166, CloseRule.hs:82-84).
+fn elaborate_restriction(r: &p::Restriction, msig: &MaudeSig) -> Result<Restriction, ElabError> {
+    let syn = tamarin_theory::formula::from_parser(&r.formula, msig)?;
+    let formula = tamarin_theory::formula::to_lnformula(&syn).ok_or_else(|| ElabError {
+        message: format!(
+            "SAPIC restriction {} carries an unexpanded predicate atom",
+            r.name
+        ),
+    })?;
+    Ok(Restriction {
+        name: r.name.clone(),
+        original_formula: Some(formula.clone()),
+        formula,
+    })
 }
 
 /// Re-elaborate a `_restrict`-rewritten parser-AST rule body into a

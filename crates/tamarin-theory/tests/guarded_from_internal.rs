@@ -180,13 +180,23 @@ fn file_phase(path: &Path, root: &Path) -> FileReport {
     let file = rel(path, root).display().to_string();
     let at = |what: &str| format!("{file}: {what}");
     let msig = &elab.signature.maude_sig;
+    // A restriction's formula is read from the parse tree carrying the macro
+    // and predicate expansion `elaborate` applies to it, since the elaborated
+    // restriction stores the internal formula this test's second route builds.
+    let mut expanded = parsed.clone();
+    tamarin_theory::macro_expand::expand_theory_macros(&mut expanded);
+    if tamarin_theory::predicate_expand::expand_theory_formulas(&mut expanded).is_err() {
+        return FileReport::skipped(Outcome::SkippedElab);
+    }
     let items: Vec<(String, &p::Formula)> = elab
         .lemmas()
         .map(|l| (format!("lemma `{}'", l.name), &l.formula))
-        .chain(
-            elab.restrictions()
-                .map(|r| (format!("restriction `{}'", r.name), &r.formula)),
-        )
+        .chain(expanded.items.iter().filter_map(|it| match it {
+            p::TheoryItem::Restriction(r) | p::TheoryItem::LegacyAxiom(r) => {
+                Some((format!("restriction `{}'", r.name), &r.formula))
+            }
+            _ => None,
+        }))
         .collect();
     let findings = items
         .iter()

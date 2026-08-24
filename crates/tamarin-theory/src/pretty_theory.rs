@@ -1025,7 +1025,7 @@ fn render_open_restriction(
     render_restriction_attributes(&r.attributes, &mut out);
     out.push_str(":\n");
     out.push_str(&pf::formula_doublequoted_nested(&original, 2));
-    if is_safety_formula(&original, msig) {
+    if is_safety_formula_parsed(&original, msig) {
         out.push_str("\n  ");
         out.push_str(&line_comment_("safety formula").render());
     }
@@ -1319,15 +1319,13 @@ pub fn web_proto_rules(parsed: &p::Theory, elaborated: &Theory) -> Vec<String> {
 /// one rendered restriction string per restriction, in source order.  Reuses
 /// `render_parsed_restriction` (the `--prove` theory-body restriction printer).
 pub fn web_restrictions(parsed: &p::Theory, elaborated: &Theory) -> Vec<String> {
-    let (macros, predicates) = collect_macros_predicates(parsed);
-    let arity1 = arity1_noeq_names(elaborated);
     parsed
         .items
         .iter()
         .filter_map(|item| match item {
-            p::TheoryItem::Restriction(r) | p::TheoryItem::LegacyAxiom(r) => Some(
-                render_parsed_restriction(r, &macros, &predicates, elaborated, &arity1),
-            ),
+            p::TheoryItem::Restriction(r) | p::TheoryItem::LegacyAxiom(r) => {
+                render_parsed_restriction(r, elaborated)
+            }
             _ => None,
         })
         .collect()
@@ -2250,9 +2248,7 @@ fn render_parsed_item(
         // `LegacyAxiom` as a restriction for solving; render it the same so the
         // deprecated-`axiom` blocks (e.g. the thesis-evoting auth models) emit
         // their `restriction <name>:` blocks instead of being dropped.
-        Restriction(r) | LegacyAxiom(r) => Some(render_parsed_restriction(
-            r, macros, predicates, elab, arity1,
-        )),
+        Restriction(r) | LegacyAxiom(r) => render_parsed_restriction(r, elab),
         Predicates(preds) => {
             // HS `prettyTheory` folds each `PredicateItem` through
             // `prettyPredicate` (TheoryObject.hs:732-768, see line 764, 802-806):
@@ -3686,63 +3682,26 @@ pub fn expand_lemma_formula_for_display(parsed: &p::Theory, f: &p::Formula) -> p
     expand_predicates_for_display(f, &collect_predicates(parsed))
 }
 
-// arity-1 no-eq function-name set; membership-only (.contains), never iterated;
-// std kept (byte-inert) — iteration order never reaches output.
-#[allow(clippy::disallowed_types)]
-fn render_parsed_restriction(
-    r: &p::Restriction,
-    macros: &[p::Macro],
-    predicates: &[p::Predicate],
-    elab: &Theory,
-    arity1: &std::collections::HashSet<String>,
-) -> String {
-    // HS `prettyRestriction` (TheoryObject.hs:889-900):
-    //   The `Restriction` carries two formulas after `applyMacroInRestriction`:
-    //   - `_rstrFormula`         = macro-EXPANDED formula  (displayed in expanded block)
-    //   - `_rstrOriginalFormula` = original macro-form     (displayed on top)
-    //   HS always has `ogFormula = Just _` (applyMacroInRestriction sets it
-    //   even when there are no macros: `Just $ maybe f id ofm`).
-    //
-    // RS's `r.formula` is the parser-form (macro calls present).  Apply
-    // the theory's macros to get the expanded formula used in the block.
-    // Fold arity-1 surplus args into a pair first (HS `naryOpApp` `k == 1`,
-    // Parser/Term.hs:94-96), exactly as the parser would — applies to BOTH the
-    // original and expanded displays since HS folds at parse time.
-    //
-    // HS `expandRestriction` (TheoryObject.hs:430-437) predicate-expands BOTH
-    // formulas (`f'`, `ofm'`), so e.g. the multiset `(<)` operator is rewritten
-    // to `∃ z. r = l ++ z` BEFORE the formula is stored — and thus before it is
-    // printed.  Mirror that here on both displayed formulas.
-    // `arity1` is computed once by the caller and threaded in.
-    //
-    // HS stores restriction formulas as `LNFormula`, whose AC heads
-    // (`Mult`/`Union`/`Xor`/`NatPlus`) are kept in `fAppAC`-sorted order
-    // (Term/Term/Raw.hs:118-122) — so a user-written union like `seq1 + dif`
-    // displays AC-sorted as `dif++seq1`.  Our parser keeps `BinOp` trees in
-    // written order, so re-establish the canonical AC operand order before
-    // rendering, exactly as the lemma display path does (render_parsed_lemma,
-    // `canonicalize_ac_in_formula`).
-    let original =
-        crate::elaborate::canonicalize_ac_in_formula(&crate::elaborate::rewrite_arity1_formula(
-            &expand_predicates_for_display(&r.formula, predicates),
-            arity1,
-        ));
-    let expanded = if macros.is_empty() {
-        original.clone()
-    } else {
-        crate::elaborate::canonicalize_ac_in_formula(&crate::elaborate::rewrite_arity1_formula(
-            &expand_predicates_for_display(
-                &crate::macro_expand::apply_macros_formula(macros, &r.formula),
-                predicates,
-            ),
-            arity1,
-        ))
-    };
+/// HS `prettyRestriction` (TheoryObject.hs:889-901) over the ELABORATED
+/// restriction the parsed item names.  `_rstrFormula` is the macro- and
+/// predicate-expanded formula elaboration stored and `_rstrOriginalFormula`
+/// the pre-macro one, so the body shows `fromMaybe expandedFormula ogFormula`
+/// (TheoryObject.hs:893), the safety predicate runs on `_rstrFormula`
+/// (TheoryObject.hs:901) and the `expanded formula:` comment shows
+/// `_rstrFormula` (TheoryObject.hs:895-898).  That block sits under
+/// `case ogFormula of Just _`, and elaboration and the SAPIC injection both
+/// fill `original_formula`, so it is always written.  The name and the
+/// `left`/`right` attributes come from the parsed item, which is what the
+/// printer walks.  A parsed restriction with no elaborated twin renders
+/// nothing, as an unpaired rule does.
+fn render_parsed_restriction(r: &p::Restriction, elab: &Theory) -> Option<String> {
+    let er = elab.lookup_restriction(&r.name)?;
+    let original = er.original_formula.as_ref().unwrap_or(&er.formula);
     use crate::pretty_hpj::{
         escape_html_entities, hl_close, hl_open, html_mode, keyword_, line_comment_, Hl,
     };
     let mut out = String::new();
-    // HS `kwRestriction <-> text name <> colon` (TheoryObject.hs:848-849):
+    // HS `kwRestriction <-> text name <> colon` (TheoryObject.hs:891-892):
     // `restriction` is a keyword; the name is `text` (entity-escaped in HtmlDoc
     // mode).  `keyword_`/escaping are identities in plain mode.
     out.push_str(&keyword_("restriction").render());
@@ -3755,28 +3714,27 @@ fn render_parsed_restriction(
     render_restriction_attributes(&r.attributes, &mut out);
 
     out.push_str(":\n");
-    // Top-level display: original formula (macro form) — `fromMaybe expandedFormula ogFormula`.
-    // Since ogFormula = Just original, this always shows `r.formula` (macro form).
-    out.push_str(&pf::formula_doublequoted_nested(&original, 2));
-    // Safety annotation: `nest 2 (if safety then lineComment_ "safety formula"
-    // else emptyDoc)` (TheoryObject.hs:889-901, see line 894), where
-    // `safety = isSafetyFormula $ formulaToGuarded_ $ expandedFormula`
-    // (TheoryObject.hs:901) — the predicate runs on the EXPANDED formula.
-    if is_safety_formula(&expanded, &elab.signature.maude_sig) {
+    out.push_str(&pf::doublequoted_nested_doc(pf::lnformula_doc(original), 2));
+    // `nest 2 (if safety then lineComment_ "safety formula" else emptyDoc)`
+    // (TheoryObject.hs:894).
+    if is_safety_formula(&er.formula) {
         out.push_str("\n  ");
         out.push_str(&line_comment_("safety formula").render());
     }
-    // Expanded formula block: `nest 2 (multiComment (text "expanded formula:"
-    // $-$ doubleQuotes (prettyLNFormula expandedFormula)))` (TheoryObject.hs:
-    // 852-854).  `multiComment = comment (…)` wraps the whole `/* … */` in an
+    // `nest 2 (multiComment (text "expanded formula:" $-$ doubleQuotes
+    // (prettyLNFormula expandedFormula)))` (TheoryObject.hs:896-897).
+    // `multiComment = comment (…)` wraps the whole `/* … */` in an
     // `hl_comment` span; the inner formula still carries its own operator spans.
     out.push_str("\n\n  ");
     out.push_str(&hl_open(Hl::Comment));
     out.push_str("/*\n  expanded formula:\n");
-    out.push_str(&pf::formula_doublequoted_nested(&expanded, 2));
+    out.push_str(&pf::doublequoted_nested_doc(
+        pf::lnformula_doc(&er.formula),
+        2,
+    ));
     out.push_str("\n  */");
     out.push_str(&hl_close(Hl::Comment));
-    out
+    Some(out)
 }
 
 /// Render the restriction attributes, i.e., `left` and/or `right`
@@ -3831,17 +3789,26 @@ fn render_predicate(pr: &p::Predicate, arity1: &std::collections::HashSet<String
 }
 
 /// HS `isSafetyFormula . formulaToGuarded_` (Guarded.hs:156-164 / 466-467) over
-/// a restriction's surface formula.
+/// a restriction's formula.
 ///
 /// `isSafetyFormula gf0 = null (frees [gf0]) && noExistential gf0`
 /// (Guarded.hs:157-158): the guarded formula must be CLOSED *and* free of
 /// existential quantifiers.  `crate::guarded::is_safety_formula` is that exact
-/// predicate; this wrapper supplies the parser-AST closing and the
-/// `LNFormula → LNGuarded` step.
+/// predicate; this wrapper supplies the `LNFormula → LNGuarded` step.
 /// HS's `formulaToGuarded_` `error`s out when the formula is not guardable
 /// (`either (error . render) id`, Guarded.hs:467) and takes the whole run down;
 /// an unguardable restriction here yields `false` (no annotation) instead.
-fn is_safety_formula(f: &p::Formula, msig: &tamarin_term::maude_sig::MaudeSig) -> bool {
+fn is_safety_formula(f: &crate::formula::LNFormula) -> bool {
+    match crate::guarded::formula_to_guarded(f) {
+        Ok(g) => crate::guarded::is_safety_formula(&g),
+        Err(_) => false,
+    }
+}
+
+/// [`is_safety_formula`] on the parser-AST formula the `--parse-only`
+/// restriction renderer holds, closed by
+/// [`crate::guarded::formula_to_guarded_parsed`].
+fn is_safety_formula_parsed(f: &p::Formula, msig: &tamarin_term::maude_sig::MaudeSig) -> bool {
     match crate::guarded::formula_to_guarded_parsed(f, msig) {
         Ok(g) => crate::guarded::is_safety_formula(&g),
         Err(_) => false,
@@ -4867,6 +4834,57 @@ mod lnatom_to_parser_tests {
         assert_eq!(
             lnatom_to_parser(&a),
             p::Atom::Less(pvar("i", LSort::Node), pvar("j", LSort::Node))
+        );
+    }
+}
+
+#[cfg(test)]
+mod closed_restriction_tests {
+    use super::*;
+
+    /// The fixture theory of `scripts/divergence_fixtures/s3_macro_lemma_header.spthy`,
+    /// cut to its restrictions: `MacroRestriction` calls a macro and a
+    /// predicate, `PlainRestriction` neither.
+    const SRC: &str = "theory S3MacroLemmaHeader\n\
+begin\n\
+predicates:\n  IsPairOf(m, a, b) <=> m = <a, b>\n\
+macros:\n  tag(x) = <'t', x>, wrap(x, y) = tag(<x, y>)\n\
+rule A:\n  [ In( <x, y> ) ] --[ A( wrap(x, y) ) ]-> [ Out( tag(x) ) ]\n\
+restriction PlainRestriction:\n  \"All m #i. A( m ) @ #i ==> not( m = 'no' )\"\n\
+restriction MacroRestriction:\n  \"All m x y #i. A( m ) @ #i & IsPairOf(m, x, y) ==> m = wrap(x, y)\"\n\
+end\n";
+
+    /// HS `prettyRestriction` quotes `fromMaybe expandedFormula ogFormula`
+    /// above the block and `expandedFormula` inside it
+    /// (TheoryObject.hs:893, :895-898), and `applyMacroInRestriction` fills
+    /// `ogFormula` with the pre-macro formula
+    /// (Theory/Model/Restriction.hs:164-166).  So the macro call `wrap(x, y)`
+    /// stands on top and its expansion `<'t', x, y>` in the block, while the
+    /// predicate atom `IsPairOf(m, x, y)` is inlined in both — parse-time
+    /// expansion, which `liftedAddRestriction` runs over the stored formula
+    /// and its original alike (Theory/Text/Parser.hs:129-139).
+    ///
+    /// Expected strings are the pinned oracle's bytes for the fixture
+    /// (`scripts/divergence_fixtures/expected/s3_macro_lemma_header.theory.hs.txt`).
+    #[test]
+    fn closed_restriction_prints_the_original_on_top_and_the_expanded_in_the_block() {
+        let parsed = tamarin_parser::parse_theory(SRC, &[]).expect("theory parses");
+        let elaborated = crate::elaborate::elaborate(&parsed).expect("theory elaborates");
+        let rendered = web_restrictions(&parsed, &elaborated);
+        assert_eq!(
+            rendered,
+            vec![
+                "restriction PlainRestriction:\n  \
+                 \"∀ m #i. (A( m ) @ #i) ⇒ (¬(m = 'no'))\"\n  \
+                 // safety formula\n\n  \
+                 /*\n  expanded formula:\n  \
+                 \"∀ m #i. (A( m ) @ #i) ⇒ (¬(m = 'no'))\"\n  */",
+                "restriction MacroRestriction:\n  \
+                 \"∀ m x y #i. ((A( m ) @ #i) ∧ (m = <x, y>)) ⇒ (m = wrap(x, y))\"\n  \
+                 // safety formula\n\n  \
+                 /*\n  expanded formula:\n  \
+                 \"∀ m x y #i. ((A( m ) @ #i) ∧ (m = <x, y>)) ⇒ (m = <'t', x, y>)\"\n  */",
+            ]
         );
     }
 }

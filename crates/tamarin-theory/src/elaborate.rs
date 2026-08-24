@@ -46,12 +46,14 @@ use tamarin_term::maude_sig::{
 use tamarin_term::term::{f_app_no_eq, Term};
 use tamarin_term::vterm::{Lit, VTerm};
 
-use crate::guarded::formula_to_guarded_parsed;
+use crate::formula::LNFormula;
+use crate::guarded::{formula_to_guarded, formula_to_guarded_parsed};
+use crate::restriction::Restriction;
 use crate::rule::{ProtoRuleE, ProtoRuleEInfo, ProtoRuleName, Rule, RuleAttributes};
 use crate::signature::SignaturePure;
 use crate::theory::{
-    AccLemma, CaseTest, LNMacro, Lemma, LemmaAttr, OpenProtoRule, OpenRestriction, ProofSkeleton,
-    Theory, TheoryItem, TraceQuantifier, TranslationElement,
+    AccLemma, CaseTest, LNMacro, Lemma, LemmaAttr, OpenProtoRule, ProofSkeleton, Theory,
+    TheoryItem, TraceQuantifier, TranslationElement,
 };
 
 #[derive(Debug, Clone)]
@@ -102,7 +104,7 @@ pub fn elaborate_with_diagnostics(
         }
     }
     for r in thy.restrictions() {
-        if let Err(e) = formula_to_guarded_parsed(&r.formula, msig) {
+        if let Err(e) = formula_to_guarded(&r.formula) {
             diags.push(GuardDiagnostic {
                 topic: "Formula guardedness".into(),
                 item: format!("Restriction `{}'", r.name),
@@ -299,52 +301,67 @@ pub fn elaborate(parser_thy: &p::Theory) -> Result<Theory, ElabError> {
     // predicate body into use sites, and the body could contain macro
     // calls — so expand macros first.
     crate::macro_expand::expand_theory_macros(&mut thy_clone);
-    if let Err(e) = crate::predicate_expand::expand_theory_formulas(&mut thy_clone) {
-        return Err(ElabError {
+    let expand_predicates = |thy: &mut p::Theory| -> Result<(), ElabError> {
+        crate::predicate_expand::expand_theory_formulas(thy).map_err(|e| ElabError {
             message: format!("predicate expansion failed: {}", e.message),
-        });
-    }
-    let mut thy = elaborate_already_expanded(&thy_clone)?;
+        })
+    };
+    expand_predicates(&mut thy_clone)?;
+    // The item's formula before macro application, which HS's
+    // `applyMacroInRestriction` stores as `_rstrOriginalFormula`
+    // (Theory/Model/Restriction.hs:164-166).  A theory that declares no macro
+    // leaves `expand_theory_macros` a no-op (`applyMacroInFormula [] fm = fm`,
+    // Model/Formula.hs:314-316), so the two lists coincide and only the
+    // predicate-expanded one is built.  Both expansion passes rewrite the item
+    // list in place and add and remove nothing, so the lists pair by position.
+    let original_items = if declares_macros(parser_thy) {
+        let mut orig = parser_thy.clone();
+        expand_predicates(&mut orig)?;
+        Some(orig.items)
+    } else {
+        None
+    };
+    let mut thy = elaborate_already_expanded(&thy_clone, original_items.as_deref())?;
 
     // HS folds surplus arguments of arity-1 function applications into a
     // single right-associative pair at PARSE time (`naryOpApp` `k == 1`,
     // Theory/Text/Parser/Term.hs:94-96 + `tupleterm` line 211-212:
     // `chainr1 (msetterm ...) (curry fAppPair <$ comma)`), so the surface
     // `h(a, b, c)` parses to `h(<a, b, c>)` = `h(fAppPair a (fAppPair b c))`.
-    // Because the fold happens at parse time, the lemma/restriction formula
-    // stored in HS's theory is ALREADY folded, and every downstream consumer
-    // (in particular `formulaToGuarded`, which builds the prover's initial
-    // constraint-system goal and thus the `solve( ... )` text printed in the
-    // proof body) sees the folded form.
+    // Because the fold happens at parse time, the lemma formula stored in HS's
+    // theory is ALREADY folded, and every downstream consumer (in particular
+    // `formulaToGuarded`, which builds the prover's initial constraint-system
+    // goal and thus the `solve( ... )` text printed in the proof body) sees
+    // the folded form.
     //
     // RS's term parser is arity-unaware and keeps `App("h", [a, b, c])`, so we
-    // re-establish the fold here, once, on the elaborated theory's
-    // lemma/restriction formulas — after the signature is final so
-    // `arity1_noeq_names` covers both user `functions: f/1` and builtin
-    // arity-1 NoEq symbols.  This makes `prove.rs`'s guarded-conversion
-    // calls (lemma + reuse-lemma + restriction) carry the folded `h(<…>)`
-    // shape into the goal, matching HS.  The display path folds the parser-AST
-    // separately (pretty_theory.rs), and the fold is idempotent (an arity-1
-    // application with exactly one — already-paired — argument is left
-    // unchanged), so applying it on both sides is safe.
+    // re-establish the fold here, once, on the elaborated theory's lemma
+    // formulas — after the signature is final so `arity1_noeq_names` covers
+    // both user `functions: f/1` and builtin arity-1 NoEq symbols.  This makes
+    // `prove.rs`'s guarded-conversion calls (lemma + reuse-lemma) carry the
+    // folded `h(<…>)` shape into the goal, matching HS.  The display path
+    // folds the parser-AST separately (pretty_theory.rs), and the fold is
+    // idempotent (an arity-1 application with exactly one — already-paired —
+    // argument is left unchanged), so applying it on both sides is safe.
+    // A restriction needs no pass: `restriction_formula` converts it through
+    // `term_to_lnterm`, which folds.
     let arity1 = arity1_noeq_names(thy.signature.maude_sig());
     if !arity1.is_empty() {
         for item in &mut thy.items {
-            match item {
-                TheoryItem::Lemma(l) => {
-                    l.formula = rewrite_arity1_formula(&l.formula, &arity1);
-                }
-                TheoryItem::Restriction(r) => {
-                    r.formula = rewrite_arity1_formula(&r.formula, &arity1);
-                    if let Some(of) = &r.original_formula {
-                        r.original_formula = Some(rewrite_arity1_formula(of, &arity1));
-                    }
-                }
-                _ => {}
+            if let TheoryItem::Lemma(l) = item {
+                l.formula = rewrite_arity1_formula(&l.formula, &arity1);
             }
         }
     }
     Ok(thy)
+}
+
+/// Whether the theory declares a macro, i.e. whether
+/// `macro_expand::expand_theory_macros` rewrites anything.
+fn declares_macros(thy: &p::Theory) -> bool {
+    thy.items
+        .iter()
+        .any(|i| matches!(i, p::TheoryItem::Macros(ms) if !ms.is_empty()))
 }
 
 /// Join of the `[NDC]` and `[NDC-diff]` attributes (HS `function`'s `joinNDC`).
@@ -362,7 +379,10 @@ fn ndc_state_of(ndc: bool, ndc_diff: bool) -> NdcState {
     a.join(b)
 }
 
-fn elaborate_already_expanded(parser_thy: &p::Theory) -> Result<Theory, ElabError> {
+fn elaborate_already_expanded(
+    parser_thy: &p::Theory,
+    original_items: Option<&[p::TheoryItem]>,
+) -> Result<Theory, ElabError> {
     let mut sig = SignaturePure::empty(parser_thy.is_diff);
     if parser_thy.is_diff {
         sig.maude_sig = sig.maude_sig.merge(enable_diff_maude_sig());
@@ -389,18 +409,25 @@ fn elaborate_already_expanded(parser_thy: &p::Theory) -> Result<Theory, ElabErro
         thy.items.push(TheoryItem::ConfigBlock(cfg.clone()));
     }
 
-    elaborate_items(&parser_thy.items, &mut thy)?;
+    elaborate_items(&parser_thy.items, original_items, &mut thy)?;
     Ok(thy)
 }
 
-fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), ElabError> {
+fn elaborate_items(
+    items: &[p::TheoryItem],
+    original_items: Option<&[p::TheoryItem]>,
+    out: &mut Theory,
+) -> Result<(), ElabError> {
     // Signature-conflict rules (HS `extendSig` / `function`,
     // Theory/Text/Parser/Signature.hs:102-135, 200-225) are enforced at
     // parse time (`Parser::enable_builtin` / `Parser::function_decl`) — the
     // single point where theories are ingested — so the declarations
     // reaching here are conflict-free and the arms below only BUILD the
     // signature.
-    for item in items {
+    for (idx, item) in items.iter().enumerate() {
+        // The same item read from the pre-macro list, or the item itself when
+        // that list is absent because the theory declares no macro.
+        let original_item = original_items.and_then(|o| o.get(idx)).unwrap_or(item);
         match item {
             p::TheoryItem::Builtins(names) => {
                 let mut s = out.signature.maude_sig.clone();
@@ -613,8 +640,17 @@ fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), Elab
                     .push(crate::tactic::Tactic::parse(&t.name, &t.raw));
             }
             p::TheoryItem::Restriction(r) | p::TheoryItem::LegacyAxiom(r) => {
-                let or = OpenRestriction::new(r.name.clone(), r.formula.clone());
-                out.items.push(TheoryItem::Restriction(or));
+                let original = match original_item {
+                    p::TheoryItem::Restriction(o) | p::TheoryItem::LegacyAxiom(o) => &o.formula,
+                    _ => &r.formula,
+                };
+                let msig = &out.signature.maude_sig;
+                let restr = Restriction {
+                    name: r.name.clone(),
+                    formula: restriction_formula(&r.formula, msig)?,
+                    original_formula: Some(restriction_formula(original, msig)?),
+                };
+                out.items.push(TheoryItem::Restriction(restr));
             }
             p::TheoryItem::Rule(r) | p::TheoryItem::IntrRule(r) => {
                 let elab = rule_to_proto_rule_e(r, &out.signature.maude_sig)?;
@@ -690,6 +726,18 @@ fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), Elab
         }
     }
     Ok(())
+}
+
+/// The formula HS's `liftedAddRestriction` stores: the surface formula closed
+/// by [`crate::formula::from_parser`] and stripped of its predicate sugar by
+/// `expandRestriction` (Theory/Text/Parser.hs:129-139,
+/// Theory/Model/Restriction.hs:70).  Predicate expansion already ran over the
+/// whole theory, so a surviving sugar atom is an elaboration error.
+fn restriction_formula(f: &p::Formula, sig: &MaudeSig) -> Result<LNFormula, ElabError> {
+    let syn = crate::formula::from_parser(f, sig)?;
+    crate::formula::to_lnformula(&syn).ok_or_else(|| ElabError {
+        message: "restriction formula carries an unexpanded predicate atom".to_string(),
+    })
 }
 
 /// Map a parser-AST lemma attribute to the elaborated form (the two enums

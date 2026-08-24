@@ -16,15 +16,10 @@ use tamarin_term::lterm::LVar;
 
 use crate::formula::SyntacticLNFormula;
 use crate::predicate::Predicate;
-use crate::restriction::ProtoRestriction;
+use crate::restriction::Restriction;
 use crate::rule::ProtoRuleE;
 use crate::sapic::PlainProcess;
 use crate::signature::SignaturePure;
-
-/// Restriction over the surface formula, used in `OpenTheory`. After
-/// elaboration this becomes [`crate::restriction::Restriction`] which
-/// carries an `LNFormula`.
-pub type OpenRestriction = ProtoRestriction<tamarin_parser::ast::Formula>;
 
 /// A protocol rule modulo E with its variant machinery.  Mirrors the
 /// `ProtoRuleE` half of HS's `OpenProtoRule = (ProtoRuleE, [ProtoRuleAC])`;
@@ -279,7 +274,7 @@ impl ProofSkeleton {
 pub enum TheoryItem<R = OpenProtoRule, P = ProofSkeleton, S = TranslationElement> {
     Rule(R),
     Lemma(Lemma<P>),
-    Restriction(OpenRestriction),
+    Restriction(Restriction),
     Text(FormalComment),
     ConfigBlock(ConfigBlock),
     Predicate(Predicate),
@@ -299,7 +294,7 @@ pub enum DiffTheoryItem<
     EitherRule(Side, R2),
     DiffLemma(DiffLemma<P>),
     EitherLemma(Side, Lemma<P2>),
-    EitherRestriction(Side, OpenRestriction),
+    EitherRestriction(Side, Restriction),
     DiffMacros(Vec<LNMacro>),
     DiffText(FormalComment),
     DiffConfigBlock(ConfigBlock),
@@ -408,7 +403,7 @@ impl<R, P, S> Theory<R, P, S> {
         })
     }
 
-    pub fn restrictions(&self) -> impl Iterator<Item = &OpenRestriction> {
+    pub fn restrictions(&self) -> impl Iterator<Item = &Restriction> {
         self.items.iter().filter_map(|i| match i {
             TheoryItem::Restriction(r) => Some(r),
             _ => None,
@@ -437,11 +432,10 @@ impl<R, P, S> Theory<R, P, S> {
     /// Look up a restriction by name (HS `lookupRestriction`,
     /// TheoryObject.hs:671-672).
     ///
-    /// Intentionally retained: faithful mirror of HS `lookupRestriction`
-    /// (TheoryObject.hs:671-672); its only caller is [`Theory::add_restriction`],
-    /// itself reached only from the equally caller-less
-    /// [`Theory::add_restrictions`].
-    pub fn lookup_restriction(&self, name: &str) -> Option<&OpenRestriction> {
+    /// The closed printer's restriction renderer resolves the parsed item to
+    /// its elaborated twin through this (`pretty_theory::render_parsed_restriction`),
+    /// and [`Theory::add_restriction`] uses it as the duplicate-name guard.
+    pub fn lookup_restriction(&self, name: &str) -> Option<&Restriction> {
         self.restrictions().find(|r| r.name == name)
     }
 
@@ -492,7 +486,7 @@ impl<R, P, S> Theory<R, P, S> {
     /// Intentionally retained: faithful mirror of HS `addRestriction`
     /// (TheoryObject.hs:453-456); its only caller is the equally caller-less
     /// [`Theory::add_restrictions`].
-    pub fn add_restriction(&mut self, r: OpenRestriction) -> bool {
+    pub fn add_restriction(&mut self, r: Restriction) -> bool {
         if self.lookup_restriction(&r.name).is_some() {
             return false;
         }
@@ -507,7 +501,7 @@ impl<R, P, S> Theory<R, P, S> {
     /// (TheoryObject.hs:458-459); no caller yet.
     pub fn add_restrictions(
         &mut self,
-        restrictions: impl IntoIterator<Item = OpenRestriction>,
+        restrictions: impl IntoIterator<Item = Restriction>,
     ) -> &mut Self {
         for r in restrictions {
             self.add_restriction(r);
@@ -569,8 +563,12 @@ mod tests {
         }
     }
 
-    fn restriction(name: &str) -> OpenRestriction {
-        OpenRestriction::new(name, tamarin_parser::ast::Formula::True)
+    fn restriction(name: &str) -> Restriction {
+        Restriction {
+            name: name.to_string(),
+            formula: crate::formula::ProtoFormula::ltrue(),
+            original_formula: None,
+        }
     }
 
     fn lnmacro(name: &str) -> LNMacro {

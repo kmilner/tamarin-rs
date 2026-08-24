@@ -920,3 +920,50 @@ fn an_acc_lemma_stores_the_internal_formula() {
         other => panic!("expected an existential quantifier, got {other:?}"),
     }
 }
+
+/// A restriction stores two formulas: `_rstrFormula`, the macro-expanded one
+/// the solver and the `expanded formula:` block read, and
+/// `_rstrOriginalFormula`, the pre-macro one HS's `applyMacroInRestriction`
+/// records (Theory/Model/Restriction.hs:164-166).  `liftedAddRestriction`
+/// predicate-expands the restriction before it is stored
+/// (Theory/Text/Parser.hs:129-139), so the predicate atom is inlined in both
+/// while the macro call survives only in the original.  A restriction that
+/// calls no macro stores the same formula twice.
+#[test]
+fn restriction_stores_the_pre_macro_formula_as_its_original() {
+    let src = "theory T\n\
+begin\n\
+predicates:\n  IsPairOf(m, a, b) <=> m = <a, b>\n\
+macros:\n  tag(x) = <'t', x>, wrap(x, y) = tag(<x, y>)\n\
+rule A:\n  [ In( <x, y> ) ] --[ A( wrap(x, y) ) ]-> [ Out( tag(x) ) ]\n\
+restriction PlainRestriction:\n  \"All m #i. A( m ) @ #i ==> not( m = 'no' )\"\n\
+restriction MacroRestriction:\n  \"All m x y #i. A( m ) @ #i & IsPairOf(m, x, y) ==> m = wrap(x, y)\"\n\
+end\n";
+    let thy = elaborate(&parse_theory(src, &[]).unwrap()).unwrap();
+    let shown = |f: &crate::formula::LNFormula| crate::pretty_formula::pretty_lnformula(f);
+    let rs: Vec<(&str, String, String)> = thy
+        .restrictions()
+        .map(|r| {
+            (
+                r.name.as_str(),
+                shown(r.original_formula.as_ref().expect("original formula")),
+                shown(&r.formula),
+            )
+        })
+        .collect();
+    assert_eq!(
+        rs,
+        vec![
+            (
+                "PlainRestriction",
+                "∀ m #i. (A( m ) @ #i) ⇒ (¬(m = 'no'))".to_string(),
+                "∀ m #i. (A( m ) @ #i) ⇒ (¬(m = 'no'))".to_string(),
+            ),
+            (
+                "MacroRestriction",
+                "∀ m x y #i. ((A( m ) @ #i) ∧ (m = <x, y>)) ⇒ (m = wrap(x, y))".to_string(),
+                "∀ m x y #i. ((A( m ) @ #i) ∧ (m = <x, y>)) ⇒ (m = <'t', x, y>)".to_string(),
+            ),
+        ]
+    );
+}

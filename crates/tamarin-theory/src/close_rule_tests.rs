@@ -512,7 +512,7 @@ fn elaborate_deduction_theory_via_text(
     let restrictions: Vec<Guarded> = elaborated
         .restrictions()
         .map(|r| {
-            crate::guarded::formula_to_guarded_parsed(&r.formula, msig).unwrap_or_else(|e| {
+            crate::guarded::formula_to_guarded(&r.formula).unwrap_or_else(|e| {
                 panic!(
                     "[ndc] synthetic deduction theory restriction {} is not guarded ({}); theory:\n{}",
                     r.name,
