@@ -292,7 +292,6 @@ fn precompute_sources_handles_multiple_unique_tags() {
 /// ```
 #[test]
 fn restrict_eq_store_keeps_only_stable_keyed_bindings() {
-    use std::collections::BTreeSet;
     use tamarin_term::lterm::{LSort, LVar};
     use tamarin_term::subst::Subst;
     use tamarin_term::term::Term;
@@ -313,8 +312,7 @@ fn restrict_eq_store_keeps_only_stable_keyed_bindings() {
         (sk28, Term::Lit(Lit::Var(t2))),
     ]);
 
-    let stable: BTreeSet<LVar> = [t1, t2].into_iter().collect();
-    restrict_eq_store_to_stable_vars(&mut sys, &stable);
+    restrict_eq_store_to_stable_vars(&mut sys, &[t1, t2]);
 
     // t1 binding kept; m19 + sk28 bindings dropped.
     assert!(
@@ -339,7 +337,6 @@ fn restrict_eq_store_keeps_only_stable_keyed_bindings() {
 /// appear in the corpus.
 #[test]
 fn restrict_eq_store_does_not_chain_chase() {
-    use std::collections::BTreeSet;
     use tamarin_term::lterm::{LSort, LVar};
     use tamarin_term::subst::Subst;
     use tamarin_term::term::Term;
@@ -360,8 +357,7 @@ fn restrict_eq_store_does_not_chain_chase() {
         (e10, Term::Lit(Lit::Var(blind_arg))),
     ]);
 
-    let stable: BTreeSet<LVar> = [t1].into_iter().collect();
-    restrict_eq_store_to_stable_vars(&mut sys, &stable);
+    restrict_eq_store_to_stable_vars(&mut sys, &[t1]);
 
     // t.1's binding must be exactly e.10 (the var), NOT chain-chased
     // to blind_arg.
@@ -379,7 +375,6 @@ fn restrict_eq_store_does_not_chain_chase() {
 /// vars (large idx), stableVars are lemma vars (small idx).
 #[test]
 fn restrict_eq_store_empties_subst_when_no_keys_are_stable() {
-    use std::collections::BTreeSet;
     use tamarin_term::lterm::{LSort, LVar};
     use tamarin_term::subst::Subst;
     use tamarin_term::term::Term;
@@ -396,10 +391,10 @@ fn restrict_eq_store_empties_subst_when_no_keys_are_stable() {
         (sk28, Term::Lit(Lit::Var(pub_b))),
     ]);
 
-    let stable: BTreeSet<LVar> = [LVar::new("t", LSort::Msg, 1), LVar::new("t", LSort::Msg, 2)]
-        .into_iter()
-        .collect();
-    restrict_eq_store_to_stable_vars(&mut sys, &stable);
+    restrict_eq_store_to_stable_vars(
+        &mut sys,
+        &[LVar::new("t", LSort::Msg, 1), LVar::new("t", LSort::Msg, 2)],
+    );
 
     assert!(
         sys.eq_store.subst.is_empty(),
@@ -746,8 +741,8 @@ fn some_inst_system_keeps_the_seeded_vars_and_draws_in_hs_field_order() {
     let maude = start_maude(&path, tamarin_term::maude_sig::pair_maude_sig());
     let sys = system_with_a_variable_per_field(mterm(11));
     // The goal's own variables: the node the case is grafted onto and the
-    // term of its fact.
-    let keep: std::collections::BTreeSet<LVar> = [nvar(10), mvar(11)].into_iter().collect();
+    // term of its fact, in the ascending order `frees` hands over.
+    let keep = [nvar(10), mvar(11)];
 
     maude.reset_counter_to(500);
     let out = some_inst_system(&sys, &keep, &maude);
@@ -857,4 +852,41 @@ fn rename_map_counts_neg_subterms() {
     let rename = compute_rename_map(&sys, &std::collections::BTreeSet::new());
     assert_eq!(rename.get(&mvar(90)), Some(LVar::new("", LSort::Msg, 0)));
     assert_eq!(rename.get(&mvar(91)), Some(LVar::new("", LSort::Msg, 1)));
+}
+
+// =========================================================================
+// source_bounds
+// =========================================================================
+
+/// `boundsVarIdx` (LTerm.hs:672-675) folds the frees of `instance HasFrees
+/// System` (System.hs:1832-1877), which reaches the subterm store's NEGATIVE
+/// subterms before its positive and solved ones (SubtermStore.hs:546-549).  A
+/// variable living in a negative subterm alone therefore sets both ends of
+/// the source's bounds, and so both the `matchToGoal` rename shift and the
+/// `refineSource` fresh seed.
+#[test]
+fn bounds_var_idx_of_system_counts_neg_subterms() {
+    let mut sys = System::empty();
+    sys.subterm_store_mut().neg_subterms =
+        SortedPairSet::rebuild_from(vec![(mterm(90), mterm(91))]);
+    assert_eq!(tamarin_term::lterm::bounds_var_idx(&sys), Some((90, 91)));
+}
+
+/// `source_bounds` splits the two ends of `instance HasFrees Source`
+/// (System.hs:1879-1889).  The MIN is over `cdGoal` and every case, because
+/// `rename th0` (Sources.hs:268-317, see line 307) rebases the whole source.
+/// The MAX is over the cases alone, because `avoid th` (Sources.hs:113-137,
+/// see line 128) sees a source whose `cdGoal` has already been overwritten
+/// with the live goal.
+#[test]
+fn source_bounds_takes_the_max_over_cases_only() {
+    let goal = Goal::Action(nvar(5), LNFact::new(FactTag::Out, vec![mterm(200)]));
+    let mut case_sys = System::empty();
+    case_sys.content_mut().last_atom = Some(nvar(20));
+    case_sys.subterm_store_mut().neg_subterms =
+        SortedPairSet::rebuild_from(vec![(mterm(60), mterm(61))]);
+    let src = Source::eager(goal, vec![("case".to_string(), case_sys.clone())], false);
+
+    let cases = vec![("case".to_string(), case_sys)];
+    assert_eq!(source_bounds(&src, &cases), (Some(5), Some(61)));
 }

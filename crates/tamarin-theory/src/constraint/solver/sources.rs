@@ -22,6 +22,7 @@
 
 use crate::constraint::system::System;
 use tamarin_term::bind::Bindings;
+use tamarin_term::lterm::frees;
 
 // =============================================================================
 // Precompute-mode marker
@@ -46,25 +47,6 @@ thread_local! {
     // dispatch fires there exactly like HS's `solveAllSafeGoals`.
     static IN_INITIAL_SOURCE_CASES: std::cell::Cell<bool>
         = const { std::cell::Cell::new(false) };
-}
-
-/// The variables kept stable across a source-case graft: the live goal's node
-/// id plus every free variable of its fact — HS's `frees goal = [iTerm] ++
-/// frees faTerm`.  Both the `restrict_eq_store_to_stable_vars` (`stableVars`)
-/// restriction and the `someInst` keep-var bindings use this exact set, in the
-/// action and premise paths alike; the shared helper makes that invariant
-/// explicit instead of leaving four separated copies to drift.
-fn collect_node_and_fact_frees(
-    live_node: &crate::constraint::constraints::NodeId,
-    fa_live: &crate::fact::LNFact,
-) -> std::collections::BTreeSet<tamarin_term::lterm::LVar> {
-    use tamarin_term::lterm::HasFrees;
-    let mut s = std::collections::BTreeSet::new();
-    s.insert(*live_node);
-    fa_live.for_each_free(&mut |v: &tamarin_term::lterm::LVar| {
-        s.insert(*v);
-    });
-    s
 }
 
 /// The set of every node id in `sys` — the membership set used to keep only
@@ -1023,122 +1005,6 @@ fn ku_source_label_for_fa(fa: &crate::fact::LNFact) -> Option<String> {
     }
 }
 
-/// HS-faithful free-var idx BOUNDS of a `System` (`boundsVarIdx`,
-/// LTerm.hs:674-675, under `instance HasFrees System`,
-/// System.hs:1833-1847): `Some((min, max))`, or `None` when the system
-/// has no frees.
-///
-/// Coverage differs from [`system_max_idx`] deliberately: HS
-/// `SubstVFresh` `foldFrees` walks DOMAIN KEYS ONLY
-/// (SubstVFresh.hs:196-198), so eq-store conj RANGES (existential
-/// witnesses) are NOT counted here.  (`system_max_idx` includes them
-/// for its own collision-avoidance purposes — that is a superset of the
-/// HS fold and must stay as-is.)  Disj goals' formulas ARE counted (HS
-/// `Goal` HasFrees folds the `DisjG` disjunction).
-///
-/// Used by the `matchToGoal` whole-source `rename` rebase (min side:
-/// HS `rename x`, LTerm.hs:638-645, shifts by `freshStart - minVarIdx`)
-/// and the `refineSource` seed `fs = avoid th` (max side,
-/// Sources.hs:113-137, see line 128).
-fn system_bounds_hs(sys: &System) -> Option<(u64, u64)> {
-    use crate::constraint::constraints::Goal;
-    use std::cell::Cell;
-    use tamarin_term::lterm::HasFrees;
-    // `(lowest, highest)` var index seen so far — a `Cell` so the two
-    // accumulating closures below can both borrow it immutably.
-    let bounds: Cell<Option<(u64, u64)>> = Cell::new(None);
-    let mut visit = |v: &tamarin_term::lterm::LVar| {
-        let cur = bounds.get();
-        bounds.set(Some(
-            cur.map_or((v.idx, v.idx), |(lo, hi)| (lo.min(v.idx), hi.max(v.idx))),
-        ));
-    };
-    for (id, ru) in sys.nodes.iter() {
-        id.for_each_free(&mut visit);
-        ru.for_each_free(&mut visit);
-    }
-    for e in &sys.edges {
-        e.src.0.for_each_free(&mut visit);
-        e.tgt.0.for_each_free(&mut visit);
-    }
-    for l in &sys.less_atoms {
-        l.smaller.for_each_free(&mut visit);
-        l.larger.for_each_free(&mut visit);
-    }
-    if let Some(la) = &sys.last_atom {
-        la.for_each_free(&mut visit);
-    }
-    // Guarded formulas: `min_var_idx` returns None on frees-less
-    // formulas; when Some, `max_var_idx` over the same Free leaves is
-    // the valid max.
-    let upd_guarded = |g: &crate::guarded::Guarded| {
-        if let Some(lo) = crate::guarded::min_var_idx(g) {
-            let hi = crate::guarded::max_var_idx(g);
-            let cur = bounds.get();
-            bounds.set(Some(
-                cur.map_or((lo, hi), |(clo, chi)| (clo.min(lo), chi.max(hi))),
-            ));
-        }
-    };
-    for (g, _) in sys.goals.iter() {
-        match g {
-            Goal::Action(i, fa) => {
-                i.for_each_free(&mut visit);
-                fa.for_each_free(&mut visit);
-            }
-            Goal::Premise(p, fa) => {
-                p.0.for_each_free(&mut visit);
-                fa.for_each_free(&mut visit);
-            }
-            Goal::Chain(c, p) => {
-                c.0.for_each_free(&mut visit);
-                p.0.for_each_free(&mut visit);
-            }
-            Goal::Subterm((s, t)) => {
-                s.for_each_free(&mut visit);
-                t.for_each_free(&mut visit);
-            }
-            Goal::Disj(d) => {
-                for alt in &d.0 {
-                    upd_guarded(alt);
-                }
-            }
-            Goal::Split(_) => {}
-        }
-    }
-    for f in sys
-        .formulas
-        .iter()
-        .chain(sys.solved_formulas.iter())
-        .chain(sys.lemmas.iter())
-    {
-        upd_guarded(f);
-    }
-    // Eq-store free subst: keys AND range terms (HS `Subst` HasFrees).
-    for (v, t) in sys.eq_store.subst.to_list() {
-        visit(&v);
-        t.for_each_free(&mut visit);
-    }
-    // Eq-store conj: DOMAIN keys only (HS SubstVFresh foldFrees).
-    for d in &sys.eq_store.conj {
-        for s in &d.substs {
-            for (v, _t) in s.to_list() {
-                visit(&v);
-            }
-        }
-    }
-    for sc in sys
-        .subterm_store
-        .subterms
-        .iter()
-        .chain(sys.subterm_store.solved_subterms.iter())
-    {
-        sc.small.for_each_free(&mut visit);
-        sc.big.for_each_free(&mut visit);
-    }
-    bounds.get()
-}
-
 /// HS-faithful idx bounds over a WHOLE precomputed `Source` for the
 /// `matchToGoal` rename + `refineSource` seed:
 ///
@@ -1152,32 +1018,16 @@ fn system_bounds_hs(sys: &System) -> Option<(u64, u64)> {
 ///   count; the caller maxes this (post-shift) with the live goal's
 ///   own max.
 ///
-/// `cases` must be the source's materialised case list
-/// (`src.cases(ctx)`); the goal-pattern frees come from `src.goal`.
+/// The two ends come from `src.goal` and the caller's case list rather than
+/// from a `HasFrees` impl on `Source`, because a source's cases sit behind a
+/// `Mutex` that only a `ProofContext` fills: `cases` must be the source's
+/// materialised case list (`src.cases(ctx)`).
 fn source_bounds(src: &Source, cases: &[(String, System)]) -> (Option<u64>, Option<u64>) {
-    use crate::constraint::constraints::Goal;
-    use tamarin_term::lterm::HasFrees;
-    let mut min: Option<u64> = None;
+    use tamarin_term::lterm::bounds_var_idx;
+    let mut min: Option<u64> = bounds_var_idx(&src.goal).map(|(lo, _)| lo);
     let mut cases_max: Option<u64> = None;
-    {
-        let mut upd = |i: u64| {
-            min = Some(min.map_or(i, |c| c.min(i)));
-        };
-        let mut visit = |v: &tamarin_term::lterm::LVar| upd(v.idx);
-        match &src.goal {
-            Goal::Action(n, fa) => {
-                n.for_each_free(&mut visit);
-                fa.for_each_free(&mut visit);
-            }
-            Goal::Premise((n, _), fa) => {
-                n.for_each_free(&mut visit);
-                fa.for_each_free(&mut visit);
-            }
-            _ => {}
-        }
-    }
     for (_, cs) in cases {
-        if let Some((lo, hi)) = system_bounds_hs(cs) {
+        if let Some((lo, hi)) = bounds_var_idx(cs) {
             min = Some(min.map_or(lo, |c| c.min(lo)));
             cases_max = Some(cases_max.map_or(hi, |c| c.max(hi)));
         }
@@ -1213,6 +1063,13 @@ impl Drop for RefineFsScope {
     }
 }
 
+/// The largest free-var idx in `sys`, the collision floor a sub-case is
+/// freshened above.  Its visited set is deliberately not `boundsVarIdx`'s
+/// (LTerm.hs:672-675): the RANGES of the equation store's disjunctions count
+/// here, where HS's `SubstVFresh` fold walks their domain keys alone
+/// (SubstVFresh.hs:196-202), while a `Goal::Disj`'s formulas and the subterm
+/// store's negative pairs do not count.  The value seeds `reserve_idxs`, so
+/// every later draw of that counter moves with it.
 fn system_max_idx(sys: &System) -> u64 {
     use crate::constraint::constraints::Goal;
     use std::cell::Cell;
@@ -3228,10 +3085,7 @@ fn sort_ge(a: tamarin_term::lterm::LSort, b: tamarin_term::lterm::LSort) -> bool
 /// after every `refineSource` call (saturateSources iterations
 /// + matchToGoal's refineSubst).  Both places need the restrict
 ///   for runtime applySource to see a clean precomputed case.
-fn restrict_eq_store_to_stable_vars(
-    sys: &mut System,
-    stable_vars: &std::collections::BTreeSet<tamarin_term::lterm::LVar>,
-) {
+fn restrict_eq_store_to_stable_vars(sys: &mut System, stable_vars: &[tamarin_term::lterm::LVar]) {
     // Haskell's `restrict` (SubstVFree.hs:160-161; call site
     // Sources.hs:122-124 `modify sSubst (restrict stableVars)`) is a
     // simple key-filter using FULL LVar equality:
@@ -3298,7 +3152,7 @@ fn rename_system_by(sys: &System, shift_amount: i128) -> System {
 /// (Control/Monad/Bind.hs:125-140).
 fn some_inst_system(
     sys: &System,
-    keep: &std::collections::BTreeSet<tamarin_term::lterm::LVar>,
+    keep: &[tamarin_term::lterm::LVar],
     maude: &tamarin_term::maude_proc::MaudeHandle,
 ) -> System {
     let mut bindings = Bindings::new();
@@ -3754,7 +3608,7 @@ fn refine_source_case_action(
         // goal's free vars (since `set cdGoal goalTerm` was applied).
         // Drops any leftover abstract/rule-internal bindings introduced
         // during precompute and renamed via Step A.1.
-        let runtime_stable = collect_node_and_fact_frees(live_node, fa_live);
+        let runtime_stable = frees(&(*live_node, fa_live.clone()));
         restrict_eq_store_to_stable_vars(&mut refined.sys, &runtime_stable);
         crate::state_trace::emit(
             "applySource_refined",
@@ -3782,7 +3636,7 @@ fn refine_source_case_action(
         // `avoid(live_sys) + 1` below, then `some_inst_system`
         // draws fresh idxs from it per unique LVar in traversal order.
         // ---------------------------------------------------------------
-        let keep_vars = collect_node_and_fact_frees(live_node, fa_live);
+        let keep_vars = frees(&(*live_node, fa_live.clone()));
         // HS `_applySource` (Sources.hs:344-350) runs `someInst sysTh0` in
         // the LIVE Reduction monad — the imports draw from the step's ONE
         // threaded FreshT counter, sequentially after whatever the step
@@ -4442,7 +4296,7 @@ fn apply_source_case_premise(
         if refined.sys.eq_store.is_false() {
             continue;
         }
-        let runtime_stable = collect_node_and_fact_frees(live_node, fa_live);
+        let runtime_stable = frees(&(*live_node, fa_live.clone()));
         restrict_eq_store_to_stable_vars(&mut refined.sys, &runtime_stable);
         crate::state_trace::emit(
             "applySource_prem_refined",
@@ -4452,7 +4306,7 @@ fn apply_source_case_premise(
         let refined_case = refined.sys;
 
         // D — someInst keepVarBindings.
-        let keep_vars = collect_node_and_fact_frees(live_node, fa_live);
+        let keep_vars = frees(&(*live_node, fa_live.clone()));
         // HS `_applySource` (Sources.hs:344-350) runs `someInst sysTh0` in
         // the LIVE Reduction monad — imports draw from the step's ONE
         // threaded FreshT counter (see the matching comment in

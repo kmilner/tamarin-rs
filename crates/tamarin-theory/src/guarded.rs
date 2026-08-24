@@ -2379,9 +2379,9 @@ fn subst_gterm_slice(
 /// Read-only visitor over every `BVar::Free` leaf of a guarded formula,
 /// covering the identical leaf set that `map_lvars_in_guarded` remaps
 /// (walk Disj/Conj/GGuarded, hit each Free leaf in guards + body). The
-/// single free-var fold shared by [`max_var_idx`]/[`min_var_idx`] so the
-/// idx-bound walks stay in lockstep with the freshen/shift mapper without
-/// rebuilding the tree.
+/// single free-var fold behind [`max_var_idx`] and the `HasFrees` impl for
+/// [`Guarded`], so the idx-bound walks stay in lockstep with the
+/// freshen/shift mapper without rebuilding the tree.
 pub fn for_each_free_var_in_guarded<F: FnMut(&p::VarSpec)>(g: &Guarded, f: &mut F) {
     fn rec_term<F: FnMut(&p::VarSpec)>(t: &GTerm, f: &mut F) {
         match t {
@@ -2451,19 +2451,6 @@ pub fn max_var_idx(g: &Guarded) -> u64 {
         if v.idx > m {
             m = v.idx;
         }
-    });
-    m
-}
-
-/// Minimum idx over all `BVar::Free` leaves of a guarded formula, or
-/// `None` when the formula has no free variables.  The min-side twin of
-/// [`max_var_idx`] — needed by HS `boundsVarIdx` mirrors (LTerm.hs:674-675
-/// folds frees with `minMaxSingleton`), e.g. the `matchToGoal`
-/// whole-source `rename` rebase in `sources.rs`.
-pub fn min_var_idx(g: &Guarded) -> Option<u64> {
-    let mut m: Option<u64> = None;
-    for_each_free_var_in_guarded(g, &mut |v: &p::VarSpec| {
-        m = Some(m.map_or(v.idx, |c| c.min(v.idx)));
     });
     m
 }
