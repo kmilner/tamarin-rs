@@ -271,10 +271,9 @@ fn mk_fact(rname: &str, args: Vec<p::Term>) -> p::Fact {
 // rewrite (HS Theory/Model/Restriction.hs:90-128)
 // =============================================================================
 
-/// A fresh-variable substitution: maps each minted fresh var (by key) to
-/// the ORIGINAL term it abstracted.  Keyed by `(name, idx)` — the fresh
-/// vars are all `LSortMsg` so the sort is implicit.
-type RewriteSubst = BTreeMap<(String, u64), p::Term>;
+/// A fresh-variable substitution: maps each minted fresh var (by [`VarKey`])
+/// to the ORIGINAL term it abstracted.
+type RewriteSubst = BTreeMap<VarKey, p::Term>;
 
 /// HS `rewrite f = runState (evalFreshT (traverseFormulaAtom fAt' f) 0) M.empty`
 /// (Theory/Model/Restriction.hs:92-128, see line 96): traverse every term of
@@ -309,7 +308,7 @@ impl RewriteState {
             sort: LSort::Msg,
             typ: None,
         };
-        self.subst.insert((v.name.clone(), v.idx), t.clone());
+        self.subst.insert(var_full_key(&v), t.clone());
         p::Term::Var(v)
     }
 }
@@ -425,22 +424,19 @@ fn rewrite_term(t: &p::Term, bound: &[VarKey], st: &mut RewriteState) -> p::Term
     }
 }
 
-/// Identity of a parser-AST variable for bound-tracking: `(name, idx)`.  HS
-/// quantifiers bind a specific `LVar`, so a body occurrence is "bound" only
-/// when it is the SAME variable the binder introduced.  Matching by name
-/// ALONE wrongly conflates a distinct variable sharing a binder's name (the
-/// equation's `k` (idx 0) vs the process's `k.1` (idx 1) in a let-destructor
-/// restriction) — so the index is required.  But sort must NOT be part of the
-/// key: the parser AST gives a binder and its body occurrences INCONSISTENT
-/// sort hints (a typed binder `∀ x:msg` vs an untagged body `x`, like the
-/// quantifier sort-conflation handled in the guarded conversion), so keying on
-/// sort would treat the body occurrence as free and mis-abstract it (it broke
-/// the dmn-message-tracing `_restrict` restrictions). `(name, idx)` matches
-/// HS for every gate file while still separating `k`/`k.1`.
-type VarKey = (String, u64);
+/// Identity of a parser-AST variable for bound-tracking: `(name, idx, sort)`.
+/// HS builds the de Bruijn body with `quantify x`, which replaces exactly the
+/// occurrences satisfying `v == x` (Theory/Model/Formula.hs:347-352), and
+/// `Eq LVar` compares index, sort and name (Term/LTerm.hs:541-542); the
+/// free/bound split `rewrite` reads (Theory/Model/Restriction.hs:99-112) is
+/// the one `quantify` produced.  A body occurrence is bound only when
+/// it agrees with the binder in all three components: a node-sorted `#i` and a
+/// message-sorted `i` are distinct variables, as are the equation's `k`
+/// (idx 0) and the process's `k.1` (idx 1) in a let-destructor restriction.
+type VarKey = (String, u64, LSort);
 
 fn var_full_key(v: &p::VarSpec) -> VarKey {
-    (v.name.clone(), v.idx)
+    (v.name.clone(), v.idx, v.sort)
 }
 
 /// HS `isFree (Bound _) = False; isFree (Free v) = v /= varNow`.
@@ -536,12 +532,10 @@ fn frees_sorted(f: &p::Formula) -> Vec<p::VarSpec> {
 }
 
 fn dedup_first(vs: Vec<p::VarSpec>) -> Vec<p::VarSpec> {
-    let mut seen: std::collections::BTreeSet<(String, u64, LSort)> =
-        std::collections::BTreeSet::new();
+    let mut seen: std::collections::BTreeSet<VarKey> = std::collections::BTreeSet::new();
     let mut out = Vec::with_capacity(vs.len());
     for v in vs {
-        let key = (v.name.clone(), v.idx, v.sort);
-        if seen.insert(key) {
+        if seen.insert(var_full_key(&v)) {
             out.push(v);
         }
     }
@@ -700,6 +694,49 @@ mod tests {
                 p::Term::App("true".to_string(), Vec::new()),
             ))
         );
+    }
+
+    #[test]
+    fn restriction_binder_identity_is_the_full_variable() {
+        // `∀ #i` binds the node-sorted `i` only: the `i` in the message
+        // position of `A(i)` is a different variable, stays free, and is
+        // abstracted into the fresh `x`.
+        let phi = parse_formula_str("All #i. A(i) @ #i", &pair_maude_sig()).unwrap();
+        let (rewr, subst) = rewrite(&phi);
+        let p::Formula::Forall(binders, body) = &rewr else {
+            panic!("expected forall, got {:?}", rewr);
+        };
+        assert_eq!(
+            (binders[0].name.as_str(), binders[0].sort),
+            ("i", LSort::Node)
+        );
+        let p::Formula::Atom(p::Atom::Action(fact, tp)) = &**body else {
+            panic!("expected an action atom, got {:?}", body);
+        };
+        let fresh = p::VarSpec {
+            name: "x".to_string(),
+            idx: 0,
+            sort: LSort::Msg,
+            typ: None,
+        };
+        assert_eq!(fact.args, vec![p::Term::Var(fresh.clone())]);
+        assert_eq!(*tp, p::Term::Var(binders[0].clone()));
+        assert_eq!(
+            subst.get(&var_full_key(&fresh)),
+            Some(&p::Term::Var(p::VarSpec {
+                name: "i".to_string(),
+                idx: 0,
+                sort: LSort::Msg,
+                typ: None,
+            }))
+        );
+
+        // `∀ x:msg` binds the message-sorted `x`, and the bare body `x` is
+        // that variable: nothing is abstracted.
+        let phi = parse_formula_str("All x:msg #i. A(x) @ #i", &pair_maude_sig()).unwrap();
+        let (rewr, subst) = rewrite(&phi);
+        assert!(subst.is_empty(), "nothing to abstract, got {:?}", subst);
+        assert_eq!(rewr, phi);
     }
 
     #[test]
