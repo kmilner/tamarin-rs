@@ -167,9 +167,7 @@ fn invalid_step_node(node: &ProofTree, sys: System) -> ProofNode {
 fn parsed_to_unannotated(node: &ProofTree, sys: System) -> ProofNode {
     let method = node.method.clone();
     let status = match &method {
-        ProofMethod::Finished(MethodResult::Contradictory(_)) => NodeStatus::Contradictory,
-        ProofMethod::Finished(MethodResult::Solved) => NodeStatus::Solved,
-        ProofMethod::Finished(MethodResult::Unfinishable) => NodeStatus::Unfinishable,
+        ProofMethod::Finished(r) => finished_status(r),
         ProofMethod::Sorry(_) if node.cases.is_empty() => NodeStatus::Sorry,
         _ => NodeStatus::Open,
     };
@@ -196,42 +194,47 @@ pub fn annotated_sorry_root(sys: System) -> ProofNode {
     annotated_sorry(None, sys)
 }
 
-/// Shared body of the finished-leaf replay arms (`by contradiction`,
-/// `SOLVED`, `UNFINISHABLE`).  Each arm has the same shape: if runtime
-/// `is_finished` agrees with the skeleton's claimed terminal method
-/// (`matches_expected`), emit a `Finished(method)` node carrying `status`;
-/// otherwise fall through — `invalid_step_node` when replaying without the
-/// auto-prover, else `run_proof_search` (HS `checkProof` marks the stale
-/// step an annotated sorry which `replaceSorryProver` then reproves).
+/// Replay a terminal leaf (`by contradiction`, `SOLVED`, `UNFINISHABLE`).
+/// When runtime `is_finished` reaches a result of the same kind as the
+/// skeleton's `stored` one, that stored result is emitted verbatim;
+/// otherwise the step falls through — `invalid_step_node` when replaying
+/// without the auto-prover, else `run_proof_search` (HS `checkProof` marks
+/// the stale step an annotated sorry which `replaceSorryProver` then
+/// reproves).
 ///
-/// `method` is emitted verbatim and may differ from what `matches_expected`
-/// accepts: `by contradiction` matches any `Contradictory(_)` but emits
-/// `Contradictory(None)` so the reprinted method carries no reason.
+/// The two results are compared by kind, not by value: the skeleton's `by
+/// contradiction` is `Contradictory(None)`
+/// (Theory/Text/Parser/Proof.hs:81) and matches a runtime
+/// `Contradictory(Just reason)`, and emitting the stored value keeps the
+/// reprinted method free of a reason.
 fn finished_leaf(
     ctx: &ProofContext,
     sys: System,
     node: &ProofTree,
-    matches_expected: impl Fn(&MethodResult) -> bool,
-    method: MethodResult,
-    status: NodeStatus,
+    stored: &MethodResult,
     auto_prove: bool,
     proof_bound: usize,
 ) -> ProofNode {
+    let same_kind = |r: &MethodResult| std::mem::discriminant(r) == std::mem::discriminant(stored);
     match is_finished(ctx, &sys) {
-        Some(ref r) if matches_expected(r) => ProofNode {
-            method: ProofMethod::Finished(method),
+        Some(ref r) if same_kind(r) => ProofNode {
+            method: ProofMethod::Finished(stored.clone()),
             sys,
             children: BTreeMap::new(),
-            status,
+            status: finished_status(stored),
             annotated: true,
         },
-        _ => {
-            if !auto_prove {
-                invalid_step_node(node, sys)
-            } else {
-                run_proof_search(ctx, sys, proof_bound)
-            }
-        }
+        _ if !auto_prove => invalid_step_node(node, sys),
+        _ => run_proof_search(ctx, sys, proof_bound),
+    }
+}
+
+/// The [`NodeStatus`] a `Finished` step of each kind closes with.
+fn finished_status(r: &MethodResult) -> NodeStatus {
+    match r {
+        MethodResult::Solved => NodeStatus::Solved,
+        MethodResult::Contradictory(_) => NodeStatus::Contradictory,
+        MethodResult::Unfinishable => NodeStatus::Unfinishable,
     }
 }
 
@@ -259,87 +262,23 @@ fn replay_node(
         return run_proof_search(ctx, sys, proof_bound);
     }
 
-    // `by contradiction` leaf → emit a Finished(Contradictory) node if
-    // a contradiction can actually be derived; else fall through to the
-    // auto-prover.  This is HS-faithful, not a divergence: at close time
-    // `checkProof` re-execs the stored `Finished (Contradictory Nothing)`
+    // A terminal leaf: `by contradiction`, `SOLVED`
+    // (Theory/Text/Parser/Proof.hs:102-103) or `UNFINISHABLE`.  The stored
+    // result is re-checked against `sys` and kept when it still holds; on
+    // disagreement the step falls through, which is HS-faithful rather than a
+    // divergence.  At close time `checkProof` re-execs the stored `Finished`
     // step (`checkAndExecProofMethod`, Theory/Proof.hs:447-467, see line 456);
-    // if the system is no
-    // longer contradictory the method returns `Nothing`, so checkProof
-    // emits `sorryNode (Just "invalid proof step encountered") ...`
-    // (Theory/Proof.hs:459-460) carrying `Just sys`.  For a `--prove`-selected
-    // lemma `replaceSorryProver` then re-runs the auto-prover on that
-    // annotated sorry (CloseRule.hs:57-71, see line 71 → TheoryLoader.hs:705-707, see line 706), exactly the
-    // `run_proof_search` fall-through below.
-    if matches!(
-        node.method,
-        ProofMethod::Finished(MethodResult::Contradictory(_))
-    ) && node.cases.is_empty()
-    {
-        // HS replay (checkProof, Theory/Proof.hs) preserves the skeleton's
-        // STORED method verbatim — the parser builds `Finished (Contradictory
-        // Nothing)` for `by contradiction`
-        // (Theory/Text/Parser/Proof.hs:81), so the reprinted
-        // method carries no reason (`prettyProofMethod` → plain `by
-        // contradiction`).  Emit `Contradictory(None)`, NOT a freshly-
-        // recomputed reason (which would print a spurious `/* from
-        // formulas */`).  On disagreement HS `checkProof` (Theory/Proof.hs)
-        // emits
-        //   `sorryNode (Just "invalid proof step encountered") (M.singleton "" prf)`
-        // where `prf` is the current leaf, `noSystemPrf`'d → unannotated.
-        return finished_leaf(
-            ctx,
-            sys,
-            node,
-            |r| matches!(r, MethodResult::Contradictory(_)),
-            MethodResult::Contradictory(None),
-            NodeStatus::Contradictory,
-            auto_prove,
-            proof_bound,
-        );
-    }
-
-    // `SOLVED` leaf (HS Theory/Text/Parser/Proof.hs:102-103).  If runtime
-    // is_finished
-    // agrees, emit Finished(Solved); else fall through to the auto-prover
-    // (whose run_proof_search may simplify/contract further until it
-    // reaches Solved naturally).  The fall-through is exactly HS's
-    // pipeline: close-time `checkProof` marks the stale `Finished Solved`
-    // an annotated `sorry /* invalid proof step encountered */`
-    // (Theory/Proof.hs:459-460), and for a `--prove`-selected lemma
-    // `replaceSorryProver` then reproves it (CloseRule.hs:57-71, see line 71 →
-    // TheoryLoader.hs:705-707, see line 706).  Skeleton's SOLVED is HS's claim; RS verifies
-    // via its own solver.
-    if matches!(node.method, ProofMethod::Finished(MethodResult::Solved)) && node.cases.is_empty() {
-        return finished_leaf(
-            ctx,
-            sys,
-            node,
-            |r| matches!(r, MethodResult::Solved),
-            MethodResult::Solved,
-            NodeStatus::Solved,
-            auto_prove,
-            proof_bound,
-        );
-    }
-
-    // `UNFINISHABLE` leaf — emit Finished(Unfinishable) if runtime
-    // agrees, else fall back to auto-prover.
-    if matches!(
-        node.method,
-        ProofMethod::Finished(MethodResult::Unfinishable)
-    ) && node.cases.is_empty()
-    {
-        return finished_leaf(
-            ctx,
-            sys,
-            node,
-            |r| matches!(r, MethodResult::Unfinishable),
-            MethodResult::Unfinishable,
-            NodeStatus::Unfinishable,
-            auto_prove,
-            proof_bound,
-        );
+    // when the method does not apply it returns `Nothing`, so checkProof
+    // emits `sorryNode (Just "invalid proof step encountered")
+    // (M.singleton "" prf)` (Theory/Proof.hs:459-460) over the `noSystemPrf`'d
+    // subtree, and for a `--prove`-selected lemma `replaceSorryProver` then
+    // re-runs the auto-prover on that annotated sorry (CloseRule.hs:57-71, see
+    // line 71 → TheoryLoader.hs:705-707, see line 706).  A skeleton's `SOLVED`
+    // is HS's claim; RS verifies it with its own solver.
+    if let ProofMethod::Finished(stored) = &node.method {
+        if node.cases.is_empty() {
+            return finished_leaf(ctx, sys, node, stored, auto_prove, proof_bound);
+        }
     }
 
     // ---- Non-leaf nodes: pick a method, exec it, recurse. ----

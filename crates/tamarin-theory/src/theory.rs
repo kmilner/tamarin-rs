@@ -268,16 +268,7 @@ pub struct ProofTree {
 /// (Theory/ProofSkeleton.hs:59-61); `prove::replace_sorry_prove` (HS
 /// `replaceSorryProver`, Theory/Proof.hs:641-650) walks the tree at
 /// proof-replay time and invokes the auto-prover only at `sorry` leaves.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ProofSkeleton {
-    pub tree: Option<ProofTree>,
-}
-
-impl ProofSkeleton {
-    pub fn unproven() -> Self {
-        ProofSkeleton { tree: None }
-    }
-}
+pub type ProofSkeleton = Option<ProofTree>;
 
 /// `TheoryItem` — one top-level construct in a (non-diff) theory.
 #[derive(Debug, Clone, PartialEq)]
@@ -677,14 +668,6 @@ mod tests {
         // `--no-ndc` opts out; the check is on by default.
         assert!(o.deduction_chain_check);
         assert!(o.lemmas_to_prove.is_empty());
-    }
-
-    /// An unproven lemma carries no proof tree.  The printer, the web and
-    /// the JSON paths all read `tree`; a placeholder there makes the code
-    /// print a proof that the prover never found.
-    #[test]
-    fn proof_skeleton_unproven_is_empty() {
-        assert!(ProofSkeleton::unproven().tree.is_none());
     }
 }
 

@@ -240,8 +240,7 @@ pub enum LemmaAttr {
 /// auto-prover output at proof-replay time.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProofSkeleton {
-    /// Raw source text of the proof skeleton (used for diagnostics/logging and
-    /// propagated into theory.rs's `ProofSkeleton` during elaboration).
+    /// Raw source text of the proof skeleton.
     pub raw: String,
     /// Structured parse of `raw`.  `None` only if `try_proof_skeleton`
     /// failed to interpret the token stream (we always set this for

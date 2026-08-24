@@ -1846,7 +1846,7 @@ impl TheoryPipeline<'_> {
         // output is identical either way (every lemma is a 1-step sorry).
         let lemma_filter: &[String] = &self.opts.lemma_names;
         let prove_anything = self.opts.prove_mode;
-        let any_stored_proof = self.elaborated.lemmas().any(|l| l.proof.tree.is_some());
+        let any_stored_proof = self.elaborated.lemmas().any(|l| l.proof.is_some());
         // The modes that skip the prove loop entirely: `--precompute-only`
         // renders stats instead, and a plain load with no stored skeleton to
         // replay has nothing to run.

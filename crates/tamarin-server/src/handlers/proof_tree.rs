@@ -235,7 +235,7 @@ impl ProofState {
         let mut replayed_roots: BTreeMap<String, ProofNode> = BTreeMap::new();
         if let Some(session) = session.as_deref() {
             for lemma in typed.lemmas() {
-                if lemma.proof.tree.is_none() {
+                if lemma.proof.is_none() {
                     continue;
                 }
                 // Unbounded (`usize::MAX`) like the CLI's non-target

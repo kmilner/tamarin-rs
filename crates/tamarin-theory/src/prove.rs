@@ -1076,7 +1076,7 @@ impl ProverSession {
             // consults its source cases — and so saturates its key — iff it is
             // a `--prove` target OR carries a stored proof skeleton that
             // `check_and_extend` replays.
-            if !(is_target(lemma.name.as_str()) || lemma.proof.tree.is_some()) {
+            if !(is_target(lemma.name.as_str()) || lemma.proof.is_some()) {
                 continue;
             }
             let kind = lemma_source_kind(lemma);
@@ -1294,7 +1294,7 @@ fn prove_lemma_in_session_mode(
     // The `cases(ctx)` accessor (sources.rs) still calls `ensure_saturated`
     // lazily for every path that DOES consult a source — skeleton replay
     // and `run_proof_search` — so correctness is unchanged.)
-    let will_emit_bare_sorry = !auto_prove && lemma.proof.tree.is_none();
+    let will_emit_bare_sorry = !auto_prove && lemma.proof.is_none();
     // Reuse a previously-computed refined-source set when one
     // exists for this exact `source_key`.  See [`CachedSources`] for why a
     // hit is byte-identical (only delta==0 results are ever cached).
@@ -1334,7 +1334,7 @@ fn prove_lemma_in_session_mode(
         ctx.use_induction = crate::constraint::solver::context::UseInduction::UseInduction;
     }
     // Skeleton replay: same logic as in `prove_lemma_with_pool_file_heuristic`.
-    if let Some(tree) = lemma.proof.tree.clone() {
+    if let Some(tree) = lemma.proof.clone() {
         if auto_prove {
             return Ok(crate::replay::replace_sorry_prove(
                 &ctx,
@@ -1667,7 +1667,7 @@ pub fn prove_lemma_with_pool_file_heuristic(
     // invoke the auto-prover only at `by sorry` leaves.  Otherwise (no
     // skeleton or parser couldn't structure it) fall through to the
     // pre-existing auto-prover-from-scratch behavior.
-    if let Some(tree) = lemma.proof.tree.clone() {
+    if let Some(tree) = lemma.proof.clone() {
         if tamarin_utils::env_gate!("TAM_DBG_REPLAY") {
             eprintln!("[replay] firing skeleton replay for `{}`", lemma_name);
         }

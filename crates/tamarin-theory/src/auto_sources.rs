@@ -587,7 +587,7 @@ pub fn build_source_lemma(name: &str, formula: LNFormula) -> crate::theory::Lemm
         trace_quantifier: TraceQuantifier::AllTraces,
         original_formula: Some(formula.clone()),
         formula,
-        proof: crate::theory::ProofSkeleton::unproven(),
+        proof: None,
         // HS `unprovenLemma` seeds `_lPlaintext` with "Unpr_inSkeleton"
         // (`Theory/ProofSkeleton.hs:59-61, see line 61`).
         plaintext: "Unpr_inSkeleton".to_string(),

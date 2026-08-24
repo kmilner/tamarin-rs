@@ -995,7 +995,7 @@ fn render_open_lemma(
             let tree = crate::elaborate::proof_tree_from_parsed(parsed, msig)
                 .map_err(|e| format!("in the proof of lemma `{}`: {}", lem.name, e.message))?;
             let mut body = String::new();
-            pp_open_proof(&tree, &mut body, 0);
+            pp_proof(&tree, &mut body, 0);
             out.push_str(&body);
         }
         None => out.push_str("by sorry"),
@@ -1092,77 +1092,6 @@ fn open_process_doc(pr: &crate::sapic::PlainProcess) -> crate::pretty_hpj::Doc {
                 .above_g(parens(open_process_doc(p2)).nest(1)),
             _ => Doc::text(format!("{};", node_text(pr))).above_g(open_process_doc(p2)),
         },
-    }
-}
-
-/// Echo a stored proof skeleton — HS `prettyProof = prettyProofWith
-/// (prettyProofMethod . psMethod) (const id)` (Theory/Proof.hs:1051-1075).
-/// Same case/next/qed assembly as the closed `pp_proof`, over the stored
-/// tree.  Cases were stored via `M.fromList` (Parser/Proof.hs:113), so they
-/// echo in SORTED name order regardless of source order (oracle-verified).
-fn pp_open_proof(tree: &crate::theory::ProofTree, out: &mut String, depth: usize) {
-    use crate::constraint::solver::proof_method::{ProofMethod as PM, Result as MR};
-    let base = depth * 2;
-    let mut cases: Vec<&(String, crate::theory::ProofTree)> = tree.cases.iter().collect();
-    cases.sort_by(|a, b| a.0.cmp(&b.0));
-    match cases.as_slice() {
-        // `ppCases ps@(ProofStep (Finished Solved) _) [] = prettyStep ps`
-        // (Theory/Proof.hs:1064) — no `by ` prefix on the SOLVED leaf.
-        [] if matches!(tree.method, PM::Finished(MR::Solved)) => {
-            out.push_str(&pf::step_line_with_unann(
-                pp_step_doc(&tree.method, ""),
-                base,
-                true,
-                "",
-            ));
-        }
-        // `ppCases ps [] = prettyCase ps (kwBy <> text " ") <> prettyStep ps`.
-        [] => {
-            out.push_str(&pf::step_line_with_unann(
-                pp_step_doc(&tree.method, ""),
-                base,
-                true,
-                "by ",
-            ));
-        }
-        // `ppCases ps [("", prf)] = prettyStep ps $-$ ppPrf prf`.
-        [(label, child)] if label.is_empty() => {
-            out.push_str(&pf::step_line_with_unann(
-                pp_step_doc(&tree.method, ""),
-                base,
-                true,
-                "",
-            ));
-            out.push('\n');
-            out.push_str(&"  ".repeat(depth));
-            pp_open_proof(child, out, depth);
-        }
-        multi => {
-            out.push_str(&pf::step_line_with_unann(
-                pp_step_doc(&tree.method, ""),
-                base,
-                true,
-                "",
-            ));
-            for (i, (name, child)) in multi.iter().enumerate() {
-                if i > 0 {
-                    out.push('\n');
-                    out.push_str(&"  ".repeat(depth));
-                    out.push_str("next");
-                }
-                out.push('\n');
-                let pad = "  ".repeat(depth + 1);
-                out.push_str(&pad);
-                out.push_str("case ");
-                out.push_str(name);
-                out.push('\n');
-                out.push_str(&pad);
-                pp_open_proof(child, out, depth + 1);
-            }
-            out.push('\n');
-            out.push_str(&"  ".repeat(depth));
-            out.push_str("qed");
-        }
     }
 }
 
@@ -3780,7 +3709,57 @@ pub fn pretty_proof_body(node: &crate::constraint::solver::search::ProofNode) ->
     out
 }
 
-fn pp_proof(node: &crate::constraint::solver::search::ProofNode, out: &mut String, depth: usize) {
+/// The two proof trees the proof body prints: the tree the solver searched
+/// and the tree a lemma's stored skeleton elaborated into.  HS prints both
+/// with `prettyProofWith` over a `Proof a = LTree CaseName (ProofStep a)`
+/// (Theory/Proof.hs:1054-1075).
+trait ProofBody {
+    fn method(&self) -> &crate::constraint::solver::proof_method::ProofMethod;
+
+    /// False for a step whose constraint system is HS's `Nothing`, which
+    /// prints `/* unannotated */` (ProofSkeleton.hs:80-84).
+    fn annotated(&self) -> bool;
+
+    /// The child cases in the name order HS's `M.toList` gives.
+    fn cases(&self) -> Vec<(&String, &Self)>;
+}
+
+impl ProofBody for crate::constraint::solver::search::ProofNode {
+    fn method(&self) -> &crate::constraint::solver::proof_method::ProofMethod {
+        &self.method
+    }
+
+    fn annotated(&self) -> bool {
+        self.annotated
+    }
+
+    fn cases(&self) -> Vec<(&String, &Self)> {
+        self.children.iter().collect()
+    }
+}
+
+impl ProofBody for crate::theory::ProofTree {
+    fn method(&self) -> &crate::constraint::solver::proof_method::ProofMethod {
+        &self.method
+    }
+
+    /// HS echoes a stored skeleton with `prettyProof`, whose step printer is
+    /// `prettyProofMethod . psMethod` and has no annotation branch
+    /// (Theory/Proof.hs:1051-1052), so no step carries `/* unannotated */`.
+    fn annotated(&self) -> bool {
+        true
+    }
+
+    /// `cases` keeps source order; the parser stored them in an `M.fromList`
+    /// (Theory/Text/Parser/Proof.hs:113), so they print sorted by name.
+    fn cases(&self) -> Vec<(&String, &Self)> {
+        let mut cases: Vec<(&String, &Self)> = self.cases.iter().map(|(n, c)| (n, c)).collect();
+        cases.sort_by_key(|(n, _)| *n);
+        cases
+    }
+}
+
+fn pp_proof<T: ProofBody>(node: &T, out: &mut String, depth: usize) {
     use crate::constraint::solver::proof_method::{ProofMethod, Result as MR};
     // The step's first char lands at col `depth*2` (proof body uses
     // 2-space indent per nesting level).
@@ -3801,13 +3780,12 @@ fn pp_proof(node: &crate::constraint::solver::search::ProofNode, out: &mut Strin
     // run it through the same HughesPJ engine so the break is
     // byte-identical to HS.
     let base = depth * 2;
-    let annotated = node.annotated;
-    let cases: Vec<(&String, &crate::constraint::solver::search::ProofNode)> =
-        node.children.iter().collect();
+    let annotated = node.annotated();
+    let cases = node.cases();
 
-    match (&node.method, cases.as_slice()) {
+    match (node.method(), cases.as_slice()) {
         (ProofMethod::Finished(MR::Solved), []) => {
-            let doc = pp_step_doc(&node.method, "");
+            let doc = pp_step_doc(node.method(), "");
             out.push_str(&pf::step_line_with_unann(doc, base, annotated, ""));
         }
         (_, []) => {
@@ -3827,11 +3805,11 @@ fn pp_proof(node: &crate::constraint::solver::search::ProofNode, out: &mut Strin
             // the method's own wrapped continuation columns by the prefix
             // width and counts it toward the ribbon, so the method lines
             // stay byte-identical to HS.
-            let doc = pp_step_doc(&node.method, "");
+            let doc = pp_step_doc(node.method(), "");
             out.push_str(&pf::step_line_with_unann(doc, base, annotated, "by "));
         }
         (_, [(label, child)]) if label.is_empty() => {
-            let doc = pp_step_doc(&node.method, "");
+            let doc = pp_step_doc(node.method(), "");
             out.push_str(&pf::step_line_with_unann(doc, base, annotated, ""));
             out.push('\n');
             // HS `ppCases ps [("", prf)] = prettyStep ps $-$ ppPrf prf`
@@ -3842,10 +3820,10 @@ fn pp_proof(node: &crate::constraint::solver::search::ProofNode, out: &mut Strin
             // we reproduce that here: write the same `depth`-level indent
             // before recursing into the child.
             out.push_str(&"  ".repeat(depth));
-            pp_proof(child, out, depth);
+            pp_proof(*child, out, depth);
         }
         (_, multi) => {
-            let doc = pp_step_doc(&node.method, "");
+            let doc = pp_step_doc(node.method(), "");
             out.push_str(&pf::step_line_with_unann(doc, base, annotated, ""));
             for (i, (name, child)) in multi.iter().enumerate() {
                 if i > 0 {
@@ -3864,7 +3842,7 @@ fn pp_proof(node: &crate::constraint::solver::search::ProofNode, out: &mut Strin
                 out.push_str(name);
                 out.push('\n');
                 out.push_str(&pad);
-                pp_proof(child, out, depth + 1);
+                pp_proof(*child, out, depth + 1);
             }
             out.push('\n');
             out.push_str(&"  ".repeat(depth));
@@ -3916,7 +3894,14 @@ fn pp_step_doc(
     // flat string with no internal wrapping, so `Doc::text` of the
     // string form is faithful.
     let body = match m {
-        PM::SolveGoal(g) => solve_step_doc(g),
+        // HS `SolveGoal goal -> keyword_ "solve(" <-> prettyGoal goal <->
+        // keyword_ ")"` (ProofMethod.hs:1181).  The `solve(` / `)` delimiters
+        // are `hl_keyword` spans (identity in plain mode, so batch bytes are
+        // unchanged); the unannotated-replay overview index
+        // (`hl_superfluous` steps) needs these spans to match HS.
+        PM::SolveGoal(g) => crate::pretty_hpj::keyword_("solve(")
+            .beside_sp(solve_goal_to_doc(g))
+            .beside_sp(crate::pretty_hpj::keyword_(")")),
         // HS `prettyProofMethod` (ProofMethod.hs:1183-1186):
         //   Finished (Contradictory reason) ->
         //     sep [ keyword_ "contradiction"
@@ -4021,17 +4006,6 @@ pub(crate) fn render_goal_for_oracle(g: &crate::constraint::constraints::Goal) -
     // order while HS's oracle reordered).
     let _plain = crate::pretty_hpj::HtmlDocGuard::disable();
     solve_goal_to_doc(g).render_with(ORACLE_LINE_LENGTH, ORACLE_RIBBON)
-}
-
-/// HS `SolveGoal goal -> keyword_ "solve(" <-> prettyGoal goal <-> keyword_ ")"`
-/// (ProofMethod.hs:1181).  The `solve(` / `)` delimiters are `hl_keyword`
-/// spans (identity in plain mode, so batch bytes are unchanged); the
-/// unannotated-replay overview index (`hl_superfluous` steps) needs these
-/// spans to match HS.
-fn solve_step_doc(g: &crate::constraint::constraints::Goal) -> crate::pretty_hpj::Doc {
-    crate::pretty_hpj::keyword_("solve(")
-        .beside_sp(solve_goal_to_doc(g))
-        .beside_sp(crate::pretty_hpj::keyword_(")"))
 }
 
 /// Build a `pretty_hpj::Doc` for a non-DisjG `Goal`, mirroring HS

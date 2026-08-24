@@ -397,3 +397,23 @@ fn solve_disj_five_alts() {
         other => panic!("expected a disjunction goal, got {:?}", other),
     }
 }
+
+/// A public name may hold a bracket: HS `singleQuotedString`
+/// (Token.hs:452-453) reads `many1 (noneOf "'\n")`, and `prettyGoal` prints
+/// the name back with the bracket inside the quotes.  Framing the text of a
+/// `solve( ... )` step therefore has to step over a quoted name instead of
+/// counting its brackets, or the goal is cut short and the whole skeleton
+/// fails to parse.
+#[test]
+fn solve_goal_with_bracket_in_pub_name() {
+    let t = parse_proof_tree("solve( A( 'a)b' ) @ #i ) by sorry", &bare_parser()).expect("parse");
+    match &t.method {
+        ParsedMethod::SolveGoal(GoalSpec::Action(v, fact)) => {
+            assert_eq!(v.name, "i");
+            assert_eq!(fact.name, "A");
+            assert_eq!(fact.args, vec![Term::PubLit("a)b".to_string())]);
+        }
+        other => panic!("expected an action goal, got {other:?}"),
+    }
+    assert_eq!(t.cases[0].1.method, ParsedMethod::Sorry);
+}

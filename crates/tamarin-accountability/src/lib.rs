@@ -425,7 +425,7 @@ fn inject_lemma(
         },
         original_formula: Some(original),
         formula: expanded,
-        proof: t::ProofSkeleton::unproven(),
+        proof: None,
         plaintext: "generation".to_string(),
     };
     elaborated.items.push(TheoryItem::Lemma(elab_lemma));

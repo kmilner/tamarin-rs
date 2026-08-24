@@ -257,7 +257,10 @@ impl<'a> TreeParser<'a> {
     }
 
     /// Read raw text between an already-consumed `(` and its matching
-    /// `)`, accounting for nested parens.  Returns the inner text
+    /// `)`, accounting for nested parens.  A single-quoted string is copied
+    /// through without counting its brackets: HS `singleQuotedString`
+    /// (Token.hs:452-453) is `many1 (noneOf "'\n")`, so a `(` or `)` inside a
+    /// public or fresh name is part of the name.  Returns the inner text
     /// (excluding the final `)` which is consumed).
     fn read_balanced_paren(&mut self) -> Result<String, ProofTreeParseError> {
         let mut s = String::new();
@@ -265,6 +268,24 @@ impl<'a> TreeParser<'a> {
         while depth > 0 {
             match self.lx.peek() {
                 None => return Err(self.err("unterminated `(` in solve(...)")),
+                Some('\'') => {
+                    s.push('\'');
+                    self.lx.bump();
+                    loop {
+                        match self.lx.peek() {
+                            None | Some('\n') => break,
+                            Some('\'') => {
+                                s.push('\'');
+                                self.lx.bump();
+                                break;
+                            }
+                            Some(c) => {
+                                s.push(c);
+                                self.lx.bump();
+                            }
+                        }
+                    }
+                }
                 Some('(') => {
                     s.push('(');
                     self.lx.bump();

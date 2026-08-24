@@ -1041,7 +1041,7 @@ fn stored_proof_steps_convert_to_internal_goals() {
     let parsed = parse_theory(src, &[]).unwrap();
     let thy = elaborate(&parsed).expect("elaborate");
     let lemma = thy.lemmas().next().expect("one lemma");
-    let step0 = lemma.proof.tree.as_ref().expect("a stored proof");
+    let step0 = lemma.proof.as_ref().expect("a stored proof");
 
     // A nullary user function inside a stored goal is an application, not a
     // variable, and the timepoint keeps its index.

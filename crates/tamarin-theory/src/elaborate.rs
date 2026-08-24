@@ -54,8 +54,8 @@ use crate::rule::{
 };
 use crate::signature::SignaturePure;
 use crate::theory::{
-    AccLemma, CaseTest, LNMacro, Lemma, LemmaAttr, OpenProtoRule, ProofSkeleton, ProofTree, Theory,
-    TheoryItem, TraceQuantifier, TranslationElement,
+    AccLemma, CaseTest, LNMacro, Lemma, LemmaAttr, OpenProtoRule, ProofTree, Theory, TheoryItem,
+    TraceQuantifier, TranslationElement,
 };
 
 #[derive(Debug, Clone)]
@@ -641,20 +641,16 @@ fn elaborate_items(
                     },
                     formula: item_formula(&l.formula, msig, "lemma")?,
                     original_formula: Some(item_formula(original, msig, "lemma")?),
-                    proof: ProofSkeleton {
-                        tree: match l.proof.as_ref().and_then(|p| p.tree.as_ref()) {
-                            Some(t) => {
-                                Some(proof_tree_from_parsed(t, &out.signature.maude_sig).map_err(
-                                    |e| ElabError {
-                                        message: format!(
-                                            "in the proof of lemma `{}`: {}",
-                                            l.name, e.message
-                                        ),
-                                    },
-                                )?)
-                            }
-                            None => None,
-                        },
+                    proof: match l.proof.as_ref().and_then(|p| p.tree.as_ref()) {
+                        Some(t) => {
+                            Some(proof_tree_from_parsed(t, msig).map_err(|e| ElabError {
+                                message: format!(
+                                    "in the proof of lemma `{}`: {}",
+                                    l.name, e.message
+                                ),
+                            })?)
+                        }
+                        None => None,
                     },
                     plaintext: l.plaintext.clone(),
                 };
