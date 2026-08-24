@@ -197,7 +197,7 @@ impl GoodAnnotation for ProcessParsedAnnotation {
 // Process
 // =============================================================================
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SapicAction<V> {
     Rep,
     New(V),
@@ -254,7 +254,7 @@ pub enum ProcessCombinator<V> {
     },
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Process<Ann, V> {
     Null(Ann),
     Comb(
@@ -635,5 +635,45 @@ mod tests {
         let pm = PatternSapicLVar::Match(v.clone());
         assert_eq!(unpattern_var(pb), v);
         assert_eq!(unpattern_var(pm), v);
+    }
+
+    /// A process tree is `Eq`, and the comparison descends into the formulas
+    /// a conditional and an embedded MSR's restrictions carry: two trees built
+    /// from equal formulas are equal, and one changed atom separates them.
+    #[test]
+    fn process_equality_is_structural_over_condition_formulas() {
+        use crate::atom::ProtoAtom;
+        use crate::formula::ProtoFormula;
+        use tamarin_term::vterm::var_term;
+
+        fn requires_eq<T: Eq>(_: &T) {}
+
+        let v = |n: &str| var_term(BVar::Free(SapicLVar::untyped(LVar::new(n, LSort::Msg, 0))));
+        let eq =
+            |l: &str, r: &str| -> SapicFormula { ProtoFormula::Atom(ProtoAtom::EqE(v(l), v(r))) };
+        let proc = |cond: SapicFormula, rest: SapicFormula| -> PlainProcess {
+            Process::Action(
+                SapicAction::Msr {
+                    prems: Vec::new(),
+                    acts: Vec::new(),
+                    concs: Vec::new(),
+                    rest: vec![rest],
+                    match_vars: BTreeSet::new(),
+                },
+                ann_empty(),
+                Box::new(Process::Comb(
+                    ProcessCombinator::Cond(cond),
+                    ann_empty(),
+                    Box::new(null_proc()),
+                    Box::new(null_proc()),
+                )),
+            )
+        };
+
+        let p = proc(eq("x", "y"), eq("a", "b"));
+        requires_eq(&p);
+        assert_eq!(p, proc(eq("x", "y"), eq("a", "b")));
+        assert_ne!(p, proc(eq("x", "z"), eq("a", "b")));
+        assert_ne!(p, proc(eq("x", "y"), eq("a", "c")));
     }
 }
