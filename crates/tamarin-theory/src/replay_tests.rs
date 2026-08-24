@@ -22,47 +22,6 @@ fn maude() -> Option<MaudeHandle> {
     }))
 }
 
-/// `canonicalise_term_text` must normalise away the wrap-induced
-/// whitespace that a STORED proof's pretty-printer inserts directly
-/// inside `<…>` / `(…)` delimiters when a term overflows the ribbon.
-/// Regression for the trace-existence `exists_trace` replay bug: the
-/// skeleton `solve( !KU(hmac(<KSQ, $USR, senc(<…>, …)>, …)) )` term
-/// wraps as `senc(< … CD_j.1 >, …)` (note `< `/` >`), while the
-/// runtime renders `senc(<…CD_j.1>, …)` (no inner space).  If these
-/// don't canonicalise equal, term-disambiguation in `match_goal`
-/// fails and the time-var fallback mis-picks the smallest-idx `#vk`
-/// knowledge goal (`!KU($USR)`) instead of the intended hmac goal.
-#[test]
-fn canonicalise_strips_wrap_spaces_inside_brackets() {
-    // Wrapped (skeleton) form after the whitespace-collapse pass:
-    let skel = "hmac(<KSQ, $USR, senc(< ~CDSK_j_USR_O, ~MDSK_j_USR_O, KSQ, $USR, keystatus, CD_j.1 >, ~UK_i_USR_O) >, ~MDSK_j_USR_O)";
-    // Runtime (un-wrapped) form:
-    let rt = "hmac(<KSQ, $USR, senc(<~CDSK_j_USR_O, ~MDSK_j_USR_O, KSQ, $USR, keystatus, CD_j.1>, ~UK_i_USR_O)>, ~MDSK_j_USR_O)";
-    assert_eq!(canonicalise_term_text(skel), canonicalise_term_text(rt));
-    // The canonical form must carry NO space adjacent to the inside
-    // of a bracket/paren.
-    let c = canonicalise_term_text(skel);
-    assert!(!c.contains("< "), "no `< ` in {c}");
-    assert!(!c.contains(" >"), "no ` >` in {c}");
-    assert!(!c.contains("( "), "no `( ` in {c}");
-    assert!(!c.contains(" )"), "no ` )` in {c}");
-    // Multi-line input (raw skeleton text with newlines + indent)
-    // canonicalises identically to the runtime form.
-    let multiline = "hmac(<KSQ, \n   $USR, \n   senc(<\n     ~CDSK_j_USR_O, KSQ, $USR, keystatus, CD_j.1\n    >,\n    ~UK_i_USR_O)\n   >,\n   ~MDSK_j_USR_O)";
-    let rt2 = "hmac(<KSQ, $USR, senc(<~CDSK_j_USR_O, KSQ, $USR, keystatus, CD_j.1>, ~UK_i_USR_O)>, ~MDSK_j_USR_O)";
-    assert_eq!(
-        canonicalise_term_text(multiline),
-        canonicalise_term_text(rt2)
-    );
-    // Inter-token spaces (e.g. after commas) are PRESERVED so distinct
-    // terms never collapse together.
-    assert_eq!(canonicalise_term_text("<a, b>"), "<a, b>");
-    assert_ne!(
-        canonicalise_term_text("<a, b>"),
-        canonicalise_term_text("<a, c>")
-    );
-}
-
 /// An otherwise-empty system that carries one solved formula.  The system
 /// has no goals and no contradictions.  It is also past the initial state,
 /// so `is_finished` runs and the auto-prover closes the system as Solved.
@@ -160,29 +119,45 @@ fn contradiction_leaf_without_contradiction_falls_back_to_auto() {
     assert_eq!(result.status, NodeStatus::Solved);
 }
 
-/// Match an Action goal by fact name + arity.  Uses an empty-args
-/// fact for simplicity (matches by tag name + arity 0).
+// Every stored goal below is a `GoalSpec` the goal grammar would produce, so
+// `match_goal` converts it through `elaborate::goal_from_parsed` and looks
+// the result up by structural equality — HS's `M.member`
+// (ProofMethod.hs:253-258).
+
+/// A timepoint variable of a stored goal, as [`Parser::nodevar`] builds it.
+fn node(name: &str, idx: u64) -> tamarin_parser::ast::VarSpec {
+    tamarin_parser::ast::VarSpec {
+        name: name.into(),
+        idx,
+        sort: LSort::Node,
+        typ: None,
+    }
+}
+
+/// A stored goal's fact, as `Parser::fact` builds it.
+fn pfact(persistent: bool, name: &str, args: Vec<tamarin_parser::ast::Term>) -> PFact {
+    PFact {
+        persistent,
+        name: name.into(),
+        args,
+        annotations: Vec::new(),
+    }
+}
+
+/// Match an Action goal whose fact takes no arguments.
 #[test]
 fn match_action_goal_by_name_arity() {
     use crate::fact::{Fact, FactTag, Multiplicity};
     let i = LVar::new("t", LSort::Node, 0);
     let tag = FactTag::Proto(Multiplicity::Linear, "Setup", 0);
-    let fact = Fact::new(tag, Vec::new());
-    let goal = Goal::Action(i, fact);
+    let goal = Goal::Action(i, Fact::new(tag, Vec::new()));
     let mut sys = System::empty();
     sys.goals_mut().push((goal.clone(), Default::default()));
-    let spec = GoalSpec::Action {
-        fact: PFact {
-            persistent: false,
-            name: "Setup".into(),
-            args: Vec::new(),
-            annotations: Vec::new(),
-        },
-        time_var: "t".into(),
-        time_idx: 0,
-    };
-    let matched = match_goal(&spec, &sys, &pair_maude_sig()).expect("should match");
-    assert_eq!(matched, goal);
+    let spec = GoalSpec::Action(node("t", 0), pfact(false, "Setup", Vec::new()));
+    assert_eq!(
+        match_goal(&spec, &sys, &pair_maude_sig()).expect("should match"),
+        goal
+    );
 }
 
 /// match_goal returns None when no goal matches the fact name.
@@ -191,278 +166,138 @@ fn no_match_returns_none() {
     use crate::fact::{Fact, FactTag, Multiplicity};
     let i = LVar::new("t", LSort::Node, 0);
     let tag = FactTag::Proto(Multiplicity::Linear, "Setup", 0);
-    let fact = Fact::new(tag, Vec::new());
-    let goal = Goal::Action(i, fact);
+    let goal = Goal::Action(i, Fact::new(tag, Vec::new()));
     let mut sys = System::empty();
     sys.goals_mut().push((goal, Default::default()));
-    let spec = GoalSpec::Action {
-        fact: PFact {
-            persistent: false,
-            name: "WrongName".into(),
-            args: Vec::new(),
-            annotations: Vec::new(),
-        },
-        time_var: "t".into(),
-        time_idx: 0,
-    };
+    let spec = GoalSpec::Action(node("t", 0), pfact(false, "WrongName", Vec::new()));
     assert!(match_goal(&spec, &sys, &pair_maude_sig()).is_none());
 }
 
-/// Variable-renaming-aware Action match: two same-fact-name Action
-/// goals at different timepoints — the matcher must disambiguate by
-/// the skeleton's FULL timepoint LVar (root name AND idx), mirroring
-/// HS `M.member`.
+/// Two same-fact-name Action goals at different timepoints: the stored goal
+/// carries the FULL timepoint LVar, name and index, so it binds exactly one
+/// of them and a drifted index binds neither.
 ///
-/// HS reference: `ActionG i fa` carries the exact timepoint LVar `i`;
-/// HS dispatches `SolveGoal goal -> guard (goal `M.member` sGoals)`
-/// (ProofMethod.hs:252-273, see line 258) — the goal key is the full LVar, so the idx is
-/// part of the match.  HS pretty-prints a timepoint as `#t2` when its
-/// idx is 0 and `#t2.7` when its idx is 7 (`Show LVar`, LTerm.hs:550-557),
-/// so a stored skeleton's `time_idx` always equals the LVar idx of the
-/// goal it was generated from — the matcher requires that exact idx.
+/// HS pretty-prints a timepoint as `#t2` when its index is 0 and `#t2.7`
+/// when it is 7 (`Show LVar`, LTerm.hs:550-557), so the index in a stored
+/// goal is the index of the goal it names.
 #[test]
 fn match_action_disambiguates_by_time_var_root() {
     use crate::fact::{Fact, FactTag, Multiplicity};
-    let i1 = LVar::new("t1", LSort::Node, 5);
-    let i2 = LVar::new("t2", LSort::Node, 7);
+    use tamarin_parser::ast::Term as PTerm;
     let tag = FactTag::Proto(Multiplicity::Linear, "Step", 1);
-    // Two goals with the same fact tag/arity but different
-    // timepoints.
-    let g1 = Goal::Action(
-        i1,
-        Fact::new(
-            tag,
-            vec![tamarin_term::term::Term::Lit(
-                tamarin_term::vterm::Lit::Var(LVar::new("x", LSort::Msg, 0)),
-            )],
-        ),
-    );
-    let g2 = Goal::Action(
-        i2,
-        Fact::new(
-            tag,
-            vec![tamarin_term::term::Term::Lit(
-                tamarin_term::vterm::Lit::Var(LVar::new("y", LSort::Msg, 0)),
-            )],
-        ),
-    );
+    let arg = |n: &str| {
+        vec![tamarin_term::term::Term::Lit(
+            tamarin_term::vterm::Lit::Var(LVar::new(n, LSort::Msg, 0)),
+        )]
+    };
+    let g1 = Goal::Action(LVar::new("t1", LSort::Node, 5), Fact::new(tag, arg("x")));
+    let g2 = Goal::Action(LVar::new("t2", LSort::Node, 7), Fact::new(tag, arg("y")));
     let mut sys = System::empty();
     sys.goals_mut().push((g1.clone(), Default::default()));
     sys.goals_mut().push((g2.clone(), Default::default()));
-    // Skeleton spec asking for the t2 goal: full LVar `#t2.7`.
-    let spec = GoalSpec::Action {
-        fact: PFact {
-            persistent: false,
-            name: "Step".into(),
-            args: vec![tamarin_parser::ast::Term::Var(
-                tamarin_parser::ast::VarSpec {
-                    name: "y".into(),
+    let spec = |tp: &str, idx: u64, arg: &str| {
+        GoalSpec::Action(
+            node(tp, idx),
+            pfact(
+                false,
+                "Step",
+                vec![PTerm::Var(tamarin_parser::ast::VarSpec {
+                    name: arg.into(),
                     idx: 0,
-                    sort: tamarin_term::lterm::LSort::Msg,
+                    sort: LSort::Msg,
                     typ: None,
-                },
-            )],
-            annotations: Vec::new(),
-        },
-        time_var: "t2".into(),
-        time_idx: 7,
+                })],
+            ),
+        )
     };
-    let matched = match_goal(&spec, &sys, &pair_maude_sig()).expect("should match");
-    match matched {
-        Goal::Action(i, _) => assert_eq!(
-            i.name, "t2",
-            "matcher must pick the goal whose timepoint LVar.name == time_var"
-        ),
-        other => panic!("expected Action, got {:?}", other),
-    }
-    // And with the t1 goal's full LVar `#t1.5` we get the other goal.
-    let spec2 = GoalSpec::Action {
-        fact: PFact {
-            persistent: false,
-            name: "Step".into(),
-            args: vec![tamarin_parser::ast::Term::Var(
-                tamarin_parser::ast::VarSpec {
-                    name: "x".into(),
-                    idx: 0,
-                    sort: tamarin_term::lterm::LSort::Msg,
-                    typ: None,
-                },
-            )],
-            annotations: Vec::new(),
-        },
-        time_var: "t1".into(),
-        time_idx: 5,
-    };
-    let matched2 = match_goal(&spec2, &sys, &pair_maude_sig()).expect("should match");
-    match matched2 {
-        Goal::Action(i, _) => assert_eq!(i.name, "t1"),
-        other => panic!("expected Action, got {:?}", other),
-    }
-    // A drifted idx (stored `#t2.9`, runtime `#t2.7`) is an `M.member`
-    // miss in HS — the matcher must reject it (→ invalid step).
-    let spec_drift = GoalSpec::Action {
-        fact: PFact {
-            persistent: false,
-            name: "Step".into(),
-            args: vec![tamarin_parser::ast::Term::Var(
-                tamarin_parser::ast::VarSpec {
-                    name: "y".into(),
-                    idx: 0,
-                    sort: tamarin_term::lterm::LSort::Msg,
-                    typ: None,
-                },
-            )],
-            annotations: Vec::new(),
-        },
-        time_var: "t2".into(),
-        time_idx: 9,
-    };
+    assert_eq!(
+        match_goal(&spec("t2", 7, "y"), &sys, &pair_maude_sig()).expect("should match"),
+        g2
+    );
+    assert_eq!(
+        match_goal(&spec("t1", 5, "x"), &sys, &pair_maude_sig()).expect("should match"),
+        g1
+    );
+    // A drifted index (stored `#t2.9`, runtime `#t2.7`) is an `M.member`
+    // miss in HS.
     assert!(
-        match_goal(&spec_drift, &sys, &pair_maude_sig()).is_none(),
+        match_goal(&spec("t2", 9, "y"), &sys, &pair_maude_sig()).is_none(),
         "drifted timepoint idx must miss like HS `M.member`"
     );
+    // So is a drifted argument.
+    assert!(match_goal(&spec("t2", 7, "x"), &sys, &pair_maude_sig()).is_none());
 }
 
-/// Variable-renaming-aware Premise match: two same-(name, arity,
-/// prem_idx) Premise goals at different node timepoints.
+/// Two same-(name, arity, prem idx) Premise goals at different node
+/// timepoints.
 #[test]
 fn match_premise_disambiguates_by_time_var_root() {
     use crate::fact::{Fact, FactTag, Multiplicity};
     use crate::rule::PremIdx;
-    let n1 = LVar::new("u", LSort::Node, 0);
-    let n2 = LVar::new("v", LSort::Node, 0);
     let tag = FactTag::Proto(Multiplicity::Linear, "Inp", 0);
-    let g1 = Goal::Premise((n1, PremIdx(0)), Fact::new(tag, Vec::new()));
-    let g2 = Goal::Premise((n2, PremIdx(0)), Fact::new(tag, Vec::new()));
+    let g1 = Goal::Premise(
+        (LVar::new("u", LSort::Node, 0), PremIdx(0)),
+        Fact::new(tag, Vec::new()),
+    );
+    let g2 = Goal::Premise(
+        (LVar::new("v", LSort::Node, 0), PremIdx(0)),
+        Fact::new(tag, Vec::new()),
+    );
     let mut sys = System::empty();
     sys.goals_mut().push((g1, Default::default()));
-    sys.goals_mut().push((g2, Default::default()));
-    let spec = GoalSpec::Premise {
-        fact: PFact {
-            persistent: false,
-            name: "Inp".into(),
-            args: Vec::new(),
-            annotations: Vec::new(),
-        },
-        prem_idx: 0,
-        time_var: "v".into(),
-        time_idx: 0,
-    };
-    let matched = match_goal(&spec, &sys, &pair_maude_sig()).expect("should match");
-    match matched {
-        Goal::Premise((node, _), _) => assert_eq!(node.name, "v"),
-        other => panic!("expected Premise, got {:?}", other),
-    }
+    sys.goals_mut().push((g2.clone(), Default::default()));
+    let spec = GoalSpec::Premise((node("v", 0), 0), pfact(false, "Inp", Vec::new()));
+    assert_eq!(
+        match_goal(&spec, &sys, &pair_maude_sig()).expect("should match"),
+        g2
+    );
 }
 
-/// Chain matcher — synthetic system with two Chain goals at
-/// different (src,tgt) pairs; the matcher picks by var+idx.
+/// Chain matcher — two Chain goals at different (src, tgt) pairs.
 #[test]
 fn match_chain_goal_by_var_and_idx() {
     use crate::rule::{ConcIdx, PremIdx};
-    let i = LVar::new("i", LSort::Node, 3);
-    let j = LVar::new("j", LSort::Node, 5);
-    let k = LVar::new("k", LSort::Node, 7);
+    let i = LVar::new("i", LSort::Node, 0);
+    let j = LVar::new("j", LSort::Node, 0);
+    let k = LVar::new("k", LSort::Node, 0);
     let g_ij = Goal::Chain((i, ConcIdx(0)), (j, PremIdx(2)));
     let g_jk = Goal::Chain((j, ConcIdx(1)), (k, PremIdx(0)));
     let mut sys = System::empty();
     sys.goals_mut().push((g_ij.clone(), Default::default()));
     sys.goals_mut().push((g_jk.clone(), Default::default()));
-    // Ask for (#j, 1) ~~> (#k, 0).
-    let spec = GoalSpec::Chain {
-        src_var: "j".into(),
-        conc_idx: 1,
-        tgt_var: "k".into(),
-        prem_idx: 0,
-    };
-    let matched = match_goal(&spec, &sys, &pair_maude_sig()).expect("should match");
-    assert_eq!(matched, g_jk);
-    // And the other side.
-    let spec2 = GoalSpec::Chain {
-        src_var: "i".into(),
-        conc_idx: 0,
-        tgt_var: "j".into(),
-        prem_idx: 2,
-    };
+    let spec = |a: &str, c: u64, b: &str, p: u64| GoalSpec::Chain((node(a, 0), c), (node(b, 0), p));
     assert_eq!(
-        match_goal(&spec2, &sys, &pair_maude_sig()).expect("should match"),
+        match_goal(&spec("j", 1, "k", 0), &sys, &pair_maude_sig()).expect("should match"),
+        g_jk
+    );
+    assert_eq!(
+        match_goal(&spec("i", 0, "j", 2), &sys, &pair_maude_sig()).expect("should match"),
         g_ij
     );
-    // Wrong idx — no match.
-    let bad = GoalSpec::Chain {
-        src_var: "i".into(),
-        conc_idx: 9,
-        tgt_var: "j".into(),
-        prem_idx: 2,
-    };
-    assert!(match_goal(&bad, &sys, &pair_maude_sig()).is_none());
+    // Wrong conclusion index — no match.
+    assert!(match_goal(&spec("i", 9, "j", 2), &sys, &pair_maude_sig()).is_none());
 }
 
-/// Subterm matcher — open Subterm goals are matched by canonical
-/// pretty-printed-text equality on both sides.
-///
-/// The system holds two open Subterm goals.  This turns off the
-/// unique-Subterm fallback that appears below.  Only the text comparison can
-/// pick a side.  A spec whose text matches neither goal must return no
-/// match.  It must not guess.
+/// HS's `ChainG NodeConc NodePrem` carries a full `nodevar` at each
+/// endpoint (Theory/Text/Parser/Proof.hs:28-36), so a stored chain goal
+/// whose endpoint index differs from the runtime one is an `M.member` miss.
 #[test]
-fn match_subterm_goal_by_pretty_text() {
-    use tamarin_term::lterm::{LSort, LVar};
-    use tamarin_term::term::Term;
-    use tamarin_term::vterm::Lit;
-    let v = |n: &str| -> tamarin_term::lterm::LNTerm {
-        Term::Lit(Lit::Var(LVar::new(n, LSort::Msg, 0)))
-    };
-    let g1 = Goal::Subterm((v("x"), v("y")));
-    let g2 = Goal::Subterm((v("a"), v("b")));
-    let mut sys = System::empty();
-    sys.goals_mut().push((g1.clone(), Default::default()));
-    sys.goals_mut().push((g2.clone(), Default::default()));
-    // Skeleton-parsed small_raw / big_raw must canonicalise to the
-    // same text as `pretty_lnterm(small)` / `pretty_lnterm(big)`.
-    use tamarin_term::pretty::pretty_lnterm;
-    let spec = |small: &str, big: &str| GoalSpec::Subterm {
-        small_raw: pretty_lnterm(&v(small)),
-        big_raw: pretty_lnterm(&v(big)),
-    };
-    assert_eq!(
-        match_goal(&spec("x", "y"), &sys, &pair_maude_sig()).expect("should match"),
-        g1
+fn chain_goal_requires_the_node_index() {
+    use crate::rule::{ConcIdx, PremIdx};
+    let goal = Goal::Chain(
+        (LVar::new("i", LSort::Node, 3), ConcIdx(0)),
+        (LVar::new("j", LSort::Node, 5), PremIdx(2)),
     );
-    assert_eq!(
-        match_goal(&spec("a", "b"), &sys, &pair_maude_sig()).expect("should match"),
-        g2
-    );
-    // Both sides must agree.  The halves of two different goals never
-    // combine into a match.
-    assert!(match_goal(&spec("x", "b"), &sys, &pair_maude_sig()).is_none());
-    // No text matches here.  The unique fallback is off, because there are
-    // two Subterm goals.  `match_goal` therefore returns no match.
-    assert!(match_goal(&spec("p", "q"), &sys, &pair_maude_sig()).is_none());
-}
-
-/// Subterm matcher fallback — when skeleton text differs from
-/// runtime pretty (e.g. LVar idx renumbering) but only ONE open
-/// Subterm goal exists, the unique-match fallback picks it.
-#[test]
-fn match_subterm_unique_fallback() {
-    use tamarin_term::lterm::{LSort, LVar};
-    use tamarin_term::term::Term;
-    use tamarin_term::vterm::Lit;
-    let small = Term::Lit(Lit::Var(LVar::new("x", LSort::Msg, 99)));
-    let big = Term::Lit(Lit::Var(LVar::new("y", LSort::Msg, 99)));
-    let goal = Goal::Subterm((small, big));
     let mut sys = System::empty();
     sys.goals_mut().push((goal.clone(), Default::default()));
-    // Skeleton small/big text deliberately uses a name the runtime
-    // doesn't have — text mismatch but unique-Subterm fallback
-    // still picks the goal.
-    let spec = GoalSpec::Subterm {
-        small_raw: "skel_small".into(),
-        big_raw: "skel_big".into(),
-    };
-    let matched = match_goal(&spec, &sys, &pair_maude_sig()).expect("unique-fallback should match");
-    assert_eq!(matched, goal);
+    let exact = GoalSpec::Chain((node("i", 3), 0), (node("j", 5), 2));
+    assert_eq!(
+        match_goal(&exact, &sys, &pair_maude_sig()).expect("should match"),
+        goal
+    );
+    // The same root names with the indices dropped name a different goal.
+    let root_only = GoalSpec::Chain((node("i", 0), 0), (node("j", 0), 2));
+    assert!(match_goal(&root_only, &sys, &pair_maude_sig()).is_none());
 }
 
 /// Split matcher — exact id match on `Goal::Split(SplitId(n))`.
@@ -474,17 +309,49 @@ fn match_split_goal_by_id() {
     let mut sys = System::empty();
     sys.goals_mut().push((goal_a.clone(), Default::default()));
     sys.goals_mut().push((goal_b.clone(), Default::default()));
-    let spec = GoalSpec::Split { split_id: 3 };
-    let matched = match_goal(&spec, &sys, &pair_maude_sig()).expect("should match");
-    assert_eq!(matched, goal_b);
-    let spec2 = GoalSpec::Split { split_id: 7 };
     assert_eq!(
-        match_goal(&spec2, &sys, &pair_maude_sig()).expect("should match"),
+        match_goal(&GoalSpec::Split(3), &sys, &pair_maude_sig()).expect("should match"),
+        goal_b
+    );
+    assert_eq!(
+        match_goal(&GoalSpec::Split(7), &sys, &pair_maude_sig()).expect("should match"),
         goal_a
     );
-    // No id 99 in the system → None.
-    let none = GoalSpec::Split { split_id: 99 };
-    assert!(match_goal(&none, &sys, &pair_maude_sig()).is_none());
+    assert!(match_goal(&GoalSpec::Split(99), &sys, &pair_maude_sig()).is_none());
+}
+
+/// Subterm matcher — the two terms are compared as `LNTerm`s, and a stored
+/// goal that names neither open goal misses even when only one is open.
+#[test]
+fn subterm_goal_has_no_unique_fallback() {
+    use tamarin_parser::ast::Term as PTerm;
+    use tamarin_term::term::Term;
+    use tamarin_term::vterm::Lit;
+    let v = |n: &str, idx: u64| -> tamarin_term::lterm::LNTerm {
+        Term::Lit(Lit::Var(LVar::new(n, LSort::Msg, idx)))
+    };
+    let goal = Goal::Subterm((v("x", 99), v("y", 99)));
+    let mut sys = System::empty();
+    sys.goals_mut().push((goal.clone(), Default::default()));
+    let spec = |small: &str, big: &str, idx: u64| {
+        let mk = |n: &str| {
+            PTerm::Var(tamarin_parser::ast::VarSpec {
+                name: n.into(),
+                idx,
+                sort: LSort::Msg,
+                typ: None,
+            })
+        };
+        GoalSpec::Subterm(mk(small), mk(big))
+    };
+    assert_eq!(
+        match_goal(&spec("x", "y", 99), &sys, &pair_maude_sig()).expect("should match"),
+        goal
+    );
+    // The sole open Subterm goal is not a fallback: a stored goal naming
+    // other terms, or the same names at another index, misses.
+    assert!(match_goal(&spec("p", "q", 99), &sys, &pair_maude_sig()).is_none());
+    assert!(match_goal(&spec("x", "y", 0), &sys, &pair_maude_sig()).is_none());
 }
 
 /// Disj matcher — two open Disj goals of different alt counts; the
@@ -663,7 +530,7 @@ fn parsed_to_unannotated_marks_whole_subtree() {
             ("b".to_string(), leaf(ParsedMethod::Sorry)),
         ],
     };
-    let node = parsed_to_unannotated(&skel, System::empty());
+    let node = parsed_to_unannotated(&skel, System::empty(), &pair_maude_sig());
     assert!(!node.annotated, "root must be unannotated");
     assert_eq!(node.children.len(), 2);
     for (name, child) in &node.children {

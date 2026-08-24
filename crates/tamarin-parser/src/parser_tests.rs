@@ -11,6 +11,23 @@ fn parse_formula_str_sig(s: &str) -> Result<Formula, ParseError> {
     parse_formula_str(s, &pair_maude_sig())
 }
 
+/// A parser carrying `msig`'s symbols, standing in for the theory parser
+/// [`parse_goal_str`] reads a stored proof's goals inside.
+fn sig_parser(msig: &tamarin_term::maude_sig::MaudeSig) -> Parser<'static> {
+    let mut p = Parser::new("", &[], false);
+    p.seed_signature(msig);
+    p
+}
+
+/// The small side of the subterm goal `<src> ⊏ y`, which is where the goal
+/// grammar reads a term.
+fn goal_term(src: &str, msig: &tamarin_term::maude_sig::MaudeSig) -> Result<Term, ParseError> {
+    parse_goal_str(&format!("{src} \u{228F} y"), &sig_parser(msig)).map(|g| match g {
+        GoalSpec::Subterm(small, _) => small,
+        other => panic!("expected a subterm goal for {src}, got {other:?}"),
+    })
+}
+
 // ---- GHC call-site coordinates, read back out of the pinned source --------
 //
 // The three `*_SITE` constants below are pasted verbatim into `HasCallStack`
@@ -866,13 +883,13 @@ fn comment_handling() {
     assert!(t.items.is_empty(), "unexpected items: {:?}", t.items);
 }
 
+/// The one argument of a subterm goal, read in structural mode
+/// ([`parse_goal_str`]'s): a theory parse resolves the head through
+/// `lookup_arity` and an undeclared `h` would backtrack to a variable
+/// (oracle probes p05/p25 — unknown operators are parse errors upstream).
 #[test]
 fn term_application() {
-    // Structural mode ([`parse_term_str`]'s): a theory parse resolves the
-    // head through `lookup_arity` and an undeclared `h` would backtrack
-    // to a variable (oracle probes p05/p25 — unknown operators are parse
-    // errors upstream).
-    match parse_term_str("h(<a, b>, ~k)", &pair_maude_sig()).unwrap() {
+    match goal_term("h(<a, b>, ~k)", &pair_maude_sig()).unwrap() {
         Term::App(name, args) => {
             assert_eq!(name, "h");
             // The nested tuple is one argument, not two.
@@ -977,17 +994,15 @@ fn type_p_only_capital_any_is_default() {
 // 1.13.0: `A(<>)` is a parse error; `A(<x>)` renders `A( x )`.
 #[test]
 fn empty_tuple_is_error_singleton_collapses() {
-    assert!(
-        parse_term_str("<>", &pair_maude_sig()).is_err(),
-        "<> must be a parse error"
-    );
+    let term = |src: &str| goal_term(src, &pair_maude_sig());
+    assert!(term("<>").is_err(), "<> must be a parse error");
     // Singleton tuple collapses to the inner term.
-    match parse_term_str("<x>", &pair_maude_sig()).unwrap() {
+    match term("<x>").unwrap() {
         Term::Var(v) => assert_eq!(v.name, "x"),
         other => panic!("expected singleton to collapse to Var, got {:?}", other),
     }
     // Two-element tuple is a Pair.
-    match parse_term_str("<x, y>", &pair_maude_sig()).unwrap() {
+    match term("<x, y>").unwrap() {
         Term::Pair(items) => assert_eq!(items.len(), 2),
         other => panic!("expected Pair, got {:?}", other),
     }
@@ -1842,10 +1857,9 @@ fn prefix_exp_resolving_to_the_dh_symbol_is_binop_exp() {
     );
 }
 
-/// The signature-free entry points seed the parser state as HS `mkStateSig`
-/// does (Theory/Text/Parser/Token.hs:175-176), so a re-parse of rendered text
-/// reads the same 0-arity constants and `[AC]` infix operators the theory
-/// parse did.
+/// The goal grammar reads a stored proof's terms in the state of the parser
+/// the text came out of, so it resolves the same 0-arity constants and `[AC]`
+/// infix operators the theory parse did.
 #[test]
 fn structural_mode_resolves_nullary_names_from_the_signature() {
     let mut msig = pair_maude_sig();
@@ -1864,20 +1878,18 @@ fn structural_mode_resolves_nullary_names_from_the_signature() {
             tamarin_term::function_symbols::NdcState::NotNdc,
         ));
 
-    assert!(
-        matches!(parse_term_str("c", &msig).unwrap(), Term::App(n, a) if n == "c" && a.is_empty())
-    );
+    assert!(matches!(goal_term("c", &msig).unwrap(), Term::App(n, a) if n == "c" && a.is_empty()));
     assert!(matches!(
-        parse_term_str("(x add c)", &msig).unwrap(),
+        goal_term("(x add c)", &msig).unwrap(),
         Term::BinOp(BinOp::AcFct(_), _, _)
     ));
     // Without the declarations both spellings stay what the bare grammar
     // gives them.
     assert!(matches!(
-        parse_term_str("c", &pair_maude_sig()).unwrap(),
+        goal_term("c", &pair_maude_sig()).unwrap(),
         Term::Var(_)
     ));
-    assert!(parse_term_str("(x add c)", &pair_maude_sig()).is_err());
+    assert!(goal_term("(x add c)", &pair_maude_sig()).is_err());
 }
 
 /// HS's rule `let` binds a variable — `sortedLVar [LSortMsg, LSortNat]` under

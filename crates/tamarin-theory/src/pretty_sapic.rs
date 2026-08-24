@@ -666,8 +666,17 @@ mod tests {
     /// action and one `_restrict(<restr>)`, both read against the signature
     /// `decl` declares.
     fn msr_render(arg: &str, restr: &str, decl: &str) -> String {
+        use tamarin_parser::ast::{Atom, Formula};
+
         let sig = sig_of(decl);
-        let t = tamarin_parser::parser::parse_term_str(arg, &sig).unwrap();
+        // The action's argument comes back out of an action atom, the formula
+        // entry point's way of reading one term with `sig`'s symbols.
+        let action =
+            tamarin_parser::parser::parse_formula_str(&format!("Ev({arg}) @ #i"), &sig).unwrap();
+        let t = match &action {
+            Formula::Atom(Atom::Action(fact, _)) => fact.args[0].clone(),
+            other => panic!("expected an action atom, got {other:?}"),
+        };
         let f = tamarin_parser::parser::parse_formula_str(restr, &sig).unwrap();
         let ev = crate::fact::Fact::new(
             crate::fact::FactTag::Proto(crate::fact::Multiplicity::Linear, "Ev", 1),

@@ -45,10 +45,13 @@ use tamarin_term::maude_sig::{
 use tamarin_term::term::{f_app_no_eq, Term};
 use tamarin_term::vterm::{Lit, VTerm};
 
+use crate::constraint::constraints::{Goal, SplitId};
 use crate::formula::LNFormula;
 use crate::guarded::formula_to_guarded;
 use crate::restriction::Restriction;
-use crate::rule::{ProtoRuleE, ProtoRuleEInfo, ProtoRuleName, Rule, RuleAttributes};
+use crate::rule::{
+    ConcIdx, PremIdx, ProtoRuleE, ProtoRuleEInfo, ProtoRuleName, Rule, RuleAttributes,
+};
 use crate::signature::SignaturePure;
 use crate::theory::{
     AccLemma, CaseTest, LNMacro, Lemma, LemmaAttr, OpenProtoRule, ProofSkeleton, Theory,
@@ -999,6 +1002,44 @@ pub fn fact_to_lnfact(f: &p::Fact, sig: &MaudeSig) -> Result<crate::fact::LNFact
         })
         .collect();
     Ok(Fact::new(tag, terms?).with_annotations(copy_fact_annotations(f)))
+}
+
+/// The internal [`Goal`](crate::constraint::constraints::Goal) of a stored
+/// `solve( ... )` step.
+///
+/// HS's proof parser builds the `Goal` value directly (`goal`,
+/// Theory/Text/Parser/Proof.hs:38-72), and `checkAndExecProofMethod` looks it
+/// up in `sGoals` by structural equality (ProofMethod.hs:253-258).  The
+/// parser AST reaches that value through the same converters the rest of the
+/// theory goes through, so a stored goal and a live one are built the same
+/// way.
+///
+/// The disjunction and the unrecognised forms carry no terms to convert and
+/// are an error here; the replay matcher handles them from their text.
+pub fn goal_from_parsed(g: &p::GoalSpec, sig: &MaudeSig) -> Result<Goal, ElabError> {
+    let term = |t: &p::Term| {
+        term_to_lnterm(t, sig).ok_or_else(|| ElabError {
+            message: "could not elaborate term in a stored proof goal".to_string(),
+        })
+    };
+    match g {
+        p::GoalSpec::Action(i, fa) => {
+            Ok(Goal::Action(varspec_to_lvar(i), fact_to_lnfact(fa, sig)?))
+        }
+        p::GoalSpec::Chain((i, c), (j, v)) => Ok(Goal::Chain(
+            (varspec_to_lvar(i), ConcIdx(*c as usize)),
+            (varspec_to_lvar(j), PremIdx(*v as usize)),
+        )),
+        p::GoalSpec::Premise((i, v), fa) => Ok(Goal::Premise(
+            (varspec_to_lvar(i), PremIdx(*v as usize)),
+            fact_to_lnfact(fa, sig)?,
+        )),
+        p::GoalSpec::Split(n) => Ok(Goal::Split(SplitId(*n))),
+        p::GoalSpec::Subterm(small, big) => Ok(Goal::Subterm((term(small)?, term(big)?))),
+        p::GoalSpec::Disj { .. } | p::GoalSpec::Raw(_) => Err(ElabError {
+            message: "stored proof goal carries no terms to elaborate".to_string(),
+        }),
+    }
 }
 
 fn compute_new_vars(

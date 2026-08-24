@@ -3,6 +3,9 @@
 //   scripts/gen_license_headers.py --authors <this file>
 
 use super::*;
+use crate::ast::{BinOp, FactAnnotation, Term};
+use crate::parser::{parse_goal_str, Parser};
+use tamarin_term::lterm::LSort;
 
 /// The three childless leaf forms that a printed proof can end in.  Each form
 /// maps to its own [`ParsedMethod`].  No form carries a case block.
@@ -13,7 +16,7 @@ fn leaf_forms() {
         ("by contradiction", ParsedMethod::Contradiction),
         ("SOLVED", ParsedMethod::SolvedLeaf),
     ] {
-        let t = parse_proof_tree(src).unwrap_or_else(|e| panic!("{src}: {e}"));
+        let t = parse_proof_tree(src, &bare_parser()).unwrap_or_else(|e| panic!("{src}: {e}"));
         assert_eq!(t.method, method, "{src}");
         assert!(t.cases.is_empty(), "{src} must be childless: {:?}", t.cases);
     }
@@ -43,7 +46,7 @@ fn induction_with_case_block() {
             by sorry
             qed
         ";
-    let t = parse_proof_tree(src).expect("parse");
+    let t = parse_proof_tree(src, &bare_parser()).expect("parse");
     assert_eq!(t.method, ParsedMethod::Induction);
     assert_eq!(t.cases.len(), 2);
     assert_eq!(t.cases[0].0, "empty_trace");
@@ -58,7 +61,7 @@ fn identifier_stops_at_hyphen() {
     // "_"`) does NOT accept `-`, so a case name like `foo-bar` is
     // tokenised as the identifier `foo`; the `-bar` is not part of the
     // case name.  This locks in HS-faithful identifier termination.
-    let t = parse_proof_tree("induction case foo-bar by sorry qed").expect("parse");
+    let t = parse_proof_tree("induction case foo-bar by sorry qed", &bare_parser()).expect("parse");
     assert_eq!(t.method, ParsedMethod::Induction);
     assert_eq!(t.cases.len(), 1);
     assert_eq!(t.cases[0].0, "foo");
@@ -74,96 +77,216 @@ fn bare_inter_method_without_child_is_err() {
     // expecting case/qed/SOLVED/by/sorry/simplify/solve/...").  We must
     // mirror that failure (the caller downgrades `Err` to `tree: None`
     // and replays via the auto-prover), so it must NOT parse to a leaf.
-    assert!(parse_proof_tree("simplify").is_err());
-    assert!(parse_proof_tree("induction").is_err());
+    assert!(parse_proof_tree("simplify", &bare_parser()).is_err());
+    assert!(parse_proof_tree("induction", &bare_parser()).is_err());
     // A method followed by an inline sub-proof DOES parse (the inline
     // single-child `""` subproof branch), and the leaf form is `by`.
-    assert!(parse_proof_tree("simplify by sorry").is_ok());
-    assert!(parse_proof_tree("by simplify").is_ok());
+    assert!(parse_proof_tree("simplify by sorry", &bare_parser()).is_ok());
+    assert!(parse_proof_tree("by simplify", &bare_parser()).is_ok());
 }
 
+/// A parser with no theory symbols declared, standing in for the theory
+/// parser a stored proof's goals are read inside.
+fn bare_parser() -> Parser<'static> {
+    Parser::new("", &[], false)
+}
+
+/// The same with `msig`'s symbols installed, as the theory parser holds the
+/// theory's.
+fn sig_parser(msig: &tamarin_term::maude_sig::MaudeSig) -> Parser<'static> {
+    let mut p = Parser::new("", &[], false);
+    p.seed_signature(msig);
+    p
+}
+
+/// Every goal shape below goes through the sub-parser entry point the
+/// `solve( ... )` arm uses, so the assertions pin the grammar itself rather
+/// than the framing around it.
+fn goal(src: &str) -> GoalSpec {
+    parse_goal_str(src, &bare_parser()).unwrap_or_else(|e| panic!("{src}: {e}"))
+}
+
+/// HS `actionGoal` (Theory/Text/Parser/Proof.hs:49-52) keeps the whole
+/// timepoint `LVar` in `ActionG i fa`, index included, so `#vk.6` must not
+/// collapse to `#vk`.
 #[test]
-fn solve_action_goal() {
-    let src = "solve( Foo( x ) @ #i )";
-    let t = parse_proof_tree(&format!("{} by sorry", src)).expect("parse");
-    match &t.method {
-        ParsedMethod::SolveGoal(
-            GoalSpec::Action {
-                fact,
-                time_var,
-                time_idx,
-            },
-            _,
-        ) => {
-            assert_eq!(fact.name, "Foo");
+fn action_goal_keeps_the_timepoint_index() {
+    match goal("!KU( ~AK ) @ #vk.6") {
+        GoalSpec::Action(i, fact) => {
+            assert_eq!(i.name, "vk");
+            assert_eq!(i.idx, 6);
+            assert_eq!(i.sort, LSort::Node);
+            assert!(fact.persistent);
+            assert_eq!(fact.name, "KU");
             assert_eq!(fact.args.len(), 1);
-            assert_eq!(time_var, "i");
-            assert_eq!(*time_idx, 0);
         }
-        other => panic!("expected Action solve goal, got {:?}", other),
+        other => panic!("expected an action goal, got {other:?}"),
     }
-    assert_eq!(t.cases.len(), 1);
-    assert_eq!(t.cases[0].0, "");
-    assert_eq!(t.cases[0].1.method, ParsedMethod::Sorry);
-}
-
-#[test]
-fn solve_action_goal_captures_timepoint_idx() {
-    // HS's `ActionG i fa` carries the full timepoint LVar incl. idx;
-    // dropping `.6` would re-render the head as `#vk` (regression) and
-    // break exact goal matching.
-    let src = "solve( !KU( ~AK ) @ #vk.6 )";
-    let t = parse_proof_tree(&format!("{} by sorry", src)).expect("parse");
-    match &t.method {
-        ParsedMethod::SolveGoal(
-            GoalSpec::Action {
-                time_var, time_idx, ..
-            },
-            _,
-        ) => {
-            assert_eq!(time_var, "vk");
-            assert_eq!(*time_idx, 6);
+    match goal("Foo( x ) @ #i") {
+        GoalSpec::Action(i, fact) => {
+            assert_eq!(i.name, "i");
+            assert_eq!(i.idx, 0);
+            assert_eq!(fact.name, "Foo");
         }
-        other => panic!("expected Action solve goal, got {:?}", other),
+        other => panic!("expected an action goal, got {other:?}"),
     }
 }
 
+/// HS `premiseGoal` (Theory/Text/Parser/Proof.hs:54-57) reads `opRequires`
+/// (`▶` plus a SUBSCRIPT natural, Token.hs:617-619) between the fact and the
+/// node variable.
 #[test]
-fn solve_premise_goal_subscript() {
-    // ▶₀ (subscript 0)
-    let src = "solve( Server( pid, sid, otc ) \u{25B6}\u{2080} #t1 )";
-    let t = parse_proof_tree(&format!("{} by sorry", src)).expect("parse");
-    match &t.method {
-        ParsedMethod::SolveGoal(
-            GoalSpec::Premise {
-                fact,
-                prem_idx,
-                time_var,
-                time_idx,
-            },
-            _,
-        ) => {
+fn premise_goal_reads_the_subscript_index() {
+    match goal("Server( pid, sid, otc ) \u{25B6}\u{2080} #t1") {
+        GoalSpec::Premise((i, v), fact) => {
+            assert_eq!(i.name, "t1");
+            assert_eq!(v, 0);
             assert_eq!(fact.name, "Server");
-            assert_eq!(*prem_idx, 0);
-            assert_eq!(time_var, "t1");
-            assert_eq!(*time_idx, 0);
+            assert_eq!(fact.args.len(), 3);
         }
-        other => panic!("expected Premise solve goal, got {:?}", other),
+        other => panic!("expected a premise goal, got {other:?}"),
     }
-}
-
-#[test]
-fn solve_persistent_premise() {
-    // !F_Fact(...) ▶₂ #i
-    let src = "solve( !F_OutSessKeys( a, b ) \u{25B6}\u{2082} #i )";
-    let t = parse_proof_tree(&format!("{} by sorry", src)).expect("parse");
-    match &t.method {
-        ParsedMethod::SolveGoal(GoalSpec::Premise { fact, prem_idx, .. }, _) => {
+    match goal("!F_OutSessKeys( a, b ) \u{25B6}\u{2082} #i") {
+        GoalSpec::Premise((_, v), fact) => {
             assert!(fact.persistent);
             assert_eq!(fact.name, "F_OutSessKeys");
-            assert_eq!(*prem_idx, 2);
+            assert_eq!(v, 2);
         }
-        other => panic!("expected persistent premise, got {:?}", other),
+        other => panic!("expected a premise goal, got {other:?}"),
+    }
+}
+
+/// `fact llit` is `fact'` (Theory/Text/Parser/Fact.hs:39-63), which reads the
+/// `option [] $ list factAnnotation` suffix, so an annotated fact is a goal
+/// like any other.
+#[test]
+fn premise_goal_accepts_an_annotated_fact() {
+    match goal("!Pk( x )[no_precomp] \u{25B6}\u{2080} #vr.2") {
+        GoalSpec::Premise((i, v), fact) => {
+            assert_eq!(i.name, "vr");
+            assert_eq!(i.idx, 2);
+            assert_eq!(v, 0);
+            assert_eq!(fact.name, "Pk");
+            assert_eq!(fact.annotations, vec![FactAnnotation::NoSources]);
+        }
+        other => panic!("expected a premise goal, got {other:?}"),
+    }
+}
+
+/// HS `chainGoal` (Theory/Text/Parser/Proof.hs:59) is `nodeConc <* opChain`
+/// then `nodePrem`, and both endpoints are a full `nodevar` plus a natural
+/// (Theory/Text/Parser/Proof.hs:28-36) — the node index is part of the goal.
+#[test]
+fn chain_goal_keeps_both_node_indices() {
+    match goal("(#i.2, 0) ~~> (#j, 1)") {
+        GoalSpec::Chain((src, conc), (tgt, prem)) => {
+            assert_eq!(src.name, "i");
+            assert_eq!(src.idx, 2);
+            assert_eq!(conc, 0);
+            assert_eq!(tgt.name, "j");
+            assert_eq!(tgt.idx, 0);
+            assert_eq!(prem, 1);
+        }
+        other => panic!("expected a chain goal, got {other:?}"),
+    }
+}
+
+/// HS `eqSplitGoal` (Theory/Text/Parser/Proof.hs:70-72).  Id 0 is the first
+/// id the equation store mints.
+#[test]
+fn split_goal_reads_the_split_id() {
+    for id in [3i64, 0, 42] {
+        match goal(&format!("splitEqs({id})")) {
+            GoalSpec::Split(n) => assert_eq!(n, id),
+            other => panic!("expected a split goal for {id}, got {other:?}"),
+        }
+    }
+}
+
+/// HS `stSplitGoal` (Theory/Text/Parser/Proof.hs:63-68) accepts both
+/// spellings of `opSubterm` (Token.hs:574-576).
+#[test]
+fn subterm_goal_accepts_both_spellings() {
+    for src in ["x \u{228F} h(x)", "x << h(x)"] {
+        match goal(src) {
+            GoalSpec::Subterm(small, big) => {
+                assert!(matches!(&small, Term::Var(v) if v.name == "x"), "{src}");
+                assert!(
+                    matches!(&big, Term::App(n, a) if n == "h" && a.len() == 1),
+                    "{src}"
+                );
+            }
+            other => panic!("expected a subterm goal for {src}, got {other:?}"),
+        }
+    }
+}
+
+/// A user-declared `[AC]` symbol is written INFIX, and `acterm`
+/// (Theory/Text/Parser/Term.hs:165-174) reads it only when the symbol is in
+/// the signature the sub-parser inherits.
+#[test]
+fn goal_reads_a_user_ac_argument_infix() {
+    let mut msig = tamarin_term::maude_sig::pair_maude_sig();
+    msig.st_ac_fun_syms
+        .insert(tamarin_term::function_symbols::AcFctSym::new(
+            b"add".to_vec(),
+            tamarin_term::function_symbols::Privacy::Public,
+            tamarin_term::function_symbols::Constructability::Constructor,
+            tamarin_term::function_symbols::NdcState::NotNdc,
+        ));
+    let g = parse_goal_str("F( (z add h(y)) ) @ #i", &sig_parser(&msig)).expect("parse");
+    match g {
+        GoalSpec::Action(_, fact) => match &fact.args[..] {
+            [Term::BinOp(BinOp::AcFct(op), l, r)] => {
+                assert_eq!(*op, "add");
+                assert!(matches!(&**l, Term::Var(v) if v.name == "z"));
+                assert!(matches!(&**r, Term::App(n, _) if n == "h"));
+            }
+            other => panic!("expected one infix AC argument, got {other:?}"),
+        },
+        other => panic!("expected an action goal, got {other:?}"),
+    }
+    // Without the symbol in the signature the infix spelling is not a term.
+    assert!(parse_goal_str("F( (z add h(y)) ) @ #i", &bare_parser()).is_err());
+}
+
+/// `diff(a, b)` is a term only when the theory enables it, so the goal
+/// sub-parser carries the parent's `diff` bit.
+#[test]
+fn goal_diff_argument_follows_the_diff_bit() {
+    let g = parse_goal_str("F( diff(a, b) ) @ #i", &Parser::new("", &[], true)).expect("parse");
+    match g {
+        GoalSpec::Action(_, fact) => {
+            assert!(matches!(&fact.args[..], [Term::Diff(_, _)]));
+        }
+        other => panic!("expected an action goal, got {other:?}"),
+    }
+    assert!(parse_goal_str("F( diff(a, b) ) @ #i", &bare_parser()).is_err());
+}
+
+/// HS reads the goal as `parens goal` (Theory/Text/Parser/Proof.hs:80), so
+/// the whole text between the parentheses is the goal.
+#[test]
+fn goal_rejects_trailing_text() {
+    assert!(parse_goal_str("Foo( x ) @ #i and then some", &bare_parser()).is_err());
+    assert!(parse_goal_str("splitEqs(3) splitEqs(4)", &bare_parser()).is_err());
+}
+
+/// HS `nodevar` (Token.hs:443-448) is `sortedLVar [LSortNode]` or a bare
+/// `indexedIdentifier`; a `$`/`~`/`%` sigil names a different sort.
+#[test]
+fn nodevar_rejects_a_non_node_sigil() {
+    assert!(parse_goal_str("Foo( x ) @ $i", &bare_parser()).is_err());
+    assert!(parse_goal_str("Foo( x ) @ ~i", &bare_parser()).is_err());
+    // The two spellings HS does accept.
+    for src in ["Foo( x ) @ #i", "Foo( x ) @ i", "Foo( x ) @ i:node"] {
+        match goal(src) {
+            GoalSpec::Action(i, _) => {
+                assert_eq!(i.name, "i", "{src}");
+                assert_eq!(i.sort, LSort::Node, "{src}");
+            }
+            other => panic!("expected an action goal for {src}, got {other:?}"),
+        }
     }
 }
 
@@ -184,7 +307,7 @@ fn nested_case_block() {
               by sorry
             qed
         ";
-    let t = parse_proof_tree(src).expect("parse");
+    let t = parse_proof_tree(src, &bare_parser()).expect("parse");
     assert!(matches!(t.method, ParsedMethod::SolveGoal(_, _)));
     assert_eq!(t.cases.len(), 2);
     assert_eq!(t.cases[0].0, "case_1");
@@ -200,94 +323,10 @@ fn raw_goalspec_fallback() {
     // GoalSpec::Raw.  All recognised forms (Action, Premise, Disj,
     // Chain, Subterm, Split) need specific structural markers.
     let src = "solve( garbage_no_marker ) by sorry";
-    let t = parse_proof_tree(src).expect("parse");
+    let t = parse_proof_tree(src, &bare_parser()).expect("parse");
     match &t.method {
         ParsedMethod::SolveGoal(GoalSpec::Raw(_), _) => {}
         other => panic!("expected Raw goal-spec, got {:?}", other),
-    }
-}
-
-#[test]
-fn solve_chain_goal() {
-    // HS `chainGoal` (Theory/Text/Parser/Proof.hs:39-72, see line 59)
-    // pretty-print:
-    // `(#i, 0) ~~> (#j, 2)`  (NodeConc ~~> NodePrem).
-    let src = "solve( (#i, 0) ~~> (#j, 2) ) by sorry";
-    let t = parse_proof_tree(src).expect("parse");
-    match &t.method {
-        ParsedMethod::SolveGoal(
-            GoalSpec::Chain {
-                src_var,
-                conc_idx,
-                tgt_var,
-                prem_idx,
-            },
-            _,
-        ) => {
-            assert_eq!(src_var, "i");
-            assert_eq!(*conc_idx, 0);
-            assert_eq!(tgt_var, "j");
-            assert_eq!(*prem_idx, 2);
-        }
-        other => panic!("expected Chain goal-spec, got {:?}", other),
-    }
-}
-
-#[test]
-fn solve_chain_goal_with_freshen_suffix() {
-    // HS sometimes emits a freshen suffix like `#i.2` on the
-    // pretty-printed nodevar; the parser must strip it.
-    let src = "solve( (#i.5, 1) ~~> (#j.7, 0) ) by sorry";
-    let t = parse_proof_tree(src).expect("parse");
-    match &t.method {
-        ParsedMethod::SolveGoal(
-            GoalSpec::Chain {
-                src_var,
-                conc_idx,
-                tgt_var,
-                prem_idx,
-            },
-            _,
-        ) => {
-            // Freshen suffix stripped from the var ROOT.
-            assert_eq!(src_var, "i");
-            assert_eq!(*conc_idx, 1);
-            assert_eq!(tgt_var, "j");
-            assert_eq!(*prem_idx, 0);
-        }
-        other => panic!("expected Chain goal-spec, got {:?}", other),
-    }
-}
-
-#[test]
-fn solve_subterm_goal() {
-    // HS `stSplitGoal` (Theory/Text/Parser/Proof.hs:63-66) pretty-print:
-    // `<term> ⊏ <term>` (U+228F).
-    let src = "solve( foo(a, b) \u{228F} bar(c) ) by sorry";
-    let t = parse_proof_tree(src).expect("parse");
-    match &t.method {
-        ParsedMethod::SolveGoal(GoalSpec::Subterm { small_raw, big_raw }, _) => {
-            assert_eq!(small_raw, "foo(a, b)");
-            assert_eq!(big_raw, "bar(c)");
-        }
-        other => panic!("expected Subterm goal-spec, got {:?}", other),
-    }
-}
-
-#[test]
-fn solve_split_goal() {
-    // HS `eqSplitGoal` (Theory/Text/Parser/Proof.hs:70-72) pretty-print:
-    // `splitEqs(N)`.  The test includes the boundary id 0, which is the first
-    // id that EquationStore creates.
-    for id in [42i64, 0] {
-        let src = format!("solve( splitEqs({id}) ) by sorry");
-        let t = parse_proof_tree(&src).expect("parse");
-        match &t.method {
-            ParsedMethod::SolveGoal(GoalSpec::Split { split_id }, _) => {
-                assert_eq!(*split_id, id, "{src}");
-            }
-            other => panic!("expected Split goal-spec for {src}, got {:?}", other),
-        }
     }
 }
 
@@ -301,7 +340,7 @@ fn solve_split_goal() {
 #[test]
 fn solve_disj_two_alts() {
     let src = "solve( (last(#t1)) \u{2225} (#t1 < #t2) ) by sorry";
-    let t = parse_proof_tree(src).expect("parse");
+    let t = parse_proof_tree(src, &bare_parser()).expect("parse");
     match &t.method {
         ParsedMethod::SolveGoal(GoalSpec::Disj { alts, alt_texts }, _) => {
             assert_eq!(alts.len(), 2);
@@ -320,7 +359,7 @@ fn solve_disj_quantified_alts() {
     let src = "solve( (\u{2200} pid otc1 tc1 otc2 tc2 #t1 #t2. \
                           (last(#t1)) \u{2228} (last(#t2))) \u{2225} \
                           (\u{2203} #t1 #t2 a b c. (last(#t1))) ) by sorry";
-    let t = parse_proof_tree(src).expect("parse");
+    let t = parse_proof_tree(src, &bare_parser()).expect("parse");
     match &t.method {
         ParsedMethod::SolveGoal(GoalSpec::Disj { alts, alt_texts: _ }, _) => {
             assert_eq!(alts.len(), 2);
@@ -341,7 +380,7 @@ fn solve_disj_five_alts() {
     let src = "solve( (last(#t2)) \u{2225} (last(#t1)) \u{2225} \
                           ((#t1 < #t2) \u{2227} (last(#t3))) \u{2225} \
                           (#t2 < #t1) \u{2225} (#t1 = #t2) ) by sorry";
-    let t = parse_proof_tree(src).expect("parse");
+    let t = parse_proof_tree(src, &bare_parser()).expect("parse");
     match &t.method {
         ParsedMethod::SolveGoal(GoalSpec::Disj { alts, alt_texts }, _) => {
             assert_eq!(alts.len(), 5);

@@ -1069,8 +1069,8 @@ pub struct Parser<'a> {
     /// Whether prefix applications resolve through [`Self::lookup_arity`]
     /// (HS `naryOpApp`/`binaryAlgApp`, Theory/Text/Parser/Term.hs:88-121).  True
     /// for theory
-    /// parsing; [`parse_term_str`]/[`parse_formula_str`] clear it because they
-    /// re-parse RENDERED term text with no signature state, where every
+    /// parsing; [`parse_formula_str`]/[`parse_goal_str`] clear it because they
+    /// re-parse RENDERED text with no signature state, where every
     /// application must be accepted structurally.
     resolve_prefix_apps: bool,
     /// Whether a `:` after a variable names a SAPIC TYPE rather than a sort
@@ -2234,7 +2234,7 @@ impl<'a> Parser<'a> {
     /// the macro names both of the first two append.  The theory-level `NoEq`
     /// symbols come with the enable flags, as they do in HS's `funSyms`
     /// (Term/Maude/Signature.hs:110-125).
-    fn seed_signature(&mut self, sig: &MaudeSig) {
+    pub(crate) fn seed_signature(&mut self, sig: &MaudeSig) {
         self.fun_syms.clear();
         for f in &sig.st_fun_syms {
             self.insert_fun_sym(&String::from_utf8_lossy(f.name), FunOptions::of_no_eq(f));
@@ -2261,6 +2261,23 @@ impl<'a> Parser<'a> {
         self.sig_enable_xor = sig.enable_xor;
         self.sig_enable_mset = sig.enable_mset;
         self.sig_enable_nat = sig.enable_nat;
+    }
+
+    /// Copy the symbol state a sub-parser reads from the parser whose text
+    /// carried it.  HS runs a nested parse in the enclosing parser's state,
+    /// which supplies `acterm` the INFIX spelling of the user-declared `[AC]`
+    /// symbols (Theory/Text/Parser/Term.hs:166-172), `nullaryApp` the arity-0
+    /// constants (Theory/Text/Parser/Term.hs:158-163) and `diff` its gate.
+    fn seed_from(&mut self, parent: &Parser<'_>) {
+        self.fun_syms = parent.fun_syms.clone();
+        self.ac_fun_syms = parent.ac_fun_syms.clone();
+        self.macro_syms = parent.macro_syms.clone();
+        self.sig_enable_dh = parent.sig_enable_dh;
+        self.sig_enable_bp = parent.sig_enable_bp;
+        self.sig_enable_xor = parent.sig_enable_xor;
+        self.sig_enable_mset = parent.sig_enable_mset;
+        self.sig_enable_nat = parent.sig_enable_nat;
+        self.enable_diff = parent.enable_diff;
     }
 
     /// Identifier that may contain hyphens (e.g. `asymmetric-encryption`,
@@ -4293,7 +4310,7 @@ impl<'a> Parser<'a> {
         //
         // If the structured parse fails we still keep the raw text,
         // and `replace_sorry_prove` will fall back to the auto-prover.
-        let tree = parse_proof_tree(&raw).ok();
+        let tree = parse_proof_tree(&raw, self).ok();
         Ok(Some(ProofSkeleton { raw, tree }))
     }
 
@@ -5745,7 +5762,7 @@ impl<'a> Parser<'a> {
                         }
                     }
                 } else {
-                    // Structural mode ([`parse_term_str`]): accept any
+                    // Structural mode ([`parse_goal_str`]): accept any
                     // application shape, strictly comma-separated.
                     self.lx.bump();
                     self.skip_ws();
@@ -6186,6 +6203,159 @@ impl<'a> Parser<'a> {
         Ok(FlagFormula::Atom(id))
     }
 
+    // =========================================================================
+    // Proof goals
+    // =========================================================================
+
+    /// Parse the goal inside a stored `solve( ... )` step.  HS `goal`
+    /// (Theory/Text/Parser/Proof.hs:38-72):
+    ///
+    /// ```haskell
+    /// goal = asum
+    ///     [ stSplitGoal, premiseGoal, actionGoal
+    ///     , chainGoal, disjSplitGoal, eqSplitGoal ]
+    /// ```
+    ///
+    /// Each HS alternative is a `try`, so a partial parse backtracks; the
+    /// save/restore around every arm below is that `try`.  The equation split
+    /// is hoisted above the disjunction, which accepts the same language: HS
+    /// reaches `eqSplitGoal` only because `disjSplitGoal` fails on
+    /// `splitEqs(N)`, and the keyword form does not depend on how
+    /// [`Parser::formula`] reads a lower-case predicate-shaped atom.
+    /// `disjSplitGoal` itself is recognised from the goal text by
+    /// [`crate::proof_tree::parse_goal_spec`].
+    fn goal(&mut self) -> Result<GoalSpec, ParseError> {
+        let save = self.save();
+        if let Ok(g) = self.subterm_goal() {
+            return Ok(g);
+        }
+        self.restore(save);
+        if let Ok(g) = self.premise_goal() {
+            return Ok(g);
+        }
+        self.restore(save);
+        if let Ok(g) = self.action_goal() {
+            return Ok(g);
+        }
+        self.restore(save);
+        if let Ok(g) = self.chain_goal() {
+            return Ok(g);
+        }
+        self.restore(save);
+        if let Ok(g) = self.eq_split_goal() {
+            return Ok(g);
+        }
+        self.restore(save);
+        Err(self.err("expected a proof goal"))
+    }
+
+    /// HS `stSplitGoal` (Theory/Text/Parser/Proof.hs:63-68): two
+    /// `msetterm False (vlit msgvar)` terms around `opSubterm`
+    /// (`<<` or `⊏`, Token.hs:574-576).
+    fn subterm_goal(&mut self) -> Result<GoalSpec, ParseError> {
+        let small = self.msetterm(false)?;
+        if !self.try_punct("<<") && !self.try_punct("\u{228F}") {
+            return Err(self.err("expected `⊏`"));
+        }
+        let big = self.msetterm(false)?;
+        Ok(GoalSpec::Subterm(small, big))
+    }
+
+    /// HS `premiseGoal` (Theory/Text/Parser/Proof.hs:54-57): a `fact llit`
+    /// followed by `opRequires` (`▶` and a subscript natural,
+    /// Token.hs:618-619) and a `nodevar`.
+    fn premise_goal(&mut self) -> Result<GoalSpec, ParseError> {
+        let fa = self.fact()?;
+        self.skip_ws();
+        if !self.lx.eat_str("\u{25B6}") {
+            return Err(self.err("expected `▶`"));
+        }
+        let v = self
+            .lx
+            .natural_subscript()
+            .ok_or_else(|| self.err("expected a subscript premise index"))?;
+        let i = self.nodevar()?;
+        Ok(GoalSpec::Premise((i, v), fa))
+    }
+
+    /// HS `actionGoal` (Theory/Text/Parser/Proof.hs:49-52): a `fact llit`
+    /// followed by `opAt` (`@`, Token.hs:566-568) and a `nodevar`.
+    fn action_goal(&mut self) -> Result<GoalSpec, ParseError> {
+        let fa = self.fact()?;
+        if !self.try_punct("@") {
+            return Err(self.err("expected `@`"));
+        }
+        let i = self.nodevar()?;
+        Ok(GoalSpec::Action(i, fa))
+    }
+
+    /// HS `chainGoal` (Theory/Text/Parser/Proof.hs:59): a `nodeConc` and a
+    /// `nodePrem` around `opChain` (`~~>`, Token.hs:621-623), each of them
+    /// `parens ((,) <$> nodevar <*> (comma *> natural))`
+    /// (Theory/Text/Parser/Proof.hs:28-36).
+    fn chain_goal(&mut self) -> Result<GoalSpec, ParseError> {
+        let conc = self.node_idx_pair()?;
+        if !self.try_punct("~~>") {
+            return Err(self.err("expected `~~>`"));
+        }
+        let prem = self.node_idx_pair()?;
+        Ok(GoalSpec::Chain(conc, prem))
+    }
+
+    /// HS `nodePrem`/`nodeConc` (Theory/Text/Parser/Proof.hs:28-36):
+    /// `parens ((,) <$> nodevar <*> (comma *> natural))`.
+    fn node_idx_pair(&mut self) -> Result<(VarSpec, u64), ParseError> {
+        self.require_punct("(")?;
+        let v = self.nodevar()?;
+        self.require_punct(",")?;
+        let n = self
+            .lx
+            .natural()
+            .ok_or_else(|| self.err("expected a node index"))?;
+        self.require_punct(")")?;
+        Ok((v, n))
+    }
+
+    /// HS `eqSplitGoal` (Theory/Text/Parser/Proof.hs:70-72):
+    /// `symbol_ "splitEqs"` then `parens natural`.
+    fn eq_split_goal(&mut self) -> Result<GoalSpec, ParseError> {
+        if !self.try_kw("splitEqs") {
+            return Err(self.err("expected `splitEqs`"));
+        }
+        self.require_punct("(")?;
+        let n = self
+            .lx
+            .natural()
+            .ok_or_else(|| self.err("expected a split id"))?;
+        self.require_punct(")")?;
+        Ok(GoalSpec::Split(n as i64))
+    }
+
+    /// Parse a timepoint variable.  HS `nodevar` (Token.hs:443-448) is
+    /// `sortedLVar [LSortNode]` — the `#x` prefix or the `x:node` suffix —
+    /// or a bare `indexedIdentifier` stamped `LSortNode`.  A `$`/`~`/`%`
+    /// sigil, a different sort suffix and a SAPIC type annotation are all
+    /// outside that language.
+    fn nodevar(&mut self) -> Result<VarSpec, ParseError> {
+        let save = self.save();
+        let v = self.var_spec()?;
+        // `sortedLVar [LSortNode]` is the `#x` sigil and the `x:node` suffix;
+        // the second alternative reads a bare `indexedIdentifier`, which
+        // [`Parser::try_var_spec`] stamps `LSort::Msg` with no suffix consumed.
+        let is_node = v.sort == LSort::Node
+            || (v.sort == LSort::Msg && !self.sort_suffix_consumed && v.typ.is_none());
+        if !is_node {
+            self.restore(save);
+            return Err(self.err("expected a timepoint variable"));
+        }
+        Ok(VarSpec {
+            name: v.name,
+            idx: v.idx,
+            sort: LSort::Node,
+            typ: None,
+        })
+    }
+
     fn eval_flagformula(&self, f: &FlagFormula) -> bool {
         match f {
             FlagFormula::Atom(s) => self.flags.contains(s),
@@ -6260,34 +6430,26 @@ pub fn parse_formula_str(s: &str, msig: &MaudeSig) -> Result<Formula, ParseError
     Ok(f)
 }
 
-/// Parse a standalone term from its source text into the AST [`Term`].
+/// Parse the goal of a stored `solve( ... )` step into the AST [`GoalSpec`].
 ///
-/// Used by the stored-proof replay matcher (`tamarin-theory::replay`) to
-/// recover the structure of a `solve(...)` goal's fact arguments — which
-/// the lightweight proof-tree skeleton parser captures only as raw text —
-/// so they can be compared structurally (modulo variable renaming) against
-/// the runtime goal terms.  All algebraic operators are enabled at parse
-/// time (see [`Parser::new`]); semantic gating is irrelevant here because
-/// we only need the operator/function shape.
+/// The sub-parser is built like [`parse_formula_str`]'s: rendered goal text
+/// carries applications of symbols this fresh parser has no declarations for,
+/// so prefix applications are accepted structurally instead of resolved
+/// through `lookup_arity`.
 ///
-/// `msig` is the signature the text was rendered against, seeded as HS
-/// `parseString` seeds one (Theory/Text/Parser/Token.hs:250-258).  It gives
-/// [`Parser::acterm`] the INFIX spelling of the user-declared `[AC]` symbols
-/// (`x add y` for `functions: add/2 [AC]`, Theory/Text/Parser/Term.hs:165-174)
-/// and `nullaryApp` the arity-0 constants.
-pub fn parse_term_str(s: &str, msig: &MaudeSig) -> Result<Term, ParseError> {
+/// `parent` is the parser the stored text came out of, whose symbol state
+/// [`Parser::seed_from`] copies: HS's proof parser runs inside the theory
+/// parser and reads its `stSig` (Theory/Text/Parser/Proof.hs:38-72).
+pub fn parse_goal_str(s: &str, parent: &Parser<'_>) -> Result<GoalSpec, ParseError> {
     let mut p = Parser::new(s, &[], false);
-    p.seed_signature(msig);
-    // Rendered term text carries applications of symbols this fresh parser
-    // has no declarations for — accept them structurally instead of
-    // resolving through `lookup_arity`.
+    p.seed_from(parent);
     p.resolve_prefix_apps = false;
-    let t = p.term(false)?;
+    let g = p.goal()?;
     p.skip_ws();
     if !p.lx.is_eof() {
-        return Err(p.err("trailing garbage in term string"));
+        return Err(p.err("trailing garbage in goal string"));
     }
-    Ok(t)
+    Ok(g)
 }
 
 #[cfg(test)]

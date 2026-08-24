@@ -1108,11 +1108,15 @@ fn open_method_doc(
         PM::Contradiction => keyword_("contradiction"),
         PM::Simplify => keyword_("simplify"),
         PM::Induction => keyword_("induction"),
-        // Re-render the stored goal text through the same structured-goal
-        // builders the live path uses (HS keeps `SolveGoal goal` structured
-        // and re-prints via `prettyGoal`, so stored layout must not be echoed
-        // verbatim — see `raw_solve_to_doc`).
-        PM::SolveGoal(_, raw) => raw_solve_to_doc(raw, msig),
+        // HS keeps `SolveGoal goal` structured and re-prints it via
+        // `prettyGoal`, so the stored layout is never echoed verbatim: the
+        // goal is converted and laid out by the same builder the live path
+        // uses, and the forms that carry no `Goal` value go through
+        // `raw_solve_to_doc`.
+        PM::SolveGoal(spec, raw) => match crate::elaborate::goal_from_parsed(spec, msig) {
+            Ok(g) => solve_step_doc(&g),
+            Err(_) => raw_solve_to_doc(raw, msig),
+        },
         PM::SolvedLeaf => keyword_("SOLVED").beside_sp(line_comment_("trace found")),
         PM::Unfinishable => {
             keyword_("UNFINISHABLE").beside_sp(line_comment_("reducible operator in subterm"))
@@ -3189,19 +3193,6 @@ fn render_lvar(v: &tamarin_term::lterm::LVar) -> String {
     s
 }
 
-/// Render a timepoint / node id from a (root-name, idx) pair the way HS's
-/// `Show LVar` (Node sort) does: `#name` for idx 0, else `#name.idx`.
-/// Mirrors [`render_lvar`] for a `LSort::Node` var without constructing one;
-/// used by `raw_goal_to_doc` to re-render an unannotated goal head with its
-/// timepoint index preserved (HS `prettyGoal`'s `show i`).
-fn render_node_id_str(name: &str, idx: u32) -> String {
-    if idx == 0 {
-        format!("#{}", name)
-    } else {
-        format!("#{}.{}", name, idx)
-    }
-}
-
 /// Convert LNFacts (post-elaboration) to parser-AST Facts so we can
 /// reuse the parser-AST fact rendering path.
 pub(crate) fn lnfacts_to_parser(facts: &[crate::fact::LNFact]) -> Vec<p::Fact> {
@@ -3774,15 +3765,11 @@ fn render_predicate(pr: &p::Predicate, arity1: &std::collections::HashSet<String
     // rendered INDEPENDENTLY at that style from column 0, then concatenated
     // as plain text.
     //
-    // Render the predicate fact DIRECTLY (`fact_doc`), NOT via
-    // `reparse_fact_doc`.  HS `prettyPredicate` (TheoryObject.hs:845-849) calls
+    // HS `prettyPredicate` (TheoryObject.hs:845-849) calls
     // `prettyFact prettyLVar (pFact p)`, where each formal-arg `LVar` carries
     // its sort and `prettyLVar` renders the sigil (`#time` for an `LSortNode`
-    // arg).  A predicate's args come from the real term parser (`self.term`),
-    // so they are proper sorted `Var`s already.  `reparse_fact_doc` is meant
-    // for proof-tree facts whose args `build_fact` stuffs into `Var` *names* as
-    // raw text; re-parsing a sorted formal arg from its bare `name` drops the
-    // sigil (`#time` → `time`).  Going through `fact_doc` preserves the sort.
+    // arg), so `fact_doc` reads the args the term parser built and keeps the
+    // sort.
     let factstr = pf::fact_doc(&fact).render_with(hpj::DEFAULT_LINE_LENGTH, hpj::DEFAULT_RIBBON);
     let formulastr =
         pf::formula_doc(&formula).render_at(hpj::DEFAULT_LINE_LENGTH, hpj::DEFAULT_RIBBON, 0);
@@ -3981,24 +3968,13 @@ fn pp_step_doc(
     prefix: &str,
     msig: &tamarin_term::maude_sig::MaudeSig,
 ) -> crate::pretty_hpj::Doc {
-    use crate::constraint::constraints::Goal;
     use crate::constraint::solver::proof_method::{ProofMethod as PM, Result as MR};
     use crate::pretty_hpj::Doc;
     // `solve( <goal> )` builds its own goal Doc; everything else is a
     // flat string with no internal wrapping, so `Doc::text` of the
     // string form is faithful.
     let body = match m {
-        PM::SolveGoal(g) => {
-            let inner = match g {
-                Goal::Disj(d) if !d.0.is_empty() => pf::disj_goal_to_doc(&d.0),
-                _ => solve_goal_to_doc(g),
-            };
-            // HS `keyword_ "solve(" <-> prettyGoal goal <-> keyword_ ")"`
-            // (ProofMethod.hs:1181) — `solve(` and `)` are `hl_keyword` spans.
-            crate::pretty_hpj::keyword_("solve(")
-                .beside_sp(inner)
-                .beside_sp(crate::pretty_hpj::keyword_(")"))
-        }
+        PM::SolveGoal(g) => solve_step_doc(g),
         // A `RawSolve` is the display-only method kept for an unannotated
         // (replayed) subtree (replay.rs `parsed_to_unannotated`).  HS's
         // `noSystemPrf` (Theory/Proof.hs:447-467, see line 467 `mapProofInfo (\i -> (Just i,
@@ -4117,162 +4093,67 @@ pub(crate) fn render_goal_for_oracle(g: &crate::constraint::constraints::Goal) -
     solve_goal_to_doc(g).render_with(ORACLE_LINE_LENGTH, ORACLE_RIBBON)
 }
 
-/// Build the `solve( <goal> )` Doc for an unannotated (replayed) step from
-/// its raw goal text, re-rendering through the HS-faithful Doc engine.
-///
-/// HS `noSystemPrf` (Theory/Proof.hs:447-467, see line 467) keeps the parsed `SolveGoal goal`
-/// structured, so `prettyProofMethod`/`prettyGoal` re-wraps it fresh.  We
-/// recover the structure from the raw `solve(...)` inner text and route it
-/// through the SAME builders the live-goal path uses
-/// (`pf::fact_doc`/`pf::term_doc`/`pf::disj_goal_to_doc`), so the wrapping
-/// is byte-identical to HS regardless of how the stored `.spthy` was laid
-/// out.  Goal shapes we cannot structurally recover (chain / `Raw`) fall
-/// back to the verbatim text — those goals are short and never wrap, so HS
-/// renders them on one line too.
-///
-/// `msig` reaches the re-parses through [`raw_goal_to_doc`].
-fn raw_solve_to_doc(raw: &str, msig: &tamarin_term::maude_sig::MaudeSig) -> crate::pretty_hpj::Doc {
-    // Mirror HS `SolveGoal goal -> keyword_ "solve(" <-> prettyGoal goal <->
-    // keyword_ ")"` (ProofMethod.hs:1181): the `solve(` / `)` delimiters are
-    // `hl_keyword` spans (identity in plain mode, so batch bytes are
-    // unchanged).  The unannotated-replay overview index (`hl_superfluous`
-    // steps) needs these spans to match HS.
-    let goal_doc = raw_goal_to_doc(raw, msig);
+/// HS `SolveGoal goal -> keyword_ "solve(" <-> prettyGoal goal <-> keyword_ ")"`
+/// (ProofMethod.hs:1181).  The `solve(` / `)` delimiters are `hl_keyword`
+/// spans (identity in plain mode, so batch bytes are unchanged); the
+/// unannotated-replay overview index (`hl_superfluous` steps) needs these
+/// spans to match HS.
+fn solve_step_doc(g: &crate::constraint::constraints::Goal) -> crate::pretty_hpj::Doc {
     crate::pretty_hpj::keyword_("solve(")
-        .beside_sp(goal_doc)
+        .beside_sp(solve_goal_to_doc(g))
+        .beside_sp(crate::pretty_hpj::keyword_(")"))
+}
+
+/// The same `solve( <goal> )` layout for a step whose goal is only text.
+///
+/// HS `noSystemPrf` (Theory/Proof.hs:447-467, see line 467) keeps the parsed
+/// `SolveGoal goal` structured, so `prettyProofMethod`/`prettyGoal` re-wraps
+/// it fresh; the structure is recovered from the raw `solve(...)` inner text
+/// and routed through the SAME builders the live-goal path uses, so the
+/// wrapping is byte-identical to HS regardless of how the stored `.spthy`
+/// was laid out.
+fn raw_solve_to_doc(raw: &str, msig: &tamarin_term::maude_sig::MaudeSig) -> crate::pretty_hpj::Doc {
+    crate::pretty_hpj::keyword_("solve(")
+        .beside_sp(raw_goal_to_doc(raw, msig))
         .beside_sp(crate::pretty_hpj::keyword_(")"))
 }
 
 /// Re-render the goal text inside a `solve( ... )` (the part between the
-/// parens) as a Doc.  Mirrors HS `prettyGoal` (Constraints.hs:273-287) by
-/// reconstructing each goal kind from `parse_goal_spec`
-/// (`proof_tree.rs`) and laying it out with the live-goal builders.
+/// parens) as a Doc.  The goals `elaborate::goal_from_parsed` converts are
+/// rendered from their `Goal` value by `solve_goal_to_doc`, so what reaches
+/// here is a disjunction or a goal text nothing recognises.
 ///
-/// `msig` is the signature the stored text was rendered against, which each
-/// re-parse needs for the user `[AC]` symbols' infix spelling and the
-/// arity-0 constants — HS's parser reads both from the signature in parser
-/// state (Theory/Text/Parser/Term.hs:158-174).
+/// HS `prettyGoal (DisjG (Disj gfs))` (Constraints.hs:281-284) lays each
+/// disjunct out with `prettyGuarded`, so the disjuncts are re-parsed into
+/// `Guarded` values and handed to the live-goal builder; anything that fails
+/// to re-parse renders as stored.  `msig` is the signature the stored text
+/// was rendered against, which the re-parse needs for the user `[AC]`
+/// symbols' infix spelling and the arity-0 constants — HS's parser reads
+/// both from the signature in parser state (Theory/Text/Parser/Term.hs:158-174).
 fn raw_goal_to_doc(raw: &str, msig: &tamarin_term::maude_sig::MaudeSig) -> crate::pretty_hpj::Doc {
     use crate::guarded::formula_to_guarded_parsed;
     use crate::pretty_hpj::Doc;
     use tamarin_parser::ast::GoalSpec;
-    use tamarin_parser::parser::{parse_formula_str, parse_term_str};
+    use tamarin_parser::parser::parse_formula_str;
     use tamarin_parser::proof_tree::parse_goal_spec;
 
     let trimmed = raw.trim();
-    match parse_goal_spec(trimmed) {
-        // `prettyGoal (ActionG i fa) = prettyFact fa <-> "@" <-> show i`.
-        // `show i` (HS `Show LVar`) keeps the timepoint idx: `#vk.6`, not
-        // `#vk`.  Reconstruct the node LVar and render via `render_lvar`
-        // (the same renderer the live-goal path uses, render_node_id) so
-        // the head is byte-identical to HS's re-render.
-        GoalSpec::Action {
-            fact,
-            time_var,
-            time_idx,
-        } => reparse_fact_doc(&fact, msig)
-            .beside_sp(crate::pretty_hpj::operator_("@"))
-            .beside_sp(Doc::text(render_node_id_str(&time_var, time_idx))),
-        // `prettyGoal (PremiseG (i, PremIdx v) fa) =
-        //    prettyLNFact fa <-> "▶"<>subscript v <-> prettyNodeId i`.
-        GoalSpec::Premise {
-            fact,
-            prem_idx,
-            time_var,
-            time_idx,
-        } => reparse_fact_doc(&fact, msig)
-            .beside_sp(Doc::text(format!("\u{25B6}{}", goal_subscript(prem_idx))))
-            .beside_sp(Doc::text(render_node_id_str(&time_var, time_idx))),
-        // `prettyGoal (DisjG (Disj gfs)) =
-        //    fsep $ punctuate "  ∥" (map (nest 1 . parens . prettyGuarded) gfs)`.
-        // Re-parse each disjunct's text into a Guarded and route through the
-        // same `disj_goal_to_doc` the live path uses.  If ANY disjunct fails
-        // to re-parse, fall back to verbatim (the rare unparseable case then
-        // renders as stored).
-        GoalSpec::Disj { .. } => match parse_disjuncts_to_guarded(trimmed, msig) {
+    if let GoalSpec::Disj { .. } = parse_goal_spec(trimmed) {
+        return match parse_disjuncts_to_guarded(trimmed, msig) {
             Some(gfs) => pf::disj_goal_to_doc(&gfs),
             None => Doc::text(trimmed),
-        },
-        // `prettyGoal (SubtermG (l,r)) = prettyLNTerm l <-> "⊏" <-> prettyLNTerm r`.
-        GoalSpec::Subterm { small_raw, big_raw } => {
-            match (
-                parse_term_str(small_raw.trim(), msig),
-                parse_term_str(big_raw.trim(), msig),
-            ) {
-                (Ok(l), Ok(r)) => pf::term_doc(&l)
-                    .beside_sp(crate::pretty_hpj::operator_("\u{228F}"))
-                    .beside_sp(pf::term_doc(&r)),
-                _ => Doc::text(trimmed),
-            }
-        }
-        // `splitEqs(N)` never wraps; keep verbatim.
-        GoalSpec::Split { .. } => Doc::text(trimmed),
-        // `prettyGoal (ChainG c p) = prettyNodeConc c <-> operator_ "~~>" <->
-        //  prettyNodePrem p` (Constraints.hs).  The endpoints render as plain
-        // node text; only the `~~>` arrow is an `hl_operator` span.  The stored
-        // goal text is exactly `<conc> ~~> <prem>`, so split on the arrow.
-        GoalSpec::Chain { .. } => match trimmed.split_once("~~>") {
-            Some((l, r)) => Doc::text(l.trim_end())
-                .beside_sp(crate::pretty_hpj::operator_("~~>"))
-                .beside_sp(Doc::text(r.trim_start())),
-            None => Doc::text(trimmed),
-        },
-        // Unrecognised goal shapes: a lone guarded formula goal (e.g. a
-        // single quantified alt) parses here.  Try formula→guarded so it
-        // re-wraps like HS's `prettyGuarded`; else keep verbatim.
-        GoalSpec::Raw(_) => {
-            match parse_formula_str(trimmed, msig)
-                .ok()
-                .and_then(|f| formula_to_guarded_parsed(&f, msig).ok())
-            {
-                Some(g) => pf::disj_goal_to_doc(std::slice::from_ref(&g)),
-                None => Doc::text(trimmed),
-            }
-        }
+        };
     }
-}
-
-/// Render an Action/Premise goal's `Fact` to a Doc, RE-PARSING each
-/// argument's term text into a structured term first.
-///
-/// `parse_goal_spec`'s Action/Premise parser (`build_fact` in
-/// `proof_tree.rs`) is a goal-MATCHING shim — it does NOT parse the
-/// argument terms, instead stuffing each top-level-comma-split arg's RAW
-/// TEXT (incl. any stored newlines / wrapping) into a `Term::Var` name.
-/// Rendering that via `pf::fact_doc` directly would echo the stored layout
-/// verbatim (the dnp3 `senc(<…>)` tuple wrapped exactly as the input file
-/// had it).  Here we re-parse each arg's text with `parse_term_str` so the
-/// fact's terms get their real structure and re-wrap through the Doc engine
-/// like HS's `prettyLNFact`.  If any arg fails to re-parse we keep that
-/// arg's raw text (it still renders, just not re-flowed) — a strictly
-/// no-worse fallback.
-///
-/// `msig` is the signature the stored text was rendered against, so the
-/// re-parse reads a user `[AC]` symbol's infix spelling (`x add y`) — HS's
-/// `acterm` takes the same set from the signature in parser state
-/// (Theory/Text/Parser/Term.hs:166-172).
-fn reparse_fact_doc(
-    fact: &tamarin_parser::ast::Fact,
-    msig: &tamarin_term::maude_sig::MaudeSig,
-) -> crate::pretty_hpj::Doc {
-    use tamarin_parser::ast::{Fact, Term};
-    use tamarin_parser::parser::parse_term_str;
-    let args: Vec<Term> = fact
-        .args
-        .iter()
-        .map(|a| match a {
-            // `build_fact` stored the raw arg text as a `Var` name; re-parse it.
-            Term::Var(v) => parse_term_str(v.name.trim(), msig).unwrap_or_else(|_| a.clone()),
-            other => other.clone(),
-        })
-        .collect();
-    let reparsed = Fact {
-        persistent: fact.persistent,
-        name: fact.name.clone(),
-        args,
-        annotations: fact.annotations.clone(),
-    };
-    pf::fact_doc(&reparsed)
+    // A lone guarded formula goal (e.g. a single quantified alt) parses
+    // here.  Try formula-to-guarded so it re-wraps like HS's `prettyGuarded`;
+    // else keep verbatim.
+    match parse_formula_str(trimmed, msig)
+        .ok()
+        .and_then(|f| formula_to_guarded_parsed(&f, msig).ok())
+    {
+        Some(g) => pf::disj_goal_to_doc(std::slice::from_ref(&g)),
+        None => Doc::text(trimmed),
+    }
 }
 
 /// Split the `solve(...)` disjunction text at top-level `∥`, re-parsing

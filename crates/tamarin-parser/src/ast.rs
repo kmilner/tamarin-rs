@@ -310,115 +310,38 @@ pub enum ParsedMethod {
     Other(String),
 }
 
-/// Best-effort parse of the formula inside `solve( ... )`.
+/// The goal of a stored `solve( ... )` step.
 ///
-/// The text inside `solve(...)` is one of HS's `goal` parses
-/// (Theory/Text/Parser/Proof.hs:38-72):
-///
-///   - `Fact( ... ) @ #var`        →  ActionG
-///   - `Fact( ... ) ▶<n> #var`     →  PremiseG (subscript-digit shows
-///     the premise index)
-///   - `gf1 ∥ gf2 ∥ ...`           →  DisjG (Disj [guardedFormula])
-///   - chain / subterm / splitEqs  →  Chain/Subterm/Split
-///
-/// We build the cheap-to-recognise variants (Action, Premise, Disj);
-/// everything else lands in `Raw` and the replay walker falls back to
-/// the auto-prover.
+/// The five forms below are the ones [`crate::parser::parse_goal_str`]
+/// builds from HS's `goal` grammar (Theory/Text/Parser/Proof.hs:38-72); they
+/// mirror the HS `Goal` constructors (Constraints.hs:159-171) over surface
+/// terms instead of `LNTerm`s.  A disjunction-split goal is still recognised
+/// from its text (`Disj`), and any goal text neither path recognises is kept
+/// verbatim in `Raw`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum GoalSpec {
-    /// `Fact( args... ) @ #ivar` — action goal.
-    Action {
-        fact: Fact,
-        /// Timepoint variable ROOT name (sigil/idx stripped), e.g. `vk`
-        /// from `#vk.6`.
-        time_var: String,
-        /// Timepoint variable index (the `N` in `#vk.N`; `0` when absent).
-        /// HS's `ActionG i fa` carries the full LVar incl. idx, so this is
-        /// needed to re-render the goal head faithfully (`#vk.6`, not `#vk`)
-        /// and for exact goal-key matching at replay time.
-        time_idx: u32,
-    },
-    /// `Fact( args... ) ▶<idx> #ivar` — premise goal.  The premise
-    /// index is the digit after `▶` (UTF-8 ▶₀..▶₉).
-    Premise {
-        fact: Fact,
-        prem_idx: usize,
-        /// Node variable ROOT name (sigil/idx stripped).
-        time_var: String,
-        /// Node variable index (the `N` in `#i.N`; `0` when absent).
-        time_idx: u32,
-    },
-    /// `gf1 ∥ gf2 ∥ ...` — disjunction-split goal.  Mirrors HS
-    /// `disjSplitGoal = (DisjG . Disj) <$> sepBy1 guardedFormula
-    /// (symbol "∥")` (Theory/Text/Parser/Proof.hs:39-72, see line 61).
-    ///
-    /// HS parses each disjunct as a full `Guarded` value bearing
-    /// concrete LVar identities, then matches by structural equality
-    /// against the open `Goal::Disj(...)` in `sys.goals` (HS
-    /// ProofMethod.hs:254-274, see line 258 `SolveGoal goal -> guard (goal `M.member`
-    /// L.get sGoals sys)`).
-    ///
-    /// We can't reconstruct skeleton-text LVar indices reliably (they
-    /// differ from runtime indices), so we capture each disjunct's
-    /// STRUCTURAL signature (its top-level shape: quantified or not,
-    /// and the number of bound vars).  The replay matcher then looks
-    /// for an open `Goal::Disj` whose `d.0` list has the same length
-    /// and whose entries share the same per-alt shape.  At the points
-    /// where the HS-parsed disjunction would be matched, only ONE open
-    /// `Goal::Disj` typically lives in `sys.goals`, so the shape
-    /// signature is a sufficient discriminator.
+    /// `Fact( args... ) @ #i` — HS `ActionG LVar LNFact`.
+    Action(VarSpec, Fact),
+    /// `(#i, n) ~~> (#j, m)` — HS `ChainG NodeConc NodePrem`.  Both node
+    /// variables carry their index, and both natural indices are kept.
+    Chain((VarSpec, u64), (VarSpec, u64)),
+    /// `Fact( args... ) ▶<n> #i` — HS `PremiseG NodePrem LNFact`.  The
+    /// premise index is the subscript after `▶`.
+    Premise((VarSpec, u64), Fact),
+    /// `splitEqs(N)` — HS `SplitG SplitId`.
+    Split(i64),
+    /// `gf1 ∥ gf2 ∥ ...` — HS `DisjG (Disj LNGuarded)`, recognised from the
+    /// goal text: `alts` is each disjunct's top-level shape and `alt_texts`
+    /// its normalised rendering, which together stand in for the `Guarded`
+    /// values HS parses.
     Disj {
         alts: Vec<DisjAlt>,
         alt_texts: Vec<String>,
     },
-    /// `(#i, n) ~~> (#j, m)` — chain-split goal.  Mirrors HS
-    /// `chainGoal = ChainG <$> (try (nodeConc <* opChain)) <*> nodePrem`
-    /// (Theory/Text/Parser/Proof.hs:39-72, see line 59).  `nodeConc`/`nodePrem` parse
-    /// `(<nodevar>, <natural>)` and the operator is `~~>` (HS
-    /// `prettyGoal (ChainG c p)` Constraints.hs:275-276).
-    ///
-    /// We capture the time-var names (e.g. `i`, `j` from `#i`/`#j`)
-    /// and the conclusion / premise indices.  The replay matcher
-    /// disambiguates by these idxs and the time-var ROOT name; LVar
-    /// suffix-idxs are intentionally ignored (skeleton-text indices
-    /// differ from runtime LVar indices — same pattern as Action /
-    /// Premise).
-    Chain {
-        src_var: String,
-        conc_idx: u32,
-        tgt_var: String,
-        prem_idx: u32,
-    },
-    /// `<small> ⊏ <big>` — subterm-split goal.  Mirrors HS
-    /// `stSplitGoal` (Theory/Text/Parser/Proof.hs:63-66):
-    /// ```haskell
-    /// stSplitGoal = do
-    ///   a <- try (termp <* opSubterm)
-    ///   b <- termp
-    ///   return $ SubtermG (a, b)
-    /// ```
-    /// and the pretty-printer at Constraints.hs:287-288 emits
-    /// `<term> ⊏ <term>` (U+228F).
-    ///
-    /// We keep both sides as raw text trimmed of outer whitespace; the
-    /// matcher compares against open `Goal::Subterm((l, r))` by canonical
-    /// pretty-printed text equality.
-    Subterm { small_raw: String, big_raw: String },
-    /// `splitEqs(N)` — equation-split goal.  Mirrors HS `eqSplitGoal`
-    /// (Theory/Text/Parser/Proof.hs:70-72):
-    /// ```haskell
-    /// eqSplitGoal = try $ do
-    ///   symbol_ "splitEqs"
-    ///   parens $ (SplitG . SplitId . fromIntegral) <$> natural
-    /// ```
-    /// and the pretty-printer at Constraints.hs:285-286 emits
-    /// `splitEqs(<i64>)`.  The matcher looks up `Goal::Split(SplitId(N))`
-    /// by exact id — split ids are stable identifiers minted by the
-    /// equation store, not subject to LVar-style renaming.
-    Split { split_id: i64 },
-    /// Anything we didn't structurally recognise.  Kept as raw text so
-    /// the walker can choose to either (a) fall back to auto-prover or
-    /// (b) be extended later to handle it.
+    /// `<small> ⊏ <big>` — HS `SubtermG (LNTerm, LNTerm)`.
+    Subterm(Term, Term),
+    /// Goal text neither the goal grammar nor the disjunction splitter
+    /// recognises.  The replay walker falls back to the auto-prover on it.
     Raw(String),
 }
 

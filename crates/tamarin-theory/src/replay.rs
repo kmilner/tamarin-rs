@@ -75,7 +75,7 @@ use crate::constraint::solver::proof_method::{
 };
 use crate::constraint::solver::search::{run_proof_search, NodeStatus, ProofNode};
 use crate::constraint::system::System;
-use crate::fact::{fact_tag_name, FactTag, Multiplicity};
+use crate::fact::fact_tag_name;
 
 /// Drive a single lemma's skeleton.  Equivalent of HS
 /// `runProver (replaceSorryProver (runAutoProver autoProver)) ctxt 0
@@ -139,8 +139,12 @@ fn annotated_sorry(reason: Option<String>, sys: System) -> ProofNode {
 /// where `prf` is the original subtree passed through `noSystemPrf`
 /// (→ unannotated).  Mirrors that: a `Sorry` whose single `""` child is
 /// `parsed_to_unannotated(node, sys)`.
-fn invalid_step_node(node: &ParsedProofTree, sys: System) -> ProofNode {
-    let child = parsed_to_unannotated(node, sys.clone());
+fn invalid_step_node(
+    node: &ParsedProofTree,
+    sys: System,
+    msig: &tamarin_term::maude_sig::MaudeSig,
+) -> ProofNode {
+    let child = parsed_to_unannotated(node, sys.clone(), msig);
     let mut children = BTreeMap::new();
     children.insert("".to_string(), child);
     ProofNode {
@@ -169,13 +173,18 @@ fn invalid_step_node(node: &ParsedProofTree, sys: System) -> ProofNode {
 /// - `Induction`   → `ProofMethod::Induction`
 /// - `Sorry`       → `ProofMethod::Sorry(None)`
 /// - `Contradiction` → `ProofMethod::Finished(Contradictory(None))`
-/// - `SolveGoal(_, raw)` → `ProofMethod::RawSolve(raw)` (display-only)
+/// - `SolveGoal(spec, raw)` → `ProofMethod::SolveGoal(goal)`, or
+///   `ProofMethod::RawSolve(raw)` when `spec` carries no convertible goal
 /// - `SolvedLeaf`  → `ProofMethod::Finished(Solved)`
 /// - `Unfinishable` → `ProofMethod::Finished(Unfinishable)`
 /// - `Invalidated` → `ProofMethod::Invalidated`
 /// - `Other(s)`    → `ProofMethod::Sorry(Some(s))`
-fn parsed_to_unannotated(node: &ParsedProofTree, sys: System) -> ProofNode {
-    let method = parsed_method_to_display(&node.method);
+fn parsed_to_unannotated(
+    node: &ParsedProofTree,
+    sys: System,
+    msig: &tamarin_term::maude_sig::MaudeSig,
+) -> ProofNode {
+    let method = parsed_method_to_display(&node.method, msig);
     let status = match &method {
         ProofMethod::Finished(MethodResult::Contradictory(_)) => NodeStatus::Contradictory,
         ProofMethod::Finished(MethodResult::Solved) => NodeStatus::Solved,
@@ -186,7 +195,7 @@ fn parsed_to_unannotated(node: &ParsedProofTree, sys: System) -> ProofNode {
     let children: BTreeMap<String, ProofNode> = node
         .cases
         .iter()
-        .map(|(name, sub)| (name.clone(), parsed_to_unannotated(sub, sys.clone())))
+        .map(|(name, sub)| (name.clone(), parsed_to_unannotated(sub, sys.clone(), msig)))
         .collect();
     ProofNode {
         method,
@@ -199,13 +208,26 @@ fn parsed_to_unannotated(node: &ParsedProofTree, sys: System) -> ProofNode {
 
 /// Convert a `ParsedMethod` to the best display-only `ProofMethod`.
 /// Used exclusively by `parsed_to_unannotated` — not for exec.
-fn parsed_method_to_display(pm: &ParsedMethod) -> ProofMethod {
+///
+/// A goal the elaborator converts becomes a `SolveGoal`, which
+/// `prettyProofMethod` (ProofMethod.hs:1174-1187) re-renders through
+/// `prettyGoal` exactly as HS's `noSystemPrf` does; the disjunction and
+/// unrecognised forms keep their stored text.
+fn parsed_method_to_display(
+    pm: &ParsedMethod,
+    msig: &tamarin_term::maude_sig::MaudeSig,
+) -> ProofMethod {
     match pm {
         ParsedMethod::Simplify => ProofMethod::Simplify,
         ParsedMethod::Induction => ProofMethod::Induction,
         ParsedMethod::Sorry => ProofMethod::Sorry(None),
         ParsedMethod::Contradiction => ProofMethod::Finished(MethodResult::Contradictory(None)),
-        ParsedMethod::SolveGoal(_, raw) => ProofMethod::RawSolve(raw.clone()),
+        ParsedMethod::SolveGoal(spec, raw) => {
+            match crate::elaborate::goal_from_parsed(spec, msig) {
+                Ok(g) => ProofMethod::SolveGoal(g),
+                Err(_) => ProofMethod::RawSolve(raw.clone()),
+            }
+        }
         ParsedMethod::SolvedLeaf => ProofMethod::Finished(MethodResult::Solved),
         ParsedMethod::Unfinishable => ProofMethod::Finished(MethodResult::Unfinishable),
         ParsedMethod::Invalidated => ProofMethod::Invalidated,
@@ -253,7 +275,7 @@ fn finished_leaf(
         },
         _ => {
             if !auto_prove {
-                invalid_step_node(node, sys)
+                invalid_step_node(node, sys, &ctx.maude.maude_sig())
             } else {
                 run_proof_search(ctx, sys, proof_bound)
             }
@@ -380,7 +402,7 @@ fn replay_node(
             // this by creating a sorry with one child "" → the original
             // ParsedProofTree converted to unannotated ProofNodes.
             if !auto_prove {
-                return invalid_step_node(node, sys);
+                return invalid_step_node(node, sys, &ctx.maude.maude_sig());
             }
             return run_proof_search(ctx, sys, proof_bound);
         }
@@ -469,7 +491,8 @@ fn replay_node(
                 // lemma (extend sorries) and check-only replay keep drifted
                 // cases verbatim.  (KCL07 is a stale-stored-proof theory
                 // that exercises this drifted-case path.)
-                let placeholder = parsed_to_unannotated(sub_tree, sys.clone());
+                let placeholder =
+                    parsed_to_unannotated(sub_tree, sys.clone(), &ctx.maude.maude_sig());
                 children.insert(skel_name.clone(), placeholder);
                 any_sorry = true;
                 if push_path {
@@ -572,15 +595,14 @@ fn replay_node(
 
 /// Resolve a parsed method against `sys` and produce a (method, cases)
 /// pair if possible.  For `SolveGoal(GoalSpec::Raw(_))` (a `solve(...)`
-/// in the skeleton whose inner formula we couldn't structurally parse,
-/// e.g. a disjunction `(a) ∥ (b)` or a subterm `a ⊏ b`), we iterate
-/// over the candidate ProofMethods in heuristic-ranked order (same
-/// list `expand` in search.rs uses) and pick the first one whose
-/// resulting case-set is compatible with the skeleton's child case
-/// names.  This is the closest we can come to HS's behavior without a
-/// full formula→Goal parser: HS parses the formula directly into a
-/// Goal, but if our auto-prover would have picked the same goal in
-/// that state, the case-decomposition matches.
+/// whose goal text neither the goal grammar nor the disjunction splitter
+/// recognises), we iterate over the candidate ProofMethods in
+/// heuristic-ranked order (same list `expand` in search.rs uses) and pick
+/// the first one whose resulting case-set is compatible with the skeleton's
+/// child case names.  This is the closest we can come to HS's behavior
+/// without a Goal value: HS parses the goal directly, but if our
+/// auto-prover would have picked the same goal in that state, the
+/// case-decomposition matches.
 fn exec_method_for(
     parsed: &ParsedMethod,
     sys: &System,
@@ -588,12 +610,8 @@ fn exec_method_for(
     skel_children: &[(String, ParsedProofTree)],
 ) -> Option<(ProofMethod, Vec<(String, System)>)> {
     let dbg = tamarin_utils::env_gate!("TAM_DBG_REPLAY");
-    // The theory's signature, read once for the whole step: the stored-goal
-    // re-parse needs it for a user AC symbol's infix spelling and for the
-    // arity-0 constants.
-    let msig = ctx.maude.maude_sig();
     // Fast path: parsed method resolves directly.
-    if let Some(method) = resolve_method(parsed, sys, &msig) {
+    if let Some(method) = resolve_method(parsed, sys, &ctx.maude.maude_sig()) {
         if let Some(cases) = exec_proof_method(ctx, &method, sys) {
             if dbg {
                 let names: Vec<&str> = cases.iter().map(|(n, _)| n.as_str()).collect();
@@ -617,13 +635,11 @@ fn exec_method_for(
     // Slow path: SolveGoal(GoalSpec::Raw(_)) — iterate candidates and
     // pick the first SolveGoal whose case-set has at least one name in
     // common with the skeleton's child names.  This is HS-faithful in
-    // spirit: HS parses the formula inside `solve(...)` directly to a
-    // Goal value via `goal` (Theory/Text/Parser/Proof.hs:39-72) and
-    // would always find the goal in `sys.goals`; we can't do that for
-    // disjunction / subterm / split goals yet (see GoalSpec::Raw
-    // doc-comment), so we approximate by trusting the heuristic
-    // ranking — for the patterns we hit in the target lemmas, the
-    // top-ranked goal IS the one HS parsed.
+    // spirit: HS parses the goal inside `solve(...)` directly to a Goal
+    // value via `goal` (Theory/Text/Parser/Proof.hs:38-72) and would always
+    // find it in `sys.goals`; a `Raw` goal text has no such value, so we
+    // approximate by trusting the heuristic ranking — for the patterns we
+    // hit in the target lemmas, the top-ranked goal IS the one HS parsed.
     if !matches!(parsed, ParsedMethod::SolveGoal(GoalSpec::Raw(_), _)) {
         return None;
     }
@@ -770,91 +786,6 @@ fn resolve_method(
     }
 }
 
-/// Exact-match a stored-proof fact's argument terms against a runtime
-/// [`LNFact`]'s terms — HS's `M.member` semantics (ProofMethod.hs:253-274, see line 258
-/// `guard (goal `M.member` L.get sGoals sys)`).
-///
-/// HS parses the stored `solve(...)` goal into a full `Goal` carrying
-/// concrete LVar identities (`fact llit`, Theory/Text/Parser/Proof.hs:38-72)
-/// and looks it up by **structural equality** against `sys.goals`; when the
-/// goal is absent from the (drifted) current system `checkProof` returns
-/// `Nothing` and marks the step `sorry /* invalid proof step encountered */`,
-/// keeping the stored subtree verbatim (Theory/Proof.hs:456-467).
-///
-/// Our skeleton parser keeps each fact argument only as raw surface text
-/// (`build_fact` stuffs it into a `Term::Var` name).  We recover the
-/// canonical runtime term by re-parsing that text (`parse_term_str`) and
-/// converting it through the SAME smart constructors the runtime uses
-/// ([`parse_arg_to_lnterm`] → `term_to_lnterm` in elaborate.rs: sorts via
-/// sigil, AC flattened+sorted via `f_app_ac`, pairs right-nested,
-/// unary-builtins folded, `em` as a C-symbol).  Two terms in that canonical
-/// form are equal iff HS's `M.member` would treat the goals as equal, so a
-/// plain `==` is the faithful test.
-///
-/// Exact `==` mirrors HS: a valid replay step's goal is byte-for-byte the
-/// runtime goal (RS reproduces HS's reset indices), so any divergence is
-/// correctly rejected.  A looser sort-aware alpha-equivalence test would
-/// be wrong here — it accepts goals HS rejects, letting a
-/// structurally-distinct same-shape goal bind and re-derive a divergent
-/// subtree.
-///
-/// `msig` is the signature the stored text was rendered against, which the
-/// re-parse needs for a user `[AC]` symbol's infix spelling.
-fn fact_terms_match_exact(
-    parsed_args: &[tamarin_parser::ast::Term],
-    runtime_terms: &[tamarin_term::lterm::LNTerm],
-    msig: &tamarin_term::maude_sig::MaudeSig,
-) -> bool {
-    if parsed_args.len() != runtime_terms.len() {
-        return false;
-    }
-    parsed_args.iter().zip(runtime_terms.iter()).all(|(p, r)| {
-        match parse_arg_to_lnterm(p, msig) {
-            // Canonical re-parse equals the runtime term exactly (M.member).
-            Some(t) => &t == r,
-            // Unparseable / unconvertible arg: we cannot establish exact
-            // equality.  HS always has a concrete parsed term here, so
-            // failing closed (no match) mirrors an `M.member` miss.
-            None => false,
-        }
-    })
-}
-
-/// Re-parse a skeleton fact-argument's raw text into a canonical runtime
-/// [`LNTerm`] (the same representation runtime goals use), for exact `==`
-/// comparison.  `parsed_term_of_arg` recovers the surface AST from the
-/// `Term::Var` name shim; `term_to_lnterm` (elaborate.rs) is HS's
-/// `fact llit` term construction (it reads the live elaboration context for
-/// user function symbols, which is in scope during proof-search replay).
-fn parse_arg_to_lnterm(
-    arg: &tamarin_parser::ast::Term,
-    msig: &tamarin_term::maude_sig::MaudeSig,
-) -> Option<tamarin_term::lterm::LNTerm> {
-    let ast = parsed_term_of_arg(arg, msig)?;
-    crate::elaborate::term_to_lnterm(&ast, msig)
-}
-
-/// Recover a structured AST term from a skeleton fact argument.  The
-/// skeleton parser stores each arg as a `Term::Var` whose `name` holds
-/// the raw surface text (see `build_fact`); re-parse that text.  If the
-/// arg is already structured (future-proofing), return it directly.
-///
-/// `msig` is the signature the stored text was rendered against, which the
-/// re-parse needs to read a user `[AC]` symbol's infix spelling
-/// (`(z add h(y))` for `functions: add/2 [AC]`) — HS's `acterm` takes the
-/// same set from the parser state's signature
-/// (Theory/Text/Parser/Term.hs:165-174).
-fn parsed_term_of_arg(
-    arg: &tamarin_parser::ast::Term,
-    msig: &tamarin_term::maude_sig::MaudeSig,
-) -> Option<tamarin_parser::ast::Term> {
-    use tamarin_parser::ast::Term as PTerm;
-    match arg {
-        PTerm::Var(v) => tamarin_parser::parser::parse_term_str(&v.name, msig).ok(),
-        other => Some(other.clone()),
-    }
-}
-
 /// The OPEN goals of `sys`, in `sGoals` creation order — the search space
 /// every [`match_goal`] arm ranges over, mirroring HS's `M.member`/`M.toList`
 /// over `sGoals`.
@@ -867,99 +798,35 @@ fn open_goals(sys: &System) -> impl Iterator<Item = &Goal> {
 
 /// Find a [`Goal`] in `sys.goals` that matches the parsed [`GoalSpec`].
 ///
-/// HS looks the goal up by structural equality on the parsed `Goal` value
-/// itself (`Theory.Text.Parser.Proof.goal`,
-/// Theory/Text/Parser/Proof.hs:38-72), whose LVar
-/// identities come from the parser's name table.  RS's skeleton parser keeps
-/// only surface text, so each arm rebuilds as much of that equality as its
-/// goal kind allows: the fact-bearing kinds re-parse the stored terms and
-/// compare them exactly ([`fact_terms_match_exact`]), the rest compare
-/// canonicalised rendered text or a stable id.
+/// HS parses the `solve( ... )` text straight into a `Goal` value
+/// (`goal`, Theory/Text/Parser/Proof.hs:38-72) and looks it up with
+/// `guard (goal `M.member` L.get sGoals sys)` (ProofMethod.hs:253-258), i.e.
+/// by structural equality.  The five forms `elaborate::goal_from_parsed`
+/// converts are matched that way here.  A disjunction reaches this function
+/// as the shape-and-text signature the goal text yields, so its arm below
+/// stands in for that equality.
+///
+/// [`open_goals`] skips goals already marked solved, which is the one place
+/// this lookup ranges over less than HS's `sGoals`.
 ///
 /// `None` means the stored step names a goal this system does not have.  For
 /// every kind handled here `exec_method_for` then gives up (its raw-solve
 /// fallback is reserved for [`GoalSpec::Raw`]), and the caller emits
 /// `sorry /* invalid proof step encountered */` over the verbatim stored
 /// subtree — HS `checkProof`'s `Nothing` branch (Theory/Proof.hs:456-467).
-///
-/// `msig` reaches the term re-parses through [`fact_terms_match_exact`].
 fn match_goal(
     spec: &GoalSpec,
     sys: &System,
     msig: &tamarin_term::maude_sig::MaudeSig,
 ) -> Option<Goal> {
     match spec {
-        GoalSpec::Action {
-            fact,
-            time_var,
-            time_idx,
-            ..
-        } => {
-            // HS's parsed `ActionG i fa` matches by structural equality
-            // against a key of `sGoals` (ProofMethod.hs:253-274, see line
-            // 258, `goal `M.member` sGoals`), so the conjuncts below are one
-            // `M.member` test split into the three things RS can check:
-            //
-            // * (name, arity, persistent) — the fact SHAPE.  Skip KU goals
-            //   (auto-handled) unless the spec itself names `KU`: the
-            //   skeleton usually names protocol facts, but it may explicitly
-            //   solve a `!KU( t ) @ #i` (noise secrecy proofs do), and a
-            //   non-KU spec must not spuriously bind a KU goal of matching
-            //   arity.
-            // * `fact_terms_match_exact` — the TERMS.  Shape alone is not
-            //   enough: a stale stored `!KU( ~r1 )` must not bind a present
-            //   `!KU( h(...) )`, which would re-derive the wrong goal and
-            //   cascade into a divergent subtree.
-            // * the FULL timepoint LVar, name AND idx.  A stored step whose
-            //   idx has drifted from the re-executed system's (stored
-            //   `!KU(~e0)@#vk.17` vs a re-minted `#vk.18` after upstream
-            //   case-numbering changed) is a `M.member` miss in HS.  Root
-            //   name alone is too lenient — it re-binds the drifted goal and
-            //   replays it as a live step.
-            //
-            // `sGoals` is keyed by `Goal`, so at most one open goal can
-            // satisfy all three.
-            let want_ku = fact.name == "KU";
-            open_goals(sys)
-                .find(|g| match g {
-                    Goal::Action(i, fa) => {
-                        name_matches(&fa.tag, &fact.name)
-                            && fa.terms.len() == fact.args.len()
-                            && tag_persistent(&fa.tag) == fact.persistent
-                            && (want_ku || !matches!(fa.tag, FactTag::Ku))
-                            && fact_terms_match_exact(&fact.args, &fa.terms, msig)
-                            && *i.name == **time_var
-                            && i.idx == *time_idx as u64
-                    }
-                    _ => false,
-                })
-                .cloned()
-        }
-        GoalSpec::Premise {
-            fact,
-            prem_idx,
-            time_var,
-            time_idx,
-            ..
-        } => {
-            // `PremiseG (i, v) fa` under the same one-`M.member`-test-split-
-            // in-three reading as the Action arm above (shape, then exact
-            // terms, then the FULL node LVar); the extra conjunct is the
-            // `PremIdx v`.
-            open_goals(sys)
-                .find(|g| match g {
-                    Goal::Premise((node, prem), fa) => {
-                        name_matches(&fa.tag, &fact.name)
-                            && fa.terms.len() == fact.args.len()
-                            && tag_persistent(&fa.tag) == fact.persistent
-                            && prem.0 == *prem_idx
-                            && fact_terms_match_exact(&fact.args, &fa.terms, msig)
-                            && *node.name == **time_var
-                            && node.idx == *time_idx as u64
-                    }
-                    _ => false,
-                })
-                .cloned()
+        GoalSpec::Action(..)
+        | GoalSpec::Chain(..)
+        | GoalSpec::Premise(..)
+        | GoalSpec::Split(_)
+        | GoalSpec::Subterm(..) => {
+            let stored = crate::elaborate::goal_from_parsed(spec, msig).ok()?;
+            open_goals(sys).find(|g| **g == stored).cloned()
         }
         GoalSpec::Disj { alts, alt_texts } => {
             // HS-faithful: HS parses the `solve(...)` text into a
@@ -1059,147 +926,11 @@ fn match_goal(
                 }
             }
             // No alt rendered as stored (or no text info) — fall back to
-            // source order (creation order in `sGoals`).  Mirrors the
-            // Action/Premise ambiguity-resolution policy above.
+            // source order (creation order in `sGoals`).
             Some(shape_matches[0].clone())
-        }
-        GoalSpec::Chain {
-            src_var,
-            conc_idx,
-            tgt_var,
-            prem_idx,
-        } => {
-            // HS dispatch: `solve( (#i, n) ~~> (#j, m) )` parses to
-            // `ChainG (i, ConcIdx n) (j, PremIdx m)`
-            // (Theory/Text/Parser/Proof.hs:59) and
-            // matches by structural equality against an open
-            // `Goal::Chain(...)` in `sys.goals` (HS ProofMethod.hs:258:
-            // `goal `M.member` sGoals`).  HS's open chain-goal carries
-            // concrete LVar identities — same skeleton-vs-runtime LVar
-            // suffix-idx mismatch as Action/Premise.  We match by var
-            // ROOT name + conc/prem idx, ignoring suffix idxs.
-            open_goals(sys)
-                .find(|g| match g {
-                    Goal::Chain((src, c), (tgt, p)) => {
-                        *src.name == **src_var
-                            && *tgt.name == **tgt_var
-                            && c.0 == *conc_idx as usize
-                            && p.0 == *prem_idx as usize
-                    }
-                    _ => false,
-                })
-                .cloned()
-        }
-        GoalSpec::Subterm { small_raw, big_raw } => {
-            // HS `stSplitGoal` (Theory/Text/Parser/Proof.hs:63-66) parses to
-            // `SubtermG (small, big)` over LNTerm and dispatches via
-            // structural Map lookup in `sys.goals` (HS ProofMethod.hs:253-274, see line 258).
-            // We compare by canonical pretty-printed text — see HS
-            // `prettyGoal (SubtermG (l,r))` at Constraints.hs:287-288
-            // which prints `prettyLNTerm l ⊏ prettyLNTerm r`.  Pretty
-            // representations are stable across the skeleton-vs-runtime
-            // boundary for ground terms; for terms containing free
-            // LVars the skeleton-text and runtime indices may diverge,
-            // so as a fallback we accept the sole open Subterm goal when
-            // there is exactly one.
-            use tamarin_term::pretty::pretty_lnterm;
-            let want_small = canonicalise_term_text(small_raw);
-            let want_big = canonicalise_term_text(big_raw);
-            let by_text = open_goals(sys)
-                .find(|g| match g {
-                    Goal::Subterm((l, r)) => {
-                        canonicalise_term_text(&pretty_lnterm(l)) == want_small
-                            && canonicalise_term_text(&pretty_lnterm(r)) == want_big
-                    }
-                    _ => false,
-                })
-                .cloned();
-            if by_text.is_some() {
-                return by_text;
-            }
-            // Fallback: if exactly one open Subterm goal exists, use
-            // it (the skeleton text uniquely identifies it by being
-            // the only Subterm in `sys.goals`).
-            let mut subterms = open_goals(sys).filter(|g| matches!(g, Goal::Subterm(_)));
-            let first = subterms.next();
-            match subterms.next() {
-                None => first.cloned(),
-                Some(_) => None,
-            }
-        }
-        GoalSpec::Split { split_id } => {
-            // HS `eqSplitGoal` (Theory/Text/Parser/Proof.hs:70-72) parses to
-            // `SplitG (SplitId N)` and dispatches via structural Map
-            // lookup in `sys.goals`.  Split ids are stable (minted by
-            // `EquationStore::add_disj`), so an exact id-match is
-            // correct here — no variable-renaming concerns.
-            let want = crate::constraint::constraints::SplitId(*split_id);
-            open_goals(sys)
-                .find(|g| matches!(g, Goal::Split(id) if *id == want))
-                .cloned()
         }
         GoalSpec::Raw(_) => None,
     }
-}
-
-/// Normalise spaces in a pretty-printed term/text fragment so that
-/// equality between skeleton-text and runtime-pretty doesn't fail on
-/// whitespace differences (HS's `fsep`/`PrettyPrint` and our
-/// `pretty_lnterm` produce slightly different spacing around commas
-/// and operators).  Collapses any run of ASCII whitespace into a single
-/// space and trims.
-///
-/// Additionally removes whitespace that sits *immediately inside* a
-/// bracket / paren delimiter — i.e. directly after `<`, `(` or directly
-/// before `>`, `)`.  The skeleton text comes from the STORED proof,
-/// whose `solve(...)` terms are pretty-printed by HughesPJ with line
-/// wrapping: a pair `<a, b>` that overflows the ribbon wraps to
-/// `<\n        a,\n        b\n      >`, and after the whitespace-collapse
-/// above that becomes `< a, b >`.  The runtime `render_lnterm` renders
-/// the same term un-wrapped as `<a, b>` (no inner space).  Without this
-/// extra normalisation the two strings differ only by those wrap-induced
-/// `< `/` >`/`( `/` )` spaces, the term-text disambiguation in
-/// `match_goal` returns 0 matches, and the fallback time-var tie-break
-/// then mis-selects the smallest-idx `#vk` knowledge goal (e.g.
-/// `!KU($USR)`) in place of the skeleton's intended `!KU(hmac(...))`.
-/// The spacing is purely cosmetic (it only ever arises from wrapping),
-/// so stripping it is structure-preserving and HS-faithful.
-fn canonicalise_term_text(s: &str) -> String {
-    // Pass 1: collapse runs of ASCII whitespace to a single space, trim.
-    let mut collapsed = String::with_capacity(s.len());
-    let mut last_ws = true; // suppress leading whitespace
-    for c in s.chars() {
-        if c.is_whitespace() {
-            if !last_ws {
-                collapsed.push(' ');
-                last_ws = true;
-            }
-        } else {
-            collapsed.push(c);
-            last_ws = false;
-        }
-    }
-    if collapsed.ends_with(' ') {
-        collapsed.pop();
-    }
-    // Pass 2: drop a space that immediately follows `<`/`(` (opening
-    // delimiter) or immediately precedes `>`/`)` (closing delimiter).
-    let chars: Vec<char> = collapsed.chars().collect();
-    let mut out = String::with_capacity(chars.len());
-    let mut prev: Option<char> = None;
-    for (idx, &c) in chars.iter().enumerate() {
-        if c == ' ' {
-            if matches!(prev, Some('<') | Some('(')) {
-                continue; // space right after an opening delimiter
-            }
-            if matches!(chars.get(idx + 1), Some('>') | Some(')')) {
-                continue; // space right before a closing delimiter
-            }
-        }
-        out.push(c);
-        prev = Some(c);
-    }
-    out
 }
 
 /// Compare the skeleton's per-alt signature against an open
@@ -1282,21 +1013,6 @@ fn disj_alt_shape_matches(skel: &DisjAlt, g: &crate::guarded::Guarded) -> bool {
         | (DisjAlt::NonQuant, Guarded::Disj(_)) => true,
         _ => false,
     }
-}
-
-fn name_matches(tag: &FactTag, want: &str) -> bool {
-    fact_tag_name(tag) == want
-}
-
-fn tag_persistent(tag: &FactTag) -> bool {
-    // `KU`/`KD` knowledge facts are persistent (Theory/Model/Fact.hs:383-388;
-    // `factTagMultiplicity` → Persistent), and the skeleton pretty-prints
-    // them with the `!` prefix (e.g. `solve( !KU( ~n ) @ #vk )`), so the
-    // parsed spec's `persistent` flag is `true` and must match here.
-    matches!(
-        tag,
-        FactTag::Proto(Multiplicity::Persistent, _, _) | FactTag::Ku | FactTag::Kd
-    )
 }
 
 #[cfg(test)]

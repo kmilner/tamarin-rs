@@ -241,13 +241,16 @@ fn corpus_stored_proof_census() {
     assert_eq!(regular.other, 0, "regular lemmas with an unknown method");
     // No stored goal of a regular lemma is a subterm split.
     assert_eq!(regular.subterm, 0, "stored subterm goals");
+    // Every stored goal of a regular lemma is one the goal grammar or the
+    // disjunction splitter recognises; a `Raw` goal sends its step to the
+    // ranked-candidate slow path of `replay::exec_method_for`.
+    assert_eq!(regular.raw, 0, "unrecognised stored goals");
     for (kind, n) in [
         ("action", regular.action),
         ("premise", regular.premise),
         ("chain", regular.chain),
         ("split", regular.split),
         ("disj", regular.disj),
-        ("raw", regular.raw),
     ] {
         assert!(n > 0, "no stored {kind} goal to exercise");
     }

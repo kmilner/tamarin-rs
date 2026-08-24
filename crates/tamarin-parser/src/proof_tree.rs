@@ -24,13 +24,16 @@
 //! ```
 //!
 //! See [`crate::ast::ParsedProofTree`] / [`crate::ast::ParsedMethod`]
-//! for the shape of the structured output.  Anything we can't
-//! recognise structurally (rare proof-method tokens, unusual goal
-//! formulas) is captured in `Other(text)` / `GoalSpec::Raw(text)` so
-//! the replay walker can fall back to the auto-prover.
+//! for the shape of the structured output; the `goal` inside a
+//! `solve( ... )` step is read by [`crate::parser::parse_goal_str`].
+//! Anything we can't recognise structurally (rare proof-method tokens,
+//! unusual goal formulas) is captured in `Other(text)` /
+//! `GoalSpec::Raw(text)` so the replay walker can fall back to the
+//! auto-prover.
 
-use crate::ast::{DisjAlt, Fact, GoalSpec, ParsedMethod, ParsedProofTree};
+use crate::ast::{DisjAlt, GoalSpec, ParsedMethod, ParsedProofTree};
 use crate::lexer::{is_ident_char, Lexer};
+use crate::parser::Parser;
 
 #[derive(Debug, Clone)]
 pub struct ProofTreeParseError {
@@ -55,9 +58,18 @@ impl std::error::Error for ProofTreeParseError {}
 /// caller (parser.rs `try_proof_skeleton`) downgrades the failure to
 /// `tree: None` so the lemma is at least readable, and replay falls
 /// back to auto-prover at the top.
-pub fn parse_proof_tree(raw: &str) -> Result<ParsedProofTree, ProofTreeParseError> {
+///
+/// `parent` is the theory parser the skeleton text came out of, whose symbol
+/// state [`crate::parser::parse_goal_str`] needs to read the goal inside a
+/// `solve( ... )` step; HS's proof parser runs inside the theory parser and
+/// reads the same state (Theory/Text/Parser/Proof.hs:38-72).
+pub fn parse_proof_tree<'a>(
+    raw: &'a str,
+    parent: &'a Parser<'a>,
+) -> Result<ParsedProofTree, ProofTreeParseError> {
     let mut p = TreeParser {
         lx: Lexer::new(raw),
+        parent,
     };
     let tree = p.proof_skeleton()?;
     // Any trailing junk is tolerated — likely the outer `qed` from a
@@ -67,40 +79,9 @@ pub fn parse_proof_tree(raw: &str) -> Result<ParsedProofTree, ProofTreeParseErro
     Ok(tree)
 }
 
-/// Read raw text between an already-consumed `(` and its matching `)`,
-/// accounting for nested parens.  Returns the inner text (excluding the final
-/// `)`, which is consumed), or `None` on EOF before the closing paren.
-fn read_balanced_paren(lx: &mut Lexer<'_>) -> Option<String> {
-    let mut s = String::new();
-    let mut depth: i32 = 1;
-    while depth > 0 {
-        match lx.peek() {
-            None => return None,
-            Some('(') => {
-                s.push('(');
-                lx.bump();
-                depth += 1;
-            }
-            Some(')') => {
-                depth -= 1;
-                if depth == 0 {
-                    lx.bump();
-                    break;
-                }
-                s.push(')');
-                lx.bump();
-            }
-            Some(c) => {
-                s.push(c);
-                lx.bump();
-            }
-        }
-    }
-    Some(s)
-}
-
 struct TreeParser<'a> {
     lx: Lexer<'a>,
+    parent: &'a Parser<'a>,
 }
 
 impl<'a> TreeParser<'a> {
@@ -206,13 +187,15 @@ impl<'a> TreeParser<'a> {
         // Theory/Text/Parser/Proof.hs:102-103) — see the
         // `SOLVED` branch of `proof_skeleton`.
         if self.try_kw("solve") {
-            // `solve( <goal-text> )`.  HS parses an inner `goal`; we
-            // capture the parenthesised text verbatim and best-effort
-            // structural parse it.
+            // `solve( <goal-text> )`.  HS parses an inner `goal`
+            // (Theory/Text/Parser/Proof.hs:80); we frame the parenthesised
+            // text and hand it to the same grammar, keeping the text for the
+            // forms [`parse_goal_spec`] still recognises.
             self.require_punct("(")?;
             let inner = self.read_balanced_paren()?;
             // `read_balanced_paren` consumed the matching `)`.
-            let spec = parse_goal_spec(&inner);
+            let spec = crate::parser::parse_goal_str(&inner, self.parent)
+                .unwrap_or_else(|_| parse_goal_spec(&inner));
             return Ok(ParsedMethod::SolveGoal(spec, inner));
         }
         // Unrecognised token — capture the next identifier-like word
@@ -292,7 +275,32 @@ impl<'a> TreeParser<'a> {
     /// `)`, accounting for nested parens.  Returns the inner text
     /// (excluding the final `)` which is consumed).
     fn read_balanced_paren(&mut self) -> Result<String, ProofTreeParseError> {
-        read_balanced_paren(&mut self.lx).ok_or_else(|| self.err("unterminated `(` in solve(...)"))
+        let mut s = String::new();
+        let mut depth: i32 = 1;
+        while depth > 0 {
+            match self.lx.peek() {
+                None => return Err(self.err("unterminated `(` in solve(...)")),
+                Some('(') => {
+                    s.push('(');
+                    self.lx.bump();
+                    depth += 1;
+                }
+                Some(')') => {
+                    depth -= 1;
+                    if depth == 0 {
+                        self.lx.bump();
+                        break;
+                    }
+                    s.push(')');
+                    self.lx.bump();
+                }
+                Some(c) => {
+                    s.push(c);
+                    self.lx.bump();
+                }
+            }
+        }
+        Ok(s)
     }
 }
 
@@ -300,90 +308,35 @@ impl<'a> TreeParser<'a> {
 // Goal-spec parser
 // =============================================================================
 
-/// Best-effort parse of the text inside `solve( ... )`.  Mirrors HS
-/// `goal` (Theory/Text/Parser/Proof.hs:38-72):
+/// Classify a `solve( ... )` goal text that [`crate::parser::parse_goal_str`]
+/// does not accept.
 ///
-/// ```haskell
-/// goal = asum
-///   [ stSplitGoal, premiseGoal, actionGoal,
-///     chainGoal, disjSplitGoal, eqSplitGoal ]
-/// ```
-///
-/// We structurally recognise (in the order the code tries them) Action
-/// (`Fact(...) @ #t`), Premise (`Fact(...) ▶<n> #t`), Disj
-/// (`gf1 ∥ gf2 ∥ ...` — HS `disjSplitGoal`,
-/// Theory/Text/Parser/Proof.hs:39-72, see line 61), Chain
-/// (`(#i,n) ~~> (#j,m)` — HS `chainGoal`,
-/// Theory/Text/Parser/Proof.hs:39-72, see line 59), Split
-/// (`splitEqs(N)` — HS `eqSplitGoal`, Theory/Text/Parser/Proof.hs:70-72),
-/// then Subterm
-/// (`<a> ⊏ <b>` — HS `stSplitGoal`, Theory/Text/Parser/Proof.hs:63-66).
-/// Anything else
-/// lands in `GoalSpec::Raw` and the walker falls back to the
-/// auto-prover.
+/// HS `disjSplitGoal = (DisjG . Disj) <$> sepBy1 guardedFormula (symbol "∥")`
+/// (Theory/Text/Parser/Proof.hs:61) parses each disjunct into a `Guarded`
+/// value; here each disjunct contributes its top-level shape and its
+/// normalised text, which the replay matcher uses in place of those values.
+/// Text that carries no top-level `∥` is kept verbatim in
+/// [`GoalSpec::Raw`] and the replay walker falls back to the auto-prover.
 pub fn parse_goal_spec(raw: &str) -> GoalSpec {
     let trimmed = raw.trim();
-    let mut p = GoalParser {
-        lx: Lexer::new(trimmed),
-    };
-    if let Some(spec) = p.try_action_or_premise() {
-        return spec;
-    }
-    if let Some(spec) = try_disj_split(trimmed) {
-        return spec;
-    }
-    if let Some(spec) = try_chain_split(trimmed) {
-        return spec;
-    }
-    if let Some(spec) = try_eq_split(trimmed) {
-        return spec;
-    }
-    if let Some(spec) = try_subterm_split(trimmed) {
-        return spec;
-    }
-    GoalSpec::Raw(trimmed.to_string())
-}
-
-/// Try to split the goal-spec text on top-level `∥` (HS U+2225, the
-/// disjunction-split separator).  Returns `GoalSpec::Disj { alts }` if
-/// at least one `∥` appears at top-level (depth-0 of `()/[]/<>/{}`),
-/// classifying each disjunct by its shape (`∀ / ∃ / NonQuant`).
-///
-/// Mirrors HS `disjSplitGoal = (DisjG . Disj) <$> sepBy1 guardedFormula
-/// (symbol "∥")` (Theory/Text/Parser/Proof.hs:39-72, see line 61).  HS parses each
-/// disjunct as a full `Guarded` value — we capture only the shape so
-/// we can match against an existing `Goal::Disj` in `sys.goals` at
-/// replay time without rebuilding LVar identities.
-fn try_disj_split(text: &str) -> Option<GoalSpec> {
-    let parts = split_top_level_disj(text);
+    let parts = split_top_level_disj(trimmed);
     if parts.len() < 2 {
-        // HS `disjSplitGoal` uses `sepBy1`, so a lone `guardedFormula`
-        // (no `∥`) would parse as a single-disjunct `DisjG (Disj [gf])`.
-        // That degenerate goal is never emitted as an actionable goal by
-        // the solver (DisjG goals arise from case-splits with >=2
-        // disjuncts), so it is unreachable in printed proofs.  The `>= 2`
-        // guard is also needed to avoid mis-classifying every non-disj
-        // goal text as a 1-alt Disj — single-part text intentionally
-        // falls through to chain/eq/subterm and finally `GoalSpec::Raw`,
-        // which replays via the auto-prover.
-        return None;
+        // `sepBy1` would read a lone `guardedFormula` as a one-disjunct
+        // `DisjG (Disj [gf])`.  The solver mints a `DisjG` goal only from a
+        // case split with two or more disjuncts, so that degenerate goal is
+        // never printed; requiring `∥` also keeps every other unrecognised
+        // goal text out of the `Disj` classification.
+        return GoalSpec::Raw(trimmed.to_string());
     }
     let alts: Vec<DisjAlt> = parts.iter().map(|p| classify_disj_alt(p)).collect();
-    // HS-faithful disambiguation: when multiple Disj goals in
-    // sys.goals share the same alt shape signature (e.g. binding-A
-    // and binding-B instantiations of the same IH-body 5-alt disj),
-    // the shape-only `disj_alts_match` can't distinguish them.  HS
-    // parses each alt as a full `Guarded` with concrete LVar
-    // identities (Theory/Text/Parser/Proof.hs:39-72, see line 61), enabling
-    // structural match in
-    // sys.goals.  We can't easily reconstruct those identities, but
-    // we CAN capture each alt's normalized text and use it as a
-    // tie-breaker when shape matching is ambiguous.  See
-    // Yubikey::slightly_weaker_invariant at
-    // /non_empty_trace/case_1: both binding-A's disj (alt[0] =
-    // `last(#t2)`) and binding-B's (alt[0] = `last(#t1)`) match the
-    // 5-alt NonQuant shape; without alt-text matching, match_goal
-    // picks the wrong one and the proof diverges.
+    // The shape signature alone does not separate two `DisjG` goals that the
+    // insertImpliedFormulas pass minted at one induction hypothesis: they
+    // share their alt count and every per-alt shape.  HS separates them by
+    // the concrete LVar identities inside each parsed `Guarded`; the
+    // normalised alt text carries the same distinction across the
+    // skeleton-vs-runtime boundary.  Yubikey::slightly_weaker_invariant at
+    // /non_empty_trace/case_1 is the case: alt[0] is `last(#t2)` in one and
+    // `last(#t1)` in the other.
     let alt_texts: Vec<String> = parts
         .iter()
         .map(|p| {
@@ -391,7 +344,7 @@ fn try_disj_split(text: &str) -> Option<GoalSpec> {
             normalize_disj_alt_text(&s)
         })
         .collect();
-    Some(GoalSpec::Disj { alts, alt_texts })
+    GoalSpec::Disj { alts, alt_texts }
 }
 
 /// Normalize a disj-alt's text for cross-renderer comparison.  Both
@@ -530,310 +483,6 @@ fn count_quant_vars(after_qua: &str) -> usize {
         }
     }
     n
-}
-
-/// Try to parse a chain-split goal-text: `(#i, N) ~~> (#j, M)`.
-///
-/// HS reference: `chainGoal = ChainG <$> (try (nodeConc <* opChain))
-/// <*> nodePrem` (Theory/Text/Parser/Proof.hs:39-72, see line 59) where
-/// `nodeConc/nodePrem = parens ((,) <$> nodevar <*> (comma *> natural))`
-/// (Theory/Text/Parser/Proof.hs:29-31,34-36).  The operator `~~>` is the HS
-/// pretty rendering
-/// (Constraints.hs:275-276).
-///
-/// We extract the time-var ROOT name (stripping any trailing `.N`
-/// freshen-suffix that HS's pretty-printer can emit) and the natural
-/// idx for each side.  The matcher disambiguates by these.
-fn try_chain_split(text: &str) -> Option<GoalSpec> {
-    // Find the top-level `~~>` separator.  HS prints exactly `~~>`
-    // (operator_ "~~>" inside fsep) so a plain substring search suffices
-    // — we only need to ensure we're at depth 0 of `()/[]/{}` to skip
-    // any `~~>` that hypothetically appeared inside a tuple (none do in
-    // practice but we are defensive).
-    let arrow_pos = find_top_level_substr(text, "~~>")?;
-    let lhs = text[..arrow_pos].trim();
-    let rhs = text[arrow_pos + 3..].trim();
-    let (src_var, conc_idx) = parse_node_idx_pair(lhs)?;
-    let (tgt_var, prem_idx) = parse_node_idx_pair(rhs)?;
-    Some(GoalSpec::Chain {
-        src_var,
-        conc_idx,
-        tgt_var,
-        prem_idx,
-    })
-}
-
-/// Try to parse a subterm-split goal-text: `<small> ⊏ <big>` (U+228F).
-///
-/// HS reference: `stSplitGoal` (Theory/Text/Parser/Proof.hs:63-66)
-/// parses `try (termp <* opSubterm) >>= ...`, where `opSubterm` is the
-/// `⊏` operator (renderer at Constraints.hs:287-288).
-///
-/// We split on the FIRST top-level `⊏` and trim both sides.  The text
-/// is kept raw — the matcher canonicalises against the runtime
-/// `Goal::Subterm((l, r))` pretty-print at match time.
-fn try_subterm_split(text: &str) -> Option<GoalSpec> {
-    const SUBTERM_OP: char = '\u{228F}';
-    let pos = find_top_level_char(text, SUBTERM_OP)?;
-    let small_raw = text[..pos].trim().to_string();
-    let big_raw = text[pos + SUBTERM_OP.len_utf8()..].trim().to_string();
-    if small_raw.is_empty() || big_raw.is_empty() {
-        return None;
-    }
-    Some(GoalSpec::Subterm { small_raw, big_raw })
-}
-
-/// Try to parse an equation-split goal-text: `splitEqs(N)`.
-///
-/// HS reference: `eqSplitGoal = try $ do { symbol_ "splitEqs"; parens
-/// $ (SplitG . SplitId . fromIntegral) <$> natural }`
-/// (Theory/Text/Parser/Proof.hs:70-72).  Pretty-printer:
-/// `text "splitEqs" <> parens (text $ show (unSplitId x))`
-/// (Constraints.hs:279-280).
-fn try_eq_split(text: &str) -> Option<GoalSpec> {
-    let s = text.trim_start();
-    let rest = s.strip_prefix("splitEqs")?.trim_start();
-    let rest = rest.strip_prefix('(')?.trim_start();
-    // Read decimal digits.
-    let mut end = 0usize;
-    let bs = rest.as_bytes();
-    while end < bs.len() && bs[end].is_ascii_digit() {
-        end += 1;
-    }
-    if end == 0 {
-        return None;
-    }
-    let n: i64 = rest[..end].parse().ok()?;
-    let tail = rest[end..].trim_start();
-    if !tail.starts_with(')') {
-        return None;
-    }
-    Some(GoalSpec::Split { split_id: n })
-}
-
-/// Locate the byte-offset of the first occurrence of `needle` at
-/// top-level depth (depth 0 of `()/[]/{}`).  Returns `None` if absent.
-fn find_top_level_substr(s: &str, needle: &str) -> Option<usize> {
-    let bs = s.as_bytes();
-    let nb = needle.as_bytes();
-    if nb.is_empty() || bs.len() < nb.len() {
-        return None;
-    }
-    let mut depth: i32 = 0;
-    let mut i = 0;
-    while i + nb.len() <= bs.len() {
-        let c = bs[i];
-        if c == b'(' || c == b'[' || c == b'{' {
-            depth += 1;
-        } else if c == b')' || c == b']' || c == b'}' {
-            depth -= 1;
-        } else if depth == 0 && &bs[i..i + nb.len()] == nb {
-            return Some(i);
-        }
-        i += 1;
-    }
-    None
-}
-
-/// Same as [`find_top_level_substr`] but for a single (possibly
-/// multi-byte) `char`.
-fn find_top_level_char(s: &str, needle: char) -> Option<usize> {
-    let mut depth: i32 = 0;
-    for (i, c) in s.char_indices() {
-        match c {
-            '(' | '[' | '{' => depth += 1,
-            ')' | ']' | '}' => depth -= 1,
-            _ if c == needle && depth == 0 => return Some(i),
-            _ => {}
-        }
-    }
-    None
-}
-
-/// Parse a `(#name[.idx], N)` (or `(name[.idx], N)`) pair as used by
-/// HS `nodeConc / nodePrem` (Theory/Text/Parser/Proof.hs:29-31,34-36).
-/// Returns the time-var
-/// ROOT name (stripping any `.idx` freshen suffix) plus the natural N.
-fn parse_node_idx_pair(s: &str) -> Option<(String, u32)> {
-    let trimmed = s.trim();
-    let inside = trimmed.strip_prefix('(')?.strip_suffix(')')?.trim();
-    // Split into name-side / number-side on the first top-level `,`.
-    let comma = inside.find(',')?;
-    let name_part = inside[..comma].trim();
-    let num_part = inside[comma + 1..].trim();
-    // Strip optional `#` prefix; capture identifier-like characters up
-    // to (but not including) any `.` (freshen suffix) or whitespace.
-    let name_no_hash = name_part.strip_prefix('#').unwrap_or(name_part).trim();
-    let mut end = name_no_hash.len();
-    for (i, c) in name_no_hash.char_indices() {
-        if c == '.' || c.is_whitespace() {
-            end = i;
-            break;
-        }
-        if !is_ident_char(c) {
-            return None;
-        }
-    }
-    let var_name = name_no_hash[..end].to_string();
-    if var_name.is_empty() {
-        return None;
-    }
-    let idx: u32 = num_part.parse().ok()?;
-    Some((var_name, idx))
-}
-
-struct GoalParser<'a> {
-    lx: Lexer<'a>,
-}
-
-impl<'a> GoalParser<'a> {
-    /// Try to match `[!]Name( <args> ) @ #t`  or
-    /// `[!]Name( <args> ) ▶<idx> #t`.
-    fn try_action_or_premise(&mut self) -> Option<GoalSpec> {
-        let save = self.lx.pos();
-        // Optional `!` prefix for persistent facts.
-        self.lx.skip_ws();
-        let persistent = self.lx.eat_str("!");
-        self.lx.skip_ws();
-        // Fact name: starts with uppercase.
-        let name = self.lx.identifier()?;
-        if !name.chars().next().is_some_and(|c| c.is_ascii_uppercase()) {
-            self.lx.set_pos(save);
-            return None;
-        }
-        self.lx.skip_ws();
-        if !self.lx.eat_str("(") {
-            self.lx.set_pos(save);
-            return None;
-        }
-        // Read the args as raw balanced-paren text here (we don't deeply
-        // parse the terms). `build_fact` later splits on top-level commas
-        // and wraps each arg as `crate::ast::Term::Var` so the Fact struct
-        // is well-formed.
-        let args_text = self.read_balanced_paren()?;
-        // After the `)`, expect `@` (action) or `▶<digit>` (premise).
-        self.lx.skip_ws();
-        if self.lx.eat_str("@") {
-            self.lx.skip_ws();
-            // Time variable: `#name[.idx]`.
-            let _hash = self.lx.eat_str("#");
-            let tvar = match self.lx.identifier() {
-                Some(s) => s,
-                None => {
-                    self.lx.set_pos(save);
-                    return None;
-                }
-            };
-            // Capture `.idx` if present (HS's `ActionG i fa` keeps the
-            // full timepoint LVar incl. idx — needed to re-render the head
-            // as `#vk.6` not `#vk`, and for exact goal matching).
-            let tidx = if self.lx.eat_str(".") {
-                self.lx.natural().unwrap_or(0) as u32
-            } else {
-                0
-            };
-            return Some(GoalSpec::Action {
-                fact: build_fact(persistent, name, &args_text),
-                time_var: tvar,
-                time_idx: tidx,
-            });
-        }
-        // Premise marker: `▶<digit>` — UTF-8 ▶ is `\u{25B6}`, the
-        // subscript digit follows.
-        if self.lx.rest().starts_with('\u{25B6}') {
-            // consume the ▶ (a single Unicode scalar)
-            self.lx.bump();
-            // HS always emits a Unicode subscript here: the pretty-printer
-            // prints `▶ ++ subscript (show v)` (Constraints.hs:273-288) and the
-            // parser `opRequires = symbol "▶" *> naturalSubscript`
-            // (Token.hs:618-619, see line 619) accepts ONLY subscript digits.
-            let idx_val = self.lx.natural_subscript()?;
-            self.lx.skip_ws();
-            let _hash = self.lx.eat_str("#");
-            let tvar = match self.lx.identifier() {
-                Some(s) => s,
-                None => {
-                    self.lx.set_pos(save);
-                    return None;
-                }
-            };
-            let tidx = if self.lx.eat_str(".") {
-                self.lx.natural().unwrap_or(0) as u32
-            } else {
-                0
-            };
-            return Some(GoalSpec::Premise {
-                fact: build_fact(persistent, name, &args_text),
-                prem_idx: idx_val as usize,
-                time_var: tvar,
-                time_idx: tidx,
-            });
-        }
-        self.lx.set_pos(save);
-        None
-    }
-
-    fn read_balanced_paren(&mut self) -> Option<String> {
-        read_balanced_paren(&mut self.lx)
-    }
-}
-
-/// Build a `Fact` from name + raw args text.  We don't fully parse the
-/// argument terms — that's used only for diagnostics today.  The
-/// arity (number of commas at top level) is the load-bearing field for
-/// goal matching (matches the count of terms in the runtime LNFact).
-fn build_fact(persistent: bool, name: String, args_text: &str) -> Fact {
-    use crate::ast::Term;
-    let trimmed = args_text.trim();
-    let args: Vec<Term> = if trimmed.is_empty() {
-        Vec::new()
-    } else {
-        split_top_level_commas(trimmed)
-            .into_iter()
-            .map(|s| {
-                Term::Var(crate::ast::VarSpec {
-                    name: s.trim().to_string(),
-                    idx: 0,
-                    sort: tamarin_term::lterm::LSort::Msg,
-                    typ: None,
-                })
-            })
-            .collect()
-    };
-    Fact {
-        persistent,
-        name,
-        args,
-        annotations: Vec::new(),
-    }
-}
-
-/// Split a string at top-level commas — ignores commas inside any kind
-/// of bracket (`()`, `<>`, `[]`, `{}`).
-fn split_top_level_commas(s: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut cur = String::new();
-    let mut depth: i32 = 0;
-    for c in s.chars() {
-        match c {
-            '(' | '<' | '[' | '{' => {
-                depth += 1;
-                cur.push(c);
-            }
-            ')' | '>' | ']' | '}' => {
-                depth -= 1;
-                cur.push(c);
-            }
-            ',' if depth == 0 => {
-                out.push(std::mem::take(&mut cur));
-            }
-            _ => cur.push(c),
-        }
-    }
-    if !cur.is_empty() {
-        out.push(cur);
-    }
-    out
 }
 
 // =============================================================================
