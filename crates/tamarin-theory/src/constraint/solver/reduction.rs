@@ -4354,7 +4354,7 @@ fn normalise_node_id(
 /// Convert a parser-AST term to an `LVar` of node sort (for the time
 /// argument of an action atom or the operands of a `Less`/`Last`).
 ///
-/// Mirrors Haskell `bltermNodeId` (Reduction.hs ~480): returns `Just`
+/// Mirrors Haskell `bltermNodeId` (Term/LTerm.hs:526-528): returns `Just`
 /// only when the term is a Var with sort `LSortNode`. Returning
 /// `Some` for non-Node sorts causes the Eq/Less→Disj CR-rules to
 /// fire on msg-var `¬(a=b)` formulas — which Haskell leaves as

@@ -2,13 +2,13 @@
  * The sort a bare identifier takes from the position it sits in.  The
  * argument of `last`, the operand after `@` and both operands of `<` are read
  * with `nodevar` (Theory/Text/Parser/Formula.hs:43-59#blatom,
- * Token.hs:444-448#nodevar) and every other operand with `msgvar`
- * (Token.hs:440-441#msgvar), so in each lemma here the bare occurrence and
- * the like-named binder are two different variables: the occurrence stays
- * free and the display renames the binder apart.  No theory under
- * tamarin-prover/examples writes a bare identifier in a timepoint position
- * next to a like-named message binder, so this row is the guard on that
- * reading.
+ * Token.hs:444-448#nodevar) and a fact argument or a term-equality operand
+ * with `msgvar` (Token.hs:440-441#msgvar), so in each lemma here the bare
+ * occurrence and the like-named binder are two different variables: the
+ * occurrence stays free and the display renames the binder apart.  No theory
+ * under tamarin-prover/examples writes a bare identifier in a timepoint
+ * position next to a like-named message binder, so this row is the guard on
+ * that reading.
  *
  * Compared slice: the `theory … end` echo, which carries the three lemma
  * formulas and the guarded formulas the solver receives (see check.sh).

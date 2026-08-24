@@ -464,10 +464,10 @@ fn collect_var_specs(t: &p::Term, out: &mut Vec<p::VarSpec>) {
 /// prefix order are hints only, invisible outside the synthetic search.
 fn deduction_lemma_guarded(s: &[LNFact], fact_term: &LNTerm) -> Guarded {
     let var_d: Vec<LVar> = tamarin_term::lterm::frees(&s.to_vec());
-    // `lnterm_to_parser` hints a Msg variable `LSort::Msg` — the same
-    // concrete sort the parser pins on a prefixless quantifier binder
-    // (`quantifier_binder`, HS `msgvar` Token.hs:440-441), so the binder
-    // list below is byte-identical to a parsed one.
+    // `lnterm_to_parser` carries a Msg variable's sort over as `LSort::Msg`
+    // — the same concrete sort the parser pins on a prefixless quantifier
+    // binder (`quantifier_binder`, HS `msgvar` Token.hs:440-441), so the
+    // binder list below is byte-identical to a parsed one.
     let lower = crate::pretty_theory::lnterm_to_parser;
     // aLemma s (CloseRule.hs:263): `map lvarToLnterm (varD s)`.
     let gen_args: Vec<p::Term> = var_d

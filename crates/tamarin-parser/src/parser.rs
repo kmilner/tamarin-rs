@@ -3894,6 +3894,26 @@ impl<'a> Parser<'a> {
         Ok(id)
     }
 
+    /// The left side of one `let` definition — HS `sortedLVar` under
+    /// `genericletBlock` (Theory/Text/Parser/Let.hs:24-31): an indexed
+    /// identifier with an optional sort prefix or `:sort` suffix, never an
+    /// application or a compound term.  HS's sort list here is `[LSortMsg,
+    /// LSortNat]`; this parser takes any sort.  `Ok(None)` means no variable
+    /// starts here, which ends the definition list.
+    fn let_binder(&mut self) -> Result<Option<VarSpec>, ParseError> {
+        let Some(v) = self.try_var_spec()? else {
+            return Ok(None);
+        };
+        let v = self.attach_sort_suffix(v)?;
+        self.note_var_dot_hangover(&v);
+        Ok(Some(v))
+    }
+
+    /// HS `letBlock` (Theory/Text/Parser/Let.hs:28-35): a sequence of
+    /// `sortedLVar [LSortMsg, LSortNat] <* equalSign` definitions closed by
+    /// `in`, folded into an `LNSubst`.  The left side is a VARIABLE, so a
+    /// bare identifier that names an arity-0 function symbol binds the
+    /// like-named variable and leaves the body's `nullaryApp` constant alone.
     fn parse_let_block(&mut self) -> Result<Vec<LetBinding>, ParseError> {
         self.require_kw("let")?;
         let mut bs = Vec::new();
@@ -3911,9 +3931,9 @@ impl<'a> Parser<'a> {
                 break;
             }
             let lhs_save = self.save();
-            let lhs = match self.term(false) {
-                Ok(t) => t,
-                Err(_) => {
+            let lhs = match self.let_binder() {
+                Ok(Some(v)) => Term::Var(v),
+                Ok(None) | Err(_) => {
                     self.restore(lhs_save);
                     break;
                 }
@@ -4864,15 +4884,28 @@ impl<'a> Parser<'a> {
     /// `nodevarTerm = lit . Var <$> nodep` (Theory/Text/Parser/Formula.hs:59):
     /// a variable in a timepoint position takes `LSortNode` from its
     /// position, since `nodevar` is the only parser that reads there
-    /// (Token.hs:443-448), whichever sigil the source spells.  This parser
-    /// also accepts a non-variable term in those positions (see
-    /// [`Self::fatom`]'s `<` arm), which is left as written.
+    /// (Token.hs:443-448).  `nodevar` accepts `#name`, a bare name and
+    /// `name:node`, and fails on any other spelling.  It reads the bare name
+    /// with `indexedIdentifier` (Token.hs:445-447), which never consults the
+    /// signature, so a name that is also an arity-0 symbol is a timepoint
+    /// variable here rather than the constant `nullaryApp` builds for it
+    /// elsewhere (Theory/Text/Parser/Term.hs:158-163) — the zero-argument
+    /// application arm below.  This parser is wider: it takes a variable
+    /// under any sigil, and a non-variable term (see [`Self::fatom`]'s `<`
+    /// arm), which is left as written.  The two agree on every timepoint HS
+    /// accepts.
     fn node_sorted(t: Term) -> Term {
         match t {
             Term::Var(mut v) => {
                 v.sort = LSort::Node;
                 Term::Var(v)
             }
+            Term::App(name, args) if args.is_empty() => Term::Var(VarSpec {
+                name,
+                idx: 0,
+                sort: LSort::Node,
+                typ: None,
+            }),
             other => other,
         }
     }
@@ -5273,26 +5306,31 @@ impl<'a> Parser<'a> {
         Ok(t)
     }
 
+    /// Whether the variable just consumed ended on a plain `indexedIdentifier`
+    /// lexeme: no explicit `.<index>` (`option 0 (try (dot *> natural))`,
+    /// Token.hs:395-400), no `:sort` suffix (`sortedLVar`'s suffix arm ends in
+    /// `symbol_ (sortSuffix s)`, Token.hs:409-421) and no SAPIC `:type`
+    /// annotation.  That is the shape [`Self::bare_ident_term`] reads as an
+    /// arity-0 symbol's constant, and the shape that leaves the
+    /// `Expect "\".\""` hangover behind.
+    fn is_plain_indexed_identifier(&self, v: &VarSpec) -> bool {
+        !self.dot_index_consumed && !self.sort_suffix_consumed && v.typ.is_none()
+    }
+
     /// Set [`Parser::var_dot_hangover`] for the variable atom just consumed.
     ///
     /// HS leaves the `Expect "\".\""` at the current position iff the
-    /// variable's LAST lexeme was its `identifier` — i.e. no explicit
-    /// `.<index>` was consumed (`option 0 (try (dot *> natural))`,
-    /// Token.hs:395-400, whose one attempt is spent once it succeeds), no
-    /// `:sort` suffix follows ([`Parser::sort_suffix_consumed`],
-    /// Token.hs:409-421), and the name is not one
-    /// `nullaryApp` claims instead of `plit` — an arity-0 symbol of
-    /// `funSyms ∪ macroNames`, matched by `symbol`, not `indexedIdentifier`
-    /// (Theory/Text/Parser/Term.hs:148,158-163).  The explicit-index case
-    /// (including `.0`) is
-    /// what [`Parser::dot_index_consumed`] records: every variable parse runs
-    /// [`Self::try_dot_index`] right after its identifier, so at this point
-    /// that field is the just-parsed variable's.
+    /// variable's LAST lexeme was its `identifier`: the lexeme is a plain
+    /// `indexedIdentifier` ([`Self::is_plain_indexed_identifier`]) and the
+    /// name is not one `nullaryApp` claims instead of `plit` — an arity-0
+    /// symbol of `funSyms ∪ macroNames`, matched by `symbol`, not
+    /// `indexedIdentifier` (Theory/Text/Parser/Term.hs:148,158-163).  Every
+    /// variable parse runs [`Self::try_dot_index`] right after its
+    /// identifier, so [`Parser::dot_index_consumed`] is the just-parsed
+    /// variable's at this point.
     fn note_var_dot_hangover(&mut self, v: &VarSpec) {
-        self.var_dot_hangover = !self.dot_index_consumed
-            && !self.sort_suffix_consumed
-            && v.typ.is_none()
-            && !self.is_nullary_sym(&v.name);
+        self.var_dot_hangover =
+            self.is_plain_indexed_identifier(v) && !self.is_nullary_sym(&v.name);
         // Where this variable's `letter or digit` identifier hangover sits —
         // recorded by the identifier-consuming site that just ran (see
         // [`Parser::last_ident_end`]) and only meaningful alongside the dot
@@ -5768,12 +5806,14 @@ impl<'a> Parser<'a> {
     /// (Theory/Text/Parser/Term.hs:139-153,158-163): an identifier that is an
     /// arity-0 symbol of `funSyms maudeSig ∪ macroNames maudeSig` is the
     /// application `fApp fs []`, whatever a same-named binder is in scope.
-    /// `nullaryApp` matches through `symbol`, so its alternative wins only
-    /// when the whole lexeme is the symbol's name — an index, a sort suffix
-    /// or a SAPIC type annotation leaves trailing input and the name reparses
-    /// as `plit`'s variable.  The lexeme is then the symbol's name rather
-    /// than an `indexedIdentifier`, so it leaves neither of the variable
-    /// hangovers [`Parser::note_var_dot_hangover`] records.
+    /// `nullaryApp` matches through `symbol`, which has no word boundary, so
+    /// HS claims the name and leaves the rest of the lexeme behind: `c.1`,
+    /// `c:msg` and a SAPIC `c:ty` are the constant `c` followed by input the
+    /// enclosing parser rejects.  This parser claims the name only when the
+    /// whole lexeme is it, and reads those three as variables instead.  A
+    /// claimed name is the symbol's lexeme rather than an
+    /// `indexedIdentifier`, so it leaves neither of the variable hangovers
+    /// [`Parser::note_var_dot_hangover`] records.
     fn bare_ident_term(&mut self, id: String) -> Result<Term, ParseError> {
         let idx = self.try_dot_index();
         let v = VarSpec {
@@ -5783,16 +5823,10 @@ impl<'a> Parser<'a> {
             typ: None,
         };
         let v = self.attach_sort_suffix(v)?;
-        if !self.dot_index_consumed
-            && !self.sort_suffix_consumed
-            && v.typ.is_none()
-            && self.is_nullary_sym(&v.name)
-        {
-            self.var_dot_hangover = false;
-            self.var_hangover_ident_end = None;
+        self.note_var_dot_hangover(&v);
+        if self.is_plain_indexed_identifier(&v) && self.is_nullary_sym(&v.name) {
             return Ok(Term::App(v.name, Vec::new()));
         }
-        self.note_var_dot_hangover(&v);
         Ok(Term::Var(v))
     }
 

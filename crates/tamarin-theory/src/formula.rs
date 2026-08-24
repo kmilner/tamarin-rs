@@ -340,10 +340,9 @@ pub fn to_lnformula(fm: &SyntacticLNFormula) -> Option<LNFormula> {
 /// of the list is the innermost one.
 ///
 /// Variable sorts come from the parser, which stamps them by syntactic
-/// position as HS's `msgvar`/`nodevar` do (Token.hs:440-448), and reach the
-/// `LVar` through `elaborate::sort_of`.  A
-/// binder closes exactly the occurrences equal to its `LVar` in name, sort
-/// and index (HS `quantify`'s `v == x`, Theory/Model/Formula.hs:350-352), so
+/// position as HS's `msgvar`/`nodevar` do (Token.hs:440-448).  A binder
+/// closes exactly the occurrences equal to its `LVar` in name, sort and
+/// index (HS `quantify`'s `v == x`, Theory/Model/Formula.hs:350-352), so
 /// `Ex ~k. Made(k)` leaves the message-sorted `k` free.  A bare 0-arity
 /// symbol is already an application when it arrives, so no binder of that
 /// name closes it (HS `nullaryApp`, Theory/Text/Parser/Term.hs:158-163).  A

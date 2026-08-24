@@ -1678,8 +1678,9 @@ enum HeadSym {
 /// `userDefinedFunSyms` — free symbols before user-defined AC symbols — then
 /// the macro names, and hands `naryOpApp` / `binaryAlgApp` the privacy,
 /// constructability and NDC state of the first match, which those build
-/// `fAppNoEq` / `fAppAC` from (:87-121).  A name in both halves is therefore
-/// the FREE symbol; [`MaudeSig::fun_sym_named`] preserves that order.
+/// `fAppNoEq` / `fAppAC` from (Theory/Text/Parser/Term.hs:87-121).  A name
+/// in both halves is therefore the FREE symbol; [`MaudeSig::fun_sym_named`]
+/// preserves that order.
 ///
 /// The arity is the one WRITTEN, not the one declared: HS rejects an
 /// application whose two disagree (`naryOpApp`'s arity check), while this

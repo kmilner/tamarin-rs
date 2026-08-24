@@ -121,36 +121,38 @@ fn cmp_term_ties_the_prefix_pair_spelling_with_the_bracket_spelling() {
     assert_eq!(cmp_term(&prefix, &long), Less);
 }
 
-/// Both variable orderings rank sorts in the `LSort` declaration order
-/// (Term/LTerm.hs:165-170).  A bare name is message-sorted in HS, where
-/// `msgvar` reads it through `sortedLVar`'s empty `LSortMsg` prefix parser
-/// (Token.hs:424-433#mkPrefixParser, Token.hs:440-441#msgvar), so `Msg` sits
-/// behind `Pub` and `Fresh` and ahead of `Node` and `Nat`.  The printed
-/// operand order of an AC application rides on this through `cmp_term`.
+/// Both variable orderings compare the sort with `LSort`'s derived `Ord`,
+/// which ranks the five sorts in their declaration order
+/// (Term/LTerm.hs:165-170): `Pub`, `Fresh`, `Msg`, `Node`, `Nat`.  The printed
+/// operand order of an AC application rides on this through `cmp_term`, so a
+/// reordering of the `LSort` variants moves printed output.
 #[test]
-fn a_bare_variable_ranks_as_msg() {
-    use std::cmp::Ordering::{Equal, Greater, Less};
+fn variable_ordering_ranks_sorts_in_lsort_declaration_order() {
+    let declared = [
+        LSort::Pub,
+        LSort::Fresh,
+        LSort::Msg,
+        LSort::Node,
+        LSort::Nat,
+    ];
+
     let vs = |sort| p::VarSpec {
         name: "x".into(),
         idx: 0,
         sort,
         typ: None,
     };
-    let bare = vs(LSort::Msg);
-    assert_eq!(cmp_varspec(&bare, &vs(LSort::Msg)), Equal);
-    assert_eq!(cmp_varspec(&bare, &vs(LSort::Pub)), Greater);
-    assert_eq!(cmp_varspec(&bare, &vs(LSort::Fresh)), Greater);
-    assert_eq!(cmp_varspec(&bare, &vs(LSort::Node)), Less);
-    assert_eq!(cmp_varspec(&bare, &vs(LSort::Nat)), Less);
-
     let b = |sort| GBinding {
         name: "x".into(),
         sort,
     };
-    let bare = b(LSort::Msg);
-    assert_eq!(cmp_binding(&bare, &b(LSort::Msg)), Equal);
-    assert_eq!(cmp_binding(&bare, &b(LSort::Fresh)), Greater);
-    assert_eq!(cmp_binding(&bare, &b(LSort::Nat)), Less);
+    for (i, &s) in declared.iter().enumerate() {
+        for (j, &t) in declared.iter().enumerate() {
+            let want = i.cmp(&j);
+            assert_eq!(cmp_varspec(&vs(s), &vs(t)), want, "{s:?} vs {t:?}");
+            assert_eq!(cmp_binding(&b(s), &b(t)), want, "{s:?} vs {t:?}");
+        }
+    }
 }
 
 #[test]

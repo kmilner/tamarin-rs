@@ -1597,6 +1597,53 @@ fn timepoint_positions_are_node_sorted() {
     assert_eq!(sort_of("k = l"), vec![LSort::Msg, LSort::Msg]);
 }
 
+/// `nodevar` reads a bare name with `indexedIdentifier` (Token.hs:445-447),
+/// which does not consult the signature, so a name declared as an arity-0
+/// symbol is still a timepoint variable in a timepoint position — unlike the
+/// term parser, where `nullaryApp` claims it
+/// (Theory/Text/Parser/Term.hs:158-163).
+#[test]
+fn nullary_symbol_name_in_a_timepoint_position_is_a_variable() {
+    // `c` is an application everywhere the term parser reads it.
+    let concs =
+        rule_conclusions("theory T begin\nfunctions: c/0\nrule R:\n  [ ] --> [ Out(c) ]\nend");
+    assert!(matches!(&concs[0].args[0], Term::App(n, a) if n == "c" && a.is_empty()));
+
+    let thy = parse_theory(
+        "theory T begin\n\
+         functions: c/0\n\
+         lemma l1: \"All #i. A( ) @ c\"\n\
+         lemma l2: \"last(c)\"\n\
+         lemma l3: \"All #i. #i < c\"\n\
+         lemma l4: \"All #i. #i = c\"\n\
+         end",
+        &[],
+    )
+    .expect("parses");
+    let mut seen = 0;
+    for it in &thy.items {
+        let TheoryItem::Lemma(l) = it else { continue };
+        let f = match &l.formula {
+            Formula::Forall(_, body) => body.as_ref().clone(),
+            other => other.clone(),
+        };
+        let t = match f {
+            Formula::Atom(Atom::Action(_, t)) | Formula::Atom(Atom::Last(t)) => t,
+            Formula::Atom(Atom::Less(_, r)) | Formula::Atom(Atom::Eq(_, r)) => r,
+            other => panic!("expected one atom in {}, got {other:?}", l.name),
+        };
+        let v = var_of(&t);
+        assert_eq!(
+            (v.name.as_str(), v.idx, v.sort),
+            ("c", 0, LSort::Node),
+            "{} reads `c` as a constant",
+            l.name
+        );
+        seen += 1;
+    }
+    assert_eq!(seen, 4);
+}
+
 /// A quantifier binder is `try varp <|> nodep` with `varp = msgvar`
 /// (Theory/Text/Parser/Formula.hs:73-76), and an operand of an AC operator is
 /// a message term, so the `dif` binder and the `seq1` operand of
@@ -1651,9 +1698,10 @@ fn rule_conclusions(src: &str) -> Vec<Fact> {
 
 /// HS `nullaryApp` (Theory/Text/Parser/Term.hs:158-163) claims a bare
 /// identifier that is an arity-0 symbol of `funSyms maudeSig ∪ macroNames
-/// maudeSig`, so it is an application, not a variable.  A `.idx`, a `:sort`
-/// suffix, a SAPIC `:type`, a sigil, or a use ahead of the declaration all
-/// leave a variable.
+/// maudeSig`, so it is an application, not a variable.  A sigil and a use
+/// ahead of the declaration leave a variable in HS too.  A `.idx`, a `:sort`
+/// suffix and a SAPIC `:type` leave one only here: `symbol` has no word
+/// boundary, so HS claims the name and then fails on the rest of the lexeme.
 #[test]
 fn bare_nullary_symbol_parses_as_application() {
     let concs = rule_conclusions(
@@ -1673,8 +1721,8 @@ fn bare_nullary_symbol_parses_as_application() {
         );
     }
 
-    // Anything past the bare identifier leaves `nullaryApp`'s `symbol` match
-    // incomplete, so the name reparses as `plit`'s variable.
+    // The name is claimed only when the whole lexeme is it, so anything past
+    // the bare identifier leaves a variable.
     let concs = rule_conclusions(
         "theory T begin\n\
          functions: c/0\n\
@@ -1692,7 +1740,7 @@ fn bare_nullary_symbol_parses_as_application() {
     }
 
     // A SAPIC `:type` annotation is the same: the lexeme continues past the
-    // symbol's name.
+    // symbol's name, so the name is not claimed.
     let thy = parse_theory(
         "theory T begin\nfunctions: c/0\nprocess: out(c:ty)\nend",
         &[],
@@ -1830,4 +1878,41 @@ fn structural_mode_resolves_nullary_names_from_the_signature() {
         Term::Var(_)
     ));
     assert!(parse_term_str("(x add c)", &pair_maude_sig()).is_err());
+}
+
+/// HS's rule `let` binds a variable — `sortedLVar [LSortMsg, LSortNat]` under
+/// `genericletBlock` (Theory/Text/Parser/Let.hs:24-31) — while the rule body
+/// reads a declared arity-0 symbol as `nullaryApp`'s constant
+/// (Theory/Text/Parser/Term.hs:158-163).  A binding whose name is such a
+/// symbol therefore binds a variable the body never mentions, and the oracle
+/// prints `--[ E( c ) ]->` for the theory below.
+#[test]
+fn a_let_binder_is_a_variable_not_a_nullary_constant() {
+    let thy = parse_theory(
+        "theory L\nbegin\n\nfunctions: c/0\n\nrule R:\n  let c = 'lit'\n  in\n  \
+         [ ] --[ E(c) ]-> [ ]\n\nend\n",
+        &[],
+    )
+    .expect("parses");
+    let rule = thy
+        .items
+        .iter()
+        .find_map(|i| match i {
+            TheoryItem::Rule(r) => Some(r),
+            _ => None,
+        })
+        .expect("one rule");
+    assert_eq!(
+        rule.let_block[0].var,
+        Term::Var(VarSpec {
+            name: "c".to_string(),
+            idx: 0,
+            sort: LSort::Msg,
+            typ: None,
+        })
+    );
+    assert_eq!(
+        rule.actions[0].args,
+        vec![Term::App("c".to_string(), vec![])]
+    );
 }
