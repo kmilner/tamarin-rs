@@ -2,15 +2,22 @@
 // of the tamarin-prover sources this file cites; list them with:
 //   scripts/gen_license_headers.py --authors <this file>
 
-//! Corpus equality net for the locally-nameless formula printers: every
-//! formula of every `.spthy` under the examples tree, built exactly as the
-//! production renderers build their `Doc` input, is printed through the
-//! parser-AST printer and through `syntactic_lnformula_doc` (and
-//! `lnformula_doc` where the sugar strips), and the renders are compared
-//! through both production wrappers.
+//! Corpus net for the locally-nameless formula conversions: every formula
+//! of every `.spthy` under the examples tree, built exactly as the
+//! production renderers build their `Doc` input, is
+//!
+//!   * printed through the parser-AST printer and through
+//!     `syntactic_lnformula_doc` (and `lnformula_doc` where the sugar
+//!     strips), and the renders compared through both production wrappers
+//!     and through the flat render the guarded-conversion error text uses;
+//!   * converted with `from_parser` from both the raw and the
+//!     print-preprocessed parser AST, and the two results compared;
+//!   * checked for the two parser-AST shapes the round trip cannot carry
+//!     back — source-order fact annotations and a `VarSpec` type tag.
 
 use super::*;
 use crate::elaborate::{canonicalize_ac_in_formula as canon, rewrite_arity1_formula};
+use crate::fact::FactAnnotation;
 use crate::formula::{from_parser, sapic_from_parser, to_lnformula};
 use crate::macro_expand::apply_macros_formula;
 use crate::pretty_sapic::render_sapic;
@@ -18,27 +25,43 @@ use crate::pretty_theory::{collect_macros, collect_predicates, expand_predicates
 use crate::sapic::to_lformula;
 use rayon::prelude::*;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 /// Examples beyond this test's budget, relative to the corpus root and
 /// reported as `skipped_listed`: the accountability lemmas of the mixvote
 /// multi-session family grow geometrically with the session count, so a
-/// session-4 lemma takes about a minute through the six renders below and
-/// session 5 overflows the stack.  Neither file is in the prove or pretty
+/// session-4 lemma takes minutes through the renders below and session 5
+/// overflows the stack.  Neither file is in the prove or pretty
 /// gate corpus (scripts/parity_corpus.txt).
 const BEYOND_BUDGET: &[&str] = &[
     "sapic/deprecated/csf21-acc-unbounded/mixvote/mixvote_SmHh-multi-session-4-fixed.spthy",
     "sapic/deprecated/csf21-acc-unbounded/mixvote/mixvote_SmHh-multi-session-5-fixed.spthy",
 ];
 
-/// One formula to compare, tagged with where it came from.  `raw` is the
-/// formula as written, kept for the items a SAPIC process prints, whose
-/// internal form is built from the source text and not from `formula`'s
-/// AC-canonicalised copy.
+/// A page width beyond any formula of the tree, so every `sep`, `fsep` and
+/// `fcat` takes its flat branch and the render is the whole formula on one
+/// line with no break inserted anywhere.  This is the string
+/// [`pretty_formula`] writes; `Doc::one_line_render`, HughesPJ's
+/// `OneLineMode`, is a different one — it takes every `Union`'s
+/// line-breaking branch and turns each break into one space, including the
+/// `fcat` breaks a pair `<a, b>` and an AC application carry.
+const FLAT_WIDTH: usize = 1 << 40;
+
+/// One formula to compare, tagged with where it came from.
+///
+/// `pre` is the formula before the printer's own preprocessing — for a
+/// lemma or restriction header the predicate-expanded (and, in the
+/// `(macros)` variant, macro-expanded) formula, for a SAPIC condition or
+/// embedded `_restrict` the formula as written.  `formula` is `pre` after
+/// the arity-1 fold and the AC canonicalisation the matching renderer
+/// applies.  `sapic` marks the items a SAPIC process prints, whose
+/// internal form is built by [`sapic_from_parser`].
 struct Item {
     label: String,
     formula: p::Formula,
-    raw: Option<p::Formula>,
+    pre: p::Formula,
+    sapic: bool,
 }
 
 /// The examples tree, or the override in `CORPUS_ROOT`.
@@ -78,7 +101,8 @@ fn process_formulas(proc_: &p::Process, label: &str, out: &mut Vec<Item>) {
                     out.push(Item {
                         label: format!("{label}/msr-restriction-{i}"),
                         formula: canon(f),
-                        raw: Some(f.clone()),
+                        pre: f.clone(),
+                        sapic: true,
                     });
                 }
             }
@@ -89,7 +113,8 @@ fn process_formulas(proc_: &p::Process, label: &str, out: &mut Vec<Item>) {
                 out.push(Item {
                     label: format!("{label}/cond"),
                     formula: canon(f),
-                    raw: Some(f.clone()),
+                    pre: f.clone(),
+                    sapic: true,
                 });
             }
             process_formulas(left, label, out);
@@ -111,45 +136,52 @@ fn process_formulas(proc_: &p::Process, label: &str, out: &mut Vec<Item>) {
 fn theory_formulas(parsed: &p::Theory, arity1: &dyn Fn(&p::Formula) -> p::Formula) -> Vec<Item> {
     let macros = collect_macros(parsed);
     let predicates = collect_predicates(parsed);
-    let header = |f: &p::Formula| canon(&arity1(&expand_predicates_for_display(f, &predicates)));
+    let item = |label: String, pre: p::Formula, formula: p::Formula| Item {
+        label,
+        formula,
+        pre,
+        sapic: false,
+    };
     let header_items = |out: &mut Vec<Item>, kind: &str, name: &str, f: &p::Formula| {
-        out.push(Item {
-            label: format!("{kind} {name}"),
-            formula: header(f),
-            raw: None,
-        });
+        let pre = expand_predicates_for_display(f, &predicates);
+        out.push(item(
+            format!("{kind} {name}"),
+            pre.clone(),
+            canon(&arity1(&pre)),
+        ));
         if !macros.is_empty() {
-            out.push(Item {
-                label: format!("{kind} {name} (macros)"),
-                formula: header(&apply_macros_formula(&macros, f)),
-                raw: None,
-            });
+            let pre = expand_predicates_for_display(&apply_macros_formula(&macros, f), &predicates);
+            out.push(item(
+                format!("{kind} {name} (macros)"),
+                pre.clone(),
+                canon(&arity1(&pre)),
+            ));
         }
     };
     let mut out = Vec::new();
-    for item in &parsed.items {
-        match item {
+    for it in &parsed.items {
+        match it {
             p::TheoryItem::Lemma(lem) => header_items(&mut out, "lemma", &lem.name, &lem.formula),
             p::TheoryItem::Restriction(r) | p::TheoryItem::LegacyAxiom(r) => {
                 header_items(&mut out, "restriction", &r.name, &r.formula)
             }
-            p::TheoryItem::AccLemma(al) => out.push(Item {
-                label: format!("acclemma {}", al.name),
-                formula: canon(&arity1(&al.formula)),
-                raw: None,
-            }),
-            p::TheoryItem::CaseTest(ct) => out.push(Item {
-                label: format!("casetest {}", ct.name),
-                formula: canon(&arity1(&ct.formula)),
-                raw: None,
-            }),
+            p::TheoryItem::AccLemma(al) => out.push(item(
+                format!("acclemma {}", al.name),
+                al.formula.clone(),
+                canon(&arity1(&al.formula)),
+            )),
+            p::TheoryItem::CaseTest(ct) => out.push(item(
+                format!("casetest {}", ct.name),
+                ct.formula.clone(),
+                canon(&arity1(&ct.formula)),
+            )),
             p::TheoryItem::Predicates(ps) => {
                 for pr in ps {
-                    out.push(Item {
-                        label: format!("predicate {}", pr.fact.name),
-                        formula: arity1(&pr.formula),
-                        raw: None,
-                    });
+                    out.push(item(
+                        format!("predicate {}", pr.fact.name),
+                        pr.formula.clone(),
+                        arity1(&pr.formula),
+                    ));
                 }
             }
             p::TheoryItem::ProcessDef(pd) => {
@@ -233,15 +265,22 @@ fn file_phase(path: &Path, root: &Path) -> FileReport {
     rep
 }
 
-/// The corpus root, its `.spthy` files, the file-level phase over all of
-/// them and the pool that ran it.
-type Corpus = (PathBuf, Vec<PathBuf>, Vec<FileReport>, rayon::ThreadPool);
+/// The corpus root, its `.spthy` files, and the file-level phase over all
+/// of them.
+type Corpus = (PathBuf, Vec<PathBuf>, Vec<FileReport>);
 
-/// Parse, lift, elaborate and collect the whole tree.  The parser and the
-/// Doc builders recurse along the input, and the web server renders on
-/// 64 MiB tokio threads (run.rs), so the workers get the same stacks.
-/// `None` when the root is missing and `TAM_ALLOW_NO_CORPUS=1` allows the
-/// skip.
+/// A pool whose workers can take the parser's and the Doc builders'
+/// recursion along the input; the web server renders on 64 MiB tokio
+/// threads (run.rs), so they get the same stacks.
+fn deep_pool() -> rayon::ThreadPool {
+    rayon::ThreadPoolBuilder::new()
+        .stack_size(64 * 1024 * 1024)
+        .build()
+        .expect("rayon pool")
+}
+
+/// Parse, lift, elaborate and collect the whole tree.  `None` when the
+/// root is missing and `TAM_ALLOW_NO_CORPUS=1` allows the skip.
 fn corpus_phase() -> Option<Corpus> {
     let root = corpus_root();
     if !root.is_dir() {
@@ -255,17 +294,30 @@ fn corpus_phase() -> Option<Corpus> {
         );
     }
     let files = spthy_files(&root);
-    let pool = rayon::ThreadPoolBuilder::new()
-        .stack_size(64 * 1024 * 1024)
-        .build()
-        .expect("rayon pool");
-    let reports: Vec<FileReport> = pool.install(|| {
+    let reports: Vec<FileReport> = deep_pool().install(|| {
         files
             .par_iter()
             .map(|path| file_phase(path, &root))
             .collect()
     });
-    Some((root, files, reports, pool))
+    Some((root, files, reports))
+}
+
+/// [`corpus_phase`] run once for every test in this module: they read the
+/// same items, and parsing, lifting and elaborating the tree is the
+/// expensive half.
+fn corpus() -> Option<&'static Corpus> {
+    static CORPUS: OnceLock<Option<Corpus>> = OnceLock::new();
+    CORPUS.get_or_init(corpus_phase).as_ref()
+}
+
+/// Files that reached the formula-level phase, and the whole tree.
+fn file_counts(reports: &[FileReport]) -> (usize, usize) {
+    let parsed = reports
+        .iter()
+        .filter(|r| matches!(r.outcome, Outcome::Parsed))
+        .count();
+    (parsed, reports.len())
 }
 
 /// A comparison over the corpus is a net only while it covers the tree: a
@@ -279,16 +331,34 @@ fn assert_corpus_covered(parsed: usize, files: usize) {
     );
 }
 
+/// Every item of the tree, each with the index of the file it came from —
+/// which is where its label and its signature are read.
+fn all_items(corpus: &Corpus) -> Vec<(usize, &Item)> {
+    corpus
+        .2
+        .iter()
+        .enumerate()
+        .flat_map(|(i, r)| r.items.iter().map(move |it| (i, it)))
+        .collect()
+}
+
+/// `<file>: <label>` of one finding.
+fn at(corpus: &Corpus, i: usize, label: &str) -> String {
+    format!("{}: {label}", rel(&corpus.1[i], &corpus.0).display())
+}
+
 /// `(label, parser-AST render, locally-nameless render)` of one disagreement.
 type Mismatch = (String, String, String);
 
-/// Both printers on one formula through both production wrappers, against
-/// the signature the file's renderers run under.
+/// Both printers on one formula through all three production shapes: the
+/// lemma header, the nested restriction body, and the flat one-line string
+/// the guarded-conversion error text quotes.
 fn compare(item: &Item, msig: &tamarin_term::maude_sig::MaudeSig) -> Vec<Mismatch> {
     let f = &item.formula;
     let ast = formula_to_doc(f, &[], &mut avoid_precise_formula(f));
     let ast_header = lemma_header_line_doc("all-traces", ast.clone());
     let ast_nested = doublequoted_nested_doc(ast, 2);
+    let ast_flat = pretty_formula(f);
     let ln = match from_parser(f, msig) {
         Ok(ln) => ln,
         Err(e) => {
@@ -314,12 +384,20 @@ fn compare(item: &Item, msig: &tamarin_term::maude_sig::MaudeSig) -> Vec<Mismatc
             ));
             continue;
         }
-        let nested = doublequoted_nested_doc(doc, 2);
+        let nested = doublequoted_nested_doc(doc.clone(), 2);
         if nested != ast_nested {
             mismatches.push((
                 format!("{} [{kind} nested]", item.label),
                 ast_nested.clone(),
                 nested,
+            ));
+        }
+        let flat = doc.render_with(FLAT_WIDTH, FLAT_WIDTH);
+        if flat != ast_flat {
+            mismatches.push((
+                format!("{} [{kind} flat]", item.label),
+                ast_flat.clone(),
+                flat,
             ));
         }
     }
@@ -329,9 +407,10 @@ fn compare(item: &Item, msig: &tamarin_term::maude_sig::MaudeSig) -> Vec<Mismatc
 #[test]
 fn corpus_lnformula_doc_matches_ast_printer() {
     let start = Instant::now();
-    let Some((root, files, reports, pool)) = corpus_phase() else {
+    let Some(corpus) = corpus() else {
         return;
     };
+    let (root, files, reports) = corpus;
     let count = |o: fn(&Outcome) -> bool| reports.iter().filter(|r| o(&r.outcome)).count();
     let parsed = count(|o| matches!(o, Outcome::Parsed));
     let skipped_listed = count(|o| matches!(o, Outcome::SkippedListed));
@@ -340,17 +419,13 @@ fn corpus_lnformula_doc_matches_ast_printer() {
     let skipped_elab = count(|o| matches!(o, Outcome::SkippedElab));
     let slowest_file = reports
         .iter()
-        .zip(&files)
+        .zip(files)
         .max_by_key(|(r, _)| r.elapsed)
-        .map(|(r, path)| format!("{} ({:?})", rel(path, &root).display(), r.elapsed))
+        .map(|(r, path)| format!("{} ({:?})", rel(path, root).display(), r.elapsed))
         .unwrap_or_default();
-    let work: Vec<(usize, &Item)> = reports
-        .iter()
-        .enumerate()
-        .flat_map(|(i, r)| r.items.iter().map(move |it| (i, it)))
-        .collect();
+    let work = all_items(corpus);
     let formulas = work.len();
-    let results: Vec<(usize, Duration, Vec<Mismatch>)> = pool.install(|| {
+    let results: Vec<(usize, Duration, Vec<Mismatch>)> = deep_pool().install(|| {
         work.par_iter()
             .map(|(i, item)| {
                 let t = Instant::now();
@@ -363,26 +438,14 @@ fn corpus_lnformula_doc_matches_ast_printer() {
         .iter()
         .zip(&work)
         .max_by_key(|((_, d, _), _)| *d)
-        .map(|((i, d, _), (_, item))| {
-            format!(
-                "{}: {} ({d:?})",
-                rel(&files[*i], &root).display(),
-                item.label
-            )
-        })
+        .map(|((i, d, _), (_, item))| at(corpus, *i, &format!("{} ({d:?})", item.label)))
         .unwrap_or_default();
-    let mismatches: Vec<(String, String, String, String)> = results
+    let mismatches: Vec<(String, String, String)> = results
         .iter()
         .flat_map(|(i, _, found)| {
-            let file = rel(&files[*i], &root);
-            found.iter().map(move |(label, ast, ln)| {
-                (
-                    file.display().to_string(),
-                    label.clone(),
-                    ast.clone(),
-                    ln.clone(),
-                )
-            })
+            found
+                .iter()
+                .map(move |(label, ast, ln)| (at(corpus, *i, label), ast.clone(), ln.clone()))
         })
         .collect();
     eprintln!(
@@ -393,8 +456,8 @@ fn corpus_lnformula_doc_matches_ast_printer() {
         mismatches.len(),
         start.elapsed()
     );
-    for (file, label, ast, ln) in &mismatches {
-        eprintln!("MISMATCH {file}: {label}\n--- ast\n{ast}\n--- ln\n{ln}");
+    for (where_, ast, ln) in &mismatches {
+        eprintln!("MISMATCH {where_}\n--- ast\n{ast}\n--- ln\n{ln}");
     }
     assert_corpus_covered(parsed, files.len());
     assert!(formulas > 0, "no formulas compared");
@@ -406,13 +469,263 @@ fn corpus_lnformula_doc_matches_ast_printer() {
     );
 }
 
-/// A page width beyond any formula of the tree, so every `sep`, `fsep` and
-/// `fcat` takes its flat branch and the render is the whole formula on one
-/// line with no break inserted anywhere.  `Doc::one_line_render`, HughesPJ's
-/// `OneLineMode`, is a different string: it turns every break into exactly
-/// one space, including the `fcat` breaks a pair `<a, b>` and an AC
-/// application carry, where the flat layout has none.
-const FLAT_WIDTH: usize = 1 << 40;
+#[test]
+fn corpus_from_parser_absorbs_the_print_preprocessing() {
+    let start = Instant::now();
+    let Some(corpus) = corpus() else {
+        return;
+    };
+    let (parsed, files) = file_counts(&corpus.2);
+    let work = all_items(corpus);
+    let formulas = work.len();
+    let build = |f: &p::Formula, msig: &tamarin_term::maude_sig::MaudeSig| {
+        from_parser(f, msig).map_err(|e| e.message)
+    };
+    let mismatches: Vec<String> = deep_pool().install(|| {
+        work.par_iter()
+            .filter_map(|(i, item)| {
+                let msig = &corpus.2[*i].msig;
+                let raw = build(&item.pre, msig);
+                let pre_passed = build(&item.formula, msig);
+                (raw != pre_passed).then(|| {
+                    format!(
+                        "MISMATCH {}\n--- from_parser(pre)\n{raw:?}\n--- from_parser(preprocessed)\n{pre_passed:?}",
+                        at(corpus, *i, &item.label)
+                    )
+                })
+            })
+            .collect()
+    });
+    eprintln!(
+        "corpus from_parser: files={files} parsed={parsed} formulas={formulas} mismatches={} wall={:?}",
+        mismatches.len(),
+        start.elapsed()
+    );
+    for m in &mismatches {
+        eprintln!("{m}");
+    }
+    assert_corpus_covered(parsed, files);
+    assert!(formulas > 0, "no formulas compared");
+    assert!(
+        mismatches.is_empty(),
+        "{} mismatches; first: {}",
+        mismatches.len(),
+        mismatches[0]
+    );
+}
+
+/// The `VarSpec`s and the fact-carrying atoms of one formula, in traversal
+/// order.
+#[derive(Default)]
+struct Shapes<'a> {
+    vars: Vec<&'a p::VarSpec>,
+    facts: Vec<&'a p::Fact>,
+}
+
+fn collect_term<'a>(t: &'a p::Term, out: &mut Shapes<'a>) {
+    match t {
+        p::Term::Var(v) => out.vars.push(v),
+        p::Term::App(_, ts) | p::Term::Pair(ts) => ts.iter().for_each(|t| collect_term(t, out)),
+        p::Term::AlgApp(_, a, b) | p::Term::BinOp(_, a, b) => {
+            collect_term(a, out);
+            collect_term(b, out);
+        }
+        p::Term::Diff(a, b) => {
+            collect_term(a, out);
+            collect_term(b, out);
+        }
+        p::Term::PatMatch(inner) => collect_term(inner, out),
+        p::Term::PubLit(_)
+        | p::Term::FreshLit(_)
+        | p::Term::NatLit(_)
+        | p::Term::Number(_)
+        | p::Term::NumberOne
+        | p::Term::NatOne
+        | p::Term::DhNeutral => {}
+    }
+}
+
+fn collect_fact<'a>(f: &'a p::Fact, out: &mut Shapes<'a>) {
+    out.facts.push(f);
+    f.args.iter().for_each(|t| collect_term(t, out));
+}
+
+fn collect_atom<'a>(a: &'a p::Atom, out: &mut Shapes<'a>) {
+    match a {
+        p::Atom::Eq(x, y)
+        | p::Atom::Less(x, y)
+        | p::Atom::LessMset(x, y)
+        | p::Atom::Subterm(x, y) => {
+            collect_term(x, out);
+            collect_term(y, out);
+        }
+        p::Atom::Action(f, t) => {
+            collect_fact(f, out);
+            collect_term(t, out);
+        }
+        p::Atom::Last(t) => collect_term(t, out),
+        p::Atom::Pred(f) => collect_fact(f, out),
+    }
+}
+
+fn collect_formula<'a>(f: &'a p::Formula, out: &mut Shapes<'a>) {
+    match f {
+        p::Formula::True | p::Formula::False => {}
+        p::Formula::Atom(a) => collect_atom(a, out),
+        p::Formula::Not(g) => collect_formula(g, out),
+        p::Formula::And(x, y)
+        | p::Formula::Or(x, y)
+        | p::Formula::Implies(x, y)
+        | p::Formula::Iff(x, y) => {
+            collect_formula(x, out);
+            collect_formula(y, out);
+        }
+        p::Formula::Forall(vs, g) | p::Formula::Exists(vs, g) => {
+            out.vars.extend(vs.iter());
+            collect_formula(g, out);
+        }
+    }
+}
+
+fn shapes(f: &p::Formula) -> Shapes<'_> {
+    let mut out = Shapes::default();
+    collect_formula(f, &mut out);
+    out
+}
+
+/// The internal annotation a parser annotation converts to
+/// (`elaborate::copy_fact_annotations`), whose `Ord` orders the `BTreeSet`
+/// the internal fact stores (`fact.rs:39-44`, `:97`).
+fn internal_annotation(a: &p::FactAnnotation) -> FactAnnotation {
+    match a {
+        p::FactAnnotation::SolveFirst => FactAnnotation::SolveFirst,
+        p::FactAnnotation::SolveLast => FactAnnotation::SolveLast,
+        p::FactAnnotation::NoSources => FactAnnotation::NoSources,
+    }
+}
+
+/// Whether a parser fact's source-order annotation list is what the
+/// internal fact's `BTreeSet` gives back: strictly increasing under the
+/// internal `Ord`, so neither reordered nor duplicated.
+fn annotations_are_ord_sorted(annotations: &[p::FactAnnotation]) -> bool {
+    let anns: Vec<FactAnnotation> = annotations.iter().map(internal_annotation).collect();
+    anns.windows(2).all(|w| w[0] < w[1])
+}
+
+#[test]
+fn annotations_written_out_of_ord_order_are_not_ord_sorted() {
+    assert!(annotations_are_ord_sorted(&[
+        p::FactAnnotation::SolveFirst,
+        p::FactAnnotation::NoSources,
+    ]));
+    assert!(!annotations_are_ord_sorted(&[
+        p::FactAnnotation::NoSources,
+        p::FactAnnotation::SolveFirst,
+    ]));
+    assert!(!annotations_are_ord_sorted(&[
+        p::FactAnnotation::SolveLast,
+        p::FactAnnotation::SolveLast,
+    ]));
+}
+
+#[test]
+fn corpus_fact_annotations_are_ord_sorted() {
+    let start = Instant::now();
+    let Some(corpus) = corpus() else {
+        return;
+    };
+    let (parsed, files) = file_counts(&corpus.2);
+    let work = all_items(corpus);
+    let formulas = work.len();
+    let mut annotated = 0usize;
+    let mut mismatches: Vec<String> = Vec::new();
+    for (i, item) in &work {
+        for fact in shapes(&item.formula).facts {
+            if fact.annotations.is_empty() {
+                continue;
+            }
+            annotated += 1;
+            if !annotations_are_ord_sorted(&fact.annotations) {
+                mismatches.push(format!(
+                    "MISMATCH {} fact {}: {:?}",
+                    at(corpus, *i, &item.label),
+                    fact.name,
+                    fact.annotations
+                ));
+            }
+        }
+    }
+    eprintln!(
+        "corpus annotations: files={files} parsed={parsed} formulas={formulas} \
+         annotated_facts={annotated} mismatches={} wall={:?}",
+        mismatches.len(),
+        start.elapsed()
+    );
+    for m in &mismatches {
+        eprintln!("{m}");
+    }
+    assert_corpus_covered(parsed, files);
+    assert!(formulas > 0, "no formulas walked");
+    assert!(
+        mismatches.is_empty(),
+        "{} facts whose annotations the BTreeSet round trip reorders; first: {}",
+        mismatches.len(),
+        mismatches[0]
+    );
+}
+
+#[test]
+fn corpus_no_typed_varspec_in_theory_formulas() {
+    let start = Instant::now();
+    let Some(corpus) = corpus() else {
+        return;
+    };
+    let (parsed, files) = file_counts(&corpus.2);
+    let work = all_items(corpus);
+    let formulas = work.len();
+    let mut vars = 0usize;
+    let mut sapic_typed = 0usize;
+    let mut mismatches: Vec<String> = Vec::new();
+    for (i, item) in &work {
+        for v in shapes(&item.formula).vars {
+            vars += 1;
+            if v.typ.is_none() {
+                continue;
+            }
+            // A SAPIC condition is parsed by `standardFormula sapicvar
+            // sapicnodevar` (Theory/Text/Parser/Sapic.hs:253-254), whose
+            // variables carry the SAPIC type annotation; `sapic_from_parser`
+            // is the instantiation that keeps it.
+            if item.sapic {
+                sapic_typed += 1;
+            } else {
+                mismatches.push(format!(
+                    "MISMATCH {} variable {}:{:?}",
+                    at(corpus, *i, &item.label),
+                    v.name,
+                    v.typ
+                ));
+            }
+        }
+    }
+    eprintln!(
+        "corpus varspec types: files={files} parsed={parsed} formulas={formulas} variables={vars} \
+         sapic_typed={sapic_typed} mismatches={} wall={:?}",
+        mismatches.len(),
+        start.elapsed()
+    );
+    for m in &mismatches {
+        eprintln!("{m}");
+    }
+    assert_corpus_covered(parsed, files);
+    assert!(vars > 0, "no variables walked");
+    assert!(
+        mismatches.is_empty(),
+        "{} typed variables outside a SAPIC formula; first: {}",
+        mismatches.len(),
+        mismatches[0]
+    );
+}
 
 /// The two SAPIC assertions on one item, and whether the process printer's
 /// own width breaks the formula over more than one line.
@@ -427,10 +740,7 @@ const FLAT_WIDTH: usize = 1 << 40;
 /// it runs at [`FLAT_WIDTH`] and compares content — AC operand order, atom
 /// shape, spelling — and not layout.
 fn compare_sapic(item: &Item, msig: &tamarin_term::maude_sig::MaudeSig) -> Result<bool, Mismatch> {
-    let raw = item
-        .raw
-        .as_ref()
-        .expect("a SAPIC item carries the formula as written");
+    let raw = &item.pre;
     let label = |what: &str| format!("{} [{what}]", item.label);
     let sapic = match sapic_from_parser(raw, msig) {
         Ok(f) => f,
@@ -460,36 +770,26 @@ fn compare_sapic(item: &Item, msig: &tamarin_term::maude_sig::MaudeSig) -> Resul
 #[test]
 fn corpus_sapic_condition_render_matches_the_internal_printer() {
     let start = Instant::now();
-    let Some((root, files, reports, pool)) = corpus_phase() else {
+    let Some(corpus) = corpus() else {
         return;
     };
-    let parsed = reports
-        .iter()
-        .filter(|r| matches!(r.outcome, Outcome::Parsed))
-        .count();
-    let work: Vec<(usize, &Item)> = reports
-        .iter()
-        .enumerate()
-        .flat_map(|(i, r)| {
-            r.items
-                .iter()
-                .filter(|it| it.raw.is_some())
-                .map(move |it| (i, it))
-        })
+    let (parsed, files) = file_counts(&corpus.2);
+    let work: Vec<(usize, &Item)> = all_items(corpus)
+        .into_iter()
+        .filter(|(_, it)| it.sapic)
         .collect();
     let sapic_items = work.len();
-    let results: Vec<(usize, &Item, Result<bool, Mismatch>)> = pool.install(|| {
+    let results: Vec<(usize, &Item, Result<bool, Mismatch>)> = deep_pool().install(|| {
         work.par_iter()
-            .map(|&(i, item)| (i, item, compare_sapic(item, &reports[i].msig)))
+            .map(|&(i, item)| (i, item, compare_sapic(item, &corpus.2[i].msig)))
             .collect()
     });
-    let at = |i: usize, label: &str| format!("{}: {label}", rel(&files[i], &root).display());
     let mismatches: Vec<String> = results
         .iter()
         .filter_map(|(i, _, r)| match r {
             Err((label, expected, got)) => Some(format!(
                 "MISMATCH {}\n--- expected\n{expected}\n--- got\n{got}",
-                at(*i, label)
+                at(corpus, *i, label)
             )),
             Ok(_) => None,
         })
@@ -500,14 +800,13 @@ fn corpus_sapic_condition_render_matches_the_internal_printer() {
     let wrapping: Vec<String> = results
         .iter()
         .filter_map(|(i, item, r)| match r {
-            Ok(true) => Some(at(*i, &item.label)),
+            Ok(true) => Some(at(corpus, *i, &item.label)),
             _ => None,
         })
         .collect();
     eprintln!(
-        "corpus sapic: files={} parsed={parsed} sapic_items={sapic_items} mismatches={} \
+        "corpus sapic: files={files} parsed={parsed} sapic_items={sapic_items} mismatches={} \
          wrapping_items={} wall={:?}",
-        files.len(),
         mismatches.len(),
         wrapping.len(),
         start.elapsed()
@@ -518,7 +817,7 @@ fn corpus_sapic_condition_render_matches_the_internal_printer() {
     for m in &mismatches {
         eprintln!("{m}");
     }
-    assert_corpus_covered(parsed, files.len());
+    assert_corpus_covered(parsed, files);
     assert!(sapic_items > 0, "no SAPIC formulas compared");
     assert!(
         mismatches.is_empty(),
