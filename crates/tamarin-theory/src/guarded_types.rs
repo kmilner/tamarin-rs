@@ -704,6 +704,14 @@ pub fn map_free_atom<F: FnMut(&p::VarSpec) -> p::VarSpec>(a: &GAtom, f: &mut F) 
 /// parser AST the guarded store is built from carries the sorted RIGHT fold
 /// `canonicalize_ac_in_pterm` produces.
 ///
+/// A binary application arrives in the prefix form `App(name, [a, b])`: an
+/// internal term holds one `fAppNoEq` for both the prefix and the braced
+/// source spelling (HS `naryOpApp`/`binaryAlgApp`,
+/// Theory/Text/Parser/Term.hs:88-106,:109-121), so it does not record the
+/// source spelling.  The two share a [`crate::guarded::cmp_term`] key
+/// and a printed form (`prettyTerm` has no brace case,
+/// Term/Term.hs:298-327); they differ under the derived `PartialEq`.
+///
 /// Stage 5 of the internal-representation programme deletes this function
 /// together with `GTerm`.
 pub fn blnatom_to_parser(a: &crate::atom::Atom<crate::formula::BLNTerm>) -> p::Atom {
@@ -911,6 +919,32 @@ mod tests {
                     p::BinOp::AcFct(tamarin_term::intern::intern_str("add")),
                     ga(GTerm::Var(BVar::Free(vs("x", 0)))),
                     ga(GTerm::Var(BVar::Free(vs("y", 0)))),
+                )
+            );
+        }
+
+        /// An internal term holds one `fAppNoEq` for `op(t1, t2)` and for
+        /// `op{t1}t2` (HS `naryOpApp`/`binaryAlgApp`,
+        /// Theory/Text/Parser/Term.hs:88-106,:109-121), so the lowering
+        /// writes the prefix `GTerm::App` and never the parser AST's braced
+        /// `GTerm::AlgApp`.
+        #[test]
+        fn blnatom_to_gatom_writes_a_binary_application_in_prefix_form() {
+            let sdec = tamarin_term::function_symbols::NoEqSym::new(
+                b"sdec".to_vec(),
+                2,
+                Privacy::Public,
+                Constructability::Destructor,
+            );
+            assert_eq!(
+                lowered(f_app_no_eq(sdec, vec![v("m"), v("k")])),
+                GTerm::App(
+                    "sdec".into(),
+                    vec![
+                        GTerm::Var(BVar::Free(vs("m", 0))),
+                        GTerm::Var(BVar::Free(vs("k", 0))),
+                    ]
+                    .into(),
                 )
             );
         }

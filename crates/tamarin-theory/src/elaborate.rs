@@ -1447,6 +1447,11 @@ pub fn canonicalize_ac_in_pterm(t: &p::Term) -> p::Term {
             n.clone(),
             args.iter().map(canonicalize_ac_in_pterm).collect(),
         ),
+        // `op{t1}t2` is a head of its own: HS `binaryAlgApp` has no `em` case
+        // and builds `fAppNoEq` (Theory/Text/Parser/Term.hs:109-121) where
+        // `naryOpApp` builds `fAppC EMap` for `em(a, b)`
+        // (Theory/Text/Parser/Term.hs:103), so the braced spelling of a
+        // commutative symbol keeps its arguments in source order.
         p::Term::AlgApp(n, a, b) => p::Term::AlgApp(
             n.clone(),
             Box::new(canonicalize_ac_in_pterm(a)),

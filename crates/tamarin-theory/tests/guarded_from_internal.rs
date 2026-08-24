@@ -45,9 +45,24 @@
 //!   AST records `sdec{m}k` as `Term::AlgApp` and `sdec(m, k)` as
 //!   `Term::App`, while HS `binaryAlgApp` builds one `fAppNoEq` for both
 //!   (Theory/Text/Parser/Term.hs:109-121), so an internal term cannot say
-//!   which of them the source spells.  The two spellings share a `cmp_term`
-//!   key and a printed form, and they differ under the derived `PartialEq`.
-//!   This one is on a gate-corpus file.
+//!   which of them the source spells.  It is marked `braced spelling only`,
+//!   which [`spelling_normalised`] checks: rewriting the parser-AST route's
+//!   `AlgApp` nodes to the prefix `App` makes the two values equal, so the
+//!   head is the whole of the difference.  The two spellings share a
+//!   `cmp_term` key and a printed form (`prettyTerm` has no brace case,
+//!   Term/Term.hs:298-327), and the parser AST is their only source: every
+//!   term the solver builds out of an `LNTerm` goes through
+//!   `elaborate::lnterm_to_term`, which writes the prefix form.  This one is
+//!   on a gate-corpus file, and the head the guarded store carries is not
+//!   observable there: `loops/Typing_and_Destructors.spthy` matches the
+//!   pinned oracle under `--prove` and at load with either head.
+//!
+//! The braced head is kept on the parser-AST side rather than normalised
+//! away there, because HS holds the two spellings apart for a commutative
+//! symbol: `naryOpApp` maps `em(a, b)` to `fAppC EMap`, whose arguments it
+//! sorts (Theory/Text/Parser/Term.hs:103, Term/Term/Raw.hs:133-134), while
+//! `binaryAlgApp` has no `em` case and maps `em{a}b` to `fAppNoEq`
+//! (Theory/Text/Parser/Term.hs:109-121).
 
 use rayon::prelude::*;
 use std::path::{Path, PathBuf};
@@ -56,7 +71,8 @@ use std::time::{Duration, Instant};
 use tamarin_parser::ast as p;
 use tamarin_theory::formula::{from_parser, to_lnformula};
 use tamarin_theory::guarded::{
-    canonicalize_ac_in_guarded, formula_to_guarded, formula_to_guarded_ln, Guarded,
+    canonicalize_ac_in_guarded, formula_to_guarded, formula_to_guarded_ln, ga, GAtom, GFact, GTerm,
+    Guarded,
 };
 use tamarin_theory::pretty_formula::pretty_guarded;
 
@@ -94,7 +110,7 @@ const RESIDUE: &[&str] = &[
     "csf26-ac/multiset-UD/csf20-disputeResolution/mixvote_ShHh_RF_reuseAsRestriction.spthy: lemma `TimelyP' [canonical forms agree]",
     "csf26-ac/multiset-UD/csf20-disputeResolution/mixvote_ShHh_RF_reuseAsRestriction.spthy: lemma `VoterC' [canonical forms agree]",
     "csf26-ac/multiset-UD/csf20-disputeResolution/mixvote_ShHh_RF_reuseAsRestriction.spthy: lemma `VoterC' [canonical forms agree]",
-    "loops/Typing_and_Destructors.spthy: lemma `type_assertion' [canonical forms differ]",
+    "loops/Typing_and_Destructors.spthy: lemma `type_assertion' [braced spelling only]",
     "thesis-LaraSchmid-evoting/chapter4_DisputeResolution/aletheaDR_ShHh_RF.spthy: lemma `DRvoterC' [canonical forms agree]",
     "thesis-LaraSchmid-evoting/chapter4_DisputeResolution/aletheaDR_ShHh_RF.spthy: lemma `DRvoterT' [canonical forms agree]",
     "thesis-LaraSchmid-evoting/chapter4_DisputeResolution/aletheaDR_ShHh_RF_functional_LHS.spthy: lemma `DRvoterC' [canonical forms agree]",
@@ -188,6 +204,67 @@ fn canonical(g: &Result<Guarded, String>) -> Result<Guarded, String> {
     }
 }
 
+/// Every braced binary application of `g` written in the prefix form the
+/// locally-nameless route produces.  `GTerm::AlgApp(n, a, b)` and
+/// `GTerm::App(n, [a, b])` are one `fAppNoEq` in an internal term (HS
+/// `binaryAlgApp`, Theory/Text/Parser/Term.hs:109-121), so two values that
+/// agree under this rewrite differ in the source spelling alone.
+fn spelling_normalised(g: &Guarded) -> Guarded {
+    fn term(t: &GTerm) -> GTerm {
+        match t {
+            GTerm::AlgApp(n, a, b) => GTerm::App(n.clone(), vec![term(a), term(b)].into()),
+            GTerm::App(n, args) => GTerm::App(n.clone(), args.iter().map(term).collect()),
+            GTerm::Pair(items) => GTerm::Pair(items.iter().map(term).collect()),
+            GTerm::Diff(a, b) => GTerm::Diff(ga(term(a)), ga(term(b))),
+            GTerm::BinOp(op, a, b) => GTerm::BinOp(*op, ga(term(a)), ga(term(b))),
+            GTerm::PatMatch(inner) => GTerm::PatMatch(ga(term(inner))),
+            GTerm::Var(_)
+            | GTerm::PubLit(_)
+            | GTerm::FreshLit(_)
+            | GTerm::NatLit(_)
+            | GTerm::Number(_)
+            | GTerm::NumberOne
+            | GTerm::NatOne
+            | GTerm::DhNeutral => t.clone(),
+        }
+    }
+    fn fact(f: &GFact) -> GFact {
+        GFact {
+            persistent: f.persistent,
+            name: f.name.clone(),
+            args: f.args.iter().map(term).collect(),
+            annotations: f.annotations.clone(),
+        }
+    }
+    fn atom(a: &GAtom) -> GAtom {
+        match a {
+            GAtom::Eq(x, y) => GAtom::Eq(term(x), term(y)),
+            GAtom::Less(x, y) => GAtom::Less(term(x), term(y)),
+            GAtom::LessMset(x, y) => GAtom::LessMset(term(x), term(y)),
+            GAtom::Subterm(x, y) => GAtom::Subterm(term(x), term(y)),
+            GAtom::Action(f, t) => GAtom::Action(fact(f), term(t)),
+            GAtom::Last(t) => GAtom::Last(term(t)),
+            GAtom::Pred(f) => GAtom::Pred(fact(f)),
+        }
+    }
+    match g {
+        Guarded::Atom(a) => Guarded::Atom(atom(a)),
+        Guarded::Conj(v) => Guarded::Conj(v.iter().map(spelling_normalised).collect()),
+        Guarded::Disj(v) => Guarded::Disj(v.iter().map(spelling_normalised).collect()),
+        Guarded::GGuarded {
+            qua,
+            vars,
+            guards,
+            body,
+        } => Guarded::GGuarded {
+            qua: *qua,
+            vars: vars.clone(),
+            guards: guards.iter().map(atom).collect(),
+            body: std::sync::Arc::new(spelling_normalised(body)),
+        },
+    }
+}
+
 /// Both routes on one formula: the parser AST as `elaborate` stores it, and
 /// the locally-nameless formula `from_parser` closes it into.  A formula
 /// that cannot reach `LNFormula` is itself a finding — the internal-formula
@@ -214,7 +291,10 @@ fn compare(
     if ast == ln {
         return None;
     }
-    let canon = if canonical(&ast) == canonical(&ln) {
+    let spelling = matches!((&ast, &ln), (Ok(a), Ok(l)) if spelling_normalised(a) == *l);
+    let canon = if spelling {
+        "braced spelling only"
+    } else if canonical(&ast) == canonical(&ln) {
         "canonical forms agree"
     } else {
         "canonical forms differ"
