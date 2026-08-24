@@ -1,0 +1,59 @@
+// The guarded-conversion error rendered past the width of the renderer that
+// prints it.
+//
+// `noUnguardedVars` (Theory/Constraint/System/Guarded.hs:507-514) throws a Doc,
+// not a string: an `fsep` over the offending variable names (lines 509-512)
+// above `ppFormula f0`, and `ppFormula = nest 2 . doubleQuotes .
+// prettyLNFormula` (line 477) is a Doc too, as is the `in the formula` trailer
+// `ppError` appends (line 479).  Every break in them is decided by whichever
+// renderer receives the Doc, and the same error reaches two:
+//
+//   - the `theory … end` echo, through `prettyLemma`'s `conversion to guarded
+//     formula failed:` comment (lib/theory/src/Lemma.hs:131-134), printed by
+//     `renderDoc` at `lineWidth = 110` (Main/Console.hs:242-243,398-399) and
+//     HughesPJ's default 1.5 ribbons, so ~73 columns of text;
+//   - the wf report, through `checkGuarded`
+//     (Theory/Tools/Wellformedness.hs:988-993) under the ` Formula guardedness`
+//     topic (line 1004), which `addComment` stores as `render c`
+//     (TheoryObject.hs:717-718) — HughesPJ's default style, 100 columns and ~67
+//     of ribbon — and which nests the message two columns deeper than the echo
+//     does.
+//
+// `WideUnguardable` is written to fall between the two budgets: the echo keeps
+// each pair equation on one line and breaks the conjunction, the report breaks
+// inside the equations as well, and the variable list wraps after a different
+// name in each.  `NarrowUnguardable` fits in both and is the control — its four
+// lines are identical everywhere, so a diff confined to the wide lemma is the
+// width, not the message.
+//
+// Both probes are LEMMAS.  `prettyRestriction` (TheoryObject.hs:889-901)
+// decides its `// safety formula` line with `formulaToGuarded_`
+// (Guarded.hs:466-467), which is `either (error . render) id`, so the oracle
+// DIES while printing an unguardable restriction and yields no comparable
+// bytes.
+//
+// Mode `diverge`: the port renders the quoted formula and the variable list as
+// single lines in both places.  See check.sh's `divergence_shape` for the
+// anchors.  `guarded_freshened_names` pins the same message where it fits the
+// budget; no corpus theory carries an unguardable lemma at all.
+//
+// Compared slices: the wf report block AND the `theory … end` echo (see
+// check.sh) — the corner is exactly that the two lay the same Doc out
+// differently.
+
+theory S3UnguardableWideLemma
+begin
+
+rule A:
+  [ In( x ) ] --[ Observed( x ) ]-> [ ]
+
+lemma WideUnguardable:
+  "All firstArgument secondArgument thirdArgument fourthArgument.
+     ( <firstArgument, secondArgument> = <thirdArgument, fourthArgument>
+     & <secondArgument, thirdArgument> = <fourthArgument, firstArgument> )
+   ==> F"
+
+lemma NarrowUnguardable:
+  "All x z. (<x, z> = x) ==> F"
+
+end

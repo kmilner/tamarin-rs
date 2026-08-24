@@ -45,3 +45,7 @@ sapic_msr_restrict_wrap	theory	match	--derivcheck-timeout=0
 sapic_pubname_in_restrict	wf	match	--derivcheck-timeout=0
 sapic_cond_binder	wf,theory	match	--derivcheck-timeout=0
 sapic_call_cond	wf,theory	match	--derivcheck-timeout=0
+s3_macro_lemma_header	theory	match	--derivcheck-timeout=0
+s3_acc_pred_lemma	wf,theory	match	--derivcheck-timeout=0
+s3_nested_tuple_guard	wf,theory	match	--derivcheck-timeout=0
+s3_unguardable_wide_lemma	wf,theory	diverge	--derivcheck-timeout=0

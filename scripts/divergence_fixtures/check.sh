@@ -38,6 +38,21 @@ report() { printf '  %-24s %-6s %-8s %s\n' "$1" "$2" "$3" "$4"; }
 # The directory and the manifest must agree before anything is loaded.
 census_fixture_dir
 
+# The port renders a guarded-conversion error as strings, so the quoted formula
+# and the `unguarded variable(s)` list stay on one line whatever the width, while
+# the control lemma that fits either budget comes out identical on both sides.
+# Both slices of s3_unguardable_wide_lemma assert that half of the divergence.
+unguardable_wide_port_side() {
+    local hs="$1" rs="$2" ctl='"∀ x z. (<x, z> = x) ⇒ (⊥)"'
+    grep -qF "unguarded variable(s) 'firstArgument', 'secondArgument', 'thirdArgument', 'fourthArgument' in the subformula" "$rs" \
+        || { echo "    port side no longer keeps the variable list on one line" >&2; return 1; }
+    grep -qF '"∀ firstArgument secondArgument thirdArgument fourthArgument. ((<firstArgument, secondArgument> = <thirdArgument, fourthArgument>) ∧ (<secondArgument, thirdArgument> = <fourthArgument, firstArgument>)) ⇒ (⊥)"' "$rs" \
+        || { echo "    port side no longer keeps the quoted formula on one line" >&2; return 1; }
+    grep -qF "$ctl" "$hs" && grep -qF "$ctl" "$rs" \
+        || { echo "    the narrow control lemma is gone from one side — the divergence is no longer confined to the width" >&2; return 1; }
+    return 0
+}
+
 # Extra assertions for a `diverge` fixture: the SHAPE of the divergence, not
 # just its existence, so an unrelated change to either side cannot leave the
 # fixture in a passing state for the wrong reason.  A `diverge` row with no arm
@@ -63,6 +78,26 @@ divergence_shape() {
             || { echo "    oracle side does not re-sort the AC arguments by the display index — expected \`B( (x++~x.1) )\`" >&2; return 1; }
         grep -qF "⇒ (∃ ~x.1 #j. B( (~x.1++x) ) @ #j)" "$expected/$1.$2.rs.txt" \
             || { echo "    port side does not order the AC arguments by the written sort — expected \`B( (~x.1++x) )\`" >&2; return 1; }
+        ;;
+    s3_unguardable_wide_lemma.theory)
+        # The echo hands the error Doc to renderDoc at 110 columns and HughesPJ's
+        # default 1.5 ribbons, so the variable list breaks after 'thirdArgument'
+        # and each pair equation still fits on one line.
+        grep -qxF "  unguarded variable(s) 'firstArgument', 'secondArgument', 'thirdArgument'," "$expected/$1.$2.hs.txt" \
+            || { echo "    oracle side no longer breaks the variable list after 'thirdArgument'" >&2; return 1; }
+        grep -qxF "      ((<firstArgument, secondArgument> = <thirdArgument, fourthArgument>) ∧" "$expected/$1.$2.hs.txt" \
+            || { echo "    oracle side no longer keeps a pair equation on one line at the echo's width" >&2; return 1; }
+        unguardable_wide_port_side "$expected/$1.$2.hs.txt" "$expected/$1.$2.rs.txt" || return 1
+        ;;
+    s3_unguardable_wide_lemma.wf)
+        # The report goes through addComment's render — 100 columns, the same 1.5
+        # ribbons — two columns deeper, so the same list breaks one name earlier
+        # and each pair equation breaks at its `=`.
+        grep -qxF "    unguarded variable(s) 'firstArgument', 'secondArgument'," "$expected/$1.$2.hs.txt" \
+            || { echo "    oracle side no longer breaks the variable list after 'secondArgument'" >&2; return 1; }
+        grep -qxF "        ((<firstArgument, secondArgument> =" "$expected/$1.$2.hs.txt" \
+            || { echo "    oracle side no longer breaks a pair equation at its '=' at the report's width" >&2; return 1; }
+        unguardable_wide_port_side "$expected/$1.$2.hs.txt" "$expected/$1.$2.rs.txt" || return 1
         ;;
     *)  echo "    no documented shape for the $1.$2 divergence — add an arm here" >&2; return 1 ;;
     esac

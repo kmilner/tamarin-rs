@@ -1,0 +1,17 @@
+WARNING: the following wellformedness checks failed!
+
+ Formula guardedness
+====================
+
+  Lemma `WideUnguardable' cannot be converted to a guarded formula:
+    unguarded variable(s) 'firstArgument', 'secondArgument', 'thirdArgument', 'fourthArgument' in the subformula
+      "∀ firstArgument secondArgument thirdArgument fourthArgument. ((<firstArgument, secondArgument> = <thirdArgument, fourthArgument>) ∧ (<secondArgument, thirdArgument> = <fourthArgument, firstArgument>)) ⇒ (⊥)"
+    in the formula
+      "∀ firstArgument secondArgument thirdArgument fourthArgument. ((<firstArgument, secondArgument> = <thirdArgument, fourthArgument>) ∧ (<secondArgument, thirdArgument> = <fourthArgument, firstArgument>)) ⇒ (⊥)"
+  
+  Lemma `NarrowUnguardable' cannot be converted to a guarded formula:
+    unguarded variable(s) 'x', 'z' in the subformula
+      "∀ x z. (<x, z> = x) ⇒ (⊥)"
+    in the formula
+      "∀ x z. (<x, z> = x) ⇒ (⊥)"
+*/
