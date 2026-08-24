@@ -44,16 +44,18 @@
 //! pipeline of the same theories is kept under `cfg(test)` as the
 //! differential reference for the structural builders (see the tests).
 
-use tamarin_parser::ast as p;
 use tamarin_term::function_symbols::{FunSym, NdcState, Privacy};
-use tamarin_term::lterm::{HasFrees, LNTerm, LSort, LVar};
+use tamarin_term::lterm::{BVar, HasFrees, LNTerm, LSort, LVar};
 use tamarin_term::maude_proc::MaudeHandle;
 use tamarin_term::rewriting::Equal;
 use tamarin_term::subst_vfresh::LNSubstVFresh;
 use tamarin_term::term::Term;
+use tamarin_term::vterm::var_term;
 
+use crate::atom::ProtoAtom;
 use crate::constraint::solver::context::IntrRuleCache;
 use crate::fact::{Fact, FactTag, LNFact, Multiplicity};
+use crate::formula::{exists_var, for_all_var, lift_free, BLNTerm, LNFormula, ProtoFormula};
 use crate::guarded::Guarded;
 use crate::rule::{
     apply_subst_rule, get_conc_fact, get_deconstr_rule_kd_prem, get_deconstr_rule_prems_tail,
@@ -319,85 +321,83 @@ fn deduction_rule(s: &[LNFact]) -> crate::theory::OpenProtoRule {
     ))
 }
 
-/// A `#`-sorted idx-0 parser-AST variable — the timepoint/binder shape
-/// the restriction and lemma formulas quantify over.
-fn ndc_node_var(name: &str) -> p::VarSpec {
-    p::VarSpec {
-        name: name.to_string(),
-        idx: 0,
-        sort: LSort::Node,
-        typ: None,
-    }
+/// A `#`-sorted idx-0 variable — the timepoint/binder shape the restriction
+/// and lemma formulas quantify over (HS `LVar x LSortNode 0`,
+/// CloseRule.hs:273-274).
+fn ndc_node_var(name: &str) -> LVar {
+    LVar::new(name, LSort::Node, 0)
+}
+
+/// A timepoint as a formula term: `LIT (Var (Free v))` (CloseRule.hs:273).
+fn free_time(v: &LVar) -> BLNTerm {
+    var_term(BVar::Free(*v))
 }
 
 /// `FACT() @ #tv` — HS `factAnd`/`factAndD` (CloseRule.hs:273,277): a
 /// nullary Linear proto fact at a Node-sorted timepoint.
-fn nullary_action_at(fact_name: &str, tv: &p::VarSpec) -> p::Formula {
-    p::Formula::Atom(p::Atom::Action(
-        p::Fact {
-            persistent: false,
-            name: fact_name.to_string(),
-            args: Vec::new(),
-            annotations: Vec::new(),
-        },
-        p::Term::Var(tv.clone()),
+fn nullary_action_at(fact_name: &str, tv: &LVar) -> LNFormula {
+    ProtoFormula::Atom(ProtoAtom::Action(
+        free_time(tv),
+        crate::fact::proto_fact(Multiplicity::Linear, fact_name, Vec::new()).map_ref(lift_free),
     ))
 }
 
 /// `#a = #b` — HS `factEq` (CloseRule.hs:274).
-fn time_eq(a: &p::VarSpec, b: &p::VarSpec) -> p::Formula {
-    p::Formula::Atom(p::Atom::Eq(
-        p::Term::Var(a.clone()),
-        p::Term::Var(b.clone()),
-    ))
+fn time_eq(a: &LVar, b: &LVar) -> LNFormula {
+    ProtoFormula::Atom(ProtoAtom::EqE(free_time(a), free_time(b)))
+}
+
+/// `foldr (hinted forAll) f vs` (Theory/Text/Parser/Formula.hs:73-77, over
+/// `forAll` Theory/Model/Formula.hs:355-356 and `hinted` :364-365): close
+/// the binders from the last to the first, so the first variable of `vs`
+/// carries the outermost quantifier.  The hint is
+/// `hint (LVar n s _) = (n, s)` (Theory/Model/Formula.hs:227-228).
+fn close_all(vs: &[LVar], body: LNFormula) -> LNFormula {
+    vs.iter().rev().fold(body, |acc, v| {
+        for_all_var((v.name.to_string(), v.sort), v, acc)
+    })
+}
+
+/// [`close_all`] at `exists` (Theory/Model/Formula.hs:359-360).
+fn close_ex(vs: &[LVar], body: LNFormula) -> LNFormula {
+    vs.iter().rev().fold(body, |acc, v| {
+        exists_var((v.name.to_string(), v.sort), v, acc)
+    })
 }
 
 /// HS `newRestriction0` (CloseRule.hs:269-275):
-/// `All #ndci #ndcj. OnlyOnce() @ #ndci & OnlyOnce() @ #ndcj ==>
-/// #ndci = #ndcj`, as the parser-AST value the parse of that text yields.
-/// HS names the binders `i`/`j` (LSortNode); the `ndc`-prefixed names are
-/// hints only, invisible outside the synthetic proof search.
-fn only_once_restriction_ast() -> p::Formula {
+/// `All #ndci #ndcj. OnlyOnce() @ #ndci & OnlyOnce() @ #ndcj ==> #ndci = #ndcj`.
+/// HS names the binders `i`/`j` and closes them with `forAllFormula`, a
+/// `foldl` over ascending `frees` that makes the LAST variable the outermost
+/// binder (Theory/Model/Formula.hs:537-538), where [`close_all`] keeps the
+/// written order.  Names and prefix order are hints only, invisible outside
+/// the synthetic proof search.
+fn only_once_restriction() -> LNFormula {
     let i = ndc_node_var("ndci");
     let j = ndc_node_var("ndcj");
-    p::Formula::Forall(
-        vec![i.clone(), j.clone()],
-        Box::new(p::Formula::Implies(
-            Box::new(p::Formula::And(
-                Box::new(nullary_action_at("OnlyOnce", &i)),
-                Box::new(nullary_action_at("OnlyOnce", &j)),
-            )),
-            Box::new(time_eq(&i, &j)),
-        )),
+    close_all(
+        &[i, j],
+        nullary_action_at("OnlyOnce", &i)
+            .and(nullary_action_at("OnlyOnce", &j))
+            .implies(time_eq(&i, &j)),
     )
 }
 
 /// HS `newRestriction2` (CloseRule.hs:280-283):
 /// `All #ndci #ndcj #ndck. OnlyOnceD() @ #ndci & OnlyOnceD() @ #ndcj &
 /// OnlyOnceD() @ #ndck ==> #ndci = #ndcj | #ndci = #ndck | #ndcj = #ndck`
-/// (`&`/`|` left-associated, as the parser builds them).
-fn only_once_d_restriction_ast() -> p::Formula {
+/// (`.&&.` and `.||.` are `infixl`, and both bind tighter than `.==>.` —
+/// Theory/Model/Formula.hs:233-235).
+fn only_once_d_restriction() -> LNFormula {
     let i = ndc_node_var("ndci");
     let j = ndc_node_var("ndcj");
     let k = ndc_node_var("ndck");
-    p::Formula::Forall(
-        vec![i.clone(), j.clone(), k.clone()],
-        Box::new(p::Formula::Implies(
-            Box::new(p::Formula::And(
-                Box::new(p::Formula::And(
-                    Box::new(nullary_action_at("OnlyOnceD", &i)),
-                    Box::new(nullary_action_at("OnlyOnceD", &j)),
-                )),
-                Box::new(nullary_action_at("OnlyOnceD", &k)),
-            )),
-            Box::new(p::Formula::Or(
-                Box::new(p::Formula::Or(
-                    Box::new(time_eq(&i, &j)),
-                    Box::new(time_eq(&i, &k)),
-                )),
-                Box::new(time_eq(&j, &k)),
-            )),
-        )),
+    close_all(
+        &[i, j, k],
+        nullary_action_at("OnlyOnceD", &i)
+            .and(nullary_action_at("OnlyOnceD", &j))
+            .and(nullary_action_at("OnlyOnceD", &k))
+            .implies(time_eq(&i, &j).or(time_eq(&i, &k)).or(time_eq(&j, &k))),
     )
 }
 
@@ -406,17 +406,15 @@ fn only_once_d_restriction_ast() -> p::Formula {
 /// values in theory order (`OnlyOnce` first).  The formulas are closed
 /// constants whose every binder is action-guarded, so the conversion
 /// cannot fail.
-fn deduction_restrictions(
-    sig: &tamarin_term::maude_sig::MaudeSig,
-    with_only_once_d: bool,
-) -> Vec<Guarded> {
-    let mut asts = vec![only_once_restriction_ast()];
+fn deduction_restrictions(with_only_once_d: bool) -> Vec<Guarded> {
+    let mut formulas = vec![only_once_restriction()];
     if with_only_once_d {
-        asts.push(only_once_d_restriction_ast());
+        formulas.push(only_once_d_restriction());
     }
-    asts.iter()
+    formulas
+        .iter()
         .map(|f| {
-            crate::guarded::formula_to_guarded_parsed(f, sig).unwrap_or_else(|e| {
+            crate::guarded::formula_to_guarded(f).unwrap_or_else(|e| {
                 panic!(
                     "[ndc] deduction restriction failed guarded conversion: {}",
                     e.message
@@ -426,95 +424,52 @@ fn deduction_restrictions(
         .collect()
 }
 
-/// Push every variable of a parser-AST term onto `out` in traversal
-/// order, first occurrence wins.  Fixes the lemma's data-binder order.
-fn collect_var_specs(t: &p::Term, out: &mut Vec<p::VarSpec>) {
-    match t {
-        p::Term::Var(v) if !out.contains(v) => {
-            out.push(v.clone());
-        }
-        p::Term::App(_, args) | p::Term::Pair(args) => {
-            for a in args {
-                collect_var_specs(a, out);
-            }
-        }
-        p::Term::AlgApp(_, a, b) | p::Term::Diff(a, b) | p::Term::BinOp(_, a, b) => {
-            collect_var_specs(a, out);
-            collect_var_specs(b, out);
-        }
-        p::Term::PatMatch(inner) => collect_var_specs(inner, out),
-        _ => {}
-    }
-}
-
 /// HS `newLemmas`' formula (CloseRule.hs:263-267):
 /// `Not (existFormula (landFormula (aLemma s ++ [kLogFact fact_term])))`,
 /// i.e. ¬∃ vars #t0 #t1. Generated_0(varD s) @ #t0 ∧ K(fact_term) @ #t1
 /// — with `aLemma`'s arguments NOT Msg→Fresh-retyped (only
 /// `lvarToLnterm`'s Nat→Fresh), and `kLogFact = protoFact Linear "K"`
-/// (Theory/Model/Fact.hs:302-303).  Built over the parser-AST formula layer (the
-/// `Guarded` leaf type) via `lnterm_to_parser` and converted by the same
-/// `formula_to_guarded_parsed` the load path applies to user lemmas.
+/// (Theory/Model/Fact.hs:301-303).  `landFormula` lifts each fact with
+/// `fmap (fmap (fmap Free))` (CloseRule.hs:200-201) — [`Fact::map_ref`] of
+/// [`lift_free`].
 ///
-/// Same-named binders stay distinct without renaming: binder resolution
-/// keys on (name, idx, sort) (guarded_types.rs `subst_free_term_cow`),
-/// mirroring HS's sort-aware `LVar` identity — so a Nat variable (Fresh
-/// in the `Generated_0` args via `lvarToLnterm`, Nat inside the K term)
-/// and dotted-index unifier variables (`x.5`) resolve to their own
-/// binders.  Binder names and order: HS quantifies `frees` under their
-/// own names with timepoints `"0"`/`"1"`; here the data binders keep
-/// first-occurrence order with `ndct`-named timepoints last — names and
-/// prefix order are hints only, invisible outside the synthetic search.
-fn deduction_lemma_guarded(
-    sig: &tamarin_term::maude_sig::MaudeSig,
-    s: &[LNFact],
-    fact_term: &LNTerm,
-) -> Guarded {
+/// Binder names and order: HS quantifies `frees` under their own names with
+/// timepoints `"0"`/`"1"`; here the data binders keep first-occurrence order
+/// with `ndct`-named timepoints last — names and prefix order are hints
+/// only, invisible outside the synthetic search.  Same-named binders stay
+/// distinct because a binder closes exactly the occurrences equal to its
+/// whole `LVar` (HS `quantify`'s `v == x`, Theory/Model/Formula.hs:350-352),
+/// so a Nat variable (Fresh in the `Generated_0` args via `lvarToLnterm`,
+/// Nat inside the K term) and dotted-index unifier variables (`x.5`) each
+/// close their own occurrences.
+fn deduction_lemma_guarded(s: &[LNFact], fact_term: &LNTerm) -> Guarded {
     let var_d: Vec<LVar> = tamarin_term::lterm::frees(&s.to_vec());
-    // `lnterm_to_parser` carries a Msg variable's sort over as `LSort::Msg`
-    // — the same concrete sort the parser pins on a prefixless quantifier
-    // binder (`quantifier_binder`, HS `msgvar` Token.hs:440-441), so the
-    // binder list below is byte-identical to a parsed one.
-    let lower = crate::pretty_theory::lnterm_to_parser;
     // aLemma s (CloseRule.hs:263): `map lvarToLnterm (varD s)`.
-    let gen_args: Vec<p::Term> = var_d
-        .iter()
-        .map(|v| lower(&crate::fact::lvar_to_lnterm(v)))
-        .collect();
-    let k_arg = lower(fact_term);
-    let mut binders: Vec<p::VarSpec> = Vec::new();
-    for t in gen_args.iter().chain(std::iter::once(&k_arg)) {
-        collect_var_specs(t, &mut binders);
+    let gen_args: Vec<LNTerm> = var_d.iter().map(crate::fact::lvar_to_lnterm).collect();
+    let mut binders: Vec<LVar> = Vec::new();
+    for t in gen_args.iter().chain(std::iter::once(fact_term)) {
+        t.for_each_free(&mut |v| {
+            if !binders.contains(v) {
+                binders.push(*v);
+            }
+        });
     }
     let t0 = ndc_node_var("ndct0");
     let t1 = ndc_node_var("ndct1");
-    let gen_at = p::Formula::Atom(p::Atom::Action(
-        p::Fact {
-            persistent: false,
-            name: "Generated_0".to_string(),
-            args: gen_args,
-            annotations: Vec::new(),
-        },
-        p::Term::Var(t0.clone()),
+    let gen_at = ProtoFormula::Atom(ProtoAtom::Action(
+        free_time(&t0),
+        crate::fact::proto_fact(Multiplicity::Linear, "Generated_0", gen_args).map_ref(lift_free),
     ));
-    let k_at = p::Formula::Atom(p::Atom::Action(
-        p::Fact {
-            persistent: false,
-            name: "K".to_string(),
-            args: vec![k_arg],
-            annotations: Vec::new(),
-        },
-        p::Term::Var(t1.clone()),
+    let k_at = ProtoFormula::Atom(ProtoAtom::Action(
+        free_time(&t1),
+        crate::fact::k_log_fact(fact_term.clone()).map_ref(lift_free),
     ));
     binders.push(t0);
     binders.push(t1);
-    let ast = p::Formula::Not(Box::new(p::Formula::Exists(
-        binders,
-        Box::new(p::Formula::And(Box::new(gen_at), Box::new(k_at))),
-    )));
+    let fm = close_ex(&binders, gen_at.and(k_at)).not();
     // Every binder occurs in one of the two Action guard atoms by
     // construction, so the conversion cannot fail on guardedness.
-    crate::guarded::formula_to_guarded_parsed(&ast, sig).unwrap_or_else(|e| {
+    crate::guarded::formula_to_guarded(&fm).unwrap_or_else(|e| {
         panic!(
             "[ndc] deduction lemma failed guarded conversion: {}",
             e.message
@@ -557,12 +512,8 @@ fn prove_deduction_theory(
     use crate::constraint::system::{formula_to_system, SourceKind};
 
     let rules = vec![deduction_rule(s)];
-    // The synthetic theory's signature IS the parent's, which the handle
-    // carries: HS builds `modifiedTheory1/2` over `emptyThy`, whose
-    // signature is `toSignaturePure sig` (CloseRule.hs:242,247,252).
-    let sig = maude.maude_sig();
-    let restrictions = deduction_restrictions(&sig, with_only_once_d);
-    let g = deduction_lemma_guarded(&sig, s, fact_term);
+    let restrictions = deduction_restrictions(with_only_once_d);
+    let g = deduction_lemma_guarded(s, fact_term);
     let ctx = ProofContext::new_with_injected_intruder_rules(
         maude.clone(),
         rules,

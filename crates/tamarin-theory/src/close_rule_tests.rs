@@ -59,7 +59,6 @@ fn ku(t: LNTerm) -> LNFact {
 /// here also exercises the parent-vs-synthetic guard-set equivalence
 /// the production path relies on.
 fn assert_structural_matches_text(
-    sig: &tamarin_term::maude_sig::MaudeSig,
     sig_text: &str,
     s: &[LNFact],
     fact_term: &LNTerm,
@@ -78,8 +77,8 @@ fn assert_structural_matches_text(
     let (text_rule, text_restrictions, text_lemma) =
         elaborate_deduction_theory_via_text(sig_text, &s2, &t2, with_only_once_d);
     let struct_rule = deduction_rule(&s2);
-    let struct_restrictions = deduction_restrictions(sig, with_only_once_d);
-    let struct_lemma = deduction_lemma_guarded(sig, &s2, &t2);
+    let struct_restrictions = deduction_restrictions(with_only_once_d);
+    let struct_lemma = deduction_lemma_guarded(&s2, &t2);
     // Whole-struct equality: premises/conclusions/actions, rule info
     // (name + attributes), and `new_vars` — the structural side's HS
     // `[]` (CloseRule.hs:257) must coincide with the text side's
@@ -127,7 +126,6 @@ fn structural_deduction_theory_matches_text_pipeline() {
     for (s, fact_term, label) in &cases {
         for ood in [true, false] {
             assert_structural_matches_text(
-                &sig,
                 &sig_text,
                 s,
                 fact_term,
@@ -138,26 +136,105 @@ fn structural_deduction_theory_matches_text_pipeline() {
     }
 }
 
-/// The structural restriction ASTs are exactly what the parser
-/// produces for the restriction text the render pipeline emits.
+/// The structural restriction formulas are exactly what
+/// [`crate::formula::from_parser`] builds for the restriction text the
+/// render pipeline emits.
 #[test]
-fn restriction_asts_equal_their_parsed_text() {
+fn restriction_formulas_equal_their_parsed_text() {
     let src = "theory R\nbegin\n\
 restriction OnlyOnce:\n  \"All #ndci #ndcj. OnlyOnce() @ #ndci & OnlyOnce() @ #ndcj ==> #ndci = #ndcj\"\n\
 restriction OnlyOnceD:\n  \"All #ndci #ndcj #ndck. OnlyOnceD() @ #ndci & OnlyOnceD() @ #ndcj & OnlyOnceD() @ #ndck ==> #ndci = #ndcj | #ndci = #ndck | #ndcj = #ndck\"\n\
 end\n";
     let parsed = tamarin_parser::parse_theory(src, &[]).expect("restriction theory parses");
-    let formulas: Vec<&p::Formula> = parsed
+    // The restriction atoms are nullary facts and timepoint equalities, so
+    // no term needs a function symbol from the signature.
+    let sig = tamarin_term::maude_sig::pair_maude_sig();
+    let formulas: Vec<LNFormula> = parsed
         .items
         .iter()
         .filter_map(|it| match it {
-            p::TheoryItem::Restriction(r) => Some(&r.formula),
+            tamarin_parser::ast::TheoryItem::Restriction(r) => Some(&r.formula),
             _ => None,
+        })
+        .map(|f| {
+            let syn = crate::formula::from_parser(f, &sig).expect("restriction closes");
+            crate::formula::to_lnformula(&syn).expect("restriction carries no predicate")
         })
         .collect();
     assert_eq!(formulas.len(), 2);
-    assert_eq!(*formulas[0], only_once_restriction_ast(), "OnlyOnce");
-    assert_eq!(*formulas[1], only_once_d_restriction_ast(), "OnlyOnceD");
+    assert_eq!(formulas[0], only_once_restriction(), "OnlyOnce");
+    assert_eq!(formulas[1], only_once_d_restriction(), "OnlyOnceD");
+}
+
+/// The guarded values the NDC search runs on, pinned as text: the two
+/// restrictions HS `addRestrictions` installs (CloseRule.hs:247,252).  The
+/// binder names and their prefix order are the port's, not HS's, and a
+/// change to either moves the synthetic search and with it the `[NDC]` tags
+/// in the printed `functions:` header.
+#[test]
+fn only_once_restriction_guarded_is_unchanged() {
+    let g = &deduction_restrictions(false)[0];
+    assert_eq!(
+        crate::pretty_formula::pretty_guarded(g),
+        "∀ #ndci #ndcj. (OnlyOnce( ) @ #ndci) ∧ (OnlyOnce( ) @ #ndcj) ⇒ #ndci = #ndcj",
+    );
+}
+
+/// [`only_once_restriction_guarded_is_unchanged`] for the `OnlyOnceD`
+/// restriction, which only theory-1 carries.
+#[test]
+fn only_once_d_restriction_guarded_is_unchanged() {
+    let rs = deduction_restrictions(true);
+    assert_eq!(rs.len(), 2, "theory-1 carries both restrictions");
+    assert_eq!(
+        crate::pretty_formula::pretty_guarded(&rs[1]),
+        "∀ #ndci #ndcj #ndck. (OnlyOnceD( ) @ #ndci) ∧ (OnlyOnceD( ) @ #ndcj) ∧ (OnlyOnceD( ) @ #ndck) ⇒ ((#ndci = #ndcj) ∨ (#ndci = #ndck) ∨ (#ndcj = #ndck))",
+    );
+}
+
+/// [`only_once_restriction_guarded_is_unchanged`] for the `Deduction`
+/// lemma, over the shapes the NDC pass meets: dotted unifier indices with a
+/// cross-sort Nat variable, a user-AC term, a builtin application with a
+/// pair and fresh/public variables, and the ground zero-binder case.
+#[test]
+fn deduction_lemma_guarded_is_unchanged() {
+    let pretty = |s: &[LNFact], t: &LNTerm| {
+        crate::pretty_formula::pretty_guarded(&deduction_lemma_guarded(s, t))
+    };
+    let x0 = var_term(LVar::new("x", LSort::Msg, 0));
+    let x5 = var_term(LVar::new("x", LSort::Msg, 5));
+    let n = var_term(LVar::new("n", LSort::Nat, 0));
+    assert_eq!(
+        pretty(
+            &[
+                kd(tamarin_term::builtin::pair(x0.clone(), x5.clone())),
+                ku(n.clone()),
+            ],
+            &n,
+        ),
+        "∀ x ~n x.1 %n.1 #ndct0 #ndct1. (Generated_0( x, ~n, x.1 ) @ #ndct0) ∧ (K( %n.1 ) @ #ndct1) ⇒ ⊥",
+    );
+    let (_sig, probe) = xorr_parent();
+    let (xorr2, xorr3, h_pair, fst_c, zeroo) =
+        (&probe[0], &probe[1], &probe[2], &probe[3], &probe[4]);
+    let a = var_term(
+        tamarin_term::lterm::frees(&vec![xorr2.clone()])
+            .into_iter()
+            .next()
+            .expect("xorr(a, b) has free vars"),
+    );
+    assert_eq!(
+        pretty(&[kd(xorr2.clone()), ku(a)], xorr3),
+        "∀ a b c #ndct0 #ndct1. (Generated_0( a, b ) @ #ndct0) ∧ (K( (a xorr b xorr c) ) @ #ndct1) ⇒ ⊥",
+    );
+    assert_eq!(
+        pretty(&[kd(h_pair.clone()), ku(fst_c.clone())], h_pair),
+        "∀ $p ~k a c #ndct0 #ndct1. (Generated_0( $p, ~k, a, c ) @ #ndct0) ∧ (K( h(<~k, $p, a>) ) @ #ndct1) ⇒ ⊥",
+    );
+    assert_eq!(
+        pretty(&[kd(zeroo.clone())], zeroo),
+        "∀ #ndct0 #ndct1. (Generated_0( ) @ #ndct0) ∧ (K( zeroo ) @ #ndct1) ⇒ ⊥",
+    );
 }
 
 /// HS `landFormula` seeds the lemma conjunction with `ltrue`
@@ -168,54 +245,24 @@ end\n";
 /// invisible.
 #[test]
 fn lemma_guarded_is_invariant_to_hs_ltrue_conjunct() {
-    let x = ndc_node_var("ndct0");
-    let y = ndc_node_var("ndct1");
-    let v = p::VarSpec {
-        name: "v".to_string(),
-        idx: 0,
-        sort: LSort::Msg,
-        typ: None,
-    };
-    let gen_at = p::Formula::Atom(p::Atom::Action(
-        p::Fact {
-            persistent: false,
-            name: "Generated_0".to_string(),
-            args: vec![p::Term::Var(v.clone())],
-            annotations: Vec::new(),
-        },
-        p::Term::Var(x.clone()),
+    let t0 = ndc_node_var("ndct0");
+    let t1 = ndc_node_var("ndct1");
+    let v = LVar::new("v", LSort::Msg, 0);
+    let gen_at: LNFormula = ProtoFormula::Atom(ProtoAtom::Action(
+        free_time(&t0),
+        crate::fact::proto_fact(Multiplicity::Linear, "Generated_0", vec![var_term(v)])
+            .map_ref(lift_free),
     ));
-    let k_at = p::Formula::Atom(p::Atom::Action(
-        p::Fact {
-            persistent: false,
-            name: "K".to_string(),
-            args: vec![p::Term::Var(v.clone())],
-            annotations: Vec::new(),
-        },
-        p::Term::Var(y.clone()),
+    let k_at: LNFormula = ProtoFormula::Atom(ProtoAtom::Action(
+        free_time(&t1),
+        crate::fact::k_log_fact(var_term(v)).map_ref(lift_free),
     ));
-    let binders = vec![v, x, y];
-    let ours = p::Formula::Not(Box::new(p::Formula::Exists(
-        binders.clone(),
-        Box::new(p::Formula::And(
-            Box::new(gen_at.clone()),
-            Box::new(k_at.clone()),
-        )),
-    )));
-    let hs_shaped = p::Formula::Not(Box::new(p::Formula::Exists(
-        binders,
-        Box::new(p::Formula::And(
-            Box::new(p::Formula::And(
-                Box::new(p::Formula::True),
-                Box::new(gen_at),
-            )),
-            Box::new(k_at),
-        )),
-    )));
-    let sig = tamarin_term::maude_sig::pair_maude_sig();
+    let binders = [v, t0, t1];
+    let ours = close_ex(&binders, gen_at.clone().and(k_at.clone())).not();
+    let hs_shaped = close_ex(&binders, ProtoFormula::ltrue().and(gen_at).and(k_at)).not();
     assert_eq!(
-        crate::guarded::formula_to_guarded_parsed(&ours, &sig).expect("ours converts"),
-        crate::guarded::formula_to_guarded_parsed(&hs_shaped, &sig).expect("HS shape converts"),
+        crate::guarded::formula_to_guarded(&ours).expect("ours converts"),
+        crate::guarded::formula_to_guarded(&hs_shaped).expect("HS shape converts"),
     );
 }
 
@@ -236,7 +283,7 @@ fn structural_lemma_closes_dotted_and_cross_sort_binders() {
         kd(tamarin_term::builtin::pair(x0.clone(), x5.clone())),
         ku(n.clone()),
     ];
-    let g = deduction_lemma_guarded(&tamarin_term::maude_sig::pair_maude_sig(), &s, &n);
+    let g = deduction_lemma_guarded(&s, &n);
     assert!(
         crate::guarded::free_vars(&g).is_empty(),
         "every occurrence must resolve to a binder; free vars: {:?}",
