@@ -494,16 +494,11 @@ fn synthesise_probe_theory(
     // not.  Keying the rename map on (name, sort, idx) — not (name, idx)
     // alone — is required so same-named vars of different sorts (e.g.
     // Register_pk's `~ltk` vs `ltk`) stay distinct.
-    // Each free var gets a UNIQUE probe name (`dvar<k>`) keeping its sort
-    // (nat→fresh).  HS distinguishes same-named/different-sort vars (`~ltk`
-    // vs `ltk`) via sort-aware LVar identity in de Bruijn conversion; RS's
-    // `formula_to_guarded` keys binders by NAME (not the full sort-aware
-    // LVar identity), so two `Ex ltk ltk` binders would be ambiguous and
-    // mis-resolve `KU(~ltk)`.  The unique `dvar<k>` naming is the mechanism
-    // that recovers HS's sort-disambiguation, with NO effect on derivability
-    // (variable names are immaterial to the intruder); the original var name
-    // is restored for the WfError report via `show_lvar` (prove_probe uses
-    // `free_vars`).
+    // A probe var's name (`dvar<k>`) and index carry nothing: derivability
+    // reads sorts and structure alone, and `prove_probe` reports the
+    // undecidable variable from the original `free_vars` entry through
+    // `show_lvar`.  `nat_to_fresh_var` gives the probe var the sort
+    // `lvarToLnterm` gives the premise.
     let probe_vars: Vec<p::VarSpec> = free_vars
         .iter()
         .enumerate()
