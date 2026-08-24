@@ -46,7 +46,7 @@ fn bare_nullary_macro_name_expands() {
     );
     assert!(
         matches!(&rule.actions[0].args[1],
-            p::Term::Var(v) if v.name == "konst" && v.sort == p::SortHint::Pub),
+            p::Term::Var(v) if v.name == "konst" && v.sort == LSort::Pub),
         "got {:?}",
         rule.actions[0].args[1]
     );

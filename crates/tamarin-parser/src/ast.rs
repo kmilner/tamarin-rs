@@ -11,6 +11,8 @@
 //! syntax-level staging form that a later elaboration pass lowers. [`Theory`] is
 //! the root; every other type hangs off its [`TheoryItem`] stream.
 
+use tamarin_term::lterm::LSort;
+
 // =============================================================================
 // Top-level theory
 // =============================================================================
@@ -645,35 +647,14 @@ impl BinOp {
     }
 }
 
+/// A variable occurrence: HS `LVar` plus the SAPIC type annotation HS keeps
+/// beside it in `SapicLVar` (Theory/Sapic/Term.hs:64-65).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct VarSpec {
     pub name: String,
     pub idx: u64,
-    pub sort: SortHint,
+    pub sort: LSort,
     pub typ: Option<String>, // SAPIC type annotation
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub enum SortHint {
-    Msg,
-    Pub,   // $x
-    Fresh, // ~x
-    Node,  // #x
-    Nat,   // %x
-    /// Sort given by suffix `: msg | : pub | : fresh | : node | : nat`.
-    Suffix(SuffixSort),
-    /// No sort hint: bare identifier, sort to be inferred.
-    #[default]
-    Untagged,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum SuffixSort {
-    Msg,
-    Pub,
-    Fresh,
-    Node,
-    Nat,
 }
 
 // =============================================================================

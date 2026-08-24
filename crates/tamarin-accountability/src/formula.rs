@@ -22,10 +22,11 @@
 //! rendering and guarded-proving paths.
 
 use tamarin_parser::ast as p;
+use tamarin_term::lterm::LSort;
 use tamarin_theory::guarded_types::{
     self as gt, atom_to_gatom_free, close_subst, collect_free_atom, gatom_to_atom, lvar_to_binding,
-    map_free_atom, normalise_msg_sort, open_subst, subst_bound_atom_at_depth,
-    subst_free_atom_at_depth, BVar, GAtom, GBinding, GFact, GTerm,
+    map_free_atom, open_subst, subst_bound_atom_at_depth, subst_free_atom_at_depth, BVar, GAtom,
+    GBinding, GFact, GTerm,
 };
 
 // The connective/quantifier enums (HS Theory/Model/Formula.hs:107,111) are
@@ -34,7 +35,7 @@ pub(crate) use tamarin_theory::formula::{Connective as Conn, Quantifier as Quant
 
 /// A `SyntacticLNFormula` in locally-nameless form.
 ///
-/// `Qua` carries a `GBinding` (name + sort hint, HS `(String, LSort)`); the
+/// `Qua` carries a `GBinding` (name and sort, HS `(String, LSort)`); the
 /// binder's identity is positional (De-Bruijn), so the body refers to it via
 /// `BVar::Bound(depth)` in its `GAtom` leaves.
 #[derive(Clone, Debug, PartialEq)]
@@ -63,26 +64,11 @@ impl Fm {
 // LTerm.hs:546-548; LSort order Pub<Fresh<Msg<Node<Nat, LTerm.hs:165-169).
 // =============================================================================
 
-/// Rank a `SortHint` to mirror HS `LSort` Ord.  A bare (`Untagged`) message
-/// variable is `LSortMsg`, so `frees` dedups a bare `x` against `x:msg` the
-/// way HS dedups two `LSortMsg` variables.
-pub(crate) fn sort_rank(s: p::SortHint) -> u8 {
-    use p::{SortHint::*, SuffixSort};
-    match s {
-        Pub | Suffix(SuffixSort::Pub) => 0,
-        Fresh | Suffix(SuffixSort::Fresh) => 1,
-        Msg | Suffix(SuffixSort::Msg) | Untagged => 2,
-        Node | Suffix(SuffixSort::Node) => 3,
-        Nat | Suffix(SuffixSort::Nat) => 4,
-    }
-}
-
 /// HS `LVar` Ord: `compare idx <> compare sort <> compare name`.
-/// Compares via [`sort_rank`], so `Untagged` ties with `Msg`.
 fn cmp_lvar(a: &p::VarSpec, b: &p::VarSpec) -> std::cmp::Ordering {
     a.idx
         .cmp(&b.idx)
-        .then(sort_rank(a.sort).cmp(&sort_rank(b.sort)))
+        .then(a.sort.cmp(&b.sort))
         .then(a.name.cmp(&b.name))
 }
 
@@ -95,7 +81,7 @@ pub(crate) fn temp_var(name: &str) -> p::VarSpec {
     p::VarSpec {
         name: name.to_string(),
         idx: 0,
-        sort: p::SortHint::Node,
+        sort: LSort::Node,
         typ: None,
     }
 }
@@ -105,7 +91,7 @@ pub(crate) fn msg_var(name: &str) -> p::VarSpec {
     p::VarSpec {
         name: name.to_string(),
         idx: 0,
-        sort: p::SortHint::Msg,
+        sort: LSort::Msg,
         typ: None,
     }
 }
@@ -115,11 +101,9 @@ pub(crate) fn free_term(v: p::VarSpec) -> GTerm {
     GTerm::Var(BVar::Free(v))
 }
 
-/// HS `LVar` `==`: equal name, sort AND index (LTerm.hs:541-542).  Sorts are
-/// compared after normalising to their concrete base (a bare `Untagged`
-/// message variable is `LSortMsg`).
+/// HS `LVar` `==`: equal name, sort AND index (LTerm.hs:541-542).
 pub(crate) fn lvar_eq(a: &p::VarSpec, b: &p::VarSpec) -> bool {
-    a.idx == b.idx && a.name == b.name && normalise_msg_sort(a.sort) == normalise_msg_sort(b.sort)
+    a.idx == b.idx && a.name == b.name && a.sort == b.sort
 }
 
 /// HS `tempTerm name = varTerm $ Free $ LVar name LSortNode 0`.
@@ -804,7 +788,7 @@ mod tests {
         p::VarSpec {
             name: name.to_string(),
             idx,
-            sort: p::SortHint::Node,
+            sort: LSort::Node,
             typ: None,
         }
     }
@@ -823,7 +807,7 @@ mod tests {
         p::VarSpec {
             name: name.to_string(),
             idx,
-            sort: p::SortHint::Msg,
+            sort: LSort::Msg,
             typ: None,
         }
     }
@@ -842,7 +826,7 @@ mod tests {
                     args: vec![p::Term::Var(p::VarSpec {
                         name: "x".into(),
                         idx: 0,
-                        sort: p::SortHint::Msg,
+                        sort: LSort::Msg,
                         typ: None,
                     })],
                     annotations: vec![],
@@ -855,7 +839,7 @@ mod tests {
         let fv = frees(&fm);
         assert_eq!(fv.len(), 1);
         assert_eq!(fv[0].name, "x");
-        assert_eq!(fv[0].sort, p::SortHint::Msg);
+        assert_eq!(fv[0].sort, LSort::Msg);
         // The round trip keeps the name and the node sort of the temporal
         // binder.  The De-Bruijn `Bound(0)` in the body resolves back to that
         // same `#i`.  So the test compares the complete formula, not only
@@ -888,7 +872,7 @@ mod tests {
             Quant::Ex,
             GBinding {
                 name: "i".into(),
-                sort: p::SortHint::Node,
+                sort: LSort::Node,
             },
             Box::new(action_a_x_at_i(0)),
         );
@@ -913,7 +897,7 @@ mod tests {
             Quant::All,
             GBinding {
                 name: "x".into(),
-                sort: p::SortHint::Msg,
+                sort: LSort::Msg,
             },
             Box::new(inner),
         );
@@ -948,7 +932,7 @@ mod tests {
             Quant::All,
             GBinding {
                 name: "j".into(),
-                sort: p::SortHint::Node,
+                sort: LSort::Node,
             },
             Box::new(proto_fact_formula("A", vec![], GTerm::Var(BVar::Bound(0)))),
         );
@@ -981,7 +965,7 @@ mod tests {
             Quant::Ex,
             GBinding {
                 name: "i".into(),
-                sort: p::SortHint::Node,
+                sort: LSort::Node,
             },
             Box::new(proto_fact_formula("P", vec![], GTerm::Var(BVar::Bound(0)))),
         );
@@ -996,7 +980,7 @@ mod tests {
             panic!("expected a universal at the top");
         };
         assert_eq!(b.name, "i");
-        assert_eq!(b.sort, p::SortHint::Node);
+        assert_eq!(b.sort, LSort::Node);
         assert_eq!(
             *body,
             proto_fact_formula("P", vec![], GTerm::Var(BVar::Bound(0))).implies(Fm::Tf(false))

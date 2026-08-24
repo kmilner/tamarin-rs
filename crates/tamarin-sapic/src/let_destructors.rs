@@ -416,7 +416,7 @@ fn subst_cond_formula(
     // universe (via the LN form, so AC normal form / pub-literal rendering match
     // HS).  `None` leaves the var unchanged (not in the subst domain).
     crate::convert::map_free_terms(f, &mut |v: &p::VarSpec, _bound| {
-        let lv = LVar::new(v.name.clone(), crate::convert::sort_of_hint(&v.sort), v.idx);
+        let lv = LVar::new(v.name.clone(), v.sort, v.idx);
         // The Case-B subst keys an untyped `SapicLVar` (and, when the bound var
         // was typed, its typed variant too); a `Cond`-formula var is untyped, so
         // probe the untyped key first, then the typed-erased path.

@@ -178,7 +178,7 @@ fn lemma_guarded_is_invariant_to_hs_ltrue_conjunct() {
     let v = p::VarSpec {
         name: "v".to_string(),
         idx: 0,
-        sort: p::SortHint::Untagged,
+        sort: LSort::Msg,
         typ: None,
     };
     let gen_at = p::Formula::Atom(p::Atom::Action(

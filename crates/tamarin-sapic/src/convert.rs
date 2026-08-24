@@ -24,7 +24,7 @@
 use std::collections::BTreeSet;
 
 use tamarin_parser::ast as p;
-use tamarin_term::lterm::{LSort, LVar};
+use tamarin_term::lterm::LVar;
 use tamarin_theory::elaborate::{fact_to_sapic_fact, term_to_sapic_term};
 use tamarin_theory::macro_expand::map_formula_terms;
 use tamarin_theory::sapic::{
@@ -44,46 +44,19 @@ impl ConvertError {
     }
 }
 
-pub(crate) fn sort_of_hint(s: &p::SortHint) -> LSort {
-    match s {
-        p::SortHint::Fresh | p::SortHint::Suffix(p::SuffixSort::Fresh) => LSort::Fresh,
-        p::SortHint::Pub | p::SortHint::Suffix(p::SuffixSort::Pub) => LSort::Pub,
-        p::SortHint::Node | p::SortHint::Suffix(p::SuffixSort::Node) => LSort::Node,
-        p::SortHint::Nat | p::SortHint::Suffix(p::SuffixSort::Nat) => LSort::Nat,
-        p::SortHint::Msg | p::SortHint::Suffix(p::SuffixSort::Msg) | p::SortHint::Untagged => {
-            LSort::Msg
-        }
-    }
-}
-
-/// `LSort` → parser `SortHint` (the inverse of [`sort_of_hint`]; always maps to
-/// the plain, non-`Suffix` hint).
-pub(crate) fn lsort_to_sort_hint(s: LSort) -> p::SortHint {
-    match s {
-        LSort::Fresh => p::SortHint::Fresh,
-        LSort::Pub => p::SortHint::Pub,
-        LSort::Node => p::SortHint::Node,
-        LSort::Nat => p::SortHint::Nat,
-        LSort::Msg => p::SortHint::Msg,
-    }
-}
-
 /// `LVar` → parser `VarSpec` (name/idx/sort carried over, no SAPIC type).
 pub(crate) fn lvar_to_varspec(v: &LVar) -> p::VarSpec {
     p::VarSpec {
         name: v.name.to_string(),
         idx: v.idx,
-        sort: lsort_to_sort_hint(v.sort),
+        sort: v.sort,
         typ: None,
     }
 }
 
 /// `VarSpec` → `SapicLVar` (carrying the SAPIC `name:type` annotation).
 pub(crate) fn varspec_to_sapic(v: &p::VarSpec) -> SapicLVar {
-    SapicLVar::new(
-        LVar::new(v.name.clone(), sort_of_hint(&v.sort), v.idx),
-        v.typ.clone(),
-    )
+    SapicLVar::new(LVar::new(v.name.clone(), v.sort, v.idx), v.typ.clone())
 }
 
 /// Rebuild a parser-AST formula, mapping `f` over every FREE `Var` leaf.
@@ -548,6 +521,7 @@ pub fn convert_process(proc: &p::Process) -> Result<PlainProcess, ConvertError> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tamarin_term::lterm::LSort;
 
     #[test]
     fn convert_new_event_out_chain() {
@@ -555,13 +529,13 @@ mod tests {
         let xspec = p::VarSpec {
             name: "x".into(),
             idx: 0,
-            sort: p::SortHint::Msg,
+            sort: LSort::Msg,
             typ: Some("lol".into()),
         };
         let xref = p::Term::Var(p::VarSpec {
             name: "x".into(),
             idx: 0,
-            sort: p::SortHint::Msg,
+            sort: LSort::Msg,
             typ: None,
         });
         let ffx = p::Term::App(
@@ -680,7 +654,7 @@ mod tests {
         let a = p::Term::Var(p::VarSpec {
             name: "a".into(),
             idx: 0,
-            sort: p::SortHint::Msg,
+            sort: LSort::Msg,
             typ: None,
         });
         let b = p::Term::PubLit("b".into());
@@ -736,7 +710,7 @@ mod tests {
                 p::VarSpec {
                     name: "v".into(),
                     idx: 0,
-                    sort: p::SortHint::Msg,
+                    sort: LSort::Msg,
                     typ: Some("cellty".into()),
                 },
             ),
@@ -770,7 +744,7 @@ mod tests {
             p::Term::Var(p::VarSpec {
                 name: n.into(),
                 idx: 0,
-                sort: p::SortHint::Msg,
+                sort: LSort::Msg,
                 typ: None,
             })
         };
@@ -809,7 +783,7 @@ mod tests {
                     p::Term::Var(p::VarSpec {
                         name: n.into(),
                         idx: 1,
-                        sort: p::SortHint::Msg,
+                        sort: LSort::Msg,
                         typ: None,
                     })
                 };
@@ -836,7 +810,7 @@ mod tests {
                     p::Term::Var(p::VarSpec {
                         name: "k".into(),
                         idx: 1,
-                        sort: p::SortHint::Msg,
+                        sort: LSort::Msg,
                         typ: None,
                     })
                 ],
@@ -890,7 +864,7 @@ mod tests {
         p::Term::Var(p::VarSpec {
             name: name.into(),
             idx: 0,
-            sort: p::SortHint::Msg,
+            sort: LSort::Msg,
             typ: typ.map(Into::into),
         })
     }
@@ -996,7 +970,7 @@ mod tests {
         let ispec = p::VarSpec {
             name: "i".into(),
             idx: 0,
-            sort: p::SortHint::Node,
+            sort: LSort::Node,
             typ: None,
         };
         // One template built twice — with the marker and without — so the

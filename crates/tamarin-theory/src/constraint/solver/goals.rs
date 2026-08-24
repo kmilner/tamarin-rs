@@ -1944,11 +1944,6 @@ fn gfact_is_progress(f: &crate::guarded_types::GFact) -> bool {
     !f.persistent && f.args.len() == 1 && f.name.starts_with("ProgressTo_")
 }
 
-fn is_node_sort_hint(s: &tamarin_parser::ast::SortHint) -> bool {
-    use tamarin_parser::ast::{SortHint, SuffixSort};
-    matches!(s, SortHint::Node | SortHint::Suffix(SuffixSort::Node))
-}
-
 /// HS `isProgressDisj` (ProofMethod.hs:130-135): a Disj goal all of whose
 /// disjuncts are `Ex #node. ProgressTo_…( #node )`.
 fn is_progress_disj(a: &AnnotatedGoal) -> bool {
@@ -1967,7 +1962,10 @@ fn is_progress_disj(a: &AnnotatedGoal) -> bool {
             vars,
             guards,
             ..
-        } if vars.len() == 1 && guards.len() == 1 && is_node_sort_hint(&vars[0].sort) => {
+        } if vars.len() == 1
+            && guards.len() == 1
+            && vars[0].sort == tamarin_term::lterm::LSort::Node =>
+        {
             matches!(&guards[0], GAtom::Action(f, _) if gfact_is_progress(f))
         }
         _ => false,

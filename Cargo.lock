@@ -1403,6 +1403,7 @@ name = "tamarin-accountability"
 version = "1.13.0"
 dependencies = [
  "tamarin-parser",
+ "tamarin-term",
  "tamarin-theory",
 ]
 
@@ -1414,6 +1415,7 @@ version = "1.13.0"
 name = "tamarin-parser"
 version = "1.13.0"
 dependencies = [
+ "tamarin-term",
  "walkdir",
 ]
 

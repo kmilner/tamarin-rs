@@ -258,7 +258,7 @@ fn match_action_disambiguates_by_time_var_root() {
                 tamarin_parser::ast::VarSpec {
                     name: "y".into(),
                     idx: 0,
-                    sort: tamarin_parser::ast::SortHint::Untagged,
+                    sort: tamarin_term::lterm::LSort::Msg,
                     typ: None,
                 },
             )],
@@ -284,7 +284,7 @@ fn match_action_disambiguates_by_time_var_root() {
                 tamarin_parser::ast::VarSpec {
                     name: "x".into(),
                     idx: 0,
-                    sort: tamarin_parser::ast::SortHint::Untagged,
+                    sort: tamarin_term::lterm::LSort::Msg,
                     typ: None,
                 },
             )],
@@ -308,7 +308,7 @@ fn match_action_disambiguates_by_time_var_root() {
                 tamarin_parser::ast::VarSpec {
                     name: "y".into(),
                     idx: 0,
-                    sort: tamarin_parser::ast::SortHint::Untagged,
+                    sort: tamarin_term::lterm::LSort::Msg,
                     typ: None,
                 },
             )],
@@ -496,7 +496,7 @@ fn match_disj_goal_by_alt_count() {
     let mk_vs = |n: &str| tamarin_parser::ast::VarSpec {
         name: n.into(),
         idx: 0,
-        sort: tamarin_parser::ast::SortHint::Node,
+        sort: tamarin_term::lterm::LSort::Node,
         typ: None,
     };
     // Two non-quant alts.
@@ -583,7 +583,7 @@ fn match_disj_goal_prefers_alt_text_score_over_source_order() {
     let mk_vs = |n: &str| tamarin_parser::ast::VarSpec {
         name: n.into(),
         idx: 0,
-        sort: tamarin_parser::ast::SortHint::Node,
+        sort: tamarin_term::lterm::LSort::Node,
         typ: None,
     };
     let last = |n: &str| Guarded::Atom(GAtom::Last(GTerm::Var(BVar::Free(mk_vs(n)))));

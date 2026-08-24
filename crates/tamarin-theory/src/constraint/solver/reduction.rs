@@ -2856,7 +2856,7 @@ impl<'ctx> Reduction<'ctx> {
                             tamarin_parser::ast::Term::Var(tamarin_parser::ast::VarSpec {
                                 name: last_node.name.to_string(),
                                 idx: last_node.idx,
-                                sort: tamarin_parser::ast::SortHint::Node,
+                                sort: tamarin_term::lterm::LSort::Node,
                                 typ: None,
                             });
                         let d = crate::guarded::Guarded::Disj(
@@ -4351,29 +4351,28 @@ fn normalise_node_id(
 
 /// Convert a parser-AST term to an `LVar` of node sort (for the time
 /// argument of an action atom or the operands of a `Less`/`Last`).
-/// Accepts either a `#i`-sorted variable or any unsorted variable in
-/// a position requiring a node — the sort hint check is loose to
-/// match Haskell's `ltermNodeId'`.
+///
+/// Mirrors Haskell `bltermNodeId` (Reduction.hs ~480): returns `Just`
+/// only when the term is a Var with sort `LSortNode`. Returning
+/// `Some` for non-Node sorts causes the Eq/Less→Disj CR-rules to
+/// fire on msg-var `¬(a=b)` formulas — which Haskell leaves as
+/// formulas, producing the SOLVED vs solve divergence on
+/// MinValueEq/WrongEquality.
 fn term_to_node_id(
     t: &tamarin_parser::ast::Term,
 ) -> Option<crate::constraint::constraints::NodeId> {
-    use tamarin_parser::ast::{SortHint, SuffixSort, Term as AstTerm};
-    let v = match t {
-        AstTerm::Var(v) => v,
-        _ => return None,
+    use tamarin_parser::ast::Term as AstTerm;
+    let AstTerm::Var(v) = t else {
+        return None;
     };
-    // Mirror Haskell `bltermNodeId` (Reduction.hs ~480): returns `Just`
-    // only when the term is a Var with sort `LSortNode`. Returning
-    // `Some` for non-Node sorts causes the Eq/Less→Disj CR-rules to
-    // fire on msg-var `¬(a=b)` formulas — which Haskell leaves as
-    // formulas, producing the SOLVED vs solve divergence on
-    // MinValueEq/WrongEquality.
-    match v.sort {
-        SortHint::Node | SortHint::Suffix(SuffixSort::Node) => Some(
-            tamarin_term::lterm::LVar::new(v.name.clone(), tamarin_term::lterm::LSort::Node, v.idx),
-        ),
-        _ => None,
+    if v.sort != tamarin_term::lterm::LSort::Node {
+        return None;
     }
+    Some(tamarin_term::lterm::LVar::new(
+        v.name.clone(),
+        tamarin_term::lterm::LSort::Node,
+        v.idx,
+    ))
 }
 
 /// `forbiddenEdge` — port of the chain-goal forbidden edge shapes.  RS has

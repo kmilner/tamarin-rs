@@ -182,11 +182,7 @@ fn collect_comb_vars(
 fn cond_formula_free_lvars(f: &tamarin_parser::ast::Formula) -> Vec<LVar> {
     let mut out = Vec::new();
     crate::convert::fold_free_vars(f, &mut |v, _bound| {
-        out.push(LVar::new(
-            v.name.clone(),
-            crate::convert::sort_of_hint(&v.sort),
-            v.idx,
-        ));
+        out.push(LVar::new(v.name.clone(), v.sort, v.idx));
     });
     out
 }
@@ -203,7 +199,7 @@ fn rename_cond_formula(
 ) -> tamarin_parser::ast::Formula {
     use tamarin_parser::ast as p;
     crate::convert::map_free_terms(f, &mut |v, _bound| {
-        let key = LVar::new(v.name.clone(), crate::convert::sort_of_hint(&v.sort), v.idx);
+        let key = LVar::new(v.name.clone(), v.sort, v.idx);
         subst.get(&key).map(|nv| {
             p::Term::Var(p::VarSpec {
                 name: nv.name.to_string(),
@@ -996,7 +992,7 @@ mod tests {
             p::Term::Var(p::VarSpec {
                 typ: None,
                 name: "k".into(),
-                sort: p::SortHint::Msg,
+                sort: LSort::Msg,
                 idx: 0,
             })
         };

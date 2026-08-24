@@ -6,13 +6,13 @@
 //!
 //! Port of `Theory.Tools.Wellformedness` from
 //! `lib/theory/src/Theory/Tools/Wellformedness.hs`. The checks here work
-//! directly on the surface syntax tree, because `tamarin-parser` is
-//! dependency-free and so cannot reach the elaborated signature, the
-//! SAPIC-translated theory or the HughesPJ renderer. As a consequence:
+//! directly on the surface syntax tree, because `tamarin-parser` depends
+//! only on `tamarin-term` and so cannot reach the elaborated signature,
+//! the SAPIC-translated theory or the HughesPJ renderer. As a consequence:
 //!
-//! - Checks that need term-level sort inference (e.g. `Nat Sorts`) work
-//!   over the parser's [`SortHint`] / sigil annotations rather than a
-//!   full sort assignment.
+//! - Checks that need term-level sort inference (e.g. `Nat Sorts`) read
+//!   the `LSort` the parser stamps on each variable rather than a full
+//!   sort assignment.
 //! - Checks that DO need one of those three — `formulaReports`,
 //!   `multRestrictedReport`, `ruleVariantsReport` — live in
 //!   `tamarin-theory` and are spliced into this report by the batch
@@ -29,6 +29,8 @@
 //! `*Check` function. The umbrella entry point is [`check_theory`].
 
 use std::collections::{BTreeMap, BTreeSet};
+
+use tamarin_term::lterm::{sort_prefix, LSort};
 
 use crate::ast::*;
 
@@ -861,7 +863,7 @@ fn wf_term_doc(t: &Term, ac: &AcSyms) -> WfDoc {
     match t {
         Var(v) => {
             let mut s = String::new();
-            s.push_str(sort_prefix(&v.sort));
+            s.push_str(sort_prefix(v.sort));
             s.push_str(&v.name);
             if v.idx > 0 {
                 s.push('.');
@@ -1178,7 +1180,7 @@ fn cmp_wf_term(a: &Term, b: &Term, ac: &AcSyms) -> std::cmp::Ordering {
             // HS Ord LVar = (idx, sort, name) (LTerm.hs:545-548).
             v1.idx
                 .cmp(&v2.idx)
-                .then_with(|| sort_tag(&v1.sort).cmp(&sort_tag(&v2.sort)))
+                .then_with(|| v1.sort.cmp(&v2.sort))
                 .then_with(|| v1.name.cmp(&v2.name))
         }
         PubLit(s1) => {
@@ -1329,57 +1331,6 @@ fn cmp_term_lists<T: std::borrow::Borrow<Term>>(
         }
     }
     a.len().cmp(&b.len())
-}
-
-/// HS LSort declaration order (Term/LTerm.hs:165-170):
-/// Pub < Fresh < Msg < Node < Nat.
-fn sort_tag(s: &SortHint) -> u8 {
-    use SortHint::*;
-    use SuffixSort as SS;
-    match s {
-        Pub | Suffix(SS::Pub) => 0,
-        Fresh | Suffix(SS::Fresh) => 1,
-        Msg | Suffix(SS::Msg) | Untagged => 2,
-        Node | Suffix(SS::Node) => 3,
-        Nat | Suffix(SS::Nat) => 4,
-    }
-}
-
-fn sort_prefix(s: &SortHint) -> &'static str {
-    use SortHint::*;
-    use SuffixSort as SS;
-    match s {
-        Pub | Suffix(SS::Pub) => "$",
-        Fresh | Suffix(SS::Fresh) => "~",
-        Node | Suffix(SS::Node) => "#",
-        Nat | Suffix(SS::Nat) => "%",
-        Msg | Suffix(SS::Msg) | Untagged => "",
-    }
-}
-
-/// True if a sort hint indicates a fresh-sort variable.
-fn is_fresh_sort(s: &SortHint) -> bool {
-    matches!(s, SortHint::Fresh | SortHint::Suffix(SuffixSort::Fresh))
-}
-
-fn is_msg_sort_or_untagged(s: &SortHint) -> bool {
-    matches!(
-        s,
-        SortHint::Msg | SortHint::Untagged | SortHint::Suffix(SuffixSort::Msg)
-    )
-}
-
-fn is_pub_sort(s: &SortHint) -> bool {
-    matches!(s, SortHint::Pub | SortHint::Suffix(SuffixSort::Pub))
-}
-
-/// True if a sort hint indicates a node- (temporal-) sort variable.
-fn is_node_sort(s: &SortHint) -> bool {
-    matches!(s, SortHint::Node | SortHint::Suffix(SuffixSort::Node))
-}
-
-fn is_nat_sort(s: &SortHint) -> bool {
-    matches!(s, SortHint::Nat | SortHint::Suffix(SuffixSort::Nat))
 }
 
 // =============================================================================
@@ -1589,7 +1540,7 @@ pub fn fresh_fact_arguments(thy: &Theory) -> WfReport {
             // message-sort. Anything else (constants, function
             // applications, public/node vars) triggers the warning.
             let ok = match arg {
-                Term::Var(v) => is_fresh_sort(&v.sort) || is_msg_sort_or_untagged(&v.sort),
+                Term::Var(v) => matches!(v.sort, LSort::Fresh | LSort::Msg),
                 _ => false,
             };
             if !ok {
@@ -1728,8 +1679,7 @@ fn collect_formula_facts<'a>(
 /// `Eq LVar`, LTerm.hs:541-542).
 fn db_index(v: &VarSpec, binders: &[&VarSpec]) -> Option<usize> {
     binders.iter().enumerate().rev().find_map(|(pos, b)| {
-        (b.name == v.name && sort_tag(&b.sort) == sort_tag(&v.sort) && b.idx == v.idx)
-            .then(|| binders.len() - 1 - pos)
+        (b.name == v.name && b.sort == v.sort && b.idx == v.idx).then(|| binders.len() - 1 - pos)
     })
 }
 
@@ -2366,25 +2316,25 @@ fn collect_rule_unbound_vars(r: &Rule, nullary_funs: &BTreeSet<String>) -> Vec<V
     let lookup_binder = lookup_binder_render(r);
     // HS `boundVars = S.fromList $ frees (get rPrems ru)` keys on the full
     // LVar (name AND sort AND idx), so `~ltk` (fresh) does NOT bind `ltk`
-    // (msg).  Key on (name, sort_tag, idx).
-    let mut bound: BTreeSet<(String, u8, u64)> = BTreeSet::new();
+    // (msg).  Key on (name, sort, idx).
+    let mut bound: BTreeSet<(String, LSort, u64)> = BTreeSet::new();
     for f in &prems {
         for v in fact_vars(f) {
-            bound.insert((v.name.clone(), sort_tag(&v.sort), v.idx));
+            bound.insert((v.name.clone(), v.sort, v.idx));
         }
     }
     let mut unbound: Vec<VarSpec> = Vec::new();
-    let mut seen: BTreeSet<(String, u8, u64)> = BTreeSet::new();
+    let mut seen: BTreeSet<(String, LSort, u64)> = BTreeSet::new();
     for f in acts.iter().chain(&concs) {
         for v in fact_vars(f) {
-            if is_pub_sort(&v.sort) {
+            if v.sort == LSort::Pub {
                 continue;
             }
             // HS `isNowNode v = lvarSort v == LSortNode && lvarName v == "NOW"`
             // (Wellformedness.hs:504-505): the `#NOW` node `varNow`
             // (Theory/Model/Restriction.hs:86-88) that embedded-restriction
             // expansion mints is never premise-bound.
-            if is_node_sort(&v.sort) && v.name == "NOW" {
+            if v.sort == LSort::Node && v.name == "NOW" {
                 continue;
             }
             if lookup_binder.is_some_and(|b| b == render_var(&v)) {
@@ -2405,7 +2355,7 @@ fn collect_rule_unbound_vars(r: &Rule, nullary_funs: &BTreeSet<String>) -> Vec<V
             if is_known_nullary_constant_name(&v.name) {
                 continue;
             }
-            let key = (v.name.clone(), sort_tag(&v.sort), v.idx);
+            let key = (v.name.clone(), v.sort, v.idx);
             if bound.contains(&key) {
                 continue;
             }
@@ -2516,7 +2466,7 @@ pub fn message_derivation_report(thy: &Theory) -> WfReport {
 }
 
 fn render_var(v: &VarSpec) -> String {
-    let prefix = sort_prefix(&v.sort);
+    let prefix = sort_prefix(v.sort);
     if v.idx == 0 {
         format!("{}{}", prefix, v.name)
     } else {
@@ -2811,7 +2761,7 @@ fn rhs_is_ground(t: &Term, nullary_funs: &BTreeSet<String>) -> bool {
             // Message-sorted bare names that resolve to a nullary constant are
             // variable-free; everything else (and any sigil-tagged var) is a
             // genuine free variable.
-            v.sort == SortHint::Msg
+            v.sort == LSort::Msg
                 && (is_known_nullary_constant_name(&v.name) || nullary_funs.contains(&v.name))
         }
         App(_, args) | Pair(args) => args.iter().all(|a| rhs_is_ground(a, nullary_funs)),
@@ -2907,12 +2857,10 @@ pub fn variable_sort_clashes(thy: &Theory) -> WfReport {
             grp.sort_by(|a, b| {
                 a.idx
                     .cmp(&b.idx)
-                    .then_with(|| sort_tag(&a.sort).cmp(&sort_tag(&b.sort)))
+                    .then_with(|| a.sort.cmp(&b.sort))
                     .then_with(|| a.name.cmp(&b.name))
             });
-            grp.dedup_by(|a, b| {
-                a.name == b.name && sort_tag(&a.sort) == sort_tag(&b.sort) && a.idx == b.idx
-            });
+            grp.dedup_by(|a, b| a.name == b.name && a.sort == b.sort && a.idx == b.idx);
             if grp.len() >= 2 {
                 clash_groups.push(grp);
             }
@@ -3076,7 +3024,7 @@ fn is_nat_one(t: &Term) -> bool {
 /// Faithful port of HS `notOnlyNat` (Wellformedness.hs:296-300): the inner
 /// recursion under `%+`.  Accepts `NatOne` and genuine nat-sorted *variables*
 /// (`isNatVar`, LTerm.hs:333-335); recurses through nested `%+`; flags
-/// everything else (including untagged/msg/pub vars and nat *literals* like
+/// everything else (including msg/pub vars and nat *literals* like
 /// `%'a'`, which are `Con` names, not vars — matching HS's `isNatVar`, which
 /// is true only for `Lit (Var v)` with `lvarSort v == LSortNat`).
 fn not_only_nat<'a>(t: &'a Term, out: &mut Vec<&'a Term>, ac: &AcSyms) {
@@ -3091,7 +3039,7 @@ fn not_only_nat<'a>(t: &'a Term, out: &mut Vec<&'a Term>, ac: &AcSyms) {
         // NatOne -> []
         _ if is_nat_one(t) => {}
         // t | isNatVar t = []  (nat-sorted VARIABLE only)
-        Term::Var(v) if is_nat_sort(&v.sort) => {}
+        Term::Var(v) if v.sort == LSort::Nat => {}
         // t = [t]  (anything else is an offending operand)
         _ => out.push(t),
     }

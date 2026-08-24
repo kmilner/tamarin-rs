@@ -28,7 +28,7 @@
 //! ported as `simplify_guarded_with` in guarded.rs.)
 
 use crate::atom::{to_atom, ProtoAtom, SyntacticAtom, SyntacticSugar, Unit2};
-use crate::elaborate::{fact_to_lnfact, sort_of, term_to_lnterm, ElabError};
+use crate::elaborate::{fact_to_lnfact, term_to_lnterm, ElabError};
 use crate::fact::Fact;
 use crate::predicate::smaller_fact;
 use tamarin_parser::ast as p;
@@ -375,7 +375,7 @@ fn close_binders(
     body: SyntacticLNFormula,
 ) -> SyntacticLNFormula {
     vs.iter().rev().fold(body, |acc, v| {
-        let x = LVar::new(&v.name, sort_of(&v.sort), v.idx);
+        let x = LVar::new(&v.name, v.sort, v.idx);
         q((x.name.to_string(), x.sort), &x, acc)
     })
 }
@@ -637,7 +637,7 @@ mod tests {
         (name.to_string(), sort)
     }
 
-    fn parser_var(name: &str, sort: p::SortHint) -> p::Term {
+    fn parser_var(name: &str, sort: LSort) -> p::Term {
         p::Term::Var(p::VarSpec {
             name: name.to_string(),
             idx: 0,
@@ -760,8 +760,8 @@ mod tests {
     #[test]
     fn from_parser_less_mset_is_smaller_pred() {
         let f = p::Formula::Atom(p::Atom::LessMset(
-            parser_var("x", p::SortHint::Msg),
-            parser_var("y", p::SortHint::Msg),
+            parser_var("x", LSort::Msg),
+            parser_var("y", LSort::Msg),
         ));
         let want = ProtoFormula::Atom(ProtoAtom::Syntactic(SyntacticSugar::Pred(smaller_fact(
             free("x", LSort::Msg, 0),
@@ -773,8 +773,8 @@ mod tests {
     /// A SAPIC `=t` pattern has no `LNTerm` form.
     #[test]
     fn from_parser_rejects_pat_match() {
-        let pat = p::Term::PatMatch(Box::new(parser_var("x", p::SortHint::Msg)));
-        let in_term = p::Formula::Atom(p::Atom::Eq(pat.clone(), parser_var("y", p::SortHint::Msg)));
+        let pat = p::Term::PatMatch(Box::new(parser_var("x", LSort::Msg)));
+        let in_term = p::Formula::Atom(p::Atom::Eq(pat.clone(), parser_var("y", LSort::Msg)));
         let err = from_parser(&in_term).unwrap_err();
         assert_eq!(err.message, "could not elaborate term in formula");
         let in_fact = p::Formula::Atom(p::Atom::Pred(p::Fact {

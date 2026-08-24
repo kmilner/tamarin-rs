@@ -325,7 +325,7 @@ fn ndc_node_var(name: &str) -> p::VarSpec {
     p::VarSpec {
         name: name.to_string(),
         idx: 0,
-        sort: p::SortHint::Node,
+        sort: LSort::Node,
         typ: None,
     }
 }
@@ -464,7 +464,7 @@ fn collect_var_specs(t: &p::Term, out: &mut Vec<p::VarSpec>) {
 /// prefix order are hints only, invisible outside the synthetic search.
 fn deduction_lemma_guarded(s: &[LNFact], fact_term: &LNTerm) -> Guarded {
     let var_d: Vec<LVar> = tamarin_term::lterm::frees(&s.to_vec());
-    // `lnterm_to_parser` hints a Msg variable `SortHint::Msg` — the same
+    // `lnterm_to_parser` hints a Msg variable `LSort::Msg` — the same
     // concrete sort the parser pins on a prefixless quantifier binder
     // (`quantifier_binder`, HS `msgvar` Token.hs:440-441), so the binder
     // list below is byte-identical to a parsed one.

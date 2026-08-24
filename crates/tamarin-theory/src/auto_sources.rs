@@ -26,7 +26,7 @@ use crate::fact::{proto_or_in_fact_view, proto_or_out_fact_view, FactTag, LNFact
 use crate::rule::{print_fact_position, print_position, rule_name_string, ExtendedPosition};
 use crate::theory::{OpenProtoRule, TheoryItem};
 use tamarin_parser::ast as p;
-use tamarin_term::lterm::{rename_avoiding, LNTerm};
+use tamarin_term::lterm::{rename_avoiding, LNTerm, LSort};
 use tamarin_term::maude_proc::MaudeHandle;
 use tamarin_term::positions::{at_pos, deepest_prot_subterm, find_pos};
 use tamarin_term::rewriting::Equal;
@@ -34,7 +34,7 @@ use tamarin_term::term::all_prot_subterms;
 
 /// Bound-variable names, matching HS's quantifier binders in
 /// `addAutoSourcesLemma` (`OpenTheory.hs:399-535`).
-fn var(name: &str, sort: p::SortHint) -> p::VarSpec {
+fn var(name: &str, sort: LSort) -> p::VarSpec {
     p::VarSpec {
         name: name.to_string(),
         idx: 0,
@@ -42,7 +42,7 @@ fn var(name: &str, sort: p::SortHint) -> p::VarSpec {
         typ: None,
     }
 }
-fn var_term(name: &str, sort: p::SortHint) -> p::Term {
+fn var_term(name: &str, sort: LSort) -> p::Term {
     p::Term::Var(var(name, sort))
 }
 
@@ -91,8 +91,8 @@ fn forall(vs: Vec<p::VarSpec>, body: p::Formula) -> p::Formula {
     p::Formula::Forall(vs, Box::new(body))
 }
 
-const MSG: p::SortHint = p::SortHint::Msg;
-const NODE: p::SortHint = p::SortHint::Node;
+const MSG: LSort = LSort::Msg;
+const NODE: LSort = LSort::Node;
 
 /// `orKU` (OpenTheory.hs:138-538, see line 484): `∃ j. !KU(x) @ j ∧ j < i`. Here `i` is the
 /// input timepoint and `x` the input-term variable.

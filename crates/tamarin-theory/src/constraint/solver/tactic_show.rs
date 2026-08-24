@@ -32,7 +32,7 @@
 
 use tamarin_parser::ast as p;
 use tamarin_term::function_symbols::{AcSym, CSym, FunSym};
-use tamarin_term::lterm::{LNTerm, Name, NameTag};
+use tamarin_term::lterm::{sort_prefix, LNTerm, Name, NameTag};
 use tamarin_term::vterm::Lit;
 
 use crate::fact::{FactTag, Multiplicity};
@@ -53,15 +53,7 @@ fn show_varspec(v: &p::VarSpec) -> String {
 /// Like [`show_varspec`] but writes directly into `out`, avoiding the
 /// throwaway intermediate `String`.  Produces byte-identical output.
 fn write_varspec(v: &p::VarSpec, out: &mut String) {
-    let prefix = match v.sort {
-        p::SortHint::Fresh | p::SortHint::Suffix(p::SuffixSort::Fresh) => "~",
-        p::SortHint::Pub | p::SortHint::Suffix(p::SuffixSort::Pub) => "$",
-        p::SortHint::Node | p::SortHint::Suffix(p::SuffixSort::Node) => "#",
-        p::SortHint::Nat | p::SortHint::Suffix(p::SuffixSort::Nat) => "%",
-        // Msg / Untagged / Suffix(Msg) => "" (LSortMsg has no prefix).
-        _ => "",
-    };
-    out.push_str(prefix);
+    out.push_str(sort_prefix(v.sort));
     if v.name.is_empty() {
         out.push_str(&v.idx.to_string());
     } else if v.idx == 0 {
@@ -279,15 +271,7 @@ fn write_args(args: &[LNTerm], out: &mut String) {
 /// directly into `out`, avoiding a throwaway intermediate `String`;
 /// produces byte-identical output.
 fn write_lvar(v: &tamarin_term::lterm::LVar, out: &mut String) {
-    use tamarin_term::lterm::LSort;
-    let prefix = match v.sort {
-        LSort::Fresh => "~",
-        LSort::Pub => "$",
-        LSort::Node => "#",
-        LSort::Nat => "%",
-        LSort::Msg => "",
-    };
-    out.push_str(prefix);
+    out.push_str(sort_prefix(v.sort));
     if v.name.is_empty() {
         out.push_str(&v.idx.to_string());
     } else if v.idx == 0 {
@@ -539,19 +523,20 @@ pub fn sys_reveal_shown(oracle_type: &str, formulas: &[std::sync::Arc<Guarded>])
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tamarin_term::lterm::LSort;
 
     fn fresh(name: &str) -> p::VarSpec {
         p::VarSpec {
             name: name.into(),
             idx: 0,
-            sort: p::SortHint::Fresh,
+            sort: LSort::Fresh,
             typ: None,
         }
     }
 
-    /// `show LVar` is `sortPrefix s ++ body`.  Each sort has one prefix.  Msg
-    /// and Untagged have no prefix.  The `.idx` suffix appears only for an
-    /// index that is not zero.
+    /// `show LVar` is `sortPrefix s ++ body`.  Each sort has one prefix; Msg
+    /// has none.  The `.idx` suffix appears only for an index that is not
+    /// zero.
     #[test]
     fn show_varspec_covers_every_sort_prefix_and_the_index_suffix() {
         let sorted = |sort, name: &str, idx| {
@@ -563,14 +548,14 @@ mod tests {
             })
         };
         assert_eq!(show_varspec(&fresh("s")), "~s");
-        assert_eq!(sorted(p::SortHint::Pub, "a", 0), "$a");
-        assert_eq!(sorted(p::SortHint::Node, "i", 0), "#i");
-        assert_eq!(sorted(p::SortHint::Nat, "n", 0), "%n");
-        assert_eq!(sorted(p::SortHint::Msg, "m", 0), "m");
+        assert_eq!(sorted(LSort::Pub, "a", 0), "$a");
+        assert_eq!(sorted(LSort::Node, "i", 0), "#i");
+        assert_eq!(sorted(LSort::Nat, "n", 0), "%n");
+        assert_eq!(sorted(LSort::Msg, "m", 0), "m");
         // An index that is not zero appends `.idx`.  A variable with no name
         // shows the index alone.
-        assert_eq!(sorted(p::SortHint::Fresh, "s", 3), "~s.3");
-        assert_eq!(sorted(p::SortHint::Msg, "", 7), "7");
+        assert_eq!(sorted(LSort::Fresh, "s", 3), "~s.3");
+        assert_eq!(sorted(LSort::Msg, "", 7), "7");
     }
 
     #[test]

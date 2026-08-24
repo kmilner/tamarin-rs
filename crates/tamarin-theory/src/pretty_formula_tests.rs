@@ -4,7 +4,7 @@
 
 use super::*;
 
-fn v(name: &str, sort: p::SortHint) -> p::VarSpec {
+fn v(name: &str, sort: LSort) -> p::VarSpec {
     p::VarSpec {
         name: name.into(),
         idx: 0,
@@ -73,18 +73,18 @@ fn forall_with_action() {
     let fa = p::Fact {
         persistent: false,
         name: "F".into(),
-        args: vec![p::Term::Var(v("ni", p::SortHint::Untagged))],
+        args: vec![p::Term::Var(v("ni", LSort::Msg))],
         annotations: vec![],
     };
     let body = p::Formula::Implies(
         Box::new(p::Formula::Atom(p::Atom::Action(
             fa,
-            p::Term::Var(v("i", p::SortHint::Node)),
+            p::Term::Var(v("i", LSort::Node)),
         ))),
         Box::new(p::Formula::False),
     );
     let f = p::Formula::Forall(
-        vec![v("ni", p::SortHint::Untagged), v("i", p::SortHint::Node)],
+        vec![v("ni", LSort::Msg), v("i", LSort::Node)],
         Box::new(body),
     );
     // The output follows HS.  `Name( args )` keeps the internal spaces, and
@@ -107,7 +107,7 @@ fn long_quantifier_varlist_wraps() {
         "sndcode2", "ess", "hv1", "hv2", "hy1", "hy2", "x1", "x2", "adv1", "adv2", "ek", "bb",
         "sks", "y1", "y2", "aa", "ea", "el", "em",
     ];
-    let vs: Vec<p::VarSpec> = names.iter().map(|n| v(n, p::SortHint::Untagged)).collect();
+    let vs: Vec<p::VarSpec> = names.iter().map(|n| v(n, LSort::Msg)).collect();
     let f = p::Formula::Exists(vs, Box::new(p::Formula::False));
     let out = pretty_formula_wrapped(&f, 0);
     let lines: Vec<&str> = out.split('\n').collect();
@@ -139,8 +139,8 @@ fn long_quantifier_varlist_wraps() {
 #[test]
 fn pair_term() {
     let t = p::Term::Pair(vec![
-        p::Term::Var(v("a", p::SortHint::Untagged)),
-        p::Term::Var(v("b", p::SortHint::Untagged)),
+        p::Term::Var(v("a", LSort::Msg)),
+        p::Term::Var(v("b", LSort::Msg)),
     ]);
     assert_eq!(pretty_term(&t), "<a, b>");
 }
@@ -209,8 +209,8 @@ fn user_ac_symbol_nullary_renders_bare_name() {
 fn binop_xor() {
     let t = p::Term::BinOp(
         p::BinOp::Xor,
-        Box::new(p::Term::Var(v("a", p::SortHint::Untagged))),
-        Box::new(p::Term::Var(v("b", p::SortHint::Untagged))),
+        Box::new(p::Term::Var(v("a", LSort::Msg))),
+        Box::new(p::Term::Var(v("b", LSort::Msg))),
     );
     assert_eq!(pretty_term(&t), "(a\u{2295}b)");
 }
@@ -222,8 +222,8 @@ fn guarded_negation_shortcut() {
         qua: Quant::All,
         vars: vec![].into(),
         guards: vec![crate::guarded::atom_to_gatom_free(&p::Atom::Less(
-            p::Term::Var(v("i", p::SortHint::Node)),
-            p::Term::Var(v("j", p::SortHint::Node)),
+            p::Term::Var(v("i", LSort::Node)),
+            p::Term::Var(v("j", LSort::Node)),
         ))]
         .into(),
         body: std::sync::Arc::new(Guarded::Disj(vec![].into())),
@@ -242,7 +242,7 @@ fn ac_chain_term() -> p::Term {
     let pair = |n: &str, payload: &str| {
         p::Term::Pair(vec![
             p::Term::PubLit(n.into()),
-            p::Term::Var(v(payload, p::SortHint::Fresh)),
+            p::Term::Var(v(payload, LSort::Fresh)),
         ])
     };
     // ((p1 ++ p2) ++ p3) — binary, same-op; renderer flattens to n-ary.
@@ -285,7 +285,7 @@ fn ac_union_chain_wraps_in_guarded_formula() {
     // gterm_to_doc (guarded path) must wrap the SAME AC chain identically,
     // since HS uses ONE prettyTerm for both rule terms and formula terms.
     // Build `z = <chain>` as a guarded Eq atom and render wrapped.
-    let eq = p::Atom::Eq(p::Term::Var(v("z", p::SortHint::Msg)), ac_chain_term());
+    let eq = p::Atom::Eq(p::Term::Var(v("z", LSort::Msg)), ac_chain_term());
     let g = Guarded::Atom(crate::guarded::atom_to_gatom_free(&eq));
     // indent 12 (a proof-tree depth) forces the RHS chain to wrap.
     let s = pretty_guarded_wrapped(&g, 12);
@@ -312,15 +312,15 @@ fn exp_with_ac_exponent_wraps_inside_fun() {
         Box::new(p::Term::PubLit("g".into())),
         Box::new(p::Term::BinOp(
             p::BinOp::Mult,
-            Box::new(p::Term::Var(v("longFreshPrivKeyOne", p::SortHint::Fresh))),
-            Box::new(p::Term::Var(v("longFreshPrivKeyTwo", p::SortHint::Fresh))),
+            Box::new(p::Term::Var(v("longFreshPrivKeyOne", LSort::Fresh))),
+            Box::new(p::Term::Var(v("longFreshPrivKeyTwo", LSort::Fresh))),
         )),
     );
     let t = p::Term::App(
         "hmac".into(),
         vec![
             exp.clone(),
-            p::Term::Var(v("longSaltArgumentName", p::SortHint::Fresh)),
+            p::Term::Var(v("longSaltArgumentName", LSort::Fresh)),
         ],
     );
     let doc = term_to_doc(&t, &[]);
@@ -359,8 +359,8 @@ fn algapp_renders_function_form_flat_term() {
     // sdec{body}key  ->  sdec(body, key)
     let t = p::Term::AlgApp(
         "sdec".into(),
-        Box::new(p::Term::Var(v("body", p::SortHint::Untagged))),
-        Box::new(p::Term::Var(v("key", p::SortHint::Untagged))),
+        Box::new(p::Term::Var(v("body", LSort::Msg))),
+        Box::new(p::Term::Var(v("key", LSort::Msg))),
     );
     assert_eq!(pretty_term(&t), "sdec(body, key)");
 }
@@ -371,10 +371,10 @@ fn algapp_pair_arg_renders_function_form_flat_term() {
     let t = p::Term::AlgApp(
         "senc".into(),
         Box::new(p::Term::Pair(vec![
-            p::Term::Var(v("a", p::SortHint::Untagged)),
-            p::Term::Var(v("b", p::SortHint::Untagged)),
+            p::Term::Var(v("a", LSort::Msg)),
+            p::Term::Var(v("b", LSort::Msg)),
         ])),
-        Box::new(p::Term::Var(v("k", p::SortHint::Untagged))),
+        Box::new(p::Term::Var(v("k", LSort::Msg))),
     );
     assert_eq!(pretty_term(&t), "senc(<a, b>, k)");
 }
@@ -383,8 +383,8 @@ fn algapp_pair_arg_renders_function_form_flat_term() {
 fn algapp_renders_function_form_doc_term() {
     let t = p::Term::AlgApp(
         "sdec".into(),
-        Box::new(p::Term::Var(v("body", p::SortHint::Untagged))),
-        Box::new(p::Term::Var(v("key", p::SortHint::Untagged))),
+        Box::new(p::Term::Var(v("body", LSort::Msg))),
+        Box::new(p::Term::Var(v("key", LSort::Msg))),
     );
     assert_eq!(term_to_doc(&t, &[]).render(), "sdec(body, key)");
 }
@@ -395,11 +395,11 @@ fn algapp_renders_function_form_flat_gterm() {
         "sdec".into(),
         std::sync::Arc::new(crate::guarded::GTerm::Var(crate::guarded::BVar::Free(v(
             "body",
-            p::SortHint::Untagged,
+            LSort::Msg,
         )))),
         std::sync::Arc::new(crate::guarded::GTerm::Var(crate::guarded::BVar::Free(v(
             "key",
-            p::SortHint::Untagged,
+            LSort::Msg,
         )))),
     );
     let mut s = String::new();
@@ -414,20 +414,14 @@ fn algapp_pair_arg_renders_function_form_doc_gterm() {
         "senc".into(),
         std::sync::Arc::new(crate::guarded::GTerm::Pair(
             vec![
-                crate::guarded::GTerm::Var(crate::guarded::BVar::Free(v(
-                    "a",
-                    p::SortHint::Untagged,
-                ))),
-                crate::guarded::GTerm::Var(crate::guarded::BVar::Free(v(
-                    "b",
-                    p::SortHint::Untagged,
-                ))),
+                crate::guarded::GTerm::Var(crate::guarded::BVar::Free(v("a", LSort::Msg))),
+                crate::guarded::GTerm::Var(crate::guarded::BVar::Free(v("b", LSort::Msg))),
             ]
             .into(),
         )),
         std::sync::Arc::new(crate::guarded::GTerm::Var(crate::guarded::BVar::Free(v(
             "k",
-            p::SortHint::Untagged,
+            LSort::Msg,
         )))),
     );
     assert_eq!(gterm_to_doc(&g, &[]).render(), "senc(<a, b>, k)");
@@ -442,7 +436,7 @@ fn fact_annotations_render_in_ord_order() {
     let fa = p::Fact {
         persistent: false,
         name: "F".into(),
-        args: vec![p::Term::Var(v("a", p::SortHint::Untagged))],
+        args: vec![p::Term::Var(v("a", LSort::Msg))],
         annotations: vec![
             p::FactAnnotation::NoSources,
             p::FactAnnotation::SolveFirst,

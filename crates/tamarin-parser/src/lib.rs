@@ -7,11 +7,12 @@
 //! Port of `Theory.Text.Parser.*` from `lib/theory/src/Theory/Text/Parser/`.
 //!
 //! This is a *syntax-level* parser: it produces a loose AST that mirrors
-//! the surface syntax. Semantic enrichment that the Haskell parser does
-//! inline (arity validation, sort assignment, `_restrict` expansion,
-//! macro expansion, scope analysis) is deferred to a later elaboration
-//! pass. The goal is to recognise every well-formed `.spthy` file that
-//! Tamarin's Haskell parser accepts.
+//! the surface syntax. Variables carry the `tamarin_term::lterm::LSort`
+//! the Haskell parser assigns them, but the rest of the semantic
+//! enrichment the Haskell parser does inline (arity validation,
+//! `_restrict` expansion, macro expansion, scope analysis) is deferred to
+//! a later elaboration pass. The goal is to recognise every well-formed
+//! `.spthy` file that Tamarin's Haskell parser accepts.
 
 pub mod ast;
 pub mod lexer;

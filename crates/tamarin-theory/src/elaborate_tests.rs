@@ -98,8 +98,8 @@ fn installed_bundle_resolves_every_attribute_in_term_to_lnterm() {
     let thy = parse_theory(src, &[]).unwrap();
     let _guard = set_user_funs_for_theory(&thy);
 
-    let x = parser_var("x", 0, p::SortHint::Msg);
-    let y = parser_var("y", 0, p::SortHint::Msg);
+    let x = parser_var("x", 0, LSort::Msg);
+    let y = parser_var("y", 0, LSort::Msg);
 
     // `ac` set: a prefix application of an `[AC]` symbol lowers to an AC
     // application carrying the declaration's flags.
@@ -116,7 +116,7 @@ fn installed_bundle_resolves_every_attribute_in_term_to_lnterm() {
 
     // `private` set + `nullary` set: a bare name declared `/0`
     // becomes a 0-arity private constant, not a free variable.
-    match term_to_lnterm(&parser_var("sec", 0, p::SortHint::Msg)).unwrap() {
+    match term_to_lnterm(&parser_var("sec", 0, LSort::Msg)).unwrap() {
         Term::App(FunSym::NoEq(sym), args) => {
             assert!(args.is_empty());
             assert_eq!(sym.arity, 0);
@@ -159,8 +159,8 @@ fn installed_bundle_resolves_every_attribute_in_term_to_lnterm() {
 fn hardcoded_unary_builtins_fold_surplus_arguments() {
     use tamarin_term::function_symbols::FunSym;
 
-    let a = parser_var("a", 0, p::SortHint::Msg);
-    let b = parser_var("b", 0, p::SortHint::Msg);
+    let a = parser_var("a", 0, LSort::Msg);
+    let b = parser_var("b", 0, LSort::Msg);
     let a_b_pair =
         tamarin_term::builtin::pair(term_to_lnterm(&a).unwrap(), term_to_lnterm(&b).unwrap());
     for name in [
@@ -212,8 +212,8 @@ fn diff_term_lowers_to_the_private_diff_symbol() {
     use tamarin_term::function_symbols::{diff_sym, AcState, FunSym};
     use tamarin_term::maude_print::fun_sym_encode_attr;
 
-    let x = parser_var("x", 0, p::SortHint::Msg);
-    let y = parser_var("y", 0, p::SortHint::Msg);
+    let x = parser_var("x", 0, LSort::Msg);
+    let y = parser_var("y", 0, LSort::Msg);
     let t = p::Term::Diff(Box::new(x), Box::new(y));
 
     match term_to_lnterm(&t).unwrap() {
@@ -243,19 +243,19 @@ fn canonicalize_ac_in_pterm_flattens_and_sorts() {
     let na = p::Term::Var(p::VarSpec {
         typ: None,
         name: "na".into(),
-        sort: p::SortHint::Msg,
+        sort: LSort::Msg,
         idx: 0,
     });
     let k = p::Term::Var(p::VarSpec {
         typ: None,
         name: "k".into(),
-        sort: p::SortHint::Fresh,
+        sort: LSort::Fresh,
         idx: 0,
     });
     let nb = p::Term::Var(p::VarSpec {
         typ: None,
         name: "nb".into(),
-        sort: p::SortHint::Fresh,
+        sort: LSort::Fresh,
         idx: 0,
     });
     let inner = p::Term::BinOp(p::BinOp::Xor, Box::new(na.clone()), Box::new(k.clone()));
@@ -288,7 +288,7 @@ fn canonicalize_ac_in_pterm_sees_the_installed_ac_set_at_every_depth() {
         p::Term::Var(p::VarSpec {
             typ: None,
             name: name.into(),
-            sort: p::SortHint::Msg,
+            sort: LSort::Msg,
             idx: 0,
         })
     };
@@ -495,7 +495,7 @@ fn elaborate_lemma_passthrough() {
 // lnterm_to_term round-tripping correctness
 // =========================================================================
 
-fn parser_var(name: &str, idx: u64, sort: p::SortHint) -> p::Term {
+fn parser_var(name: &str, idx: u64, sort: LSort) -> p::Term {
     p::Term::Var(p::VarSpec {
         name: name.into(),
         idx,
@@ -531,17 +531,17 @@ fn lnterm_to_term_inverts_term_to_lnterm() {
     let cases: Vec<(&str, p::Term, LNTerm)> = vec![
         (
             "msg var carries LSortMsg and its index",
-            parser_var("x", 7, p::SortHint::Msg),
+            parser_var("x", 7, LSort::Msg),
             var_term(LVar::new("x", LSort::Msg, 7)),
         ),
         (
             "`~k.3` is LSortFresh, not Msg",
-            parser_var("k", 3, p::SortHint::Fresh),
+            parser_var("k", 3, LSort::Fresh),
             var_term(LVar::new("k", LSort::Fresh, 3)),
         ),
         (
             "`#i` is LSortNode",
-            parser_var("i", 0, p::SortHint::Node),
+            parser_var("i", 0, LSort::Node),
             var_term(LVar::new("i", LSort::Node, 0)),
         ),
         (
@@ -557,17 +557,17 @@ fn lnterm_to_term_inverts_term_to_lnterm() {
         (
             "<a, b> is one `pair` application",
             p::Term::Pair(vec![
-                parser_var("a", 0, p::SortHint::Msg),
-                parser_var("b", 0, p::SortHint::Msg),
+                parser_var("a", 0, LSort::Msg),
+                parser_var("b", 0, LSort::Msg),
             ]),
             pair2(msg("a"), msg("b")),
         ),
         (
             "<a, b, c> nests RIGHT: pair(a, pair(b, c)), and unnests flat",
             p::Term::Pair(vec![
-                parser_var("a", 0, p::SortHint::Msg),
-                parser_var("b", 0, p::SortHint::Msg),
-                parser_var("c", 0, p::SortHint::Msg),
+                parser_var("a", 0, LSort::Msg),
+                parser_var("b", 0, LSort::Msg),
+                parser_var("c", 0, LSort::Msg),
             ]),
             pair2(msg("a"), pair2(msg("b"), msg("c"))),
         ),
@@ -576,8 +576,8 @@ fn lnterm_to_term_inverts_term_to_lnterm() {
             p::Term::App(
                 "f".into(),
                 vec![
-                    p::Term::App("g".into(), vec![parser_var("x", 0, p::SortHint::Msg)]),
-                    parser_var("y", 0, p::SortHint::Msg),
+                    p::Term::App("g".into(), vec![parser_var("x", 0, LSort::Msg)]),
+                    parser_var("y", 0, LSort::Msg),
                 ],
             ),
             f_app_no_eq(
@@ -625,7 +625,7 @@ fn let_block_substitutes_in_premises() {
     let in_fact = &desugared.premises[0];
     assert_eq!(in_fact.name, "In");
     match &in_fact.args[0] {
-        p::Term::Var(vs) if vs.name == "k" && vs.sort == p::SortHint::Fresh => {}
+        p::Term::Var(vs) if vs.name == "k" && vs.sort == LSort::Fresh => {}
         other => panic!("expected ~k after subst, got {:?}", other),
     }
 }
@@ -654,7 +654,7 @@ fn let_block_sequential_bindings() {
     let in_fact = &desugared.premises[0];
     match &in_fact.args[0] {
         p::Term::App(name, args) if name == "h" => match &args[0] {
-            p::Term::Var(vs) if vs.name == "k" && vs.sort == p::SortHint::Fresh => {}
+            p::Term::Var(vs) if vs.name == "k" && vs.sort == LSort::Fresh => {}
             other => panic!("expected h(~k), got h({:?})", other),
         },
         other => panic!("expected h(~k), got {:?}", other),
@@ -689,7 +689,7 @@ fn let_block_forward_reference_stays_free() {
     let in_fact = &desugared.premises[0];
     match &in_fact.args[0] {
         p::Term::App(name, args) if name == "h" => match &args[0] {
-            p::Term::Var(vs) if vs.name == "b" && vs.sort != p::SortHint::Fresh => {}
+            p::Term::Var(vs) if vs.name == "b" && vs.sort != LSort::Fresh => {}
             other => panic!("expected h(b) with free b, got h({:?})", other),
         },
         other => panic!("expected h(b), got {:?}", other),
@@ -709,12 +709,12 @@ fn let_block_substitutes_in_actions_and_conclusions() {
     let desugared = apply_let_block(r);
     let use_act = &desugared.actions[0];
     match &use_act.args[0] {
-        p::Term::Var(vs) if vs.name == "k" && vs.sort == p::SortHint::Fresh => {}
+        p::Term::Var(vs) if vs.name == "k" && vs.sort == LSort::Fresh => {}
         other => panic!("expected Use(~k), got Use({:?})", other),
     }
     let out_conc = &desugared.conclusions[0];
     match &out_conc.args[0] {
-        p::Term::Var(vs) if vs.name == "k" && vs.sort == p::SortHint::Fresh => {}
+        p::Term::Var(vs) if vs.name == "k" && vs.sort == LSort::Fresh => {}
         other => panic!("expected Out(~k), got Out({:?})", other),
     }
 }

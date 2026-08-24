@@ -597,7 +597,7 @@ mod tests {
         let k = p::Term::Var(p::VarSpec {
             typ: None,
             name: "k".into(),
-            sort: p::SortHint::Msg,
+            sort: LSort::Msg,
             idx: 1,
         });
         let eq_cond = |args: Vec<p::Term>| {
@@ -675,7 +675,7 @@ mod tests {
         let k = p::Term::Var(p::VarSpec {
             typ: None,
             name: "k".into(),
-            sort: p::SortHint::Msg,
+            sort: LSort::Msg,
             idx: 1,
         });
         let add_k_a = p::Term::App("add".into(), vec![k.clone(), p::Term::PubLit("a".into())]);

@@ -173,7 +173,8 @@ fn simplify_decomposes_top_level_conj() {
     // Conj([Atom1, Atom2]) — Atom1/Atom2 are reducible-formula leaves
     // when wrapped in Conj of size 2 since the Conj itself is
     // reducible (matches the `Conj _` arm of `reducible_formula`).
-    use tamarin_parser::ast::{Atom, SortHint, Term, VarSpec};
+    use tamarin_parser::ast::{Atom, Term, VarSpec};
+    use tamarin_term::lterm::LSort;
     // Use two distinct Last atoms with the same name but DIFFERENT
     // idx values so the test exercises Conj decomposition without
     // tripping Haskell's `insertLast` unification (which collapses
@@ -183,7 +184,7 @@ fn simplify_decomposes_top_level_conj() {
         Term::Var(VarSpec {
             name: n.to_string(),
             idx,
-            sort: SortHint::Node,
+            sort: LSort::Node,
             typ: None,
         })
     };
@@ -243,12 +244,13 @@ fn simplify_disj_decomposes_into_goal() {
         None => return,
     };
     let mut sys = System::empty();
-    use tamarin_parser::ast::{Atom, SortHint, Term, VarSpec};
+    use tamarin_parser::ast::{Atom, Term, VarSpec};
+    use tamarin_term::lterm::LSort;
     let mkvar = |n: &str| {
         Term::Var(VarSpec {
             name: n.to_string(),
             idx: 0,
-            sort: SortHint::Node,
+            sort: LSort::Node,
             typ: None,
         })
     };
@@ -289,12 +291,13 @@ fn partial_atom_valuation_last_returns_none_when_successor_not_in_trace() {
         Some(h) => h,
         None => return,
     };
-    use tamarin_parser::ast::{Atom, SortHint, Term, VarSpec};
+    use tamarin_parser::ast::{Atom, Term, VarSpec};
+    use tamarin_term::lterm::LSort;
     let mkvar = |n: &str, idx: u64| {
         Term::Var(VarSpec {
             name: n.to_string(),
             idx,
-            sort: SortHint::Node,
+            sort: LSort::Node,
             typ: None,
         })
     };
@@ -388,11 +391,7 @@ fn simplify_marks_subterm_self_contradiction() {
 // match_atom_via_maude correctness
 // =========================================================================
 
-fn mk_var_p(
-    name: &str,
-    idx: u64,
-    sort: tamarin_parser::ast::SortHint,
-) -> tamarin_parser::ast::Term {
+fn mk_var_p(name: &str, idx: u64, sort: tamarin_term::lterm::LSort) -> tamarin_parser::ast::Term {
     tamarin_parser::ast::Term::Var(tamarin_parser::ast::VarSpec {
         name: name.into(),
         idx,
@@ -441,13 +440,13 @@ fn match_atom_via_maude_simple_var_to_var() {
         tamarin_parser::ast::VarSpec {
             name: "k".into(),
             idx: 0,
-            sort: tamarin_parser::ast::SortHint::Msg,
+            sort: tamarin_term::lterm::LSort::Msg,
             typ: None,
         },
         tamarin_parser::ast::VarSpec {
             name: "i".into(),
             idx: 0,
-            sort: tamarin_parser::ast::SortHint::Node,
+            sort: tamarin_term::lterm::LSort::Node,
             typ: None,
         },
     ];
@@ -455,9 +454,9 @@ fn match_atom_via_maude_simple_var_to_var() {
         persistent: false,
         annotations: Vec::new(),
         name: "Setup".into(),
-        args: vec![mk_var_p("k", 0, tamarin_parser::ast::SortHint::Msg)],
+        args: vec![mk_var_p("k", 0, tamarin_term::lterm::LSort::Msg)],
     };
-    let g_time = mk_var_p("i", 0, tamarin_parser::ast::SortHint::Node);
+    let g_time = mk_var_p("i", 0, tamarin_term::lterm::LSort::Node);
     let i_node = tamarin_term::lterm::LVar::new("n", tamarin_term::lterm::LSort::Node, 7);
     let sys_arg = mk_var_l("alpha", 3, tamarin_term::lterm::LSort::Msg);
     let substs = match_atom_via_maude(
@@ -496,19 +495,19 @@ fn match_atom_via_maude_pattern_with_pair_against_pair() {
         tamarin_parser::ast::VarSpec {
             name: "a".into(),
             idx: 0,
-            sort: tamarin_parser::ast::SortHint::Msg,
+            sort: tamarin_term::lterm::LSort::Msg,
             typ: None,
         },
         tamarin_parser::ast::VarSpec {
             name: "b".into(),
             idx: 0,
-            sort: tamarin_parser::ast::SortHint::Msg,
+            sort: tamarin_term::lterm::LSort::Msg,
             typ: None,
         },
         tamarin_parser::ast::VarSpec {
             name: "i".into(),
             idx: 0,
-            sort: tamarin_parser::ast::SortHint::Node,
+            sort: tamarin_term::lterm::LSort::Node,
             typ: None,
         },
     ];
@@ -517,11 +516,11 @@ fn match_atom_via_maude_pattern_with_pair_against_pair() {
         annotations: Vec::new(),
         name: "Action".into(),
         args: vec![tamarin_parser::ast::Term::Pair(vec![
-            mk_var_p("a", 0, tamarin_parser::ast::SortHint::Msg),
-            mk_var_p("b", 0, tamarin_parser::ast::SortHint::Msg),
+            mk_var_p("a", 0, tamarin_term::lterm::LSort::Msg),
+            mk_var_p("b", 0, tamarin_term::lterm::LSort::Msg),
         ])],
     };
-    let g_time = mk_var_p("i", 0, tamarin_parser::ast::SortHint::Node);
+    let g_time = mk_var_p("i", 0, tamarin_term::lterm::LSort::Node);
     let i_node = tamarin_term::lterm::LVar::new("n", tamarin_term::lterm::LSort::Node, 1);
     // System has Action(<x, y>) where x, y are concrete LNTerm vars.
     use tamarin_term::function_symbols::{Constructability, NoEqSym, Privacy};
@@ -581,13 +580,13 @@ fn match_atom_via_maude_zero_subject_args_binds_only_the_time() {
         tamarin_parser::ast::VarSpec {
             name: "k".into(),
             idx: 0,
-            sort: tamarin_parser::ast::SortHint::Msg,
+            sort: tamarin_term::lterm::LSort::Msg,
             typ: None,
         },
         tamarin_parser::ast::VarSpec {
             name: "i".into(),
             idx: 0,
-            sort: tamarin_parser::ast::SortHint::Node,
+            sort: tamarin_term::lterm::LSort::Node,
             typ: None,
         },
     ];
@@ -595,9 +594,9 @@ fn match_atom_via_maude_zero_subject_args_binds_only_the_time() {
         persistent: false,
         annotations: Vec::new(),
         name: "F".into(),
-        args: vec![mk_var_p("k", 0, tamarin_parser::ast::SortHint::Msg)],
+        args: vec![mk_var_p("k", 0, tamarin_term::lterm::LSort::Msg)],
     };
-    let g_time = mk_var_p("i", 0, tamarin_parser::ast::SortHint::Node);
+    let g_time = mk_var_p("i", 0, tamarin_term::lterm::LSort::Node);
     let i_node = tamarin_term::lterm::LVar::new("n", tamarin_term::lterm::LSort::Node, 0);
     let substs = match_atom_via_maude(
         &h,
@@ -956,8 +955,8 @@ fn ku_action_uniqueness_unchanged_when_terms_differ() {
     );
 }
 
-/// Builds `x = 'z'` as one `Guarded`.  The sort hint on `x` is a parameter.
-fn eq_pub_lit_with_hint(sort: tamarin_parser::ast::SortHint) -> crate::guarded::Guarded {
+/// Builds `x = 'z'` as one `Guarded`.  The sort of `x` is a parameter.
+fn eq_pub_lit_with_sort(sort: tamarin_term::lterm::LSort) -> crate::guarded::Guarded {
     use crate::guarded::{BVar, GAtom, GTerm, Guarded};
     Guarded::Atom(GAtom::Eq(
         GTerm::Var(BVar::Free(tamarin_parser::ast::VarSpec {
@@ -970,62 +969,50 @@ fn eq_pub_lit_with_hint(sort: tamarin_parser::ast::SortHint) -> crate::guarded::
     ))
 }
 
-/// `dedupe_formulas_pass` compares the canonical form from
-/// `normalize_sort_hints`.  It does not compare raw `Guarded` equality.
-/// `x:Msg = 'z'` and `x:Untagged = 'z'` are therefore one formula.  The pass
-/// keeps the first `Arc` that it sees.
+/// `dedupe_formulas_pass` compares `Guarded` equality and keeps the first
+/// `Arc` of each group of equal formulas.
 #[test]
-fn dedupe_formulas_collapses_sort_hint_variants_keeping_the_first() {
+fn dedupe_formulas_drops_a_repeated_formula() {
     let ctx = match ctx() {
         Some(c) => c,
         None => return,
     };
-    use crate::guarded::normalize_sort_hints;
-    use tamarin_parser::ast::SortHint;
-    let f1 = eq_pub_lit_with_hint(SortHint::Msg);
-    let f2 = eq_pub_lit_with_hint(SortHint::Untagged);
-    // These two assertions pin both halves of the premise.  A change to the
-    // constructors can make the pair raw-equal.  Dedupe then fires for a
-    // trivial reason.  Such a change can also make the canonical forms
-    // unequal.  Dedupe then never fires.  Both cases fail here.  Without
-    // these assertions the test below quietly checks nothing.
-    assert_ne!(f1, f2, "the pair must be distinct under raw `Guarded` `Eq`");
+    use tamarin_term::lterm::LSort;
+    let first = std::sync::Arc::new(eq_pub_lit_with_sort(LSort::Msg));
+    let second = std::sync::Arc::new(eq_pub_lit_with_sort(LSort::Msg));
     assert_eq!(
-        normalize_sort_hints(&f1),
-        normalize_sort_hints(&f2),
-        "`Untagged` is exactly what `normalize_sort_hints` erases to `Msg`"
+        *first, *second,
+        "the pair must be equal under `Guarded` `Eq`"
+    );
+    assert!(
+        !std::sync::Arc::ptr_eq(&first, &second),
+        "the pair must be two allocations, so the surviving one is identifiable"
     );
 
     let mut sys = System::empty();
-    sys.formulas_mut().push(std::sync::Arc::new(f1.clone()));
-    sys.formulas_mut().push(std::sync::Arc::new(f2.clone()));
+    sys.formulas_mut().push(first.clone());
+    sys.formulas_mut().push(second);
     let mut r = Reduction::new(&ctx, sys);
     assert_eq!(dedupe_formulas_pass(&mut r), ChangeIndicator::Changed);
-    assert_eq!(r.sys.formulas.len(), 1, "the canon-equal pair collapses");
-    assert_eq!(
-        *r.sys.formulas[0], f1,
-        "the FIRST occurrence is kept, not the later canon-equal one"
+    assert_eq!(r.sys.formulas.len(), 1, "the equal pair collapses");
+    assert!(
+        std::sync::Arc::ptr_eq(&r.sys.formulas[0], &first),
+        "the FIRST occurrence is kept, not the later equal one"
     );
 }
 
-/// This is the other side of the canonicalisation.  Sort hints that survive
-/// `normalize_sort_hints` keep the formulas apart.  The pass then drops
-/// nothing.
+/// The other side: the binder sort is part of `Guarded` equality, so two
+/// formulas that differ only in it stay apart and the pass drops nothing.
 #[test]
-fn dedupe_formulas_keeps_formulas_whose_canons_differ() {
+fn dedupe_formulas_keeps_formulas_of_different_sort() {
     let ctx = match ctx() {
         Some(c) => c,
         None => return,
     };
-    use crate::guarded::normalize_sort_hints;
-    use tamarin_parser::ast::SortHint;
-    let f1 = eq_pub_lit_with_hint(SortHint::Msg);
-    let f2 = eq_pub_lit_with_hint(SortHint::Fresh);
-    assert_ne!(
-        normalize_sort_hints(&f1),
-        normalize_sort_hints(&f2),
-        "`Fresh` is NOT erased — the canons must stay distinct"
-    );
+    use tamarin_term::lterm::LSort;
+    let f1 = eq_pub_lit_with_sort(LSort::Msg);
+    let f2 = eq_pub_lit_with_sort(LSort::Fresh);
+    assert_ne!(f1, f2, "the sorts must keep the pair distinct");
 
     let mut sys = System::empty();
     sys.formulas_mut().push(std::sync::Arc::new(f1.clone()));

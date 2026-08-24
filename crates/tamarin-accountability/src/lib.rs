@@ -22,11 +22,12 @@ mod generation;
 
 use tamarin_parser::ast as p;
 use tamarin_parser::wf::WfError;
+use tamarin_term::lterm::LSort;
 
 use tamarin_theory::elaborate::elaborate_lemma_attr;
 use tamarin_theory::theory::{self as t, Theory, TheoryItem};
 
-use crate::formula::{frees, from_p_formula, sort_rank, to_p_formula, Fm};
+use crate::formula::{frees, from_p_formula, to_p_formula, Fm};
 use crate::generation::{generate_accountability_lemmas, AccData, CaseTestData};
 
 /// Accountability translation error: HS `AccException`
@@ -633,5 +634,5 @@ fn term_is_free_var(t: &tamarin_theory::guarded_types::GTerm) -> bool {
 
 /// HS `isPubVar` (Term/LTerm.hs:328-331, see line 330): a variable of sort `LSortPub` (`$x`).
 fn is_pub_var(t: &p::Term) -> bool {
-    matches!(t, p::Term::Var(v) if sort_rank(v.sort) == 0)
+    matches!(t, p::Term::Var(v) if v.sort == LSort::Pub)
 }

@@ -932,7 +932,7 @@ fn function_decl_typing_info(d: &p::FunctionDecl) -> crate::theory::SapicFunSym 
 /// Theory/Sapic/Term.hs:108-110): the LVar display (sigil + name, `.idx`
 /// when non-zero) plus `:type` when annotated.
 fn show_open_varspec(v: &p::VarSpec) -> String {
-    let mut s = pf::sort_prefix_from_hint(v.sort).to_string();
+    let mut s = tamarin_term::lterm::sort_prefix(v.sort).to_string();
     s.push_str(&v.name);
     if v.idx != 0 {
         s.push('.');
@@ -2477,7 +2477,7 @@ fn render_parsed_macros(macros: &[p::Macro]) -> String {
                 .args
                 .iter()
                 .map(|v| {
-                    let mut s = pf::sort_prefix_from_hint(v.sort).to_string();
+                    let mut s = tamarin_term::lterm::sort_prefix(v.sort).to_string();
                     s.push_str(&v.name);
                     if v.idx > 0 {
                         s.push('.');
@@ -3292,25 +3292,15 @@ pub fn lnfact_to_parser(fa: &crate::fact::LNFact) -> p::Fact {
 /// disagree about any of those shapes.
 pub fn lnterm_to_parser(t: &tamarin_term::lterm::LNTerm) -> p::Term {
     use tamarin_term::function_symbols::{AcSym, FunSym};
-    use tamarin_term::lterm::LSort;
     use tamarin_term::term::Term;
     use tamarin_term::vterm::Lit;
     match t {
-        Term::Lit(Lit::Var(v)) => {
-            let sort = match v.sort {
-                LSort::Pub => p::SortHint::Pub,
-                LSort::Fresh => p::SortHint::Fresh,
-                LSort::Node => p::SortHint::Node,
-                LSort::Nat => p::SortHint::Nat,
-                LSort::Msg => p::SortHint::Msg,
-            };
-            p::Term::Var(p::VarSpec {
-                name: v.name.to_string(),
-                idx: v.idx,
-                sort,
-                typ: None,
-            })
-        }
+        Term::Lit(Lit::Var(v)) => p::Term::Var(p::VarSpec {
+            name: v.name.to_string(),
+            idx: v.idx,
+            sort: v.sort,
+            typ: None,
+        }),
         Term::Lit(Lit::Con(n)) => {
             use tamarin_term::lterm::NameTag;
             match n.tag {
@@ -4598,13 +4588,14 @@ mod oracle_goal_tests {
         use crate::constraint::constraints::{Disj, Goal};
         use crate::guarded::Guarded;
         use crate::guarded_types::{BVar, GAtom, GTerm};
-        use tamarin_parser::ast::{SortHint, VarSpec};
+        use tamarin_parser::ast::VarSpec;
+        use tamarin_term::lterm::LSort;
 
         let tp = |n: &str| {
             GTerm::Var(BVar::Free(VarSpec {
                 name: n.to_string(),
                 idx: 0,
-                sort: SortHint::Node,
+                sort: LSort::Node,
                 typ: None,
             }))
         };

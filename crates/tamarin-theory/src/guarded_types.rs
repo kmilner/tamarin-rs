@@ -15,6 +15,7 @@
 //! `Bound (k-1)` refers to the outermost.
 
 use tamarin_parser::ast as p;
+use tamarin_term::lterm::LSort;
 use tamarin_utils::cow::cow_map_arc;
 
 /// Mirrors HS `BVar v = Bound Integer | Free v`.
@@ -35,7 +36,7 @@ pub enum BVar {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct GBinding {
     pub name: String,
-    pub sort: p::SortHint,
+    pub sort: LSort,
 }
 
 /// Mirrors HS `VTerm c (BVar v)` — a Term whose Var leaves are `BVar`.
@@ -172,7 +173,7 @@ pub fn term_to_gterm_free(t: &p::Term) -> GTerm {
         // `ginduct` rejects the formula as "not closed", and `[sources]`
         // lemmas silently lose their induction (proof explodes).
         p::Term::Var(v)
-            if v.sort == p::SortHint::Msg
+            if v.sort == LSort::Msg
                 && v.idx == 0
                 && crate::elaborate::is_user_nullary_fun(&v.name) =>
         {
@@ -305,23 +306,6 @@ pub fn gatom_to_atom(a: &GAtom) -> p::Atom {
 // element of `vs` (innermost binder) maps to Bound 0, first element to
 // Bound (k-1).
 
-/// Fold a parser `SortHint` onto the concrete sort HS spells as an `LSort`:
-/// `Suffix(X)` is the `:msg|:pub|…` form of `X`, and a bare variable is
-/// `LSortMsg` (HS `msgvar = sortedLVar [LSortFresh, LSortPub, LSortNat,
-/// LSortMsg]`, whose `LSortMsg` prefix parser consumes no sigil).
-pub fn normalise_msg_sort(s: p::SortHint) -> p::SortHint {
-    use p::{SortHint as S, SuffixSort as SS};
-    match s {
-        S::Untagged => S::Msg,
-        S::Suffix(SS::Msg) => S::Msg,
-        S::Suffix(SS::Pub) => S::Pub,
-        S::Suffix(SS::Fresh) => S::Fresh,
-        S::Suffix(SS::Node) => S::Node,
-        S::Suffix(SS::Nat) => S::Nat,
-        other => other,
-    }
-}
-
 /// `subst_free_term_at_depth(t, s, depth)` — for each Free leaf, look up
 /// `(lvar, db)` in `s`; if found, replace with `Bound(db + depth)`.
 ///
@@ -350,9 +334,8 @@ pub fn subst_free_term_at_depth(t: &GTerm, s: &[(p::VarSpec, u32)], depth: u32) 
 fn subst_free_term_cow(t: &GTerm, s: &[(p::VarSpec, u32)], depth: u32) -> Option<GTerm> {
     match t {
         GTerm::Var(BVar::Free(v)) => {
-            let occ_sort = normalise_msg_sort(v.sort);
             for (lv, db) in s {
-                if lv.name == v.name && lv.idx == v.idx && normalise_msg_sort(lv.sort) == occ_sort {
+                if lv.name == v.name && lv.idx == v.idx && lv.sort == v.sort {
                     return Some(GTerm::Var(BVar::Bound(db + depth)));
                 }
             }
@@ -732,7 +715,7 @@ mod tests {
         p::VarSpec {
             name: name.to_string(),
             idx,
-            sort: p::SortHint::Msg,
+            sort: LSort::Msg,
             typ: None,
         }
     }
@@ -741,7 +724,7 @@ mod tests {
         p::VarSpec {
             name: name.to_string(),
             idx,
-            sort: p::SortHint::Node,
+            sort: LSort::Node,
             typ: None,
         }
     }

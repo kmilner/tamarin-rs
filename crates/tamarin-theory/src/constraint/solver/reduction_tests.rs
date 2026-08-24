@@ -903,8 +903,9 @@ fn insert_atom_action_creates_action_goal() {
         None => return,
     };
     let mut r = Reduction::new(&ctx, System::empty());
-    use tamarin_parser::ast::{Atom, Fact, SortHint, Term, VarSpec};
-    let mkvar = |n: &str, sort: SortHint| {
+    use tamarin_parser::ast::{Atom, Fact, Term, VarSpec};
+    use tamarin_term::lterm::LSort;
+    let mkvar = |n: &str, sort: LSort| {
         Term::Var(VarSpec {
             name: n.to_string(),
             idx: 0,
@@ -917,9 +918,9 @@ fn insert_atom_action_creates_action_goal() {
             persistent: false,
             annotations: Vec::new(),
             name: "Setup".into(),
-            args: vec![mkvar("k", SortHint::Msg)],
+            args: vec![mkvar("k", LSort::Msg)],
         },
-        mkvar("i", SortHint::Node),
+        mkvar("i", LSort::Node),
     );
     let ok = r.insert_atom(&action);
     assert!(ok);
@@ -936,12 +937,13 @@ fn insert_atom_less_creates_less_atom() {
         None => return,
     };
     let mut r = Reduction::new(&ctx, System::empty());
-    use tamarin_parser::ast::{Atom, SortHint, Term, VarSpec};
+    use tamarin_parser::ast::{Atom, Term, VarSpec};
+    use tamarin_term::lterm::LSort;
     let mkvar = |n: &str| {
         Term::Var(VarSpec {
             name: n.to_string(),
             idx: 0,
-            sort: SortHint::Node,
+            sort: LSort::Node,
             typ: None,
         })
     };
@@ -966,11 +968,12 @@ fn insert_atom_last_sets_last_atom() {
         None => return,
     };
     let mut r = Reduction::new(&ctx, System::empty());
-    use tamarin_parser::ast::{Atom, SortHint, Term, VarSpec};
+    use tamarin_parser::ast::{Atom, Term, VarSpec};
+    use tamarin_term::lterm::LSort;
     let v = Term::Var(VarSpec {
         name: "i".into(),
         idx: 0,
-        sort: SortHint::Node,
+        sort: LSort::Node,
         typ: None,
     });
     let last = Atom::Last(v);
@@ -1107,12 +1110,13 @@ fn default_case_name_is_one_indexed() {
 /// (Reduction.hs:461-486).
 fn neg_less_node_universal(i_name: &str, j_name: &str) -> Guarded {
     use crate::guarded::{atom_to_gatom_free, GAtom, Quant};
-    use tamarin_parser::ast::{Atom, SortHint, Term, VarSpec};
+    use tamarin_parser::ast::{Atom, Term, VarSpec};
+    use tamarin_term::lterm::LSort;
     let mkvar = |n: &str| {
         Term::Var(VarSpec {
             name: n.to_string(),
             idx: 0,
-            sort: SortHint::Node,
+            sort: LSort::Node,
             typ: None,
         })
     };

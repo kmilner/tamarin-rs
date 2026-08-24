@@ -586,7 +586,7 @@ pub struct CollectedUserFuns {
     /// `true`; `xor` adds `zero`; etc.), mirroring HS's parser-state
     /// `nullaryApp` lookup.  Read by `term_to_lnterm`'s `Var` branch so a
     /// bare `true` (which the lexer-level surface parser renders as
-    /// `Var("true",Untagged)` for lack of a signature lookup) becomes a
+    /// `Var("true", LSort::Msg)` for lack of a signature lookup) becomes a
     /// 0-arity `f_app_no_eq` constant instead of a free variable.  Without
     /// it, `Eq(verify(...), true)` in a rule's actions becomes an `Eq` over
     /// `verify(...)` and a Msg-sort variable, which the `Eq_check_succeed`
@@ -1851,25 +1851,12 @@ fn collect_vars(t: &tamarin_term::lterm::LNTerm, out: &mut BTreeSet<LVar>) {
 // Term conversion: parser::Term → LNTerm
 // =============================================================================
 
-pub(crate) fn sort_of(s: &p::SortHint) -> LSort {
-    match s {
-        p::SortHint::Fresh | p::SortHint::Suffix(p::SuffixSort::Fresh) => LSort::Fresh,
-        p::SortHint::Pub | p::SortHint::Suffix(p::SuffixSort::Pub) => LSort::Pub,
-        p::SortHint::Node | p::SortHint::Suffix(p::SuffixSort::Node) => LSort::Node,
-        p::SortHint::Nat | p::SortHint::Suffix(p::SuffixSort::Nat) => LSort::Nat,
-        p::SortHint::Msg | p::SortHint::Suffix(p::SuffixSort::Msg) | p::SortHint::Untagged => {
-            LSort::Msg
-        }
-    }
-}
-
-/// A parse-time variable occurrence as the solver's `LVar`: the surface sort
-/// hint resolved through [`sort_of`], name and index carried over.  The
-/// SAPIC-typed variant wraps this in a `SapicLVar` with the `:type`
-/// annotation; the `VarSpec.typ` field has no `LVar` counterpart and is
-/// dropped here.
+/// A parse-time variable occurrence as the solver's `LVar`: sort, name and
+/// index carried over, with the name interned.  The SAPIC-typed variant
+/// wraps this in a `SapicLVar` with the `:type` annotation; the
+/// `VarSpec.typ` field has no `LVar` counterpart and is dropped here.
 pub(crate) fn varspec_to_lvar(v: &p::VarSpec) -> LVar {
-    LVar::new(&v.name, sort_of(&v.sort), v.idx)
+    LVar::new(&v.name, v.sort, v.idx)
 }
 
 /// Convert an `LNTerm` back to a parser-AST term. Used when we
@@ -1877,24 +1864,14 @@ pub(crate) fn varspec_to_lvar(v: &p::VarSpec) -> LVar {
 /// parser-AST world (e.g. for `insert_implied_formulas`).
 pub fn lnterm_to_term(t: &tamarin_term::lterm::LNTerm) -> p::Term {
     use tamarin_term::function_symbols::FunSym;
-    use tamarin_term::lterm::LSort;
     use tamarin_term::vterm::Lit;
     match t {
-        tamarin_term::term::Term::Lit(Lit::Var(v)) => {
-            let sort = match v.sort {
-                LSort::Msg => p::SortHint::Msg,
-                LSort::Pub => p::SortHint::Pub,
-                LSort::Fresh => p::SortHint::Fresh,
-                LSort::Node => p::SortHint::Node,
-                LSort::Nat => p::SortHint::Nat,
-            };
-            p::Term::Var(p::VarSpec {
-                name: v.name.to_string(),
-                idx: v.idx,
-                sort,
-                typ: None,
-            })
-        }
+        tamarin_term::term::Term::Lit(Lit::Var(v)) => p::Term::Var(p::VarSpec {
+            name: v.name.to_string(),
+            idx: v.idx,
+            sort: v.sort,
+            typ: None,
+        }),
         tamarin_term::term::Term::Lit(Lit::Con(name)) => {
             // Encode as the right literal kind based on the sort hint
             // attached to the name's tag.
@@ -2606,7 +2583,7 @@ pub fn term_to_lnterm(t: &p::Term) -> Option<tamarin_term::lterm::LNTerm> {
     // name at idx 0.
     let mk_var =
         |v: &p::VarSpec, funs: &CollectedUserFuns| -> Option<tamarin_term::lterm::LNTerm> {
-            if v.sort == p::SortHint::Msg && v.idx == 0 && funs.is_user_nullary_fun(&v.name) {
+            if v.sort == LSort::Msg && v.idx == 0 && funs.is_user_nullary_fun(&v.name) {
                 let sym = NoEqSym::new(
                     v.name.as_bytes().to_vec(),
                     0,
@@ -2645,7 +2622,7 @@ pub fn term_to_sapic_term(t: &p::Term) -> Option<crate::sapic::SapicTerm> {
     // additionally gated on an un-annotated variable); otherwise a typed
     // `SapicLVar`.
     let mk_var = |v: &p::VarSpec, funs: &CollectedUserFuns| -> Option<crate::sapic::SapicTerm> {
-        if v.sort == p::SortHint::Msg
+        if v.sort == LSort::Msg
             && v.idx == 0
             && v.typ.is_none()
             && funs.is_user_nullary_fun(&v.name)

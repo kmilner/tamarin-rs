@@ -643,18 +643,19 @@ mod tests {
     use crate::convert::convert_process;
     use crate::typing::type_and_rename_process;
     use tamarin_parser::ast as p;
+    use tamarin_term::lterm::LSort;
 
     fn typing2_process() -> p::Process {
         let xspec = p::VarSpec {
             name: "x".into(),
             idx: 0,
-            sort: p::SortHint::Msg,
+            sort: LSort::Msg,
             typ: Some("lol".into()),
         };
         let xref = p::Term::Var(p::VarSpec {
             name: "x".into(),
             idx: 0,
-            sort: p::SortHint::Msg,
+            sort: LSort::Msg,
             typ: None,
         });
         let ffx = p::Term::App(
@@ -730,7 +731,7 @@ mod tests {
             p::Term::Var(p::VarSpec {
                 name: "i".into(),
                 idx: 0,
-                sort: p::SortHint::Node,
+                sort: LSort::Node,
                 typ: None,
             }),
         ))

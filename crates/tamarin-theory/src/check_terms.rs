@@ -52,9 +52,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use tamarin_parser::ast as p;
-use tamarin_parser::ast::{Atom, BinOp, Formula, SortHint, SuffixSort, Term, VarSpec};
+use tamarin_parser::ast::{Atom, BinOp, Formula, Term, VarSpec};
 use tamarin_parser::wf::WfError;
 use tamarin_term::function_symbols::{AcFctSym, AcSym, CSym, FunSym, EMAP_SYM_STRING};
+use tamarin_term::lterm::{sort_prefix, LSort};
 use tamarin_term::maude_sig::MaudeSig;
 
 use crate::pretty_hpj::{fsep, punctuate, Doc};
@@ -589,7 +590,7 @@ fn resolve_var(v: &VarSpec, scope: &Scope, irr: &Irreducible) -> RTerm {
     }
     // Not bound: a bare message-sorted name that is a declared nullary funsym
     // is an application (e.g. private `f/0` parsed as Var("f")).
-    if v.sort == SortHint::Msg && irr.nullary_named(&v.name) {
+    if v.sort == LSort::Msg && irr.nullary_named(&v.name) {
         return resolve_named(&v.name, vec![], irr);
     }
     RTerm::Free(v.clone())
@@ -599,46 +600,28 @@ fn resolve_var(v: &VarSpec, scope: &Scope, irr: &Irreducible) -> RTerm {
 ///
 /// HS binds a use to its binder via full `LVar` equality — name AND sort AND
 /// idx (`quantify x = ... | v == x = Bound i`, Theory/Model/Formula.hs:347-352; `LVar` `Eq`
-/// compares `idx`, sort and name, LTerm.hs:546-548). We reproduce this on the
-/// sort-*kind*, over the concrete `LSort` the parser gave each occurrence
-/// (Theory/Text/Parser/Formula.hs:112-117, see line 114
-/// `standardFormula msgvar nodevar`): a message-position variable comes from
-/// `msgvar`, whose bare arm is `LSortMsg` (Token.hs:424-426, 440-441), and a
-/// temporal-position one from `nodevar` (`LSortNode`, Token.hs:444-447).
+/// compares `idx`, sort and name, LTerm.hs:546-548). The sort is the one the
+/// parser gave the occurrence (Theory/Text/Parser/Formula.hs:112-117, see
+/// line 114 `standardFormula msgvar nodevar`): a message-position variable
+/// comes from `msgvar`, whose bare arm is `LSortMsg` (Token.hs:424-426,
+/// 440-441), and a temporal-position one from `nodevar` (`LSortNode`,
+/// Token.hs:444-447).
 ///
-/// `quantify`'s `v == x` then compares sort exactly, so a bare `x` binds
+/// `quantify`'s `v == x` compares sort exactly, so a bare `x` binds
 /// only to a `LSortMsg` binder, never to a `~x`/`$x`/`%x`/`#x` binder of the
 /// same name+idx. The `idx` comparison likewise keeps `x.1` and `x.2` distinct.
 fn lookup_bound(v: &VarSpec, scope: &Scope) -> Option<u32> {
-    let expected: u8 = kind_of(&v.sort);
     // Search innermost (last) first.
     for (i, b) in scope.iter().enumerate().rev() {
         if b.name != v.name || b.idx != v.idx {
             continue;
         }
-        if kind_of(&b.sort) == expected {
+        if b.sort == v.sort {
             let db = (scope.len() - 1 - i) as u32;
             return Some(db);
         }
     }
     None
-}
-
-const KIND_FRESH: u8 = 0;
-const KIND_PUB: u8 = 1;
-const KIND_NODE: u8 = 2;
-const KIND_NAT: u8 = 3;
-const KIND_MSG: u8 = 4;
-
-fn kind_of(s: &SortHint) -> u8 {
-    match s {
-        SortHint::Fresh | SortHint::Suffix(SuffixSort::Fresh) => KIND_FRESH,
-        SortHint::Pub | SortHint::Suffix(SuffixSort::Pub) => KIND_PUB,
-        SortHint::Node | SortHint::Suffix(SuffixSort::Node) => KIND_NODE,
-        SortHint::Nat | SortHint::Suffix(SuffixSort::Nat) => KIND_NAT,
-        SortHint::Msg | SortHint::Suffix(SuffixSort::Msg) => KIND_MSG,
-        SortHint::Untagged => KIND_MSG,
-    }
 }
 
 // =============================================================================
@@ -806,13 +789,7 @@ fn write_rterm(t: &RTerm, out: &mut String) {
 /// `idx /= 0`, `name.idx`; if the name is empty, just the index).
 /// Shared with the message-derivation probe (`deriv_check`).
 pub(crate) fn show_lvar(v: &VarSpec) -> String {
-    let prefix = match v.sort {
-        SortHint::Fresh | SortHint::Suffix(SuffixSort::Fresh) => "~",
-        SortHint::Pub | SortHint::Suffix(SuffixSort::Pub) => "$",
-        SortHint::Node | SortHint::Suffix(SuffixSort::Node) => "#",
-        SortHint::Nat | SortHint::Suffix(SuffixSort::Nat) => "%",
-        _ => "",
-    };
+    let prefix = sort_prefix(v.sort);
     let body = if v.name.is_empty() {
         v.idx.to_string()
     } else if v.idx == 0 {

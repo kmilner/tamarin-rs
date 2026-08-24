@@ -465,25 +465,23 @@ fn case_name_list_to_string_is_intercalate_underscore() {
 
 /// The system key spells the sort of every quantifier binder, so the five
 /// sorts have to key apart: two systems whose binders differ only in sort are
-/// distinct and must not be deduplicated against each other.  The untagged
-/// hint carries the message sort and spells it.
+/// distinct and must not be deduplicated against each other.
 #[test]
 fn binder_sorts_key_apart() {
     use std::collections::BTreeSet;
-    use tamarin_parser::ast::SortHint;
-    let key = |s: &SortHint| {
+    use tamarin_term::lterm::LSort;
+    let key = |s: &LSort| {
         let mut out = String::new();
-        push_sort_hint_dbg(&mut out, s);
+        push_sort_dbg(&mut out, *s);
         out
     };
     let sorts = [
-        SortHint::Pub,
-        SortHint::Fresh,
-        SortHint::Msg,
-        SortHint::Node,
-        SortHint::Nat,
+        LSort::Pub,
+        LSort::Fresh,
+        LSort::Msg,
+        LSort::Node,
+        LSort::Nat,
     ];
     let keys: BTreeSet<String> = sorts.iter().map(key).collect();
     assert_eq!(keys.len(), sorts.len());
-    assert_eq!(key(&SortHint::Untagged), key(&SortHint::Msg));
 }

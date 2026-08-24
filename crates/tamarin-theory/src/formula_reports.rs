@@ -46,6 +46,7 @@
 
 use tamarin_parser::ast as p;
 use tamarin_parser::wf::{underline_topic, WfError};
+use tamarin_term::lterm::LSort;
 use tamarin_term::maude_sig::MaudeSig;
 
 use crate::check_terms::{TermChecker, WF_WIDTH};
@@ -161,19 +162,13 @@ fn check_quantifiers(header: &str, fm: &p::Formula) -> Option<WfError> {
 
 /// HS's `show` of the binder's `LSort` when that sort is NOT one of
 /// `[LSortMsg, LSortNode, LSortNat]` (Wellformedness.hs:957), else `None`.
-/// An untagged binder is `LSortMsg`: the sort of a quantified variable comes
-/// from its prefix / suffix alone, never from inference.
-fn disallowed_sort_show(sort: p::SortHint) -> Option<&'static str> {
+/// A bare binder is `LSortMsg`: the sort of a quantified variable comes
+/// from its prefix or suffix alone, never from inference.
+fn disallowed_sort_show(sort: LSort) -> Option<&'static str> {
     match sort {
-        p::SortHint::Pub | p::SortHint::Suffix(p::SuffixSort::Pub) => Some("LSortPub"),
-        p::SortHint::Fresh | p::SortHint::Suffix(p::SuffixSort::Fresh) => Some("LSortFresh"),
-        p::SortHint::Msg
-        | p::SortHint::Node
-        | p::SortHint::Nat
-        | p::SortHint::Untagged
-        | p::SortHint::Suffix(p::SuffixSort::Msg)
-        | p::SortHint::Suffix(p::SuffixSort::Node)
-        | p::SortHint::Suffix(p::SuffixSort::Nat) => None,
+        LSort::Pub => Some("LSortPub"),
+        LSort::Fresh => Some("LSortFresh"),
+        LSort::Msg | LSort::Node | LSort::Nat => None,
     }
 }
 
@@ -310,7 +305,7 @@ mod tests {
         );
     }
 
-    /// Node-, message- and untagged binders are allowed
+    /// Node-, message- and nat-sorted binders are allowed
     /// (`[LSortMsg, LSortNode, LSortNat]`, Wellformedness.hs:957), and the
     /// binder's index is not part of the shown pair (`~n.1` → `("n",…)`).
     #[test]

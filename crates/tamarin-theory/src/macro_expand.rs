@@ -39,6 +39,7 @@
 use std::collections::BTreeMap;
 
 use tamarin_parser::ast as p;
+use tamarin_term::lterm::LSort;
 
 /// Apply all macros to a term, recursing into args first and re-expanding
 /// the body after substitution.  Mirrors HS `applyMacros` exactly
@@ -96,7 +97,7 @@ pub fn apply_macros_term(macros: &[p::Macro], term: &p::Term) -> p::Term {
         // leave those (and 0-ary FUNCTION names, which `term_to_lnterm`'s
         // nullary branch lifts) untouched.
         p::Term::Var(v) => {
-            if v.idx == 0 && v.sort == p::SortHint::Msg && v.typ.is_none() {
+            if v.idx == 0 && v.sort == LSort::Msg && v.typ.is_none() {
                 if let Some(m) = find_matching_macro(&v.name, 0, macros) {
                     let expanded = subst_term_by_name(&m.body, &BTreeMap::new());
                     // Re-expand the EXPANDED body to handle nested macros.

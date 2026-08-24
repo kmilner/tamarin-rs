@@ -14,6 +14,7 @@
 use std::collections::BTreeMap;
 
 use tamarin_parser::ast as p;
+use tamarin_term::lterm::LSort;
 
 #[derive(Debug, Clone)]
 pub struct ExpandError {
@@ -191,7 +192,7 @@ fn expand_quantified(
     let capture = subst_range_vars(&new_subst);
     // A binder collides only with a substituted var of the SAME (name, sort)
     // — HS LVar identity (see fn doc).
-    let collides = |v: &p::VarSpec| capture.contains(&(v.name.clone(), sort_key(v.sort)));
+    let collides = |v: &p::VarSpec| capture.contains(&(v.name.clone(), v.sort));
     // Fast path: no binder collides with a substituted variable.
     if !vs.iter().any(collides) {
         return Ok(make(
@@ -225,40 +226,12 @@ fn expand_quantified(
 
 /// `(name, sort)` pairs occurring in the RANGE (values) of a substitution —
 /// the variables at risk of capture by a binder of the SAME name AND sort.
-fn subst_range_vars(subst: &Subst) -> std::collections::BTreeSet<(String, SortKey)> {
+fn subst_range_vars(subst: &Subst) -> std::collections::BTreeSet<(String, LSort)> {
     let mut out = std::collections::BTreeSet::new();
     for v in subst.map.values() {
         collect_term_vars_keyed(v, &mut out);
     }
     out
-}
-
-/// Normalised sort domain matching HS `LSort` variable identity.  HS LVars
-/// compare by `(lvarName, lvarSort)`; the message domain (a bare formula
-/// var, no prefix) is `LSortMsg`, so `Msg` and the un-prefixed `Untagged`
-/// hint collapse to the same key, while `#`/`~`/`$`/`%` are distinct sorts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum SortKey {
-    Msg,
-    Pub,
-    Fresh,
-    Node,
-    Nat,
-}
-
-fn sort_key(s: p::SortHint) -> SortKey {
-    match s {
-        p::SortHint::Msg | p::SortHint::Untagged => SortKey::Msg,
-        p::SortHint::Pub => SortKey::Pub,
-        p::SortHint::Fresh => SortKey::Fresh,
-        p::SortHint::Node => SortKey::Node,
-        p::SortHint::Nat => SortKey::Nat,
-        p::SortHint::Suffix(p::SuffixSort::Msg) => SortKey::Msg,
-        p::SortHint::Suffix(p::SuffixSort::Pub) => SortKey::Pub,
-        p::SortHint::Suffix(p::SuffixSort::Fresh) => SortKey::Fresh,
-        p::SortHint::Suffix(p::SuffixSort::Node) => SortKey::Node,
-        p::SortHint::Suffix(p::SuffixSort::Nat) => SortKey::Nat,
-    }
 }
 
 /// Visit every variable occurrence of a term; the two collectors below differ
@@ -279,9 +252,9 @@ fn for_each_term_var(t: &p::Term, f: &mut dyn FnMut(&p::VarSpec)) {
 }
 
 /// Collect `(name, sort)` keys of every variable in a term.
-fn collect_term_vars_keyed(t: &p::Term, out: &mut std::collections::BTreeSet<(String, SortKey)>) {
+fn collect_term_vars_keyed(t: &p::Term, out: &mut std::collections::BTreeSet<(String, LSort)>) {
     for_each_term_var(t, &mut |v| {
-        out.insert((v.name.clone(), sort_key(v.sort)));
+        out.insert((v.name.clone(), v.sort));
     });
 }
 
@@ -307,7 +280,7 @@ fn smaller_expansion(lhs: &p::Term, rhs: &p::Term) -> p::Formula {
     let z = p::VarSpec {
         name: zname,
         idx: 0,
-        sort: p::SortHint::Msg,
+        sort: LSort::Msg,
         typ: None,
     };
     let z_term = p::Term::Var(z.clone());

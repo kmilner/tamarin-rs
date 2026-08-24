@@ -120,13 +120,12 @@ fn cmp_term_ties_the_prefix_pair_spelling_with_the_bracket_spelling() {
     assert_eq!(cmp_term(&prefix, &long), Less);
 }
 
-/// A bare name is message-sorted in HS, where `msgvar` reads it through
-/// `sortedLVar`'s empty `LSortMsg` prefix parser
-/// (Token.hs:424-433#mkPrefixParser, Token.hs:440-441#msgvar).  So an
-/// untagged hint ties with `Msg` in both variable orderings and takes `Msg`'s
-/// place in the `LSort` declaration order (Term/LTerm.hs:165-170): behind
-/// `Pub` and `Fresh`, ahead of `Node` and `Nat`.  The printed operand order of
-/// an AC application rides on this through `cmp_term`.
+/// Both variable orderings rank sorts in the `LSort` declaration order
+/// (Term/LTerm.hs:165-170).  A bare name is message-sorted in HS, where
+/// `msgvar` reads it through `sortedLVar`'s empty `LSortMsg` prefix parser
+/// (Token.hs:424-433#mkPrefixParser, Token.hs:440-441#msgvar), so `Msg` sits
+/// behind `Pub` and `Fresh` and ahead of `Node` and `Nat`.  The printed
+/// operand order of an AC application rides on this through `cmp_term`.
 #[test]
 fn a_bare_variable_ranks_as_msg() {
     use std::cmp::Ordering::{Equal, Greater, Less};
@@ -136,21 +135,21 @@ fn a_bare_variable_ranks_as_msg() {
         sort,
         typ: None,
     };
-    let bare = vs(p::SortHint::Untagged);
-    assert_eq!(cmp_varspec(&bare, &vs(p::SortHint::Msg)), Equal);
-    assert_eq!(cmp_varspec(&bare, &vs(p::SortHint::Pub)), Greater);
-    assert_eq!(cmp_varspec(&bare, &vs(p::SortHint::Fresh)), Greater);
-    assert_eq!(cmp_varspec(&bare, &vs(p::SortHint::Node)), Less);
-    assert_eq!(cmp_varspec(&bare, &vs(p::SortHint::Nat)), Less);
+    let bare = vs(LSort::Msg);
+    assert_eq!(cmp_varspec(&bare, &vs(LSort::Msg)), Equal);
+    assert_eq!(cmp_varspec(&bare, &vs(LSort::Pub)), Greater);
+    assert_eq!(cmp_varspec(&bare, &vs(LSort::Fresh)), Greater);
+    assert_eq!(cmp_varspec(&bare, &vs(LSort::Node)), Less);
+    assert_eq!(cmp_varspec(&bare, &vs(LSort::Nat)), Less);
 
     let b = |sort| GBinding {
         name: "x".into(),
         sort,
     };
-    let bare = b(p::SortHint::Untagged);
-    assert_eq!(cmp_binding(&bare, &b(p::SortHint::Msg)), Equal);
-    assert_eq!(cmp_binding(&bare, &b(p::SortHint::Fresh)), Greater);
-    assert_eq!(cmp_binding(&bare, &b(p::SortHint::Nat)), Less);
+    let bare = b(LSort::Msg);
+    assert_eq!(cmp_binding(&bare, &b(LSort::Msg)), Equal);
+    assert_eq!(cmp_binding(&bare, &b(LSort::Fresh)), Greater);
+    assert_eq!(cmp_binding(&bare, &b(LSort::Nat)), Less);
 }
 
 #[test]
@@ -385,7 +384,7 @@ fn var(name: &str, idx: u64) -> p::Term {
     p::Term::Var(p::VarSpec {
         name: name.into(),
         idx,
-        sort: p::SortHint::Msg,
+        sort: LSort::Msg,
         typ: None,
     })
 }
@@ -435,10 +434,9 @@ fn varsubst_pair_descent() {
     assert_eq!(result, expected);
 }
 
-/// The parser produces `Ex #i. P @ i` with the binder as `Node` and
-/// the body's `i` as `Untagged`.  `close_subst` must match by
-/// `(name, idx)` only — full `VarSpec` equality would leave the body's
-/// `i` Free, breaking `is_closed` / `ginduct`.
+/// The parser sorts the `#i` binder and the `@ i` occurrence alike, as
+/// `Node`, so `close_subst` binds the body occurrence and `gnot`/`ginduct`
+/// see a closed formula.
 #[test]
 fn injectivity_check_ginduct_succeeds() {
     let gf = g("not (Ex id #i #j #k. Initiated(id) @ i & Removed(id) @ j & Copied(id) @ k & #i < #j & #j < #k)").expect("guarded");
@@ -457,7 +455,7 @@ fn varsubst_shadowing_blocks_inner_binder() {
     let inner_k = p::VarSpec {
         name: "k".into(),
         idx: 0,
-        sort: p::SortHint::Msg,
+        sort: LSort::Msg,
         typ: None,
     };
     let mkfact = |t: p::Term| p::Fact {
@@ -721,7 +719,7 @@ fn simplify_universal_with_quantifier_left_intact() {
     // simplification past the binder.
     let bound_var = GBinding {
         name: "x".into(),
-        sort: p::SortHint::Msg,
+        sort: LSort::Msg,
     };
     let g = mk_universal(vec![bound_var], &[mk_eq("a", "b")]);
     let val = |_atom: &p::Atom| Some(true);
@@ -1063,7 +1061,7 @@ fn canonicalize_sorts_commutative_em_args() {
     let x = GTerm::Var(BVar::Free(p::VarSpec {
         name: "x".into(),
         idx: 0,
-        sort: p::SortHint::Msg,
+        sort: LSort::Msg,
         typ: None,
     }));
     let p_lit = GTerm::PubLit("P".into());
@@ -1194,7 +1192,7 @@ fn subst_gterm_cow_var_value_equality() {
     // `None` ONLY when the replacement reproduces the exact same leaf, and
     // must still rebuild (`Some`) whenever the hit normalises the leaf's
     // spelling — otherwise the leaf-canonicalisation of `term_to_gterm_free`
-    // (Untagged→Msg sort, `typ` dropped) would be silently lost.
+    // (the dropped `typ`) would be silently lost.
     let mut s: VarSubst = VarSubst::default();
     // Replacement is the canonical Msg-sorted, no-typ leaf.
     s.insert(
@@ -1202,12 +1200,12 @@ fn subst_gterm_cow_var_value_equality() {
         p::Term::Var(p::VarSpec {
             name: "x".into(),
             idx: 0,
-            sort: p::SortHint::Msg,
+            sort: LSort::Msg,
             typ: None,
         }),
     );
 
-    let leaf = |sort: p::SortHint, typ: Option<&str>| {
+    let leaf = |sort: LSort, typ: Option<&str>| {
         GTerm::Var(BVar::Free(p::VarSpec {
             name: "x".into(),
             idx: 0,
@@ -1218,23 +1216,23 @@ fn subst_gterm_cow_var_value_equality() {
 
     // Exact identity hit: replacement == leaf → reuse the input (`None`).
     assert_eq!(
-        subst_gterm_cow(&leaf(p::SortHint::Msg, None), &s),
+        subst_gterm_cow(&leaf(LSort::Msg, None), &s),
         None,
         "an identity hit must report None so the caller reuses the leaf"
     );
 
-    // Spelling-normalising hit — Untagged leaf, canonical Msg replacement:
-    // must rebuild so the Untagged→Msg normalisation is applied.
+    // The Var arm keys on (name, idx), so a leaf of another sort is a hit
+    // and must rebuild to the Msg-sorted replacement.
     assert_eq!(
-        subst_gterm_cow(&leaf(p::SortHint::Untagged, None), &s),
+        subst_gterm_cow(&leaf(LSort::Fresh, None), &s),
         Some(term_to_gterm_free(s.get(&("x", 0)).unwrap())),
-        "an Untagged-sorted leaf must rebuild to the Msg-sorted replacement"
+        "a fresh-sorted leaf must rebuild to the Msg-sorted replacement"
     );
 
     // Typ-dropping hit — leaf carries a SAPIC `typ`, replacement drops it:
     // must rebuild so the `typ` is dropped.
     assert_eq!(
-        subst_gterm_cow(&leaf(p::SortHint::Msg, Some("A")), &s),
+        subst_gterm_cow(&leaf(LSort::Msg, Some("A")), &s),
         Some(term_to_gterm_free(s.get(&("x", 0)).unwrap())),
         "a typ-annotated leaf must rebuild to the typ-dropped replacement"
     );
@@ -1246,12 +1244,12 @@ fn subst_gterm_cow_var_value_equality() {
         p::Term::Var(p::VarSpec {
             name: "x".into(),
             idx: 7,
-            sort: p::SortHint::Msg,
+            sort: LSort::Msg,
             typ: None,
         }),
     );
     assert_eq!(
-        subst_gterm_cow(&leaf(p::SortHint::Msg, None), &s2),
+        subst_gterm_cow(&leaf(LSort::Msg, None), &s2),
         Some(term_to_gterm_free(s2.get(&("x", 0)).unwrap())),
         "a real idx remap must rebuild"
     );
@@ -1262,7 +1260,7 @@ fn subst_gterm_cow_var_value_equality() {
             &GTerm::Var(BVar::Free(p::VarSpec {
                 name: "y".into(),
                 idx: 0,
-                sort: p::SortHint::Msg,
+                sort: LSort::Msg,
                 typ: None,
             })),
             &s

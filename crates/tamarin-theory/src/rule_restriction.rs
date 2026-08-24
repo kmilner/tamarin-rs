@@ -32,6 +32,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use tamarin_parser::ast as p;
+use tamarin_term::lterm::LSort;
 
 use crate::predicate_expand::{expand_formula, ExpandError};
 
@@ -42,7 +43,7 @@ fn var_now() -> p::VarSpec {
     p::VarSpec {
         name: "NOW".to_string(),
         idx: 0,
-        sort: p::SortHint::Node,
+        sort: LSort::Node,
         typ: None,
     }
 }
@@ -116,10 +117,10 @@ pub fn lift_rule_restrictions(thy: &mut p::Theory) -> Result<(), ExpandError> {
 /// (`tools::abstract_interpretation`).
 ///
 /// Variable conversion mirrors elaboration's rule-body conversion
-/// (`elaborate::sort_of`) so the collected frees share identity with the
-/// elaborated rule's variables.  Bare nullary constants — which HS resolves
-/// to 0-ary applications at parse time (`nullaryApp`) but the RS parser
-/// leaves as untagged vars — are resolved away first, exactly as
+/// (`elaborate::varspec_to_lvar`) so the collected frees share identity with
+/// the elaborated rule's variables.  Bare nullary constants — which HS
+/// resolves to 0-ary applications at parse time (`nullaryApp`) but the RS
+/// parser leaves as message-sorted vars — are resolved away first, exactly as
 /// `lift_one_rule` does before its own rewrite.
 pub fn restriction_frees_by_rule(
     thy: &p::Theory,
@@ -196,8 +197,9 @@ pub fn lift_one_rule(
         // HS resolves a bare `<name>` token to a 0-arity `FApp (NoEq …) []`
         // during PARSING (`nullaryApp`), so by the time `rewrite` runs the
         // constant is a function application, not a variable — and `rewrite`
-        // keeps it inlined.  The RS parser leaves it as `Var{name, Untagged,
-        // idx 0}`; resolve those to `App(name, [])` here (an argument-less
+        // keeps it inlined.  The RS parser leaves it as
+        // `Var{name, LSort::Msg, idx 0}`; resolve those to `App(name, [])`
+        // here (an argument-less
         // `FApp` has no free-variable-containing args, so `rewrite`'s
         // abstraction clauses at Theory/Model/Restriction.hs:99-112 never fire
         // on it), so
@@ -291,9 +293,7 @@ fn resolve_nullary_constants(f: &p::Formula, nullary: &BTreeSet<String>) -> p::F
 /// Recursively resolve nullary-constant `Var`s to `App(name, [])` within a term.
 fn resolve_nullary_term(t: &p::Term, nullary: &BTreeSet<String>) -> p::Term {
     match t {
-        p::Term::Var(v)
-            if v.sort == p::SortHint::Msg && v.idx == 0 && nullary.contains(&v.name) =>
-        {
+        p::Term::Var(v) if v.sort == LSort::Msg && v.idx == 0 && nullary.contains(&v.name) => {
             p::Term::App(v.name.clone(), Vec::new())
         }
         _ => rebuild_term(t, |c| resolve_nullary_term(c, nullary)),
@@ -350,7 +350,7 @@ impl RewriteState {
         let v = p::VarSpec {
             name: "x".to_string(),
             idx,
-            sort: p::SortHint::Msg,
+            sort: LSort::Msg,
             typ: None,
         };
         self.subst.insert((v.name.clone(), v.idx), t.clone());
@@ -556,7 +556,7 @@ fn rebuild_term(t: &p::Term, mut f: impl FnMut(&p::Term) -> p::Term) -> p::Term 
 
 /// Is this var the special `#NOW` timepoint (HS `varNow`)?
 fn is_var_now(v: &p::VarSpec) -> bool {
-    v.name == "NOW" && matches!(v.sort, p::SortHint::Node) && v.idx == 0
+    v.name == "NOW" && matches!(v.sort, LSort::Node) && v.idx == 0
 }
 
 /// NOTE: unlike HS `freesList` (LTerm.hs = `D.toList . freesDList`)
@@ -580,10 +580,11 @@ fn frees_sorted(f: &p::Formula) -> Vec<p::VarSpec> {
 }
 
 fn dedup_first(vs: Vec<p::VarSpec>) -> Vec<p::VarSpec> {
-    let mut seen: std::collections::BTreeSet<(String, u64, u8)> = std::collections::BTreeSet::new();
+    let mut seen: std::collections::BTreeSet<(String, u64, LSort)> =
+        std::collections::BTreeSet::new();
     let mut out = Vec::with_capacity(vs.len());
     for v in vs {
-        let key = (v.name.clone(), v.idx, sort_rank(v.sort));
+        let key = (v.name.clone(), v.idx, v.sort);
         if seen.insert(key) {
             out.push(v);
         }
@@ -597,22 +598,8 @@ fn dedup_first(vs: Vec<p::VarSpec>) -> Vec<p::VarSpec> {
 fn cmp_lvar(a: &p::VarSpec, b: &p::VarSpec) -> std::cmp::Ordering {
     a.idx
         .cmp(&b.idx)
-        .then(sort_rank(a.sort).cmp(&sort_rank(b.sort)))
+        .then(a.sort.cmp(&b.sort))
         .then(a.name.cmp(&b.name))
-}
-
-/// Rank a parser `SortHint` to mirror HS `LSort` Ord.  Untagged vars in a
-/// restriction formula stand for Msg-sorted message variables.
-fn sort_rank(s: p::SortHint) -> u8 {
-    use p::SortHint::*;
-    use p::SuffixSort;
-    match s {
-        Pub | Suffix(SuffixSort::Pub) => 0,
-        Fresh | Suffix(SuffixSort::Fresh) => 1,
-        Msg | Suffix(SuffixSort::Msg) | Untagged => 2,
-        Node | Suffix(SuffixSort::Node) => 3,
-        Nat | Suffix(SuffixSort::Nat) => 4,
-    }
 }
 
 fn collect_frees_formula(f: &p::Formula, bound: &mut Vec<VarKey>, out: &mut Vec<p::VarSpec>) {
@@ -725,11 +712,8 @@ mod tests {
         // The formula has two binders.  They are the abstracted x (Msg) and
         // #NOW (Node), in the sorted order x then NOW.
         assert_eq!(vs.len(), 2);
-        assert_eq!((vs[0].name.as_str(), vs[0].sort), ("x", p::SortHint::Msg));
-        assert_eq!(
-            (vs[1].name.as_str(), vs[1].sort),
-            ("NOW", p::SortHint::Node)
-        );
+        assert_eq!((vs[0].name.as_str(), vs[0].sort), ("x", LSort::Msg));
+        assert_eq!((vs[1].name.as_str(), vs[1].sort), ("NOW", LSort::Node));
         // HS `f'' = (Action #NOW fact) ==> f'`.  The generated action is the
         // antecedent, and the rewritten body is the consequent.  A swap of the
         // two keeps the formula an `Implies`, but it inverts the meaning of

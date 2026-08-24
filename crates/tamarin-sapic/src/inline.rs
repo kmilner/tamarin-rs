@@ -370,6 +370,7 @@ fn apply_match_vars(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tamarin_term::lterm::LSort;
 
     fn pub_lit(s: &str) -> p::Term {
         p::Term::PubLit(s.to_string())
@@ -380,7 +381,7 @@ mod tests {
         let xref = p::Term::Var(p::VarSpec {
             name: param.to_string(),
             idx: 0,
-            sort: p::SortHint::Msg,
+            sort: LSort::Msg,
             typ: None,
         });
         p::ProcessDef {
@@ -388,7 +389,7 @@ mod tests {
             vars: Some(vec![p::VarSpec {
                 name: param.to_string(),
                 idx: 0,
-                sort: p::SortHint::Msg,
+                sort: LSort::Msg,
                 typ: None,
             }]),
             body: p::Process::Action {

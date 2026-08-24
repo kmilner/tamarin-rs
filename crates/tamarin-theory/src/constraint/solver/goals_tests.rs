@@ -498,10 +498,11 @@ fn goal_cmp_disj_var_sort_uses_lsort_ord() {
     use crate::constraint::constraints::Disj;
     use crate::guarded::{BVar, GAtom, GTerm, Guarded};
     use std::cmp::Ordering;
-    use tamarin_parser::ast::{SortHint, VarSpec};
+    use tamarin_parser::ast::VarSpec;
+    use tamarin_term::lterm::LSort;
 
     // A single-atom Disj over `Last(v)` where v differs only by sort.
-    let mk_disj = |sort: SortHint| -> Goal {
+    let mk_disj = |sort: LSort| -> Goal {
         let v = VarSpec {
             name: "x".to_string(),
             idx: 0,
@@ -511,8 +512,8 @@ fn goal_cmp_disj_var_sort_uses_lsort_ord() {
         let atom = GAtom::Last(GTerm::Var(BVar::Free(v)));
         Goal::Disj(Disj::new(vec![Guarded::Atom(atom)]))
     };
-    let pub_disj = mk_disj(SortHint::Pub);
-    let fresh_disj = mk_disj(SortHint::Fresh);
+    let pub_disj = mk_disj(LSort::Pub);
+    let fresh_disj = mk_disj(LSort::Fresh);
     // HS LSort Ord: Pub < Fresh.  The structural comparator must put the
     // Pub-var Disj first (by sort, not by Debug-string name order).
     assert_eq!(

@@ -1550,8 +1550,9 @@ fn atom_decomposition_creates_action_goal_in_simplify() {
         return;
     };
 
-    use tamarin_parser::ast::{Atom, Fact, SortHint, Term, VarSpec};
-    let mkvar = |n: &str, sort: SortHint| {
+    use tamarin_parser::ast::{Atom, Fact, Term, VarSpec};
+    use tamarin_term::lterm::LSort;
+    let mkvar = |n: &str, sort: LSort| {
         Term::Var(VarSpec {
             name: n.to_string(),
             idx: 0,
@@ -1564,9 +1565,9 @@ fn atom_decomposition_creates_action_goal_in_simplify() {
             persistent: false,
             annotations: Vec::new(),
             name: "Setup".into(),
-            args: vec![mkvar("k", SortHint::Msg)],
+            args: vec![mkvar("k", LSort::Msg)],
         },
-        mkvar("i", SortHint::Node),
+        mkvar("i", LSort::Node),
     );
     let g = tamarin_theory::guarded::Guarded::Conj(
         vec![tamarin_theory::guarded::Guarded::Atom(
@@ -1689,12 +1690,13 @@ fn simplify_conj_wrapping_disj_produces_goal() {
         return;
     };
 
-    use tamarin_parser::ast::{Atom, SortHint, Term, VarSpec};
+    use tamarin_parser::ast::{Atom, Term, VarSpec};
+    use tamarin_term::lterm::LSort;
     let mkvar = |n: &str| {
         Term::Var(VarSpec {
             name: n.to_string(),
             idx: 0,
-            sort: SortHint::Node,
+            sort: LSort::Node,
             typ: None,
         })
     };

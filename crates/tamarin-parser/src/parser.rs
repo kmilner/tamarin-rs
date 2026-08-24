@@ -10,6 +10,8 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
+use tamarin_term::lterm::LSort;
+
 use crate::ast::*;
 use crate::lexer::{is_ident_char, is_reserved_name, Lexer, Pos};
 use crate::proof_tree::parse_proof_tree;
@@ -3037,7 +3039,7 @@ impl<'a> Parser<'a> {
     /// `lvar` gave the argument (Token.hs:409-437): an explicit prefix or
     /// suffix names it, a prefixless binder is `LSortMsg`.
     fn has_duplicate_macro_arg(args: &[VarSpec]) -> bool {
-        let mut seen: Vec<(&str, u64, SortHint)> = Vec::with_capacity(args.len());
+        let mut seen: Vec<(&str, u64, LSort)> = Vec::with_capacity(args.len());
         for a in args {
             let key = (a.name.as_str(), a.idx, a.sort);
             if seen.contains(&key) {
@@ -4790,7 +4792,7 @@ impl<'a> Parser<'a> {
     fn node_sorted(t: Term) -> Term {
         match t {
             Term::Var(mut v) => {
-                v.sort = SortHint::Node;
+                v.sort = LSort::Node;
                 Term::Var(v)
             }
             other => other,
@@ -4867,7 +4869,7 @@ impl<'a> Parser<'a> {
             // left operand is one is the LAST alternative, "node equality"
             // (Theory/Text/Parser/Formula.hs:51,56): `nodevarTerm` on both
             // sides, which reads a bare right operand as a timepoint.
-            if matches!(&lhs, Term::Var(v) if v.sort == SortHint::Node) {
+            if matches!(&lhs, Term::Var(v) if v.sort == LSort::Node) {
                 return Ok(Formula::Atom(Atom::Eq(lhs, Self::node_sorted(rhs))));
             }
             return Ok(Formula::Atom(Atom::Eq(lhs, rhs)));
@@ -5612,7 +5614,7 @@ impl<'a> Parser<'a> {
                     let v = VarSpec {
                         name: id,
                         idx,
-                        sort: SortHint::Msg,
+                        sort: LSort::Msg,
                         typ: None,
                     };
                     let v = self.attach_sort_suffix(v)?;
@@ -5691,7 +5693,7 @@ impl<'a> Parser<'a> {
             let v = VarSpec {
                 name: id,
                 idx,
-                sort: SortHint::Msg,
+                sort: LSort::Msg,
                 typ: None,
             };
             let v = self.attach_sort_suffix(v)?;
@@ -5856,11 +5858,11 @@ impl<'a> Parser<'a> {
             // Distinguish suffix sort vs SAPIC type annotation.
             let snap = self.save();
             for (kw, sort) in [
-                ("msg", SortHint::Msg),
-                ("pub", SortHint::Pub),
-                ("fresh", SortHint::Fresh),
-                ("node", SortHint::Node),
-                ("nat", SortHint::Nat),
+                ("msg", LSort::Msg),
+                ("pub", LSort::Pub),
+                ("fresh", LSort::Fresh),
+                ("node", LSort::Node),
+                ("nat", LSort::Nat),
             ] {
                 if self.try_kw(kw) {
                     v.sort = sort;
@@ -5887,15 +5889,15 @@ impl<'a> Parser<'a> {
         let sort = match self.lx.peek() {
             Some('~') => {
                 self.lx.bump();
-                SortHint::Fresh
+                LSort::Fresh
             }
             Some('$') => {
                 self.lx.bump();
-                SortHint::Pub
+                LSort::Pub
             }
             Some('#') => {
                 self.lx.bump();
-                SortHint::Node
+                LSort::Node
             }
             Some('%') => {
                 // Could be `%1` (nat one) or `%'n'` (nat name lit) or `%x` (nat var).
@@ -5905,7 +5907,7 @@ impl<'a> Parser<'a> {
                     Some('\'') | Some('1') => return Ok(None), // handled by literal/atom path
                     Some(c) if c.is_ascii_alphabetic() => {
                         self.lx.bump();
-                        SortHint::Nat
+                        LSort::Nat
                     }
                     _ => {
                         return Ok(None);
@@ -5915,7 +5917,7 @@ impl<'a> Parser<'a> {
             // HS `sortedLVar`'s `mkPrefixParser LSortMsg` arm is the bare
             // `LSortMsg -> pure ()` case (Token.hs:424-426): a prefixless
             // identifier is message-sorted.
-            Some(c) if c.is_alphabetic() => SortHint::Msg,
+            Some(c) if c.is_alphabetic() => LSort::Msg,
             _ => return Ok(None),
         };
         let pre_ident = self.save();

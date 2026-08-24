@@ -2328,7 +2328,7 @@ fn match_atom_via_maude(
         let i_term = tamarin_parser::ast::Term::Var(tamarin_parser::ast::VarSpec {
             name: i.name.to_string(),
             idx: i.idx,
-            sort: tamarin_parser::ast::SortHint::Node,
+            sort: tamarin_term::lterm::LSort::Node,
             typ: None,
         });
         base_subst.insert(
@@ -4348,30 +4348,20 @@ fn drop_trivially_true_formulas_pass(red: &mut Reduction) -> ChangeIndicator {
     }
 }
 
-/// Deduplicate the formula list. Haskell uses `Set` storage so this
-/// is implicit; we use `Vec` so a manual pass is needed.
-///
-/// Dedupe compares on a sort-hint-normalised canonical form: two
-/// formulas that differ ONLY by `SortHint::Msg` vs `SortHint::Untagged`
-/// (or other equivalent forms — see `normalize_sort_hints`) elaborate
-/// to the same `LSort` and represent the same semantic formula.
-/// Without normalisation, the Maude→AST round trip in
-/// `insert_implied_formulas_pass` produces variants that compare
-/// unequal, accumulating duplicate IH-Disjs.
+/// Deduplicate the formula list, keeping the first `Arc` of each group of
+/// equal formulas. Haskell uses `Set` storage so this is implicit; we use
+/// `Vec` so a manual pass is needed.
 fn dedupe_formulas_pass(red: &mut Reduction) -> ChangeIndicator {
-    use crate::guarded::{normalize_sort_hints, Guarded};
+    use crate::guarded::Guarded;
     let before = red.sys.formulas.len();
     let mut seen: Vec<std::sync::Arc<Guarded>> = Vec::new();
-    let mut seen_canon: Vec<Guarded> = Vec::new();
     // Read via `iter()` (Deref, no mut borrow) so the common no-op path (no
     // duplicates) takes ZERO mutable borrow and ZERO stamp bump — this pass
     // runs every simplify fixpoint iteration, including the final no-op one
     // that follows the `subst_system` marker-set, and an unconditional bump
     // here would staleify that marker and collapse the skip (design Finding 2).
     for f in red.sys.formulas.iter() {
-        let canon = normalize_sort_hints(f);
-        if !seen_canon.contains(&canon) {
-            seen_canon.push(canon);
+        if !seen.iter().any(|g| **g == **f) {
             seen.push(f.clone());
         }
     }

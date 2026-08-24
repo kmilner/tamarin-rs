@@ -22,6 +22,7 @@ use std::collections::BTreeSet;
 
 use crate::guarded_types::cow_pair_arc;
 use tamarin_parser::ast as p;
+use tamarin_term::lterm::{sort_prefix, LSort};
 use tamarin_utils::cow::{cow_map_arc, cow_map_vec, cow_pair};
 
 pub use crate::guarded_types::{
@@ -558,7 +559,7 @@ fn flatten_ac_binop<'a>(op: &p::BinOp, t: &'a GTerm, out: &mut Vec<&'a GTerm>) {
 pub fn cmp_varspec(a: &p::VarSpec, b: &p::VarSpec) -> std::cmp::Ordering {
     a.idx
         .cmp(&b.idx)
-        .then_with(|| cmp_sort_hint(&a.sort, &b.sort))
+        .then_with(|| a.sort.cmp(&b.sort))
         .then_with(|| a.name.cmp(&b.name))
 }
 
@@ -567,31 +568,7 @@ pub fn cmp_varspec(a: &p::VarSpec, b: &p::VarSpec) -> std::cmp::Ordering {
 /// sort by `(name, sort)` lex.  Our `GBinding` carries only those
 /// two fields.
 pub fn cmp_binding(a: &GBinding, b: &GBinding) -> std::cmp::Ordering {
-    a.name
-        .cmp(&b.name)
-        .then_with(|| cmp_sort_hint(&a.sort, &b.sort))
-}
-
-/// HS LSort declaration order (Term/LTerm.hs:165-170):
-///   LSortPub < LSortFresh < LSortMsg < LSortNode < LSortNat.
-fn cmp_sort_hint(a: &p::SortHint, b: &p::SortHint) -> std::cmp::Ordering {
-    sort_hint_tag(a).cmp(&sort_hint_tag(b))
-}
-
-fn sort_hint_tag(s: &p::SortHint) -> u8 {
-    use p::SortHint::*;
-    use p::SuffixSort;
-    // A bare name is message-sorted in HS: `msgvar` reads it through
-    // `sortedLVar`'s empty `LSortMsg` prefix parser
-    // (Token.hs:424-433#mkPrefixParser, Token.hs:440-441#msgvar), so an
-    // untagged hint ranks with `Msg`.
-    match s {
-        Pub | Suffix(SuffixSort::Pub) => 0,
-        Fresh | Suffix(SuffixSort::Fresh) => 1,
-        Msg | Suffix(SuffixSort::Msg) | Untagged => 2,
-        Node | Suffix(SuffixSort::Node) => 3,
-        Nat | Suffix(SuffixSort::Nat) => 4,
-    }
+    a.name.cmp(&b.name).then_with(|| a.sort.cmp(&b.sort))
 }
 
 /// HS Fact Ord (Theory/Model/Fact.hs:173-174): `compare tag tag' <> compare ts
@@ -1230,26 +1207,18 @@ pub fn free_vars(g: &Guarded) -> BTreeSet<String> {
     out
 }
 
-/// Full identity of a logical variable, as `(name, idx, sort tag)`.
+/// Full identity of a logical variable, as `(name, idx, sort)`.
 ///
 /// HS `remainingUnguarded` (Guarded.hs:523-533) works over `[LVar]` and
 /// `frees`, so variables are compared by
 /// HS `instance Eq LVar` (LTerm.hs:541-542) — `i1 == i2 && s1 == s2 && n1 ==
 /// n2`.  A binder `x.1` is therefore a DIFFERENT variable from an enclosing
 /// `x`, and `#x` a different variable from `x`.
-///
-/// The sort component is the sort the parser assigned the occurrence, folded
-/// through `normalise_msg_sort` exactly as in `subst_free_term_cow`
-/// (guarded_types.rs).
-type VarKey = (String, u64, u8);
+type VarKey = (String, u64, LSort);
 
 /// Build the [`VarKey`] of a variable occurrence carrying `sort`.
-fn var_key(name: &str, idx: u64, sort: p::SortHint) -> VarKey {
-    (
-        name.to_string(),
-        idx,
-        sort_hint_tag(&crate::guarded_types::normalise_msg_sort(sort)),
-    )
+fn var_key(name: &str, idx: u64, sort: LSort) -> VarKey {
+    (name.to_string(), idx, sort)
 }
 
 /// Collect the identity of every variable leaf in a parser-AST term.  Used
@@ -1850,14 +1819,7 @@ fn unguarded_error(positions: &[usize], freshened: &[p::VarSpec]) -> GuardError 
     // `v ++ "." ++ show i`.  `quotes` then single-quotes the result, so the
     // rendered output is e.g. `'#i'` or `'x.5'` — NOT a bare `'name'`.
     let show_lvar = |v: &p::VarSpec| -> String {
-        let prefix = match v.sort {
-            p::SortHint::Fresh | p::SortHint::Suffix(p::SuffixSort::Fresh) => "~",
-            p::SortHint::Pub | p::SortHint::Suffix(p::SuffixSort::Pub) => "$",
-            p::SortHint::Node | p::SortHint::Suffix(p::SuffixSort::Node) => "#",
-            p::SortHint::Nat | p::SortHint::Suffix(p::SuffixSort::Nat) => "%",
-            // Msg / Untagged / Suffix(Msg) => "" (LSortMsg has no prefix).
-            _ => "",
-        };
+        let prefix = sort_prefix(v.sort);
         let body = if v.name.is_empty() {
             v.idx.to_string()
         } else if v.idx == 0 {
@@ -2005,95 +1967,6 @@ pub fn normalize_witness_lvars_cow(g: &Guarded) -> Option<Guarded> {
 /// Intentionally a no-op identity clone: faithful HS port marker.
 pub fn normalize_bound_lvars(g: &Guarded) -> Guarded {
     g.clone()
-}
-
-/// Normalize equivalent sort hints so two `Guarded` formulas that
-/// differ ONLY by sort hint compare equal under `==`.
-///
-/// All of `SortHint::Msg`, `SortHint::Suffix(SuffixSort::Msg)`, and
-/// `SortHint::Untagged` map to `LSort::Msg` in elaboration (see
-/// `elaborate::sort_of`).  Implied-formula matching uses Maude →
-/// LNTerm → parser-AST round trips, where `lnterm_to_term` always
-/// produces the canonical `SortHint::Msg`/`Pub`/`Fresh`/`Node`/`Nat`
-/// form regardless of the original hint.  Formulas created by other
-/// paths (lemma re-instantiation, ginduct on the IH) may retain
-/// `Untagged` or suffix-style hints.  Without normalisation, two
-/// semantically-identical formulas compare unequal and the dedupe in
-/// `insert_formula` / `insert_implied_formulas_pass` lets
-/// duplicates accumulate.
-///
-/// Concretely: `RFID_Simple::Device_Init_Use_Set` was generating
-/// duplicate IH-Disjs at depth 2 — one with `sk:Msg` and one with
-/// `sk:Untagged`.
-pub fn normalize_sort_hints(g: &Guarded) -> Guarded {
-    use crate::guarded_types::normalise_msg_sort as norm_sort;
-    fn norm_binding(b: &GBinding) -> GBinding {
-        GBinding {
-            name: b.name.clone(),
-            sort: norm_sort(b.sort),
-        }
-    }
-    fn norm_bvar(b: &BVar) -> BVar {
-        match b {
-            BVar::Bound(n) => BVar::Bound(*n),
-            BVar::Free(v) => BVar::Free(p::VarSpec {
-                name: v.name.clone(),
-                idx: v.idx,
-                sort: norm_sort(v.sort),
-                typ: v.typ.clone(),
-            }),
-        }
-    }
-    fn norm_term(t: &GTerm) -> GTerm {
-        match t {
-            GTerm::Var(b) => GTerm::Var(norm_bvar(b)),
-            GTerm::App(n, args) => GTerm::App(n.clone(), args.iter().map(norm_term).collect()),
-            GTerm::Pair(args) => GTerm::Pair(args.iter().map(norm_term).collect()),
-            GTerm::AlgApp(n, a, b) => GTerm::AlgApp(n.clone(), ga(norm_term(a)), ga(norm_term(b))),
-            GTerm::Diff(a, b) => GTerm::Diff(ga(norm_term(a)), ga(norm_term(b))),
-            GTerm::BinOp(op, a, b) => GTerm::BinOp(*op, ga(norm_term(a)), ga(norm_term(b))),
-            GTerm::PatMatch(inner) => GTerm::PatMatch(ga(norm_term(inner))),
-            _ => t.clone(),
-        }
-    }
-    fn norm_fact(f: &GFact) -> GFact {
-        GFact {
-            persistent: f.persistent,
-            name: f.name.clone(),
-            args: f.args.iter().map(norm_term).collect(),
-            annotations: f.annotations.clone(),
-        }
-    }
-    fn norm_atom(a: &GAtom) -> GAtom {
-        match a {
-            GAtom::Action(f, t) => GAtom::Action(norm_fact(f), norm_term(t)),
-            GAtom::Eq(x, y) => GAtom::Eq(norm_term(x), norm_term(y)),
-            GAtom::Less(x, y) => GAtom::Less(norm_term(x), norm_term(y)),
-            GAtom::LessMset(x, y) => GAtom::LessMset(norm_term(x), norm_term(y)),
-            GAtom::Subterm(x, y) => GAtom::Subterm(norm_term(x), norm_term(y)),
-            GAtom::Last(t) => GAtom::Last(norm_term(t)),
-            GAtom::Pred(f) => GAtom::Pred(norm_fact(f)),
-        }
-    }
-    fn rec(g: &Guarded) -> Guarded {
-        match g {
-            Guarded::Atom(a) => Guarded::Atom(norm_atom(a)),
-            Guarded::Disj(items) => Guarded::Disj(items.iter().map(rec).collect()),
-            Guarded::Conj(items) => Guarded::Conj(items.iter().map(rec).collect()),
-            Guarded::GGuarded {
-                qua,
-                vars,
-                guards,
-                body,
-            } => Guarded::GGuarded {
-                qua: *qua,
-                vars: vars.iter().map(norm_binding).collect(),
-                guards: guards.iter().map(norm_atom).collect(),
-                body: std::sync::Arc::new(rec(body)),
-            },
-        }
-    }
-    rec(g)
 }
 
 /// Canonicalise AC-`BinOp` argument ordering inside a `Guarded` so two
@@ -2537,7 +2410,7 @@ fn subst_gterm_cow(t: &GTerm, s: &VarSubst) -> Option<GTerm> {
                 // of `term_to_gterm_free` is preserved.
                 Some(p::Term::Var(spec))
                     if spec == v
-                        && !(spec.sort == p::SortHint::Msg
+                        && !(spec.sort == LSort::Msg
                             && spec.idx == 0
                             && crate::elaborate::is_user_nullary_fun(&spec.name)) =>
                 {
@@ -2834,12 +2707,7 @@ pub fn to_induction_hypothesis(g: &Guarded) -> Result<Guarded, String> {
                 .iter()
                 .rev()
                 .enumerate()
-                .filter(|(_, v)| {
-                    matches!(
-                        v.sort,
-                        p::SortHint::Node | p::SortHint::Suffix(p::SuffixSort::Node)
-                    )
-                })
+                .filter(|(_, v)| v.sort == LSort::Node)
                 .map(|(j, _)| Guarded::Atom(GAtom::Last(GTerm::Var(BVar::Bound(j as u32)))))
                 .collect();
             match qua {

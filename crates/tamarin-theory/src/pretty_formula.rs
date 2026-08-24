@@ -24,7 +24,7 @@
 //! other internal term takes to this renderer.
 
 use tamarin_parser::ast as p;
-use tamarin_term::lterm::LVar;
+use tamarin_term::lterm::{sort_prefix, LSort, LVar};
 use tamarin_term::pretty::pp_lvar;
 use tamarin_utils::fresh::PreciseFreshState;
 
@@ -55,7 +55,7 @@ use crate::pretty_theory::{lnfact_to_parser, lnterm_to_parser};
 /// 0).  Matching on the full LVar identity also fixes shadowing of
 /// idx-bearing source binders, mirroring HS's positional (De-Bruijn)
 /// resolution.
-type Bind = (String, p::SortHint, String, u64);
+type Bind = (String, LSort, String, u64);
 
 /// Pretty-print a parser-AST formula.  Mirrors Haskell's
 /// `prettyLNFormula` (Theory/Model/Formula.hs:518-520):
@@ -561,7 +561,7 @@ fn avoid_precise_formula(f: &p::Formula) -> PreciseFreshState {
 }
 
 /// The full identity of a variable: `(name, idx, sort)`.
-type VarIdent = (String, u64, p::SortHint);
+type VarIdent = (String, u64, LSort);
 
 fn var_ident(v: &p::VarSpec) -> VarIdent {
     (v.name.clone(), v.idx, v.sort)
@@ -809,7 +809,7 @@ fn pp_qua(
             if i > 0 {
                 out.push(' ');
             }
-            out.push_str(sort_prefix_from_hint(b.1));
+            out.push_str(sort_prefix(b.1));
             out.push_str(&b.2);
         }
         out.push_str(". ");
@@ -919,7 +919,7 @@ fn formula_to_doc(
                     .iter()
                     .map(|b| {
                         let mut s = String::new();
-                        s.push_str(sort_prefix_from_hint(b.1));
+                        s.push_str(sort_prefix(b.1));
                         s.push_str(&b.2);
                         doc_text(s)
                     })
@@ -1200,12 +1200,7 @@ pub const LINE_LENGTH: usize = 110;
 /// `freshLVar "x" LSortMsg`).  Innermost-first matching still resolves
 /// ordinary same-(name,idx) shadowing to the inner binder (source
 /// binders carry idx 0, so the idx test is a no-op there).
-fn lookup_display(
-    name: &str,
-    idx: u64,
-    sort: p::SortHint,
-    scope: &[Bind],
-) -> Option<(p::SortHint, String)> {
+fn lookup_display(name: &str, idx: u64, sort: LSort, scope: &[Bind]) -> Option<(LSort, String)> {
     for b in scope.iter().rev() {
         if b.0 == name && b.3 == idx && b.1 == sort {
             return Some((b.1, b.2.clone()));
@@ -1215,7 +1210,7 @@ fn lookup_display(
 }
 
 fn pp_var(v: &p::VarSpec, out: &mut String) {
-    out.push_str(sort_prefix_from_hint(v.sort));
+    out.push_str(sort_prefix(v.sort));
     out.push_str(&v.name);
     if v.idx > 0 {
         out.push('.');
@@ -1232,27 +1227,11 @@ fn pp_var(v: &p::VarSpec, out: &mut String) {
 /// source name+idx verbatim.
 fn pp_var_scoped(v: &p::VarSpec, scope: &[Bind], out: &mut String) {
     if let Some((bsort, display)) = lookup_display(&v.name, v.idx, v.sort, scope) {
-        out.push_str(sort_prefix_from_hint(bsort));
+        out.push_str(sort_prefix(bsort));
         out.push_str(&display);
         return;
     }
     pp_var(v, out);
-}
-
-pub fn sort_prefix_from_hint(s: p::SortHint) -> &'static str {
-    use p::SortHint::*;
-    use p::SuffixSort;
-    match s {
-        Pub => "$",
-        Fresh => "~",
-        Node => "#",
-        Nat => "%",
-        Suffix(SuffixSort::Pub) => "$",
-        Suffix(SuffixSort::Fresh) => "~",
-        Suffix(SuffixSort::Node) => "#",
-        Suffix(SuffixSort::Nat) => "%",
-        Suffix(SuffixSort::Msg) | Msg | Untagged => "",
-    }
 }
 
 // =============================================================================
@@ -2346,7 +2325,7 @@ fn pp_binding_list_with_display(bs: &[Bind], out: &mut String) {
         if i > 0 {
             out.push(' ');
         }
-        out.push_str(sort_prefix_from_hint(b.1));
+        out.push_str(sort_prefix(b.1));
         out.push_str(&b.2);
     }
 }
@@ -2480,7 +2459,7 @@ fn gguarded_to_doc(
         .iter()
         .map(|b| {
             let mut s = String::new();
-            s.push_str(sort_prefix_from_hint(b.1));
+            s.push_str(sort_prefix(b.1));
             s.push_str(&b.2);
             Doc::text(s)
         })
@@ -2599,7 +2578,7 @@ fn pp_gterm(t: &crate::guarded::GTerm, scope: &[Vec<Bind>], out: &mut String) {
         GTerm::Var(BVar::Free(v)) => pp_var(v, out),
         GTerm::Var(BVar::Bound(n)) => {
             if let Some(b) = lookup_bound(*n, scope) {
-                out.push_str(sort_prefix_from_hint(b.1));
+                out.push_str(sort_prefix(b.1));
                 out.push_str(&b.2);
             } else {
                 // Out-of-range De Bruijn index: corresponds to no HS output

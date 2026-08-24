@@ -480,6 +480,7 @@ fn lvar_to_string(v: &tamarin_term::lterm::LVar) -> String {
 mod tests {
     use super::*;
     use crate::constraint::system::System;
+    use tamarin_term::lterm::LSort;
 
     /// This is the all-empty shape, which no corpus proof reaches.  Every
     /// section body is `emptyDoc`.  The definition
@@ -641,7 +642,7 @@ mod tests {
     fn um3_subst_term_wraps_like_hs() {
         use tamarin_parser::ast as p;
 
-        let var = |name: &str, idx: u64, sort: p::SortHint| {
+        let var = |name: &str, idx: u64, sort: LSort| {
             p::Term::Var(p::VarSpec {
                 name: name.to_string(),
                 idx,
@@ -653,19 +654,19 @@ mod tests {
         let app = |n: &str, args: Vec<p::Term>| p::Term::App(n.to_string(), args);
         let pair = p::Term::Pair;
         let exp = |l: p::Term, r: p::Term| p::Term::BinOp(p::BinOp::Exp, Box::new(l), Box::new(r));
-        let a5 = || var("A", 5, p::SortHint::Pub);
-        let b5 = || var("B", 5, p::SortHint::Pub);
-        let y5 = || var("Y", 5, p::SortHint::Msg);
-        let z5 = || var("z", 5, p::SortHint::Msg);
-        let ex5 = || var("ex", 5, p::SortHint::Fresh);
+        let a5 = || var("A", 5, LSort::Pub);
+        let b5 = || var("B", 5, LSort::Pub);
+        let y5 = || var("Y", 5, LSort::Msg);
+        let z5 = || var("z", 5, LSort::Msg);
+        let ex5 = || var("ex", 5, LSort::Fresh);
         let g_ex5 = || exp(pube("g"), ex5());
         let g_eax5 = || {
             exp(
                 pube("g"),
                 p::Term::BinOp(
                     p::BinOp::Mult,
-                    Box::new(var("ea", 5, p::SortHint::Fresh)),
-                    Box::new(var("x", 5, p::SortHint::Fresh)),
+                    Box::new(var("ea", 5, LSort::Fresh)),
+                    Box::new(var("x", 5, LSort::Fresh)),
                 ),
             )
         };

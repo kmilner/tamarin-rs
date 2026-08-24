@@ -270,14 +270,7 @@ fn term_repr(t: &crate::guarded::GTerm) -> String {
     match t {
         GTerm::Var(BVar::Free(v)) => format!(
             "{}{}#{}",
-            match v.sort {
-                tamarin_parser::ast::SortHint::Fresh => "~",
-                tamarin_parser::ast::SortHint::Pub => "$",
-                tamarin_parser::ast::SortHint::Node => "#",
-                tamarin_parser::ast::SortHint::Nat => "%",
-                tamarin_parser::ast::SortHint::Msg => "",
-                _ => "?",
-            },
+            tamarin_term::lterm::sort_prefix(v.sort),
             v.name,
             v.idx
         ),

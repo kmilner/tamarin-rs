@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+tamarin-term = { workspace = true }
 
 [dev-dependencies]
 walkdir = "2"

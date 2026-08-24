@@ -280,14 +280,13 @@ pub fn rename_precise_system(sys: &mut System) {
     let formula_subst: VarSubst = map
         .iter()
         .map(|(old, new)| {
-            let sort = lvar_sort_to_sort_hint(new.sort);
             (
                 // `old.0.name` is an interned `&'static str` — zero-alloc key.
                 (old.0.name, old.0.idx),
                 tamarin_parser::ast::Term::Var(tamarin_parser::ast::VarSpec {
                     name: new.name.to_string(),
                     idx: new.idx,
-                    sort,
+                    sort: new.sort,
                     typ: None,
                 }),
             )
@@ -680,18 +679,6 @@ impl RenameState {
     }
 }
 
-fn lvar_sort_to_sort_hint(s: tamarin_term::lterm::LSort) -> tamarin_parser::ast::SortHint {
-    use tamarin_parser::ast::SortHint;
-    use tamarin_term::lterm::LSort;
-    match s {
-        LSort::Msg => SortHint::Msg,
-        LSort::Pub => SortHint::Pub,
-        LSort::Fresh => SortHint::Fresh,
-        LSort::Node => SortHint::Node,
-        LSort::Nat => SortHint::Nat,
-    }
-}
-
 fn goal_for_each_free(g: &Goal, f: &mut dyn FnMut(&LVar)) {
     match g {
         Goal::Action(i, fa) => {
@@ -771,10 +758,9 @@ fn term_for_each_free(t: &crate::guarded::GTerm, f: &mut dyn FnMut(&LVar)) {
     use crate::guarded::{BVar, GTerm};
     match t {
         GTerm::Var(BVar::Free(v)) => {
-            let sort = parser_sort_to_lsort(v.sort);
             f(&LVar {
                 name: tamarin_term::intern::intern_str(v.name.as_str()),
-                sort,
+                sort: v.sort,
                 idx: v.idx,
             });
         }
@@ -797,11 +783,6 @@ fn term_for_each_free(t: &crate::guarded::GTerm, f: &mut dyn FnMut(&LVar)) {
         }
         GTerm::PatMatch(t) => term_for_each_free(t, f),
     }
-}
-
-/// Thin wrapper over the shared `sort_hint_to_lsort` mapping (`sources`).
-fn parser_sort_to_lsort(s: tamarin_parser::ast::SortHint) -> tamarin_term::lterm::LSort {
-    super::sources::sort_hint_to_lsort(&s)
 }
 
 #[cfg(test)]

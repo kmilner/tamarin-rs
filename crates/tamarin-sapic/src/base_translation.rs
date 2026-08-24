@@ -18,7 +18,7 @@
 
 use std::collections::BTreeSet;
 
-use tamarin_term::lterm::{LNTerm, LVar};
+use tamarin_term::lterm::{LNTerm, LSort, LVar};
 use tamarin_term::vterm::{Lit, VTerm};
 
 use tamarin_theory::sapic::{ProcessPosition, SapicAction, SapicLVar, SapicTerm};
@@ -920,11 +920,7 @@ pub(crate) use tamarin_theory::pretty_theory::lnterm_to_parser as ln_term_to_par
 fn formula_free_lvars(f: &tamarin_parser::ast::Formula) -> BTreeSet<LVar> {
     let mut out = BTreeSet::new();
     crate::convert::fold_free_vars(f, &mut |v, _bound| {
-        out.insert(LVar::new(
-            v.name.clone(),
-            crate::convert::sort_of_hint(&v.sort),
-            v.idx,
-        ));
+        out.insert(LVar::new(v.name.clone(), v.sort, v.idx));
     });
     out
 }
@@ -983,7 +979,7 @@ pub fn single_session_restriction() -> tamarin_parser::ast::Restriction {
     let tvar = |name: &str| p::VarSpec {
         name: name.into(),
         idx: 0,
-        sort: p::SortHint::Node,
+        sort: LSort::Node,
         typ: None,
     };
     let init_at = |tv: &str| -> p::Formula {
@@ -1028,13 +1024,13 @@ pub fn predicate_restrictions() -> Vec<tamarin_parser::ast::Restriction> {
     let tvar = |name: &str| p::VarSpec {
         name: name.into(),
         idx: 0,
-        sort: p::SortHint::Node,
+        sort: LSort::Node,
         typ: None,
     };
     let mvar = |name: &str| p::VarSpec {
         name: name.into(),
         idx: 0,
-        sort: p::SortHint::Msg,
+        sort: LSort::Msg,
         typ: None,
     };
     let pred_at = |pname: &str| -> p::Formula {
@@ -1366,7 +1362,7 @@ mod tests {
             p::Term::Var(p::VarSpec {
                 typ: None,
                 name: name.into(),
-                sort: p::SortHint::Msg,
+                sort: LSort::Msg,
                 idx: 0,
             })
         };

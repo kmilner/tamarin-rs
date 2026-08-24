@@ -929,8 +929,9 @@ mod tests {
         // Build a closed action-bearing formula:
         //   Ex k #i. Setup(k) @ #i
         // tracked as a guarded GGuarded::Ex with a single Action guard.
-        use tamarin_parser::ast::{Atom, Fact, SortHint, Term, VarSpec};
-        let mkvar = |n: &str, sort: SortHint| {
+        use tamarin_parser::ast::{Atom, Fact, Term, VarSpec};
+        use tamarin_term::lterm::LSort;
+        let mkvar = |n: &str, sort: LSort| {
             Term::Var(VarSpec {
                 name: n.to_string(),
                 idx: 0,
@@ -943,9 +944,9 @@ mod tests {
                 persistent: false,
                 annotations: Vec::new(),
                 name: "Setup".into(),
-                args: vec![mkvar("k", SortHint::Msg)],
+                args: vec![mkvar("k", LSort::Msg)],
             },
-            mkvar("i", SortHint::Node),
+            mkvar("i", LSort::Node),
         );
         let body = crate::guarded::Guarded::Conj(Vec::new().into());
         // Build with close_guarded so the binder's `k` and `i` are
@@ -956,13 +957,13 @@ mod tests {
                 VarSpec {
                     name: "k".into(),
                     idx: 0,
-                    sort: SortHint::Msg,
+                    sort: LSort::Msg,
                     typ: None,
                 },
                 VarSpec {
                     name: "i".into(),
                     idx: 0,
-                    sort: SortHint::Node,
+                    sort: LSort::Node,
                     typ: None,
                 },
             ],

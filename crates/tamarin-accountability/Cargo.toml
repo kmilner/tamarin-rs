@@ -11,6 +11,7 @@ description = "Accountability extension for the Tamarin prover (Rust port)."
 publish = false
 
 [dependencies]
+tamarin-term = { workspace = true }
 tamarin-parser = { workspace = true }
 tamarin-theory = { workspace = true }
 

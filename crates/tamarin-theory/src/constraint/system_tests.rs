@@ -696,12 +696,13 @@ fn insert_lemma_flattens_top_level_conj() {
     // Use Atom-bearing lemmas so the smart Conj flattening doesn't
     // optimise them away. We just need two leaves that don't
     // recurse further into Conj.
-    use tamarin_parser::ast::{Atom, SortHint, Term, VarSpec};
+    use tamarin_parser::ast::{Atom, Term, VarSpec};
+    use tamarin_term::lterm::LSort;
     let mkvar = |n: &str| {
         Term::Var(VarSpec {
             name: n.to_string(),
             idx: 0,
-            sort: SortHint::Node,
+            sort: LSort::Node,
             typ: None,
         })
     };
@@ -751,12 +752,13 @@ fn formula_to_system_all_traces_negates() {
 
 #[test]
 fn formula_to_system_partitions_safety_restrictions() {
-    use tamarin_parser::ast::{Atom, SortHint, Term, TraceQuantifier, VarSpec};
+    use tamarin_parser::ast::{Atom, Term, TraceQuantifier, VarSpec};
+    use tamarin_term::lterm::LSort;
     let mkvar = |n: &str| {
         Term::Var(VarSpec {
             name: n.to_string(),
             idx: 0,
-            sort: SortHint::Node,
+            sort: LSort::Node,
             typ: None,
         })
     };

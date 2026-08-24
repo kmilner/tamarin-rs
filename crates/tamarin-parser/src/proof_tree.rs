@@ -794,7 +794,7 @@ fn build_fact(persistent: bool, name: String, args_text: &str) -> Fact {
                 Term::Var(crate::ast::VarSpec {
                     name: s.trim().to_string(),
                     idx: 0,
-                    sort: crate::ast::SortHint::Msg,
+                    sort: tamarin_term::lterm::LSort::Msg,
                     typ: None,
                 })
             })

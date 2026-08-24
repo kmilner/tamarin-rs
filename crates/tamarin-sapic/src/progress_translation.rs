@@ -16,7 +16,7 @@
 use std::collections::BTreeSet;
 
 use tamarin_parser::ast as p;
-use tamarin_term::lterm::LVar;
+use tamarin_term::lterm::{LSort, LVar};
 use tamarin_theory::sapic::{pretty_position, Process, SapicLVar};
 
 use crate::annotation::ProcessAnnotation;
@@ -187,7 +187,7 @@ fn res_progress_init() -> p::Restriction {
     let tvar = p::VarSpec {
         name: "t".into(),
         idx: 0,
-        sort: p::SortHint::Node,
+        sort: LSort::Node,
         typ: None,
     };
     let init_at = p::Formula::Atom(p::Atom::Action(
@@ -259,13 +259,13 @@ fn make_restriction(pos: &[i64], tos: &PosSet) -> p::Restriction {
     let t1var = p::VarSpec {
         name: "t".into(),
         idx: 1,
-        sort: p::SortHint::Node,
+        sort: LSort::Node,
         typ: None,
     };
     let t2var = p::VarSpec {
         name: "t".into(),
         idx: 2,
-        sort: p::SortHint::Node,
+        sort: LSort::Node,
         typ: None,
     };
 

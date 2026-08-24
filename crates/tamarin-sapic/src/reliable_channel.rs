@@ -16,7 +16,7 @@
 use std::collections::BTreeSet;
 
 use tamarin_parser::ast as p;
-use tamarin_term::lterm::{LVar, NameTag};
+use tamarin_term::lterm::{LSort, LVar, NameTag};
 use tamarin_term::vterm::{Lit, VTerm};
 use tamarin_theory::sapic::{
     process_contains, Process, ProcessPosition, SapicAction, SapicLVar, SapicTerm,
@@ -195,13 +195,13 @@ fn res_reliable() -> p::Restriction {
     let tvar = |name: &str, idx: u64| p::VarSpec {
         name: name.into(),
         idx,
-        sort: p::SortHint::Node,
+        sort: LSort::Node,
         typ: None,
     };
     let mvar = |name: &str| p::VarSpec {
         name: name.into(),
         idx: 0,
-        sort: p::SortHint::Msg,
+        sort: LSort::Msg,
         typ: None,
     };
     let send = p::Formula::Atom(p::Atom::Action(

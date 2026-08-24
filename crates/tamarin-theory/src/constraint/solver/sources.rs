@@ -3820,9 +3820,9 @@ fn freshen_system_some_inst(
     }
     // sFormulas, sSolvedFormulas, sLemmas — walk frees in each Guarded.
     // We reuse `map_lvars_in_guarded` as a side-effect walker: the
-    // callback receives every free VarSpec; we convert to LVar (using
-    // SortHint→LSort projection) and import.  The mapped output is
-    // discarded — we only care about the visit side effect.
+    // callback receives every free VarSpec; we convert to LVar and import.
+    // The mapped output is discarded — we only care about the visit side
+    // effect.
     let walk_guarded =
         |g: &crate::guarded::Guarded,
          bindings: &mut BTreeMap<tamarin_term::lterm::LVar, tamarin_term::lterm::LVar>| {
@@ -3900,7 +3900,7 @@ fn freshen_system_some_inst(
         bindings.get(v).copied().unwrap_or(*v)
     };
     // For Guarded formulas (VarSpec-based), build a (name, idx) → new (name, idx) map.
-    // VarSpec sort hints are preserved unchanged.
+    // VarSpec sorts are preserved unchanged.
     let vs_map: std::collections::BTreeMap<(String, u64), (String, u64)> = bindings
         .iter()
         .map(|(orig, new)| {
@@ -4050,27 +4050,11 @@ fn freshen_system_some_inst(
     out
 }
 
-/// Shared `SortHint`/`SuffixSort` -> `LSort` mapping.  A bare name is
-/// message-sorted in HS, where `msgvar` reads it through `sortedLVar`'s empty
-/// `LSortMsg` prefix parser (Token.hs:424-433#mkPrefixParser,
-/// Token.hs:440-441#msgvar), so the untagged hint maps to `LSort::Msg`.
-pub(crate) fn sort_hint_to_lsort(s: &tamarin_parser::ast::SortHint) -> tamarin_term::lterm::LSort {
-    use tamarin_parser::ast::{SortHint, SuffixSort};
-    use tamarin_term::lterm::LSort;
-    match s {
-        SortHint::Msg | SortHint::Untagged | SortHint::Suffix(SuffixSort::Msg) => LSort::Msg,
-        SortHint::Pub | SortHint::Suffix(SuffixSort::Pub) => LSort::Pub,
-        SortHint::Fresh | SortHint::Suffix(SuffixSort::Fresh) => LSort::Fresh,
-        SortHint::Node | SortHint::Suffix(SuffixSort::Node) => LSort::Node,
-        SortHint::Nat | SortHint::Suffix(SuffixSort::Nat) => LSort::Nat,
-    }
-}
-
 /// Project a `VarSpec` to an `LVar` for `someInst` import tracking.
 fn vspec_to_lvar(v: &tamarin_parser::ast::VarSpec) -> tamarin_term::lterm::LVar {
     tamarin_term::lterm::LVar {
         name: tamarin_term::intern::intern_str(v.name.as_str()),
-        sort: sort_hint_to_lsort(&v.sort),
+        sort: v.sort,
         idx: v.idx,
     }
 }
@@ -6043,10 +6027,8 @@ fn goal_walk_frees(
 }
 
 /// Walk a Guarded collecting free LVars in DFS order.  Free LVars
-/// correspond to BVar::Free leaves; we reconstruct an LVar by combining
-/// VarSpec name/idx with a best-effort sort.  HS's `Guarded` lives over
-/// LVar directly, so its free vars carry full LSort.  RS's `Guarded`
-/// uses VarSpec which has a SortHint; we map it back to LSort.
+/// correspond to BVar::Free leaves; the `LVar` is the leaf's `VarSpec`
+/// name, index and sort with the name interned.
 fn guarded_walk_frees(
     g: &crate::guarded::Guarded,
     push: &mut dyn FnMut(&tamarin_term::lterm::LVar),
@@ -6073,7 +6055,7 @@ fn guarded_walk_frees(
     for vs in &frees {
         push(&tamarin_term::lterm::LVar {
             name: tamarin_term::intern::intern_str(vs.name.as_str()),
-            sort: sort_hint_to_lsort(&vs.sort),
+            sort: vs.sort,
             idx: vs.idx,
         });
     }
@@ -6246,22 +6228,17 @@ fn bool_key_str(b: bool) -> &'static str {
     }
 }
 
-/// The sort of a binder, spelled into the system key: static strs for the
-/// fieldless variants, formatter fallback for the (rare) `Suffix` payload.
-/// The untagged hint spells `Msg`, the sort it carries.
-fn push_sort_hint_dbg(out: &mut String, s: &tamarin_parser::ast::SortHint) {
-    use tamarin_parser::ast::SortHint;
-    match s {
-        SortHint::Msg | SortHint::Untagged => out.push_str("Msg"),
-        SortHint::Pub => out.push_str("Pub"),
-        SortHint::Fresh => out.push_str("Fresh"),
-        SortHint::Node => out.push_str("Node"),
-        SortHint::Nat => out.push_str("Nat"),
-        SortHint::Suffix(x) => {
-            use std::fmt::Write as _;
-            let _ = write!(out, "Suffix({:?})", x);
-        }
-    }
+/// The sort of a binder, spelled into the system key as `Debug` spells it,
+/// through static strs so the key costs no formatter.
+fn push_sort_dbg(out: &mut String, s: tamarin_term::lterm::LSort) {
+    use tamarin_term::lterm::LSort;
+    out.push_str(match s {
+        LSort::Msg => "Msg",
+        LSort::Pub => "Pub",
+        LSort::Fresh => "Fresh",
+        LSort::Node => "Node",
+        LSort::Nat => "Nat",
+    });
 }
 
 /// Append the pre-rendered `scratch` element `ranges` to `out` in sorted
@@ -6495,7 +6472,7 @@ fn write_rule_to_key_excl_new_vars(
 fn write_gfree_var(v: &tamarin_parser::ast::VarSpec, rename: &RenameMap, out: &mut String) {
     let lv = tamarin_term::lterm::LVar {
         name: tamarin_term::intern::intern_str(v.name.as_str()),
-        sort: sort_hint_to_lsort(&v.sort),
+        sort: v.sort,
         idx: v.idx,
     };
     let rv = rename.get(&lv).unwrap_or(&lv);
@@ -6716,7 +6693,7 @@ fn write_guarded_struct(g: &crate::guarded::Guarded, rename: &RenameMap, out: &m
                 }
                 out.push_str(&b.name);
                 out.push(':');
-                push_sort_hint_dbg(out, &b.sort);
+                push_sort_dbg(out, b.sort);
             }
             out.push_str("){");
             for (i, a) in guards.iter().enumerate() {

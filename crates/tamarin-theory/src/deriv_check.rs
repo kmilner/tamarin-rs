@@ -54,6 +54,7 @@
 use std::time::Duration;
 use tamarin_parser::ast as p;
 use tamarin_parser::wf::WfError;
+use tamarin_term::lterm::LSort;
 use tamarin_term::maude_proc::MaudeHandle;
 
 use crate::constraint::solver::context::IntrRuleCache;
@@ -304,23 +305,18 @@ fn collect_rule_free_vars(
     // derivability candidates.  Key the dedup set on (name, sort, idx) too;
     // a (name, idx)-only key would let `~ltk` mask `ltk` and silently drop
     // the non-derivable msg var (Register_pk `ltk`).
-    let mut seen: std::collections::BTreeSet<(String, u8, u64)> = std::collections::BTreeSet::new();
+    let mut seen: std::collections::BTreeSet<(String, LSort, u64)> =
+        std::collections::BTreeSet::new();
     let push = |v: &p::VarSpec,
                 out: &mut Vec<p::VarSpec>,
-                seen: &mut std::collections::BTreeSet<(String, u8, u64)>| {
-        if matches!(v.sort, p::SortHint::Pub | p::SortHint::Node) {
-            return;
-        }
-        if matches!(
-            v.sort,
-            p::SortHint::Suffix(p::SuffixSort::Pub) | p::SortHint::Suffix(p::SuffixSort::Node)
-        ) {
+                seen: &mut std::collections::BTreeSet<(String, LSort, u64)>| {
+        if matches!(v.sort, LSort::Pub | LSort::Node) {
             return;
         }
         if nullary_funs.contains(&v.name) {
             return;
         }
-        let key = (v.name.clone(), sort_ord(&v.sort), v.idx);
+        let key = (v.name.clone(), v.sort, v.idx);
         if seen.insert(key) {
             out.push(v.clone());
         }
@@ -354,35 +350,18 @@ fn collect_rule_free_vars(
     out.sort_by(|a, b| {
         a.idx
             .cmp(&b.idx)
-            .then_with(|| sort_ord(&a.sort).cmp(&sort_ord(&b.sort)))
+            .then_with(|| a.sort.cmp(&b.sort))
             .then_with(|| a.name.cmp(&b.name))
     });
     out
-}
-
-/// HS LSort derived-Ord: Pub=0, Fresh=1, Msg=2, Node=3, Nat=4 (untagged →
-/// Msg).  Used both for LVar ordering and as the sort component of the
-/// free-var identity key (a (name, idx)-only key would conflate `~ltk` and
-/// `ltk`).
-fn sort_ord(s: &p::SortHint) -> u8 {
-    match s {
-        p::SortHint::Pub | p::SortHint::Suffix(p::SuffixSort::Pub) => 0,
-        p::SortHint::Fresh | p::SortHint::Suffix(p::SuffixSort::Fresh) => 1,
-        p::SortHint::Msg | p::SortHint::Suffix(p::SuffixSort::Msg) | p::SortHint::Untagged => 2,
-        p::SortHint::Node | p::SortHint::Suffix(p::SuffixSort::Node) => 3,
-        p::SortHint::Nat | p::SortHint::Suffix(p::SuffixSort::Nat) => 4,
-    }
 }
 
 /// HS `lvarToLnterm`: retype an LSortNat var to LSortFresh; otherwise keep
 /// the var's sort unchanged (Theory/Model/Fact.hs:331-333).
 fn nat_to_fresh_var(v: &p::VarSpec) -> p::VarSpec {
     let mut nv = v.clone();
-    if matches!(
-        v.sort,
-        p::SortHint::Nat | p::SortHint::Suffix(p::SuffixSort::Nat)
-    ) {
-        nv.sort = p::SortHint::Fresh;
+    if v.sort == LSort::Nat {
+        nv.sort = LSort::Fresh;
     }
     nv
 }
@@ -396,11 +375,11 @@ fn nat_to_fresh_var(v: &p::VarSpec) -> p::VarSpec {
 #[allow(clippy::disallowed_types)]
 fn rename_term_to_probe(
     t: &p::Term,
-    map: &std::collections::HashMap<(String, u8, u64), p::VarSpec>,
+    map: &std::collections::HashMap<(String, LSort, u64), p::VarSpec>,
 ) -> p::Term {
     match t {
         p::Term::Var(v) => {
-            let key = (v.name.clone(), sort_ord(&v.sort), v.idx);
+            let key = (v.name.clone(), v.sort, v.idx);
             match map.get(&key) {
                 Some(pv) => p::Term::Var(pv.clone()),
                 None => p::Term::Var(nat_to_fresh_var(v)),
@@ -557,15 +536,10 @@ fn synthesise_probe_theory(
         .collect();
     // Sort-aware (name, sort, idx) → probe-var map for renaming premise terms
     // (so `Out(~ltk)` references the same `dvar<k>` as `Fr(dvar<k>)`).
-    let rename: std::collections::HashMap<(String, u8, u64), p::VarSpec> = free_vars
+    let rename: std::collections::HashMap<(String, LSort, u64), p::VarSpec> = free_vars
         .iter()
         .enumerate()
-        .map(|(k, v)| {
-            (
-                (v.name.clone(), sort_ord(&v.sort), v.idx),
-                probe_vars[k].clone(),
-            )
-        })
+        .map(|(k, v)| ((v.name.clone(), v.sort, v.idx), probe_vars[k].clone()))
         .collect();
     let fresh_premises: Vec<p::Fact> = probe_vars
         .iter()
@@ -633,13 +607,13 @@ fn synthesise_probe_theory(
         let t0 = p::VarSpec {
             name: "t0".into(),
             idx: 0,
-            sort: p::SortHint::Node,
+            sort: LSort::Node,
             typ: None,
         };
         let t1 = p::VarSpec {
             name: "t1".into(),
             idx: 0,
-            sort: p::SortHint::Node,
+            sort: LSort::Node,
             typ: None,
         };
         let gen_at = action_atom(action.clone(), p::Term::Var(t0.clone()));
