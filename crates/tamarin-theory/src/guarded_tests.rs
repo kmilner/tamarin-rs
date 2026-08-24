@@ -1294,3 +1294,81 @@ fn subst_gterm_cow_var_value_equality() {
         "a domain miss must report None"
     );
 }
+
+// =============================================================================
+// The locally-nameless route
+// =============================================================================
+
+/// [`formula_to_guarded_ln`] on the formula text `g` converts through the
+/// parser AST: `from_parser` closes it into a `SyntacticLNFormula`,
+/// `to_lnformula` strips the sugar and the conversion reads the result.
+fn g_ln(s: &str) -> Result<Guarded, GuardError> {
+    let sig = pair_maude_sig();
+    let f = parse_formula_str(s, &sig).map_err(|e| err(format!("parse: {}", e)))?;
+    let syn = crate::formula::from_parser(&f, &sig).map_err(|e| err(e.message))?;
+    let plain = crate::formula::to_lnformula(&syn).ok_or_else(|| err("residual sugar"))?;
+    formula_to_guarded_ln(&plain)
+}
+
+/// HS `noUnguardedVars` names the survivors of the prefix `openFormulaPrefix`
+/// drew (Guarded.hs:507-514), and `avoidPrecise` seeds that supply from the
+/// free variables (LTerm.hs:706-709,714-715), so a free `x.3` puts the
+/// binder `x` at index 4.  The expected bytes are the pinned oracle's, as
+/// `tests/guarded_unguarded_freshening.rs` records them.
+#[test]
+fn ln_route_reports_the_unguarded_variable_under_its_freshened_name() {
+    let e =
+        g_ln("Foo(x.3) @ #i ==> (All x z. (<x, z> = x) ==> F)").expect_err("x and z are unguarded");
+    assert_eq!(
+        e.message,
+        "unguarded variable(s) 'x.4', 'z' in the subformula"
+    );
+}
+
+/// A binder whose name an enclosing binder already took is drawn one index
+/// further on, which both names it in the diagnostic and makes it a variable
+/// of its own: written with that index in the source, the same shape is
+/// guarded, because the equation's right-hand side is then the OUTER `x` and
+/// is covered.
+#[test]
+fn ln_route_opens_a_shadowed_binder_under_a_fresh_index() {
+    let e = g_ln("All x #NOW. Foo(x) @ #NOW ==> (All x z. (<x, z> = x) ==> F)")
+        .expect_err("the inner x and z are unguarded");
+    assert_eq!(
+        e.message,
+        "unguarded variable(s) 'x.1', 'z' in the subformula"
+    );
+    let r = g_ln("All x #NOW. Foo(x) @ #NOW ==> (All x.1 z. (<x.1, z> = x) ==> F)")
+        .expect("x.1 and z are guarded by the pair equation");
+    assert!(is_safety_formula(&r));
+}
+
+/// HS `convAll` accepts only `Conn Imp ante suc` beneath the prefix
+/// (Guarded.hs:546-563).
+#[test]
+fn ln_route_rejects_a_universal_without_a_toplevel_implication() {
+    let e = g_ln("All k #i. Setup(k) @ #i").expect_err("the body is an action, not an implication");
+    assert_eq!(
+        e.message,
+        "universal quantifier without toplevel implication"
+    );
+}
+
+/// HS `convert polarity (Conn Iff f1 f2)` is `gconj` of the two implications
+/// (Guarded.hs:565-566), which at the entry polarity is what the written
+/// conjunction of them converts to.
+#[test]
+fn ln_route_treats_iff_as_two_implications() {
+    let iff =
+        g_ln("(Ex x #i. A(x) @ #i) <=> (Ex y #j. B(y) @ #j)").expect("both sides are guarded");
+    let spelled_out = g_ln(
+        "((Ex x #i. A(x) @ #i) ==> (Ex y #j. B(y) @ #j)) & \
+         ((Ex y #j. B(y) @ #j) ==> (Ex x #i. A(x) @ #i))",
+    )
+    .expect("both sides are guarded");
+    assert_eq!(iff, spelled_out);
+    assert!(
+        matches!(&iff, Guarded::Conj(items) if items.len() == 2),
+        "the two implications are conjoined, got {iff:?}"
+    );
+}

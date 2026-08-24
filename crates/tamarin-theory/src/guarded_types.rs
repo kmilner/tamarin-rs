@@ -687,6 +687,94 @@ pub fn map_free_atom<F: FnMut(&p::VarSpec) -> p::VarSpec>(a: &GAtom, f: &mut F) 
 }
 
 // =============================================================================
+// Lowering an opened locally-nameless atom into the GTerm world
+// =============================================================================
+
+/// The parser-AST spelling of an atom of a locally-nameless formula whose
+/// binders are all opened: read it over plain `LVar`s
+/// ([`crate::guarded::bvar_to_lvar`]), project it
+/// ([`crate::pretty_theory::lnatom_to_parser`]), give the three nullary
+/// constants their parser-AST constructors back ([`restore_nullary_constants`])
+/// and put the AC argument lists into canonical order
+/// ([`crate::elaborate::canonicalize_ac_in_atom`]).
+///
+/// The canonicalisation is what makes the two spellings meet.  An internal
+/// `FApp (AC f)` holds a flat, sorted argument list (Term/Term/Raw.hs:118-129),
+/// which `lnterm_to_parser` writes as a LEFT-folded `BinOp` chain, while the
+/// parser AST the guarded store is built from carries the sorted RIGHT fold
+/// `canonicalize_ac_in_pterm` produces.
+///
+/// Stage 5 of the internal-representation programme deletes this function
+/// together with `GTerm`.
+pub fn blnatom_to_parser(a: &crate::atom::Atom<crate::formula::BLNTerm>) -> p::Atom {
+    let projected = crate::pretty_theory::lnatom_to_parser(&crate::guarded::bvar_to_lvar(a));
+    crate::elaborate::canonicalize_ac_in_atom(&crate::macro_expand::map_atom_terms(
+        &projected,
+        &restore_nullary_constants,
+    ))
+}
+
+/// `one`, `tone` and `DH_neutral` back in the parser AST's own constructors.
+///
+/// The three are nullary `NoEq` symbols in a term
+/// (Term/Term.hs:147-148,150-151,156-158), which is all `lnterm_to_parser`
+/// can see, and the parser AST spells each of them as its own variant, which
+/// [`term_to_gterm_free`] carries into [`GTerm::NumberOne`],
+/// [`GTerm::NatOne`] and [`GTerm::DhNeutral`].  The variants and the nullary
+/// `App` share a [`crate::guarded::cmp_term`] key, so the rewrite moves no AC
+/// argument; it decides the derived `PartialEq` and `Hash` the solver's
+/// membership tests use.
+fn restore_nullary_constants(t: &p::Term) -> p::Term {
+    match t {
+        p::Term::App(n, args) if args.is_empty() => match n.as_str() {
+            "one" => p::Term::NumberOne,
+            "tone" => p::Term::NatOne,
+            "DH_neutral" => p::Term::DhNeutral,
+            _ => t.clone(),
+        },
+        p::Term::App(n, args) => p::Term::App(
+            n.clone(),
+            args.iter().map(restore_nullary_constants).collect(),
+        ),
+        p::Term::AlgApp(n, a, b) => p::Term::AlgApp(
+            n.clone(),
+            Box::new(restore_nullary_constants(a)),
+            Box::new(restore_nullary_constants(b)),
+        ),
+        p::Term::Pair(items) => {
+            p::Term::Pair(items.iter().map(restore_nullary_constants).collect())
+        }
+        p::Term::Diff(a, b) => p::Term::Diff(
+            Box::new(restore_nullary_constants(a)),
+            Box::new(restore_nullary_constants(b)),
+        ),
+        p::Term::BinOp(op, a, b) => p::Term::BinOp(
+            *op,
+            Box::new(restore_nullary_constants(a)),
+            Box::new(restore_nullary_constants(b)),
+        ),
+        p::Term::PatMatch(inner) => p::Term::PatMatch(Box::new(restore_nullary_constants(inner))),
+        p::Term::Var(_)
+        | p::Term::PubLit(_)
+        | p::Term::FreshLit(_)
+        | p::Term::NatLit(_)
+        | p::Term::Number(_)
+        | p::Term::NumberOne
+        | p::Term::NatOne
+        | p::Term::DhNeutral => t.clone(),
+    }
+}
+
+/// [`blnatom_to_parser`] lifted into the `GTerm` world, all variables free —
+/// HS `GAto a` at an atom whose `BVar`s are all `Free` (Guarded.hs:121,482).
+///
+/// Stage 5 of the internal-representation programme deletes this function
+/// together with `GTerm`.
+pub fn blnatom_to_gatom(a: &crate::atom::Atom<crate::formula::BLNTerm>) -> GAtom {
+    atom_to_gatom_free(&blnatom_to_parser(a))
+}
+
+// =============================================================================
 // Unit tests
 // =============================================================================
 
@@ -709,6 +797,145 @@ mod tests {
             idx,
             sort: LSort::Node,
             typ: None,
+        }
+    }
+
+    // =========================================================================
+    // blnatom_to_gatom
+    // =========================================================================
+
+    mod blnatom {
+        use super::*;
+        use crate::atom::{Atom, ProtoAtom};
+        use tamarin_term::function_symbols::{
+            AcFctSym, AcSym, Constructability, NdcState, Privacy,
+        };
+        use tamarin_term::lterm::{BVar as TBVar, LVar};
+        use tamarin_term::term::{f_app_ac, f_app_no_eq};
+        use tamarin_term::vterm::var_term;
+
+        /// A free message variable of the locally-nameless term type.
+        fn v(name: &str) -> crate::formula::BLNTerm {
+            var_term(TBVar::Free(LVar::new(name, LSort::Msg, 0)))
+        }
+
+        /// The lowered left operand of an equality atom.
+        fn lowered(t: crate::formula::BLNTerm) -> GTerm {
+            let a: Atom<crate::formula::BLNTerm> = ProtoAtom::EqE(t, v("zzz"));
+            match blnatom_to_gatom(&a) {
+                GAtom::Eq(l, _) => l,
+                other => panic!("an equality atom lowers to an equality atom, got {other:?}"),
+            }
+        }
+
+        fn user_ac() -> AcFctSym {
+            AcFctSym::new(
+                b"add".to_vec(),
+                Privacy::Public,
+                Constructability::Constructor,
+                NdcState::NotNdc,
+            )
+        }
+
+        /// An internal AC application holds a flat sorted argument list;
+        /// the guarded store holds the RIGHT-leaning `BinOp` chain
+        /// `canonicalize_ac_in_pterm` folds, so `x ++ y ++ z` nests to the
+        /// right.
+        #[test]
+        fn blnatom_to_gatom_right_folds_a_three_element_ac_chain() {
+            let t = f_app_ac(AcSym::Union, vec![v("x"), v("y"), v("z")]);
+            let var = |n: &str| ga(GTerm::Var(BVar::Free(vs(n, 0))));
+            assert_eq!(
+                lowered(t),
+                GTerm::BinOp(
+                    p::BinOp::Union,
+                    var("x"),
+                    ga(GTerm::BinOp(p::BinOp::Union, var("y"), var("z"))),
+                )
+            );
+        }
+
+        /// HS builds `<a, b, c>` as `pair(a, pair(b, c))`; the guarded store
+        /// holds the flat n-ary `Pair` [`mk_gpair`] splices out of the right
+        /// spine, so the nested spelling and the flat one are one value.
+        #[test]
+        fn blnatom_to_gatom_splices_a_trailing_pair() {
+            let pair = |a, b| f_app_no_eq(tamarin_term::function_symbols::pair_sym(), vec![a, b]);
+            let t = pair(v("a"), pair(v("b"), v("c")));
+            assert_eq!(
+                lowered(t),
+                GTerm::Pair(
+                    vec![
+                        GTerm::Var(BVar::Free(vs("a", 0))),
+                        GTerm::Var(BVar::Free(vs("b", 0))),
+                        GTerm::Var(BVar::Free(vs("c", 0))),
+                    ]
+                    .into()
+                )
+            );
+        }
+
+        /// HS renders `exp(a, b)` as the infix `a^b` (Term/Term.hs:310), and
+        /// the parser AST spells that `BinOp(Exp, ..)`.
+        #[test]
+        fn blnatom_to_gatom_writes_exp_as_the_infix_operator() {
+            let t = f_app_no_eq(
+                tamarin_term::function_symbols::exp_sym(),
+                vec![v("a"), v("b")],
+            );
+            assert_eq!(
+                lowered(t),
+                GTerm::BinOp(
+                    p::BinOp::Exp,
+                    ga(GTerm::Var(BVar::Free(vs("a", 0)))),
+                    ga(GTerm::Var(BVar::Free(vs("b", 0)))),
+                )
+            );
+        }
+
+        /// HS renders a user-`[AC]` symbol infix (Term/Term.hs:305), which
+        /// the parser AST spells `BinOp(AcFct(name), ..)`.
+        ///
+        /// The nullary arm of that HS case (Term/Term.hs:304) has no reachable
+        /// term here: rebuilding a term through `fApp` rejects an empty AC
+        /// argument list (`fAppAC`, Term/Term/Raw.hs:120), and every read of
+        /// an atom of a locally-nameless formula rebuilds that way
+        /// (`bvarToLVar`'s `fmapTerm`, Guarded.hs:322-327).
+        #[test]
+        fn blnatom_to_gatom_writes_a_user_ac_symbol_as_its_infix_chain() {
+            let t: crate::formula::BLNTerm =
+                f_app_ac(AcSym::AcFct(user_ac()), vec![v("x"), v("y")]);
+            assert_eq!(
+                lowered(t),
+                GTerm::BinOp(
+                    p::BinOp::AcFct(tamarin_term::intern::intern_str("add")),
+                    ga(GTerm::Var(BVar::Free(vs("x", 0)))),
+                    ga(GTerm::Var(BVar::Free(vs("y", 0)))),
+                )
+            );
+        }
+
+        /// `one`, `tone` and `DH_neutral` are nullary `NoEq` symbols in a
+        /// term and dedicated variants in the parser AST and in `GTerm`
+        /// ([`restore_nullary_constants`]).
+        #[test]
+        fn blnatom_to_gatom_restores_the_nullary_constants() {
+            let sym = tamarin_term::function_symbols::one_sym;
+            assert_eq!(lowered(f_app_no_eq(sym(), vec![])), GTerm::NumberOne);
+            assert_eq!(
+                lowered(f_app_no_eq(
+                    tamarin_term::function_symbols::nat_one_sym(),
+                    vec![]
+                )),
+                GTerm::NatOne
+            );
+            assert_eq!(
+                lowered(f_app_no_eq(
+                    tamarin_term::function_symbols::dh_neutral_sym(),
+                    vec![]
+                )),
+                GTerm::DhNeutral
+            );
         }
     }
 
