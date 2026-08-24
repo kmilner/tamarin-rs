@@ -6,7 +6,7 @@
 //! check) from `lib/theory/src/Theory/Tools/Wellformedness.hs:960-985`.
 //!
 //! `checkTerms header maudeSig fm` collects the terms appearing in the ATOMS
-//! of `fm` ([`crate::formula::formula_terms`], HS `formulaTerms`), then keeps
+//! of `fm` (`crate::formula::formula_terms`, HS `formulaTerms`), then keeps
 //! as offenders every term that is not `allowed`:
 //!
 //! ```text

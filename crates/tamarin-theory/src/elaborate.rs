@@ -17,10 +17,12 @@
 //!   and predicate expansion (`predicate_expand::expand_theory_formulas`)
 //!   before any typed conversion
 //! - Rules — `parser::Rule` → `OpenProtoRule(ProtoRuleE, [])`
-//! - Lemmas / restrictions — the formula is intentionally retained as
-//!   parser AST (guarded conversion done lazily via `formula_to_guarded_parsed`),
-//!   after arity-1 tuple folding (`rewrite_arity1_*`) and AC/C
-//!   canonicalization (`canonicalize_ac_in_p*`)
+//! - Lemmas — the formula is retained as parser AST (guarded conversion done
+//!   lazily via `formula_to_guarded_parsed`), after arity-1 tuple folding
+//!   (`rewrite_arity1_formula`)
+//! - Restrictions — the formula is converted to `LNFormula`
+//!   (`restriction_formula`), alongside the pre-macro formula HS keeps as
+//!   `_rstrOriginalFormula`
 //!
 //! It also provides the parser↔typed conversion helpers used above:
 //! `term_to_lnterm`/`lnterm_to_term` (LNTerm round-tripping) and the
