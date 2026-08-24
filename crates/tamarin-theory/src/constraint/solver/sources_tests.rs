@@ -485,3 +485,180 @@ fn binder_sorts_key_apart() {
     let keys: BTreeSet<String> = sorts.iter().map(key).collect();
     assert_eq!(keys.len(), sorts.len());
 }
+
+// =========================================================================
+// rename_system_by
+// =========================================================================
+
+use crate::constraint::constraints::{Disj, Edge, Goal, LessAtom, NodeId, Reason, SplitId};
+use crate::constraint::system::GoalStatus;
+use crate::fact::{FactTag, LNFact};
+use crate::guarded::Guarded;
+use crate::rule::{ConcIdx, IntrRuleACInfo, PremIdx, Rule, RuleACInst, RuleInfo};
+use crate::tools::equation_store::EqDisj;
+use crate::tools::subterm_store::{SortedPairSet, SubtermConstraint};
+use std::sync::Arc;
+use tamarin_term::function_symbols::AcSym;
+use tamarin_term::lterm::{frees_list, HasFrees, LNTerm, LSort, LVar};
+use tamarin_term::subst::Subst;
+use tamarin_term::subst_vfresh::SubstVFresh;
+use tamarin_term::term::Term;
+use tamarin_term::vterm::Lit;
+
+fn nvar(idx: u64) -> NodeId {
+    LVar::new("i", LSort::Node, idx)
+}
+
+fn mvar(idx: u64) -> LVar {
+    LVar::new("x", LSort::Msg, idx)
+}
+
+fn mterm(idx: u64) -> LNTerm {
+    Term::Lit(Lit::Var(mvar(idx)))
+}
+
+/// A rule instance whose single premise holds `t`.
+fn rule_holding(t: LNTerm) -> RuleACInst {
+    Rule::new(
+        RuleInfo::Intr(IntrRuleACInfo::Coerce),
+        vec![LNFact::new(FactTag::Out, vec![t])],
+        Vec::new(),
+        Vec::new(),
+    )
+}
+
+fn subterm_constraint(small: u64, big: u64) -> SubtermConstraint {
+    SubtermConstraint {
+        small: mterm(small),
+        big: mterm(big),
+        propagated: true,
+    }
+}
+
+/// A `last(i.idx)` formula over one free node leaf.
+fn last_formula(idx: u64) -> Guarded {
+    use tamarin_parser::ast::{Atom, Term as PTerm, VarSpec};
+    Guarded::Atom(crate::guarded::atom_to_gatom_free(&Atom::Last(PTerm::Var(
+        VarSpec {
+            name: "i".to_string(),
+            idx,
+            sort: LSort::Node,
+            typ: None,
+        },
+    ))))
+}
+
+/// A system carrying a distinct variable in every field the `HasFrees`
+/// instance walks, plus the two the instance carries over untouched
+/// (`old_neg_subterms` and the ranges of the equation store's disjunctions).
+/// The node rule of `nodes[0]` holds `t`, so a caller can plant a term whose
+/// shape it wants to read back.
+fn system_with_a_variable_per_field(t: LNTerm) -> System {
+    let mut s = System::empty();
+    s.content_mut().nodes = Arc::new(vec![(nvar(10), rule_holding(t))]);
+    s.content_mut().edges = vec![Edge {
+        src: (nvar(30), ConcIdx(0)),
+        tgt: (nvar(31), PremIdx(0)),
+    }];
+    s.content_mut().less_atoms = vec![LessAtom::new(nvar(40), nvar(41), Reason::Fresh)];
+    s.content_mut().last_atom = Some(nvar(50));
+    {
+        let st = s.subterm_store_mut();
+        st.neg_subterms = SortedPairSet::rebuild_from(vec![(mterm(90), mterm(91))]);
+        st.old_neg_subterms = SortedPairSet::rebuild_from(vec![(mterm(98), mterm(99))]);
+        st.subterms = vec![subterm_constraint(70, 71)];
+        st.solved_subterms = vec![subterm_constraint(80, 81)];
+    }
+    {
+        let es = s.eq_store_mut();
+        es.subst = Subst::from_list(vec![(mvar(100), mterm(101))]);
+        es.conj = vec![EqDisj {
+            split_id: SplitId(0),
+            substs: vec![SubstVFresh::from_list(vec![(mvar(110), mterm(111))])],
+        }];
+    }
+    s.content_mut().formulas = vec![Arc::new(last_formula(120))];
+    s.content_mut().solved_formulas = vec![Arc::new(last_formula(130))];
+    s.content_mut().lemmas = vec![Arc::new(last_formula(140))];
+    s.content_mut().goals = Arc::new(vec![
+        (
+            Goal::Action(nvar(150), LNFact::new(FactTag::Out, vec![mterm(151)])),
+            GoalStatus::default(),
+        ),
+        (
+            Goal::Disj(Disj::new(vec![last_formula(170)])),
+            GoalStatus::default(),
+        ),
+        (
+            Goal::Subterm((mterm(180), mterm(181))),
+            GoalStatus::default(),
+        ),
+    ]);
+    s
+}
+
+/// `rename th0` moves every free variable of the system by the shift, which
+/// is `mapFrees (Monotone (incVar shift))` over all thirteen fields of the
+/// Haskell record (LTerm.hs:643, System.hs:1864-1877) — the negative subterms
+/// included.  The two values the instance carries over stay put: the ranges
+/// of the equation store's disjunctions, whose variables count as fresh
+/// (SubstVFresh.hs:196-202), and `old_neg_subterms` (SubtermStore.hs:95).
+#[test]
+fn rename_system_by_shifts_every_field_including_neg_subterms() {
+    let sys = system_with_a_variable_per_field(mterm(11));
+    let out = rename_system_by(&sys, 1000);
+
+    let expected: Vec<LVar> = frees_list(&sys)
+        .into_iter()
+        .map(|v| LVar::new(v.name, v.sort, v.idx + 1000))
+        .collect();
+    assert_eq!(frees_list(&out), expected);
+
+    assert_eq!(
+        out.subterm_store.neg_subterms.to_vec(),
+        vec![(mterm(1090), mterm(1091))],
+        "the negative subterms move with the rest of the store"
+    );
+    assert_eq!(
+        out.eq_store.conj[0].substs[0].to_list(),
+        vec![(mvar(1110), mterm(111))],
+        "a disjunction's domain key moves and its range does not"
+    );
+    assert_eq!(
+        out.subterm_store.old_neg_subterms.to_vec(),
+        vec![(mterm(98), mterm(99))]
+    );
+}
+
+/// The shift is a `Monotone` map (LTerm.hs:643), so it rebuilds an AC
+/// argument list with `unsafefApp` and keeps its order.  That is sound
+/// because `Ord LVar` compares the index first (LTerm.hs:546-548): adding one
+/// constant to every index cannot reorder two arguments, so the result is in
+/// AC-normal form already and equals what the re-sorting `Arbitrary` map
+/// produces.
+#[test]
+fn shift_keeps_ac_arg_order() {
+    // `z.1` before `a.2` in AC-normal form: the index decides, not the name.
+    let low = Term::Lit(Lit::Var(LVar::new("z", LSort::Msg, 1)));
+    let high = Term::Lit(Lit::Var(LVar::new("a", LSort::Msg, 2)));
+    let product = tamarin_term::term::f_app_ac(AcSym::Mult, vec![low, high]);
+    let sys = system_with_a_variable_per_field(product);
+
+    let out = rename_system_by(&sys, 1000);
+    let args = match &out.nodes[0].1.premises[0].terms[0] {
+        Term::App(_, args) => args.to_vec(),
+        _ => unreachable!("the fixture stores an AC application"),
+    };
+    assert_eq!(
+        args,
+        vec![
+            Term::Lit(Lit::Var(LVar::new("z", LSort::Msg, 1001))),
+            Term::Lit(Lit::Var(LVar::new("a", LSort::Msg, 1002))),
+        ]
+    );
+    assert_eq!(
+        out,
+        sys.map_free(&mut |v: LVar| LVar::new(v.name, v.sort, v.idx + 1000)),
+        "the monotone shift and the re-sorting one agree"
+    );
+}

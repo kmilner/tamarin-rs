@@ -3441,220 +3441,31 @@ fn restrict_eq_store_to_stable_vars(
     sys.eq_store_mut().subst = tamarin_term::subst::Subst::from_list(kept);
 }
 
-/// Freshen all vars in `sys` EXCEPT those in `keep`, shifting every
-/// other var's idx by `shift_amount`. Mirrors Haskell's
-/// `someInst sysTh0 keepVarBindings` (Sources.hs:336-350, see line 348). Vars in `keep`
-/// are preserved (they correspond to live-system vars introduced by
-/// the match-subst); other vars get shifted (callers derive
-/// `shift_amount` from the MaudeHandle's global counter via
-/// `reserve_idxs`) so they don't collide with live-system vars OR with
-/// vars from prior applySource grafts.  Without a globally-unique
-/// shift, two applySource calls against the same live system at the
-/// same step would shift to identical idxs, creating spurious cycles
-/// in the joined system (TLS_Handshake::session_key_setup_possible root
-/// cause).
-fn freshen_system_keep_with_shift(
-    sys: &System,
-    shift_amount: i128,
-    keep: &std::collections::BTreeSet<tamarin_term::lterm::LVar>,
-) -> System {
+/// `rename th0` (LTerm.hs:638-645) with the shift the caller has already
+/// computed: every free variable's index moves by `shift_amount` through
+/// `mapFrees (Monotone (incVar shift))`.  This is the rename `matchToGoal`
+/// performs on a whole source before matching it against the live goal
+/// (Sources.hs:307, `rename th0` under `avoid goalTerm`), so `shift_amount`
+/// is `freshStart - minVarIdx` over the SOURCE, not over the single case
+/// being renamed.
+///
+/// The shift is signed: it is negative whenever the source's stored indices
+/// sit above the fresh supply's seed, which is the normal case at runtime
+/// source dispatch, where the supply is seeded at `avoid goalTerm`.  Every
+/// shifted index stays in range by construction (`shift >= -min(source)`);
+/// the clamp is defensive.
+///
+/// A globally-unique shift is what keeps two `applySource` calls against the
+/// same live system at the same step from landing on identical indices and
+/// creating spurious cycles in the joined system.
+fn rename_system_by(sys: &System, shift_amount: i128) -> System {
     use tamarin_term::lterm::HasFrees;
-    // Signed shift: HS `rename x` (LTerm.hs:638-645) rebases the whole
-    // span by `freshStart - minVarIdx`, which is NEGATIVE whenever the
-    // source's stored idxs sit above the fresh-supply seed (the normal
-    // case at runtime source dispatch, where the supply is seeded at
-    // `avoid goalTerm`).  Every shifted idx stays ≥ 0 by construction
-    // (`shift ≥ -min(source)`); clamp defensively anyway.
-    let shift_idx = |idx: u64| -> u64 {
-        let n = idx as i128 + shift_amount;
-        if n < 0 {
-            0
-        } else if n > u64::MAX as i128 {
-            u64::MAX
-        } else {
-            n as u64
-        }
-    };
-    let shift_lvar = |v: &tamarin_term::lterm::LVar| {
-        if keep.contains(v) {
-            *v
-        } else {
-            let mut v2 = *v;
-            v2.idx = shift_idx(v2.idx);
-            v2
-        }
-    };
-    // Haskell-faithful `mapFrees` on parser-AST `VarSpec` (used by
-    // Guarded formulas): mirror `shift_lvar` semantics — skip keep,
-    // shift idx otherwise.  Project keep to `(name, idx)` since
-    // VarSpec sort and LVar sort are distinct types and in-practice
-    // names disambiguate node vs message vars.
-    let keep_name_idx: std::collections::BTreeSet<(String, u64)> =
-        keep.iter().map(|v| (v.name.to_string(), v.idx)).collect();
-    let shift_vs = |v: &tamarin_parser::ast::VarSpec| {
-        if keep_name_idx.contains(&(v.name.clone(), v.idx)) {
-            v.clone()
-        } else {
-            tamarin_parser::ast::VarSpec {
-                name: v.name.clone(),
-                idx: shift_idx(v.idx),
-                sort: v.sort,
-                typ: v.typ.clone(),
-            }
-        }
-    };
-    let mut out = sys.clone();
-    // NOT a uniform shift: vars in `keep` are left un-shifted while the
-    // rest move by `shift_amount`, so `max(node vars)` is NOT simply
-    // `old + shift`.  Cannot prove the bump — invalidate the node
-    // component (safe fallback; it will be re-walked on next `bounds_max`
-    // miss).  The clone above copied `sys`'s stale (pre-rename) value —
-    // for BOTH caches, so drop the full max too (a stale-LOW full max
-    // would mis-seed `avoid_fresh_state` on the freshened clone).
-    out.invalidate_node_max_cache();
-    out.invalidate_max_var_idx_cache();
-    out.content_mut_untracked().nodes = std::sync::Arc::new(
-        std::sync::Arc::unwrap_or_clone(std::mem::take(&mut out.content_mut_untracked().nodes))
-            .into_iter()
-            .map(|(id, ru)| (shift_lvar(&id), ru.map_free(&mut |v| shift_lvar(&v))))
-            .collect(),
-    );
-    out.content_mut_untracked().edges = std::mem::take(&mut out.content_mut_untracked().edges)
-        .into_iter()
-        .map(|e| crate::constraint::constraints::Edge {
-            src: (shift_lvar(&e.src.0), e.src.1),
-            tgt: (shift_lvar(&e.tgt.0), e.tgt.1),
+    sys.clone()
+        .map_free_monotone(&mut |v: tamarin_term::lterm::LVar| {
+            let mut w = v;
+            w.idx = (v.idx as i128 + shift_amount).clamp(0, u64::MAX as i128) as u64;
+            w
         })
-        .collect();
-    out.content_mut_untracked().less_atoms =
-        std::mem::take(&mut out.content_mut_untracked().less_atoms)
-            .into_iter()
-            .map(|l| {
-                crate::constraint::constraints::LessAtom::new(
-                    shift_lvar(&l.smaller),
-                    shift_lvar(&l.larger),
-                    l.reason,
-                )
-            })
-            .collect();
-    out.content_mut_untracked().goals = std::sync::Arc::new(
-        std::sync::Arc::unwrap_or_clone(std::mem::take(&mut out.content_mut_untracked().goals))
-            .into_iter()
-            .map(|(g, st)| {
-                let g2 = match g {
-                    crate::constraint::constraints::Goal::Action(n, fa) => {
-                        crate::constraint::constraints::Goal::Action(
-                            shift_lvar(&n),
-                            fa.map_free(&mut |v| shift_lvar(&v)),
-                        )
-                    }
-                    crate::constraint::constraints::Goal::Premise(p, fa) => {
-                        crate::constraint::constraints::Goal::Premise(
-                            (shift_lvar(&p.0), p.1),
-                            fa.map_free(&mut |v| shift_lvar(&v)),
-                        )
-                    }
-                    crate::constraint::constraints::Goal::Chain(c, p) => {
-                        crate::constraint::constraints::Goal::Chain(
-                            (shift_lvar(&c.0), c.1),
-                            (shift_lvar(&p.0), p.1),
-                        )
-                    }
-                    // Haskell-faithful: Disj carries guarded formulas;
-                    // Subterm carries an (LNTerm, LNTerm) pair.  Their
-                    // free vars must shift too.  Split(SplitId) is an
-                    // opaque index — no vars to rename.
-                    crate::constraint::constraints::Goal::Disj(d) => {
-                        let mapped: Vec<_> =
-                            d.0.into_iter()
-                                .map(|alt| crate::guarded::map_lvars_in_guarded(&alt, &shift_vs))
-                                .collect();
-                        crate::constraint::constraints::Goal::Disj(
-                            crate::constraint::constraints::Disj(mapped),
-                        )
-                    }
-                    crate::constraint::constraints::Goal::Subterm((small, big)) => {
-                        crate::constraint::constraints::Goal::Subterm((
-                            small.map_free(&mut |v| shift_lvar(&v)),
-                            big.map_free(&mut |v| shift_lvar(&v)),
-                        ))
-                    }
-                    other @ crate::constraint::constraints::Goal::Split(_) => other,
-                };
-                (g2, st)
-            })
-            .collect(),
-    );
-    if let Some(la) = out.content_mut_untracked().last_atom.take() {
-        out.content_mut_untracked().last_atom = Some(shift_lvar(&la));
-    }
-    // Haskell-faithful: shift free LVars in `formulas`, `solved_formulas`,
-    // and `lemmas`.  Haskell's `mapFrees` on System (System.hs:1863-1876)
-    // traverses ALL 13 fields — without this, post-freshen formulas/
-    // lemmas reference pre-freshen var idxs and collide with live
-    // post-shift node/edge idxs.
-    *out.formulas_mut_untracked() = std::mem::take(out.formulas_mut_untracked())
-        .into_iter()
-        .map(|g| std::sync::Arc::new(crate::guarded::map_lvars_in_guarded(&g, &shift_vs)))
-        .collect();
-    *out.solved_formulas_mut_untracked() = std::mem::take(out.solved_formulas_mut_untracked())
-        .into_iter()
-        .map(|g| std::sync::Arc::new(crate::guarded::map_lvars_in_guarded(&g, &shift_vs)))
-        .collect();
-    out.content_mut_untracked().lemmas = std::mem::take(&mut out.content_mut_untracked().lemmas)
-        .into_iter()
-        .map(|g| std::sync::Arc::new(crate::guarded::map_lvars_in_guarded(&g, &shift_vs)))
-        .collect();
-    // Shift LNTerm vars inside subterm_store constraints.
-    for c in &mut out.subterm_store_mut().subterms {
-        c.small = c.small.clone().map_free(&mut |v| shift_lvar(&v));
-        c.big = c.big.clone().map_free(&mut |v| shift_lvar(&v));
-    }
-    for c in &mut out.subterm_store_mut().solved_subterms {
-        c.small = c.small.clone().map_free(&mut |v| shift_lvar(&v));
-        c.big = c.big.clone().map_free(&mut |v| shift_lvar(&v));
-    }
-    // Eq-store subst: shift both var keys and term values.
-    out.eq_store_mut().subst = {
-        let pairs: Vec<_> = out
-            .eq_store
-            .subst
-            .to_list()
-            .into_iter()
-            .map(|(v, t)| {
-                let new_v = shift_lvar(&v);
-                let new_t = t.map_free(&mut |w| shift_lvar(&w));
-                (new_v, new_t)
-            })
-            .collect();
-        tamarin_term::subst::Subst::from_list(pairs)
-    };
-    // Eq-store conj (SplitG disjunctions).  HS-faithful `mapFrees
-    // (SubstVFresh n LVar)` (SubstVFresh.hs:200-202): `rename`/`mapFrees`
-    // rewrite ONLY the DOMAIN keys; the range (existentially-bound
-    // witnesses) is left UNTOUCHED.  Shifting the range here would re-base
-    // the variant-disj witnesses on every matchToGoal rename, feeding the
-    // cumulative inflation that rotates Responder_secrecy's 3-way split.
-    // Match `freshen_system_some_inst`
-    // and `rename_precise_system`'s eq-store walk: shift keys only.
-    //
-    // NOTE: a uniform shift of the domain keys keeps the variant SplitG's
-    // keys consistent with the surrounding (also-shifted) nodes/edges/goals
-    // so `subst_system` still finds matching keys after a variant is
-    // picked (the resolved1_contract_reachable concern); the witnesses in
-    // the range are local and need no shift.
-    for disj in out.eq_store_mut().conj.iter_mut() {
-        for s in disj.substs.iter_mut() {
-            let pairs: Vec<_> = s
-                .to_list()
-                .into_iter()
-                .map(|(v, t)| (shift_lvar(&v), t))
-                .collect();
-            *s = tamarin_term::subst_vfresh::SubstVFresh::from_list(pairs);
-        }
-    }
-    out.mint_fresh_stamps();
-    out
 }
 
 /// HS-faithful `someInst`: per-var fresh allocation in HS's `mapFrees`
@@ -3671,10 +3482,9 @@ fn freshen_system_keep_with_shift(
 ///
 /// Each unique LVar in HS-traversal-order gets the NEXT idx from the
 /// global counter (FastFresh).  Vars in `keep` are bound identically
-/// (keepVarBindings).  Differs from `freshen_system_keep_with_shift`
-/// which uniformly shifts all non-keep vars by a fixed amount —
-/// `someInst` instead assigns distinct sequential idxs in traversal
-/// order, mirroring HS exactly.
+/// (keepVarBindings).  Differs from `rename_system_by`, which moves every
+/// index by the same amount — `someInst` instead assigns distinct
+/// sequential idxs in traversal order, mirroring HS exactly.
 fn freshen_system_some_inst(
     sys: &System,
     keep: &std::collections::BTreeSet<tamarin_term::lterm::LVar>,
@@ -4276,9 +4086,7 @@ fn refine_source_case_action(
     };
     let renamed_abstract_node = shift_lvar(&abstract_node_orig);
     let renamed_abstract_action = abstract_action_orig.map_free(&mut |v| shift_lvar(&v));
-    let empty_keep: std::collections::BTreeSet<tamarin_term::lterm::LVar> =
-        std::collections::BTreeSet::new();
-    let renamed_case = freshen_system_keep_with_shift(case_sys, rename_shift, &empty_keep);
+    let renamed_case = rename_system_by(case_sys, rename_shift);
     // HS `refineSource` (Sources.hs:113-137, see line 128): `fs = avoid th` where
     // `th = set cdGoal goalTerm (renamed th0)` — ONE seed for EVERY
     // case's `runReduction proofStep ctxt se fs`, computed over the
@@ -5022,9 +4830,7 @@ fn apply_source_case_premise(
     };
     let renamed_abstract_node = shift_lvar(&abstract_node_orig);
     let renamed_abstract_fact = abstract_prem_fact_orig.map_free(&mut |v| shift_lvar(&v));
-    let empty_keep: std::collections::BTreeSet<tamarin_term::lterm::LVar> =
-        std::collections::BTreeSet::new();
-    let mut renamed_case = freshen_system_keep_with_shift(case_sys, rename_shift, &empty_keep);
+    let mut renamed_case = rename_system_by(case_sys, rename_shift);
 
     // A.2 — match (faTerm matchFact faPat) <> (iTerm matchLVar iPat).
     let mut pairs: Vec<(tamarin_term::lterm::LNTerm, tamarin_term::lterm::LNTerm)> =

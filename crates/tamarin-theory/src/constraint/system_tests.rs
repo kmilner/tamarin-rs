@@ -192,7 +192,6 @@ fn content_untracked_callers_are_enumerated() {
         "subst_system_once",
         "set_nodes",
         "freshen_system",
-        "freshen_system_keep_with_shift",
         "freshen_system_some_inst",
         "rename_precise_system",
         "normalise_less_atoms_pass",

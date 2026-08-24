@@ -2667,11 +2667,12 @@ pub fn ginduct(g: &Guarded) -> Result<(Guarded, Guarded), String> {
 
 /// Apply a `VarSpec → VarSpec` transformation to every FREE variable
 /// reference in a `Guarded` formula.  Variables bound by an enclosing
-/// `GGuarded` are NOT passed to `f` — they stay verbatim.  Used by
-/// `freshen_system_keep_with_shift` (sources.rs) to shift free-var
-/// idxs in stored formulas / solved_formulas / lemmas alongside the
-/// rest of the system, mirroring Haskell's uniform `mapFrees`
-/// (Theory/Constraint/System.hs:1863-1877) which traverses ALL 13 system fields.
+/// `GGuarded` are NOT passed to `f` — they stay verbatim.  The map body of
+/// this module's `HasFrees` instance and of the freshening walks in
+/// `sources.rs`, which shift free-var idxs in a system's stored formulas /
+/// solved_formulas / lemmas alongside the rest of it, mirroring Haskell's
+/// uniform `mapFrees` (Theory/Constraint/System.hs:1863-1877) which traverses
+/// ALL 13 system fields.
 pub fn map_lvars_in_guarded<F>(g: &Guarded, mut f: F) -> Guarded
 where
     F: FnMut(&p::VarSpec) -> p::VarSpec,
