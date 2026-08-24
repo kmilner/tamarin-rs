@@ -853,3 +853,202 @@ fn existential_binder_keeps_ac_operand_order() {
          ∧\n  (#i < #j) ∧ (∀ dif. (seq2 = (dif++seq1)) ⇒ ⊥)\""
     );
 }
+
+// =============================================================================
+// Locally-nameless → parser AST
+// =============================================================================
+
+/// The signature of `builtins: multiset`, under which the parser reads the
+/// `(<)` operator.
+fn mset_maude_sig() -> tamarin_term::maude_sig::MaudeSig {
+    let thy = tamarin_parser::parser::parse_theory("theory T begin\nbuiltins: multiset\nend", &[])
+        .unwrap();
+    crate::elaborate::elaborate(&thy)
+        .unwrap()
+        .signature
+        .maude_sig
+}
+
+/// Each binder of the reopened formula carries the display name the printer
+/// gives it, and each occurrence carries that binder's identity: printing the
+/// reopened AST reproduces the locally-nameless render, and closing it again
+/// reproduces the formula.
+#[test]
+fn to_parser_reopens_the_binders_the_printer_shows() {
+    use crate::formula::from_parser;
+    use tamarin_parser::parser::parse_formula_str;
+    use tamarin_term::maude_sig::pair_maude_sig;
+
+    let msig = pair_maude_sig();
+    for src in [
+        "All x y #i. A(x, y) @ #i",
+        // The inner binder shadows the outer one: `x` and `x.1`.
+        "All x. Ex x. A(x) @ #i",
+        // A free `x` seeds the supply, so the binder is displayed `x.1`.
+        "(Ex x. A(x) @ #i) & B(x) @ #j",
+        // The shape the `_restrict` lifting builds, with its `x`/`x.1` fresh
+        // variables and the `#NOW` timepoint.
+        "All x #NOW x.1. Restr_C_2_1(x, x.1) @ NOW ==> x = x.1",
+        "All x. P(x, y)",
+        "All x y. (x + y) = z",
+        "All #i #j. last(#i) & #i < #j",
+        "All x y. x << y",
+        "not (Ex x. A(x) @ #i) ==> (F | T)",
+    ] {
+        let f = parse_formula_str(src, &msig).unwrap();
+        let ln = from_parser(&f, &msig).unwrap();
+        let back = syntactic_lnformula_to_parser(&ln);
+        assert_eq!(
+            pretty_formula(&back),
+            syntactic_lnformula_doc(&ln).render(),
+            "render of the reopened AST on {src}"
+        );
+        assert_eq!(
+            from_parser(&back, &msig).unwrap(),
+            ln,
+            "closing the reopened AST on {src}"
+        );
+    }
+}
+
+/// HS closes a binder list with `foldr (hinted q) f vs`
+/// (Theory/Text/Parser/Formula.hs:73-77), one `Qua` node per variable.
+/// Reopening collects the run back into one binder list, and stops at the
+/// first binder of the other quantifier.
+#[test]
+fn to_parser_groups_consecutive_binders_of_one_quantifier() {
+    use crate::formula::from_parser;
+    use tamarin_parser::parser::parse_formula_str;
+    use tamarin_term::maude_sig::pair_maude_sig;
+
+    let msig = pair_maude_sig();
+    let f = parse_formula_str("All x y #i. A(x, y) @ #i", &msig).unwrap();
+    let ln = from_parser(&f, &msig).unwrap();
+    // Three nested `Qua` nodes closed the three binders.
+    assert!(matches!(
+        &ln,
+        ProtoFormula::Qua(_, _, b1)
+            if matches!(b1.as_ref(), ProtoFormula::Qua(_, _, b2)
+                if matches!(b2.as_ref(), ProtoFormula::Qua(_, _, _)))
+    ));
+    let p::Formula::Forall(vs, body) = syntactic_lnformula_to_parser(&ln) else {
+        panic!("expected one universal binder list");
+    };
+    assert_eq!(
+        vs,
+        vec![v("x", LSort::Msg), v("y", LSort::Msg), v("i", LSort::Node)]
+    );
+    assert!(matches!(*body, p::Formula::Atom(p::Atom::Action(_, _))));
+
+    let f = parse_formula_str("All x. Ex y. A(x, y) @ #i", &msig).unwrap();
+    let ln = from_parser(&f, &msig).unwrap();
+    let p::Formula::Forall(vs, body) = syntactic_lnformula_to_parser(&ln) else {
+        panic!("expected a universal binder list");
+    };
+    assert_eq!(vs, vec![v("x", LSort::Msg)]);
+    let p::Formula::Exists(vs, _) = *body else {
+        panic!("expected an existential binder list");
+    };
+    assert_eq!(vs, vec![v("y", LSort::Msg)]);
+}
+
+/// The only sugar a `SyntacticLNFormula` carries is `Pred`, and it is
+/// `blatom`'s predicate atom (Theory/Text/Parser/Formula.hs:52).  The
+/// multiset `(<)` is parsed into the `Smaller` predicate (`smallerp`,
+/// Theory/Text/Parser/Formula.hs:30-38), so it comes back as that predicate,
+/// not as the AST's own `(<)` atom.
+#[test]
+fn to_parser_writes_a_sugar_predicate_back_as_a_predicate_atom() {
+    use crate::formula::from_parser;
+    use tamarin_parser::parser::parse_formula_str;
+
+    let msig = mset_maude_sig();
+    let f = parse_formula_str("All x. P(x, y)", &msig).unwrap();
+    let ln = from_parser(&f, &msig).unwrap();
+    let p::Formula::Forall(_, body) = syntactic_lnformula_to_parser(&ln) else {
+        panic!("expected the universal binder");
+    };
+    let p::Formula::Atom(p::Atom::Pred(fa)) = *body else {
+        panic!("expected a predicate atom");
+    };
+    assert_eq!(fa.name, "P");
+    assert_eq!(fa.args.len(), 2);
+
+    // The AST's own `(<)` atom closes into the same `Smaller` predicate, so
+    // it too comes back as a predicate atom.
+    let mset = p::Formula::Atom(p::Atom::LessMset(
+        p::Term::Var(v("x", LSort::Msg)),
+        p::Term::Var(v("y", LSort::Msg)),
+    ));
+    for f in [parse_formula_str("x (<) y", &msig).unwrap(), mset] {
+        let ln = from_parser(&f, &msig).unwrap();
+        let p::Formula::Atom(p::Atom::Pred(fa)) = syntactic_lnformula_to_parser(&ln) else {
+            panic!("expected the Smaller predicate atom for {f:?}");
+        };
+        assert_eq!(fa.name, "Smaller");
+        assert_eq!(
+            fa.args,
+            vec![
+                p::Term::Var(v("x", LSort::Msg)),
+                p::Term::Var(v("y", LSort::Msg))
+            ]
+        );
+    }
+}
+
+/// The fresh supply is seeded with the formula's free variables
+/// (`avoidPrecise`, LTerm.hs:714-715), so a reopened binder never takes the
+/// name of a free variable: the binder of `Ex x. A(x)` beside a free `x` is
+/// displayed `x.1`, the free occurrence keeps `x`, and closing the reopened
+/// AST binds the same occurrence it started with.
+#[test]
+fn to_parser_cannot_capture_a_free_variable_with_a_binder_name() {
+    use crate::formula::{formula_frees, from_parser};
+    use tamarin_parser::parser::parse_formula_str;
+    use tamarin_term::maude_sig::pair_maude_sig;
+
+    let msig = pair_maude_sig();
+    let f = parse_formula_str("(Ex x. A(x) @ #i) & B(x) @ #j", &msig).unwrap();
+    let ln = from_parser(&f, &msig).unwrap();
+    let p::Formula::And(left, right) = syntactic_lnformula_to_parser(&ln) else {
+        panic!("expected the conjunction");
+    };
+    let p::Formula::Exists(vs, body) = *left else {
+        panic!("expected the existential binder");
+    };
+    assert_eq!(
+        vs,
+        vec![p::VarSpec {
+            name: "x".to_string(),
+            idx: 1,
+            sort: LSort::Msg,
+            typ: None,
+        }]
+    );
+    let p::Formula::Atom(p::Atom::Action(fa, _)) = *body else {
+        panic!("expected the bound action atom");
+    };
+    assert_eq!(fa.args, vec![p::Term::Var(bound_x1())]);
+    let p::Formula::Atom(p::Atom::Action(fa, _)) = *right else {
+        panic!("expected the free action atom");
+    };
+    assert_eq!(fa.args, vec![p::Term::Var(v("x", LSort::Msg))]);
+
+    let back = syntactic_lnformula_to_parser(&ln);
+    assert_eq!(from_parser(&back, &msig).unwrap(), ln);
+    assert_eq!(
+        formula_frees(&from_parser(&back, &msig).unwrap()),
+        formula_frees(&ln)
+    );
+}
+
+/// The `x.1` display name a binder takes when the free `x` already holds
+/// index 0.
+fn bound_x1() -> p::VarSpec {
+    p::VarSpec {
+        name: "x".to_string(),
+        idx: 1,
+        sort: LSort::Msg,
+        typ: None,
+    }
+}

@@ -28,7 +28,7 @@ use tamarin_term::lterm::{sort_prefix, LSort, LVar};
 use tamarin_term::pretty::pp_lvar;
 use tamarin_utils::fresh::PreciseFreshState;
 
-use crate::atom::{ProtoAtom, SyntacticSugar, Unit2};
+use crate::atom::{ProtoAtom, SyntacticAtom, SyntacticSugar, Unit2};
 use crate::fact::Fact;
 use crate::formula::{
     formula_frees, open_bound_term, BLNTerm, Connective, LNFormula, LNProtoFormula, ProtoFormula,
@@ -1172,6 +1172,111 @@ fn open_term(t: &BLNTerm, scope: &[LVar]) -> p::Term {
 /// [`open_term`] over every argument of a fact.
 fn open_fact(fa: &Fact<BLNTerm>, scope: &[LVar]) -> p::Fact {
     lnfact_to_parser(&fa.map_ref(|t| open_bound_term(t, scope)))
+}
+
+// =============================================================================
+// Locally-nameless formulas — parser-AST projection
+// (HS `openFormula`, Theory/Model/Formula.hs:274-291)
+// =============================================================================
+
+/// Open a [`SyntacticLNFormula`] into the parser-AST formula shape
+/// [`crate::formula::from_parser`] closes, with the binder names
+/// [`syntactic_lnformula_doc`] prints.
+///
+/// The walk is HS `openFormulaPrefix` (Theory/Model/Formula.hs:296-309) under
+/// the printer's own supply: [`avoid_precise_lnformula`] seeds the `Precise`
+/// counters with the formula's free variables (HS `avoidPrecise`,
+/// LTerm.hs:714-715), each binder takes a fresh index for its hint name, and
+/// [`open_term`]/[`open_fact`] resolve its bound occurrences to that same
+/// `(name, idx, sort)` identity — so a binder name never collides with a free
+/// variable, and a reopened occurrence never resolves to a different binder.
+/// A run of binders of one quantifier becomes one `Forall`/`Exists` list, the
+/// shape HS's `foldr (hinted q) f vs` closes
+/// (Theory/Text/Parser/Formula.hs:73-77).
+///
+/// `rule_restriction::lift_one_rule` takes parser-AST formulas, so this is
+/// the one crossing back for internal restriction formulas: the SAPIC
+/// translation's `_restrict` boundary in `tamarin_sapic::apply`.  It goes
+/// with that lifting, once the lifting itself takes internal rules.
+pub fn syntactic_lnformula_to_parser(f: &SyntacticLNFormula) -> p::Formula {
+    formula_to_parser(f, &mut Vec::new(), &mut avoid_precise_lnformula(f))
+}
+
+/// [`syntactic_lnformula_to_parser`]'s recursion.  `scope` holds the display
+/// `LVar` of every enclosing binder, innermost last, exactly as in
+/// [`lformula_doc`]; `state` is the shared fresh supply, rolled back per
+/// binder block by `scope_freshness` (HS `scopeFreshness`,
+/// Theory/Model/Formula.hs:503-506).
+fn formula_to_parser(
+    f: &SyntacticLNFormula,
+    scope: &mut Vec<LVar>,
+    state: &mut PreciseFreshState,
+) -> p::Formula {
+    match f {
+        ProtoFormula::Atom(a) => p::Formula::Atom(opened_atom_to_parser(a, scope)),
+        ProtoFormula::Tf(true) => p::Formula::True,
+        ProtoFormula::Tf(false) => p::Formula::False,
+        ProtoFormula::Not(p_) => p::Formula::Not(Box::new(formula_to_parser(p_, scope, state))),
+        ProtoFormula::Conn(c, l, r) => {
+            let l_ast = Box::new(formula_to_parser(l, scope, state));
+            let r_ast = Box::new(formula_to_parser(r, scope, state));
+            match c {
+                Connective::And => p::Formula::And(l_ast, r_ast),
+                Connective::Or => p::Formula::Or(l_ast, r_ast),
+                Connective::Imp => p::Formula::Implies(l_ast, r_ast),
+                Connective::Iff => p::Formula::Iff(l_ast, r_ast),
+            }
+        }
+        ProtoFormula::Qua(q, hint, body) => state.scope_freshness(|state| {
+            let mut hints = vec![hint];
+            let mut inner = body.as_ref();
+            while let ProtoFormula::Qua(q2, hint2, body2) = inner {
+                if q2 != q {
+                    break;
+                }
+                hints.push(hint2);
+                inner = body2.as_ref();
+            }
+            let depth = scope.len();
+            let vs: Vec<p::VarSpec> = hints
+                .into_iter()
+                .map(|(name, sort)| {
+                    let x = LVar::new(name, *sort, state.fresh_ident(name));
+                    scope.push(x);
+                    p::VarSpec {
+                        name: x.name.to_string(),
+                        idx: x.idx,
+                        sort: x.sort,
+                        typ: None,
+                    }
+                })
+                .collect();
+            let body_ast = Box::new(formula_to_parser(inner, scope, state));
+            scope.truncate(depth);
+            match q {
+                Quantifier::All => p::Formula::Forall(vs, body_ast),
+                Quantifier::Ex => p::Formula::Exists(vs, body_ast),
+            }
+        }),
+    }
+}
+
+/// [`opened_atom_doc`]'s projection without the printer: the atom opened
+/// against `scope` and written as the parser atom `from_parser` closes.
+/// `Syntactic(Pred fa)` is `blatom`'s predicate alternative
+/// (Theory/Text/Parser/Formula.hs:52), the only sugar a
+/// [`SyntacticLNFormula`] carries; the multiset `(<)` is parsed into the
+/// `Smaller` predicate (`smallerp`, Theory/Text/Parser/Formula.hs:30-38) and
+/// has no closed form of its own.
+fn opened_atom_to_parser(a: &SyntacticAtom<BLNTerm>, scope: &[LVar]) -> p::Atom {
+    match a {
+        ProtoAtom::Syntactic(SyntacticSugar::Pred(fa)) => p::Atom::Pred(open_fact(fa, scope)),
+        ProtoAtom::Action(t, fa) => p::Atom::Action(open_fact(fa, scope), open_term(t, scope)),
+        ProtoAtom::EqE(l, r) => p::Atom::Eq(open_term(l, scope), open_term(r, scope)),
+        ProtoAtom::Subterm(l, r) => p::Atom::Subterm(open_term(l, scope), open_term(r, scope)),
+        ProtoAtom::Less(l, r) => p::Atom::Less(open_term(l, scope), open_term(r, scope)),
+        ProtoAtom::Last(t) => p::Atom::Last(open_term(t, scope)),
+    }
 }
 
 // =============================================================================
