@@ -94,10 +94,7 @@ pub fn formula_reports(thy: &p::Theory, sig: &MaudeSig) -> Vec<WfError> {
     // Both expansions mirror what HS's formulas have already undergone by
     // the time `formulaReports` reads them: `annFormulas` applies
     // `applyMacroInFormula` itself (Wellformedness.hs:1007-1014) and
-    // predicates are inlined at parse time.  They stay here — and not on the
-    // elaborated theory — until stage 6 stores the macro- and
-    // predicate-expanded formula on every item, SAPIC- and
-    // accountability-injected ones included.  A predicate-expansion error
+    // predicates are inlined at parse time.  A predicate-expansion error
     // (e.g. an undefined predicate) is surfaced by the elaborate path; here
     // the macro-only form is kept so the checks still run on what they can.
     let mut expanded = thy.clone();

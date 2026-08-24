@@ -711,9 +711,6 @@ pub fn map_free_atom<F: FnMut(&p::VarSpec) -> p::VarSpec>(a: &GAtom, f: &mut F) 
 /// source spelling.  The two share a [`crate::guarded::cmp_term`] key
 /// and a printed form (`prettyTerm` has no brace case,
 /// Term/Term.hs:298-327); they differ under the derived `PartialEq`.
-///
-/// Stage 5 of the internal-representation programme deletes this function
-/// together with `GTerm`.
 pub fn blnatom_to_parser(a: &crate::atom::Atom<crate::formula::BLNTerm>) -> p::Atom {
     let projected = crate::pretty_theory::lnatom_to_parser(&crate::guarded::bvar_to_lvar(a));
     crate::elaborate::canonicalize_ac_in_atom(&crate::macro_expand::map_atom_terms(
@@ -775,9 +772,6 @@ fn restore_nullary_constants(t: &p::Term) -> p::Term {
 
 /// [`blnatom_to_parser`] lifted into the `GTerm` world, all variables free —
 /// HS `GAto a` at an atom whose `BVar`s are all `Free` (Guarded.hs:121,482).
-///
-/// Stage 5 of the internal-representation programme deletes this function
-/// together with `GTerm`.
 pub fn blnatom_to_gatom(a: &crate::atom::Atom<crate::formula::BLNTerm>) -> GAtom {
     atom_to_gatom_free(&blnatom_to_parser(a))
 }

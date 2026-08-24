@@ -77,35 +77,6 @@ pub fn pretty_formula(f: &p::Formula) -> String {
     s
 }
 
-/// Pretty-print a formula with HS-style `sep`/`nest`-driven
-/// line wrapping.  `indent` is the column where the first character of the
-/// formula will land in the final output.  The fixed page/ribbon widths
-/// come from `LINE_LENGTH`/`RIBBON` (HS `lineWidth = 110`,
-/// `ribbonLength = 73`), so there is no per-call width knob.
-///
-/// HS's `Text.PrettyPrint.HughesPJ` decides "does flat fit on this
-/// line" via `fits ((w `min` r) - sl) p` (HughesPJ.hs:873), where
-///   - `w = lineLength` (Main/Console.hs:241-243, see line 243, `lineWidth = 110`),
-///   - `r = ribbonLength = round(lineLength / ribbonsPerLine) = 73`
-///     (HughesPJ.hs:1010, `defaultStyle.ribbonsPerLine = 1.5`,
-///     HughesPJ.hs:940),
-///   - `sl` = chars already laid down on the current output line.
-///     I.e. a doc of flat length N fits at current column C on a line that
-///     began at column L iff `C + N <= min(lineLength, L + ribbon)`.
-///
-/// This routes through the HS-faithful Doc engine
-/// (`crate::pretty_hpj`) so per-NilAbove `w`-shrinkage is tracked
-/// (HS get1 NilAbove: `nilAbove_ (get (w - sl) p)`).
-pub fn pretty_formula_wrapped(f: &p::Formula, indent: usize) -> String {
-    use crate::pretty_hpj as hpj;
-    // Build the formula's Doc tree, then render via the HS-faithful
-    // engine.  `indent` is the column where the first text of the
-    // formula will land; we model it as an initial `sl` to render_at.
-    let mut state = avoid_precise_formula(f);
-    let doc = formula_to_doc(f, &[], &mut state);
-    doc.render_at(hpj::LINE_LENGTH, hpj::RIBBON, indent)
-}
-
 /// The `Doc` of a parser-AST formula, seeded with the display names of its
 /// free variables the way HS's `prettyLNFormula` seeds `avoidPrecise`
 /// (Theory/Model/Formula.hs:518-520).

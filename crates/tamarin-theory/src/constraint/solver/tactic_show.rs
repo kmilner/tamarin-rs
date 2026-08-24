@@ -29,7 +29,6 @@
 
 use tamarin_parser::ast as p;
 use tamarin_term::lterm::{sort_prefix, LNTerm};
-use tamarin_term::term::show_term;
 
 use crate::fact::{FactTag, Multiplicity};
 use crate::guarded::Guarded;
@@ -190,17 +189,6 @@ fn write_pair(items: &[GTerm], out: &mut String) {
             out.push(')');
         }
     }
-}
-
-// =============================================================================
-// `show (Term (Lit Name LVar))` = `show LNTerm` — used by reasonableNoncesNoise,
-// isFactName, isInFactTerms
-// =============================================================================
-
-/// HS `Show (Term a)` applied to `LNTerm = VTerm Name LVar`
-/// (Term/Term/Raw.hs:227-237).
-pub fn show_lnterm(t: &LNTerm) -> String {
-    show_term(t)
 }
 
 // =============================================================================
@@ -425,6 +413,7 @@ mod tests {
     use super::*;
     use tamarin_term::function_symbols::AcSym;
     use tamarin_term::lterm::LSort;
+    use tamarin_term::term::show_term;
 
     fn fresh(name: &str) -> p::VarSpec {
         p::VarSpec {
@@ -518,7 +507,7 @@ mod tests {
     /// AC operators (whose derived `show ACSym` names always take an
     /// argument list) and the user-`[AC]` nullary/applied pair.
     #[test]
-    fn show_lnterm_covers_every_applied_symbol_arm() {
+    fn show_term_covers_every_applied_symbol_arm() {
         use tamarin_term::builtin::{emap, msg_var, mult, nat_plus, union, xor};
         use tamarin_term::function_symbols::{
             AcFctSym, Constructability, NdcState, NoEqSym, Privacy,
@@ -543,32 +532,31 @@ mod tests {
             )
         };
 
-        assert_eq!(show_lnterm(&f_app_no_eq(noeq(b"g", 0), vec![])), "g");
+        let nullary: LNTerm = f_app_no_eq(noeq(b"g", 0), vec![]);
+        assert_eq!(show_term(&nullary), "g");
         assert_eq!(
-            show_lnterm(&f_app_no_eq(noeq(b"h", 2), vec![x.clone(), y.clone()])),
+            show_term(&f_app_no_eq(noeq(b"h", 2), vec![x.clone(), y.clone()])),
             "h(x,y)"
         );
-        assert_eq!(show_lnterm(&emap(x.clone(), y.clone())), "em(x,y)");
+        assert_eq!(show_term(&emap(x.clone(), y.clone())), "em(x,y)");
         assert_eq!(
-            show_lnterm(&f_app_list(vec![x.clone(), y.clone()])),
+            show_term(&f_app_list(vec![x.clone(), y.clone()])),
             "LIST(x,y)"
         );
-        assert_eq!(show_lnterm(&union(x.clone(), y.clone())), "Union(x,y)");
-        assert_eq!(show_lnterm(&mult(x.clone(), y.clone())), "Mult(x,y)");
-        assert_eq!(show_lnterm(&xor(x.clone(), y.clone())), "Xor(x,y)");
-        assert_eq!(show_lnterm(&nat_plus(x.clone(), y.clone())), "NatPlus(x,y)");
+        assert_eq!(show_term(&union(x.clone(), y.clone())), "Union(x,y)");
+        assert_eq!(show_term(&mult(x.clone(), y.clone())), "Mult(x,y)");
+        assert_eq!(show_term(&xor(x.clone(), y.clone())), "Xor(x,y)");
+        assert_eq!(show_term(&nat_plus(x.clone(), y.clone())), "NatPlus(x,y)");
         assert_eq!(
-            show_lnterm(&f_app_acfct(acfct(b"xorr"), vec![x.clone(), y.clone()])),
+            show_term(&f_app_acfct(acfct(b"xorr"), vec![x.clone(), y.clone()])),
             "xorr(x,y)"
         );
         // `FApp (AC (ACfct (s,_))) [] -> s` — the bare name, no parens.
-        assert_eq!(
-            show_lnterm(&tamarin_term::term::Term::App(
-                tamarin_term::function_symbols::FunSym::Ac(AcSym::AcFct(acfct(b"nil"))),
-                Vec::new().into(),
-            )),
-            "nil"
+        let nullary_acfct: LNTerm = tamarin_term::term::Term::App(
+            tamarin_term::function_symbols::FunSym::Ac(AcSym::AcFct(acfct(b"nil"))),
+            Vec::new().into(),
         );
+        assert_eq!(show_term(&nullary_acfct), "nil");
     }
 
     #[test]

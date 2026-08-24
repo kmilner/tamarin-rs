@@ -20,9 +20,10 @@
 //! macro matching keyed on the `FunSym` (a `NoEq (name, (arity, Private,
 //! Destructor, NotNDC))` tuple — Term/Macro.hs:29-30, see line 30).  RS parses lemma/restriction
 //! formulas as `parser::ast::Formula` and converts them to `LNFormula` in
-//! `elaborate`, so the natural place to expand is the parser AST.  This is observationally faithful: every macro call
-//! site is rewritten to its body before either side's typed conversion
-//! runs.  The macro fun-syms themselves are still registered in MaudeSig
+//! `elaborate`, so the natural place to expand is the parser AST.  This is
+//! observationally faithful: every macro call site is rewritten to its body
+//! before either side's typed conversion runs.  The macro fun-syms
+//! themselves are still registered in MaudeSig
 //! (HS Theory/Text/Parser/Macro.hs:29-47, see line 46 `addMacroSym`) so any unexpanded
 //! reference — and Maude — still see them.
 //!

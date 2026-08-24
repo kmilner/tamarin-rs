@@ -237,6 +237,18 @@ pub fn translate(parsed: &mut p::Theory, elaborated: &mut Theory) -> Result<(), 
         .flatten()
         .collect();
 
+    // The macro DEFINITIONS `applyMacroInLemma` substitutes into each generated
+    // lemma at close time (CloseRule.hs:85), in declaration order.
+    let declared_macros: Vec<p::Macro> = parsed
+        .items
+        .iter()
+        .filter_map(|i| match i {
+            p::TheoryItem::Macros(ms) => Some(ms.iter().cloned()),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+
     // Existing lemma names (HS `addLemma` guards on `lookupLemma`, which scans
     // `LemmaItem`s only — TheoryObject.hs:461-465); grows as generated lemmas
     // are appended.
@@ -286,6 +298,7 @@ pub fn translate(parsed: &mut p::Theory, elaborated: &mut Theory) -> Result<(), 
                 parsed,
                 elaborated,
                 &declared_preds,
+                &declared_macros,
                 &acc.attributes,
                 &gen.name,
                 gen.quantifier,
@@ -357,26 +370,36 @@ fn render_fact(f: &p::Fact) -> String {
 
 /// Append one generated lemma to both theories (HS `addLemma`, which appends at
 /// the end of the item list, TheoryObject.hs:461-465).  The elaborated lemma
-/// carries the internal formula `expandLemma` builds, predicate-expanded
-/// against `predicates` (Theory/Text/Parser.hs:141-152); the parser-AST theory
-/// the `--parse-only` and `-m msr` renderers walk keeps the surface form.  A
+/// carries the two formulas a closed theory's lemma holds: `_lOriginalFormula`
+/// is the one `expandLemma` builds, predicate-expanded against `predicates`
+/// (Theory/Text/Parser.hs:141-152), and `_lFormula` is that formula with the
+/// theory's macros applied, which `closeTheory` maps over every lemma
+/// including the ones this translation added (`applyMacroInLemma`,
+/// CloseRule.hs:85, lib/theory/src/Lemma.hs:83-88).  The parser-AST theory the
+/// `--parse-only` and `-m msr` renderers walk keeps the surface form.  A
 /// formula the expansion or the signature rejects is added to neither theory.
 fn inject_lemma(
     parsed: &mut p::Theory,
     elaborated: &mut Theory,
     predicates: &[p::Predicate],
+    macros: &[p::Macro],
     attributes: &[p::LemmaAttr],
     name: &str,
     quantifier: p::TraceQuantifier,
     formula: p::Formula,
 ) {
-    let expanded = tamarin_theory::predicate_expand::expand_formula(&formula, predicates)
-        .ok()
-        .and_then(|f| {
-            tamarin_theory::formula::from_parser(&f, &elaborated.signature.maude_sig).ok()
-        })
-        .and_then(|syn| tamarin_theory::formula::to_lnformula(&syn));
-    let Some(expanded) = expanded else {
+    let msig = &elaborated.signature.maude_sig;
+    let close = |f: &p::Formula| {
+        tamarin_theory::formula::from_parser(f, msig)
+            .ok()
+            .and_then(|syn| tamarin_theory::formula::to_lnformula(&syn))
+    };
+    let Ok(pred_expanded) = tamarin_theory::predicate_expand::expand_formula(&formula, predicates)
+    else {
+        return;
+    };
+    let with_macros = tamarin_theory::macro_expand::apply_macros_formula(macros, &pred_expanded);
+    let (Some(original), Some(expanded)) = (close(&pred_expanded), close(&with_macros)) else {
         return;
     };
     let parsed_lemma = p::Lemma {
@@ -400,10 +423,7 @@ fn inject_lemma(
             p::TraceQuantifier::AllTraces => t::TraceQuantifier::AllTraces,
             p::TraceQuantifier::ExistsTrace => t::TraceQuantifier::ExistsTrace,
         },
-        // The generated formula carries no macro call, so HS's close-time
-        // `applyMacroInLemma` leaves `_lOriginalFormula` equal to `_lFormula`
-        // (lib/theory/src/Lemma.hs:83-88, CloseRule.hs:85).
-        original_formula: Some(expanded.clone()),
+        original_formula: Some(original),
         formula: expanded,
         proof: t::ProofSkeleton::unproven(),
         plaintext: "generation".to_string(),
@@ -712,6 +732,61 @@ end\n";
         assert!(
             shown.iter().any(|s| s.contains("a = 'bad'")),
             "the predicate body is inlined: {shown:?}"
+        );
+    }
+
+    /// A case test whose formula calls a macro, so every lemma
+    /// `generateAccountabilityLemmas` builds carries the call too.
+    const MACRO_SRC: &str = "theory AccMacroLemma\n\
+begin\n\
+macros:\n  tag(x) = <'t', x>\n\
+rule L:\n  [ In( <x, a> ) ] --[ Log( tag(x), a ) ]-> [ ]\n\
+test badLog:\n  \"Ex #i x. Log(tag(x), a)@i\"\n\
+lemma acc:\n  badLog account for \"All a #i x. Log(tag(x), a)@i ==> not(a = 'ok')\"\n\
+end\n";
+
+    /// `closeTheory` maps `applyMacroInLemma` over every lemma of the theory,
+    /// the injected ones included (CloseRule.hs:85), which stores the
+    /// macro-applied formula as `_lFormula` and the formula as injected as
+    /// `_lOriginalFormula` (lib/theory/src/Lemma.hs:83-88).  The printer quotes
+    /// the original on the header line and converts `_lFormula` for the guarded
+    /// block, so the macro call survives in the header and nowhere else.
+    #[test]
+    fn generated_lemmas_carry_the_macro_applied_formula_beside_the_call() {
+        let mut parsed = tamarin_parser::parse_theory(MACRO_SRC, &[]).expect("theory parses");
+        let mut elaborated =
+            tamarin_theory::elaborate::elaborate(&parsed).expect("theory elaborates");
+        translate(&mut parsed, &mut elaborated).expect("translation");
+        let shown = |f: &tamarin_theory::formula::LNFormula| {
+            tamarin_theory::pretty_formula::pretty_lnformula(f)
+        };
+        let mut with_call = 0;
+        for l in elaborated.lemmas() {
+            let formula = shown(&l.formula);
+            let original = shown(l.original_formula.as_ref().expect("original formula"));
+            if !original.contains("tag(") {
+                assert!(
+                    !formula.contains("tag("),
+                    "a lemma applies a macro its original never called in {}: {formula}",
+                    l.name
+                );
+                continue;
+            }
+            with_call += 1;
+            assert!(
+                formula.contains("<'t', x") && !formula.contains("tag("),
+                "the macro reached _lFormula unapplied in {}: {formula}",
+                l.name
+            );
+            assert!(
+                !original.contains("<'t', x"),
+                "_lOriginalFormula lost the macro call in {}: {original}",
+                l.name
+            );
+        }
+        assert!(
+            with_call > 1,
+            "the generated lemmas carry the case test's macro call"
         );
     }
 }

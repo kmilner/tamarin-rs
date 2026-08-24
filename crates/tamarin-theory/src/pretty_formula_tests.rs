@@ -109,7 +109,8 @@ fn long_quantifier_varlist_wraps() {
     ];
     let vs: Vec<p::VarSpec> = names.iter().map(|n| v(n, LSort::Msg)).collect();
     let f = p::Formula::Exists(vs, Box::new(p::Formula::False));
-    let out = pretty_formula_wrapped(&f, 0);
+    let out =
+        formula_doc(&f).render_at(crate::pretty_hpj::LINE_LENGTH, crate::pretty_hpj::RIBBON, 0);
     let lines: Vec<&str> = out.split('\n').collect();
     assert!(lines.len() >= 2, "long var list must wrap: {out:?}");
     // First line opens with the existential symbol and a space.

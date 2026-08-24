@@ -3752,7 +3752,7 @@ fn render_restriction_attributes(attrs: &[p::RestrictionAttr], out: &mut String)
 }
 
 /// Render one predicate item, mirroring HS `prettyPredicate`
-/// (TheoryObject.hs:802-806):
+/// (TheoryObject.hs:845-849):
 ///   prettyPredicate p = kwPredicate <> colon <-> text (factstr ++ "<=>" ++ formulastr)
 ///     factstr    = render $ prettyFact prettyLVar (pFact p)
 ///     formulastr = render $ prettyLNFormula      (pFormula p)
@@ -3764,11 +3764,15 @@ fn render_restriction_attributes(attrs: &[p::RestrictionAttr], out: &mut String)
 // std kept (byte-inert) — iteration order never reaches output.
 #[allow(clippy::disallowed_types)]
 fn render_predicate(pr: &p::Predicate, arity1: &std::collections::HashSet<String>) -> String {
+    use crate::pretty_hpj as hpj;
     let fact = crate::elaborate::rewrite_arity1_fact(&pr.fact, arity1);
     let formula = crate::elaborate::rewrite_arity1_formula(&pr.formula, arity1);
-    // HS `render` lays each sub-doc out at width 110 from column 0 (factstr and
-    // formulastr are rendered INDEPENDENTLY, then concatenated as plain text),
-    // so route the formula through the Doc engine starting at column 0.
+    // `render` is HughesPJ's default style: `lineLength = 100` and
+    // `ribbonsPerLine = 1.5`, so `fullRender` rounds the ribbon to 67
+    // (HughesPJ.hs:940, :1010) — NOT the 110/73 the console's `renderDoc`
+    // installs for the surrounding theory echo.  factstr and formulastr are
+    // rendered INDEPENDENTLY at that style from column 0, then concatenated
+    // as plain text.
     //
     // Render the predicate fact DIRECTLY (`fact_doc`), NOT via
     // `reparse_fact_doc`.  HS `prettyPredicate` (TheoryObject.hs:845-849) calls
@@ -3779,8 +3783,9 @@ fn render_predicate(pr: &p::Predicate, arity1: &std::collections::HashSet<String
     // for proof-tree facts whose args `build_fact` stuffs into `Var` *names* as
     // raw text; re-parsing a sorted formal arg from its bare `name` drops the
     // sigil (`#time` → `time`).  Going through `fact_doc` preserves the sort.
-    let factstr = pf::fact_doc(&fact).render();
-    let formulastr = pf::pretty_formula_wrapped(&formula, 0);
+    let factstr = pf::fact_doc(&fact).render_with(hpj::DEFAULT_LINE_LENGTH, hpj::DEFAULT_RIBBON);
+    let formulastr =
+        pf::formula_doc(&formula).render_at(hpj::DEFAULT_LINE_LENGTH, hpj::DEFAULT_RIBBON, 0);
     format!("predicate: {}<=>{}", factstr, formulastr)
 }
 
@@ -4830,6 +4835,46 @@ mod lnatom_to_parser_tests {
         assert_eq!(
             lnatom_to_parser(&a),
             p::Atom::Less(pvar("i", LSort::Node), pvar("j", LSort::Node))
+        );
+    }
+}
+
+#[cfg(test)]
+mod predicate_echo_tests {
+    use super::*;
+
+    /// HS `prettyPredicate` (TheoryObject.hs:845-849) lays the predicate's
+    /// fact and formula out with `render`, HughesPJ's default style, and
+    /// embeds the two as one `text`.  That style is 100 columns with 1.5
+    /// ribbons per line, which `fullRender` rounds to a ribbon of 67
+    /// (HughesPJ.hs:940, :1010), while the theory echo around the predicate
+    /// item is laid out by the console's `renderDoc` at 110/73.  So a
+    /// predicate formula breaks where 67 columns of ribbon run out, not
+    /// where 73 do: `Between`'s inner conjunction is 68 columns wide and
+    /// breaks, and its second operand starts a line of its own.
+    ///
+    /// Expected string: the pinned oracle's bytes for this theory.
+    #[test]
+    fn predicate_formula_wraps_at_the_default_style() {
+        const SRC: &str = "theory P4PredWidth\n\
+begin\n\
+rule R:\n  [ In( x ) ] --[ Ev( x ) ]-> [ ]\n\
+predicate: Between(x, y, z) <=> \
+(Ex #i #j #k. Ev(x) @ #i & Ev(y) @ #j & Ev(z) @ #k & #i < #j & #j < #k)\n\
+end\n";
+        let parsed = tamarin_parser::parse_theory(SRC, &[]).expect("theory parses");
+        let predicates = collect_predicates(&parsed);
+        // The theory declares no arity-1 no-eq function.
+        #[allow(clippy::disallowed_types)]
+        let arity1 = std::collections::HashSet::new();
+        assert_eq!(
+            render_predicate(&predicates[0], &arity1),
+            concat!(
+                "predicate: Between( x, y, z )<=>\u{2203} #i #j #k.\n",
+                " ((((Ev( x ) @ #i) \u{2227} (Ev( y ) @ #j)) \u{2227} (Ev( z ) @ #k)) \u{2227}\n",
+                "  (#i < #j)) \u{2227}\n",
+                " (#j < #k)",
+            )
         );
     }
 }

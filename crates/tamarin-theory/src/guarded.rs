@@ -1558,7 +1558,7 @@ fn unguarded_error(positions: &[usize], freshened: &[p::VarSpec]) -> GuardError 
 /// quantifier prefix it opens draws its binders from a single supply.
 ///
 /// The atoms are lowered into the `GTerm` world one at a time
-/// ([`crate::guarded_types::blnatom_to_gatom`]).  `convert_ln` descends
+/// ([`crate::guarded_types::blnatom_to_gatom`]).  `convert` descends
 /// through every quantifier before it meets an atom, so each atom is
 /// all-`Free` when it is lowered, under the binders `open_formula_prefix`
 /// drew and with its AC arguments sorted under them: opening substitutes each
@@ -1576,7 +1576,7 @@ fn unguarded_error(positions: &[usize], freshened: &[p::VarSpec]) -> GuardError 
 /// `pretty_formula.rs`).
 pub fn formula_to_guarded(f: &crate::formula::LNFormula) -> Result<Guarded, GuardError> {
     let mut fresh = crate::formula::avoid_precise_lnformula(f);
-    convert_ln(false, f, &mut fresh)
+    convert(false, f, &mut fresh)
 }
 
 /// [`formula_to_guarded`] on a parser-AST formula, closed by
@@ -1585,11 +1585,10 @@ pub fn formula_to_guarded(f: &crate::formula::LNFormula) -> Result<Guarded, Guar
 /// a caller that cannot build the internal formula still renders the same
 /// block a guardedness failure renders.
 ///
-/// Callers, with the stage that drops each: the `--parse-only` open renderers
-/// (`pretty_theory.rs`, `is_safety_formula_parsed` among them) print a
-/// different observable and go with the printer retarget in stage 4; the two
-/// stored-proof re-parse sites (`pretty_theory.rs`, which parse goal text
-/// against the signature they already hold) keep it until stage 9.
+/// Callers: the `--parse-only` open renderers (`pretty_theory.rs`,
+/// `is_safety_formula_parsed` among them), and the two stored-proof re-parse
+/// sites (`pretty_theory.rs`), which parse goal text against the signature
+/// they already hold.
 pub fn formula_to_guarded_parsed(
     f: &p::Formula,
     sig: &tamarin_term::maude_sig::MaudeSig,
@@ -1613,7 +1612,7 @@ fn lvar_to_varspec(v: &tamarin_term::lterm::LVar) -> p::VarSpec {
 /// HS `convert` (Guarded.hs:481-505,565-566).  `polarity` is the implicit
 /// negation the conversion carries: at `True` the guarded formula returned
 /// is equivalent to the negation of `f`.
-fn convert_ln(
+fn convert(
     polarity: bool,
     f: &crate::formula::LNFormula,
     fresh: &mut tamarin_utils::fresh::PreciseFreshState,
@@ -1629,25 +1628,19 @@ fn convert_ln(
                 Ok(Guarded::Atom(ga))
             }
         }
-        ProtoFormula::Not(g) => convert_ln(!polarity, g, fresh),
+        ProtoFormula::Not(g) => convert(!polarity, g, fresh),
         ProtoFormula::Conn(Connective::And, a, b) => {
-            let sub = vec![
-                convert_ln(polarity, a, fresh)?,
-                convert_ln(polarity, b, fresh)?,
-            ];
+            let sub = vec![convert(polarity, a, fresh)?, convert(polarity, b, fresh)?];
             Ok(if polarity { gdisj(sub) } else { gconj(sub) })
         }
         ProtoFormula::Conn(Connective::Or, a, b) => {
-            let sub = vec![
-                convert_ln(polarity, a, fresh)?,
-                convert_ln(polarity, b, fresh)?,
-            ];
+            let sub = vec![convert(polarity, a, fresh)?, convert(polarity, b, fresh)?];
             Ok(if polarity { gconj(sub) } else { gdisj(sub) })
         }
         ProtoFormula::Conn(Connective::Imp, a, b) => {
             // p ⇒ q is ¬p ∨ q.
-            let nag = convert_ln(!polarity, a, fresh)?;
-            let cag = convert_ln(polarity, b, fresh)?;
+            let nag = convert(!polarity, a, fresh)?;
+            let cag = convert(polarity, b, fresh)?;
             let sub = vec![nag, cag];
             Ok(if polarity { gconj(sub) } else { gdisj(sub) })
         }
@@ -1657,8 +1650,8 @@ fn convert_ln(
             let lhs = ProtoFormula::Conn(Connective::Imp, a.clone(), b.clone());
             let rhs = ProtoFormula::Conn(Connective::Imp, b.clone(), a.clone());
             Ok(gconj(vec![
-                convert_ln(polarity, &lhs, fresh)?,
-                convert_ln(polarity, &rhs, fresh)?,
+                convert(polarity, &lhs, fresh)?,
+                convert(polarity, &rhs, fresh)?,
             ]))
         }
         // The quantifier decides whether the body must be a top-level
@@ -1674,11 +1667,11 @@ fn convert_ln(
             let result = match qua0 {
                 Quantifier::All => {
                     let out_qua = if polarity { Quant::Ex } else { Quant::All };
-                    convert_all_ln(&xs, &body, polarity, out_qua, fresh)
+                    convert_all(&xs, &body, polarity, out_qua, fresh)
                 }
                 Quantifier::Ex => {
                     let out_qua = if polarity { Quant::All } else { Quant::Ex };
-                    convert_ex_ln(&xs, &body, polarity, out_qua, fresh)
+                    convert_ex(&xs, &body, polarity, out_qua, fresh)
                 }
             };
             // Both throws of this arm quote `ppFormula f0`, the quantifier
@@ -1698,21 +1691,21 @@ fn convert_ln(
 
 /// HS `convEx` (Guarded.hs:535-543): the body is a conjunction whose action
 /// and equality atoms guard the prefix.
-fn convert_ex_ln(
+fn convert_ex(
     xs: &[p::VarSpec],
     body: &crate::formula::LNFormula,
     polarity: bool,
     out_qua: Quant,
     fresh: &mut tamarin_utils::fresh::PreciseFreshState,
 ) -> Result<Guarded, GuardError> {
-    let (atoms, others) = split_conj_actions_eqs_ln(body);
+    let (atoms, others) = split_conj_actions_eqs(body);
     let unguarded = remaining_unguarded(xs, &atoms);
     if !unguarded.is_empty() {
         return Err(unguarded_error(&unguarded, xs));
     }
     let mut converted = Vec::with_capacity(others.len());
     for f in &others {
-        converted.push(convert_ln(polarity, f, fresh)?);
+        converted.push(convert(polarity, f, fresh)?);
     }
     let body_guarded = if polarity {
         gdisj(converted)
@@ -1724,7 +1717,7 @@ fn convert_ex_ln(
 
 /// HS `convAll` (Guarded.hs:546-563): the body is an implication whose
 /// antecedent guards the prefix.
-fn convert_all_ln(
+fn convert_all(
     xs: &[p::VarSpec],
     body: &crate::formula::LNFormula,
     polarity: bool,
@@ -1735,16 +1728,16 @@ fn convert_all_ln(
     let ProtoFormula::Conn(Connective::Imp, ante, succ) = body else {
         return Err(err("universal quantifier without toplevel implication"));
     };
-    let (atoms, ante_others) = split_conj_actions_eqs_ln(ante);
+    let (atoms, ante_others) = split_conj_actions_eqs(ante);
     let unguarded = remaining_unguarded(xs, &atoms);
     if !unguarded.is_empty() {
         return Err(unguarded_error(&unguarded, xs));
     }
     let mut sub = Vec::with_capacity(ante_others.len() + 1);
     for f in &ante_others {
-        sub.push(convert_ln(!polarity, f, fresh)?);
+        sub.push(convert(!polarity, f, fresh)?);
     }
-    sub.push(convert_ln(polarity, succ, fresh)?);
+    sub.push(convert(polarity, succ, fresh)?);
     let body_guarded = if polarity { gconj(sub) } else { gdisj(sub) };
     Ok(close_guarded(out_qua, xs.to_vec(), atoms, body_guarded))
 }
@@ -1755,7 +1748,7 @@ fn convert_all_ln(
 /// [`remaining_unguarded`] and [`close_guarded`] read
 /// ([`crate::guarded_types::blnatom_to_parser`], HS's `bvarToLVar` plus the
 /// projection).
-fn split_conj_actions_eqs_ln(
+fn split_conj_actions_eqs(
     f: &crate::formula::LNFormula,
 ) -> (Vec<p::Atom>, Vec<crate::formula::LNFormula>) {
     use crate::atom::ProtoAtom;

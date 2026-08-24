@@ -33,11 +33,10 @@ use serde_json::{Map, Value};
 
 use tamarin_term::function_symbols::{plain_show_bytes, show_acfct_sym, AcSym, FunSym};
 use tamarin_term::lterm::{LNTerm, LVar, Name};
-use tamarin_term::term::Term;
+use tamarin_term::term::{show_term, Term};
 use tamarin_term::vterm::Lit;
 
 use crate::constraint::constraints::{NodeConc, NodeId, NodePrem, Reason};
-use crate::constraint::solver::tactic_show::show_lnterm;
 use crate::fact::{fact_tag_multiplicity, show_fact_tag, FactTag, LNFact, Multiplicity};
 use crate::pretty_hpj::{fsep, punctuate, Doc, DEFAULT_LINE_LENGTH, DEFAULT_RIBBON};
 use crate::rule::{
@@ -284,7 +283,7 @@ fn json_term(t: &LNTerm, outermost: bool) -> Value {
     let funct = |name: String, ts: &[LNTerm]| -> Value {
         let mut fields = vec![("jgnFunct", Value::String(name)), ("jgnParams", params(ts))];
         if outermost {
-            fields.push(("jgnShow", Value::String(show_lnterm(t))));
+            fields.push(("jgnShow", Value::String(show_term(t))));
         }
         object(fields)
     };
@@ -294,7 +293,7 @@ fn json_term(t: &LNTerm, outermost: bool) -> Value {
         Term::App(FunSym::Ac(o), ts) => funct(show_ac_sym(o), ts),
         _ => object([(
             "jgnConst",
-            Value::String(format!("unknown term type: {}", show_lnterm(t))),
+            Value::String(format!("unknown term type: {}", show_term(t))),
         )]),
     }
 }
@@ -835,9 +834,10 @@ mod tests {
         );
         let pk = f_app_no_eq(sym("pk", 1), vec![var("ltkA", LSort::Fresh)]);
         let t = f_app_no_eq(sym("aenc", 2), vec![pair, pk]);
-        assert_eq!(show_lnterm(&t), "aenc(pair('3',~nr),pk(~ltkA))");
+        assert_eq!(show_term(&t), "aenc(pair('3',~nr),pk(~ltkA))");
         // A nullary NoEq symbol shows as the bare name (no parentheses).
-        assert_eq!(show_lnterm(&f_app_no_eq(sym("g", 0), vec![])), "g");
+        let nullary: LNTerm = f_app_no_eq(sym("g", 0), vec![]);
+        assert_eq!(show_term(&nullary), "g");
     }
 
     // `jgnShow` is present on the OUTERMOST term only, and omitted entirely
@@ -871,7 +871,7 @@ mod tests {
         let x1 = lit(Lit::Var(LVar::new("x", LSort::Fresh, 1)));
         let (t0, t1) = (nest(&x0), nest(&x1));
         assert_eq!(
-            show_lnterm(&t0),
+            show_term(&t0),
             "g(f(~x,f(~x,f(~x,f(~x,f(~x,f(~x,f(~x,f(~x,f(~x,f(~x,f(~x,f(~x,f(~x,\
              f(~x,f(~x,f(~x,f(~x,f(~x,f(~x,f(~x,~x)))))))))))))))))))))"
         );

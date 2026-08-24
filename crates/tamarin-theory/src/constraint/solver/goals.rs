@@ -1069,7 +1069,7 @@ fn eval_leaf(
             let oracle_type = head(0);
             let nonces: Vec<String> = ts::action_goal_fact_terms(&g.goal)
                 .iter()
-                .map(ts::show_lnterm)
+                .map(tamarin_term::term::show_term)
                 .collect();
             let mut sys_pattern = vec!["~n".to_string()];
             sys_pattern.extend(ts::sys_reveal_shown(oracle_type, &sys.formulas));
@@ -1117,7 +1117,7 @@ fn eval_leaf(
         "isInFactTerms" => {
             let s = head(0);
             match ts::action_goal_single_term(&g.goal) {
-                Some(t) => regex_is_match(s, &ts::show_lnterm(t)),
+                Some(t) => regex_is_match(s, &tamarin_term::term::show_term(t)),
                 None => false,
             }
         }
