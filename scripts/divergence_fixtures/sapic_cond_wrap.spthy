@@ -1,0 +1,42 @@
+// A SAPIC conditional whose formula is wider than one line.
+//
+// A conditional renders its formula STANDALONE: `prettySapicComb (Cond a) =
+// "if " ++ render (prettySyntacticSapicFormula a)`
+// (Theory/Sapic/Process.hs:476#prettySapicComb, reaching
+// Theory/Sapic/Term.hs:174-175#prettySyntacticSapicFormula), and `render` is
+// HughesPJ's default page — 100 columns, ribbon 67.  The conjunction node's
+// `sep [opParens p' <-> ppOp op, opParens q']`
+// (Theory/Model/Formula.hs:493-496, inside
+// Theory/Model/Formula.hs:474-514#prettyLFormula) therefore breaks, and the
+// second conjunct starts a new line at column 0.  Each conjunct here is 62
+// characters wide, so the conjunction needs 127 and does not fit; the port
+// builds the same text with a flat string builder and takes no break.
+//
+// One rendering feeds two outputs (Sapic/Facts.hs:376-388#toRule): the
+// `process=` rule attribute reprints the step verbatim, while the derived
+// rule name is `filter isAlpha` over the same string
+// (Sapic/Facts.hs:401#stripNonAlphanumerical) and drops the line break — so
+// both engines name the two rules
+// `ifLongeraaaaaaaaaaxxxxxxxxxxbbbbbbbbbbyyyyyyyyyyLongercccccccccczzzzzzzzzzaaaaaaaaaayyyyyyyyyy_0_1`
+// and `…_1_1`, and only the attribute differs.  check.sh's shape arm pins
+// both halves of that.
+//
+// Compared slice: the `theory … end` echo, which carries the `process=`
+// attribute of every generated rule.  Every SAPIC condition in the corpus
+// fits on one line, so no gate row reaches this shape.
+
+theory SapicCondWrap
+begin
+
+functions: aaaaaaaaaa/1, bbbbbbbbbb/1, cccccccccc/1
+
+predicates: Longer(xxxxxxxxxx, yyyyyyyyyy) <=> xxxxxxxxxx = yyyyyyyyyy
+
+process:
+  in(<xxxxxxxxxx, yyyyyyyyyy, zzzzzzzzzz>);
+  if Longer(aaaaaaaaaa(xxxxxxxxxx), bbbbbbbbbb(yyyyyyyyyy)) & Longer(cccccccccc(zzzzzzzzzz), aaaaaaaaaa(yyyyyyyyyy)) then
+     out('yes')
+  else
+     out('no')
+
+end

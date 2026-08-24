@@ -1,0 +1,202 @@
+theory SapicCondWrap
+
+begin
+
+// Function signature and definition of the equational theory E
+
+functions: aaaaaaaaaa/1, bbbbbbbbbb/1, cccccccccc/1, fst/1, pair/2, snd/1
+equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
+
+heuristic: p
+
+predicate: Longer( xxxxxxxxxx, yyyyyyyyyy )<=>xxxxxxxxxx = yyyyyyyyyy
+
+rule (modulo E) Init[color=#ffffff,
+                     process="in(<xxxxxxxxxx.1, yyyyyyyyyy.1, zzzzzzzzzz.1>);", issapicrule,
+                     role='Process']:
+   [ ] --[ Init( ) ]-> [ State_( ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) inxxxxxxxxxxyyyyyyyyyyzzzzzzzzzz_0_[color=#ffffff,
+                                                    process="in(<xxxxxxxxxx.1, yyyyyyyyyy.1, zzzzzzzzzz.1>);",
+                                                    issapicrule, role='Process']:
+   [ State_( ), In( <xxxxxxxxxx.1, yyyyyyyyyy.1, zzzzzzzzzz.1> ) ]
+  -->
+   [ State_1( xxxxxxxxxx.1, yyyyyyyyyy.1, zzzzzzzzzz.1 ) ]
+
+  /*
+  rule (modulo AC) inxxxxxxxxxxyyyyyyyyyyzzzzzzzzzz_0_[color=#ffffff,
+                                                       process="in(<xxxxxxxxxx.1, yyyyyyyyyy.1, zzzzzzzzzz.1>);",
+                                                       issapicrule, role='Process']:
+     [ State_( ), In( <xxxxxxxxxx, yyyyyyyyyy, zzzzzzzzzz> ) ]
+    -->
+     [ State_1( xxxxxxxxxx, yyyyyyyyyy, zzzzzzzzzz ) ]
+  */
+
+restriction Restr_ifLongeraaaaaaaaaaxxxxxxxxxxbbbbbbbbbbyyyyyyyyyyLongercccccccccczzzzzzzzzzaaaaaaaaaayyyyyyyyyy_0_1_1:
+  "∀ x #NOW x.1 x.2 x.3.
+    (Restr_ifLongeraaaaaaaaaaxxxxxxxxxxbbbbbbbbbbyyyyyyyyyyLongercccccccccczzzzzzzzzzaaaaaaaaaayyyyyyyyyy_0_1_1( x,
+                                                                                                                 x.1,
+                                                                                                                 x.2,
+                                                                                                                 x.3
+     ) @ #NOW) ⇒
+    ((x = x.1) ∧ (x.2 = x.3))"
+  // safety formula
+
+  /*
+  expanded formula:
+  "∀ x #NOW x.1 x.2 x.3.
+    (Restr_ifLongeraaaaaaaaaaxxxxxxxxxxbbbbbbbbbbyyyyyyyyyyLongercccccccccczzzzzzzzzzaaaaaaaaaayyyyyyyyyy_0_1_1( x,
+                                                                                                                 x.1,
+                                                                                                                 x.2,
+                                                                                                                 x.3
+     ) @ #NOW) ⇒
+    ((x = x.1) ∧ (x.2 = x.3))"
+  */
+
+rule (modulo E) ifLongeraaaaaaaaaaxxxxxxxxxxbbbbbbbbbbyyyyyyyyyyLongercccccccccczzzzzzzzzzaaaaaaaaaayyyyyyyyyy_0_1[color=#ffffff,
+                                                                                                                   process="if (Longer( aaaaaaaaaa(xxxxxxxxxx.1), bbbbbbbbbb(yyyyyyyyyy.1) )) ∧
+(Longer( cccccccccc(zzzzzzzzzz.1), aaaaaaaaaa(yyyyyyyyyy.1) ))",
+                                                                                                                   issapicrule,
+                                                                                                                   role='Process']:
+   [ State_1( xxxxxxxxxx.1, yyyyyyyyyy.1, zzzzzzzzzz.1 ) ]
+  --[
+  Restr_ifLongeraaaaaaaaaaxxxxxxxxxxbbbbbbbbbbyyyyyyyyyyLongercccccccccczzzzzzzzzzaaaaaaaaaayyyyyyyyyy_0_1_1( aaaaaaaaaa(xxxxxxxxxx.1),
+                                                                                                              bbbbbbbbbb(yyyyyyyyyy.1),
+                                                                                                              cccccccccc(zzzzzzzzzz.1),
+                                                                                                              aaaaaaaaaa(yyyyyyyyyy.1)
+  )
+  ]->
+   [ State_11( xxxxxxxxxx.1, yyyyyyyyyy.1, zzzzzzzzzz.1 ) ]
+
+  /*
+  rule (modulo AC) ifLongeraaaaaaaaaaxxxxxxxxxxbbbbbbbbbbyyyyyyyyyyLongercccccccccczzzzzzzzzzaaaaaaaaaayyyyyyyyyy_0_1[color=#ffffff,
+                                                                                                                      process="if (Longer( aaaaaaaaaa(xxxxxxxxxx.1), bbbbbbbbbb(yyyyyyyyyy.1) )) ∧
+(Longer( cccccccccc(zzzzzzzzzz.1), aaaaaaaaaa(yyyyyyyyyy.1) ))",
+                                                                                                                      issapicrule,
+                                                                                                                      role='Process']:
+     [ State_1( xxxxxxxxxx, yyyyyyyyyy, zzzzzzzzzz ) ]
+    --[
+    Restr_ifLongeraaaaaaaaaaxxxxxxxxxxbbbbbbbbbbyyyyyyyyyyLongercccccccccczzzzzzzzzzaaaaaaaaaayyyyyyyyyy_0_1_1( aaaaaaaaaa(xxxxxxxxxx),
+                                                                                                                bbbbbbbbbb(yyyyyyyyyy),
+                                                                                                                cccccccccc(zzzzzzzzzz),
+                                                                                                                aaaaaaaaaa(yyyyyyyyyy)
+    )
+    ]->
+     [ State_11( xxxxxxxxxx, yyyyyyyyyy, zzzzzzzzzz ) ]
+  */
+
+restriction Restr_ifLongeraaaaaaaaaaxxxxxxxxxxbbbbbbbbbbyyyyyyyyyyLongercccccccccczzzzzzzzzzaaaaaaaaaayyyyyyyyyy_1_1_1:
+  "∀ x #NOW x.1 x.2 x.3.
+    (Restr_ifLongeraaaaaaaaaaxxxxxxxxxxbbbbbbbbbbyyyyyyyyyyLongercccccccccczzzzzzzzzzaaaaaaaaaayyyyyyyyyy_1_1_1( x,
+                                                                                                                 x.1,
+                                                                                                                 x.2,
+                                                                                                                 x.3
+     ) @ #NOW) ⇒
+    (¬((x = x.1) ∧ (x.2 = x.3)))"
+  // safety formula
+
+  /*
+  expanded formula:
+  "∀ x #NOW x.1 x.2 x.3.
+    (Restr_ifLongeraaaaaaaaaaxxxxxxxxxxbbbbbbbbbbyyyyyyyyyyLongercccccccccczzzzzzzzzzaaaaaaaaaayyyyyyyyyy_1_1_1( x,
+                                                                                                                 x.1,
+                                                                                                                 x.2,
+                                                                                                                 x.3
+     ) @ #NOW) ⇒
+    (¬((x = x.1) ∧ (x.2 = x.3)))"
+  */
+
+rule (modulo E) ifLongeraaaaaaaaaaxxxxxxxxxxbbbbbbbbbbyyyyyyyyyyLongercccccccccczzzzzzzzzzaaaaaaaaaayyyyyyyyyy_1_1[color=#ffffff,
+                                                                                                                   process="if (Longer( aaaaaaaaaa(xxxxxxxxxx.1), bbbbbbbbbb(yyyyyyyyyy.1) )) ∧
+(Longer( cccccccccc(zzzzzzzzzz.1), aaaaaaaaaa(yyyyyyyyyy.1) ))",
+                                                                                                                   issapicrule,
+                                                                                                                   role='Process']:
+   [ State_1( xxxxxxxxxx.1, yyyyyyyyyy.1, zzzzzzzzzz.1 ) ]
+  --[
+  Restr_ifLongeraaaaaaaaaaxxxxxxxxxxbbbbbbbbbbyyyyyyyyyyLongercccccccccczzzzzzzzzzaaaaaaaaaayyyyyyyyyy_1_1_1( aaaaaaaaaa(xxxxxxxxxx.1),
+                                                                                                              bbbbbbbbbb(yyyyyyyyyy.1),
+                                                                                                              cccccccccc(zzzzzzzzzz.1),
+                                                                                                              aaaaaaaaaa(yyyyyyyyyy.1)
+  )
+  ]->
+   [ State_12( xxxxxxxxxx.1, yyyyyyyyyy.1, zzzzzzzzzz.1 ) ]
+
+  /*
+  rule (modulo AC) ifLongeraaaaaaaaaaxxxxxxxxxxbbbbbbbbbbyyyyyyyyyyLongercccccccccczzzzzzzzzzaaaaaaaaaayyyyyyyyyy_1_1[color=#ffffff,
+                                                                                                                      process="if (Longer( aaaaaaaaaa(xxxxxxxxxx.1), bbbbbbbbbb(yyyyyyyyyy.1) )) ∧
+(Longer( cccccccccc(zzzzzzzzzz.1), aaaaaaaaaa(yyyyyyyyyy.1) ))",
+                                                                                                                      issapicrule,
+                                                                                                                      role='Process']:
+     [ State_1( xxxxxxxxxx, yyyyyyyyyy, zzzzzzzzzz ) ]
+    --[
+    Restr_ifLongeraaaaaaaaaaxxxxxxxxxxbbbbbbbbbbyyyyyyyyyyLongercccccccccczzzzzzzzzzaaaaaaaaaayyyyyyyyyy_1_1_1( aaaaaaaaaa(xxxxxxxxxx),
+                                                                                                                bbbbbbbbbb(yyyyyyyyyy),
+                                                                                                                cccccccccc(zzzzzzzzzz),
+                                                                                                                aaaaaaaaaa(yyyyyyyyyy)
+    )
+    ]->
+     [ State_12( xxxxxxxxxx, yyyyyyyyyy, zzzzzzzzzz ) ]
+  */
+
+rule (modulo E) outyes_0_11[color=#ffffff, process="out('yes');",
+                            issapicrule, role='Process']:
+   [ State_11( xxxxxxxxxx.1, yyyyyyyyyy.1, zzzzzzzzzz.1 ) ]
+  -->
+   [ State_111( xxxxxxxxxx.1, yyyyyyyyyy.1, zzzzzzzzzz.1 ), Out( 'yes' ) ]
+
+  /*
+  rule (modulo AC) outyes_0_11[color=#ffffff, process="out('yes');",
+                               issapicrule, role='Process']:
+     [ State_11( xxxxxxxxxx, yyyyyyyyyy, zzzzzzzzzz ) ]
+    -->
+     [ State_111( xxxxxxxxxx, yyyyyyyyyy, zzzzzzzzzz ), Out( 'yes' ) ]
+  */
+
+rule (modulo E) p_0_111[color=#ffffff, process="0", issapicrule,
+                        role='Process']:
+   [ State_111( xxxxxxxxxx.1, yyyyyyyyyy.1, zzzzzzzzzz.1 ) ] --> [ ]
+
+  /*
+  rule (modulo AC) p_0_111[color=#ffffff, process="0", issapicrule,
+                           role='Process']:
+     [ State_111( xxxxxxxxxx, yyyyyyyyyy, zzzzzzzzzz ) ] --> [ ]
+  */
+
+rule (modulo E) outno_0_12[color=#ffffff, process="out('no');",
+                           issapicrule, role='Process']:
+   [ State_12( xxxxxxxxxx.1, yyyyyyyyyy.1, zzzzzzzzzz.1 ) ]
+  -->
+   [ State_121( xxxxxxxxxx.1, yyyyyyyyyy.1, zzzzzzzzzz.1 ), Out( 'no' ) ]
+
+  /*
+  rule (modulo AC) outno_0_12[color=#ffffff, process="out('no');",
+                              issapicrule, role='Process']:
+     [ State_12( xxxxxxxxxx, yyyyyyyyyy, zzzzzzzzzz ) ]
+    -->
+     [ State_121( xxxxxxxxxx, yyyyyyyyyy, zzzzzzzzzz ), Out( 'no' ) ]
+  */
+
+rule (modulo E) p_0_121[color=#ffffff, process="0", issapicrule,
+                        role='Process']:
+   [ State_121( xxxxxxxxxx.1, yyyyyyyyyy.1, zzzzzzzzzz.1 ) ] --> [ ]
+
+  /*
+  rule (modulo AC) p_0_121[color=#ffffff, process="0", issapicrule,
+                           role='Process']:
+     [ State_121( xxxxxxxxxx, yyyyyyyyyy, zzzzzzzzzz ) ] --> [ ]
+  */
+
+restriction single_session:
+  "∀ #i #j. ((Init( ) @ #i) ∧ (Init( ) @ #j)) ⇒ (#i = #j)"
+  // safety formula
+
+  /*
+  expanded formula:
+  "∀ #i #j. ((Init( ) @ #i) ∧ (Init( ) @ #j)) ⇒ (#i = #j)"
+  */
+
+
+
+end

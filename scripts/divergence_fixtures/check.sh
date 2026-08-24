@@ -64,6 +64,60 @@ divergence_shape() {
         grep -qF "⇒ (∃ ~x.1 #j. B( (~x.1++x) ) @ #j)" "$expected/$1.$2.rs.txt" \
             || { echo "    port side does not order the AC arguments by the written sort — expected \`B( (~x.1++x) )\`" >&2; return 1; }
         ;;
+    sapic_cond_wrap.theory)
+        # A conditional's formula is rendered standalone at the HughesPJ
+        # default width, so the conjunction breaks and the second conjunct
+        # starts at column 0; the port renders it flat.  The derived rule name
+        # is `filter isAlpha` over the same string and drops the break, so it
+        # has to stay identical on both sides.
+        grep -qxF '(Longer( cccccccccc(zzzzzzzzzz.1), aaaaaaaaaa(yyyyyyyyyy.1) ))",' "$expected/$1.$2.hs.txt" \
+            || { echo "    oracle side does not break the conjunction onto its own line at column 0" >&2; return 1; }
+        grep -qF ') )) ∧ (Longer( cccccccccc(zzzzzzzzzz.1)' "$expected/$1.$2.rs.txt" \
+            || { echo "    port side does not keep the conjunction on one line" >&2; return 1; }
+        local nm=ifLongeraaaaaaaaaaxxxxxxxxxxbbbbbbbbbbyyyyyyyyyyLongercccccccccczzzzzzzzzzaaaaaaaaaayyyyyyyyyy_0_1
+        grep -qF "$nm" "$expected/$1.$2.hs.txt" && grep -qF "$nm" "$expected/$1.$2.rs.txt" \
+            || { echo "    the derived rule name $nm is not on both sides — the layout has reached the name" >&2; return 1; }
+        ;;
+    sapic_cond_type_tag.theory)
+        # A condition's variables are `SapicLVar`s, and `-m=spthytyped` prints
+        # a process definition's formals with their type tag.  The port prints
+        # every formal untagged.  Row `V` carries the positional rule — a
+        # predicate argument takes `sapicvar` whatever its spelling — and
+        # agrees on both sides.
+        grep -qxF "let  S (#k.1:node,#l.1:node) = out('yes') if #k.1 < #l.1 out('no')" "$expected/$1.$2.hs.txt" \
+            || { echo "    oracle side does not tag the two operands of \`<\` — expected \`(#k.1:node,#l.1:node)\`" >&2; return 1; }
+        grep -qxF "let  P (x.1:foo) = out('yes') if Eq( x.1, 'a' ) out('no')" "$expected/$1.$2.hs.txt" \
+            || { echo "    oracle side does not carry the written type — expected \`(x.1:foo)\`" >&2; return 1; }
+        grep -qxF "let  S (#k.1,#l.1) = out('yes') if #k.1 < #l.1 out('no')" "$expected/$1.$2.rs.txt" \
+            || { echo "    port side does not print the \`<\` operands untagged — expected \`(#k.1,#l.1)\`" >&2; return 1; }
+        grep -qxF "let  P (x.1) = out('yes') if Eq( x.1, 'a' ) out('no')" "$expected/$1.$2.rs.txt" \
+            || { echo "    port side does not print the typed variable untagged — expected \`(x.1)\`" >&2; return 1; }
+        local v="let  V (y.1,#p.1) = out('yes') if Pred( #p.1, y.1 ) out('no')"
+        grep -qxF "$v" "$expected/$1.$2.hs.txt" && grep -qxF "$v" "$expected/$1.$2.rs.txt" \
+            || { echo "    a predicate argument is no plain \`sapicvar\` on one of the two sides — expected \`(y.1,#p.1)\`" >&2; return 1; }
+        ;;
+    sapic_msr_restrict_wrap.theory)
+        # The restriction item is a Doc composition `_restrict(` <> formula <>
+        # `)`, so the formula's break indents by the ten columns of the
+        # opening operator; the port flattens the formula before the rule's
+        # layout sees it.
+        grep -qxF '_restrict((aaaaaaaaaa(xxxxxxxxxx.1) = bbbbbbbbbb(yyyyyyyyyy.1)) ∧' "$expected/$1.$2.hs.txt" \
+            || { echo "    oracle side does not break the restriction formula after the conjunction" >&2; return 1; }
+        grep -qxF '          (cccccccccc(zzzzzzzzzz.1) = aaaaaaaaaa(yyyyyyyyyy.1)))' "$expected/$1.$2.hs.txt" \
+            || { echo "    oracle side does not indent the continuation by the ten columns of \`_restrict(\`" >&2; return 1; }
+        grep -qxF '_restrict((aaaaaaaaaa(xxxxxxxxxx.1) = bbbbbbbbbb(yyyyyyyyyy.1)) ∧ (cccccccccc(zzzzzzzzzz.1) = aaaaaaaaaa(yyyyyyyyyy.1)))' "$expected/$1.$2.rs.txt" \
+            || { echo "    port side does not keep the restriction formula on one line" >&2; return 1; }
+        ;;
+    sapic_pubname_in_restrict.wf)
+        # `universeBi` reaches the source subprocess a translated rule carries,
+        # so a public name occurring only inside an embedded `_restrict`
+        # formula joins the capitalization check; the port harvests the
+        # embedded rule's facts and not its restrictions.
+        grep -qF "1. rule \"Init\":  name 'Foo', 'foo'" "$expected/$1.$2.hs.txt" \
+            || { echo "    oracle side does not report the clash — expected \`rule \"Init\":  name 'Foo', 'foo'\`" >&2; return 1; }
+        grep -qxF '/* All wellformedness checks were successful. */' "$expected/$1.$2.rs.txt" \
+            || { echo "    port side does not report the run clean" >&2; return 1; }
+        ;;
     *)  echo "    no documented shape for the $1.$2 divergence — add an arm here" >&2; return 1 ;;
     esac
     return 0

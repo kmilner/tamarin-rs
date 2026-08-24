@@ -1,0 +1,54 @@
+// The SAPIC type tag on a variable that only a conditional mentions.
+//
+// A SAPIC condition is parsed by `standardFormula sapicvar sapicnodevar`
+// (Theory/Text/Parser/Sapic.hs:252-255, one instantiation of
+// Theory/Text/Parser/Formula.hs:108-109#standardFormula), so its variables
+// are `SapicLVar`s: `sapicvar` reads an optional `:type` and leaves the tag
+// `Nothing` otherwise (Theory/Text/Parser/Token.hs:506-510#sapicvar), while
+// `sapicnodevar` stamps `Just "node"`
+// (Theory/Text/Parser/Token.hs:522-525#sapicnodevar,
+// Theory/Sapic/Term.hs:99-100#defaultSapicNodeType).
+//
+// The tag reaches the printed theory.  A process definition written without
+// formals takes its formals from `S.toList (varsProc pr) \\ accBindings pr`
+// (Sapic/Typing.hs:219#pvars); `varsProc = foldMap Data.Set.singleton`
+// (Theory/Sapic/Process.hs:361-362#varsProc) over the derived `Foldable`
+// reaches the condition's free variables, and `-m=spthytyped` prints them
+// with `map show`
+// (TheoryObject.hs:791-799#prettyTranslationElement), where
+// `show (SapicLVar v (Just t)) = show v ++ ":" ++ t`
+// (Theory/Sapic/Term.hs:108-110).  The port carries the condition as parser
+// formula and prints every formal untagged, so four of the five `let` lines
+// differ.
+//
+// The tagging is POSITIONAL, and row `V` is the measurement of that:
+// `blatom` writes `nodevarTerm = lit . Var <$> nodep` for `last`'s argument,
+// an action's timepoint and both operands of `<`
+// (Theory/Text/Parser/Formula.hs:44-57#blatom), while a predicate atom takes
+// `fact (vlit (try varp <|> nodep))`, where `sapicvar` wins for every
+// spelling — so `#p` inside `Pred` stays untagged on BOTH engines and only
+// `S`, `T` and `U` carry `:node`.
+//
+// Flags: `-m=spthytyped`, the one mode that prints a process definition's
+// formals.  No corpus theory is loaded in that mode, and no corpus condition
+// mentions a timepoint, a `last`, a `<` or a `:type`, so this row is the only
+// check on the tag.
+//
+// Compared slice: the `theory … end` echo, which in this mode carries the
+// five `let` declarations and the `process:` block.
+
+theory SapicCondTypeTag
+begin
+
+predicates: Eq(a, b) <=> a = b, Pred(a, b) <=> a = a
+
+let P = if Eq(x:foo, 'a') then out('yes') else out('no')
+let S = if #k < #l then out('yes') else out('no')
+let T = if last(#m) then out('yes') else out('no')
+let U = if Ev(x)@#n then out('yes') else out('no')
+let V = if Pred(#p, y) then out('yes') else out('no')
+
+process:
+  out('done')
+
+end
