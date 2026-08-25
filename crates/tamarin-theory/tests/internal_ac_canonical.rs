@@ -160,8 +160,8 @@ fn compare_theory(elab: &Theory, at: &dyn Fn(&str) -> String) -> (usize, usize, 
     for item in elab.rules() {
         // The E-rule, plus the two bodies an item holds beside it: the
         // abstracted rule the modulo-AC comment block prints when the rule
-        // has reducible-headed sub-terms, and the `cprRuleE` half an
-        // `--auto-sources` close leaves behind.
+        // has reducible-headed sub-terms, and the `cprRuleE` half the item
+        // keeps whenever `rule` diverges from it.
         let bodies = [
             Some(&item.rule),
             item.abstracted_rule.as_ref(),

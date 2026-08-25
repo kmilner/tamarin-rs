@@ -31,15 +31,6 @@
 //! they cannot tell two refinements apart.
 //!
 //! Divergences from HS, all deliberate:
-//! * **Macro theories**: HS `closeProtoRule` (lib/theory/src/Rule.hs:82-86) keeps
-//!   `cprRuleE` macro-UNexpanded, so `getProtoRuleEs` (ClosedTheory.hs:87-89)
-//!   feeds partial evaluation the macro-form rules and unification runs on
-//!   the macro symbols.  RS elaborated rules are macro-expanded
-//!   (`rule::apply_macro_in_rule` in `elaborate_items`), so partial
-//!   evaluation here runs on the
-//!   expanded rules; on a theory with a `macros:` block the report facts
-//!   and refined rule bodies can show expanded terms where HS shows macro
-//!   calls.
 //! * **Trace emission**: HS traces via `Debug.Trace` thunks that fire when
 //!   the closed theory is rendered — AFTER the `[Theory X] Theory closed`
 //!   stderr marker.  [`partial_evaluation`]/[`apply_partial_evaluation`]
@@ -500,7 +491,9 @@ pub fn apply_partial_evaluation(
     style: EvaluationStyle,
 ) -> Result<String, MaudeError> {
     // HS `getProtoRuleEs` (ClosedTheory.hs:87-89) extracts `cprRuleE` — the
-    // E-half that `addActionClosedProtoRule` never annotates
+    // E-half that keeps the macro calls as the source writes them
+    // (`closeProtoRule`, lib/theory/src/Rule.hs:82-86), that
+    // `addActionClosedProtoRule` never annotates
     // (lib/theory/src/Rule.hs:95-99) and that `unfoldRuleVariants` duplicates
     // verbatim across variants (lib/theory/src/Rule.hs:63-79, see line 76) —
     // so when the `--auto-sources` close preceded this call the refinement
@@ -510,10 +503,7 @@ pub fn apply_partial_evaluation(
     // Feeding the annotated `rule` half instead lets the baked AUTO actions
     // reach the second close, whose refined-source trigger they then
     // wrongly satisfy.
-    let mut ru_es: Vec<ProtoRuleE> = elaborated
-        .rules()
-        .map(|o| o.rule_e.as_deref().unwrap_or(&o.rule).clone())
-        .collect();
+    let mut ru_es: Vec<ProtoRuleE> = elaborated.rules().map(|o| o.rule_e().clone()).collect();
     if ru_es.is_empty() {
         // No closed rule item: HS's `replaceProtoRules` never fires and
         // the trivial evaluation produces no trace.
@@ -561,14 +551,21 @@ pub fn apply_partial_evaluation(
     );
 
     // Elaborated-side splice (same shape; the refined rules carry empty
-    // variant/loop-breaker fields for the caller's re-close).
+    // variant/loop-breaker fields for the caller's re-close).  That re-close
+    // is HS's second `closeTheoryWithMaude` (Prover.hs:238-241), which reaches
+    // `closeProtoRule` and narrows `applyMacroInRule macros ruE` while keeping
+    // the refined rule itself as `cprRuleE` (lib/theory/src/Rule.hs:82-86).
+    let macros: Vec<crate::theory::LNMacro> = elaborated.macros().cloned().collect();
     let mut inserted: Vec<TheoryItem> = Vec::with_capacity(refined.len() + 1);
     inserted.push(TheoryItem::Text(("text".to_string(), body)));
-    inserted.extend(
-        refined
-            .into_iter()
-            .map(|r| TheoryItem::Rule(OpenProtoRule::new(r))),
-    );
+    inserted.extend(refined.into_iter().map(|r| {
+        let expanded = crate::rule::apply_macro_in_rule(&macros, r.clone());
+        let mut opr = OpenProtoRule::new(expanded);
+        if opr.rule != r {
+            opr.rule_e = Some(Box::new(r));
+        }
+        TheoryItem::Rule(opr)
+    }));
     elaborated.items = splice_refined(
         std::mem::take(&mut elaborated.items),
         e_anchor,

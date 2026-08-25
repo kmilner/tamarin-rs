@@ -938,6 +938,71 @@ end\n";
     assert_eq!(shown(&rule.rule.conclusions[0]), "Out( h(~k) )");
 }
 
+/// `closeProtoRule` narrows `applyMacroInRule macros ruE` into the AC half and
+/// keeps `ruE` itself as `cprRuleE` (lib/theory/src/Rule.hs:82-86), the half
+/// `prettyClosedProtoRule` quotes as the `rule (modulo E)` block
+/// (ClosedTheory.hs:331-366).  That is the `encrypt`/`aenc` split
+/// `examples/features/macros/MacroExample.spthy` prints.  A rule whose body
+/// calls no macro is its own E half, so it stores none.
+#[test]
+fn macro_rule_keeps_its_pre_macro_e_half() {
+    use crate::pretty_hpj::FLAT_WIDTH;
+
+    let src = "theory T\n\
+begin\n\
+builtins: asymmetric-encryption\n\
+macros:\n  encrypt(x, y) = aenc(x, y)\n\
+rule Client:\n  [ Fr(~k), !Pk($S, pkS) ] --> [ Out( encrypt(~k, pkS) ) ]\n\
+rule Plain:\n  [ Fr(~k) ] --> [ Out( ~k ) ]\n\
+end\n";
+    let thy = elaborate(&parse_theory(src, &[]).unwrap()).unwrap();
+    let shown = |fa: &crate::fact::LNFact| {
+        crate::fact::pretty_lnfact(fa).render_with(FLAT_WIDTH, FLAT_WIDTH)
+    };
+    let rules: Vec<_> = thy.rules().collect();
+
+    assert!(rules[0].rule_e.is_some());
+    assert_eq!(
+        shown(&rules[0].rule_e().conclusions[0]),
+        "Out( encrypt(~k, pkS) )"
+    );
+    assert_eq!(shown(&rules[0].rule.conclusions[0]), "Out( aenc(~k, pkS) )");
+
+    assert!(rules[1].rule_e.is_none());
+    assert_eq!(shown(&rules[1].rule_e().conclusions[0]), "Out( ~k )");
+}
+
+/// A `variants` block is parsed into `_oprRuleAC` (`protoRule`,
+/// Theory/Text/Parser/Rule.hs:126-135, see line 134) and reaches the close
+/// untouched: `closeProtoRule`'s third equation maps `ClosedProtoRule ruE`
+/// over the list instead of computing variants or applying the macros
+/// (lib/theory/src/Rule.hs:82-86, see line 86).
+#[test]
+fn manual_variants_reach_the_internal_rule() {
+    use crate::pretty_hpj::FLAT_WIDTH;
+
+    let src = "theory T\n\
+begin\n\
+functions: f/1\n\
+macros:\n  m(x) = f(x)\n\
+rule R:\n  [ In( x ) ] --[ A( m(x) ) ]-> [ Out( m(x) ) ]\n\
+  variants\n\
+    rule (modulo AC) R:\n      [ In( y ) ] --[ A( m(y) ) ]-> [ Out( f(y) ) ],\n\
+    rule (modulo AC) R:\n      [ In( z ) ] --[ A( f(z) ) ]-> [ Out( f(z) ) ]\n\
+end\n";
+    let thy = elaborate(&parse_theory(src, &[]).unwrap()).unwrap();
+    let shown = |fa: &crate::fact::LNFact| {
+        crate::fact::pretty_lnfact(fa).render_with(FLAT_WIDTH, FLAT_WIDTH)
+    };
+    let rule = thy.rules().next().expect("elaborated rule");
+
+    assert_eq!(rule.rule_ac.len(), 2);
+    assert_eq!(rule.rule_ac[0].info.name, ProtoRuleName::Stand("R"));
+    assert_eq!(shown(&rule.rule_ac[0].actions[0]), "A( m(y) )");
+    assert_eq!(shown(&rule.rule_ac[0].conclusions[0]), "Out( f(y) )");
+    assert_eq!(shown(&rule.rule_ac[1].actions[0]), "A( f(z) )");
+}
+
 /// A case test and an accountability lemma are `TranslationItem`s, which
 /// `closeTheoryItem` passes through with no macro application
 /// (CloseRule.hs:82-90, see line 90) and `liftedAddCaseTest` /

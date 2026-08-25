@@ -66,16 +66,32 @@ pub struct OpenProtoRule {
     /// reads this flag where it mirrors that branch choice
     /// (`pretty_theory::rule_open_ac_nonempty`).
     pub unfolded_variant: bool,
-    /// HS's `cprRuleE` half, kept only when the `--auto-sources` close made
-    /// `rule` diverge from it: `addActionClosedProtoRule` adds AUTO actions
-    /// to `cprRuleAC` only (lib/theory/src/Rule.hs:95-99) and
+    /// HS's `cprRuleE` half (`ClosedProtoRule`, Items/RuleItem.hs:56-59),
+    /// stored only where it differs from `rule`: **`None` iff `rule` IS that
+    /// half**.  Three steps drive them apart.  `elaborate_items` applies the
+    /// theory's macros to `rule` alone, because `closeProtoRule` narrows
+    /// `applyMacroInRule macros ruE` and keeps the unexpanded `ruE`
+    /// (lib/theory/src/Rule.hs:82-86).  `addActionClosedProtoRule` adds AUTO
+    /// actions to `cprRuleAC` only (lib/theory/src/Rule.hs:95-99).
     /// `unfoldRuleVariants` carries the ORIGINAL rule as every variant's
     /// `cprRuleE` (lib/theory/src/Rule.hs:63-79, see line 76).  Consumers of
     /// HS's `getProtoRuleEs` (`S.toList . S.fromList . map oprRuleE`,
-    /// ClosedTheory.hs:87-89) — partial evaluation — must read this half:
-    /// it carries no AUTO actions, and the Set round-trip collapses the
-    /// per-variant duplicates.  `None` whenever `rule` still IS the E-half.
+    /// ClosedTheory.hs:87-89) — partial evaluation — must read this half
+    /// through [`OpenProtoRule::rule_e`]: it is macro-unexpanded, carries no
+    /// AUTO actions, and the Set round-trip collapses the per-variant
+    /// duplicates.
     pub rule_e: Option<Box<ProtoRuleE>>,
+    /// HS's `_oprRuleAC` (Items/RuleItem.hs:34-36): the `variants (modulo
+    /// AC)` blocks the source writes out, parsed by `protoRuleAC` and
+    /// collected by `protoRule` (Theory/Text/Parser/Rule.hs:126-135, see line
+    /// 134).  A rule that declares them is closed by mapping `ClosedProtoRule
+    /// ruE` over the list rather than by computing variants, so neither the
+    /// macros nor Maude ever touch them (lib/theory/src/Rule.hs:82-86, see
+    /// line 86).  HS types them `ProtoRuleAC`; the parser fills that info's
+    /// variant and loop-breaker slots with `Disj [emptySubstVFresh]` and `[]`
+    /// (`protoRuleACInfo`, Theory/Text/Parser/Rule.hs:138-143, see line 142),
+    /// so a [`ProtoRuleE`] holds everything a parsed block carries.
+    pub rule_ac: Vec<ProtoRuleE>,
 }
 
 impl OpenProtoRule {
@@ -87,7 +103,15 @@ impl OpenProtoRule {
             loop_breakers: Vec::new(),
             unfolded_variant: false,
             rule_e: None,
+            rule_ac: Vec::new(),
         }
+    }
+
+    /// HS's `cprRuleE` — the rule as the source writes it, before the macros
+    /// and before an `--auto-sources` close annotates or unfolds it.
+    /// `getProtoRuleEs` (ClosedTheory.hs:87-89) reads exactly this.
+    pub fn rule_e(&self) -> &ProtoRuleE {
+        self.rule_e.as_deref().unwrap_or(&self.rule)
     }
 
     pub fn name(&self) -> &str {

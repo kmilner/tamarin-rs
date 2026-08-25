@@ -302,12 +302,9 @@ fn auto_names(m: &Matched, pos: &ExtendedPosition, rin_name: &str) -> (String, S
 /// AUTO fact names, `addLabels`' targeting, the `done` cases — uses the AC
 /// name, `getRuleName (cprRuleAC ru)`).
 fn rule_e_name(o: &OpenProtoRule) -> &str {
-    match o.rule_e.as_deref() {
-        Some(re) => match &re.info.name {
-            crate::rule::ProtoRuleName::Stand(n) => n,
-            crate::rule::ProtoRuleName::Fresh => "Fresh",
-        },
-        None => o.name(),
+    match &o.rule_e().info.name {
+        crate::rule::ProtoRuleName::Stand(n) => n,
+        crate::rule::ProtoRuleName::Fresh => "Fresh",
     }
 }
 
@@ -606,10 +603,10 @@ pub fn has_lemma_named(items: &[TheoryItem], name: &str) -> bool {
 /// `cprRuleAC` only (`addActionClosedProtoRule`, lib/theory/src/Rule.hs:97-99);
 /// for a trivial-variant rule (no
 /// abstracted form) that is the rule itself, which renders as
-/// `rule (modulo E)` and propagates to its instances.  The pristine body is
-/// snapshotted into `rule_e` first — HS's untouched `cprRuleE` half, which
-/// partial evaluation's `getProtoRuleEs` must keep reading (see the field
-/// doc).
+/// `rule (modulo E)` and propagates to its instances.  A rule that still IS
+/// its own E half gets the pristine body snapshotted into `rule_e` first —
+/// HS's untouched `cprRuleE`, which partial evaluation's `getProtoRuleEs`
+/// must keep reading (see the field doc).
 fn add_action_to_open_rule(o: &mut OpenProtoRule, action: LNFact) {
     if o.rule_e.is_none() {
         o.rule_e = Some(Box::new(o.rule.clone()));
@@ -716,7 +713,11 @@ fn unfold_one_rule_variants(o: &OpenProtoRule) -> Vec<OpenProtoRule> {
                 // `toClosedProtoRule` keeps the ORIGINAL rule as every
                 // variant's `cprRuleE` (lib/theory/src/Rule.hs:75-76) — the
                 // half `getProtoRuleEs` dedups back to one copy.
-                rule_e: o.rule_e.clone().or_else(|| Some(Box::new(o.rule.clone()))),
+                rule_e: Some(Box::new(o.rule_e().clone())),
+                // `unfoldRuleVariants` runs on a rule whose variants Maude
+                // computed, which `closeProtoRule` reaches only for a rule
+                // that declared none (lib/theory/src/Rule.hs:82-86).
+                rule_ac: Vec::new(),
             }
         })
         .collect()

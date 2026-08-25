@@ -616,10 +616,25 @@ fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), Elab
                     )));
             }
             p::TheoryItem::Rule(r) | p::TheoryItem::IntrRule(r) => {
-                let elab = rule_to_proto_rule_e(r, &out.signature.maude_sig)?;
-                out.items.push(TheoryItem::Rule(OpenProtoRule::new(
-                    crate::rule::apply_macro_in_rule(&macros, elab),
-                )));
+                // `closeProtoRule` narrows `applyMacroInRule macros ruE` into
+                // the AC half and keeps `ruE` itself as the `cprRuleE` half
+                // (lib/theory/src/Rule.hs:82-86).  A theory that declares no
+                // macro, or a rule whose body calls none, leaves the two
+                // identical.
+                let e = rule_to_proto_rule_e(r, &out.signature.maude_sig)?;
+                let mut opr =
+                    OpenProtoRule::new(crate::rule::apply_macro_in_rule(&macros, e.clone()));
+                if opr.rule != e {
+                    opr.rule_e = Some(Box::new(e));
+                }
+                // `protoRule`'s `variants` block
+                // (Theory/Text/Parser/Rule.hs:126-135, see line 134).
+                opr.rule_ac = r
+                    .variants
+                    .iter()
+                    .map(|v| rule_to_proto_rule_e(v, &out.signature.maude_sig))
+                    .collect::<Result<Vec<_>, _>>()?;
+                out.items.push(TheoryItem::Rule(opr));
             }
             p::TheoryItem::Lemma(l) => {
                 let msig = &out.signature.maude_sig;
