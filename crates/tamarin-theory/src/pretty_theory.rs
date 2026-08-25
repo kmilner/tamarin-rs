@@ -4049,11 +4049,11 @@ pub(crate) fn render_goal_for_oracle(g: &crate::constraint::constraints::Goal) -
 
 /// Build a `pretty_hpj::Doc` for a non-DisjG `Goal`, mirroring HS
 /// `prettyGoal` (Constraints.hs:273-287).  `<->` = `<+>` (beside-with-
-/// space).  Facts go through `prettyLNFact`'s `nestShort'` wrapping (via
-/// `pf::fact_doc`); terms through `prettyLNTerm` (via `pf::term_doc`);
-/// node-ids / node-conc / node-prem are atomic strings (HS `prettyNodeId`
-/// is `text . show`).  The non-empty DisjG case is rendered by the
-/// `disj_goal_to_doc` arm below.
+/// space).  Facts go through `prettyLNFact`'s `nestShort'` wrapping
+/// ([`crate::fact::pretty_lnfact`]); terms through `prettyLNTerm`
+/// ([`tamarin_term::pretty::pretty_nterm`]); node-ids / node-conc /
+/// node-prem are atomic strings (HS `prettyNodeId` is `text . show`).  The
+/// non-empty DisjG case is rendered by the `disj_goal_to_doc` arm below.
 pub(crate) fn solve_goal_to_doc(
     g: &crate::constraint::constraints::Goal,
 ) -> crate::pretty_hpj::Doc {
@@ -4066,7 +4066,7 @@ pub(crate) fn solve_goal_to_doc(
         // `opAction = "@"` (Theory/Text/Pretty.hs:170).
         Goal::Action(i, fa) => {
             let nid = render_node_id(i);
-            pf::fact_doc(&lnfact_to_parser(fa))
+            crate::fact::pretty_lnfact(fa)
                 .beside_sp(crate::pretty_hpj::operator_("@"))
                 .beside_sp(Doc::text(nid))
         }
@@ -4080,7 +4080,7 @@ pub(crate) fn solve_goal_to_doc(
         Goal::Premise((i, PremIdx(v)), fa) => {
             let sub = goal_subscript(*v);
             let nid = render_node_id(i);
-            pf::fact_doc(&lnfact_to_parser(fa))
+            crate::fact::pretty_lnfact(fa)
                 .beside_sp(Doc::text(format!("\u{25B6}{}", sub)))
                 .beside_sp(Doc::text(nid))
         }
@@ -4095,9 +4095,9 @@ pub(crate) fn solve_goal_to_doc(
         Goal::Disj(d) => pf::disj_goal_to_doc(&d.0),
         // `prettyGoal (SubtermG (l,r)) =
         //    prettyLNTerm l <-> operator_ "⊏" <-> prettyLNTerm r`.
-        Goal::Subterm((l, r)) => pf::term_doc(&lnterm_to_parser(l))
+        Goal::Subterm((l, r)) => tamarin_term::pretty::pretty_nterm(l)
             .beside_sp(crate::pretty_hpj::operator_("\u{228F}"))
-            .beside_sp(pf::term_doc(&lnterm_to_parser(r))),
+            .beside_sp(tamarin_term::pretty::pretty_nterm(r)),
     }
 }
 
@@ -4194,15 +4194,82 @@ fn render_generated_from(build: &BuildInfo) -> String {
 #[cfg(test)]
 mod oracle_goal_tests {
     use super::*;
-    use crate::constraint::constraints::Goal;
+    use crate::constraint::constraints::{Disj, Goal};
     use crate::fact::{Fact, FactTag, LNFact, Multiplicity};
-    use crate::rule::PremIdx;
-    use tamarin_term::lterm::{LNTerm, LSort, LVar};
-    use tamarin_term::term::Term;
+    use crate::rule::{ConcIdx, PremIdx};
+    use crate::tools::equation_store::SplitId;
+    use tamarin_term::function_symbols::{
+        diff_sym, exp_sym, nat_one_sym, pair_sym, AcFctSym, AcSym, Constructability, FunSym,
+        NdcState, Privacy,
+    };
+    use tamarin_term::intern::intern_str;
+    use tamarin_term::lterm::{pub_term, LNTerm, LSort, LVar};
+    use tamarin_term::term::{f_app_ac, f_app_no_eq, unsafe_f_app, Term};
     use tamarin_term::vterm::Lit;
 
     fn fresh(name: &str) -> LNTerm {
         Term::Lit(Lit::Var(LVar::new(name, LSort::Fresh, 0)))
+    }
+
+    fn msg(name: &str) -> LNTerm {
+        Term::Lit(Lit::Var(LVar::new(name, LSort::Msg, 0)))
+    }
+
+    /// HS's oracle string is `concat . lines . render $ prettyGoal g`
+    /// (ProofMethod.hs:606).
+    fn collapse(s: &str) -> String {
+        s.lines().collect::<Vec<_>>().concat()
+    }
+
+    /// The term shapes HS `prettyTerm` gives an arm of its own
+    /// (Term/Term.hs:304-317): a builtin AC operator, a `pair` chain, `exp`,
+    /// `diff`, a user-`[AC]` symbol nullary and binary, and `%1`.
+    fn shape_terms() -> Vec<(&'static str, LNTerm)> {
+        let user_ac = AcFctSym::new(
+            b"add".to_vec(),
+            Privacy::Public,
+            Constructability::Constructor,
+            NdcState::NotNdc,
+        );
+        vec![
+            ("mult", f_app_ac(AcSym::Mult, vec![fresh("a"), fresh("b")])),
+            ("xor", f_app_ac(AcSym::Xor, vec![fresh("a"), fresh("b")])),
+            (
+                "pair",
+                f_app_no_eq(
+                    pair_sym(),
+                    vec![msg("x"), f_app_no_eq(pair_sym(), vec![msg("y"), msg("z")])],
+                ),
+            ),
+            (
+                "exp",
+                f_app_no_eq(exp_sym(), vec![pub_term("g"), fresh("a")]),
+            ),
+            ("diff", f_app_no_eq(diff_sym(), vec![msg("x"), msg("y")])),
+            (
+                "nullary_user_ac",
+                unsafe_f_app(FunSym::Ac(AcSym::AcFct(user_ac)), vec![]),
+            ),
+            (
+                "binary_user_ac",
+                f_app_ac(AcSym::AcFct(user_ac), vec![msg("x"), msg("y")]),
+            ),
+            ("nat_one", f_app_no_eq(nat_one_sym(), vec![])),
+        ]
+    }
+
+    fn ev_fact(t: LNTerm) -> LNFact {
+        Fact::new(
+            FactTag::Proto(Multiplicity::Linear, intern_str("Ev"), 1),
+            vec![t],
+        )
+    }
+
+    fn st_fact(t: LNTerm) -> LNFact {
+        Fact::new(
+            FactTag::Proto(Multiplicity::Persistent, intern_str("St"), 1),
+            vec![t],
+        )
     }
 
     /// The oracle/tactic ranking string is HS's `concat . lines . render`,
@@ -4307,6 +4374,118 @@ mod oracle_goal_tests {
             collapsed, " (#a < #b)  \u{2225} (#b < #a)",
             "oracle disjunction goal must keep HS's leading `nest 1` space; \
              losing it is the render_at/lay2 regression",
+        );
+    }
+
+    /// The `Action`, `Premise` and `Subterm` arms at the oracle width, once
+    /// per term shape.  These strings are the external ranking program's
+    /// stdin, so one byte of drift here reorders goals and changes which
+    /// proof the solver finds — not just what it prints.
+    #[test]
+    fn the_term_goal_arms_render_each_shape_at_the_oracle_width() {
+        let expected: Vec<(&str, &str, &str, &str)> = vec![
+            (
+                "mult",
+                "Ev( (~a*~b) ) @ #i",
+                "!St( (~a*~b) ) \u{25B6}\u{2082} #i",
+                "(~a*~b) \u{228F} w",
+            ),
+            (
+                "xor",
+                "Ev( (~a\u{2295}~b) ) @ #i",
+                "!St( (~a\u{2295}~b) ) \u{25B6}\u{2082} #i",
+                "(~a\u{2295}~b) \u{228F} w",
+            ),
+            (
+                "pair",
+                "Ev( <x, y, z> ) @ #i",
+                "!St( <x, y, z> ) \u{25B6}\u{2082} #i",
+                "<x, y, z> \u{228F} w",
+            ),
+            (
+                "exp",
+                "Ev( 'g'^~a ) @ #i",
+                "!St( 'g'^~a ) \u{25B6}\u{2082} #i",
+                "'g'^~a \u{228F} w",
+            ),
+            (
+                "diff",
+                "Ev( diff(x, y) ) @ #i",
+                "!St( diff(x, y) ) \u{25B6}\u{2082} #i",
+                "diff(x, y) \u{228F} w",
+            ),
+            (
+                "nullary_user_ac",
+                "Ev( add ) @ #i",
+                "!St( add ) \u{25B6}\u{2082} #i",
+                "add \u{228F} w",
+            ),
+            (
+                "binary_user_ac",
+                "Ev( (x add y) ) @ #i",
+                "!St( (x add y) ) \u{25B6}\u{2082} #i",
+                "(x add y) \u{228F} w",
+            ),
+            (
+                "nat_one",
+                "Ev( %1 ) @ #i",
+                "!St( %1 ) \u{25B6}\u{2082} #i",
+                "%1 \u{228F} w",
+            ),
+        ];
+        let node = LVar::new("i", LSort::Node, 0);
+        let shapes = shape_terms();
+        assert_eq!(shapes.len(), expected.len());
+        for ((label, t), (elabel, action, premise, subterm)) in shapes.into_iter().zip(expected) {
+            assert_eq!(label, elabel);
+            let g = Goal::Action(node, ev_fact(t.clone()));
+            assert_eq!(collapse(&render_goal_for_oracle(&g)), action, "{label}");
+            let g = Goal::Premise((node, PremIdx(2)), st_fact(t.clone()));
+            assert_eq!(collapse(&render_goal_for_oracle(&g)), premise, "{label}");
+            let g = Goal::Subterm((t, msg("w")));
+            assert_eq!(collapse(&render_goal_for_oracle(&g)), subterm, "{label}");
+        }
+    }
+
+    /// The three arms with no term in them: `prettyNodeConc`/`prettyNodePrem`
+    /// (Constraints.hs:255-261), `splitEqs` and the empty disjunction
+    /// (Constraints.hs:281,285-286).
+    #[test]
+    fn the_termless_goal_arms_render_at_the_oracle_width() {
+        let chain = Goal::Chain(
+            (LVar::new("i", LSort::Node, 0), ConcIdx(1)),
+            (LVar::new("j", LSort::Node, 3), PremIdx(0)),
+        );
+        assert_eq!(
+            collapse(&render_goal_for_oracle(&chain)),
+            "(#i, 1) ~~> (#j.3, 0)"
+        );
+        assert_eq!(
+            collapse(&render_goal_for_oracle(&Goal::Split(SplitId(7)))),
+            "splitEqs(7)"
+        );
+        assert_eq!(
+            collapse(&render_goal_for_oracle(&Goal::Disj(Disj::new(vec![])))),
+            "Disj (\u{22A5})"
+        );
+    }
+
+    /// A fact holding all eight shapes runs past the oracle ribbon, so
+    /// `prettyFact`'s `nestShort'` (Theory/Model/Fact.hs:572) breaks the
+    /// argument list and indents the continuation by the lead's width plus
+    /// one.  `concat . lines` joins the two lines, leaving that indent inside
+    /// the string the oracle reads — six spaces after the comma.
+    #[test]
+    fn a_wide_action_goal_keeps_the_nest_short_indent_in_the_oracle_string() {
+        let wide: LNFact = Fact::new(
+            FactTag::Proto(Multiplicity::Linear, intern_str("Wide"), 8),
+            shape_terms().into_iter().map(|(_, t)| t).collect(),
+        );
+        let g = Goal::Action(LVar::new("i", LSort::Node, 0), wide);
+        assert_eq!(
+            collapse(&render_goal_for_oracle(&g)),
+            "Wide( (~a*~b), (~a\u{2295}~b), <x, y, z>, 'g'^~a, diff(x, y), add,\
+             \u{20}     (x add y), %1) @ #i"
         );
     }
 }

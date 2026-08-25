@@ -429,8 +429,7 @@ fn pretty_source_kind(sk: Option<SourceKind>) -> &'static str {
 /// `Doc` built with `nestShort'`, so it emits the inner-paren spaces
 /// (`!KU( ~ltk )`) and wraps at the display width.  Every rendering that
 /// reaches user-visible output goes through the `Doc` path instead
-/// (`pretty_formula::fact_doc` on the parser-AST projection, e.g.
-/// `graph::color::fact_doc_of` for DOT and `solve_goal_to_doc` for goals).
+/// (`graph::color::fact_doc_of` for DOT, `fact::pretty_lnfact` for goals).
 /// The flat form here is for the env-gated debug dumps in
 /// `constraint::solver::context`, where one fact per line is the point.
 pub fn pretty_fact(fa: &LNFact) -> String {

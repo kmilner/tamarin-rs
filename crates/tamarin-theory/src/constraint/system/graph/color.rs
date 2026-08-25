@@ -28,10 +28,9 @@ use crate::rule::{IntrRuleACInfo, ProtoRuleName, RuleACInst, RuleInfo};
 /// (`prettyFact`'s `ppFact`, Theory/Model/Fact.hs:567-574, see line 572), which —
 /// unlike a bare `name(a, b)` — emits the
 /// HughesPJ INNER-PAREN SPACES `!KU( ~ltk )` when the fact fits on one line.
-/// We therefore reuse the *same* faithful `Doc` path the proof pretty-
-/// printer uses for goals (`solve_goal_to_doc` → `pretty_formula::fact_doc`
-/// on the parser-AST projection), NOT `pretty_system::pretty_fact` (which
-/// omits those spaces).
+/// We therefore reuse the faithful `Doc` path (`pretty_formula::fact_doc` on
+/// the parser-AST projection), NOT `pretty_system::pretty_fact` (which omits
+/// those spaces).
 pub(crate) fn fact_doc_of(fa: &LNFact) -> Doc {
     crate::pretty_formula::fact_doc(&crate::pretty_theory::lnfact_to_parser(fa))
 }
