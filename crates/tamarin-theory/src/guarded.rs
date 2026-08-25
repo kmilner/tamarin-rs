@@ -28,6 +28,7 @@ use tamarin_term::lterm::{sort_prefix, HasFrees, LNTerm, LSort, LVar};
 use tamarin_term::term::map_lits;
 use tamarin_term::vterm::Lit;
 use tamarin_utils::cow::{cow_map_arc, cow_map_vec, cow_pair};
+use tamarin_utils::fresh::MonadFresh;
 
 pub use crate::guarded_types::{
     atom_to_gatom_free, close_subst, fact_to_gfact_free, ga, gatom_to_atom, gfact_to_fact,
@@ -1423,6 +1424,62 @@ pub fn subst_bound_guarded(g: &Guarded, s: &[(u32, p::VarSpec)]) -> Guarded {
     map_guarded_atoms(g, &mut |d, a| subst_bound_atom_at_depth(a, s, d))
 }
 
+/// Mirror HS `openGuarded :: (Ord c, MonadFresh m) => LGuarded c
+/// -> m (Maybe (Quantifier, [LVar], [Atom (VTerm c LVar)], LGuarded c))`
+/// (Guarded.hs:364-373).
+///
+/// `Some((qua, xs, ats, gf))` for a `GGuarded`, `None` for every other
+/// shape.  One variable is drawn per binder through `fresh_ident` (HS
+/// `freshLVar n s`, LTerm.hs:301-302), and both the guards and the body get
+/// this binder's DeBruijn indices replaced by the drawn variables
+/// (`substBoundAtom` / `substBound`, Guarded.hs:289-300).  Each guard is then
+/// read over plain variables (HS `bvarToLVar`, Guarded.hs:322-327), so it
+/// carries no `Bound` leaf; the body keeps the indices of the binders inside
+/// it, which the next `open_guarded` draws.
+///
+/// Both substitutions and `bvarToLVar` are `fmap (fmapTerm (fmap …))`
+/// (Guarded.hs:290,308,324), which rebuilds every application through `fApp`
+/// and therefore sorts the argument list of an AC symbol and of the
+/// commutative `em` (Term/Term/Raw.hs:119-134).  The projected guard runs
+/// [`crate::elaborate::canonicalize_ac_in_atom`] for that — the recipe
+/// [`crate::guarded_types::blnatom_to_parser`] uses to make the two spellings
+/// meet.
+pub fn open_guarded(
+    g: &Guarded,
+    fresh: &mut dyn MonadFresh,
+) -> Option<(Quant, Vec<p::VarSpec>, Vec<p::Atom>, Guarded)> {
+    let Guarded::GGuarded {
+        qua,
+        vars,
+        guards,
+        body,
+    } = g
+    else {
+        return None;
+    };
+    // HS `xs <- mapM (\(n,s) -> freshLVar n s) vs`.
+    let xs: Vec<p::VarSpec> = vars
+        .iter()
+        .map(|b| p::VarSpec {
+            name: b.name.clone(),
+            idx: fresh.fresh_ident(&b.name),
+            sort: b.sort,
+            typ: None,
+        })
+        .collect();
+    // HS `subst xs = zip [0..] (reverse xs)`.
+    let s = open_subst(&xs);
+    let ats: Vec<p::Atom> = guards
+        .iter()
+        .map(|a| {
+            crate::elaborate::canonicalize_ac_in_atom(&gatom_to_atom(&subst_bound_atom_at_depth(
+                a, &s, 0,
+            )))
+        })
+        .collect();
+    Some((*qua, xs, ats, subst_bound_guarded(body, &s)))
+}
+
 /// Mirror HS `closeGuarded :: Quantifier -> [LVar] -> [Atom] -> LGuarded -> LGuarded`.
 ///
 /// Takes named LVars `xs`, parser-AST atoms `atoms`, and an already-built
@@ -1581,9 +1638,8 @@ fn unguarded_error(positions: &[usize], freshened: &[p::VarSpec]) -> GuardError 
 /// name alone would not put it — the argument order of a `++` chain under two
 /// sibling prefixes that bind one name follows the second prefix's `b3.1`.
 /// That order reaches the solver through the derived `PartialEq`/`Hash` on
-/// [`Guarded`], never the printed formula, which re-sorts AC arguments under
-/// the names it opens the binders with (`sort_ac_args_for_display`,
-/// `pretty_formula.rs`).
+/// [`Guarded`], never the printed formula, which draws its own binder names
+/// through [`open_guarded`] and re-sorts the AC arguments under them.
 pub fn formula_to_guarded(f: &crate::formula::LNFormula) -> Result<Guarded, GuardError> {
     let mut fresh = crate::formula::avoid_precise_lnformula(f);
     convert(false, f, &mut fresh)

@@ -1374,6 +1374,126 @@ fn treats_iff_as_two_implications() {
 }
 
 // =============================================================================
+// openGuarded (Guarded.hs:364-373)
+// =============================================================================
+
+/// The spelling of a drawn binder: the name, plus a `.<idx>` suffix past
+/// index 0 (HS `show LVar`, LTerm.hs:550-557).
+fn spell(v: &p::VarSpec) -> String {
+    if v.idx == 0 {
+        v.name.clone()
+    } else {
+        format!("{}.{}", v.name, v.idx)
+    }
+}
+
+/// `openGuarded` draws one variable per binder through `freshLVar`
+/// (Guarded.hs:367, LTerm.hs:301-302), so three nested prefixes that all bind
+/// the name `x` take the indices 0, 1 and 2 from one supply.  Those are the
+/// names the printer shows, because `prettyGuarded`'s `GGuarded` arm opens
+/// the binder from the very supply its `scopeFreshness` holds
+/// (Guarded.hs:847-849).
+#[test]
+fn open_guarded_draws_the_binder_names_the_printer_shows() {
+    use tamarin_utils::fresh::PreciseFreshState;
+    let gf = g("Ex x #i. A(x) @ #i & (Ex x #j. A(x) @ #j & (Ex x #k. A(x) @ #k))")
+        .expect("guarded conversion");
+
+    let mut fresh = PreciseFreshState::nothing_used();
+    let mut drawn: Vec<String> = Vec::new();
+    let mut cur = gf.clone();
+    while let Some((_qua, vs, _ats, body)) = open_guarded(&cur, &mut fresh) {
+        drawn.extend(
+            vs.iter()
+                .map(|v| format!("{}{}", sort_prefix(v.sort), spell(v))),
+        );
+        cur = body;
+    }
+    assert_eq!(
+        drawn,
+        vec!["x", "#i", "x.1", "#j", "x.2", "#k"],
+        "each prefix draws the next index for the name it repeats"
+    );
+
+    // The printed formula names the same binders.
+    let shown = crate::pretty_formula::pretty_guarded(&gf);
+    for prefix in ["\u{2203} x #i.", "\u{2203} x.1 #j.", "\u{2203} x.2 #k."] {
+        assert!(shown.contains(prefix), "missing {prefix:?} in {shown:?}");
+    }
+}
+
+/// `openGuarded`'s `substBoundAtom` is `fmap (fmapTerm (fmap subst))`
+/// (Guarded.hs:290), which rebuilds the application through `fApp`, and
+/// `fAppC` sorts a commutative symbol's arguments
+/// (`fAppC nacsym as = FAPP (C nacsym) (sort as)`, Term/Term/Raw.hs:133-134).
+/// So a stored `em` whose arguments the drawn variable puts out of order comes
+/// back sorted.
+#[test]
+fn open_guarded_sorts_a_commutative_argument_pair() {
+    use std::sync::Arc;
+    use tamarin_utils::fresh::PreciseFreshState;
+    let a = p::VarSpec {
+        name: "a".into(),
+        idx: 0,
+        sort: LSort::Msg,
+        typ: None,
+    };
+    // `em(x, a)` with `x` the binder: `Ord LVar` is (idx, sort, name)
+    // (LTerm.hs:546-548), so opening `x` at index 0 puts `a` first.
+    let em = GTerm::App(
+        Arc::from("em"),
+        Arc::from(vec![
+            GTerm::Var(BVar::Bound(0)),
+            GTerm::Var(BVar::Free(a.clone())),
+        ]),
+    );
+    let gf = Guarded::GGuarded {
+        qua: Quant::Ex,
+        vars: vec![GBinding {
+            name: "x".into(),
+            sort: LSort::Msg,
+        }]
+        .into(),
+        guards: vec![GAtom::Eq(em, GTerm::PubLit("z".into()))].into(),
+        body: Arc::new(gtrue()),
+    };
+
+    let mut fresh = PreciseFreshState::nothing_used();
+    let (qua, vs, ats, body) = open_guarded(&gf, &mut fresh).expect("a GGuarded opens");
+    assert_eq!(qua, Quant::Ex);
+    assert_eq!(
+        vs,
+        vec![p::VarSpec {
+            name: "x".into(),
+            idx: 0,
+            sort: LSort::Msg,
+            typ: None,
+        }]
+    );
+    assert_eq!(
+        ats,
+        vec![p::Atom::Eq(
+            p::Term::App(
+                "em".into(),
+                vec![p::Term::Var(a.clone()), p::Term::Var(vs[0].clone())],
+            ),
+            p::Term::PubLit("z".into()),
+        )]
+    );
+    assert_eq!(body, gtrue());
+}
+
+/// Anything but a `GGuarded` opens to `None` (HS `openGuarded _ = return
+/// Nothing`, Guarded.hs:373).
+#[test]
+fn open_guarded_declines_a_non_guarded_formula() {
+    use tamarin_utils::fresh::PreciseFreshState;
+    let mut fresh = PreciseFreshState::nothing_used();
+    assert!(open_guarded(&gtrue(), &mut fresh).is_none());
+    assert!(open_guarded(&gfalse(), &mut fresh).is_none());
+}
+
+// =============================================================================
 // HasFrees for Guarded (Guarded.hs:272-277)
 // =============================================================================
 

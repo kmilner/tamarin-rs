@@ -1,0 +1,34 @@
+theory S5GuardedEmOpen
+
+begin
+
+// Function signature and definition of the equational theory E
+
+builtins: diffie-hellman, bilinear-pairing
+functions: fst/1, pair/2, snd/1
+equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
+
+rule (modulo E) A:
+   [ In( x ), In( y ) ] --[ C( x ), B( y ) ]-> [ ]
+
+  /* has exactly the trivial AC variant */
+
+lemma sibling_binders:
+  exists-trace "(∃ x #i. C( x ) @ #i) ∧ (∃ x y #j. B( em(x, y) ) @ #j)"
+/*
+guarded formula characterizing all satisfying traces:
+"(∃ x #i. (C( x ) @ #i)) ∧ (∃ x y #j. (B( em(x, y) ) @ #j))"
+*/
+by sorry
+
+lemma sibling_binders_written_swapped:
+  exists-trace "(∃ x #i. C( x ) @ #i) ∧ (∃ x y #j. B( em(x, y) ) @ #j)"
+/*
+guarded formula characterizing all satisfying traces:
+"(∃ x #i. (C( x ) @ #i)) ∧ (∃ x y #j. (B( em(x, y) ) @ #j))"
+*/
+by sorry
+
+
+
+end

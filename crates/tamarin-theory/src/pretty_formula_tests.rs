@@ -284,8 +284,8 @@ fn ac_union_chain_wraps_in_rule_term() {
 
 #[test]
 fn ac_union_chain_wraps_in_guarded_formula() {
-    // gterm_to_doc (guarded path) must wrap the SAME AC chain identically,
-    // since HS uses ONE prettyTerm for both rule terms and formula terms.
+    // The guarded path must wrap the SAME AC chain identically, since HS
+    // uses ONE prettyTerm for both rule terms and formula terms.
     // Build `z = <chain>` as a guarded Eq atom and render wrapped.
     let eq = p::Atom::Eq(p::Term::Var(v("z", LSort::Msg)), ac_chain_term());
     let g = Guarded::Atom(crate::guarded::atom_to_gatom_free(&eq));
@@ -404,10 +404,13 @@ fn algapp_renders_function_form_flat_gterm() {
             LSort::Msg,
         )))),
     );
-    assert_eq!(
-        gterm_to_doc(&g, &[]).render_with(FLAT_WIDTH, FLAT_WIDTH),
-        "sdec(body, key)"
-    );
+    // The guarded printer reaches a term through its atom, so read the
+    // `AlgApp` off the left side of an equality.
+    let a = Guarded::Atom(crate::guarded::GAtom::Eq(
+        g,
+        crate::guarded::GTerm::PubLit("z".into()),
+    ));
+    assert_eq!(pretty_guarded(&a), "sdec(body, key) = 'z'");
 }
 
 #[test]
@@ -427,7 +430,11 @@ fn algapp_pair_arg_renders_function_form_doc_gterm() {
             LSort::Msg,
         )))),
     );
-    assert_eq!(gterm_to_doc(&g, &[]).render(), "senc(<a, b>, k)");
+    let a = Guarded::Atom(crate::guarded::GAtom::Eq(
+        g,
+        crate::guarded::GTerm::PubLit("z".into()),
+    ));
+    assert_eq!(guarded_doc(&a).render(), "senc(<a, b>, k) = 'z'");
 }
 
 #[test]
