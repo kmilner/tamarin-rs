@@ -553,6 +553,136 @@ impl<R, P> Theory<R, P, TranslationElement> {
 }
 
 // =============================================================================
+// The render-time view of a rule item
+// =============================================================================
+
+/// HS `OpenProtoRule` (Items/RuleItem.hs:34-37): a rule modulo E together with
+/// the rules modulo AC that differ from it.  [`open_proto_rule`] builds one
+/// per rule item and [`merge_open_proto_rules`] concatenates the AC halves of
+/// consecutive items that share an E rule.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MergedProtoRule {
+    pub rule_e: ProtoRuleE,
+    pub rule_ac: Vec<crate::rule::ProtoRuleAC>,
+}
+
+/// HS `cprRuleAC` (Items/RuleItem.hs:56-59) rebuilt from the split
+/// representation: the `variants (modulo AC)` blocks the source writes, which
+/// `closeProtoRule` turns into one closed rule each (lib/theory/src/Rule.hs:86),
+/// otherwise the single narrowed form — the abstracted body when Maude found
+/// reducible sub-terms, else the rule itself.  The info carries the rule's own
+/// name and attributes, the variant disjunction and the loop breakers, and an
+/// empty `variant_substs` stands for HS's `Disj [emptySubstVFresh]`.
+pub fn closed_rules_ac(r: &OpenProtoRule) -> Vec<crate::rule::ProtoRuleAC> {
+    let variants = if r.variant_substs.is_empty() {
+        vec![tamarin_term::subst_vfresh::LNSubstVFresh::empty()]
+    } else {
+        r.variant_substs.clone()
+    };
+    let info = |e: &ProtoRuleE| crate::rule::ProtoRuleACInfo {
+        name: e.info.name,
+        attributes: e.info.attributes.clone(),
+        variants: variants.clone(),
+        loop_breakers: r.loop_breakers.clone(),
+    };
+    if r.rule_ac.is_empty() {
+        let ac = r.abstracted_rule.as_ref().unwrap_or(&r.rule);
+        vec![crate::rule::Rule {
+            info: info(&r.rule),
+            premises: ac.premises.clone(),
+            conclusions: ac.conclusions.clone(),
+            actions: ac.actions.clone(),
+            new_vars: ac.new_vars.clone(),
+        }]
+    } else {
+        r.rule_ac
+            .iter()
+            .map(|ac| crate::rule::Rule {
+                info: info(ac),
+                premises: ac.premises.clone(),
+                conclusions: ac.conclusions.clone(),
+                actions: ac.actions.clone(),
+                new_vars: ac.new_vars.clone(),
+            })
+            .collect()
+    }
+}
+
+/// HS `openProtoRule` (lib/theory/src/Rule.hs:51-59): the E rule with the AC
+/// rules that `equal_up_to_terms` cannot identify with it; an AC rule that
+/// differs from the E rule only in its terms is dropped.
+pub fn open_proto_rule(r: &OpenProtoRule) -> MergedProtoRule {
+    let rule_e = r.rule_e().clone();
+    let rule_ac = closed_rules_ac(r)
+        .into_iter()
+        .filter(|ac| !crate::rule::equal_up_to_terms(ac, &rule_e))
+        .collect();
+    MergedProtoRule { rule_e, rule_ac }
+}
+
+/// HS `mergeOpenProtoRules . map (mapTheoryItem openProtoRule id)`
+/// (ClosedTheory.hs:402, OpenTheory.hs:592-603): every rule item opened, then
+/// runs of consecutive rule items sharing an E rule collapsed into one item
+/// whose AC list is their concatenation.  Every other item passes through at
+/// its position.
+pub fn merge_open_proto_rules<P: Clone, S: Clone>(
+    items: &[TheoryItem<OpenProtoRule, P, S>],
+) -> Vec<TheoryItem<MergedProtoRule, P, S>> {
+    let mut out: Vec<TheoryItem<MergedProtoRule, P, S>> = Vec::new();
+    for item in items {
+        let opened = match item {
+            TheoryItem::Rule(r) => open_proto_rule(r),
+            TheoryItem::Lemma(x) => {
+                out.push(TheoryItem::Lemma(x.clone()));
+                continue;
+            }
+            TheoryItem::Restriction(x) => {
+                out.push(TheoryItem::Restriction(x.clone()));
+                continue;
+            }
+            TheoryItem::Text(x) => {
+                out.push(TheoryItem::Text(x.clone()));
+                continue;
+            }
+            TheoryItem::ConfigBlock(x) => {
+                out.push(TheoryItem::ConfigBlock(x.clone()));
+                continue;
+            }
+            TheoryItem::Predicate(x) => {
+                out.push(TheoryItem::Predicate(x.clone()));
+                continue;
+            }
+            TheoryItem::Macros(x) => {
+                out.push(TheoryItem::Macros(x.clone()));
+                continue;
+            }
+            TheoryItem::Translation(x) => {
+                out.push(TheoryItem::Translation(x.clone()));
+                continue;
+            }
+        };
+        // `groupBy comp` compares each element against the group's FIRST, and
+        // the fold leaves that element's E rule in place, so the accumulated
+        // item is what the next one is compared against.
+        match out.last_mut() {
+            Some(TheoryItem::Rule(prev)) if prev.rule_e == opened.rule_e => {
+                prev.rule_ac.extend(opened.rule_ac)
+            }
+            _ => out.push(TheoryItem::Rule(opened)),
+        }
+    }
+    out
+}
+
+/// HS `containsManualRuleVariants` (OpenTheory.hs:584-589): whether any rule
+/// item carries an AC rule of its own.
+pub fn contains_manual_rule_variants<P, S>(items: &[TheoryItem<MergedProtoRule, P, S>]) -> bool {
+    items
+        .iter()
+        .any(|i| matches!(i, TheoryItem::Rule(r) if !r.rule_ac.is_empty()))
+}
+
+// =============================================================================
 // Diff theory
 // =============================================================================
 

@@ -2239,7 +2239,7 @@ fn rule_open_ac_nonempty(
 /// `addProtoRule`'s `maybe True (ruE ==)`, OpenTheory.hs:727-733), so its
 /// copies are equal.  Any other duplicate name is the parser's
 /// `duplicate rule: <name>` error.
-fn contains_manual_rule_variants(
+pub fn contains_manual_rule_variants(
     parsed: &p::Theory,
     elaborated: &Theory,
     auto_sources: bool,
@@ -2439,7 +2439,7 @@ pub(crate) fn rule_attributes_doc(attrs: &[p::RuleAttr]) -> crate::pretty_hpj::D
 // arity-1 no-eq function-name set; membership-only (.contains), never iterated;
 // std kept (byte-inert) — iteration order never reaches output.
 #[allow(clippy::disallowed_types)]
-fn render_rule_e_block(
+pub fn render_rule_e_block(
     parsed_rule: &p::Rule,
     arity1: &std::collections::HashSet<String>,
 ) -> (String, Vec<p::Fact>, Vec<p::Fact>, Vec<p::Fact>) {
@@ -2479,7 +2479,7 @@ fn render_rule_e_block(
 // arity-1 no-eq function-name set; membership-only (.contains), never iterated;
 // std kept (byte-inert) — iteration order never reaches output.
 #[allow(clippy::disallowed_types)]
-pub(crate) fn display_fact_rows(
+pub fn display_fact_rows(
     parsed_rule: &p::Rule,
     arity1: &std::collections::HashSet<String>,
 ) -> (Vec<p::Fact>, Vec<p::Fact>, Vec<p::Fact>) {
@@ -2693,7 +2693,7 @@ fn render_loop_breakers_line(breakers: &[crate::rule::PremIdx], indent: usize) -
 /// which still has macro calls) matches the elaborated body.  If they
 /// differ, even a rule with no AC variants must show the AC comment block
 /// containing the expanded form.
-pub(crate) fn is_trivial_proto_variant_ac(
+pub fn is_trivial_proto_variant_ac(
     display_premises: &[p::Fact],
     display_actions: &[p::Fact],
     display_conclusions: &[p::Fact],
@@ -2954,28 +2954,12 @@ fn variant_subst_doc(
     subst: &tamarin_term::subst_vfresh::LNSubstVFresh,
     n_width: usize,
 ) -> crate::pretty_hpj::Doc {
-    use crate::pretty_hpj::{self as hpj, Doc};
-    let bindings = subst.to_list();
-    // HS `prettyEq (a,b) = prettyNTerm (Var a) $$ nest 6 (text "="
-    // <-> prettyNTerm b)` (SubstVFresh.hs:228-229).  `<->` is `<+>`
-    // (beside-with-space).
-    let eq_docs: Vec<Doc> = bindings
-        .iter()
-        .map(|(v, t)| {
-            let term_doc = pretty_nterm(t);
-            // HS `prettyEq (a,b) = prettyNTerm (Var a) $$ nest 6 (text "=" <->
-            // prettyNTerm b)` (SubstVFresh.hs:228-229) — the substitution `=` is a
-            // PLAIN `text`, NOT `opEqual`, so it carries no `hl_operator` span.
-            let rhs = Doc::text("=").beside_sp(term_doc).nest(6);
-            Doc::text(render_lvar(v)).above(rhs)
-        })
-        .collect();
-    let conj = hpj::vcat(eq_docs);
+    use crate::pretty_hpj::Doc;
     // HS `pp (i, d) = text (flushRight nWidth (show i)) <> d`, with
     // `d = text ". " <> conj` (from `numbered' = numbered (text "")
     // . map (text ". " <>)`).
     let label = format!("{:>width$}", n, width = n_width);
-    Doc::text(label).beside(Doc::text(". ").beside(conj))
+    Doc::text(label).beside(Doc::text(". ").beside(crate::rule::pretty_subst_vfresh_conj(subst)))
 }
 
 /// Render the full `prettyDisjLNSubstsVFresh` (numbered') block.  HS

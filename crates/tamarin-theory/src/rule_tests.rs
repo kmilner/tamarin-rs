@@ -600,3 +600,173 @@ fn elaborated_rule_carries_its_restrict_formulas() {
     let rule = elab.rules().find(|r| r.name() == "A").expect("rule A");
     assert_eq!(rule.rule.info.restrictions, vec![expected]);
 }
+
+/// HS `prettyRuleAttributes` returns `emptyDoc` for a record equal to `mempty`
+/// (Theory/Model/Rule.hs:1330-1334), which is what an unattributed rule
+/// carries.
+#[test]
+fn pretty_rule_attribute_omits_an_empty_record() {
+    let attr = RuleAttributes::empty();
+    assert_eq!(pretty_rule_attribute(&attr).render(), "");
+    assert_eq!(pretty_rule_attributes(&attr).render(), "");
+}
+
+/// HS `prettyRuleAttribute` renders `catMaybes [color, process,
+/// no_derivcheck, issapicrule, role]` in that order, separated by
+/// `punctuate comma` and wrapped in brackets by `prettyRuleAttributes`
+/// (Theory/Model/Rule.hs:1313-1334).  A record with all five fields set fixes
+/// both the order and the spelling of each one, and overruns the ribbon: the
+/// `fsep` then breaks the list, with the continuation hanging one column in —
+/// where `hcat [text "[", …]` left it.
+#[test]
+fn pretty_rule_attribute_renders_all_five_fields_in_order() {
+    let attr = RuleAttributes {
+        color: Some(tamarin_utils::color::Rgb::new(1.0, 0.0, 0.5)),
+        process: Some(crate::sapic::Process::Null(
+            crate::sapic::ProcessParsedAnnotation::empty(),
+        )),
+        ignore_deriv_checks: true,
+        is_sapic_rule: true,
+        role: Some("Initiator".to_string()),
+    };
+    assert_eq!(
+        pretty_rule_attributes(&attr).render(),
+        "[color=#ff0080, process=\"0\", no_derivcheck, issapicrule,\n role='Initiator']"
+    );
+}
+
+/// Each field on its own: a `Nothing` field and a `False` flag drop out of
+/// `catMaybes` (Theory/Model/Rule.hs:1315-1321), so a record with one field
+/// set renders exactly that field.
+#[test]
+fn pretty_rule_attribute_renders_each_field_alone() {
+    let with = |f: fn(&mut RuleAttributes)| {
+        let mut attr = RuleAttributes::empty();
+        f(&mut attr);
+        pretty_rule_attributes(&attr).render()
+    };
+    assert_eq!(
+        with(|a| a.color = Some(tamarin_utils::color::Rgb::new(0.0, 0.0, 0.0))),
+        "[color=#000000]"
+    );
+    assert_eq!(
+        with(|a| a.process = Some(crate::sapic::Process::Null(
+            crate::sapic::ProcessParsedAnnotation::empty()
+        ))),
+        "[process=\"0\"]"
+    );
+    assert_eq!(with(|a| a.ignore_deriv_checks = true), "[no_derivcheck]");
+    assert_eq!(with(|a| a.is_sapic_rule = true), "[issapicrule]");
+    assert_eq!(with(|a| a.role = Some("R".to_string())), "[role='R']");
+}
+
+/// HS `equalUpToTerms` compares the rule name, the three list lengths and the
+/// fact tags (Theory/Model/Rule.hs:958-968).  Two rules whose facts carry the
+/// same tags but different terms are equal; a differing name, an extra action
+/// or a differing tag separates them.
+#[test]
+fn equal_up_to_terms_ignores_terms() {
+    use crate::fact::{proto_fact, Multiplicity};
+    let ac = |name: &str, acts: Vec<crate::fact::LNFact>| ProtoRuleAC {
+        info: ProtoRuleACInfo {
+            name: ProtoRuleName::Stand(tamarin_term::intern::intern_str(name)),
+            attributes: RuleAttributes::empty(),
+            variants: vec![tamarin_term::subst_vfresh::LNSubstVFresh::empty()],
+            loop_breakers: vec![],
+        },
+        premises: vec![in_fact(msg_var("other", 0))],
+        conclusions: vec![out_fact(msg_var("other", 0))],
+        actions: acts,
+        new_vars: vec![],
+    };
+    let e: ProtoRuleE = Rule::new(
+        ProtoRuleEInfo::standard("Send"),
+        vec![in_fact(msg_var("m", 0))],
+        vec![out_fact(msg_var("m", 0))],
+        vec![],
+    );
+    assert!(equal_up_to_terms(&ac("Send", vec![]), &e));
+    assert!(!equal_up_to_terms(&ac("Other", vec![]), &e));
+    assert!(!equal_up_to_terms(
+        &ac(
+            "Send",
+            vec![proto_fact(Multiplicity::Linear, "Act", vec![])]
+        ),
+        &e
+    ));
+    let mut wrong_tag = ac("Send", vec![]);
+    wrong_tag.premises = vec![fresh_fact(msg_var("m", 0))];
+    assert!(!equal_up_to_terms(&wrong_tag, &e));
+}
+
+/// HS `mergeOpenProtoRules` (OpenTheory.hs:592-603) collapses a run of
+/// consecutive rule items sharing an E rule into one item whose AC list is
+/// their concatenation, in order.  A non-rule item between two such rules
+/// ends the run, and every other item keeps its place.
+#[test]
+fn merge_open_proto_rules_groups_consecutive_equal_e_rules() {
+    use crate::theory::{
+        merge_open_proto_rules, OpenProtoRule, ProofSkeleton, TheoryItem, TranslationElement,
+    };
+    // Two rules whose E half is the same `Send` rule and whose AC halves are
+    // the two Maude narrowings `unfoldRuleVariants` names `Send___VARIANT_<i>`
+    // (lib/theory/src/Rule.hs:63-79).
+    let e: ProtoRuleE = Rule::new(
+        ProtoRuleEInfo::standard("Send"),
+        vec![in_fact(msg_var("m", 0))],
+        vec![out_fact(msg_var("m", 0))],
+        vec![],
+    );
+    let variant = |i: usize| {
+        let mut r = OpenProtoRule::new(Rule::new(
+            ProtoRuleEInfo::standard(format!("Send___VARIANT_{i}")),
+            vec![in_fact(msg_var("m", 0))],
+            vec![out_fact(msg_var("m", 0))],
+            vec![],
+        ));
+        r.rule_e = Some(Box::new(e.clone()));
+        r
+    };
+    let other = OpenProtoRule::new(Rule::new(
+        ProtoRuleEInfo::standard("Recv"),
+        vec![in_fact(msg_var("m", 0))],
+        vec![],
+        vec![],
+    ));
+    let items: Vec<TheoryItem<OpenProtoRule, ProofSkeleton, TranslationElement>> = vec![
+        TheoryItem::Rule(variant(1)),
+        TheoryItem::Rule(variant(2)),
+        TheoryItem::Text(("".to_string(), "between".to_string())),
+        TheoryItem::Rule(variant(3)),
+        TheoryItem::Rule(other),
+    ];
+    let merged = merge_open_proto_rules(&items);
+    let names = |r: &crate::theory::MergedProtoRule| {
+        r.rule_ac
+            .iter()
+            .map(|ac| match ac.info.name {
+                ProtoRuleName::Stand(n) => n.to_string(),
+                ProtoRuleName::Fresh => "Fresh".to_string(),
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(merged.len(), 4);
+    match &merged[0] {
+        TheoryItem::Rule(r) => {
+            assert_eq!(r.rule_e, e);
+            assert_eq!(names(r), vec!["Send___VARIANT_1", "Send___VARIANT_2"]);
+        }
+        other => panic!("expected a rule item, got {other:?}"),
+    }
+    assert!(matches!(merged[1], TheoryItem::Text(_)));
+    match &merged[2] {
+        TheoryItem::Rule(r) => assert_eq!(names(r), vec!["Send___VARIANT_3"]),
+        other => panic!("expected a rule item, got {other:?}"),
+    }
+    // `Recv`'s AC half is its own E half up to terms, so `openProtoRule` drops
+    // it (lib/theory/src/Rule.hs:55-58).
+    match &merged[3] {
+        TheoryItem::Rule(r) => assert!(r.rule_ac.is_empty()),
+        other => panic!("expected a rule item, got {other:?}"),
+    }
+}

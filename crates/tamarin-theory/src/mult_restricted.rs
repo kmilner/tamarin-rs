@@ -51,7 +51,7 @@ use tamarin_term::vterm::Lit;
 
 use crate::fact::LNFact;
 use crate::pretty_hpj::{self as hpj, Doc};
-use crate::rule::{pretty_rule_restr_gen, ProtoRuleE};
+use crate::rule::{pretty_proto_rule_e, ProtoRuleE};
 use crate::theory::Theory;
 
 /// HS `underlineTopic "Multiplication restriction of rules"`
@@ -71,10 +71,9 @@ const WF_RIBBON: usize = 67;
 ///
 /// `elab` supplies the rules (HS `thyProtoRules`, i.e. macro-applied E-rules of
 /// the translated theory) and `sig` the irreducible-symbol classification.
-/// Each entry's attribute block comes from the rule it dumps: HS's
-/// `prettyRuleAttributes` (Theory/Model/Rule.hs:1330-1334) reads
-/// `ruleAttributes ru = L.get (preAttributes . rInfo)`
-/// (Theory/Model/Rule.hs:670-674) off the rule itself.
+/// Each entry's name and attribute block come from the rule it dumps, the way
+/// HS's `prettyNamedRule` reads `prettyRuleName ru <> prettyRuleAttributes ru`
+/// off the rule (Theory/Model/Rule.hs:1397-1398).
 pub fn mult_restricted_report(elab: &Theory, sig: &MaudeSig) -> Vec<WfError> {
     let irreducible = &sig.irreducible_fun_syms;
     let mut out = Vec::new();
@@ -100,21 +99,18 @@ pub fn mult_restricted_report(elab: &Theory, sig: &MaudeSig) -> Vec<WfError> {
         if mults.is_empty() && unbounds.is_empty() {
             continue;
         }
-        let name = opr.name();
-        let attrs = surface_attrs(&ru.info.attributes);
         out.push(WfError::new(
             TOPIC,
-            entry_doc(name, &attrs, ru, &abstracted, &mults, &unbounds)
-                .render_with(WF_LINE_LENGTH, WF_RIBBON),
+            entry_doc(ru, &abstracted, &mults, &unbounds).render_with(WF_LINE_LENGTH, WF_RIBBON),
         ));
     }
     out
 }
 
 /// A rule's own `RuleAttributes` in the `Vec<p::RuleAttr>` shape
-/// [`crate::pretty_theory::rule_attributes_doc`] — the port's single
-/// implementation of HS `prettyRuleAttributes` (Theory/Model/Rule.hs:1330-1334)
-/// — consumes.
+/// [`crate::pretty_theory::rule_attributes_doc`] consumes — the attribute half
+/// of [`crate::elaborate::proto_rule_to_parsed`], the parser-AST projection of
+/// a synthesised rule.
 ///
 /// HS's `prettyRuleAttribute` (Theory/Model/Rule.hs:1314-1327) renders the record's fields
 /// as `catMaybes [color, process, no_derivcheck, issapicrule, role]`;
@@ -122,9 +118,6 @@ pub fn mult_restricted_report(elab: &Theory, sig: &MaudeSig) -> Vec<WfError> {
 /// here is not load-bearing.  An all-default record maps to the empty list,
 /// which `rule_attributes_doc` renders as HS's `ruleAttributes ru == mempty ⇒
 /// emptyDoc` branch.
-///
-/// Also the attribute half of [`crate::elaborate::proto_rule_to_parsed`],
-/// the parser-AST projection of a synthesised rule.
 pub(crate) fn surface_attrs(attr: &crate::rule::RuleAttributes) -> Vec<p::RuleAttr> {
     let mut out = Vec::new();
     if let Some(c) = &attr.color {
@@ -372,24 +365,17 @@ fn replace_abstracted(t: &LNTerm, bindings: &BTreeMap<LNTerm, LVar>) -> LNTerm {
 /// `.nest(2)` at the end is `prettyWfErrorReport`'s per-group `nest 2`
 /// (Wellformedness.hs:118-125), baked in here so the HughesPJ width decisions
 /// are made at the body's true column.
-fn entry_doc(
-    name: &str,
-    attrs: &[p::RuleAttr],
-    ru: &ProtoRuleE,
-    abstracted: &ProtoRuleE,
-    mults: &[LNTerm],
-    unbounds: &[LVar],
-) -> Doc {
+fn entry_doc(ru: &ProtoRuleE, abstracted: &ProtoRuleE, mults: &[LNTerm], unbounds: &[LVar]) -> Doc {
     // `above_g` is HughesPJ's `$+$` — the NON-overlapping vertical join HS's
     // `$-$` maps to (Text/PrettyPrint/Class.hs:180).  The overlapping `$$` would splice
     // `text "" $$ nest 2 x` onto one line and swallow the blank separators.
     let mut d = Doc::text("The following rule is not multiplication restricted:")
-        .above_g(rule_doc(name, attrs, ru).nest(2))
+        .above_g(pretty_proto_rule_e(ru).nest(2))
         .above_g(Doc::text_hs(""))
         .above_g(Doc::text(
             "After replacing reducible function symbols in lhs with variables:",
         ))
-        .above_g(rule_doc(name, attrs, abstracted).nest(2))
+        .above_g(pretty_proto_rule_e(abstracted).nest(2))
         .above_g(Doc::text_hs(""));
     if !mults.is_empty() {
         // HS `prettyLNTermList = fsep . punctuate comma . map prettyLNTerm`
@@ -420,17 +406,4 @@ fn entry_doc(
         );
     }
     d.nest(2)
-}
-
-/// HS `prettyProtoRuleE = prettyNamedRule (kwRuleModulo "E") (const emptyDoc)`
-/// (Theory/Model/Rule.hs:1434-1435), i.e. `prefix <-> name <> attrs <> colon
-/// $-$ nest 2 (prettyRule prems acts concs)` (Theory/Model/Rule.hs:1393-1401).  The trailing
-/// `$-$ nest 2 (ppInfo …)` contributes nothing for an E-rule.
-fn rule_doc(name: &str, attrs: &[p::RuleAttr], r: &ProtoRuleE) -> Doc {
-    let header = hpj::kw_rule_modulo("E")
-        .beside_sp(Doc::text(name))
-        .beside(crate::pretty_theory::rule_attributes_doc(attrs))
-        .beside(Doc::text(":"));
-    let body = pretty_rule_restr_gen(&r.premises, &r.actions, &r.conclusions);
-    header.above_g(body.nest(2))
 }

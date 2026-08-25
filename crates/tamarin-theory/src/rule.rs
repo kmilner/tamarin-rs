@@ -21,9 +21,11 @@ use tamarin_term::lterm::{HasFrees, LNTerm, LVar, Name};
 use tamarin_term::macro_expand::LNMacro;
 use tamarin_utils::color::Rgb;
 
-use crate::fact::{apply_macro_in_fact, pretty_lnfact, LNFact};
+use crate::fact::{apply_macro_in_fact, pretty_lnfact, FactTag, LNFact, Multiplicity};
 use crate::formula::SyntacticLNFormula;
-use crate::pretty_hpj::{fsep, operator_, punctuate, sep, Doc};
+use crate::pretty_hpj::{
+    fsep, hcat, kw_rule_modulo, line_comment_, numbered_prime, operator_, punctuate, sep, vcat, Doc,
+};
 use crate::sapic::PlainProcess;
 
 // =============================================================================
@@ -730,6 +732,37 @@ const RESERVED_RULE_NAMES: [&str; 7] = [
 ];
 
 // =============================================================================
+// Rule comparison
+// =============================================================================
+
+/// HS `equalUpToTerms` (Theory/Model/Rule.hs:958-968): the two rules share a
+/// name, have the same number of premises, conclusions and actions, and the
+/// facts at each position share a tag.  Terms, fact annotations and the rule
+/// infos beyond the name are not compared.
+pub fn equal_up_to_terms(ru_ac: &ProtoRuleAC, ru_e: &ProtoRuleE) -> bool {
+    let same_tags = |xs: &[LNFact], ys: &[LNFact]| {
+        xs.len() == ys.len() && xs.iter().zip(ys).all(|(f1, f2)| f1.tag == f2.tag)
+    };
+    ru_ac.info.name == ru_e.info.name
+        && same_tags(&ru_ac.premises, &ru_e.premises)
+        && same_tags(&ru_ac.conclusions, &ru_e.conclusions)
+        && same_tags(&ru_ac.actions, &ru_e.actions)
+}
+
+/// HS `isTrivialProtoVariantAC` (Theory/Model/Rule.hs:789-793): the variant
+/// disjunction is the identity substitution alone and the two rule bodies —
+/// premises, conclusions, actions and new variables — are equal, facts
+/// compared whole (tag, annotations and terms).
+pub fn is_trivial_proto_variant_ac(ru_ac: &ProtoRuleAC, ru_e: &ProtoRuleE) -> bool {
+    ru_ac.info.variants.len() == 1
+        && ru_ac.info.variants[0].is_empty()
+        && ru_ac.premises == ru_e.premises
+        && ru_ac.conclusions == ru_e.conclusions
+        && ru_ac.actions == ru_e.actions
+        && ru_ac.new_vars == ru_e.new_vars
+}
+
+// =============================================================================
 // Maude-backed unification helpers — port of `unifiableRuleACInsts`,
 // `unifyLNFactEqs`, `unifiableLNFacts`.
 // =============================================================================
@@ -882,6 +915,214 @@ pub fn pretty_rule_restr_gen(prems: &[LNFact], acts: &[LNFact], concls: &[LNFact
         arrow,
         pp_facts_list(concls).nest(1),
     ])
+}
+
+/// HS `prettyProtoRuleName` (Theory/Model/Rule.hs:1287-1290): the reserved
+/// `Fresh` rule prints under its own name, a user rule under
+/// [`prefix_if_reserved`].
+fn pretty_proto_rule_name(name: &ProtoRuleName) -> Doc {
+    match name {
+        ProtoRuleName::Fresh => Doc::text("Fresh"),
+        ProtoRuleName::Stand(n) => Doc::text(prefix_if_reserved(n)),
+    }
+}
+
+/// HS `getRuleNameDiff` on a protocol rule (Theory/Model/Rule.hs:812-823):
+/// `"Proto"` before the rule name, with the reserved `Fresh` rule spelled
+/// `FreshRule`.
+fn proto_rule_name_diff(name: &ProtoRuleName) -> String {
+    match name {
+        ProtoRuleName::Fresh => "ProtoFreshRule".to_string(),
+        ProtoRuleName::Stand(n) => format!("Proto{}", n),
+    }
+}
+
+/// HS `prettyRuleAttribute` (Theory/Model/Rule.hs:1313-1328): the record's set
+/// fields as `fsep $ punctuate comma $ catMaybes [color, process,
+/// no_derivcheck, issapicrule, role]`.  A `Nothing` field and a `False` flag
+/// contribute nothing.
+pub fn pretty_rule_attribute(attr: &RuleAttributes) -> Doc {
+    let mut parts: Vec<Doc> = Vec::new();
+    if let Some(c) = attr.color {
+        parts.push(Doc::text("color=").beside(Doc::text(tamarin_utils::color::rgb_to_hex(c))));
+    }
+    if let Some(proc) = &attr.process {
+        // HS `ppProcess p = text "process=" <> text ("\"" ++
+        // prettySapicTopLevel' f p ++ "\"")` (Theory/Model/Rule.hs:1324-1327),
+        // whose local `f` renders an embedded MSR block through
+        // `prettyRuleRestr`.
+        parts.push(Doc::text("process=").beside(Doc::text(format!(
+            "\"{}\"",
+            crate::pretty_sapic::pretty_sapic_top_level_attr(proc)
+        ))));
+    }
+    if attr.ignore_deriv_checks {
+        parts.push(Doc::text("no_derivcheck"));
+    }
+    if attr.is_sapic_rule {
+        parts.push(Doc::text("issapicrule"));
+    }
+    if let Some(r) = &attr.role {
+        parts.push(
+            Doc::text("role='")
+                .beside(Doc::text(r.clone()))
+                .beside(Doc::text("'")),
+        );
+    }
+    fsep(punctuate(Doc::char(','), parts))
+}
+
+/// HS `prettyRuleAttributes` (Theory/Model/Rule.hs:1330-1334): the attribute
+/// list in brackets, or nothing at all when the record equals `mempty`.
+pub fn pretty_rule_attributes(attr: &RuleAttributes) -> Doc {
+    if *attr == RuleAttributes::empty() {
+        Doc::empty()
+    } else {
+        hcat(vec![
+            Doc::text("["),
+            pretty_rule_attribute(attr),
+            Doc::text("]"),
+        ])
+    }
+}
+
+/// HS `prettyNamedRule prefix ppInfo ru` (Theory/Model/Rule.hs:1393-1405):
+///
+/// ```text
+/// prefix <-> prettyRuleName ru <> prettyRuleAttributes ru <> colon $-$
+/// nest 2 (prettyRule prems acts concls) $-$
+/// nest 2 (ppInfo (rInfo ru))
+/// ```
+///
+/// `acts` drops the diff annotation `Diff<getRuleNameDiff ru>()` — a nullary
+/// linear protocol fact with no annotations — that `addDiffLabel` attaches in
+/// diff mode (Theory/Model/Rule.hs:1404).  `info` is the already-rendered
+/// `ppInfo` result; the empty doc there leaves the rule at its body.
+fn pretty_named_rule<I>(
+    prefix: Doc,
+    name: &ProtoRuleName,
+    attributes: &RuleAttributes,
+    ru: &Rule<I>,
+    info: Doc,
+) -> Doc {
+    let diff_label = format!("Diff{}", proto_rule_name_diff(name));
+    let is_diff_annotation = |fa: &LNFact| {
+        matches!(&fa.tag, FactTag::Proto(Multiplicity::Linear, n, 0) if *n == diff_label)
+            && fa.annotations.is_empty()
+            && fa.terms.is_empty()
+    };
+    let filtered: Option<Vec<LNFact>> = ru.actions.iter().any(&is_diff_annotation).then(|| {
+        ru.actions
+            .iter()
+            .filter(|fa| !is_diff_annotation(fa))
+            .cloned()
+            .collect()
+    });
+    let acts: &[LNFact] = filtered.as_deref().unwrap_or(&ru.actions);
+    prefix
+        .beside_sp(pretty_proto_rule_name(name))
+        .beside(pretty_rule_attributes(attributes))
+        .beside(Doc::char(':'))
+        .above_g(pretty_rule_restr_gen(&ru.premises, acts, &ru.conclusions).nest(2))
+        .above_g(info.nest(2))
+}
+
+/// HS `prettyLoopBreakers` (Theory/Model/Rule.hs:1418-1424): a `// loop
+/// breaker: [i]` line comment, plural for more than one, nothing when there
+/// are none.  Haskell `show` on `[Int]` puts no space after the commas.
+pub fn pretty_loop_breakers(breakers: &[PremIdx]) -> Doc {
+    if breakers.is_empty() {
+        return Doc::empty();
+    }
+    let plural = if breakers.len() == 1 { "" } else { "s" };
+    let idxs: Vec<String> = breakers.iter().map(|b| b.0.to_string()).collect();
+    line_comment_(&format!("loop breaker{}: [{}]", plural, idxs.join(",")))
+}
+
+/// HS `prettyDisjLNSubstsVFresh`'s `ppConj`
+/// (Term/Substitution/SubstVFresh.hs:223-229): one substitution as a `vcat` of
+/// `var $$ nest 6 ("=" <-> term)` bindings.
+///
+/// The `text ". " <>` of the enclosing `numbered'` is a BESIDE onto this
+/// multi-line doc, so HughesPJ measures the ribbon of the wrapped lines from
+/// the number's column.  Keep the whole conjunction one doc: rendering each
+/// binding standalone measures from the variable's column instead and moves
+/// the wrap point of terms close to the boundary (an 11-tuple `<x.16, …,
+/// x.26>` in pkcs11-templates `cannot_obtain_key`).
+pub(crate) fn pretty_subst_vfresh_conj(subst: &tamarin_term::subst_vfresh::LNSubstVFresh) -> Doc {
+    let eqs: Vec<Doc> = subst
+        .to_list()
+        .iter()
+        .map(|(v, t)| {
+            // HS `prettyEq (a,b) = prettyNTerm (Var a) $$ nest 6 (text "=" <->
+            // prettyNTerm b)` — the `=` is a PLAIN `text`, so it carries no
+            // `hl_operator` span.
+            let mut var = String::new();
+            tamarin_term::pretty::pp_lvar(v, &mut var);
+            let rhs = Doc::text("=")
+                .beside_sp(tamarin_term::pretty::pretty_nterm(t))
+                .nest(6);
+            Doc::text(var).above(rhs)
+        })
+        .collect();
+    vcat(eqs)
+}
+
+/// HS `prettyDisjLNSubstsVFresh` (Term/Substitution/SubstVFresh.hs:223-229):
+/// the disjunction as `numbered'` over the per-substitution conjunctions.
+fn pretty_disj_ln_substs_vfresh(substs: &[tamarin_term::subst_vfresh::LNSubstVFresh]) -> Doc {
+    numbered_prime(substs.iter().map(pretty_subst_vfresh_conj).collect())
+}
+
+/// HS `prettyProtoRuleACInfo` (Theory/Model/Rule.hs:1407-1413): the variant
+/// disjunction under a `variants (modulo AC)` keyword, then the loop
+/// breakers.  A disjunction holding nothing but the identity substitution
+/// prints neither keyword nor block.
+fn pretty_proto_rule_ac_info(info: &ProtoRuleACInfo) -> Doc {
+    let variants = if info.variants.len() == 1 && info.variants[0].is_empty() {
+        Doc::empty()
+    } else {
+        crate::pretty_hpj::kw_modulo("variants", "AC")
+            .above_g(pretty_disj_ln_substs_vfresh(&info.variants))
+    };
+    variants.above_g(pretty_loop_breakers(&info.loop_breakers))
+}
+
+/// HS `prettyProtoRuleE` (Theory/Model/Rule.hs:1434-1435): the rule under the
+/// `rule (modulo E)` prefix, with no trailing info block.
+pub fn pretty_proto_rule_e(ru: &ProtoRuleE) -> Doc {
+    pretty_named_rule(
+        kw_rule_modulo("E"),
+        &ru.info.name,
+        &ru.info.attributes,
+        ru,
+        Doc::empty(),
+    )
+}
+
+/// HS `prettyProtoRuleACasE` (Theory/Model/Rule.hs:1442-1444): an AC rule
+/// printed under the `rule (modulo E)` prefix, its variant disjunction and
+/// loop breakers left out.
+pub fn pretty_proto_rule_ac_as_e(ru: &ProtoRuleAC) -> Doc {
+    pretty_named_rule(
+        kw_rule_modulo("E"),
+        &ru.info.name,
+        &ru.info.attributes,
+        ru,
+        Doc::empty(),
+    )
+}
+
+/// HS `prettyProtoRuleAC` (Theory/Model/Rule.hs:1458-1459): the rule under the
+/// `rule (modulo AC)` prefix followed by its `ProtoRuleACInfo`.
+pub fn pretty_proto_rule_ac(ru: &ProtoRuleAC) -> Doc {
+    pretty_named_rule(
+        kw_rule_modulo("AC"),
+        &ru.info.name,
+        &ru.info.attributes,
+        ru,
+        pretty_proto_rule_ac_info(&ru.info),
+    )
 }
 
 // =============================================================================
