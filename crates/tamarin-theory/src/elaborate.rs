@@ -382,185 +382,235 @@ fn elaborate_already_expanded(
     Ok(thy)
 }
 
+/// The signature and translation-option contribution of one theory item.
+/// `builtins:`, `functions:`, `equations:` and `macros:` declarations build
+/// `out.signature.maude_sig` and `out.options`; every other item kind leaves
+/// `out` untouched.
+///
+/// The returned macros are a `macros:` item's declarations elaborated against
+/// the signature as it stands at each one, which is why they are built here
+/// and not from the finished signature; `elaborate_items` pushes them as a
+/// `TheoryItem::Macros`. Every other item kind returns an empty list.
+///
+/// Signature-conflict rules (HS `extendSig` / `function`,
+/// Theory/Text/Parser/Signature.hs:102-135, 200-225) are enforced at parse
+/// time (`Parser::enable_builtin` / `Parser::function_decl`) — the single
+/// point where theories are ingested — so the declarations reaching here are
+/// conflict-free and this step only BUILDS the signature.
+fn maude_sig_step(item: &p::TheoryItem, out: &mut Theory) -> Result<Vec<LNMacro>, ElabError> {
+    match item {
+        p::TheoryItem::Builtins(names) => {
+            let mut s = out.signature.maude_sig.clone();
+            for name in names {
+                if let Some(sig) = builtin_sig(name) {
+                    s = s.merge(sig);
+                }
+                // HS `builtinsNames` (Theory/Text/Parser/Signature.hs:78-85)
+                // maps two builtins to translation options:
+                //   `reliable-channel` → `_transReliable`
+                //   `locations-report` → `_transReport`
+                match name.as_str() {
+                    "reliable-channel" => out.options.trans_reliable = true,
+                    "locations-report" => out.options.trans_report = true,
+                    _ => {}
+                }
+                // NOTE: `diffie-hellman` already arrives with `enable_dh`
+                // set (its MaudeSig is `dh_maude_sig`, see
+                // builtinsDiffNames in
+                // Theory/Text/Parser/Signature.hs:58-76, see line 62),
+                // and `merge` ORs `enable_dh`, so no explicit force is
+                // needed here.  `diff` is a header/CLI flag handled via
+                // `enable_diff_maude_sig`, never a `builtins:` entry.
+            }
+            out.signature.maude_sig = s;
+        }
+        p::TheoryItem::Functions(decls) => {
+            use tamarin_term::function_symbols::UserDefinedSym;
+            for d in decls {
+                let arity = d.arg_types.len();
+                let priv_ = if d.private {
+                    Privacy::Private
+                } else {
+                    Privacy::Public
+                };
+                let constr = if d.destructor {
+                    Constructability::Destructor
+                } else {
+                    Constructability::Constructor
+                };
+                let ndc = ndc_state_of(d.ndc, d.ndc_diff);
+                // HS `function`'s fst/snd short-circuit (Theory/Text/
+                // Parser/Signature.hs:217, name-only by design — it tests
+                // neither arity nor privacy): a re-declared fst/snd
+                // resolves to the EXISTING symbol and `addFunSym` is
+                // never reached, so `functions: fst/1 [destructor]`
+                // alone must NOT flip the signature to the destructor
+                // variant (only `builtins: dest-pairing` does that).
+                if (d.name == "fst" || d.name == "snd")
+                    && out
+                        .signature
+                        .maude_sig
+                        .st_fun_syms
+                        .iter()
+                        .any(|s| s.name == d.name.as_bytes())
+                {
+                    continue;
+                }
+                let user_sym = if d.ac {
+                    UserDefinedSym::AcFctUser(AcFctSym::new(
+                        d.name.as_bytes().to_vec(),
+                        priv_,
+                        constr,
+                        ndc,
+                    ))
+                } else {
+                    UserDefinedSym::NoEqUser(
+                        NoEqSym::new(d.name.as_bytes().to_vec(), arity, priv_, constr)
+                            .with_ndc(ndc),
+                    )
+                };
+                // `add_fun_sym` consumes `self` by value; move the
+                // current sig out via `take` to avoid a per-declaration
+                // deep clone of the whole MaudeSig.  Output order and
+                // dedup are unchanged (same `add_fun_sym` path).
+                let cur = std::mem::take(&mut out.signature.maude_sig);
+                out.signature.maude_sig = cur.add_fun_sym(user_sym);
+            }
+        }
+        p::TheoryItem::Equations { eqs, convergent } => {
+            // Port of Haskell `addEquationsM` (Theory.hs).
+            // Convert each LHS=RHS pair to a CtxtStRule via
+            // `rrule_to_ctxt_st_rule` and install it on the MaudeSig
+            // so Maude sees the rewrite rule in its `fmod MSG ...`
+            // module.  Convergent flag is stored as informational.
+            out.signature.maude_sig.eq_convergent = *convergent;
+            let mut s = out.signature.maude_sig.clone();
+            for eq in eqs {
+                // Haskell's `equation` parser hard-fails with
+                // "Not a correct equation: ..." when an LHS=RHS pair
+                // cannot be converted to a CtxtStRule
+                // (Theory/Text/Parser/Signature.hs:245-249, see line 249).  Match
+                // that failure behaviour rather than silently dropping.
+                let (Some(l), Some(r)) = (
+                    term_to_lnterm(&eq.lhs, &out.signature.maude_sig),
+                    term_to_lnterm(&eq.rhs, &out.signature.maude_sig),
+                ) else {
+                    return Err(ElabError {
+                        message: "Not a correct equation".to_string(),
+                    });
+                };
+                let rrule = tamarin_term::rewriting::RRule::new(l, r);
+                match tamarin_term::subterm_rule::rrule_to_ctxt_st_rule(&rrule) {
+                    Some(ctxt) => s = s.add_ctxt_st_rule(ctxt),
+                    None => {
+                        return Err(ElabError {
+                            message: "Not a correct equation".to_string(),
+                        });
+                    }
+                }
+            }
+            out.signature.maude_sig = s.refresh();
+        }
+        p::TheoryItem::Macros(macros) => {
+            let mut ms = Vec::new();
+            for m in macros {
+                let args: Vec<LVar> = m.args.iter().map(varspec_to_lvar).collect();
+                // HS `macro` parses the body with `msetterm False llit`
+                // (Theory/Text/Parser/Macro.hs:39), which has no pattern-match (`=t`)
+                // production, so a body that converts to a `PatMatch`
+                // here would be a hard parse failure in HS — and
+                // `addMacroSym` (Theory/Text/Parser/Macro.hs:46) always runs for any parsed
+                // macro.  Returning an error therefore matches HS's
+                // parse-fail semantics: silently skipping would drop both
+                // the `LNMacro` push and the fun-sym registration.
+                // `term_to_lnterm` returns None only on `PatMatch`, which
+                // the surface macro parser never places in a body.
+                let body = match term_to_lnterm(&m.body, &out.signature.maude_sig) {
+                    Some(t) => t,
+                    None => {
+                        return Err(ElabError {
+                            message: format!("could not elaborate macro body for `{}`", m.name),
+                        });
+                    }
+                };
+                // Register macro fun-sym in MaudeSig — mirrors HS
+                // `addMacroSym (op,(k,Private,Destructor,NotNDC))`
+                // (Theory/Text/Parser/Macro.hs:29-47, see line 46) and
+                // `macroToFunSym` (Term/Macro.hs:29-30, see line 30).  After parser-
+                // AST macro expansion (run in `elaborate()` above)
+                // no call site references the macro name, but
+                // the fun-sym must still be present in MaudeSig so
+                // Maude / source precomputation / round-trip parsers
+                // see the same signature as HS.
+                let sym = NoEqSym::new(
+                    m.name.as_bytes().to_vec(),
+                    args.len(),
+                    Privacy::Private,
+                    Constructability::Destructor,
+                );
+                // Move the sig out via `take` (add_macro_sym consumes
+                // `self`) to avoid a per-macro deep clone; behaviour and
+                // ordering are identical.
+                let cur = std::mem::take(&mut out.signature.maude_sig);
+                out.signature.maude_sig = cur.add_macro_sym(sym);
+                ms.push(LNMacro {
+                    name: m.name.clone(),
+                    args,
+                    body,
+                });
+            }
+            return Ok(ms);
+        }
+        _ => {}
+    }
+    Ok(Vec::new())
+}
+
+/// The `MaudeSig` a parsed theory's declarations build, without elaborating
+/// the theory: [`maude_sig_step`] folded over `thy`'s items from the empty,
+/// diff-seeded signature [`elaborate_already_expanded`] starts from.
+///
+/// It equals `elaborate(thy)?.signature.maude_sig`: those are the only four
+/// item kinds that touch the signature, and both expansion passes `elaborate`
+/// runs before `elaborate_items` leave all four untouched
+/// (`macro_expand::expand_items`, `predicate_expand::expand_theory_formulas`).
+/// `elaborate_tests::parse_time_signature_matches_elaboration` pins that over
+/// the examples tree.
+pub fn parse_time_signature(thy: &p::Theory) -> Result<MaudeSig, ElabError> {
+    let mut sig = SignaturePure::empty(thy.is_diff);
+    if thy.is_diff {
+        sig.maude_sig = sig.maude_sig.merge(enable_diff_maude_sig());
+    }
+    let mut scratch: Theory = Theory::new(thy.name.clone(), sig);
+    for item in &thy.items {
+        maude_sig_step(item, &mut scratch)?;
+    }
+    Ok(scratch.signature.maude_sig)
+}
+
 fn elaborate_items(
     items: &[p::TheoryItem],
     original_items: Option<&[p::TheoryItem]>,
     out: &mut Theory,
 ) -> Result<(), ElabError> {
-    // Signature-conflict rules (HS `extendSig` / `function`,
-    // Theory/Text/Parser/Signature.hs:102-135, 200-225) are enforced at
-    // parse time (`Parser::enable_builtin` / `Parser::function_decl`) — the
-    // single point where theories are ingested — so the declarations
-    // reaching here are conflict-free and the arms below only BUILD the
-    // signature.
     for (idx, item) in items.iter().enumerate() {
         // The same item read from the pre-macro list, or the item itself when
         // that list is absent because the theory declares no macro.
         let original_item = original_items.and_then(|o| o.get(idx)).unwrap_or(item);
         match item {
             p::TheoryItem::Builtins(names) => {
-                let mut s = out.signature.maude_sig.clone();
+                maude_sig_step(item, out)?;
                 for name in names {
-                    if let Some(sig) = builtin_sig(name) {
-                        s = s.merge(sig);
-                    }
-                    // HS `builtinsNames` (Theory/Text/Parser/Signature.hs:78-85)
-                    // maps two builtins to translation options:
-                    //   `reliable-channel` → `_transReliable`
-                    //   `locations-report` → `_transReport`
-                    match name.as_str() {
-                        "reliable-channel" => out.options.trans_reliable = true,
-                        "locations-report" => out.options.trans_report = true,
-                        _ => {}
-                    }
-                    // NOTE: `diffie-hellman` already arrives with `enable_dh`
-                    // set (its MaudeSig is `dh_maude_sig`, see
-                    // builtinsDiffNames in
-                    // Theory/Text/Parser/Signature.hs:58-76, see line 62),
-                    // and `merge` ORs `enable_dh`, so no explicit force is
-                    // needed here.  `diff` is a header/CLI flag handled via
-                    // `enable_diff_maude_sig`, never a `builtins:` entry.
                     out.items.push(TheoryItem::Translation(
                         TranslationElement::SignatureBuiltin(name.clone()),
                     ));
                 }
-                out.signature.maude_sig = s;
             }
-            p::TheoryItem::Functions(decls) => {
-                use tamarin_term::function_symbols::UserDefinedSym;
-                for d in decls {
-                    let arity = d.arg_types.len();
-                    let priv_ = if d.private {
-                        Privacy::Private
-                    } else {
-                        Privacy::Public
-                    };
-                    let constr = if d.destructor {
-                        Constructability::Destructor
-                    } else {
-                        Constructability::Constructor
-                    };
-                    let ndc = ndc_state_of(d.ndc, d.ndc_diff);
-                    // HS `function`'s fst/snd short-circuit (Theory/Text/
-                    // Parser/Signature.hs:217, name-only by design — it tests
-                    // neither arity nor privacy): a re-declared fst/snd
-                    // resolves to the EXISTING symbol and `addFunSym` is
-                    // never reached, so `functions: fst/1 [destructor]`
-                    // alone must NOT flip the signature to the destructor
-                    // variant (only `builtins: dest-pairing` does that).
-                    if (d.name == "fst" || d.name == "snd")
-                        && out
-                            .signature
-                            .maude_sig
-                            .st_fun_syms
-                            .iter()
-                            .any(|s| s.name == d.name.as_bytes())
-                    {
-                        continue;
-                    }
-                    let user_sym = if d.ac {
-                        UserDefinedSym::AcFctUser(AcFctSym::new(
-                            d.name.as_bytes().to_vec(),
-                            priv_,
-                            constr,
-                            ndc,
-                        ))
-                    } else {
-                        UserDefinedSym::NoEqUser(
-                            NoEqSym::new(d.name.as_bytes().to_vec(), arity, priv_, constr)
-                                .with_ndc(ndc),
-                        )
-                    };
-                    // `add_fun_sym` consumes `self` by value; move the
-                    // current sig out via `take` to avoid a per-declaration
-                    // deep clone of the whole MaudeSig.  Output order and
-                    // dedup are unchanged (same `add_fun_sym` path).
-                    let cur = std::mem::take(&mut out.signature.maude_sig);
-                    out.signature.maude_sig = cur.add_fun_sym(user_sym);
-                }
+            p::TheoryItem::Functions(_) | p::TheoryItem::Equations { .. } => {
+                maude_sig_step(item, out)?;
             }
-            p::TheoryItem::Equations { eqs, convergent } => {
-                // Port of Haskell `addEquationsM` (Theory.hs).
-                // Convert each LHS=RHS pair to a CtxtStRule via
-                // `rrule_to_ctxt_st_rule` and install it on the MaudeSig
-                // so Maude sees the rewrite rule in its `fmod MSG ...`
-                // module.  Convergent flag is stored as informational.
-                out.signature.maude_sig.eq_convergent = *convergent;
-                let mut s = out.signature.maude_sig.clone();
-                for eq in eqs {
-                    // Haskell's `equation` parser hard-fails with
-                    // "Not a correct equation: ..." when an LHS=RHS pair
-                    // cannot be converted to a CtxtStRule
-                    // (Theory/Text/Parser/Signature.hs:245-249, see line 249).  Match
-                    // that failure behaviour rather than silently dropping.
-                    let (Some(l), Some(r)) = (
-                        term_to_lnterm(&eq.lhs, &out.signature.maude_sig),
-                        term_to_lnterm(&eq.rhs, &out.signature.maude_sig),
-                    ) else {
-                        return Err(ElabError {
-                            message: "Not a correct equation".to_string(),
-                        });
-                    };
-                    let rrule = tamarin_term::rewriting::RRule::new(l, r);
-                    match tamarin_term::subterm_rule::rrule_to_ctxt_st_rule(&rrule) {
-                        Some(ctxt) => s = s.add_ctxt_st_rule(ctxt),
-                        None => {
-                            return Err(ElabError {
-                                message: "Not a correct equation".to_string(),
-                            });
-                        }
-                    }
-                }
-                out.signature.maude_sig = s.refresh();
-            }
-            p::TheoryItem::Macros(macros) => {
-                let mut ms = Vec::new();
-                for m in macros {
-                    let args: Vec<LVar> = m.args.iter().map(varspec_to_lvar).collect();
-                    // HS `macro` parses the body with `msetterm False llit`
-                    // (Theory/Text/Parser/Macro.hs:39), which has no pattern-match (`=t`)
-                    // production, so a body that converts to a `PatMatch`
-                    // here would be a hard parse failure in HS — and
-                    // `addMacroSym` (Theory/Text/Parser/Macro.hs:46) always runs for any parsed
-                    // macro.  Returning an error therefore matches HS's
-                    // parse-fail semantics: silently skipping would drop both
-                    // the `LNMacro` push and the fun-sym registration.
-                    // `term_to_lnterm` returns None only on `PatMatch`, which
-                    // the surface macro parser never places in a body.
-                    let body = match term_to_lnterm(&m.body, &out.signature.maude_sig) {
-                        Some(t) => t,
-                        None => {
-                            return Err(ElabError {
-                                message: format!("could not elaborate macro body for `{}`", m.name),
-                            });
-                        }
-                    };
-                    // Register macro fun-sym in MaudeSig — mirrors HS
-                    // `addMacroSym (op,(k,Private,Destructor,NotNDC))`
-                    // (Theory/Text/Parser/Macro.hs:29-47, see line 46) and
-                    // `macroToFunSym` (Term/Macro.hs:29-30, see line 30).  After parser-
-                    // AST macro expansion (run in `elaborate()` above)
-                    // call sites no longer reference the macro name, but
-                    // the fun-sym must still be present in MaudeSig so
-                    // Maude / source precomputation / round-trip parsers
-                    // see the same signature as HS.
-                    let sym = NoEqSym::new(
-                        m.name.as_bytes().to_vec(),
-                        args.len(),
-                        Privacy::Private,
-                        Constructability::Destructor,
-                    );
-                    // Move the sig out via `take` (add_macro_sym consumes
-                    // `self`) to avoid a per-macro deep clone; behaviour and
-                    // ordering are identical.
-                    let cur = std::mem::take(&mut out.signature.maude_sig);
-                    out.signature.maude_sig = cur.add_macro_sym(sym);
-                    ms.push(LNMacro {
-                        name: m.name.clone(),
-                        args,
-                        body,
-                    });
-                }
+            p::TheoryItem::Macros(_) => {
+                let ms = maude_sig_step(item, out)?;
                 if !ms.is_empty() {
                     out.items.push(TheoryItem::Macros(ms));
                 }
