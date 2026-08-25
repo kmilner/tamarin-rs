@@ -23,9 +23,9 @@ fn main() {
     let theory_path = &args[1];
     let lemma = &args[2];
 
-    let (parsed, _elaborated, maude) = common::load_theory_with_maude(theory_path);
+    let (_parsed, elaborated, maude) = common::load_theory_with_maude(theory_path);
 
-    let root = prove_lemma(&parsed, lemma, maude, 500).expect("prove");
+    let root = prove_lemma(&elaborated, lemma, maude, 500).expect("prove");
     let steps = count_steps(&root);
     eprintln!(
         "=== {} proof tree (status={:?}, children={}, steps={}) ===",

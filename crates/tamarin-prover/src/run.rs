@@ -1172,7 +1172,7 @@ impl TheoryPipeline<'_> {
         maude: MaudeHandle,
     ) -> Result<tamarin_theory::prove::ProverSession, tamarin_theory::prove::ProveError> {
         tamarin_theory::prove::ProverSession::build_with_in_file_and_heuristic(
-            &self.parsed,
+            &self.elaborated,
             maude,
             self.file_maude_pool.clone(),
             self.in_file,
@@ -1891,10 +1891,9 @@ impl TheoryPipeline<'_> {
             // typing assumptions.
             //
             // Fall-through path: if `build_prover_session` errors we
-            // fall back to the per-lemma `prove_lemma_with_pool` path
-            // (which re-runs the setup per lemma but is more tolerant
-            // of theories where elaboration fails on a subset of
-            // lemmas).  Almost never hits in practice.
+            // fall back to the per-lemma `prove_lemma_with_pool` path,
+            // which re-runs the same setup for each lemma.  Almost
+            // never hits in practice.
             let cli_heuristic = self.cli_heuristic();
             let session = self.build_prover_session(maude.clone()).ok();
 
@@ -1907,7 +1906,6 @@ impl TheoryPipeline<'_> {
             // stderr order.
             self.closed_marker(&pe_trace);
 
-            let parsed = &self.parsed;
             let elaborated = &self.elaborated;
             let theory_name = self.theory_name.as_str();
             let cut = self.cut;
@@ -1972,7 +1970,7 @@ impl TheoryPipeline<'_> {
                         usize::MAX,
                     ),
                     (None, _) => tamarin_theory::prove::prove_lemma_with_pool_file_heuristic(
-                        parsed,
+                        elaborated,
                         &lemma_name,
                         maude.clone(),
                         file_maude_pool.clone(),

@@ -48,11 +48,17 @@ fn fixture_theory(name: &str) -> tamarin_parser::ast::Theory {
     tamarin_parser::parse_theory(&src, &[]).expect("parse")
 }
 
+/// Elaborates a parsed theory into the internal theory the prover entry
+/// points take.
+fn elaborated(pt: &tamarin_parser::ast::Theory) -> crate::theory::Theory {
+    crate::elaborate::elaborate(pt).expect("elaborate")
+}
+
 #[test]
 fn prove_lemma_unknown_name_is_error() {
     let Some(h) = maude() else { return };
     let parser_theory = tamarin_parser::parse_theory("theory T begin end", &[]).expect("parse");
-    let r = prove_lemma(&parser_theory, "nonexistent", h, 5);
+    let r = prove_lemma(&elaborated(&parser_theory), "nonexistent", h, 5);
     assert!(matches!(r, Err(ProveError::LemmaNotFound(_))));
 }
 
@@ -77,7 +83,7 @@ fn injectivity_corpus_example_is_contradictory() {
     ))
     .expect("read features/injectivity/injectivity.spthy");
     let pt = tamarin_parser::parse_theory(&src, &[]).expect("parse");
-    let root = prove_lemma(&pt, "injectivity_check", h, 200).expect("prove");
+    let root = prove_lemma(&elaborated(&pt), "injectivity_check", h, 200).expect("prove");
     assert_eq!(root.status, NodeStatus::Contradictory);
 }
 
@@ -98,7 +104,7 @@ fn cr_external_recentalive_converges_and_holds() {
         return;
     };
     let t0 = std::time::Instant::now();
-    let root = prove_lemma(&pt, "recentalive", h, 200).expect("prove");
+    let root = prove_lemma(&elab, "recentalive", h, 200).expect("prove");
     let dt = t0.elapsed();
     assert_eq!(root.status, NodeStatus::Contradictory);
     assert!(
@@ -120,7 +126,7 @@ fn sig_minimal_tautology_is_contradictory() {
     let Some(h) = maude_with(elab.signature.maude_sig.clone()) else {
         return;
     };
-    let root = prove_lemma(&pt, "a_self", h, 50).expect("prove");
+    let root = prove_lemma(&elab, "a_self", h, 50).expect("prove");
     assert_eq!(root.status, NodeStatus::Contradictory);
 }
 
@@ -130,7 +136,7 @@ fn sig_minimal_tautology_is_contradictory() {
 fn two_fresh_premises_in_one_rule_reach_solved() {
     let Some(h) = maude() else { return };
     let pt = fixture_theory("needs_constructor_simple.spthy");
-    let root = prove_lemma(&pt, "sent_exists", h, 200).expect("prove");
+    let root = prove_lemma(&elaborated(&pt), "sent_exists", h, 200).expect("prove");
     assert_eq!(root.status, NodeStatus::Solved);
 }
 
@@ -142,7 +148,7 @@ fn two_fresh_premises_in_one_rule_reach_solved() {
 fn intruder_pair_construction_reaches_solved() {
     let Some(h) = maude() else { return };
     let pt = fixture_theory("needs_constructor.spthy");
-    let root = prove_lemma(&pt, "pair_arrives", h, 2000).expect("prove");
+    let root = prove_lemma(&elaborated(&pt), "pair_arrives", h, 2000).expect("prove");
     assert_eq!(root.status, NodeStatus::Solved);
 }
 
@@ -233,7 +239,7 @@ end
         crate::constraint::solver::search::SysRetention::KeepAll,
     );
     let pt = tamarin_parser::parse_theory(src, &[]).expect("parse");
-    let root = prove_lemma(&pt, "always_A", h, 200).expect("prove");
+    let root = prove_lemma(&elaborated(&pt), "always_A", h, 200).expect("prove");
     // Root = the initial constraint system (the negated goal formula),
     // with the lemma's refined source kind — NOT an empty default.
     assert!(
@@ -273,8 +279,8 @@ lemma trivial:
 end
 "#;
     let parser_theory = tamarin_parser::parse_theory(src, &[]).expect("parse");
-    let root =
-        prove_lemma(&parser_theory, "trivial", h, 100).expect("prove_lemma should not error");
+    let root = prove_lemma(&elaborated(&parser_theory), "trivial", h, 100)
+        .expect("prove_lemma should not error");
 
     // Root method: under the `AvoidInduction` default (exists-trace
     // lemmas), Haskell's `rankProofMethods` tries Simplify first.
@@ -305,7 +311,7 @@ fn session_from(src: &str) -> Option<ProverSession> {
     let h = maude()?;
     let pt = tamarin_parser::parse_theory(src, &[]).expect("parse");
     ProverSession::build_with_in_file_and_heuristic(
-        &pt,
+        &elaborated(&pt),
         h,
         None,
         "",
@@ -314,6 +320,62 @@ fn session_from(src: &str) -> Option<ProverSession> {
         None,
     )
     .ok()
+}
+
+/// HS `closeProtoRule` (lib/theory/src/Rule.hs:82-86, see line 84) builds
+/// `ClosedProtoRule ruE <$> maybeToList (variantsProtoRule hnd ruE)`, so a
+/// rule with no variants yields NO closed rule: it is in neither the closed
+/// theory nor the proof search.  The canonical case is a rule carrying both
+/// `Fr(~x)` and `In(~x)`, where `~x` cannot be sent before it is generated.
+/// `run.rs` drops such a rule from the internal theory before the session is
+/// built, and the session's rules are that theory's, so the drop reaches the
+/// proof context.
+#[test]
+fn a_no_variant_rule_is_absent_from_the_session() {
+    let Some(h) = maude() else { return };
+    let pt = tamarin_parser::parse_theory(
+        "theory T begin\n\
+rule Contradictory: [ Fr(~x), In(~x) ] --[ C(~x) ]-> [ Out(~x) ]\n\
+rule Setup: [ Fr(~k) ] --[ Setup(~k) ]-> [ Out(~k) ]\n\
+lemma trivial: exists-trace \"Ex k #i. Setup(k) @ #i\"\n\
+end",
+        &[],
+    )
+    .expect("parse");
+    let mut theory = elaborated(&pt);
+    let no_variant: Vec<String> = theory
+        .rules()
+        .filter(|r| {
+            crate::tools::rule_variants::rule_has_no_variants_for_wf_with(&h, &r.rule, None)
+        })
+        .map(|r| r.name().to_string())
+        .collect();
+    assert_eq!(no_variant, vec!["Contradictory".to_string()]);
+    theory.items.retain(|i| match i {
+        crate::theory::TheoryItem::Rule(r) => !no_variant.iter().any(|n| n == r.name()),
+        _ => true,
+    });
+
+    let session = ProverSession::build_with_in_file_and_heuristic(
+        &theory,
+        h,
+        None,
+        "",
+        CliHeuristic::default(),
+        crate::constraint::solver::context::CutStrategy::Dfs,
+        None,
+    )
+    .expect("session");
+    let names: Vec<&str> = session.theory.rules().map(|r| r.name()).collect();
+    assert_eq!(names, vec!["Setup"]);
+    assert!(
+        !session
+            .template_ctx
+            .rules
+            .iter()
+            .any(|r| r.name() == "Contradictory"),
+        "the dropped rule must not reach the template proof context"
+    );
 }
 
 const SHARED_KEY_TWO_LEMMAS: &str = "theory T begin\n\

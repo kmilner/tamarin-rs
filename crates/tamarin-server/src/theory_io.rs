@@ -271,7 +271,11 @@ pub fn load_from_source(
     // `ProofState::new` injects it into the web session / shared context
     // instead of re-running the check per context build.
     let mut ndc_cache: Option<Arc<Vec<tamarin_theory::rule::IntrRuleAC>>> = None;
-    if let Ok(maude) = MaudeHandle::start(maude_path, typed.signature.maude_sig.clone()) {
+    // The signature every Maude process for this theory loads its module
+    // from, taken before the NDC join below — see
+    // `TheoryEntry::prover_maude_sig` for why the join must not reach it.
+    let prover_maude_sig = typed.signature.maude_sig.clone();
+    if let Ok(maude) = MaudeHandle::start(maude_path, prover_maude_sig.clone()) {
         tamarin_theory::tools::rule_variants::populate_rule_variants(&mut typed, &maude, None);
         // Annotate per-rule loop breakers on the stored theory so the web
         // rules / source / message renderers emit HS's `// loop breaker: [<n>]`
@@ -349,6 +353,7 @@ pub fn load_from_source(
         name: typed.name.clone(),
         parser_theory: Arc::new(parser_theory),
         typed_theory: Arc::new(typed),
+        prover_maude_sig,
         origin,
         loaded_at: Local::now(),
         primary: true,

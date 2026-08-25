@@ -41,10 +41,9 @@ use tamarin_theory::constraint::solver::search::{
     candidate_methods_with_expl, NodeStatus, ProofNode,
 };
 use tamarin_theory::constraint::system::{formula_to_system, SourceKind, System};
-use tamarin_theory::elaborate::elaborate;
 use tamarin_theory::guarded::{formula_to_guarded, Guarded};
 use tamarin_theory::pretty_system::pretty_non_graph_system;
-use tamarin_theory::theory::{LemmaAttr, OpenProtoRule, TraceQuantifier};
+use tamarin_theory::theory::{LemmaAttr, OpenProtoRule, TheoryItem, TraceQuantifier};
 
 use crate::handlers::path_parse::{encode_sub_path, url_path_escape};
 use crate::handlers::root::html_escape;
@@ -119,13 +118,18 @@ impl ProofState {
     /// freshly loaded theory.  Mirrors the construction in
     /// `tamarin_theory::prove::prove_lemma` minus the search loop.
     ///
+    /// `maude_sig`: the signature this theory's Maude process loads its
+    /// module from (`TheoryEntry::prover_maude_sig`) — `typed`'s signature
+    /// from before the load's NDC join.
+    ///
     /// `ndc_cache`: the theory's once-per-load NDC-checked intruder cache
     /// (`theory_io` ran `check_close_intr_rule` at load), injected into
     /// both the web session and the shared display context so neither
     /// re-runs the check.  The borrowed handle is the same allocation the
     /// `TheoryEntry` holds, so neither injection copies the rule list.
     pub fn new(
-        parser_theory: &tamarin_parser::ast::Theory,
+        typed: &tamarin_theory::theory::Theory,
+        maude_sig: tamarin_term::maude_sig::MaudeSig,
         maude_path: &str,
         cli_cut: Option<tamarin_theory::constraint::solver::context::CutStrategy>,
         in_file: &str,
@@ -136,25 +140,21 @@ impl ProofState {
         // the theory's `configuration:` block is consulted only when
         // the flag is absent.  Steers the session's autoprove
         // (`runAutoProver`'s `apCut`) and the shared web context.
+        let config_block = typed.items.iter().find_map(|i| match i {
+            TheoryItem::ConfigBlock(c) => Some(c),
+            _ => None,
+        });
         let cut = match cli_cut {
             Some(c) => c,
-            None => match &parser_theory.configuration {
+            None => match config_block {
                 Some(cfg) => tamarin_theory::prove::config_block_options(cfg)?
                     .0
                     .unwrap_or(tamarin_theory::constraint::solver::context::CutStrategy::Dfs),
                 None => tamarin_theory::constraint::solver::context::CutStrategy::Dfs,
             },
         };
-        let mut typed =
-            elaborate(parser_theory).map_err(|e| format!("elaborate: {}", e.message))?;
-        // Oracle-path base (HS Theory/Text/Parser.hs:309): a `heuristic: o "./oracle-…"`
-        // resolves against the theory file's directory
-        // (`hs_take_directory(in_file)` in prove.rs), both in the session
-        // built below and in raw-solve replay rankings.
-        typed.in_file = in_file.to_string();
-        let sig = typed.signature.maude_sig.clone();
-        let maude =
-            MaudeHandle::start(maude_path, sig).map_err(|e| format!("maude start: {:?}", e))?;
+        let maude = MaudeHandle::start(maude_path, maude_sig)
+            .map_err(|e| format!("maude start: {:?}", e))?;
         let rules: Vec<OpenProtoRule> = typed.rules().cloned().collect();
         // Build the ProofContext WITH the theory's restrictions, mirroring
         // HS `closeRuleCache`'s `safetyRestrictions` (CloseRule.hs:425-426) and the
@@ -216,10 +216,10 @@ impl ProofState {
         //
         let session: Option<Arc<tamarin_theory::prove::ProverSession>> =
             match tamarin_theory::prove::ProverSession::build_with_in_file_and_heuristic(
-                parser_theory,
+                typed,
                 maude.clone(),
                 None,
-                &typed.in_file,
+                in_file,
                 tamarin_theory::prove::CliHeuristic::default(),
                 cut,
                 ndc_cache,
@@ -315,7 +315,7 @@ impl ProofState {
                 let mut rankings =
                     tamarin_theory::constraint::solver::goals::parse_heuristic_str_with_tactics(
                         &h,
-                        &typed.in_file,
+                        in_file,
                         &typed.tactic,
                     );
                 // Oracle paths resolve against the theory file's directory
@@ -323,10 +323,7 @@ impl ProofState {
                 // — same prefixing the batch session applies
                 // (prove.rs `resolve_heuristic`); without it the dmn
                 // family's `heuristic: o "./oracle-…"` exec fails cwd-relative.
-                tamarin_theory::prove::prepend_theory_dir_to_oracle_paths(
-                    &mut rankings,
-                    &typed.in_file,
-                );
+                tamarin_theory::prove::prepend_theory_dir_to_oracle_paths(&mut rankings, in_file);
                 rankings
             });
             lemma_settings.insert(
@@ -1311,8 +1308,26 @@ lemma trivial: exists-trace
   "Ex k #i. Setup(k) @ #i"
 end
 "#;
-        let pt = tamarin_parser::parse_theory(src, &[]).expect("parse");
-        ProofState::new(&pt, mp, None, "", None).expect("build state")
+        let entry = crate::theory_io::load_from_source(
+            src,
+            crate::state::TheoryOrigin::Upload("trivial.spthy".to_string()),
+            mp,
+            0,
+        )
+        .expect("load");
+        ProofState::new(
+            &entry.typed_theory,
+            entry.prover_maude_sig.clone(),
+            mp,
+            None,
+            "",
+            entry
+                .ndc_cache
+                .clone()
+                .map(tamarin_theory::constraint::solver::context::IntrRuleCache::from)
+                .as_ref(),
+        )
+        .expect("build state")
     }
 
     #[test]

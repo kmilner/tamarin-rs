@@ -4,7 +4,7 @@
 
 //! End-to-end `prove_lemma` entry point.
 //!
-//! Bridges a parsed `.spthy` theory and a lemma name into the
+//! Bridges an elaborated theory and a lemma name into the
 //! proof-search driver. Mirrors the high-level shape of Haskell's
 //! `Theory.Proof.proveLemma`:
 //!
@@ -15,21 +15,19 @@
 //! 5. Build a `ProofContext` carrying the theory's rules.
 //! 6. Drive `run_proof_search` to produce a `ProofNode` tree.
 //!
-//! Returns `Err` on parser/elaboration/guarded-conversion failures.
+//! Returns `Err` on lemma-lookup / guarded-conversion failures.
 
 use tamarin_parser::ast as p;
 
 use crate::constraint::solver::context::{IntrRuleCache, ProofContext};
 use crate::constraint::solver::search::{run_proof_search, ProofNode};
 use crate::constraint::system::{formula_to_system, SourceKind};
-use crate::elaborate::elaborate;
 use crate::guarded::{formula_to_guarded, Guarded};
 use crate::theory::OpenProtoRule;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProveError {
     LemmaNotFound(String),
-    Elaboration(String),
     Guarded(String),
 }
 
@@ -57,7 +55,6 @@ impl std::fmt::Display for ProveError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ProveError::LemmaNotFound(n) => write!(f, "lemma not found: {}", n),
-            ProveError::Elaboration(m) => write!(f, "elaboration: {}", m),
             ProveError::Guarded(m) => write!(f, "guarded conversion: {}", m),
         }
     }
@@ -826,8 +823,8 @@ impl ProverSession {
 
     /// Build the shared per-file state, also setting `theory.in_file` for
     /// oracle path resolution (HS Theory/Text/Parser.hs).  Does the expensive
-    /// once-per-file work: theory elaboration, restriction conversion, full
-    /// `ProofContext` construction (which runs intruder rule generation,
+    /// once-per-file work: restriction conversion and full `ProofContext`
+    /// construction (which runs intruder rule generation,
     /// `close_intr_rule`, DH/BP cached variants, per-rule variant
     /// expansion, source precomputation).  Carries the CLI
     /// `--heuristic`/`--oraclename`/`--oracle-only` (HS `AutoProver`): when
@@ -844,7 +841,7 @@ impl ProverSession {
     // std kept (byte-inert) — iteration order never reaches output.
     #[allow(clippy::disallowed_types)]
     pub fn build_with_in_file_and_heuristic(
-        parser_theory: &p::Theory,
+        theory: &crate::theory::Theory,
         maude: tamarin_term::maude_proc::MaudeHandle,
         pool: Option<std::sync::Arc<tamarin_term::maude_proc::MaudePool>>,
         in_file: &str,
@@ -852,8 +849,7 @@ impl ProverSession {
         cut: crate::constraint::solver::context::CutStrategy,
         ndc_cache: Option<&IntrRuleCache>,
     ) -> Result<Self, ProveError> {
-        let mut theory =
-            elaborate(parser_theory).map_err(|e| ProveError::Elaboration(e.message))?;
+        let mut theory = theory.clone();
         // Set in_file for oracle path resolution (HS Theory/Text/Parser.hs:309).
         theory.in_file = in_file.to_string();
         // HS `mkSystem` maps `formulaToGuarded_ = either (error . render) id`
@@ -1378,7 +1374,7 @@ fn prove_lemma_in_session_mode(
     Ok(r)
 }
 
-/// Drive a proof attempt for one lemma in a parsed theory.
+/// Drive a proof attempt for one lemma in an elaborated theory.
 ///
 /// `proof_bound` is `--bound=N`'s proof-depth bound (HS `apBound`,
 /// applied as `boundProofDepth` in `runAutoProver`,
@@ -1387,13 +1383,13 @@ fn prove_lemma_in_session_mode(
 /// `sorry /* bound N hit */` leaves.  Pass `usize::MAX` for unbounded
 /// (HS `Nothing`, the default).
 pub fn prove_lemma(
-    parser_theory: &p::Theory,
+    theory: &crate::theory::Theory,
     lemma_name: &str,
     maude: tamarin_term::maude_proc::MaudeHandle,
     proof_bound: usize,
 ) -> Result<ProofNode, ProveError> {
     prove_lemma_with_pool_file_heuristic(
-        parser_theory,
+        theory,
         lemma_name,
         maude,
         None,
@@ -1418,7 +1414,7 @@ pub fn prove_lemma(
 /// the fallback path never re-runs the check; the borrowed handle lets a
 /// whole per-lemma loop share one cache allocation.
 pub fn prove_lemma_with_pool_file_heuristic(
-    parser_theory: &p::Theory,
+    theory: &crate::theory::Theory,
     lemma_name: &str,
     maude: tamarin_term::maude_proc::MaudeHandle,
     pool: Option<std::sync::Arc<tamarin_term::maude_proc::MaudePool>>,
@@ -1437,22 +1433,12 @@ pub fn prove_lemma_with_pool_file_heuristic(
     } else {
         None
     };
-    if trace {
-        eprintln!("[phase] elaborate start");
-    }
-    // Elaborate to get the typed theory, then pull rules + restrictions.
-    let mut theory = elaborate(parser_theory).map_err(|e| ProveError::Elaboration(e.message))?;
+    let mut theory = theory.clone();
     // Set in_file for oracle path resolution (HS Theory/Text/Parser.hs:309).
     if !in_file.is_empty() {
         theory.in_file = in_file.to_string();
     }
-    if trace {
-        eprintln!(
-            "[phase] elaborate done dt={:.3}s",
-            t_phase.as_ref().map_or(0.0, |t| t.elapsed().as_secs_f64())
-        );
-    }
-    let t_after_elab: Option<std::time::Instant> = if trace {
+    let t_setup: Option<std::time::Instant> = if trace {
         Some(std::time::Instant::now())
     } else {
         None
@@ -1522,9 +1508,7 @@ pub fn prove_lemma_with_pool_file_heuristic(
     if trace {
         eprintln!(
             "[phase] formula_to_system done dt={:.3}s; ProofContext::new start",
-            t_after_elab
-                .as_ref()
-                .map_or(0.0, |t| t.elapsed().as_secs_f64())
+            t_setup.as_ref().map_or(0.0, |t| t.elapsed().as_secs_f64())
         );
     }
     let t_ctx: Option<std::time::Instant> = if trace {

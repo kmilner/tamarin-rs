@@ -9,9 +9,10 @@
 //! `/thy/trace/<idx>/main/...`.
 //!
 //! We keep both the parser AST and the elaborated typed theory.  The
-//! parser AST is what [`ProofState::new`] re-elaborates to build the live
-//! prover session; the elaborated theory is used for accessor helpers
-//! (lemma list, restriction count, …).
+//! parser AST drives the web rule / restriction / macro renderers; the
+//! elaborated theory is what [`ProofState::new`] builds the live prover
+//! session from, and what the accessor helpers (lemma list, restriction
+//! count, …) read.
 //!
 //! Concurrency: `parking_lot::Mutex` — interactive single-user UI, no
 //! need for an async lock.  Only the autoprover (`autoprove` /
@@ -38,12 +39,19 @@ pub struct TheoryEntry {
     pub idx: usize,
     /// Theory name from the `.spthy` source.
     pub name: String,
-    /// Parser AST — kept verbatim so the lazily built [`ProofState`] can
-    /// re-elaborate exactly the shape the CLI prover would.
+    /// Parser AST — kept verbatim for the web renderers that walk it.
     pub parser_theory: Arc<p::Theory>,
-    /// Elaborated, typed theory — used for accessor helpers.  Wrapped
-    /// in `Arc` so we can clone the entry cheaply.
+    /// Elaborated, typed theory — the accessor helpers' source and the
+    /// theory the lazily built [`ProofState`] proves.  Wrapped in `Arc`
+    /// so we can clone the entry cheaply.
     pub typed_theory: Arc<TypedTheory>,
+    /// The signature every Maude process for this theory loads its module
+    /// from, taken before the load joins `check_close_intr_rule`'s verdicts
+    /// into [`typed_theory`](Self::typed_theory)'s signature.  A symbol's NDC
+    /// state is part of its Maude operator name, while the signature's rewrite
+    /// rules and the theory's terms keep their untagged symbols, so a module
+    /// built from the joined signature declares operators nothing else names.
+    pub prover_maude_sig: tamarin_term::maude_sig::MaudeSig,
     /// Where the theory came from.
     pub origin: TheoryOrigin,
     /// Load time for the UI.
@@ -254,7 +262,7 @@ impl TheoryStore {
         // `ProofState::new` (Maude boot + source precompute) so unrelated
         // handlers — and other tokio workers — aren't blocked for its
         // duration.
-        let (parser_theory, in_file, ndc_cache) = {
+        let (typed_theory, prover_maude_sig, in_file, ndc_cache) = {
             let inner = self.inner.lock();
             let entry = inner
                 .by_idx
@@ -264,7 +272,8 @@ impl TheoryStore {
                 return Ok(ps.clone());
             }
             (
-                entry.parser_theory.clone(),
+                entry.typed_theory.clone(),
+                entry.prover_maude_sig.clone(),
                 entry.origin.label(),
                 entry.ndc_cache.clone(),
             )
@@ -275,7 +284,8 @@ impl TheoryStore {
         let ndc_cache =
             ndc_cache.map(tamarin_theory::constraint::solver::context::IntrRuleCache::from);
         let ps = Arc::new(ProofState::new(
-            &parser_theory,
+            &typed_theory,
+            prover_maude_sig,
             &cfg.maude_path,
             cfg.stop_on_trace,
             &in_file,
