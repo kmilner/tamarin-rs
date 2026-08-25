@@ -51,7 +51,8 @@ mod tests {
     use tamarin_utils::pretty_hpj::html_mode as engine_html_mode;
 
     /// The guard this module re-exports and the engine's own `html_mode()`
-    /// read the same process global: this crate must not carry a second copy.
+    /// read the same thread-local flag: this crate must not carry a second
+    /// copy.
     #[test]
     fn html_mode_guard_is_shared_with_the_engine() {
         assert!(!engine_html_mode());

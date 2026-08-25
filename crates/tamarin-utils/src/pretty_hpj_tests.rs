@@ -381,7 +381,7 @@ fn fcat_close_bracket_separate_item() {
 }
 
 #[test]
-fn html_mode_is_one_process_global() {
+fn html_mode_is_one_engine_flag() {
     // One flag drives the whole engine: `html_mode()` reports what
     // `HtmlDocGuard` set, and `Doc::text` escapes and measures against the
     // same flag.
