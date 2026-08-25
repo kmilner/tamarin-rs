@@ -39,7 +39,8 @@ pub struct TheoryEntry {
     pub idx: usize,
     /// Theory name from the `.spthy` source.
     pub name: String,
-    /// Parser AST — kept verbatim for the web renderers that walk it.
+    /// Parser AST of the loaded theory, as the SAPIC and accountability
+    /// translations leave it.
     pub parser_theory: Arc<p::Theory>,
     /// Elaborated, typed theory — the accessor helpers' source and the
     /// theory the lazily built [`ProofState`] proves.  Wrapped in `Arc`

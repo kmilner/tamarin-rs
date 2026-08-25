@@ -165,9 +165,9 @@ pub fn load_from_source(
     // parsing.  RS captures `_restrict` into `Rule.embedded_restrictions`
     // at parse time; run the lifting pass here, immediately after parse and
     // BEFORE the wellformedness clone / elaboration / SAPIC translation —
-    // the exact position `run_batch` in run.rs uses — so the transformed
-    // parser theory drives every web renderer (rules / source / message /
-    // graphs / sequents).
+    // the exact position `run_batch` in run.rs uses — so the lifted
+    // restrictions reach `elaborate` and through it every web renderer
+    // (rules / source / message / graphs / sequents).
     tamarin_theory::rule_restriction::lift_rule_restrictions(&mut parser_theory)
         .map_err(|e| LoadError::Parse(format!("_restrict expansion failed: {}", e.message)))?;
 
@@ -222,9 +222,9 @@ pub fn load_from_source(
     // `!typed.is_sapic`, so it is safe to call unconditionally and leaves
     // non-process theories byte-unchanged.  It injects the generated MSR
     // rules + `single_session` restriction + `heuristic: p` into BOTH
-    // `parser_theory` (which drives the web rules / source / message
-    // renderers) and `typed` (for AC-variant pre-computation), so it MUST run
-    // before `populate_rule_variants` below.  `user_set_heuristic` is true iff
+    // `parser_theory` and `typed`; `typed` is what the web renderers and the
+    // AC-variant pre-computation read, so it MUST run before
+    // `populate_rule_variants` below.  `user_set_heuristic` is true iff
     // a `heuristic:` item already populated `typed.heuristic` (HS
     // `addHeuristic` returns `Nothing` in that case).
     // HS `Acc.checkWellformedness t` (translateTheory, TheoryLoader.hs:494-500, see line 497)
@@ -242,8 +242,9 @@ pub fn load_from_source(
     // `processOpenTheory`, TheoryLoader.hs:470-484, see line 472): expands each
     // `… accounts for` lemma into its
     // verification-condition lemmas + case-test predicates, injecting into
-    // BOTH `parser_theory` (web renderers) and `typed` (lemma list, proof
-    // state).  Without this the web UI has no pages for the VC sub-lemmas
+    // BOTH `parser_theory` and `typed`, which carries the lemma list, the
+    // proof state and everything the web renderers read.  Without this the
+    // web UI has no pages for the VC sub-lemmas
     // batch `--prove` proves.  No-op for theories without accountability
     // lemmas / case tests.
     tamarin_accountability::translate(&mut parser_theory, &mut typed)
