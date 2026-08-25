@@ -333,15 +333,9 @@ fn ast_rule_to_intr_rule_ac(
     };
 
     // HS `genericRule msgvar nodevar` returns `(ps, as, cs, [])`.
-    // The let block, restrictions, variants, and left/right fields
-    // are all empty for intruder rules.  Surface them as elaboration
-    // errors if present (defensive).
-    if !r.let_block.is_empty() {
-        return Err(format!(
-            "intruder rule {} unexpectedly has a let-block",
-            r.name
-        ));
-    }
+    // The restrictions, variants, and left/right fields are all empty for
+    // intruder rules.  Surface them as elaboration errors if present
+    // (defensive).
     if !r.embedded_restrictions.is_empty() {
         return Err(format!(
             "intruder rule {} unexpectedly has embedded restrictions",

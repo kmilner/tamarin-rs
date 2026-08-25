@@ -3401,11 +3401,11 @@ impl<'a> Parser<'a> {
     ///
     /// Equality is on the parsed AST minus the `(modulo E)` head, which HS
     /// discards at parse time (`optional moduloE`, Parser/Rule.hs:100-104).
-    /// Two corners are knowingly coarser than HS, which compares rules AFTER
-    /// applying the `let` substitution and appending the minted `Restr_*`
-    /// actions: same-name rules that differ only in `let`-bindings yet expand
-    /// to the same rule reject here where HS accepts, and vice-versa shapes
-    /// cannot arise (byte-identical sources always compare equal).
+    /// HS compares rules after `liftedAddProtoRule` has appended the minted
+    /// `Restr_*` actions; two same-name rules that both carry an embedded
+    /// restriction die at the restriction guard above before this comparison
+    /// runs, and a rule with none has no action to append, so the two
+    /// comparisons agree.
     fn guard_duplicate_rule(&mut self, r: &Rule) -> Result<(), ParseError> {
         if self.is_diff {
             return Ok(());
@@ -3420,7 +3420,6 @@ impl<'a> Parser<'a> {
         }
         if let Some(first) = self.seen_rules.iter().find(|p| p.name == r.name) {
             let differs = first.attributes != r.attributes
-                || first.let_block != r.let_block
                 || first.premises != r.premises
                 || first.actions != r.actions
                 || first.conclusions != r.conclusions
@@ -3575,14 +3574,21 @@ impl<'a> Parser<'a> {
         let attributes = self.rule_attributes()?;
         self.require_rule_colon(had_attributes)?;
         // Optional let block.
-        let (let_block, premises) = if self.at_keyword("let") {
-            (self.parse_let_block()?, self.fact_list()?)
+        let (lets, mut premises) = if self.at_keyword("let") {
+            (self.let_bindings()?, self.fact_list()?)
         } else {
             (vec![], self.premises_after_absent_let()?)
         };
         // Actions / restrictions either `--[..]->` or `-->`
-        let (actions, embedded_restrictions) = self.parse_actions_and_restrictions()?;
-        let conclusions = self.fact_list()?;
+        let (mut actions, mut embedded_restrictions) = self.parse_actions_and_restrictions()?;
+        let mut conclusions = self.fact_list()?;
+        apply_let_bindings(
+            &lets,
+            &mut premises,
+            &mut actions,
+            &mut conclusions,
+            &mut embedded_restrictions,
+        );
         // Optional variants
         let variants = if self.try_kw("variants") {
             let mut vs = Vec::new();
@@ -3622,7 +3628,6 @@ impl<'a> Parser<'a> {
             name,
             modulo,
             attributes,
-            let_block,
             premises,
             actions,
             conclusions,
@@ -3645,18 +3650,24 @@ impl<'a> Parser<'a> {
         let had_attributes = self.peek_punct("[");
         let attributes = self.rule_attributes()?;
         self.require_rule_colon(had_attributes)?;
-        let (let_block, premises) = if self.at_keyword("let") {
-            (self.parse_let_block()?, self.fact_list()?)
+        let (lets, mut premises) = if self.at_keyword("let") {
+            (self.let_bindings()?, self.fact_list()?)
         } else {
             (vec![], self.premises_after_absent_let()?)
         };
-        let (actions, embedded_restrictions) = self.parse_actions_and_restrictions()?;
-        let conclusions = self.fact_list()?;
+        let (mut actions, mut embedded_restrictions) = self.parse_actions_and_restrictions()?;
+        let mut conclusions = self.fact_list()?;
+        apply_let_bindings(
+            &lets,
+            &mut premises,
+            &mut actions,
+            &mut conclusions,
+            &mut embedded_restrictions,
+        );
         Ok(Rule {
             name,
             modulo,
             attributes,
-            let_block,
             premises,
             actions,
             conclusions,
@@ -3932,7 +3943,7 @@ impl<'a> Parser<'a> {
     /// `in`, folded into an `LNSubst`.  The left side is a VARIABLE, so a
     /// bare identifier that names an arity-0 function symbol binds the
     /// like-named variable and leaves the body's `nullaryApp` constant alone.
-    fn parse_let_block(&mut self) -> Result<Vec<LetBinding>, ParseError> {
+    fn let_bindings(&mut self) -> Result<Vec<(Term, Term)>, ParseError> {
         self.require_kw("let")?;
         let mut bs = Vec::new();
         loop {
@@ -3961,10 +3972,7 @@ impl<'a> Parser<'a> {
                 break;
             }
             let rhs = self.term(false)?;
-            bs.push(LetBinding {
-                var: lhs,
-                value: rhs,
-            });
+            bs.push((lhs, rhs));
         }
         // Consume the `in` terminator if present.
         let _ = self.try_kw("in");
@@ -6421,6 +6429,111 @@ impl<'a> Parser<'a> {
             FlagFormula::And(a, b) => self.eval_flagformula(a) && self.eval_flagformula(b),
             FlagFormula::Or(a, b) => self.eval_flagformula(a) || self.eval_flagformula(b),
         }
+    }
+}
+
+// =============================================================================
+// `let` inlining
+// =============================================================================
+
+/// Substitute a rule's `let` bindings into its body — HS
+/// `apply subst (ps0,as0,cs0,rs0)` (Theory/Text/Parser/Rule.hs:119, 133, 153).
+///
+/// `letBlock` folds the bindings with `foldr1 compose` over singleton
+/// substitutions (Theory/Text/Parser/Let.hs:35) and `compose s1 s2` has the
+/// effect of `s1(s2(t))` (Term/Substitution/SubstVFree.hs:186-191), so the
+/// bindings apply in REVERSE source order.  A binding's right-hand side is
+/// therefore rewritten by the bindings that precede it (`let a = ~k  b = h(a)`
+/// puts `h(~k)` in the body), while a reference to a LATER binding survives as
+/// a free variable (`let a = h(b)  b = ~k` puts `h(b)` in the body).
+fn apply_let_bindings(
+    bindings: &[(Term, Term)],
+    premises: &mut [Fact],
+    actions: &mut [Fact],
+    conclusions: &mut [Fact],
+    restrictions: &mut [Formula],
+) {
+    for (var, value) in bindings.iter().rev() {
+        for f in premises
+            .iter_mut()
+            .chain(actions.iter_mut())
+            .chain(conclusions.iter_mut())
+        {
+            subst_let_fact(f, var, value);
+        }
+        for phi in restrictions.iter_mut() {
+            subst_let_formula(phi, var, value);
+        }
+    }
+}
+
+fn subst_let_fact(f: &mut Fact, key: &Term, val: &Term) {
+    for a in f.args.iter_mut() {
+        *a = subst_let_term(a, key, val);
+    }
+}
+
+fn subst_let_term(t: &Term, key: &Term, val: &Term) -> Term {
+    if t == key {
+        return val.clone();
+    }
+    match t {
+        Term::App(name, args) => Term::App(
+            name.clone(),
+            args.iter().map(|a| subst_let_term(a, key, val)).collect(),
+        ),
+        Term::AlgApp(name, a, b) => Term::AlgApp(
+            name.clone(),
+            Box::new(subst_let_term(a, key, val)),
+            Box::new(subst_let_term(b, key, val)),
+        ),
+        Term::Pair(args) => Term::Pair(args.iter().map(|a| subst_let_term(a, key, val)).collect()),
+        Term::Diff(a, b) => Term::Diff(
+            Box::new(subst_let_term(a, key, val)),
+            Box::new(subst_let_term(b, key, val)),
+        ),
+        Term::BinOp(op, a, b) => Term::BinOp(
+            *op,
+            Box::new(subst_let_term(a, key, val)),
+            Box::new(subst_let_term(b, key, val)),
+        ),
+        Term::PatMatch(a) => Term::PatMatch(Box::new(subst_let_term(a, key, val))),
+        Term::Var(_)
+        | Term::PubLit(_)
+        | Term::FreshLit(_)
+        | Term::NatLit(_)
+        | Term::Number(_)
+        | Term::NumberOne
+        | Term::NatOne
+        | Term::DhNeutral => t.clone(),
+    }
+}
+
+fn subst_let_formula(phi: &mut Formula, key: &Term, val: &Term) {
+    match phi {
+        Formula::False | Formula::True => {}
+        Formula::Atom(a) => subst_let_atom(a, key, val),
+        Formula::Not(p) => subst_let_formula(p, key, val),
+        Formula::And(a, b) | Formula::Or(a, b) | Formula::Implies(a, b) | Formula::Iff(a, b) => {
+            subst_let_formula(a, key, val);
+            subst_let_formula(b, key, val);
+        }
+        Formula::Forall(_, body) | Formula::Exists(_, body) => subst_let_formula(body, key, val),
+    }
+}
+
+fn subst_let_atom(a: &mut Atom, key: &Term, val: &Term) {
+    match a {
+        Atom::Eq(x, y) | Atom::Less(x, y) | Atom::LessMset(x, y) | Atom::Subterm(x, y) => {
+            *x = subst_let_term(x, key, val);
+            *y = subst_let_term(y, key, val);
+        }
+        Atom::Action(f, t) => {
+            subst_let_fact(f, key, val);
+            *t = subst_let_term(t, key, val);
+        }
+        Atom::Last(t) => *t = subst_let_term(t, key, val),
+        Atom::Pred(f) => subst_let_fact(f, key, val),
     }
 }
 

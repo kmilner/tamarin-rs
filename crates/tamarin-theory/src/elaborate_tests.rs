@@ -615,132 +615,15 @@ fn term_to_lnterm_reads_every_surface_shape() {
 }
 
 // =========================================================================
-// Rule let-block desugaring
+// Rule `let` inlining
 // =========================================================================
-//
-// Haskell tamarin desugars `rule R: let x = t in body` by substituting
-// `t` for occurrences of `x` in the body before any further analysis.
-// These tests pin our `apply_let_block` to the same semantics.
 
+// The parser inlines a rule's `let` bindings (its own tests pin the
+// substitution); elaboration therefore sees the substituted body.  The
+// action and the conclusion of the elaborated rule carry `~k`, and the local
+// name `r` is gone.
 #[test]
-fn let_block_substitutes_in_premises() {
-    // rule R: let r = ~k in [In(r)] --[]-> []
-    // After desugaring: [In(~k)] --[]-> []
-    let src = r#"theory T begin
-            rule R: let r = ~k in [In(r), Fr(~k)] --[]-> []
-        end"#;
-    let p = parse_theory(src, &[]).unwrap();
-    let r = match &p.items[0] {
-        p::TheoryItem::Rule(r) => r,
-        _ => unreachable!(),
-    };
-    let desugared = apply_let_block(r);
-    assert!(desugared.let_block.is_empty());
-    // Premise In should now hold ~k (Var with sort Fresh), not local `r`.
-    let in_fact = &desugared.premises[0];
-    assert_eq!(in_fact.name, "In");
-    match &in_fact.args[0] {
-        p::Term::Var(vs) if vs.name == "k" && vs.sort == LSort::Fresh => {}
-        other => panic!("expected ~k after subst, got {:?}", other),
-    }
-}
-
-#[test]
-fn let_block_sequential_bindings() {
-    // let a = ~k; b = h(a) in [In(b)] --[]-> []
-    // After desugaring: [In(h(~k))]
-    // `builtins: hashing` declares `h/1` — the parser resolves prefix
-    // applications through `lookupArity` and an undeclared head would
-    // reparse as a variable and fail (oracle probes p05/p25).
-    let src = r#"theory T begin
-            builtins: hashing
-            rule R: let a = ~k b = h(a) in [In(b), Fr(~k)] --[]-> []
-        end"#;
-    let p = parse_theory(src, &[]).unwrap();
-    let r = p
-        .items
-        .iter()
-        .find_map(|it| match it {
-            p::TheoryItem::Rule(r) => Some(r),
-            _ => None,
-        })
-        .unwrap();
-    let desugared = apply_let_block(r);
-    let in_fact = &desugared.premises[0];
-    match &in_fact.args[0] {
-        p::Term::App(name, args) if name == "h" => match &args[0] {
-            p::Term::Var(vs) if vs.name == "k" && vs.sort == LSort::Fresh => {}
-            other => panic!("expected h(~k), got h({:?})", other),
-        },
-        other => panic!("expected h(~k), got {:?}", other),
-    }
-}
-
-#[test]
-fn let_block_forward_reference_stays_free() {
-    // HS bottom-up semantics (`letBlock`'s `toSubst = foldr1 compose .
-    // map (substFromList . return)`, Theory/Text/Parser/Let.hs:22-35): a binding whose
-    // RHS references a LATER binding keeps that name as a free var —
-    // by the time `a`'s application introduces `b` into the body,
-    // `b`'s singleton substitution has already been applied.
-    //   let a = h(b) b = ~k in [In(a), Fr(~k)]
-    // After desugaring: In(h(b)) with `b` a free Msg-var, NOT h(~k).
-    // `builtins: hashing` declares `h/1` — see
-    // `let_block_sequential_bindings`.
-    let src = r#"theory T begin
-            builtins: hashing
-            rule R: let a = h(b) b = ~k in [In(a), Fr(~k)] --[]-> []
-        end"#;
-    let p = parse_theory(src, &[]).unwrap();
-    let r = p
-        .items
-        .iter()
-        .find_map(|it| match it {
-            p::TheoryItem::Rule(r) => Some(r),
-            _ => None,
-        })
-        .unwrap();
-    let desugared = apply_let_block(r);
-    let in_fact = &desugared.premises[0];
-    match &in_fact.args[0] {
-        p::Term::App(name, args) if name == "h" => match &args[0] {
-            p::Term::Var(vs) if vs.name == "b" && vs.sort != LSort::Fresh => {}
-            other => panic!("expected h(b) with free b, got h({:?})", other),
-        },
-        other => panic!("expected h(b), got {:?}", other),
-    }
-}
-
-#[test]
-fn let_block_substitutes_in_actions_and_conclusions() {
-    let src = r#"theory T begin
-            rule R: let r = ~k in [Fr(~k)] --[Use(r)]-> [Out(r)]
-        end"#;
-    let p = parse_theory(src, &[]).unwrap();
-    let r = match &p.items[0] {
-        p::TheoryItem::Rule(r) => r,
-        _ => unreachable!(),
-    };
-    let desugared = apply_let_block(r);
-    let use_act = &desugared.actions[0];
-    match &use_act.args[0] {
-        p::Term::Var(vs) if vs.name == "k" && vs.sort == LSort::Fresh => {}
-        other => panic!("expected Use(~k), got Use({:?})", other),
-    }
-    let out_conc = &desugared.conclusions[0];
-    match &out_conc.args[0] {
-        p::Term::Var(vs) if vs.name == "k" && vs.sort == LSort::Fresh => {}
-        other => panic!("expected Out(~k), got Out({:?})", other),
-    }
-}
-
-// `elaborate` must run the desugaring itself (`rule_to_proto_rule_e`).  It
-// must not merely leave `apply_let_block` available to other callers.  The
-// action and the conclusion of the elaborated rule carry `~k`.  The local
-// name `r` is gone.  Without the desugaring, `r` elaborates without any
-// complaint as a free Msg-variable.
-#[test]
-fn let_block_end_to_end_elaborates() {
+fn let_inlining_end_to_end_elaborates() {
     let src = r#"theory T begin
             rule R: let r = ~k in [Fr(~k)] --[Use(r)]-> [Out(r)]
             lemma trivial: "All k #i. Use(k) @ i ==> Use(k) @ i"

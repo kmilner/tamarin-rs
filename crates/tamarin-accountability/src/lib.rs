@@ -596,19 +596,15 @@ fn theory_has_restrictions(parsed: &p::Theory) -> bool {
 
 /// The rules HS's RP check scans, reconstructed from the parser AST: each
 /// rule's E-form plus its explicit AC variants (HS `rulesLNFacts` /
-/// `rulesActions` read `_oprRuleE` and `_oprRuleAC`, Generation.hs:128-146),
-/// with `let` blocks applied — HS substitutes lets into the rule at parse time
-/// (Parser/Rule.hs:131-133), while our parser keeps `Rule.let_block` unapplied
-/// until elaboration.  Macros stay UNexpanded: HS applies them only at theory
-/// close (`closeProtoRule`, src/Rule.hs:82-86), after this check has run.
-fn rp_check_rules(parsed: &p::Theory) -> Vec<p::Rule> {
+/// `rulesActions` read `_oprRuleE` and `_oprRuleAC`, Generation.hs:128-146).
+/// Macros stay UNexpanded: HS applies them only at theory close
+/// (`closeProtoRule`, src/Rule.hs:82-86), after this check has run.
+fn rp_check_rules(parsed: &p::Theory) -> Vec<&p::Rule> {
     let mut out = Vec::new();
     for i in &parsed.items {
         if let p::TheoryItem::Rule(r) = i {
-            out.push(tamarin_theory::elaborate::apply_let_block(r));
-            for v in &r.variants {
-                out.push(tamarin_theory::elaborate::apply_let_block(v));
-            }
+            out.push(r);
+            out.extend(r.variants.iter());
         }
     }
     out
@@ -617,7 +613,7 @@ fn rp_check_rules(parsed: &p::Theory) -> Vec<p::Rule> {
 /// HS `rulesContainPubConst thy = any termContainsPubConst (rulesLNTerms thy)`
 /// (Generation.hs:320-322): any premise/action/conclusion term of any rule is
 /// or contains a public constant.
-fn rules_contain_pub_const(rules: &[p::Rule]) -> bool {
+fn rules_contain_pub_const(rules: &[&p::Rule]) -> bool {
     rules.iter().any(|r| {
         r.premises
             .iter()
@@ -652,7 +648,7 @@ fn term_contains_pub_const(t: &p::Term) -> bool {
 /// case-test action fact and every rule action fact sharing its tag, each free
 /// variable of the case-test fact must line up with a public variable in the
 /// rule fact.
-fn case_tests_instantiated_by_pub_vars(elaborated: &Theory, rules: &[p::Rule]) -> bool {
+fn case_tests_instantiated_by_pub_vars(elaborated: &Theory, rules: &[&p::Rule]) -> bool {
     let ct_facts = case_tests_facts(elaborated);
     let rule_facts = rules_actions(rules);
     for cf in &ct_facts {
@@ -674,7 +670,7 @@ fn case_tests_facts(elaborated: &Theory) -> Vec<Fact<BLNTerm>> {
 }
 
 /// HS `rulesActions thy` (Generation.hs:142-146): every rule's action facts.
-fn rules_actions(rules: &[p::Rule]) -> Vec<&p::Fact> {
+fn rules_actions<'a>(rules: &[&'a p::Rule]) -> Vec<&'a p::Fact> {
     rules.iter().flat_map(|r| r.actions.iter()).collect()
 }
 

@@ -497,7 +497,6 @@ fn parsed_stub_rule(name: &str) -> p::Rule {
         name: name.to_string(),
         modulo: None,
         attributes: vec![],
-        let_block: vec![],
         premises: vec![],
         actions: vec![],
         conclusions: vec![],

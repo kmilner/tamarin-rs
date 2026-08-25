@@ -126,13 +126,6 @@ pub fn restriction_frees_by_rule(
         if rule.embedded_restrictions.is_empty() {
             continue;
         }
-        // Same let application as `lift_one_rule` (HS applies the let block
-        // to the restriction formulas at parse, Parser/Rule.hs:132-135).
-        let rule = if rule.let_block.is_empty() {
-            rule.clone()
-        } else {
-            crate::elaborate::apply_let_block(rule)
-        };
         let mut frees: Vec<tamarin_term::lterm::LVar> = Vec::new();
         for phi in &rule.embedded_restrictions {
             for v in frees_list(phi) {
@@ -157,24 +150,10 @@ pub fn restriction_frees_by_rule(
 /// synthesises, injecting the generated restrictions + rewritten actions into
 /// both the parsed and elaborated theories.
 pub fn lift_one_rule(
-    rule: p::Rule,
+    mut rule: p::Rule,
     predicates: &[p::Predicate],
 ) -> Result<(Vec<p::Restriction>, p::Rule), ExpandError> {
     let rname = rule.name.clone();
-    // HS applies the `let` block to (ps, as, cs, rs) at parse time, in the
-    // parser around `liftedAddProtoRule`, BEFORE that runs.  Mirror by desugaring
-    // the let block here, so the abstracted restriction terms (and the
-    // appended action terms, which join the rule body) carry the let
-    // expansion exactly once.  `apply_let_block` returns the rule with an
-    // empty `let_block`; downstream `apply_let_block` calls (elaborate /
-    // render) then become no-ops, matching HS where no let block survives
-    // parse.
-    let mut rule = if rule.let_block.is_empty() {
-        rule
-    } else {
-        crate::elaborate::apply_let_block(&rule)
-    };
-
     let formulas = std::mem::take(&mut rule.embedded_restrictions);
     let mut restrictions: Vec<p::Restriction> = Vec::with_capacity(formulas.len());
     let mut new_actions: Vec<p::Fact> = Vec::with_capacity(formulas.len());

@@ -21,6 +21,30 @@ fn unbound_var_detected() {
     assert!(topics(&r).contains("Unbound variables"), "report: {:?}", r);
 }
 
+/// The parser inlines a rule's `let` bindings into the body it builds
+/// (`apply subst (ps0,as0,cs0,rs0)`, Theory/Text/Parser/Rule.hs:119), so every
+/// check here reads the substituted facts.  `Fr(m)` passes the fresh-argument
+/// check as a message variable and fails it as `Fr( h(~k) )`; `c %+ %1` is nat
+/// well sorted only once `c` is the nat variable `%i`.  The end-to-end pin is
+/// `scripts/divergence_fixtures/s6_let_conclusion_var`.
+#[test]
+fn let_inlining_reaches_the_fresh_and_nat_checks() {
+    let t = parse(
+        r#"theory T begin
+            builtins: hashing, natural-numbers
+            rule Reuse: let m = h(~k) in [Fr(m)] --[ ]-> [Out(m)]
+            rule Count: let c = %i in [In(<'c', %i>)] --[Count(c %+ %1)]-> []
+        end"#,
+    );
+    let r = check_theory(&t);
+    let tp = topics(&r);
+    assert!(
+        tp.contains("Fr facts must only use a fresh- or a msg-variable"),
+        "report: {r:?}"
+    );
+    assert!(!tp.contains("Nat Sorts"), "report: {r:?}");
+}
+
 /// Rule conclusions also feed the arity table.  The tests that pin the arity
 /// body clash on premises (`nullary_fact_keeps_only_the_sep_space`) or on an
 /// action/lemma-fact pair (`wf_lemma_fact_show_form_nests_pairs_right`).

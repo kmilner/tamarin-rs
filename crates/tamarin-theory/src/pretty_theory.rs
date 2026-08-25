@@ -2531,14 +2531,7 @@ fn render_rule_e_block(
 /// triviality test (`auto_sources::unfold_rule_variants`), so the two agree
 /// byte-for-byte on what the rule displays as.
 ///
-/// Desugars `let x = t in ...` bindings first — HS does this via
-/// `applyMacroInProtoRule`/`expandRuleLetBlock` so the emitted rule contains
-/// no bound names from the `let` block.  Mirrors `apply_let_block`
-/// (`elaborate.rs`).  HS site: `lib/theory/src/TheoryObject.hs::prettyTheory`
-/// → `prettyRule` chain which operates on the post-`applyMacroInProtoRule`
-/// rule.
-///
-/// Then re-folds arity-1 comma lists: an arity-1 function applied as
+/// Re-folds arity-1 comma lists: an arity-1 function applied as
 /// `f(a,b,c)` is folded by `naryOpApp`'s `k == 1` branch into `f(<a,b,c>)`
 /// (Theory/Text/Parser/Term.hs:94-96).  RS's term parser keeps the surplus
 /// args, so re-fold here before rendering.  See `rewrite_arity1_term`.
@@ -2550,18 +2543,17 @@ pub(crate) fn display_fact_rows(
     parsed_rule: &p::Rule,
     arity1: &std::collections::HashSet<String>,
 ) -> (Vec<p::Fact>, Vec<p::Fact>, Vec<p::Fact>) {
-    let desugared = crate::elaborate::apply_let_block(parsed_rule);
-    let premises: Vec<p::Fact> = desugared
+    let premises: Vec<p::Fact> = parsed_rule
         .premises
         .iter()
         .map(|f| rewrite_arity1_fact(f, arity1))
         .collect();
-    let actions: Vec<p::Fact> = desugared
+    let actions: Vec<p::Fact> = parsed_rule
         .actions
         .iter()
         .map(|f| rewrite_arity1_fact(f, arity1))
         .collect();
-    let conclusions: Vec<p::Fact> = desugared
+    let conclusions: Vec<p::Fact> = parsed_rule
         .conclusions
         .iter()
         .map(|f| rewrite_arity1_fact(f, arity1))
@@ -4252,7 +4244,6 @@ mod manual_rule_variants_tests {
             name: name.to_string(),
             modulo: None,
             attributes: vec![],
-            let_block: vec![],
             premises: vec![],
             actions: vec![],
             conclusions: vec![],

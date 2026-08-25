@@ -124,24 +124,17 @@ pub fn check_message_derivation(
         // HS applies theory macros before the deriv check
         // (MessageDerivationChecks.hs:36-50, see line 40 -- `originalRules = map
         // (applyMacroInProtoRule (theoryMacros thy)) $ theoryRules thy`).
-        // Mirror that here: first expand theory-level `macros:` into the
-        // rule's premise/action/conclusion facts (the only parts the deriv
-        // check inspects), THEN substitute the rule-local `let { }` block.
-        // Theory macros are a DISTINCT AST node (`TheoryItem::Macros`) from
-        // the rule-local let-block (`Rule.let_block`); both must be resolved
-        // so we walk the same shape HS does.  Without macro expansion, a rule
-        // whose body uses a fresh-introducing macro is silently skipped; and
-        // without let-block substitution, RS flags every let-bound name
-        // (`pkB`, `mtr`, `ci2`, ...) as non-derivable.
+        // Mirror that here: expand theory-level `macros:` into the rule's
+        // premise/action/conclusion facts, the only parts the deriv check
+        // inspects.  Without it, a rule whose body uses a fresh-introducing
+        // macro is silently skipped.
         let macro_expanded;
-        let macro_src = if theory_macros.is_empty() {
+        let rule = if theory_macros.is_empty() {
             raw_rule
         } else {
             macro_expanded = apply_theory_macros_to_rule(raw_rule, &theory_macros);
             &macro_expanded
         };
-        let expanded = crate::elaborate::apply_let_block(macro_src);
-        let rule = &expanded;
         let free_vars = collect_rule_free_vars(rule);
         if free_vars.is_empty() {
             continue;
@@ -246,10 +239,6 @@ fn apply_theory_macros_to_rule(rule: &p::Rule, macros: &[p::Macro]) -> p::Rule {
     }
     for f in &mut r.conclusions {
         *f = crate::macro_expand::apply_macros_fact(macros, f);
-    }
-    for b in &mut r.let_block {
-        b.value = crate::macro_expand::apply_macros_term(macros, &b.value);
-        b.var = crate::macro_expand::apply_macros_term(macros, &b.var);
     }
     r
 }
@@ -554,7 +543,6 @@ fn synthesise_probe_theory(
         name: format!("Probe_{}", idx),
         modulo: None,
         attributes: Vec::new(),
-        let_block: Vec::new(),
         premises: fresh_premises,
         actions: vec![action.clone()],
         conclusions: out_concs,

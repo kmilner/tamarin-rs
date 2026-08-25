@@ -135,7 +135,6 @@ pub struct Rule {
     pub name: String,
     pub modulo: Option<String>, // E or AC
     pub attributes: Vec<RuleAttr>,
-    pub let_block: Vec<LetBinding>,
     pub premises: Vec<Fact>,
     pub actions: Vec<Fact>,
     pub conclusions: Vec<Fact>,
@@ -158,12 +157,6 @@ pub enum RuleAttr {
     /// (so the pretty-printer renders the `process="..."` attribute).
     Process(String),
     External(String, Option<String>),
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct LetBinding {
-    pub var: Term, // pattern
-    pub value: Term,
 }
 
 // =============================================================================

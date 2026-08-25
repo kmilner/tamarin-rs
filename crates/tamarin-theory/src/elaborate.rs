@@ -794,26 +794,17 @@ fn rule_to_proto_rule_e(r: &p::Rule, sig: &MaudeSig) -> Result<ProtoRuleE, ElabE
         attributes: rule_attributes_from_parser(&r.attributes),
         restrictions: Vec::new(),
     };
-    // Desugar let-bindings before fact conversion: each `let x = t in ...`
-    // binding substitutes `x` with `t` in the rule body.
-    let r_owned: p::Rule;
-    let r_eff = if r.let_block.is_empty() {
-        r
-    } else {
-        r_owned = apply_let_block(r);
-        &r_owned
-    };
-    let prems = r_eff
+    let prems = r
         .premises
         .iter()
         .map(|f| fact_to_lnfact(f, sig))
         .collect::<Result<Vec<_>, _>>()?;
-    let acts = r_eff
+    let acts = r
         .actions
         .iter()
         .map(|f| fact_to_lnfact(f, sig))
         .collect::<Result<Vec<_>, _>>()?;
-    let concs = r_eff
+    let concs = r
         .conclusions
         .iter()
         .map(|f| fact_to_lnfact(f, sig))
@@ -821,126 +812,6 @@ fn rule_to_proto_rule_e(r: &p::Rule, sig: &MaudeSig) -> Result<ProtoRuleE, ElabE
     let new_vars = compute_new_vars(&prems, &concs, &acts);
 
     Ok(Rule::new(info, prems, concs, acts).with_new_vars(new_vars))
-}
-
-/// Desugar a rule's `let x_1 = t_1 ... x_n = t_n in body` block by
-/// substituting each binding's RHS for occurrences of the LHS in the
-/// body (premises, actions, conclusions, embedded restrictions).
-///
-/// HS `letBlock` (Parser/Let.hs): `toSubst = foldr1 compose . map
-/// (substFromList . return)` with `compose s1 s2` = "apply s2 first,
-/// then s1" (SubstVFree.hs).  `foldr1 compose [b1..bn]` is
-/// therefore equivalent to applying each binding as a SINGLETON
-/// substitution sequentially in REVERSE binding order ("bottom-up
-/// application semantics", Theory/Text/Parser/Let.hs:22-24).  Consequences:
-///   * backward references expand: binding i's RHS, once introduced
-///     into the body at step i, is rewritten by the later-applied
-///     steps j < i;
-///   * FORWARD references survive as free variables: by the time an
-///     early binding introduces a later binding's name into the body,
-///     that later binding has already been applied (spdm's `cipher_in
-///     = senc(message_in, resp_master_secret)` with
-///     `resp_master_secret` defined 20 lines below keeps it as a free
-///     Msg-var in the rule — semantically MORE GENERAL than the
-///     expanded term, affecting unification and proof search).
-pub fn apply_let_block(r: &p::Rule) -> p::Rule {
-    let mut out = r.clone();
-    let bindings = std::mem::take(&mut out.let_block);
-
-    for b in bindings.iter().rev() {
-        for f in &mut out.premises {
-            subst_fact_in_place(f, &b.var, &b.value);
-        }
-        for f in &mut out.actions {
-            subst_fact_in_place(f, &b.var, &b.value);
-        }
-        for f in &mut out.conclusions {
-            subst_fact_in_place(f, &b.var, &b.value);
-        }
-        for phi in &mut out.embedded_restrictions {
-            subst_formula_in_place(phi, &b.var, &b.value);
-        }
-    }
-    out
-}
-
-fn subst_term(t: &p::Term, key: &p::Term, val: &p::Term) -> p::Term {
-    if t == key {
-        return val.clone();
-    }
-    match t {
-        p::Term::App(name, args) => p::Term::App(
-            name.clone(),
-            args.iter().map(|a| subst_term(a, key, val)).collect(),
-        ),
-        p::Term::AlgApp(name, a, b) => p::Term::AlgApp(
-            name.clone(),
-            Box::new(subst_term(a, key, val)),
-            Box::new(subst_term(b, key, val)),
-        ),
-        p::Term::Pair(args) => {
-            p::Term::Pair(args.iter().map(|a| subst_term(a, key, val)).collect())
-        }
-        p::Term::Diff(a, b) => p::Term::Diff(
-            Box::new(subst_term(a, key, val)),
-            Box::new(subst_term(b, key, val)),
-        ),
-        p::Term::BinOp(op, a, b) => p::Term::BinOp(
-            *op,
-            Box::new(subst_term(a, key, val)),
-            Box::new(subst_term(b, key, val)),
-        ),
-        p::Term::PatMatch(a) => p::Term::PatMatch(Box::new(subst_term(a, key, val))),
-        // Atoms and literals: no recursion.
-        p::Term::Var(_)
-        | p::Term::PubLit(_)
-        | p::Term::FreshLit(_)
-        | p::Term::NatLit(_)
-        | p::Term::Number(_)
-        | p::Term::NumberOne
-        | p::Term::NatOne
-        | p::Term::DhNeutral => t.clone(),
-    }
-}
-
-fn subst_fact_in_place(f: &mut p::Fact, key: &p::Term, val: &p::Term) {
-    for a in &mut f.args {
-        *a = subst_term(a, key, val);
-    }
-}
-
-fn subst_formula_in_place(phi: &mut p::Formula, key: &p::Term, val: &p::Term) {
-    use p::Formula::*;
-    match phi {
-        False | True => {}
-        Atom(a) => subst_atom_in_place(a, key, val),
-        Not(p) => subst_formula_in_place(p, key, val),
-        And(a, b) | Or(a, b) | Implies(a, b) | Iff(a, b) => {
-            subst_formula_in_place(a, key, val);
-            subst_formula_in_place(b, key, val);
-        }
-        Forall(_, body) | Exists(_, body) => {
-            subst_formula_in_place(body, key, val);
-        }
-    }
-}
-
-fn subst_atom_in_place(a: &mut p::Atom, key: &p::Term, val: &p::Term) {
-    use p::Atom::*;
-    match a {
-        Eq(x, y) | Less(x, y) | LessMset(x, y) | Subterm(x, y) => {
-            *x = subst_term(x, key, val);
-            *y = subst_term(y, key, val);
-        }
-        Action(f, t) => {
-            subst_fact_in_place(f, key, val);
-            *t = subst_term(t, key, val);
-        }
-        Last(t) => {
-            *t = subst_term(t, key, val);
-        }
-        Pred(f) => subst_fact_in_place(f, key, val),
-    }
 }
 
 /// Fact-tag mapping shared by [`fact_to_lnfact`] and [`fact_to_sapic_fact`].
@@ -1168,8 +1039,7 @@ fn lnfacts_to_parser(facts: &[crate::fact::LNFact]) -> Vec<p::Fact> {
 /// come from here.
 ///
 /// The body is the elaborated E-rule projected back through
-/// `lnfacts_to_parser`, so it is already macro/let expanded: the render
-/// path's `apply_let_block` / macro checks are no-ops, and AC argument order
+/// `lnfacts_to_parser`, so it is already macro expanded and AC argument order
 /// is canonicalised at render time (`render_rule_body`), exactly as for the
 /// modulo-AC comment blocks.  The attributes carry color / process /
 /// no_derivcheck / issapicrule / role, as HS's `toRule` produced them.
@@ -1181,7 +1051,6 @@ pub fn proto_rule_to_parsed(r: &crate::rule::ProtoRuleE) -> p::Rule {
         },
         modulo: None,
         attributes: crate::mult_restricted::surface_attrs(&r.info.attributes),
-        let_block: Vec::new(),
         premises: lnfacts_to_parser(&r.premises),
         actions: lnfacts_to_parser(&r.actions),
         conclusions: lnfacts_to_parser(&r.conclusions),
@@ -1728,8 +1597,8 @@ fn cmp_varspec(a: &p::VarSpec, b: &p::VarSpec) -> std::cmp::Ordering {
 /// Also canonicalises `C`-symbol applications: `em(a, b)` is
 /// commutative (not associative), so HS's `fAppC EMap [a, b]` sorts the
 /// two arguments (Term/Term/Raw.hs:133-134).  Mirror that here so the parser-AST
-/// display path matches HS — `em` args from let-block desugaring may
-/// arrive in source order, which can differ from canonical order.
+/// display path matches HS — `em` args arrive in source order, which can
+/// differ from canonical order.
 /// HS site: `Theory/Text/Parser/Term.hs:87-106, see line 103` / `Term/Term/Raw.hs:133-134`:
 ///   `fAppC nacsym as = FAPP (C nacsym) (sort as)`
 pub fn canonicalize_ac_in_pterm(t: &p::Term) -> p::Term {

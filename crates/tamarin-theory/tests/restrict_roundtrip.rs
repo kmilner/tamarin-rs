@@ -191,7 +191,6 @@ fn one_rule(f: &p::Formula) -> p::Rule {
         name: "C_2".to_string(),
         modulo: None,
         attributes: Vec::new(),
-        let_block: Vec::new(),
         premises: Vec::new(),
         actions: Vec::new(),
         conclusions: Vec::new(),

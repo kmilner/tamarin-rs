@@ -1108,7 +1108,6 @@ mod tests {
             name: name.to_string(),
             modulo: None,
             attributes: vec![],
-            let_block: vec![],
             premises: vec![],
             actions: vec![],
             conclusions: vec![],

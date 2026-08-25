@@ -639,16 +639,15 @@ fn term_name_lits(t: &Term, out: &mut Vec<(NameKind, String)>) {
     }
 }
 
-/// Every name literal of a rule, in [`rule_facts`] order, over the
-/// LET-SUBSTITUTED facts.  Both name reports walk `universeBi ru`
-/// (`freshNamesReport'` Wellformedness.hs:447, `publicNamesReport'`
-/// Wellformedness.hs:475-478) over `thyProtoRules` (:456, :486), whose rules
-/// are already let-substituted — so a name occurring only inside a `let`
-/// value (`let m = ~'foo' in … Out(m)`) is inlined and surfaces here.
+/// Every name literal of a rule, in [`rule_facts`] order.  Both name reports
+/// walk `universeBi ru` (`freshNamesReport'` Wellformedness.hs:447,
+/// `publicNamesReport'` Wellformedness.hs:475-478) over `thyProtoRules`
+/// (:456, :486), so a name occurring only inside a `let` value
+/// (`let m = ~'foo' in … Out(m)`) is inlined into the rule body by the parser
+/// and surfaces here.
 fn rule_name_lits(r: &Rule) -> Vec<(NameKind, String)> {
-    let (prems, acts, concs) = rule_facts_with_lets(r);
     let mut names = Vec::new();
-    for f in prems.iter().chain(&acts).chain(&concs) {
+    for f in rule_facts(r) {
         for t in &f.args {
             term_name_lits(t, &mut names);
         }
@@ -940,70 +939,6 @@ fn wf_term_doc(t: &Term, ac: &AcSyms) -> WfDoc {
         PatMatch(inner) => {
             WfDoc::Beside(vec![WfDoc::Text("=".to_string()), wf_term_doc(inner, ac)])
         }
-    }
-}
-
-/// Substitute every `let`-binding of a rule into its facts, mirroring HS,
-/// whose rule parser inlines the `let` block before building the
-/// `ProtoRuleE` (so wellformedness checks see fully-substituted facts).
-///
-/// HS `letBlock` (Parser/Let.hs:28-35, see line 34) is `foldr1 compose` over singleton
-/// substitutions — equivalent to applying each binding sequentially in
-/// REVERSE binding order ("bottom-up").  Backward references expand;
-/// FORWARD references survive as free variables.  Matches
-/// `elaborate::apply_let_block`.
-fn rule_facts_with_lets(r: &Rule) -> (Vec<Fact>, Vec<Fact>, Vec<Fact>) {
-    let mut prems = r.premises.clone();
-    let mut acts = r.actions.clone();
-    let mut concs = r.conclusions.clone();
-    for b in r.let_block.iter().rev() {
-        for f in prems.iter_mut() {
-            subst_let_fact(f, &b.var, &b.value);
-        }
-        for f in acts.iter_mut() {
-            subst_let_fact(f, &b.var, &b.value);
-        }
-        for f in concs.iter_mut() {
-            subst_let_fact(f, &b.var, &b.value);
-        }
-    }
-    (prems, acts, concs)
-}
-
-fn subst_let_fact(f: &mut Fact, key: &Term, val: &Term) {
-    for a in f.args.iter_mut() {
-        *a = subst_let_term(a, key, val);
-    }
-}
-
-fn subst_let_term(t: &Term, key: &Term, val: &Term) -> Term {
-    if t == key {
-        return val.clone();
-    }
-    use Term::*;
-    match t {
-        App(name, args) => App(
-            name.clone(),
-            args.iter().map(|a| subst_let_term(a, key, val)).collect(),
-        ),
-        AlgApp(name, a, b) => AlgApp(
-            name.clone(),
-            Box::new(subst_let_term(a, key, val)),
-            Box::new(subst_let_term(b, key, val)),
-        ),
-        Pair(args) => Pair(args.iter().map(|a| subst_let_term(a, key, val)).collect()),
-        Diff(a, b) => Diff(
-            Box::new(subst_let_term(a, key, val)),
-            Box::new(subst_let_term(b, key, val)),
-        ),
-        BinOp(op, a, b) => BinOp(
-            *op,
-            Box::new(subst_let_term(a, key, val)),
-            Box::new(subst_let_term(b, key, val)),
-        ),
-        PatMatch(a) => PatMatch(Box::new(subst_let_term(a, key, val))),
-        Var(_) | PubLit(_) | FreshLit(_) | NatLit(_) | Number(_) | NumberOne | NatOne
-        | DhNeutral => t.clone(),
     }
 }
 
@@ -1383,21 +1318,21 @@ pub fn reserved_fact_name_rules(thy: &Theory) -> WfReport {
     let ac = user_ac_fun_names(thy);
     let mut out = Vec::new();
     for r in theory_rules(thy) {
-        // HS checks the let-substituted `ProtoRuleE`, so the emitted facts
-        // carry their fully-inlined terms (Term/Term/Raw.hs fAppAC order).
-        let (prems, acts, concs) = rule_facts_with_lets(r);
-        let bad_lhs: Vec<&Fact> = prems
+        let bad_lhs: Vec<&Fact> = r
+            .premises
             .iter()
             .filter(|f| KLOG_NAMES.contains(&f.name.as_str()))
             .collect();
-        let bad_acts: Vec<&Fact> = acts
+        let bad_acts: Vec<&Fact> = r
+            .actions
             .iter()
             .filter(|f| {
                 KLOG_NAMES.contains(&f.name.as_str())
                     || matches!(f.name.as_str(), "In" | "Out" | "Fr")
             })
             .collect();
-        let bad_rhs: Vec<&Fact> = concs
+        let bad_rhs: Vec<&Fact> = r
+            .conclusions
             .iter()
             .filter(|f| KLOG_NAMES.contains(&f.name.as_str()))
             .collect();
@@ -1484,12 +1419,10 @@ pub fn special_facts_usage(thy: &Theory) -> WfReport {
     let mut out = Vec::new();
     for r in theory_rules(thy) {
         // HS `specialFactsUsage'` (Wellformedness.hs:553-566) reads
-        // `get rPrems`/`get rConcs` on the closed `ProtoRuleE`, whose facts
-        // carry their fully-inlined `let` terms — mirror the reserved-names
-        // sibling and use the let-substituted facts.
-        let (prems, _acts, concs) = rule_facts_with_lets(r);
-        let lhs_bad: Vec<&Fact> = prems.iter().filter(|f| f.name == "Out").collect();
-        let rhs_bad: Vec<&Fact> = concs
+        // `get rPrems`/`get rConcs` on the closed `ProtoRuleE`.
+        let lhs_bad: Vec<&Fact> = r.premises.iter().filter(|f| f.name == "Out").collect();
+        let rhs_bad: Vec<&Fact> = r
+            .conclusions
             .iter()
             .filter(|f| f.name == "Fr" || f.name == "In")
             .collect();
@@ -2266,20 +2199,19 @@ fn lookup_binder_render(r: &Rule) -> Option<&str> {
 }
 
 /// Collect a rule's unbound variables (conclusion/action vars NOT in
-/// any premise / let-binding).  Returns the list in first-occurrence
-/// order, deduped, excluding pub-sort variables (which are implicitly
-/// adversary-known and so always bound).
+/// any premise).  Returns the list in first-occurrence order, deduped,
+/// excluding pub-sort variables (which are implicitly adversary-known and so
+/// always bound).
 fn collect_rule_unbound_vars(r: &Rule) -> Vec<VarSpec> {
     // HS `unboundCheck` (Wellformedness.hs:493-512) runs on the
     // let-substituted, macro-applied `ProtoRuleE` (`thyProtoRules`).  So
-    // `let m1 = <'1',$A,~Na> in ... Out(m1)` is INLINED to `Out(<'1',$A,~Na>)`
-    // before the check — the let value's free vars are NOT bound, only the
-    // (now-substituted-away) let variable.  Mirror by inlining lets here.
+    // `let m1 = <'1',$A,~Na> in ... Out(m1)` reaches the check as
+    // `Out(<'1',$A,~Na>)` — the let value's free vars are NOT bound, only the
+    // substituted-away let variable.
     //
     // HS collects `frees (rConcs, rActs, rInfo)`; we iterate only
     // `acts.chain(concs)` and so do NOT fold in raw embedded-restriction
     // (`rInfo`) free vars — a distinct, currently-out-of-scope gap.
-    let (prems, acts, concs) = rule_facts_with_lets(r);
     // HS `originatesFromLookup` (Wellformedness.hs:501-503, 506-510): the
     // variable a `lookup t as v` combinator binds reaches the generated rule
     // through its `IsIn( t, v )` action rather than a premise, so it is not
@@ -2290,14 +2222,14 @@ fn collect_rule_unbound_vars(r: &Rule) -> Vec<VarSpec> {
     // LVar (name AND sort AND idx), so `~ltk` (fresh) does NOT bind `ltk`
     // (msg).  Key on (name, sort, idx).
     let mut bound: BTreeSet<(String, LSort, u64)> = BTreeSet::new();
-    for f in &prems {
+    for f in &r.premises {
         for v in fact_vars(f) {
             bound.insert((v.name.clone(), v.sort, v.idx));
         }
     }
     let mut unbound: Vec<VarSpec> = Vec::new();
     let mut seen: BTreeSet<(String, LSort, u64)> = BTreeSet::new();
-    for f in acts.iter().chain(&concs) {
+    for f in r.actions.iter().chain(&r.conclusions) {
         for v in fact_vars(f) {
             if v.sort == LSort::Pub {
                 continue;
@@ -2548,7 +2480,6 @@ fn project_rule(r: &Rule, left: bool) -> Rule {
         name: r.name.clone(),
         modulo: r.modulo.clone(),
         attributes: r.attributes.clone(),
-        let_block: r.let_block.clone(),
         premises: r.premises.iter().map(|f| proj_fact(f, left)).collect(),
         actions: r.actions.iter().map(|f| proj_fact(f, left)).collect(),
         conclusions: r.conclusions.iter().map(|f| proj_fact(f, left)).collect(),
@@ -2759,11 +2690,10 @@ fn contains_subterm(haystack: &Term, needle: &Term) -> bool {
 pub fn variable_sort_clashes(thy: &Theory) -> WfReport {
     let mut out = Vec::new();
     for r in theory_rules(thy) {
-        let (prems, acts, concs) = rule_facts_with_lets(r);
         // Pair each var with its lowercase name ONCE, so the sort/group steps
         // below don't re-allocate a `to_lowercase` string per comparison/probe.
         let mut vars: Vec<(String, VarSpec)> = Vec::new();
-        for f in prems.iter().chain(&acts).chain(&concs) {
+        for f in rule_facts(r) {
             for v in fact_vars(f) {
                 vars.push((v.name.to_lowercase(), v));
             }

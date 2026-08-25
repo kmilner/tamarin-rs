@@ -234,8 +234,6 @@ pub fn apply_macros_formula(macros: &[p::Macro], f: &p::Formula) -> p::Formula {
 ///     Theory/Text/Parser.hs:97-105, see line 105)
 ///   - restriction formula (Theory/Model/Restriction.hs:164-166)
 ///   - embedded restriction in rule (treat as formula)
-///   - rule let-block RHS (already inlined into the rule by
-///     `apply_let_block` at elaborate time)
 ///
 /// Macros are collected from `TheoryItem::Macros` items in the theory.
 /// If no macros are declared, the theory is left unchanged (HS:
@@ -318,14 +316,6 @@ fn expand_rule(macros: &[p::Macro], r: &mut p::Rule) {
     }
     for phi in &mut r.embedded_restrictions {
         *phi = apply_macros_formula(macros, phi);
-    }
-    // Let-block: macros can appear on the RHS.  apply_let_block (in
-    // elaborate.rs) substitutes these into the body after parsing; we
-    // expand on the LHS-and-RHS terms here so a let `x = macro(...)`
-    // sees its RHS rewritten before `apply_let_block` substitutes it.
-    for b in &mut r.let_block {
-        b.value = apply_macros_term(macros, &b.value);
-        b.var = apply_macros_term(macros, &b.var);
     }
     // Variants / diff sides are passed through UNCHANGED, matching HS.
     // `variants` is the user-written explicit `variants ...` block (HS
