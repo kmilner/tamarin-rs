@@ -13,6 +13,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use tamarin_term::lterm::{HasFrees, LNTerm, LVar};
+use tamarin_term::macro_expand::LNMacro;
 
 use crate::pretty_hpj::{fsep, nest_short_doc, punctuate, Doc};
 
@@ -534,6 +535,17 @@ pub fn is_nearly_trivial_ku_fact(
 // =============================================================================
 
 pub type LNFact = Fact<LNTerm>;
+
+/// HS `applyMacroInFact` (Theory/Model/Fact.hs:323-325): the theory's macros
+/// applied to every term of a fact, tag and annotations kept.
+pub fn apply_macro_in_fact(macros: &[LNMacro], f: &LNFact) -> LNFact {
+    let terms: Vec<LNTerm> = f
+        .terms
+        .iter()
+        .map(|t| tamarin_term::macro_expand::apply_macros(macros, t.clone()))
+        .collect();
+    Fact::fresh_annotated(f.tag, f.annotations.clone(), terms)
+}
 
 /// HS `instance Apply s t => Apply s (Fact t)` (Theory/Model/Fact.hs:196-197,
 /// `apply subst = fmap (apply subst)`): a free substitution applied to every

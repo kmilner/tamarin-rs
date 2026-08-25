@@ -30,8 +30,8 @@ use tamarin_theory::elaborate::{fact_to_sapic_fact, term_to_sapic_term};
 use tamarin_theory::formula::sapic_from_parser;
 // A variable literal of a SAPIC term and a SAPIC binder are the same reading
 // of a `VarSpec`, so both come from one definition.
+use tamarin_theory::elaborate::map_formula_terms;
 pub(crate) use tamarin_theory::elaborate::varspec_to_sapic;
-use tamarin_theory::macro_expand::map_formula_terms;
 use tamarin_theory::sapic::{
     PlainProcess, Process, ProcessCombinator, ProcessParsedAnnotation, SapicAction, SapicLVar,
 };

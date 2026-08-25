@@ -13,14 +13,16 @@
 //!   composition is handled by `signature::SignaturePure::empty`)
 //! - `functions:`/`equations:`/`macros:` → signature registration
 //!   (`st_fun_syms`, `CtxtStRule`s when convertible, macro definitions)
-//! - Parser-AST macro expansion (`macro_expand::expand_theory_macros`)
-//!   before any typed conversion
 //! - `predicates:` → `theory::Predicate`, which the later items of the same
 //!   theory are expanded against (`predicate::expand_formula`)
 //! - Rules — `parser::Rule` → `OpenProtoRule(ProtoRuleE, [])`
 //! - Lemmas and restrictions — the formula is converted to `LNFormula`
-//!   (`item_formula`), alongside the pre-macro formula HS keeps as
-//!   `_lOriginalFormula` / `_rstrOriginalFormula`
+//!   (`item_formula`)
+//! - The declared macros applied to the internal rule, lemma and restriction
+//!   (`rule::apply_macro_in_rule`, `theory::apply_macro_in_lemma`,
+//!   `restriction::apply_macro_in_restriction`), which also records the
+//!   pre-macro formula HS keeps as `_lOriginalFormula` /
+//!   `_rstrOriginalFormula`
 //!
 //! It also provides the parser↔typed conversion helpers used above:
 //! `term_to_lnterm`, the `lnterm_to_parser` projection the printers read, and
@@ -49,14 +51,14 @@ use tamarin_term::vterm::{Lit, VTerm};
 use crate::constraint::constraints::{Disj, Goal, SplitId};
 use crate::formula::LNFormula;
 use crate::guarded::{formula_to_guarded, formula_to_guarded_parsed};
-use crate::restriction::Restriction;
+use crate::restriction::{apply_macro_in_restriction, Restriction};
 use crate::rule::{
     ConcIdx, PremIdx, ProtoRuleE, ProtoRuleEInfo, ProtoRuleName, Rule, RuleAttributes,
 };
 use crate::signature::SignaturePure;
 use crate::theory::{
-    AccLemma, CaseTest, LNMacro, Lemma, LemmaAttr, OpenProtoRule, ProofTree, Theory, TheoryItem,
-    TraceQuantifier, TranslationElement,
+    apply_macro_in_lemma, AccLemma, CaseTest, LNMacro, Lemma, LemmaAttr, OpenProtoRule, ProofTree,
+    Theory, TheoryItem, TraceQuantifier, TranslationElement,
 };
 
 #[derive(Debug, Clone)]
@@ -290,43 +292,6 @@ fn collect_process_pub_names(p: &crate::sapic::PlainProcess, out: &mut Vec<Strin
 /// formula-bearing item is expanded against the `predicates:` declared before
 /// it (`elaborate_items`).
 pub fn elaborate(parser_thy: &p::Theory) -> Result<Theory, ElabError> {
-    let mut thy_clone = parser_thy.clone();
-    // Apply macros at parser-AST level.  Mirrors HS's parse-time application:
-    // lemmas are expanded by `parseLemmaWithMacros`
-    // (Theory/Text/Parser.hs:97-105); rules by `closeProtoRule`
-    // (lib/theory/src/Rule.hs:82-86) before variantsProtoRule runs;
-    // restrictions by `applyMacroInRestriction`
-    // (Theory/Model/Restriction.hs:164-166).  We apply at the parser-AST level
-    // so a single pass handles every term-bearing item before any typed
-    // conversion (`term_to_lnterm` / `from_parser`) sees a macro call.
-    crate::macro_expand::expand_theory_macros(&mut thy_clone);
-    // The item's formula before macro application, which HS's
-    // `applyMacroInRestriction` stores as `_rstrOriginalFormula`
-    // (Theory/Model/Restriction.hs:164-166).  `expand_theory_macros` rewrites
-    // the item list in place and adds and removes nothing, so the two lists
-    // pair by position.
-    elaborate_already_expanded(&thy_clone, &parser_thy.items)
-}
-
-/// Join of the `[NDC]` and `[NDC-diff]` attributes (HS `function`'s `joinNDC`).
-fn ndc_state_of(ndc: bool, ndc_diff: bool) -> NdcState {
-    let a = if ndc {
-        NdcState::IsNdc
-    } else {
-        NdcState::NotNdc
-    };
-    let b = if ndc_diff {
-        NdcState::IsNdcDiff
-    } else {
-        NdcState::NotNdc
-    };
-    a.join(b)
-}
-
-fn elaborate_already_expanded(
-    parser_thy: &p::Theory,
-    original_items: &[p::TheoryItem],
-) -> Result<Theory, ElabError> {
     let mut sig = SignaturePure::empty(parser_thy.is_diff);
     if parser_thy.is_diff {
         sig.maude_sig = sig.maude_sig.merge(enable_diff_maude_sig());
@@ -353,8 +318,23 @@ fn elaborate_already_expanded(
         thy.items.push(TheoryItem::ConfigBlock(cfg.clone()));
     }
 
-    elaborate_items(&parser_thy.items, original_items, &mut thy)?;
+    elaborate_items(&parser_thy.items, &mut thy)?;
     Ok(thy)
+}
+
+/// Join of the `[NDC]` and `[NDC-diff]` attributes (HS `function`'s `joinNDC`).
+fn ndc_state_of(ndc: bool, ndc_diff: bool) -> NdcState {
+    let a = if ndc {
+        NdcState::IsNdc
+    } else {
+        NdcState::NotNdc
+    };
+    let b = if ndc_diff {
+        NdcState::IsNdcDiff
+    } else {
+        NdcState::NotNdc
+    };
+    a.join(b)
 }
 
 /// The signature and translation-option contribution of one theory item.
@@ -528,11 +508,7 @@ fn maude_sig_step(item: &p::TheoryItem, out: &mut Theory) -> Result<Vec<LNMacro>
                 // ordering are identical.
                 let cur = std::mem::take(&mut out.signature.maude_sig);
                 out.signature.maude_sig = cur.add_macro_sym(sym);
-                ms.push(LNMacro {
-                    name: m.name.clone(),
-                    args,
-                    body,
-                });
+                ms.push(LNMacro::new(m.name.as_bytes().to_vec(), args, body));
             }
             return Ok(ms);
         }
@@ -543,12 +519,11 @@ fn maude_sig_step(item: &p::TheoryItem, out: &mut Theory) -> Result<Vec<LNMacro>
 
 /// The `MaudeSig` a parsed theory's declarations build, without elaborating
 /// the theory: [`maude_sig_step`] folded over `thy`'s items from the empty,
-/// diff-seeded signature [`elaborate_already_expanded`] starts from.
+/// diff-seeded signature [`elaborate`] starts from.
 ///
 /// It equals `elaborate(thy)?.signature.maude_sig`: those are the only four
-/// item kinds that touch the signature, and the macro expansion `elaborate`
-/// runs before `elaborate_items` (`macro_expand::expand_theory_macros`)
-/// leaves all four untouched.
+/// item kinds that touch the signature, and `elaborate_items` runs the same
+/// step over the same items in the same order.
 /// `elaborate_tests::parse_time_signature_matches_elaboration` pins that over
 /// the examples tree.
 pub fn parse_time_signature(thy: &p::Theory) -> Result<MaudeSig, ElabError> {
@@ -563,20 +538,20 @@ pub fn parse_time_signature(thy: &p::Theory) -> Result<MaudeSig, ElabError> {
     Ok(scratch.signature.maude_sig)
 }
 
-fn elaborate_items(
-    items: &[p::TheoryItem],
-    original_items: &[p::TheoryItem],
-    out: &mut Theory,
-) -> Result<(), ElabError> {
+fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), ElabError> {
     // The predicates declared so far, in source order.  HS expands a lemma or
     // restriction against `theoryPredicates thy` as it is added
     // (Theory/Text/Parser.hs:129-152, TheoryObject.hs:433-449), so an item
     // textually before a `predicates:` block does not see it.
     let mut preds: Vec<crate::predicate::Predicate> = Vec::new();
-    for (idx, item) in items.iter().enumerate() {
-        // The same item read from the pre-macro list, which pairs with
-        // `items` by position.
-        let original_item = original_items.get(idx).unwrap_or(item);
+    // The macros declared so far, read back from the items pushed for them.
+    // HS applies `theoryMacros thy0` to every item at close time
+    // (`closeTheoryItem`, CloseRule.hs:84-86); a macro call that precedes its
+    // `macros:` block is an "unknown operator" parse failure
+    // (`lookupArity`, Theory/Text/Parser/Term.hs:62-66), so the two lists
+    // agree on every theory that parses.
+    let mut macros: Vec<LNMacro> = Vec::new();
+    for item in items.iter() {
         match item {
             p::TheoryItem::Builtins(names) => {
                 maude_sig_step(item, out)?;
@@ -593,6 +568,7 @@ fn elaborate_items(
                 let ms = maude_sig_step(item, out)?;
                 if !ms.is_empty() {
                     out.items.push(TheoryItem::Macros(ms));
+                    macros = out.macros().cloned().collect();
                 }
             }
             p::TheoryItem::Predicates(predicates) => {
@@ -629,27 +605,23 @@ fn elaborate_items(
                     .push(crate::tactic::Tactic::parse(&t.name, &t.raw));
             }
             p::TheoryItem::Restriction(r) | p::TheoryItem::LegacyAxiom(r) => {
-                let original = match original_item {
-                    p::TheoryItem::Restriction(o) | p::TheoryItem::LegacyAxiom(o) => &o.formula,
-                    _ => &r.formula,
-                };
-                let msig = &out.signature.maude_sig;
                 let restr = Restriction {
                     name: r.name.clone(),
-                    formula: item_formula(&r.formula, msig, &preds)?,
-                    original_formula: Some(item_formula(original, msig, &preds)?),
+                    formula: item_formula(&r.formula, &out.signature.maude_sig, &preds)?,
+                    original_formula: None,
                 };
-                out.items.push(TheoryItem::Restriction(restr));
+                out.items
+                    .push(TheoryItem::Restriction(apply_macro_in_restriction(
+                        &macros, restr,
+                    )));
             }
             p::TheoryItem::Rule(r) | p::TheoryItem::IntrRule(r) => {
                 let elab = rule_to_proto_rule_e(r, &out.signature.maude_sig)?;
-                out.items.push(TheoryItem::Rule(OpenProtoRule::new(elab)));
+                out.items.push(TheoryItem::Rule(OpenProtoRule::new(
+                    crate::rule::apply_macro_in_rule(&macros, elab),
+                )));
             }
             p::TheoryItem::Lemma(l) => {
-                let original = match original_item {
-                    p::TheoryItem::Lemma(o) => &o.formula,
-                    _ => &l.formula,
-                };
                 let msig = &out.signature.maude_sig;
                 let lem: Lemma = Lemma {
                     name: l.name.clone(),
@@ -660,7 +632,7 @@ fn elaborate_items(
                         p::TraceQuantifier::ExistsTrace => TraceQuantifier::ExistsTrace,
                     },
                     formula: item_formula(&l.formula, msig, &preds)?,
-                    original_formula: Some(item_formula(original, msig, &preds)?),
+                    original_formula: None,
                     proof: match l.proof.as_ref().and_then(|p| p.tree.as_ref()) {
                         Some(t) => {
                             Some(proof_tree_from_parsed(t, msig).map_err(|e| ElabError {
@@ -674,7 +646,8 @@ fn elaborate_items(
                     },
                     plaintext: l.plaintext.clone(),
                 };
-                out.items.push(TheoryItem::Lemma(lem));
+                out.items
+                    .push(TheoryItem::Lemma(apply_macro_in_lemma(&macros, lem)));
             }
             p::TheoryItem::DiffLemma(_dl) => {
                 // Unreachable for a non-diff theory: HS only parses
@@ -1001,7 +974,7 @@ pub fn proof_tree_from_parsed(
     })
 }
 
-fn compute_new_vars(
+pub(crate) fn compute_new_vars(
     prems: &[crate::fact::LNFact],
     concs: &[crate::fact::LNFact],
     acts: &[crate::fact::LNFact],
@@ -1713,9 +1686,69 @@ pub fn canonicalize_ac_in_pterm(t: &p::Term) -> p::Term {
     }
 }
 
+/// Shared structural walker: rebuild a parser-AST fact, mapping `g` over
+/// every arg.  The single traversal shape behind [`canonicalize_ac_in_pfact`],
+/// [`rewrite_arity1_fact`] and `macro_expand::apply_macros_fact` (each
+/// supplies its own leaf `&Term -> Term`).
+pub(crate) fn map_fact_terms(f: &p::Fact, g: &dyn Fn(&p::Term) -> p::Term) -> p::Fact {
+    p::Fact {
+        persistent: f.persistent,
+        name: f.name.clone(),
+        args: f.args.iter().map(g).collect(),
+        annotations: f.annotations.clone(),
+    }
+}
+
+/// Shared structural walker: rebuild an atom, mapping `g` over every term and
+/// `map_fact_terms` over embedded facts.  See [`map_fact_terms`].
+pub(crate) fn map_atom_terms(a: &p::Atom, g: &dyn Fn(&p::Term) -> p::Term) -> p::Atom {
+    use p::Atom::*;
+    match a {
+        Eq(x, y) => Eq(g(x), g(y)),
+        Less(x, y) => Less(g(x), g(y)),
+        LessMset(x, y) => LessMset(g(x), g(y)),
+        Subterm(x, y) => Subterm(g(x), g(y)),
+        Action(f, t) => Action(map_fact_terms(f, g), g(t)),
+        Last(t) => Last(g(t)),
+        Pred(f) => Pred(map_fact_terms(f, g)),
+    }
+}
+
+/// Shared structural walker: rebuild a formula, mapping `g` over every leaf
+/// term while cloning quantifier `VarSpec`s unchanged.  See [`map_fact_terms`].
+/// `pub` (not `pub(crate)`): tamarin-sapic's `formula_unpattern` walks with it
+/// too.
+pub fn map_formula_terms(f: &p::Formula, g: &dyn Fn(&p::Term) -> p::Term) -> p::Formula {
+    use p::Formula::*;
+    match f {
+        False => False,
+        True => True,
+        Atom(a) => Atom(map_atom_terms(a, g)),
+        Not(x) => Not(Box::new(map_formula_terms(x, g))),
+        And(x, y) => And(
+            Box::new(map_formula_terms(x, g)),
+            Box::new(map_formula_terms(y, g)),
+        ),
+        Or(x, y) => Or(
+            Box::new(map_formula_terms(x, g)),
+            Box::new(map_formula_terms(y, g)),
+        ),
+        Implies(x, y) => Implies(
+            Box::new(map_formula_terms(x, g)),
+            Box::new(map_formula_terms(y, g)),
+        ),
+        Iff(x, y) => Iff(
+            Box::new(map_formula_terms(x, g)),
+            Box::new(map_formula_terms(y, g)),
+        ),
+        Forall(vs, x) => Forall(vs.clone(), Box::new(map_formula_terms(x, g))),
+        Exists(vs, x) => Exists(vs.clone(), Box::new(map_formula_terms(x, g))),
+    }
+}
+
 /// Apply `canonicalize_ac_in_pterm` to every term in a fact.
 pub fn canonicalize_ac_in_pfact(f: &p::Fact) -> p::Fact {
-    crate::macro_expand::map_fact_terms(f, &canonicalize_ac_in_pterm)
+    map_fact_terms(f, &canonicalize_ac_in_pterm)
 }
 
 /// Apply `canonicalize_ac_in_pterm` to every term in a parser-AST formula.
@@ -1727,7 +1760,7 @@ pub fn canonicalize_ac_in_pfact(f: &p::Fact) -> p::Fact {
 /// order on the free-variable parser AST so the subsequent guarded conversion
 /// (Free→Bound abstraction) preserves exactly what HS would have produced.
 pub fn canonicalize_ac_in_formula(f: &p::Formula) -> p::Formula {
-    crate::macro_expand::map_formula_terms(f, &canonicalize_ac_in_pterm)
+    map_formula_terms(f, &canonicalize_ac_in_pterm)
 }
 
 /// Names of arity-1 NoEq function symbols in the (closed-theory) signature.
@@ -1812,7 +1845,7 @@ pub fn rewrite_arity1_term(t: &p::Term, arity1: &std::collections::HashSet<Strin
 // std kept (byte-inert) — iteration order never reaches output.
 #[allow(clippy::disallowed_types)]
 pub fn rewrite_arity1_fact(fa: &p::Fact, arity1: &std::collections::HashSet<String>) -> p::Fact {
-    crate::macro_expand::map_fact_terms(fa, &|t| rewrite_arity1_term(t, arity1))
+    map_fact_terms(fa, &|t| rewrite_arity1_term(t, arity1))
 }
 
 /// Apply [`rewrite_arity1_term`] to every term in a parser-AST formula.
@@ -1824,7 +1857,7 @@ pub fn rewrite_arity1_formula(
     f: &p::Formula,
     arity1: &std::collections::HashSet<String>,
 ) -> p::Formula {
-    crate::macro_expand::map_formula_terms(f, &|t| rewrite_arity1_term(t, arity1))
+    map_formula_terms(f, &|t| rewrite_arity1_term(t, arity1))
 }
 
 /// Right-fold a non-empty term list into a right-associative `pair(..)` chain:

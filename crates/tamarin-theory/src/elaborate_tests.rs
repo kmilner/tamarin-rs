@@ -895,6 +895,92 @@ end\n";
     );
 }
 
+/// HS applies the theory's macros to the internal rule at close time
+/// (`closeTheoryItem`, CloseRule.hs:84, `applyMacroInRule`,
+/// Theory/Model/Rule.hs:1115-1121) and keeps the parsed rule unexpanded, which
+/// is what the `rule (modulo E)` block prints — the split
+/// `examples/features/macros/MacroExample.spthy` shows.  The parser has
+/// already inlined the rule's `let` bindings by then
+/// (Theory/Text/Parser/Rule.hs:119), so a macro call written on the right of
+/// a binding reaches the internal rule expanded.
+#[test]
+fn macro_in_a_let_bound_term_reaches_the_internal_rule() {
+    use crate::pretty_hpj::FLAT_WIDTH;
+
+    let src = "theory T\n\
+begin\n\
+functions: h/1\n\
+macros:\n  m(x) = h(x)\n\
+rule A:\n  let y = m(~k) in\n  [ Fr(~k) ] --[ A( y ) ]-> [ Out( y ) ]\n\
+end\n";
+    let parsed = parse_theory(src, &[]).unwrap();
+    let parsed_rule = parsed
+        .items
+        .iter()
+        .find_map(|i| match i {
+            p::TheoryItem::Rule(r) => Some(r),
+            _ => None,
+        })
+        .expect("parsed rule");
+    assert!(
+        matches!(&parsed_rule.actions[0].args[0],
+            p::Term::App(n, args) if n == "m" && args.len() == 1),
+        "the parsed rule keeps the macro call: {:?}",
+        parsed_rule.actions[0].args[0]
+    );
+
+    let thy = elaborate(&parsed).unwrap();
+    let rule = thy.rules().next().expect("elaborated rule");
+    let shown = |fa: &crate::fact::LNFact| {
+        crate::fact::pretty_lnfact(fa).render_with(FLAT_WIDTH, FLAT_WIDTH)
+    };
+    assert_eq!(shown(&rule.rule.actions[0]), "A( h(~k) )");
+    assert_eq!(shown(&rule.rule.conclusions[0]), "Out( h(~k) )");
+}
+
+/// A case test and an accountability lemma are `TranslationItem`s, which
+/// `closeTheoryItem` passes through with no macro application
+/// (CloseRule.hs:82-90, see line 90) and `liftedAddCaseTest` /
+/// `liftedAddAccLemma` add verbatim (Theory/Text/Parser.hs:153-163, see lines
+/// 157 and 163).  Their formulas keep the macro call the source wrote.
+#[test]
+fn a_case_test_and_an_acc_lemma_keep_their_macro_calls() {
+    use crate::pretty_hpj::FLAT_WIDTH;
+    use crate::theory::TranslationElement;
+
+    let src = "theory T\n\
+begin\n\
+functions: id/1\n\
+macros:\n  idm(x) = id(x)\n\
+rule R:\n  [ In( x ) ] --[ Blame( x ), Fin( ) ]-> [ Out( x ) ]\n\
+test blamed:\n  \"Ex #i. Blame(idm('a')) @ #i\"\n\
+lemma acc:\n  blamed accounts for \"All #i. Fin() @ #i ==> Ex #j. Blame(idm('a')) @ #j\"\n\
+end\n";
+    let thy = elaborate(&parse_theory(src, &[]).unwrap()).unwrap();
+    let shown = |f: &crate::formula::SyntacticLNFormula| {
+        crate::pretty_formula::syntactic_lnformula_doc(f).render_with(FLAT_WIDTH, FLAT_WIDTH)
+    };
+    let mut seen: Vec<String> = Vec::new();
+    for item in &thy.items {
+        match item {
+            TheoryItem::Translation(TranslationElement::CaseTest(c)) => {
+                seen.push(shown(&c.formula))
+            }
+            TheoryItem::Translation(TranslationElement::AccLemma(a)) => {
+                seen.push(shown(&a.formula))
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(
+        seen,
+        vec![
+            "∃ #i. Blame( idm('a') ) @ #i".to_string(),
+            "∀ #i. (Fin( ) @ #i) ⇒ (∃ #j. Blame( idm('a') ) @ #j)".to_string(),
+        ]
+    );
+}
+
 /// The stored proof of a lemma reaches the solver as internal
 /// [`ProofMethod`](crate::constraint::solver::proof_method::ProofMethod)
 /// values: HS's `proofMethod` (Theory/Text/Parser/Proof.hs:75-85) builds them
@@ -1226,8 +1312,8 @@ struct SigReport {
     findings: Vec<String>,
 }
 
-/// Whether the theory declares a macro, i.e. whether
-/// `macro_expand::expand_theory_macros` rewrites anything.
+/// Whether the theory declares a macro, i.e. whether `maude_sig_step`'s
+/// `Macros` arm contributes a symbol to the signature.
 fn declares_macros(thy: &p::Theory) -> bool {
     thy.items
         .iter()
@@ -1247,12 +1333,10 @@ fn carries_diff_item(thy: &p::Theory) -> bool {
     })
 }
 
-/// `parse_time_signature` folds `maude_sig_step` over the parsed items and
-/// `elaborate` folds it over the macro-expanded ones, so the two agree
-/// exactly while macro expansion rewrites no `builtins:`, `functions:`,
-/// `equations:` or `macros:` item.  Every theory of the examples tree is the
-/// net, each diff example also in its `--diff` reading, where both sides seed
-/// `enable_diff_maude_sig`.
+/// `parse_time_signature` and `elaborate` fold `maude_sig_step` over the same
+/// items in the same order, so the two agree exactly.  Every theory of the
+/// examples tree is the net, each diff example also in its `--diff` reading,
+/// where both sides seed `enable_diff_maude_sig`.
 ///
 /// The floors keep it a net: a parse or elaboration regression that shrinks
 /// the compared set fails here instead of passing on fewer files.

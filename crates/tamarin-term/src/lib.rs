@@ -24,6 +24,7 @@
 //!   and the LNTerm↔Maude conversion context)
 //! - [`unification`] ← `Term.Unification` — **non-AC fragment only**
 //!   (AC unification is delegated to Maude via [`maude_proc`])
+//! - [`macro_expand`] ← `Term.Macro`
 //! - [`subsumption`] ← `Term.Subsumption`
 //! - [`norm`] ← `Term.Rewriting.Norm` (calls into Maude)
 //! - [`intern`] ← (no HS analog) global write-once intern pools for
@@ -39,6 +40,7 @@ pub mod builtin;
 pub mod function_symbols;
 pub mod intern;
 pub mod lterm;
+pub mod macro_expand;
 pub mod maude_parse;
 pub mod maude_print;
 pub mod maude_proc;

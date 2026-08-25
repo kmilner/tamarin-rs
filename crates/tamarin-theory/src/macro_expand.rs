@@ -2,30 +2,38 @@
 // of the tamarin-prover sources this file cites; list them with:
 //   scripts/gen_license_headers.py --authors <this file>
 
-//! Parser-AST level macro expansion.
+//! Parser-AST level macro expansion — a second engine beside the internal one
+//! ([`tamarin_term::macro_expand::apply_macros`] and the `apply_macro_in_*`
+//! functions of [`crate::fact`], [`crate::formula`], [`crate::rule`],
+//! [`crate::theory`] and [`crate::restriction`]), for the passes that still
+//! read macro-expanded PARSER rules and formulas:
+//!
+//!   - [`macro_expanded_clone`] — `translated_wf`'s two wellformedness clones
+//!     (stage 8) and `deriv_check`'s probe theory (stage 7);
+//!   - [`expand_theory_macros`] — `formula_reports`' pre-pass (stage 8);
+//!   - [`apply_macros_fact`] — `deriv_check`'s rule rewrite and
+//!     `pretty_theory::is_trivial_proto_variant_ac` (stage 7);
+//!   - [`apply_macros_formula`] — `tamarin_accountability`'s injected lemma
+//!     (stage 7).
 //!
 //! Port of `Term.Macro.applyMacros` (HS: lib/term/src/Term/Macro.hs:40-54)
 //! plus the call-sites that drive it:
 //!
 //!   - `applyMacroInRule`     — lib/theory/src/Theory/Model/Rule.hs:1115-1121
-//!   - `applyMacroInFact`     — lib/theory/src/Theory/Model/Fact.hs:323-326
+//!   - `applyMacroInFact`     — lib/theory/src/Theory/Model/Fact.hs:323-325
 //!   - `applyMacroInFormula`  — lib/theory/src/Theory/Model/Formula.hs:314-316
 //!   - `applyMacroInLemma`    — lib/theory/src/Lemma.hs:83-88
 //!   - `applyMacroInRestriction` — lib/theory/src/Theory/Model/Restriction.hs:164-166
 //!   - `closeProtoRule` calls applyMacroInRule BEFORE variantsProtoRule
 //!     — lib/theory/src/Rule.hs:82-87
-//!   - `parseLemmaWithMacros`  — lib/theory/src/Theory/Text/Parser.hs:97-105
 //!
 //! HS works at the typed `LNTerm` / `LNFact` / `LNFormula` level, with
 //! macro matching keyed on the `FunSym` (a `NoEq (name, (arity, Private,
-//! Destructor, NotNDC))` tuple — Term/Macro.hs:29-30, see line 30).  RS parses lemma/restriction
-//! formulas as `parser::ast::Formula` and converts them to `LNFormula` in
-//! `elaborate`, so the natural place to expand is the parser AST.  This is
-//! observationally faithful: every macro call site is rewritten to its body
-//! before either side's typed conversion runs.  The macro fun-syms
-//! themselves are still registered in MaudeSig
-//! (HS Theory/Text/Parser/Macro.hs:29-47, see line 46 `addMacroSym`) so any unexpanded
-//! reference — and Maude — still see them.
+//! Destructor, NotNDC))` tuple — Term/Macro.hs:29-30, see line 30).  At the
+//! parser-AST level a call site carries no `FunSym`, so the match is by
+//! (name, arity).  The macro fun-syms themselves are registered in MaudeSig
+//! (HS Theory/Text/Parser/Macro.hs:29-47, see line 46 `addMacroSym`) so any
+//! unexpanded reference — and Maude — still see them.
 //!
 //! Recursion semantics mirror HS exactly:
 //!   - args are recursively expanded FIRST (Term/Macro.hs:40-54, see line 46),
@@ -39,6 +47,8 @@
 use std::collections::BTreeMap;
 
 use tamarin_parser::ast as p;
+
+use crate::elaborate::{map_fact_terms, map_formula_terms};
 
 /// Apply all macros to a term, recursing into args first and re-expanding
 /// the body after substitution.  Mirrors HS `applyMacros` exactly
@@ -149,68 +159,8 @@ pub(crate) fn subst_term_by_name(t: &p::Term, subst: &BTreeMap<String, p::Term>)
     }
 }
 
-/// Shared structural walker: rebuild a fact, mapping `g` over every arg.
-/// The single traversal shape behind `apply_macros_fact`,
-/// `elaborate::canonicalize_ac_in_pfact`, and `elaborate::rewrite_arity1_fact`
-/// (each supplies its own leaf `&Term -> Term`).
-pub(crate) fn map_fact_terms(f: &p::Fact, g: &dyn Fn(&p::Term) -> p::Term) -> p::Fact {
-    p::Fact {
-        persistent: f.persistent,
-        name: f.name.clone(),
-        args: f.args.iter().map(g).collect(),
-        annotations: f.annotations.clone(),
-    }
-}
-
-/// Shared structural walker: rebuild an atom, mapping `g` over every term and
-/// `map_fact_terms` over embedded facts.  See [`map_fact_terms`].
-pub(crate) fn map_atom_terms(a: &p::Atom, g: &dyn Fn(&p::Term) -> p::Term) -> p::Atom {
-    use p::Atom::*;
-    match a {
-        Eq(x, y) => Eq(g(x), g(y)),
-        Less(x, y) => Less(g(x), g(y)),
-        LessMset(x, y) => LessMset(g(x), g(y)),
-        Subterm(x, y) => Subterm(g(x), g(y)),
-        Action(f, t) => Action(map_fact_terms(f, g), g(t)),
-        Last(t) => Last(g(t)),
-        Pred(f) => Pred(map_fact_terms(f, g)),
-    }
-}
-
-/// Shared structural walker: rebuild a formula, mapping `g` over every leaf
-/// term while cloning quantifier `VarSpec`s unchanged.  See [`map_fact_terms`].
-/// `pub` (not `pub(crate)`): tamarin-sapic's `formula_unpattern` walks with it
-/// too.
-pub fn map_formula_terms(f: &p::Formula, g: &dyn Fn(&p::Term) -> p::Term) -> p::Formula {
-    use p::Formula::*;
-    match f {
-        False => False,
-        True => True,
-        Atom(a) => Atom(map_atom_terms(a, g)),
-        Not(x) => Not(Box::new(map_formula_terms(x, g))),
-        And(x, y) => And(
-            Box::new(map_formula_terms(x, g)),
-            Box::new(map_formula_terms(y, g)),
-        ),
-        Or(x, y) => Or(
-            Box::new(map_formula_terms(x, g)),
-            Box::new(map_formula_terms(y, g)),
-        ),
-        Implies(x, y) => Implies(
-            Box::new(map_formula_terms(x, g)),
-            Box::new(map_formula_terms(y, g)),
-        ),
-        Iff(x, y) => Iff(
-            Box::new(map_formula_terms(x, g)),
-            Box::new(map_formula_terms(y, g)),
-        ),
-        Forall(vs, x) => Forall(vs.clone(), Box::new(map_formula_terms(x, g))),
-        Exists(vs, x) => Exists(vs.clone(), Box::new(map_formula_terms(x, g))),
-    }
-}
-
 /// Apply macros to every term in a fact.  Mirrors HS `applyMacroInFact`
-/// (Theory/Model/Fact.hs:323-326 `applyMacroInFact mcs (Fact tag annot terms) =
+/// (Theory/Model/Fact.hs:323-325 `applyMacroInFact mcs (Fact tag annot terms) =
 /// let mTerms = map (applyMacros mcs) terms in Fact tag annot mTerms`).
 pub fn apply_macros_fact(macros: &[p::Macro], f: &p::Fact) -> p::Fact {
     map_fact_terms(f, &|t| apply_macros_term(macros, t))
@@ -231,7 +181,7 @@ pub fn apply_macros_formula(macros: &[p::Macro], f: &p::Formula) -> p::Formula {
 /// Apply macros to all items in a theory.  Mirrors HS's call-sites:
 ///   - rule prems/concs/acts (Theory/Model/Rule.hs:1115-1121 + ClosedTheory.hs:322-323)
 ///   - lemma formula (lib/theory/src/Lemma.hs:83-88, called from
-///     Theory/Text/Parser.hs:97-105, see line 105)
+///     CloseRule.hs:82-90, see line 85)
 ///   - restriction formula (Theory/Model/Restriction.hs:164-166)
 ///   - embedded restriction in rule (treat as formula)
 ///

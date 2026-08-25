@@ -2747,8 +2747,9 @@ fn render_loop_breakers_line(breakers: &[crate::rule::PremIdx], indent: usize) -
 /// `ruE` untouched — lib/theory/src/Rule.hs:82-86, see line 85).
 /// `isTrivialProtoVariantAC` then
 /// returns `False` because `ps != ps'` (macro term ≠ expanded term).
-/// RS's `opr.rule` stores the EXPANDED form (post-`expand_theory_macros`)
-/// so we must additionally check whether the DISPLAY form (parsed_rule,
+/// RS's `opr.rule` stores the EXPANDED form (`rule::apply_macro_in_rule` runs
+/// on it in `elaborate_items`), so we must additionally check whether the
+/// DISPLAY form (parsed_rule,
 /// which still has macro calls) matches the elaborated body.  If they
 /// differ, even a rule with no AC variants must show the AC comment block
 /// containing the expanded form.

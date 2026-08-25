@@ -36,6 +36,7 @@ use crate::predicate::smaller_fact;
 use crate::sapic::{default_sapic_node_type, SapicFormula, SapicLNFact, SapicLVar, SapicTerm};
 use tamarin_parser::ast as p;
 use tamarin_term::lterm::{fresh_lvar, BVar, LNTerm, LSort, LVar, Name};
+use tamarin_term::macro_expand::{apply_macros, ln_macros_to_bn_macros, LNMacro};
 use tamarin_term::maude_sig::MaudeSig;
 use tamarin_term::subst::{apply_bvar, apply_bvterm, Subst};
 use tamarin_term::term::{map_lits, Term};
@@ -389,6 +390,21 @@ where
                 other => other.clone(),
             })
         })
+    })
+}
+
+/// HS `applyMacroInFormula` (Theory/Model/Formula.hs:314-316): the theory's
+/// macros applied to every term of every atom, through the `BVar`-tagged
+/// macros [`ln_macros_to_bn_macros`](tamarin_term::macro_expand::ln_macros_to_bn_macros)
+/// builds.  An empty macro list leaves the formula as it stands, which is HS's
+/// own first equation (:315).
+pub fn apply_macro_in_formula(macros: &[LNMacro], fm: LNFormula) -> LNFormula {
+    if macros.is_empty() {
+        return fm;
+    }
+    let bn = ln_macros_to_bn_macros(macros);
+    map_atoms(fm, &mut |_, a| {
+        map_atom(a, &mut |t| apply_macros(&bn, t.clone()))
     })
 }
 

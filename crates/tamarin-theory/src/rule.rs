@@ -18,9 +18,10 @@
 
 use tamarin_term::function_symbols::{FunSym, NdcState};
 use tamarin_term::lterm::{HasFrees, LNTerm, LVar, Name};
+use tamarin_term::macro_expand::LNMacro;
 use tamarin_utils::color::Rgb;
 
-use crate::fact::{pretty_lnfact, LNFact};
+use crate::fact::{apply_macro_in_fact, pretty_lnfact, LNFact};
 use crate::formula::SyntacticLNFormula;
 use crate::pretty_hpj::{fsep, operator_, punctuate, sep, Doc};
 use crate::sapic::PlainProcess;
@@ -89,6 +90,42 @@ impl<I> Rule<I> {
             .iter()
             .enumerate()
             .map(|(i, f)| (ConcIdx(i), f))
+    }
+}
+
+/// HS `applyMacroInRule` (Theory/Model/Rule.hs:1115-1121): the theory's macros
+/// applied to every premise, conclusion and action, `new_vars` recomputed from
+/// the rewritten facts (`newVariables mRuPrems (mRuConcs ++ mRuActs)`, :1121)
+/// and `info` left as it stands — so a rule's `_restrict` formulas keep their
+/// macro calls.  An empty macro list returns the rule untouched, which is the
+/// case HS's `closeProtoRule` splits out to keep `new_vars` as the rule holds
+/// them (lib/theory/src/Rule.hs:82-85).
+pub fn apply_macro_in_rule<I>(macros: &[LNMacro], r: Rule<I>) -> Rule<I> {
+    if macros.is_empty() {
+        return r;
+    }
+    let premises: Vec<LNFact> = r
+        .premises
+        .iter()
+        .map(|f| apply_macro_in_fact(macros, f))
+        .collect();
+    let conclusions: Vec<LNFact> = r
+        .conclusions
+        .iter()
+        .map(|f| apply_macro_in_fact(macros, f))
+        .collect();
+    let actions: Vec<LNFact> = r
+        .actions
+        .iter()
+        .map(|f| apply_macro_in_fact(macros, f))
+        .collect();
+    let new_vars = crate::elaborate::compute_new_vars(&premises, &conclusions, &actions);
+    Rule {
+        info: r.info,
+        premises,
+        conclusions,
+        actions,
+        new_vars,
     }
 }
 

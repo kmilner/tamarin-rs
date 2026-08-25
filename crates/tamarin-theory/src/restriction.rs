@@ -4,14 +4,16 @@
 
 //! Port of `Theory.Model.Restriction` from
 //! `lib/theory/src/Theory/Model/Restriction.hs` — the
-//! `ProtoRestriction`/`Restriction` data type.
+//! `ProtoRestriction`/`Restriction` data type and
+//! [`apply_macro_in_restriction`].
 //!
 //! The surface-formula → `LNFormula` rewrite-then-quantify machinery
 //! (`fromRuleRestriction` / `rewrite`, Theory/Model/Restriction.hs:90-162) is
-//! ported in
-//! [`crate::rule_restriction`]; this module models only the data type.
+//! ported in [`crate::rule_restriction`].
 
-use crate::formula::LNFormula;
+use tamarin_term::macro_expand::LNMacro;
+
+use crate::formula::{apply_macro_in_formula, LNFormula};
 
 // Not yet ported: the `--diff` lhs/rhs restriction attributes
 // (HS `RestrictionAttribute`); no caller yet.
@@ -39,3 +41,18 @@ pub struct ProtoRestriction<F> {
 }
 
 pub type Restriction = ProtoRestriction<LNFormula>;
+
+/// HS `applyMacroInRestriction` (Theory/Model/Restriction.hs:164-166): the
+/// theory's macros applied to the formula, with the formula as it stood
+/// recorded as the original one unless the restriction already carries one.
+/// HS runs it over every restriction of a closed theory (`closeTheoryItem`,
+/// CloseRule.hs:84), macros or none, so `original_formula` ends up filled
+/// either way.
+pub fn apply_macro_in_restriction(macros: &[LNMacro], r: Restriction) -> Restriction {
+    let original = r.original_formula.unwrap_or_else(|| r.formula.clone());
+    Restriction {
+        name: r.name,
+        formula: apply_macro_in_formula(macros, r.formula),
+        original_formula: Some(original),
+    }
+}

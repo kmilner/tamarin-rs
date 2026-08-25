@@ -12,8 +12,6 @@
 //! where polymorphism actually matters (open vs closed, diff vs trace)
 //! we model with explicit enums or distinct types.
 
-use tamarin_term::lterm::LVar;
-
 use crate::formula::{LNFormula, SyntacticLNFormula};
 use crate::predicate::Predicate;
 use crate::restriction::Restriction;
@@ -206,6 +204,20 @@ pub struct Lemma<P = ProofSkeleton> {
     pub plaintext: String,
 }
 
+/// HS `applyMacroInLemma` (lib/theory/src/Lemma.hs:83-88): the theory's macros
+/// applied to the formula, with the formula as it stood recorded as the
+/// original one.  HS runs it over every lemma of a closed theory
+/// (`closeTheoryItem`, CloseRule.hs:85), macros or none, so
+/// `original_formula` ends up filled either way.
+pub fn apply_macro_in_lemma<P>(macros: &[LNMacro], lemma: Lemma<P>) -> Lemma<P> {
+    let original_formula = lemma.formula.clone();
+    Lemma {
+        formula: crate::formula::apply_macro_in_formula(macros, lemma.formula),
+        original_formula: Some(original_formula),
+        ..lemma
+    }
+}
+
 // Not yet ported: diff theories (needs `ClosedDiffTheory`). `DiffLemma`,
 // `DiffTheoryItem`, `Side`, and `DiffTheory` below model the HS diff-theory
 // surface but are not yet produced by elaboration or consumed by the prover.
@@ -242,13 +254,9 @@ pub struct CaseTest {
     pub formula: SyntacticLNFormula,
 }
 
-/// Macro definition (`name(args) = body`).
-#[derive(Debug, Clone, PartialEq)]
-pub struct LNMacro {
-    pub name: String,
-    pub args: Vec<LVar>,
-    pub body: tamarin_term::lterm::LNTerm,
-}
+/// HS `LNMacro` (Term/Macro.hs:24): one `macros:` declaration, `name(params)
+/// = body`.
+pub use tamarin_term::macro_expand::LNMacro;
 
 /// One node of a lemma's stored proof — HS `ProofSkeleton = Proof ()`, i.e.
 /// `LTree CaseName (ProofStep ())` (Theory/ProofSkeleton.hs:30,
@@ -574,11 +582,15 @@ mod tests {
     }
 
     fn lnmacro(name: &str) -> LNMacro {
-        LNMacro {
-            name: name.to_string(),
-            args: Vec::new(),
-            body: tamarin_term::vterm::var_term(LVar::new("x", tamarin_term::lterm::LSort::Msg, 0)),
-        }
+        LNMacro::new(
+            name.as_bytes().to_vec(),
+            Vec::new(),
+            tamarin_term::vterm::var_term(tamarin_term::lterm::LVar::new(
+                "x",
+                tamarin_term::lterm::LSort::Msg,
+                0,
+            )),
+        )
     }
 
     /// Every accessor is a `filter_map` over one `TheoryItem` arm.  A
@@ -613,8 +625,8 @@ mod tests {
         );
         assert_eq!(t.predicates().count(), 0);
         assert_eq!(
-            t.macros().map(|m| m.name.as_str()).collect::<Vec<_>>(),
-            vec!["m1", "m2"],
+            t.macros().map(|m| m.name.as_slice()).collect::<Vec<_>>(),
+            vec![b"m1".as_slice(), b"m2".as_slice()],
             "`macros()` flattens the item's macro list"
         );
         assert_eq!(t.lookup_lemma("L").map(|l| l.name.as_str()), Some("L"));

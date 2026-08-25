@@ -35,7 +35,8 @@
 //!   `cprRuleE` macro-UNexpanded, so `getProtoRuleEs` (ClosedTheory.hs:87-89)
 //!   feeds partial evaluation the macro-form rules and unification runs on
 //!   the macro symbols.  RS elaborated rules are macro-expanded
-//!   (`expand_theory_macros`), so partial evaluation here runs on the
+//!   (`rule::apply_macro_in_rule` in `elaborate_items`), so partial
+//!   evaluation here runs on the
 //!   expanded rules; on a theory with a `macros:` block the report facts
 //!   and refined rule bodies can show expanded terms where HS shows macro
 //!   calls.
