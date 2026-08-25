@@ -1634,3 +1634,128 @@ fn map_free_keeps_the_leaf_sort_and_typ() {
     assert_eq!(v.sort, LSort::Fresh);
     assert_eq!(v.typ.as_deref(), Some("A"));
 }
+
+// =============================================================================
+// The spelling an internal term takes inside the guarded store
+// =============================================================================
+
+/// The guarded atom an `LNTerm` equation takes: `lTermToBTerm` on both sides,
+/// then the store's own projection.
+fn stored_eq(l: &LNTerm, r: &LNTerm) -> GAtom {
+    crate::guarded_types::blnatom_to_gatom(&crate::atom::ProtoAtom::EqE(
+        crate::formula::lift_free(l),
+        crate::formula::lift_free(r),
+    ))
+}
+
+/// A flat AC argument list becomes a RIGHT-nested `BinOp` chain in the store's
+/// argument order.  The left-nested chain over the same leaves is the same term
+/// under [`cmp_term`] and a different one under the derived `PartialEq` that
+/// the solver's formula membership and dedup read.
+#[test]
+fn a_three_argument_ac_chain_from_an_internal_term_matches_the_stored_fold() {
+    use tamarin_term::function_symbols::AcSym;
+    use tamarin_term::lterm::pub_term;
+    use tamarin_term::term::{f_app_ac, Term};
+
+    let t: LNTerm = f_app_ac(
+        AcSym::Mult,
+        vec![pub_term("c"), pub_term("a"), pub_term("b")],
+    );
+    let Term::App(_, args) = &t else {
+        panic!("an AC application")
+    };
+    assert_eq!(args.len(), 3);
+    let leaf = |i: usize| term_to_gterm_free(&crate::elaborate::lnterm_to_parser(&args[i]));
+
+    let right = GTerm::BinOp(
+        p::BinOp::Mult,
+        ga(leaf(0)),
+        ga(GTerm::BinOp(p::BinOp::Mult, ga(leaf(1)), ga(leaf(2)))),
+    );
+    assert_eq!(stored_eq(&t, &t), GAtom::Eq(right.clone(), right.clone()));
+
+    let left = GTerm::BinOp(
+        p::BinOp::Mult,
+        ga(GTerm::BinOp(p::BinOp::Mult, ga(leaf(0)), ga(leaf(1)))),
+        ga(leaf(2)),
+    );
+    assert_eq!(cmp_term(&right, &left), std::cmp::Ordering::Equal);
+    assert_ne!(right, left);
+}
+
+/// `one`, `tone` and `DH_neutral` are nullary `NoEq` symbols in an internal
+/// term and dedicated variants in the store.  Both spellings share a
+/// [`cmp_term`] key and differ under the derived `PartialEq`.
+#[test]
+fn the_nullary_constants_from_an_internal_term_match_the_stored_variants() {
+    use tamarin_term::function_symbols::{dh_neutral_sym, nat_one_sym, one_sym};
+    use tamarin_term::term::f_app_no_eq;
+
+    let one: LNTerm = f_app_no_eq(one_sym(), vec![]);
+    let tone: LNTerm = f_app_no_eq(nat_one_sym(), vec![]);
+    let neutral: LNTerm = f_app_no_eq(dh_neutral_sym(), vec![]);
+
+    assert_eq!(
+        stored_eq(&one, &tone),
+        GAtom::Eq(GTerm::NumberOne, GTerm::NatOne)
+    );
+    assert_eq!(
+        stored_eq(&neutral, &neutral),
+        GAtom::Eq(GTerm::DhNeutral, GTerm::DhNeutral)
+    );
+
+    let app = GTerm::App("tone".into(), vec![].into());
+    assert_eq!(cmp_term(&GTerm::NatOne, &app), std::cmp::Ordering::Equal);
+    assert_ne!(GTerm::NatOne, app);
+}
+
+/// A pair-valued tail flattens into the enclosing tuple: the store holds
+/// `<'UM3', B, A, '1', 'g'^~ex>`, the shape `mk_gpair`'s canonical invariant
+/// names (UM_three_pass `CK_secure_UM3`).  The nested spelling shares its
+/// [`cmp_term`] key and is a different term under the derived `PartialEq`.
+#[test]
+fn a_pair_valued_tail_from_an_internal_term_matches_the_stored_tuple() {
+    use tamarin_term::function_symbols::{exp_sym, pair_sym};
+    use tamarin_term::lterm::pub_term;
+    use tamarin_term::term::f_app_no_eq;
+    use tamarin_term::vterm::var_term;
+
+    let pair = |a: LNTerm, b: LNTerm| f_app_no_eq(pair_sym(), vec![a, b]);
+    let b: LNTerm = var_term(LVar::new("B", LSort::Msg, 0));
+    let a: LNTerm = var_term(LVar::new("A", LSort::Msg, 0));
+    let ex: LNTerm = f_app_no_eq(
+        exp_sym(),
+        vec![pub_term("g"), var_term(LVar::new("ex", LSort::Fresh, 0))],
+    );
+    let matching_comm = pair(pub_term("1"), ex.clone());
+    let t: LNTerm = pair(
+        pub_term("UM3"),
+        pair(b.clone(), pair(a.clone(), matching_comm.clone())),
+    );
+
+    let gt = |x: &LNTerm| term_to_gterm_free(&crate::elaborate::lnterm_to_parser(x));
+    let flat = GTerm::Pair(
+        vec![
+            GTerm::PubLit("UM3".into()),
+            gt(&b),
+            gt(&a),
+            GTerm::PubLit("1".into()),
+            gt(&ex),
+        ]
+        .into(),
+    );
+    assert_eq!(stored_eq(&t, &t), GAtom::Eq(flat.clone(), flat.clone()));
+
+    let nested = GTerm::Pair(
+        vec![
+            GTerm::PubLit("UM3".into()),
+            gt(&b),
+            gt(&a),
+            GTerm::Pair(vec![GTerm::PubLit("1".into()), gt(&ex)].into()),
+        ]
+        .into(),
+    );
+    assert_eq!(cmp_term(&flat, &nested), std::cmp::Ordering::Equal);
+    assert_ne!(flat, nested);
+}

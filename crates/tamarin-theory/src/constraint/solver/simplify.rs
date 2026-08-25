@@ -15,7 +15,7 @@
 //! Each pass is a `Reduction` step that may modify the system. This Rust
 //! port implements the full fixpoint loop and every pass.
 
-use crate::constraint::solver::reduction::{ChangeIndicator, Reduction};
+use crate::constraint::solver::reduction::{binder_varspec, ChangeIndicator, Reduction};
 
 /// Labeled variant — emits a `[SIMP_CONTRA]` trace under
 /// `TAM_RS_TRACE_SIMP_CONTRA=1` so per-pass contradiction firings can be
@@ -4122,14 +4122,11 @@ fn simp_injective_fact_eq_mon_pass(red: &mut Reduction) -> ChangeIndicator {
                     // SplitNow` realises the term equation with the same
                     // contradiction checks the eager path had.
                     MonotonicBehaviour::Constant if s != t => {
-                        let s_g = crate::guarded::term_to_gterm_free(
-                            &crate::elaborate::lnterm_to_term(s),
-                        );
-                        let t_g = crate::guarded::term_to_gterm_free(
-                            &crate::elaborate::lnterm_to_term(t),
-                        );
                         new_formulas.push(crate::guarded::Guarded::Atom(
-                            crate::guarded::GAtom::Eq(s_g, t_g),
+                            crate::guarded_types::blnatom_to_gatom(&crate::atom::ProtoAtom::EqE(
+                                crate::formula::lift_free(s),
+                                crate::formula::lift_free(t),
+                            )),
                         ));
                     }
                     // HS-faithful case (2) (Simplify.hs):
@@ -4171,14 +4168,13 @@ fn simp_injective_fact_eq_mon_pass(red: &mut Reduction) -> ChangeIndicator {
                         let ab_ji = red.sys.always_before_with(&ab_adj, jj, ii);
                         // case (2) (Simplify.hs): [EqE i j | s == t]
                         if s == t && ii != jj {
-                            let i_g = crate::guarded::term_to_gterm_free(
-                                &crate::elaborate::lnterm_to_term(&node_id_to_lnterm(ii)),
-                            );
-                            let j_g = crate::guarded::term_to_gterm_free(
-                                &crate::elaborate::lnterm_to_term(&node_id_to_lnterm(jj)),
-                            );
                             new_formulas.push(crate::guarded::Guarded::Atom(
-                                crate::guarded::GAtom::Eq(i_g, j_g),
+                                crate::guarded_types::blnatom_to_gatom(
+                                    &crate::atom::ProtoAtom::EqE(
+                                        crate::formula::lift_free(&node_id_to_lnterm(ii)),
+                                        crate::formula::lift_free(&node_id_to_lnterm(jj)),
+                                    ),
+                                ),
                             ));
                         }
                         // case (4) (Simplify.hs): [¬EqE s t |
@@ -4187,12 +4183,13 @@ fn simp_injective_fact_eq_mon_pass(red: &mut Reduction) -> ChangeIndicator {
                         let already_ineq = inequalities.contains(&(s.clone(), t.clone()))
                             || inequalities.contains(&(t.clone(), s.clone()));
                         if comparable && !already_ineq {
-                            let s_ast = crate::elaborate::lnterm_to_term(s);
-                            let t_ast = crate::elaborate::lnterm_to_term(t);
                             let neg = crate::guarded::gall(
                                 Vec::new(),
-                                vec![crate::guarded::atom_to_gatom_free(
-                                    &tamarin_parser::ast::Atom::Eq(s_ast, t_ast),
+                                vec![crate::guarded_types::blnatom_to_gatom(
+                                    &crate::atom::ProtoAtom::EqE(
+                                        crate::formula::lift_free(s),
+                                        crate::formula::lift_free(t),
+                                    ),
                                 )],
                                 crate::guarded::gfalse(),
                             );
@@ -4674,9 +4671,10 @@ fn propagate_subterm_obvious(red: &mut Reduction) -> ChangeIndicator {
     let mk_eq_atom = |s: &tamarin_term::lterm::LNTerm,
                       t: &tamarin_term::lterm::LNTerm|
      -> crate::guarded::GAtom {
-        let s_ast = crate::elaborate::lnterm_to_term(s);
-        let t_ast = crate::elaborate::lnterm_to_term(t);
-        crate::guarded::atom_to_gatom_free(&tamarin_parser::ast::Atom::Eq(s_ast, t_ast))
+        crate::guarded_types::blnatom_to_gatom(&crate::atom::ProtoAtom::EqE(
+            crate::formula::lift_free(s),
+            crate::formula::lift_free(t),
+        ))
     };
     let emit_neg_eq = |s: tamarin_term::lterm::LNTerm,
                        t: tamarin_term::lterm::LNTerm,
@@ -4696,18 +4694,15 @@ fn propagate_subterm_obvious(red: &mut Reduction) -> ChangeIndicator {
                        big: &tamarin_term::lterm::LNTerm,
                        new_var: &tamarin_term::lterm::LVar,
                        new_formulas: &mut Vec<crate::guarded::Guarded>| {
-        let var_lt: tamarin_term::lterm::LNTerm =
-            tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(*new_var));
-        let vs = match crate::elaborate::lnterm_to_term(&var_lt) {
-            tamarin_parser::ast::Term::Var(v) => v,
-            _ => return,
-        };
-        let l_ast = crate::elaborate::lnterm_to_term(small_plus);
-        let r_ast = crate::elaborate::lnterm_to_term(big);
         let f = crate::guarded::close_guarded(
             crate::guarded::Quant::All,
-            vec![vs],
-            vec![tamarin_parser::ast::Atom::Eq(l_ast, r_ast)],
+            vec![binder_varspec(new_var)],
+            vec![crate::guarded_types::blnatom_to_parser(
+                &crate::atom::ProtoAtom::EqE(
+                    crate::formula::lift_free(small_plus),
+                    crate::formula::lift_free(big),
+                ),
+            )],
             crate::guarded::gfalse(),
         );
         if !new_formulas.contains(&f) {

@@ -5485,27 +5485,38 @@ fn split_subterm_single(
     out
 }
 
+/// A binder variable as the parser-AST `VarSpec` that
+/// [`crate::guarded::close_guarded`] binds over: the `LVar`'s name, index and
+/// sort, and no SAPIC type annotation (`VarSpec.typ` has no `LVar`
+/// counterpart).
+pub(crate) fn binder_varspec(v: &tamarin_term::lterm::LVar) -> tamarin_parser::ast::VarSpec {
+    tamarin_parser::ast::VarSpec {
+        name: v.name.to_string(),
+        idx: v.idx,
+        sort: v.sort,
+        typ: None,
+    }
+}
+
 /// Build `closeGuarded Ex [newVar] [EqE l r] gtrue` (HS Goals.hs `closeGuarded`).
 /// `newVar` is the single existentially-bound variable; `l`/`r` are the
-/// equation sides (`lTermToBTerm`-lifted to the parser AST, becoming
-/// free then bound by `close_guarded`).
+/// equation sides, `lTermToBTerm`-lifted and projected to the spelling the
+/// guarded store holds ([`crate::guarded_types::blnatom_to_parser`]), free
+/// until `close_guarded` binds them.
 fn close_guarded_ex_eq(
     new_var: &tamarin_term::lterm::LVar,
     l: &tamarin_term::lterm::LNTerm,
     r: &tamarin_term::lterm::LNTerm,
 ) -> crate::guarded::Guarded {
-    let var_lt: tamarin_term::lterm::LNTerm =
-        tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(*new_var));
-    let vs = match crate::elaborate::lnterm_to_term(&var_lt) {
-        tamarin_parser::ast::Term::Var(v) => v,
-        _ => unreachable!("var_term elaborates to a Var"),
-    };
-    let l_ast = crate::elaborate::lnterm_to_term(l);
-    let r_ast = crate::elaborate::lnterm_to_term(r);
     crate::guarded::close_guarded(
         crate::guarded::Quant::Ex,
-        vec![vs],
-        vec![tamarin_parser::ast::Atom::Eq(l_ast, r_ast)],
+        vec![binder_varspec(new_var)],
+        vec![crate::guarded_types::blnatom_to_parser(
+            &crate::atom::ProtoAtom::EqE(
+                crate::formula::lift_free(l),
+                crate::formula::lift_free(r),
+            ),
+        )],
         crate::guarded::gtrue(),
     )
 }
@@ -8020,11 +8031,11 @@ impl<'ctx> Reduction<'ctx> {
                 }
                 SubtermSplit::EqualD(l, r) => {
                     // insertFormula $ GAto $ EqE (lTermToBTerm l) (lTermToBTerm r)
-                    let l_ast = crate::elaborate::lnterm_to_term(l);
-                    let r_ast = crate::elaborate::lnterm_to_term(r);
-                    let atom = crate::guarded::atom_to_gatom_free(&tamarin_parser::ast::Atom::Eq(
-                        l_ast, r_ast,
-                    ));
+                    let atom =
+                        crate::guarded_types::blnatom_to_gatom(&crate::atom::ProtoAtom::EqE(
+                            crate::formula::lift_free(l),
+                            crate::formula::lift_free(r),
+                        ));
                     sub.insert_formula(crate::guarded::Guarded::Atom(atom));
                 }
                 SubtermSplit::AcNewVarD(small_plus, big, new_var) => {
