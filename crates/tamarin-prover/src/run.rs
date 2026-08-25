@@ -1663,7 +1663,7 @@ impl TheoryPipeline<'_> {
             self.marker("Derivation checks started");
             if let Some(m) = self.file_maude.as_ref() {
                 let extra = tamarin_theory::deriv_check::check_message_derivation(
-                    &self.parsed,
+                    &self.elaborated,
                     m,
                     deriv_timeout,
                     self.ndc_cache.clone(),

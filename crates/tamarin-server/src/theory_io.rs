@@ -318,8 +318,8 @@ pub fn load_from_source(
         // (Main/Mode/Interactive.hs:70), so the shared
         // `--derivcheck-timeout` (TheoryLoader.hs:180-185, read at
         // TheoryLoader.hs:391-393) applies.  Needs the Maude handle; runs on
-        // the POST-translation parser theory (`parser_theory`, matching
-        // run.rs's `&parsed` at that point).
+        // the POST-translation theory (`typed`, matching run.rs's
+        // `&self.elaborated` at that point).
         // HS brackets the check with stderr markers via `traceM`
         // (TheoryLoader.hs:578-594, see line 581,594) — emitted for every close (initial
         // load, upload, reload), and only when derivChecks != 0
@@ -328,7 +328,7 @@ pub fn load_from_source(
             eprintln!("[Theory {}] Derivation checks started", typed.name);
         }
         let extra = tamarin_theory::deriv_check::check_message_derivation(
-            &parser_theory,
+            &typed,
             &maude,
             derivcheck_timeout,
             ndc_cache
