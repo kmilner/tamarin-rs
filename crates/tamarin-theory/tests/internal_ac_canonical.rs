@@ -6,14 +6,15 @@
 //! an internal fact or term renders the same with and without
 //! `canonicalize_ac_in_pfact` / `canonicalize_ac_in_pterm`.
 //!
-//! Three print sites run the projection of an `LNFact` through the AC
-//! canonicaliser before handing it to the fact renderer:
-//! `pretty_theory::render_ac_variants_block`,
-//! `mult_restricted::to_parser_facts` and
-//! `tools::abstract_interpretation::state_fact_doc`.  HS has no such step:
-//! `fAppAC` sorts an AC argument list at construction
-//! (`Term/Term/Raw.hs:117-129#fAppAC`) and `prettyFact`
-//! (`Theory/Model/Fact.hs:567-574#prettyFact`) prints what it is handed.
+//! That inertness is what lets a print site holding an internal value hand
+//! it straight to the internal printer, as HS does: `fAppAC` sorts an AC
+//! argument list at construction (`Term/Term/Raw.hs:117-129#fAppAC`) and
+//! `prettyFact` (`Theory/Model/Fact.hs:567-574#prettyFact`) prints what it
+//! is handed.  The canonicaliser stays where the rendered body is the
+//! PARSED rule's rather than an internal one's
+//! (`pretty_theory::render_rule_body`,
+//! `pretty_theory::render_unfolded_variants_block`), since the order the
+//! source wrote is not the order the constructor picks.
 //!
 //! The two projections are not structurally equal, and the assertion here
 //! is not structural equality: `lnterm_to_parser` folds an AC argument
