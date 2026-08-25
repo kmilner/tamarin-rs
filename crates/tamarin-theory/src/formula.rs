@@ -174,10 +174,24 @@ where
     S: SugarTerms<VTerm<C, BVar<V>>>,
     V: Ord + Clone,
 {
-    let mut out = Vec::new();
-    for_each_free_var(fm, &mut |v| out.push(v.clone()));
+    let mut out = formula_frees_list(fm);
     out.sort();
     out.dedup();
+    out
+}
+
+/// HS `freesList` (Term/LTerm.hs:605-608) at the same instances
+/// [`formula_frees`] uses: the free variables in the order the `Foldable`
+/// traversal yields them, duplicates kept. HS `frees = sortednub . freesList`
+/// (Term/LTerm.hs:610-614) is [`formula_frees`]; callers that number
+/// variables by first occurrence need this list instead.
+pub fn formula_frees_list<S, C, V>(fm: &ProtoFormula<S, (String, LSort), C, V>) -> Vec<V>
+where
+    S: SugarTerms<VTerm<C, BVar<V>>>,
+    V: Clone,
+{
+    let mut out = Vec::new();
+    for_each_free_var(fm, &mut |v| out.push(v.clone()));
     out
 }
 

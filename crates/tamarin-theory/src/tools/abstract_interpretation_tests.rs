@@ -12,7 +12,7 @@
 
 use super::*;
 use crate::fact::{proto_fact, Multiplicity};
-use crate::rule::{ProtoRuleEInfo, Rule};
+use crate::rule::{ProtoRuleEInfo, ProtoRuleName, Rule};
 use crate::signature::SignaturePure;
 use tamarin_term::builtin::{fresh_var, msg_var};
 use tamarin_term::lterm::pub_term;
@@ -300,22 +300,12 @@ fn partial_evaluation_trace_bytes_and_style_invariance() {
         ],
         vec![],
     );
-    let (st_s, rules_s, trace_s) = partial_evaluation(
-        &h,
-        EvaluationStyle::Summary,
-        std::slice::from_ref(&init),
-        &Default::default(),
-    )
-    .unwrap();
+    let (st_s, rules_s, trace_s) =
+        partial_evaluation(&h, EvaluationStyle::Summary, std::slice::from_ref(&init)).unwrap();
     assert_eq!(trace_s, " partial evaluation: step 0 added 2 facts\n");
 
-    let (st_v, rules_v, trace_v) = partial_evaluation(
-        &h,
-        EvaluationStyle::Tracing,
-        std::slice::from_ref(&init),
-        &Default::default(),
-    )
-    .unwrap();
+    let (st_v, rules_v, trace_v) =
+        partial_evaluation(&h, EvaluationStyle::Tracing, std::slice::from_ref(&init)).unwrap();
     assert_eq!(
         trace_v,
         " partial evaluation: step 0 added 2 facts\n\
@@ -326,7 +316,7 @@ fn partial_evaluation_trace_bytes_and_style_invariance() {
     );
 
     let (st_q, rules_q, trace_q) =
-        partial_evaluation(&h, EvaluationStyle::Silent, &[init], &Default::default()).unwrap();
+        partial_evaluation(&h, EvaluationStyle::Silent, &[init]).unwrap();
     assert_eq!(trace_q, "");
 
     // stdout is byte-identical between styles: same state, same rules.
@@ -370,8 +360,7 @@ fn abstract_state_keeps_the_last_inserted_annotations() {
     // `getProtoRuleEs`' sorted order: A before B, so B's conclusion is
     // abstracted and inserted last.
     let rules = [mk("A", st_plain), mk("B", st_marked)];
-    let (st, refined, _) =
-        partial_evaluation(&h, EvaluationStyle::Summary, &rules, &Default::default()).unwrap();
+    let (st, refined, _) = partial_evaluation(&h, EvaluationStyle::Summary, &rules).unwrap();
     let report = abs_state_report(&st, refined.len(), rules.len());
     assert!(
         report.contains("\n1. St( ~k )[+]\n"),
@@ -429,8 +418,7 @@ fn partial_evaluation_rule_multiplication_and_name_hints() {
     );
 
     let rules = [rule_a, rule_b, rule_c, rule_d];
-    let (st, refined, trace) =
-        partial_evaluation(&h, EvaluationStyle::Summary, &rules, &Default::default()).unwrap();
+    let (st, refined, trace) = partial_evaluation(&h, EvaluationStyle::Summary, &rules).unwrap();
     assert_eq!(
         trace,
         " partial evaluation: step 0 added 2 facts\n \
@@ -559,14 +547,8 @@ fn apply_partial_evaluation_splices_at_first_rule_item() {
         TheoryItem::Text(("section".to_string(), "after".to_string())),
     ];
 
-    let trace = apply_partial_evaluation(
-        &mut parsed,
-        &mut elab,
-        &h,
-        EvaluationStyle::Summary,
-        &Default::default(),
-    )
-    .unwrap();
+    let trace =
+        apply_partial_evaluation(&mut parsed, &mut elab, &h, EvaluationStyle::Summary).unwrap();
     // Two zero-premise rules, conclusions abstract to Ap(y) + Out(z).
     assert_eq!(trace, " partial evaluation: step 0 added 2 facts\n");
 
@@ -623,17 +605,47 @@ fn apply_partial_evaluation_no_rules_is_noop() {
     ))];
     let parsed_before = parsed.clone();
     let elab_before = elab.clone();
-    let trace = apply_partial_evaluation(
-        &mut parsed,
-        &mut elab,
-        &h,
-        EvaluationStyle::Tracing,
-        &Default::default(),
-    )
-    .unwrap();
+    let trace =
+        apply_partial_evaluation(&mut parsed, &mut elab, &h, EvaluationStyle::Tracing).unwrap();
     assert_eq!(trace, "");
     assert_eq!(parsed, parsed_before);
     assert_eq!(elab, elab_before);
+}
+
+// =============================================================================
+// `_restrict`-formula frees
+// =============================================================================
+
+/// One `_restrict` formula as the rule carries it: an atom over the given
+/// free variables.
+fn restr_action(timepoint: LVar, arg: LVar) -> crate::formula::SyntacticLNFormula {
+    let lift = |v: LVar| {
+        crate::formula::lift_free(&tamarin_term::vterm::var_term::<
+            tamarin_term::lterm::Name,
+            LVar,
+        >(v))
+    };
+    crate::formula::ProtoFormula::Atom(crate::atom::ProtoAtom::Action(
+        lift(timepoint),
+        crate::fact::Fact::fresh(
+            crate::fact::FactTag::Proto(Multiplicity::Linear, "P", 1),
+            vec![lift(arg)],
+        ),
+    ))
+}
+
+/// `info_frees` is HS `freesList` over `preRestriction` (Term/LTerm.hs:605-608):
+/// first occurrence first, NOT sorted by `Ord LVar`.  An action atom folds its
+/// timepoint before the fact's arguments (Theory/Model/Atom.hs:129-136), so
+/// `P( y ) @ #i` with `#i` at the higher index yields `[#i, y]` where the
+/// sorted list would be `[y, #i]`.
+#[test]
+fn info_frees_are_in_occurrence_order() {
+    let i = LVar::new("i", LSort::Node, 5);
+    let y = LVar::new("y", LSort::Msg, 1);
+    let mut r: ProtoRuleE = Rule::new(ProtoRuleEInfo::standard("A"), vec![], vec![], vec![]);
+    r.info.restrictions = vec![restr_action(i, y)];
+    assert_eq!(info_frees(&r), vec![i, y]);
 }
 
 // =============================================================================
@@ -649,13 +661,13 @@ fn apply_partial_evaluation_no_rules_is_noop() {
 /// Restr_A_1( eq(x.2, x.2) ) ]-> [ ]`, while the same rule with a
 /// free-less `_restrict` formula renders `[ In( x ) ]`.
 #[test]
-fn restriction_frees_floor_the_final_rename() {
+fn info_frees_floor_the_final_rename() {
     let Some(path) = maude_path() else { return };
     let sig = pair_maude_sig().merge(hash_maude_sig());
     let h = MaudeHandle::start(&path, sig).unwrap();
     let hh = |t: LNTerm| f_app_no_eq(tamarin_term::builtin::hash_sym(), vec![t]);
-    let rule_a = || -> ProtoRuleE {
-        Rule::new(
+    let rule_a = |restrictions: Vec<crate::formula::SyntacticLNFormula>| -> ProtoRuleE {
+        let mut r = Rule::new(
             ProtoRuleEInfo::standard("A"),
             vec![crate::fact::in_fact(msg_var("x", 0))],
             vec![],
@@ -664,16 +676,20 @@ fn restriction_frees_floor_the_final_rename() {
                 "Restr_A_1",
                 vec![hh(msg_var("x", 0))],
             )],
-        )
+        );
+        r.info.restrictions = restrictions;
+        r
     };
 
     // Refinement: In(x.0) ≐ In(z.1) (state fact renamed above avoid=1),
     // unifier image drawn at index 2 → body var x.2.  With the formula
     // free x.0 in play the rename's minimum is 0 and x.2 SURVIVES.
-    let frees: BTreeMap<String, Vec<LVar>> =
-        [("A".to_string(), vec![LVar::new("x", LSort::Msg, 0)])].into();
+    let with_free = vec![restr_action(
+        LVar::new("i", LSort::Node, 0),
+        LVar::new("x", LSort::Msg, 0),
+    )];
     let (_, refined, _) =
-        partial_evaluation(&h, EvaluationStyle::Silent, &[rule_a()], &frees).unwrap();
+        partial_evaluation(&h, EvaluationStyle::Silent, &[rule_a(with_free)]).unwrap();
     assert_eq!(refined.len(), 1);
     assert_eq!(
         refined[0].premises,
@@ -689,13 +705,8 @@ fn restriction_frees_floor_the_final_rename() {
     );
 
     // Without info frees the same rule renames its minimum down to 0.
-    let (_, refined0, _) = partial_evaluation(
-        &h,
-        EvaluationStyle::Silent,
-        &[rule_a()],
-        &Default::default(),
-    )
-    .unwrap();
+    let (_, refined0, _) =
+        partial_evaluation(&h, EvaluationStyle::Silent, &[rule_a(vec![])]).unwrap();
     assert_eq!(
         refined0[0].premises,
         vec![crate::fact::in_fact(msg_var("x", 0))]

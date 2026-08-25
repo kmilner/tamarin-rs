@@ -1106,10 +1106,6 @@ struct TheoryPipeline<'a> {
     /// `configAutoSources`).
     cut: tamarin_theory::constraint::solver::context::CutStrategy,
     auto_sources: bool,
-    /// The `_restrict` formulas' free variables per rule, captured before
-    /// `lift_rule_restrictions` cleared them; partial evaluation's
-    /// rename/dedup reads them (see `restriction_frees_by_rule`).
-    restriction_frees: std::collections::BTreeMap<String, Vec<tamarin_term::lterm::LVar>>,
     /// The maude binary this run invokes (`--with-maude` or the probed
     /// default), resolved once per run and reused by every spawn and
     /// spawn-failure message.
@@ -1793,7 +1789,6 @@ impl TheoryPipeline<'_> {
                 &mut self.elaborated,
                 m,
                 style,
-                &self.restriction_frees,
             )
             .map_err(|e| RunError(format!("partial evaluation of {} failed: {}", in_file, e)))?;
 
@@ -2323,17 +2318,6 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         // lifting pass here, BEFORE wellformedness / elaboration / rendering,
         // so the transformed parser theory drives all three (the renderer
         // iterates `parsed.items`).
-        // Capture the `_restrict` formulas' free variables per rule BEFORE
-        // the lift clears them: HS keeps the formulas on the rule
-        // (`preRestriction`) and partial evaluation's rename/dedup depends
-        // on their frees (see `restriction_frees_by_rule`) — its only
-        // consumer, so the walk runs only under `--partial-evaluation`.  The
-        // position is fixed: the frees are gone once the lift below runs.
-        let restriction_frees = if opts.partial_evaluation.is_some() {
-            tamarin_theory::rule_restriction::restriction_frees_by_rule(&parsed)
-        } else {
-            Default::default()
-        };
         tamarin_theory::rule_restriction::lift_rule_restrictions(&mut parsed).map_err(|e| {
             RunError(format!(
                 "_restrict expansion failed in {}: {}",
@@ -2513,7 +2497,6 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             maude_sig,
             cut,
             auto_sources,
-            restriction_frees,
             maude_path: &maude_path,
             file_maude: None,
             file_maude_pool: None,

@@ -15,21 +15,20 @@
 //! index is 0, deduplicated modulo variable freshness
 //! (`eqModuloFreshnessNoAC`, first occurrence wins).
 //!
-//! A structural subtlety this module must reproduce: HS rules carry their
-//! `_restrict` formulas in `preRestriction` (ProtoRuleEInfo) forever, and
-//! `HasFrees (Rule i)` folds over them (info FIRST,
-//! Theory/Model/Rule.hs:291-298) while
-//! `Apply ProtoRuleEInfo` is the identity (Theory/Model/Rule.hs:500-501).
-//! So a refined
-//! rule keeps its ORIGINAL restriction frees unsubstituted, and they floor
-//! the final `rename`'s index shift (a fully-substituted body keeps its
+//! A structural subtlety this module must reproduce: a rule carries its
+//! `_restrict` formulas in `ProtoRuleEInfo::restrictions` (HS
+//! `preRestriction`), `HasFrees (Rule i)` folds over them before the body
+//! (Theory/Model/Rule.hs:291-298, Theory/Model/Rule.hs:491-498) and `Apply
+//! ProtoRuleEInfo` is the identity (Theory/Model/Rule.hs:500-501).  So a
+//! refined rule keeps its ORIGINAL restriction frees unsubstituted, and they
+//! floor the final `rename`'s index shift (a fully-substituted body keeps its
 //! refined indices — the oracle renders `In( x.2 )` for
 //! features/predicates/minimal.spthy) and are bound first by
-//! `eqModuloFreshnessNoAC`'s canonicalisation.  RS rules do not carry the
-//! formulas (`lift_rule_restrictions` clears them), so the equivalent frees
-//! are threaded in as `restr_frees`
-//! (`rule_restriction::restriction_frees_by_rule`), keyed by rule name —
-//! unique among the ORIGINAL rules, which is what refinement looks up by.
+//! `eqModuloFreshnessNoAC`'s canonicalisation.  [`info_frees`] reads them off
+//! the rule.  `HasFrees for Rule<I>` (rule.rs) skips `info`, so the shift and
+//! the canonicalisation pass the frees as a separate list and leave the
+//! formulas alone: every refinement of one rule carries the same formulas, so
+//! they cannot tell two refinements apart.
 //!
 //! Divergences from HS, all deliberate:
 //! * **Macro theories**: HS `closeProtoRule` (lib/theory/src/Rule.hs:82-86) keeps
@@ -54,7 +53,7 @@
 //!   restriction tiebreak is unreachable: duplicate rule names are rejected
 //!   at parse time, so the name alone already discriminates the input.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use tamarin_parser::ast as p;
 use tamarin_term::function_symbols::FunSym;
@@ -68,7 +67,7 @@ use tamarin_utils::fresh::FastFreshState;
 
 use crate::fact::{fresh_fact, in_fact, out_fact, pretty_lnfact, FactTag, LNFact};
 use crate::pretty_hpj::{self as hpj, Doc};
-use crate::rule::{unify_ln_fact_eqs, ProtoRuleE, ProtoRuleName};
+use crate::rule::{unify_ln_fact_eqs, ProtoRuleE};
 use crate::theory::{OpenProtoRule, Theory, TheoryItem};
 
 /// How to report on performing a partial evaluation.  HS
@@ -159,7 +158,6 @@ fn refine_rule(
     maude: &MaudeHandle,
     state_facts: &[&LNFact],
     ru: &ProtoRuleE,
-    extra_frees: &[LVar],
     out: &mut Vec<ProtoRuleE>,
 ) -> Result<(), MaudeError> {
     fn go(
@@ -202,10 +200,9 @@ fn refine_rule(
     // Seed: `evalFreshT (avoid ru)` — the counter starts above the rule's
     // maximum free variable index.  HS's `avoid` folds the rule info too
     // (`HasFrees (Rule i)`, Theory/Model/Rule.hs:291-298), so the `_restrict`
-    // formulas'
-    // frees participate in the bound; `extra_frees` carries them.
+    // formulas' frees participate in the bound.
     let body_bound = avoid(ru).fresh_idents(0);
-    let info_bound = extra_frees.iter().map(|v| v.idx + 1).max().unwrap_or(0);
+    let info_bound = info_frees(ru).iter().map(|v| v.idx + 1).max().unwrap_or(0);
     let seed = FastFreshState::seeded(body_bound.max(info_bound));
     let mut eqs: Vec<Equal<LNFact>> = Vec::new();
     go(maude, state_facts, ru, 0, seed, &mut eqs, out)
@@ -226,15 +223,10 @@ fn refine_rule(
 /// Returns `(fixpoint state, the rules refined against it, trace)`.  The
 /// fixpoint iteration itself contributes no trace line: HS traces adjacent
 /// pairs, and the final pair's state equals its predecessor's successor.
-///
-/// `restr_frees` carries each rule's `_restrict`-formula frees (see the
-/// module doc), which extend the per-rule `avoid` seed exactly as HS's
-/// info-folding `HasFrees` does.
 fn interpret_abstractly(
     maude: &MaudeHandle,
     style: EvaluationStyle,
     rules: &[ProtoRuleE],
-    restr_frees: &BTreeMap<String, Vec<LVar>>,
 ) -> Result<(BTreeSet<LNFact>, Vec<ProtoRuleE>, String), MaudeError> {
     let mut st: BTreeSet<LNFact> = BTreeSet::new();
     st.insert(abs_fact(&fresh_fact(var_term(LVar::new(
@@ -251,13 +243,7 @@ fn interpret_abstractly(
         {
             let state_facts: Vec<&LNFact> = st.iter().collect();
             for ru in rules {
-                refine_rule(
-                    maude,
-                    &state_facts,
-                    ru,
-                    info_frees(restr_frees, ru),
-                    &mut refined,
-                )?;
+                refine_rule(maude, &state_facts, ru, &mut refined)?;
             }
         }
         // Only CONCLUSIONS feed the state (HS `get rConcs`).  `S.insert`
@@ -306,15 +292,16 @@ fn interpret_abstractly(
 // eqModuloFreshnessNoAC for rules (Term/LTerm.hs:663-670)
 // =============================================================================
 
-/// The rule's `_restrict`-formula frees (HS `preRestriction`'s
-/// `HasFrees` contribution), looked up by name.  Refined rules keep their
-/// original rule's name and info, so every refinement of one rule resolves
-/// to the same frees.  The reserved `Fresh` rule never carries them.
-fn info_frees<'a>(restr_frees: &'a BTreeMap<String, Vec<LVar>>, r: &ProtoRuleE) -> &'a [LVar] {
-    match &r.info.name {
-        ProtoRuleName::Stand(s) => restr_frees.get(*s).map(|v| v.as_slice()).unwrap_or(&[]),
-        ProtoRuleName::Fresh => &[],
-    }
+/// The rule's `_restrict`-formula frees: HS `foldFrees f rstr`
+/// (Theory/Model/Rule.hs:491-498) over `preRestriction`, in `freesList`
+/// order — first occurrence first, duplicates kept, since the caller
+/// numbers them by first occurrence.
+fn info_frees(r: &ProtoRuleE) -> Vec<LVar> {
+    r.info
+        .restrictions
+        .iter()
+        .flat_map(crate::formula::formula_frees_list)
+        .collect()
 }
 
 /// Canonicalise every free variable of `r` to `LVar "" <sort> <seq-idx>`
@@ -323,13 +310,13 @@ fn info_frees<'a>(restr_frees: &'a BTreeMap<String, Vec<LVar>>, r: &ProtoRuleE) 
 /// `_restrict`-formula frees
 /// before the body (premises, conclusions, actions, new_vars) — so a body
 /// variable identical to a restriction free reuses its canon slot, and
-/// body-only variables start numbering after them.  `extra` carries those
-/// info frees (post-shift).  Mirrors HS `eqModuloFreshnessNoAC`'s
-/// `normIndices`.
-fn canon_rule_frees(r: &ProtoRuleE, extra: &[LVar]) -> ProtoRuleE {
+/// body-only variables start numbering after them.  `info_vars` carries those
+/// info frees as [`rename_rule_from_zero`] shifted them.  Mirrors HS
+/// `eqModuloFreshnessNoAC`'s `normIndices`.
+fn canon_rule_frees(r: &ProtoRuleE, info_vars: &[LVar]) -> ProtoRuleE {
     let mut map: tamarin_utils::FastMap<LVar, LVar> = Default::default();
     let mut ctr: u64 = 0;
-    for v in extra {
+    for v in info_vars {
         if !map.contains_key(v) {
             let nv = LVar::new("", v.sort, ctr);
             ctr += 1;
@@ -354,13 +341,13 @@ fn canon_rule_frees(r: &ProtoRuleE, extra: &[LVar]) -> ProtoRuleE {
 /// HS `nubBy eqModuloFreshnessNoAC` over rules: first occurrence wins;
 /// two rules are equal iff their free-canonicalised forms are structurally
 /// equal (including `info` — the rule NAME is part of it, so dedup can
-/// only merge refinements of the same original rule, which also share the
-/// same info frees).
+/// only merge refinements of the same original rule, which also carry the
+/// same unsubstituted `_restrict` formulas).
 fn nub_modulo_freshness(rules: Vec<(ProtoRuleE, Vec<LVar>)>) -> Vec<ProtoRuleE> {
     let mut kept: Vec<ProtoRuleE> = Vec::new();
     let mut kept_canon: Vec<ProtoRuleE> = Vec::new();
-    for (r, extra) in rules {
-        let c = canon_rule_frees(&r, &extra);
+    for (r, info_vars) in rules {
+        let c = canon_rule_frees(&r, &info_vars);
         if !kept_canon.contains(&c) {
             kept.push(r);
             kept_canon.push(c);
@@ -397,9 +384,8 @@ fn partial_evaluation(
     maude: &MaudeHandle,
     style: EvaluationStyle,
     ru_es: &[ProtoRuleE],
-    restr_frees: &BTreeMap<String, Vec<LVar>>,
 ) -> Result<(BTreeSet<LNFact>, Vec<ProtoRuleE>, String), MaudeError> {
-    let (final_st, final_rules, trace) = interpret_abstractly(maude, style, ru_es, restr_frees)?;
+    let (final_st, final_rules, trace) = interpret_abstractly(maude, style, ru_es)?;
     // `map ((`evalFresh` nothingUsed) . rename)`: per rule, a uniform
     // index shift making the minimum free var index 0.  The minimum is
     // taken over the body frees AND the rule's unsubstituted
@@ -407,40 +393,37 @@ fn partial_evaluation(
     // Theory/Model/Rule.hs:291-298), which HS's `mapFrees` shifts along with
     // the body —
     // the shifted info frees then seed the dedup's canonicalisation.
-    let renamed: Vec<(ProtoRuleE, Vec<LVar>)> = final_rules
-        .into_iter()
-        .map(|r| {
-            let extra = info_frees(restr_frees, &r).to_vec();
-            rename_rule_from_zero(r, extra)
-        })
-        .collect();
+    let renamed: Vec<(ProtoRuleE, Vec<LVar>)> =
+        final_rules.into_iter().map(rename_rule_from_zero).collect();
     Ok((final_st, nub_modulo_freshness(renamed), trace))
 }
 
 /// HS `(`evalFresh` nothingUsed) . rename` over a refined rule
 /// (LTerm.hs:638-645): compute `boundsVarIdx` over the body frees ∪ the
-/// rule's `_restrict`-formula frees (`extra`), then shift every index
-/// uniformly so the minimum becomes 0.  `extra` is shifted too (HS's
-/// `mapFrees` maps the info) and returned for the dedup's canon pass.
-fn rename_rule_from_zero(r: ProtoRuleE, extra: Vec<LVar>) -> (ProtoRuleE, Vec<LVar>) {
+/// rule's `_restrict`-formula frees, then shift every index uniformly so the
+/// minimum becomes 0.  The info frees are shifted too (HS's `mapFrees` maps
+/// the info, Theory/Model/Rule.hs:302-306) and returned for the dedup's canon
+/// pass.
+fn rename_rule_from_zero(r: ProtoRuleE) -> (ProtoRuleE, Vec<LVar>) {
+    let info_vars = info_frees(&r);
     let mut lo: Option<u64> = None;
     let mut see = |idx: u64| {
         lo = Some(lo.map_or(idx, |m: u64| m.min(idx)));
     };
     r.for_each_free(&mut |v| see(v.idx));
-    for v in &extra {
+    for v in &info_vars {
         see(v.idx);
     }
     let Some(min) = lo else {
-        return (r, extra);
+        return (r, info_vars);
     };
     // `freshIdents` on `nothingUsed` returns 0, so the shift is `-min`.
     let shifted = r.map_free_with(&mut |v| LVar::new(v.name, v.sort, v.idx - min), true);
-    let extra = extra
+    let info_vars = info_vars
         .into_iter()
         .map(|v| LVar::new(v.name, v.sort, v.idx - min))
         .collect();
-    (shifted, extra)
+    (shifted, info_vars)
 }
 
 // =============================================================================
@@ -514,7 +497,6 @@ pub fn apply_partial_evaluation(
     elaborated: &mut Theory,
     maude: &MaudeHandle,
     style: EvaluationStyle,
-    restr_frees: &BTreeMap<String, Vec<LVar>>,
 ) -> Result<String, MaudeError> {
     // HS `getProtoRuleEs` (ClosedTheory.hs:87-89) extracts `cprRuleE` — the
     // E-half that `addActionClosedProtoRule` never annotates
@@ -555,7 +537,7 @@ pub fn apply_partial_evaluation(
     ru_es.sort_by(proto_rule_cmp);
     ru_es.dedup_by(|a, b| a == b);
 
-    let (st, refined, trace) = partial_evaluation(maude, style, &ru_es, restr_frees)?;
+    let (st, refined, trace) = partial_evaluation(maude, style, &ru_es)?;
     let body = abs_state_report(&st, refined.len(), ru_es.len());
 
     // Parsed-side splice: the report block, then one rule item per refined

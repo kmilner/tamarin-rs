@@ -267,6 +267,10 @@ pub enum ProtoRuleName {
 pub struct ProtoRuleEInfo {
     pub name: ProtoRuleName,
     pub attributes: RuleAttributes,
+    /// HS `_preRestriction` (Theory/Model/Rule.hs:423): the rule's
+    /// `_restrict` formulas as written.  `Apply ProtoRuleEInfo` is the
+    /// identity (Theory/Model/Rule.hs:500-501), so they are never
+    /// substituted; only their free variables are read.
     pub restrictions: Vec<SyntacticLNFormula>,
 }
 

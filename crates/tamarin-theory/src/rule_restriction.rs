@@ -15,7 +15,12 @@
 //!      `∀ <frees>. (Restr_<rule>_<i>(<free-var terms>) @ #NOW) ⇒ φ'`,
 //!   4. inserts that restriction BEFORE the rule, and
 //!   5. appends the action `Restr_<rule>_<i>(<original abstracted terms>)`
-//!      to the rule's actions, clearing its embedded restrictions.
+//!      to the rule's actions.
+//!
+//! The rule keeps its `_restrict` formulas: HS's `addActions` rebuilds only
+//! `rActs` (Theory/Text/Parser.hs:188), so `preRestriction` survives on every
+//! closed rule and `elaborate::rule_to_proto_rule_e` carries the same
+//! formulas onto `ProtoRuleEInfo.restrictions`.
 //!
 //! HS performs this DURING parsing (the parser calls `liftedAddProtoRule`
 //! per rule, building the `OpenTheory` with restrictions inserted and
@@ -56,13 +61,18 @@ const RESTR_PREFIX: &str = "Restr_";
 /// Mirrors HS `liftedAddProtoRule` invoked per rule during parsing.  For
 /// every `TheoryItem::Rule` carrying `embedded_restrictions`, generate the
 /// `Restr_<rule>_<i>` restrictions (inserted immediately before the rule)
-/// and rewrite the rule's actions, clearing `embedded_restrictions`.
+/// and append the `Restr_<rule>_<i>` actions to the rule.
+///
+/// Run it exactly ONCE per parsed theory: the rule keeps its `_restrict`
+/// formulas, so a second call generates a second copy of every restriction
+/// and appends the actions again.  The production callers are `run.rs`'s
+/// per-file pipeline and the web server's `theory_io`.
 ///
 /// Predicate atoms inside each `_restrict` formula are expanded against the
 /// theory's `predicate:` declarations first (HS `liftedExpandFormula`).
-/// `let` bindings are applied to the rule body before lifting so the
-/// abstracted terms see their expansions (HS applies `let` at parse time,
-/// Parser/Rule.hs:133, before `liftedAddProtoRule`).
+/// `let` bindings reach the rule body from the parser, so the abstracted
+/// terms see their expansions (HS applies `let` in `protoRule`,
+/// Theory/Text/Parser/Rule.hs:133).
 pub fn lift_rule_restrictions(thy: &mut p::Theory) -> Result<(), ExpandError> {
     // Collect predicate definitions once (declared before the rules).
     let predicates: Vec<p::Predicate> = thy
@@ -96,52 +106,6 @@ pub fn lift_rule_restrictions(thy: &mut p::Theory) -> Result<(), ExpandError> {
     Ok(())
 }
 
-/// Free variables of each rule's `_restrict` formulas, keyed by rule name.
-///
-/// HS keeps the (let-applied, predicate-unexpanded) `_restrict` formulas on
-/// the rule as `preRestriction` forever: the parser stores them
-/// (Parser/Rule.hs:135) and `liftedAddProtoRule`
-/// (Theory/Text/Parser.hs:166-193) appends the generated actions without
-/// clearing the field.  `HasFrees ProtoRuleEInfo`
-/// (Theory/Model/Rule.hs:491-498) folds over those formulas while `Apply
-/// ProtoRuleEInfo` is the identity (Theory/Model/Rule.hs:500-501), so every
-/// closed rule
-/// carries their frees, never substituted.  RS clears the parsed
-/// `embedded_restrictions` in [`lift_rule_restrictions`]; this helper — run
-/// BEFORE the lift — captures the same frees for the one downstream consumer
-/// whose bytes depend on them: partial evaluation's rename/dedup
-/// (`tools::abstract_interpretation`).
-///
-/// Variable conversion mirrors elaboration's rule-body conversion
-/// (`elaborate::varspec_to_lvar`) so the collected frees share identity with
-/// the elaborated rule's variables.
-pub fn restriction_frees_by_rule(
-    thy: &p::Theory,
-) -> BTreeMap<String, Vec<tamarin_term::lterm::LVar>> {
-    let mut map: BTreeMap<String, Vec<tamarin_term::lterm::LVar>> = BTreeMap::new();
-    for item in &thy.items {
-        let p::TheoryItem::Rule(rule) = item else {
-            continue;
-        };
-        if rule.embedded_restrictions.is_empty() {
-            continue;
-        }
-        let mut frees: Vec<tamarin_term::lterm::LVar> = Vec::new();
-        for phi in &rule.embedded_restrictions {
-            for v in frees_list(phi) {
-                let lv = crate::elaborate::varspec_to_lvar(&v);
-                if !frees.contains(&lv) {
-                    frees.push(lv);
-                }
-            }
-        }
-        if !frees.is_empty() {
-            map.insert(rule.name.clone(), frees);
-        }
-    }
-    map
-}
-
 /// Lift one rule's embedded restrictions.  Returns the generated
 /// restrictions (in `1..n` order) and the rewritten rule.
 ///
@@ -154,15 +118,15 @@ pub fn lift_one_rule(
     predicates: &[p::Predicate],
 ) -> Result<(Vec<p::Restriction>, p::Rule), ExpandError> {
     let rname = rule.name.clone();
-    let formulas = std::mem::take(&mut rule.embedded_restrictions);
-    let mut restrictions: Vec<p::Restriction> = Vec::with_capacity(formulas.len());
-    let mut new_actions: Vec<p::Fact> = Vec::with_capacity(formulas.len());
+    let n = rule.embedded_restrictions.len();
+    let mut restrictions: Vec<p::Restriction> = Vec::with_capacity(n);
+    let mut new_actions: Vec<p::Fact> = Vec::with_capacity(n);
 
     // HS `counter = zip [1..]`: 1-indexed.
-    for (i, phi) in formulas.into_iter().enumerate() {
+    for (i, phi) in rule.embedded_restrictions.iter().enumerate() {
         let idx = i + 1;
         // HS `liftedExpandFormula thy` — expand predicate atoms.
-        let expanded = expand_formula(&phi, predicates)?;
+        let expanded = expand_formula(phi, predicates)?;
         // HS `fromRuleRestriction (rname ++ "_" ++ show i) f`.
         let sub_name = format!("{}_{}", rname, idx);
         let (restr, action) = from_rule_restriction(&sub_name, &expanded);
@@ -171,7 +135,9 @@ pub fn lift_one_rule(
     }
 
     // HS `addActions = modify rActs (++ actions)`: APPEND the restriction
-    // actions after the rule's existing actions.
+    // actions after the rule's existing actions.  `addActions` rebuilds only
+    // `rActs`, so the rule keeps its `_restrict` formulas
+    // (Theory/Text/Parser.hs:188).
     rule.actions.extend(new_actions);
     Ok((restrictions, rule))
 }
@@ -743,12 +709,12 @@ mod tests {
         // adds the rule after them.  The restriction is therefore immediately
         // before the rule.
         assert_eq!(restr_pos + 1, rule_pos, "restriction must precede rule");
-        // The pass rewrites the rule action and clears the embedded
-        // restrictions.
+        // The pass appends the rule action and leaves the `_restrict`
+        // formula on the rule.
         let p::TheoryItem::Rule(r) = &thy.items[rule_pos] else {
             panic!("item at {rule_pos} is not the rule");
         };
-        assert!(r.embedded_restrictions.is_empty());
+        assert_eq!(r.embedded_restrictions.len(), 1);
         assert_eq!(r.actions.len(), 1);
         assert_eq!(r.actions[0].name, "Restr_A_1");
         // The action carries the original term, without abstraction.

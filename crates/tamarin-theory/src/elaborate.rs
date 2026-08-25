@@ -813,10 +813,19 @@ fn rule_attributes_from_parser(attrs: &[p::RuleAttr]) -> RuleAttributes {
 }
 
 fn rule_to_proto_rule_e(r: &p::Rule, sig: &MaudeSig) -> Result<ProtoRuleE, ElabError> {
+    // HS `modify preRestriction (++ rs) ri` (Theory/Text/Parser/Rule.hs:121,
+    // 135): the rule carries its `_restrict` formulas as parsed — predicate
+    // atoms unexpanded, since `liftedAddProtoRule` expands only the copies it
+    // lifts (Theory/Text/Parser.hs:175-193).
+    let restrictions = r
+        .embedded_restrictions
+        .iter()
+        .map(|f| crate::formula::from_parser(f, sig))
+        .collect::<Result<Vec<_>, _>>()?;
     let info = ProtoRuleEInfo {
         name: ProtoRuleName::Stand(tamarin_term::intern::intern_str(&r.name)),
         attributes: rule_attributes_from_parser(&r.attributes),
-        restrictions: Vec::new(),
+        restrictions,
     };
     let prems = r
         .premises

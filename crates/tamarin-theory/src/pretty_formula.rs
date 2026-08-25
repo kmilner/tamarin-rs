@@ -325,11 +325,9 @@ fn facts_list_doc(facts: &[p::Fact]) -> crate::pretty_hpj::Doc {
 ///
 /// HS uses the bare `-->` arrow only when `null acts && null restr`.  The
 /// Rust check below tests only `acts.is_empty()` (there is no `restr`
-/// operand), which is correct ONLY because `_restrict` restrictions are
-/// pre-lifted out of the rule before rendering
-/// (`rule_restriction::lift_rule_restrictions` clears `embedded_restrictions`
-/// and folds them into `acts`), so `restr` is always empty at render time.
-/// Callers MUST pass already-lifted rules.
+/// operand), matching HS `prettyRule`, which passes `[]` for `restr`
+/// (Theory/Model/Rule.hs:1389-1390) — the printed rule shows the lifted
+/// `Restr_*` actions, never the `_restrict` formulas.
 pub fn rule_body_to_doc(
     prems: &[p::Fact],
     acts: &[p::Fact],

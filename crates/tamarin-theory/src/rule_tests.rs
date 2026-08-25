@@ -569,3 +569,34 @@ fn pretty_rule_restr_gen_breaks_at_the_arrows() {
         ]
     );
 }
+
+/// HS keeps a rule's `_restrict` formulas on `preRestriction`
+/// (Theory/Text/Parser/Rule.hs:135) and `liftedAddProtoRule` appends the
+/// generated actions without touching the field
+/// (Theory/Text/Parser.hs:188), so the elaborated rule carries them —
+/// closed against the theory's signature, with its predicate atoms
+/// unexpanded.
+#[test]
+fn elaborated_rule_carries_its_restrict_formulas() {
+    let src = "theory T begin\n\
+               functions: eq/2\n\
+               rule A:\n  [In(x)] --[ _restrict(Ex #i. Act(eq(x,x)) @ #i) ]-> []\n\
+               end";
+    let mut parsed = tamarin_parser::parse_theory(src, &[]).unwrap();
+    crate::rule_restriction::lift_rule_restrictions(&mut parsed).unwrap();
+    let elab = crate::elaborate::elaborate(&parsed).unwrap();
+    let source = parsed
+        .items
+        .iter()
+        .find_map(|it| match it {
+            tamarin_parser::ast::TheoryItem::Rule(r) if r.name == "A" => Some(r),
+            _ => None,
+        })
+        .expect("parsed rule A");
+    assert_eq!(source.embedded_restrictions.len(), 1);
+    let expected =
+        crate::formula::from_parser(&source.embedded_restrictions[0], &elab.signature.maude_sig)
+            .unwrap();
+    let rule = elab.rules().find(|r| r.name() == "A").expect("rule A");
+    assert_eq!(rule.rule.info.restrictions, vec![expected]);
+}
