@@ -32,10 +32,10 @@
 // DIES while printing an unguardable restriction and yields no comparable
 // bytes.
 //
-// Mode `diverge`: the port renders the quoted formula and the variable list as
-// single lines in both places.  See check.sh's `divergence_shape` for the
-// anchors.  `guarded_freshened_names` pins the same message where it fits the
-// budget; no corpus theory carries an unguardable lemma at all.
+// Mode `match`: the port hands the same Doc to each renderer and reproduces the
+// oracle's bytes at both budgets.  `guarded_freshened_names` pins the same
+// message where it fits the budget; no corpus theory carries an unguardable
+// lemma at all.
 //
 // Compared slices: the wf report block AND the `theory … end` echo (see
 // check.sh) — the corner is exactly that the two lay the same Doc out
