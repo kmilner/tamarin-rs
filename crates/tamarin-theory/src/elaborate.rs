@@ -961,7 +961,7 @@ fn subst_atom_in_place(a: &mut p::Atom, key: &p::Term, val: &p::Term) {
 /// Do NOT alias "K" → FactTag::Ku: that breaks witness construction
 /// for any lemma using K(_) atoms (they can no longer satisfy via
 /// ISend; only Coerce/etc. routes would remain available).
-fn fact_tag_of(f: &p::Fact) -> crate::fact::FactTag {
+pub fn fact_tag_of(f: &p::Fact) -> crate::fact::FactTag {
     use crate::fact::{FactTag, Multiplicity};
     match f.name.as_str() {
         "Fr" => FactTag::Fresh,

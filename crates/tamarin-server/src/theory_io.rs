@@ -230,7 +230,7 @@ pub fn load_from_source(
     // HS `Acc.checkWellformedness t` (translateTheory, TheoryLoader.hs:494-500, see line 497)
     // runs on the PRE-translation theory — before `apply_sapic` injects the
     // SAPIC-generated rules (mirrors run.rs's CLI-side placement).
-    let acc_wf = tamarin_accountability::check_wellformedness(&parser_theory);
+    let acc_wf = tamarin_accountability::check_wellformedness(&parser_theory, &typed);
     let user_set_heuristic = !typed.heuristic.is_empty();
     // HS `Sapic.checkWellformedness` (Warnings.hs) is part of `preReport`, which
     // is PREPENDED to the rest of the report (as in `run_batch`).  A hard

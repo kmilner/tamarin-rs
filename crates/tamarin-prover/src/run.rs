@@ -1244,7 +1244,8 @@ impl TheoryPipeline<'_> {
             // SAPIC-generated rules (a pure-SAPIC theory has no MSR rules at this
             // point, so `rulesContainPubConst` / `caseTestsInstantiatedByPubVars`
             // scan an empty rule set).  Compute it here, before the mutation.
-            let acc_wf = tamarin_accountability::check_wellformedness(&self.parsed);
+            let acc_wf =
+                tamarin_accountability::check_wellformedness(&self.parsed, &self.elaborated);
 
             let user_set_heuristic = !self.elaborated.heuristic.is_empty();
             // Which translation steps run depends on the output module

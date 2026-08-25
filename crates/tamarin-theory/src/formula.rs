@@ -7,24 +7,22 @@
 //! `LNFormula`/`SyntacticLNFormula` instances, the basic builders, the
 //! sugar traversal ([`SugarTerms`]), free variables ([`formula_frees`]), the
 //! quantifier-introduction helpers (`quantify`, `exists`, `forAll`,
-//! `existFormula`, `forAllFormula`), the sugar-stripping [`to_lnformula`],
+//! `existFormula`, `forAllFormula`), the De Bruijn lift
+//! [`shift_free_indices`], the sugar-stripping [`to_lnformula`],
 //! the closing of the parser AST into a [`SyntacticLNFormula`]
 //! ([`from_parser`], which HS does inside its formula parser,
 //! `Theory/Text/Parser/Formula.hs`), the opening of a bound term against a
-//! binder scope (`open_bound_term`, the substitution step of HS
+//! binder scope ([`open_bound_term`], the substitution step of HS
 //! `openFormula`, used by the printer) and the opening of a whole quantifier
 //! prefix ([`open_formula`], [`open_formula_prefix`]).
 //!
 //! The representation is locally nameless: bound variables are
 //! `BVar::Bound(de_bruijn_idx)`, free variables are `Free(v)`.
 //!
-//! The pure transforms (`nnf`, `pullquants`, `prenex`, `pnf`,
-//! `simplifyFormula`) are not ported on this type. Formula.hs's
-//! `shiftFreeIndices`/`simplifyFormula` (plus Generation.hs's
-//! `pullQuantifiers`/`mergeQuantifiers`, and a second `quantify`) are ported
-//! in `tamarin-accountability/src/formula.rs`, over a parallel
-//! locally-nameless type (`Fm`) whose leaves are `guarded_types` parser-AST
-//! atoms rather than this module's real-term `ProtoAtom`s. (The
+//! The pure transforms `nnf`, `pullquants`, `prenex` and `pnf` are not
+//! ported on this type. `simplifyFormula`, together with Generation.hs's
+//! `pullQuantifiers`/`mergeQuantifiers` that call it, is ported in
+//! `tamarin-accountability/src/generation.rs` beside its only caller. (The
 //! guarded-formula simplifier `simplifyGuarded` is a different HS function,
 //! ported as `simplify_guarded_with` in guarded.rs.)
 
@@ -420,6 +418,30 @@ where
     })
 }
 
+/// HS `shiftFreeIndices n` (Theory/Model/Formula.hs:458-465): raise by `n`
+/// every bound index that refers past this formula's own binders, which is
+/// what moving a sub-formula under one more binder needs.  `map_atoms` hands
+/// each atom its De Bruijn depth `i`, so an index below `i` belongs to a
+/// binder inside the formula and stays.
+pub fn shift_free_indices<S, H, C, V>(
+    n: u64,
+    fm: ProtoFormula<S, H, C, V>,
+) -> ProtoFormula<S, H, C, V>
+where
+    S: MapSugar<VTerm<C, BVar<V>>, VTerm<C, BVar<V>>, Mapped = S>,
+    C: Ord + Clone,
+    V: Ord + Clone,
+{
+    map_atoms(fm, &mut |i, a| {
+        map_atom(a, &mut |t| {
+            map_lits(t, &mut |l| match l {
+                Lit::Var(BVar::Bound(j)) if *j >= i => Lit::Var(BVar::Bound(j + n)),
+                other => other.clone(),
+            })
+        })
+    })
+}
+
 /// HS `existFormula` (Theory/Model/Formula.hs:532-534): exists-quantify every free variable
 /// of the formula, each under its own name/sort hint.  `frees` is sorted, and
 /// the fold is a `foldl`, so the SMALLEST free variable ends up innermost.
@@ -722,7 +744,7 @@ fn free_fact<F: FormulaVars>(
 /// (Theory/Model/Formula.hs:481-484), whose error message is kept for an
 /// index past the scope.  The rebuild through [`map_lits`] re-sorts AC
 /// arguments under the opened `LVar`s, as HS's `fApp` does.
-pub(crate) fn open_bound_term(t: &BLNTerm, scope: &[LVar]) -> LNTerm {
+pub fn open_bound_term(t: &BLNTerm, scope: &[LVar]) -> LNTerm {
     map_lits(t, &mut |l| match l {
         Lit::Con(c) => Lit::Con(*c),
         Lit::Var(BVar::Free(v)) => Lit::Var(*v),
@@ -923,6 +945,32 @@ mod tests {
         };
         let bound = ProtoAtom::Last(var_term(BVar::Bound(1)));
         assert_eq!(*body, ProtoFormula::Atom(bound));
+    }
+
+    /// `shiftFreeIndices n` raises exactly the indices that dangle past the
+    /// formula's own binders: at an atom under one binder, `Bound(0)` is that
+    /// binder's and stays, while `Bound(1)` points outside and moves.
+    #[test]
+    fn shift_free_indices_lifts_only_the_indices_above_the_scope() {
+        use tamarin_term::vterm::var_term;
+
+        let atom = |i: u64, j: u64| -> LNFormula {
+            ProtoFormula::Atom(ProtoAtom::Less(
+                var_term(BVar::Bound(i)),
+                var_term(BVar::Bound(j)),
+            ))
+        };
+        let hint = ("y".to_string(), LSort::Node);
+        let fm: LNFormula = ProtoFormula::for_all(hint.clone(), atom(0, 1)).and(atom(0, 1));
+        let ProtoFormula::Conn(_, under, outside) = shift_free_indices(2, fm) else {
+            panic!("expected the conjunction to survive the shift");
+        };
+        assert_eq!(
+            *under,
+            ProtoFormula::for_all(hint, atom(0, 3)),
+            "under the binder only the dangling index moves"
+        );
+        assert_eq!(*outside, atom(2, 3), "outside it both move");
     }
 
     fn x_var() -> LVar {

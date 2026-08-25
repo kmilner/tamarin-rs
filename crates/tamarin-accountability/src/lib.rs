@@ -22,12 +22,15 @@ mod generation;
 
 use tamarin_parser::ast as p;
 use tamarin_parser::wf::WfError;
-use tamarin_term::lterm::LSort;
+use tamarin_term::lterm::{BVar, LSort};
+use tamarin_term::term::Term;
+use tamarin_term::vterm::Lit;
 
-use tamarin_theory::elaborate::elaborate_lemma_attr;
-use tamarin_theory::theory::{self as t, Theory, TheoryItem};
+use tamarin_theory::elaborate::{elaborate_lemma_attr, fact_tag_of};
+use tamarin_theory::fact::Fact;
+use tamarin_theory::formula::{formula_frees, to_lnformula, BLNTerm, SyntacticLNFormula};
+use tamarin_theory::theory::{self as t, Theory, TheoryItem, TranslationElement};
 
-use crate::formula::{frees, from_p_formula, to_p_formula, Fm};
 use crate::generation::{generate_accountability_lemmas, AccData, CaseTestData};
 
 /// Accountability translation error: HS `AccException`
@@ -89,13 +92,34 @@ impl std::fmt::Display for AccError {
 struct RawAccLemma {
     name: String,
     attributes: Vec<p::LemmaAttr>,
-    formula: p::Formula,
+    formula: SyntacticLNFormula,
     case_test_idents: Vec<String>,
 }
 
 struct RawCaseTest {
     name: String,
-    formula: p::Formula,
+    formula: SyntacticLNFormula,
+    /// The surface formula the case-test predicate keeps as its body (HS
+    /// `_pFormula`, Theory/Syntactic/Predicate.hs:32-36).
+    parsed_formula: p::Formula,
+}
+
+/// The case-test formulas of the elaborated theory, in declaration order (HS
+/// `theoryCaseTests`).
+fn elaborated_case_tests(elaborated: &Theory) -> impl Iterator<Item = &SyntacticLNFormula> {
+    elaborated.items.iter().filter_map(|i| match i {
+        TheoryItem::Translation(TranslationElement::CaseTest(c)) => Some(&c.formula),
+        _ => None,
+    })
+}
+
+/// The accountability-lemma formulas of the elaborated theory, in declaration
+/// order (HS `theoryAccLemmas`).
+fn elaborated_acc_lemmas(elaborated: &Theory) -> impl Iterator<Item = &SyntacticLNFormula> {
+    elaborated.items.iter().filter_map(|i| match i {
+        TheoryItem::Translation(TranslationElement::AccLemma(a)) => Some(&a.formula),
+        _ => None,
+    })
 }
 
 /// The theory's case tests (declaration order) and accountability lemmas.
@@ -103,31 +127,48 @@ struct RawCaseTest {
 /// HS binds `_aCaseTests` when the lemma is parsed (`mapMaybe (flip
 /// lookupCaseTest thy)` over the items parsed so far, Text/Parser.hs:276-279), so a
 /// case test declared after the lemma is undefined for it.
-fn collect_acc_items(parsed: &p::Theory) -> (Vec<RawCaseTest>, Vec<(RawAccLemma, usize)>) {
-    let mut case_tests: Vec<RawCaseTest> = Vec::new();
-    let mut acc_lemmas: Vec<(RawAccLemma, usize)> = Vec::new();
+///
+/// The locally-nameless formula of each item is the one elaboration closed
+/// (`formula::from_parser`), which is where HS's parser closes it too
+/// (Theory/Text/Parser/Formula.hs:44-77); elaboration emits exactly one
+/// translation item per parsed item, so the two lists pair by position.
+fn collect_acc_items(
+    parsed: &p::Theory,
+    elaborated: &Theory,
+) -> (Vec<RawCaseTest>, Vec<(RawAccLemma, usize)>) {
+    let mut parsed_case_tests: Vec<&p::CaseTest> = Vec::new();
+    let mut parsed_acc: Vec<(&p::AccLemma, usize)> = Vec::new();
     for i in &parsed.items {
         match i {
-            p::TheoryItem::CaseTest(c) => {
-                case_tests.push(RawCaseTest {
-                    name: c.name.clone(),
-                    formula: c.formula.clone(),
-                });
-            }
-            p::TheoryItem::AccLemma(a) => {
-                acc_lemmas.push((
-                    RawAccLemma {
-                        name: a.name.clone(),
-                        attributes: a.attributes.clone(),
-                        formula: a.formula.clone(),
-                        case_test_idents: a.case_test_idents.clone(),
-                    },
-                    case_tests.len(),
-                ));
-            }
+            p::TheoryItem::CaseTest(c) => parsed_case_tests.push(c),
+            p::TheoryItem::AccLemma(a) => parsed_acc.push((a, parsed_case_tests.len())),
             _ => {}
         }
     }
+    let case_tests = parsed_case_tests
+        .into_iter()
+        .zip(elaborated_case_tests(elaborated))
+        .map(|(c, formula)| RawCaseTest {
+            name: c.name.clone(),
+            formula: formula.clone(),
+            parsed_formula: c.formula.clone(),
+        })
+        .collect();
+    let acc_lemmas = parsed_acc
+        .into_iter()
+        .zip(elaborated_acc_lemmas(elaborated))
+        .map(|((a, n_before), formula)| {
+            (
+                RawAccLemma {
+                    name: a.name.clone(),
+                    attributes: a.attributes.clone(),
+                    formula: formula.clone(),
+                    case_test_idents: a.case_test_idents.clone(),
+                },
+                n_before,
+            )
+        })
+        .collect();
     (case_tests, acc_lemmas)
 }
 
@@ -173,7 +214,7 @@ fn undefined_case_tests(acc: &RawAccLemma, defined_names: &[String]) -> Option<V
 /// acc lemma still get their predicates appended (HS `translate` runs its
 /// `caseTestToPredicate` fold unconditionally).
 pub fn translate(parsed: &mut p::Theory, elaborated: &mut Theory) -> Result<(), AccError> {
-    let (case_tests, acc_lemmas) = collect_acc_items(parsed);
+    let (case_tests, acc_lemmas) = collect_acc_items(parsed, elaborated);
     if acc_lemmas.is_empty() && case_tests.is_empty() {
         return Ok(());
     }
@@ -193,13 +234,6 @@ pub fn translate(parsed: &mut p::Theory, elaborated: &mut Theory) -> Result<(), 
     if !undef.is_empty() {
         return Err(AccError::CaseTestsUndefined(undef));
     }
-
-    // Pre-convert each case test's formula to locally-nameless form once
-    // (declaration order, so `[..n_before]` is each lemma's visible scope).
-    let case_test_data: Vec<(String, Fm)> = case_tests
-        .iter()
-        .map(|c| (c.name.clone(), from_p_formula(&c.formula)))
-        .collect();
 
     // Predicate fact tags `(name, arity, persistent)` defined for this theory:
     // every `predicates:` item (HS `theoryPredicates` — position-insensitive at
@@ -264,21 +298,18 @@ pub fn translate(parsed: &mut p::Theory, elaborated: &mut Theory) -> Result<(), 
     // Generate + inject the lemmas, in theory order (HS
     // `foldM liftedAddLemma thy (concat accLemmas)`).
     for (acc, n_before) in &acc_lemmas {
-        let scope = &case_test_data[..*n_before];
+        let scope = &case_tests[..*n_before];
         let acc_data = AccData {
             name: acc.name.clone(),
-            formula: from_p_formula(&acc.formula),
+            formula: acc.formula.clone(),
             case_tests: acc
                 .case_test_idents
                 .iter()
                 .filter_map(|id| {
-                    scope
-                        .iter()
-                        .find(|(n, _)| n == id)
-                        .map(|(_, f)| CaseTestData {
-                            name: id.clone(),
-                            formula: f.clone(),
-                        })
+                    scope.iter().find(|c| &c.name == id).map(|c| CaseTestData {
+                        name: id.clone(),
+                        formula: c.formula.clone(),
+                    })
                 })
                 .collect(),
         };
@@ -293,7 +324,8 @@ pub fn translate(parsed: &mut p::Theory, elaborated: &mut Theory) -> Result<(), 
                 return Err(AccError::DuplicateLemma(gen.name));
             }
             lemma_names.push(gen.name.clone());
-            let formula = to_p_formula(&gen.formula);
+            let formula =
+                tamarin_theory::pretty_formula::syntactic_lnformula_to_parser(&gen.formula);
             inject_lemma(
                 parsed,
                 elaborated,
@@ -329,19 +361,26 @@ pub fn translate(parsed: &mut p::Theory, elaborated: &mut Theory) -> Result<(), 
 
 /// Fact tags of the `Pred` atoms in `fm` that match no defined predicate
 /// (first offender, rendered as HS `showFactTagArity`: `name/arity`).
-fn undefined_predicate(fm: &Fm, defined: &[(String, usize, bool)]) -> Option<String> {
+fn undefined_predicate(
+    fm: &SyntacticLNFormula,
+    defined: &[(String, usize, bool)],
+) -> Option<String> {
+    use tamarin_theory::fact::{fact_tag_arity, fact_tag_name};
     formula::formula_pred_facts(fm).into_iter().find_map(|f| {
+        let name = fact_tag_name(&f.tag);
+        let arity = fact_tag_arity(&f.tag);
+        let persistent = f.is_persistent();
         let known = defined
             .iter()
-            .any(|(n, a, p_)| *n == f.name && *a == f.args.len() && *p_ == f.persistent);
+            .any(|(n, a, p_)| *n == name && *a == arity && *p_ == persistent);
         if known {
             None
         } else {
             Some(format!(
                 "{}{}/{}",
-                if f.persistent { "!" } else { "" },
-                f.name,
-                f.args.len()
+                if persistent { "!" } else { "" },
+                name,
+                arity
             ))
         }
     })
@@ -440,42 +479,32 @@ fn inject_lemma(
 /// case-test formula has syntactic sugar that `toLNFormula` cannot strip (a
 /// predicate atom), otherwise `mkPredicate name formula`.
 fn case_test_to_predicate(c: &RawCaseTest) -> Option<p::Predicate> {
-    if formula_has_predicate_atom(&c.formula) {
-        return None;
-    }
+    // `toLNFormula` is `Nothing` while any atom still carries the predicate
+    // sugar (Theory/Model/Formula.hs:369-373).
+    let stripped = to_lnformula(&c.formula)?;
     // HS `mkPredicate name formula = Predicate (protoFact Linear (capitalize
-    // name) (frees formula)) formula`.  The fact args are the formula's sorted
-    // free variables (concrete-sorted).
-    let fm = from_p_formula(&c.formula);
-    let free_vars = frees(&fm);
+    // name) (frees formula)) formula` (Theory/Syntactic/Predicate.hs:38-42).
+    // The fact args are the formula's sorted free variables.
     let fact = p::Fact {
         persistent: false,
         name: capitalize(&c.name),
-        args: free_vars.into_iter().map(p::Term::Var).collect(),
+        args: formula_frees(&stripped)
+            .into_iter()
+            .map(|v| {
+                p::Term::Var(p::VarSpec {
+                    name: v.name.to_string(),
+                    idx: v.idx,
+                    sort: v.sort,
+                    typ: None,
+                })
+            })
+            .collect(),
         annotations: Vec::new(),
     };
     Some(p::Predicate {
         fact,
-        formula: c.formula.clone(),
+        formula: c.parsed_formula.clone(),
     })
-}
-
-/// HS `toLNFormula` returns `Nothing` for a formula carrying syntactic sugar
-/// (`Syntactic _`, i.e. a predicate atom).  Detect any `Pred` atom.
-fn formula_has_predicate_atom(f: &p::Formula) -> bool {
-    match f {
-        p::Formula::True | p::Formula::False => false,
-        p::Formula::Atom(p::Atom::Pred(_)) => true,
-        p::Formula::Atom(_) => false,
-        p::Formula::Not(g) => formula_has_predicate_atom(g),
-        p::Formula::And(a, b)
-        | p::Formula::Or(a, b)
-        | p::Formula::Implies(a, b)
-        | p::Formula::Iff(a, b) => formula_has_predicate_atom(a) || formula_has_predicate_atom(b),
-        p::Formula::Forall(_, body) | p::Formula::Exists(_, body) => {
-            formula_has_predicate_atom(body)
-        }
-    }
 }
 
 /// HS `capitalize` (Predicate.hs:39-43, see line 42): upper-case the first character.
@@ -493,7 +522,7 @@ fn capitalize(s: &str) -> String {
 
 /// HS `Accountability.checkWellformedness` (Generation.hs:345-346): the RP-check
 /// report, emitted only when the theory declares accountability lemmas.
-pub fn check_wellformedness(parsed: &p::Theory) -> Vec<WfError> {
+pub fn check_wellformedness(parsed: &p::Theory, elaborated: &Theory) -> Vec<WfError> {
     let has_acc_lemma = parsed
         .items
         .iter()
@@ -501,12 +530,12 @@ pub fn check_wellformedness(parsed: &p::Theory) -> Vec<WfError> {
     if !has_acc_lemma {
         return Vec::new();
     }
-    acc_rp_report(parsed)
+    acc_rp_report(parsed, elaborated)
 }
 
 /// HS `accRPReport` (Generation.hs:324-343): the topic + explanation for the
 /// RP (BR) syntactic criterion.  Empty when no warning fires.
-fn acc_rp_report(parsed: &p::Theory) -> Vec<WfError> {
+fn acc_rp_report(parsed: &p::Theory, elaborated: &Theory) -> Vec<WfError> {
     let rules = rp_check_rules(parsed);
     let mut warnings: Vec<String> = Vec::new();
     if theory_has_restrictions(parsed) {
@@ -515,7 +544,7 @@ fn acc_rp_report(parsed: &p::Theory) -> Vec<WfError> {
     if rules_contain_pub_const(&rules) {
         warnings.push("The specification contains public names.".to_string());
     }
-    if !case_tests_instantiated_by_pub_vars(parsed, &rules) {
+    if !case_tests_instantiated_by_pub_vars(elaborated, &rules) {
         warnings
             .push("At least one case test can be instantiated with non-public names.".to_string());
     }
@@ -623,12 +652,12 @@ fn term_contains_pub_const(t: &p::Term) -> bool {
 /// case-test action fact and every rule action fact sharing its tag, each free
 /// variable of the case-test fact must line up with a public variable in the
 /// rule fact.
-fn case_tests_instantiated_by_pub_vars(parsed: &p::Theory, rules: &[p::Rule]) -> bool {
-    let ct_facts = case_tests_facts(parsed);
+fn case_tests_instantiated_by_pub_vars(elaborated: &Theory, rules: &[p::Rule]) -> bool {
+    let ct_facts = case_tests_facts(elaborated);
     let rule_facts = rules_actions(rules);
     for cf in &ct_facts {
         for rf in &rule_facts {
-            if fact_tag_eq(cf, rf) && !free_vars_instantiated_by_pub_vars(&cf.args, &rf.args) {
+            if fact_tag_eq(cf, rf) && !free_vars_instantiated_by_pub_vars(&cf.terms, &rf.args) {
                 return false;
             }
         }
@@ -637,15 +666,11 @@ fn case_tests_instantiated_by_pub_vars(parsed: &p::Theory, rules: &[p::Rule]) ->
 }
 
 /// HS `caseTestsFacts thy` (Generation.hs:120-122): the action facts of every
-/// case test's formula (with Free/Bound variable status resolved).
-fn case_tests_facts(parsed: &p::Theory) -> Vec<tamarin_theory::guarded_types::GFact> {
-    let mut out = Vec::new();
-    let (case_tests, _) = collect_acc_items(parsed);
-    for c in &case_tests {
-        let fm = from_p_formula(&c.formula);
-        out.extend(formula::formula_action_facts(&fm));
-    }
-    out
+/// case test's formula.
+fn case_tests_facts(elaborated: &Theory) -> Vec<Fact<BLNTerm>> {
+    elaborated_case_tests(elaborated)
+        .flat_map(formula::formula_action_facts)
+        .collect()
 }
 
 /// HS `rulesActions thy` (Generation.hs:142-146): every rule's action facts.
@@ -653,18 +678,17 @@ fn rules_actions(rules: &[p::Rule]) -> Vec<&p::Fact> {
     rules.iter().flat_map(|r| r.actions.iter()).collect()
 }
 
-/// HS `FactTag` equality: same name, arity and persistence.
-fn fact_tag_eq(cf: &tamarin_theory::guarded_types::GFact, rf: &p::Fact) -> bool {
-    cf.name == rf.name && cf.args.len() == rf.args.len() && cf.persistent == rf.persistent
+/// HS `cTag == rTag` (Generation.hs:316-318).  The rule side is a parser
+/// fact, so its tag is read with the same `fact_tag_of` that elaboration
+/// applies to the case-test formula's own facts.
+fn fact_tag_eq(cf: &Fact<BLNTerm>, rf: &p::Fact) -> bool {
+    cf.tag == fact_tag_of(rf)
 }
 
-/// HS `freeVarsInstantiatedByPubVars` (Generation.hs:308-312): at each position
+/// HS `freeVarsInstantiatedByPubVars` (Generation.hs:309-312): at each position
 /// where the case-test fact holds a free variable, the rule fact must hold a
 /// public variable.
-fn free_vars_instantiated_by_pub_vars(
-    c_terms: &[tamarin_theory::guarded_types::GTerm],
-    r_terms: &[p::Term],
-) -> bool {
+fn free_vars_instantiated_by_pub_vars(c_terms: &[BLNTerm], r_terms: &[p::Term]) -> bool {
     c_terms
         .iter()
         .zip(r_terms.iter())
@@ -672,13 +696,10 @@ fn free_vars_instantiated_by_pub_vars(
         .all(|(_, r)| is_pub_var(r))
 }
 
-/// HS `termIsFreeVar` (Generation.hs:155-160): the term is a single Free
+/// HS `termIsFreeVar` (Generation.hs:156-160): the term is a single Free
 /// variable (a `Bound` variable or non-variable term is not).
-fn term_is_free_var(t: &tamarin_theory::guarded_types::GTerm) -> bool {
-    matches!(
-        t,
-        tamarin_theory::guarded_types::GTerm::Var(tamarin_theory::guarded_types::BVar::Free(_))
-    )
+fn term_is_free_var(t: &BLNTerm) -> bool {
+    matches!(t, Term::Lit(Lit::Var(BVar::Free(_))))
 }
 
 /// HS `isPubVar` (Term/LTerm.hs:328-331, see line 330): a variable of sort `LSortPub` (`$x`).
@@ -689,6 +710,43 @@ fn is_pub_var(t: &p::Term) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The case test `Ex #i. A(x)@i`, with `x` free, makes the round trip
+    /// every generated lemma takes: elaboration closes the temporal binder to
+    /// a De Bruijn index, and the projection back to the parser AST reopens it
+    /// under the same name, sort and index.  So the comparison is against the
+    /// whole source formula, not only its outermost constructor: that catches
+    /// a binder renamed to a generated name, a dropped body, and an index that
+    /// resolves to the wrong binder.
+    #[test]
+    fn case_test_round_trip() {
+        const ROUND_TRIP_SRC: &str = "theory AccRoundTrip\n\
+begin\n\
+rule L:\n  [ In( x ) ] --[ A( x ) ]-> [ ]\n\
+test aOnce:\n  \"Ex #i. A(x)@i\"\n\
+end\n";
+        let parsed = tamarin_parser::parse_theory(ROUND_TRIP_SRC, &[]).expect("theory parses");
+        let elaborated = tamarin_theory::elaborate::elaborate(&parsed).expect("theory elaborates");
+        let fm = elaborated_case_tests(&elaborated)
+            .next()
+            .expect("the case test reaches the elaborated theory");
+        // `x` is the only free variable — the temporal binder is bound.
+        let fv = formula_frees(fm);
+        assert_eq!(fv.len(), 1);
+        assert_eq!((fv[0].name, fv[0].sort), ("x", LSort::Msg));
+        let source = parsed
+            .items
+            .iter()
+            .find_map(|i| match i {
+                p::TheoryItem::CaseTest(c) => Some(&c.formula),
+                _ => None,
+            })
+            .expect("the case test is parsed");
+        assert_eq!(
+            &tamarin_theory::pretty_formula::syntactic_lnformula_to_parser(fm),
+            source
+        );
+    }
 
     /// A case test carrying a user predicate, so every lemma
     /// `generateAccountabilityLemmas` builds out of it carries the sugar too.

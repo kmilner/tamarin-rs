@@ -27,13 +27,12 @@
 //! inside its comment blocks (Export.hs:1424-1425).
 //!
 //! Blockers, in dependency order:
-//! - `simplifyFormula` / `pnf` / `nnf` / `pullquants` / `prenex` /
-//!   `shiftFreeIndices` (Theory/Model/Formula.hs:380-465) are unported over
-//!   `ProtoFormula`; `ppLemma` (Export.hs:1462-1469#ppLemma, see line 1469) and
-//!   `flattenNestedQuantifiers` (Export.hs:1517-1535) need them.
-//!   `tamarin_accountability::formula` ports `simplifyFormula` and
-//!   `shiftFreeIndices` over that crate's own locally-nameless `Fm`, which is a
-//!   `SyntacticLNFormula` over `guarded_types`, not a `ProtoFormula`.
+//! - `nnf` / `pullquants` / `prenex` / `pnf`
+//!   (Theory/Model/Formula.hs:415-456) are unported over `ProtoFormula`;
+//!   `ppLemma` (Export.hs:1462-1469#ppLemma, see line 1469) and
+//!   `flattenNestedQuantifiers` (Export.hs:1517-1535) need them beside
+//!   `tamarin_theory::formula::shift_free_indices` and the `simplifyFormula`
+//!   that `tamarin_accountability::generation` keeps private to that crate.
 //! - About 1300 of Export.hs's lines (Export.hs:1705-2605 and :2922-3300) are
 //!   Export-specific `LNFormula → LNFormula` transforms and shape classifiers
 //!   with no analogue in the port.
