@@ -22,7 +22,7 @@ use crate::fact::FactAnnotation;
 use crate::formula::{from_parser, sapic_from_parser, to_lnformula};
 use crate::macro_expand::apply_macros_formula;
 use crate::pretty_sapic::render_sapic;
-use crate::pretty_theory::{collect_macros, collect_predicates, expand_predicates_for_display};
+use crate::pretty_theory::{collect_macros, expand_predicates_for_display};
 use crate::sapic::to_lformula;
 use crate::test_corpus::{beyond_budget, corpus_root, parse_file, rel, spthy_files};
 use rayon::prelude::*;
@@ -90,9 +90,13 @@ fn process_formulas(proc_: &p::Process, label: &str, out: &mut Vec<Item>) {
 /// the theory's macros first when there are any (`render_guarded_block`);
 /// accountability lemmas and case tests are arity-1-folded and
 /// canonicalised; predicate bodies are only arity-1-folded.
-fn theory_formulas(parsed: &p::Theory, arity1: &dyn Fn(&p::Formula) -> p::Formula) -> Vec<Item> {
+fn theory_formulas(
+    parsed: &p::Theory,
+    predicates: &[crate::predicate::Predicate],
+    msig: &tamarin_term::maude_sig::MaudeSig,
+    arity1: &dyn Fn(&p::Formula) -> p::Formula,
+) -> Vec<Item> {
     let macros = collect_macros(parsed);
-    let predicates = collect_predicates(parsed);
     let item = |label: String, pre: p::Formula, formula: p::Formula| Item {
         label,
         formula,
@@ -100,14 +104,15 @@ fn theory_formulas(parsed: &p::Theory, arity1: &dyn Fn(&p::Formula) -> p::Formul
         sapic: false,
     };
     let header_items = |out: &mut Vec<Item>, kind: &str, name: &str, f: &p::Formula| {
-        let pre = expand_predicates_for_display(f, &predicates);
+        let pre = expand_predicates_for_display(f, predicates, msig);
         out.push(item(
             format!("{kind} {name}"),
             pre.clone(),
             canon(&arity1(&pre)),
         ));
         if !macros.is_empty() {
-            let pre = expand_predicates_for_display(&apply_macros_formula(&macros, f), &predicates);
+            let pre =
+                expand_predicates_for_display(&apply_macros_formula(&macros, f), predicates, msig);
             out.push(item(
                 format!("{kind} {name} (macros)"),
                 pre.clone(),
@@ -206,7 +211,8 @@ fn file_phase(path: &Path, root: &Path) -> FileReport {
     rep.msig = std::sync::Arc::new(elab.signature.maude_sig.clone());
     let arity1_names = crate::elaborate::arity1_noeq_names(elab.signature.maude_sig());
     let arity1 = |f: &p::Formula| rewrite_arity1_formula(f, &arity1_names);
-    rep.items = theory_formulas(&parsed, &arity1);
+    let predicates: Vec<crate::predicate::Predicate> = elab.predicates().cloned().collect();
+    rep.items = theory_formulas(&parsed, &predicates, elab.signature.maude_sig(), &arity1);
     rep.outcome = Outcome::Parsed;
     rep.elapsed = start.elapsed();
     rep

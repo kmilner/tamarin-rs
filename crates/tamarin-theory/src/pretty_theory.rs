@@ -566,7 +566,10 @@ fn open_theory_blocks(
 
     // Per-item blocks, source order (`parMap rdeepseq ppItem (thyItems thy)`,
     // TheoryObject.hs:767 — parallel render, sequential vsep order).
-    let predicates: Vec<p::Predicate> = collect_predicates(parsed);
+    // HS reads `theoryPredicates thy` — the `PredicateItem`s the parser
+    // appended (Theory/Text/Parser/Signature.hs:277-283) — which is the
+    // elaborated theory's typed list here.
+    let predicates: Vec<crate::predicate::Predicate> = elaborated.predicates().cloned().collect();
     let arity1 = arity1_noeq_names(elaborated);
     let mut st = OpenPrintState {
         opts,
@@ -616,7 +619,7 @@ struct OpenPrintState<'a> {
 #[allow(clippy::disallowed_types)]
 fn render_open_item(
     item: &p::TheoryItem,
-    predicates: &[p::Predicate],
+    predicates: &[crate::predicate::Predicate],
     in_file: &str,
     arity1: &std::collections::HashSet<String>,
     msig: &tamarin_term::maude_sig::MaudeSig,
@@ -964,7 +967,7 @@ fn render_open_rule(parsed_rule: &p::Rule, arity1: &std::collections::HashSet<St
 #[allow(clippy::disallowed_types)]
 fn render_open_lemma(
     lem: &p::Lemma,
-    predicates: &[p::Predicate],
+    predicates: &[crate::predicate::Predicate],
     in_file: &str,
     arity1: &std::collections::HashSet<String>,
     msig: &tamarin_term::maude_sig::MaudeSig,
@@ -978,7 +981,7 @@ fn render_open_lemma(
     // sees the folded `h(<…>)` shape.
     let header_formula =
         crate::elaborate::canonicalize_ac_in_formula(&crate::elaborate::rewrite_arity1_formula(
-            &expand_predicates_for_display(&lem.formula, predicates),
+            &expand_predicates_for_display(&lem.formula, predicates, msig),
             arity1,
         ));
     let mut out = render_lemma_head(
@@ -1014,13 +1017,13 @@ fn render_open_lemma(
 #[allow(clippy::disallowed_types)]
 fn render_open_restriction(
     r: &p::Restriction,
-    predicates: &[p::Predicate],
+    predicates: &[crate::predicate::Predicate],
     arity1: &std::collections::HashSet<String>,
     msig: &tamarin_term::maude_sig::MaudeSig,
 ) -> String {
     let original =
         crate::elaborate::canonicalize_ac_in_formula(&crate::elaborate::rewrite_arity1_formula(
-            &expand_predicates_for_display(&r.formula, predicates),
+            &expand_predicates_for_display(&r.formula, predicates, msig),
             arity1,
         ));
     use crate::pretty_hpj::{keyword_, line_comment_};
@@ -1157,23 +1160,6 @@ pub(crate) fn collect_macros(parsed: &p::Theory) -> Vec<p::Macro> {
         .filter_map(|i| {
             if let p::TheoryItem::Macros(ms) = i {
                 Some(ms.as_slice())
-            } else {
-                None
-            }
-        })
-        .flatten()
-        .cloned()
-        .collect()
-}
-
-/// Collect the theory's predicate declarations in source order.
-pub(crate) fn collect_predicates(parsed: &p::Theory) -> Vec<p::Predicate> {
-    parsed
-        .items
-        .iter()
-        .filter_map(|i| {
-            if let p::TheoryItem::Predicates(ps) = i {
-                Some(ps.as_slice())
             } else {
                 None
             }
@@ -3247,12 +3233,12 @@ fn render_guarded_block(lem: &crate::theory::Lemma) -> String {
 #[allow(clippy::disallowed_types)]
 fn render_open_guarded_block(
     lem: &p::Lemma,
-    predicates: &[p::Predicate],
+    predicates: &[crate::predicate::Predicate],
     arity1: &std::collections::HashSet<String>,
     msig: &tamarin_term::maude_sig::MaudeSig,
 ) -> String {
     let expanded_formula = crate::elaborate::rewrite_arity1_formula(
-        &expand_predicates_for_display(&lem.formula, predicates),
+        &expand_predicates_for_display(&lem.formula, predicates, msig),
         arity1,
     );
     guarded_block_comment(
@@ -3329,19 +3315,50 @@ fn guarded_block_comment(
 // Restriction
 // =============================================================================
 
-/// Predicate-expand a formula for DISPLAY, mirroring HS `expandFormula`
-/// (Theory/Syntactic/Predicate.hs:82-93) as applied by `expandRestriction` /
-/// `expandLemma` (TheoryObject.hs:430-446).  This rewrites `Pred` sugar — and
-/// the builtin multiset `(<)` / `Smaller` — into the surviving atom forms, so
-/// the displayed lemma/restriction text matches HS byte-for-byte.  The parse
-/// already succeeded (so every referenced predicate is defined and arities
-/// match); should expansion nonetheless error, fall back to the un-expanded
-/// formula rather than panic.
+/// Predicate-expand a formula for DISPLAY through the internal expander,
+/// mirroring HS `expandFormula` (Theory/Syntactic/Predicate.hs:82-105) as
+/// applied by `expandRestriction` / `expandLemma` (TheoryObject.hs:430-446).
+/// The rewrite replaces every `Pred` use site — and the builtin multiset
+/// `(<)`, which [`crate::formula::from_parser`] closes to a `Smaller` use
+/// site — by the predicate's body, so the displayed lemma/restriction text
+/// matches HS byte-for-byte, capture spelling included.
+///
+/// A formula with no such atom is returned as written: there is nothing to
+/// expand, and the round trip through the internal formula would re-derive
+/// its binder display names for nothing.  The parse already succeeded (so
+/// every referenced predicate is defined and arities match); should the
+/// conversion or the expansion nonetheless fail, fall back to the
+/// un-expanded formula rather than panic.
 pub(crate) fn expand_predicates_for_display(
     f: &p::Formula,
-    predicates: &[p::Predicate],
+    predicates: &[crate::predicate::Predicate],
+    msig: &tamarin_term::maude_sig::MaudeSig,
 ) -> p::Formula {
-    crate::predicate_expand::expand_formula(f, predicates).unwrap_or_else(|_| f.clone())
+    if !has_predicate_atom(f) {
+        return f.clone();
+    }
+    let expanded = crate::formula::from_parser(f, msig)
+        .ok()
+        .and_then(|syn| crate::predicate::expand_formula(predicates, &syn).ok());
+    match expanded {
+        Some(ln) => pf::lnformula_to_parser(&ln),
+        None => f.clone(),
+    }
+}
+
+/// Whether `f` carries an atom the predicate expansion rewrites: a predicate
+/// use site, or the multiset `(<)` the built-in `Smaller` predicate expands.
+fn has_predicate_atom(f: &p::Formula) -> bool {
+    match f {
+        p::Formula::True | p::Formula::False => false,
+        p::Formula::Atom(a) => matches!(a, p::Atom::Pred(_) | p::Atom::LessMset(_, _)),
+        p::Formula::Not(g) => has_predicate_atom(g),
+        p::Formula::And(a, b)
+        | p::Formula::Or(a, b)
+        | p::Formula::Implies(a, b)
+        | p::Formula::Iff(a, b) => has_predicate_atom(a) || has_predicate_atom(b),
+        p::Formula::Forall(_, b) | p::Formula::Exists(_, b) => has_predicate_atom(b),
+    }
 }
 
 /// HS `prettyRestriction` (TheoryObject.hs:889-901) over the ELABORATED
@@ -4561,12 +4578,19 @@ predicate: Between(x, y, z) <=> \
 (Ex #i #j #k. Ev(x) @ #i & Ev(y) @ #j & Ev(z) @ #k & #i < #j & #j < #k)\n\
 end\n";
         let parsed = tamarin_parser::parse_theory(SRC, &[]).expect("theory parses");
-        let predicates = collect_predicates(&parsed);
+        let predicates: Vec<&p::Predicate> = parsed
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                p::TheoryItem::Predicates(ps) => ps.first(),
+                _ => None,
+            })
+            .collect();
         // The theory declares no arity-1 no-eq function.
         #[allow(clippy::disallowed_types)]
         let arity1 = std::collections::HashSet::new();
         assert_eq!(
-            render_predicate(&predicates[0], &arity1),
+            render_predicate(predicates[0], &arity1),
             concat!(
                 "predicate: Between( x, y, z )<=>\u{2203} #i #j #k.\n",
                 " ((((Ev( x ) @ #i) \u{2227} (Ev( y ) @ #j)) \u{2227} (Ev( z ) @ #k)) \u{2227}\n",

@@ -22,7 +22,8 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 use tamarin_parser::ast as p;
-use tamarin_theory::formula::{from_parser, to_lnformula};
+use tamarin_theory::formula::from_parser;
+use tamarin_theory::predicate::Predicate;
 use tamarin_theory::theory::{LemmaAttr, Theory, TheoryItem};
 
 /// Examples beyond this test's budget, relative to the corpus root and
@@ -136,23 +137,17 @@ fn probe_conversions(
     if expanded.items.len() != parsed.items.len() {
         out.push(at("macro expansion changed the item count"));
     }
-    let mut predicate_only = parsed.clone();
-    for thy in [&mut expanded, &mut predicate_only] {
-        if let Err(e) = tamarin_theory::predicate_expand::expand_theory_formulas(thy) {
-            out.push(at(&format!("predicate expansion failed: {}", e.message)));
-        }
-    }
-    for (which, thy) in [
-        ("formula", &expanded),
-        ("original_formula", &predicate_only),
-    ] {
+    let predicates: Vec<Predicate> = elab.predicates().cloned().collect();
+    for (which, thy) in [("formula", &expanded), ("original_formula", parsed)] {
         for (label, f) in formulas(thy) {
             let where_ = |what: &str| at(&format!("{label} [{which}]: {what}"));
             match from_parser(f, msig) {
                 Err(e) => out.push(where_(&format!("from_parser: {}", e.message))),
+                // The expansion is what strips the `Pred` sugar, so a
+                // formula it accepts is the `LNFormula` the item stores.
                 Ok(ln) => {
-                    if to_lnformula(&ln).is_none() {
-                        out.push(where_("to_lnformula: residual sugar"));
+                    if let Err(e) = tamarin_theory::predicate::expand_formula(&predicates, &ln) {
+                        out.push(where_(&format!("predicate expansion failed: {e}")));
                     }
                 }
             }

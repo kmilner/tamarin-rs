@@ -91,15 +91,28 @@ pub(crate) fn ann_formulas(thy: &p::Theory) -> Vec<(String, &p::Formula)> {
 /// `sig` is the elaborated `MaudeSig`, for `checkTerms`'s
 /// `irreducibleFunSyms` classification.
 pub fn formula_reports(thy: &p::Theory, sig: &MaudeSig) -> Vec<WfError> {
-    // Both expansions mirror what HS's formulas have already undergone by
-    // the time `formulaReports` reads them: `annFormulas` applies
-    // `applyMacroInFormula` itself (Wellformedness.hs:1007-1014) and
-    // predicates are inlined at parse time.  A predicate-expansion error
-    // (e.g. an undefined predicate) is surfaced by the elaborate path; here
-    // the macro-only form is kept so the checks still run on what they can.
+    // `annFormulas` applies `applyMacroInFormula` itself
+    // (Wellformedness.hs:1007-1014), so the formulas are read off a
+    // macro-expanded copy of the theory.
     let mut expanded = thy.clone();
     crate::macro_expand::expand_theory_macros(&mut expanded);
-    let _ = crate::predicate_expand::expand_theory_formulas(&mut expanded);
+    // HS's predicates are inlined at parse time, against the predicates
+    // declared so far (`liftedAddLemma` → `expandLemma`,
+    // Theory/Text/Parser.hs:145-147).  Here every declaration of the theory
+    // is in scope: a formula that names a predicate declared after it is
+    // rejected by `elaborate`, which runs before any wellformedness check.
+    // The bodies are read off the same macro-expanded copy as the formulas,
+    // so a body that calls a macro reaches the use site expanded.
+    let predicates: Vec<crate::predicate::Predicate> = expanded
+        .items
+        .iter()
+        .filter_map(|i| match i {
+            p::TheoryItem::Predicates(ps) => Some(ps.as_slice()),
+            _ => None,
+        })
+        .flatten()
+        .filter_map(|pd| crate::predicate::from_parser(pd, sig).ok())
+        .collect();
 
     let terms = TermChecker::new(sig);
     let mut out: Vec<WfError> = Vec::new();
@@ -114,12 +127,21 @@ pub fn formula_reports(thy: &p::Theory, sig: &MaudeSig) -> Vec<WfError> {
         // HS `msum [checkQuantifiers, checkTerms, checkGuarded]` = `concat`:
         // every arm runs for every formula, findings concatenated in this
         // order (Wellformedness.hs:1002-1004).
-        out.extend(check_quantifiers(&header, &syn));
-        out.extend(terms.check(&header, &syn));
-        // A formula that keeps syntactic sugar carries no guardedness
-        // finding; the predicate expansion above leaves none behind.
-        if let Some(plain) = crate::formula::to_lnformula(&syn) {
-            out.extend(check_guarded_entry(&header, &plain));
+        match crate::predicate::expand_formula(&predicates, &syn) {
+            Ok(plain) => {
+                out.extend(check_quantifiers(&header, &plain));
+                out.extend(terms.check(&header, &plain));
+                out.extend(check_guarded_entry(&header, &plain));
+            }
+            // An undefined predicate is reported by the elaborate path.
+            // The quantifier and term arms still run on the formula as
+            // written; `atomTerms` yields nothing for the residual
+            // `Syntactic` atom (Wellformedness.hs:908-915), and the
+            // guardedness arm needs a formula without one.
+            Err(_) => {
+                out.extend(check_quantifiers(&header, &syn));
+                out.extend(terms.check(&header, &syn));
+            }
         }
     }
     out
@@ -204,7 +226,7 @@ fn check_guarded_entry(header: &str, formula: &crate::formula::LNFormula) -> Opt
 /// The binders are the formula's `(String, LSort)` HINTS, collected by HS's
 /// `foldFormula` with `\_ binder rest -> binder : rest` over `const mappend`
 /// connectives, i.e. in document order, outermost binder first.
-fn check_quantifiers(header: &str, fm: &crate::formula::SyntacticLNFormula) -> Option<WfError> {
+fn check_quantifiers<S>(header: &str, fm: &crate::formula::LNProtoFormula<S>) -> Option<WfError> {
     let mut binders: Vec<&(String, LSort)> = Vec::new();
     collect_binders(fm, &mut binders);
 
@@ -261,8 +283,8 @@ fn disallowed_sort_show(sort: LSort) -> Option<&'static str> {
 /// quantifier contributes its own hint before its body's, and a connective
 /// its left operand's before its right's.  A source `All x y. …` closes into
 /// nested `Qua`s, so its binders come out left to right.
-fn collect_binders<'a>(
-    fm: &'a crate::formula::SyntacticLNFormula,
+fn collect_binders<'a, S>(
+    fm: &'a crate::formula::LNProtoFormula<S>,
     out: &mut Vec<&'a (String, LSort)>,
 ) {
     use crate::formula::ProtoFormula;

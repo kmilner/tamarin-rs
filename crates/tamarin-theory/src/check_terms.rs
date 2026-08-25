@@ -39,7 +39,7 @@ use tamarin_term::maude_sig::MaudeSig;
 use tamarin_term::term::{show_term, Term};
 use tamarin_term::vterm::Lit;
 
-use crate::formula::{BLNTerm, SyntacticLNFormula};
+use crate::formula::{BLNTerm, LNProtoFormula};
 use crate::pretty_hpj::{fsep, punctuate, Doc};
 
 /// The fixed render budget for the formula-report WF blocks, determined
@@ -86,7 +86,7 @@ impl<'a> TermChecker<'a> {
 
     /// The `checkTerms` finding for one annotated formula, if it has
     /// offenders.  `header` is HS's `"Lemma `n'"` / `"Restriction `n'"`.
-    pub fn check(&self, header: &str, fm: &SyntacticLNFormula) -> Option<WfError> {
+    pub fn check<S>(&self, header: &str, fm: &LNProtoFormula<S>) -> Option<WfError> {
         let offenders: Vec<String> = crate::formula::formula_terms(fm)
             .into_iter()
             .filter(|t| !self.allowed(t))

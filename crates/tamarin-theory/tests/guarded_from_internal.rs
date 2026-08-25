@@ -26,6 +26,7 @@ use std::time::{Duration, Instant};
 use tamarin_parser::ast as p;
 use tamarin_theory::formula::{from_parser, to_lnformula};
 use tamarin_theory::guarded::{formula_to_guarded, formula_to_guarded_parsed, Guarded};
+use tamarin_theory::predicate::Predicate;
 use tamarin_theory::pretty_formula::pretty_guarded;
 
 /// Examples beyond this test's budget, relative to the corpus root and
@@ -145,6 +146,29 @@ fn compare(
     })
 }
 
+/// `f` with its predicate use sites replaced by the predicates' bodies, back
+/// in the parser-AST shape both routes read — `predicate::expand_formula`
+/// (the expansion the elaborated lemma carries) projected through
+/// `lnformula_to_parser`.  A formula that reaches `LNFormula` as written has
+/// no use site to replace and is returned unchanged; so is one the
+/// conversion or the expansion rejects, which `compare` then reports.
+fn expand_predicates(
+    f: &p::Formula,
+    predicates: &[Predicate],
+    msig: &tamarin_term::maude_sig::MaudeSig,
+) -> p::Formula {
+    let Ok(syn) = from_parser(f, msig) else {
+        return f.clone();
+    };
+    if to_lnformula(&syn).is_some() {
+        return f.clone();
+    }
+    match tamarin_theory::predicate::expand_formula(predicates, &syn) {
+        Ok(ln) => tamarin_theory::pretty_formula::lnformula_to_parser(&ln),
+        Err(_) => f.clone(),
+    }
+}
+
 /// Parse, lift the embedded restrictions and elaborate one file, then
 /// compare both routes on every lemma and restriction the elaborated theory
 /// holds — the formulas `prove`, `auto_sources` and the printer convert.  A
@@ -186,10 +210,8 @@ fn file_phase(path: &Path, root: &Path) -> FileReport {
     // route builds.
     let mut expanded = parsed.clone();
     tamarin_theory::macro_expand::expand_theory_macros(&mut expanded);
-    if tamarin_theory::predicate_expand::expand_theory_formulas(&mut expanded).is_err() {
-        return FileReport::skipped(Outcome::SkippedElab);
-    }
-    let items: Vec<(String, &p::Formula)> = expanded
+    let predicates: Vec<Predicate> = elab.predicates().cloned().collect();
+    let items: Vec<(String, p::Formula)> = expanded
         .items
         .iter()
         .filter_map(|it| match it {
@@ -199,6 +221,7 @@ fn file_phase(path: &Path, root: &Path) -> FileReport {
             }
             _ => None,
         })
+        .map(|(label, f)| (label, expand_predicates(f, &predicates, msig)))
         .collect();
     let findings = items
         .iter()

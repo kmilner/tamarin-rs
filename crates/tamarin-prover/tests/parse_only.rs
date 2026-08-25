@@ -1067,3 +1067,72 @@ end
 "#,
     );
 }
+
+/// A predicate use site whose argument names a variable the predicate body
+/// also binds.  HS `expandFormula` (Theory/Syntactic/Predicate.hs:82-105)
+/// splices the body under `compSubst`'s De Bruijn shift and renames nothing,
+/// so the two stay apart — the body's binder is an index, the use-site `z` is
+/// free — and the printer gives the binder the next display index, `z.1`.
+/// The multiset `(<)` reaches the same expansion through the built-in
+/// `Smaller` predicate (Theory/Text/Parser/Formula.hs:30-38), whose body binds
+/// `z` as well.  Both the quoted lemma formula and its guarded block carry
+/// that spelling.
+#[test]
+fn predicates_and_smaller_echo() {
+    assert_transcript(
+        "predicates_and_smaller_echo",
+        &[(
+            "p17_pred_capture.spthy",
+            r#"theory S6PredCapture
+begin
+
+builtins: multiset
+
+predicates: P(x) <=> Ex z #i. Act(x, z) @ #i
+
+lemma cap:
+  "All z #j. Start(z) @ #j ==> P(z)"
+
+lemma mset:
+  "All y #j. Start(y) @ #j ==> Smaller(z, y)"
+
+end
+"#,
+        )],
+        &["p17_pred_capture.spthy"],
+        r#"theory S6PredCapture
+
+begin
+
+// Function signature and definition of the equational theory E
+
+builtins: multiset
+functions: fst/1, pair/2, snd/1
+equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
+
+builtin  multiset
+
+predicate: P( x )<=>∃ z #i. Act( x, z ) @ #i
+
+lemma cap:
+  all-traces "∀ z #j. (Start( z ) @ #j) ⇒ (∃ z.1 #i. Act( z, z.1 ) @ #i)"
+/*
+guarded formula characterizing all counter-examples:
+"∃ z #j. (Start( z ) @ #j) ∧ ∀ z.1 #i. (Act( z, z.1 ) @ #i) ⇒ ⊥"
+*/
+by sorry
+
+lemma mset:
+  all-traces "∀ y #j. (Start( y ) @ #j) ⇒ (∃ z.1. y = (z++z.1))"
+/*
+guarded formula characterizing all counter-examples:
+"∃ y #j. (Start( y ) @ #j) ∧ ∀ z.1. (y = (z++z.1)) ⇒ ⊥"
+*/
+by sorry
+
+end
+"#,
+        r#"[Theory S6PredCapture] Theory loaded
+"#,
+    );
+}

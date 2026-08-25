@@ -22,7 +22,7 @@
 //! - [`intruder_rules`] / [`intruder_variants`] ←
 //!   `Theory.Tools.IntruderRules`; [`close_rule`] ← `CloseRule.hs`'s
 //!   no-deconstruction-chain check
-//! - [`predicate`] / [`predicate_expand`] ← `Theory.Syntactic.Predicate`
+//! - [`predicate`] ← `Theory.Syntactic.Predicate`
 //!   (data + lookup + `expandFormula`)
 //! - [`constraint`] ← `Theory.Constraint.*` (the constraint solver,
 //!   ~32k LOC: system, reduction, goals, sources, simplify,
@@ -69,7 +69,6 @@ pub mod macro_expand;
 pub mod module;
 pub mod mult_restricted;
 pub mod predicate;
-pub mod predicate_expand;
 pub mod pretty_formula;
 pub mod pretty_hpj;
 pub mod pretty_sapic;

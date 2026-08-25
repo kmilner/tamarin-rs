@@ -29,7 +29,8 @@ use tamarin_term::vterm::Lit;
 use tamarin_theory::elaborate::{elaborate_lemma_attr, fact_tag_of};
 use tamarin_theory::fact::Fact;
 use tamarin_theory::formula::{formula_frees, to_lnformula, BLNTerm, SyntacticLNFormula};
-use tamarin_theory::theory::{self as t, Theory, TheoryItem, TranslationElement};
+use tamarin_theory::predicate::Predicate;
+use tamarin_theory::theory::{self as t, LNMacro, Theory, TheoryItem, TranslationElement};
 
 use crate::generation::{generate_accountability_lemmas, AccData, CaseTestData};
 
@@ -261,27 +262,11 @@ pub fn translate(parsed: &mut p::Theory, elaborated: &mut Theory) -> Result<(), 
     // after the lemma loop, so — as in HS, where `liftedAddLemma` expands
     // against `theoryPredicates thy` at the point of the add — they are not
     // among them.
-    let declared_preds: Vec<p::Predicate> = parsed
-        .items
-        .iter()
-        .filter_map(|i| match i {
-            p::TheoryItem::Predicates(ps) => Some(ps.iter().cloned()),
-            _ => None,
-        })
-        .flatten()
-        .collect();
+    let declared_preds: Vec<Predicate> = elaborated.predicates().cloned().collect();
 
     // The macro DEFINITIONS `applyMacroInLemma` substitutes into each generated
     // lemma at close time (CloseRule.hs:85), in declaration order.
-    let declared_macros: Vec<p::Macro> = parsed
-        .items
-        .iter()
-        .filter_map(|i| match i {
-            p::TheoryItem::Macros(ms) => Some(ms.iter().cloned()),
-            _ => None,
-        })
-        .flatten()
-        .collect();
+    let declared_macros: Vec<LNMacro> = elaborated.macros().cloned().collect();
 
     // Existing lemma names (HS `addLemma` guards on `lookupLemma`, which scans
     // `LemmaItem`s only — TheoryObject.hs:461-465); grows as generated lemmas
@@ -324,8 +309,6 @@ pub fn translate(parsed: &mut p::Theory, elaborated: &mut Theory) -> Result<(), 
                 return Err(AccError::DuplicateLemma(gen.name));
             }
             lemma_names.push(gen.name.clone());
-            let formula =
-                tamarin_theory::pretty_formula::syntactic_lnformula_to_parser(&gen.formula);
             inject_lemma(
                 parsed,
                 elaborated,
@@ -334,7 +317,7 @@ pub fn translate(parsed: &mut p::Theory, elaborated: &mut Theory) -> Result<(), 
                 &acc.attributes,
                 &gen.name,
                 gen.quantifier,
-                formula,
+                &gen.formula,
             );
         }
     }
@@ -414,39 +397,31 @@ fn render_fact(f: &p::Fact) -> String {
 /// (Theory/Text/Parser.hs:141-152), and `_lFormula` is that formula with the
 /// theory's macros applied, which `closeTheory` maps over every lemma
 /// including the ones this translation added (`applyMacroInLemma`,
-/// CloseRule.hs:85, lib/theory/src/Lemma.hs:83-88).  The parser-AST theory the
-/// `--parse-only` and `-m msr` renderers walk keeps the surface form.  A
-/// formula the expansion or the signature rejects is added to neither theory.
+/// CloseRule.hs:85, lib/theory/src/Lemma.hs:83-88).  Both are built from
+/// `formula`, the generator's own internal value; the parser-AST theory the
+/// `--parse-only` and `-m msr` renderers walk gets its projection, which keeps
+/// the surface form.  A formula the expansion rejects is added to neither
+/// theory.
 fn inject_lemma(
     parsed: &mut p::Theory,
     elaborated: &mut Theory,
-    predicates: &[p::Predicate],
-    macros: &[p::Macro],
+    predicates: &[Predicate],
+    macros: &[LNMacro],
     attributes: &[p::LemmaAttr],
     name: &str,
     quantifier: p::TraceQuantifier,
-    formula: p::Formula,
+    formula: &SyntacticLNFormula,
 ) {
-    let msig = &elaborated.signature.maude_sig;
-    let close = |f: &p::Formula| {
-        tamarin_theory::formula::from_parser(f, msig)
-            .ok()
-            .and_then(|syn| tamarin_theory::formula::to_lnformula(&syn))
-    };
-    let Ok(pred_expanded) = tamarin_theory::predicate_expand::expand_formula(&formula, predicates)
-    else {
+    let Ok(original) = tamarin_theory::predicate::expand_formula(predicates, formula) else {
         return;
     };
-    let with_macros = tamarin_theory::macro_expand::apply_macros_formula(macros, &pred_expanded);
-    let (Some(original), Some(expanded)) = (close(&pred_expanded), close(&with_macros)) else {
-        return;
-    };
+    let expanded = tamarin_theory::formula::apply_macro_in_formula(macros, original.clone());
     let parsed_lemma = p::Lemma {
         name: name.to_string(),
         modulo: None,
         attributes: attributes.to_vec(),
         trace_quantifier: quantifier.clone(),
-        formula,
+        formula: tamarin_theory::pretty_formula::syntactic_lnformula_to_parser(formula),
         proof: None,
         // HS `skeletonLemma name "generation" ..` seeds `_lPlaintext` with
         // "generation" (ProofSkeleton.hs:63-64); never rendered by `--prove`.
@@ -760,7 +735,7 @@ end\n";
     /// (Theory/Text/Parser.hs:141-152), so no `Pred` atom reaches the stored
     /// `LNFormula`: `IsBad(a)` is inlined as `a = 'bad'`.
     #[test]
-    fn generated_lemmas_are_predicate_expanded_at_injection() {
+    fn generated_lemmas_have_predicates_inlined_at_injection() {
         let mut parsed = tamarin_parser::parse_theory(SRC, &[]).expect("theory parses");
         let mut elaborated =
             tamarin_theory::elaborate::elaborate(&parsed).expect("theory elaborates");

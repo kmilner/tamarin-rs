@@ -12,9 +12,7 @@
 //!     (stage 8) and `deriv_check`'s probe theory (stage 7);
 //!   - [`expand_theory_macros`] — `formula_reports`' pre-pass (stage 8);
 //!   - [`apply_macros_fact`] — `deriv_check`'s rule rewrite and
-//!     `pretty_theory::is_trivial_proto_variant_ac` (stage 7);
-//!   - [`apply_macros_formula`] — `tamarin_accountability`'s injected lemma
-//!     (stage 7).
+//!     `pretty_theory::is_trivial_proto_variant_ac` (stage 7).
 //!
 //! Port of `Term.Macro.applyMacros` (HS: lib/term/src/Term/Macro.hs:40-54)
 //! plus the call-sites that drive it:
@@ -123,10 +121,8 @@ fn find_matching_macro<'a>(
 }
 
 /// Apply a name-keyed substitution to a parser term.  HS's typed
-/// `apply subst term` (Term/Macro.hs:40-54, see line 48) becomes a structural name-keyed walk.
-/// Shared with `predicate_expand` (whose `Subst` newtype wraps the same
-/// `BTreeMap<String, p::Term>`), so both stay in lockstep on capture /
-/// replacement semantics.
+/// `apply subst term` (Term/Macro.hs:40-54, see line 48) becomes a structural
+/// name-keyed walk.
 pub(crate) fn subst_term_by_name(t: &p::Term, subst: &BTreeMap<String, p::Term>) -> p::Term {
     match t {
         p::Term::Var(v) => match subst.get(&v.name) {
@@ -174,7 +170,7 @@ pub fn apply_macros_fact(macros: &[p::Macro], f: &p::Fact) -> p::Fact {
 /// param names and call args at every call site, so no quantifier-bound
 /// variable in the surrounding formula can ever be a param (the macro
 /// definition is independent of the use site).
-pub fn apply_macros_formula(macros: &[p::Macro], f: &p::Formula) -> p::Formula {
+pub(crate) fn apply_macros_formula(macros: &[p::Macro], f: &p::Formula) -> p::Formula {
     map_formula_terms(f, &|t| apply_macros_term(macros, t))
 }
 
