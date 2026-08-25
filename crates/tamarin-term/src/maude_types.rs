@@ -160,8 +160,8 @@ fn import_lit(l: &Lit<Name, LVar>, ctx: &mut ConvCtx) -> MaudeLit {
             MaudeLit::MaudeConst(id, s)
         }
     };
-    ctx.forward.insert(l.clone(), m.clone());
-    ctx.inverse.insert(m.clone(), l.clone());
+    ctx.forward.insert(*l, m.clone());
+    ctx.inverse.insert(m.clone(), *l);
     m
 }
 
@@ -217,7 +217,7 @@ pub fn mterm_to_lnterm(
                     let lv = LVar::new(name_hint, *sort, *next_idx);
                     *next_idx += 1;
                     let lit = Lit::Var(lv);
-                    ctx.inverse.insert(ml.clone(), lit.clone());
+                    ctx.inverse.insert(ml.clone(), lit);
                     Term::Lit(lit)
                 }
                 MaudeLit::MaudeConst(_, _) => {
