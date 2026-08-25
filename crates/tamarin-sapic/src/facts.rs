@@ -493,7 +493,7 @@ pub struct AnnotatedRule<Ann> {
     pub concs: Vec<TransFact>,
     /// Embedded restrictions (HS `restr :: [SyntacticLNFormula]`, Facts.hs:116-125, see line 123).
     /// `apply_sapic` hands them to the `_restrict` expansion
-    /// (`rule_restriction::lift_one_rule`), which turns each into a
+    /// (`rule_restriction::rule_restrictions`), which turns each into a
     /// `Restr_<rule>_<i>` restriction plus an action on this rule.
     pub restr: Vec<SyntacticLNFormula>,
     pub index: usize,

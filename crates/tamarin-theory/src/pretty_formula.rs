@@ -901,9 +901,8 @@ pub fn lnformula_to_parser(f: &LNFormula) -> p::Formula {
 
 /// [`lnformula_to_parser`] at the parser's sugar, keeping the `Pred` atoms.
 ///
-/// `tamarin_sapic::apply` crosses back here for the `_restrict` formulas of
-/// the rules the translation synthesises (stage 8), and
-/// `tamarin_accountability` for the lemmas its generator builds (stage 7).
+/// `tamarin_accountability` crosses back here for the lemmas its generator
+/// builds (stage 7).
 pub fn syntactic_lnformula_to_parser(f: &SyntacticLNFormula) -> p::Formula {
     formula_to_parser(f, &mut Vec::new(), &mut avoid_precise_lnformula(f))
 }

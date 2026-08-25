@@ -73,11 +73,7 @@ pub fn lift_rule_restrictions(thy: &mut p::Theory) -> Result<(), ElabError> {
 /// Lift one rule's embedded restrictions, projecting both outputs back into
 /// the parser AST: the generated restrictions in `1..n` order and the rule
 /// with the `Restr_<rule>_<i>` actions appended.
-///
-/// Public so the SAPIC translation (`tamarin_sapic::apply`) lifts the rules it
-/// synthesises the same way, HS `foldM liftedAddProtoRule`
-/// (sapic/src/Sapic.hs:75).
-pub fn lift_one_rule(
+fn lift_one_rule(
     mut rule: p::Rule,
     predicates: &[Predicate],
     sig: &MaudeSig,

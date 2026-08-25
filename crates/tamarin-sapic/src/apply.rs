@@ -20,9 +20,12 @@ use tamarin_parser::ast as p;
 use tamarin_parser::wf::WfError;
 use tamarin_term::maude_sig::MaudeSig;
 
-use tamarin_theory::elaborate::ElabError;
+use tamarin_theory::elaborate::{proto_rule_to_parsed, ElabError};
+use tamarin_theory::formula::LNFormula;
+use tamarin_theory::predicate::{expand_formula, Predicate};
+use tamarin_theory::pretty_formula::lnformula_to_parser;
 use tamarin_theory::restriction::Restriction;
-use tamarin_theory::rule::ProtoRuleE;
+use tamarin_theory::rule_restriction::rule_restrictions;
 use tamarin_theory::sapic::PlainProcess;
 use tamarin_theory::theory::{OpenProtoRule, Theory, TheoryItem};
 
@@ -142,43 +145,25 @@ pub fn apply_sapic(
     })?;
 
     // The `predicate:` declarations the embedded `_restrict` formulas expand
-    // against (HS `liftedExpandFormula`), read from the parsed theory and
-    // closed against the elaborated signature.
-    let mut predicates: Vec<tamarin_theory::predicate::Predicate> = Vec::new();
-    for item in &parsed.items {
-        if let p::TheoryItem::Predicates(ps) = item {
-            for pd in ps {
-                predicates.push(tamarin_theory::predicate::from_parser(
-                    pd,
-                    &elaborated.signature.maude_sig,
-                )?);
-            }
-        }
-    }
+    // against: HS `liftedExpandFormula` reads `theoryPredicates thy`
+    // (Theory/Text/Parser.hs:112-114), the list `elaborate` built from the
+    // theory's `predicates:` items.
+    let predicates: Vec<Predicate> = elaborated.predicates().cloned().collect();
 
     // Inject each generated rule into BOTH theories, running the `_restrict`
     // expansion HS `liftedAddProtoRule` (Theory/Text/Parser.hs:175-193) performs
     // per rule: for each embedded restriction formula, mint a fresh action
     // `Restr_<rule>_<i>` + a global restriction `∀ … #NOW. Restr…@#NOW ⇒ φ`,
     // insert the restrictions BEFORE the rule, and append the actions to the
-    // rule.  We share the parser-AST lift (`lift_one_rule`) for both theories:
-    //   - parsed:     the generated restrictions + rewritten parser rule;
-    //   - elaborated: the same restrictions (as `Restriction`, internal
-    //                 formula) + the elaborated rewritten rule (the original
-    //                 `ProtoRuleE` attributes/name with the rewritten body, so
-    //                 the appended `Restr_*` actions are present).
+    // rule.  The lift runs on the internal formulas the translation carries;
+    // `elaborated` receives its outputs and `parsed` their projection.
     for (rule, restr_formulas) in &translation.rules {
-        // Synthesise the parser-AST rule, carrying the embedded restrictions.
-        // `proto_rule_to_parsed` projects the elaborated E-rule back to parser
-        // facts and carries color / process / no_derivcheck / issapicrule /
-        // role exactly as HS's `toRule` produced them.
-        let mut parsed_rule = tamarin_theory::elaborate::proto_rule_to_parsed(rule);
-        // `lift_one_rule` reads parser-AST formulas, so the embedded
-        // restrictions cross back to the AST here.
-        parsed_rule.embedded_restrictions = restr_formulas
-            .iter()
-            .map(tamarin_theory::pretty_formula::syntactic_lnformula_to_parser)
-            .collect();
+        // Synthesise the parser-AST rule as it stands BEFORE the lift, which
+        // is the shape the name guard below compares.  `proto_rule_to_parsed`
+        // projects the elaborated E-rule back to parser facts and carries
+        // color / process / no_derivcheck / issapicrule / role exactly as HS's
+        // `toRule` produced them.
+        let parsed_rule = proto_rule_to_parsed(rule);
 
         // HS `foldM liftedAddProtoRule th (map (`OpenProtoRule` []) eProtoRule)`
         // (sapic/src/Sapic.hs:75): each generated rule goes through the same
@@ -213,32 +198,44 @@ pub fn apply_sapic(
             continue;
         }
 
-        // `if <formula>` arm: expand the embedded restriction.
-        let (gen_restrs, rewritten) = tamarin_theory::rule_restriction::lift_one_rule(
-            parsed_rule,
-            &predicates,
-            &elaborated.signature.maude_sig,
-        )
-        .map_err(|e| ElabError {
-            message: format!("SAPIC _restrict expansion: {}", e.message),
-        })?;
-
-        // Restrictions precede the rule in both theories.
-        for r in &gen_restrs {
-            let restr = elaborate_restriction(r, &elaborated.signature.maude_sig)?;
-            parsed.items.push(p::TheoryItem::Restriction(r.clone()));
-            elaborated.items.push(TheoryItem::Restriction(restr));
+        // `if <formula>` / `let … else` arm: expand the predicate atoms of
+        // every embedded formula (HS `liftedExpandFormula`,
+        // Theory/Text/Parser.hs:178).
+        let mut closed: Vec<LNFormula> = Vec::with_capacity(restr_formulas.len());
+        for phi in restr_formulas {
+            closed.push(expand_formula(&predicates, phi).map_err(|e| ElabError {
+                message: format!("SAPIC _restrict expansion: {e}"),
+            })?);
         }
 
-        // Elaborated rule: re-elaborate the rewritten parser-rule body to
-        // LNFacts and pair it with the original `ProtoRuleE`'s info (which holds
-        // the SAPIC attributes + name).  Re-elaborating the whole body keeps the
-        // appended `Restr_*` actions byte-faithful to the parsed rule.
-        let elab_rule = reelaborate_rule_body(rule, &rewritten, &elaborated.signature.maude_sig)?;
+        // HS `addActions` rebuilds `rActs` alone (Theory/Text/Parser.hs:188), so
+        // the rule keeps the `_preRestriction` formulas (Theory/Model/Rule.hs:424)
+        // `toRule` gave it (sapic/src/Sapic/Facts.hs:376-379) and the `rNewVars`
+        // the translation computed.
+        let mut lifted = rule.clone();
+        lifted.info.restrictions = restr_formulas.clone();
+        for (mut restr, action) in rule_restrictions(&parsed_rule.name, &closed) {
+            // Restrictions precede the rule in both theories.
+            parsed
+                .items
+                .push(p::TheoryItem::Restriction(p::Restriction {
+                    name: restr.name.clone(),
+                    formula: lnformula_to_parser(&restr.formula),
+                    attributes: Vec::new(),
+                }));
+            // HS `applyMacroInRestriction` records the formula as it stands as
+            // the original one for every restriction of a closed theory
+            // (Theory/Model/Restriction.hs:164-166, CloseRule.hs:84).
+            restr.original_formula = Some(restr.formula.clone());
+            elaborated.items.push(TheoryItem::Restriction(restr));
+            lifted.actions.push(action);
+        }
+        parsed
+            .items
+            .push(p::TheoryItem::Rule(proto_rule_to_parsed(&lifted)));
         elaborated
             .items
-            .push(TheoryItem::Rule(OpenProtoRule::new(elab_rule)));
-        parsed.items.push(p::TheoryItem::Rule(rewritten));
+            .push(TheoryItem::Rule(OpenProtoRule::new(lifted)));
     }
 
     // Inject the global restrictions (set_in/set_notin, predicate_eq/not_eq,
@@ -273,12 +270,13 @@ pub fn apply_sapic(
     Ok(wf_report)
 }
 
-/// Lower one generated restriction into the elaborated theory's
-/// [`Restriction`]: the formula is closed by `from_parser` and stripped of
-/// its predicate sugar, which `lift_one_rule` already inlined, and
-/// `original_formula` repeats it — HS's `applyMacroInRestriction` fills that
+/// Lower one of the translation's global restrictions — `baseRestr`'s
+/// hardcoded and locking ones (Basetranslation.hs:449-468) plus the progress
+/// and reliable-channel ones — into the elaborated theory's [`Restriction`]:
+/// the parser-AST formula those builders write is closed by `from_parser`, and
+/// `original_formula` repeats it, as HS's `applyMacroInRestriction` fills that
 /// field for every restriction of a closed theory
-/// (Theory/Model/Restriction.hs:164-166, CloseRule.hs:82-84).
+/// (Theory/Model/Restriction.hs:164-166, CloseRule.hs:84).
 fn elaborate_restriction(r: &p::Restriction, msig: &MaudeSig) -> Result<Restriction, ElabError> {
     let syn = tamarin_theory::formula::from_parser(&r.formula, msig)?;
     let formula = tamarin_theory::formula::to_lnformula(&syn).ok_or_else(|| ElabError {
@@ -294,38 +292,115 @@ fn elaborate_restriction(r: &p::Restriction, msig: &MaudeSig) -> Result<Restrict
     })
 }
 
-/// Re-elaborate a `_restrict`-rewritten parser-AST rule body into a
-/// `ProtoRuleE`, reusing the original SAPIC rule's `info` (name + attributes).
-///
-/// The rewrite appended `Restr_<rule>_<i>(...)` actions to the rule; elaborating
-/// the rewritten body (premises/actions/conclusions) regenerates the rule's
-/// LNFacts including those actions, byte-faithful to the parsed rendering.  The
-/// `new_vars` are recomputed (HS `newVariables l (c ++ a)`), though the Restr
-/// action args are always already premise-bound so they add nothing.
-fn reelaborate_rule_body(
-    original: &ProtoRuleE,
-    rewritten: &p::Rule,
-    sig: &MaudeSig,
-) -> Result<ProtoRuleE, ElabError> {
-    use tamarin_theory::elaborate::fact_to_lnfact;
-    let prems = rewritten
-        .premises
-        .iter()
-        .map(|f| fact_to_lnfact(f, sig))
-        .collect::<Result<Vec<_>, _>>()?;
-    let acts = rewritten
-        .actions
-        .iter()
-        .map(|f| fact_to_lnfact(f, sig))
-        .collect::<Result<Vec<_>, _>>()?;
-    let concs = rewritten
-        .conclusions
-        .iter()
-        .map(|f| fact_to_lnfact(f, sig))
-        .collect::<Result<Vec<_>, _>>()?;
-    let new_vars = crate::facts::compute_new_vars(&prems, &concs, &acts);
-    Ok(
-        tamarin_theory::rule::Rule::new(original.info.clone(), prems, concs, acts)
-            .with_new_vars(new_vars),
-    )
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tamarin_theory::rule::ProtoRuleName;
+
+    /// The `else` arm of a pattern `let` carries the restriction
+    /// `∀ y w. (<y, w> = z) ⇒ ⊥` (Basetranslation.hs:261-269), so the
+    /// translated theory gets one generated `Restr_letywz_2_1_1` restriction
+    /// plus the action that reaches it on rule `letywz_2_1`.
+    const LET_ELSE: &str = "theory T begin\n\
+        process:\n\
+          in(z); let <y, w> = z in out(y) else out('n')\n\
+        end";
+
+    /// The generated restriction and the appended action land in both
+    /// theories, the restriction immediately before its rule (HS adds the
+    /// expanded restrictions and then the rule, Theory/Text/Parser.hs:179-180),
+    /// and the internal rule keeps the premises, conclusions and new variables
+    /// the translation built — the lift only appends actions
+    /// (`addActions`, Theory/Text/Parser.hs:188).
+    #[test]
+    fn generated_rule_carries_its_restrict_formulas() {
+        let mut parsed = tamarin_parser::parse_theory(LET_ELSE, &[]).unwrap();
+        let mut elaborated = tamarin_theory::elaborate::elaborate(&parsed).unwrap();
+
+        // The same translation `apply_sapic` runs, so the rule it injects can
+        // be compared against the values the translation produced.
+        let maude_sig = elaborated.signature.maude_sig.clone();
+        let (_, plain) = sapic_pre_report(&parsed, &maude_sig).unwrap().unwrap();
+        let typed = type_and_rename_process(&maude_sig, &[], &plain).unwrap();
+        let translation = translate(
+            &typed,
+            false,
+            &maude_sig.st_rules,
+            TranslateOptions::default(),
+        )
+        .unwrap();
+        let (translated, restr_formulas) = translation
+            .rules
+            .iter()
+            .find(|(_, r)| !r.is_empty())
+            .expect("no generated rule carries a `_restrict` formula");
+
+        apply_sapic(&mut parsed, &mut elaborated, false).unwrap();
+
+        let restr_pos = parsed
+            .items
+            .iter()
+            .position(
+                |i| matches!(i, p::TheoryItem::Restriction(r) if r.name == "Restr_letywz_2_1_1"),
+            )
+            .expect("restriction not generated");
+        let rule_pos = parsed
+            .items
+            .iter()
+            .position(|i| matches!(i, p::TheoryItem::Rule(r) if r.name == "letywz_2_1"))
+            .expect("rule missing");
+        assert_eq!(restr_pos + 1, rule_pos, "restriction must precede rule");
+        let p::TheoryItem::Rule(pr) = &parsed.items[rule_pos] else {
+            panic!("item at {rule_pos} is not the rule");
+        };
+        assert_eq!(
+            pr.actions
+                .iter()
+                .map(|f| f.name.as_str())
+                .collect::<Vec<_>>(),
+            ["Restr_letywz_2_1_1"],
+            "the projected rule carries the generated action"
+        );
+
+        let erestr_pos = elaborated
+            .items
+            .iter()
+            .position(|i| matches!(i, TheoryItem::Restriction(r) if r.name == "Restr_letywz_2_1_1"))
+            .expect("internal restriction not generated");
+        let erule_pos = elaborated
+            .items
+            .iter()
+            .position(|i| {
+                matches!(i, TheoryItem::Rule(r)
+                    if r.rule.info.name == ProtoRuleName::Stand("letywz_2_1"))
+            })
+            .expect("internal rule missing");
+        assert_eq!(erestr_pos + 1, erule_pos);
+        let TheoryItem::Restriction(er) = &elaborated.items[erestr_pos] else {
+            panic!("item at {erestr_pos} is not the restriction");
+        };
+        assert_eq!(er.original_formula.as_ref(), Some(&er.formula));
+
+        let TheoryItem::Rule(er) = &elaborated.items[erule_pos] else {
+            panic!("item at {erule_pos} is not the rule");
+        };
+        let injected = &er.rule;
+        assert_eq!(injected.premises, translated.premises);
+        assert_eq!(injected.conclusions, translated.conclusions);
+        assert_eq!(injected.new_vars, translated.new_vars);
+        assert_eq!(
+            injected.actions.len(),
+            translated.actions.len() + 1,
+            "the lift appends exactly the generated action"
+        );
+        assert_eq!(
+            injected.actions[..translated.actions.len()],
+            translated.actions[..]
+        );
+        assert_eq!(
+            tamarin_theory::fact::show_fact_tag(&injected.actions[translated.actions.len()].tag),
+            "Restr_letywz_2_1_1"
+        );
+        assert_eq!(&injected.info.restrictions, restr_formulas);
+    }
 }

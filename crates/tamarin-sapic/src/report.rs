@@ -22,9 +22,9 @@
 //!         [ Out( rep(x, loc) ) ]
 //!      to the initial rules.  Its embedded restriction is the syntactic
 //!      predicate atom `Pred (Report x loc)`, which `liftedAddProtoRule`
-//!      (`apply.rs` / `rule_restriction::lift_one_rule`) binds to the
-//!      user-defined `Report` predicate, producing the `Restr_ReportRule_1`
-//!      restriction and the `Restr_ReportRule_1(...)` action.
+//!      (`apply.rs`) binds to the user-defined `Report` predicate, producing
+//!      the `Restr_ReportRule_1` restriction and the `Restr_ReportRule_1(...)`
+//!      action.
 //!
 //! `x` and `loc` are HS `LVar s LSortMsg 0` (Report.hs:37-39).
 
@@ -72,7 +72,7 @@ pub fn report_init(
 
     // restr: `Syntactic . Pred $ protoFact Linear "Report" [varTerm (Free x),
     // varTerm (Free loc)]` (Report.hs:41).  The `_restrict` expansion
-    // (`lift_one_rule`) binds it to the user `Report` predicate.
+    // (`apply.rs`) binds it to the user `Report` predicate.
     let report_pred = ProtoFormula::Atom(ProtoAtom::Syntactic(SyntacticSugar::Pred(Fact::new(
         FactTag::Proto(Multiplicity::Linear, "Report", 2),
         vec![

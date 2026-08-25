@@ -347,10 +347,10 @@ fn get_unlock_positions(p: &Process<ProcessAnnotation<LVar>, SapicLVar>) -> Vec<
 /// The result of translating a single top-level process.
 pub struct Translation {
     /// The generated rules, each paired with its embedded `_restrict`
-    /// formulas.  HS attaches these as the rule's `_preRestriction`; the RS
-    /// port keeps them alongside the elaborated rule so `apply_sapic` can run
-    /// the `_restrict` expansion (`lift_rule_restrictions`, HS
-    /// `liftedAddProtoRule`) over both theories.
+    /// formulas.  HS attaches these as the rule's `_preRestriction`
+    /// (sapic/src/Sapic/Facts.hs:376-379); the port pairs them with the rule
+    /// here, and `apply_sapic` runs the `_restrict` expansion (HS
+    /// `liftedAddProtoRule`) over both theories from them.
     pub rules: Vec<(ProtoRuleE, Vec<SyntacticLNFormula>)>,
     pub restrictions: Vec<tamarin_parser::ast::Restriction>,
 }
