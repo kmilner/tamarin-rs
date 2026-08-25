@@ -1714,7 +1714,6 @@ impl TheoryPipeline<'_> {
         if self.auto_sources {
             let m = self.require_maude()?;
             tamarin_theory::auto_sources::apply_auto_sources(
-                &mut self.parsed,
                 &mut self.elaborated,
                 m,
                 self.file_maude_pool.clone(),
@@ -1787,7 +1786,6 @@ impl TheoryPipeline<'_> {
             if self.auto_sources {
                 let m2 = self.require_maude()?;
                 tamarin_theory::auto_sources::apply_auto_sources(
-                    &mut self.parsed,
                     &mut self.elaborated,
                     m2,
                     self.file_maude_pool.clone(),
