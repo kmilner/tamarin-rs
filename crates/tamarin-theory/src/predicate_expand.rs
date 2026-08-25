@@ -2,14 +2,22 @@
 // of the tamarin-prover sources this file cites; list them with:
 //   scripts/gen_license_headers.py --authors <this file>
 
-//! Port of `Theory.Syntactic.Predicate.expandFormula` —
-//! substitutes predicate-atom occurrences in a formula with the body
-//! of the matching predicate definition. Uses parser-AST formulas /
-//! predicates throughout.
+//! `Theory.Syntactic.Predicate.expandFormula` over parser-AST formulas and
+//! predicates: a predicate `P(x_1, ..., x_n) <=> phi` is applied to a use-site
+//! atom `P(t_1, ..., t_n)` by substituting each variable `x_i` in `phi` with
+//! the corresponding term `t_i`.
 //!
-//! A predicate `P(x_1, ..., x_n) <=> phi` is "applied" to a use-site
-//! atom `P(t_1, ..., t_n)` by substituting each variable `x_i` in
-//! `phi` with the corresponding term `t_i`.
+//! The passes that run before elaboration read it: the `_restrict` lift
+//! (`rule_restriction`), the wellformedness formula reports
+//! (`formula_reports`), the `--parse-only` display expansion
+//! (`pretty_theory::expand_predicates_for_display`) and
+//! `tamarin_accountability`'s lemma injection.  `predicate::expand_formula` is
+//! the same rewrite on a `SyntacticLNFormula`, and it is what the elaborated
+//! theory's lemmas and restrictions go through.
+//!
+//! The two differ where a body binder and a use-site variable share a name and
+//! sort: the internal expander is the De Bruijn splice HS runs and renames
+//! nothing, while this one alpha-renames the binder to a new base name.
 
 use std::collections::BTreeMap;
 
@@ -493,228 +501,4 @@ fn find_predicate<'a>(preds: &'a [p::Predicate], fact: &p::Fact) -> Option<&'a p
 /// macro-expansion substitution in lockstep.
 fn subst_term(t: &p::Term, subst: &Subst) -> p::Term {
     crate::macro_expand::subst_term_by_name(t, &subst.map)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tamarin_parser::parser::parse_formula_str;
-    use tamarin_term::maude_sig::pair_maude_sig;
-
-    fn pred(decl: &str) -> Vec<p::Predicate> {
-        // Parse a tiny theory containing only `predicates: <decl>`.
-        let src = format!("theory T begin\npredicates: {}\nend", decl);
-        let thy = tamarin_parser::parse_theory(&src, &[]).unwrap();
-        thy.items
-            .into_iter()
-            .filter_map(|it| match it {
-                p::TheoryItem::Predicates(ps) => Some(ps),
-                _ => None,
-            })
-            .flatten()
-            .collect()
-    }
-
-    /// The expansion replaces the use-site atom with the predicate's body.
-    /// It maps the declared parameter to the use-site argument.  The test
-    /// compares the bytes with the oracle (Git revision ef3f0468).  The
-    /// oracle renders this lemma as `∀ x. ∃ #i. A( x ) @ #i`.
-    #[test]
-    fn expand_simple_predicate() {
-        let preds = pred("P(x) <=> Ex #i. A(x) @ #i");
-        let f = parse_formula_str("All x. P(x)", &pair_maude_sig()).unwrap();
-        let expanded = expand_formula(&f, &preds).unwrap();
-        assert!(!has_pred_atom(&expanded), "got {:?}", expanded);
-        assert_eq!(
-            crate::pretty_formula::pretty_formula(&expanded),
-            "\u{2200} x. \u{2203} #i. A( x ) @ #i"
-        );
-    }
-
-    #[test]
-    fn expand_undefined_predicate_errors() {
-        let preds: Vec<p::Predicate> = Vec::new();
-        let f = parse_formula_str("All x. UndefinedPred(x)", &pair_maude_sig()).unwrap();
-        let res = expand_formula(&f, &preds);
-        // `UndefinedPred(x)` parses as a `Pred` atom; with no matching
-        // predicate, expansion reports `UndefinedPredicate`.  HS renders it
-        // (Theory/Text/Parser/Exceptions.hs:33-34 + Theory/Model/Fact.hs:556-557) as
-        // `undefined predicate <name>/<arity>` (leading `!` if persistent).
-        // Probed against the v1.13.0 prover: `... ==> P(x)` reports
-        // `undefined predicate P/1`.
-        let err = res.expect_err("expected undefined-predicate error");
-        assert_eq!(err.message, "undefined predicate UndefinedPred/1");
-    }
-
-    #[test]
-    fn expand_arity_mismatch_is_undefined_predicate() {
-        // HS `lookupPredicate` (Predicate.hs:76-80) matches the FULL
-        // `FactTag` (multiplicity + name + arity).  A use-site whose arity
-        // differs from the declared predicate does not match and falls
-        // through to `UndefinedPredicate`.  Probed against the v1.13.0
-        // prover: `predicates: P(x) <=> ...` used as `P(a, b)` reports
-        // `undefined predicate P/2` — NOT a bespoke "arity mismatch".
-        let preds = pred("P(x) <=> Ex #i. A(x) @ #i");
-        let f = parse_formula_str("All a b. P(a, b)", &pair_maude_sig()).unwrap();
-        let err = expand_formula(&f, &preds).expect_err("expected error");
-        assert_eq!(err.message, "undefined predicate P/2");
-    }
-
-    #[test]
-    fn case_test_and_acc_lemma_keep_pred_atoms() {
-        // HS adds case-tests / acc-lemmas verbatim (liftedAddCaseTest /
-        // liftedAddAccLemma, Theory/Text/Parser.hs:153-163) with NO
-        // predicate expansion — their `Pred` sugar stays intact for the
-        // accountability translation.  `expand_theory_formulas` must NOT
-        // expand them; a regular lemma over the same predicate IS expanded.
-        let src = "theory T begin\n\
-            predicates: P(x) <=> Ex #i. A(x) @ #i\n\
-            test ct:\n  \"P(a)\"\n\
-            lemma acc:\n  ct account for\n    \"All x. P(x)\"\n\
-            lemma reg:\n  \"All x. P(x)\"\n\
-            end";
-        let mut thy = tamarin_parser::parse_theory(src, &[]).unwrap();
-        expand_theory_formulas(&mut thy).unwrap();
-        let mut saw_ct = false;
-        let mut saw_acc = false;
-        let mut saw_reg = false;
-        for item in &thy.items {
-            match item {
-                p::TheoryItem::CaseTest(c) => {
-                    saw_ct = true;
-                    assert!(
-                        has_pred_atom(&c.formula),
-                        "case-test must keep too its Pred atom: {:?}",
-                        c.formula
-                    );
-                }
-                p::TheoryItem::AccLemma(a) => {
-                    saw_acc = true;
-                    assert!(
-                        has_pred_atom(&a.formula),
-                        "acc-lemma must keep its Pred atom: {:?}",
-                        a.formula
-                    );
-                }
-                p::TheoryItem::Lemma(l) => {
-                    saw_reg = true;
-                    assert_eq!(
-                        crate::pretty_formula::pretty_formula(&l.formula),
-                        "\u{2200} x. \u{2203} #i. A( x ) @ #i",
-                        "regular lemma must carry the predicate's body"
-                    );
-                }
-                _ => {}
-            }
-        }
-        assert!(
-            saw_ct && saw_acc && saw_reg,
-            "expected all three item kinds (ct={saw_ct}, acc={saw_acc}, reg={saw_reg})"
-        );
-    }
-
-    #[test]
-    fn expand_avoids_variable_capture() {
-        // P(x) <=> Ex z #i. Act(x, z) @ #i.  Applying it at use-site P(z)
-        // (free z) must NOT let the body's `Ex z` capture the substituted
-        // z: the binder is alpha-renamed, so no surviving quantifier binds
-        // `z`.  (Without capture-avoidance the body would become Act(z, z).)
-        let preds = pred("P(x) <=> Ex z #i. Act(x, z) @ #i");
-        let f = parse_formula_str("P(z)", &pair_maude_sig()).unwrap();
-        let expanded = expand_formula(&f, &preds).unwrap();
-        assert!(
-            !binds_var_named(&expanded, "z"),
-            "variable capture: a quantifier still binds `z`: {:?}",
-            expanded
-        );
-        // The use-site `z` stays as `Act`'s first argument.  The renamed
-        // binder fills the second argument.  The rename makes a new base name
-        // (`z1`).  The oracle (Git revision ef3f0468) keeps the base name and
-        // allocates a new index instead.  It prints
-        // `∃ z.1 #i. Act( z, z.1 ) @ #i`.
-        assert_eq!(
-            crate::pretty_formula::pretty_formula(&expanded),
-            "\u{2203} z1 #i. Act( z, z1 ) @ #i"
-        );
-    }
-
-    #[test]
-    fn expand_lessmset_to_smaller_existential() {
-        // The multiset `(<)` operator has no dedicated atom in HS: it parses
-        // to `Pred Smaller` and `expandFormula` rewrites it to
-        // `∃ z. rhs = lhs ++ z`.  Probed against the real HS prover (v1.13.0)
-        // on `All x y #i. Foo(x,y)@#i ==> x (<) y`, which prints
-        //   ∀ x y #i. (Foo( x, y ) @ #i) ⇒ (∃ z. y = (x++z))
-        // so a bare `x (<) y` expands to `∃ z. y = (x++z)`.
-        let preds: Vec<p::Predicate> = Vec::new();
-        let f = parse_formula_str("x (<) y", &pair_maude_sig()).unwrap();
-        let expanded = expand_formula(&f, &preds).unwrap();
-        // `LessMset` must be gone (no `(<)` reaches the pretty-printer).
-        assert!(
-            !has_lessmset_atom(&expanded),
-            "LessMset survived expansion: {:?}",
-            expanded
-        );
-        let printed = crate::pretty_formula::pretty_formula(&expanded);
-        assert_eq!(printed, "\u{2203} z. y = (x++z)", "got {:?}", expanded);
-        assert!(!printed.contains("(<)"), "still emits (<): {}", printed);
-    }
-
-    /// The builtin's bound `z` must not capture a use-site that mentions `z`
-    /// itself.  The expansion renames the binder.  The use-site `z` stays the
-    /// union's first operand.  The rename makes a new base name (`z1`).  The
-    /// oracle (Git revision ef3f0468) renders the same lemma with a new index
-    /// on the original base, `∃ z.1. y = (z++z.1)`.
-    #[test]
-    fn expand_lessmset_capture_avoids_z() {
-        let preds: Vec<p::Predicate> = Vec::new();
-        let f = parse_formula_str("z (<) y", &pair_maude_sig()).unwrap();
-        let expanded = expand_formula(&f, &preds).unwrap();
-        assert!(!has_lessmset_atom(&expanded), "got {:?}", expanded);
-        assert_eq!(
-            crate::pretty_formula::pretty_formula(&expanded),
-            "\u{2203} z1. y = (z++z1)"
-        );
-    }
-
-    fn has_lessmset_atom(f: &p::Formula) -> bool {
-        match f {
-            p::Formula::Atom(p::Atom::LessMset(_, _)) => true,
-            p::Formula::True | p::Formula::False | p::Formula::Atom(_) => false,
-            p::Formula::Not(g) => has_lessmset_atom(g),
-            p::Formula::And(a, b)
-            | p::Formula::Or(a, b)
-            | p::Formula::Implies(a, b)
-            | p::Formula::Iff(a, b) => has_lessmset_atom(a) || has_lessmset_atom(b),
-            p::Formula::Forall(_, b) | p::Formula::Exists(_, b) => has_lessmset_atom(b),
-        }
-    }
-
-    fn binds_var_named(f: &p::Formula, name: &str) -> bool {
-        match f {
-            p::Formula::True | p::Formula::False | p::Formula::Atom(_) => false,
-            p::Formula::Not(g) => binds_var_named(g, name),
-            p::Formula::And(a, b)
-            | p::Formula::Or(a, b)
-            | p::Formula::Implies(a, b)
-            | p::Formula::Iff(a, b) => binds_var_named(a, name) || binds_var_named(b, name),
-            p::Formula::Forall(vs, b) | p::Formula::Exists(vs, b) => {
-                vs.iter().any(|v| v.name == name) || binds_var_named(b, name)
-            }
-        }
-    }
-
-    fn has_pred_atom(f: &p::Formula) -> bool {
-        match f {
-            p::Formula::Atom(p::Atom::Pred(_)) => true,
-            p::Formula::True | p::Formula::False => false,
-            p::Formula::Atom(_) => false,
-            p::Formula::Not(g) => has_pred_atom(g),
-            p::Formula::And(a, b)
-            | p::Formula::Or(a, b)
-            | p::Formula::Implies(a, b)
-            | p::Formula::Iff(a, b) => has_pred_atom(a) || has_pred_atom(b),
-            p::Formula::Forall(_, b) | p::Formula::Exists(_, b) => has_pred_atom(b),
-        }
-    }
 }

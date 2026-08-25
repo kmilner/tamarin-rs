@@ -288,6 +288,38 @@ fn collect_atom_terms<'a, S, T>(a: &'a ProtoAtom<S, T>, out: &mut Vec<&'a T>) {
     }
 }
 
+/// HS `traverseFormulaAtom` (Theory/Model/Formula.hs:212-219#traverseFormulaAtom):
+/// rebuild the formula with every atom replaced by the WHOLE FORMULA the
+/// callback returns, under an effect — `Result` here, the `Either FactTag`
+/// HS's predicate expansion runs in.  It is built on `foldFormula`
+/// (Theory/Model/Formula.hs:140-156#foldFormula), which threads no De Bruijn
+/// depth, so the callback sees the atom alone; [`map_atoms`] runs on
+/// `foldFormulaScope` and hands each atom its depth.  Atoms are visited left
+/// to right, and the binder hints are carried across.
+pub fn traverse_formula_atom<S, S2, H, C, C2, V, V2, E>(
+    fm: &ProtoFormula<S, H, C, V>,
+    f: &mut dyn FnMut(&ProtoAtom<S, VTerm<C, BVar<V>>>) -> Result<ProtoFormula<S2, H, C2, V2>, E>,
+) -> Result<ProtoFormula<S2, H, C2, V2>, E>
+where
+    H: Clone,
+{
+    match fm {
+        ProtoFormula::Atom(a) => f(a),
+        ProtoFormula::Tf(b) => Ok(ProtoFormula::Tf(*b)),
+        ProtoFormula::Not(p) => Ok(ProtoFormula::Not(Box::new(traverse_formula_atom(p, f)?))),
+        ProtoFormula::Conn(c, p, q) => {
+            let l = traverse_formula_atom(p, &mut *f)?;
+            let r = traverse_formula_atom(q, f)?;
+            Ok(ProtoFormula::Conn(*c, Box::new(l), Box::new(r)))
+        }
+        ProtoFormula::Qua(q, h, p) => Ok(ProtoFormula::Qua(
+            *q,
+            h.clone(),
+            Box::new(traverse_formula_atom(p, f)?),
+        )),
+    }
+}
+
 /// HS `mapAtoms` (Theory/Model/Formula.hs:267-270): rebuild the formula with
 /// every atom replaced by `f`'s result.  `f` also receives the atom's De
 /// Bruijn depth — the number of binders between the formula's root and the
@@ -1634,6 +1666,47 @@ mod tests {
         let (qua, x, body) = open_formula(&fm, &mut fresh).expect("the quantifier");
         assert_eq!(qua, Quantifier::All);
         assert_eq!(for_all_var((x.name.to_string(), x.sort), &x, body), fm);
+    }
+
+    /// [`traverse_formula_atom`] hands the callback the atom itself, and the
+    /// callback's own `map_atom` walk of an `Action` reads the time point
+    /// before the fact's arguments (HS `Functor (ProtoAtom s)`,
+    /// Theory/Model/Atom.hs:121-127#fmap).  Atoms arrive left to right and
+    /// each returned formula is spliced in place of its atom.
+    #[test]
+    fn traverse_formula_atom_visits_the_action_timepoint_first() {
+        use crate::fact::{FactTag, Multiplicity};
+
+        let v = |n: &str, s| tamarin_term::vterm::var_term(BVar::Free(LVar::new(n, s, 0)));
+        let action: LNFormula = ProtoFormula::Atom(ProtoAtom::Action(
+            v("i", LSort::Node),
+            Fact::new(
+                FactTag::Proto(Multiplicity::Linear, "A", 2),
+                vec![v("a", LSort::Msg), v("b", LSort::Msg)],
+            ),
+        ));
+        let last: LNFormula = ProtoFormula::Atom(ProtoAtom::Last(v("j", LSort::Node)));
+        let fm = ProtoFormula::exists(("z".to_string(), LSort::Msg), action.and(last));
+
+        let mut seen: Vec<String> = Vec::new();
+        let out: LNFormula = traverse_formula_atom(&fm, &mut |a| {
+            let _ = map_atom(a, &mut |t: &BLNTerm| {
+                seen.push(match t {
+                    Term::Lit(Lit::Var(BVar::Free(x))) => x.name.to_string(),
+                    _ => "?".to_string(),
+                });
+                t.clone()
+            });
+            Ok::<LNFormula, ()>(ProtoFormula::ltrue())
+        })
+        .unwrap();
+
+        assert_eq!(seen, vec!["i", "a", "b", "j"]);
+        let expected: LNFormula = ProtoFormula::exists(
+            ("z".to_string(), LSort::Msg),
+            ProtoFormula::ltrue().and(ProtoFormula::ltrue()),
+        );
+        assert_eq!(out, expected);
     }
 
     // =========================================================================

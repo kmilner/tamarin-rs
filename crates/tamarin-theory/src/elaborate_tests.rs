@@ -1226,6 +1226,14 @@ struct SigReport {
     findings: Vec<String>,
 }
 
+/// Whether the theory declares a macro, i.e. whether
+/// `macro_expand::expand_theory_macros` rewrites anything.
+fn declares_macros(thy: &p::Theory) -> bool {
+    thy.items
+        .iter()
+        .any(|i| matches!(i, p::TheoryItem::Macros(ms) if !ms.is_empty()))
+}
+
 /// Whether a `--diff` run is what loads this theory: `diffLemma`,
 /// `equivLemma` and `diffEquivLemma` items only parse inside a diff theory.
 fn carries_diff_item(thy: &p::Theory) -> bool {
@@ -1240,11 +1248,11 @@ fn carries_diff_item(thy: &p::Theory) -> bool {
 }
 
 /// `parse_time_signature` folds `maude_sig_step` over the parsed items and
-/// `elaborate` folds it over the macro- and predicate-expanded ones, so the
-/// two agree exactly while neither expansion rewrites a `builtins:`,
-/// `functions:`, `equations:` or `macros:` item.  Every theory of the
-/// examples tree is the net, each diff example also in its `--diff` reading,
-/// where both sides seed `enable_diff_maude_sig`.
+/// `elaborate` folds it over the macro-expanded ones, so the two agree
+/// exactly while macro expansion rewrites no `builtins:`, `functions:`,
+/// `equations:` or `macros:` item.  Every theory of the examples tree is the
+/// net, each diff example also in its `--diff` reading, where both sides seed
+/// `enable_diff_maude_sig`.
 ///
 /// The floors keep it a net: a parse or elaboration regression that shrinks
 /// the compared set fails here instead of passing on fewer files.

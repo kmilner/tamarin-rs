@@ -14,8 +14,9 @@
 //! - `functions:`/`equations:`/`macros:` → signature registration
 //!   (`st_fun_syms`, `CtxtStRule`s when convertible, macro definitions)
 //! - Parser-AST macro expansion (`macro_expand::expand_theory_macros`)
-//!   and predicate expansion (`predicate_expand::expand_theory_formulas`)
 //!   before any typed conversion
+//! - `predicates:` → `theory::Predicate`, which the later items of the same
+//!   theory are expanded against (`predicate::expand_formula`)
 //! - Rules — `parser::Rule` → `OpenProtoRule(ProtoRuleE, [])`
 //! - Lemmas and restrictions — the formula is converted to `LNFormula`
 //!   (`item_formula`), alongside the pre-macro formula HS keeps as
@@ -284,53 +285,27 @@ fn collect_process_pub_names(p: &crate::sapic::PlainProcess, out: &mut Vec<Strin
     });
 }
 
-/// Elaborate a parser theory into a typed `Theory`. The signature
-/// is initialised from the union of `builtins:` declarations. Before
-/// the structural conversion runs, predicate atoms are expanded
-/// in-place against any `predicates:` declarations.
+/// Elaborate a parser theory into a typed `Theory`. The signature is
+/// initialised from the union of `builtins:` declarations, and every
+/// formula-bearing item is expanded against the `predicates:` declared before
+/// it (`elaborate_items`).
 pub fn elaborate(parser_thy: &p::Theory) -> Result<Theory, ElabError> {
     let mut thy_clone = parser_thy.clone();
-    // Apply macros at parser-AST level BEFORE predicate expansion.
-    // Mirrors HS's parse-time application: lemmas are expanded by
-    // `parseLemmaWithMacros` (Theory/Text/Parser.hs:97-105); rules by
-    // `closeProtoRule` (lib/theory/src/Rule.hs:82-86) before
-    // variantsProtoRule runs; restrictions by `applyMacroInRestriction`
-    // (Theory/Model/Restriction.hs:164-166).  We apply at the parser-AST
-    // level so a single pass handles every term-bearing item before any
-    // typed conversion (`term_to_lnterm` / `from_parser`) sees a
-    // macro call.  Predicate-expand may itself substitute the inlined
-    // predicate body into use sites, and the body could contain macro
-    // calls — so expand macros first.
+    // Apply macros at parser-AST level.  Mirrors HS's parse-time application:
+    // lemmas are expanded by `parseLemmaWithMacros`
+    // (Theory/Text/Parser.hs:97-105); rules by `closeProtoRule`
+    // (lib/theory/src/Rule.hs:82-86) before variantsProtoRule runs;
+    // restrictions by `applyMacroInRestriction`
+    // (Theory/Model/Restriction.hs:164-166).  We apply at the parser-AST level
+    // so a single pass handles every term-bearing item before any typed
+    // conversion (`term_to_lnterm` / `from_parser`) sees a macro call.
     crate::macro_expand::expand_theory_macros(&mut thy_clone);
-    let expand_predicates = |thy: &mut p::Theory| -> Result<(), ElabError> {
-        crate::predicate_expand::expand_theory_formulas(thy).map_err(|e| ElabError {
-            message: format!("predicate expansion failed: {}", e.message),
-        })
-    };
-    expand_predicates(&mut thy_clone)?;
     // The item's formula before macro application, which HS's
     // `applyMacroInRestriction` stores as `_rstrOriginalFormula`
-    // (Theory/Model/Restriction.hs:164-166).  A theory that declares no macro
-    // leaves `expand_theory_macros` a no-op (`applyMacroInFormula [] fm = fm`,
-    // Model/Formula.hs:314-316), so the two lists coincide and only the
-    // predicate-expanded one is built.  Both expansion passes rewrite the item
-    // list in place and add and remove nothing, so the lists pair by position.
-    let original_items = if declares_macros(parser_thy) {
-        let mut orig = parser_thy.clone();
-        expand_predicates(&mut orig)?;
-        Some(orig.items)
-    } else {
-        None
-    };
-    elaborate_already_expanded(&thy_clone, original_items.as_deref())
-}
-
-/// Whether the theory declares a macro, i.e. whether
-/// `macro_expand::expand_theory_macros` rewrites anything.
-fn declares_macros(thy: &p::Theory) -> bool {
-    thy.items
-        .iter()
-        .any(|i| matches!(i, p::TheoryItem::Macros(ms) if !ms.is_empty()))
+    // (Theory/Model/Restriction.hs:164-166).  `expand_theory_macros` rewrites
+    // the item list in place and adds and removes nothing, so the two lists
+    // pair by position.
+    elaborate_already_expanded(&thy_clone, &parser_thy.items)
 }
 
 /// Join of the `[NDC]` and `[NDC-diff]` attributes (HS `function`'s `joinNDC`).
@@ -350,7 +325,7 @@ fn ndc_state_of(ndc: bool, ndc_diff: bool) -> NdcState {
 
 fn elaborate_already_expanded(
     parser_thy: &p::Theory,
-    original_items: Option<&[p::TheoryItem]>,
+    original_items: &[p::TheoryItem],
 ) -> Result<Theory, ElabError> {
     let mut sig = SignaturePure::empty(parser_thy.is_diff);
     if parser_thy.is_diff {
@@ -571,9 +546,9 @@ fn maude_sig_step(item: &p::TheoryItem, out: &mut Theory) -> Result<Vec<LNMacro>
 /// diff-seeded signature [`elaborate_already_expanded`] starts from.
 ///
 /// It equals `elaborate(thy)?.signature.maude_sig`: those are the only four
-/// item kinds that touch the signature, and both expansion passes `elaborate`
-/// runs before `elaborate_items` leave all four untouched
-/// (`macro_expand::expand_items`, `predicate_expand::expand_theory_formulas`).
+/// item kinds that touch the signature, and the macro expansion `elaborate`
+/// runs before `elaborate_items` (`macro_expand::expand_theory_macros`)
+/// leaves all four untouched.
 /// `elaborate_tests::parse_time_signature_matches_elaboration` pins that over
 /// the examples tree.
 pub fn parse_time_signature(thy: &p::Theory) -> Result<MaudeSig, ElabError> {
@@ -590,13 +565,18 @@ pub fn parse_time_signature(thy: &p::Theory) -> Result<MaudeSig, ElabError> {
 
 fn elaborate_items(
     items: &[p::TheoryItem],
-    original_items: Option<&[p::TheoryItem]>,
+    original_items: &[p::TheoryItem],
     out: &mut Theory,
 ) -> Result<(), ElabError> {
+    // The predicates declared so far, in source order.  HS expands a lemma or
+    // restriction against `theoryPredicates thy` as it is added
+    // (Theory/Text/Parser.hs:129-152, TheoryObject.hs:433-449), so an item
+    // textually before a `predicates:` block does not see it.
+    let mut preds: Vec<crate::predicate::Predicate> = Vec::new();
     for (idx, item) in items.iter().enumerate() {
-        // The same item read from the pre-macro list, or the item itself when
-        // that list is absent because the theory declares no macro.
-        let original_item = original_items.and_then(|o| o.get(idx)).unwrap_or(item);
+        // The same item read from the pre-macro list, which pairs with
+        // `items` by position.
+        let original_item = original_items.get(idx).unwrap_or(item);
         match item {
             p::TheoryItem::Builtins(names) => {
                 maude_sig_step(item, out)?;
@@ -615,25 +595,15 @@ fn elaborate_items(
                     out.items.push(TheoryItem::Macros(ms));
                 }
             }
-            p::TheoryItem::Predicates(_predicates) => {
-                // Predicates render via the PARSER-AST path
-                // (`render_parsed_item` → HS `prettyPredicate`,
-                // pretty_theory.rs) since the pretty-printer iterates the
-                // parser theory, not this elaborated one.  Their `_restrict`
-                // / lemma / restriction USES are already inlined upstream:
-                // `predicate_expand::expand_theory_formulas` (run by
-                // `elaborate` before `elaborate_items`) substitutes predicate
-                // atoms in lemmas/restrictions, and
-                // `rule_restriction::lift_rule_restrictions` (run in run.rs
-                // right after parse, mirroring HS `liftedAddProtoRule`)
-                // expands them inside `_restrict` formulas.  The typed
-                // predicate item is read nowhere: HS reads its
-                // `PredicateItem`s through `theoryPredicates` to expand each
-                // lemma and restriction as it is added
-                // (Theory/Text/Parser.hs:114, TheoryObject.hs:438-450) and
-                // to print them, and the port does both from the parser
-                // theory.  So no typed `theory::Predicate` is built here
-                // even though `formula::from_parser` can convert its body.
+            p::TheoryItem::Predicates(predicates) => {
+                // HS `preddeclaration` folds `liftedAddPredicate` over the
+                // block (Theory/Text/Parser/Signature.hs:277-283), which
+                // appends a `PredicateItem` per declaration.
+                for pd in predicates {
+                    let pred = crate::predicate::from_parser(pd, &out.signature.maude_sig)?;
+                    preds.push(pred.clone());
+                    out.items.push(TheoryItem::Predicate(pred));
+                }
             }
             p::TheoryItem::Options(opts) => {
                 let mut o = out.options.clone();
@@ -666,8 +636,8 @@ fn elaborate_items(
                 let msig = &out.signature.maude_sig;
                 let restr = Restriction {
                     name: r.name.clone(),
-                    formula: item_formula(&r.formula, msig, "restriction")?,
-                    original_formula: Some(item_formula(original, msig, "restriction")?),
+                    formula: item_formula(&r.formula, msig, &preds)?,
+                    original_formula: Some(item_formula(original, msig, &preds)?),
                 };
                 out.items.push(TheoryItem::Restriction(restr));
             }
@@ -689,8 +659,8 @@ fn elaborate_items(
                         p::TraceQuantifier::AllTraces => TraceQuantifier::AllTraces,
                         p::TraceQuantifier::ExistsTrace => TraceQuantifier::ExistsTrace,
                     },
-                    formula: item_formula(&l.formula, msig, "lemma")?,
-                    original_formula: Some(item_formula(original, msig, "lemma")?),
+                    formula: item_formula(&l.formula, msig, &preds)?,
+                    original_formula: Some(item_formula(original, msig, &preds)?),
                     proof: match l.proof.as_ref().and_then(|p| p.tree.as_ref()) {
                         Some(t) => {
                             Some(proof_tree_from_parsed(t, msig).map_err(|e| ElabError {
@@ -763,13 +733,17 @@ fn elaborate_items(
 /// The formula HS's `liftedAddLemma` / `liftedAddRestriction` store: the
 /// surface formula closed by [`crate::formula::from_parser`] and stripped of
 /// its predicate sugar by `expandLemma` / `expandRestriction`
-/// (Theory/Text/Parser.hs:129-152, TheoryObject.hs:430-446).  Predicate
-/// expansion already ran over the whole theory, so a surviving sugar atom is
-/// an elaboration error; `kind` names the item in it.
-fn item_formula(f: &p::Formula, sig: &MaudeSig, kind: &str) -> Result<LNFormula, ElabError> {
+/// (Theory/Text/Parser.hs:129-152, TheoryObject.hs:433-449).  The expansion
+/// IS the sugar stripper, so a use site with no matching predicate is the
+/// only way it fails.
+fn item_formula(
+    f: &p::Formula,
+    sig: &MaudeSig,
+    preds: &[crate::predicate::Predicate],
+) -> Result<LNFormula, ElabError> {
     let syn = crate::formula::from_parser(f, sig)?;
-    crate::formula::to_lnformula(&syn).ok_or_else(|| ElabError {
-        message: format!("{kind} formula carries an unexpanded predicate atom"),
+    crate::predicate::expand_formula(preds, &syn).map_err(|e| ElabError {
+        message: format!("predicate expansion failed: {}", e),
     })
 }
 

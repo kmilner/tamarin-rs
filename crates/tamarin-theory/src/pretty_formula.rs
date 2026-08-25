@@ -715,8 +715,8 @@ fn atom_to_doc(a: &p::Atom, scope: &[Bind]) -> crate::pretty_hpj::Doc {
         // (Theory/Text/Parser/Formula.hs:30-38) parses `(<)` to
         // `Pred Smaller`, and `expandFormula` (Predicate.hs:82-93) rewrites
         // it to `∃ z. r = l ++ z` BEFORE any pretty-printing — see
-        // `predicate_expand::expand_atom`, reached from
-        // `predicate_expand::expand_theory_formulas` during elaboration.
+        // `predicate::expand_formula`, which every elaborated lemma and
+        // restriction formula goes through.
         // So this arm is unreachable on the elaborated formula/restriction
         // path; it is a defensive fallback that renders the pre-expansion
         // shape only if a raw `LessMset` is ever printed directly.
