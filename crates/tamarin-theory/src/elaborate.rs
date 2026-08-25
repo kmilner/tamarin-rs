@@ -1576,11 +1576,338 @@ pub fn lnterm_to_parser(t: &tamarin_term::lterm::LNTerm) -> p::Term {
     }
 }
 
+// =============================================================================
+// HS-faithful Ord for a parser-AST term
+// =============================================================================
+//
+// [`canonicalize_ac_in_pterm`] reproduces on the parser AST the argument sort
+// HS's `fAppAC` and `fAppC` smart constructors perform when they build an
+// `LNTerm` (Term/Term/Raw.hs:118-134).  That sort is HS's derived
+// `Ord (Term a)` (Term/Term/Raw.hs:71-75, see line 74), so the comparator
+// below reads that order off the parser-AST spelling of the same term.
+
+/// HS list Ord: element by element, shorter first.  `T` is `p::Term` for a
+/// stored argument vector and `&p::Term` for the borrowed operand list the
+/// AC branch of [`cmp_pterm`] flattens.
+fn cmp_pterm_list<T: std::borrow::Borrow<p::Term>>(a: &[T], b: &[T]) -> std::cmp::Ordering {
+    for (x, y) in a.iter().zip(b.iter()) {
+        let c = cmp_pterm(x.borrow(), y.borrow());
+        if c != std::cmp::Ordering::Equal {
+            return c;
+        }
+    }
+    a.len().cmp(&b.len())
+}
+
+/// HS Term Ord: `LIT _ < FAPP _ _` (Term/Term/Raw.hs:71-75, see line 74),
+/// walked over the parser AST, whose variables are all free.
+fn cmp_pterm(a: &p::Term, b: &p::Term) -> std::cmp::Ordering {
+    use p::Term::*;
+    let (ca, sa) = term_class(a);
+    let (cb, sb) = term_class(b);
+    if ca != cb {
+        return ca.cmp(&cb);
+    }
+    // FApp class (ca == cb == 1): HS `Ord (Term a)` compares `FAPP fsym ts`
+    // by `compare fsym` THEN `compare ts` (derived Ord on
+    // `Term a = LIT a | FAPP FunSym [Term a]`, Term/Term/Raw.hs:71-75, see line 74).  The
+    // `FunSym` Ord is `NoEq < AC < C < List`, and within `NoEq` it is
+    // `Ord NoEqSym = (name, (arity, privacy, constructability, ndc))`
+    // (FunctionSymbols.hs:131-132) — i.e. compared by NAME first.
+    //
+    // The parser AST spells several HS `FAPP (NoEq sym)` terms as dedicated
+    // variants (`Pair`=pair, `BinOp Exp`=exp, `Diff`=diff, `NumberOne`=one,
+    // `NatOne`=tone, `DhNeutral`=DH_neutral) and the AC ops as
+    // `BinOp Mult/Union/Xor/NatPlus`.  These must NOT be ordered by RUST
+    // VARIANT: HS's `FunSym` Ord is name-based (e.g. HS sorts `exp(...)`
+    // BEFORE `pair(...)` because `"exp" < "pair"`), and this order decides
+    // the operand sequence [`canonicalize_ac_in_pterm`] stores — hence every
+    // AC list the theory echo prints.
+    //
+    // Faithful: compare two FApp-class terms by their HS `FunSym` key
+    // (`funsym_key`), then by the argument list (flattened+sorted for AC,
+    // matching `fAppAC`'s `sort (...)`, Term/Term/Raw.hs:118-129, see line 123).
+    if ca == 1 {
+        // Borrowed FunSym key (no per-comparison allocation): compare
+        // (outer, name-bytes, arity) in HS order without materialising a
+        // `Vec`.  The name is compared as a `&[u8]` slice.
+        let (oa, na, aa) = funsym_key(a);
+        let (ob, nb, ab) = funsym_key(b);
+        let kc = oa
+            .cmp(&ob)
+            .then_with(|| na.cmp(nb))
+            .then_with(|| aa.cmp(&ab));
+        if kc != std::cmp::Ordering::Equal {
+            return kc;
+        }
+        // Same FunSym: compare argument lists in HS `[Term a]` order.
+        // AC ops compare a sorted, flattened multiset (HS stores args
+        // pre-sorted by `fAppAC`); everything else compares positionally.
+        if let (BinOp(o1, _, _), BinOp(o2, _, _)) = (a, b) {
+            if is_ac_binop(o1) && is_ac_binop(o2) {
+                let mut args_a = Vec::new();
+                let mut args_b = Vec::new();
+                flatten_ac_binop(o1, a, &mut args_a);
+                flatten_ac_binop(o2, b, &mut args_b);
+                args_a.sort_by(|x, y| cmp_pterm(x, y));
+                args_b.sort_by(|x, y| cmp_pterm(x, y));
+                return cmp_pterm_list(&args_a, &args_b);
+            }
+        }
+        return cmp_fapp_args(a, b);
+    }
+    match (a, b) {
+        // Lit class:
+        (Var(v1), Var(v2)) => cmp_varspec(v1, v2),
+        (PubLit(s1), PubLit(s2)) => s1.cmp(s2),
+        (FreshLit(s1), FreshLit(s2)) => s1.cmp(s2),
+        (NatLit(s1), NatLit(s2)) => s1.cmp(s2),
+        (Number(n1), Number(n2)) => n1.cmp(n2),
+        _ => {
+            // Lit-class sub-discriminator (Con < Var; among Con by NameTag
+            // then name) — handled by `term_class`'s sub_tag.
+            sa.cmp(&sb)
+        }
+    }
+}
+
+/// HS `FunSym` Ord key for a FApp-class `p::Term`.  Returns
+/// `(outer, name, arity)` where `outer` mirrors HS's `FunSym` constructor
+/// order `NoEq(0) < AC(1) < C(2) < List(3)` (FunctionSymbols.hs:150-154)
+/// and, within `NoEq`, `(name, arity)` mirrors `Ord NoEqSym` (compared by
+/// name then arity — privacy/constructability never disambiguate two
+/// distinct symbols sharing a name+arity).  The builtin AC ops carry no name;
+/// their `ACSym` order is `Union < Mult < Xor < NatPlus < ACfct`
+/// (FunctionSymbols.hs:138-139), encoded in the third (`arity`) field as an
+/// index so AC terms sort among themselves by ACSym and after every NoEq
+/// term.  A user-defined `ACfct` carries its name, which sorts after the
+/// builtin ops' empty name and orders two `ACfct`s by name — mirroring
+/// `Ord ACfctSym`, whose first tuple component is the name.
+///
+/// `em/2` is HS's sole `C` symbol.  `CSym` is a single nullary constructor
+/// (`data CSym = EMap`, FunctionSymbols.hs:142-143), so a `C` key carries
+/// neither name nor arity and every `C` term ties on those two fields.
+/// The classification is by NAME ALONE: the parser's `naryOpApp` builds
+/// `fAppC EMap` for any application written `em(…)`, whether `em` comes from
+/// the `bilinear-pairing` builtin or from a user `functions:` declaration
+/// (Theory/Text/Parser/Term.hs:103) — so a `p::Term`, which carries only the
+/// name, has everything the decision needs.  The `op{t1}t2` spelling is NOT
+/// covered: `binaryAlgApp` has no `em` case and builds `fAppNoEq`
+/// (Theory/Text/Parser/Term.hs:119-121), matching `AlgApp`'s `NoEq` key below.
+/// Arity is pinned to 2 because a `C` term of any other arity is rejected
+/// downstream (`viewTerm2`, Term/Term/Raw.hs:190).
+fn funsym_key(t: &p::Term) -> (u8, &[u8], usize) {
+    use p::Term::*;
+    // NoEq syms: outer = 0, key by (name-bytes, arity).  Static byte-string
+    // literals (`b"pair"` etc.) are `&'static [u8]` and coerce to the
+    // elided output lifetime; `n.as_bytes()` borrows from `t`.  No alloc.
+    match t {
+        // Parser-AST spellings of HS `FAPP (NoEq sym)` terms:
+        Pair(_) => (0, b"pair", 2),
+        BinOp(p::BinOp::Exp, _, _) => (0, b"exp", 2),
+        Diff(_, _) => (0, b"diff", 2),
+        NumberOne => (0, b"one", 0),
+        NatOne => (0, b"tone", 0),
+        DhNeutral => (0, b"DH_neutral", 0),
+        // C sym: outer = 2, above every NoEq and AC term whatever its name.
+        App(n, args) if n == "em" && args.len() == 2 => (2, b"", 0),
+        App(n, args) => (0, n.as_bytes(), args.len()),
+        AlgApp(n, _, _) => (0, n.as_bytes(), 2),
+        // AC ops: outer = 1, ACSym order Union<Mult<Xor<NatPlus> in field 3.
+        BinOp(p::BinOp::Union, _, _) => (1, b"", 0),
+        BinOp(p::BinOp::Mult, _, _) => (1, b"", 1),
+        BinOp(p::BinOp::Xor, _, _) => (1, b"", 2),
+        BinOp(p::BinOp::NatPlus, _, _) => (1, b"", 3),
+        BinOp(p::BinOp::AcFct(n), _, _) => (1, n.as_bytes(), 4),
+        // PatMatch is SAPIC surface syntax with no HS term — sort after all.
+        PatMatch(_) => (255, b"", 0),
+        // Lit-class terms never reach here (ca != 1).
+        _ => (254, b"", 0),
+    }
+}
+
+/// The HS argument pair `[t1, t2]` of a `pairSym`-headed term, as
+/// `(t1, spine)` where `spine` is the operand list of `t2` in the same
+/// flattened spelling — so `t2` is `Pair(spine)` when `spine` has two or more
+/// elements and `spine[0]` when it has one.
+///
+/// HS builds nested pairs (`fAppPair (x, y) = fAppNoEq pairSym [x, y]`,
+/// Term/Term.hs:163), so `<a, b, c>` is `pair(a, pair(b, c))` and its arity-2
+/// argument list is `[a, pair(b, c)]`.  The parser stores that spine FLAT in
+/// `Pair`, and also carries the source prefix spelling `pair(a, b)` as
+/// `App("pair", [a, b])` — both key `(0, "pair", 2)` in [`funsym_key`], so
+/// both must expose the same nested argument list to `Ord`.
+fn pair_spine(t: &p::Term) -> Option<(&p::Term, &[p::Term])> {
+    match t {
+        p::Term::Pair(x) if x.len() >= 2 => Some((&x[0], &x[1..])),
+        p::Term::App(n, x) if n == "pair" && x.len() == 2 => Some((&x[0], &x[1..])),
+        p::Term::AlgApp(n, l, r) if n == "pair" => Some((l, std::slice::from_ref(&**r))),
+        _ => None,
+    }
+}
+
+/// Compare two pair spines: `x` and `y` each stand for the term
+/// `Pair(x)`/`Pair(y)` when they hold two or more elements and for their sole
+/// element otherwise.  Recurses down the spine so that, at the position where
+/// one side's spine ends and the other's continues, HS's `Ord` pits a plain
+/// term against a `pairSym` FAPP — which is why `<a, z>` sorts BEFORE
+/// `<a, b, c>` (`z` is a LIT, `pair(b, c)` a FAPP, and `LIT _ < FAPP _ _`,
+/// Term/Term/Raw.hs:72-74).
+fn cmp_pair_spine(x: &[p::Term], y: &[p::Term]) -> std::cmp::Ordering {
+    if x.is_empty() || y.is_empty() {
+        return x.len().cmp(&y.len());
+    }
+    match (x.len(), y.len()) {
+        (1, 1) => cmp_pterm(&x[0], &y[0]),
+        (1, _) => cmp_pterm_vs_pair_spine(&x[0], y),
+        (_, 1) => cmp_pterm_vs_pair_spine(&y[0], x).reverse(),
+        _ => cmp_pterm(&x[0], &y[0]).then_with(|| cmp_pair_spine(&x[1..], &y[1..])),
+    }
+}
+
+/// Compare a term `t` against the pair `Pair(y)` that spine `y` (two or more
+/// elements) stands for, without materialising that `Pair`.  Mirrors
+/// [`cmp_pterm`]'s dispatch: LIT class first, then the `FunSym` key against
+/// `pairSym`, then the argument lists.
+fn cmp_pterm_vs_pair_spine(t: &p::Term, y: &[p::Term]) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    if term_class(t).0 != 1 {
+        return Ordering::Less;
+    }
+    let (o, n, a) = funsym_key(t);
+    let key = o
+        .cmp(&0)
+        .then_with(|| n.cmp(b"pair".as_slice()))
+        .then_with(|| a.cmp(&2));
+    if key != Ordering::Equal {
+        return key;
+    }
+    match pair_spine(t) {
+        Some((h, tail)) => cmp_pterm(h, &y[0]).then_with(|| cmp_pair_spine(tail, &y[1..])),
+        None => Ordering::Equal,
+    }
+}
+
+/// Compare the argument lists of two same-FunSym, non-AC FApp terms,
+/// mirroring HS's positional `compare ts` on `[Term a]`.
+fn cmp_fapp_args(a: &p::Term, b: &p::Term) -> std::cmp::Ordering {
+    use p::Term::*;
+    // A `pairSym` key ties every pair spelling, whose HS argument list is the
+    // arity-2 `[t1, t2]` of the RIGHT-NESTED spine rather than the parser's
+    // flat operand vector — see [`pair_spine`].
+    if let (Some((ha, ta)), Some((hb, tb))) = (pair_spine(a), pair_spine(b)) {
+        return cmp_pterm(ha, hb).then_with(|| cmp_pair_spine(ta, tb));
+    }
+    match (a, b) {
+        (App(_, x), App(_, y)) => cmp_pterm_list(x, y),
+        (AlgApp(_, l1, r1), AlgApp(_, l2, r2)) => cmp_pterm(l1, l2).then_with(|| cmp_pterm(r1, r2)),
+        (Diff(l1, r1), Diff(l2, r2)) => cmp_pterm(l1, l2).then_with(|| cmp_pterm(r1, r2)),
+        (BinOp(_, l1, r1), BinOp(_, l2, r2)) => cmp_pterm(l1, l2).then_with(|| cmp_pterm(r1, r2)),
+        (PatMatch(x), PatMatch(y)) => cmp_pterm(x, y),
+        // 0-arity builtins (one/tone/DH_neutral): no args.
+        (NumberOne, NumberOne) | (NatOne, NatOne) | (DhNeutral, DhNeutral) => {
+            std::cmp::Ordering::Equal
+        }
+        // Cross-variant operands only reach here when funsym_key tied them
+        // (e.g. App("exp",[..]) vs BinOp(Exp,..) — both key (0,"exp",2));
+        // compare their argument lists positionally.
+        _ => cmp_pterm_list(&fapp_args(a), &fapp_args(b)),
+    }
+}
+
+/// Collect the positional argument list of a FApp-class term (for
+/// cross-representation comparison when two terms share a FunSym key).
+fn fapp_args(t: &p::Term) -> Vec<p::Term> {
+    use p::Term::*;
+    match t {
+        App(_, x) => x.clone(),
+        Pair(x) => x.clone(),
+        AlgApp(_, l, r) | Diff(l, r) | BinOp(_, l, r) => vec![(**l).clone(), (**r).clone()],
+        PatMatch(x) => vec![(**x).clone()],
+        _ => Vec::new(),
+    }
+}
+
+/// Returns `(class, sub_tag)` where class=0 for Lit-like, 1 for FApp-like.
+///
+/// HS-faithful: a free-variable `p::Term` corresponds to `Term (Lit Name LVar)`,
+/// whose derived `Ord` is `LIT _ < FAPP _ _` (Term/Term/Raw.hs:72-74), and within
+/// `LIT`, `Lit c v = Con c | Var v` derives `Con < Var` (VTerm.hs:56-57).
+/// Therefore ALL constant literals (Pub/Fresh/Nat names) sort BEFORE any
+/// variable.  Among constants, `Ord Name` compares the `NameTag` first
+/// (`FreshName | PubName | NodeName | NatName`, LTerm.hs:219-220) so the literal
+/// order is Fresh < Pub < Nat, then by name string.  Variables come last in
+/// the `LIT` class.
+///
+/// The 0-arity builtins `NumberOne`/`NatOne`/`DhNeutral` are NOT literals in
+/// HS — they are `fAppNoEq oneSym []` / `fAppNoEq natOneSym []` /
+/// `fAppNoEq dhNeutralSym []` (Term/Term.hs:127-130), i.e. nullary function
+/// applications, so they belong to the FApp class.
+fn term_class(t: &p::Term) -> (u8, u8) {
+    use p::Term::*;
+    match t {
+        // LIT (Con name): constants, ordered by Name's NameTag (Fresh<Pub<Nat).
+        FreshLit(_) => (0, 0),
+        PubLit(_) => (0, 1),
+        NatLit(_) => (0, 2),
+        Number(_) => (0, 3),
+        // LIT (Var v): variables sort after all constants.
+        Var(_) => (0, 4),
+        // FAPP: nullary builtins are NoEq function applications, not literals.
+        // NB: the second field below is a tie-breaker ONLY within the Lit
+        // class (sub-tags 0..4); the FApp sub-tags (1,0)..(1,8) are never
+        // consulted for ordering, because [`cmp_pterm`] dispatches every
+        // FApp-class term through `funsym_key`/`cmp_fapp_args` (the `ca == 1`
+        // branch) and returns before the `sa.cmp(&sb)` sub-tag fallthrough.
+        NumberOne => (1, 0),
+        NatOne => (1, 1),
+        DhNeutral => (1, 2),
+        App(_, _) => (1, 3),
+        AlgApp(_, _, _) => (1, 4),
+        Pair(_) => (1, 5),
+        Diff(_, _) => (1, 6),
+        BinOp(_, _, _) => (1, 7),
+        PatMatch(_) => (1, 8),
+    }
+}
+
+/// HS-faithful: which `BinOp`s are AC (associative-commutative)?
+/// Mirrors HS's `MaudeSig`-attribute classification: Mult, Union, Xor,
+/// NatPlus and the user-declared `[AC]` symbols are AC; Exp is NOT
+/// (right-associative algebraic).
+fn is_ac_binop(o: &p::BinOp) -> bool {
+    use p::BinOp::*;
+    matches!(o, Mult | Union | Xor | NatPlus | AcFct(_))
+}
+
+/// Flatten an AC-BinOp chain into a flat operand list, BORROWING the operands.
+/// E.g. `BinOp(Union, BinOp(Union, a, b), c)` flattens to `[&a, &b, &c]`.
+/// Non-matching outer terms are pushed verbatim (no recursion into
+/// nested non-Union/non-same-op subtrees).
+fn flatten_ac_binop<'a>(op: &p::BinOp, t: &'a p::Term, out: &mut Vec<&'a p::Term>) {
+    match t {
+        p::Term::BinOp(inner_op, l, r) if inner_op == op => {
+            flatten_ac_binop(op, l, out);
+            flatten_ac_binop(op, r, out);
+        }
+        _ => out.push(t),
+    }
+}
+
+/// HS-faithful Ord for free `LVar`: `(idx, sort, name)` lexicographic
+/// (Term/LTerm.hs:545-548).  Rust's `p::VarSpec` has the same fields
+/// in a different declaration order — we compare in HS's order.
+fn cmp_varspec(a: &p::VarSpec, b: &p::VarSpec) -> std::cmp::Ordering {
+    a.idx
+        .cmp(&b.idx)
+        .then_with(|| a.sort.cmp(&b.sort))
+        .then_with(|| a.name.cmp(&b.name))
+}
+
 /// AC-canonicalise a parser-AST term: for every `BinOp(op, l, r)` where op
 /// is AC (Mult/Union/Xor/NatPlus, or a user-declared `[AC]` symbol),
-/// flatten the chain into the full multiset, sort it (via the existing
-/// `cmp_term` for GTerm — we convert through GTerm transiently), then
-/// re-fold right-leaning so the canonical form matches HS's flat-sorted
+/// flatten the chain into the full multiset, sort it with [`cmp_pterm`],
+/// then re-fold right-leaning so the canonical form matches HS's flat-sorted
 /// `FApp (AC op) args`.
 ///
 /// Without this, parser-AST `BinOp` stays in the order the parser
@@ -1602,21 +1929,6 @@ pub fn lnterm_to_parser(t: &tamarin_term::lterm::LNTerm) -> p::Term {
 ///   `fAppC nacsym as = FAPP (C nacsym) (sort as)`
 pub fn canonicalize_ac_in_pterm(t: &p::Term) -> p::Term {
     use p::BinOp;
-    fn is_ac(op: BinOp) -> bool {
-        matches!(
-            op,
-            BinOp::Mult | BinOp::Union | BinOp::Xor | BinOp::NatPlus | BinOp::AcFct(_)
-        )
-    }
-    fn flatten(op: BinOp, t: &p::Term, out: &mut Vec<p::Term>) {
-        match t {
-            p::Term::BinOp(inner, l, r) if *inner == op => {
-                flatten(op, l, out);
-                flatten(op, r, out);
-            }
-            _ => out.push(t.clone()),
-        }
-    }
     /// Sort a flattened AC operand list and re-fold it right-leaning into
     /// `BinOp(op, x_0, BinOp(op, x_1, ...))` — the parser-AST spelling of
     /// HS's flat, sorted `FApp (AC op) args` (`fAppAC`,
@@ -1630,14 +1942,6 @@ pub fn canonicalize_ac_in_pterm(t: &p::Term) -> p::Term {
             acc = p::Term::BinOp(op, Box::new(prev), Box::new(acc));
         }
         acc
-    }
-    fn cmp_pterm(a: &p::Term, b: &p::Term) -> std::cmp::Ordering {
-        // Convert to GTerm transiently for the canonical `cmp_term`
-        // ordering.  GTerm and p::Term are structurally identical for
-        // Free-only inputs, so the comparison is faithful.
-        let ga = crate::guarded_types::term_to_gterm_free(a);
-        let gb = crate::guarded_types::term_to_gterm_free(b);
-        crate::guarded::cmp_term(&ga, &gb)
     }
     match t {
         p::Term::Var(_)
@@ -1689,13 +1993,14 @@ pub fn canonicalize_ac_in_pterm(t: &p::Term) -> p::Term {
         p::Term::BinOp(op, l, r) => {
             let l2 = canonicalize_ac_in_pterm(l);
             let r2 = canonicalize_ac_in_pterm(r);
-            if !is_ac(*op) {
+            if !is_ac_binop(op) {
                 return p::Term::BinOp(*op, Box::new(l2), Box::new(r2));
             }
             // Flatten the WHOLE AC chain rooted at this BinOp, then sort.
-            let mut flat: Vec<p::Term> = Vec::new();
-            flatten(*op, &l2, &mut flat);
-            flatten(*op, &r2, &mut flat);
+            let mut operands: Vec<&p::Term> = Vec::new();
+            flatten_ac_binop(op, &l2, &mut operands);
+            flatten_ac_binop(op, &r2, &mut operands);
+            let flat: Vec<p::Term> = operands.into_iter().cloned().collect();
             sort_and_fold(*op, flat)
         }
     }

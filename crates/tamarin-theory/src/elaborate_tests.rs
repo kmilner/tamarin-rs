@@ -1218,3 +1218,314 @@ fn converters_disagree_on_list_and_degenerate_ac() {
         p::Term::App("?Mult".to_string(), vec![parser_var("x", 0, LSort::Msg)])
     );
 }
+
+// =========================================================================
+// The parser-AST term order `canonicalize_ac_in_pterm` sorts by
+// =========================================================================
+
+/// HS's pair is a nested arity-2 FAPP (`fAppPair`, Term/Term.hs:163), so
+/// `<a, z>` and `<a, b, c>` first differ at argument 2 — `z` against
+/// `pair(b, c)` — where `LIT _ < FAPP _ _` (Term/Term/Raw.hs:72-74) puts
+/// `<a, z>` first.  Comparing the parser's FLAT operand vectors element-wise
+/// would weigh `b` against `z` and reverse the two.
+#[test]
+fn cmp_pterm_orders_pairs_by_their_nested_spine() {
+    use std::cmp::Ordering::{Equal, Greater, Less};
+    let v = |n: &str| parser_var(n, 0, LSort::Msg);
+    let short = p::Term::Pair(vec![v("a"), v("z")]);
+    let long = p::Term::Pair(vec![v("a"), v("b"), v("c")]);
+    assert_eq!(cmp_pterm(&short, &long), Less);
+    assert_eq!(cmp_pterm(&long, &short), Greater);
+    // The right-nested spelling of the SAME term compares equal, so the
+    // flat `Pair` and the tail it stands for are interchangeable.
+    let nested = p::Term::Pair(vec![v("a"), p::Term::Pair(vec![v("b"), v("c")])]);
+    assert_eq!(cmp_pterm(&long, &nested), Equal);
+}
+
+/// The source spelling `pair(a, b)` is HS's `pairSym` FAPP just like
+/// `<a, b>` (`naryOpApp`, Theory/Text/Parser/Term.hs:88-105, see line
+/// 104), so the two parser-AST shapes tie — and both order against a longer
+/// pair through the same nested spine.
+#[test]
+fn cmp_pterm_ties_the_prefix_pair_spelling_with_the_bracket_spelling() {
+    use std::cmp::Ordering::{Equal, Less};
+    let v = |n: &str| parser_var(n, 0, LSort::Msg);
+    let prefix = p::Term::App("pair".into(), vec![v("a"), v("z")]);
+    let bracket = p::Term::Pair(vec![v("a"), v("z")]);
+    assert_eq!(cmp_pterm(&prefix, &bracket), Equal);
+    let long = p::Term::Pair(vec![v("a"), v("b"), v("c")]);
+    assert_eq!(cmp_pterm(&prefix, &long), Less);
+}
+
+/// `em/2` occupies the `C` tier of HS's derived `Ord FunSym`
+/// (`NoEq < AC < C < List`, FunctionSymbols.hs:150-154), so it outranks
+/// every `NoEq` and every `AC` head whatever the names involved.  The
+/// classification is by name alone — `naryOpApp` builds `fAppC EMap` for
+/// any `em(…)` application, builtin-declared or user-declared
+/// (Theory/Text/Parser/Term.hs:103) — while the `op{t1}t2` spelling goes
+/// through `binaryAlgApp`, which has no `em` case and yields `fAppNoEq`
+/// (Theory/Text/Parser/Term.hs:109-121).
+///
+/// Oracle bytes (pinned build, Git revision ef3f0468), each from a theory
+/// whose source order is `em` first:
+///   * `builtins: bilinear-pairing` + `functions: f/2`,
+///     `Test(em('g','h') * f('g','h'))`
+///     renders `Test( (f('g', 'h')*em('g', 'h')) )` — `f` FIRST, though
+///     `"em" < "f"` as names.
+///   * same theory with `Test(em{'g'}'h' * f('g','h'))`
+///     renders `Test( (em('g', 'h')*f('g', 'h')) )` — `em` FIRST, the
+///     `NoEq` name order.
+///   * `builtins: bilinear-pairing, multiset`,
+///     `Test(em(~a,~b) + (~a * ~b))`
+///     renders `Test( ((~a*~b)++em(~a, ~b)) )` — the `AC` product first.
+///   * `builtins: diffie-hellman` + `functions: em/2, f/2` (no pairing
+///     builtin), `Test(em('g','h') * f('g','h'))`
+///     still renders `Test( (f('g', 'h')*em('g', 'h')) )`.
+#[test]
+fn cmp_pterm_ranks_em_in_the_c_tier() {
+    use std::cmp::Ordering::{Greater, Less};
+    let gl = p::Term::PubLit("g".into());
+    let hl = p::Term::PubLit("h".into());
+    let gh = vec![gl.clone(), hl.clone()];
+    let em = p::Term::App("em".into(), gh.clone());
+    let f = p::Term::App("f".into(), gh.clone());
+
+    // C(2) beats NoEq(0) in BOTH directions, name order notwithstanding.
+    assert_eq!(
+        cmp_pterm(&f, &em),
+        Less,
+        "NoEq `f/2` must sort before C `em/2` despite \"em\" < \"f\""
+    );
+    assert_eq!(
+        cmp_pterm(&em, &f),
+        Greater,
+        "cmp_pterm must be antisymmetric"
+    );
+    // A NoEq name that already precedes "em" stays first — the tier, not
+    // the name, decides.
+    let aaa = p::Term::App("aaa".into(), gh.clone());
+    assert_eq!(cmp_pterm(&aaa, &em), Less);
+
+    // AC(1) < C(2): the multiset operand `~a*~b` precedes the pairing.
+    let prod = p::Term::BinOp(p::BinOp::Mult, Box::new(gl.clone()), Box::new(hl.clone()));
+    assert_eq!(
+        cmp_pterm(&prod, &em),
+        Less,
+        "an AC head must sort before the C `em/2`"
+    );
+
+    // `em{'g'}'h'` is `fAppNoEq`, so it sorts by name and precedes `f/2`.
+    let em_alg = p::Term::AlgApp("em".into(), Box::new(gl.clone()), Box::new(hl.clone()));
+    assert_eq!(
+        cmp_pterm(&em_alg, &f),
+        Less,
+        "the `op{{t1}}t2` spelling of em is a NoEq symbol, ordered by name"
+    );
+    assert_eq!(
+        cmp_pterm(&em_alg, &em),
+        Less,
+        "NoEq `em/2` and C `em/2` are distinct FunSyms, NoEq first"
+    );
+
+    // Two C terms tie on the whole FunSym key (`CSym` is a single nullary
+    // constructor) and fall through to the argument list.
+    let em_gg = p::Term::App("em".into(), vec![gl.clone(), gl.clone()]);
+    assert_eq!(
+        cmp_pterm(&em_gg, &em),
+        Less,
+        "same-FunSym C terms compare by their arguments"
+    );
+
+    // Only the binary form is a C symbol: `viewTerm2` rejects a `C` node
+    // of any other arity (Term/Term/Raw.hs:190), so a 3-ary `em` keeps the
+    // NoEq key and its name order.
+    let em3 = p::Term::App("em".into(), vec![gl.clone(), hl.clone(), gl.clone()]);
+    assert_eq!(cmp_pterm(&em3, &f), Less);
+}
+
+/// `t` and every one of its sub-terms, outermost first.
+fn pterm_subterms<'a>(t: &'a p::Term, out: &mut Vec<&'a p::Term>) {
+    out.push(t);
+    match t {
+        p::Term::App(_, args) | p::Term::Pair(args) => {
+            for a in args {
+                pterm_subterms(a, out);
+            }
+        }
+        p::Term::AlgApp(_, a, b) | p::Term::Diff(a, b) | p::Term::BinOp(_, a, b) => {
+            pterm_subterms(a, out);
+            pterm_subterms(b, out);
+        }
+        p::Term::PatMatch(a) => pterm_subterms(a, out),
+        _ => {}
+    }
+}
+
+fn pfact_subterms<'a>(f: &'a p::Fact, out: &mut Vec<&'a p::Term>) {
+    for a in &f.args {
+        pterm_subterms(a, out);
+    }
+}
+
+fn patom_subterms<'a>(a: &'a p::Atom, out: &mut Vec<&'a p::Term>) {
+    match a {
+        p::Atom::Eq(x, y)
+        | p::Atom::Less(x, y)
+        | p::Atom::LessMset(x, y)
+        | p::Atom::Subterm(x, y) => {
+            pterm_subterms(x, out);
+            pterm_subterms(y, out);
+        }
+        p::Atom::Action(fa, t) => {
+            pfact_subterms(fa, out);
+            pterm_subterms(t, out);
+        }
+        p::Atom::Last(t) => pterm_subterms(t, out),
+        p::Atom::Pred(fa) => pfact_subterms(fa, out),
+    }
+}
+
+fn pformula_subterms<'a>(f: &'a p::Formula, out: &mut Vec<&'a p::Term>) {
+    match f {
+        p::Formula::False | p::Formula::True => {}
+        p::Formula::Atom(a) => patom_subterms(a, out),
+        p::Formula::Not(x) => pformula_subterms(x, out),
+        p::Formula::And(x, y)
+        | p::Formula::Or(x, y)
+        | p::Formula::Implies(x, y)
+        | p::Formula::Iff(x, y) => {
+            pformula_subterms(x, out);
+            pformula_subterms(y, out);
+        }
+        p::Formula::Forall(_, x) | p::Formula::Exists(_, x) => pformula_subterms(x, out),
+    }
+}
+
+fn prule_subterms<'a>(r: &'a p::Rule, out: &mut Vec<&'a p::Term>) {
+    for fa in r.premises.iter().chain(&r.actions).chain(&r.conclusions) {
+        pfact_subterms(fa, out);
+    }
+    for f in &r.embedded_restrictions {
+        pformula_subterms(f, out);
+    }
+    for v in &r.variants {
+        prule_subterms(v, out);
+    }
+    if let Some((l, r2)) = &r.left_right {
+        prule_subterms(l, out);
+        prule_subterms(r2, out);
+    }
+}
+
+/// Every parser-AST term one theory's lemmas, restrictions and rule bodies
+/// hold, outermost first.
+fn theory_pterms(thy: &p::Theory) -> Vec<&p::Term> {
+    let mut out = Vec::new();
+    for item in &thy.items {
+        match item {
+            p::TheoryItem::Lemma(l) => pformula_subterms(&l.formula, &mut out),
+            p::TheoryItem::Restriction(r) | p::TheoryItem::LegacyAxiom(r) => {
+                pformula_subterms(&r.formula, &mut out)
+            }
+            p::TheoryItem::Rule(r) | p::TheoryItem::IntrRule(r) => prule_subterms(r, &mut out),
+            _ => {}
+        }
+    }
+    out
+}
+
+/// How many terms of one file the comparison samples.  The sample is
+/// compared pairwise, so the per-file cost is quadratic in this number.
+const CORPUS_PTERM_SAMPLE: usize = 120;
+
+/// [`cmp_pterm`] is the parser-AST reading of the order
+/// `crate::guarded::cmp_term` gives the same term lifted to `GTerm`
+/// (`term_to_gterm_free` is the lift).  Both comparators exist while the
+/// solver's guarded formulas are still `GTerm`-shaped, and the theory echo's
+/// AC operand order rides on [`canonicalize_ac_in_pterm`] sorting by the
+/// first — so the two must agree on every term the examples tree holds.
+#[test]
+fn cmp_pterm_agrees_with_the_guarded_comparator_over_the_corpus() {
+    use crate::guarded::cmp_term;
+    use crate::guarded_types::{term_to_gterm_free, GTerm};
+    use crate::test_corpus::{beyond_budget, corpus_root, parse_file, rel, spthy_files};
+    use rayon::prelude::*;
+
+    let root = corpus_root();
+    if !root.is_dir() {
+        assert_eq!(
+            std::env::var("TAM_ALLOW_NO_CORPUS").as_deref(),
+            Ok("1"),
+            "corpus root {} missing; set TAM_ALLOW_NO_CORPUS=1 to skip",
+            root.display()
+        );
+        eprintln!("corpus: root {} missing, skipped", root.display());
+        return;
+    }
+    let files = spthy_files(&root);
+    // The parser recurses along the input; the web server parses on 64 MiB
+    // tokio threads (run.rs), so the workers get the same stacks.
+    let pool = rayon::ThreadPoolBuilder::new()
+        .stack_size(64 * 1024 * 1024)
+        .build()
+        .expect("rayon pool");
+    let probe = |path: &std::path::Path| -> (usize, usize, Vec<String>) {
+        if beyond_budget(path, &root) {
+            return (0, 0, Vec::new());
+        }
+        let Some(thy) = parse_file(path) else {
+            return (0, 0, Vec::new());
+        };
+        let all = theory_pterms(&thy);
+        let step = all.len().div_ceil(CORPUS_PTERM_SAMPLE).max(1);
+        let sample: Vec<&p::Term> = all
+            .into_iter()
+            .step_by(step)
+            .take(CORPUS_PTERM_SAMPLE)
+            .collect();
+        let lifted: Vec<GTerm> = sample.iter().map(|t| term_to_gterm_free(t)).collect();
+        let mut findings = Vec::new();
+        let mut pairs = 0usize;
+        for i in 0..sample.len() {
+            for j in (i + 1)..sample.len() {
+                pairs += 1;
+                let here = cmp_pterm(sample[i], sample[j]);
+                let there = cmp_term(&lifted[i], &lifted[j]);
+                if here != there && findings.is_empty() {
+                    findings.push(format!(
+                        "{}: {:?} vs {:?} — cmp_pterm {here:?}, cmp_term {there:?}",
+                        rel(path, &root).display(),
+                        sample[i],
+                        sample[j]
+                    ));
+                }
+            }
+        }
+        (1, pairs, findings)
+    };
+    let probes: Vec<(usize, usize, Vec<String>)> =
+        pool.install(|| files.par_iter().map(|p| probe(p)).collect());
+
+    let parsed: usize = probes.iter().map(|p| p.0).sum();
+    let pairs: usize = probes.iter().map(|p| p.1).sum();
+    let findings: Vec<&String> = probes.iter().flat_map(|p| &p.2).collect();
+    eprintln!(
+        "cmp_pterm vs cmp_term: files={} parsed={parsed} pairs={pairs}",
+        files.len()
+    );
+    // A comparison over the corpus is a net only while it covers the tree.
+    // The tree has 19 parser rejects in 1037 files, the same floor the other
+    // corpus nets hold.
+    assert!(
+        parsed * 20 >= files.len() * 19,
+        "only {parsed} of {} files reached the comparison",
+        files.len()
+    );
+    assert!(pairs > 0, "no pairs compared");
+    assert!(
+        findings.is_empty(),
+        "{} disagreements; first: {}",
+        findings.len(),
+        findings[0]
+    );
+}
