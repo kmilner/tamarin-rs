@@ -715,7 +715,10 @@ fn render_open_item(
         // `prettyTranslationElement` typing cases (TheoryObject.hs:800-838).
         Functions(decls) => decls
             .iter()
-            .map(|d| pretty_function_typing_info(&function_decl_typing_info(d)).render())
+            .map(|d| {
+                pretty_function_typing_info(&crate::elaborate::function_decl_typing_info(d))
+                    .render()
+            })
             .collect(),
         // `equations:` / `options:` only mutate the signature/options — no
         // theory item (Parser/Signature.hs:232-249, 252-269).  `heuristic:` /
@@ -859,55 +862,6 @@ fn render_open_item(
             )]
         }
     })
-}
-
-/// Build the `SapicFunSym` a `functions:` declaration records as its
-/// `FunctionTypingInfo` item (HS `function`, Parser/Signature.hs:185-233:
-/// the parsed name/arity/attribute flags plus the declared SAPIC types).
-fn function_decl_typing_info(d: &p::FunctionDecl) -> crate::theory::SapicFunSym {
-    use tamarin_term::function_symbols::{
-        AcFctSym, Constructability, NdcState, NoEqSym, Privacy, UserDefinedSym,
-    };
-    let privacy = if d.private {
-        Privacy::Private
-    } else {
-        Privacy::Public
-    };
-    let constructability = if d.destructor {
-        Constructability::Destructor
-    } else {
-        Constructability::Constructor
-    };
-    // `joinNDC` (Parser/Signature.hs:196-198).
-    let ndc = match (d.ndc, d.ndc_diff) {
-        (false, false) => NdcState::NotNdc,
-        (true, false) => NdcState::IsNdc,
-        (false, true) => NdcState::IsNdcDiff,
-        (true, true) => NdcState::IsNdcBoth,
-    };
-    let sym = if d.ac {
-        UserDefinedSym::AcFctUser(AcFctSym::new(
-            d.name.as_bytes().to_vec(),
-            privacy,
-            constructability,
-            ndc,
-        ))
-    } else {
-        UserDefinedSym::NoEqUser(
-            NoEqSym::new(
-                d.name.as_bytes().to_vec(),
-                d.arg_types.len(),
-                privacy,
-                constructability,
-            )
-            .with_ndc(ndc),
-        )
-    };
-    crate::theory::SapicFunSym {
-        sym,
-        arg_types: d.arg_types.clone(),
-        out_type: d.out_type.clone(),
-    }
 }
 
 /// `show` on a parse-time process-def formal (HS `Show SapicLVar`,

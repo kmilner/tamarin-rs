@@ -1500,3 +1500,55 @@ fn parse_time_signature_matches_elaboration() {
         findings.iter().take(5).collect::<Vec<_>>()
     );
 }
+
+/// HS folds `addFunctionTypingInfo` over every declaration of a `functions:`
+/// block (Theory/Text/Parser.hs:259-262), so a block of three declarations
+/// leaves three `FunctionTypingInfo` items in source order, each carrying the
+/// `UserDefinedSym` the declaration's attributes select and the declared SAPIC
+/// types (HS `function`, Theory/Text/Parser/Signature.hs:183-225).
+#[test]
+fn each_function_declaration_becomes_a_typing_info() {
+    use tamarin_term::function_symbols::{Constructability, NdcState, Privacy, UserDefinedSym};
+
+    let src = "theory T begin\n\
+               functions: h/2, unpack(cipher, key):plain [private, destructor],\n\
+                          mix/2 [AC, NDC]\n\
+               end\n";
+    let thy = elaborate(&parse_theory(src, &[]).unwrap()).unwrap();
+    let infos: Vec<&crate::theory::SapicFunSym> = thy.function_typing_infos().collect();
+    assert_eq!(
+        infos
+            .iter()
+            .map(|f| String::from_utf8_lossy(f.sym.name()).into_owned())
+            .collect::<Vec<_>>(),
+        vec!["h", "unpack", "mix"]
+    );
+
+    let unpack = match infos[1].sym {
+        UserDefinedSym::NoEqUser(s) => s,
+        other => panic!("expected a free symbol, got {other:?}"),
+    };
+    assert_eq!(unpack.arity, 2);
+    assert_eq!(unpack.privacy, Privacy::Private);
+    assert_eq!(unpack.constructability, Constructability::Destructor);
+    assert_eq!(unpack.ndc, NdcState::NotNdc);
+    assert_eq!(
+        infos[1].arg_types,
+        vec![Some("cipher".to_string()), Some("key".to_string())]
+    );
+    assert_eq!(infos[1].out_type, Some("plain".to_string()));
+
+    // `/2` is the untyped form: every argument and the result take
+    // `defaultSapicType` (HS `functionType`,
+    // Theory/Text/Parser/Signature.hs:152-156), and `[AC]` selects the
+    // arity-free `ACfctUser` symbol.
+    let mix = match infos[2].sym {
+        UserDefinedSym::AcFctUser(s) => s,
+        other => panic!("expected a user-defined AC symbol, got {other:?}"),
+    };
+    assert_eq!(mix.privacy, Privacy::Public);
+    assert_eq!(mix.constructability, Constructability::Constructor);
+    assert_eq!(mix.ndc, NdcState::IsNdc);
+    assert_eq!(infos[2].arg_types, vec![None, None]);
+    assert_eq!(infos[2].out_type, None);
+}

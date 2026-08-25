@@ -12,7 +12,8 @@
 //! - `builtins:` → `MaudeSig` (we record the names; full sig
 //!   composition is handled by `signature::SignaturePure::empty`)
 //! - `functions:`/`equations:`/`macros:` → signature registration
-//!   (`st_fun_syms`, `CtxtStRule`s when convertible, macro definitions)
+//!   (`st_fun_syms`, `CtxtStRule`s when convertible, macro definitions), plus a
+//!   `TranslationElement::FunctionTypingInfo` item per `functions:` declaration
 //! - `predicates:` → `theory::Predicate`, which the later items of the same
 //!   theory are expanded against (`predicate::expand_formula`)
 //! - Rules — `parser::Rule` → `OpenProtoRule(ProtoRuleE, [])`
@@ -58,7 +59,7 @@ use crate::rule::{
 use crate::signature::SignaturePure;
 use crate::theory::{
     apply_macro_in_lemma, AccLemma, CaseTest, LNMacro, Lemma, LemmaAttr, OpenProtoRule, ProofTree,
-    Theory, TheoryItem, TraceQuantifier, TranslationElement,
+    SapicFunSym, Theory, TheoryItem, TraceQuantifier, TranslationElement,
 };
 
 #[derive(Debug, Clone)]
@@ -337,6 +338,48 @@ fn ndc_state_of(ndc: bool, ndc_diff: bool) -> NdcState {
     a.join(b)
 }
 
+/// The `SapicFunSym` a `functions:` declaration records as its
+/// `FunctionTypingInfo` item (HS `function`,
+/// Theory/Text/Parser/Signature.hs:183-225): the declared name, arity and
+/// attribute flags paired with the declared SAPIC argument and result types.
+pub(crate) fn function_decl_typing_info(d: &p::FunctionDecl) -> SapicFunSym {
+    use tamarin_term::function_symbols::UserDefinedSym;
+    let privacy = if d.private {
+        Privacy::Private
+    } else {
+        Privacy::Public
+    };
+    let constructability = if d.destructor {
+        Constructability::Destructor
+    } else {
+        Constructability::Constructor
+    };
+    let ndc = ndc_state_of(d.ndc, d.ndc_diff);
+    let sym = if d.ac {
+        UserDefinedSym::AcFctUser(AcFctSym::new(
+            d.name.as_bytes().to_vec(),
+            privacy,
+            constructability,
+            ndc,
+        ))
+    } else {
+        UserDefinedSym::NoEqUser(
+            NoEqSym::new(
+                d.name.as_bytes().to_vec(),
+                d.arg_types.len(),
+                privacy,
+                constructability,
+            )
+            .with_ndc(ndc),
+        )
+    };
+    SapicFunSym {
+        sym,
+        arg_types: d.arg_types.clone(),
+        out_type: d.out_type.clone(),
+    }
+}
+
 /// The signature and translation-option contribution of one theory item.
 /// `builtins:`, `functions:`, `equations:` and `macros:` declarations build
 /// `out.signature.maude_sig` and `out.options`; every other item kind leaves
@@ -561,7 +604,19 @@ fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), Elab
                     ));
                 }
             }
-            p::TheoryItem::Functions(_) | p::TheoryItem::Equations { .. } => {
+            p::TheoryItem::Functions(decls) => {
+                maude_sig_step(item, out)?;
+                // HS folds `addFunctionTypingInfo` over the block's
+                // declarations (Theory/Text/Parser.hs:259-262,
+                // TheoryObject.hs:492-493): one `FunctionTypingInfo` item per
+                // declaration, in source order.
+                for d in decls {
+                    out.items.push(TheoryItem::Translation(
+                        TranslationElement::FunctionTypingInfo(function_decl_typing_info(d)),
+                    ));
+                }
+            }
+            p::TheoryItem::Equations { .. } => {
                 maude_sig_step(item, out)?;
             }
             p::TheoryItem::Macros(_) => {

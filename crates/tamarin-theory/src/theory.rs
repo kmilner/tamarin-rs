@@ -133,11 +133,9 @@ pub struct ProcessDef {
     pub body: PlainProcess,
 }
 
-/// Lightweight placeholder for `Theory.Sapic.SapicFunSym` —
-/// `(UserDefinedSym, [SapicType], SapicType)` (Theory/Sapic/Term.hs:78), so a
-/// typing declaration can name a free OR a user-defined AC symbol. Backs the
-/// not-yet-produced `TranslationElement::FunctionTypingInfo` variant — kept for
-/// the HS port.
+/// `Theory.Sapic.SapicFunSym` — `(UserDefinedSym, [SapicType], SapicType)`
+/// (Theory/Sapic/Term.hs:78), so a typing declaration can name a free OR a
+/// user-defined AC symbol. Payload of `TranslationElement::FunctionTypingInfo`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SapicFunSym {
     pub sym: tamarin_term::function_symbols::UserDefinedSym,
@@ -160,10 +158,10 @@ pub type ConfigBlock = String;
 /// surface syntax.
 ///
 /// Mirrors the full HS `TranslationElement` surface. Only
-/// `SignatureBuiltin`, `AccLemma`, `CaseTest`, and `ExportInfo` are
-/// currently produced by elaboration; the remaining variants
-/// (`Process`, `ProcessDef`, `FunctionTypingInfo`, `DiffEquivLemma`,
-/// `EquivLemma`) are not yet produced — kept for the faithful HS port.
+/// `SignatureBuiltin`, `FunctionTypingInfo`, `AccLemma`, `CaseTest`, and
+/// `ExportInfo` are produced by elaboration; the remaining variants
+/// (`Process`, `ProcessDef`, `DiffEquivLemma`, `EquivLemma`) are not yet
+/// produced — kept for the faithful HS port.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TranslationElement {
     Process(PlainProcess),
@@ -540,6 +538,17 @@ impl<R, P, S> Theory<R, P, S> {
             self.add_restriction(r);
         }
         self
+    }
+}
+
+impl<R, P> Theory<R, P, TranslationElement> {
+    /// HS `theoryFunctionTypingInfos` (TheoryObject.hs:368-369): the
+    /// `SapicFunSym` of every `functions:` declaration, in source order.
+    pub fn function_typing_infos(&self) -> impl Iterator<Item = &SapicFunSym> {
+        self.items.iter().filter_map(|i| match i {
+            TheoryItem::Translation(TranslationElement::FunctionTypingInfo(f)) => Some(f),
+            _ => None,
+        })
     }
 }
 
