@@ -741,21 +741,17 @@ impl ProverSession {
     /// ClosedTheory.hs:553-575).  Forces the template's source cells
     /// (`ensure_saturated`), so it is intended for the precompute-only
     /// path where the session serves no proving afterwards.
-    pub fn precomputation_stats(
-        &self,
-        parsed: &p::Theory,
-    ) -> Result<PrecomputationStats, ProveError> {
+    pub fn precomputation_stats(&self) -> Result<PrecomputationStats, ProveError> {
         use crate::constraint::solver::sources::{
             refine_with_source_asms, unsolved_chain_constraints, Source,
         };
-        // HS `length (getClassifiedRules thy)._crProtocol`: the user
-        // protocol rules plus the intruder members of `crProtocol` —
+        // HS `length (getClassifiedRules thy)._crProtocol`: the theory's
+        // rule items plus the intruder members of `crProtocol` —
         // everything that is neither a construction rule (`isConstrRule`,
         // Model/Rule.hs:707-714) nor a destruction rule (`isDestrRule`,
-        // Model/Rule.hs:694-698), i.e. ISend/IRecv/IRecvNC/Fresh.  Same
-        // computation as the web index's `proto_rule_count`.
+        // Model/Rule.hs:694-698), i.e. ISend/IRecv/IRecvNC/Fresh.
         use crate::rule::IntrRuleACInfo as I;
-        let rules = crate::pretty_theory::web_proto_rules(parsed, &self.theory).len()
+        let rules = self.theory.rules().count()
             + self
                 .template_ctx
                 .intruder_rules

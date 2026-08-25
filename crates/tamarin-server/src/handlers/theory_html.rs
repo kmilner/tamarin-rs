@@ -188,9 +188,7 @@ fn proof_state(entry: &TheoryEntry) -> String {
 /// `web_proto_rules.len()` plus the ISend/IRecv-style intruder members of
 /// `crProtocol` (`ctx.intruder_rules` minus construction/destruction rules).
 fn proto_rule_count(entry: &TheoryEntry) -> usize {
-    let proto =
-        tamarin_theory::pretty_theory::web_proto_rules(&entry.parser_theory, &entry.typed_theory)
-            .len();
+    let proto = tamarin_theory::pretty_theory::web_proto_rules(&entry.typed_theory).len();
     let extra = entry.proof_state.as_ref().map_or(0, |ps| {
         let ctx = ps.ctx.lock();
         ctx.intruder_rules
@@ -952,9 +950,8 @@ fn rules_html(entry: &TheoryEntry) -> String {
     // HS `rulesSnippet`'s FIRST slot: `if null (theoryMacros thy) then text
     // empty else ppWithHeader "Macros" (prettyMacros ...)` — a `text ""` blank
     // line when there are no macros, else the macros section.
-    let macros_block = tamarin_theory::pretty_theory::web_macros(&entry.parser_theory);
-    let proto_rules =
-        tamarin_theory::pretty_theory::web_proto_rules(&entry.parser_theory, &entry.typed_theory);
+    let macros_block = tamarin_theory::pretty_theory::web_macros(&entry.typed_theory);
+    let proto_rules = tamarin_theory::pretty_theory::web_proto_rules(&entry.typed_theory);
     let mut inj_body = String::from("None");
     let mut extra_ac: Vec<String> = Vec::new();
     if let Some(ps) = &entry.proof_state {
@@ -995,8 +992,7 @@ fn rules_html(entry: &TheoryEntry) -> String {
     // `vsep $ map prettyRestriction` (Web/Theory.hs:893-923, see line 901) = `foldr ($--$)` =
     // blank line between restrictions.
     let restr_body =
-        tamarin_theory::pretty_theory::web_restrictions(&entry.parser_theory, &entry.typed_theory)
-            .join("\n\n");
+        tamarin_theory::pretty_theory::web_restrictions(&entry.typed_theory).join("\n\n");
 
     // HS `rulesSnippet` order: Macros slot → Fact Symbols → MSR → Restrictions.
     let macros_slot = match &macros_block {

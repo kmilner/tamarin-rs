@@ -12,8 +12,6 @@
 //!     wellformedness clone (stage 8);
 //!   - [`expand_theory_macros`] — the parser-theory probes and
 //!     `check_terms_wf`'s tests (stage 8);
-//!   - [`apply_macros_fact`] — `pretty_theory::is_trivial_proto_variant_ac`
-//!     (stage 7).
 //!
 //! Port of `Term.Macro.applyMacros` (HS: lib/term/src/Term/Macro.hs:40-54)
 //! plus the call-sites that drive it:

@@ -30,7 +30,7 @@ use tamarin_theory::pretty_theory::{format_wf_block, web_proto_rules, web_signat
 fn rule_echoes(src: &str) -> Vec<String> {
     let thy = parse_theory(src, &[]).expect("parse");
     let elaborated = elaborate(&thy).expect("elaborate");
-    web_proto_rules(&thy, &elaborated)
+    web_proto_rules(&elaborated)
         .into_iter()
         .map(|rule| match rule.split_once("\n\n  /*") {
             Some((echo, _annotation)) => echo.to_string(),

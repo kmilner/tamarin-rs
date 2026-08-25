@@ -22,7 +22,7 @@ use crate::fact::FactAnnotation;
 use crate::formula::{from_parser, sapic_from_parser, to_lnformula};
 use crate::macro_expand::apply_macros_formula;
 use crate::pretty_sapic::render_sapic;
-use crate::pretty_theory::{collect_macros, expand_predicates_for_display};
+use crate::pretty_theory::expand_predicates_for_display;
 use crate::sapic::to_lformula;
 use crate::test_corpus::{beyond_budget, corpus_root, parse_file, rel, spthy_files};
 use rayon::prelude::*;
@@ -83,20 +83,28 @@ fn process_formulas(proc_: &p::Process, label: &str, out: &mut Vec<Item>) {
     }
 }
 
-/// Every formula the theory prints, built as the production renderer
-/// builds it: lemma and restriction headers are predicate-expanded,
-/// arity-1-folded and AC-canonicalised (`render_parsed_lemma`,
-/// `render_parsed_restriction`), and their guarded-block variant applies
-/// the theory's macros first when there are any (`render_guarded_block`);
-/// accountability lemmas and case tests are arity-1-folded and
-/// canonicalised; predicate bodies are only arity-1-folded.
+/// Every formula the theory prints, built as the production renderers build
+/// it: lemma and restriction headers are predicate-expanded, arity-1-folded
+/// and AC-canonicalised, and their guarded-block variant applies the theory's
+/// macros first when there are any; accountability lemmas and case tests are
+/// arity-1-folded and canonicalised; predicate bodies are only
+/// arity-1-folded.
 fn theory_formulas(
     parsed: &p::Theory,
     predicates: &[crate::predicate::Predicate],
     msig: &tamarin_term::maude_sig::MaudeSig,
     arity1: &dyn Fn(&p::Formula) -> p::Formula,
 ) -> Vec<Item> {
-    let macros = collect_macros(parsed);
+    let macros: Vec<p::Macro> = parsed
+        .items
+        .iter()
+        .filter_map(|i| match i {
+            p::TheoryItem::Macros(ms) => Some(ms.as_slice()),
+            _ => None,
+        })
+        .flatten()
+        .cloned()
+        .collect();
     let item = |label: String, pre: p::Formula, formula: p::Formula| Item {
         label,
         formula,

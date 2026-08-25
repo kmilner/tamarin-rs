@@ -403,8 +403,8 @@ pub fn pretty_intruder_variants(rules: &[crate::rule::IntrRuleAC]) -> String {
             let header = crate::pretty_hpj::kw_rule_modulo("AC")
                 .beside_sp(Doc::text(intr_rule_name(&r.info)))
                 .beside(Doc::text(":"));
-            // Render header and body separately (as `render_rule` does): the
-            // header is one logical line, the body starts fresh at `nest 2`.
+            // Render header and body separately: the header is one logical
+            // line, the body starts fresh at `nest 2`.
             let mut s = header.render();
             s.push('\n');
             s.push_str(

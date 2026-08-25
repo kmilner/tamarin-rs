@@ -325,7 +325,7 @@ pub fn translate(parsed: &mut p::Theory, elaborated: &mut Theory) -> Result<(), 
     // Case-test predicates (HS `mapMaybe caseTestToPredicate (theoryCaseTests thy)`
     // then `foldM liftedAddPredicate`), appended AFTER all generated lemmas.
     for c in &case_tests {
-        if let Some(pred) = case_test_to_predicate(c) {
+        if let Some((pred, internal)) = case_test_to_predicate(c) {
             let tag = (
                 pred.fact.name.clone(),
                 pred.fact.args.len(),
@@ -336,6 +336,7 @@ pub fn translate(parsed: &mut p::Theory, elaborated: &mut Theory) -> Result<(), 
             }
             defined_preds.push(tag);
             parsed.items.push(p::TheoryItem::Predicates(vec![pred]));
+            elaborated.items.push(TheoryItem::Predicate(internal));
         }
     }
 
@@ -450,21 +451,22 @@ fn inject_lemma(
 // Theory/Syntactic/Predicate.hs:38-42)
 // =============================================================================
 
-/// HS `caseTestToPredicate` (Items/CaseTestItem.hs:33-36): `Nothing` when the
+/// HS `caseTestToPredicate` (Items/CaseTestItem.hs:33-37): `None` when the
 /// case-test formula has syntactic sugar that `toLNFormula` cannot strip (a
-/// predicate atom), otherwise `mkPredicate name formula`.
-fn case_test_to_predicate(c: &RawCaseTest) -> Option<p::Predicate> {
+/// predicate atom), otherwise `mkPredicate name formula`
+/// (Theory/Syntactic/Predicate.hs:38-43) as the internal predicate and its
+/// parser-AST twin.
+fn case_test_to_predicate(c: &RawCaseTest) -> Option<(p::Predicate, Predicate)> {
     // `toLNFormula` is `Nothing` while any atom still carries the predicate
     // sugar (Theory/Model/Formula.hs:369-373).
     let stripped = to_lnformula(&c.formula)?;
-    // HS `mkPredicate name formula = Predicate (protoFact Linear (capitalize
-    // name) (frees formula)) formula` (Theory/Syntactic/Predicate.hs:38-42).
     // The fact args are the formula's sorted free variables.
+    let frees = formula_frees(&stripped);
     let fact = p::Fact {
         persistent: false,
         name: capitalize(&c.name),
-        args: formula_frees(&stripped)
-            .into_iter()
+        args: frees
+            .iter()
             .map(|v| {
                 p::Term::Var(p::VarSpec {
                     name: v.name.to_string(),
@@ -476,10 +478,14 @@ fn case_test_to_predicate(c: &RawCaseTest) -> Option<p::Predicate> {
             .collect(),
         annotations: Vec::new(),
     };
-    Some(p::Predicate {
-        fact,
-        formula: c.parsed_formula.clone(),
-    })
+    let internal = Predicate::new(&c.name, stripped, frees);
+    Some((
+        p::Predicate {
+            fact,
+            formula: c.parsed_formula.clone(),
+        },
+        internal,
+    ))
 }
 
 /// HS `capitalize` (Predicate.hs:39-43, see line 42): upper-case the first character.

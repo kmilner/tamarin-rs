@@ -709,7 +709,6 @@ fn unfold_one_rule_variants(o: &OpenProtoRule) -> Vec<OpenProtoRule> {
                 variant_substs: vec![LNSubstVFresh::empty()],
                 abstracted_rule: None,
                 loop_breakers: o.loop_breakers.clone(),
-                unfolded_variant: true,
                 // `toClosedProtoRule` keeps the ORIGINAL rule as every
                 // variant's `cprRuleE` (lib/theory/src/Rule.hs:75-76) — the
                 // half `getProtoRuleEs` dedups back to one copy.
@@ -725,46 +724,24 @@ fn unfold_one_rule_variants(o: &OpenProtoRule) -> Vec<OpenProtoRule> {
 
 /// HS `unfoldRules items` (CloseRule.hs:106-110) over the paired
 /// parsed/elaborated theories: replace every closed rule whose AC variant is
-/// non-trivial (`isTrivialProtoVariantAC`, shared with the renderer as
-/// `pretty_theory::is_trivial_proto_variant_ac`) by its per-variant rules
-/// ([`unfold_one_rule_variants`]); trivial-variant rules stay unchanged, so
-/// the pass is the identity on a theory whose variants are all trivial.
+/// non-trivial (`isTrivialProtoVariantAC`, Theory/Model/Rule.hs:789-793) by
+/// its per-variant rules ([`unfold_one_rule_variants`]); trivial-variant
+/// rules stay unchanged, so the pass is the identity on a theory whose
+/// variants are all trivial.
 ///
-/// BOTH item lists are rewritten in place, mirroring what
-/// `mergeOpenProtoRules` + `prettyOpenProtoRuleAsClosedRule` make of the
-/// unfolded items at render time (OpenTheory.hs:592-606, 827-851):
-///  * ONE variant — the merge yields `OpenProtoRule ruE [ruAC]`, rendered
-///    `prettyProtoRuleACasE ruAC` (the AC body under the `___VARIANT_1`
-///    name, as if modulo E) — so the parsed slot is REPLACED by the rule
-///    regenerated from the variant's LN body (`proto_rule_to_parsed`, as
-///    the partial-evaluation splice does).
-///  * TWO OR MORE variants — the merge groups them back under their shared
-///    `cprRuleE` and renders `prettyProtoRuleE ruE` + a ` variants` block
-///    of `rule (modulo AC)` sub-blocks (OpenTheory.hs:845-851) — so the
-///    parsed slot KEEPS the original display rule and parks the regenerated
-///    variant bodies in its `variants` field
-///    (`pretty_theory::render_unfolded_variants_block` renders them).
-///
-/// Either way the renderer's positional `(name, occurrence)` pairing
-/// (`pretty_theory::pair_elaborated_rules`) stays aligned.  A parsed
-/// leftover with no elaborated counterpart (the no-variant drop, run.rs)
-/// keeps its slot and keeps rendering as nothing.
+/// BOTH item lists are rewritten in place.  The elaborated one is what the
+/// printer walks, through `mergeOpenProtoRules` +
+/// `prettyOpenProtoRuleAsClosedRule` (OpenTheory.hs:592-603, 826-850): one
+/// variant renders as `prettyProtoRuleACasE` (the AC body under the
+/// `___VARIANT_1` name, as if modulo E), two or more group back under their
+/// shared `cprRuleE` into a ` variants` block of `rule (modulo AC)`
+/// sub-blocks.  The parsed list is rewritten the same way — replacing the
+/// slot for a single variant, parking the regenerated bodies in the display
+/// rule's `variants` field for several — so the two stay aligned by
+/// `(name, occurrence)` for the passes that still read it.
 ///
 /// Returns `true` iff any rule was unfolded.
 fn unfold_rule_variants(parsed: &mut p::Theory, elaborated: &mut crate::theory::Theory) -> bool {
-    let macros = crate::pretty_theory::collect_macros(parsed);
-    let arity1 = crate::elaborate::arity1_noeq_names(elaborated.signature.maude_sig());
-
-    // Parsed display rules grouped by name in item order: the k-th parsed
-    // rule named N displays the k-th elaborated rule named N
-    // (`pair_elaborated_rules`' invariant).
-    let mut parsed_by_name: tamarin_utils::FastMap<&str, Vec<&p::Rule>> = Default::default();
-    for item in &parsed.items {
-        if let p::TheoryItem::Rule(r) = item {
-            parsed_by_name.entry(r.name.as_str()).or_default().push(r);
-        }
-    }
-
     // Decision pass over the elaborated rules in item order: one entry per
     // rule item (`None` = trivial, keep).  `parsed_repl` keys the
     // regenerated parsed rules by the same (name, occurrence) the rewrite
@@ -787,22 +764,13 @@ fn unfold_rule_variants(parsed: &mut p::Theory, elaborated: &mut crate::theory::
             *c += 1;
             k
         };
-        // HS tests `isTrivialProtoVariantAC ruAC ruE` with `ruE` = the
-        // original (display) rule; the parsed item is RS's display half.
-        // An elaborated rule nothing displays degenerates to the
-        // machinery-only test — synthesise the display from the elaborated
-        // body, on which the macro check is inert.
-        let trivial = match parsed_by_name.get(name.as_str()).and_then(|g| g.get(k)) {
-            Some(pr) => {
-                let (dp, da, dc) = crate::pretty_theory::display_fact_rows(pr, &arity1);
-                crate::pretty_theory::is_trivial_proto_variant_ac(&dp, &da, &dc, o, &macros)
-            }
-            None => {
-                let pr = crate::elaborate::proto_rule_to_parsed(&o.rule);
-                let (dp, da, dc) = crate::pretty_theory::display_fact_rows(&pr, &arity1);
-                crate::pretty_theory::is_trivial_proto_variant_ac(&dp, &da, &dc, o, &macros)
-            }
-        };
+        // HS `isTrivialProtoVariantAC ruAC ruE` over the closed rules the item
+        // closes into (lib/theory/src/Rule.hs:82-86): a rule declaring its own
+        // `variants (modulo AC)` blocks yields one closed rule per block, and
+        // the item is left alone when every one of them is trivial.
+        let trivial = crate::theory::closed_rules_ac(o)
+            .iter()
+            .all(|ac| crate::rule::is_trivial_proto_variant_ac(ac, o.rule_e()));
         if trivial {
             elab_repl.push(None);
             continue;
@@ -1138,7 +1106,10 @@ mod tests {
             .collect();
         expect.push("TR".to_string());
         assert_eq!(names, expect);
-        let variants: Vec<&OpenProtoRule> = elab.rules().filter(|r| r.unfolded_variant).collect();
+        let variants: Vec<&OpenProtoRule> = elab
+            .rules()
+            .filter(|r| r.name().starts_with("NT___VARIANT_"))
+            .collect();
         assert_eq!(variants.len(), substs.len());
         for v in &variants {
             // `Disj [emptySubstVFresh]` + carried breakers + the ORIGINAL

@@ -49,9 +49,16 @@
 //! ```
 //!
 //! Each top-level item is separated by a blank line (HS uses `vsep`).
+//!
+//! HS's `prettyTheory` (TheoryObject.hs:747-783) is one function taking five
+//! injected printers; here its ITEM half is [`pretty_theory_items`] and its
+//! header/footer half is spelled out once in [`pretty_closed_theory`] and once
+//! in `open_theory_blocks`.  The two assemblies differ in `ppSig`/`ppCache`
+//! and in the trailing wellformedness / `Generated from:` / `end` handling,
+//! and each is about thirty lines, so they stay apart.
 
 use crate::pretty_formula as pf;
-use crate::theory::Theory;
+use crate::theory::{Theory, TheoryItem, TranslationElement};
 use tamarin_parser::ast as p;
 use tamarin_term::pretty::pretty_nterm;
 
@@ -245,33 +252,33 @@ pub fn pretty_goal_rankings(raw: &str, in_file: &str) -> String {
 
 // =============================================================================
 
-/// Render the analyzed theory in HS's `prettyClosedTheory` shape.
+/// Render the analyzed theory in HS's `prettyClosedTheory` shape
+/// (ClosedTheory.hs:381-418#prettyClosedTheory).
 pub fn pretty_closed_theory(
-    parsed: &p::Theory,
-    elaborated: &Theory,
+    thy: &Theory,
     proved: &[ProvedLemma],
     wf_block: &str,
     build: &BuildInfo,
     in_file: &str,
-    auto_sources: bool,
 ) -> String {
     let mut out = String::new();
 
-    // HS `prettyTheory` (TheoryObject.hs:741-756):
+    // HS `prettyTheory` (TheoryObject.hs:747-783):
     //   vsep [ kwTheoryName name
     //        , ...configBlocks...  (filter isConfigBlock thyItems, before begin)
     //        , kwTheoryBegin, ... ]
-    // ConfigBlocks: `prettyConfigBlock cb = text "configuration: " <> doubleQuotes (text cb)`
-    // RS stores the configuration string directly in `parsed.configuration`.
     out.push_str("theory ");
-    out.push_str(&elaborated.name);
-    if let Some(cfg) = &parsed.configuration {
-        // HS: `text "configuration: " <> doubleQuotes (text cb)`
-        // = `configuration: "<cb>"`
-        // Emitted via vsep (blank-line separated from theory name and begin).
-        out.push_str("\n\nconfiguration: \"");
-        out.push_str(cfg);
-        out.push('"');
+    out.push_str(&thy.name);
+    for item in &thy.items {
+        if let TheoryItem::ConfigBlock(cfg) = item {
+            // HS `prettyConfigBlock cb = text "configuration: " <>
+            // doubleQuotes (text cb)` (TheoryObject.hs:921-922), emitted via
+            // `vsep` and so blank-line separated from the theory name and
+            // from `begin`.
+            out.push_str("\n\nconfiguration: \"");
+            out.push_str(cfg);
+            out.push('"');
+        }
     }
     out.push_str("\n\nbegin\n\n");
 
@@ -280,29 +287,29 @@ pub fn pretty_closed_theory(
 
     // builtins / functions / equations — render_signature already ends
     // with a trailing '\n' after each line so we don't add another here.
-    out.push_str(&render_signature(&elaborated.signature.maude_sig));
+    out.push_str(&render_signature(&thy.signature.maude_sig));
 
-    // HS `prettyTheory` (TheoryObject.hs:741-751) emits, between the
+    // HS `prettyTheory` (TheoryObject.hs:756-768) emits, between the
     // signature and the cache block, in this order:
     //   - `vcat $ map prettyTactic thyT` (only if non-empty tactics)
     //   - `heuristic: <ranking>` line (only if non-empty heuristic)
     //   - `ppCache` (the "looping facts with injective instances" comment).
     // `vsep` separates each non-empty element with a blank line.
     // Mirror that here.
-    if !elaborated.tactic.is_empty() {
+    if !thy.tactic.is_empty() {
         // `vcat $ map prettyTactic thyT`: tactics joined by a single
         // newline (no blank line between them).
-        let blocks: Vec<String> = elaborated.tactic.iter().map(|t| t.render()).collect();
+        let blocks: Vec<String> = thy.tactic.iter().map(|t| t.render()).collect();
         out.push('\n');
         out.push_str(&blocks.join("\n"));
         out.push('\n');
     }
-    if !elaborated.heuristic.is_empty() {
+    if !thy.heuristic.is_empty() {
         // HS `TheoryObject.hs:756-768, see line 764`: `text "heuristic: " <> text (prettyGoalRankings thyH)`
         // where `prettyGoalRankings = unwords . map prettyGoalRanking` (System.hs:706-707).
         // Each ranking in the Vec is a raw heuristic string; join their expansions with a
         // space.  (In practice there is only one `heuristic:` item per theory.)
-        let rendered: Vec<String> = elaborated
+        let rendered: Vec<String> = thy
             .heuristic
             .iter()
             .map(|raw| pretty_goal_rankings(raw, in_file))
@@ -312,60 +319,53 @@ pub fn pretty_closed_theory(
         out.push_str(&rendered.join(" "));
         out.push('\n');
     }
-    let inj_block = render_injective_fact_insts(elaborated);
+    let inj_block = render_injective_fact_insts(thy);
     if !inj_block.is_empty() {
         out.push('\n');
         out.push_str(&inj_block);
         out.push('\n');
     }
 
-    // Iterate parsed.items, mapping to elaborated entities where needed.
-    // HS preserves source order via vsep over `thyItems`.  Each item is
-    // separated from the previous block by a blank line.
-    //
-    // HS-parallel: `lib/theory/src/TheoryObject.hs:747-783, see line 759,767`
-    //   `parMap rdeepseq ppItem (theoryItems thy)` (and `OpenTheory.hs:902-940, see line 914,926`).
-    // HS evaluates each item's `Doc` in parallel; the final `vsep`
-    // (sequential concatenation) preserves source order.  We mirror via
-    // rayon `par_iter().collect()` — parallel per-item render, sequential
-    // string append.
-    use rayon::prelude::*;
-    // Collect macros once (mirrors HS `closeProtoRule`, which applies them to
-    // every rule of the closing theory, lib/theory/src/Rule.hs:82-86).
-    // Computed here (not per item) so it is not re-collected and cloned for
-    // every theory item.
-    let macros: Vec<p::Macro> = collect_macros(parsed);
-    // Names of arity-1 NoEq function symbols.  Depends only on the
-    // (immutable) elaborated signature, so compute it once here and thread
-    // it through to every per-item renderer rather than recomputing (and
-    // re-cloning the signature) for each rule/lemma/restriction/predicate.
-    let arity1 = arity1_noeq_names(elaborated);
-    // HS `prettyClosedTheory` (ClosedTheory.hs:382-418, see line 383) switches the WHOLE theory
-    // to the open-as-closed renderer when `containsManualRuleVariants` holds,
-    // which suppresses loop-breaker comments on trivial-AC-variant rules.
-    let manual_variants = contains_manual_rule_variants(parsed, elaborated, auto_sources);
-    // Positional `(name, occurrence)` pairing of each parsed rule item with
-    // its elaborated counterpart — see `pair_elaborated_rules`.
-    let elab_rules = pair_elaborated_rules(&parsed.items, elaborated);
-    let rendered: Vec<Option<String>> = parsed
-        .items
-        .par_iter()
-        .enumerate()
-        .map(|(idx, item)| {
-            render_parsed_item(
-                item,
-                elab_rules[idx],
-                &macros,
-                elaborated,
-                proved,
+    // HS `prettyClosedTheory` (ClosedTheory.hs:383-402) renders the merged
+    // rule items through `prettyOpenProtoRuleAsClosedRule` when some of them
+    // carries an AC rule of its own, and the closed items through
+    // `prettyClosedProtoRule` otherwise.
+    let proof = |lem: &crate::theory::Lemma| match proved
+        .iter()
+        .find(|p| p.name == lem.name)
+        .and_then(|p| p.proof_body.as_ref())
+    {
+        Some(b) => b.clone(),
+        None => "by sorry".to_string(),
+    };
+    // HS `emptyString` (lib/theory/src/Pretty.hs:24-25) as `ppSap`
+    // (ClosedTheory.hs:390, :398).
+    let translation = |_: &TranslationElement| String::new();
+    let merged = crate::theory::merge_open_proto_rules(&thy.items);
+    let blocks = if crate::theory::contains_manual_rule_variants(&merged) {
+        pretty_theory_items(
+            &merged,
+            &ItemPrinters {
+                rule: &|r| crate::rule::pretty_open_proto_rule_as_closed_rule(r).render(),
+                proof: &proof,
+                translation: &translation,
                 in_file,
-                &arity1,
-                manual_variants,
-                auto_sources,
-            )
-        })
-        .collect();
-    for b in rendered.into_iter().flatten() {
+            },
+        )
+    } else {
+        pretty_theory_items(
+            &crate::theory::close_proto_rules(&thy.items),
+            &ItemPrinters {
+                rule: &|r: &crate::theory::ClosedProtoRule| {
+                    crate::rule::pretty_closed_proto_rule(&r.rule_ac, &r.rule_e).render()
+                },
+                proof: &proof,
+                translation: &translation,
+                in_file,
+            },
+        )
+    };
+    for b in blocks {
         out.push('\n');
         out.push_str(&b);
         out.push('\n');
@@ -386,6 +386,88 @@ pub fn pretty_closed_theory(
     out.push_str("\nend\n");
 
     out
+}
+
+// =============================================================================
+// The theory item fold (HS `prettyTheory`, TheoryObject.hs:747-783)
+// =============================================================================
+
+/// The printers HS's `prettyTheory` (TheoryObject.hs:747-783) injects that
+/// reach a theory ITEM.  `ppSig` and `ppCache` are applied to the header, so
+/// they stay with the two header assemblies.
+///
+/// HS applies `ppPrf` to the lemma's own proof; RS's closed print takes the
+/// proof body from the prover's result list instead, so the slot is handed
+/// the whole lemma.
+pub struct ItemPrinters<'a, R> {
+    /// HS `ppRule`.
+    pub rule: &'a (dyn Fn(&R) -> String + Sync),
+    /// HS `ppPrf`, the body `prettyLemma` puts under the lemma
+    /// (lib/theory/src/Lemma.hs:116-141, see line 130).
+    pub proof: &'a (dyn Fn(&crate::theory::Lemma) -> String + Sync),
+    /// HS `ppSap`.
+    pub translation: &'a (dyn Fn(&TranslationElement) -> String + Sync),
+    /// The theory's file name, which a `heuristic=` lemma attribute needs to
+    /// resolve a bare `o`/`O` ranking's default oracle (`defaultOracleNames`,
+    /// System.hs:551-561).
+    pub in_file: &'a str,
+}
+
+/// HS `parMap rdeepseq ppItem (filter (not . isConfigBlock) (thyItems thy))`
+/// (TheoryObject.hs:767): one rendered block per item, in source order.  HS's
+/// `vsep` is `foldr ($--$) emptyDoc` over those blocks and `$--$` drops an
+/// empty operand (Theory/Text/Pretty.hs:83-84), so an item that renders
+/// nothing contributes no block and no blank line.
+pub fn pretty_theory_items<R: Sync>(
+    items: &[TheoryItem<R, crate::theory::ProofSkeleton, TranslationElement>],
+    pp: &ItemPrinters<'_, R>,
+) -> Vec<String> {
+    use rayon::prelude::*;
+    items
+        .par_iter()
+        .map(|item| pretty_theory_item(item, pp))
+        .filter(|b| !b.is_empty())
+        .collect()
+}
+
+/// HS `ppItem = foldTheoryItem ppRule prettyRestriction (prettyLemma ppPrf)
+/// (uncurry prettyFormalComment) prettyConfigBlock prettyPredicate
+/// prettyMacros ppSap` (TheoryObject.hs:772-781).  The config blocks are
+/// printed before `begin` (TheoryObject.hs:759), so the item stream skips
+/// them.
+fn pretty_theory_item<R>(
+    item: &TheoryItem<R, crate::theory::ProofSkeleton, TranslationElement>,
+    pp: &ItemPrinters<'_, R>,
+) -> String {
+    match item {
+        TheoryItem::Rule(r) => (pp.rule)(r),
+        TheoryItem::Restriction(r) => pretty_restriction(r),
+        TheoryItem::Lemma(l) => pretty_lemma(l, &(pp.proof)(l), pp.in_file),
+        TheoryItem::Text(fc) => pretty_formal_comment(fc),
+        TheoryItem::ConfigBlock(_) => String::new(),
+        TheoryItem::Predicate(pr) => pretty_predicate(pr),
+        TheoryItem::Macros(ms) => pretty_macros(ms),
+        TheoryItem::Translation(t) => (pp.translation)(t),
+    }
+}
+
+/// HS `prettyFormalComment` (lib/theory/src/Pretty.hs:19-21):
+///
+/// ```haskell
+/// prettyFormalComment ""     body = multiComment_ [body]
+/// prettyFormalComment header body = text $ header ++ "{*" ++ body ++ "*}"
+/// ```
+///
+/// A user `section{* .. *}` / `text{* .. *}` item always carries a non-empty
+/// header; the empty one only arises from a machine-injected comment
+/// (`addComment`).
+fn pretty_formal_comment(fc: &crate::theory::FormalComment) -> String {
+    let (header, body) = fc;
+    if header.is_empty() {
+        format!("/*\n{}\n*/", body)
+    } else {
+        format!("{}{{*{}*}}", header, body)
+    }
 }
 
 // =============================================================================
@@ -835,7 +917,7 @@ fn render_open_item(
             let header = if al.attributes.is_empty() {
                 kw.beside_sp(name_doc).beside(Doc::text(":"))
             } else {
-                let attr_docs: Vec<Doc> = lemma_attr_docs(&al.attributes, in_file);
+                let attr_docs: Vec<Doc> = parsed_lemma_attr_docs(&al.attributes, in_file);
                 let attrs_fsep = hpj::fsep(hpj::punctuate(Doc::text(","), attr_docs));
                 let brackets = Doc::text("[").beside(attrs_fsep).beside(Doc::text("]"));
                 kw.beside_sp(name_doc)
@@ -875,7 +957,7 @@ fn render_open_item(
 // std kept (byte-inert) — iteration order never reaches output.
 #[allow(clippy::disallowed_types)]
 fn render_open_rule(parsed_rule: &p::Rule, arity1: &std::collections::HashSet<String>) -> String {
-    let (mut out, _, _, _) = render_rule_e_block(parsed_rule, arity1);
+    let mut out = render_rule_e_block(parsed_rule, arity1);
     if !parsed_rule.variants.is_empty() {
         // Manual in-rule variants (`protoRule`'s `symbol "variants" *>
         // commaSep1 protoRuleAC`, Parser/Rule.hs:130-135).  Absent from the
@@ -888,7 +970,7 @@ fn render_open_rule(parsed_rule: &p::Rule, arity1: &std::collections::HashSet<St
             if i > 0 {
                 out.push_str("\n  ,");
             }
-            let (vblock, _, _, _) = render_rule_e_block(v, arity1);
+            let vblock = render_rule_e_block(v, arity1);
             let vblock = vblock.replacen("rule (modulo E)", "rule (modulo AC)", 1);
             for line in vblock.lines() {
                 out.push_str("\n  ");
@@ -924,9 +1006,10 @@ fn render_open_lemma(
             &expand_predicates_for_display(&lem.formula, predicates, msig),
             arity1,
         ));
-    let mut out = render_lemma_head(
-        lem,
-        in_file,
+    let mut out = lemma_head(
+        &lem.name,
+        parsed_lemma_attr_docs(&lem.attributes, in_file),
+        quantifier_keyword(&lem.trace_quantifier),
         pf::formula_doc(&header_formula),
         &render_open_guarded_block(lem, predicates, arity1, msig),
     );
@@ -951,7 +1034,9 @@ fn render_open_lemma(
 /// `liftedExpandRestriction` at parse, macro calls intact), the safety check
 /// runs on that same formula, and the `case ogFormula of Just _ →
 /// /* expanded formula: */` block is skipped.  Oracle-verified: `--parse-only`
-/// prints a macro-using restriction without the expanded block.
+/// prints a macro-using restriction without the expanded block.  No attribute
+/// list is printed: HS's restriction parser accepts none
+/// (`restriction`, Theory/Text/Parser/Restriction.hs:77-81).
 // arity-1 no-eq function-name set; membership-only (.contains), never iterated;
 // std kept (byte-inert) — iteration order never reaches output.
 #[allow(clippy::disallowed_types)]
@@ -972,7 +1057,6 @@ fn render_open_restriction(
     out.push_str(&keyword_("restriction").render());
     out.push(' ');
     out.push_str(&r.name);
-    render_restriction_attributes(&r.attributes, &mut out);
     out.push_str(":\n");
     out.push_str(&pf::formula_doublequoted_nested(&original, 2));
     if is_safety_formula_parsed(&original, msig) {
@@ -1091,61 +1175,38 @@ pub fn web_pretty_source_header(
     hpj::hsep(vec![left, right]).render()
 }
 
-/// Collect the theory's macro declarations in source order (mirrors HS
-/// `applyMacroInRestriction` / `parseLemmaWithMacros`).
-pub(crate) fn collect_macros(parsed: &p::Theory) -> Vec<p::Macro> {
-    parsed
-        .items
-        .iter()
-        .filter_map(|i| {
-            if let p::TheoryItem::Macros(ms) = i {
-                Some(ms.as_slice())
-            } else {
-                None
-            }
-        })
-        .flatten()
-        .cloned()
-        .collect()
-}
-
-/// HS `prettyClosedProtoRule` over `theoryRules thy` (Web/Theory.hs:887-917, see line 894,898) —
-/// one rendered rule string per user protocol rule, in source order.  Reuses
-/// `render_rule` (the `--prove` theory-body rule printer) with the same
-/// macro/arity1/manual-variant setup `pretty_closed_theory` uses.
-pub fn web_proto_rules(parsed: &p::Theory, elaborated: &Theory) -> Vec<String> {
-    let macros = collect_macros(parsed);
-    let arity1 = arity1_noeq_names(elaborated);
-    let manual_variants = contains_manual_rule_variants(parsed, elaborated, false);
-    // Same positional `(name, occurrence)` pairing as `pretty_closed_theory`
-    // — see `pair_elaborated_rules`.
-    let elab_rules = pair_elaborated_rules(&parsed.items, elaborated);
-    parsed
-        .items
-        .iter()
-        .enumerate()
-        .filter_map(|(idx, item)| match item {
-            p::TheoryItem::Rule(r) => elab_rules[idx]
-                .map(|er| render_rule(r, er, &macros, &arity1, manual_variants, false)),
-            _ => None,
+/// HS `rulesSnippet`'s `map prettyClosedProtoRule protoRules`
+/// (Web/Theory.hs:892-904, see line 900) — one rendered rule string per
+/// closed protocol rule, in source order, for the interactive `main/rules`
+/// page.
+pub fn web_proto_rules(thy: &Theory) -> Vec<String> {
+    thy.rules()
+        .flat_map(|r| {
+            crate::theory::closed_rules_ac(r)
+                .into_iter()
+                .map(|ac| crate::rule::pretty_closed_proto_rule(&ac, r.rule_e()).render())
+                .collect::<Vec<_>>()
         })
         .collect()
 }
 
-/// HS `prettyRestriction` over `theoryRestrictions thy` (Web/Theory.hs:887-917, see line 895) —
-/// one rendered restriction string per restriction, in source order.  Reuses
-/// `render_parsed_restriction` (the `--prove` theory-body restriction printer).
-pub fn web_restrictions(parsed: &p::Theory, elaborated: &Theory) -> Vec<String> {
-    parsed
-        .items
-        .iter()
-        .filter_map(|item| match item {
-            p::TheoryItem::Restriction(r) | p::TheoryItem::LegacyAxiom(r) => {
-                render_parsed_restriction(r, elaborated)
-            }
-            _ => None,
-        })
-        .collect()
+/// HS `rulesSnippet`'s `vsep $ map prettyRestriction $ theoryRestrictions thy`
+/// (Web/Theory.hs:892-904, see line 901) — one rendered restriction string
+/// per restriction, in source order.
+pub fn web_restrictions(thy: &Theory) -> Vec<String> {
+    thy.restrictions().map(pretty_restriction).collect()
+}
+
+/// HS `rulesSnippet`'s first `ppWithHeader "Macros"`
+/// (Web/Theory.hs:892-904, see line 895-897): the `macros:` block, or nothing
+/// at all when the theory declares none.
+pub fn web_macros(thy: &Theory) -> Option<String> {
+    let macros: Vec<crate::theory::LNMacro> = thy.macros().cloned().collect();
+    if macros.is_empty() {
+        None
+    } else {
+        Some(pretty_macros(&macros))
+    }
 }
 
 /// Render HS `ppInjectiveFactInsts` (ClosedTheory.hs:413-418):
@@ -1932,184 +1993,6 @@ fn sep_block_with_lead(
 }
 
 // =============================================================================
-// Item dispatch
-// =============================================================================
-
-/// Pair every parsed theory item with its elaborated rule, keyed by
-/// `(name, occurrence-ordinal)` rather than by name alone — `None` for a
-/// non-rule item and for a parsed rule with no elaborated counterpart.
-///
-/// One pass groups the elaborated rules by name (in theory order); the
-/// occurrence ordinal of a parsed rule item among the earlier rule items of
-/// the same name indexes straight into its group.
-///
-/// INVARIANT: for every rule name `N`, the k-th parsed rule item named `N`
-/// corresponds to the k-th elaborated rule named `N`.
-/// * Without partial evaluation rule names are unique (duplicates are a
-///   parse error), so the ordinal is always 0 and this is exactly a
-///   name-keyed lookup — including the no-variant drop (run.rs), which
-///   removes a rule from the elaborated theory only: its parsed leftover
-///   has zero elaborated occurrences and is not rendered.
-/// * After `apply_partial_evaluation` names can repeat (one rule refining
-///   into several); both item lists are then regenerated 1:1 from the same
-///   refined-rule list in the same order, so same-name groups align
-///   positionally.  A pass that drops refined rules from only ONE of the
-///   two lists would break this alignment — drop from both, or not at all.
-/// * After the auto-sources unfold (`auto_sources::unfold_rule_variants`) a
-///   single-variant slot is regenerated 1:1 under its `___VARIANT_1` name
-///   on both sides, while a MULTI-variant slot keeps the original parsed
-///   rule (variant bodies parked in its `variants` field) against several
-///   elaborated `___VARIANT_<i>` rules — that slot pairs with its first
-///   variant via the fallback below.
-fn pair_elaborated_rules<'a>(
-    items: &[p::TheoryItem],
-    elab: &'a Theory,
-) -> Vec<Option<&'a crate::theory::OpenProtoRule>> {
-    let mut by_name: tamarin_utils::FastMap<&str, Vec<&'a crate::theory::OpenProtoRule>> =
-        Default::default();
-    for er in elab.rules() {
-        by_name.entry(er.name()).or_default().push(er);
-    }
-    let mut counts: tamarin_utils::FastMap<&str, usize> = Default::default();
-    items
-        .iter()
-        .map(|item| match item {
-            p::TheoryItem::Rule(r) => {
-                let c = counts.entry(r.name.as_str()).or_default();
-                let occ = *c;
-                *c += 1;
-                by_name
-                    .get(r.name.as_str())
-                    .and_then(|group| group.get(occ))
-                    .copied()
-                    .or_else(|| {
-                        // Merged-display slot of a multi-variant auto-sources
-                        // unfold (`unfold_rule_variants` parked the variant
-                        // bodies in `r.variants` and no elaborated rule keeps
-                        // the original name): anchor the slot to its k-th
-                        // `___VARIANT_1` rule — every variant of one unfold
-                        // carries the same loop breakers, so one anchor
-                        // suffices for `render_unfolded_variants_block`.
-                        if r.variants.is_empty() {
-                            return None;
-                        }
-                        let vname = format!("{}___VARIANT_1", r.name);
-                        by_name
-                            .get(vname.as_str())
-                            .and_then(|group| group.get(occ))
-                            .copied()
-                            .filter(|er| er.unfolded_variant)
-                    })
-            }
-            _ => None,
-        })
-        .collect()
-}
-
-#[allow(clippy::too_many_arguments)]
-// arity-1 no-eq function-name set; membership-only (.contains), never iterated;
-// std kept (byte-inert) — iteration order never reaches output.
-#[allow(clippy::disallowed_types)]
-fn render_parsed_item(
-    item: &p::TheoryItem,
-    elab_rule: Option<&crate::theory::OpenProtoRule>,
-    macros: &[p::Macro],
-    elab: &Theory,
-    proved: &[ProvedLemma],
-    in_file: &str,
-    arity1: &std::collections::HashSet<String>,
-    manual_variants: bool,
-    auto_sources: bool,
-) -> Option<String> {
-    use p::TheoryItem::*;
-    // `macros` is collected once by the caller (mirrors HS
-    // `applyMacroInRestriction` + `parseLemmaWithMacros`, which store the
-    // expanded formula separately from the original).
-    match item {
-        Builtins(_) | Functions(_) | Equations { .. } | Options(_) | Heuristic(_) | Tactic(_) => {
-            // These are absorbed into the signature/configuration headers.
-            None
-        }
-        Rule(r) => {
-            // HS closeProtoRule (lib/theory/src/Rule.hs:82-86, see line 84): `ClosedProtoRule ruE <$>
-            // maybeToList (variantsProtoRule hnd ruE)` — a rule with no
-            // variants yields NO closed rule, so it is absent from the
-            // closed theory and never rendered.  Such rules are removed
-            // from the elaborated theory in run.rs; mirror the absence here.
-            // The lookup is positional (`(name, occurrence)`) because
-            // partial evaluation makes rule names non-unique.
-            elab_rule.map(|er| {
-                // Merged display of a multi-variant auto-sources unfold: the
-                // paired rule is the slot's FIRST `___VARIANT_<i>` rule (see
-                // `pair_elaborated_rules`), and the variant bodies live in
-                // `r.variants` — HS's `prettyProtoRuleE ruE` + ` variants`
-                // block (`prettyOpenProtoRuleAsClosedRule`'s merged branch,
-                // OpenTheory.hs:845-851).
-                if er.unfolded_variant && !r.variants.is_empty() {
-                    render_unfolded_variants_block(r, er, arity1)
-                } else {
-                    render_rule(r, er, macros, arity1, manual_variants, auto_sources)
-                }
-            })
-        }
-        IntrRule(_) => None,
-        Lemma(l) => render_parsed_lemma(l, proved, in_file, elab),
-        // HS treats the deprecated `axiom` keyword as a synonym for
-        // `restriction` (`liftedAddRestriction`; the legacy `axiom`/`Axiom` is
-        // parsed and rendered as a `restriction`). RS already elaborates
-        // `LegacyAxiom` as a restriction for solving; render it the same so the
-        // deprecated-`axiom` blocks (e.g. the thesis-evoting auth models) emit
-        // their `restriction <name>:` blocks instead of being dropped.
-        Restriction(r) | LegacyAxiom(r) => render_parsed_restriction(r, elab),
-        Predicates(preds) => {
-            // HS `prettyTheory` folds each `PredicateItem` through
-            // `prettyPredicate` (TheoryObject.hs:732-768, see line 764, 802-806):
-            //   prettyPredicate p = kwPredicate <> colon <-> text (factstr ++ "<=>" ++ formulastr)
-            //     factstr    = render $ prettyFact prettyLVar (pFact p)
-            //     formulastr = render $ prettyLNFormula      (pFormula p)
-            // `kwPredicate = keyword_ "predicate"`, `<>` is no-space append and
-            // `<->` is beside-with-space, so each predicate renders on its own
-            // line as `predicate: <fact><=><formula>`.
-            // Each `predicate` in a `predicates:` block is added as a SEPARATE
-            // `PredicateItem` in HS (commaSep1 + foldM liftedAddPredicate,
-            // Parser/Signature.hs:267-268), so the theory `vsep` separates them
-            // with a blank line.  The Rust parser groups them into one
-            // `Predicates` item, so we reproduce that blank-line separation by
-            // joining the per-predicate lines with `\n\n`.
-            if preds.is_empty() {
-                return None;
-            }
-            let lines: Vec<String> = preds
-                .iter()
-                .map(|pr| render_predicate(pr, arity1))
-                .collect();
-            Some(lines.join("\n\n"))
-        }
-        Macros(macros) => {
-            if macros.is_empty() {
-                return None;
-            }
-            Some(render_parsed_macros(macros))
-        }
-        FormalComment { header, body } => {
-            // HS `prettyFormalComment` (lib/theory/src/Pretty.hs:19-21):
-            //   prettyFormalComment ""     body = multiComment_ [body]
-            //   prettyFormalComment header body = text $ header ++ "{*" ++ body ++ "*}"
-            // User `section{* .. *}` / `text{* .. *}` items always carry a
-            // non-empty header, so they render verbatim as
-            // `header{*body*}`.  (An empty header only arises from
-            // machine-injected comments via `addComment`.)
-            if header.is_empty() {
-                Some(format!("/*\n{}\n*/", body))
-            } else {
-                Some(format!("{}{{*{}*}}", header, body))
-            }
-        }
-        _ => None,
-    }
-}
-
-// =============================================================================
 // Rule
 // =============================================================================
 
@@ -2121,123 +2004,6 @@ fn render_parsed_item(
 #[allow(clippy::disallowed_types)]
 fn arity1_noeq_names(elab: &Theory) -> std::collections::HashSet<String> {
     crate::elaborate::arity1_noeq_names(elab.signature.maude_sig())
-}
-
-/// HS `openProtoRule` (lib/theory/src/Rule.hs:52-59) returns `OpenProtoRule ruE ruleAC`
-/// where `ruleAC = []` iff `equalUpToTerms cprRuleAC cprRuleE` (i.e. the
-/// closed rule's AC and E forms agree on fact TAGS + lengths,
-/// Theory/Model/Rule.hs:887-895), else `ruleAC = [cprRuleAC]`.
-///
-/// `containsManualRuleVariants` (OpenTheory.hs:584-589) is True iff some
-/// (merged) rule has a non-empty `ruleAC` — i.e. some rule's `openProtoRule`
-/// yields the `[cprRuleAC]` branch.  `prettyClosedTheory`
-/// (ClosedTheory.hs:382-418, see line 383) uses that to switch the WHOLE theory to the
-/// "open-as-closed" renderer `prettyOpenProtoRuleAsClosedRule`
-/// (OpenTheory.hs:827-851), which — for the `OpenProtoRule ruE []` (empty)
-/// branch — emits NO `prettyLoopBreakers` line ("cannot show loop breakers
-/// here, as we do not have the information"), whereas the
-/// `OpenProtoRule _ [ruAC]` (non-empty) branch KEEPS the loop breakers.
-///
-/// This predicate is RS's per-rule mirror of "would `openProtoRule` yield a
-/// non-empty `ruleAC`":
-///   * Manual variants: a parsed `variants (modulo AC)` block on the input
-///     rule produces `OpenProtoRule ruE (non-empty)` directly — always
-///     counts, with or without `--auto-sources`.
-///   * Unfolded VARIANT rules (`unfoldRuleVariants`, lib/theory/src/Rule.hs:63-79,
-///     applied by the `--auto-sources` close): the AC name gains the
-///     `___VARIANT_<i>` suffix while `cprRuleE` keeps the original, so
-///     `equalUpToTerms` is False on the name alone → non-empty `ruleAC`.
-///   * `--auto-sources`: `closeTheoryWithMaude` adds the synthetic
-///     `AUTO_IN_*`/`AUTO_OUT_*` action facts to `cprRuleAC` ONLY (NOT
-///     `cprRuleE` — `addActionClosedProtoRule`, lib/theory/src/Rule.hs:97-99), so an
-///     AUTO-annotated rule has AC ≠ E up to fact tags → `equalUpToTerms`
-///     False → non-empty `ruleAC`.  AC-variant substitution itself never
-///     changes a fact's TAG, so the AUTO action is the only operation that
-///     makes `equalUpToTerms` False here; "the elaborated rule carries an
-///     `AUTO_*` action" is therefore exactly the auto-path discriminant.
-///
-/// Used both to compute the theory-level gate (OR over all rules) and, in
-/// `render_rule`, to decide whether a trivial-AC-variant rule keeps or drops
-/// its loop-breaker comment under the open renderer.
-fn rule_open_ac_nonempty(
-    parsed_rule: &p::Rule,
-    elab_rule: Option<&crate::theory::OpenProtoRule>,
-    auto_sources: bool,
-) -> bool {
-    // Manual `variants (modulo AC)` block on the input rule.
-    if !parsed_rule.variants.is_empty() {
-        return true;
-    }
-    // An unfolded VARIANT rule (auto-sources `unfoldRuleVariants`,
-    // lib/theory/src/Rule.hs:63-79): its AC name (`<orig>___VARIANT_<i>`)
-    // differs from its E name, so `equalUpToTerms`
-    // (Theory/Model/Rule.hs:960-968) is False on the name alone and
-    // `openProtoRule` yields the non-empty branch — with or without an
-    // AUTO action.
-    if elab_rule.is_some_and(|r| r.unfolded_variant) {
-        return true;
-    }
-    if !auto_sources {
-        // Non-auto path: HS does NOT unfold computed variants, and every
-        // closed rule's AC form agrees with its E form up to terms, so
-        // `openProtoRule` is always the empty branch.  Computed AC variants
-        // do not count.
-        return false;
-    }
-    // Auto path: the rule's AC form differs from its E form up to tags iff it
-    // received an `AUTO_*` action.
-    match elab_rule {
-        None => false,
-        Some(r) => r.rule.actions.iter().any(|f| {
-            matches!(&f.tag, crate::fact::FactTag::Proto(_, name, _)
-                if name.starts_with("AUTO_IN_") || name.starts_with("AUTO_OUT_"))
-        }),
-    }
-}
-
-/// HS `containsManualRuleVariants mergedRules` (OpenTheory.hs:584-589) as
-/// computed by `prettyClosedTheory` (ClosedTheory.hs:382-418, see line 383, 402): True iff any
-/// rule's `openProtoRule` yields a non-empty AC list.  See
-/// [`rule_open_ac_nonempty`].  When True the theory renders via the
-/// open-as-closed path, which suppresses loop-breaker comments on
-/// trivial-AC-variant rules whose AC form equals their E form.
-///
-/// Each parsed rule item resolves to its elaborated counterpart by NAME
-/// alone, not by the renderer's positional `(name, occurrence-ordinal)`
-/// pairing ([`pair_elaborated_rules`]).  The two resolutions cannot disagree
-/// here, because [`rule_open_ac_nonempty`] is constant across the elaborated
-/// rules that share a name:
-/// * Without `auto_sources` the elaborated rule is never read — the
-///   predicate is the parsed item's own `variants` block, else False.
-/// * With `auto_sources` it asks only whether the elaborated rule carries an
-///   `AUTO_IN_*`/`AUTO_OUT_*` action, and those actions are attached BY
-///   NAME: HS `addLabels` folds into a rule every act whose source rule has
-///   the SAME NAME (`filter ((ruleName ru ==) . ruleName . fst3) acts`,
-///   OpenTheory.hs:138-538, see line 359,364), and
-///   [`crate::auto_sources::apply_auto_sources`] mirrors that, applying each
-///   `(rule name, action)` pair to every elaborated rule of that name.  So
-///   same-named rules always carry the same AUTO actions.
-///
-/// Same-named elaborated rules arise only two ways, and neither can break
-/// that: [`crate::tools::apply_partial_evaluation`] refines ONE original
-/// rule into several, and substitution leaves their action fact tags
-/// identical; and a rule declaration repeated VERBATIM is admitted (HS
-/// `addProtoRule`'s `maybe True (ruE ==)`, OpenTheory.hs:727-733), so its
-/// copies are equal.  Any other duplicate name is the parser's
-/// `duplicate rule: <name>` error.
-pub fn contains_manual_rule_variants(
-    parsed: &p::Theory,
-    elaborated: &Theory,
-    auto_sources: bool,
-) -> bool {
-    parsed.items.iter().any(|item| {
-        if let p::TheoryItem::Rule(r) = item {
-            let elab_rule = elaborated.rules().find(|er| er.name() == r.name);
-            rule_open_ac_nonempty(r, elab_rule, auto_sources)
-        } else {
-            false
-        }
-    })
 }
 
 /// Apply the arity-1 surplus-arg pair-fold (HS `naryOpApp` `k == 1`,
@@ -2320,20 +2086,6 @@ fn render_parsed_macros(macros: &[p::Macro]) -> String {
     header.above(body).render()
 }
 
-/// Render the `macros:` block for HS `rulesSnippet`'s first `ppWithHeader
-/// "Macros"` (Web/Theory.hs) — the interactive `main/rules` page.  Returns
-/// `None` when the theory declares no macros (HS omits the whole section),
-/// else the same `prettyMacros` string the `--prove` theory body uses
-/// ([`render_parsed_macros`]); rendered at the caller's active display width.
-pub fn web_macros(parsed: &p::Theory) -> Option<String> {
-    let macros: Vec<p::Macro> = collect_macros(parsed);
-    if macros.is_empty() {
-        None
-    } else {
-        Some(render_parsed_macros(&macros))
-    }
-}
-
 /// Render a rule's attribute block `[...]`, mirroring HS `prettyRuleAttributes`
 /// / `prettyRuleAttribute` (Model/Rule.hs:1314-1334).  HS emits a FIXED-order
 /// `catMaybes [color, process, no_derivcheck, issapicrule, role]` joined by
@@ -2414,24 +2166,19 @@ pub(crate) fn rule_attributes_doc(attrs: &[p::RuleAttr]) -> crate::pretty_hpj::D
 
 /// The `rule (modulo E) NAME[attrs]:` header line plus the 3-space-indented
 /// `[ prems ] --[ acts ]-> [ concs ]` body, i.e. HS `prettyProtoRuleE`
-/// (Model/Rule.hs:1280-1292 `prettyNamedRule` with the `(modulo E)` prefix).
-/// Also returns the arity-1-folded fact rows so `render_rule`'s
-/// trivial-AC-variant comparison can reuse them.
-///
-/// Shared by the closed renderer (`render_rule`, which appends the
-/// AC-variant/loop-breaker annotations) and the open `--parse-only` renderer
-/// (`render_open_rule`, which appends nothing — `prettyOpenProtoRule`'s
-/// `OpenProtoRule ruE []` branch, OpenTheory.hs:815-816).
+/// (Theory/Model/Rule.hs:1434-1435) over the parsed rule the `--parse-only`
+/// printer walks — `prettyOpenProtoRule`'s `OpenProtoRule ruE []` branch
+/// (OpenTheory.hs:815-816).
 // arity-1 no-eq function-name set; membership-only (.contains), never iterated;
 // std kept (byte-inert) — iteration order never reaches output.
 #[allow(clippy::disallowed_types)]
 pub fn render_rule_e_block(
     parsed_rule: &p::Rule,
     arity1: &std::collections::HashSet<String>,
-) -> (String, Vec<p::Fact>, Vec<p::Fact>, Vec<p::Fact>) {
+) -> String {
     let name = &parsed_rule.name;
     let mut out = String::new();
-    // HS rule-header line (`prettyNamedRule`, Model/Rule.hs:1280-1292, see line 1285):
+    // HS rule-header line (`prettyNamedRule`, Theory/Model/Rule.hs:1393-1405, see line 1397):
     //   `prefix <-> prettyRuleName ru <> prettyRuleAttributes ru <> colon`
     // i.e. `"rule (modulo E)" <+> name <> [attrs] <> ":"`.  Routed through the
     // HughesPJ-faithful Doc engine so the attribute list's `fsep` wraps at the
@@ -2446,334 +2193,30 @@ pub fn render_rule_e_block(
         out.push_str(&header.render());
         out.push('\n');
     }
-    let (premises, actions, conclusions) = display_fact_rows(parsed_rule, arity1);
-    out.push_str(&render_rule_body(&premises, &actions, &conclusions));
-    (out, premises, actions, conclusions)
-}
-
-/// A parsed rule's display fact rows `(premises, actions, conclusions)` —
-/// the form every closed-rule comparison and render works on.  Shared by
-/// `render_rule_e_block` and the `--auto-sources` variant unfold's
-/// triviality test (`auto_sources::unfold_rule_variants`), so the two agree
-/// byte-for-byte on what the rule displays as.
-///
-/// Re-folds arity-1 comma lists: an arity-1 function applied as
-/// `f(a,b,c)` is folded by `naryOpApp`'s `k == 1` branch into `f(<a,b,c>)`
-/// (Theory/Text/Parser/Term.hs:94-96).  RS's term parser keeps the surplus
-/// args, so re-fold here before rendering.  See `rewrite_arity1_term`.
-/// `arity1` is computed once by the caller and threaded in.
-// arity-1 no-eq function-name set; membership-only (.contains), never iterated;
-// std kept (byte-inert) — iteration order never reaches output.
-#[allow(clippy::disallowed_types)]
-pub fn display_fact_rows(
-    parsed_rule: &p::Rule,
-    arity1: &std::collections::HashSet<String>,
-) -> (Vec<p::Fact>, Vec<p::Fact>, Vec<p::Fact>) {
-    let premises: Vec<p::Fact> = parsed_rule
-        .premises
-        .iter()
-        .map(|f| rewrite_arity1_fact(f, arity1))
-        .collect();
-    let actions: Vec<p::Fact> = parsed_rule
-        .actions
-        .iter()
-        .map(|f| rewrite_arity1_fact(f, arity1))
-        .collect();
-    let conclusions: Vec<p::Fact> = parsed_rule
-        .conclusions
-        .iter()
-        .map(|f| rewrite_arity1_fact(f, arity1))
-        .collect();
-    (premises, actions, conclusions)
-}
-
-// arity-1 no-eq function-name set; membership-only (.contains), never iterated;
-// std kept (byte-inert) — iteration order never reaches output.
-#[allow(clippy::disallowed_types)]
-fn render_rule(
-    parsed_rule: &p::Rule,
-    elab_rule: &crate::theory::OpenProtoRule,
-    macros: &[p::Macro],
-    arity1: &std::collections::HashSet<String>,
-    manual_variants: bool,
-    auto_sources: bool,
-) -> String {
-    let name = &parsed_rule.name;
-    let (mut out, premises, actions, conclusions) = render_rule_e_block(parsed_rule, arity1);
-
-    // `elab_rule` is the elaborated counterpart of `parsed_rule`, resolved
-    // by the caller's positional pairing (`pair_elaborated_rules`) — it decides
-    // between "trivial AC variant" and the full `/* rule (modulo AC) ... */`
-    // block.  HS-faithful: matches `prettyClosedProtoRule`
-    // (ClosedTheory.hs:332-363); the test itself is the shared
-    // `is_trivial_proto_variant_ac` (also the auto-sources unfold's gate).
-    let trivial = is_trivial_proto_variant_ac(&premises, &actions, &conclusions, elab_rule, macros);
-
-    // HS `prettyClosedProtoRule` (ClosedTheory.hs:337-339, 352-354) emits
-    // `prettyLoopBreakers` at `nest 2` BEFORE the trailing
-    // `multiComment_` (trivial) or `multiComment (prettyProtoRuleAC ...)`
-    // (non-trivial) block.  We emit the same `  // loop breaker: [<n>]`
-    // / `  // loop breakers: [<n>,<m>]` line here when non-empty.
-    //
-    // HS gate (ClosedTheory.hs:382-418, see line 383): when `containsManualRuleVariants` holds
-    // the whole theory renders via `prettyOpenProtoRuleAsClosedRule`
-    // (OpenTheory.hs:827-851).  Its trivial-AC-variant branch
-    // `(OpenProtoRule ruE [])` (OpenTheory.hs:828-835) shows NO loop-breaker
-    // line ("cannot show loop breakers here, as we do not have the
-    // information"), while the `(OpenProtoRule _ [ruAC])` branch
-    // (OpenTheory.hs:836-843) KEEPS them.  A rule lands in the empty branch
-    // iff its `openProtoRule` AC list is empty — see `rule_open_ac_nonempty`.
-    // So under the gate, suppress the loop-breaker comment on a
-    // trivial-AC-variant rule whose AC form equals its E form (no manual
-    // variants, no AUTO action).  Without the gate the closed renderer
-    // (`prettyClosedProtoRule`) always shows them — unchanged.
-    let open_ac_nonempty = rule_open_ac_nonempty(parsed_rule, Some(elab_rule), auto_sources);
-    let show_loop_breakers = !manual_variants || open_ac_nonempty;
-    let outer_loop_breaker = if show_loop_breakers {
-        render_loop_breakers_line(&elab_rule.loop_breakers, 2)
-    } else {
-        String::new()
+    // Re-folds arity-1 comma lists: an arity-1 function applied as
+    // `f(a,b,c)` is folded by `naryOpApp`'s `k == 1` branch into `f(<a,b,c>)`
+    // (Theory/Text/Parser/Term.hs:94-96).  RS's term parser keeps the surplus
+    // args, so re-fold here before rendering.
+    let fold = |fs: &[p::Fact]| -> Vec<p::Fact> {
+        fs.iter().map(|f| rewrite_arity1_fact(f, arity1)).collect()
     };
-    if trivial {
-        out.push_str("\n\n");
-        out.push_str(&outer_loop_breaker);
-        // HS trivial branch: `nest 2 (multiComment_ ["has exactly the trivial
-        // AC variant"])` (ClosedTheory.hs:337-339).  In HtmlDoc mode this yields
-        // an `hl_comment` span; in plain mode `multi_comment_` renders exactly
-        // `/* has exactly the trivial AC variant */` (single line at this width).
-        out.push_str("  ");
-        out.push_str(
-            &crate::pretty_hpj::multi_comment_(&["has exactly the trivial AC variant"]).render(),
-        );
-    } else {
-        out.push_str("\n\n");
-        out.push_str(&outer_loop_breaker);
-        out.push_str(&render_ac_variants_block(
-            name,
-            elab_rule,
-            &parsed_rule.attributes,
-        ));
-    }
+    out.push_str(&render_rule_body(
+        &fold(&parsed_rule.premises),
+        &fold(&parsed_rule.actions),
+        &fold(&parsed_rule.conclusions),
+    ));
     out
 }
 
-/// The merged display of a multi-variant auto-sources unfold — HS
-/// `prettyOpenProtoRuleAsClosedRule (OpenProtoRule ruE variants)`
-/// (OpenTheory.hs:845-851):
-///   `prettyProtoRuleE ruE $-$ nest 1 (kwVariants $-$ nest 1 (ppList
-///   prettyProtoRuleAC variants))`
-/// — the E rule at its usual columns, a ` variants` keyword line (nest 1),
-/// then each variant as `prettyProtoRuleAC` at nest 2 (header at col 2,
-/// body bracket at col 5, its `ProtoRuleACInfo` at col 4), separated by a
-/// `,` line at col 2.  For an unfolded variant the info prints only the
-/// carried loop breakers — the disjunction is `[emptySubstVFresh]`, which
-/// `ppVariants` elides (Theory/Model/Rule.hs:1407-1413, see line 1412) —
-/// and every variant of one unfold carries the SAME breakers, so the
-/// slot's single elaborated anchor (`er`, its first variant — see
-/// `pair_elaborated_rules`) supplies them for all.
-// arity-1 no-eq function-name set; membership-only (.contains), never iterated;
-// std kept (byte-inert) — iteration order never reaches output.
-#[allow(clippy::disallowed_types)]
-fn render_unfolded_variants_block(
-    parsed_rule: &p::Rule,
-    er: &crate::theory::OpenProtoRule,
-    arity1: &std::collections::HashSet<String>,
-) -> String {
-    use crate::elaborate::canonicalize_ac_in_pfact;
-    use crate::pretty_hpj::Doc;
-    let (mut out, _, _, _) = render_rule_e_block(parsed_rule, arity1);
-    out.push('\n');
-    out.push(' ');
-    out.push_str(&crate::pretty_hpj::keyword_("variants").render());
-    for (i, v) in parsed_rule.variants.iter().enumerate() {
-        out.push('\n');
-        if i > 0 {
-            out.push_str("  ,\n");
-        }
-        let header = crate::pretty_hpj::kw_rule_modulo("AC")
-            .beside_sp(Doc::text(v.name.clone()))
-            .beside(rule_attributes_doc(&v.attributes))
-            .beside(Doc::text(":"))
-            .nest(2);
-        out.push_str(&header.render());
-        out.push('\n');
-        // The variant bodies are parser-AST facts regenerated from LN facts
-        // (`proto_rule_to_parsed`), so AC argument order is canonicalised at
-        // render time.  A print site holding the internal rule instead hands
-        // its `LNFact`s straight to `rule::pretty_rule_restr_gen`, which
-        // needs no such fixup.
-        let prems: Vec<p::Fact> = v.premises.iter().map(canonicalize_ac_in_pfact).collect();
-        let acts: Vec<p::Fact> = v.actions.iter().map(canonicalize_ac_in_pfact).collect();
-        let concs: Vec<p::Fact> = v.conclusions.iter().map(canonicalize_ac_in_pfact).collect();
-        let body = render_rule_body_at(&prems, &acts, &concs, 5);
-        out.push_str(body.trim_end_matches('\n'));
-        let breakers = render_loop_breakers_line(&er.loop_breakers, 4);
-        if !breakers.is_empty() {
-            out.push('\n');
-            out.push_str(breakers.trim_end_matches('\n'));
-        }
-    }
-    out
-}
-
-/// Render HS's `prettyLoopBreakers` (Theory/Model/Rule.hs:1418-1424):
+/// Render the `[ prems ] --[ acts ]-> [ concs ]` body of a parsed rule.
 ///
-/// ```haskell
-/// prettyLoopBreakers i = case breakers of
-///     []  -> emptyDoc
-///     [_] -> lineComment_ $ "loop breaker: "  ++ show breakers
-///     _   -> lineComment_ $ "loop breakers: " ++ show breakers
-///   where breakers = getPremIdx <$> L.get pracLoopBreakers i
-/// ```
-///
-/// `lineComment_ s = comment $ text "//" <-> text s` → `// <s>`.  Haskell
-/// `show` on `[Int]` produces `[i,j,k]` with NO spaces after commas.
-/// The trailing `\n` lets the next line attach.
-fn render_loop_breakers_line(breakers: &[crate::rule::PremIdx], indent: usize) -> String {
-    if breakers.is_empty() {
-        return String::new();
-    }
-    let plural = if breakers.len() == 1 { "" } else { "s" };
-    let idxs: Vec<String> = breakers.iter().map(|b| b.0.to_string()).collect();
-    let body = format!("loop breaker{}: [{}]", plural, idxs.join(","));
-    // HS `prettyLoopBreakers` emits this via `lineComment_`
-    // (Theory/Model/Rule.hs:1419-1429, see line 1421,1429), so the HtmlDoc pane render wraps it in an
-    // `hl_comment` span; the plain render is the bare `// …` text.
-    format!(
-        "{}{}\n",
-        " ".repeat(indent),
-        crate::pretty_hpj::line_comment_(&body).render()
-    )
-}
-
-/// HS `isTrivialProtoVariantAC ruAC ruE` (Model/Rule.hs:790-793):
-///   variants == [emptySubstVFresh] && ps == ps' && cs == cs' && as == as' && nvs == nvs'
-///
-/// i.e. trivial iff (a) the variant disjunction is just the identity
-/// AND (b) the AC-normalised rule body equals the E-rule body
-/// structurally.  Even when there are NO non-trivial substitutions
-/// to enumerate, the AC normalisation may have rewritten terms
-/// (e.g. `'g'^~ltkB^~ltkA` → `'g'^(~ltkA*~ltkB)` under DH), in which
-/// case HS prints the AC body as a comment block rather than the
-/// trivial-variant annotation.
-///
-/// Evaluated here on RS's split representation: `elab_rule` carries the
-/// variant machinery, and `display_*` are the parsed rule's display fact
-/// rows ([`display_fact_rows`]) standing in for HS's `cprRuleE` half.
-/// Shared by `render_rule` (trivial comment vs `rule (modulo AC)` block,
-/// `prettyClosedProtoRule`, ClosedTheory.hs:332-363) and the
-/// `--auto-sources` variant unfold's gate
-/// (`auto_sources::unfold_rule_variants`, HS lib/theory/src/Rule.hs:63-79)
-/// so the two can never disagree on triviality.
-///
-/// MACRO CASE (ClosedTheory.hs:332-366, see line 334 + Model/Rule.hs:790-793): When the theory
-/// uses macros, HS's `cprRuleE` keeps the MACRO form of the rule while
-/// `cprRuleAC` has the EXPANDED form (closeProtoRule runs
-/// `applyMacroInRule` before `variantsProtoRule` but stores the original
-/// `ruE` untouched — lib/theory/src/Rule.hs:82-86, see line 85).
-/// `isTrivialProtoVariantAC` then
-/// returns `False` because `ps != ps'` (macro term ≠ expanded term).
-/// RS's `opr.rule` stores the EXPANDED form (`rule::apply_macro_in_rule` runs
-/// on it in `elaborate_items`), so we must additionally check whether the
-/// DISPLAY form (parsed_rule,
-/// which still has macro calls) matches the elaborated body.  If they
-/// differ, even a rule with no AC variants must show the AC comment block
-/// containing the expanded form.
-pub fn is_trivial_proto_variant_ac(
-    display_premises: &[p::Fact],
-    display_actions: &[p::Fact],
-    display_conclusions: &[p::Fact],
-    elab_rule: &crate::theory::OpenProtoRule,
-    macros: &[p::Macro],
-) -> bool {
-    let no_residual_substs = elab_rule.variant_substs.iter().all(|s| s.is_empty());
-    // In HS, `cprRuleE` (E-rule) and `cprRuleAC` (AC-rule) live in
-    // the SAME term universe — AC smart-constructors normalise at
-    // construction time everywhere, so the only difference between
-    // them arises from (a) genuine non-trivial AC variants or (b)
-    // macro expansion changing terms.
-    //
-    // In RS: `abstracted_rule = Some(ac)` iff Maude found a
-    // non-trivial abstraction (reducible sub-terms, yielding a
-    // different AC form) — compare the E-rule against the abstracted
-    // AC form via `same_rule_body`.
-    // `abstracted_rule = None` means `abstract_rule_and_variants`
-    // returned `Ok(None)` (common_subst empty AND no residual
-    // substs) — i.e., the AC form IS the E form.  The only remaining
-    // source of divergence is macro expansion: if the display body
-    // contains macro calls, it differs from the
-    // elaborated form and HS's `ps != ps'` would fire.  Detect this
-    // by applying macros to the display facts and checking whether
-    // any term changed (HS `applyMacroInRule`, lib/theory/src/Rule.hs:85).
-    //
-    // Crucially: do NOT compare rendered text across AST↔LN spaces —
-    // AC ordering and nat-constant representation differ between the
-    // parsed form and the projection of `elab_rule.rule.*`, producing
-    // false negatives for plain rules like those in ParserTests.spthy.
-    //
-    // The macro check holds REGARDLESS of whether
-    // Maude abstracted the rule, so it MUST gate BOTH branches below:
-    // a rule that is both macro-using AND abstracted (e.g. a `^`/DH
-    // rule whose body is a macro call) is NOT trivial
-    // (regression/trace/issue777: `pk(x)='g'^x`, `Out(pk(~x))`).
-    // Fast path: with no macro definitions, `apply_macros_fact` is an
-    // identity rebuild (no macro can match), so the comparison below is
-    // always `true`.  Skip the three deep-clone passes entirely.
-    let no_macro_in_display = macros.is_empty() || {
-        let mp: Vec<p::Fact> = display_premises
-            .iter()
-            .map(|f| crate::macro_expand::apply_macros_fact(macros, f))
-            .collect();
-        let ma: Vec<p::Fact> = display_actions
-            .iter()
-            .map(|f| crate::macro_expand::apply_macros_fact(macros, f))
-            .collect();
-        let mc: Vec<p::Fact> = display_conclusions
-            .iter()
-            .map(|f| crate::macro_expand::apply_macros_fact(macros, f))
-            .collect();
-        mp == display_premises && ma == display_actions && mc == display_conclusions
-    };
-    let ac_body_matches = match &elab_rule.abstracted_rule {
-        // No Maude abstraction: AC form == E form structurally, so
-        // trivial iff no macro changes the display body.
-        None => no_macro_in_display,
-        // Maude abstracted the rule: the AC (abstracted) body must
-        // match the elaborated body AND no macro may differ between
-        // the display (E) and expanded (AC) forms.
-        Some(ac) => same_rule_body(&elab_rule.rule, ac) && no_macro_in_display,
-    };
-    no_residual_substs && ac_body_matches
-}
-
-/// Compare the `(premises, conclusions, actions, new_vars)` of two
-/// `ProtoRuleE` rules structurally.  Mirrors HS's
-/// `isTrivialProtoVariantAC` body equality check (Model/Rule.hs:790-793, see line 793):
-/// `ps == ps' && cs == cs' && as == as' && nvs == nvs'`.
-///
-/// Used by `render_rule` to decide whether the AC-normalised rule body
-/// differs from the E-rule body — when it does, even an empty variant
-/// disjunction must be rendered as a `/* rule (modulo AC) ... */`
-/// comment block (since the AC form is observably different).
-fn same_rule_body(a: &crate::rule::ProtoRuleE, b: &crate::rule::ProtoRuleE) -> bool {
-    use crate::fact::LNFact;
-    let same_facts = |xs: &[LNFact], ys: &[LNFact]| {
-        xs.len() == ys.len()
-            && xs
-                .iter()
-                .zip(ys.iter())
-                .all(|(f1, f2)| f1.tag == f2.tag && f1.terms == f2.terms)
-    };
-    same_facts(&a.premises, &b.premises)
-        && same_facts(&a.conclusions, &b.conclusions)
-        && same_facts(&a.actions, &b.actions)
-        && a.new_vars == b.new_vars
-}
-
-/// Render `[ prems ] --[ acts ]-> [ concs ]` body shared between the
-/// modulo-E and modulo-AC renderers.  Tries single-line layout first;
-/// when it overflows the 76-col threshold, wraps each clause to its own
-/// line as HS's `prettyRuleRestrGen` does via `sep`.
+/// HS `prettyNamedRule` wraps the body as `nest 2 (prettyRule ...)`
+/// (Theory/Model/Rule.hs:1393-1405, see line 1400), and `prettyRuleRestrGen`
+/// (Theory/Model/Rule.hs:1366-1382) lays out `sep [nest 1 (ppFactsList
+/// prems), arrow, nest 1 (ppFactsList concls)]`.  The combined `nest 2 + nest
+/// 1` puts the bracket `[` at col 3 and the arrow at col 2; the whole body is
+/// one `pretty_hpj::Doc` (`rule_body_to_doc`) at `nest 2` so the HughesPJ
+/// engine makes the `sep`/`fsep` wrap decisions byte-identically to HS.
 fn render_rule_body(prems: &[p::Fact], acts: &[p::Fact], concs: &[p::Fact]) -> String {
     // AC-canonicalise the rule body BEFORE rendering — the parser produces
     // left-associative nested `BinOp(Xor, BinOp(Xor, na, k), nb)` for
@@ -2781,196 +2224,14 @@ fn render_rule_body(prems: &[p::Fact], acts: &[p::Fact], concs: &[p::Fact]) -> S
     // the multiset, producing a different visual order (`k ⊕ nb ⊕ na`).
     // We apply the same canonicalisation to the parser AST so the rendered
     // rule body matches HS byte-for-byte.  `term_to_lnterm` covers the
-    // LNTerm path; this call is the parser-AST path's equivalent.  The
-    // modulo-E rule prints from the PARSED rule, whose body still holds the
-    // macro calls the internal rule has expanded, so the canonicalisation
-    // belongs to this parser-AST body.
+    // LNTerm path; this call is the parser-AST path's equivalent.
     use crate::elaborate::canonicalize_ac_in_pfact;
     let prems2: Vec<p::Fact> = prems.iter().map(canonicalize_ac_in_pfact).collect();
     let acts2: Vec<p::Fact> = acts.iter().map(canonicalize_ac_in_pfact).collect();
     let concs2: Vec<p::Fact> = concs.iter().map(canonicalize_ac_in_pfact).collect();
-    render_rule_body_at(&prems2, &acts2, &concs2, 3)
-}
-
-/// Render rule body at column `indent`.  Used by the AC variant block
-/// (via `render_rule_body`, which prepends 2 spaces) and the top-level
-/// rule (indent=3).
-///
-/// HS `prettyNamedRule` wraps the body as `nest 2 (prettyRule ...)`
-/// (Theory/Model/Rule.hs:1397-1400), and `prettyRuleRestrGen`
-/// (Model/Rule.hs:1366-1383) lays out `sep [nest 1 (ppFactsList prems), arrow,
-/// nest 1 (ppFactsList concls)]`.  The combined `nest 2 + nest 1` puts
-/// the bracket `[` at col 3, the arrow at col 2.  We build the whole body
-/// as one `pretty_hpj::Doc` (`rule_body_to_doc`) nested by `indent - 1`
-/// (== 2 for indent=3) so the HughesPJ engine makes the `sep`/`fsep`
-/// wrap decisions byte-identically to HS, instead of the hand-rolled
-/// string packers.
-fn render_rule_body_at(
-    prems: &[p::Fact],
-    acts: &[p::Fact],
-    concs: &[p::Fact],
-    indent: usize,
-) -> String {
-    let nest = indent.saturating_sub(1) as isize;
-    pf::rule_body_to_doc(prems, acts, concs).nest(nest).render()
-}
-
-/// Render the HS `/* rule (modulo AC) <name>: ... variants (modulo AC)
-/// 1. ... */` comment block.  Mirrors `prettyClosedProtoRule`'s
-/// `multiComment $ prettyProtoRuleAC ruAC` branch (ClosedTheory.hs:332-366, see line 354).
-///
-/// HS `prettyProtoRuleACInfo` (Theory/Model/Rule.hs:1407-1413) emits the variants
-/// sub-block via `ppVariants`, which returns `emptyDoc` when the
-/// disjunction is exactly `[emptySubstVFresh]`.  So when RS's
-/// `variant_substs` is empty (== HS's `[empty]`) or every subst is
-/// itself empty, we emit only the rule body — no `variants (modulo AC)`
-/// header — matching HS byte-for-byte for the AddPublicKey-style case
-/// where the AC body differs from the E body but no residual variant
-/// disjunction remains.
-fn render_ac_variants_block(
-    name: &str,
-    rule: &crate::theory::OpenProtoRule,
-    attrs: &[p::RuleAttr],
-) -> String {
-    use crate::pretty_hpj::{hl_close, hl_open, Hl};
-    let mut s = String::new();
-    // HS `nest 2 (multiComment (prettyProtoRuleAC ruAC))` (ClosedTheory.hs:332-366, see line 354):
-    // `multiComment = comment (fsep [text "/*", …, text "*/"])` wraps the whole
-    // `/* … */` in an `hl_comment` span (opened after the 2-space indent).
-    s.push_str("  ");
-    s.push_str(&hl_open(Hl::Comment));
-    s.push_str("/*\n");
-    // HS renders the AC rule via `nest 2 (multiComment (prettyProtoRuleAC …))`
-    // (ClosedTheory.hs:332-366, see line 354), so the `rule (modulo AC) <name>[attrs]:` header
-    // line sits at column 2 and its attribute-list `fsep` wraps at the ribbon
-    // width with the continuation hanging right after the `[`.  Build it through
-    // the same Doc engine as the modulo-E header, prefixed by the 2-space
-    // comment indent so the absolute columns (and thus the wrap point) match HS.
-    {
-        use crate::pretty_hpj::Doc;
-        // Build the header with NO leading spaces, then `nest(2)` so BOTH the
-        // first line and the `fsep` continuation are indented exactly like HS's
-        // `nest 2 (multiComment …)` — the ribbon/width accounting is measured
-        // from the nest-2 baseline (a literal 2-space text prefix would charge
-        // the first line differently and wrap one element too early; cf.
-        // no-replication.spthy `news_0_`).
-        let header = crate::pretty_hpj::kw_rule_modulo("AC")
-            .beside_sp(Doc::text(name))
-            .beside(rule_attributes_doc(attrs))
-            .beside(Doc::text(":"))
-            .nest(2);
-        s.push_str(&header.render());
-        s.push('\n');
-    }
-    // Body of the abstracted rule.  Use the abstracted rule's facts when
-    // available; when `abstracted_rule` is `None` (no reducible-headed
-    // sub-terms), fall back to the ELABORATED rule's facts (`rule.rule`).
-    // This is the macro case: the elaborated facts have macro calls expanded
-    // (e.g. `aenc(~k, pkS)` instead of `encrypt(~k, pkS)`) — exactly what HS's
-    // `cprRuleAC` holds after `variantsProtoRule (applyMacroInRule macros ruE)`.
-    let ac_rule = rule.abstracted_rule.as_ref().unwrap_or(&rule.rule);
-    // The comment block sits inside HS's `nest 2 (multiComment
-    // (prettyNamedRule …))` (ClosedTheory.hs:332-366, see line 354), so the rule body's
-    // facts land at absolute column 5 (2 comment + 2 rule nest + 1
-    // bracket).  CRITICAL: the body Doc carries that indent as a `nest 4`,
-    // so the HughesPJ width decisions are made at the absolute column and
-    // lines within 2 columns of the boundary break exactly where HS breaks
-    // (cf. the spdm R_KE_Response tuple: HS breaks at col 95).
-    let body = crate::rule::pretty_rule_restr_gen(
-        &ac_rule.premises,
-        &ac_rule.actions,
-        &ac_rule.conclusions,
-    )
-    .nest(4)
-    .render();
-    s.push_str(&body);
-    if !body.ends_with('\n') {
-        s.push('\n');
-    }
-    // HS `ppVariants (Disj [subst]) | subst == emptySubstVFresh = emptyDoc`
-    // (Theory/Model/Rule.hs:1407-1413, see line 1412): skip the variants sub-block when there's no
-    // residual disjunction beyond the identity.
-    let has_residual_variants = rule.variant_substs.iter().any(|sub| !sub.is_empty());
-    if has_residual_variants {
-        // HS `kwVariantsModulo "AC"` = `kwModulo "variants" "AC"` =
-        // `keyword_ "variants" <-> parens (keyword_ "modulo" <-> text "AC")`.
-        s.push_str("    ");
-        s.push_str(&crate::pretty_hpj::kw_modulo("variants", "AC").render());
-        s.push('\n');
-        // HS `prettyDisjLNSubstsVFresh = numbered' (map ppConj substs)`
-        // (SubstVFresh.hs:223-227).  Built and rendered as ONE Doc at
-        // `nest 4` so the `text i <> ". " <> vcat` beside-onto-multiline
-        // ribbon interaction is HS-faithful — see `variant_subst_doc`.
-        s.push_str(&render_variant_substs_block(&rule.variant_substs));
-    }
-    // HS `prettyProtoRuleACInfo i = ppVariants ... $-$ prettyLoopBreakers i`
-    // (Theory/Model/Rule.hs:1407-1410): the loop-breaker line also appears INSIDE the
-    // `multiComment` AC block, at the same nest-2 column as the rule
-    // body (= absolute column 4 here, since the outer block is itself
-    // at indent 2 inside `nest 2 (multiComment ...)`).
-    s.push_str(&render_loop_breakers_line(&rule.loop_breakers, 4));
-    s.push_str("  */");
-    s.push_str(&hl_close(Hl::Comment));
-    s
-}
-
-/// Render one entry of `prettyDisjLNSubstsVFresh` (SubstVFresh.hs:223-229)
-/// as a Doc: the variant's number, then each domain var followed by
-/// `= <range>`.  `n_width` is the width of the largest variant number
-/// (HS `numbered`'s `nWidth = length (show n)`,
-/// Text/PrettyPrint/Class.hs:252-259, see line 258); each
-/// variant's number is right-flushed in that width so dots line up.
-///
-/// HS `numbered` (Text/PrettyPrint/Class.hs:252-259) renders each variant as
-/// `pp (i, d) = text (flushRight nWidth (show i)) <> d` where `d` is
-/// `text ". " <> vcat (map prettyEq bindings)`.  The whole `numbered'`
-/// block sits at `nest 4` inside the rule's `multiComment`.
-///
-/// CRITICAL: the `text ". " <>` is a BESIDE onto the multi-line `vcat`.
-/// In HughesPJ the ribbon budget for the inner (wrapped) lines is then
-/// measured from the OUTER line start (the `text i` column), not from the
-/// var column.  So build the whole numbered conjunction as ONE Doc and
-/// render it at `nest 4` (do NOT render each binding STANDALONE via
-/// `entry.nest(col)` — that measures the ribbon from the var column and
-/// shifts wrap decisions for terms within a few columns of the boundary,
-/// e.g. an 11-tuple `<x.16, …, x.26>`: pkcs11-templates
-/// `cannot_obtain_key` et al.), mirroring HS byte-for-byte.
-fn variant_subst_doc(
-    n: usize,
-    subst: &tamarin_term::subst_vfresh::LNSubstVFresh,
-    n_width: usize,
-) -> crate::pretty_hpj::Doc {
-    use crate::pretty_hpj::Doc;
-    // HS `pp (i, d) = text (flushRight nWidth (show i)) <> d`, with
-    // `d = text ". " <> conj` (from `numbered' = numbered (text "")
-    // . map (text ". " <>)`).
-    let label = format!("{:>width$}", n, width = n_width);
-    Doc::text(label).beside(Doc::text(". ").beside(crate::rule::pretty_subst_vfresh_conj(subst)))
-}
-
-/// Render the full `prettyDisjLNSubstsVFresh` (numbered') block.  HS
-/// `numbered vsep ds = foldr1 ($-$) $ intersperse vsep $ map pp ...` with
-/// `vsep = text ""` (a blank separator line at the block's nest).
-///
-/// Each numbered conjunction is an independent Doc rendered at `nest 4`
-/// (the `multiComment` indent) — they don't interact across the blank
-/// separators, so rendering them individually is faithful — and joined by
-/// the blank `"    \n"` line (HS `text ""` at nest 4).  Building each
-/// conjunction as a single Doc (not per-binding) is what reproduces the
-/// `text i <> ". " <> vcat` beside-onto-multiline ribbon decision.
-fn render_variant_substs_block(substs: &[tamarin_term::subst_vfresh::LNSubstVFresh]) -> String {
-    let n_width = substs.len().to_string().len();
-    let mut s = String::new();
-    for (i, subst) in substs.iter().enumerate() {
-        if i > 0 {
-            // HS `intersperse (text "")` → a blank line at nest 4.
-            s.push_str("    \n");
-        }
-        let mut rendered = variant_subst_doc(i + 1, subst, n_width).nest(4).render();
-        rendered.push('\n');
-        s.push_str(&rendered);
-    }
-    s
+    pf::rule_body_to_doc(&prems2, &acts2, &concs2)
+        .nest(2)
+        .render()
 }
 
 /// Render a `LVar` the way HS `instance Show LVar` (LTerm.hs:550-557) does:
@@ -3001,53 +2262,37 @@ const ORACLE_RIBBON: usize = 67;
 // Lemma
 // =============================================================================
 
-/// HS `prettyLemma` (lib/theory/src/Lemma.hs:116-141) over the ELABORATED
-/// lemma the parsed item names.  `_lFormula` is the macro- and
-/// predicate-expanded formula elaboration stored and `_lOriginalFormula` the
-/// pre-macro one, so the header line quotes `fromMaybe expandedFormula
-/// ogFormula` (lib/theory/src/Lemma.hs:121) and the guarded block converts
-/// `_lFormula` (lib/theory/src/Lemma.hs:125).  The name and the attributes
-/// come from the parsed item, which is what the printer walks.  A parsed
-/// lemma with no elaborated twin renders nothing, as an unpaired rule does.
-fn render_parsed_lemma(
-    lem: &p::Lemma,
-    proved: &[ProvedLemma],
-    in_file: &str,
-    elab: &Theory,
-) -> Option<String> {
-    let el = elab.lookup_lemma(&lem.name)?;
-    let original = el.original_formula.as_ref().unwrap_or(&el.formula);
-    let mut out = render_lemma_head(
-        lem,
-        in_file,
+/// HS `prettyLemma ppPrf` (lib/theory/src/Lemma.hs:116-141): the `lemma
+/// <name> [attrs]:` header, the `<quant> "<formula>"` line, the `/* guarded
+/// formula … */` comment block and the injected proof body.  The header line
+/// quotes `fromMaybe expandedFormula ogFormula` (`:121`) and the guarded
+/// block converts `_lFormula` (`:125`).
+fn pretty_lemma(lem: &crate::theory::Lemma, proof: &str, in_file: &str) -> String {
+    let original = lem.original_formula.as_ref().unwrap_or(&lem.formula);
+    let mut out = lemma_head(
+        &lem.name,
+        lemma_attr_docs(&lem.attributes, in_file),
+        trace_quantifier_keyword(lem.trace_quantifier),
         pf::lnformula_doc(original),
-        &render_guarded_block(el),
+        &render_guarded_block(lem),
     );
-
-    // Proof body — either the prover's result (if --prove ran) or
-    // the lemma's stored skeleton.
-    let proof = proved.iter().find(|p| p.name == lem.name);
-    let body = match proof.and_then(|p| p.proof_body.as_ref()) {
-        Some(b) => b.clone(),
-        None => "by sorry".to_string(),
-    };
     out.push('\n');
-    out.push_str(&body);
-    Some(out)
+    out.push_str(proof);
+    out
 }
 
-/// Everything of HS `prettyLemma` (lib/theory/src/Lemma.hs:116-141) BEFORE the proof body:
-/// the `lemma <name> [attrs]:` header, the `<quant> "<formula>"` line, and
-/// the `/* guarded formula ... */` comment block.  The name, the attributes
-/// and the trace quantifier come from the parsed item; `formula_doc` is the
-/// quoted formula of the quantifier line and `guarded_block` the comment,
+/// Everything of HS `prettyLemma` (lib/theory/src/Lemma.hs:116-141) BEFORE the
+/// proof body: the `lemma <name> [attrs]:` header, the `<quant> "<formula>"`
+/// line, and the `/* guarded formula ... */` comment block.  `formula_doc` is
+/// the quoted formula of the quantifier line and `guarded_block` the comment,
 /// both built by the caller from the formula representation it holds.
-/// Shared by the closed renderer (`render_parsed_lemma`, which appends the
+/// Shared by the closed renderer ([`pretty_lemma`], which appends the
 /// prover's proof body) and the open `--parse-only` renderer
 /// (`render_open_lemma`, which appends the parsed proof skeleton).
-fn render_lemma_head(
-    lem: &p::Lemma,
-    in_file: &str,
+fn lemma_head(
+    name: &str,
+    attr_docs: Vec<crate::pretty_hpj::Doc>,
+    quant: &str,
     formula_doc: crate::pretty_hpj::Doc,
     guarded_block: &str,
 ) -> String {
@@ -3060,11 +2305,10 @@ fn render_lemma_head(
     // Rendered via HughesPJ so `fsep` wraps the attributes list when the
     // line is long (e.g. `[heuristic={…}, use_induction,\n<col>reuse]`).
     let kw = Doc::text("lemma");
-    let name_doc = Doc::text(lem.name.clone());
-    let header_doc = if lem.attributes.is_empty() {
+    let name_doc = Doc::text(name);
+    let header_doc = if attr_docs.is_empty() {
         kw.beside_sp(name_doc).beside(Doc::text(":"))
     } else {
-        let attr_docs: Vec<Doc> = lemma_attr_docs(&lem.attributes, in_file);
         // `brackets (fsep (punctuate comma attrs))` — no space after `[`
         // (beside, not beside_sp) so fsep's continuation aligns with the
         // first attr character (i.e. right after `[`).
@@ -3083,7 +2327,6 @@ fn render_lemma_head(
     // `sep` wrap, the formula's internal `sep`/`nest` wrapping, and the
     // continuation indents are byte-identical to HS.  The `nest 2` indent
     // is included in the rendered output (HS renders it at theory col 0).
-    let quant = quantifier_keyword(&lem.trace_quantifier);
     out.push_str(&pf::lemma_header_line_doc(quant, formula_doc));
     out.push('\n');
 
@@ -3096,7 +2339,7 @@ fn render_lemma_head(
 /// `prettyLemmaAttribute` (lib/theory/src/Lemma.hs:97-107): each attribute becomes a
 /// `text "..."` Doc; these are assembled into
 /// `brackets (fsep (punctuate comma docs))` by the caller.
-fn lemma_attr_docs(attrs: &[p::LemmaAttr], in_file: &str) -> Vec<crate::pretty_hpj::Doc> {
+fn parsed_lemma_attr_docs(attrs: &[p::LemmaAttr], in_file: &str) -> Vec<crate::pretty_hpj::Doc> {
     use crate::pretty_hpj::Doc;
     let mut out = Vec::new();
     for a in attrs {
@@ -3124,10 +2367,50 @@ fn lemma_attr_docs(attrs: &[p::LemmaAttr], in_file: &str) -> Vec<crate::pretty_h
     out
 }
 
+/// HS `prettyLemmaAttribute` (lib/theory/src/Lemma.hs:97-107) over the
+/// theory's own attribute type; an attribute HS has no case for renders
+/// nothing (`prettyLemmaAttribute _ = emptyDoc`, `:106`).
+fn lemma_attr_docs(
+    attrs: &[crate::theory::LemmaAttr],
+    in_file: &str,
+) -> Vec<crate::pretty_hpj::Doc> {
+    use crate::pretty_hpj::Doc;
+    let mut out = Vec::new();
+    for a in attrs {
+        use crate::theory::LemmaAttr::*;
+        let s: Option<String> = match a {
+            Sources => Some("sources".into()),
+            Reuse => Some("reuse".into()),
+            DiffReuse => Some("diff_reuse".into()),
+            UseInduction => Some("use_induction".into()),
+            HideLemma(s) => Some(format!("hide_lemma={}", s)),
+            // HS `text ("heuristic=" ++ prettyGoalRankings h)` (`:103`),
+            // space-separated and with the oracle name expanded.
+            Heuristic(s) => Some(format!("heuristic={}", pretty_goal_rankings(s, in_file))),
+            Output(modules) => Some(format!("output=[{}]", modules.join(","))),
+            Left => Some("left".into()),
+            Right => Some("right".into()),
+            Hint(_) => None,
+        };
+        if let Some(s) = s {
+            out.push(Doc::text(s));
+        }
+    }
+    out
+}
+
 fn quantifier_keyword(q: &p::TraceQuantifier) -> &'static str {
     match q {
         p::TraceQuantifier::AllTraces => "all-traces",
         p::TraceQuantifier::ExistsTrace => "exists-trace",
+    }
+}
+
+/// HS `prettyTraceQuantifier` (lib/theory/src/Lemma.hs:179-181).
+fn trace_quantifier_keyword(q: crate::theory::TraceQuantifier) -> &'static str {
+    match q {
+        crate::theory::TraceQuantifier::AllTraces => "all-traces",
+        crate::theory::TraceQuantifier::ExistsTrace => "exists-trace",
     }
 }
 
@@ -3285,21 +2568,19 @@ fn has_predicate_atom(f: &p::Formula) -> bool {
     }
 }
 
-/// HS `prettyRestriction` (TheoryObject.hs:889-901) over the ELABORATED
-/// restriction the parsed item names.  `_rstrFormula` is the macro- and
-/// predicate-expanded formula elaboration stored and `_rstrOriginalFormula`
-/// the pre-macro one, so the body shows `fromMaybe expandedFormula ogFormula`
-/// (TheoryObject.hs:893), the safety predicate runs on `_rstrFormula`
-/// (TheoryObject.hs:901) and the `expanded formula:` comment shows
-/// `_rstrFormula` (TheoryObject.hs:895-898).  That block sits under
-/// `case ogFormula of Just _`, and elaboration and the SAPIC injection both
-/// fill `original_formula`, so it is always written.  The name and the
-/// `left`/`right` attributes come from the parsed item, which is what the
-/// printer walks.  A parsed restriction with no elaborated twin renders
-/// nothing, as an unpaired rule does.
-fn render_parsed_restriction(r: &p::Restriction, elab: &Theory) -> Option<String> {
-    let er = elab.lookup_restriction(&r.name)?;
-    let original = er.original_formula.as_ref().unwrap_or(&er.formula);
+/// HS `prettyRestriction` (TheoryObject.hs:889-901).  `_rstrFormula` is the
+/// macro- and predicate-expanded formula and `_rstrOriginalFormula` the
+/// pre-macro one, so the body shows `fromMaybe expandedFormula ogFormula`
+/// (`:893`), the safety predicate runs on `_rstrFormula` (`:901`) and the
+/// `expanded formula:` comment shows `_rstrFormula` (`:895-898`).  That block
+/// sits under `case ogFormula of Just _`, and elaboration and the SAPIC
+/// injection both fill `original_formula`, so it is always written.
+///
+/// The restriction carries no attribute list: HS's restriction parser accepts
+/// none (`restriction`, Theory/Text/Parser/Restriction.hs:77-81) and only the
+/// diff parser does (`diffRestriction`, `:95-100`).
+fn pretty_restriction(r: &crate::restriction::Restriction) -> String {
+    let original = r.original_formula.as_ref().unwrap_or(&r.formula);
     use crate::pretty_hpj::{
         escape_html_entities, hl_close, hl_open, html_mode, keyword_, line_comment_, Hl,
     };
@@ -3314,13 +2595,11 @@ fn render_parsed_restriction(r: &p::Restriction, elab: &Theory) -> Option<String
     } else {
         out.push_str(&r.name);
     }
-    render_restriction_attributes(&r.attributes, &mut out);
-
     out.push_str(":\n");
     out.push_str(&pf::doublequoted_nested_doc(pf::lnformula_doc(original), 2));
     // `nest 2 (if safety then lineComment_ "safety formula" else emptyDoc)`
     // (TheoryObject.hs:894).
-    if is_safety_formula(&er.formula) {
+    if is_safety_formula(&r.formula) {
         out.push_str("\n  ");
         out.push_str(&line_comment_("safety formula").render());
     }
@@ -3332,30 +2611,12 @@ fn render_parsed_restriction(r: &p::Restriction, elab: &Theory) -> Option<String
     out.push_str(&hl_open(Hl::Comment));
     out.push_str("/*\n  expanded formula:\n");
     out.push_str(&pf::doublequoted_nested_doc(
-        pf::lnformula_doc(&er.formula),
+        pf::lnformula_doc(&r.formula),
         2,
     ));
     out.push_str("\n  */");
     out.push_str(&hl_close(Hl::Comment));
-    Some(out)
-}
-
-/// Render the restriction attributes, i.e., `left` and/or `right`
-fn render_restriction_attributes(attrs: &[p::RestrictionAttr], out: &mut String) {
-    if attrs.is_empty() {
-        return;
-    }
-    out.push(' ');
-    out.push('[');
-    let attr_strs: Vec<&str> = attrs
-        .iter()
-        .map(|a| match a {
-            p::RestrictionAttr::LeftRestriction => "left",
-            p::RestrictionAttr::RightRestriction => "right",
-        })
-        .collect();
-    out.push_str(&attr_strs.join(", "));
-    out.push(']');
+    out
 }
 
 /// Render one predicate item, mirroring HS `prettyPredicate`
@@ -3390,6 +2651,93 @@ fn render_predicate(pr: &p::Predicate, arity1: &std::collections::HashSet<String
     let formulastr =
         pf::formula_doc(&formula).render_at(hpj::DEFAULT_LINE_LENGTH, hpj::DEFAULT_RIBBON, 0);
     format!("predicate: {}<=>{}", factstr, formulastr)
+}
+
+/// HS `prettyPredicate` (TheoryObject.hs:845-849):
+///
+/// ```haskell
+/// prettyPredicate p = kwPredicate <> colon <-> text (factstr ++ "<=>" ++ formulastr)
+///   factstr    = render $ prettyFact prettyLVar (pFact p)
+///   formulastr = render $ prettyLNFormula      (pFormula p)
+/// ```
+///
+/// `kwPredicate <> colon` is `predicate:` (no space), `<->` adds one space,
+/// then the combined `<fact><=><formula>` text (no spaces around `<=>`).
+///
+/// `render` is HughesPJ's default style: `lineLength = 100` and
+/// `ribbonsPerLine = 1.5`, so `fullRender` rounds the ribbon to 67
+/// (HughesPJ.hs:940, :1010) — NOT the 110/73 the console's `renderDoc`
+/// installs for the surrounding theory echo.  The fact and the formula are
+/// rendered INDEPENDENTLY at that style from column 0, then concatenated as
+/// plain text.
+fn pretty_predicate(pr: &crate::predicate::Predicate) -> String {
+    use crate::pretty_hpj::{self as hpj, Doc};
+    // HS `prettyLVar = text . show` over the formal args, so each carries its
+    // sort sigil (`#i` for a temporal arg).
+    let pp_var = |v: &tamarin_term::lterm::LVar| Doc::text(render_lvar(v));
+    let factstr = crate::fact::pretty_fact(&pp_var, &pr.fact)
+        .render_with(hpj::DEFAULT_LINE_LENGTH, hpj::DEFAULT_RIBBON);
+    let formulastr =
+        pf::lnformula_doc(&pr.formula).render_at(hpj::DEFAULT_LINE_LENGTH, hpj::DEFAULT_RIBBON, 0);
+    format!("predicate: {}<=>{}", factstr, formulastr)
+}
+
+/// HS `prettyMacros` / `prettyMacro` (TheoryObject.hs:862-884).
+///
+/// HS: `prettyMacros m = keyword_ "macros:" $$ nest 4 (vcat [macros...])`
+/// HS: `prettyMacro (op, args, out) =
+///       vcat [ppNonEmptyList (\ds -> sep (map (nest 4) ds)) text [op++"("]
+///             <-> prettyVarList args <-> text ") = " <-> prettyTerm show out]`
+///
+/// `ppNonEmptyList hdr pp [x] = hdr [pp x] = sep [nest 4 (text x)]`
+/// = `nest 4 (text (name++"("))`.
+///
+/// With `keyword_ "macros:" $$ nest 4 (nest 4 "name(" <+> args <+> ") = " <+> body)`:
+/// the double-nest (8 total) combined with `keyword_`'s 7-char width makes
+/// `nil_above_nest` inline the content (k = -7+8 = 1 > 0), putting everything
+/// on ONE line: `macros: name( args ) =  body`.
+///
+/// For multiple macros, each is nested 4 levels inside the outer `nest 4`,
+/// giving 8-space indent on subsequent lines.  An empty list renders nothing
+/// (`prettyMacros [] = emptyDoc`, TheoryObject.hs:863).
+fn pretty_macros(macros: &[crate::theory::LNMacro]) -> String {
+    use crate::pretty_hpj::{self as hpj, Doc};
+    if macros.is_empty() {
+        return String::new();
+    }
+    let last_idx = macros.len() - 1;
+    let macro_docs: Vec<Doc> = macros
+        .iter()
+        .enumerate()
+        .map(|(i, m)| {
+            // HS: `ppNonEmptyList (\ds -> sep (map (nest 4) ds)) text [op++"("]`
+            // = `sep [nest 4 (text (op ++ "("))]` = `nest 4 (text (op ++ "("))`.
+            let name_open = Doc::text(format!("{}(", String::from_utf8_lossy(&m.name))).nest(4);
+            // HS `prettyVarList = fsep . punctuate comma . map prettyLVar`
+            // (TheoryObject.hs:858-859).
+            let args: Vec<Doc> = m.params.iter().map(|v| Doc::text(render_lvar(v))).collect();
+            // HS `prettyTerm (text . show) out`.
+            let body = tamarin_term::pretty::pretty_nterm(&m.body);
+            // Build: `nest 4 "name(" <+> args <+> ") = " <+> body`
+            // HS <-> = HughesPJ <+> (beside with space = beside_sp).
+            let mut doc = name_open;
+            if !args.is_empty() {
+                doc = doc.beside_sp(hpj::fsep(hpj::punctuate(Doc::char(','), args)));
+            }
+            doc = doc.beside_sp(Doc::text(") = "));
+            doc = doc.beside_sp(body);
+            // HS: last macro has no trailing comma
+            if i < last_idx {
+                doc.beside(Doc::text(","))
+            } else {
+                doc
+            }
+        })
+        .collect();
+
+    // HS: `keyword_ "macros:" $$ nest 4 (vcat macro_docs)`
+    let body = hpj::vcat(macro_docs).nest(4);
+    Doc::text("macros:").above(body).render()
 }
 
 /// HS `isSafetyFormula . formulaToGuarded_` (Guarded.hs:156-164 / 466-467) over
@@ -4178,141 +3526,74 @@ mod manual_rule_variants_tests {
     use super::*;
     use crate::fact::{proto_fact, Multiplicity};
     use crate::rule::{ProtoRuleE, ProtoRuleEInfo, Rule};
-    use crate::signature::SignaturePure;
-    use crate::theory::{OpenProtoRule, TheoryItem};
+    use crate::theory::{
+        contains_manual_rule_variants, merge_open_proto_rules, OpenProtoRule, ProofSkeleton,
+        TranslationElement,
+    };
 
-    fn parsed_rule(name: &str) -> p::TheoryItem {
-        p::TheoryItem::Rule(p::Rule {
-            name: name.to_string(),
-            modulo: None,
-            attributes: vec![],
-            premises: vec![],
-            actions: vec![],
-            conclusions: vec![],
-            embedded_restrictions: vec![],
-            variants: vec![],
-            left_right: None,
-        })
+    type Item = TheoryItem<OpenProtoRule, ProofSkeleton, TranslationElement>;
+
+    /// A rule item whose AC half carries `action_names` on top of the E half —
+    /// the shape `addActionClosedProtoRule` leaves behind, which adds the
+    /// `AUTO_*` actions to `cprRuleAC` alone (lib/theory/src/Rule.hs:95-99).
+    fn elab_rule(name: &str, action_names: &[&str]) -> Item {
+        let e: ProtoRuleE = Rule::new(ProtoRuleEInfo::standard(name), vec![], vec![], vec![]);
+        let mut opr = OpenProtoRule::new(e.clone());
+        if !action_names.is_empty() {
+            opr.rule.actions = action_names
+                .iter()
+                .map(|a| proto_fact(Multiplicity::Linear, a, vec![]))
+                .collect();
+            opr.rule_e = Some(Box::new(e));
+        }
+        TheoryItem::Rule(opr)
     }
 
-    /// An elaborated rule named `name`, carrying `action_names` as actions.
-    fn elab_rule(name: &str, action_names: &[&str]) -> TheoryItem {
-        let acts = action_names
-            .iter()
-            .map(|a| proto_fact(Multiplicity::Linear, a, vec![]))
-            .collect();
-        let r: ProtoRuleE = Rule::new(ProtoRuleEInfo::standard(name), vec![], vec![], acts);
-        TheoryItem::Rule(OpenProtoRule::new(r))
+    fn gate(items: &[Item]) -> bool {
+        contains_manual_rule_variants(&merge_open_proto_rules(items))
     }
 
-    fn theories(names: &[&str], elab: Vec<TheoryItem>) -> (p::Theory, Theory) {
-        let parsed = p::Theory {
-            is_diff: false,
-            name: "T".to_string(),
-            configuration: None,
-            items: names.iter().map(|n| parsed_rule(n)).collect(),
-        };
-        let mut elaborated: Theory = Theory::new("T", SignaturePure::empty(false));
-        elaborated.items = elab;
-        (parsed, elaborated)
-    }
-
-    /// The same OR computed with the renderer's positional
-    /// `(name, occurrence-ordinal)` pairing instead of the name-keyed
-    /// lookup.
-    fn positional(parsed: &p::Theory, elaborated: &Theory, auto_sources: bool) -> bool {
-        let paired = pair_elaborated_rules(&parsed.items, elaborated);
-        parsed
-            .items
-            .iter()
-            .zip(paired)
-            .any(|(item, er)| match item {
-                p::TheoryItem::Rule(r) => rule_open_ac_nonempty(r, er, auto_sources),
-                _ => false,
-            })
-    }
-
-    /// Partial evaluation refines one rule into several of the SAME name;
-    /// auto-sources then annotates them by name, so every member of a
-    /// same-name group carries the same `AUTO_*` action.  On that shape the
-    /// name-keyed lookup and the positional pairing agree.
+    /// `containsManualRuleVariants` (OpenTheory.hs:584-589) is the OR over the
+    /// merged items' AC lists, and an `AUTO_*` action separates a rule's AC
+    /// half from its E half by action count, so `equalUpToTerms` keeps it
+    /// (lib/theory/src/Rule.hs:52-59).  Partial evaluation refines one rule
+    /// into several of the SAME name and auto-sources annotates them by name,
+    /// so every member of a same-name group opens the gate alike.
     #[test]
-    fn auto_actions_are_uniform_across_same_named_rules() {
+    fn an_auto_action_opens_the_gate() {
         let auto_out = "AUTO_OUT_TERM_1_0_0__Recv";
-        let (parsed, elaborated) = theories(
-            &["Send", "Send", "Recv"],
-            vec![
-                elab_rule("Send", &[auto_out]),
-                elab_rule("Send", &[auto_out]),
-                elab_rule("Recv", &["AUTO_IN_TERM_1_0_0__Recv"]),
-            ],
-        );
-        assert!(contains_manual_rule_variants(&parsed, &elaborated, true));
-        assert_eq!(
-            contains_manual_rule_variants(&parsed, &elaborated, true),
-            positional(&parsed, &elaborated, true),
-        );
+        assert!(gate(&[
+            elab_rule("Send", &[auto_out]),
+            elab_rule("Send", &[auto_out]),
+            elab_rule("Recv", &["AUTO_IN_TERM_1_0_0__Recv"]),
+        ]));
         // The gate is an OR over the rules.  The mixed theory above still
         // fires if the discriminant loses one of the two prefixes.  Each
         // prefix therefore gets a single-rule theory of its own.
         for auto in [auto_out, "AUTO_IN_TERM_1_0_0__Recv"] {
-            let (parsed, elaborated) = theories(&["R"], vec![elab_rule("R", &[auto])]);
             assert!(
-                contains_manual_rule_variants(&parsed, &elaborated, true),
+                gate(&[elab_rule("R", &[auto])]),
                 "{auto} alone must open the gate",
-            );
-            assert!(
-                !contains_manual_rule_variants(&parsed, &elaborated, false),
-                "{auto} must be invisible without --auto-sources",
             );
         }
     }
 
-    /// A theory whose duplicated rules carry no `AUTO_*` action leaves the
-    /// gate off — under both resolutions.
+    /// A theory whose rules' AC halves say what their E halves say leaves the
+    /// gate off, duplicated names included.
     #[test]
-    fn no_auto_action_leaves_the_gate_off() {
-        let (parsed, elaborated) = theories(
-            &["Send", "Send", "Recv"],
-            vec![
-                elab_rule("Send", &["Plain"]),
-                elab_rule("Send", &["Plain"]),
-                elab_rule("Recv", &[]),
-            ],
-        );
-        assert!(!contains_manual_rule_variants(&parsed, &elaborated, true));
-        assert_eq!(
-            contains_manual_rule_variants(&parsed, &elaborated, true),
-            positional(&parsed, &elaborated, true),
-        );
-    }
-
-    /// Without `--auto-sources` the elaborated rule is not consulted at all:
-    /// the gate is the parsed items' `variants` blocks, which the refined
-    /// rules partial evaluation emits never have.
-    #[test]
-    fn without_auto_sources_the_elaborated_rule_is_not_consulted() {
-        let auto_out = "AUTO_OUT_TERM_1_0_0__Recv";
-        let (parsed, elaborated) = theories(
-            &["Send", "Send"],
-            vec![
-                elab_rule("Send", &[auto_out]),
-                elab_rule("Send", &[auto_out]),
-            ],
-        );
-        assert!(!contains_manual_rule_variants(&parsed, &elaborated, false));
-        assert_eq!(
-            contains_manual_rule_variants(&parsed, &elaborated, false),
-            positional(&parsed, &elaborated, false),
-        );
+    fn matching_ac_and_e_halves_leave_the_gate_off() {
+        assert!(!gate(&[
+            elab_rule("Send", &[]),
+            elab_rule("Send", &[]),
+            elab_rule("Recv", &[]),
+        ]));
     }
 }
 
 #[cfg(test)]
 mod ac_variants_block_tests {
-    use super::*;
     use crate::fact::{in_fact, out_fact, proto_fact, Multiplicity};
-    use crate::rule::{ProtoRuleEInfo, Rule};
+    use crate::rule::{ProtoRuleEInfo, Rule, RuleAttributes};
     use crate::theory::OpenProtoRule;
     use tamarin_term::function_symbols::{zero_sym, AcSym, FunSym};
     use tamarin_term::lterm::{LNTerm, LSort, LVar};
@@ -4330,13 +3611,25 @@ mod ac_variants_block_tests {
         var_term(v)
     }
 
+    /// The `nest 2 (multiComment (prettyProtoRuleAC ruAC))` block
+    /// `prettyClosedProtoRule` puts under a rule whose AC form differs from
+    /// its E form (ClosedTheory.hs:349-353).
+    fn ac_block(o: &OpenProtoRule) -> String {
+        let acs = crate::theory::closed_rules_ac(o);
+        crate::pretty_hpj::multi_comment(crate::rule::pretty_proto_rule_ac(&acs[0]))
+            .nest(2)
+            .render()
+    }
+
     /// `features/xor/basicfunctionality/xor0.spthy`'s `receive` rule as the
     /// closing pipeline leaves it: one abstracted variable in the body, and
     /// the two substitutions Maude's narrowing returns for it.
     fn xor0_receive() -> OpenProtoRule {
         let z = msg("z");
+        let mut info = ProtoRuleEInfo::standard("receive");
+        info.attributes.ignore_deriv_checks = true;
         let mut open = OpenProtoRule::new(Rule::new(
-            ProtoRuleEInfo::standard("receive"),
+            info,
             vec![in_fact(term(z))],
             vec![],
             vec![proto_fact(Multiplicity::Linear, "Response", vec![term(z)])],
@@ -4353,12 +3646,20 @@ mod ac_variants_block_tests {
     /// `sapic/fast/basic/typing.spthy`'s `outxloly_0_11121111111` rule: a
     /// multiset union in a conclusion, and an attribute list long enough
     /// that the header's `fsep` wraps.
-    fn typing_outxloly() -> (OpenProtoRule, Vec<p::RuleAttr>) {
+    fn typing_outxloly() -> OpenProtoRule {
         let vars: Vec<LVar> = ["a", "n", "x", "y"].into_iter().map(msg).collect();
         let args: Vec<LNTerm> = vars.iter().map(|v| term(*v)).collect();
         let union = f_app_ac(AcSym::Union, vec![term(vars[2]), term(vars[3])]);
-        let open = OpenProtoRule::new(Rule::new(
-            ProtoRuleEInfo::standard("outxloly_0_11121111111"),
+        let mut info = ProtoRuleEInfo::standard("outxloly_0_11121111111");
+        info.attributes = RuleAttributes {
+            color: tamarin_utils::color::hex_to_rgb("6c8040"),
+            process: None,
+            ignore_deriv_checks: false,
+            is_sapic_rule: true,
+            role: Some("P".to_string()),
+        };
+        OpenProtoRule::new(Rule::new(
+            info,
             vec![proto_fact(
                 Multiplicity::Linear,
                 "State_11121111111",
@@ -4369,23 +3670,16 @@ mod ac_variants_block_tests {
                 out_fact(union),
             ],
             vec![],
-        ));
-        let attrs = vec![
-            p::RuleAttr::Color("#6c8040".to_string()),
-            p::RuleAttr::Process("out((x.1:lol++y.1));".to_string()),
-            p::RuleAttr::IsSapicRule,
-            p::RuleAttr::Role("P".to_string()),
-        ];
-        (open, attrs)
+        ))
     }
 
     /// The block prints the internal rule's AC arguments in the order the
     /// rule holds them.  Both expectations are the bytes the Haskell oracle
     /// at the submodule pin prints for the named corpus rule.
     #[test]
-    fn render_ac_variants_block_keeps_the_internal_ac_order() {
+    fn the_ac_block_keeps_the_internal_ac_order() {
         assert_eq!(
-            render_ac_variants_block("receive", &xor0_receive(), &[p::RuleAttr::NoDerivCheck]),
+            ac_block(&xor0_receive()),
             concat!(
                 "  /*\n",
                 "  rule (modulo AC) receive[no_derivcheck]:\n",
@@ -4397,13 +3691,12 @@ mod ac_variants_block_tests {
                 "  */",
             ),
         );
-        let (rule, attrs) = typing_outxloly();
         assert_eq!(
-            render_ac_variants_block("outxloly_0_11121111111", &rule, &attrs),
+            ac_block(&typing_outxloly()),
             concat!(
                 "  /*\n",
-                "  rule (modulo AC) outxloly_0_11121111111[color=#6c8040,\n",
-                "                                          process=\"out((x.1:lol++y.1));\", issapicrule, role='P']:\n",
+                "  rule (modulo AC) outxloly_0_11121111111[color=#6c8040, issapicrule,\n",
+                "                                          role='P']:\n",
                 "     [ State_11121111111( a, n, x, y ) ]\n",
                 "    -->\n",
                 "     [ State_111211111111( a, n, x, y ), Out( (x++y) ) ]\n",
@@ -4418,13 +3711,13 @@ mod ac_variants_block_tests {
     /// so a body holding the two operands the other way round prints them
     /// that way round.
     #[test]
-    fn render_ac_variants_block_does_not_re_sort_the_ac_arguments() {
-        let (mut rule, attrs) = typing_outxloly();
+    fn the_ac_block_does_not_re_sort_the_ac_arguments() {
+        let mut rule = typing_outxloly();
         let x = term(msg("x"));
         let y = term(msg("y"));
         let reversed = Term::App(FunSym::Ac(AcSym::Union), vec![y, x].into());
         *rule.rule.conclusions.last_mut().expect("Out conclusion") = out_fact(reversed);
-        let block = render_ac_variants_block("outxloly_0_11121111111", &rule, &attrs);
+        let block = ac_block(&rule);
         assert!(block.contains("Out( (y++x) )"), "{block}");
     }
 }
@@ -4557,7 +3850,7 @@ end\n";
     fn closed_restriction_prints_the_original_on_top_and_the_expanded_in_the_block() {
         let parsed = tamarin_parser::parse_theory(SRC, &[]).expect("theory parses");
         let elaborated = crate::elaborate::elaborate(&parsed).expect("theory elaborates");
-        let rendered = web_restrictions(&parsed, &elaborated);
+        let rendered = web_restrictions(&elaborated);
         assert_eq!(
             rendered,
             vec![
@@ -4573,6 +3866,43 @@ end\n";
                  \"∀ m x y #i. ((A( m ) @ #i) ∧ (m = <x, y>)) ⇒ (m = <'t', x, y>)\"\n  */",
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod restriction_attribute_tests {
+    use super::*;
+
+    /// HS's restriction parser accepts no attribute list at all —
+    /// `restriction varp nodep = Restriction <$> (symbol "restriction" *>
+    /// identifier <* colon) <*> doubleQuoted (standardFormula varp nodep)
+    /// <*> pure Nothing` (Theory/Text/Parser/Restriction.hs:77-81) — and only
+    /// `diffRestriction` (`:95-100`) does, so `prettyRestriction`
+    /// (TheoryObject.hs:889-901) has no attribute to print.  RS's parser is
+    /// lenient here and reads `[left]`/`[right]` in a non-diff theory; neither
+    /// print carries it through.
+    #[test]
+    fn restriction_attributes_are_not_printed() {
+        const SRC: &str = "theory RestrictionAttrs\n\
+begin\n\
+rule A:\n  [ In( x ) ] --[ A( x ) ]-> [ ]\n\
+restriction Sided [left]:\n  \"All x #i. A( x ) @ #i ==> not( x = 'no' )\"\n\
+end\n";
+        let parsed = tamarin_parser::parse_theory(SRC, &[]).expect("theory parses");
+        let elaborated = crate::elaborate::elaborate(&parsed).expect("theory elaborates");
+        let closed = web_restrictions(&elaborated);
+        assert_eq!(closed.len(), 1);
+        assert!(
+            closed[0].starts_with("restriction Sided:\n"),
+            "closed print: {}",
+            closed[0]
+        );
+        let open = pretty_open_theory(&parsed, &elaborated, "f.spthy", &|_| {
+            Err("no process in this theory".to_string())
+        })
+        .expect("open print");
+        assert!(open.contains("restriction Sided:\n"), "open print: {open}");
+        assert!(!open.contains("[left]"), "open print: {open}");
     }
 }
 
@@ -4609,13 +3939,9 @@ end\n";
     fn closed_lemma_header_uses_the_original_and_the_guarded_block_the_expanded() {
         let parsed = tamarin_parser::parse_theory(SRC, &[]).expect("theory parses");
         let elaborated = crate::elaborate::elaborate(&parsed).expect("theory elaborates");
-        let rendered: Vec<String> = parsed
-            .items
-            .iter()
-            .filter_map(|item| match item {
-                p::TheoryItem::Lemma(l) => render_parsed_lemma(l, &[], "", &elaborated),
-                _ => None,
-            })
+        let rendered: Vec<String> = elaborated
+            .lemmas()
+            .map(|l| pretty_lemma(l, "by sorry", ""))
             .collect();
         assert_eq!(
             rendered,

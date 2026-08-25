@@ -12,9 +12,8 @@
 //! `prettyFact` (`Theory/Model/Fact.hs:567-574#prettyFact`) prints what it
 //! is handed.  The canonicaliser stays where the rendered body is the
 //! PARSED rule's rather than an internal one's
-//! (`pretty_theory::render_rule_body`,
-//! `pretty_theory::render_unfolded_variants_block`), since the order the
-//! source wrote is not the order the constructor picks.
+//! (`pretty_theory::render_rule_e_block`, the `--parse-only` rule printer),
+//! since the order the source wrote is not the order the constructor picks.
 //!
 //! The two projections are not structurally equal, and the assertion here
 //! is not structural equality: `lnterm_to_parser` folds an AC argument

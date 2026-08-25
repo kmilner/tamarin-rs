@@ -478,9 +478,9 @@ fn abs_state_report(st: &BTreeSet<LNFact>, n_refined: usize, n_orig: usize) -> S
 /// no loop breakers): the caller must re-run `populate_rule_variants` and
 /// `annotate_loop_breakers` on the rewritten theory — HS's second
 /// `closeTheoryWithMaude`.  The parsed and elaborated refined rule items
-/// are inserted 1:1 in the same order, which is what keeps
-/// `pretty_theory::pair_elaborated_rules`'s `(name, occurrence-ordinal)` pairing
-/// aligned once partial evaluation makes rule names non-unique.
+/// are inserted 1:1 in the same order, which is what keeps the two item
+/// streams aligned by `(name, occurrence-ordinal)` once partial evaluation
+/// makes rule names non-unique.
 ///
 /// Returns the stderr trace bytes to emit after the "Theory closed"
 /// marker (see [`partial_evaluation`]).

@@ -32,7 +32,7 @@ use tamarin_theory::pretty_theory::web_proto_rules;
 fn rule_echo(src: &str) -> String {
     let thy = parse_theory(src, &[]).expect("parse");
     let elaborated = elaborate(&thy).expect("elaborate");
-    let mut rendered = web_proto_rules(&thy, &elaborated);
+    let mut rendered = web_proto_rules(&elaborated);
     assert_eq!(rendered.len(), 1, "one rule per probe theory");
     let rule = rendered.remove(0);
     match rule.split_once("\n\n  /*") {

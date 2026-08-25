@@ -10,8 +10,7 @@
 //! crate rather than here:
 //! - `someRuleACInst*` (rule instantiation) — in
 //!   `constraint::solver::reduction` (`canonical_rule_inst`).
-//! - Pretty-printing — `render_rule` in `pretty_theory.rs`; graph/dot
-//!   rendering of rule instances lives in `constraint::system::dot`.
+//! - Graph/dot rendering of rule instances — in `constraint::system::dot`.
 //!
 //! The Haskell version uses `fclabels` lenses heavily; we replace those
 //! with public fields plus accessor methods.
@@ -24,7 +23,8 @@ use tamarin_utils::color::Rgb;
 use crate::fact::{apply_macro_in_fact, pretty_lnfact, FactTag, LNFact, Multiplicity};
 use crate::formula::SyntacticLNFormula;
 use crate::pretty_hpj::{
-    fsep, hcat, kw_rule_modulo, line_comment_, numbered_prime, operator_, punctuate, sep, vcat, Doc,
+    above_blank, fsep, hcat, kw_rule_modulo, kw_variants, line_comment_, multi_comment,
+    multi_comment_, numbered_prime, operator_, punctuate, sep, vcat, Doc,
 };
 use crate::sapic::PlainProcess;
 
@@ -1123,6 +1123,95 @@ pub fn pretty_proto_rule_ac(ru: &ProtoRuleAC) -> Doc {
         ru,
         pretty_proto_rule_ac_info(&ru.info),
     )
+}
+
+/// HS `multiComment_ ["has exactly the trivial AC variant"]`, the annotation
+/// both closed-rule printers put under a rule whose AC form says nothing the
+/// E form does not (ClosedTheory.hs:335-339, OpenTheory.hs:833-834).
+fn trivial_ac_variant_comment() -> Doc {
+    multi_comment_(&["has exactly the trivial AC variant"])
+}
+
+/// HS `prettyClosedProtoRule` (ClosedTheory.hs:331-366#prettyClosedProtoRule):
+/// four shapes, keyed on the AC rule's relation to the E rule.  A trivial AC
+/// variant prints the E rule with the annotation; an AC rule that carries
+/// added actions prints as if it were modulo E; an AC rule that only narrowed
+/// the terms prints the E rule with the AC rule quoted in a comment; and a
+/// rule whose AC name differs — one variant of a rule split into several —
+/// prints as modulo AC with the E rule quoted under it.
+pub fn pretty_closed_proto_rule(ru_ac: &ProtoRuleAC, ru_e: &ProtoRuleE) -> Doc {
+    let breakers = || pretty_loop_breakers(&ru_ac.info.loop_breakers);
+    if is_trivial_proto_variant_ac(ru_ac, ru_e) {
+        above_blank(
+            pretty_proto_rule_e(ru_e),
+            breakers().above_g(trivial_ac_variant_comment()).nest(2),
+        )
+    } else if ru_ac.info.name == ru_e.info.name {
+        if !equal_up_to_terms(ru_ac, ru_e) {
+            above_blank(
+                pretty_proto_rule_ac_as_e(ru_ac),
+                breakers().above_g(trivial_ac_variant_comment()).nest(2),
+            )
+        } else {
+            above_blank(
+                pretty_proto_rule_e(ru_e),
+                breakers()
+                    .above_g(multi_comment(pretty_proto_rule_ac(ru_ac)))
+                    .nest(2),
+            )
+        }
+    } else {
+        above_blank(
+            pretty_proto_rule_ac(ru_ac),
+            breakers()
+                .above_g(multi_comment_(&["variant of"]))
+                .above_g(multi_comment(pretty_proto_rule_e(ru_e)))
+                .nest(3),
+        )
+    }
+}
+
+/// HS `ppList` (OpenTheory.hs:822-824): the AC rules of a merged rule item,
+/// one `prettyProtoRuleAC` each, separated by a `,` line.
+fn pretty_proto_rule_ac_list(variants: &[ProtoRuleAC]) -> Doc {
+    match variants {
+        [] => Doc::empty(),
+        [x] => pretty_proto_rule_ac(x),
+        [x, rest @ ..] => pretty_proto_rule_ac(x)
+            .above_g(Doc::char(','))
+            .above_g(pretty_proto_rule_ac_list(rest)),
+    }
+}
+
+/// HS `prettyOpenProtoRuleAsClosedRule`
+/// (OpenTheory.hs:826-850#prettyOpenProtoRuleAsClosedRule): the printer
+/// `prettyClosedTheory` switches the whole theory to when some rule item
+/// carries an AC rule of its own.  With no AC rule the loop breakers are
+/// unavailable and only the annotation is printed; with one the AC rule
+/// stands in for the E rule; with several the E rule is followed by a
+/// `variants` block listing them.
+pub fn pretty_open_proto_rule_as_closed_rule(r: &crate::theory::MergedProtoRule) -> Doc {
+    match r.rule_ac.as_slice() {
+        [] => above_blank(
+            pretty_proto_rule_e(&r.rule_e),
+            Doc::empty().above_g(trivial_ac_variant_comment()).nest(2),
+        ),
+        [ru_ac] => above_blank(
+            pretty_proto_rule_ac_as_e(ru_ac),
+            pretty_loop_breakers(&ru_ac.info.loop_breakers)
+                .above_g(if ru_ac.info.variants.len() == 1 {
+                    trivial_ac_variant_comment()
+                } else {
+                    multi_comment(pretty_proto_rule_ac(ru_ac))
+                })
+                .nest(2),
+        ),
+        variants => pretty_proto_rule_e(&r.rule_e).above_g(
+            kw_variants()
+                .above_g(pretty_proto_rule_ac_list(variants).nest(1))
+                .nest(1),
+        ),
+    }
 }
 
 // =============================================================================

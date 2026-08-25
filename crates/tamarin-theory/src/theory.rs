@@ -56,16 +56,6 @@ pub struct OpenProtoRule {
     /// populated by `ProofContext::new`'s `annotate_loop_breakers`
     /// pass.
     pub loop_breakers: Vec<crate::rule::PremIdx>,
-    /// This rule is a product of the `--auto-sources` variant unfold
-    /// (`unfoldRuleVariants`, lib/theory/src/Rule.hs:63-79): `rule` holds one
-    /// AC variant named `<orig>___VARIANT_<i>` while HS's `cprRuleE` half
-    /// keeps the ORIGINAL rule, so the two names differ and
-    /// `equalUpToTerms` (Theory/Model/Rule.hs:960-968) is False on the name
-    /// alone — `openProtoRule` (lib/theory/src/Rule.hs:52-59) then always
-    /// yields its non-empty `[ruAC]` branch for such a rule.  The renderer
-    /// reads this flag where it mirrors that branch choice
-    /// (`pretty_theory::rule_open_ac_nonempty`).
-    pub unfolded_variant: bool,
     /// HS's `cprRuleE` half (`ClosedProtoRule`, Items/RuleItem.hs:56-59),
     /// stored only where it differs from `rule`: **`None` iff `rule` IS that
     /// half**.  Three steps drive them apart.  `elaborate_items` applies the
@@ -101,7 +91,6 @@ impl OpenProtoRule {
             variant_substs: Vec::new(),
             abstracted_rule: None,
             loop_breakers: Vec::new(),
-            unfolded_variant: false,
             rule_e: None,
             rule_ac: Vec::new(),
         }
@@ -460,9 +449,7 @@ impl<R, P, S> Theory<R, P, S> {
     /// Look up a restriction by name (HS `lookupRestriction`,
     /// TheoryObject.hs:671-672).
     ///
-    /// The closed printer's restriction renderer resolves the parsed item to
-    /// its elaborated twin through this (`pretty_theory::render_parsed_restriction`),
-    /// and [`Theory::add_restriction`] uses it as the duplicate-name guard.
+    /// [`Theory::add_restriction`] uses it as the duplicate-name guard.
     pub fn lookup_restriction(&self, name: &str) -> Option<&Restriction> {
         self.restrictions().find(|r| r.name == name)
     }
@@ -635,6 +622,44 @@ pub fn open_proto_rule(r: &OpenProtoRule) -> MergedProtoRule {
         .filter(|ac| !crate::rule::equal_up_to_terms(ac, &rule_e))
         .collect();
     MergedProtoRule { rule_e, rule_ac }
+}
+
+/// HS `ClosedProtoRule` (Items/RuleItem.hs:50-59): the rule as the source
+/// writes it beside the one rule modulo AC `closeProtoRule` narrows it to.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClosedProtoRule {
+    pub rule_e: ProtoRuleE,
+    pub rule_ac: crate::rule::ProtoRuleAC,
+}
+
+/// HS `closeTheoryItem`'s rule arm followed by `unfoldClosedRules`
+/// (CloseRule.hs:82-93#unfoldClosedRules) over `closeProtoRule`
+/// (lib/theory/src/Rule.hs:82-86): a rule item becomes one closed rule per AC
+/// rule it closes into — one for a computed narrowing, one per `variants
+/// (modulo AC)` block the source writes — each carrying the item's E half.
+/// Every other item passes through at its position.
+pub fn close_proto_rules<P: Clone, S: Clone>(
+    items: &[TheoryItem<OpenProtoRule, P, S>],
+) -> Vec<TheoryItem<ClosedProtoRule, P, S>> {
+    let mut out: Vec<TheoryItem<ClosedProtoRule, P, S>> = Vec::new();
+    for item in items {
+        match item {
+            TheoryItem::Rule(r) => out.extend(closed_rules_ac(r).into_iter().map(|ac| {
+                TheoryItem::Rule(ClosedProtoRule {
+                    rule_e: r.rule_e().clone(),
+                    rule_ac: ac,
+                })
+            })),
+            TheoryItem::Lemma(x) => out.push(TheoryItem::Lemma(x.clone())),
+            TheoryItem::Restriction(x) => out.push(TheoryItem::Restriction(x.clone())),
+            TheoryItem::Text(x) => out.push(TheoryItem::Text(x.clone())),
+            TheoryItem::ConfigBlock(x) => out.push(TheoryItem::ConfigBlock(x.clone())),
+            TheoryItem::Predicate(x) => out.push(TheoryItem::Predicate(x.clone())),
+            TheoryItem::Macros(x) => out.push(TheoryItem::Macros(x.clone())),
+            TheoryItem::Translation(x) => out.push(TheoryItem::Translation(x.clone())),
+        }
+    }
+    out
 }
 
 /// HS `mergeOpenProtoRules . map (mapTheoryItem openProtoRule id)`

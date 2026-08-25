@@ -25,6 +25,12 @@ pub fn multi_comment_(lines: &[&str]) -> Doc {
     comment(fsep(vec![Doc::text("/*"), body, Doc::text("*/")]))
 }
 
+/// HS `multiComment d = comment $ fsep [text "/*", d, text "*/"]`
+/// (`Theory/Text/Pretty.hs:102-103`).
+pub fn multi_comment(d: Doc) -> Doc {
+    comment(fsep(vec![Doc::text("/*"), d, Doc::text("*/")]))
+}
+
 /// HS `closedComment_ s = comment $ fsep [text "/*", text s, text "*/"]`
 /// (`Theory/Text/Pretty.hs:111-112`).
 pub fn closed_comment_(s: &str) -> Doc {
@@ -43,6 +49,11 @@ pub fn kw_modulo(what: &str, thy: &str) -> Doc {
 /// (`Theory/Text/Pretty.hs:154-156, see line 156`).
 pub fn kw_rule_modulo(thy: &str) -> Doc {
     kw_modulo("rule", thy)
+}
+
+/// HS `kwVariants = keyword_ "variants"` (`Theory/Text/Pretty.hs:146`).
+pub fn kw_variants() -> Doc {
+    keyword_("variants")
 }
 
 #[cfg(test)]

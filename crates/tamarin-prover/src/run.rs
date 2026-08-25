@@ -2173,13 +2173,9 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
     // skipping the summary block.  The doc's stats force the saturation
     // lazily at that renderDoc, so each file's `[Saturating Sources]`
     // stderr trace fires in the PRINT phase (after every file's markers),
-    // not during its loop iteration — stash the session + parsed theory +
-    // wf-failure count here and defer the stats computation to match.
-    let mut precompute_pending: Vec<(
-        tamarin_theory::prove::ProverSession,
-        tamarin_parser::ast::Theory,
-        usize,
-    )> = Vec::new();
+    // not during its loop iteration — stash the session and the wf-failure
+    // count here and defer the stats computation to match.
+    let mut precompute_pending: Vec<(tamarin_theory::prove::ProverSession, usize)> = Vec::new();
 
     // The maude binary this run invokes is argv-constant, and resolving the
     // default probes the filesystem — resolve it ONCE here and lend it to the
@@ -2591,7 +2587,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
                         .build_prover_session(maude)
                         .map_err(|e| RunError(e.to_string()))?;
                     let wf_len = st.wf_report.len();
-                    precompute_pending.push((session, st.parsed, wf_len));
+                    precompute_pending.push((session, wf_len));
                 } else {
                     // HS `outputTraces` (Batch.hs:224-226) runs in `processThy`'s
                     // close-and-prove `else` — the ONLY branch that reaches it.
@@ -2616,13 +2612,11 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
                     // Generated-from footer.
                     let wf_block = tamarin_theory::pretty_theory::format_wf_block(&st.wf_report);
                     let body = tamarin_theory::pretty_theory::pretty_closed_theory(
-                        &st.parsed,
                         &st.elaborated,
                         &closed.proved_lemmas,
                         &wf_block,
                         &build_info,
                         in_file,
-                        st.auto_sources,
                     );
                     // HS normal mode: `writeOutput` is true whenever `-o`/`-O` was
                     // given (Batch.hs:168), and a `mkOutPath` miss — `-o=` with no
@@ -2670,12 +2664,12 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         // docs to stdout after the file loop, no summary block.  Forcing
         // each file's stats here (traces, then its doc) reproduces HS's
         // renderDoc-time stderr order — see `precompute_pending`.
-        for (session, parsed, wf_len) in &precompute_pending {
+        for (session, wf_len) in &precompute_pending {
             // The trace is already armed: each file's `close_translated_theory`
             // left it on, matching HS, where this forcing happens inside the
             // same `showSaturation = True` close.
             let stats = session
-                .precomputation_stats(parsed)
+                .precomputation_stats()
                 .map_err(|e| RunError(e.to_string()))?;
             // HS `casesInfo` (ClosedTheory.hs:563-570).
             let chain_info = |n: usize| -> String {

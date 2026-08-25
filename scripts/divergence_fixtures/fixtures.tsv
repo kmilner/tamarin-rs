@@ -58,3 +58,4 @@ s6_restrict_action_timepoint	wf,theory	match	--derivcheck-timeout=0
 s6_restrict_free_ac	theory	match	--derivcheck-timeout=0
 s6_restrict_let_two	theory	match	--derivcheck-timeout=0
 s7_pe_macro_rule	theory	match	--partial-evaluation=summary --derivcheck-timeout=0
+s7_intruder_rule_block	theory	match	--derivcheck-timeout=0

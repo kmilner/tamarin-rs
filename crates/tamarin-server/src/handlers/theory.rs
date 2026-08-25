@@ -452,13 +452,11 @@ fn render_theory_source(entry: &crate::state::TheoryEntry) -> String {
         None => Vec::new(),
     };
     let mut body = tamarin_theory::pretty_theory::pretty_closed_theory(
-        &entry.parser_theory,
         &entry.typed_theory,
         &proved,
         &wf_block,
         &build,
         &in_file,
-        false,
     );
     // `getTheorySourceR` / `getTheoryMessageDeductionR` / `getDownloadTheoryR`
     // are all `render . prettyClosedTheory` (Handler.hs:1015-1022, :1050-1055,

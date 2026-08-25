@@ -673,7 +673,15 @@ fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), Elab
                         &macros, restr,
                     )));
             }
-            p::TheoryItem::Rule(r) | p::TheoryItem::IntrRule(r) => {
+            // A top-level `rule (modulo AC)` block is an intruder rule: HS's
+            // parser routes it into `_thyCache` through `addIntrRuleACs`
+            // (`intrRule`, Theory/Text/Parser/Rule.hs:156-161;
+            // Theory/Text/Parser.hs:287; OpenTheory.hs:750-751), so it becomes
+            // no theory item, reaches neither print (`ppCache = const
+            // emptyDoc`, OpenTheory.hs:869-874) and joins no protocol rule
+            // set.
+            p::TheoryItem::IntrRule(_) => {}
+            p::TheoryItem::Rule(r) => {
                 // `closeProtoRule` narrows `applyMacroInRule macros ruE` into
                 // the AC half and keeps `ruE` itself as the `cprRuleE` half
                 // (lib/theory/src/Rule.hs:82-86).  A theory that declares no
@@ -1160,14 +1168,13 @@ fn lnfacts_to_parser(facts: &[crate::fact::LNFact]) -> Vec<p::Fact> {
 
 /// Materialise an elaborated `ProtoRuleE` as a parser-AST rule item, so a
 /// synthesised rule (SAPIC translation, partial evaluation) can join the
-/// parsed-item stream `pretty_closed_theory` renders from — the display facts
-/// come from here.
+/// parsed item stream.
 ///
 /// The body is the elaborated E-rule projected back through
-/// `lnfacts_to_parser`, so it is already macro expanded and AC argument order
-/// is canonicalised at render time (`render_rule_body`), exactly as for the
-/// modulo-AC comment blocks.  The attributes carry color / process /
-/// no_derivcheck / issapicrule / role, as HS's `toRule` produced them.
+/// `lnfacts_to_parser`, so it is already macro expanded and its AC argument
+/// order is the constructor's rather than the source's.  The attributes carry
+/// color / process / no_derivcheck / issapicrule / role, as HS's `toRule`
+/// produced them.
 pub fn proto_rule_to_parsed(r: &crate::rule::ProtoRuleE) -> p::Rule {
     p::Rule {
         name: match &r.info.name {
@@ -1175,7 +1182,7 @@ pub fn proto_rule_to_parsed(r: &crate::rule::ProtoRuleE) -> p::Rule {
             crate::rule::ProtoRuleName::Fresh => "Fresh".to_string(),
         },
         modulo: None,
-        attributes: crate::mult_restricted::surface_attrs(&r.info.attributes),
+        attributes: parsed_rule_attrs(&r.info.attributes),
         premises: lnfacts_to_parser(&r.premises),
         actions: lnfacts_to_parser(&r.actions),
         conclusions: lnfacts_to_parser(&r.conclusions),
@@ -1183,6 +1190,48 @@ pub fn proto_rule_to_parsed(r: &crate::rule::ProtoRuleE) -> p::Rule {
         variants: Vec::new(),
         left_right: None,
     }
+}
+
+/// A rule's own `RuleAttributes` in the `Vec<p::RuleAttr>` shape the parser
+/// AST carries — the attribute half of [`proto_rule_to_parsed`].
+///
+/// HS's `prettyRuleAttribute` (Theory/Model/Rule.hs:1313-1328) renders the
+/// record's fields as `catMaybes [color, process, no_derivcheck, issapicrule,
+/// role]`; the parser-AST printer re-derives that order from the list, so the
+/// order here is not load-bearing.  An all-default record maps to the empty
+/// list, which prints as HS's `ruleAttributes ru == mempty ⇒ emptyDoc` branch
+/// (Theory/Model/Rule.hs:1330-1334).
+fn parsed_rule_attrs(attr: &crate::rule::RuleAttributes) -> Vec<p::RuleAttr> {
+    let mut out = Vec::new();
+    if let Some(c) = &attr.color {
+        // HS `text "color=" <> text (rgbToHex c)`; the printer re-attaches the
+        // `#` that `rgbToHex` (Data/Color.hs:140-147) prefixes.
+        out.push(p::RuleAttr::Color(
+            tamarin_utils::color::rgb_to_hex(*c)
+                .trim_start_matches('#')
+                .to_string(),
+        ));
+    }
+    if let Some(proc) = &attr.process {
+        // HS `ppProcess p = text "process=" <> text ("\"" ++
+        // prettySapicTopLevel' f p ++ "\"")` (Theory/Model/Rule.hs:1324-1327).
+        // Only the SAPIC translation fills this field — HS's attribute parser
+        // `parseAndIgnore`s a user-written `process=`
+        // (Theory/Text/Parser/Rule.hs:69-95, see line 74), as does RS's.
+        out.push(p::RuleAttr::Process(
+            crate::pretty_sapic::pretty_sapic_top_level_attr(proc),
+        ));
+    }
+    if attr.ignore_deriv_checks {
+        out.push(p::RuleAttr::NoDerivCheck);
+    }
+    if attr.is_sapic_rule {
+        out.push(p::RuleAttr::IsSapicRule);
+    }
+    if let Some(r) = &attr.role {
+        out.push(p::RuleAttr::Role(r.clone()));
+    }
+    out
 }
 
 /// `LNFact` → parser-AST `Fact`: the tag's name and multiplicity, the terms
