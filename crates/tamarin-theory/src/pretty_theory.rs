@@ -53,6 +53,7 @@
 use crate::pretty_formula as pf;
 use crate::theory::Theory;
 use tamarin_parser::ast as p;
+use tamarin_term::pretty::pretty_nterm;
 
 /// Build info passed in from the prover binary so the Generated-from
 /// block reflects compile-time facts.
@@ -1647,18 +1648,15 @@ mod function_typing_info_tests {
 /// function applications wrap at the ribbon width exactly as HS
 /// `prettyCtxtStRule`/`prettyLNTerm` (SubtermRule.hs:123-126, Term/Term.hs:326-327)
 /// — the `ppFun f ts = text (f++"(") <> fsep (punctuate comma …) <> ")"` `fsep`
-/// breaks at argument boundaries when the term overruns.  We reach the Doc path
-/// by converting the `LNTerm` to a parser-AST `p::Term` (`lnterm_to_parser`,
-/// the same conversion already used elsewhere) and rendering it through
-/// `pf::term_doc` (= HS `prettyTerm`).
+/// breaks at argument boundaries when the term overruns.  Each side is the
+/// `LNTerm` printed by [`pretty_nterm`], HS `prettyLNTerm = prettyNTerm`
+/// (LTerm.hs:930-935#prettyNTerm).
 fn render_equations(
     sig: &tamarin_term::maude_sig::MaudeSig,
 ) -> Vec<(crate::pretty_hpj::Doc, crate::pretty_hpj::Doc)> {
     let mut items = Vec::new();
     for r in &sig.st_rules {
-        let lhs = pf::term_doc(&lnterm_to_parser(&r.lhs));
-        let rhs = pf::term_doc(&lnterm_to_parser(&r.rhs.term));
-        items.push((lhs, rhs));
+        items.push((pretty_nterm(&r.lhs), pretty_nterm(&r.rhs.term)));
     }
     items
 }
@@ -1679,8 +1677,8 @@ fn render_equations(
 ///     `Ord CtxtStRule`), so e.g. `f1, f2, f3, g` rather than source order
 ///     `f1, g, f2, f3`;
 ///   * each equation = `prettyCtxtStRule r = sep [nest 2 lhs, "=" <-> rhs]`
-///     (SubtermRule.hs:122-123), rendered via `pf::term_doc` so a wide RHS
-///     wraps (HS `prettyTerm`'s `fsep` ppFun, Term/Term.hs:326-327);
+///     (SubtermRule.hs:122-123), each side rendered via `pretty_nterm` so a
+///     wide RHS wraps (HS `prettyTerm`'s `fsep` ppFun, Term/Term.hs:326-327);
 ///   * suppressed entirely when `eqConvergent (sig thy)` is set
 ///     (`isUserMarkedConvergent`, Wellformedness.hs:1211-1214/1285).
 ///
@@ -1728,8 +1726,8 @@ pub fn subterm_convergence_report_wf(
         let docs: Vec<Doc> = non_conv
             .iter()
             .map(|r| {
-                let lhs = pf::term_doc(&lnterm_to_parser(&r.lhs)).nest(2);
-                let rhs = pf::term_doc(&lnterm_to_parser(&r.rhs.term));
+                let lhs = pretty_nterm(&r.lhs).nest(2);
+                let rhs = pretty_nterm(&r.rhs.term);
                 let eq_doc = Doc::text("=").beside_sp(rhs);
                 hpj::sep(vec![lhs, eq_doc])
             })
@@ -2683,9 +2681,10 @@ fn render_unfolded_variants_block(
             .nest(2);
         out.push_str(&header.render());
         out.push('\n');
-        // The variant bodies were regenerated from LN facts
-        // (`proto_rule_to_parsed`), so canonicalise AC argument order at
-        // render time exactly as the modulo-AC comment block does.
+        // The variant bodies are parser-AST facts regenerated from LN facts
+        // (`proto_rule_to_parsed`), so AC argument order is canonicalised at
+        // render time; S7 owns the move to the internal items, and the
+        // canonicalisation goes with the projection.
         let prems: Vec<p::Fact> = v.premises.iter().map(canonicalize_ac_in_pfact).collect();
         let acts: Vec<p::Fact> = v.actions.iter().map(canonicalize_ac_in_pfact).collect();
         let concs: Vec<p::Fact> = v.conclusions.iter().map(canonicalize_ac_in_pfact).collect();
@@ -2864,7 +2863,10 @@ fn render_rule_body(prems: &[p::Fact], acts: &[p::Fact], concs: &[p::Fact]) -> S
     // the multiset, producing a different visual order (`k ⊕ nb ⊕ na`).
     // We apply the same canonicalisation to the parser AST so the rendered
     // rule body matches HS byte-for-byte.  `term_to_lnterm` covers the
-    // LNTerm path; this call is the parser-AST path's equivalent.
+    // LNTerm path; this call is the parser-AST path's equivalent.  The
+    // modulo-E rule prints from the PARSED rule, whose body still holds the
+    // macro calls the internal rule has expanded; S6 owns the move to the
+    // internal rule, and the canonicalisation goes with the parser-AST body.
     use crate::elaborate::canonicalize_ac_in_pfact;
     let prems2: Vec<p::Fact> = prems.iter().map(canonicalize_ac_in_pfact).collect();
     let acts2: Vec<p::Fact> = acts.iter().map(canonicalize_ac_in_pfact).collect();
@@ -2949,22 +2951,20 @@ fn render_ac_variants_block(
     // (e.g. `aenc(~k, pkS)` instead of `encrypt(~k, pkS)`) — exactly what HS's
     // `cprRuleAC` holds after `variantsProtoRule (applyMacroInRule macros ruE)`.
     let ac_rule = rule.abstracted_rule.as_ref().unwrap_or(&rule.rule);
-    let prems = lnfacts_to_parser(&ac_rule.premises);
-    let acts = lnfacts_to_parser(&ac_rule.actions);
-    let concs = lnfacts_to_parser(&ac_rule.conclusions);
     // The comment block sits inside HS's `nest 2 (multiComment
     // (prettyNamedRule …))` (ClosedTheory.hs:332-366, see line 354), so the rule body's
     // facts land at absolute column 5 (2 comment + 2 rule nest + 1
-    // bracket).  CRITICAL: render the body with the ENGINE aware of the
-    // full indent (nest 4 via indent=5) — the HughesPJ width decisions must
-    // be made at the absolute column, so lines within 2 columns of the
-    // boundary break exactly where HS breaks (cf. the spdm R_KE_Response
-    // tuple: HS breaks at col 95).
-    use crate::elaborate::canonicalize_ac_in_pfact;
-    let prems2: Vec<p::Fact> = prems.iter().map(canonicalize_ac_in_pfact).collect();
-    let acts2: Vec<p::Fact> = acts.iter().map(canonicalize_ac_in_pfact).collect();
-    let concs2: Vec<p::Fact> = concs.iter().map(canonicalize_ac_in_pfact).collect();
-    let body = render_rule_body_at(&prems2, &acts2, &concs2, 5);
+    // bracket).  CRITICAL: the body Doc carries that indent as a `nest 4`,
+    // so the HughesPJ width decisions are made at the absolute column and
+    // lines within 2 columns of the boundary break exactly where HS breaks
+    // (cf. the spdm R_KE_Response tuple: HS breaks at col 95).
+    let body = crate::rule::pretty_rule_restr_gen(
+        &ac_rule.premises,
+        &ac_rule.actions,
+        &ac_rule.conclusions,
+    )
+    .nest(4)
+    .render();
     s.push_str(&body);
     if !body.ends_with('\n') {
         s.push('\n');
@@ -3030,7 +3030,7 @@ fn variant_subst_doc(
     let eq_docs: Vec<Doc> = bindings
         .iter()
         .map(|(v, t)| {
-            let term_doc = pf::term_to_doc(&lnterm_to_parser(t), &[]);
+            let term_doc = pretty_nterm(t);
             // HS `prettyEq (a,b) = prettyNTerm (Var a) $$ nest 6 (text "=" <->
             // prettyNTerm b)` (SubstVFresh.hs:228-229) — the substitution `=` is a
             // PLAIN `text`, NOT `opEqual`, so it carries no `hl_operator` span.
@@ -4444,6 +4444,127 @@ mod manual_rule_variants_tests {
             contains_manual_rule_variants(&parsed, &elaborated, false),
             positional(&parsed, &elaborated, false),
         );
+    }
+}
+
+#[cfg(test)]
+mod ac_variants_block_tests {
+    use super::*;
+    use crate::fact::{in_fact, out_fact, proto_fact, Multiplicity};
+    use crate::rule::{ProtoRuleEInfo, Rule};
+    use crate::theory::OpenProtoRule;
+    use tamarin_term::function_symbols::{zero_sym, AcSym, FunSym};
+    use tamarin_term::lterm::{LNTerm, LSort, LVar};
+    use tamarin_term::subst_vfresh::LNSubstVFresh;
+    use tamarin_term::term::{f_app_ac, f_app_no_eq, Term};
+    use tamarin_term::vterm::var_term;
+
+    /// A message-sort variable at index 0 — how the abstracted AC rule
+    /// spells the variables its variant substitutions bind.
+    fn msg(name: &str) -> LVar {
+        LVar::new(name, LSort::Msg, 0)
+    }
+
+    fn term(v: LVar) -> LNTerm {
+        var_term(v)
+    }
+
+    /// `features/xor/basicfunctionality/xor0.spthy`'s `receive` rule as the
+    /// closing pipeline leaves it: one abstracted variable in the body, and
+    /// the two substitutions Maude's narrowing returns for it.
+    fn xor0_receive() -> OpenProtoRule {
+        let z = msg("z");
+        let mut open = OpenProtoRule::new(Rule::new(
+            ProtoRuleEInfo::standard("receive"),
+            vec![in_fact(term(z))],
+            vec![],
+            vec![proto_fact(Multiplicity::Linear, "Response", vec![term(z)])],
+        ));
+        let a = LVar::new("a", LSort::Fresh, 4);
+        let b = LVar::new("b", LSort::Fresh, 4);
+        open.variant_substs = vec![
+            LNSubstVFresh::from_list([(z, f_app_no_eq(zero_sym(), vec![]))]),
+            LNSubstVFresh::from_list([(z, f_app_ac(AcSym::Xor, vec![term(a), term(b)]))]),
+        ];
+        open
+    }
+
+    /// `sapic/fast/basic/typing.spthy`'s `outxloly_0_11121111111` rule: a
+    /// multiset union in a conclusion, and an attribute list long enough
+    /// that the header's `fsep` wraps.
+    fn typing_outxloly() -> (OpenProtoRule, Vec<p::RuleAttr>) {
+        let vars: Vec<LVar> = ["a", "n", "x", "y"].into_iter().map(msg).collect();
+        let args: Vec<LNTerm> = vars.iter().map(|v| term(*v)).collect();
+        let union = f_app_ac(AcSym::Union, vec![term(vars[2]), term(vars[3])]);
+        let open = OpenProtoRule::new(Rule::new(
+            ProtoRuleEInfo::standard("outxloly_0_11121111111"),
+            vec![proto_fact(
+                Multiplicity::Linear,
+                "State_11121111111",
+                args.clone(),
+            )],
+            vec![
+                proto_fact(Multiplicity::Linear, "State_111211111111", args),
+                out_fact(union),
+            ],
+            vec![],
+        ));
+        let attrs = vec![
+            p::RuleAttr::Color("#6c8040".to_string()),
+            p::RuleAttr::Process("out((x.1:lol++y.1));".to_string()),
+            p::RuleAttr::IsSapicRule,
+            p::RuleAttr::Role("P".to_string()),
+        ];
+        (open, attrs)
+    }
+
+    /// The block prints the internal rule's AC arguments in the order the
+    /// rule holds them.  Both expectations are the bytes the Haskell oracle
+    /// at the submodule pin prints for the named corpus rule.
+    #[test]
+    fn render_ac_variants_block_keeps_the_internal_ac_order() {
+        assert_eq!(
+            render_ac_variants_block("receive", &xor0_receive(), &[p::RuleAttr::NoDerivCheck]),
+            concat!(
+                "  /*\n",
+                "  rule (modulo AC) receive[no_derivcheck]:\n",
+                "     [ In( z ) ] --[ Response( z ) ]-> [ ]\n",
+                "    variants (modulo AC)\n",
+                "    1. z     = zero\n",
+                "    \n",
+                "    2. z     = (~a.4\u{2295}~b.4)\n",
+                "  */",
+            ),
+        );
+        let (rule, attrs) = typing_outxloly();
+        assert_eq!(
+            render_ac_variants_block("outxloly_0_11121111111", &rule, &attrs),
+            concat!(
+                "  /*\n",
+                "  rule (modulo AC) outxloly_0_11121111111[color=#6c8040,\n",
+                "                                          process=\"out((x.1:lol++y.1));\", issapicrule, role='P']:\n",
+                "     [ State_11121111111( a, n, x, y ) ]\n",
+                "    -->\n",
+                "     [ State_111211111111( a, n, x, y ), Out( (x++y) ) ]\n",
+                "  */",
+            ),
+        );
+    }
+
+    /// HS sorts an AC argument list at construction (`fAppAC`,
+    /// Term/Term/Raw.hs:118-129#fAppAC) and `prettyFact`
+    /// (Theory/Model/Fact.hs:566-574#prettyFact) prints what it is handed,
+    /// so a body holding the two operands the other way round prints them
+    /// that way round.
+    #[test]
+    fn render_ac_variants_block_does_not_re_sort_the_ac_arguments() {
+        let (mut rule, attrs) = typing_outxloly();
+        let x = term(msg("x"));
+        let y = term(msg("y"));
+        let reversed = Term::App(FunSym::Ac(AcSym::Union), vec![y, x].into());
+        *rule.rule.conclusions.last_mut().expect("Out conclusion") = out_fact(reversed);
+        let block = render_ac_variants_block("outxloly_0_11121111111", &rule, &attrs);
+        assert!(block.contains("Out( (y++x) )"), "{block}");
     }
 }
 
