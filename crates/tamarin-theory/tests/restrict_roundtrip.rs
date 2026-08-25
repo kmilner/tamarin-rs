@@ -2,29 +2,32 @@
 // of the tamarin-prover sources this file cites; list them with:
 //   scripts/gen_license_headers.py --authors <this file>
 
-//! Corpus net for the locally-nameless → parser-AST bridge
-//! [`syntactic_lnformula_to_parser`], measured through the one pass that
-//! consumes its output: the `_restrict` lifting.
+//! Corpus net for the internal → parser-AST projection the `_restrict`
+//! lifting writes back into the parsed theory.
 //!
 //! For every `_restrict` formula of a protocol rule and every SAPIC condition
-//! and embedded-MSR restriction of the examples tree, two one-rule
-//! `p::Rule`s are lifted with `rule_restriction::lift_one_rule` — one
-//! carrying the parsed formula, one carrying that formula closed with
-//! `formula::from_parser` and reopened with the bridge — and the generated
-//! restrictions and the rewritten rule must be equal.  That comparison covers
-//! predicate expansion, `rewrite`'s abstraction (whose fresh-variable counter
-//! and granularity depend on the term shapes), the `frees_sorted` binder list
-//! of the generated restriction and the `Restr_*` action inserted into the
-//! rule, in one shot.
+//! and embedded-MSR restriction of the examples tree, the formula is closed,
+//! its predicates are expanded and `restriction::from_rule_restriction` turns
+//! it into the generated restriction and its action fact — the two values
+//! `lift_rule_restrictions` projects.  Each projection is then reopened:
+//! `pretty_formula::lnformula_to_parser` followed by `formula::from_parser`
+//! must give the restriction's formula back, and `elaborate::lnfact_to_parser`
+//! followed by `elaborate::fact_to_lnfact` must give the action back.
+//!
+//! That measures the one round trip the user-rule path takes, over the fresh
+//! `x`/`x.1` variables `rewrite` mints, the `∀`-binder prefix, the abstracted
+//! terms of the action and the AC argument orders `f_app_ac` imposes when the
+//! projection is closed again.
 
 use rayon::prelude::*;
 use std::path::{Path, PathBuf};
 use tamarin_parser::ast as p;
 use tamarin_term::maude_sig::MaudeSig;
-use tamarin_theory::elaborate::canonicalize_ac_in_formula;
-use tamarin_theory::formula::from_parser;
-use tamarin_theory::pretty_formula::syntactic_lnformula_to_parser;
-use tamarin_theory::rule_restriction::{lift_one_rule, lift_rule_restrictions};
+use tamarin_theory::elaborate::{fact_to_lnfact, lnfact_to_parser};
+use tamarin_theory::formula::{from_parser, to_lnformula};
+use tamarin_theory::predicate::{expand_formula, Predicate};
+use tamarin_theory::pretty_formula::lnformula_to_parser;
+use tamarin_theory::rule_restriction::{lift_rule_restrictions, rule_restrictions};
 
 /// One formula to round-trip, tagged with where it came from.
 struct Item {
@@ -87,9 +90,9 @@ fn process_formulas(proc_: &p::Process, label: &str, out: &mut Vec<Item>) {
     }
 }
 
-/// Every formula that reaches [`lift_one_rule`]: a rule's `_restrict`
-/// formulas, and the SAPIC conditions and embedded-MSR restrictions the
-/// translation turns into rule restrictions.
+/// Every formula the lifting reaches: a rule's `_restrict` formulas, and the
+/// SAPIC conditions and embedded-MSR restrictions the translation turns into
+/// rule restrictions.
 fn theory_formulas(parsed: &p::Theory) -> Vec<Item> {
     let mut out = Vec::new();
     for item in &parsed.items {
@@ -118,22 +121,26 @@ fn theory_formulas(parsed: &p::Theory) -> Vec<Item> {
     out
 }
 
-fn predicates(parsed: &p::Theory) -> Vec<p::Predicate> {
+/// The theory's `predicates:` declarations, closed the way the lifting closes
+/// them.  A declaration the signature rejects drops out: the file's other
+/// formulas are still worth netting.
+fn predicates(parsed: &p::Theory, msig: &MaudeSig) -> Vec<Predicate> {
     parsed
         .items
         .iter()
         .filter_map(|i| match i {
-            p::TheoryItem::Predicates(ps) => Some(ps.clone()),
+            p::TheoryItem::Predicates(ps) => Some(ps),
             _ => None,
         })
         .flatten()
+        .filter_map(|pd| tamarin_theory::predicate::from_parser(pd, msig).ok())
         .collect()
 }
 
 /// What one file leaves for the formula-level phase.
 struct FileReport {
     items: Vec<Item>,
-    predicates: Vec<p::Predicate>,
+    predicates: Vec<Predicate>,
     msig: MaudeSig,
     /// The file has items but no signature to close them against.
     skipped: bool,
@@ -179,25 +186,9 @@ fn file_phase(path: &Path) -> FileReport {
         return rep;
     };
     rep.msig = elab.signature.maude_sig.clone();
-    rep.predicates = predicates(&parsed);
+    rep.predicates = predicates(&parsed, &rep.msig);
     rep.items = items;
     rep
-}
-
-/// The one-rule theory item `lift_one_rule` consumes: a rule whose only
-/// content is the formula under test.
-fn one_rule(f: &p::Formula) -> p::Rule {
-    p::Rule {
-        name: "C_2".to_string(),
-        modulo: None,
-        attributes: Vec::new(),
-        premises: Vec::new(),
-        actions: Vec::new(),
-        conclusions: Vec::new(),
-        embedded_restrictions: vec![f.clone()],
-        variants: Vec::new(),
-        left_right: None,
-    }
 }
 
 /// The outcome of one formula's round trip.
@@ -205,46 +196,66 @@ enum Outcome {
     Equal,
     /// `from_parser` rejects the formula (a SAPIC `=t` pattern term).
     Unconvertible(String),
-    /// Predicate expansion fails on both sides alike.
+    /// Predicate expansion fails: the formula calls a predicate the theory
+    /// never declares.
     ExpandError,
     Mismatch(String),
 }
 
-/// The parsed formula and its round trip, lifted and compared.
-///
-/// The parsed side is AC-canonicalised first: closing a formula builds its
-/// terms through `f_app_ac`, which sorts the arguments of an AC symbol, so
-/// the round trip returns the canonical order while the source AST keeps the
-/// written one.  Both renderers canonicalise before printing
-/// (`render_rule`'s `canonicalize_ac_in_pfact`,
-/// `render_parsed_restriction`'s `canonicalize_ac_in_formula`), so the
-/// comparison is over the shapes that reach the output.
-fn compare(item: &Item, preds: &[p::Predicate], msig: &MaudeSig) -> Outcome {
-    let ln = match from_parser(&item.formula, msig) {
-        Ok(ln) => ln,
+/// Lift one formula and reopen both of the values the lifting projects.
+fn compare(item: &Item, preds: &[Predicate], msig: &MaudeSig) -> Outcome {
+    let syn = match from_parser(&item.formula, msig) {
+        Ok(f) => f,
         Err(e) => return Outcome::Unconvertible(format!("{}: {}", item.label, e.message)),
     };
-    let reopened = syntactic_lnformula_to_parser(&ln);
-    let direct = lift_one_rule(one_rule(&canonicalize_ac_in_formula(&item.formula)), preds);
-    let through = lift_one_rule(one_rule(&reopened), preds);
-    match (direct, through) {
-        (Ok(a), Ok(b)) if a == b => Outcome::Equal,
-        (Ok(a), Ok(b)) => Outcome::Mismatch(format!(
-            "{}\n--- from the parsed formula\n{a:#?}\n--- through the round trip\n{b:#?}",
+    let expanded = match expand_formula(preds, &syn) {
+        Ok(f) => f,
+        Err(_) => return Outcome::ExpandError,
+    };
+    let (restr, action) = rule_restrictions("C_2", std::slice::from_ref(&expanded))
+        .pop()
+        .expect("one formula, one restriction");
+
+    let reopened = match from_parser(&lnformula_to_parser(&restr.formula), msig) {
+        Ok(f) => f,
+        Err(e) => {
+            return Outcome::Mismatch(format!(
+                "{}: the projected restriction does not close again: {}",
+                item.label, e.message
+            ))
+        }
+    };
+    match to_lnformula(&reopened) {
+        Some(back) if back == restr.formula => {}
+        Some(back) => {
+            return Outcome::Mismatch(format!(
+                "{}\n--- the generated restriction\n{:#?}\n--- reopened\n{back:#?}",
+                item.label, restr.formula
+            ))
+        }
+        None => {
+            return Outcome::Mismatch(format!(
+                "{}: the reopened restriction carries predicate sugar",
+                item.label
+            ))
+        }
+    }
+
+    match fact_to_lnfact(&lnfact_to_parser(&action), msig) {
+        Ok(back) if back == action => Outcome::Equal,
+        Ok(back) => Outcome::Mismatch(format!(
+            "{}\n--- the appended action\n{action:#?}\n--- reopened\n{back:#?}",
             item.label
         )),
-        (Err(_), Err(_)) => Outcome::ExpandError,
-        (a, b) => Outcome::Mismatch(format!(
-            "{}: lifting agrees on neither side ({:?} / {:?})",
-            item.label,
-            a.err().map(|e| e.message),
-            b.err().map(|e| e.message)
+        Err(e) => Outcome::Mismatch(format!(
+            "{}: the projected action does not close again: {}",
+            item.label, e.message
         )),
     }
 }
 
 #[test]
-fn lift_one_rule_agrees_across_the_locally_nameless_round_trip() {
+fn the_lifting_projection_reopens_to_the_internal_values() {
     let root = corpus_root();
     if !root.is_dir() {
         if std::env::var("TAM_ALLOW_NO_CORPUS").as_deref() == Ok("1") {
@@ -321,8 +332,8 @@ fn lift_one_rule_agrees_across_the_locally_nameless_round_trip() {
         eprintln!("UNCONVERTIBLE {u}");
     }
     // The comparison is a net only while it covers the tree: 129 formulas
-    // over 48 files, of which 98 are rule `_restrict`s, all of them lifted on
-    // both sides.  A change that stops the parser, the lifting or the
+    // over 48 files, of which 98 are rule `_restrict`s, all of them lifted
+    // and reopened.  A change that stops the parser, the lifting or the
     // elaboration from reaching them has to fail here instead of shrinking
     // the comparison.
     assert!(

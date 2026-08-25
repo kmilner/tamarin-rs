@@ -31,10 +31,10 @@ use tamarin_term::pretty::pp_lvar;
 use tamarin_utils::fresh::PreciseFreshState;
 
 use crate::atom::{map_atom, pretty_natom, pretty_syntactic_natom, MapSugar, ProtoAtom};
-use crate::elaborate::syntactic_lnatom_to_parser;
+use crate::elaborate::{proto_atom_to_parser, SugarToParser};
 use crate::formula::{
     avoid_precise_lnformula, open_bound_term, BLNTerm, Connective, LNFormula, LNProtoFormula,
-    ProtoFormula, Quantifier, SyntacticLNFormula,
+    ProtoFormula, Quantifier, SugarTerms, SyntacticLNFormula,
 };
 use crate::guarded::{bvar_to_lvar, open_guarded, Guarded};
 use crate::pretty_hpj::{self as hpj, Doc, FLAT_WIDTH};
@@ -51,7 +51,7 @@ use crate::pretty_hpj::{self as hpj, Doc, FLAT_WIDTH};
 /// the binder var's ORIGINAL index (HS `lvarIdx`); it lets the body-var
 /// scope lookup distinguish two binders that share a name+sort but differ
 /// by index — e.g. the `x`(idx 0) / `x.1`(idx 1) fresh vars minted by
-/// `rule_restriction::rewrite` (HS `freshLVar "x" LSortMsg` from counter
+/// `restriction::rewrite` (HS `freshLVar "x" LSortMsg` from counter
 /// 0).  Matching on the full LVar identity also fixes shadowing of
 /// idx-bearing source binders, mirroring HS's positional (De-Bruijn)
 /// resolution.
@@ -887,9 +887,31 @@ fn lformula_doc<S: MapSugar<BLNTerm, LNTerm>>(
 // (HS `openFormula`, Theory/Model/Formula.hs:274-291)
 // =============================================================================
 
-/// Open a [`SyntacticLNFormula`] into the parser-AST formula shape
+/// Open an [`LNFormula`] into the parser-AST formula shape
 /// [`crate::formula::from_parser`] closes, with the binder names
-/// [`syntactic_lnformula_doc`] prints.
+/// [`lnformula_doc`] prints.
+///
+/// `rule_restriction::lift_rule_restrictions` projects the restriction
+/// `restriction::from_rule_restriction` generates through this, so the
+/// parser-AST theory the wellformedness checker, the elaboration and the
+/// renderer read carries it.
+pub fn lnformula_to_parser(f: &LNFormula) -> p::Formula {
+    formula_to_parser(f, &mut Vec::new(), &mut avoid_precise_lnformula(f))
+}
+
+/// [`lnformula_to_parser`] at the parser's sugar, keeping the `Pred` atoms.
+///
+/// `tamarin_sapic::apply` crosses back here for the `_restrict` formulas of
+/// the rules the translation synthesises (stage 8), and
+/// `tamarin_accountability` for the lemmas its generator builds (stage 7).
+pub fn syntactic_lnformula_to_parser(f: &SyntacticLNFormula) -> p::Formula {
+    formula_to_parser(f, &mut Vec::new(), &mut avoid_precise_lnformula(f))
+}
+
+/// The recursion of both projections.  `scope` holds the display `LVar` of
+/// every enclosing binder, innermost last, exactly as in [`lformula_doc`];
+/// `state` is the shared fresh supply, rolled back per binder block by
+/// `scope_freshness` (HS `scopeFreshness`, Theory/Model/Formula.hs:503-506).
 ///
 /// The walk is HS `openFormulaPrefix` (Theory/Model/Formula.hs:296-309) under
 /// the printer's own supply: [`avoid_precise_lnformula`] seeds the `Precise`
@@ -902,31 +924,19 @@ fn lformula_doc<S: MapSugar<BLNTerm, LNTerm>>(
 /// A run of binders of one quantifier becomes one `Forall`/`Exists` list, the
 /// shape HS's `foldr (hinted q) f vs` closes
 /// (Theory/Text/Parser/Formula.hs:73-77).
-///
-/// `rule_restriction::lift_one_rule` takes parser-AST formulas, so this is
-/// the one crossing back for internal restriction formulas: the SAPIC
-/// translation's `_restrict` boundary in `tamarin_sapic::apply`.  It goes
-/// with that lifting, once the lifting itself takes internal rules.
-pub fn syntactic_lnformula_to_parser(f: &SyntacticLNFormula) -> p::Formula {
-    formula_to_parser(f, &mut Vec::new(), &mut avoid_precise_lnformula(f))
-}
-
-/// [`syntactic_lnformula_to_parser`]'s recursion.  `scope` holds the display
-/// `LVar` of every enclosing binder, innermost last, exactly as in
-/// [`lformula_doc`]; `state` is the shared fresh supply, rolled back per
-/// binder block by `scope_freshness` (HS `scopeFreshness`,
-/// Theory/Model/Formula.hs:503-506).
-fn formula_to_parser(
-    f: &SyntacticLNFormula,
+fn formula_to_parser<S>(
+    f: &LNProtoFormula<S>,
     scope: &mut Vec<LVar>,
     state: &mut PreciseFreshState,
-) -> p::Formula {
+) -> p::Formula
+where
+    S: MapSugar<BLNTerm, LNTerm> + SugarTerms<BLNTerm>,
+    S::Mapped: SugarToParser,
+{
     match f {
-        ProtoFormula::Atom(a) => {
-            p::Formula::Atom(syntactic_lnatom_to_parser(&map_atom(a, &mut |t| {
-                open_bound_term(t, scope)
-            })))
-        }
+        ProtoFormula::Atom(a) => p::Formula::Atom(proto_atom_to_parser(&map_atom(a, &mut |t| {
+            open_bound_term(t, scope)
+        }))),
         ProtoFormula::Tf(true) => p::Formula::True,
         ProtoFormula::Tf(false) => p::Formula::False,
         ProtoFormula::Not(p_) => p::Formula::Not(Box::new(formula_to_parser(p_, scope, state))),
@@ -997,7 +1007,7 @@ pub const LINE_LENGTH: usize = 110;
 /// at binder entry — HS's De Bruijn lookup, where a `Bound` var resolves to
 /// its binder's freshly-allocated `LVar`.  Matching on `idx` distinguishes
 /// two binders that share a name and sort but differ by index — the
-/// `x`(idx 0) / `x.1`(idx 1) fresh vars `rule_restriction::rewrite` mints
+/// `x`(idx 0) / `x.1`(idx 1) fresh vars `restriction::rewrite` mints
 /// (HS `freshLVar "x" LSortMsg`); ordinary same-(name,idx) shadowing still
 /// resolves to the inner binder, source binders carrying idx 0.  A var no
 /// binder matches (the common case: free vars like `#vk.6`) keeps its

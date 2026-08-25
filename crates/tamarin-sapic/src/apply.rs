@@ -142,16 +142,19 @@ pub fn apply_sapic(
     })?;
 
     // The `predicate:` declarations the embedded `_restrict` formulas expand
-    // against (HS `liftedExpandFormula`).  Collected from the parsed theory.
-    let predicates: Vec<p::Predicate> = parsed
-        .items
-        .iter()
-        .filter_map(|i| match i {
-            p::TheoryItem::Predicates(ps) => Some(ps.clone()),
-            _ => None,
-        })
-        .flatten()
-        .collect();
+    // against (HS `liftedExpandFormula`), read from the parsed theory and
+    // closed against the elaborated signature.
+    let mut predicates: Vec<tamarin_theory::predicate::Predicate> = Vec::new();
+    for item in &parsed.items {
+        if let p::TheoryItem::Predicates(ps) = item {
+            for pd in ps {
+                predicates.push(tamarin_theory::predicate::from_parser(
+                    pd,
+                    &elaborated.signature.maude_sig,
+                )?);
+            }
+        }
+    }
 
     // Inject each generated rule into BOTH theories, running the `_restrict`
     // expansion HS `liftedAddProtoRule` (Theory/Text/Parser.hs:175-193) performs
@@ -211,12 +214,14 @@ pub fn apply_sapic(
         }
 
         // `if <formula>` arm: expand the embedded restriction.
-        let (gen_restrs, rewritten) =
-            tamarin_theory::rule_restriction::lift_one_rule(parsed_rule, &predicates).map_err(
-                |e| ElabError {
-                    message: format!("SAPIC _restrict expansion: {}", e.message),
-                },
-            )?;
+        let (gen_restrs, rewritten) = tamarin_theory::rule_restriction::lift_one_rule(
+            parsed_rule,
+            &predicates,
+            &elaborated.signature.maude_sig,
+        )
+        .map_err(|e| ElabError {
+            message: format!("SAPIC _restrict expansion: {}", e.message),
+        })?;
 
         // Restrictions precede the rule in both theories.
         for r in &gen_restrs {

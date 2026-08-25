@@ -1013,3 +1013,57 @@ end
     let entries: Vec<_> = std::fs::read_dir(dir.join("out")).unwrap().collect();
     assert!(entries.is_empty(), "--parse-only must write no -O files");
 }
+
+/// A `_restrict` action atom whose time point is FREE.  HS's `Traversable
+/// (ProtoAtom s)` is `Action <$> f i <*> traverse f fa`
+/// (Theory/Model/Atom.hs:139-140) and its `Foldable` folds in the same order
+/// (Theory/Model/Atom.hs:130-131), so `rewrite` abstracts the time point into
+/// the first fresh variable and `freesList` puts it first in the generated
+/// fact: the restriction reads `Restr_A_1( x, x.1 )` over `B( x.1 ) @ x`, and
+/// the rule's appended action reads `Restr_A_1( #i, f(x, y) )`.  A `_restrict`
+/// whose time point is bound mints no fresh variable for it and cannot tell
+/// the two orders apart.
+#[test]
+fn restrict_abstracts_the_timepoint_first() {
+    assert_transcript(
+        "restrict_abstracts_the_timepoint_first",
+        &[(
+            "p16_restrict_timepoint.spthy",
+            r#"theory RestrictTimepoint
+begin
+
+functions: f/2
+
+rule A:
+  [ Fr(~k), In(x), In(y) ] --[ _restrict(B(f(x,y)) @ #i), S(~k) ]-> [ Out(~k) ]
+
+end
+"#,
+        )],
+        &["p16_restrict_timepoint.spthy"],
+        r#"theory RestrictTimepoint
+
+begin
+
+// Function signature and definition of the equational theory E
+
+functions: f/2, fst/1, pair/2, snd/1
+equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
+
+function: f (Any, Any) : Any   
+
+restriction Restr_A_1:
+  "∀ x #NOW x.1. (Restr_A_1( x, x.1 ) @ #NOW) ⇒ (B( x.1 ) @ x)"
+  // safety formula
+
+rule (modulo E) A:
+   [ Fr( ~k ), In( x ), In( y ) ]
+  --[ S( ~k ), Restr_A_1( #i, f(x, y) ) ]->
+   [ Out( ~k ) ]
+
+end
+"#,
+        r#"[Theory RestrictTimepoint] Theory loaded
+"#,
+    );
+}

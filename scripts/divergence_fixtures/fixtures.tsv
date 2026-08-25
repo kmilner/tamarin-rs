@@ -54,3 +54,6 @@ s5_guarded_em_open	wf,theory	match	--derivcheck-timeout=0
 s5_guarded_ac_binder	theory	match	--derivcheck-timeout=0
 s6_let_conclusion_var	wf,theory	match	--derivcheck-timeout=0
 s6_predicate_capture	theory	match	--derivcheck-timeout=0
+s6_restrict_action_timepoint	wf,theory	match	--derivcheck-timeout=0
+s6_restrict_free_ac	theory	match	--derivcheck-timeout=0
+s6_restrict_let_two	theory	match	--derivcheck-timeout=0

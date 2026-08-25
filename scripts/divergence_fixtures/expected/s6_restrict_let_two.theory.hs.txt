@@ -1,0 +1,36 @@
+theory S6RestrictLetTwo
+
+begin
+
+// Function signature and definition of the equational theory E
+
+functions: fst/1, h/1, pair/2, snd/1
+equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
+
+restriction Restr_A_1:
+  "∀ x #NOW x.1. (Restr_A_1( x, x.1 ) @ #NOW) ⇒ (∃ #i. Ev( x, x.1 ) @ #i)"
+
+  /*
+  expanded formula:
+  "∀ x #NOW x.1. (Restr_A_1( x, x.1 ) @ #NOW) ⇒ (∃ #i. Ev( x, x.1 ) @ #i)"
+  */
+
+restriction Restr_A_2:
+  "∀ x #NOW x.1. (Restr_A_2( x, x.1 ) @ #NOW) ⇒ (x = x.1)"
+  // safety formula
+
+  /*
+  expanded formula:
+  "∀ x #NOW x.1. (Restr_A_2( x, x.1 ) @ #NOW) ⇒ (x = x.1)"
+  */
+
+rule (modulo E) A:
+   [ In( x ), In( y ) ]
+  --[ Restr_A_1( h(x), h(y) ), Restr_A_2( h(x), h(y) ) ]->
+   [ Out( h(x) ) ]
+
+  /* has exactly the trivial AC variant */
+
+
+
+end

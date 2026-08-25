@@ -1106,24 +1106,49 @@ pub(crate) fn fact_annotations_to_parser(
         .collect()
 }
 
-/// `SyntacticAtom<LNTerm>` → parser-AST `Atom`: [`lnterm_to_parser`] and
-/// [`lnfact_to_parser`] over the arms of HS `ProtoAtom` (Atom.hs:78-84,100).
-///
-/// The `Pred` sugar (Atom.hs:86-87) closes back into `blatom`'s predicate
-/// alternative (Theory/Text/Parser/Formula.hs:52).  The multiset `(<)` is
-/// parsed into the `Smaller` predicate (`smallerp`,
-/// Theory/Text/Parser/Formula.hs:30-38) and has no closed form of its own.
-pub(crate) fn syntactic_lnatom_to_parser(
-    a: &crate::atom::SyntacticAtom<tamarin_term::lterm::LNTerm>,
+/// The parser-AST atom a syntactic-sugar variant closes back into — the
+/// `ppS` argument of HS `prettyProtoAtom` (Atom.hs:212-224) in the closing
+/// direction, and the projection counterpart of [`crate::atom::MapSugar`].
+pub(crate) trait SugarToParser {
+    fn sugar_to_parser(&self) -> p::Atom;
+}
+
+impl SugarToParser for crate::atom::SyntacticSugar<tamarin_term::lterm::LNTerm> {
+    /// The `Pred` sugar (Atom.hs:86-87) closes back into `blatom`'s predicate
+    /// alternative (Theory/Text/Parser/Formula.hs:52).  The multiset `(<)` is
+    /// parsed into the `Smaller` predicate (`smallerp`,
+    /// Theory/Text/Parser/Formula.hs:30-38) and has no closed form of its own.
+    fn sugar_to_parser(&self) -> p::Atom {
+        let crate::atom::SyntacticSugar::Pred(fa) = self;
+        p::Atom::Pred(lnfact_to_parser(fa))
+    }
+}
+
+impl SugarToParser for crate::atom::Unit2 {
+    /// HS `prettyAtom = prettyProtoAtom (const emptyDoc)` (Atom.hs:226-229):
+    /// `Unit2` holds no term, and the parser grammar has no production for it.
+    /// `predicate::expand_formula` replaces every `Pred` atom by a formula
+    /// (Theory/Syntactic/Predicate.hs:82-105), so an `LNFormula` reaches this
+    /// projection with the sugar gone.
+    fn sugar_to_parser(&self) -> p::Atom {
+        panic!("proto_atom_to_parser: Unit2 sugar has no parser-AST atom")
+    }
+}
+
+/// `ProtoAtom<S, LNTerm>` → parser-AST `Atom`: [`lnterm_to_parser`] and
+/// [`lnfact_to_parser`] over the arms of HS `ProtoAtom` (Atom.hs:78-84,100),
+/// with the sugar closed by its own [`SugarToParser`] impl.
+pub(crate) fn proto_atom_to_parser<S: SugarToParser>(
+    a: &crate::atom::ProtoAtom<S, tamarin_term::lterm::LNTerm>,
 ) -> p::Atom {
-    use crate::atom::{ProtoAtom, SyntacticSugar};
+    use crate::atom::ProtoAtom;
     match a {
         ProtoAtom::Action(t, fa) => p::Atom::Action(lnfact_to_parser(fa), lnterm_to_parser(t)),
         ProtoAtom::EqE(l, r) => p::Atom::Eq(lnterm_to_parser(l), lnterm_to_parser(r)),
         ProtoAtom::Subterm(l, r) => p::Atom::Subterm(lnterm_to_parser(l), lnterm_to_parser(r)),
         ProtoAtom::Less(l, r) => p::Atom::Less(lnterm_to_parser(l), lnterm_to_parser(r)),
         ProtoAtom::Last(t) => p::Atom::Last(lnterm_to_parser(t)),
-        ProtoAtom::Syntactic(SyntacticSugar::Pred(fa)) => p::Atom::Pred(lnfact_to_parser(fa)),
+        ProtoAtom::Syntactic(s) => s.sugar_to_parser(),
     }
 }
 

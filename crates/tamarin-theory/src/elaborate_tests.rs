@@ -1077,7 +1077,7 @@ fn a_non_guardable_stored_disjunct_fails_elaboration() {
 /// HS writes an action atom as `Action t (Fact t)` (Atom.hs:78) and the
 /// parser AST as `Action(Fact, Term)`, so the two operands swap places.
 #[test]
-fn syntactic_lnatom_to_parser_keeps_the_action_timepoint_and_fact() {
+fn proto_atom_to_parser_keeps_the_action_timepoint_and_fact() {
     use crate::atom::{ProtoAtom, SyntacticAtom};
     use crate::fact::{Fact, FactTag, Multiplicity};
     use tamarin_term::intern::intern_str;
@@ -1092,7 +1092,7 @@ fn syntactic_lnatom_to_parser_keeps_the_action_timepoint_and_fact() {
     );
     let a: SyntacticAtom<LNTerm> = ProtoAtom::Action(i, fa);
     assert_eq!(
-        syntactic_lnatom_to_parser(&a),
+        proto_atom_to_parser(&a),
         p::Atom::Action(
             p::Fact {
                 persistent: false,
@@ -1107,7 +1107,7 @@ fn syntactic_lnatom_to_parser_keeps_the_action_timepoint_and_fact() {
 
 /// The binary atoms keep their left and right operand where they are.
 #[test]
-fn syntactic_lnatom_to_parser_keeps_the_binary_operand_order() {
+fn proto_atom_to_parser_keeps_the_binary_operand_order() {
     use crate::atom::{ProtoAtom, SyntacticAtom};
     use tamarin_term::lterm::LNTerm;
     use tamarin_term::vterm::var_term;
@@ -1116,7 +1116,7 @@ fn syntactic_lnatom_to_parser_keeps_the_binary_operand_order() {
     let j: LNTerm = var_term(LVar::new("j", LSort::Node, 0));
     let a: SyntacticAtom<LNTerm> = ProtoAtom::Less(i, j);
     assert_eq!(
-        syntactic_lnatom_to_parser(&a),
+        proto_atom_to_parser(&a),
         p::Atom::Less(
             parser_var("i", 0, LSort::Node),
             parser_var("j", 0, LSort::Node)
