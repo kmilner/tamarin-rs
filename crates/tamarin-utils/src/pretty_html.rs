@@ -5,11 +5,10 @@
 //! `escapeHtmlEntities` from `lib/utils/src/Text/PrettyPrint/Html.hs`
 //! (Text/PrettyPrint/Html.hs:140-149).
 //!
-//! [`escape_html_entities`] is the one HTML escaper in the tree: the theory
-//! crate re-exports it as `tamarin_theory::pretty_hpj::escape_html_entities`
-//! and the server aliases it as `root::html_escape`.  The HTML `Doc` mode
-//! (`HtmlDoc` of the same Haskell module) lives in
-//! `tamarin_theory::pretty_hpj`.
+//! [`escape_html_entities`] is the one HTML escaper in the tree.  The rest of
+//! that Haskell module — the `HtmlDoc` render mode — lives in
+//! [`crate::pretty_hpj`], which re-exports this function; the server aliases it
+//! as `root::html_escape`.
 
 /// Escape the five HTML metacharacters.
 pub fn escape_html_entities(s: &str) -> String {

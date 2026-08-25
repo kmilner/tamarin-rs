@@ -35,7 +35,7 @@ use crate::formula::{
     ProtoFormula, Quantifier, SyntacticLNFormula,
 };
 use crate::guarded::{Guarded, Quant};
-use crate::pretty_hpj::{self as hpj, Doc};
+use crate::pretty_hpj::{self as hpj, Doc, FLAT_WIDTH};
 use crate::pretty_theory::{lnfact_to_parser, lnterm_to_parser};
 
 /// A scope entry: the binder's source name + sort, plus the *display* name
@@ -1004,13 +1004,6 @@ pub fn lnformula_doc(f: &LNFormula) -> Doc {
         &mut avoid_precise_lnformula(f),
     )
 }
-
-/// A page wider than any formula of the examples tree, so every `sep`,
-/// `fsep` and `fcat` of a formula `Doc` takes its flat branch and no break is
-/// inserted anywhere.  HughesPJ's `OneLineMode` (`Doc::one_line_render`) is a
-/// different string: it takes each `Union`'s line-breaking branch and turns
-/// every break into one space.
-const FLAT_WIDTH: usize = 1 << 40;
 
 /// [`lnformula_doc`] laid out flat — the string [`pretty_formula`] writes for
 /// the parser AST the formula was closed from

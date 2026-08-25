@@ -11,6 +11,7 @@ pub mod dot;
 mod env_gate;
 pub mod fresh;
 pub mod prelude_ext;
+pub mod pretty_hpj;
 pub mod pretty_html;
 pub mod unicode;
 

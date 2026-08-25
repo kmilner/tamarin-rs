@@ -379,3 +379,18 @@ fn fcat_close_bracket_separate_item() {
     let out = d.render_with(12, 12);
     assert_eq!(out, "<aaa,bbb,\nccc,ddd>");
 }
+
+#[test]
+fn html_mode_is_one_process_global() {
+    // One flag drives the whole engine: `html_mode()` reports what
+    // `HtmlDocGuard` set, and `Doc::text` escapes and measures against the
+    // same flag.
+    assert!(!html_mode());
+    {
+        let _g = HtmlDocGuard::enable();
+        assert!(html_mode());
+        assert_eq!(Doc::text("<a>").render(), "&lt;a&gt;");
+    }
+    assert!(!html_mode());
+    assert_eq!(Doc::text("<a>").render(), "<a>");
+}
