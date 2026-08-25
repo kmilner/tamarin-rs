@@ -31,7 +31,7 @@
 //! set iteration orders).  These are interactive-UI diagnostic panes only
 //! and do not affect proof results or golden `--prove` output.
 
-use tamarin_term::pretty::{pp_lvar, pretty_lnterm};
+use tamarin_term::pretty::{pp_lvar, pretty_lnterm, pretty_nterm};
 
 use crate::constraint::constraints::{Goal, NodeId};
 use crate::constraint::system::{SourceKind, System};
@@ -82,13 +82,6 @@ fn vsep_docs(ds: Vec<Doc>) -> Doc {
         acc = above_blank(d, acc);
     }
     acc
-}
-
-// HS `prettyNTerm t` (LTerm.hs:930-931, see line 931 `prettyTerm (text . show)`) as a Doc,
-// via the parser-AST projection — the same Doc path the proof printer and
-// web DOT renderer use, so fact/term wrapping is byte-faithful.
-fn lnterm_doc(t: &tamarin_term::lterm::LNTerm) -> Doc {
-    crate::pretty_formula::term_doc(&crate::pretty_theory::lnterm_to_parser(t))
 }
 
 // ---------------------------------------------------------------------
@@ -179,9 +172,9 @@ fn pretty_subterm_store(sys: &System) -> Doc {
 
     // `ppSt (a,b) = prettyNTerm a $$ nest 3 (opSubterm <-> prettyNTerm b)`
     let pp_st = |small: &tamarin_term::lterm::LNTerm, big: &tamarin_term::lterm::LNTerm| {
-        lnterm_doc(small).above(
+        pretty_nterm(small).above(
             crate::pretty_hpj::operator_("\u{228F}") // ⊏  (opSubterm)
-                .beside_sp(lnterm_doc(big))
+                .beside_sp(pretty_nterm(big))
                 .nest(3),
         )
     };
@@ -293,7 +286,7 @@ fn pp_eq(
 ) -> Doc {
     Doc::text(lvar_to_string(a)).above(
         crate::pretty_hpj::operator_("=") // opEqual
-            .beside_sp(lnterm_doc(b))
+            .beside_sp(pretty_nterm(b))
             .nest(6),
     )
 }
@@ -321,7 +314,7 @@ fn pretty_subst_free(subst: &crate::tools::equation_store::LNSubst) -> Vec<Doc> 
             // prettyTerm ppLit t <-> " <~ {" <> fsep (punctuate comma vars) <> "}"
             // (SubstVFree.hs:342-348) — the term is a real `prettyTerm` Doc,
             // so an over-wide term wraps at the pane width exactly as HS.
-            lnterm_doc(&t)
+            pretty_nterm(&t)
                 .beside_sp(crate::pretty_hpj::operator_(" <~ {")) // operator_ " <~ {"
                 .beside(fsep(punctuate(Doc::text(","), vars)))
                 .beside(crate::pretty_hpj::operator_("}"))
@@ -429,7 +422,8 @@ fn pretty_source_kind(sk: Option<SourceKind>) -> &'static str {
 /// `Doc` built with `nestShort'`, so it emits the inner-paren spaces
 /// (`!KU( ~ltk )`) and wraps at the display width.  Every rendering that
 /// reaches user-visible output goes through the `Doc` path instead
-/// (`graph::color::fact_doc_of` for DOT, `fact::pretty_lnfact` for goals).
+/// (`fact::pretty_lnfact`, e.g. `graph::color::fact_doc_of` for DOT and
+/// `solve_goal_to_doc` for goals).
 /// The flat form here is for the env-gated debug dumps in
 /// `constraint::solver::context`, where one fact per line is the point.
 pub fn pretty_fact(fa: &LNFact) -> String {

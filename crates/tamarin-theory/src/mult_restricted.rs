@@ -45,13 +45,13 @@ use tamarin_parser::wf::WfError;
 use tamarin_term::function_symbols::{AcSym, FunSym};
 use tamarin_term::lterm::{sort_of_lnterm, HasFrees, LNTerm, LSort, LVar};
 use tamarin_term::maude_sig::MaudeSig;
+use tamarin_term::pretty::pretty_nterm;
 use tamarin_term::term::{f_app, Term};
 use tamarin_term::vterm::Lit;
 
 use crate::fact::LNFact;
-use crate::pretty_formula as pf;
 use crate::pretty_hpj::{self as hpj, Doc};
-use crate::rule::ProtoRuleE;
+use crate::rule::{pretty_rule_restr_gen, ProtoRuleE};
 use crate::theory::Theory;
 
 /// HS `underlineTopic "Multiplication restriction of rules"`
@@ -397,7 +397,7 @@ fn entry_doc(
         // already ends in one — hence the doubled space before the list.
         let list = hpj::fsep(hpj::punctuate(
             Doc::text(","),
-            mults.iter().map(lnterm_doc).collect(),
+            mults.iter().map(pretty_nterm).collect(),
         ));
         d = d.above_g(
             Doc::text("Terms with multiplication: ")
@@ -407,13 +407,11 @@ fn entry_doc(
     }
     if !unbounds.is_empty() {
         // HS `prettyVarList = fsep . punctuate comma . map prettyLVar`
-        // (TheoryObject.hs:858-859).
+        // (TheoryObject.hs:858-859), and `prettyLVar = text . show`
+        // (LTerm.hs:922-923).
         let list = hpj::fsep(hpj::punctuate(
             Doc::text(","),
-            unbounds
-                .iter()
-                .map(|v| lnterm_doc(&Term::Lit(Lit::Var(*v))))
-                .collect(),
+            unbounds.iter().map(|v| Doc::text(v.to_string())).collect(),
         ));
         d = d.above_g(
             Doc::text("Variables that occur only in rhs: ")
@@ -433,23 +431,6 @@ fn rule_doc(name: &str, attrs: &[p::RuleAttr], r: &ProtoRuleE) -> Doc {
         .beside_sp(Doc::text(name))
         .beside(crate::pretty_theory::rule_attributes_doc(attrs))
         .beside(Doc::text(":"));
-    let prems = to_parser_facts(&r.premises);
-    let acts = to_parser_facts(&r.actions);
-    let concs = to_parser_facts(&r.conclusions);
-    header.above_g(pf::rule_body_to_doc(&prems, &acts, &concs).nest(2))
-}
-
-/// Runtime `LNFact`s in the parser-AST shape the fact/term renderers consume,
-/// the same conversion the modulo-AC rule block uses.
-fn to_parser_facts(facts: &[LNFact]) -> Vec<p::Fact> {
-    crate::pretty_theory::lnfacts_to_parser(facts)
-        .iter()
-        .map(crate::elaborate::canonicalize_ac_in_pfact)
-        .collect()
-}
-
-/// HS `prettyLNTerm` over a runtime term, through the same LN → parser-AST →
-/// Doc path the rule bodies take.
-fn lnterm_doc(t: &LNTerm) -> Doc {
-    pf::term_doc(&crate::pretty_theory::lnterm_to_parser(t))
+    let body = pretty_rule_restr_gen(&r.premises, &r.actions, &r.conclusions);
+    header.above_g(body.nest(2))
 }

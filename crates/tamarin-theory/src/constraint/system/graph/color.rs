@@ -20,19 +20,16 @@ use crate::fact::LNFact;
 use crate::pretty_hpj::Doc;
 use crate::rule::{IntrRuleACInfo, ProtoRuleName, RuleACInst, RuleInfo};
 
-/// The `Doc` of an `LNFact` exactly as Haskell `prettyLNFact`
-/// (Theory/Model/Fact.hs:581-582), the printer `renderLNFact`
-/// (System/Dot.hs:227-236) feeds
-/// after abbreviation replacement.  `prettyLNFact` builds the
-/// argument list with `nestShort' (n++"(") ")" . fsep . punctuate comma`
-/// (`prettyFact`'s `ppFact`, Theory/Model/Fact.hs:567-574, see line 572), which —
-/// unlike a bare `name(a, b)` — emits the
-/// HughesPJ INNER-PAREN SPACES `!KU( ~ltk )` when the fact fits on one line.
-/// We therefore reuse the faithful `Doc` path (`pretty_formula::fact_doc` on
-/// the parser-AST projection), NOT `pretty_system::pretty_fact` (which omits
-/// those spaces).
+/// The `Doc` of an `LNFact` as Haskell `prettyLNFact`
+/// (Theory/Model/Fact.hs:581-582) builds it — what the printer
+/// `renderLNFact` (System/Dot.hs:227-236) returns after abbreviation
+/// replacement.  `prettyFact`'s `ppFact` lays the argument list out with
+/// `nestShort' (n++"(") ")" . fsep . punctuate comma`
+/// (Theory/Model/Fact.hs:567-574, see line 572), which — unlike a bare
+/// `name(a, b)` — emits the HughesPJ INNER-PAREN SPACES `!KU( ~ltk )` when
+/// the fact fits on one line.
 pub(crate) fn fact_doc_of(fa: &LNFact) -> Doc {
-    crate::pretty_formula::fact_doc(&crate::pretty_theory::lnfact_to_parser(fa))
+    crate::fact::pretty_lnfact(fa)
 }
 
 /// HS `toColor` — the per-`Reason` less-edge colour, spelled identically in

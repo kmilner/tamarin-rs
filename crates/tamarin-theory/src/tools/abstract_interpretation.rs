@@ -66,8 +66,7 @@ use tamarin_term::term::{f_app, Term};
 use tamarin_term::vterm::{var_term, Lit};
 use tamarin_utils::fresh::FastFreshState;
 
-use crate::fact::{fresh_fact, in_fact, out_fact, FactTag, LNFact};
-use crate::pretty_formula as pf;
+use crate::fact::{fresh_fact, in_fact, out_fact, pretty_lnfact, FactTag, LNFact};
 use crate::pretty_hpj::{self as hpj, Doc};
 use crate::rule::{unify_ln_fact_eqs, ProtoRuleE, ProtoRuleName};
 use crate::theory::{OpenProtoRule, Theory, TheoryItem};
@@ -290,7 +289,7 @@ fn interpret_abstractly(
                 ));
             }
             EvaluationStyle::Tracing => {
-                let diff: Vec<Doc> = st_next.difference(&st).map(state_fact_doc).collect();
+                let diff: Vec<Doc> = st_next.difference(&st).map(pretty_lnfact).collect();
                 let body = render_default_style(hpj::numbered_prime(diff).nest(2));
                 trace.push_str(&format!(
                     " partial evaluation: step {} added {} facts\n\n{}\n\n",
@@ -373,13 +372,6 @@ fn nub_modulo_freshness(rules: Vec<(ProtoRuleE, Vec<LVar>)>) -> Vec<ProtoRuleE> 
 // =============================================================================
 // partialEvaluation (AbstractInterpretation.hs:86-119)
 // =============================================================================
-
-/// A state fact rendered the HS `prettyLNFact` way: through the parser-AST
-/// fact renderer, the same LN → parser-AST → Doc path the rule bodies take.
-fn state_fact_doc(fa: &LNFact) -> Doc {
-    let pfact = crate::pretty_theory::lnfact_to_parser(fa);
-    pf::fact_doc(&crate::elaborate::canonicalize_ac_in_pfact(&pfact))
-}
 
 /// HS renders the trace/report docs with the plain `render`
 /// (Text/PrettyPrint/Class.hs:77-78)
@@ -476,7 +468,7 @@ fn abs_state_report(st: &BTreeSet<LNFact>, n_refined: usize, n_orig: usize) -> S
         " the abstract state after partial evaluation contains {} facts:",
         st.len()
     ));
-    let facts: Vec<Doc> = st.iter().map(state_fact_doc).collect();
+    let facts: Vec<Doc> = st.iter().map(pretty_lnfact).collect();
     let footer = Doc::text(format!(
         "This abstract state results in {} refined multiset rewriting rules.\n\
          Note that the original number of multiset rewriting rules was {}.\n\n",
