@@ -1674,8 +1674,9 @@ fn render_equations(
 ///     `Ord CtxtStRule`), so e.g. `f1, f2, f3, g` rather than source order
 ///     `f1, g, f2, f3`;
 ///   * each equation = `prettyCtxtStRule r = sep [nest 2 lhs, "=" <-> rhs]`
-///     (SubtermRule.hs:122-123), each side rendered via `pretty_nterm` so a
-///     wide RHS wraps (HS `prettyTerm`'s `fsep` ppFun, Term/Term.hs:326-327);
+///     (SubtermRule.hs:122-126, see line 125), each side rendered via
+///     `pretty_nterm` so a wide RHS wraps (HS `prettyTerm`'s `fsep` ppFun,
+///     Term/Term.hs:326-327);
 ///   * suppressed entirely when `eqConvergent (sig thy)` is set
 ///     (`isUserMarkedConvergent`, Wellformedness.hs:1211-1214/1285).
 ///
@@ -2680,8 +2681,9 @@ fn render_unfolded_variants_block(
         out.push('\n');
         // The variant bodies are parser-AST facts regenerated from LN facts
         // (`proto_rule_to_parsed`), so AC argument order is canonicalised at
-        // render time; S7 owns the move to the internal items, and the
-        // canonicalisation goes with the projection.
+        // render time.  A print site holding the internal rule instead hands
+        // its `LNFact`s straight to `rule::pretty_rule_restr_gen`, which
+        // needs no such fixup.
         let prems: Vec<p::Fact> = v.premises.iter().map(canonicalize_ac_in_pfact).collect();
         let acts: Vec<p::Fact> = v.actions.iter().map(canonicalize_ac_in_pfact).collect();
         let concs: Vec<p::Fact> = v.conclusions.iter().map(canonicalize_ac_in_pfact).collect();
@@ -2862,8 +2864,8 @@ fn render_rule_body(prems: &[p::Fact], acts: &[p::Fact], concs: &[p::Fact]) -> S
     // rule body matches HS byte-for-byte.  `term_to_lnterm` covers the
     // LNTerm path; this call is the parser-AST path's equivalent.  The
     // modulo-E rule prints from the PARSED rule, whose body still holds the
-    // macro calls the internal rule has expanded; S6 owns the move to the
-    // internal rule, and the canonicalisation goes with the parser-AST body.
+    // macro calls the internal rule has expanded, so the canonicalisation
+    // belongs to this parser-AST body.
     use crate::elaborate::canonicalize_ac_in_pfact;
     let prems2: Vec<p::Fact> = prems.iter().map(canonicalize_ac_in_pfact).collect();
     let acts2: Vec<p::Fact> = acts.iter().map(canonicalize_ac_in_pfact).collect();
@@ -3235,7 +3237,7 @@ fn render_guarded_block(lem: &crate::theory::Lemma) -> String {
             crate::theory::TraceQuantifier::ExistsTrace
         ),
         crate::guarded::formula_to_guarded(&lem.formula),
-        || crate::pretty_formula::pretty_lnformula(&lem.formula),
+        || crate::pretty_formula::lnformula_doc(&lem.formula),
     )
 }
 
@@ -3263,18 +3265,18 @@ fn render_open_guarded_block(
     guarded_block_comment(
         matches!(lem.trace_quantifier, p::TraceQuantifier::ExistsTrace),
         crate::guarded::formula_to_guarded_parsed(&expanded_formula, msig),
-        || crate::pretty_formula::pretty_formula(&expanded_formula),
+        || pf::formula_doc(&expanded_formula),
     )
 }
 
 /// The `/* guarded formula characterizing ... */` comment of HS
 /// `ppLNFormulaGuarded` (lib/theory/src/Lemma.hs:131-141) around an already
-/// converted formula.  `full_text` writes the quoted whole formula of the
+/// converted formula.  `full_doc` builds the quoted whole formula of the
 /// failure branch, which the success branch never needs.
 fn guarded_block_comment(
     exists_trace: bool,
     gf: Result<crate::guarded::Guarded, crate::guarded::GuardError>,
-    full_text: impl FnOnce() -> String,
+    full_doc: impl FnOnce() -> crate::pretty_hpj::Doc,
 ) -> String {
     let header = if exists_trace {
         "guarded formula characterizing all satisfying traces:"
@@ -3290,23 +3292,25 @@ fn guarded_block_comment(
             // quoted failing sub-formula (Guarded.hs:508-514/561-563 both
             // include `ppFormula f0`), then "in the formula" + the quoted
             // formula passed to `formulaToGuarded` (nest 2 . doubleQuotes).
+            // `nest 2 err` (lib/theory/src/Lemma.hs:132-134) over the thrown
+            // message Doc.
             let mut block = String::from("/*\nconversion to guarded formula failed:\n");
-            for line in e.message.lines() {
-                block.push_str("  ");
-                block.push_str(line);
-                block.push('\n');
-            }
-            let full_text = full_text();
-            let sub_text = e
+            block.push_str(&e.message_doc().nest(2).render());
+            block.push('\n');
+            // Both formulas are `ppFormula = nest 2 . doubleQuotes .
+            // prettyLNFormula` (Guarded.hs:476-477) inside `nest 2 err`
+            // (lib/theory/src/Lemma.hs:132-134), so each is a `Doc` laid out
+            // at nesting 4 and wraps at the page width.
+            let full = full_doc();
+            let sub = e
                 .subject_formula
                 .as_ref()
-                .map(crate::pretty_formula::pretty_lnformula)
-                .unwrap_or_else(|| full_text.clone());
-            block.push_str("    \"");
-            block.push_str(&sub_text);
-            block.push_str("\"\n  in the formula\n    \"");
-            block.push_str(&full_text);
-            block.push_str("\"\n*/");
+                .map(crate::pretty_formula::lnformula_doc)
+                .unwrap_or_else(|| full.clone());
+            block.push_str(&pf::doublequoted_nested_doc(sub, 4));
+            block.push_str("\n  in the formula\n");
+            block.push_str(&pf::doublequoted_nested_doc(full, 4));
+            block.push_str("\n*/");
             return block;
         }
     };

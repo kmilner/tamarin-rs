@@ -1206,8 +1206,8 @@ pub fn lnterm_to_term(t: &tamarin_term::lterm::LNTerm) -> p::Term {
                         // uniformly at every nesting depth (the printer is
                         // recursive).  Without this round-trip the runtime
                         // exp term reaches the formula/guard term path as a
-                        // generic `App("exp", [..])`, which `term_to_doc`/
-                        // `pp_term` render PREFIX `exp(b, e)` — diverging from
+                        // generic `App("exp", [..])`, which `term_to_doc`
+                        // renders PREFIX `exp(b, e)` — diverging from
                         // HS for every exp nested inside a multiset/pair/
                         // equation in a guard or contradiction (e.g.
                         // DHKEA_NAXOS `eCK_key_secrecy`).  Same NoEq
@@ -1363,6 +1363,8 @@ pub fn proto_rule_to_parsed(r: &crate::rule::ProtoRuleE) -> p::Rule {
     }
 }
 
+/// `LNFact` → parser-AST `Fact`: the tag's name and multiplicity, the terms
+/// through [`lnterm_to_parser`] and the annotation set.
 pub fn lnfact_to_parser(fa: &crate::fact::LNFact) -> p::Fact {
     use crate::fact::FactTag;
     let (name, persistent) = match &fa.tag {
@@ -1371,7 +1373,8 @@ pub fn lnfact_to_parser(fa: &crate::fact::LNFact) -> p::Fact {
         FactTag::Fresh => ("Fr".to_string(), false),
         FactTag::In => ("In".to_string(), false),
         FactTag::Out => ("Out".to_string(), false),
-        // KU and KD are Persistent per factTagMultiplicity (Model/Fact.hs:358-359).
+        // KU and KD are Persistent per factTagMultiplicity
+        // (Theory/Model/Fact.hs:383-388, see line 386).
         FactTag::Ku => ("KU".to_string(), true),
         FactTag::Kd => ("KD".to_string(), true),
         FactTag::Ded => ("Ded".to_string(), false),
@@ -1398,8 +1401,7 @@ pub fn lnfact_to_parser(fa: &crate::fact::LNFact) -> p::Fact {
 }
 
 /// `Atom<LNTerm>` → parser-AST `Atom`: [`lnterm_to_parser`] and
-/// [`lnfact_to_parser`] over the arms of HS `Atom` (Atom.hs:78-84,100), the
-/// atom-level twin of [`lnfact_to_parser`].
+/// [`lnfact_to_parser`] over the arms of HS `Atom` (Atom.hs:78-84,100).
 ///
 /// A `Syntactic` atom has no parser-AST form here: HS's `Unit2` sugar carries
 /// no fact (Atom.hs:92-94), and [`crate::formula::to_lnformula`] refuses an
@@ -1478,7 +1480,7 @@ pub fn lnterm_to_parser(t: &tamarin_term::lterm::LNTerm) -> p::Term {
                 NameTag::Node => p::Term::PubLit(n.id.0.to_string()),
                 // `prettyTerm`'s literal case is `text . show`, and `show
                 // (Name AbbrevName n) = show n` (LTerm.hs:240) is the bare id;
-                // a nullary `App` is the parser-AST term `pp_term` renders
+                // a nullary `App` is the parser-AST term `term_to_doc` renders
                 // that way.  Reached from `prettyLNFact` on the facts
                 // `Web.Utils.abbrev` rewrote.
                 NameTag::Abbrev => p::Term::App(n.id.0.to_string(), Vec::new()),
@@ -1500,7 +1502,7 @@ pub fn lnterm_to_parser(t: &tamarin_term::lterm::LNTerm) -> p::Term {
             }
             // `exp` is the DH exponentiation infix operator — HS
             // `prettyTerm` (Term/Term.hs:310) renders `exp(a, b)` as `a^b`.
-            // Surface as `p::Term::BinOp(Exp, ..)` so `pp_term`'s special
+            // Surface as `p::Term::BinOp(Exp, ..)` so `term_to_doc`'s special
             // case applies.
             if name == "exp" && args.len() == 2 {
                 return p::Term::BinOp(

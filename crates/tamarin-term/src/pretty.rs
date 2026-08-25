@@ -937,9 +937,9 @@ mod tests {
 
     /// `prettyProtoAtom` writes its timepoint positions with `text (show v)`
     /// (Atom.hs:216,223,224), not with `ppT`.  The two agree on a literal —
-    /// `show (LIT l) = show l` (Term/Term/Raw.hs:228) — which is the shape
-    /// every constructed timepoint has; on an application they part, `show`
-    /// keeping the prefix form the pretty-printer rewrites.
+    /// `show (LIT l) = show l` (Term/Term/Raw.hs:227-232, see line 230) —
+    /// which is the shape every constructed timepoint has; on an application
+    /// they part, `show` keeping the prefix form the pretty-printer rewrites.
     #[test]
     fn show_term_is_the_prefix_form() {
         for (t, _) in shape_rows() {

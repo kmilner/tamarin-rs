@@ -293,10 +293,10 @@ mod tests {
     }
 
     /// Every arm of `prettyProtoAtom` other than `Syntactic`
-    /// (Atom.hs:216-224) carries its own operator and its own break points:
-    /// `Action` hangs the time point off `prettyFact`, `EqE` and `Subterm`
-    /// are `sep`s, `Less` is two `<+>`s and `Last` wraps its operand in plain
-    /// parentheses.
+    /// (Atom.hs:216-224) carries its own operator: `Action` joins the fact,
+    /// `@` and the time point with `<->`, `EqE` and `Subterm` are `sep`s,
+    /// `Less` is two `<->`s and `Last` wraps its operand in plain
+    /// parentheses.  Only the two `sep` arms add a break point of their own.
     #[test]
     fn pretty_natom_prints_each_arm() {
         let cases: Vec<(Atom<LNTerm>, &str)> = vec![

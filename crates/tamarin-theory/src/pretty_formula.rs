@@ -56,8 +56,8 @@ use crate::pretty_hpj::{self as hpj, Doc, FLAT_WIDTH};
 /// resolution.
 type Bind = (String, LSort, String, u64);
 
-/// [`formula_doc`] laid out flat — the one-line string a guarded-conversion
-/// error quotes, the parser-AST twin of [`pretty_lnformula`].
+/// [`formula_doc`] laid out flat — the one-line string of a parser-AST
+/// formula, the parser-AST twin of [`pretty_lnformula`].
 pub fn pretty_formula(f: &p::Formula) -> String {
     formula_doc(f).render_with(FLAT_WIDTH, FLAT_WIDTH)
 }
@@ -111,8 +111,21 @@ pub fn formula_doublequoted_nested(f: &p::Formula, nest_n: usize) -> String {
 /// already built formula `Doc`, whichever formula representation produced
 /// it.
 pub(crate) fn doublequoted_nested_doc(formula_doc: Doc, nest_n: usize) -> String {
+    doublequoted_nested(formula_doc, nest_n).render()
+}
+
+/// [`doublequoted_nested_doc`] at the HughesPJ default page width, for the
+/// text HS builds with the plain `render` (Text/PrettyPrint/Class.hs:77-78)
+/// rather than with the console's `renderDoc` — the wellformedness report,
+/// which `Main/TheoryLoader.hs` folds into the theory as a comment string.
+pub(crate) fn doublequoted_nested_doc_default_width(formula_doc: Doc, nest_n: usize) -> String {
+    doublequoted_nested(formula_doc, nest_n)
+        .render_with(hpj::DEFAULT_LINE_LENGTH, hpj::DEFAULT_RIBBON)
+}
+
+fn doublequoted_nested(formula_doc: Doc, nest_n: usize) -> Doc {
     let dq = Doc::text("\"").beside(formula_doc).beside(Doc::text("\""));
-    dq.nest(nest_n as isize).render()
+    dq.nest(nest_n as isize)
 }
 
 /// [`guarded_doc`] laid out flat — the one-line string the web layer's
@@ -650,19 +663,6 @@ fn allocate_formula_binders_refs(
     out
 }
 
-/// HS `opParens p = "(" <> p <> ")"` (Highlight.hs:58-59) —
-/// unconditional paren wrap.
-fn doc_op_parens(d: crate::pretty_hpj::Doc) -> crate::pretty_hpj::Doc {
-    // HS `opParens d = operator_ "(" <> d <> operator_ ")"` — the parens are
-    // `hl_operator` spans in HtmlDoc mode.
-    crate::pretty_hpj::op_parens(d)
-}
-
-/// `text` helper.
-fn doc_text<S: Into<String>>(s: S) -> crate::pretty_hpj::Doc {
-    crate::pretty_hpj::Doc::text(s.into())
-}
-
 /// HS `prettyLFormula ppAtom` (Theory/Model/Formula.hs:474-514) over the
 /// parser AST.  The formula-structural nodes (Conn / Qua / Not) produce the
 /// sep-Unions where wrap decisions happen; the atoms carry the break points
@@ -715,7 +715,7 @@ fn formula_to_doc(
                         let mut s = String::new();
                         s.push_str(sort_prefix(b.1));
                         s.push_str(&b.2);
-                        doc_text(s)
+                        Doc::text(s)
                     })
                     .collect();
                 // HS `ppQuant qua <> ppVars vs <> operator_ "."`: `opForall`/
@@ -791,7 +791,7 @@ fn formula_to_doc_opparens(
     scope: &[Bind],
     state: &mut PreciseFreshState,
 ) -> crate::pretty_hpj::Doc {
-    doc_op_parens(formula_to_doc(f, scope, state))
+    hpj::op_parens(formula_to_doc(f, scope, state))
 }
 
 fn binop_to_doc(
@@ -829,9 +829,8 @@ pub fn lnformula_doc(f: &LNFormula) -> Doc {
 /// [`lnformula_doc`] laid out flat — the string [`pretty_formula`] writes for
 /// the parser AST the formula was closed from
 /// (`corpus_lnformula_doc_matches_ast_printer` compares the two over the
-/// examples tree).  This is the quoted formula text of a guarded-conversion
-/// error, where HS renders the same `prettyLNFormula` Doc
-/// (`ppFormula`, Guarded.hs:477).
+/// examples tree).  The prove-time guarded-conversion error quotes it on
+/// stderr; the printed theory renders the same Doc at its own width.
 pub fn pretty_lnformula(f: &LNFormula) -> String {
     lnformula_doc(f).render_with(FLAT_WIDTH, FLAT_WIDTH)
 }
@@ -869,7 +868,7 @@ fn lformula_doc<S: MapSugar<BLNTerm, LNTerm>>(
         ProtoFormula::Tf(false) => hpj::operator_("\u{22A5}"),
         // `operator_ "¬" <> opParens p'` (Theory/Model/Formula.hs:488-490).
         ProtoFormula::Not(p_) => hpj::operator_("\u{00AC}")
-            .beside(doc_op_parens(lformula_doc(p_, pp_atom, scope, state))),
+            .beside(hpj::op_parens(lformula_doc(p_, pp_atom, scope, state))),
         // `sep [opParens p' <-> ppOp op, opParens q']`
         // (Theory/Model/Formula.hs:493-501); `<->` is `<+>`.
         ProtoFormula::Conn(c, l, r) => {
@@ -879,8 +878,8 @@ fn lformula_doc<S: MapSugar<BLNTerm, LNTerm>>(
                 Connective::Imp => "\u{21D2}",
                 Connective::Iff => "\u{21D4}",
             };
-            let l_doc = doc_op_parens(lformula_doc(l, pp_atom, scope, state));
-            let r_doc = doc_op_parens(lformula_doc(r, pp_atom, scope, state));
+            let l_doc = hpj::op_parens(lformula_doc(l, pp_atom, scope, state));
+            let r_doc = hpj::op_parens(lformula_doc(r, pp_atom, scope, state));
             hpj::sep(vec![l_doc.beside_sp(hpj::operator_(op)), r_doc])
         }
         // `scopeFreshness $ do (vs, qua, fm') <- openFormulaPrefix fm; ...
@@ -918,7 +917,7 @@ fn lformula_doc<S: MapSugar<BLNTerm, LNTerm>>(
                         scope.push(x);
                         let mut s = String::new();
                         pp_lvar(&x, &mut s);
-                        doc_text(s)
+                        Doc::text(s)
                     })
                     .collect();
                 let quant = hpj::operator_(sym)
@@ -1790,14 +1789,6 @@ fn sort_ac_args_for_display<'a>(flat: &mut [&'a crate::guarded::GTerm], scope: &
 //       _               -> dsucc = nest 1 (pp gf);
 //                          sep [quantifier, sep [dante, connective, dsucc]]
 
-/// HS `opParens d = operator_ "(" <> d <> operator_ ")"` — for the plain
-/// `Doc` instance `operator_ = text` and `highlight = id`, so this is an
-/// unconditional `"(" <> d <> ")"` (Highlight.hs:58-59).
-fn gdoc_op_parens(d: crate::pretty_hpj::Doc) -> crate::pretty_hpj::Doc {
-    // HS `opParens d = operator_ "(" <> d <> operator_ ")"` — `hl_operator` spans.
-    crate::pretty_hpj::op_parens(d)
-}
-
 /// Build a `pretty_hpj::Doc` for a guarded formula, mirroring HS `pp`
 /// inside `prettyGuarded` (Guarded.hs:830-866).  Threads the Precise fresh
 /// `state` through the scope-freshness each `GGuarded` opens, and renders
@@ -1821,7 +1812,7 @@ fn guarded_to_doc(
             // HS: `parens $ sep $ punctuate (operator_ " ∨") (map opParens ps)`.
             let ps: Vec<Doc> = xs
                 .iter()
-                .map(|x| gdoc_op_parens(guarded_to_doc(x, scope, state)))
+                .map(|x| hpj::op_parens(guarded_to_doc(x, scope, state)))
                 .collect();
             let punct = hpj::punctuate(hpj::operator_(" \u{2228}"), ps); // " ∨"
                                                                          // `parens` (Text/PrettyPrint/Class.hs:149-149) is `char '(' <> d <> char ')'` — PLAIN.
@@ -1833,7 +1824,7 @@ fn guarded_to_doc(
             // HS: `sep $ punctuate (operator_ " ∧") (map opParens ps)`.
             let ps: Vec<Doc> = xs
                 .iter()
-                .map(|x| gdoc_op_parens(guarded_to_doc(x, scope, state)))
+                .map(|x| hpj::op_parens(guarded_to_doc(x, scope, state)))
                 .collect();
             let punct = hpj::punctuate(hpj::operator_(" \u{2227}"), ps); // " ∧"
             hpj::sep(punct)
@@ -1876,7 +1867,7 @@ fn gguarded_to_doc(
         } else {
             let ps: Vec<Doc> = guards
                 .iter()
-                .map(|gd| gdoc_op_parens(gatom_to_doc(gd, &new_scope)))
+                .map(|gd| hpj::op_parens(gatom_to_doc(gd, &new_scope)))
                 .collect();
             let punct = hpj::punctuate(hpj::operator_(" \u{2227}"), ps);
             hpj::sep(punct).nest(1)

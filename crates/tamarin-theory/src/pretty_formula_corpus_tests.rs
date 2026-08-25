@@ -9,7 +9,8 @@
 //!   * printed through the parser-AST printer and through
 //!     `syntactic_lnformula_doc` (and `lnformula_doc` where the sugar
 //!     strips), and the renders compared through both production wrappers
-//!     and through the flat render the guarded-conversion error text uses;
+//!     and through the flat render `pretty_formula`/`pretty_lnformula`
+//!     produce;
 //!   * converted with `from_parser` from both the raw and the
 //!     print-preprocessed parser AST, and the two results compared;
 //!   * checked for the two parser-AST shapes the round trip cannot carry
@@ -765,75 +766,6 @@ fn corpus_sapic_condition_render_matches_the_internal_printer() {
     }
     assert_corpus_covered(parsed, files);
     assert!(sapic_items > 0, "no SAPIC formulas compared");
-    assert!(
-        mismatches.is_empty(),
-        "{} mismatches; first: {}",
-        mismatches.len(),
-        mismatches[0]
-    );
-}
-
-/// The guarded formulas one corpus item yields: the formula as written and
-/// its negation, which is the shape `prove` converts for a safety lemma
-/// (`guarded::formula_to_guarded`, HS Guarded.hs:481-505).  An item whose
-/// formula is not guarded in either polarity contributes nothing.
-fn item_guardeds(item: &Item, msig: &tamarin_term::maude_sig::MaudeSig) -> Vec<(String, Guarded)> {
-    let negated = p::Formula::Not(Box::new(item.formula.clone()));
-    [("", &item.formula), (" [negated]", &negated)]
-        .into_iter()
-        .filter_map(|(what, f)| {
-            let g = crate::guarded::formula_to_guarded_parsed(f, msig).ok()?;
-            Some((format!("{}{what}", item.label), g))
-        })
-        .collect()
-}
-
-#[test]
-fn corpus_pretty_guarded_matches_doc_flat() {
-    let start = Instant::now();
-    let Some(corpus) = corpus() else {
-        return;
-    };
-    let (parsed, files) = file_counts(&corpus.2);
-    let work = all_items(corpus);
-    let results: Vec<(usize, usize, Vec<Mismatch>)> = deep_pool().install(|| {
-        work.par_iter()
-            .map(|(i, item)| {
-                let gs = item_guardeds(item, &corpus.2[*i].msig);
-                let found = gs
-                    .iter()
-                    .filter_map(|(label, g)| {
-                        let flat = pretty_guarded(g);
-                        let doc = guarded_doc(g).render_with(FLAT_WIDTH, FLAT_WIDTH);
-                        (flat != doc).then(|| (label.clone(), flat, doc))
-                    })
-                    .collect();
-                (*i, gs.len(), found)
-            })
-            .collect()
-    });
-    let guardeds: usize = results.iter().map(|(_, n, _)| n).sum();
-    let mismatches: Vec<String> = results
-        .iter()
-        .flat_map(|(i, _, found)| {
-            found.iter().map(move |(label, flat, doc)| {
-                format!(
-                    "MISMATCH {}\n--- pretty_guarded\n{flat}\n--- guarded_doc flat\n{doc}",
-                    at(corpus, *i, label)
-                )
-            })
-        })
-        .collect();
-    eprintln!(
-        "corpus guarded: files={files} parsed={parsed} guardeds={guardeds} mismatches={} wall={:?}",
-        mismatches.len(),
-        start.elapsed()
-    );
-    for m in &mismatches {
-        eprintln!("{m}");
-    }
-    assert_corpus_covered(parsed, files);
-    assert!(guardeds > 0, "no guarded formulas compared");
     assert!(
         mismatches.is_empty(),
         "{} mismatches; first: {}",

@@ -1067,9 +1067,34 @@ pub struct GuardError {
     ///     "<full_formula>"
     ///   ```
     /// Its enclosing binders are already opened, so it prints on its own
-    /// through [`crate::pretty_formula::pretty_lnformula`].  `None` for a
+    /// through [`crate::pretty_formula::lnformula_doc`].  `None` for a
     /// failure outside a quantifier.
     pub subject_formula: Option<crate::formula::LNFormula>,
+    /// The quoted variable names of HS `noUnguardedVars` (Guarded.hs:507-514),
+    /// which builds its message with `fsep` over one `Doc` per name.  Empty
+    /// for every other failure, whose message is a single `text`.
+    pub unguarded_vars: Vec<String>,
+}
+
+impl GuardError {
+    /// The message as the `Doc` HS throws (Guarded.hs:507-514 and
+    /// Guarded.hs:561-563).
+    /// The unguarded-variable list is an `fsep`, so it wraps at the width
+    /// and nesting the caller renders it at; every other message is one
+    /// `text` on a single line.
+    pub fn message_doc(&self) -> crate::pretty_hpj::Doc {
+        use crate::pretty_hpj::{fsep, punctuate, Doc};
+        if self.unguarded_vars.is_empty() {
+            return Doc::text(&self.message);
+        }
+        let mut parts = vec![Doc::text("unguarded variable(s)")];
+        parts.extend(punctuate(
+            Doc::text(","),
+            self.unguarded_vars.iter().map(Doc::text).collect(),
+        ));
+        parts.extend(["in", "the", "subformula"].into_iter().map(Doc::text));
+        fsep(parts)
+    }
 }
 
 impl std::fmt::Display for GuardError {
@@ -1083,6 +1108,7 @@ fn err(msg: impl Into<String>) -> GuardError {
     GuardError {
         message: msg.into(),
         subject_formula: None,
+        unguarded_vars: Vec::new(),
     }
 }
 
@@ -1525,10 +1551,12 @@ fn unguarded_error(positions: &[usize], freshened: &[p::VarSpec]) -> GuardError 
         .iter()
         .map(|&i| show_lvar(&freshened[i]))
         .collect();
-    err(format!(
+    let mut e = err(format!(
         "unguarded variable(s) {} in the subformula",
         names.join(", ")
-    ))
+    ));
+    e.unguarded_vars = names;
+    e
 }
 
 // =============================================================================
