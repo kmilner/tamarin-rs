@@ -31,24 +31,32 @@
 
 use std::collections::BTreeMap;
 
-use crate::base_translation::{subst_fact, subst_term};
 use tamarin_parser::ast as p;
 use tamarin_term::lterm::Name;
 use tamarin_term::maude_sig::MaudeSig;
-use tamarin_term::subst::Subst;
+use tamarin_term::subst::{apply_vterm, Subst};
 use tamarin_term::vterm::{Lit, VTerm};
 
-use tamarin_theory::formula::apply_subst;
-use tamarin_theory::sapic::{
-    PlainProcess, Process, ProcessCombinator, SapicAction, SapicLVar, SapicTerm,
-};
-
-use crate::convert::{
+use crate::formula::apply_subst;
+use crate::process_convert::{
     action as convert_action, combinator as convert_combinator, term as convert_term, ConvertError,
+};
+use crate::sapic::{
+    PlainProcess, Process, ProcessCombinator, SapicAction, SapicLNFact, SapicLVar, SapicTerm,
 };
 
 /// A substitution mapping SAPIC parameter variables to argument terms.
 type SapicSubst = Subst<Name, SapicLVar>;
+
+/// Apply a SAPIC substitution to a SAPIC term.
+fn subst_term(subst: &SapicSubst, t: &SapicTerm) -> SapicTerm {
+    apply_vterm(subst, t.clone())
+}
+
+/// Apply a SAPIC substitution to a SAPIC fact (tag and annotations kept).
+fn subst_fact(subst: &SapicSubst, f: &SapicLNFact) -> SapicLNFact {
+    f.map_ref(|t| subst_term(subst, t))
+}
 
 /// Look up each process definition by name (HS `lookupProcessDef`,
 /// `TheoryObject.hs:678-679`).  Built once from the parsed theory's `ProcessDef`
@@ -75,7 +83,7 @@ pub fn convert_process_with_defs(
     defs: &ProcessDefMap<'_>,
     sig: &MaudeSig,
 ) -> Result<PlainProcess, ConvertError> {
-    use tamarin_theory::sapic::ProcessParsedAnnotation;
+    use crate::sapic::ProcessParsedAnnotation;
     let ann = ProcessParsedAnnotation::empty();
     match proc {
         p::Process::Null => Ok(Process::Null(ann)),
@@ -108,7 +116,7 @@ fn inline_call(
     defs: &ProcessDefMap<'_>,
     sig: &MaudeSig,
 ) -> Result<PlainProcess, ConvertError> {
-    use tamarin_theory::sapic::ProcessParsedAnnotation;
+    use crate::sapic::ProcessParsedAnnotation;
 
     // `checkProcess` (Theory/Text/Parser/Sapic.hs:314-317): fail if the
     // process is undefined.
@@ -126,7 +134,7 @@ fn inline_call(
     let params: Vec<SapicLVar> = def
         .vars
         .as_ref()
-        .map(|vs| vs.iter().map(crate::convert::varspec_to_sapic).collect())
+        .map(|vs| vs.iter().map(crate::elaborate::varspec_to_sapic).collect())
         .unwrap_or_default();
 
     if params.len() != sapic_args.len() {
@@ -174,7 +182,7 @@ fn inline_call(
 /// node's annotation.  Only the FRONT node is touched (HS mappends at the root).
 fn process_add_annotation(
     p: PlainProcess,
-    ann_add: tamarin_theory::sapic::ProcessParsedAnnotation,
+    ann_add: crate::sapic::ProcessParsedAnnotation,
 ) -> PlainProcess {
     match p {
         Process::Null(a) => Process::Null(a.append(ann_add)),
@@ -439,7 +447,7 @@ mod tests {
                         assert_eq!(msg, args[0]);
                         assert_eq!(
                             msg,
-                            crate::convert::term(&pub_lit("t"), &pair_maude_sig())
+                            crate::process_convert::term(&pub_lit("t"), &pair_maude_sig())
                                 .expect("'t' converts")
                         );
                     }

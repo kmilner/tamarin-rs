@@ -5,7 +5,7 @@
 //! Parser-AST → theory-AST process converter.
 //!
 //! Maps `tamarin_parser::ast::Process` (the surface syntax tree) into
-//! `tamarin_theory::sapic::PlainProcess` (the HS-faithful `Process<ann, v>`
+//! `crate::sapic::PlainProcess` (the HS-faithful `Process<ann, v>`
 //! working representation):
 //!
 //!   - `Null`
@@ -26,13 +26,13 @@ use std::collections::BTreeSet;
 use tamarin_parser::ast as p;
 use tamarin_term::lterm::LVar;
 use tamarin_term::maude_sig::MaudeSig;
-use tamarin_theory::elaborate::{fact_to_sapic_fact, term_to_sapic_term};
-use tamarin_theory::formula::sapic_from_parser;
 // A variable literal of a SAPIC term and a SAPIC binder are the same reading
 // of a `VarSpec`, so both come from one definition.
-use tamarin_theory::elaborate::map_formula_terms;
-pub(crate) use tamarin_theory::elaborate::varspec_to_sapic;
-use tamarin_theory::sapic::{
+use crate::elaborate::{
+    fact_to_sapic_fact, map_formula_terms, term_to_sapic_term, varspec_to_sapic,
+};
+use crate::formula::sapic_from_parser;
+use crate::sapic::{
     PlainProcess, Process, ProcessCombinator, ProcessParsedAnnotation, SapicAction, SapicLVar,
 };
 
@@ -50,7 +50,7 @@ impl ConvertError {
 }
 
 /// `LVar` → parser `VarSpec` (name/idx/sort carried over, no SAPIC type).
-pub(crate) fn lvar_to_varspec(v: &LVar) -> p::VarSpec {
+pub fn lvar_to_varspec(v: &LVar) -> p::VarSpec {
     p::VarSpec {
         name: v.name.to_string(),
         idx: v.idx,
@@ -59,15 +59,12 @@ pub(crate) fn lvar_to_varspec(v: &LVar) -> p::VarSpec {
     }
 }
 
-pub(crate) fn term(
-    t: &p::Term,
-    sig: &MaudeSig,
-) -> Result<tamarin_theory::sapic::SapicTerm, ConvertError> {
+pub(crate) fn term(t: &p::Term, sig: &MaudeSig) -> Result<crate::sapic::SapicTerm, ConvertError> {
     term_to_sapic_term(t, sig)
         .ok_or_else(|| ConvertError::new("could not convert SAPIC term (pattern term?)"))
 }
 
-fn fact(f: &p::Fact, sig: &MaudeSig) -> Result<tamarin_theory::sapic::SapicLNFact, ConvertError> {
+fn fact(f: &p::Fact, sig: &MaudeSig) -> Result<crate::sapic::SapicLNFact, ConvertError> {
     fact_to_sapic_fact(f, sig).map_err(|e| ConvertError::new(e.message))
 }
 
@@ -165,7 +162,7 @@ fn fact_unpattern(
     f: &p::Fact,
     sig: &MaudeSig,
     mut match_vars: Option<&mut BTreeSet<SapicLVar>>,
-) -> Result<tamarin_theory::sapic::SapicLNFact, ConvertError> {
+) -> Result<crate::sapic::SapicLNFact, ConvertError> {
     let mut sink = BTreeSet::new();
     let args: Vec<p::Term> = f
         .args
@@ -240,7 +237,7 @@ pub(crate) fn combinator(
 fn convert_let_pattern(
     pat: &p::Term,
     sig: &MaudeSig,
-) -> Result<(tamarin_theory::sapic::SapicTerm, BTreeSet<SapicLVar>), ConvertError> {
+) -> Result<(crate::sapic::SapicTerm, BTreeSet<SapicLVar>), ConvertError> {
     let mut match_vars: BTreeSet<SapicLVar> = BTreeSet::new();
     let unpatterned = strip_pat_match(pat, &mut match_vars);
     let left = term(&unpatterned, sig)?;
@@ -320,8 +317,8 @@ pub fn convert_process(proc: &p::Process, sig: &MaudeSig) -> Result<PlainProcess
         p::Process::Call { .. } => {
             // Process-call inlining requires the theory's process-definition
             // map; the real pipeline goes through
-            // `inline::convert_process_with_defs`.  This def-less entry point
-            // (used by unit tests) cannot resolve a call.
+            // `process_inline::convert_process_with_defs`.  This def-less
+            // entry point (used by unit tests) cannot resolve a call.
             Err(ConvertError::new(
                 "process calls require convert_process_with_defs",
             ))
@@ -397,7 +394,7 @@ mod tests {
         let Process::Action(SapicAction::Event(fact), _, body) = *body else {
             panic!("expected Event under the New");
         };
-        assert_eq!(tamarin_theory::fact::fact_tag_name(&fact.tag), "Test");
+        assert_eq!(crate::fact::fact_tag_name(&fact.tag), "Test");
         assert_eq!(fact.terms.len(), 1);
         let Process::Action(SapicAction::ChOut { chan, msg }, _, body) = *body else {
             panic!("expected ChOut under the Event");
@@ -434,7 +431,7 @@ mod tests {
         let Process::Action(SapicAction::Event(f), _, _) = p else {
             panic!("expected an event child, got {p:?}");
         };
-        tamarin_theory::fact::fact_tag_name(&f.tag)
+        crate::fact::fact_tag_name(&f.tag)
     }
 
     #[test]
@@ -470,7 +467,7 @@ mod tests {
         let Process::Action(SapicAction::Event(f), _, _) = *body else {
             panic!("expected the replicated event as Rep's child");
         };
-        assert_eq!(tamarin_theory::fact::fact_tag_name(&f.tag), "A");
+        assert_eq!(crate::fact::fact_tag_name(&f.tag), "A");
     }
 
     #[test]
@@ -522,23 +519,17 @@ mod tests {
         else {
             panic!("expected a Cond combinator");
         };
-        let want = tamarin_theory::formula::ProtoFormula::Atom(
-            tamarin_theory::atom::ProtoAtom::Syntactic(tamarin_theory::atom::SyntacticSugar::Pred(
-                tamarin_theory::fact::Fact::new(
-                    tamarin_theory::fact::FactTag::Proto(
-                        tamarin_theory::fact::Multiplicity::Linear,
-                        "P",
-                        1,
-                    ),
-                    vec![tamarin_term::vterm::VTerm::Lit(
-                        tamarin_term::vterm::Lit::Con(tamarin_term::lterm::Name::new(
-                            tamarin_term::lterm::NameTag::Pub,
-                            "c",
-                        )),
-                    )],
-                ),
+        let want = crate::formula::ProtoFormula::Atom(crate::atom::ProtoAtom::Syntactic(
+            crate::atom::SyntacticSugar::Pred(crate::fact::Fact::new(
+                crate::fact::FactTag::Proto(crate::fact::Multiplicity::Linear, "P", 1),
+                vec![tamarin_term::vterm::VTerm::Lit(
+                    tamarin_term::vterm::Lit::Con(tamarin_term::lterm::Name::new(
+                        tamarin_term::lterm::NameTag::Pub,
+                        "c",
+                    )),
+                )],
             )),
-        );
+        ));
         assert_eq!(got, want);
         assert_eq!(child_event_name(&then), "E");
     }
@@ -584,15 +575,15 @@ mod tests {
         let cond = |decl: &str| {
             let thy =
                 tamarin_parser::parse_theory(&format!("theory T begin\n{decl}\nend"), &[]).unwrap();
-            let msig = tamarin_theory::elaborate::elaborate(&thy)
+            let msig = crate::elaborate::elaborate(&thy)
                 .unwrap()
                 .signature
                 .maude_sig;
             let f = tamarin_parser::parser::parse_formula_str("Eq(c, k)", &msig).unwrap();
             sapic_from_parser(&f, &msig).unwrap()
         };
-        let names = |f: &tamarin_theory::sapic::SapicFormula| -> Vec<String> {
-            tamarin_theory::formula::formula_frees(f)
+        let names = |f: &crate::sapic::SapicFormula| -> Vec<String> {
+            crate::formula::formula_frees(f)
                 .iter()
                 .map(|v| v.var.name.to_string())
                 .collect()
@@ -616,7 +607,7 @@ mod tests {
         let msig = msig();
         let f = tamarin_parser::parser::parse_formula_str("Ex k. Eq(c, k)", &msig).unwrap();
         let got = sapic_from_parser(&f, &msig).unwrap();
-        let frees: Vec<String> = tamarin_theory::formula::formula_frees(&got)
+        let frees: Vec<String> = crate::formula::formula_frees(&got)
             .iter()
             .map(|v| v.var.name.to_string())
             .collect();

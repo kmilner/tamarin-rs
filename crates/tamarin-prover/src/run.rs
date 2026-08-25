@@ -2357,9 +2357,9 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             // each `P(args)` call and wraps it in a `ProcessCall` marker
             // action (Theory/Text/Parser/Sapic.hs:293-312) — `prettySapic'`
             // then prints just `P(args)` for the marker (Theory/Sapic/Process.hs:496).
-            let process_defs = tamarin_sapic::inline::collect_process_defs(&parsed);
+            let process_defs = tamarin_theory::process_inline::collect_process_defs(&parsed);
             let conv = |proc: &tamarin_parser::ast::Process| {
-                tamarin_sapic::inline::convert_process_with_defs(
+                tamarin_theory::process_inline::convert_process_with_defs(
                     proc,
                     &process_defs,
                     &elaborated.signature.maude_sig,
@@ -2556,9 +2556,9 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
                 // from the typing result), so they are always present here.
                 let popts = print_opts.expect("translate mode always fills its print options");
                 let wf_block = tamarin_theory::pretty_theory::format_wf_block(&st.wf_report);
-                let process_defs = tamarin_sapic::inline::collect_process_defs(&st.parsed);
+                let process_defs = tamarin_theory::process_inline::collect_process_defs(&st.parsed);
                 let conv = |proc: &tamarin_parser::ast::Process| {
-                    tamarin_sapic::inline::convert_process_with_defs(
+                    tamarin_theory::process_inline::convert_process_with_defs(
                         proc,
                         &process_defs,
                         &st.elaborated.signature.maude_sig,

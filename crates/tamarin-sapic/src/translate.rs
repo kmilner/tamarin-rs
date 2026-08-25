@@ -640,10 +640,10 @@ fn is_pos_neg_atom(a: &tamarin_parser::ast::Atom) -> (bool, bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::convert::convert_process;
     use crate::typing::type_and_rename_process;
     use tamarin_parser::ast as p;
     use tamarin_term::lterm::LSort;
+    use tamarin_theory::process_convert::convert_process;
 
     fn typing2_process() -> p::Process {
         let xspec = p::VarSpec {

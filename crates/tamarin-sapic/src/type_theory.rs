@@ -30,14 +30,16 @@ use tamarin_term::maude_sig::MaudeSig;
 use tamarin_term::term::f_app;
 use tamarin_term::vterm::{var_term, Lit, VTerm};
 
-use tamarin_theory::elaborate::ElabError;
+use tamarin_theory::elaborate::{varspec_to_sapic, ElabError};
 use tamarin_theory::pretty_theory::TypedOverlay;
+use tamarin_theory::process_inline::{
+    collect_process_defs, convert_process_with_defs, ProcessDefMap,
+};
 use tamarin_theory::sapic::{
     PlainProcess, Process, ProcessParsedAnnotation, SapicAction, SapicLVar,
 };
 use tamarin_theory::theory::{SapicFunSym, Theory};
 
-use crate::inline::{collect_process_defs, convert_process_with_defs, ProcessDefMap};
 use crate::typing::{
     collect_user_fun_typings, init_te_from_sig, type_and_rename_process_in, vars_proc,
     TypingEnvironment,
@@ -173,7 +175,7 @@ fn type_process_def(
     let declared: Option<Vec<SapicLVar>> = pd
         .vars
         .as_ref()
-        .map(|vs| vs.iter().map(crate::convert::varspec_to_sapic).collect());
+        .map(|vs| vs.iter().map(varspec_to_sapic).collect());
     let pvars: Vec<SapicLVar> = match &declared {
         Some(vs) => vs.clone(),
         None => {

@@ -252,7 +252,7 @@ fn make_restriction(pos: &[i64], tos: &PosSet) -> p::Restriction {
     // `pvar = msgVarProgress pos` — the message-sort progress var (rendered
     // without the `~`), quantified universally.
     let pvar = msg_var_progress(&pos_v);
-    let pvar_spec = crate::convert::lvar_to_varspec(&pvar);
+    let pvar_spec = tamarin_theory::process_convert::lvar_to_varspec(&pvar);
     let pvar_term = p::Term::Var(pvar_spec.clone());
 
     // `t1var = LVar "t" LSortNode 1`, `t2var = LVar "t" LSortNode 2`.

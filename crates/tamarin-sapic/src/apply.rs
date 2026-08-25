@@ -24,13 +24,13 @@ use tamarin_theory::elaborate::{proto_rule_to_parsed, ElabError};
 use tamarin_theory::formula::LNFormula;
 use tamarin_theory::predicate::{expand_formula, Predicate};
 use tamarin_theory::pretty_formula::lnformula_to_parser;
+use tamarin_theory::process_convert::ConvertError;
+use tamarin_theory::process_inline::{collect_process_defs, convert_process_with_defs};
 use tamarin_theory::restriction::Restriction;
 use tamarin_theory::rule_restriction::rule_restrictions;
 use tamarin_theory::sapic::PlainProcess;
 use tamarin_theory::theory::{OpenProtoRule, Theory, TheoryItem};
 
-use crate::convert::ConvertError;
-use crate::inline::{collect_process_defs, convert_process_with_defs};
 use crate::translate::{needs_in_ev_res, translate, TranslateOptions};
 use crate::typing::{collect_user_fun_typings, type_and_rename_process};
 

@@ -18,7 +18,10 @@
 //! - [`rule`] ← `Theory.Model.Rule` (data layer + indices + info types);
 //!   instantiation (`someRuleACInst*`) lives in
 //!   [`constraint::solver::reduction`]
-//! - [`sapic`] ← `Theory.Sapic.{Position, Term, Annotation, Process, Pattern}`
+//! - [`sapic`] ← `Theory.Sapic.{Position, Term, Annotation, Process, Pattern}`;
+//!   [`process_convert`] / [`process_inline`] build a `PlainProcess` from the
+//!   parser's surface process AST, which HS's parser builds directly
+//!   (`Theory/Text/Parser/Sapic.hs`)
 //! - [`intruder_rules`] / [`intruder_variants`] ←
 //!   `Theory.Tools.IntruderRules`; [`close_rule`] ← `CloseRule.hs`'s
 //!   no-deconstruction-chain check
@@ -77,6 +80,8 @@ pub mod pretty_system;
 #[path = "pretty_term_corpus_tests.rs"]
 mod pretty_term_corpus_tests;
 pub mod pretty_theory;
+pub mod process_convert;
+pub mod process_inline;
 pub mod proof_skeleton;
 pub mod prove;
 pub mod replay;

@@ -78,8 +78,7 @@ pub fn to_ln_fact(f: &tamarin_theory::sapic::SapicLNFact) -> tamarin_theory::fac
     f.map_ref(to_ln_term)
 }
 
-/// Apply a SAPIC substitution to a SAPIC term. Shared by `inline` and
-/// `let_destructors` (both substitute SAPIC terms identically).
+/// Apply a SAPIC substitution to a SAPIC term.
 pub(crate) fn subst_term(
     subst: &tamarin_term::subst::Subst<tamarin_term::lterm::Name, SapicLVar>,
     t: &SapicTerm,
