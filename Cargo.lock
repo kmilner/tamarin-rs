@@ -652,16 +652,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "indexmap"
-version = "2.14.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d466e9454f08e4a911e14806c24e16fba1b4c121d1ea474396f396069cf949d9"
-dependencies = [
- "equivalent",
- "hashbrown",
-]
-
-[[package]]
 name = "ipnet"
 version = "2.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1268,10 +1258,8 @@ version = "1.13.0"
 dependencies = [
  "fancy-regex",
  "hashbrown",
- "indexmap",
  "mimalloc",
  "rayon",
- "rustc-hash",
  "serde_json",
  "tamarin-accountability",
  "tamarin-parser",

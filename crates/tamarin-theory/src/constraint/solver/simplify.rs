@@ -16,6 +16,7 @@
 //! port implements the full fixpoint loop and every pass.
 
 use crate::constraint::solver::reduction::{ChangeIndicator, Reduction};
+use crate::tools::equation_store::LNSubst;
 
 /// Labeled variant — emits a `[SIMP_CONTRA]` trace under
 /// `TAM_RS_TRACE_SIMP_CONTRA=1` so per-pass contradiction firings can be
@@ -1149,11 +1150,10 @@ fn eq_node_id(t: &tamarin_term::lterm::LNTerm) -> Option<crate::constraint::cons
 /// as a new formula.
 ///
 /// Matching uses Maude-backed AC matching via `maude.match_eqs`:
-/// the guard fact's term arguments are converted to LNTerm patterns,
-/// and the system action's terms become matching subjects. Maude
-/// returns a list of `(LVar, LNTerm)` substitutions which we then
-/// translate back to parser-AST terms and store in the `VarSubst`
-/// for application to the implied body.
+/// the guard fact's term arguments are the patterns, and the system
+/// action's terms become matching subjects. Maude returns a list of
+/// `(LVar, LNTerm)` substitutions, each an [`LNSubst`] applied to the
+/// implied body.
 fn insert_implied_formulas_pass(red: &mut Reduction) -> ChangeIndicator {
     use crate::atom::Atom as AAtom;
     use crate::atom::ProtoAtom;
@@ -1196,8 +1196,8 @@ fn insert_implied_formulas_pass(red: &mut Reduction) -> ChangeIndicator {
     // advances past every previously-seen idx.
     //
     // Rust: take baseline as max system var idx + 1; allocate
-    // sequential idxs per bound var.  Then `subst_atom`/`subst_guarded`
-    // applies the rename throughout antecedent + body.
+    // sequential idxs per bound var.  Then `open_guarded` applies the
+    // rename throughout antecedent + body.
     // HS's ambient `MonadFresh`; `FastFreshState::seeded` is its non-precise
     // form (`freshIdent _name = freshIdents 1`,
     // Control/Monad/Fresh/Class.hs:38-41), so every opened binder across the
@@ -1564,7 +1564,7 @@ fn try_match_all_guards(
     out_canon: &mut Vec<(crate::guarded::Guarded, u64)>,
 ) {
     use crate::atom::ProtoAtom;
-    use crate::guarded::{subst_guarded, subst_lnatom, VarSubst};
+    use crate::guarded::subst_guarded;
 
     // The `(name, idx)` set of the universal's bound vars, hoisted out of the
     // per-(guard, action) matching calls: it depends only on `vars` —
@@ -1582,7 +1582,7 @@ fn try_match_all_guards(
         guard_idx: usize,
         sys_actions: &[(crate::constraint::constraints::NodeId, crate::fact::LNFact)],
         actions_by_name: &tamarin_utils::FastMap<String, Vec<u32>>,
-        acc: &VarSubst,
+        acc: &LNSubst,
         body: &crate::guarded::Guarded,
         dedup_tables: &ImpliedDedupTables<'_>,
         other_guards: &[&crate::atom::Atom<tamarin_term::lterm::LNTerm>],
@@ -1614,7 +1614,11 @@ fn try_match_all_guards(
             // into its own pass.
             let surviving_gatoms: Vec<crate::atom::Atom<crate::formula::BLNTerm>> = other_guards
                 .iter()
-                .map(|g| crate::guarded::lift_free_atom(&subst_lnatom(g, acc)))
+                .map(|g| {
+                    crate::guarded::lift_free_atom(&crate::atom::map_atom(g, &mut |t| {
+                        tamarin_term::subst::apply_vterm(acc, t.clone())
+                    }))
+                })
                 .collect();
             let body_subst = subst_guarded(body, acc);
             // Mirror Haskell's `gall [] otherAtoms succedent` smart-
@@ -1732,9 +1736,8 @@ fn try_match_all_guards(
                 // guard binds a variable used by a later guard propagate
                 // the binding correctly.  For single-guard universals
                 // this is a no-op (acc is empty).
-                use crate::guarded::{subst_lnfact, subst_lnterm};
-                let g_fact_subst = subst_lnfact(g_fact, acc);
-                let g_time_subst = subst_lnterm(g_time, acc);
+                let g_fact_subst = crate::fact::apply_subst_fact(acc, g_fact);
+                let g_time_subst = tamarin_term::subst::apply_vterm(acc, g_time.clone());
                 // Iterate only the name-equal group of the pass-invariant
                 // `actions_by_name` index (substitution never rewrites a
                 // fact NAME, so the group key is exact).  The group holds
@@ -1794,9 +1797,8 @@ fn try_match_all_guards(
                 // matching context); the other side is the pattern.
                 // Match pattern against subject with the pure
                 // structural matcher and compose substitutions.
-                use crate::guarded::subst_lnterm;
-                let s_subst = subst_lnterm(s, acc);
-                let t_subst = subst_lnterm(t, acc);
+                let s_subst = tamarin_term::subst::apply_vterm(acc, s.clone());
+                let t_subst = tamarin_term::subst::apply_vterm(acc, t.clone());
                 let s_has_pat = atom_has_unbound_pattern_var(&s_subst, vars);
                 let t_has_pat = atom_has_unbound_pattern_var(&t_subst, vars);
                 let (pat_term, subj_term) = match (s_has_pat, t_has_pat) {
@@ -1918,14 +1920,17 @@ fn try_match_all_guards(
                 for struct_subst in candidates {
                     // Keep the LVar → LNTerm bindings of the universal's own
                     // variables.
-                    let mut subst_here = VarSubst::default();
+                    let mut subst_here: std::collections::BTreeMap<
+                        tamarin_term::lterm::LVar,
+                        tamarin_term::lterm::LNTerm,
+                    > = std::collections::BTreeMap::new();
                     for (lv, lt) in struct_subst {
                         if !vars.iter().any(|v| v.name == lv.name && v.idx == lv.idx) {
                             continue;
                         }
-                        // `lv.name` is an interned `&'static str` — zero-alloc key.
-                        subst_here.insert((lv.name, lv.idx), lt);
+                        subst_here.insert(lv, lt);
                     }
+                    let subst_here = LNSubst::from_map(subst_here);
                     let Some(combined) = combine_substs(acc, &subst_here) else {
                         continue;
                     };
@@ -1962,7 +1967,7 @@ fn try_match_all_guards(
         0,
         sys_actions,
         actions_by_name,
-        &VarSubst::default(),
+        &LNSubst::empty(),
         body,
         dedup_tables,
         other_guards,
@@ -1973,12 +1978,12 @@ fn try_match_all_guards(
 
 /// Combine two substitutions. If they map the same key to different
 /// terms, return None. Otherwise return the union.
-fn combine_substs(
-    a: &crate::guarded::VarSubst,
-    b: &crate::guarded::VarSubst,
-) -> Option<crate::guarded::VarSubst> {
-    let mut out = a.clone();
-    for (k, v) in b {
+fn combine_substs(a: &LNSubst, b: &LNSubst) -> Option<LNSubst> {
+    let mut out: std::collections::BTreeMap<
+        tamarin_term::lterm::LVar,
+        tamarin_term::lterm::LNTerm,
+    > = a.iter().map(|(v, t)| (*v, t.clone())).collect();
+    for (k, v) in b.iter() {
         match out.get(k) {
             Some(existing) if existing != v => return None,
             _ => {
@@ -1986,7 +1991,7 @@ fn combine_substs(
             }
         }
     }
-    Some(out)
+    Some(LNSubst::from_map(out))
 }
 
 /// True iff a term mentions any `LVar` whose `(name, idx)` is in `vars` —
@@ -2182,8 +2187,8 @@ fn structural_match(
 
 /// Maude-backed matcher: ask Maude to match each of the universal's guard
 /// terms against the corresponding system term.  The returned
-/// `(LVar, LNTerm)` bindings become a [`crate::guarded::VarSubst`]; the
-/// result is empty when Maude reports no match.
+/// `(LVar, LNTerm)` bindings become an [`LNSubst`]; the result is empty when
+/// Maude reports no match.
 ///
 /// Mirrors Haskell's `matchAction` flow in `impliedFormulas`.
 ///
@@ -2198,11 +2203,13 @@ fn match_atom_via_maude(
     g_time: &tamarin_term::lterm::LNTerm,
     i: &crate::constraint::constraints::NodeId,
     sys_args: &[tamarin_term::lterm::LNTerm],
-) -> Vec<crate::guarded::VarSubst> {
-    use crate::guarded::VarSubst;
+) -> Vec<LNSubst> {
     use tamarin_term::term::Term as LTerm;
     use tamarin_term::vterm::Lit as LLit;
-    let mut base_subst = VarSubst::default();
+    let mut base_subst: std::collections::BTreeMap<
+        tamarin_term::lterm::LVar,
+        tamarin_term::lterm::LNTerm,
+    > = std::collections::BTreeMap::new();
 
     // Time variable.  HS's `matchAction` (Guarded.hs:805-807) matches
     // the time node `i1 matchWith i2` ALONGSIDE the fact — the time is
@@ -2232,7 +2239,7 @@ fn match_atom_via_maude(
     };
     if vars.iter().any(|v| v.name == g_t.name && v.idx == g_t.idx) {
         base_subst.insert(
-            (g_t.name, g_t.idx),
+            *g_t,
             tamarin_term::vterm::var_term(tamarin_term::lterm::LVar::new(
                 i.name,
                 tamarin_term::lterm::LSort::Node,
@@ -2255,7 +2262,7 @@ fn match_atom_via_maude(
         });
     }
     if eqs.is_empty() {
-        return vec![base_subst];
+        return vec![LNSubst::from_map(base_subst)];
     }
 
     // Structural matching: Haskell's `solveMatchLTerm` (Term/Subsumption.hs)
@@ -2369,17 +2376,16 @@ fn match_atom_via_maude(
     // bound during matching.  Threading free-var bindings into `acc`
     // would cause spurious propagation when later guards re-encounter
     // those names.
-    let mut out: Vec<VarSubst> = Vec::with_capacity(ms.len());
+    let mut out: Vec<LNSubst> = Vec::with_capacity(ms.len());
     for m in ms {
         let mut subst = base_subst.clone();
         for (lv, lt) in m {
             if !pattern_vars.contains(&(lv.name.to_string(), lv.idx)) {
                 continue;
             }
-            // `lv.name` is an interned `&'static str` — zero-alloc key.
-            subst.insert((lv.name, lv.idx), lt);
+            subst.insert(lv, lt);
         }
-        out.push(subst);
+        out.push(LNSubst::from_map(subst));
     }
     out
 }

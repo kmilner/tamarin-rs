@@ -12,9 +12,7 @@ tamarin-utils = { workspace = true }
 tamarin-term = { workspace = true }
 tamarin-parser = { workspace = true }
 rayon = { workspace = true }
-rustc-hash = { workspace = true }
 hashbrown = "0.17"
-indexmap = { workspace = true }
 fancy-regex = "0.18"
 # `Theory.Constraint.System.JSON` (lib/theory's aeson dependency upstream).
 serde_json = "1"

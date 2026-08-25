@@ -23,6 +23,7 @@ use std::collections::BTreeSet;
 use crate::atom::{fold_atom, map_atom, Atom, ProtoAtom};
 use crate::fact::Fact;
 use crate::formula::{lift_free, BLNTerm, Quantifier};
+use crate::tools::equation_store::LNSubst;
 use tamarin_parser::ast as p;
 use tamarin_term::lterm::{frees, BVar, HasFrees, LNTerm, LSort, LVar};
 use tamarin_term::term::{f_app, map_lits, Term};
@@ -1208,107 +1209,18 @@ fn gnot_atom(a: &Atom<BLNTerm>) -> Guarded {
 // Substitution of free variables
 // =============================================================================
 
-/// Substitution mapping a free `LVar` (keyed by `(name, idx)`) to a
-/// replacement term.  Applied to `Guarded` formulas via [`subst_guarded`],
-/// which lifts each image with [`lift_free`] exactly as HS's
-/// `Apply (Subst c v) (VTerm c (BVar v))` does (SubstVFree.hs:297-302).
-///
-/// Keyed by the *interned* `&'static str` name (see [`tamarin_term::intern`]):
-/// `LVar.name` is already interned, so LVar-sourced builds key with zero
-/// alloc.  The per-leaf *lookups* on the substitution-apply hot path do NOT
-/// intern: they probe with the borrowed [`VarSubstKey`], which hashes and
-/// compares by content exactly like the owned key — skipping the intern pool
-/// entirely (its probe plus the map's own hash cost ~3% of stateverif at 1
-/// core, and its lock traffic ping-pongs across workers at 16).  Key equality
-/// is unchanged — `&str`/`String` both hash/compare by content — so the key
-/// set is identical to a `(String, u64)` map.
-///
-/// `IndexMap` (Fx-hashed) rather than a std `HashMap`: `IndexMap` supports
-/// the borrowed-key `Equivalent` probe above, and its iteration order is
-/// insertion order (deterministic).  Byte-safe: no `VarSubst` is ever
-/// iterated toward output — every consumer is a keyed
-/// `get`/`insert`/`is_empty`/`len` (the `subst_*` fns, `collect_witness_vars`,
-/// `match_atom_via_maude`), and the sole iteration (`combine_substs`' union) is
-/// order-independent in both its `Some`/`None` outcome and its resulting map.
-pub type VarSubst = indexmap::IndexMap<(&'static str, u64), LNTerm, rustc_hash::FxBuildHasher>;
-
-/// Borrowed lookup key for [`VarSubst`]: probes by *content* so the
-/// substitution-apply leaves need not intern the leaf's name first.
-///
-/// Hash-consistency with the owned `(&'static str, u64)` key is by
-/// construction: the derived tuple `Hash` feeds `self.0.hash(state)` then
-/// `self.1.hash(state)`, and this impl performs the identical two calls on
-/// the identical value types (`&str`, `u64`), so equal content ⇒ equal hash
-/// under any hasher.  `Equivalent` compares the same two fields, so a probe
-/// hits exactly the entries the interned-key probe would.
-struct VarSubstKey<'a>(&'a str, u64);
-
-impl std::hash::Hash for VarSubstKey<'_> {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.0.hash(state);
-        self.1.hash(state);
-    }
-}
-
-impl indexmap::Equivalent<(&'static str, u64)> for VarSubstKey<'_> {
-    fn equivalent(&self, key: &(&'static str, u64)) -> bool {
-        self.1 == key.1 && self.0 == key.0
-    }
-}
-
-/// Apply a [`VarSubst`] to a term over plain `LVar`s.
-pub fn subst_lnterm(t: &LNTerm, s: &VarSubst) -> LNTerm {
-    match subst_lnterm_cow(t, s) {
-        Some(u) => u,
-        None => t.clone(),
-    }
-}
-
-/// Copy-on-write core of [`subst_lnterm`]: `None` when no leaf is replaced.
-fn subst_lnterm_cow(t: &LNTerm, s: &VarSubst) -> Option<LNTerm> {
-    match t {
-        Term::Lit(Lit::Var(v)) => match s.get(&VarSubstKey(v.name, v.idx)) {
-            Some(image) if image == t => None,
-            Some(image) => Some(image.clone()),
-            None => None,
-        },
-        Term::Lit(_) => None,
-        Term::App(sym, args) => {
-            cow_map_vec(&args[..], |a| subst_lnterm_cow(a, s)).map(|new| f_app(*sym, new))
-        }
-    }
-}
-
-/// Apply a [`VarSubst`] to a fact over plain `LVar`s.
-pub fn subst_lnfact(f: &Fact<LNTerm>, s: &VarSubst) -> Fact<LNTerm> {
-    f.map_ref(|t| subst_lnterm(t, s))
-}
-
-/// Apply a [`VarSubst`] to an atom over plain `LVar`s.
-pub fn subst_lnatom(a: &Atom<LNTerm>, s: &VarSubst) -> Atom<LNTerm> {
-    map_atom(a, &mut |t| subst_lnterm(t, s))
-}
-
-/// Copy-on-write application of a [`VarSubst`] to a locally-nameless term.
+/// Copy-on-write application of an [`LNSubst`] to a locally-nameless term.
 /// HS `apply subst = (`bindTerm` applyBLLit)` with
 /// `applyBLLit (Var (Free v)) = maybe (lit l) (fmapTerm (fmap Free)) (imageOf subst v)`
 /// (SubstVFree.hs:297-302): a `Bound` leaf is left alone and every rebuilt
 /// application goes through `fApp`, so AC and `C` argument lists re-sort.
+///
 /// `None` when the substitution touches no leaf, so the caller can reuse its
-/// input.
-fn subst_blnterm_cow(t: &BLNTerm, s: &VarSubst) -> Option<BLNTerm> {
+/// input.  A domain hit always changes the leaf, because a `Subst` drops the
+/// `x ~> x` mappings as it is built (SubstVFree.hs:163-165).
+fn subst_blnterm_cow(t: &BLNTerm, s: &LNSubst) -> Option<BLNTerm> {
     match t {
-        Term::Lit(Lit::Var(BVar::Free(v))) => match s.get(&VarSubstKey(v.name, v.idx)) {
-            None => None,
-            Some(image) => {
-                let lifted = lift_free(image);
-                if &lifted == t {
-                    None
-                } else {
-                    Some(lifted)
-                }
-            }
-        },
+        Term::Lit(Lit::Var(BVar::Free(v))) => s.image_of(v).map(lift_free),
         Term::Lit(_) => None,
         Term::App(sym, args) => {
             cow_map_vec(&args[..], |a| subst_blnterm_cow(a, s)).map(|new| f_app(*sym, new))
@@ -1316,7 +1228,7 @@ fn subst_blnterm_cow(t: &BLNTerm, s: &VarSubst) -> Option<BLNTerm> {
     }
 }
 
-fn subst_gatom_cow(a: &Atom<BLNTerm>, s: &VarSubst) -> Option<Atom<BLNTerm>> {
+fn subst_gatom_cow(a: &Atom<BLNTerm>, s: &LNSubst) -> Option<Atom<BLNTerm>> {
     match a {
         ProtoAtom::EqE(x, y) => subst_gpair_cow(x, y, s).map(|(a, b)| ProtoAtom::EqE(a, b)),
         ProtoAtom::Less(x, y) => subst_gpair_cow(x, y, s).map(|(a, b)| ProtoAtom::Less(a, b)),
@@ -1328,21 +1240,21 @@ fn subst_gatom_cow(a: &Atom<BLNTerm>, s: &VarSubst) -> Option<Atom<BLNTerm>> {
     }
 }
 
-fn subst_gpair_cow(x: &BLNTerm, y: &BLNTerm, s: &VarSubst) -> Option<(BLNTerm, BLNTerm)> {
+fn subst_gpair_cow(x: &BLNTerm, y: &BLNTerm, s: &LNSubst) -> Option<(BLNTerm, BLNTerm)> {
     cow_pair(x, subst_blnterm_cow(x, s), y, subst_blnterm_cow(y, s))
 }
 
-fn subst_gfact_cow(f: &Fact<BLNTerm>, s: &VarSubst) -> Option<Fact<BLNTerm>> {
+fn subst_gfact_cow(f: &Fact<BLNTerm>, s: &LNSubst) -> Option<Fact<BLNTerm>> {
     cow_map_arc(&f.terms, |a| subst_blnterm_cow(a, s)).map(|terms| f.with_terms(terms))
 }
 
-/// Apply a `VarSubst` to a guarded formula. Substitutes through
-/// guards, body, and every nested term — but only free leaves (`Bound`
-/// vars are positional and cannot collide).
+/// Apply an [`LNSubst`] to a guarded formula: each free leaf in the domain
+/// takes its image, guards and body alike.  A `Bound` leaf is positional and
+/// carries no variable identity, so a binder cannot capture an image variable.
 ///
-/// Mirrors HS `apply subst = mapGuardedAtoms (const $ apply subst)`
-/// (Guarded.hs:393-394).
-pub fn subst_guarded(g: &Guarded, s: &VarSubst) -> Guarded {
+/// HS `instance Apply LNSubst LNGuarded`: `apply subst = mapGuardedAtoms
+/// (const $ apply subst)` (Guarded.hs:393-394).
+pub fn subst_guarded(g: &Guarded, s: &LNSubst) -> Guarded {
     if s.is_empty() {
         return g.clone();
     }
@@ -1355,7 +1267,7 @@ pub fn subst_guarded(g: &Guarded, s: &VarSubst) -> Guarded {
 /// from `subst_blnterm_cow`, mirroring its shape; every `Some(_)` is
 /// byte-identical to the eager rebuild (changed children rebuilt, unchanged
 /// children cloned, in positional order).
-pub fn subst_guarded_cow(g: &Guarded, s: &VarSubst) -> Option<Guarded> {
+pub fn subst_guarded_cow(g: &Guarded, s: &LNSubst) -> Option<Guarded> {
     match g {
         Guarded::Atom(a) => subst_gatom_cow(a, s).map(Guarded::Atom),
         Guarded::Disj(items) => cow_map_arc(items, |i| subst_guarded_cow(i, s)).map(Guarded::Disj),
@@ -1394,46 +1306,32 @@ pub fn subst_guarded_cow(g: &Guarded, s: &VarSubst) -> Option<Guarded> {
 /// over-merge legitimately-distinct implications.
 ///
 /// Copy-on-write: returns `None` when `g` carries no `x`-named witness var
-/// (the common case — `collect_witness_vars` finds nothing) OR when the
-/// witness substitution touches no leaf (`subst_guarded_cow` returns
-/// `None`), so a caller can reuse `g` by move/borrow instead of cloning.
+/// with a non-zero idx (the common case — [`collect_witness_vars`] finds
+/// nothing) OR when the witness substitution touches no leaf
+/// (`subst_guarded_cow` returns `None`), so a caller can reuse `g` by
+/// move/borrow instead of cloning.
 pub fn normalize_witness_lvars_cow(g: &Guarded) -> Option<Guarded> {
-    let mut subst: VarSubst = VarSubst::default();
-    collect_witness_vars(g, &mut subst);
+    let subst = collect_witness_vars(g);
     if subst.is_empty() {
         return None;
     }
     subst_guarded_cow(g, &subst)
 }
 
-fn collect_witness_vars(g: &Guarded, out: &mut VarSubst) {
-    // The witness set is exactly the free-leaf set `HasFrees` enumerates
-    // (guards + body, all atom variants); we keep only the "x"-named leaves,
-    // canonicalising idx→0.  `out` is keyed by (interned name, idx), so
-    // visitation order is irrelevant to the resulting map.
-    //
-    // Every accepted leaf has name == "x", so intern the key root once
-    // (loop-invariant hoist) instead of per leaf.
-    let x_name: &'static str = tamarin_term::intern::intern_str("x");
+/// The `x`-named free leaves of `g`, each mapped to its own `idx == 0` form.
+///
+/// The witness set is exactly the free-leaf set `HasFrees` enumerates
+/// (guards + body, all atom variants).  Keying by the whole `LVar` gives two
+/// leaves that share a name and an index but differ in sort their own
+/// canonical images, so visitation order is irrelevant to the result.
+fn collect_witness_vars(g: &Guarded) -> LNSubst {
+    let mut out: std::collections::BTreeMap<LVar, LNTerm> = std::collections::BTreeMap::new();
     g.for_each_free(&mut |v| {
         if v.name == "x" {
-            out.insert((x_name, v.idx), var_term(LVar::new(v.name, v.sort, 0)));
+            out.insert(*v, var_term(LVar::new(v.name, v.sort, 0)));
         }
     });
-}
-
-/// The eq-store's `Subst<Name, LVar>` as a [`VarSubst`].  Used to
-/// canonicalize implied formulas during `insertImpliedFormulas` dedup:
-/// Maude unification mints fresh witness LVars per call, so
-/// structurally-identical derivations would otherwise be treated as
-/// distinct entries.
-pub fn var_subst_from_eq_store(eq_store: &crate::tools::equation_store::EquationStore) -> VarSubst {
-    let mut out: VarSubst = VarSubst::default();
-    for (lv, lt) in eq_store.subst.to_list() {
-        // `lv.name` is already an interned `&'static str` — zero-alloc key.
-        out.insert((lv.name, lv.idx), lt);
-    }
-    out
+    LNSubst::from_map(out)
 }
 
 // =============================================================================

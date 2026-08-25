@@ -7,6 +7,7 @@ use tamarin_parser::parser::parse_formula_str;
 use tamarin_term::function_symbols::{AcSym, CSym, Constructability, NoEqSym, Privacy};
 use tamarin_term::lterm::pub_term;
 use tamarin_term::maude_sig::pair_maude_sig;
+use tamarin_term::subst::apply_vterm;
 use tamarin_term::term::{f_app_ac, f_app_c, f_app_no_eq};
 
 fn g(s: &str) -> Result<Guarded, GuardError> {
@@ -447,7 +448,7 @@ fn implication_distributes() {
 }
 
 // =========================================================================
-// VarSubst correctness tests — the term-based substitution model
+// Substitution correctness tests
 // =========================================================================
 
 fn var(name: &str, idx: u64) -> LNTerm {
@@ -460,45 +461,47 @@ fn lpair(a: LNTerm, b: LNTerm) -> LNTerm {
     f_app_no_eq(tamarin_term::function_symbols::pair_sym(), vec![a, b])
 }
 
+/// The `LVar` key of a substitution entry, at the sort [`var`] builds.
+fn key(name: &str, idx: u64) -> LVar {
+    LVar::new(name, LSort::Msg, idx)
+}
+
 #[test]
-fn varsubst_var_to_non_var_term() {
+fn subst_var_to_non_var_term() {
     // Bind `k` to the public constant 'foo'.
-    let mut s = VarSubst::default();
-    s.insert(("k", 0), pubconst("foo"));
-    let result = subst_lnterm(&var("k", 0), &s);
+    let s = LNSubst::from_list(vec![(key("k", 0), pubconst("foo"))]);
+    let result = apply_vterm(&s, var("k", 0));
     assert_eq!(result, pubconst("foo"));
 }
 
 #[test]
-fn varsubst_descends_into_app_args() {
+fn subst_descends_into_app_args() {
     // `f(k, m)` where `k` is bound to 'foo'.
-    let mut s = VarSubst::default();
-    s.insert(("k", 0), pubconst("foo"));
+    let s = LNSubst::from_list(vec![(key("k", 0), pubconst("foo"))]);
     let f = user_sym("f", 2);
     let t = f_app_no_eq(f, vec![var("k", 0), var("m", 0)]);
-    let result = subst_lnterm(&t, &s);
+    let result = apply_vterm(&s, t);
     let expected = f_app_no_eq(f, vec![pubconst("foo"), var("m", 0)]);
     assert_eq!(result, expected);
 }
 
-/// The substitution uses `(name, idx)` as the key.  A variable with the same
-/// name but a different index is another variable.  It passes through
-/// unchanged.
+/// The substitution is keyed by the whole `LVar`, so a variable that differs
+/// from the domain entry in its index or in its sort is another variable and
+/// passes through unchanged (`Ord LVar`, LTerm.hs:546-548).
 #[test]
-fn varsubst_idx_aware() {
-    let mut s = VarSubst::default();
-    s.insert(("x", 5), var("y", 0));
-    // x with idx 5 → y, x with idx 6 unchanged.
-    assert_eq!(subst_lnterm(&var("x", 5), &s), var("y", 0));
-    assert_eq!(subst_lnterm(&var("x", 6), &s), var("x", 6));
+fn subst_keys_on_the_whole_variable() {
+    let s = LNSubst::from_list(vec![(key("x", 5), var("y", 0))]);
+    assert_eq!(apply_vterm(&s, var("x", 5)), var("y", 0));
+    assert_eq!(apply_vterm(&s, var("x", 6)), var("x", 6));
+    let fresh_x = var_term(LVar::new("x", LSort::Fresh, 5));
+    assert_eq!(apply_vterm(&s, fresh_x.clone()), fresh_x);
 }
 
 #[test]
-fn varsubst_pair_descent() {
-    let mut s = VarSubst::default();
-    s.insert(("a", 0), pubconst("X"));
+fn subst_pair_descent() {
+    let s = LNSubst::from_list(vec![(key("a", 0), pubconst("X"))]);
     let t = lpair(var("a", 0), var("b", 0));
-    let result = subst_lnterm(&t, &s);
+    let result = apply_vterm(&s, t);
     let expected = lpair(pubconst("X"), var("b", 0));
     assert_eq!(result, expected);
 }
@@ -515,12 +518,11 @@ fn injectivity_check_ginduct_succeeds() {
 }
 
 #[test]
-fn varsubst_shadowing_blocks_inner_binder() {
+fn applying_a_substitution_to_a_guarded_formula_leaves_bound_leaves_alone() {
     // `Ex k. Action(k) @ i` — substituting `k` from outside should
     // NOT rewrite the inner `k` because it's positionally bound
     // (DeBruijn `Bound(0)` in the body, not Free LVar `k:0`).
-    let mut s = VarSubst::default();
-    s.insert(("k", 0), pubconst("OUTER"));
+    let s = LNSubst::from_list(vec![(key("k", 0), pubconst("OUTER"))]);
     let inner_k = LVar::new("k", LSort::Msg, 0);
     // Build via close_guarded so that `k` becomes Bound(0) in the body.
     let g = close_guarded(
@@ -1298,43 +1300,35 @@ fn em_funsym_key_is_c_tier() {
     assert_eq!(em3.cmp(&f), Less);
 }
 
-/// The value-equality COW in `subst_blnterm_cow`'s `Free` arm returns `None`
-/// ONLY when the image reproduces the exact same leaf, and rebuilds (`Some`)
-/// whenever the hit changes it — `apply` lifts the image through
-/// `fmapTerm (fmap Free)` (SubstVFree.hs:297-302), so the comparison is
-/// against the LIFTED image.
+/// `subst_blnterm_cow` reports `Some` exactly on a domain hit: the leaf's
+/// whole `LVar` is the key, and a `Subst` holds no `x ~> x` mapping
+/// (SubstVFree.hs:163-165), so a hit always changes the leaf.  The image is
+/// lifted through `fmapTerm (fmap Free)` (SubstVFree.hs:297-302).
 #[test]
-fn subst_blnterm_cow_var_value_equality() {
-    let mut s: VarSubst = VarSubst::default();
-    s.insert(("x", 0), var_term(LVar::new("x", LSort::Msg, 0)));
+fn subst_blnterm_cow_reports_a_domain_hit() {
+    let s = LNSubst::from_list(vec![(
+        LVar::new("x", LSort::Msg, 0),
+        var_term(LVar::new("x", LSort::Msg, 7)),
+    )]);
 
     let leaf = |sort: LSort| bfree("x", 0, sort);
 
-    // Exact identity hit: image == leaf → reuse the input (`None`).
+    // A hit rebuilds to the lifted image.
     assert_eq!(
         subst_blnterm_cow(&leaf(LSort::Msg), &s),
-        None,
-        "an identity hit must report None so the caller reuses the leaf"
+        Some(bfree("x", 7, LSort::Msg)),
+        "a domain hit must rebuild to the lifted image"
     );
 
-    // The `Free` arm keys on (name, idx), so a leaf of another sort is a hit
-    // and rebuilds to the Msg-sorted image.
+    // A leaf that shares the name and the index but carries another sort is
+    // another variable, so it is a miss.
     assert_eq!(
         subst_blnterm_cow(&leaf(LSort::Fresh), &s),
-        Some(leaf(LSort::Msg)),
-        "a fresh-sorted leaf must rebuild to the Msg-sorted image"
+        None,
+        "a leaf of another sort must report None"
     );
 
-    // Non-identity idx remap still rebuilds.
-    let mut s2: VarSubst = VarSubst::default();
-    s2.insert(("x", 0), var_term(LVar::new("x", LSort::Msg, 7)));
-    assert_eq!(
-        subst_blnterm_cow(&leaf(LSort::Msg), &s2),
-        Some(bfree("x", 7, LSort::Msg)),
-        "a real idx remap must rebuild"
-    );
-
-    // A leaf whose (name, idx) is not in the domain returns None (miss).
+    // A leaf whose name is not in the domain returns None (miss).
     assert_eq!(
         subst_blnterm_cow(&bfree("y", 0, LSort::Msg), &s),
         None,
@@ -1343,6 +1337,34 @@ fn subst_blnterm_cow_var_value_equality() {
 
     // A `Bound` leaf carries no variable identity, so it is never a hit.
     assert_eq!(subst_blnterm_cow(&var_term(BVar::Bound(0)), &s), None);
+}
+
+/// The witness map keys on the whole `LVar`, so two `x`-named leaves that
+/// share an index but differ in sort each keep their own sort under the
+/// `idx == 0` canonicalisation.
+#[test]
+fn witness_subst_keys_distinguish_sorts() {
+    let msg_x = LVar::new("x", LSort::Msg, 3);
+    let fresh_x = LVar::new("x", LSort::Fresh, 3);
+    let g = Guarded::Atom(ProtoAtom::Action(
+        var_term(BVar::Free(LVar::new("i", LSort::Node, 0))),
+        bfact(
+            false,
+            "A",
+            vec![var_term(BVar::Free(msg_x)), var_term(BVar::Free(fresh_x))],
+        ),
+    ));
+    let normalised = normalize_witness_lvars_cow(&g).expect("both witnesses move to idx 0");
+    let Guarded::Atom(ProtoAtom::Action(_, fa)) = &normalised else {
+        panic!("expected Atom(Action), got {normalised:?}");
+    };
+    assert_eq!(
+        fa.terms.as_ref(),
+        [
+            var_term(BVar::Free(LVar::new("x", LSort::Msg, 0))),
+            var_term(BVar::Free(LVar::new("x", LSort::Fresh, 0))),
+        ]
+    );
 }
 
 // =============================================================================

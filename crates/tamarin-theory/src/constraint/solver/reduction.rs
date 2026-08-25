@@ -186,14 +186,6 @@ pub struct Reduction<'ctx> {
     /// Populated alongside `Cases`; empty means "no counters recorded"
     /// (callers fall back to bounds_max seeding).
     pub last_case_counters: Vec<u64>,
-    /// σ-as-`VarSubst` cache for the Atom mark=true dedup: `(subst_stamp,
-    /// var_subst_from_eq_store(σ))` at the time it was built.  σ is a pure
-    /// function of `sys.eq_store.subst`, and every subst mutation mints a
-    /// fresh `subst_stamp` (sealed axis: `set_eq_store`/`take_eq_store`/
-    /// `eq_store_mut` are the only doors), so a matching stamp proves the
-    /// cached value is bit-identical to a rebuild.  Sub-Reductions start
-    /// `None` and rebuild on first use (conservative miss only).
-    eq_vs_cache: Option<(u64, crate::guarded::VarSubst)>,
 }
 
 /// `ChangeIndicator` mirrors the `True`/`False` flag the Haskell
@@ -306,7 +298,6 @@ impl<'ctx> Reduction<'ctx> {
             pending_eq_arms: Vec::new(),
             pending_conjoin_arm_systems: Vec::new(),
             last_case_counters: Vec::new(),
-            eq_vs_cache: None,
         }
     }
 
@@ -349,7 +340,6 @@ impl<'ctx> Reduction<'ctx> {
             pending_eq_arms: Vec::new(),
             pending_conjoin_arm_systems: Vec::new(),
             last_case_counters: Vec::new(),
-            eq_vs_cache: None,
         }
     }
 
@@ -780,8 +770,8 @@ impl<'ctx> Reduction<'ctx> {
         // and invalidates only then, so an identity pass keeps both
         // caches valid and the dozens of `bounds_max` calls per proof
         // step stay O(1) hits instead of full re-walks.
-        // Build the parser-AST `VarSubst` ONCE for the whole pass.  It is
-        // derived purely from `subst` (fixed above), so it is identical
+        // Build the chain-chased substitution ONCE for the whole pass.  It
+        // is derived purely from `subst` (fixed above), so it is identical
         // for every `Disj` goal AND the formula/lemma substitution below.
         // Building this once avoids O(num_disj_goals × subst_size) cost:
         // spdm's attack lemmas carry ~15 `All…==>#x=#y` uniqueness
@@ -789,14 +779,14 @@ impl<'ctx> Reduction<'ctx> {
         // avoidable cost in the proof/refine hot path (~7.5% of the whole
         // run in `perf`). Built once here, reused everywhere.
         //
-        // Further: the parser subst is consumed ONLY by `Disj` goals (the
-        // goal loop below) and the formula/solved-formula/lemma rewrites
-        // (after the loop).  `build_parser_subst_from_eq_store` chain-chases
-        // EVERY eq-store entry, which is pure waste when the system carries
-        // none of those — common in deep proof states where the lemma's
-        // formulas are already discharged.  Gate the build so it only runs
-        // when a consumer exists.
-        let needs_parser_subst = !self.sys.formulas.is_empty()
+        // Further: it is consumed ONLY by `Disj` goals (the goal loop
+        // below) and the formula/solved-formula/lemma rewrites (after the
+        // loop).  `chase_eq_store_subst` chain-chases EVERY eq-store entry,
+        // which is pure waste when the system carries none of those —
+        // common in deep proof states where the lemma's formulas are
+        // already discharged.  Gate the build so it only runs when a
+        // consumer exists.
+        let needs_formula_subst = !self.sys.formulas.is_empty()
             || !self.sys.solved_formulas.is_empty()
             || !self.sys.lemmas.is_empty()
             || self
@@ -804,10 +794,10 @@ impl<'ctx> Reduction<'ctx> {
                 .goals
                 .iter()
                 .any(|(g, _)| matches!(g, Goal::Disj(_)));
-        let parser_subst: crate::guarded::VarSubst = if needs_parser_subst {
-            build_parser_subst_from_eq_store(&subst)
+        let formula_subst: crate::tools::equation_store::LNSubst = if needs_formula_subst {
+            chase_eq_store_subst(&subst)
         } else {
-            crate::guarded::VarSubst::default()
+            crate::tools::equation_store::LNSubst::empty()
         };
         let map_var = |v: tamarin_term::lterm::LVar| -> tamarin_term::lterm::LVar {
             // Keyed image probe: a Var→Var binding renames the id; an
@@ -1376,9 +1366,8 @@ impl<'ctx> Reduction<'ctx> {
             } else {
                 false
             };
-            // Disj goal rewriting: Disjs carry a `Guarded` body whose
-            // free variables are `VarSpec` (parser-AST), same form
-            // used in `formulas`/`lemmas`.  Route through
+            // Disj goal rewriting: Disjs carry a `Guarded` body, the same
+            // form `formulas`/`lemmas` hold.  Route through
             // `subst_guarded` so saturate-time Disj goals get their
             // bodies re-narrowed when runtime unification populates
             // the eq_store — mirrors Haskell's `substSystem`
@@ -1397,7 +1386,7 @@ impl<'ctx> Reduction<'ctx> {
                     Goal::Chain((map_var_tracked(c.0), c.1), (map_var_tracked(p.0), p.1))
                 }
                 Goal::Disj(d) => {
-                    if parser_subst.is_empty() {
+                    if formula_subst.is_empty() {
                         Goal::Disj(d)
                     } else {
                         let new_alts: Vec<_> = d
@@ -1411,7 +1400,7 @@ impl<'ctx> Reduction<'ctx> {
                                 // zero clones.  Byte-identical to the eager
                                 // 16-round `subst_guarded`.
                                 let mut cur =
-                                    match crate::guarded::subst_guarded_cow(&alt, &parser_subst) {
+                                    match crate::guarded::subst_guarded_cow(&alt, &formula_subst) {
                                         None => return alt,
                                         Some(s0) => {
                                             goals_value_changed.set(true);
@@ -1419,7 +1408,7 @@ impl<'ctx> Reduction<'ctx> {
                                         }
                                     };
                                 for _ in 0..15 {
-                                    match crate::guarded::subst_guarded_cow(&cur, &parser_subst) {
+                                    match crate::guarded::subst_guarded_cow(&cur, &formula_subst) {
                                         None => break,
                                         Some(nxt) => cur = nxt,
                                     }
@@ -1517,13 +1506,10 @@ impl<'ctx> Reduction<'ctx> {
         }
         // Formulas / solved formulas / lemmas: port of Haskell's
         // `substFormulas`, `substSolvedFormulas`, `substLemmas` (all
-        // run inside `substSystem`).  Our formulas are stored as
-        // `Guarded` over parser-AST `VarSpec`, while the eq-store's
-        // substitution is over `LVar`s.  Build a parser-AST `VarSubst`
-        // by converting each LVar→LNTerm entry to (name, idx)→Term,
-        // then apply via `subst_guarded` (which already respects
-        // quantifier shadowing).  Without this, free variables in
-        // formulas (e.g. a lemma's outer Skolem `key` after the
+        // run inside `substSystem`), each `apply subst` over the stored
+        // `Guarded` (which already respects quantifier shadowing: `Bound`
+        // leaves carry no variable identity).  Without this, free variables
+        // in formulas (e.g. a lemma's outer Skolem `key` after the
         // proof has unified `key = ~k15`) never get substituted, and
         // simplify-time formula-evaluation (eval_formula_atoms,
         // insert_implied_formulas) misses contradictions like a
@@ -1532,7 +1518,7 @@ impl<'ctx> Reduction<'ctx> {
         // Hoisted out of the `if` below so it is in scope for the `raised`
         // return: set true iff a formula/solved-formula/lemma value changed.
         let mut formulas_value_changed = false;
-        if !parser_subst.is_empty() {
+        if !formula_subst.is_empty() {
             // Iterate per-formula until subst_guarded reaches a fixpoint
             // — eq-store entries can form chains (e.g. `x:1 → x:13`,
             // `x:13 → ~n:28`); a single application only reduces by one
@@ -1551,11 +1537,11 @@ impl<'ctx> Reduction<'ctx> {
             // `subst_guarded_cow == None` ⇔ the original loop broke immediately
             // (`nxt == cur`).
             let apply_to_fixpoint = |f: &Guarded| -> Option<Guarded> {
-                let mut cur = crate::guarded::subst_guarded_cow(f, &parser_subst)?;
+                let mut cur = crate::guarded::subst_guarded_cow(f, &formula_subst)?;
                 // One subst pass already applied; continue to the fixpoint
                 // (the original ran up to 16 passes total).
                 for _ in 0..15 {
-                    match crate::guarded::subst_guarded_cow(&cur, &parser_subst) {
+                    match crate::guarded::subst_guarded_cow(&cur, &formula_subst) {
                         None => break,
                         Some(nxt) => cur = nxt,
                     }
@@ -2500,17 +2486,6 @@ impl<'ctx> Reduction<'ctx> {
                 // then normalize witness LVars `~mw#N → ~mw#0`, then
                 // alpha-canon GGuarded bound vars).
                 if mark {
-                    // σ rebuilt only when the subst axis moved since the
-                    // cached copy (see `eq_vs_cache`); a stamp hit is
-                    // bit-identical to `var_subst_from_eq_store` here.
-                    let stamp = self.sys.subst_stamp();
-                    if !matches!(&self.eq_vs_cache, Some((s, _)) if *s == stamp) {
-                        self.eq_vs_cache = Some((
-                            stamp,
-                            crate::guarded::var_subst_from_eq_store(&self.sys.eq_store),
-                        ));
-                    }
-                    let eq_vs = &self.eq_vs_cache.as_ref().expect("just ensured").1;
                     // COW canon.  No bound-var canonicalisation: `Guarded`
                     // binders are DeBruijn, so `Bound` vars carry no idx and
                     // alpha-equivalent formulas already compare `==` (matching
@@ -2521,7 +2496,7 @@ impl<'ctx> Reduction<'ctx> {
                     // can borrow the input `f`; a closure cannot express that.)
                     fn apply_canon<'f>(
                         f: &'f crate::guarded::Guarded,
-                        eq_vs: &crate::guarded::VarSubst,
+                        eq_vs: &crate::tools::equation_store::LNSubst,
                     ) -> std::borrow::Cow<'f, crate::guarded::Guarded> {
                         let f1: std::borrow::Cow<crate::guarded::Guarded> = if eq_vs.is_empty() {
                             std::borrow::Cow::Borrowed(f)
@@ -2536,12 +2511,14 @@ impl<'ctx> Reduction<'ctx> {
                             Some(g) => std::borrow::Cow::Owned(g),
                         }
                     }
-                    let canon = apply_canon(&g, eq_vs);
-                    let already_solved = self
-                        .sys
-                        .solved_formulas
-                        .iter()
-                        .any(|f| apply_canon(f, eq_vs).as_ref() == canon.as_ref());
+                    let already_solved = {
+                        let eq_vs = &self.sys.eq_store.subst;
+                        let canon = apply_canon(&g, eq_vs);
+                        self.sys
+                            .solved_formulas
+                            .iter()
+                            .any(|f| apply_canon(f, eq_vs).as_ref() == canon.as_ref())
+                    };
                     if !already_solved {
                         // Pure ADD (solved-formula push under
                         // !already_solved): bump.
@@ -4160,17 +4137,15 @@ fn dedup_preserve_order<T: PartialEq>(v: &mut Vec<T>) {
     v.truncate(kept);
 }
 
-/// Convert an eq-store `LSubst` (LVar → LNTerm) into a
-/// [`crate::guarded::VarSubst`] keyed by `(name, idx)`.  Used by
-/// `subst_system` to push the eq-store substitution into formulas /
+/// The eq-store substitution with every binding chain chased to its end.
+/// Used by `subst_system` to push the eq-store substitution into formulas /
 /// solved_formulas / lemmas — Haskell's `substFormulas` /
 /// `substSolvedFormulas` / `substLemmas`.  Each LVar in the subst's domain
-/// maps via its `(name, idx)` to the term at the end of its binding chain.
-/// Only entries that change are recorded (skipping identity mappings keeps
-/// the per-step subst small).
-fn build_parser_subst_from_eq_store(
+/// maps to the term at the end of its binding chain; identity mappings are
+/// skipped, which keeps the per-step subst small.
+fn chase_eq_store_subst(
     subst: &crate::tools::equation_store::LNSubst,
-) -> crate::guarded::VarSubst {
+) -> crate::tools::equation_store::LNSubst {
     // Chain-chase to a canonical representative.  If the eq-store has both
     // `a → b` and `b → c`, the formula should rewrite `a` to `c` (not `b`).
     // Mirrors Haskell's `applyVTerm` behaviour where applying a composed
@@ -4181,8 +4156,8 @@ fn build_parser_subst_from_eq_store(
     // with lemma's `Loop(lid, k, kOrig)` binds both `k_lemma` and
     // `kOrig_lemma` to the rule's `kOrig`.  Subsequent compose may
     // funnel one through the other (e.g. `k_lemma → kOrig_rule →
-    // kOrig_lemma`); without chain-chase in the parser_subst the
-    // lemma's universal `Start(lid, kOrig)` doesn't get its `kOrig`
+    // kOrig_lemma`); without the chain-chase the lemma's universal
+    // `Start(lid, kOrig)` doesn't get its `kOrig`
     // rewritten to match the rule action's canonical form, so
     // `structural_match` fails and `impliedFormulas` misses the
     // discharge, leaving FormulasFalse unfired — wrong-Solved.
@@ -4201,12 +4176,12 @@ fn build_parser_subst_from_eq_store(
         }
         cur
     };
-    // Pre-size for the keyed-lookup-only output map (capacity is
-    // output-invisible: nothing output-bearing iterates it).  Iterate
-    // `dom()` (borrowed keys, same BTreeMap order) instead of `to_list()`,
-    // which deep-clones every `(var, term)` pair we never read.
-    let mut out =
-        crate::guarded::VarSubst::with_capacity_and_hasher(subst.len(), Default::default());
+    // Iterate `dom()` (borrowed keys, same BTreeMap order) instead of
+    // `to_list()`, which deep-clones every `(var, term)` pair we never read.
+    let mut out: std::collections::BTreeMap<
+        tamarin_term::lterm::LVar,
+        tamarin_term::lterm::LNTerm,
+    > = std::collections::BTreeMap::new();
     for lv in subst.dom() {
         let final_term = lookup_chain(lv);
         // Identity mappings are no-ops; skip.
@@ -4215,10 +4190,9 @@ fn build_parser_subst_from_eq_store(
                 continue;
             }
         }
-        // `lv.name` is an interned `&'static str` — zero-alloc key.
-        out.insert((lv.name, lv.idx), final_term);
+        out.insert(*lv, final_term);
     }
-    out
+    crate::tools::equation_store::LNSubst::from_map(out)
 }
 
 /// Build the implicit `ISend` rule instance:

@@ -381,17 +381,17 @@ fn mk_var_l(name: &str, idx: u64, sort: tamarin_term::lterm::LSort) -> tamarin_t
     ))
 }
 
-/// Returns the `(name, idx) → subject term` bindings that the caller reads
+/// Returns the `variable → subject term` bindings that the caller reads
 /// back from a match.  The result is sorted, so an assertion on the complete
 /// substitution is stable.
-fn subst_pairs(s: &crate::guarded::VarSubst) -> Vec<(String, u64, String)> {
+fn subst_pairs(s: &crate::tools::equation_store::LNSubst) -> Vec<(String, u64, String)> {
     let mut out: Vec<(String, u64, String)> = s
         .iter()
         .map(|(k, v)| match v {
             tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(v)) => {
-                (k.0.to_string(), k.1, format!("{}.{}", v.name, v.idx))
+                (k.name.to_string(), k.idx, format!("{}.{}", v.name, v.idx))
             }
-            other => (k.0.to_string(), k.1, format!("{other:?}")),
+            other => (k.name.to_string(), k.idx, format!("{other:?}")),
         })
         .collect();
     out.sort();
@@ -543,14 +543,24 @@ fn match_atom_via_maude_zero_subject_args_binds_only_the_time() {
     );
     assert_eq!(substs.len(), 1, "empty equation list ⇒ one trivial matcher");
     let subst = &substs[0];
-    match subst.get(&("i", 0u64)) {
+    match subst.image_of(&tamarin_term::lterm::LVar::new(
+        "i",
+        tamarin_term::lterm::LSort::Node,
+        0,
+    )) {
         Some(tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(v))) => {
             assert_eq!((v.name, v.idx), ("n", 0));
         }
         other => panic!("expected i → Var(n, 0), got {other:?}"),
     }
     assert!(
-        !subst.contains_key(&("k", 0u64)),
+        subst
+            .image_of(&tamarin_term::lterm::LVar::new(
+                "k",
+                tamarin_term::lterm::LSort::Msg,
+                0
+            ))
+            .is_none(),
         "the unmatched pattern arg must stay unbound"
     );
 }
