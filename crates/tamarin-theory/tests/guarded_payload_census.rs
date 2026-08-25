@@ -14,14 +14,6 @@
 //! payloads over the whole tree, so the size of the difference is read off
 //! the corpus rather than assumed:
 //!
-//! * `GAtom::Pred` and `GAtom::LessMset` have no counterpart in HS's guarded
-//!   atom: `Atom t = ProtoAtom Unit2 t` (`Theory/Model/Atom.hs:100`) leaves
-//!   the sugar constructor uninhabited (`Theory/Model/Atom.hs:78-83`) and
-//!   `ProtoAtom` has no multiset-order arm;
-//! * HS's `Eq`/`Ord` on a fact ignore its annotations
-//!   (`Theory/Model/Fact.hs:169-174`), which is what `Fact`'s own `Eq`, `Ord`
-//!   and `Hash` read, so the row counts the facts an annotation-blind identity
-//!   merges;
 //! * `p::VarSpec` carries a SAPIC type annotation inside `GTerm`'s derived
 //!   `PartialEq`/`Hash`; `LVar` has no such field;
 //! * a substitution keyed on `(name, idx)` and one keyed on the whole `LVar`
@@ -45,6 +37,7 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 use tamarin_term::lterm::LSort;
+use tamarin_theory::atom::ProtoAtom;
 use tamarin_theory::guarded::{
     canonicalize_ac_in_guarded, formula_to_guarded, BVar, GAtom, GFact, GTerm, Guarded,
 };
@@ -114,20 +107,14 @@ struct Finding {
 /// What one guarded formula holds.
 #[derive(Default)]
 struct Payload {
-    /// The atom variants HS's guarded atom has no constructor for.
-    sugar_atoms: Vec<String>,
-    /// One entry per fact: its identity under HS's `Eq`, and the annotation
-    /// set that identity leaves out.
-    facts: Vec<(String, String)>,
+    /// How many facts the walk reached.
+    facts: usize,
     /// Free leaves carrying a SAPIC type.
     typed: Vec<String>,
     /// The sorts each `(name, idx)` is seen at.
     frees: BTreeMap<(String, u64), BTreeSet<LSort>>,
     /// Binary applications of the commutative `em`.
     emap: Vec<String>,
-    /// How many of [`Payload::facts`] carry an annotation at all — the
-    /// population the annotation row draws its collisions from.
-    annotated_facts: usize,
 }
 
 fn walk_term(t: &GTerm, out: &mut Payload) {
@@ -171,13 +158,7 @@ fn walk_term(t: &GTerm, out: &mut Payload) {
 }
 
 fn walk_fact(f: &GFact, out: &mut Payload) {
-    if !f.annotations.is_empty() {
-        out.annotated_facts += 1;
-    }
-    out.facts.push((
-        format!("{:?}", (&f.tag, &f.terms)),
-        format!("{:?}", f.annotations),
-    ));
+    out.facts += 1;
     for a in f.terms.iter() {
         walk_term(a, out);
     }
@@ -185,27 +166,16 @@ fn walk_fact(f: &GFact, out: &mut Payload) {
 
 fn walk_atom(a: &GAtom, out: &mut Payload) {
     match a {
-        GAtom::Pred(f) => {
-            out.sugar_atoms.push(format!(
-                "Pred {}",
-                tamarin_theory::fact::fact_tag_name(&f.tag)
-            ));
-            walk_fact(f, out);
-        }
-        GAtom::LessMset(x, y) => {
-            out.sugar_atoms.push(format!("LessMset {x:?} {y:?}"));
+        ProtoAtom::EqE(x, y) | ProtoAtom::Less(x, y) | ProtoAtom::Subterm(x, y) => {
             walk_term(x, out);
             walk_term(y, out);
         }
-        GAtom::Eq(x, y) | GAtom::Less(x, y) | GAtom::Subterm(x, y) => {
-            walk_term(x, out);
-            walk_term(y, out);
-        }
-        GAtom::Action(f, t) => {
+        ProtoAtom::Action(t, f) => {
             walk_fact(f, out);
             walk_term(t, out);
         }
-        GAtom::Last(t) => walk_term(t, out),
+        ProtoAtom::Last(t) => walk_term(t, out),
+        ProtoAtom::Syntactic(_) => {}
     }
 }
 
@@ -232,10 +202,7 @@ struct FileReport {
     outcome: Option<Outcome>,
     formulas: usize,
     facts: usize,
-    annotated_facts: usize,
     unguardable: usize,
-    sugar_atoms: Vec<Finding>,
-    annotations: Vec<Finding>,
     typed: Vec<Finding>,
     sort_collisions: Vec<Finding>,
     emap: Vec<Finding>,
@@ -303,9 +270,6 @@ fn file_phase(path: &Path, root: &Path) -> FileReport {
         outcome: Some(Outcome::Elaborated),
         ..FileReport::default()
     };
-    // The fact identity HS compares, across the whole theory, against the
-    // annotation sets that identity leaves out.
-    let mut fact_annotations: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for (label, f) in &items {
         let entry = format!("{file}: {label}");
         let Ok(g) = formula_to_guarded(f) else {
@@ -315,15 +279,11 @@ fn file_phase(path: &Path, root: &Path) -> FileReport {
         report.formulas += 1;
         let mut payload = Payload::default();
         walk_guarded(&g, &mut payload);
-        report.facts += payload.facts.len();
-        report.annotated_facts += payload.annotated_facts;
+        report.facts += payload.facts;
         let row = |detail: String| Finding {
             entry: entry.clone(),
             detail,
         };
-        report
-            .sugar_atoms
-            .extend(payload.sugar_atoms.into_iter().map(&row));
         report.typed.extend(payload.typed.into_iter().map(&row));
         report.emap.extend(payload.emap.into_iter().map(&row));
         for ((name, idx), sorts) in payload.frees {
@@ -333,23 +293,11 @@ fn file_phase(path: &Path, root: &Path) -> FileReport {
                     .push(row(format!("{name}.{idx} at {sorts:?}")));
             }
         }
-        for (key, annotations) in payload.facts {
-            fact_annotations.entry(key).or_default().insert(annotations);
-        }
         let canonical = canonicalize_ac_in_guarded(&g);
         if canonical != g {
             report
                 .moved
                 .push(row(format!("stored {g:?}\n  canonical {canonical:?}")));
-        }
-    }
-    for (key, annotations) in fact_annotations {
-        if annotations.len() > 1 {
-            let seen: Vec<&str> = annotations.iter().map(String::as_str).collect();
-            report.annotations.push(Finding {
-                entry: file.clone(),
-                detail: format!("{key} annotated {seen:?}"),
-            });
         }
     }
     report.elapsed = start.elapsed();
@@ -405,7 +353,6 @@ fn census(label: &str) -> Option<&'static [FileReport]> {
     let elaborated = count(|o| matches!(o, Outcome::Elaborated));
     let formulas: usize = reports.iter().map(|r| r.formulas).sum();
     let facts: usize = reports.iter().map(|r| r.facts).sum();
-    let annotated: usize = reports.iter().map(|r| r.annotated_facts).sum();
     let unguardable: usize = reports.iter().map(|r| r.unguardable).sum();
     let slowest = reports
         .iter()
@@ -416,8 +363,7 @@ fn census(label: &str) -> Option<&'static [FileReport]> {
     eprintln!(
         "guarded payload [{label}]: files={} elaborated={elaborated} skipped_listed={} \
          skipped_parse={} skipped_lift={} skipped_elab={} formulas={formulas} \
-         unguardable={unguardable} facts={facts} annotated_facts={annotated} \
-         slowest_file={slowest}",
+         unguardable={unguardable} facts={facts} slowest_file={slowest}",
         files.len(),
         count(|o| matches!(o, Outcome::SkippedListed)),
         count(|o| matches!(o, Outcome::SkippedParse)),
@@ -444,30 +390,6 @@ fn rows(reports: &[FileReport], column: fn(&FileReport) -> &[Finding], tag: &str
     let mut entries: Vec<String> = findings.iter().map(|f| f.entry.clone()).collect();
     entries.sort();
     entries
-}
-
-#[test]
-fn corpus_guarded_atoms_are_never_predicate_or_multiset() {
-    let Some(reports) = census("sugar atoms") else {
-        return;
-    };
-    let entries = rows(reports, |r| &r.sugar_atoms, "SUGAR-ATOM");
-    assert!(
-        entries.is_empty(),
-        "predicate or multiset-order atoms reach the guarded store: {entries:?}"
-    );
-}
-
-#[test]
-fn corpus_guarded_facts_never_differ_only_by_annotation() {
-    let Some(reports) = census("fact annotations") else {
-        return;
-    };
-    let entries = rows(reports, |r| &r.annotations, "ANNOTATION");
-    assert!(
-        entries.is_empty(),
-        "guarded facts differ only by annotation in: {entries:?}"
-    );
 }
 
 #[test]

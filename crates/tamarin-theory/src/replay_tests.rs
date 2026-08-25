@@ -301,8 +301,9 @@ fn node_vs(name: &str) -> tamarin_parser::ast::VarSpec {
 
 /// `last(#<name>)` as one alternative of a disjunction goal.
 fn last_alt(name: &str) -> crate::guarded::Guarded {
-    use crate::guarded::{BVar, GAtom, GTerm, Guarded};
-    Guarded::Atom(GAtom::Last(GTerm::Var(BVar::Free(node_vs(name)))))
+    use crate::atom::ProtoAtom;
+    use crate::guarded::{BVar, GTerm, Guarded};
+    Guarded::Atom(ProtoAtom::Last(GTerm::Var(BVar::Free(node_vs(name)))))
 }
 
 fn disj(alts: Vec<crate::guarded::Guarded>) -> Goal {
@@ -346,7 +347,8 @@ fn disj_goal_rejects_a_different_alt_count() {
 /// miss.
 #[test]
 fn disj_goal_of_another_sort_misses() {
-    use crate::guarded::{BVar, GAtom, GTerm, Guarded};
+    use crate::atom::ProtoAtom;
+    use crate::guarded::{BVar, GTerm, Guarded};
     use tamarin_parser::ast::VarSpec;
     let leaf = |sort: LSort| {
         GTerm::Var(BVar::Free(VarSpec {
@@ -356,7 +358,7 @@ fn disj_goal_of_another_sort_misses() {
             typ: None,
         }))
     };
-    let alt = |sort: LSort| Guarded::Atom(GAtom::Eq(leaf(sort), leaf(sort)));
+    let alt = |sort: LSort| Guarded::Atom(ProtoAtom::EqE(leaf(sort), leaf(sort)));
     let live = disj(vec![alt(LSort::Msg)]);
     let mut sys = System::empty();
     sys.goals_mut().push((live.clone(), Default::default()));
@@ -372,7 +374,8 @@ fn disj_goal_of_another_sort_misses() {
 /// both sides before comparing.
 #[test]
 fn disj_goal_matches_modulo_ac_fold() {
-    use crate::guarded::{BVar, GAtom, GTerm, Guarded};
+    use crate::atom::ProtoAtom;
+    use crate::guarded::{BVar, GTerm, Guarded};
     use crate::guarded_types::ga;
     use tamarin_parser::ast::{BinOp, VarSpec};
     let leaf = |n: &str| {
@@ -387,7 +390,7 @@ fn disj_goal_matches_modulo_ac_fold() {
     // `(a ++ b) ++ c` and `a ++ (b ++ c)` are the same HS `fAppAC` term.
     let left = un(un(leaf("a"), leaf("b")), leaf("c"));
     let right = un(leaf("a"), un(leaf("b"), leaf("c")));
-    let alt = |t: GTerm| Guarded::Atom(GAtom::Eq(t, leaf("z")));
+    let alt = |t: GTerm| Guarded::Atom(ProtoAtom::EqE(t, leaf("z")));
     let live = disj(vec![alt(right)]);
     let mut sys = System::empty();
     sys.goals_mut().push((live.clone(), Default::default()));

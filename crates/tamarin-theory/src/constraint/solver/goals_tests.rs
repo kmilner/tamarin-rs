@@ -495,8 +495,9 @@ fn useful_goal_nr_uses_derived_usefulness_ord() {
 /// (Fresh<Msg<Nat<Node<Pub).
 #[test]
 fn goal_cmp_disj_var_sort_uses_lsort_ord() {
+    use crate::atom::ProtoAtom;
     use crate::constraint::constraints::Disj;
-    use crate::guarded::{BVar, GAtom, GTerm, Guarded};
+    use crate::guarded::{BVar, GTerm, Guarded};
     use std::cmp::Ordering;
     use tamarin_parser::ast::VarSpec;
     use tamarin_term::lterm::LSort;
@@ -509,7 +510,7 @@ fn goal_cmp_disj_var_sort_uses_lsort_ord() {
             sort,
             typ: None,
         };
-        let atom = GAtom::Last(GTerm::Var(BVar::Free(v)));
+        let atom = ProtoAtom::Last(GTerm::Var(BVar::Free(v)));
         Goal::Disj(Disj::new(vec![Guarded::Atom(atom)]))
     };
     let pub_disj = mk_disj(LSort::Pub);

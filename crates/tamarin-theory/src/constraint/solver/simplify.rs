@@ -3917,7 +3917,7 @@ fn simp_injective_fact_eq_mon_pass(red: &mut Reduction) -> ChangeIndicator {
                 if **body != crate::guarded::gfalse() {
                     continue;
                 }
-                if let crate::guarded::GAtom::Eq(s_g, t_g) = &guards[0] {
+                if let crate::atom::ProtoAtom::EqE(s_g, t_g) = &guards[0] {
                     let s = crate::guarded::gterm_to_term(s_g);
                     let t = crate::guarded::gterm_to_term(t_g);
                     if let (Some(sl), Some(tl)) = (

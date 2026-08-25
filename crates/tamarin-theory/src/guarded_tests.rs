@@ -57,13 +57,14 @@ fn gf(persistent: bool, name: &str) -> GFact {
     gf_args(persistent, name, 0)
 }
 
-// The guarded fact order, as the solver reaches it: `cmp_atom`'s `Action`
-// arm compares the timepoint and then the fact, so a shared timepoint leaves
-// the fact deciding.  The fact half is HS `Ord (Fact t)`
-// (Theory/Model/Fact.hs:173-174) — the `FactTag` first, then the term list.
+// The guarded fact order, as the solver reaches it: the derived
+// `Ord (ProtoAtom s t)` (Atom.hs:78-84) compares an `Action`'s timepoint and
+// then its fact, so a shared timepoint leaves the fact deciding.  The fact
+// half is HS `Ord (Fact t)` (Theory/Model/Fact.hs:173-174) — the `FactTag`
+// first, then the term list.
 fn cmp_gfact(a: &GFact, b: &GFact) -> std::cmp::Ordering {
-    let at = |f: &GFact| GAtom::Action(f.clone(), GTerm::Var(BVar::Bound(0)));
-    cmp_atom(&at(a), &at(b))
+    let at = |f: &GFact| -> GAtom { ProtoAtom::Action(GTerm::Var(BVar::Bound(0)), f.clone()) };
+    at(a).cmp(&at(b))
 }
 
 /// `FactTag`'s derived Ord segregates every ProtoFact before every reserved
@@ -541,7 +542,7 @@ fn varsubst_shadowing_blocks_inner_binder() {
     // touch the Bound `k` reference.
     match result {
         Guarded::GGuarded { body, .. } => match &*body {
-            Guarded::Atom(GAtom::Action(fa, _)) => {
+            Guarded::Atom(ProtoAtom::Action(_, fa)) => {
                 // Walk the body atom and verify the `k` slot is still Bound(0).
                 match &fa.terms[0] {
                     GTerm::Var(BVar::Bound(0)) => {}
@@ -591,12 +592,12 @@ fn ginduct_extracts_two_cases() {
 fn last_bound_indices(g: &Guarded) -> Vec<u32> {
     fn go(g: &Guarded, out: &mut Vec<u32>) {
         match g {
-            Guarded::Atom(GAtom::Last(GTerm::Var(BVar::Bound(n)))) => out.push(*n),
+            Guarded::Atom(ProtoAtom::Last(GTerm::Var(BVar::Bound(n)))) => out.push(*n),
             Guarded::Atom(_) => {}
             Guarded::Disj(xs) | Guarded::Conj(xs) => xs.iter().for_each(|x| go(x, out)),
             Guarded::GGuarded { guards, body, .. } => {
                 for a in guards.iter() {
-                    if let GAtom::Last(GTerm::Var(BVar::Bound(n))) = a {
+                    if let ProtoAtom::Last(GTerm::Var(BVar::Bound(n))) = a {
                         out.push(*n);
                     }
                 }
@@ -1141,7 +1142,7 @@ fn canonicalize_sorts_commutative_em_args() {
     let em_sorted = GTerm::App(Arc::from("em"), Arc::from(vec![p_lit.clone(), x.clone()]));
     // Wrap each in an Eq atom inside a trivial guarded formula so we
     // exercise the real `canonicalize_ac_in_guarded` entry point.
-    let mk = |t: &GTerm| Guarded::Atom(GAtom::Eq(t.clone(), GTerm::PubLit("z".into())));
+    let mk = |t: &GTerm| Guarded::Atom(ProtoAtom::EqE(t.clone(), GTerm::PubLit("z".into())));
     let canon_unsorted = canonicalize_ac_in_guarded(&mk(&em_unsorted));
     let canon_sorted = canonicalize_ac_in_guarded(&mk(&em_sorted));
     // Both must canonicalise to the sorted form, hence be equal.
@@ -1496,7 +1497,7 @@ fn open_guarded_sorts_a_commutative_argument_pair() {
     let gf = Guarded::GGuarded {
         qua: Quantifier::Ex,
         vars: vec![("x".to_string(), LSort::Msg)].into(),
-        guards: vec![GAtom::Eq(em, GTerm::PubLit("z".into()))].into(),
+        guards: vec![ProtoAtom::EqE(em, GTerm::PubLit("z".into()))].into(),
         body: Arc::new(gtrue()),
     };
 
@@ -1574,9 +1575,9 @@ fn hf_names(g: &Guarded) -> Vec<String> {
 /// carry that order.
 #[test]
 fn action_atom_visits_timepoint_before_fact() {
-    let atom = GAtom::Action(
-        hf_fact("A", vec![hf_leaf("x", 1, LSort::Msg)]),
+    let atom = ProtoAtom::Action(
         hf_leaf("i", 2, LSort::Node),
+        hf_fact("A", vec![hf_leaf("x", 1, LSort::Msg)]),
     );
     let g = Guarded::Atom(atom.clone());
 
@@ -1608,7 +1609,7 @@ fn bound_leaves_are_skipped() {
     let g = Guarded::GGuarded {
         qua: Quantifier::Ex,
         vars: vec![("z".to_string(), LSort::Msg)].into(),
-        guards: vec![GAtom::Eq(
+        guards: vec![ProtoAtom::EqE(
             GTerm::Var(BVar::Bound(0)),
             hf_leaf("y", 4, LSort::Msg),
         )]
@@ -1627,7 +1628,7 @@ fn bound_leaves_are_skipped() {
     assert_eq!(vars[0].0, "z", "the binder list stays verbatim");
     assert_eq!(
         guards[0],
-        GAtom::Eq(GTerm::Var(BVar::Bound(0)), hf_leaf("r", 14, LSort::Msg))
+        ProtoAtom::EqE(GTerm::Var(BVar::Bound(0)), hf_leaf("r", 14, LSort::Msg))
     );
 }
 
@@ -1638,13 +1639,13 @@ fn guards_visited_before_body() {
     let g = Guarded::GGuarded {
         qua: Quantifier::All,
         vars: vec![].into(),
-        guards: vec![GAtom::Eq(
+        guards: vec![ProtoAtom::EqE(
             hf_leaf("g", 1, LSort::Msg),
             hf_leaf("h", 2, LSort::Msg),
         )]
         .into(),
         body: std::sync::Arc::new(Guarded::Conj(
-            vec![Guarded::Atom(GAtom::Last(hf_leaf("b", 3, LSort::Node)))].into(),
+            vec![Guarded::Atom(ProtoAtom::Last(hf_leaf("b", 3, LSort::Node)))].into(),
         )),
     };
     assert_eq!(hf_names(&g), vec!["g.1", "h.2", "b.3"]);
@@ -1660,13 +1661,13 @@ fn map_free_keeps_the_leaf_sort_and_typ() {
         sort: LSort::Fresh,
         typ: Some("A".into()),
     };
-    let g = Guarded::Atom(GAtom::Last(GTerm::Var(BVar::Free(leaf))));
+    let g = Guarded::Atom(ProtoAtom::Last(GTerm::Var(BVar::Free(leaf))));
 
     let renamed = g.map_free(&mut |v| {
         assert_eq!(v.sort, LSort::Fresh);
         LVar::new("w", v.sort, 9)
     });
-    let Guarded::Atom(GAtom::Last(GTerm::Var(BVar::Free(v)))) = &renamed else {
+    let Guarded::Atom(ProtoAtom::Last(GTerm::Var(BVar::Free(v)))) = &renamed else {
         panic!("map_free must keep the atom shape")
     };
     assert_eq!(v.name, "w");
@@ -1713,7 +1714,10 @@ fn a_three_argument_ac_chain_from_an_internal_term_matches_the_stored_fold() {
         ga(leaf(0)),
         ga(GTerm::BinOp(p::BinOp::Mult, ga(leaf(1)), ga(leaf(2)))),
     );
-    assert_eq!(stored_eq(&t, &t), GAtom::Eq(right.clone(), right.clone()));
+    assert_eq!(
+        stored_eq(&t, &t),
+        ProtoAtom::EqE(right.clone(), right.clone())
+    );
 
     let left = GTerm::BinOp(
         p::BinOp::Mult,
@@ -1738,11 +1742,11 @@ fn the_nullary_constants_from_an_internal_term_match_the_stored_variants() {
 
     assert_eq!(
         stored_eq(&one, &tone),
-        GAtom::Eq(GTerm::NumberOne, GTerm::NatOne)
+        ProtoAtom::EqE(GTerm::NumberOne, GTerm::NatOne)
     );
     assert_eq!(
         stored_eq(&neutral, &neutral),
-        GAtom::Eq(GTerm::DhNeutral, GTerm::DhNeutral)
+        ProtoAtom::EqE(GTerm::DhNeutral, GTerm::DhNeutral)
     );
 
     let app = GTerm::App("tone".into(), vec![].into());
@@ -1785,7 +1789,10 @@ fn a_pair_valued_tail_from_an_internal_term_matches_the_stored_tuple() {
         ]
         .into(),
     );
-    assert_eq!(stored_eq(&t, &t), GAtom::Eq(flat.clone(), flat.clone()));
+    assert_eq!(
+        stored_eq(&t, &t),
+        ProtoAtom::EqE(flat.clone(), flat.clone())
+    );
 
     let nested = GTerm::Pair(
         vec![

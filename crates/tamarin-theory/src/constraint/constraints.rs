@@ -571,7 +571,8 @@ mod tests {
 
     /// A guarded atom over two free node leaves.
     fn guarded_pair() -> Guarded {
-        use crate::guarded::{BVar, GAtom, GTerm};
+        use crate::atom::ProtoAtom;
+        use crate::guarded::{BVar, GTerm};
         let leaf = |name: &str, idx: u64| {
             GTerm::Var(BVar::Free(tamarin_parser::ast::VarSpec {
                 name: name.into(),
@@ -580,7 +581,7 @@ mod tests {
                 typ: None,
             }))
         };
-        Guarded::Atom(GAtom::Less(leaf("g", 8), leaf("h", 9)))
+        Guarded::Atom(ProtoAtom::Less(leaf("g", 8), leaf("h", 9)))
     }
 
     /// Add 100 to the index of every variable the map reaches.  The rename is

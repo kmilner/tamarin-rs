@@ -5467,8 +5467,8 @@ fn write_gfact_struct(f: &crate::guarded::GFact, rename: &Bindings, out: &mut St
     out.push(']');
 }
 
-fn write_gatom_struct(a: &crate::guarded_types::GAtom, rename: &Bindings, out: &mut String) {
-    use crate::guarded_types::GAtom;
+fn write_gatom_struct(a: &crate::guarded::GAtom, rename: &Bindings, out: &mut String) {
+    use crate::atom::ProtoAtom;
     let bin = |tag: &str,
                x: &crate::guarded_types::GTerm,
                y: &crate::guarded_types::GTerm,
@@ -5481,27 +5481,22 @@ fn write_gatom_struct(a: &crate::guarded_types::GAtom, rename: &Bindings, out: &
         out.push(')');
     };
     match a {
-        GAtom::Eq(x, y) => bin("EQ", x, y, out),
-        GAtom::Less(x, y) => bin("LT", x, y, out),
-        GAtom::LessMset(x, y) => bin("LTm", x, y, out),
-        GAtom::Subterm(x, y) => bin("SUB", x, y, out),
-        GAtom::Action(f, t) => {
+        ProtoAtom::EqE(x, y) => bin("EQ", x, y, out),
+        ProtoAtom::Less(x, y) => bin("LT", x, y, out),
+        ProtoAtom::Subterm(x, y) => bin("SUB", x, y, out),
+        ProtoAtom::Action(t, f) => {
             out.push_str("ACT(");
             write_gfact_struct(f, rename, out);
             out.push('@');
             write_gterm_struct(t, rename, out);
             out.push(')');
         }
-        GAtom::Last(t) => {
+        ProtoAtom::Last(t) => {
             out.push_str("LAST(");
             write_gterm_struct(t, rename, out);
             out.push(')');
         }
-        GAtom::Pred(f) => {
-            out.push_str("PRED(");
-            write_gfact_struct(f, rename, out);
-            out.push(')');
-        }
+        ProtoAtom::Syntactic(_) => out.push_str("SYN"),
     }
 }
 

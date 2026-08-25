@@ -30,9 +30,10 @@
 use tamarin_parser::ast as p;
 use tamarin_term::lterm::{sort_prefix, LNTerm};
 
+use crate::atom::ProtoAtom;
 use crate::fact::{FactTag, Multiplicity};
 use crate::guarded::{GFact, Guarded};
-use crate::guarded_types::{BVar, GAtom, GTerm};
+use crate::guarded_types::{BVar, GTerm};
 
 // =============================================================================
 // `show` of a free LVar carried in a GTerm (`p::VarSpec`)
@@ -255,7 +256,7 @@ fn guard_fact_tag_names(g: &Guarded, out: &mut Vec<String>) {
         }
         Guarded::GGuarded { guards, body, .. } => {
             for a in guards.iter() {
-                if let GAtom::Action(f, _) = a {
+                if let ProtoAtom::Action(_, f) = a {
                     out.push(crate::fact::fact_tag_name(&f.tag));
                 }
             }
@@ -269,7 +270,7 @@ fn guard_fact_tag_names(g: &Guarded, out: &mut Vec<String>) {
 fn formula_action_fact(g: &Guarded) -> Option<&GFact> {
     if let Guarded::GGuarded { guards, .. } = g {
         if guards.len() == 1 {
-            if let GAtom::Action(fa, _) = &guards[0] {
+            if let ProtoAtom::Action(_, fa) = &guards[0] {
                 return Some(fa);
             }
         }

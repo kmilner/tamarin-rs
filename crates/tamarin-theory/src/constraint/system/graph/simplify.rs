@@ -187,8 +187,9 @@ fn guarded_mentions_node(v: &NodeId, g: &crate::guarded::Guarded) -> bool {
     }
 }
 
-fn atom_mentions_node(v: &NodeId, at: &crate::guarded_types::GAtom) -> bool {
-    use crate::guarded_types::{BVar, GAtom, GTerm};
+fn atom_mentions_node(v: &NodeId, at: &crate::guarded::GAtom) -> bool {
+    use crate::atom::ProtoAtom;
+    use crate::guarded_types::{BVar, GTerm};
     let mentions_term = |t: &GTerm| -> bool {
         if let GTerm::Var(BVar::Free(spec)) = t {
             // HS `notOccursIn proj = not $ getAny $ foldFrees (Any . (v ==))
@@ -204,12 +205,12 @@ fn atom_mentions_node(v: &NodeId, at: &crate::guarded_types::GAtom) -> bool {
         false
     };
     match at {
-        GAtom::Action(_, t) => mentions_term(t),
-        GAtom::Last(t) => mentions_term(t),
-        GAtom::Eq(a, b) | GAtom::Less(a, b) | GAtom::LessMset(a, b) | GAtom::Subterm(a, b) => {
+        ProtoAtom::Action(t, _) => mentions_term(t),
+        ProtoAtom::Last(t) => mentions_term(t),
+        ProtoAtom::EqE(a, b) | ProtoAtom::Less(a, b) | ProtoAtom::Subterm(a, b) => {
             mentions_term(a) || mentions_term(b)
         }
-        GAtom::Pred(_) => false,
+        ProtoAtom::Syntactic(_) => false,
     }
 }
 

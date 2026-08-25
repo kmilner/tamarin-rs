@@ -957,8 +957,9 @@ fn ku_action_uniqueness_unchanged_when_terms_differ() {
 
 /// Builds `x = 'z'` as one `Guarded`.  The sort of `x` is a parameter.
 fn eq_pub_lit_with_sort(sort: tamarin_term::lterm::LSort) -> crate::guarded::Guarded {
-    use crate::guarded::{BVar, GAtom, GTerm, Guarded};
-    Guarded::Atom(GAtom::Eq(
+    use crate::atom::ProtoAtom;
+    use crate::guarded::{BVar, GTerm, Guarded};
+    Guarded::Atom(ProtoAtom::EqE(
         GTerm::Var(BVar::Free(tamarin_parser::ast::VarSpec {
             name: "x".to_string(),
             idx: 0,

@@ -15,8 +15,9 @@
 //! `Bound 0` refers to the innermost binder (rightmost in the binder list);
 //! `Bound (k-1)` refers to the outermost.
 
+use crate::atom::{fold_atom, map_atom, ProtoAtom};
 use crate::fact::Fact;
-use crate::guarded::{GBinding, GFact};
+use crate::guarded::{GAtom, GBinding, GFact};
 use tamarin_parser::ast as p;
 use tamarin_utils::cow::cow_map_arc;
 
@@ -34,7 +35,7 @@ pub enum BVar {
 ///
 /// Structurally identical to `p::Term`, but Var carries a `BVar` instead of
 /// a raw `VarSpec`. All other variants are unchanged.
-// `Hash` (here and on `GAtom`/`Guarded`) is derived alongside the derived
+// `Hash` (here and on `Guarded`) is derived alongside the derived
 // `PartialEq`, so the impl hashes exactly the fields equality compares — the
 // consistency (equal values ⇒ equal hashes) the implied-formula dedup's hash
 // prefilter relies on (see `fx_hash_one`).  A `GFact` gets the same
@@ -86,20 +87,6 @@ pub(crate) fn cow_pair_arc(
         a2.map(ga).unwrap_or_else(|| a.clone()),
         b2.map(ga).unwrap_or_else(|| b.clone()),
     ))
-}
-
-/// Mirrors HS `Atom (VTerm c (BVar v))`.
-///
-/// Same variant set as `p::Atom`, but terms are `GTerm`.
-#[derive(Debug, Clone, PartialEq, Hash)]
-pub enum GAtom {
-    Eq(GTerm, GTerm),
-    Less(GTerm, GTerm),
-    LessMset(GTerm, GTerm),
-    Subterm(GTerm, GTerm),
-    Action(GFact, GTerm),
-    Last(GTerm),
-    Pred(GFact),
 }
 
 // =============================================================================
@@ -180,15 +167,24 @@ pub fn fact_to_gfact_free(f: &p::Fact) -> GFact {
 }
 
 /// Lift `p::Atom` to `GAtom` treating every variable as `Free`.
+///
+/// The guarded atom is sugar-free (`Atom t = ProtoAtom Unit2 t`,
+/// Atom.hs:100), and a guarded formula is built from an `LNFormula` whose
+/// sugar [`crate::formula::to_lnformula`] has already refused
+/// (`formula.rs`), so a predicate atom never reaches here.  The multiset
+/// order has no arm of its own at all: [`crate::formula::from_parser`]
+/// rewrites it into the `Smaller` predicate, as HS's `smallerp` does
+/// (Theory/Text/Parser/Formula.hs:30-38).
 pub fn atom_to_gatom_free(a: &p::Atom) -> GAtom {
     match a {
-        p::Atom::Eq(s, t) => GAtom::Eq(term_to_gterm_free(s), term_to_gterm_free(t)),
-        p::Atom::Less(s, t) => GAtom::Less(term_to_gterm_free(s), term_to_gterm_free(t)),
-        p::Atom::LessMset(s, t) => GAtom::LessMset(term_to_gterm_free(s), term_to_gterm_free(t)),
-        p::Atom::Subterm(s, t) => GAtom::Subterm(term_to_gterm_free(s), term_to_gterm_free(t)),
-        p::Atom::Action(f, t) => GAtom::Action(fact_to_gfact_free(f), term_to_gterm_free(t)),
-        p::Atom::Last(t) => GAtom::Last(term_to_gterm_free(t)),
-        p::Atom::Pred(f) => GAtom::Pred(fact_to_gfact_free(f)),
+        p::Atom::Eq(s, t) => ProtoAtom::EqE(term_to_gterm_free(s), term_to_gterm_free(t)),
+        p::Atom::Less(s, t) => ProtoAtom::Less(term_to_gterm_free(s), term_to_gterm_free(t)),
+        p::Atom::Subterm(s, t) => ProtoAtom::Subterm(term_to_gterm_free(s), term_to_gterm_free(t)),
+        p::Atom::Action(f, t) => ProtoAtom::Action(term_to_gterm_free(t), fact_to_gfact_free(f)),
+        p::Atom::Last(t) => ProtoAtom::Last(term_to_gterm_free(t)),
+        p::Atom::Pred(_) | p::Atom::LessMset(_, _) => {
+            panic!("atom_to_gatom_free: syntactic sugar in a plain atom")
+        }
     }
 }
 
@@ -249,13 +245,12 @@ pub fn gfact_to_fact(g: &GFact) -> p::Fact {
 /// HS equivalent: `bvarToLVar`.
 pub fn gatom_to_atom(a: &GAtom) -> p::Atom {
     match a {
-        GAtom::Eq(s, t) => p::Atom::Eq(gterm_to_term(s), gterm_to_term(t)),
-        GAtom::Less(s, t) => p::Atom::Less(gterm_to_term(s), gterm_to_term(t)),
-        GAtom::LessMset(s, t) => p::Atom::LessMset(gterm_to_term(s), gterm_to_term(t)),
-        GAtom::Subterm(s, t) => p::Atom::Subterm(gterm_to_term(s), gterm_to_term(t)),
-        GAtom::Action(f, t) => p::Atom::Action(gfact_to_fact(f), gterm_to_term(t)),
-        GAtom::Last(t) => p::Atom::Last(gterm_to_term(t)),
-        GAtom::Pred(f) => p::Atom::Pred(gfact_to_fact(f)),
+        ProtoAtom::EqE(s, t) => p::Atom::Eq(gterm_to_term(s), gterm_to_term(t)),
+        ProtoAtom::Less(s, t) => p::Atom::Less(gterm_to_term(s), gterm_to_term(t)),
+        ProtoAtom::Subterm(s, t) => p::Atom::Subterm(gterm_to_term(s), gterm_to_term(t)),
+        ProtoAtom::Action(t, f) => p::Atom::Action(gfact_to_fact(f), gterm_to_term(t)),
+        ProtoAtom::Last(t) => p::Atom::Last(gterm_to_term(t)),
+        ProtoAtom::Syntactic(_) => panic!("gatom_to_atom: syntactic sugar in a plain atom"),
     }
 }
 
@@ -362,30 +357,7 @@ pub fn subst_free_fact_at_depth(f: &GFact, s: &[(p::VarSpec, u32)], depth: u32) 
 /// every term leaf in an atom. Mirrors HS `substFreeAtom` (with the i+j shift
 /// applied externally by the caller — pass `depth` for the j term).
 pub fn subst_free_atom_at_depth(a: &GAtom, s: &[(p::VarSpec, u32)], depth: u32) -> GAtom {
-    match a {
-        GAtom::Eq(x, y) => GAtom::Eq(
-            subst_free_term_at_depth(x, s, depth),
-            subst_free_term_at_depth(y, s, depth),
-        ),
-        GAtom::Less(x, y) => GAtom::Less(
-            subst_free_term_at_depth(x, s, depth),
-            subst_free_term_at_depth(y, s, depth),
-        ),
-        GAtom::LessMset(x, y) => GAtom::LessMset(
-            subst_free_term_at_depth(x, s, depth),
-            subst_free_term_at_depth(y, s, depth),
-        ),
-        GAtom::Subterm(x, y) => GAtom::Subterm(
-            subst_free_term_at_depth(x, s, depth),
-            subst_free_term_at_depth(y, s, depth),
-        ),
-        GAtom::Action(f, t) => GAtom::Action(
-            subst_free_fact_at_depth(f, s, depth),
-            subst_free_term_at_depth(t, s, depth),
-        ),
-        GAtom::Last(t) => GAtom::Last(subst_free_term_at_depth(t, s, depth)),
-        GAtom::Pred(f) => GAtom::Pred(subst_free_fact_at_depth(f, s, depth)),
-    }
+    map_atom(a, &mut |t| subst_free_term_at_depth(t, s, depth))
 }
 
 // =============================================================================
@@ -480,30 +452,7 @@ pub fn subst_bound_fact_at_depth(f: &GFact, s: &[(u32, p::VarSpec)], depth: u32)
 /// `subst_bound_atom_at_depth(a, s, depth)` — applies the Bound→Free subst.
 /// Mirrors HS `substBoundAtom` (i+j shift baked into the depth parameter).
 pub fn subst_bound_atom_at_depth(a: &GAtom, s: &[(u32, p::VarSpec)], depth: u32) -> GAtom {
-    match a {
-        GAtom::Eq(x, y) => GAtom::Eq(
-            subst_bound_term_at_depth(x, s, depth),
-            subst_bound_term_at_depth(y, s, depth),
-        ),
-        GAtom::Less(x, y) => GAtom::Less(
-            subst_bound_term_at_depth(x, s, depth),
-            subst_bound_term_at_depth(y, s, depth),
-        ),
-        GAtom::LessMset(x, y) => GAtom::LessMset(
-            subst_bound_term_at_depth(x, s, depth),
-            subst_bound_term_at_depth(y, s, depth),
-        ),
-        GAtom::Subterm(x, y) => GAtom::Subterm(
-            subst_bound_term_at_depth(x, s, depth),
-            subst_bound_term_at_depth(y, s, depth),
-        ),
-        GAtom::Action(f, t) => GAtom::Action(
-            subst_bound_fact_at_depth(f, s, depth),
-            subst_bound_term_at_depth(t, s, depth),
-        ),
-        GAtom::Last(t) => GAtom::Last(subst_bound_term_at_depth(t, s, depth)),
-        GAtom::Pred(f) => GAtom::Pred(subst_bound_fact_at_depth(f, s, depth)),
-    }
+    map_atom(a, &mut |t| subst_bound_term_at_depth(t, s, depth))
 }
 
 // =============================================================================
@@ -575,29 +524,10 @@ pub fn collect_free_term(t: &GTerm, out: &mut Vec<p::VarSpec>) {
     }
 }
 
-/// Push every Free LVar reachable from an atom into `out`.
+/// Push every Free LVar reachable from an atom into `out`, in the order HS's
+/// `Foldable ProtoAtom` (Atom.hs:129-136) visits the atom's terms.
 pub fn collect_free_atom(a: &GAtom, out: &mut Vec<p::VarSpec>) {
-    match a {
-        GAtom::Eq(x, y) | GAtom::Less(x, y) | GAtom::LessMset(x, y) | GAtom::Subterm(x, y) => {
-            collect_free_term(x, out);
-            collect_free_term(y, out);
-        }
-        // HS `Foldable ProtoAtom` folds the timepoint BEFORE the fact:
-        // `foldMap f (Action i fa) = f i `mappend` foldMap f fa`
-        // (Atom.hs:130-131).
-        GAtom::Action(f, t) => {
-            collect_free_term(t, out);
-            for arg in f.terms.iter() {
-                collect_free_term(arg, out);
-            }
-        }
-        GAtom::Last(t) => collect_free_term(t, out),
-        GAtom::Pred(f) => {
-            for arg in f.terms.iter() {
-                collect_free_term(arg, out);
-            }
-        }
-    }
+    fold_atom(a, &mut |t| collect_free_term(t, out));
 }
 
 /// Apply a remapping to every Free LVar in a term. Bound vars are untouched.
@@ -633,24 +563,10 @@ pub fn map_free_fact<F: FnMut(&p::VarSpec) -> p::VarSpec>(g: &GFact, f: &mut F) 
     g.map_ref(|a| map_free_term(a, f))
 }
 
-/// Apply a remapping to every Free LVar in an atom.
+/// Apply a remapping to every Free LVar in an atom, in the order HS's
+/// `Traversable ProtoAtom` (Atom.hs:138-145) visits the atom's terms.
 pub fn map_free_atom<F: FnMut(&p::VarSpec) -> p::VarSpec>(a: &GAtom, f: &mut F) -> GAtom {
-    match a {
-        GAtom::Eq(x, y) => GAtom::Eq(map_free_term(x, f), map_free_term(y, f)),
-        GAtom::Less(x, y) => GAtom::Less(map_free_term(x, f), map_free_term(y, f)),
-        GAtom::LessMset(x, y) => GAtom::LessMset(map_free_term(x, f), map_free_term(y, f)),
-        GAtom::Subterm(x, y) => GAtom::Subterm(map_free_term(x, f), map_free_term(y, f)),
-        // HS `Traversable ProtoAtom` visits the timepoint BEFORE the fact:
-        // `traverse f (Action i fa) = Action <$> f i <*> traverse f fa`
-        // (Atom.hs:139-140).  Bind the timepoint first: Rust evaluates
-        // constructor arguments left to right.
-        GAtom::Action(g, t) => {
-            let t2 = map_free_term(t, f);
-            GAtom::Action(map_free_fact(g, f), t2)
-        }
-        GAtom::Last(t) => GAtom::Last(map_free_term(t, f)),
-        GAtom::Pred(g) => GAtom::Pred(map_free_fact(g, f)),
-    }
+    map_atom(a, &mut |t| map_free_term(t, f))
 }
 
 // =============================================================================
@@ -770,6 +686,32 @@ mod tests {
         }
     }
 
+    /// The guarded atom is sugar-free (Atom.hs:98-100), and `formula_to_guarded`
+    /// reads an `LNFormula` whose sugar `toLNFormula` (Theory/Model/Formula.hs:369-373) has
+    /// already refused, so a predicate atom cannot reach the lift.
+    #[test]
+    #[should_panic(expected = "syntactic sugar in a plain atom")]
+    fn atom_to_gatom_free_rejects_a_predicate_atom() {
+        atom_to_gatom_free(&p::Atom::Pred(p::Fact {
+            persistent: false,
+            name: "Smaller".to_string(),
+            args: vec![p::Term::Var(vs("x", 0)), p::Term::Var(vs("y", 0))],
+            annotations: vec![],
+        }));
+    }
+
+    /// The multiset order is the `Smaller` predicate by the time a formula is
+    /// closed (`smallerp`, Theory/Text/Parser/Formula.hs:30-38), so its parser
+    /// spelling never reaches the lift either.
+    #[test]
+    #[should_panic(expected = "syntactic sugar in a plain atom")]
+    fn atom_to_gatom_free_rejects_a_multiset_order_atom() {
+        atom_to_gatom_free(&p::Atom::LessMset(
+            p::Term::Var(vs("x", 0)),
+            p::Term::Var(vs("y", 0)),
+        ));
+    }
+
     // =========================================================================
     // blnatom_to_gatom
     // =========================================================================
@@ -793,7 +735,7 @@ mod tests {
         fn lowered(t: crate::formula::BLNTerm) -> GTerm {
             let a: Atom<crate::formula::BLNTerm> = ProtoAtom::EqE(t, v("zzz"));
             match blnatom_to_gatom(&a) {
-                GAtom::Eq(l, _) => l,
+                ProtoAtom::EqE(l, _) => l,
                 other => panic!("an equality atom lowers to an equality atom, got {other:?}"),
             }
         }
@@ -1026,7 +968,7 @@ mod tests {
 
         // verify x became Bound(0) in the closed form
         match &closed {
-            GAtom::Action(f, _) => match &f.terms[0] {
+            ProtoAtom::Action(_, f) => match &f.terms[0] {
                 GTerm::Var(BVar::Bound(n)) => assert_eq!(*n, 0),
                 other => panic!("expected Bound(0), got {:?}", other),
             },
@@ -1084,7 +1026,8 @@ mod tests {
         // Suppose we already closed `forall y. P(x, y)` — y is Bound 0,
         // x is still Free.
         let x = vs("x", 100);
-        let mut inner_body = GAtom::Action(
+        let mut inner_body = ProtoAtom::Action(
+            GTerm::Var(BVar::Free(vs_node("t", 0))),
             GFact::new(
                 crate::fact::FactTag::Proto(
                     crate::fact::Multiplicity::Linear,
@@ -1096,7 +1039,6 @@ mod tests {
                     GTerm::Var(BVar::Bound(0)),
                 ],
             ),
-            GTerm::Var(BVar::Free(vs_node("t", 0))),
         );
 
         // Now close the outer `forall x.` — depth becomes 1 because we're
@@ -1109,7 +1051,7 @@ mod tests {
 
         // x should now be Bound(1); y is still Bound(0).
         match &inner_body {
-            GAtom::Action(f, _) => {
+            ProtoAtom::Action(_, f) => {
                 match &f.terms[0] {
                     GTerm::Var(BVar::Bound(n)) => assert_eq!(*n, 1, "x should shift to Bound(1)"),
                     other => panic!("expected Bound(1), got {:?}", other),

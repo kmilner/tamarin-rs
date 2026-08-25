@@ -4103,9 +4103,10 @@ mod oracle_goal_tests {
     /// v1.13.0 HS prover with an echoing oracle.
     #[test]
     fn disj_goal_for_oracle_has_leading_space() {
+        use crate::atom::ProtoAtom;
         use crate::constraint::constraints::{Disj, Goal};
         use crate::guarded::Guarded;
-        use crate::guarded_types::{BVar, GAtom, GTerm};
+        use crate::guarded_types::{BVar, GTerm};
         use tamarin_parser::ast::VarSpec;
         use tamarin_term::lterm::LSort;
 
@@ -4118,8 +4119,8 @@ mod oracle_goal_tests {
             }))
         };
         // `#a < #b` ∥ `#b < #a`
-        let d1 = Guarded::Atom(GAtom::Less(tp("a"), tp("b")));
-        let d2 = Guarded::Atom(GAtom::Less(tp("b"), tp("a")));
+        let d1 = Guarded::Atom(ProtoAtom::Less(tp("a"), tp("b")));
+        let d2 = Guarded::Atom(ProtoAtom::Less(tp("b"), tp("a")));
         let goal = Goal::Disj(Disj::new(vec![d1, d2]));
 
         let rendered = render_goal_for_oracle(&goal);

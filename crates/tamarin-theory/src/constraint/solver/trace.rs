@@ -248,20 +248,19 @@ pub fn guarded_repr(g: &crate::guarded::Guarded) -> String {
 }
 
 fn atom_repr(a: &crate::guarded::GAtom) -> String {
-    use crate::guarded::GAtom;
+    use crate::atom::ProtoAtom;
     match a {
-        GAtom::Eq(s, t) => format!("Eq({},{})", term_repr(s), term_repr(t)),
-        GAtom::Less(s, t) => format!("Less({},{})", term_repr(s), term_repr(t)),
-        GAtom::LessMset(s, t) => format!("LMset({},{})", term_repr(s), term_repr(t)),
-        GAtom::Subterm(s, t) => format!("Subterm({},{})", term_repr(s), term_repr(t)),
-        GAtom::Last(s) => format!("Last({})", term_repr(s)),
-        GAtom::Action(f, t) => format!(
+        ProtoAtom::EqE(s, t) => format!("Eq({},{})", term_repr(s), term_repr(t)),
+        ProtoAtom::Less(s, t) => format!("Less({},{})", term_repr(s), term_repr(t)),
+        ProtoAtom::Subterm(s, t) => format!("Subterm({},{})", term_repr(s), term_repr(t)),
+        ProtoAtom::Last(s) => format!("Last({})", term_repr(s)),
+        ProtoAtom::Action(t, f) => format!(
             "{}({})@{}",
             crate::fact::fact_tag_name(&f.tag),
             f.terms.iter().map(term_repr).collect::<Vec<_>>().join(","),
             term_repr(t)
         ),
-        GAtom::Pred(f) => format!("Pred({})", crate::fact::fact_tag_name(&f.tag)),
+        ProtoAtom::Syntactic(_) => "Syntactic".to_string(),
     }
 }
 

@@ -1939,9 +1939,10 @@ fn gfact_is_progress(f: &crate::guarded::GFact) -> bool {
 /// HS `isProgressDisj` (ProofMethod.hs:130-135): a Disj goal all of whose
 /// disjuncts are `Ex #node. ProgressTo_…( #node )`.
 fn is_progress_disj(a: &AnnotatedGoal) -> bool {
+    use crate::atom::ProtoAtom;
     use crate::constraint::constraints::Disj;
     use crate::formula::Quantifier;
-    use crate::guarded::{GAtom, Guarded};
+    use crate::guarded::Guarded;
     let Goal::Disj(Disj(items)) = &a.goal else {
         return false;
     };
@@ -1958,7 +1959,7 @@ fn is_progress_disj(a: &AnnotatedGoal) -> bool {
             && guards.len() == 1
             && vars[0].1 == tamarin_term::lterm::LSort::Node =>
         {
-            matches!(&guards[0], GAtom::Action(f, _) if gfact_is_progress(f))
+            matches!(&guards[0], ProtoAtom::Action(_, f) if gfact_is_progress(f))
         }
         _ => false,
     })
@@ -2502,7 +2503,8 @@ fn goal_usefulness_with_adj(g: &Goal, looping: bool, sys: &System, adj: &RawLess
 /// demotion never fires.  Walks recursively, surfacing KU action atoms
 /// from inside `GGuarded`/`GAtom`/`Conj`/`Disj` structures.
 fn has_ku_guards(sys: &System) -> bool {
-    use crate::guarded::{GAtom, Guarded};
+    use crate::atom::ProtoAtom;
+    use crate::guarded::Guarded;
     fn walk_guards(g: &Guarded) -> bool {
         match g {
             // HS `getTags _qua _ss atos inner` inspects ONLY the guard list
@@ -2511,7 +2513,7 @@ fn has_ku_guards(sys: &System) -> bool {
             // KU action atom must NOT count — only a `GGuarded`'s guards.
             Guarded::GGuarded { guards, body, .. } => {
                 for atom in guards.iter() {
-                    if let GAtom::Action(fa, _) = atom {
+                    if let ProtoAtom::Action(_, fa) = atom {
                         if fa.is_ku() {
                             return true;
                         }

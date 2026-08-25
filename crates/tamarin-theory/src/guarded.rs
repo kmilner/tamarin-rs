@@ -20,7 +20,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::atom::{map_atom, Atom};
+use crate::atom::{fold_atom, map_atom, Atom, ProtoAtom};
 use crate::fact::Fact;
 use crate::formula::{BLNTerm, Quantifier};
 use crate::guarded_types::cow_pair_arc;
@@ -36,12 +36,17 @@ pub use crate::guarded_types::{
     gterm_to_term, lvar_to_binding, map_free_atom, map_free_fact, map_free_term, open_subst,
     subst_bound_atom_at_depth, subst_bound_fact_at_depth, subst_bound_term_at_depth,
     subst_free_atom_at_depth, subst_free_fact_at_depth, subst_free_term_at_depth,
-    term_to_gterm_free, BVar, GAtom, GTerm,
+    term_to_gterm_free, BVar, GTerm,
 };
 
 // =============================================================================
 // Guarded data type
 // =============================================================================
+
+/// HS's guarded atom, `Atom (VTerm c (BVar v))` (Guarded.hs:121): the
+/// sugar-free `ProtoAtom Unit2` (Atom.hs:78-84,:100) over a term whose
+/// variable leaves are `BVar`s.
+pub type GAtom = Atom<GTerm>;
 
 /// The fact a guarded atom carries.  HS's guarded atom is
 /// `Atom (VTerm c (BVar v))` (Guarded.hs:121) and its `Action` arm holds a
@@ -76,8 +81,8 @@ pub type GBinding = (String, LSort);
 // to which clause's matches fire first → goal-nrs of newly-inserted
 // Disj formulas → goal pick at downstream proof steps.
 //
-// This module provides `cmp_guarded` (and helpers `cmp_atom` /
-// `cmp_term`) that mirror HS's derived Ord chain.
+// This module provides `cmp_guarded` (and the helper `cmp_term`) that
+// mirror HS's derived Ord chain.
 
 /// HS-faithful structural comparison for Guarded.  Mirrors HS's derived
 /// `Ord (Guarded s c v)` on `Theory.Constraint.System.Guarded.Guarded`.
@@ -95,7 +100,7 @@ pub fn cmp_guarded(a: &Guarded, b: &Guarded) -> std::cmp::Ordering {
             let Guarded::Atom(y) = b else {
                 unreachable!("guarded tag matched Atom")
             };
-            cmp_atom(x, y)
+            x.cmp(y)
         }
         Guarded::Disj(xs) => {
             let Guarded::Disj(ys) = b else {
@@ -133,7 +138,7 @@ pub fn cmp_guarded(a: &Guarded, b: &Guarded) -> std::cmp::Ordering {
                 // uses cmp_varspec, which mirrors HS's
                 // `Ord LVar = (idx, sort, name)`.
                 .then_with(|| v1.cmp(v2))
-                .then_with(|| cmp_slice(g1, g2, cmp_atom))
+                .then_with(|| g1.cmp(g2))
                 .then_with(|| cmp_guarded(b1, b2))
         }
     }
@@ -171,90 +176,25 @@ where
     }
 }
 
-/// HS-faithful Ord for `ProtoAtom`: Action < EqE < Subterm < Less < Last
-/// < Syntactic (Theory/Model/Atom.hs:78-84).  Rust's `GAtom` declares
-/// variants in a different order; we re-map to HS's order via
-/// `atom_tag`.  `LessMset` has no HS equivalent — put at end.
-pub fn cmp_atom(a: &GAtom, b: &GAtom) -> std::cmp::Ordering {
-    let ta = atom_tag(a);
-    let tb = atom_tag(b);
-    if ta != tb {
-        return ta.cmp(&tb);
-    }
-    // Tag equality above guarantees same variant, so each `let … else` binding
-    // of `b` is infallible.  Match `a` exhaustively (no wildcard) so a new
-    // `GAtom` variant forces a comparison here.
-    match a {
-        // HS `data ProtoAtom s t = Action t (Fact t) | ...` derives Ord
-        // (Atom.hs:78-84), so the derived comparison is the timepoint term
-        // `t` FIRST, then the `Fact t`.  Rust's `GAtom::Action(GFact, GTerm)`
-        // stores fact-then-term, so we must compare the timepoint first.
-        //
-        // HS `Ord (Fact t)` is `compare tag tag' <> compare ts ts'`
-        // (Theory/Model/Fact.hs:173-174): the derived `Ord FactTag` first,
-        // then the term list, with the annotations ignored.  `FactTag`'s own
-        // derived `Ord` supplies the tag half; `cmp_term` supplies the term
-        // order the `GTerm` payload needs.
-        GAtom::Action(f1, t1) => {
-            let GAtom::Action(f2, t2) = b else {
-                unreachable!("atom tag matched Action")
-            };
-            cmp_term(t1, t2)
-                .then_with(|| f1.tag.cmp(&f2.tag))
-                .then_with(|| cmp_slice(&f1.terms, &f2.terms, cmp_term))
-        }
-        GAtom::Eq(a1, b1) => {
-            let GAtom::Eq(a2, b2) = b else {
-                unreachable!("atom tag matched Eq")
-            };
-            cmp_term(a1, a2).then_with(|| cmp_term(b1, b2))
-        }
-        GAtom::Subterm(a1, b1) => {
-            let GAtom::Subterm(a2, b2) = b else {
-                unreachable!("atom tag matched Subterm")
-            };
-            cmp_term(a1, a2).then_with(|| cmp_term(b1, b2))
-        }
-        GAtom::Less(a1, b1) => {
-            let GAtom::Less(a2, b2) = b else {
-                unreachable!("atom tag matched Less")
-            };
-            cmp_term(a1, a2).then_with(|| cmp_term(b1, b2))
-        }
-        GAtom::Last(t1) => {
-            let GAtom::Last(t2) = b else {
-                unreachable!("atom tag matched Last")
-            };
-            cmp_term(t1, t2)
-        }
-        GAtom::Pred(f1) => {
-            let GAtom::Pred(f2) = b else {
-                unreachable!("atom tag matched Pred")
-            };
-            f1.tag
-                .cmp(&f2.tag)
-                .then_with(|| cmp_slice(&f1.terms, &f2.terms, cmp_term))
-        }
-        GAtom::LessMset(a1, b1) => {
-            let GAtom::LessMset(a2, b2) = b else {
-                unreachable!("atom tag matched LessMset")
-            };
-            cmp_term(a1, a2).then_with(|| cmp_term(b1, b2))
-        }
+/// HS `Ord (Term (Lit Name (BVar v)))` (Term/Term/Raw.hs:71-75), through
+/// [`cmp_term`].  Where HS holds one term the port holds several spellings —
+/// the prefix `App("pair", [a, b])` beside `Pair([a, b])`, the nullary
+/// `App("one", [])` beside [`GTerm::NumberOne`], two nestings of one AC chain
+/// — and this order ties them exactly as HS's does, while the derived
+/// `PartialEq` tells them apart.
+impl Ord for GTerm {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        cmp_term(self, other)
     }
 }
 
-fn atom_tag(a: &GAtom) -> u8 {
-    match a {
-        GAtom::Action(_, _) => 0,
-        GAtom::Eq(_, _) => 1,
-        GAtom::Subterm(_, _) => 2,
-        GAtom::Less(_, _) => 3,
-        GAtom::Last(_) => 4,
-        GAtom::Pred(_) => 5,
-        GAtom::LessMset(_, _) => 6, // Rust-only, no HS equivalent
+impl PartialOrd for GTerm {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
     }
 }
+
+impl Eq for GTerm {}
 
 /// HS Term Ord: `Lit < FApp` (Term.hs).  Walks `GTerm`.  Bound vars sort
 /// before Free vars (HS `BVar = Bound Int | Free v` declaration order).
@@ -667,7 +607,7 @@ pub fn reducible_formula(fm: &Guarded) -> bool {
             body_is_false
                 && matches!(
                     &guards[0],
-                    GAtom::Less(_, _) | GAtom::Subterm(_, _) | GAtom::Last(_),
+                    ProtoAtom::Less(_, _) | ProtoAtom::Subterm(_, _) | ProtoAtom::Last(_),
                 )
         }
         _ => false,
@@ -802,16 +742,15 @@ pub fn simplify_guarded_with(
 }
 
 /// Convert `GAtom` to `p::Atom` if no Bound vars are present, else None.
-/// HS `unbindAtom`.
+/// HS `unbindAtom` (Guarded.hs:351-352).
 pub fn try_gatom_to_atom(a: &GAtom) -> Option<p::Atom> {
     Some(match a {
-        GAtom::Eq(s, t) => p::Atom::Eq(try_gterm_to_term(s)?, try_gterm_to_term(t)?),
-        GAtom::Less(s, t) => p::Atom::Less(try_gterm_to_term(s)?, try_gterm_to_term(t)?),
-        GAtom::LessMset(s, t) => p::Atom::LessMset(try_gterm_to_term(s)?, try_gterm_to_term(t)?),
-        GAtom::Subterm(s, t) => p::Atom::Subterm(try_gterm_to_term(s)?, try_gterm_to_term(t)?),
-        GAtom::Action(f, t) => p::Atom::Action(try_gfact_to_fact(f)?, try_gterm_to_term(t)?),
-        GAtom::Last(t) => p::Atom::Last(try_gterm_to_term(t)?),
-        GAtom::Pred(f) => p::Atom::Pred(try_gfact_to_fact(f)?),
+        ProtoAtom::EqE(s, t) => p::Atom::Eq(try_gterm_to_term(s)?, try_gterm_to_term(t)?),
+        ProtoAtom::Less(s, t) => p::Atom::Less(try_gterm_to_term(s)?, try_gterm_to_term(t)?),
+        ProtoAtom::Subterm(s, t) => p::Atom::Subterm(try_gterm_to_term(s)?, try_gterm_to_term(t)?),
+        ProtoAtom::Action(t, f) => p::Atom::Action(try_gfact_to_fact(f)?, try_gterm_to_term(t)?),
+        ProtoAtom::Last(t) => p::Atom::Last(try_gterm_to_term(t)?),
+        ProtoAtom::Syntactic(_) => panic!("try_gatom_to_atom: syntactic sugar in a guarded atom"),
     })
 }
 
@@ -2074,14 +2013,15 @@ fn cac_pair_cow(x: &GTerm, y: &GTerm, cmp: GCmp) -> Option<(GTerm, GTerm)> {
 
 fn cac_rec_atom_cow(a: &GAtom, cmp: GCmp) -> Option<GAtom> {
     match a {
-        GAtom::Action(f, t) => cow_pair(f, cac_rec_fact_cow(f, cmp), t, cac_rec_term_cow(t, cmp))
-            .map(|(f, t)| GAtom::Action(f, t)),
-        GAtom::Eq(x, y) => cac_pair_cow(x, y, cmp).map(|(a, b)| GAtom::Eq(a, b)),
-        GAtom::Less(x, y) => cac_pair_cow(x, y, cmp).map(|(a, b)| GAtom::Less(a, b)),
-        GAtom::LessMset(x, y) => cac_pair_cow(x, y, cmp).map(|(a, b)| GAtom::LessMset(a, b)),
-        GAtom::Subterm(x, y) => cac_pair_cow(x, y, cmp).map(|(a, b)| GAtom::Subterm(a, b)),
-        GAtom::Last(t) => cac_rec_term_cow(t, cmp).map(GAtom::Last),
-        GAtom::Pred(f) => cac_rec_fact_cow(f, cmp).map(GAtom::Pred),
+        ProtoAtom::Action(t, f) => {
+            cow_pair(t, cac_rec_term_cow(t, cmp), f, cac_rec_fact_cow(f, cmp))
+                .map(|(t, f)| ProtoAtom::Action(t, f))
+        }
+        ProtoAtom::EqE(x, y) => cac_pair_cow(x, y, cmp).map(|(a, b)| ProtoAtom::EqE(a, b)),
+        ProtoAtom::Less(x, y) => cac_pair_cow(x, y, cmp).map(|(a, b)| ProtoAtom::Less(a, b)),
+        ProtoAtom::Subterm(x, y) => cac_pair_cow(x, y, cmp).map(|(a, b)| ProtoAtom::Subterm(a, b)),
+        ProtoAtom::Last(t) => cac_rec_term_cow(t, cmp).map(ProtoAtom::Last),
+        ProtoAtom::Syntactic(_) => None,
     }
 }
 
@@ -2274,14 +2214,13 @@ pub fn subst_guarded_cow(g: &Guarded, s: &VarSubst) -> Option<Guarded> {
 /// cannot collide with any binder.
 fn subst_gatom_cow(a: &GAtom, s: &VarSubst) -> Option<GAtom> {
     match a {
-        GAtom::Eq(x, y) => subst_gpair_cow(x, y, s).map(|(a, b)| GAtom::Eq(a, b)),
-        GAtom::Less(x, y) => subst_gpair_cow(x, y, s).map(|(a, b)| GAtom::Less(a, b)),
-        GAtom::LessMset(x, y) => subst_gpair_cow(x, y, s).map(|(a, b)| GAtom::LessMset(a, b)),
-        GAtom::Subterm(x, y) => subst_gpair_cow(x, y, s).map(|(a, b)| GAtom::Subterm(a, b)),
-        GAtom::Action(f, t) => cow_pair(f, subst_gfact_cow(f, s), t, subst_gterm_cow(t, s))
-            .map(|(f, t)| GAtom::Action(f, t)),
-        GAtom::Last(t) => subst_gterm_cow(t, s).map(GAtom::Last),
-        GAtom::Pred(f) => subst_gfact_cow(f, s).map(GAtom::Pred),
+        ProtoAtom::EqE(x, y) => subst_gpair_cow(x, y, s).map(|(a, b)| ProtoAtom::EqE(a, b)),
+        ProtoAtom::Less(x, y) => subst_gpair_cow(x, y, s).map(|(a, b)| ProtoAtom::Less(a, b)),
+        ProtoAtom::Subterm(x, y) => subst_gpair_cow(x, y, s).map(|(a, b)| ProtoAtom::Subterm(a, b)),
+        ProtoAtom::Action(t, f) => cow_pair(t, subst_gterm_cow(t, s), f, subst_gfact_cow(f, s))
+            .map(|(t, f)| ProtoAtom::Action(t, f)),
+        ProtoAtom::Last(t) => subst_gterm_cow(t, s).map(ProtoAtom::Last),
+        ProtoAtom::Syntactic(_) => None,
     }
 }
 
@@ -2419,32 +2358,9 @@ pub fn for_each_free_var_in_guarded<F: FnMut(&p::VarSpec)>(g: &Guarded, f: &mut 
             _ => {}
         }
     }
-    fn rec_atom<F: FnMut(&p::VarSpec)>(a: &GAtom, f: &mut F) {
-        match a {
-            GAtom::Eq(x, y) | GAtom::Less(x, y) | GAtom::LessMset(x, y) | GAtom::Subterm(x, y) => {
-                rec_term(x, f);
-                rec_term(y, f);
-            }
-            // HS `Foldable ProtoAtom` folds the timepoint BEFORE the fact:
-            // `foldMap f (Action i fa) = f i `mappend` foldMap f fa`
-            // (Atom.hs:130-131).
-            GAtom::Action(fa, t) => {
-                rec_term(t, f);
-                for arg in fa.terms.iter() {
-                    rec_term(arg, f);
-                }
-            }
-            GAtom::Last(t) => rec_term(t, f),
-            GAtom::Pred(fa) => {
-                for a in fa.terms.iter() {
-                    rec_term(a, f);
-                }
-            }
-        }
-    }
     fn rec<F: FnMut(&p::VarSpec)>(g: &Guarded, f: &mut F) {
         match g {
-            Guarded::Atom(a) => rec_atom(a, f),
+            Guarded::Atom(a) => fold_atom(a, &mut |t| rec_term(t, f)),
             Guarded::Disj(xs) | Guarded::Conj(xs) => {
                 for x in xs.iter() {
                     rec(x, f);
@@ -2453,7 +2369,7 @@ pub fn for_each_free_var_in_guarded<F: FnMut(&p::VarSpec)>(g: &Guarded, f: &mut 
             Guarded::GGuarded { guards, body, .. } => {
                 // Bindings carry no idx in the DeBruijn representation.
                 for a in guards.iter() {
-                    rec_atom(a, f);
+                    fold_atom(a, &mut |t| rec_term(t, f));
                 }
                 rec(body, f);
             }
@@ -2570,11 +2486,6 @@ fn is_closed(g: &Guarded) -> bool {
     free_vars(g).is_empty()
 }
 
-/// Test whether an atom is a `Last(_)` predicate.
-fn is_last_atom(a: &GAtom) -> bool {
-    matches!(a, GAtom::Last(_))
-}
-
 /// `toInductionHypothesis`: rewrite a doubly guarded formula into its
 /// induction hypothesis form. Errors out on non-last-free formulas.
 pub fn to_induction_hypothesis(g: &Guarded) -> Result<Guarded, String> {
@@ -2585,7 +2496,7 @@ pub fn to_induction_hypothesis(g: &Guarded) -> Result<Guarded, String> {
             guards,
             body,
         } => {
-            if guards.iter().any(is_last_atom) {
+            if guards.iter().any(Atom::is_last) {
                 return Err("formula not last-free".to_string());
             }
             let body2 = to_induction_hypothesis(body)?;
@@ -2608,7 +2519,7 @@ pub fn to_induction_hypothesis(g: &Guarded) -> Result<Guarded, String> {
                 .rev()
                 .enumerate()
                 .filter(|(_, v)| v.1 == LSort::Node)
-                .map(|(j, _)| Guarded::Atom(GAtom::Last(GTerm::Var(BVar::Bound(j as u32)))))
+                .map(|(j, _)| Guarded::Atom(ProtoAtom::Last(GTerm::Var(BVar::Bound(j as u32)))))
                 .collect();
             match qua {
                 Quantifier::All => {
@@ -2625,14 +2536,14 @@ pub fn to_induction_hypothesis(g: &Guarded) -> Result<Guarded, String> {
                 }
             }
         }
-        Guarded::Atom(GAtom::Less(i, j)) => Ok(Guarded::Disj(
+        Guarded::Atom(ProtoAtom::Less(i, j)) => Ok(Guarded::Disj(
             vec![
-                Guarded::Atom(GAtom::Eq(i.clone(), j.clone())),
-                Guarded::Atom(GAtom::Less(j.clone(), i.clone())),
+                Guarded::Atom(ProtoAtom::EqE(i.clone(), j.clone())),
+                Guarded::Atom(ProtoAtom::Less(j.clone(), i.clone())),
             ]
             .into(),
         )),
-        Guarded::Atom(GAtom::Last(_)) => Err("formula not last-free".to_string()),
+        Guarded::Atom(ProtoAtom::Last(_)) => Err("formula not last-free".to_string()),
         Guarded::Atom(a) => Ok(gnot_atom(a)),
         Guarded::Disj(xs) => {
             let xs2 = xs

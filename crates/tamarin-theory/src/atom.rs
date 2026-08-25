@@ -23,12 +23,15 @@ use crate::pretty_hpj::{self as hpj, Doc};
 pub struct Unit2;
 
 /// Syntactic sugar wrapper used during parsing.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum SyntacticSugar<T> {
     Pred(Fact<T>),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// HS `data ProtoAtom s t` (Atom.hs:78-84), whose derived `Ord` ranks the
+/// variants in this declaration order and, within one variant, compares the
+/// fields left to right.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ProtoAtom<S, T> {
     Action(T, Fact<T>),
     EqE(T, T),
@@ -102,10 +105,32 @@ pub fn map_atom<S: MapSugar<T, U>, T, U>(
     }
 }
 
+/// HS `Foldable (ProtoAtom s)` (Atom.hs:129-136) at the `Unit2` sugar, whose
+/// own `Foldable` (Atom.hs:92-94) contributes nothing: `Action` folds the
+/// time point before the fact's terms, and each binary atom folds its left
+/// operand before its right — the order a folding function with a counter
+/// sees.
+pub fn fold_atom<T>(a: &Atom<T>, f: &mut dyn FnMut(&T)) {
+    match a {
+        ProtoAtom::Action(t, fa) => {
+            f(t);
+            for x in fa.terms.iter() {
+                f(x);
+            }
+        }
+        ProtoAtom::EqE(l, r) | ProtoAtom::Subterm(l, r) | ProtoAtom::Less(l, r) => {
+            f(l);
+            f(r);
+        }
+        ProtoAtom::Last(t) => f(t),
+        ProtoAtom::Syntactic(Unit2) => {}
+    }
+}
+
 // -- Predicates ---------------------------------------------------------------
 //
-// Kept for parity with the exported API of Haskell's `Theory.Model.Atom`; no
-// current Rust caller exercises these on an `Atom<T>` value (the live
+// The predicates of Haskell's `Theory.Model.Atom`.  `to_induction_hypothesis`
+// reads `is_last`; the rest complete the family (the live
 // `is_action`/`is_eq`/`is_subterm` elsewhere are on `Goal`/`Process`/`Term`,
 // not `Atom`).
 
@@ -265,6 +290,54 @@ mod tests {
             }),
             want
         );
+    }
+
+    /// `fold_atom` visits the `Action` time point before the fact's terms
+    /// (Atom.hs:129-130) and each binary atom's left operand before its
+    /// right, and the `Unit2` sugar contributes nothing (Atom.hs:92-94).
+    #[test]
+    fn fold_atom_visits_the_terms_in_the_haskell_order() {
+        let seen = |a: &Atom<LNTerm>| {
+            let mut out = Vec::new();
+            fold_atom(a, &mut |t| out.push(show_term(t)));
+            out
+        };
+        let action: Atom<LNTerm> =
+            ProtoAtom::Action(tp("i"), Fact::new(FactTag::Term, vec![y(), x()]));
+        assert_eq!(seen(&action), vec!["#i", "y", "x"]);
+        assert_eq!(seen(&ProtoAtom::EqE(y(), x())), vec!["y", "x"]);
+        assert_eq!(seen(&ProtoAtom::Syntactic(Unit2)), Vec::<String>::new());
+    }
+
+    /// The derived `Ord` ranks the variants in HS's declaration order
+    /// (Atom.hs:78-84): Action, EqE, Subterm, Less, Last, Syntactic.
+    #[test]
+    fn proto_atom_ord_follows_the_haskell_declaration_order() {
+        let ascending: Vec<Atom<LNTerm>> = vec![
+            ProtoAtom::Action(x(), fresh_fact(y())),
+            ProtoAtom::EqE(x(), y()),
+            ProtoAtom::Subterm(x(), y()),
+            ProtoAtom::Less(x(), y()),
+            ProtoAtom::Last(x()),
+            ProtoAtom::Syntactic(Unit2),
+        ];
+        for (i, a) in ascending.iter().enumerate() {
+            for (j, b) in ascending.iter().enumerate() {
+                assert_eq!(a.cmp(b), i.cmp(&j), "{a:?} vs {b:?}");
+            }
+        }
+    }
+
+    /// HS `Action t (Fact t)` (Atom.hs:78) puts the time point first, so the
+    /// derived `Ord` decides on it before it reaches the fact.  Here the two
+    /// halves disagree: the smaller time point carries the larger fact.
+    #[test]
+    fn proto_atom_action_orders_the_timepoint_before_the_fact() {
+        let early: Atom<LNTerm> = ProtoAtom::Action(tp("i"), fresh_fact(y()));
+        let late: Atom<LNTerm> = ProtoAtom::Action(tp("j"), fresh_fact(x()));
+        assert!(tp("i") < tp("j"));
+        assert!(fresh_fact(y()) > fresh_fact(x()));
+        assert!(early < late);
     }
 
     /// `to_atom` replaces the sugar payload with the field-less `Unit2`.  It

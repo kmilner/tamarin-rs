@@ -406,7 +406,7 @@ fn algapp_renders_function_form_flat_gterm() {
     );
     // The guarded printer reaches a term through its atom, so read the
     // `AlgApp` off the left side of an equality.
-    let a = Guarded::Atom(crate::guarded::GAtom::Eq(
+    let a = Guarded::Atom(crate::atom::ProtoAtom::EqE(
         g,
         crate::guarded::GTerm::PubLit("z".into()),
     ));
@@ -430,7 +430,7 @@ fn algapp_pair_arg_renders_function_form_doc_gterm() {
             LSort::Msg,
         )))),
     );
-    let a = Guarded::Atom(crate::guarded::GAtom::Eq(
+    let a = Guarded::Atom(crate::atom::ProtoAtom::EqE(
         g,
         crate::guarded::GTerm::PubLit("z".into()),
     ));
