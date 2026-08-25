@@ -3212,6 +3212,18 @@ pub fn lnterm_to_parser(t: &tamarin_term::lterm::LNTerm) -> p::Term {
         }
         Term::App(FunSym::NoEq(sym), args) => {
             let name = String::from_utf8_lossy(sym.name).to_string();
+            // HS `prettyTerm`'s `diff` arm (Term/Term.hs:311) is a chain of
+            // `<>`, so the application never breaks at its comma — a wide
+            // `diff` wraps inside its second operand instead.
+            // `p::Term::Diff` is the parser-AST shape `term_to_doc` renders
+            // that way; a `NoEq` application of the same NAME is a different
+            // symbol and renders through `ppFun`, whose `fsep` does break.
+            if *sym == tamarin_term::function_symbols::diff_sym() && args.len() == 2 {
+                return p::Term::Diff(
+                    Box::new(lnterm_to_parser(&args[0])),
+                    Box::new(lnterm_to_parser(&args[1])),
+                );
+            }
             // `exp` is the DH exponentiation infix operator — HS
             // `prettyTerm` (Term/Term.hs:310) renders `exp(a, b)` as `a^b`.
             // Surface as `p::Term::BinOp(Exp, ..)` so `pp_term`'s special
@@ -4509,6 +4521,28 @@ mod lnatom_to_parser_tests {
         assert_eq!(
             lnatom_to_parser(&a),
             p::Atom::Less(pvar("i", LSort::Node), pvar("j", LSort::Node))
+        );
+    }
+
+    /// A `diffSym` application projects to `p::Term::Diff`, the shape whose
+    /// renderer is the chain of `<>` HS `prettyTerm` uses (Term/Term.hs:311).
+    /// A wide one therefore wraps inside its second operand and never at the
+    /// comma, which is what the oracle prints for the rules of
+    /// `examples/csf18-alethea/alethea_selectionphase_anonymity.spthy`.
+    #[test]
+    fn lnterm_to_parser_keeps_the_unbreakable_diff_shape() {
+        let wide = |c: char| -> LNTerm { tamarin_term::lterm::pub_term(c.to_string().repeat(60)) };
+        let d: LNTerm = tamarin_term::term::f_app_no_eq(
+            tamarin_term::function_symbols::diff_sym(),
+            vec![wide('a'), wide('b')],
+        );
+        let projected = lnterm_to_parser(&d);
+        assert!(matches!(projected, p::Term::Diff(..)));
+        let rendered = pf::term_doc(&projected).render_with(110, 73);
+        assert!(!rendered.contains('\n'), "{rendered}");
+        assert_eq!(
+            rendered,
+            tamarin_term::pretty::pretty_nterm(&d).render_with(110, 73)
         );
     }
 }

@@ -7,6 +7,8 @@
 //! `VTerm<C, V>` is a term whose literals are either *constants* (of type
 //! `C`) or *variables* (of type `V`).
 
+use std::fmt;
+
 use crate::term::{lit, Term, TermView};
 
 /// Literal: either a constant `Con(c)` or a variable `Var(v)`.
@@ -14,6 +16,17 @@ use crate::term::{lit, Term, TermView};
 pub enum Lit<C, V> {
     Con(C),
     Var(V),
+}
+
+/// HS `instance (Show v, Show c) => Show (Lit c v)` (VTerm.hs:98-100): a
+/// literal writes its payload, with no constructor name around it.
+impl<C: fmt::Display, V: fmt::Display> fmt::Display for Lit<C, V> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Lit::Con(c) => write!(f, "{c}"),
+            Lit::Var(v) => write!(f, "{v}"),
+        }
+    }
 }
 
 /// `VTerm<C, V>` = `Term<Lit<C, V>>`. Type alias only — all term operations

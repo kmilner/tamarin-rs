@@ -14,15 +14,13 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use tamarin_term::function_symbols::{
-    diff_sym, exp_sym, nat_one_sym, pair_sym, AcSym, CSym, FunSym, EMAP_SYM_STRING,
-};
+use tamarin_term::function_symbols::{CSym, FunSym};
 use tamarin_term::lterm::{LNTerm, LSort, LVar};
-use tamarin_term::pretty::{ac_op_symbol, pretty_lnterm};
+use tamarin_term::pretty::{pretty_lnterm, pretty_nterm};
 use tamarin_term::term::{is_pair, Term};
 use tamarin_term::vterm::Lit;
 
-use crate::pretty_hpj::{fcat, fsep, punctuate, Doc, DEFAULT_LINE_LENGTH, DEFAULT_RIBBON};
+use crate::pretty_hpj::{DEFAULT_LINE_LENGTH, DEFAULT_RIBBON};
 
 use crate::fact::LNFact;
 use crate::rule::{IntrRuleACInfo, ProtoRuleACInstInfo, ProtoRuleName, RuleACInst, RuleInfo};
@@ -374,105 +372,10 @@ fn sub_terms_no_pair(t: &LNTerm, out: &mut Vec<LNTerm>) {
 /// verified `pretty_hpj` port) at HS `render`'s default widths
 /// (`DEFAULT_LINE_LENGTH`/`DEFAULT_RIBBON` = 100/67).
 fn rendered_term_len(t: &LNTerm) -> usize {
-    lnterm_doc(t)
+    pretty_nterm(t)
         .render_with(DEFAULT_LINE_LENGTH, DEFAULT_RIBBON)
         .chars()
         .count()
-}
-
-/// HS `prettyLNTerm` = `prettyTerm (text . show)` as a HughesPJ `Doc`
-/// (Term/Term.hs:298-327), built directly on `LNTerm`.
-///
-/// tamarin-theory has the same Doc under `pretty_formula::term_doc`, reached
-/// through the parser-AST projection `pretty_theory::lnterm_to_parser`; going
-/// that way from here would convert every rendered term through the parser
-/// AST — so the (small, closed) `ppTerm` case split is mirrored here instead,
-/// using `pretty_hpj`'s public combinators.  Case order and Doc shape follow
-/// Term.hs exactly:
-///   - literals: `text (show l)` — one unbreakable token (the single-line
-///     `pretty_lnterm` of a literal IS `show l`);
-///   - AC:   `ppTerms (ppACOp o) 1 "(" ")" ts`;
-///   - exp:  `t1 <> "^" <> t2`; diff: `"diff" <> "(" <> t1 <> ", " <> t2 <> ")"`;
-///   - %1:   `text "%1"`; pairs: `ppTerms ", " 1 "<" ">" (split t)`;
-///   - nullary NoEq: `text f`; other NoEq / EMap / LIST: `ppFun`.
-fn lnterm_doc(t: &LNTerm) -> Doc {
-    match t {
-        Term::Lit(_) => Doc::text(pretty_lnterm(t)),
-        // #883 prettyTerm: a nullary user-AC application prints as the bare
-        // symbol name (n-ary ones go through the generic AC arm below).
-        Term::App(FunSym::Ac(AcSym::AcFct(s)), ts) if ts.is_empty() => {
-            Doc::text(String::from_utf8_lossy(s.name))
-        }
-        Term::App(FunSym::Ac(o), ts) => {
-            pp_terms(ac_op_symbol(*o), 1, "(", ")", ts.iter().collect())
-        }
-        Term::App(FunSym::NoEq(sym), ts) if ts.len() == 2 && *sym == exp_sym() => {
-            lnterm_doc(&ts[0])
-                .beside(Doc::text("^"))
-                .beside(lnterm_doc(&ts[1]))
-        }
-        Term::App(FunSym::NoEq(sym), ts) if ts.len() == 2 && *sym == diff_sym() => {
-            Doc::text("diff")
-                .beside(Doc::text("("))
-                .beside(lnterm_doc(&ts[0]))
-                .beside(Doc::text(", "))
-                .beside(lnterm_doc(&ts[1]))
-                .beside(Doc::text(")"))
-        }
-        Term::App(FunSym::NoEq(sym), ts) if ts.is_empty() && *sym == nat_one_sym() => {
-            Doc::text("%1")
-        }
-        Term::App(FunSym::NoEq(sym), _) if *sym == pair_sym() => {
-            let mut flat: Vec<&LNTerm> = Vec::new();
-            split_pair(t, &mut flat);
-            pp_terms(", ", 1, "<", ">", flat)
-        }
-        Term::App(FunSym::NoEq(sym), ts) if ts.is_empty() => {
-            Doc::text(String::from_utf8_lossy(sym.name))
-        }
-        Term::App(FunSym::NoEq(sym), ts) => pp_fun(&String::from_utf8_lossy(sym.name), ts),
-        Term::App(FunSym::C(CSym::EMap), ts) => {
-            pp_fun(&String::from_utf8_lossy(EMAP_SYM_STRING), ts)
-        }
-        Term::App(FunSym::List, ts) => pp_fun("LIST", ts),
-    }
-}
-
-/// HS `ppTerms sepa n lead finish ts` (Term/Term.hs:319-321):
-/// `fcat . (text lead :) . (++[text finish]) . map (nest n)
-///       . punctuate (text sepa) . map ppTerm`.
-fn pp_terms(sepa: &str, n: isize, lead: &str, finish: &str, ts: Vec<&LNTerm>) -> Doc {
-    let docs: Vec<Doc> = ts.into_iter().map(lnterm_doc).collect();
-    let items = punctuate(Doc::text(sepa), docs);
-    let mut all: Vec<Doc> = Vec::with_capacity(items.len() + 2);
-    all.push(Doc::text(lead));
-    for d in items {
-        all.push(d.nest(n));
-    }
-    all.push(Doc::text(finish));
-    fcat(all)
-}
-
-/// HS `ppFun f ts` (Term/Term.hs:326-327):
-/// `text (f++"(") <> fsep (punctuate comma (map ppTerm ts)) <> text ")"`.
-fn pp_fun(f: &str, ts: &[LNTerm]) -> Doc {
-    let docs: Vec<Doc> = ts.iter().map(lnterm_doc).collect();
-    Doc::text(format!("{}(", f))
-        .beside(fsep(punctuate(Doc::text(","), docs)))
-        .beside(Doc::text(")"))
-}
-
-/// HS `split` (Term/Term.hs:323-324): flatten a right-nested pair spine.
-/// `viewTerm2 -> FPair` requires exactly two arguments AND full `NoEqSym`
-/// equality with `pairSym`.
-fn split_pair<'a>(t: &'a LNTerm, out: &mut Vec<&'a LNTerm>) {
-    match t {
-        Term::App(FunSym::NoEq(sym), ts) if ts.len() == 2 && *sym == pair_sym() => {
-            out.push(&ts[0]);
-            split_pair(&ts[1], out);
-        }
-        _ => out.push(t),
-    }
 }
 
 /// Mirror of `judgeTerm` (Abbreviation.hs:79-101).
