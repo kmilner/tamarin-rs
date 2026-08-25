@@ -364,6 +364,21 @@ pub fn flattened_ac_terms<A>(sym: AcSym, t: &Term<A>) -> Vec<&Term<A>> {
     out
 }
 
+/// HS `ltermNodeId` (LTerm.hs:464-465): the node-id variable of a term that is
+/// one — a variable leaf of sort `LSortNode` — and `None` otherwise.
+///
+/// The sort guard is load-bearing for the solver: answering `Some` for another
+/// sort fires `insertFormula`'s `Eq`/`Less` → disjunction CR-rules on a
+/// `¬(a = b)` formula over message variables, which HS instead keeps in
+/// `sFormulas` (the `WrongEquality` lemma of
+/// examples/regression/trace/MinValueEq.spthy).
+pub fn lterm_node_id<C>(t: &crate::term::Term<crate::vterm::Lit<C, LVar>>) -> Option<LVar> {
+    match t {
+        crate::term::Term::Lit(crate::vterm::Lit::Var(v)) if v.sort == LSort::Node => Some(*v),
+        _ => None,
+    }
+}
+
 // =============================================================================
 // BVar — bound or free variable (for binders / formulas)
 // =============================================================================
@@ -778,6 +793,26 @@ mod tests {
         assert!(is_msg_var(&t));
         assert!(!is_pub_var(&t));
         assert_eq!(get_var(&t), Some(&v));
+    }
+
+    /// The `LSortNode` guard is the MinValueEq `WrongEquality` invariant: a
+    /// message variable is not a node id, so a negated equality over two of
+    /// them stays a formula instead of splitting into an ordering
+    /// disjunction.
+    #[test]
+    fn lterm_node_id_rejects_a_message_sorted_variable() {
+        let i = LVar::new("i", LSort::Node, 0);
+        let n: LNTerm = var_term(i);
+        assert_eq!(lterm_node_id(&n), Some(i));
+        let m: LNTerm = var_term(LVar::new("a", LSort::Msg, 0));
+        assert_eq!(lterm_node_id(&m), None);
+    }
+
+    #[test]
+    fn lterm_node_id_rejects_an_application() {
+        let n: LNTerm = var_term(LVar::new("i", LSort::Node, 0));
+        let t: LNTerm = f_app_no_eq(pair_sym(), vec![n.clone(), n]);
+        assert_eq!(lterm_node_id(&t), None);
     }
 
     #[test]

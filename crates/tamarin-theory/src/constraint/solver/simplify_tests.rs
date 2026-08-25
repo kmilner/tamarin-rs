@@ -271,16 +271,7 @@ fn partial_atom_valuation_last_returns_none_when_successor_not_in_trace() {
         Some(h) => h,
         None => return,
     };
-    use tamarin_parser::ast::{Atom, Term, VarSpec};
-    use tamarin_term::lterm::LSort;
-    let mkvar = |n: &str, idx: u64| {
-        Term::Var(VarSpec {
-            name: n.to_string(),
-            idx,
-            sort: LSort::Node,
-            typ: None,
-        })
-    };
+    use crate::atom::ProtoAtom;
     let mkvar_l = |n: &str, idx: u64| {
         tamarin_term::lterm::LVar::new(n, tamarin_term::lterm::LSort::Node, idx)
     };
@@ -309,7 +300,13 @@ fn partial_atom_valuation_last_returns_none_when_successor_not_in_trace() {
     let last_n = |sys: &crate::constraint::system::System| {
         let ab_adj = sys.build_always_before_adj();
         let node_rule_map = sys.node_rule_map();
-        partial_atom_valuation_with(sys, &h, &ab_adj, &node_rule_map, &Atom::Last(mkvar("n", 0)))
+        partial_atom_valuation_with(
+            sys,
+            &h,
+            &ab_adj,
+            &node_rule_map,
+            &ProtoAtom::Last(tamarin_term::vterm::var_term(mkvar_l("n", 0))),
+        )
     };
     assert_eq!(
         last_n(&sys),

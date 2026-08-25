@@ -311,15 +311,12 @@ pub fn gall(vars: Vec<(String, LSort)>, guards: Vec<Atom<BLNTerm>>, body: Guarde
 ///   gets simplified once the quantifier is gone (matches Haskell).
 pub fn simplify_guarded_with(
     fm: &Guarded,
-    valuation: &dyn Fn(&p::Atom) -> Option<bool>,
+    valuation: &dyn Fn(&Atom<LNTerm>) -> Option<bool>,
 ) -> Guarded {
     // HS `simplifyGuardedOrReturn` calls `valuation =<< unbindAtom ato`
     // (Guarded.hs:679), which is `Nothing` whenever any `Bound` leaf is
-    // present.  The valuation reads the parser AST, which the guarded store's
-    // own spelling ([`blnatom_to_parser`]) projects onto.
-    let eval = |a: &Atom<BLNTerm>| -> Option<bool> {
-        unbind_atom(a).and_then(|la| valuation(&lnatom_to_stored_parser(&la)))
-    };
+    // present.
+    let eval = |a: &Atom<BLNTerm>| -> Option<bool> { unbind_atom(a).and_then(|la| valuation(&la)) };
     match fm {
         Guarded::Atom(a) => match eval(a) {
             Some(true) => gtrue(),
@@ -1673,82 +1670,6 @@ pub fn ginduct(g: &Guarded) -> Result<(Guarded, Guarded), String> {
     let base_case = gtf(base);
     let step_case = gconj(vec![g.clone(), gf_ih]);
     Ok((base_case, step_case))
-}
-
-// =============================================================================
-// The parser-AST spelling the solver's remaining readers take
-// =============================================================================
-
-/// The parser-AST spelling of an atom of a locally-nameless formula whose
-/// binders are all opened: read it over plain `LVar`s ([`bvar_to_lvar`]) and
-/// project it with [`lnatom_to_stored_parser`].
-pub fn blnatom_to_parser(a: &Atom<BLNTerm>) -> p::Atom {
-    lnatom_to_stored_parser(&bvar_to_lvar(a))
-}
-
-/// An atom over plain `LVar`s in the parser AST's own spelling:
-/// `crate::elaborate::lnatom_to_parser`, then the three nullary constants in
-/// their parser-AST constructors ([`restore_nullary_constants`]), then the AC
-/// argument lists back in canonical order
-/// (`crate::elaborate::canonicalize_ac_in_atom`).
-///
-/// The canonicalisation is what makes the two spellings meet.  An internal
-/// `FApp (AC f)` holds a flat, sorted argument list (Term/Term/Raw.hs:118-129),
-/// which `lnterm_to_parser` writes as a LEFT-folded `BinOp` chain, while the
-/// parser AST the solver's readers compare against carries the sorted RIGHT
-/// fold `canonicalize_ac_in_pterm` produces.
-pub fn lnatom_to_stored_parser(a: &Atom<LNTerm>) -> p::Atom {
-    let projected = crate::elaborate::lnatom_to_parser(a);
-    crate::elaborate::canonicalize_ac_in_atom(&crate::macro_expand::map_atom_terms(
-        &projected,
-        &restore_nullary_constants,
-    ))
-}
-
-/// `one`, `tone` and `DH_neutral` back in the parser AST's own constructors.
-///
-/// The three are nullary `NoEq` symbols in a term
-/// (Term/Term.hs:147-148,150-151,156-158), which is all `lnterm_to_parser`
-/// can see, and the parser AST spells each of them as its own variant.
-fn restore_nullary_constants(t: &p::Term) -> p::Term {
-    match t {
-        p::Term::App(n, args) if args.is_empty() => match n.as_str() {
-            "one" => p::Term::NumberOne,
-            "tone" => p::Term::NatOne,
-            "DH_neutral" => p::Term::DhNeutral,
-            _ => t.clone(),
-        },
-        p::Term::App(n, args) => p::Term::App(
-            n.clone(),
-            args.iter().map(restore_nullary_constants).collect(),
-        ),
-        p::Term::AlgApp(n, a, b) => p::Term::AlgApp(
-            n.clone(),
-            Box::new(restore_nullary_constants(a)),
-            Box::new(restore_nullary_constants(b)),
-        ),
-        p::Term::Pair(items) => {
-            p::Term::Pair(items.iter().map(restore_nullary_constants).collect())
-        }
-        p::Term::Diff(a, b) => p::Term::Diff(
-            Box::new(restore_nullary_constants(a)),
-            Box::new(restore_nullary_constants(b)),
-        ),
-        p::Term::BinOp(op, a, b) => p::Term::BinOp(
-            *op,
-            Box::new(restore_nullary_constants(a)),
-            Box::new(restore_nullary_constants(b)),
-        ),
-        p::Term::PatMatch(inner) => p::Term::PatMatch(Box::new(restore_nullary_constants(inner))),
-        p::Term::Var(_)
-        | p::Term::PubLit(_)
-        | p::Term::FreshLit(_)
-        | p::Term::NatLit(_)
-        | p::Term::Number(_)
-        | p::Term::NumberOne
-        | p::Term::NatOne
-        | p::Term::DhNeutral => t.clone(),
-    }
 }
 
 // =============================================================================

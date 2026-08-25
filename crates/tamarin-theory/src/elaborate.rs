@@ -22,8 +22,8 @@
 //!   `_lOriginalFormula` / `_rstrOriginalFormula`
 //!
 //! It also provides the parser↔typed conversion helpers used above:
-//! `term_to_lnterm`/`lnterm_to_term` (LNTerm round-tripping) and the
-//! SAPIC term/fact converters (`term_to_sapic_term`/`fact_to_sapic_fact`).
+//! `term_to_lnterm`, the `lnterm_to_parser` projection the printers read, and
+//! the SAPIC term/fact converters (`term_to_sapic_term`/`fact_to_sapic_fact`).
 //!
 //! Returned errors describe the surface offence (e.g. "duplicate rule
 //! `R`"), with no internal panics.
@@ -1152,178 +1152,6 @@ pub(crate) fn varspec_to_lvar(v: &p::VarSpec) -> LVar {
     LVar::new(&v.name, v.sort, v.idx)
 }
 
-/// Convert an `LNTerm` back to a parser-AST term. Used when we
-/// need to translate Maude-produced substitutions back into the
-/// parser-AST world (e.g. for `insert_implied_formulas`).
-pub fn lnterm_to_term(t: &tamarin_term::lterm::LNTerm) -> p::Term {
-    use tamarin_term::function_symbols::FunSym;
-    use tamarin_term::vterm::Lit;
-    match t {
-        tamarin_term::term::Term::Lit(Lit::Var(v)) => p::Term::Var(p::VarSpec {
-            name: v.name.to_string(),
-            idx: v.idx,
-            sort: v.sort,
-            typ: None,
-        }),
-        tamarin_term::term::Term::Lit(Lit::Con(name)) => {
-            // Encode as the right literal kind based on the sort hint
-            // attached to the name's tag.
-            match name.tag {
-                tamarin_term::lterm::NameTag::Pub => p::Term::PubLit(name.id.0.to_string()),
-                tamarin_term::lterm::NameTag::Fresh => p::Term::FreshLit(name.id.0.to_string()),
-                tamarin_term::lterm::NameTag::Nat => p::Term::NatLit(name.id.0.to_string()),
-                tamarin_term::lterm::NameTag::Node => p::Term::PubLit(name.id.0.to_string()),
-                // `show (Name AbbrevName n) = show n` (LTerm.hs:240) is the
-                // bare id, and a nullary `App` is the parser-AST term that
-                // renders that way.
-                tamarin_term::lterm::NameTag::Abbrev => {
-                    p::Term::App(name.id.0.to_string(), Vec::new())
-                }
-            }
-        }
-        tamarin_term::term::Term::App(funsym, args) => {
-            let parser_args: Vec<p::Term> = args.iter().map(lnterm_to_term).collect();
-            match funsym {
-                FunSym::NoEq(s) => {
-                    let name = String::from_utf8(s.name.to_vec()).unwrap_or_default();
-                    if name == "pair" && parser_args.len() == 2 {
-                        // Re-pair into a flat Pair term where possible.
-                        // Right-assoc: pair(a, pair(b, c)) → Pair([a, b, c]).
-                        let mut flat = vec![parser_args[0].clone()];
-                        match &parser_args[1] {
-                            p::Term::Pair(rest) => flat.extend(rest.clone()),
-                            other => flat.push(other.clone()),
-                        }
-                        p::Term::Pair(flat)
-                    } else if name == "exp" && parser_args.len() == 2 {
-                        // Round-trip the `exp` NoEq head back to parser
-                        // `BinOp(Exp, ..)` (the inverse of the
-                        // `p::BinOp::Exp` arm in `term_to_vterm` below).
-                        // HS `viewTerm` exposes `exp(b,e)` as
-                        // `FApp (NoEq s) [t1,t2] | s == expSym`, and
-                        // `prettyTerm` (Term/Term.hs:298-317, see line 310) renders that arm as
-                        // `ppTerm t1 <> text "^" <> ppTerm t2` — infix `b^e`,
-                        // uniformly at every nesting depth (the printer is
-                        // recursive).  Without this round-trip the runtime
-                        // exp term reaches the formula/guard term path as a
-                        // generic `App("exp", [..])`, which `term_to_doc`
-                        // renders PREFIX `exp(b, e)` — diverging from
-                        // HS for every exp nested inside a multiset/pair/
-                        // equation in a guard or contradiction (e.g.
-                        // DHKEA_NAXOS `eCK_key_secrecy`).  Same NoEq
-                        // round-trip rationale as the AC/`em` arms above.
-                        let mut iter = parser_args.into_iter();
-                        let base = iter.next().unwrap();
-                        let exponent = iter.next().unwrap();
-                        p::Term::BinOp(p::BinOp::Exp, Box::new(base), Box::new(exponent))
-                    } else {
-                        p::Term::App(name, parser_args)
-                    }
-                }
-                FunSym::Ac(ac) => {
-                    // Round-trip AC heads back to parser BinOp so that a
-                    // later `term_to_lnterm` call rebuilds them as the
-                    // proper `FunSym::Ac` head (not as `NoEqSym("?")`).
-                    // Without this, `insert_implied_formulas_pass`'s
-                    // Maude-backed matcher (`match_atom_via_maude`) sees
-                    // a NoEq-headed pattern against an Ac-headed
-                    // subject, and AC matching fails — observed on
-                    // MTI_C0::Secrecy_..._Initiator where the lemma's
-                    // `AcceptedR(... exp(g, ~tid*~x.5) ...)` universal
-                    // pattern arrives at the matcher as
-                    // `exp(g, NoEq("?", 2, ekI, x))` and never matches
-                    // the system's `exp(g, Mult(x, ekI))`.
-                    // Mirrors HS's `viewTerm` round-trip via `FApp (AC m)`
-                    // (Term/Term.hs: viewTerm).
-                    use tamarin_term::function_symbols::AcSym;
-                    // AC terms are flattened by `f_app_ac` to 2+ args.
-                    // Round-trip via parser BinOp (left-fold), which
-                    // term_to_lnterm later rebuilds as a flat AC App.
-                    // Must fire on ALL arity>=2 AC terms: a flat 3+-arg AC
-                    // term (common with multiset: `a + b + c`) must NOT fall
-                    // through to the `?Union` placeholder branch, or a
-                    // downstream `term_to_lnterm` re-parse rebuilds it as an
-                    // opaque non-AC functor `App(NoEq("?Union"), [a,b,c])`,
-                    // breaking Maude unification on multiset equations (e.g.
-                    // the `1+x+z` → false simplification chain for
-                    // `counters_linear_order`).
-                    if parser_args.len() >= 2 {
-                        let op = match ac {
-                            AcSym::Mult => p::BinOp::Mult,
-                            AcSym::Union => p::BinOp::Union,
-                            AcSym::Xor => p::BinOp::Xor,
-                            AcSym::NatPlus => p::BinOp::NatPlus,
-                            // A user-declared `[AC]` symbol is infix in HS's
-                            // `prettyTerm` as well (Term/Term.hs:305:
-                            // `ppTerms (" " ++ BC.unpack f ++ " ") 1 "(" ")"
-                            // ts`), so it round-trips through the same parser
-                            // `BinOp` node as the builtin AC operators.
-                            AcSym::AcFct(s) => p::BinOp::AcFct(tamarin_term::intern::intern_str(
-                                &String::from_utf8_lossy(s.name),
-                            )),
-                        };
-                        // Left-fold: a parser BinOp is strictly arity-2,
-                        // so fold left-to-right when more than 2 args.
-                        let mut iter = parser_args.into_iter();
-                        let first = iter.next().unwrap();
-                        let second = iter.next().unwrap();
-                        let mut acc = p::Term::BinOp(op, Box::new(first), Box::new(second));
-                        for next in iter {
-                            acc = p::Term::BinOp(op, Box::new(acc), Box::new(next));
-                        }
-                        acc
-                    } else if let AcSym::AcFct(s) = ac {
-                        // HS `prettyTerm` renders a NULLARY user-AC symbol as
-                        // its bare name (Term/Term.hs:304), and `fAppAC`
-                        // collapses a one-element operand list to that operand
-                        // (Term/Term/Raw.hs:118-122) — neither shape carries an
-                        // infix operator, so both stay a named application.
-                        p::Term::App(String::from_utf8_lossy(s.name).into_owned(), parser_args)
-                    } else {
-                        // Defensive: 0- or 1-arg AC term shouldn't occur
-                        // (AC operators are arity-2), but emit a
-                        // recognisable placeholder if it does.
-                        let name = match ac {
-                            AcSym::Mult => "?Mult",
-                            AcSym::Union => "?Union",
-                            AcSym::Xor => "?Xor",
-                            AcSym::NatPlus => "?NatPlus",
-                            AcSym::AcFct(_) => unreachable!("handled above"),
-                        };
-                        p::Term::App(name.to_string(), parser_args)
-                    }
-                }
-                FunSym::C(c) => {
-                    // HS-faithful: round-trip a C-symbol (bilinear-pairing
-                    // `em`) back through the parser AST under its proper
-                    // builtin name so a later `term_to_lnterm` rebuilds it
-                    // as `FunSym::C(EMap)` (via the `em` arm of
-                    // `term_to_vterm`).  Without this, `lnterm_to_term`
-                    // emits `App("?", [a,b])` which `term_to_lnterm` rebuilds
-                    // as `NoEqSym(name="?", arity=2, Public, Constructor)` —
-                    // Maude rejects `tamXC?` as a bad token, returns empty
-                    // for every `match in MSG` over a guard that mentions
-                    // `em`, and `insert_implied_formulas_pass` silently
-                    // fails to instantiate the implications.  Symptom on
-                    // Scott::key_secrecy: lemma verifies in HS but RS
-                    // terminates `SOLVED // trace found` (wrong verdict).
-                    // Mirrors HS's `viewTerm` round-trip via `FApp (C EMap)`
-                    // followed by `naryOpApp` at Theory/Text/Parser/Term.hs:87-106, see line 103.
-                    use tamarin_term::function_symbols::CSym;
-                    let name = match c {
-                        CSym::EMap => String::from_utf8(
-                            tamarin_term::function_symbols::EMAP_SYM_STRING.to_vec(),
-                        )
-                        .unwrap(),
-                    };
-                    p::Term::App(name, parser_args)
-                }
-                FunSym::List => p::Term::App("?".to_string(), parser_args),
-            }
-        }
-    }
-}
-
 // =============================================================================
 // Projection: internal values → parser AST
 // =============================================================================
@@ -1403,50 +1231,24 @@ pub(crate) fn fact_annotations_to_parser(
         .collect()
 }
 
-/// `Atom<LNTerm>` → parser-AST `Atom`: [`lnterm_to_parser`] and
-/// [`lnfact_to_parser`] over the arms of HS `Atom` (Atom.hs:78-84,100).
+/// `SyntacticAtom<LNTerm>` → parser-AST `Atom`: [`lnterm_to_parser`] and
+/// [`lnfact_to_parser`] over the arms of HS `ProtoAtom` (Atom.hs:78-84,100).
 ///
-/// A `Syntactic` atom has no parser-AST form here: HS's `Unit2` sugar carries
-/// no fact (Atom.hs:92-94), and [`crate::formula::to_lnformula`] refuses an
-/// atom that still holds sugar, so an `LNFormula` holds none.
-pub(crate) fn lnatom_to_parser(a: &crate::atom::Atom<tamarin_term::lterm::LNTerm>) -> p::Atom {
-    proto_atom_to_parser(
-        &|_: &crate::atom::Unit2| panic!("lnatom_to_parser: syntactic sugar in a plain atom"),
-        a,
-    )
-}
-
-/// [`lnatom_to_parser`] over an atom that still carries the parser's `Pred`
-/// sugar (Atom.hs:86-87), which closes back into `blatom`'s predicate
+/// The `Pred` sugar (Atom.hs:86-87) closes back into `blatom`'s predicate
 /// alternative (Theory/Text/Parser/Formula.hs:52).  The multiset `(<)` is
 /// parsed into the `Smaller` predicate (`smallerp`,
 /// Theory/Text/Parser/Formula.hs:30-38) and has no closed form of its own.
 pub(crate) fn syntactic_lnatom_to_parser(
     a: &crate::atom::SyntacticAtom<tamarin_term::lterm::LNTerm>,
 ) -> p::Atom {
-    use crate::atom::SyntacticSugar;
-    proto_atom_to_parser(
-        &|SyntacticSugar::Pred(fa)| p::Atom::Pred(lnfact_to_parser(fa)),
-        a,
-    )
-}
-
-/// The five sugar-free arms shared by [`lnatom_to_parser`] and
-/// [`syntactic_lnatom_to_parser`]; `pp_sugar` closes the sugar the way that
-/// atom type carries it, as HS's `prettyProtoAtom` takes its own sugar
-/// printer (Atom.hs:212-215).
-fn proto_atom_to_parser<S>(
-    pp_sugar: &dyn Fn(&S) -> p::Atom,
-    a: &crate::atom::ProtoAtom<S, tamarin_term::lterm::LNTerm>,
-) -> p::Atom {
-    use crate::atom::ProtoAtom;
+    use crate::atom::{ProtoAtom, SyntacticSugar};
     match a {
         ProtoAtom::Action(t, fa) => p::Atom::Action(lnfact_to_parser(fa), lnterm_to_parser(t)),
         ProtoAtom::EqE(l, r) => p::Atom::Eq(lnterm_to_parser(l), lnterm_to_parser(r)),
         ProtoAtom::Subterm(l, r) => p::Atom::Subterm(lnterm_to_parser(l), lnterm_to_parser(r)),
         ProtoAtom::Less(l, r) => p::Atom::Less(lnterm_to_parser(l), lnterm_to_parser(r)),
         ProtoAtom::Last(t) => p::Atom::Last(lnterm_to_parser(t)),
-        ProtoAtom::Syntactic(s) => pp_sugar(s),
+        ProtoAtom::Syntactic(SyntacticSugar::Pred(fa)) => p::Atom::Pred(lnfact_to_parser(fa)),
     }
 }
 
@@ -2012,11 +1814,6 @@ pub fn canonicalize_ac_in_pterm(t: &p::Term) -> p::Term {
 /// Apply `canonicalize_ac_in_pterm` to every term in a fact.
 pub fn canonicalize_ac_in_pfact(f: &p::Fact) -> p::Fact {
     crate::macro_expand::map_fact_terms(f, &canonicalize_ac_in_pterm)
-}
-
-/// Apply `canonicalize_ac_in_pterm` to every term in a parser-AST atom.
-pub fn canonicalize_ac_in_atom(a: &p::Atom) -> p::Atom {
-    crate::macro_expand::map_atom_terms(a, &canonicalize_ac_in_pterm)
 }
 
 /// Apply `canonicalize_ac_in_pterm` to every term in a parser-AST formula.

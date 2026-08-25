@@ -706,7 +706,7 @@ fn eval_formula_atoms_pass(red: &mut Reduction) -> ChangeIndicator {
         // lookup.  `sys.nodes` is unique-keyed, so a lookup returns the same
         // rule a linear scan would find.
         let node_rule_map = red.sys.node_rule_map();
-        let val = |a: &tamarin_parser::ast::Atom| {
+        let val = |a: &crate::atom::Atom<tamarin_term::lterm::LNTerm>| {
             partial_atom_valuation_with(&red.sys, &maude, &ab_adj, &node_rule_map, a)
         };
         for fm in formulas.into_iter() {
@@ -803,7 +803,7 @@ fn eval_formula_atoms_pass(red: &mut Reduction) -> ChangeIndicator {
 ///     `j alwaysBefore i`.
 ///   - `Eq x y`: True if syntactically equal; False if both sides are
 ///     node ids with one before the other.
-///   - `Action(fa, t)`: True if there's an unsolved Goal::Action(t, fa)
+///   - `Action(t, fa)`: True if there's an unsolved Goal::Action(t, fa)
 ///     OR if the node `t` has `fa` among its actions.
 ///   - `Last t`: True if `t == sys.last_atom`; False if any node is
 ///     after `t` per the less relation.
@@ -820,10 +820,9 @@ fn partial_atom_valuation_with(
         &crate::constraint::constraints::NodeId,
         &crate::rule::RuleACInst,
     >,
-    atom: &tamarin_parser::ast::Atom,
+    atom: &crate::atom::Atom<tamarin_term::lterm::LNTerm>,
 ) -> Option<bool> {
-    use tamarin_parser::ast::Atom;
-    let msig = maude.maude_sig();
+    use crate::atom::ProtoAtom;
     // `nonUnifiableNodes i j`: i and j must be distinct in every model.
     // Returns true iff both nodes are in the system *and* their rule
     // instances do not AC-unify.  Mirrors Haskell's helper of the same
@@ -874,9 +873,9 @@ fn partial_atom_valuation_with(
         })
     };
     match atom {
-        Atom::Less(i, j) => {
-            let ni = parser_node_id(i)?;
-            let nj = parser_node_id(j)?;
+        ProtoAtom::Less(i, j) => {
+            let ni = eq_node_id(i)?;
+            let nj = eq_node_id(j)?;
             // HS-faithful guard ORDER (Simplify.hs):
             //   | i == j || j `before` i  -> Just False
             //   | i `before` j            -> Just True
@@ -912,13 +911,13 @@ fn partial_atom_valuation_with(
             }
             None
         }
-        Atom::Eq(x, y) => {
+        ProtoAtom::EqE(x, y) => {
             if x == y {
                 return Some(true);
             }
             // Node-id case: compare via the order relation and
             // rule-instance unifiability.
-            if let (Some(ni), Some(nj)) = (parser_node_id(x), parser_node_id(y)) {
+            if let (Some(ni), Some(nj)) = (eq_node_id(x), eq_node_id(y)) {
                 if sys.always_before_with(ab_adj, &ni, &nj)
                     || sys.always_before_with(ab_adj, &nj, &ni)
                 {
@@ -931,31 +930,21 @@ fn partial_atom_valuation_with(
             }
             // Term-level case: ask Maude whether the two terms are
             // unifiable.  Mirrors Haskell's `EqE` arm in
-            // `partialAtomValuation` (Simplify.hs) via
+            // `partialAtomValuation` (Simplify.hs:381-390) via
             // `unifiableLNTerms`.  If non-unifiable, the equality
             // is False in every model.  If unifiable, we leave it
             // unknown — the equality may or may not hold once the
             // proof state is refined.
-            let (Some(tx), Some(ty)) = (
-                crate::elaborate::term_to_lnterm(x, &msig),
-                crate::elaborate::term_to_lnterm(y, &msig),
-            ) else {
-                return None;
-            };
-            if tx == ty {
-                return Some(true);
-            }
-            match maude.unify(&[tamarin_term::rewriting::Equal { lhs: tx, rhs: ty }]) {
+            match maude.unify(&[tamarin_term::rewriting::Equal {
+                lhs: x.clone(),
+                rhs: y.clone(),
+            }]) {
                 Ok(uns) if uns.is_empty() => Some(false),
                 _ => None,
             }
         }
-        Atom::Action(fa, t) => {
-            let n = parser_node_id(t)?;
-            let lnfa = match crate::elaborate::fact_to_lnfact(fa, &msig) {
-                Ok(f) => f,
-                Err(_) => return None,
-            };
+        ProtoAtom::Action(t, lnfa) => {
+            let n = eq_node_id(t)?;
             // Mirror Haskell `Simplify.hs` exactly:
             //   ActionG i fa `M.member` sGoals -> Just True
             //   case M.lookup i sNodes of
@@ -970,7 +959,7 @@ fn partial_atom_valuation_with(
             // action exists in every model.
             for (g, _st) in sys.goals.iter() {
                 if let crate::constraint::constraints::Goal::Action(gi, gfa) = g {
-                    if gi == &n && gfa == &lnfa {
+                    if gi == &n && gfa == lnfa {
                         return Some(true);
                     }
                 }
@@ -979,7 +968,7 @@ fn partial_atom_valuation_with(
             // (`or_insert`), so this lookup picks the same rule a linear
             // first-match scan of `sys.nodes` would.
             let rule = node_rule.get(&n).copied()?;
-            if rule.actions.iter().any(|a| a == &lnfa) {
+            if rule.actions.iter().any(|a| a == lnfa) {
                 return Some(true);
             }
             // False direction: if no rule action could possibly
@@ -993,7 +982,7 @@ fn partial_atom_valuation_with(
             // enumerate the assignment and propagate the body.
             let mut all_non_unif = true;
             for a in &rule.actions {
-                match crate::rule::unifiable_ln_facts(maude, &lnfa, a) {
+                match crate::rule::unifiable_ln_facts(maude, lnfa, a) {
                     Ok(true) => {
                         all_non_unif = false;
                         break;
@@ -1010,8 +999,8 @@ fn partial_atom_valuation_with(
             }
             None
         }
-        Atom::Last(t) => {
-            let n = parser_node_id(t)?;
+        ProtoAtom::Last(t) => {
+            let n = eq_node_id(t)?;
             // Haskell-faithful (Simplify.hs):
             //   Last i
             //     | isLast sys i                       -> Just True
@@ -1077,30 +1066,28 @@ fn partial_atom_valuation_with(
         // here we just need the cheap structural checks plus posSubterms /
         // negSubterms membership so a lemma-formula atom can collapse to
         // True/False before being inserted as a goal.
-        Atom::Subterm(small, big) => {
+        ProtoAtom::Subterm(small_lt, big_lt) => {
             use crate::tools::subterm_store::elem_not_below_reducible;
             use tamarin_term::lterm::{is_fresh_var, is_pub_var};
             use tamarin_term::term::Term as LTerm;
             use tamarin_term::vterm::Lit as LLit;
-            let small_lt = crate::elaborate::term_to_lnterm(small, &msig)?;
-            let big_lt = crate::elaborate::term_to_lnterm(big, &msig)?;
             // small ⊏ small  -> False  (trivially-false)
             if small_lt == big_lt {
                 return Some(false);
             }
             // small ⊏ Con _  -> False  (Haskell: SubtermStore.hs:334-371, see line 347)
-            if let LTerm::Lit(LLit::Con(_)) = &big_lt {
+            if let LTerm::Lit(LLit::Con(_)) = big_lt {
                 return Some(false);
             }
             // small ⊏ Var (pub|fresh) -> False  (CR-rule S_invalid)
-            if is_pub_var(&big_lt) || is_fresh_var(&big_lt) {
+            if is_pub_var(big_lt) || is_fresh_var(big_lt) {
                 return Some(false);
             }
             // Reducible-syntactic check (redElem): port of Haskell's
             // `small `redElem` big` line in `isTrueFalse`
             // (SubtermStore.hs:334-371, see line 342).
             let reducible_syms = maude.maude_sig().reducible_fun_syms_fast.clone();
-            if elem_not_below_reducible(&reducible_syms, &small_lt, &big_lt) {
+            if elem_not_below_reducible(&reducible_syms, small_lt, big_lt) {
                 return Some(true);
             }
             // HS `isTrueFalse reducible (Just sst)` (SubtermStore.hs:356-371):
@@ -1116,12 +1103,12 @@ fn partial_atom_valuation_with(
                 .subterms
                 .iter()
                 .chain(sys.subterm_store.solved_subterms.iter())
-                .any(|c| c.small == small_lt && c.big == big_lt);
+                .any(|c| &c.small == small_lt && &c.big == big_lt);
             let is_negated_inside = sys
                 .subterm_store
                 .neg_subterms
                 .iter()
-                .any(|(s, t)| *s == small_lt && *t == big_lt);
+                .any(|(s, t)| s == small_lt && t == big_lt);
             if is_inside && !is_negated_inside {
                 return Some(true);
             }
@@ -1134,17 +1121,22 @@ fn partial_atom_valuation_with(
     }
 }
 
-/// Parser-AST term → solver `NodeId` (LVar of Node sort). Convenience
-/// wrapper around the looser `term_to_node_id` from `reduction.rs` so
-/// we don't introduce a circular module dependency.
-fn parser_node_id(t: &tamarin_parser::ast::Term) -> Option<crate::constraint::constraints::NodeId> {
-    use tamarin_parser::ast::Term;
-    let v = match t {
-        Term::Var(v) => v,
-        _ => return None,
+/// The node id `partial_atom_valuation_with` reads out of a timepoint term:
+/// any variable leaf, coerced to `LSort::Node`.
+///
+/// DIVERGENCE from HS `partialAtomValuation` (Simplify.hs:381-390).  The `EqE`
+/// arm there asks `unifiableLNTerms` FIRST and only then reads `ltermNodeId`,
+/// which answers `Just` at `LSortNode` alone (LTerm.hs:452-453,464-465), so
+/// `$A = ~b` is `Just False` for HS.  Here the arm consults this coercing
+/// lookup before Maude and answers `None` for that atom.  The port's `Less`,
+/// `Action` and `Last` arms read the same lookup where HS's `ltermNodeId'`
+/// errors on any other sort.
+fn eq_node_id(t: &tamarin_term::lterm::LNTerm) -> Option<crate::constraint::constraints::NodeId> {
+    let tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(v)) = t else {
+        return None;
     };
     Some(tamarin_term::lterm::LVar::new(
-        v.name.clone(),
+        v.name,
         tamarin_term::lterm::LSort::Node,
         v.idx,
     ))

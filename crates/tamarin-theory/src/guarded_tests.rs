@@ -683,10 +683,10 @@ fn mk_gatom_eq(a: &str, b: &str) -> Atom<BLNTerm> {
     ProtoAtom::EqE(bfree(a, 0, LSort::Msg), bfree(b, 0, LSort::Msg))
 }
 
-/// The same equality in the parser-AST spelling `simplify_guarded_with`
-/// hands its valuation.
-fn mk_eq(a: &str, b: &str) -> p::Atom {
-    blnatom_to_parser(&mk_gatom_eq(a, b))
+/// The same equality over plain `LVar`s, as `simplify_guarded_with` hands it
+/// to its valuation (HS `unbindAtom`, Guarded.hs:351-352).
+fn mk_eq(a: &str, b: &str) -> Atom<LNTerm> {
+    bvar_to_lvar(&mk_gatom_eq(a, b))
 }
 
 fn mk_atom_eq(a: &str, b: &str) -> Guarded {
@@ -696,21 +696,21 @@ fn mk_atom_eq(a: &str, b: &str) -> Guarded {
 #[test]
 fn simplify_atom_with_known_true_collapses_to_gtrue() {
     let g = mk_atom_eq("x", "y");
-    let val = |_a: &p::Atom| Some(true);
+    let val = |_a: &Atom<LNTerm>| Some(true);
     assert_eq!(simplify_guarded_with(&g, &val), gtrue());
 }
 
 #[test]
 fn simplify_atom_with_known_false_collapses_to_gfalse() {
     let g = mk_atom_eq("x", "y");
-    let val = |_a: &p::Atom| Some(false);
+    let val = |_a: &Atom<LNTerm>| Some(false);
     assert_eq!(simplify_guarded_with(&g, &val), gfalse());
 }
 
 #[test]
 fn simplify_atom_unknown_left_intact() {
     let g = mk_atom_eq("x", "y");
-    let val = |_a: &p::Atom| None;
+    let val = |_a: &Atom<LNTerm>| None;
     assert_eq!(simplify_guarded_with(&g, &val), g);
 }
 
@@ -720,7 +720,7 @@ fn simplify_disj_drops_false_branches() {
     let a = mk_atom_eq("p", "q");
     let b = mk_eq("r", "s");
     let g = Guarded::Disj(vec![a.clone(), Guarded::Atom(mk_gatom_eq("r", "s"))].into());
-    let val = move |atom: &p::Atom| if atom == &b { Some(false) } else { None };
+    let val = move |atom: &Atom<LNTerm>| if atom == &b { Some(false) } else { None };
     assert_eq!(simplify_guarded_with(&g, &val), a);
 }
 
@@ -729,7 +729,7 @@ fn simplify_conj_short_circuits_on_false() {
     // a ∧ b — if b evaluates False, conj should be gfalse.
     let b = mk_eq("r", "s");
     let g = Guarded::Conj(vec![mk_atom_eq("p", "q"), Guarded::Atom(mk_gatom_eq("r", "s"))].into());
-    let val = move |atom: &p::Atom| if atom == &b { Some(false) } else { None };
+    let val = move |atom: &Atom<LNTerm>| if atom == &b { Some(false) } else { None };
     assert_eq!(simplify_guarded_with(&g, &val), gfalse());
 }
 
@@ -749,7 +749,7 @@ fn simplify_universal_with_one_false_guard_is_gtrue() {
     // (All vars[]. [a, b]. body) with a=False → gtrue (vacuous).
     let a = mk_eq("a", "b");
     let g = mk_universal(Vec::new(), &[("a", "b"), ("c", "d")]);
-    let val = move |atom: &p::Atom| if atom == &a { Some(false) } else { None };
+    let val = move |atom: &Atom<LNTerm>| if atom == &a { Some(false) } else { None };
     assert_eq!(simplify_guarded_with(&g, &val), gtrue());
 }
 
@@ -760,7 +760,7 @@ fn simplify_universal_drops_true_guards_keeps_unknown() {
     // The valuation decides `a` as True, so the code drops it.  Every other
     // atom is unknown: `c = d` and the atom in the body.  Each unknown atom
     // survives unchanged.
-    let val = move |atom: &p::Atom| if atom == &a { Some(true) } else { None };
+    let val = move |atom: &Atom<LNTerm>| if atom == &a { Some(true) } else { None };
     match simplify_guarded_with(&g, &val) {
         Guarded::GGuarded { vars, guards, .. } => {
             assert!(vars.is_empty());
@@ -780,7 +780,7 @@ fn simplify_universal_drops_true_guards_keeps_unknown() {
 fn simplify_universal_with_all_true_guards_returns_body() {
     let a = mk_eq("a", "b");
     let g = mk_universal(Vec::new(), &[("a", "b")]);
-    let val = move |atom: &p::Atom| if atom == &a { Some(true) } else { None };
+    let val = move |atom: &Atom<LNTerm>| if atom == &a { Some(true) } else { None };
     assert_eq!(simplify_guarded_with(&g, &val), mk_atom_eq("p", "q"));
 }
 
@@ -790,7 +790,7 @@ fn simplify_universal_with_quantifier_left_intact() {
     // simplification past the binder.
     let bound_var = ("x".to_string(), LSort::Msg);
     let g = mk_universal(vec![bound_var], &[("a", "b")]);
-    let val = |_atom: &p::Atom| Some(true);
+    let val = |_atom: &Atom<LNTerm>| Some(true);
     assert_eq!(simplify_guarded_with(&g, &val), g);
 }
 

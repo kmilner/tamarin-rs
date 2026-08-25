@@ -28,7 +28,7 @@ use crate::constraint::solver::context::ProofContext;
 use crate::constraint::system::System;
 use crate::guarded::{bterm_to_lterm, Guarded};
 use crate::rule::RuleACInst;
-use tamarin_term::lterm::blterm_node_id;
+use tamarin_term::lterm::{blterm_node_id, lterm_node_id};
 
 /// The complete set of per-pass change signals raised by
 /// [`Reduction::subst_system_once`].  Built exactly ONCE, at the pass's
@@ -791,12 +791,11 @@ impl<'ctx> Reduction<'ctx> {
         //
         // Further: the parser subst is consumed ONLY by `Disj` goals (the
         // goal loop below) and the formula/solved-formula/lemma rewrites
-        // (after the loop).  `build_parser_subst_from_eq_store` chain-
-        // chases and `lnterm_to_term`-converts EVERY eq-store entry, which
-        // is pure waste when the system carries none of those — common in
-        // deep proof states where the lemma's formulas are already
-        // discharged.  Gate the build so it only runs when a consumer
-        // exists.
+        // (after the loop).  `build_parser_subst_from_eq_store` chain-chases
+        // EVERY eq-store entry, which is pure waste when the system carries
+        // none of those — common in deep proof states where the lemma's
+        // formulas are already discharged.  Gate the build so it only runs
+        // when a consumer exists.
         let needs_parser_subst = !self.sys.formulas.is_empty()
             || !self.sys.solved_formulas.is_empty()
             || !self.sys.lemmas.is_empty()
@@ -2187,36 +2186,22 @@ impl<'ctx> Reduction<'ctx> {
         bounds_max(&self.sys)
     }
 
-    /// Insert a parser-AST `Atom` into the system following Haskell's
-    /// `insertAtom` semantics:
+    /// HS `insertAtom` (Reduction.hs:414-421):
     ///
-    /// - `Eq(x, y)`     → `solve_term_eqs` (Maude AC unification)
-    /// - `Less(i, j)`   → push a `LessAtom` (Formula reason)
-    /// - `Last(t)`      → set `last_atom` if `t` is a node variable
-    /// - `Action(fa,t)` → push a `Goal::Action(node_id, lnfact)`
-    /// - `Subterm(s,b)` → push a subterm-store entry
-    /// - `Pred(_)`      → returns `false`: predicates are pre-expanded
-    ///   during translation and have no `LNAtom` form
-    /// - `LessMset(_,_)`→ returns `false`: multiset ordering is not a
-    ///   temporal `LNAtom`, so it never reaches here
+    /// - `EqE(x, y)`     → `solveTermEqs SplitNow`
+    /// - `Less(i, j)`    → `insertLess` with the `Formula` reason
+    /// - `Last(t)`       → `insertLast`
+    /// - `Action(t, fa)` → `insertAction`
+    /// - `Subterm(s, b)` → `insertSubterm`
+    /// - `Syntactic(_)`  → nothing
     ///
-    /// HS's `LNAtom` (Reduction.hs `insertAtom`) only has
-    /// `EqE`/`Subterm`/`Action`/`Less`/`Last`/`Syntactic`; the two
-    /// parser-AST shapes above have no counterpart and are rejected.
-    ///
-    /// Returns `true` if the atom was successfully decomposed,
-    /// `false` if it was a shape with no `LNAtom` counterpart.
-    pub fn insert_atom(&mut self, a: &tamarin_parser::ast::Atom) -> bool {
-        use tamarin_parser::ast::Atom;
-        let msig = self.ctx.maude.maude_sig();
+    /// Returns `true` when the atom became a constraint.  HS reads the three
+    /// timepoints with `ltermNodeId'`, which errors on any other sort; the
+    /// total [`lterm_node_id`] answers `None` there and the atom is dropped.
+    pub fn insert_atom(&mut self, a: &crate::atom::Atom<tamarin_term::lterm::LNTerm>) -> bool {
+        use crate::atom::ProtoAtom;
         match a {
-            Atom::Eq(x, y) => {
-                let (Some(tx), Some(ty)) = (
-                    crate::elaborate::term_to_lnterm(x, &msig),
-                    crate::elaborate::term_to_lnterm(y, &msig),
-                ) else {
-                    return false;
-                };
+            ProtoAtom::EqE(x, y) => {
                 // KNOWN COMPENSATING DIVERGENCE (pending a faithful
                 // rule-variant / normalisation pass).
                 //
@@ -2253,8 +2238,8 @@ impl<'ctx> Reduction<'ctx> {
                 // these two reduces once a faithful variant/normalisation
                 // pass lands.
                 let maude = self.maude.clone();
-                let tx = maude.reduce(&tx).unwrap_or(tx);
-                let ty = maude.reduce(&ty).unwrap_or(ty);
+                let tx = maude.reduce(x).unwrap_or_else(|_| x.clone());
+                let ty = maude.reduce(y).unwrap_or_else(|_| y.clone());
                 // Haskell `insertAtom (EqE x y) = void (solveTermEqs
                 // SplitNow [Equal x y])`.  The monadic `void` ignores
                 // the ChangeIndicator but the monad propagates
@@ -2300,8 +2285,8 @@ impl<'ctx> Reduction<'ctx> {
                 self.changed = ChangeIndicator::Changed;
                 true
             }
-            Atom::Less(i, j) => {
-                let (Some(ni), Some(nj)) = (term_to_node_id(i), term_to_node_id(j)) else {
+            ProtoAtom::Less(i, j) => {
+                let (Some(ni), Some(nj)) = (lterm_node_id(i), lterm_node_id(j)) else {
                     return false;
                 };
                 // Normalise through the eq-store substitution so any
@@ -2315,41 +2300,36 @@ impl<'ctx> Reduction<'ctx> {
                 ));
                 true
             }
-            Atom::Last(t) => {
-                let Some(n) = term_to_node_id(t) else {
+            ProtoAtom::Last(t) => {
+                let Some(n) = lterm_node_id(t) else {
                     return false;
                 };
                 // HS-faithful insertLast (Reduction.hs:402-407).
                 let _ = self.insert_last(n);
                 true
             }
-            Atom::Action(fact, t) => {
-                let Ok(lnfact) = crate::elaborate::fact_to_lnfact(fact, &msig) else {
+            ProtoAtom::Action(t, fact) => {
+                let Some(n) = lterm_node_id(t) else {
                     return false;
                 };
-                let Some(n) = term_to_node_id(t) else {
-                    return false;
-                };
-                self.insert_goal(Goal::Action(n, lnfact));
+                self.insert_goal(Goal::Action(n, fact.clone()));
                 true
             }
-            Atom::Subterm(s, b) => {
-                let (Some(ts), Some(tb)) = (
-                    crate::elaborate::term_to_lnterm(s, &msig),
-                    crate::elaborate::term_to_lnterm(b, &msig),
-                ) else {
-                    return false;
-                };
+            ProtoAtom::Subterm(s, b) => {
                 // Pure ADD (`SubtermStore::add` is a plain push, no
                 // removal): the max can only rise by the two new terms —
                 // bump both sides instead of invalidating.
-                self.sys.bump_cache_term(&ts);
-                self.sys.bump_cache_term(&tb);
-                self.sys.subterm_store_mut().add(ts, tb);
+                self.sys.bump_cache_term(s);
+                self.sys.bump_cache_term(b);
+                self.sys.subterm_store_mut().add(s.clone(), b.clone());
                 self.changed = ChangeIndicator::Changed;
                 true
             }
-            Atom::Pred(_) | Atom::LessMset(_, _) => false,
+            // HS `Syntactic _ -> return ()` (Reduction.hs:421): the sugar
+            // carries no constraint.  `to_lnformula` refuses a formula that
+            // still holds one (formula.rs), so no atom of a guarded formula
+            // reaches this arm.
+            ProtoAtom::Syntactic(_) => false,
         }
     }
 
@@ -2492,11 +2472,10 @@ impl<'ctx> Reduction<'ctx> {
                 self.changed = ChangeIndicator::Changed;
             }
             Guarded::Atom(ref ga) => {
-                // Try to decompose into a constraint via insert_atom.
-                // Top-level Guarded::Atom has no Bound vars; project to the
-                // parser AST `insert_atom` reads.
-                let a = crate::guarded::blnatom_to_parser(ga);
-                let _ = self.insert_atom(&a);
+                // HS `GAto ato -> markAsSolved; insertAtom (bvarToLVar ato)`
+                // (Reduction.hs:441-442): a top-level atom of a stored formula
+                // has no `Bound` leaf left for `bvarToLVar` to reject.
+                let _ = self.insert_atom(&crate::guarded::bvar_to_lvar(ga));
                 // Haskell-faithful: only mark the OUTER formula as
                 // solved (mark=True at top-level `insert_formula`).
                 // Inner recursion (mark=False, from Conj/Ex body) does
@@ -4181,14 +4160,14 @@ fn dedup_preserve_order<T: PartialEq>(v: &mut Vec<T>) {
     v.truncate(kept);
 }
 
-/// Convert an eq-store `LSubst` (LVar → LNTerm) into a parser-AST
-/// `VarSubst` keyed by `(name, idx)`.  Used by `subst_system` to push
-/// the eq-store substitution into formulas / solved_formulas /
-/// lemmas — Haskell's `substFormulas` / `substSolvedFormulas` /
-/// `substLemmas`.  Each LVar in the subst's domain maps via its
-/// `(name, idx)` to a parser-AST term obtained from
-/// `lnterm_to_term`.  Only entries that change are recorded
-/// (skipping identity mappings keeps the per-step subst small).
+/// Convert an eq-store `LSubst` (LVar → LNTerm) into a
+/// [`crate::guarded::VarSubst`] keyed by `(name, idx)`.  Used by
+/// `subst_system` to push the eq-store substitution into formulas /
+/// solved_formulas / lemmas — Haskell's `substFormulas` /
+/// `substSolvedFormulas` / `substLemmas`.  Each LVar in the subst's domain
+/// maps via its `(name, idx)` to the term at the end of its binding chain.
+/// Only entries that change are recorded (skipping identity mappings keeps
+/// the per-step subst small).
 fn build_parser_subst_from_eq_store(
     subst: &crate::tools::equation_store::LNSubst,
 ) -> crate::guarded::VarSubst {
@@ -4275,32 +4254,6 @@ fn normalise_node_id(
     } else {
         id
     }
-}
-
-/// Convert a parser-AST term to an `LVar` of node sort (for the time
-/// argument of an action atom or the operands of a `Less`/`Last`).
-///
-/// Mirrors Haskell `bltermNodeId` (Term/LTerm.hs:526-528): returns `Just`
-/// only when the term is a Var with sort `LSortNode`. Returning
-/// `Some` for non-Node sorts causes the Eq/Less→Disj CR-rules to
-/// fire on msg-var `¬(a=b)` formulas — which Haskell leaves as
-/// formulas, producing the SOLVED vs solve divergence on
-/// MinValueEq/WrongEquality.
-fn term_to_node_id(
-    t: &tamarin_parser::ast::Term,
-) -> Option<crate::constraint::constraints::NodeId> {
-    use tamarin_parser::ast::Term as AstTerm;
-    let AstTerm::Var(v) = t else {
-        return None;
-    };
-    if v.sort != tamarin_term::lterm::LSort::Node {
-        return None;
-    }
-    Some(tamarin_term::lterm::LVar::new(
-        v.name.clone(),
-        tamarin_term::lterm::LSort::Node,
-        v.idx,
-    ))
 }
 
 /// `forbiddenEdge` — port of the chain-goal forbidden edge shapes.  RS has

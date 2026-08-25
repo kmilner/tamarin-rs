@@ -22,6 +22,11 @@ fn ctx() -> Option<ProofContext> {
     Some(ProofContext::new(h, Vec::new()))
 }
 
+/// The index-0 variable leaf of the given name and sort.
+fn mkvar_ln(name: &str, sort: tamarin_term::lterm::LSort) -> tamarin_term::lterm::LNTerm {
+    tamarin_term::vterm::var_term(tamarin_term::lterm::LVar::new(name, sort, 0))
+}
+
 /// `ku_vars` must read the two variables `removePermutations` permutes
 /// off the AC constructor rules' own `KU(x)`, `KU(y)` premises — and
 /// answer `OtherRule` for every other premise shape, including the
@@ -903,24 +908,15 @@ fn insert_atom_action_creates_action_goal() {
         None => return,
     };
     let mut r = Reduction::new(&ctx, System::empty());
-    use tamarin_parser::ast::{Atom, Fact, Term, VarSpec};
+    use crate::atom::ProtoAtom;
     use tamarin_term::lterm::LSort;
-    let mkvar = |n: &str, sort: LSort| {
-        Term::Var(VarSpec {
-            name: n.to_string(),
-            idx: 0,
-            sort,
-            typ: None,
-        })
-    };
-    let action = Atom::Action(
-        Fact {
-            persistent: false,
-            annotations: Vec::new(),
-            name: "Setup".into(),
-            args: vec![mkvar("k", LSort::Msg)],
-        },
-        mkvar("i", LSort::Node),
+    let action = ProtoAtom::Action(
+        mkvar_ln("i", LSort::Node),
+        crate::fact::proto_fact(
+            crate::fact::Multiplicity::Linear,
+            "Setup",
+            vec![mkvar_ln("k", LSort::Msg)],
+        ),
     );
     let ok = r.insert_atom(&action);
     assert!(ok);
@@ -930,6 +926,47 @@ fn insert_atom_action_creates_action_goal() {
                 crate::fact::Multiplicity::Linear, "Setup", 1)));
 }
 
+/// HS `insertAtom` answers `Syntactic _ -> return ()` (Reduction.hs:421):
+/// the sugar carries no constraint, so nothing about the system moves.
+#[test]
+fn insert_atom_ignores_a_syntactic_atom() {
+    let ctx = match ctx() {
+        Some(c) => c,
+        None => return,
+    };
+    let mut r = Reduction::new(&ctx, System::empty());
+    let a = crate::atom::ProtoAtom::Syntactic(crate::atom::Unit2);
+    assert!(!r.insert_atom(&a));
+    assert!(r.sys.goals.is_empty());
+    assert!(r.sys.less_atoms.is_empty());
+    assert_eq!(r.sys.last_atom, None);
+    assert!(r.sys.eq_store.subst.is_empty());
+}
+
+/// A `NameTag::Node` constant reaches the eq-store as itself.  It is the tag
+/// Maude mints for a skolemised timepoint (maude_proc.rs), and the parser AST
+/// has no spelling of its own for it: `elaborate::lnterm_to_parser` writes such
+/// a name as a `Pub` literal.
+#[test]
+fn insert_atom_eq_keeps_the_node_name_tag() {
+    let ctx = match ctx() {
+        Some(c) => c,
+        None => return,
+    };
+    let mut r = Reduction::new(&ctx, System::empty());
+    use tamarin_term::lterm::{LSort, Name, NameTag};
+    let node_name: tamarin_term::lterm::LNTerm =
+        tamarin_term::vterm::const_term(Name::new(NameTag::Node, "n1"));
+    let a = crate::atom::ProtoAtom::EqE(mkvar_ln("i", LSort::Node), node_name.clone());
+    assert!(r.insert_atom(&a));
+    let i = tamarin_term::lterm::LVar::new("i", LSort::Node, 0);
+    assert_eq!(
+        r.sys.eq_store.subst.image_of(&i),
+        Some(&node_name),
+        "the eq-store binds the timepoint to the Node-tagged name itself"
+    );
+}
+
 #[test]
 fn insert_atom_less_creates_less_atom() {
     let ctx = match ctx() {
@@ -937,17 +974,9 @@ fn insert_atom_less_creates_less_atom() {
         None => return,
     };
     let mut r = Reduction::new(&ctx, System::empty());
-    use tamarin_parser::ast::{Atom, Term, VarSpec};
+    use crate::atom::ProtoAtom;
     use tamarin_term::lterm::LSort;
-    let mkvar = |n: &str| {
-        Term::Var(VarSpec {
-            name: n.to_string(),
-            idx: 0,
-            sort: LSort::Node,
-            typ: None,
-        })
-    };
-    let less = Atom::Less(mkvar("i"), mkvar("j"));
+    let less = ProtoAtom::Less(mkvar_ln("i", LSort::Node), mkvar_ln("j", LSort::Node));
     let ok = r.insert_atom(&less);
     assert!(ok);
     assert_eq!(r.sys.less_atoms.len(), 1);
@@ -968,15 +997,9 @@ fn insert_atom_last_sets_last_atom() {
         None => return,
     };
     let mut r = Reduction::new(&ctx, System::empty());
-    use tamarin_parser::ast::{Atom, Term, VarSpec};
+    use crate::atom::ProtoAtom;
     use tamarin_term::lterm::LSort;
-    let v = Term::Var(VarSpec {
-        name: "i".into(),
-        idx: 0,
-        sort: LSort::Node,
-        typ: None,
-    });
-    let last = Atom::Last(v);
+    let last = ProtoAtom::Last(mkvar_ln("i", LSort::Node));
     assert!(r.insert_atom(&last));
     assert_eq!(
         r.sys.last_atom,

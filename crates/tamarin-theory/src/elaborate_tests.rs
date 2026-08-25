@@ -510,7 +510,7 @@ fn elaborate_lemma_passthrough() {
 }
 
 // =========================================================================
-// lnterm_to_term round-tripping correctness
+// term_to_lnterm surface-shape coverage
 // =========================================================================
 
 fn parser_var(name: &str, idx: u64, sort: LSort) -> p::Term {
@@ -522,13 +522,11 @@ fn parser_var(name: &str, idx: u64, sort: LSort) -> p::Term {
     })
 }
 
-// `lnterm_to_term` inverts `term_to_lnterm` on every surface shape that the
-// solver round-trips through the parser AST.  A round trip on its own still
-// succeeds with two matching bugs: one that mangles a sort, and one that
-// unmangles it again.
-// So each case also pins the LNTerm that the forward direction produces.
+// The internal term `term_to_lnterm` builds for every surface shape the
+// parser writes: the sort each variable spelling carries, the `NameTag` each
+// literal spelling carries, and the right-nested `pair` chain a tuple becomes.
 #[test]
-fn lnterm_to_term_inverts_term_to_lnterm() {
+fn term_to_lnterm_reads_every_surface_shape() {
     use tamarin_term::function_symbols::NoEqSym;
     use tamarin_term::lterm::{LNTerm, Name, NameTag};
     use tamarin_term::term::f_app_no_eq;
@@ -613,7 +611,6 @@ fn lnterm_to_term_inverts_term_to_lnterm() {
             lnterm,
             "{label}: term_to_lnterm"
         );
-        assert_eq!(lnterm_to_term(&lnterm), surface, "{label}: lnterm_to_term");
     }
 }
 
@@ -1111,8 +1108,8 @@ fn a_non_guardable_stored_disjunct_fails_elaboration() {
 /// HS writes an action atom as `Action t (Fact t)` (Atom.hs:78) and the
 /// parser AST as `Action(Fact, Term)`, so the two operands swap places.
 #[test]
-fn lnatom_to_parser_keeps_the_action_timepoint_and_fact() {
-    use crate::atom::{Atom, ProtoAtom};
+fn syntactic_lnatom_to_parser_keeps_the_action_timepoint_and_fact() {
+    use crate::atom::{ProtoAtom, SyntacticAtom};
     use crate::fact::{Fact, FactTag, Multiplicity};
     use tamarin_term::intern::intern_str;
     use tamarin_term::lterm::LNTerm;
@@ -1124,9 +1121,9 @@ fn lnatom_to_parser_keeps_the_action_timepoint_and_fact() {
         FactTag::Proto(Multiplicity::Linear, intern_str("Ev"), 1),
         vec![x],
     );
-    let a: Atom<LNTerm> = ProtoAtom::Action(i, fa);
+    let a: SyntacticAtom<LNTerm> = ProtoAtom::Action(i, fa);
     assert_eq!(
-        lnatom_to_parser(&a),
+        syntactic_lnatom_to_parser(&a),
         p::Atom::Action(
             p::Fact {
                 persistent: false,
@@ -1141,16 +1138,16 @@ fn lnatom_to_parser_keeps_the_action_timepoint_and_fact() {
 
 /// The binary atoms keep their left and right operand where they are.
 #[test]
-fn lnatom_to_parser_keeps_the_binary_operand_order() {
-    use crate::atom::{Atom, ProtoAtom};
+fn syntactic_lnatom_to_parser_keeps_the_binary_operand_order() {
+    use crate::atom::{ProtoAtom, SyntacticAtom};
     use tamarin_term::lterm::LNTerm;
     use tamarin_term::vterm::var_term;
 
     let i: LNTerm = var_term(LVar::new("i", LSort::Node, 0));
     let j: LNTerm = var_term(LVar::new("j", LSort::Node, 0));
-    let a: Atom<LNTerm> = ProtoAtom::Less(i, j);
+    let a: SyntacticAtom<LNTerm> = ProtoAtom::Less(i, j);
     assert_eq!(
-        lnatom_to_parser(&a),
+        syntactic_lnatom_to_parser(&a),
         p::Atom::Less(
             parser_var("i", 0, LSort::Node),
             parser_var("j", 0, LSort::Node)
@@ -1182,17 +1179,13 @@ fn lnterm_to_parser_keeps_the_unbreakable_diff_shape() {
     );
 }
 
-/// The two `LNTerm` → parser-AST projections are not interchangeable.
-///
 /// `lnterm_to_parser` materialises the surface HS `prettyTerm` prints, so a
 /// `List` application is `LIST(…)` (Term/Term.hs:317) and a degenerate
 /// one-argument AC application — a shape `fAppAC` collapses away
 /// (Term/Term/Raw.hs:121) — is its operand alone, because an infix chain
-/// needs two operands.  `lnterm_to_term` materialises the surface
-/// `term_to_lnterm` reads back, where neither head has a spelling of its own
-/// and both fall through to a placeholder name.
+/// needs two operands.
 #[test]
-fn converters_disagree_on_list_and_degenerate_ac() {
+fn lnterm_to_parser_spells_list_and_a_degenerate_ac_application() {
     use tamarin_term::function_symbols::{AcSym, FunSym};
     use tamarin_term::lterm::LNTerm;
     use tamarin_term::term::{f_app_list, unsafe_f_app};
@@ -1206,17 +1199,9 @@ fn converters_disagree_on_list_and_degenerate_ac() {
         lnterm_to_parser(&list),
         p::Term::App("LIST".to_string(), vec![px.clone()])
     );
-    assert_eq!(
-        lnterm_to_term(&list),
-        p::Term::App("?".to_string(), vec![px.clone()])
-    );
 
     let degenerate = unsafe_f_app(FunSym::Ac(AcSym::Mult), vec![x]);
     assert_eq!(lnterm_to_parser(&degenerate), px);
-    assert_eq!(
-        lnterm_to_term(&degenerate),
-        p::Term::App("?Mult".to_string(), vec![parser_var("x", 0, LSort::Msg)])
-    );
 }
 
 // =========================================================================
