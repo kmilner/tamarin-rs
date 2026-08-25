@@ -67,10 +67,6 @@ pub fn fill_body(fill: &WfFill) -> String {
                 .nest(2)
                 .render_with(WF_LINE_LENGTH, WF_RIBBON)
         }
-        // HS `natSortErrors` (Wellformedness.hs:315-316) builds the body with
-        // `<>` alone; the only break points are the ones the two `prettyLNTerm`
-        // documents carry inside them.
-        WfFill::Beside(doc) => cell_doc(doc).nest(2).render_with(WF_LINE_LENGTH, WF_RIBBON),
     }
 }
 

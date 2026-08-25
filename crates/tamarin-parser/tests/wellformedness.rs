@@ -13,8 +13,8 @@
 //! The comparison must not pass while it compares nothing.  Three cases are
 //! each a failure.  The first is a `.spthy` file that no `expected.txt` line
 //! mentions.  The second is a `#!` line for a fixture that no positive line
-//! lists.  The third is a fixture that has neither a parser-level expected
-//! topic nor a forbidden one.  This test still cannot see a fixture that has
+//! lists.  The third is a fixture that has no parser-level expected topic, no
+//! forbidden one, and no pinned `.report`.  This test still cannot see a fixture that has
 //! lost its content while its `#!` negatives stay satisfiable.  An empty
 //! theory emits no topic, so it triggers no negative.  `tamarin-theory`'s
 //! `tests/wellformedness_fixture_reports.rs` covers that case from the crate
@@ -27,17 +27,28 @@ use std::path::PathBuf;
 
 use tamarin_parser::{parse_theory, wf};
 
-/// The two topics that `wf::check_theory` cannot produce.  HS `checkTerms`
-/// needs the elaborated `MaudeSig` to classify a funsym as reducible or
-/// irreducible.  `multRestrictedReport` (Wellformedness.hs:1108-1113) needs
-/// the irreducible symbols of `abstractRule` and the HughesPJ rule renderer.
-/// Their ports therefore live in `tamarin_theory::check_terms` and
-/// `tamarin_theory::mult_restricted`, and `tamarin_theory::translated_wf`
-/// splices them in after elaboration.  The tests of those modules
+/// The topics that `wf::check_theory` cannot produce, because their checks
+/// read the TRANSLATED theory, the elaborated `MaudeSig`, or both: HS
+/// `checkTerms` classifies a funsym as reducible or irreducible,
+/// `multRestrictedReport` (Wellformedness.hs:1108-1113) needs the irreducible
+/// symbols of `abstractRule` and the HughesPJ rule renderer, and
+/// `unboundReport` / `publicNamesReport` / `factLhsOccurNoRhs` /
+/// `natWellSortedReport` walk `thyProtoRules` of the theory SAPIC's
+/// translation has already extended.  Their ports live in
+/// `tamarin_theory::{check_terms, mult_restricted, translated_rule_wf,
+/// elaborate}`, and `tamarin_theory::translated_wf` splices them in
+/// after elaboration.  The tests of those modules
 /// (`tamarin-theory/tests/mult_restricted_report.rs`) and the corpus wf gate
-/// cover these two topics.  The parser-only comparison here drops them from
-/// the positive side.
-const POST_ELABORATION_TOPICS: [&str; 2] = ["Formula terms", "Multiplication restriction of rules"];
+/// cover them.  The parser-only comparison here drops them from the positive
+/// side.
+const POST_ELABORATION_TOPICS: [&str; 6] = [
+    "Formula terms",
+    "Multiplication restriction of rules",
+    "Unbound variables",
+    "Public constants with mismatching capitalization",
+    "Facts occur in the left-hand-side but not in any right-hand-side",
+    "Nat Sorts",
+];
 
 /// The minimum size of the roster.  [`fixture_roster_is_complete`] accepts
 /// any pair of a file and a line.  This bound is therefore what makes the
@@ -139,6 +150,18 @@ fn load_corpus() -> Corpus {
     }
 }
 
+/// Does the fixture carry a `.report` expectation?  That file pins its whole
+/// rendered wellformedness block against the oracle's bytes
+/// (`tamarin-theory/tests/wellformedness_fixture_reports.rs`), which reaches
+/// the post-elaboration checks this harness cannot, so such a fixture is held
+/// to its content even when every topic it lists is post-elaboration.
+fn has_report_expectation(name: &str) -> bool {
+    fixtures_dir()
+        .join("reports")
+        .join(format!("{name}.report"))
+        .is_file()
+}
+
 /// The stems of the `.spthy` files in the fixture directory.
 fn fixture_files() -> BTreeSet<String> {
     fs::read_dir(fixtures_dir())
@@ -177,12 +200,13 @@ fn every_fixture_parses_and_matches() {
         for topic in POST_ELABORATION_TOPICS {
             expected.remove(topic);
         }
-        if expected.is_empty() && fx.forbidden.is_empty() {
+        if expected.is_empty() && fx.forbidden.is_empty() && !has_report_expectation(&fx.name) {
             failures.push(format!(
-                "VACUOUS {}: every expected topic is post-elaboration ({:?}), and no `#!` line \
-                 pins one as absent, so this fixture asserts only that the file parses. Restore \
-                 a parser-level expectation or add a `#!` line.",
-                fx.name, POST_ELABORATION_TOPICS
+                "VACUOUS {}: every expected topic is post-elaboration ({:?}), no `#!` line pins \
+                 one as absent, and there is no reports/{}.report, so this fixture asserts only \
+                 that the file parses. Restore a parser-level expectation, add a `#!` line, or \
+                 pin its rendered block.",
+                fx.name, POST_ELABORATION_TOPICS, fx.name
             ));
         }
         if !expected.is_subset(&topics) {

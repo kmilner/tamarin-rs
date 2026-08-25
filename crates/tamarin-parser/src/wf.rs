@@ -89,20 +89,6 @@ impl WfError {
             fill: Some(WfFill::Paragraph { info, cells }),
         }
     }
-
-    /// A `WfError` whose body is a single `<>`-juxtaposed `Doc` — HS
-    /// `natSortErrors` (Wellformedness.hs:315-316), `prettyLNTerm err <> text
-    /// " in term " <> prettyLNTerm t <> text " must be of sort nat"`.  The
-    /// terms inside break at their OWN `fcat`/`fsep` points once the body
-    /// passes the ribbon, so the layout is the engine's.
-    pub fn beside(topic: impl Into<String>, parts: Vec<WfDoc>) -> Self {
-        let doc = WfDoc::Beside(parts);
-        WfError {
-            topic: topic.into(),
-            message: format!("  {}", doc.to_flat()),
-            fill: Some(WfFill::Beside(doc)),
-        }
-    }
 }
 
 /// The body of a wellformedness entry that HS lays out as one HughesPJ `Doc`.
@@ -119,8 +105,6 @@ pub enum WfFill {
         /// (`prettyVarList`, TheoryObject.hs:858-859).
         cells: Vec<WfDoc>,
     },
-    /// A `<>` chain with no top-level fill of its own.
-    Beside(WfDoc),
 }
 
 /// The layout skeleton of one `prettyTerm` / `prettyLNFact` rendering
@@ -366,9 +350,16 @@ pub fn check_theory(thy: &Theory) -> WfReport {
     // the factReports group and the ruleSorts check, matching the diff
     // order at Wellformedness.hs:1256-1261.
     let mut report = Vec::new();
-    report.extend(unbound_report(thy));
+    // unboundReport — spliced by the load pipelines
+    // (`tamarin_theory::translated_rule_wf`, anchored by
+    // `after_unbound_topics`): it reads the TRANSLATED theory's rules, so
+    // the ones SAPIC's process translation generates are in scope.
     report.extend(fresh_names_report(thy));
-    report.extend(public_names_report(thy));
+    // publicNamesReport — spliced by the load pipelines
+    // (`tamarin_theory::elaborate::translated_public_names_report`,
+    // anchored by `after_public_names_topics`): it reads the TRANSLATED
+    // rules, whose `process` attribute carries the constants that appear
+    // only inside a SAPIC process.
     // HS `ruleSortsReport` (sortsClashCheck) runs HERE — after publicNamesReport
     // and BEFORE factReports (Wellformedness.hs:1270-1286, see line 1275/1256).  It is ported as
     // `variable_sort_clashes` ("Variable with mismatching sorts or
@@ -384,7 +375,9 @@ pub fn check_theory(thy: &Theory) -> WfReport {
     report.extend(fresh_fact_arguments(thy));
     report.extend(special_facts_usage(thy));
     report.extend(fact_usage(thy));
-    report.extend(fact_lhs_occur_no_rhs(thy));
+    // factLhsOccurNoRhs — spliced by the load pipelines
+    // (`tamarin_theory::translated_rule_wf`): same reason as
+    // unboundReport above.
     // leftRightRuleReportDiff (diff only) — placed AFTER factReports and
     // ruleSorts, BEFORE formulaReports, matching HS `checkWellformednessDiff`
     // order (Wellformedness.hs:1248-1265, see line 1259).  (ruleVariantsReportDiff sits between
@@ -402,8 +395,9 @@ pub fn check_theory(thy: &Theory) -> WfReport {
     // (`tamarin_theory::mult_restricted`): it needs the elaborated
     // signature's irreducible funsyms and the HughesPJ rule renderer,
     // neither of which the parser crate reaches.
-    // natWellSortedReport:
-    report.extend(nat_well_sorted_report(thy));
+    // natWellSortedReport — spliced by the load pipelines
+    // (`tamarin_theory::translated_rule_wf`): same reason as
+    // unboundReport above.
     // checkEquationsSubtermConvergence:
     report.extend(subterm_convergence_report(thy));
     // Message Derivation Checks (HS: TheoryLoader.hs:172-176 +
@@ -653,14 +647,6 @@ fn rule_name_lits(r: &Rule) -> Vec<(NameKind, String)> {
         }
     }
     names
-}
-
-fn rule_terms(r: &Rule) -> impl Iterator<Item = &Term> {
-    r.premises
-        .iter()
-        .chain(&r.actions)
-        .chain(&r.conclusions)
-        .flat_map(|f: &Fact| f.args.iter())
 }
 
 /// Build an HS `underlineTopic` block: `"<title>\n<====>\n"` where the
@@ -1898,7 +1884,7 @@ where
 }
 
 // =============================================================================
-// Fact occurs in some LHS but not in any RHS
+// Proto-fact classification
 // =============================================================================
 
 /// `isProtoFact` for parser facts: every user fact (including the
@@ -1909,122 +1895,6 @@ where
 /// Theory/Model/Fact.hs:348-350).
 fn is_proto_fact_name(name: &str) -> bool {
     !matches!(name, "Fr" | "In" | "Out" | "KU" | "KD" | "Ded" | "Term")
-}
-
-/// Levenshtein edit distance (HS `editDistance`, used by `mostSimilarName`).
-fn edit_distance(a: &str, b: &str) -> usize {
-    let a: Vec<char> = a.chars().collect();
-    let b: Vec<char> = b.chars().collect();
-    let (n, m) = (a.len(), b.len());
-    let mut prev: Vec<usize> = (0..=m).collect();
-    let mut cur = vec![0usize; m + 1];
-    for i in 1..=n {
-        cur[0] = i;
-        for j in 1..=m {
-            let cost = if a[i - 1] == b[j - 1] { 0 } else { 1 };
-            cur[j] = (prev[j] + 1).min(cur[j - 1] + 1).min(prev[j - 1] + cost);
-        }
-        std::mem::swap(&mut prev, &mut cur);
-    }
-    prev[m]
-}
-
-pub fn fact_lhs_occur_no_rhs(thy: &Theory) -> WfReport {
-    // Mirrors HS `factLhsOccurNoRhs'` (Wellformedness.hs:214-256): for every
-    // PROTO premise fact whose full factInfo (name, arity, multiplicity) is
-    // produced by no rule's conclusion, suggest the RHS proto fact with the
-    // smallest name edit-distance (<= 3, `mostSimilarName`).
-    //
-    // Title carries a single trailing space, matching HS's source-literal
-    // `"Facts occur in the left-hand-side but not in any right-hand-side "`.
-    let title = "Facts occur in the left-hand-side but not in any right-hand-side ";
-
-    // rhs = all proto conclusion facts in source order (regroup of getFacts
-    // rConcs).  factInfo = (name, arity, persistent).
-    let mut rhs: Vec<(&str, &Fact)> = Vec::new();
-    for r in theory_rules(thy) {
-        for f in &r.conclusions {
-            if !is_proto_fact_name(&f.name) {
-                continue;
-            }
-            rhs.push((r.name.as_str(), f));
-        }
-    }
-    let rhs_info: BTreeSet<(&str, usize, bool)> = rhs
-        .iter()
-        .map(|(_, f)| (f.name.as_str(), f.args.len(), f.persistent))
-        .collect();
-
-    // Detect orphan premises (proto LHS facts whose factInfo is in no RHS).
-    #[allow(clippy::type_complexity)]
-    let mut orphan_pairs: Vec<(&str, &Fact, Option<(&str, &Fact)>)> = Vec::new();
-    for r in theory_rules(thy) {
-        for f in &r.premises {
-            if !is_proto_fact_name(&f.name) {
-                continue;
-            }
-            // HS `removeSame`: drop if the full factInfo occurs in some RHS.
-            if rhs_info.contains(&(f.name.as_str(), f.args.len(), f.persistent)) {
-                continue;
-            }
-            // HS `minimalEdFact`: the RHS fact with minimum name edit distance
-            // (`min_by_key` keeps the first on ties, matching RHS order);
-            // `isSimilar` keeps it only if <= 3.
-            let suggestion = rhs
-                .iter()
-                .map(|(rn, rf)| (edit_distance(&f.name, &rf.name), *rn, *rf))
-                .min_by_key(|(d, _, _)| *d)
-                .filter(|(d, _, _)| *d <= 3)
-                .map(|(_, rn, rf)| (rn, rf));
-            orphan_pairs.push((r.name.as_str(), f, suggestion));
-        }
-    }
-
-    if orphan_pairs.is_empty() {
-        return Vec::new();
-    }
-
-    let mut s = String::new();
-    s.push_str(&underline_topic(title));
-    s.push('\n');
-    // HS `numbered'` = `numbered (text "")`: items are interspersed with
-    // `text ""` separators and joined by `$-$`.  `text ""` at indent 2
-    // (from the `nest 2` in the caller) renders as `"  "` (2 spaces).
-    // Result: item1\n  \nitem2\n  \nitem3\n (blank 2-space lines between items).
-    let last_idx = orphan_pairs.len() - 1;
-    // HS `numbered'` left-pads the index to the width of the largest index.
-    let w = numbered_index_width(orphan_pairs.len());
-    for (i, (rule_name, fa, suggestion)) in orphan_pairs.iter().enumerate() {
-        let primary = format!(
-            "in rule \"{}\":  factName `{}' arity: {} multiplicity: {}",
-            rule_name,
-            fa.name,
-            fa.args.len(),
-            if fa.persistent {
-                "Persistent"
-            } else {
-                "Linear"
-            },
-        );
-        let line = match suggestion {
-            Some((sug_rule, sug_fa)) => format!(
-                "  {:>w$}. {}. Perhaps you want to use the fact in rule \"{}\":  factName `{}' arity: {} multiplicity: {}",
-                i + 1, primary, sug_rule, sug_fa.name, sug_fa.args.len(),
-                if sug_fa.persistent { "Persistent" } else { "Linear" },
-                w = w,
-            ),
-            None => format!("  {:>w$}. {}", i + 1, primary, w = w),
-        };
-        s.push_str(&line);
-        s.push('\n');
-        // HS `numbered (text "")` inserts `text ""` between items.
-        // At 2-space indent this renders as "  \n".
-        if i < last_idx {
-            s.push_str("  \n");
-        }
-    }
-
-    vec![WfError::new(title, s)]
 }
 
 // =============================================================================
@@ -2074,35 +1944,14 @@ pub fn fresh_names_report(thy: &Theory) -> WfReport {
 // Public constant capitalization clashes
 // =============================================================================
 
-pub fn public_names_report(thy: &Theory) -> WfReport {
-    // Port of HS `publicNamesReport'` (Wellformedness.hs:463-484).
-    //   publicNames = [(ruleName, pubConstName)]   (public-NAME literals)
-    //   findClashes = clashesOn (lowerCase . show . snd) (show . snd)
-    // and each clash group is rendered as
-    //   numbered' (map (fsep . punctuate comma . map ppRuleAndName . groupOn fst))
-    // where ppRuleAndName lists the names of one rule together
-    //   `rule "R":  name 'a', 'b'`.
-    // This is a SINGLE WfError (count 1) carrying the full block; it uses the
-    // default `format_wf_block` path (header baked into the message).
-    let mut pairs: Vec<(String, String)> = Vec::new(); // (ruleName, pubName)
-    for r in theory_rules(thy) {
-        for (k, n) in rule_name_lits(r) {
-            if k == NameKind::Pub {
-                pairs.push((r.name.clone(), n));
-            }
-        }
-    }
-    public_names_report_from_pairs(pairs)
-}
-
-/// The clash-detection + rendering half of `publicNamesReport'`
-/// (Wellformedness.hs:463-484), factored out so the SAPIC post-translation
-/// re-check can feed it `(showRuleCaseName, pubName)` pairs harvested from the
-/// ELABORATED rules (whose `process=` attribute carries the source process, the
-/// way HS `universeBi` walks it) — the parser AST stores that attribute as a
-/// rendered string, so the parser-level walk above cannot see it.  `pairs` must
-/// arrive in rule order (matching HS `thyProtoRules`), first-occurrence-wins:
-/// `clashesOn` keeps the earliest `(rule, name)` per distinct public name.
+/// The clash-detection + rendering half of HS `publicNamesReport'`
+/// (Wellformedness.hs:463-484).  Its caller,
+/// `tamarin_theory::elaborate::translated_public_names_report`, harvests the
+/// `(showRuleCaseName, pubName)` pairs from the ELABORATED rules — including
+/// the `process` attribute HS's `universeBi` walks — which the parser AST
+/// stores only as a rendered string.  `pairs` must arrive in rule order
+/// (matching HS `thyProtoRules`), first-occurrence-wins: `clashesOn` keeps the
+/// earliest `(rule, name)` per distinct public name.
 pub fn public_names_report_from_pairs(pairs: Vec<(String, String)>) -> WfReport {
     if pairs.is_empty() {
         return Vec::new();
@@ -2264,46 +2113,6 @@ fn collect_rule_unbound_vars(r: &Rule) -> Vec<VarSpec> {
             .then_with(|| a.name.cmp(&b.name))
     });
     unbound
-}
-
-pub fn unbound_report(thy: &Theory) -> WfReport {
-    // HS `unboundReport` (Wellformedness.hs:514-519) produces one `WfError`
-    // PER offending rule, all sharing the topic "Unbound variables".  The
-    // WARNING count printed in the summary is `length rep` (Batch.hs:87-316, see line 245),
-    // i.e. the number of these un-grouped entries — so we must emit one
-    // entry per rule, NOT a single aggregated block.
-    //
-    // The renderer `prettyWfErrorReport` (Wellformedness.hs:118-125) then
-    // `groupOn`s by topic and lays each group out as
-    //   `text topic $-$ (nest 2 . vcat . intersperse (text "") $ map snd errs)`.
-    // i.e. the underlineTopic header is emitted ONCE for the group, the
-    // per-rule bodies are indented by 2 spaces and separated by a 2-space
-    // blank line.  Each body is `text info $-$ nest 2 (prettyVarList vars)`
-    // (Wellformedness.hs:497-498), so the `rule ... has unbound variables:`
-    // line gets 2 spaces and the variable list 2+2 = 4 spaces.  RS's
-    // `format_wf_block` applies that group-level header + 2-space layout
-    // (see below); each entry here carries ONLY its body (`snd err`).
-    let mut out = Vec::new();
-    for r in theory_rules(thy) {
-        let unbound = collect_rule_unbound_vars(r);
-        if !unbound.is_empty() {
-            // HS `prettyVarList = fsep . punctuate comma . map prettyLVar`
-            // (TheoryObject.hs:858-859): the same paragraph fill the sibling
-            // `reservedFactNameRules`/`specialFactsUsage` fact lists use, at
-            // the same 4-space inner `nest 2` indent.  `prettyLVar` is a bare
-            // `text`, so these cells have no break point of their own.
-            let names: Vec<WfDoc> = unbound.iter().map(|v| WfDoc::Text(render_var(v))).collect();
-            // Body only: `  rule `{name}' has unbound variables: ` (2-space
-            // ppTopic nest, trailing space from HS's `info`) then the
-            // variable list at 4 spaces.  format_wf_block adds the header.
-            out.push(WfError::filled(
-                "Unbound variables",
-                format!("rule `{}' has unbound variables: ", r.name),
-                names,
-            ));
-        }
-    }
-    out
 }
 
 /// Static analog of HS's `checkVariableDeducability`
@@ -2758,159 +2567,6 @@ pub fn variable_sort_clashes(thy: &Theory) -> WfReport {
         ));
     }
     out
-}
-
-// =============================================================================
-// Nat sorts: `%+` requires nat operands
-// =============================================================================
-
-pub fn nat_well_sorted_report(thy: &Theory) -> WfReport {
-    // Port of HS `natWellSortedReport` + `natSortErrors` (Wellformedness.hs:
-    // 314-333).  For each top-level fact-arg term `t` (HS `factTerms` of every
-    // prem/act/conc), `nonWellSorted t` collects the offending operands `err`
-    // and we emit ONE body `<err> in term <t> must be of sort nat` per
-    // (t, err) — the rule name is NOT part of the message, and `t` in the
-    // message is the WHOLE fact-arg term, not the `%+` subterm.
-    //
-    // HS produces one WfError per (t, err); `prettyWfErrorReport` groups them
-    // under a single "Nat Sorts" header (bodies 2-space-nested, separated by a
-    // `  ` blank line), which the headerless-preamble path reproduces.  The
-    // body is a `<>` chain of two `prettyLNTerm`s, so a term that overruns the
-    // ribbon breaks at its own `fcat` points — hence the [`WfDoc`] fill.
-    let topic = "Nat Sorts";
-    let ac = user_ac_fun_names(thy);
-    let mut report = WfReport::new();
-    for r in theory_rules(thy) {
-        for t in rule_terms(r) {
-            let mut errs: Vec<&Term> = Vec::new();
-            non_well_sorted(t, &mut errs, &ac);
-            for err in errs {
-                report.push(WfError::beside(
-                    topic,
-                    vec![
-                        wf_term_doc(err, &ac),
-                        WfDoc::Text(" in term ".to_string()),
-                        wf_term_doc(t, &ac),
-                        WfDoc::Text(" must be of sort nat".to_string()),
-                    ],
-                ));
-            }
-        }
-    }
-    // HS `natWellSortedReport`'s `getItemTerms` also checks the formula terms
-    // of LemmaItem/RestrictionItem/PredicateItem (Wellformedness.hs:327-329).
-    // That formula-term walk is not yet implemented here; the nat checks that
-    // fire in the corpus all sit inside rules.
-    report
-}
-
-/// The direct operands of a parser term — the `ts` of HS's `FAPP _ ts`
-/// before any smart-constructor canonicalisation.
-fn wf_direct_children(t: &Term) -> Vec<&Term> {
-    use Term::*;
-    match t {
-        App(_, args) | Pair(args) => args.iter().collect(),
-        AlgApp(_, a, b) | Diff(a, b) | BinOp(_, a, b) => vec![a, b],
-        PatMatch(inner) => vec![inner],
-        Var(_) | PubLit(_) | FreshLit(_) | NatLit(_) | Number(_) | NumberOne | NatOne
-        | DhNeutral => Vec::new(),
-    }
-}
-
-/// The operand list HS's term carries for `t`: an `AC` head's flattened,
-/// sorted chain and a `C` head's sorted arguments (`fAppAC`/`fAppC`,
-/// Term/Term/Raw.hs:118-134), otherwise the direct children.
-///
-/// This is [`hs_fapp_args`]'s borrowing sibling, for the wellformedness
-/// WALKS that report references into the term rather than rendering it —
-/// they see the same operand ORDER HS's checks traverse.  `Pair`'s
-/// right-nesting is left flat: a walk over `[a, b, c]` reaches the same
-/// leaves in the same order as one over `[a, pair(b, c)]`.
-fn wf_canon_children<'a>(t: &'a Term, ac: &AcSyms) -> Vec<&'a Term> {
-    let t = ac_collapse(t, ac);
-    let key = wf_funsym_key(t, ac);
-    match key.0 {
-        1 => {
-            let mut flat: Vec<&Term> = Vec::new();
-            flatten_ac(key, t, &mut flat, ac);
-            flat.sort_by(|a, b| cmp_wf_term(a, b, ac));
-            flat
-        }
-        2 => {
-            let mut args = wf_direct_children(t);
-            args.sort_by(|a, b| cmp_wf_term(a, b, ac));
-            args
-        }
-        _ => wf_direct_children(t),
-    }
-}
-
-/// Faithful port of HS `nonWellSorted` (Wellformedness.hs:293-303): collect
-/// the operands appearing under a `%+` (`FNatPlus`) that are not themselves
-/// nat-well-sorted.  Pushes references to the offending sub-terms onto `out`.
-fn non_well_sorted<'a>(t: &'a Term, out: &mut Vec<&'a Term>, ac: &AcSyms) {
-    let t = ac_collapse(t, ac);
-    match t {
-        // FNatPlus list -> concatMap notOnlyNat list
-        Term::BinOp(BinOp::NatPlus, _, _) => {
-            for a in wf_canon_children(t, ac) {
-                not_only_nat(a, out, ac);
-            }
-        }
-        // NatOne -> []; Lit _ -> []
-        Term::NatOne
-        | Term::Var(_)
-        | Term::PubLit(_)
-        | Term::FreshLit(_)
-        | Term::NatLit(_)
-        | Term::Number(_)
-        | Term::NumberOne
-        | Term::DhNeutral => {}
-        // FApp _ ts -> concatMap nonWellSorted ts (recurse into children)
-        _ => {
-            for a in wf_canon_children(t, ac) {
-                non_well_sorted(a, out, ac);
-            }
-        }
-    }
-}
-
-/// HS `natOneSym = ("tone", (0,Public,Constructor))` — the `%1` of
-/// `builtins: natural-numbers`.  Source text spells it `%1`
-/// (`Term::NatOne`); a term that has been through the theory layer and back
-/// — every fact of a rule SAPIC's translation generates — carries the
-/// signature symbol instead, as the nullary application `tone`.  Both are
-/// HS's `FApp (NoEq natOneSym) []`.
-fn is_nat_one(t: &Term) -> bool {
-    match t {
-        Term::NatOne => true,
-        Term::App(name, args) => name == "tone" && args.is_empty(),
-        _ => false,
-    }
-}
-
-/// Faithful port of HS `notOnlyNat` (Wellformedness.hs:296-300): the inner
-/// recursion under `%+`.  Accepts `NatOne` and genuine nat-sorted *variables*
-/// (`isNatVar`, LTerm.hs:333-335); recurses through nested `%+`; flags
-/// everything else (including msg/pub vars and nat *literals* like
-/// `%'a'`, which are `Con` names, not vars — matching HS's `isNatVar`, which
-/// is true only for `Lit (Var v)` with `lvarSort v == LSortNat`).
-fn not_only_nat<'a>(t: &'a Term, out: &mut Vec<&'a Term>, ac: &AcSyms) {
-    let t = ac_collapse(t, ac);
-    match t {
-        // FNatPlus l -> concatMap notOnlyNat l
-        Term::BinOp(BinOp::NatPlus, _, _) => {
-            for a in wf_canon_children(t, ac) {
-                not_only_nat(a, out, ac);
-            }
-        }
-        // NatOne -> []
-        _ if is_nat_one(t) => {}
-        // t | isNatVar t = []  (nat-sorted VARIABLE only)
-        Term::Var(v) if v.sort == LSort::Nat => {}
-        // t = [t]  (anything else is an offending operand)
-        _ => out.push(t),
-    }
 }
 
 // =============================================================================

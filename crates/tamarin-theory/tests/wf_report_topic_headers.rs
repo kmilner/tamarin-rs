@@ -20,6 +20,43 @@
 use tamarin_parser::parse_theory;
 use tamarin_theory::pretty_theory::format_wf_block;
 
+/// The `/* WARNING … */` comment both load pipelines render: the parser-level
+/// pass, then the translated-theory splice.
+fn load_wf_block(src: &str) -> String {
+    let parsed = parse_theory(src, &[]).expect("parse");
+    let mut report = tamarin_theory::translated_wf::pre_translation_wf_report(&parsed);
+    let elaborated = tamarin_theory::elaborate::elaborate(&parsed).expect("elaborate");
+    let maude_sig = elaborated.signature.maude_sig.clone();
+    tamarin_theory::translated_wf::splice_translated_wf_reports(
+        &elaborated,
+        &maude_sig,
+        &mut report,
+    );
+    format_wf_block(&report)
+}
+
+/// `unboundReport` is HS check index 2 and `lemmaAttributeReport` index 9
+/// (Wellformedness.hs:1270-1286), so the unbound group opens the block even
+/// though the load pipeline splices it into a report `check_theory` has
+/// already assembled.  The theory declares no process, so the splice is the
+/// only producer of the topic.  Bytes are the pinned oracle's (Git revision
+/// ef3f0468) for this theory under `--derivcheck-timeout=0`.
+#[test]
+fn spliced_unbound_group_precedes_a_later_topic() {
+    let src = "theory SpliceOrder\nbegin\n\
+               rule R: [ ] --[ A( ) ]-> [ Out(~k) ]\n\
+               lemma L [reuse]:\n  exists-trace \"Ex #i. A( ) @ #i\"\n\
+               end\n";
+    assert_eq!(
+        load_wf_block(src),
+        "/*\nWARNING: the following wellformedness checks failed!\n\n\
+         Unbound variables\n=================\n\n  \
+         rule `R' has unbound variables: \n    ~k\n\n\
+         Lemma annotations\n=================\n\n  \
+         Lemma `L': cannot reuse 'exists-trace' lemmas\n*/"
+    );
+}
+
 /// `freshFactArguments'` pairs the underlined topic with a bare
 /// `text ("rule " ++ quote …) <-> text "fact:" <-> prettyLNFact fa`
 /// (Wellformedness.hs:574-576), so header, indent and separator all come from

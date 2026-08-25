@@ -8,11 +8,12 @@
 //! [`crate::theory`] and [`crate::restriction`]), for the passes that still
 //! read macro-expanded PARSER rules and formulas:
 //!
-//!   - [`macro_expanded_clone`] — `translated_wf`'s two wellformedness clones
-//!     (stage 8) and `deriv_check`'s probe theory (stage 7);
-//!   - [`expand_theory_macros`] — `formula_reports`' pre-pass (stage 8);
-//!   - [`apply_macros_fact`] — `deriv_check`'s rule rewrite and
-//!     `pretty_theory::is_trivial_proto_variant_ac` (stage 7).
+//!   - [`macro_expanded_clone`] — `translated_wf::pre_translation_wf_report`'s
+//!     wellformedness clone (stage 8);
+//!   - [`expand_theory_macros`] — the parser-theory probes and
+//!     `check_terms_wf`'s tests (stage 8);
+//!   - [`apply_macros_fact`] — `pretty_theory::is_trivial_proto_variant_ac`
+//!     (stage 7).
 //!
 //! Port of `Term.Macro.applyMacros` (HS: lib/term/src/Term/Macro.hs:40-54)
 //! plus the call-sites that drive it:

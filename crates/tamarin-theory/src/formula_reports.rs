@@ -36,21 +36,25 @@
 //! so it is ALL lemmas (theory order) followed by ALL restrictions (theory
 //! order) — not a single interleaved item walk.
 //!
-//! The formulas HS reads here are already macro- and predicate-expanded:
-//! `applyMacroInFormula (theoryMacros thy)` is applied in `annFormulas`
-//! itself, and predicates are inlined at PARSE time
+//! The formulas the three arms read are macro- and predicate-expanded:
+//! `annFormulas` applies `applyMacroInFormula (theoryMacros thy)` itself, and
+//! predicates are inlined at PARSE time
 //! (`liftedAddLemma`→`expandLemma`→`expandFormula`, Theory/Text/Parser.hs:145-147;
-//! `liftedAddRestriction`→`expandRestriction`, lines 132-134), so all three
-//! checks see the inlined predicate bodies — including their terms and
-//! their quantifiers.
+//! `liftedAddRestriction`→`expandRestriction`, lines 132-134).  The elaborated
+//! [`Lemma::formula`](crate::theory::Lemma::formula) and
+//! [`Restriction::formula`](crate::restriction::ProtoRestriction::formula) are
+//! that formula: `elaborate` inlines the predicates and applies the theory's
+//! macros as it builds each item, so all three checks see the inlined
+//! predicate bodies — including their terms and their quantifiers.
 
-use tamarin_parser::ast as p;
 use tamarin_parser::wf::{underline_topic, WfError};
 use tamarin_term::lterm::LSort;
 use tamarin_term::maude_sig::MaudeSig;
 
 use crate::check_terms::{TermChecker, WF_WIDTH};
+use crate::formula::LNFormula;
 use crate::pretty_hpj::{fsep, punctuate, Doc};
+use crate::theory::{Theory, TheoryItem};
 
 /// HS `underlineTopic "Quantifier sorts"` (Wellformedness.hs:1002).
 const QUANTIFIER_TOPIC: &str = "Quantifier sorts";
@@ -60,16 +64,13 @@ const QUANTIFIER_TOPIC: &str = "Quantifier sorts";
 /// `++`, so this is ALL lemmas in theory order followed by ALL restrictions
 /// in theory order.  Headers are HS's `"Lemma " ++ quote name` /
 /// `"Restriction " ++ quote name`.
-///
-/// Macros must already be expanded by the caller (HS applies
-/// `applyMacroInFormula` here).
-pub(crate) fn ann_formulas(thy: &p::Theory) -> Vec<(String, &p::Formula)> {
-    let mut lemmas: Vec<(String, &p::Formula)> = Vec::new();
-    let mut restrictions: Vec<(String, &p::Formula)> = Vec::new();
+fn ann_formulas(thy: &Theory) -> Vec<(String, &LNFormula)> {
+    let mut lemmas: Vec<(String, &LNFormula)> = Vec::new();
+    let mut restrictions: Vec<(String, &LNFormula)> = Vec::new();
     for item in &thy.items {
         match item {
-            p::TheoryItem::Lemma(l) => lemmas.push((format!("Lemma `{}'", l.name), &l.formula)),
-            p::TheoryItem::Restriction(r) | p::TheoryItem::LegacyAxiom(r) => {
+            TheoryItem::Lemma(l) => lemmas.push((format!("Lemma `{}'", l.name), &l.formula)),
+            TheoryItem::Restriction(r) => {
                 restrictions.push((format!("Restriction `{}'", r.name), &r.formula))
             }
             _ => {}
@@ -83,66 +84,23 @@ pub(crate) fn ann_formulas(thy: &p::Theory) -> Vec<(String, &p::Formula)> {
 /// `annFormulas` running `checkQuantifiers`, `checkTerms` and `checkGuarded`
 /// per formula, so the three topics interleave exactly as HS emits them.
 ///
-/// `thy` is the TRANSLATED parser theory — HS's single `checkWellformedness`
-/// runs on the `OpenTranslatedTheory` (`checkTranslatedTheory`,
+/// `thy` is the TRANSLATED theory — HS's single `checkWellformedness` runs on
+/// the `OpenTranslatedTheory` (`checkTranslatedTheory`,
 /// TheoryLoader.hs:559-565, fed by `closeTheory` at :726-728), so
 /// `annFormulas` also covers the restrictions SAPIC's `let … else` / `if`
 /// lowering mints and the lemmas the accountability translation appends.
 /// `sig` is the elaborated `MaudeSig`, for `checkTerms`'s
 /// `irreducibleFunSyms` classification.
-pub fn formula_reports(thy: &p::Theory, sig: &MaudeSig) -> Vec<WfError> {
-    // `annFormulas` applies `applyMacroInFormula` itself
-    // (Wellformedness.hs:1007-1014), so the formulas are read off a
-    // macro-expanded copy of the theory.
-    let mut expanded = thy.clone();
-    crate::macro_expand::expand_theory_macros(&mut expanded);
-    // HS's predicates are inlined at parse time, against the predicates
-    // declared so far (`liftedAddLemma` → `expandLemma`,
-    // Theory/Text/Parser.hs:145-147).  Here every declaration of the theory
-    // is in scope: a formula that names a predicate declared after it is
-    // rejected by `elaborate`, which runs before any wellformedness check.
-    // The bodies are read off the same macro-expanded copy as the formulas,
-    // so a body that calls a macro reaches the use site expanded.
-    let predicates: Vec<crate::predicate::Predicate> = expanded
-        .items
-        .iter()
-        .filter_map(|i| match i {
-            p::TheoryItem::Predicates(ps) => Some(ps.as_slice()),
-            _ => None,
-        })
-        .flatten()
-        .filter_map(|pd| crate::predicate::from_parser(pd, sig).ok())
-        .collect();
-
+pub fn formula_reports(thy: &Theory, sig: &MaudeSig) -> Vec<WfError> {
     let terms = TermChecker::new(sig);
     let mut out: Vec<WfError> = Vec::new();
-    for (header, fm) in ann_formulas(&expanded) {
-        // All three arms read the internal formula HS's parser closed
-        // (`get lFormula l`, Wellformedness.hs:1009).  `from_parser` reaches
-        // every lemma and restriction of the translated corpus
-        // (`tests/s3_translated_theory_probes.rs`).
-        let Ok(syn) = crate::formula::from_parser(fm, sig) else {
-            continue;
-        };
+    for (header, fm) in ann_formulas(thy) {
         // HS `msum [checkQuantifiers, checkTerms, checkGuarded]` = `concat`:
         // every arm runs for every formula, findings concatenated in this
         // order (Wellformedness.hs:1002-1004).
-        match crate::predicate::expand_formula(&predicates, &syn) {
-            Ok(plain) => {
-                out.extend(check_quantifiers(&header, &plain));
-                out.extend(terms.check(&header, &plain));
-                out.extend(check_guarded_entry(&header, &plain));
-            }
-            // An undefined predicate is reported by the elaborate path.
-            // The quantifier and term arms still run on the formula as
-            // written; `atomTerms` yields nothing for the residual
-            // `Syntactic` atom (Wellformedness.hs:908-915), and the
-            // guardedness arm needs a formula without one.
-            Err(_) => {
-                out.extend(check_quantifiers(&header, &syn));
-                out.extend(terms.check(&header, &syn));
-            }
-        }
+        out.extend(check_quantifiers(&header, fm));
+        out.extend(terms.check(&header, fm));
+        out.extend(check_guarded_entry(&header, fm));
     }
     out
 }
@@ -310,7 +268,7 @@ mod tests {
     fn reports(src: &str) -> Vec<WfError> {
         let thy = parse_theory(src, &[]).expect("parse");
         let elaborated = crate::elaborate::elaborate(&thy).expect("elaborate");
-        formula_reports(&thy, &elaborated.signature.maude_sig)
+        formula_reports(&elaborated, &elaborated.signature.maude_sig)
     }
 
     /// `annFormulas = lemmas <|> restrictions` (Wellformedness.hs:1006-1014):
@@ -452,6 +410,30 @@ mod tests {
              (\"aaaaaaaaaaaa\",LSortFresh), (\"bbbbbbbbbbbb\",LSortPub),\n    \
              (\"cccccccccccc\",LSortFresh), (\"dddddddddddd\",LSortPub),\n    \
              (\"eeeeeeeeeeee\",LSortFresh), (\"ffffffffffff\",LSortPub)"
+        );
+    }
+
+    /// `annFormulas` applies `applyMacroInFormula (theoryMacros thy)`
+    /// (Wellformedness.hs:1007-1014), so a macro call is reported as its
+    /// expansion.  Oracle bytes for the theory below (Git revision ef3f0468):
+    /// `exp(Bound 1,Bound 1)`, not the `sq` call.
+    #[test]
+    fn a_macro_call_is_reported_as_its_expansion() {
+        let src = "theory MacroFT\nbegin\n\
+                   builtins: diffie-hellman\n\
+                   macros: sq(x) = x^x\n\
+                   rule R: [ In(x) ] --[ A(x) ]-> [ Out(x) ]\n\
+                   lemma lm: \"All x #i. A(sq(x)) @ i ==> F\"\n\
+                   end\n";
+        let errs = reports(src);
+        let topics: Vec<&str> = errs.iter().map(|e| e.topic.as_str()).collect();
+        assert_eq!(topics, vec!["Formula terms"]);
+        assert!(
+            errs[0]
+                .message
+                .contains("  Lemma `lm' uses terms of the wrong form: `exp(Bound 1,Bound 1)'"),
+            "offender is the expanded term: {}",
+            errs[0].message
         );
     }
 

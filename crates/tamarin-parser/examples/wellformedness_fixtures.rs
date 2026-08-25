@@ -13,9 +13,9 @@
 //! fixture roster, a `.spthy` no `expected.txt` line mentions, a line that
 //! lists no topics, an oracle that fails to launch, and a fixture whose
 //! step-2 expectations all vanish into [`POST_ELABORATION_TOPICS`] are each a
-//! failure — the last one unless the fixture is on
-//! [`EMPTY_RUST_EXPECTATION_ALLOWLIST`] *and* carries negative expectations
-//! for step 2 to compare instead.
+//! failure — the last one unless the fixture pins its rendered block in
+//! `tests/wellformedness_fixtures/reports/`, which holds it to its content
+//! from the crate that runs the post-elaboration checks.
 //!
 //! Usage:  cargo run -p tamarin-parser --example wellformedness_fixtures \
 //!           [-- <fixtures-dir>]
@@ -37,47 +37,31 @@ use tamarin_parser::{parse_theory, wf};
 mod common;
 use common::run_tamarin;
 
-/// The two topics the parser-level `wf::check_theory` cannot produce: both HS
+/// The topics the parser-level `wf::check_theory` cannot produce: their HS
 /// checks need the elaborated `MaudeSig` (reducible-funsym classification,
-/// and `abstractRule`'s irreducible symbols), so their ports live in
-/// `tamarin_theory::check_terms` / `tamarin_theory::mult_restricted` and run
-/// post-elaboration.  Step 2 drops them; step 3 still holds the oracle to
-/// them.
-const POST_ELABORATION_TOPICS: [&str; 2] = ["Formula terms", "Multiplication restriction of rules"];
-
-/// Fixtures whose step-2 expectation set is EMPTY once
-/// [`POST_ELABORATION_TOPICS`] are removed, each with the reason it stays.
-///
-/// A fixture that empties and is NOT listed here fails the run: "the file
-/// parses" is not a wellformedness expectation.  A listed fixture that stops
-/// emptying fails too, so an entry cannot outlive its reason.  And every
-/// entry must carry `#!` negative expectations in `expected.txt`, so step 2
-/// compares *something* for it.
-///
-/// Step 2 still cannot separate the real content of a listed fixture from an
-/// empty theory.  Neither of the two emits a negative topic.
-/// `tests/wellformedness_fixture_reports.rs` in `tamarin-theory` can make
-/// that separation.  It runs each fixture through the post-elaboration
-/// checks.  It then compares the complete rendered report against
-/// `tests/wellformedness_fixtures/reports/`.
-const EMPTY_RUST_EXPECTATION_ALLOWLIST: &[(&str, &str)] = &[
-    (
-        "formula_unguarded",
-        "pins `Formula terms` alone (the lemma's free `#i`); HS `checkTerms` \
-         is post-elaboration in the port",
-    ),
-    (
-        "multiplication_in_rule_lhs",
-        "pins `Multiplication restriction of rules` alone; HS \
-         `multRestrictedReport` is post-elaboration in the port",
-    ),
-    (
-        "quantifier_wrong_sort",
-        "pins `Formula terms` alone; the oracle's second topic here, \
-         ` Formula guardedness`, is post-elaboration in the port too and \
-         cannot be pinned in a file the parser-only harness also reads",
-    ),
+/// `abstractRule`'s irreducible symbols) or the TRANSLATED theory's rules, so
+/// their ports live in `tamarin_theory::{check_terms, mult_restricted,
+/// translated_rule_wf, elaborate}` and run post-elaboration.  Step 2 drops them; step 3
+/// still holds the oracle to them.
+const POST_ELABORATION_TOPICS: [&str; 6] = [
+    "Formula terms",
+    "Multiplication restriction of rules",
+    "Unbound variables",
+    "Public constants with mismatching capitalization",
+    "Facts occur in the left-hand-side but not in any right-hand-side",
+    "Nat Sorts",
 ];
+
+/// Does the fixture pin its whole rendered wellformedness block?  Such a file
+/// lives in `tests/wellformedness_fixtures/reports/` and is compared byte for
+/// byte by `tamarin-theory`'s `tests/wellformedness_fixture_reports.rs`,
+/// which runs the post-elaboration checks this harness cannot reach.  A
+/// fixture whose step-2 expectation set empties into
+/// [`POST_ELABORATION_TOPICS`] is therefore still held to its content — an
+/// empty theory in its place fails there.
+fn has_report_expectation(dir: &std::path::Path, name: &str) -> bool {
+    dir.join("reports").join(format!("{name}.report")).is_file()
+}
 
 /// Topic titles compare modulo surrounding whitespace: HS carries a
 /// source-literal trailing space on the LHS-usage title and a leading one on
@@ -203,7 +187,7 @@ fn main() {
     let mut rust_wf_match = 0usize;
     let mut topics_match = 0usize;
     let mut negatives_checked = 0usize;
-    let mut allowlisted_hit: Vec<(&str, &str)> = Vec::new();
+    let mut report_pinned_hit: Vec<&str> = Vec::new();
 
     for fx in &fixtures {
         let name = fx.name.as_str();
@@ -245,29 +229,17 @@ fn main() {
         let negative = negatives.get(name).cloned().unwrap_or_default();
         negatives_checked += negative.len();
 
-        let allowed: Option<&str> = EMPTY_RUST_EXPECTATION_ALLOWLIST
-            .iter()
-            .find(|(n, _)| *n == name)
-            .map(|(_, reason)| *reason);
-        match (rust_expected.is_empty(), allowed) {
-            (true, None) => fail_lines.push(format!(
-                "VACUOUS {}: every expected topic is post-elaboration ({:?}), so step 2 \
-                 asserts only that the file parses. Restore a parser-level expectation, \
-                 or add an EMPTY_RUST_EXPECTATION_ALLOWLIST entry with a reason.",
-                name, POST_ELABORATION_TOPICS
-            )),
-            (true, Some(_)) if negative.is_empty() => fail_lines.push(format!(
-                "VACUOUS {}: allowlisted with an empty step-2 expectation set but carrying \
-                 no `#!` negative expectations, so step 2 still compares nothing.",
-                name
-            )),
-            (true, Some(reason)) => allowlisted_hit.push((name, reason)),
-            (false, Some(_)) => fail_lines.push(format!(
-                "STALE  {}: on EMPTY_RUST_EXPECTATION_ALLOWLIST, but its step-2 expectation \
-                 set is no longer empty ({:?}) — drop the allowlist entry.",
-                name, rust_expected
-            )),
-            (false, None) => {}
+        if rust_expected.is_empty() {
+            if has_report_expectation(&dir, name) {
+                report_pinned_hit.push(name);
+            } else {
+                fail_lines.push(format!(
+                    "VACUOUS {}: every expected topic is post-elaboration ({:?}) and there is \
+                     no reports/{}.report, so step 2 asserts only that the file parses. \
+                     Restore a parser-level expectation, or pin its rendered block.",
+                    name, POST_ELABORATION_TOPICS, name
+                ));
+            }
         }
 
         if rust_expected.is_subset(&rust_topics) {
@@ -356,13 +328,13 @@ fn main() {
         negatives_checked,
         negatives.len()
     );
-    if !allowlisted_hit.is_empty() {
+    if !report_pinned_hit.is_empty() {
         println!(
-            "\nStep-2 expectation set empty (allowlisted; checked by their `#!` \
-             negatives and by step 3):"
+            "\nStep-2 expectation set empty (rendered block pinned in reports/, \
+             and checked by step 3):"
         );
-        for (name, reason) in &allowlisted_hit {
-            println!("  {}: {}", name, reason);
+        for name in &report_pinned_hit {
+            println!("  {}", name);
         }
     }
     if !fail_lines.is_empty() {

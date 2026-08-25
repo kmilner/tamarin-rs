@@ -120,24 +120,44 @@ impl<'a> TermChecker<'a> {
 }
 
 /// Port of HS `formulaReports`'s `checkTerms` arm (Wellformedness.hs:1003),
-/// run on its own over every lemma + restriction formula (HS `annFormulas`
-/// order: all lemmas in theory order, then all restrictions).  Macros and
-/// predicates must already be expanded by the caller, as HS's formulas are by
-/// the time `formulaReports` reads them.
+/// run on its own over every lemma + restriction formula of a PARSER theory.
+/// Macros and predicates must already be expanded by the caller, as HS's
+/// formulas are by the time `formulaReports` reads them.
 ///
 /// The batch / web load pipelines instead go through
-/// [`crate::formula_reports::formula_reports`], which interleaves this arm
-/// with the other two per formula as HS's `msum` does; this entry point
-/// serves callers that want the `checkTerms` findings alone.
+/// [`crate::formula_reports::formula_reports`], which reads the elaborated
+/// theory and interleaves this arm with the other two per formula as HS's
+/// `msum` does; this entry point serves callers that hold a parser theory and
+/// want the `checkTerms` findings alone.
 pub fn check_terms_wf(thy: &p::Theory, sig: &MaudeSig) -> Vec<WfError> {
     let checker = TermChecker::new(sig);
-    crate::formula_reports::ann_formulas(thy)
+    ann_formulas(thy)
         .into_iter()
         .filter_map(|(header, fm)| {
             let fm = crate::formula::from_parser(fm, sig).ok()?;
             checker.check(&header, &fm)
         })
         .collect()
+}
+
+/// HS `annFormulas` (Wellformedness.hs:1006-1014) over the parser AST: `<|>`
+/// on lists is `++`, so this is ALL lemmas in theory order followed by ALL
+/// restrictions in theory order, headed by HS's `"Lemma " ++ quote name` /
+/// `"Restriction " ++ quote name`.
+fn ann_formulas(thy: &p::Theory) -> Vec<(String, &p::Formula)> {
+    let mut lemmas: Vec<(String, &p::Formula)> = Vec::new();
+    let mut restrictions: Vec<(String, &p::Formula)> = Vec::new();
+    for item in &thy.items {
+        match item {
+            p::TheoryItem::Lemma(l) => lemmas.push((format!("Lemma `{}'", l.name), &l.formula)),
+            p::TheoryItem::Restriction(r) | p::TheoryItem::LegacyAxiom(r) => {
+                restrictions.push((format!("Restriction `{}'", r.name), &r.formula))
+            }
+            _ => {}
+        }
+    }
+    lemmas.extend(restrictions);
+    lemmas
 }
 
 // =============================================================================

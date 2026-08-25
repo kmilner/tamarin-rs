@@ -131,7 +131,6 @@ fn render_report(name: &str) -> String {
     let maude_sig = elaborated.signature.maude_sig.clone();
     tamarin_theory::translated_wf::swap_subterm_convergence_report(&mut report, &maude_sig);
     tamarin_theory::translated_wf::splice_translated_wf_reports(
-        &parsed,
         &elaborated,
         &maude_sig,
         &mut report,

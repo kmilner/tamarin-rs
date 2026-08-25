@@ -120,16 +120,14 @@ pub fn elaborate_with_diagnostics(
     Ok((thy, diags))
 }
 
-/// Post-translation port of HS `publicNamesReport'` (Wellformedness.hs:463-484)
-/// for SAPIC theories.  HS runs the FULL `checkWellformedness` on the TRANSLATED
-/// theory, so `publicNames = universeBi ru` walks each generated rule INCLUDING
-/// the source subprocess HS attaches to it.  The parser-level
-/// `wf::public_names_report` runs BEFORE translation (on the process-only
-/// theory, no generated rules) and — even post-translation — the parser AST
-/// stores the process only as a rendered `process="…"` string, so a constant
-/// appearing solely inside the process (the `'C'` in `insert <'roles', x, 'C'>`)
-/// is invisible to it.  Walk the ELABORATED rules' facts AND their `process`
-/// attribute here to recover those constants.
+/// Port of HS `publicNamesReport'` (Wellformedness.hs:463-484) over the
+/// TRANSLATED theory's rules.  HS runs the FULL `checkWellformedness` on that
+/// theory, so `publicNames = universeBi ru` walks each generated rule
+/// INCLUDING the source subprocess HS attaches to it — and the parser AST
+/// stores that subprocess only as a rendered `process="…"` string, so a
+/// constant appearing solely inside the process (the `'C'` in
+/// `insert <'roles', x, 'C'>`) is reachable only from the elaborated rule.
+/// Walk the ELABORATED rules' facts AND their `process` attribute.
 ///
 /// The root `Init` rule carries the WHOLE process (`base_init` in
 /// tamarin-sapic's base_translation.rs; HS `baseInit`,
@@ -137,7 +135,7 @@ pub fn elaborate_with_diagnostics(
 /// process) and is emitted first, so under `clashesOn`'s
 /// first-occurrence dedup it wins every public name — reproducing HS's
 /// `rule "Init":  name 'C', 'c'` attribution.
-pub fn sapic_public_names_report(thy: &Theory) -> Vec<tamarin_parser::wf::WfError> {
+pub fn translated_public_names_report(thy: &Theory) -> Vec<tamarin_parser::wf::WfError> {
     let mut pairs: Vec<(String, String)> = Vec::new();
     for r in thy.items.iter().filter_map(|it| match it {
         TheoryItem::Rule(r) => Some(r),

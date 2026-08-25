@@ -9,40 +9,24 @@ fn parse(src: &str) -> Theory {
     parse_theory(src, &["diff"]).expect("parse")
 }
 
-/// A fresh variable that occurs only in a conclusion is unbound.  The sibling
-/// checks that pin the body of the unbound-variable report reach that check
-/// through action facts (`wf_entry_fills_comma_lists_at_the_report_ribbon`)
-/// or through a premise-bound rule (`lookup_binder_is_not_unbound`).  This
-/// test covers the conclusion-side fresh-variable branch.
-#[test]
-fn unbound_var_detected() {
-    let t = parse("theory T begin rule R: [] --[ ]-> [ Out(~k) ] end");
-    let r = check_theory(&t);
-    assert!(topics(&r).contains("Unbound variables"), "report: {:?}", r);
-}
-
 /// The parser inlines a rule's `let` bindings into the body it builds
-/// (`apply subst (ps0,as0,cs0,rs0)`, Theory/Text/Parser/Rule.hs:119), so every
-/// check here reads the substituted facts.  `Fr(m)` passes the fresh-argument
-/// check as a message variable and fails it as `Fr( h(~k) )`; `c %+ %1` is nat
-/// well sorted only once `c` is the nat variable `%i`.  The end-to-end pin is
-/// `scripts/divergence_fixtures/s6_let_conclusion_var`.
+/// (`apply subst (ps0,as0,cs0,rs0)`, Theory/Text/Parser/Rule.hs:119), so the
+/// checks read the substituted facts: `Fr(m)` passes the fresh-argument check
+/// as a message variable and fails it as `Fr( h(~k) )`.  The end-to-end pin
+/// is `scripts/divergence_fixtures/s6_let_conclusion_var`.
 #[test]
-fn let_inlining_reaches_the_fresh_and_nat_checks() {
+fn let_inlining_reaches_the_fresh_fact_check() {
     let t = parse(
         r#"theory T begin
-            builtins: hashing, natural-numbers
+            builtins: hashing
             rule Reuse: let m = h(~k) in [Fr(m)] --[ ]-> [Out(m)]
-            rule Count: let c = %i in [In(<'c', %i>)] --[Count(c %+ %1)]-> []
         end"#,
     );
     let r = check_theory(&t);
-    let tp = topics(&r);
     assert!(
-        tp.contains("Fr facts must only use a fresh- or a msg-variable"),
+        topics(&r).contains("Fr facts must only use a fresh- or a msg-variable"),
         "report: {r:?}"
     );
-    assert!(!tp.contains("Nat Sorts"), "report: {r:?}");
 }
 
 /// Rule conclusions also feed the arity table.  The tests that pin the arity
@@ -188,9 +172,9 @@ fn wf_entry_compares_same_head_operands_on_hs_argument_lists() {
     );
 }
 
-/// The fact/variable lists of `specialFactsUsage'`,
-/// `reservedFactNameRules'` and `unboundCheck` are HS `fsep` paragraph
-/// fills, which break before any cell that would pass column
+/// The fact lists of `specialFactsUsage'` and `reservedFactNameRules'` are
+/// HS `fsep` paragraph fills, which break before any cell that would pass
+/// column
 /// [`WF_FILL_RIBBON`] measured from the 4-space nesting.  This is
 /// [`WfError::message`]'s flat-cell rendering; every cell here fits inside
 /// the ribbon, so it equals the pinned oracle's bytes (ef3f0468).  The
@@ -215,27 +199,19 @@ fn wf_entry_fills_comma_lists_at_the_report_ribbon() {
              \x20   Out( a11 ), Out( a12 ), Out( a13 ), Out( a14 ), Out( a15 ),\n\
              \x20   Out( a16 ), Out( a17 ), Out( a18 ), Out( a19 ), Out( a20 )"
     );
-    // The same 20 names as `K` action facts (10-column cells: six fit at
-    // 65, seven would need 76) and as unbound variables (4-column cells:
-    // thirteen fit at 64, fourteen would need 69).
+    // The same 20 names as `K` action facts: 10-column cells, six fit at 65
+    // and seven would need 76.
     let t = parse(&format!(
         "theory T begin rule R: [] --[ {} ]-> [] end",
         list(20, &|i| format!("K( a{i:02} )"))
     ));
-    let report = check_theory(&t);
     assert_eq!(
-        only(&report, "Reserved names"),
+        only(&check_theory(&t), "Reserved names"),
         "  Rule `R' contains facts with reserved names on the middle:\n\
              \x20   K( a01 ), K( a02 ), K( a03 ), K( a04 ), K( a05 ), K( a06 ),\n\
              \x20   K( a07 ), K( a08 ), K( a09 ), K( a10 ), K( a11 ), K( a12 ),\n\
              \x20   K( a13 ), K( a14 ), K( a15 ), K( a16 ), K( a17 ), K( a18 ),\n\
              \x20   K( a19 ), K( a20 )"
-    );
-    assert_eq!(
-        only(&report, "Unbound variables"),
-        "  rule `R' has unbound variables: \n\
-             \x20   a01, a02, a03, a04, a05, a06, a07, a08, a09, a10, a11, a12, a13,\n\
-             \x20   a14, a15, a16, a17, a18, a19, a20"
     );
     // The ribbon boundary itself: `Out( a ),` (9) + space + a 57-column
     // fact is exactly 67 and stays on the line; one column more breaks.
@@ -476,10 +452,9 @@ fn wf_entry_renders_pair_headed_terms_in_angle_form() {
     );
 }
 
-/// The `Fr`-argument, nat-sort and subterm-convergence checks reach the
-/// terms through their own printers, each of which is HS `prettyLNTerm`
-/// and so carries the same shape-keyed pair arm.  Byte-pinned to the
-/// pinned oracle (ef3f0468).
+/// The `Fr`-argument and subterm-convergence checks reach the terms through
+/// their own printers, each of which is HS `prettyLNTerm` and so carries the
+/// same shape-keyed pair arm.  Byte-pinned to the pinned oracle (ef3f0468).
 #[test]
 fn wf_pair_headed_terms_render_in_angle_form_in_every_check() {
     // Oracle: `rule `Test' fact: Fr( <a, b> )`.
@@ -490,18 +465,6 @@ fn wf_pair_headed_terms_render_in_angle_form_in_every_check() {
             "Fr facts must only use a fresh- or a msg-variable"
         ),
         "rule `Test' fact: Fr( <a, b> )"
-    );
-    // Oracle:
-    //   `  x in term (x%+<a, b>) must be of sort nat`
-    //   `  <a, b> in term (x%+<a, b>) must be of sort nat`
-    let t = parse(
-        "theory T begin builtins: natural-numbers \
-            rule Test: [ In( x %+ pair(a,b) ) ] --[ ]-> [] end",
-    );
-    assert_eq!(
-        group_bodies(&check_theory(&t), "Nat Sorts"),
-        "  x in term (x%+<a, b>) must be of sort nat\n  \n  \
-             <a, b> in term (x%+<a, b>) must be of sort nat"
     );
     // Oracle: `    ff(x, y) = <x, y>`.
     let t = parse(
@@ -595,57 +558,6 @@ fn wf_lemma_fact_show_form_canonicalises_ac_and_c_heads() {
     );
 }
 
-/// The `Nat Sorts` bodies render `prettyLNTerm` over the canonical term,
-/// and `nonWellSorted` walks the canonical operand list — so both the
-/// offender `err` and the enclosing term `t` print flattened and sorted,
-/// and MULTIPLE offenders of one term are reported in that same order.
-/// Byte-pinned to the pinned oracle (ef3f0468).
-#[test]
-fn nat_sorts_renders_ac_terms_canonically() {
-    let bodies = |src: &str| -> String {
-        let t = parse(&format!(
-            "theory T begin \
-                 builtins: multiset, xor, bilinear-pairing, natural-numbers \
-                 functions: add/2 [AC], zz/1 \
-                 rule R: [ In(<a,b,c>) ] --> [ Out( {src} ) ] end"
-        ));
-        group_bodies(&check_theory(&t), "Nat Sorts")
-    };
-    assert_eq!(
-        bodies("(a*b)*c %+ %1"),
-        "  (a*b*c) in term (%1%+(a*b*c)) must be of sort nat"
-    );
-    assert_eq!(
-        bodies("add(add(b,a),c) %+ %1"),
-        "  (a add b add c) in term (%1%+(a add b add c)) must be of sort nat"
-    );
-    assert_eq!(
-        bodies("em(b,a) %+ %1"),
-        "  em(a, b) in term (%1%+em(a, b)) must be of sort nat"
-    );
-    assert_eq!(
-        bodies("zz(b*a) %+ %1"),
-        "  zz((a*b)) in term (%1%+zz((a*b))) must be of sort nat"
-    );
-    // `fAppAC _ [a] = a`: the offender is `a`, not `add(a)`.
-    assert_eq!(
-        bodies("add(a) %+ %1"),
-        "  a in term (a%+%1) must be of sort nat"
-    );
-    // `exp` is `NoEq`, so it renders unparenthesised.
-    assert_eq!(
-        bodies("(a^b) %+ %1"),
-        "  a^b in term (a^b%+%1) must be of sort nat"
-    );
-    // Two offenders under one `%+`: reported in canonical operand order
-    // (the LIT `c` before the `Mult`-headed FAPP), not source order.
-    assert_eq!(
-        bodies("(a*b) %+ c %+ %1"),
-        "  c in term (c%+%1%+(a*b)) must be of sort nat\n  \n  \
-             (a*b) in term (c%+%1%+(a*b)) must be of sort nat"
-    );
-}
-
 /// HS `freshFactArguments'` renders the offending premise with
 /// `prettyLNFact` (Wellformedness.hs:569-576, see line 576), so the body
 /// carries `prettyLVar`'s `.idx` suffix and `prettyTerm`'s AC/C
@@ -674,20 +586,6 @@ fn fresh_fact_argument_renders_the_whole_fact_like_prettylnfact() {
     assert_eq!(body("zz(x.1)"), "Fr( zz(x.1) )");
 }
 
-/// The bodies of every `topic` entry joined the way `prettyWfErrorReport`
-/// joins a topic group (`intersperse (text "")` under one header,
-/// Wellformedness.hs:118-125).  For the topics that emit ONE `WfError` per
-/// finding, so `report.len()` keeps HS's `N wellformedness check failed` count.
-fn group_bodies(report: &WfReport, topic: &str) -> String {
-    let hits: Vec<&str> = report
-        .iter()
-        .filter(|e| e.topic == topic)
-        .map(|e| e.message.as_str())
-        .collect();
-    assert!(!hits.is_empty(), "no {topic:?} entry in {report:?}");
-    hits.join("\n  \n")
-}
-
 /// Return the single `WfError` whose topic matches `topic`.
 fn only(report: &WfReport, topic: &str) -> String {
     let hits: Vec<&WfError> = report.iter().filter(|e| e.topic == topic).collect();
@@ -699,45 +597,6 @@ fn only(report: &WfReport, topic: &str) -> String {
         report
     );
     hits[0].message.clone()
-}
-
-/// Probed against tamarin-prover ef3f0468 on `Out(%a %+ ~x)`:
-///   `~x in term (~x%+%a) must be of sort nat`
-/// The only operand that the check rejects is the fresh var `~x`.  The check
-/// accepts the nat-sorted `%a`.  This matches HS `notOnlyNat`/`isNatVar`,
-/// which accepts `NatOne` and nat-sorted *variables*.  The message has no
-/// rule name.  `t` is the complete fact-arg term.  The `%+` operands print in
-/// `Ord LVar` order (`~x` is `LSortFresh`, `%a` is `LSortNat`,
-/// LTerm.hs:165-170) rather than in the source order.  HS's `fAppAC` sorts
-/// them at construction.
-#[test]
-fn nat_sorts_message_format() {
-    let t = parse(
-        "theory T begin builtins: natural-numbers \
-            rule R: [ Fr(~x) ] --[ ]-> [ Out(%a %+ ~x) ] end",
-    );
-    // One `WfError` per (t, err), body 2-space-nested, header supplied by
-    // `prettyWfErrorReport`'s topic group.
-    assert_eq!(
-        group_bodies(&check_theory(&t), "Nat Sorts"),
-        "  ~x in term (~x%+%a) must be of sort nat"
-    );
-}
-
-/// The check flags a nat *literal* `%'a'`, which is a `Con` name and not a
-/// var.  It does not flag the nat var `%y` beside it.  This matches HS
-/// `isNatVar`, which is true only for `Lit (Var ..)` with LSortNat.  The
-/// single body is pinned byte for byte to the pinned oracle (ef3f0468).
-#[test]
-fn nat_sorts_flags_nat_literal() {
-    let t = parse(
-        "theory T begin builtins: natural-numbers \
-            rule R: [ Fr(~x) ] --[ ]-> [ Out(%'a' %+ %y) ] end",
-    );
-    assert_eq!(
-        group_bodies(&check_theory(&t), "Nat Sorts"),
-        "  %'a' in term (%'a'%+%y) must be of sort nat"
-    );
 }
 
 /// Probed against tamarin-prover v1.13.0 on `Out(<~k, ~'foo'>)`:
@@ -754,109 +613,6 @@ fn fresh_public_constants_message_format() {
         msg,
         "Fresh public constants\n======================\n\n  \
              rule `R': fresh public constants are not allowed: ~'foo'"
-    );
-}
-
-/// A free variable literally named `True` IS reported as unbound — there
-/// is no builtin `True` nullary (only `true`), so the parser leaves it a
-/// variable.
-#[test]
-fn variable_named_true_is_unbound() {
-    let t = parse("theory T begin rule R: [ ] --[ ]-> [ Out(True) ] end");
-    assert!(
-        topics(&check_theory(&t)).contains("Unbound variables"),
-        "True must be reported as unbound"
-    );
-}
-
-/// A builtin's 0-arity constant is a symbol only while that builtin is
-/// enabled (`nullaryApp` searches `funSyms maudeSig`,
-/// Theory/Text/Parser/Term.hs:158-163), so the same bare name is a variable
-/// — and an unbound one — in a theory that does not enable it.
-#[test]
-fn bare_name_of_a_disabled_builtin_constant_is_a_variable() {
-    let t = parse("theory T begin rule R: [ ] --[ ]-> [ Out(<zero, true>) ] end");
-    assert!(
-        topics(&check_theory(&t)).contains("Unbound variables"),
-        "zero and true must be reported as unbound without xor and signing"
-    );
-    let t = parse(
-        "theory T begin builtins: xor, signing          rule R: [ ] --[ ]-> [ Out(<zero, true>) ] end",
-    );
-    assert!(
-        !topics(&check_theory(&t)).contains("Unbound variables"),
-        "with the builtins enabled both names are constants: {:?}",
-        check_theory(&t)
-    );
-}
-
-/// HS `originatesFromLookup` (Wellformedness.hs:501-503, 506-510): the
-/// variable a SAPIC `lookup t as v` combinator binds reaches its generated
-/// rule through the `IsIn( t, v )` action, so it is not unbound — while an
-/// otherwise identical rule without the `process=` attribute is.  The
-/// parser never mints [`RuleAttr::Process`] (HS's rule-attribute parser
-/// discards a written one), so the generated shape is built by attaching
-/// the attribute the SAPIC translation writes.
-#[test]
-fn lookup_binder_is_not_unbound() {
-    let src = "theory T begin \
-                   rule L: [ State_1(m.1) ] --[ IsIn(m.1, v.1) ]-> [ State_11(m.1, v.1) ] \
-                   end";
-    let mut t = parse(src);
-    assert_eq!(
-        unbound_report(&t).len(),
-        1,
-        "without the lookup attribute v.1 is unbound"
-    );
-    for it in t.items.iter_mut() {
-        if let TheoryItem::Rule(r) = it {
-            r.attributes
-                .push(RuleAttr::Process("lookup m.1 as v.1".into()));
-        }
-    }
-    assert!(
-        unbound_report(&t).is_empty(),
-        "the lookup binder must be suppressed: {:?}",
-        unbound_report(&t)
-    );
-
-    // A DIFFERENT free variable in the same lookup rule is still reported:
-    // HS compares the offender against the binder, it does not exempt the
-    // whole rule.
-    let mut t2 = parse(
-        "theory T begin \
-             rule L: [ State_1(m.1) ] --[ IsIn(m.1, v.1) ]-> [ State_11(m.1, v.1, w.2) ] \
-             end",
-    );
-    for it in t2.items.iter_mut() {
-        if let TheoryItem::Rule(r) = it {
-            r.attributes
-                .push(RuleAttr::Process("lookup m.1 as v.1".into()));
-        }
-    }
-    let rep = unbound_report(&t2);
-    assert_eq!(rep.len(), 1);
-    let Some(WfFill::Paragraph { cells, .. }) = rep[0].fill.as_ref() else {
-        panic!("unbound entry carries its cells: {rep:?}");
-    };
-    assert_eq!(
-        *cells,
-        vec![WfDoc::Text("w.2".to_string())],
-        "only the non-binder variable is reported: {rep:?}"
-    );
-}
-
-/// HS `unboundVars` is a `frees` result (Wellformedness.hs:505-511), so the
-/// list is sorted by `Ord LVar` = `(idx, sort, name)` (LTerm.hs:546-548)
-/// rather than by source order: the fresh `~nr` precedes the msg-sorted `mi`
-/// and `ni`, and the pub-sorted `$A` is dropped.  Probed against the pinned
-/// oracle (ef3f0468) on `Out(<ni, ~nr, $A, mi>)`.
-#[test]
-fn unbound_variables_are_listed_in_lvar_order() {
-    let t = parse("theory T begin rule R: [ ] --[ ]-> [ Out(<ni, ~nr, $A, mi>) ] end");
-    assert_eq!(
-        group_bodies(&unbound_report(&t), "Unbound variables"),
-        "  rule `R' has unbound variables: \n    ~nr, mi, ni"
     );
 }
 
@@ -889,90 +645,5 @@ fn subterm_convergence_last_write_wins() {
     assert!(
         topics(&check_theory(&t)).contains("Subterm Convergence Warning"),
         "regular block last => flag false => warning fires"
-    );
-}
-
-/// This is HS's source-literal topic string.  It includes the trailing space
-/// (Wellformedness.hs:221#topic).
-const LHS_NO_RHS_TOPIC: &str = "Facts occur in the left-hand-side but not in any right-hand-side ";
-
-/// This is `underlineTopic LHS_NO_RHS_TOPIC` plus the `$-$` blank line that
-/// opens the body.  The title is 65 characters long, and its trailing space
-/// counts.  Below the title is a rule of 65 `=` characters.
-const LHS_NO_RHS_HEADER: &str =
-    "Facts occur in the left-hand-side but not in any right-hand-side \n\
-     =================================================================\n\n";
-
-/// The suggestion arm of `fact_lhs_occur_no_rhs` is the only caller of the
-/// live `edit_distance`.  It picks the RHS fact with the smallest name
-/// distance.  It does not pick the first one.  `Sesion` is 1 edit from
-/// `Session` and 2 edits from `Section`, which the source lists earlier.  So
-/// the report suggests `Session`.  A wrong cost term in `edit_distance` makes
-/// `Section` win here.
-///
-/// The body bytes follow HS `showRuleAndFact`/`showFactInfo`
-/// (Wellformedness.hs:239-251#showRuleAndFact).  They come from a probe
-/// against the pinned oracle (ef3f0468).
-#[test]
-fn fact_lhs_no_rhs_suggests_the_smallest_edit_distance_not_the_first() {
-    let t = parse(
-        r#"theory T begin
-            rule A: [ Sesion(x) ] --[ ]-> [ ]
-            rule B: [ ] --[ ]-> [ Section(x) ]
-            rule C: [ ] --[ ]-> [ Session(x) ]
-        end"#,
-    );
-    assert_eq!(
-        only(&fact_lhs_occur_no_rhs(&t), LHS_NO_RHS_TOPIC),
-        format!(
-            "{LHS_NO_RHS_HEADER}  1. in rule \"A\":  factName `Sesion' arity: 1 \
-             multiplicity: Linear. Perhaps you want to use the fact in rule \"C\":  \
-             factName `Session' arity: 1 multiplicity: Linear\n"
-        )
-    );
-}
-
-/// HS `isSimilar` keeps the nearest RHS name only at distance `<= 3`
-/// (Wellformedness.hs:192-196#isSimilar).  `Abc` is 4 edits from `Abcdefg`,
-/// the only RHS name.  So the line has no "Perhaps you want to use" suffix.
-/// The body comes from a probe against the pinned oracle (ef3f0468).
-#[test]
-fn fact_lhs_no_rhs_drops_the_suggestion_past_distance_three() {
-    let t = parse(
-        r#"theory T begin
-            rule A: [ Abc(x) ] --[ ]-> [ ]
-            rule B: [ ] --[ ]-> [ Abcdefg(x) ]
-        end"#,
-    );
-    assert_eq!(
-        only(&fact_lhs_occur_no_rhs(&t), LHS_NO_RHS_TOPIC),
-        format!(
-            "{LHS_NO_RHS_HEADER}  1. in rule \"A\":  factName `Abc' arity: 1 \
-             multiplicity: Linear\n"
-        )
-    );
-}
-
-/// Both RHS names are 1 edit from `Aaa`.  The tie goes to the first name in
-/// RHS source order.  HS `minimalEdFact` takes `listToMaybe . sortOn snd`
-/// (Wellformedness.hs:200-201#minimalEdFact), and that sort is stable.  The
-/// port's `min_by_key` copies this behaviour.  The body comes from a probe
-/// against the pinned oracle (ef3f0468).
-#[test]
-fn fact_lhs_no_rhs_breaks_distance_ties_by_rhs_source_order() {
-    let t = parse(
-        r#"theory T begin
-            rule A: [ Aaa(x) ] --[ ]-> [ ]
-            rule B: [ ] --[ ]-> [ Aax(x) ]
-            rule C: [ ] --[ ]-> [ Aay(x) ]
-        end"#,
-    );
-    assert_eq!(
-        only(&fact_lhs_occur_no_rhs(&t), LHS_NO_RHS_TOPIC),
-        format!(
-            "{LHS_NO_RHS_HEADER}  1. in rule \"A\":  factName `Aaa' arity: 1 \
-             multiplicity: Linear. Perhaps you want to use the fact in rule \"B\":  \
-             factName `Aax' arity: 1 multiplicity: Linear\n"
-        )
     );
 }

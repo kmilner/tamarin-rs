@@ -15,17 +15,25 @@
 
 use tamarin_theory::pretty_theory::format_wf_block;
 
-/// The `/* WARNING … */` comment `check_theory`'s report renders to, i.e. the
-/// block the theory output carries between the source body and the summary.
+/// The `/* WARNING … */` comment the load pipelines render, i.e. the block the
+/// theory output carries between the source body and the summary: the
+/// parser-level pass, then the translated-theory splice that carries
+/// `unboundReport` and its siblings.
 ///
-/// The load pipelines drop `check_theory`'s STATIC "Message Derivation Checks"
+/// Both pipelines drop `check_theory`'s STATIC "Message Derivation Checks"
 /// placeholder and re-add the dynamic check's own entries, which
 /// `--derivcheck-timeout=0` — how the expected blocks below were captured —
-/// produces none of; the same drop here keeps the probes comparable.
+/// produces none of; `pre_translation_wf_report` makes the same drop.
 fn wf_block(src: &str) -> String {
-    let thy = tamarin_parser::parse_theory(src, &[]).expect("probe parses");
-    let mut report = tamarin_parser::wf::check_theory(&thy);
-    report.retain(|e| e.topic != "Message Derivation Checks");
+    let parsed = tamarin_parser::parse_theory(src, &[]).expect("probe parses");
+    let mut report = tamarin_theory::translated_wf::pre_translation_wf_report(&parsed);
+    let elaborated = tamarin_theory::elaborate::elaborate(&parsed).expect("probe elaborates");
+    let maude_sig = elaborated.signature.maude_sig.clone();
+    tamarin_theory::translated_wf::splice_translated_wf_reports(
+        &elaborated,
+        &maude_sig,
+        &mut report,
+    );
     format_wf_block(&report)
 }
 

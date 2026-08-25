@@ -256,15 +256,10 @@ pub fn load_from_source(
 
     // HS re-runs the full `checkWellformedness` on the TRANSLATED theory
     // (`checkTranslatedTheory`), i.e. after `apply_sapic` / `Acc::translate`
-    // injected the generated rules and lemmas.  The six re-runs and their
-    // splice positions are shared with the batch path (`run_batch`) — see
+    // injected the generated rules and lemmas.  The re-runs and their splice
+    // positions are shared with the batch path (`run_batch`) — see
     // `tamarin_theory::translated_wf`.
-    tamarin_theory::translated_wf::splice_translated_wf_reports(
-        &parser_theory,
-        &typed,
-        &maude_sig,
-        &mut wf_report,
-    );
+    tamarin_theory::translated_wf::splice_translated_wf_reports(&typed, &maude_sig, &mut wf_report);
 
     // The theory's once-per-load NDC-checked intruder cache
     // (`check_close_intr_rule` below).  Stored on the `TheoryEntry` so

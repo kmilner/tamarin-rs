@@ -1382,12 +1382,11 @@ impl TheoryPipeline<'_> {
         // `translate` has injected the generated rules, whereas our
         // `check_theory` runs earlier on the PRE-translation theory (in the
         // file loop, before `apply_sapic`), where the SAPIC rules are
-        // invisible to the rule-dependent checks.  The six re-runs and their
+        // invisible to the rule-dependent checks.  The re-runs and their
         // splice positions are shared with the web load path — see
-        // `tamarin_theory::translated_wf`.  The seventh, Maude-dependent
-        // "Rule variants" block is batch-only and stays below.
+        // `tamarin_theory::translated_wf`.  The Maude-dependent "Rule
+        // variants" block is batch-only and stays below.
         tamarin_theory::translated_wf::splice_translated_wf_reports(
-            &self.parsed,
             &self.elaborated,
             &self.maude_sig,
             &mut self.wf_report,

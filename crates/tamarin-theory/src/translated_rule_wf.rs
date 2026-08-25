@@ -672,6 +672,31 @@ mod tests {
             report("add(add(b,a),c) %+ %1"),
             "  (a add b add c) in term (%1%+(a add b add c)) must be of sort nat"
         );
+        assert_eq!(
+            report("em(b,a) %+ %1"),
+            "  em(a, b) in term (%1%+em(a, b)) must be of sort nat"
+        );
+        assert_eq!(
+            report("zz(b*a) %+ %1"),
+            "  zz((a*b)) in term (%1%+zz((a*b))) must be of sort nat"
+        );
+        // `fAppAC _ [a] = a`: the offender is `a`, not `add(a)`.
+        assert_eq!(
+            report("add(a) %+ %1"),
+            "  a in term (a%+%1) must be of sort nat"
+        );
+        // `exp` is `NoEq`, so it renders unparenthesised.
+        assert_eq!(
+            report("(a^b) %+ %1"),
+            "  a^b in term (a^b%+%1) must be of sort nat"
+        );
+        // Two offenders under one `%+`, in canonical operand order (the LIT
+        // `c` before the `Mult`-headed FAPP) rather than source order.
+        assert_eq!(
+            report("(a*b) %+ c %+ %1"),
+            "  c in term (c%+%1%+(a*b)) must be of sort nat\n  \n  \
+             (a*b) in term (c%+%1%+(a*b)) must be of sort nat"
+        );
     }
 
     /// One entry per `(term, offending operand)` pair, so a `%+` with two
@@ -687,6 +712,52 @@ mod tests {
             bodies(&nat_well_sorted_report(&thy)),
             "  x in term (x%+<a, b>) must be of sort nat\n  \n  \
              <a, b> in term (x%+<a, b>) must be of sort nat"
+        );
+    }
+
+    /// A free variable literally named `True` is unbound: there is no builtin
+    /// `True` nullary (only `true`), so the parser leaves it a variable.
+    #[test]
+    fn variable_named_true_is_unbound() {
+        let thy = elaborated("theory T begin rule R: [ ] --[ ]-> [ Out(True) ] end");
+        assert_eq!(
+            bodies(&unbound_report(&thy)),
+            "  rule `R' has unbound variables: \n    True"
+        );
+    }
+
+    /// `prettyVarList` is HS's `fsep` paragraph fill, so the variable cells
+    /// break before the one that would pass the ribbon — 4-column cells:
+    /// thirteen fit at 64, fourteen would need 69.  Byte-pinned to the pinned
+    /// oracle (ef3f0468).
+    #[test]
+    fn unbound_variable_list_fills_at_the_report_ribbon() {
+        let names: Vec<String> = (1..=20).map(|i| format!("K( a{i:02} )")).collect();
+        let thy = elaborated(&format!(
+            "theory T begin rule R: [] --[ {} ]-> [] end",
+            names.join(", ")
+        ));
+        assert_eq!(
+            bodies(&unbound_report(&thy)),
+            "  rule `R' has unbound variables: \n    \
+             a01, a02, a03, a04, a05, a06, a07, a08, a09, a10, a11, a12, a13,\n    \
+             a14, a15, a16, a17, a18, a19, a20"
+        );
+    }
+
+    /// The parser inlines a rule's `let` bindings into the body it builds
+    /// (`apply subst (ps0,as0,cs0,rs0)`, Theory/Text/Parser/Rule.hs:119), so
+    /// the check reads the substituted facts: `c %+ %1` is nat well sorted
+    /// once `c` is the nat variable `%i`.
+    #[test]
+    fn let_inlining_reaches_the_nat_check() {
+        let thy = elaborated(
+            "theory T begin builtins: natural-numbers \
+             rule Count: let c = %i in [In(<'c', %i>)] --[Count(c %+ %1)]-> [] end",
+        );
+        assert!(
+            nat_well_sorted_report(&thy).is_empty(),
+            "the inlined `%i` is nat sorted"
         );
     }
 }
