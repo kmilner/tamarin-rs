@@ -101,6 +101,19 @@ impl SapicLVar {
     }
 }
 
+/// HS `instance Show SapicLVar` (Theory/Sapic/Term.hs:108-110): the variable's
+/// own `Show LVar` (Term/LTerm.hs:550-557), followed by `":" ++ t` when the
+/// variable carries a type tag.
+impl std::fmt::Display for SapicLVar {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.var)?;
+        match &self.stype {
+            Some(t) => write!(f, ":{t}"),
+            None => Ok(()),
+        }
+    }
+}
+
 /// `SapicNTerm<V>` ≡ `VTerm<Name, V>` — SAPIC terms carry `Name` constants.
 pub type SapicNTerm<V> = VTerm<Name, V>;
 pub type SapicTerm = SapicNTerm<SapicLVar>;

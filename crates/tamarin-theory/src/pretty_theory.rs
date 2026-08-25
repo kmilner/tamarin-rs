@@ -691,10 +691,7 @@ fn render_open_item(
                     // `map show l` over typed `SapicLVar`s
                     // (Theory/Sapic/Term.hs:108-110): LVar display plus
                     // `:type` suffix.
-                    let shown: Vec<String> = vs
-                        .iter()
-                        .map(crate::pretty_sapic::show_sapic_lvar)
-                        .collect();
+                    let shown: Vec<String> = vs.iter().map(ToString::to_string).collect();
                     d = d.beside_sp(Doc::text(format!("({})", shown.join(","))));
                 }
                 d = d
