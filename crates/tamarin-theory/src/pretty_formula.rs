@@ -15,28 +15,27 @@
 //!   `∀`, `∃`, `⇒`, `∧`, `∨`, `¬`, `⊤`, `⊥`, `@`, `<`, `=`, `⊏`,
 //!   `last(...)`.
 //!
-//! Term arguments inside facts/atoms are rendered from
-//! `tamarin_parser::ast::Term` by [`term_to_doc`].  The AST and `Guarded`
-//! paths carry that term type already; the locally-nameless path
+//! The AST and `Guarded` paths render their term arguments from
+//! `tamarin_parser::ast::Term` and `guarded_types::GTerm` with
+//! [`term_to_doc`] and `gterm_to_doc`.  The locally-nameless path
 //! ([`lnformula_doc`], [`syntactic_lnformula_doc`]) opens each atom's bound
-//! variables against the binders in scope and projects the opened
-//! `LNTerm`s through `pretty_theory::lnterm_to_parser`, the same route every
-//! other internal term takes to this renderer.
+//! variables against the binders in scope and hands the resulting `LNTerm`
+//! atom to `atom::pretty_natom`/`atom::pretty_syntactic_natom`, which print
+//! through `tamarin_term::pretty::pretty_term` and `fact::pretty_fact`.
 
 use tamarin_parser::ast as p;
-use tamarin_term::lterm::{sort_prefix, LSort, LVar};
+use tamarin_term::lterm::{sort_prefix, LNTerm, LSort, LVar};
 use tamarin_term::pretty::pp_lvar;
 use tamarin_utils::fresh::PreciseFreshState;
 
-use crate::atom::{ProtoAtom, SyntacticAtom, SyntacticSugar, Unit2};
-use crate::fact::Fact;
+use crate::atom::{map_atom, pretty_natom, pretty_syntactic_natom, MapSugar, ProtoAtom};
 use crate::formula::{
     avoid_precise_lnformula, open_bound_term, BLNTerm, Connective, LNFormula, LNProtoFormula,
     ProtoFormula, Quantifier, SyntacticLNFormula,
 };
 use crate::guarded::{Guarded, Quant};
 use crate::pretty_hpj::{self as hpj, Doc, FLAT_WIDTH};
-use crate::pretty_theory::{lnfact_to_parser, lnterm_to_parser};
+use crate::pretty_theory::syntactic_lnatom_to_parser;
 
 /// A scope entry: the binder's source name + sort, plus the *display* name
 /// used to render bound occurrences in the body.  HS-faithful: the display
@@ -937,12 +936,11 @@ fn binop_to_doc(
 // =============================================================================
 
 /// HS `prettyLNFormula` (Theory/Model/Formula.hs:518-520):
-/// `Precise.evalFresh (prettyLFormula prettyNAtom fm) (avoidPrecise fm)`,
-/// where `prettyAtom = prettyProtoAtom (const emptyDoc)` (Atom.hs:226-229).
+/// `Precise.evalFresh (prettyLFormula prettyNAtom fm) (avoidPrecise fm)`.
 pub fn lnformula_doc(f: &LNFormula) -> Doc {
     lformula_doc(
         f,
-        &|Unit2, _| Doc::empty(),
+        &pretty_natom,
         &mut Vec::new(),
         &mut avoid_precise_lnformula(f),
     )
@@ -959,37 +957,39 @@ pub fn pretty_lnformula(f: &LNFormula) -> String {
 }
 
 /// HS `prettySyntacticLNFormula` (Theory/Model/Formula.hs:523-525): as
-/// [`lnformula_doc`], with `prettySyntacticNAtom`'s
-/// `prettyPred (Pred fa) = prettyNFact fa` (Atom.hs:236-239) printing the
-/// sugar, which is `atom_to_doc`'s `Pred` arm over the opened fact.
+/// [`lnformula_doc`], with `prettySyntacticNAtom` (Atom.hs:236-239) printing
+/// the atoms, so a `Pred` atom prints as its fact.
 pub fn syntactic_lnformula_doc(f: &SyntacticLNFormula) -> Doc {
     lformula_doc(
         f,
-        &|SyntacticSugar::Pred(fa), scope| atom_to_doc(&p::Atom::Pred(open_fact(fa, scope)), &[]),
+        &pretty_syntactic_natom,
         &mut Vec::new(),
         &mut avoid_precise_lnformula(f),
     )
 }
 
-/// HS `prettyLFormula ppAtom` (Theory/Model/Formula.hs:474-514); `sugar_doc`
-/// is the part of `ppAtom` that prints a `Syntactic` atom.  `scope` holds
-/// the display `LVar` of every enclosing binder, innermost last, which is
-/// what the `Bound` indices of an atom refer to.
-fn lformula_doc<S>(
+/// HS `prettyLFormula ppAtom` (Theory/Model/Formula.hs:474-514).  `scope`
+/// holds the display `LVar` of every enclosing binder, innermost last, which
+/// is what the `Bound` indices of an atom refer to.
+fn lformula_doc<S: MapSugar<BLNTerm, LNTerm>>(
     f: &LNProtoFormula<S>,
-    sugar_doc: &dyn Fn(&S, &[LVar]) -> Doc,
+    pp_atom: &dyn Fn(&ProtoAtom<S::Mapped, LNTerm>) -> Doc,
     scope: &mut Vec<LVar>,
     state: &mut PreciseFreshState,
 ) -> Doc {
     match f {
-        ProtoFormula::Atom(a) => opened_atom_doc(a, sugar_doc, scope),
+        // `pp (Ato a) = return $ ppAtom (fmap (mapLits (fmap extractFree)) a)`
+        // (Theory/Model/Formula.hs:484): every bound variable of the atom,
+        // the sugar's included, resolves to its binder's display `LVar`
+        // before the atom printer sees it.
+        ProtoFormula::Atom(a) => pp_atom(&map_atom(a, &mut |t| open_bound_term(t, scope))),
         // `pp (TF True) = operator_ "⊤"` / `pp (TF False) = operator_ "⊥"`
         // (Theory/Model/Formula.hs:485-486).
         ProtoFormula::Tf(true) => hpj::operator_("\u{22A4}"),
         ProtoFormula::Tf(false) => hpj::operator_("\u{22A5}"),
         // `operator_ "¬" <> opParens p'` (Theory/Model/Formula.hs:488-490).
         ProtoFormula::Not(p_) => hpj::operator_("\u{00AC}")
-            .beside(doc_op_parens(lformula_doc(p_, sugar_doc, scope, state))),
+            .beside(doc_op_parens(lformula_doc(p_, pp_atom, scope, state))),
         // `sep [opParens p' <-> ppOp op, opParens q']`
         // (Theory/Model/Formula.hs:493-501); `<->` is `<+>`.
         ProtoFormula::Conn(c, l, r) => {
@@ -999,8 +999,8 @@ fn lformula_doc<S>(
                 Connective::Imp => "\u{21D2}",
                 Connective::Iff => "\u{21D4}",
             };
-            let l_doc = doc_op_parens(lformula_doc(l, sugar_doc, scope, state));
-            let r_doc = doc_op_parens(lformula_doc(r, sugar_doc, scope, state));
+            let l_doc = doc_op_parens(lformula_doc(l, pp_atom, scope, state));
+            let r_doc = doc_op_parens(lformula_doc(r, pp_atom, scope, state));
             hpj::sep(vec![l_doc.beside_sp(hpj::operator_(op)), r_doc])
         }
         // `scopeFreshness $ do (vs, qua, fm') <- openFormulaPrefix fm; ...
@@ -1044,47 +1044,12 @@ fn lformula_doc<S>(
                 let quant = hpj::operator_(sym)
                     .beside(hpj::fsep(var_docs))
                     .beside(hpj::operator_("."));
-                let body_doc = lformula_doc(inner, sugar_doc, scope, state);
+                let body_doc = lformula_doc(inner, pp_atom, scope, state);
                 scope.truncate(depth);
                 hpj::sep(vec![quant, body_doc.nest(1)])
             })
         }
     }
-}
-
-/// `ppAtom (fmap (mapLits (fmap extractFree)) a)` (Theory/Model/Formula.hs:484):
-/// the plain atoms are opened against the enclosing binders' display
-/// `LVar`s and handed to [`atom_to_doc`] as parser-AST atoms, whose arms
-/// are `prettyProtoAtom`'s (Atom.hs:212-224); the sugar goes to
-/// `sugar_doc`.  The projection through `lnterm_to_parser` and
-/// `lnfact_to_parser` is the one every other internal term takes into this
-/// renderer.  `atom_to_doc` gets an empty binder scope: after opening,
-/// every variable is a display `LVar` and renders as itself.
-fn opened_atom_doc<S>(
-    a: &ProtoAtom<S, BLNTerm>,
-    sugar_doc: &dyn Fn(&S, &[LVar]) -> Doc,
-    scope: &[LVar],
-) -> Doc {
-    let pa = match a {
-        ProtoAtom::Syntactic(s) => return sugar_doc(s, scope),
-        ProtoAtom::Action(t, fa) => p::Atom::Action(open_fact(fa, scope), open_term(t, scope)),
-        ProtoAtom::EqE(l, r) => p::Atom::Eq(open_term(l, scope), open_term(r, scope)),
-        ProtoAtom::Subterm(l, r) => p::Atom::Subterm(open_term(l, scope), open_term(r, scope)),
-        ProtoAtom::Less(l, r) => p::Atom::Less(open_term(l, scope), open_term(r, scope)),
-        ProtoAtom::Last(t) => p::Atom::Last(open_term(t, scope)),
-    };
-    atom_to_doc(&pa, &[])
-}
-
-/// Open a term's bound variables against `scope` and project it to the
-/// parser AST.
-fn open_term(t: &BLNTerm, scope: &[LVar]) -> p::Term {
-    lnterm_to_parser(&open_bound_term(t, scope))
-}
-
-/// [`open_term`] over every argument of a fact.
-fn open_fact(fa: &Fact<BLNTerm>, scope: &[LVar]) -> p::Fact {
-    lnfact_to_parser(&fa.map_ref(|t| open_bound_term(t, scope)))
 }
 
 // =============================================================================
@@ -1100,9 +1065,10 @@ fn open_fact(fa: &Fact<BLNTerm>, scope: &[LVar]) -> p::Fact {
 /// the printer's own supply: [`avoid_precise_lnformula`] seeds the `Precise`
 /// counters with the formula's free variables (HS `avoidPrecise`,
 /// LTerm.hs:714-715), each binder takes a fresh index for its hint name, and
-/// [`open_term`]/[`open_fact`] resolve its bound occurrences to that same
-/// `(name, idx, sort)` identity — so a binder name never collides with a free
-/// variable, and a reopened occurrence never resolves to a different binder.
+/// each atom is opened against the enclosing binders' display `LVar`s, so a
+/// bound occurrence carries that same `(name, idx, sort)` identity — a binder
+/// name never collides with a free variable, and a reopened occurrence never
+/// resolves to a different binder.
 /// A run of binders of one quantifier becomes one `Forall`/`Exists` list, the
 /// shape HS's `foldr (hinted q) f vs` closes
 /// (Theory/Text/Parser/Formula.hs:73-77).
@@ -1126,7 +1092,11 @@ fn formula_to_parser(
     state: &mut PreciseFreshState,
 ) -> p::Formula {
     match f {
-        ProtoFormula::Atom(a) => p::Formula::Atom(opened_atom_to_parser(a, scope)),
+        ProtoFormula::Atom(a) => {
+            p::Formula::Atom(syntactic_lnatom_to_parser(&map_atom(a, &mut |t| {
+                open_bound_term(t, scope)
+            })))
+        }
         ProtoFormula::Tf(true) => p::Formula::True,
         ProtoFormula::Tf(false) => p::Formula::False,
         ProtoFormula::Not(p_) => p::Formula::Not(Box::new(formula_to_parser(p_, scope, state))),
@@ -1171,24 +1141,6 @@ fn formula_to_parser(
                 Quantifier::Ex => p::Formula::Exists(vs, body_ast),
             }
         }),
-    }
-}
-
-/// [`opened_atom_doc`]'s projection without the printer: the atom opened
-/// against `scope` and written as the parser atom `from_parser` closes.
-/// `Syntactic(Pred fa)` is `blatom`'s predicate alternative
-/// (Theory/Text/Parser/Formula.hs:52), the only sugar a
-/// [`SyntacticLNFormula`] carries; the multiset `(<)` is parsed into the
-/// `Smaller` predicate (`smallerp`, Theory/Text/Parser/Formula.hs:30-38) and
-/// has no closed form of its own.
-fn opened_atom_to_parser(a: &SyntacticAtom<BLNTerm>, scope: &[LVar]) -> p::Atom {
-    match a {
-        ProtoAtom::Syntactic(SyntacticSugar::Pred(fa)) => p::Atom::Pred(open_fact(fa, scope)),
-        ProtoAtom::Action(t, fa) => p::Atom::Action(open_fact(fa, scope), open_term(t, scope)),
-        ProtoAtom::EqE(l, r) => p::Atom::Eq(open_term(l, scope), open_term(r, scope)),
-        ProtoAtom::Subterm(l, r) => p::Atom::Subterm(open_term(l, scope), open_term(r, scope)),
-        ProtoAtom::Less(l, r) => p::Atom::Less(open_term(l, scope), open_term(r, scope)),
-        ProtoAtom::Last(t) => p::Atom::Last(open_term(t, scope)),
     }
 }
 
@@ -1424,8 +1376,8 @@ pub fn term_to_doc(t: &p::Term, scope: &[Bind]) -> crate::pretty_hpj::Doc {
                 // fallthrough: `FApp (NoEq s) [] | s == natOneSym -> text
                 // "%1"` (Term/Term.hs:298-327, see line 312).  `natOneSym = ("tone",
                 // (0,Public,Constructor))`; the parser AST keeps only the
-                // name, so match on nullary "tone" (runtime nat-one reaches
-                // here as `App("tone", [])` via `lnterm_to_parser`).
+                // name, so match on nullary "tone", the shape an internal
+                // nat-one takes when it is projected onto the parser AST.
                 if name == "tone" {
                     Doc::text("%1")
                 } else {
@@ -1909,9 +1861,9 @@ fn pp_term(t: &p::Term, scope: &[Bind], out: &mut String) {
         App(name, args) if name == "pair" && args.len() == 2 => pp_pair_term(t, scope, out),
         App(name, args) => {
             // Nullary nat-one first, as in HS: `FApp (NoEq s) [] | s ==
-            // natOneSym -> text "%1"` (Term/Term.hs:298-327, see line 312) — the runtime
-            // constant reaches here as `App("tone", [])` via
-            // `lnterm_to_parser` (see the `term_to_doc` twin arm).
+            // natOneSym -> text "%1"` (Term/Term.hs:298-327, see line 312) — the
+            // constant reaches here as `App("tone", [])` (see the
+            // `term_to_doc` twin arm).
             if name == "tone" && args.is_empty() {
                 out.push_str("%1");
                 return;

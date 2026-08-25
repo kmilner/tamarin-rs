@@ -3158,6 +3158,35 @@ pub fn lnfact_to_parser(fa: &crate::fact::LNFact) -> p::Fact {
 /// no fact (Atom.hs:92-94), and [`crate::formula::to_lnformula`] refuses an
 /// atom that still holds sugar, so an `LNFormula` holds none.
 pub fn lnatom_to_parser(a: &crate::atom::Atom<tamarin_term::lterm::LNTerm>) -> p::Atom {
+    proto_atom_to_parser(
+        &|_: &crate::atom::Unit2| panic!("lnatom_to_parser: syntactic sugar in a plain atom"),
+        a,
+    )
+}
+
+/// [`lnatom_to_parser`] over an atom that still carries the parser's `Pred`
+/// sugar (Atom.hs:86-87), which closes back into `blatom`'s predicate
+/// alternative (Theory/Text/Parser/Formula.hs:52).  The multiset `(<)` is
+/// parsed into the `Smaller` predicate (`smallerp`,
+/// Theory/Text/Parser/Formula.hs:30-38) and has no closed form of its own.
+pub fn syntactic_lnatom_to_parser(
+    a: &crate::atom::SyntacticAtom<tamarin_term::lterm::LNTerm>,
+) -> p::Atom {
+    use crate::atom::SyntacticSugar;
+    proto_atom_to_parser(
+        &|SyntacticSugar::Pred(fa)| p::Atom::Pred(lnfact_to_parser(fa)),
+        a,
+    )
+}
+
+/// The five sugar-free arms shared by [`lnatom_to_parser`] and
+/// [`syntactic_lnatom_to_parser`]; `pp_sugar` closes the sugar the way that
+/// atom type carries it, as HS's `prettyProtoAtom` takes its own sugar
+/// printer (Atom.hs:212-215).
+fn proto_atom_to_parser<S>(
+    pp_sugar: &dyn Fn(&S) -> p::Atom,
+    a: &crate::atom::ProtoAtom<S, tamarin_term::lterm::LNTerm>,
+) -> p::Atom {
     use crate::atom::ProtoAtom;
     match a {
         ProtoAtom::Action(t, fa) => p::Atom::Action(lnfact_to_parser(fa), lnterm_to_parser(t)),
@@ -3165,9 +3194,7 @@ pub fn lnatom_to_parser(a: &crate::atom::Atom<tamarin_term::lterm::LNTerm>) -> p
         ProtoAtom::Subterm(l, r) => p::Atom::Subterm(lnterm_to_parser(l), lnterm_to_parser(r)),
         ProtoAtom::Less(l, r) => p::Atom::Less(lnterm_to_parser(l), lnterm_to_parser(r)),
         ProtoAtom::Last(t) => p::Atom::Last(lnterm_to_parser(t)),
-        ProtoAtom::Syntactic(crate::atom::Unit2) => {
-            panic!("lnatom_to_parser: syntactic sugar in a plain atom")
-        }
+        ProtoAtom::Syntactic(s) => pp_sugar(s),
     }
 }
 

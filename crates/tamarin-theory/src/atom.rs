@@ -8,7 +8,15 @@
 //! syntactic-sugar wrapper `S` and a term type `T`. Stripping the sugar
 //! (`Atom<T>` ≡ `ProtoAtom<Unit, T>`) yields the form used after parsing.
 
-use crate::fact::Fact;
+use std::fmt;
+
+use tamarin_term::lterm::Name;
+use tamarin_term::pretty::pretty_nterm;
+use tamarin_term::term::{show_term, ShowLit, Term};
+use tamarin_term::vterm::{Lit, VTerm};
+
+use crate::fact::{pretty_fact, Fact};
+use crate::pretty_hpj::{self as hpj, Doc};
 
 /// Marker type with no fields — Haskell's `Unit2 t = Unit2`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -124,18 +132,80 @@ impl<T> Atom<T> {
     }
 }
 
+// -- Pretty-printing ----------------------------------------------------------
+
+/// HS `prettyProtoAtom ppS ppT` (Atom.hs:212-224).  `ppT` prints the `Action`
+/// fact's terms and both operands of `EqE` and `Subterm`; the `Action` time
+/// point, both `Less` operands and the `Last` operand print with `show`
+/// (Atom.hs:217,223,224), which on a term is
+/// [`tamarin_term::term::show_term`].
+pub fn pretty_proto_atom<S, A: ShowLit>(
+    pp_s: &dyn Fn(&S) -> Doc,
+    pp_t: &dyn Fn(&Term<A>) -> Doc,
+    a: &ProtoAtom<S, Term<A>>,
+) -> Doc {
+    match a {
+        ProtoAtom::Action(v, fa) => pretty_fact(pp_t, fa)
+            .beside_sp(hpj::operator_("@"))
+            .beside_sp(Doc::text(show_term(v))),
+        ProtoAtom::Syntactic(s) => pp_s(s),
+        ProtoAtom::EqE(l, r) => hpj::sep(vec![pp_t(l).beside_sp(hpj::operator_("=")), pp_t(r)]),
+        ProtoAtom::Subterm(l, r) => {
+            hpj::sep(vec![pp_t(l).beside_sp(hpj::operator_("\u{228F}")), pp_t(r)])
+        }
+        ProtoAtom::Less(u, v) => Doc::text(show_term(u))
+            .beside_sp(hpj::operator_("<"))
+            .beside_sp(Doc::text(show_term(v))),
+        ProtoAtom::Last(i) => hpj::operator_("last").beside(hpj::parens(Doc::text(show_term(i)))),
+    }
+}
+
+/// HS `prettyAtom = prettyProtoAtom (const emptyDoc)` (Atom.hs:226-229): the
+/// `Unit2` sugar of a post-parsing atom carries nothing to print.
+pub fn pretty_atom<A: ShowLit>(pp_t: &dyn Fn(&Term<A>) -> Doc, a: &Atom<Term<A>>) -> Doc {
+    pretty_proto_atom(&|_: &Unit2| Doc::empty(), pp_t, a)
+}
+
+/// HS `prettyNAtom = prettyAtom prettyNTerm` (Atom.hs:232-233) over
+/// `NAtom v = Atom (VTerm Name v)` (Atom.hs:107).
+pub fn pretty_natom<V>(a: &Atom<VTerm<Name, V>>) -> Doc
+where
+    V: fmt::Display,
+    Lit<Name, V>: ShowLit,
+{
+    pretty_atom(&|t: &VTerm<Name, V>| pretty_nterm(t), a)
+}
+
+/// HS `prettySyntacticNAtom = prettyProtoAtom prettyPred prettyNTerm`, whose
+/// `prettyPred (Pred fa) = prettyNFact fa` (Atom.hs:236-239) is
+/// `prettyFact prettyNTerm` (Theory/Model/Fact.hs:577-578) on the sugar's
+/// fact.
+pub fn pretty_syntactic_natom<V>(a: &SyntacticAtom<VTerm<Name, V>>) -> Doc
+where
+    V: fmt::Display,
+    Lit<Name, V>: ShowLit,
+{
+    let pp_t = |t: &VTerm<Name, V>| pretty_nterm(t);
+    pretty_proto_atom(&|SyntacticSugar::Pred(fa)| pretty_fact(&pp_t, fa), &pp_t, a)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::fact::{fresh_fact, FactTag};
     use tamarin_term::builtin::msg_var;
-    use tamarin_term::lterm::LNTerm;
+    use tamarin_term::function_symbols::pair_sym;
+    use tamarin_term::lterm::{LNTerm, LSort, LVar};
+    use tamarin_term::term::{f_app_no_eq, lit};
 
     fn x() -> LNTerm {
         msg_var("x", 0)
     }
     fn y() -> LNTerm {
         msg_var("y", 0)
+    }
+    fn tp(name: &str) -> LNTerm {
+        lit(Lit::Var(LVar::new(name, LSort::Node, 0)))
     }
 
     /// Every predicate matches exactly its own variant.  The test asserts the
@@ -220,5 +290,60 @@ mod tests {
         for (input, expected) in cases {
             assert_eq!(to_atom(input), expected);
         }
+    }
+
+    /// Every arm of `prettyProtoAtom` other than `Syntactic`
+    /// (Atom.hs:216-224) carries its own operator and its own break points:
+    /// `Action` hangs the time point off `prettyFact`, `EqE` and `Subterm`
+    /// are `sep`s, `Less` is two `<+>`s and `Last` wraps its operand in plain
+    /// parentheses.
+    #[test]
+    fn pretty_natom_prints_each_arm() {
+        let cases: Vec<(Atom<LNTerm>, &str)> = vec![
+            (ProtoAtom::Action(tp("i"), fresh_fact(y())), "Fr( y ) @ #i"),
+            (ProtoAtom::EqE(x(), y()), "x = y"),
+            (ProtoAtom::Subterm(x(), y()), "x \u{228F} y"),
+            (ProtoAtom::Less(tp("i"), tp("j")), "#i < #j"),
+            (ProtoAtom::Last(tp("i")), "last(#i)"),
+        ];
+        for (a, want) in cases {
+            assert_eq!(pretty_natom(&a).render(), want, "{a:?}");
+        }
+    }
+
+    /// `prettySyntacticNAtom` prints a `Pred` atom as its fact
+    /// (Atom.hs:236-239) and leaves the other arms to `prettyProtoAtom`.
+    #[test]
+    fn pretty_syntactic_natom_prints_the_pred_fact() {
+        let a: SyntacticAtom<LNTerm> = ProtoAtom::Syntactic(SyntacticSugar::Pred(Fact::new(
+            FactTag::Proto(crate::fact::Multiplicity::Linear, "Eq", 2),
+            vec![x(), y()],
+        )));
+        assert_eq!(pretty_syntactic_natom(&a).render(), "Eq( x, y )");
+        let plain: SyntacticAtom<LNTerm> = ProtoAtom::EqE(x(), y());
+        assert_eq!(pretty_syntactic_natom(&plain).render(), "x = y");
+    }
+
+    /// The time point positions take HS `show` (Atom.hs:217,223,224), not the
+    /// `ppT` the fact and the `EqE`/`Subterm` operands take.  The two spell a
+    /// `Lit` alike, so the difference shows only on an applied term: `show`
+    /// keeps the prefix form where `prettyTerm` would write `<x, y>`.
+    #[test]
+    fn pretty_natom_shows_the_time_point() {
+        let applied = f_app_no_eq(pair_sym(), vec![x(), y()]);
+        let a: Atom<LNTerm> = ProtoAtom::Last(applied.clone());
+        assert_eq!(pretty_natom(&a).render(), "last(pair(x,y))");
+        let eq: Atom<LNTerm> = ProtoAtom::EqE(applied, y());
+        assert_eq!(pretty_natom(&eq).render(), "<x, y> = y");
+    }
+
+    /// `show LVar` writes the index alone when the name is empty
+    /// (LTerm.hs:554), which is the variable spelling `prettyNTerm` reaches
+    /// through `Show (Lit c v)` (VTerm.hs:98-100).
+    #[test]
+    fn lvar_with_no_name_shows_its_index() {
+        let anon: LNTerm = lit(Lit::Var(LVar::new("", LSort::Fresh, 7)));
+        let a: Atom<LNTerm> = ProtoAtom::EqE(anon, y());
+        assert_eq!(pretty_natom(&a).render(), "~7 = y");
     }
 }

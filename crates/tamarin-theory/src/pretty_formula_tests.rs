@@ -3,6 +3,7 @@
 //   scripts/gen_license_headers.py --authors <this file>
 
 use super::*;
+use crate::atom::Unit2;
 
 fn v(name: &str, sort: LSort) -> p::VarSpec {
     p::VarSpec {
