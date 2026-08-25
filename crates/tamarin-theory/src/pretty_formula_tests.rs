@@ -404,9 +404,10 @@ fn algapp_renders_function_form_flat_gterm() {
             LSort::Msg,
         )))),
     );
-    let mut s = String::new();
-    pp_gterm(&g, &[], &mut s);
-    assert_eq!(s, "sdec(body, key)");
+    assert_eq!(
+        gterm_to_doc(&g, &[]).render_with(FLAT_WIDTH, FLAT_WIDTH),
+        "sdec(body, key)"
+    );
 }
 
 #[test]
