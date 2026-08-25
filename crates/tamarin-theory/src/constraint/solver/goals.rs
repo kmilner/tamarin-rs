@@ -1926,17 +1926,21 @@ fn is_insert_template_action(a: &AnnotatedGoal) -> bool {
     insert_action_first_key_has_prefix(a, "template")
 }
 
-/// HS `isProgressFact` (ProofMethod.hs:126-128): a Linear fact of arity 1 whose
-/// name has the `ProgressTo_` prefix.  Operates on a guarded `GFact`.
-fn gfact_is_progress(f: &crate::guarded_types::GFact) -> bool {
-    !f.persistent && f.args.len() == 1 && f.name.starts_with("ProgressTo_")
+/// HS `isProgressFact` (ProofMethod.hs:126-128): a `ProtoFact Linear name 1`
+/// whose name has the `ProgressTo_` prefix.  Operates on a guarded `GFact`.
+fn gfact_is_progress(f: &crate::guarded::GFact) -> bool {
+    matches!(
+        f.tag,
+        crate::fact::FactTag::Proto(crate::fact::Multiplicity::Linear, name, 1)
+            if name.starts_with("ProgressTo_")
+    )
 }
 
 /// HS `isProgressDisj` (ProofMethod.hs:130-135): a Disj goal all of whose
 /// disjuncts are `Ex #node. ProgressTo_…( #node )`.
 fn is_progress_disj(a: &AnnotatedGoal) -> bool {
     use crate::constraint::constraints::Disj;
-    use crate::guarded::Quant;
+    use crate::formula::Quantifier;
     use crate::guarded::{GAtom, Guarded};
     let Goal::Disj(Disj(items)) = &a.goal else {
         return false;
@@ -1946,13 +1950,13 @@ fn is_progress_disj(a: &AnnotatedGoal) -> bool {
     }
     items.iter().all(|g| match g {
         Guarded::GGuarded {
-            qua: Quant::Ex,
+            qua: Quantifier::Ex,
             vars,
             guards,
             ..
         } if vars.len() == 1
             && guards.len() == 1
-            && vars[0].sort == tamarin_term::lterm::LSort::Node =>
+            && vars[0].1 == tamarin_term::lterm::LSort::Node =>
         {
             matches!(&guards[0], GAtom::Action(f, _) if gfact_is_progress(f))
         }
@@ -2508,7 +2512,7 @@ fn has_ku_guards(sys: &System) -> bool {
             Guarded::GGuarded { guards, body, .. } => {
                 for atom in guards.iter() {
                     if let GAtom::Action(fa, _) = atom {
-                        if fa.name == "KU" {
+                        if fa.is_ku() {
                             return true;
                         }
                     }

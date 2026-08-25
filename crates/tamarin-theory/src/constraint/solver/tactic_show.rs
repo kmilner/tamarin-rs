@@ -31,8 +31,8 @@ use tamarin_parser::ast as p;
 use tamarin_term::lterm::{sort_prefix, LNTerm};
 
 use crate::fact::{FactTag, Multiplicity};
-use crate::guarded::Guarded;
-use crate::guarded_types::{BVar, GAtom, GFact, GTerm};
+use crate::guarded::{GFact, Guarded};
+use crate::guarded_types::{BVar, GAtom, GTerm};
 
 // =============================================================================
 // `show` of a free LVar carried in a GTerm (`p::VarSpec`)
@@ -256,7 +256,7 @@ fn guard_fact_tag_names(g: &Guarded, out: &mut Vec<String>) {
         Guarded::GGuarded { guards, body, .. } => {
             for a in guards.iter() {
                 if let GAtom::Action(f, _) = a {
-                    out.push(f.name.clone());
+                    out.push(crate::fact::fact_tag_name(&f.tag));
                 }
             }
             guard_fact_tag_names(body, out);
@@ -301,7 +301,7 @@ fn check_formula(oracle_type: &str, f: &Guarded) -> Vec<p::VarSpec> {
         Some(fa) => fa,
         None => return Vec::new(),
     };
-    let shown_terms = show_term_list(&fact.args);
+    let shown_terms = show_term_list(&fact.terms);
     let pat = if oracle_type == "curve" {
         "grpid,exp\\('g'"
     } else {
@@ -325,7 +325,7 @@ fn check_formula(oracle_type: &str, f: &Guarded) -> Vec<p::VarSpec> {
     // Dropping the Bound (vs. matching HS's panic) is intentional: a crash is
     // never the desired `--prove` output.
     let mut acc: Vec<p::VarSpec> = Vec::new();
-    for arg in fact.args.iter() {
+    for arg in fact.terms.iter() {
         let mut vars: Vec<p::VarSpec> = Vec::new();
         crate::guarded_types::collect_free_term(arg, &mut vars);
         // varsVTerm = sortednub (HS Ord LVar = idx, sort, name).

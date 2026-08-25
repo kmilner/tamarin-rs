@@ -36,7 +36,7 @@ use crate::formula::{
     avoid_precise_lnformula, open_bound_term, BLNTerm, Connective, LNFormula, LNProtoFormula,
     ProtoFormula, Quantifier, SyntacticLNFormula,
 };
-use crate::guarded::{gatom_to_atom, open_guarded, Guarded, Quant};
+use crate::guarded::{gatom_to_atom, open_guarded, Guarded};
 use crate::pretty_hpj::{self as hpj, Doc, FLAT_WIDTH};
 
 /// A scope entry: the binder's source name + sort, plus the *display* name
@@ -1448,8 +1448,8 @@ fn gguarded_to_doc(g: &Guarded, state: &mut PreciseFreshState) -> crate::pretty_
     // sort prefix, the name and a `.<idx>` suffix past index 0
     // (LTerm.hs:550-557).
     let sym = match qua {
-        Quant::All => "\u{2200}",
-        Quant::Ex => "\u{2203}",
+        Quantifier::All => "\u{2200}",
+        Quantifier::Ex => "\u{2203}",
     };
     let var_docs: Vec<Doc> = vs.iter().map(|v| Doc::text(var_display(v, &[]))).collect();
     let ppvars = hpj::fsep(var_docs);
@@ -1458,8 +1458,8 @@ fn gguarded_to_doc(g: &Guarded, state: &mut PreciseFreshState) -> crate::pretty_
         .beside(hpj::operator_("."));
 
     // Case analysis (Guarded.hs:855-862).
-    let is_ex_trivial = matches!(qua, Quant::Ex) && body_is_true(&body);
-    let is_neg = matches!(qua, Quant::All) && vs.is_empty() && body_is_false(&body);
+    let is_ex_trivial = matches!(qua, Quantifier::Ex) && body_is_true(&body);
+    let is_neg = matches!(qua, Quantifier::All) && vs.is_empty() && body_is_false(&body);
 
     if is_neg {
         // `(All, [], GDisj []) | gf == gfalse -> operator_ "¬" <> dante`.
@@ -1471,8 +1471,8 @@ fn gguarded_to_doc(g: &Guarded, state: &mut PreciseFreshState) -> crate::pretty_
         // `_ -> dsucc = nest 1 (pp gf);
         //       sep [quantifier, sep [dante, connective, dsucc]]`.
         let connective = hpj::operator_(match qua {
-            Quant::All => "\u{21D2}", // ⇒
-            Quant::Ex => "\u{2227}",  // ∧
+            Quantifier::All => "\u{21D2}", // ⇒
+            Quantifier::Ex => "\u{2227}",  // ∧
         });
         let dsucc = guarded_to_doc(&body, state).nest(1);
         let inner = hpj::sep(vec![dante, connective, dsucc]);

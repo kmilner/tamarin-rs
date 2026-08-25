@@ -752,7 +752,7 @@ fn simp_split_neg_ac_recurse_emits_ac_formula() {
     let has_ac_formula = r.sys.formulas.iter().any(|f| {
         matches!(f.as_ref(),
             crate::guarded::Guarded::GGuarded {
-                qua: crate::guarded::Quant::All, vars, body, .. }
+                qua: crate::formula::Quantifier::All, vars, body, .. }
             if vars.len() == 1 && **body == crate::guarded::gfalse())
     });
     assert!(

@@ -19,10 +19,10 @@
 //!   the sugar constructor uninhabited (`Theory/Model/Atom.hs:78-83`) and
 //!   `ProtoAtom` has no multiset-order arm;
 //! * HS's `Eq`/`Ord` on a fact ignore its annotations
-//!   (`Theory/Model/Fact.hs:169-174`) where `GFact`'s derived `PartialEq` and
-//!   `Hash` read them, so two facts differing only there are one value to HS
-//!   and two to the port;
-//! * `p::VarSpec` carries a SAPIC type annotation inside that same derived
+//!   (`Theory/Model/Fact.hs:169-174`), which is what `Fact`'s own `Eq`, `Ord`
+//!   and `Hash` read, so the row counts the facts an annotation-blind identity
+//!   merges;
+//! * `p::VarSpec` carries a SAPIC type annotation inside `GTerm`'s derived
 //!   `PartialEq`/`Hash`; `LVar` has no such field;
 //! * a substitution keyed on `(name, idx)` and one keyed on the whole `LVar`
 //!   agree exactly while no two free variables of one formula share a name
@@ -117,7 +117,7 @@ struct Payload {
     /// The atom variants HS's guarded atom has no constructor for.
     sugar_atoms: Vec<String>,
     /// One entry per fact: its identity under HS's `Eq`, and the annotation
-    /// list the port's derived `PartialEq` reads beside it.
+    /// set that identity leaves out.
     facts: Vec<(String, String)>,
     /// Free leaves carrying a SAPIC type.
     typed: Vec<String>,
@@ -175,10 +175,10 @@ fn walk_fact(f: &GFact, out: &mut Payload) {
         out.annotated_facts += 1;
     }
     out.facts.push((
-        format!("{:?}", (f.persistent, &f.name, &f.args)),
+        format!("{:?}", (&f.tag, &f.terms)),
         format!("{:?}", f.annotations),
     ));
-    for a in f.args.iter() {
+    for a in f.terms.iter() {
         walk_term(a, out);
     }
 }
@@ -186,7 +186,10 @@ fn walk_fact(f: &GFact, out: &mut Payload) {
 fn walk_atom(a: &GAtom, out: &mut Payload) {
     match a {
         GAtom::Pred(f) => {
-            out.sugar_atoms.push(format!("Pred {}", f.name));
+            out.sugar_atoms.push(format!(
+                "Pred {}",
+                tamarin_theory::fact::fact_tag_name(&f.tag)
+            ));
             walk_fact(f, out);
         }
         GAtom::LessMset(x, y) => {
@@ -301,7 +304,7 @@ fn file_phase(path: &Path, root: &Path) -> FileReport {
         ..FileReport::default()
     };
     // The fact identity HS compares, across the whole theory, against the
-    // annotation lists the port's derived `PartialEq` distinguishes.
+    // annotation sets that identity leaves out.
     let mut fact_annotations: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for (label, f) in &items {
         let entry = format!("{file}: {label}");

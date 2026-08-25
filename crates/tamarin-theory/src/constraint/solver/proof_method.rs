@@ -942,7 +942,7 @@ mod tests {
         // Build with close_guarded so the binder's `k` and `i` are
         // properly substituted to `Bound` in the guard atom.
         let fm = crate::guarded::close_guarded(
-            crate::guarded::Quant::Ex,
+            crate::formula::Quantifier::Ex,
             vec![
                 VarSpec {
                     name: "k".into(),

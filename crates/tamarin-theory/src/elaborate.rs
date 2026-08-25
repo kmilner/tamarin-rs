@@ -984,7 +984,7 @@ pub fn fact_tag_of(f: &p::Fact) -> crate::fact::FactTag {
 
 /// Copy a parser fact's annotations into the typed `FactAnnotation` set.
 /// Shared by [`fact_to_lnfact`] and [`fact_to_sapic_fact`].
-fn copy_fact_annotations(f: &p::Fact) -> BTreeSet<crate::fact::FactAnnotation> {
+pub(crate) fn copy_fact_annotations(f: &p::Fact) -> BTreeSet<crate::fact::FactAnnotation> {
     let mut anns: BTreeSet<crate::fact::FactAnnotation> = BTreeSet::new();
     for ann in &f.annotations {
         anns.insert(match ann {
@@ -1366,38 +1366,41 @@ pub fn proto_rule_to_parsed(r: &crate::rule::ProtoRuleE) -> p::Rule {
 /// `LNFact` → parser-AST `Fact`: the tag's name and multiplicity, the terms
 /// through [`lnterm_to_parser`] and the annotation set.
 pub fn lnfact_to_parser(fa: &crate::fact::LNFact) -> p::Fact {
-    use crate::fact::FactTag;
-    let (name, persistent) = match &fa.tag {
-        FactTag::Proto(crate::fact::Multiplicity::Persistent, n, _) => (n.to_string(), true),
-        FactTag::Proto(_, n, _) => (n.to_string(), false),
-        FactTag::Fresh => ("Fr".to_string(), false),
-        FactTag::In => ("In".to_string(), false),
-        FactTag::Out => ("Out".to_string(), false),
-        // KU and KD are Persistent per factTagMultiplicity
-        // (Theory/Model/Fact.hs:383-388, see line 386).
-        FactTag::Ku => ("KU".to_string(), true),
-        FactTag::Kd => ("KD".to_string(), true),
-        FactTag::Ded => ("Ded".to_string(), false),
-        FactTag::Term => ("Term".to_string(), false),
-    };
+    let (name, persistent) = fact_tag_to_parser(&fa.tag);
     p::Fact {
         persistent,
         name,
         args: fa.terms.iter().map(lnterm_to_parser).collect(),
-        // HS `prettyFact` appends `ppAnn an` to every fact (Theory/Model/Fact.hs:567-574),
-        // so the annotations must survive the projection.  `fa.annotations`
-        // is a `BTreeSet<FactAnnotation>` whose iteration order IS the HS
-        // `S.toList` (Ord) order the renderer expects.
-        annotations: fa
-            .annotations
-            .iter()
-            .map(|a| match a {
-                crate::fact::FactAnnotation::SolveFirst => p::FactAnnotation::SolveFirst,
-                crate::fact::FactAnnotation::SolveLast => p::FactAnnotation::SolveLast,
-                crate::fact::FactAnnotation::NoSources => p::FactAnnotation::NoSources,
-            })
-            .collect(),
+        annotations: fact_annotations_to_parser(&fa.annotations),
     }
+}
+
+/// The parser AST's spelling of a fact tag: `factTagName`
+/// (Theory/Model/Fact.hs:536-545) with the persistence `factTagMultiplicity`
+/// gives it (Theory/Model/Fact.hs:383-388).  The inverse of [`fact_tag_of`] on
+/// every tag that function builds.
+pub(crate) fn fact_tag_to_parser(tag: &crate::fact::FactTag) -> (String, bool) {
+    (
+        crate::fact::fact_tag_name(tag),
+        crate::fact::fact_tag_multiplicity(tag) == crate::fact::Multiplicity::Persistent,
+    )
+}
+
+/// A fact's annotations in the parser AST's own constructors — the inverse of
+/// [`copy_fact_annotations`].  HS `prettyFact` appends `ppAnn an` to every fact
+/// (Theory/Model/Fact.hs:567-574), so the annotations must survive the
+/// projection; the `BTreeSet`'s iteration order IS the HS `S.toList` (Ord)
+/// order the renderer expects.
+pub(crate) fn fact_annotations_to_parser(
+    anns: &BTreeSet<crate::fact::FactAnnotation>,
+) -> Vec<p::FactAnnotation> {
+    anns.iter()
+        .map(|a| match a {
+            crate::fact::FactAnnotation::SolveFirst => p::FactAnnotation::SolveFirst,
+            crate::fact::FactAnnotation::SolveLast => p::FactAnnotation::SolveLast,
+            crate::fact::FactAnnotation::NoSources => p::FactAnnotation::NoSources,
+        })
+        .collect()
 }
 
 /// `Atom<LNTerm>` → parser-AST `Atom`: [`lnterm_to_parser`] and

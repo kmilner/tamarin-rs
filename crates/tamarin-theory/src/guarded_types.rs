@@ -10,12 +10,14 @@
 //! - `Guarded s c v = ... | GGuarded Quantifier [s] [Atom (VTerm c (BVar v))] (Guarded s c v)`
 //! - `LNGuarded = Guarded (String, LSort) Name LVar`
 //!
-//! In our model: `s = GBinding` (name+sort, no idx), `v = VarSpec` (full LVar).
+//! In our model: `s = GBinding` (a `(name, sort)` tuple, no idx),
+//! `v = VarSpec` (full LVar).
 //! `Bound 0` refers to the innermost binder (rightmost in the binder list);
 //! `Bound (k-1)` refers to the outermost.
 
+use crate::fact::Fact;
+use crate::guarded::{GBinding, GFact};
 use tamarin_parser::ast as p;
-use tamarin_term::lterm::LSort;
 use tamarin_utils::cow::cow_map_arc;
 
 /// Mirrors HS `BVar v = Bound Integer | Free v`.
@@ -28,25 +30,15 @@ pub enum BVar {
     Free(p::VarSpec),
 }
 
-/// Mirrors HS `[s] = [(String, LSort)]` — binder lacking idx.
-///
-/// HS `s = (String, LSort)`; the position of the binding in the `[s]` list
-/// determines its DeBruijn index. We keep `name` for display/parsing but
-/// the binding's identity is purely positional.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct GBinding {
-    pub name: String,
-    pub sort: LSort,
-}
-
 /// Mirrors HS `VTerm c (BVar v)` — a Term whose Var leaves are `BVar`.
 ///
 /// Structurally identical to `p::Term`, but Var carries a `BVar` instead of
 /// a raw `VarSpec`. All other variants are unchanged.
-// `Hash` (here and on `GFact`/`GAtom`/`Guarded`) is derived alongside the
-// derived `PartialEq`, so the impl hashes exactly the fields equality
-// compares — the consistency (equal values ⇒ equal hashes) the implied-
-// formula dedup's hash prefilter relies on (see `fx_hash_one`).
+// `Hash` (here and on `GAtom`/`Guarded`) is derived alongside the derived
+// `PartialEq`, so the impl hashes exactly the fields equality compares — the
+// consistency (equal values ⇒ equal hashes) the implied-formula dedup's hash
+// prefilter relies on (see `fx_hash_one`).  A `GFact` gets the same
+// consistency from `Fact`'s hand-written `Eq`/`Hash` pair.
 #[derive(Debug, Clone, PartialEq, Hash)]
 pub enum GTerm {
     Var(BVar),
@@ -94,15 +86,6 @@ pub(crate) fn cow_pair_arc(
         a2.map(ga).unwrap_or_else(|| a.clone()),
         b2.map(ga).unwrap_or_else(|| b.clone()),
     ))
-}
-
-/// Mirrors HS `Fact (VTerm c (BVar v))`.
-#[derive(Debug, Clone, PartialEq, Hash)]
-pub struct GFact {
-    pub persistent: bool,
-    pub name: String,
-    pub args: std::sync::Arc<[GTerm]>,
-    pub annotations: Vec<p::FactAnnotation>,
 }
 
 /// Mirrors HS `Atom (VTerm c (BVar v))`.
@@ -189,12 +172,11 @@ pub fn term_to_gterm_free(t: &p::Term) -> GTerm {
 
 /// Lift `p::Fact` to `GFact` treating every variable as `Free`.
 pub fn fact_to_gfact_free(f: &p::Fact) -> GFact {
-    GFact {
-        persistent: f.persistent,
-        name: f.name.clone(),
-        args: f.args.iter().map(term_to_gterm_free).collect(),
-        annotations: f.annotations.clone(),
-    }
+    Fact::new(
+        crate::elaborate::fact_tag_of(f),
+        f.args.iter().map(term_to_gterm_free).collect(),
+    )
+    .with_annotations(crate::elaborate::copy_fact_annotations(f))
 }
 
 /// Lift `p::Atom` to `GAtom` treating every variable as `Free`.
@@ -253,11 +235,12 @@ pub fn gterm_to_term(g: &GTerm) -> p::Term {
 
 /// Convert `GFact` to `p::Fact`, panicking on any leftover Bound.
 pub fn gfact_to_fact(g: &GFact) -> p::Fact {
+    let (name, persistent) = crate::elaborate::fact_tag_to_parser(&g.tag);
     p::Fact {
-        persistent: g.persistent,
-        name: g.name.clone(),
-        args: g.args.iter().map(gterm_to_term).collect(),
-        annotations: g.annotations.clone(),
+        persistent,
+        name,
+        args: g.terms.iter().map(gterm_to_term).collect(),
+        annotations: crate::elaborate::fact_annotations_to_parser(&g.annotations),
     }
 }
 
@@ -372,16 +355,7 @@ fn subst_free_slice(
 
 /// `subst_free_fact_at_depth(f, s, depth)` — analogous for facts.
 pub fn subst_free_fact_at_depth(f: &GFact, s: &[(p::VarSpec, u32)], depth: u32) -> GFact {
-    GFact {
-        persistent: f.persistent,
-        name: f.name.clone(),
-        args: f
-            .args
-            .iter()
-            .map(|a| subst_free_term_at_depth(a, s, depth))
-            .collect(),
-        annotations: f.annotations.clone(),
-    }
+    f.map_ref(|a| subst_free_term_at_depth(a, s, depth))
 }
 
 /// `subst_free_atom_at_depth(a, s, depth)` — applies the Free→Bound subst to
@@ -500,16 +474,7 @@ fn subst_bound_slice(
 
 /// `subst_bound_fact_at_depth(f, s, depth)` — analogous for facts.
 pub fn subst_bound_fact_at_depth(f: &GFact, s: &[(u32, p::VarSpec)], depth: u32) -> GFact {
-    GFact {
-        persistent: f.persistent,
-        name: f.name.clone(),
-        args: f
-            .args
-            .iter()
-            .map(|a| subst_bound_term_at_depth(a, s, depth))
-            .collect(),
-        annotations: f.annotations.clone(),
-    }
+    f.map_ref(|a| subst_bound_term_at_depth(a, s, depth))
 }
 
 /// `subst_bound_atom_at_depth(a, s, depth)` — applies the Bound→Free subst.
@@ -572,12 +537,10 @@ pub fn open_subst(xs: &[p::VarSpec]) -> Vec<(u32, p::VarSpec)> {
         .collect()
 }
 
-/// Project a binder's metadata. HS `vs' = map (lvarName &&& lvarSort) vs`.
+/// Project a binder's metadata. HS `vs' = map (lvarName &&& lvarSort) vs`
+/// (Guarded.hs:384).
 pub fn lvar_to_binding(v: &p::VarSpec) -> GBinding {
-    GBinding {
-        name: v.name.clone(),
-        sort: v.sort,
-    }
+    (v.name.clone(), v.sort)
 }
 
 // =============================================================================
@@ -624,13 +587,13 @@ pub fn collect_free_atom(a: &GAtom, out: &mut Vec<p::VarSpec>) {
         // (Atom.hs:130-131).
         GAtom::Action(f, t) => {
             collect_free_term(t, out);
-            for arg in f.args.iter() {
+            for arg in f.terms.iter() {
                 collect_free_term(arg, out);
             }
         }
         GAtom::Last(t) => collect_free_term(t, out),
         GAtom::Pred(f) => {
-            for arg in f.args.iter() {
+            for arg in f.terms.iter() {
                 collect_free_term(arg, out);
             }
         }
@@ -667,12 +630,7 @@ pub fn map_free_term<F: FnMut(&p::VarSpec) -> p::VarSpec>(t: &GTerm, f: &mut F) 
 
 /// Apply a remapping to every Free LVar in a fact.
 pub fn map_free_fact<F: FnMut(&p::VarSpec) -> p::VarSpec>(g: &GFact, f: &mut F) -> GFact {
-    GFact {
-        persistent: g.persistent,
-        name: g.name.clone(),
-        args: g.args.iter().map(|a| map_free_term(a, f)).collect(),
-        annotations: g.annotations.clone(),
-    }
+    g.map_ref(|a| map_free_term(a, f))
 }
 
 /// Apply a remapping to every Free LVar in an atom.
@@ -792,6 +750,7 @@ pub fn blnatom_to_gatom(a: &crate::atom::Atom<crate::formula::BLNTerm>) -> GAtom
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tamarin_term::lterm::LSort;
 
     fn vs(name: &str, idx: u64) -> p::VarSpec {
         p::VarSpec {
@@ -1067,7 +1026,7 @@ mod tests {
 
         // verify x became Bound(0) in the closed form
         match &closed {
-            GAtom::Action(f, _) => match &f.args[0] {
+            GAtom::Action(f, _) => match &f.terms[0] {
                 GTerm::Var(BVar::Bound(n)) => assert_eq!(*n, 0),
                 other => panic!("expected Bound(0), got {:?}", other),
             },
@@ -1126,16 +1085,17 @@ mod tests {
         // x is still Free.
         let x = vs("x", 100);
         let mut inner_body = GAtom::Action(
-            GFact {
-                persistent: false,
-                name: "P".to_string(),
-                args: vec![
+            GFact::new(
+                crate::fact::FactTag::Proto(
+                    crate::fact::Multiplicity::Linear,
+                    tamarin_term::intern::intern_str("P"),
+                    2,
+                ),
+                vec![
                     GTerm::Var(BVar::Free(x.clone())),
                     GTerm::Var(BVar::Bound(0)),
-                ]
-                .into(),
-                annotations: vec![],
-            },
+                ],
+            ),
             GTerm::Var(BVar::Free(vs_node("t", 0))),
         );
 
@@ -1150,11 +1110,11 @@ mod tests {
         // x should now be Bound(1); y is still Bound(0).
         match &inner_body {
             GAtom::Action(f, _) => {
-                match &f.args[0] {
+                match &f.terms[0] {
                     GTerm::Var(BVar::Bound(n)) => assert_eq!(*n, 1, "x should shift to Bound(1)"),
                     other => panic!("expected Bound(1), got {:?}", other),
                 }
-                match &f.args[1] {
+                match &f.terms[1] {
                     GTerm::Var(BVar::Bound(n)) => assert_eq!(*n, 0, "y stays Bound(0)"),
                     other => panic!("expected Bound(0), got {:?}", other),
                 }

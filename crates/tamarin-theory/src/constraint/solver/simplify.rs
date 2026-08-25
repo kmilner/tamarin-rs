@@ -1164,7 +1164,8 @@ fn parser_node_id(t: &tamarin_parser::ast::Term) -> Option<crate::constraint::co
 /// for application to the implied body.
 fn insert_implied_formulas_pass(red: &mut Reduction) -> ChangeIndicator {
     use crate::constraint::constraints::Goal;
-    use crate::guarded::{Guarded, Quant};
+    use crate::formula::Quantifier;
+    use crate::guarded::Guarded;
     use tamarin_parser::ast::Atom as AAtom;
 
     // Mirror Haskell `impliedFormulas` (System.hs:1111-1121): `openGuarded gf`
@@ -1220,7 +1221,7 @@ fn insert_implied_formulas_pass(red: &mut Reduction) -> ChangeIndicator {
             .copied()
             .filter_map(|f| match f {
                 Guarded::GGuarded {
-                    qua: Quant::All,
+                    qua: Quantifier::All,
                     vars,
                     guards,
                     body,
@@ -1236,9 +1237,9 @@ fn insert_implied_formulas_pass(red: &mut Reduction) -> ChangeIndicator {
                     let mut xs: Vec<tamarin_parser::ast::VarSpec> = Vec::with_capacity(vars.len());
                     for b in vars.iter() {
                         xs.push(tamarin_parser::ast::VarSpec {
-                            name: b.name.clone(),
+                            name: b.0.clone(),
                             idx: rename_baseline,
-                            sort: b.sort,
+                            sort: b.1,
                             typ: None,
                         });
                         rename_baseline = rename_baseline.saturating_add(1);
@@ -3904,7 +3905,7 @@ fn simp_injective_fact_eq_mon_pass(red: &mut Reduction) -> ChangeIndicator {
                 body,
             } = fm.as_ref()
             {
-                if !matches!(qua, crate::guarded::Quant::All) {
+                if !matches!(qua, crate::formula::Quantifier::All) {
                     continue;
                 }
                 if !vars.is_empty() {
@@ -4695,7 +4696,7 @@ fn propagate_subterm_obvious(red: &mut Reduction) -> ChangeIndicator {
                        new_var: &tamarin_term::lterm::LVar,
                        new_formulas: &mut Vec<crate::guarded::Guarded>| {
         let f = crate::guarded::close_guarded(
-            crate::guarded::Quant::All,
+            crate::formula::Quantifier::All,
             vec![binder_varspec(new_var)],
             vec![crate::guarded_types::blnatom_to_parser(
                 &crate::atom::ProtoAtom::EqE(

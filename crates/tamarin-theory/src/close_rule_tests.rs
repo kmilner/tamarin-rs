@@ -291,7 +291,7 @@ fn structural_lemma_closes_dotted_and_cross_sort_binders() {
     );
     match &g {
         Guarded::GGuarded {
-            qua: crate::guarded::Quant::All,
+            qua: crate::formula::Quantifier::All,
             vars,
             guards,
             body,

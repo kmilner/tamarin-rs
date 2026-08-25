@@ -594,9 +594,8 @@ fn synthesise_probe_theory(
         let gen_at = action_atom(action.clone(), p::Term::Var(t0.clone()));
         let ku_fact = p::Fact {
             // KU is Persistent per factTagMultiplicity (Theory/Model/Fact.hs:382-388,
-            // see line 386);
-            // keep the "for special names, persistent == tag multiplicity"
-            // invariant so GFact equality with parsed KU facts is faithful.
+            // see line 386), which is the multiplicity `mkProtoFact` fixes for
+            // the reserved name (Theory/Text/Parser/Fact.hs:56-63).
             persistent: true,
             name: "KU".into(),
             args: vec![p::Term::Var(v_renamed)],

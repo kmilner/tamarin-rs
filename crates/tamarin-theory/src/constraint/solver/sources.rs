@@ -5451,16 +5451,14 @@ fn write_gterm_struct(t: &crate::guarded_types::GTerm, rename: &Bindings, out: &
     }
 }
 
-fn write_gfact_struct(f: &crate::guarded_types::GFact, rename: &Bindings, out: &mut String) {
+fn write_gfact_struct(f: &crate::guarded::GFact, rename: &Bindings, out: &mut String) {
     use std::fmt::Write as _;
-    if f.persistent {
-        out.push('!');
-    }
-    out.push_str(&f.name);
-    out.push(':');
-    let _ = write!(out, "{:?}", f.annotations);
+    // `{:?}` of the `FactTag` writes the multiplicity, the name and the arity;
+    // the annotations follow, so the pair is injective over everything the fact
+    // holds beside its terms.
+    let _ = write!(out, "{:?}:{:?}", f.tag, f.annotations);
     out.push('[');
-    for (i, t) in f.args.iter().enumerate() {
+    for (i, t) in f.terms.iter().enumerate() {
         if i > 0 {
             out.push(',');
         }
@@ -5565,19 +5563,19 @@ fn write_guarded_struct(g: &crate::guarded::Guarded, rename: &Bindings, out: &mu
             body,
         } => {
             out.push('G');
-            // `{:?}` of `Quant` is the bare variant name.
+            // `{:?}` of `Quantifier` is the bare variant name.
             out.push_str(match qua {
-                crate::guarded::Quant::All => "All",
-                crate::guarded::Quant::Ex => "Ex",
+                crate::formula::Quantifier::All => "All",
+                crate::formula::Quantifier::Ex => "Ex",
             });
             out.push('(');
             for (i, b) in vars.iter().enumerate() {
                 if i > 0 {
                     out.push(',');
                 }
-                out.push_str(&b.name);
+                out.push_str(&b.0);
                 out.push(':');
-                push_sort_dbg(out, b.sort);
+                push_sort_dbg(out, b.1);
             }
             out.push_str("){");
             for (i, a) in guards.iter().enumerate() {

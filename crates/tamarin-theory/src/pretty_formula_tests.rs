@@ -221,7 +221,7 @@ fn binop_xor() {
 fn guarded_negation_shortcut() {
     // ∀ [] [Less(i,j)] ⊥  ⇒  rendered as `¬(i < j)`.
     let g = Guarded::GGuarded {
-        qua: Quant::All,
+        qua: Quantifier::All,
         vars: vec![].into(),
         guards: vec![crate::guarded::atom_to_gatom_free(&p::Atom::Less(
             p::Term::Var(v("i", LSort::Node)),

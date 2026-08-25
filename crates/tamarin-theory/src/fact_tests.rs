@@ -289,9 +289,9 @@ fn bloom_miss_implies_no_change() {
     );
 }
 
-/// Trait regression: two facts equal-but-for-fingerprints compare `==`
-/// and `Ord`-equal.  Pins that the manual `Eq`/`Ord` stay blind to BOTH
-/// out-of-band caches (`bloom` and `max_var`; no `Hash` derive added).
+/// Trait regression: two facts equal-but-for-fingerprints compare `==`,
+/// `Ord`-equal and hash equal.  Pins that the manual `Eq`/`Ord`/`Hash` stay
+/// blind to BOTH out-of-band caches (`bloom` and `max_var`).
 #[test]
 fn fingerprints_are_invisible_to_eq_and_ord() {
     let mut a = Fact::fresh(FactTag::Out, vec![mv("x", 0)]);
@@ -307,6 +307,47 @@ fn fingerprints_are_invisible_to_eq_and_ord() {
         "Ord must ignore the bloom/max_var fields"
     );
     assert!(a.partial_cmp(&b) == Some(std::cmp::Ordering::Equal));
+    assert_eq!(
+        tamarin_utils::fx_hash_one(&a),
+        tamarin_utils::fx_hash_one(&b),
+        "Hash must ignore the bloom/max_var fields"
+    );
+}
+
+/// `Hash` reads the same fields `Eq` reads, so the annotations stay out of it
+/// (HS ignores them in `Eq`/`Ord`, Theory/Model/Fact.hs:169-174).
+#[test]
+fn fact_hash_ignores_annotations() {
+    let a = fresh_fact(msg_var("x", 0)).annotate(FactAnnotation::SolveFirst);
+    let b = fresh_fact(msg_var("x", 0));
+    assert_eq!(a, b);
+    assert_eq!(
+        tamarin_utils::fx_hash_one(&a),
+        tamarin_utils::fx_hash_one(&b)
+    );
+}
+
+/// The consistency the implied-formula dedup's hash prefilter rests on:
+/// every pair of `==` facts hashes equal, so a hash mismatch really does prove
+/// the two values differ.
+#[test]
+fn fact_equal_values_hash_equal() {
+    let mut r = Lcg(0x0FF1_CE99);
+    let mut equal_pairs = 0u64;
+    for _ in 0..2000 {
+        let a = rand_fact(&mut r);
+        // An independently built structural copy, with the annotations and the
+        // fingerprints deliberately drawn differently.
+        let b = Fact::new(a.tag, a.terms.to_vec()).annotate(FactAnnotation::SolveLast);
+        assert_eq!(a, b);
+        assert_eq!(
+            tamarin_utils::fx_hash_one(&a),
+            tamarin_utils::fx_hash_one(&b),
+            "equal facts must hash equal: {a:?}"
+        );
+        equal_pairs += 1;
+    }
+    assert!(equal_pairs > 0);
 }
 
 /// `var_bit` determinism: two INDEPENDENTLY-constructed content-equal

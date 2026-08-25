@@ -40,71 +40,102 @@ fn ground_truth() {
     assert_eq!(r, gtrue());
 }
 
-// GFact builder for cmp_fact ordering tests.
-fn gf(persistent: bool, name: &str) -> GFact {
-    GFact {
+// A guarded fact with the given multiplicity, name and argument count. The
+// tag is whatever `fact_tag_of` gives the parser fact, so a reserved name
+// reaches its own `FactTag` constructor and every other name stays a
+// `ProtoFact`.
+fn gf_args(persistent: bool, name: &str, arity: usize) -> GFact {
+    fact_to_gfact_free(&p::Fact {
         persistent,
         name: name.into(),
-        args: vec![].into(),
+        args: (0..arity).map(|i| var("a", i as u64)).collect(),
         annotations: vec![],
-    }
+    })
 }
 
-/// HS `FactTag` derived Ord segregates all ProtoFacts before every
-/// special tag, and orders the special tags in declaration sequence
-/// (Fr < Out < In < KU < KD < Ded < Term).  cmp_fact must reproduce
-/// this from the canonicalised name string.
+fn gf(persistent: bool, name: &str) -> GFact {
+    gf_args(persistent, name, 0)
+}
+
+// The guarded fact order, as the solver reaches it: `cmp_atom`'s `Action`
+// arm compares the timepoint and then the fact, so a shared timepoint leaves
+// the fact deciding.  The fact half is HS `Ord (Fact t)`
+// (Theory/Model/Fact.hs:173-174) — the `FactTag` first, then the term list.
+fn cmp_gfact(a: &GFact, b: &GFact) -> std::cmp::Ordering {
+    let at = |f: &GFact| GAtom::Action(f.clone(), GTerm::Var(BVar::Bound(0)));
+    cmp_atom(&at(a), &at(b))
+}
+
+/// `FactTag`'s derived Ord segregates every ProtoFact before every reserved
+/// tag and orders the reserved tags in declaration sequence
+/// (Theory/Model/Fact.hs:137-148).  `fact_tag_of` recovers the reserved tags
+/// from the names the parser canonicalises to (`mkProtoFact`,
+/// Theory/Text/Parser/Fact.hs:56-63), leaving every other name a `ProtoFact`.
 #[test]
-fn cmp_fact_special_tag_segregation() {
+fn guarded_facts_sort_every_proto_before_every_reserved_tag() {
     use std::cmp::Ordering::Less;
-    // A ProtoFact with a name that lexically sorts AFTER every special
-    // name must still come FIRST (constructor index dominates).
+    // A ProtoFact with a name that lexically sorts AFTER every reserved
+    // name must still come FIRST (the constructor index dominates).
     let proto_z = gf(false, "Zebra");
-    for special in ["Fr", "Out", "In", "KU", "KD", "Ded", "Term"] {
-        let persistent = matches!(special, "KU" | "KD");
-        let s = gf(persistent, special);
+    for reserved in ["Fr", "Out", "In", "KU", "KD", "Ded"] {
+        let persistent = matches!(reserved, "KU" | "KD");
+        let s = gf(persistent, reserved);
         assert_eq!(
-            cmp_fact(&proto_z, &s),
+            cmp_gfact(&proto_z, &s),
             Less,
-            "ProtoFact must sort before special tag {special}"
+            "a ProtoFact must sort before the reserved tag {reserved}"
         );
     }
-    // Special tags order in declaration sequence.
-    assert_eq!(cmp_fact(&gf(false, "Fr"), &gf(false, "Out")), Less);
-    assert_eq!(cmp_fact(&gf(false, "Out"), &gf(false, "In")), Less);
-    assert_eq!(cmp_fact(&gf(false, "In"), &gf(true, "KU")), Less);
-    assert_eq!(cmp_fact(&gf(true, "KU"), &gf(true, "KD")), Less);
-    assert_eq!(cmp_fact(&gf(true, "KD"), &gf(false, "Ded")), Less);
-    assert_eq!(cmp_fact(&gf(false, "Ded"), &gf(false, "Term")), Less);
-    // "K" is an ordinary ProtoFact (not special), so it precedes Fr.
-    assert_eq!(cmp_fact(&gf(false, "K"), &gf(false, "Fr")), Less);
+    // The reserved tags order in declaration sequence.
+    assert_eq!(cmp_gfact(&gf(false, "Fr"), &gf(false, "Out")), Less);
+    assert_eq!(cmp_gfact(&gf(false, "Out"), &gf(false, "In")), Less);
+    assert_eq!(cmp_gfact(&gf(false, "In"), &gf(true, "KU")), Less);
+    assert_eq!(cmp_gfact(&gf(true, "KU"), &gf(true, "KD")), Less);
+    assert_eq!(cmp_gfact(&gf(true, "KD"), &gf(false, "Ded")), Less);
+    // "K" and "Term" are ordinary ProtoFacts, so both precede Fr.
+    assert_eq!(cmp_gfact(&gf(false, "K"), &gf(false, "Fr")), Less);
+    assert_eq!(cmp_gfact(&gf(false, "Term"), &gf(false, "Fr")), Less);
 }
 
-/// ProtoFacts compare by (Persistent<Linear, name, arity).
+/// ProtoFacts compare by the `(Multiplicity, String, Int)` triple, and the
+/// arity in that triple is compared BEFORE the term list, exactly as
+/// `compare tag tag'` precedes `compare ts ts'`.
 #[test]
-fn cmp_fact_proto_triple() {
+fn guarded_proto_facts_sort_by_multiplicity_then_name_then_arity() {
     use std::cmp::Ordering::Less;
-    // Persistent < Linear (reversed bool).
-    assert_eq!(cmp_fact(&gf(true, "P"), &gf(false, "P")), Less);
+    // Persistent < Linear.
+    assert_eq!(cmp_gfact(&gf(true, "P"), &gf(false, "P")), Less);
     // Then by name.
-    assert_eq!(cmp_fact(&gf(false, "A"), &gf(false, "B")), Less);
-    // Then by arity.
-    let a1 = GFact {
+    assert_eq!(cmp_gfact(&gf(false, "A"), &gf(false, "B")), Less);
+    // Then by arity, before any term is looked at: the one-argument fact wins
+    // even though its argument sorts AFTER the two-argument fact's first.
+    let mk = |args: Vec<p::Term>| {
+        fact_to_gfact_free(&p::Fact {
+            persistent: false,
+            name: "P".into(),
+            args,
+            annotations: vec![],
+        })
+    };
+    assert_eq!(
+        cmp_gfact(&mk(vec![var("z", 0)]), &mk(vec![var("a", 0), var("a", 1)])),
+        Less
+    );
+}
+
+/// The guarded fact ignores its annotations in equality, as HS's `Eq (Fact t)`
+/// does (Theory/Model/Fact.hs:169-174).
+#[test]
+fn guarded_facts_ignore_their_annotations() {
+    let plain = gf_args(false, "P", 1);
+    let annotated = fact_to_gfact_free(&p::Fact {
         persistent: false,
         name: "P".into(),
-        args: vec![].into(),
-        annotations: vec![],
-    };
-    let a2 = GFact {
-        persistent: false,
-        name: "P".into(),
-        args: vec![crate::guarded_types::GTerm::Var(
-            crate::guarded_types::BVar::Bound(0),
-        )]
-        .into(),
-        annotations: vec![],
-    };
-    assert_eq!(cmp_fact(&a1, &a2), Less);
+        args: vec![var("a", 0)],
+        annotations: vec![p::FactAnnotation::SolveFirst],
+    });
+    assert_eq!(plain, annotated);
+    assert_eq!(cmp_gfact(&plain, &annotated), std::cmp::Ordering::Equal);
 }
 
 /// HS's pair is a nested arity-2 FAPP (`fAppPair`, Term/Term.hs:163), so
@@ -165,17 +196,22 @@ fn variable_ordering_ranks_sorts_in_lsort_declaration_order() {
         sort,
         typ: None,
     };
-    let b = |sort| GBinding {
-        name: "x".into(),
-        sort,
-    };
+    let b = |sort| ("x".to_string(), sort);
     for (i, &s) in declared.iter().enumerate() {
         for (j, &t) in declared.iter().enumerate() {
             let want = i.cmp(&j);
             assert_eq!(cmp_varspec(&vs(s), &vs(t)), want, "{s:?} vs {t:?}");
-            assert_eq!(cmp_binding(&b(s), &b(t)), want, "{s:?} vs {t:?}");
+            assert_eq!(b(s).cmp(&b(t)), want, "{s:?} vs {t:?}");
         }
     }
+}
+
+/// HS `data Quantifier = All | Ex` (Theory/Model/Formula.hs:111-112) derives
+/// Ord, so `All` sorts before `Ex` — the first field the guarded formula's
+/// `GGuarded` comparison reads.
+#[test]
+fn quantifier_orders_all_before_ex() {
+    assert!(Quantifier::All < Quantifier::Ex);
 }
 
 #[test]
@@ -268,7 +304,7 @@ fn simple_action_under_all() {
         Guarded::GGuarded {
             qua, vars, guards, ..
         } => {
-            assert_eq!(qua, Quant::All);
+            assert_eq!(qua, Quantifier::All);
             assert_eq!(vars.len(), 2);
             assert_eq!(guards.len(), 1);
         }
@@ -289,7 +325,7 @@ fn exists_with_guarded_var() {
     let r = g("Ex k #i. Setup(k) @ #i").unwrap();
     match r {
         Guarded::GGuarded { qua, vars, .. } => {
-            assert_eq!(qua, Quant::Ex);
+            assert_eq!(qua, Quantifier::Ex);
             assert_eq!(vars.len(), 2);
         }
         x => panic!("expected GGuarded(Ex), got {:?}", x),
@@ -329,7 +365,7 @@ fn indexed_inner_binder_is_guarded_against_same_named_outer_var() {
         Guarded::GGuarded {
             qua, vars, guards, ..
         } => {
-            assert_eq!(*qua, Quant::All);
+            assert_eq!(*qua, Quantifier::All);
             assert_eq!(vars.len(), 2, "outer binders x and #NOW");
             assert_eq!(guards.len(), 1, "outer guard Foo(x) @ #NOW");
         }
@@ -366,7 +402,7 @@ fn timepoint_guard_matches_sigilless_occurrence() {
     let r = g("Ex #j. Bar(x) @ j").expect("#j is guarded by the action's timepoint");
     match &r {
         Guarded::GGuarded { qua, vars, .. } => {
-            assert_eq!(*qua, Quant::Ex);
+            assert_eq!(*qua, Quantifier::Ex);
             assert_eq!(vars.len(), 1);
         }
         x => panic!("expected GGuarded(Ex), got {:?}", x),
@@ -387,12 +423,12 @@ fn implication_distributes() {
             guards,
             body,
         } => {
-            assert_eq!(*qua, Quant::All);
+            assert_eq!(*qua, Quantifier::All);
             assert_eq!(vars.len(), 2, "binders k and #i");
             assert_eq!(guards.len(), 1, "the antecedent is the guard");
             match &**body {
                 Guarded::GGuarded { qua, vars, .. } => {
-                    assert_eq!(*qua, Quant::Ex);
+                    assert_eq!(*qua, Quantifier::Ex);
                     assert_eq!(vars.len(), 2, "binders j and #t");
                 }
                 other => panic!("expected the consequent as the body, got {:?}", other),
@@ -492,7 +528,7 @@ fn varsubst_shadowing_blocks_inner_binder() {
     };
     // Build via close_guarded so that `k` becomes Bound(0) in the body.
     let g = close_guarded(
-        Quant::Ex,
+        Quantifier::Ex,
         vec![inner_k.clone()],
         Vec::new(),
         Guarded::Atom(atom_to_gatom_free(&p::Atom::Action(
@@ -507,7 +543,7 @@ fn varsubst_shadowing_blocks_inner_binder() {
         Guarded::GGuarded { body, .. } => match &*body {
             Guarded::Atom(GAtom::Action(fa, _)) => {
                 // Walk the body atom and verify the `k` slot is still Bound(0).
-                match &fa.args[0] {
+                match &fa.terms[0] {
                     GTerm::Var(BVar::Bound(0)) => {}
                     other => panic!("expected Bound(0), got {:?}", other),
                 }
@@ -533,7 +569,13 @@ fn ginduct_extracts_two_cases() {
             assert_eq!(items.len(), 2, "step case is `gconj [gf, IH]`");
             assert_eq!(items[0], gf, "the original formula comes first");
             assert!(
-                matches!(&items[1], Guarded::GGuarded { qua: Quant::Ex, .. }),
+                matches!(
+                    &items[1],
+                    Guarded::GGuarded {
+                        qua: Quantifier::Ex,
+                        ..
+                    }
+                ),
                 "the IH flips the outer quantifier: {:?}",
                 items[1]
             );
@@ -590,7 +632,7 @@ fn induction_hypothesis_emits_last_atoms_for_node_sorted_binders() {
         Guarded::GGuarded {
             qua, vars, body, ..
         } => {
-            assert_eq!(*qua, Quant::Ex);
+            assert_eq!(*qua, Quantifier::Ex);
             assert_eq!(vars.len(), 1);
             assert_eq!(
                 last_bound_indices(body),
@@ -691,7 +733,7 @@ fn simplify_conj_short_circuits_on_false() {
 /// `p = q`.
 fn mk_universal(vars: Vec<GBinding>, guards: &[p::Atom]) -> Guarded {
     Guarded::GGuarded {
-        qua: Quant::All,
+        qua: Quantifier::All,
         vars: vars.into(),
         guards: guards.iter().map(atom_to_gatom_free).collect(),
         body: std::sync::Arc::new(mk_atom_eq("p", "q")),
@@ -743,10 +785,7 @@ fn simplify_universal_with_all_true_guards_returns_body() {
 fn simplify_universal_with_quantifier_left_intact() {
     // GGuarded with bound vars is left alone — Haskell delays
     // simplification past the binder.
-    let bound_var = GBinding {
-        name: "x".into(),
-        sort: LSort::Msg,
-    };
+    let bound_var = ("x".to_string(), LSort::Msg);
     let g = mk_universal(vec![bound_var], &[mk_eq("a", "b")]);
     let val = |_atom: &p::Atom| Some(true);
     assert_eq!(simplify_guarded_with(&g, &val), g);
@@ -1027,7 +1066,10 @@ fn gnot_flips_universal_to_existential() {
     let n = gnot(&f);
     // The resulting quantifier MUST be Ex.
     match n {
-        Guarded::GGuarded { qua: Quant::Ex, .. } => {}
+        Guarded::GGuarded {
+            qua: Quantifier::Ex,
+            ..
+        } => {}
         other => panic!("expected Ex quantifier after negating All; got {:?}", other),
     }
 }
@@ -1042,7 +1084,10 @@ fn gnot_flips_existential_to_universal() {
     let f = g("Ex x #i. P(x)@#i").unwrap();
     // Sanity: starts as Ex.
     match &f {
-        Guarded::GGuarded { qua: Quant::Ex, .. } => {}
+        Guarded::GGuarded {
+            qua: Quantifier::Ex,
+            ..
+        } => {}
         other => panic!("test setup: expected Ex; got {:?}", other),
     }
     let n = gnot(&f);
@@ -1050,7 +1095,8 @@ fn gnot_flips_existential_to_universal() {
     // simplified — but for this non-trivial body it remains All).
     match n {
         Guarded::GGuarded {
-            qua: Quant::All, ..
+            qua: Quantifier::All,
+            ..
         } => {}
         other => panic!("expected All quantifier after negating Ex; got {:?}", other),
     }
@@ -1448,19 +1494,15 @@ fn open_guarded_sorts_a_commutative_argument_pair() {
         ]),
     );
     let gf = Guarded::GGuarded {
-        qua: Quant::Ex,
-        vars: vec![GBinding {
-            name: "x".into(),
-            sort: LSort::Msg,
-        }]
-        .into(),
+        qua: Quantifier::Ex,
+        vars: vec![("x".to_string(), LSort::Msg)].into(),
         guards: vec![GAtom::Eq(em, GTerm::PubLit("z".into()))].into(),
         body: Arc::new(gtrue()),
     };
 
     let mut fresh = PreciseFreshState::nothing_used();
     let (qua, vs, ats, body) = open_guarded(&gf, &mut fresh).expect("a GGuarded opens");
-    assert_eq!(qua, Quant::Ex);
+    assert_eq!(qua, Quantifier::Ex);
     assert_eq!(
         vs,
         vec![p::VarSpec {
@@ -1511,12 +1553,14 @@ fn hf_leaf(name: &str, idx: u64, sort: LSort) -> GTerm {
 }
 
 fn hf_fact(name: &str, args: Vec<GTerm>) -> GFact {
-    GFact {
-        persistent: false,
-        name: name.into(),
-        args: args.into(),
-        annotations: vec![],
-    }
+    GFact::new(
+        crate::fact::FactTag::Proto(
+            crate::fact::Multiplicity::Linear,
+            tamarin_term::intern::intern_str(name),
+            args.len(),
+        ),
+        args,
+    )
 }
 
 fn hf_names(g: &Guarded) -> Vec<String> {
@@ -1562,12 +1606,8 @@ fn action_atom_visits_timepoint_before_fact() {
 #[test]
 fn bound_leaves_are_skipped() {
     let g = Guarded::GGuarded {
-        qua: Quant::Ex,
-        vars: vec![GBinding {
-            name: "z".into(),
-            sort: LSort::Msg,
-        }]
-        .into(),
+        qua: Quantifier::Ex,
+        vars: vec![("z".to_string(), LSort::Msg)].into(),
         guards: vec![GAtom::Eq(
             GTerm::Var(BVar::Bound(0)),
             hf_leaf("y", 4, LSort::Msg),
@@ -1584,7 +1624,7 @@ fn bound_leaves_are_skipped() {
     let Guarded::GGuarded { guards, vars, .. } = &renamed else {
         panic!("map_free must keep the GGuarded shape")
     };
-    assert_eq!(vars[0].name, "z", "the binder list stays verbatim");
+    assert_eq!(vars[0].0, "z", "the binder list stays verbatim");
     assert_eq!(
         guards[0],
         GAtom::Eq(GTerm::Var(BVar::Bound(0)), hf_leaf("r", 14, LSort::Msg))
@@ -1596,7 +1636,7 @@ fn bound_leaves_are_skipped() {
 #[test]
 fn guards_visited_before_body() {
     let g = Guarded::GGuarded {
-        qua: Quant::All,
+        qua: Quantifier::All,
         vars: vec![].into(),
         guards: vec![GAtom::Eq(
             hf_leaf("g", 1, LSort::Msg),

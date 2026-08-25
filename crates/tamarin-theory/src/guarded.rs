@@ -21,7 +21,8 @@
 use std::collections::BTreeSet;
 
 use crate::atom::{map_atom, Atom};
-use crate::formula::BLNTerm;
+use crate::fact::Fact;
+use crate::formula::{BLNTerm, Quantifier};
 use crate::guarded_types::cow_pair_arc;
 use tamarin_parser::ast as p;
 use tamarin_term::lterm::{sort_prefix, HasFrees, LNTerm, LSort, LVar};
@@ -35,18 +36,23 @@ pub use crate::guarded_types::{
     gterm_to_term, lvar_to_binding, map_free_atom, map_free_fact, map_free_term, open_subst,
     subst_bound_atom_at_depth, subst_bound_fact_at_depth, subst_bound_term_at_depth,
     subst_free_atom_at_depth, subst_free_fact_at_depth, subst_free_term_at_depth,
-    term_to_gterm_free, BVar, GAtom, GBinding, GFact, GTerm,
+    term_to_gterm_free, BVar, GAtom, GTerm,
 };
 
 // =============================================================================
 // Guarded data type
 // =============================================================================
 
-#[derive(Debug, Copy, Clone, PartialEq, Hash)]
-pub enum Quant {
-    All,
-    Ex,
-}
+/// The fact a guarded atom carries.  HS's guarded atom is
+/// `Atom (VTerm c (BVar v))` (Guarded.hs:121) and its `Action` arm holds a
+/// `Fact t` over that same term (Atom.hs:78), so the fact's term leaves are
+/// `BVar`s.
+pub type GFact = Fact<GTerm>;
+
+/// HS's binder type in `LNGuarded = Guarded (String,LSort) Name LVar`
+/// (Guarded.hs:391): a binder carries a name and a sort, and its identity is
+/// the position it holds in the `GGuarded` binder list.
+pub type GBinding = (String, LSort);
 
 // ===========================================================================
 // HS-faithful Ord for Guarded
@@ -118,16 +124,15 @@ pub fn cmp_guarded(a: &Guarded, b: &Guarded) -> std::cmp::Ordering {
             else {
                 unreachable!("guarded tag matched GGuarded")
             };
-            cmp_quant(q1, q2)
-                // HS-faithful: in `LNGuarded = Guarded (String,LSort) Name
-                // LVar` (Guarded.hs:391), the `s` parameter — used
-                // for GGuarded's binding list — is the TUPLE
-                // `(String, LSort)`, NOT `LVar`.  Our `GBinding` carries
-                // exactly those two fields, so bindings sort by
-                // (name, sort) only (cmp_binding); there is no idx on a
-                // binding.  Free-var comparison inside terms still uses
-                // cmp_varspec which mirrors HS's `Ord LVar = (idx, sort, name)`.
-                .then_with(|| cmp_slice(v1, v2, cmp_binding))
+            q1.cmp(q2)
+                // In `LNGuarded = Guarded (String,LSort) Name LVar`
+                // (Guarded.hs:391) the `s` parameter — GGuarded's binding
+                // list — is the TUPLE `(String, LSort)`, NOT `LVar`, so
+                // bindings sort by (name, sort) under the tuple's own `Ord`
+                // and a binding has no idx.  Free-var comparison inside terms
+                // uses cmp_varspec, which mirrors HS's
+                // `Ord LVar = (idx, sort, name)`.
+                .then_with(|| v1.cmp(v2))
                 .then_with(|| cmp_slice(g1, g2, cmp_atom))
                 .then_with(|| cmp_guarded(b1, b2))
         }
@@ -141,12 +146,6 @@ fn guarded_tag(g: &Guarded) -> u8 {
         Guarded::Conj(_) => 2,
         Guarded::GGuarded { .. } => 3,
     }
-}
-
-fn cmp_quant(a: &Quant, b: &Quant) -> std::cmp::Ordering {
-    let ta = if matches!(a, Quant::All) { 0u8 } else { 1 };
-    let tb = if matches!(b, Quant::All) { 0u8 } else { 1 };
-    ta.cmp(&tb)
 }
 
 /// HS list Ord: element-by-element, shorter < longer.
@@ -190,11 +189,19 @@ pub fn cmp_atom(a: &GAtom, b: &GAtom) -> std::cmp::Ordering {
         // (Atom.hs:78-84), so the derived comparison is the timepoint term
         // `t` FIRST, then the `Fact t`.  Rust's `GAtom::Action(GFact, GTerm)`
         // stores fact-then-term, so we must compare the timepoint first.
+        //
+        // HS `Ord (Fact t)` is `compare tag tag' <> compare ts ts'`
+        // (Theory/Model/Fact.hs:173-174): the derived `Ord FactTag` first,
+        // then the term list, with the annotations ignored.  `FactTag`'s own
+        // derived `Ord` supplies the tag half; `cmp_term` supplies the term
+        // order the `GTerm` payload needs.
         GAtom::Action(f1, t1) => {
             let GAtom::Action(f2, t2) = b else {
                 unreachable!("atom tag matched Action")
             };
-            cmp_term(t1, t2).then_with(|| cmp_fact(f1, f2))
+            cmp_term(t1, t2)
+                .then_with(|| f1.tag.cmp(&f2.tag))
+                .then_with(|| cmp_slice(&f1.terms, &f2.terms, cmp_term))
         }
         GAtom::Eq(a1, b1) => {
             let GAtom::Eq(a2, b2) = b else {
@@ -224,7 +231,9 @@ pub fn cmp_atom(a: &GAtom, b: &GAtom) -> std::cmp::Ordering {
             let GAtom::Pred(f2) = b else {
                 unreachable!("atom tag matched Pred")
             };
-            cmp_fact(f1, f2)
+            f1.tag
+                .cmp(&f2.tag)
+                .then_with(|| cmp_slice(&f1.terms, &f2.terms, cmp_term))
         }
         GAtom::LessMset(a1, b1) => {
             let GAtom::LessMset(a2, b2) = b else {
@@ -568,85 +577,6 @@ pub fn cmp_varspec(a: &p::VarSpec, b: &p::VarSpec) -> std::cmp::Ordering {
         .then_with(|| a.name.cmp(&b.name))
 }
 
-/// HS-faithful Ord for GGuarded *binding* entries.  In LNGuarded, the
-/// binding type is `(String, LSort)` — Guarded.hs:391.  So bindings
-/// sort by `(name, sort)` lex.  Our `GBinding` carries only those
-/// two fields.
-pub fn cmp_binding(a: &GBinding, b: &GBinding) -> std::cmp::Ordering {
-    a.name.cmp(&b.name).then_with(|| a.sort.cmp(&b.sort))
-}
-
-/// HS Fact Ord (Theory/Model/Fact.hs:173-174): `compare tag tag' <> compare ts
-/// ts'`.  Annotations are explicitly IGNORED in `Ord (Fact t)`
-/// (Theory/Model/Fact.hs:169-174, whose line-169 comment reads "Ignore
-/// annotations in equality and ord testing").  Works on
-/// `GFact` (HS `Fact (VTerm c (BVar v))`).
-///
-/// The HS `FactTag` Ord (Theory/Model/Fact.hs:136-148, derived) compares a `ProtoFact`
-/// by `(Multiplicity, String, Int)` where `Multiplicity = Persistent |
-/// Linear` orders `Persistent < Linear`, and `Int` is the arity.  Rust's
-/// `bool` Ord gives `false < true`, so to reproduce `Persistent < Linear`
-/// we must order `persistent == true` BEFORE `persistent == false` — i.e.
-/// reverse the bool comparison.  Arity (`args.len()`) is part of the
-/// `FactTag` key and is therefore compared BEFORE the term list, exactly
-/// as `compare tag tag'` precedes `compare ts ts'`.
-///
-/// SPECIAL-TAG SEGREGATION: HS `FactTag` (Theory/Model/Fact.hs:136-148, derived Ord) is
-/// `ProtoFact Multiplicity String Int | FreshFact | OutFact | InFact |
-/// KUFact | KDFact | DedFact | TermFact`.  With a derived `Ord` the
-/// *constructor index* dominates, so EVERY `ProtoFact` sorts before EVERY
-/// special tag, and the special tags order amongst themselves in that
-/// declaration sequence (Fresh < Out < In < KU < KD < Ded < Term).
-///
-/// `GFact` carries only `(persistent, name)`, not the full `FactTag` enum,
-/// but the parser (`fact()` in tamarin-parser, mirroring HS `mkProtoFact`,
-/// Parser/Fact.hs:56-63) has already CANONICALISED reserved names to their
-/// exact tag spelling — `Fr`, `Out`, `In`, `KU`, `KD`, `Ded` — and fixed
-/// their multiplicity (KU/KD persistent, the rest linear).  So we can
-/// recover the tag class from the name string with an exact (case-sensitive)
-/// match, identical to `fact_to_lnfact`'s mapping in `elaborate.rs`.  Names
-/// that are not one of those reserved spellings (including the ordinary
-/// proto-fact `K`) are `ProtoFact`s.
-fn fact_tag_class(f: &GFact) -> u8 {
-    // ProtoFact == 0 so it sorts before all special tags, matching the
-    // derived constructor order. Special tags follow Theory/Model/Fact.hs:139-147.
-    match f.name.as_str() {
-        "Fr" => 1,   // FreshFact
-        "Out" => 2,  // OutFact
-        "In" => 3,   // InFact
-        "KU" => 4,   // KUFact
-        "KD" => 5,   // KDFact
-        "Ded" => 6,  // DedFact
-        "Term" => 7, // TermFact (internal; never parsed, but mapped for completeness)
-        _ => 0,      // ProtoFact (incl. "K")
-    }
-}
-
-pub fn cmp_fact(a: &GFact, b: &GFact) -> std::cmp::Ordering {
-    use std::cmp::Ordering;
-    // `compare tag tag'`: first by FactTag constructor class.
-    let (ca, cb) = (fact_tag_class(a), fact_tag_class(b));
-    let tag_ord = ca.cmp(&cb).then_with(|| {
-        if ca == 0 {
-            // Both ProtoFact: derived Ord compares the inner triple
-            // `(Multiplicity, String, Int)` = (multiplicity, name, arity).
-            // Persistent < Linear: persistent==true must sort first, so
-            // compare `b.persistent` against `a.persistent` to reverse
-            // `bool`'s false<true ordering.
-            b.persistent
-                .cmp(&a.persistent)
-                .then_with(|| a.name.cmp(&b.name))
-                .then_with(|| a.args.len().cmp(&b.args.len()))
-        } else {
-            // Both the same special tag: nullary constructors compare
-            // equal at the tag level (no inner fields).
-            Ordering::Equal
-        }
-    });
-    // `<> compare ts ts'`: tie-break on the term list.
-    tag_ord.then_with(|| cmp_slice(&a.args, &b.args, cmp_term))
-}
-
 /// HS-faithful Guarded type. Mirrors `Theory.Constraint.System.Guarded.Guarded`.
 ///
 /// Atoms use `GAtom` (which is `Atom (VTerm c (BVar v))` in HS), so a
@@ -669,7 +599,7 @@ pub enum Guarded {
     /// (when `qua = Ex`). The `as` are the *guard* atoms, all
     /// quantified `xs` must be bound by them.
     GGuarded {
-        qua: Quant,
+        qua: Quantifier,
         vars: std::sync::Arc<[GBinding]>,
         guards: std::sync::Arc<[GAtom]>,
         body: std::sync::Arc<Guarded>,
@@ -723,9 +653,12 @@ pub fn reducible_formula(fm: &Guarded) -> bool {
     match fm {
         Guarded::Atom(_) => true,
         Guarded::Conj(_) => true,
-        Guarded::GGuarded { qua: Quant::Ex, .. } => true,
         Guarded::GGuarded {
-            qua: Quant::All,
+            qua: Quantifier::Ex,
+            ..
+        } => true,
+        Guarded::GGuarded {
+            qua: Quantifier::All,
             vars,
             guards,
             body,
@@ -835,7 +768,7 @@ pub fn simplify_guarded_with(
             gconj(simplified)
         }
         Guarded::GGuarded {
-            qua: Quant::All,
+            qua: Quantifier::All,
             vars,
             guards,
             body,
@@ -928,15 +861,16 @@ pub fn try_gterm_to_term(t: &GTerm) -> Option<p::Term> {
 
 /// Convert `GFact` to `p::Fact` if no Bound vars are present, else None.
 pub fn try_gfact_to_fact(f: &GFact) -> Option<p::Fact> {
-    let mut args = Vec::with_capacity(f.args.len());
-    for a in f.args.iter() {
+    let mut args = Vec::with_capacity(f.terms.len());
+    for a in f.terms.iter() {
         args.push(try_gterm_to_term(a)?);
     }
+    let (name, persistent) = crate::elaborate::fact_tag_to_parser(&f.tag);
     Some(p::Fact {
-        persistent: f.persistent,
-        name: f.name.clone(),
+        persistent,
+        name,
         args,
-        annotations: f.annotations.clone(),
+        annotations: crate::elaborate::fact_annotations_to_parser(&f.annotations),
     })
 }
 
@@ -1022,7 +956,7 @@ pub fn gex(vars: Vec<GBinding>, guards: Vec<GAtom>, body: Guarded) -> Guarded {
         return gfalse();
     }
     Guarded::GGuarded {
-        qua: Quant::Ex,
+        qua: Quantifier::Ex,
         vars: vars.into(),
         guards: guards.into(),
         body: std::sync::Arc::new(body),
@@ -1043,7 +977,7 @@ pub fn gall(vars: Vec<GBinding>, guards: Vec<GAtom>, body: Guarded) -> Guarded {
         return gtrue();
     }
     Guarded::GGuarded {
-        qua: Quant::All,
+        qua: Quantifier::All,
         vars: vars.into(),
         guards: guards.into(),
         body: std::sync::Arc::new(body),
@@ -1133,9 +1067,12 @@ pub fn is_safety_formula(g: &Guarded) -> bool {
     fn no_existential(g: &Guarded) -> bool {
         match g {
             Guarded::Atom(_) => true,
-            Guarded::GGuarded { qua: Quant::Ex, .. } => false,
             Guarded::GGuarded {
-                qua: Quant::All,
+                qua: Quantifier::Ex,
+                ..
+            } => false,
+            Guarded::GGuarded {
+                qua: Quantifier::All,
                 body,
                 ..
             } => no_existential(body),
@@ -1447,7 +1384,7 @@ pub fn subst_bound_guarded(g: &Guarded, s: &[(u32, p::VarSpec)]) -> Guarded {
 pub fn open_guarded(
     g: &Guarded,
     fresh: &mut dyn MonadFresh,
-) -> Option<(Quant, Vec<p::VarSpec>, Vec<p::Atom>, Guarded)> {
+) -> Option<(Quantifier, Vec<p::VarSpec>, Vec<p::Atom>, Guarded)> {
     let Guarded::GGuarded {
         qua,
         vars,
@@ -1461,9 +1398,9 @@ pub fn open_guarded(
     let xs: Vec<p::VarSpec> = vars
         .iter()
         .map(|b| p::VarSpec {
-            name: b.name.clone(),
-            idx: fresh.fresh_ident(&b.name),
-            sort: b.sort,
+            name: b.0.clone(),
+            idx: fresh.fresh_ident(&b.0),
+            sort: b.1,
             typ: None,
         })
         .collect();
@@ -1499,7 +1436,7 @@ pub fn open_guarded(
 ///            vs'   = map (lvarName &&& lvarSort) vs
 /// ```
 pub fn close_guarded(
-    qua: Quant,
+    qua: Quantifier,
     xs: Vec<p::VarSpec>,
     atoms: Vec<p::Atom>,
     body: Guarded,
@@ -1515,8 +1452,8 @@ pub fn close_guarded(
     let new_body = subst_free_guarded(&body, &close_s);
     let vs: Vec<GBinding> = xs.iter().map(lvar_to_binding).collect();
     match qua {
-        Quant::Ex => gex(vs, new_guards, new_body),
-        Quant::All => gall(vs, new_guards, new_body),
+        Quantifier::Ex => gex(vs, new_guards, new_body),
+        Quantifier::All => gall(vs, new_guards, new_body),
     }
 }
 
@@ -1732,11 +1669,19 @@ fn convert(
             let xs: Vec<p::VarSpec> = xs.iter().map(lvar_to_varspec).collect();
             let result = match qua0 {
                 Quantifier::All => {
-                    let out_qua = if polarity { Quant::Ex } else { Quant::All };
+                    let out_qua = if polarity {
+                        Quantifier::Ex
+                    } else {
+                        Quantifier::All
+                    };
                     convert_all(&xs, &body, polarity, out_qua, fresh)
                 }
                 Quantifier::Ex => {
-                    let out_qua = if polarity { Quant::All } else { Quant::Ex };
+                    let out_qua = if polarity {
+                        Quantifier::All
+                    } else {
+                        Quantifier::Ex
+                    };
                     convert_ex(&xs, &body, polarity, out_qua, fresh)
                 }
             };
@@ -1761,7 +1706,7 @@ fn convert_ex(
     xs: &[p::VarSpec],
     body: &crate::formula::LNFormula,
     polarity: bool,
-    out_qua: Quant,
+    out_qua: Quantifier,
     fresh: &mut tamarin_utils::fresh::PreciseFreshState,
 ) -> Result<Guarded, GuardError> {
     let (atoms, others) = split_conj_actions_eqs(body);
@@ -1787,7 +1732,7 @@ fn convert_all(
     xs: &[p::VarSpec],
     body: &crate::formula::LNFormula,
     polarity: bool,
-    out_qua: Quant,
+    out_qua: Quantifier,
     fresh: &mut tamarin_utils::fresh::PreciseFreshState,
 ) -> Result<Guarded, GuardError> {
     use crate::formula::{Connective, ProtoFormula};
@@ -1866,7 +1811,7 @@ fn split_conj_actions_eqs(
 /// `Guarded.hs:618`.
 fn gnot_atom(a: &GAtom) -> Guarded {
     Guarded::GGuarded {
-        qua: Quant::All,
+        qua: Quantifier::All,
         vars: Vec::new().into(),
         guards: vec![a.clone()].into(),
         body: std::sync::Arc::new(gfalse()),
@@ -2119,12 +2064,7 @@ fn cac_rec_slice(args: &std::sync::Arc<[GTerm]>, cmp: GCmp) -> Option<std::sync:
 // first change) lives once in `tamarin_utils::cow::{cow_map_arc, cow_pair}`.
 
 fn cac_rec_fact_cow(f: &GFact, cmp: GCmp) -> Option<GFact> {
-    cow_map_arc(&f.args, |a| cac_rec_term_cow(a, cmp)).map(|args| GFact {
-        persistent: f.persistent,
-        name: f.name.clone(),
-        args,
-        annotations: f.annotations.clone(),
-    })
+    cow_map_arc(&f.terms, |a| cac_rec_term_cow(a, cmp)).map(|terms| f.with_terms(terms))
 }
 
 /// COW of a GTerm pair: `None` when BOTH are unchanged.
@@ -2351,12 +2291,7 @@ fn subst_gpair_cow(x: &GTerm, y: &GTerm, s: &VarSubst) -> Option<(GTerm, GTerm)>
 
 /// Substitute Free LVar leaves in a `GFact`.
 fn subst_gfact_cow(f: &GFact, s: &VarSubst) -> Option<GFact> {
-    cow_map_arc(&f.args, |a| subst_gterm_cow(a, s)).map(|args| GFact {
-        persistent: f.persistent,
-        name: f.name.clone(),
-        args,
-        annotations: f.annotations.clone(),
-    })
+    cow_map_arc(&f.terms, |a| subst_gterm_cow(a, s)).map(|terms| f.with_terms(terms))
 }
 
 /// Copy-on-write substitution of Free LVar leaves in a `GTerm`.  Returns `None` when the subtree
@@ -2495,13 +2430,13 @@ pub fn for_each_free_var_in_guarded<F: FnMut(&p::VarSpec)>(g: &Guarded, f: &mut 
             // (Atom.hs:130-131).
             GAtom::Action(fa, t) => {
                 rec_term(t, f);
-                for arg in fa.args.iter() {
+                for arg in fa.terms.iter() {
                     rec_term(arg, f);
                 }
             }
             GAtom::Last(t) => rec_term(t, f),
             GAtom::Pred(fa) => {
-                for a in fa.args.iter() {
+                for a in fa.terms.iter() {
                     rec_term(a, f);
                 }
             }
@@ -2562,13 +2497,13 @@ pub fn gnot(g: &Guarded) -> Guarded {
         //   go (GGuarded All ss as gf) = gex  ss as (go gf)
         //   go (GGuarded Ex  ss as gf) = gall ss as (go gf)
         Guarded::GGuarded {
-            qua: Quant::All,
+            qua: Quantifier::All,
             vars,
             guards,
             body,
         } => gex(vars.to_vec(), guards.to_vec(), gnot(body)),
         Guarded::GGuarded {
-            qua: Quant::Ex,
+            qua: Quantifier::Ex,
             vars,
             guards,
             body,
@@ -2609,7 +2544,7 @@ pub fn satisfied_by_empty_trace(g: &Guarded) -> Result<bool, String> {
             }
             Ok(all)
         }
-        Guarded::GGuarded { qua, .. } => Ok(matches!(qua, Quant::All)),
+        Guarded::GGuarded { qua, .. } => Ok(matches!(qua, Quantifier::All)),
     }
 }
 
@@ -2672,17 +2607,17 @@ pub fn to_induction_hypothesis(g: &Guarded) -> Result<Guarded, String> {
                 .iter()
                 .rev()
                 .enumerate()
-                .filter(|(_, v)| v.sort == LSort::Node)
+                .filter(|(_, v)| v.1 == LSort::Node)
                 .map(|(j, _)| Guarded::Atom(GAtom::Last(GTerm::Var(BVar::Bound(j as u32)))))
                 .collect();
             match qua {
-                Quant::All => {
+                Quantifier::All => {
                     // gex ss as (gconj (map gnotAtom lastAtos ++ [gf']))
                     let mut items: Vec<Guarded> = last_atos.iter().map(gnot).collect();
                     items.push(body2);
                     Ok(gex(vars.to_vec(), guards.to_vec(), gconj(items)))
                 }
-                Quant::Ex => {
+                Quantifier::Ex => {
                     // gall ss as (gdisj (map GAto lastAtos ++ [gf']))
                     let mut items = last_atos;
                     items.push(body2);

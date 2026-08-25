@@ -257,11 +257,11 @@ fn atom_repr(a: &crate::guarded::GAtom) -> String {
         GAtom::Last(s) => format!("Last({})", term_repr(s)),
         GAtom::Action(f, t) => format!(
             "{}({})@{}",
-            f.name,
-            f.args.iter().map(term_repr).collect::<Vec<_>>().join(","),
+            crate::fact::fact_tag_name(&f.tag),
+            f.terms.iter().map(term_repr).collect::<Vec<_>>().join(","),
             term_repr(t)
         ),
-        GAtom::Pred(f) => format!("Pred({})", f.name),
+        GAtom::Pred(f) => format!("Pred({})", crate::fact::fact_tag_name(&f.tag)),
     }
 }
 
@@ -785,7 +785,7 @@ fn guarded_head(g: &crate::guarded::Guarded) -> String {
         Guarded::Atom(_) => "Atom".to_string(),
         Guarded::Conj(_) => "Conj".to_string(),
         Guarded::Disj(_) => "Disj".to_string(),
-        // Format matches that HS build's guarded-head trace: `<Quant><N>v`
+        // Format matches that HS build's guarded-head trace: `<Quantifier><N>v`
         // (e.g. `Ex1v`).  Suppresses bound-var names so HS/Rust line up.
         Guarded::GGuarded { qua, vars, .. } => format!("{:?}{}v", qua, vars.len()),
     }

@@ -133,13 +133,22 @@ pub struct Fact<T> {
     max_var: u64,
 }
 
-// Equality and ordering compare `tag` and `terms` only.  `annotations` is
-// excluded because HS `Eq`/`Ord LNFact` treat it as metadata; `bloom` is
-// excluded because it is an out-of-band skip fingerprint of the terms' frees
-// (a superset of them, or the `u64::MAX` sentinel), not part of a fact's
-// value — HS `LNFact` carries no such field.  Each impl destructures without
-// `..` so a new `Fact` field forces an inclusion decision in every sibling
-// impl at once.
+// Equality, ordering and hashing read `tag` and `terms` only.  `annotations` is
+// excluded because HS `Eq`/`Ord LNFact` treat it as metadata (Theory/Model/Fact.hs:169-174,
+// whose line-169 comment reads "Ignore annotations in equality and ord
+// testing"); `bloom` is excluded because it is an out-of-band skip fingerprint
+// of the terms' frees (a superset of them, or the `u64::MAX` sentinel), not
+// part of a fact's value — HS `LNFact` carries no such field.  Each impl
+// destructures without `..` so a new `Fact` field forces an inclusion decision
+// in every sibling impl at once.
+//
+// `Hash` is hand-written rather than derived so it reads EXACTLY the fields
+// `PartialEq` reads: equal values must hash equal, because the implied-formula
+// dedup skips its deep comparison on hash inequality
+// (`insert_implied_formulas_pass`, constraint/solver/simplify.rs).  A `Hash`
+// that folded in `annotations` would let two equal formulas hash apart, the
+// dedup would never fire, and the pass would re-insert the same formula on
+// every simplifier round.
 impl<T: PartialEq> PartialEq for Fact<T> {
     fn eq(&self, other: &Self) -> bool {
         let Fact {
@@ -201,6 +210,19 @@ impl<T: Ord> Ord for Fact<T> {
         tag.cmp(other_tag).then(terms.cmp(other_terms))
     }
 }
+impl<T: std::hash::Hash> std::hash::Hash for Fact<T> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        let Fact {
+            tag,
+            terms,
+            annotations: _,
+            bloom: _,
+            max_var: _,
+        } = self;
+        tag.hash(state);
+        terms.hash(state);
+    }
+}
 
 impl<T> Fact<T> {
     /// Generic constructor: stores `bloom = u64::MAX` (no `HasFrees` bound, so
@@ -219,6 +241,19 @@ impl<T> Fact<T> {
     pub fn with_annotations(mut self, ann: BTreeSet<FactAnnotation>) -> Self {
         self.annotations = ann;
         self
+    }
+    /// Rebuild over an already-built term slice, keeping `tag` and
+    /// `annotations`.  Both cached fingerprints become `u64::MAX` — the
+    /// never-wrong-skip default [`Fact::new`] stores — because the new terms'
+    /// frees are unknown here.
+    pub fn with_terms(&self, terms: Arc<[T]>) -> Fact<T> {
+        Fact {
+            tag: self.tag,
+            annotations: self.annotations.clone(),
+            terms,
+            bloom: u64::MAX,
+            max_var: u64::MAX,
+        }
     }
     pub fn annotate(mut self, a: FactAnnotation) -> Self {
         self.annotations.insert(a);

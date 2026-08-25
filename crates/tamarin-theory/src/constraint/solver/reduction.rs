@@ -2422,11 +2422,11 @@ impl<'ctx> Reduction<'ctx> {
                 Guarded::Disj(items) if items.is_empty() => "Disj-EMPTY",
                 Guarded::Disj(_) => "Disj",
                 Guarded::GGuarded {
-                    qua: crate::guarded::Quant::Ex,
+                    qua: crate::formula::Quantifier::Ex,
                     ..
                 } => "Ex",
                 Guarded::GGuarded {
-                    qua: crate::guarded::Quant::All,
+                    qua: crate::formula::Quantifier::All,
                     ..
                 } => "All",
             };
@@ -2604,7 +2604,7 @@ impl<'ctx> Reduction<'ctx> {
                 }
             }
             Guarded::GGuarded {
-                qua: crate::guarded::Quant::Ex,
+                qua: crate::formula::Quantifier::Ex,
                 vars,
                 guards,
                 body,
@@ -2625,18 +2625,14 @@ impl<'ctx> Reduction<'ctx> {
                     eprintln!(
                         "[EX-DECOMP] ENTER mark={} vars={:?}",
                         mark,
-                        vars.iter()
-                            .map(|b| (b.name.clone(), b.sort))
-                            .collect::<Vec<_>>()
+                        vars.iter().map(|b| (b.0.clone(), b.1)).collect::<Vec<_>>()
                     );
                 }
                 if crate::guarded::stores_contains(&self.sys.solved_formulas, &outer) {
                     if tamarin_utils::env_gate!("TAM_DBG_EX_DECOMP") {
                         eprintln!(
                             "[EX-DECOMP] SKIP (already solved) vars={:?}",
-                            vars.iter()
-                                .map(|b| (b.name.clone(), b.sort))
-                                .collect::<Vec<_>>()
+                            vars.iter().map(|b| (b.0.clone(), b.1)).collect::<Vec<_>>()
                         );
                     }
                     return;
@@ -2667,9 +2663,9 @@ impl<'ctx> Reduction<'ctx> {
                     .iter()
                     .enumerate()
                     .map(|(i, b)| tamarin_parser::ast::VarSpec {
-                        name: b.name.clone(),
+                        name: b.0.clone(),
                         idx: base + i as u64,
-                        sort: b.sort,
+                        sort: b.1,
                         typ: None,
                     })
                     .collect();
@@ -2697,7 +2693,7 @@ impl<'ctx> Reduction<'ctx> {
                 self.changed = ChangeIndicator::Changed;
             }
             Guarded::GGuarded {
-                qua: crate::guarded::Quant::All,
+                qua: crate::formula::Quantifier::All,
                 ref vars,
                 ref guards,
                 ref body,
@@ -5509,7 +5505,7 @@ fn close_guarded_ex_eq(
     r: &tamarin_term::lterm::LNTerm,
 ) -> crate::guarded::Guarded {
     crate::guarded::close_guarded(
-        crate::guarded::Quant::Ex,
+        crate::formula::Quantifier::Ex,
         vec![binder_varspec(new_var)],
         vec![crate::guarded_types::blnatom_to_parser(
             &crate::atom::ProtoAtom::EqE(

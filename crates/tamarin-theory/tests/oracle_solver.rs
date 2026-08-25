@@ -27,7 +27,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use tamarin_parser::parse_theory;
-use tamarin_theory::guarded::{formula_to_guarded_parsed, Guarded, Quant};
+use tamarin_theory::formula::Quantifier;
+use tamarin_theory::guarded::{formula_to_guarded_parsed, Guarded};
 
 fn fixtures_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
@@ -668,11 +669,11 @@ fn count_quantifiers(g: &Guarded) -> (usize, usize, usize, usize) {
                 qua, vars, body, ..
             } => {
                 match qua {
-                    Quant::Ex => {
+                    Quantifier::Ex => {
                         c.0 += 1;
                         c.1 += vars.len();
                     }
-                    Quant::All => {
+                    Quantifier::All => {
                         c.2 += 1;
                         c.3 += vars.len();
                     }
