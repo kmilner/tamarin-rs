@@ -56,29 +56,24 @@ use crate::pretty_theory::syntactic_lnatom_to_parser;
 /// resolution.
 type Bind = (String, LSort, String, u64);
 
-/// Pretty-print a parser-AST formula.  Mirrors Haskell's
-/// `prettyLNFormula` (Theory/Model/Formula.hs:518-520):
+/// [`formula_doc`] laid out flat — the one-line string a guarded-conversion
+/// error quotes, the parser-AST twin of [`pretty_lnformula`].
+pub fn pretty_formula(f: &p::Formula) -> String {
+    formula_doc(f).render_with(FLAT_WIDTH, FLAT_WIDTH)
+}
+
+/// The `Doc` of a parser-AST formula.  Mirrors Haskell's `prettyLNFormula`
+/// (Theory/Model/Formula.hs:518-520):
 ///
 /// ```text
 /// prettyLNFormula fm =
 ///     Precise.evalFresh (prettyLFormula prettyNAtom fm) (avoidPrecise fm)
 /// ```
 ///
-/// We seed the Precise fresh state with the formula's free-var names
-/// (`avoidPrecise = avoidPreciseVars . frees`, LTerm.hs:714-715) and
-/// run pp under that state — each `Forall`/`Exists` then does
-/// `scopeFreshness` and allocates display names that respect both the
-/// free-var seed and any outer-binder allocations.
-pub fn pretty_formula(f: &p::Formula) -> String {
-    let mut s = String::new();
-    let mut state = avoid_precise_formula(f);
-    pp_formula(f, &[], &mut state, &mut s);
-    s
-}
-
-/// The `Doc` of a parser-AST formula, seeded with the display names of its
-/// free variables the way HS's `prettyLNFormula` seeds `avoidPrecise`
-/// (Theory/Model/Formula.hs:518-520).
+/// The Precise fresh state is seeded with the formula's free-var names
+/// (`avoidPrecise = avoidPreciseVars . frees`, LTerm.hs:714-715), so each
+/// `Forall`/`Exists` does `scopeFreshness` and allocates display names that
+/// respect both the free-var seed and any outer-binder allocations.
 pub(crate) fn formula_doc(f: &p::Formula) -> Doc {
     let mut state = avoid_precise_formula(f);
     formula_to_doc(f, &[], &mut state)
@@ -305,18 +300,10 @@ pub fn term_doc(t: &p::Term) -> crate::pretty_hpj::Doc {
     term_to_doc(t, &[])
 }
 
-/// Pretty-print a parser-AST term standalone.
+/// [`term_doc`] laid out flat, for a caller that splices the term into a
+/// line of its own making.
 pub fn pretty_term(t: &p::Term) -> String {
-    let mut s = String::new();
-    pp_term(t, &[], &mut s);
-    s
-}
-
-/// Pretty-print a fact `F(a,b,...)`.
-pub fn pretty_fact(fa: &p::Fact) -> String {
-    let mut s = String::new();
-    pp_fact(fa, &[], &mut s);
-    s
+    term_doc(t).render_with(FLAT_WIDTH, FLAT_WIDTH)
 }
 
 /// HS `ppFactsList list = fsep [operator_ "[", ppList (map ppFact list),
@@ -605,45 +592,23 @@ fn allocate_guarded_binders(
             format!("{}.{}", v.name, idx)
         };
         // The guarded path resolves bound vars POSITIONALLY (`lookup_bound`
-        // / `bound_to_varspec`), never via the name-based `lookup_display`,
-        // so the stored source_idx is unused here; carry `0`.
+        // / `bound_to_varspec`), never by the name matching `var_display`
+        // does, so the stored source_idx is unused here; carry `0`.
         out.push((v.name.clone(), v.sort, display, 0));
     }
     out
 }
 
 // =============================================================================
-// Formula (parser AST)
+// Formula (parser AST) — HughesPJ Doc engine
 // =============================================================================
-
-/// `scope` is a flat list of binder entries (innermost binder last).
-/// Each entry carries the binder's source name+sort plus the display
-/// name allocated via `Precise.freshIdent` — when an inner binder
-/// shadows an outer name, the inner display name carries a `.<idx>`
-/// suffix (HS `show LVar`, LTerm.hs:550-557).
-///
-/// `state` threads the HS `Precise.Fresh` state across `scopeFreshness`
-/// boundaries (Theory/Model/Formula.hs:503-514 — every `Qua` saves/restores state).
-fn pp_formula(f: &p::Formula, scope: &[Bind], state: &mut PreciseFreshState, out: &mut String) {
-    use p::Formula::*;
-    match f {
-        True => out.push('\u{22A4}'),  // ⊤
-        False => out.push('\u{22A5}'), // ⊥
-        Atom(a) => pp_atom(a, scope, out),
-        Not(p_) => {
-            // HS `prettyLFormula` Not case: `¬<opParens p>` — wraps in
-            // parens if the operand is non-atomic.
-            out.push('\u{00AC}'); // ¬
-            pp_formula_opparens(p_, scope, state, out);
-        }
-        And(l, r) => pp_binop(l, r, " \u{2227} ", scope, state, out),
-        Or(l, r) => pp_binop(l, r, " \u{2228} ", scope, state, out),
-        Implies(l, r) => pp_binop(l, r, " \u{21D2} ", scope, state, out),
-        Iff(l, r) => pp_binop(l, r, " \u{21D4} ", scope, state, out),
-        Forall(vs, body) => pp_qua(true, vs, body, scope, state, out),
-        Exists(vs, body) => pp_qua(false, vs, body, scope, state, out),
-    }
-}
+//
+// Build a `pretty_hpj::Doc` tree mirroring HS's `prettyLFormula`
+// (Theory/Model/Formula.hs:474-514): Conn → `sep [opParens p <-> op, opParens q]`,
+// Qua → `sep [quantifier, nest 1 body]`.  The Doc engine handles
+// per-NilAbove `w`-shrinkage (HS get1 NilAbove:
+// `nilAbove_ (get (w - sl) p)`) which is required for HS-byte-exact
+// wireguard output (the deeply-nested And case).
 
 /// Peel consecutive same-kind quantifier nodes, mirroring HS
 /// `openFormulaPrefix` (Theory/Model/Formula.hs:296-309): `∀ x. ∀ y. P` is one binder
@@ -691,85 +656,13 @@ fn allocate_formula_binders_refs(
             format!("{}.{}", v.name, idx)
         };
         // 4th element = source_idx (predicate-fix `Bind`): carry the parsed
-        // var's idx so `lookup_display` can resolve body-var occurrences by
+        // var's idx so `var_display` can resolve body-var occurrences by
         // full identity (name, idx, sort) — distinguishing fresh `x` vs `x.1`
         // in `_restrict`/predicate rendering.
         out.push((v.name.clone(), v.sort, display, v.idx));
     }
     out
 }
-
-/// HS `pp fm@(Qua _ _ _) = scopeFreshness $ do ...` (Theory/Model/Formula.hs:503-514):
-/// save Precise state, `openFormulaPrefix` collapses consecutive same-kind
-/// quantifiers into one binder block, allocate display names, render body,
-/// restore state.
-fn pp_qua(
-    is_forall: bool,
-    vs: &[p::VarSpec],
-    body: &p::Formula,
-    scope: &[Bind],
-    state: &mut PreciseFreshState,
-    out: &mut String,
-) {
-    state.scope_freshness(|state| {
-        // HS `openFormulaPrefix` (Theory/Model/Formula.hs:296-309) collapses `∀ x. ∀ y. P`
-        // to `∀ x y. P`.
-        let (all_vs, inner_body) = open_formula_prefix(is_forall, vs, body);
-        let new_scope = allocate_formula_binders_refs(&all_vs, scope, state);
-        out.push(if is_forall { '\u{2200}' } else { '\u{2203}' });
-        out.push(' ');
-        // Render binder display names (post-allocation).
-        for (i, b) in new_scope[scope.len()..].iter().enumerate() {
-            if i > 0 {
-                out.push(' ');
-            }
-            out.push_str(sort_prefix(b.1));
-            out.push_str(&b.2);
-        }
-        out.push_str(". ");
-        pp_formula(inner_body, &new_scope, state, out);
-    })
-}
-
-/// HS `Conn` case: `sep [opParens p <-> op, opParens q]` — both sides
-/// wrapped in `opParens`, then sep.
-fn pp_binop(
-    l: &p::Formula,
-    r: &p::Formula,
-    op: &str,
-    scope: &[Bind],
-    state: &mut PreciseFreshState,
-    out: &mut String,
-) {
-    pp_formula_opparens(l, scope, state, out);
-    out.push_str(op);
-    pp_formula_opparens(r, scope, state, out);
-}
-
-/// HS `opParens`: unconditional paren wrap.
-/// HS Highlight.hs:58-59: `opParens d = operator_ "(" <> d <> operator_ ")"`
-/// — wraps everything, including `True`/`False` atoms.
-fn pp_formula_opparens(
-    f: &p::Formula,
-    scope: &[Bind],
-    state: &mut PreciseFreshState,
-    out: &mut String,
-) {
-    out.push('(');
-    pp_formula(f, scope, state, out);
-    out.push(')');
-}
-
-// =============================================================================
-// HS-style wrapped layout — Doc-engine path
-// =============================================================================
-//
-// Build a `pretty_hpj::Doc` tree mirroring HS's `prettyLFormula`
-// (Theory/Model/Formula.hs:474-514): Conn → `sep [opParens p <-> op, opParens q]`,
-// Qua → `sep [quantifier, nest 1 body]`.  The Doc engine handles
-// per-NilAbove `w`-shrinkage (HS get1 NilAbove:
-// `nilAbove_ (get (w - sl) p)`) which is required for HS-byte-exact
-// wireguard output (the deeply-nested And case).
 
 /// HS `opParens p = "(" <> p <> ")"` (Highlight.hs:58-59) —
 /// unconditional paren wrap.
@@ -784,9 +677,10 @@ fn doc_text<S: Into<String>>(s: S) -> crate::pretty_hpj::Doc {
     crate::pretty_hpj::Doc::text(s.into())
 }
 
-/// Mirror of `pp_formula` returning a Doc.  Atoms/terms/facts render
-/// inline (their flat strings); only the formula-structural nodes
-/// (Conn / Qua / Not) produce sep-Unions where wrap decisions happen.
+/// HS `prettyLFormula ppAtom` (Theory/Model/Formula.hs:474-514) over the
+/// parser AST.  The formula-structural nodes (Conn / Qua / Not) produce the
+/// sep-Unions where wrap decisions happen; the atoms carry the break points
+/// of their own facts and terms.
 fn formula_to_doc(
     f: &p::Formula,
     scope: &[Bind],
@@ -1158,125 +1052,33 @@ pub const RIBBON: usize = 73;
 /// (`Main/Console.hs:241-243, see line 243`).
 pub const LINE_LENGTH: usize = 110;
 
-/// Find the binding's display name, if any.  Match by the binder's FULL
-/// source identity (name, source-idx, sort) against the scope,
-/// innermost first.  Mirrors HS's De Bruijn lookup — a Bound var resolves
-/// to its binder's freshly-allocated LVar (whose `show` is
-/// `sortPrefix ++ name[.idx]`).
+/// The spelling of a parser-AST variable occurrence: HS `show LVar`
+/// (LTerm.hs:550-557), `sortPrefix ++ name` with a `.<idx>` suffix for a
+/// non-zero index.
 ///
-/// Matching on `idx` (not just name+sort) is what distinguishes two
-/// binders that share a name+sort but differ by index — the `x`(idx 0) /
-/// `x.1`(idx 1) fresh vars `rule_restriction::rewrite` mints (HS
-/// `freshLVar "x" LSortMsg`).  Innermost-first matching still resolves
-/// ordinary same-(name,idx) shadowing to the inner binder (source
-/// binders carry idx 0, so the idx test is a no-op there).
-fn lookup_display(name: &str, idx: u64, sort: LSort, scope: &[Bind]) -> Option<(LSort, String)> {
+/// A binder in `scope` matching the occurrence's FULL source identity
+/// (name, idx, sort), innermost first, lends it the display name allocated
+/// at binder entry — HS's De Bruijn lookup, where a `Bound` var resolves to
+/// its binder's freshly-allocated `LVar`.  Matching on `idx` distinguishes
+/// two binders that share a name and sort but differ by index — the
+/// `x`(idx 0) / `x.1`(idx 1) fresh vars `rule_restriction::rewrite` mints
+/// (HS `freshLVar "x" LSortMsg`); ordinary same-(name,idx) shadowing still
+/// resolves to the inner binder, source binders carrying idx 0.  A var no
+/// binder matches (the common case: free vars like `#vk.6`) keeps its
+/// source name and index.
+fn var_display(v: &p::VarSpec, scope: &[Bind]) -> String {
     for b in scope.iter().rev() {
-        if b.0 == name && b.3 == idx && b.1 == sort {
-            return Some((b.1, b.2.clone()));
+        if b.0 == v.name && b.3 == v.idx && b.1 == v.sort {
+            return format!("{}{}", sort_prefix(b.1), b.2);
         }
     }
-    None
-}
-
-fn pp_var(v: &p::VarSpec, out: &mut String) {
-    out.push_str(sort_prefix(v.sort));
-    out.push_str(&v.name);
+    let mut s = String::from(sort_prefix(v.sort));
+    s.push_str(&v.name);
     if v.idx > 0 {
-        out.push('.');
-        out.push_str(&v.idx.to_string());
+        s.push('.');
+        s.push_str(&v.idx.to_string());
     }
-}
-
-/// Render an occurrence against a binding scope.  Resolve against the binder
-/// scope by FULL identity (name, idx, sort), for any idx — a body occurrence
-/// of a binder var may itself carry an index (e.g. the `x.1` fresh var minted
-/// by `rule_restriction`) — and emit the binder's *display* name (which may
-/// carry a `.<idx>` suffix per HS `show LVar`, LTerm.hs:550-557).  When no
-/// binder matches (the common case: free vars like `#vk.6`), render the
-/// source name+idx verbatim.
-fn pp_var_scoped(v: &p::VarSpec, scope: &[Bind], out: &mut String) {
-    if let Some((bsort, display)) = lookup_display(&v.name, v.idx, v.sort, scope) {
-        out.push_str(sort_prefix(bsort));
-        out.push_str(&display);
-        return;
-    }
-    pp_var(v, out);
-}
-
-// =============================================================================
-// Atom
-// =============================================================================
-
-fn pp_atom(a: &p::Atom, scope: &[Bind], out: &mut String) {
-    use p::Atom::*;
-    match a {
-        Eq(l, r) => {
-            pp_term(l, scope, out);
-            out.push_str(" = ");
-            pp_term(r, scope, out);
-        }
-        Less(l, r) => {
-            pp_term(l, scope, out);
-            out.push_str(" < ");
-            pp_term(r, scope, out);
-        }
-        // Multiset `(<)`: HS has no printer for it — `expandFormula`
-        // rewrites it to `∃ z. r = l ++ z` before printing (see
-        // `predicate_expand::expand_atom`).  Unreachable on the elaborated
-        // path; defensive fallback rendering the pre-expansion shape.
-        LessMset(l, r) => {
-            pp_term(l, scope, out);
-            out.push_str(" (<) ");
-            pp_term(r, scope, out);
-        }
-        Subterm(l, r) => {
-            pp_term(l, scope, out);
-            out.push_str(" \u{228F} "); // ⊏
-            pp_term(r, scope, out);
-        }
-        Action(fa, t) => {
-            pp_fact(fa, scope, out);
-            out.push_str(" @ ");
-            pp_term(t, scope, out);
-        }
-        Last(t) => {
-            out.push_str("last(");
-            pp_term(t, scope, out);
-            out.push(')');
-        }
-        Pred(fa) => pp_fact(fa, scope, out),
-    }
-}
-
-// =============================================================================
-// Fact
-// =============================================================================
-
-fn pp_fact(fa: &p::Fact, scope: &[Bind], out: &mut String) {
-    // HS `prettyFact` (Theory/Model/Fact.hs:567-574):
-    //   `ppFact n t = nestShort' (n ++ "(") ")" . fsep . punctuate comma $ map ppTerm t`
-    // `nestShort'` (Text/PrettyPrint/Class.hs:221-223) wraps as
-    // `sep [text "Name(", body, text ")"]`. When `body` is empty
-    // (empty-arg fact), HS's HughesPJ `sep` collapses the empty middle
-    // and emits `Name( )` with ONE inner space; non-empty `body` emits
-    // `Name( a, b )` with one space pad on each side.
-    if fa.persistent {
-        out.push('!');
-    }
-    out.push_str(&fa.name);
-    if fa.args.is_empty() {
-        out.push_str("( )");
-    } else {
-        out.push_str("( ");
-        for (i, t) in fa.args.iter().enumerate() {
-            if i > 0 {
-                out.push_str(", ");
-            }
-            pp_term(t, scope, out);
-        }
-        out.push_str(" )");
-    }
+    s
 }
 
 // =============================================================================
@@ -1351,14 +1153,39 @@ pub fn term_to_doc(t: &p::Term, scope: &[Bind]) -> crate::pretty_hpj::Doc {
     use crate::pretty_hpj::Doc;
     use p::Term::*;
     match t {
-        // Atomic / non-wrapping leaves: render via the existing string
-        // printer (these never break internally in HS either).
-        Var(_) | PubLit(_) | FreshLit(_) | NatLit(_) | Number(_) | NumberOne | NatOne
-        | DhNeutral | PatMatch(_) => {
-            let mut s = String::new();
-            pp_term(t, scope, &mut s);
-            Doc::text(s)
-        }
+        // HS `prettyTerm` (Term/Term.hs:299-303) sends a literal to `ppLit`,
+        // which for `prettyNTerm` is `text . show` (Term/LTerm.hs:930-931) —
+        // one unbreakable `text`.
+        Var(v) => Doc::text(var_display(v, scope)),
+        PubLit(s) => Doc::text(format!("'{s}'")),
+        FreshLit(s) => Doc::text(format!("~'{s}'")),
+        NatLit(s) => Doc::text(format!("%'{s}'")),
+        Number(n) => Doc::text(n.to_string()),
+        // HS `fAppOne = fAppNoEq oneSym []` (Term/Term.hs:147-148), and
+        // `prettyTerm` has NO special case for `oneSym` (Term/Term.hs:298-327)
+        // — a nullary `NoEq` symbol falls through to `text (BC.unpack f)`,
+        // i.e. its symbol string `"one"` (`oneSymString`,
+        // Term/Term/FunctionSymbols.hs:226; `oneSym` at 255).  The `1` keyword
+        // is only a *parser* spelling for this constant; HS always renders it
+        // back as `one`.
+        NumberOne => Doc::text("one"),
+        NatOne => Doc::text("%1"),
+        // HS `dhNeutralSym` is a nullary NoEq public constructor; HS
+        // `prettyTerm` renders `FApp (NoEq (f,_)) []` as `text f` =
+        // `dhNeutralSymString` = "DH_neutral" (Term/Term.hs:314;
+        // Term/Term/FunctionSymbols.hs:229, mirrored by
+        // `function_symbols::DH_NEUTRAL_SYM_STRING`).  NOT `1:msg`/`1`.
+        DhNeutral => Doc::text("DH_neutral"),
+        // The `=`-pattern prefix of a SAPIC pattern position, which HS parses
+        // over a variable (`sapicpatternvar`,
+        // Theory/Text/Parser/Token.hs:512-518) and carries in
+        // `PatternSapicLVar`, not in the term.  There is no HS term arm for
+        // it; it renders as one unbreakable `text`, whatever shape a `let`
+        // substitution left under the `=`.
+        PatMatch(inner) => Doc::text(format!(
+            "={}",
+            term_to_doc(inner, scope).render_with(FLAT_WIDTH, FLAT_WIDTH)
+        )),
         // HS `prettyTerm` (Term/Term.hs:313):
         //   `FApp (NoEq s) _ | s == pairSym -> ppTerms ", " 1 "<" ">" (split t)`
         // The arm fires on the pair SHAPE, so the prefix spelling `pair(a, b)`
@@ -1795,166 +1622,6 @@ fn gatom_to_doc(a: &crate::guarded::GAtom, scope: &[Vec<Bind>]) -> crate::pretty
             Doc::text(s)
         }
         Pred(fa) => gfact_to_doc(fa, scope),
-    }
-}
-
-/// HS `ppTerms ", " 1 "<" ">" (split t)` (Term/Term.hs:313,319-321) as a
-/// string: `pair_doc`'s twin on the `pp_term` path, for a pair-shaped `t`.
-fn pp_pair_term(t: &p::Term, scope: &[Bind], out: &mut String) {
-    let flat = flatten_pair_terms(t);
-    out.push('<');
-    for (i, it) in flat.iter().enumerate() {
-        if i > 0 {
-            out.push_str(", ");
-        }
-        pp_term(it, scope, out);
-    }
-    out.push('>');
-}
-
-fn pp_term(t: &p::Term, scope: &[Bind], out: &mut String) {
-    use p::Term::*;
-    match t {
-        Var(v) => pp_var_scoped(v, scope, out),
-        PubLit(s) => {
-            out.push('\'');
-            out.push_str(s);
-            out.push('\'');
-        }
-        FreshLit(s) => {
-            out.push('~');
-            out.push('\'');
-            out.push_str(s);
-            out.push('\'');
-        }
-        NatLit(s) => {
-            out.push('%');
-            out.push('\'');
-            out.push_str(s);
-            out.push('\'');
-        }
-        Number(n) => out.push_str(&n.to_string()),
-        // HS `fAppOne = fAppNoEq oneSym []` (Term/Term.hs:147-148), and
-        // `prettyTerm` has NO special case for `oneSym` (Term/Term.hs:298-327)
-        // — a nullary `NoEq` symbol falls through to `text (BC.unpack f)`,
-        // i.e. its symbol string `"one"` (`oneSymString`,
-        // Term/Term/FunctionSymbols.hs:226; `oneSym` at 255).  The
-        // `1` keyword is only a *parser* spelling for this constant; HS always
-        // renders it back as `one`.
-        NumberOne => out.push_str("one"),
-        NatOne => out.push_str("%1"),
-        // HS `dhNeutralSym` is a nullary NoEq public constructor; HS
-        // `prettyTerm` renders `FApp (NoEq (f,_)) []` as `text f` =
-        // `dhNeutralSymString` = "DH_neutral" (Term/Term.hs:314;
-        // Term/Term/FunctionSymbols.hs:229, mirrored by
-        // `function_symbols::DH_NEUTRAL_SYM_STRING`).  NOT `1:msg`/`1`.
-        DhNeutral => out.push_str("DH_neutral"),
-        // HS `prettyTerm` (Term/Term.hs:313):
-        //   `FApp (NoEq s) _ | s == pairSym -> ppTerms ", " 1 "<" ">" (split t)`
-        // The arm fires on the pair SHAPE, so both parser spellings — the
-        // `<a, b, c>` syntax (`Pair`) and the prefix application `pair(a, b)`
-        // (`App`) — render between `<` and `>`, with `split`
-        // (`flatten_pair_terms`) walking the right spine of either form.  The
-        // `App` case precedes the generic `App` arm below, which would
-        // otherwise print `pair(a, b)` through `ppFun`.
-        Pair(_) => pp_pair_term(t, scope, out),
-        App(name, args) if name == "pair" && args.len() == 2 => pp_pair_term(t, scope, out),
-        App(name, args) => {
-            // Nullary nat-one first, as in HS: `FApp (NoEq s) [] | s ==
-            // natOneSym -> text "%1"` (Term/Term.hs:298-327, see line 312) — the
-            // constant reaches here as `App("tone", [])` (see the
-            // `term_to_doc` twin arm).
-            if name == "tone" && args.is_empty() {
-                out.push_str("%1");
-                return;
-            }
-            out.push_str(name);
-            if !args.is_empty() {
-                out.push('(');
-                for (i, a) in args.iter().enumerate() {
-                    if i > 0 {
-                        out.push_str(", ");
-                    }
-                    pp_term(a, scope, out);
-                }
-                out.push(')');
-            }
-        }
-        AlgApp(name, l, r) => {
-            // HS pretty-prints `aenc{m}pk` as `aenc(m, pk)` (canonical
-            // function syntax) — the curly-brace form is parser sugar.
-            out.push_str(name);
-            out.push('(');
-            pp_term(l, scope, out);
-            out.push_str(", ");
-            pp_term(r, scope, out);
-            out.push(')');
-        }
-        Diff(l, r) => {
-            out.push_str("diff(");
-            pp_term(l, scope, out);
-            out.push_str(", ");
-            pp_term(r, scope, out);
-            out.push(')');
-        }
-        BinOp(op, l, r) => {
-            // HS `prettyTerm` (Term/Term.hs:305-310):
-            //   `FApp (AC o)   ts -> ppTerms (ppACOp o) 1 "(" ")" ts`
-            //   `FApp (NoEq s) [t1,t2] | s == expSym -> ppTerm t1 <> text "^" <> ppTerm t2`
-            // — AC ops always print with surrounding `(` `)` (the
-            // `"("`/`")"` lead/finish in `ppTerms`); exp prints with
-            // no precedence/paren guard.
-            //
-            // For AC ops: HS's term is `FApp (AC op) [args]` — a flat
-            // n-ary node — so `ppTerms` joins with the op and a SINGLE
-            // outer paren-pair surrounds the whole chain.  Our parser
-            // AST represents AC as binary `BinOp(op, l, r)`; to match
-            // HS's flat rendering, flatten same-op children and join
-            // with the op symbol.  Without this, nested binary
-            // representations like `Xor(Xor(a, b), c)` print as
-            // `((a⊕b)⊕c)` instead of HS's `(a⊕b⊕c)`.
-            let is_exp = matches!(op, p::BinOp::Exp);
-            let is_ac = matches!(
-                op,
-                p::BinOp::Mult
-                    | p::BinOp::Union
-                    | p::BinOp::Xor
-                    | p::BinOp::NatPlus
-                    | p::BinOp::AcFct(_)
-            );
-            if is_ac {
-                let mut flat: Vec<&p::Term> = Vec::new();
-                flatten_ac_terms(*op, l, &mut flat);
-                flatten_ac_terms(*op, r, &mut flat);
-                out.push('(');
-                let sym = binop_symbol(*op);
-                for (i, child) in flat.iter().enumerate() {
-                    if i > 0 {
-                        out.push_str(sym);
-                    }
-                    pp_term(child, scope, out);
-                }
-                out.push(')');
-                return;
-            }
-            if !is_exp {
-                out.push('(');
-            }
-            // Within an exp, children print at Top (no extra parens for
-            // nested `^`).  Within an AC, children at Top — AC nesting
-            // already gets its own mandatory parens via the recursive
-            // call, and the parent's parens are unconditional.
-            pp_term(l, scope, out);
-            out.push_str(binop_symbol(*op));
-            pp_term(r, scope, out);
-            if !is_exp {
-                out.push(')');
-            }
-        }
-        PatMatch(inner) => {
-            out.push('=');
-            pp_term(inner, scope, out);
-        }
     }
 }
 
@@ -2507,9 +2174,9 @@ fn pp_gatom(a: &crate::guarded::GAtom, scope: &[Vec<Bind>], out: &mut String) {
 }
 
 fn pp_gfact(fa: &crate::guarded::GFact, scope: &[Vec<Bind>], out: &mut String) {
-    // HS-faithful: `Name( args )` with internal spaces, matching `pp_fact`.
-    // Empty-arg case collapses to a single inner space — see `pp_fact`
-    // for the HS citation.
+    // HS `prettyFact`/`ppFact` (Theory/Model/Fact.hs:567-574) laid out flat:
+    // `Name( a, b )` with one space of padding inside the parens, and a
+    // single inner space when the argument list is empty.
     if fa.persistent {
         out.push('!');
     }
@@ -2528,8 +2195,8 @@ fn pp_gfact(fa: &crate::guarded::GFact, scope: &[Vec<Bind>], out: &mut String) {
     }
 }
 
-/// [`pp_pair_term`] over `GTerm`: HS `ppTerms ", " 1 "<" ">" (split t)`
-/// (Term/Term.hs:313,319-321) as a string, for a pair-shaped `t`.
+/// HS `ppTerms ", " 1 "<" ">" (split t)` (Term/Term.hs:313,319-321) over
+/// `GTerm` as a string, for a pair-shaped `t`.
 fn pp_pair_gterm(t: &crate::guarded::GTerm, scope: &[Vec<Bind>], out: &mut String) {
     let flat = flatten_pair_gterms(t);
     out.push('<');
@@ -2545,7 +2212,7 @@ fn pp_pair_gterm(t: &crate::guarded::GTerm, scope: &[Vec<Bind>], out: &mut Strin
 fn pp_gterm(t: &crate::guarded::GTerm, scope: &[Vec<Bind>], out: &mut String) {
     use crate::guarded::{BVar, GTerm};
     match t {
-        GTerm::Var(BVar::Free(v)) => pp_var(v, out),
+        GTerm::Var(BVar::Free(v)) => out.push_str(&var_display(v, &[])),
         GTerm::Var(BVar::Bound(n)) => {
             if let Some(b) = lookup_bound(*n, scope) {
                 out.push_str(sort_prefix(b.1));
@@ -2579,8 +2246,9 @@ fn pp_gterm(t: &crate::guarded::GTerm, scope: &[Vec<Bind>], out: &mut String) {
         GTerm::Number(n) => {
             out.push_str(&n.to_string());
         }
-        // HS `oneSym` renders as its symbol string `"one"` — see note in
-        // `pp_term` (no `prettyTerm` special case; Term/Term.hs:298-327).
+        // HS `oneSym` renders as its symbol string `"one"`: `prettyTerm` has
+        // no special case for it (Term/Term.hs:298-327), so the nullary `NoEq`
+        // symbol falls through to `text (BC.unpack f)`.
         GTerm::NumberOne => out.push_str("one"),
         GTerm::NatOne => out.push_str("%1"),
         // HS renders `dhNeutralSym` (nullary NoEq) as its symbol string
@@ -2639,8 +2307,7 @@ fn pp_gterm(t: &crate::guarded::GTerm, scope: &[Vec<Bind>], out: &mut String) {
             // Our AST stores AC as binary `BinOp(op, l, r)`; flatten same-op
             // children and join under one paren-pair to match HS — without
             // this `('1'++x)++z` stayed nested instead of HS `('1'++x++z)`,
-            // and `x++z = y` lost HS's outer `(x++z)` parens.  Mirror of the
-            // parser-AST `pp_term` AC handling above.
+            // and `x++z = y` lost HS's outer `(x++z)` parens.
             let is_exp = matches!(op, p::BinOp::Exp);
             if is_exp {
                 pp_gterm(l, scope, out);
