@@ -1581,7 +1581,7 @@ pub fn formula_to_guarded_parsed(
 }
 
 /// The binder `close_guarded` and `remaining_unguarded` match on, as
-/// [`crate::pretty_theory::lnterm_to_parser`] writes a variable leaf.
+/// [`crate::elaborate::lnterm_to_parser`] writes a variable leaf.
 fn lvar_to_varspec(v: &tamarin_term::lterm::LVar) -> p::VarSpec {
     p::VarSpec {
         name: v.name.to_string(),

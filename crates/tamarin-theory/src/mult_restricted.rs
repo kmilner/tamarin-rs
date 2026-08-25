@@ -123,7 +123,7 @@ pub fn mult_restricted_report(elab: &Theory, sig: &MaudeSig) -> Vec<WfError> {
 /// which `rule_attributes_doc` renders as HS's `ruleAttributes ru == mempty ⇒
 /// emptyDoc` branch.
 ///
-/// Also the attribute half of [`crate::pretty_theory::proto_rule_to_parsed`],
+/// Also the attribute half of [`crate::elaborate::proto_rule_to_parsed`],
 /// the parser-AST projection of a synthesised rule.
 pub(crate) fn surface_attrs(attr: &crate::rule::RuleAttributes) -> Vec<p::RuleAttr> {
     let mut out = Vec::new();

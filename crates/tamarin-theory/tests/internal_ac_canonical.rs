@@ -39,10 +39,10 @@ use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 use tamarin_term::lterm::LNTerm;
 use tamarin_theory::elaborate::{canonicalize_ac_in_pfact, canonicalize_ac_in_pterm};
+use tamarin_theory::elaborate::{lnfact_to_parser, lnterm_to_parser};
 use tamarin_theory::fact::LNFact;
 use tamarin_theory::pretty_formula as pf;
 use tamarin_theory::pretty_hpj::{Doc, DEFAULT_LINE_LENGTH, DEFAULT_RIBBON, LINE_LENGTH, RIBBON};
-use tamarin_theory::pretty_theory::{lnfact_to_parser, lnterm_to_parser};
 use tamarin_theory::rule::{ProtoRuleE, ProtoRuleName};
 use tamarin_theory::theory::Theory;
 

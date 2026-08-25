@@ -1324,6 +1324,256 @@ pub fn lnterm_to_term(t: &tamarin_term::lterm::LNTerm) -> p::Term {
     }
 }
 
+// =============================================================================
+// Projection: internal values → parser AST
+// =============================================================================
+
+/// Convert LNFacts (post-elaboration) to parser-AST Facts so we can
+/// reuse the parser-AST fact rendering path.
+fn lnfacts_to_parser(facts: &[crate::fact::LNFact]) -> Vec<p::Fact> {
+    facts.iter().map(lnfact_to_parser).collect()
+}
+
+/// Materialise an elaborated `ProtoRuleE` as a parser-AST rule item, so a
+/// synthesised rule (SAPIC translation, partial evaluation) can join the
+/// parsed-item stream `pretty_closed_theory` renders from — the display facts
+/// come from here.
+///
+/// The body is the elaborated E-rule projected back through
+/// `lnfacts_to_parser`, so it is already macro/let expanded: the render
+/// path's `apply_let_block` / macro checks are no-ops, and AC argument order
+/// is canonicalised at render time (`render_rule_body`), exactly as for the
+/// modulo-AC comment blocks.  The attributes carry color / process /
+/// no_derivcheck / issapicrule / role, as HS's `toRule` produced them.
+pub fn proto_rule_to_parsed(r: &crate::rule::ProtoRuleE) -> p::Rule {
+    p::Rule {
+        name: match &r.info.name {
+            crate::rule::ProtoRuleName::Stand(s) => s.to_string(),
+            crate::rule::ProtoRuleName::Fresh => "Fresh".to_string(),
+        },
+        modulo: None,
+        attributes: crate::mult_restricted::surface_attrs(&r.info.attributes),
+        let_block: Vec::new(),
+        premises: lnfacts_to_parser(&r.premises),
+        actions: lnfacts_to_parser(&r.actions),
+        conclusions: lnfacts_to_parser(&r.conclusions),
+        embedded_restrictions: Vec::new(),
+        variants: Vec::new(),
+        left_right: None,
+    }
+}
+
+pub fn lnfact_to_parser(fa: &crate::fact::LNFact) -> p::Fact {
+    use crate::fact::FactTag;
+    let (name, persistent) = match &fa.tag {
+        FactTag::Proto(crate::fact::Multiplicity::Persistent, n, _) => (n.to_string(), true),
+        FactTag::Proto(_, n, _) => (n.to_string(), false),
+        FactTag::Fresh => ("Fr".to_string(), false),
+        FactTag::In => ("In".to_string(), false),
+        FactTag::Out => ("Out".to_string(), false),
+        // KU and KD are Persistent per factTagMultiplicity (Model/Fact.hs:358-359).
+        FactTag::Ku => ("KU".to_string(), true),
+        FactTag::Kd => ("KD".to_string(), true),
+        FactTag::Ded => ("Ded".to_string(), false),
+        FactTag::Term => ("Term".to_string(), false),
+    };
+    p::Fact {
+        persistent,
+        name,
+        args: fa.terms.iter().map(lnterm_to_parser).collect(),
+        // HS `prettyFact` appends `ppAnn an` to every fact (Theory/Model/Fact.hs:567-574),
+        // so the annotations must survive the projection.  `fa.annotations`
+        // is a `BTreeSet<FactAnnotation>` whose iteration order IS the HS
+        // `S.toList` (Ord) order the renderer expects.
+        annotations: fa
+            .annotations
+            .iter()
+            .map(|a| match a {
+                crate::fact::FactAnnotation::SolveFirst => p::FactAnnotation::SolveFirst,
+                crate::fact::FactAnnotation::SolveLast => p::FactAnnotation::SolveLast,
+                crate::fact::FactAnnotation::NoSources => p::FactAnnotation::NoSources,
+            })
+            .collect(),
+    }
+}
+
+/// `Atom<LNTerm>` → parser-AST `Atom`: [`lnterm_to_parser`] and
+/// [`lnfact_to_parser`] over the arms of HS `Atom` (Atom.hs:78-84,100), the
+/// atom-level twin of [`lnfact_to_parser`].
+///
+/// A `Syntactic` atom has no parser-AST form here: HS's `Unit2` sugar carries
+/// no fact (Atom.hs:92-94), and [`crate::formula::to_lnformula`] refuses an
+/// atom that still holds sugar, so an `LNFormula` holds none.
+pub(crate) fn lnatom_to_parser(a: &crate::atom::Atom<tamarin_term::lterm::LNTerm>) -> p::Atom {
+    proto_atom_to_parser(
+        &|_: &crate::atom::Unit2| panic!("lnatom_to_parser: syntactic sugar in a plain atom"),
+        a,
+    )
+}
+
+/// [`lnatom_to_parser`] over an atom that still carries the parser's `Pred`
+/// sugar (Atom.hs:86-87), which closes back into `blatom`'s predicate
+/// alternative (Theory/Text/Parser/Formula.hs:52).  The multiset `(<)` is
+/// parsed into the `Smaller` predicate (`smallerp`,
+/// Theory/Text/Parser/Formula.hs:30-38) and has no closed form of its own.
+pub(crate) fn syntactic_lnatom_to_parser(
+    a: &crate::atom::SyntacticAtom<tamarin_term::lterm::LNTerm>,
+) -> p::Atom {
+    use crate::atom::SyntacticSugar;
+    proto_atom_to_parser(
+        &|SyntacticSugar::Pred(fa)| p::Atom::Pred(lnfact_to_parser(fa)),
+        a,
+    )
+}
+
+/// The five sugar-free arms shared by [`lnatom_to_parser`] and
+/// [`syntactic_lnatom_to_parser`]; `pp_sugar` closes the sugar the way that
+/// atom type carries it, as HS's `prettyProtoAtom` takes its own sugar
+/// printer (Atom.hs:212-215).
+fn proto_atom_to_parser<S>(
+    pp_sugar: &dyn Fn(&S) -> p::Atom,
+    a: &crate::atom::ProtoAtom<S, tamarin_term::lterm::LNTerm>,
+) -> p::Atom {
+    use crate::atom::ProtoAtom;
+    match a {
+        ProtoAtom::Action(t, fa) => p::Atom::Action(lnfact_to_parser(fa), lnterm_to_parser(t)),
+        ProtoAtom::EqE(l, r) => p::Atom::Eq(lnterm_to_parser(l), lnterm_to_parser(r)),
+        ProtoAtom::Subterm(l, r) => p::Atom::Subterm(lnterm_to_parser(l), lnterm_to_parser(r)),
+        ProtoAtom::Less(l, r) => p::Atom::Less(lnterm_to_parser(l), lnterm_to_parser(r)),
+        ProtoAtom::Last(t) => p::Atom::Last(lnterm_to_parser(t)),
+        ProtoAtom::Syntactic(s) => pp_sugar(s),
+    }
+}
+
+/// `LNTerm` → parser-AST `Term`: the projection every printer of an `LNTerm`
+/// goes through, and the term-level twin of [`lnfact_to_parser`].
+///
+/// The parser AST is the universe HS `prettyTerm` (Term/Term.hs:299-317) prints
+/// from, so the shapes that function special-cases must be materialised here:
+/// `exp` as the infix `^` (line 310), a `pair` chain as the n-ary tuple its
+/// `split` walks out of the RIGHT spine (lines 313,323-324), an AC symbol as
+/// the infix chain of its `ppTerms` arms (lines 305-309), a nullary user-`[AC]`
+/// symbol as its bare name (line 304) and `List` as `LIST(…)` (line 317).
+///
+/// `tamarin-sapic` lowers through this same function (its restriction and
+/// `if`-predicate bodies are parser-AST formulas), so the two surfaces cannot
+/// disagree about any of those shapes.
+pub fn lnterm_to_parser(t: &tamarin_term::lterm::LNTerm) -> p::Term {
+    use tamarin_term::function_symbols::{AcSym, FunSym};
+    use tamarin_term::term::Term;
+    use tamarin_term::vterm::Lit;
+    match t {
+        Term::Lit(Lit::Var(v)) => p::Term::Var(p::VarSpec {
+            name: v.name.to_string(),
+            idx: v.idx,
+            sort: v.sort,
+            typ: None,
+        }),
+        Term::Lit(Lit::Con(n)) => {
+            use tamarin_term::lterm::NameTag;
+            match n.tag {
+                NameTag::Pub => p::Term::PubLit(n.id.0.to_string()),
+                NameTag::Fresh => p::Term::FreshLit(n.id.0.to_string()),
+                NameTag::Nat => p::Term::NatLit(n.id.0.to_string()),
+                NameTag::Node => p::Term::PubLit(n.id.0.to_string()),
+                // `prettyTerm`'s literal case is `text . show`, and `show
+                // (Name AbbrevName n) = show n` (LTerm.hs:240) is the bare id;
+                // a nullary `App` is the parser-AST term `pp_term` renders
+                // that way.  Reached from `prettyLNFact` on the facts
+                // `Web.Utils.abbrev` rewrote.
+                NameTag::Abbrev => p::Term::App(n.id.0.to_string(), Vec::new()),
+            }
+        }
+        Term::App(FunSym::NoEq(sym), args) => {
+            let name = String::from_utf8_lossy(sym.name).to_string();
+            // HS `prettyTerm`'s `diff` arm (Term/Term.hs:311) is a chain of
+            // `<>`, so the application never breaks at its comma — a wide
+            // `diff` wraps inside its second operand instead.
+            // `p::Term::Diff` is the parser-AST shape `term_to_doc` renders
+            // that way; a `NoEq` application of the same NAME is a different
+            // symbol and renders through `ppFun`, whose `fsep` does break.
+            if *sym == tamarin_term::function_symbols::diff_sym() && args.len() == 2 {
+                return p::Term::Diff(
+                    Box::new(lnterm_to_parser(&args[0])),
+                    Box::new(lnterm_to_parser(&args[1])),
+                );
+            }
+            // `exp` is the DH exponentiation infix operator — HS
+            // `prettyTerm` (Term/Term.hs:310) renders `exp(a, b)` as `a^b`.
+            // Surface as `p::Term::BinOp(Exp, ..)` so `pp_term`'s special
+            // case applies.
+            if name == "exp" && args.len() == 2 {
+                return p::Term::BinOp(
+                    p::BinOp::Exp,
+                    Box::new(lnterm_to_parser(&args[0])),
+                    Box::new(lnterm_to_parser(&args[1])),
+                );
+            }
+            // A `pair` chain flattens to the n-ary tuple HS `prettyTerm`'s
+            // `split` produces (Term/Term.hs:313,323-324): `split` consumes the
+            // RIGHT child while it is itself a pair, so a left-nested
+            // `pair(pair(a,b),c)` stays the 2-tuple `<<a, b>, c>`.
+            if name == "pair" && args.len() == 2 {
+                let mut items: Vec<p::Term> = Vec::new();
+                items.push(lnterm_to_parser(&args[0]));
+                let mut tail = &args[1];
+                loop {
+                    match tail {
+                        Term::App(FunSym::NoEq(s2), a2)
+                            if a2.len() == 2 && String::from_utf8_lossy(s2.name) == "pair" =>
+                        {
+                            items.push(lnterm_to_parser(&a2[0]));
+                            tail = &a2[1];
+                        }
+                        _ => {
+                            items.push(lnterm_to_parser(tail));
+                            break;
+                        }
+                    }
+                }
+                return p::Term::Pair(items);
+            }
+            p::Term::App(name, args.iter().map(lnterm_to_parser).collect())
+        }
+        // HS `FApp (C EMap) ts -> ppFun emapSymString ts` (Term/Term.hs:316).
+        Term::App(FunSym::C(_), args) => p::Term::App(
+            "em".to_string(),
+            args.iter().map(lnterm_to_parser).collect(),
+        ),
+        // HS `prettyTerm` (Term/Term.hs:304): `FApp (AC (ACfct (f,_))) [] ->
+        // text (BC.unpack f)` — a nullary user-AC symbol is the bare name,
+        // which `term_to_doc` renders for a nullary `App`.
+        Term::App(FunSym::Ac(AcSym::AcFct(s)), args) if args.is_empty() => {
+            p::Term::App(String::from_utf8_lossy(s.name).into_owned(), vec![])
+        }
+        Term::App(FunSym::Ac(ac), args) => {
+            // Render AC as left-assoc binops to preserve display.
+            let op = match ac {
+                AcSym::Mult => p::BinOp::Mult,
+                AcSym::Union => p::BinOp::Union,
+                AcSym::NatPlus => p::BinOp::NatPlus,
+                AcSym::Xor => p::BinOp::Xor,
+                // HS renders a user-declared `[AC]` symbol INFIX too
+                // (Term/Term.hs:305): `ppTerms (" " ++ BC.unpack f ++ " ") 1
+                // "(" ")" ts`, i.e. `(x add y)`.
+                AcSym::AcFct(s) => p::BinOp::AcFct(tamarin_term::intern::intern_str(
+                    &String::from_utf8_lossy(s.name),
+                )),
+            };
+            let mut it = args.iter();
+            let first = lnterm_to_parser(it.next().expect("AC needs at least one arg"));
+            it.fold(first, |acc, next| {
+                p::Term::BinOp(op, Box::new(acc), Box::new(lnterm_to_parser(next)))
+            })
+        }
+        // HS `FApp List ts -> ppFun "LIST" ts` (Term/Term.hs:317).
+        Term::App(FunSym::List, args) => p::Term::App(
+            "LIST".to_string(),
+            args.iter().map(lnterm_to_parser).collect(),
+        ),
+    }
+}
+
 /// AC-canonicalise a parser-AST term: for every `BinOp(op, l, r)` where op
 /// is AC (Mult/Union/Xor/NatPlus, or a user-declared `[AC]` symbol),
 /// flatten the chain into the full multiset, sort it (via the existing

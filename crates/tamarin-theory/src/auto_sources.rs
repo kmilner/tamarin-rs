@@ -797,7 +797,7 @@ fn unfold_rule_variants(parsed: &mut p::Theory, elaborated: &mut crate::theory::
                 crate::pretty_theory::is_trivial_proto_variant_ac(&dp, &da, &dc, o, &macros)
             }
             None => {
-                let pr = crate::pretty_theory::proto_rule_to_parsed(&o.rule);
+                let pr = crate::elaborate::proto_rule_to_parsed(&o.rule);
                 let (dp, da, dc) = crate::pretty_theory::display_fact_rows(&pr, &arity1);
                 crate::pretty_theory::is_trivial_proto_variant_ac(&dp, &da, &dc, o, &macros)
             }
@@ -809,7 +809,7 @@ fn unfold_rule_variants(parsed: &mut p::Theory, elaborated: &mut crate::theory::
         let variants = unfold_one_rule_variants(o);
         let parsed_variants: Vec<p::Rule> = variants
             .iter()
-            .map(|v| crate::pretty_theory::proto_rule_to_parsed(&v.rule))
+            .map(|v| crate::elaborate::proto_rule_to_parsed(&v.rule))
             .collect();
         let rewrite = if parsed_variants.len() == 1 {
             ParsedRewrite::Replace(parsed_variants)
@@ -1002,7 +1002,7 @@ pub fn apply_auto_sources(
                     }
                 }
             }
-            let ast_action = crate::pretty_theory::lnfact_to_parser(action);
+            let ast_action = crate::elaborate::lnfact_to_parser(action);
             for item in parsed.items.iter_mut() {
                 if let p::TheoryItem::Rule(r) = item {
                     if &r.name == rule_name {

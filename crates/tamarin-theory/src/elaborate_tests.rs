@@ -523,9 +523,9 @@ fn parser_var(name: &str, idx: u64, sort: LSort) -> p::Term {
 }
 
 // `lnterm_to_term` inverts `term_to_lnterm` on every surface shape that the
-// display path round-trips.  (`pretty_theory` reads a parser AST back out of
-// elaborated terms.)  A round trip on its own still succeeds with two
-// matching bugs: one that mangles a sort, and one that unmangles it again.
+// solver round-trips through the parser AST.  A round trip on its own still
+// succeeds with two matching bugs: one that mangles a sort, and one that
+// unmangles it again.
 // So each case also pins the LNTerm that the forward direction produces.
 #[test]
 fn lnterm_to_term_inverts_term_to_lnterm() {
@@ -1101,5 +1101,120 @@ fn a_non_guardable_stored_disjunct_fails_elaboration() {
         err.message.contains("lemma `unguarded`"),
         "the message must name the lemma, got {:?}",
         err.message
+    );
+}
+
+// =========================================================================
+// Projection: internal values → parser AST
+// =========================================================================
+
+/// HS writes an action atom as `Action t (Fact t)` (Atom.hs:78) and the
+/// parser AST as `Action(Fact, Term)`, so the two operands swap places.
+#[test]
+fn lnatom_to_parser_keeps_the_action_timepoint_and_fact() {
+    use crate::atom::{Atom, ProtoAtom};
+    use crate::fact::{Fact, FactTag, Multiplicity};
+    use tamarin_term::intern::intern_str;
+    use tamarin_term::lterm::LNTerm;
+    use tamarin_term::vterm::var_term;
+
+    let x: LNTerm = var_term(LVar::new("x", LSort::Msg, 0));
+    let i: LNTerm = var_term(LVar::new("i", LSort::Node, 0));
+    let fa = Fact::new(
+        FactTag::Proto(Multiplicity::Linear, intern_str("Ev"), 1),
+        vec![x],
+    );
+    let a: Atom<LNTerm> = ProtoAtom::Action(i, fa);
+    assert_eq!(
+        lnatom_to_parser(&a),
+        p::Atom::Action(
+            p::Fact {
+                persistent: false,
+                name: "Ev".to_string(),
+                args: vec![parser_var("x", 0, LSort::Msg)],
+                annotations: Vec::new(),
+            },
+            parser_var("i", 0, LSort::Node),
+        )
+    );
+}
+
+/// The binary atoms keep their left and right operand where they are.
+#[test]
+fn lnatom_to_parser_keeps_the_binary_operand_order() {
+    use crate::atom::{Atom, ProtoAtom};
+    use tamarin_term::lterm::LNTerm;
+    use tamarin_term::vterm::var_term;
+
+    let i: LNTerm = var_term(LVar::new("i", LSort::Node, 0));
+    let j: LNTerm = var_term(LVar::new("j", LSort::Node, 0));
+    let a: Atom<LNTerm> = ProtoAtom::Less(i, j);
+    assert_eq!(
+        lnatom_to_parser(&a),
+        p::Atom::Less(
+            parser_var("i", 0, LSort::Node),
+            parser_var("j", 0, LSort::Node)
+        )
+    );
+}
+
+/// A `diffSym` application projects to `p::Term::Diff`, the shape whose
+/// renderer is the chain of `<>` HS `prettyTerm` uses (Term/Term.hs:311).
+/// A wide one therefore wraps inside its second operand and never at the
+/// comma, which is what the oracle prints for the rules of
+/// `examples/csf18-alethea/alethea_selectionphase_anonymity.spthy`.
+#[test]
+fn lnterm_to_parser_keeps_the_unbreakable_diff_shape() {
+    use tamarin_term::lterm::LNTerm;
+
+    let wide = |c: char| -> LNTerm { tamarin_term::lterm::pub_term(c.to_string().repeat(60)) };
+    let d: LNTerm = tamarin_term::term::f_app_no_eq(
+        tamarin_term::function_symbols::diff_sym(),
+        vec![wide('a'), wide('b')],
+    );
+    let projected = lnterm_to_parser(&d);
+    assert!(matches!(projected, p::Term::Diff(..)));
+    let rendered = crate::pretty_formula::term_doc(&projected).render_with(110, 73);
+    assert!(!rendered.contains('\n'), "{rendered}");
+    assert_eq!(
+        rendered,
+        tamarin_term::pretty::pretty_nterm(&d).render_with(110, 73)
+    );
+}
+
+/// The two `LNTerm` → parser-AST projections are not interchangeable.
+///
+/// `lnterm_to_parser` materialises the surface HS `prettyTerm` prints, so a
+/// `List` application is `LIST(…)` (Term/Term.hs:317) and a degenerate
+/// one-argument AC application — a shape `fAppAC` collapses away
+/// (Term/Term/Raw.hs:121) — is its operand alone, because an infix chain
+/// needs two operands.  `lnterm_to_term` materialises the surface
+/// `term_to_lnterm` reads back, where neither head has a spelling of its own
+/// and both fall through to a placeholder name.
+#[test]
+fn converters_disagree_on_list_and_degenerate_ac() {
+    use tamarin_term::function_symbols::{AcSym, FunSym};
+    use tamarin_term::lterm::LNTerm;
+    use tamarin_term::term::{f_app_list, unsafe_f_app};
+    use tamarin_term::vterm::var_term;
+
+    let x: LNTerm = var_term(LVar::new("x", LSort::Msg, 0));
+    let px = parser_var("x", 0, LSort::Msg);
+
+    let list = f_app_list(vec![x.clone()]);
+    assert_eq!(
+        lnterm_to_parser(&list),
+        p::Term::App("LIST".to_string(), vec![px.clone()])
+    );
+    assert_eq!(
+        lnterm_to_term(&list),
+        p::Term::App("?".to_string(), vec![px.clone()])
+    );
+
+    let degenerate = unsafe_f_app(FunSym::Ac(AcSym::Mult), vec![x]);
+    assert_eq!(lnterm_to_parser(&degenerate), px);
+    assert_eq!(
+        lnterm_to_term(&degenerate),
+        p::Term::App("?Mult".to_string(), vec![parser_var("x", 0, LSort::Msg)])
     );
 }

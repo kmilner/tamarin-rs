@@ -8,7 +8,7 @@
 //! same two ways.
 //!
 //! * through `pretty_nterm` — the `Doc` built from the internal term;
-//! * through `pretty_theory::lnterm_to_parser` + the AC canonicaliser +
+//! * through `elaborate::lnterm_to_parser` + the AC canonicaliser +
 //!   `pretty_formula::term_doc` — the parser-AST projection the print
 //!   sites hand to the AST renderer.
 //!
@@ -27,9 +27,9 @@ use tamarin_term::pretty::pretty_nterm;
 use tamarin_term::term::Term;
 
 use crate::elaborate::canonicalize_ac_in_pterm;
+use crate::elaborate::lnterm_to_parser;
 use crate::pretty_formula as pf;
 use crate::pretty_hpj::{DEFAULT_LINE_LENGTH, DEFAULT_RIBBON, LINE_LENGTH, RIBBON};
-use crate::pretty_theory::lnterm_to_parser;
 use crate::rule::{ProtoRuleE, ProtoRuleName};
 use crate::test_corpus::{beyond_budget, corpus_root, parse_file, rel, spthy_files};
 use crate::theory::Theory;

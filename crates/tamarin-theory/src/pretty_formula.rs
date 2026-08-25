@@ -29,13 +29,13 @@ use tamarin_term::pretty::pp_lvar;
 use tamarin_utils::fresh::PreciseFreshState;
 
 use crate::atom::{map_atom, pretty_natom, pretty_syntactic_natom, MapSugar, ProtoAtom};
+use crate::elaborate::syntactic_lnatom_to_parser;
 use crate::formula::{
     avoid_precise_lnformula, open_bound_term, BLNTerm, Connective, LNFormula, LNProtoFormula,
     ProtoFormula, Quantifier, SyntacticLNFormula,
 };
 use crate::guarded::{Guarded, Quant};
 use crate::pretty_hpj::{self as hpj, Doc, FLAT_WIDTH};
-use crate::pretty_theory::syntactic_lnatom_to_parser;
 
 /// A scope entry: the binder's source name + sort, plus the *display* name
 /// used to render bound occurrences in the body.  HS-faithful: the display

@@ -169,7 +169,7 @@ pub fn apply_sapic(
         // `proto_rule_to_parsed` projects the elaborated E-rule back to parser
         // facts and carries color / process / no_derivcheck / issapicrule /
         // role exactly as HS's `toRule` produced them.
-        let mut parsed_rule = tamarin_theory::pretty_theory::proto_rule_to_parsed(rule);
+        let mut parsed_rule = tamarin_theory::elaborate::proto_rule_to_parsed(rule);
         // `lift_one_rule` reads parser-AST formulas, so the embedded
         // restrictions cross back to the AST here.
         parsed_rule.embedded_restrictions = restr_formulas

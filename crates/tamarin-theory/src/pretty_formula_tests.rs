@@ -169,7 +169,7 @@ fn user_ac_symbol_renders_infix() {
     let y = var_term(LVar::new("y", LSort::Msg, 0));
     let t = f_app_ac(AcSym::AcFct(sym), vec![x, y]);
 
-    let ast = crate::pretty_theory::lnterm_to_parser(&t);
+    let ast = crate::elaborate::lnterm_to_parser(&t);
     assert_eq!(term_to_doc(&ast, &[]).render(), "(x add y)");
 
     // The same infix form must reach a rendered fact.
@@ -198,7 +198,7 @@ fn user_ac_symbol_nullary_renders_bare_name() {
         NdcState::NotNdc,
     );
     let t = Term::App(FunSym::Ac(AcSym::AcFct(sym)), Vec::new().into());
-    let ast = crate::pretty_theory::lnterm_to_parser(&t);
+    let ast = crate::elaborate::lnterm_to_parser(&t);
     assert_eq!(term_to_doc(&ast, &[]).render(), "add");
 }
 

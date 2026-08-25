@@ -702,7 +702,7 @@ pub fn map_free_atom<F: FnMut(&p::VarSpec) -> p::VarSpec>(a: &GAtom, f: &mut F) 
 /// The parser-AST spelling of an atom of a locally-nameless formula whose
 /// binders are all opened: read it over plain `LVar`s
 /// ([`crate::guarded::bvar_to_lvar`]), project it
-/// ([`crate::pretty_theory::lnatom_to_parser`]), give the three nullary
+/// (`crate::elaborate::lnatom_to_parser`), give the three nullary
 /// constants their parser-AST constructors back ([`restore_nullary_constants`])
 /// and put the AC argument lists into canonical order
 /// ([`crate::elaborate::canonicalize_ac_in_atom`]).
@@ -721,7 +721,7 @@ pub fn map_free_atom<F: FnMut(&p::VarSpec) -> p::VarSpec>(a: &GAtom, f: &mut F) 
 /// and a printed form (`prettyTerm` has no brace case,
 /// Term/Term.hs:298-327); they differ under the derived `PartialEq`.
 pub fn blnatom_to_parser(a: &crate::atom::Atom<crate::formula::BLNTerm>) -> p::Atom {
-    let projected = crate::pretty_theory::lnatom_to_parser(&crate::guarded::bvar_to_lvar(a));
+    let projected = crate::elaborate::lnatom_to_parser(&crate::guarded::bvar_to_lvar(a));
     crate::elaborate::canonicalize_ac_in_atom(&crate::macro_expand::map_atom_terms(
         &projected,
         &restore_nullary_constants,

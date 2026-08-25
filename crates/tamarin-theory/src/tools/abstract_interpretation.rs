@@ -568,7 +568,7 @@ pub fn apply_partial_evaluation(
     inserted.extend(
         refined
             .iter()
-            .map(|r| p::TheoryItem::Rule(crate::pretty_theory::proto_rule_to_parsed(r))),
+            .map(|r| p::TheoryItem::Rule(crate::elaborate::proto_rule_to_parsed(r))),
     );
     parsed.items = splice_refined(
         std::mem::take(&mut parsed.items),

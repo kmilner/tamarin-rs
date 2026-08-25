@@ -1193,7 +1193,6 @@ fn rename_lock_pos_atoms(f: &mut tamarin_parser::ast::Formula, idx: u64) {
 mod tests {
     use super::*;
     use tamarin_term::lterm::LSort;
-    use tamarin_theory::pretty_theory::lnterm_to_parser;
     use tamarin_theory::sapic::ProcessCombinator;
 
     fn lv(name: &str, idx: u64) -> LVar {
@@ -1446,16 +1445,16 @@ mod tests {
         );
     }
 
-    // User-`[AC]` symbols must lower INFIX (`BinOp::AcFct`, left-folded), as
-    // HS `prettyTerm` renders them (Term/Term.hs:305): the lowering carries
-    // the translation's restriction bodies into emitted bytes, so a prefix
-    // `App("add", …)` here would diverge from the oracle in both the rendered
-    // predicate and the derived rule/restriction names.  No corpus theory
-    // combines SAPIC with a user `[AC]` symbol, so this shape is only pinned
-    // here.
+    // A user-`[AC]` symbol prints INFIX, as HS `prettyTerm` renders it
+    // (Term/Term.hs:305): the translation's restriction bodies carry these
+    // terms into emitted bytes, so a prefix `add(…)` here would diverge from
+    // the oracle in both the rendered predicate and the derived
+    // rule/restriction names.  No corpus theory combines SAPIC with a user
+    // `[AC]` symbol, so this shape is only pinned here.
     #[test]
-    fn user_ac_terms_lower_infix() {
+    fn user_ac_terms_print_infix() {
         use tamarin_term::function_symbols::{AcFctSym, Constructability, NdcState, Privacy};
+        use tamarin_term::pretty::pretty_nterm;
         use tamarin_term::term::f_app_acfct;
 
         let add = AcFctSym::new(
@@ -1464,36 +1463,36 @@ mod tests {
             Constructability::Constructor,
             NdcState::NotNdc,
         );
-        let op = tamarin_parser::ast::BinOp::AcFct(tamarin_term::intern::intern_str("add"));
         let leaf = |n: &str| tamarin_term::term::Term::Lit(Lit::Var(lv(n, 0)));
 
         for arity in [2usize, 3] {
             let t = f_app_acfct(add, (0..arity).map(|i| leaf(&format!("x{i}"))).collect());
-            // Fold the expectation over the smart constructor's own
-            // (flattened, sorted) arg list so the test pins only the
-            // infix left-fold, not the AC argument order.
+            // Read the expectation off the smart constructor's own
+            // (flattened, sorted) argument list so the test pins the infix
+            // spelling, not the AC argument order.
             let tamarin_term::term::Term::App(_, args) = &t else {
                 panic!("f_app_acfct built a non-App term");
             };
-            let mut it = args.iter().map(lnterm_to_parser);
-            let first = it.next().unwrap();
-            let expected = it.fold(first, |acc, a| {
-                tamarin_parser::ast::Term::BinOp(op, Box::new(acc), Box::new(a))
-            });
-            assert_eq!(lnterm_to_parser(&t), expected);
+            assert_eq!(args.len(), arity);
+            let operands: Vec<String> = args.iter().map(|a| pretty_nterm(a).render()).collect();
+            assert_eq!(
+                pretty_nterm(&t).render(),
+                format!("({})", operands.join(" add "))
+            );
         }
     }
 
-    /// The lowering the SAPIC translation uses is the one HS `prettyTerm`
-    /// defines, so `exp` comes out infix and a `pair` chain is split down the
-    /// RIGHT spine only (Term/Term.hs:310,313,323-324).  Both shapes reach
-    /// emitted bytes through `let_else_restriction`: on
+    /// The terms the SAPIC translation builds print through HS `prettyTerm`,
+    /// so `exp` comes out infix and a `pair` chain is split down the RIGHT
+    /// spine only (Term/Term.hs:310,313,323-324).  Both shapes reach emitted
+    /// bytes through `let_else_restriction`: on
     /// `let <x, y> = <'g'^k, <<'a','b'>,'c'>> in … else …` the pinned oracle
     /// (ef3f0468) renders the generated action as
     /// `Restr_letxygkabc_2_1_1( <'g'^k.1, <'a', 'b'>, 'c'> )`.
     #[test]
-    fn exp_and_nested_pairs_lower_like_prettyterm() {
+    fn exp_and_nested_pairs_print_like_prettyterm() {
         use tamarin_term::function_symbols::{Constructability, NoEqSym, Privacy};
+        use tamarin_term::pretty::pretty_nterm;
         use tamarin_term::term::{f_app_list, f_app_no_eq, Term as TTerm};
 
         let sym = |n: &[u8], k| {
@@ -1506,8 +1505,7 @@ mod tests {
         };
         let leaf = |n: &str| TTerm::Lit(Lit::Var(lv(n, 0)));
         let pair = |a: LNTerm, b: LNTerm| f_app_no_eq(sym(b"pair", 2), vec![a, b]);
-        let render =
-            |t: &LNTerm| tamarin_theory::pretty_formula::term_doc(&lnterm_to_parser(t)).render();
+        let render = |t: &LNTerm| pretty_nterm(t).render();
 
         // `exp(a, b)` is the infix `a^b`, not a prefix application.
         let e = f_app_no_eq(sym(b"exp", 2), vec![leaf("a"), leaf("b")]);
