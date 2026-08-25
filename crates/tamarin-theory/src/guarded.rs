@@ -626,14 +626,13 @@ pub fn max_var_idx(g: &Guarded) -> u64 {
     m
 }
 
-/// Debug-only check that every AC and `C` argument list in `g` is sorted.
+/// Is every AC and `C` argument list in `g` sorted?
 ///
 /// [`map_lits`] rebuilds each application through `f_app`, which sorts those
 /// two argument lists (Raw.hs:119-134) and leaves every other one alone, so a
 /// formula equals its identity map exactly when it is already in that form.
 /// [`insert_formula`](crate::constraint::solver::reduction::Reduction::insert_formula)
-/// asserts it at the store boundary.
-#[cfg(debug_assertions)]
+/// checks it with `debug_assert!` at the store boundary.
 pub fn is_ac_canonical(g: &Guarded) -> bool {
     map_guarded_atoms(g, &mut |_, a| {
         map_atom(a, &mut |t| map_lits(t, &mut |l| l.clone()))
