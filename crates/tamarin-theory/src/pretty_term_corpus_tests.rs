@@ -5,14 +5,12 @@
 //! Corpus net for `prettyTerm` over the internal term
 //! (`tamarin_term::pretty::pretty_term`, `Term/Term.hs:299-327`): every
 //! `LNTerm` the elaborated theories of the examples tree hold renders the
-//! same three ways.
+//! same two ways.
 //!
 //! * through `pretty_nterm` — the `Doc` built from the internal term;
 //! * through `pretty_theory::lnterm_to_parser` + the AC canonicaliser +
 //!   `pretty_formula::term_doc` — the parser-AST projection the print
-//!   sites hand to the AST renderer;
-//! * flat, against `pretty_lnterm`, the `String` printer the JSON
-//!   abbreviation sort key and the contradiction text use.
+//!   sites hand to the AST renderer.
 //!
 //! The two `Doc`s are compared at three shapes rather than flat, because a
 //! difference in `Doc` structure — a break point one side has and the
@@ -25,12 +23,12 @@ use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use tamarin_term::lterm::LNTerm;
-use tamarin_term::pretty::{pretty_lnterm, pretty_nterm};
+use tamarin_term::pretty::pretty_nterm;
 use tamarin_term::term::Term;
 
 use crate::elaborate::canonicalize_ac_in_pterm;
 use crate::pretty_formula as pf;
-use crate::pretty_hpj::{DEFAULT_LINE_LENGTH, DEFAULT_RIBBON, FLAT_WIDTH, LINE_LENGTH, RIBBON};
+use crate::pretty_hpj::{DEFAULT_LINE_LENGTH, DEFAULT_RIBBON, LINE_LENGTH, RIBBON};
 use crate::pretty_theory::lnterm_to_parser;
 use crate::rule::{ProtoRuleE, ProtoRuleName};
 use crate::test_corpus::{beyond_budget, corpus_root, parse_file, rel, spthy_files};
@@ -137,13 +135,6 @@ fn compare_doc(label: &str, t: &LNTerm) -> Option<String> {
     None
 }
 
-/// The flat render against the `String` printer.
-fn compare_flat(label: &str, t: &LNTerm) -> Option<String> {
-    let flat = pretty_nterm(t).render_with(FLAT_WIDTH, FLAT_WIDTH);
-    let string = pretty_lnterm(t);
-    (flat != string).then(|| format!("{label}\n--- flat Doc\n{flat}\n--- pretty_lnterm\n{string}"))
-}
-
 /// Which stage of the load pipeline a file reached.
 enum Outcome {
     Elaborated,
@@ -158,7 +149,6 @@ struct FileProbe {
     outcome: Outcome,
     terms: usize,
     doc_findings: Vec<String>,
-    flat_findings: Vec<String>,
     elapsed: Duration,
 }
 
@@ -168,7 +158,6 @@ impl FileProbe {
             outcome,
             terms: 0,
             doc_findings: Vec::new(),
-            flat_findings: Vec::new(),
             elapsed: Duration::ZERO,
         }
     }
@@ -197,17 +186,13 @@ fn probe(path: &Path, root: &Path) -> FileProbe {
     let file = rel(path, root).display().to_string();
     let terms = theory_terms(&elab);
     let mut doc_findings = Vec::new();
-    let mut flat_findings = Vec::new();
     for (label, t) in &terms {
-        let at = format!("{file}: {label}");
-        doc_findings.extend(compare_doc(&at, t));
-        flat_findings.extend(compare_flat(&at, t));
+        doc_findings.extend(compare_doc(&format!("{file}: {label}"), t));
     }
     FileProbe {
         outcome: Outcome::Elaborated,
         terms: terms.len(),
         doc_findings,
-        flat_findings,
         elapsed: start.elapsed(),
     }
 }
@@ -293,26 +278,6 @@ fn corpus_pretty_nterm_matches_the_projected_doc() {
     };
     let terms = census("prettyTerm vs projection", start);
     let findings: Vec<&String> = probes.iter().flat_map(|p| &p.doc_findings).collect();
-    for f in &findings {
-        eprintln!("DISAGREEMENT {f}");
-    }
-    assert!(terms > 0, "no terms compared");
-    assert!(
-        findings.is_empty(),
-        "{} disagreements; first: {}",
-        findings.len(),
-        findings[0]
-    );
-}
-
-#[test]
-fn corpus_pretty_lnterm_matches_the_flat_doc() {
-    let start = Instant::now();
-    let Some((_, _, probes)) = corpus() else {
-        return;
-    };
-    let terms = census("prettyTerm flat vs pretty_lnterm", start);
-    let findings: Vec<&String> = probes.iter().flat_map(|p| &p.flat_findings).collect();
     for f in &findings {
         eprintln!("DISAGREEMENT {f}");
     }

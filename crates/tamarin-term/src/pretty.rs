@@ -25,168 +25,22 @@
 //! The entry points are:
 //! - [`pretty_term`], the `Doc` printer parameterised over the printer of the
 //!   term's literals, and [`pretty_nterm`] at `NTerm v = VTerm Name v`;
-//! - [`pretty_lnterm`], which returns a `String` (port of `prettyLNTerm`);
+//! - [`pretty_lnterm`], that `Doc` laid out on a single line as a `String`;
 //! - `impl Display for LNTerm` (technically on `Term<Lit<Name, LVar>>`).
 
 use std::fmt;
 use std::fmt::Write as _;
 use std::sync::{OnceLock, RwLock};
 
-use tamarin_utils::pretty_hpj::{fcat, fsep, punctuate, Doc};
+use tamarin_utils::pretty_hpj::{fcat, fsep, punctuate, Doc, HtmlDocGuard, FLAT_WIDTH};
 use tamarin_utils::FastMap;
 
 use crate::function_symbols::{
     diff_sym, exp_sym, nat_one_sym, pair_sym, AcSym, CSym, FunSym, EMAP_SYM_STRING,
 };
-use crate::lterm::{sort_prefix, BVar, LSort, LVar, Name, NameTag};
+use crate::lterm::{sort_prefix, BVar, LNTerm, LSort, LVar, Name, NameTag};
 use crate::term::{ShowLit, Term};
 use crate::vterm::{Lit, VTerm};
-
-/// Pretty-print an `LNTerm` to a `String`.
-///
-/// Port of `prettyLNTerm` from `Term.LTerm` (`LTerm.hs`)
-/// which delegates to `prettyTerm (text . show)`.
-pub fn pretty_lnterm<T: PrettyTerm + ?Sized>(t: &T) -> String {
-    let mut s = String::new();
-    t.pretty_into(&mut s);
-    s
-}
-
-/// Trait for terms that know how to render themselves in the
-/// Haskell-faithful pretty form.  Avoids a free-standing
-/// generic-on-`Lit` function so [`Display`] can be implemented on
-/// `Term<Lit<Name, LVar>>` directly.
-pub trait PrettyTerm {
-    fn pretty_into(&self, out: &mut String);
-}
-
-// ---------------------------------------------------------------------
-// Term<Lit<Name, LVar>> = LNTerm
-// ---------------------------------------------------------------------
-
-impl PrettyTerm for Term<Lit<Name, LVar>> {
-    fn pretty_into(&self, out: &mut String) {
-        pp_term_lnterm(self, out);
-    }
-}
-
-fn pp_term_lnterm(t: &Term<Lit<Name, LVar>>, out: &mut String) {
-    match t {
-        Term::Lit(l) => pp_lit_lnterm(l, out),
-        // Haskell `prettyTerm` matches the user-defined AC symbols BEFORE the
-        // builtin AC operators, and prints a nullary application as the bare
-        // symbol name (`FApp (AC (ACfct (f, _))) [] -> text (BC.unpack f)`).
-        // Non-nullary ones fall through to the generic AC arm below, whose
-        // separator `ac_op_symbol` renders as `" f "`.
-        Term::App(FunSym::Ac(AcSym::AcFct(sym)), ts) if ts.is_empty() => {
-            out.push_str(&String::from_utf8_lossy(sym.name));
-        }
-        Term::App(FunSym::Ac(o), ts) => {
-            // Haskell: `ppTerms <op> 1 "(" ")" ts` — parenthesised
-            // infix list joined by the AC operator symbol.  The separator
-            // only ever appears BETWEEN operands, so a 1-element `ts` never
-            // resolves one.
-            let op = if ts.len() > 1 { ac_op_symbol(*o) } else { "" };
-            out.push('(');
-            for (i, child) in ts.iter().enumerate() {
-                if i > 0 {
-                    out.push_str(op);
-                }
-                pp_term_lnterm(child, out);
-            }
-            out.push(')');
-        }
-        // Haskell `prettyTerm` matches full `NoEqSym` equality (incl.
-        // privacy/constructability), e.g. `s == expSym` — not just the
-        // name+arity (Term/Term.hs:310-313).
-        Term::App(FunSym::NoEq(sym), ts) if ts.len() == 2 && *sym == exp_sym() => {
-            pp_term_lnterm(&ts[0], out);
-            out.push('^');
-            pp_term_lnterm(&ts[1], out);
-        }
-        Term::App(FunSym::NoEq(sym), ts) if ts.len() == 2 && *sym == diff_sym() => {
-            out.push_str("diff(");
-            pp_term_lnterm(&ts[0], out);
-            out.push_str(", ");
-            pp_term_lnterm(&ts[1], out);
-            out.push(')');
-        }
-        Term::App(FunSym::NoEq(sym), ts) if ts.is_empty() && *sym == nat_one_sym() => {
-            out.push_str("%1");
-        }
-        Term::App(FunSym::NoEq(sym), _) if *sym == pair_sym() => {
-            // Flatten right-associated pair trees.
-            let mut flat: Vec<&Term<Lit<Name, LVar>>> = Vec::new();
-            collect_pair_tail(t, &mut flat);
-            out.push('<');
-            for (i, c) in flat.iter().enumerate() {
-                if i > 0 {
-                    out.push_str(", ");
-                }
-                pp_term_lnterm(c, out);
-            }
-            out.push('>');
-        }
-        Term::App(FunSym::NoEq(sym), ts) => {
-            out.push_str(&String::from_utf8_lossy(sym.name));
-            if !ts.is_empty() {
-                out.push('(');
-                for (i, c) in ts.iter().enumerate() {
-                    if i > 0 {
-                        out.push_str(", ");
-                    }
-                    pp_term_lnterm(c, out);
-                }
-                out.push(')');
-            }
-        }
-        Term::App(FunSym::C(CSym::EMap), ts) => {
-            out.push_str(&String::from_utf8_lossy(EMAP_SYM_STRING));
-            out.push('(');
-            for (i, c) in ts.iter().enumerate() {
-                if i > 0 {
-                    out.push_str(", ");
-                }
-                pp_term_lnterm(c, out);
-            }
-            out.push(')');
-        }
-        Term::App(FunSym::List, ts) => {
-            // `LIST(...)` — matches Haskell `ppFun "LIST" ts`
-            out.push_str("LIST(");
-            for (i, c) in ts.iter().enumerate() {
-                if i > 0 {
-                    out.push_str(", ");
-                }
-                pp_term_lnterm(c, out);
-            }
-            out.push(')');
-        }
-    }
-}
-
-/// HS `split` (Term/Term.hs:323-324): `split (viewTerm2 -> FPair t1 t2) = t1 :
-/// split t2; split t = [t]`.  ONLY the RIGHT spine of a pair is flattened —
-/// `pair(t1, t2)` yields `t1` then recurses into `t2`.  A LEFT-nested pair
-/// such as `pair(pair(a,b), c)` therefore renders as `<<a, b>, c>` (the left
-/// child is printed by the recursive term printer, NOT flattened here).
-fn collect_pair_tail<'a>(t: &'a Term<Lit<Name, LVar>>, out: &mut Vec<&'a Term<Lit<Name, LVar>>>) {
-    if let Term::App(FunSym::NoEq(sym), args) = t {
-        if *sym == pair_sym() && args.len() == 2 {
-            out.push(&args[0]);
-            collect_pair_tail(&args[1], out);
-            return;
-        }
-    }
-    out.push(t);
-}
-
-fn pp_lit_lnterm(l: &Lit<Name, LVar>, out: &mut String) {
-    match l {
-        Lit::Var(v) => pp_lvar(v, out),
-        Lit::Con(n) => pp_name(n, out),
-    }
-}
 
 /// Mirror of Haskell `instance Show LVar` (LTerm.hs:550-557).
 pub fn pp_lvar(v: &LVar, out: &mut String) {
@@ -340,6 +194,21 @@ pub fn pretty_nterm<V: fmt::Display>(t: &VTerm<Name, V>) -> Doc {
     pretty_term(&|l: &Lit<Name, V>| Doc::text(l.to_string()), t)
 }
 
+/// HS `prettyLNTerm = prettyNTerm` (LTerm.hs:934-935) laid out on a single
+/// line: [`FLAT_WIDTH`] leaves no `fcat` or `fsep` of the `Doc` a reason to
+/// break.  HS has no `String` twin — the flat form is what the port's map and
+/// sort keys, its abbreviation table and its debug messages compare.
+///
+/// The `Doc` is built and rendered in plain mode whatever the caller's
+/// rendering context: the callers that put the string back into a `Doc::text`
+/// take their escaping from that `Doc`, which is where HS's
+/// `Document (HtmlDoc d)` instance applies it (Html.hs:102-104), and the rest
+/// write to a plain-text channel.
+pub fn pretty_lnterm(t: &LNTerm) -> String {
+    let _plain = HtmlDocGuard::disable();
+    pretty_nterm(t).render_with(FLAT_WIDTH, FLAT_WIDTH)
+}
+
 /// HS `ppTerms sepa n lead finish ts` (Term/Term.hs:319-321):
 /// `fcat . (text lead :) . (++[text finish]) . map (nest n)
 ///       . punctuate (text sepa) . map ppTerm`.
@@ -431,9 +300,7 @@ impl ShowLit for Lit<Name, BVar<LVar>> {
 
 impl fmt::Display for Term<Lit<Name, LVar>> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut buf = String::new();
-        pp_term_lnterm(self, &mut buf);
-        f.write_str(&buf)
+        f.write_str(&pretty_lnterm(self))
     }
 }
 
@@ -861,8 +728,6 @@ mod tests {
     // `pretty_term` / `pretty_nterm`, the Doc printer.
     // =====================================================================
 
-    use tamarin_utils::pretty_hpj::FLAT_WIDTH;
-
     /// The Doc of `t` laid out on one line: no width is ever exceeded, so no
     /// `fcat`/`fsep` ever breaks.
     fn flat(t: &Term<Lit<Name, LVar>>) -> String {
@@ -1034,6 +899,20 @@ mod tests {
                 vec![var("a", LSort::Msg), var("b", LSort::Msg)]
             )),
             "(a f b)"
+        );
+    }
+
+    /// A pair term keeps its raw `<`/`>` under an enclosing HTML render: the
+    /// escaping belongs to the `Doc` a caller wraps the string in, HS's
+    /// `Document (HtmlDoc d)` instance (Html.hs:102-104).
+    #[test]
+    fn pretty_lnterm_stays_plain_under_an_html_render() {
+        let p = f_app_no_eq(pair_sym(), vec![var("a", LSort::Msg), var("b", LSort::Msg)]);
+        let _html = HtmlDocGuard::enable();
+        assert_eq!(pretty_lnterm(&p), "<a, b>");
+        assert_eq!(
+            Doc::text(pretty_lnterm(&p)).render_with(FLAT_WIDTH, FLAT_WIDTH),
+            "&lt;a, b&gt;"
         );
     }
 
