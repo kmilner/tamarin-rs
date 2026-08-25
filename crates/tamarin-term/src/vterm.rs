@@ -10,7 +10,7 @@
 use crate::term::{lit, Term, TermView};
 
 /// Literal: either a constant `Con(c)` or a variable `Var(v)`.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Lit<C, V> {
     Con(C),
     Var(V),
