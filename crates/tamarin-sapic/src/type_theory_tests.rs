@@ -4,7 +4,9 @@
 
 use super::*;
 
+use tamarin_parser::ast as p;
 use tamarin_theory::pretty_theory::{pretty_open_theory_by_module, BuildInfo, OpenPrintOpts};
+use tamarin_theory::process_inline::theory_process_conv;
 
 /// The pinned oracle build's `Generated from:` facts (Git revision ef3f0468),
 /// so the byte expectations below match the captured stdout verbatim.
@@ -25,11 +27,7 @@ fn build(input: &str) -> (p::Theory, Theory) {
 }
 
 fn render(parsed: &p::Theory, elaborated: &Theory, opts: &OpenPrintOpts) -> String {
-    let process_defs = collect_process_defs(parsed);
-    let conv = |proc: &p::Process| {
-        convert_process_with_defs(proc, &process_defs, &elaborated.signature.maude_sig)
-            .map_err(|e| e.message)
-    };
+    let conv = theory_process_conv(parsed, &elaborated.signature.maude_sig);
     pretty_open_theory_by_module(
         parsed,
         elaborated,
@@ -42,8 +40,8 @@ fn render(parsed: &p::Theory, elaborated: &Theory, opts: &OpenPrintOpts) -> Stri
     .unwrap()
 }
 
-fn spthytyped_opts(parsed: &p::Theory, elaborated: &Theory) -> OpenPrintOpts {
-    let result = type_theory_env(parsed, elaborated).unwrap();
+fn spthytyped_opts(elaborated: &Theory) -> OpenPrintOpts {
+    let result = type_theory_env(elaborated).unwrap();
     OpenPrintOpts {
         typed: Some(result.overlay),
         extra_function_items: result.fun_items,
@@ -75,7 +73,7 @@ end
 #[test]
 fn spthytyped_typing4_bytes() {
     let (parsed, elaborated) = build(TYPING4);
-    let opts = spthytyped_opts(&parsed, &elaborated);
+    let opts = spthytyped_opts(&elaborated);
     let expected = "theory Typing
 
 begin
@@ -155,7 +153,7 @@ end
 #[test]
 fn spthytyped_channels4_bytes() {
     let (parsed, elaborated) = build(CHANNELS4);
-    let opts = spthytyped_opts(&parsed, &elaborated);
+    let opts = spthytyped_opts(&elaborated);
     let expected = "theory ChannelsTestOne
 
 begin
@@ -326,7 +324,7 @@ process: P
 end
 "#;
     let (parsed, elaborated) = build(src);
-    let result = type_theory_env(&parsed, &elaborated).unwrap();
+    let result = type_theory_env(&elaborated).unwrap();
     // The `Some(vec![])` rule (Typing.hs:224 — always `Just`).
     assert_eq!(result.overlay.defs.len(), 1);
     assert_eq!(result.overlay.defs[0].0, Some(Vec::new()));
@@ -379,7 +377,7 @@ process:
 end
 "#;
     let (parsed, elaborated) = build(src);
-    let opts = spthytyped_opts(&parsed, &elaborated);
+    let opts = spthytyped_opts(&elaborated);
     let expected = "theory T1
 
 begin
@@ -446,7 +444,7 @@ process:
 end
 "#;
     let (parsed, elaborated) = build(src);
-    let opts = spthytyped_opts(&parsed, &elaborated);
+    let opts = spthytyped_opts(&elaborated);
     let out = render(&parsed, &elaborated, &opts);
     for line in [
         "let  P (x.1:foo) = out('yes') if Eq( x.1, 'a' ) out('no')",

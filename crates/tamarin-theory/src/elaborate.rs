@@ -58,8 +58,8 @@ use crate::rule::{
 };
 use crate::signature::SignaturePure;
 use crate::theory::{
-    apply_macro_in_lemma, AccLemma, CaseTest, LNMacro, Lemma, LemmaAttr, OpenProtoRule, ProofTree,
-    SapicFunSym, Theory, TheoryItem, TraceQuantifier, TranslationElement,
+    apply_macro_in_lemma, AccLemma, CaseTest, LNMacro, Lemma, LemmaAttr, OpenProtoRule, ProcessDef,
+    ProofTree, SapicFunSym, Theory, TheoryItem, TraceQuantifier, TranslationElement,
 };
 
 #[derive(Debug, Clone)]
@@ -594,6 +594,11 @@ fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), Elab
     // (`lookupArity`, Theory/Text/Parser/Term.hs:62-66), so the two lists
     // agree on every theory that parses.
     let mut macros: Vec<LNMacro> = Vec::new();
+    // HS's parser inlines a `P(args)` call against the definitions the theory
+    // holds when the call is read (`checkProcess`, Theory/Text/Parser/Sapic.hs:
+    // 314-317); the RS parser keeps the call, so the whole item list supplies
+    // the definitions here.
+    let process_defs = crate::process_inline::collect_process_defs(items);
     for item in items.iter() {
         match item {
             p::TheoryItem::Builtins(names) => {
@@ -743,16 +748,49 @@ fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), Elab
                 out.items
                     .push(TheoryItem::Translation(TranslationElement::CaseTest(ct)));
             }
-            p::TheoryItem::ProcessDef(_)
-            | p::TheoryItem::TopLevelProcess(_)
-            | p::TheoryItem::EquivLemma(_, _)
-            | p::TheoryItem::DiffEquivLemma(_) => {
-                // Process/equiv items are intentionally not lowered here.
-                // SAPIC translation is a dedicated pass
-                // (`tamarin_sapic::apply::apply_sapic`) that consumes the
-                // parser AST directly and injects the generated MSR rules
-                // into the elaborated theory, so this arm deliberately
-                // drops them.
+            p::TheoryItem::TopLevelProcess(proc) => {
+                // `toplevelprocess` adds a `ProcessItem`
+                // (Theory/Text/Parser/Sapic.hs:73-78,
+                // Theory/Text/Parser.hs:290-291).
+                let pp = elaborate_process(proc, &process_defs, &out.signature.maude_sig)?;
+                out.items
+                    .push(TheoryItem::Translation(TranslationElement::Process(pp)));
+            }
+            p::TheoryItem::ProcessDef(d) => {
+                // `processDef` stores the body and the declared formals
+                // (Theory/Text/Parser/Sapic.hs:64-72); `_pVars` is `Nothing`
+                // for a `let P = …` written without a parameter list.
+                let body = elaborate_process(&d.body, &process_defs, &out.signature.maude_sig)?;
+                let vars = d
+                    .vars
+                    .as_ref()
+                    .map(|vs| vs.iter().map(varspec_to_sapic).collect());
+                out.items
+                    .push(TheoryItem::Translation(TranslationElement::ProcessDef(
+                        ProcessDef {
+                            name: d.name.clone(),
+                            vars,
+                            body,
+                        },
+                    )));
+            }
+            p::TheoryItem::EquivLemma(p1, p2) => {
+                // `equivLemma` (Theory/Text/Parser/Sapic.hs:203-209).
+                let msig = &out.signature.maude_sig;
+                let c1 = elaborate_process(p1, &process_defs, msig)?;
+                let c2 = elaborate_process(p2, &process_defs, msig)?;
+                out.items
+                    .push(TheoryItem::Translation(TranslationElement::EquivLemma(
+                        c1, c2,
+                    )));
+            }
+            p::TheoryItem::DiffEquivLemma(proc) => {
+                // `diffEquivLemma` (Theory/Text/Parser/Sapic.hs:211-218).
+                let pp = elaborate_process(proc, &process_defs, &out.signature.maude_sig)?;
+                out.items
+                    .push(TheoryItem::Translation(TranslationElement::DiffEquivLemma(
+                        pp,
+                    )));
             }
             p::TheoryItem::Export { tag, body } => {
                 out.items
@@ -787,6 +825,19 @@ fn item_formula(
     let syn = crate::formula::from_parser(f, sig)?;
     crate::predicate::expand_formula(preds, &syn).map_err(|e| ElabError {
         message: format!("predicate expansion failed: {}", e),
+    })
+}
+
+/// The `PlainProcess` a process-bearing item carries.  HS's parser builds it
+/// while it reads the item, so the surface process tree is converted here,
+/// against the signature the declarations before the item have built.
+fn elaborate_process(
+    proc: &p::Process,
+    defs: &crate::process_inline::ProcessDefMap<'_>,
+    sig: &MaudeSig,
+) -> Result<crate::sapic::PlainProcess, ElabError> {
+    crate::process_inline::convert_process_with_defs(proc, defs, sig).map_err(|e| ElabError {
+        message: format!("SAPIC translation: {}", e.message),
     })
 }
 

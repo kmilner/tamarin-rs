@@ -905,22 +905,21 @@ pub(crate) fn vars_proc<A>(p: &Process<A, SapicLVar>) -> Vec<SapicLVar> {
     set.into_iter().collect()
 }
 
-/// Collect the user `functions:` typing declarations of a parsed theory (HS
-/// `theoryFunctionTypingInfos`; every parsed `FunctionDecl` becomes a
-/// `FunctionTypingInfo` item, Theory/Text/Parser.hs:259-262 `addFunctionTypingInfo`)
-/// as the `(name, arg_types, out_type)` triples [`init_te_from_sig`] overlays.
-/// Plain `f/2` declarations carry `Nothing` types (the `defaultFunctionType`),
-/// which the typing env already holds — so they are harmless overlays.
-pub(crate) fn collect_user_fun_typings(parsed: &tamarin_parser::ast::Theory) -> Vec<UserFunTyping> {
-    let mut out = Vec::new();
-    for item in &parsed.items {
-        if let tamarin_parser::ast::TheoryItem::Functions(decls) = item {
-            for d in decls {
-                out.push((d.name.clone(), d.arg_types.clone(), d.out_type.clone()));
-            }
-        }
-    }
-    out
+/// The theory's `FunctionTypingInfo` items (HS `theoryFunctionTypingInfos`,
+/// TheoryObject.hs:368-369) as the `(name, arg_types, out_type)` triples
+/// [`init_te_from_sig`] overlays.  Plain `f/2` declarations carry `Nothing`
+/// types (the `defaultFunctionType`), which the typing env already holds — so
+/// they are harmless overlays.
+pub(crate) fn collect_user_fun_typings(thy: &tamarin_theory::theory::Theory) -> Vec<UserFunTyping> {
+    thy.function_typing_infos()
+        .map(|fs| {
+            (
+                String::from_utf8_lossy(fs.sym.name()).into_owned(),
+                fs.arg_types.clone(),
+                fs.out_type.clone(),
+            )
+        })
+        .collect()
 }
 
 #[cfg(test)]

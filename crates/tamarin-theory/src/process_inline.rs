@@ -59,14 +59,14 @@ fn subst_fact(subst: &SapicSubst, f: &SapicLNFact) -> SapicLNFact {
 }
 
 /// Look up each process definition by name (HS `lookupProcessDef`,
-/// `TheoryObject.hs:678-679`).  Built once from the parsed theory's `ProcessDef`
+/// `TheoryObject.hs:693-694`).  Built once from the parsed theory's `ProcessDef`
 /// items, threaded into [`convert_process_with_defs`].
 pub type ProcessDefMap<'a> = BTreeMap<String, &'a p::ProcessDef>;
 
-/// Collect every `ProcessDef` of the parsed theory into a lookup map.
-pub fn collect_process_defs(thy: &p::Theory) -> ProcessDefMap<'_> {
+/// Collect every `ProcessDef` of a parsed item list into a lookup map.
+pub fn collect_process_defs(items: &[p::TheoryItem]) -> ProcessDefMap<'_> {
     let mut m = BTreeMap::new();
-    for item in &thy.items {
+    for item in items {
         if let p::TheoryItem::ProcessDef(d) = item {
             // HS `addProcessDef` rejects duplicate names; the first definition
             // wins for our lookup (a well-formed theory has no duplicates).
@@ -74,6 +74,18 @@ pub fn collect_process_defs(thy: &p::Theory) -> ProcessDefMap<'_> {
         }
     }
     m
+}
+
+/// The open printer's process converter over one parsed theory
+/// ([`crate::pretty_theory::OpenProcessConv`]): every `P(args)` call resolves
+/// against the theory's own `ProcessDef`s and is inlined the way HS's parser
+/// inlines it.
+pub fn theory_process_conv<'a>(
+    thy: &'a p::Theory,
+    sig: &'a MaudeSig,
+) -> impl Fn(&p::Process) -> Result<PlainProcess, String> + 'a {
+    let defs = collect_process_defs(&thy.items);
+    move |proc: &p::Process| convert_process_with_defs(proc, &defs, sig).map_err(|e| e.message)
 }
 
 /// `convert_process` with process-definition resolution.  Identical to

@@ -122,10 +122,10 @@ impl OpenProtoRule {
     }
 }
 
-/// Lightweight placeholder for `Theory.Sapic.ProcessDef`, populated
-/// by the SAPIC translation pass. We carry just enough to round-trip
-/// through pretty-printing. Backs the not-yet-produced
-/// `TranslationElement::ProcessDef` variant — kept for the HS port.
+/// HS `ProcessDef` (Items/ProcessItem.hs:23-28): the payload of a
+/// `let P (v1,…,vn) = …` declaration.  `vars` is `None` for a definition
+/// written without a parameter list; the SAPIC typing pass replaces it with
+/// the inferred formals (`typeAndRenameProcessDef`, Typing.hs:217-225).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProcessDef {
     pub name: String,
@@ -157,11 +157,8 @@ pub type ConfigBlock = String;
 /// translation that aren't first-class top-level constructs in the
 /// surface syntax.
 ///
-/// Mirrors the full HS `TranslationElement` surface. Only
-/// `SignatureBuiltin`, `FunctionTypingInfo`, `AccLemma`, `CaseTest`, and
-/// `ExportInfo` are produced by elaboration; the remaining variants
-/// (`Process`, `ProcessDef`, `DiffEquivLemma`, `EquivLemma`) are not yet
-/// produced — kept for the faithful HS port.
+/// Mirrors the full HS `TranslationElement` surface (Items/TheoryItem.hs:
+/// 43-53); elaboration produces every variant.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TranslationElement {
     Process(PlainProcess),
@@ -547,6 +544,26 @@ impl<R, P> Theory<R, P, TranslationElement> {
     pub fn function_typing_infos(&self) -> impl Iterator<Item = &SapicFunSym> {
         self.items.iter().filter_map(|i| match i {
             TheoryItem::Translation(TranslationElement::FunctionTypingInfo(f)) => Some(f),
+            _ => None,
+        })
+    }
+
+    /// HS `theoryProcesses` (TheoryObject.hs:360-361): the body of every
+    /// top-level `process:` item, in source order.  `equivLemma` and
+    /// `diffEquivLemma` processes are NOT included, matching the comprehension
+    /// over `ProcessItem` alone.
+    pub fn processes(&self) -> impl Iterator<Item = &PlainProcess> {
+        self.items.iter().filter_map(|i| match i {
+            TheoryItem::Translation(TranslationElement::Process(pr)) => Some(pr),
+            _ => None,
+        })
+    }
+
+    /// HS `theoryProcessDefs` (TheoryObject.hs:364-365): every `let P = …`
+    /// definition, in source order.
+    pub fn process_defs(&self) -> impl Iterator<Item = &ProcessDef> {
+        self.items.iter().filter_map(|i| match i {
+            TheoryItem::Translation(TranslationElement::ProcessDef(d)) => Some(d),
             _ => None,
         })
     }

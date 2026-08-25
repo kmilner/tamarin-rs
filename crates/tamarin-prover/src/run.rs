@@ -1259,15 +1259,10 @@ impl TheoryPipeline<'_> {
                 // — the same inlined `PlainProcess` `apply_sapic` checks.
                 let mut wf: Vec<tamarin_parser::wf::WfError> = Vec::new();
                 if self.elaborated.is_sapic {
-                    match tamarin_sapic::apply::sapic_pre_report(
-                        &self.parsed,
-                        &self.elaborated.signature.maude_sig,
-                    ) {
-                        Ok(Some((report, _))) => wf = report,
-                        // `is_sapic` set with no `TopLevelProcess`.
-                        Ok(None) => {}
-                        // Same GHC-exception shape as the apply_sapic arm below.
-                        Err(e) => return Err(ghc_exception(&e.message)),
+                    if let Some((report, _)) =
+                        tamarin_sapic::apply::sapic_pre_report(&self.elaborated)
+                    {
+                        wf = report;
                     }
                 }
                 if translate_module == Some(TranslateModule::SpthyTyped) {
@@ -1276,10 +1271,7 @@ impl TheoryPipeline<'_> {
                     // parser AST stays untouched, the typed processes/defs
                     // ride the overlay, and the recomputed `function:` items
                     // are appended in descending key order.
-                    match tamarin_sapic::type_theory::type_theory_env(
-                        &self.parsed,
-                        &self.elaborated,
-                    ) {
+                    match tamarin_sapic::type_theory::type_theory_env(&self.elaborated) {
                         Ok(r) => {
                             print_opts = Some(tamarin_theory::pretty_theory::OpenPrintOpts {
                                 typed: Some(r.overlay),
@@ -2351,21 +2343,16 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
                 RunError(format!("elaboration error in {}: {}", in_file, e.message))
             })?;
             // Parsed `process:` / `let` bodies are converted to SAPIC
-            // `PlainProcess` for the Doc-based `prettySapic'` port; the
-            // conversion lives in `tamarin-sapic` (dependency direction).
-            // `convert_process_with_defs` mirrors HS's PARSER, which inlines
-            // each `P(args)` call and wraps it in a `ProcessCall` marker
-            // action (Theory/Text/Parser/Sapic.hs:293-312) — `prettySapic'`
-            // then prints just `P(args)` for the marker (Theory/Sapic/Process.hs:496).
-            let process_defs = tamarin_theory::process_inline::collect_process_defs(&parsed);
-            let conv = |proc: &tamarin_parser::ast::Process| {
-                tamarin_theory::process_inline::convert_process_with_defs(
-                    proc,
-                    &process_defs,
-                    &elaborated.signature.maude_sig,
-                )
-                .map_err(|e| e.message)
-            };
+            // `PlainProcess` for the Doc-based `prettySapic'` port.  The
+            // converter mirrors HS's PARSER, which inlines each `P(args)`
+            // call and wraps it in a `ProcessCall` marker action
+            // (Theory/Text/Parser/Sapic.hs:293-312) — `prettySapic'` then
+            // prints just `P(args)` for the marker
+            // (Theory/Sapic/Process.hs:496).
+            let conv = tamarin_theory::process_inline::theory_process_conv(
+                &parsed,
+                &elaborated.signature.maude_sig,
+            );
             let body = tamarin_theory::pretty_theory::pretty_open_theory(
                 &parsed,
                 &elaborated,
@@ -2556,15 +2543,10 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
                 // from the typing result), so they are always present here.
                 let popts = print_opts.expect("translate mode always fills its print options");
                 let wf_block = tamarin_theory::pretty_theory::format_wf_block(&st.wf_report);
-                let process_defs = tamarin_theory::process_inline::collect_process_defs(&st.parsed);
-                let conv = |proc: &tamarin_parser::ast::Process| {
-                    tamarin_theory::process_inline::convert_process_with_defs(
-                        proc,
-                        &process_defs,
-                        &st.elaborated.signature.maude_sig,
-                    )
-                    .map_err(|e| e.message)
-                };
+                let conv = tamarin_theory::process_inline::theory_process_conv(
+                    &st.parsed,
+                    &st.elaborated.signature.maude_sig,
+                );
                 let body = tamarin_theory::pretty_theory::pretty_open_theory_by_module(
                     &st.parsed,
                     &st.elaborated,

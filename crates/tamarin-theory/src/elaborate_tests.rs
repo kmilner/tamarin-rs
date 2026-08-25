@@ -1552,3 +1552,240 @@ fn each_function_declaration_becomes_a_typing_info() {
     assert_eq!(infos[2].arg_types, vec![None, None]);
     assert_eq!(infos[2].out_type, None);
 }
+
+/// HS's parser stores each process-bearing declaration as its own theory item
+/// as it reads it (`addProcess`, Theory/Text/Parser.hs:290-291; the
+/// `ProcessDef` / `EquivLemma` neighbours at :292-296), so the elaborated item
+/// list holds them interleaved with the rules in source order.  A `P(args)`
+/// call arrives inlined behind its `ProcessCall` marker action, which is what
+/// `checkProcess` + `applyM` build (Theory/Text/Parser/Sapic.hs:295-312).
+#[test]
+fn process_items_keep_their_source_position() {
+    use crate::sapic::{Process, SapicAction};
+
+    let src = "theory T begin\n\
+               rule R: [ ] --> [ ]\n\
+               let P(x) = out(x)\n\
+               process: P('a')\n\
+               equivLemma: out('b') out('c')\n\
+               end\n";
+    let thy = elaborate(&parse_theory(src, &["diff"]).unwrap()).unwrap();
+    let kinds: Vec<&str> = thy
+        .items
+        .iter()
+        .map(|i| match i {
+            TheoryItem::Rule(_) => "rule",
+            TheoryItem::Translation(TranslationElement::ProcessDef(_)) => "processdef",
+            TheoryItem::Translation(TranslationElement::Process(_)) => "process",
+            TheoryItem::Translation(TranslationElement::EquivLemma(_, _)) => "equivlemma",
+            other => panic!("unexpected item {other:?}"),
+        })
+        .collect();
+    assert_eq!(kinds, ["rule", "processdef", "process", "equivlemma"]);
+
+    // `_pVars` carries the declared formals as `SapicLVar`s, whose `show` is
+    // the parameter list the open print writes back.
+    let def = thy.process_defs().next().unwrap();
+    assert_eq!(def.name, "P");
+    assert_eq!(
+        def.vars
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>(),
+        ["x"]
+    );
+
+    // `out('a')` behind the marker, with the definition's name recorded on
+    // the substituted body (`processAddAnnotation`,
+    // Theory/Text/Parser/Sapic.hs:308-311).
+    let top = thy.processes().next().unwrap();
+    let Process::Action(SapicAction::ProcessCall(name, args), _, body) = top else {
+        panic!("expected a ProcessCall marker, got {top:?}");
+    };
+    assert_eq!(name, "P");
+    assert_eq!(args.len(), 1);
+    assert_eq!(body.annotation().process_names, ["P".to_string()]);
+    let Process::Action(SapicAction::ChOut { chan: None, msg }, _, _) = body.as_ref() else {
+        panic!("expected the substituted `out(x)` body, got {body:?}");
+    };
+    assert_eq!(*msg, args[0]);
+}
+
+/// One process-bearing item as the comparison below reads it.
+#[derive(Debug, PartialEq)]
+enum ProcessProbe {
+    Process(crate::sapic::PlainProcess),
+    Def(
+        String,
+        Option<Vec<crate::sapic::SapicLVar>>,
+        crate::sapic::PlainProcess,
+    ),
+    Equiv(crate::sapic::PlainProcess, crate::sapic::PlainProcess),
+    DiffEquiv(crate::sapic::PlainProcess),
+}
+
+/// The process-bearing parsed items converted against the FINISHED signature,
+/// which is the signature every caller outside `elaborate` holds.
+fn parsed_process_probes(
+    thy: &p::Theory,
+    sig: &tamarin_term::maude_sig::MaudeSig,
+) -> Result<Vec<ProcessProbe>, String> {
+    let defs = crate::process_inline::collect_process_defs(&thy.items);
+    let conv = |pr: &p::Process| {
+        crate::process_inline::convert_process_with_defs(pr, &defs, sig).map_err(|e| e.message)
+    };
+    let mut out = Vec::new();
+    for item in &thy.items {
+        match item {
+            p::TheoryItem::TopLevelProcess(pr) => out.push(ProcessProbe::Process(conv(pr)?)),
+            p::TheoryItem::ProcessDef(d) => out.push(ProcessProbe::Def(
+                d.name.clone(),
+                d.vars
+                    .as_ref()
+                    .map(|vs| vs.iter().map(varspec_to_sapic).collect()),
+                conv(&d.body)?,
+            )),
+            p::TheoryItem::EquivLemma(p1, p2) => {
+                out.push(ProcessProbe::Equiv(conv(p1)?, conv(p2)?))
+            }
+            p::TheoryItem::DiffEquivLemma(pr) => out.push(ProcessProbe::DiffEquiv(conv(pr)?)),
+            _ => {}
+        }
+    }
+    Ok(out)
+}
+
+/// The same items off the elaborated theory, in item order.
+fn internal_process_probes(thy: &Theory) -> Vec<ProcessProbe> {
+    thy.items
+        .iter()
+        .filter_map(|i| match i {
+            TheoryItem::Translation(TranslationElement::Process(pr)) => {
+                Some(ProcessProbe::Process(pr.clone()))
+            }
+            TheoryItem::Translation(TranslationElement::ProcessDef(d)) => Some(ProcessProbe::Def(
+                d.name.clone(),
+                d.vars.clone(),
+                d.body.clone(),
+            )),
+            TheoryItem::Translation(TranslationElement::EquivLemma(p1, p2)) => {
+                Some(ProcessProbe::Equiv(p1.clone(), p2.clone()))
+            }
+            TheoryItem::Translation(TranslationElement::DiffEquivLemma(pr)) => {
+                Some(ProcessProbe::DiffEquiv(pr.clone()))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// `elaborate` converts each process against the signature the declarations
+/// BEFORE it have built, the way it converts each rule; every other caller
+/// converts against the finished signature.  Over the examples tree the two
+/// readings agree item for item, so the internal items carry exactly the
+/// processes the open print renders.
+///
+/// The floor keeps it a net: a regression that stops producing the items, or
+/// that makes elaboration reject process theories, fails here instead of
+/// passing on fewer files.
+#[test]
+fn corpus_process_items_match_the_converted_parsed_items() {
+    use crate::test_corpus::{beyond_budget, corpus_root, parse_file, rel, spthy_files};
+    use rayon::prelude::*;
+
+    let root = corpus_root();
+    if !root.is_dir() {
+        if std::env::var("TAM_ALLOW_NO_CORPUS").as_deref() == Ok("1") {
+            eprintln!("corpus: root {} missing, skipped", root.display());
+            return;
+        }
+        panic!(
+            "corpus root {} missing; set TAM_ALLOW_NO_CORPUS=1 to skip",
+            root.display()
+        );
+    }
+    let files = spthy_files(&root);
+    let pool = rayon::ThreadPoolBuilder::new()
+        .stack_size(64 * 1024 * 1024)
+        .build()
+        .expect("rayon pool");
+    let per_file: Vec<(usize, Vec<String>)> = pool.install(|| {
+        files
+            .par_iter()
+            .map(|path| {
+                let mut findings = Vec::new();
+                if beyond_budget(path, &root) {
+                    return (0, findings);
+                }
+                let Some(thy) = parse_file(path) else {
+                    return (0, findings);
+                };
+                let at = rel(path, &root).display().to_string();
+                let carries_process = thy.items.iter().any(|i| {
+                    matches!(
+                        i,
+                        p::TheoryItem::TopLevelProcess(_)
+                            | p::TheoryItem::ProcessDef(_)
+                            | p::TheoryItem::EquivLemma(_, _)
+                            | p::TheoryItem::DiffEquivLemma(_)
+                    )
+                });
+                let elab = match elaborate(&thy) {
+                    Ok(e) => e,
+                    Err(e) if carries_process => {
+                        findings.push(format!("{at}: elaboration rejects it: {}", e.message));
+                        return (0, findings);
+                    }
+                    Err(_) => return (0, findings),
+                };
+                let internal = internal_process_probes(&elab);
+                match parsed_process_probes(&thy, &elab.signature.maude_sig) {
+                    Ok(parsed) if parsed == internal => (parsed.len(), findings),
+                    Ok(parsed) => {
+                        for (i, (a, b)) in parsed.iter().zip(&internal).enumerate() {
+                            if a != b {
+                                findings.push(format!("{at}: item {i} differs"));
+                            }
+                        }
+                        if parsed.len() != internal.len() {
+                            findings.push(format!(
+                                "{at}: {} parsed items against {} internal",
+                                parsed.len(),
+                                internal.len()
+                            ));
+                        }
+                        (0, findings)
+                    }
+                    Err(e) => {
+                        findings.push(format!("{at}: the finished signature rejects it: {e}"));
+                        (0, findings)
+                    }
+                }
+            })
+            .collect()
+    });
+
+    let compared: usize = per_file.iter().map(|(n, _)| n).sum();
+    let with_items = per_file.iter().filter(|(n, _)| *n > 0).count();
+    let findings: Vec<&String> = per_file.iter().flat_map(|(_, f)| f).collect();
+    eprintln!(
+        "process items: files={} with_process_items={with_items} items={compared} findings={}",
+        files.len(),
+        findings.len()
+    );
+    // The tree holds 1037 files, of which 122 carry 316 process-bearing
+    // items.
+    assert!(
+        with_items >= 120,
+        "only {with_items} files contributed a process item"
+    );
+    assert!(compared >= 310, "only {compared} process items compared");
+    assert!(
+        findings.is_empty(),
+        "{} disagreements; first: {:#?}",
+        findings.len(),
+        findings.iter().take(5).collect::<Vec<_>>()
+    );
+}

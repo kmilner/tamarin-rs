@@ -17,28 +17,23 @@
 //!    re-appends one per entry of the final `funs` map — `foldrWithKey` +
 //!    append ⇒ the emitted order is DESCENDING key order.
 //!
-//! RS keeps the parser AST immutable and returns the typed processes as a
+//! RS leaves the theory's items in place and returns the typed processes as a
 //! [`TypedOverlay`] for `pretty_theory`'s open renderer, plus the recomputed
 //! `function:` items and the final environment (whose `events` map the export
 //! backends consume).
 
 use std::collections::BTreeSet;
 
-use tamarin_parser::ast as p;
 use tamarin_term::function_symbols::FunSym;
-use tamarin_term::maude_sig::MaudeSig;
 use tamarin_term::term::f_app;
 use tamarin_term::vterm::{var_term, Lit, VTerm};
 
-use tamarin_theory::elaborate::{varspec_to_sapic, ElabError};
+use tamarin_theory::elaborate::ElabError;
 use tamarin_theory::pretty_theory::TypedOverlay;
-use tamarin_theory::process_inline::{
-    collect_process_defs, convert_process_with_defs, ProcessDefMap,
-};
 use tamarin_theory::sapic::{
     PlainProcess, Process, ProcessParsedAnnotation, SapicAction, SapicLVar,
 };
-use tamarin_theory::theory::{SapicFunSym, Theory};
+use tamarin_theory::theory::{ProcessDef, SapicFunSym, Theory, TheoryItem, TranslationElement};
 
 use crate::typing::{
     collect_user_fun_typings, init_te_from_sig, type_and_rename_process_in, vars_proc,
@@ -61,34 +56,30 @@ pub struct TypeTheoryResult {
     pub env: TypingEnvironment,
 }
 
-/// `typeTheoryEnv` (Typing.hs:204-226) over the parsed + elaborated theory
-/// pair.  Runs on EVERY theory — a process-free (non-SAPIC) theory still gets
-/// its `function:` items recomputed from the signature-seeded environment.
-pub fn type_theory_env(
-    parsed: &p::Theory,
-    elaborated: &Theory,
-) -> Result<TypeTheoryResult, ElabError> {
-    let msig = &elaborated.signature.maude_sig;
-    let user_fun_typings = collect_user_fun_typings(parsed);
+/// `typeTheoryEnv` (Typing.hs:204-226) over the elaborated theory.  Runs on
+/// EVERY theory — a process-free (non-SAPIC) theory still gets its `function:`
+/// items recomputed from the signature-seeded environment.
+pub fn type_theory_env(thy: &Theory) -> Result<TypeTheoryResult, ElabError> {
+    let msig = &thy.signature.maude_sig;
+    let user_fun_typings = collect_user_fun_typings(thy);
     let mut env = init_te_from_sig(msig, &user_fun_typings).map_err(|e| ElabError {
         message: format!("SAPIC typing: {e}"),
     })?;
 
-    let defs = collect_process_defs(parsed);
-
     // Pass 1 — `mapMProcesses typeAndRenameProcess` (TheoryObject.hs:279-291):
     // one typed process per occurrence, in item order; `EquivLemma` yields two
-    // (p1 first).  Conversion inlines `P(args)` calls exactly as HS's parser
-    // did before the items were stored.
+    // (p1 first).
     let mut processes: Vec<PlainProcess> = Vec::new();
-    for item in &parsed.items {
+    for item in &thy.items {
         match item {
-            p::TheoryItem::TopLevelProcess(proc) | p::TheoryItem::DiffEquivLemma(proc) => {
-                processes.push(type_one(&mut env, proc, &defs, msig)?);
+            TheoryItem::Translation(
+                TranslationElement::Process(pr) | TranslationElement::DiffEquivLemma(pr),
+            ) => {
+                processes.push(type_one(&mut env, pr)?);
             }
-            p::TheoryItem::EquivLemma(p1, p2) => {
-                processes.push(type_one(&mut env, p1, &defs, msig)?);
-                processes.push(type_one(&mut env, p2, &defs, msig)?);
+            TheoryItem::Translation(TranslationElement::EquivLemma(p1, p2)) => {
+                processes.push(type_one(&mut env, p1)?);
+                processes.push(type_one(&mut env, p2)?);
             }
             _ => {}
         }
@@ -97,10 +88,8 @@ pub fn type_theory_env(
     // Pass 2 — `mapMProcessesDef typeAndRenameProcessDef`
     // (TheoryObject.hs:294-301, Typing.hs:217-225), same environment.
     let mut typed_defs: Vec<(Option<Vec<SapicLVar>>, PlainProcess)> = Vec::new();
-    for item in &parsed.items {
-        if let p::TheoryItem::ProcessDef(pd) = item {
-            typed_defs.push(type_process_def(&mut env, pd, &defs, msig)?);
-        }
+    for pd in thy.process_defs() {
+        typed_defs.push(type_process_def(&mut env, pd)?);
     }
 
     // `Map.foldrWithKey addFunctionTypingInfo'` (Typing.hs:210,226):
@@ -128,18 +117,9 @@ pub fn type_theory_env(
     })
 }
 
-/// Convert one parser-AST process (inlining `let`-def calls) and run
-/// `typeAndRenameProcess` on it against the shared environment.
-fn type_one(
-    env: &mut TypingEnvironment,
-    proc: &p::Process,
-    defs: &ProcessDefMap<'_>,
-    sig: &MaudeSig,
-) -> Result<PlainProcess, ElabError> {
-    let plain = convert_process_with_defs(proc, defs, sig).map_err(|e| ElabError {
-        message: format!("SAPIC translation: {}", e.message),
-    })?;
-    type_and_rename_process_in(env, &plain).map_err(|e| ElabError {
+/// Run `typeAndRenameProcess` on one process against the shared environment.
+fn type_one(env: &mut TypingEnvironment, proc: &PlainProcess) -> Result<PlainProcess, ElabError> {
+    type_and_rename_process_in(env, proc).map_err(|e| ElabError {
         message: format!("SAPIC typing: {e}"),
     })
 }
@@ -163,19 +143,12 @@ fn type_one(
 /// `Just`, so a parameterless def renders `let  P () =`.
 fn type_process_def(
     env: &mut TypingEnvironment,
-    pd: &p::ProcessDef,
-    defs: &ProcessDefMap<'_>,
-    sig: &MaudeSig,
+    pd: &ProcessDef,
 ) -> Result<(Option<Vec<SapicLVar>>, PlainProcess), ElabError> {
-    let pr = convert_process_with_defs(&pd.body, defs, sig).map_err(|e| ElabError {
-        message: format!("SAPIC translation: {}", e.message),
-    })?;
+    let pr = pd.body.clone();
     // The def's DECLARED formals (`_pVars`), which both the `pVars` seeding
     // below and HS's "should not be taken" fallback hand back unchanged.
-    let declared: Option<Vec<SapicLVar>> = pd
-        .vars
-        .as_ref()
-        .map(|vs| vs.iter().map(varspec_to_sapic).collect());
+    let declared: Option<Vec<SapicLVar>> = pd.vars.clone();
     let pvars: Vec<SapicLVar> = match &declared {
         Some(vs) => vs.clone(),
         None => {

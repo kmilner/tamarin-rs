@@ -29,7 +29,7 @@ use std::collections::BTreeSet;
 
 use tamarin_term::lterm::LVar;
 
-use tamarin_theory::formula::SyntacticLNFormula;
+use tamarin_theory::formula::{LNFormula, SyntacticLNFormula};
 use tamarin_theory::rule::ProtoRuleE;
 use tamarin_theory::sapic::{GoodAnnotation, PlainProcess, Process, ProcessPosition, SapicLVar};
 
@@ -571,14 +571,14 @@ pub fn translate(
 /// (sapic/src/Sapic.hs:45-101, see line 101): does
 /// any of the theory's lemmas fall in the fragment that requires the `in_event`
 /// restriction?  Each lemma is classified via `lemma_needs_in_ev_res`.
-pub fn needs_in_ev_res(lemmas: &[tamarin_parser::ast::Lemma]) -> bool {
-    lemmas.iter().any(lemma_needs_in_ev_res)
+pub fn needs_in_ev_res(thy: &tamarin_theory::theory::Theory) -> bool {
+    thy.lemmas().any(lemma_needs_in_ev_res)
 }
 
 /// `lemmaNeedsInEvRes` (sapic/src/Sapic.hs:175-181): classify a lemma by its trace
 /// quantifier and the (pos, neg) polarity of its formula.
-fn lemma_needs_in_ev_res(lem: &tamarin_parser::ast::Lemma) -> bool {
-    use tamarin_parser::ast::TraceQuantifier as TQ;
+fn lemma_needs_in_ev_res(lem: &tamarin_theory::theory::Lemma) -> bool {
+    use tamarin_theory::theory::TraceQuantifier as TQ;
     let (pos, neg) = is_pos_neg_formula(&lem.formula);
     match (&lem.trace_quantifier, pos, neg) {
         (TQ::AllTraces, _, true) => false,      // L- for all-traces
@@ -593,8 +593,8 @@ fn lemma_needs_in_ev_res(lem: &tamarin_parser::ast::Lemma) -> bool {
 /// positive (L+) and/or negative (L-) fragment.  Returns `(isPos, isNeg)`.  The
 /// only special case is an `Action` atom on the `K` fact, which is `(True,
 /// False)` (a `K(..)@t` action is positive but not negative).
-fn is_pos_neg_formula(f: &tamarin_parser::ast::Formula) -> (bool, bool) {
-    use tamarin_parser::ast::Formula::*;
+fn is_pos_neg_formula(f: &LNFormula) -> (bool, bool) {
+    use tamarin_theory::formula::{Connective, ProtoFormula};
     fn and2(a: (bool, bool), b: (bool, bool)) -> (bool, bool) {
         (a.0 && b.0, a.1 && b.1)
     }
@@ -602,14 +602,18 @@ fn is_pos_neg_formula(f: &tamarin_parser::ast::Formula) -> (bool, bool) {
         (a.1, a.0)
     }
     match f {
-        True | False => (true, true),
-        Atom(a) => is_pos_neg_atom(a),
-        Not(p) => swap(is_pos_neg_formula(p)),
-        And(p, q) | Or(p, q) => and2(is_pos_neg_formula(p), is_pos_neg_formula(q)),
+        ProtoFormula::Tf(_) => (true, true),
+        ProtoFormula::Atom(a) => is_pos_neg_atom(a),
+        ProtoFormula::Not(p) => swap(is_pos_neg_formula(p)),
+        ProtoFormula::Conn(Connective::And | Connective::Or, p, q) => {
+            and2(is_pos_neg_formula(p), is_pos_neg_formula(q))
+        }
         // `Conn Imp p q -> isPosNegFormula $ Not p .||. q`, i.e. the `Or` of the
         // `Not` case — evaluated directly rather than by rebuilding the
         // desugared formula.
-        Implies(p, q) => and2(swap(is_pos_neg_formula(p)), is_pos_neg_formula(q)),
+        ProtoFormula::Conn(Connective::Imp, p, q) => {
+            and2(swap(is_pos_neg_formula(p)), is_pos_neg_formula(q))
+        }
         // `Conn Iff p q -> isPosNegFormula $ p .==>. q .&&. q .==>. p` — NOT
         // the `And` of the two `Imp` cases: `.&&.` is infixl 3 and `.==>.` is
         // infixr 1 (Theory/Model/Formula.hs:233-235), so the expression parses
@@ -617,22 +621,27 @@ fn is_pos_neg_formula(f: &tamarin_parser::ast::Formula) -> (bool, bool) {
         // `and2(swap(fp), and2(swap(fq), fp))`.  The two differ whenever `fq`
         // is asymmetric (a `K(..)@t` atom in `q`): HS keeps the second
         // component `p1 && q1 && p2`, the symmetric reading zeroes it.
-        Iff(p, q) => {
+        ProtoFormula::Conn(Connective::Iff, p, q) => {
             let (fp, fq) = (is_pos_neg_formula(p), is_pos_neg_formula(q));
             and2(swap(fp), and2(swap(fq), fp))
         }
-        Forall(_, p) | Exists(_, p) => is_pos_neg_formula(p),
+        ProtoFormula::Qua(_, _, p) => is_pos_neg_formula(p),
     }
 }
 
 /// `isPosNegFormula (Ato (Action _ f))` dispatches on `isActualKFact (factTag
-/// f)` (sapic/src/Sapic.hs:156-172, see line 159, 167-169): a `K`-fact action
-/// is `(True, False)`; every
-/// other atom is `(True, True)`.
-fn is_pos_neg_atom(a: &tamarin_parser::ast::Atom) -> (bool, bool) {
-    use tamarin_parser::ast::Atom;
+/// f)` (sapic/src/Sapic.hs:156-172, see line 159, 167-169): an action on a
+/// protocol fact named `K` is `(True, False)`; every other atom is
+/// `(True, True)`.
+fn is_pos_neg_atom(
+    a: &tamarin_theory::atom::Atom<tamarin_theory::formula::BLNTerm>,
+) -> (bool, bool) {
+    use tamarin_theory::atom::ProtoAtom;
+    use tamarin_theory::fact::FactTag;
     match a {
-        Atom::Action(fact, _) if fact.name == "K" => (true, false),
+        ProtoAtom::Action(_, fact) if matches!(fact.tag, FactTag::Proto(_, "K", _)) => {
+            (true, false)
+        }
         _ => (true, true),
     }
 }
@@ -720,20 +729,25 @@ mod tests {
         assert_eq!(tr.restrictions[0].name, "single_session");
     }
 
-    fn action_atom(name: &str) -> p::Formula {
-        p::Formula::Atom(p::Atom::Action(
-            p::Fact {
-                persistent: false,
-                name: name.into(),
-                args: vec![],
-                annotations: vec![],
-            },
-            p::Term::Var(p::VarSpec {
-                name: "i".into(),
-                idx: 0,
-                sort: LSort::Node,
-                typ: None,
-            }),
+    /// `name()@#i` as the lemma formula holds it: a `ProtoFact` action atom
+    /// over a free node variable.
+    fn action_atom(name: &str) -> LNFormula {
+        use tamarin_term::lterm::BVar;
+        use tamarin_term::vterm::var_term;
+        use tamarin_theory::atom::ProtoAtom;
+        use tamarin_theory::fact::{Fact, FactTag, Multiplicity};
+        use tamarin_theory::formula::ProtoFormula;
+        let i = var_term(BVar::Free(LVar::new("i", LSort::Node, 0)));
+        ProtoFormula::Atom(ProtoAtom::Action(
+            i,
+            Fact::new(
+                FactTag::Proto(
+                    Multiplicity::Linear,
+                    tamarin_term::intern::intern_str(name),
+                    0,
+                ),
+                vec![],
+            ),
         ))
     }
 
@@ -746,15 +760,16 @@ mod tests {
     /// `in_event` restriction.
     #[test]
     fn iff_polarity_follows_hs_fixity_parse() {
-        let iff = p::Formula::Iff(Box::new(action_atom("A")), Box::new(action_atom("K")));
+        let iff = action_atom("A").iff(action_atom("K"));
         assert_eq!(is_pos_neg_formula(&iff), (false, true));
 
-        let lem = p::Lemma {
+        let lem = tamarin_theory::theory::Lemma {
             name: "weird".into(),
             modulo: None,
             attributes: vec![],
-            trace_quantifier: p::TraceQuantifier::AllTraces,
+            trace_quantifier: tamarin_theory::theory::TraceQuantifier::AllTraces,
             formula: iff,
+            original_formula: None,
             proof: None,
             plaintext: String::new(),
         };

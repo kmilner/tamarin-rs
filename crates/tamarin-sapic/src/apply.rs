@@ -24,8 +24,6 @@ use tamarin_theory::elaborate::{proto_rule_to_parsed, ElabError};
 use tamarin_theory::formula::LNFormula;
 use tamarin_theory::predicate::{expand_formula, Predicate};
 use tamarin_theory::pretty_formula::lnformula_to_parser;
-use tamarin_theory::process_convert::ConvertError;
-use tamarin_theory::process_inline::{collect_process_defs, convert_process_with_defs};
 use tamarin_theory::restriction::Restriction;
 use tamarin_theory::rule_restriction::rule_restrictions;
 use tamarin_theory::sapic::PlainProcess;
@@ -35,38 +33,21 @@ use crate::translate::{needs_in_ev_res, translate, TranslateOptions};
 use crate::typing::{collect_user_fun_typings, type_and_rename_process};
 
 /// HS `Sapic.checkWellformedness` (Warnings.hs:37-38) over the UNTRANSLATED
-/// theory: locate the single top-level process, inline its process-definition
-/// calls, and warn-check the resulting `PlainProcess`.  The check runs AFTER
-/// inlining (HS inlines at parse time) but BEFORE `typeTheory` /
-/// `renameUnique`, so two binders sharing a name (e.g. `new x; new x`) are
-/// still alpha-identical and detected as captured.
+/// theory: warn-check the single top-level process.  The process arrives with
+/// its `P(args)` calls already inlined (HS inlines at parse time) but BEFORE
+/// `typeTheory` / `renameUnique`, so two binders sharing a name (e.g.
+/// `new x; new x`) are still alpha-identical and detected as captured.
 ///
 /// `translateTheory` computes this report on the open theory before any
 /// translation step (TheoryLoader.hs:487-499, see line 497), so both the
 /// translating path ([`apply_sapic`]) and the `-m spthy` / `-m spthytyped`
 /// paths that skip translation report exactly these warnings.
 ///
-/// Returns the report together with the inlined process the caller goes on to
-/// type and translate, or `None` when the theory carries no top-level process.
-/// The inlining error is handed back unwrapped: callers word it differently.
-pub fn sapic_pre_report(
-    parsed: &p::Theory,
-    sig: &MaudeSig,
-) -> Result<Option<(Vec<WfError>, PlainProcess)>, ConvertError> {
-    let top = parsed.items.iter().find_map(|i| match i {
-        p::TheoryItem::TopLevelProcess(proc) => Some(proc.clone()),
-        _ => None,
-    });
-    let Some(top) = top else {
-        return Ok(None);
-    };
-    // parser AST → theory AST, inlining process-definition calls
-    // (`let P = ..` / `P(args)`) with parameter substitution.  HS inlines at
-    // parse time (`Theory.Text.Parser.Sapic.actionprocess`); we do it here,
-    // resolving every `Call` against the theory's `ProcessDef`s.
-    let defs = collect_process_defs(parsed);
-    let plain = convert_process_with_defs(&top, &defs, sig)?;
-    Ok(Some((crate::warnings::check_wellformedness(&plain), plain)))
+/// Returns the report together with the process the caller goes on to type and
+/// translate, or `None` when the theory carries no top-level process.
+pub fn sapic_pre_report(thy: &Theory) -> Option<(Vec<WfError>, PlainProcess)> {
+    let top = thy.processes().next()?.clone();
+    Some((crate::warnings::check_wellformedness(&top), top))
 }
 
 /// Apply the SAPIC `process:` translation to a theory that contains exactly one
@@ -95,11 +76,7 @@ pub fn apply_sapic(
     // report is returned to the caller and translation proceeds regardless
     // (these are warnings, not hard errors).  `is_sapic` set with no
     // `TopLevelProcess` is a defensive no-op.
-    let Some((wf_report, plain)) = sapic_pre_report(parsed, &elaborated.signature.maude_sig)
-        .map_err(|e| ElabError {
-            message: format!("SAPIC translation: {}", e.message),
-        })?
-    else {
+    let Some((wf_report, plain)) = sapic_pre_report(elaborated) else {
         return Ok(Vec::new());
     };
 
@@ -108,8 +85,8 @@ pub fn apply_sapic(
     // declarations (`theoryFunctionTypingInfos`, e.g. `f(bitstring):bitstring`)
     // seed the function-typing environment so `typeWith` can back-propagate a
     // declared argument/return type onto the bound variables.
+    let user_fun_typings = collect_user_fun_typings(elaborated);
     let maude_sig = &elaborated.signature.maude_sig;
-    let user_fun_typings = collect_user_fun_typings(parsed);
     let typed =
         type_and_rename_process(maude_sig, &user_fun_typings, &plain).map_err(|e| ElabError {
             message: format!("SAPIC typing: {e}"),
@@ -119,15 +96,7 @@ pub fn apply_sapic(
     // lemmaNeedsInEvRes (theoryLemmas th)` (sapic/src/Sapic.hs:45-101, see line 101): gates the
     // `EventEmpty`/`ChannelIn` actions + the `in_event` restriction.  HS
     // `theoryLemmas` = the (non-diff, non-accountability) `Lemma` items.
-    let lemmas: Vec<p::Lemma> = parsed
-        .items
-        .iter()
-        .filter_map(|i| match i {
-            p::TheoryItem::Lemma(l) => Some(l.clone()),
-            _ => None,
-        })
-        .collect();
-    let needs_in_ev = needs_in_ev_res(&lemmas);
+    let needs_in_ev = needs_in_ev_res(elaborated);
     // The signature's CtxtStRules drive `translateLetDestr` (let-destructor /
     // let-elimination pass).
     let st_rules = &maude_sig.st_rules;
@@ -320,7 +289,7 @@ mod tests {
         // The same translation `apply_sapic` runs, so the rule it injects can
         // be compared against the values the translation produced.
         let maude_sig = elaborated.signature.maude_sig.clone();
-        let (_, plain) = sapic_pre_report(&parsed, &maude_sig).unwrap().unwrap();
+        let (_, plain) = sapic_pre_report(&elaborated).unwrap();
         let typed = type_and_rename_process(&maude_sig, &[], &plain).unwrap();
         let translation = translate(
             &typed,

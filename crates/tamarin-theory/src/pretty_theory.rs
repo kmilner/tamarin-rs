@@ -782,7 +782,10 @@ fn render_open_item(
                 // on a `SapicLVar` is the LVar display (sort sigil + name,
                 // `.idx` only when non-zero — always 0 at parse) plus an
                 // optional `:type` suffix (Theory/Sapic/Term.hs:108-110).
-                let shown: Vec<String> = vs.iter().map(show_open_varspec).collect();
+                let shown: Vec<String> = vs
+                    .iter()
+                    .map(|v| crate::elaborate::varspec_to_sapic(v).to_string())
+                    .collect();
                 d = d.beside_sp(Doc::text(format!("({})", shown.join(","))));
             }
             d = d
@@ -862,23 +865,6 @@ fn render_open_item(
             )]
         }
     })
-}
-
-/// `show` on a parse-time process-def formal (HS `Show SapicLVar`,
-/// Theory/Sapic/Term.hs:108-110): the LVar display (sigil + name, `.idx`
-/// when non-zero) plus `:type` when annotated.
-fn show_open_varspec(v: &p::VarSpec) -> String {
-    let mut s = tamarin_term::lterm::sort_prefix(v.sort).to_string();
-    s.push_str(&v.name);
-    if v.idx != 0 {
-        s.push('.');
-        s.push_str(&v.idx.to_string());
-    }
-    if let Some(t) = &v.typ {
-        s.push(':');
-        s.push_str(t);
-    }
-    s
 }
 
 /// HS `prettyOpenProtoRule` (OpenTheory.hs:815-824): the E-rule alone for the
