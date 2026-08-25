@@ -108,7 +108,7 @@ fn pretty_last(sys: &System) -> Doc {
 /// order than HS whenever two lemmas were inserted out of Ord order
 /// (e.g. the two safety restrictions of `design-choices.spthy`).  Mirror
 /// `S.toList` here by sorting a view of the Vec with the HS-faithful
-/// `cmp_guarded` comparator (guarded.rs — the derived `Ord Guarded`) and
+/// derived `Ord Guarded` (Guarded.hs:129) and
 /// collapsing `Ord`-equal duplicates, exactly as the equivalent
 /// sort+dedup in `rename_precise.rs` does for the live field.
 ///
@@ -127,8 +127,8 @@ fn pretty_formula_set(items: &[std::sync::Arc<Guarded>]) -> Doc {
         return Doc::Empty;
     }
     let mut sorted: Vec<&Guarded> = items.iter().map(|f| f.as_ref()).collect();
-    sorted.sort_by(|a, b| crate::guarded::cmp_guarded(a, b));
-    sorted.dedup_by(|a, b| crate::guarded::cmp_guarded(a, b) == std::cmp::Ordering::Equal);
+    sorted.sort();
+    sorted.dedup();
     vsep_docs(sorted.into_iter().map(guarded_doc).collect())
 }
 
@@ -161,7 +161,7 @@ fn combine(header: &str, d: Doc) -> Doc {
 // `Vec`s in insertion order (`.push()` in `add`/`conjoin`), whereas HS
 // emits the `posSt`/`solvedSt` Sets via `S.toList` in `Ord` order — so
 // their numbered ordering may differ from Haskell. Left as-is: sorting
-// needs a faithful `Ord LNTerm` (FunSym-by-name, like `guarded::cmp_term`
+// needs a faithful `Ord LNTerm` (FunSym-by-name, like `Ord (Term a)`
 // but for raw LNTerms); the derived `VTerm` Ord could flip a
 // currently-matching pane, so it is not safe to apply blindly. Tracked as
 // a residual gap.

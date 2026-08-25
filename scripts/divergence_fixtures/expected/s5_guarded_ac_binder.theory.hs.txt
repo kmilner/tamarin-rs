@@ -1,0 +1,42 @@
+theory S5GuardedAcBinder
+
+begin
+
+// Function signature and definition of the equational theory E
+
+builtins: multiset
+functions: fst/1, pair/2, snd/1
+equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
+
+rule (modulo E) A:
+   [ In( x ) ] --[ B( x ), C( x ) ]-> [ ]
+
+  /* has exactly the trivial AC variant */
+
+lemma ac_binder:
+  exists-trace "∃ a b #j. B( (a++b) ) @ #j"
+/*
+guarded formula characterizing all satisfying traces:
+"∃ a b #j. (B( (a++b) ) @ #j)"
+*/
+by sorry
+
+lemma ac_binder_written_swapped:
+  exists-trace "∃ a b #j. B( (a++b) ) @ #j"
+/*
+guarded formula characterizing all satisfying traces:
+"∃ a b #j. (B( (a++b) ) @ #j)"
+*/
+by sorry
+
+lemma ac_binder_after_a_sibling_prefix:
+  exists-trace "(∃ a #i. C( a ) @ #i) ∧ (∃ a b #j. B( (a++b) ) @ #j)"
+/*
+guarded formula characterizing all satisfying traces:
+"(∃ a #i. (C( a ) @ #i)) ∧ (∃ a b #j. (B( (a++b) ) @ #j))"
+*/
+by sorry
+
+
+
+end

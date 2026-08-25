@@ -187,11 +187,13 @@ fn guarded_mentions_node(v: &NodeId, g: &crate::guarded::Guarded) -> bool {
     }
 }
 
-fn atom_mentions_node(v: &NodeId, at: &crate::guarded::GAtom) -> bool {
+fn atom_mentions_node(v: &NodeId, at: &crate::atom::Atom<crate::formula::BLNTerm>) -> bool {
     use crate::atom::ProtoAtom;
-    use crate::guarded_types::{BVar, GTerm};
-    let mentions_term = |t: &GTerm| -> bool {
-        if let GTerm::Var(BVar::Free(spec)) = t {
+    use tamarin_term::lterm::BVar;
+    use tamarin_term::term::Term;
+    use tamarin_term::vterm::Lit;
+    let mentions_term = |t: &crate::formula::BLNTerm| -> bool {
+        if let Term::Lit(Lit::Var(BVar::Free(spec))) = t {
             // HS `notOccursIn proj = not $ getAny $ foldFrees (Any . (v ==))
             // (proj se)` (Simplification.hs:95-96) folds FULL `LVar` equality
             // (name AND idx AND sort) over the formula's free vars. Comparing
@@ -200,7 +202,7 @@ fn atom_mentions_node(v: &NodeId, at: &crate::guarded::GAtom) -> bool {
             // rejecting `#vr.4` from compression and keeping a transfer node
             // (`d_0_snd`) HS hides. Match name AND idx (both are node-sort
             // here: `v` is a NodeId and only node vars can equal it).
-            return *spec.name == *v.name && spec.idx == v.idx;
+            return spec.name == v.name && spec.idx == v.idx;
         }
         false
     };

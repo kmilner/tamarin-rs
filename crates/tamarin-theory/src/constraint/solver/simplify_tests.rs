@@ -173,39 +173,26 @@ fn simplify_decomposes_top_level_conj() {
     // Conj([Atom1, Atom2]) — Atom1/Atom2 are reducible-formula leaves
     // when wrapped in Conj of size 2 since the Conj itself is
     // reducible (matches the `Conj _` arm of `reducible_formula`).
-    use tamarin_parser::ast::{Atom, Term, VarSpec};
-    use tamarin_term::lterm::LSort;
+    use crate::atom::ProtoAtom;
+    use crate::fact::{Fact, FactTag, Multiplicity};
+    use crate::formula::BLNTerm;
+    use tamarin_term::lterm::{BVar, LSort, LVar};
+    use tamarin_term::vterm::var_term;
     // Use two distinct Last atoms with the same name but DIFFERENT
     // idx values so the test exercises Conj decomposition without
     // tripping Haskell's `insertLast` unification (which collapses
     // two distinct Last atoms with different node-ids into a single
     // node-id-equation, dropping one of the original atoms).
-    let mkvar_idx = |n: &str, idx: u64| {
-        Term::Var(VarSpec {
-            name: n.to_string(),
-            idx,
-            sort: LSort::Node,
-            typ: None,
-        })
+    let mkvar_idx =
+        |n: &str, idx: u64| -> BLNTerm { var_term(BVar::Free(LVar::new(n, LSort::Node, idx))) };
+    let action = |name: &'static str, t: BLNTerm| {
+        crate::guarded::Guarded::Atom(ProtoAtom::Action(
+            t,
+            Fact::fresh(FactTag::Proto(Multiplicity::Linear, name, 0), Vec::new()),
+        ))
     };
-    let a1 = crate::guarded::Guarded::Atom(crate::guarded::atom_to_gatom_free(&Atom::Action(
-        tamarin_parser::ast::Fact {
-            persistent: false,
-            name: "P".to_string(),
-            args: vec![],
-            annotations: Vec::new(),
-        },
-        mkvar_idx("i", 0),
-    )));
-    let a2 = crate::guarded::Guarded::Atom(crate::guarded::atom_to_gatom_free(&Atom::Action(
-        tamarin_parser::ast::Fact {
-            persistent: false,
-            name: "Q".to_string(),
-            args: vec![],
-            annotations: Vec::new(),
-        },
-        mkvar_idx("j", 0),
-    )));
+    let a1 = action("P", mkvar_idx("i", 0));
+    let a2 = action("Q", mkvar_idx("j", 0));
     sys.invalidate_max_var_idx_cache();
     sys.formulas_mut()
         .push(std::sync::Arc::new(crate::guarded::Guarded::Conj(
@@ -244,20 +231,13 @@ fn simplify_disj_decomposes_into_goal() {
         None => return,
     };
     let mut sys = System::empty();
-    use tamarin_parser::ast::{Atom, Term, VarSpec};
-    use tamarin_term::lterm::LSort;
-    let mkvar = |n: &str| {
-        Term::Var(VarSpec {
-            name: n.to_string(),
-            idx: 0,
-            sort: LSort::Node,
-            typ: None,
-        })
-    };
-    let a1 =
-        crate::guarded::Guarded::Atom(crate::guarded::atom_to_gatom_free(&Atom::Last(mkvar("i"))));
-    let a2 =
-        crate::guarded::Guarded::Atom(crate::guarded::atom_to_gatom_free(&Atom::Last(mkvar("j"))));
+    use crate::atom::ProtoAtom;
+    use crate::formula::BLNTerm;
+    use tamarin_term::lterm::{BVar, LSort, LVar};
+    use tamarin_term::vterm::var_term;
+    let mkvar = |n: &str| -> BLNTerm { var_term(BVar::Free(LVar::new(n, LSort::Node, 0))) };
+    let a1 = crate::guarded::Guarded::Atom(ProtoAtom::Last(mkvar("i")));
+    let a2 = crate::guarded::Guarded::Atom(ProtoAtom::Last(mkvar("j")));
     // Wrap a Disj inside a Conj so the outer formula is reducible
     // (Conj is) — reduce_formulas will trip on it and decompose
     // the Disj inside.
@@ -391,20 +371,12 @@ fn simplify_marks_subterm_self_contradiction() {
 // match_atom_via_maude correctness
 // =========================================================================
 
-fn mk_var_p(name: &str, idx: u64, sort: tamarin_term::lterm::LSort) -> tamarin_parser::ast::Term {
-    tamarin_parser::ast::Term::Var(tamarin_parser::ast::VarSpec {
-        name: name.into(),
-        idx,
-        sort,
-        typ: None,
-    })
-}
 /// The `(name, idx)` projection `try_match_all_guards` hoists and passes
 /// to `match_atom_via_maude` in production.
 fn mk_pattern_vars(
-    vars: &[tamarin_parser::ast::VarSpec],
+    vars: &[tamarin_term::lterm::LVar],
 ) -> std::collections::BTreeSet<(String, u64)> {
-    vars.iter().map(|v| (v.name.clone(), v.idx)).collect()
+    vars.iter().map(|v| (v.name.to_string(), v.idx)).collect()
 }
 fn mk_var_l(name: &str, idx: u64, sort: tamarin_term::lterm::LSort) -> tamarin_term::lterm::LNTerm {
     tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(
@@ -419,7 +391,7 @@ fn subst_pairs(s: &crate::guarded::VarSubst) -> Vec<(String, u64, String)> {
     let mut out: Vec<(String, u64, String)> = s
         .iter()
         .map(|(k, v)| match v {
-            tamarin_parser::ast::Term::Var(v) => {
+            tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(v)) => {
                 (k.0.to_string(), k.1, format!("{}.{}", v.name, v.idx))
             }
             other => (k.0.to_string(), k.1, format!("{other:?}")),
@@ -437,26 +409,15 @@ fn match_atom_via_maude_simple_var_to_var() {
     };
     // Pattern: All k #i. Setup(k)@i — guard: Action(Setup(k), #i).
     let vars = vec![
-        tamarin_parser::ast::VarSpec {
-            name: "k".into(),
-            idx: 0,
-            sort: tamarin_term::lterm::LSort::Msg,
-            typ: None,
-        },
-        tamarin_parser::ast::VarSpec {
-            name: "i".into(),
-            idx: 0,
-            sort: tamarin_term::lterm::LSort::Node,
-            typ: None,
-        },
+        tamarin_term::lterm::LVar::new("k", tamarin_term::lterm::LSort::Msg, 0),
+        tamarin_term::lterm::LVar::new("i", tamarin_term::lterm::LSort::Node, 0),
     ];
-    let g_fact = tamarin_parser::ast::Fact {
-        persistent: false,
-        annotations: Vec::new(),
-        name: "Setup".into(),
-        args: vec![mk_var_p("k", 0, tamarin_term::lterm::LSort::Msg)],
-    };
-    let g_time = mk_var_p("i", 0, tamarin_term::lterm::LSort::Node);
+    let g_fact = crate::fact::proto_fact(
+        crate::fact::Multiplicity::Linear,
+        "Setup",
+        vec![mk_var_l("k", 0, tamarin_term::lterm::LSort::Msg)],
+    );
+    let g_time = mk_var_l("i", 0, tamarin_term::lterm::LSort::Node);
     let i_node = tamarin_term::lterm::LVar::new("n", tamarin_term::lterm::LSort::Node, 7);
     let sys_arg = mk_var_l("alpha", 3, tamarin_term::lterm::LSort::Msg);
     let substs = match_atom_via_maude(
@@ -492,37 +453,10 @@ fn match_atom_via_maude_pattern_with_pair_against_pair() {
     };
     // Pattern: All a b #i. Action(<a, b>) @ i.
     let vars = vec![
-        tamarin_parser::ast::VarSpec {
-            name: "a".into(),
-            idx: 0,
-            sort: tamarin_term::lterm::LSort::Msg,
-            typ: None,
-        },
-        tamarin_parser::ast::VarSpec {
-            name: "b".into(),
-            idx: 0,
-            sort: tamarin_term::lterm::LSort::Msg,
-            typ: None,
-        },
-        tamarin_parser::ast::VarSpec {
-            name: "i".into(),
-            idx: 0,
-            sort: tamarin_term::lterm::LSort::Node,
-            typ: None,
-        },
+        tamarin_term::lterm::LVar::new("a", tamarin_term::lterm::LSort::Msg, 0),
+        tamarin_term::lterm::LVar::new("b", tamarin_term::lterm::LSort::Msg, 0),
+        tamarin_term::lterm::LVar::new("i", tamarin_term::lterm::LSort::Node, 0),
     ];
-    let g_fact = tamarin_parser::ast::Fact {
-        persistent: false,
-        annotations: Vec::new(),
-        name: "Action".into(),
-        args: vec![tamarin_parser::ast::Term::Pair(vec![
-            mk_var_p("a", 0, tamarin_term::lterm::LSort::Msg),
-            mk_var_p("b", 0, tamarin_term::lterm::LSort::Msg),
-        ])],
-    };
-    let g_time = mk_var_p("i", 0, tamarin_term::lterm::LSort::Node);
-    let i_node = tamarin_term::lterm::LVar::new("n", tamarin_term::lterm::LSort::Node, 1);
-    // System has Action(<x, y>) where x, y are concrete LNTerm vars.
     use tamarin_term::function_symbols::{Constructability, NoEqSym, Privacy};
     use tamarin_term::term::f_app_no_eq;
     let pair_sym = NoEqSym::new(
@@ -531,6 +465,20 @@ fn match_atom_via_maude_pattern_with_pair_against_pair() {
         Privacy::Public,
         Constructability::Constructor,
     );
+    let g_fact = crate::fact::proto_fact(
+        crate::fact::Multiplicity::Linear,
+        "Action",
+        vec![f_app_no_eq(
+            pair_sym,
+            vec![
+                mk_var_l("a", 0, tamarin_term::lterm::LSort::Msg),
+                mk_var_l("b", 0, tamarin_term::lterm::LSort::Msg),
+            ],
+        )],
+    );
+    let g_time = mk_var_l("i", 0, tamarin_term::lterm::LSort::Node);
+    let i_node = tamarin_term::lterm::LVar::new("n", tamarin_term::lterm::LSort::Node, 1);
+    // System has Action(<x, y>) where x, y are concrete LNTerm vars.
     let sys_pair = f_app_no_eq(
         pair_sym,
         vec![
@@ -577,26 +525,15 @@ fn match_atom_via_maude_zero_subject_args_binds_only_the_time() {
     };
     // Pattern wants 1 arg; system has 0.
     let vars = vec![
-        tamarin_parser::ast::VarSpec {
-            name: "k".into(),
-            idx: 0,
-            sort: tamarin_term::lterm::LSort::Msg,
-            typ: None,
-        },
-        tamarin_parser::ast::VarSpec {
-            name: "i".into(),
-            idx: 0,
-            sort: tamarin_term::lterm::LSort::Node,
-            typ: None,
-        },
+        tamarin_term::lterm::LVar::new("k", tamarin_term::lterm::LSort::Msg, 0),
+        tamarin_term::lterm::LVar::new("i", tamarin_term::lterm::LSort::Node, 0),
     ];
-    let g_fact = tamarin_parser::ast::Fact {
-        persistent: false,
-        annotations: Vec::new(),
-        name: "F".into(),
-        args: vec![mk_var_p("k", 0, tamarin_term::lterm::LSort::Msg)],
-    };
-    let g_time = mk_var_p("i", 0, tamarin_term::lterm::LSort::Node);
+    let g_fact = crate::fact::proto_fact(
+        crate::fact::Multiplicity::Linear,
+        "F",
+        vec![mk_var_l("k", 0, tamarin_term::lterm::LSort::Msg)],
+    );
+    let g_time = mk_var_l("i", 0, tamarin_term::lterm::LSort::Node);
     let i_node = tamarin_term::lterm::LVar::new("n", tamarin_term::lterm::LSort::Node, 0);
     let substs = match_atom_via_maude(
         &h,
@@ -610,8 +547,8 @@ fn match_atom_via_maude_zero_subject_args_binds_only_the_time() {
     assert_eq!(substs.len(), 1, "empty equation list ⇒ one trivial matcher");
     let subst = &substs[0];
     match subst.get(&("i", 0u64)) {
-        Some(tamarin_parser::ast::Term::Var(v)) => {
-            assert_eq!((v.name.as_str(), v.idx), ("n", 0));
+        Some(tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(v))) => {
+            assert_eq!((v.name, v.idx), ("n", 0));
         }
         other => panic!("expected i → Var(n, 0), got {other:?}"),
     }
@@ -628,14 +565,12 @@ fn match_atom_via_maude_rejects_non_var_time() {
         None => return,
     };
     // Time is a literal — pattern matcher should reject.
-    let vars: Vec<tamarin_parser::ast::VarSpec> = Vec::new();
-    let g_fact = tamarin_parser::ast::Fact {
-        persistent: false,
-        annotations: Vec::new(),
-        name: "F".into(),
-        args: vec![],
-    };
-    let g_time = tamarin_parser::ast::Term::PubLit("notavar".into());
+    let vars: Vec<tamarin_term::lterm::LVar> = Vec::new();
+    let g_fact = crate::fact::proto_fact(crate::fact::Multiplicity::Linear, "F", vec![]);
+    let g_time = tamarin_term::vterm::const_term(tamarin_term::lterm::Name::new(
+        tamarin_term::lterm::NameTag::Pub,
+        "notavar",
+    ));
     let i_node = tamarin_term::lterm::LVar::new("n", tamarin_term::lterm::LSort::Node, 0);
     let substs = match_atom_via_maude(
         &h,
@@ -958,15 +893,12 @@ fn ku_action_uniqueness_unchanged_when_terms_differ() {
 /// Builds `x = 'z'` as one `Guarded`.  The sort of `x` is a parameter.
 fn eq_pub_lit_with_sort(sort: tamarin_term::lterm::LSort) -> crate::guarded::Guarded {
     use crate::atom::ProtoAtom;
-    use crate::guarded::{BVar, GTerm, Guarded};
+    use crate::guarded::Guarded;
+    use tamarin_term::lterm::{BVar, LVar, Name, NameTag};
+    use tamarin_term::vterm::{const_term, var_term};
     Guarded::Atom(ProtoAtom::EqE(
-        GTerm::Var(BVar::Free(tamarin_parser::ast::VarSpec {
-            name: "x".to_string(),
-            idx: 0,
-            sort,
-            typ: None,
-        })),
-        GTerm::PubLit("z".to_string()),
+        var_term(BVar::Free(LVar::new("x", sort, 0))),
+        const_term(Name::new(NameTag::Pub, "z")),
     ))
 }
 

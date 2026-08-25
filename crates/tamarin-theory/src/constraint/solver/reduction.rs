@@ -26,8 +26,9 @@
 use crate::constraint::constraints::{Disj, Edge, Goal, LessAtom};
 use crate::constraint::solver::context::ProofContext;
 use crate::constraint::system::System;
-use crate::guarded::Guarded;
+use crate::guarded::{bterm_to_lterm, Guarded};
 use crate::rule::RuleACInst;
+use tamarin_term::lterm::blterm_node_id;
 
 /// The complete set of per-pass change signals raised by
 /// [`Reduction::subst_system_once`].  Built exactly ONCE, at the pass's
@@ -1400,49 +1401,33 @@ impl<'ctx> Reduction<'ctx> {
                     if parser_subst.is_empty() {
                         Goal::Disj(d)
                     } else {
-                        let new_alts: Vec<_> =
-                            d.0.into_iter()
-                                .map(|alt| {
-                                    // COW mirror of the store rewrite's
-                                    // `apply_to_fixpoint` (below): `subst_guarded_cow
-                                    // == None` ⇔ the fixpoint loop broke immediately
-                                    // (`nxt == cur`), so reuse the owned `alt` with
-                                    // zero clones when both the subst and the trailing
-                                    // AC-canon are no-ops.  Byte-identical to the eager
-                                    // 16-round `subst_guarded` + `canonicalize_ac`.
-                                    let mut cur = match crate::guarded::subst_guarded_cow(
-                                    &alt, &parser_subst)
-                                {
-                                    None => return match crate::guarded::
-                                        canonicalize_ac_in_guarded_cow(&alt)
-                                    {
-                                        Some(c) => {
+                        let new_alts: Vec<_> = d
+                            .0
+                            .into_iter()
+                            .map(|alt| {
+                                // COW mirror of the store rewrite's
+                                // `apply_to_fixpoint` (below): `subst_guarded_cow
+                                // == None` ⇔ the fixpoint loop broke immediately
+                                // (`nxt == cur`), so reuse the owned `alt` with
+                                // zero clones.  Byte-identical to the eager
+                                // 16-round `subst_guarded`.
+                                let mut cur =
+                                    match crate::guarded::subst_guarded_cow(&alt, &parser_subst) {
+                                        None => return alt,
+                                        Some(s0) => {
                                             goals_value_changed.set(true);
-                                            c
+                                            s0
                                         }
-                                        None => alt,
-                                    },
-                                    Some(s0) => {
-                                        goals_value_changed.set(true);
-                                        s0
+                                    };
+                                for _ in 0..15 {
+                                    match crate::guarded::subst_guarded_cow(&cur, &parser_subst) {
+                                        None => break,
+                                        Some(nxt) => cur = nxt,
                                     }
-                                };
-                                    for _ in 0..15 {
-                                        match crate::guarded::subst_guarded_cow(&cur, &parser_subst)
-                                        {
-                                            None => break,
-                                            Some(nxt) => cur = nxt,
-                                        }
-                                    }
-                                    // Re-canonicalise AC after substitution so the
-                                    // substituted Disj-goal body matches the
-                                    // flat-sorted re-derived form for the goal-store
-                                    // dedup (see the formula-subst comment in
-                                    // `subst_system_once`).
-                                    crate::guarded::canonicalize_ac_in_guarded_cow(&cur)
-                                        .unwrap_or(cur)
-                                })
-                                .collect::<Vec<_>>();
+                                }
+                                cur
+                            })
+                            .collect::<Vec<_>>();
                         // Normalise the disjunct LIST in lockstep with the
                         // GDisj formula twin (HS 150f5eba substGoals DisjG
                         // arm: `DisjG (normaliseDisjList (apply subst
@@ -1559,26 +1544,15 @@ impl<'ctx> Reduction<'ctx> {
             // partially-applied formula-subst.  Bounded loop (16 steps)
             // to defend against degenerate cycles.
             // Copy-on-write: returns `None` when the formula is wholly
-            // unchanged (subst touches no leaf AND no AC node needs re-sorting),
-            // so the caller skips the store entirely with zero allocation.  This
-            // replaces three unconditional deep rebuilds (clone + subst + canon)
-            // per stored formula per `subst_system` call — the dominant residual
-            // guarded-clone cost after the dedup-canon hoist.  Byte-identical:
+            // unchanged (the subst touches no leaf), so the caller skips the
+            // store entirely with zero allocation.  This replaces two
+            // unconditional deep rebuilds (clone + subst) per stored formula
+            // per `subst_system` call — the dominant residual guarded-clone
+            // cost after the dedup-canon hoist.  Byte-identical:
             // `subst_guarded_cow == None` ⇔ the original loop broke immediately
-            // (`nxt == cur`), and `canonicalize_ac_in_guarded_cow == None` ⇔ the
-            // original `canonicalize` returned a value `== cur`.
+            // (`nxt == cur`).
             let apply_to_fixpoint = |f: &Guarded| -> Option<Guarded> {
-                let mut cur = match crate::guarded::subst_guarded_cow(f, &parser_subst) {
-                    // Subst is a structural no-op; the only possible change is
-                    // the trailing canonicalisation (mirror `canonicalize(f)`).
-                    // A canon change can equalise sibling connectives, so
-                    // re-normalise the changed result (150f5eba boundary).
-                    None => {
-                        return crate::guarded::canonicalize_ac_in_guarded_cow(f)
-                            .map(crate::guarded::normalise_stored_formula_owned)
-                    }
-                    Some(s0) => s0,
-                };
+                let mut cur = crate::guarded::subst_guarded_cow(f, &parser_subst)?;
                 // One subst pass already applied; continue to the fixpoint
                 // (the original ran up to 16 passes total).
                 for _ in 0..15 {
@@ -1587,19 +1561,6 @@ impl<'ctx> Reduction<'ctx> {
                         Some(nxt) => cur = nxt,
                     }
                 }
-                // Re-canonicalise AC operators after substitution.  Substituting
-                // an AC-valued var into an AC context (`rest ++ matchingComm`
-                // with `matchingComm := <a>++<b>`) leaves a nested/unsorted
-                // `Union(rest, Union(a,b))` that no longer structurally matches
-                // the flat-sorted form `impliedFormulas` produces
-                // (`implied_apply_canon_cow`, simplify.rs) — defeating
-                // the `solved_formulas` dedup, so the prover re-derives and
-                // re-solves a disjunction HS already discharged
-                // (UM_three_pass `CK_secure_UM3`).  HS's AC constructors
-                // (`fAppAC`) flatten+sort on construction, so HS never sees the
-                // nested form; mirror that here.  (Tuple pairs are already
-                // canonicalised inside `subst_gterm_cow` via `mk_gpair`.)
-                let cur = crate::guarded::canonicalize_ac_in_guarded_cow(&cur).unwrap_or(cur);
                 // Re-normalise the connective structure — the stored-state
                 // substitution boundary of HS 150f5eba (substFormulas =
                 // `S.map (normaliseStoredFormula . apply subst)`): a subst
@@ -2411,6 +2372,14 @@ impl<'ctx> Reduction<'ctx> {
         // (post-substitution, normalised) stored sets.  Port of HS
         // insertFormula entry normalisation (150f5eba).
         let g = crate::guarded::normalise_stored_formula_owned(g);
+        // Every path into the store builds its atoms through `fApp`, so the
+        // AC and `C` argument lists arrive flat and sorted; a formula that
+        // reached here another way would compare unequal to its own rebuild
+        // and re-fire a discharged implied-formula disjunction.
+        debug_assert!(
+            crate::guarded::is_ac_canonical(&g),
+            "a stored formula holds an argument list `fApp` would order differently: {g:?}"
+        );
         self.insert_formula_inner(g, true);
     }
 
@@ -2524,9 +2493,9 @@ impl<'ctx> Reduction<'ctx> {
             }
             Guarded::Atom(ref ga) => {
                 // Try to decompose into a constraint via insert_atom.
-                // Top-level Guarded::Atom has no Bound vars; round-trip
-                // to parser AST for the legacy `insert_atom` interface.
-                let a = crate::guarded::gatom_to_atom(ga);
+                // Top-level Guarded::Atom has no Bound vars; project to the
+                // parser AST `insert_atom` reads.
+                let a = crate::guarded::blnatom_to_parser(ga);
                 let _ = self.insert_atom(&a);
                 // Haskell-faithful: only mark the OUTER formula as
                 // solved (mark=True at top-level `insert_formula`).
@@ -2606,8 +2575,7 @@ impl<'ctx> Reduction<'ctx> {
             Guarded::GGuarded {
                 qua: crate::formula::Quantifier::Ex,
                 vars,
-                guards,
-                body,
+                ..
             } => {
                 // CR-rule *S_∃*: openGuarded — allocate fresh LVars for
                 // the bound vars, substitute Bound → Free in guards/body,
@@ -2657,37 +2625,30 @@ impl<'ctx> Reduction<'ctx> {
                     self.maude.ensure_above(avoid_max);
                 }
                 let base = self.maude.reserve_idxs(vars.len() as u64);
-                // Fresh LVars (HS `freshLVar`-style), one per binding in
-                // the original lexical order.
-                let xs: Vec<tamarin_parser::ast::VarSpec> = vars
-                    .iter()
-                    .enumerate()
-                    .map(|(i, b)| tamarin_parser::ast::VarSpec {
-                        name: b.0.clone(),
-                        idx: base + i as u64,
-                        sort: b.1,
-                        typ: None,
-                    })
-                    .collect();
+                // HS `openGuarded` draws one binder per `(name, sort)` from the
+                // ambient `MonadFresh`; `FastFreshState::seeded(base)` is that
+                // supply's non-precise form (`freshIdent _name = freshIdents 1`,
+                // Control/Monad/Fresh/Class.hs:38-41), so the binders take
+                // `base, base+1, …` in the original lexical order.
+                let mut fresh = tamarin_utils::fresh::FastFreshState::seeded(base);
+                let (_, xs, ats, opened_body) =
+                    crate::guarded::open_guarded(&g, &mut fresh).expect("Ex arm matched GGuarded");
                 if tamarin_utils::env_gate!("TAM_DBG_EX_DECOMP") {
                     eprintln!(
                         "[EX-DECOMP] FIRE avoid_max={} base={} xs={:?}",
                         avoid_max,
                         base,
-                        xs.iter()
-                            .map(|v| (v.name.clone(), v.idx))
-                            .collect::<Vec<_>>()
+                        xs.iter().map(|v| (v.name, v.idx)).collect::<Vec<_>>()
                     );
                 }
-                // HS `subst xs = zip [0..] (reverse xs)`: Bound 0 → xs[k-1].
-                let open_s = crate::guarded::open_subst(&xs);
-                let mut items: Vec<Guarded> = guards
+                // HS `insertFormula (GGuarded Ex ss as gf)`: the opened guards
+                // are re-lifted (`GAto . fmap (fmapTerm (fmap Free))`,
+                // Reduction.hs:459-462) and conjoined with the opened body.
+                let mut items: Vec<Guarded> = ats
                     .iter()
-                    .map(|a| {
-                        Guarded::Atom(crate::guarded::subst_bound_atom_at_depth(a, &open_s, 0))
-                    })
+                    .map(|a| Guarded::Atom(crate::guarded::lift_free_atom(a)))
                     .collect();
-                items.push(crate::guarded::subst_bound_guarded(&body, &open_s));
+                items.push(opened_body);
                 let new_body = crate::guarded::gconj(items);
                 self.insert_formula_inner(new_body, false);
                 self.changed = ChangeIndicator::Changed;
@@ -2707,14 +2668,10 @@ impl<'ctx> Reduction<'ctx> {
                 //   ∀[].[Subterm i j].⊥     → insertNegSubterm
                 //   ∀[].[Last i].⊥          → last < i ∨ i < last
                 //
-                // Empty-binder universals: guards have no Bound vars so
-                // we can safely round-trip to parser AST for the legacy
-                // matching code below.
-                use tamarin_parser::ast::Atom as AAtom;
-                let guard_pa = crate::guarded::gatom_to_atom(&guards[0]);
-                match &guard_pa {
-                    AAtom::Less(i, j)
-                        if term_to_node_id(i).is_some() && term_to_node_id(j).is_some() =>
+                use crate::atom::ProtoAtom;
+                match &guards[0] {
+                    ProtoAtom::Less(i, j)
+                        if blterm_node_id(i).is_some() && blterm_node_id(j).is_some() =>
                     {
                         // Haskell decomposes ∀[].[Less i j].⊥ into
                         // `i = j ∨ j < i` (Reduction.hs:464-489).
@@ -2748,11 +2705,10 @@ impl<'ctx> Reduction<'ctx> {
                         }
                         let d = crate::guarded::Guarded::Disj(
                             vec![
-                                crate::guarded::Guarded::Atom(crate::guarded::atom_to_gatom_free(
-                                    &AAtom::Eq(i.clone(), j.clone()),
-                                )),
-                                crate::guarded::Guarded::Atom(crate::guarded::atom_to_gatom_free(
-                                    &AAtom::Less(j.clone(), i.clone()),
+                                crate::guarded::Guarded::Atom(ProtoAtom::EqE(i.clone(), j.clone())),
+                                crate::guarded::Guarded::Atom(ProtoAtom::Less(
+                                    j.clone(),
+                                    i.clone(),
                                 )),
                             ]
                             .into(),
@@ -2760,7 +2716,7 @@ impl<'ctx> Reduction<'ctx> {
                         self.insert_formula_inner(d, false);
                         self.changed = ChangeIndicator::Changed;
                     }
-                    AAtom::Less(_, _) => {
+                    ProtoAtom::Less(_, _) => {
                         // Less on non-node terms — keep as formula.
                         if !crate::guarded::stores_contains(&self.sys.formulas, &g)
                             && !crate::guarded::stores_contains(&self.sys.solved_formulas, &g)
@@ -2770,8 +2726,8 @@ impl<'ctx> Reduction<'ctx> {
                             self.changed = ChangeIndicator::Changed;
                         }
                     }
-                    AAtom::Eq(i, j)
-                        if term_to_node_id(i).is_some() && term_to_node_id(j).is_some() =>
+                    ProtoAtom::EqE(i, j)
+                        if blterm_node_id(i).is_some() && blterm_node_id(j).is_some() =>
                     {
                         // i = j is false (i,j are node ids) ⇒ i < j ∨ j < i
                         // HS-faithful: only mark when called from top-level
@@ -2785,11 +2741,13 @@ impl<'ctx> Reduction<'ctx> {
                         }
                         let d = crate::guarded::Guarded::Disj(
                             vec![
-                                crate::guarded::Guarded::Atom(crate::guarded::atom_to_gatom_free(
-                                    &AAtom::Less(i.clone(), j.clone()),
+                                crate::guarded::Guarded::Atom(ProtoAtom::Less(
+                                    i.clone(),
+                                    j.clone(),
                                 )),
-                                crate::guarded::Guarded::Atom(crate::guarded::atom_to_gatom_free(
-                                    &AAtom::Less(j.clone(), i.clone()),
+                                crate::guarded::Guarded::Atom(ProtoAtom::Less(
+                                    j.clone(),
+                                    i.clone(),
                                 )),
                             ]
                             .into(),
@@ -2797,7 +2755,7 @@ impl<'ctx> Reduction<'ctx> {
                         self.insert_formula_inner(d, false);
                         self.changed = ChangeIndicator::Changed;
                     }
-                    AAtom::Last(i) => {
+                    ProtoAtom::Last(i) => {
                         // Haskell `insertFormula` for `∀[].[Last i].⊥`
                         // (Reduction.hs:481-489):
                         //   markAsSolved
@@ -2836,20 +2794,18 @@ impl<'ctx> Reduction<'ctx> {
                                 j
                             }
                         };
-                        let last_term =
-                            tamarin_parser::ast::Term::Var(tamarin_parser::ast::VarSpec {
-                                name: last_node.name.to_string(),
-                                idx: last_node.idx,
-                                sort: tamarin_term::lterm::LSort::Node,
-                                typ: None,
-                            });
+                        let last_term: crate::formula::BLNTerm = tamarin_term::vterm::var_term(
+                            tamarin_term::lterm::BVar::Free(last_node),
+                        );
                         let d = crate::guarded::Guarded::Disj(
                             vec![
-                                crate::guarded::Guarded::Atom(crate::guarded::atom_to_gatom_free(
-                                    &AAtom::Less(last_term.clone(), i.clone()),
+                                crate::guarded::Guarded::Atom(ProtoAtom::Less(
+                                    last_term.clone(),
+                                    i.clone(),
                                 )),
-                                crate::guarded::Guarded::Atom(crate::guarded::atom_to_gatom_free(
-                                    &AAtom::Less(i.clone(), last_term),
+                                crate::guarded::Guarded::Atom(ProtoAtom::Less(
+                                    i.clone(),
+                                    last_term,
                                 )),
                             ]
                             .into(),
@@ -2857,7 +2813,7 @@ impl<'ctx> Reduction<'ctx> {
                         self.insert_formula_inner(d, false);
                         self.changed = ChangeIndicator::Changed;
                     }
-                    AAtom::Subterm(s, b) => {
+                    ProtoAtom::Subterm(s, b) => {
                         // ¬(s ⊏ b) — HS `insertFormula` "negative Subterm"
                         // arm (Reduction.hs:468-471):
                         //   markAsSolved
@@ -2876,21 +2832,13 @@ impl<'ctx> Reduction<'ctx> {
                                 .solved_formulas_mut()
                                 .push(std::sync::Arc::new(g.clone()));
                         }
-                        let msig = self.ctx.maude.maude_sig();
-                        if let (Some(ts), Some(tb)) = (
-                            crate::elaborate::term_to_lnterm(s, &msig),
-                            crate::elaborate::term_to_lnterm(b, &msig),
-                        ) {
-                            self.sys.invalidate_max_var_idx_cache();
-                            if self.sys.subterm_store_mut().add_neg(ts, tb) {
-                                self.changed = ChangeIndicator::Changed;
-                            }
-                        } else if !crate::guarded::stores_contains(&self.sys.formulas, &g) {
-                            // Defensive fallback for terms our LNTerm
-                            // conversion can't represent — keep visible
-                            // as a formula rather than dropping.
-                            self.sys.invalidate_max_var_idx_cache();
-                            self.sys.formulas_mut().push(std::sync::Arc::new(g));
+                        // HS `insertNegSubterm (bTermToLTerm i) (bTermToLTerm j)`
+                        // (Reduction.hs:468-471); the empty binder list leaves
+                        // no `Bound` leaf for `bTermToLTerm` to reject.
+                        let ts = bterm_to_lterm(s);
+                        let tb = bterm_to_lterm(b);
+                        self.sys.invalidate_max_var_idx_cache();
+                        if self.sys.subterm_store_mut().add_neg(ts, tb) {
                             self.changed = ChangeIndicator::Changed;
                         }
                     }
@@ -4288,9 +4236,8 @@ fn build_parser_subst_from_eq_store(
                 continue;
             }
         }
-        let term = crate::elaborate::lnterm_to_term(&final_term);
         // `lv.name` is an interned `&'static str` — zero-alloc key.
-        out.insert((lv.name, lv.idx), term);
+        out.insert((lv.name, lv.idx), final_term);
     }
     out
 }
@@ -4915,7 +4862,7 @@ pub fn system_has_any_free_var(sys: &System) -> bool {
         .chain(sys.solved_formulas.iter())
         .chain(sys.lemmas.iter())
     {
-        if !crate::guarded::free_vars(f).is_empty() {
+        if !crate::guarded::is_closed(f) {
             return true;
         }
     }
@@ -5481,38 +5428,18 @@ fn split_subterm_single(
     out
 }
 
-/// A binder variable as the parser-AST `VarSpec` that
-/// [`crate::guarded::close_guarded`] binds over: the `LVar`'s name, index and
-/// sort, and no SAPIC type annotation (`VarSpec.typ` has no `LVar`
-/// counterpart).
-pub(crate) fn binder_varspec(v: &tamarin_term::lterm::LVar) -> tamarin_parser::ast::VarSpec {
-    tamarin_parser::ast::VarSpec {
-        name: v.name.to_string(),
-        idx: v.idx,
-        sort: v.sort,
-        typ: None,
-    }
-}
-
 /// Build `closeGuarded Ex [newVar] [EqE l r] gtrue` (HS Goals.hs `closeGuarded`).
 /// `newVar` is the single existentially-bound variable; `l`/`r` are the
-/// equation sides, `lTermToBTerm`-lifted and projected to the spelling the
-/// guarded store holds ([`crate::guarded_types::blnatom_to_parser`]), free
-/// until `close_guarded` binds them.
+/// equation sides, free until `close_guarded` binds them.
 fn close_guarded_ex_eq(
     new_var: &tamarin_term::lterm::LVar,
-    l: &tamarin_term::lterm::LNTerm,
-    r: &tamarin_term::lterm::LNTerm,
+    s_plus: &tamarin_term::lterm::LNTerm,
+    t: &tamarin_term::lterm::LNTerm,
 ) -> crate::guarded::Guarded {
     crate::guarded::close_guarded(
         crate::formula::Quantifier::Ex,
-        vec![binder_varspec(new_var)],
-        vec![crate::guarded_types::blnatom_to_parser(
-            &crate::atom::ProtoAtom::EqE(
-                crate::formula::lift_free(l),
-                crate::formula::lift_free(r),
-            ),
-        )],
+        vec![*new_var],
+        vec![crate::atom::ProtoAtom::EqE(s_plus.clone(), t.clone())],
         crate::guarded::gtrue(),
     )
 }
@@ -8027,11 +7954,10 @@ impl<'ctx> Reduction<'ctx> {
                 }
                 SubtermSplit::EqualD(l, r) => {
                     // insertFormula $ GAto $ EqE (lTermToBTerm l) (lTermToBTerm r)
-                    let atom =
-                        crate::guarded_types::blnatom_to_gatom(&crate::atom::ProtoAtom::EqE(
-                            crate::formula::lift_free(l),
-                            crate::formula::lift_free(r),
-                        ));
+                    let atom = crate::atom::ProtoAtom::EqE(
+                        crate::formula::lift_free(l),
+                        crate::formula::lift_free(r),
+                    );
                     sub.insert_formula(crate::guarded::Guarded::Atom(atom));
                 }
                 SubtermSplit::AcNewVarD(small_plus, big, new_var) => {

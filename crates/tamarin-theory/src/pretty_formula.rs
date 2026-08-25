@@ -31,12 +31,12 @@ use tamarin_term::pretty::pp_lvar;
 use tamarin_utils::fresh::PreciseFreshState;
 
 use crate::atom::{map_atom, pretty_natom, pretty_syntactic_natom, MapSugar, ProtoAtom};
-use crate::elaborate::{canonicalize_ac_in_atom, syntactic_lnatom_to_parser};
+use crate::elaborate::syntactic_lnatom_to_parser;
 use crate::formula::{
     avoid_precise_lnformula, open_bound_term, BLNTerm, Connective, LNFormula, LNProtoFormula,
     ProtoFormula, Quantifier, SyntacticLNFormula,
 };
-use crate::guarded::{gatom_to_atom, open_guarded, Guarded};
+use crate::guarded::{bvar_to_lvar, open_guarded, Guarded};
 use crate::pretty_hpj::{self as hpj, Doc, FLAT_WIDTH};
 
 /// A scope entry: the binder's source name + sort, plus the *display* name
@@ -540,38 +540,15 @@ fn collect_free_vars_term(t: &p::Term, bound: &[VarIdent], state: &mut PreciseFr
     }
 }
 
-/// HS `avoidPrecise` on a Guarded formula: walks `Free` BVar leaves only
-/// (Bound vars are positional, not named) and inserts (name, idx+1) into
-/// the Precise state.  Mirrors HS `avoidPreciseVars . frees`.
+/// HS `avoidPrecise = avoidPreciseVars . frees` (LTerm.hs:706-709,:714-715) on
+/// a guarded formula: the free variables seed the per-name counters, so a
+/// binder whose name a free variable uses is drawn with a larger index.
 fn avoid_precise_guarded(g: &Guarded) -> PreciseFreshState {
-    use crate::guarded_types::collect_free_atom;
-    let mut state = PreciseFreshState::nothing_used();
-    // Seed one atom's free vars into the Precise state (HS `avoidPreciseVars`).
-    fn seed_atom_frees(a: &crate::guarded::GAtom, state: &mut PreciseFreshState) {
-        let mut frees = Vec::new();
-        collect_free_atom(a, &mut frees);
-        for v in frees {
-            avoid_precise_insert(state, &v.name, v.idx);
-        }
-    }
-    fn walk(g: &Guarded, state: &mut PreciseFreshState) {
-        match g {
-            Guarded::Atom(a) => seed_atom_frees(a, state),
-            Guarded::Disj(xs) | Guarded::Conj(xs) => {
-                for x in xs.iter() {
-                    walk(x, state);
-                }
-            }
-            Guarded::GGuarded { guards, body, .. } => {
-                for a in guards.iter() {
-                    seed_atom_frees(a, state);
-                }
-                walk(body, state);
-            }
-        }
-    }
-    walk(g, &mut state);
-    state
+    PreciseFreshState::avoid_precise(
+        tamarin_term::lterm::frees(g)
+            .into_iter()
+            .map(|v| (v.name.to_string(), v.idx)),
+    )
 }
 
 // =============================================================================
@@ -1379,16 +1356,8 @@ fn binop_symbol(op: p::BinOp) -> &'static str {
 fn guarded_to_doc(g: &Guarded, state: &mut PreciseFreshState) -> crate::pretty_hpj::Doc {
     use crate::pretty_hpj::{self as hpj, Doc};
     match g {
-        Guarded::Atom(a) => {
-            // HS `pp (GAto a) = prettyNAtom (bvarToLVar a)` (Guarded.hs:831).
-            // `bvarToLVar` is `fmap (fmapTerm (fmap …))` (Guarded.hs:322-324),
-            // which rebuilds every application through `fApp` and so sorts the
-            // argument list of an AC symbol and of the commutative `em`
-            // (Term/Term/Raw.hs:119-134) — `canonicalize_ac_in_atom` over the
-            // parser AST.  `prettyNAtom` builds a real Doc (Atom.hs:212-224)
-            // whose terms/facts wrap via `prettyTerm`/`prettyFact`.
-            atom_to_doc(&canonicalize_ac_in_atom(&gatom_to_atom(a)), &[])
-        }
+        // HS `pp (GAto a) = prettyNAtom (bvarToLVar a)` (Guarded.hs:831).
+        Guarded::Atom(a) => pretty_natom(&bvar_to_lvar(a)),
         Guarded::Disj(xs) if xs.is_empty() => hpj::operator_("\u{22A5}"), // ⊥
         Guarded::Conj(xs) if xs.is_empty() => hpj::operator_("\u{22A4}"), // ⊤
         Guarded::Disj(xs) => {
@@ -1436,7 +1405,7 @@ fn gguarded_to_doc(g: &Guarded, state: &mut PreciseFreshState) -> crate::pretty_
     } else {
         let ps: Vec<Doc> = atoms
             .iter()
-            .map(|a| hpj::op_parens(atom_to_doc(a, &[])))
+            .map(|a| hpj::op_parens(pretty_natom(a)))
             .collect();
         let punct = hpj::punctuate(hpj::operator_(" \u{2227}"), ps);
         hpj::sep(punct).nest(1)
@@ -1451,7 +1420,7 @@ fn gguarded_to_doc(g: &Guarded, state: &mut PreciseFreshState) -> crate::pretty_
         Quantifier::All => "\u{2200}",
         Quantifier::Ex => "\u{2203}",
     };
-    let var_docs: Vec<Doc> = vs.iter().map(|v| Doc::text(var_display(v, &[]))).collect();
+    let var_docs: Vec<Doc> = vs.iter().map(|v| Doc::text(v.to_string())).collect();
     let ppvars = hpj::fsep(var_docs);
     let quantifier = hpj::operator_(sym)
         .beside_sp(ppvars)

@@ -10,7 +10,7 @@
 
 use std::fmt;
 
-use tamarin_term::lterm::Name;
+use tamarin_term::lterm::{HasFrees, LVar, Name};
 use tamarin_term::pretty::pretty_nterm;
 use tamarin_term::term::{show_term, ShowLit, Term};
 use tamarin_term::vterm::{Lit, VTerm};
@@ -124,6 +124,20 @@ pub fn fold_atom<T>(a: &Atom<T>, f: &mut dyn FnMut(&T)) {
         }
         ProtoAtom::Last(t) => f(t),
         ProtoAtom::Syntactic(Unit2) => {}
+    }
+}
+
+/// HS `instance HasFrees t => HasFrees (Atom t)` (Atom.hs:156-161): both
+/// directions run through the `Traversable`/`Foldable` instances, so they
+/// reach every term of the atom in [`fold_atom`]'s order and rebuild the atom
+/// around the mapped terms.  `foldFreesOcc` contributes nothing.
+impl<T: HasFrees + Clone> HasFrees for Atom<T> {
+    fn for_each_free(&self, f: &mut dyn FnMut(&LVar)) {
+        fold_atom(self, &mut |t| t.for_each_free(f));
+    }
+
+    fn map_free_with(self, f: &mut dyn FnMut(LVar) -> LVar, monotone: bool) -> Self {
+        map_atom(&self, &mut |t| t.clone().map_free_with(f, monotone))
     }
 }
 

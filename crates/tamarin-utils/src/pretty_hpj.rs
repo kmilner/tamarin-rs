@@ -919,9 +919,9 @@ pub fn fcat(ds: Vec<Doc>) -> Doc {
 /// HS `ppTerms sepa n lead finish ts` (Term/Term.hs:319-321): an `fcat` of
 /// `text lead`, each element rendered and `nest(1)`'d (all but the last
 /// `sep`-suffixed), and `text finish`.  Shared by the pair (`<`/`, `/`>`)
-/// and AC-op (`(`/op/`)`) builders across the parser-AST, GTerm and SAPIC
-/// term renderers — they differ only in these three strings and the
-/// per-element `render` fn, so every caller stays byte-identical.
+/// and AC-op (`(`/op/`)`) builders across the parser-AST and SAPIC term
+/// renderers — they differ only in these three strings and the per-element
+/// `render` fn, so every caller stays byte-identical.
 pub fn fcat_bracketed<T>(
     lead: &str,
     sep: &str,
@@ -944,8 +944,8 @@ pub fn fcat_bracketed<T>(
 }
 
 /// HS `ppFun f ts = text (f ++ "(") <> fsep (punctuate comma (map ppTerm ts))
-/// <> text ")"` (Term/Term.hs:326-327).  Shared by the parser-AST, GTerm and
-/// SAPIC function-application renderers — they differ only in the per-element
+/// <> text ")"` (Term/Term.hs:326-327).  Shared by the parser-AST and SAPIC
+/// function-application renderers — they differ only in the per-element
 /// `render` fn, so the common `text(name++"(") <> fsep(punctuate ',' …) <>
 /// text ")"` Doc shape lives here (HS `comma = char ','`).
 pub fn fun_app_doc<T>(name: &str, args: &[&T], render: impl Fn(&T) -> Doc) -> Doc {

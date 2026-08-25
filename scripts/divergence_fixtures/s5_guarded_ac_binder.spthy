@@ -1,0 +1,51 @@
+/*
+ * The argument order of an associative-commutative operand list inside a
+ * guarded formula, when the operands are the quantified variables themselves.
+ *
+ * `closeGuarded` binds the prefix with `zip (reverse vs) [0..]`
+ * (Guarded.hs:376-384), so the LAST binder takes De Bruijn index 0, and
+ * `substFreeAtom`'s `fmapTerm` rebuilds the application through `fApp`
+ * (Guarded.hs:289-296, Term/Term/Raw.hs:111-129), which sorts an AC operand
+ * list.  `Ord BVar` puts `Bound i` before `Free x` and orders the indices
+ * numerically (LTerm.hs:476-478), so the stored operand order is the reverse
+ * of the prefix order, whatever the source wrote.  `prettyGuarded`
+ * (Guarded.hs:827-866) then opens each `GGuarded` inside `scopeFreshness`,
+ * drawing both binders at index 0, and `openGuarded`'s `substBoundAtom`
+ * (Guarded.hs:364-373) rebuilds through `fApp` once more — two binders at one
+ * index and one sort tie until the name decides (`Ord LVar`,
+ * LTerm.hs:546-548), so the echo reads the operands in NAME order.
+ *
+ * The first two lemmas write the same two operands in the two possible source
+ * orders and both echo `(a++b)`, so the row pins that neither the written
+ * order nor the conversion's own order reaches the echo.  The third puts a
+ * sibling prefix ahead of the same shape: `formulaToGuarded` threads one
+ * `Precise` supply across the whole formula (Guarded.hs:471-479), so its
+ * second `a` is drawn at index 1 and the conversion sorts the pair the other
+ * way round before binding it — and the echo is unchanged.
+ *
+ * Mode `match`: the two engines agree on this shape.
+ *
+ * Compared slice: the `theory … end` echo, which carries each lemma's
+ * `guarded formula characterizing …` block (see check.sh).
+ */
+theory S5GuardedAcBinder
+begin
+
+builtins: multiset
+
+rule A:
+  [ In(x) ] --[ B(x), C(x) ]-> [ ]
+
+lemma ac_binder:
+  exists-trace
+  "Ex a b #j. B(b ++ a) @ j"
+
+lemma ac_binder_written_swapped:
+  exists-trace
+  "Ex a b #j. B(a ++ b) @ j"
+
+lemma ac_binder_after_a_sibling_prefix:
+  exists-trace
+  "(Ex a #i. C(a) @ i) & (Ex a b #j. B(b ++ a) @ j)"
+
+end

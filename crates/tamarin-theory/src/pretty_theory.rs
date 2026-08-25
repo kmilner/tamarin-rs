@@ -4105,19 +4105,12 @@ mod oracle_goal_tests {
     fn disj_goal_for_oracle_has_leading_space() {
         use crate::atom::ProtoAtom;
         use crate::constraint::constraints::{Disj, Goal};
+        use crate::formula::BLNTerm;
         use crate::guarded::Guarded;
-        use crate::guarded_types::{BVar, GTerm};
-        use tamarin_parser::ast::VarSpec;
-        use tamarin_term::lterm::LSort;
+        use tamarin_term::lterm::{BVar, LSort, LVar};
+        use tamarin_term::vterm::var_term;
 
-        let tp = |n: &str| {
-            GTerm::Var(BVar::Free(VarSpec {
-                name: n.to_string(),
-                idx: 0,
-                sort: LSort::Node,
-                typ: None,
-            }))
-        };
+        let tp = |n: &str| -> BLNTerm { var_term(BVar::Free(LVar::new(n, LSort::Node, 0))) };
         // `#a < #b` ∥ `#b < #a`
         let d1 = Guarded::Atom(ProtoAtom::Less(tp("a"), tp("b")));
         let d2 = Guarded::Atom(ProtoAtom::Less(tp("b"), tp("a")));

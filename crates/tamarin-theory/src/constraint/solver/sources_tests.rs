@@ -532,15 +532,14 @@ fn subterm_constraint(small: u64, big: u64) -> SubtermConstraint {
 
 /// A `last(i.idx)` formula over one free node leaf.
 fn last_formula(idx: u64) -> Guarded {
-    use tamarin_parser::ast::{Atom, Term as PTerm, VarSpec};
-    Guarded::Atom(crate::guarded::atom_to_gatom_free(&Atom::Last(PTerm::Var(
-        VarSpec {
-            name: "i".to_string(),
-            idx,
-            sort: LSort::Node,
-            typ: None,
-        },
-    ))))
+    use crate::atom::ProtoAtom;
+    use tamarin_term::lterm::{BVar, LVar};
+    use tamarin_term::vterm::var_term;
+    Guarded::Atom(ProtoAtom::Last(var_term(BVar::Free(LVar::new(
+        "i",
+        LSort::Node,
+        idx,
+    )))))
 }
 
 /// A system carrying a distinct variable in every field the `HasFrees`
@@ -889,4 +888,80 @@ fn source_bounds_takes_the_max_over_cases_only() {
 
     let cases = vec![("case".to_string(), case_sys)];
     assert_eq!(source_bounds(&src, &cases), (Some(5), Some(61)));
+}
+
+/// [`write_guarded_struct`] applies the alpha-rename to each free leaf in
+/// place and writes every argument list positionally.  A stored formula's AC
+/// list is sorted under the ORIGINAL variables, so a rebuild through `fApp`
+/// under the renamed ones would move the operands and merge two cases the
+/// guarded store's own `==` keeps apart.
+#[test]
+fn the_redundant_case_key_renames_without_resorting_ac_arguments() {
+    use crate::atom::ProtoAtom;
+    use crate::formula::BLNTerm;
+    use crate::guarded::Guarded;
+    use tamarin_term::bind::Bindings;
+    use tamarin_term::function_symbols::AcSym;
+    use tamarin_term::lterm::{BVar, LVar};
+    use tamarin_term::term::{f_app_ac, Term};
+    use tamarin_term::vterm::var_term;
+
+    let a = LVar::new("a", LSort::Msg, 0);
+    let b = LVar::new("b", LSort::Msg, 0);
+    let leaf = |v: LVar| -> BLNTerm { var_term(BVar::Free(v)) };
+    // `a * b` is stored in that order; the rename sends `a` past `b`.
+    let stored = f_app_ac(AcSym::Mult, vec![leaf(a), leaf(b)]);
+    let Term::App(_, args) = &stored else {
+        panic!("an application")
+    };
+    assert_eq!(args.as_ref(), &[leaf(a), leaf(b)]);
+
+    let mut rename = Bindings::new();
+    rename.insert(a, LVar::new("z", LSort::Msg, 0));
+    let g = Guarded::Atom(ProtoAtom::Last(stored));
+    let mut key = String::new();
+    write_guarded_struct(&g, &rename, &mut key);
+
+    let mut renamed_in_place = String::new();
+    write_guarded_struct(
+        &Guarded::Atom(ProtoAtom::Last(f_app_ac(
+            AcSym::Mult,
+            vec![leaf(LVar::new("z", LSort::Msg, 0)), leaf(b)],
+        ))),
+        &Bindings::new(),
+        &mut renamed_in_place,
+    );
+    // `fAppAC` sorts `z` after `b`, so the rebuilt operand order differs from
+    // the one the key writes.
+    assert_ne!(key, renamed_in_place);
+    assert!(key.contains("Fz#0:"), "the free leaf is renamed: {key}");
+    assert!(
+        key.find("Fz#0:").unwrap() < key.find("Fb#0:").unwrap(),
+        "the stored operand order survives the rename: {key}"
+    );
+}
+
+/// The `App` arm writes the `FunSym`'s full identity, so two AC applications
+/// that differ only in their head take different keys and stay separate
+/// cases.
+#[test]
+fn redundant_case_key_separates_two_ac_heads() {
+    use crate::atom::ProtoAtom;
+    use crate::formula::BLNTerm;
+    use crate::guarded::Guarded;
+    use tamarin_term::bind::Bindings;
+    use tamarin_term::function_symbols::AcSym;
+    use tamarin_term::lterm::{BVar, LVar};
+    use tamarin_term::term::f_app_ac;
+    use tamarin_term::vterm::var_term;
+
+    let leaf = |n: &str| -> BLNTerm { var_term(BVar::Free(LVar::new(n, LSort::Msg, 0))) };
+    let key_of = |sym: AcSym| {
+        let g = Guarded::Atom(ProtoAtom::Last(f_app_ac(sym, vec![leaf("a"), leaf("b")])));
+        let mut out = String::new();
+        write_guarded_struct(&g, &Bindings::new(), &mut out);
+        out
+    };
+    assert_ne!(key_of(AcSym::Mult), key_of(AcSym::Union));
+    assert_ne!(key_of(AcSym::Mult), key_of(AcSym::Xor));
 }

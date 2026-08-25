@@ -75,7 +75,7 @@ pub fn rename_precise_system(sys: &mut System) {
     //
     // For LVar-only fields we look up directly. For term-bearing fields we
     // build a `Subst` (LVar → Var-term) and apply via `apply_vterm`. For
-    // guarded formulas we use the parser-level `VarSubst`.
+    // guarded formulas we use the `(name, idx)`-keyed `VarSubst`.
     // ----------------------------------------------------------------------
 
     // `bindings.changed()` covers EVERY field (Phase 1 walks them all), so a
@@ -112,12 +112,7 @@ pub fn rename_precise_system(sys: &mut System) {
             (
                 // `old.name` is an interned `&'static str` — zero-alloc key.
                 (old.name, old.idx),
-                tamarin_parser::ast::Term::Var(tamarin_parser::ast::VarSpec {
-                    name: new.name.to_string(),
-                    idx: new.idx,
-                    sort: new.sort,
-                    typ: None,
-                }),
+                Term::Lit(Lit::Var(new)),
             )
         })
         .collect();
@@ -267,7 +262,7 @@ pub fn rename_precise_system(sys: &mut System) {
     new_goals.dedup_by(|a, b| a.0 == b.0);
     sys.content_mut_untracked().goals = std::sync::Arc::new(new_goals);
 
-    // 6. Formulas / solved / lemmas — via parser-level VarSubst.
+    // 6. Formulas / solved / lemmas — via the `(name, idx)`-keyed VarSubst.
     //
     // HS-faithful: `_sFormulas` / `_sSolvedFormulas` / `_sLemmas` are
     // `S.Set LNGuarded`. `mapFrees (S.Set a) = fmap S.fromList . mapFrees
@@ -289,8 +284,8 @@ pub fn rename_precise_system(sys: &mut System) {
                     *f = std::sync::Arc::new(nf);
                 }
             }
-            v.sort_by(|a, b| crate::guarded::cmp_guarded(a, b));
-            v.dedup_by(|a, b| crate::guarded::cmp_guarded(a, b) == std::cmp::Ordering::Equal);
+            v.sort();
+            v.dedup();
         };
         sort_dedup_guarded(sys.formulas_mut_untracked(), &formula_subst);
         sort_dedup_guarded(sys.solved_formulas_mut_untracked(), &formula_subst);

@@ -459,14 +459,8 @@ pub(crate) fn goal_cmp(a: &Goal, b: &Goal) -> std::cmp::Ordering {
             };
             // HS `Disj a = Disj [a]` derives `Ord` as the newtype over the
             // list, i.e. plain list Ord (element-by-element, shorter < longer),
-            // bottoming out at the structural `Ord LNGuarded`.  Use the
-            // HS-faithful structural comparator `cmp_guarded` (which threads
-            // through `cmp_varspec`'s numeric idx-first LVar Ord, `cmp_atom`'s
-            // timepoint-first ProtoAtom Ord, and declaration-order sort Ord).
-            // Do NOT use a string-render approach (idx/sort via `{:?}`,
-            // length-first prefix): it diverges from HS on var sort order,
-            // decimal idx width, and Action timepoint-vs-fact order.
-            crate::guarded::cmp_slice(&da.0, &db.0, crate::guarded::cmp_guarded)
+            // bottoming out at the derived `Ord LNGuarded` (Guarded.hs:129).
+            da.0.cmp(&db.0)
         }
         Goal::Subterm((sa, ta_)) => {
             let Goal::Subterm((sb, tb_)) = b else {
@@ -1927,8 +1921,8 @@ fn is_insert_template_action(a: &AnnotatedGoal) -> bool {
 }
 
 /// HS `isProgressFact` (ProofMethod.hs:126-128): a `ProtoFact Linear name 1`
-/// whose name has the `ProgressTo_` prefix.  Operates on a guarded `GFact`.
-fn gfact_is_progress(f: &crate::guarded::GFact) -> bool {
+/// whose name has the `ProgressTo_` prefix.  Operates on a guard atom's fact.
+fn gfact_is_progress(f: &crate::fact::Fact<crate::formula::BLNTerm>) -> bool {
     matches!(
         f.tag,
         crate::fact::FactTag::Proto(crate::fact::Multiplicity::Linear, name, 1)
@@ -2501,7 +2495,7 @@ fn goal_usefulness_with_adj(g: &Goal, looping: bool, sys: &System, adj: &RawLess
 /// trigger this short-circuit, otherwise every KU action goal is
 /// promoted to `Useful` and `currentlyDeducible` / `probablyConstructible`
 /// demotion never fires.  Walks recursively, surfacing KU action atoms
-/// from inside `GGuarded`/`GAtom`/`Conj`/`Disj` structures.
+/// from inside `GGuarded`/atom/`Conj`/`Disj` structures.
 fn has_ku_guards(sys: &System) -> bool {
     use crate::atom::ProtoAtom;
     use crate::guarded::Guarded;

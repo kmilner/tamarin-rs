@@ -289,21 +289,17 @@ fn subterm_goal_has_no_unique_fallback() {
     assert!(match_goal(&goal("x", "y", 0), &sys).is_none());
 }
 
-/// A node-sorted `VarSpec`, as `Parser::nodevar` builds it.
-fn node_vs(name: &str) -> tamarin_parser::ast::VarSpec {
-    tamarin_parser::ast::VarSpec {
-        name: name.into(),
-        idx: 0,
-        sort: tamarin_term::lterm::LSort::Node,
-        typ: None,
-    }
-}
-
 /// `last(#<name>)` as one alternative of a disjunction goal.
 fn last_alt(name: &str) -> crate::guarded::Guarded {
     use crate::atom::ProtoAtom;
-    use crate::guarded::{BVar, GTerm, Guarded};
-    Guarded::Atom(ProtoAtom::Last(GTerm::Var(BVar::Free(node_vs(name)))))
+    use crate::guarded::Guarded;
+    use tamarin_term::lterm::{BVar, LVar};
+    use tamarin_term::vterm::var_term;
+    Guarded::Atom(ProtoAtom::Last(var_term(BVar::Free(LVar::new(
+        name,
+        LSort::Node,
+        0,
+    )))))
 }
 
 fn disj(alts: Vec<crate::guarded::Guarded>) -> Goal {
@@ -348,16 +344,11 @@ fn disj_goal_rejects_a_different_alt_count() {
 #[test]
 fn disj_goal_of_another_sort_misses() {
     use crate::atom::ProtoAtom;
-    use crate::guarded::{BVar, GTerm, Guarded};
-    use tamarin_parser::ast::VarSpec;
-    let leaf = |sort: LSort| {
-        GTerm::Var(BVar::Free(VarSpec {
-            name: "x".into(),
-            idx: 0,
-            sort,
-            typ: None,
-        }))
-    };
+    use crate::formula::BLNTerm;
+    use crate::guarded::Guarded;
+    use tamarin_term::lterm::{BVar, LVar};
+    use tamarin_term::vterm::var_term;
+    let leaf = |sort: LSort| -> BLNTerm { var_term(BVar::Free(LVar::new("x", sort, 0))) };
     let alt = |sort: LSort| Guarded::Atom(ProtoAtom::EqE(leaf(sort), leaf(sort)));
     let live = disj(vec![alt(LSort::Msg)]);
     let mut sys = System::empty();
@@ -369,33 +360,28 @@ fn disj_goal_of_another_sort_misses() {
     assert!(match_goal(&disj(vec![alt(LSort::Fresh)]), &sys).is_none());
 }
 
-/// An AC chain of a runtime disjunct can be folded either way round
-/// (guarded.rs `canonicalize_ac_in_guarded`), so `goal_matches` re-folds
-/// both sides before comparing.
+/// `fAppAC` flattens and sorts its arguments (Term/Raw.hs `fAppAC`), so an
+/// AC chain built either way round is ONE value and a disjunction goal
+/// folded the other way is a `M.member` hit.
 #[test]
-fn disj_goal_matches_modulo_ac_fold() {
+fn disj_goal_matches_either_ac_folding() {
     use crate::atom::ProtoAtom;
-    use crate::guarded::{BVar, GTerm, Guarded};
-    use crate::guarded_types::ga;
-    use tamarin_parser::ast::{BinOp, VarSpec};
-    let leaf = |n: &str| {
-        GTerm::Var(BVar::Free(VarSpec {
-            name: n.into(),
-            idx: 0,
-            sort: LSort::Msg,
-            typ: None,
-        }))
-    };
-    let un = |l: GTerm, r: GTerm| GTerm::BinOp(BinOp::Union, ga(l), ga(r));
-    // `(a ++ b) ++ c` and `a ++ (b ++ c)` are the same HS `fAppAC` term.
+    use crate::formula::BLNTerm;
+    use crate::guarded::Guarded;
+    use tamarin_term::function_symbols::AcSym;
+    use tamarin_term::lterm::{BVar, LVar};
+    use tamarin_term::term::f_app_ac;
+    use tamarin_term::vterm::var_term;
+    let leaf = |n: &str| -> BLNTerm { var_term(BVar::Free(LVar::new(n, LSort::Msg, 0))) };
+    let un = |l: BLNTerm, r: BLNTerm| f_app_ac(AcSym::Union, vec![l, r]);
     let left = un(un(leaf("a"), leaf("b")), leaf("c"));
     let right = un(leaf("a"), un(leaf("b"), leaf("c")));
-    let alt = |t: GTerm| Guarded::Atom(ProtoAtom::EqE(t, leaf("z")));
+    let alt = |t: BLNTerm| Guarded::Atom(ProtoAtom::EqE(t, leaf("z")));
     let live = disj(vec![alt(right)]);
     let mut sys = System::empty();
     sys.goals_mut().push((live.clone(), Default::default()));
     let stored = disj(vec![alt(left)]);
-    assert_ne!(stored, live, "the two foldings differ structurally");
+    assert_eq!(stored, live, "the two foldings are the same AC term");
     assert_eq!(match_goal(&stored, &sys).expect("should match"), live);
 }
 

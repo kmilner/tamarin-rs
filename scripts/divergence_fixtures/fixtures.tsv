@@ -51,3 +51,4 @@ s3_nested_tuple_guard	wf,theory	match	--derivcheck-timeout=0
 s3_unguardable_wide_lemma	wf,theory	match	--derivcheck-timeout=0
 s3_acc_macro_case_test	theory	match	--derivcheck-timeout=0
 s5_guarded_em_open	wf,theory	match	--derivcheck-timeout=0
+s5_guarded_ac_binder	theory	match	--derivcheck-timeout=0

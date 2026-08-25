@@ -9,7 +9,7 @@
 //! - [`fact`] ← `Theory.Model.Fact`
 //! - [`atom`] ← `Theory.Model.Atom`
 //! - [`formula`] ← `Theory.Model.Formula` (data type + builders)
-//! - [`guarded`] / [`guarded_types`] ← `Theory.Model.Formula` (guarded
+//! - [`guarded`] ← `Theory.Model.Formula` (guarded
 //!   formulas)
 //! - [`restriction`] ← `Theory.Model.Restriction`;
 //!   [`rule_restriction`] ← `Theory.Model.Restriction` `liftedAddProtoRule`
@@ -63,7 +63,6 @@ pub mod fact;
 pub mod formula;
 pub mod formula_reports;
 pub mod guarded;
-pub mod guarded_types;
 pub mod intruder_rules;
 pub mod intruder_variants;
 pub mod macro_expand;

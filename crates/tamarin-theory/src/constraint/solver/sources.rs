@@ -5356,10 +5356,9 @@ fn write_rule_to_key_excl_new_vars(
     // Crucial: rule.new_vars EXCLUDED per `compareRulesUpToNewVars`.
 }
 
-/// Look up the renamed identity of a `Free` GTerm var and write it.
-fn write_gfree_var(v: &tamarin_parser::ast::VarSpec, rename: &Bindings, out: &mut String) {
-    let lv = crate::elaborate::varspec_to_lvar(v);
-    let rv = rename.get(&lv).unwrap_or(lv);
+/// Look up the renamed identity of a free variable leaf and write it.
+fn write_gfree_var(v: &tamarin_term::lterm::LVar, rename: &Bindings, out: &mut String) {
+    let rv = rename.get(v).unwrap_or(*v);
     // Encode the renamed identity (name + idx + sort) of a Free leaf.
     out.push('F');
     out.push_str(rv.name);
@@ -5369,40 +5368,35 @@ fn write_gfree_var(v: &tamarin_parser::ast::VarSpec, rename: &Bindings, out: &mu
     out.push_str(lsort_key_str(rv.sort));
 }
 
-fn write_gterm_struct(t: &crate::guarded_types::GTerm, rename: &Bindings, out: &mut String) {
-    use crate::guarded_types::{BVar, GTerm};
+/// Write a locally-nameless term into the key buffer, renaming free leaves in
+/// place.
+///
+/// The argument lists are written POSITIONALLY, including the AC and `C` ones:
+/// the key must partition formulas the way the guarded store's own `==` does,
+/// and a stored formula's AC list is sorted under the ORIGINAL variables, not
+/// the renamed ones.  Re-sorting the rendered children (as
+/// [`write_term_to_key_with`] does for a system term, whose HS counterpart
+/// really is rebuilt through `fAppAC`) would make the partition coarser and
+/// drop cases the port keeps.
+///
+/// The `App` arm writes the `FunSym`'s full identity, so the encoding is
+/// injective over everything the term holds.
+fn write_gterm_struct(t: &crate::formula::BLNTerm, rename: &Bindings, out: &mut String) {
     use std::fmt::Write as _;
+    use tamarin_term::lterm::BVar;
+    use tamarin_term::term::Term;
+    use tamarin_term::vterm::Lit;
     match t {
-        GTerm::Var(BVar::Free(v)) => write_gfree_var(v, rename, out),
-        GTerm::Var(BVar::Bound(n)) => {
+        Term::Lit(Lit::Var(BVar::Free(v))) => write_gfree_var(v, rename, out),
+        Term::Lit(Lit::Var(BVar::Bound(n))) => {
             out.push('B');
-            push_u64(out, u64::from(*n));
+            push_u64(out, *n);
         }
-        GTerm::PubLit(s) => {
-            out.push_str("p'");
-            out.push_str(s);
-            out.push('\'');
+        Term::Lit(Lit::Con(c)) => {
+            let _ = write!(out, "{:?}", c);
         }
-        GTerm::FreshLit(s) => {
-            out.push_str("f'");
-            out.push_str(s);
-            out.push('\'');
-        }
-        GTerm::NatLit(s) => {
-            out.push_str("n'");
-            out.push_str(s);
-            out.push('\'');
-        }
-        GTerm::Number(x) => {
-            out.push('#');
-            push_u64(out, *x);
-        }
-        GTerm::NumberOne => out.push_str("#1"),
-        GTerm::NatOne => out.push_str("%1"),
-        GTerm::DhNeutral => out.push_str("dhN"),
-        GTerm::App(name, args) => {
-            out.push_str(name);
-            out.push('(');
+        Term::App(sym, args) => {
+            let _ = write!(out, "{:?}(", sym);
             for (i, a) in args.iter().enumerate() {
                 if i > 0 {
                     out.push(',');
@@ -5411,47 +5405,14 @@ fn write_gterm_struct(t: &crate::guarded_types::GTerm, rename: &Bindings, out: &
             }
             out.push(')');
         }
-        GTerm::AlgApp(name, a, b) => {
-            out.push_str(name);
-            out.push_str("^(");
-            write_gterm_struct(a, rename, out);
-            out.push(',');
-            write_gterm_struct(b, rename, out);
-            out.push(')');
-        }
-        GTerm::Pair(items) => {
-            out.push('<');
-            for (i, a) in items.iter().enumerate() {
-                if i > 0 {
-                    out.push(',');
-                }
-                write_gterm_struct(a, rename, out);
-            }
-            out.push('>');
-        }
-        GTerm::Diff(a, b) => {
-            out.push_str("diff(");
-            write_gterm_struct(a, rename, out);
-            out.push(',');
-            write_gterm_struct(b, rename, out);
-            out.push(')');
-        }
-        GTerm::BinOp(op, a, b) => {
-            let _ = write!(out, "{:?}(", op);
-            write_gterm_struct(a, rename, out);
-            out.push(',');
-            write_gterm_struct(b, rename, out);
-            out.push(')');
-        }
-        GTerm::PatMatch(t) => {
-            out.push_str("=(");
-            write_gterm_struct(t, rename, out);
-            out.push(')');
-        }
     }
 }
 
-fn write_gfact_struct(f: &crate::guarded::GFact, rename: &Bindings, out: &mut String) {
+fn write_gfact_struct(
+    f: &crate::fact::Fact<crate::formula::BLNTerm>,
+    rename: &Bindings,
+    out: &mut String,
+) {
     use std::fmt::Write as _;
     // `{:?}` of the `FactTag` writes the multiplicity, the name and the arity;
     // the annotations follow, so the pair is injective over everything the fact
@@ -5467,19 +5428,21 @@ fn write_gfact_struct(f: &crate::guarded::GFact, rename: &Bindings, out: &mut St
     out.push(']');
 }
 
-fn write_gatom_struct(a: &crate::guarded::GAtom, rename: &Bindings, out: &mut String) {
+fn write_gatom_struct(
+    a: &crate::atom::Atom<crate::formula::BLNTerm>,
+    rename: &Bindings,
+    out: &mut String,
+) {
     use crate::atom::ProtoAtom;
-    let bin = |tag: &str,
-               x: &crate::guarded_types::GTerm,
-               y: &crate::guarded_types::GTerm,
-               out: &mut String| {
-        out.push_str(tag);
-        out.push('(');
-        write_gterm_struct(x, rename, out);
-        out.push(',');
-        write_gterm_struct(y, rename, out);
-        out.push(')');
-    };
+    let bin =
+        |tag: &str, x: &crate::formula::BLNTerm, y: &crate::formula::BLNTerm, out: &mut String| {
+            out.push_str(tag);
+            out.push('(');
+            write_gterm_struct(x, rename, out);
+            out.push(',');
+            write_gterm_struct(y, rename, out);
+            out.push(')');
+        };
     match a {
         ProtoAtom::EqE(x, y) => bin("EQ", x, y, out),
         ProtoAtom::Less(x, y) => bin("LT", x, y, out),
@@ -5508,7 +5471,7 @@ fn write_gatom_struct(a: &crate::guarded::GAtom, rename: &Bindings, out: &mut St
 /// structural fingerprint, with NO formula clone and NO `Debug` dispatch.
 /// Cloning the formula via `subst_guarded` to apply the rename and then
 /// `format!("{:?}", _)`-ing it through the derived `Debug` machinery would be
-/// far slower (GTerm clone churn, the generic `Debug` formatter builders, and
+/// far slower (term clone churn, the generic `Debug` formatter builders, and
 /// an intermediate `String` per formula).
 ///
 /// The key BYTES are an arbitrary internal fingerprint:
@@ -5516,13 +5479,10 @@ fn write_gatom_struct(a: &crate::guarded::GAtom, rename: &Bindings, out: &mut St
 /// only ever compared for equality/ordering against other keys from the
 /// SAME `removeRedundantCases` call, so ANY injective encoding induces the
 /// same equivalence partition.  The `rename` map is a var→var alpha
-/// renaming (`compute_rename_map`), so substituting it never produces a
-/// `Pair` and `mk_gpair`'s tuple-flattening (the one non-rename effect of
-/// `subst_guarded`) can never fire for this input class — a full
-/// `subst_guarded` here would do *nothing but rename free vars*.  This
-/// serializer renames the same free vars and is injective over the formula
-/// structure, so it partitions formulas exactly as a substitute-then-
-/// compare route would.
+/// renaming (`compute_rename_map`), and this serializer renames exactly those
+/// free vars in place: it never re-sorts an AC argument list, which a
+/// `subst_guarded` rebuild through `fApp` would.  Keeping the argument order
+/// keeps the partition as fine as the guarded store's own `==`.
 fn write_guarded_struct(g: &crate::guarded::Guarded, rename: &Bindings, out: &mut String) {
     use crate::guarded::Guarded;
     match g {

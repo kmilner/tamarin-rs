@@ -668,8 +668,7 @@ fn trace_goal_insert() -> bool {
 /// sort, then name (LTerm.hs:546-548); `Edge`'s derived `Ord` is `src` then
 /// `tgt` (Constraints.hs:79-83); `LessAtom`'s manual `Ord` is
 /// `(smaller, larger)`, ignoring the reason tag (Constraints.hs:126-130);
-/// `Ord Guarded` is derived (Guarded.hs:121-129), mirrored by
-/// [`crate::guarded::cmp_guarded`]; `Ord Goal` is derived
+/// `Ord Guarded` is derived (Guarded.hs:121-129); `Ord Goal` is derived
 /// (Constraints.hs:159-172), mirrored by
 /// [`crate::constraint::solver::goals::goal_cmp`].
 ///
@@ -689,7 +688,7 @@ pub fn nodes_in_map_order(nodes: &[(NodeId, RuleACInst)]) -> Vec<&(NodeId, RuleA
 /// this one implementation.
 pub fn formulas_in_set_order(formulas: &[Arc<Guarded>]) -> Vec<&Guarded> {
     let mut ordered: Vec<&Guarded> = formulas.iter().map(|f| f.as_ref()).collect();
-    ordered.sort_by(|a, b| crate::guarded::cmp_guarded(a, b));
+    ordered.sort();
     ordered
 }
 
@@ -1544,7 +1543,7 @@ impl System {
     ///
     /// The key match is `==` on the goal itself.  For Disj goals that is HS's
     /// Map-key match: both sides bind quantified vars by DeBruijn index (RS's
-    /// `BVar::Bound`, guarded_types.rs), so a Disj re-fired across proof
+    /// `BVar::Bound`), so a Disj re-fired across proof
     /// positions is structurally identical to the stored one and merges into
     /// it instead of accumulating a second, `solved=false` copy.
     pub fn add_goal_with_loop_flag(&mut self, g: Goal, looping: bool) {

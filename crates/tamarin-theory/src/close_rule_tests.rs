@@ -285,9 +285,9 @@ fn structural_lemma_closes_dotted_and_cross_sort_binders() {
     ];
     let g = deduction_lemma_guarded(&s, &n);
     assert!(
-        crate::guarded::free_vars(&g).is_empty(),
+        tamarin_term::lterm::frees(&g).is_empty(),
         "every occurrence must resolve to a binder; free vars: {:?}",
-        crate::guarded::free_vars(&g)
+        tamarin_term::lterm::frees(&g)
     );
     match &g {
         Guarded::GGuarded {

@@ -719,20 +719,13 @@ fn insert_lemma_flattens_top_level_conj() {
     // Use Atom-bearing lemmas so the smart Conj flattening doesn't
     // optimise them away. We just need two leaves that don't
     // recurse further into Conj.
-    use tamarin_parser::ast::{Atom, Term, VarSpec};
-    use tamarin_term::lterm::LSort;
-    let mkvar = |n: &str| {
-        Term::Var(VarSpec {
-            name: n.to_string(),
-            idx: 0,
-            sort: LSort::Node,
-            typ: None,
-        })
-    };
-    let l1 =
-        crate::guarded::Guarded::Atom(crate::guarded::atom_to_gatom_free(&Atom::Last(mkvar("i"))));
-    let l2 =
-        crate::guarded::Guarded::Atom(crate::guarded::atom_to_gatom_free(&Atom::Last(mkvar("j"))));
+    use crate::atom::ProtoAtom;
+    use crate::formula::BLNTerm;
+    use tamarin_term::lterm::{BVar, LSort, LVar};
+    use tamarin_term::vterm::var_term;
+    let mkvar = |n: &str| -> BLNTerm { var_term(BVar::Free(LVar::new(n, LSort::Node, 0))) };
+    let l1 = crate::guarded::Guarded::Atom(ProtoAtom::Last(mkvar("i")));
+    let l2 = crate::guarded::Guarded::Atom(ProtoAtom::Last(mkvar("j")));
     s.insert_lemma(crate::guarded::Guarded::Conj(
         vec![l1.clone(), l2.clone()].into(),
     ));
@@ -775,24 +768,18 @@ fn formula_to_system_all_traces_negates() {
 
 #[test]
 fn formula_to_system_partitions_safety_restrictions() {
-    use tamarin_parser::ast::{Atom, Term, TraceQuantifier, VarSpec};
-    use tamarin_term::lterm::LSort;
-    let mkvar = |n: &str| {
-        Term::Var(VarSpec {
-            name: n.to_string(),
-            idx: 0,
-            sort: LSort::Node,
-            typ: None,
-        })
-    };
+    use crate::atom::ProtoAtom;
+    use crate::formula::BLNTerm;
+    use tamarin_parser::ast::TraceQuantifier;
+    use tamarin_term::lterm::{BVar, LSort, LVar};
+    use tamarin_term::vterm::var_term;
+    let mkvar = |n: &str| -> BLNTerm { var_term(BVar::Free(LVar::new(n, LSort::Node, 0))) };
     // `Last(i)` has a free variable, so `is_safety_formula` rejects it.  It
     // is the non-safety arm of the partition.  It is also the one shape that
     // tells the two arms apart.  `formulas` holds exactly one entry in both
     // cases, the complete conjunction, so its length says nothing.
-    let goal =
-        crate::guarded::Guarded::Atom(crate::guarded::atom_to_gatom_free(&Atom::Last(mkvar("j"))));
-    let unsafe_r =
-        crate::guarded::Guarded::Atom(crate::guarded::atom_to_gatom_free(&Atom::Last(mkvar("i"))));
+    let goal = crate::guarded::Guarded::Atom(ProtoAtom::Last(mkvar("j")));
+    let unsafe_r = crate::guarded::Guarded::Atom(ProtoAtom::Last(mkvar("i")));
     // gtrue is a safety formula: it has no Ex and no free variables.  gfalse
     // (`Disj []`) is a safety formula too.
     let restrictions = vec![
@@ -877,16 +864,14 @@ fn subterm_constraint(small: u64, big: u64) -> SubtermConstraint {
 
 /// A `last(i.idx)` formula over one free node leaf.
 fn last_formula(idx: u64) -> Guarded {
-    use tamarin_parser::ast::{Atom, Term as PTerm, VarSpec};
-    use tamarin_term::lterm::LSort;
-    Guarded::Atom(crate::guarded::atom_to_gatom_free(&Atom::Last(PTerm::Var(
-        VarSpec {
-            name: "i".to_string(),
-            idx,
-            sort: LSort::Node,
-            typ: None,
-        },
-    ))))
+    use crate::atom::ProtoAtom;
+    use tamarin_term::lterm::{BVar, LSort, LVar};
+    use tamarin_term::vterm::var_term;
+    Guarded::Atom(ProtoAtom::Last(var_term(BVar::Free(LVar::new(
+        "i",
+        LSort::Node,
+        idx,
+    )))))
 }
 
 /// A system carrying a distinct variable in every field of the Haskell record

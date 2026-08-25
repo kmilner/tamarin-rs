@@ -315,13 +315,11 @@ impl HasFrees for Goal {
 /// - `LNTerm` — `Lit < App`, then symbol then arguments, mirroring the
 ///   derived `Ord (Term a)` / `Ord (Lit c v)` (Raw.hs:73-75, VTerm.hs:56-58).
 ///
-/// `Disj` bottoms out in `Guarded`, whose HS-faithful comparison is
-/// [`crate::guarded::cmp_guarded`]; HS's `Disj` is a newtype over a list, so
-/// the wrapper compares lexicographically.
+/// - `Guarded` — its own derived `Ord` (Guarded.hs:129); HS's `Disj` is a
+///   newtype over a list, so the wrapper compares lexicographically.
 ///
-/// This is a free function rather than an `Ord` impl because `Ord` requires
-/// `Eq`, and `Guarded` carries no `Eq` — the same reason `cmp_guarded` is a
-/// free function.
+/// This is a free function rather than an `Ord` impl because `Goal`'s `Eq` is
+/// derived and its HS-faithful order is not the derived one.
 ///
 /// HS holds `sGoals` in a `Map Goal GoalStatus`, so any `M.toList` walk of it
 /// is in ascending `Goal` order; this crate's goal store is a `Vec` in
@@ -363,7 +361,7 @@ pub fn cmp_goal(a: &Goal, b: &Goal) -> std::cmp::Ordering {
             let Goal::Disj(d2) = b else {
                 unreachable!("goal tag matched Disj")
             };
-            crate::guarded::cmp_slice(&d1.0, &d2.0, crate::guarded::cmp_guarded)
+            d1.0.cmp(&d2.0)
         }
         Goal::Subterm((s1, t1)) => {
             let Goal::Subterm((s2, t2)) = b else {
@@ -572,15 +570,9 @@ mod tests {
     /// A guarded atom over two free node leaves.
     fn guarded_pair() -> Guarded {
         use crate::atom::ProtoAtom;
-        use crate::guarded::{BVar, GTerm};
-        let leaf = |name: &str, idx: u64| {
-            GTerm::Var(BVar::Free(tamarin_parser::ast::VarSpec {
-                name: name.into(),
-                idx,
-                sort: tamarin_term::lterm::LSort::Node,
-                typ: None,
-            }))
-        };
+        use tamarin_term::lterm::{BVar, LSort, LVar};
+        use tamarin_term::vterm::var_term;
+        let leaf = |name: &str, idx: u64| var_term(BVar::Free(LVar::new(name, LSort::Node, idx)));
         Guarded::Atom(ProtoAtom::Less(leaf("g", 8), leaf("h", 9)))
     }
 

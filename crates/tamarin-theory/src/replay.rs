@@ -604,24 +604,8 @@ fn match_goal(stored: &Goal, sys: &System) -> Option<Goal> {
 
 /// HS `M.member` over `sGoals` (ProofMethod.hs:253-258): structural equality
 /// of the stored goal and a live one.
-///
-/// A `Disj` compares its alternatives under `canonicalize_ac_in_guarded`, the
-/// projection of the port's [`Guarded`](crate::guarded::Guarded) onto HS's
-/// `LNGuarded` identity: a live alternative can carry an AC folding that its
-/// stored twin does not (see `guarded::canonicalize_ac_in_guarded` for how
-/// `rename_precise_system` unsorts an AC chain).
 fn goal_matches(stored: &Goal, live: &Goal) -> bool {
-    use crate::guarded::canonicalize_ac_in_guarded as canon;
-    match (stored, live) {
-        (Goal::Disj(a), Goal::Disj(b)) => {
-            a.0.len() == b.0.len()
-                && a.0
-                    .iter()
-                    .zip(b.0.iter())
-                    .all(|(x, y)| canon(x) == canon(y))
-        }
-        _ => stored == live,
-    }
+    stored == live
 }
 
 #[cfg(test)]

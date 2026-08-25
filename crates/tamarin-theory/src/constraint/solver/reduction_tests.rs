@@ -1109,19 +1109,12 @@ fn default_case_name_is_one_indexed() {
 /// `Less`-of-node-ids idiom HS calls `markAsSolved`+decompose on
 /// (Reduction.hs:461-486).
 fn neg_less_node_universal(i_name: &str, j_name: &str) -> Guarded {
-    use crate::formula::Quantifier;
-    use crate::guarded::{atom_to_gatom_free, GAtom};
-    use tamarin_parser::ast::{Atom, Term, VarSpec};
-    use tamarin_term::lterm::LSort;
-    let mkvar = |n: &str| {
-        Term::Var(VarSpec {
-            name: n.to_string(),
-            idx: 0,
-            sort: LSort::Node,
-            typ: None,
-        })
-    };
-    let guard: GAtom = atom_to_gatom_free(&Atom::Less(mkvar(i_name), mkvar(j_name)));
+    use crate::atom::ProtoAtom;
+    use crate::formula::{BLNTerm, Quantifier};
+    use tamarin_term::lterm::{BVar, LSort, LVar};
+    use tamarin_term::vterm::var_term;
+    let mkvar = |n: &str| -> BLNTerm { var_term(BVar::Free(LVar::new(n, LSort::Node, 0))) };
+    let guard = ProtoAtom::Less(mkvar(i_name), mkvar(j_name));
     Guarded::GGuarded {
         qua: Quantifier::All,
         vars: Vec::new().into(),

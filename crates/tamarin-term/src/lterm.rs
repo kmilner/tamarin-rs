@@ -374,6 +374,17 @@ pub enum BVar<V> {
     Free(V),
 }
 
+/// HS `bltermNodeId` (LTerm.hs:526-528): the node-id variable of a term that
+/// is one — a `Free` leaf of sort `LSortNode` — and `None` otherwise.
+pub fn blterm_node_id<C>(t: &crate::term::Term<crate::vterm::Lit<C, BVar<LVar>>>) -> Option<LVar> {
+    match t {
+        crate::term::Term::Lit(crate::vterm::Lit::Var(BVar::Free(v))) if v.sort == LSort::Node => {
+            Some(*v)
+        }
+        _ => None,
+    }
+}
+
 impl<V> BVar<V> {
     pub fn is_bound(&self) -> bool {
         matches!(self, BVar::Bound(_))
@@ -525,9 +536,10 @@ impl HasFreesV for LVar {
     }
 }
 
-// Intentionally retained: faithful HS port of the `HasFrees (BVar v)` instance,
-// so `Lit<C, BVar<LVar>>` is a `HasFrees` leaf. Not yet reached through the
-// trait (formula terms over `BVar<LVar>` are traversed by pattern matching).
+// HS `instance HasFrees v => HasFrees (BVar v)` (LTerm.hs:766-776): a `Bound`
+// index carries no variable, so both directions pass it through.  This makes
+// `Lit<C, BVar<LVar>>` a `HasFrees` leaf, which is how the guarded formula's
+// terms over `BVar<LVar>` reach the trait.
 impl HasFreesV for BVar<LVar> {
     fn for_each_free_v(&self, f: &mut dyn FnMut(&LVar)) {
         if let BVar::Free(v) = self {

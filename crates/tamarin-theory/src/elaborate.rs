@@ -2272,8 +2272,7 @@ where
             // Defensive: `p::Term::Number` cannot arise from parsed
             // input. HS has no bare-integer (>=2) term — the parser
             // recognizes only `1`/`%1`/`DH_neutral` (Term.hs), and the
-            // Rust parser likewise never constructs `Term::Number`. This
-            // variant only appears via GTerm round-trip converters, so
+            // Rust parser likewise never constructs `Term::Number`, so
             // this arm is unreachable for real elaboration input.
             let n = Name::new(NameTag::Pub, "n".to_string());
             Some(Term::Lit(Lit::Con(n)))

@@ -213,10 +213,10 @@ pub fn trace_form(kind: &str, repr: impl FnOnce() -> String) {
 }
 
 /// Canonicalized representation of a Guarded formula for [FORMULA_ADD]
-/// tracing — recursive structural dump with full bound-term content
-/// (var idxs suppressed via name-only LVar rendering) so HS/Rust diffs
-/// can distinguish formulas with the same head shape but different
-/// instantiation of free vars (e.g., `KU(ni:42)` vs `KU(ni:44)`).
+/// tracing — a recursive structural dump whose terms print through HS's own
+/// `Show (Term a)` ([`tamarin_term::term::show_term`]), so HS/Rust diffs can
+/// distinguish formulas with the same head shape but different instantiation
+/// of free vars (e.g., `KU(Free ni.42)` vs `KU(Free ni.44)`).
 pub fn guarded_repr(g: &crate::guarded::Guarded) -> String {
     use crate::guarded::Guarded;
     match g {
@@ -247,53 +247,21 @@ pub fn guarded_repr(g: &crate::guarded::Guarded) -> String {
     }
 }
 
-fn atom_repr(a: &crate::guarded::GAtom) -> String {
+fn atom_repr(a: &crate::atom::Atom<crate::formula::BLNTerm>) -> String {
     use crate::atom::ProtoAtom;
+    use tamarin_term::term::show_term;
     match a {
-        ProtoAtom::EqE(s, t) => format!("Eq({},{})", term_repr(s), term_repr(t)),
-        ProtoAtom::Less(s, t) => format!("Less({},{})", term_repr(s), term_repr(t)),
-        ProtoAtom::Subterm(s, t) => format!("Subterm({},{})", term_repr(s), term_repr(t)),
-        ProtoAtom::Last(s) => format!("Last({})", term_repr(s)),
+        ProtoAtom::EqE(s, t) => format!("Eq({},{})", show_term(s), show_term(t)),
+        ProtoAtom::Less(s, t) => format!("Less({},{})", show_term(s), show_term(t)),
+        ProtoAtom::Subterm(s, t) => format!("Subterm({},{})", show_term(s), show_term(t)),
+        ProtoAtom::Last(s) => format!("Last({})", show_term(s)),
         ProtoAtom::Action(t, f) => format!(
             "{}({})@{}",
             crate::fact::fact_tag_name(&f.tag),
-            f.terms.iter().map(term_repr).collect::<Vec<_>>().join(","),
-            term_repr(t)
+            f.terms.iter().map(show_term).collect::<Vec<_>>().join(","),
+            show_term(t)
         ),
         ProtoAtom::Syntactic(_) => "Syntactic".to_string(),
-    }
-}
-
-fn term_repr(t: &crate::guarded::GTerm) -> String {
-    use crate::guarded::{BVar, GTerm};
-    match t {
-        GTerm::Var(BVar::Free(v)) => format!(
-            "{}{}#{}",
-            tamarin_term::lterm::sort_prefix(v.sort),
-            v.name,
-            v.idx
-        ),
-        GTerm::Var(BVar::Bound(n)) => format!("B{}", n),
-        GTerm::App(name, args) => format!(
-            "{}({})",
-            name,
-            args.iter().map(term_repr).collect::<Vec<_>>().join(",")
-        ),
-        GTerm::Pair(args) => format!(
-            "<{}>",
-            args.iter().map(term_repr).collect::<Vec<_>>().join(",")
-        ),
-        GTerm::AlgApp(name, a, b) => format!("{}({},{})", name, term_repr(a), term_repr(b)),
-        GTerm::Diff(a, b) => format!("diff({},{})", term_repr(a), term_repr(b)),
-        GTerm::BinOp(op, a, b) => format!("{:?}({},{})", op, term_repr(a), term_repr(b)),
-        GTerm::PubLit(s) => format!("'{}'", s),
-        GTerm::FreshLit(s) => format!("~'{}'", s),
-        GTerm::NatLit(s) => format!("%'{}'", s),
-        GTerm::Number(n) => format!("{}", n),
-        GTerm::NumberOne => "1".to_string(),
-        GTerm::NatOne => "%1".to_string(),
-        GTerm::DhNeutral => "1g".to_string(),
-        GTerm::PatMatch(t) => format!("=({})", term_repr(t)),
     }
 }
 

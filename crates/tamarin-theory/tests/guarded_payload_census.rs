@@ -9,38 +9,33 @@
 //!
 //! HS's guarded formula is `Guarded (String, LSort) Name LVar`
 //! (`Guarded.hs:391`) — its atoms are `Atom (VTerm c (BVar v))`
-//! (`Guarded.hs:121`) over the internal term, where the port's atoms carry
-//! parser-AST terms.  Each row below measures one difference between the two
-//! payloads over the whole tree, so the size of the difference is read off
-//! the corpus rather than assumed:
+//! (`Guarded.hs:121`) over the internal term.  Each row below is a property
+//! of that store read off the corpus rather than assumed:
 //!
-//! * `p::VarSpec` carries a SAPIC type annotation inside `GTerm`'s derived
-//!   `PartialEq`/`Hash`; `LVar` has no such field;
 //! * a substitution keyed on `(name, idx)` and one keyed on the whole `LVar`
 //!   agree exactly while no two free variables of one formula share a name
 //!   and an index across two sorts;
-//! * `em(a, b)` is the commutative symbol `canonicalize_ac_in_atom` sorts
-//!   name-keyed (`elaborate.rs`, HS `fAppC`, `Term/Term/Raw.hs:133-134`),
-//!   where `gterm_to_doc`'s `App` arm prints its two arguments in stored
-//!   order (`pretty_formula.rs`) — a binary `em` in the guarded store is
-//!   where the two orders part;
-//! * and [`MOVED_FORMULAS`] counts the formulas whose stored AC argument
-//!   lists are not the ones `fApp` builds (`Term/Term/Raw.hs:111-115`,
-//!   `:119-129`).  `cmp_term` orders a variable leaf through `cmp_bvar`,
-//!   which puts `Bound` before `Free` exactly as HS's derived `Ord BVar` does
-//!   (`LTerm.hs:476-478`), so `canonicalize_ac_in_guarded` sorts the way an
-//!   internal term does and its disagreement list is the measurement.
+//! * `em` is the commutative symbol `fAppC` sorts (`Term/Term/Raw.hs:
+//!   133-134`), and the printer's application arm writes its arguments in
+//!   stored order (`pretty_formula.rs`) — a binary `em` in the guarded store
+//!   is where a stored order could differ from a printed one;
+//! * and [`NON_CANONICAL_FORMULAS`] counts the formulas whose stored AC and
+//!   `C` argument lists are not the ones `fApp` builds
+//!   (`Term/Term/Raw.hs:111-115`, `:119-134`).
 
 use rayon::prelude::*;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
-use tamarin_term::lterm::LSort;
-use tamarin_theory::atom::ProtoAtom;
-use tamarin_theory::guarded::{
-    canonicalize_ac_in_guarded, formula_to_guarded, BVar, GAtom, GFact, GTerm, Guarded,
-};
+use tamarin_term::function_symbols::{CSym, FunSym};
+use tamarin_term::lterm::{BVar, LSort};
+use tamarin_term::term::Term;
+use tamarin_term::vterm::Lit;
+use tamarin_theory::atom::{Atom, ProtoAtom};
+use tamarin_theory::fact::Fact;
+use tamarin_theory::formula::BLNTerm;
+use tamarin_theory::guarded::{formula_to_guarded, is_ac_canonical, Guarded};
 
 /// Examples beyond this test's budget, relative to the corpus root and
 /// reported as `skipped_listed`: the accountability lemmas of the mixvote
@@ -51,18 +46,15 @@ const BEYOND_BUDGET: &[&str] = &[
     "sapic/deprecated/csf21-acc-unbounded/mixvote/mixvote_SmHh-multi-session-5-fixed.spthy",
 ];
 
-/// How many corpus formulas disagree with their own AC-canonicalisation, and
-/// how many files hold them.
+/// How many corpus formulas hold an AC or `C` argument list `fApp` would
+/// order differently, and how many files hold them.
 ///
-/// `blnatom_to_parser` lowers each atom with every binder open and sorts its
-/// AC arguments under `Ord LVar`; `subst_free_term_at_depth` then retags the
-/// drawn leaves `Bound` where they stand.  A chain whose order under
-/// `Ord LVar` differs from its order under the De Bruijn indices therefore
-/// keeps the open order, where a term rebuilt through `fApp` carries the
-/// closed one.  Every such formula is printed with both spellings; the two
-/// counts are the stop condition.
-const MOVED_FORMULAS: usize = 708;
-const MOVED_FILES: usize = 173;
+/// Every atom of the store is built through `fApp` (`f_app`, `f_app_ac`,
+/// `f_app_c`), which flattens and sorts those two argument lists, so the
+/// census expects none.  Any row printed here is a construction path that
+/// bypassed `fApp`.
+const NON_CANONICAL_FORMULAS: usize = 0;
+const NON_CANONICAL_FILES: usize = 0;
 
 /// The examples tree, or the override in `CORPUS_ROOT`.
 fn corpus_root() -> PathBuf {
@@ -109,62 +101,40 @@ struct Finding {
 struct Payload {
     /// How many facts the walk reached.
     facts: usize,
-    /// Free leaves carrying a SAPIC type.
-    typed: Vec<String>,
     /// The sorts each `(name, idx)` is seen at.
     frees: BTreeMap<(String, u64), BTreeSet<LSort>>,
     /// Binary applications of the commutative `em`.
     emap: Vec<String>,
 }
 
-fn walk_term(t: &GTerm, out: &mut Payload) {
+fn walk_term(t: &BLNTerm, out: &mut Payload) {
     match t {
-        GTerm::Var(BVar::Free(v)) => {
-            if v.typ.is_some() {
-                out.typed.push(format!("{v:?}"));
-            }
+        Term::Lit(Lit::Var(BVar::Free(v))) => {
             out.frees
-                .entry((v.name.clone(), v.idx))
+                .entry((v.name.to_string(), v.idx))
                 .or_default()
                 .insert(v.sort);
         }
-        GTerm::Var(BVar::Bound(_))
-        | GTerm::PubLit(_)
-        | GTerm::FreshLit(_)
-        | GTerm::NatLit(_)
-        | GTerm::Number(_)
-        | GTerm::NumberOne
-        | GTerm::NatOne
-        | GTerm::DhNeutral => {}
-        GTerm::App(n, args) => {
-            if &**n == "em" && args.len() == 2 {
+        Term::Lit(_) => {}
+        Term::App(sym, args) => {
+            if matches!(sym, FunSym::C(CSym::EMap)) && args.len() == 2 {
                 out.emap.push(format!("{t:?}"));
             }
             for a in args.iter() {
                 walk_term(a, out);
             }
         }
-        GTerm::Pair(items) => {
-            for a in items.iter() {
-                walk_term(a, out);
-            }
-        }
-        GTerm::AlgApp(_, a, b) | GTerm::Diff(a, b) | GTerm::BinOp(_, a, b) => {
-            walk_term(a, out);
-            walk_term(b, out);
-        }
-        GTerm::PatMatch(inner) => walk_term(inner, out),
     }
 }
 
-fn walk_fact(f: &GFact, out: &mut Payload) {
+fn walk_fact(f: &Fact<BLNTerm>, out: &mut Payload) {
     out.facts += 1;
     for a in f.terms.iter() {
         walk_term(a, out);
     }
 }
 
-fn walk_atom(a: &GAtom, out: &mut Payload) {
+fn walk_atom(a: &Atom<BLNTerm>, out: &mut Payload) {
     match a {
         ProtoAtom::EqE(x, y) | ProtoAtom::Less(x, y) | ProtoAtom::Subterm(x, y) => {
             walk_term(x, out);
@@ -203,10 +173,9 @@ struct FileReport {
     formulas: usize,
     facts: usize,
     unguardable: usize,
-    typed: Vec<Finding>,
     sort_collisions: Vec<Finding>,
     emap: Vec<Finding>,
-    moved: Vec<Finding>,
+    non_canonical: Vec<Finding>,
     elapsed: Duration,
 }
 
@@ -284,7 +253,6 @@ fn file_phase(path: &Path, root: &Path) -> FileReport {
             entry: entry.clone(),
             detail,
         };
-        report.typed.extend(payload.typed.into_iter().map(&row));
         report.emap.extend(payload.emap.into_iter().map(&row));
         for ((name, idx), sorts) in payload.frees {
             if sorts.len() > 1 {
@@ -293,11 +261,8 @@ fn file_phase(path: &Path, root: &Path) -> FileReport {
                     .push(row(format!("{name}.{idx} at {sorts:?}")));
             }
         }
-        let canonical = canonicalize_ac_in_guarded(&g);
-        if canonical != g {
-            report
-                .moved
-                .push(row(format!("stored {g:?}\n  canonical {canonical:?}")));
+        if !is_ac_canonical(&g) {
+            report.non_canonical.push(row(format!("stored {g:?}")));
         }
     }
     report.elapsed = start.elapsed();
@@ -393,18 +358,6 @@ fn rows(reports: &[FileReport], column: fn(&FileReport) -> &[Finding], tag: &str
 }
 
 #[test]
-fn corpus_guarded_variable_leaves_carry_no_sapic_type() {
-    let Some(reports) = census("sapic types") else {
-        return;
-    };
-    let entries = rows(reports, |r| &r.typed, "SAPIC-TYPE");
-    assert!(
-        entries.is_empty(),
-        "guarded variable leaves carry a SAPIC type in: {entries:?}"
-    );
-}
-
-#[test]
 fn corpus_guarded_free_variables_never_collide_across_sorts() {
     let Some(reports) = census("sort collisions") else {
         return;
@@ -429,15 +382,18 @@ fn corpus_guarded_terms_never_head_a_binary_em() {
 }
 
 #[test]
-fn corpus_guarded_ac_arguments_move_only_in_the_measured_set() {
+fn corpus_guarded_ac_arguments_are_canonical() {
     let Some(reports) = census("ac argument order") else {
         return;
     };
-    let entries = rows(reports, |r| &r.moved, "MOVED");
-    let files = reports.iter().filter(|r| !r.moved.is_empty()).count();
+    let entries = rows(reports, |r| &r.non_canonical, "NON-CANONICAL");
+    let files = reports
+        .iter()
+        .filter(|r| !r.non_canonical.is_empty())
+        .count();
     assert_eq!(
         (entries.len(), files),
-        (MOVED_FORMULAS, MOVED_FILES),
-        "the set of formulas whose AC arguments move has changed"
+        (NON_CANONICAL_FORMULAS, NON_CANONICAL_FILES),
+        "a stored formula holds an argument list `fApp` would order differently"
     );
 }

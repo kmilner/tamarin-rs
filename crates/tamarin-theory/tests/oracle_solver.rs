@@ -1555,30 +1555,21 @@ fn atom_decomposition_creates_action_goal_in_simplify() {
         return;
     };
 
-    use tamarin_parser::ast::{Atom, Fact, Term, VarSpec};
-    use tamarin_term::lterm::LSort;
-    let mkvar = |n: &str, sort: LSort| {
-        Term::Var(VarSpec {
-            name: n.to_string(),
-            idx: 0,
-            sort,
-            typ: None,
-        })
-    };
-    let action_atom = Atom::Action(
-        Fact {
-            persistent: false,
-            annotations: Vec::new(),
-            name: "Setup".into(),
-            args: vec![mkvar("k", LSort::Msg)],
-        },
+    use tamarin_term::lterm::{BVar, LSort, LVar};
+    use tamarin_term::vterm::var_term;
+    use tamarin_theory::atom::ProtoAtom;
+    use tamarin_theory::fact::{Fact, FactTag, Multiplicity};
+    use tamarin_theory::formula::BLNTerm;
+    let mkvar = |n: &str, sort: LSort| -> BLNTerm { var_term(BVar::Free(LVar::new(n, sort, 0))) };
+    let action_atom = ProtoAtom::Action(
         mkvar("i", LSort::Node),
+        Fact::fresh(
+            FactTag::Proto(Multiplicity::Linear, "Setup", 1),
+            vec![mkvar("k", LSort::Msg)],
+        ),
     );
     let g = tamarin_theory::guarded::Guarded::Conj(
-        vec![tamarin_theory::guarded::Guarded::Atom(
-            tamarin_theory::guarded::atom_to_gatom_free(&action_atom),
-        )]
-        .into(),
+        vec![tamarin_theory::guarded::Guarded::Atom(action_atom)].into(),
     );
     let mut sys = System::empty();
     sys.formulas_mut().push(std::sync::Arc::new(g));
@@ -1695,22 +1686,13 @@ fn simplify_conj_wrapping_disj_produces_goal() {
         return;
     };
 
-    use tamarin_parser::ast::{Atom, Term, VarSpec};
-    use tamarin_term::lterm::LSort;
-    let mkvar = |n: &str| {
-        Term::Var(VarSpec {
-            name: n.to_string(),
-            idx: 0,
-            sort: LSort::Node,
-            typ: None,
-        })
-    };
-    let a1 = tamarin_theory::guarded::Guarded::Atom(tamarin_theory::guarded::atom_to_gatom_free(
-        &Atom::Last(mkvar("i")),
-    ));
-    let a2 = tamarin_theory::guarded::Guarded::Atom(tamarin_theory::guarded::atom_to_gatom_free(
-        &Atom::Last(mkvar("j")),
-    ));
+    use tamarin_term::lterm::{BVar, LSort, LVar};
+    use tamarin_term::vterm::var_term;
+    use tamarin_theory::atom::ProtoAtom;
+    use tamarin_theory::formula::BLNTerm;
+    let mkvar = |n: &str| -> BLNTerm { var_term(BVar::Free(LVar::new(n, LSort::Node, 0))) };
+    let a1 = tamarin_theory::guarded::Guarded::Atom(ProtoAtom::Last(mkvar("i")));
+    let a2 = tamarin_theory::guarded::Guarded::Atom(ProtoAtom::Last(mkvar("j")));
     let disj = tamarin_theory::guarded::Guarded::Disj(vec![a1, a2].into());
     let mut sys = System::empty();
     sys.formulas_mut()

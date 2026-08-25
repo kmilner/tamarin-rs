@@ -4,6 +4,10 @@
 
 use super::*;
 use crate::atom::Unit2;
+use crate::formula::BLNTerm;
+use tamarin_term::function_symbols::{Constructability, NoEqSym, Privacy};
+use tamarin_term::lterm::{Name, NameTag};
+use tamarin_term::term::f_app_no_eq;
 
 fn v(name: &str, sort: LSort) -> p::VarSpec {
     p::VarSpec {
@@ -12,6 +16,31 @@ fn v(name: &str, sort: LSort) -> p::VarSpec {
         sort,
         typ: None,
     }
+}
+
+/// A free variable leaf of a guarded formula's term.
+fn bvar(name: &str, sort: LSort) -> BLNTerm {
+    tamarin_term::vterm::var_term(tamarin_term::lterm::BVar::Free(
+        tamarin_term::lterm::LVar::new(name, sort, 0),
+    ))
+}
+
+/// A public-name leaf of a guarded formula's term.
+fn bpub(name: &str) -> BLNTerm {
+    tamarin_term::vterm::const_term(Name::new(NameTag::Pub, name))
+}
+
+/// A user-declared public constructor applied to `args`.
+fn user_app(name: &str, args: Vec<BLNTerm>) -> BLNTerm {
+    f_app_no_eq(
+        NoEqSym::new(
+            name.as_bytes().to_vec(),
+            args.len(),
+            Privacy::Public,
+            Constructability::Constructor,
+        ),
+        args,
+    )
 }
 
 #[test]
@@ -223,10 +252,10 @@ fn guarded_negation_shortcut() {
     let g = Guarded::GGuarded {
         qua: Quantifier::All,
         vars: vec![].into(),
-        guards: vec![crate::guarded::atom_to_gatom_free(&p::Atom::Less(
-            p::Term::Var(v("i", LSort::Node)),
-            p::Term::Var(v("j", LSort::Node)),
-        ))]
+        guards: vec![crate::atom::ProtoAtom::Less(
+            bvar("i", LSort::Node),
+            bvar("j", LSort::Node),
+        )]
         .into(),
         body: std::sync::Arc::new(Guarded::Disj(vec![].into())),
     };
@@ -240,6 +269,23 @@ fn guarded_negation_shortcut() {
 /// pair payloads are long enough that the flat AC chain exceeds the ribbon
 /// and HS `prettyTerm` (Term/Term.hs:298-327, see line 305-309 `FApp (AC o) -> ppTerms ...`) must
 /// wrap it with the `++` operator at line ends and each element `nest 1`'d.
+fn ac_chain_bterm() -> BLNTerm {
+    let pair = |n: &str, payload: &str| {
+        f_app_no_eq(
+            tamarin_term::function_symbols::pair_sym(),
+            vec![bpub(n), bvar(payload, LSort::Fresh)],
+        )
+    };
+    tamarin_term::term::f_app_ac(
+        tamarin_term::function_symbols::AcSym::Union,
+        vec![
+            pair("1", "longPayloadNameNumberOne"),
+            pair("2", "longPayloadNameNumberTwo"),
+            pair("3", "longPayloadNameNumberThree"),
+        ],
+    )
+}
+
 fn ac_chain_term() -> p::Term {
     let pair = |n: &str, payload: &str| {
         p::Term::Pair(vec![
@@ -287,8 +333,10 @@ fn ac_union_chain_wraps_in_guarded_formula() {
     // The guarded path must wrap the SAME AC chain identically, since HS
     // uses ONE prettyTerm for both rule terms and formula terms.
     // Build `z = <chain>` as a guarded Eq atom and render wrapped.
-    let eq = p::Atom::Eq(p::Term::Var(v("z", LSort::Msg)), ac_chain_term());
-    let g = Guarded::Atom(crate::guarded::atom_to_gatom_free(&eq));
+    let g = Guarded::Atom(crate::atom::ProtoAtom::EqE(
+        bvar("z", LSort::Msg),
+        ac_chain_bterm(),
+    ));
     // indent 12 (a proof-tree depth) forces the RHS chain to wrap.
     let s = pretty_guarded_wrapped(&g, 12);
     assert!(s.contains("++\n"), "guarded AC chain did not wrap:\n{s}");
@@ -354,8 +402,8 @@ fn exp_with_ac_exponent_wraps_inside_fun() {
 // `{` branch of `atom_term` in `parser.rs`); HS `prettyTerm`/`ppFun`
 // (Term/Term.hs:298-327) has no brace case
 // and re-emits these NoEq applications in function form
-// `name(a, b)`.  Every term renderer (flat + Doc, parser-AST + GTerm) must
-// match that.
+// `name(a, b)`.  Every term renderer (flat + Doc, parser-AST + guarded
+// formula) must match that.
 #[test]
 fn algapp_renders_function_form_flat_term() {
     // sdec{body}key  ->  sdec(body, key)
@@ -392,48 +440,31 @@ fn algapp_renders_function_form_doc_term() {
 }
 
 #[test]
-fn algapp_renders_function_form_flat_gterm() {
-    let g = crate::guarded::GTerm::AlgApp(
-        "sdec".into(),
-        std::sync::Arc::new(crate::guarded::GTerm::Var(crate::guarded::BVar::Free(v(
-            "body",
-            LSort::Msg,
-        )))),
-        std::sync::Arc::new(crate::guarded::GTerm::Var(crate::guarded::BVar::Free(v(
-            "key",
-            LSort::Msg,
-        )))),
+fn algapp_renders_function_form_flat_guarded_term() {
+    let g = user_app(
+        "sdec",
+        vec![bvar("body", LSort::Msg), bvar("key", LSort::Msg)],
     );
     // The guarded printer reaches a term through its atom, so read the
-    // `AlgApp` off the left side of an equality.
-    let a = Guarded::Atom(crate::atom::ProtoAtom::EqE(
-        g,
-        crate::guarded::GTerm::PubLit("z".into()),
-    ));
+    // application off the left side of an equality.
+    let a = Guarded::Atom(crate::atom::ProtoAtom::EqE(g, bpub("z")));
     assert_eq!(pretty_guarded(&a), "sdec(body, key) = 'z'");
 }
 
 #[test]
-fn algapp_pair_arg_renders_function_form_doc_gterm() {
-    // senc{a,b}k as a GTerm -> senc(<a, b>, k) via the Doc renderer
-    let g = crate::guarded::GTerm::AlgApp(
-        "senc".into(),
-        std::sync::Arc::new(crate::guarded::GTerm::Pair(
-            vec![
-                crate::guarded::GTerm::Var(crate::guarded::BVar::Free(v("a", LSort::Msg))),
-                crate::guarded::GTerm::Var(crate::guarded::BVar::Free(v("b", LSort::Msg))),
-            ]
-            .into(),
-        )),
-        std::sync::Arc::new(crate::guarded::GTerm::Var(crate::guarded::BVar::Free(v(
-            "k",
-            LSort::Msg,
-        )))),
+fn algapp_pair_arg_renders_function_form_doc_guarded_term() {
+    // senc{a,b}k as a guarded term -> senc(<a, b>, k) via the Doc renderer
+    let g = user_app(
+        "senc",
+        vec![
+            f_app_no_eq(
+                tamarin_term::function_symbols::pair_sym(),
+                vec![bvar("a", LSort::Msg), bvar("b", LSort::Msg)],
+            ),
+            bvar("k", LSort::Msg),
+        ],
     );
-    let a = Guarded::Atom(crate::atom::ProtoAtom::EqE(
-        g,
-        crate::guarded::GTerm::PubLit("z".into()),
-    ));
+    let a = Guarded::Atom(crate::atom::ProtoAtom::EqE(g, bpub("z")));
     assert_eq!(guarded_doc(&a).render(), "senc(<a, b>, k) = 'z'");
 }
 
