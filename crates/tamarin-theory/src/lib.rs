@@ -98,5 +98,6 @@ pub(crate) mod test_corpus;
 pub(crate) mod test_maude;
 pub mod theory;
 pub mod tools;
+pub mod translated_rule_wf;
 pub mod translated_wf;
 pub mod wf_fill;

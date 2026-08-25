@@ -2199,9 +2199,11 @@ fn lookup_binder_render(r: &Rule) -> Option<&str> {
 }
 
 /// Collect a rule's unbound variables (conclusion/action vars NOT in
-/// any premise).  Returns the list in first-occurrence order, deduped,
-/// excluding pub-sort variables (which are implicitly adversary-known and so
-/// always bound).
+/// any premise), excluding pub-sort variables (which are implicitly
+/// adversary-known and so always bound).  HS's `unboundVars` is a `frees`
+/// result (Wellformedness.hs:505-511), and `frees = sortednub . freesList`
+/// (LTerm.hs:613-614), so the list comes back sorted by `Ord LVar` — `(idx,
+/// sort, name)` (LTerm.hs:546-548) — and deduplicated.
 fn collect_rule_unbound_vars(r: &Rule) -> Vec<VarSpec> {
     // HS `unboundCheck` (Wellformedness.hs:493-512) runs on the
     // let-substituted, macro-applied `ProtoRuleE` (`thyProtoRules`).  So
@@ -2253,6 +2255,14 @@ fn collect_rule_unbound_vars(r: &Rule) -> Vec<VarSpec> {
             }
         }
     }
+    // `sortednub` by HS's `Ord LVar`.  `seen` has already dropped the
+    // duplicates, so this only orders them.
+    unbound.sort_by(|a, b| {
+        a.idx
+            .cmp(&b.idx)
+            .then_with(|| a.sort.cmp(&b.sort))
+            .then_with(|| a.name.cmp(&b.name))
+    });
     unbound
 }
 

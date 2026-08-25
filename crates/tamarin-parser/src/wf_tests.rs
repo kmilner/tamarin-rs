@@ -846,6 +846,20 @@ fn lookup_binder_is_not_unbound() {
     );
 }
 
+/// HS `unboundVars` is a `frees` result (Wellformedness.hs:505-511), so the
+/// list is sorted by `Ord LVar` = `(idx, sort, name)` (LTerm.hs:546-548)
+/// rather than by source order: the fresh `~nr` precedes the msg-sorted `mi`
+/// and `ni`, and the pub-sorted `$A` is dropped.  Probed against the pinned
+/// oracle (ef3f0468) on `Out(<ni, ~nr, $A, mi>)`.
+#[test]
+fn unbound_variables_are_listed_in_lvar_order() {
+    let t = parse("theory T begin rule R: [ ] --[ ]-> [ Out(<ni, ~nr, $A, mi>) ] end");
+    assert_eq!(
+        group_bodies(&unbound_report(&t), "Unbound variables"),
+        "  rule `R' has unbound variables: \n    ~nr, mi, ni"
+    );
+}
+
 /// `equations [convergent]` as the LAST equations block suppresses the
 /// whole Subterm Convergence Warning (HS `isUserMarkedConvergent`,
 /// last-write-wins), even with a non-convergent regular block present.
