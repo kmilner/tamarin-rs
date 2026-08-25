@@ -433,3 +433,85 @@ fn max_var_equals_the_manual_walk() {
         );
     }
 }
+
+// =========================================================================
+// `prettyFact` (Theory/Model/Fact.hs:566-582)
+// =========================================================================
+
+/// `nestShort n lead finish body = sep [lead $$ nest n body, finish]`
+/// (Text/PrettyPrint/Class.hs:218) puts a space on each side of the argument
+/// list when the whole fact fits on one line, and the tag of a persistent
+/// fact carries the `!` prefix `showFactTag` gives it
+/// (Theory/Model/Fact.hs:549-553).
+#[test]
+fn pretty_lnfact_emits_the_nest_short_inner_spaces() {
+    let fa = ku_fact(fresh_var("ltk", 0));
+    assert_eq!(pretty_lnfact(&fa).render(), "!KU( ~ltk )");
+}
+
+/// A zero-argument fact still gets the two `nestShort` spaces: the body is
+/// the empty `fsep`, so the layout is `sep [text "F(", text ")"]`.
+#[test]
+fn pretty_lnfact_zero_arity_keeps_its_inner_space() {
+    let fa: LNFact = Fact::new(FactTag::Proto(Multiplicity::Linear, "F", 0), vec![]);
+    assert_eq!(pretty_lnfact(&fa).render(), "F( )");
+}
+
+/// `ppAnn` reads `S.toList`, i.e. `FactAnnotation`'s `Ord` order
+/// (Theory/Model/Fact.hs:573-574), which is the declaration order
+/// `SolveFirst < SolveLast < NoSources` (Theory/Model/Fact.hs:154).  The
+/// annotations go in in the opposite order, so the output can only come from
+/// the set's iteration order.
+#[test]
+fn pretty_lnfact_annotations_in_ord_order() {
+    let fa = ku_fact(fresh_var("ltk", 0))
+        .annotate(FactAnnotation::NoSources)
+        .annotate(FactAnnotation::SolveFirst);
+    assert_eq!(
+        pretty_lnfact(&fa).render(),
+        "!KU( ~ltk )[+, no_precomp]",
+        "the suffix is `brackets . fsep . punctuate comma` over the set"
+    );
+}
+
+/// A tag whose arity disagrees with the argument count prints
+/// `MALFORMED-` followed by HS's DERIVED `show tag`
+/// (Theory/Model/Fact.hs:569), which spells the constructor and quotes a
+/// protocol fact's name, and not the multiplicity-prefix spelling
+/// `show_fact_tag` gives.
+#[test]
+fn pretty_lnfact_malformed_arity() {
+    let proto: LNFact = Fact::new(
+        FactTag::Proto(Multiplicity::Persistent, "P", 2),
+        vec![mv("x", 0)],
+    );
+    assert_eq!(
+        pretty_lnfact(&proto).render(),
+        "MALFORMED-ProtoFact Persistent \"P\" 2( x )"
+    );
+    let builtin: LNFact = Fact::new(FactTag::Fresh, vec![mv("x", 0), mv("y", 0)]);
+    assert_eq!(
+        pretty_lnfact(&builtin).render(),
+        "MALFORMED-FreshFact( x, y )"
+    );
+    // The annotation suffix hangs off the malformed head as well
+    // (Theory/Model/Fact.hs:569).
+    let annotated = builtin.annotate(FactAnnotation::SolveLast);
+    assert_eq!(
+        pretty_lnfact(&annotated).render(),
+        "MALFORMED-FreshFact( x, y )[-]"
+    );
+}
+
+/// The argument printer is a parameter, exactly as `prettyFact ppTerm`
+/// (Theory/Model/Fact.hs:567) takes one, so a `Fact` over any term type
+/// prints through its own leaf renderer.
+#[test]
+fn pretty_fact_takes_the_argument_printer() {
+    let fa: Fact<&str> = Fact::new(FactTag::Proto(Multiplicity::Linear, "F", 2), vec!["a", "b"]);
+    let doc = pretty_fact(
+        &|s: &&str| crate::pretty_hpj::Doc::text(s.to_uppercase()),
+        &fa,
+    );
+    assert_eq!(doc.render(), "F( A, B )");
+}

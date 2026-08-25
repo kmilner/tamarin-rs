@@ -368,68 +368,11 @@ pub fn rule_body_to_doc(
 // HS `prettyIntruderVariants` (Theory/Model/Rule.hs:1465-1466):
 //   `vcat . intersperse (text "") $ map prettyIntrRuleAC vs`
 // each rule via `prettyNamedRule (kwRuleModulo "AC") (const emptyDoc)`
-// (Theory/Model/Rule.hs:1446-1447) = `header $-$ nest 2 body`, where the body is laid out
-// by `prettyRuleRestrGen` — the SAME `sep`-based layout as `rule_body_to_doc`
-// above.  Facts render with HS `prettyLNFact`/`prettyFact`
-// (Theory/Model/Fact.hs:567-582):
-// the SAME `nest_short_doc` paren layout as `fact_to_doc`, only over the
-// runtime `LNFact` representation with atomic `pretty_lnterm` argument docs.
+// (Theory/Model/Rule.hs:1446-1447) = `header $-$ nest 2 body`, where the body
+// is `rule::pretty_rule_restr_gen` over the rule's `LNFact`s.
 // The two blocks (DH then BP) concatenate with NO separating newline
 // (HS `putStrLn (dhS ++ bpS)`, Main/Mode/Intruder.hs:43-63, see line 53).
 // ============================================================================
-
-/// Render one runtime `LNFact` as a Doc — the `LNFact` analogue of
-/// `fact_to_doc`: `[!]TAG( t, … )` via `nest_short_doc`, arguments as atomic
-/// `pretty_lnterm` docs (intruder-rule fact terms never wrap internally, so
-/// the `sep`/`fsep` wrap decisions are identical to HS's structured docs).
-fn ln_fact_to_doc(fa: &crate::fact::LNFact) -> crate::pretty_hpj::Doc {
-    use crate::fact::{fact_tag_multiplicity, fact_tag_name, Multiplicity};
-    use crate::pretty_hpj::{self as hpj, Doc};
-    let mut lead = String::new();
-    // HS `showFactTag` (Theory/Model/Fact.hs:549-553): `!` prefix for persistent tags
-    // (incl. KU/KD), then the tag name.
-    if fact_tag_multiplicity(&fa.tag) == Multiplicity::Persistent {
-        lead.push('!');
-    }
-    lead.push_str(&fact_tag_name(&fa.tag));
-    lead.push('(');
-    let arg_docs: Vec<Doc> = fa
-        .terms
-        .iter()
-        .map(|t| Doc::text(tamarin_term::pretty::pretty_lnterm(t)))
-        .collect();
-    let body = hpj::fsep(hpj::punctuate(comma_doc(), arg_docs));
-    hpj::nest_short_doc(&lead, ")", body)
-}
-
-/// `[ f, … ]` fact-list for runtime `LNFact`s (HS `ppFactsList`).
-fn ln_facts_list_doc(facts: &[crate::fact::LNFact]) -> crate::pretty_hpj::Doc {
-    use crate::pretty_hpj::{self as hpj, Doc};
-    let inner: Vec<Doc> = facts.iter().map(ln_fact_to_doc).collect();
-    let body = hpj::fsep(hpj::punctuate(comma_doc(), inner));
-    hpj::fsep(vec![hpj::operator_("["), body, hpj::operator_("]")])
-}
-
-/// `[ prems ] --[ acts ]-> [ concls ]` body for an `LNFact` rule — the
-/// `LNFact` analogue of `rule_body_to_doc`, identical structure (HS
-/// `prettyRuleRestrGen`, Theory/Model/Rule.hs:1366-1375).
-fn ln_rule_body_to_doc(
-    prems: &[crate::fact::LNFact],
-    acts: &[crate::fact::LNFact],
-    concls: &[crate::fact::LNFact],
-) -> crate::pretty_hpj::Doc {
-    use crate::pretty_hpj::{self as hpj, Doc};
-    let prem_doc = ln_facts_list_doc(prems).nest(1);
-    let arrow = if acts.is_empty() {
-        hpj::operator_("-->")
-    } else {
-        let act_docs: Vec<Doc> = acts.iter().map(ln_fact_to_doc).collect();
-        let act_body = hpj::fsep(hpj::punctuate(comma_doc(), act_docs));
-        hpj::fsep(vec![hpj::operator_("--["), act_body, hpj::operator_("]->")])
-    };
-    let conc_doc = ln_facts_list_doc(concls).nest(1);
-    hpj::sep(vec![prem_doc, arrow, conc_doc])
-}
 
 /// HS intruder-rule name (`prettyIntrRuleACInfo`, Theory/Model/Rule.hs:1347-1357):
 /// `c`/`d` prefix for Constr/Destr, fixed lowercase keywords otherwise, all
@@ -481,7 +424,7 @@ pub fn pretty_intruder_variants(rules: &[crate::rule::IntrRuleAC]) -> String {
             let mut s = header.render();
             s.push('\n');
             s.push_str(
-                &ln_rule_body_to_doc(&r.premises, &r.actions, &r.conclusions)
+                &crate::rule::pretty_rule_restr_gen(&r.premises, &r.actions, &r.conclusions)
                     .nest(2)
                     .render(),
             );

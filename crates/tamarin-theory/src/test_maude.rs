@@ -90,6 +90,9 @@ mod tests {
     /// can call it.
     ///
     /// - `crates/tamarin-theory/src/test_maude.rs` — the shared probe above.
+    /// - `crates/tamarin-theory/tests/intruder_variants_render.rs` — the
+    ///   `tamarin-prover variants` byte pin, which generates the DH and BP
+    ///   intruder rules through two maude handles of its own.
     /// - `crates/tamarin-theory/tests/oracle_solver.rs` — the integration
     ///   mirror of that probe.
     /// - `crates/tamarin-theory/examples/common/mod.rs` — the loader for the
@@ -106,7 +109,7 @@ mod tests {
     /// - `crates/tamarin-term/src/test_maude.rs` — the bottom crate's own
     ///   shared probe, and the twin of this file.  It is in
     ///   [`SKIPS_SILENTLY`].
-    const ALLOWED: [&str; 8] = [
+    const ALLOWED: [&str; 9] = [
         "crates/tamarin-prover/tests/common/mod.rs",
         "crates/tamarin-server/src/handlers/proof_tree.rs",
         "crates/tamarin-server/tests/common/mod.rs",
@@ -114,6 +117,7 @@ mod tests {
         "crates/tamarin-term/src/test_maude.rs",
         "crates/tamarin-theory/examples/common/mod.rs",
         "crates/tamarin-theory/src/test_maude.rs",
+        "crates/tamarin-theory/tests/intruder_variants_render.rs",
         "crates/tamarin-theory/tests/oracle_solver.rs",
     ];
 
@@ -125,12 +129,13 @@ mod tests {
     /// the ladder of candidates.  A `MAUDE_PATH` that is set but names a file
     /// that does not exist must panic.  A probe that resolves nothing at all
     /// must also panic, unless the opt-out is named.
-    const MUST_BE_LOUD: [&str; 6] = [
+    const MUST_BE_LOUD: [&str; 7] = [
         "crates/tamarin-prover/tests/common/mod.rs",
         "crates/tamarin-server/src/handlers/proof_tree.rs",
         "crates/tamarin-server/tests/common/mod.rs",
         "crates/tamarin-server/tests/theory_io_ndc.rs",
         "crates/tamarin-theory/src/test_maude.rs",
+        "crates/tamarin-theory/tests/intruder_variants_render.rs",
         "crates/tamarin-theory/tests/oracle_solver.rs",
     ];
 

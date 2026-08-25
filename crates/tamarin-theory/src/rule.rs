@@ -20,8 +20,9 @@ use tamarin_term::function_symbols::{FunSym, NdcState};
 use tamarin_term::lterm::{HasFrees, LNTerm, LVar, Name};
 use tamarin_utils::color::Rgb;
 
-use crate::fact::LNFact;
+use crate::fact::{pretty_lnfact, LNFact};
 use crate::formula::SyntacticLNFormula;
+use crate::pretty_hpj::{fsep, operator_, punctuate, sep, Doc};
 use crate::sapic::PlainProcess;
 
 // =============================================================================
@@ -800,6 +801,46 @@ pub fn unifiable_rule_ac_insts(
         return Ok(true);
     }
     maude.unifiable(&eqs)
+}
+
+// =============================================================================
+// Pretty printing
+// =============================================================================
+
+/// HS `ppList = fsep . punctuate comma` applied to `map ppFact`
+/// (Theory/Model/Rule.hs:1379-1380) at `ppFact = prettyLNFact`.
+fn pp_list(facts: &[LNFact]) -> Doc {
+    fsep(punctuate(
+        Doc::char(','),
+        facts.iter().map(pretty_lnfact).collect(),
+    ))
+}
+
+/// HS `ppFactsList list = fsep [operator_ "[", ppFacts' list, operator_ "]"]`
+/// (Theory/Model/Rule.hs:1381).
+fn pp_facts_list(facts: &[LNFact]) -> Doc {
+    fsep(vec![operator_("["), pp_list(facts), operator_("]")])
+}
+
+/// HS `prettyRuleRestrGen ppFact ppRestr prems acts concls restr`
+/// (Theory/Model/Rule.hs:1366-1382) at `ppFact = prettyLNFact` and an empty
+/// restriction list, i.e. HS `prettyRule`
+/// (Theory/Model/Rule.hs:1389-1390):
+/// `sep [nest 1 (ppFactsList prems), arrow, nest 1 (ppFactsList concls)]`.
+///
+/// HS takes the bare `-->` arrow when `null acts && null restr`; `restr` is
+/// the empty list here, so the arrow turns on `acts` alone.
+pub fn pretty_rule_restr_gen(prems: &[LNFact], acts: &[LNFact], concls: &[LNFact]) -> Doc {
+    let arrow = if acts.is_empty() {
+        operator_("-->")
+    } else {
+        fsep(vec![operator_("--["), pp_list(acts), operator_("]->")])
+    };
+    sep(vec![
+        pp_facts_list(prems).nest(1),
+        arrow,
+        pp_facts_list(concls).nest(1),
+    ])
 }
 
 // =============================================================================

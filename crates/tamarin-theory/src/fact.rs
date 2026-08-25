@@ -14,6 +14,8 @@ use std::sync::Arc;
 
 use tamarin_term::lterm::{HasFrees, LNTerm, LVar};
 
+use crate::pretty_hpj::{fsep, nest_short_doc, punctuate, Doc};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Multiplicity {
     Persistent,
@@ -604,6 +606,91 @@ pub fn lvar_to_lnterm(v: &LVar) -> LNTerm {
         *v
     };
     tamarin_term::vterm::var_term(v)
+}
+
+// =============================================================================
+// Pretty printing
+// =============================================================================
+
+/// HS `showFactAnnotation` (Theory/Model/Fact.hs:559-564).
+fn show_fact_annotation(a: FactAnnotation) -> &'static str {
+    match a {
+        FactAnnotation::SolveFirst => "+",
+        FactAnnotation::SolveLast => "-",
+        FactAnnotation::NoSources => "no_precomp",
+    }
+}
+
+/// HS's DERIVED `Show FactTag` (Theory/Model/Fact.hs:137-148) — the
+/// constructor spelling [`pretty_fact`] puts after `MALFORMED-`
+/// (Theory/Model/Fact.hs:569), which is a different string from
+/// [`show_fact_tag`].  A `Proto` name is an identifier, so Haskell's `show`
+/// for its `String` field is the name in double quotes.
+fn show_fact_tag_derived(t: &FactTag) -> String {
+    match t {
+        FactTag::Proto(m, n, arity) => {
+            let mult = match m {
+                Multiplicity::Persistent => "Persistent",
+                Multiplicity::Linear => "Linear",
+            };
+            format!("ProtoFact {mult} \"{n}\" {arity}")
+        }
+        FactTag::Fresh => "FreshFact".to_string(),
+        FactTag::Out => "OutFact".to_string(),
+        FactTag::In => "InFact".to_string(),
+        FactTag::Ku => "KUFact".to_string(),
+        FactTag::Kd => "KDFact".to_string(),
+        FactTag::Ded => "DedFact".to_string(),
+        FactTag::Term => "TermFact".to_string(),
+    }
+}
+
+/// HS `ppFact n t = nestShort' (n ++ "(") ")" . fsep . punctuate comma $
+/// map ppTerm t` (Theory/Model/Fact.hs:572), with `nestShort' lead finish =
+/// nestShort (length lead + 1) (text lead) (text finish)` and `nestShort n
+/// lead finish body = sep [lead $$ nest n body, finish]`
+/// (Text/PrettyPrint/Class.hs:218-223).
+fn pp_fact<T>(pp_term: &dyn Fn(&T) -> Doc, n: &str, ts: &[T]) -> Doc {
+    let args: Vec<Doc> = ts.iter().map(pp_term).collect();
+    nest_short_doc(&format!("{n}("), ")", fsep(punctuate(Doc::char(','), args)))
+}
+
+/// HS `ppAnn ann` (Theory/Model/Fact.hs:573-574): the empty set prints as
+/// `emptyDoc`, any other as `brackets . fsep . punctuate comma` over
+/// `S.toList`.  `S.toList` yields `FactAnnotation`'s `Ord` order, which is
+/// the order a `BTreeSet` iterates in.
+fn pp_ann(ann: &BTreeSet<FactAnnotation>) -> Doc {
+    if ann.is_empty() {
+        return Doc::Empty;
+    }
+    let items: Vec<Doc> = ann
+        .iter()
+        .map(|a| Doc::text(show_fact_annotation(*a)))
+        .collect();
+    // HS `brackets p = char '[' <> p <> char ']'`
+    // (Text/PrettyPrint/Class.hs:150).
+    Doc::char('[')
+        .beside(fsep(punctuate(Doc::char(','), items)))
+        .beside(Doc::char(']'))
+}
+
+/// HS `prettyFact ppTerm (Fact tag an ts)` (Theory/Model/Fact.hs:566-574):
+/// the tag, the arguments in parentheses and the annotation suffix.  A tag
+/// whose arity disagrees with the argument count prints its head as
+/// `MALFORMED-` followed by HS's derived `show tag`
+/// (Theory/Model/Fact.hs:569).
+pub fn pretty_fact<T>(pp_term: &dyn Fn(&T) -> Doc, fa: &Fact<T>) -> Doc {
+    let head = if fact_tag_arity(&fa.tag) == fa.terms.len() {
+        show_fact_tag(&fa.tag)
+    } else {
+        format!("MALFORMED-{}", show_fact_tag_derived(&fa.tag))
+    };
+    pp_fact(pp_term, &head, &fa.terms).beside(pp_ann(&fa.annotations))
+}
+
+/// HS `prettyLNFact = prettyFact prettyNTerm` (Theory/Model/Fact.hs:581-582).
+pub fn pretty_lnfact(fa: &LNFact) -> Doc {
+    pretty_fact(&|t: &LNTerm| tamarin_term::pretty::pretty_nterm(t), fa)
 }
 
 #[cfg(test)]

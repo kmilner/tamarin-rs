@@ -500,3 +500,72 @@ fn rename_rule_shifts_indices() {
     });
     assert_eq!(idxs, vec![15, 16, 17, 18]);
 }
+
+// =========================================================================
+// `prettyRuleRestrGen` (Theory/Model/Rule.hs:1366-1382)
+// =========================================================================
+
+/// With no actions the middle of the `sep` is the bare `-->`
+/// (Theory/Model/Rule.hs:1369-1370), and each fact list is
+/// `fsep ["[", ppList, "]"]`, so a body that fits on one line carries a
+/// space inside each bracket.  The premise and conclusion lists are `nest
+/// 1`ed (Theory/Model/Rule.hs:1368,1375), which is the leading column the
+/// rule body shows when it is rendered at column zero.
+#[test]
+fn pretty_rule_restr_gen_uses_the_bare_arrow_without_actions() {
+    use tamarin_term::builtin::fresh_var;
+    let prems = vec![fresh_fact(fresh_var("k", 0))];
+    let concls = vec![out_fact(fresh_var("k", 0))];
+    assert_eq!(
+        pretty_rule_restr_gen(&prems, &[], &concls).render(),
+        " [ Fr( ~k ) ] --> [ Out( ~k ) ]"
+    );
+}
+
+/// With actions the arrow becomes `fsep ["--[", ppList acts, "]->"]`
+/// (Theory/Model/Rule.hs:1371-1374), and the action list is punctuated by
+/// the same comma as the premise and conclusion lists.
+#[test]
+fn pretty_rule_restr_gen_brackets_the_actions() {
+    use crate::fact::{proto_fact, Multiplicity};
+    use tamarin_term::builtin::fresh_var;
+    let prems = vec![fresh_fact(fresh_var("k", 0))];
+    let acts = vec![
+        proto_fact(Multiplicity::Linear, "A", vec![fresh_var("k", 0)]),
+        proto_fact(Multiplicity::Persistent, "B", vec![fresh_var("k", 0)]),
+    ];
+    let concls = vec![out_fact(fresh_var("k", 0))];
+    assert_eq!(
+        pretty_rule_restr_gen(&prems, &acts, &concls).render(),
+        " [ Fr( ~k ) ] --[ A( ~k ), !B( ~k ) ]-> [ Out( ~k ) ]"
+    );
+}
+
+/// A body too wide for the ribbon breaks at the `sep`
+/// (Theory/Model/Rule.hs:1368-1375): the premises, the arrow and the
+/// conclusions each take a line, and only the two fact lists carry the
+/// `nest 1` column.
+#[test]
+fn pretty_rule_restr_gen_breaks_at_the_arrows() {
+    use crate::fact::{proto_fact, Multiplicity};
+    use tamarin_term::builtin::fresh_var;
+    let prems: Vec<_> = (0..3)
+        .map(|i| {
+            proto_fact(
+                Multiplicity::Linear,
+                "Wide",
+                vec![fresh_var("keymaterial", i)],
+            )
+        })
+        .collect();
+    let concls = vec![out_fact(fresh_var("k", 0))];
+    let rendered = pretty_rule_restr_gen(&prems, &[], &concls).render();
+    assert_eq!(
+        rendered.lines().collect::<Vec<_>>(),
+        vec![
+            " [ Wide( ~keymaterial ), Wide( ~keymaterial.1 ), Wide( ~keymaterial.2 ) ]",
+            "-->",
+            " [ Out( ~k ) ]",
+        ]
+    );
+}
