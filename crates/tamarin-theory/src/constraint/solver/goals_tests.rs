@@ -440,3 +440,18 @@ fn tactic_ranking_keeps_the_braced_name() {
     assert_eq!(body("{rank}"), ('C', 1));
     assert_eq!(body("{undeclared}"), ('s', 0));
 }
+
+/// `pretty_goal_rankings` writes back the token each stored ranking parsed
+/// from — the single letters `goalRankingIdentifiers` maps
+/// (System.hs:584-597), an oracle ranking as its letter plus the quoted
+/// path, a tactic ranking as its braced name (`prettyGoalRanking`,
+/// System.hs:709-714), joined by single spaces (`prettyGoalRankings`,
+/// System.hs:706-707).  The theory stores the parsed list, so this round
+/// trip is what keeps a `heuristic:` header's echo byte-identical.
+#[test]
+fn parsed_heuristic_renders_back_to_its_tokens() {
+    let s = r#"s S i I p P C c o "x.py" O "y.py" {t}"#;
+    let rankings = parse_heuristic_str_with_tactics(s, "t.spthy", &[]);
+    assert_eq!(rankings.len(), 11);
+    assert_eq!(crate::pretty_theory::pretty_goal_rankings(&rankings), s);
+}

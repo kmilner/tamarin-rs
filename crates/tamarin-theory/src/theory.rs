@@ -193,7 +193,6 @@ pub enum LemmaAttr {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Lemma<P = ProofSkeleton> {
     pub name: String,
-    pub modulo: Option<String>,
     pub attributes: Vec<LemmaAttr>,
     pub trace_quantifier: TraceQuantifier,
     /// `_lFormula` (Items/LemmaItem.hs:53) — the macro- and predicate-expanded
@@ -224,16 +223,6 @@ pub fn apply_macro_in_lemma<P>(macros: &[LNMacro], lemma: Lemma<P>) -> Lemma<P> 
         original_formula: Some(original_formula),
         ..lemma
     }
-}
-
-// Not yet ported: diff theories (needs `ClosedDiffTheory`). `DiffLemma`,
-// `DiffTheoryItem`, `Side`, and `DiffTheory` below model the HS diff-theory
-// surface but are not yet produced by elaboration or consumed by the prover.
-#[derive(Debug, Clone, PartialEq)]
-pub struct DiffLemma<P = ProofSkeleton> {
-    pub name: String,
-    pub attributes: Vec<LemmaAttr>,
-    pub proof: P,
 }
 
 /// Accountability lemma — names a list of case-test identifiers and
@@ -316,31 +305,6 @@ impl<R, P: Clone, S: Clone> TheoryItem<R, P, S> {
             TheoryItem::Translation(x) => Ok(TheoryItem::Translation(x.clone())),
         }
     }
-}
-
-/// `DiffTheoryItem` — one top-level construct in a diff theory.
-#[derive(Debug, Clone, PartialEq)]
-pub enum DiffTheoryItem<
-    R = OpenProtoRule,
-    R2 = OpenProtoRule,
-    P = ProofSkeleton,
-    P2 = ProofSkeleton,
-> {
-    DiffRule(R),
-    EitherRule(Side, R2),
-    DiffLemma(DiffLemma<P>),
-    EitherLemma(Side, Lemma<P2>),
-    EitherRestriction(Side, Restriction),
-    DiffMacros(Vec<LNMacro>),
-    DiffText(FormalComment),
-    DiffConfigBlock(ConfigBlock),
-}
-
-/// Side of a diff theory.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Ord, PartialOrd, Hash)]
-pub enum Side {
-    LHS,
-    RHS,
 }
 
 // =============================================================================
@@ -792,41 +756,6 @@ pub fn contains_manual_rule_variants<P, S>(items: &[TheoryItem<MergedProtoRule, 
         .any(|i| matches!(i, TheoryItem::Rule(r) if !r.rule_ac.is_empty()))
 }
 
-// =============================================================================
-// Diff theory
-// =============================================================================
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct DiffTheory<R = OpenProtoRule, R2 = OpenProtoRule, P = ProofSkeleton, P2 = ProofSkeleton>
-{
-    pub name: String,
-    pub in_file: String,
-    /// The `heuristic:` header's goal rankings (HS `_thyHeuristic ::
-    /// [GoalRanking ProofContext]`, TheoryObject.hs:185), parsed when the
-    /// theory is built.
-    pub heuristic: Vec<crate::constraint::solver::goals::GoalRanking>,
-    pub tactic: Vec<crate::tactic::Tactic>,
-    pub signature: SignaturePure,
-    pub items: Vec<DiffTheoryItem<R, R2, P, P2>>,
-    pub options: Options,
-    pub is_sapic: bool,
-}
-
-impl<R, R2, P, P2> DiffTheory<R, R2, P, P2> {
-    pub fn new(name: impl Into<String>, signature: SignaturePure) -> Self {
-        DiffTheory {
-            name: name.into(),
-            in_file: String::new(),
-            heuristic: Vec::new(),
-            tactic: Vec::new(),
-            signature,
-            items: Vec::new(),
-            options: Options::default(),
-            is_sapic: false,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -839,7 +768,6 @@ mod tests {
     fn lemma(name: &str) -> Lemma<()> {
         Lemma {
             name: name.to_string(),
-            modulo: None,
             attributes: Vec::new(),
             trace_quantifier: TraceQuantifier::AllTraces,
             formula: crate::formula::ProtoFormula::ltrue(),

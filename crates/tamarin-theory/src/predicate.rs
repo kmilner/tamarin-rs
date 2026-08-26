@@ -327,11 +327,21 @@ mod tests {
         }
     }
 
+    /// `addPredicate`'s tag guard (TheoryObject.hs:540-543) keeps a theory
+    /// from declaring `Smaller/2`, so the declaration under test is built
+    /// here rather than parsed: the same tag as the built-in, a different
+    /// body.
     #[test]
     fn lookup_finds_a_declared_predicate_before_the_builtin() {
-        let preds = pred("Smaller(a, b) <=> a = b");
-        let probe: Fact<LVar> = Fact::new(preds[0].fact.tag, vec![]);
-        assert_eq!(lookup_predicate(&probe, &preds).unwrap(), preds[0]);
+        let declared = Predicate {
+            fact: builtin_predicates()[0].fact.clone(),
+            formula: crate::formula::ProtoFormula::ltrue(),
+        };
+        let probe: Fact<LVar> = Fact::new(declared.fact.tag, vec![]);
+        assert_eq!(
+            lookup_predicate(&probe, std::slice::from_ref(&declared)).unwrap(),
+            declared
+        );
         assert_eq!(
             lookup_predicate(&probe, &[]).unwrap(),
             builtin_predicates()[0],

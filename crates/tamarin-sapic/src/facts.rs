@@ -26,6 +26,8 @@ use crate::annotation::{to_parsed, ProcessAnnotation};
 // StateKind (Facts.hs:93-94) / TransFact (96-109) / TransAction (55-81)
 // =============================================================================
 
+// `pub` keeps the dead-code lint off `PState`: HS declares the variant
+// (Facts.hs:93) but never constructs it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StateKind {
     LState,
@@ -51,7 +53,7 @@ impl StateKind {
 /// `TransFact` (Facts.hs:96-109) — premise/conclusion facts.  Every
 /// constructor is wired through `factToFact`.
 #[derive(Debug, Clone, PartialEq)]
-pub enum TransFact {
+pub(crate) enum TransFact {
     Fr(LVar),
     In(LNTerm),
     Out(LNTerm),
@@ -86,7 +88,7 @@ pub enum TransFact {
 /// `TransAction` (Facts.hs:55-81) — action facts.  Every constructor is wired
 /// through `actionToFact`.
 #[derive(Debug, Clone, PartialEq)]
-pub enum TransAction {
+pub(crate) enum TransAction {
     InitEmpty,
     EventEmpty,
     /// A literal user action fact (`TamarinAct`).
@@ -135,14 +137,14 @@ pub enum TransAction {
 
 /// `SpecialPosition` (Facts.hs:111-113).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SpecialPosition {
+pub(crate) enum SpecialPosition {
     InitPosition,
     NoPosition,
 }
 
 /// `Either ProcessPosition SpecialPosition`.
 #[derive(Debug, Clone, PartialEq)]
-pub enum RulePosition {
+pub(crate) enum RulePosition {
     Pos(ProcessPosition),
     Special(SpecialPosition),
 }
@@ -484,7 +486,7 @@ pub(crate) fn color_for_process_name(names: &[String]) -> Rgb {
 /// `AnnotatedRule` (Facts.hs:116-125).  `process` is the subprocess this rule
 /// was generated for (used for naming / color / `process=` attribute).
 #[derive(Debug, Clone)]
-pub struct AnnotatedRule<Ann> {
+pub(crate) struct AnnotatedRule<Ann> {
     pub process_name: Option<String>,
     pub process: Process<Ann, SapicLVar>,
     pub position: RulePosition,
@@ -596,49 +598,10 @@ pub(crate) fn to_rule(r: &AnnotatedRule<ProcessAnnotation<LVar>>) -> ProtoRuleE 
     let prems: Vec<LNFact> = r.prems.iter().map(fact_to_fact).collect();
     let acts: Vec<LNFact> = r.acts.iter().map(action_to_fact).collect();
     let concs: Vec<LNFact> = r.concs.iter().map(fact_to_fact).collect();
-    let new_vars = compute_new_vars(&prems, &concs, &acts);
+    // HS `newVariables l r` (Facts.hs:379): the premises against the
+    // conclusions alone — the actions do not contribute new variables here.
+    let new_vars = tamarin_theory::fact::new_variables(&prems, &concs);
     Rule::new(info, prems, concs, acts).with_new_vars(new_vars)
-}
-
-/// `newVariables l r` (Rule.hs): variables in conclusions/actions not bound by
-/// the premises.  Mirrors `elaborate.rs::compute_new_vars`.
-pub(crate) fn compute_new_vars(prems: &[LNFact], concs: &[LNFact], acts: &[LNFact]) -> Vec<LNTerm> {
-    use std::collections::BTreeSet;
-    fn collect(t: &LNTerm, out: &mut BTreeSet<LVar>) {
-        match t {
-            VTerm::Lit(Lit::Var(v)) => {
-                out.insert(*v);
-            }
-            VTerm::Lit(_) => {}
-            VTerm::App(_, args) => {
-                for a in args.iter() {
-                    collect(a, out);
-                }
-            }
-        }
-    }
-    let mut prem_vars: BTreeSet<LVar> = BTreeSet::new();
-    for f in prems {
-        for t in f.terms.iter() {
-            collect(t, &mut prem_vars);
-        }
-    }
-    let mut new_set: BTreeSet<LVar> = BTreeSet::new();
-    for f in concs.iter().chain(acts) {
-        for t in f.terms.iter() {
-            let mut here = BTreeSet::new();
-            collect(t, &mut here);
-            for v in here {
-                if !prem_vars.contains(&v) {
-                    new_set.insert(v);
-                }
-            }
-        }
-    }
-    new_set
-        .into_iter()
-        .map(|v| VTerm::Lit(Lit::Var(v)))
-        .collect()
 }
 
 #[cfg(test)]
@@ -710,6 +673,35 @@ mod tests {
             }
             _ => panic!("expected proto fact"),
         }
+    }
+
+    /// `toRule` computes `newVariables l r` (Facts.hs:379): premises against
+    /// conclusions alone.  A variable occurring only in an action is not a
+    /// new variable of the generated rule; a conclusion-only variable is.
+    #[test]
+    fn to_rule_new_vars_ignore_action_only_variables() {
+        use tamarin_term::lterm::LSort;
+        use tamarin_term::vterm::var_term;
+
+        let x = LVar::new("x", LSort::Msg, 0);
+        let y = LVar::new("y", LSort::Msg, 0);
+        let z = LVar::new("z", LSort::Msg, 0);
+        let r = AnnotatedRule {
+            process_name: Some("t".to_string()),
+            process: Process::Null(ProcessAnnotation::default()),
+            position: RulePosition::Pos(vec![]),
+            prems: vec![TransFact::In(var_term(x))],
+            acts: vec![TransAction::TamarinAct(proto_fact(
+                Multiplicity::Linear,
+                "A",
+                vec![var_term(y)],
+            ))],
+            concs: vec![TransFact::Out(var_term(z))],
+            restr: Vec::new(),
+            index: 0,
+        };
+        let rule = to_rule(&r);
+        assert_eq!(rule.new_vars, vec![var_term(z)]);
     }
 
     #[test]

@@ -344,7 +344,7 @@ fn get_unlock_positions(p: &Process<ProcessAnnotation<LVar>, SapicLVar>) -> Vec<
 }
 
 /// The result of translating a single top-level process.
-pub struct Translation {
+pub(crate) struct Translation {
     /// The generated rules, each paired with its embedded `_restrict`
     /// formulas.  HS attaches these as the rule's `_preRestriction`
     /// (sapic/src/Sapic/Facts.hs:376-379); the port pairs them with the rule
@@ -358,7 +358,7 @@ pub struct Translation {
 /// (all-false) select the core linear pipeline (no progress / reliable / report
 /// / state-channel passes).
 #[derive(Debug, Clone, Copy, Default)]
-pub struct TranslateOptions {
+pub(crate) struct TranslateOptions {
     pub trans_progress: bool,
     pub trans_reliable: bool,
     pub async_channels: bool,
@@ -764,7 +764,6 @@ mod tests {
 
         let lem = tamarin_theory::theory::Lemma {
             name: "weird".into(),
-            modulo: None,
             attributes: vec![],
             trace_quantifier: tamarin_theory::theory::TraceQuantifier::AllTraces,
             formula: iff,

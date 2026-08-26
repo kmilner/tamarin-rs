@@ -79,7 +79,7 @@ impl std::error::Error for RunError {}
 /// Outcome of proving a single lemma. Mirrors the columns of Haskell's
 /// `summary of summaries:` block.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum LemmaVerdict {
+pub(crate) enum LemmaVerdict {
     Verified,
     Falsified,
     /// We exhausted the search budget or hit `Sorry`.
@@ -174,7 +174,7 @@ fn lemma_verdict(
 }
 
 #[derive(Debug, Clone)]
-pub struct LemmaResult {
+pub(crate) struct LemmaResult {
     pub name: String,
     pub verdict: LemmaVerdict,
     /// Proof-tree node count — matches HS's "(N steps)" in
@@ -187,7 +187,7 @@ pub struct LemmaResult {
 }
 
 #[derive(Debug, Clone)]
-pub struct FileResult {
+pub(crate) struct FileResult {
     pub in_file: String,
     pub out_file: Option<String>,
     pub results: Vec<LemmaResult>,
@@ -1099,7 +1099,10 @@ struct TheoryPipeline<'a> {
     translate_module: Option<TranslateModule>,
     in_file: &'a str,
     theory_name: String,
-    elaborated: tamarin_theory::theory::Theory,
+    /// Elaborated typed theory.  Behind `Arc` so the `ProverSession` shares
+    /// it without a copy; the translate/check stages mutate it through
+    /// `Arc::make_mut` while this pipeline holds the only reference.
+    elaborated: std::sync::Arc<tamarin_theory::theory::Theory>,
     wf_report: Vec<tamarin_theory::wellformedness::WfError>,
     /// The theory's `MaudeSig`, cloned from `elaborated` before SAPIC
     /// translation runs; drives the per-file Maude spawns.
@@ -1175,7 +1178,7 @@ impl TheoryPipeline<'_> {
         maude: MaudeHandle,
     ) -> Result<tamarin_theory::prove::ProverSession, tamarin_theory::prove::ProveError> {
         tamarin_theory::prove::ProverSession::build_with_in_file_and_heuristic(
-            &self.elaborated,
+            self.elaborated.clone(),
             maude,
             self.file_maude_pool.clone(),
             self.in_file,
@@ -1247,9 +1250,9 @@ impl TheoryPipeline<'_> {
                     // ones in place, and the recomputed `function:` items
                     // replace the source-positioned ones at the end of the
                     // item list.
-                    if let Err(e) =
-                        tamarin_sapic::type_theory::type_theory_env(&mut self.elaborated)
-                    {
+                    if let Err(e) = tamarin_sapic::type_theory::type_theory_env(
+                        std::sync::Arc::make_mut(&mut self.elaborated),
+                    ) {
                         // HS: `ProcessNotWellformed` / typing exceptions
                         // escape to GHC's runtime — `tamarin-prover: …`,
                         // exit 1.
@@ -1258,7 +1261,10 @@ impl TheoryPipeline<'_> {
                 }
                 wf
             } else {
-                match tamarin_sapic::apply::apply_sapic(&mut self.elaborated, user_set_heuristic) {
+                match tamarin_sapic::apply::apply_sapic(
+                    std::sync::Arc::make_mut(&mut self.elaborated),
+                    user_set_heuristic,
+                ) {
                     Ok(w) => w,
                     // HS: exceptions SAPIC `translate` raises — e.g. the
                     // `addProtoRule` name clash on inserting a generated rule
@@ -1282,7 +1288,9 @@ impl TheoryPipeline<'_> {
             // private/destructor flags.  Not part of `processOpenTheory`'s
             // `spthy` / `spthytyped` arms, so those translate modes skip it.
             if !skip_translation {
-                if let Err(e) = tamarin_accountability::translate(&mut self.elaborated) {
+                if let Err(e) = tamarin_accountability::translate(std::sync::Arc::make_mut(
+                    &mut self.elaborated,
+                )) {
                     // HS: the exceptions `Acc.translate` throws — `CaseTestsUndefined`
                     // (lib/accountability/src/Accountability.hs:42-49, see line 45) and the `UndefinedPredicate` /
                     // `DuplicateItem` parsing exceptions its `liftedAddLemma` /
@@ -1321,10 +1329,14 @@ impl TheoryPipeline<'_> {
         // (TheoryLoader.hs:702-703), which translate mode never reaches.
         if translate_module == Some(TranslateModule::Msr) {
             let lemma_names: &[String] = &self.opts.lemma_names;
-            self.elaborated.items.retain(|i| match i {
-                tamarin_theory::theory::TheoryItem::Lemma(l) => lemma_matches(lemma_names, &l.name),
-                _ => true,
-            });
+            std::sync::Arc::make_mut(&mut self.elaborated)
+                .items
+                .retain(|i| match i {
+                    tamarin_theory::theory::TheoryItem::Lemma(l) => {
+                        lemma_matches(lemma_names, &l.name)
+                    }
+                    _ => true,
+                });
         }
 
         Ok(())
@@ -1417,7 +1429,7 @@ impl TheoryPipeline<'_> {
         // (ClosedTheory.hs `closeTheory`).
         if let Some(m) = self.file_maude.as_ref() {
             tamarin_theory::tools::rule_variants::populate_rule_variants(
-                &mut self.elaborated,
+                std::sync::Arc::make_mut(&mut self.elaborated),
                 m,
                 self.file_maude_pool.as_deref(),
             );
@@ -1450,12 +1462,16 @@ impl TheoryPipeline<'_> {
         // closing.
         if let Some(wf_maude) = self.file_maude.as_ref() {
             use tamarin_theory::theory::TheoryItem;
-            self.elaborated.items.retain(|item| match item {
-                TheoryItem::Rule(opr) => {
-                    !tamarin_theory::tools::rule_variants::open_rule_has_no_variants(wf_maude, opr)
-                }
-                _ => true,
-            });
+            std::sync::Arc::make_mut(&mut self.elaborated)
+                .items
+                .retain(|item| match item {
+                    TheoryItem::Rule(opr) => {
+                        !tamarin_theory::tools::rule_variants::open_rule_has_no_variants(
+                            wf_maude, opr,
+                        )
+                    }
+                    _ => true,
+                });
         }
 
         // Annotate per-rule loop breakers on the OUTER theory so
@@ -1477,7 +1493,7 @@ impl TheoryPipeline<'_> {
         // loop-breaker comments, so the pass is skipped there.
         let translate_mode = self.translate_module.is_some();
         if let Some(m) = self.file_maude.as_ref().filter(|_| !translate_mode) {
-            annotate_theory_loop_breakers(&mut self.elaborated, m);
+            annotate_theory_loop_breakers(std::sync::Arc::make_mut(&mut self.elaborated), m);
         }
 
         // `showSaturation` is the last argument of `closeTheoryWithMaude`
@@ -1594,8 +1610,9 @@ impl TheoryPipeline<'_> {
         // no-prove and `--precompute-only` paths — shows `[NDC]` on tagged
         // symbols.
         for f in &self.ndc_funs {
-            let sig = std::mem::take(&mut self.elaborated.signature.maude_sig);
-            self.elaborated.signature.maude_sig =
+            let elab = std::sync::Arc::make_mut(&mut self.elaborated);
+            let sig = std::mem::take(&mut elab.signature.maude_sig);
+            elab.signature.maude_sig =
                 sig.join_ndc_in_sig(*f, tamarin_term::function_symbols::NdcState::IsNdc);
         }
 
@@ -1618,7 +1635,7 @@ impl TheoryPipeline<'_> {
         if self.auto_sources {
             let m = self.require_maude()?;
             tamarin_theory::auto_sources::apply_auto_sources(
-                &mut self.elaborated,
+                std::sync::Arc::make_mut(&mut self.elaborated),
                 m,
                 self.file_maude_pool.clone(),
                 self.ndc_cache.as_ref(),
@@ -1650,11 +1667,12 @@ impl TheoryPipeline<'_> {
                 crate::cli::PartialEval::Summary => tamarin_theory::tools::EvaluationStyle::Summary,
                 crate::cli::PartialEval::Verbose => tamarin_theory::tools::EvaluationStyle::Tracing,
             };
-            pe_trace =
-                tamarin_theory::tools::apply_partial_evaluation(&mut self.elaborated, m, style)
-                    .map_err(|e| {
-                        RunError(format!("partial evaluation of {} failed: {}", in_file, e))
-                    })?;
+            pe_trace = tamarin_theory::tools::apply_partial_evaluation(
+                std::sync::Arc::make_mut(&mut self.elaborated),
+                m,
+                style,
+            )
+            .map_err(|e| RunError(format!("partial evaluation of {} failed: {}", in_file, e)))?;
 
             // HS's second `closeTheoryWithMaude` (Prover.hs:237-264, see line 240).  The refined
             // rules come back as fresh open rules with empty `variant_substs`
@@ -1674,11 +1692,11 @@ impl TheoryPipeline<'_> {
             // theory and is keyed by rule name, which partial evaluation
             // makes non-unique.
             tamarin_theory::tools::rule_variants::populate_rule_variants(
-                &mut self.elaborated,
+                std::sync::Arc::make_mut(&mut self.elaborated),
                 m,
                 self.file_maude_pool.as_deref(),
             );
-            annotate_theory_loop_breakers(&mut self.elaborated, m);
+            annotate_theory_loop_breakers(std::sync::Arc::make_mut(&mut self.elaborated), m);
 
             // HS's re-close passes `autoSources` again
             // (`applyPartialEvaluation style autoSources`, TheoryLoader.hs:684-688;
@@ -1689,7 +1707,7 @@ impl TheoryPipeline<'_> {
             if self.auto_sources {
                 let m2 = self.require_maude()?;
                 tamarin_theory::auto_sources::apply_auto_sources(
-                    &mut self.elaborated,
+                    std::sync::Arc::make_mut(&mut self.elaborated),
                     m2,
                     self.file_maude_pool.clone(),
                     self.ndc_cache.as_ref(),
@@ -2304,7 +2322,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             translate_module,
             in_file: in_file.as_str(),
             theory_name,
-            elaborated,
+            elaborated: std::sync::Arc::new(elaborated),
             wf_report: Vec::new(),
             maude_sig,
             cut,
@@ -2662,7 +2680,7 @@ fn emit_output(args: &Args, in_file: &str, body: &str) -> Result<(), String> {
 
 /// Resolve the output path for `in_file` given the user's `-o` / `-O`
 /// flags. Returns `None` when output should go to stdout.
-pub fn out_path_for(args: &Args, in_file: &str) -> Option<String> {
+pub(crate) fn out_path_for(args: &Args, in_file: &str) -> Option<String> {
     if let Some(of) = &args.output_file {
         if !of.is_empty() {
             return Some(of.clone());

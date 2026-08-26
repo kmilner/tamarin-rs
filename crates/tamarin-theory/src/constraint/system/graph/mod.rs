@@ -54,11 +54,6 @@ pub struct Graph<'a> {
     /// and `getRelationType`/`colorEdge` (JSON.hs:434-435/452-453) — even for an
     /// endpoint the compression hid.
     pub system: &'a System,
-    /// The compressed/simplified copy [`Graph::repr`] was computed from.  These
-    /// nodes decide ONLY the record PORT an edge endpoint renders as, matching
-    /// the `dsConcs`/`dsPrems` state HS fills while emitting the repr's nodes
-    /// (System/Dot.hs:264-268) and reads back in `dotGenEdge` (System/Dot.hs:403-406).
-    pub simplified: RenderSystem,
     /// HS `_gRepr`.
     pub repr: GraphRepr,
     /// HS `_gAbbreviations`.
@@ -93,7 +88,6 @@ pub fn system_to_graph<'a>(sys: &'a System, options: &GraphOptions) -> Graph<'a>
     let abbreviations = compute_abbreviations(&repr, &AbbreviationOptions::default());
     Graph {
         system: sys,
-        simplified,
         repr,
         abbreviations,
     }

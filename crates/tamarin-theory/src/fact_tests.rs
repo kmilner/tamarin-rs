@@ -623,3 +623,23 @@ fn is_k_log_fact_is_the_proto_fact_named_k() {
         assert!(!is_proto_fact(&f) && !is_k_log_fact(&f), "{f:?}");
     }
 }
+
+/// HS `newVariables prems concs` (Theory/Model/Fact.hs:524-529): the
+/// difference of the two lists' variable sets, as terms, in sorted `LVar`
+/// order.  Only the two lists given take part — the caller decides whether
+/// the actions belong in the second one (`cs ++ as` at the rule parser's
+/// sites, the conclusions alone at the SAPIC and intruder sites).
+#[test]
+fn new_variables_is_the_sorted_conc_minus_prem_difference() {
+    let x = msg_var("x", 0);
+    let y = msg_var("y", 0);
+    let z = msg_var("z", 0);
+    let prems = vec![proto_fact(Multiplicity::Linear, "P", vec![x.clone()])];
+    let concs = vec![proto_fact(
+        Multiplicity::Linear,
+        "Q",
+        vec![z.clone(), y.clone(), x.clone()],
+    )];
+    assert_eq!(new_variables(&prems, &concs), vec![y, z]);
+    assert_eq!(new_variables(&concs, &prems), Vec::<LNTerm>::new());
+}

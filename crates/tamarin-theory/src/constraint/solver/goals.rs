@@ -193,13 +193,12 @@ fn loop_status(b: bool) -> String {
 ///   tactic_ranking ::= '{' [^}]* '}'
 ///   letter      ::= [a-zA-Z]
 ///
-/// `{name}` tactic rankings resolve against the theory's tactic list (HS
-/// `chosenTactic`, ProofMethod.hs:493-495).  A `{.}` (no name) resolves to HS
-/// `defaultTactic` (`Tactic "default" (SmartRanking False) [] []`,
-/// System.hs:533-534).  An unknown `{name}` falls back to `Smart(false)` —
-/// lenient on purpose for the in-file `heuristic:` header and the web routes;
-/// the batch CLI path rejects invalid strings first
-/// (`prove::validate_cli_heuristic`), so this fallback is unreachable there.
+/// `{name}` tactic rankings keep the name written between the braces and take
+/// the body of the theory's declared tactic of that name (HS looks it up at
+/// ranking time — `chosenTactic`, ProofMethod.hs:490-503).  A name no declared
+/// tactic carries — `{.}` included — keeps HS `defaultTactic`'s body
+/// (`Tactic "default" (SmartRanking False) [] []`, System.hs:533-534),
+/// which reorders nothing.
 pub fn parse_heuristic_str_with_tactics(
     s: &str,
     theory_file: &str,

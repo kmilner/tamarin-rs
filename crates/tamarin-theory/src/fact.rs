@@ -611,6 +611,32 @@ pub fn proto_fact(mult: Multiplicity, name: &str, terms: Vec<LNTerm>) -> LNFact 
     )
 }
 
+/// HS `newVariables` (Theory/Model/Fact.hs:524-529): the variables of `concs`
+/// not free in `prems`, as `varTerm`s in `S.toList` (sorted `LVar`) order.
+/// Call sites compose the second argument as HS does: the rule elaboration
+/// and `apply_macro_in_rule` pass `cs ++ as`
+/// (Theory/Text/Parser/Rule.hs:121-154, Theory/Model/Rule.hs:1121); the
+/// intruder-variant and SAPIC rule builders pass the conclusions alone
+/// (Theory/Text/Parser/Rule.hs:161, Sapic/Facts.hs:379).
+pub fn new_variables(prems: &[LNFact], concs: &[LNFact]) -> Vec<LNTerm> {
+    let mut prem_vars: BTreeSet<LVar> = BTreeSet::new();
+    for f in prems {
+        f.for_each_free(&mut |v| {
+            prem_vars.insert(*v);
+        });
+    }
+    let mut conc_vars: BTreeSet<LVar> = BTreeSet::new();
+    for f in concs {
+        f.for_each_free(&mut |v| {
+            conc_vars.insert(*v);
+        });
+    }
+    conc_vars
+        .difference(&prem_vars)
+        .map(|v| tamarin_term::vterm::var_term(*v))
+        .collect()
+}
+
 /// View a protocol or `In` fact's terms. Port of HS `protoOrInFactView`
 /// (Theory/Model/Fact.hs:358-364): a `ProtoFact` yields its terms; an `In` fact (arity 1)
 /// yields its single term; anything else is `None`. A malformed `In` fact

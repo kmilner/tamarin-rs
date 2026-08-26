@@ -49,7 +49,7 @@ use crate::handlers::path_parse::{encode_sub_path, url_path_escape};
 use crate::handlers::root::html_escape;
 
 /// Per-lemma live proof state, held inside [`TheoryEntry`].
-pub struct LemmaProofState {
+pub(crate) struct LemmaProofState {
     pub root: ProofNode,
 }
 
@@ -78,7 +78,7 @@ pub struct LemmaProofState {
 /// (`Arc<BTreeMap<…>>`); each read site copies its two fields into the
 /// Mutex-locked ctx before ranking, so there is no stale read across
 /// interleaved requests.
-pub struct LemmaSearchSettings {
+pub(crate) struct LemmaSearchSettings {
     pub use_induction: UseInduction,
     pub heuristic: Option<Vec<GoalRanking>>,
 }
@@ -93,12 +93,12 @@ pub struct LemmaSearchSettings {
 /// `Mutex` so step application is serialised against autoprove runs.
 pub struct ProofState {
     pub ctx: Arc<Mutex<ProofContext>>,
-    pub by_lemma: Arc<Mutex<BTreeMap<String, LemmaProofState>>>,
+    pub(crate) by_lemma: Arc<Mutex<BTreeMap<String, LemmaProofState>>>,
     /// Immutable, lock-free per-lemma search settings (see
     /// [`LemmaSearchSettings`]).  Built once in [`ProofState::new`]; read at
     /// every display / method-index site to override the shared ctx's
     /// `use_induction` + `heuristic` for the lemma being ranked.
-    pub lemma_settings: Arc<BTreeMap<String, LemmaSearchSettings>>,
+    pub(crate) lemma_settings: Arc<BTreeMap<String, LemmaSearchSettings>>,
     /// Shared per-file prover session (batch `--prove`'s per-lemma-context
     /// factory).  The web `autoprove`/`autoproveAll` handlers run their
     /// searches through `prove_system_in_session`, which clones this
@@ -128,7 +128,7 @@ impl ProofState {
     /// re-runs the check.  The borrowed handle is the same allocation the
     /// `TheoryEntry` holds, so neither injection copies the rule list.
     pub fn new(
-        typed: &tamarin_theory::theory::Theory,
+        typed: &std::sync::Arc<tamarin_theory::theory::Theory>,
         maude_sig: tamarin_term::maude_sig::MaudeSig,
         maude_path: &str,
         cli_cut: Option<tamarin_theory::constraint::solver::context::CutStrategy>,
@@ -216,7 +216,7 @@ impl ProofState {
         //
         let session: Option<Arc<tamarin_theory::prove::ProverSession>> =
             match tamarin_theory::prove::ProverSession::build_with_in_file_and_heuristic(
-                typed,
+                typed.clone(),
                 maude.clone(),
                 None,
                 in_file,
@@ -590,7 +590,7 @@ impl ProofState {
 
 /// Walk `path`'s case names down from `node` (the node itself for an empty
 /// path); `None` when a segment names no child.
-pub fn navigate_at<'a>(node: &'a ProofNode, path: &[String]) -> Option<&'a ProofNode> {
+pub(crate) fn navigate_at<'a>(node: &'a ProofNode, path: &[String]) -> Option<&'a ProofNode> {
     let mut cur = node;
     for seg in path {
         cur = cur.children.get(seg)?;
@@ -613,7 +613,7 @@ pub fn navigate_at<'a>(node: &'a ProofNode, path: &[String]) -> Option<&'a Proof
 /// `BTreeMap`, whose iteration order matches HS's `M.toList` (sorted by
 /// `CaseName`).  Used by `next`/`prev` (`nextThyPath`/`nextSmartThyPath`) to
 /// enumerate the navigable proof positions in order.
-pub fn get_proof_paths(root: &ProofNode) -> Vec<(Vec<String>, ProofMethod)> {
+pub(crate) fn get_proof_paths(root: &ProofNode) -> Vec<(Vec<String>, ProofMethod)> {
     let mut out = vec![(Vec::new(), root.method.clone())];
     proof_paths_go(root, &mut Vec::new(), &mut out);
     out
@@ -637,7 +637,7 @@ fn proof_paths_go(
 /// Port of HS `isInterestingMethod` (`Web/Theory.hs:1968-1972`): the proof
 /// methods that `nextSmartThyPath`/`prevSmartThyPath` stop on — an open
 /// `Sorry` leaf, or a `Finished` `Solved`/`Unfinishable` terminal.
-pub fn is_interesting_method(m: &ProofMethod) -> bool {
+pub(crate) fn is_interesting_method(m: &ProofMethod) -> bool {
     use tamarin_theory::constraint::solver::proof_method::Result as R;
     matches!(
         m,
@@ -685,7 +685,7 @@ fn combine_status(a: NodeStatus, b: NodeStatus) -> NodeStatus {
 /// The method-string is split from the path-tail at the LAST segment
 /// by the caller; this fn just parses the head segment + an optional
 /// goal-id segment for `solve`.
-pub fn parse_method(
+pub(crate) fn parse_method(
     segments: &[String],
     sys: &tamarin_theory::constraint::system::System,
 ) -> Option<ProofMethod> {
@@ -714,7 +714,7 @@ pub fn parse_method(
 
 /// Render the proof tree for a lemma as nested HTML — mirrors
 /// Haskell's `prettyProof`.
-pub fn render_proof_tree_html(idx: usize, lemma: &str, root: &ProofNode) -> String {
+pub(crate) fn render_proof_tree_html(idx: usize, lemma: &str, root: &ProofNode) -> String {
     let mut out = String::new();
     out.push_str(&format!(
         "<h2>Proof of <code>{}</code></h2>\n",
@@ -739,7 +739,7 @@ pub fn render_proof_tree_html(idx: usize, lemma: &str, root: &ProofNode) -> Stri
 ///      `<div class="preformatted sequent">…prettyNonGraphSystem…</div>`
 ///   3. `<h3>N sub-case(s)</h3>`
 ///      `<h4>case <name></h4>` + `<static-graph graphSrc="…">` per child.
-pub fn render_sub_proof_snippet(
+pub(crate) fn render_sub_proof_snippet(
     idx: usize,
     lemma: &str,
     proof_path: &[String],
@@ -1172,7 +1172,7 @@ fn render_node(out: &mut String, idx: usize, lemma: &str, path: &[String], node:
 
 /// Port of Haskell's `prettyProofMethod`
 /// (`lib/theory/src/Theory/Constraint/Solver/ProofMethod.hs:1173-1186`).
-pub fn method_label(m: &ProofMethod) -> String {
+pub(crate) fn method_label(m: &ProofMethod) -> String {
     // Delegate to the byte-faithful `--prove` renderer (HS `prettyProofMethod`)
     // so the interactive method labels carry the same fact spacing
     // (`!KU( ~ltk )`), LVar dots (`#vk.2`), and contradiction reasons as the

@@ -35,7 +35,7 @@ use crate::facts::{
 /// A single translation "rule body": `(prems, acts, concs, restr)`.
 /// HS `([TransFact],[TransAction],[TransFact],[SyntacticLNFormula])`; the
 /// 4th element carries the rule's embedded restriction formulas.
-pub type RuleBody = (
+pub(crate) type RuleBody = (
     Vec<TransFact>,
     Vec<TransAction>,
     Vec<TransFact>,
@@ -116,11 +116,6 @@ pub(crate) fn list_intersect<T: PartialEq + Clone>(xs: &[T], ys: &[T]) -> Vec<T>
     xs.iter().filter(|x| ys.contains(x)).cloned().collect()
 }
 
-/// `toLVar v = slvar v`.
-pub(crate) fn to_lvar(v: &SapicLVar) -> LVar {
-    v.var
-}
-
 /// `baseTransAction` (Basetranslation.hs:94-205).  Returns the rule bodies and
 /// the updated `tildex`.  `needs_ass_immediate` is the `needsInEvRes` flag;
 /// when false, `Event` emits NO extra `EventEmpty` action.
@@ -174,7 +169,7 @@ pub(crate) fn base_trans_action(
         // (New v): `tx' = toLVar v `insert` tildex`
         //   [([def_state, Fr (toLVar v)], [], [def_state' tx'], [])]
         SapicAction::New(v) => {
-            let lv = to_lvar(v);
+            let lv = v.to_lvar();
             let mut tx2 = tildex.clone();
             tx2.insert(lv);
             let body: RuleBody = (
@@ -582,7 +577,7 @@ pub(crate) fn base_trans_action(
 /// — HS `TranslationResultComb` (Basetranslation.hs:51-51).  `tildex_r` is `None`
 /// when the combinator has no right child to translate (e.g. `let` without an
 /// else branch).
-pub type CombResult = (Vec<RuleBody>, BTreeSet<LVar>, Option<BTreeSet<LVar>>);
+pub(crate) type CombResult = (Vec<RuleBody>, BTreeSet<LVar>, Option<BTreeSet<LVar>>);
 
 /// `baseTransComb` (Basetranslation.hs:226-306): `Parallel`, `NDC`, `CondEq`,
 /// `Cond` (with a formula), `Lookup` and `Let`.
@@ -641,10 +636,7 @@ pub(crate) fn base_trans_comb(
             // (untyped) Eq fact.
             let vars_f = fact_vars(&fa);
             if !vars_f.is_subset(tildex) {
-                let unbound: Vec<LVar> = vars_f.difference(tildex).copied().collect();
-                return Err(format!(
-                    "process not well-formed: unbound variables in conditional: {unbound:?}"
-                ));
+                return Err(wf_unbound(vars_f.difference(tildex).copied()));
             }
             let body_eq: RuleBody = (
                 vec![def_state(tildex)],
@@ -678,10 +670,7 @@ pub(crate) fn base_trans_comb(
             // timepoint variables, compared against `tildex :: Set LVar`.
             let freevars_f: BTreeSet<LVar> = formula_frees(&f).into_iter().collect();
             if !freevars_f.is_subset(tildex) {
-                let unbound: Vec<LVar> = freevars_f.difference(tildex).copied().collect();
-                return Err(format!(
-                    "process not well-formed: unbound variables in conditional: {unbound:?}"
-                ));
+                return Err(wf_unbound(freevars_f.difference(tildex).copied()));
             }
             // then-arm carries `[f]`; else-arm carries `[Not f]`.
             let body_then: RuleBody = (
@@ -713,7 +702,7 @@ pub(crate) fn base_trans_comb(
         PC::Lookup(t, v) if an.pure_state && an.unlock.is_some() => {
             let vs = an.unlock.as_ref().unwrap().0;
             let lt = to_ln_term(t);
-            let lv = to_lvar(v);
+            let lv = v.to_lvar();
             let mut tx_prime = tildex.clone();
             tx_prime.insert(lv);
             tx_prime.insert(vs);
@@ -739,7 +728,7 @@ pub(crate) fn base_trans_comb(
         //    tx', Just tildex)
         PC::Lookup(t, v) => {
             let lt = to_ln_term(t);
-            let lv = to_lvar(v);
+            let lv = v.to_lvar();
             let mut tx_prime = tildex.clone();
             tx_prime.insert(lv);
             let body_in: RuleBody = (
@@ -913,6 +902,14 @@ fn fact_vars(f: &tamarin_theory::fact::LNFact) -> BTreeSet<LVar> {
         .iter()
         .flat_map(tamarin_term::vterm::vars_vterm)
         .collect()
+}
+
+/// `show (WFUnbound varset)` (Sapic/Exceptions.hs:106-111): `The variable(s)
+/// <vars> are not bound.`, the variables comma-joined in set order
+/// (`prettyVarSet`, Sapic/Exceptions.hs:84-85).
+fn wf_unbound(vars: impl Iterator<Item = LVar>) -> String {
+    let vars: Vec<String> = vars.map(|v| v.to_string()).collect();
+    format!("The variable(s) {} are not bound.", vars.join(", "))
 }
 
 /// `baseInit` (Basetranslation.hs:312-318): the `Init` rule plus the empty
@@ -1389,10 +1386,7 @@ mod tests {
         assert!(base_trans_comb(&cond("Ex y. Eq(y, x)"), &an, &pos, &tx).is_ok());
 
         let err = base_trans_comb(&cond("Ex #j. Foo(x) @ #j"), &an, &pos, &tx).unwrap_err();
-        assert!(
-            err.contains("name: \"j\"") && err.contains("Node"),
-            "expected the timepoint to stay free, got {err}"
-        );
+        assert_eq!(err, "The variable(s) #j are not bound.");
     }
 
     // A user-`[AC]` symbol prints INFIX, as HS `prettyTerm` renders it

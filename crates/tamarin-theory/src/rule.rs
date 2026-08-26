@@ -121,7 +121,9 @@ pub fn apply_macro_in_rule<I>(macros: &[LNMacro], r: Rule<I>) -> Rule<I> {
         .iter()
         .map(|f| apply_macro_in_fact(macros, f))
         .collect();
-    let new_vars = crate::elaborate::compute_new_vars(&premises, &conclusions, &actions);
+    // HS `newVariables mRuPrems (mRuConcs ++ mRuActs)` (Theory/Model/Rule.hs:1121).
+    let new_vars =
+        crate::fact::new_variables(&premises, &[&conclusions[..], &actions[..]].concat());
     Rule {
         info: r.info,
         premises,

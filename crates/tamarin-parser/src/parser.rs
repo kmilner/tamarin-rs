@@ -287,6 +287,45 @@ fn show_string_list(items: &[&str]) -> String {
 /// string).  parsec's `Text.Parsec.Char.satisfy`/`string` use `show [c]` for
 /// the `SysUnExpect` token, so an unexpected `t` prints as `"t"`, a space as
 /// `" "`, a quote as `"\""`, a newline as `"\n"`, etc.
+/// One-line `prettyFact prettyLVar` of a predicate's declared head fact
+/// (Theory/Model/Fact.hs:567-572, `showFactTag` prefixing `!` for a
+/// persistent tag): the name and the arguments between `( ` and ` )`.
+/// `prettyLVar` is `show` (Term/LTerm.hs:922-923) — the sort prefix, the
+/// name, and `.<idx>` when the index is nonzero or the name ends in a digit
+/// (Term/LTerm.hs:550-557).  HS parses the head with `fact' lvar`
+/// (Theory/Text/Parser/Signature.hs:271-273), so its arguments are variables;
+/// any other argument shape renders as its `Debug` form.
+fn pred_fact_text(f: &Fact) -> String {
+    let mut s = String::new();
+    if f.persistent {
+        s.push('!');
+    }
+    s.push_str(&f.name);
+    if f.args.is_empty() {
+        s.push_str("( )");
+        return s;
+    }
+    s.push_str("( ");
+    for (k, a) in f.args.iter().enumerate() {
+        if k > 0 {
+            s.push_str(", ");
+        }
+        match a {
+            Term::Var(v) => {
+                s.push_str(tamarin_term::lterm::sort_prefix(v.sort));
+                s.push_str(&v.name);
+                if v.idx != 0 || v.name.ends_with(|c: char| c.is_ascii_digit()) {
+                    s.push('.');
+                    s.push_str(&v.idx.to_string());
+                }
+            }
+            other => s.push_str(&format!("{other:?}")),
+        }
+    }
+    s.push_str(" )");
+    s
+}
+
 fn show_char_token(c: char) -> String {
     let mut s = String::from('"');
     show_lit_char(c, &mut s);
@@ -985,6 +1024,21 @@ pub struct Parser<'a> {
     /// `liftedAddProtoRule` (Theory/Text/Parser.hs:175-193) inserts a rule's
     /// expanded restrictions — checked BEFORE the rule-name guard itself.
     seen_restriction_names: Vec<String>,
+    /// Names of the lemmas parsed so far — the set `addLemma`
+    /// (TheoryObject.hs:462-465, a name lookup via `lookupLemma`) guards
+    /// against when `liftedAddLemma` (Theory/Text/Parser.hs:141-147) inserts
+    /// a newly parsed lemma; a reused name fails as `duplicate lemma: <name>`
+    /// (Theory/Text/Parser/Exceptions.hs:39).  Threaded through `#include`
+    /// sub-parsers like [`Parser::seen_rules`].
+    seen_lemma_names: Vec<String>,
+    /// `(persistent, name, arity)` — the fact-tag key `lookupPredicate`
+    /// compares (Theory/Syntactic/Predicate.hs:77-80, `sameName` is tag
+    /// equality) — of each predicate declared so far, seeded with the builtin
+    /// `Smaller/2` (Theory/Syntactic/Predicate.hs:58-67), which the lookup
+    /// list always appends.  `addPredicate` (TheoryObject.hs:540-543) guards
+    /// a new declaration against this set; a collision fails as
+    /// `duplicate predicate: <fact>` (Theory/Text/Parser/Exceptions.hs:43).
+    seen_predicates: Vec<(bool, String, usize)>,
 }
 
 impl<'a> Parser<'a> {
@@ -1028,6 +1082,8 @@ impl<'a> Parser<'a> {
             item_hangover: None,
             seen_rules: Vec::new(),
             seen_restriction_names: Vec::new(),
+            seen_lemma_names: Vec::new(),
+            seen_predicates: vec![(false, "Smaller".to_string(), 2)],
         }
     }
 
@@ -1854,6 +1910,8 @@ impl<'a> Parser<'a> {
         // the registries thread in and back out with the rest of the state.
         sub.seen_rules = std::mem::take(&mut self.seen_rules);
         sub.seen_restriction_names = std::mem::take(&mut self.seen_restriction_names);
+        sub.seen_lemma_names = std::mem::take(&mut self.seen_lemma_names);
+        sub.seen_predicates = std::mem::take(&mut self.seen_predicates);
 
         // Parse the header-less item stream: same loop as a theory body, but it
         // terminates at EOF (there is no `end` keyword in a fragment).
@@ -1878,6 +1936,8 @@ impl<'a> Parser<'a> {
         self.sig_enable_nat = sub.sig_enable_nat;
         self.seen_rules = sub.seen_rules;
         self.seen_restriction_names = sub.seen_restriction_names;
+        self.seen_lemma_names = sub.seen_lemma_names;
+        self.seen_predicates = sub.seen_predicates;
 
         Ok(items)
     }
@@ -3103,7 +3163,54 @@ impl<'a> Parser<'a> {
                 break;
             }
         }
+        // HS folds `liftedAddPredicate` over the block AFTER `commaSep1`
+        // collected every declaration (Theory/Text/Parser/Signature.hs:278-284),
+        // so a collision — against an earlier block, the builtin `Smaller/2`,
+        // or an earlier declaration of the same block — fails at the position
+        // past the whole block, where the last formula's pending labels still
+        // stand.
+        for p in &ps {
+            let key = (p.fact.persistent, p.fact.name.clone(), p.fact.args.len());
+            if self.seen_predicates.contains(&key) {
+                return Err(self.predicate_dup_fail(&p.fact));
+            }
+            self.seen_predicates.push(key);
+        }
         Ok(TheoryItem::Predicates(ps))
+    }
+
+    /// The `duplicate predicate: <fact>` failure `liftedAddPredicate` raises
+    /// (Theory/Text/Parser/Signature.hs:328-331, message rendered by
+    /// Theory/Text/Parser/Exceptions.hs:43 as `prettyFact prettyLVar`): a
+    /// consumed `fail` at the position past the `predicates:` block, merging
+    /// the labels standing there — the last term's carried hangovers (or the
+    /// bare dot-index attempt of a trailing timepoint variable, which ends no
+    /// term chain), then the formula operator levels
+    /// (Theory/Text/Parser/Formula.hs:82-104) and `commaSep1`'s `","`.
+    fn predicate_dup_fail(&mut self, fact: &Fact) -> ParseError {
+        let mut e = self.err_fail(format!("duplicate predicate: {}", pred_fact_text(fact)));
+        let mut labels = self.term_carry_labels(e.offset);
+        if labels.is_empty() && self.var_dot_hangover {
+            // The dot-index attempt stands at the failure position only when
+            // the variable was the last token consumed — a later lexeme (a
+            // closing `)`, a fact's annotation bracket) moves the parse past
+            // it and drops the label.
+            let since_var = self
+                .var_hangover_ident_end
+                .map(|ie| &self.lx.src()[ie..e.offset]);
+            if since_var.is_some_and(|s| remove_comments(s).chars().all(char::is_whitespace)) {
+                labels.push(Message::Expect("\".\"".to_string()));
+            }
+        }
+        for l in [
+            "\"&\"", "\"∧\"", "\"|\"", "\"∨\"", "\"==>\"", "\"⇒\"", "\"<=>\"", "\"⇔\"", "\",\"",
+        ] {
+            labels.push(Message::Expect(l.to_string()));
+        }
+        for (k, l) in labels.into_iter().enumerate() {
+            e.messages.insert(1 + k, l);
+        }
+        e
     }
 
     // -------------------- Restriction / axiom --------------------
@@ -3153,6 +3260,19 @@ impl<'a> Parser<'a> {
         }
         self.require_punct(":")?;
         let phi = self.double_quoted_formula()?;
+        // HS `liftedAddRestriction` (Theory/Text/Parser.hs:129-134) runs
+        // `addRestriction`'s name guard (TheoryObject.hs:453-456) on each
+        // parsed `restriction`/`axiom` item.  The closing quote's lexeme left
+        // no pending labels, so the frame is bare (`unexpected <tok>` plus the
+        // message).  A left/right attribute marks the diff-theory shape, which
+        // HS's plain `restriction` production cannot even read
+        // (Theory/Text/Parser/Restriction.hs:77-80) and its diff parse routes
+        // through `liftedAddRestriction'` (Theory/Text/Parser.hs:433-435,546),
+        // splitting the sides instead of comparing names; the guard leaves
+        // those items, and every item of a diff parse, alone.
+        if !self.is_diff && attributes.is_empty() && self.seen_restriction_names.contains(&name) {
+            return Err(self.item_fail(format!("duplicate restriction: {name}")));
+        }
         // Feed the restriction-name set the `_restrict` guard consults
         // ([`Parser::guard_duplicate_rule`] step 1): HS `addRestriction`
         // checks new `Restr_<rule>_<i>` names against ALL restrictions,
@@ -3954,9 +4074,46 @@ impl<'a> Parser<'a> {
         // comments, so `end` sits at the next top-level token — exactly HS's.
         let end = self.lx.pos().offset;
         let plaintext = remove_comments(&self.lx.src()[start..end]);
+        if proof.is_none() {
+            // An absent proof leaves the unmatched skeleton alternatives'
+            // labels standing at the item's end position — HS
+            // `startProofSkeleton <|> pure (unproven ())`
+            // (Theory/Text/Parser/Lemma.hs:85) with the alternatives `SOLVED` /
+            // `by` (Theory/Text/Parser/Proof.hs:99-115) and the `proofMethod`
+            // list (Theory/Text/Parser/Proof.hs:76-85) — where a following
+            // same-position failure merges them in ahead of its own.
+            self.set_item_hangover(&[
+                "\"SOLVED\"",
+                "\"by\"",
+                "\"sorry\"",
+                "\"simplify\"",
+                "\"solve\"",
+                "\"contradiction\"",
+                "\"induction\"",
+                "\"INVALIDATED\"",
+                "\"UNFINISHABLE\"",
+            ]);
+        }
+        // HS `liftedAddLemma` (Theory/Text/Parser.hs:280-282) runs `addLemma`'s
+        // name guard (TheoryObject.hs:462-465) on each parsed lemma;
+        // accountability lemmas are TranslationItems, which `lookupLemma`
+        // (TheoryObject.hs:675-676) does not see, so they neither feed nor hit
+        // this set.  A `left`/`right` attribute marks the diff-theory shape,
+        // which a diff parse routes through `liftedAddLemma'`
+        // (Theory/Text/Parser.hs:438,532), splitting the sides instead of
+        // comparing names; the guard leaves those lemmas, and every lemma of a
+        // diff parse, alone.
+        let sided = attrs
+            .iter()
+            .any(|a| matches!(a, LemmaAttr::Left | LemmaAttr::Right));
+        if !self.is_diff && !sided {
+            if self.seen_lemma_names.iter().any(|n| n == &name) {
+                return Err(self.item_fail(format!("duplicate lemma: {name}")));
+            }
+            self.seen_lemma_names.push(name.clone());
+        }
         Ok(TheoryItem::Lemma(Lemma {
             name,
-            modulo: None,
             attributes: attrs,
             trace_quantifier,
             formula,
@@ -5275,7 +5432,7 @@ impl<'a> Parser<'a> {
     fn lookup_arity(&self, op: &str) -> Option<ArityRes> {
         let mut best: Option<FunOptions> = None;
         let mut consider = |o: FunOptions| {
-            if best.is_none_or(|b: FunOptions| o.ord_key() < b.ord_key()) {
+            if best.map_or(true, |b: FunOptions| o.ord_key() < b.ord_key()) {
                 best = Some(o);
             }
         };
@@ -5446,7 +5603,7 @@ impl<'a> Parser<'a> {
                 let mut probe = self.lx.clone();
                 probe.bump();
                 let next = probe.peek();
-                if next.is_none_or(|c| !c.is_alphanumeric() && c != '_') {
+                if next.map_or(true, |c| !c.is_alphanumeric() && c != '_') {
                     self.lx.bump();
                     self.skip_ws();
                     return Ok(Term::NumberOne);
@@ -6491,7 +6648,10 @@ pub fn parse_formula_str(s: &str, msig: &MaudeSig) -> Result<Formula, ParseError
 /// application head in the goal resolves through `lookupArity`
 /// (Theory/Text/Parser/Term.hs:88-105) against the theory's symbols exactly
 /// as one in a rule does.
-pub fn parse_parens_goal(s: &str, parent: &Parser<'_>) -> Result<(GoalSpec, usize), ParseError> {
+pub(crate) fn parse_parens_goal(
+    s: &str,
+    parent: &Parser<'_>,
+) -> Result<(GoalSpec, usize), ParseError> {
     let mut p = Parser::new(s, &[], false);
     p.seed_from(parent);
     p.require_punct("(")?;

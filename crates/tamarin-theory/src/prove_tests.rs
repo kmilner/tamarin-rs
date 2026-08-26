@@ -311,7 +311,7 @@ fn session_from(src: &str) -> Option<ProverSession> {
     let h = maude()?;
     let pt = tamarin_parser::parse_theory(src, &[]).expect("parse");
     ProverSession::build_with_in_file_and_heuristic(
-        &elaborated(&pt),
+        std::sync::Arc::new(elaborated(&pt)),
         h,
         None,
         "",
@@ -357,7 +357,7 @@ end",
     });
 
     let session = ProverSession::build_with_in_file_and_heuristic(
-        &theory,
+        std::sync::Arc::new(theory),
         h,
         None,
         "",

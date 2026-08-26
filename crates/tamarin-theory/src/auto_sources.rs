@@ -552,7 +552,6 @@ pub fn build_source_lemma(name: &str, formula: LNFormula) -> crate::theory::Lemm
     use crate::theory::{Lemma, LemmaAttr, TraceQuantifier};
     Lemma {
         name: name.to_string(),
-        modulo: None,
         attributes: vec![LemmaAttr::Sources],
         trace_quantifier: TraceQuantifier::AllTraces,
         original_formula: Some(formula.clone()),

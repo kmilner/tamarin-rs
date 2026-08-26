@@ -676,7 +676,6 @@ fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), Elab
                 let msig = &out.signature.maude_sig;
                 let lem: Lemma = Lemma {
                     name: l.name.clone(),
-                    modulo: l.modulo.clone(),
                     attributes: l.attributes.iter().map(elaborate_lemma_attr).collect(),
                     trace_quantifier: match l.trace_quantifier {
                         p::TraceQuantifier::AllTraces => TraceQuantifier::AllTraces,
@@ -909,7 +908,8 @@ fn rule_to_proto_rule_e(r: &p::Rule, sig: &MaudeSig) -> Result<ProtoRuleE, ElabE
         .iter()
         .map(|f| fact_to_lnfact(f, sig))
         .collect::<Result<Vec<_>, _>>()?;
-    let new_vars = compute_new_vars(&prems, &concs, &acts);
+    // HS `newVariables ps $ cs ++ as` (Theory/Text/Parser/Rule.hs:121-154).
+    let new_vars = crate::fact::new_variables(&prems, &[&concs[..], &acts[..]].concat());
 
     Ok(Rule::new(info, prems, concs, acts).with_new_vars(new_vars))
 }
@@ -1066,49 +1066,6 @@ pub fn proof_tree_from_parsed(
         method: proof_method_from_parsed(&t.method, sig)?,
         cases: cases?,
     })
-}
-
-pub(crate) fn compute_new_vars(
-    prems: &[crate::fact::LNFact],
-    concs: &[crate::fact::LNFact],
-    acts: &[crate::fact::LNFact],
-) -> Vec<tamarin_term::lterm::LNTerm> {
-    let mut prem_vars: BTreeSet<LVar> = BTreeSet::new();
-    for f in prems {
-        for t in f.terms.iter() {
-            collect_vars(t, &mut prem_vars);
-        }
-    }
-    let mut new_set: BTreeSet<LVar> = BTreeSet::new();
-    for f in concs.iter().chain(acts) {
-        for t in f.terms.iter() {
-            let mut here = BTreeSet::new();
-            collect_vars(t, &mut here);
-            for v in here {
-                if !prem_vars.contains(&v) {
-                    new_set.insert(v);
-                }
-            }
-        }
-    }
-    new_set
-        .into_iter()
-        .map(|v| Term::Lit(Lit::Var(v)))
-        .collect()
-}
-
-fn collect_vars(t: &tamarin_term::lterm::LNTerm, out: &mut BTreeSet<LVar>) {
-    match t {
-        Term::Lit(Lit::Var(v)) => {
-            out.insert(*v);
-        }
-        Term::Lit(_) => {}
-        Term::App(_, args) => {
-            for a in args.iter() {
-                collect_vars(a, out);
-            }
-        }
-    }
 }
 
 // =============================================================================

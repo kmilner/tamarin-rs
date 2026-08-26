@@ -348,7 +348,6 @@ fn inject_lemma(
     let expanded = tamarin_theory::formula::apply_macro_in_formula(macros, original.clone());
     let lemma = t::Lemma {
         name: name.to_string(),
-        modulo: None,
         attributes: attributes.to_vec(),
         trace_quantifier: quantifier,
         original_formula: Some(original),

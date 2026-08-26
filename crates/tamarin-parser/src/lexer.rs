@@ -723,14 +723,14 @@ impl<'a> Lexer<'a> {
 }
 
 #[inline]
-pub fn is_ident_char(c: char) -> bool {
+pub(crate) fn is_ident_char(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
 }
 
 /// Reserved names that `T.identifier spthy` rejects (Token.hs:214-230, see line 225). A word equal
 /// to one of these is not a valid identifier.
 #[inline]
-pub fn is_reserved_name(s: &str) -> bool {
+pub(crate) fn is_reserved_name(s: &str) -> bool {
     matches!(s, "in" | "let" | "rule" | "diff")
 }
 

@@ -761,7 +761,7 @@ fn type_event_fact(
 /// A user `functions:` typing declaration — the function name, its declared
 /// argument types and return type (HS `SapicFunSym = (UserDefinedSym,
 /// [SapicType], SapicType)`, the payload of `theoryFunctionTypingInfos`).
-pub type UserFunTyping = (String, Vec<SapicType>, SapicType);
+pub(crate) type UserFunTyping = (String, Vec<SapicType>, SapicType);
 
 /// `toSapicTerm` (Typing.hs:173-178): re-tag an `LNTerm`'s variables as
 /// untyped `SapicLVar`s (a structure-preserving `fmap`).

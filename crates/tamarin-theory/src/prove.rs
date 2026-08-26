@@ -510,8 +510,12 @@ struct CachedSources {
 /// `typing_assumptions`-refined source cases).
 pub struct ProverSession {
     /// Elaborated typed theory.  Used to look up lemmas, restrictions,
-    /// rules, heuristic.  Constructed once.
-    pub theory: crate::theory::Theory,
+    /// rules, heuristic.  Shares the caller's allocation (`Arc`); the
+    /// session never mutates it.
+    pub theory: std::sync::Arc<crate::theory::Theory>,
+    /// Input file path for oracle path resolution (HS
+    /// Theory/Text/Parser.hs:309).
+    in_file: String,
     /// CLI `--heuristic`/`--oraclename`/`--oracle-only` (HS `AutoProver`
     /// fields).  When `cli_heuristic.raw` is `Some`, it OVERRIDES the per-lemma
     /// / theory heuristic for EVERY lemma (HS `selectHeuristic`,
@@ -816,7 +820,7 @@ impl ProverSession {
         })
     }
 
-    /// Build the shared per-file state, also setting `theory.in_file` for
+    /// Build the shared per-file state, carrying `in_file` for
     /// oracle path resolution (HS Theory/Text/Parser.hs).  Does the expensive
     /// once-per-file work: restriction conversion and full `ProofContext`
     /// construction (which runs intruder rule generation,
@@ -836,7 +840,7 @@ impl ProverSession {
     // std kept (byte-inert) — iteration order never reaches output.
     #[allow(clippy::disallowed_types)]
     pub fn build_with_in_file_and_heuristic(
-        theory: &crate::theory::Theory,
+        theory: std::sync::Arc<crate::theory::Theory>,
         maude: tamarin_term::maude_proc::MaudeHandle,
         pool: Option<std::sync::Arc<tamarin_term::maude_proc::MaudePool>>,
         in_file: &str,
@@ -844,9 +848,6 @@ impl ProverSession {
         cut: crate::constraint::solver::context::CutStrategy,
         ndc_cache: Option<&IntrRuleCache>,
     ) -> Result<Self, ProveError> {
-        let mut theory = theory.clone();
-        // Set in_file for oracle path resolution (HS Theory/Text/Parser.hs:309).
-        theory.in_file = in_file.to_string();
         // HS `mkSystem` maps `formulaToGuarded_ = either (error . render) id`
         // (CloseRule.hs:167-188, see line 174, Guarded.hs:466-467) over restriction formulas — it
         // ABORTS on a non-guardable restriction rather than silently dropping
@@ -889,6 +890,7 @@ impl ProverSession {
         maude.reset_counter_to(setup_counter_before);
         Ok(ProverSession {
             theory,
+            in_file: in_file.to_string(),
             cli_heuristic,
             cut,
             restrictions,
@@ -923,7 +925,7 @@ impl ProverSession {
         // HS `apCut` is theory-global (one `TheoryLoadOptions.stopOnTrace`),
         // so stamp the session's cut onto every per-lemma context.
         ctx.cut = self.cut;
-        let session_in_file = &theory.in_file;
+        let session_in_file = &self.in_file;
         ctx.heuristic = resolve_heuristic(
             &self.cli_heuristic,
             lemma,
@@ -1424,11 +1426,13 @@ pub fn prove_lemma_with_pool_file_heuristic(
     } else {
         None
     };
-    let mut theory = theory.clone();
-    // Set in_file for oracle path resolution (HS Theory/Text/Parser.hs:309).
-    if !in_file.is_empty() {
-        theory.in_file = in_file.to_string();
-    }
+    // in_file for oracle path resolution (HS Theory/Text/Parser.hs:309);
+    // the theory's own path fills in when the caller passes none.
+    let in_file = if in_file.is_empty() {
+        theory.in_file.as_str()
+    } else {
+        in_file
+    };
     let t_setup: Option<std::time::Instant> = if trace {
         Some(std::time::Instant::now())
     } else {
@@ -1476,7 +1480,7 @@ pub fn prove_lemma_with_pool_file_heuristic(
     // conjoined: their IH would weaken the inductive hypothesis to a
     // disjunction across all reuse lemmas, blocking simplify from
     // resolving the IH against current trace actions.
-    let reuse_lemmas = gather_reusable_lemmas(&theory, lemma_name, lemma_source_kind)?;
+    let reuse_lemmas = gather_reusable_lemmas(theory, lemma_name, lemma_source_kind)?;
 
     let mut sys = formula_to_system(
         restrictions.clone(),
@@ -1558,7 +1562,6 @@ pub fn prove_lemma_with_pool_file_heuristic(
     // False` in `rank_goals_with` (= HS's `defaultHeuristic False`).  The
     // whole ranking list is kept for round-robin scheduling (HS
     // `roundRobinHeuristic`/`useHeuristic`, ProofMethod.hs:576-595).
-    let in_file = &theory.in_file;
     ctx.heuristic = resolve_heuristic(
         cli_heuristic,
         lemma,
@@ -1568,7 +1571,7 @@ pub fn prove_lemma_with_pool_file_heuristic(
     );
     // Set lemma_name and theory_file on ctx for oracle invocation.
     ctx.lemma_name = lemma_name.to_string();
-    ctx.theory_file = in_file.clone();
+    ctx.theory_file = in_file.to_string();
 
     // `refineWithSourceAsms`: prune precomputed source cases by
     // assumptions from `[sources]`-tagged lemmas.  Mirrors Haskell's
@@ -1584,7 +1587,7 @@ pub fn prove_lemma_with_pool_file_heuristic(
     // The proved lemma is excluded (self-refinement is circular); the
     // sorted source_key is unused off the session path.
     let (typing_assumptions, _source_key) =
-        gather_typing_assumptions(&theory, lemma_name, lemma_source_kind)?;
+        gather_typing_assumptions(theory, lemma_name, lemma_source_kind)?;
     // HS-faithful saturation: store typing assumptions, then eagerly
     // run `ensure_saturated` (which applies `refine_with_source_asms`
     // with the assumptions just set).  This matches HS's

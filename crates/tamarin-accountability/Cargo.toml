@@ -12,8 +12,11 @@ publish = false
 
 [dependencies]
 tamarin-term = { workspace = true }
-tamarin-parser = { workspace = true }
 tamarin-theory = { workspace = true }
+
+[dev-dependencies]
+# The round-trip tests parse their fixture theories from source.
+tamarin-parser = { workspace = true }
 
 [lints]
 workspace = true

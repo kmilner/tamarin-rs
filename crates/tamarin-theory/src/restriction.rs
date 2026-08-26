@@ -26,15 +26,6 @@ use crate::formula::{
     BLNTerm, LNFormula, ProtoFormula,
 };
 
-// Not yet ported: the `--diff` lhs/rhs restriction attributes
-// (HS `RestrictionAttribute`); no caller yet.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum RestrictionAttribute {
-    LhsRestriction,
-    RhsRestriction,
-    BothRestriction,
-}
-
 /// `ProtoRestriction f` from the Haskell version. We keep it generic to
 /// match the SyntacticRestriction / Restriction split.
 #[derive(Debug, Clone, PartialEq, Eq)]

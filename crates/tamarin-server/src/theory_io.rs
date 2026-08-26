@@ -151,7 +151,7 @@ pub fn load_from_path(
 /// can emit the `variants (modulo AC)` blocks byte-for-byte.  Variant
 /// computation is best-effort: if Maude can't be started the theory is
 /// still usable (rules just render without their variants block).
-pub fn load_from_source(
+pub(crate) fn load_from_source(
     src: &str,
     origin: TheoryOrigin,
     maude_path: &str,

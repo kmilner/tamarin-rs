@@ -19,7 +19,7 @@ use tamarin_theory::constraint::solver::search::{proof_status, ProofNode, ProofS
 use tamarin_theory::theory::{LemmaAttr, TraceQuantifier};
 
 /// Full overview/framing page (the one served at `/thy/trace/<idx>/overview/...`).
-pub fn overview_page(entry: &TheoryEntry, path: &TheoryPath) -> String {
+pub(crate) fn overview_page(entry: &TheoryEntry, path: &TheoryPath) -> String {
     let header_html = header(entry);
     let proof_state = proof_state(entry);
     let main_view = path_html(entry, path);
@@ -576,7 +576,7 @@ fn render_attrs(attrs: &[LemmaAttr], in_file: &str) -> String {
 }
 
 /// Main pane: render the content for a given path.
-pub fn path_html(entry: &TheoryEntry, path: &TheoryPath) -> String {
+pub(crate) fn path_html(entry: &TheoryEntry, path: &TheoryPath) -> String {
     let typed = &entry.typed_theory;
     match path {
         TheoryPath::Help => help_html(entry),
@@ -761,7 +761,7 @@ const HELP_STATIC: &str = r#"<div id="help"><h3>Quick introduction</h3><noscript
 /// Render the proof tree pane for a lemma at a given sub-path.
 /// If a live [`ProofState`] is already built, use the actual tree;
 /// otherwise fall back to the lemma's static info plus a build hint.
-pub fn proof_html(entry: &TheoryEntry, lemma: &str, sub: &[String]) -> String {
+pub(crate) fn proof_html(entry: &TheoryEntry, lemma: &str, sub: &[String]) -> String {
     // HS `htmlThyPath` for `TheoryProof l p` (Web/Theory.hs:1025-1029):
     //   pp $ fromMaybe (text "No such lemma or proof path.") $ do
     //     lemma <- lookupLemma l thy

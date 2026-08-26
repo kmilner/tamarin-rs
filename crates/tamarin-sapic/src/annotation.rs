@@ -16,11 +16,11 @@ use tamarin_theory::sapic::{
 /// Variable annotation wrapper. Semantics: when combined with itself the
 /// rightmost wins (matches Haskell `instance Semigroup AnVar`).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct AnVar<V>(pub V);
+pub(crate) struct AnVar<V>(pub V);
 
 /// Annotations attached to a process during translation.
 #[derive(Debug, Clone, PartialEq)]
-pub struct ProcessAnnotation<V> {
+pub(crate) struct ProcessAnnotation<V> {
     /// Original parsed annotation (carries process names, location,
     /// back-substitution).
     pub parsing_ann: ProcessParsedAnnotation,
@@ -143,7 +143,7 @@ impl<V: Clone> GoodAnnotation for ProcessAnnotation<V> {
 
 /// `AnnotatedProcess`: SAPIC process post-translation, parameterised over
 /// `V` (typically `tamarin_term::lterm::LVar`).
-pub type AnnotatedProcess<V> = Process<ProcessAnnotation<V>, SapicLVar>;
+pub(crate) type AnnotatedProcess<V> = Process<ProcessAnnotation<V>, SapicLVar>;
 
 /// `toAnProcess` (sapic/src/Sapic/Annotation.hs:135-139): lift a parsed process into a
 /// translation annotation by wrapping the parsed annotation in

@@ -13,7 +13,7 @@ use percent_encoding::percent_decode_str;
 
 /// A theory-internal path, mirroring Haskell `TheoryPath`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TheoryPath {
+pub(crate) enum TheoryPath {
     Help,
     Rules,
     Message,
@@ -91,7 +91,7 @@ impl TheoryPath {
 
 /// Canonical URL path-segment escaping shared by the theory/graph/proof
 /// handlers: keep `[A-Za-z0-9_.-]`, percent-encode everything else.
-pub fn url_path_escape(s: &str) -> String {
+pub(crate) fn url_path_escape(s: &str) -> String {
     s.chars()
         .map(|c| match c {
             c if c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.' => c.to_string(),
@@ -102,7 +102,7 @@ pub fn url_path_escape(s: &str) -> String {
 
 /// Match Haskell's `prefixWithUnderscore`.  Empty + `_*` strings get
 /// an extra leading `_` to avoid the empty-segment trap in Yesod.
-pub fn prefix_with_underscore(s: &str) -> String {
+pub(crate) fn prefix_with_underscore(s: &str) -> String {
     if s.is_empty() {
         "_".into()
     } else if s.starts_with('_') {
@@ -117,7 +117,7 @@ pub fn prefix_with_underscore(s: &str) -> String {
 /// (mirrors Yesod `getUrlRender`'s per-segment encoding).  Empty input
 /// yields the empty string, so callers can append the result directly
 /// after `.../proof/<lemma>` or `.../method/<lemma>/<idx>`.
-pub fn encode_sub_path(sub: &[String]) -> String {
+pub(crate) fn encode_sub_path(sub: &[String]) -> String {
     let mut s = String::new();
     for seg in sub {
         s.push('/');
@@ -127,7 +127,7 @@ pub fn encode_sub_path(sub: &[String]) -> String {
 }
 
 /// Inverse of [`prefix_with_underscore`].
-pub fn unprefix_underscore(s: &str) -> String {
+pub(crate) fn unprefix_underscore(s: &str) -> String {
     if s == "_" {
         String::new()
     } else if s.starts_with("__") {
@@ -147,7 +147,7 @@ pub fn unprefix_underscore(s: &str) -> String {
 /// [`unprefix_underscore`] reverses that here.  Trailing empty segments
 /// are dropped by the empty-segment filter, so a leading-only vs both-end
 /// trim of `/` is immaterial.
-pub fn decode_segments(raw: &str) -> Vec<String> {
+pub(crate) fn decode_segments(raw: &str) -> Vec<String> {
     raw.trim_start_matches('/')
         .split('/')
         .filter(|s| !s.is_empty())
@@ -158,7 +158,7 @@ pub fn decode_segments(raw: &str) -> Vec<String> {
 
 /// Parse a wildcard-captured path (e.g. `proof/Alice/case_1/0`) into a
 /// `TheoryPath`.  Returns `None` on malformed input.
-pub fn parse(raw: &str) -> Option<TheoryPath> {
+pub(crate) fn parse(raw: &str) -> Option<TheoryPath> {
     parse_segs(&decode_segments(raw))
 }
 

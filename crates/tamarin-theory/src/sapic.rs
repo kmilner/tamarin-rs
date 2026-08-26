@@ -499,6 +499,13 @@ mod tests {
         );
         let shared = SharedProcess::new(inner.clone());
         assert_eq!(format!("{:?}", shared), format!("{:?}", inner));
+        // The comparison key embeds the rule attributes' derived `Debug`,
+        // which reaches the process as `Option<Arc<SharedProcess>>` — the
+        // same `Some(…)` bytes the bare process writes.
+        assert_eq!(
+            format!("{:?}", Some(std::sync::Arc::new(shared))),
+            format!("{:?}", Some(&inner))
+        );
     }
 
     #[test]

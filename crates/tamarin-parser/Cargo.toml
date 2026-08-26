@@ -2,8 +2,10 @@
 name = "tamarin-parser"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+description = "Theory-file parser for the Tamarin prover (Rust port)."
 
 [dependencies]
 tamarin-term = { workspace = true }

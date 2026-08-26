@@ -165,7 +165,6 @@ pub enum RuleAttr {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Lemma {
     pub name: String,
-    pub modulo: Option<String>,
     pub attributes: Vec<LemmaAttr>,
     pub trace_quantifier: TraceQuantifier,
     pub formula: Formula,
@@ -544,7 +543,7 @@ pub struct VarSpec {
 // =============================================================================
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum FlagFormula {
+pub(crate) enum FlagFormula {
     Atom(String),
     Not(Box<FlagFormula>),
     And(Box<FlagFormula>, Box<FlagFormula>),

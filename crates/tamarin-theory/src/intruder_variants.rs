@@ -388,49 +388,9 @@ fn ast_rule_to_intr_rule_ac(
     // any (all RHS vars are LHS vars), but compute it faithfully for
     // robustness.  HS reference: Theory.Model.Fact.newVariables
     // (lib/theory/src/Theory/Model/Fact.hs:524-529, see line 527).
-    let new_vars = compute_new_vars(&prems, &concs);
+    let new_vars = crate::fact::new_variables(&prems, &concs);
 
     Ok(Rule::new(info, prems, concs, acts).with_new_vars(new_vars))
-}
-
-/// Mirrors HS `newVariables` (`lib/theory/src/Theory/Model/Fact.hs:524-529, see line 527`):
-/// `S.difference concvars premvars`, returned in `S.toList` (sorted) order.
-fn compute_new_vars(prems: &[LNFact], concs: &[LNFact]) -> Vec<tamarin_term::lterm::LNTerm> {
-    use std::collections::BTreeSet;
-    use tamarin_term::lterm::LVar;
-    use tamarin_term::term::Term;
-    use tamarin_term::vterm::Lit;
-
-    fn collect(t: &tamarin_term::lterm::LNTerm, out: &mut BTreeSet<LVar>) {
-        match t {
-            Term::Lit(Lit::Var(v)) => {
-                out.insert(*v);
-            }
-            Term::Lit(_) => {}
-            Term::App(_, args) => {
-                for a in args.iter() {
-                    collect(a, out);
-                }
-            }
-        }
-    }
-
-    let collect_all = |fs: &[LNFact]| -> BTreeSet<LVar> {
-        let mut vars = BTreeSet::new();
-        for f in fs {
-            for t in f.terms.iter() {
-                collect(t, &mut vars);
-            }
-        }
-        vars
-    };
-
-    let prem_vars = collect_all(prems);
-    collect_all(concs)
-        .into_iter()
-        .filter(|v| !prem_vars.contains(v))
-        .map(|v| Term::Lit(Lit::Var(v)))
-        .collect()
 }
 
 // =============================================================================

@@ -965,3 +965,22 @@ fn redundant_case_key_separates_two_ac_heads() {
     assert_ne!(key_of(AcSym::Mult), key_of(AcSym::Union));
     assert_ne!(key_of(AcSym::Mult), key_of(AcSym::Xor));
 }
+
+/// `Seg`'s manual `Eq`/`Ord` read the segment text, never the variant tag:
+/// an occurrence path mirrors HS's `[String]`, where a static context string
+/// and a rendered one carrying the same bytes are the same element.  A user
+/// function named `List` shares its context text with the built-in `List`
+/// segment, so a derived (variant-first) comparison would split occurrence
+/// sets HS keeps together.
+#[test]
+fn seg_eq_and_ord_read_the_text_across_variants() {
+    use std::cmp::Ordering;
+    let stat = Seg::Static("List");
+    let shared = Seg::shared("List");
+    assert!(stat == shared);
+    assert_eq!(stat.cmp(&shared), Ordering::Equal);
+    let mult = Seg::Static("AC Mult");
+    let xor = Seg::shared("AC Xor");
+    assert_eq!(mult.cmp(&xor), "AC Mult".cmp("AC Xor"));
+    assert_eq!(xor.cmp(&mult), "AC Xor".cmp("AC Mult"));
+}

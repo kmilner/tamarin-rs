@@ -27,7 +27,7 @@ use crate::bindings::captured_variables;
 /// The fixed topic HS `toWfErrorReport` attaches to every SAPIC process error
 /// (Warnings.hs:24-27, see line 27).  Rendered verbatim (NOT underlined) by
 /// `prettyWfErrorReport` (Wellformedness.hs:118-125).
-pub const SAPIC_PROCESS_TOPIC: &str = "Wellformedness-error in Process";
+pub(crate) const SAPIC_PROCESS_TOPIC: &str = "Wellformedness-error in Process";
 
 /// `warnProcess` (Warnings.hs:17-21): the list of `WFerror`s for one process.
 ///

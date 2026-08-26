@@ -33,7 +33,7 @@ type AnnotatedProc = Process<ProcessAnnotation<LVar>, SapicLVar>;
 /// `LocalException` (Locks.hs:28-28): thrown when `annotateEachClosestUnlock`
 /// encounters a `Rep` (`WFRep`) or `Parallel` (`WFPar`) below a lock.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum LockWfError {
+pub(crate) enum LockWfError {
     /// `WFRep` — replication below the lock.
     Rep,
     /// `WFPar` — parallel below the lock.

@@ -609,7 +609,7 @@ fn apply_proper_subterms(lookup: &dyn Fn(&LNTerm) -> Option<LNTerm>, t: &LNTerm)
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tamarin_term::function_symbols::{Constructability, NoEqSym, Privacy};
+    use tamarin_term::function_symbols::NoEqSym;
     use tamarin_term::lterm::{LSort, LVar};
     use tamarin_term::term::{f_app_no_eq, lit};
 
@@ -618,12 +618,7 @@ mod tests {
     }
 
     fn senc_sym() -> NoEqSym {
-        NoEqSym::new(
-            b"senc".to_vec(),
-            2,
-            Privacy::Public,
-            Constructability::Constructor,
-        )
+        tamarin_term::builtin::senc_sym()
     }
 
     #[test]

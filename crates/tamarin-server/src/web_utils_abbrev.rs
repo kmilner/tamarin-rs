@@ -34,7 +34,7 @@ use tamarin_theory::constraint::system::System;
 
 /// HS `Web.Utils.abbrev`'s minimal term size, as passed by
 /// `graphJsonThyPath` (`src/Web/Theory.hs:1331`).
-pub const MIN_ABBREV_SIZE: usize = 30;
+pub(crate) const MIN_ABBREV_SIZE: usize = 30;
 
 /// Port of `getTerms` (Web/Utils.hs:40-41): every fact term of every rule's
 /// conclusions followed by its premises.

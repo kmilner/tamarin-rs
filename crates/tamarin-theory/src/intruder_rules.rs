@@ -103,6 +103,10 @@ pub fn special_intruder_rules(diff: bool) -> Vec<IntrRuleAC> {
 /// built with the same `kuRule` shape as `PubConstr` (`kuRule
 /// NatConstrRule [] x_nat_var [x_nat_var]` — the nat variable is a
 /// rule-new variable).
+///
+/// Intentionally retained without a caller: HS wires `natIntruderRules`
+/// only into the diff-mode assembly (TheoryLoader.hs:933), and diff mode
+/// is not ported.
 pub fn nat_intruder_rules() -> Vec<IntrRuleAC> {
     let x_nat = var_term(LVar::new("x", LSort::Nat, 0));
     let mut r = Rule::new(

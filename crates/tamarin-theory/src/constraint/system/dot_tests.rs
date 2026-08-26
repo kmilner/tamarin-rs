@@ -78,7 +78,6 @@ fn dot_of(orig: &System, drawn: System) -> String {
     let repr = compute_basic_graph_repr(&simplified);
     let graph = Graph {
         system: orig,
-        simplified,
         repr,
         abbreviations: Abbreviations::new(),
     };
