@@ -1094,7 +1094,6 @@ struct TheoryPipeline<'a> {
     translate_module: Option<TranslateModule>,
     in_file: &'a str,
     theory_name: String,
-    parsed: tamarin_parser::ast::Theory,
     elaborated: tamarin_theory::theory::Theory,
     wf_report: Vec<tamarin_parser::wf::WfError>,
     /// The theory's `MaudeSig`, cloned from `elaborated` before SAPIC
@@ -2411,7 +2410,6 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             translate_module,
             in_file: in_file.as_str(),
             theory_name,
-            parsed,
             elaborated,
             wf_report,
             maude_sig,
