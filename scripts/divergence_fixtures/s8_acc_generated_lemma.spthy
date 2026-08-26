@@ -9,12 +9,9 @@
 // theory (Theory/Tools/Wellformedness.hs:1270-1286,
 // Main/TheoryLoader.hs:553-565), by which point `translate` has added the
 // generated accountability lemmas (lib/accountability/src/Accountability.hs:42-47)
-// and `acc_verif_empty` is one of them, so the oracle is silent.  The port
-// runs the check before the translation, against a lemma list holding only
-// `acc`.
+// and `acc_verif_empty` is one of them, so the check stays silent.
 //
-// Mode `diverge`: the port reports `Check presence of the --prove/--lemma
-// arguments in theory`; the oracle prints the success line.
+// Mode `match`: both engines print the success line.
 //
 // Compared slice: the wf report block.
 

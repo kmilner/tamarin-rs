@@ -4,12 +4,11 @@
 // translated theory (Main/TheoryLoader.hs:553-565), so `freshNamesReport`
 // (Theory/Tools/Wellformedness.hs:444-452) sees the rules the SAPIC
 // translation generates as well as the ones the source writes.  This theory
-// writes no rule at all: every name in the oracle's block — `Init`,
-// `newn_0_`, `outnfoo_0_1` — comes from the translation.  The port runs the
-// rule checks before the translation, so it sees no rule carrying `~'foo'`.
+// writes no rule at all: every rule the block names — `Init`, `newn_0_`,
+// `outnfoo_0_1` — comes from the translation.
 //
-// Mode `diverge`: the oracle reports `Fresh public constants` for three
-// generated rules; the port reports nothing.
+// Mode `match`: both engines report `Fresh public constants` for the three
+// generated rules.
 //
 // Compared slice: the wf report block.
 

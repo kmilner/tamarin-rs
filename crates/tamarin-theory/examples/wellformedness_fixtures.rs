@@ -11,11 +11,7 @@
 //! The run ends with an explicit `VERDICT:` line and exits nonzero on any
 //! failure.  It also refuses to pass while comparing nothing: an empty
 //! fixture roster, a `.spthy` no `expected.txt` line mentions, a line that
-//! lists no topics, an oracle that fails to launch, and a fixture whose
-//! step-2 expectations all vanish into [`POST_ELABORATION_TOPICS`] are each a
-//! failure — the last one unless the fixture pins its rendered block in
-//! `tests/wellformedness_fixtures/reports/`, which holds it to its content
-//! from the crate that runs the post-elaboration checks.
+//! lists no topics and an oracle that fails to launch are each a failure.
 //!
 //! Usage:  cargo run -p tamarin-theory --example wellformedness_fixtures \
 //!           [-- <fixtures-dir>]
@@ -37,33 +33,6 @@ use tamarin_theory::wellformedness as wf;
 
 mod common;
 use common::run_tamarin;
-
-/// The topics `wf::check_theory` cannot produce: their HS checks need the
-/// elaborated `MaudeSig` (reducible-funsym classification, `abstractRule`'s
-/// irreducible symbols, the subterm-rule Set) or the TRANSLATED theory's
-/// rules, so `wf::splice_translated_wf_reports` and
-/// `wf::append_subterm_convergence_report` add them post-elaboration.  Step 2
-/// drops them; step 3 still holds the oracle to them.
-const POST_ELABORATION_TOPICS: [&str; 7] = [
-    "Formula terms",
-    "Multiplication restriction of rules",
-    "Unbound variables",
-    "Public constants with mismatching capitalization",
-    "Facts occur in the left-hand-side but not in any right-hand-side",
-    "Nat Sorts",
-    "Subterm Convergence Warning",
-];
-
-/// Does the fixture pin its whole rendered wellformedness block?  Such a file
-/// lives in `tests/wellformedness_fixtures/reports/` and is compared byte for
-/// byte by `tests/wellformedness_fixture_reports.rs`, which runs the
-/// post-elaboration checks this harness cannot reach.  A
-/// fixture whose step-2 expectation set empties into
-/// [`POST_ELABORATION_TOPICS`] is therefore still held to its content — an
-/// empty theory in its place fails there.
-fn has_report_expectation(dir: &std::path::Path, name: &str) -> bool {
-    dir.join("reports").join(format!("{name}.report")).is_file()
-}
 
 /// Topic titles compare modulo surrounding whitespace: HS carries a
 /// source-literal trailing space on the LHS-usage title and a leading one on
@@ -190,7 +159,6 @@ fn main() {
     let mut rust_wf_match = 0usize;
     let mut topics_match = 0usize;
     let mut negatives_checked = 0usize;
-    let mut report_pinned_hit: Vec<&str> = Vec::new();
 
     for fx in &fixtures {
         let name = fx.name.as_str();
@@ -213,8 +181,7 @@ fn main() {
         };
 
         // 2. Our Rust wf checker must emit every expected topic and none of
-        // the fixture's negative pins.  [`POST_ELABORATION_TOPICS`] are
-        // dropped from the positive side; step 3 still verifies them.
+        // the fixture's negative pins.
         let elaborated = match tamarin_theory::elaborate::elaborate(&thy) {
             Ok(t) => t,
             Err(e) => {
@@ -222,29 +189,13 @@ fn main() {
                 continue;
             }
         };
-        let rust_topics: BTreeSet<String> = wf::topics(&wf::check_theory(&elaborated, &thy))
+        let rust_topics: BTreeSet<String> = wf::topics(&wf::check_wellformedness(&elaborated))
             .into_iter()
             .map(|s| norm(&s))
             .collect();
-        let mut rust_expected = fx.expected.clone();
-        for topic in POST_ELABORATION_TOPICS {
-            rust_expected.remove(topic);
-        }
+        let rust_expected = &fx.expected;
         let negative = negatives.get(name).cloned().unwrap_or_default();
         negatives_checked += negative.len();
-
-        if rust_expected.is_empty() {
-            if has_report_expectation(&dir, name) {
-                report_pinned_hit.push(name);
-            } else {
-                fail_lines.push(format!(
-                    "VACUOUS {}: every expected topic is post-elaboration ({:?}) and there is \
-                     no reports/{}.report, so step 2 asserts only that the file parses. \
-                     Restore a parser-level expectation, or pin its rendered block.",
-                    name, POST_ELABORATION_TOPICS, name
-                ));
-            }
-        }
 
         if rust_expected.is_subset(&rust_topics) {
             rust_wf_match += 1;
@@ -332,15 +283,6 @@ fn main() {
         negatives_checked,
         negatives.len()
     );
-    if !report_pinned_hit.is_empty() {
-        println!(
-            "\nStep-2 expectation set empty (rendered block pinned in reports/, \
-             and checked by step 3):"
-        );
-        for name in &report_pinned_hit {
-            println!("  {}", name);
-        }
-    }
     if !fail_lines.is_empty() {
         println!("\nFailures:");
         for l in &fail_lines {

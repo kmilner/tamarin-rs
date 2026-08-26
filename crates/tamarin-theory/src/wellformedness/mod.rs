@@ -13,25 +13,22 @@
 //! lemma and restriction formulas, [`mult`] the multiplication restriction,
 //! and [`equations`] the subterm-convergence warning.
 //!
-//! [`check_theory`] runs the checks that read the parser AST.  The checks
-//! that read the elaborated theory — the rules SAPIC generated, the lemmas
-//! accountability appended, the macro- and predicate-expanded item formulas —
-//! or its `MaudeSig` come from [`splice_translated_wf_reports`] and
-//! [`append_subterm_convergence_report`], which insert their findings at HS's
-//! check positions; see [`WF_TOPIC_ORDER`] and [`insert_wf_before`].  Both
-//! drivers — the batch CLI (`run.rs`) and the web server's theory load
-//! (`theory_io.rs`) — run exactly that sequence, so it lives here once.  The
-//! batch path additionally splices a Maude-dependent "Rule variants" block
-//! afterwards; that stays at its call site.
+//! [`check_wellformedness`] is HS's `checkWellformedness`
+//! (Wellformedness.hs:1270-1286): one pass over the translated theory that
+//! runs the checks in the order of HS's list literal.  Both drivers — the
+//! batch CLI (`run.rs`) and the web server's theory load (`theory_io.rs`) —
+//! call it once, after the SAPIC and accountability translations, so the
+//! rules SAPIC generated and the lemmas accountability appended are in
+//! scope.  The batch path additionally splices a Maude-dependent "Rule
+//! variants" block into the result at HS position 6; that stays at its call
+//! site, with [`AFTER_VARIANTS_TOPICS`] and [`insert_wf_before`].
 //!
-//! The AST checks read the `LSort` the parser stamps on each variable rather
-//! than a full sort assignment, so a check that needs term-level sort
-//! inference (e.g. `Nat Sorts`) is one of the spliced ones.
+//! Every check reads the theory's items through `Theory::items`,
+//! [`Theory::rules`] and [`Theory::lemmas`], which hand them out in item
+//! order, and nothing in the pass reorders that list: an item's index in
+//! `Theory::items` is its identity, and the report follows it.
 
 use std::collections::BTreeSet;
-
-use tamarin_parser::ast as p;
-use tamarin_term::maude_sig::MaudeSig;
 
 use crate::pretty_hpj::{self as hpj, Doc};
 use crate::rule::{pretty_proto_rule_name, ProtoRuleE};
@@ -120,25 +117,57 @@ pub(super) const WF_RIBBON: usize = 67;
 pub type WfReport = Vec<WfError>;
 
 // =============================================================================
-// Shared report ordering (batch `--prove` and web load pipelines)
+// The pass
 // =============================================================================
 
-/// Canonical HS wellformedness check-order (Wellformedness.hs check list).
-/// Each ordered-splice call site (in the batch `run.rs` and web `theory_io.rs`
-/// load pipelines) passes a SUFFIX of this list as its `anchors`: since
-/// [`insert_wf_before`] only tests membership, a suffix contains exactly the
-/// topics that sort AFTER the check being inserted.  One source of truth
-/// avoids several in-sync literal lists that would silently mis-order a single
-/// report on a typo.
-pub const WF_TOPIC_ORDER: &[&str] = &[
+/// Port of HS `checkWellformedness` (Wellformedness.hs:1270-1286): every
+/// check of HS's list literal, run once over the TRANSLATED theory, in that
+/// list's order.
+///
+/// HS's `incompleteMSRs :: Bool` is a literal `False` at its only call site
+/// (`checkTranslatedTheory`, TheoryLoader.hs:602), so `factReports`' two
+/// `inexistentActions` arms are unreachable and stay unported; the parameter
+/// is absent here.  HS's `SignatureWithMaude` argument reaches only
+/// `ruleVariantsReport`; every other check that needs the signature reads it
+/// off the theory (`get (sigpMaudeSig . thySignature) thy`,
+/// Wellformedness.hs:1003, :1113, :1211-1214), which is what
+/// `thy.signature.maude_sig` is here.
+///
+/// `ruleVariantsReport` (HS position 6) needs a live Maude process, so the
+/// batch driver runs it and splices its findings into the result with
+/// [`insert_wf_before`] and [`AFTER_VARIANTS_TOPICS`]; the web load path
+/// produces no such block.
+pub fn check_wellformedness(thy: &Theory) -> WfReport {
+    let sig = &thy.signature.maude_sig;
+    let mut report = lemmas::check_if_lemmas_in_theory(thy);
+    report.extend(rules::unbound_report(thy));
+    report.extend(rules::fresh_names_report(thy));
+    report.extend(rules::public_names_report(thy));
+    report.extend(rules::rule_sorts_report(thy));
+    report.extend(facts::fact_reports(thy));
+    report.extend(formulas::formula_reports(thy, sig));
+    report.extend(lemmas::lemma_attribute_report(thy));
+    report.extend(mult::mult_restricted_report(thy, sig));
+    report.extend(rules::nat_well_sorted_report(thy));
+    report.extend(equations::subterm_convergence_report(sig));
+    report
+}
+
+/// Anchor list for the batch driver's `ruleVariantsReport` splice: every
+/// topic [`check_wellformedness`] emits from a check HS runs AFTER it
+/// (Wellformedness.hs:1272-1285) — the `factReports` group, `formulaReports`,
+/// `lemmaAttributeReport`, `multRestrictedReport`, `natWellSortedReport` and
+/// `checkEquationsSubtermConvergence`.  [`insert_wf_before`] tests membership
+/// only, so the topics of the five earlier checks are absent from this list
+/// and cannot act as a boundary.
+pub const AFTER_VARIANTS_TOPICS: &[&str] = &[
     "Reserved names",
-    "Special facts",
     "Fr facts must only use a fresh- or a msg-variable",
+    "Special facts",
+    "Fact capitalization issues",
     "Fact arity issues",
     "Fact multiplicity issues",
-    "Fact capitalization issues",
     "Facts occur in the left-hand-side but not in any right-hand-side ",
-    "Unbound variables",
     "Quantifier sorts",
     "Formula terms",
     " Formula guardedness",
@@ -146,23 +175,11 @@ pub const WF_TOPIC_ORDER: &[&str] = &[
     "Multiplication restriction of rules",
     "Nat Sorts",
     "Subterm Convergence Warning",
-    "Message Derivation Checks",
-    "Derivation Checks",
 ];
 
-// First `WF_TOPIC_ORDER` index whose topic sorts after each splicing check.
-pub const WF_AFTER_FACT_LHS: usize = 8; // "Quantifier sorts"
-pub const WF_AFTER_CHECK_GUARDED: usize = 11; // "Lemma annotations"
-pub const WF_AFTER_MULT_RESTRICTED: usize = 13; // "Nat Sorts"
-pub const WF_AFTER_NAT_SORTED: usize = 14; // "Subterm Convergence Warning"
-
 /// Splice `errors` into `report` immediately before the first existing entry
-/// whose `topic` is one of `anchors` (its HS check-order position), or at the
-/// end if none match, preserving the relative order of both the existing tail
-/// and the inserted errors.  Shared by the batch (`run.rs`) and web
-/// (`theory_io.rs`) ordered-splice call sites — the SAPIC unbound / lhs-rhs /
-/// publicNames re-splices, formulaReports, multRestricted and ruleVariants —
-/// which differ only in their `anchors` slice and the source of `errors`.
+/// whose `topic` is one of `anchors`, or at the end if none match, preserving
+/// the relative order of both the existing tail and the inserted errors.
 /// No-op when `errors` is empty.
 pub fn insert_wf_before(report: &mut Vec<WfError>, errors: Vec<WfError>, anchors: &[&str]) {
     if errors.is_empty() {
@@ -175,117 +192,6 @@ pub fn insert_wf_before(report: &mut Vec<WfError>, errors: Vec<WfError>, anchors
     let tail = report.split_off(insert_before);
     report.extend(errors);
     report.extend(tail);
-}
-
-/// Anchor list for the SAPIC `publicNamesReport` splice (HS check index 4):
-/// the variable-sorts topic, then every [`WF_TOPIC_ORDER`] topic EXCEPT
-/// "Unbound variables" (HS `unboundReport` runs BEFORE `publicNames`, so its
-/// entries must not act as a boundary).  publicNames therefore splices before
-/// the first entry from a later check.
-pub fn after_public_names_topics() -> Vec<&'static str> {
-    std::iter::once("Variable with mismatching sorts or capitalization")
-        .chain(
-            WF_TOPIC_ORDER
-                .iter()
-                .copied()
-                .filter(|t| *t != "Unbound variables"),
-        )
-        .collect()
-}
-
-/// Anchor list for the `ruleVariantsReport` splice (HS check index 6): every
-/// [`WF_TOPIC_ORDER`] topic EXCEPT "Unbound variables", whose `unboundReport`
-/// (index 2) runs earlier and so must not act as a boundary.  The three checks
-/// between them — `freshNamesReport`, `publicNamesReport`, `ruleSortsReport` —
-/// emit topics `WF_TOPIC_ORDER` does not carry, so they are already outside
-/// the list.  ruleVariants therefore splices before the first `factReports`
-/// entry.
-pub fn after_variants_topics() -> Vec<&'static str> {
-    WF_TOPIC_ORDER
-        .iter()
-        .copied()
-        .filter(|t| *t != "Unbound variables")
-        .collect()
-}
-
-/// Topics emitted by a check that runs after `unboundReport`, but which
-/// [`WF_TOPIC_ORDER`] does not carry: `freshNamesReport` (HS index 3),
-/// `publicNamesReport` (4), `ruleSortsReport` (5) and `ruleVariantsReport`
-/// (6).
-const AFTER_UNBOUND_EXTRA_TOPICS: &[&str] = &[
-    "Fresh public constants",
-    "Public constants with mismatching capitalization",
-    "Variable with mismatching sorts or capitalization",
-    "Rule has no variants",
-];
-
-/// Anchor list for the SAPIC `unboundReport` re-splice (HS check index 2):
-/// every topic a LATER check emits.  `unboundReport` is the first entry of
-/// `checkWellformedness`'s list past `checkIfLemmasInTheory`
-/// (Wellformedness.hs:1270-1286), so the boundary set is every topic except
-/// its own and those of the checks ahead of it — the `preReport` topics (SAPIC
-/// process warnings, the accountability RP check) and the `--prove`/`--lemma`
-/// argument check.  Their absence is what keeps the re-spliced entries behind
-/// them.
-pub fn after_unbound_topics() -> Vec<&'static str> {
-    AFTER_UNBOUND_EXTRA_TOPICS
-        .iter()
-        .copied()
-        .chain(
-            WF_TOPIC_ORDER
-                .iter()
-                .copied()
-                .filter(|t| *t != "Unbound variables"),
-        )
-        .collect()
-}
-
-/// Run every wellformedness check against the theory, held as the
-/// elaborated `elab` and the parser AST `parsed`. Topics from the result
-/// can be compared directly against `tamarin-prover`'s output.
-pub fn check_theory(elab: &Theory, parsed: &p::Theory) -> WfReport {
-    // Mirrors HS `Theory.Tools.Wellformedness.checkWellformedness`
-    // (Wellformedness.hs:1270-1286) in HS check order: unbound, freshNames,
-    // publicNames, ruleSorts, factReports,
-    // formulaReports, lemmaAttribute, multRestricted, natWellSorted,
-    // subtermConvergence.
-    let mut report = Vec::new();
-    // unboundReport — spliced by `splice_translated_wf_reports`
-    // (`rules::unbound_report`, anchored by `after_unbound_topics`): it reads
-    // the TRANSLATED theory's rules, so the ones SAPIC's process translation
-    // generates are in scope.
-    report.extend(rules::fresh_names_report(elab));
-    // publicNamesReport — spliced by `splice_translated_wf_reports`
-    // (`rules::translated_public_names_report`, anchored by
-    // `after_public_names_topics`): it reads the TRANSLATED rules, whose
-    // `process` attribute carries the constants that appear only inside a
-    // SAPIC process.
-    // HS `ruleSortsReport` (sortsClashCheck) runs HERE — after publicNamesReport
-    // and BEFORE factReports (Wellformedness.hs:1270-1286, see line 1275/1256).
-    report.extend(rules::rule_sorts_report(elab));
-    // ruleVariantsReport — spliced by the batch load pipeline (`run.rs`,
-    // anchored by `after_variants_topics`): it needs a MaudeHandle and the
-    // variant solver.
-    // factReports group (Wellformedness.hs:579-583).  Its last member,
-    // factLhsOccurNoRhs, is spliced by `splice_translated_wf_reports`
-    // (`facts::fact_lhs_occur_no_rhs`): same reason as unboundReport above.
-    report.extend(facts::fact_reports(elab, parsed));
-    // formulaReports group (checkQuantifiers / checkTerms / checkGuarded) —
-    // spliced by `splice_translated_wf_reports` as one interleaved per-formula
-    // pass (`formulas::formula_reports`): it needs the elaborated signature's
-    // irreducible funsyms and the TRANSLATED theory's formulas.
-    // lemmaAttributeReport:
-    report.extend(lemmas::lemma_attribute_report(elab));
-    // multRestrictedReport — spliced by `splice_translated_wf_reports`
-    // (`mult::mult_restricted_report`): it needs the elaborated signature's
-    // irreducible funsyms and the HughesPJ rule renderer.
-    // natWellSortedReport — spliced by `splice_translated_wf_reports`
-    // (`rules::nat_well_sorted_report`): same reason as unboundReport above.
-    // checkEquationsSubtermConvergence — appended by
-    // `append_subterm_convergence_report` (`equations::subterm_convergence_report`):
-    // HS reads `thyEquations = S.toList (stRules sig)`, the elaborated
-    // signature's subterm-rule Set.
-    report
 }
 
 /// The ordered set of distinct topic strings present in `report`.
@@ -353,160 +259,4 @@ fn grouped_topic_block(topic: &str, bodies: Vec<String>) -> WfReport {
 /// so a 1-of-10+ list prints ` 1.`…`10.`.
 fn numbered_index_width(count: usize) -> usize {
     count.to_string().len()
-}
-
-/// The static wellformedness pass over the theory as written, before the
-/// SAPIC and accountability translations extend it: clone `parsed` with
-/// macros expanded — HS `thyProtoRules` (Wellformedness.hs:133-134) applies
-/// `applyMacroInRule` to every rule before the checks — and run
-/// [`check_theory`] on the clone.  `elab` is the elaborated theory of the
-/// same source, which both drivers build before this pass runs.
-///
-/// The sole caller of [`crate::macro_expand::macro_expanded_clone`].
-pub fn pre_translation_wf_report(elab: &Theory, parsed: &p::Theory) -> Vec<WfError> {
-    let parsed_for_wf = crate::macro_expand::macro_expanded_clone(parsed);
-    check_theory(elab, &parsed_for_wf)
-}
-
-/// Append the signature-driven "Subterm Convergence Warning", once
-/// elaboration has produced the `MaudeSig`.  HS
-/// `checkEquationsSubtermConvergence` (Wellformedness.hs:1222-1232) works on
-/// `thyEquations = S.toList (stRules sig)` — the SIGNATURE's subterm-rule
-/// Set, not the parser-AST `equations:` blocks — so the entry carries
-/// `Ord CtxtStRule` Set order and `prettyCtxtStRule`'s width-wrap.
-///
-/// It is the LAST check of HS's list (Wellformedness.hs:1285) and
-/// `check_theory` emits no later check's entries, so appending puts it at
-/// HS's position; [`splice_translated_wf_reports`] then anchors
-/// `natWellSortedReport` on it.
-pub fn append_subterm_convergence_report(wf_report: &mut Vec<WfError>, maude_sig: &MaudeSig) {
-    wf_report.extend(equations::subterm_convergence_report(maude_sig));
-}
-
-/// Prepend `pre` to `wf_report` — HS's `preReport ++ postReport` splice
-/// (TheoryLoader.hs:487-502, see line 497).  Used for the translation
-/// stage's `Sapic.checkWellformedness ++ Acc.checkWellformedness` block
-/// and for batch's `checkIfLemmasInTheory` result (FIRST in HS's
-/// `checkWellformedness` list, Wellformedness.hs:1272).  No-op when `pre`
-/// is empty.
-pub fn prepend_wf_report(wf_report: &mut Vec<WfError>, mut pre: Vec<WfError>) {
-    if pre.is_empty() {
-        return;
-    }
-    pre.extend(std::mem::take(wf_report));
-    *wf_report = pre;
-}
-
-/// Run the translated-theory wellformedness checks over `elaborated` and
-/// splice their findings into `wf_report`, in HS's check order.
-///
-/// `maude_sig` is the elaborated signature's `MaudeSig` as captured by the
-/// caller before translation — the reducible/irreducible funsym
-/// classification HS's `checkTerms` and `multRestrictedReport` read.
-///
-/// HS gates none of these checks on the theory carrying a process, and
-/// neither does this pass: each of them is the ONLY source of its topics, for
-/// every theory.
-pub fn splice_translated_wf_reports(
-    elaborated: &Theory,
-    maude_sig: &MaudeSig,
-    wf_report: &mut Vec<WfError>,
-) {
-    // Port of HS `unboundReport` (Wellformedness.hs:514-519).  It walks
-    // `thyProtoRules` of the TRANSLATED theory, so a variable that is free
-    // only inside a process's embedded `_restrict` — lifted into the
-    // generated rule's `Restr_<rule>_<i>( … )` action, bound by no premise —
-    // is reported against the generated rule.  The elaborated theory keeps
-    // the user rules in source order and carries the generated ones appended
-    // after them, matching HS's item order.  Position: HS check index 2, so
-    // the findings splice before the first entry from a later check.
-    let unbound = rules::unbound_report(elaborated);
-    insert_wf_before(wf_report, unbound, &after_unbound_topics());
-
-    // Port of HS `factLhsOccurNoRhs` (Wellformedness.hs:214-256), which
-    // likewise sees the generated rules, so SAPIC-only premise facts — e.g. a
-    // `Message( c, m )` consumed by an `in(c,m)` with no producing `out` —
-    // are surfaced too.  Position: the factReports group (after fact_usage,
-    // before formulaReports), matching HS check order.
-    let lhs_rhs = facts::fact_lhs_occur_no_rhs(elaborated);
-    insert_wf_before(wf_report, lhs_rhs, &WF_TOPIC_ORDER[WF_AFTER_FACT_LHS..]);
-
-    // Port of HS `publicNamesReport` (Wellformedness.hs:485-486, over the
-    // `publicNamesReport'` body at 463-483), which also runs on the TRANSLATED
-    // rules.  It reads the ELABORATED rules (facts + process attribute), so a
-    // constant appearing only in a generated rule's source process — e.g. `'C'`
-    // in `insert <'roles', x, 'C'>` clashing with `'c'` — is surfaced,
-    // attributed to the root `Init` rule exactly as HS.  Position: publicNames
-    // is HS check index 4, so it splices before the first entry from a LATER
-    // check — ruleSorts (HS index 5, the sort-clash topic) or any
-    // `WF_TOPIC_ORDER` topic except "Unbound variables" (`unboundReport`, HS
-    // index 2, runs BEFORE publicNames, so its entries must not act as a
-    // boundary).
-    let public_names = rules::translated_public_names_report(elaborated);
-    insert_wf_before(wf_report, public_names, &after_public_names_topics());
-
-    // Port of HS `formulaReports` (Wellformedness.hs:996-1015) — the whole
-    // check, all three arms.  It is ONE per-formula loop, `msum
-    // [checkQuantifiers, checkTerms, checkGuarded]` inside the `annFormulas`
-    // walk, so its three topics interleave in item order and a topic reopens
-    // after an intervening one; running the arms as separate whole-report
-    // splices would instead emit one block per topic.  `formula_reports` keeps
-    // HS's emission order.
-    //
-    // Two dependencies pin the call to this position:
-    //   - the elaborated `MaudeSig`, for `checkTerms`'s
-    //     reducible/irreducible funsym classification (HS
-    //     `irreducibleFunSyms maudeSig`), which the parser-level
-    //     `check_theory` cannot see; and
-    //   - the TRANSLATED theory, because HS's single `checkWellformedness`
-    //     pass runs on the `OpenTranslatedTheory` (`checkTranslatedTheory`,
-    //     TheoryLoader.hs:559-565, fed by `closeTheory` at :726-728), so
-    //     `annFormulas` (Wellformedness.hs:1006-1015) also covers the
-    //     restrictions SAPIC's `let … else` / `if` lowering mints
-    //     (`Restr_<rule>_<i>`, carrying the branch's terms verbatim — e.g. an
-    //     `exp` application from `<<'a'^'b','b'>, 'c'>`) and the lemmas
-    //     accountability's `translate` appends.
-    //
-    // Position: HS check index 8, so the findings splice before the first
-    // entry from a later check (`lemmaAttributeReport` onwards).
-    let formula_errors = formulas::formula_reports(elaborated, maude_sig);
-    insert_wf_before(
-        wf_report,
-        formula_errors,
-        &WF_TOPIC_ORDER[WF_AFTER_CHECK_GUARDED..],
-    );
-
-    // Port of HS `multRestrictedReport` (Wellformedness.hs:1108-1113,
-    // "Multiplication restriction of rules").  Pinned here by the same two
-    // dependencies as `formula_reports` above: the elaborated `MaudeSig` (HS
-    // `irreducibleFunSyms $ get (sigpMaudeSig . thySignature) thy`) and the
-    // TRANSLATED theory — HS's `thyProtoRules` reads the
-    // `OpenTranslatedTheory`'s rule items, so SAPIC's generated rules are in
-    // scope, and it must run BEFORE the no-variant rules are dropped from the
-    // elaborated theory (HS closes the theory only after
-    // `checkWellformedness`).
-    //
-    // Position: HS check index 10 — after `lemmaAttributeReport` (9), before
-    // `natWellSortedReport` (11), so splice before the first entry from a
-    // later check.
-    let mult_errors = mult::mult_restricted_report(elaborated, maude_sig);
-    insert_wf_before(
-        wf_report,
-        mult_errors,
-        &WF_TOPIC_ORDER[WF_AFTER_MULT_RESTRICTED..],
-    );
-
-    // Port of HS `natWellSortedReport` (Wellformedness.hs:318-333), which
-    // reads `thyProtoRules` of the `OpenTranslatedTheory`, so the rules
-    // SAPIC's translation generates are in scope: a `%+` operand that is a
-    // msg-sorted process variable (e.g. `let j:nat = i%+%1`, where the `:nat`
-    // is a SAPIC TYPE and `i` stays msg-sorted) is only visible once the
-    // process has become rules.  Position: HS check index 11, so the findings
-    // splice before the first entry from a later check.
-    let nat_errors = rules::nat_well_sorted_report(elaborated);
-    insert_wf_before(
-        wf_report,
-        nat_errors,
-        &WF_TOPIC_ORDER[WF_AFTER_NAT_SORTED..],
-    );
 }

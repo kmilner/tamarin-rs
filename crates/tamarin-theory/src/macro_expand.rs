@@ -8,10 +8,10 @@
 //! [`crate::theory`] and [`crate::restriction`]), for the passes that still
 //! read macro-expanded PARSER rules and formulas:
 //!
-//!   - [`macro_expanded_clone`] — the clone
-//!     [`crate::wellformedness::pre_translation_wf_report`] checks;
-//!   - [`expand_theory_macros`] — [`macro_expanded_clone`] and the tests that
-//!     drive a pass from a macro-expanded parser theory;
+//!   - [`expand_theory_macros`] — the tests that drive a pass from a
+//!     macro-expanded parser theory;
+//!   - [`apply_macros_formula`] — the parser-AST formula printer's corpus
+//!     test;
 //!
 //! Port of `Term.Macro.applyMacros` (HS: lib/term/src/Term/Macro.hs:40-54)
 //! plus the call-sites that drive it:
@@ -199,15 +199,6 @@ pub fn expand_theory_macros(thy: &mut p::Theory) {
     }
 
     expand_items(&macros, &mut thy.items);
-}
-
-/// Clone a parser theory and expand its macros, mirroring HS `thyProtoRules`'s
-/// `applyMacroInRule (theoryMacros thy)`.  Used for the WF re-checks (batch and
-/// web load paths) that must see macro-expanded rules.
-pub fn macro_expanded_clone(parsed: &p::Theory) -> p::Theory {
-    let mut t = parsed.clone();
-    expand_theory_macros(&mut t);
-    t
 }
 
 /// Apply macros to a slice of theory items.  The parser splices `#ifdef`

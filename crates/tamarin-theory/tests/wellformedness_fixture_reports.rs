@@ -3,27 +3,22 @@
 //! the pinned oracle's own `/* WARNING … */` block.
 //!
 //! There are two topic-level harnesses: `tests/wellformedness_topics.rs` and
-//! the `examples/wellformedness_fixtures.rs` differential runner.  Both can
-//! only reach `tamarin_theory::wellformedness::check_theory`.  They therefore
-//! compare topic names, and they must drop the topics that exist only after
-//! elaboration (each harness lists them in its own `POST_ELABORATION_TOPICS`).
-//! Four fixtures pin nothing else: `formula_unguarded`,
-//! `multiplication_in_rule_lhs`, `non_subterm_equation` and
-//! `quantifier_wrong_sort`.  If you replace one of those four with an empty
-//! `theory X begin end`, those two harnesses still pass.  This harness closes
-//! that hole.  It also compares the full report bytes of every other fixture,
-//! rather than a subset of the topics.
+//! the `examples/wellformedness_fixtures.rs` differential runner.  Both
+//! compare topic names only.  Four fixtures list a single topic:
+//! `formula_unguarded`, `multiplication_in_rule_lhs`, `non_subterm_equation`
+//! and `quantifier_wrong_sort`.  This harness compares the full report bytes
+//! of every fixture instead, so a fixture cannot be hollowed out and still
+//! pass.
 //!
-//! The pipeline below calls the four `tamarin_theory::wellformedness` entry
-//! points in the order that both production callers call them.  Those callers
-//! are `run.rs`'s batch loop and `tamarin_server::theory_io`'s web load.  This
-//! harness is therefore a third caller of that shared module, not a hand-copy
-//! of either caller.  Two production stages are deliberately absent, and
+//! The pipeline below calls `tamarin_theory::wellformedness::check_wellformedness`
+//! the way both production callers call it.  Those callers are `run.rs`'s
+//! batch loop and `tamarin_server::theory_io`'s web load.  This harness is
+//! therefore a third caller of that shared module, not a hand-copy of either
+//! caller.  Two production stages are deliberately absent, and
 //! [`render_report`] asserts that the first one cannot apply:
 //!
-//! * the SAPIC / accountability translation that `run.rs` runs between the
-//!   `append_subterm_convergence_report` and `splice_translated_wf_reports`
-//!   calls.  No fixture declares a process, and the render asserts this.
+//! * the SAPIC / accountability translation both drivers run before the pass.
+//!   No fixture declares a process, and the render asserts this.
 //! * the Maude-backed `Message Derivation Checks` and `Rule variants` blocks
 //!   that the batch loop splices afterwards.  Four expectation files
 //!   therefore carry an `# omits:` line.  That line names the derivation-check
@@ -95,19 +90,12 @@ fn render_report(name: &str) -> String {
     assert!(
         !elaborated.is_sapic,
         "{name}: declares a process, but this harness omits the SAPIC/accountability \
-         translation stage `run.rs` runs before `splice_translated_wf_reports`, so its \
+         translation stage both drivers run before the wellformedness pass, so its \
          report would be missing the generated rules' findings",
     );
-    let mut report =
-        tamarin_theory::wellformedness::pre_translation_wf_report(&elaborated, &parsed);
-    let maude_sig = elaborated.signature.maude_sig.clone();
-    tamarin_theory::wellformedness::append_subterm_convergence_report(&mut report, &maude_sig);
-    tamarin_theory::wellformedness::splice_translated_wf_reports(
+    format_wf_block(&tamarin_theory::wellformedness::check_wellformedness(
         &elaborated,
-        &maude_sig,
-        &mut report,
-    );
-    format_wf_block(&report)
+    ))
 }
 
 /// The leading `#` provenance lines of an expectation file.

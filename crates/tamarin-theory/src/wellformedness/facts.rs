@@ -12,14 +12,9 @@
 //! with the facts of its formula's `Action` atoms.  A rule fact's cell is
 //! `prettyLNFact`, a lemma fact's the derived `show` of a
 //! `Fact (VTerm Name (BVar LVar))`.
-//!
-//! The group's last member, [`fact_lhs_occur_no_rhs`], is emitted from
-//! [`super::splice_translated_wf_reports`] rather than from
-//! [`fact_reports`].
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use tamarin_parser::ast as p;
 use tamarin_term::lterm::{is_fresh_var, is_msg_var};
 
 use super::{
@@ -40,12 +35,11 @@ use crate::theory::Theory;
 // =============================================================================
 
 /// Port of HS `factReports` (Wellformedness.hs:579-583), in HS's member
-/// order.  Its last member, `factLhsOccurNoRhs`, is [`fact_lhs_occur_no_rhs`]
-/// here and is emitted at its own call site.
+/// order.
 ///
 /// `theoryFacts` is one shared binding in HS's `where`, so the cells are
 /// built once for the two members that read them.
-pub fn fact_reports(thy: &Theory, _parsed: &p::Theory) -> WfReport {
+pub fn fact_reports(thy: &Theory) -> WfReport {
     // Every cell and body below is a plain `Doc`: HS's `prettyWfErrorReport`
     // text never passes through the escaping `Document (HtmlDoc d)` instance
     // (Html.hs:102-105), so a pair term inside a fact keeps its raw `<`/`>`
@@ -57,6 +51,7 @@ pub fn fact_reports(thy: &Theory, _parsed: &p::Theory) -> WfReport {
     report.extend(fresh_fact_arguments(thy));
     report.extend(special_facts_usage(thy));
     report.extend(fact_usage(&facts));
+    report.extend(fact_lhs_occur_no_rhs(thy));
     report
 }
 
@@ -544,7 +539,7 @@ fn edit_distance(a: &str, b: &str) -> usize {
 /// The single entry bakes in the underlined header and the `numbered'`
 /// layout: `numbered (text "")` separates the items by a `text ""` line,
 /// which at `prettyWfErrorReport`'s 2-space body nest renders as two spaces.
-pub fn fact_lhs_occur_no_rhs(thy: &Theory) -> Vec<WfError> {
+fn fact_lhs_occur_no_rhs(thy: &Theory) -> Vec<WfError> {
     // The topic's trailing space is HS's source literal
     // (Wellformedness.hs:221).
     let title = "Facts occur in the left-hand-side but not in any right-hand-side ";

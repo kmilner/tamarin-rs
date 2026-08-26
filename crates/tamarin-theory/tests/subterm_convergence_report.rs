@@ -17,9 +17,9 @@
 use tamarin_parser::parse_theory;
 use tamarin_theory::wellformedness::equations::subterm_convergence_report;
 
-/// The report the load pipelines append
-/// (`wellformedness::append_subterm_convergence_report`), as its single entry's
-/// message, or `None` when the check stays silent.
+/// The report the load pipelines emit last (`wellformedness::check_wellformedness`'s
+/// closing member), as its single entry's message, or `None` when the check
+/// stays silent.
 fn message(src: &str) -> Option<String> {
     let parsed = parse_theory(src, &[]).expect("parse");
     let elaborated = tamarin_theory::elaborate::elaborate(&parsed).expect("elaborate");

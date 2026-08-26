@@ -40,7 +40,7 @@ use tamarin_theory::constraint::solver::context::annotate_theory_loop_breakers;
 use tamarin_theory::constraint::system::System;
 use tamarin_theory::elaborate::elaborate;
 use tamarin_theory::module::ModuleType;
-use tamarin_theory::wellformedness::{after_variants_topics, insert_wf_before};
+use tamarin_theory::wellformedness::{insert_wf_before, AFTER_VARIANTS_TOPICS};
 
 use crate::cli::{lemma_matches, Args, Subcommand};
 
@@ -1191,9 +1191,9 @@ impl TheoryPipeline<'_> {
     /// `removeTranslationItems` / lemma-filter behaviour its
     /// `processOpenTheory` dispatch implies (TheoryLoader.hs:470-484): emit
     /// the `Theory translated` marker, run the per-module SAPIC typing /
-    /// translation and the accountability translation, and PREPEND the
-    /// pre-translation `Sapic.checkWellformedness ++ Acc.checkWellformedness`
-    /// report.
+    /// translation and the accountability translation, and open the report
+    /// with the pre-translation
+    /// `Sapic.checkWellformedness ++ Acc.checkWellformedness`.
     ///
     /// `Err` is a process exit code whose message is already on stderr (the
     /// GHC-exception shape).
@@ -1299,14 +1299,14 @@ impl TheoryPipeline<'_> {
             }
 
             // HS `preReport = Sapic.checkWellformedness t ++ Acc.checkWellformedness t`
-            // (TheoryLoader.hs:487-502, see line 497), PREPENDED to the rest of the report
-            // (`preReport ++ postReport`): SAPIC-process warnings first, then the
-            // accountability RP check (computed above, pre-translation), then
-            // every other wellformedness entry.  The trailing `N wellformedness
-            // check failed` summary counts them via `wf_report.len()`.
-            let mut pre_report = sapic_wf;
-            pre_report.extend(acc_wf);
-            tamarin_theory::wellformedness::prepend_wf_report(&mut self.wf_report, pre_report);
+            // (TheoryLoader.hs:487-502, see line 497), the FRONT of the report
+            // (`preReport ++ postReport`, TheoryLoader.hs:726-732): SAPIC-process
+            // warnings first, then the accountability RP check (computed above,
+            // pre-translation).  `check_translated_theory` appends `postReport`
+            // behind them.  The trailing `N wellformedness check failed` summary
+            // counts them via `wf_report.len()`.
+            self.wf_report.extend(sapic_wf);
+            self.wf_report.extend(acc_wf);
         }
 
         // `-m msr` keeps only the selected lemmas (`processOpenTheory`'s
@@ -1344,20 +1344,17 @@ impl TheoryPipeline<'_> {
     /// [`Self::translate_module`] gates only the loop-breaker annotation —
     /// see the comment at that block.
     fn check_translated_theory(&mut self) {
-        // HS runs the full `checkWellformedness` on the TRANSLATED theory
-        // (TheoryLoader.hs:553-565, `checkTranslatedTheory`), i.e. AFTER SAPIC
-        // `translate` has injected the generated rules, whereas our
-        // `check_theory` runs earlier on the PRE-translation theory (in the
-        // file loop, before `apply_sapic`), where the SAPIC rules are
-        // invisible to the rule-dependent checks.  The re-runs and their
-        // splice positions are shared with the web load path — see
-        // `tamarin_theory::wellformedness`.  The Maude-dependent "Rule
-        // variants" block is batch-only and stays below.
-        tamarin_theory::wellformedness::splice_translated_wf_reports(
-            &self.elaborated,
-            &self.maude_sig,
-            &mut self.wf_report,
-        );
+        // HS `postReport`: the full `checkWellformedness` over the TRANSLATED
+        // theory (TheoryLoader.hs:553-565, `checkTranslatedTheory`), i.e. after
+        // SAPIC `translate` injected the generated rules and `Acc.translate`
+        // the generated lemmas, and after the `-m msr` lemma filter.  The pass
+        // is shared with the web load path — see
+        // `tamarin_theory::wellformedness`.  Its one Maude-dependent member,
+        // `ruleVariantsReport`, is batch-only and splices in below.
+        self.wf_report
+            .extend(tamarin_theory::wellformedness::check_wellformedness(
+                &self.elaborated,
+            ));
 
         // Spawn a single Maude handle for this file.  Used by:
         //   - the rule-variants computation that populates each rule's
@@ -1526,14 +1523,9 @@ impl TheoryPipeline<'_> {
             }
 
             // HS position 6: ruleVariantsReport comes BEFORE factReports
-            // (position 7) and AFTER unboundReport (position 2), so the
-            // anchors are every `WF_TOPIC_ORDER` topic but "Unbound
-            // variables".
-            insert_wf_before(
-                &mut self.wf_report,
-                variants_errors,
-                &after_variants_topics(),
-            );
+            // (position 7) and AFTER ruleSortsReport (position 5), so the
+            // findings go in front of the first entry from a later check.
+            insert_wf_before(&mut self.wf_report, variants_errors, AFTER_VARIANTS_TOPICS);
 
             // HS `closeProtoRule` (lib/theory/src/Rule.hs:82-86, see line 84): `ClosedProtoRule ruE <$>
             // maybeToList (variantsProtoRule hnd ruE)` — a rule with NO
@@ -2364,19 +2356,8 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             .map_err(|e| RunError(format!("elaboration error in {}: {}", in_file, e.message)))?;
         DEFERRED_HS_ERROR_MARKERS.take();
 
-        // Wellformedness checks — mirrors HS `checkWellformedness`
-        // (`Theory.Tools.Wellformedness:1270`).  Runs on every file that
-        // reaches the close pipeline, so a malformed theory is surfaced
-        // even without proving.  The shared pass (`wellformedness`) clones
-        // `parsed` with macros expanded first — HS's `thyProtoRules`
-        // applies `applyMacroInRule (theoryMacros thy)` before the checks,
-        // so `Fr(test())` where `test() = ~x` becomes `Fr(~x)` and passes.
-        // (`--parse-only` never reaches this point — it `continue`d above,
-        // before any wellformedness runs, matching HS Batch.hs:91-95.)
-        let mut wf_report =
-            tamarin_theory::wellformedness::pre_translation_wf_report(&elaborated, &parsed);
-        // Everything downstream of the wellformedness pass reads the internal
-        // theory; the parser AST ends here.
+        // Everything downstream of `elaborate` reads the internal theory; the
+        // parser AST ends here.
         drop(parsed);
         // HS `addParamsOptions`' `addNdcOption` (TheoryLoader.hs:821-826):
         // `--no-ndc` disables the no-deconstruction-chain check for this theory.
@@ -2395,25 +2376,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         // (Wellformedness.hs:1168).  The interactive path writes the same
         // field through `tamarin_server::theory_io::set_lemmas_to_prove`.
         elaborated.options.lemmas_to_prove = opts.lemma_names.clone();
-        // HS `checkIfLemmasInTheory` (Wellformedness.hs:1156-1171) — FIRST
-        // in HS's checkWellformedness list (line 1272).  Checks that every
-        // --prove=X / --lemma=X name corresponds to a theory lemma.  It runs
-        // outside the shared pass, so its result is PREPENDED to sort first,
-        // matching HS's `checkIfLemmasInTheory : ...` order.
-        tamarin_theory::wellformedness::prepend_wf_report(
-            &mut wf_report,
-            tamarin_theory::wellformedness::lemmas::check_if_lemmas_in_theory(&elaborated),
-        );
         let maude_sig = elaborated.signature.maude_sig.clone();
-
-        // "Subterm Convergence Warning" over the signature's subterm-rule
-        // set, once the `MaudeSig` exists (the shared append in
-        // `wellformedness` — see its doc for the `Ord CtxtStRule` order /
-        // width-wrap rationale).
-        tamarin_theory::wellformedness::append_subterm_convergence_report(
-            &mut wf_report,
-            &maude_sig,
-        );
 
         // The per-file pipeline state.  From here the loop follows HS's
         // stage names: `translate_theory` → `check_translated_theory` →
@@ -2425,7 +2388,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             in_file: in_file.as_str(),
             theory_name,
             elaborated,
-            wf_report,
+            wf_report: Vec::new(),
             maude_sig,
             cut,
             auto_sources,

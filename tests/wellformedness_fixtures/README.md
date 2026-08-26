@@ -17,16 +17,15 @@ negative paths in `Theory.Tools.Wellformedness`. Three harnesses consume
 it:
 
 1. `cargo test -p tamarin-theory --test wellformedness_topics` — offline
-   check that the Rust port (`tamarin_theory::wellformedness::check_theory`) emits
-   every expected topic for every fixture and none of its `#!`
-   negatives. This check runs in the normal test suite, and it needs
-   no tamarin binary. It also fails in three more cases. The first is
-   a `.spthy` file that no `expected.txt` line mentions. The second is
-   a `#!` line for a fixture that no `expected.txt` line lists. The
-   third is a fixture that compares nothing after the harness drops
-   the post-elaboration topics below. It reads only the name and the
-   topics of an `expected.txt` line; the oracle flags a line may carry
-   are harness 2's.
+   check that the Rust port
+   (`tamarin_theory::wellformedness::check_wellformedness`) emits every
+   expected topic for every fixture and none of its `#!` negatives.
+   This check runs in the normal test suite, and it needs no tamarin
+   binary. It also fails in two more cases. The first is a `.spthy`
+   file that no `expected.txt` line mentions. The second is a `#!`
+   line for a fixture that no `expected.txt` line lists. It reads only
+   the name and the topics of an `expected.txt` line; the oracle flags
+   a line may carry are harness 2's.
 2. `cargo run -p tamarin-theory --example wellformedness_fixtures
    [-- <fixtures-dir>]` — the differential runner: every fixture must
    parse, the Rust checker must emit the expected topics, and (unless
@@ -35,10 +34,9 @@ it:
    oracle binary is `$TAMARIN`, defaulting to `tamarin-prover` on
    `PATH`.
 3. `cargo test -p tamarin-theory --test wellformedness_fixture_reports`
-   — the byte-level pin. This harness runs each fixture through three
-   of the four `tamarin_theory::wellformedness` splice entry points, in the
-   order that both production callers call them. It does not call
-   `prepend_wf_report`. The rendered `/* WARNING … */` block must then
+   — the byte-level pin. This harness runs each fixture through
+   `tamarin_theory::wellformedness::check_wellformedness`, the pass both
+   production callers run. The rendered `/* WARNING … */` block must then
    equal `reports/<fixture>.report` byte for byte. Those `.report`
    files are captures of the pinned oracle's own block. This harness
    therefore holds the fixtures' *text* to upstream, and not only their
@@ -54,18 +52,11 @@ The two topic-level harnesses share two comparison rules:
   a source-literal trailing space (e.g. `"Facts occur in the
   left-hand-side but not in any right-hand-side "`), which the
   comma-separated `expected.txt` cannot represent.
-- The post-elaboration topics — each harness lists them in its own
-  `POST_ELABORATION_TOPICS` — are checked only against the tamarin
-  binary, and not against the Rust parser-level checker. A fixture that
-  pins nothing else therefore depends on its `#!` negatives in the two
-  topic-level harnesses. It also depends on its `reports/` block in
-  harness 3. Those HS passes need the elaborated `MaudeSig`
-  (reducible-funsym classification, `abstractRule`'s irreducible
-  symbols, the subterm-rule Set) or the SAPIC-translated theory's
-  rules, so they run post-elaboration — spliced by
-  `tamarin_theory::wellformedness::splice_translated_wf_reports`, which
-  both the CLI (`run.rs`) and the web loader call. Each is covered by
-  its own unit tests and by the corpus parity gates.
+- The `Rule has no variants` and `Message Derivation Checks` topics are
+  checked only against the tamarin binary. Both need a live Maude
+  process that neither topic-level harness spawns: the batch driver
+  (`run.rs`) splices them into the pass's result afterwards. Each is
+  covered by its own unit tests and by the corpus parity gates.
 
 ## `reports/`
 

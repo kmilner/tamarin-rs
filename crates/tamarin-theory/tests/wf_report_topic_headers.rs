@@ -20,20 +20,13 @@
 use tamarin_parser::parse_theory;
 use tamarin_theory::pretty_theory::format_wf_block;
 
-/// The `/* WARNING … */` comment both load pipelines render: the parser-level
-/// pass, then the translated-theory splice.
+/// The `/* WARNING … */` comment both load pipelines render.
 fn load_wf_block(src: &str) -> String {
     let parsed = parse_theory(src, &[]).expect("parse");
     let elaborated = tamarin_theory::elaborate::elaborate(&parsed).expect("elaborate");
-    let mut report =
-        tamarin_theory::wellformedness::pre_translation_wf_report(&elaborated, &parsed);
-    let maude_sig = elaborated.signature.maude_sig.clone();
-    tamarin_theory::wellformedness::splice_translated_wf_reports(
+    format_wf_block(&tamarin_theory::wellformedness::check_wellformedness(
         &elaborated,
-        &maude_sig,
-        &mut report,
-    );
-    format_wf_block(&report)
+    ))
 }
 
 /// The `Formula terms` findings of the elaborated theory: the `checkTerms`
@@ -52,13 +45,11 @@ fn formula_terms_report(src: &str) -> Vec<tamarin_theory::wellformedness::WfErro
 }
 
 /// `unboundReport` is HS check index 2 and `lemmaAttributeReport` index 9
-/// (Wellformedness.hs:1270-1286), so the unbound group opens the block even
-/// though the load pipeline splices it into a report `check_theory` has
-/// already assembled.  The theory declares no process, so the splice is the
-/// only producer of the topic.  Bytes are the pinned oracle's (Git revision
-/// ef3f0468) for this theory under `--derivcheck-timeout=0`.
+/// (Wellformedness.hs:1270-1286), so the unbound group opens the block.
+/// Bytes are the pinned oracle's (Git revision ef3f0468) for this theory
+/// under `--derivcheck-timeout=0`.
 #[test]
-fn spliced_unbound_group_precedes_a_later_topic() {
+fn unbound_group_precedes_a_later_topic() {
     let src = "theory SpliceOrder\nbegin\n\
                rule R: [ ] --[ A( ) ]-> [ Out(~k) ]\n\
                lemma L [reuse]:\n  exists-trace \"Ex #i. A( ) @ #i\"\n\
@@ -85,7 +76,7 @@ fn fr_fact_topic_prints_its_underlined_header_once() {
                end\n";
     let thy = parse_theory(src, &[]).expect("parse");
     let elaborated = tamarin_theory::elaborate::elaborate(&thy).expect("elaborate");
-    let report = tamarin_theory::wellformedness::check_theory(&elaborated, &thy);
+    let report = tamarin_theory::wellformedness::check_wellformedness(&elaborated);
     assert_eq!(
         format_wf_block(&report),
         "/*\nWARNING: the following wellformedness checks failed!\n\n\

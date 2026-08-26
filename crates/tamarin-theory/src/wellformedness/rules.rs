@@ -12,7 +12,7 @@
 //! item of the `OpenTranslatedTheory`.  The elaborated [`Theory`]'s rules are
 //! that set: `elaborate` applies the theory's macros and `apply_sapic`
 //! appends the generated rules, which is the same input [`super::mult`]
-//! reads.  [`translated_public_names_report`] (HS `publicNamesReport'`,
+//! reads.  [`public_names_report`] (HS `publicNamesReport'`,
 //! Wellformedness.hs:463-484) reads them too, including the source
 //! subprocess a generated rule carries.
 //!
@@ -339,7 +339,7 @@ pub fn fresh_names_report(thy: &Theory) -> WfReport {
 
 /// The clash-detection + rendering half of HS `publicNamesReport'`
 /// (Wellformedness.hs:463-484).  Its caller,
-/// [`translated_public_names_report`], harvests the
+/// [`public_names_report`], harvests the
 /// `(showRuleCaseName, pubName)` pairs from the ELABORATED rules — including
 /// the `process` attribute HS's `universeBi` walks — which the parser AST
 /// stores only as a rendered string.  `pairs` must arrive in rule order
@@ -414,13 +414,11 @@ fn public_names_report_from_pairs(pairs: Vec<(String, String)>) -> WfReport {
 }
 
 /// Port of HS `publicNamesReport'` (Wellformedness.hs:463-484) over the
-/// TRANSLATED theory's rules.  HS runs the FULL `checkWellformedness` on that
-/// theory, so `publicNames = universeBi ru` walks each generated rule
-/// INCLUDING the source subprocess HS attaches to it — and the parser AST
-/// stores that subprocess only as a rendered `process="…"` string, so a
+/// translated theory's rules.  `publicNames = universeBi ru` walks each
+/// generated rule INCLUDING the source subprocess HS attaches to it, so a
 /// constant appearing solely inside the process (the `'C'` in
-/// `insert <'roles', x, 'C'>`) is reachable only from the elaborated rule.
-/// Walk the ELABORATED rules' facts AND their `process` attribute.
+/// `insert <'roles', x, 'C'>`) is reached through the rule's `process`
+/// attribute alongside its facts.
 ///
 /// The root `Init` rule carries the WHOLE process (`base_init` in
 /// tamarin-sapic's base_translation.rs; HS `baseInit`,
@@ -428,7 +426,7 @@ fn public_names_report_from_pairs(pairs: Vec<(String, String)>) -> WfReport {
 /// process) and is emitted first, so under `clashesOn`'s
 /// first-occurrence dedup it wins every public name — reproducing HS's
 /// `rule "Init":  name 'C', 'c'` attribution.
-pub fn translated_public_names_report(thy: &Theory) -> Vec<WfError> {
+pub fn public_names_report(thy: &Theory) -> Vec<WfError> {
     let mut pairs: Vec<(String, String)> = Vec::new();
     for r in thy.items.iter().filter_map(|it| match it {
         crate::theory::TheoryItem::Rule(r) => Some(r),

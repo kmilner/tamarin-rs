@@ -3,20 +3,19 @@
 //   scripts/gen_license_headers.py --authors <this file>
 
 //! Integration test for the fixtures in `tests/wellformedness_fixtures/`.
-//! Each fixture must parse.  It must make `wf::check_theory` emit every
-//! topic that its `expected.txt` line lists.  It must not make
-//! `wf::check_theory` emit any topic that a `#!` line records as absent.
-//! Nothing here runs `tamarin-prover`, so this test works offline.  The
-//! differential runner (`cargo run -p tamarin-theory --example
+//! Each fixture must parse.  It must make `wf::check_wellformedness` emit
+//! every topic that its `expected.txt` line lists.  It must not make
+//! `wf::check_wellformedness` emit any topic that a `#!` line records as
+//! absent.  Nothing here runs `tamarin-prover`, so this test works offline.
+//! The differential runner (`cargo run -p tamarin-theory --example
 //! wellformedness_fixtures`) compares the same file against the oracle.
 //!
-//! The comparison must not pass while it compares nothing.  Three cases are
+//! The comparison must not pass while it compares nothing.  Two cases are
 //! each a failure.  The first is a `.spthy` file that no `expected.txt` line
 //! mentions.  The second is a `#!` line for a fixture that no positive line
-//! lists.  The third is a fixture that has no parser-level expected topic, no
-//! forbidden one, and no pinned `.report`.  This test still cannot see a fixture that has
-//! lost its content while its `#!` negatives stay satisfiable.  An empty
-//! theory emits no topic, so it triggers no negative.
+//! lists.  This test still cannot see a fixture that has lost its content
+//! while its `#!` negatives stay satisfiable.  An empty theory emits no
+//! topic, so it triggers no negative.
 //! `tests/wellformedness_fixture_reports.rs` covers that case: it compares
 //! the complete rendered report of each fixture against the bytes of the
 //! oracle.
@@ -27,30 +26,6 @@ use std::path::PathBuf;
 
 use tamarin_parser::parse_theory;
 use tamarin_theory::wellformedness as wf;
-
-/// The topics that `wf::check_theory` cannot produce, because their checks
-/// read the TRANSLATED theory, the elaborated `MaudeSig`, or both: HS
-/// `checkTerms` classifies a funsym as reducible or irreducible,
-/// `multRestrictedReport` (Wellformedness.hs:1108-1113) needs the irreducible
-/// symbols of `abstractRule` and the HughesPJ rule renderer,
-/// `checkEquationsSubtermConvergence` (Wellformedness.hs:1222-1232) reads the
-/// signature's subterm-rule Set, and `unboundReport` / `publicNamesReport` /
-/// `factLhsOccurNoRhs` / `natWellSortedReport` walk `thyProtoRules` of the
-/// theory SAPIC's translation has already extended.
-/// `wf::splice_translated_wf_reports` and
-/// `wf::append_subterm_convergence_report` add them after elaboration.  The
-/// tests of those checks (`tests/mult_restricted_report.rs`) and the corpus wf
-/// gate cover them.  The pre-elaboration comparison here drops them from the
-/// positive side.
-const POST_ELABORATION_TOPICS: [&str; 7] = [
-    "Formula terms",
-    "Multiplication restriction of rules",
-    "Unbound variables",
-    "Public constants with mismatching capitalization",
-    "Facts occur in the left-hand-side but not in any right-hand-side",
-    "Nat Sorts",
-    "Subterm Convergence Warning",
-];
 
 /// The minimum size of the roster.  [`fixture_roster_is_complete`] accepts
 /// any pair of a file and a line.  This bound is therefore what makes the
@@ -78,8 +53,9 @@ fn norm(topic: &str) -> String {
 #[derive(Debug)]
 struct Fixture {
     name: String,
-    /// The topics that `wf::check_theory` must emit.  The test compares
-    /// subsets.  A fixture may emit more topics, and that is not a failure.
+    /// The topics that `wf::check_wellformedness` must emit.  The test
+    /// compares subsets.  A fixture may emit more topics, and that is not a
+    /// failure.
     expected: BTreeSet<String>,
     /// The topics that it must not emit.  These come from the `#!` lines.
     /// They catch a false positive, as `expected` catches a missing report.
@@ -150,18 +126,6 @@ fn load_corpus() -> Corpus {
     }
 }
 
-/// Does the fixture carry a `.report` expectation?  That file pins its whole
-/// rendered wellformedness block against the oracle's bytes
-/// (`tests/wellformedness_fixture_reports.rs`), which reaches the
-/// post-elaboration checks this harness cannot, so such a fixture is held
-/// to its content even when every topic it lists is post-elaboration.
-fn has_report_expectation(name: &str) -> bool {
-    fixtures_dir()
-        .join("reports")
-        .join(format!("{name}.report"))
-        .is_file()
-}
-
 /// The stems of the `.spthy` files in the fixture directory.
 fn fixture_files() -> BTreeSet<String> {
     fs::read_dir(fixtures_dir())
@@ -196,23 +160,11 @@ fn every_fixture_parses_and_matches() {
                 continue;
             }
         };
-        let topics: BTreeSet<String> = wf::topics(&wf::check_theory(&elaborated, &thy))
+        let topics: BTreeSet<String> = wf::topics(&wf::check_wellformedness(&elaborated))
             .into_iter()
             .map(|s| norm(&s))
             .collect();
-        let mut expected = fx.expected.clone();
-        for topic in POST_ELABORATION_TOPICS {
-            expected.remove(topic);
-        }
-        if expected.is_empty() && fx.forbidden.is_empty() && !has_report_expectation(&fx.name) {
-            failures.push(format!(
-                "VACUOUS {}: every expected topic is post-elaboration ({:?}), no `#!` line pins \
-                 one as absent, and there is no reports/{}.report, so this fixture asserts only \
-                 that the file parses. Restore a parser-level expectation, add a `#!` line, or \
-                 pin its rendered block.",
-                fx.name, POST_ELABORATION_TOPICS, fx.name
-            ));
-        }
+        let expected = &fx.expected;
         if !expected.is_subset(&topics) {
             let missing: Vec<_> = expected.difference(&topics).collect();
             failures.push(format!(

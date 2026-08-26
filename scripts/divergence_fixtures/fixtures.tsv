@@ -64,5 +64,6 @@ s7_sapic_macro_rule	wf,theory	match	--derivcheck-timeout=0
 s8_restrict_sort_clash	wf	match	--derivcheck-timeout=0
 s8_restrict_fresh_name	wf	match	--derivcheck-timeout=0
 s8_two_reuse_exists_lemmas	summary	match	--derivcheck-timeout=0
-s8_sapic_generated_rule_wf	wf	diverge	--derivcheck-timeout=0
-s8_acc_generated_lemma	wf	diverge	--lemma=acc_verif_empty --derivcheck-timeout=0
+s8_sapic_generated_rule_wf	wf	match	--derivcheck-timeout=0
+s8_acc_generated_lemma	wf	match	--lemma=acc_verif_empty --derivcheck-timeout=0
+s8_msr_lemma_filter	wf	match	-m=msr --prove=keep --derivcheck-timeout=0

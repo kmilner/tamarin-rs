@@ -2,7 +2,7 @@
 // of the tamarin-prover sources this file cites; list them with:
 //   scripts/gen_license_headers.py --authors <this file>
 
-use super::super::check_theory;
+use super::super::check_wellformedness;
 use super::*;
 use crate::sapic::{ProcessParsedAnnotation, SapicLVar};
 use crate::theory::TheoryItem;
@@ -278,12 +278,10 @@ fn parse(src: &str) -> p::Theory {
     tamarin_parser::parse_theory(src, &["diff"]).expect("parse")
 }
 
-/// The whole pre-translation report of a parsed theory.  [`check_theory`]
-/// takes both representations of the same source, so the harness elaborates
-/// the theory the way the drivers do.
+/// The whole wellformedness report of a parsed theory, elaborated the way
+/// the drivers elaborate it.
 fn check(parsed: &p::Theory) -> WfReport {
-    let elaborated = crate::elaborate::elaborate(parsed).expect("elaborate");
-    check_theory(&elaborated, parsed)
+    check_wellformedness(&crate::elaborate::elaborate(parsed).expect("elaborate"))
 }
 
 /// Return the single `WfError` whose topic matches `topic`.

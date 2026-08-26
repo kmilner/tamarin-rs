@@ -212,21 +212,8 @@ pub fn load_from_source(
     eprintln!("[Theory {}] Theory translated", parsed.name);
     let mut typed = elaborate(&parsed).map_err(|e| LoadError::Elaborate(e.message))?;
 
-    // Wellformedness report — computed by the SAME pipeline `--prove` runs
-    // (`run.rs`'s `checkWellformedness`, mirroring HS `TheoryLoader.hs`), so the
-    // interactive web UI surfaces exactly the warnings HS does.  HS runs
-    // `checkWellformedness` at theory load (before any proving), so running it
-    // here — including the Maude-backed derivation check in the block below — is
-    // faithful.  The result feeds two renderings: the `/* WARNING: ... */`
-    // comment in the source/message routes (`format_wf_block`) and the
-    // `<div class="wf-warning">` header banner in help/overview (`errors_html`).
-    //
-    // Static checks run on the theory as written, before the SAPIC
-    // `translate` pass extends it; `run_batch` runs the same shared pass —
-    // macro-expanded clone, then `check_theory`.
-    let mut wf_report = tamarin_theory::wellformedness::pre_translation_wf_report(&typed, &parsed);
-    // Everything downstream of the wellformedness pass reads the internal
-    // theory; the parser AST ends here.
+    // Everything downstream of `elaborate` reads the internal theory; the
+    // parser AST ends here.
     drop(parsed);
     // HS `addParamsOptions`' `addNdcOption` (TheoryLoader.hs:821-826), the last
     // step of `loadTheory` (TheoryLoader.hs:449-452): the CLI's `ndcCheck`
@@ -245,11 +232,6 @@ pub fn load_from_source(
     // path; uploads keep the bare filename (dir "." — as in HS, where an
     // uploaded theory has no on-disk home).
     typed.in_file = origin.label();
-    let maude_sig = typed.signature.maude_sig.clone();
-
-    // Subterm-convergence check on the signature's subterm-rule set (the
-    // same append `run_batch` performs, shared in `wellformedness`).
-    tamarin_theory::wellformedness::append_subterm_convergence_report(&mut wf_report, &maude_sig);
 
     // SAPIC `process:` translation — mirror `run_batch`'s CLI-side pass so
     // the web load path renders SAPIC theories exactly like `--prove`.  Runs
@@ -267,9 +249,9 @@ pub fn load_from_source(
     // SAPIC-generated rules (mirrors run.rs's CLI-side placement).
     let acc_wf = tamarin_accountability::check_wellformedness(&typed);
     let user_set_heuristic = !typed.heuristic.is_empty();
-    // HS `Sapic.checkWellformedness` (Warnings.hs) is part of `preReport`, which
-    // is PREPENDED to the rest of the report (as in `run_batch`).  A hard
-    // translation error still propagates as `LoadError::Elaborate`.
+    // HS `Sapic.checkWellformedness` (Warnings.hs) is the head of `preReport`
+    // (as in `run_batch`).  A hard translation error still propagates as
+    // `LoadError::Elaborate`.
     let sapic_wf = tamarin_sapic::apply::apply_sapic(&mut typed, user_set_heuristic)
         .map_err(|e| LoadError::Elaborate(e.message))?;
     // Accountability translation (HS `Sapic.translate >=> Acc.translate`,
@@ -282,22 +264,22 @@ pub fn load_from_source(
     // accountability lemmas / case tests.
     tamarin_accountability::translate(&mut typed)
         .map_err(|e| LoadError::Elaborate(e.to_string()))?;
-    // `preReport` order (as in `run_batch`): SAPIC warnings, then the
-    // accountability RP check, then the rest.
-    let mut pre_report = sapic_wf;
-    pre_report.extend(acc_wf);
-    tamarin_theory::wellformedness::prepend_wf_report(&mut wf_report, pre_report);
-
-    // HS re-runs the full `checkWellformedness` on the TRANSLATED theory
-    // (`checkTranslatedTheory`), i.e. after `apply_sapic` / `Acc::translate`
-    // injected the generated rules and lemmas.  The re-runs and their splice
-    // positions are shared with the batch path (`run_batch`) — see
-    // `tamarin_theory::wellformedness`.
-    tamarin_theory::wellformedness::splice_translated_wf_reports(
-        &typed,
-        &maude_sig,
-        &mut wf_report,
-    );
+    // HS `preReport ++ postReport` (TheoryLoader.hs:726-732), as in
+    // `run_batch`: SAPIC warnings, then the accountability RP check, then the
+    // whole `checkWellformedness` pass over the TRANSLATED theory, so the
+    // rules `apply_sapic` generates and the lemmas `Acc::translate` appends
+    // are in scope (`checkTranslatedTheory`, TheoryLoader.hs:553-565).  The
+    // pass is shared with the batch path (`run_batch`) — see
+    // `tamarin_theory::wellformedness`.  Its `ruleVariantsReport` member needs
+    // a Maude process the batch path spawns; the web load emits no such block.
+    //
+    // The result feeds two renderings: the `/* WARNING: ... */` comment in the
+    // source/message routes (`format_wf_block`) and the
+    // `<div class="wf-warning">` header banner in help/overview
+    // (`errors_html`).
+    let mut wf_report = sapic_wf;
+    wf_report.extend(acc_wf);
+    wf_report.extend(tamarin_theory::wellformedness::check_wellformedness(&typed));
 
     // The theory's once-per-load NDC-checked intruder cache
     // (`check_close_intr_rule` below).  Stored on the `TheoryEntry` so

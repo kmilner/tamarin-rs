@@ -303,22 +303,16 @@ cargo run -p tamarin-theory --example wellformedness_fixtures
 
 `-- --no-tamarin` skips the oracle pass. Each fixture under
 `tests/wellformedness_fixtures/` is checked three ways: it parses, the Rust
-`wf::check_theory` emits the topics `expected.txt` claims for it, and
+`wf::check_wellformedness` emits the topics `expected.txt` claims for it, and
 `tamarin-prover` emits them too. Expectations are positive by default;
 a line beginning `#!<fixture> : <topics>` is a *negative* pin — topics that
-must NOT appear on either side — which is how a fixture whose positive
-expectations all live post-elaboration still compares something. The run ends
-in `VERDICT: PASS|FAIL (N fixture(s), M failure(s))` and exits nonzero on an
+must NOT appear on either side. The run ends in
+`VERDICT: PASS|FAIL (N fixture(s), M failure(s))` and exits nonzero on an
 empty roster, a `.spthy` no `expected.txt` line mentions, a line with no
-topics, a `#!` line naming an unlisted fixture, an oracle that fails to
-launch, or a fixture emptied by the two post-elaboration removals without an
-`EMPTY_RUST_EXPECTATION_ALLOWLIST` entry *and* negative pins.
-`crates/tamarin-theory/tests/wellformedness_topics.rs` reads the same file
-offline, and it enforces the same pins. Both harnesses check the `#!` topics
-against `wf::check_theory`. Both remove the post-elaboration topics from the
-positive expectations. Both then fail a fixture that keeps neither a
-parser-level expectation nor a negative pin. Only the example runner compares
-against the oracle.
+topics, a `#!` line naming an unlisted fixture, or an oracle that fails to
+launch. `crates/tamarin-theory/tests/wellformedness_topics.rs` reads the same
+file offline, and it enforces the same pins against the same entry point.
+Only the example runner compares against the oracle.
 
 ## Single-lemma parity
 

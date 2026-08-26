@@ -1,7 +1,7 @@
 # Format: <fixture-name> [ <oracle-flags> ]: <comma-separated topics>
 #
 # These are the wellformedness topics that `tamarin-prover` emits AND that our
-# Rust `wf::check_theory` is expected to emit. The format is intentionally
+# Rust `wf::check_wellformedness` is expected to emit. The format is intentionally
 # flat so a Rust runner can parse it as plain key/value pairs.
 #
 # Last verified: 1.13.0 @ submodule pin ef3f0468, on 2026-08-10, by loading
@@ -46,18 +46,15 @@ unbound_variables                  : Unbound variables
 # this same file and treat every non-`#` line as positive expectations, so an
 # inline `!topic` would fail there. Both enforce them — the offline test
 # `crates/tamarin-theory/tests/wellformedness_topics.rs` against
-# `wf::check_theory`, the differential runner
+# `wf::check_wellformedness`, the differential runner
 # (`cargo run -p tamarin-theory --example wellformedness_fixtures`) against
-# `wf::check_theory` and the oracle.
+# `wf::check_wellformedness` and the oracle.
 #
-# The three fixtures below each pin only a post-elaboration topic
-# (`Formula terms` / `Multiplication restriction of rules`), which the
-# parser-level checker cannot emit. Without these negatives their Rust-side
-# comparison would assert nothing beyond "the file parses"; both harnesses
-# fail such a fixture rather than pass it silently. What holds those three
-# .spthy files to their actual content is `reports/<fixture>.report` —
-# `cargo test -p tamarin-theory --test wellformedness_fixture_reports`, which
-# reaches the post-elaboration checks and pins the whole rendered block.
+# The three fixtures below each list a single positive topic, so a negative
+# is what keeps their comparison from narrowing to that one string. What
+# holds all three .spthy files to their actual content is
+# `reports/<fixture>.report` — `cargo test -p tamarin-theory --test
+# wellformedness_fixture_reports`, which pins the whole rendered block.
 #! formula_unguarded          : Formula guardedness, Unbound variables
 #! multiplication_in_rule_lhs : Formula terms, Unbound variables
 #! quantifier_wrong_sort      : Quantifier sorts, Unbound variables

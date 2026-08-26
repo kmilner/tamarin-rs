@@ -2,9 +2,10 @@
 // of the tamarin-prover sources this file cites; list them with:
 //   scripts/gen_license_headers.py --authors <this file>
 
+use tamarin_parser::ast as p;
 use tamarin_parser::parse_theory;
 
-use super::super::{check_theory, topics};
+use super::super::{check_wellformedness, topics};
 use super::*;
 
 fn parse(src: &str) -> p::Theory {
@@ -16,12 +17,10 @@ fn elaborated(src: &str) -> Theory {
     crate::elaborate::elaborate(&parse(src)).expect("elaborate")
 }
 
-/// The whole pre-translation report of a parsed theory.  [`check_theory`]
-/// takes both representations of the same source, so the harness elaborates
-/// the theory the way the drivers do.
+/// The whole wellformedness report of a parsed theory, elaborated the way
+/// the drivers elaborate it.
 fn check(parsed: &p::Theory) -> WfReport {
-    let elab = crate::elaborate::elaborate(parsed).expect("elaborate");
-    check_theory(&elab, parsed)
+    check_wellformedness(&crate::elaborate::elaborate(parsed).expect("elaborate"))
 }
 
 /// Return the single `WfError` whose topic matches `topic`.

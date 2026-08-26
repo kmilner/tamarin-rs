@@ -16,9 +16,7 @@
 use tamarin_theory::pretty_theory::format_wf_block;
 
 /// The `/* WARNING … */` comment the load pipelines render, i.e. the block the
-/// theory output carries between the source body and the summary: the
-/// parser-level pass, then the translated-theory splice that carries
-/// `unboundReport` and its siblings.
+/// theory output carries between the source body and the summary.
 ///
 /// The dynamic "Message Derivation Checks" entries both pipelines append are
 /// absent here: `--derivcheck-timeout=0` — how the expected blocks below were
@@ -26,15 +24,9 @@ use tamarin_theory::pretty_theory::format_wf_block;
 fn wf_block(src: &str) -> String {
     let parsed = tamarin_parser::parse_theory(src, &[]).expect("probe parses");
     let elaborated = tamarin_theory::elaborate::elaborate(&parsed).expect("probe elaborates");
-    let mut report =
-        tamarin_theory::wellformedness::pre_translation_wf_report(&elaborated, &parsed);
-    let maude_sig = elaborated.signature.maude_sig.clone();
-    tamarin_theory::wellformedness::splice_translated_wf_reports(
+    format_wf_block(&tamarin_theory::wellformedness::check_wellformedness(
         &elaborated,
-        &maude_sig,
-        &mut report,
-    );
-    format_wf_block(&report)
+    ))
 }
 
 /// Cells that each fit the 67-column ribbon: `fsep` packs them greedily and
