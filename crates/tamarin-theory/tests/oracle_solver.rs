@@ -408,11 +408,11 @@ fn rust_rule_count(src: &str) -> usize {
 /// (root status is neither Solved nor Contradictory) — each caller keeps
 /// its own handling and logging for `None`.
 fn verdict_str(
-    tq: &tamarin_parser::ast::TraceQuantifier,
+    tq: &tamarin_theory::theory::TraceQuantifier,
     st: &tamarin_theory::constraint::solver::search::NodeStatus,
 ) -> Option<&'static str> {
-    use tamarin_parser::ast::TraceQuantifier;
     use tamarin_theory::constraint::solver::search::NodeStatus;
+    use tamarin_theory::theory::TraceQuantifier;
     match (tq, st) {
         (TraceQuantifier::ExistsTrace, NodeStatus::Solved) => Some("verified"),
         (TraceQuantifier::ExistsTrace, NodeStatus::Contradictory) => Some("falsified"),
@@ -524,13 +524,8 @@ fn fixture_lemma_system(name: &str) -> tamarin_theory::constraint::system::Syste
     let elaborated = tamarin_theory::elaborate::elaborate(&theory).expect("elaborate");
     let g = formula_to_guarded_parsed(&lemma.formula, &elaborated.signature.maude_sig)
         .expect("guarded");
-    formula_to_system(
-        Vec::new(),
-        SourceKind::RawSources,
-        lemma.trace_quantifier.clone(),
-        false,
-        &g,
-    )
+    let tq = elaborated.lemmas().next().expect("lemma").trace_quantifier;
+    formula_to_system(Vec::new(), SourceKind::RawSources, tq, false, &g)
 }
 
 /// Our parser and the oracle's `--parse-only` echo must find the same number
@@ -1217,7 +1212,6 @@ fn corpus_proof_skeleton_match_probe() {
     // file gets a unique `--output=` tmp path so rayon jobs don't race.
     struct FileWork {
         path: std::path::PathBuf,
-        theory: tamarin_parser::ast::Theory,
         summary: String,
         proof_text: String,
         elab: tamarin_theory::theory::Theory,
@@ -1269,7 +1263,6 @@ fn corpus_proof_skeleton_match_probe() {
             let elab = tamarin_theory::elaborate::elaborate(&theory).ok()?;
             Some(FileWork {
                 path: path.clone(),
-                theory,
                 summary,
                 proof_text,
                 elab,
@@ -1283,17 +1276,13 @@ fn corpus_proof_skeleton_match_probe() {
         elab: &'a tamarin_theory::theory::Theory,
         proof_text: &'a str,
         lemma_name: String,
-        trace_quantifier: tamarin_parser::ast::TraceQuantifier,
+        trace_quantifier: tamarin_theory::theory::TraceQuantifier,
         tamarin_verdict: &'static str,
     }
     let lemmas: Vec<LemmaWork> = files
         .iter()
         .flat_map(|f| {
-            f.theory.items.iter().filter_map(move |it| {
-                let lemma = match it {
-                    tamarin_parser::ast::TheoryItem::Lemma(l) => l,
-                    _ => return None,
-                };
+            f.elab.lemmas().filter_map(move |lemma| {
                 let verdict_line = f
                     .summary
                     .lines()
@@ -1310,7 +1299,7 @@ fn corpus_proof_skeleton_match_probe() {
                     elab: &f.elab,
                     proof_text: &f.proof_text,
                     lemma_name: lemma.name.clone(),
-                    trace_quantifier: lemma.trace_quantifier.clone(),
+                    trace_quantifier: lemma.trace_quantifier,
                     tamarin_verdict,
                 })
             })
@@ -1727,13 +1716,12 @@ fn formula_to_system_pipes_parsed_lemmas() {
             if let tamarin_parser::ast::TheoryItem::Lemma(l) = it {
                 let g = formula_to_guarded_parsed(&l.formula, &elaborated.signature.maude_sig)
                     .expect("guarded");
-                let sys = formula_to_system(
-                    Vec::new(),
-                    SourceKind::RawSources,
-                    l.trace_quantifier.clone(),
-                    false,
-                    &g,
-                );
+                let tq = elaborated
+                    .lemmas()
+                    .find(|el| el.name == l.name)
+                    .expect("elaborated lemma")
+                    .trace_quantifier;
+                let sys = formula_to_system(Vec::new(), SourceKind::RawSources, tq, false, &g);
                 // Initial system always has exactly one formula.
                 assert_eq!(sys.formulas.len(), 1, "{}: lemma {}", name, l.name);
                 // No nodes, edges, or goals yet.

@@ -19,7 +19,6 @@
 mod formula;
 mod generation;
 
-use tamarin_parser::ast as p;
 use tamarin_parser::wf::WfError;
 use tamarin_term::lterm::{is_pub_const, is_pub_var, BVar, LNTerm, LVar};
 use tamarin_term::term::Term;
@@ -340,7 +339,7 @@ fn inject_lemma(
     macros: &[LNMacro],
     attributes: &[t::LemmaAttr],
     name: &str,
-    quantifier: p::TraceQuantifier,
+    quantifier: t::TraceQuantifier,
     formula: &SyntacticLNFormula,
 ) {
     let Ok(original) = tamarin_theory::predicate::expand_formula(predicates, formula) else {
@@ -351,10 +350,7 @@ fn inject_lemma(
         name: name.to_string(),
         modulo: None,
         attributes: attributes.to_vec(),
-        trace_quantifier: match &quantifier {
-            p::TraceQuantifier::AllTraces => t::TraceQuantifier::AllTraces,
-            p::TraceQuantifier::ExistsTrace => t::TraceQuantifier::ExistsTrace,
-        },
+        trace_quantifier: quantifier,
         original_formula: Some(original),
         formula: expanded,
         proof: None,
@@ -548,6 +544,7 @@ fn term_is_free_var(t: &BLNTerm) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tamarin_parser::ast as p;
     use tamarin_term::lterm::LSort;
 
     /// The case test `Ex #i. A(x)@i`, with `x` free, makes the round trip

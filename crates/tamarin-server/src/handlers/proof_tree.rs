@@ -345,10 +345,6 @@ impl ProofState {
                 Ok(g) => g,
                 Err(_) => continue,
             };
-            let tq = match lemma.trace_quantifier {
-                TraceQuantifier::AllTraces => tamarin_parser::ast::TraceQuantifier::AllTraces,
-                TraceQuantifier::ExistsTrace => tamarin_parser::ast::TraceQuantifier::ExistsTrace,
-            };
             // HS `getProofContext` / `lemmaSourceKind` (ClosedTheory.hs:97-138, see line 116,
             // lib/theory/src/Lemma.hs:38-41): a `sources` lemma is proved under RAW sources;
             // every other lemma under REFINED sources.  `mkSystem` builds the
@@ -365,7 +361,13 @@ impl ProofState {
             } else {
                 SourceKind::RefinedSources
             };
-            let mut sys = formula_to_system(restrictions_g.clone(), source_kind, tq, false, &g);
+            let mut sys = formula_to_system(
+                restrictions_g.clone(),
+                source_kind,
+                lemma.trace_quantifier,
+                false,
+                &g,
+            );
             // Reuse lemmas from earlier in the theory.
             let mut reuse: Vec<Guarded> = Vec::new();
             for prior in typed.lemmas() {

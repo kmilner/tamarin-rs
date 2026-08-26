@@ -156,7 +156,7 @@ pub fn load_from_source(
         TheoryOrigin::Local(p) => p.parent().map(|d| d.to_path_buf()),
         _ => None,
     };
-    let mut parser_theory = parse_theory_with_base(src, &flags, base_dir)
+    let mut parsed = parse_theory_with_base(src, &flags, base_dir)
         .map_err(|e| LoadError::Parse(e.with_source(source_name).to_string()))?;
 
     // HS `liftedAddProtoRule` (Theory/Text/Parser.hs:175-193) expands each
@@ -168,13 +168,13 @@ pub fn load_from_source(
     // the exact position `run_batch` in run.rs uses — so the lifted
     // restrictions reach `elaborate` and through it every web renderer
     // (rules / source / message / graphs / sequents).
-    tamarin_theory::rule_restriction::lift_rule_restrictions(&mut parser_theory)
+    tamarin_theory::rule_restriction::lift_rule_restrictions(&mut parsed)
         .map_err(|e| LoadError::Parse(format!("_restrict expansion failed: {}", e.message)))?;
 
     // HS lifecycle markers, stderr via `traceM`: "Theory loaded" right
     // after parsing (TheoryLoader.hs:449-452, see line 451; `liftedAddProtoRule` runs
     // during parsing, so post-lift here is the same point).
-    eprintln!("[Theory {}] Theory loaded", parser_theory.name);
+    eprintln!("[Theory {}] Theory loaded", parsed.name);
 
     // Wellformedness report — computed by the SAME pipeline `--prove` runs
     // (`run.rs`'s `checkWellformedness`, mirroring HS `TheoryLoader.hs`), so the
@@ -190,13 +190,16 @@ pub fn load_from_source(
     // with the same shared pass — macro-expanded clone, `check_theory`,
     // static "Message Derivation Checks" entry dropped for the dynamic
     // check in the maude block below).
-    let mut wf_report = tamarin_theory::translated_wf::pre_translation_wf_report(&parser_theory);
+    let mut wf_report = tamarin_theory::translated_wf::pre_translation_wf_report(&parsed);
 
     // "Theory translated" at the START of translation (TheoryLoader.hs:494-500, see line 496
     // prints before `processOpenTheory` runs); RS's `elaborate` is that
     // translation step.
-    eprintln!("[Theory {}] Theory translated", parser_theory.name);
-    let mut typed = elaborate(&parser_theory).map_err(|e| LoadError::Elaborate(e.message))?;
+    eprintln!("[Theory {}] Theory translated", parsed.name);
+    let mut typed = elaborate(&parsed).map_err(|e| LoadError::Elaborate(e.message))?;
+    // Everything downstream of elaboration reads the internal theory; the
+    // parser AST ends here.
+    drop(parsed);
     // HS `addParamsOptions`' `addNdcOption` (TheoryLoader.hs:821-826), the last
     // step of `loadTheory` (TheoryLoader.hs:449-452): the CLI's `ndcCheck`
     // becomes the loaded theory's `_deductionChainCheck`, which the NDC pass in
@@ -344,7 +347,6 @@ pub fn load_from_source(
     Ok(TheoryEntry {
         idx: 0,
         name: typed.name.clone(),
-        parser_theory: Arc::new(parser_theory),
         typed_theory: Arc::new(typed),
         prover_maude_sig,
         origin,
@@ -424,10 +426,10 @@ mod tests {
     fn parser_flags_and_include_base_dir_reach_the_web_load() {
         let rule_count = |entry: &TheoryEntry| {
             entry
-                .parser_theory
+                .typed_theory
                 .items
                 .iter()
-                .filter(|i| matches!(i, tamarin_parser::ast::TheoryItem::Rule(_)))
+                .filter(|i| matches!(i, tamarin_theory::theory::TheoryItem::Rule(_)))
                 .count()
         };
         let src = "theory T begin\n#ifdef FOO\nrule R: [ ] --> [ ]\n#endif\nend";

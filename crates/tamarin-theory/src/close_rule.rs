@@ -524,7 +524,7 @@ fn prove_deduction_theory(
     let sys = formula_to_system(
         restrictions,
         SourceKind::RefinedSources,
-        tamarin_parser::ast::TraceQuantifier::AllTraces,
+        crate::theory::TraceQuantifier::AllTraces,
         false,
         &g,
     );

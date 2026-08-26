@@ -13,12 +13,12 @@
 //! Generation.hs:257-258) is threaded through the families that call `rename`
 //! (`suff`, `min`, `single`), in exactly that visitation order.
 
-use tamarin_parser::ast as p;
 use tamarin_term::lterm::{LSort, LVar};
 use tamarin_theory::atom::ProtoAtom;
 use tamarin_theory::formula::{
     formula_frees, shift_free_indices, ProtoFormula, SyntacticLNFormula,
 };
+use tamarin_theory::theory::TraceQuantifier;
 
 use crate::formula::{
     corrupt_subset_frees, fold_conn, fold_l1, fold_r1, free_term, proto_fact_formula,
@@ -45,7 +45,7 @@ pub(crate) struct AccData {
 /// `lib.rs` predicate-expands the formula and applies the theory's macros.
 pub(crate) struct GenLemma {
     pub(crate) name: String,
-    pub(crate) quantifier: p::TraceQuantifier,
+    pub(crate) quantifier: TraceQuantifier,
     pub(crate) formula: SyntacticLNFormula,
 }
 
@@ -53,7 +53,7 @@ pub(crate) struct GenLemma {
 /// the generated formula with its name and trace quantifier.  The accountability
 /// lemma's attributes (HS `_aAttributes`) are copied onto each generated lemma
 /// by the injection step in `lib.rs`.
-fn to_lemma(quantifier: p::TraceQuantifier, name: String, formula: SyntacticLNFormula) -> GenLemma {
+fn to_lemma(quantifier: TraceQuantifier, name: String, formula: SyntacticLNFormula) -> GenLemma {
     GenLemma {
         name,
         quantifier,
@@ -136,11 +136,7 @@ fn sufficiency(acc: &AccData, ct: &CaseTestData, counter: &mut u64) -> GenLemma 
         no_other(&taus)
     }));
     let formula = quantify_frees(Quant::Ex, inner);
-    to_lemma(
-        p::TraceQuantifier::ExistsTrace,
-        name,
-        to_intermediate(formula),
-    )
+    to_lemma(TraceQuantifier::ExistsTrace, name, to_intermediate(formula))
 }
 
 /// HS `verifiabilityEmpty` (Generation.hs:178-185).  NOTE: the only family
@@ -157,7 +153,7 @@ fn verifiability_empty(acc: &AccData) -> GenLemma {
     .not();
     let phi = acc.formula.clone();
     let formula = quantify_frees(Quant::All, lhs.implies(phi));
-    to_lemma(p::TraceQuantifier::AllTraces, name, formula)
+    to_lemma(TraceQuantifier::AllTraces, name, formula)
 }
 
 /// HS `verifiabilityNonEmpty` (Generation.hs:187-194).
@@ -166,11 +162,7 @@ fn verifiability_nonempty(acc: &AccData, ct: &CaseTestData) -> GenLemma {
     let tau = ct.formula.clone();
     let phi = acc.formula.clone();
     let formula = quantify_frees(Quant::All, tau.implies(phi.not()));
-    to_lemma(
-        p::TraceQuantifier::AllTraces,
-        name,
-        to_intermediate(formula),
-    )
+    to_lemma(TraceQuantifier::AllTraces, name, to_intermediate(formula))
 }
 
 /// HS `minimality` (Generation.hs:196-208).
@@ -188,11 +180,7 @@ fn minimality(acc: &AccData, ct: &CaseTestData, counter: &mut u64) -> GenLemma {
         })
         .collect();
     let formula = quantify_frees(Quant::All, t1.implies(fold_conn(Conn::And, rhs)));
-    to_lemma(
-        p::TraceQuantifier::AllTraces,
-        name,
-        to_intermediate(formula),
-    )
+    to_lemma(TraceQuantifier::AllTraces, name, to_intermediate(formula))
 }
 
 /// HS `uniqueness` (Generation.hs:210-216).
@@ -201,11 +189,7 @@ fn uniqueness(acc: &AccData, ct: &CaseTestData) -> GenLemma {
     let tau = ct.formula.clone();
     let ftau = formula_frees(&tau);
     let formula = quantify_frees(Quant::All, tau.implies(frees_subset_corrupt(&ftau)));
-    to_lemma(
-        p::TraceQuantifier::AllTraces,
-        name,
-        to_intermediate(formula),
-    )
+    to_lemma(TraceQuantifier::AllTraces, name, to_intermediate(formula))
 }
 
 /// HS `injective` (Generation.hs:219-225):
@@ -224,11 +208,7 @@ fn injective(acc: &AccData, ct: &CaseTestData) -> GenLemma {
         }
     }
     let formula = quantify_frees(Quant::All, tau.implies(acc_fm));
-    to_lemma(
-        p::TraceQuantifier::AllTraces,
-        name,
-        to_intermediate(formula),
-    )
+    to_lemma(TraceQuantifier::AllTraces, name, to_intermediate(formula))
 }
 
 /// HS `singlematched` (Generation.hs:227-237).
@@ -238,11 +218,7 @@ fn singlematched(acc: &AccData, ct: &CaseTestData, counter: &mut u64) -> GenLemm
     let t1 = single_match(&ct.formula, counter);
     let inner = and_if(!taus.is_empty(), t1, || no_other(&taus));
     let formula = quantify_frees(Quant::Ex, inner);
-    to_lemma(
-        p::TraceQuantifier::ExistsTrace,
-        name,
-        to_intermediate(formula),
-    )
+    to_lemma(TraceQuantifier::ExistsTrace, name, to_intermediate(formula))
 }
 
 /// HS `casesLemmas` (Generation.hs:243-255): builds the seven families in the

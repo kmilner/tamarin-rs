@@ -2261,9 +2261,8 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         // (inserted before the rule) and rewrites the rule's actions to
         // reference it.  RS captures `_restrict` into
         // `Rule.embedded_restrictions` at parse time; run the equivalent
-        // lifting pass here, BEFORE wellformedness / elaboration / rendering,
-        // so the transformed parser theory drives all three (the renderer
-        // iterates `parsed.items`).
+        // lifting pass here, BEFORE wellformedness and elaboration, so the
+        // lifted restrictions reach both.
         tamarin_theory::rule_restriction::lift_rule_restrictions(&mut parsed).map_err(|e| {
             RunError(format!(
                 "_restrict expansion failed in {}: {}",
@@ -2383,6 +2382,9 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         let mut elaborated = elaborate(&parsed)
             .map_err(|e| RunError(format!("elaboration error in {}: {}", in_file, e.message)))?;
         DEFERRED_HS_ERROR_MARKERS.take();
+        // Everything downstream of elaboration reads the internal theory; the
+        // parser AST ends here.
+        drop(parsed);
         // HS `addParamsOptions`' `addNdcOption` (TheoryLoader.hs:821-826):
         // `--no-ndc` disables the no-deconstruction-chain check for this theory.
         //

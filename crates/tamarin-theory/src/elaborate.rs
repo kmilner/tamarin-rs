@@ -885,12 +885,10 @@ pub fn elaborate_lemma_attr(a: &p::LemmaAttr) -> LemmaAttr {
 /// `fold` combines via the `RuleAttributes` `Semigroup` (Theory/Model/Rule.hs:382-396):
 /// later duplicates win on the `Option` fields (`preferRight`), bools `||`.
 ///
-/// This carries the SAPIC display attributes (role / color / issapicrule) of a
-/// rule that reaches the parser AST through `proto_rule_to_parsed` — HS's
-/// `toRule` bakes them straight into the `ProtoRuleE`, and the projection keeps
-/// them, so elaborating that rule reads them back.  Display-only: no solver /
-/// `--prove`-text path reads these fields (only the web graph renderer does),
-/// so populating them is `--prove`-inert.
+/// This carries a rule's SAPIC display attributes (role / color /
+/// issapicrule) — HS's `toRule` bakes them straight into the `ProtoRuleE`.
+/// Display-only: no solver / `--prove`-text path reads these fields (only the
+/// web graph renderer does), so populating them is `--prove`-inert.
 fn rule_attributes_from_parser(attrs: &[p::RuleAttr]) -> RuleAttributes {
     let mut out = RuleAttributes::empty();
     for a in attrs {
@@ -1158,80 +1156,6 @@ pub(crate) fn varspec_to_lvar(v: &p::VarSpec) -> LVar {
 // =============================================================================
 // Projection: internal values → parser AST
 // =============================================================================
-
-/// Convert LNFacts (post-elaboration) to parser-AST Facts so we can
-/// reuse the parser-AST fact rendering path.
-fn lnfacts_to_parser(facts: &[crate::fact::LNFact]) -> Vec<p::Fact> {
-    facts.iter().map(lnfact_to_parser).collect()
-}
-
-/// Materialise an elaborated `ProtoRuleE` as a parser-AST rule item, so a
-/// synthesised rule (SAPIC translation, partial evaluation) can join the
-/// parsed item stream.
-///
-/// The body is the elaborated E-rule projected back through
-/// `lnfacts_to_parser`, so it is already macro expanded and its AC argument
-/// order is the constructor's rather than the source's.  The attributes carry
-/// color / process / no_derivcheck / issapicrule / role, as HS's `toRule`
-/// produced them.
-pub fn proto_rule_to_parsed(r: &crate::rule::ProtoRuleE) -> p::Rule {
-    p::Rule {
-        name: match &r.info.name {
-            crate::rule::ProtoRuleName::Stand(s) => s.to_string(),
-            crate::rule::ProtoRuleName::Fresh => "Fresh".to_string(),
-        },
-        modulo: None,
-        attributes: parsed_rule_attrs(&r.info.attributes),
-        premises: lnfacts_to_parser(&r.premises),
-        actions: lnfacts_to_parser(&r.actions),
-        conclusions: lnfacts_to_parser(&r.conclusions),
-        embedded_restrictions: Vec::new(),
-        variants: Vec::new(),
-        left_right: None,
-    }
-}
-
-/// A rule's own `RuleAttributes` in the `Vec<p::RuleAttr>` shape the parser
-/// AST carries — the attribute half of [`proto_rule_to_parsed`].
-///
-/// HS's `prettyRuleAttribute` (Theory/Model/Rule.hs:1313-1328) renders the
-/// record's fields as `catMaybes [color, process, no_derivcheck, issapicrule,
-/// role]`; the parser-AST printer re-derives that order from the list, so the
-/// order here is not load-bearing.  An all-default record maps to the empty
-/// list, which prints as HS's `ruleAttributes ru == mempty ⇒ emptyDoc` branch
-/// (Theory/Model/Rule.hs:1330-1334).
-fn parsed_rule_attrs(attr: &crate::rule::RuleAttributes) -> Vec<p::RuleAttr> {
-    let mut out = Vec::new();
-    if let Some(c) = &attr.color {
-        // HS `text "color=" <> text (rgbToHex c)`; the printer re-attaches the
-        // `#` that `rgbToHex` (Data/Color.hs:140-147) prefixes.
-        out.push(p::RuleAttr::Color(
-            tamarin_utils::color::rgb_to_hex(*c)
-                .trim_start_matches('#')
-                .to_string(),
-        ));
-    }
-    if let Some(proc) = &attr.process {
-        // HS `ppProcess p = text "process=" <> text ("\"" ++
-        // prettySapicTopLevel' f p ++ "\"")` (Theory/Model/Rule.hs:1324-1327).
-        // Only the SAPIC translation fills this field — HS's attribute parser
-        // `parseAndIgnore`s a user-written `process=`
-        // (Theory/Text/Parser/Rule.hs:69-95, see line 74), as does RS's.
-        out.push(p::RuleAttr::Process(
-            crate::pretty_sapic::pretty_sapic_top_level_attr(proc),
-        ));
-    }
-    if attr.ignore_deriv_checks {
-        out.push(p::RuleAttr::NoDerivCheck);
-    }
-    if attr.is_sapic_rule {
-        out.push(p::RuleAttr::IsSapicRule);
-    }
-    if let Some(r) = &attr.role {
-        out.push(p::RuleAttr::Role(r.clone()));
-    }
-    out
-}
 
 /// `LNFact` → parser-AST `Fact`: the tag's name and multiplicity, the terms
 /// through [`lnterm_to_parser`] and the annotation set.
@@ -1879,9 +1803,9 @@ pub fn canonicalize_ac_in_pterm(t: &p::Term) -> p::Term {
 }
 
 /// Shared structural walker: rebuild a parser-AST fact, mapping `g` over
-/// every arg.  The single traversal shape behind [`canonicalize_ac_in_pfact`],
-/// [`rewrite_arity1_fact`] and `macro_expand::apply_macros_fact` (each
-/// supplies its own leaf `&Term -> Term`).
+/// every arg.  The single traversal shape behind [`canonicalize_ac_in_pfact`]
+/// and `macro_expand::apply_macros_fact` (each supplies its own leaf
+/// `&Term -> Term`).
 pub(crate) fn map_fact_terms(f: &p::Fact, g: &dyn Fn(&p::Term) -> p::Term) -> p::Fact {
     p::Fact {
         persistent: f.persistent,
@@ -2030,14 +1954,6 @@ pub fn rewrite_arity1_term(t: &p::Term, arity1: &std::collections::HashSet<Strin
         PatMatch(inner) => PatMatch(Box::new(rewrite_arity1_term(inner, arity1))),
         other => other.clone(),
     }
-}
-
-/// Apply [`rewrite_arity1_term`] to every term in a parser-AST fact.
-// arity-1 no-eq function-name set; membership-only (.contains), never iterated;
-// std kept (byte-inert) — iteration order never reaches output.
-#[allow(clippy::disallowed_types)]
-pub fn rewrite_arity1_fact(fa: &p::Fact, arity1: &std::collections::HashSet<String>) -> p::Fact {
-    map_fact_terms(fa, &|t| rewrite_arity1_term(t, arity1))
 }
 
 /// Apply [`rewrite_arity1_term`] to every term in a parser-AST formula.

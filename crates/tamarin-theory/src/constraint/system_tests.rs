@@ -736,7 +736,7 @@ fn insert_lemma_flattens_top_level_conj() {
 
 #[test]
 fn formula_to_system_exists_trace_keeps_formula() {
-    use tamarin_parser::ast::TraceQuantifier;
+    use crate::theory::TraceQuantifier;
     let f = crate::guarded::gtrue();
     let sys = formula_to_system(
         Vec::new(),
@@ -752,7 +752,7 @@ fn formula_to_system_exists_trace_keeps_formula() {
 
 #[test]
 fn formula_to_system_all_traces_negates() {
-    use tamarin_parser::ast::TraceQuantifier;
+    use crate::theory::TraceQuantifier;
     // For AllTraces lemma `T`, the negation is `gfalse`.
     let f = crate::guarded::gtrue();
     let sys = formula_to_system(
@@ -770,7 +770,7 @@ fn formula_to_system_all_traces_negates() {
 fn formula_to_system_partitions_safety_restrictions() {
     use crate::atom::ProtoAtom;
     use crate::formula::BLNTerm;
-    use tamarin_parser::ast::TraceQuantifier;
+    use crate::theory::TraceQuantifier;
     use tamarin_term::lterm::{BVar, LSort, LVar};
     use tamarin_term::vterm::var_term;
     let mkvar = |n: &str| -> BLNTerm { var_term(BVar::Free(LVar::new(n, LSort::Node, 0))) };

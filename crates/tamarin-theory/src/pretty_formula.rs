@@ -306,46 +306,6 @@ pub fn pretty_term(t: &p::Term) -> String {
     term_doc(t).render_with(FLAT_WIDTH, FLAT_WIDTH)
 }
 
-/// HS `ppFactsList list = fsep [operator_ "[", ppList (map ppFact list),
-/// operator_ "]"]` where `ppList = fsep . punctuate comma`
-/// (Theory/Model/Rule.hs:1379-1381).
-fn facts_list_doc(facts: &[p::Fact]) -> crate::pretty_hpj::Doc {
-    use crate::pretty_hpj::{self as hpj, Doc};
-    let inner: Vec<Doc> = facts.iter().map(|f| fact_to_doc(f, &[])).collect();
-    let body = hpj::fsep(hpj::punctuate(comma_doc(), inner));
-    hpj::fsep(vec![hpj::operator_("["), body, hpj::operator_("]")])
-}
-
-/// HS `prettyRuleRestrGen` (Theory/Model/Rule.hs:1366-1375):
-///   `sep [ nest 1 (ppFactsList prems)
-///        , if null acts && null restr then "-->"
-///          else fsep ["--[", ppList (map ppFact acts ++ map ppRestr' restr), "]->"]
-///        , nest 1 (ppFactsList concls) ]`
-/// Built as a `pretty_hpj::Doc` so the `sep`/`fsep` wrapping is HS-exact.
-///
-/// HS uses the bare `-->` arrow only when `null acts && null restr`.  The
-/// Rust check below tests only `acts.is_empty()` (there is no `restr`
-/// operand), matching HS `prettyRule`, which passes `[]` for `restr`
-/// (Theory/Model/Rule.hs:1389-1390) — the printed rule shows the lifted
-/// `Restr_*` actions, never the `_restrict` formulas.
-pub fn rule_body_to_doc(
-    prems: &[p::Fact],
-    acts: &[p::Fact],
-    concls: &[p::Fact],
-) -> crate::pretty_hpj::Doc {
-    use crate::pretty_hpj::{self as hpj, Doc};
-    let prem_doc = facts_list_doc(prems).nest(1);
-    let arrow = if acts.is_empty() {
-        hpj::operator_("-->")
-    } else {
-        let act_docs: Vec<Doc> = acts.iter().map(|f| fact_to_doc(f, &[])).collect();
-        let act_body = hpj::fsep(hpj::punctuate(comma_doc(), act_docs));
-        hpj::fsep(vec![hpj::operator_("--["), act_body, hpj::operator_("]->")])
-    };
-    let conc_doc = facts_list_doc(concls).nest(1);
-    hpj::sep(vec![prem_doc, arrow, conc_doc])
-}
-
 // ============================================================================
 // Intruder-variant rendering — the `tamarin-prover variants` subcommand.
 //

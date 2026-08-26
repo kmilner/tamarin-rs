@@ -17,8 +17,6 @@
 //!
 //! Returns `Err` on lemma-lookup / guarded-conversion failures.
 
-use tamarin_parser::ast as p;
-
 use crate::constraint::solver::context::{IntrRuleCache, ProofContext};
 use crate::constraint::solver::search::{run_proof_search, ProofNode};
 use crate::constraint::system::{formula_to_system, SourceKind};
@@ -1220,14 +1218,10 @@ fn prove_lemma_in_session_mode(
     // the pre-session prove_lemma_with_pool_file_heuristic path.
     let reuse_lemmas = gather_reusable_lemmas(theory, lemma_name, lemma_source_kind)?;
 
-    let tq = match lemma.trace_quantifier {
-        crate::theory::TraceQuantifier::AllTraces => p::TraceQuantifier::AllTraces,
-        crate::theory::TraceQuantifier::ExistsTrace => p::TraceQuantifier::ExistsTrace,
-    };
     let mut sys = formula_to_system(
         session.restrictions.clone(),
         lemma_source_kind,
-        tq,
+        lemma.trace_quantifier,
         false,
         &g,
     );
@@ -1483,13 +1477,13 @@ pub fn prove_lemma_with_pool_file_heuristic(
     // resolving the IH against current trace actions.
     let reuse_lemmas = gather_reusable_lemmas(&theory, lemma_name, lemma_source_kind)?;
 
-    // Bridge our typed `theory::TraceQuantifier` back to the parser's
-    // `ast::TraceQuantifier` (which `formula_to_system` consumes).
-    let tq = match lemma.trace_quantifier {
-        crate::theory::TraceQuantifier::AllTraces => p::TraceQuantifier::AllTraces,
-        crate::theory::TraceQuantifier::ExistsTrace => p::TraceQuantifier::ExistsTrace,
-    };
-    let mut sys = formula_to_system(restrictions.clone(), lemma_source_kind, tq, false, &g);
+    let mut sys = formula_to_system(
+        restrictions.clone(),
+        lemma_source_kind,
+        lemma.trace_quantifier,
+        false,
+        &g,
+    );
     // Haskell's `addLemmas`: push reuse lemmas into `sLemmas`. They
     // become drivers for `insertImpliedFormulas` (which iterates
     // `sFormulas ++ sLemmas`) but are excluded from `ginduct`.

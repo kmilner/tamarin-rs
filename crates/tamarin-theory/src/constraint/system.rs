@@ -1948,12 +1948,12 @@ impl HasFrees for System {
 pub fn formula_to_system(
     restrictions: Vec<Guarded>,
     source_kind: SourceKind,
-    trace_quantifier: tamarin_parser::ast::TraceQuantifier,
+    trace_quantifier: crate::theory::TraceQuantifier,
     is_diff: bool,
     fm: &Guarded,
 ) -> System {
     use crate::guarded::{gconj, gnot, is_safety_formula};
-    use tamarin_parser::ast::TraceQuantifier;
+    use crate::theory::TraceQuantifier;
 
     let mut sys = System::empty();
     sys.source_kind = Some(source_kind);

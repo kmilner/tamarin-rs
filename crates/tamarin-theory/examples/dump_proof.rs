@@ -23,7 +23,7 @@ fn main() {
     let theory_path = &args[1];
     let lemma = &args[2];
 
-    let (_parsed, elaborated, maude) = common::load_theory_with_maude(theory_path);
+    let (elaborated, maude) = common::load_theory_with_maude(theory_path);
 
     let root = prove_lemma(&elaborated, lemma, maude, 500).expect("prove");
     let steps = count_steps(&root);

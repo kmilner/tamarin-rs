@@ -8,11 +8,9 @@
 //! frontend reads/writes these indices in URLs like
 //! `/thy/trace/<idx>/main/...`.
 //!
-//! We keep both the parser AST and the elaborated typed theory.  The
-//! parser AST drives the web rule / restriction / macro renderers; the
-//! elaborated theory is what [`ProofState::new`] builds the live prover
-//! session from, and what the accessor helpers (lemma list, restriction
-//! count, …) read.
+//! The elaborated typed theory is what [`ProofState::new`] builds the
+//! live prover session from, what the web renderers print, and what the
+//! accessor helpers (lemma list, restriction count, …) read.
 //!
 //! Concurrency: `parking_lot::Mutex` — interactive single-user UI, no
 //! need for an async lock.  Only the autoprover (`autoprove` /
@@ -27,7 +25,6 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Local};
 
-use tamarin_parser::ast as p;
 use tamarin_theory::theory::Theory as TypedTheory;
 
 use crate::handlers::proof_tree::ProofState;
@@ -39,9 +36,6 @@ pub struct TheoryEntry {
     pub idx: usize,
     /// Theory name from the `.spthy` source.
     pub name: String,
-    /// Parser AST of the loaded theory, as the SAPIC and accountability
-    /// translations leave it.
-    pub parser_theory: Arc<p::Theory>,
     /// Elaborated, typed theory — the accessor helpers' source and the
     /// theory the lazily built [`ProofState`] proves.  Wrapped in `Arc`
     /// so we can clone the entry cheaply.

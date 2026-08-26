@@ -52,7 +52,6 @@
 //! `Main.TheoryLoader.hs`).
 
 use std::time::Duration;
-use tamarin_parser::ast::TraceQuantifier;
 use tamarin_parser::wf::WfError;
 use tamarin_term::lterm::{HasFrees, LNTerm, LSort, LVar};
 use tamarin_term::maude_proc::MaudeHandle;
@@ -62,7 +61,7 @@ use crate::constraint::solver::context::IntrRuleCache;
 use crate::fact::{fresh_fact, ku_fact, out_fact, proto_fact, LNFact, Multiplicity};
 use crate::formula::{exists_var, lift_free, LNFormula};
 use crate::rule::{ProtoRuleE, ProtoRuleEInfo};
-use crate::theory::Theory;
+use crate::theory::{Theory, TraceQuantifier};
 
 /// Run HS's per-variable derivability check on every rule.
 ///
