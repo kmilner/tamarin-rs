@@ -1229,8 +1229,6 @@ fn corpus_proof_skeleton_match_probe() {
             if mentions_oracle_ranking(&src) {
                 return None;
             }
-            // Macros are supported via parser-AST macro expansion
-            // (tamarin_theory::macro_expand).
             if src.contains("predicates:") {
                 return None;
             }
