@@ -91,7 +91,7 @@ pub struct GuardDiagnostic {
 /// NOTE: this is an example-only convenience (used by
 /// `examples/elaborate_all.rs`), NOT part of the prove pipeline, which
 /// produces the byte-exact WF report via
-/// [`crate::formula_reports::formula_reports`].  The two perform the same
+/// [`crate::wellformedness::formulas::formula_reports`].  The two perform the same
 /// guardedness scan but format their output differently; keep them in sync
 /// if the check itself changes.
 pub fn elaborate_with_diagnostics(
@@ -120,58 +120,11 @@ pub fn elaborate_with_diagnostics(
     Ok((thy, diags))
 }
 
-/// Port of HS `publicNamesReport'` (Wellformedness.hs:463-484) over the
-/// TRANSLATED theory's rules.  HS runs the FULL `checkWellformedness` on that
-/// theory, so `publicNames = universeBi ru` walks each generated rule
-/// INCLUDING the source subprocess HS attaches to it — and the parser AST
-/// stores that subprocess only as a rendered `process="…"` string, so a
-/// constant appearing solely inside the process (the `'C'` in
-/// `insert <'roles', x, 'C'>`) is reachable only from the elaborated rule.
-/// Walk the ELABORATED rules' facts AND their `process` attribute.
-///
-/// The root `Init` rule carries the WHOLE process (`base_init` in
-/// tamarin-sapic's base_translation.rs; HS `baseInit`,
-/// Basetranslation.hs:312-317, see line 313 — the rule's annotation is `anP`, the full
-/// process) and is emitted first, so under `clashesOn`'s
-/// first-occurrence dedup it wins every public name — reproducing HS's
-/// `rule "Init":  name 'C', 'c'` attribution.
-pub fn translated_public_names_report(thy: &Theory) -> Vec<tamarin_parser::wf::WfError> {
-    let mut pairs: Vec<(String, String)> = Vec::new();
-    for r in thy.items.iter().filter_map(|it| match it {
-        TheoryItem::Rule(r) => Some(r),
-        _ => None,
-    }) {
-        // HS `showRuleCaseName ru = prettyProtoRuleName (ruleName ru)`
-        // (Theory/Model/Rule.hs:1338-1340) = `prefixIfReserved n` for a
-        // `StandRule n`.
-        let case_name = crate::rule::prefix_if_reserved(r.name());
-        let mut names: Vec<String> = Vec::new();
-        for f in r
-            .rule
-            .premises
-            .iter()
-            .chain(&r.rule.actions)
-            .chain(&r.rule.conclusions)
-        {
-            for t in f.terms.iter() {
-                collect_pub_names(t, &mut names);
-            }
-        }
-        if let Some(proc) = &r.rule.info.attributes.process {
-            collect_process_pub_names(proc, &mut names);
-        }
-        for n in names {
-            pairs.push((case_name.clone(), n));
-        }
-    }
-    tamarin_parser::wf::public_names_report_from_pairs(pairs)
-}
-
 /// Collect the id of every public-sorted `Name` constant in a term, in
 /// traversal order (HS `filter ((LSortPub ==) . sortOfName) (universeBi t)`).
 /// Generic over the variable type so it serves both `LNTerm` (rule facts) and
 /// `SapicTerm` (process terms).
-fn collect_pub_names<V>(t: &VTerm<Name, V>, out: &mut Vec<String>) {
+pub(crate) fn collect_pub_names<V>(t: &VTerm<Name, V>, out: &mut Vec<String>) {
     match t {
         Term::Lit(Lit::Con(n)) => {
             if tamarin_term::lterm::sort_of_name(n) == LSort::Pub {
@@ -198,7 +151,7 @@ fn collect_pub_names<V>(t: &VTerm<Name, V>, out: &mut Vec<String>) {
 /// facts after) but is immaterial: `clashesOn` dedups by (spelling) with the
 /// surviving pair keyed only on (rule name, spelling), which is identical for
 /// every occurrence inside one rule.
-fn collect_process_pub_names(p: &crate::sapic::PlainProcess, out: &mut Vec<String>) {
+pub(crate) fn collect_process_pub_names(p: &crate::sapic::PlainProcess, out: &mut Vec<String>) {
     use crate::sapic::{Process, ProcessCombinator as PC, SapicAction as SA};
     crate::sapic::pfold_map(p, &mut |node| {
         let ann = match node {

@@ -44,7 +44,7 @@ fn rule_echoes(src: &str) -> Vec<String> {
 fn wf_block(src: &str) -> Option<String> {
     let thy = parse_theory(src, &[]).expect("parse");
     let elaborated = elaborate(&thy).expect("elaborate");
-    let errs = tamarin_theory::formula_reports::formula_reports(
+    let errs = tamarin_theory::wellformedness::formulas::formula_reports(
         &elaborated,
         &elaborated.signature.maude_sig,
     );

@@ -60,7 +60,7 @@ pub struct TheoryEntry {
     /// the `source`/`message` routes (`format_wf_block`) and the
     /// `<div class="wf-warning">` header banner in the `help`/`overview` routes
     /// (`errors_html`).  Empty ⇒ no warnings (theory is well-formed).
-    pub wf_report: Vec<tamarin_parser::wf::WfError>,
+    pub wf_report: Vec<tamarin_theory::wellformedness::WfError>,
     /// HTML for the wellformedness warning banner shown in the theory
     /// page header (HS `errorsHtml`, rendered raw via
     /// `preEscapedToMarkup info.errorsHtml` at `src/Web/Theory.hs`).

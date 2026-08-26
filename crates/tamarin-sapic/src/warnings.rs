@@ -18,7 +18,7 @@
 //! (capturedVariables p)`).  `checkLocks` (the sibling lock-matching check) is
 //! NOT ported here — see the note on [`warn_process`].
 
-use tamarin_parser::wf::WfError;
+use tamarin_theory::wellformedness::WfError;
 
 use tamarin_theory::sapic::{GoodAnnotation, Process, SapicLVar};
 

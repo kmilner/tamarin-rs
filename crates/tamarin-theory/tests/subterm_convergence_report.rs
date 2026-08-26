@@ -15,15 +15,15 @@
 //! Expected strings are the pinned oracle's bytes (Git revision ef3f0468).
 
 use tamarin_parser::parse_theory;
-use tamarin_theory::pretty_theory::subterm_convergence_report_wf;
+use tamarin_theory::wellformedness::equations::subterm_convergence_report;
 
 /// The report the load pipelines append
-/// (`translated_wf::append_subterm_convergence_report`), as its single entry's
+/// (`wellformedness::append_subterm_convergence_report`), as its single entry's
 /// message, or `None` when the check stays silent.
 fn message(src: &str) -> Option<String> {
     let parsed = parse_theory(src, &[]).expect("parse");
     let elaborated = tamarin_theory::elaborate::elaborate(&parsed).expect("elaborate");
-    let mut errs = subterm_convergence_report_wf(&elaborated.signature.maude_sig);
+    let mut errs = subterm_convergence_report(&elaborated.signature.maude_sig);
     assert!(errs.len() <= 1, "expected at most one entry, got {errs:?}");
     let entry = errs.pop()?;
     assert_eq!(entry.topic, "Subterm Convergence Warning");

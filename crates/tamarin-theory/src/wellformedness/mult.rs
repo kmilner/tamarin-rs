@@ -40,7 +40,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use tamarin_parser::wf::WfError;
 use tamarin_term::function_symbols::{AcSym, FunSym};
 use tamarin_term::lterm::{sort_of_lnterm, HasFrees, LNTerm, LSort, LVar};
 use tamarin_term::maude_sig::MaudeSig;
@@ -52,6 +51,8 @@ use crate::fact::LNFact;
 use crate::pretty_hpj::{self as hpj, Doc};
 use crate::rule::{pretty_proto_rule_e, ProtoRuleE};
 use crate::theory::Theory;
+
+use super::WfError;
 
 /// HS `underlineTopic "Multiplication restriction of rules"`
 /// (Wellformedness.hs:1047-1051) — stored bare here because

@@ -24,10 +24,10 @@ use tamarin_theory::pretty_theory::format_wf_block;
 /// pass, then the translated-theory splice.
 fn load_wf_block(src: &str) -> String {
     let parsed = parse_theory(src, &[]).expect("parse");
-    let mut report = tamarin_theory::translated_wf::pre_translation_wf_report(&parsed);
+    let mut report = tamarin_theory::wellformedness::pre_translation_wf_report(&parsed);
     let elaborated = tamarin_theory::elaborate::elaborate(&parsed).expect("elaborate");
     let maude_sig = elaborated.signature.maude_sig.clone();
-    tamarin_theory::translated_wf::splice_translated_wf_reports(
+    tamarin_theory::wellformedness::splice_translated_wf_reports(
         &elaborated,
         &maude_sig,
         &mut report,
@@ -38,13 +38,16 @@ fn load_wf_block(src: &str) -> String {
 /// The `Formula terms` findings of the elaborated theory: the `checkTerms`
 /// arm of HS's `formulaReports` loop (Wellformedness.hs:1003), which is the
 /// path both load pipelines take.
-fn formula_terms_report(src: &str) -> Vec<tamarin_parser::wf::WfError> {
+fn formula_terms_report(src: &str) -> Vec<tamarin_theory::wellformedness::WfError> {
     let thy = parse_theory(src, &[]).expect("parse");
     let elaborated = tamarin_theory::elaborate::elaborate(&thy).expect("elaborate");
-    tamarin_theory::formula_reports::formula_reports(&elaborated, &elaborated.signature.maude_sig)
-        .into_iter()
-        .filter(|e| e.topic == "Formula terms")
-        .collect()
+    tamarin_theory::wellformedness::formulas::formula_reports(
+        &elaborated,
+        &elaborated.signature.maude_sig,
+    )
+    .into_iter()
+    .filter(|e| e.topic == "Formula terms")
+    .collect()
 }
 
 /// `unboundReport` is HS check index 2 and `lemmaAttributeReport` index 9
@@ -80,7 +83,7 @@ fn fr_fact_topic_prints_its_underlined_header_once() {
                rule T2: [ Fr( 'c' ) ] --[ ]-> []\n\
                end\n";
     let thy = parse_theory(src, &[]).expect("parse");
-    let report = tamarin_parser::wf::check_theory(&thy);
+    let report = tamarin_theory::wellformedness::check_theory(&thy);
     assert_eq!(
         format_wf_block(&report),
         "/*\nWARNING: the following wellformedness checks failed!\n\n\
@@ -135,7 +138,7 @@ fn multiplication_restriction_topic_prints_its_underlined_header() {
                end\n";
     let thy = parse_theory(src, &[]).expect("parse");
     let elaborated = tamarin_theory::elaborate::elaborate(&thy).expect("elaborate");
-    let errs = tamarin_theory::mult_restricted::mult_restricted_report(
+    let errs = tamarin_theory::wellformedness::mult::mult_restricted_report(
         &elaborated,
         &elaborated.signature.maude_sig,
     );

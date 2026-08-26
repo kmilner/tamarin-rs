@@ -33,12 +33,9 @@
 //! - [`tools`] ← `Theory.Tools.*` (equation store, subterm store,
 //!   abstract interpretation, loop breakers, rule-variants,
 //!   injective-fact instances)
-//! - [`check_terms`] / [`formula_reports`] / [`mult_restricted`] /
-//!   [`wf_fill`] ← `Theory.Tools.Wellformedness` (`checkTerms`,
-//!   `formulaReports`, `multRestrictedReport`, and the report's paragraph
-//!   layout); [`deriv_check`] ← message-derivation checks;
-//!   [`translated_wf`] ← the `checkTranslatedTheory` re-runs both drivers
-//!   share
+//! - [`wellformedness`] ← `Theory.Tools.Wellformedness`;
+//!   [`wf_fill`] ← the report's paragraph layout;
+//!   [`deriv_check`] ← message-derivation checks
 //! - [`theory`] ← top-level `Theory` (open/closed theories);
 //!   [`elaborate`] ← theory elaboration/closing
 //! - [`tactic`] ← heuristic tactics; [`proof_skeleton`] / [`replay`] /
@@ -57,20 +54,17 @@
 
 pub mod atom;
 pub mod auto_sources;
-pub mod check_terms;
 pub mod close_rule;
 pub mod constraint;
 pub mod deriv_check;
 pub mod elaborate;
 pub mod fact;
 pub mod formula;
-pub mod formula_reports;
 pub mod guarded;
 pub mod intruder_rules;
 pub mod intruder_variants;
 pub mod macro_expand;
 pub mod module;
-pub mod mult_restricted;
 pub mod predicate;
 pub mod pretty_formula;
 pub mod pretty_hpj;
@@ -98,6 +92,5 @@ pub(crate) mod test_corpus;
 pub(crate) mod test_maude;
 pub mod theory;
 pub mod tools;
-pub mod translated_rule_wf;
-pub mod translated_wf;
+pub mod wellformedness;
 pub mod wf_fill;

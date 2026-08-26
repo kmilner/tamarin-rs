@@ -3,8 +3,7 @@
 //   scripts/gen_license_headers.py --authors <this file>
 
 //! Surface-syntax AST for `.spthy` files: the loose tree [`crate::parser`]
-//! produces and [`crate::wf`] (plus, downstream, `tamarin-theory`'s
-//! elaboration) consumes.
+//! produces and `tamarin-theory` (wellformedness, elaboration) consumes.
 //!
 //! Nodes mirror Tamarin's concrete syntax rather than any single Haskell type —
 //! the HS parser builds straight into the semantic `Theory`, so this is a

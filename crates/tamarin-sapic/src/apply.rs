@@ -21,8 +21,8 @@
 //! `cprRuleE` half `closeProtoRule` keeps (lib/theory/src/Rule.hs:82-86).
 
 use tamarin_parser::ast as p;
-use tamarin_parser::wf::WfError;
 use tamarin_term::maude_sig::MaudeSig;
+use tamarin_theory::wellformedness::WfError;
 
 use tamarin_theory::elaborate::ElabError;
 use tamarin_theory::formula::LNFormula;

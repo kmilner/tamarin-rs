@@ -823,7 +823,7 @@ const NAT_THEORY_NOEQ_SYMS: &[BuiltinFunSym] = &[BuiltinFunSym::new("tone", 0, f
 /// `lookupArity` ranks as `NoEqUser` — ahead of every `ACfctUser`
 /// (Theory/Text/Parser/Term.hs:62-72) — so `crate::wf`'s printers use this to
 /// classify a prefix application of a name that is also declared `[AC]`.
-pub(crate) fn builtin_noeq_sym_names(builtin: &str) -> Vec<&'static str> {
+pub fn builtin_noeq_sym_names(builtin: &str) -> Vec<&'static str> {
     let theory: &[&[BuiltinFunSym]] = match builtin {
         "diffie-hellman" => &[DH_THEORY_NOEQ_SYMS],
         "bilinear-pairing" => &[DH_THEORY_NOEQ_SYMS, BP_THEORY_NOEQ_SYMS],

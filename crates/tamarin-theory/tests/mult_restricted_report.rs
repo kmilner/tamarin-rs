@@ -17,8 +17,8 @@
 //! Expected strings are the pinned oracle's bytes (Git revision ef3f0468).
 
 use tamarin_parser::parse_theory;
-use tamarin_theory::mult_restricted::mult_restricted_report;
 use tamarin_theory::pretty_theory::format_wf_block;
+use tamarin_theory::wellformedness::mult::mult_restricted_report;
 
 /// The rendered `/* WARNING … */` block for a theory's multiplication-
 /// restriction report, or `None` when the check stays silent.

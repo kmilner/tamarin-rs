@@ -7,7 +7,7 @@
 //! topic that its `expected.txt` line lists.  It must not make
 //! `wf::check_theory` emit any topic that a `#!` line records as absent.
 //! Nothing here runs `tamarin-prover`, so this test works offline.  The
-//! differential runner (`cargo run -p tamarin-parser --example
+//! differential runner (`cargo run -p tamarin-theory --example
 //! wellformedness_fixtures`) compares the same file against the oracle.
 //!
 //! The comparison must not pass while it compares nothing.  Three cases are
@@ -16,16 +16,17 @@
 //! lists.  The third is a fixture that has no parser-level expected topic, no
 //! forbidden one, and no pinned `.report`.  This test still cannot see a fixture that has
 //! lost its content while its `#!` negatives stay satisfiable.  An empty
-//! theory emits no topic, so it triggers no negative.  `tamarin-theory`'s
-//! `tests/wellformedness_fixture_reports.rs` covers that case from the crate
-//! that holds the post-elaboration checks.  It compares the complete
-//! rendered report of each fixture against the bytes of the oracle.
+//! theory emits no topic, so it triggers no negative.
+//! `tests/wellformedness_fixture_reports.rs` covers that case: it compares
+//! the complete rendered report of each fixture against the bytes of the
+//! oracle.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::PathBuf;
 
-use tamarin_parser::{parse_theory, wf};
+use tamarin_parser::parse_theory;
+use tamarin_theory::wellformedness as wf;
 
 /// The topics that `wf::check_theory` cannot produce, because their checks
 /// read the TRANSLATED theory, the elaborated `MaudeSig`, or both: HS
@@ -35,13 +36,12 @@ use tamarin_parser::{parse_theory, wf};
 /// `checkEquationsSubtermConvergence` (Wellformedness.hs:1222-1232) reads the
 /// signature's subterm-rule Set, and `unboundReport` / `publicNamesReport` /
 /// `factLhsOccurNoRhs` / `natWellSortedReport` walk `thyProtoRules` of the
-/// theory SAPIC's translation has already extended.  Their ports live in
-/// `tamarin_theory::{check_terms, mult_restricted, pretty_theory,
-/// translated_rule_wf, elaborate}`, and `tamarin_theory::translated_wf`
-/// splices them in after elaboration.  The tests of those modules
-/// (`tamarin-theory/tests/mult_restricted_report.rs`) and the corpus wf gate
-/// cover them.  The parser-only comparison here drops them from the positive
-/// side.
+/// theory SAPIC's translation has already extended.
+/// `wf::splice_translated_wf_reports` and
+/// `wf::append_subterm_convergence_report` add them after elaboration.  The
+/// tests of those checks (`tests/mult_restricted_report.rs`) and the corpus wf
+/// gate cover them.  The pre-elaboration comparison here drops them from the
+/// positive side.
 const POST_ELABORATION_TOPICS: [&str; 7] = [
     "Formula terms",
     "Multiplication restriction of rules",
@@ -152,8 +152,8 @@ fn load_corpus() -> Corpus {
 
 /// Does the fixture carry a `.report` expectation?  That file pins its whole
 /// rendered wellformedness block against the oracle's bytes
-/// (`tamarin-theory/tests/wellformedness_fixture_reports.rs`), which reaches
-/// the post-elaboration checks this harness cannot, so such a fixture is held
+/// (`tests/wellformedness_fixture_reports.rs`), which reaches the
+/// post-elaboration checks this harness cannot, so such a fixture is held
 /// to its content even when every topic it lists is post-elaboration.
 fn has_report_expectation(name: &str) -> bool {
     fixtures_dir()

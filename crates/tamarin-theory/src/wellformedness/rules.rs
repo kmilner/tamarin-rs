@@ -2,16 +2,23 @@
 // of the tamarin-prover sources this file cites; list them with:
 //   scripts/gen_license_headers.py --authors <this file>
 
-//! The three rule-walking wellformedness checks of the TRANSLATED theory:
+//! The wellformedness checks that walk a theory's rules.
+//!
 //! HS `unboundReport` (Wellformedness.hs:514-519), `factLhsOccurNoRhs'`
 //! (Wellformedness.hs:214-256) and `natWellSortedReport`
-//! (Wellformedness.hs:319-333).
+//! (Wellformedness.hs:319-333) read `thyProtoRules thy`
+//! (Wellformedness.hs:133-134) — the macro-applied `oprRuleE` of every rule
+//! item of the `OpenTranslatedTheory`.  The elaborated [`Theory`]'s rules are
+//! that set: `elaborate` applies the theory's macros and `apply_sapic`
+//! appends the generated rules, which is the same input [`super::mult`]
+//! reads.  [`translated_public_names_report`] (HS `publicNamesReport'`,
+//! Wellformedness.hs:463-484) reads them too, including the source
+//! subprocess a generated rule carries.
 //!
-//! All three read `thyProtoRules thy` (Wellformedness.hs:133-134) — the
-//! macro-applied `oprRuleE` of every rule item of the `OpenTranslatedTheory`.
-//! The elaborated [`Theory`]'s rules are that set: `elaborate` applies the
-//! theory's macros and `apply_sapic` appends the generated rules, which is
-//! the same input [`crate::mult_restricted`] reads.
+//! [`fresh_names_report`] (HS `freshNamesReport'`, Wellformedness.hs:444-452)
+//! and [`variable_sort_clashes`] (HS `ruleSortsReport`,
+//! Wellformedness.hs:258-280) read the parser AST, so they carry their own
+//! walk over a rule's terms.
 //!
 //! [`unbound_report`]'s body is HS's `text info $-$ nest 2 (prettyVarList
 //! vars)` paragraph fill, so it hands its variable cells to
@@ -25,7 +32,7 @@
 
 use std::collections::BTreeSet;
 
-use tamarin_parser::wf::{underline_topic, WfDoc, WfError};
+use tamarin_parser::ast as p;
 use tamarin_term::function_symbols::{nat_one_sym, AcSym, FunSym};
 use tamarin_term::lterm::{frees, frees_list, LNTerm, LSort, LVar};
 use tamarin_term::pretty::pretty_nterm;
@@ -40,6 +47,11 @@ use crate::pretty_hpj::{self as hpj, Doc};
 use crate::rule::{pretty_proto_rule_name, ProtoRuleE};
 use crate::sapic::{Process, ProcessCombinator};
 use crate::theory::Theory;
+
+use super::{
+    grouped_topic_block, numbered_index_width, render_var, rule_facts, theory_rules,
+    underline_topic, WfDoc, WfError, WfReport,
+};
 
 /// `lineLength` of the style HughesPJ's `render` uses, reached from HS
 /// through `addComment`'s `render` (TheoryObject.hs:717-718).
@@ -193,13 +205,6 @@ fn edit_distance(a: &str, b: &str) -> usize {
         std::mem::swap(&mut prev, &mut cur);
     }
     prev[m]
-}
-
-/// HS `numbered'`'s index width — `nWidth = length (show n)` for `n` items,
-/// each index rendered `flushRight nWidth (show i)`, i.e. left-padded with
-/// spaces (Text/PrettyPrint/Class.hs:251-264).
-fn numbered_index_width(count: usize) -> usize {
-    count.to_string().len()
 }
 
 /// Port of HS `factLhsOccurNoRhs'` (Wellformedness.hs:214-256): every proto
@@ -399,358 +404,358 @@ pub fn nat_well_sorted_report(thy: &Theory) -> Vec<WfError> {
 }
 
 // =============================================================================
-// Tests
+// Helpers — parser-AST variables and name literals
 // =============================================================================
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::sapic::{ProcessParsedAnnotation, SapicLVar};
-    use crate::theory::TheoryItem;
-    use tamarin_term::vterm::var_term;
-
-    /// The elaborated theory for `src`, as a loader holds it before
-    /// translation.
-    fn elaborated(src: &str) -> Theory {
-        let parsed = tamarin_parser::parse_theory(src, &[]).expect("parse");
-        crate::elaborate::elaborate(&parsed).expect("elaborate")
-    }
-
-    /// The report's bodies joined the way `prettyWfErrorReport` joins a topic
-    /// group — `intersperse (text "")` under one header, which at the group's
-    /// 2-space nest is a two-space line (Wellformedness.hs:118-125).
-    fn bodies(report: &[WfError]) -> String {
-        assert!(!report.is_empty(), "empty report");
-        report
-            .iter()
-            .map(|e| match &e.fill {
-                Some(fill) => crate::wf_fill::fill_body(fill),
-                None => e.message.clone(),
-            })
-            .collect::<Vec<_>>()
-            .join("\n  \n")
-    }
-
-    /// A `lookup t as v` combinator over one variable, as the `process`
-    /// attribute of a SAPIC-generated rule carries it.
-    fn lookup_process(v: LVar) -> crate::sapic::PlainProcess {
-        let sv = SapicLVar::untyped(v);
-        Process::Comb(
-            ProcessCombinator::Lookup(var_term(sv.clone()), sv),
-            ProcessParsedAnnotation::default(),
-            Box::new(Process::Null(ProcessParsedAnnotation::default())),
-            Box::new(Process::Null(ProcessParsedAnnotation::default())),
-        )
-    }
-
-    /// HS `frees` sorts by `Ord LVar` = `(idx, sort, name)`
-    /// (LTerm.hs:546-548), so the list is not in source order: `~nr` (fresh)
-    /// precedes the msg-sorted `mi` and `ni`, and `$A` is dropped as
-    /// pub-sorted.  Byte-pinned to the pinned oracle (ef3f0468) on
-    /// `Out(<ni, ~nr, $A, mi>)`.
-    #[test]
-    fn unbound_variables_are_listed_in_lvar_order() {
-        let thy = elaborated("theory T begin rule R: [ ] --[ ]-> [ Out(<ni, ~nr, $A, mi>) ] end");
-        assert_eq!(
-            bodies(&unbound_report(&thy)),
-            "  rule `R' has unbound variables: \n    ~nr, mi, ni"
-        );
-    }
-
-    /// A builtin's 0-arity constant is a symbol only while that builtin is
-    /// enabled (`nullaryApp`, Theory/Text/Parser/Term.hs:158-163), so the same
-    /// bare name is a variable — and an unbound one — in a theory that does
-    /// not enable it.
-    #[test]
-    fn bare_name_of_a_disabled_builtin_constant_is_a_variable() {
-        let thy = elaborated("theory T begin rule R: [ ] --[ ]-> [ Out(<zero, true>) ] end");
-        assert_eq!(
-            bodies(&unbound_report(&thy)),
-            "  rule `R' has unbound variables: \n    true, zero"
-        );
-        let thy = elaborated(
-            "theory T begin builtins: xor, signing rule R: [ ] --[ ]-> [ Out(<zero, true>) ] end",
-        );
-        assert!(
-            unbound_report(&thy).is_empty(),
-            "with the builtins enabled both names are constants: {:?}",
-            unbound_report(&thy)
-        );
-    }
-
-    /// HS `originatesFromLookup` (Wellformedness.hs:501-503, 506-510): the
-    /// variable a `lookup t as v` combinator binds reaches its generated rule
-    /// through the `IsIn( t, v )` action, so it is not unbound — while an
-    /// otherwise identical rule without the `process` attribute is.  The
-    /// parser never mints that attribute, so the generated shape is built by
-    /// attaching the process the SAPIC translation writes.
-    #[test]
-    fn lookup_binder_is_not_unbound() {
-        let src = "theory T begin \
-                   rule L: [ State_1(m.1) ] --[ IsIn(m.1, v.1) ]-> [ State_11(m.1, v.1) ] \
-                   end";
-        let mut thy = elaborated(src);
-        assert_eq!(
-            unbound_report(&thy).len(),
-            1,
-            "without the lookup attribute v.1 is unbound"
-        );
-        let binder = LVar::new("v", LSort::Msg, 1);
-        for item in thy.items.iter_mut() {
-            if let TheoryItem::Rule(r) = item {
-                r.rule.info.attributes.process = Some(lookup_process(binder));
+/// Recursively collect every variable appearing in a term.
+fn term_vars(t: &p::Term, out: &mut Vec<p::VarSpec>) {
+    match t {
+        p::Term::Var(v) => out.push(v.clone()),
+        p::Term::App(_, args) => {
+            for a in args {
+                term_vars(a, out);
             }
         }
-        assert!(
-            unbound_report(&thy).is_empty(),
-            "the lookup binder must be suppressed: {:?}",
-            unbound_report(&thy)
-        );
-
-        // A DIFFERENT free variable in the same lookup rule is still
-        // reported: HS compares the offender against the binder, it does not
-        // exempt the whole rule.
-        let mut thy = elaborated(
-            "theory T begin \
-             rule L: [ State_1(m.1) ] --[ IsIn(m.1, v.1) ]-> [ State_11(m.1, v.1, w.2) ] \
-             end",
-        );
-        for item in thy.items.iter_mut() {
-            if let TheoryItem::Rule(r) = item {
-                r.rule.info.attributes.process = Some(lookup_process(binder));
+        p::Term::AlgApp(_, a, b) => {
+            term_vars(a, out);
+            term_vars(b, out);
+        }
+        p::Term::Pair(items) => {
+            for a in items {
+                term_vars(a, out);
             }
         }
-        let report = unbound_report(&thy);
-        assert_eq!(report.len(), 1);
-        let Some(tamarin_parser::wf::WfFill::Paragraph { cells, .. }) = report[0].fill.as_ref()
-        else {
-            panic!("unbound entry carries its cells: {report:?}");
-        };
-        assert_eq!(
-            *cells,
-            vec![WfDoc::Text("w.2".to_string())],
-            "only the non-binder variable is reported: {report:?}"
-        );
-    }
-
-    /// This is `underlineTopic` of HS's source-literal topic plus the `$-$`
-    /// blank line that opens the body.  The title is 65 characters long, its
-    /// trailing space included, so the rule below it is 65 `=` characters.
-    const LHS_NO_RHS_HEADER: &str =
-        "Facts occur in the left-hand-side but not in any right-hand-side \n\
-         =================================================================\n\n";
-
-    /// The suggestion arm picks the right-hand-side fact with the smallest
-    /// name distance, not the first one.  `Sesion` is 1 edit from `Session`
-    /// and 2 from `Section`, which the source lists earlier.  Byte-pinned to
-    /// the pinned oracle (ef3f0468).
-    #[test]
-    fn fact_lhs_no_rhs_suggests_the_smallest_edit_distance_not_the_first() {
-        let thy = elaborated(
-            r#"theory T begin
-            rule A: [ Sesion(x) ] --[ ]-> [ ]
-            rule B: [ ] --[ ]-> [ Section(x) ]
-            rule C: [ ] --[ ]-> [ Session(x) ]
-        end"#,
-        );
-        assert_eq!(
-            bodies(&fact_lhs_occur_no_rhs(&thy)),
-            format!(
-                "{LHS_NO_RHS_HEADER}  1. in rule \"A\":  factName `Sesion' arity: 1 \
-                 multiplicity: Linear. Perhaps you want to use the fact in rule \"C\":  \
-                 factName `Session' arity: 1 multiplicity: Linear\n"
-            )
-        );
-    }
-
-    /// HS `isSimilar` keeps the nearest right-hand-side name only at distance
-    /// `<= 3` (Wellformedness.hs:192-196).  `Abc` is 4 edits from `Abcdefg`,
-    /// the only such name, so the line carries no suggestion.  Byte-pinned to
-    /// the pinned oracle (ef3f0468).
-    #[test]
-    fn fact_lhs_no_rhs_drops_the_suggestion_past_distance_three() {
-        let thy = elaborated(
-            r#"theory T begin
-            rule A: [ Abc(x) ] --[ ]-> [ ]
-            rule B: [ ] --[ ]-> [ Abcdefg(x) ]
-        end"#,
-        );
-        assert_eq!(
-            bodies(&fact_lhs_occur_no_rhs(&thy)),
-            format!(
-                "{LHS_NO_RHS_HEADER}  1. in rule \"A\":  factName `Abc' arity: 1 \
-                 multiplicity: Linear\n"
-            )
-        );
-    }
-
-    /// Both right-hand-side names are 1 edit from `Aaa`, and the tie goes to
-    /// the first of them: HS `minimalEdFact` takes `listToMaybe . sortOn snd`
-    /// (Wellformedness.hs:200-201), a stable sort.  Byte-pinned to the pinned
-    /// oracle (ef3f0468).
-    #[test]
-    fn fact_lhs_no_rhs_breaks_distance_ties_by_rhs_source_order() {
-        let thy = elaborated(
-            r#"theory T begin
-            rule A: [ Aaa(x) ] --[ ]-> [ ]
-            rule B: [ ] --[ ]-> [ Aax(x) ]
-            rule C: [ ] --[ ]-> [ Aay(x) ]
-        end"#,
-        );
-        assert_eq!(
-            bodies(&fact_lhs_occur_no_rhs(&thy)),
-            format!(
-                "{LHS_NO_RHS_HEADER}  1. in rule \"A\":  factName `Aaa' arity: 1 \
-                 multiplicity: Linear. Perhaps you want to use the fact in rule \"B\":  \
-                 factName `Aax' arity: 1 multiplicity: Linear\n"
-            )
-        );
-    }
-
-    /// The only operand the check rejects is the fresh variable `~x`; the
-    /// nat-sorted `%a` passes `isNatVar`.  The message carries no rule name
-    /// and `t` is the complete fact-argument term, whose `%+` operands print
-    /// in `Ord LVar` order rather than source order — `fAppAC` sorts them at
-    /// construction.  Byte-pinned to the pinned oracle (ef3f0468) on
-    /// `Out(%a %+ ~x)`.
-    #[test]
-    fn nat_sorts_message_format() {
-        let thy = elaborated(
-            "theory T begin builtins: natural-numbers \
-             rule R: [ Fr(~x) ] --[ ]-> [ Out(%a %+ ~x) ] end",
-        );
-        assert_eq!(
-            bodies(&nat_well_sorted_report(&thy)),
-            "  ~x in term (~x%+%a) must be of sort nat"
-        );
-    }
-
-    /// The check flags a nat *literal* `%'a'`, which is a `Con` name and not
-    /// a variable, and leaves the nat variable `%y` beside it — HS `isNatVar`
-    /// is true only for a `Lit (Var ..)` of sort nat.  Byte-pinned to the
-    /// pinned oracle (ef3f0468).
-    #[test]
-    fn nat_sorts_flags_nat_literal() {
-        let thy = elaborated(
-            "theory T begin builtins: natural-numbers \
-             rule R: [ Fr(~x) ] --[ ]-> [ Out(%'a' %+ %y) ] end",
-        );
-        assert_eq!(
-            bodies(&nat_well_sorted_report(&thy)),
-            "  %'a' in term (%'a'%+%y) must be of sort nat"
-        );
-    }
-
-    /// Both the offender and the enclosing term print through `prettyLNTerm`
-    /// over the canonical term, and `nonWellSorted` walks the canonical
-    /// operand list, so an AC chain appears flattened and sorted and several
-    /// offenders of one term arrive in that same order.  Byte-pinned to the
-    /// pinned oracle (ef3f0468).
-    #[test]
-    fn nat_sorts_render_ac_terms_canonically() {
-        let report = |src: &str| -> String {
-            let thy = elaborated(&format!(
-                "theory T begin \
-                 builtins: multiset, xor, bilinear-pairing, natural-numbers \
-                 functions: add/2 [AC], zz/1 \
-                 rule R: [ In(<a,b,c>) ] --> [ Out( {src} ) ] end"
-            ));
-            bodies(&nat_well_sorted_report(&thy))
-        };
-        assert_eq!(
-            report("(a*b)*c %+ %1"),
-            "  (a*b*c) in term (%1%+(a*b*c)) must be of sort nat"
-        );
-        assert_eq!(
-            report("add(add(b,a),c) %+ %1"),
-            "  (a add b add c) in term (%1%+(a add b add c)) must be of sort nat"
-        );
-        assert_eq!(
-            report("em(b,a) %+ %1"),
-            "  em(a, b) in term (%1%+em(a, b)) must be of sort nat"
-        );
-        assert_eq!(
-            report("zz(b*a) %+ %1"),
-            "  zz((a*b)) in term (%1%+zz((a*b))) must be of sort nat"
-        );
-        // `fAppAC _ [a] = a`: the offender is `a`, not `add(a)`.
-        assert_eq!(
-            report("add(a) %+ %1"),
-            "  a in term (a%+%1) must be of sort nat"
-        );
-        // `exp` is `NoEq`, so it renders unparenthesised.
-        assert_eq!(
-            report("(a^b) %+ %1"),
-            "  a^b in term (a^b%+%1) must be of sort nat"
-        );
-        // Two offenders under one `%+`, in canonical operand order (the LIT
-        // `c` before the `Mult`-headed FAPP) rather than source order.
-        assert_eq!(
-            report("(a*b) %+ c %+ %1"),
-            "  c in term (c%+%1%+(a*b)) must be of sort nat\n  \n  \
-             (a*b) in term (c%+%1%+(a*b)) must be of sort nat"
-        );
-    }
-
-    /// One entry per `(term, offending operand)` pair, so a `%+` with two
-    /// rejected operands opens two bodies under the one topic header.
-    /// Byte-pinned to the pinned oracle (ef3f0468) on `In( x %+ pair(a,b) )`.
-    #[test]
-    fn nat_sorts_reports_every_offending_operand_of_a_term() {
-        let thy = elaborated(
-            "theory T begin builtins: natural-numbers \
-             rule Test: [ In( x %+ pair(a,b) ) ] --[ ]-> [] end",
-        );
-        assert_eq!(
-            bodies(&nat_well_sorted_report(&thy)),
-            "  x in term (x%+<a, b>) must be of sort nat\n  \n  \
-             <a, b> in term (x%+<a, b>) must be of sort nat"
-        );
-    }
-
-    /// A free variable literally named `True` is unbound: there is no builtin
-    /// `True` nullary (only `true`), so the parser leaves it a variable.
-    #[test]
-    fn variable_named_true_is_unbound() {
-        let thy = elaborated("theory T begin rule R: [ ] --[ ]-> [ Out(True) ] end");
-        assert_eq!(
-            bodies(&unbound_report(&thy)),
-            "  rule `R' has unbound variables: \n    True"
-        );
-    }
-
-    /// `prettyVarList` is HS's `fsep` paragraph fill, so the variable cells
-    /// break before the one that would pass the ribbon — 4-column cells:
-    /// thirteen fit at 64, fourteen would need 69.  Byte-pinned to the pinned
-    /// oracle (ef3f0468).
-    #[test]
-    fn unbound_variable_list_fills_at_the_report_ribbon() {
-        let names: Vec<String> = (1..=20).map(|i| format!("K( a{i:02} )")).collect();
-        let thy = elaborated(&format!(
-            "theory T begin rule R: [] --[ {} ]-> [] end",
-            names.join(", ")
-        ));
-        assert_eq!(
-            bodies(&unbound_report(&thy)),
-            "  rule `R' has unbound variables: \n    \
-             a01, a02, a03, a04, a05, a06, a07, a08, a09, a10, a11, a12, a13,\n    \
-             a14, a15, a16, a17, a18, a19, a20"
-        );
-    }
-
-    /// The parser inlines a rule's `let` bindings into the body it builds
-    /// (`apply subst (ps0,as0,cs0,rs0)`, Theory/Text/Parser/Rule.hs:119), so
-    /// the check reads the substituted facts: `c %+ %1` is nat well sorted
-    /// once `c` is the nat variable `%i`.
-    #[test]
-    fn let_inlining_reaches_the_nat_check() {
-        let thy = elaborated(
-            "theory T begin builtins: natural-numbers \
-             rule Count: let c = %i in [In(<'c', %i>)] --[Count(c %+ %1)]-> [] end",
-        );
-        assert!(
-            nat_well_sorted_report(&thy).is_empty(),
-            "the inlined `%i` is nat sorted"
-        );
+        p::Term::Diff(a, b) => {
+            term_vars(a, out);
+            term_vars(b, out);
+        }
+        p::Term::BinOp(_, a, b) => {
+            term_vars(a, out);
+            term_vars(b, out);
+        }
+        p::Term::PatMatch(inner) => term_vars(inner, out),
+        p::Term::PubLit(_)
+        | p::Term::FreshLit(_)
+        | p::Term::NatLit(_)
+        | p::Term::Number(_)
+        | p::Term::NumberOne
+        | p::Term::NatOne
+        | p::Term::DhNeutral => {}
     }
 }
+
+fn fact_vars(f: &p::Fact) -> Vec<p::VarSpec> {
+    let mut v = Vec::new();
+    for a in &f.args {
+        term_vars(a, &mut v);
+    }
+    v
+}
+
+/// Collect every public-name literal (`'foo'`) and fresh-name literal
+/// (`~'foo'`) within a term subtree.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum NameKind {
+    Pub,
+    Fresh,
+}
+
+fn term_name_lits(t: &p::Term, out: &mut Vec<(NameKind, String)>) {
+    match t {
+        p::Term::PubLit(s) => out.push((NameKind::Pub, s.clone())),
+        p::Term::FreshLit(s) => out.push((NameKind::Fresh, s.clone())),
+        p::Term::App(_, args) => {
+            for a in args {
+                term_name_lits(a, out);
+            }
+        }
+        p::Term::AlgApp(_, a, b) => {
+            term_name_lits(a, out);
+            term_name_lits(b, out);
+        }
+        p::Term::Pair(items) => {
+            for a in items {
+                term_name_lits(a, out);
+            }
+        }
+        p::Term::Diff(a, b) => {
+            term_name_lits(a, out);
+            term_name_lits(b, out);
+        }
+        p::Term::BinOp(_, a, b) => {
+            term_name_lits(a, out);
+            term_name_lits(b, out);
+        }
+        p::Term::PatMatch(inner) => term_name_lits(inner, out),
+        _ => {}
+    }
+}
+
+/// Every name literal of a rule, in [`rule_facts`] order.  Both name reports
+/// walk `universeBi ru` (`freshNamesReport'` Wellformedness.hs:447,
+/// `publicNamesReport'` Wellformedness.hs:475-478) over `thyProtoRules`
+/// (:456, :486), so a name occurring only inside a `let` value
+/// (`let m = ~'foo' in … Out(m)`) is inlined into the rule body by the parser
+/// and surfaces here.
+fn rule_name_lits(r: &p::Rule) -> Vec<(NameKind, String)> {
+    let mut names = Vec::new();
+    for f in rule_facts(r) {
+        for t in &f.args {
+            term_name_lits(t, &mut names);
+        }
+    }
+    names
+}
+
+// =============================================================================
+// Fresh public constants — `~'foo'` is forbidden
+// =============================================================================
+
+pub fn fresh_names_report(thy: &p::Theory) -> WfReport {
+    // HS `freshNamesReport'` (Wellformedness.hs:444-452): one WfError per
+    // offending rule, body = `fsep` of
+    //   text ("rule " ++ quote (showRuleCaseName ru) ++ ": fresh public \
+    //         constants are not allowed:") : punctuate comma (map (show) names)
+    // where `quote cs = '`' : cs ++ "'"` (Wellformedness.hs:164-165, see line 165) and the fresh
+    // names render via `show (Name FreshName n) = "~'" ++ n ++ "'"`
+    // (LTerm.hs:235-240, see line 236).  Topic is "Fresh public constants"; the umbrella renderer
+    // emits the underlineTopic header once and 2-space-nests the bodies
+    // (separated by a `  ` blank line) — we bake that whole block into a single
+    // WfError so the default `format_wf_block` path reproduces the exact bytes.
+    let topic = "Fresh public constants";
+    let mut bodies: Vec<String> = Vec::new();
+    for r in theory_rules(thy) {
+        // HS `show (Name FreshName n) = "~'" ++ n ++ "'"` for each fresh name,
+        // joined by `punctuate comma` (`, `) under the `fsep`.
+        let fresh_lits: Vec<String> = rule_name_lits(r)
+            .iter()
+            .filter_map(|(k, n)| {
+                if *k == NameKind::Fresh {
+                    Some(format!("~'{}'", n))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        if !fresh_lits.is_empty() {
+            // Body only, 2-space `nest 2` indent baked in; HS `quote` form for
+            // the rule name (backtick + apostrophe).
+            bodies.push(format!(
+                "  rule `{}': fresh public constants are not allowed: {}",
+                r.name,
+                fresh_lits.join(", ")
+            ));
+        }
+    }
+    grouped_topic_block(topic, bodies)
+}
+
+// =============================================================================
+// Public constant capitalization clashes
+// =============================================================================
+
+/// The clash-detection + rendering half of HS `publicNamesReport'`
+/// (Wellformedness.hs:463-484).  Its caller,
+/// [`translated_public_names_report`], harvests the
+/// `(showRuleCaseName, pubName)` pairs from the ELABORATED rules — including
+/// the `process` attribute HS's `universeBi` walks — which the parser AST
+/// stores only as a rendered string.  `pairs` must arrive in rule order
+/// (matching HS `thyProtoRules`), first-occurrence-wins: `clashesOn` keeps the
+/// earliest `(rule, name)` per distinct public name.
+fn public_names_report_from_pairs(pairs: Vec<(String, String)>) -> WfReport {
+    if pairs.is_empty() {
+        return Vec::new();
+    }
+    // HS `show` of a (public) Name constant is the quoted form `'name'`.
+    let shw = |n: &str| format!("'{}'", n);
+    let f = |p: &(String, String)| shw(&p.1).to_lowercase(); // lowerCase.show.snd
+    let g = |p: &(String, String)| shw(&p.1); // show.snd
+                                              // clashesOn f g: stable-sort by f, group consecutive by f, each group
+                                              // sortednubOn g; keep groups with >= 2 distinct g.
+    let mut sorted: Vec<(String, String)> = pairs;
+    sorted.sort_by_key(|a| f(a));
+    let mut clashes: Vec<Vec<(String, String)>> = Vec::new();
+    let mut i = 0;
+    while i < sorted.len() {
+        let key = f(&sorted[i]);
+        let mut j = i + 1;
+        while j < sorted.len() && f(&sorted[j]) == key {
+            j += 1;
+        }
+        let mut grp: Vec<(String, String)> = sorted[i..j].to_vec();
+        grp.sort_by_key(|a| g(a));
+        grp.dedup_by(|a, b| g(a) == g(b));
+        if grp.len() >= 2 {
+            clashes.push(grp);
+        }
+        i = j;
+    }
+    if clashes.is_empty() {
+        return Vec::new();
+    }
+    let topic = "Public constants with mismatching capitalization";
+    let mut s = String::new();
+    s.push_str(&underline_topic(topic));
+    s.push('\n');
+    s.push_str(
+        "Identifiers are case-sensitive, mismatched capitalizations \
+        are considered as different, i.e., 'ID' is different from 'id'. \
+        Check the capitalization of your identifiers.\n",
+    );
+    s.push('\n');
+    let w = numbered_index_width(clashes.len());
+    let items: Vec<String> = clashes
+        .iter()
+        .enumerate()
+        .map(|(k, grp)| {
+            // groupOn fst: list each rule's names together.
+            let mut parts: Vec<String> = Vec::new();
+            let mut m = 0;
+            while m < grp.len() {
+                let rule = &grp[m].0;
+                let mut names = vec![shw(&grp[m].1)];
+                let mut n2 = m + 1;
+                while n2 < grp.len() && &grp[n2].0 == rule {
+                    names.push(shw(&grp[n2].1));
+                    n2 += 1;
+                }
+                parts.push(format!("rule \"{}\":  name {}", rule, names.join(", ")));
+                m = n2;
+            }
+            format!("  {:>w$}. {}", k + 1, parts.join(", "), w = w)
+        })
+        .collect();
+    s.push_str(&items.join("\n  \n"));
+    s.push('\n');
+    vec![WfError::new(topic, s)]
+}
+
+/// Port of HS `publicNamesReport'` (Wellformedness.hs:463-484) over the
+/// TRANSLATED theory's rules.  HS runs the FULL `checkWellformedness` on that
+/// theory, so `publicNames = universeBi ru` walks each generated rule
+/// INCLUDING the source subprocess HS attaches to it — and the parser AST
+/// stores that subprocess only as a rendered `process="…"` string, so a
+/// constant appearing solely inside the process (the `'C'` in
+/// `insert <'roles', x, 'C'>`) is reachable only from the elaborated rule.
+/// Walk the ELABORATED rules' facts AND their `process` attribute.
+///
+/// The root `Init` rule carries the WHOLE process (`base_init` in
+/// tamarin-sapic's base_translation.rs; HS `baseInit`,
+/// Basetranslation.hs:312-317, see line 313 — the rule's annotation is `anP`, the full
+/// process) and is emitted first, so under `clashesOn`'s
+/// first-occurrence dedup it wins every public name — reproducing HS's
+/// `rule "Init":  name 'C', 'c'` attribution.
+pub fn translated_public_names_report(thy: &Theory) -> Vec<WfError> {
+    let mut pairs: Vec<(String, String)> = Vec::new();
+    for r in thy.items.iter().filter_map(|it| match it {
+        crate::theory::TheoryItem::Rule(r) => Some(r),
+        _ => None,
+    }) {
+        // HS `showRuleCaseName ru = prettyProtoRuleName (ruleName ru)`
+        // (Theory/Model/Rule.hs:1338-1340) = `prefixIfReserved n` for a
+        // `StandRule n`.
+        let case_name = crate::rule::prefix_if_reserved(r.name());
+        let mut names: Vec<String> = Vec::new();
+        for f in r
+            .rule
+            .premises
+            .iter()
+            .chain(&r.rule.actions)
+            .chain(&r.rule.conclusions)
+        {
+            for t in f.terms.iter() {
+                crate::elaborate::collect_pub_names(t, &mut names);
+            }
+        }
+        if let Some(proc) = &r.rule.info.attributes.process {
+            crate::elaborate::collect_process_pub_names(proc, &mut names);
+        }
+        for n in names {
+            pairs.push((case_name.clone(), n));
+        }
+    }
+    public_names_report_from_pairs(pairs)
+}
+
+// =============================================================================
+// Variable sort/capitalization clashes (within a single rule)
+// =============================================================================
+
+/// Within each rule, variables whose names agree modulo case AND share an
+/// index, but differ in their full `LVar` (sort or capitalization), clash.
+/// Port of HS `sortsClashCheck`/`ruleSortsReport` (Wellformedness.hs:258-280):
+/// `clashesOn removeSort id $ frees ru` where `removeSort lv = (lowerCase
+/// (lvarName lv), lvarIdx lv)`.  Bare identifiers default to sort `msg`
+/// (HS LSortMsg), so `~ltk` (fresh) vs `ltk` (msg) clash.  Runs on the
+/// let-substituted rule (HS `thyProtoRules` applies let-subst).
+///
+/// Emits one `WfError` per offending rule (so the summary's `length rep`
+/// WARNING count matches HS, Batch.hs:87-316, see line 245), all sharing the topic
+/// "Variable with mismatching sorts or capitalization"; `format_wf_block`
+/// renders the header + "Possible reasons" preamble ONCE for the group.
+pub fn variable_sort_clashes(thy: &p::Theory) -> WfReport {
+    let mut out = Vec::new();
+    for r in theory_rules(thy) {
+        // Pair each var with its lowercase name ONCE, so the sort/group steps
+        // below don't re-allocate a `to_lowercase` string per comparison/probe.
+        let mut vars: Vec<(String, p::VarSpec)> = Vec::new();
+        for f in rule_facts(r) {
+            for v in fact_vars(f) {
+                vars.push((v.name.to_lowercase(), v));
+            }
+        }
+        // clashesOn removeSort id: sort+group by (lowercase name, idx).
+        // Stable sort over the precomputed lowercase key — identical order to
+        // re-lowercasing in the comparator.
+        vars.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.idx.cmp(&b.1.idx)));
+        let mut clash_groups: Vec<Vec<&p::VarSpec>> = Vec::new();
+        let mut i = 0;
+        while i < vars.len() {
+            let key = (vars[i].0.as_str(), vars[i].1.idx);
+            let mut j = i + 1;
+            while j < vars.len() && (vars[j].0.as_str(), vars[j].1.idx) == key {
+                j += 1;
+            }
+            // sortednubOn id: sort by HS LVar Ord (idx, sort, name) then dedup.
+            let mut grp: Vec<&p::VarSpec> = vars[i..j].iter().map(|(_, v)| v).collect();
+            grp.sort_by(|a, b| {
+                a.idx
+                    .cmp(&b.idx)
+                    .then_with(|| a.sort.cmp(&b.sort))
+                    .then_with(|| a.name.cmp(&b.name))
+            });
+            grp.dedup_by(|a, b| a.name == b.name && a.sort == b.sort && a.idx == b.idx);
+            if grp.len() >= 2 {
+                clash_groups.push(grp);
+            }
+            i = j;
+        }
+        if clash_groups.is_empty() {
+            continue;
+        }
+        // Body (headerless): HS snd = `text info $-$ nest 2 (numbered' $ map
+        // prettyVarList cs)`, with ppTopic's outer `nest 2` baked in →
+        // "  rule `X': \n    1. <vars>".  `numbered'` separates items by a
+        // blank `text ""` line, which at 4-space indent renders as "    ".
+        let mut body = format!("  rule `{}': \n", r.name);
+        let w = numbered_index_width(clash_groups.len());
+        let items: Vec<String> = clash_groups
+            .iter()
+            .enumerate()
+            .map(|(k, grp)| {
+                let vs: Vec<String> = grp.iter().copied().map(render_var).collect();
+                format!("    {:>w$}. {}", k + 1, vs.join(", "), w = w)
+            })
+            .collect();
+        body.push_str(&items.join("\n    \n"));
+        out.push(WfError::new(
+            "Variable with mismatching sorts or capitalization",
+            body,
+        ));
+    }
+    out
+}
+
+#[cfg(test)]
+#[path = "rules_tests.rs"]
+mod tests;

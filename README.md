@@ -259,7 +259,7 @@ refined sources are computed once and shared across lemmas.
 - **Parser:** full `.spthy` grammar — `macros:`, `predicates:`, `equations:`,
   `restrictions:`, `tactic:`, `heuristic:`, `#define`/`#include`
   preprocessing, multi-line comments, Unicode symbols — plus the
-  wellformedness checks (`tamarin_parser::wf`).
+  wellformedness checks (`tamarin_theory::wellformedness`).
 - **Elaborator:** rule signatures, lemma formulas → guarded form, macro and
   predicate expansion, restriction insertion, source-kind classification.
 - **Builtins:** `hashing`, `symmetric-encryption`, `asymmetric-encryption`,

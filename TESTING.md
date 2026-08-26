@@ -298,7 +298,7 @@ The probe prints all of these lines to stderr, so the command line includes
 ## Wellformedness fixtures (oracle-differential)
 
 ```bash
-cargo run -p tamarin-parser --example wellformedness_fixtures
+cargo run -p tamarin-theory --example wellformedness_fixtures
 ```
 
 `-- --no-tamarin` skips the oracle pass. Each fixture under
@@ -313,9 +313,9 @@ empty roster, a `.spthy` no `expected.txt` line mentions, a line with no
 topics, a `#!` line naming an unlisted fixture, an oracle that fails to
 launch, or a fixture emptied by the two post-elaboration removals without an
 `EMPTY_RUST_EXPECTATION_ALLOWLIST` entry *and* negative pins.
-`crates/tamarin-parser/tests/wellformedness.rs` reads the same file offline,
-and it enforces the same pins. Both harnesses check the `#!` topics against
-`wf::check_theory`. Both remove the post-elaboration topics from the
+`crates/tamarin-theory/tests/wellformedness_topics.rs` reads the same file
+offline, and it enforces the same pins. Both harnesses check the `#!` topics
+against `wf::check_theory`. Both remove the post-elaboration topics from the
 positive expectations. Both then fail a fixture that keeps neither a
 parser-level expectation nor a negative pin. Only the example runner compares
 against the oracle.

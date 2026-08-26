@@ -19,10 +19,10 @@
 mod formula;
 mod generation;
 
-use tamarin_parser::wf::WfError;
 use tamarin_term::lterm::{is_pub_const, is_pub_var, BVar, LNTerm, LVar};
 use tamarin_term::term::Term;
 use tamarin_term::vterm::Lit;
+use tamarin_theory::wellformedness::WfError;
 
 use tamarin_theory::fact::{fact_tag_arity, fact_tag_name, Fact, LNFact};
 use tamarin_theory::formula::{formula_frees, to_lnformula, BLNTerm, SyntacticLNFormula};

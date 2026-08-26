@@ -17,7 +17,7 @@
 //! `tests/wellformedness_fixtures/reports/`, which holds it to its content
 //! from the crate that runs the post-elaboration checks.
 //!
-//! Usage:  cargo run -p tamarin-parser --example wellformedness_fixtures \
+//! Usage:  cargo run -p tamarin-theory --example wellformedness_fixtures \
 //!           [-- <fixtures-dir>]
 //!
 //! Pass `--no-tamarin` to skip the Tamarin oracle pass (e.g. on systems
@@ -32,18 +32,18 @@ use std::env;
 use std::fs;
 use std::path::PathBuf;
 
-use tamarin_parser::{parse_theory, wf};
+use tamarin_parser::parse_theory;
+use tamarin_theory::wellformedness as wf;
 
 mod common;
 use common::run_tamarin;
 
-/// The topics the parser-level `wf::check_theory` cannot produce: their HS
-/// checks need the elaborated `MaudeSig` (reducible-funsym classification,
-/// `abstractRule`'s irreducible symbols, the subterm-rule Set) or the
-/// TRANSLATED theory's rules, so their ports live in
-/// `tamarin_theory::{check_terms, mult_restricted, pretty_theory,
-/// translated_rule_wf, elaborate}` and run post-elaboration.  Step 2 drops
-/// them; step 3 still holds the oracle to them.
+/// The topics `wf::check_theory` cannot produce: their HS checks need the
+/// elaborated `MaudeSig` (reducible-funsym classification, `abstractRule`'s
+/// irreducible symbols, the subterm-rule Set) or the TRANSLATED theory's
+/// rules, so `wf::splice_translated_wf_reports` and
+/// `wf::append_subterm_convergence_report` add them post-elaboration.  Step 2
+/// drops them; step 3 still holds the oracle to them.
 const POST_ELABORATION_TOPICS: [&str; 7] = [
     "Formula terms",
     "Multiplication restriction of rules",
@@ -56,8 +56,8 @@ const POST_ELABORATION_TOPICS: [&str; 7] = [
 
 /// Does the fixture pin its whole rendered wellformedness block?  Such a file
 /// lives in `tests/wellformedness_fixtures/reports/` and is compared byte for
-/// byte by `tamarin-theory`'s `tests/wellformedness_fixture_reports.rs`,
-/// which runs the post-elaboration checks this harness cannot reach.  A
+/// byte by `tests/wellformedness_fixture_reports.rs`, which runs the
+/// post-elaboration checks this harness cannot reach.  A
 /// fixture whose step-2 expectation set empties into
 /// [`POST_ELABORATION_TOPICS`] is therefore still held to its content — an
 /// empty theory in its place fails there.
@@ -117,9 +117,9 @@ fn main() {
 
     // Parse `expected.txt`.  `#!<name> : <topics>` is a negative-expectation
     // directive; every other `#` line is a comment.  Negatives ride inside a
-    // comment on purpose — the parser-only harness
-    // `crates/tamarin-parser/tests/wellformedness.rs` reads the same file and
-    // treats every non-`#` line as positive expectations.
+    // comment on purpose — the offline harness
+    // `crates/tamarin-theory/tests/wellformedness_topics.rs` reads the same
+    // file and treats every non-`#` line as positive expectations.
     for line in expected.lines() {
         let line = line.trim();
         if line.is_empty() {

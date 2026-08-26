@@ -16,19 +16,18 @@
 //! the next line and refilling the argument list at the `nestShort'` indent
 //! (Text/PrettyPrint/Class.hs:218-223).
 //!
-//! The checks themselves live in `tamarin-parser`, which cannot reach this
-//! engine, so they carry their cells over as
-//! [`WfDoc`](tamarin_parser::wf::WfDoc) skeletons in
-//! [`WfError::fill`](tamarin_parser::wf::WfError::fill) and this module lays
-//! the body out.
+//! The checks carry their cells over as
+//! [`crate::wellformedness::WfDoc`] skeletons in
+//! [`WfError::fill`](crate::wellformedness::WfError::fill) and this module
+//! lays the body out.
 //!
 //! Width: the report is baked into the theory by `addComment`, which renders
 //! with HughesPJ's DEFAULT style — `lineLength = 100`, `ribbonsPerLine = 1.5`,
 //! so `ribbonLen = round (100 / 1.5) = 67` (TheoryObject.hs:717-718) — not the
-//! console's 110/73.  See [`crate::mult_restricted`], which renders its own
+//! console's 110/73.  See [`crate::wellformedness::mult`], which renders its own
 //! entry bodies at the same width for the same reason.
 
-use tamarin_parser::wf::{WfDoc, WfFill};
+use crate::wellformedness::{WfDoc, WfFill};
 
 use crate::pretty_hpj::{self as hpj, Doc};
 
@@ -43,7 +42,7 @@ const WF_RIBBON: usize = 67;
 /// topic group in (Wellformedness.hs:118-125).
 ///
 /// The result is the entry's complete headerless body, with no trailing
-/// newline: what [`WfError::message`](tamarin_parser::wf::WfError::message)
+/// newline: what [`WfError::message`](crate::wellformedness::WfError::message)
 /// holds for the checks that need no layout engine.
 pub fn fill_body(fill: &WfFill) -> String {
     // HS builds the report as a plain `Doc`: `prettyWfErrorReport`'s text

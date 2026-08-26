@@ -6,13 +6,13 @@ use super::*;
 use tamarin_parser::parse_theory;
 
 /// The `Formula terms` findings for `src`: the arm [`TermChecker::check`]
-/// contributes to [`crate::formula_reports::formula_reports`], HS's
+/// contributes to [`super::super::formulas::formula_reports`], HS's
 /// `formulaReports` loop (Wellformedness.hs:1003), over the elaborated
 /// theory the load pipelines check.
 fn check_terms_report(src: &str) -> Vec<WfError> {
     let thy = parse_theory(src, &[]).expect("parse");
     let elab = crate::elaborate::elaborate(&thy).expect("elaborate");
-    crate::formula_reports::formula_reports(&elab, &elab.signature.maude_sig)
+    super::super::formulas::formula_reports(&elab, &elab.signature.maude_sig)
         .into_iter()
         .filter(|e| e.topic == "Formula terms")
         .collect()

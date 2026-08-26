@@ -18,7 +18,6 @@ pub mod ast;
 pub mod lexer;
 pub mod parser;
 pub mod proof_tree;
-pub mod wf;
 
 pub use ast::*;
 pub use parser::{

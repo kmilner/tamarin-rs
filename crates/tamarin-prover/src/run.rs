@@ -35,12 +35,12 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::Instant;
 
-use tamarin_parser::wf::{after_variants_topics, insert_wf_before};
 use tamarin_term::maude_proc::{MaudeHandle, MaudePool, SharedMaudeCaches};
 use tamarin_theory::constraint::solver::context::annotate_theory_loop_breakers;
 use tamarin_theory::constraint::system::System;
 use tamarin_theory::elaborate::elaborate;
 use tamarin_theory::module::ModuleType;
+use tamarin_theory::wellformedness::{after_variants_topics, insert_wf_before};
 
 use crate::cli::{lemma_matches, Args, Subcommand};
 
@@ -1095,7 +1095,7 @@ struct TheoryPipeline<'a> {
     in_file: &'a str,
     theory_name: String,
     elaborated: tamarin_theory::theory::Theory,
-    wf_report: Vec<tamarin_parser::wf::WfError>,
+    wf_report: Vec<tamarin_theory::wellformedness::WfError>,
     /// The theory's `MaudeSig`, cloned from `elaborated` before SAPIC
     /// translation runs; drives the translated-wf splices and the per-file
     /// Maude spawns.
@@ -1232,7 +1232,7 @@ impl TheoryPipeline<'_> {
                 // `translateTheory`'s preReport (`Sapic.checkWellformedness t`,
                 // Warnings.hs:37-38) still runs on the pre-translation process
                 // — the same inlined `PlainProcess` `apply_sapic` checks.
-                let wf: Vec<tamarin_parser::wf::WfError> = if self.elaborated.is_sapic {
+                let wf: Vec<tamarin_theory::wellformedness::WfError> = if self.elaborated.is_sapic {
                     tamarin_sapic::apply::sapic_pre_report(&self.elaborated)
                 } else {
                     Vec::new()
@@ -1300,7 +1300,7 @@ impl TheoryPipeline<'_> {
             // check failed` summary counts them via `wf_report.len()`.
             let mut pre_report = sapic_wf;
             pre_report.extend(acc_wf);
-            tamarin_theory::translated_wf::prepend_wf_report(&mut self.wf_report, pre_report);
+            tamarin_theory::wellformedness::prepend_wf_report(&mut self.wf_report, pre_report);
         }
 
         // `-m msr` keeps only the selected lemmas (`processOpenTheory`'s
@@ -1345,9 +1345,9 @@ impl TheoryPipeline<'_> {
         // file loop, before `apply_sapic`), where the SAPIC rules are
         // invisible to the rule-dependent checks.  The re-runs and their
         // splice positions are shared with the web load path — see
-        // `tamarin_theory::translated_wf`.  The Maude-dependent "Rule
+        // `tamarin_theory::wellformedness`.  The Maude-dependent "Rule
         // variants" block is batch-only and stays below.
-        tamarin_theory::translated_wf::splice_translated_wf_reports(
+        tamarin_theory::wellformedness::splice_translated_wf_reports(
             &self.elaborated,
             &self.maude_sig,
             &mut self.wf_report,
@@ -1456,9 +1456,9 @@ impl TheoryPipeline<'_> {
         // against `abstracted_rule` + `variant_substs`; no corpus file writes
         // such a block.
         if let Some(ref wf_maude) = self.file_maude {
-            use tamarin_parser::wf::underline_topic;
-            use tamarin_parser::wf::WfError as WfE;
             use tamarin_theory::theory::TheoryItem;
+            use tamarin_theory::wellformedness::underline_topic;
+            use tamarin_theory::wellformedness::WfError as WfE;
 
             let mut variants_errors: Vec<WfE> = Vec::new();
             let mut no_variant_rules: Vec<String> = Vec::new();
@@ -2340,22 +2340,25 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         // Wellformedness checks — mirrors HS `checkWellformedness`
         // (`Theory.Tools.Wellformedness:1270`).  Runs on every file that
         // reaches the close pipeline, so a malformed theory is surfaced
-        // even without proving.  The shared pass (`translated_wf`) clones
+        // even without proving.  The shared pass (`wellformedness`) clones
         // `parsed` with macros expanded first — HS's `thyProtoRules`
         // applies `applyMacroInRule (theoryMacros thy)` before the checks,
         // so `Fr(test())` where `test() = ~x` becomes `Fr(~x)` and passes.
         // (`--parse-only` never reaches this point — it `continue`d above,
         // before any wellformedness runs, matching HS Batch.hs:91-95.)
-        let mut wf_report = tamarin_theory::translated_wf::pre_translation_wf_report(&parsed);
+        let mut wf_report = tamarin_theory::wellformedness::pre_translation_wf_report(&parsed);
         // HS `checkIfLemmasInTheory` (Wellformedness.hs:1156-1171) — FIRST
         // in HS's checkWellformedness list (line 1272).  Checks that every
         // --prove=X / --lemma=X name corresponds to a theory lemma.  This
         // check needs the CLI args (not embedded in the parser AST), so we
         // call it separately and PREPEND the result so it sorts first —
         // matching HS's `checkIfLemmasInTheory : ...` order.
-        tamarin_theory::translated_wf::prepend_wf_report(
+        tamarin_theory::wellformedness::prepend_wf_report(
             &mut wf_report,
-            tamarin_parser::wf::check_if_lemmas_in_theory(&opts.lemma_names, &parsed),
+            tamarin_theory::wellformedness::lemmas::check_if_lemmas_in_theory(
+                &opts.lemma_names,
+                &parsed,
+            ),
         );
 
         // Elaborate (mainly to get the protocol-specific MaudeSig).  This is
@@ -2395,9 +2398,9 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
 
         // "Subterm Convergence Warning" over the signature's subterm-rule
         // set, once the `MaudeSig` exists (the shared append in
-        // `translated_wf` — see its doc for the `Ord CtxtStRule` order /
+        // `wellformedness` — see its doc for the `Ord CtxtStRule` order /
         // width-wrap rationale).
-        tamarin_theory::translated_wf::append_subterm_convergence_report(
+        tamarin_theory::wellformedness::append_subterm_convergence_report(
             &mut wf_report,
             &maude_sig,
         );

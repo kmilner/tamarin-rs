@@ -2,8 +2,10 @@
 // of the tamarin-prover sources this file cites; list them with:
 //   scripts/gen_license_headers.py --authors <this file>
 
+use tamarin_parser::parse_theory;
+
+use super::super::{check_theory, topics, WfFill};
 use super::*;
-use crate::parse_theory;
 
 fn parse(src: &str) -> Theory {
     parse_theory(src, &["diff"]).expect("parse")
@@ -80,13 +82,12 @@ fn intruder_rule_block_reaches_no_check() {
 /// The cross-operator order `binop_rank` gives AC operands is the one
 /// `tamarin_theory::guarded::funsym_key` encodes from HS's `Ord FunSym`:
 /// `Exp < Union < Mult < Xor < NatPlus < AcFct`, with two `AcFct` heads
-/// separated by name.  `funsym_key` is the source of truth — `binop_rank`
-/// restates the order because `tamarin-parser` is dependency-free and
-/// cannot call into `tamarin-theory` — so this test spells the order out
-/// for the copy that lives here.
+/// separated by name.  `funsym_key` is the source of truth over internal
+/// terms; `binop_rank` restates the order for the parser AST, so this test
+/// spells it out for that copy.
 #[test]
 fn binop_rank_matches_funsym_key_order() {
-    use crate::ast::BinOp as B;
+    use ast::BinOp as B;
     let ordered = [
         B::Exp,
         B::Union,
@@ -609,21 +610,4 @@ fn only(report: &WfReport, topic: &str) -> String {
         report
     );
     hits[0].message.clone()
-}
-
-/// Probed against tamarin-prover v1.13.0 on `Out(<~k, ~'foo'>)`:
-///   rule name uses the HS `quote` form (backtick + apostrophe) and the
-///   fresh constant renders via `show (Name FreshName ..)` = `~'foo'`.
-#[test]
-fn fresh_public_constants_message_format() {
-    let t = parse(
-        "theory T begin \
-            rule R: [ Fr(~k) ] --[ ]-> [ Out(<~k, ~'foo'>) ] end",
-    );
-    let msg = only(&check_theory(&t), "Fresh public constants");
-    assert_eq!(
-        msg,
-        "Fresh public constants\n======================\n\n  \
-             rule `R': fresh public constants are not allowed: ~'foo'"
-    );
 }

@@ -31,7 +31,6 @@
 //! runs last — so the terms this check inspects are sorted under the ordering
 //! in which `Bound` precedes every `Free` and `Bound i` orders by `i`.
 
-use tamarin_parser::wf::WfError;
 use tamarin_term::function_symbols::{AcSym, FunSym};
 use tamarin_term::lterm::{BVar, NameTag};
 use tamarin_term::maude_sig::MaudeSig;
@@ -40,6 +39,8 @@ use tamarin_term::vterm::Lit;
 
 use crate::formula::{BLNTerm, LNProtoFormula};
 use crate::pretty_hpj::{fsep, punctuate, Doc};
+
+use super::WfError;
 
 /// The fixed render budget for the formula-report WF blocks, determined
 /// empirically from HS output: HS lays the whole `/* WARNING ... */`
@@ -72,7 +73,7 @@ const ALLOWED_PARAGRAPH: &str = "The only allowed terms are public constants \
 /// classification of its `allowed` predicate (Wellformedness.hs:975).
 /// [`TermChecker::check`] runs the `checkTerms` arm of HS `formulaReports`
 /// (Wellformedness.hs:1003) for one annotated formula, so the combined
-/// per-formula pass in [`crate::formula_reports`] can interleave it with the
+/// per-formula pass in [`super::formulas`] can interleave it with the
 /// other two arms.
 pub struct TermChecker<'a> {
     sig: &'a MaudeSig,

@@ -16,8 +16,8 @@ contains hand-written, *passing* protocols — it does not exercise the
 negative paths in `Theory.Tools.Wellformedness`. Three harnesses consume
 it:
 
-1. `cargo test -p tamarin-parser --test wellformedness` — offline
-   check that the Rust port (`tamarin_parser::wf::check_theory`) emits
+1. `cargo test -p tamarin-theory --test wellformedness_topics` — offline
+   check that the Rust port (`tamarin_theory::wellformedness::check_theory`) emits
    every expected topic for every fixture and none of its `#!`
    negatives. This check runs in the normal test suite, and it needs
    no tamarin binary. It also fails in three more cases. The first is
@@ -27,7 +27,7 @@ it:
    the post-elaboration topics below. It reads only the name and the
    topics of an `expected.txt` line; the oracle flags a line may carry
    are harness 2's.
-2. `cargo run -p tamarin-parser --example wellformedness_fixtures
+2. `cargo run -p tamarin-theory --example wellformedness_fixtures
    [-- <fixtures-dir>]` — the differential runner: every fixture must
    parse, the Rust checker must emit the expected topics, and (unless
    `--no-tamarin` is passed) a `tamarin-prover` binary must emit them
@@ -36,7 +36,7 @@ it:
    `PATH`.
 3. `cargo test -p tamarin-theory --test wellformedness_fixture_reports`
    — the byte-level pin. This harness runs each fixture through three
-   of the four `tamarin_theory::translated_wf` entry points, in the
+   of the four `tamarin_theory::wellformedness` splice entry points, in the
    order that both production callers call them. It does not call
    `prepend_wf_report`. The rendered `/* WARNING … */` block must then
    equal `reports/<fixture>.report` byte for byte. Those `.report`
@@ -62,8 +62,8 @@ The two topic-level harnesses share two comparison rules:
   harness 3. Those HS passes need the elaborated `MaudeSig`
   (reducible-funsym classification, `abstractRule`'s irreducible
   symbols, the subterm-rule Set) or the SAPIC-translated theory's
-  rules, so their ports live in `tamarin_theory` and run
-  post-elaboration — spliced by `tamarin_theory::translated_wf`, which
+  rules, so they run post-elaboration — spliced by
+  `tamarin_theory::wellformedness::splice_translated_wf_reports`, which
   both the CLI (`run.rs`) and the web loader call. Each is covered by
   its own unit tests and by the corpus parity gates.
 

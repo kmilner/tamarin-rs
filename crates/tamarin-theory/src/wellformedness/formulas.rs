@@ -47,14 +47,15 @@
 //! macros as it builds each item, so all three checks see the inlined
 //! predicate bodies — including their terms and their quantifiers.
 
-use tamarin_parser::wf::{underline_topic, WfError};
 use tamarin_term::lterm::LSort;
 use tamarin_term::maude_sig::MaudeSig;
 
-use crate::check_terms::{TermChecker, WF_WIDTH};
 use crate::formula::LNFormula;
 use crate::pretty_hpj::{fsep, punctuate, Doc};
 use crate::theory::{Theory, TheoryItem};
+
+use super::check_terms::{TermChecker, WF_WIDTH};
+use super::{underline_topic, WfError};
 
 /// HS `underlineTopic "Quantifier sorts"` (Wellformedness.hs:1002).
 const QUANTIFIER_TOPIC: &str = "Quantifier sorts";

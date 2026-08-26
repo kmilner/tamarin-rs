@@ -51,8 +51,8 @@
 //! gated by `args.derivcheck_timeout`; passing `0` disables it entirely (HS:
 //! `Main.TheoryLoader.hs`).
 
+use crate::wellformedness::WfError;
 use std::time::Duration;
-use tamarin_parser::wf::WfError;
 use tamarin_term::lterm::{HasFrees, LNTerm, LSort, LVar};
 use tamarin_term::maude_proc::MaudeHandle;
 use tamarin_term::vterm::var_term;
@@ -568,7 +568,7 @@ fn format_deriv_report(per_rule: &[(String, Vec<String>)]) -> Vec<WfError> {
     // by 2 spaces at its first line via `nest 2`-equivalent, then the
     // per-rule blocks follow at col 0. See HS output bytes — the intro
     // line has a 2-space leading indent.
-    let mut msg = tamarin_parser::wf::underline_topic("Message Derivation Checks");
+    let mut msg = crate::wellformedness::underline_topic("Message Derivation Checks");
     msg.push('\n');
     msg.push_str(
         "  The variables of the following rule(s) are not derivable \

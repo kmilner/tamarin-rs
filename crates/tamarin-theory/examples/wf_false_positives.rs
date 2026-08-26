@@ -3,7 +3,7 @@
 //! no warnings) we falsely flag. False positives indicate bugs in our
 //! checker.
 //!
-//! Usage:  cargo run -p tamarin-parser --example wf_false_positives \
+//! Usage:  cargo run -p tamarin-theory --example wf_false_positives \
 //!           --release [-- <root>]
 
 // Example/dev tool: prints results to stdout by design; allow the
@@ -15,7 +15,8 @@ use std::env;
 use std::fs;
 use std::path::PathBuf;
 
-use tamarin_parser::{parse_theory, wf};
+use tamarin_parser::parse_theory;
+use tamarin_theory::wellformedness as wf;
 
 mod common;
 use common::{collect_spthy, corpus_root, run_tamarin};

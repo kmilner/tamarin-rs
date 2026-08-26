@@ -8,8 +8,8 @@
 //! [`crate::theory`] and [`crate::restriction`]), for the passes that still
 //! read macro-expanded PARSER rules and formulas:
 //!
-//!   - [`macro_expanded_clone`] — `translated_wf::pre_translation_wf_report`'s
-//!     wellformedness clone (stage 8);
+//!   - [`macro_expanded_clone`] — the clone
+//!     [`crate::wellformedness::pre_translation_wf_report`] checks;
 //!   - [`expand_theory_macros`] — [`macro_expanded_clone`] and the tests that
 //!     drive a pass from a macro-expanded parser theory;
 //!

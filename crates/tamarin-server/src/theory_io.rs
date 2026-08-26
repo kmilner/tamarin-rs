@@ -10,9 +10,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use tamarin_parser::parse_theory_with_base;
-use tamarin_parser::wf::WfError;
 use tamarin_term::maude_proc::MaudeHandle;
 use tamarin_theory::elaborate::elaborate;
+use tamarin_theory::wellformedness::WfError;
 
 use crate::state::{TheoryEntry, TheoryOrigin};
 
@@ -189,7 +189,7 @@ pub fn load_from_source(
     // `check_theory` BEFORE the SAPIC `translate` pass; `run_batch` opens
     // with the same shared pass — macro-expanded clone, then
     // `check_theory`).
-    let mut wf_report = tamarin_theory::translated_wf::pre_translation_wf_report(&parsed);
+    let mut wf_report = tamarin_theory::wellformedness::pre_translation_wf_report(&parsed);
 
     // "Theory translated" at the START of translation (TheoryLoader.hs:494-500, see line 496
     // prints before `processOpenTheory` runs); RS's `elaborate` is that
@@ -214,8 +214,8 @@ pub fn load_from_source(
     let maude_sig = typed.signature.maude_sig.clone();
 
     // Subterm-convergence check on the signature's subterm-rule set (the
-    // same append `run_batch` performs, shared in `translated_wf`).
-    tamarin_theory::translated_wf::append_subterm_convergence_report(&mut wf_report, &maude_sig);
+    // same append `run_batch` performs, shared in `wellformedness`).
+    tamarin_theory::wellformedness::append_subterm_convergence_report(&mut wf_report, &maude_sig);
 
     // SAPIC `process:` translation — mirror `run_batch`'s CLI-side pass so
     // the web load path renders SAPIC theories exactly like `--prove`.  Runs
@@ -252,14 +252,18 @@ pub fn load_from_source(
     // accountability RP check, then the rest.
     let mut pre_report = sapic_wf;
     pre_report.extend(acc_wf);
-    tamarin_theory::translated_wf::prepend_wf_report(&mut wf_report, pre_report);
+    tamarin_theory::wellformedness::prepend_wf_report(&mut wf_report, pre_report);
 
     // HS re-runs the full `checkWellformedness` on the TRANSLATED theory
     // (`checkTranslatedTheory`), i.e. after `apply_sapic` / `Acc::translate`
     // injected the generated rules and lemmas.  The re-runs and their splice
     // positions are shared with the batch path (`run_batch`) — see
-    // `tamarin_theory::translated_wf`.
-    tamarin_theory::translated_wf::splice_translated_wf_reports(&typed, &maude_sig, &mut wf_report);
+    // `tamarin_theory::wellformedness`.
+    tamarin_theory::wellformedness::splice_translated_wf_reports(
+        &typed,
+        &maude_sig,
+        &mut wf_report,
+    );
 
     // The theory's once-per-load NDC-checked intruder cache
     // (`check_close_intr_rule` below).  Stored on the `TheoryEntry` so

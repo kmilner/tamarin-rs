@@ -2,20 +2,19 @@
 //! `tests/wellformedness_fixtures/` theory, byte for byte.  The reference is
 //! the pinned oracle's own `/* WARNING … */` block.
 //!
-//! There are two parser-side harnesses: `tamarin-parser`'s
-//! `tests/wellformedness.rs` and its `examples/wellformedness_fixtures.rs`
-//! differential runner.  Both can only reach
-//! `tamarin_parser::wf::check_theory`.  They therefore compare topic names,
-//! and they must drop the topics that exist only after elaboration (each
-//! harness lists them in its own `POST_ELABORATION_TOPICS`).  Four fixtures
-//! pin nothing else: `formula_unguarded`, `multiplication_in_rule_lhs`,
-//! `non_subterm_equation` and `quantifier_wrong_sort`.  If you replace one of
-//! those four with an empty `theory X begin end`, the parser-side harnesses
-//! still pass.  This harness closes that hole from the crate that holds the
-//! post-elaboration checks.  It also compares the full report bytes of every
-//! other fixture, rather than a subset of the topics.
+//! There are two topic-level harnesses: `tests/wellformedness_topics.rs` and
+//! the `examples/wellformedness_fixtures.rs` differential runner.  Both can
+//! only reach `tamarin_theory::wellformedness::check_theory`.  They therefore
+//! compare topic names, and they must drop the topics that exist only after
+//! elaboration (each harness lists them in its own `POST_ELABORATION_TOPICS`).
+//! Four fixtures pin nothing else: `formula_unguarded`,
+//! `multiplication_in_rule_lhs`, `non_subterm_equation` and
+//! `quantifier_wrong_sort`.  If you replace one of those four with an empty
+//! `theory X begin end`, those two harnesses still pass.  This harness closes
+//! that hole.  It also compares the full report bytes of every other fixture,
+//! rather than a subset of the topics.
 //!
-//! The pipeline below calls the four `tamarin_theory::translated_wf` entry
+//! The pipeline below calls the four `tamarin_theory::wellformedness` entry
 //! points in the order that both production callers call them.  Those callers
 //! are `run.rs`'s batch loop and `tamarin_server::theory_io`'s web load.  This
 //! harness is therefore a third caller of that shared module, not a hand-copy
@@ -91,7 +90,7 @@ fn render_report(name: &str) -> String {
     let src = fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
     let parsed = parse_theory(&src, &["diff"]).unwrap_or_else(|e| panic!("{name}: parse: {e}"));
 
-    let mut report = tamarin_theory::translated_wf::pre_translation_wf_report(&parsed);
+    let mut report = tamarin_theory::wellformedness::pre_translation_wf_report(&parsed);
     let elaborated = tamarin_theory::elaborate::elaborate(&parsed)
         .unwrap_or_else(|e| panic!("{name}: elaborate: {}", e.message));
     assert!(
@@ -101,8 +100,8 @@ fn render_report(name: &str) -> String {
          report would be missing the generated rules' findings",
     );
     let maude_sig = elaborated.signature.maude_sig.clone();
-    tamarin_theory::translated_wf::append_subterm_convergence_report(&mut report, &maude_sig);
-    tamarin_theory::translated_wf::splice_translated_wf_reports(
+    tamarin_theory::wellformedness::append_subterm_convergence_report(&mut report, &maude_sig);
+    tamarin_theory::wellformedness::splice_translated_wf_reports(
         &elaborated,
         &maude_sig,
         &mut report,

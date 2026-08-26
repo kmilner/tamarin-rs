@@ -44,10 +44,10 @@ unbound_variables                  : Unbound variables
 #
 # They ride inside a `#`-prefixed directive on purpose: both harnesses read
 # this same file and treat every non-`#` line as positive expectations, so an
-# inline `!topic` would fail there. Both enforce them — the parser-only test
-# `crates/tamarin-parser/tests/wellformedness.rs` against `wf::check_theory`,
-# the differential runner
-# (`cargo run -p tamarin-parser --example wellformedness_fixtures`) against
+# inline `!topic` would fail there. Both enforce them — the offline test
+# `crates/tamarin-theory/tests/wellformedness_topics.rs` against
+# `wf::check_theory`, the differential runner
+# (`cargo run -p tamarin-theory --example wellformedness_fixtures`) against
 # `wf::check_theory` and the oracle.
 #
 # The three fixtures below each pin only a post-elaboration topic

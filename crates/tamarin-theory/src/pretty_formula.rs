@@ -1185,7 +1185,7 @@ fn flatten_ac_terms<'a>(op: p::BinOp, t: &'a p::Term, out: &mut Vec<&'a p::Term>
 /// where HS nests it `pair(a, pair(b, c))`, so every element but the last is
 /// an operand and the last continues the spine; `App("pair", [a, b])` pushes
 /// its left operand and continues on the right.  Mirror of
-/// `tamarin_parser::wf`'s `pair_split`.  Parser-AST variant.
+/// `crate::wellformedness::facts`'s `pair_split`.  Parser-AST variant.
 fn pair_split_terms<'a>(t: &'a p::Term, out: &mut Vec<&'a p::Term>) {
     match t {
         p::Term::Pair(items) => {
