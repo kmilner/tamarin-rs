@@ -1,8 +1,7 @@
-//! The ONE maude-resolution probe every maude-gated test module in this crate
+//! The one maude-resolution probe every maude-gated test module in this crate
 //! shares — the workspace-idiom equivalent of the integration suites'
-//! `tests/common/mod.rs` helpers.  Before it existed each `_tests.rs` carried
-//! its own near-identical copy, and the copies drifted (one accepted a
-//! set-but-dangling `MAUDE_PATH` that the others assert on).
+//! `tests/common/mod.rs` helpers.  Sharing it keeps the probes from drifting
+//! apart (for example on whether a set-but-dangling `MAUDE_PATH` is an error).
 //!
 //! `crates/tamarin-theory/tests/oracle_solver.rs` keeps a mirrored copy: an
 //! integration test cannot see a `#[cfg(test)]` module of the library it
