@@ -1,0 +1,25 @@
+// `--prove` and `--lemma` values that name no lemma of the theory.
+//
+// `checkIfLemmasInTheory` (Theory/Tools/Wellformedness.hs:1156-1171) reports
+// them through `findNotProvedLemmas` (Theory/Tools/Wellformedness.hs:1140-1151),
+// a `foldl` that prepends each mismatch and so reverses its input.  That input
+// is `findArg "prove" as ++ findArg "lemma" as` (Main/TheoryLoader.hs:326) over
+// an argument list `addArg` builds by prepending (Main/Console.hs:269-270,279-280),
+// so one flag's values arrive reversed.  The two reversals put the `--lemma`
+// values first, in command-line order, followed by the `--prove` values.
+//
+// Mode `match`: the two engines list the four names in the same order.
+//
+// Compared slice: the wf report block.
+
+
+theory S8LemmaArgOrder
+begin
+
+rule R:
+  [ Fr(~x) ] --[ A(~x) ]-> [ Out(~x) ]
+
+lemma real:
+  "All x #i. A(x) @ #i ==> T"
+
+end

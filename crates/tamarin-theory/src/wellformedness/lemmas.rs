@@ -50,15 +50,14 @@ pub fn check_if_lemmas_in_theory(thy: &Theory) -> WfReport {
 
     // HS `findNotProvedLemmas` (Wellformedness.hs:1140-1151, see line 1141) is
     // a `foldl` that PREPENDS mismatches, so it reverses its input.  That
-    // input is `findArg "prove" as ++ findArg "lemma" as`
-    // (TheoryLoader.hs:326) over an `Arguments` list `addArg`
-    // (Console.hs:279-280) builds by prepending, so each flag's own values
-    // arrive reversed and the fold puts them back in CLI order.
-    // `lemmas_to_prove` holds the CLI order directly, hence the forward push.
+    // input is `lemmas_to_prove`, HS's `lemmaNames` (TheoryLoader.hs:326,836):
+    // the `--prove` values then the `--lemma` values, each flag's values
+    // reversed.  The report therefore lists the `--lemma` values in
+    // command-line order, then the `--prove` values in command-line order.
     let mut not_proved: Vec<&str> = Vec::new();
     for name in lemma_args_names.iter() {
         if !arg_matches_any_lemma(name, &theory_lemma_names) {
-            not_proved.push(name);
+            not_proved.insert(0, name);
         }
     }
 

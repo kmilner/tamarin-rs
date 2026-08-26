@@ -36,13 +36,10 @@ fn load_wf_block(src: &str) -> String {
 fn formula_terms_report(src: &str) -> Vec<tamarin_theory::wellformedness::WfError> {
     let thy = parse_theory(src, &[]).expect("parse");
     let elaborated = tamarin_theory::elaborate::elaborate(&thy).expect("elaborate");
-    tamarin_theory::wellformedness::formulas::formula_reports(
-        &elaborated,
-        &elaborated.signature.maude_sig,
-    )
-    .into_iter()
-    .filter(|e| e.topic == "Formula terms")
-    .collect()
+    tamarin_theory::wellformedness::formulas::formula_reports(&elaborated)
+        .into_iter()
+        .filter(|e| e.topic == "Formula terms")
+        .collect()
 }
 
 /// `unboundReport` is HS check index 2 and `lemmaAttributeReport` index 9
@@ -132,10 +129,7 @@ fn multiplication_restriction_topic_prints_its_underlined_header() {
                end\n";
     let thy = parse_theory(src, &[]).expect("parse");
     let elaborated = tamarin_theory::elaborate::elaborate(&thy).expect("elaborate");
-    let errs = tamarin_theory::wellformedness::mult::mult_restricted_report(
-        &elaborated,
-        &elaborated.signature.maude_sig,
-    );
+    let errs = tamarin_theory::wellformedness::mult::mult_restricted_report(&elaborated);
     assert_eq!(errs.len(), 2, "one entry per offending rule");
     let entry = |name: &str, term: &str, prems: &str| {
         format!(

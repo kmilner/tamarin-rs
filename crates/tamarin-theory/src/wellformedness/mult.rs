@@ -42,7 +42,6 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use tamarin_term::function_symbols::{AcSym, FunSym};
 use tamarin_term::lterm::{sort_of_lnterm, HasFrees, LNTerm, LSort, LVar};
-use tamarin_term::maude_sig::MaudeSig;
 use tamarin_term::pretty::pretty_nterm;
 use tamarin_term::term::{f_app, Term};
 use tamarin_term::vterm::Lit;
@@ -52,30 +51,25 @@ use crate::pretty_hpj::{self as hpj, Doc};
 use crate::rule::{pretty_proto_rule_e, ProtoRuleE};
 use crate::theory::Theory;
 
-use super::WfError;
+use super::{WfError, WF_LINE_LENGTH, WF_RIBBON};
 
 /// HS `underlineTopic "Multiplication restriction of rules"`
 /// (Wellformedness.hs:1047-1051) — stored bare here because
 /// `render_wf_error_report` applies `underline_topic` once per group.
 const TOPIC: &str = "Multiplication restriction of rules";
 
-/// `lineLength` of the style HughesPJ's `render` uses (`pretty`'s
-/// `style = Style { lineLength = 100, ribbonsPerLine = 1.5 }`), reached from
-/// HS through `addComment`'s `render` (TheoryObject.hs:717-718).
-const WF_LINE_LENGTH: usize = 100;
-/// `ribbonLen = round (100 / 1.5) = 67` for [`WF_LINE_LENGTH`].
-const WF_RIBBON: usize = 67;
-
 /// Port of HS `multRestrictedReport` (Wellformedness.hs:1110-1113):
 /// `multRestrictedReport' (irreducibleFunSyms …) (thyProtoRules thy)`.
 ///
 /// `elab` supplies the rules (HS `thyProtoRules`, i.e. macro-applied E-rules of
-/// the translated theory) and `sig` the irreducible-symbol classification.
-/// Each entry's name and attribute block come from the rule it dumps, the way
-/// HS's `prettyNamedRule` reads `prettyRuleName ru <> prettyRuleAttributes ru`
-/// off the rule (Theory/Model/Rule.hs:1397-1398).
-pub fn mult_restricted_report(elab: &Theory, sig: &MaudeSig) -> Vec<WfError> {
-    let irreducible = &sig.irreducible_fun_syms;
+/// the translated theory) and its own signature the irreducible-symbol
+/// classification (HS `irreducibleFunSyms $ get (sigpMaudeSig . thySignature)
+/// thy`, Wellformedness.hs:1113).  Each entry's name and attribute block come
+/// from the rule it dumps, the way HS's `prettyNamedRule` reads
+/// `prettyRuleName ru <> prettyRuleAttributes ru` off the rule
+/// (Theory/Model/Rule.hs:1397-1398).
+pub fn mult_restricted_report(elab: &Theory) -> Vec<WfError> {
+    let irreducible = &elab.signature.maude_sig.irreducible_fun_syms;
     let mut out = Vec::new();
     for opr in elab.rules() {
         let ru = &opr.rule;

@@ -25,7 +25,7 @@ use tamarin_theory::wellformedness::mult::mult_restricted_report;
 fn block(src: &str) -> Option<String> {
     let thy = parse_theory(src, &[]).expect("parse");
     let elaborated = tamarin_theory::elaborate::elaborate(&thy).expect("elaborate");
-    let errs = mult_restricted_report(&elaborated, &elaborated.signature.maude_sig);
+    let errs = mult_restricted_report(&elaborated);
     if errs.is_empty() {
         return None;
     }
@@ -275,7 +275,7 @@ fn a_generated_rules_process_attribute_is_rendered_from_its_own_record() {
         }
     }
 
-    let errs = mult_restricted_report(&elaborated, &elaborated.signature.maude_sig);
+    let errs = mult_restricted_report(&elaborated);
     assert_eq!(
         format_wf_block(&errs),
         format!(

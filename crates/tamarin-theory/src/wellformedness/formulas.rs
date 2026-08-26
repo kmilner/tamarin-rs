@@ -48,13 +48,12 @@
 //! predicate bodies — including their terms and their quantifiers.
 
 use tamarin_term::lterm::LSort;
-use tamarin_term::maude_sig::MaudeSig;
 
 use crate::formula::LNFormula;
 use crate::pretty_hpj::{fsep, punctuate, Doc};
 use crate::theory::{Theory, TheoryItem};
 
-use super::check_terms::{TermChecker, WF_WIDTH};
+use super::check_terms::{check_terms, WF_WIDTH};
 use super::{underline_topic, WfError};
 
 /// HS `underlineTopic "Quantifier sorts"` (Wellformedness.hs:1002).
@@ -90,17 +89,17 @@ fn ann_formulas(thy: &Theory) -> Vec<(String, &LNFormula)> {
 /// TheoryLoader.hs:559-565, fed by `closeTheory` at :726-728), so
 /// `annFormulas` also covers the restrictions SAPIC's `let … else` / `if`
 /// lowering mints and the lemmas the accountability translation appends.
-/// `sig` is the elaborated `MaudeSig`, for `checkTerms`'s
-/// `irreducibleFunSyms` classification.
-pub fn formula_reports(thy: &Theory, sig: &MaudeSig) -> Vec<WfError> {
-    let terms = TermChecker::new(sig);
+/// `checkTerms` classifies against the theory's own signature (HS `get
+/// (sigpMaudeSig . thySignature) thy`, Wellformedness.hs:1003).
+pub fn formula_reports(thy: &Theory) -> Vec<WfError> {
+    let sig = &thy.signature.maude_sig;
     let mut out: Vec<WfError> = Vec::new();
     for (header, fm) in ann_formulas(thy) {
         // HS `msum [checkQuantifiers, checkTerms, checkGuarded]` = `concat`:
         // every arm runs for every formula, findings concatenated in this
         // order (Wellformedness.hs:1002-1004).
         out.extend(check_quantifiers(&header, fm));
-        out.extend(terms.check(&header, fm));
+        out.extend(check_terms(sig, &header, fm));
         out.extend(check_guarded_entry(&header, fm));
     }
     out
@@ -269,7 +268,7 @@ mod tests {
     fn reports(src: &str) -> Vec<WfError> {
         let thy = parse_theory(src, &[]).expect("parse");
         let elaborated = crate::elaborate::elaborate(&thy).expect("elaborate");
-        formula_reports(&elaborated, &elaborated.signature.maude_sig)
+        formula_reports(&elaborated)
     }
 
     /// `annFormulas = lemmas <|> restrictions` (Wellformedness.hs:1006-1014):

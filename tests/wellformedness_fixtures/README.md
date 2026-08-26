@@ -77,9 +77,9 @@ block of every one of them.
 The `Left rule`, `Right rule` and `Reserved prefixes` topics of HS
 `checkWellformednessDiff` (Wellformedness.hs:1247-1264) have no fixture
 here, because the port does not implement that pass: `run_batch`
-refuses `--diff` (`crates/tamarin-prover/src/run.rs:2092-2096`),
+refuses `--diff` (`crates/tamarin-prover/src/run.rs:2008-2012`),
 `parse_theory` pins the parser AST's `is_diff` to `false`
-(`crates/tamarin-parser/src/parser.rs:399-400`), and the internal
+(`crates/tamarin-parser/src/parser.rs:370-371`), and the internal
 `theory::Theory` carries no `is_diff` at all. A `--diff` port adds
 `diff_left_right_mismatch`, `diff_reserved_prefix` and
 `diff_right_rule_mismatch` here, built from `theory::DiffTheory`, each

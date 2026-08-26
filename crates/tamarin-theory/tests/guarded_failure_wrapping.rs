@@ -21,10 +21,7 @@ use tamarin_theory::pretty_theory::format_wf_block;
 fn wf_block(src: &str) -> String {
     let thy = parse_theory(src, &[]).expect("parse");
     let elaborated = tamarin_theory::elaborate::elaborate(&thy).expect("elaborate");
-    let errs = tamarin_theory::wellformedness::formulas::formula_reports(
-        &elaborated,
-        &elaborated.signature.maude_sig,
-    );
+    let errs = tamarin_theory::wellformedness::formulas::formula_reports(&elaborated);
     format_wf_block(&errs)
 }
 

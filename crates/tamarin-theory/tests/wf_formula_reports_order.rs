@@ -24,10 +24,7 @@ use tamarin_theory::pretty_theory::format_wf_block;
 fn wf_block(src: &str) -> String {
     let thy = parse_theory(src, &[]).expect("parse");
     let elaborated = tamarin_theory::elaborate::elaborate(&thy).expect("elaborate");
-    let errs = tamarin_theory::wellformedness::formulas::formula_reports(
-        &elaborated,
-        &elaborated.signature.maude_sig,
-    );
+    let errs = tamarin_theory::wellformedness::formulas::formula_reports(&elaborated);
     format_wf_block(&errs)
 }
 
@@ -193,10 +190,7 @@ fn all_three_arms_of_one_formula_come_out_in_msum_order() {
                end\n";
     let thy = parse_theory(src, &[]).expect("parse");
     let elaborated = tamarin_theory::elaborate::elaborate(&thy).expect("elaborate");
-    let errs = tamarin_theory::wellformedness::formulas::formula_reports(
-        &elaborated,
-        &elaborated.signature.maude_sig,
-    );
+    let errs = tamarin_theory::wellformedness::formulas::formula_reports(&elaborated);
     let topics: Vec<&str> = errs.iter().map(|e| e.topic.as_str()).collect();
     assert_eq!(
         topics,

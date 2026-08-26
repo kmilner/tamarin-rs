@@ -19,7 +19,9 @@ fn elaborated(src: &str) -> Theory {
 }
 
 /// [`elaborated`] with the `--prove`/`--lemma` selection both drivers write
-/// into the theory's options before the wellformedness pass runs.
+/// into the theory's options before the wellformedness pass runs.  `names` is
+/// HS's `lemmaNames` (TheoryLoader.hs:326): the `--prove` values then the
+/// `--lemma` values, each flag's values in reverse command-line order.
 fn with_lemma_args(src: &str, names: &[&str]) -> Theory {
     let mut thy = elaborated(src);
     thy.options.lemmas_to_prove = names.iter().map(|s| (*s).to_string()).collect();
@@ -59,13 +61,31 @@ fn prefix_argument_matches_a_lemma_by_prefix() {
 /// `--prove=aaa --prove=bbb --derivcheck-timeout=0`.
 #[test]
 fn unmatched_arguments_are_listed_in_cli_order() {
-    let report = check_if_lemmas_in_theory(&with_lemma_args(ONE_LEMMA, &["aaa", "bbb"]));
+    let report = check_if_lemmas_in_theory(&with_lemma_args(ONE_LEMMA, &["bbb", "aaa"]));
     assert_eq!(
         format_wf_block(&report),
         "/*\nWARNING: the following wellformedness checks failed!\n\n\
          Check presence of the --prove/--lemma arguments in theory\n\
          =========================================================\n\n  \
          --> 'aaa', 'bbb' from arguments do(es) not correspond to a specified lemma in the theory \n*/"
+    );
+}
+
+/// `findNotProvedLemmas`' `foldl` prepends, so it reverses `lemmaNames`, whose
+/// two halves are the `--prove` values then the `--lemma` values: the report
+/// lists the `--lemma` values first.
+///
+/// Bytes are the pinned oracle's (Git revision ef3f0468) for this theory under
+/// `--prove=aaa --lemma=bbb --derivcheck-timeout=0`.
+#[test]
+fn lemma_arguments_are_listed_before_prove_arguments() {
+    let report = check_if_lemmas_in_theory(&with_lemma_args(ONE_LEMMA, &["aaa", "bbb"]));
+    assert_eq!(
+        format_wf_block(&report),
+        "/*\nWARNING: the following wellformedness checks failed!\n\n\
+         Check presence of the --prove/--lemma arguments in theory\n\
+         =========================================================\n\n  \
+         --> 'bbb', 'aaa' from arguments do(es) not correspond to a specified lemma in the theory \n*/"
     );
 }
 

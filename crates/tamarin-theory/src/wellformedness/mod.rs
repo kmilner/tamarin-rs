@@ -112,9 +112,9 @@ impl WfError {
 
 /// `lineLength` of the style HughesPJ's `render` uses, reached from HS through
 /// `addComment`'s `render` (TheoryObject.hs:717-718).
-pub(super) const WF_LINE_LENGTH: usize = 100;
+const WF_LINE_LENGTH: usize = 100;
 /// `ribbonLen = round (100 / 1.5) = 67` for [`WF_LINE_LENGTH`].
-pub(super) const WF_RIBBON: usize = 67;
+const WF_RIBBON: usize = 67;
 
 pub type WfReport = Vec<WfError>;
 
@@ -139,7 +139,6 @@ pub type WfReport = Vec<WfError>;
 /// Maude process, hence `maude`: the batch driver passes the handle it
 /// spawned for the file, the web load path passes `None`.
 pub fn check_wellformedness(thy: &Theory, maude: Option<&MaudeHandle>) -> WfReport {
-    let sig = &thy.signature.maude_sig;
     let mut report = lemmas::check_if_lemmas_in_theory(thy);
     report.extend(rules::unbound_report(thy));
     report.extend(rules::fresh_names_report(thy));
@@ -147,11 +146,13 @@ pub fn check_wellformedness(thy: &Theory, maude: Option<&MaudeHandle>) -> WfRepo
     report.extend(rules::rule_sorts_report(thy));
     report.extend(rules::rule_variants_report(thy, maude));
     report.extend(facts::fact_reports(thy));
-    report.extend(formulas::formula_reports(thy, sig));
+    report.extend(formulas::formula_reports(thy));
     report.extend(lemmas::lemma_attribute_report(thy));
-    report.extend(mult::mult_restricted_report(thy, sig));
+    report.extend(mult::mult_restricted_report(thy));
     report.extend(rules::nat_well_sorted_report(thy));
-    report.extend(equations::subterm_convergence_report(sig));
+    report.extend(equations::subterm_convergence_report(
+        &thy.signature.maude_sig,
+    ));
     report
 }
 
@@ -166,19 +167,19 @@ pub fn topics(report: &WfReport) -> BTreeSet<String> {
 
 /// HS `thyProtoRules` (Wellformedness.hs:133-134): the macro-applied E-rule
 /// of every rule item, in item order.
-pub(super) fn thy_proto_rules(thy: &Theory) -> impl Iterator<Item = &ProtoRuleE> {
+fn thy_proto_rules(thy: &Theory) -> impl Iterator<Item = &ProtoRuleE> {
     thy.rules().map(|opr| &opr.rule)
 }
 
 /// HS `showRuleCaseName` (Theory/Model/Rule.hs:1337-1340): `render
 /// . ruleInfo prettyProtoRuleName prettyIntrRuleACInfo . ruleName`, whose
 /// protocol-rule arm is all a [`ProtoRuleE`] reaches.
-pub(super) fn show_rule_case_name(ru: &ProtoRuleE) -> String {
+fn show_rule_case_name(ru: &ProtoRuleE) -> String {
     pretty_proto_rule_name(&ru.info.name).render()
 }
 
 /// HS `quote cs = '`' : cs ++ "'"` (Wellformedness.hs:164-165).
-pub(super) fn quote(s: &str) -> String {
+fn quote(s: &str) -> String {
     format!("`{}'", s)
 }
 

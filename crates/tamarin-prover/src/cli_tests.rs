@@ -136,14 +136,15 @@ fn repeated_scalar_flags_are_last_wins() {
     // HS cmdargs is last-occurrence-wins for scalar flags (`findArg`
     // reads the head of a prepend-updated list); `args_override_self`
     // mirrors that.  The repeatable flags (`--prove`/`--lemma`/`-D`)
-    // still append.
+    // keep every occurrence, `--prove`/`--lemma` in the reverse order
+    // `findArg` reads them off the prepend-built list.
     let a = parse(&["-b=5", "-b=7", "x.spthy"]);
     assert_eq!(a.bound, Some(7));
     let a = parse(&["--heuristic=s", "--heuristic=C", "x.spthy"]);
     assert_eq!(a.heuristic.as_deref(), Some("C"));
     let a = parse(&["--prove=a", "-m=spthy", "-m=msr", "--prove=b", "x.spthy"]);
     assert_eq!(a.output_module.as_deref(), Some("msr"));
-    assert_eq!(a.lemma_names, vec!["a", "b"]);
+    assert_eq!(a.lemma_names, vec!["b", "a"]);
 }
 
 #[test]
@@ -194,18 +195,28 @@ fn prove_bare_means_all() {
 
 #[test]
 fn prove_repeated() {
+    // `findArg "prove"` reads one flag's values off the prepend-built
+    // `Arguments` list, so they arrive in reverse command-line order.
     let a = parse(&["--prove=foo", "--prove=bar*", "x.spthy"]);
-    assert_eq!(a.lemma_names, vec!["foo", "bar*"]);
+    assert_eq!(a.lemma_names, vec!["bar*", "foo"]);
 }
 
 #[test]
 fn lemma_flag_appends_after_prove_names() {
-    // `parse_args` concatenates `--prove` values then `--lemma` values;
-    // `--lemma` alone does not set prove_mode (it only restricts what
-    // `--prove` proves).
+    // `lemma_names` is HS `findArg "prove" as ++ findArg "lemma" as`, so
+    // the `--prove` values come first; `--lemma` alone does not set
+    // prove_mode (it only restricts what `--prove` proves).
     let a = parse(&["--prove=a", "--lemma=b", "x.spthy"]);
     assert!(a.prove_mode);
     assert_eq!(a.lemma_names, vec!["a", "b"]);
+    let a = parse(&[
+        "--prove=p1",
+        "--lemma=l1",
+        "--prove=p2",
+        "--lemma=l2",
+        "x.spthy",
+    ]);
+    assert_eq!(a.lemma_names, vec!["p2", "p1", "l2", "l1"]);
     let a = parse(&["--lemma=b", "x.spthy"]);
     assert!(!a.prove_mode);
     assert_eq!(a.lemma_names, vec!["b"]);

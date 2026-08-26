@@ -390,6 +390,29 @@ fn fresh_names_report_sees_a_restrict_name() {
     );
 }
 
+/// `publicNamesReport'` reads the same `universeBi` name walk
+/// (Wellformedness.hs:477-478), so a public constant that only a `_restrict`
+/// formula mentions joins the clash groups: `'ID'` reaches no fact of the
+/// rule and clashes with the `'id'` in the conclusion.  Byte-pinned to the
+/// pinned oracle (ef3f0468) on this theory under `--derivcheck-timeout=0`.
+#[test]
+fn public_names_report_sees_a_restrict_name() {
+    let thy = elaborated(
+        "theory T begin \
+         rule R: [ Fr(~x) ] --[ _restrict( not( 'ID' = 'a' ) ) ]-> [ Out(<~x, 'id'>) ] \
+         end",
+    );
+    assert_eq!(
+        bodies(&public_names_report(&thy)),
+        "Public constants with mismatching capitalization\n\
+         ================================================\n\n\
+         Identifiers are case-sensitive, mismatched capitalizations are \
+         considered as different, i.e., 'ID' is different from 'id'. Check \
+         the capitalization of your identifiers.\n\n  \
+         1. rule \"R\":  name 'ID', 'id'\n"
+    );
+}
+
 /// The name walk descends into the source subprocess a SAPIC-generated rule
 /// carries, which is where the constant of a rule that mints no fact for it
 /// lives.  The parser never mints that attribute, so the generated shape is

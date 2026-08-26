@@ -57,9 +57,9 @@ use super::WfError;
 /// renderer, so if HS's `lineWidth` (Console.hs:242-243) or the WARNING-frame
 /// indentation ever changes, this constant (used at both `render_with`
 /// call sites in `render_block` and by
-/// [`crate::formula_reports`]'s "Quantifier sorts" block, which HS lays out
+/// [`super::formulas`]'s "Quantifier sorts" block, which HS lays out
 /// inside the same frame) must be re-derived against the new binary.
-pub(crate) const WF_WIDTH: usize = 69;
+pub(super) const WF_WIDTH: usize = 69;
 
 /// The constant explanatory paragraph (HS `wrappedText "..."`).  The text
 /// never varies, so its wrapped form (at `WF_WIDTH`) is constant too.
@@ -69,52 +69,40 @@ const ALLOWED_PARAGRAPH: &str = "The only allowed terms are public constants \
     only be dropped where this is unambiguous. Moreover, reducible function \
     symbols are disallowed.";
 
-/// The signature HS `checkTerms` closes over, for the `irreducibleFunSyms`
-/// classification of its `allowed` predicate (Wellformedness.hs:975).
-/// [`TermChecker::check`] runs the `checkTerms` arm of HS `formulaReports`
-/// (Wellformedness.hs:1003) for one annotated formula, so the combined
-/// per-formula pass in [`super::formulas`] can interleave it with the
-/// other two arms.
-pub struct TermChecker<'a> {
-    sig: &'a MaudeSig,
+/// The `checkTerms` finding for one annotated formula, if it has offenders.
+/// HS `checkTerms header maudeSig fm` (Wellformedness.hs:960-985), the
+/// `checkTerms` arm of HS `formulaReports` (Wellformedness.hs:1003), so the
+/// combined per-formula pass in [`super::formulas`] interleaves it with the
+/// other two arms.  `header` is HS's `"Lemma `n'"` / `"Restriction `n'"`;
+/// `sig` is the signature the `allowed` predicate classifies against
+/// (Wellformedness.hs:975).
+pub fn check_terms<S>(sig: &MaudeSig, header: &str, fm: &LNProtoFormula<S>) -> Option<WfError> {
+    let offenders: Vec<String> = crate::formula::formula_terms(fm)
+        .into_iter()
+        .filter(|t| !allowed(sig, t))
+        .map(show_term)
+        .collect();
+    if offenders.is_empty() {
+        return None;
+    }
+    Some(WfError::new(
+        "Formula terms",
+        render_block(header, &offenders),
+    ))
 }
 
-impl<'a> TermChecker<'a> {
-    pub fn new(sig: &'a MaudeSig) -> Self {
-        TermChecker { sig }
-    }
-
-    /// The `checkTerms` finding for one annotated formula, if it has
-    /// offenders.  `header` is HS's `"Lemma `n'"` / `"Restriction `n'"`.
-    pub fn check<S>(&self, header: &str, fm: &LNProtoFormula<S>) -> Option<WfError> {
-        let offenders: Vec<String> = crate::formula::formula_terms(fm)
-            .into_iter()
-            .filter(|t| !self.allowed(t))
-            .map(show_term)
-            .collect();
-        if offenders.is_empty() {
-            return None;
-        }
-        Some(WfError::new(
-            "Formula terms",
-            render_block(header, &offenders),
-        ))
-    }
-
-    /// HS `allowed` (Wellformedness.hs:978-985).  `FUnion` is the multiset
-    /// union `viewTerm2` gives an `AC Union` head (Term/Term/Raw.hs:185), and
-    /// it is allowed whether or not the signature holds it; every other head
-    /// has to be a member of `irreducibleFunSyms`.
-    fn allowed(&self, t: &BLNTerm) -> bool {
-        match t {
-            Term::Lit(Lit::Var(BVar::Bound(_))) => true,
-            Term::Lit(Lit::Con(n)) => n.tag == NameTag::Pub,
-            Term::Lit(_) => false,
-            Term::App(FunSym::Ac(AcSym::Union), args) => args.iter().all(|a| self.allowed(a)),
-            Term::App(sym, args) => {
-                self.sig.irreducible_fun_syms_fast.contains(sym)
-                    && args.iter().all(|a| self.allowed(a))
-            }
+/// HS `allowed` (Wellformedness.hs:978-985).  `FUnion` is the multiset
+/// union `viewTerm2` gives an `AC Union` head (Term/Term/Raw.hs:185), and
+/// it is allowed whether or not the signature holds it; every other head
+/// has to be a member of `irreducibleFunSyms`.
+fn allowed(sig: &MaudeSig, t: &BLNTerm) -> bool {
+    match t {
+        Term::Lit(Lit::Var(BVar::Bound(_))) => true,
+        Term::Lit(Lit::Con(n)) => n.tag == NameTag::Pub,
+        Term::Lit(_) => false,
+        Term::App(FunSym::Ac(AcSym::Union), args) => args.iter().all(|a| allowed(sig, a)),
+        Term::App(sym, args) => {
+            sig.irreducible_fun_syms_fast.contains(sym) && args.iter().all(|a| allowed(sig, a))
         }
     }
 }
@@ -146,7 +134,7 @@ fn render_block(header: &str, offenders: &[String]) -> String {
     let para = fsep(words).nest(2).render_with(WF_WIDTH, WF_WIDTH);
 
     let mut out = String::new();
-    out.push_str("Formula terms\n=============\n");
+    out.push_str(&super::underline_topic("Formula terms"));
     out.push('\n'); // HS `$-$` blank line before the nest-2 body
     out.push_str(&line1);
     out.push('\n');

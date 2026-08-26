@@ -12,7 +12,7 @@ use tamarin_term::subterm_rule::{is_subterm_convergent, CtxtStRule};
 
 use crate::pretty_hpj::{self as hpj, Doc};
 
-use super::{underline_topic, WfError};
+use super::{underline_topic, WfError, WF_LINE_LENGTH, WF_RIBBON};
 
 /// Port of HS `checkEquationsSubtermConvergence` (Wellformedness.hs:1222-1232).
 ///
@@ -29,10 +29,7 @@ use super::{underline_topic, WfError};
 ///     `pretty_nterm` so a wide RHS wraps (HS `prettyTerm`'s `fsep` ppFun,
 ///     Term/Term.hs:326-327);
 ///   * suppressed entirely when `eqConvergent (sig thy)` is set
-///     (`isUserMarkedConvergent`, Wellformedness.hs:1211-1214/1285).
-///
-/// Both drivers reach it through
-/// [`super::append_subterm_convergence_report`].
+///     (`isUserMarkedConvergent`, Wellformedness.hs:1211-1214,1285).
 pub fn subterm_convergence_report(sig: &MaudeSig) -> Vec<WfError> {
     // HS: `if not (isUserMarkedConvergent thy) then checkEqs else []`
     // (Wellformedness.hs:1270-1286, see line 1285); `isUserMarkedConvergent thy = eqConvergent (sig thy)`.
@@ -55,18 +52,13 @@ pub fn subterm_convergence_report(sig: &MaudeSig) -> Vec<WfError> {
     // outer `nest 2`.  Build it as one HughesPJ Doc so the wrap decision +
     // indentation are HS-exact.
     //
-    // WIDTH: the WF report Doc is rendered by HS `addComment c = ... TextItem
-    // ("", render c)` (TheoryObject.hs:717-718, see line 718), where `render = P.render` uses the
-    // HughesPJ DEFAULT style (`lineLength = 100`, `ribbonsPerLine = 1.5`,
-    // `ribbon = round (100 / 1.5) = 67`) — NOT the theory body's
-    // `renderDoc` width of 110/73 (Console.hs:242-243,398-399).  The pre-rendered
-    // string is then emitted verbatim inside the `/* ... */` comment.  So the
-    // equation list wraps at the 100/67 budget, e.g. `f3`/`f6` (inline width 73
-    // from column 4) wrap while `f2` (66) stays inline.  This is a SEPARATE
-    // width from the `equations:` block, which is part of the theory body and
-    // renders at 110/73.
-    const WF_LINE_LENGTH: usize = 100;
-    const WF_RIBBON: usize = 67; // round(100 / 1.5)
+    // WIDTH: [`WF_LINE_LENGTH`] / [`WF_RIBBON`] — NOT the theory body's
+    // `renderDoc` width of 110/73 (Console.hs:242-243,398-399).  The
+    // pre-rendered string is emitted verbatim inside the `/* ... */` comment,
+    // so the equation list wraps at the 100/67 budget, e.g. `f3`/`f6` (inline
+    // width 73 from column 4) wrap while `f2` (66) stays inline.  This is a
+    // SEPARATE width from the `equations:` block, which is part of the theory
+    // body and renders at 110/73.
     let eq_lines = {
         let docs: Vec<Doc> = non_conv
             .iter()

@@ -130,7 +130,7 @@ fast gates do need the oracle binary present to address it.**
 | `cargo fmt --all --check` | formatting (CI enforces it) | seconds |
 | `cargo clippy --workspace --all-targets -- -D warnings` | lints (CI enforces it) | seconds warm |
 | `MAUDE_PATH=$(command -v maude) cargo test --profile ci --workspace` | Rust unit + integration suites | minutes |
-| `scripts/divergence_fixtures/check.sh` | 52 corner fixtures vs committed oracle captures (CI runs this too) | ~10 s |
+| `scripts/divergence_fixtures/check.sh` | 55 corner fixtures vs committed oracle captures (CI runs this too) | ~10 s |
 | `scripts/wf_gate.sh` | wellformedness block, 432 files, vs the shared load cache | ~45 s |
 | `scripts/pretty_gate.sh` | `theory … end` echo, 432 files, vs the same load cache | ~45 s |
 
@@ -303,10 +303,10 @@ cargo run -p tamarin-theory --example wellformedness_fixtures
 
 `-- --no-tamarin` skips the oracle pass. Each fixture under
 `tests/wellformedness_fixtures/` is checked three ways: it parses, the Rust
-`wf::check_wellformedness` emits the topics `expected.txt` claims for it, and
-`tamarin-prover` emits them too. Expectations are positive by default;
-a line beginning `#!<fixture> : <topics>` is a *negative* pin — topics that
-must NOT appear on either side. The run ends in
+`wellformedness::check_wellformedness` emits the topics `expected.txt`
+claims for it, and `tamarin-prover` emits them too. Expectations are
+positive by default; a line beginning `#!<fixture> : <topics>` is a
+*negative* pin — topics that must NOT appear on either side. The run ends in
 `VERDICT: PASS|FAIL (N fixture(s), M failure(s))` and exits nonzero on an
 empty roster, a `.spthy` no `expected.txt` line mentions, a line with no
 topics, a `#!` line naming an unlisted fixture, or an oracle that fails to
@@ -460,7 +460,7 @@ oracle and the port both run.
 ## Corner fixtures (no oracle, no proving)
 
 ```bash
-scripts/divergence_fixtures/check.sh          # ~10 s, 52 fixtures
+scripts/divergence_fixtures/check.sh          # ~10 s, 55 fixtures
 ```
 
 Behaviour that no theory under the submodule's `examples/` tree reaches, so

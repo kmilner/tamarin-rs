@@ -294,7 +294,7 @@ fn rule_names(ru: &ProtoRuleE) -> Vec<Name> {
 /// The body is HS's `fsep $ text info : punctuate comma (map (nest 2 . text
 /// . show) names)` — ONE paragraph fill whose first cell is the info line, so
 /// a name that would overrun the ribbon takes a line of its own at the fill's
-/// indent plus 2.  `show (Name FreshName n) = "~'" ++ n ++ "'"`
+/// indent plus 2.  `show (Name FreshName n) = "~'" ++ show n ++ "'"`
 /// (LTerm.hs:235-240, see line 236) is [`Name`]'s `Display`, and the `nest 2`
 /// `prettyWfErrorReport` applies to every body of a topic group
 /// (Wellformedness.hs:118-125) is baked in, because the break decisions
@@ -416,11 +416,11 @@ fn public_names_report_from_pairs(pairs: Vec<(String, String)>) -> WfReport {
 }
 
 /// Port of HS `publicNamesReport'` (Wellformedness.hs:463-484) over the
-/// translated theory's rules.  `publicNames = universeBi ru` walks each
-/// generated rule INCLUDING the source subprocess HS attaches to it, so a
-/// constant appearing solely inside the process (the `'C'` in
-/// `insert <'roles', x, 'C'>`) is reached through the rule's `process`
-/// attribute alongside its facts.
+/// translated theory's rules.  `publicNames = universeBi ru` is the same
+/// whole-rule name walk `freshNamesReport'` uses, [`rule_names`] here, so it
+/// reaches the rule info's `_restrict` formulas and the source subprocess HS
+/// attaches to a generated rule — the `'C'` in `insert <'roles', x, 'C'>`
+/// counts as a name of the rule that carries that process.
 ///
 /// The root `Init` rule carries the WHOLE process (`base_init` in
 /// tamarin-sapic's base_translation.rs; HS `baseInit`,
@@ -430,34 +430,9 @@ fn public_names_report_from_pairs(pairs: Vec<(String, String)>) -> WfReport {
 /// `rule "Init":  name 'C', 'c'` attribution.
 pub fn public_names_report(thy: &Theory) -> Vec<WfError> {
     let mut pairs: Vec<(String, String)> = Vec::new();
-    for r in thy.items.iter().filter_map(|it| match it {
-        crate::theory::TheoryItem::Rule(r) => Some(r),
-        _ => None,
-    }) {
-        // HS `showRuleCaseName ru = prettyProtoRuleName (ruleName ru)`
-        // (Theory/Model/Rule.hs:1338-1340) = `prefixIfReserved n` for a
-        // `StandRule n`.
-        let case_name = crate::rule::prefix_if_reserved(r.name());
-        let mut names: Vec<Name> = Vec::new();
-        for f in r
-            .rule
-            .premises
-            .iter()
-            .chain(&r.rule.actions)
-            .chain(&r.rule.conclusions)
-        {
-            for t in f.terms.iter() {
-                collect_names(t, &mut names);
-            }
-        }
-        if let Some(proc) = &r.rule.info.attributes.process {
-            collect_process_names(proc, &mut names);
-        }
-        // Collection order within a rule differs from HS's (HS walks `rInfo`
-        // first, facts after) but is immaterial: `clashesOn` dedups by
-        // spelling with the surviving pair keyed only on (rule name,
-        // spelling), which is identical for every occurrence inside one rule.
-        for n in names {
+    for ru in thy_proto_rules(thy) {
+        let case_name = show_rule_case_name(ru);
+        for n in rule_names(ru) {
             if sort_of_name(&n) == LSort::Pub {
                 pairs.push((case_name.clone(), n.id.0.to_string()));
             }

@@ -4,8 +4,9 @@
 
 //! HS `factReports` (Wellformedness.hs:579-583): the wellformedness checks
 //! over a theory's facts — reserved names, reserved `KU`/`KD`/`K` usage,
-//! `Fr` arguments, the special `In`/`Out`/`Fr` tags, and the arity /
-//! multiplicity / capitalization clash groups.
+//! `Fr` arguments, the special `In`/`Out`/`Fr` tags, the arity /
+//! multiplicity / capitalization clash groups, and the facts a rule
+//! consumes on the left-hand side that no right-hand side produces.
 //!
 //! [`theory_facts`] is HS's `theoryFacts` (Wellformedness.hs:593-605): every
 //! rule in item order with its facts in `ruleFacts` order, then every lemma
