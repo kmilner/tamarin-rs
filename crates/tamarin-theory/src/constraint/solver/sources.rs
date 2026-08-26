@@ -4822,10 +4822,55 @@ fn graft_case_into_action(
 //      flips the surviving representative on symmetric AC peers, e.g.
 //      Joux/Scott `Session_Key_Secrecy_PFS`'s B↔C mirror.)
 
+/// One segment of an occurrence path (HS's `[String]` context under
+/// `foldFreesOcc`).  A path is materialised once per variable occurrence, so a
+/// rendered segment is held behind an `Rc` and cloned as a pointer: a rule's
+/// segment is the whole `{:?}` of its info, which on a SAPIC theory carries
+/// the rule's process.  `Ord` and `Eq` read the segment's text, so paths order
+/// by their text.
+#[derive(Clone)]
+enum Seg {
+    Static(&'static str),
+    Shared(std::rc::Rc<str>),
+}
+
+impl Seg {
+    fn shared(s: &str) -> Self {
+        Seg::Shared(std::rc::Rc::from(s))
+    }
+
+    fn as_str(&self) -> &str {
+        match self {
+            Seg::Static(s) => s,
+            Seg::Shared(s) => s,
+        }
+    }
+}
+
+impl PartialEq for Seg {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_str() == other.as_str()
+    }
+}
+
+impl Eq for Seg {}
+
+impl PartialOrd for Seg {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Seg {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.as_str().cmp(other.as_str())
+    }
+}
+
 /// Walk the free LVars of `sys.nodes` in HS `foldFreesOcc` order
 /// (`HS instance HasFrees System`: only field `a` is walked; commented
-/// out for `b..m`).  Produces a list of `(LVar, BTreeSet<Vec<String>>)`
-/// where the inner set is the set of occurrence-context strings each
+/// out for `b..m`).  Produces a list of `(LVar, BTreeSet<Vec<Seg>>)`
+/// where the inner set is the set of occurrence-context paths each
 /// var appears in.  Mirrors `varOccurences`
 /// (`lib/term/src/Term/LTerm.hs:622-625, see line 625`).
 ///
@@ -4850,7 +4895,7 @@ fn var_occurrences_nodes(
     sys: &crate::constraint::system::System,
 ) -> Vec<(
     tamarin_term::lterm::LVar,
-    std::collections::BTreeSet<Vec<String>>,
+    std::collections::BTreeSet<Vec<Seg>>,
 )> {
     use std::collections::BTreeMap;
     use std::collections::BTreeSet;
@@ -4867,72 +4912,68 @@ fn var_occurrences_nodes(
     // The SAME context is pushed once for the whole arg list — HS does NOT
     // descend per-argument with an index, so every argument of an `FApp`
     // shares the symbol-name context.
-    fn funsym_occ_ctx(
-        sym: &tamarin_term::function_symbols::FunSym,
-    ) -> std::borrow::Cow<'static, str> {
-        use std::borrow::Cow;
+    fn funsym_occ_ctx(sym: &tamarin_term::function_symbols::FunSym) -> Seg {
         use tamarin_term::function_symbols::{AcSym, CSym, FunSym};
         match sym {
-            FunSym::NoEq(s) => Cow::Owned(String::from_utf8_lossy(s.name).into_owned()),
+            FunSym::NoEq(s) => Seg::shared(&String::from_utf8_lossy(s.name)),
             FunSym::Ac(ac) => match ac {
-                AcSym::Union => Cow::Borrowed("AC Union"),
-                AcSym::Mult => Cow::Borrowed("AC Mult"),
-                AcSym::Xor => Cow::Borrowed("AC Xor"),
-                AcSym::NatPlus => Cow::Borrowed("AC NatPlus"),
+                AcSym::Union => Seg::Static("AC Union"),
+                AcSym::Mult => Seg::Static("AC Mult"),
+                AcSym::Xor => Seg::Static("AC Xor"),
+                AcSym::NatPlus => Seg::Static("AC NatPlus"),
                 // Derived HS `Show` of a user-defined AC symbol.
-                AcSym::AcFct(s) => Cow::Owned(format!(
+                AcSym::AcFct(s) => Seg::shared(&format!(
                     "AC (ACfct {})",
                     tamarin_term::function_symbols::show_acfct_sym(s)
                 )),
             },
             FunSym::C(c) => match c {
-                CSym::EMap => Cow::Borrowed("C EMap"),
+                CSym::EMap => Seg::Static("C EMap"),
             },
-            FunSym::List => Cow::Borrowed("List"),
+            FunSym::List => Seg::Static("List"),
         }
     }
     // HS `show (factTag fa)` (derived `Show FactTag`, Theory/Model/Fact.hs:136-149).
     //   ProtoFact mult name arity -> "ProtoFact <mult> \"<name>\" <arity>"
     //   FreshFact/OutFact/InFact/KUFact/KDFact/DedFact/TermFact (nullary)
-    fn fact_tag_occ_ctx(f: &crate::fact::LNFact) -> std::borrow::Cow<'static, str> {
+    fn fact_tag_occ_ctx(f: &crate::fact::LNFact) -> Seg {
         use crate::fact::{FactTag, Multiplicity};
-        use std::borrow::Cow;
         match &f.tag {
             FactTag::Proto(m, name, arity) => {
                 let mstr = match m {
                     Multiplicity::Persistent => "Persistent",
                     Multiplicity::Linear => "Linear",
                 };
-                Cow::Owned(format!("ProtoFact {} {:?} {}", mstr, name, arity))
+                Seg::shared(&format!("ProtoFact {} {:?} {}", mstr, name, arity))
             }
-            FactTag::Fresh => Cow::Borrowed("FreshFact"),
-            FactTag::Out => Cow::Borrowed("OutFact"),
-            FactTag::In => Cow::Borrowed("InFact"),
-            FactTag::Ku => Cow::Borrowed("KUFact"),
-            FactTag::Kd => Cow::Borrowed("KDFact"),
-            FactTag::Ded => Cow::Borrowed("DedFact"),
-            FactTag::Term => Cow::Borrowed("TermFact"),
+            FactTag::Fresh => Seg::Static("FreshFact"),
+            FactTag::Out => Seg::Static("OutFact"),
+            FactTag::In => Seg::Static("InFact"),
+            FactTag::Ku => Seg::Static("KUFact"),
+            FactTag::Kd => Seg::Static("KDFact"),
+            FactTag::Ded => Seg::Static("DedFact"),
+            FactTag::Term => Seg::Static("TermFact"),
         }
     }
     // ctx is a stack-allocated parent-linked chain (HS's persistent
     // `[String]` occurrence path with shared tails): each descend prepends
     // one `seg` and points at its `parent`, so the whole path is shared
     // rather than re-cloned at every node.  We materialize the flat
-    // `Vec<String>` ONLY at `Var` leaves — the one place the BTreeSet
+    // `Vec<Seg>` ONLY at `Var` leaves — the one place the BTreeSet
     // accumulator needs it — so the emitted sets are byte-identical to the
     // eager path while the O(nodes*depth) intermediate clones are gone.
     struct Ctx<'a> {
-        seg: std::borrow::Cow<'static, str>,
+        seg: Seg,
         parent: Option<&'a Ctx<'a>>,
     }
     impl<'a> Ctx<'a> {
         // Flatten head-first (innermost segment first) — the exact order the
         // eager path produced by prepending each new segment at index 0.
-        fn materialize(&self) -> Vec<String> {
-            let mut v: Vec<String> = Vec::new();
+        fn materialize(&self) -> Vec<Seg> {
+            let mut v: Vec<Seg> = Vec::new();
             let mut cur: Option<&Ctx> = Some(self);
             while let Some(c) = cur {
-                v.push(c.seg.as_ref().to_owned());
+                v.push(c.seg.clone());
                 cur = c.parent;
             }
             v
@@ -4940,21 +4981,21 @@ fn var_occurrences_nodes(
     }
     // Small list/arg indices as borrowed static strs, byte-identical to
     // `i.to_string()`, so a descend never allocates for its index segment.
-    fn idx_seg(i: usize) -> std::borrow::Cow<'static, str> {
+    fn idx_seg(i: usize) -> Seg {
         const T: [&str; 17] = [
             "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15",
             "16",
         ];
         if i < T.len() {
-            std::borrow::Cow::Borrowed(T[i])
+            Seg::Static(T[i])
         } else {
-            std::borrow::Cow::Owned(i.to_string())
+            Seg::shared(&i.to_string())
         }
     }
     fn visit_term(
         t: &tamarin_term::lterm::LNTerm,
         ctx: &Ctx,
-        out: &mut BTreeMap<LVar, BTreeSet<Vec<String>>>,
+        out: &mut BTreeMap<LVar, BTreeSet<Vec<Seg>>>,
     ) {
         match t {
             Term::Lit(Lit::Var(v)) => {
@@ -5008,7 +5049,7 @@ fn var_occurrences_nodes(
     fn visit_fact(
         f: &crate::fact::LNFact,
         ctx: &Ctx,
-        out: &mut BTreeMap<LVar, BTreeSet<Vec<String>>>,
+        out: &mut BTreeMap<LVar, BTreeSet<Vec<Seg>>>,
     ) {
         let tag_ctx = Ctx {
             seg: fact_tag_occ_ctx(f),
@@ -5025,7 +5066,7 @@ fn var_occurrences_nodes(
     fn visit_facts(
         fs: &[crate::fact::LNFact],
         ctx: &Ctx,
-        out: &mut BTreeMap<LVar, BTreeSet<Vec<String>>>,
+        out: &mut BTreeMap<LVar, BTreeSet<Vec<Seg>>>,
     ) {
         for (i, f) in fs.iter().enumerate() {
             let sub = Ctx {
@@ -5042,10 +5083,10 @@ fn var_occurrences_nodes(
     fn visit_rule(
         r: &crate::rule::RuleACInst,
         ctx: &Ctx,
-        out: &mut BTreeMap<LVar, BTreeSet<Vec<String>>>,
+        out: &mut BTreeMap<LVar, BTreeSet<Vec<Seg>>>,
     ) {
         let rule_ctx = Ctx {
-            seg: std::borrow::Cow::Owned(format!("{:?}", r.info)),
+            seg: Seg::shared(&format!("{:?}", r.info)),
             parent: Some(ctx),
         };
         // ps
@@ -5073,13 +5114,13 @@ fn var_occurrences_nodes(
     let mut nodes_sorted: Vec<&(tamarin_term::lterm::LVar, crate::rule::RuleACInst)> =
         sys.nodes.iter().collect();
     nodes_sorted.sort_by_key(|a| a.0);
-    let mut out: BTreeMap<LVar, BTreeSet<Vec<String>>> = BTreeMap::new();
+    let mut out: BTreeMap<LVar, BTreeSet<Vec<Seg>>> = BTreeMap::new();
     for (nid, rule) in &nodes_sorted {
         // For (k, v) tuple: "0":p for k (NodeId is just an LVar), "1":p for v.
         // base_ctx is empty, so k = ["0"] and the rule root chain = ["1"].
-        out.entry(*nid).or_default().insert(vec!["0".to_string()]);
+        out.entry(*nid).or_default().insert(vec![Seg::Static("0")]);
         let v_ctx = Ctx {
-            seg: std::borrow::Cow::Borrowed("1"),
+            seg: Seg::Static("1"),
             parent: None,
         };
         visit_rule(rule, &v_ctx, &mut out);

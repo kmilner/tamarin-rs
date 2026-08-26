@@ -581,7 +581,9 @@ pub(crate) fn to_rule(r: &AnnotatedRule<ProcessAnnotation<LVar>>) -> ProtoRuleE 
     );
     let attr = RuleAttributes {
         color: Some(color_for_process_name(names)),
-        process: Some(plain),
+        process: Some(std::sync::Arc::new(
+            tamarin_theory::sapic::SharedProcess::new(plain),
+        )),
         ignore_deriv_checks: is_lookup_proc,
         is_sapic_rule: true,
         role: Some(role_from_process_name_list(names)),

@@ -73,7 +73,8 @@ fn is_now_node(v: &LVar) -> bool {
 /// a written `process=` (`parseAndIgnore`, Theory/Text/Parser/Rule.hs:70-96,
 /// see line 74), so the attribute is carried only by SAPIC-generated rules.
 fn lookup_binder(ru: &ProtoRuleE) -> Option<LVar> {
-    match ru.info.attributes.process.as_ref()? {
+    let process: &crate::sapic::PlainProcess = ru.info.attributes.process.as_deref()?;
+    match process {
         Process::Comb(ProcessCombinator::Lookup(_, v), _, _, _) => Some(v.to_lvar()),
         _ => None,
     }

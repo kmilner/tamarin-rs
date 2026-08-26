@@ -622,9 +622,9 @@ fn pretty_rule_attribute_omits_an_empty_record() {
 fn pretty_rule_attribute_renders_all_five_fields_in_order() {
     let attr = RuleAttributes {
         color: Some(tamarin_utils::color::Rgb::new(1.0, 0.0, 0.5)),
-        process: Some(crate::sapic::Process::Null(
-            crate::sapic::ProcessParsedAnnotation::empty(),
-        )),
+        process: Some(std::sync::Arc::new(crate::sapic::SharedProcess::new(
+            crate::sapic::Process::Null(crate::sapic::ProcessParsedAnnotation::empty()),
+        ))),
         ignore_deriv_checks: true,
         is_sapic_rule: true,
         role: Some("Initiator".to_string()),
@@ -650,9 +650,11 @@ fn pretty_rule_attribute_renders_each_field_alone() {
         "[color=#000000]"
     );
     assert_eq!(
-        with(|a| a.process = Some(crate::sapic::Process::Null(
-            crate::sapic::ProcessParsedAnnotation::empty()
-        ))),
+        with(
+            |a| a.process = Some(std::sync::Arc::new(crate::sapic::SharedProcess::new(
+                crate::sapic::Process::Null(crate::sapic::ProcessParsedAnnotation::empty())
+            )))
+        ),
         "[process=\"0\"]"
     );
     assert_eq!(with(|a| a.ignore_deriv_checks = true), "[no_derivcheck]");

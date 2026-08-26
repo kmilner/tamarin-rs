@@ -96,7 +96,9 @@ fn lookup_binder_is_not_unbound() {
     let binder = LVar::new("v", LSort::Msg, 1);
     for item in thy.items.iter_mut() {
         if let TheoryItem::Rule(r) = item {
-            r.rule.info.attributes.process = Some(lookup_process(binder));
+            r.rule.info.attributes.process = Some(std::sync::Arc::new(
+                crate::sapic::SharedProcess::new(lookup_process(binder)),
+            ));
         }
     }
     assert!(
@@ -115,7 +117,9 @@ fn lookup_binder_is_not_unbound() {
     );
     for item in thy.items.iter_mut() {
         if let TheoryItem::Rule(r) = item {
-            r.rule.info.attributes.process = Some(lookup_process(binder));
+            r.rule.info.attributes.process = Some(std::sync::Arc::new(
+                crate::sapic::SharedProcess::new(lookup_process(binder)),
+            ));
         }
     }
     let report = unbound_report(&thy);
@@ -436,7 +440,9 @@ fn fresh_names_report_walks_the_process_attribute() {
     );
     for item in thy.items.iter_mut() {
         if let TheoryItem::Rule(r) = item {
-            r.rule.info.attributes.process = Some(out_foo.clone());
+            r.rule.info.attributes.process = Some(std::sync::Arc::new(
+                crate::sapic::SharedProcess::new(out_foo.clone()),
+            ));
         }
     }
     assert_eq!(

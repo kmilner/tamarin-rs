@@ -360,8 +360,8 @@ fn cmp_attrs(a: &RuleAttributes, b: &RuleAttributes) -> std::cmp::Ordering {
     color_key(&a.color)
         .cmp(&color_key(&b.color))
         .then_with(|| {
-            let pa = a.process.as_ref().map(pretty_sapic_top_level_attr);
-            let pb = b.process.as_ref().map(pretty_sapic_top_level_attr);
+            let pa = a.process.as_deref().map(|p| pretty_sapic_top_level_attr(p));
+            let pb = b.process.as_deref().map(|p| pretty_sapic_top_level_attr(p));
             pa.cmp(&pb)
         })
         .then_with(|| a.ignore_deriv_checks.cmp(&b.ignore_deriv_checks))

@@ -284,6 +284,49 @@ pub type LProcessCombinator = ProcessCombinator<SapicLVar>;
 pub type LProcess<Ann> = Process<Ann, SapicLVar>;
 pub type PlainProcess = LProcess<ProcessParsedAnnotation>;
 
+/// A [`PlainProcess`] together with its `{:?}` rendering.
+///
+/// A SAPIC-generated rule carries the process it was generated from
+/// ([`crate::rule::RuleAttributes::process`]), and the solver renders a rule's
+/// info into a system comparison key and into an occurrence path once per node
+/// of every candidate system.  The rendering here is the process's derived
+/// `Debug` output, so [`Debug`](std::fmt::Debug) writes those bytes instead of
+/// walking the tree again, and [`Deref`](std::ops::Deref) hands out the process
+/// itself to the wellformedness pass and the printers.
+pub struct SharedProcess {
+    process: PlainProcess,
+    debug: String,
+}
+
+impl SharedProcess {
+    pub fn new(process: PlainProcess) -> Self {
+        let debug = format!("{:?}", process);
+        SharedProcess { process, debug }
+    }
+}
+
+impl std::fmt::Debug for SharedProcess {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.debug)
+    }
+}
+
+impl std::ops::Deref for SharedProcess {
+    type Target = PlainProcess;
+
+    fn deref(&self) -> &PlainProcess {
+        &self.process
+    }
+}
+
+impl PartialEq for SharedProcess {
+    fn eq(&self, other: &Self) -> bool {
+        self.process == other.process
+    }
+}
+
+impl Eq for SharedProcess {}
+
 impl<Ann, V> Process<Ann, V> {
     pub fn null(ann: Ann) -> Self {
         Process::Null(ann)
@@ -442,6 +485,21 @@ pub fn is_eq<Ann, V>(p: &Process<Ann, V>) -> bool {
 mod tests {
     use super::*;
     use tamarin_term::lterm::LSort;
+
+    /// The whole point of [`SharedProcess`] is that its `Debug` writes what
+    /// the process's own derived `Debug` writes: the solver's system
+    /// comparison keys and occurrence paths embed that rendering, so a
+    /// different spelling would reorder them.
+    #[test]
+    fn shared_process_debug_is_the_process_debug() {
+        let inner = Process::Action(
+            SapicAction::New(SapicLVar::untyped(LVar::new("x", LSort::Msg, 0))),
+            ProcessParsedAnnotation::empty(),
+            Box::new(Process::Null(ProcessParsedAnnotation::empty())),
+        );
+        let shared = SharedProcess::new(inner.clone());
+        assert_eq!(format!("{:?}", shared), format!("{:?}", inner));
+    }
 
     #[test]
     fn position_helpers() {

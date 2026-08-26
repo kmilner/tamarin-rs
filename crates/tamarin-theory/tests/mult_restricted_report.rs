@@ -271,7 +271,9 @@ fn a_generated_rules_process_attribute_is_rendered_from_its_own_record() {
     let mut elaborated = tamarin_theory::elaborate::elaborate(&thy).expect("elaborate");
     for item in &mut elaborated.items {
         if let TheoryItem::Rule(r) = item {
-            r.rule.info.attributes.process = Some(process.clone());
+            r.rule.info.attributes.process = Some(std::sync::Arc::new(
+                tamarin_theory::sapic::SharedProcess::new(process.clone()),
+            ));
         }
     }
 

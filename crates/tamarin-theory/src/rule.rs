@@ -26,7 +26,7 @@ use crate::pretty_hpj::{
     above_blank, fsep, hcat, kw_rule_modulo, kw_variants, line_comment_, multi_comment,
     multi_comment_, numbered_prime, operator_, punctuate, sep, vcat, Doc,
 };
-use crate::sapic::PlainProcess;
+use crate::sapic::SharedProcess;
 
 // =============================================================================
 // Rule
@@ -285,8 +285,13 @@ pub enum RuleInfo<P, I> {
 pub struct RuleAttributes {
     /// Color for graphical display.
     pub color: Option<Rgb>,
-    /// Source process — for SAPIC-derived rules.
-    pub process: Option<PlainProcess>,
+    /// Source process — for SAPIC-derived rules (HS `ruleProcess`,
+    /// Theory/Model/Rule.hs:367-378).  Shared behind an `Arc` because the
+    /// solver clones a rule's attributes once per rule instance it builds and
+    /// a SAPIC theory's top-level rules carry the whole process tree, so an
+    /// instance points at the process rather than copying it.  See
+    /// [`SharedProcess`] for why the rendering travels with it.
+    pub process: Option<std::sync::Arc<SharedProcess>>,
     pub ignore_deriv_checks: bool,
     pub is_sapic_rule: bool,
     /// Optional role name.
