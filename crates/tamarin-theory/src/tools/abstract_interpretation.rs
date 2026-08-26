@@ -37,17 +37,16 @@
 //!   therefore RETURN the exact trace bytes instead of `eprint!`ing them;
 //!   the caller must emit them right after its "Theory closed" marker to
 //!   match HS stderr ordering.
-//! * **Rule ordering comparator**: HS sorts `getProtoRuleEs` under the
-//!   derived `Ord (Rule i)` = (info, prems, concs, acts, newVars) with
+//! * **Rule ordering key**: HS sorts `getProtoRuleEs` under the derived
+//!   `Ord (Rule i)` = (info, prems, concs, acts, newVars) with
 //!   `Ord ProtoRuleEInfo` = (name, attributes, restrictions).  RS
-//!   `RuleAttributes`/`SyntacticLNFormula` have no `Ord`; the comparator
-//!   here uses (name, prems, concs, acts, new_vars).  The attribute/
-//!   restriction tiebreak is unreachable: duplicate rule names are rejected
-//!   at parse time, so the name alone already discriminates the input.
+//!   `RuleAttributes`/`SyntacticLNFormula` have no `Ord`; the sort key here
+//!   is (name, prems, concs, acts, new_vars).  The attribute/restriction
+//!   tiebreak is unreachable: duplicate rule names are rejected at parse
+//!   time, so the name alone already discriminates the input.
 
 use std::collections::BTreeSet;
 
-use tamarin_parser::ast as p;
 use tamarin_term::function_symbols::FunSym;
 use tamarin_term::lterm::{avoid, rename, sort_of_lnterm, HasFrees, LNTerm, LSort, LVar};
 use tamarin_term::maude_proc::{MaudeError, MaudeHandle};
@@ -422,17 +421,17 @@ fn rename_rule_from_zero(r: ProtoRuleE) -> (ProtoRuleE, Vec<LVar>) {
 // applyPartialEvaluation (Prover.hs:237-264)
 // =============================================================================
 
-/// HS derived-`Ord (Rule i)` order, minus the unreachable attribute/
-/// restriction tiebreak (see the module doc): name, then premises,
+/// The sort key of HS's derived-`Ord (Rule i)` order, minus the unreachable
+/// attribute/restriction tiebreak (see the module doc): name, then premises,
 /// conclusions, actions, new_vars.
-fn proto_rule_cmp(a: &ProtoRuleE, b: &ProtoRuleE) -> std::cmp::Ordering {
-    a.info
-        .name
-        .cmp(&b.info.name)
-        .then_with(|| a.premises.cmp(&b.premises))
-        .then_with(|| a.conclusions.cmp(&b.conclusions))
-        .then_with(|| a.actions.cmp(&b.actions))
-        .then_with(|| a.new_vars.cmp(&b.new_vars))
+fn proto_rule_key(r: &ProtoRuleE) -> impl Ord + '_ {
+    (
+        &r.info.name,
+        &r.premises,
+        &r.conclusions,
+        &r.actions,
+        &r.new_vars,
+    )
 }
 
 /// The `text{* … *}` report body (HS `ppAbsState`, Prover.hs:257-264),
@@ -455,37 +454,27 @@ fn abs_state_report(st: &BTreeSet<LNFact>, n_refined: usize, n_orig: usize) -> S
     ))
 }
 
-/// HS `applyPartialEvaluation` (Prover.hs:237-264), operating on RS's
-/// parallel parsed/elaborated theories:
+/// HS `applyPartialEvaluation` (Prover.hs:237-264) over the internal theory:
 ///
-/// 1. `ru_es` = the elaborated rules' `ProtoRuleE`s through a Set
-///    round-trip (`getProtoRuleEs`, ClosedTheory.hs:87-89) — this is what
-///    re-orders the rules ALPHABETICALLY by name.
+/// 1. `ru_es` = the rules' `ProtoRuleE`s through a Set round-trip
+///    (`getProtoRuleEs`, ClosedTheory.hs:87-89) — this is what re-orders
+///    the rules ALPHABETICALLY by name.
 /// 2. Run [`partial_evaluation`].
-/// 3. Splice both item lists: items before the first rule item stay put;
-///    at that position insert the `text{*…*}` report item followed by ALL
-///    refined rules; every other rule item is removed; later non-rule
-///    items follow in order (HS `replaceProtoRules`).  On the parsed side
-///    the anchor is the first rule item PRESENT in the elaborated theory —
-///    parsed leftovers of rules dropped by the no-variant check
-///    (run.rs) have no elaborated counterpart and so render as nothing;
-///    HS's closed item list has no such entry, so they cannot anchor the
-///    splice either.
+/// 3. Splice the item list (HS `replaceProtoRules`): items before the first
+///    rule item stay put; at that position go the `text{*…*}` report item
+///    and ALL refined rules; every other rule item is removed; later
+///    non-rule items follow in order.
 /// 4. A theory whose closed form has no rule item gets no report block and
 ///    is left untouched (HS `replaceProtoRules [] = []`).
 ///
-/// The refined elaborated rules are fresh `OpenProtoRule`s (no variants,
-/// no loop breakers): the caller must re-run `populate_rule_variants` and
+/// The refined rules are fresh `OpenProtoRule`s (no variants, no loop
+/// breakers): the caller must re-run `populate_rule_variants` and
 /// `annotate_loop_breakers` on the rewritten theory — HS's second
-/// `closeTheoryWithMaude`.  The parsed and elaborated refined rule items
-/// are inserted 1:1 in the same order, which is what keeps the two item
-/// streams aligned by `(name, occurrence-ordinal)` once partial evaluation
-/// makes rule names non-unique.
+/// `closeTheoryWithMaude`.
 ///
 /// Returns the stderr trace bytes to emit after the "Theory closed"
 /// marker (see [`partial_evaluation`]).
 pub fn apply_partial_evaluation(
-    parsed: &mut p::Theory,
     elaborated: &mut Theory,
     maude: &MaudeHandle,
     style: EvaluationStyle,
@@ -509,15 +498,7 @@ pub fn apply_partial_evaluation(
         // the trivial evaluation produces no trace.
         return Ok(String::new());
     }
-    let elab_names: BTreeSet<String> = elaborated.rules().map(|o| o.name().to_string()).collect();
-    let Some(p_anchor) = parsed
-        .items
-        .iter()
-        .position(|it| matches!(it, p::TheoryItem::Rule(r) if elab_names.contains(&r.name)))
-    else {
-        return Ok(String::new());
-    };
-    let e_anchor = elaborated
+    let anchor = elaborated
         .items
         .iter()
         .position(|it| matches!(it, TheoryItem::Rule(_)))
@@ -525,36 +506,18 @@ pub fn apply_partial_evaluation(
 
     // `getProtoRuleEs`' Set round-trip: sort under the derived rule order,
     // drop exact duplicates.
-    ru_es.sort_by(proto_rule_cmp);
+    ru_es.sort_by(|a, b| proto_rule_key(a).cmp(&proto_rule_key(b)));
     ru_es.dedup_by(|a, b| a == b);
 
     let (st, refined, trace) = partial_evaluation(maude, style, &ru_es)?;
     let body = abs_state_report(&st, refined.len(), ru_es.len());
 
-    // Parsed-side splice: the report block, then one rule item per refined
-    // rule.  Borrows `refined` so the elaborated side can consume it.
-    let mut inserted: Vec<p::TheoryItem> = Vec::with_capacity(refined.len() + 1);
-    inserted.push(p::TheoryItem::FormalComment {
-        header: "text".to_string(),
-        body: body.clone(),
-    });
-    inserted.extend(
-        refined
-            .iter()
-            .map(|r| p::TheoryItem::Rule(crate::elaborate::proto_rule_to_parsed(r))),
-    );
-    parsed.items = splice_refined(
-        std::mem::take(&mut parsed.items),
-        p_anchor,
-        |it| matches!(it, p::TheoryItem::Rule(_)),
-        inserted,
-    );
-
-    // Elaborated-side splice (same shape; the refined rules carry empty
-    // variant/loop-breaker fields for the caller's re-close).  That re-close
-    // is HS's second `closeTheoryWithMaude` (Prover.hs:238-241), which reaches
-    // `closeProtoRule` and narrows `applyMacroInRule macros ruE` while keeping
-    // the refined rule itself as `cprRuleE` (lib/theory/src/Rule.hs:82-86).
+    // The refined rules carry empty variant/loop-breaker fields for the
+    // caller's re-close.  That re-close is HS's second
+    // `closeTheoryWithMaude` (Prover.hs:238-241), which reaches
+    // `closeProtoRule` and narrows `applyMacroInRule macros ruE` while
+    // keeping the refined rule itself as `cprRuleE`
+    // (lib/theory/src/Rule.hs:82-86).
     let macros: Vec<crate::theory::LNMacro> = elaborated.macros().cloned().collect();
     let mut inserted: Vec<TheoryItem> = Vec::with_capacity(refined.len() + 1);
     inserted.push(TheoryItem::Text(("text".to_string(), body)));
@@ -566,33 +529,29 @@ pub fn apply_partial_evaluation(
         }
         TheoryItem::Rule(opr)
     }));
-    elaborated.items = splice_refined(
-        std::mem::take(&mut elaborated.items),
-        e_anchor,
-        |it| matches!(it, TheoryItem::Rule(_)),
-        inserted,
-    );
+    elaborated.items = splice_refined(std::mem::take(&mut elaborated.items), anchor, inserted);
 
     Ok(trace)
 }
 
-/// HS `replaceProtoRules` as one list rewrite, shared by the parsed and
-/// elaborated item lists: keep everything before `anchor` verbatim, put
-/// `inserted` (the report block followed by the refined rules) in the
-/// anchor's place, then keep the later NON-rule items in order.  `anchor`
-/// itself is a rule item, so the `is_rule` filter over the tail drops it
-/// along with every later rule item.
-fn splice_refined<T>(
-    items: Vec<T>,
+/// HS `replaceProtoRules` as one list rewrite: keep everything before
+/// `anchor` verbatim, put `inserted` (the report block followed by the
+/// refined rules) in the anchor's place, then keep the later NON-rule items
+/// in order.  `anchor` itself is a rule item, so the filter over the tail
+/// drops it along with every later rule item.
+fn splice_refined(
+    items: Vec<TheoryItem>,
     anchor: usize,
-    is_rule: impl Fn(&T) -> bool,
-    inserted: Vec<T>,
-) -> Vec<T> {
+    inserted: Vec<TheoryItem>,
+) -> Vec<TheoryItem> {
     let mut out = items;
     let tail = out.split_off(anchor);
     out.reserve(inserted.len() + tail.len());
     out.extend(inserted);
-    out.extend(tail.into_iter().filter(|it| !is_rule(it)));
+    out.extend(
+        tail.into_iter()
+            .filter(|it| !matches!(it, TheoryItem::Rule(_))),
+    );
     out
 }
 

@@ -1746,13 +1746,11 @@ impl TheoryPipeline<'_> {
                 crate::cli::PartialEval::Summary => tamarin_theory::tools::EvaluationStyle::Summary,
                 crate::cli::PartialEval::Verbose => tamarin_theory::tools::EvaluationStyle::Tracing,
             };
-            pe_trace = tamarin_theory::tools::apply_partial_evaluation(
-                &mut self.parsed,
-                &mut self.elaborated,
-                m,
-                style,
-            )
-            .map_err(|e| RunError(format!("partial evaluation of {} failed: {}", in_file, e)))?;
+            pe_trace =
+                tamarin_theory::tools::apply_partial_evaluation(&mut self.elaborated, m, style)
+                    .map_err(|e| {
+                        RunError(format!("partial evaluation of {} failed: {}", in_file, e))
+                    })?;
 
             // HS's second `closeTheoryWithMaude` (Prover.hs:237-264, see line 240).  The refined
             // rules come back as fresh open rules with empty `variant_substs`
@@ -1764,12 +1762,13 @@ impl TheoryPipeline<'_> {
             // whose refined dataflow graph is still cyclic, e.g.
             // loops/Minimal_Loop_Example.spthy).  Variants must be populated
             // first: the breaker relation's `instances` iterate each rule's
-            // variant substitutions.  The no-variant drop in
-            // `check_translated_theory` is NOT redone: it is name-keyed and
-            // touches `elaborated` only, while partial evaluation can give
-            // two refined rules the same name — dropping one side would break
-            // the positional parsed↔elaborated rule pairing the
-            // closed-theory renderer relies on.
+            // variant substitutions.  The no-variant drop is NOT redone:
+            // HS's re-close reaches `closeProtoRule` and drops a refined rule
+            // whose variant set comes back empty
+            // (lib/theory/src/Rule.hs:82-86), while the port's drop sits in
+            // `check_translated_theory`, runs once on the pre-evaluation
+            // theory and is keyed by rule name, which partial evaluation
+            // makes non-unique.
             tamarin_theory::tools::rule_variants::populate_rule_variants(
                 &mut self.elaborated,
                 m,

@@ -259,16 +259,16 @@ fn nub_modulo_freshness_distinguishes_sharing() {
     assert_eq!(kept.len(), 2);
 }
 
-/// The Set round-trip comparator orders by rule name (HS derived
+/// The Set round-trip key orders by rule name (HS derived
 /// `Ord ProtoRuleEInfo` — name first).
 #[test]
-fn proto_rule_cmp_sorts_alphabetically_by_name() {
+fn proto_rule_key_sorts_alphabetically_by_name() {
     let mut rules = [
         simple_rule("Zebra", ("x", 0), ("x", 0)),
         simple_rule("Apple", ("x", 0), ("x", 0)),
         simple_rule("Mango", ("x", 0), ("x", 0)),
     ];
-    rules.sort_by(proto_rule_cmp);
+    rules.sort_by(|a, b| proto_rule_key(a).cmp(&proto_rule_key(b)));
     let names: Vec<&str> = rules
         .iter()
         .map(|r| match &r.info.name {
@@ -480,30 +480,13 @@ fn partial_evaluation_rule_multiplication_and_name_hints() {
 // Maude-backed: apply_partial_evaluation splice
 // =============================================================================
 
-fn parsed_stub_rule(name: &str) -> p::Rule {
-    p::Rule {
-        name: name.to_string(),
-        modulo: None,
-        attributes: vec![],
-        premises: vec![],
-        actions: vec![],
-        conclusions: vec![],
-        embedded_restrictions: vec![],
-        variants: vec![],
-        left_right: None,
-    }
+fn text_item(tag: &str) -> TheoryItem {
+    TheoryItem::Text(("section".to_string(), tag.to_string()))
 }
 
-fn comment(tag: &str) -> p::TheoryItem {
-    p::TheoryItem::FormalComment {
-        header: "section".to_string(),
-        body: tag.to_string(),
-    }
-}
-
-/// The report + refined rules land at the FIRST rule item's position in
-/// BOTH item lists; earlier items stay put, later non-rule items follow;
-/// the refined rules come out alphabetically (§3 rows 1, 3).
+/// The report + refined rules land at the FIRST rule item's position;
+/// earlier items stay put, later non-rule items follow; the refined rules
+/// come out alphabetically (§3 rows 1, 3).
 #[test]
 fn apply_partial_evaluation_splices_at_first_rule_item() {
     let Some(path) = maude_path() else { return };
@@ -526,37 +509,24 @@ fn apply_partial_evaluation_splices_at_first_rule_item() {
         vec![],
     );
 
-    let mut parsed = p::Theory {
-        is_diff: false,
-        name: "T".to_string(),
-        configuration: None,
-        items: vec![
-            comment("before"),
-            p::TheoryItem::Rule(parsed_stub_rule("Zebra")),
-            comment("mid"),
-            p::TheoryItem::Rule(parsed_stub_rule("Apple")),
-            comment("after"),
-        ],
-    };
     let mut elab: Theory = Theory::new("T", SignaturePure::empty(false));
     elab.items = vec![
-        TheoryItem::Text(("section".to_string(), "before".to_string())),
+        text_item("before"),
         TheoryItem::Rule(OpenProtoRule::new(zebra)),
-        TheoryItem::Text(("section".to_string(), "mid".to_string())),
+        text_item("mid"),
         TheoryItem::Rule(OpenProtoRule::new(apple)),
-        TheoryItem::Text(("section".to_string(), "after".to_string())),
+        text_item("after"),
     ];
 
-    let trace =
-        apply_partial_evaluation(&mut parsed, &mut elab, &h, EvaluationStyle::Summary).unwrap();
+    let trace = apply_partial_evaluation(&mut elab, &h, EvaluationStyle::Summary).unwrap();
     // Two zero-premise rules, conclusions abstract to Ap(y) + Out(z).
     assert_eq!(trace, " partial evaluation: step 0 added 2 facts\n");
 
-    // Parsed: before | text{*report*} | Apple | Zebra | mid | after.
-    assert_eq!(parsed.items.len(), 6);
-    assert_eq!(parsed.items[0], comment("before"));
-    match &parsed.items[1] {
-        p::TheoryItem::FormalComment { header, body } => {
+    // before | text{*report*} | Apple | Zebra | mid | after.
+    assert_eq!(elab.items.len(), 6);
+    assert_eq!(elab.items[0], text_item("before"));
+    match &elab.items[1] {
+        TheoryItem::Text((header, body)) => {
             assert_eq!(header, "text");
             assert!(
                 body.starts_with(" the abstract state after partial evaluation contains 4 facts:")
@@ -568,23 +538,76 @@ fn apply_partial_evaluation_splices_at_first_rule_item() {
         }
         other => panic!("expected report item, got {:?}", other),
     }
-    let rule_name = |it: &p::TheoryItem| match it {
-        p::TheoryItem::Rule(r) => r.name.clone(),
+    let rule_name = |it: &TheoryItem| match it {
+        TheoryItem::Rule(r) => r.name().to_string(),
         other => panic!("expected rule item, got {:?}", other),
     };
-    assert_eq!(rule_name(&parsed.items[2]), "Apple");
-    assert_eq!(rule_name(&parsed.items[3]), "Zebra");
-    assert_eq!(parsed.items[4], comment("mid"));
-    assert_eq!(parsed.items[5], comment("after"));
+    assert_eq!(rule_name(&elab.items[2]), "Apple");
+    assert_eq!(rule_name(&elab.items[3]), "Zebra");
+    assert_eq!(elab.items[4], text_item("mid"));
+    assert_eq!(elab.items[5], text_item("after"));
 
-    // Elaborated: same shape, fresh OpenProtoRules (no variants/breakers).
-    assert_eq!(elab.items.len(), 6);
-    assert!(matches!(&elab.items[1], TheoryItem::Text((h2, _)) if h2 == "text"));
-    let elab_names: Vec<&str> = elab.rules().map(|r| r.name()).collect();
-    assert_eq!(elab_names, vec!["Apple", "Zebra"]);
-    assert!(elab
-        .rules()
-        .all(|r| r.variant_substs.is_empty() && r.abstracted_rule.is_none()));
+    // Fresh OpenProtoRules for the caller's re-close.
+    assert!(elab.rules().all(|r| r.variant_substs.is_empty()
+        && r.abstracted_rule.is_none()
+        && r.loop_breakers.is_empty()));
+}
+
+/// A spliced refined rule carries the pre-macro rule as its `rule_e`, the
+/// half HS's re-close narrows `applyMacroInRule macros ruE` from while
+/// keeping `ruE` itself (lib/theory/src/Rule.hs:82-86).  `open_proto_rule`
+/// then identifies the AC half with it up to terms and the rule renders
+/// without a `rule (modulo AC)` block.
+#[test]
+fn a_refined_rule_keeps_its_pre_macro_e_half() {
+    let Some(path) = maude_path() else { return };
+    let h = MaudeHandle::start(&path, pair_maude_sig()).unwrap();
+
+    // `macros: dup(y) = <y, y>` and a rule whose conclusion calls it.
+    let y = LVar::new("y", LSort::Msg, 0);
+    let dup: crate::theory::LNMacro = crate::theory::LNMacro::new(
+        b"dup".to_vec(),
+        vec![y],
+        tamarin_term::builtin::pair(var_term(y), var_term(y)),
+    );
+    let dup_call: LNTerm = f_app(
+        tamarin_term::macro_expand::macro_to_fun_sym(&dup),
+        vec![var_term(y)],
+    );
+    let macroed: ProtoRuleE = Rule::new(
+        ProtoRuleEInfo::standard("Macroed"),
+        vec![],
+        vec![proto_fact(
+            Multiplicity::Linear,
+            "Ap",
+            vec![dup_call.clone()],
+        )],
+        vec![],
+    );
+
+    let mut elab: Theory = Theory::new("T", SignaturePure::empty(false));
+    elab.items = vec![
+        TheoryItem::Macros(vec![dup]),
+        TheoryItem::Rule(OpenProtoRule::new(macroed)),
+    ];
+    apply_partial_evaluation(&mut elab, &h, EvaluationStyle::Silent).unwrap();
+
+    let refined: Vec<&OpenProtoRule> = elab.rules().collect();
+    assert_eq!(refined.len(), 1);
+    let opr = refined[0];
+    assert_eq!(
+        opr.rule_e().conclusions,
+        vec![proto_fact(Multiplicity::Linear, "Ap", vec![dup_call])]
+    );
+    assert_eq!(
+        opr.rule.conclusions,
+        vec![proto_fact(
+            Multiplicity::Linear,
+            "Ap",
+            vec![tamarin_term::builtin::pair(var_term(y), var_term(y))]
+        )]
+    );
+    assert!(crate::theory::open_proto_rule(opr).rule_ac.is_empty());
 }
 
 /// A theory with no rule items is a no-op (HS `replaceProtoRules [] = []`).
@@ -592,23 +615,11 @@ fn apply_partial_evaluation_splices_at_first_rule_item() {
 fn apply_partial_evaluation_no_rules_is_noop() {
     let Some(path) = maude_path() else { return };
     let h = MaudeHandle::start(&path, pair_maude_sig()).unwrap();
-    let mut parsed = p::Theory {
-        is_diff: false,
-        name: "T".to_string(),
-        configuration: None,
-        items: vec![comment("only")],
-    };
     let mut elab: Theory = Theory::new("T", SignaturePure::empty(false));
-    elab.items = vec![TheoryItem::Text((
-        "section".to_string(),
-        "only".to_string(),
-    ))];
-    let parsed_before = parsed.clone();
+    elab.items = vec![text_item("only")];
     let elab_before = elab.clone();
-    let trace =
-        apply_partial_evaluation(&mut parsed, &mut elab, &h, EvaluationStyle::Tracing).unwrap();
+    let trace = apply_partial_evaluation(&mut elab, &h, EvaluationStyle::Tracing).unwrap();
     assert_eq!(trace, "");
-    assert_eq!(parsed, parsed_before);
     assert_eq!(elab, elab_before);
 }
 
