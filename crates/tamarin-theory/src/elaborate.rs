@@ -36,7 +36,6 @@ use std::collections::BTreeSet;
 
 use tamarin_parser::ast as p;
 use tamarin_term::function_symbols::{AcFctSym, Constructability, NdcState, NoEqSym, Privacy};
-use tamarin_term::lterm::LSort;
 use tamarin_term::lterm::LVar;
 
 use tamarin_term::lterm::{Name, NameTag};
@@ -120,38 +119,31 @@ pub fn elaborate_with_diagnostics(
     Ok((thy, diags))
 }
 
-/// Collect the id of every public-sorted `Name` constant in a term, in
-/// traversal order (HS `filter ((LSortPub ==) . sortOfName) (universeBi t)`).
-/// Generic over the variable type so it serves both `LNTerm` (rule facts) and
-/// `SapicTerm` (process terms).
-pub(crate) fn collect_pub_names<V>(t: &VTerm<Name, V>, out: &mut Vec<String>) {
+/// Collect every `Name` constant of a term in traversal order — HS
+/// `universeBi t` at `[Name]`, which both name reports filter by
+/// `sortOfName` (Wellformedness.hs:447, :475-478).  Generic over the variable
+/// type so it serves both `LNTerm` (rule facts) and `SapicTerm` (process
+/// terms).
+pub(crate) fn collect_names<V>(t: &VTerm<Name, V>, out: &mut Vec<Name>) {
     match t {
-        Term::Lit(Lit::Con(n)) => {
-            if tamarin_term::lterm::sort_of_name(n) == LSort::Pub {
-                out.push(n.id.0.to_string());
-            }
-        }
+        Term::Lit(Lit::Con(n)) => out.push(*n),
         Term::Lit(Lit::Var(_)) => {}
         Term::App(_, args) => {
             for a in args.iter() {
-                collect_pub_names(a, out);
+                collect_names(a, out);
             }
         }
     }
 }
 
-/// Walk every node of a SAPIC process (`pfoldMap`), collecting public-name
-/// constants from each node's terms — the `universeBi` reach over the source
+/// Walk every node of a SAPIC process (`pfoldMap`), collecting the `Name`
+/// constants of each node's terms — the `universeBi` reach over the source
 /// subprocess HS attaches to a generated rule.  HS's `universeBi` is
 /// field-exhaustive: it also descends into each node's
 /// `ProcessParsedAnnotation.location` term, into a `Cond` combinator's
 /// condition formula and into an `Msr` action's embedded `_restrict`
 /// formulas (all `Data` in HS), so those are harvested here too.
-/// Collection order within a rule differs from HS's (HS walks `rInfo` first,
-/// facts after) but is immaterial: `clashesOn` dedups by (spelling) with the
-/// surviving pair keyed only on (rule name, spelling), which is identical for
-/// every occurrence inside one rule.
-pub(crate) fn collect_process_pub_names(p: &crate::sapic::PlainProcess, out: &mut Vec<String>) {
+pub(crate) fn collect_process_names(p: &crate::sapic::PlainProcess, out: &mut Vec<Name>) {
     use crate::sapic::{Process, ProcessCombinator as PC, SapicAction as SA};
     crate::sapic::pfold_map(p, &mut |node| {
         let ann = match node {
@@ -160,36 +152,36 @@ pub(crate) fn collect_process_pub_names(p: &crate::sapic::PlainProcess, out: &mu
             Process::Comb(_, a, _, _) => a,
         };
         if let Some(loc) = &ann.location {
-            collect_pub_names(loc, out);
+            collect_names(loc, out);
         }
         match node {
             Process::Null(_) => {}
             Process::Action(ac, _, _) => match ac {
                 SA::ChIn { chan, msg, .. } => {
                     if let Some(c) = chan {
-                        collect_pub_names(c, out);
+                        collect_names(c, out);
                     }
-                    collect_pub_names(msg, out);
+                    collect_names(msg, out);
                 }
                 SA::ChOut { chan, msg } => {
                     if let Some(c) = chan {
-                        collect_pub_names(c, out);
+                        collect_names(c, out);
                     }
-                    collect_pub_names(msg, out);
+                    collect_names(msg, out);
                 }
                 SA::Insert(a, b) => {
-                    collect_pub_names(a, out);
-                    collect_pub_names(b, out);
+                    collect_names(a, out);
+                    collect_names(b, out);
                 }
-                SA::Delete(a) | SA::Lock(a) | SA::Unlock(a) => collect_pub_names(a, out),
+                SA::Delete(a) | SA::Lock(a) | SA::Unlock(a) => collect_names(a, out),
                 SA::Event(fa) => {
                     for t in fa.terms.iter() {
-                        collect_pub_names(t, out);
+                        collect_names(t, out);
                     }
                 }
                 SA::ProcessCall(_, args) => {
                     for t in args {
-                        collect_pub_names(t, out);
+                        collect_names(t, out);
                     }
                 }
                 SA::Msr {
@@ -201,36 +193,34 @@ pub(crate) fn collect_process_pub_names(p: &crate::sapic::PlainProcess, out: &mu
                 } => {
                     for fa in prems.iter().chain(acts).chain(concs) {
                         for t in fa.terms.iter() {
-                            collect_pub_names(t, out);
+                            collect_names(t, out);
                         }
                     }
                     // An embedded `_restrict` formula is part of the source
                     // subprocess the generated rule carries, so its `'c'`
                     // literals are `Name` constants `universeBi` reaches.
                     for f in rest {
-                        crate::formula::for_each_formula_term(f, &mut |t| {
-                            collect_pub_names(t, out)
-                        });
+                        crate::formula::for_each_formula_term(f, &mut |t| collect_names(t, out));
                     }
                 }
                 SA::Rep | SA::New(_) => {}
             },
             Process::Comb(c, _, _, _) => match c {
                 PC::CondEq(a, b) => {
-                    collect_pub_names(a, out);
-                    collect_pub_names(b, out);
+                    collect_names(a, out);
+                    collect_names(b, out);
                 }
-                PC::Lookup(t, _) => collect_pub_names(t, out),
+                PC::Lookup(t, _) => collect_names(t, out),
                 PC::Let { left, right, .. } => {
-                    collect_pub_names(left, out);
-                    collect_pub_names(right, out);
+                    collect_names(left, out);
+                    collect_names(right, out);
                 }
                 // A condition is a `SapicNFormula`, so its `'c'` literals are
                 // the same `Name` constants `universeBi` collects everywhere
                 // else; a declared nullary symbol is an `App` and contributes
                 // nothing.
                 PC::Cond(f) => {
-                    crate::formula::for_each_formula_term(f, &mut |t| collect_pub_names(t, out))
+                    crate::formula::for_each_formula_term(f, &mut |t| collect_names(t, out))
                 }
                 PC::Parallel | PC::Ndc => {}
             },

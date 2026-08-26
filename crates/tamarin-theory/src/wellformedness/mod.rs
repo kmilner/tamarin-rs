@@ -247,7 +247,7 @@ pub fn after_unbound_topics() -> Vec<&'static str> {
 pub fn check_theory(elab: &Theory, parsed: &p::Theory) -> WfReport {
     // Mirrors HS `Theory.Tools.Wellformedness.checkWellformedness`
     // (Wellformedness.hs:1270-1286) in HS check order: unbound, freshNames,
-    // publicNames, ruleSorts (variable_sort_clashes), factReports,
+    // publicNames, ruleSorts, factReports,
     // formulaReports, lemmaAttribute, multRestricted, natWellSorted,
     // subtermConvergence.
     let mut report = Vec::new();
@@ -255,17 +255,15 @@ pub fn check_theory(elab: &Theory, parsed: &p::Theory) -> WfReport {
     // (`rules::unbound_report`, anchored by `after_unbound_topics`): it reads
     // the TRANSLATED theory's rules, so the ones SAPIC's process translation
     // generates are in scope.
-    report.extend(rules::fresh_names_report(elab, parsed));
+    report.extend(rules::fresh_names_report(elab));
     // publicNamesReport — spliced by `splice_translated_wf_reports`
     // (`rules::translated_public_names_report`, anchored by
     // `after_public_names_topics`): it reads the TRANSLATED rules, whose
     // `process` attribute carries the constants that appear only inside a
     // SAPIC process.
     // HS `ruleSortsReport` (sortsClashCheck) runs HERE — after publicNamesReport
-    // and BEFORE factReports (Wellformedness.hs:1270-1286, see line 1275/1256).  It is ported as
-    // `variable_sort_clashes` ("Variable with mismatching sorts or
-    // capitalization").
-    report.extend(rules::variable_sort_clashes(elab, parsed));
+    // and BEFORE factReports (Wellformedness.hs:1270-1286, see line 1275/1256).
+    report.extend(rules::rule_sorts_report(elab));
     // ruleVariantsReport — spliced by the batch load pipeline (`run.rs`,
     // anchored by `after_variants_topics`): it needs a MaudeHandle and the
     // variant solver.
@@ -480,7 +478,7 @@ pub fn splice_translated_wf_reports(
     // in `insert <'roles', x, 'C'>` clashing with `'c'` — is surfaced,
     // attributed to the root `Init` rule exactly as HS.  Position: publicNames
     // is HS check index 4, so it splices before the first entry from a LATER
-    // check — ruleSorts (HS index 5, the `variable_sort_clashes` topic) or any
+    // check — ruleSorts (HS index 5, the sort-clash topic) or any
     // `WF_TOPIC_ORDER` topic except "Unbound variables" (`unboundReport`, HS
     // index 2, runs BEFORE publicNames, so its entries must not act as a
     // boundary).

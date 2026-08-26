@@ -4,7 +4,9 @@
 
 //! The wellformedness checks that walk a theory's rules.
 //!
-//! HS `unboundReport` (Wellformedness.hs:514-519) and `natWellSortedReport`
+//! HS `unboundReport` (Wellformedness.hs:514-519), `freshNamesReport'`
+//! (Wellformedness.hs:444-452), `ruleSortsReport`
+//! (Wellformedness.hs:275-279) and `natWellSortedReport`
 //! (Wellformedness.hs:319-333) read `thyProtoRules thy`
 //! (Wellformedness.hs:133-134) — the macro-applied `oprRuleE` of every rule
 //! item of the `OpenTranslatedTheory`.  The elaborated [`Theory`]'s rules are
@@ -14,10 +16,11 @@
 //! Wellformedness.hs:463-484) reads them too, including the source
 //! subprocess a generated rule carries.
 //!
-//! [`fresh_names_report`] (HS `freshNamesReport'`, Wellformedness.hs:444-452)
-//! and [`variable_sort_clashes`] (HS `ruleSortsReport`,
-//! Wellformedness.hs:258-280) read the parser AST, so they carry their own
-//! walk over a rule's terms.
+//! The two checks that read a whole rule rather than its facts take HS's own
+//! reach: [`fresh_names_report`] walks [`rule_names`], the `universeBi ru`
+//! name traversal, and [`rule_sorts_report`] folds
+//! [`crate::rule::proto_rule_e_frees`], the `frees` fold that descends into
+//! the rule info's `_restrict` formulas.
 //!
 //! [`unbound_report`]'s body is HS's `text info $-$ nest 2 (prettyVarList
 //! vars)` paragraph fill, so it hands its variable cells to
@@ -29,22 +32,22 @@
 
 use std::collections::BTreeSet;
 
-use tamarin_parser::ast as p;
 use tamarin_term::function_symbols::{nat_one_sym, AcSym, FunSym};
-use tamarin_term::lterm::{frees, frees_list, LNTerm, LSort, LVar};
+use tamarin_term::lterm::{frees, frees_list, sort_of_name, LNTerm, LSort, LVar, Name};
 use tamarin_term::pretty::pretty_nterm;
 use tamarin_term::term::Term;
 use tamarin_term::vterm::Lit;
 
-use crate::formula::formula_frees_list;
+use crate::elaborate::{collect_names, collect_process_names};
+use crate::formula::{for_each_formula_term, formula_frees_list};
 use crate::pretty_hpj::{self as hpj, Doc};
-use crate::rule::ProtoRuleE;
+use crate::rule::{proto_rule_e_frees, ProtoRuleE};
 use crate::sapic::{Process, ProcessCombinator};
 use crate::theory::Theory;
 
 use super::{
-    grouped_topic_block, numbered_index_width, quote, render_var, rule_facts, show_rule_case_name,
-    theory_rules, thy_proto_rules, underline_topic, WfError, WfReport, WF_LINE_LENGTH, WF_RIBBON,
+    grouped_topic_block, numbered_index_width, quote, show_rule_case_name, thy_proto_rules,
+    underline_topic, WfError, WfReport, WF_LINE_LENGTH, WF_RIBBON,
 };
 
 // =============================================================================
@@ -246,148 +249,86 @@ pub fn nat_well_sorted_report(thy: &Theory) -> Vec<WfError> {
 }
 
 // =============================================================================
-// Helpers — parser-AST variables and name literals
+// Helpers — the name literals of a rule
 // =============================================================================
 
-/// Recursively collect every variable appearing in a term.
-fn term_vars(t: &p::Term, out: &mut Vec<p::VarSpec>) {
-    match t {
-        p::Term::Var(v) => out.push(v.clone()),
-        p::Term::App(_, args) => {
-            for a in args {
-                term_vars(a, out);
-            }
-        }
-        p::Term::AlgApp(_, a, b) => {
-            term_vars(a, out);
-            term_vars(b, out);
-        }
-        p::Term::Pair(items) => {
-            for a in items {
-                term_vars(a, out);
-            }
-        }
-        p::Term::Diff(a, b) => {
-            term_vars(a, out);
-            term_vars(b, out);
-        }
-        p::Term::BinOp(_, a, b) => {
-            term_vars(a, out);
-            term_vars(b, out);
-        }
-        p::Term::PatMatch(inner) => term_vars(inner, out),
-        p::Term::PubLit(_)
-        | p::Term::FreshLit(_)
-        | p::Term::NatLit(_)
-        | p::Term::Number(_)
-        | p::Term::NumberOne
-        | p::Term::NatOne
-        | p::Term::DhNeutral => {}
+/// Every `Name` of a rule, in HS `universeBi ru` order — the `Data`
+/// traversal visits a constructor's fields left to right, so the rule info
+/// comes first (its attributes, then its `_restrict` formulas —
+/// Theory/Model/Rule.hs:421-425) and the premises, conclusions, actions and
+/// new variables follow (Theory/Model/Rule.hs:218-225).
+fn rule_names(ru: &ProtoRuleE) -> Vec<Name> {
+    let mut out = Vec::new();
+    // The source subprocess a SAPIC-generated rule carries: HS's `universeBi`
+    // descends into it, so a constant that appears only there is a name of
+    // the rule.  HS's rule-attribute parser discards a written `process=`
+    // (`parseAndIgnore`, Theory/Text/Parser/Rule.hs:70-96, see line 74), so a
+    // user rule never carries one.
+    if let Some(proc) = &ru.info.attributes.process {
+        collect_process_names(proc, &mut out);
     }
-}
-
-fn fact_vars(f: &p::Fact) -> Vec<p::VarSpec> {
-    let mut v = Vec::new();
-    for a in &f.args {
-        term_vars(a, &mut v);
+    for phi in &ru.info.restrictions {
+        for_each_formula_term(phi, &mut |t| collect_names(t, &mut out));
     }
-    v
-}
-
-/// Collect every public-name literal (`'foo'`) and fresh-name literal
-/// (`~'foo'`) within a term subtree.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum NameKind {
-    Pub,
-    Fresh,
-}
-
-fn term_name_lits(t: &p::Term, out: &mut Vec<(NameKind, String)>) {
-    match t {
-        p::Term::PubLit(s) => out.push((NameKind::Pub, s.clone())),
-        p::Term::FreshLit(s) => out.push((NameKind::Fresh, s.clone())),
-        p::Term::App(_, args) => {
-            for a in args {
-                term_name_lits(a, out);
-            }
-        }
-        p::Term::AlgApp(_, a, b) => {
-            term_name_lits(a, out);
-            term_name_lits(b, out);
-        }
-        p::Term::Pair(items) => {
-            for a in items {
-                term_name_lits(a, out);
-            }
-        }
-        p::Term::Diff(a, b) => {
-            term_name_lits(a, out);
-            term_name_lits(b, out);
-        }
-        p::Term::BinOp(_, a, b) => {
-            term_name_lits(a, out);
-            term_name_lits(b, out);
-        }
-        p::Term::PatMatch(inner) => term_name_lits(inner, out),
-        _ => {}
-    }
-}
-
-/// Every name literal of a rule, in [`rule_facts`] order.  Both name reports
-/// walk `universeBi ru` (`freshNamesReport'` Wellformedness.hs:447,
-/// `publicNamesReport'` Wellformedness.hs:475-478) over `thyProtoRules`
-/// (:456, :486), so a name occurring only inside a `let` value
-/// (`let m = ~'foo' in … Out(m)`) is inlined into the rule body by the parser
-/// and surfaces here.
-fn rule_name_lits(r: &p::Rule) -> Vec<(NameKind, String)> {
-    let mut names = Vec::new();
-    for f in rule_facts(r) {
-        for t in &f.args {
-            term_name_lits(t, &mut names);
+    for fa in ru.premises.iter().chain(&ru.conclusions).chain(&ru.actions) {
+        for t in fa.terms.iter() {
+            collect_names(t, &mut out);
         }
     }
-    names
+    for t in &ru.new_vars {
+        collect_names(t, &mut out);
+    }
+    out
 }
 
 // =============================================================================
 // Fresh public constants — `~'foo'` is forbidden
 // =============================================================================
 
-pub fn fresh_names_report(_elab: &Theory, parsed: &p::Theory) -> WfReport {
-    // HS `freshNamesReport'` (Wellformedness.hs:444-452): one WfError per
-    // offending rule, body = `fsep` of
-    //   text ("rule " ++ quote (showRuleCaseName ru) ++ ": fresh public \
-    //         constants are not allowed:") : punctuate comma (map (show) names)
-    // where `quote cs = '`' : cs ++ "'"` (Wellformedness.hs:164-165, see line 165) and the fresh
-    // names render via `show (Name FreshName n) = "~'" ++ n ++ "'"`
-    // (LTerm.hs:235-240, see line 236).  Topic is "Fresh public constants"; the umbrella renderer
-    // emits the underlineTopic header once and 2-space-nests the bodies
-    // (separated by a `  ` blank line) — we bake that whole block into a single
-    // WfError so the default `format_wf_block` path reproduces the exact bytes.
+/// Port of HS `freshNamesReport'` (Wellformedness.hs:444-452): one body per
+/// rule that mentions a fresh-sorted `Name`, the `~'foo'` literal no `Fr`
+/// premise can produce.
+///
+/// The body is HS's `fsep $ text info : punctuate comma (map (nest 2 . text
+/// . show) names)` — ONE paragraph fill whose first cell is the info line, so
+/// a name that would overrun the ribbon takes a line of its own at the fill's
+/// indent plus 2.  `show (Name FreshName n) = "~'" ++ n ++ "'"`
+/// (LTerm.hs:235-240, see line 236) is [`Name`]'s `Display`, and the `nest 2`
+/// `prettyWfErrorReport` applies to every body of a topic group
+/// (Wellformedness.hs:118-125) is baked in, because the break decisions
+/// depend on the body's absolute column.  [`grouped_topic_block`] joins the
+/// rendered bodies under the one `underlineTopic` header.
+pub fn fresh_names_report(thy: &Theory) -> WfReport {
+    // Plain mode for the same reason as [`nat_well_sorted_report`]: the body
+    // is a `Doc` built and laid out here, and the web routes render under an
+    // active `HtmlDocGuard`.
+    let _plain = hpj::HtmlDocGuard::disable();
     let topic = "Fresh public constants";
     let mut bodies: Vec<String> = Vec::new();
-    for r in theory_rules(parsed) {
-        // HS `show (Name FreshName n) = "~'" ++ n ++ "'"` for each fresh name,
-        // joined by `punctuate comma` (`, `) under the `fsep`.
-        let fresh_lits: Vec<String> = rule_name_lits(r)
-            .iter()
-            .filter_map(|(k, n)| {
-                if *k == NameKind::Fresh {
-                    Some(format!("~'{}'", n))
-                } else {
-                    None
-                }
-            })
+    for ru in thy_proto_rules(thy) {
+        let names: Vec<Name> = rule_names(ru)
+            .into_iter()
+            .filter(|n| sort_of_name(n) == LSort::Fresh)
             .collect();
-        if !fresh_lits.is_empty() {
-            // Body only, 2-space `nest 2` indent baked in; HS `quote` form for
-            // the rule name (backtick + apostrophe).
-            bodies.push(format!(
-                "  rule `{}': fresh public constants are not allowed: {}",
-                r.name,
-                fresh_lits.join(", ")
-            ));
+        if names.is_empty() {
+            continue;
         }
+        let mut cells = vec![Doc::text(format!(
+            "rule {}: fresh public constants are not allowed:",
+            quote(&show_rule_case_name(ru))
+        ))];
+        cells.extend(hpj::punctuate(
+            Doc::char(','),
+            names
+                .iter()
+                .map(|n| Doc::text(n.to_string()).nest(2))
+                .collect(),
+        ));
+        bodies.push(
+            hpj::fsep(cells)
+                .nest(2)
+                .render_with(WF_LINE_LENGTH, WF_RIBBON),
+        );
     }
     grouped_topic_block(topic, bodies)
 }
@@ -497,7 +438,7 @@ pub fn translated_public_names_report(thy: &Theory) -> Vec<WfError> {
         // (Theory/Model/Rule.hs:1338-1340) = `prefixIfReserved n` for a
         // `StandRule n`.
         let case_name = crate::rule::prefix_if_reserved(r.name());
-        let mut names: Vec<String> = Vec::new();
+        let mut names: Vec<Name> = Vec::new();
         for f in r
             .rule
             .premises
@@ -506,14 +447,20 @@ pub fn translated_public_names_report(thy: &Theory) -> Vec<WfError> {
             .chain(&r.rule.conclusions)
         {
             for t in f.terms.iter() {
-                crate::elaborate::collect_pub_names(t, &mut names);
+                collect_names(t, &mut names);
             }
         }
         if let Some(proc) = &r.rule.info.attributes.process {
-            crate::elaborate::collect_process_pub_names(proc, &mut names);
+            collect_process_names(proc, &mut names);
         }
+        // Collection order within a rule differs from HS's (HS walks `rInfo`
+        // first, facts after) but is immaterial: `clashesOn` dedups by
+        // spelling with the surviving pair keyed only on (rule name,
+        // spelling), which is identical for every occurrence inside one rule.
         for n in names {
-            pairs.push((case_name.clone(), n));
+            if sort_of_name(&n) == LSort::Pub {
+                pairs.push((case_name.clone(), n.id.0.to_string()));
+            }
         }
     }
     public_names_report_from_pairs(pairs)
@@ -523,76 +470,85 @@ pub fn translated_public_names_report(thy: &Theory) -> Vec<WfError> {
 // Variable sort/capitalization clashes (within a single rule)
 // =============================================================================
 
-/// Within each rule, variables whose names agree modulo case AND share an
-/// index, but differ in their full `LVar` (sort or capitalization), clash.
-/// Port of HS `sortsClashCheck`/`ruleSortsReport` (Wellformedness.hs:258-280):
-/// `clashesOn removeSort id $ frees ru` where `removeSort lv = (lowerCase
-/// (lvarName lv), lvarIdx lv)`.  Bare identifiers default to sort `msg`
-/// (HS LSortMsg), so `~ltk` (fresh) vs `ltk` (msg) clash.  Runs on the
-/// let-substituted rule (HS `thyProtoRules` applies let-subst).
+/// HS `prettyVarList = fsep . punctuate comma . map prettyLVar`
+/// (TheoryObject.hs:858-859), whose `prettyLVar = text . show`
+/// (LTerm.hs:922-923) makes each cell a leaf.
+fn pretty_var_list(vars: &[LVar]) -> Doc {
+    hpj::fsep(hpj::punctuate(
+        Doc::char(','),
+        vars.iter().map(|v| Doc::text(v.to_string())).collect(),
+    ))
+}
+
+/// Port of HS `sortsClashCheck` (Wellformedness.hs:258-272): the variables
+/// that agree modulo case and index but differ as `LVar`s clash.  Bare
+/// identifiers carry sort `msg`, so `~ltk` (fresh) and `ltk` (msg) are a
+/// clash.
 ///
-/// Emits one `WfError` per offending rule (so the summary's `length rep`
-/// WARNING count matches HS, Batch.hs:87-316, see line 245), all sharing the topic
-/// "Variable with mismatching sorts or capitalization"; `format_wf_block`
-/// renders the header + "Possible reasons" preamble ONCE for the group.
-pub fn variable_sort_clashes(_elab: &Theory, parsed: &p::Theory) -> WfReport {
+/// The body is HS's `text info $-$ nest 2 (numbered' $ map prettyVarList cs)`
+/// with `prettyWfErrorReport`'s per-body `nest 2`
+/// (Wellformedness.hs:118-125) baked in, so the fills break at the body's
+/// true column.  The header and the "Possible reasons" paragraph HS carries
+/// in the topic string come from the topic itself, through
+/// `pretty_theory`'s headerless-preamble table.
+fn sorts_clash_check(info: String, vars: &[LVar]) -> Vec<WfError> {
+    // HS `clashesOn f g` (Wellformedness.hs:154-161) with `f = removeSort lv
+    // = (lowerCase (lvarName lv), lvarIdx lv)`: stable-sort by `f`, group the
+    // consecutive runs, and keep the runs whose `sortednubOn g` holds at
+    // least two elements.  `f` is taken once per variable rather than once
+    // per comparison.
+    let mut keyed: Vec<(String, LVar)> = vars.iter().map(|v| (v.name.to_lowercase(), *v)).collect();
+    keyed.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.idx.cmp(&b.1.idx)));
+    let mut clashes: Vec<Vec<LVar>> = Vec::new();
+    let mut i = 0;
+    while i < keyed.len() {
+        let key = (keyed[i].0.as_str(), keyed[i].1.idx);
+        let mut j = i + 1;
+        while j < keyed.len() && (keyed[j].0.as_str(), keyed[j].1.idx) == key {
+            j += 1;
+        }
+        // `sortednubOn id` sorts by `Ord LVar` — the index, then the sort,
+        // then the name (LTerm.hs:546-548).
+        let mut grp: Vec<LVar> = keyed[i..j].iter().map(|(_, v)| *v).collect();
+        grp.sort();
+        grp.dedup();
+        if grp.len() >= 2 {
+            clashes.push(grp);
+        }
+        i = j;
+    }
+    if clashes.is_empty() {
+        return Vec::new();
+    }
+    // `above_g` is HughesPJ's `$+$`, which HS's `$-$` maps to
+    // (Text/PrettyPrint/Class.hs:180).
+    let body = Doc::text(info)
+        .above_g(
+            hpj::numbered_prime(clashes.iter().map(|grp| pretty_var_list(grp)).collect()).nest(2),
+        )
+        .nest(2)
+        .render_with(WF_LINE_LENGTH, WF_RIBBON);
+    vec![WfError::new(
+        "Variable with mismatching sorts or capitalization",
+        body,
+    )]
+}
+
+/// Port of HS `ruleSortsReport` (Wellformedness.hs:275-279): one entry per
+/// offending rule, so the summary's `length rep` WARNING count matches HS
+/// (Batch.hs:246).  Its input is `frees ru`, which folds the rule info first
+/// and so reaches a variable that occurs only in a `_restrict` formula
+/// ([`proto_rule_e_frees`]).
+pub fn rule_sorts_report(thy: &Theory) -> WfReport {
+    // Plain mode for the same reason as [`nat_well_sorted_report`]: the body
+    // is a `Doc` built and laid out here, and the web routes render under an
+    // active `HtmlDocGuard`.
+    let _plain = hpj::HtmlDocGuard::disable();
     let mut out = Vec::new();
-    for r in theory_rules(parsed) {
-        // Pair each var with its lowercase name ONCE, so the sort/group steps
-        // below don't re-allocate a `to_lowercase` string per comparison/probe.
-        let mut vars: Vec<(String, p::VarSpec)> = Vec::new();
-        for f in rule_facts(r) {
-            for v in fact_vars(f) {
-                vars.push((v.name.to_lowercase(), v));
-            }
-        }
-        // clashesOn removeSort id: sort+group by (lowercase name, idx).
-        // Stable sort over the precomputed lowercase key — identical order to
-        // re-lowercasing in the comparator.
-        vars.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.idx.cmp(&b.1.idx)));
-        let mut clash_groups: Vec<Vec<&p::VarSpec>> = Vec::new();
-        let mut i = 0;
-        while i < vars.len() {
-            let key = (vars[i].0.as_str(), vars[i].1.idx);
-            let mut j = i + 1;
-            while j < vars.len() && (vars[j].0.as_str(), vars[j].1.idx) == key {
-                j += 1;
-            }
-            // sortednubOn id: sort by HS LVar Ord (idx, sort, name) then dedup.
-            let mut grp: Vec<&p::VarSpec> = vars[i..j].iter().map(|(_, v)| v).collect();
-            grp.sort_by(|a, b| {
-                a.idx
-                    .cmp(&b.idx)
-                    .then_with(|| a.sort.cmp(&b.sort))
-                    .then_with(|| a.name.cmp(&b.name))
-            });
-            grp.dedup_by(|a, b| a.name == b.name && a.sort == b.sort && a.idx == b.idx);
-            if grp.len() >= 2 {
-                clash_groups.push(grp);
-            }
-            i = j;
-        }
-        if clash_groups.is_empty() {
-            continue;
-        }
-        // Body (headerless): HS snd = `text info $-$ nest 2 (numbered' $ map
-        // prettyVarList cs)`, with ppTopic's outer `nest 2` baked in →
-        // "  rule `X': \n    1. <vars>".  `numbered'` separates items by a
-        // blank `text ""` line, which at 4-space indent renders as "    ".
-        let mut body = format!("  rule `{}': \n", r.name);
-        let w = numbered_index_width(clash_groups.len());
-        let items: Vec<String> = clash_groups
-            .iter()
-            .enumerate()
-            .map(|(k, grp)| {
-                let vs: Vec<String> = grp.iter().copied().map(render_var).collect();
-                format!("    {:>w$}. {}", k + 1, vs.join(", "), w = w)
-            })
-            .collect();
-        body.push_str(&items.join("\n    \n"));
-        out.push(WfError::new(
-            "Variable with mismatching sorts or capitalization",
-            body,
+    for ru in thy_proto_rules(thy) {
+        out.extend(sorts_clash_check(
+            format!("rule {}: ", quote(&show_rule_case_name(ru))),
+            &proto_rule_e_frees(ru),
         ));
     }
     out

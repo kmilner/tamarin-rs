@@ -57,28 +57,6 @@ divergence_shape() {
         grep -qF "Out( (y++tamXCAbar(a)) )" "$rs" \
             || { echo "    port side no longer keeps tamXCAbar(a) — expected \`Out( (y++tamXCAbar(a)) )\`" >&2; return 1; }
         ;;
-    s8_restrict_sort_clash.wf)
-        # The oracle folds a rule's `_restrict` formulas into `frees ru`; the
-        # port reads the rule's variables out of its facts, and `#NOW` reaches
-        # none of them.
-        grep -qF "Variable with mismatching sorts or capitalization" "$hs" \
-            || { echo "    oracle side lacks the sort-clash topic — expected \`Variable with mismatching sorts or capitalization'" >&2; return 1; }
-        grep -qF "1. ~now, #NOW" "$hs" \
-            || { echo "    oracle side does not group \`~now' with \`#NOW'" >&2; return 1; }
-        grep -qF "$clean" "$rs" \
-            || { echo "    port side reports a topic — the sort-clash gap may be closed" >&2; return 1; }
-        ;;
-    s8_restrict_fresh_name.wf)
-        # The oracle's name walk reaches a rule's `_restrict` formulas; the
-        # port's does not.  Both reach `~'foo'` through the generated
-        # restriction, so `Formula terms` stands on both sides.
-        grep -qF "rule \`R': fresh public constants are not allowed: ~'foo'" "$hs" \
-            || { echo "    oracle side lacks the \`Fresh public constants' body for rule R" >&2; return 1; }
-        grep -qF "Fresh public constants" "$rs" \
-            && { echo "    port side reports \`Fresh public constants' — the gap may be closed" >&2; return 1; }
-        grep -qF "Formula terms" "$rs" \
-            || { echo "    port side lacks \`Formula terms', so the two sides differ for another reason" >&2; return 1; }
-        ;;
     s8_two_reuse_exists_lemmas.summary)
         # One report entry per offending lemma upstream, one entry carrying
         # both bodies in the port; the `Lemma annotations` block is identical

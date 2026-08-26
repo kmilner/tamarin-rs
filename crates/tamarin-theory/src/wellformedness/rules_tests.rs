@@ -6,7 +6,9 @@ use super::super::check_theory;
 use super::*;
 use crate::sapic::{ProcessParsedAnnotation, SapicLVar};
 use crate::theory::TheoryItem;
-use tamarin_term::vterm::var_term;
+use tamarin_parser::ast as p;
+use tamarin_term::lterm::NameTag;
+use tamarin_term::vterm::{var_term, Lit as VLit};
 
 /// The elaborated theory for `src`, as a loader holds it before
 /// translation.
@@ -311,5 +313,130 @@ fn fresh_public_constants_message_format() {
         msg,
         "Fresh public constants\n======================\n\n  \
              rule `R': fresh public constants are not allowed: ~'foo'"
+    );
+}
+
+/// HS `thyProtoRules` applies the theory's macros to the `oprRuleE` of every
+/// rule item (Wellformedness.hs:133-134).  `elaborate` applies them at its
+/// single rule-construction site, so the elaborated rule IS the macro-applied
+/// one and the checks read it directly: the parsed rule still carries the
+/// call `m(~k)`, the internal rule carries `h(~k)`.
+#[test]
+fn thy_proto_rules_returns_the_macro_applied_rule() {
+    let src = "theory T\nbegin\n\
+               functions: h/1\n\
+               macros:\n  m(x) = h(x)\n\
+               rule A:\n  [ Fr(~k) ] --[ ]-> [ Out( m(~k) ) ]\n\
+               end\n";
+    let parsed = tamarin_parser::parse_theory(src, &[]).expect("parse");
+    let parsed_rule = parsed
+        .items
+        .iter()
+        .find_map(|i| match i {
+            p::TheoryItem::Rule(r) => Some(r),
+            _ => None,
+        })
+        .expect("parsed rule");
+    assert!(
+        matches!(&parsed_rule.conclusions[0].args[0],
+            p::Term::App(n, args) if n == "m" && args.len() == 1),
+        "the parsed rule keeps the macro call: {:?}",
+        parsed_rule.conclusions[0].args[0]
+    );
+
+    let thy = crate::elaborate::elaborate(&parsed).expect("elaborate");
+    let rules: Vec<&ProtoRuleE> = thy_proto_rules(&thy).collect();
+    assert_eq!(rules.len(), 1);
+    assert_eq!(
+        crate::fact::pretty_lnfact(&rules[0].conclusions[0]).render(),
+        "Out( h(~k) )"
+    );
+}
+
+/// HS `frees` folds the rule info before the facts, so a variable that only
+/// the rule's `_restrict` formula mentions joins the clash groups: `#NOW`
+/// (`varNow`, Theory/Model/Restriction.hs:87-88) reaches no fact of the rule
+/// and clashes with the fresh `~now`.  Byte-pinned to the pinned oracle
+/// (ef3f0468) through `scripts/divergence_fixtures/s8_restrict_sort_clash`.
+#[test]
+fn rule_sorts_report_sees_a_restrict_free_variable() {
+    let thy = elaborated(
+        "theory T begin \
+         rule R: [ Fr(~now) ] --[ _restrict( Ex #j. A() @ #j & #j < #NOW ) ]-> [ Out(~now) ] \
+         end",
+    );
+    assert_eq!(
+        bodies(&rule_sorts_report(&thy)),
+        "  rule `R': \n    1. ~now, #NOW"
+    );
+}
+
+/// The name walk reaches the rule info too, so a fresh constant that only a
+/// `_restrict` formula mentions is reported.  Byte-pinned to the pinned
+/// oracle (ef3f0468) through
+/// `scripts/divergence_fixtures/s8_restrict_fresh_name`.
+#[test]
+fn fresh_names_report_sees_a_restrict_name() {
+    let thy = elaborated(
+        "theory T begin \
+         rule R: [ Fr(~x) ] --[ _restrict( not( ~'foo' = 'a' ) ) ]-> [ Out(~x) ] \
+         end",
+    );
+    assert_eq!(
+        bodies(&fresh_names_report(&thy)),
+        "Fresh public constants\n======================\n\n  \
+         rule `R': fresh public constants are not allowed: ~'foo'"
+    );
+}
+
+/// The name walk descends into the source subprocess a SAPIC-generated rule
+/// carries, which is where the constant of a rule that mints no fact for it
+/// lives.  The parser never mints that attribute, so the generated shape is
+/// built by attaching the process the SAPIC translation writes.
+#[test]
+fn fresh_names_report_walks_the_process_attribute() {
+    let mut thy = elaborated("theory T begin rule R: [ ] --[ ]-> [ ] end");
+    let out_foo = crate::sapic::Process::Action(
+        crate::sapic::SapicAction::ChOut {
+            chan: None,
+            msg: Term::Lit(VLit::Con(Name::new(NameTag::Fresh, "foo"))),
+        },
+        ProcessParsedAnnotation::default(),
+        Box::new(crate::sapic::Process::Null(
+            ProcessParsedAnnotation::default(),
+        )),
+    );
+    assert!(
+        fresh_names_report(&thy).is_empty(),
+        "no fact carries a name"
+    );
+    for item in thy.items.iter_mut() {
+        if let TheoryItem::Rule(r) = item {
+            r.rule.info.attributes.process = Some(out_foo.clone());
+        }
+    }
+    assert_eq!(
+        bodies(&fresh_names_report(&thy)),
+        "Fresh public constants\n======================\n\n  \
+         rule `R': fresh public constants are not allowed: ~'foo'"
+    );
+}
+
+/// HS's body is one `fsep` whose first cell is the info line, so the second
+/// name breaks onto a line of its own at the fill's indent plus the cells'
+/// own `nest 2`.  Byte-pinned to the pinned oracle (ef3f0468) through
+/// `scripts/divergence_fixtures/s8_sapic_generated_rule_wf`, whose generated
+/// rule `outnfoo_0_1` carries `~'foo'` twice.
+#[test]
+fn fresh_names_report_fills_at_the_report_ribbon() {
+    let thy = elaborated(
+        "theory T begin \
+         rule outnfoo_0_1: [ ] --[ ]-> [ Out(<~'foo', ~'foo'>) ] \
+         end",
+    );
+    assert_eq!(
+        bodies(&fresh_names_report(&thy)),
+        "Fresh public constants\n======================\n\n  \
+         rule `outnfoo_0_1': fresh public constants are not allowed: ~'foo',\n    ~'foo'"
     );
 }

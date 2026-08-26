@@ -13,12 +13,9 @@
 // (Theory/Model/Rule.hs:291-297) and `HasFrees ProtoRuleEInfo`
 // (Theory/Model/Rule.hs:491-498) folds the restrictions inside it.  `~now` and
 // `#NOW` share a lowercased name and an index and differ in sort, so
-// `sortsClashCheck` (Theory/Tools/Wellformedness.hs:258-272) groups them.  The
-// port collects a rule's variables from its premises, actions and conclusions,
-// so it sees `~now` alone.
+// `sortsClashCheck` (Theory/Tools/Wellformedness.hs:258-272) groups them.
 //
-// Mode `diverge`: the oracle reports `Variable with mismatching sorts or
-// capitalization` for `~now, #NOW`; the port reports nothing.
+// Mode `match`: the two engines agree on this shape.
 //
 // Compared slice: the wf report block.
 

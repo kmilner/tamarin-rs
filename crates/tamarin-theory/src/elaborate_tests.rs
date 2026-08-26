@@ -4,6 +4,7 @@
 
 use super::*;
 use tamarin_parser::parse_theory;
+use tamarin_term::lterm::{sort_of_name, LSort};
 use tamarin_term::maude_sig::pair_maude_sig;
 
 /// The signature every production caller of [`term_to_lnterm`] holds: the
@@ -654,9 +655,13 @@ fn condition_public_names_are_harvested_from_the_internal_terms() {
             Box::new(Process::Null(ProcessParsedAnnotation::empty())),
             Box::new(Process::Null(ProcessParsedAnnotation::empty())),
         );
-        let mut out = Vec::new();
-        collect_process_pub_names(&proc, &mut out);
-        out
+        let mut names = Vec::new();
+        collect_process_names(&proc, &mut names);
+        names
+            .into_iter()
+            .filter(|n| sort_of_name(n) == LSort::Pub)
+            .map(|n| n.id.0.to_string())
+            .collect()
     };
 
     assert_eq!(
@@ -699,8 +704,13 @@ fn process_pub_names_reach_an_msr_embedded_restriction() {
         ProcessParsedAnnotation::empty(),
         Box::new(Process::Null(ProcessParsedAnnotation::empty())),
     );
-    let mut got = Vec::new();
-    collect_process_pub_names(&proc, &mut got);
+    let mut names = Vec::new();
+    collect_process_names(&proc, &mut names);
+    let got: Vec<String> = names
+        .into_iter()
+        .filter(|n| sort_of_name(n) == LSort::Pub)
+        .map(|n| n.id.0.to_string())
+        .collect();
     assert_eq!(
         got,
         vec!["baz".to_string(), "Foo".to_string(), "bar".to_string()]

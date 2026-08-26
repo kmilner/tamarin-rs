@@ -7,15 +7,13 @@
 // variable, so `rewrite` returns it unchanged
 // (Theory/Model/Restriction.hs:96-112) and the action fact
 // `fromRuleRestriction` adds to the rule (Theory/Model/Restriction.hs:141-162)
-// carries nothing.  The port collects names from the rule's premises, actions
-// and conclusions, so it never sees `~'foo'`.
+// carries nothing, so the name is reachable only through the rule info.
 //
-// Both engines reach `~'foo'` through the generated `Restr_R_1` restriction
-// and report it under `Formula terms`, so the divergence is exactly the
-// missing `Fresh public constants` topic.
+// Both engines also reach `~'foo'` through the generated `Restr_R_1`
+// restriction and report it under `Formula terms`, so the block carries two
+// topics.
 //
-// Mode `diverge`: the oracle reports both topics; the port reports only
-// `Formula terms`.
+// Mode `match`: the two engines agree on this shape.
 //
 // Compared slice: the wf report block.
 
