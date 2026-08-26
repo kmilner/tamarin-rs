@@ -36,19 +36,18 @@
 //! - About 1300 of Export.hs's lines (Export.hs:1705-2605 and :2922-3300) are
 //!   Export-specific `LNFormula → LNFormula` transforms and shape classifiers
 //!   with no analogue in the port.
-//! - The typed OPEN theory is not retained as theory items:
+//! - Export's traversal of the typed OPEN theory is unported.  The theory
+//!   itself is there: elaboration builds the
 //!   `TranslationElement::{Process, ProcessDef, FunctionTypingInfo,
-//!   EquivLemma, DiffEquivLemma}` are never produced by elaboration, and
-//!   `tamarin_sapic::apply` discards the typed process after MSR
-//!   translation.  `tamarin_sapic::type_theory::type_theory_env` does port
-//!   `Sapic.typeTheoryEnv` (Typing.hs:204-226) — the typed processes/defs
-//!   including `typeAndRenameProcessDef`'s `_pVars` inference, the
-//!   recomputed `function:` items, and the final `TypingEnvironment` whose
-//!   `events` map `loadHeaders` (Export.hs:2743-2754) folds over to emit
-//!   `event` headers — but it hands them back as a render-time overlay
-//!   (`tamarin_theory::pretty_theory::TypedOverlay`), not as the
-//!   `OpenTheory` value Export traverses (`processOpenTheory`,
-//!   TheoryLoader.hs:481-483).
+//!   EquivLemma, DiffEquivLemma}` items, and
+//!   `tamarin_sapic::type_theory::type_theory_env` ports `Sapic.typeTheoryEnv`
+//!   (Typing.hs:204-226) — it rewrites those items with the typed
+//!   processes/defs, including `typeAndRenameProcessDef`'s `_pVars` inference
+//!   and the recomputed `function:` items, and returns the
+//!   `TypingEnvironment` whose `events` map `loadHeaders`
+//!   (Export.hs:2743-2754) folds over to emit `event` headers.  What has no
+//!   port is what `processOpenTheory` (TheoryLoader.hs:481-483) hands that
+//!   theory to.
 //!
 //! Oracle-fixture reality at the pinned v1.13.0 (ef3f0468), measured over the
 //! 1042-file corpus: `-m proverif` produces output for 44 files; `-m

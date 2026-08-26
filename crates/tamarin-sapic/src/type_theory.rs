@@ -17,10 +17,9 @@
 //!    re-appends one per entry of the final `funs` map — `foldrWithKey` +
 //!    append ⇒ the emitted order is DESCENDING key order.
 //!
-//! RS leaves the theory's items in place and returns the typed processes as a
-//! [`TypedOverlay`] for `pretty_theory`'s open renderer, plus the recomputed
-//! `function:` items and the final environment (whose `events` map the export
-//! backends consume).
+//! The theory's items are rewritten in place, in the order the two `mapM`s
+//! visit them; the environment is returned because its `events` map is what
+//! the export backends consume.
 
 use std::collections::BTreeSet;
 
@@ -29,7 +28,6 @@ use tamarin_term::term::f_app;
 use tamarin_term::vterm::{var_term, Lit, VTerm};
 
 use tamarin_theory::elaborate::ElabError;
-use tamarin_theory::pretty_theory::TypedOverlay;
 use tamarin_theory::sapic::{
     PlainProcess, Process, ProcessParsedAnnotation, SapicAction, SapicLVar,
 };
@@ -40,46 +38,37 @@ use crate::typing::{
     TypingEnvironment,
 };
 
-/// Everything `typeTheoryEnv` returns, split for the RS consumers: the typed
-/// processes/defs (renderer overlay), the recomputed `function:` items
-/// (descending key order, ready to append), and the final environment.
-pub struct TypeTheoryResult {
-    pub overlay: TypedOverlay,
-    /// One `SapicFunSym` per entry of the final `funs` map, in HS's
-    /// `Map.foldrWithKey`-append order = DESCENDING `UserDefinedSym` order.
-    pub fun_items: Vec<SapicFunSym>,
-    /// The environment the whole theory was typed against.  No RS caller
-    /// reads it: its consumers are the ProVerif / DeepSec exporters
-    /// (`loadHeaders` folds over `events`, Export.hs:2743-2754), which are
-    /// unported — see `tamarin_export`'s module doc.  Returned so the
-    /// exporters land against a complete `typeTheoryEnv`.
-    pub env: TypingEnvironment,
-}
-
-/// `typeTheoryEnv` (Typing.hs:204-226) over the elaborated theory.  Runs on
-/// EVERY theory — a process-free (non-SAPIC) theory still gets its `function:`
-/// items recomputed from the signature-seeded environment.
-pub fn type_theory_env(thy: &Theory) -> Result<TypeTheoryResult, ElabError> {
-    let msig = &thy.signature.maude_sig;
+/// `typeTheoryEnv` (Typing.hs:204-226) over the elaborated theory, whose
+/// process-bearing items and `FunctionTypingInfo` items it rewrites in place —
+/// HS's first return component.  The second, the environment the whole theory
+/// was typed against, is handed back: no RS caller reads it, but its consumers
+/// are the ProVerif / DeepSec exporters (`loadHeaders` folds over `events`,
+/// Export.hs:2743-2754), which are unported — see `tamarin_export`'s module
+/// doc.  `typeTheory` (Typing.hs:229-230) is this function with the
+/// environment discarded.
+///
+/// Runs on EVERY theory — a process-free (non-SAPIC) theory still gets its
+/// `function:` items recomputed from the signature-seeded environment.
+pub fn type_theory_env(thy: &mut Theory) -> Result<TypingEnvironment, ElabError> {
     let user_fun_typings = collect_user_fun_typings(thy);
-    let mut env = init_te_from_sig(msig, &user_fun_typings).map_err(|e| ElabError {
-        message: format!("SAPIC typing: {e}"),
-    })?;
+    let mut env =
+        init_te_from_sig(&thy.signature.maude_sig, &user_fun_typings).map_err(|e| ElabError {
+            message: format!("SAPIC typing: {e}"),
+        })?;
 
     // Pass 1 — `mapMProcesses typeAndRenameProcess` (TheoryObject.hs:279-291):
-    // one typed process per occurrence, in item order; `EquivLemma` yields two
-    // (p1 first).
-    let mut processes: Vec<PlainProcess> = Vec::new();
-    for item in &thy.items {
+    // every process-bearing item typed in item order; `EquivLemma` types its
+    // first process before its second.
+    for item in &mut thy.items {
         match item {
             TheoryItem::Translation(
                 TranslationElement::Process(pr) | TranslationElement::DiffEquivLemma(pr),
             ) => {
-                processes.push(type_one(&mut env, pr)?);
+                *pr = type_one(&mut env, pr)?;
             }
             TheoryItem::Translation(TranslationElement::EquivLemma(p1, p2)) => {
-                processes.push(type_one(&mut env, p1)?);
-                processes.push(type_one(&mut env, p2)?);
+                *p1 = type_one(&mut env, p1)?;
+                *p2 = type_one(&mut env, p2)?;
             }
             _ => {}
         }
@@ -87,34 +76,31 @@ pub fn type_theory_env(thy: &Theory) -> Result<TypeTheoryResult, ElabError> {
 
     // Pass 2 — `mapMProcessesDef typeAndRenameProcessDef`
     // (TheoryObject.hs:294-301, Typing.hs:217-225), same environment.
-    let mut typed_defs: Vec<(Option<Vec<SapicLVar>>, PlainProcess)> = Vec::new();
-    for pd in thy.process_defs() {
-        typed_defs.push(type_process_def(&mut env, pd)?);
+    for item in &mut thy.items {
+        if let TheoryItem::Translation(TranslationElement::ProcessDef(pd)) = item {
+            let (vars, body) = type_process_def(&mut env, pd)?;
+            pd.vars = vars;
+            pd.body = body;
+        }
     }
 
-    // `Map.foldrWithKey addFunctionTypingInfo'` (Typing.hs:210,226):
-    // `foldrWithKey` applies the largest key innermost and each application
-    // APPENDS, so the item order is descending key order — `BTreeMap` reverse
-    // iteration (`UserDefinedSym`'s derived `Ord` matches HS's tuple order).
-    let fun_items: Vec<SapicFunSym> = env
-        .funs
-        .iter()
-        .rev()
-        .map(|(sym, (ins, out))| SapicFunSym {
-            sym: *sym,
-            arg_types: ins.clone(),
-            out_type: out.clone(),
-        })
-        .collect();
-
-    Ok(TypeTheoryResult {
-        overlay: TypedOverlay {
-            processes,
-            defs: typed_defs,
-        },
-        fun_items,
-        env,
-    })
+    // `Map.foldrWithKey addFunctionTypingInfo' (clearFunctionTypingInfos th')`
+    // (Typing.hs:210,226): every source-positioned typing item is dropped, and
+    // `foldrWithKey` applies the largest key innermost while each application
+    // APPENDS, so the re-emitted order is descending key order — `BTreeMap`
+    // reverse iteration (`UserDefinedSym`'s derived `Ord` matches HS's tuple
+    // order).
+    tamarin_theory::theory::clear_function_typing_infos(thy);
+    for (sym, (ins, out)) in env.funs.iter().rev() {
+        thy.items.push(TheoryItem::Translation(
+            TranslationElement::FunctionTypingInfo(SapicFunSym {
+                sym: *sym,
+                arg_types: ins.clone(),
+                out_type: out.clone(),
+            }),
+        ));
+    }
+    Ok(env)
 }
 
 /// Run `typeAndRenameProcess` on one process against the shared environment.

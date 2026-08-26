@@ -59,7 +59,6 @@
 
 use crate::pretty_formula as pf;
 use crate::theory::{Theory, TheoryItem, TranslationElement};
-use tamarin_parser::ast as p;
 use tamarin_term::pretty::pretty_nterm;
 
 /// Build info passed in from the prover binary so the Generated-from
@@ -399,14 +398,14 @@ pub fn pretty_closed_theory(
 /// HS applies `ppPrf` to the lemma's own proof; RS's closed print takes the
 /// proof body from the prover's result list instead, so the slot is handed
 /// the whole lemma.
-pub struct ItemPrinters<'a, R> {
+pub struct ItemPrinters<'a, R, S> {
     /// HS `ppRule`.
     pub rule: &'a (dyn Fn(&R) -> String + Sync),
     /// HS `ppPrf`, the body `prettyLemma` puts under the lemma
     /// (lib/theory/src/Lemma.hs:116-141, see line 130).
     pub proof: &'a (dyn Fn(&crate::theory::Lemma) -> String + Sync),
     /// HS `ppSap`.
-    pub translation: &'a (dyn Fn(&TranslationElement) -> String + Sync),
+    pub translation: &'a (dyn Fn(&S) -> String + Sync),
     /// The theory's file name, which a `heuristic=` lemma attribute needs to
     /// resolve a bare `o`/`O` ranking's default oracle (`defaultOracleNames`,
     /// System.hs:551-561).
@@ -418,9 +417,9 @@ pub struct ItemPrinters<'a, R> {
 /// `vsep` is `foldr ($--$) emptyDoc` over those blocks and `$--$` drops an
 /// empty operand (Theory/Text/Pretty.hs:83-84), so an item that renders
 /// nothing contributes no block and no blank line.
-pub fn pretty_theory_items<R: Sync>(
-    items: &[TheoryItem<R, crate::theory::ProofSkeleton, TranslationElement>],
-    pp: &ItemPrinters<'_, R>,
+pub fn pretty_theory_items<R: Sync, S: Sync>(
+    items: &[TheoryItem<R, crate::theory::ProofSkeleton, S>],
+    pp: &ItemPrinters<'_, R, S>,
 ) -> Vec<String> {
     use rayon::prelude::*;
     items
@@ -435,9 +434,9 @@ pub fn pretty_theory_items<R: Sync>(
 /// prettyMacros ppSap` (TheoryObject.hs:772-781).  The config blocks are
 /// printed before `begin` (TheoryObject.hs:759), so the item stream skips
 /// them.
-fn pretty_theory_item<R>(
-    item: &TheoryItem<R, crate::theory::ProofSkeleton, TranslationElement>,
-    pp: &ItemPrinters<'_, R>,
+fn pretty_theory_item<R, S>(
+    item: &TheoryItem<R, crate::theory::ProofSkeleton, S>,
+    pp: &ItemPrinters<'_, R, S>,
 ) -> String {
     match item {
         TheoryItem::Rule(r) => (pp.rule)(r),
@@ -471,138 +470,92 @@ fn pretty_formal_comment(fc: &crate::theory::FormalComment) -> String {
 }
 
 // =============================================================================
-// Open theory (`--parse-only`) — port of HS `prettyOpenTheory`
-// (OpenTheory.hs:870-877) = `prettyTheory prettySignaturePure (const emptyDoc)
-// prettyOpenProtoRule prettyProof prettyTranslationElement`
-// (TheoryObject.hs:747-783).  Differences from the closed print:
+// Open theory — port of HS `prettyOpenTheory` (OpenTheory.hs:869-877) =
+// `prettyTheory prettySignaturePure (const emptyDoc) prettyOpenProtoRule
+// prettyProof prettyTranslationElement` (TheoryObject.hs:747-783).
+// Differences from the closed print:
 //   - the signature is the PARSE-time `SignaturePure` (same `prettyMaudeSig`
-//     renderer — for a parsed theory the two signatures have equal content,
-//     since translation has not added anything yet);
+//     renderer — for a theory that has not been closed the two signatures
+//     have equal content);
 //   - `ppCache = const emptyDoc`: no "looping facts with injective instances"
 //     comment and no intruder-rule section;
-//   - rules render as `prettyOpenProtoRule` — the E-rule only, with NO
-//     loop-breaker / AC-variant annotations (OpenTheory.hs:815-824);
-//   - lemmas carry their PARSED proof skeleton (`prettyProof`), `by sorry`
+//   - rules render as `prettyOpenProtoRule` — the E rule and the manual
+//     `variants (modulo AC)` blocks, with no loop breakers and no computed
+//     variants (OpenTheory.hs:814-824);
+//   - lemmas carry their stored proof skeleton (`prettyProof`), `by sorry`
 //     when none was written;
-//   - restrictions show no `/* expanded formula: */` block (parse-time
-//     `_rstrOriginalFormula` is `Nothing` — `applyMacroInRestriction` only
-//     runs at translation; oracle-verified);
+//   - the lemma and restriction items are taken through [`open_view_items`],
+//     so their quoted formula, guarded characterization and safety test read
+//     the pre-macro formula and no `expanded formula:` block is written;
 //   - `TranslationItem`s render via `prettyTranslationElement`
 //     (TheoryObject.hs:785-841): `builtin  <name>`, `function: …` typing
 //     lines, `process:`/`let` blocks, `export:`, accountability lemmas and
 //     `test` case tests;
-//   - no wellformedness block and no `Generated from:` footer (Batch.hs:91-95
-//     prints the doc alone).
+//   - `--parse-only` prints no wellformedness block and no `Generated from:`
+//     footer (Batch.hs:91-95 prints the doc alone), while the `-m` prints add
+//     both.
 // =============================================================================
 
-/// Convert one parsed top-level/def process into the SAPIC `PlainProcess`
-/// this module's Doc printer consumes.  Injected by the driver crate
-/// (`tamarin-prover`), which owns the `tamarin-sapic` dependency —
-/// `tamarin-theory` cannot depend on it (dependency direction).
-pub type OpenProcessConv<'a> =
-    &'a dyn Fn(&p::Process) -> Result<crate::sapic::PlainProcess, String>;
-
-/// The `Sapic.typeTheoryEnv` output overlaid onto the open print: the typed
-/// (`renameUnique` + `typeProcess`) processes replace the parse-time ones at
-/// render time, keyed by occurrence order.  Produced by
-/// `tamarin_sapic::type_theory::type_theory_env`; the parser AST itself stays
-/// untouched (HS instead rewrites the theory's `TranslationItem`s in place,
-/// `mapMProcesses`/`mapMProcessesDef`, TheoryObject.hs:279-301).
-#[derive(Debug, Clone, Default)]
-pub struct TypedOverlay {
-    /// One typed process per process-bearing occurrence, in item order:
-    /// `TopLevelProcess` and `DiffEquivLemma` contribute one each,
-    /// `EquivLemma` two (first, then second) — HS `mapMProcesses`'s `f'`
-    /// arms (TheoryObject.hs:279-291).
-    pub processes: Vec<crate::sapic::PlainProcess>,
-    /// One `(vars, body)` per `ProcessDef` item, in item order (HS
-    /// `mapMProcessesDef`, TheoryObject.hs:294-301).  After typing, `vars`
-    /// is always `Some` — `Some(vec![])` for a parameterless `let P = …`
-    /// (Typing.hs:217-225), which renders as `let  P () =`.
-    pub defs: Vec<(
-        Option<Vec<crate::sapic::SapicLVar>>,
-        crate::sapic::PlainProcess,
-    )>,
-}
-
-/// Options for the by-module open print (`prettyOpenTheoryByModule`,
-/// TheoryLoader.hs:783-801).
-///
-/// - `spthy`: all defaults (the plain `prettyOpenTheory`).
-/// - `spthytyped`: `typed = Some(overlay)` + `extra_function_items` — the
-///   overlay also DROPS every source-positioned `Functions` item
-///   (`clearFunctionTypingInfos`, TheoryObject.hs:504-508), and the extra
-///   items re-emit the recomputed `function:` blocks at the end
-///   (Typing.hs:210 `Map.foldrWithKey addFunctionTypingInfo'` — the caller
-///   passes them in DESCENDING key order).
-/// - `msr`: `drop_translation_items = true` — every `TranslationElement`
-///   analogue renders empty (`prettyOpenTranslatedTheory` after
-///   `removeTranslationItems`, OpenTheory.hs:47-52, 891-898).
-#[derive(Debug, Clone, Default)]
-pub struct OpenPrintOpts {
-    pub typed: Option<TypedOverlay>,
-    /// Recomputed `function:` typing items appended after the source items
-    /// (before the wellformedness / version comment blocks).
-    pub extra_function_items: Vec<crate::theory::SapicFunSym>,
-    /// Zero out the `TranslationElement` set: `Builtins`, `Functions`,
-    /// `TopLevelProcess`, `ProcessDef`, `EquivLemma`, `DiffEquivLemma`,
-    /// `Export`, `AccLemma`, `CaseTest` (Items/TheoryItem.hs:43-53).
-    pub drop_translation_items: bool,
-}
-
-/// Pretty-print the parsed open theory — HS `prettyOpenTheory` as emitted by
-/// `--parse-only` (Batch.hs:91-95 `putStrLn . renderDoc`; the returned string
-/// carries NO trailing newline, the caller's `println!` supplies `putStrLn`'s).
-///
-/// `elaborated` supplies the parse-time signature (`prettySignaturePure`
-/// content), the hoisted `heuristic:`/`tactic:` headers, and the arity-1
-/// symbol set for the parse-time `naryOpApp` fold; the elaborated RULES are
-/// never consulted (open rules render from the parser AST alone).
-pub fn pretty_open_theory(
-    parsed: &p::Theory,
-    elaborated: &Theory,
-    in_file: &str,
-    conv: OpenProcessConv<'_>,
-) -> Result<String, String> {
-    let mut blocks =
-        open_theory_blocks(parsed, elaborated, in_file, conv, &OpenPrintOpts::default())?;
+/// HS `prettyOpenTheory` (OpenTheory.hs:869-877) as `--parse-only` emits it
+/// (Batch.hs:91-95 `putStrLn . renderDoc`): the returned string carries NO
+/// trailing newline, the caller's `println!` supplies `putStrLn`'s.
+pub fn pretty_open_theory(thy: &Theory, in_file: &str) -> String {
+    let translation = |el: &TranslationElement| pretty_translation_element(el, in_file);
+    let mut blocks = open_theory_blocks(thy, in_file, &translation);
     blocks.push("end".to_string());
-    Ok(blocks.join("\n\n"))
+    blocks.join("\n\n")
 }
 
-/// The by-module open print — HS `prettyOpenTheoryByModule`'s
-/// `spthy`/`spthytyped`/`msr` arms (TheoryLoader.hs:783-801) followed by the
-/// two trailing comment `TextItem`s `withVersionAndReport` appends
-/// (TheoryLoader.hs:636-660): the wellformedness block (`reportToDoc` — pass
-/// the pre-rendered [`format_wf_block`] string) and the `Generated from:`
-/// version block.  Which theory shape gets rendered is entirely in `opts`
-/// (see [`OpenPrintOpts`]); the returned string carries NO trailing newline
-/// (`putStrLn`'s caller supplies it, and `-o FILE` writes it verbatim).
+/// [`pretty_open_theory`] followed by the two trailing comment `TextItem`s
+/// `withVersionAndReport` appends (TheoryLoader.hs:636-660): the
+/// wellformedness block (`reportToDoc` — pass the pre-rendered
+/// [`format_wf_block`] string) and the `Generated from:` version block.
+/// `prettyOpenTheoryByModule`'s `spthy` and `spthytyped` arms
+/// (TheoryLoader.hs:783-801) both land here; they differ only in the theory
+/// VALUE, which `tamarin_sapic::type_theory::type_theory_env` has rewritten
+/// for `spthytyped`.
 pub fn pretty_open_theory_by_module(
-    parsed: &p::Theory,
-    elaborated: &Theory,
+    thy: &Theory,
     in_file: &str,
-    conv: OpenProcessConv<'_>,
-    opts: &OpenPrintOpts,
     wf_block: &str,
     build: &BuildInfo,
-) -> Result<String, String> {
-    let mut blocks = open_theory_blocks(parsed, elaborated, in_file, conv, opts)?;
+) -> String {
+    let translation = |el: &TranslationElement| pretty_translation_element(el, in_file);
+    let mut blocks = open_theory_blocks(thy, in_file, &translation);
     blocks.push(wf_block.to_string());
     blocks.push(render_generated_from(build));
     blocks.push("end".to_string());
-    Ok(blocks.join("\n\n"))
+    blocks.join("\n\n")
+}
+
+/// HS `prettyOpenTranslatedTheory` (OpenTheory.hs:891-899) with the same two
+/// trailing comment items: `prettyOpenTheoryByModule`'s `msr` arm, which is
+/// `prettyOpenTranslatedTheory . removeTranslationItems`
+/// (TheoryLoader.hs:786,789).  `ppSap` is `emptyString`
+/// (lib/theory/src/Pretty.hs:24-25), so every translation item renders
+/// nothing; take the theory through
+/// [`crate::theory::remove_translation_items`].
+pub fn pretty_open_translated_theory_by_module(
+    thy: &Theory<crate::theory::OpenProtoRule, crate::theory::ProofSkeleton, ()>,
+    in_file: &str,
+    wf_block: &str,
+    build: &BuildInfo,
+) -> String {
+    let translation = |_: &()| String::new();
+    let mut blocks = open_theory_blocks(thy, in_file, &translation);
+    blocks.push(wf_block.to_string());
+    blocks.push(render_generated_from(build));
+    blocks.push("end".to_string());
+    blocks.join("\n\n")
 }
 
 /// Shared block list of the open print: everything from `theory <name>` up to
 /// (but not including) the final `end`, one `vsep` block per entry.
-fn open_theory_blocks(
-    parsed: &p::Theory,
-    elaborated: &Theory,
+fn open_theory_blocks<S: Sync + Clone>(
+    thy: &Theory<crate::theory::OpenProtoRule, crate::theory::ProofSkeleton, S>,
     in_file: &str,
-    conv: OpenProcessConv<'_>,
-    opts: &OpenPrintOpts,
-) -> Result<Vec<String>, String> {
+    translation: &(dyn Fn(&S) -> String + Sync),
+) -> Vec<String> {
     // HS `prettyTheory` (TheoryObject.hs:757-770) = `vsep` over:
     //   [ kwTheoryName, configBlocks…, kwTheoryBegin, lineComment_ "…",
     //     ppSig, tactics?, heuristic?, ppCache ] ++ items ++ [kwEnd].
@@ -610,11 +563,13 @@ fn open_theory_blocks(
     // non-empty blocks with exactly one blank line — modelled here as a
     // Vec<String> of newline-free-trailing blocks joined with "\n\n".
     let mut blocks: Vec<String> = Vec::new();
-    blocks.push(format!("theory {}", parsed.name));
-    if let Some(cfg) = &parsed.configuration {
-        // `prettyConfigBlock cb = text "configuration: " <> doubleQuotes (text cb)`
-        // (TheoryObject.hs:921-922), filtered BEFORE `begin` (line 760).
-        blocks.push(format!("configuration: \"{}\"", cfg));
+    blocks.push(format!("theory {}", thy.name));
+    for item in &thy.items {
+        if let TheoryItem::ConfigBlock(cfg) = item {
+            // `prettyConfigBlock cb = text "configuration: " <> doubleQuotes (text cb)`
+            // (TheoryObject.hs:921-922), filtered BEFORE `begin` (line 760).
+            blocks.push(format!("configuration: \"{}\"", cfg));
+        }
     }
     blocks.push("begin".to_string());
     blocks.push("// Function signature and definition of the equational theory E".to_string());
@@ -623,7 +578,7 @@ fn open_theory_blocks(
     // — the same three-line `builtins:/functions:/equations:` vcat the closed
     // print emits (`render_signature`), whose sub-blocks are single-newline
     // separated; strip the trailing '\n' so the block joins via the vsep glue.
-    let sig_block = render_signature(&elaborated.signature.maude_sig);
+    let sig_block = render_signature(&thy.signature.maude_sig);
     let sig_trimmed = sig_block.trim_end_matches('\n');
     if !sig_trimmed.is_empty() {
         blocks.push(sig_trimmed.to_string());
@@ -632,12 +587,12 @@ fn open_theory_blocks(
     // joined tactic blocks; then the `heuristic:` line (line 765).  Both are
     // hoisted header fields in HS (never item-positioned), which `elaborate`
     // mirrors by collecting the parser's Tactic/Heuristic items.
-    if !elaborated.tactic.is_empty() {
-        let tblocks: Vec<String> = elaborated.tactic.iter().map(|t| t.render()).collect();
+    if !thy.tactic.is_empty() {
+        let tblocks: Vec<String> = thy.tactic.iter().map(|t| t.render()).collect();
         blocks.push(tblocks.join("\n"));
     }
-    if !elaborated.heuristic.is_empty() {
-        let rendered: Vec<String> = elaborated
+    if !thy.heuristic.is_empty() {
+        let rendered: Vec<String> = thy
             .heuristic
             .iter()
             .map(|raw| pretty_goal_rankings(raw, in_file))
@@ -645,425 +600,163 @@ fn open_theory_blocks(
         blocks.push(format!("heuristic: {}", rendered.join(" ")));
     }
     // `ppCache = const emptyDoc` (OpenTheory.hs:872) — nothing here.
-
-    // Per-item blocks, source order (`parMap rdeepseq ppItem (thyItems thy)`,
-    // TheoryObject.hs:767 — parallel render, sequential vsep order).
-    // HS reads `theoryPredicates thy` — the `PredicateItem`s the parser
-    // appended (Theory/Text/Parser/Signature.hs:277-283) — which is the
-    // elaborated theory's typed list here.
-    let predicates: Vec<crate::predicate::Predicate> = elaborated.predicates().cloned().collect();
-    let arity1 = arity1_noeq_names(elaborated);
-    let mut st = OpenPrintState {
-        opts,
-        proc_idx: 0,
-        def_idx: 0,
-    };
-    for item in &parsed.items {
-        blocks.extend(render_open_item(
-            item,
-            &predicates,
+    blocks.extend(pretty_theory_items(
+        &open_view_items(&thy.items),
+        &ItemPrinters {
+            rule: &|r| crate::rule::pretty_open_proto_rule(r).render(),
+            proof: &open_proof_body,
+            translation,
             in_file,
-            &arity1,
-            &elaborated.signature.maude_sig,
-            conv,
-            &mut st,
-        )?);
-    }
-    // Recomputed `function:` items land at the END of `thyItems`
-    // (`addFunctionTypingInfo` appends, TheoryObject.hs:492-493) — i.e. after
-    // every source item, before the wf/version comments the caller appends.
-    for fti in &opts.extra_function_items {
-        blocks.push(pretty_function_typing_info(fti).render());
-    }
-    Ok(blocks)
+        },
+    ));
+    blocks
 }
 
-/// The print options plus the two overlay cursors threaded through the
-/// per-item render: HS consumes the typed processes / process-defs by
-/// occurrence order (`mapMProcesses` / `mapMProcessesDef`,
-/// TheoryObject.hs:279-301), so each `TypedOverlay` slot is taken exactly
-/// once as the item list is walked.
-struct OpenPrintState<'a> {
-    opts: &'a OpenPrintOpts,
-    /// Next unconsumed [`TypedOverlay::processes`] index.
-    proc_idx: usize,
-    /// Next unconsumed [`TypedOverlay::defs`] index.
-    def_idx: usize,
+/// HS's `OpenTheory` VALUE of the items a theory carries once elaboration has
+/// applied the macros: a lemma's `_lFormula` and a restriction's
+/// `_rstrFormula` are the formula as the source wrote it, and
+/// `_lOriginalFormula` / `_rstrOriginalFormula` are `Nothing`.
+/// `applyMacroInLemma` (lib/theory/src/Lemma.hs:83-88) and
+/// `applyMacroInRestriction` (Theory/Model/Restriction.hs:164-166) build the
+/// closed shape from exactly this one, so undoing them is what makes
+/// `prettyLemma` and `prettyRestriction` reproduce the parse-time bytes: the
+/// quoted header formula, the guarded characterization, the restriction body
+/// and the safety test all read the pre-macro formula, and the
+/// `expanded formula:` block stays unwritten (HS emits it only for
+/// `Just` — TheoryObject.hs:895-898).
+fn open_view_items<R: Clone, S: Clone>(
+    items: &[TheoryItem<R, crate::theory::ProofSkeleton, S>],
+) -> Vec<TheoryItem<R, crate::theory::ProofSkeleton, S>> {
+    items
+        .iter()
+        .map(|item| match item {
+            TheoryItem::Lemma(l) => TheoryItem::Lemma(crate::theory::Lemma {
+                formula: l
+                    .original_formula
+                    .clone()
+                    .unwrap_or_else(|| l.formula.clone()),
+                original_formula: None,
+                ..l.clone()
+            }),
+            TheoryItem::Restriction(r) => {
+                TheoryItem::Restriction(crate::restriction::Restriction {
+                    name: r.name.clone(),
+                    formula: r
+                        .original_formula
+                        .clone()
+                        .unwrap_or_else(|| r.formula.clone()),
+                    original_formula: None,
+                })
+            }
+            other => other.clone(),
+        })
+        .collect()
 }
 
-/// One parsed theory item → its open-print blocks (usually 0 or 1; a
-/// `builtins:`/`functions:`/`predicates:` line yields one block PER declared
-/// entry, since HS appends one `TheoryItem` per entry — Parser/Signature.hs:97
-/// (`SignatureBuiltin`), TheoryObject.hs:492-493 (`FunctionTypingInfo`),
-/// TheoryObject.hs:540-543 (`PredicateItem`)).
-// arity-1 no-eq function-name set; membership-only (.contains), never iterated;
-// std kept (byte-inert) — iteration order never reaches output.
-#[allow(clippy::disallowed_types)]
-fn render_open_item(
-    item: &p::TheoryItem,
-    predicates: &[crate::predicate::Predicate],
-    in_file: &str,
-    arity1: &std::collections::HashSet<String>,
-    msig: &tamarin_term::maude_sig::MaudeSig,
-    conv: OpenProcessConv<'_>,
-    st: &mut OpenPrintState<'_>,
-) -> Result<Vec<String>, String> {
-    use crate::pretty_hpj::Doc;
-    use p::TheoryItem::*;
-    let opts = st.opts;
-    // `msr`: `removeTranslationItems` maps every `TranslationItem _` to
-    // `TranslationItem ()` (OpenTheory.hs:47-52) and
-    // `prettyOpenTranslatedTheory` renders those as `emptyDoc`
-    // (OpenTheory.hs:891-899 with `emptyString`), so the whole
-    // `TranslationElement` set (Items/TheoryItem.hs:43-53) vanishes.
-    if opts.drop_translation_items {
-        if let Builtins(_)
-        | Functions(_)
-        | TopLevelProcess(_)
-        | ProcessDef(_)
-        | EquivLemma(..)
-        | DiffEquivLemma(_)
-        | Export { .. }
-        | AccLemma(_)
-        | CaseTest(_) = item
-        {
-            return Ok(Vec::new());
+/// HS `prettyProof` over a lemma's stored `ProofSkeleton`: a lemma written
+/// without a proof carries the one-node `unproven ()` skeleton
+/// (Theory/ProofSkeleton.hs:59-61), whose `Sorry Nothing` step prints
+/// `by sorry`.
+fn open_proof_body(lem: &crate::theory::Lemma) -> String {
+    match &lem.proof {
+        Some(tree) => {
+            let mut body = String::new();
+            pp_proof(tree, &mut body, 0);
+            body
         }
+        None => "by sorry".to_string(),
     }
-    // `spthytyped`: substitute the typed processes/defs by occurrence order
-    // and drop the source-positioned `function:` items
-    // (`clearFunctionTypingInfos`; the recomputed set is re-appended at the
-    // end by `open_theory_blocks`).
-    if let Some(overlay) = &opts.typed {
-        let take_proc = |idx: &mut usize| -> Result<&crate::sapic::PlainProcess, String> {
-            let p = overlay
-                .processes
-                .get(*idx)
-                .ok_or_else(|| "typed overlay: process count mismatch".to_string())?;
-            *idx += 1;
-            Ok(p)
-        };
-        match item {
-            Functions(_) => return Ok(Vec::new()),
-            TopLevelProcess(_) => {
-                let pp = take_proc(&mut st.proc_idx)?;
-                return Ok(vec![Doc::text("process:")
-                    .above_g(open_process_doc(pp).nest(2))
-                    .render()]);
-            }
-            EquivLemma(_, _) => {
-                let d1 = take_proc(&mut st.proc_idx)?;
-                let d2 = take_proc(&mut st.proc_idx)?;
-                return Ok(vec![Doc::text("equivLemma:")
-                    .above_g(open_process_doc(d1).nest(2))
-                    .above(open_process_doc(d2).nest(2))
-                    .render()]);
-            }
-            DiffEquivLemma(_) => {
-                let d = take_proc(&mut st.proc_idx)?;
-                return Ok(vec![Doc::text("diffEquivLemma:")
-                    .above_g(open_process_doc(d).nest(2))
-                    .render()]);
-            }
-            ProcessDef(pd) => {
-                let (vars, body) = overlay
-                    .defs
-                    .get(st.def_idx)
-                    .ok_or_else(|| "typed overlay: process-def count mismatch".to_string())?;
-                st.def_idx += 1;
-                let mut d = Doc::text("let ").beside_sp(Doc::text(pd.name.clone()));
-                if let Some(vs) = vars {
-                    // `map show l` over typed `SapicLVar`s
-                    // (Theory/Sapic/Term.hs:108-110): LVar display plus
-                    // `:type` suffix.
-                    let shown: Vec<String> = vs.iter().map(ToString::to_string).collect();
-                    d = d.beside_sp(Doc::text(format!("({})", shown.join(","))));
-                }
-                d = d
-                    .beside_sp(Doc::text("="))
-                    .beside_sp(open_process_doc(body).nest(2));
-                return Ok(vec![d.render()]);
-            }
-            _ => {}
-        }
-    }
-    Ok(match item {
-        // Every `builtins:` entry appends `TranslationItem (SignatureBuiltin
-        // name)` (Parser/Signature.hs:89-101, see line 97), rendered
-        // `text "builtin " <-> text s` (TheoryObject.hs:843) = two spaces.
-        Builtins(names) => names.iter().map(|n| format!("builtin  {}", n)).collect(),
-        // Every `functions:` declaration appends `FunctionTypingInfo`
-        // (Theory/Text/Parser.hs:259-262, TheoryObject.hs:492-493), rendered by the two
-        // `prettyTranslationElement` typing cases (TheoryObject.hs:800-838).
-        Functions(decls) => decls
-            .iter()
-            .map(|d| {
-                pretty_function_typing_info(&crate::elaborate::function_decl_typing_info(d))
-                    .render()
-            })
-            .collect(),
-        // `equations:` / `options:` only mutate the signature/options — no
-        // theory item (Parser/Signature.hs:232-249, 252-269).  `heuristic:` /
-        // `tactic:` land in the hoisted header fields (rendered above).
-        // `#define`/`#include` are parse-time preprocessing.  `rule (modulo
-        // AC)` intruder rules go to `thyCache`, which the open print's
-        // `ppCache = const emptyDoc` drops.  Diff-mode lemmas are
-        // unreachable (the driver rejects `--diff` earlier).
-        Equations { .. }
-        | Options(_)
-        | Heuristic(_)
-        | Tactic(_)
-        | Define(_)
-        | Include(_)
-        | IntrRule(_)
-        | DiffLemma(_) => Vec::new(),
-        Rule(r) => vec![render_open_rule(r, arity1)],
-        Lemma(l) => vec![render_open_lemma(l, predicates, in_file, arity1, msig)?],
-        // `axiom` is the deprecated synonym parsed into a `RestrictionItem`
-        // (`legacyAxiom` → `liftedAddRestriction`, Theory/Text/Parser.hs:270-272).
-        Restriction(r) | LegacyAxiom(r) => {
-            vec![render_open_restriction(r, predicates, arity1, msig)]
-        }
-        Predicates(preds) => preds
-            .iter()
-            .map(|pr| render_predicate(pr, arity1))
-            .collect(),
-        Macros(ms) => {
-            if ms.is_empty() {
-                Vec::new()
-            } else {
-                vec![render_parsed_macros(ms)]
-            }
-        }
-        FormalComment { header, body } => {
-            // Same shape as the closed print (`prettyFormalComment`,
-            // lib/theory/src/Pretty.hs:19-21).
-            if header.is_empty() {
-                vec![format!("/*\n{}\n*/", body)]
-            } else {
-                vec![format!("{}{{*{}*}}", header, body)]
-            }
-        }
-        // `prettyTranslationElement (ProcessItem p)` (TheoryObject.hs:786):
-        //   `text "process" <> colon $-$ (nest 2 $ prettyProcess p)`.
-        TopLevelProcess(proc) => {
-            let pp = conv(proc)?;
-            vec![Doc::text("process:")
-                .above_g(open_process_doc(&pp).nest(2))
-                .render()]
-        }
-        // `prettyTranslationElement (ProcessDefItem p)` (TheoryObject.hs:791-799):
-        //   `text "let " <-> name <-> vars? <-> text "=" <-> nest 2 (prettyProcess body)`
-        // — note `text "let "` keeps its own trailing space, so `<->` yields
-        // the oracle's `let  P …` double space.
-        ProcessDef(pd) => {
-            let body = conv(&pd.body)?;
+}
+
+/// HS `prettyTranslationElement` (TheoryObject.hs:785-841).  `in_file`
+/// resolves a bare `o`/`O` ranking inside an accountability lemma's
+/// `heuristic=` attribute (`defaultOracleNames`, System.hs:551-561).
+fn pretty_translation_element(el: &TranslationElement, in_file: &str) -> String {
+    use crate::pretty_hpj::{self as hpj, Doc};
+    match el {
+        // `text "process" <> colon $-$ (nest 2 $ prettyProcess p)` (`:786`).
+        TranslationElement::Process(pr) => Doc::text("process:")
+            .above_g(open_process_doc(pr).nest(2))
+            .render(),
+        // `text "diffEquivLemma" <> colon $-$ (nest 2 $ prettyProcess p)` (`:787`).
+        TranslationElement::DiffEquivLemma(pr) => Doc::text("diffEquivLemma:")
+            .above_g(open_process_doc(pr).nest(2))
+            .render(),
+        // `text "equivLemma" <> colon $-$ (nest 2 p1) $$ (nest 2 p2)` (`:788`).
+        TranslationElement::EquivLemma(p1, p2) => Doc::text("equivLemma:")
+            .above_g(open_process_doc(p1).nest(2))
+            .above(open_process_doc(p2).nest(2))
+            .render(),
+        // `text "let " <-> name <-> vars? <-> text "=" <-> nest 2 (prettyProcess body)`
+        // (`:791-799`) — `text "let "` keeps its own trailing space, so `<->`
+        // yields the oracle's `let  P …` double space.  `show` on a
+        // `SapicLVar` is the LVar display plus an optional `:type` suffix
+        // (Theory/Sapic/Term.hs:108-110).
+        TranslationElement::ProcessDef(pd) => {
             let mut d = Doc::text("let ").beside_sp(Doc::text(pd.name.clone()));
             if let Some(vs) = &pd.vars {
-                // `text ("(" ++ intercalate "," (map show l) ++ ")")` — `show`
-                // on a `SapicLVar` is the LVar display (sort sigil + name,
-                // `.idx` only when non-zero — always 0 at parse) plus an
-                // optional `:type` suffix (Theory/Sapic/Term.hs:108-110).
-                let shown: Vec<String> = vs
-                    .iter()
-                    .map(|v| crate::elaborate::varspec_to_sapic(v).to_string())
-                    .collect();
+                let shown: Vec<String> = vs.iter().map(ToString::to_string).collect();
                 d = d.beside_sp(Doc::text(format!("({})", shown.join(","))));
             }
-            d = d
-                .beside_sp(Doc::text("="))
-                .beside_sp(open_process_doc(&body).nest(2));
-            vec![d.render()]
+            d.beside_sp(Doc::text("="))
+                .beside_sp(open_process_doc(&pd.body).nest(2))
+                .render()
         }
-        // `prettyTranslationElement (EquivLemma p1 p2)` (TheoryObject.hs:788):
-        //   `text "equivLemma" <> colon $-$ (nest 2 p1) $$ (nest 2 p2)`.
-        EquivLemma(p1, p2) => {
-            let d1 = conv(p1)?;
-            let d2 = conv(p2)?;
-            vec![Doc::text("equivLemma:")
-                .above_g(open_process_doc(&d1).nest(2))
-                .above(open_process_doc(&d2).nest(2))
-                .render()]
-        }
-        // `prettyTranslationElement (DiffEquivLemma p)` (TheoryObject.hs:787).
-        DiffEquivLemma(proc) => {
-            let d = conv(proc)?;
-            vec![Doc::text("diffEquivLemma:")
-                .above_g(open_process_doc(&d).nest(2))
-                .render()]
-        }
-        // `prettyTranslationElement (ExportInfoItem eInfo)` (TheoryObject.hs:
-        // 839-842): `text "export: " <-> tag <-> nest 2 (doubleQuotes body)`
-        // — all flat text chunks, so the layout is a plain concatenation with
-        // `<->`'s single spaces (`export:  tag "body"`, double space after the
-        // colon from `"export: "`'s own trailing space).  The body is emitted
-        // verbatim (embedded newlines stay at column 0 — HughesPJ cannot
-        // re-indent inside one `text` chunk).  HS's opening `symbol "\""`
-        // lexeme skips the whitespace right after the quote
-        // (Parser/Signature.hs:287-295), which the RS lexer keeps — trim it.
-        Export { tag, body } => {
-            vec![format!("export:  {} \"{}\"", tag, body.trim_start())]
+        // `(text "builtin ") <-> (text s)` (`:843`) = two spaces.
+        TranslationElement::SignatureBuiltin(name) => format!("builtin  {}", name),
+        // The two `FunctionTypingInfo` cases (`:800-838`).
+        TranslationElement::FunctionTypingInfo(fti) => pretty_function_typing_info(fti).render(),
+        // `(text "export: ") <-> tag <-> nest 2 (doubleQuotes body)`
+        // (`:839-842`) — all flat text chunks, so the layout is a plain
+        // concatenation with `<->`'s single spaces (`export:  tag "body"`,
+        // double space after the colon from `"export: "`'s own trailing
+        // space).  The body is emitted verbatim (embedded newlines stay at
+        // column 0 — HughesPJ cannot re-indent inside one `text` chunk).
+        // HS's opening `symbol "\""` lexeme skips the whitespace right after
+        // the quote (Parser/Signature.hs:287-295), which the RS lexer keeps —
+        // trim it.
+        TranslationElement::ExportInfo { tag, body } => {
+            format!("export:  {} \"{}\"", tag, body.trim_start())
         }
         // `prettyAccLemma` (Items/AccLemmaItem.hs:47-57):
         //   kwLemma <-> name[attrs] <> colon $-$ nest 2 (
         //     text (intercalate ", " caseIdents) <-> "accounts for" $-$
         //     sep [doubleQuotes (prettySyntacticLNFormula aFormula)])
-        // The formula is the PARSED one (no macro/predicate expansion —
-        // accountability lemmas skip `expandLemma`, Theory/Text/Parser.hs:276-279).
-        AccLemma(al) => {
-            use crate::pretty_hpj as hpj;
+        // The `Pred` sugar survives: `liftedAddAccLemma` adds the lemma
+        // verbatim (Theory/Text/Parser.hs:153-157).
+        TranslationElement::AccLemma(al) => {
             let kw = Doc::text("lemma");
             let name_doc = Doc::text(al.name.clone());
             let header = if al.attributes.is_empty() {
                 kw.beside_sp(name_doc).beside(Doc::text(":"))
             } else {
-                let attr_docs: Vec<Doc> = parsed_lemma_attr_docs(&al.attributes, in_file);
+                let attr_docs = lemma_attr_docs(&al.attributes, in_file);
                 let attrs_fsep = hpj::fsep(hpj::punctuate(Doc::text(","), attr_docs));
                 let brackets = Doc::text("[").beside(attrs_fsep).beside(Doc::text("]"));
                 kw.beside_sp(name_doc)
                     .beside_sp(brackets)
                     .beside(Doc::text(":"))
             };
-            let f = crate::elaborate::canonicalize_ac_in_formula(
-                &crate::elaborate::rewrite_arity1_formula(&al.formula, arity1),
-            );
             let mut out = header.render();
             out.push_str("\n  ");
             out.push_str(&al.case_test_idents.join(", "));
             out.push_str(" accounts for\n");
-            out.push_str(&pf::formula_doublequoted_nested(&f, 2));
-            vec![out]
+            out.push_str(&pf::doublequoted_nested_doc(
+                pf::syntactic_lnformula_doc(&al.formula),
+                2,
+            ));
+            out
         }
         // `prettyCaseTest` (Items/CaseTestItem.hs:39-45):
         //   text "test" <-> name <> colon $-$ nest 2 (sep [doubleQuotes f]).
-        CaseTest(ct) => {
-            let f = crate::elaborate::canonicalize_ac_in_formula(
-                &crate::elaborate::rewrite_arity1_formula(&ct.formula, arity1),
-            );
-            vec![format!(
+        TranslationElement::CaseTest(ct) => {
+            format!(
                 "test {}:\n{}",
                 ct.name,
-                pf::formula_doublequoted_nested(&f, 2)
-            )]
-        }
-    })
-}
-
-/// HS `prettyOpenProtoRule` (OpenTheory.hs:815-824): the E-rule alone for the
-/// (universal) empty-variants case; a rule that carries a manual
-/// `variants (modulo AC)` block appends it via
-/// `nest 1 (kwVariants $-$ nest 1 (ppList prettyProtoRuleAC variants))`.
-// arity-1 no-eq function-name set; membership-only (.contains), never iterated;
-// std kept (byte-inert) — iteration order never reaches output.
-#[allow(clippy::disallowed_types)]
-fn render_open_rule(parsed_rule: &p::Rule, arity1: &std::collections::HashSet<String>) -> String {
-    let mut out = render_rule_e_block(parsed_rule, arity1);
-    if !parsed_rule.variants.is_empty() {
-        // Manual in-rule variants (`protoRule`'s `symbol "variants" *>
-        // commaSep1 protoRuleAC`, Parser/Rule.hs:130-135).  Absent from the
-        // example corpus outside comments; rendered best-effort in the HS
-        // shape (`nest 1 (kwVariants $-$ nest 1 (ppList prettyProtoRuleAC
-        // variants))`, OpenTheory.hs:818-824: each variant as its
-        // `rule (modulo AC)` header + body, the list `,`-separated).
-        out.push_str("\n variants (modulo AC)");
-        for (i, v) in parsed_rule.variants.iter().enumerate() {
-            if i > 0 {
-                out.push_str("\n  ,");
-            }
-            let vblock = render_rule_e_block(v, arity1);
-            let vblock = vblock.replacen("rule (modulo E)", "rule (modulo AC)", 1);
-            for line in vblock.lines() {
-                out.push_str("\n  ");
-                out.push_str(line);
-            }
+                pf::doublequoted_nested_doc(pf::syntactic_lnformula_doc(&ct.formula), 2)
+            )
         }
     }
-    out
-}
-
-/// Open-print lemma (HS `prettyLemma prettyProof` inside `prettyOpenTheory`):
-/// the shared head over the parse-time `_lFormula` plus the PARSED proof
-/// skeleton (`by sorry` when none).
-// arity-1 no-eq function-name set; membership-only (.contains), never iterated;
-// std kept (byte-inert) — iteration order never reaches output.
-#[allow(clippy::disallowed_types)]
-fn render_open_lemma(
-    lem: &p::Lemma,
-    predicates: &[crate::predicate::Predicate],
-    in_file: &str,
-    arity1: &std::collections::HashSet<String>,
-    msig: &tamarin_term::maude_sig::MaudeSig,
-) -> Result<String, String> {
-    // HS `expandLemma` (TheoryObject.hs:439-446) predicate-expands the lemma
-    // formula at parse; the term parser folds surplus args of arity-1
-    // functions into a pair (`naryOpApp` `k == 1`, Parser/Term.hs:94-96) —
-    // e.g. `h(H, x)` → `h(<H, x>)` — and `fAppAC` sorts AC arguments when the
-    // `LNTerm` is built (Term/Term/Raw.hs:118-122), where the parser AST keeps
-    // written order.  The fold runs BEFORE the AC sort so the canonicaliser
-    // sees the folded `h(<…>)` shape.
-    let header_formula =
-        crate::elaborate::canonicalize_ac_in_formula(&crate::elaborate::rewrite_arity1_formula(
-            &expand_predicates_for_display(&lem.formula, predicates, msig),
-            arity1,
-        ));
-    let mut out = lemma_head(
-        &lem.name,
-        parsed_lemma_attr_docs(&lem.attributes, in_file),
-        quantifier_keyword(&lem.trace_quantifier),
-        pf::formula_doc(&header_formula),
-        &render_open_guarded_block(lem, predicates, arity1, msig),
-    );
-    out.push('\n');
-    match lem.proof.as_ref().and_then(|ps| ps.tree.as_ref()) {
-        Some(parsed) => {
-            let tree = crate::elaborate::proof_tree_from_parsed(parsed, msig)
-                .map_err(|e| format!("in the proof of lemma `{}`: {}", lem.name, e.message))?;
-            let mut body = String::new();
-            pp_proof(&tree, &mut body, 0);
-            out.push_str(&body);
-        }
-        None => out.push_str("by sorry"),
-    }
-    Ok(out)
-}
-
-/// Open-print restriction — HS `prettyRestriction` (TheoryObject.hs:889-901)
-/// on the PARSE-time `Restriction`: `_rstrOriginalFormula` is still `Nothing`
-/// (only translation's `applyMacroInRestriction` fills it), so the top formula
-/// is the parse-time `_rstrFormula` (predicate-expanded by
-/// `liftedExpandRestriction` at parse, macro calls intact), the safety check
-/// runs on that same formula, and the `case ogFormula of Just _ →
-/// /* expanded formula: */` block is skipped.  Oracle-verified: `--parse-only`
-/// prints a macro-using restriction without the expanded block.  No attribute
-/// list is printed: HS's restriction parser accepts none
-/// (`restriction`, Theory/Text/Parser/Restriction.hs:77-81).
-// arity-1 no-eq function-name set; membership-only (.contains), never iterated;
-// std kept (byte-inert) — iteration order never reaches output.
-#[allow(clippy::disallowed_types)]
-fn render_open_restriction(
-    r: &p::Restriction,
-    predicates: &[crate::predicate::Predicate],
-    arity1: &std::collections::HashSet<String>,
-    msig: &tamarin_term::maude_sig::MaudeSig,
-) -> String {
-    let original =
-        crate::elaborate::canonicalize_ac_in_formula(&crate::elaborate::rewrite_arity1_formula(
-            &expand_predicates_for_display(&r.formula, predicates, msig),
-            arity1,
-        ));
-    use crate::pretty_hpj::{keyword_, line_comment_};
-    let mut out = String::new();
-
-    out.push_str(&keyword_("restriction").render());
-    out.push(' ');
-    out.push_str(&r.name);
-    out.push_str(":\n");
-    out.push_str(&pf::formula_doublequoted_nested(&original, 2));
-    if is_safety_formula_parsed(&original, msig) {
-        out.push_str("\n  ");
-        out.push_str(&line_comment_("safety formula").render());
-    }
-    out
 }
 
 /// HS `prettySapic'` (Theory/Sapic/Process.hs:485-502) as a Doc:
@@ -1420,135 +1113,105 @@ pub fn pretty_function_typing_info(fti: &crate::theory::SapicFunSym) -> crate::p
 }
 
 #[cfg(test)]
-mod open_print_opts_tests {
+mod open_item_tests {
     use super::*;
-    use crate::sapic::{PlainProcess, Process, ProcessParsedAnnotation};
+    use crate::sapic::{Process, ProcessParsedAnnotation};
+    use crate::theory::{
+        remove_translation_items, ProcessDef, SapicFunSym, Theory, TheoryItem, TranslationElement,
+    };
+    use tamarin_term::function_symbols::{Constructability, NdcState, NoEqSym, Privacy};
 
-    fn no_conv(_: &p::Process) -> Result<PlainProcess, String> {
-        Err("conv must not be called for overlaid/dropped items".to_string())
-    }
-
-    fn null_proc() -> PlainProcess {
+    fn null_proc() -> crate::sapic::PlainProcess {
         Process::Null(ProcessParsedAnnotation::empty())
     }
 
-    fn render_item(item: &p::TheoryItem, st: &mut OpenPrintState<'_>) -> Vec<String> {
-        // arity-1 set / predicates are irrelevant to the arms under test.
-        #[allow(clippy::disallowed_types)]
-        let arity1 = std::collections::HashSet::new();
-        render_open_item(
-            item,
-            &[],
-            "f.spthy",
-            &arity1,
-            &tamarin_term::maude_sig::pair_maude_sig(),
-            &no_conv,
-            st,
-        )
-        .unwrap()
-    }
-
-    fn fdecl(name: &str) -> p::FunctionDecl {
-        p::FunctionDecl {
-            name: name.to_string(),
+    fn typing_info(name: &'static str) -> SapicFunSym {
+        SapicFunSym {
+            sym: tamarin_term::function_symbols::UserDefinedSym::NoEqUser(NoEqSym {
+                name: name.as_bytes(),
+                arity: 1,
+                privacy: Privacy::Public,
+                constructability: Constructability::Constructor,
+                ndc: NdcState::NotNdc,
+            }),
             arg_types: vec![None],
             out_type: None,
-            private: false,
-            destructor: false,
-            ac: false,
-            ndc: false,
-            ndc_diff: false,
         }
     }
 
-    /// `msr`: every `TranslationElement` analogue renders empty
-    /// (`removeTranslationItems` + `emptyString`, OpenTheory.hs:47-52,
-    /// 891-898); non-translation items are untouched.
+    fn theory_with(items: Vec<TheoryItem>) -> Theory {
+        let mut thy = Theory::new("T", crate::signature::SignaturePure::empty(false));
+        thy.items = items;
+        thy
+    }
+
+    /// `msr`: `removeTranslationItems` replaces every `TranslationElement`
+    /// with `()` (OpenTheory.hs:46-52), which `prettyOpenTranslatedTheory`
+    /// prints through `emptyString` (OpenTheory.hs:891-899); every other item
+    /// is kept and rendered.
     #[test]
-    fn drop_translation_items_zeroes_the_translation_element_set() {
-        let opts = OpenPrintOpts {
-            typed: None,
-            extra_function_items: Vec::new(),
-            drop_translation_items: true,
-        };
-        let mut st = OpenPrintState {
-            opts: &opts,
-            proc_idx: 0,
-            def_idx: 0,
-        };
-        let dropped = [
-            p::TheoryItem::Builtins(vec!["multiset".to_string()]),
-            p::TheoryItem::Functions(vec![fdecl("h")]),
-            p::TheoryItem::TopLevelProcess(p::Process::Null),
-            p::TheoryItem::ProcessDef(p::ProcessDef {
+    fn the_translated_theory_prints_no_translation_item() {
+        let thy = theory_with(vec![
+            TheoryItem::Translation(TranslationElement::SignatureBuiltin("multiset".to_string())),
+            TheoryItem::Translation(TranslationElement::FunctionTypingInfo(typing_info("h"))),
+            TheoryItem::Translation(TranslationElement::Process(null_proc())),
+            TheoryItem::Translation(TranslationElement::ProcessDef(ProcessDef {
                 name: "P".to_string(),
                 vars: None,
-                body: p::Process::Null,
-            }),
-            p::TheoryItem::EquivLemma(p::Process::Null, p::Process::Null),
-            p::TheoryItem::DiffEquivLemma(p::Process::Null),
-            p::TheoryItem::Export {
+                body: null_proc(),
+            })),
+            TheoryItem::Translation(TranslationElement::EquivLemma(null_proc(), null_proc())),
+            TheoryItem::Translation(TranslationElement::DiffEquivLemma(null_proc())),
+            TheoryItem::Translation(TranslationElement::ExportInfo {
                 tag: "queries".to_string(),
                 body: "q".to_string(),
-            },
-        ];
-        for item in &dropped {
-            assert!(
-                render_item(item, &mut st).is_empty(),
-                "expected empty render for {item:?}"
-            );
-        }
-        // A non-translation item still renders.
-        let keep = p::TheoryItem::FormalComment {
-            header: String::new(),
-            body: "keep".to_string(),
-        };
+            }),
+            TheoryItem::Text((String::new(), "keep".to_string())),
+        ]);
+        let translated = remove_translation_items(&thy);
+        let blocks = open_theory_blocks(&translated, "f.spthy", &|_: &()| String::new());
         assert_eq!(
-            render_item(&keep, &mut st),
-            vec!["/*\nkeep\n*/".to_string()]
+            blocks.last().map(String::as_str),
+            Some("/*\nkeep\n*/"),
+            "only the formal comment survives: {blocks:?}"
         );
     }
 
-    /// `spthytyped`: process-bearing items render the OVERLAY processes (conv
-    /// is never consulted), `ProcessDef` renders the overlay `(vars, body)` —
-    /// `Some(vec![])` as the `let  P () =` empty parens — and
-    /// source-positioned `Functions` items vanish
-    /// (`clearFunctionTypingInfos`).
+    /// `prettyTranslationElement` (TheoryObject.hs:785-843) on the item kinds
+    /// whose text is a plain concatenation.
     #[test]
-    fn typed_overlay_substitutes_processes_and_defs() {
-        let opts = OpenPrintOpts {
-            typed: Some(TypedOverlay {
-                processes: vec![null_proc()],
-                defs: vec![(Some(Vec::new()), null_proc())],
-            }),
-            extra_function_items: Vec::new(),
-            drop_translation_items: false,
-        };
-        let mut st = OpenPrintState {
-            opts: &opts,
-            proc_idx: 0,
-            def_idx: 0,
-        };
+    fn translation_elements_render_their_headers() {
         assert_eq!(
-            render_item(&p::TheoryItem::TopLevelProcess(p::Process::Null), &mut st),
-            vec!["process:\n  0".to_string()]
-        );
-        assert_eq!(
-            render_item(
-                &p::TheoryItem::ProcessDef(p::ProcessDef {
-                    name: "P".to_string(),
-                    vars: None,
-                    body: p::Process::Null,
-                }),
-                &mut st
+            pretty_translation_element(
+                &TranslationElement::SignatureBuiltin("multiset".to_string()),
+                "f.spthy"
             ),
-            vec!["let  P () = 0".to_string()]
+            "builtin  multiset"
         );
-        assert!(render_item(&p::TheoryItem::Functions(vec![fdecl("h")]), &mut st).is_empty());
         assert_eq!(
-            (st.proc_idx, st.def_idx),
-            (1, 1),
-            "one process and one def consumed"
+            pretty_translation_element(
+                &TranslationElement::ExportInfo {
+                    tag: "queries".to_string(),
+                    body: " q".to_string(),
+                },
+                "f.spthy"
+            ),
+            "export:  queries \"q\""
+        );
+        assert_eq!(
+            pretty_translation_element(&TranslationElement::Process(null_proc()), "f.spthy"),
+            "process:\n  0"
+        );
+        assert_eq!(
+            pretty_translation_element(
+                &TranslationElement::ProcessDef(ProcessDef {
+                    name: "P".to_string(),
+                    vars: Some(Vec::new()),
+                    body: null_proc(),
+                }),
+                "f.spthy"
+            ),
+            "let  P () = 0"
         );
     }
 }
@@ -1993,246 +1656,8 @@ fn sep_block_with_lead(
 }
 
 // =============================================================================
-// Rule
+// Shared rendering helpers
 // =============================================================================
-
-/// Names of arity-1 NoEq function symbols in the closed theory signature.
-/// Mirrors HS `lookupArity` reading the parser-state signature for
-/// `naryOpApp`'s `k == 1` tuple-folding (Theory/Text/Parser/Term.hs:88-96).
-// arity-1 no-eq function-name set; membership-only (.contains), never iterated;
-// std kept (byte-inert) — iteration order never reaches output.
-#[allow(clippy::disallowed_types)]
-fn arity1_noeq_names(elab: &Theory) -> std::collections::HashSet<String> {
-    crate::elaborate::arity1_noeq_names(elab.signature.maude_sig())
-}
-
-/// Apply the arity-1 surplus-arg pair-fold (HS `naryOpApp` `k == 1`,
-/// Theory/Text/Parser/Term.hs:94-96) to every term in a parser-AST fact.  Thin alias over the
-/// shared [`crate::elaborate::rewrite_arity1_fact`] so the rule
-/// pretty-printer and the lemma/formula paths share one implementation.
-// arity-1 no-eq function-name set; membership-only (.contains), never iterated;
-// std kept (byte-inert) — iteration order never reaches output.
-#[allow(clippy::disallowed_types)]
-fn rewrite_arity1_fact(fa: &p::Fact, arity1: &std::collections::HashSet<String>) -> p::Fact {
-    crate::elaborate::rewrite_arity1_fact(fa, arity1)
-}
-
-/// HS `prettyMacros` / `prettyMacro` (TheoryObject.hs:862-884).
-///
-/// HS: `prettyMacros m = keyword_ "macros:" $$ nest 4 (vcat [macros...])`
-/// HS: `prettyMacro (op, args, out) =
-///       vcat [ppNonEmptyList (\ds -> sep (map (nest 4) ds)) text [op++"("]
-///             <-> prettyVarList args <-> text ") = " <-> prettyTerm show out]`
-///
-/// `ppNonEmptyList hdr pp [x] = hdr [pp x] = sep [nest 4 (text x)]`
-/// = `nest 4 (text (name++"("))`.
-///
-/// With `keyword_ "macros:" $$ nest 4 (nest 4 "name(" <+> args <+> ") = " <+> body)`:
-/// the double-nest (8 total) combined with `keyword_`'s 7-char width makes
-/// `nil_above_nest` inline the content (k = -7+8 = 1 > 0), putting everything
-/// on ONE line: `macros: name( args ) =  body`.
-///
-/// For multiple macros, each is nested 4 levels inside the outer `nest 4`,
-/// giving 8-space indent on subsequent lines.
-fn render_parsed_macros(macros: &[p::Macro]) -> String {
-    use crate::pretty_hpj::{self as hpj, Doc};
-
-    let last_idx = macros.len() - 1;
-    let macro_docs: Vec<Doc> = macros
-        .iter()
-        .enumerate()
-        .map(|(i, m)| {
-            // HS: `ppNonEmptyList (\ds -> sep (map (nest 4) ds)) text [op++"("]`
-            // = `sep [nest 4 (text (op ++ "("))]` = `nest 4 (text (op ++ "("))`.
-            let name_open = Doc::text(format!("{}(", m.name)).nest(4);
-            // HS: `prettyVarList args = fsep . punctuate comma . map prettyLVar`
-            // For macro args (bare LVar names, sort-prefix from hint):
-            let args_parts: Vec<String> = m
-                .args
-                .iter()
-                .map(|v| {
-                    let mut s = tamarin_term::lterm::sort_prefix(v.sort).to_string();
-                    s.push_str(&v.name);
-                    if v.idx > 0 {
-                        s.push('.');
-                        s.push_str(&v.idx.to_string());
-                    }
-                    s
-                })
-                .collect();
-            let args_str = args_parts.join(", ");
-            // HS: `prettyTerm (text . show) body`
-            let body_str = pf::pretty_term(&m.body);
-            // Build: `nest 4 "name(" <+> args <+> ") = " <+> body`
-            // HS <-> = HughesPJ <+> (beside with space = beside_sp).
-            let mut doc = name_open;
-            if !m.args.is_empty() {
-                doc = doc.beside_sp(Doc::text(args_str));
-            }
-            doc = doc.beside_sp(Doc::text(") = "));
-            doc = doc.beside_sp(Doc::text(body_str));
-            // HS: last macro has no trailing comma
-            if i < last_idx {
-                doc.beside(Doc::text(","))
-            } else {
-                doc
-            }
-        })
-        .collect();
-
-    // HS: `keyword_ "macros:" $$ nest 4 (vcat macro_docs)`
-    let body = hpj::vcat(macro_docs).nest(4);
-    let header = Doc::text("macros:");
-    header.above(body).render()
-}
-
-/// Render a rule's attribute block `[...]`, mirroring HS `prettyRuleAttributes`
-/// / `prettyRuleAttribute` (Model/Rule.hs:1314-1334).  HS emits a FIXED-order
-/// `catMaybes [color, process, no_derivcheck, issapicrule, role]` joined by
-/// `fsep . punctuate comma` (", "), wrapped in `[`..`]`; empty → nothing.
-/// External (`x-…`) attributes are NOT in HS's list, so they are dropped.
-/// Build HS `prettyRuleAttribute`'s ordered part list (Model/Rule.hs:1314-1321).
-///
-/// HS stores the parsed attribute LIST folded into a `RuleAttributes` STRUCT via
-/// its `Semigroup` (Model/Rule.hs:382-396): for the `Maybe`-typed fields
-/// (`ruleColor`, `role`) `preferRight a b = if isJust b then b else a` ⇒ the
-/// LAST occurrence wins.  RS therefore takes the LAST match, not the first
-/// (`rev().find_map(..)`).  `no_derivcheck`/`issapicrule` are booleans combined
-/// with `||`, so order-independent (`.any(..)`).
-///
-/// Render order is the `catMaybes [color, process, no_derivcheck, issapicrule,
-/// role]` of `prettyRuleAttribute`.  HS's attribute parser `parseAndIgnore`s
-/// `process=` (Parser/Rule.hs:68-93, see line 72), so a user-written `process=` never sets
-/// `ruleProcess` and is never rendered; RS mirrors this by discarding `process=`
-/// at parse time.  [`p::RuleAttr::Process`] is synthesised only by the SAPIC
-/// translation on the rules it generates (`tamarin_sapic::apply`), matching
-/// HS's `ruleProcess`.
-fn rule_attribute_parts(attrs: &[p::RuleAttr]) -> Vec<String> {
-    let mut parts: Vec<String> = Vec::new();
-    // color= : HS `text "color=" <> text (rgbToHex c)`; `rgbToHex` is
-    // `'#':` + lowercase 2-digit-per-channel hex (Data/Color.hs:140-147, see line 141).
-    if let Some(hex) = attrs.iter().rev().find_map(|a| match a {
-        p::RuleAttr::Color(c) => Some(c),
-        _ => None,
-    }) {
-        parts.push(format!(
-            "color=#{}",
-            hex.trim_start_matches('#').to_lowercase()
-        ));
-    }
-    // process= : HS `ppProcess p = text "process=" <> "\"" ++ topLevel ++ "\""`
-    // (Model/Rule.hs:1324-1327, see line 1324).  Rendered between color= and no_derivcheck.  Only
-    // SAPIC-translation-generated rules carry it (the parser ignores a
-    // user-written `process=`); the LAST occurrence wins (Maybe field).
-    if let Some(s) = attrs.iter().rev().find_map(|a| match a {
-        p::RuleAttr::Process(s) => Some(s),
-        _ => None,
-    }) {
-        parts.push(format!("process=\"{}\"", s));
-    }
-    if attrs.iter().any(|a| matches!(a, p::RuleAttr::NoDerivCheck)) {
-        parts.push("no_derivcheck".to_string());
-    }
-    if attrs.iter().any(|a| matches!(a, p::RuleAttr::IsSapicRule)) {
-        parts.push("issapicrule".to_string());
-    }
-    if let Some(r) = attrs.iter().rev().find_map(|a| match a {
-        p::RuleAttr::Role(r) => Some(r),
-        _ => None,
-    }) {
-        parts.push(format!("role='{}'", r));
-    }
-    parts
-}
-
-/// Build the `prettyRuleAttributes` Doc (Model/Rule.hs:1330-1334):
-///   `mempty == ruleAttributes ⇒ emptyDoc`,
-///   else `hcat [text "[", prettyRuleAttribute ru, text "]"]`,
-/// where `prettyRuleAttribute = fsep $ punctuate comma [..]`.  Returning a Doc
-/// (not a flat string) lets the enclosing rule-header line wrap the attribute
-/// list via `fsep` at the ribbon width, exactly as HughesPJ does for HS.
-pub(crate) fn rule_attributes_doc(attrs: &[p::RuleAttr]) -> crate::pretty_hpj::Doc {
-    use crate::pretty_hpj::{self as hpj, Doc};
-    let parts = rule_attribute_parts(attrs);
-    if parts.is_empty() {
-        return Doc::empty();
-    }
-    let part_docs: Vec<Doc> = parts.into_iter().map(Doc::text).collect();
-    // `fsep $ punctuate comma [..]` — comma is `text ","`, and the `fsep`
-    // continuation hangs at the column right after `[` (beside, no space).
-    let inner = hpj::fsep(hpj::punctuate(Doc::text(","), part_docs));
-    Doc::text("[").beside(inner).beside(Doc::text("]"))
-}
-
-/// The `rule (modulo E) NAME[attrs]:` header line plus the 3-space-indented
-/// `[ prems ] --[ acts ]-> [ concs ]` body, i.e. HS `prettyProtoRuleE`
-/// (Theory/Model/Rule.hs:1434-1435) over the parsed rule the `--parse-only`
-/// printer walks — `prettyOpenProtoRule`'s `OpenProtoRule ruE []` branch
-/// (OpenTheory.hs:815-816).
-// arity-1 no-eq function-name set; membership-only (.contains), never iterated;
-// std kept (byte-inert) — iteration order never reaches output.
-#[allow(clippy::disallowed_types)]
-pub fn render_rule_e_block(
-    parsed_rule: &p::Rule,
-    arity1: &std::collections::HashSet<String>,
-) -> String {
-    let name = &parsed_rule.name;
-    let mut out = String::new();
-    // HS rule-header line (`prettyNamedRule`, Theory/Model/Rule.hs:1393-1405, see line 1397):
-    //   `prefix <-> prettyRuleName ru <> prettyRuleAttributes ru <> colon`
-    // i.e. `"rule (modulo E)" <+> name <> [attrs] <> ":"`.  Routed through the
-    // HughesPJ-faithful Doc engine so the attribute list's `fsep` wraps at the
-    // ribbon width (the continuation hangs right after the `[`), byte-identical
-    // to HS.  `<->`/`<+>` = space, `<>` = no space.
-    {
-        use crate::pretty_hpj::Doc;
-        let header = crate::pretty_hpj::kw_rule_modulo("E")
-            .beside_sp(Doc::text(name.clone()))
-            .beside(rule_attributes_doc(&parsed_rule.attributes))
-            .beside(Doc::text(":"));
-        out.push_str(&header.render());
-        out.push('\n');
-    }
-    // Re-folds arity-1 comma lists: an arity-1 function applied as
-    // `f(a,b,c)` is folded by `naryOpApp`'s `k == 1` branch into `f(<a,b,c>)`
-    // (Theory/Text/Parser/Term.hs:94-96).  RS's term parser keeps the surplus
-    // args, so re-fold here before rendering.
-    let fold = |fs: &[p::Fact]| -> Vec<p::Fact> {
-        fs.iter().map(|f| rewrite_arity1_fact(f, arity1)).collect()
-    };
-    out.push_str(&render_rule_body(
-        &fold(&parsed_rule.premises),
-        &fold(&parsed_rule.actions),
-        &fold(&parsed_rule.conclusions),
-    ));
-    out
-}
-
-/// Render the `[ prems ] --[ acts ]-> [ concs ]` body of a parsed rule.
-///
-/// HS `prettyNamedRule` wraps the body as `nest 2 (prettyRule ...)`
-/// (Theory/Model/Rule.hs:1393-1405, see line 1400), and `prettyRuleRestrGen`
-/// (Theory/Model/Rule.hs:1366-1382) lays out `sep [nest 1 (ppFactsList
-/// prems), arrow, nest 1 (ppFactsList concls)]`.  The combined `nest 2 + nest
-/// 1` puts the bracket `[` at col 3 and the arrow at col 2; the whole body is
-/// one `pretty_hpj::Doc` (`rule_body_to_doc`) at `nest 2` so the HughesPJ
-/// engine makes the `sep`/`fsep` wrap decisions byte-identically to HS.
-fn render_rule_body(prems: &[p::Fact], acts: &[p::Fact], concs: &[p::Fact]) -> String {
-    // AC-canonicalise the rule body BEFORE rendering — the parser produces
-    // left-associative nested `BinOp(Xor, BinOp(Xor, na, k), nb)` for
-    // `na ⊕ k ⊕ nb`, but HS's `fAppAC` at parse time flattens and sorts
-    // the multiset, producing a different visual order (`k ⊕ nb ⊕ na`).
-    // We apply the same canonicalisation to the parser AST so the rendered
-    // rule body matches HS byte-for-byte.  `term_to_lnterm` covers the
-    // LNTerm path; this call is the parser-AST path's equivalent.
-    use crate::elaborate::canonicalize_ac_in_pfact;
-    let prems2: Vec<p::Fact> = prems.iter().map(canonicalize_ac_in_pfact).collect();
-    let acts2: Vec<p::Fact> = acts.iter().map(canonicalize_ac_in_pfact).collect();
-    let concs2: Vec<p::Fact> = concs.iter().map(canonicalize_ac_in_pfact).collect();
-    pf::rule_body_to_doc(&prems2, &acts2, &concs2)
-        .nest(2)
-        .render()
-}
 
 /// Render a `LVar` the way HS `instance Show LVar` (LTerm.hs:550-557) does:
 /// sort prefix (`~`/`$`/`#`/`%`/empty), then the root name, then `.idx` when
@@ -2285,10 +1710,7 @@ fn pretty_lemma(lem: &crate::theory::Lemma, proof: &str, in_file: &str) -> Strin
 /// proof body: the `lemma <name> [attrs]:` header, the `<quant> "<formula>"`
 /// line, and the `/* guarded formula ... */` comment block.  `formula_doc` is
 /// the quoted formula of the quantifier line and `guarded_block` the comment,
-/// both built by the caller from the formula representation it holds.
-/// Shared by the closed renderer ([`pretty_lemma`], which appends the
-/// prover's proof body) and the open `--parse-only` renderer
-/// (`render_open_lemma`, which appends the parsed proof skeleton).
+/// both built by [`pretty_lemma`] from the lemma it holds.
 fn lemma_head(
     name: &str,
     attr_docs: Vec<crate::pretty_hpj::Doc>,
@@ -2335,38 +1757,6 @@ fn lemma_head(
     out
 }
 
-/// Build `Doc` nodes for each lemma attribute.  Mirrors HS
-/// `prettyLemmaAttribute` (lib/theory/src/Lemma.hs:97-107): each attribute becomes a
-/// `text "..."` Doc; these are assembled into
-/// `brackets (fsep (punctuate comma docs))` by the caller.
-fn parsed_lemma_attr_docs(attrs: &[p::LemmaAttr], in_file: &str) -> Vec<crate::pretty_hpj::Doc> {
-    use crate::pretty_hpj::Doc;
-    let mut out = Vec::new();
-    for a in attrs {
-        use p::LemmaAttr::*;
-        let s: Option<String> = match a {
-            Sources => Some("sources".into()),
-            Reuse => Some("reuse".into()),
-            DiffReuse => Some("diff_reuse".into()),
-            UseInduction => Some("use_induction".into()),
-            HideLemma(s) => Some(format!("hide_lemma={}", s)),
-            // HS `prettyLemmaAttribute (LemmaHeuristic h)`
-            // (lib/theory/src/Lemma.hs:97-107, see line 103):
-            //   `text ("heuristic=" ++ prettyGoalRankings h)`
-            // Mirror space-separated, oracle-name-expanded rendering.
-            Heuristic(s) => Some(format!("heuristic={}", pretty_goal_rankings(s, in_file))),
-            Output(modules) => Some(format!("output=[{}]", modules.join(","))),
-            Left => Some("left".into()),
-            Right => Some("right".into()),
-            _ => None,
-        };
-        if let Some(s) = s {
-            out.push(Doc::text(s));
-        }
-    }
-    out
-}
-
 /// HS `prettyLemmaAttribute` (lib/theory/src/Lemma.hs:97-107) over the
 /// theory's own attribute type; an attribute HS has no case for renders
 /// nothing (`prettyLemmaAttribute _ = emptyDoc`, `:106`).
@@ -2399,13 +1789,6 @@ fn lemma_attr_docs(
     out
 }
 
-fn quantifier_keyword(q: &p::TraceQuantifier) -> &'static str {
-    match q {
-        p::TraceQuantifier::AllTraces => "all-traces",
-        p::TraceQuantifier::ExistsTrace => "exists-trace",
-    }
-}
-
 /// HS `prettyTraceQuantifier` (lib/theory/src/Lemma.hs:179-181).
 fn trace_quantifier_keyword(q: crate::theory::TraceQuantifier) -> &'static str {
     match q {
@@ -2424,34 +1807,6 @@ fn render_guarded_block(lem: &crate::theory::Lemma) -> String {
         ),
         crate::guarded::formula_to_guarded(&lem.formula),
         || crate::pretty_formula::lnformula_doc(&lem.formula),
-    )
-}
-
-/// [`render_guarded_block`] for the `--parse-only` renderer, over the parsed
-/// lemma's surface formula.  The parse-time lemma's guarded characterization
-/// is computed BEFORE `applyMacroInLemma` runs, so no macro is applied here —
-/// oracle-verified: `--parse-only` prints `m1('a')` un-expanded inside the
-/// guarded block where the closed print shows `h('a')`.  HS `expandLemma`
-/// (TheoryObject.hs:439-446) does predicate-expand at parse, and the arity-1
-/// surplus-argument fold (`naryOpApp` `k == 1`, Parser/Term.hs:94-96) happens
-/// in the term parser, so the guarded form carries `h(<…>)` not `h(…)`.
-// arity-1 no-eq function-name set; membership-only (.contains), never iterated;
-// std kept (byte-inert) — iteration order never reaches output.
-#[allow(clippy::disallowed_types)]
-fn render_open_guarded_block(
-    lem: &p::Lemma,
-    predicates: &[crate::predicate::Predicate],
-    arity1: &std::collections::HashSet<String>,
-    msig: &tamarin_term::maude_sig::MaudeSig,
-) -> String {
-    let expanded_formula = crate::elaborate::rewrite_arity1_formula(
-        &expand_predicates_for_display(&lem.formula, predicates, msig),
-        arity1,
-    );
-    guarded_block_comment(
-        matches!(lem.trace_quantifier, p::TraceQuantifier::ExistsTrace),
-        crate::guarded::formula_to_guarded_parsed(&expanded_formula, msig),
-        || pf::formula_doc(&expanded_formula),
     )
 }
 
@@ -2522,59 +1877,14 @@ fn guarded_block_comment(
 // Restriction
 // =============================================================================
 
-/// Predicate-expand a formula for DISPLAY through the internal expander,
-/// mirroring HS `expandFormula` (Theory/Syntactic/Predicate.hs:82-105) as
-/// applied by `expandRestriction` / `expandLemma` (TheoryObject.hs:430-446).
-/// The rewrite replaces every `Pred` use site — and the builtin multiset
-/// `(<)`, which [`crate::formula::from_parser`] closes to a `Smaller` use
-/// site — by the predicate's body, so the displayed lemma/restriction text
-/// matches HS byte-for-byte, capture spelling included.
-///
-/// A formula with no such atom is returned as written: there is nothing to
-/// expand, and the round trip through the internal formula would re-derive
-/// its binder display names for nothing.  The parse already succeeded (so
-/// every referenced predicate is defined and arities match); should the
-/// conversion or the expansion nonetheless fail, fall back to the
-/// un-expanded formula rather than panic.
-pub(crate) fn expand_predicates_for_display(
-    f: &p::Formula,
-    predicates: &[crate::predicate::Predicate],
-    msig: &tamarin_term::maude_sig::MaudeSig,
-) -> p::Formula {
-    if !has_predicate_atom(f) {
-        return f.clone();
-    }
-    let expanded = crate::formula::from_parser(f, msig)
-        .ok()
-        .and_then(|syn| crate::predicate::expand_formula(predicates, &syn).ok());
-    match expanded {
-        Some(ln) => pf::lnformula_to_parser(&ln),
-        None => f.clone(),
-    }
-}
-
-/// Whether `f` carries an atom the predicate expansion rewrites: a predicate
-/// use site, or the multiset `(<)` the built-in `Smaller` predicate expands.
-fn has_predicate_atom(f: &p::Formula) -> bool {
-    match f {
-        p::Formula::True | p::Formula::False => false,
-        p::Formula::Atom(a) => matches!(a, p::Atom::Pred(_) | p::Atom::LessMset(_, _)),
-        p::Formula::Not(g) => has_predicate_atom(g),
-        p::Formula::And(a, b)
-        | p::Formula::Or(a, b)
-        | p::Formula::Implies(a, b)
-        | p::Formula::Iff(a, b) => has_predicate_atom(a) || has_predicate_atom(b),
-        p::Formula::Forall(_, b) | p::Formula::Exists(_, b) => has_predicate_atom(b),
-    }
-}
-
 /// HS `prettyRestriction` (TheoryObject.hs:889-901).  `_rstrFormula` is the
 /// macro- and predicate-expanded formula and `_rstrOriginalFormula` the
 /// pre-macro one, so the body shows `fromMaybe expandedFormula ogFormula`
 /// (`:893`), the safety predicate runs on `_rstrFormula` (`:901`) and the
-/// `expanded formula:` comment shows `_rstrFormula` (`:895-898`).  That block
-/// sits under `case ogFormula of Just _`, and elaboration and the SAPIC
-/// injection both fill `original_formula`, so it is always written.
+/// `expanded formula:` comment shows `_rstrFormula` (`:895-898`) under a
+/// `case ogFormula of Just _` guard.  The closed theory's restrictions carry
+/// an original formula (elaboration and the SAPIC injection both fill it) and
+/// print the block; the open view sets it to `None` and prints none.
 ///
 /// The restriction carries no attribute list: HS's restriction parser accepts
 /// none (`restriction`, Theory/Text/Parser/Restriction.hs:77-81) and only the
@@ -2607,50 +1917,18 @@ fn pretty_restriction(r: &crate::restriction::Restriction) -> String {
     // (prettyLNFormula expandedFormula)))` (TheoryObject.hs:896-897).
     // `multiComment = comment (…)` wraps the whole `/* … */` in an
     // `hl_comment` span; the inner formula still carries its own operator spans.
-    out.push_str("\n\n  ");
-    out.push_str(&hl_open(Hl::Comment));
-    out.push_str("/*\n  expanded formula:\n");
-    out.push_str(&pf::doublequoted_nested_doc(
-        pf::lnformula_doc(&r.formula),
-        2,
-    ));
-    out.push_str("\n  */");
-    out.push_str(&hl_close(Hl::Comment));
+    if r.original_formula.is_some() {
+        out.push_str("\n\n  ");
+        out.push_str(&hl_open(Hl::Comment));
+        out.push_str("/*\n  expanded formula:\n");
+        out.push_str(&pf::doublequoted_nested_doc(
+            pf::lnformula_doc(&r.formula),
+            2,
+        ));
+        out.push_str("\n  */");
+        out.push_str(&hl_close(Hl::Comment));
+    }
     out
-}
-
-/// Render one predicate item, mirroring HS `prettyPredicate`
-/// (TheoryObject.hs:845-849):
-///   prettyPredicate p = kwPredicate <> colon <-> text (factstr ++ "<=>" ++ formulastr)
-///     factstr    = render $ prettyFact prettyLVar (pFact p)
-///     formulastr = render $ prettyLNFormula      (pFormula p)
-/// `kwPredicate <> colon` is `predicate:` (no space), `<->` adds one space,
-/// then the combined `<fact><=><formula>` text (no spaces around `<=>`).
-/// The fact/formula terms are arity-1 folded (HS `naryOpApp` k==1 at parse
-/// time), matching the rule/restriction renderers.
-// arity-1 no-eq function-name set; membership-only (.contains), never iterated;
-// std kept (byte-inert) — iteration order never reaches output.
-#[allow(clippy::disallowed_types)]
-fn render_predicate(pr: &p::Predicate, arity1: &std::collections::HashSet<String>) -> String {
-    use crate::pretty_hpj as hpj;
-    let fact = crate::elaborate::rewrite_arity1_fact(&pr.fact, arity1);
-    let formula = crate::elaborate::rewrite_arity1_formula(&pr.formula, arity1);
-    // `render` is HughesPJ's default style: `lineLength = 100` and
-    // `ribbonsPerLine = 1.5`, so `fullRender` rounds the ribbon to 67
-    // (HughesPJ.hs:940, :1010) — NOT the 110/73 the console's `renderDoc`
-    // installs for the surrounding theory echo.  factstr and formulastr are
-    // rendered INDEPENDENTLY at that style from column 0, then concatenated
-    // as plain text.
-    //
-    // HS `prettyPredicate` (TheoryObject.hs:845-849) calls
-    // `prettyFact prettyLVar (pFact p)`, where each formal-arg `LVar` carries
-    // its sort and `prettyLVar` renders the sigil (`#time` for an `LSortNode`
-    // arg), so `fact_doc` reads the args the term parser built and keeps the
-    // sort.
-    let factstr = pf::fact_doc(&fact).render_with(hpj::DEFAULT_LINE_LENGTH, hpj::DEFAULT_RIBBON);
-    let formulastr =
-        pf::formula_doc(&formula).render_at(hpj::DEFAULT_LINE_LENGTH, hpj::DEFAULT_RIBBON, 0);
-    format!("predicate: {}<=>{}", factstr, formulastr)
 }
 
 /// HS `prettyPredicate` (TheoryObject.hs:845-849):
@@ -2752,16 +2030,6 @@ fn pretty_macros(macros: &[crate::theory::LNMacro]) -> String {
 /// an unguardable restriction here yields `false` (no annotation) instead.
 fn is_safety_formula(f: &crate::formula::LNFormula) -> bool {
     match crate::guarded::formula_to_guarded(f) {
-        Ok(g) => crate::guarded::is_safety_formula(&g),
-        Err(_) => false,
-    }
-}
-
-/// [`is_safety_formula`] on the parser-AST formula the `--parse-only`
-/// restriction renderer holds, closed by
-/// [`crate::guarded::formula_to_guarded_parsed`].
-fn is_safety_formula_parsed(f: &p::Formula, msig: &tamarin_term::maude_sig::MaudeSig) -> bool {
-    match crate::guarded::formula_to_guarded_parsed(f, msig) {
         Ok(g) => crate::guarded::is_safety_formula(&g),
         Err(_) => false,
     }
@@ -3739,23 +3007,8 @@ mod stored_proof_reparse_tests {
                  simplify\nsolve( !KU( (x add\n         y) ) @ #i )\n  by sorry\nend"
             )
         };
-        let lemma_of = |thy: &p::Theory| match thy.items.iter().find_map(|it| match it {
-            p::TheoryItem::Lemma(l) => Some(l.clone()),
-            _ => None,
-        }) {
-            Some(l) => l,
-            None => panic!("no lemma"),
-        };
-        // arity-1 set / predicates are irrelevant to the goal echo.
-        #[allow(clippy::disallowed_types)]
-        let arity1 = std::collections::HashSet::new();
-
         let thy = tamarin_parser::parser::parse_theory(&src("functions: add/2 [AC]"), &[]).unwrap();
-        let msig = crate::elaborate::elaborate(&thy)
-            .unwrap()
-            .signature
-            .maude_sig;
-        let echo = render_open_lemma(&lemma_of(&thy), &[], "f.spthy", &arity1, &msig).unwrap();
+        let echo = pretty_open_theory(&crate::elaborate::elaborate(&thy).unwrap(), "f.spthy");
         assert!(
             echo.contains("solve( !KU( (x add y) ) @ #i )"),
             "the stored wrapping must not survive the echo: {echo}"
@@ -3764,10 +3017,15 @@ mod stored_proof_reparse_tests {
         // Without the declaration the infix spelling is not a term, so the
         // goal grammar rejects it and the skeleton keeps no tree.
         let thy = tamarin_parser::parser::parse_theory(&src("functions: add/2"), &[]).unwrap();
-        assert!(lemma_of(&thy)
-            .proof
-            .as_ref()
-            .is_some_and(|ps| ps.tree.is_none()));
+        let lemma = thy
+            .items
+            .iter()
+            .find_map(|it| match it {
+                tamarin_parser::ast::TheoryItem::Lemma(l) => Some(l),
+                _ => None,
+            })
+            .expect("no lemma");
+        assert!(lemma.proof.as_ref().is_some_and(|ps| ps.tree.is_none()));
     }
 }
 
@@ -3795,19 +3053,10 @@ predicate: Between(x, y, z) <=> \
 (Ex #i #j #k. Ev(x) @ #i & Ev(y) @ #j & Ev(z) @ #k & #i < #j & #j < #k)\n\
 end\n";
         let parsed = tamarin_parser::parse_theory(SRC, &[]).expect("theory parses");
-        let predicates: Vec<&p::Predicate> = parsed
-            .items
-            .iter()
-            .filter_map(|i| match i {
-                p::TheoryItem::Predicates(ps) => ps.first(),
-                _ => None,
-            })
-            .collect();
-        // The theory declares no arity-1 no-eq function.
-        #[allow(clippy::disallowed_types)]
-        let arity1 = std::collections::HashSet::new();
+        let elaborated = crate::elaborate::elaborate(&parsed).expect("theory elaborates");
+        let predicate = elaborated.predicates().next().expect("predicate item");
         assert_eq!(
-            render_predicate(predicates[0], &arity1),
+            pretty_predicate(predicate),
             concat!(
                 "predicate: Between( x, y, z )<=>\u{2203} #i #j #k.\n",
                 " ((((Ev( x ) @ #i) \u{2227} (Ev( y ) @ #j)) \u{2227} (Ev( z ) @ #k)) \u{2227}\n",
@@ -3897,10 +3146,7 @@ end\n";
             "closed print: {}",
             closed[0]
         );
-        let open = pretty_open_theory(&parsed, &elaborated, "f.spthy", &|_| {
-            Err("no process in this theory".to_string())
-        })
-        .expect("open print");
+        let open = pretty_open_theory(&elaborated, "f.spthy");
         assert!(open.contains("restriction Sided:\n"), "open print: {open}");
         assert!(!open.contains("[left]"), "open print: {open}");
     }

@@ -1190,12 +1190,9 @@ impl TheoryPipeline<'_> {
     /// pre-translation `Sapic.checkWellformedness ++ Acc.checkWellformedness`
     /// report.
     ///
-    /// Returns the translate-mode render options (`Some` iff `-m` is in
-    /// force).  `Err` is a process exit code whose message is already on
-    /// stderr (the GHC-exception shape).
-    fn translate_theory(
-        &mut self,
-    ) -> Result<Option<tamarin_theory::pretty_theory::OpenPrintOpts>, i32> {
+    /// `Err` is a process exit code whose message is already on stderr (the
+    /// GHC-exception shape).
+    fn translate_theory(&mut self) -> Result<(), i32> {
         let translate_module = self.translate_module;
         // HS emits this marker at the top of `translateTheory`
         // (TheoryLoader.hs:487-502, see line 496).
@@ -1211,26 +1208,6 @@ impl TheoryPipeline<'_> {
         // `check_translated_theory`.  `user_set_heuristic` is
         // true iff a `heuristic:` item already populated `elaborated.heuristic`
         // (HS `addHeuristic` returns `Nothing` in that case).
-        // The translate-mode render's print options, one per module
-        // (`prettyOpenTheoryByModule`, TheoryLoader.hs:783-801).  `Some` iff
-        // `-m` is in force: `spthy` and `msr` are fixed, while `spthytyped`
-        // carries `Sapic.typeTheory`'s per-file result and is therefore filled
-        // by the SAPIC block below, at the position where HS runs the typing.
-        // `None` in every other mode.
-        let mut print_opts: Option<tamarin_theory::pretty_theory::OpenPrintOpts> =
-            match translate_module {
-                // `spthy`: the plain open print (`prettyOpenTheory`).
-                Some(TranslateModule::Spthy) => {
-                    Some(tamarin_theory::pretty_theory::OpenPrintOpts::default())
-                }
-                // `msr`: drop the TranslationElement set
-                // (`prettyOpenTranslatedTheory . removeTranslationItems`).
-                Some(TranslateModule::Msr) => Some(tamarin_theory::pretty_theory::OpenPrintOpts {
-                    drop_translation_items: true,
-                    ..Default::default()
-                }),
-                Some(TranslateModule::SpthyTyped) | None => None,
-            };
         {
             // HS `Acc.checkWellformedness t` (translateTheory, TheoryLoader.hs:487-502, see line 497)
             // runs on the PRE-translation theory `t` — the report is computed
@@ -1266,23 +1243,18 @@ impl TheoryPipeline<'_> {
                     }
                 }
                 if translate_module == Some(TranslateModule::SpthyTyped) {
-                    // `Sapic.typeTheory` (`typeTheoryEnv`, Typing.hs:204-226)
-                    // over the SAME parsed theory the renderer sees — the
-                    // parser AST stays untouched, the typed processes/defs
-                    // ride the overlay, and the recomputed `function:` items
-                    // are appended in descending key order.
-                    match tamarin_sapic::type_theory::type_theory_env(&self.elaborated) {
-                        Ok(r) => {
-                            print_opts = Some(tamarin_theory::pretty_theory::OpenPrintOpts {
-                                typed: Some(r.overlay),
-                                extra_function_items: r.fun_items,
-                                drop_translation_items: false,
-                            })
-                        }
+                    // `Sapic.typeTheory` (`typeTheoryEnv`, Typing.hs:204-226):
+                    // the typed and renamed processes replace the parse-time
+                    // ones in place, and the recomputed `function:` items
+                    // replace the source-positioned ones at the end of the
+                    // item list.
+                    if let Err(e) =
+                        tamarin_sapic::type_theory::type_theory_env(&mut self.elaborated)
+                    {
                         // HS: `ProcessNotWellformed` / typing exceptions
                         // escape to GHC's runtime — `tamarin-prover: …`,
                         // exit 1.
-                        Err(e) => return Err(ghc_exception(&e.message)),
+                        return Err(ghc_exception(&e.message));
                     }
                 }
                 wf
@@ -1356,13 +1328,13 @@ impl TheoryPipeline<'_> {
         // (TheoryLoader.hs:702-703), which translate mode never reaches.
         if translate_module == Some(TranslateModule::Msr) {
             let lemma_names: &[String] = &self.opts.lemma_names;
-            self.parsed.items.retain(|i| match i {
-                tamarin_parser::ast::TheoryItem::Lemma(l) => lemma_matches(lemma_names, &l.name),
+            self.elaborated.items.retain(|i| match i {
+                tamarin_theory::theory::TheoryItem::Lemma(l) => lemma_matches(lemma_names, &l.name),
                 _ => true,
             });
         }
 
-        Ok(print_opts)
+        Ok(())
     }
 
     /// HS `checkTranslatedTheory` (TheoryLoader.hs:553-615): the
@@ -2337,29 +2309,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             let elaborated = elaborate(&parsed).map_err(|e| {
                 RunError(format!("elaboration error in {}: {}", in_file, e.message))
             })?;
-            // Parsed `process:` / `let` bodies are converted to SAPIC
-            // `PlainProcess` for the Doc-based `prettySapic'` port.  The
-            // converter mirrors HS's PARSER, which inlines each `P(args)`
-            // call and wraps it in a `ProcessCall` marker action
-            // (Theory/Text/Parser/Sapic.hs:293-312) — `prettySapic'` then
-            // prints just `P(args)` for the marker
-            // (Theory/Sapic/Process.hs:496).
-            let conv = tamarin_theory::process_inline::theory_process_conv(
-                &parsed,
-                &elaborated.signature.maude_sig,
-            );
-            let body = tamarin_theory::pretty_theory::pretty_open_theory(
-                &parsed,
-                &elaborated,
-                in_file,
-                &conv,
-            )
-            .map_err(|e| {
-                RunError(format!(
-                    "open-theory rendering of {} failed: {}",
-                    in_file, e
-                ))
-            })?;
+            let body = tamarin_theory::pretty_theory::pretty_open_theory(&elaborated, in_file);
             parse_only_docs.push(body);
             file_results.push(FileResult {
                 in_file: in_file.clone(),
@@ -2484,10 +2434,9 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             ndc_funs: Vec::new(),
         };
 
-        let print_opts = match st.translate_theory() {
-            Ok(v) => v,
-            Err(code) => return Ok(code),
-        };
+        if let Err(code) = st.translate_theory() {
+            return Ok(code);
+        }
 
         st.check_translated_theory();
 
@@ -2519,7 +2468,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         // Per-file summary rows for `file_results`.  Translate mode records
         // skipped rows too, though its output phase never prints a summary.
         let results: Vec<LemmaResult> = match translate_module {
-            Some(_) => {
+            Some(module) => {
                 // HS `translateAndCheckTheory` never closes, never proves
                 // and never replays stored skeletons — it skips
                 // `closeTranslatedTheory`'s `proveTheory` entirely
@@ -2533,30 +2482,28 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
                 // is BUFFERED — Batch.hs:101-113 processes every file before any
                 // doc is printed or written.
                 //
-                // `translate_theory` fills the print options for every module
-                // it can return from (`spthy`/`msr` statically, `spthytyped`
-                // from the typing result), so they are always present here.
-                let popts = print_opts.expect("translate mode always fills its print options");
+                // `spthy` and `spthytyped` share `prettyOpenTheory` and differ
+                // only in the theory value `translate_theory` left behind;
+                // `msr` is `prettyOpenTranslatedTheory . removeTranslationItems`.
                 let wf_block = tamarin_theory::pretty_theory::format_wf_block(&st.wf_report);
-                let conv = tamarin_theory::process_inline::theory_process_conv(
-                    &st.parsed,
-                    &st.elaborated.signature.maude_sig,
-                );
-                let body = tamarin_theory::pretty_theory::pretty_open_theory_by_module(
-                    &st.parsed,
-                    &st.elaborated,
-                    in_file,
-                    &conv,
-                    &popts,
-                    &wf_block,
-                    &build_info,
-                )
-                .map_err(|e| {
-                    RunError(format!(
-                        "open-theory rendering of {} failed: {}",
-                        in_file, e
-                    ))
-                })?;
+                let body = match module {
+                    TranslateModule::Msr => {
+                        tamarin_theory::pretty_theory::pretty_open_translated_theory_by_module(
+                            &tamarin_theory::theory::remove_translation_items(&st.elaborated),
+                            in_file,
+                            &wf_block,
+                            &build_info,
+                        )
+                    }
+                    TranslateModule::Spthy | TranslateModule::SpthyTyped => {
+                        tamarin_theory::pretty_theory::pretty_open_theory_by_module(
+                            &st.elaborated,
+                            in_file,
+                            &wf_block,
+                            &build_info,
+                        )
+                    }
+                };
                 translate_docs.push(body);
                 results
             }
@@ -2786,8 +2733,17 @@ fn init_rayon_pool(args: &Args) {
     // even if N matches.  We swallow the error: the first invocation
     // wins (which is the desired behaviour — RS runs `run_batch` once
     // per process, and tests install their own pool).
+    // `stack_size`: the theory item fold renders each item as ONE HughesPJ
+    // Doc on a worker (HS `parMap rdeepseq ppItem`, TheoryObject.hs:767), and
+    // the eager Doc builders (`beside`/`above_g`) recurse along the left
+    // operand's token spine, so depth scales with the item's size.  GHC grows
+    // its stack on demand; rayon's default worker stacks do not, and overflow
+    // on equation- and formula-heavy theories (`jcs18/trace-existence.spthy`).
+    // 64 MiB is reserved virtual address space only, committed on use — the
+    // same size the interactive server gives its tokio workers.
     let _ = rayon::ThreadPoolBuilder::new()
         .num_threads(n)
+        .stack_size(64 * 1024 * 1024)
         .thread_name(|i| format!("tamarin-rayon-{}", i))
         .build_global();
 }

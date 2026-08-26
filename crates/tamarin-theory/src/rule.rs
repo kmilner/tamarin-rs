@@ -1183,6 +1183,25 @@ fn pretty_proto_rule_ac_list(variants: &[ProtoRuleAC]) -> Doc {
     }
 }
 
+/// HS `prettyOpenProtoRule`
+/// (OpenTheory.hs:814-824#prettyOpenProtoRule): the printer of an open
+/// theory's rule item.  A rule with no manual `variants (modulo AC)` block is
+/// its E rule; one manual variant stands in for the E rule and prints under
+/// the `rule (modulo E)` prefix; several are listed under a `variants` block
+/// below the E rule.
+pub fn pretty_open_proto_rule(r: &crate::theory::OpenProtoRule) -> Doc {
+    let variants = crate::theory::manual_rule_variants(r);
+    match variants.as_slice() {
+        [] => pretty_proto_rule_e(r.rule_e()),
+        [ru_ac] => pretty_proto_rule_ac_as_e(ru_ac),
+        vs => pretty_proto_rule_e(r.rule_e()).above_g(
+            kw_variants()
+                .above_g(pretty_proto_rule_ac_list(vs).nest(1))
+                .nest(1),
+        ),
+    }
+}
+
 /// HS `prettyOpenProtoRuleAsClosedRule`
 /// (OpenTheory.hs:826-850#prettyOpenProtoRuleAsClosedRule): the printer
 /// `prettyClosedTheory` switches the whole theory to when some rule item

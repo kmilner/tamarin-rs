@@ -1136,3 +1136,140 @@ end
 "#,
     );
 }
+
+/// The open theory's lemma and restriction carry the formula as the source
+/// wrote it: HS's `_lOriginalFormula` / `_rstrOriginalFormula` are `Nothing`
+/// before `applyMacroInLemma` / `applyMacroInRestriction` run at close time
+/// (lib/theory/src/Lemma.hs:83-88, Theory/Model/Restriction.hs:164-166), so
+/// `prettyLemma`'s quoted line and guarded block (lib/theory/src/Lemma.hs:
+/// 116-141) and `prettyRestriction`'s body (TheoryObject.hs:889-901) all show
+/// the macro CALL, and the `expanded formula:` block that block's `Just _`
+/// guard controls is not written.
+#[test]
+fn macro_lemma_and_restriction_quote_the_unexpanded_formula() {
+    assert_transcript(
+        "macro_lemma_and_restriction_quote_the_unexpanded_formula",
+        &[(
+            "p24_macro_view.spthy",
+            r#"theory MacroView
+begin
+
+functions: h/1
+macros: m1(x) = h(x), m2(x, y) = <m1(x), y>
+
+rule A:
+  [ ] --[ A(m2('a', 'b')) ]-> [ ]
+
+restriction rst:
+  "All z #i #j. A(z) @ i & A(m2('a', 'b')) @ j ==> #i = #j"
+
+lemma lem:
+  all-traces
+  "All z #i. A(z) @ i ==> z = m2('a', 'b')"
+
+end
+"#,
+        )],
+        &["p24_macro_view.spthy"],
+        r#"theory MacroView
+
+begin
+
+// Function signature and definition of the equational theory E
+
+functions: fst/1, h/1, pair/2, snd/1
+equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
+
+function: h (Any) : Any   
+
+macros: m1( x ) =  h(x),
+        m2( x, y ) =  <m1(x), y>
+
+rule (modulo E) A:
+   [ ] --[ A( m2('a', 'b') ) ]-> [ ]
+
+restriction rst:
+  "∀ z #i #j. ((A( z ) @ #i) ∧ (A( m2('a', 'b') ) @ #j)) ⇒ (#i = #j)"
+  // safety formula
+
+lemma lem:
+  all-traces "∀ z #i. (A( z ) @ #i) ⇒ (z = m2('a', 'b'))"
+/*
+guarded formula characterizing all counter-examples:
+"∃ z #i. (A( z ) @ #i) ∧ ¬(z = m2('a', 'b'))"
+*/
+by sorry
+
+end
+"#,
+        r#"[Theory MacroView] Theory loaded
+"#,
+    );
+}
+
+/// A rule written with a manual `variants (modulo AC)` block, which the parser
+/// stores as the rule item's `_oprRuleAC` list (`protoRule`,
+/// Theory/Text/Parser/Rule.hs:126-135).  `prettyOpenProtoRule`
+/// (OpenTheory.hs:814-820) prints several variants under `kwVariants` — the
+/// bare `variants` keyword (Theory/Text/Pretty.hs:146) — below the E rule, and
+/// prints a LONE variant through `prettyProtoRuleACasE`, which shows the
+/// variant's own name and body in place of the E rule's.
+#[test]
+fn manual_rule_variants_block_round_trips() {
+    assert_transcript(
+        "manual_rule_variants_block_round_trips",
+        &[(
+            "p25_manual_variants.spthy",
+            r#"theory ManualVariants
+begin
+
+functions: f/1
+
+rule R:
+  [ In( x ) ] --[ R( f(x) ) ]-> [ Out( f(x) ) ]
+ variants
+  rule (modulo AC) R___VARIANT_1:
+     [ In( f(y) ) ] --[ R( f(f(y)) ) ]-> [ Out( f(f(y)) ) ]
+  ,
+  rule (modulo AC) R___VARIANT_2:
+     [ In( 'c' ) ] --[ R( f('c') ) ]-> [ Out( f('c') ) ]
+
+rule S:
+  [ In( z ) ] --[ S( z ) ]-> [ ]
+ variants
+  rule (modulo AC) S___VARIANT_1:
+     [ In( 'd' ) ] --[ S( 'd' ) ]-> [ ]
+
+end
+"#,
+        )],
+        &["p25_manual_variants.spthy"],
+        r#"theory ManualVariants
+
+begin
+
+// Function signature and definition of the equational theory E
+
+functions: f/1, fst/1, pair/2, snd/1
+equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
+
+function: f (Any) : Any   
+
+rule (modulo E) R:
+   [ In( x ) ] --[ R( f(x) ) ]-> [ Out( f(x) ) ]
+ variants
+  rule (modulo AC) R___VARIANT_1:
+     [ In( f(y) ) ] --[ R( f(f(y)) ) ]-> [ Out( f(f(y)) ) ]
+  ,
+  rule (modulo AC) R___VARIANT_2:
+     [ In( 'c' ) ] --[ R( f('c') ) ]-> [ Out( f('c') ) ]
+
+rule (modulo E) S___VARIANT_1:
+   [ In( 'd' ) ] --[ S( 'd' ) ]-> [ ]
+
+end
+"#,
+        r#"[Theory ManualVariants] Theory loaded
+"#,
+    );
+}

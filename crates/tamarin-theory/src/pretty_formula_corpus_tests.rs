@@ -22,13 +22,57 @@ use crate::fact::FactAnnotation;
 use crate::formula::{from_parser, sapic_from_parser, to_lnformula};
 use crate::macro_expand::apply_macros_formula;
 use crate::pretty_sapic::render_sapic;
-use crate::pretty_theory::expand_predicates_for_display;
 use crate::sapic::to_lformula;
 use crate::test_corpus::{beyond_budget, corpus_root, parse_file, rel, spthy_files};
 use rayon::prelude::*;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
+
+/// Predicate-expand a parser-AST formula through the internal expander,
+/// mirroring HS `expandFormula` (Theory/Syntactic/Predicate.hs:82-105) as
+/// applied by `expandRestriction` / `expandLemma` (TheoryObject.hs:430-446).
+/// This is the AST-side mirror of the expansion `elaborate` performs on the
+/// internal lemma and restriction formulas, so the two sides of the net start
+/// from the same formula.
+///
+/// A formula with no such atom is returned as written: there is nothing to
+/// expand, and the round trip through the internal formula would re-derive
+/// its binder display names for nothing.  The parse already succeeded (so
+/// every referenced predicate is defined and arities match); should the
+/// conversion or the expansion nonetheless fail, fall back to the
+/// un-expanded formula rather than panic.
+fn expand_predicates_for_display(
+    f: &p::Formula,
+    predicates: &[crate::predicate::Predicate],
+    msig: &tamarin_term::maude_sig::MaudeSig,
+) -> p::Formula {
+    if !has_predicate_atom(f) {
+        return f.clone();
+    }
+    let expanded = crate::formula::from_parser(f, msig)
+        .ok()
+        .and_then(|syn| crate::predicate::expand_formula(predicates, &syn).ok());
+    match expanded {
+        Some(ln) => crate::pretty_formula::lnformula_to_parser(&ln),
+        None => f.clone(),
+    }
+}
+
+/// Whether `f` carries an atom the predicate expansion rewrites: a predicate
+/// use site, or the multiset `(<)` the built-in `Smaller` predicate expands.
+fn has_predicate_atom(f: &p::Formula) -> bool {
+    match f {
+        p::Formula::True | p::Formula::False => false,
+        p::Formula::Atom(a) => matches!(a, p::Atom::Pred(_) | p::Atom::LessMset(_, _)),
+        p::Formula::Not(g) => has_predicate_atom(g),
+        p::Formula::And(a, b)
+        | p::Formula::Or(a, b)
+        | p::Formula::Implies(a, b)
+        | p::Formula::Iff(a, b) => has_predicate_atom(a) || has_predicate_atom(b),
+        p::Formula::Forall(_, b) | p::Formula::Exists(_, b) => has_predicate_atom(b),
+    }
+}
 
 /// One formula to compare, tagged with where it came from.
 ///

@@ -716,6 +716,72 @@ pub fn merge_open_proto_rules<P: Clone, S: Clone>(
     out
 }
 
+/// HS `_oprRuleAC` (Items/RuleItem.hs:34-36) as `prettyOpenProtoRule` reads
+/// it: the `variants (modulo AC)` blocks the source writes, typed as the
+/// `ProtoRuleAC`s the parser builds.  `protoRuleACInfo` gives each of them the
+/// rule's own name and attributes, the identity substitution as its variant
+/// disjunction and an empty loop-breaker list
+/// (Theory/Text/Parser/Rule.hs:137-143, see line 142).
+pub fn manual_rule_variants(r: &OpenProtoRule) -> Vec<crate::rule::ProtoRuleAC> {
+    r.rule_ac
+        .iter()
+        .map(|v| crate::rule::Rule {
+            info: crate::rule::ProtoRuleACInfo {
+                name: v.info.name,
+                attributes: v.info.attributes.clone(),
+                variants: vec![tamarin_term::subst_vfresh::LNSubstVFresh::empty()],
+                loop_breakers: Vec::new(),
+            },
+            premises: v.premises.clone(),
+            conclusions: v.conclusions.clone(),
+            actions: v.actions.clone(),
+            new_vars: v.new_vars.clone(),
+        })
+        .collect()
+}
+
+/// HS `removeTranslationItems` (OpenTheory.hs:46-52): every `TranslationItem`
+/// carries `()` and every other item is kept as it stands.
+/// `prettyOpenTranslatedTheory` renders the unit payload as `emptyString`
+/// (OpenTheory.hs:891-899), so the whole `TranslationElement` set disappears
+/// from the `-m msr` print.
+pub fn remove_translation_items(thy: &Theory) -> Theory<OpenProtoRule, ProofSkeleton, ()> {
+    Theory {
+        name: thy.name.clone(),
+        in_file: thy.in_file.clone(),
+        heuristic: thy.heuristic.clone(),
+        tactic: thy.tactic.clone(),
+        signature: thy.signature.clone(),
+        items: thy
+            .items
+            .iter()
+            .map(|item| match item {
+                TheoryItem::Rule(x) => TheoryItem::Rule(x.clone()),
+                TheoryItem::Lemma(x) => TheoryItem::Lemma(x.clone()),
+                TheoryItem::Restriction(x) => TheoryItem::Restriction(x.clone()),
+                TheoryItem::Text(x) => TheoryItem::Text(x.clone()),
+                TheoryItem::ConfigBlock(x) => TheoryItem::ConfigBlock(x.clone()),
+                TheoryItem::Predicate(x) => TheoryItem::Predicate(x.clone()),
+                TheoryItem::Macros(x) => TheoryItem::Macros(x.clone()),
+                TheoryItem::Translation(_) => TheoryItem::Translation(()),
+            })
+            .collect(),
+        options: thy.options.clone(),
+        is_sapic: thy.is_sapic,
+    }
+}
+
+/// HS `clearFunctionTypingInfos` (TheoryObject.hs:504-508): drop every
+/// source-positioned `FunctionTypingInfo` item.
+pub fn clear_function_typing_infos<R, P>(thy: &mut Theory<R, P, TranslationElement>) {
+    thy.items.retain(|i| {
+        !matches!(
+            i,
+            TheoryItem::Translation(TranslationElement::FunctionTypingInfo(_))
+        )
+    });
+}
+
 /// HS `containsManualRuleVariants` (OpenTheory.hs:584-589): whether any rule
 /// item carries an AC rule of its own.
 pub fn contains_manual_rule_variants<P, S>(items: &[TheoryItem<MergedProtoRule, P, S>]) -> bool {

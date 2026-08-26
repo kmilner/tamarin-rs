@@ -76,18 +76,6 @@ pub fn collect_process_defs(items: &[p::TheoryItem]) -> ProcessDefMap<'_> {
     m
 }
 
-/// The open printer's process converter over one parsed theory
-/// ([`crate::pretty_theory::OpenProcessConv`]): every `P(args)` call resolves
-/// against the theory's own `ProcessDef`s and is inlined the way HS's parser
-/// inlines it.
-pub fn theory_process_conv<'a>(
-    thy: &'a p::Theory,
-    sig: &'a MaudeSig,
-) -> impl Fn(&p::Process) -> Result<PlainProcess, String> + 'a {
-    let defs = collect_process_defs(&thy.items);
-    move |proc: &p::Process| convert_process_with_defs(proc, &defs, sig).map_err(|e| e.message)
-}
-
 /// `convert_process` with process-definition resolution.  Identical to
 /// `convert_process` for every node except `Call`, which is inlined here.
 pub fn convert_process_with_defs(

@@ -18,10 +18,8 @@
 //! [`expand_formula`] runs on a [`SyntacticLNFormula`] and returns an
 //! [`LNFormula`]: the expansion is what strips the `Pred` sugar.  Every
 //! consumer goes through it — the `_restrict` lift, the elaborated lemmas and
-//! restrictions, the wellformedness formula reports, the accountability
-//! lemma injection, and the `--parse-only` display bridge
-//! (`pretty_theory::expand_predicates_for_display`), which projects the
-//! result back to the parser AST it prints.
+//! restrictions, the wellformedness formula reports and the accountability
+//! lemma injection.
 
 use crate::atom::{map_atom, to_atom, ProtoAtom, SyntacticSugar};
 use crate::elaborate::{copy_fact_annotations, fact_tag_of, varspec_to_lvar, ElabError};
