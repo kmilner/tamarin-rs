@@ -435,6 +435,12 @@ fn run_interactive(args: &Args) -> Result<i32, RunError> {
     // `ndcCheck` = `not (--no-ndc)` (TheoryLoader.hs:365-366) into each loaded
     // theory's `_deductionChainCheck`.  Set before the eager load below.
     tamarin_server::theory_io::set_ndc_check(!args.no_ndc);
+    // `--prove` / `--lemma` — `addLemmaToProve` (TheoryLoader.hs:835-838) is
+    // the `addNdcOption` sibling in that same `addParamsOptions`, and
+    // `theoryLoadFlags` (TheoryLoader.hs:94-107) is part of this mode's flag
+    // set (Interactive.hs:70), so the selection reaches every web load's
+    // `_lemmasToProve`.
+    tamarin_server::theory_io::set_lemmas_to_prove(args.lemma_names.clone());
     // `-D/--defines` + `--quit-on-warning` — the rest of `toParserFlags
     // thyOpts` (TheoryLoader.hs:285-291) in that same captured closure, so
     // every web load (startup, upload, reload) evaluates `#ifdef` blocks
@@ -2369,19 +2375,6 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         // before any wellformedness runs, matching HS Batch.hs:91-95.)
         let mut wf_report =
             tamarin_theory::wellformedness::pre_translation_wf_report(&elaborated, &parsed);
-        // HS `checkIfLemmasInTheory` (Wellformedness.hs:1156-1171) — FIRST
-        // in HS's checkWellformedness list (line 1272).  Checks that every
-        // --prove=X / --lemma=X name corresponds to a theory lemma.  This
-        // check needs the CLI args (not embedded in the parser AST), so we
-        // call it separately and PREPEND the result so it sorts first —
-        // matching HS's `checkIfLemmasInTheory : ...` order.
-        tamarin_theory::wellformedness::prepend_wf_report(
-            &mut wf_report,
-            tamarin_theory::wellformedness::lemmas::check_if_lemmas_in_theory(
-                &opts.lemma_names,
-                &parsed,
-            ),
-        );
         // Everything downstream of the wellformedness pass reads the internal
         // theory; the parser AST ends here.
         drop(parsed);
@@ -2395,6 +2388,22 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         if !opts.ndc_check {
             elaborated.options.deduction_chain_check = false;
         }
+        // The same `addParamsOptions`' `addLemmaToProve`
+        // (TheoryLoader.hs:835-838): the `--prove=X` / `--lemma=X` values
+        // become the theory's own
+        // `_lemmasToProve`, which `checkIfLemmasInTheory` reads back
+        // (Wellformedness.hs:1168).  The interactive path writes the same
+        // field through `tamarin_server::theory_io::set_lemmas_to_prove`.
+        elaborated.options.lemmas_to_prove = opts.lemma_names.clone();
+        // HS `checkIfLemmasInTheory` (Wellformedness.hs:1156-1171) — FIRST
+        // in HS's checkWellformedness list (line 1272).  Checks that every
+        // --prove=X / --lemma=X name corresponds to a theory lemma.  It runs
+        // outside the shared pass, so its result is PREPENDED to sort first,
+        // matching HS's `checkIfLemmasInTheory : ...` order.
+        tamarin_theory::wellformedness::prepend_wf_report(
+            &mut wf_report,
+            tamarin_theory::wellformedness::lemmas::check_if_lemmas_in_theory(&elaborated),
+        );
         let maude_sig = elaborated.signature.maude_sig.clone();
 
         // "Subterm Convergence Warning" over the signature's subterm-rule

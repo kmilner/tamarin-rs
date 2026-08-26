@@ -1458,9 +1458,10 @@ fn wf_headerless_preamble(topic: &str) -> Option<(String, bool)> {
             Some((format!("{}\n", underline_topic(topic)), false))
         }
         // HS `freshFactArguments'` (Wellformedness.hs:569-576, see line 574)
-        // pairs the underlined topic with a body that carries neither the
-        // header nor the `nest 2` indent, so both come from here.
-        "Fr facts must only use a fresh- or a msg-variable" => {
+        // and `lemmaAttributeReport` (Wellformedness.hs:924-932, see lines
+        // 930-931) pair the underlined topic with a body that carries neither
+        // the header nor the `nest 2` indent, so both come from here.
+        "Fr facts must only use a fresh- or a msg-variable" | "Lemma annotations" => {
             Some((format!("{}\n", underline_topic(topic)), true))
         }
         "Variable with mismatching sorts or capitalization" => Some((

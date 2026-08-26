@@ -57,15 +57,6 @@ divergence_shape() {
         grep -qF "Out( (y++tamXCAbar(a)) )" "$rs" \
             || { echo "    port side no longer keeps tamXCAbar(a) — expected \`Out( (y++tamXCAbar(a)) )\`" >&2; return 1; }
         ;;
-    s8_two_reuse_exists_lemmas.summary)
-        # One report entry per offending lemma upstream, one entry carrying
-        # both bodies in the port; the `Lemma annotations` block is identical
-        # and only the count differs.
-        grep -qF "WARNING: 2 wellformedness check failed!" "$hs" \
-            || { echo "    oracle side does not count 2 wellformedness checks" >&2; return 1; }
-        grep -qF "WARNING: 1 wellformedness check failed!" "$rs" \
-            || { echo "    port side does not count 1 wellformedness check" >&2; return 1; }
-        ;;
     s8_sapic_generated_rule_wf.wf)
         # The oracle checks the rules the SAPIC translation generates; the port
         # checks the theory before that translation.  This theory writes no

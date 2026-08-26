@@ -3,15 +3,12 @@
 // `lemmaAttributeReport` (Theory/Tools/Wellformedness.hs:924-932) is a
 // list-monad `do` over the theory's lemmas, so it yields one report ENTRY per
 // offending lemma.  The trailing count line is `length rep`
-// (Main/Mode/Batch.hs:246), which therefore counts two.  The port collects
-// both bodies into a single entry, so the two engines print the same
-// `Lemma annotations` block and different counts.
+// (Main/Mode/Batch.hs:246), which therefore counts two, while the
+// `Lemma annotations` block itself carries one header and both bodies.
 //
-// Mode `diverge`: the oracle's summary says `WARNING: 2 wellformedness check
-// failed!`, the port's says `WARNING: 1`.
-//
-// Compared slice: the run summary, which is where the count is printed; the wf
-// report block is byte-identical on both engines.
+// Compared slice: the run summary, which is where the count is printed.  No
+// corpus theory writes two such lemmas, so this is the only cover for the
+// count.
 
 
 theory S8TwoReuseExistsLemmas

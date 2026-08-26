@@ -75,6 +75,36 @@ pub fn ndc_check() -> bool {
     NDC_CHECK.load(Ordering::Relaxed)
 }
 
+/// The `--prove`/`--lemma` selection every web load applies to the theory it
+/// loads.
+///
+/// `addLemmaToProve` (TheoryLoader.hs:835-838) is the `addNdcOption` sibling
+/// inside the same `addParamsOptions` (TheoryLoader.hs:821), so the values
+/// `mkTheoryLoadOptions` collects — `findArg "prove" as ++ findArg "lemma" as`
+/// (TheoryLoader.hs:326) — land in the loaded theory's `_lemmasToProve`, which
+/// `checkIfLemmasInTheory` reads back (Wellformedness.hs:1168).  Those flags
+/// come from `theoryLoadFlags` (TheoryLoader.hs:94-107), which the interactive
+/// mode carries too (Interactive.hs:70).
+///
+/// Process-wide, like [`NDC_CHECK`]: `run_interactive` sets it from the CLI
+/// before the first load, and all three load sites read it through
+/// [`load_from_source`].
+static LEMMAS_TO_PROVE: std::sync::RwLock<Vec<String>> = std::sync::RwLock::new(Vec::new());
+
+/// Set the `--prove`/`--lemma` selection [`load_from_source`] applies.
+pub fn set_lemmas_to_prove(names: Vec<String>) {
+    *LEMMAS_TO_PROVE.write().expect("LEMMAS_TO_PROVE poisoned") = names;
+}
+
+/// The `--prove`/`--lemma` selection [`load_from_source`] applies to each
+/// loaded theory.
+pub fn lemmas_to_prove() -> Vec<String> {
+    LEMMAS_TO_PROVE
+        .read()
+        .expect("LEMMAS_TO_PROVE poisoned")
+        .clone()
+}
+
 /// The parser flags every web load parses with — HS `toParserFlags
 /// thyOpts` (TheoryLoader.hs:285-291) inside the same captured
 /// `loadTheory thyLoadOptions` closure as [`NDC_CHECK`] above, so the
@@ -203,6 +233,11 @@ pub fn load_from_source(
     // becomes the loaded theory's `_deductionChainCheck`, which the NDC pass in
     // the maude block below reads back.  [`NDC_CHECK`] carries the flag here.
     typed.options.deduction_chain_check = ndc_check();
+    // The `addLemmaToProve` sibling of that same `addParamsOptions`
+    // (TheoryLoader.hs:835-838): the CLI's `--prove`/`--lemma` selection
+    // becomes the loaded theory's `_lemmasToProve`.  [`LEMMAS_TO_PROVE`]
+    // carries it here.
+    typed.options.lemmas_to_prove = lemmas_to_prove();
     // Oracle path resolution base: HS threads the parser's `inFile` into
     // `defaultOracleNames` (Theory/Text/Parser.hs:250), so a
     // `heuristic: o "./oracle-…"` resolves against the theory's own

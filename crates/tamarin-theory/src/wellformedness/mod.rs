@@ -276,7 +276,7 @@ pub fn check_theory(elab: &Theory, parsed: &p::Theory) -> WfReport {
     // pass (`formulas::formula_reports`): it needs the elaborated signature's
     // irreducible funsyms and the TRANSLATED theory's formulas.
     // lemmaAttributeReport:
-    report.extend(lemmas::lemma_attribute_report(elab, parsed));
+    report.extend(lemmas::lemma_attribute_report(elab));
     // multRestrictedReport — spliced by `splice_translated_wf_reports`
     // (`mult::mult_restricted_report`): it needs the elaborated signature's
     // irreducible funsyms and the HughesPJ rule renderer.
