@@ -10,9 +10,17 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-use tamarin_term::function_symbols::{Constructability, NdcState, NoEqSym, Privacy};
+use tamarin_term::function_symbols::{
+    bp_fun_sig, dh_fun_sig, nat_fun_sig, xor_fun_sig, Constructability, FunSig, FunSym, NdcState,
+    NoEqSym, Privacy,
+};
 use tamarin_term::lterm::LSort;
-use tamarin_term::maude_sig::MaudeSig;
+use tamarin_term::maude_sig::{
+    asym_enc_dest_maude_sig, asym_enc_maude_sig, bp_maude_sig, dh_maude_sig, hash_maude_sig,
+    location_report_maude_sig, mset_maude_sig, nat_maude_sig, pair_dest_maude_sig,
+    reveal_signature_maude_sig, signature_dest_maude_sig, signature_maude_sig,
+    sym_enc_dest_maude_sig, sym_enc_maude_sig, xor_maude_sig, MaudeSig,
+};
 
 use crate::ast::*;
 use crate::lexer::{is_ident_char, is_reserved_name, Lexer, Pos};
@@ -549,20 +557,6 @@ impl FunOptions {
         }
     }
 
-    /// The options of a builtin's `NoEqSym`.  Every symbol in the builtin
-    /// signatures is `NotNDC` (Term/Builtin/Signature.hs:18-44,
-    /// Term/Term/FunctionSymbols.hs:245-262), so only arity, privacy and
-    /// constructability vary.
-    fn of(sym: &BuiltinFunSym) -> Self {
-        FunOptions {
-            arity: sym.arity,
-            private: sym.private,
-            destructor: sym.destructor,
-            ndc: false,
-            ndc_diff: false,
-        }
-    }
-
     /// HS's derived `Ord` on the `NoEqSym` payload
     /// `(Int, Privacy, Constructability, NDCstate)`: componentwise, with each
     /// constructor ranked by declaration order — `Private < Public`,
@@ -609,164 +603,66 @@ impl FunOptions {
     }
 }
 
-/// One entry of a builtin's `stFunSyms` — HS `NoEqSym` restricted to the shapes
-/// the builtin signatures use (all of them `NotNDC`).
-///
-/// Public so `tamarin-theory` can pin [`BUILTIN_ST_FUN_SYMS`] against the
-/// `MaudeSig` tables it derives the very same symbols from; nothing else in the
-/// port reads this type.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct BuiltinFunSym {
-    /// The symbol's name.
-    pub name: &'static str,
-    /// Its arity.
-    pub arity: usize,
-    /// HS `Privacy`: `true` is `Private`.
-    pub private: bool,
-    /// HS `Constructability`: `true` is `Destructor`.
-    pub destructor: bool,
-}
-
-impl BuiltinFunSym {
-    const fn new(name: &'static str, arity: usize, private: bool, destructor: bool) -> Self {
-        BuiltinFunSym {
-            name,
-            arity,
-            private,
-            destructor,
-        }
-    }
-}
-
-/// The `stFunSyms` of each `builtins:` name's `MaudeSig`, i.e. the free
-/// function symbols enabling that builtin adds to the parse-time signature.
-///
-/// Rows are in HS's `builtinsNames` order
+/// The `MaudeSig` each `builtins:` name enables, in HS's `builtinsNames` order
 /// (Theory/Text/Parser/Signature.hs:78-86, whose tail is `builtinsDiffNames`,
 /// Theory/Text/Parser/Signature.hs:58-76) — the order `builtinReservedNames`
 /// (Theory/Text/Parser/Signature.hs:178-181) is built in and therefore the
-/// order `function`'s `conflictingBuiltins` list is rendered in.  Within a row
-/// the symbols are in `S.toList` (ascending, raw-byte) order, matching the list
-/// HS's `extendSig` iterates.
+/// order `function`'s `conflictingBuiltins` list is rendered in.
 ///
-/// The rows whose `MaudeSig` only flips an enable flag (`diffie-hellman`,
-/// `bilinear-pairing`, `multiset`, `xor`, `natural-numbers` —
-/// Term/Maude/Signature.hs:191-196) contribute no symbols and reserve no names.
 /// `reliable-channel` is absent on purpose: it maps to `Nothing`
 /// (Theory/Text/Parser/Signature.hs:84), so it neither merges a signature nor
 /// reserves anything.
-const BUILTIN_ST_FUN_SYMS: &[(&str, &[BuiltinFunSym])] = &[
-    // locationReportFunSig (Term/Builtin/Signature.hs:71-72)
-    (
-        "locations-report",
-        &[
-            BuiltinFunSym::new("check_rep", 2, false, true),
-            BuiltinFunSym::new("get_rep", 1, false, true),
-            BuiltinFunSym::new("rep", 2, true, false),
-            BuiltinFunSym::new("report", 1, false, false),
-        ],
-    ),
-    ("diffie-hellman", &[]),
-    ("bilinear-pairing", &[]),
-    ("multiset", &[]),
-    ("xor", &[]),
-    // symEncFunSig (Term/Builtin/Signature.hs:59-61)
-    (
-        "symmetric-encryption",
-        &[
-            BuiltinFunSym::new("sdec", 2, false, false),
-            BuiltinFunSym::new("senc", 2, false, false),
-        ],
-    ),
-    // asymEncFunSig (Term/Builtin/Signature.hs:63-65)
-    (
-        "asymmetric-encryption",
-        &[
-            BuiltinFunSym::new("adec", 2, false, false),
-            BuiltinFunSym::new("aenc", 2, false, false),
-            BuiltinFunSym::new("pk", 1, false, false),
-        ],
-    ),
-    // signatureFunSig (Term/Builtin/Signature.hs:67-69)
-    (
-        "signing",
-        &[
-            BuiltinFunSym::new("pk", 1, false, false),
-            BuiltinFunSym::new("sign", 2, false, false),
-            BuiltinFunSym::new("true", 0, false, false),
-            BuiltinFunSym::new("verify", 3, false, false),
-        ],
-    ),
-    // pairFunDestSig (Term/Term/FunctionSymbols.hs:302-304)
-    (
-        "dest-pairing",
-        &[
-            BuiltinFunSym::new("fst", 1, false, true),
-            BuiltinFunSym::new("pair", 2, false, false),
-            BuiltinFunSym::new("snd", 1, false, true),
-        ],
-    ),
-    // symEncFunDestSig (Term/Builtin/Signature.hs:83-85)
-    (
-        "dest-symmetric-encryption",
-        &[
-            BuiltinFunSym::new("sdec", 2, false, true),
-            BuiltinFunSym::new("senc", 2, false, false),
-        ],
-    ),
-    // asymEncFunDestSig (Term/Builtin/Signature.hs:87-89)
-    (
-        "dest-asymmetric-encryption",
-        &[
-            BuiltinFunSym::new("adec", 2, false, true),
-            BuiltinFunSym::new("aenc", 2, false, false),
-            BuiltinFunSym::new("pk", 1, false, false),
-        ],
-    ),
-    // signatureFunDestSig (Term/Builtin/Signature.hs:91-93)
-    (
-        "dest-signing",
-        &[
-            BuiltinFunSym::new("pk", 1, false, false),
-            BuiltinFunSym::new("sign", 2, false, false),
-            BuiltinFunSym::new("true", 0, false, false),
-            BuiltinFunSym::new("verify", 3, false, true),
-        ],
-    ),
-    // revealSignatureFunSig (Term/Builtin/Signature.hs:71-73, see line 73)
-    (
-        "revealing-signing",
-        &[
-            BuiltinFunSym::new("getMessage", 1, false, false),
-            BuiltinFunSym::new("pk", 1, false, false),
-            BuiltinFunSym::new("revealSign", 2, false, false),
-            BuiltinFunSym::new("revealVerify", 3, false, false),
-            BuiltinFunSym::new("true", 0, false, false),
-        ],
-    ),
-    // hashFunSig (Term/Builtin/Signature.hs:75-77)
-    ("hashing", &[BuiltinFunSym::new("h", 1, false, false)]),
-    ("natural-numbers", &[]),
+const BUILTIN_MAUDE_SIGS: &[(&str, fn() -> MaudeSig)] = &[
+    ("locations-report", location_report_maude_sig),
+    ("diffie-hellman", dh_maude_sig),
+    ("bilinear-pairing", bp_maude_sig),
+    ("multiset", mset_maude_sig),
+    ("xor", xor_maude_sig),
+    ("symmetric-encryption", sym_enc_maude_sig),
+    ("asymmetric-encryption", asym_enc_maude_sig),
+    ("signing", signature_maude_sig),
+    ("dest-pairing", pair_dest_maude_sig),
+    ("dest-symmetric-encryption", sym_enc_dest_maude_sig),
+    ("dest-asymmetric-encryption", asym_enc_dest_maude_sig),
+    ("dest-signing", signature_dest_maude_sig),
+    ("revealing-signing", reveal_signature_maude_sig),
+    ("hashing", hash_maude_sig),
+    ("natural-numbers", nat_maude_sig),
 ];
+
+/// The `stFunSyms` of every [`BUILTIN_MAUDE_SIGS`] row, i.e. the free function
+/// symbols enabling that builtin adds to the parse-time signature, each row in
+/// the `S.toList` (ascending, raw-byte) order HS's `extendSig` iterates
+/// (Theory/Text/Parser/Signature.hs:102-135, see line 105).
+///
+/// The rows whose `MaudeSig` only flips an enable flag (`diffie-hellman`,
+/// `bilinear-pairing`, `multiset`, `xor`, `natural-numbers` —
+/// Term/Maude/Signature.hs:200-205) are empty and reserve no names.
+fn builtin_st_fun_sym_table() -> &'static [(&'static str, Vec<NoEqSym>)] {
+    use std::sync::OnceLock;
+    static TABLE: OnceLock<Vec<(&'static str, Vec<NoEqSym>)>> = OnceLock::new();
+    TABLE.get_or_init(|| {
+        BUILTIN_MAUDE_SIGS
+            .iter()
+            .map(|(name, sig)| (*name, sig().st_fun_syms.into_iter().collect()))
+            .collect()
+    })
+}
 
 /// The `stFunSyms` a `builtins:` name contributes, or `None` for a name with no
 /// `MaudeSig` (`reliable-channel`) and for names this parser does not know.
-///
-/// Public for the `tamarin-theory` cross-check that pins
-/// [`BUILTIN_ST_FUN_SYMS`] against that crate's `MaudeSig` tables.
-pub fn builtin_st_fun_syms(name: &str) -> Option<&'static [BuiltinFunSym]> {
-    BUILTIN_ST_FUN_SYMS
+fn builtin_st_fun_syms(name: &str) -> Option<&'static [NoEqSym]> {
+    builtin_st_fun_sym_table()
         .iter()
         .find(|(n, _)| *n == name)
-        .map(|(_, syms)| *syms)
+        .map(|(_, syms)| syms.as_slice())
 }
 
-/// The names in [`BUILTIN_ST_FUN_SYMS`], in table (`builtinsNames`) order.
-///
-/// Public for the same `tamarin-theory` cross-check as
-/// [`builtin_st_fun_syms`].
-pub fn builtin_st_fun_sym_names() -> impl Iterator<Item = &'static str> {
-    BUILTIN_ST_FUN_SYMS.iter().map(|(n, _)| *n)
+/// A builtin symbol's name as text.  Every name the builtin `MaudeSig`s carry
+/// is ASCII (Term/Builtin/Signature.hs:18-44,
+/// Term/Term/FunctionSymbols.hs:221-243).
+fn sym_name(sym: &NoEqSym) -> &'static str {
+    std::str::from_utf8(sym.name).expect("builtin symbol names are ASCII")
 }
 
 /// The non-AC (`NoEq`) symbols each theory-level enable flag folds into
@@ -776,30 +672,41 @@ pub fn builtin_st_fun_sym_names() -> impl Iterator<Item = &'static str> {
 /// macro-name conflict check searches (Theory/Text/Parser/Macro.hs:43).
 /// Their AC members (`Mult`, `Xor`, `Union`, `NatPlus`) and BP's `C EMap` are
 /// not `NoEq`/`ACfct` and never enter that set.
-///
-/// `DH_THEORY_NOEQ_SYMS` is `dhFunSig`'s `NoEq` part
-/// (Term/Term/FunctionSymbols.hs:283-284), contributed when `enableDH ||
-/// enableBP` (the `maudeSig` smart constructor forces `enableDH` under BP,
-/// Term/Maude/Signature.hs:111-112); the rest are the `NoEq` parts of
-/// `bpFunSig`, `xorFunSig` and `natFunSig`
-/// (Term/Term/FunctionSymbols.hs:291-292,287-288,324-325).  Options per
-/// Term/Term/FunctionSymbols.hs:245-267 (all `Public,Constructor,NotNDC`).
-const DH_THEORY_NOEQ_SYMS: &[BuiltinFunSym] = &[
-    BuiltinFunSym::new("exp", 2, false, false),
-    BuiltinFunSym::new("inv", 1, false, false),
-    BuiltinFunSym::new("one", 0, false, false),
-    BuiltinFunSym::new("DH_neutral", 0, false, false),
-];
+struct TheoryNoEqSyms {
+    /// `dhFunSig`'s `NoEq` part (Term/Term/FunctionSymbols.hs:283-284),
+    /// contributed when `enableDH || enableBP` (the `maudeSig` smart
+    /// constructor forces `enableDH` under BP,
+    /// Term/Maude/Signature.hs:110-112).
+    dh: Vec<NoEqSym>,
+    /// `bpFunSig`'s `NoEq` part (Term/Term/FunctionSymbols.hs:291-292).
+    bp: Vec<NoEqSym>,
+    /// `xorFunSig`'s `NoEq` part (Term/Term/FunctionSymbols.hs:287-288).
+    xor: Vec<NoEqSym>,
+    /// `natFunSig`'s `NoEq` part (Term/Term/FunctionSymbols.hs:324-325).
+    nat: Vec<NoEqSym>,
+}
 
-/// `bpFunSig`'s `NoEq` part — see [`DH_THEORY_NOEQ_SYMS`].
-const BP_THEORY_NOEQ_SYMS: &[BuiltinFunSym] = &[BuiltinFunSym::new("pmult", 2, false, false)];
-
-/// `xorFunSig`'s `NoEq` part — see [`DH_THEORY_NOEQ_SYMS`].
-const XOR_THEORY_NOEQ_SYMS: &[BuiltinFunSym] = &[BuiltinFunSym::new("zero", 0, false, false)];
-
-/// `natFunSig`'s `NoEq` part (`natOneSym`, whose name is `tone` —
-/// Term/Term/FunctionSymbols.hs:236) — see [`DH_THEORY_NOEQ_SYMS`].
-const NAT_THEORY_NOEQ_SYMS: &[BuiltinFunSym] = &[BuiltinFunSym::new("tone", 0, false, false)];
+/// [`TheoryNoEqSyms`] read off the four `FunSig`s.
+fn theory_noeq_syms() -> &'static TheoryNoEqSyms {
+    use std::sync::OnceLock;
+    static SYMS: OnceLock<TheoryNoEqSyms> = OnceLock::new();
+    SYMS.get_or_init(|| {
+        fn noeq(sig: FunSig) -> Vec<NoEqSym> {
+            sig.into_iter()
+                .filter_map(|s| match s {
+                    FunSym::NoEq(f) => Some(f),
+                    _ => None,
+                })
+                .collect()
+        }
+        TheoryNoEqSyms {
+            dh: noeq(dh_fun_sig()),
+            bp: noeq(bp_fun_sig()),
+            xor: noeq(xor_fun_sig()),
+            nat: noeq(nat_fun_sig()),
+        }
+    })
+}
 
 /// Intern an AC-symbol name for the `'static` borrow [`BinOp::AcFct`]
 /// carries.  Names are deduplicated process-wide, so re-parses leak at most
@@ -915,7 +822,7 @@ pub struct Parser<'a> {
     /// `Public, Constructor, NotNDC` — Term/Term/FunctionSymbols.hs:247-261) in
     /// `S.toList` order, because `parseFile` starts from `sig = pairMaudeSig`
     /// (Token.hs:260-261).  A `builtins:` item merges the row of
-    /// [`BUILTIN_ST_FUN_SYMS`] it names; user `functions:` declarations add
+    /// [`builtin_st_fun_sym_table`] it names; user `functions:` declarations add
     /// their own symbol, except `[AC]` ones (HS files those under
     /// `stACFunSyms` via `ACfctUser`, Term/Maude/Signature.hs:170-173).
     ///
@@ -2077,7 +1984,7 @@ impl<'a> Parser<'a> {
             return Ok(());
         };
         // The `MaudeSig`s of these names carry only an enable flag
-        // (Term/Maude/Signature.hs:191-196); `mappend` ORs it into the
+        // (Term/Maude/Signature.hs:200-205); `mappend` ORs it into the
         // signature.  Recorded for both the diff and non-diff builtins parsers,
         // which merge signatures identically
         // (Theory/Text/Parser/Signature.hs:102-148).
@@ -2101,10 +2008,10 @@ impl<'a> Parser<'a> {
                 // differing entries is listed twice.
                 let mut clashes: Vec<&str> = Vec::new();
                 for s in syms {
-                    let want = FunOptions::of(s);
+                    let want = FunOptions::of_no_eq(s);
                     for (n, o) in &self.fun_syms {
-                        if n == s.name && *o != want {
-                            clashes.push(s.name);
+                        if n.as_bytes() == s.name && *o != want {
+                            clashes.push(sym_name(s));
                         }
                     }
                 }
@@ -2124,10 +2031,10 @@ impl<'a> Parser<'a> {
             // single `lookup` (first match) per builtin symbol.
             let mut macro_clashes: Vec<&str> = Vec::new();
             for s in syms {
-                let want = FunOptions::of(s);
-                if let Some((_, o)) = self.macro_syms.iter().find(|(n, _)| n == s.name) {
+                let want = FunOptions::of_no_eq(s);
+                if let Some((_, o)) = self.macro_syms.iter().find(|(n, _)| n.as_bytes() == s.name) {
                     if *o != want {
-                        macro_clashes.push(s.name);
+                        macro_clashes.push(sym_name(s));
                     }
                 }
             }
@@ -2139,22 +2046,24 @@ impl<'a> Parser<'a> {
                 )));
             }
             self.reserved_builtin_names
-                .extend(syms.iter().map(|s| s.name.to_string()));
+                .extend(syms.iter().map(|s| sym_name(s).to_string()));
         }
         // `modifyStateSig (mappend msig)`, whose `unionExceptPairSym`
         // (Term/Maude/Signature.hs:126-146) makes the pair projections
         // exclusive: whichever variant the incoming signature carries evicts
         // the other one.
         for s in syms {
-            if s.name == "fst" || s.name == "snd" {
+            let fname = sym_name(s);
+            if fname == "fst" || fname == "snd" {
+                let opts = FunOptions::of_no_eq(s);
                 let evicted = FunOptions {
-                    destructor: !s.destructor,
-                    ..FunOptions::of(s)
+                    destructor: !opts.destructor,
+                    ..opts
                 };
                 self.fun_syms
-                    .retain(|(n, o)| !(n == s.name && *o == evicted));
+                    .retain(|(n, o)| !(n == fname && *o == evicted));
             }
-            self.insert_fun_sym(s.name, FunOptions::of(s));
+            self.insert_fun_sym(fname, FunOptions::of_no_eq(s));
         }
         Ok(())
     }
@@ -2754,9 +2663,9 @@ impl<'a> Parser<'a> {
                 // `conflictingBuiltins` (Theory/Text/Parser/Signature.hs:203)
                 // scans the WHOLE
                 // static table, not just the builtins this theory enabled.
-                let conflicting: Vec<&str> = BUILTIN_ST_FUN_SYMS
+                let conflicting: Vec<&str> = builtin_st_fun_sym_table()
                     .iter()
-                    .filter(|(_, syms)| syms.iter().any(|s| s.name == name))
+                    .filter(|(_, syms)| syms.iter().any(|s| s.name == name.as_bytes()))
                     .map(|(b, _)| *b)
                     .collect();
                 return Err(fail(
@@ -3109,7 +3018,9 @@ impl<'a> Parser<'a> {
         self.fun_syms.iter().any(|(n, _)| n == name)
             || self.ac_fun_syms.iter().any(|n| n == name)
             || self.macro_syms.iter().any(|(n, _)| n == name)
-            || self.enabled_theory_noeq_syms().any(|s| s.name == name)
+            || self
+                .enabled_theory_noeq_syms()
+                .any(|s| s.name == name.as_bytes())
     }
 
     /// The parse error HS's `fail $ "Conflicting name for macro " ++ op`
@@ -5356,8 +5267,8 @@ impl<'a> Parser<'a> {
             }
         }
         for s in self.enabled_theory_noeq_syms() {
-            if s.name == op {
-                consider(FunOptions::of(s));
+            if s.name == op.as_bytes() {
+                consider(FunOptions::of_no_eq(s));
             }
         }
         if let Some(opts) = best {
@@ -5393,20 +5304,18 @@ impl<'a> Parser<'a> {
             .any(|(n, o)| n == name && o.arity == 0)
             || self
                 .enabled_theory_noeq_syms()
-                .any(|s| s.name == name && s.arity == 0)
+                .any(|s| s.name == name.as_bytes() && s.arity == 0)
     }
 
     /// The theory-level `NoEq` symbols the enabled signature bits fold into
-    /// `funSyms` — see [`DH_THEORY_NOEQ_SYMS`].
-    fn enabled_theory_noeq_syms(&self) -> impl Iterator<Item = &'static BuiltinFunSym> {
+    /// `funSyms` — see [`TheoryNoEqSyms`].
+    fn enabled_theory_noeq_syms(&self) -> impl Iterator<Item = &'static NoEqSym> {
+        let syms = theory_noeq_syms();
         [
-            (
-                self.sig_enable_dh || self.sig_enable_bp,
-                DH_THEORY_NOEQ_SYMS,
-            ),
-            (self.sig_enable_bp, BP_THEORY_NOEQ_SYMS),
-            (self.sig_enable_xor, XOR_THEORY_NOEQ_SYMS),
-            (self.sig_enable_nat, NAT_THEORY_NOEQ_SYMS),
+            (self.sig_enable_dh || self.sig_enable_bp, &syms.dh),
+            (self.sig_enable_bp, &syms.bp),
+            (self.sig_enable_xor, &syms.xor),
+            (self.sig_enable_nat, &syms.nat),
         ]
         .into_iter()
         .filter(|(enabled, _)| *enabled)
