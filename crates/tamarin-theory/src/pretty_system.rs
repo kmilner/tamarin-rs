@@ -31,14 +31,14 @@
 //! set iteration orders).  These are interactive-UI diagnostic panes only
 //! and do not affect proof results or golden `--prove` output.
 
-use tamarin_term::pretty::{pp_lvar, pretty_lnterm, pretty_nterm};
+use tamarin_term::pretty::{pretty_lnterm, pretty_nterm};
 
-use crate::constraint::constraints::{Goal, NodeId};
+use crate::constraint::constraints::Goal;
 use crate::constraint::system::{SourceKind, System};
 use crate::fact::{fact_tag_name, LNFact};
 use crate::guarded::Guarded;
 use crate::pretty_formula::guarded_doc;
-use crate::pretty_hpj::{above_blank, fsep, numbered_prime, punctuate, Doc};
+use crate::pretty_hpj::{above_blank, fsep, numbered_prime, punctuate, vcat, Doc};
 
 /// Emit just the non-graph-part of the system, matching Haskell's
 /// `prettyNonGraphSystem` (System.hs:1672-1685):
@@ -92,7 +92,7 @@ fn vsep_docs(ds: Vec<Doc>) -> Doc {
 fn pretty_last(sys: &System) -> Doc {
     match &sys.last_atom {
         None => Doc::text("none"),
-        Some(nid) => Doc::text(pretty_node_id(nid)),
+        Some(nid) => Doc::text(nid.to_string()),
     }
 }
 
@@ -206,7 +206,7 @@ fn pretty_subterm_store(sys: &System) -> Doc {
     }
 
     // HS `vcat $ map combine [...]`.
-    vcat_doc(sections)
+    vcat(sections)
 }
 
 // Faithful port of Haskell `prettyEqStore` (EquationStore.hs:650-670).
@@ -231,13 +231,13 @@ fn pretty_eq_store(sys: &System) -> Doc {
     }
 
     // subst: vcat (prettySubst (text.show) (text.show) substFree)
-    lines.push(combine("subst", vcat_doc(pretty_subst_free(&eq.subst))));
+    lines.push(combine("subst", vcat(pretty_subst_free(&eq.subst))));
 
     // conj: vcat (map ppDisj disjs)
     let disjs: Vec<Doc> = eq.conj.iter().map(pp_disj).collect();
-    lines.push(combine("conj", vcat_doc(disjs)));
+    lines.push(combine("conj", vcat(disjs)));
 
-    vcat_doc(lines)
+    vcat(lines)
 }
 
 // HS `ppDisj (idx, substs) = text (show idx ++ ".") <-> numbered' conjs`
@@ -263,7 +263,7 @@ fn pp_subst_vfresh(subst: &crate::tools::equation_store::LNSubstVFresh) -> Doc {
     // carry `hl_operator` spans in HtmlDoc mode and are identity in plain mode.
     let mut quant_parts: Vec<Doc> = vec![operator_("\u{2203} ")]; // opExists "∃ "
     for v in subst.vars_range() {
-        quant_parts.push(Doc::text(lvar_to_string(&v)));
+        quant_parts.push(Doc::text(v.to_string()));
     }
     let quant = hsep(quant_parts).beside(operator_(".")); // opDot
 
@@ -284,7 +284,7 @@ fn pp_eq(
     a: &tamarin_term::lterm::LVar,
     b: &tamarin_term::vterm::VTerm<tamarin_term::lterm::Name, tamarin_term::lterm::LVar>,
 ) -> Doc {
-    Doc::text(lvar_to_string(a)).above(
+    Doc::text(a.to_string()).above(
         crate::pretty_hpj::operator_("=") // opEqual
             .beside_sp(pretty_nterm(b))
             .nest(6),
@@ -310,7 +310,7 @@ fn pretty_subst_free(subst: &crate::tools::equation_store::LNSubst) -> Vec<Doc> 
     groups
         .into_iter()
         .map(|(t, vs)| {
-            let vars: Vec<Doc> = vs.iter().map(|v| Doc::text(lvar_to_string(v))).collect();
+            let vars: Vec<Doc> = vs.iter().map(|v| Doc::text(v.to_string())).collect();
             // prettyTerm ppLit t <-> " <~ {" <> fsep (punctuate comma vars) <> "}"
             // (SubstVFree.hs:342-348) — the term is a real `prettyTerm` Doc,
             // so an over-wide term wraps at the pane width exactly as HS.
@@ -334,12 +334,6 @@ fn intersperse(sep: Doc, xs: Vec<Doc>) -> Vec<Doc> {
     out
 }
 
-// HS `vcat ds`: fold with `$$` (above). Empty operands collapse, matching
-// HughesPJ's `vcat = foldr (\p q -> Above p False q) empty`.
-fn vcat_doc(ds: Vec<Doc>) -> Doc {
-    crate::pretty_hpj::vcat(ds)
-}
-
 // ---------------------------------------------------------------------
 // goals
 // ---------------------------------------------------------------------
@@ -357,13 +351,13 @@ fn vcat_doc(ds: Vec<Doc>) -> Doc {
 // (`solve_goal_to_doc`), so fact spacing (`!KU( ~ltk )`) and LVar dots match.
 fn pretty_goals(sys: &System, want_solved: bool) -> Doc {
     // `M.toList sGoals` yields Goal-Ord; RS stores goals in a Vec (creation
-    // order), so sort by the solver's `goal_cmp` before rendering.
+    // order), so sort by `Ord Goal` before rendering.
     let mut ordered: Vec<_> = sys
         .goals
         .iter()
         .filter(|(_, st)| st.solved == want_solved)
         .collect();
-    ordered.sort_by(|a, b| crate::constraint::solver::goals::goal_cmp(&a.0, &b.0));
+    ordered.sort_by(|a, b| a.0.cmp(&b.0));
     let mut items: Vec<Doc> = Vec::with_capacity(ordered.len());
     for (g, st) in ordered {
         // sourceRule = HS `goalRule sys goal` → `nodeRuleSafe (goalNodeId g)`.
@@ -455,18 +449,6 @@ pub fn pretty_fact(fa: &LNFact) -> String {
             .collect();
         format!("{}[{}]", base, anns.join(", "))
     }
-}
-
-fn pretty_node_id(nid: &NodeId) -> String {
-    let mut s = String::new();
-    pp_lvar(nid, &mut s);
-    s
-}
-
-fn lvar_to_string(v: &tamarin_term::lterm::LVar) -> String {
-    let mut s = String::new();
-    pp_lvar(v, &mut s);
-    s
 }
 
 #[cfg(test)]
@@ -697,10 +679,7 @@ mod tests {
             .beside(Doc::text("}"));
         // Pane context: `combine ("equations", vcat [combine ("subst", …)])`
         // — the mapping sits at nest 2+2 exactly as in `prettyEqStore`.
-        let doc = combine(
-            "equations",
-            vcat_doc(vec![combine("subst", vcat_doc(vec![line]))]),
-        );
+        let doc = combine("equations", vcat(vec![combine("subst", vcat(vec![line]))]));
         let out = doc.render_with(100, 67);
         let expected = "equations:\n  \
 subst:\n    \

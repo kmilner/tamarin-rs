@@ -94,135 +94,6 @@ fn dispatch_solve_goal_marks_solved_then_routes() {
     );
 }
 
-// =========================================================================
-// Haskell-faithfulness invariants for Goal-Ord.
-//
-// Haskell `data Goal` (Constraints.hs:159-172) declares variants in
-// this exact order, and derives `Ord`:
-//
-//     data Goal = ActionG _ _
-//               | ChainG _ _
-//               | PremiseG _ _
-//               | SplitG _
-//               | DisjG _
-//               | SubtermG _
-//               deriving( ..., Ord, ... )
-//
-// So the constructor tag order is:
-//     Action < Chain < Premise < Split < Disj < Subterm
-//
-// Rust's `Goal` (constraints.rs) derives no `Ord`; `goal_cmp`
-// (goals.rs) hand-codes the tag function, and it is the comparator
-// every goal sort in the solver goes through (pretty_system,
-// rename_precise, sources, reduction).  Any divergence between it and
-// the HS declaration order silently sorts goals differently than
-// Haskell.
-// =========================================================================
-
-/// Pin Haskell's Goal-Ord tag order: Action < Chain < Premise < Split
-/// < Disj < Subterm.
-///
-/// This is the exact order from Constraints.hs:159-172.  `goal_cmp`
-/// orders every goal list the solver sorts, so this tag ranking decides
-/// which goal each step picks — and hence the proof shape.
-#[test]
-fn goal_cmp_tag_order_matches_haskell_declaration() {
-    use crate::constraint::constraints::{Disj, NodeId, SplitId};
-    use crate::fact::{FactTag, LNFact, Multiplicity};
-    use crate::rule::{ConcIdx, PremIdx};
-    use std::cmp::Ordering;
-    use tamarin_term::lterm::{LSort, LVar};
-
-    // Build one minimal instance of each Goal variant.
-    let v: LVar = LVar::new("k", LSort::Msg, 0);
-    let n: NodeId = LVar::new("i", LSort::Node, 0);
-    let f: LNFact = LNFact::new(FactTag::Proto(Multiplicity::Linear, "F", 0), vec![]);
-
-    let action: Goal = Goal::Action(v, f.clone());
-    let chain: Goal = Goal::Chain((n, ConcIdx(0)), (n, PremIdx(0)));
-    let premise: Goal = Goal::Premise((n, PremIdx(0)), f.clone());
-    let split: Goal = Goal::Split(SplitId(0));
-    let disj: Goal = Goal::Disj(Disj::<crate::guarded::Guarded>::new(vec![]));
-    // Use plain msg vars for the Subterm pair.
-    let sub: Goal = Goal::Subterm((
-        tamarin_term::builtin::msg_var("a", 0),
-        tamarin_term::builtin::msg_var("b", 0),
-    ));
-
-    // The order from Constraints.hs:159-172 (deriving Ord):
-    //   ActionG < ChainG < PremiseG < SplitG < DisjG < SubtermG
-    //
-    // **THIS IS THE CONTRACT.**  If Rust's `goal_cmp` differs, every
-    // goal sort that routes through it orders differently from
-    // Haskell, causing proof-step divergences silently.
-    let order = [&action, &chain, &premise, &split, &disj, &sub];
-    let names = ["Action", "Chain", "Premise", "Split", "Disj", "Subterm"];
-    for i in 0..order.len() {
-        // Every variant compares Equal with itself.  The short-circuit on
-        // the tag must fall through to a payload comparison that agrees.
-        assert_eq!(
-            goal_cmp(order[i], order[i]),
-            Ordering::Equal,
-            "{} must compare Equal with itself",
-            names[i]
-        );
-        for j in (i + 1)..order.len() {
-            assert_eq!(
-                goal_cmp(order[i], order[j]),
-                Ordering::Less,
-                "Haskell Goal-Ord requires {} < {} \
-                     (Constraints.hs:159-172 declaration order).  \
-                     goal_cmp put them in the wrong order — this WILL \
-                     cause silent proof divergence.",
-                names[i],
-                names[j]
-            );
-            assert_eq!(
-                goal_cmp(order[j], order[i]),
-                Ordering::Greater,
-                "Haskell Goal-Ord requires {} > {}",
-                names[j],
-                names[i]
-            );
-        }
-    }
-}
-
-/// Pin that `Goal`'s variant declaration order in Rust matches Haskell's
-/// data-decl order.  The test above pins `goal_cmp`'s hand-written tag
-/// function; this pins the enum that function shadows, so reordering one
-/// without the other fails here.  `Goal` derives no `Ord` and stable Rust
-/// cannot reflect over variants, so read the declaration out of the
-/// source — `discriminant` values are opaque and stay pairwise distinct
-/// under ANY reordering, which is why they cannot pin an order.
-#[test]
-fn rust_goal_enum_variant_order_matches_haskell() {
-    let src = std::fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/src/constraint/constraints.rs"
-    ))
-    .expect("constraints.rs is readable");
-    let body = src
-        .split_once("pub enum Goal {")
-        .expect("Goal enum declaration present")
-        .1
-        .split_once("\n}")
-        .expect("Goal enum declaration closes")
-        .0;
-    let variants: Vec<&str> = body
-        .lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty() && !l.starts_with("//") && !l.starts_with('#'))
-        .map(|l| l.split(['(', '{', ',', ' ']).next().unwrap_or(l))
-        .collect();
-    assert_eq!(
-        variants,
-        ["Action", "Chain", "Premise", "Split", "Disj", "Subterm"],
-        "Goal's variants must be declared in HS's `data Goal` order \
-         (Constraints.hs:159-172); `goal_cmp` ranks tags by that order"
-    );
-}
-
 // -- Tactic ranking tests -------------------------------------------------
 
 /// HS `pg =~ regex` is an UNANCHORED PCRE search (matches anywhere).
@@ -484,7 +355,7 @@ fn useful_goal_nr_uses_derived_usefulness_ord() {
     assert!(Usefulness::LoopBreaker < Usefulness::ProbablyConstructible);
 }
 
-// -- goal_cmp Disj structural Ord (Constraints.hs derived Ord) -----------
+// -- `Ord Goal` Disj structural order (Constraints.hs derived Ord) -------
 
 /// HS `Disj a = Disj [a]` derives Ord = list Ord bottoming out at the
 /// structural `Ord LNGuarded`, whose var leaves use `Ord LVar = (idx,
@@ -494,7 +365,7 @@ fn useful_goal_nr_uses_derived_usefulness_ord() {
 /// `Ord LSort` (Pub<Fresh), not by the `{:?}` sort-name string
 /// (Fresh<Msg<Nat<Node<Pub).
 #[test]
-fn goal_cmp_disj_var_sort_uses_lsort_ord() {
+fn goal_ord_disj_var_sort_uses_lsort_ord() {
     use crate::atom::ProtoAtom;
     use crate::constraint::constraints::Disj;
     use crate::guarded::Guarded;
@@ -512,9 +383,9 @@ fn goal_cmp_disj_var_sort_uses_lsort_ord() {
     // HS LSort Ord: Pub < Fresh.  The structural comparator must put the
     // Pub-var Disj first (by sort, not by Debug-string name order).
     assert_eq!(
-        goal_cmp(&pub_disj, &fresh_disj),
+        pub_disj.cmp(&fresh_disj),
         Ordering::Less,
         "HS LSort Ord requires Pub < Fresh in Disj structural compare"
     );
-    assert_eq!(goal_cmp(&fresh_disj, &pub_disj), Ordering::Greater);
+    assert_eq!(fresh_disj.cmp(&pub_disj), Ordering::Greater);
 }

@@ -32,8 +32,12 @@
 //! lemmas (run.rs `translate_theory`), rendered both ways at the three
 //! shapes the print sites use.
 
+mod corpus_util;
+
+use corpus_util::{deep_pool, rel, LoadSkip};
 use rayon::prelude::*;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 use tamarin_term::lterm::LNTerm;
@@ -44,16 +48,6 @@ use tamarin_theory::pretty_formula as pf;
 use tamarin_theory::pretty_hpj::{Doc, DEFAULT_LINE_LENGTH, DEFAULT_RIBBON, LINE_LENGTH, RIBBON};
 use tamarin_theory::rule::{ProtoRuleE, ProtoRuleName};
 use tamarin_theory::theory::Theory;
-
-/// Examples beyond this test's budget, relative to the corpus root and
-/// reported as `skipped_listed`: the accountability lemmas of the mixvote
-/// multi-session family grow geometrically with the session count.
-/// Neither file is in the prove or pretty gate corpus
-/// (scripts/parity_corpus.txt).
-const BEYOND_BUDGET: &[&str] = &[
-    "sapic/deprecated/csf21-acc-unbounded/mixvote/mixvote_SmHh-multi-session-4-fixed.spthy",
-    "sapic/deprecated/csf21-acc-unbounded/mixvote/mixvote_SmHh-multi-session-5-fixed.spthy",
-];
 
 /// `(line length, ribbon, start column)` of every render the comparison
 /// runs: the console width the `--prove` theory echo uses, the HughesPJ
@@ -67,31 +61,6 @@ const SHAPES: [(usize, usize, usize); 3] = [
     (DEFAULT_LINE_LENGTH, DEFAULT_RIBBON, 0),
     (DEFAULT_LINE_LENGTH, DEFAULT_RIBBON, 5),
 ];
-
-/// The examples tree, or the override in `CORPUS_ROOT`.
-fn corpus_root() -> PathBuf {
-    if let Ok(root) = std::env::var("CORPUS_ROOT") {
-        return PathBuf::from(root);
-    }
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tamarin-prover/examples")
-}
-
-/// `path` relative to the corpus root, as the report names it.
-fn rel<'a>(path: &'a Path, root: &Path) -> &'a Path {
-    path.strip_prefix(root).unwrap_or(path)
-}
-
-fn spthy_files(root: &Path) -> Vec<PathBuf> {
-    let mut files: Vec<PathBuf> = walkdir::WalkDir::new(root)
-        .into_iter()
-        .filter_map(Result::ok)
-        .filter(|e| e.file_type().is_file())
-        .map(|e| e.into_path())
-        .filter(|p| p.extension().is_some_and(|x| x == "spthy"))
-        .collect();
-    files.sort();
-    files
-}
 
 /// The first shape at which `projected` and `resorted` disagree, with both
 /// renders quoted.
@@ -185,10 +154,7 @@ fn compare_theory(elab: &Theory, at: &dyn Fn(&str) -> String) -> (usize, usize, 
 #[derive(PartialEq)]
 enum Outcome {
     Translated,
-    SkippedListed,
-    SkippedParse,
-    SkippedLift,
-    SkippedElab,
+    Skipped(LoadSkip),
     /// `apply_sapic` or the accountability translation reported an error or
     /// panicked; the driver turns both into a process exit (run.rs).
     SkippedTranslate,
@@ -215,38 +181,14 @@ impl FileProbe {
     }
 }
 
-/// The driver's load pipeline for one file — parse, lift the embedded
-/// restrictions, elaborate, translate the SAPIC process, translate the
-/// accountability lemmas (run.rs `translate_theory`) — then
-/// [`compare_theory`] over the theory that leaves.  A diff-operator theory
-/// is parsed again with the `diff` define, the way `-D=diff` enables the
-/// operator on the CLI.
+/// The driver's load pipeline for one file — the load ladder, then the
+/// SAPIC and the accountability translation (run.rs `translate_theory`) —
+/// then [`compare_theory`] over the theory that leaves.
 fn probe(path: &Path, root: &Path) -> FileProbe {
     let start = Instant::now();
-    if BEYOND_BUDGET.contains(&rel(path, root).to_string_lossy().as_ref()) {
-        return FileProbe::skipped(Outcome::SkippedListed);
-    }
-    let Ok(src) = std::fs::read_to_string(path) else {
-        return FileProbe::skipped(Outcome::SkippedParse);
-    };
-    let base = path.parent().map(Path::to_path_buf);
-    let parsed = std::panic::catch_unwind(|| {
-        tamarin_parser::parser::parse_theory_with_base(&src, &[], base.clone())
-            .or_else(|_| tamarin_parser::parser::parse_theory_with_base(&src, &["diff"], base))
-            .ok()
-    });
-    let Ok(Some(mut parsed)) = parsed else {
-        return FileProbe::skipped(Outcome::SkippedParse);
-    };
-    let lifted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        tamarin_theory::rule_restriction::lift_rule_restrictions(&mut parsed).is_ok()
-    }));
-    if !matches!(lifted, Ok(true)) {
-        return FileProbe::skipped(Outcome::SkippedLift);
-    }
-    let elab = std::panic::catch_unwind(|| tamarin_theory::elaborate::elaborate(&parsed).ok());
-    let Ok(Some(mut elab)) = elab else {
-        return FileProbe::skipped(Outcome::SkippedElab);
+    let (_, mut elab) = match corpus_util::load_elaborated(path, root) {
+        Ok(loaded) => loaded,
+        Err(skip) => return FileProbe::skipped(Outcome::Skipped(skip)),
     };
     let found = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let user_set_heuristic = !elab.heuristic.is_empty();
@@ -278,40 +220,12 @@ fn corpus() -> Option<&'static Corpus> {
     static CORPUS: OnceLock<Option<Corpus>> = OnceLock::new();
     CORPUS
         .get_or_init(|| {
-            let root = corpus_root();
-            if !root.is_dir() {
-                if std::env::var("TAM_ALLOW_NO_CORPUS").as_deref() == Ok("1") {
-                    eprintln!("corpus: root {} missing, skipped", root.display());
-                    return None;
-                }
-                panic!(
-                    "corpus root {} missing; set TAM_ALLOW_NO_CORPUS=1 to skip",
-                    root.display()
-                );
-            }
-            let files = spthy_files(&root);
-            // The parser, the translations and the Doc builders recurse
-            // along the input; the web server renders on 64 MiB tokio
-            // threads (run.rs), so the workers get the same stacks.
-            let pool = rayon::ThreadPoolBuilder::new()
-                .stack_size(64 * 1024 * 1024)
-                .build()
-                .expect("rayon pool");
-            let probes = pool.install(|| files.par_iter().map(|p| probe(p, &root)).collect());
+            let (root, files) = corpus_util::corpus_files("corpus")?;
+            let probes =
+                deep_pool().install(|| files.par_iter().map(|p| probe(p, &root)).collect());
             Some((root, files, probes))
         })
         .as_ref()
-}
-
-/// A comparison over the corpus is a net only while it covers the tree: a
-/// change that makes a stage of the pipeline reject files has to fail here
-/// instead of shrinking the comparison.  The tree has 19 parser rejects in
-/// 1037 files, the same floor the other corpus nets hold.
-fn assert_corpus_covered(loaded: usize, files: usize) {
-    assert!(
-        loaded * 20 >= files * 19,
-        "only {loaded} of {files} files reached the comparison"
-    );
 }
 
 #[test]
@@ -336,10 +250,10 @@ fn corpus_internal_facts_render_the_same_with_and_without_the_ac_resort() {
          skipped_parse={} skipped_lift={} skipped_elab={} skipped_translate={} \
          facts={facts} terms={terms} findings={} wall={:?} slowest_file={slowest}",
         files.len(),
-        count(|o| matches!(o, Outcome::SkippedListed)),
-        count(|o| matches!(o, Outcome::SkippedParse)),
-        count(|o| matches!(o, Outcome::SkippedLift)),
-        count(|o| matches!(o, Outcome::SkippedElab)),
+        count(|o| matches!(o, Outcome::Skipped(LoadSkip::Listed))),
+        count(|o| matches!(o, Outcome::Skipped(LoadSkip::Parse))),
+        count(|o| matches!(o, Outcome::Skipped(LoadSkip::Lift))),
+        count(|o| matches!(o, Outcome::Skipped(LoadSkip::Elab))),
         count(|o| matches!(o, Outcome::SkippedTranslate)),
         findings.len(),
         start.elapsed()
@@ -347,7 +261,7 @@ fn corpus_internal_facts_render_the_same_with_and_without_the_ac_resort() {
     for f in &findings {
         eprintln!("DISAGREEMENT {f}");
     }
-    assert_corpus_covered(translated, files.len());
+    corpus_util::assert_corpus_covered(translated, files.len());
     assert!(facts > 0, "no facts compared");
     assert!(terms > 0, "no equation sides compared");
     assert!(

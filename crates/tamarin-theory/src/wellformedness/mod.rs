@@ -51,7 +51,7 @@ pub mod rules;
 /// A wellformedness diagnostic. `topic` matches exactly the underlined
 /// header string Tamarin emits (e.g. `"Reserved names"`,
 /// `"Fact arity issues"`).
-#[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WfError {
     /// Short title used for grouping/ordering — matches HS's
     /// `underlineTopic` argument exactly (e.g. `"Reserved names"`).

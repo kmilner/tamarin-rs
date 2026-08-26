@@ -6,10 +6,10 @@
 //! `lib/theory/src/Theory/Model/Formula.hs`: the formula data type with its
 //! `LNFormula`/`SyntacticLNFormula` instances, the basic builders, the
 //! sugar traversal ([`SugarTerms`]), free variables ([`formula_frees`]), the
-//! quantifier-introduction helpers (`quantify`, `exists`, `forAll`,
-//! `existFormula`, `forAllFormula`), the De Bruijn lift
-//! [`shift_free_indices`], the sugar-stripping [`to_lnformula`],
-//! the closing of the parser AST into a [`SyntacticLNFormula`]
+//! quantifier-introduction helpers (`quantify`, `exists`, `forAll`), the
+//! De Bruijn lift [`shift_free_indices`], the sugar-stripping
+//! [`to_lnformula`], the closing of the parser AST into a
+//! [`SyntacticLNFormula`]
 //! ([`from_parser`], which HS does inside its formula parser,
 //! `Theory/Text/Parser/Formula.hs`), the opening of a bound term against a
 //! binder scope ([`open_bound_term`], the substitution step of HS
@@ -137,9 +137,8 @@ impl<S, H, C, V> ProtoFormula<S, H, C, V> {
 
 // =============================================================================
 // Sugar traversal (Atom.hs:87-94), free variables (Theory/Model/Formula.hs:321-333),
-// quantifier introduction (Theory/Model/Formula.hs:347-360), the whole-formula
-// closures `existFormula` / `forAllFormula` (Theory/Model/Formula.hs:532-538)
-// and `toLNFormula` (Theory/Model/Formula.hs:369-373).
+// quantifier introduction (Theory/Model/Formula.hs:347-360) and `toLNFormula`
+// (Theory/Model/Formula.hs:369-373).
 // =============================================================================
 
 /// The `Foldable` instance of a sugar type, which both `SyntacticSugar` and
@@ -528,25 +527,6 @@ where
                 other => other.clone(),
             })
         })
-    })
-}
-
-/// HS `existFormula` (Theory/Model/Formula.hs:532-534): exists-quantify every free variable
-/// of the formula, each under its own name/sort hint.  `frees` is sorted, and
-/// the fold is a `foldl`, so the SMALLEST free variable ends up innermost.
-pub fn exist_formula(fm: LNFormula) -> LNFormula {
-    let vars = formula_frees(&fm);
-    vars.into_iter().fold(fm, |acc, v| {
-        exists_var((v.name.to_string(), v.sort), &v, acc)
-    })
-}
-
-/// HS `forAllFormula` (Theory/Model/Formula.hs:536-538): as [`exist_formula`], with
-/// universal quantifiers.
-pub fn for_all_formula(fm: LNFormula) -> LNFormula {
-    let vars = formula_frees(&fm);
-    vars.into_iter().fold(fm, |acc, v| {
-        for_all_var((v.name.to_string(), v.sort), &v, acc)
     })
 }
 
@@ -999,17 +979,18 @@ mod tests {
         assert!(matches!(ex, ProtoFormula::Qua(Quantifier::Ex, h, _) if h == hint()));
     }
 
-    /// `existFormula` quantifies every free variable, and `quantify` turns its
-    /// free occurrences into the new binder's De Bruijn index.
+    /// `exists_var` closes the variable, and `quantify` turns its free
+    /// occurrences into the new binder's De Bruijn index.
     #[test]
-    fn exist_formula_binds_each_free_var() {
+    fn exists_var_binds_the_free_var() {
         use tamarin_term::vterm::var_term;
 
         let x = LVar::new("x", LSort::Msg, 0);
         let atom = ProtoAtom::EqE(var_term(BVar::Free(x)), var_term(BVar::Free(x)));
         let fm: LNFormula = ProtoFormula::Atom(atom);
 
-        let ProtoFormula::Qua(q, hint, body) = exist_formula(fm) else {
+        let ProtoFormula::Qua(q, hint, body) = exists_var(("x".to_string(), LSort::Msg), &x, fm)
+        else {
             panic!("expected an existential quantifier around the atom");
         };
         assert_eq!(q, Quantifier::Ex);

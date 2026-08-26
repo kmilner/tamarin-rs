@@ -670,11 +670,12 @@ fn eval_formula_atoms_pass(red: &mut Reduction) -> ChangeIndicator {
     // Simplify.hs — ascending Guarded Ord.  Rust's Vec is in
     // insertion order; sort first to match HS's iteration.
     // HS-faithful: collect references to the formulas, sort the references
-    // by the same `cmp_guarded` comparator, and clone only the ones that
-    // actually change (below).  In a converged fixpoint most formulas are
-    // unchanged, so cloning every `Guarded` up-front (a deep recursive AST
-    // clone) is wasted work.  Iteration order is preserved (same comparator,
-    // same set), so the change list is byte-identical.
+    // by the derived `Guarded` `Ord` (HS `deriving Ord`, Guarded.hs:129),
+    // and clone only the ones that actually change (below).  In a converged
+    // fixpoint most formulas are unchanged, so cloning every `Guarded`
+    // up-front (a deep recursive AST clone) is wasted work.  Iteration order
+    // is preserved (same comparator, same set), so the change list is
+    // byte-identical.
     let mut formulas: Vec<&Guarded> = red.sys.formulas.iter().map(|f| f.as_ref()).collect();
     formulas.sort();
     // HS-faithful: `evalFormulaAtoms` builds a CHANGE LIST via

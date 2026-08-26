@@ -1554,20 +1554,6 @@ fn sep_block_with_lead(
     hpj::sep(docs).render()
 }
 
-// =============================================================================
-// Shared rendering helpers
-// =============================================================================
-
-/// Render a `LVar` the way HS `instance Show LVar` (LTerm.hs:550-557) does:
-/// sort prefix (`~`/`$`/`#`/`%`/empty), then the root name, then `.idx` when
-/// `idx /= 0`.  Delegates to [`tamarin_term::pretty::pp_lvar`], the HS-faithful
-/// mirror, so the empty-name branch matches HS exactly.
-fn render_lvar(v: &tamarin_term::lterm::LVar) -> String {
-    let mut s = String::new();
-    tamarin_term::pretty::pp_lvar(v, &mut s);
-    s
-}
-
 /// HughesPJ default-`style` line length used by the oracle/tactic
 /// ranking path.  HS `render = P.render` (`Text.PrettyPrint.Class`
 /// re-exports `P.render` from HughesPJ — Text/PrettyPrint/Class.hs:77-78), and `P.render`
@@ -1851,7 +1837,7 @@ fn pretty_predicate(pr: &crate::predicate::Predicate) -> String {
     use crate::pretty_hpj::{self as hpj, Doc};
     // HS `prettyLVar = text . show` over the formal args, so each carries its
     // sort sigil (`#i` for a temporal arg).
-    let pp_var = |v: &tamarin_term::lterm::LVar| Doc::text(render_lvar(v));
+    let pp_var = |v: &tamarin_term::lterm::LVar| Doc::text(v.to_string());
     let factstr = crate::fact::pretty_fact(&pp_var, &pr.fact)
         .render_with(hpj::DEFAULT_LINE_LENGTH, hpj::DEFAULT_RIBBON);
     let formulastr =
@@ -1892,7 +1878,7 @@ fn pretty_macros(macros: &[crate::theory::LNMacro]) -> String {
             let name_open = Doc::text(format!("{}(", String::from_utf8_lossy(&m.name))).nest(4);
             // HS `prettyVarList = fsep . punctuate comma . map prettyLVar`
             // (TheoryObject.hs:858-859).
-            let args: Vec<Doc> = m.params.iter().map(|v| Doc::text(render_lvar(v))).collect();
+            let args: Vec<Doc> = m.params.iter().map(|v| Doc::text(v.to_string())).collect();
             // HS `prettyTerm (text . show) out`.
             let body = tamarin_term::pretty::pretty_nterm(&m.body);
             // Build: `nest 4 "name(" <+> args <+> ") = " <+> body`
@@ -2306,10 +2292,9 @@ pub(crate) fn solve_goal_to_doc(
 }
 
 /// Render a `NodeId` (`LVar` of Node sort).  HS `prettyNodeId`
-/// (LTerm.hs:926-927) is `text . show`, where `Show LVar`
-/// (LTerm.hs:550-557) yields `<sortPrefix><name>` (or `<...>.<idx>`).
+/// (LTerm.hs:926-927) is `text . show`; `Display for LVar` is that `show`.
 fn render_node_id(nid: &crate::constraint::constraints::NodeId) -> String {
-    render_lvar(nid)
+    nid.to_string()
 }
 
 /// Render a `NodeConc`.  Mirrors HS `prettyNodeConc`
@@ -2353,13 +2338,8 @@ fn pp_contradiction(c: &crate::constraint::solver::contradictions::Contradiction
         // where `cex :: (NodeId, NodeId, NodeId)`.  HS `Show` for a
         // tuple yields `(a,b,c)` (no spaces after commas), with each
         // component rendered by `Show LVar` (LTerm.hs:550-557) — which
-        // is identical to our `render_lvar`.
-        C::NonInjectiveFactInstance(a, b, c) => format!(
-            "non-injective facts ({},{},{})",
-            render_lvar(a),
-            render_lvar(b),
-            render_lvar(c)
-        ),
+        // is `Display for LVar`.
+        C::NonInjectiveFactInstance(a, b, c) => format!("non-injective facts ({a},{b},{c})"),
         C::FormulasFalse => "from formulas".to_string(),
         // HS: `SuperfluousLearn m v ->
         //        doubleQuotes (prettyLNTerm m) <->
@@ -2375,7 +2355,7 @@ fn pp_contradiction(c: &crate::constraint::solver::contradictions::Contradiction
         //        text $ "node " ++ show j ++ " after last node " ++ show i`
         // Note HS reverses the order: `j` first in the message, then `i`.
         C::NodeAfterLast(i, j) => {
-            format!("node {} after last node {}", render_lvar(j), render_lvar(i))
+            format!("node {j} after last node {i}")
         }
     }
 }

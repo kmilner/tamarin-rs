@@ -23,6 +23,9 @@
 //!   `C` argument lists are not the ones `fApp` builds
 //!   (`Term/Term/Raw.hs:111-115`, `:119-134`).
 
+mod corpus_util;
+
+use corpus_util::{deep_pool, rel, LoadSkip};
 use rayon::prelude::*;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -37,15 +40,6 @@ use tamarin_theory::fact::Fact;
 use tamarin_theory::formula::BLNTerm;
 use tamarin_theory::guarded::{formula_to_guarded, is_ac_canonical, Guarded};
 
-/// Examples beyond this test's budget, relative to the corpus root and
-/// reported as `skipped_listed`: the accountability lemmas of the mixvote
-/// multi-session family grow geometrically with the session count.  Neither
-/// file is in the prove or pretty gate corpus (scripts/parity_corpus.txt).
-const BEYOND_BUDGET: &[&str] = &[
-    "sapic/deprecated/csf21-acc-unbounded/mixvote/mixvote_SmHh-multi-session-4-fixed.spthy",
-    "sapic/deprecated/csf21-acc-unbounded/mixvote/mixvote_SmHh-multi-session-5-fixed.spthy",
-];
-
 /// How many corpus formulas hold an AC or `C` argument list `fApp` would
 /// order differently, and how many files hold them.
 ///
@@ -56,38 +50,10 @@ const BEYOND_BUDGET: &[&str] = &[
 const NON_CANONICAL_FORMULAS: usize = 0;
 const NON_CANONICAL_FILES: usize = 0;
 
-/// The examples tree, or the override in `CORPUS_ROOT`.
-fn corpus_root() -> PathBuf {
-    if let Ok(root) = std::env::var("CORPUS_ROOT") {
-        return PathBuf::from(root);
-    }
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tamarin-prover/examples")
-}
-
-/// `path` relative to the corpus root, as the report names it.
-fn rel<'a>(path: &'a Path, root: &Path) -> &'a Path {
-    path.strip_prefix(root).unwrap_or(path)
-}
-
-fn spthy_files(root: &Path) -> Vec<PathBuf> {
-    let mut files: Vec<PathBuf> = walkdir::WalkDir::new(root)
-        .into_iter()
-        .filter_map(Result::ok)
-        .filter(|e| e.file_type().is_file())
-        .map(|e| e.into_path())
-        .filter(|p| p.extension().is_some_and(|x| x == "spthy"))
-        .collect();
-    files.sort();
-    files
-}
-
 /// How far one file got.
 enum Outcome {
     Elaborated,
-    SkippedListed,
-    SkippedParse,
-    SkippedLift,
-    SkippedElab,
+    Skipped(LoadSkip),
 }
 
 /// One row of the census: which formula, and what the walk found in it.
@@ -188,37 +154,14 @@ impl FileReport {
     }
 }
 
-/// Parse, lift the embedded restrictions and elaborate one file, then walk
-/// the guarded form of every lemma and restriction the elaborated theory
-/// holds — the formulas the solver converts.  A diff-operator theory is
-/// parsed again with the `diff` define, the way `-D=diff` enables the
-/// operator on the CLI.
+/// Run one file through the load ladder, then walk the guarded form of
+/// every lemma and restriction the elaborated theory holds — the formulas
+/// the solver converts.
 fn file_phase(path: &Path, root: &Path) -> FileReport {
     let start = Instant::now();
-    if BEYOND_BUDGET.contains(&rel(path, root).to_string_lossy().as_ref()) {
-        return FileReport::skipped(Outcome::SkippedListed);
-    }
-    let Ok(src) = std::fs::read_to_string(path) else {
-        return FileReport::skipped(Outcome::SkippedParse);
-    };
-    let base = path.parent().map(Path::to_path_buf);
-    let parsed = std::panic::catch_unwind(|| {
-        tamarin_parser::parser::parse_theory_with_base(&src, &[], base.clone())
-            .or_else(|_| tamarin_parser::parser::parse_theory_with_base(&src, &["diff"], base))
-            .ok()
-    });
-    let Ok(Some(mut parsed)) = parsed else {
-        return FileReport::skipped(Outcome::SkippedParse);
-    };
-    let lifted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        tamarin_theory::rule_restriction::lift_rule_restrictions(&mut parsed).is_ok()
-    }));
-    if !matches!(lifted, Ok(true)) {
-        return FileReport::skipped(Outcome::SkippedLift);
-    }
-    let elab = std::panic::catch_unwind(|| tamarin_theory::elaborate::elaborate(&parsed).ok());
-    let Ok(Some(elab)) = elab else {
-        return FileReport::skipped(Outcome::SkippedElab);
+    let (_, elab) = match corpus_util::load_elaborated(path, root) {
+        Ok(loaded) => loaded,
+        Err(skip) => return FileReport::skipped(Outcome::Skipped(skip)),
     };
     let file = rel(path, root).display().to_string();
     let items: Vec<(String, &tamarin_theory::formula::LNFormula)> = elab
@@ -278,35 +221,18 @@ fn corpus() -> Option<&'static Corpus> {
     static CORPUS: OnceLock<Option<Corpus>> = OnceLock::new();
     CORPUS
         .get_or_init(|| {
-            let root = corpus_root();
-            if !root.is_dir() {
-                if std::env::var("TAM_ALLOW_NO_CORPUS").as_deref() == Ok("1") {
-                    eprintln!("corpus: root {} missing, skipped", root.display());
-                    return None;
-                }
-                panic!(
-                    "corpus root {} missing; set TAM_ALLOW_NO_CORPUS=1 to skip",
-                    root.display()
-                );
-            }
-            let files = spthy_files(&root);
-            // The parser, the elaboration and the walk recurse along the
-            // input; the web server renders on 64 MiB tokio threads (run.rs),
-            // so the workers get the same stacks.
-            let pool = rayon::ThreadPoolBuilder::new()
-                .stack_size(64 * 1024 * 1024)
-                .build()
-                .expect("rayon pool");
-            let reports = pool.install(|| files.par_iter().map(|p| file_phase(p, &root)).collect());
+            let (root, files) = corpus_util::corpus_files("corpus")?;
+            let reports =
+                deep_pool().install(|| files.par_iter().map(|p| file_phase(p, &root)).collect());
             Some((root, files, reports))
         })
         .as_ref()
 }
 
 /// The census line, and the floors that keep a walk over nothing from
-/// passing: the tree has 19 parser rejects in 1037 files, the same floor
-/// `guarded_from_internal.rs` holds, and the walked formulas and facts are
-/// counted.  `None` when the corpus root is absent and the skip is allowed.
+/// passing: the shared coverage floor, and counts of the walked formulas
+/// and facts.  `None` when the corpus root is absent and the skip is
+/// allowed.
 fn census(label: &str) -> Option<&'static [FileReport]> {
     let (root, files, reports) = corpus()?;
     let count = |f: fn(&Outcome) -> bool| {
@@ -330,16 +256,12 @@ fn census(label: &str) -> Option<&'static [FileReport]> {
          skipped_parse={} skipped_lift={} skipped_elab={} formulas={formulas} \
          unguardable={unguardable} facts={facts} slowest_file={slowest}",
         files.len(),
-        count(|o| matches!(o, Outcome::SkippedListed)),
-        count(|o| matches!(o, Outcome::SkippedParse)),
-        count(|o| matches!(o, Outcome::SkippedLift)),
-        count(|o| matches!(o, Outcome::SkippedElab)),
+        count(|o| matches!(o, Outcome::Skipped(LoadSkip::Listed))),
+        count(|o| matches!(o, Outcome::Skipped(LoadSkip::Parse))),
+        count(|o| matches!(o, Outcome::Skipped(LoadSkip::Lift))),
+        count(|o| matches!(o, Outcome::Skipped(LoadSkip::Elab))),
     );
-    assert!(
-        elaborated * 20 >= files.len() * 19,
-        "only {elaborated} of {} files reached the walk",
-        files.len()
-    );
+    corpus_util::assert_corpus_covered(elaborated, files.len());
     assert!(elaborated > 400, "only {elaborated} files reached the walk");
     assert!(formulas > 400, "only {formulas} formulas walked");
     assert!(facts > 0, "no facts walked");

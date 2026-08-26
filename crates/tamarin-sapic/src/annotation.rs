@@ -181,23 +181,23 @@ pub fn to_annotated<V: Clone>(
     go(p)
 }
 
-/// Drop the translation annotations and recover the parsed-stage form.
-// Intentionally retained: faithful port of HS `toProcess`
-// (sapic/src/Sapic/Annotation.hs:141-144), the symmetric inverse of
-// `to_annotated`; no non-test caller yet.
-pub fn to_parsed<V>(
-    p: Process<ProcessAnnotation<V>, SapicLVar>,
+/// `toProcess` (sapic/src/Sapic/Annotation.hs:141-144): drop the translation
+/// annotations and recover the parsed-stage form — the inverse of
+/// [`to_annotated`].  `facts::to_rule` erases with it for the rule name and
+/// the `process=` attribute (Facts.hs:391).
+pub(crate) fn to_parsed<Ann: GoodAnnotation>(
+    p: &Process<Ann, SapicLVar>,
 ) -> Process<ProcessParsedAnnotation, SapicLVar> {
     match p {
-        Process::Null(ann) => Process::Null(ann.parsing_ann),
-        Process::Action(a, ann, body) => {
-            Process::Action(a, ann.parsing_ann, Box::new(to_parsed(*body)))
+        Process::Null(a) => Process::Null(a.parsed().clone()),
+        Process::Action(ac, a, body) => {
+            Process::Action(ac.clone(), a.parsed().clone(), Box::new(to_parsed(body)))
         }
-        Process::Comb(c, ann, l, r) => Process::Comb(
-            c,
-            ann.parsing_ann,
-            Box::new(to_parsed(*l)),
-            Box::new(to_parsed(*r)),
+        Process::Comb(c, a, l, r) => Process::Comb(
+            c.clone(),
+            a.parsed().clone(),
+            Box::new(to_parsed(l)),
+            Box::new(to_parsed(r)),
         ),
     }
 }
@@ -257,6 +257,6 @@ mod tests {
         // fields start at their default values.
         assert_eq!(annotated.annotation().parsing_ann, named("comb"));
         assert!(annotated.annotation().lock.is_none());
-        assert_eq!(to_parsed(annotated), parsed);
+        assert_eq!(to_parsed(&annotated), parsed);
     }
 }

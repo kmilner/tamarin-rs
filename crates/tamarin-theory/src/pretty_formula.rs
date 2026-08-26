@@ -100,17 +100,11 @@ pub fn lemma_header_line_doc(quant: &str, formula_doc: Doc) -> String {
 }
 
 /// Render `nest n $ doubleQuotes (prettyLNFormula f)` through the
-/// HS-faithful engine (the restriction-body shape, TheoryObject.hs:889-893, see line 893).
-/// The `nest n` indent is included in the output; the `"` is a real Doc
-/// `beside` so the formula's wrapped continuation lines indent to the
-/// formula's start column.
-pub fn formula_doublequoted_nested(f: &p::Formula, nest_n: usize) -> String {
-    doublequoted_nested_doc(formula_doc(f), nest_n)
-}
-
-/// The restriction-body shape of [`formula_doublequoted_nested`] around an
-/// already built formula `Doc`, whichever formula representation produced
-/// it.
+/// HS-faithful engine (the restriction-body shape, TheoryObject.hs:889-893, see line 893)
+/// around an already built formula `Doc`, whichever formula representation
+/// produced it.  The `nest n` indent is included in the output; the `"` is a
+/// real Doc `beside` so the formula's wrapped continuation lines indent to
+/// the formula's start column.
 pub(crate) fn doublequoted_nested_doc(formula_doc: Doc, nest_n: usize) -> String {
     doublequoted_nested(formula_doc, nest_n).render()
 }
@@ -805,29 +799,14 @@ fn lformula_doc<S: MapSugar<BLNTerm, LNTerm>>(
                 Quantifier::Ex => "\u{2203} ",
             };
             state.scope_freshness(|state| {
-                // `openFormulaPrefix` (Theory/Model/Formula.hs:296-309) opens
-                // every directly nested quantifier of the same kind in the
-                // same binder block.
-                let mut hints = vec![hint];
-                let mut inner = body.as_ref();
-                while let ProtoFormula::Qua(q2, hint2, body2) = inner {
-                    if q2 != q {
-                        break;
-                    }
-                    hints.push(hint2);
-                    inner = body2.as_ref();
-                }
                 let depth = scope.len();
-                let var_docs: Vec<Doc> = hints
-                    .into_iter()
-                    .map(|(name, sort)| {
-                        // `freshLVar n s = LVar n s <$> freshIdent n`
-                        // (LTerm.hs:301-302), shown by `show LVar`
-                        // (LTerm.hs:550-557).
-                        let x = LVar::new(name, *sort, state.fresh_ident(name));
-                        scope.push(x);
+                let (vs, inner) = open_display_prefix(*q, hint, body, scope, state);
+                let var_docs: Vec<Doc> = vs
+                    .iter()
+                    .map(|x| {
+                        // `show LVar` (LTerm.hs:550-557).
                         let mut s = String::new();
-                        pp_lvar(&x, &mut s);
+                        pp_lvar(x, &mut s);
                         Doc::text(s)
                     })
                     .collect();
@@ -840,6 +819,39 @@ fn lformula_doc<S: MapSugar<BLNTerm, LNTerm>>(
             })
         }
     }
+}
+
+/// HS `openFormulaPrefix` (Theory/Model/Formula.hs:296-309) against the
+/// display scope: collect the hint of the binder at hand and of every
+/// directly nested binder of the same quantifier, allocate each a display
+/// `LVar` (`freshLVar n s = LVar n s <$> freshIdent n`, LTerm.hs:301-302)
+/// pushed onto `scope`, and return those `LVar`s with the body beneath the
+/// prefix.  The caller truncates `scope` after recursing into the body.
+fn open_display_prefix<'a, S>(
+    q: Quantifier,
+    hint: &(String, LSort),
+    body: &'a LNProtoFormula<S>,
+    scope: &mut Vec<LVar>,
+    state: &mut PreciseFreshState,
+) -> (Vec<LVar>, &'a LNProtoFormula<S>) {
+    let mut hints = vec![hint];
+    let mut inner = body;
+    while let ProtoFormula::Qua(q2, hint2, body2) = inner {
+        if *q2 != q {
+            break;
+        }
+        hints.push(hint2);
+        inner = body2.as_ref();
+    }
+    let vs = hints
+        .into_iter()
+        .map(|(name, sort)| {
+            let x = LVar::new(name, *sort, state.fresh_ident(name));
+            scope.push(x);
+            x
+        })
+        .collect();
+    (vs, inner)
 }
 
 // =============================================================================
@@ -907,27 +919,15 @@ where
             }
         }
         ProtoFormula::Qua(q, hint, body) => state.scope_freshness(|state| {
-            let mut hints = vec![hint];
-            let mut inner = body.as_ref();
-            while let ProtoFormula::Qua(q2, hint2, body2) = inner {
-                if q2 != q {
-                    break;
-                }
-                hints.push(hint2);
-                inner = body2.as_ref();
-            }
             let depth = scope.len();
-            let vs: Vec<p::VarSpec> = hints
+            let (xs, inner) = open_display_prefix(*q, hint, body, scope, state);
+            let vs: Vec<p::VarSpec> = xs
                 .into_iter()
-                .map(|(name, sort)| {
-                    let x = LVar::new(name, *sort, state.fresh_ident(name));
-                    scope.push(x);
-                    p::VarSpec {
-                        name: x.name.to_string(),
-                        idx: x.idx,
-                        sort: x.sort,
-                        typ: None,
-                    }
+                .map(|x| p::VarSpec {
+                    name: x.name.to_string(),
+                    idx: x.idx,
+                    sort: x.sort,
+                    typ: None,
                 })
                 .collect();
             let body_ast = Box::new(formula_to_parser(inner, scope, state));

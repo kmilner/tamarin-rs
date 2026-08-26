@@ -77,9 +77,8 @@ pub fn subterm_convergence_report(sig: &MaudeSig) -> Vec<WfError> {
         s
     };
 
-    // Assemble the full message block (topic header + intro + equations +
-    // footer) — byte-identical to the parser-level version, only `eq_lines`
-    // differs (proper order + width-wrap).
+    // Assemble the full message block: topic header, intro, equations,
+    // footer.
     let mut msg = String::new();
     msg.push_str(&underline_topic("Subterm Convergence Warning"));
     msg.push('\n'); // blank line before intro (HS `$-$`)

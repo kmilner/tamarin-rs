@@ -17,7 +17,7 @@
 //!     back — source-order fact annotations and a `VarSpec` type tag.
 
 use super::*;
-use crate::elaborate::{canonicalize_ac_in_formula as canon, rewrite_arity1_formula};
+use crate::elaborate::canonicalize_ac_in_formula as canon;
 use crate::fact::FactAnnotation;
 use crate::formula::{from_parser, sapic_from_parser, to_lnformula};
 use crate::macro_expand::apply_macros_formula;
@@ -128,16 +128,17 @@ fn process_formulas(proc_: &p::Process, label: &str, out: &mut Vec<Item>) {
 }
 
 /// Every formula the theory prints, built as the production renderers build
-/// it: lemma and restriction headers are predicate-expanded, arity-1-folded
-/// and AC-canonicalised, and their guarded-block variant applies the theory's
+/// it: lemma and restriction headers are predicate-expanded and
+/// AC-canonicalised, and their guarded-block variant applies the theory's
 /// macros first when there are any; accountability lemmas and case tests are
-/// arity-1-folded and canonicalised; predicate bodies are only
-/// arity-1-folded.
+/// canonicalised; predicate bodies are taken as parsed.  The theory parser
+/// resolves arities at parse time (its `lookup_arity` `k == 1` branch parses
+/// an arity-1 application's surplus arguments as one tuple, as HS `naryOpApp`
+/// does — Theory/Text/Parser/Term.hs:94-96), so no arity fold is needed here.
 fn theory_formulas(
     parsed: &p::Theory,
     predicates: &[crate::predicate::Predicate],
     msig: &tamarin_term::maude_sig::MaudeSig,
-    arity1: &dyn Fn(&p::Formula) -> p::Formula,
 ) -> Vec<Item> {
     let macros: Vec<p::Macro> = parsed
         .items
@@ -157,18 +158,14 @@ fn theory_formulas(
     };
     let header_items = |out: &mut Vec<Item>, kind: &str, name: &str, f: &p::Formula| {
         let pre = expand_predicates_for_display(f, predicates, msig);
-        out.push(item(
-            format!("{kind} {name}"),
-            pre.clone(),
-            canon(&arity1(&pre)),
-        ));
+        out.push(item(format!("{kind} {name}"), pre.clone(), canon(&pre)));
         if !macros.is_empty() {
             let pre =
                 expand_predicates_for_display(&apply_macros_formula(&macros, f), predicates, msig);
             out.push(item(
                 format!("{kind} {name} (macros)"),
                 pre.clone(),
-                canon(&arity1(&pre)),
+                canon(&pre),
             ));
         }
     };
@@ -182,19 +179,19 @@ fn theory_formulas(
             p::TheoryItem::AccLemma(al) => out.push(item(
                 format!("acclemma {}", al.name),
                 al.formula.clone(),
-                canon(&arity1(&al.formula)),
+                canon(&al.formula),
             )),
             p::TheoryItem::CaseTest(ct) => out.push(item(
                 format!("casetest {}", ct.name),
                 ct.formula.clone(),
-                canon(&arity1(&ct.formula)),
+                canon(&ct.formula),
             )),
             p::TheoryItem::Predicates(ps) => {
                 for pr in ps {
                     out.push(item(
                         format!("predicate {}", pr.fact.name),
                         pr.formula.clone(),
-                        arity1(&pr.formula),
+                        pr.formula.clone(),
                     ));
                 }
             }
@@ -261,10 +258,8 @@ fn file_phase(path: &Path, root: &Path) -> FileReport {
         return rep;
     };
     rep.msig = std::sync::Arc::new(elab.signature.maude_sig.clone());
-    let arity1_names = crate::elaborate::arity1_noeq_names(elab.signature.maude_sig());
-    let arity1 = |f: &p::Formula| rewrite_arity1_formula(f, &arity1_names);
     let predicates: Vec<crate::predicate::Predicate> = elab.predicates().cloned().collect();
-    rep.items = theory_formulas(&parsed, &predicates, elab.signature.maude_sig(), &arity1);
+    rep.items = theory_formulas(&parsed, &predicates, elab.signature.maude_sig());
     rep.outcome = Outcome::Parsed;
     rep.elapsed = start.elapsed();
     rep

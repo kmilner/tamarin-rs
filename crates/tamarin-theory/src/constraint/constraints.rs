@@ -191,7 +191,36 @@ impl<T: HasFrees> HasFrees for Disj<T> {
 // =============================================================================
 
 /// A `Goal` denotes that a constraint reduction rule is applicable.
-#[derive(Debug, Clone, PartialEq)]
+///
+/// The derived `Ord` mirrors HS's derived `Ord Goal` (Constraints.hs:159-172):
+/// constructor rank is declaration order — `ActionG < ChainG < PremiseG <
+/// SplitG < DisjG < SubtermG` — so the variants below MUST stay in HS's
+/// declaration order (every goal sort in the solver routes through this
+/// `Ord`; reordering silently changes the proof shape).  Within a
+/// constructor the payloads compare left to right, each through an `Ord`
+/// that mirrors its HS counterpart:
+///
+/// - `LVar` — manual `Ord` = `(idx, sort, name)` (LTerm.hs:546-548).
+/// - `LNFact` — manual `Ord` = tag then terms, annotations IGNORED, which is
+///   HS's manual `instance Ord (Fact t)` (Model/Fact.hs:173-174), not a derived
+///   one; `FactTag`'s derived `Ord` matches HS's constructor and payload
+///   order (Model/Fact.hs:137-148), as does `Multiplicity`'s
+///   (Model/Fact.hs:133-134).
+/// - `NodeConc` / `NodePrem` — `(LVar, ConcIdx/PremIdx)` tuples; the index
+///   newtypes derive `Ord` over their integer, as HS's do
+///   (Model/Rule.hs:233-238).
+/// - `SplitId` — newtype over an integer, derived both sides
+///   (EquationStore.hs:88-89).
+/// - `LNTerm` — `Lit < App`, then symbol then arguments, mirroring the
+///   derived `Ord (Term a)` / `Ord (Lit c v)` (Raw.hs:73-75, VTerm.hs:56-58).
+/// - `Guarded` — its own derived `Ord` (Guarded.hs:129); HS's `Disj` is a
+///   newtype over a list, so the wrapper compares lexicographically.
+///
+/// HS holds `sGoals` in a `Map Goal GoalStatus`, so any `M.toList` walk of
+/// it is in ascending `Goal` order; this crate's goal store is a `Vec` in
+/// insertion order, so a caller mirroring such a walk sorts by this `Ord`
+/// first.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Goal {
     /// An action that must exist in the trace.
     Action(LVar, LNFact),
@@ -293,96 +322,6 @@ impl HasFrees for Goal {
     }
 }
 
-/// HS-faithful structural comparison for [`Goal`], mirroring the derived
-/// `Ord Goal` (Constraints.hs:159-172).
-///
-/// Constructor rank is `ActionG < ChainG < PremiseG < SplitG < DisjG <
-/// SubtermG`, which is this enum's declaration order; within a constructor
-/// the payloads compare left to right.  Every payload comparison below
-/// delegates to an `Ord` that already mirrors its HS counterpart:
-///
-/// - `LVar` — manual `Ord` = `(idx, sort, name)` (LTerm.hs:546-548).
-/// - `LNFact` — manual `Ord` = tag then terms, annotations IGNORED, which is
-///   HS's manual `instance Ord (Fact t)` (Model/Fact.hs:173-174), not a derived
-///   one; `FactTag`'s derived `Ord` matches HS's constructor and payload
-///   order (Model/Fact.hs:137-148), as does `Multiplicity`'s
-///   (Model/Fact.hs:133-134).
-/// - `NodeConc` / `NodePrem` — `(LVar, ConcIdx/PremIdx)` tuples; the index
-///   newtypes derive `Ord` over their integer, as HS's do
-///   (Model/Rule.hs:233-238).
-/// - `SplitId` — newtype over an integer, derived both sides
-///   (EquationStore.hs:88-89).
-/// - `LNTerm` — `Lit < App`, then symbol then arguments, mirroring the
-///   derived `Ord (Term a)` / `Ord (Lit c v)` (Raw.hs:73-75, VTerm.hs:56-58).
-///
-/// - `Guarded` — its own derived `Ord` (Guarded.hs:129); HS's `Disj` is a
-///   newtype over a list, so the wrapper compares lexicographically.
-///
-/// This is a free function rather than an `Ord` impl because `Goal`'s `Eq` is
-/// derived and its HS-faithful order is not the derived one.
-///
-/// HS holds `sGoals` in a `Map Goal GoalStatus`, so any `M.toList` walk of it
-/// is in ascending `Goal` order; this crate's goal store is a `Vec` in
-/// insertion order, so a caller mirroring such a walk sorts with this first.
-pub fn cmp_goal(a: &Goal, b: &Goal) -> std::cmp::Ordering {
-    let (ta, tb) = (goal_tag(a), goal_tag(b));
-    if ta != tb {
-        return ta.cmp(&tb);
-    }
-    // Tag equality above guarantees the same variant, so each `let … else`
-    // binding of `b` is infallible.  Match `a` exhaustively (no wildcard) so a
-    // new `Goal` variant forces a comparison here.
-    match a {
-        Goal::Action(i1, f1) => {
-            let Goal::Action(i2, f2) = b else {
-                unreachable!("goal tag matched Action")
-            };
-            i1.cmp(i2).then_with(|| f1.cmp(f2))
-        }
-        Goal::Chain(c1, p1) => {
-            let Goal::Chain(c2, p2) = b else {
-                unreachable!("goal tag matched Chain")
-            };
-            c1.cmp(c2).then_with(|| p1.cmp(p2))
-        }
-        Goal::Premise(p1, f1) => {
-            let Goal::Premise(p2, f2) = b else {
-                unreachable!("goal tag matched Premise")
-            };
-            p1.cmp(p2).then_with(|| f1.cmp(f2))
-        }
-        Goal::Split(s1) => {
-            let Goal::Split(s2) = b else {
-                unreachable!("goal tag matched Split")
-            };
-            s1.cmp(s2)
-        }
-        Goal::Disj(d1) => {
-            let Goal::Disj(d2) = b else {
-                unreachable!("goal tag matched Disj")
-            };
-            d1.0.cmp(&d2.0)
-        }
-        Goal::Subterm((s1, t1)) => {
-            let Goal::Subterm((s2, t2)) = b else {
-                unreachable!("goal tag matched Subterm")
-            };
-            s1.cmp(s2).then_with(|| t1.cmp(t2))
-        }
-    }
-}
-
-fn goal_tag(g: &Goal) -> u8 {
-    match g {
-        Goal::Action(_, _) => 0,
-        Goal::Chain(_, _) => 1,
-        Goal::Premise(_, _) => 2,
-        Goal::Split(_) => 3,
-        Goal::Disj(_) => 4,
-        Goal::Subterm(_) => 5,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -419,7 +358,7 @@ mod tests {
     // order `ActionG < ChainG < PremiseG < SplitG < DisjG < SubtermG`
     // (Constraints.hs:159-172), and only then by payload.
     #[test]
-    fn cmp_goal_ranks_constructors_in_haskell_order() {
+    fn goal_ord_ranks_constructors_in_haskell_order() {
         use crate::fact::{FactTag, LNFact};
         use crate::guarded::gtrue;
         use crate::rule::{ConcIdx, PremIdx};
@@ -441,7 +380,7 @@ mod tests {
         for (i, a) in ordered.iter().enumerate() {
             for (j, b) in ordered.iter().enumerate() {
                 assert_eq!(
-                    cmp_goal(a, b),
+                    a.cmp(b),
                     i.cmp(&j),
                     "constructor rank {i} vs {j}: {a:?} / {b:?}"
                 );
@@ -453,26 +392,23 @@ mod tests {
         // `#a.2` despite sorting after it by name.
         let lo = Goal::Action(LVar::new("i", LSort::Node, 1), fa.clone());
         let hi = Goal::Action(LVar::new("a", LSort::Node, 2), fa.clone());
-        assert_eq!(cmp_goal(&lo, &hi), Ordering::Less);
+        assert_eq!(lo.cmp(&hi), Ordering::Less);
         // Equal node ids fall through to the fact, which orders by tag then
         // terms with annotations ignored (Model/Fact.hs:173-174).
         let fresh = LNFact::new(FactTag::Fresh, vec![t.clone()]);
         let a_out = Goal::Action(node("i"), fa);
         let a_fresh = Goal::Action(node("i"), fresh);
-        assert_eq!(cmp_goal(&a_fresh, &a_out), Ordering::Less);
-        assert_eq!(cmp_goal(&a_out, &a_out), Ordering::Equal);
+        assert_eq!(a_fresh.cmp(&a_out), Ordering::Less);
+        assert_eq!(a_out.cmp(&a_out), Ordering::Equal);
 
         // `SplitG` compares its id; `SubtermG` its term pair left to right.
         assert_eq!(
-            cmp_goal(&Goal::Split(SplitId(1)), &Goal::Split(SplitId(2))),
+            Goal::Split(SplitId(1)).cmp(&Goal::Split(SplitId(2))),
             Ordering::Less
         );
         let u = lit(Lit::Var(LVar::new("y", LSort::Msg, 0)));
         assert_eq!(
-            cmp_goal(
-                &Goal::Subterm((t.clone(), t.clone())),
-                &Goal::Subterm((t.clone(), u))
-            ),
+            Goal::Subterm((t.clone(), t.clone())).cmp(&Goal::Subterm((t.clone(), u))),
             Ordering::Less
         );
     }

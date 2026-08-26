@@ -989,12 +989,12 @@ fn for_each_free_walks_fields_in_system_hs_order() {
             mvar(103),
             mvar(110),
             mvar(112),
-            // sFormulas, sSolvedFormulas, sLemmas: each store by `cmp_guarded`.
+            // sFormulas, sSolvedFormulas, sLemmas: each store by `Ord Guarded`.
             nvar(120),
             nvar(121),
             nvar(130),
             nvar(140),
-            // sGoals: ascending `goal_cmp`, so the Action goal precedes the
+            // sGoals: ascending `Ord Goal`, so the Action goal precedes the
             // Chain one that is stored first.
             nvar(150),
             mvar(151),

@@ -2003,7 +2003,7 @@ fn run_solve_all_safe_goals_disj_with_progress(
             })
             .map(|(g, st)| (g.clone(), st.looping))
             .collect();
-        goals.sort_by(|a, b| crate::constraint::solver::goals::goal_cmp(&a.0, &b.0));
+        goals.sort_by(|a, b| a.0.cmp(&b.0));
         // HS-faithful `lastChainTerm` filter (Sources.hs:182-186):
         //   filterM (\(g,_) -> case g of
         //     (ChainG c _) -> (\x -> return $ Just True /=

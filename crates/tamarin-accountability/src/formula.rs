@@ -35,7 +35,7 @@ pub(crate) fn temp_var(name: &str) -> LVar {
 }
 
 /// HS `msgVar name = LVar name LSortMsg 0` (Generation.hs:56-57).
-pub(crate) fn msg_var(name: &str) -> LVar {
+fn msg_var(name: &str) -> LVar {
     LVar::new(name, LSort::Msg, 0)
 }
 
@@ -96,7 +96,7 @@ pub(crate) fn vars_eq(l: &[LVar], r: &[LVar]) -> SyntacticLNFormula {
 }
 
 /// HS `isElem v vars = foldr1 (.||.) (map (eq v) vars)` (Generation.hs:70-73).
-pub(crate) fn is_elem(v: &LVar, vars: &[LVar]) -> SyntacticLNFormula {
+fn is_elem(v: &LVar, vars: &[LVar]) -> SyntacticLNFormula {
     fold_r1(Conn::Or, vars.iter().map(|w| eq_vars(v, w)).collect())
 }
 

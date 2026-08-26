@@ -19,44 +19,23 @@
 //! terms of the action and the AC argument orders `f_app_ac` imposes when the
 //! projection is closed again.
 
+mod corpus_util;
+
+use corpus_util::{deep_pool, rel};
 use rayon::prelude::*;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use tamarin_parser::ast as p;
 use tamarin_term::maude_sig::MaudeSig;
 use tamarin_theory::elaborate::{fact_to_lnfact, lnfact_to_parser};
 use tamarin_theory::formula::{from_parser, to_lnformula};
 use tamarin_theory::predicate::{expand_formula, Predicate};
 use tamarin_theory::pretty_formula::lnformula_to_parser;
-use tamarin_theory::rule_restriction::{lift_rule_restrictions, rule_restrictions};
+use tamarin_theory::rule_restriction::rule_restrictions;
 
 /// One formula to round-trip, tagged with where it came from.
 struct Item {
     label: String,
     formula: p::Formula,
-}
-
-/// The examples tree, or the override in `CORPUS_ROOT`.
-fn corpus_root() -> PathBuf {
-    if let Ok(root) = std::env::var("CORPUS_ROOT") {
-        return PathBuf::from(root);
-    }
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tamarin-prover/examples")
-}
-
-fn rel<'a>(path: &'a Path, root: &Path) -> &'a Path {
-    path.strip_prefix(root).unwrap_or(path)
-}
-
-fn spthy_files(root: &Path) -> Vec<PathBuf> {
-    let mut files: Vec<PathBuf> = walkdir::WalkDir::new(root)
-        .into_iter()
-        .filter_map(Result::ok)
-        .filter(|e| e.file_type().is_file())
-        .map(|e| e.into_path())
-        .filter(|p| p.extension().is_some_and(|x| x == "spthy"))
-        .collect();
-    files.sort();
-    files
 }
 
 /// The condition formulas and embedded-MSR restrictions of a process.
@@ -148,8 +127,6 @@ struct FileReport {
 
 /// Parse one file, collect its formulas, and elaborate it for the signature
 /// `from_parser` closes against.  A file with no such formula costs a parse.
-/// A diff-operator theory is parsed again with the `diff` define, the way
-/// `-D=diff` enables the operator on the CLI.
 fn file_phase(path: &Path) -> FileReport {
     let mut rep = FileReport {
         items: Vec::new(),
@@ -157,16 +134,7 @@ fn file_phase(path: &Path) -> FileReport {
         msig: MaudeSig::default(),
         skipped: false,
     };
-    let Ok(src) = std::fs::read_to_string(path) else {
-        return rep;
-    };
-    let base = path.parent().map(Path::to_path_buf);
-    let parsed = std::panic::catch_unwind(|| {
-        tamarin_parser::parser::parse_theory_with_base(&src, &[], base.clone())
-            .or_else(|_| tamarin_parser::parser::parse_theory_with_base(&src, &["diff"], base))
-            .ok()
-    });
-    let Ok(Some(mut parsed)) = parsed else {
+    let Some(mut parsed) = corpus_util::parse_file(path) else {
         return rep;
     };
     let items = theory_formulas(&parsed);
@@ -174,14 +142,7 @@ fn file_phase(path: &Path) -> FileReport {
         return rep;
     }
     // Elaboration runs on the lifted theory, as the production path does.
-    let lifted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        lift_rule_restrictions(&mut parsed).is_ok()
-    }));
-    let elab = match lifted {
-        Ok(true) => std::panic::catch_unwind(|| tamarin_theory::elaborate::elaborate(&parsed).ok()),
-        _ => Ok(None),
-    };
-    let Ok(Some(elab)) = elab else {
+    let Ok(elab) = corpus_util::lift_and_elaborate(&mut parsed) else {
         rep.skipped = true;
         return rep;
     };
@@ -256,27 +217,10 @@ fn compare(item: &Item, preds: &[Predicate], msig: &MaudeSig) -> Outcome {
 
 #[test]
 fn the_lifting_projection_reopens_to_the_internal_values() {
-    let root = corpus_root();
-    if !root.is_dir() {
-        if std::env::var("TAM_ALLOW_NO_CORPUS").as_deref() == Ok("1") {
-            eprintln!(
-                "restrict_roundtrip: root {} missing, skipped",
-                root.display()
-            );
-            return;
-        }
-        panic!(
-            "corpus root {} missing; set TAM_ALLOW_NO_CORPUS=1 to skip",
-            root.display()
-        );
-    }
-    let files = spthy_files(&root);
-    // The parser recurses along the input; the web server renders on 64 MiB
-    // tokio threads (run.rs), so the workers get the same.
-    let pool = rayon::ThreadPoolBuilder::new()
-        .stack_size(64 * 1024 * 1024)
-        .build()
-        .expect("rayon pool");
+    let Some((root, files)) = corpus_util::corpus_files("restrict_roundtrip") else {
+        return;
+    };
+    let pool = deep_pool();
     let reports: Vec<FileReport> =
         pool.install(|| files.par_iter().map(|p| file_phase(p)).collect());
     let files_with_items = reports.iter().filter(|r| !r.items.is_empty()).count();

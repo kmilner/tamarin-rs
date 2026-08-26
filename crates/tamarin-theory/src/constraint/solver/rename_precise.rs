@@ -244,11 +244,10 @@ pub fn rename_precise_system(sys: &mut System) {
     // `M.fromList` builds a Map keyed by Ord Goal, so post-rename the
     // entries land in ascending NEW Goal order.
     //
-    // Sort + dedup (O(n log n)) instead of an O(n^2) membership scan. We
-    // dedup on structural `Goal` equality (plain `==`) — NOT on
-    // `goal_cmp == Equal`, because `goal_cmp` orders
-    // Disj goals by len + canonical string and would over-collapse.
-    new_goals.sort_by(|a, b| crate::constraint::solver::goals::goal_cmp(&a.0, &b.0));
+    // Sort + dedup (O(n log n)) instead of an O(n^2) membership scan.  The
+    // dedup key is the goal alone, ignoring the status: `M.fromList` builds
+    // a `Map Goal GoalStatus`, which collapses entries sharing a goal.
+    new_goals.sort_by(|a, b| a.0.cmp(&b.0));
     new_goals.dedup_by(|a, b| a.0 == b.0);
     sys.content_mut_untracked().goals = std::sync::Arc::new(new_goals);
 

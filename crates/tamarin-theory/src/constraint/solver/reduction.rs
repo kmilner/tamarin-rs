@@ -1243,7 +1243,7 @@ impl<'ctx> Reduction<'ctx> {
         // (8 lines each) where HS picked `KU(~nb)` first (lower
         // post-subst nr because its NodeId was smaller) while RS
         // picked `KU(~na)` first.
-        goals.sort_by(|(g1, _), (g2, _)| crate::constraint::solver::goals::goal_cmp(g1, g2));
+        goals.sort_by(|(g1, _), (g2, _)| g1.cmp(g2));
         // Mirror node-fact handling above: apply the eq-store
         // substitution to each goal term with no Maude normalization.
         // HS's `substGoals` applies subst via the `Apply` instance and
@@ -3731,14 +3731,14 @@ impl<'ctx> Reduction<'ctx> {
         // HS iterates `M.toList` (Goal-derived Ord), so the freshly
         // assigned `gsNr`s for NEW goals follow Goal-Ord — within a
         // single graft batch an `ActionG` therefore gets a smaller nr
-        // than a `PremiseG`.  Iterate in `goal_cmp` order to match
+        // than a `PremiseG`.  Iterate in `Ord Goal` order to match
         // (RS's `sys.goals` is a Vec in production/push order, which
         // would otherwise assign the nrs in the wrong relative order).
         let mut conjoin_goals: Vec<&(
             crate::constraint::constraints::Goal,
             crate::constraint::system::GoalStatus,
         )> = sys.goals.iter().collect();
-        conjoin_goals.sort_by(|a, b| crate::constraint::solver::goals::goal_cmp(&a.0, &b.0));
+        conjoin_goals.sort_by(|a, b| a.0.cmp(&b.0));
         for (g, st) in conjoin_goals {
             if matches!(g, crate::constraint::constraints::Goal::Split(_)) {
                 continue;

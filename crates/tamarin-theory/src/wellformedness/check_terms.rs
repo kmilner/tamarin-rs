@@ -37,7 +37,7 @@ use tamarin_term::maude_sig::MaudeSig;
 use tamarin_term::term::{show_term, Term};
 use tamarin_term::vterm::Lit;
 
-use crate::formula::{BLNTerm, LNProtoFormula};
+use crate::formula::{BLNTerm, LNFormula};
 use crate::pretty_hpj::{fsep, punctuate, Doc};
 
 use super::WfError;
@@ -76,7 +76,7 @@ const ALLOWED_PARAGRAPH: &str = "The only allowed terms are public constants \
 /// other two arms.  `header` is HS's `"Lemma `n'"` / `"Restriction `n'"`;
 /// `sig` is the signature the `allowed` predicate classifies against
 /// (Wellformedness.hs:975).
-pub fn check_terms<S>(sig: &MaudeSig, header: &str, fm: &LNProtoFormula<S>) -> Option<WfError> {
+pub fn check_terms(sig: &MaudeSig, header: &str, fm: &LNFormula) -> Option<WfError> {
     let offenders: Vec<String> = crate::formula::formula_terms(fm)
         .into_iter()
         .filter(|t| !allowed(sig, t))

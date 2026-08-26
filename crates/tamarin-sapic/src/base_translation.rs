@@ -869,7 +869,6 @@ fn merge_with_state_rule(
 /// variable index already present in `tildex`.  HS `avoid` = `maybe 0 (succ .
 /// snd) . boundsVarIdx` — i.e. (max index in `tildex`) + 1, or 0 if empty.
 fn fresh_msg_var_avoiding(name: &str, tildex: &BTreeSet<LVar>) -> LVar {
-    use tamarin_term::lterm::LSort;
     let idx = tildex
         .iter()
         .map(|v| v.idx)
@@ -937,120 +936,35 @@ pub fn base_init(
 }
 
 // =============================================================================
-// baseRestr — the always-on `single_session` restriction (Basetranslation.hs)
+// baseRestr — the hard-coded restrictions (Basetranslation.hs)
 // =============================================================================
 
-/// The hardcoded text of `resSingleSession` (Basetranslation.hs:361-364).
-///
-/// HS parses this string with `parseRestriction` (`toEx`).  We instead build
-/// the restriction directly as a parser-AST [`tamarin_parser::ast::Restriction`]
-/// so it flows through the existing restriction renderer / solver, which is
-/// what `translate` injects into the theory.  The rendered output is
-/// byte-identical to what HS emits for `restriction single_session`.
+/// The `single_session` restriction `resSingleSession`
+/// (Basetranslation.hs:361-364), one of the hard-coded restrictions
+/// `baseRestr` assembles (Basetranslation.hs:449-479, see line 459).  The
+/// formula body is HS's hardcoded string, parsed as HS's
+/// `toEx`/`parseRestriction` parses it.
 pub fn single_session_restriction() -> tamarin_parser::ast::Restriction {
-    use tamarin_parser::ast as p;
-    // Formula: ∀ #i #j. ((Init( ) @ #i) ∧ (Init( ) @ #j)) ⇒ (#i = #j)
-    //   = All #i #j. Init()@i & Init()@j ==> #i=#j
-    let tvar = |name: &str| p::VarSpec {
-        name: name.into(),
-        idx: 0,
-        sort: LSort::Node,
-        typ: None,
-    };
-    let init_at = |tv: &str| -> p::Formula {
-        p::Formula::Atom(p::Atom::Action(
-            p::Fact {
-                persistent: false,
-                name: "Init".into(),
-                args: vec![],
-                annotations: vec![],
-            },
-            p::Term::Var(tvar(tv)),
-        ))
-    };
-    let body = p::Formula::Implies(
-        Box::new(p::Formula::And(
-            Box::new(init_at("i")),
-            Box::new(init_at("j")),
-        )),
-        Box::new(p::Formula::Atom(p::Atom::Eq(
-            p::Term::Var(tvar("i")),
-            p::Term::Var(tvar("j")),
-        ))),
-    );
-    let formula = p::Formula::Forall(vec![tvar("i"), tvar("j")], Box::new(body));
-    p::Restriction {
-        name: "single_session".to_string(),
-        formula,
-        attributes: vec![],
-    }
+    parse_restriction("single_session", "All #i #j. Init()@i & Init()@j ==> #i=#j")
 }
 
-/// The two conditional-equality restrictions `predicate_eq` / `predicate_not_eq`
+/// The two conditional-equality restrictions `resEq` / `resNotEq`
 /// (Basetranslation.hs:427-436), added by `baseRestr` when the process
-/// `contains isEq` (a `CondEq` combinator).  As with `single_session`, we build
-/// them as parser-AST [`tamarin_parser::ast::Restriction`] so they render
-/// byte-identically to HS's hand-written strings:
-///   `predicate_eq:      "All #i a b. Pred_Eq(a,b)@i ==> a = b"`
-///   `predicate_not_eq:  "All #i a b. Pred_Not_Eq(a,b)@i ==> not(a = b)"`
+/// `contains isEq` (a `CondEq` combinator).  The formula bodies are HS's
+/// hardcoded strings, parsed as HS's `toEx`/`parseRestriction` parses them.
 pub fn predicate_restrictions() -> Vec<tamarin_parser::ast::Restriction> {
-    use tamarin_parser::ast as p;
-    // `#i` is a node (timepoint) variable; `a`, `b` are message variables.
-    let tvar = |name: &str| p::VarSpec {
-        name: name.into(),
-        idx: 0,
-        sort: LSort::Node,
-        typ: None,
-    };
-    let mvar = |name: &str| p::VarSpec {
-        name: name.into(),
-        idx: 0,
-        sort: LSort::Msg,
-        typ: None,
-    };
-    let pred_at = |pname: &str| -> p::Formula {
-        p::Formula::Atom(p::Atom::Action(
-            p::Fact {
-                persistent: false,
-                name: pname.into(),
-                args: vec![p::Term::Var(mvar("a")), p::Term::Var(mvar("b"))],
-                annotations: vec![],
-            },
-            p::Term::Var(tvar("i")),
-        ))
-    };
-    let eq_atom = p::Formula::Atom(p::Atom::Eq(
-        p::Term::Var(mvar("a")),
-        p::Term::Var(mvar("b")),
-    ));
-
-    // predicate_eq: All #i a b. Pred_Eq(a,b)@i ==> a = b
-    let eq_body = p::Formula::Implies(Box::new(pred_at("Pred_Eq")), Box::new(eq_atom.clone()));
-    let eq_formula = p::Formula::Forall(vec![tvar("i"), mvar("a"), mvar("b")], Box::new(eq_body));
-    let predicate_eq = p::Restriction {
-        name: "predicate_eq".to_string(),
-        formula: eq_formula,
-        attributes: vec![],
-    };
-
-    // predicate_not_eq: All #i a b. Pred_Not_Eq(a,b)@i ==> not(a = b)
-    let neq_body = p::Formula::Implies(
-        Box::new(pred_at("Pred_Not_Eq")),
-        Box::new(p::Formula::Not(Box::new(eq_atom))),
-    );
-    let neq_formula = p::Formula::Forall(vec![tvar("i"), mvar("a"), mvar("b")], Box::new(neq_body));
-    let predicate_not_eq = p::Restriction {
-        name: "predicate_not_eq".to_string(),
-        formula: neq_formula,
-        attributes: vec![],
-    };
-
-    vec![predicate_eq, predicate_not_eq]
+    vec![
+        parse_restriction("predicate_eq", "All #i a b. Pred_Eq(a,b)@i ==> a = b"),
+        parse_restriction(
+            "predicate_not_eq",
+            "All #i a b. Pred_Not_Eq(a,b)@i ==> not(a = b)",
+        ),
+    ]
 }
 
 /// Parse one of the hard-coded restriction strings (`parseRestriction`'s job in
-/// HS) and wrap it in a named `Restriction`.  Shared by all four hard-coded
-/// restriction builders so the parse+panic+wrap shape lives in one place.
+/// HS) and wrap it in a named `Restriction`.  Shared by every hard-coded
+/// restriction builder so the parse+panic+wrap shape lives in one place.
 ///
 /// HS `parseRestriction = parseString [] …` (Theory/Text/Parser/Restriction.hs:65-66)
 /// and `parseString` seeds the parser state with `pairMaudeSig`
@@ -1199,6 +1113,43 @@ mod tests {
     }
     fn svar(name: &str) -> SapicTerm {
         VTerm::Lit(Lit::Var(SapicLVar::untyped(lv(name, 0))))
+    }
+
+    /// The hard-coded restriction strings lower to the internal formulas the
+    /// oracle prints (pinned build ef3f0468; `restriction single_session` /
+    /// `predicate_eq` / `predicate_not_eq` blocks of any translated theory).
+    /// The unsigiled `@i` references must resolve to the node variables the
+    /// `All #i` binders introduce.
+    #[test]
+    fn hardcoded_restrictions_lower_to_the_oracle_formulas() {
+        use tamarin_theory::formula::{from_parser, to_lnformula};
+        use tamarin_theory::pretty_formula::pretty_lnformula;
+        let msig = tamarin_term::maude_sig::pair_maude_sig();
+        let lower = |r: &tamarin_parser::ast::Restriction| {
+            pretty_lnformula(&to_lnformula(&from_parser(&r.formula, &msig).unwrap()).unwrap())
+        };
+        assert_eq!(
+            lower(&single_session_restriction()),
+            "\u{2200} #i #j. ((Init( ) @ #i) \u{2227} (Init( ) @ #j)) \u{21d2} (#i = #j)"
+        );
+        let preds = predicate_restrictions();
+        assert_eq!(
+            preds
+                .iter()
+                .map(|r| (r.name.as_str(), lower(r)))
+                .collect::<Vec<_>>(),
+            [
+                (
+                    "predicate_eq",
+                    "\u{2200} #i a b. (Pred_Eq( a, b ) @ #i) \u{21d2} (a = b)".to_string()
+                ),
+                (
+                    "predicate_not_eq",
+                    "\u{2200} #i a b. (Pred_Not_Eq( a, b ) @ #i) \u{21d2} (\u{ac}(a = b))"
+                        .to_string()
+                ),
+            ]
+        );
     }
 
     #[test]

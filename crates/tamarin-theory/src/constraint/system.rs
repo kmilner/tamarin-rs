@@ -669,8 +669,7 @@ fn trace_goal_insert() -> bool {
 /// `tgt` (Constraints.hs:79-83); `LessAtom`'s manual `Ord` is
 /// `(smaller, larger)`, ignoring the reason tag (Constraints.hs:126-130);
 /// `Ord Guarded` is derived (Guarded.hs:121-129); `Ord Goal` is derived
-/// (Constraints.hs:159-172), mirrored by
-/// [`crate::constraint::solver::goals::goal_cmp`].
+/// (Constraints.hs:159-172), mirrored by [`Goal`]'s own derive.
 ///
 /// Takes a slice rather than a `&System` so a call site holding only
 /// `&[(NodeId, RuleACInst)]` shares this one implementation.
@@ -686,7 +685,7 @@ pub fn nodes_in_map_order(nodes: &[(NodeId, RuleACInst)]) -> Vec<&(NodeId, RuleA
 ///
 /// Takes a slice so that `sFormulas`, `sSolvedFormulas` and `sLemmas` share
 /// this one implementation.
-pub fn formulas_in_set_order(formulas: &[Arc<Guarded>]) -> Vec<&Guarded> {
+pub(crate) fn formulas_in_set_order(formulas: &[Arc<Guarded>]) -> Vec<&Guarded> {
     let mut ordered: Vec<&Guarded> = formulas.iter().map(|f| f.as_ref()).collect();
     ordered.sort();
     ordered
@@ -1183,9 +1182,9 @@ impl System {
 
     /// `sGoals` in `M.toList` order, i.e. ascending `Ord Goal` — see
     /// [`nodes_in_map_order`].
-    pub fn goals_in_map_order(&self) -> Vec<&(Goal, GoalStatus)> {
+    pub(crate) fn goals_in_map_order(&self) -> Vec<&(Goal, GoalStatus)> {
         let mut ordered: Vec<&(Goal, GoalStatus)> = self.goals.iter().collect();
-        ordered.sort_by(|a, b| crate::constraint::solver::goals::goal_cmp(&a.0, &b.0));
+        ordered.sort_by(|a, b| a.0.cmp(&b.0));
         ordered
     }
 

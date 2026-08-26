@@ -881,7 +881,7 @@ fn existential_binder_keeps_ac_operand_order() {
     )
     .unwrap();
     assert_eq!(
-        formula_doublequoted_nested(&canonicalize_ac_in_formula(&f), 2),
+        doublequoted_nested_doc(formula_doc(&canonicalize_ac_in_formula(&f)), 2),
         want
     );
     // `formulaToGuarded` on the negation is what the solver stores and what

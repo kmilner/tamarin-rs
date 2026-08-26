@@ -1,6 +1,8 @@
 //! The examples-tree walker this crate's corpus tests share: the corpus
 //! root, the file list, the budget list and the parse step each of those
-//! tests starts from.
+//! tests starts from.  The corpus nets under `tests/` use the same walker
+//! from `tests/corpus_util/mod.rs`, which crate privacy keeps separate
+//! from this one.
 
 use std::path::{Path, PathBuf};
 use tamarin_parser::ast as p;

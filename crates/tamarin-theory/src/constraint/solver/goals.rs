@@ -354,11 +354,10 @@ pub fn parse_heuristic_str_with_tactics(
 /// fully overrides the `M.toList` Goal-Ord, so emitting goals in nr
 /// order here is exactly HS's post-`goalNrRanking` order — HS-faithful.
 ///
-/// The `M.toList` Goal-Ord is only material at the direct `goal_cmp`
-/// call sites: `goal_cmp` (below) is the HS-`Ord Goal`-faithful
-/// comparator, wired into the goal sorts in `reduction.rs`,
-/// `sources.rs`, and `rename_precise.rs` (~7 call sites), which already
-/// use it.
+/// The `M.toList` Goal-Ord is only material at the sites that sort a
+/// goal list by `Ord Goal` (the derived mirror of HS's, see the `Goal`
+/// enum): the goal sorts in `reduction.rs`, `sources.rs` and
+/// `rename_precise.rs`.
 pub fn open_goals(sys: &System) -> Vec<AnnotatedGoal> {
     let mut out = Vec::new();
     // HS `existingDeps = rawLessRel sys` — built ONCE per openGoals pass and
@@ -393,82 +392,6 @@ pub fn open_goals(sys: &System) -> Vec<AnnotatedGoal> {
     // but defensive) keep Vec order.
     sort_goal_nr(&mut out);
     out
-}
-
-/// Manual structural compare on `Goal`, mirroring Haskell's derived
-/// `Ord Goal` (Constraints.hs:155-168).  Variant tags follow Haskell
-/// declaration order:
-///     ActionG < ChainG < PremiseG < SplitG < DisjG < SubtermG.
-///
-/// **Do NOT change this ordering without updating Haskell.**  If the
-/// tags drift from declaration order, BTreeMap-backed goal iteration
-/// (e.g. `solveUniqueActions`, `solveAllSafeGoals`) silently picks
-/// goals in a different order and the proof shape diverges.
-pub(crate) fn goal_cmp(a: &Goal, b: &Goal) -> std::cmp::Ordering {
-    let tag = |g: &Goal| -> u8 {
-        match g {
-            Goal::Action(_, _) => 0,
-            Goal::Chain(_, _) => 1,
-            Goal::Premise(_, _) => 2,
-            Goal::Split(_) => 3,
-            Goal::Disj(_) => 4,
-            Goal::Subterm(_) => 5,
-        }
-    };
-    let ta = tag(a);
-    let tb = tag(b);
-    if ta != tb {
-        return ta.cmp(&tb);
-    }
-    // Tag equality above guarantees `a` and `b` are the same variant, so each
-    // `let … else` binding of `b` is infallible.  Match `a` exhaustively (no
-    // wildcard) so a new `Goal` variant fails to compile here until its payload
-    // comparison is written.
-    match a {
-        Goal::Action(la, fa) => {
-            let Goal::Action(lb, fb) = b else {
-                unreachable!("goal tag matched Action")
-            };
-            la.cmp(lb).then_with(|| fa.cmp(fb))
-        }
-        Goal::Chain(ca, pa) => {
-            let Goal::Chain(cb, pb) = b else {
-                unreachable!("goal tag matched Chain")
-            };
-            (&ca.0, ca.1 .0)
-                .cmp(&(&cb.0, cb.1 .0))
-                .then_with(|| (&pa.0, pa.1 .0).cmp(&(&pb.0, pb.1 .0)))
-        }
-        Goal::Premise(pa, fa) => {
-            let Goal::Premise(pb, fb) = b else {
-                unreachable!("goal tag matched Premise")
-            };
-            (&pa.0, pa.1 .0)
-                .cmp(&(&pb.0, pb.1 .0))
-                .then_with(|| fa.cmp(fb))
-        }
-        Goal::Split(sa) => {
-            let Goal::Split(sb) = b else {
-                unreachable!("goal tag matched Split")
-            };
-            sa.cmp(sb)
-        }
-        Goal::Disj(da) => {
-            let Goal::Disj(db) = b else {
-                unreachable!("goal tag matched Disj")
-            };
-            // HS `Disj a = Disj [a]` derives `Ord` as the newtype over the
-            // list, i.e. plain list Ord (element-by-element, shorter < longer),
-            // bottoming out at the derived `Ord LNGuarded` (Guarded.hs:129).
-            da.0.cmp(&db.0)
-        }
-        Goal::Subterm((sa, ta_)) => {
-            let Goal::Subterm((sb, tb_)) = b else {
-                unreachable!("goal tag matched Subterm")
-            };
-            sa.cmp(sb).then_with(|| ta_.cmp(tb_))
-        }
-    }
 }
 
 /// Error type for oracle execution failures.
@@ -1293,7 +1216,7 @@ fn smart_ranking(
     // sys.goals insertion order = nr order, and the subsequent
     // partitions here are stable too, so no extra sort is required.
     //
-    // Do NOT re-sort Disj goals by `goal_cmp` here: HS's `M.toList sGoals`
+    // Do NOT re-sort Disj goals by `Ord Goal` here: HS's `M.toList sGoals`
     // order does NOT survive to the pick (`goalNrRanking` clobbers it).
     // Re-sorting breaks HS-faithfulness for Device_Init_Use_Set
     // (case-content swap caused by Rust picking the structurally-

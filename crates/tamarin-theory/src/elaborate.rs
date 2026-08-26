@@ -1812,103 +1812,17 @@ pub fn canonicalize_ac_in_pfact(f: &p::Fact) -> p::Fact {
 
 /// Apply `canonicalize_ac_in_pterm` to every term in a parser-AST formula.
 ///
-/// HS-faithful: HS sorts AC arguments at parse time when building LNTerm via
-/// `fAppAC` (Term/Term/Raw.hs:118-129) over the *free* logical variables,
-/// using `Ord LVar` = (idx, sort, name) (LTerm.hs:545-548).  Our parser keeps
+/// HS sorts AC arguments at parse time when building LNTerm via `fAppAC`
+/// (Term/Term/Raw.hs:118-129) over the *free* logical variables, using
+/// `Ord LVar` = (idx, sort, name) (LTerm.hs:545-548).  The parser keeps
 /// `BinOp` trees in written order; this walk re-establishes the canonical AC
-/// order on the free-variable parser AST so the subsequent guarded conversion
-/// (Free→Bound abstraction) preserves exactly what HS would have produced.
-pub fn canonicalize_ac_in_formula(f: &p::Formula) -> p::Formula {
+/// order on the free-variable parser AST.  Test-only: the formula printers
+/// consume internal formulas, whose terms are AC-canonical by construction,
+/// and the printer parity tests use this walk to put their parser-AST side
+/// into the same order.
+#[cfg(test)]
+pub(crate) fn canonicalize_ac_in_formula(f: &p::Formula) -> p::Formula {
     map_formula_terms(f, &canonicalize_ac_in_pterm)
-}
-
-/// Names of arity-1 NoEq function symbols in the (closed-theory) signature.
-/// Mirrors HS `lookupArity` reading the parser-state signature for
-/// `naryOpApp`'s `k == 1` tuple-folding (Theory/Text/Parser/Term.hs:88-96).
-// arity-1 no-eq function-name set; membership-only (.contains), never iterated;
-// std kept (byte-inert) — iteration order never reaches output.
-#[allow(clippy::disallowed_types)]
-pub fn arity1_noeq_names(
-    sig: &tamarin_term::maude_sig::MaudeSig,
-) -> std::collections::HashSet<String> {
-    sig.no_eq_fun_syms()
-        .iter()
-        .filter(|s| s.arity == 1)
-        .map(|s| String::from_utf8_lossy(s.name).to_string())
-        .collect()
-}
-
-/// Re-fold surplus arguments of an arity-1 function application into a
-/// single right-associative pair, mirroring HS `naryOpApp` for `k == 1`
-/// (Theory/Text/Parser/Term.hs:94-96):
-///   `ts <- parens $ if k == 1 then return <$> tupleterm ... else commaSep ...`
-/// where `tupleterm = chainr1 (...) (fAppPair <$ comma)`.  So for an arity-1
-/// symbol `f`, the surface `f(a, b, c)` parses to `f(<a, b, c>)` — a single
-/// argument which is the right-associative pair `<a, b, c>`.
-///
-/// HS performs this fold at PARSE time, so every downstream consumer (the
-/// lemma/restriction pretty-printer, the guarded-formula conversion, and the
-/// "Formula terms" wellformedness check) sees the already-folded form.  RS's
-/// term parser performs the same fold (its `lookup_arity`-resolved `k == 1`
-/// branch parses one tuple), so on theory ASTs this pass is a no-op; it is
-/// kept as belt-and-braces for ASTs from other producers (e.g. the parser's
-/// structural mode, which is arity-unaware and keeps `App("f", [a, b, c])`).
-/// Skipping the fold shows up twice: as the alethea `h(<a,b>)`
-/// formula-rendering divergence, and as a spurious "reducible function symbols
-/// are disallowed" wf warning (a unary `h` applied with surplus args looks
-/// to the wf check like an unknown reducible `h/n`).
-// arity-1 no-eq function-name set; membership-only (.contains), never iterated;
-// std kept (byte-inert) — iteration order never reaches output.
-#[allow(clippy::disallowed_types)]
-pub fn rewrite_arity1_term(t: &p::Term, arity1: &std::collections::HashSet<String>) -> p::Term {
-    use p::Term::*;
-    match t {
-        App(name, args) => {
-            let new_args: Vec<p::Term> = args
-                .iter()
-                .map(|a| rewrite_arity1_term(a, arity1))
-                .collect();
-            if arity1.contains(name) && new_args.len() > 1 {
-                App(name.clone(), vec![Pair(new_args)])
-            } else {
-                App(name.clone(), new_args)
-            }
-        }
-        Pair(items) => Pair(
-            items
-                .iter()
-                .map(|i| rewrite_arity1_term(i, arity1))
-                .collect(),
-        ),
-        AlgApp(name, l, r) => AlgApp(
-            name.clone(),
-            Box::new(rewrite_arity1_term(l, arity1)),
-            Box::new(rewrite_arity1_term(r, arity1)),
-        ),
-        Diff(l, r) => Diff(
-            Box::new(rewrite_arity1_term(l, arity1)),
-            Box::new(rewrite_arity1_term(r, arity1)),
-        ),
-        BinOp(op, l, r) => BinOp(
-            *op,
-            Box::new(rewrite_arity1_term(l, arity1)),
-            Box::new(rewrite_arity1_term(r, arity1)),
-        ),
-        PatMatch(inner) => PatMatch(Box::new(rewrite_arity1_term(inner, arity1))),
-        other => other.clone(),
-    }
-}
-
-/// Apply [`rewrite_arity1_term`] to every term in a parser-AST formula.
-/// See [`rewrite_arity1_term`] for the HS-faithfulness rationale.
-// arity-1 no-eq function-name set; membership-only (.contains), never iterated;
-// std kept (byte-inert) — iteration order never reaches output.
-#[allow(clippy::disallowed_types)]
-pub fn rewrite_arity1_formula(
-    f: &p::Formula,
-    arity1: &std::collections::HashSet<String>,
-) -> p::Formula {
-    map_formula_terms(f, &|t| rewrite_arity1_term(t, arity1))
 }
 
 /// Right-fold a non-empty term list into a right-associative `pair(..)` chain:

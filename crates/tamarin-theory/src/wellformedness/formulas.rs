@@ -124,7 +124,7 @@ pub fn formula_reports(thy: &Theory) -> Vec<WfError> {
 ///
 /// Indentation: 2 (`prettyWfErrorReport`'s `nest 2`) + 2 (`checkGuarded`'s
 /// `nest 2 err`) + 2 (`ppFormula`'s `nest 2`) = 6 spaces for formula text.
-fn check_guarded_entry(header: &str, formula: &crate::formula::LNFormula) -> Option<WfError> {
+fn check_guarded_entry(header: &str, formula: &LNFormula) -> Option<WfError> {
     use crate::pretty_formula::{doublequoted_nested_doc_default_width, lnformula_doc};
     use crate::pretty_hpj as hpj;
 
@@ -184,7 +184,7 @@ fn check_guarded_entry(header: &str, formula: &crate::formula::LNFormula) -> Opt
 /// The binders are the formula's `(String, LSort)` HINTS, collected by HS's
 /// `foldFormula` with `\_ binder rest -> binder : rest` over `const mappend`
 /// connectives, i.e. in document order, outermost binder first.
-fn check_quantifiers<S>(header: &str, fm: &crate::formula::LNProtoFormula<S>) -> Option<WfError> {
+fn check_quantifiers(header: &str, fm: &LNFormula) -> Option<WfError> {
     let mut binders: Vec<&(String, LSort)> = Vec::new();
     collect_binders(fm, &mut binders);
 
@@ -241,10 +241,7 @@ fn disallowed_sort_show(sort: LSort) -> Option<&'static str> {
 /// quantifier contributes its own hint before its body's, and a connective
 /// its left operand's before its right's.  A source `All x y. …` closes into
 /// nested `Qua`s, so its binders come out left to right.
-fn collect_binders<'a, S>(
-    fm: &'a crate::formula::LNProtoFormula<S>,
-    out: &mut Vec<&'a (String, LSort)>,
-) {
+fn collect_binders<'a>(fm: &'a LNFormula, out: &mut Vec<&'a (String, LSort)>) {
     use crate::formula::ProtoFormula;
     match fm {
         ProtoFormula::Tf(_) | ProtoFormula::Atom(_) => {}

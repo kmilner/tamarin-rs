@@ -339,6 +339,35 @@ pub fn fresh_names_report(thy: &Theory) -> WfReport {
 // Public constant capitalization clashes
 // =============================================================================
 
+/// HS `clashesOn f g xs` (Wellformedness.hs:154-161): stable-sort by `f`,
+/// group the consecutive runs equal under `f`, `sortednubOn g` each run
+/// (sort by `g`, keep the first element per distinct `g`), and return the
+/// runs holding at least two elements.  `f` is taken once per element.
+fn clashes_on<A: Clone, B: Ord, C: Ord>(
+    f: impl Fn(&A) -> B,
+    g: impl Fn(&A) -> C,
+    xs: &[A],
+) -> Vec<Vec<A>> {
+    let mut keyed: Vec<(B, &A)> = xs.iter().map(|a| (f(a), a)).collect();
+    keyed.sort_by(|x, y| x.0.cmp(&y.0));
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < keyed.len() {
+        let mut j = i + 1;
+        while j < keyed.len() && keyed[j].0 == keyed[i].0 {
+            j += 1;
+        }
+        let mut grp: Vec<A> = keyed[i..j].iter().map(|(_, a)| (*a).clone()).collect();
+        grp.sort_by_key(|a| g(a));
+        grp.dedup_by(|a, b| g(a) == g(b));
+        if grp.len() >= 2 {
+            out.push(grp);
+        }
+        i = j;
+    }
+    out
+}
+
 /// The clash-detection + rendering half of HS `publicNamesReport'`
 /// (Wellformedness.hs:463-484).  Its caller,
 /// [`public_names_report`], harvests the
@@ -348,33 +377,15 @@ pub fn fresh_names_report(thy: &Theory) -> WfReport {
 /// (matching HS `thyProtoRules`), first-occurrence-wins: `clashesOn` keeps the
 /// earliest `(rule, name)` per distinct public name.
 fn public_names_report_from_pairs(pairs: Vec<(String, String)>) -> WfReport {
-    if pairs.is_empty() {
-        return Vec::new();
-    }
     // HS `show` of a (public) Name constant is the quoted form `'name'`.
     let shw = |n: &str| format!("'{}'", n);
-    let f = |p: &(String, String)| shw(&p.1).to_lowercase(); // lowerCase.show.snd
-    let g = |p: &(String, String)| shw(&p.1); // show.snd
-                                              // clashesOn f g: stable-sort by f, group consecutive by f, each group
-                                              // sortednubOn g; keep groups with >= 2 distinct g.
-    let mut sorted: Vec<(String, String)> = pairs;
-    sorted.sort_by_key(|a| f(a));
-    let mut clashes: Vec<Vec<(String, String)>> = Vec::new();
-    let mut i = 0;
-    while i < sorted.len() {
-        let key = f(&sorted[i]);
-        let mut j = i + 1;
-        while j < sorted.len() && f(&sorted[j]) == key {
-            j += 1;
-        }
-        let mut grp: Vec<(String, String)> = sorted[i..j].to_vec();
-        grp.sort_by_key(|a| g(a));
-        grp.dedup_by(|a, b| g(a) == g(b));
-        if grp.len() >= 2 {
-            clashes.push(grp);
-        }
-        i = j;
-    }
+    // HS `findClashes = clashesOn (map toLower . show . snd) (show . snd)`
+    // (Wellformedness.hs:479).
+    let clashes = clashes_on(
+        |p: &(String, String)| shw(&p.1).to_lowercase(),
+        |p: &(String, String)| shw(&p.1),
+        &pairs,
+    );
     if clashes.is_empty() {
         return Vec::new();
     }
@@ -467,31 +478,15 @@ fn pretty_var_list(vars: &[LVar]) -> Doc {
 /// in the topic string come from the topic itself, through
 /// `pretty_theory`'s headerless-preamble table.
 fn sorts_clash_check(info: String, vars: &[LVar]) -> Vec<WfError> {
-    // HS `clashesOn f g` (Wellformedness.hs:154-161) with `f = removeSort lv
-    // = (lowerCase (lvarName lv), lvarIdx lv)`: stable-sort by `f`, group the
-    // consecutive runs, and keep the runs whose `sortednubOn g` holds at
-    // least two elements.  `f` is taken once per variable rather than once
-    // per comparison.
-    let mut keyed: Vec<(String, LVar)> = vars.iter().map(|v| (v.name.to_lowercase(), *v)).collect();
-    keyed.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.idx.cmp(&b.1.idx)));
-    let mut clashes: Vec<Vec<LVar>> = Vec::new();
-    let mut i = 0;
-    while i < keyed.len() {
-        let key = (keyed[i].0.as_str(), keyed[i].1.idx);
-        let mut j = i + 1;
-        while j < keyed.len() && (keyed[j].0.as_str(), keyed[j].1.idx) == key {
-            j += 1;
-        }
-        // `sortednubOn id` sorts by `Ord LVar` — the index, then the sort,
-        // then the name (LTerm.hs:546-548).
-        let mut grp: Vec<LVar> = keyed[i..j].iter().map(|(_, v)| *v).collect();
-        grp.sort();
-        grp.dedup();
-        if grp.len() >= 2 {
-            clashes.push(grp);
-        }
-        i = j;
-    }
+    // HS `clashesOn removeSort id $ frees t` (Wellformedness.hs:259) with
+    // `removeSort lv = (lowerCase (lvarName lv), lvarIdx lv)`; the identity
+    // projection's `sortednubOn` sorts by `Ord LVar` — the index, then the
+    // sort, then the name (LTerm.hs:546-548).
+    let clashes = clashes_on(
+        |v: &LVar| (v.name.to_lowercase(), v.idx),
+        |v: &LVar| *v,
+        vars,
+    );
     if clashes.is_empty() {
         return Vec::new();
     }

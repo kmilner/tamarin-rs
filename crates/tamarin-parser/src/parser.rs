@@ -393,20 +393,6 @@ pub fn parse_theory_with_base(
     Ok(thy)
 }
 
-/// Parse a theory.
-///
-/// NOTE: this entry point always parses a NON-diff theory: it delegates to
-/// [`parse_theory`], which pins the parser's `is_diff` to `false`, so the
-/// result never carries `Theory::is_diff` (HS derives diff-theory selection
-/// from `"diff" \`S.member\` flags0`).  A `diff` entry in `flags` does still
-/// set the parser's `enable_diff` bit, which is what makes the `diff(a, b)`
-/// term operator legal.
-///
-/// No production caller; kept as parity/API surface.
-pub fn parse_theory_or_diff(input: &str, flags: &[&str]) -> Result<Theory, ParseError> {
-    parse_theory(input, flags)
-}
-
 /// Parse a stream of intruder-rule declarations of the form
 ///     `rule (modulo AC) <name>[<limit>]: [..] --[..]-> [..]`
 /// (with no surrounding `theory ... begin ... end` wrapper).
@@ -815,30 +801,6 @@ const XOR_THEORY_NOEQ_SYMS: &[BuiltinFunSym] = &[BuiltinFunSym::new("zero", 0, f
 /// Term/Term/FunctionSymbols.hs:236) — see [`DH_THEORY_NOEQ_SYMS`].
 const NAT_THEORY_NOEQ_SYMS: &[BuiltinFunSym] = &[BuiltinFunSym::new("tone", 0, false, false)];
 
-/// Every `NoEq` function-symbol NAME a `builtins:` item of this name folds
-/// into `funSyms`: its `stFunSyms` row plus the `NoEq` part of the
-/// theory-level `FunSig`s its enable flags contribute
-/// (Term/Maude/Signature.hs:110-125; the `maudeSig` smart constructor forces
-/// `enableDH` under BP, Term/Maude/Signature.hs:111-112).  These are the names
-/// `lookupArity` ranks as `NoEqUser` — ahead of every `ACfctUser`
-/// (Theory/Text/Parser/Term.hs:62-72) — so `crate::wf`'s printers use this to
-/// classify a prefix application of a name that is also declared `[AC]`.
-pub fn builtin_noeq_sym_names(builtin: &str) -> Vec<&'static str> {
-    let theory: &[&[BuiltinFunSym]] = match builtin {
-        "diffie-hellman" => &[DH_THEORY_NOEQ_SYMS],
-        "bilinear-pairing" => &[DH_THEORY_NOEQ_SYMS, BP_THEORY_NOEQ_SYMS],
-        "xor" => &[XOR_THEORY_NOEQ_SYMS],
-        "natural-numbers" => &[NAT_THEORY_NOEQ_SYMS],
-        _ => &[],
-    };
-    builtin_st_fun_syms(builtin)
-        .unwrap_or(&[])
-        .iter()
-        .map(|s| s.name)
-        .chain(theory.iter().flat_map(|syms| syms.iter().map(|s| s.name)))
-        .collect()
-}
-
 /// Intern an AC-symbol name for the `'static` borrow [`BinOp::AcFct`]
 /// carries.  Names are deduplicated process-wide, so re-parses leak at most
 /// one allocation per distinct `[AC]` symbol name.  Equality on the variant is
@@ -928,14 +890,6 @@ pub struct Parser<'a> {
     /// diff` cannot define it anyway — `diff` is a reserved name, so the
     /// directive's `identifier` rejects it.)
     enable_diff: bool,
-    /// Whether to enable parsing of operators that depend on builtins.
-    /// We default-enable everything since this is a structural parser, so these
-    /// are always `true`; they are kept as named gates for the operator-parsing
-    /// sites (`!eqn && self.enable_x`) should builtin-aware gating ever be added.
-    enable_dh: bool,
-    enable_xor: bool,
-    enable_mset: bool,
-    enable_nat: bool,
     /// Directory of the file currently being parsed (`takeDirectory inFile0` in
     /// HS).  `#include "file"` resolves relative to this; `None` (no source
     /// file) means includes are taken verbatim, mirroring HS's `Nothing` case.
@@ -991,8 +945,8 @@ pub struct Parser<'a> {
     /// The `enableDH`/`enableBP`/`enableXor`/`enableMSet`/`enableNat` bits of
     /// HS's parse-time `MaudeSig` (Term/Maude/Signature.hs:90-108), flipped by
     /// the `builtins:` names whose signatures carry only these flags
-    /// (Term/Maude/Signature.hs:191-196).  Distinct from [`Parser::enable_dh`]
-    /// &c., which deliberately stay `true` so the structural parser accepts
+    /// (Term/Maude/Signature.hs:191-196).  The term chain levels themselves
+    /// deliberately stay open (`!eqn` only), so the structural parser accepts
     /// every operator: these mirror the HS signature bits exactly, for the two
     /// places where that state reaches output bytes — the theory-level function
     /// symbols `userDefinedFunSyms` contributes to the macro-name conflict
@@ -1138,10 +1092,6 @@ impl<'a> Parser<'a> {
             enable_diff: is_diff || flags_set.contains("diff"),
             flags: flags_set,
             is_diff,
-            enable_dh: true,
-            enable_xor: true,
-            enable_mset: true,
-            enable_nat: true,
             base_dir: None,
             ac_fun_syms: Vec::new(),
             fun_syms: vec![
@@ -5177,7 +5127,7 @@ impl<'a> Parser<'a> {
 
     fn msetterm_inner(&mut self, eqn: bool) -> Result<Term, ParseError> {
         let mut lhs = self.natterm(eqn)?;
-        if !eqn && self.enable_mset {
+        if !eqn {
             loop {
                 self.skip_ws();
                 // `++` or `+` (as multiset union); careful with `+` for NDC
@@ -5205,7 +5155,7 @@ impl<'a> Parser<'a> {
 
     fn natterm(&mut self, eqn: bool) -> Result<Term, ParseError> {
         let mut lhs = self.xorterm(eqn)?;
-        if !eqn && self.enable_nat {
+        if !eqn {
             while self.try_punct("%+") {
                 let rhs = self.xorterm(eqn)?;
                 lhs = Term::BinOp(BinOp::NatPlus, Box::new(lhs), Box::new(rhs));
@@ -5216,7 +5166,7 @@ impl<'a> Parser<'a> {
 
     fn xorterm(&mut self, eqn: bool) -> Result<Term, ParseError> {
         let mut lhs = self.multterm(eqn)?;
-        if !eqn && self.enable_xor {
+        if !eqn {
             while self.try_kw("XOR") || self.try_punct("⊕") {
                 let rhs = self.multterm(eqn)?;
                 lhs = Term::BinOp(BinOp::Xor, Box::new(lhs), Box::new(rhs));
@@ -5226,7 +5176,7 @@ impl<'a> Parser<'a> {
     }
 
     fn multterm(&mut self, eqn: bool) -> Result<Term, ParseError> {
-        if eqn || !self.enable_dh {
+        if eqn {
             return self.acterm(eqn);
         }
         let mut lhs = self.expterm(eqn)?;
@@ -6580,8 +6530,8 @@ enum FactOrRestr {
 ///
 /// Lemmas and restrictions store their formula as a quoted string; this is the
 /// entry point used to recover the AST from that text.  Errors on any trailing
-/// input after the formula.  All algebraic operators are enabled at parse time
-/// (see [`Parser::new`]); semantic gating is irrelevant here.
+/// input after the formula.  The term chain levels are always open outside
+/// `equations:` blocks, so every algebraic operator parses here.
 ///
 /// `msig` is the signature the text was rendered against, seeded as HS
 /// `parseString` seeds one (Theory/Text/Parser/Token.hs:250-258): it supplies

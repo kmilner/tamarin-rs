@@ -20,7 +20,7 @@ use tamarin_theory::sapic::{
     pretty_position, GoodAnnotation, PlainProcess, Process, ProcessPosition, SapicLVar,
 };
 
-use crate::annotation::ProcessAnnotation;
+use crate::annotation::{to_parsed, ProcessAnnotation};
 
 // =============================================================================
 // StateKind (Facts.hs:93-94) / TransFact (96-109) / TransAction (55-81)
@@ -528,28 +528,11 @@ fn strip_non_alphabetic(s: &str) -> String {
     s.chars().filter(|c| c.is_alphabetic()).collect()
 }
 
-/// Erase the rich annotation back to a `PlainProcess` for printing (HS
-/// `toProcess`).
-fn to_plain<Ann: GoodAnnotation + Clone>(p: &Process<Ann, SapicLVar>) -> PlainProcess {
-    match p {
-        Process::Null(a) => Process::Null(a.parsed().clone()),
-        Process::Action(ac, a, body) => {
-            Process::Action(ac.clone(), a.parsed().clone(), Box::new(to_plain(body)))
-        }
-        Process::Comb(c, a, l, r) => Process::Comb(
-            c.clone(),
-            a.parsed().clone(),
-            Box::new(to_plain(l)),
-            Box::new(to_plain(r)),
-        ),
-    }
-}
-
 /// The HS-faithful rule name (Facts.hs:381-388).
 pub fn rule_name<Ann: GoodAnnotation + Clone>(r: &AnnotatedRule<Ann>) -> String {
     match &r.process_name {
         Some(s) => s.clone(),
-        None => generated_rule_name(&to_plain(&r.process), r.index, &r.position),
+        None => generated_rule_name(&to_parsed(&r.process), r.index, &r.position),
     }
 }
 
@@ -557,8 +540,9 @@ pub fn rule_name<Ann: GoodAnnotation + Clone>(r: &AnnotatedRule<Ann>) -> String 
 /// `unNull (stripNonAlphanumerical (prettySapicTopLevel process)) ++ "_" ++
 /// show index ++ "_" ++ prettyEitherPositionOrSpecial position`.
 ///
-/// Takes the already-erased process so [`to_rule`] can share one `to_plain`
-/// with the `process=` attribute it also builds from it.
+/// Takes the already-erased process so [`to_rule`] can share one
+/// [`crate::annotation::to_parsed`] with the `process=` attribute it also
+/// builds from it.
 fn generated_rule_name(plain: &PlainProcess, index: usize, position: &RulePosition) -> String {
     let stripped = strip_non_alphabetic(&pretty_sapic_top_level(plain));
     // `unNull s = if null s then "p" else s`
@@ -575,7 +559,7 @@ fn generated_rule_name(plain: &PlainProcess, index: usize, position: &RulePositi
 pub fn to_rule(r: &AnnotatedRule<ProcessAnnotation<LVar>>) -> ProtoRuleE {
     // Both the generated name and the `process=` attribute read the erased
     // process, so erase once.
-    let plain = to_plain(&r.process);
+    let plain = to_parsed(&r.process);
     let name = match &r.process_name {
         Some(s) => s.clone(),
         None => generated_rule_name(&plain, r.index, &r.position),

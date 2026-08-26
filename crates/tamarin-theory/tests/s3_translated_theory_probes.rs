@@ -18,6 +18,9 @@
 //! reads an item by name depends on (`Theory::lookup_lemma` /
 //! `lookup_restriction`) over everything the two translations add.
 
+mod corpus_util;
+
+use corpus_util::{deep_pool, rel, LoadSkip};
 use rayon::prelude::*;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -26,49 +29,11 @@ use tamarin_theory::formula::LNFormula;
 use tamarin_theory::pretty_formula::pretty_lnformula;
 use tamarin_theory::theory::{Theory, TheoryItem};
 
-/// Examples beyond this test's budget, relative to the corpus root and
-/// reported as `skipped_listed`: the accountability lemmas of the mixvote
-/// multi-session family grow geometrically with the session count.
-/// Neither file is in the prove or pretty gate corpus
-/// (scripts/parity_corpus.txt).
-const BEYOND_BUDGET: &[&str] = &[
-    "sapic/deprecated/csf21-acc-unbounded/mixvote/mixvote_SmHh-multi-session-4-fixed.spthy",
-    "sapic/deprecated/csf21-acc-unbounded/mixvote/mixvote_SmHh-multi-session-5-fixed.spthy",
-];
-
-/// The examples tree, or the override in `CORPUS_ROOT`.
-fn corpus_root() -> PathBuf {
-    if let Ok(root) = std::env::var("CORPUS_ROOT") {
-        return PathBuf::from(root);
-    }
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tamarin-prover/examples")
-}
-
-/// `path` relative to the corpus root, as the report names it.
-fn rel<'a>(path: &'a Path, root: &Path) -> &'a Path {
-    path.strip_prefix(root).unwrap_or(path)
-}
-
-fn spthy_files(root: &Path) -> Vec<PathBuf> {
-    let mut files: Vec<PathBuf> = walkdir::WalkDir::new(root)
-        .into_iter()
-        .filter_map(Result::ok)
-        .filter(|e| e.file_type().is_file())
-        .map(|e| e.into_path())
-        .filter(|p| p.extension().is_some_and(|x| x == "spthy"))
-        .collect();
-    files.sort();
-    files
-}
-
 /// Which stage of the pipeline a file reached.
 #[derive(PartialEq)]
 enum Outcome {
     Translated,
-    SkippedListed,
-    SkippedParse,
-    SkippedLift,
-    SkippedElab,
+    Skipped(LoadSkip),
     /// `apply_sapic` or the accountability translation reported an error or
     /// panicked; the driver turns both into a process exit (run.rs).
     SkippedTranslate,
@@ -205,37 +170,14 @@ fn probe_lookups(
 }
 
 /// The driver's load pipeline for one file, up to the point where the
-/// translated theory is complete — parse, lift the embedded restrictions,
-/// elaborate, translate the SAPIC process, translate the accountability
-/// lemmas (run.rs `translate_theory`) — then both probes over that theory.
-/// A diff-operator theory is parsed again with the `diff` define, the way
-/// `-D=diff` enables the operator on the CLI.
+/// translated theory is complete — the load ladder, then the SAPIC and the
+/// accountability translation (run.rs `translate_theory`) — then both
+/// probes over that theory.
 fn probe(path: &Path, root: &Path) -> FileProbe {
     let start = Instant::now();
-    if BEYOND_BUDGET.contains(&rel(path, root).to_string_lossy().as_ref()) {
-        return FileProbe::skipped(Outcome::SkippedListed);
-    }
-    let Ok(src) = std::fs::read_to_string(path) else {
-        return FileProbe::skipped(Outcome::SkippedParse);
-    };
-    let base = path.parent().map(Path::to_path_buf);
-    let parsed = std::panic::catch_unwind(|| {
-        tamarin_parser::parser::parse_theory_with_base(&src, &[], base.clone())
-            .or_else(|_| tamarin_parser::parser::parse_theory_with_base(&src, &["diff"], base))
-            .ok()
-    });
-    let Ok(Some(mut parsed)) = parsed else {
-        return FileProbe::skipped(Outcome::SkippedParse);
-    };
-    let lifted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        tamarin_theory::rule_restriction::lift_rule_restrictions(&mut parsed).is_ok()
-    }));
-    if !matches!(lifted, Ok(true)) {
-        return FileProbe::skipped(Outcome::SkippedLift);
-    }
-    let elab = std::panic::catch_unwind(|| tamarin_theory::elaborate::elaborate(&parsed).ok());
-    let Ok(Some(mut elab)) = elab else {
-        return FileProbe::skipped(Outcome::SkippedElab);
+    let (_, mut elab) = match corpus_util::load_elaborated(path, root) {
+        Ok(loaded) => loaded,
+        Err(skip) => return FileProbe::skipped(Outcome::Skipped(skip)),
     };
     let found = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         // The names the source declares, against which the translations'
@@ -281,40 +223,12 @@ fn corpus() -> Option<&'static Corpus> {
     static CORPUS: OnceLock<Option<Corpus>> = OnceLock::new();
     CORPUS
         .get_or_init(|| {
-            let root = corpus_root();
-            if !root.is_dir() {
-                if std::env::var("TAM_ALLOW_NO_CORPUS").as_deref() == Ok("1") {
-                    eprintln!("corpus: root {} missing, skipped", root.display());
-                    return None;
-                }
-                panic!(
-                    "corpus root {} missing; set TAM_ALLOW_NO_CORPUS=1 to skip",
-                    root.display()
-                );
-            }
-            let files = spthy_files(&root);
-            // The parser, the translations and the formula walks recurse
-            // along the input; the web server renders on 64 MiB tokio
-            // threads (run.rs), so the workers get the same stacks.
-            let pool = rayon::ThreadPoolBuilder::new()
-                .stack_size(64 * 1024 * 1024)
-                .build()
-                .expect("rayon pool");
-            let probes = pool.install(|| files.par_iter().map(|p| probe(p, &root)).collect());
+            let (root, files) = corpus_util::corpus_files("corpus")?;
+            let probes =
+                deep_pool().install(|| files.par_iter().map(|p| probe(p, &root)).collect());
             Some((root, files, probes))
         })
         .as_ref()
-}
-
-/// A probe over the corpus is a net only while it covers the tree: a change
-/// that makes a stage of the pipeline reject files has to fail here instead
-/// of shrinking the probe.  The tree has 19 parser rejects in 1037 files,
-/// the same floor the stage-0 net holds.
-fn assert_corpus_covered(loaded: usize, files: usize) {
-    assert!(
-        loaded * 20 >= files * 19,
-        "only {loaded} of {files} files reached the probe"
-    );
 }
 
 /// The header both probes print: how many files reached the translated
@@ -340,10 +254,10 @@ fn census(corpus: &Corpus) -> String {
          skipped_translate={:?} slowest_file={slowest}",
         files.len(),
         count(|o| matches!(o, Outcome::Translated)),
-        count(|o| matches!(o, Outcome::SkippedListed)),
-        count(|o| matches!(o, Outcome::SkippedParse)),
-        count(|o| matches!(o, Outcome::SkippedLift)),
-        count(|o| matches!(o, Outcome::SkippedElab)),
+        count(|o| matches!(o, Outcome::Skipped(LoadSkip::Listed))),
+        count(|o| matches!(o, Outcome::Skipped(LoadSkip::Parse))),
+        count(|o| matches!(o, Outcome::Skipped(LoadSkip::Lift))),
+        count(|o| matches!(o, Outcome::Skipped(LoadSkip::Elab))),
         rejected,
     )
 }
@@ -374,7 +288,7 @@ fn translated_items_carry_both_formulas() {
         eprintln!("FAILURE {f}");
     }
     let (loaded, files) = coverage(probes);
-    assert_corpus_covered(loaded, files);
+    corpus_util::assert_corpus_covered(loaded, files);
     assert!(items > 0, "no formulas walked");
     assert!(
         failures.is_empty(),
@@ -402,7 +316,7 @@ fn every_translated_item_has_one_lookup() {
         eprintln!("FAILURE {f}");
     }
     let (loaded, files) = coverage(probes);
-    assert_corpus_covered(loaded, files);
+    corpus_util::assert_corpus_covered(loaded, files);
     assert!(pairs > 0, "no names looked up");
     assert!(
         failures.is_empty(),

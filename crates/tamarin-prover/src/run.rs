@@ -1102,8 +1102,7 @@ struct TheoryPipeline<'a> {
     elaborated: tamarin_theory::theory::Theory,
     wf_report: Vec<tamarin_theory::wellformedness::WfError>,
     /// The theory's `MaudeSig`, cloned from `elaborated` before SAPIC
-    /// translation runs; drives the translated-wf splices and the per-file
-    /// Maude spawns.
+    /// translation runs; drives the per-file Maude spawns.
     maude_sig: tamarin_term::maude_sig::MaudeSig,
     /// Effective per-theory cut strategy + auto-sources: CLI flags merged
     /// with the in-file `configuration:` block ([`effective_cut`] /

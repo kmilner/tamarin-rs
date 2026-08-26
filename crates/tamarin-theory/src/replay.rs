@@ -554,7 +554,7 @@ fn goal_kind(g: &Goal) -> String {
 
 /// Resolve one stored [`ProofMethod`] against `sys`.
 ///
-/// A `SolveGoal` binds the LIVE goal that [`goal_matches`] equates with the
+/// A `SolveGoal` binds the LIVE goal [`match_goal`] finds equal to the
 /// stored one, so the executed method carries the value `sys.goals` holds;
 /// the terminal methods are handled as leaves in [`replay_node`] and resolve
 /// to nothing here.
@@ -586,8 +586,9 @@ fn open_goals(sys: &System) -> impl Iterator<Item = &Goal> {
 ///
 /// HS looks the parsed `Goal` up with
 /// `guard (goal \`M.member\` L.get sGoals sys)` (ProofMethod.hs:253-258), i.e.
-/// by structural equality; [`goal_matches`] is that equality.  The LIVE goal
-/// is returned, so the executed method carries the value `sys.goals` holds.
+/// by structural equality.  The LIVE goal is returned, so the executed
+/// method carries the value `sys.goals` holds (`Fact` equality ignores the
+/// annotations, so the two can differ there).
 ///
 /// [`open_goals`] skips goals already marked solved, which is the one place
 /// this lookup ranges over less than HS's `sGoals`.
@@ -597,15 +598,7 @@ fn open_goals(sys: &System) -> impl Iterator<Item = &Goal> {
 /// verbatim stored subtree — HS `checkProof`'s `Nothing` branch
 /// (Theory/Proof.hs:456-467).
 fn match_goal(stored: &Goal, sys: &System) -> Option<Goal> {
-    open_goals(sys)
-        .find(|live| goal_matches(stored, live))
-        .cloned()
-}
-
-/// HS `M.member` over `sGoals` (ProofMethod.hs:253-258): structural equality
-/// of the stored goal and a live one.
-fn goal_matches(stored: &Goal, live: &Goal) -> bool {
-    stored == live
+    open_goals(sys).find(|live| *live == stored).cloned()
 }
 
 #[cfg(test)]
