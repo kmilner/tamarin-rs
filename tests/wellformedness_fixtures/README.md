@@ -9,7 +9,7 @@ headers inside its `WARNING: the following wellformedness checks
 failed!` block. The two topic-level harnesses treat that list as a
 subset of the topics a fixture emits. A fixture can therefore emit
 more topics than its line lists. The `reports/` directory holds the
-bytes of the whole block for most fixtures.
+bytes of the whole block for every fixture.
 
 This corpus exists because the upstream `tamarin-prover/examples/` tree
 contains hand-written, *passing* protocols — it does not exercise the
@@ -24,7 +24,9 @@ it:
    a `.spthy` file that no `expected.txt` line mentions. The second is
    a `#!` line for a fixture that no `expected.txt` line lists. The
    third is a fixture that compares nothing after the harness drops
-   the post-elaboration topics below.
+   the post-elaboration topics below. It reads only the name and the
+   topics of an `expected.txt` line; the oracle flags a line may carry
+   are harness 2's.
 2. `cargo run -p tamarin-parser --example wellformedness_fixtures
    [-- <fixtures-dir>]` — the differential runner: every fixture must
    parse, the Rust checker must emit the expected topics, and (unless
@@ -41,10 +43,10 @@ it:
    files are captures of the pinned oracle's own block. This harness
    therefore holds the fixtures' *text* to upstream, and not only their
    topic names. It runs offline, and it needs no Maude. It also fails
-   in three more cases. The first is a fixture with neither a `.report`
-   file nor a `NO_REPORT_EXPECTATION` entry. The second is a `.report`
-   file for a fixture that no longer exists. The third is a `.report`
-   file whose `# source:` provenance line does not name the oracle.
+   in three more cases. The first is a fixture with no `.report` file.
+   The second is a `.report` file for a fixture that does not exist.
+   The third is a `.report` file whose `# source:` provenance line does
+   not name the oracle.
 
 The two topic-level harnesses share two comparison rules:
 
@@ -52,19 +54,18 @@ The two topic-level harnesses share two comparison rules:
   a source-literal trailing space (e.g. `"Facts occur in the
   left-hand-side but not in any right-hand-side "`), which the
   comma-separated `expected.txt` cannot represent.
-- `Formula terms` and `Multiplication restriction of rules` are checked
-  only against the tamarin binary, and not against the Rust
-  parser-level checker. A fixture that pins nothing else therefore
-  depends on its `#!` negatives in the two topic-level harnesses. It
-  also depends on its `reports/` block in harness 3.
-  The HS `checkTerms` and `multRestrictedReport` passes both need the
-  elaborated `MaudeSig` (reducible-funsym classification, and
-  `abstractRule`'s irreducible symbols), so their ports live in
-  `tamarin_theory::check_terms` and `tamarin_theory::mult_restricted`
-  and run post-elaboration — spliced by
-  `tamarin_theory::translated_wf`, which both the CLI (`run.rs`) and
-  the web loader call. Each is covered by its own unit tests and by the
-  corpus parity gates.
+- The post-elaboration topics — each harness lists them in its own
+  `POST_ELABORATION_TOPICS` — are checked only against the tamarin
+  binary, and not against the Rust parser-level checker. A fixture that
+  pins nothing else therefore depends on its `#!` negatives in the two
+  topic-level harnesses. It also depends on its `reports/` block in
+  harness 3. Those HS passes need the elaborated `MaudeSig`
+  (reducible-funsym classification, `abstractRule`'s irreducible
+  symbols, the subterm-rule Set) or the SAPIC-translated theory's
+  rules, so their ports live in `tamarin_theory` and run
+  post-elaboration — spliced by `tamarin_theory::translated_wf`, which
+  both the CLI (`run.rs`) and the web loader call. Each is covered by
+  its own unit tests and by the corpus parity gates.
 
 ## `reports/`
 
@@ -79,15 +80,19 @@ that section in afterwards. It is a dynamic check, and it needs Maude.
 `expected.txt` records the same difference for the topic-level
 harnesses.
 
-The three `diff_*` fixtures have no `.report` file. The harness lists
-them in `NO_REPORT_EXPECTATION` with the reason. The reason is that
-the port's `Left rule`, `Right rule` and `Reserved prefixes` bodies
-are best-effort divergences from upstream. The code documents each of
-them (see `wf::left_right_rule_report` and
-`wf::reserved_prefix_report`). A pin here would hold a divergence in
-place instead of holding the port to upstream. Each of the three
-fixtures keeps a topic in `expected.txt` that the parser side reaches,
-so harness 1 still compares something for them.
+Every fixture carries a `.report` file, so harness 3 pins the whole
+block of every one of them.
+
+The `Left rule`, `Right rule` and `Reserved prefixes` topics of HS
+`checkWellformednessDiff` (Wellformedness.hs:1247-1264) have no fixture
+here, because the port does not implement that pass: `run_batch`
+refuses `--diff` (`crates/tamarin-prover/src/run.rs:2092-2096`),
+`parse_theory` pins the parser AST's `is_diff` to `false`
+(`crates/tamarin-parser/src/parser.rs:399-400`), and the internal
+`theory::Theory` carries no `is_diff` at all. A `--diff` port adds
+`diff_left_right_mismatch`, `diff_reserved_prefix` and
+`diff_right_rule_mismatch` here, built from `theory::DiffTheory`, each
+with an oracle-captured `.report` block.
 
 To re-capture a report after a submodule bump, follow these steps.
 Load the fixture through the pinned `tamarin-prover` build. You do not
@@ -108,7 +113,7 @@ fixture pins yet are marked *(unpinned)*:
 
 - Check presence of the --prove/--lemma arguments in theory *(unpinned)*
 - Reserved names
-- Reserved prefixes
+- Reserved prefixes *(unported — `checkWellformednessDiff`)*
 - Special facts
 - Fr facts must only use a fresh- or a msg-variable
 - Fact capitalization issues *(unpinned)*
@@ -135,6 +140,6 @@ fixture pins yet are marked *(unpinned)*:
 - Formula terms
 - Nat Sorts
 - Subterm Convergence Warning
-- Left rule / Right rule (diff theories)
+- Left rule / Right rule *(unported — `checkWellformednessDiff`)*
 
 Each fixture is named after the category it targets.

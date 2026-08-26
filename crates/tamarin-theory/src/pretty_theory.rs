@@ -1311,14 +1311,9 @@ fn render_equations(
 /// Port of HS `checkEquationsSubtermConvergence` (Wellformedness.hs:1222-1232).
 ///
 /// HS works on `thyEquations thy = S.toList (stRules sig)` — the SIGNATURE's
-/// subterm-rule Set, NOT the parser-AST `equations:` blocks.  The parser-level
-/// `tamarin_parser::wf::subterm_convergence_report` approximates this on the
-/// parser AST but (a) keeps the source order rather than the `Ord CtxtStRule`
-/// Set order, and (b) renders each equation on a single flat line (no
-/// width-wrapping), because the `tamarin-parser` crate has no access to the
-/// HughesPJ engine.  This function — living in `tamarin-theory`, which has the
-/// elaborated `MaudeSig` plus the ported HughesPJ printer — reproduces HS
-/// byte-for-byte:
+/// subterm-rule Set, NOT the parser-AST `equations:` blocks — and this
+/// function reproduces it byte-for-byte from the elaborated `MaudeSig` and
+/// the ported HughesPJ printer:
 ///
 ///   * order = `sig.st_rules` `BTreeSet` iteration = HS `S.toList` (derived
 ///     `Ord CtxtStRule`), so e.g. `f1, f2, f3, g` rather than source order
@@ -1330,8 +1325,8 @@ fn render_equations(
 ///   * suppressed entirely when `eqConvergent (sig thy)` is set
 ///     (`isUserMarkedConvergent`, Wellformedness.hs:1211-1214/1285).
 ///
-/// `run.rs` calls this AFTER elaboration and REPLACES the parser-level entry
-/// (same retain/re-add pattern used for "Message Derivation Checks").
+/// Both drivers call this after elaboration, through
+/// `translated_wf::append_subterm_convergence_report`.
 pub fn subterm_convergence_report_wf(
     sig: &tamarin_term::maude_sig::MaudeSig,
 ) -> Vec<tamarin_parser::wf::WfError> {

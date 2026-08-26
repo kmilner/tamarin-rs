@@ -6,14 +6,14 @@
 //! `tests/wellformedness.rs` and its `examples/wellformedness_fixtures.rs`
 //! differential runner.  Both can only reach
 //! `tamarin_parser::wf::check_theory`.  They therefore compare topic names,
-//! and they must drop the two topics that exist only after elaboration
-//! (`Formula terms`, `Multiplication restriction of rules`).  Three fixtures
-//! pin nothing else: `formula_unguarded`, `multiplication_in_rule_lhs` and
-//! `quantifier_wrong_sort`.  If you replace one of those three with an empty
-//! `theory X begin end`, the parser-side harnesses still pass.  This harness
-//! closes that hole from the crate that holds the post-elaboration checks.  It
-//! also compares the full report bytes of every other fixture, rather than a
-//! subset of the topics.
+//! and they must drop the topics that exist only after elaboration (each
+//! harness lists them in its own `POST_ELABORATION_TOPICS`).  Four fixtures
+//! pin nothing else: `formula_unguarded`, `multiplication_in_rule_lhs`,
+//! `non_subterm_equation` and `quantifier_wrong_sort`.  If you replace one of
+//! those four with an empty `theory X begin end`, the parser-side harnesses
+//! still pass.  This harness closes that hole from the crate that holds the
+//! post-elaboration checks.  It also compares the full report bytes of every
+//! other fixture, rather than a subset of the topics.
 //!
 //! The pipeline below calls the four `tamarin_theory::translated_wf` entry
 //! points in the order that both production callers call them.  Those callers
@@ -23,7 +23,7 @@
 //! [`render_report`] asserts that the first one cannot apply:
 //!
 //! * the SAPIC / accountability translation that `run.rs` runs between the
-//!   `swap_subterm_convergence_report` and `splice_translated_wf_reports`
+//!   `append_subterm_convergence_report` and `splice_translated_wf_reports`
 //!   calls.  No fixture declares a process, and the render asserts this.
 //! * the Maude-backed `Message Derivation Checks` and `Rule variants` blocks
 //!   that the batch loop splices afterwards.  Four expectation files
@@ -44,34 +44,6 @@ use std::path::{Path, PathBuf};
 
 use tamarin_parser::parse_theory;
 use tamarin_theory::pretty_theory::format_wf_block;
-
-/// Fixtures with no `.report` expectation, each with the reason it has none.
-///
-/// These three fixtures trip two diff-theory checks, and both checks render a
-/// deliberately best-effort body.  `wf::left_right_rule_report`
-/// (wf.rs:2562-2574) and `wf::reserved_prefix_report` (wf.rs:1489-1505) each
-/// carry a comment.  Those comments say the faithful HS bodies need
-/// `prettyProtoRuleE` and HughesPJ `wrappedText`, which the parser crate
-/// cannot reach.  They also say that no corpus input exercises the path.  The
-/// bytes of these two checks are therefore not the oracle's.  A pin here would
-/// fix a divergence in place instead of pinning upstream.  Each of the three
-/// fixtures keeps a topic in `expected.txt` that the parser side can reach
-/// (`Left rule`, `Right rule`, `Reserved prefixes`).  If you empty one of the
-/// three, the parser-side harness still fails.
-const NO_REPORT_EXPECTATION: &[(&str, &str)] = &[
-    (
-        "diff_left_right_mismatch",
-        "`Left rule` body is a documented best-effort divergence",
-    ),
-    (
-        "diff_reserved_prefix",
-        "`Reserved prefixes` body is a documented best-effort divergence",
-    ),
-    (
-        "diff_right_rule_mismatch",
-        "`Right rule` body is a documented best-effort divergence",
-    ),
-];
 
 /// The minimum number of pinned reports.  [`report_roster_is_complete`]
 /// accepts any matched pair, so it alone cannot detect a mass truncation of
@@ -129,7 +101,7 @@ fn render_report(name: &str) -> String {
          report would be missing the generated rules' findings",
     );
     let maude_sig = elaborated.signature.maude_sig.clone();
-    tamarin_theory::translated_wf::swap_subterm_convergence_report(&mut report, &maude_sig);
+    tamarin_theory::translated_wf::append_subterm_convergence_report(&mut report, &maude_sig);
     tamarin_theory::translated_wf::splice_translated_wf_reports(
         &elaborated,
         &maude_sig,
@@ -182,40 +154,22 @@ fn every_fixture_report_matches_its_pinned_block() {
     }
 }
 
-/// Every fixture is either pinned here or listed with a reason.  Every pin and
-/// every exclusion names a fixture that exists.
+/// Every fixture pins its rendered block against the oracle, and every pin
+/// names a fixture that exists.
 #[test]
 fn report_roster_is_complete() {
     let fixtures = fixture_stems();
     let reports = report_stems();
-    let excluded: BTreeSet<String> = NO_REPORT_EXPECTATION
-        .iter()
-        .map(|(n, _)| (*n).to_string())
-        .collect();
 
-    let unpinned: Vec<_> = fixtures
-        .difference(&reports)
-        .filter(|n| !excluded.contains(*n))
-        .collect();
+    let unpinned: Vec<_> = fixtures.difference(&reports).collect();
     assert!(
         unpinned.is_empty(),
-        "{unpinned:?}.spthy have no .report expectation and no NO_REPORT_EXPECTATION entry, \
-         so their report bytes are unpinned",
+        "{unpinned:?}.spthy have no .report expectation, so their report bytes are unpinned",
     );
     let orphaned: Vec<_> = reports.difference(&fixtures).collect();
     assert!(
         orphaned.is_empty(),
         "{orphaned:?}.report pin fixtures that have no .spthy file",
-    );
-    let stale: Vec<_> = excluded.difference(&fixtures).collect();
-    assert!(
-        stale.is_empty(),
-        "NO_REPORT_EXPECTATION lists {stale:?}, which have no .spthy file",
-    );
-    let both: Vec<_> = excluded.intersection(&reports).collect();
-    assert!(
-        both.is_empty(),
-        "{both:?} are both pinned and excused — drop the NO_REPORT_EXPECTATION entry",
     );
     assert!(
         reports.len() >= MIN_REPORTS,

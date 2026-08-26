@@ -2343,11 +2343,9 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         // even without proving.  The shared pass (`translated_wf`) clones
         // `parsed` with macros expanded first — HS's `thyProtoRules`
         // applies `applyMacroInRule (theoryMacros thy)` before the checks,
-        // so `Fr(test())` where `test() = ~x` becomes `Fr(~x)` and passes —
-        // and drops the static "Message Derivation Checks" entry the
-        // dynamic check below replaces.  (`--parse-only` never reaches
-        // this point — it `continue`d above, before any wellformedness
-        // runs, matching HS Batch.hs:91-95.)
+        // so `Fr(test())` where `test() = ~x` becomes `Fr(~x)` and passes.
+        // (`--parse-only` never reaches this point — it `continue`d above,
+        // before any wellformedness runs, matching HS Batch.hs:91-95.)
         let mut wf_report = tamarin_theory::translated_wf::pre_translation_wf_report(&parsed);
         // HS `checkIfLemmasInTheory` (Wellformedness.hs:1156-1171) — FIRST
         // in HS's checkWellformedness list (line 1272).  Checks that every
@@ -2395,11 +2393,14 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         }
         let maude_sig = elaborated.signature.maude_sig.clone();
 
-        // Replace `check_theory`'s AST-level "Subterm Convergence Warning"
-        // placeholder with the signature-driven version now that the
-        // `MaudeSig` exists (the shared swap in `translated_wf` — see its
-        // doc for the `Ord CtxtStRule` order / width-wrap rationale).
-        tamarin_theory::translated_wf::swap_subterm_convergence_report(&mut wf_report, &maude_sig);
+        // "Subterm Convergence Warning" over the signature's subterm-rule
+        // set, once the `MaudeSig` exists (the shared append in
+        // `translated_wf` — see its doc for the `Ord CtxtStRule` order /
+        // width-wrap rationale).
+        tamarin_theory::translated_wf::append_subterm_convergence_report(
+            &mut wf_report,
+            &maude_sig,
+        );
 
         // The per-file pipeline state.  From here the loop follows HS's
         // stage names: `translate_theory` → `check_translated_theory` →

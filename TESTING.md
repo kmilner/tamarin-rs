@@ -315,7 +315,7 @@ launch, or a fixture emptied by the two post-elaboration removals without an
 `EMPTY_RUST_EXPECTATION_ALLOWLIST` entry *and* negative pins.
 `crates/tamarin-parser/tests/wellformedness.rs` reads the same file offline,
 and it enforces the same pins. Both harnesses check the `#!` topics against
-`wf::check_theory`. Both remove the two post-elaboration topics from the
+`wf::check_theory`. Both remove the post-elaboration topics from the
 positive expectations. Both then fail a fixture that keeps neither a
 parser-level expectation nor a negative pin. Only the example runner compares
 against the oracle.

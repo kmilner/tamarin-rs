@@ -39,17 +39,19 @@ use common::run_tamarin;
 
 /// The topics the parser-level `wf::check_theory` cannot produce: their HS
 /// checks need the elaborated `MaudeSig` (reducible-funsym classification,
-/// `abstractRule`'s irreducible symbols) or the TRANSLATED theory's rules, so
-/// their ports live in `tamarin_theory::{check_terms, mult_restricted,
-/// translated_rule_wf, elaborate}` and run post-elaboration.  Step 2 drops them; step 3
-/// still holds the oracle to them.
-const POST_ELABORATION_TOPICS: [&str; 6] = [
+/// `abstractRule`'s irreducible symbols, the subterm-rule Set) or the
+/// TRANSLATED theory's rules, so their ports live in
+/// `tamarin_theory::{check_terms, mult_restricted, pretty_theory,
+/// translated_rule_wf, elaborate}` and run post-elaboration.  Step 2 drops
+/// them; step 3 still holds the oracle to them.
+const POST_ELABORATION_TOPICS: [&str; 7] = [
     "Formula terms",
     "Multiplication restriction of rules",
     "Unbound variables",
     "Public constants with mismatching capitalization",
     "Facts occur in the left-hand-side but not in any right-hand-side",
     "Nat Sorts",
+    "Subterm Convergence Warning",
 ];
 
 /// Does the fixture pin its whole rendered wellformedness block?  Such a file
@@ -75,7 +77,8 @@ fn pct(n: usize, total: usize) -> f64 {
     100.0 * n as f64 / total.max(1) as f64
 }
 
-/// One positive `expected.txt` line.
+/// One positive `expected.txt` line.  `flags` are the extra arguments step 3
+/// passes to the oracle binary for this fixture.
 struct Fixture {
     name: String,
     flags: Vec<String>,
@@ -198,7 +201,7 @@ fn main() {
             fs::read_to_string(&path).unwrap_or_else(|_| panic!("missing {}", path.display()));
 
         // 1. Our parser must accept the fixture.
-        let mut thy = match parse_theory(&src, &["diff"]) {
+        let thy = match parse_theory(&src, &["diff"]) {
             Ok(t) => {
                 parser_ok += 1;
                 t
@@ -208,12 +211,6 @@ fn main() {
                 continue;
             }
         };
-        // Override is_diff if the fixture is flagged --diff. Our parser
-        // doesn't auto-detect diff mode (Tamarin uses a separate
-        // entry point), so we surface it from the fixture metadata.
-        if fx.flags.iter().any(|f| f == "--diff") {
-            thy.is_diff = true;
-        }
 
         // 2. Our Rust wf checker must emit every expected topic and none of
         // the fixture's negative pins.  [`POST_ELABORATION_TOPICS`] are

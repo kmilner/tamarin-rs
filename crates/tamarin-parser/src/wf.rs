@@ -14,16 +14,11 @@
 //!   the `LSort` the parser stamps on each variable rather than a full
 //!   sort assignment.
 //! - Checks that DO need one of those three — `formulaReports`,
-//!   `multRestrictedReport`, `ruleVariantsReport` — live in
-//!   `tamarin-theory` and are spliced into this report by the batch
-//!   (`run.rs`) and web (`theory_io.rs`) load pipelines; see
-//!   [`WF_TOPIC_ORDER`] and [`insert_wf_before`].
-//! - Bodies reproduce HS's formatters byte-for-byte except where an
-//!   individual check documents a departure: [`reserved_prefix_report`]
-//!   and [`left_right_rule_report`] emit only a topic-faithful
-//!   best-effort body (neither fires on the corpus), and
-//!   [`message_derivation_report`] is a static approximation of HS's
-//!   prover-driven check.
+//!   `multRestrictedReport`, `ruleVariantsReport` and
+//!   `checkEquationsSubtermConvergence` — live in `tamarin-theory` and
+//!   are spliced into this report by the batch (`run.rs`) and web
+//!   (`theory_io.rs`) load pipelines; see [`WF_TOPIC_ORDER`] and
+//!   [`insert_wf_before`].
 //!
 //! Each public check function corresponds to a Haskell `*Report` /
 //! `*Check` function. The umbrella entry point is [`check_theory`].
@@ -301,19 +296,13 @@ pub fn after_variants_topics() -> Vec<&'static str> {
 
 /// Topics emitted by a check that runs after `unboundReport`, but which
 /// [`WF_TOPIC_ORDER`] does not carry: `freshNamesReport` (HS index 3),
-/// `publicNamesReport` (4), `ruleSortsReport` (5), `ruleVariantsReport` (6),
-/// the `reservedPrefixReport` arm of `factReports` (7), the `checkQuantifiers`
-/// arm of `formulaReports` (8), and `leftRightRuleReportDiff`, which
-/// `checkWellformednessDiff` (Wellformedness.hs:1248-1265, see line 1259) runs
-/// between those last two.
+/// `publicNamesReport` (4), `ruleSortsReport` (5) and `ruleVariantsReport`
+/// (6).
 const AFTER_UNBOUND_EXTRA_TOPICS: &[&str] = &[
     "Fresh public constants",
     "Public constants with mismatching capitalization",
     "Variable with mismatching sorts or capitalization",
     "Rule has no variants",
-    "Reserved prefixes",
-    "Left rule",
-    "Right rule",
 ];
 
 /// Anchor list for the SAPIC `unboundReport` re-splice (HS check index 2):
@@ -341,14 +330,10 @@ pub fn after_unbound_topics() -> Vec<&'static str> {
 /// can be compared directly against `tamarin-prover`'s output.
 pub fn check_theory(thy: &Theory) -> WfReport {
     // Mirrors HS `Theory.Tools.Wellformedness.checkWellformedness`
-    // (Wellformedness.hs:1270-1286) and, for diff theories,
-    // `checkWellformednessDiff` (1248-1265), in HS check order: unbound,
-    // freshNames, publicNames, ruleSorts (variable_sort_clashes),
-    // factReports, [leftRightRule (diff only)], formulaReports,
-    // lemmaAttribute, multRestricted, natWellSorted, subtermConvergence,
-    // then message-derivation.  `leftRightRuleReportDiff` is placed AFTER
-    // the factReports group and the ruleSorts check, matching the diff
-    // order at Wellformedness.hs:1256-1261.
+    // (Wellformedness.hs:1270-1286) in HS check order: unbound, freshNames,
+    // publicNames, ruleSorts (variable_sort_clashes), factReports,
+    // formulaReports, lemmaAttribute, multRestricted, natWellSorted,
+    // subtermConvergence.
     let mut report = Vec::new();
     // unboundReport — spliced by the load pipelines
     // (`tamarin_theory::translated_rule_wf`, anchored by
@@ -371,19 +356,12 @@ pub fn check_theory(thy: &Theory) -> WfReport {
     // factReports group:
     report.extend(reserved_report(thy));
     report.extend(reserved_fact_name_rules(thy));
-    report.extend(reserved_prefix_report(thy));
     report.extend(fresh_fact_arguments(thy));
     report.extend(special_facts_usage(thy));
     report.extend(fact_usage(thy));
     // factLhsOccurNoRhs — spliced by the load pipelines
     // (`tamarin_theory::translated_rule_wf`): same reason as
     // unboundReport above.
-    // leftRightRuleReportDiff (diff only) — placed AFTER factReports and
-    // ruleSorts, BEFORE formulaReports, matching HS `checkWellformednessDiff`
-    // order (Wellformedness.hs:1248-1265, see line 1259).  (ruleVariantsReportDiff sits between
-    // factReports and leftRightRule in HS but is unported, so it does not
-    // affect placement.)
-    report.extend(left_right_rule_report(thy));
     // formulaReports group (checkQuantifiers / checkTerms / checkGuarded) —
     // spliced by the load pipelines as one interleaved per-formula pass
     // (`tamarin_theory::formula_reports::formula_reports`): it needs the
@@ -398,14 +376,10 @@ pub fn check_theory(thy: &Theory) -> WfReport {
     // natWellSortedReport — spliced by the load pipelines
     // (`tamarin_theory::translated_rule_wf`): same reason as
     // unboundReport above.
-    // checkEquationsSubtermConvergence:
-    report.extend(subterm_convergence_report(thy));
-    // Message Derivation Checks (HS: TheoryLoader.hs:172-176 +
-    // MessageDerivationChecks.hs:35-47).  HS's check is dynamic
-    // (per-variable prover invocation, --derivcheck-timeout default 5s);
-    // we run a static intersection that catches the same variables for
-    // the common case.  See `message_derivation_report` docstring.
-    report.extend(message_derivation_report(thy));
+    // checkEquationsSubtermConvergence — appended by the load pipelines
+    // (`tamarin_theory::translated_wf::append_subterm_convergence_report`):
+    // HS reads `thyEquations = S.toList (stRules sig)`, the elaborated
+    // signature's subterm-rule Set, which the parser crate cannot reach.
     report
 }
 
@@ -597,6 +571,17 @@ fn fact_vars(f: &Fact) -> Vec<VarSpec> {
         term_vars(a, &mut v);
     }
     v
+}
+
+/// An `LVar` as HS `show` prints it — the sort prefix, the name, and the
+/// index when it is nonzero (LTerm.hs:550-557).
+fn render_var(v: &VarSpec) -> String {
+    let prefix = sort_prefix(v.sort);
+    if v.idx == 0 {
+        format!("{}{}", prefix, v.name)
+    } else {
+        format!("{}{}.{}", prefix, v.name, v.idx)
+    }
 }
 
 /// Collect every public-name literal (`'foo'`) and fresh-name literal
@@ -1360,48 +1345,6 @@ pub fn reserved_fact_name_rules(thy: &Theory) -> WfReport {
 }
 
 // =============================================================================
-// Reserved prefixes (DiffIntr*, DiffProto*) — diff theories only
-// =============================================================================
-
-pub fn reserved_prefix_report(thy: &Theory) -> WfReport {
-    // Port of HS `reservedPrefixReport` (Wellformedness.hs:796-808), diff
-    // theories only.  HS groups ONE error per offending rule with body
-    //   wrappedText ("The " ++ origin ++ " contains facts with reserved \
-    //     prefixes ('DiffIntr', 'DiffProto') inside names:")
-    //   $-$ map (nest 2) [prettyLNFact fa $-$ text (show factInfo)]
-    // where `origin = "Rule " ++ quote (showRuleCaseName ru)` and
-    // `quote cs = '`' : cs ++ "'"`.
-    //
-    // The faithful body needs HughesPJ `wrappedText` (greedy column-fill of the
-    // header, which ALWAYS wraps here since the string exceeds the render
-    // width) and `show factInfo` of the `(tag, arity, multiplicity)` tuple —
-    // neither reproducible in the parser crate (the HughesPJ renderer lives in
-    // `tamarin-theory`).  This check produces NO output on any corpus input, so
-    // per the module-header disclaimer it is one of the two that emit only a
-    // topic-faithful best-effort body; it uses the HS `quote` form for the rule
-    // name, and topic "Reserved prefixes" matches HS `underlineTopic`.
-    let mut out = Vec::new();
-    if !thy.is_diff {
-        return out;
-    }
-    for r in theory_rules(thy) {
-        for f in rule_facts(r) {
-            let lower = f.name.to_lowercase();
-            if lower.starts_with("diffintr") || lower.starts_with("diffproto") {
-                out.push(WfError::new(
-                    "Reserved prefixes",
-                    format!(
-                        "Rule `{}' contains a fact with reserved prefix: {}",
-                        r.name, f.name
-                    ),
-                ));
-            }
-        }
-    }
-    out
-}
-
-// =============================================================================
 // Special facts misuse
 // =============================================================================
 
@@ -2026,166 +1969,6 @@ pub fn public_names_report_from_pairs(pairs: Vec<(String, String)>) -> WfReport 
 }
 
 // =============================================================================
-// Unbound variables: vars in RHS / actions but not in LHS
-// =============================================================================
-
-/// The rendered variable a SAPIC `lookup t as v` combinator binds, for a rule
-/// whose top-level source process IS such a combinator — HS's
-/// `match v (Just (ProcessComb (Lookup _ v') _ _ _)) = v == slvar v'`
-/// (Wellformedness.hs:501-503).  HS pattern-matches the `ruleProcess`
-/// attribute's `Process` value; the parser AST holds that attribute already
-/// rendered, by `prettySapicComb (Lookup t v) = "lookup " ++ p t ++ " as " ++
-/// show v` (Theory/Sapic/Process.hs:473-483, see line 482) — the only
-/// combinator rendering that starts `lookup `, and the only one whose text
-/// ends in a bare `show v`.  `p t` precedes the separator and `show v` is a
-/// single token, so the binder is the text past the LAST ` as `.  Every
-/// user-written rule yields `None`: HS's rule-attribute parser discards a
-/// written `process=` (`parseAndIgnore`, Parser/Rule.hs:68-93, see line 72),
-/// so [`RuleAttr::Process`] exists only on SAPIC-generated rules.
-fn lookup_binder_render(r: &Rule) -> Option<&str> {
-    r.attributes.iter().find_map(|a| match a {
-        RuleAttr::Process(p) => p
-            .strip_prefix("lookup ")
-            .and_then(|rest| rest.rsplit_once(" as "))
-            .map(|(_, v)| v),
-        _ => None,
-    })
-}
-
-/// Collect a rule's unbound variables (conclusion/action vars NOT in
-/// any premise), excluding pub-sort variables (which are implicitly
-/// adversary-known and so always bound).  HS's `unboundVars` is a `frees`
-/// result (Wellformedness.hs:505-511), and `frees = sortednub . freesList`
-/// (LTerm.hs:613-614), so the list comes back sorted by `Ord LVar` — `(idx,
-/// sort, name)` (LTerm.hs:546-548) — and deduplicated.
-fn collect_rule_unbound_vars(r: &Rule) -> Vec<VarSpec> {
-    // HS `unboundCheck` (Wellformedness.hs:493-512) runs on the
-    // let-substituted, macro-applied `ProtoRuleE` (`thyProtoRules`).  So
-    // `let m1 = <'1',$A,~Na> in ... Out(m1)` reaches the check as
-    // `Out(<'1',$A,~Na>)` — the let value's free vars are NOT bound, only the
-    // substituted-away let variable.
-    //
-    // HS collects `frees (rConcs, rActs, rInfo)`; we iterate only
-    // `acts.chain(concs)` and so do NOT fold in raw embedded-restriction
-    // (`rInfo`) free vars — a distinct, currently-out-of-scope gap.
-    // HS `originatesFromLookup` (Wellformedness.hs:501-503, 506-510): the
-    // variable a `lookup t as v` combinator binds reaches the generated rule
-    // through its `IsIn( t, v )` action rather than a premise, so it is not
-    // unbound.  `lookup_binder_render` is `None` for every non-`lookup` rule,
-    // which is every user-written one.
-    let lookup_binder = lookup_binder_render(r);
-    // HS `boundVars = S.fromList $ frees (get rPrems ru)` keys on the full
-    // LVar (name AND sort AND idx), so `~ltk` (fresh) does NOT bind `ltk`
-    // (msg).  Key on (name, sort, idx).
-    let mut bound: BTreeSet<(String, LSort, u64)> = BTreeSet::new();
-    for f in &r.premises {
-        for v in fact_vars(f) {
-            bound.insert((v.name.clone(), v.sort, v.idx));
-        }
-    }
-    let mut unbound: Vec<VarSpec> = Vec::new();
-    let mut seen: BTreeSet<(String, LSort, u64)> = BTreeSet::new();
-    for f in r.actions.iter().chain(&r.conclusions) {
-        for v in fact_vars(f) {
-            if v.sort == LSort::Pub {
-                continue;
-            }
-            // HS `isNowNode v = lvarSort v == LSortNode && lvarName v == "NOW"`
-            // (Wellformedness.hs:504-505): the `#NOW` node `varNow`
-            // (Theory/Model/Restriction.hs:86-88) that embedded-restriction
-            // expansion mints is never premise-bound.
-            if v.sort == LSort::Node && v.name == "NOW" {
-                continue;
-            }
-            if lookup_binder.is_some_and(|b| b == render_var(&v)) {
-                continue;
-            }
-            let key = (v.name.clone(), v.sort, v.idx);
-            if bound.contains(&key) {
-                continue;
-            }
-            if seen.insert(key.clone()) {
-                unbound.push(v);
-            }
-        }
-    }
-    // `sortednub` by HS's `Ord LVar`.  `seen` has already dropped the
-    // duplicates, so this only orders them.
-    unbound.sort_by(|a, b| {
-        a.idx
-            .cmp(&b.idx)
-            .then_with(|| a.sort.cmp(&b.sort))
-            .then_with(|| a.name.cmp(&b.name))
-    });
-    unbound
-}
-
-/// Static analog of HS's `checkVariableDeducability`
-/// (`Theory.Tools.MessageDerivationChecks`).  HS spawns the prover on a
-/// synthetic theory per rule + per variable; this emits the SAME set of
-/// variables that [`unbound_report`] flags, under the distinct topic HS uses.
-///
-/// HS's check is a superset: it also catches variables that ARE bound by a
-/// premise but whose containing fact is never produced by any other rule, so
-/// the intruder can't derive them.  Catching that requires the prover (HS's
-/// `proveTheory` per-variable loop) and is gated behind
-/// `--derivcheck-timeout` (default 5s), so it lives in
-/// `tamarin_theory::deriv_check`.  Both load pipelines drop this entry from
-/// the report and substitute that Maude-backed result; what stays here serves
-/// the `--parse-only` batch path, which starts no Maude.
-pub fn message_derivation_report(thy: &Theory) -> WfReport {
-    // Aggregate (rule_name, [unbound_var_names]) pairs across the
-    // theory, skipping rules with the `no_derivcheck` attribute.
-    let mut per_rule: Vec<(String, Vec<String>)> = Vec::new();
-    for r in theory_rules(thy) {
-        if r.attributes
-            .iter()
-            .any(|a| matches!(a, crate::ast::RuleAttr::NoDerivCheck))
-        {
-            continue;
-        }
-        let unbound = collect_rule_unbound_vars(r);
-        if unbound.is_empty() {
-            continue;
-        }
-        // HS shows the LVar (sort prefix included): MessageDerivationChecks.hs:122-138, see line 138
-        let names: Vec<String> = unbound.iter().map(render_var).collect();
-        per_rule.push((r.name.clone(), names));
-    }
-    if per_rule.is_empty() {
-        return Vec::new();
-    }
-    // HS emits this as a single WfErrorReport entry with a multi-line
-    // message: explanatory header + one block per affected rule.
-    let mut msg = String::from(
-        "The variables of the following rule(s) are not derivable \
-         from their premises, you may be performing unintended pattern \
-         matching.\n\n",
-    );
-    let rule_blocks: Vec<String> = per_rule
-        .iter()
-        .map(|(rule_name, vars)| {
-            format!(
-                "Rule {}: \nFailed to derive Variable(s): {}",
-                rule_name,
-                vars.join(", ")
-            )
-        })
-        .collect();
-    msg.push_str(&rule_blocks.join("\n\n"));
-    vec![WfError::new("Message Derivation Checks", msg)]
-}
-
-fn render_var(v: &VarSpec) -> String {
-    let prefix = sort_prefix(v.sort);
-    if v.idx == 0 {
-        format!("{}{}", prefix, v.name)
-    } else {
-        format!("{}{}.{}", prefix, v.name, v.idx)
-    }
-}
-
-// =============================================================================
 // Lemma annotations — reuse on exists-trace
 // =============================================================================
 
@@ -2214,276 +1997,6 @@ pub fn lemma_attribute_report(thy: &Theory) -> WfReport {
     // lemma and adding "Lemma annotations" to the headerless-preamble set in
     // `tamarin_theory::pretty_theory`.
     grouped_topic_block(topic, bodies)
-}
-
-// =============================================================================
-// Diff theory: Left rule / Right rule consistency
-// =============================================================================
-
-pub fn left_right_rule_report(thy: &Theory) -> WfReport {
-    // Port of HS `leftRightRuleReportDiff` (Wellformedness.hs:397-414).  Topics
-    // "Left rule"/"Right rule" match HS `underlineTopic` exactly.  HS's bodies
-    // are
-    //   text "Inconsistent left rule"  $-$ nest 2 (prettyProtoRuleE lr)
-    //   $--$ text "w.r.t." $--$ nest 2 (prettyProtoRuleE (get dprRule ru))
-    // i.e. the EXPLICIT user-written left rule `lr` and the PARENT diff rule
-    // (NOT the projection used for the equalUpToAddedActions comparison), with
-    // NO rule name.  Reproducing that needs `prettyProtoRuleE`/`prettyNamedRule`
-    // (kwRuleModulo "E"), which has no equivalent in the parser crate, and this
-    // path is unreachable on the corpus — so per the module-header disclaimer
-    // we keep a topic-faithful body and do not reproduce the full rule
-    // pretty-print.
-    let mut out = Vec::new();
-    if !thy.is_diff {
-        return out;
-    }
-    for r in theory_rules(thy) {
-        let (lhs_diff, rhs_diff) = match &r.left_right {
-            Some(pair) => pair,
-            None => continue,
-        };
-        // Project the parent rule's premises onto LEFT (first arg of
-        // diff) and RIGHT (second arg).
-        let proj_l = project_rule(r, /* left = */ true);
-        let proj_r = project_rule(r, /* left = */ false);
-        if !rules_equivalent_up_to_actions(&proj_l, lhs_diff) {
-            out.push(WfError::new(
-                "Left rule",
-                format!("Inconsistent left rule for `{}'", r.name),
-            ));
-        }
-        if !rules_equivalent_up_to_actions(&proj_r, rhs_diff) {
-            out.push(WfError::new(
-                "Right rule",
-                format!("Inconsistent right rule for `{}'", r.name),
-            ));
-        }
-    }
-    out
-}
-
-/// Project all `diff(a, b)` subterms in `r` onto `left` or right. Used to
-/// derive what the explicit left/right rule blocks should look like.
-fn project_rule(r: &Rule, left: bool) -> Rule {
-    fn proj_term(t: &Term, left: bool) -> Term {
-        match t {
-            Term::Diff(a, b) => {
-                if left {
-                    proj_term(a, left)
-                } else {
-                    proj_term(b, left)
-                }
-            }
-            Term::App(n, args) => {
-                Term::App(n.clone(), args.iter().map(|a| proj_term(a, left)).collect())
-            }
-            Term::AlgApp(n, a, b) => Term::AlgApp(
-                n.clone(),
-                Box::new(proj_term(a, left)),
-                Box::new(proj_term(b, left)),
-            ),
-            Term::Pair(items) => Term::Pair(items.iter().map(|a| proj_term(a, left)).collect()),
-            Term::BinOp(op, a, b) => Term::BinOp(
-                *op,
-                Box::new(proj_term(a, left)),
-                Box::new(proj_term(b, left)),
-            ),
-            Term::PatMatch(inner) => Term::PatMatch(Box::new(proj_term(inner, left))),
-            other => other.clone(),
-        }
-    }
-    fn proj_fact(f: &Fact, left: bool) -> Fact {
-        Fact {
-            persistent: f.persistent,
-            name: f.name.clone(),
-            args: f.args.iter().map(|a| proj_term(a, left)).collect(),
-            annotations: f.annotations.clone(),
-        }
-    }
-    Rule {
-        name: r.name.clone(),
-        modulo: r.modulo.clone(),
-        attributes: r.attributes.clone(),
-        premises: r.premises.iter().map(|f| proj_fact(f, left)).collect(),
-        actions: r.actions.iter().map(|f| proj_fact(f, left)).collect(),
-        conclusions: r.conclusions.iter().map(|f| proj_fact(f, left)).collect(),
-        embedded_restrictions: r.embedded_restrictions.clone(),
-        variants: vec![],
-        left_right: None,
-    }
-}
-
-/// Two rules are "equivalent up to added actions" if their premises
-/// and conclusions match exactly. Tamarin allows the explicit
-/// left/right rule to add actions; everything else must match.
-fn rules_equivalent_up_to_actions(a: &Rule, b: &Rule) -> bool {
-    a.premises == b.premises && a.conclusions == b.conclusions
-}
-
-// =============================================================================
-// Subterm convergence warning
-// =============================================================================
-
-/// True if `lhs = rhs` is a subterm-convergent rewrite rule: every
-/// proper subterm of the RHS occurs as a subterm of the LHS, OR the
-/// RHS is exactly a constant `true`.
-///
-/// HS site: `Wellformedness.hs:1222-1232` — `checkEquationsSubtermConvergence`.
-/// Emits ONE WfError with the full formatted block:
-///   `underlineTopic "Subterm Convergence Warning" $-$ introText $-$
-///    vcat (map prettyCtxtStRule nonSubtermEquations) $-$ manualRef`
-/// where `prettyCtxtStRule` uses `sep [nest 2 lhsDoc, "=" <-> rhsDoc]`.
-pub fn subterm_convergence_report(thy: &Theory) -> WfReport {
-    // HS guards the WHOLE check on `not (isUserMarkedConvergent thy)`
-    // (Wellformedness.hs:1270-1286, see line 1285), where `isUserMarkedConvergent thy =
-    // eqConvergent (sig thy)` (1211-1212).  The parser sets `eqConvergent =
-    // convergent` on EVERY `equations` block
-    // (Theory/Text/Parser/Signature.hs:232-243, see line 242) — LAST-WRITE-
-    // WINS, not "any block convergent".  Mirror by reading the `convergent`
-    // flag of the LAST `equations` item; if it is set, suppress the entire
-    // report.  (Probed: `[convergent]` block last => suppressed; `[convergent]`
-    // first + a regular block last => fires.)
-    let global_convergent = thy
-        .items
-        .iter()
-        .rev()
-        .find_map(|it| match it {
-            TheoryItem::Equations { convergent, .. } => Some(*convergent),
-            _ => None,
-        })
-        .unwrap_or(false);
-    if global_convergent {
-        return Vec::new();
-    }
-
-    // Collect all non-subterm-convergent equations across ALL `equations`
-    // items (HS `thyEquations = S.toList (stRules sig)` merges every block's
-    // equations into one Set — so we do NOT skip per-block).
-    let mut non_conv: Vec<(&Term, &Term)> = Vec::new();
-    for it in &thy.items {
-        let eqs = match it {
-            TheoryItem::Equations { eqs, .. } => eqs,
-            _ => continue,
-        };
-        for eq in eqs {
-            if !is_subterm_convergent(&eq.lhs, &eq.rhs) {
-                non_conv.push((&eq.lhs, &eq.rhs));
-            }
-        }
-    }
-    // HS `thyEquations` is a `Set CtxtStRule` (`S.toList` => deduped, ordered
-    // by the derived `Ord CtxtStRule`).  We dedup structurally-equal equations
-    // to match the Set's deduplication; we keep source order rather than
-    // replicating the full `Ord LNTerm` term-AST order (the parser AST lacks
-    // it), so the LISTED ORDER may still differ from HS when there are >=2
-    // distinct non-convergent user equations.  Corpus cases have a single
-    // non-convergent equation, where this is a no-op.
-    non_conv.dedup_by(|a, b| a.0 == b.0 && a.1 == b.1);
-    if non_conv.is_empty() {
-        return Vec::new();
-    }
-
-    // HS `prettyCtxtStRule r = sep [nest 2 (prettyLNTerm lhs), "=" <-> prettyLNTerm rhs]`
-    // For equations that fit on one line, `sep` renders inline:
-    // `  {lhs} = {rhs}` (two spaces from the outer nest-2 context inside `vcat`).
-    // HS's outer `$-$` / `vcat` adds no extra indent — each rule renders
-    // with its own `nest 2` inside the sep.  Result: `    {lhs} = {rhs}`
-    // (4 leading spaces, as observed in HS output).
-    let ac = user_ac_fun_names(thy);
-    let mut eq_lines = String::new();
-    for (lhs, rhs) in &non_conv {
-        let lhs_s = pp_term_for_wf(lhs, &ac);
-        let rhs_s = pp_term_for_wf(rhs, &ac);
-        // `sep [nest 2 lhsDoc, "=" <-> rhsDoc]` inline → `  lhs = rhs`
-        // HS output observed: `    unblind(...) = sign(...)` (4-space indent).
-        // The top-level `$-$ vcat (map pretty ...) $-$` gives no extra indent,
-        // but prettyWfErrorReport wraps the body in `nest 2`:
-        // `(nest 2 . vcat . map snd) errs` (Wellformedness.hs:118-125, see line 122).
-        // So the per-rule `nest 2 lhs` + outer `nest 2` = 4 spaces total.
-        eq_lines.push_str("    ");
-        eq_lines.push_str(&lhs_s);
-        eq_lines.push_str(" = ");
-        eq_lines.push_str(&rhs_s);
-        eq_lines.push('\n');
-    }
-
-    // Assemble the full message block (topic header + intro + equations + footer).
-    // HS: `underlineTopic "Subterm Convergence Warning"` produces
-    //   `"Subterm Convergence Warning\n===========================\n"`.
-    // Then `$-$` (blank-line separator) adds a blank line before the intro.
-    // Then `vcat` adds the equations, then `$-$` + manual reference text.
-    let mut msg = String::new();
-    msg.push_str(&underline_topic("Subterm Convergence Warning"));
-    msg.push('\n'); // blank line before intro (HS `$-$`)
-                    // The intro text — HS: `text "User-defined equations must be convergent..."`.
-                    // Wrapped at 2-space indent (outer nest-2 in prettyWfErrorReport).
-    msg.push_str("  User-defined equations must be convergent and have the finite variant property. The following equations are not subterm convergent. If you are sure that the set of equations is nevertheless convergent and has the finite variant property, you can ignore this warning and continue \n");
-    msg.push('\n'); // blank line after intro (HS `$-$` before vcat)
-    msg.push_str(&eq_lines);
-    // HS: `$-$ text " \n For more information..."` — note the leading space.
-    msg.push_str("   \n For more information, please refer to the manual : https://tamarin-prover.com/manual/master/book/010_modeling-issues.html ");
-
-    vec![WfError::new("Subterm Convergence Warning", msg)]
-}
-
-/// [`wf_term_doc`] — HS `prettyLNTerm` — laid out flat.
-///
-/// Sharing the one printer is what keeps these messages AC-canonical: HS's
-/// terms are built by the smart constructors `fAppAC`/`fAppC`
-/// (Term/Term/Raw.hs:118-134), so every `prettyTerm` call site sees a
-/// flattened, sorted AC spine and a sorted `C` argument list, whatever the
-/// source spelling was.
-///
-/// (No HughesPJ wrapping — the messages using this helper are expected to
-/// fit on one line.)
-fn pp_term_for_wf(t: &Term, ac: &AcSyms) -> String {
-    wf_term_doc(t, ac).to_flat()
-}
-
-fn is_subterm_convergent(lhs: &Term, rhs: &Term) -> bool {
-    // HS `isSubtermConvergentCtxtRule` (SubtermRule.hs:108-112):
-    //   | isConstant rhs = True
-    //   | otherwise      = not (null (findSubterm lhs rhs))
-    // where `isConstant term = null (frees term)` (SubtermRule.hs:114-116) —
-    // i.e. ANY variable-free (ground) RHS is accepted, not just a fixed set
-    // of reserved names (e.g. `f(x) = 'c'`, `f(x) = g('a','b')`, or a user
-    // `c/0` constant), where `frees` collects only `LVar`s.
-    if rhs_is_ground(rhs) {
-        return true;
-    }
-    // Otherwise the RHS must literally appear as a subterm of the LHS.
-    contains_subterm(lhs, rhs)
-}
-
-/// True if `t` has no free variables, mirroring HS `isConstant term =
-/// null (frees term)` where `frees` collects only `LVar`s.  A nullary
-/// constant is an argument-less `App`, which the term parser builds for a
-/// bare identifier naming an arity-0 symbol (`nullaryApp`,
-/// Theory/Text/Parser/Term.hs:158-163), so it holds no variable.
-fn rhs_is_ground(t: &Term) -> bool {
-    use Term::*;
-    match t {
-        Var(_) => false,
-        App(_, args) | Pair(args) => args.iter().all(rhs_is_ground),
-        AlgApp(_, a, b) | Diff(a, b) | BinOp(_, a, b) => rhs_is_ground(a) && rhs_is_ground(b),
-        PatMatch(inner) => rhs_is_ground(inner),
-        PubLit(_) | FreshLit(_) | NatLit(_) | Number(_) | NumberOne | NatOne | DhNeutral => true,
-    }
-}
-
-fn contains_subterm(haystack: &Term, needle: &Term) -> bool {
-    if haystack == needle {
-        return true;
-    }
-    match haystack {
-        Term::App(_, args) | Term::Pair(args) => args.iter().any(|a| contains_subterm(a, needle)),
-        Term::AlgApp(_, a, b) => contains_subterm(a, needle) || contains_subterm(b, needle),
-        Term::Diff(a, b) | Term::BinOp(_, a, b) => {
-            contains_subterm(a, needle) || contains_subterm(b, needle)
-        }
-        Term::PatMatch(inner) => contains_subterm(inner, needle),
-        _ => false,
-    }
 }
 
 // =============================================================================

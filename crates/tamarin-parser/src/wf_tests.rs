@@ -471,11 +471,11 @@ fn wf_entry_renders_pair_headed_terms_in_angle_form() {
     );
 }
 
-/// The `Fr`-argument and subterm-convergence checks reach the terms through
-/// their own printers, each of which is HS `prettyLNTerm` and so carries the
-/// same shape-keyed pair arm.  Byte-pinned to the pinned oracle (ef3f0468).
+/// The `Fr`-argument check reaches the terms through its own printer, which
+/// is HS `prettyLNTerm` and so carries the shape-keyed pair arm.  Byte-pinned
+/// to the pinned oracle (ef3f0468).
 #[test]
-fn wf_pair_headed_terms_render_in_angle_form_in_every_check() {
+fn wf_pair_headed_terms_render_in_angle_form() {
     // Oracle: `rule `Test' fact: Fr( <a, b> )`.
     let t = parse("theory T begin rule Test: [ Fr( pair(a,b) ) ] --[ ]-> [] end");
     assert_eq!(
@@ -485,13 +485,6 @@ fn wf_pair_headed_terms_render_in_angle_form_in_every_check() {
         ),
         "rule `Test' fact: Fr( <a, b> )"
     );
-    // Oracle: `    ff(x, y) = <x, y>`.
-    let t = parse(
-        "theory T begin functions: ff/2 equations: ff(x,y) = pair(x,y) \
-            rule Test: [ ] --[ ]-> [] end",
-    );
-    let msg = only(&check_theory(&t), "Subterm Convergence Warning");
-    assert!(msg.contains("\n    ff(x, y) = <x, y>\n"), "report: {msg:?}");
 }
 
 /// The De Bruijn `show` form HS prints for a LEMMA fact is the derived
@@ -632,37 +625,5 @@ fn fresh_public_constants_message_format() {
         msg,
         "Fresh public constants\n======================\n\n  \
              rule `R': fresh public constants are not allowed: ~'foo'"
-    );
-}
-
-/// `equations [convergent]` as the LAST equations block suppresses the
-/// whole Subterm Convergence Warning (HS `isUserMarkedConvergent`,
-/// last-write-wins), even with a non-convergent regular block present.
-#[test]
-fn subterm_convergence_global_convergent_guard() {
-    let t = parse(
-        "theory T begin functions: f/1, g/1, a/0, b/0 \
-            equations: f(x) = g(x) \
-            equations [convergent]: g(y) = a end",
-    );
-    assert!(
-        !topics(&check_theory(&t)).contains("Subterm Convergence Warning"),
-        "global convergent flag (last-write-wins) must suppress the check"
-    );
-}
-
-/// A `[convergent]` block FIRST followed by a regular block LAST does NOT
-/// suppress (last-write-wins => flag false), so the non-convergent
-/// equation is reported.
-#[test]
-fn subterm_convergence_last_write_wins() {
-    let t = parse(
-        "theory T begin functions: f/1, g/1, a/0, b/0 \
-            equations [convergent]: g(y) = a \
-            equations: f(x) = g(x) end",
-    );
-    assert!(
-        topics(&check_theory(&t)).contains("Subterm Convergence Warning"),
-        "regular block last => flag false => warning fires"
     );
 }

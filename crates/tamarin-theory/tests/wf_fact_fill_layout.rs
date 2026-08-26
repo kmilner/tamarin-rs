@@ -20,10 +20,9 @@ use tamarin_theory::pretty_theory::format_wf_block;
 /// parser-level pass, then the translated-theory splice that carries
 /// `unboundReport` and its siblings.
 ///
-/// Both pipelines drop `check_theory`'s STATIC "Message Derivation Checks"
-/// placeholder and re-add the dynamic check's own entries, which
-/// `--derivcheck-timeout=0` — how the expected blocks below were captured —
-/// produces none of; `pre_translation_wf_report` makes the same drop.
+/// The dynamic "Message Derivation Checks" entries both pipelines append are
+/// absent here: `--derivcheck-timeout=0` — how the expected blocks below were
+/// captured — produces none of them.
 fn wf_block(src: &str) -> String {
     let parsed = tamarin_parser::parse_theory(src, &[]).expect("probe parses");
     let mut report = tamarin_theory::translated_wf::pre_translation_wf_report(&parsed);

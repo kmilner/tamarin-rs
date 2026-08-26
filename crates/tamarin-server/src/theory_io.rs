@@ -187,9 +187,8 @@ pub fn load_from_source(
     //
     // Static checks run on the PRE-translation parsed theory (HS runs
     // `check_theory` BEFORE the SAPIC `translate` pass; `run_batch` opens
-    // with the same shared pass — macro-expanded clone, `check_theory`,
-    // static "Message Derivation Checks" entry dropped for the dynamic
-    // check in the maude block below).
+    // with the same shared pass — macro-expanded clone, then
+    // `check_theory`).
     let mut wf_report = tamarin_theory::translated_wf::pre_translation_wf_report(&parsed);
 
     // "Theory translated" at the START of translation (TheoryLoader.hs:494-500, see line 496
@@ -215,8 +214,8 @@ pub fn load_from_source(
     let maude_sig = typed.signature.maude_sig.clone();
 
     // Subterm-convergence check on the signature's subterm-rule set (the
-    // same swap `run_batch` performs, shared in `translated_wf`).
-    tamarin_theory::translated_wf::swap_subterm_convergence_report(&mut wf_report, &maude_sig);
+    // same append `run_batch` performs, shared in `translated_wf`).
+    tamarin_theory::translated_wf::append_subterm_convergence_report(&mut wf_report, &maude_sig);
 
     // SAPIC `process:` translation — mirror `run_batch`'s CLI-side pass so
     // the web load path renders SAPIC theories exactly like `--prove`.  Runs

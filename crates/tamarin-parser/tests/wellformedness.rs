@@ -31,29 +31,31 @@ use tamarin_parser::{parse_theory, wf};
 /// read the TRANSLATED theory, the elaborated `MaudeSig`, or both: HS
 /// `checkTerms` classifies a funsym as reducible or irreducible,
 /// `multRestrictedReport` (Wellformedness.hs:1108-1113) needs the irreducible
-/// symbols of `abstractRule` and the HughesPJ rule renderer, and
-/// `unboundReport` / `publicNamesReport` / `factLhsOccurNoRhs` /
-/// `natWellSortedReport` walk `thyProtoRules` of the theory SAPIC's
-/// translation has already extended.  Their ports live in
-/// `tamarin_theory::{check_terms, mult_restricted, translated_rule_wf,
-/// elaborate}`, and `tamarin_theory::translated_wf` splices them in
-/// after elaboration.  The tests of those modules
+/// symbols of `abstractRule` and the HughesPJ rule renderer,
+/// `checkEquationsSubtermConvergence` (Wellformedness.hs:1222-1232) reads the
+/// signature's subterm-rule Set, and `unboundReport` / `publicNamesReport` /
+/// `factLhsOccurNoRhs` / `natWellSortedReport` walk `thyProtoRules` of the
+/// theory SAPIC's translation has already extended.  Their ports live in
+/// `tamarin_theory::{check_terms, mult_restricted, pretty_theory,
+/// translated_rule_wf, elaborate}`, and `tamarin_theory::translated_wf`
+/// splices them in after elaboration.  The tests of those modules
 /// (`tamarin-theory/tests/mult_restricted_report.rs`) and the corpus wf gate
 /// cover them.  The parser-only comparison here drops them from the positive
 /// side.
-const POST_ELABORATION_TOPICS: [&str; 6] = [
+const POST_ELABORATION_TOPICS: [&str; 7] = [
     "Formula terms",
     "Multiplication restriction of rules",
     "Unbound variables",
     "Public constants with mismatching capitalization",
     "Facts occur in the left-hand-side but not in any right-hand-side",
     "Nat Sorts",
+    "Subterm Convergence Warning",
 ];
 
 /// The minimum size of the roster.  [`fixture_roster_is_complete`] accepts
 /// any pair of a file and a line.  This bound is therefore what makes the
 /// test fail when the corpus loses most of its fixtures.
-const MIN_FIXTURES: usize = 20;
+const MIN_FIXTURES: usize = 18;
 
 fn fixtures_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -76,7 +78,6 @@ fn norm(topic: &str) -> String {
 #[derive(Debug)]
 struct Fixture {
     name: String,
-    is_diff: bool,
     /// The topics that `wf::check_theory` must emit.  The test compares
     /// subsets.  A fixture may emit more topics, and that is not a failure.
     expected: BTreeSet<String>,
@@ -94,7 +95,9 @@ struct Corpus {
 
 /// Parse `expected.txt`.  A `#!<name> [flags] : <topics>` line is a negative
 /// expectation.  Every other `#` line is a comment.  Any other line is a
-/// positive expectation.
+/// positive expectation.  The oracle flags a line may carry belong to the
+/// differential runner (`examples/wellformedness_fixtures.rs`); this harness
+/// runs no oracle, so it reads the name and the topics only.
 fn load_corpus() -> Corpus {
     let dir = fixtures_dir();
     let text = fs::read_to_string(dir.join("expected.txt")).expect("expected.txt missing");
@@ -113,11 +116,9 @@ fn load_corpus() -> Corpus {
         let Some((lhs, rhs)) = body.split_once(':') else {
             continue;
         };
-        let mut parts = lhs.split_whitespace();
-        let Some(name) = parts.next() else {
+        let Some(name) = lhs.split_whitespace().next() else {
             continue;
         };
-        let is_diff = parts.any(|f| f == "--diff");
         let topics: BTreeSet<String> = rhs.split(',').map(norm).filter(|s| !s.is_empty()).collect();
         assert!(
             !topics.is_empty(),
@@ -133,7 +134,6 @@ fn load_corpus() -> Corpus {
         } else {
             fixtures.push(Fixture {
                 name: name.to_string(),
-                is_diff,
                 expected: topics,
                 forbidden: BTreeSet::new(),
             });
@@ -182,16 +182,13 @@ fn every_fixture_parses_and_matches() {
         let path = dir.join(format!("{}.spthy", fx.name));
         let src = fs::read_to_string(&path)
             .unwrap_or_else(|_| panic!("missing fixture file: {}", path.display()));
-        let mut thy = match parse_theory(&src, &["diff"]) {
+        let thy = match parse_theory(&src, &["diff"]) {
             Ok(t) => t,
             Err(e) => {
                 failures.push(format!("PARSE  {}: {}", fx.name, e));
                 continue;
             }
         };
-        if fx.is_diff {
-            thy.is_diff = true;
-        }
         let topics: BTreeSet<String> = wf::topics(&wf::check_theory(&thy))
             .into_iter()
             .map(|s| norm(&s))
