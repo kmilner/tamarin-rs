@@ -35,6 +35,18 @@ fn load_wf_block(src: &str) -> String {
     format_wf_block(&report)
 }
 
+/// The `Formula terms` findings of the elaborated theory: the `checkTerms`
+/// arm of HS's `formulaReports` loop (Wellformedness.hs:1003), which is the
+/// path both load pipelines take.
+fn formula_terms_report(src: &str) -> Vec<tamarin_parser::wf::WfError> {
+    let thy = parse_theory(src, &[]).expect("parse");
+    let elaborated = tamarin_theory::elaborate::elaborate(&thy).expect("elaborate");
+    tamarin_theory::formula_reports::formula_reports(&elaborated, &elaborated.signature.maude_sig)
+        .into_iter()
+        .filter(|e| e.topic == "Formula terms")
+        .collect()
+}
+
 /// `unboundReport` is HS check index 2 and `lemmaAttributeReport` index 9
 /// (Wellformedness.hs:1270-1286), so the unbound group opens the block even
 /// though the load pipeline splices it into a report `check_theory` has
@@ -90,9 +102,7 @@ fn formula_terms_group_prints_its_header_once() {
                lemma l1: \"All x #i. A(x^x) @ i ==> F\"\n\
                lemma l2: \"All y #j. A(y^y) @ j ==> F\"\n\
                end\n";
-    let thy = parse_theory(src, &[]).expect("parse");
-    let elaborated = tamarin_theory::elaborate::elaborate(&thy).expect("elaborate");
-    let errs = tamarin_theory::check_terms::check_terms_wf(&thy, &elaborated.signature.maude_sig);
+    let errs = formula_terms_report(src);
     assert_eq!(errs.len(), 2, "one entry per offending lemma");
     let body = "uses terms of the wrong form: `exp(Bound 1,Bound 1)'\n  \n  \
                 The only allowed terms are public constants and bound node and\n  \
@@ -181,9 +191,7 @@ fn formula_terms_restriction_group_prints_its_header_once() {
                \"All #NOW. Restr_letstcde_2_2_1() @ #NOW ==> \
                (All s t. <s, t> = <'c'^'d', 'e'> ==> F)\"\n\
                end\n";
-    let thy = parse_theory(src, &[]).expect("parse");
-    let elaborated = tamarin_theory::elaborate::elaborate(&thy).expect("elaborate");
-    let errs = tamarin_theory::check_terms::check_terms_wf(&thy, &elaborated.signature.maude_sig);
+    let errs = formula_terms_report(src);
     assert_eq!(errs.len(), 2, "one entry per offending restriction");
 
     let mut expected: Vec<&str> = vec![
@@ -230,9 +238,7 @@ fn formula_terms_lemma_group_prints_its_header_once() {
                \"All x y #i. Test2(em(x, y) * aaa(x, y)) @ #i ==> \
                Ex #j. Test(em(x, y) * f(x, y)) @ #j\"\n\
                end\n";
-    let thy = parse_theory(src, &[]).expect("parse");
-    let elaborated = tamarin_theory::elaborate::elaborate(&thy).expect("elaborate");
-    let errs = tamarin_theory::check_terms::check_terms_wf(&thy, &elaborated.signature.maude_sig);
+    let errs = formula_terms_report(src);
     assert_eq!(errs.len(), 2, "one entry per offending lemma");
 
     let mut expected: Vec<&str> = vec![

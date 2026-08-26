@@ -5,12 +5,17 @@
 use super::*;
 use tamarin_parser::parse_theory;
 
-fn sig_of(src: &str) -> (p::Theory, MaudeSig) {
-    let mut thy = parse_theory(src, &[]).expect("parse");
-    crate::macro_expand::expand_theory_macros(&mut thy);
+/// The `Formula terms` findings for `src`: the arm [`TermChecker::check`]
+/// contributes to [`crate::formula_reports::formula_reports`], HS's
+/// `formulaReports` loop (Wellformedness.hs:1003), over the elaborated
+/// theory the load pipelines check.
+fn check_terms_report(src: &str) -> Vec<WfError> {
+    let thy = parse_theory(src, &[]).expect("parse");
     let elab = crate::elaborate::elaborate(&thy).expect("elaborate");
-    let sig = elab.signature.maude_sig.clone();
-    (thy, sig)
+    crate::formula_reports::formula_reports(&elab, &elab.signature.maude_sig)
+        .into_iter()
+        .filter(|e| e.topic == "Formula terms")
+        .collect()
 }
 
 #[test]
@@ -20,8 +25,7 @@ fn private_nullary_function_is_allowed() {
                functions: f/0 [private]\n\
                lemma secretF:\n  \"All #i. K(f) @ i ==> F\"\n\
                end\n";
-    let (thy, sig) = sig_of(src);
-    let report = check_terms_wf(&thy, &sig);
+    let report = check_terms_report(src);
     assert!(report.is_empty(), "expected no offenders, got {:?}", report);
 }
 
@@ -34,8 +38,7 @@ fn reducible_destructor_is_offender() {
                  \"All x #i. K(x) @ i ==> Ex body key #j #k. \
                    K(body) @ j & key = snd(sdec(body, key)) & j < i & k < i\"\n\
                end\n";
-    let (thy, sig) = sig_of(src);
-    let report = check_terms_wf(&thy, &sig);
+    let report = check_terms_report(src);
     assert_eq!(report.len(), 1, "expected one Formula-terms block");
     let msg = &report[0].message;
     assert!(
@@ -61,8 +64,7 @@ fn offender_text_matches_the_haskell_show() {
                    K(body) @ j & key = snd(sdec(body, key)) & j < i & k < i\"\n\
                lemma FreeTimepoint:\n  \"All #j. K('c') @ i ==> F\"\n\
                end\n";
-    let (thy, sig) = sig_of(src);
-    let report = check_terms_wf(&thy, &sig);
+    let report = check_terms_report(src);
     assert_eq!(
         report.len(),
         2,
@@ -78,8 +80,7 @@ fn plain_protocol_lemma_no_offenders() {
     let src = "theory T begin\n\
                lemma L:\n  \"All x #i. K(x) @ i ==> Ex #j. K(x) @ j\"\n\
                end\n";
-    let (thy, sig) = sig_of(src);
-    assert!(check_terms_wf(&thy, &sig).is_empty());
+    assert!(check_terms_report(src).is_empty());
 }
 
 #[test]
@@ -87,8 +88,7 @@ fn public_constant_allowed() {
     let src = "theory T begin\n\
                lemma L:\n  \"All #i. K('c') @ i ==> F\"\n\
                end\n";
-    let (thy, sig) = sig_of(src);
-    assert!(check_terms_wf(&thy, &sig).is_empty());
+    assert!(check_terms_report(src).is_empty());
 }
 
 #[test]
@@ -101,8 +101,7 @@ fn unary_hash_with_surplus_args_is_allowed() {
                builtins: hashing\n\
                lemma L:\n  \"All x y #i. K(h(x, y)) @ i ==> F\"\n\
                end\n";
-    let (thy, sig) = sig_of(src);
-    let report = check_terms_wf(&thy, &sig);
+    let report = check_terms_report(src);
     assert!(report.is_empty(), "expected no offenders, got {:?}", report);
 }
 
@@ -119,8 +118,7 @@ fn bare_message_use_does_not_bind_to_node_binder() {
     let src = "theory T begin\n\
                lemma L:\n  \"All #x. (K(x) @ #x) ==> F\"\n\
                end\n";
-    let (thy, sig) = sig_of(src);
-    let report = check_terms_wf(&thy, &sig);
+    let report = check_terms_report(src);
     assert_eq!(report.len(), 1, "expected one Formula-terms block");
     assert!(
         report[0].message.contains("`Free x'"),
@@ -135,8 +133,7 @@ fn free_message_variable_is_offender() {
     let src = "theory T begin\n\
                lemma L:\n  \"All #i. K(x) @ i ==> F\"\n\
                end\n";
-    let (thy, sig) = sig_of(src);
-    let report = check_terms_wf(&thy, &sig);
+    let report = check_terms_report(src);
     assert_eq!(report.len(), 1);
     assert!(
         report[0].message.contains("`Free x'"),
@@ -176,11 +173,7 @@ fn prefix_em_is_a_reducible_c_symbol_even_when_user_declared() {
                functions: em/2, f/2\n\
                lemma L1:\n  \"All #i. Test(em('g', 'h') * f('g', 'h')) @ #i ==> F\"\n\
                end\n";
-    let (thy, sig) = sig_of(src);
-    one_offender(
-        &check_terms_wf(&thy, &sig),
-        "`Mult(f('g','h'),em('g','h'))'",
-    );
+    one_offender(&check_terms_report(src), "`Mult(f('g','h'),em('g','h'))'");
 }
 
 #[test]
@@ -196,8 +189,7 @@ fn a_user_em_without_bilinear_pairing_is_an_ordinary_symbol() {
                functions: em/2, f/2\n\
                lemma L1:\n  \"All #i. Test(em('g', 'h') * f('g', 'h')) @ #i ==> F\"\n\
                end\n";
-    let (thy, sig) = sig_of(src);
-    assert!(check_terms_wf(&thy, &sig).is_empty());
+    assert!(check_terms_report(src).is_empty());
 }
 
 #[test]
@@ -214,11 +206,7 @@ fn em_written_as_alg_app_stays_a_noeq_symbol() {
                functions: f/2\n\
                lemma L1:\n  \"All #i. Test(em{'g'}'h' * f('g', 'h')) @ #i ==> F\"\n\
                end\n";
-    let (thy, sig) = sig_of(src);
-    one_offender(
-        &check_terms_wf(&thy, &sig),
-        "`Mult(em('g','h'),f('g','h'))'",
-    );
+    one_offender(&check_terms_report(src), "`Mult(em('g','h'),f('g','h'))'");
 }
 
 #[test]
@@ -238,8 +226,7 @@ fn c_and_ac_arguments_sort_on_the_de_bruijn_form() {
                lemma L2:\n  \"All x y #i. Test2(em(x, y) * aaa(x, y)) @ #i ==> \
                  Ex #j. Test(em(x, y) * f(x, y)) @ #j\"\n\
                end\n";
-    let (thy, sig) = sig_of(src);
-    let report = check_terms_wf(&thy, &sig);
+    let report = check_terms_report(src);
     assert_eq!(report.len(), 1, "expected one block, got {:?}", report);
     assert!(
         report[0].message.contains(
@@ -263,8 +250,7 @@ fn builtin_ac_arguments_are_flattened_and_sorted() {
                builtins: xor, multiset\n\
                lemma L3:\n  \"All #i. Test(('b' ++ 'a') ++ ('c' XOR 'd')) @ #i ==> F\"\n\
                end\n";
-    let (thy, sig) = sig_of(src);
-    one_offender(&check_terms_wf(&thy, &sig), "`Union('a','b',Xor('c','d'))'");
+    one_offender(&check_terms_report(src), "`Union('a','b',Xor('c','d'))'");
 }
 
 #[test]
@@ -282,8 +268,7 @@ fn user_ac_symbol_written_prefix_is_flattened_and_sorted() {
                lemma L1:\n  \"All #i. Test(uac(red('b','a'), 'a')) @ #i ==> F\"\n\
                lemma L2:\n  \"All #i. Test(uac(uac('z','a'), red('b','c'))) @ #i ==> F\"\n\
                end\n";
-    let (thy, sig) = sig_of(src);
-    let report = check_terms_wf(&thy, &sig);
+    let report = check_terms_report(src);
     assert_eq!(report.len(), 2, "expected two blocks, got {:?}", report);
     assert!(
         report[0].message.contains("`uac('a',red('b','a'))'"),
@@ -306,6 +291,5 @@ fn bare_free_variable_under_at_keeps_its_node_sort() {
     let src = "theory T begin\n\
                lemma L1:\n  \"All #j. K('c') @ i ==> F\"\n\
                end\n";
-    let (thy, sig) = sig_of(src);
-    one_offender(&check_terms_wf(&thy, &sig), "`Free #i'");
+    one_offender(&check_terms_report(src), "`Free #i'");
 }

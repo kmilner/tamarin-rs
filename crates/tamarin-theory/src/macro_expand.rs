@@ -10,8 +10,8 @@
 //!
 //!   - [`macro_expanded_clone`] — `translated_wf::pre_translation_wf_report`'s
 //!     wellformedness clone (stage 8);
-//!   - [`expand_theory_macros`] — the parser-theory probes and
-//!     `check_terms_wf`'s tests (stage 8);
+//!   - [`expand_theory_macros`] — [`macro_expanded_clone`] and the tests that
+//!     drive a pass from a macro-expanded parser theory;
 //!
 //! Port of `Term.Macro.applyMacros` (HS: lib/term/src/Term/Macro.hs:40-54)
 //! plus the call-sites that drive it:
