@@ -38,7 +38,7 @@ fn pub_name_is(t: &SapicTerm, id: &str) -> bool {
 
 /// `reliableChannelInit anP (initrules, initTx)` (ReliableChannelTranslation.hs:27-35):
 /// prepend the `MessageIDRule`.
-pub fn reliable_channel_init(
+pub(crate) fn reliable_channel_init(
     an_proc: &AProc,
     init_rules: Vec<crate::facts::AnnotatedRule<ProcessAnnotation<LVar>>>,
     init_tx: BTreeSet<LVar>,
@@ -73,7 +73,7 @@ pub fn reliable_channel_init(
 /// an `Err(WFReliable)` for a malformed reliable channel action.  `None` falls
 /// through to the base translation (`tAct`).
 #[allow(clippy::type_complexity)]
-pub fn reliable_channel_trans_act(
+pub(crate) fn reliable_channel_trans_act(
     ac: &SapicAction<SapicLVar>,
     p: &ProcessPosition,
     tx: &BTreeSet<LVar>,
@@ -171,7 +171,7 @@ pub fn reliable_channel_trans_act(
 
 /// `reliableChannelRestr anP restrictions` (ReliableChannelTranslation.hs:103-115):
 /// add the `reliable` restriction iff the process contains a reliable OUT.
-pub fn reliable_channel_restr(
+pub(crate) fn reliable_channel_restr(
     an_proc: &AProc,
     mut restrictions: Vec<p::Restriction>,
 ) -> Vec<p::Restriction> {

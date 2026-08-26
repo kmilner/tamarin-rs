@@ -44,7 +44,7 @@ use tamarin_theory::sapic::{Process, ProcessCombinator, SapicLVar, SapicTerm};
 use crate::annotation::{AnnotatedProcess, ProcessAnnotation};
 
 /// `translateLetDestr rules p` (LetDestructors.hs:98-100) — the entry point.
-pub fn translate_let_destr(
+pub(crate) fn translate_let_destr(
     st_rules: &std::collections::BTreeSet<CtxtStRule>,
     p: AnnotatedProcess<LVar>,
 ) -> AnnotatedProcess<LVar> {

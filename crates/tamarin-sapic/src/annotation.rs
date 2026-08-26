@@ -64,36 +64,36 @@ impl<V> Default for ProcessAnnotation<V> {
 }
 
 impl<V: Clone> ProcessAnnotation<V> {
-    pub fn empty() -> Self {
+    pub(crate) fn empty() -> Self {
         Self::default()
     }
 
-    pub fn with_lock(v: V) -> Self {
+    pub(crate) fn with_lock(v: V) -> Self {
         Self {
             lock: Some(AnVar(v)),
             ..Default::default()
         }
     }
-    pub fn with_unlock(v: V) -> Self {
+    pub(crate) fn with_unlock(v: V) -> Self {
         Self {
             unlock: Some(AnVar(v)),
             ..Default::default()
         }
     }
-    pub fn with_secret_channel(v: V) -> Self {
+    pub(crate) fn with_secret_channel(v: V) -> Self {
         Self {
             secret_channel: Some(AnVar(v)),
             ..Default::default()
         }
     }
-    pub fn with_destructor_equation(t1: LNTerm, t2: LNTerm, else_branch: bool) -> Self {
+    pub(crate) fn with_destructor_equation(t1: LNTerm, t2: LNTerm, else_branch: bool) -> Self {
         Self {
             destructor_equation: Some((t1, t2)),
             else_branch,
             ..Default::default()
         }
     }
-    pub fn with_else_branch(b: bool) -> Self {
+    pub(crate) fn with_else_branch(b: bool) -> Self {
         Self {
             else_branch: b,
             ..Default::default()
@@ -111,7 +111,7 @@ impl<V: Clone> ProcessAnnotation<V> {
     /// (left-biased on `Just`/`Just`), so they keep the *left* value
     /// (`self.X.or(other.X)`). `pure_state` is OR'ed; `else_branch` is taken
     /// from the right operand.
-    pub fn append(self, other: Self) -> Self {
+    pub(crate) fn append(self, other: Self) -> Self {
         ProcessAnnotation {
             parsing_ann: self.parsing_ann.append(other.parsing_ann),
             lock: other.lock.or(self.lock),
@@ -148,7 +148,7 @@ pub type AnnotatedProcess<V> = Process<ProcessAnnotation<V>, SapicLVar>;
 /// `toAnProcess` (sapic/src/Sapic/Annotation.hs:135-139): lift a parsed process into a
 /// translation annotation by wrapping the parsed annotation in
 /// `ProcessAnnotation`.
-pub fn to_annotated<V: Clone>(
+pub(crate) fn to_annotated<V: Clone>(
     p: Process<ProcessParsedAnnotation, SapicLVar>,
 ) -> Process<ProcessAnnotation<V>, SapicLVar> {
     fn go<V: Clone>(

@@ -18,7 +18,7 @@ use tamarin_theory::sapic::{
 use tamarin_utils::prelude_ext::nub_on;
 
 /// `bindings`: variables bound *precisely at this point* in `p`.
-pub fn bindings<A: GoodAnnotation>(p: &Process<A, SapicLVar>) -> Vec<SapicLVar> {
+pub(crate) fn bindings<A: GoodAnnotation>(p: &Process<A, SapicLVar>) -> Vec<SapicLVar> {
     match p {
         Process::Null(_) => Vec::new(),
         Process::Comb(c, _, _, _) => bindings_comb(c),
@@ -27,7 +27,7 @@ pub fn bindings<A: GoodAnnotation>(p: &Process<A, SapicLVar>) -> Vec<SapicLVar> 
 }
 
 /// `bindingsAct`: variables bound by an action (`new x`, `in(c, t)`, etc.).
-pub fn bindings_act(a: &SapicAction<SapicLVar>) -> Vec<SapicLVar> {
+pub(crate) fn bindings_act(a: &SapicAction<SapicLVar>) -> Vec<SapicLVar> {
     match a {
         // HS: `(New v) -> [v]` (Bindings.hs:21-26, see line 23).
         SapicAction::New(v) => vec![v.clone()],
@@ -62,7 +62,7 @@ pub fn bindings_act(a: &SapicAction<SapicLVar>) -> Vec<SapicLVar> {
 }
 
 /// `bindingsComb`: variables bound by a process combinator (`lookup`, `let`).
-pub fn bindings_comb(c: &ProcessCombinator<SapicLVar>) -> Vec<SapicLVar> {
+pub(crate) fn bindings_comb(c: &ProcessCombinator<SapicLVar>) -> Vec<SapicLVar> {
     match c {
         // HS: `(Lookup _ v) -> [v]` (Bindings.hs:29-33, see line 31).
         ProcessCombinator::Lookup(_, v) => vec![v.clone()],
@@ -87,7 +87,7 @@ pub fn bindings_comb(c: &ProcessCombinator<SapicLVar>) -> Vec<SapicLVar> {
 /// (`pfoldMap f pl <> f node <> pfoldMap f pr`) and a `ProcessAction`
 /// self-first (`f node <> pfoldMap f p`); `tamarin_theory::sapic::pfold_map`
 /// implements exactly that order, so the bound-variable sequence matches HS.
-pub fn acc_bindings<A: GoodAnnotation>(p: &Process<A, SapicLVar>) -> Vec<SapicLVar> {
+pub(crate) fn acc_bindings<A: GoodAnnotation>(p: &Process<A, SapicLVar>) -> Vec<SapicLVar> {
     pfold_map(p, &mut |node| bindings(node))
 }
 
@@ -117,7 +117,7 @@ fn captured_variables_at<A: GoodAnnotation>(p: &Process<A, SapicLVar>) -> Vec<Sa
 /// run `capturedVariablesAt` at every node and concatenate the results in
 /// `pfoldMap` order.  A variable appearing here is bound twice (captured) on
 /// some path and yields a `WFBoundTwice` warning.
-pub fn captured_variables<A: GoodAnnotation>(p: &Process<A, SapicLVar>) -> Vec<SapicLVar> {
+pub(crate) fn captured_variables<A: GoodAnnotation>(p: &Process<A, SapicLVar>) -> Vec<SapicLVar> {
     pfold_map(p, &mut captured_variables_at)
 }
 

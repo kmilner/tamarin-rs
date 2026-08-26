@@ -11,8 +11,8 @@
 #
 # `Message Derivation Checks` is intentionally OMITTED here — it is a separate
 # phase (`Theory.Tools.MessageDerivationChecks`, ported as
-# `tamarin_theory::deriv_check`), which needs Maude and which neither
-# topic-level harness runs. At the pin above the oracle reports it for
+# `tamarin_theory::deriv_check`), which needs Maude and which the differential
+# runner does not run. At the pin above the oracle reports it for
 # `multiplication_in_rule_lhs`, so pinning it here would fail the Rust side.
 
 exists_trace_reuse                 : Lemma annotations
@@ -42,13 +42,11 @@ unbound_variables                  : Unbound variables
 # checks, so they can only catch a MISSING report; these catch a FALSE
 # POSITIVE.
 #
-# They ride inside a `#`-prefixed directive on purpose: both harnesses read
-# this same file and treat every non-`#` line as positive expectations, so an
-# inline `!topic` would fail there. Both enforce them — the offline test
-# `crates/tamarin-theory/tests/wellformedness_topics.rs` against
-# `wf::check_wellformedness`, the differential runner
-# (`cargo run -p tamarin-theory --example wellformedness_fixtures`) against
-# `wf::check_wellformedness` and the oracle.
+# They ride inside a `#`-prefixed directive on purpose: every harness that
+# reads this file treats a non-`#` line as positive expectations, so an
+# inline `!topic` would fail there. The differential runner
+# (`cargo run -p tamarin-theory --example wellformedness_fixtures`) enforces
+# them against `wf::check_wellformedness` and against the oracle.
 #
 # The three fixtures below each list a single positive topic, so a negative
 # is what keeps their comparison from narrowing to that one string. What

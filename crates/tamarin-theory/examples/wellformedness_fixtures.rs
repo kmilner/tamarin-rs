@@ -86,9 +86,8 @@ fn main() {
 
     // Parse `expected.txt`.  `#!<name> : <topics>` is a negative-expectation
     // directive; every other `#` line is a comment.  Negatives ride inside a
-    // comment on purpose — the offline harness
-    // `crates/tamarin-theory/tests/wellformedness_topics.rs` reads the same
-    // file and treats every non-`#` line as positive expectations.
+    // comment on purpose — this loop treats every non-`#` line as positive
+    // expectations, so an inline `!topic` would land in a topic set.
     for line in expected.lines() {
         let line = line.trim();
         if line.is_empty() {

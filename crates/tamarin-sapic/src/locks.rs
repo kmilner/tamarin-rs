@@ -132,7 +132,7 @@ fn annotate_locks_go(
 /// `annotateLocks` (Locks.hs:94-99): run `annotateLocks'` with the fresh counter
 /// seeded at 0.  On a wellformedness error (`Rep`/`Parallel` below a lock), HS
 /// `throwM`s a `ProcessNotWellformed (WFLock tag)`; we surface it as an `Err`.
-pub fn annotate_locks(p: AnnotatedProc) -> Result<AnnotatedProc, String> {
+pub(crate) fn annotate_locks(p: AnnotatedProc) -> Result<AnnotatedProc, String> {
     let mut fresh = FastFreshState::nothing_used();
     annotate_locks_go(&mut fresh, p).map_err(|e| match e {
         LockWfError::Rep => {
@@ -249,8 +249,8 @@ mod tests {
     /// Sapic/Exceptions.hs:32-34). They select different wording in the
     /// `ProcessNotWellformed` error that upstream throws. The two arms must
     /// therefore not collapse into one error. A lock whose scope stays open is
-    /// the only way to reach either tag. The public entry point must refuse
-    /// the process in both cases.
+    /// the only way to reach either tag. `annotate_locks` must refuse the
+    /// process in both cases.
     #[test]
     fn parallel_and_replication_below_lock_error_distinctly() {
         // lock 's'; ( 0 | 0 )  — WFPar

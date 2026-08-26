@@ -310,9 +310,10 @@ positive by default; a line beginning `#!<fixture> : <topics>` is a
 `VERDICT: PASS|FAIL (N fixture(s), M failure(s))` and exits nonzero on an
 empty roster, a `.spthy` no `expected.txt` line mentions, a line with no
 topics, a `#!` line naming an unlisted fixture, or an oracle that fails to
-launch. `crates/tamarin-theory/tests/wellformedness_topics.rs` reads the same
-file offline, and it enforces the same pins against the same entry point.
-Only the example runner compares against the oracle.
+launch. `crates/tamarin-theory/tests/wellformedness_fixture_reports.rs` reads
+the same file offline: it holds that roster to the fixture directory, and it
+pins each fixture's whole rendered `/* WARNING … */` block against an oracle
+capture under `tests/wellformedness_fixtures/reports/`.
 
 ## Single-lemma parity
 

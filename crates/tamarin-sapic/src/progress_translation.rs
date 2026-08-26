@@ -114,7 +114,7 @@ fn extend_vars(dom_pf: &PosSet, pos: &[i64], tx: &mut BTreeSet<LVar>) {
 }
 
 /// `progressInit anP (initrules, initTx)` (ProgressTranslation.hs:54-62).
-pub fn progress_init(
+pub(crate) fn progress_init(
     an_proc: &AProc,
     init_rules: Vec<AnnotatedRule<ProcessAnnotation<LVar>>>,
     init_tx: BTreeSet<LVar>,
@@ -145,7 +145,7 @@ pub fn progress_init(
 /// `progressTransAct` (ProgressTranslation.hs:111-119): post-process the base
 /// action translation result.  `dom_pf` / the inverse are computed once and
 /// threaded in.
-pub fn progress_trans_act(
+pub(crate) fn progress_trans_act(
     dom_pf: &PosSet,
     inv_pf: &impl Fn(&[i64]) -> Option<Pos>,
     pos: &[i64],
@@ -162,7 +162,7 @@ pub fn progress_trans_act(
 
 /// `progressTransComb` (ProgressTranslation.hs:122-132).  Note: HS uses the SAME
 /// `extendVars domPF pos` on both `tx1` and (fmap'd) `tx2`.
-pub fn progress_trans_comb(
+pub(crate) fn progress_trans_comb(
     dom_pf: &PosSet,
     inv_pf: &impl Fn(&[i64]) -> Option<Pos>,
     pos: &[i64],
@@ -209,7 +209,7 @@ fn res_progress_init() -> p::Restriction {
 
 /// `progressRestr anP restrictions` (ProgressTranslation.hs:156-177): append the
 /// per-from-position `Progress_<pos>_to_<...>` restrictions, then `progressInit`.
-pub fn progress_restr(
+pub(crate) fn progress_restr(
     an_proc: &AProc,
     mut restrictions: Vec<p::Restriction>,
 ) -> Result<Vec<p::Restriction>, String> {

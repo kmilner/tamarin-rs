@@ -53,7 +53,7 @@ type AnnProc = Process<ProcessAnnotation<LVar>, SapicLVar>;
 ///                  [Ato protFact]                              -- restr
 ///                  0
 ///   protFact = Syntactic . Pred $ protoFact Linear "Report" [varTerm x, varTerm loc]
-pub fn report_init(
+pub(crate) fn report_init(
     an_proc: &AnnProc,
     init_rules: Vec<AnnotatedRule<ProcessAnnotation<LVar>>>,
     init_tx: BTreeSet<LVar>,
@@ -107,7 +107,7 @@ pub fn report_init(
 /// walk the process, threading the in-scope `@location` annotation down via
 /// `opt_loc`, and rewrite `report(t)` terms in actions / combinators to
 /// `rep(subst loc t, loc)` wherever a `Just loc` is in scope.
-pub fn translate_terms_report(p: AnnProc) -> AnnProc {
+pub(crate) fn translate_terms_report(p: AnnProc) -> AnnProc {
     report_map_terms(None, p)
 }
 

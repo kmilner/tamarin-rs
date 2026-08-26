@@ -38,7 +38,7 @@ use crate::constraint::system::{SourceKind, System};
 use crate::fact::{fact_tag_name, LNFact};
 use crate::guarded::Guarded;
 use crate::pretty_formula::guarded_doc;
-use crate::pretty_hpj::{above_blank, fsep, numbered_prime, punctuate, vcat, Doc};
+use crate::pretty_hpj::{fsep, numbered_prime, punctuate, vcat, vsep, Doc};
 
 /// Emit just the non-graph-part of the system, matching Haskell's
 /// `prettyNonGraphSystem` (System.hs:1672-1685):
@@ -68,20 +68,7 @@ pub fn pretty_non_graph_system(sys: &System) -> String {
         combine("unsolved constraints", pretty_goals(sys, false)),
         combine("solved constraints", pretty_goals(sys, true)),
     ];
-    vsep_docs(sections).render()
-}
-
-// ---------------------------------------------------------------------
-// vsep (HS Theory/Text/Pretty.hs:83-84)
-// ---------------------------------------------------------------------
-
-// HS `vsep = foldr ($--$) emptyDoc` (Theory/Text/Pretty.hs:83-84) — RIGHT fold.
-fn vsep_docs(ds: Vec<Doc>) -> Doc {
-    let mut acc = Doc::Empty;
-    for d in ds.into_iter().rev() {
-        acc = above_blank(d, acc);
-    }
-    acc
+    vsep(sections).render()
 }
 
 // ---------------------------------------------------------------------
@@ -129,7 +116,7 @@ fn pretty_formula_set(items: &[std::sync::Arc<Guarded>]) -> Doc {
     let mut sorted: Vec<&Guarded> = items.iter().map(|f| f.as_ref()).collect();
     sorted.sort();
     sorted.dedup();
-    vsep_docs(sorted.into_iter().map(guarded_doc).collect())
+    vsep(sorted.into_iter().map(guarded_doc).collect())
 }
 
 // ---------------------------------------------------------------------
@@ -385,7 +372,7 @@ fn pretty_goals(sys: &System, want_solved: bool) -> Doc {
         );
     }
     // HS `vsep = foldr ($--$)` — a BLANK line between adjacent goals.
-    vsep_docs(items)
+    vsep(items)
 }
 
 // ---------------------------------------------------------------------

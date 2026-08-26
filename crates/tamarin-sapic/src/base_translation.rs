@@ -44,7 +44,7 @@ pub type RuleBody = (
 
 /// `baseTransNull` (Basetranslation.hs:81-82):
 ///   `[([State LState p tildex], [], [], [])]`
-pub fn base_trans_null(p: &ProcessPosition, tildex: &BTreeSet<LVar>) -> Vec<RuleBody> {
+pub(crate) fn base_trans_null(p: &ProcessPosition, tildex: &BTreeSet<LVar>) -> Vec<RuleBody> {
     let st = TransFact::State(
         StateKind::LState,
         p.clone(),
@@ -56,7 +56,7 @@ pub fn base_trans_null(p: &ProcessPosition, tildex: &BTreeSet<LVar>) -> Vec<Rule
 /// Type-erase: HS works over `LNTerm` (untyped) for the rule facts; the
 /// translation calls `toLNTerm` / `toLVar` on SAPIC terms.  Convert a typed
 /// SAPIC term to a plain `LNTerm` (drop the type tag).
-pub fn to_ln_term(t: &SapicTerm) -> LNTerm {
+pub(crate) fn to_ln_term(t: &SapicTerm) -> LNTerm {
     match t {
         VTerm::Lit(Lit::Var(sv)) => VTerm::Lit(Lit::Var(sv.var)),
         VTerm::Lit(Lit::Con(c)) => VTerm::Lit(Lit::Con(*c)),
@@ -74,7 +74,7 @@ pub fn to_ln_term(t: &SapicTerm) -> LNTerm {
 }
 
 /// `toLNFact` over a SAPIC fact (drop type tags from every term).
-pub fn to_ln_fact(f: &tamarin_theory::sapic::SapicLNFact) -> tamarin_theory::fact::LNFact {
+pub(crate) fn to_ln_fact(f: &tamarin_theory::sapic::SapicLNFact) -> tamarin_theory::fact::LNFact {
     f.map_ref(to_ln_term)
 }
 
@@ -117,14 +117,14 @@ pub(crate) fn list_intersect<T: PartialEq + Clone>(xs: &[T], ys: &[T]) -> Vec<T>
 }
 
 /// `toLVar v = slvar v`.
-pub fn to_lvar(v: &SapicLVar) -> LVar {
+pub(crate) fn to_lvar(v: &SapicLVar) -> LVar {
     v.var
 }
 
 /// `baseTransAction` (Basetranslation.hs:94-205).  Returns the rule bodies and
 /// the updated `tildex`.  `needs_ass_immediate` is the `needsInEvRes` flag;
 /// when false, `Event` emits NO extra `EventEmpty` action.
-pub fn base_trans_action(
+pub(crate) fn base_trans_action(
     async_channels: bool,
     needs_ass_immediate: bool,
     ac: &SapicAction<SapicLVar>,
@@ -586,7 +586,7 @@ pub type CombResult = (Vec<RuleBody>, BTreeSet<LVar>, Option<BTreeSet<LVar>>);
 
 /// `baseTransComb` (Basetranslation.hs:226-306): `Parallel`, `NDC`, `CondEq`,
 /// `Cond` (with a formula), `Lookup` and `Let`.
-pub fn base_trans_comb(
+pub(crate) fn base_trans_comb(
     c: &tamarin_theory::sapic::ProcessCombinator<SapicLVar>,
     an: &ProcessAnnotation<LVar>,
     p: &ProcessPosition,
@@ -919,7 +919,7 @@ fn fact_vars(f: &tamarin_theory::fact::LNFact) -> BTreeSet<LVar> {
 /// initial `tildex`.
 ///   `[AnnotatedRule (Just "Init") anP (Right InitPosition) [] [InitEmpty]
 ///       [State LState [] empty] [] 0]`
-pub fn base_init(
+pub(crate) fn base_init(
     an_proc: &tamarin_theory::sapic::Process<ProcessAnnotation<LVar>, SapicLVar>,
 ) -> (Vec<AnnotatedRule<ProcessAnnotation<LVar>>>, BTreeSet<LVar>) {
     let rule = AnnotatedRule {
@@ -944,7 +944,7 @@ pub fn base_init(
 /// `baseRestr` assembles (Basetranslation.hs:449-479, see line 459).  The
 /// formula body is HS's hardcoded string, parsed as HS's
 /// `toEx`/`parseRestriction` parses it.
-pub fn single_session_restriction() -> tamarin_parser::ast::Restriction {
+pub(crate) fn single_session_restriction() -> tamarin_parser::ast::Restriction {
     parse_restriction("single_session", "All #i #j. Init()@i & Init()@j ==> #i=#j")
 }
 
@@ -952,7 +952,7 @@ pub fn single_session_restriction() -> tamarin_parser::ast::Restriction {
 /// (Basetranslation.hs:427-436), added by `baseRestr` when the process
 /// `contains isEq` (a `CondEq` combinator).  The formula bodies are HS's
 /// hardcoded strings, parsed as HS's `toEx`/`parseRestriction` parses them.
-pub fn predicate_restrictions() -> Vec<tamarin_parser::ast::Restriction> {
+pub(crate) fn predicate_restrictions() -> Vec<tamarin_parser::ast::Restriction> {
     vec![
         parse_restriction("predicate_eq", "All #i a b. Pred_Eq(a,b)@i ==> a = b"),
         parse_restriction(
@@ -989,7 +989,7 @@ fn parse_restriction(name: &str, src: &str) -> tamarin_parser::ast::Restriction 
 /// byte-identical to HS's hand-written strings, and AC/sort handling matches the
 /// parser path).  `has_delete` selects the full variants (the process also
 /// `contains isDelete`) over the NoDelete variants.
-pub fn state_restrictions(has_delete: bool) -> Vec<tamarin_parser::ast::Restriction> {
+pub(crate) fn state_restrictions(has_delete: bool) -> Vec<tamarin_parser::ast::Restriction> {
     // `parseRestriction`'s formula body, verbatim from Basetranslation.hs.
     let (set_in_src, set_notin_src) = if has_delete {
         (
@@ -1028,7 +1028,7 @@ pub fn state_restrictions(has_delete: bool) -> Vec<tamarin_parser::ast::Restrict
 /// the other hardcoded restrictions, HS parses the string with
 /// `parseRestriction`; we parse the same formula body so the rendered output is
 /// byte-identical to HS.
-pub fn in_event_restriction() -> tamarin_parser::ast::Restriction {
+pub(crate) fn in_event_restriction() -> tamarin_parser::ast::Restriction {
     let src = "All x #t3. ChannelIn(x)@t3 ==> (Ex #t2. K(x)@t2 & #t2 < #t3\n\
                & (All #t1. Event()@t1  ==> #t1 < #t2 | #t3 < #t1)\n\
                & (All #t1 xp. K(xp)@t1 ==> #t1 < #t2 | #t1 = #t2 | #t3 < #t1))";
@@ -1060,7 +1060,7 @@ const RES_LOCKING_POS_NO_UNLOCK: &str =
 /// variant) and rewriting the `LockPOS`/`UnlockPOS` action facts to
 /// `Lock_<idx>`/`Unlock_<idx>` (HS `mapAtoms subst`, with
 /// `hardcode s = s ++ "_" ++ show (lvarIdx v)`).
-pub fn res_locking(has_unlock: bool, v: &LVar) -> tamarin_parser::ast::Restriction {
+pub(crate) fn res_locking(has_unlock: bool, v: &LVar) -> tamarin_parser::ast::Restriction {
     let src = if has_unlock {
         RES_LOCKING_POS
     } else {

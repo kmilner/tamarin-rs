@@ -36,11 +36,11 @@ pub enum StateKind {
 
 impl StateKind {
     /// `isSemiState` (Facts.hs:148-152).
-    pub fn is_semi_state(self) -> bool {
+    pub(crate) fn is_semi_state(self) -> bool {
         matches!(self, StateKind::LSemiState | StateKind::PSemiState)
     }
     /// `multiplicity` (Facts.hs:166-170).
-    pub fn multiplicity(self) -> Multiplicity {
+    pub(crate) fn multiplicity(self) -> Multiplicity {
         match self {
             StateKind::LState | StateKind::LSemiState => Multiplicity::Linear,
             StateKind::PState | StateKind::PSemiState => Multiplicity::Persistent,
@@ -164,7 +164,7 @@ fn sorted_unique(mut vs: Vec<LVar>) -> Vec<LVar> {
 // =============================================================================
 
 /// `factToFact` (Facts.hs:253-270).
-pub fn fact_to_fact(f: &TransFact) -> LNFact {
+pub(crate) fn fact_to_fact(f: &TransFact) -> LNFact {
     match f {
         TransFact::Fr(v) => fresh_fact(VTerm::Lit(Lit::Var(*v))),
         TransFact::In(t) => in_fact(t.clone()),
@@ -240,7 +240,7 @@ pub fn fact_to_fact(f: &TransFact) -> LNFact {
 }
 
 /// `actionToFact` (Facts.hs:213-234).
-pub fn action_to_fact(a: &TransAction) -> LNFact {
+pub(crate) fn action_to_fact(a: &TransAction) -> LNFact {
     match a {
         TransAction::InitEmpty => proto_fact(Multiplicity::Linear, "Init", vec![]),
         TransAction::EventEmpty => proto_fact(Multiplicity::Linear, "Event", vec![]),
@@ -334,26 +334,26 @@ pub fn action_to_fact(a: &TransAction) -> LNFact {
 }
 
 /// `varNameProgress p = "prog_" ++ prettyPosition p` (Facts.hs:189-190).
-pub fn var_name_progress(p: &ProcessPosition) -> String {
+pub(crate) fn var_name_progress(p: &ProcessPosition) -> String {
     format!("prog_{}", pretty_position(p))
 }
 
 /// `varProgress p = LVar (varNameProgress p) LSortFresh 0` (Facts.hs:192-197):
 /// the fresh progress variable used in the rule premise/conclusion/action.
-pub fn var_progress(p: &ProcessPosition) -> LVar {
+pub(crate) fn var_progress(p: &ProcessPosition) -> LVar {
     LVar::new(var_name_progress(p), tamarin_term::lterm::LSort::Fresh, 0)
 }
 
 /// `msgVarProgress p = LVar (varNameProgress p) LSortMsg 0` (Facts.hs:199-204):
 /// the message-sort progress variable used in the progress RESTRICTION
 /// quantifier (`∀ prog_<pos>. ..`).
-pub fn msg_var_progress(p: &ProcessPosition) -> LVar {
+pub(crate) fn msg_var_progress(p: &ProcessPosition) -> LVar {
     LVar::new(var_name_progress(p), tamarin_term::lterm::LSort::Msg, 0)
 }
 
 /// `varMID p = LVar ("mid_" ++ prettyPosition p) LSortFresh 0` (Facts.hs:244-251).
 /// (HS also has the identical `varMsgId`, Facts.hs:206-211.)
-pub fn var_mid(p: &ProcessPosition) -> LVar {
+pub(crate) fn var_mid(p: &ProcessPosition) -> LVar {
     LVar::new(
         format!("mid_{}", pretty_position(p)),
         tamarin_term::lterm::LSort::Fresh,
@@ -362,14 +362,14 @@ pub fn var_mid(p: &ProcessPosition) -> LVar {
 }
 
 /// `isNonSemiState` (Facts.hs:154-156): a non-semi `State` fact.
-pub fn is_non_semi_state(f: &TransFact) -> bool {
+pub(crate) fn is_non_semi_state(f: &TransFact) -> bool {
     matches!(f, TransFact::State(kind, _, _) if !kind.is_semi_state())
 }
 
 /// `addVarToState v' (State kind pos vs) = State kind pos (v' `S.insert` vs)`
 /// (Facts.hs:162-164): insert a variable into a `State` fact's variable set;
 /// other facts unchanged.
-pub fn add_var_to_state(v: &LVar, f: &TransFact) -> TransFact {
+pub(crate) fn add_var_to_state(v: &LVar, f: &TransFact) -> TransFact {
     match f {
         TransFact::State(kind, pos, vs) => {
             let mut nvs = vs.clone();
@@ -383,12 +383,12 @@ pub fn add_var_to_state(v: &LVar, f: &TransFact) -> TransFact {
 }
 
 /// `lockFactName v = "Lock_" ++ show (lvarIdx v)` (Facts.hs:180-181).
-pub fn lock_fact_name(v: &LVar) -> String {
+pub(crate) fn lock_fact_name(v: &LVar) -> String {
     format!("Lock_{}", v.idx)
 }
 
 /// `unlockFactName v = "Unlock_" ++ show (lvarIdx v)` (Facts.hs:183-184).
-pub fn unlock_fact_name(v: &LVar) -> String {
+pub(crate) fn unlock_fact_name(v: &LVar) -> String {
     format!("Unlock_{}", v.idx)
 }
 
@@ -460,7 +460,7 @@ fn interpolate(a: Hsv, b: Hsv, t: f64) -> Hsv {
 }
 
 /// `colorForProcessName` (Facts.hs:368-374).
-pub fn color_for_process_name(names: &[String]) -> Rgb {
+pub(crate) fn color_for_process_name(names: &[String]) -> Rgb {
     if names.is_empty() {
         // HS `RGB 255 255 255` — `rgbToHex` clamps `floor(256*255)` to 255 →
         // `#ffffff`.  Mirror with the same out-of-[0,1] value.
@@ -529,7 +529,7 @@ fn strip_non_alphabetic(s: &str) -> String {
 }
 
 /// The HS-faithful rule name (Facts.hs:381-388).
-pub fn rule_name<Ann: GoodAnnotation + Clone>(r: &AnnotatedRule<Ann>) -> String {
+pub(crate) fn rule_name<Ann: GoodAnnotation + Clone>(r: &AnnotatedRule<Ann>) -> String {
     match &r.process_name {
         Some(s) => s.clone(),
         None => generated_rule_name(&to_parsed(&r.process), r.index, &r.position),
@@ -556,7 +556,7 @@ fn generated_rule_name(plain: &PlainProcess, index: usize, position: &RulePositi
 /// `ignoreDerivChecks = isLookup process` (Facts.hs:403-404): the lookup rules
 /// carry the `no_derivcheck` attribute so the message-derivation check skips
 /// them (the bound lookup variable is unconstrained at that point).
-pub fn to_rule(r: &AnnotatedRule<ProcessAnnotation<LVar>>) -> ProtoRuleE {
+pub(crate) fn to_rule(r: &AnnotatedRule<ProcessAnnotation<LVar>>) -> ProtoRuleE {
     // Both the generated name and the `process=` attribute read the erased
     // process, so erase once.
     let plain = to_parsed(&r.process);
@@ -600,7 +600,7 @@ pub fn to_rule(r: &AnnotatedRule<ProcessAnnotation<LVar>>) -> ProtoRuleE {
 
 /// `newVariables l r` (Rule.hs): variables in conclusions/actions not bound by
 /// the premises.  Mirrors `elaborate.rs::compute_new_vars`.
-pub fn compute_new_vars(prems: &[LNFact], concs: &[LNFact], acts: &[LNFact]) -> Vec<LNTerm> {
+pub(crate) fn compute_new_vars(prems: &[LNFact], concs: &[LNFact], acts: &[LNFact]) -> Vec<LNTerm> {
     use std::collections::BTreeSet;
     fn collect(t: &LNTerm, out: &mut BTreeSet<LVar>) {
         match t {

@@ -359,7 +359,7 @@ fn is_pure_state(p: &AnnotatedProc, target: &SapicTerm, lone_insert: bool) -> (b
 }
 
 /// HS `annotatePureStates` (States.hs:192-196).
-pub fn annotate_pure_states(p: AnnotatedProc) -> AnnotatedProc {
+pub(crate) fn annotate_pure_states(p: AnnotatedProc) -> AnnotatedProc {
     if exists_attacker_unpure(&p, &BTreeSet::new()) {
         add_states_channels(p)
     } else if get_all_states(&p, &BTreeSet::new()).0.is_empty() {

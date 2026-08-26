@@ -62,7 +62,7 @@ struct TransCtx {
 
 /// `propagateNames` (Facts.hs:327-341): push each node's process-names down to
 /// its children so every node carries the names of all its ancestors.
-pub fn propagate_names<A: GoodAnnotation + Clone>(
+pub(crate) fn propagate_names<A: GoodAnnotation + Clone>(
     p: Process<A, SapicLVar>,
 ) -> Process<A, SapicLVar> {
     fn go<A: GoodAnnotation + Clone>(
@@ -381,7 +381,7 @@ pub struct TranslateOptions {
 /// `needsInEvRes = any lemmaNeedsInEvRes (theoryLemmas th)`.  `opts` carries the
 /// `_transProgress` / `_transReliable` / `_asynchronousChannels` /
 /// `_compressEvents` gates.
-pub fn translate(
+pub(crate) fn translate(
     plain: &PlainProcess,
     needs_in_ev_res: bool,
     st_rules: &std::collections::BTreeSet<tamarin_term::subterm_rule::CtxtStRule>,
@@ -570,7 +570,7 @@ pub fn translate(
 /// (sapic/src/Sapic.hs:45-101, see line 101): does
 /// any of the theory's lemmas fall in the fragment that requires the `in_event`
 /// restriction?  Each lemma is classified via `lemma_needs_in_ev_res`.
-pub fn needs_in_ev_res(thy: &tamarin_theory::theory::Theory) -> bool {
+pub(crate) fn needs_in_ev_res(thy: &tamarin_theory::theory::Theory) -> bool {
     thy.lemmas().any(lemma_needs_in_ev_res)
 }
 

@@ -6,34 +6,24 @@ unavoidably trip a second check as collateral). The
 companion `expected.txt` lists, for each fixture, the topic string(s)
 `tamarin-prover` must emit when loading the theory — the `=`-underlined
 headers inside its `WARNING: the following wellformedness checks
-failed!` block. The two topic-level harnesses treat that list as a
-subset of the topics a fixture emits. A fixture can therefore emit
-more topics than its line lists. The `reports/` directory holds the
-bytes of the whole block for every fixture.
+failed!` block. The differential runner treats that list as a subset of
+the topics a fixture emits. A fixture can therefore emit more topics
+than its line lists. The `reports/` directory holds the bytes of the
+whole block for every fixture.
 
 This corpus exists because the upstream `tamarin-prover/examples/` tree
 contains hand-written, *passing* protocols — it does not exercise the
-negative paths in `Theory.Tools.Wellformedness`. Three harnesses consume
+negative paths in `Theory.Tools.Wellformedness`. Two harnesses consume
 it:
 
-1. `cargo test -p tamarin-theory --test wellformedness_topics` — offline
-   check that the Rust port
-   (`tamarin_theory::wellformedness::check_wellformedness`) emits every
-   expected topic for every fixture and none of its `#!` negatives.
-   This check runs in the normal test suite, and it needs no tamarin
-   binary. It also fails in two more cases. The first is a `.spthy`
-   file that no `expected.txt` line mentions. The second is a `#!`
-   line for a fixture that no `expected.txt` line lists. It reads only
-   the name and the topics of an `expected.txt` line; the oracle flags
-   a line may carry are harness 2's.
-2. `cargo run -p tamarin-theory --example wellformedness_fixtures
+1. `cargo run -p tamarin-theory --example wellformedness_fixtures
    [-- <fixtures-dir>]` — the differential runner: every fixture must
-   parse, the Rust checker must emit the expected topics, and (unless
-   `--no-tamarin` is passed) a `tamarin-prover` binary must emit them
-   too, confirming the fixtures still shoot at the right targets. The
-   oracle binary is `$TAMARIN`, defaulting to `tamarin-prover` on
-   `PATH`.
-3. `cargo test -p tamarin-theory --test wellformedness_fixture_reports`
+   parse, the Rust checker must emit the expected topics and none of
+   the fixture's `#!` negatives, and (unless `--no-tamarin` is passed)
+   a `tamarin-prover` binary must emit them too, confirming the
+   fixtures still shoot at the right targets. The oracle binary is
+   `$TAMARIN`, defaulting to `tamarin-prover` on `PATH`.
+2. `cargo test -p tamarin-theory --test wellformedness_fixture_reports`
    — the byte-level pin. This harness runs each fixture through
    `tamarin_theory::wellformedness::check_wellformedness`, the pass both
    production callers run. The rendered `/* WARNING … */` block must then
@@ -41,12 +31,17 @@ it:
    files are captures of the pinned oracle's own block. This harness
    therefore holds the fixtures' *text* to upstream, and not only their
    topic names. It runs offline, and it needs no Maude. It also fails
-   in three more cases. The first is a fixture with no `.report` file.
-   The second is a `.report` file for a fixture that does not exist.
-   The third is a `.report` file whose `# source:` provenance line does
-   not name the oracle.
+   in these cases. The first is a fixture with no `.report` file. The
+   second is a `.report` file for a fixture that does not exist. The
+   third is a `.report` file whose `# source:` provenance line does not
+   name the oracle. The last is an `expected.txt` roster that does not
+   match the fixture directory: a `.spthy` file no line mentions, a
+   line naming a file that does not exist, a `#!` line for a fixture no
+   positive line lists, or a line that lists no topics. That roster is
+   what harness 1 iterates, so this test keeps it honest inside the
+   normal test suite.
 
-The two topic-level harnesses share two comparison rules:
+The runner's topic comparison has two rules:
 
 - Topics compare modulo trailing whitespace — some Haskell titles carry
   a source-literal trailing space (e.g. `"Facts occur in the
@@ -54,9 +49,9 @@ The two topic-level harnesses share two comparison rules:
   comma-separated `expected.txt` cannot represent.
 - The `Rule has no variants` and `Message Derivation Checks` topics are
   checked only against the tamarin binary. Both need a live Maude
-  process that neither topic-level harness spawns: the batch driver
-  (`run.rs`) splices them into the pass's result afterwards. Each is
-  covered by its own unit tests and by the corpus parity gates.
+  process that the runner does not spawn: the batch driver (`run.rs`)
+  splices them into the pass's result afterwards. Each is covered by
+  its own unit tests and by the corpus parity gates.
 
 ## `reports/`
 
@@ -66,12 +61,11 @@ follows them. The files use two provenance keys. Every file carries a
 `# source:` line, and that line must name the oracle. Four files also
 carry an `# omits:` line. Those four files need it because the
 oracle's block ends with a `Message Derivation Checks` section.
-Harness 3's pipeline does not produce that section. The production callers splice
+Harness 2's pipeline does not produce that section. The production callers splice
 that section in afterwards. It is a dynamic check, and it needs Maude.
-`expected.txt` records the same difference for the topic-level
-harnesses.
+`expected.txt` records the same difference for the differential runner.
 
-Every fixture carries a `.report` file, so harness 3 pins the whole
+Every fixture carries a `.report` file, so harness 2 pins the whole
 block of every one of them.
 
 The `Left rule`, `Right rule` and `Reserved prefixes` topics of HS
@@ -125,9 +119,7 @@ fixture pins yet are marked *(unpinned)*:
 - Inexistent restriction actions *(unpinned)*
 - Inexistant lemma actions / Restriction actions, diff theories *(unpinned)*
 - Formula guardedness *(no fixture of its own. `quantifier_wrong_sort`
-  also trips this check, so only its `reports/` block pins it.
-  `expected.txt` cannot pin it, because the parser-only harness also
-  reads that file)*
+  also trips this check, and its `reports/` block pins it)*
 - Formula terms
 - Nat Sorts
 - Subterm Convergence Warning

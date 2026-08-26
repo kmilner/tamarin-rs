@@ -2,13 +2,13 @@
 //! `tests/wellformedness_fixtures/` theory, byte for byte.  The reference is
 //! the pinned oracle's own `/* WARNING … */` block.
 //!
-//! There are two topic-level harnesses: `tests/wellformedness_topics.rs` and
-//! the `examples/wellformedness_fixtures.rs` differential runner.  Both
-//! compare topic names only.  Four fixtures list a single topic:
+//! The `examples/wellformedness_fixtures.rs` differential runner compares
+//! topic names only, and four fixtures list a single topic:
 //! `formula_unguarded`, `multiplication_in_rule_lhs`, `non_subterm_equation`
 //! and `quantifier_wrong_sort`.  This harness compares the full report bytes
 //! of every fixture instead, so a fixture cannot be hollowed out and still
-//! pass.
+//! pass.  It also holds that runner's `expected.txt` roster to the fixture
+//! directory, in [`expected_txt_lists_every_fixture`].
 //!
 //! The pipeline below calls `tamarin_theory::wellformedness::check_wellformedness`
 //! the way both production callers call it.  Those callers are `run.rs`'s
@@ -23,8 +23,8 @@
 //!   that the batch loop splices afterwards.  Four expectation files
 //!   therefore carry an `# omits:` line.  That line names the derivation-check
 //!   section that the oracle prints and this pipeline does not.
-//!   `expected.txt` documents the same asymmetry for the topic-level
-//!   harnesses.
+//!   `expected.txt` documents the same asymmetry for the differential
+//!   runner.
 //!
 //! The expected bytes live in one file per fixture, at
 //! `tests/wellformedness_fixtures/reports/<fixture>.report`.  Each file opens
@@ -164,6 +164,80 @@ fn report_roster_is_complete() {
         reports.len() >= MIN_REPORTS,
         "expected ≥{MIN_REPORTS} pinned reports, got {}",
         reports.len(),
+    );
+}
+
+/// The fixture names `tests/wellformedness_fixtures/expected.txt` carries:
+/// `positive` holds the names of its expectation lines, `negative` the names
+/// of its `#!` lines.
+struct ExpectedNames {
+    positive: BTreeSet<String>,
+    negative: BTreeSet<String>,
+}
+
+/// Reads the names out of `expected.txt`.  A `#!<name> [oracle-flags] :
+/// <topics>` line is a negative expectation, every other `#` line is a
+/// comment, and any other line is a positive expectation.  A line that lists
+/// no topics compares nothing in the differential runner, so it fails here.
+fn expected_names() -> ExpectedNames {
+    let path = fixtures_dir().join("expected.txt");
+    let text = fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    let mut names = ExpectedNames {
+        positive: BTreeSet::new(),
+        negative: BTreeSet::new(),
+    };
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let (body, negative) = match line.strip_prefix("#!") {
+            Some(rest) => (rest.trim(), true),
+            None if line.starts_with('#') => continue,
+            None => (line, false),
+        };
+        let Some((lhs, rhs)) = body.split_once(':') else {
+            continue;
+        };
+        let Some(name) = lhs.split_whitespace().next() else {
+            continue;
+        };
+        assert!(
+            rhs.split(',').any(|t| !t.trim().is_empty()),
+            "{name}: {} line lists no topics, so it compares nothing",
+            if negative { "`#!`" } else { "expected.txt" },
+        );
+        if negative {
+            names.negative.insert(name.to_string());
+        } else {
+            names.positive.insert(name.to_string());
+        }
+    }
+    names
+}
+
+/// The differential runner drives the fixtures from `expected.txt`.  A
+/// `.spthy` file that no line names goes unchecked there, and a `#!` negative
+/// pin whose fixture no positive line lists is enforced against nothing.
+#[test]
+fn expected_txt_lists_every_fixture() {
+    let names = expected_names();
+    let fixtures = fixture_stems();
+
+    let unlisted: Vec<_> = fixtures.difference(&names.positive).collect();
+    assert!(
+        unlisted.is_empty(),
+        "{unlisted:?}.spthy have no expected.txt line, so the differential runner skips them",
+    );
+    let missing: Vec<_> = names.positive.difference(&fixtures).collect();
+    assert!(
+        missing.is_empty(),
+        "expected.txt lists {missing:?}, which have no .spthy file",
+    );
+    let orphaned: Vec<_> = names.negative.difference(&names.positive).collect();
+    assert!(
+        orphaned.is_empty(),
+        "`#!` negative pins for fixtures expected.txt does not list: {orphaned:?}",
     );
 }
 

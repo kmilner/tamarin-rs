@@ -44,7 +44,7 @@ pub const SAPIC_PROCESS_TOPIC: &str = "Wellformedness-error in Process";
 /// would require an `annotateLocks'`-style pass that returns the unmatched-
 /// unlock predicate rather than throwing — left out to avoid emitting spurious
 /// lock warnings.
-pub fn warn_process<A: GoodAnnotation>(p: &Process<A, SapicLVar>) -> Vec<WfError> {
+pub(crate) fn warn_process<A: GoodAnnotation>(p: &Process<A, SapicLVar>) -> Vec<WfError> {
     captured_variables(p)
         .iter()
         .map(|v| {
@@ -68,7 +68,7 @@ pub fn warn_process<A: GoodAnnotation>(p: &Process<A, SapicLVar>) -> Vec<WfError
 /// `Sapic.checkWellformedness` (Warnings.hs:37-38) for a single process:
 /// `toWfErrorReport . warnProcess`.  The caller concatenates the result over
 /// every `theoryProcesses` (here: the single top-level process).
-pub fn check_wellformedness<A: GoodAnnotation>(p: &Process<A, SapicLVar>) -> Vec<WfError> {
+pub(crate) fn check_wellformedness<A: GoodAnnotation>(p: &Process<A, SapicLVar>) -> Vec<WfError> {
     warn_process(p)
 }
 

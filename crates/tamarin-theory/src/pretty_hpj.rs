@@ -3,12 +3,25 @@
 //   scripts/gen_license_headers.py --authors <this file>
 
 //! Port of `Theory.Text.Pretty` (`lib/theory/src/Theory/Text/Pretty.hs`): the
-//! theory-level comment and keyword combinators.  HS re-exports the highlight
-//! and Doc combinators from the same module (`module Text.PrettyPrint.Highlight`,
-//! `Theory/Text/Pretty.hs:10`); here they come from the Doc engine in
-//! `tamarin-utils`.
+//! theory-level document, comment and keyword combinators.  HS re-exports the
+//! highlight and Doc combinators from the same module
+//! (`module Text.PrettyPrint.Highlight`, `Theory/Text/Pretty.hs:10`); here they
+//! come from the Doc engine in `tamarin-utils`.
 
 pub use tamarin_utils::pretty_hpj::*;
+
+// -- Additional combinators (HS Theory.Text.Pretty.hs:83-84) ------------------
+
+/// HS `vsep = foldr ($--$) emptyDoc` (`Theory/Text/Pretty.hs:83-84`):
+/// right-folds [`above_blank`] over `ds`, separating the documents with empty
+/// lines.
+pub fn vsep(ds: Vec<Doc>) -> Doc {
+    let mut acc = Doc::Empty;
+    for d in ds.into_iter().rev() {
+        acc = above_blank(d, acc);
+    }
+    acc
+}
 
 // -- Comments (HS Theory.Text.Pretty.hs:96-112) -------------------------------
 

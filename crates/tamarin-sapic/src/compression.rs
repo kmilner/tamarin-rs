@@ -302,7 +302,7 @@ fn compress(
 ///
 /// Starts from the initial `State_( )` fact and removes dangling rules (those
 /// with no actions AND no conclusions).
-pub fn path_compression(comp_events: bool, msr: Vec<ERule>) -> Vec<ERule> {
+pub(crate) fn path_compression(comp_events: bool, msr: Vec<ERule>) -> Vec<ERule> {
     // `initfact = factToFact (State LState [] S.empty)` = `State_( )`, arity 0.
     let initfact: LNFact = LNFact::new(FactTag::Proto(Multiplicity::Linear, "State_", 0), vec![]);
     let compressed = compress(comp_events, vec![initfact], BTreeSet::new(), msr);

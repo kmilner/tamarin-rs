@@ -375,7 +375,7 @@ fn mk_subst(
 /// `renameUnique` (Typing.hs:232-240): seed the fresh-var supply so it avoids
 /// every variable already present, then run `renameUnique'` from the identity
 /// substitution.
-pub fn rename_unique(p: &PlainProcess) -> PlainProcess {
+pub(crate) fn rename_unique(p: &PlainProcess) -> PlainProcess {
     let avoid: Vec<(String, u64)> = proc_lvars(p)
         .into_iter()
         .map(|lv| (lv.name.to_string(), lv.idx))
@@ -885,7 +885,7 @@ pub(crate) fn type_and_rename_process_in(
 
 /// Single-process convenience wrapper: a fresh environment per call.
 /// Equivalent to HS `typeTheory` on a theory holding exactly one process.
-pub fn type_and_rename_process(
+pub(crate) fn type_and_rename_process(
     maude_sig: &tamarin_term::maude_sig::MaudeSig,
     user_fun_typings: &[UserFunTyping],
     p: &PlainProcess,

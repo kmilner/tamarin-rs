@@ -5,8 +5,8 @@
 //! What the cases here compare against the oracle:
 //! 1. The rule and lemma counts.  The test compares ours against the counts
 //!    in the oracle's `--parse-only` echo.
-//! 2. The quantifier structure of `formula_to_guarded_parsed`.  The test compares it
-//!    against the `∃`/`∀` prefixes of the same echo.
+//! 2. The quantifier structure the guarded conversion builds.  The test
+//!    compares it against the `∃`/`∀` prefixes of the same echo.
 //! 3. The per-lemma verdicts from `prove_lemma`.  The test compares them
 //!    against the oracle's `--prove` summary line.  The fixtures are all
 //!    small lemmas, and tamarin settles each one in a few steps.
@@ -695,8 +695,8 @@ fn oracle_lemma_echo<'a>(parse_only: &'a str, lemma: &str) -> &'a str {
         .unwrap_or_else(|| panic!("no source echo for lemma `{lemma}`:\n{parse_only}"))
 }
 
-/// The test checks `formula_to_guarded_parsed`'s quantifier structure against the
-/// oracle in three ways per fixture.  It pins our `(ex_blocks, ex_vars,
+/// The test checks the quantifier structure of the guarded conversion against
+/// the oracle in three ways per fixture.  It pins our `(ex_blocks, ex_vars,
 /// all_blocks, all_vars)` census.  It pins the oracle's echo of the same
 /// lemma to its bytes.  It then checks our block counts against the glyph
 /// counts in that echo.  `prettyLFormula` emits exactly one `∃`/`∀` glyph
@@ -1501,7 +1501,7 @@ fn prove_lemma_tiny_setup_verdict_matches_tamarin() {
 }
 
 /// End-to-end: parse `tiny_setup.spthy` (whose lemma is
-/// `Ex k #i. Setup(k)@#i`), drive through formula_to_guarded_parsed +
+/// `Ex k #i. Setup(k)@#i`), drive through the guarded conversion +
 /// formula_to_system + Induction → simplify, and verify the
 /// step-case branch contains a `Goal::Action(_, Setup(_))`.
 /// This exercises Ex-decomposition.
@@ -1846,7 +1846,7 @@ fn solve_premise_goal_against_fixture_matches_rule_count() {
     assert_eq!(r.sys.edges.len(), 1);
 }
 
-/// Cross-check our `formula_to_guarded_parsed` rejection messages against
+/// Cross-check our guarded-conversion rejection messages against
 /// tamarin's. Both should reject `Ex k #i. (A(k)@#i) | (B(k)@#i)`
 /// with an "unguarded variable(s)" error, since the existential
 /// guard is a disjunction of actions rather than a conjunction.
