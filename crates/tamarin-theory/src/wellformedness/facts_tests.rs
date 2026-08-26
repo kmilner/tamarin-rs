@@ -4,7 +4,7 @@
 
 use tamarin_parser::parse_theory;
 
-use super::super::{check_theory, topics, WfFill};
+use super::super::{check_theory, topics};
 use super::*;
 
 fn parse(src: &str) -> Theory {
@@ -202,12 +202,11 @@ fn wf_entry_compares_same_head_operands_on_hs_argument_lists() {
 
 /// The fact lists of `specialFactsUsage'` and `reservedFactNameRules'` are
 /// HS `fsep` paragraph fills, which break before any cell that would pass
-/// column
-/// [`WF_FILL_RIBBON`] measured from the 4-space nesting.  This is
-/// [`WfError::message`]'s flat-cell rendering; every cell here fits inside
-/// the ribbon, so it equals the pinned oracle's bytes (ef3f0468).  The
-/// layout that ships — including the descent into an over-wide cell —
-/// is pinned by `tamarin-theory/tests/wf_fact_fill_layout.rs`.
+/// the 67-column ribbon measured from the 4-space nesting.  Every cell here
+/// fits inside that ribbon, so the bodies equal the pinned oracle's bytes
+/// (ef3f0468).  The whole `/* WARNING … */` block, including the descent
+/// into an over-wide cell, is pinned by
+/// `tamarin-theory/tests/wf_fact_fill_layout.rs`.
 #[test]
 fn wf_entry_fills_comma_lists_at_the_report_ribbon() {
     let list = |n: usize, f: &dyn Fn(usize) -> String| -> String {
@@ -288,44 +287,25 @@ fn wf_entry_fills_comma_lists_at_the_report_ribbon() {
     );
 }
 
-/// A filled entry hands its cells to the layout engine as [`WfDoc`]
-/// skeletons: one per `prettyLNFact` / `prettyLVar`, with the fact's
-/// arguments still separate documents so an over-wide fact can break
-/// inside itself.  `message` keeps the flat fill, which can only give such
-/// a fact a line of its own.
+/// A filled entry hands the layout engine one document per cell, with the
+/// fact's arguments still separate documents, so a cell that overruns the
+/// ribbon breaks INSIDE itself: `nestShort'`'s enclosing `sep` drops the
+/// closing `)` — and the `punctuate comma` comma beside it — onto the
+/// following line at the fill's indent.  A single flat cell per line could
+/// only give the fact a line of its own.  The end-to-end pin against the
+/// oracle is `tamarin-theory/tests/wf_fact_fill_layout.rs`.
 #[test]
-fn filled_entries_carry_their_cells_for_the_layout_engine() {
+fn filled_entries_break_inside_an_over_wide_cell() {
     let wide = "c".repeat(58);
     let t = parse(&format!(
         "theory T begin rule R: [ Out( '{wide}' ), Out( a ) ] --[ ]-> [] end"
     ));
-    let report = check(&t);
-    let entry = report
-        .iter()
-        .find(|e| e.topic == "Special facts")
-        .expect("Special facts entry");
-    let Some(WfFill::Paragraph { info, cells }) = entry.fill.as_ref() else {
-        panic!("fact list carries its cells");
-    };
-    assert_eq!(info, "rule `R' uses disallowed facts on left-hand-side:");
     assert_eq!(
-        *cells,
-        vec![
-            WfDoc::Fact {
-                lead: "Out(".to_string(),
-                args: vec![WfDoc::Text(format!("'{wide}'"))],
-            },
-            WfDoc::Fact {
-                lead: "Out(".to_string(),
-                args: vec![WfDoc::Text("a".to_string())],
-            },
-        ]
-    );
-    assert_eq!(
-        entry.message,
+        only(&check(&t), "Special facts"),
         format!(
             "  rule `R' uses disallowed facts on left-hand-side:\n\
-                 \x20   Out( '{wide}' ),\n\
+                 \x20   Out( '{wide}'\n\
+                 \x20   ),\n\
                  \x20   Out( a )"
         )
     );

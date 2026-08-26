@@ -34,7 +34,6 @@
 //!   abstract interpretation, loop breakers, rule-variants,
 //!   injective-fact instances)
 //! - [`wellformedness`] ← `Theory.Tools.Wellformedness`;
-//!   [`wf_fill`] ← the report's paragraph layout;
 //!   [`deriv_check`] ← message-derivation checks
 //! - [`theory`] ← top-level `Theory` (open/closed theories);
 //!   [`elaborate`] ← theory elaboration/closing
@@ -93,4 +92,3 @@ pub(crate) mod test_maude;
 pub mod theory;
 pub mod tools;
 pub mod wellformedness;
-pub mod wf_fill;

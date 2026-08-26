@@ -6,8 +6,8 @@
 //! `text info $-$ nest 2 (fsep $ punctuate comma cells)` for
 //! `specialFactsUsage'` (Wellformedness.hs:563), `reservedFactNameRules'`
 //! (Wellformedness.hs:546) and `unboundCheck` (Wellformedness.hs:497-498),
-//! laid out by `tamarin_theory::wf_fill` at `addComment`'s 100/67
-//! (TheoryObject.hs:717-718).
+//! laid out by `tamarin_theory::wellformedness::WfError::filled` at
+//! `addComment`'s 100/67 (TheoryObject.hs:717-718).
 //!
 //! Every expected block is the pinned oracle's (`ef3f0468`) `/* WARNING … */`
 //! comment verbatim, so the fill's break points — between cells, and INSIDE a

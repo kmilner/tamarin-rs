@@ -34,6 +34,7 @@ use tamarin_parser::ast as p;
 use tamarin_term::lterm::sort_prefix;
 use tamarin_term::maude_sig::MaudeSig;
 
+use crate::pretty_hpj::{self as hpj, Doc};
 use crate::theory::Theory;
 
 pub mod check_terms;
@@ -61,13 +62,6 @@ pub struct WfError {
     /// concatenates the messages, separated by blank lines, beneath
     /// the topic header (which is part of `message`).
     pub message: String,
-    /// Set by the checks whose body HS builds as one `Doc` and hands to the
-    /// layout engine.  `message` carries that body with every break point
-    /// taken horizontally, and
-    /// [`crate::pretty_theory::render_wf_error_report`] re-lays the body out
-    /// with the HughesPJ engine, which additionally descends INTO a cell that
-    /// overruns the ribbon.
-    pub fill: Option<WfFill>,
 }
 
 impl WfError {
@@ -75,7 +69,6 @@ impl WfError {
         WfError {
             topic: topic.into(),
             message: message.into(),
-            fill: None,
         }
     }
 
@@ -85,136 +78,44 @@ impl WfError {
     /// (Wellformedness.hs:546) and `specialFactsUsage'`
     /// (Wellformedness.hs:563).
     ///
-    /// `info` is the body's first line WITHOUT the `nest 2` that
-    /// `prettyWfErrorReport` applies to every body of a topic group;
-    /// [`WfError::message`] gets that indent and the flat fill.
-    pub fn filled(topic: impl Into<String>, info: impl Into<String>, cells: Vec<WfDoc>) -> Self {
-        let info = info.into();
-        let flat: Vec<String> = cells.iter().map(WfDoc::to_flat).collect();
-        let message = format!("  {info}\n{}", fsep_comma_fill(&flat));
+    /// HS builds such a body as ONE `Doc` and lets the layout engine break it,
+    /// so a cell that overruns the ribbon does not merely get a line of its
+    /// own: it breaks at its OWN `sep`/`fsep`/`fcat` points, dropping
+    /// `prettyLNFact`'s closing `)` onto the next line and refilling the
+    /// argument list at the `nestShort'` indent
+    /// (Text/PrettyPrint/Class.hs:218-223).  `cells` are those documents —
+    /// `prettyLNFact` (Theory/Model/Fact.hs:567-574) or `prettyLVar`
+    /// (`prettyVarList`, TheoryObject.hs:858-859) — and the body is laid out
+    /// here, into [`WfError::message`].
+    ///
+    /// `info` is HS's `text info`, the body's first line; the `nest 2`
+    /// `prettyWfErrorReport` applies to every body of a topic group
+    /// (Wellformedness.hs:118-125) is baked in, because the break decisions
+    /// depend on the body's absolute column.
+    pub fn filled(topic: impl Into<String>, info: impl Into<String>, cells: Vec<Doc>) -> Self {
+        // HS `fsep $ punctuate comma cells` with `comma = char ','`
+        // (Text/PrettyPrint/Class.hs:121).
+        let list = hpj::fsep(hpj::punctuate(Doc::char(','), cells));
+        // `above_g` is HughesPJ's `$+$`, which HS's `$-$` maps to
+        // (Text/PrettyPrint/Class.hs:180); `info` is a single `text` (its
+        // `<->` join cannot break), so it keeps its trailing spaces on the
+        // line above the fill.
+        let message = Doc::text(info.into())
+            .above_g(list.nest(2))
+            .nest(2)
+            .render_with(WF_LINE_LENGTH, WF_RIBBON);
         WfError {
             topic: topic.into(),
             message,
-            fill: Some(WfFill::Paragraph { info, cells }),
         }
     }
 }
 
-/// The body of a wellformedness entry that HS lays out as one HughesPJ `Doc`.
-#[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd)]
-pub enum WfFill {
-    /// HS `text info $-$ nest 2 (fsep $ punctuate comma cells)`.
-    Paragraph {
-        /// HS `text info` — the body's first line, WITHOUT
-        /// `prettyWfErrorReport`'s per-body `nest 2`
-        /// (Wellformedness.hs:118-125).
-        info: String,
-        /// The cells `punctuate comma` separates: one `prettyLNFact` per
-        /// offending fact, or one `prettyLVar` per variable
-        /// (`prettyVarList`, TheoryObject.hs:858-859).
-        cells: Vec<WfDoc>,
-    },
-}
-
-/// The layout skeleton of one `prettyTerm` / `prettyLNFact` rendering
-/// (Term/Term.hs:298-327, Theory/Model/Fact.hs:567-572).
-///
-/// HS builds these as HughesPJ `Doc`s, so a fact that overruns the render
-/// ribbon breaks at its OWN `sep`/`fsep`/`fcat` points — `prettyLNFact` drops
-/// its closing `)` onto the next line and refills the argument list at a
-/// deeper indent.  [`WfDoc::to_flat`] renders the skeleton with every break
-/// point taken horizontally, and [`crate::wf_fill`] maps each variant onto
-/// the HughesPJ combinator HS used.
-#[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd)]
-pub enum WfDoc {
-    /// HS `text s` — a leaf with no internal break point.
-    Text(String),
-    /// HS `<>` — juxtaposition; the parts keep their own break points.
-    Beside(Vec<WfDoc>),
-    /// HS `ppFun f ts = text (f ++ "(") <> fsep (punctuate comma (map ppTerm
-    /// ts)) <> text ")"` (Term/Term.hs:326-327).
-    Fun(String, Vec<WfDoc>),
-    /// HS `ppTerms sepa 1 lead finish ts` (Term/Term.hs:319-321) — the `fcat`
-    /// of `text lead`, the `nest 1`'d and `sepa`-punctuated operands, and
-    /// `text finish`: pairs (`<`, `, `, `>`) and AC chains (`(`, the operator,
-    /// `)`).
-    Terms {
-        lead: String,
-        sep: String,
-        finish: String,
-        items: Vec<WfDoc>,
-    },
-    /// HS `ppFact n ts = nestShort' (n ++ "(") ")" (fsep (punctuate comma (map
-    /// ppTerm ts)))` (Theory/Model/Fact.hs:572), i.e. `sep [text lead $$ nest
-    /// (length lead + 1) body, text ")"]` (Text/PrettyPrint/Class.hs:218-223).
-    Fact { lead: String, args: Vec<WfDoc> },
-}
-
-impl WfDoc {
-    /// Render with every break point taken horizontally — the layout HughesPJ
-    /// picks while the doc fits the ribbon.
-    pub fn to_flat(&self) -> String {
-        let mut s = String::new();
-        self.write_flat(&mut s);
-        s
-    }
-
-    fn write_flat(&self, out: &mut String) {
-        match self {
-            WfDoc::Text(s) => out.push_str(s),
-            WfDoc::Beside(parts) => {
-                for p in parts {
-                    p.write_flat(out);
-                }
-            }
-            WfDoc::Fun(name, args) => {
-                out.push_str(name);
-                out.push('(');
-                for (i, a) in args.iter().enumerate() {
-                    if i > 0 {
-                        // `punctuate comma` + the space `fsep` joins with.
-                        out.push_str(", ");
-                    }
-                    a.write_flat(out);
-                }
-                out.push(')');
-            }
-            WfDoc::Terms {
-                lead,
-                sep,
-                finish,
-                items,
-            } => {
-                out.push_str(lead);
-                for (i, it) in items.iter().enumerate() {
-                    if i > 0 {
-                        out.push_str(sep);
-                    }
-                    it.write_flat(out);
-                }
-                out.push_str(finish);
-            }
-            WfDoc::Fact { lead, args } => {
-                // `nestShort'`'s two spaces: `$$` overlaps the nested body onto
-                // the lead's line one column past it, and the enclosing `sep`
-                // joins that with the closing `)`.  An argument-less fact keeps
-                // only the `sep` space (`text lead $$ nest n emptyDoc` is just
-                // the lead), so it renders `A( )`.
-                out.push_str(lead);
-                if !args.is_empty() {
-                    out.push(' ');
-                    for (i, a) in args.iter().enumerate() {
-                        if i > 0 {
-                            out.push_str(", ");
-                        }
-                        a.write_flat(out);
-                    }
-                }
-                out.push_str(" )");
-            }
-        }
-    }
-}
+/// `lineLength` of the style HughesPJ's `render` uses, reached from HS through
+/// `addComment`'s `render` (TheoryObject.hs:717-718).
+const WF_LINE_LENGTH: usize = 100;
+/// `ribbonLen = round (100 / 1.5) = 67` for [`WF_LINE_LENGTH`].
+const WF_RIBBON: usize = 67;
 
 pub type WfReport = Vec<WfError>;
 
@@ -475,68 +376,6 @@ fn grouped_topic_block(topic: &str, bodies: Vec<String>) -> WfReport {
 /// so a 1-of-10+ list prints ` 1.`…`10.`.
 fn numbered_index_width(count: usize) -> usize {
     count.to_string().len()
-}
-
-/// Column budget of one wellformedness-report fill line, measured from the
-/// fill's own left edge.
-///
-/// The report is baked into the theory by `addComment`, which renders with
-/// HughesPJ's DEFAULT style — `lineLength = 100`, `ribbonsPerLine = 1.5`, so
-/// `ribbonLen = round (100 / 1.5) = 67` (TheoryObject.hs:717-718).  HughesPJ
-/// keeps a `fill` item on the current line iff `fits ((w `min` r) - sl)`,
-/// where `w` is the line width left after the nesting and `sl` the column
-/// already used inside it.  The fills below sit at `nest 2` inside the
-/// `nest 2` `prettyWfErrorReport` wraps every body in (Wellformedness.hs:118-125),
-/// so `w = 100 - 4 = 96` and the ribbon is what binds.
-const WF_FILL_RIBBON: usize = 67;
-
-/// The `nest 2` (check) + `nest 2` (`prettyWfErrorReport`) indent every filled
-/// list below is rendered at.
-const WF_FILL_INDENT: &str = "    ";
-
-/// HS `nest 2 (fsep $ punctuate comma $ map pp xs)` — the paragraph-fill list
-/// shared by `specialFactsUsage'` (Wellformedness.hs:563),
-/// `reservedFactNameRules'` (Wellformedness.hs:546) and `prettyVarList`
-/// (TheoryObject.hs:858-859).
-///
-/// `punctuate comma` attaches the separator to the item it follows, so each
-/// cell but the last carries a trailing `,`; `fsep` then joins cells with a
-/// space, breaking to a new line — and re-applying the [`WF_FILL_INDENT`]
-/// nesting — before any cell that would pass [`WF_FILL_RIBBON`].
-///
-/// Cells are measured in characters, matching HughesPJ's `text` length.
-///
-/// This is the FLAT FALLBACK layout: every cell is rendered flat, so a cell
-/// wider than the ribbon on its own gets a line to itself.  HS descends into
-/// such a cell's own layout instead (`prettyLNFact` breaks its closing `)`
-/// onto the following line).  The shipped bytes therefore come from
-/// [`crate::wf_fill`], which lays the [`WfDoc`] skeletons the checks stash in
-/// [`WfError::fill`] out again; what this function produces is the flat
-/// rendering [`WfError::message`] carries, for callers that read the report
-/// without the layout engine.
-fn fsep_comma_fill(items: &[String]) -> String {
-    let last = items.len().saturating_sub(1);
-    let mut out = String::new();
-    let mut col = 0usize;
-    for (i, item) in items.iter().enumerate() {
-        let cell_width = item.chars().count() + usize::from(i != last);
-        if i == 0 {
-            out.push_str(WF_FILL_INDENT);
-        } else if col + 1 + cell_width <= WF_FILL_RIBBON {
-            out.push(' ');
-            col += 1;
-        } else {
-            out.push('\n');
-            out.push_str(WF_FILL_INDENT);
-            col = 0;
-        }
-        out.push_str(item);
-        if i != last {
-            out.push(',');
-        }
-        col += cell_width;
-    }
-    out
 }
 
 /// The static wellformedness pass over the theory as written, before the

@@ -1352,18 +1352,11 @@ pub fn render_wf_error_report(report: &[crate::wellformedness::WfError]) -> Stri
     // that reappears after an intervening one opens a SECOND group carrying its
     // own header.  Grouping every entry of a topic together instead would merge
     // those runs and drop the repeat.
-    let mut groups: Vec<(&str, Vec<String>)> = Vec::new();
+    let mut groups: Vec<(&str, Vec<&str>)> = Vec::new();
     for e in report {
-        // A check whose body is HS's `fsep` paragraph fill hands over its cells
-        // instead of a laid-out body, because the layout is HughesPJ's: see
-        // `crate::wf_fill`.  Everything else pre-renders its own bytes.
-        let body = match &e.fill {
-            Some(fill) => crate::wf_fill::fill_body(fill),
-            None => e.message.clone(),
-        };
         match groups.last_mut() {
-            Some((topic, msgs)) if *topic == e.topic => msgs.push(body),
-            _ => groups.push((&e.topic, vec![body])),
+            Some((topic, msgs)) if *topic == e.topic => msgs.push(&e.message),
+            _ => groups.push((&e.topic, vec![&e.message])),
         }
     }
     for (i, (topic, msgs)) in groups.iter().enumerate() {
@@ -1396,7 +1389,7 @@ pub fn render_wf_error_report(report: &[crate::wellformedness::WfError]) -> Stri
                     if nest_bodies {
                         nest_wf_body(m)
                     } else {
-                        m.clone()
+                        (*m).to_string()
                     }
                 })
                 .collect();
@@ -1452,9 +1445,9 @@ fn wf_headerless_preamble(topic: &str) -> Option<(String, bool)> {
         // `"  Variable bound twice: x."`) sit directly under a plain header.
         "Wellformedness-error in Process" => Some((format!("{topic}\n"), false)),
         // These five bake the `nest 2` into their own bytes — the `Doc` fills
-        // via `crate::wf_fill::fill_body`, `multRestrictedReport'`
-        // (Wellformedness.hs:1047-1064) via `crate::mult_restricted`.  Their
-        // bodies wrap at `sep`/`fsep` points that depend on the absolute
+        // via `WfError::filled`, `multRestrictedReport'`
+        // (Wellformedness.hs:1047-1064) via `crate::wellformedness::mult`.
+        // Their bodies wrap at `sep`/`fsep` points that depend on the absolute
         // column, so the indent has to be inside the Doc the HughesPJ engine
         // lays out, not applied to the rendered lines afterwards.
         "Unbound variables"

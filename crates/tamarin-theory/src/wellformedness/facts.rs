@@ -22,8 +22,134 @@ use tamarin_term::lterm::{sort_prefix, LSort};
 
 use super::{
     numbered_index_width, render_var, rule_facts, theory_lemmas, theory_rules, underline_topic,
-    WfDoc, WfError, WfReport,
+    WfError, WfReport,
 };
+use crate::pretty_hpj::{self as hpj, Doc};
+
+/// The layout skeleton of one `prettyTerm` / `prettyLNFact` rendering
+/// (Term/Term.hs:298-327, Theory/Model/Fact.hs:567-572).
+///
+/// HS builds these as HughesPJ `Doc`s, so a fact that overruns the render
+/// ribbon breaks at its OWN `sep`/`fsep`/`fcat` points — `prettyLNFact` drops
+/// its closing `)` onto the next line and refills the argument list at a
+/// deeper indent.  [`cell_doc`] maps each variant onto the HughesPJ
+/// combinator HS used, for the entries whose body the layout engine lays out;
+/// [`WfDoc::write_flat`] takes every break point horizontally, which is the
+/// body the single-line entries carry.
+enum WfDoc {
+    /// HS `text s` — a leaf with no internal break point.
+    Text(String),
+    /// HS `<>` — juxtaposition; the parts keep their own break points.
+    Beside(Vec<WfDoc>),
+    /// HS `ppFun f ts = text (f ++ "(") <> fsep (punctuate comma (map ppTerm
+    /// ts)) <> text ")"` (Term/Term.hs:326-327).
+    Fun(String, Vec<WfDoc>),
+    /// HS `ppTerms sepa 1 lead finish ts` (Term/Term.hs:319-321) — the `fcat`
+    /// of `text lead`, the `nest 1`'d and `sepa`-punctuated operands, and
+    /// `text finish`: pairs (`<`, `, `, `>`) and AC chains (`(`, the operator,
+    /// `)`).
+    Terms {
+        lead: String,
+        sep: String,
+        finish: String,
+        items: Vec<WfDoc>,
+    },
+    /// HS `ppFact n ts = nestShort' (n ++ "(") ")" (fsep (punctuate comma (map
+    /// ppTerm ts)))` (Theory/Model/Fact.hs:572), i.e. `sep [text lead $$ nest
+    /// (length lead + 1) body, text ")"]` (Text/PrettyPrint/Class.hs:218-223).
+    Fact { lead: String, args: Vec<WfDoc> },
+}
+
+impl WfDoc {
+    /// Render with every break point taken horizontally — the layout HughesPJ
+    /// picks while the doc fits the ribbon.
+    fn write_flat(&self, out: &mut String) {
+        match self {
+            WfDoc::Text(s) => out.push_str(s),
+            WfDoc::Beside(parts) => {
+                for p in parts {
+                    p.write_flat(out);
+                }
+            }
+            WfDoc::Fun(name, args) => {
+                out.push_str(name);
+                out.push('(');
+                for (i, a) in args.iter().enumerate() {
+                    if i > 0 {
+                        // `punctuate comma` + the space `fsep` joins with.
+                        out.push_str(", ");
+                    }
+                    a.write_flat(out);
+                }
+                out.push(')');
+            }
+            WfDoc::Terms {
+                lead,
+                sep,
+                finish,
+                items,
+            } => {
+                out.push_str(lead);
+                for (i, it) in items.iter().enumerate() {
+                    if i > 0 {
+                        out.push_str(sep);
+                    }
+                    it.write_flat(out);
+                }
+                out.push_str(finish);
+            }
+            WfDoc::Fact { lead, args } => {
+                // `nestShort'`'s two spaces: `$$` overlaps the nested body onto
+                // the lead's line one column past it, and the enclosing `sep`
+                // joins that with the closing `)`.  An argument-less fact keeps
+                // only the `sep` space (`text lead $$ nest n emptyDoc` is just
+                // the lead), so it renders `A( )`.
+                out.push_str(lead);
+                if !args.is_empty() {
+                    out.push(' ');
+                    for (i, a) in args.iter().enumerate() {
+                        if i > 0 {
+                            out.push_str(", ");
+                        }
+                        a.write_flat(out);
+                    }
+                }
+                out.push_str(" )");
+            }
+        }
+    }
+}
+
+/// One [`WfDoc`] skeleton as the HughesPJ `Doc` HS's `prettyTerm` /
+/// `prettyFact` build for it (Term/Term.hs:298-327,
+/// Theory/Model/Fact.hs:567-574).
+fn cell_doc(d: &WfDoc) -> Doc {
+    match d {
+        WfDoc::Text(s) => Doc::text(s),
+        // HS `<>` chain = `hcat` (HughesPJ.hs:496).
+        WfDoc::Beside(parts) => hpj::hcat(parts.iter().map(cell_doc).collect()),
+        WfDoc::Fun(name, args) => {
+            let refs: Vec<&WfDoc> = args.iter().collect();
+            hpj::fun_app_doc(name, &refs, cell_doc)
+        }
+        WfDoc::Terms {
+            lead,
+            sep,
+            finish,
+            items,
+        } => {
+            let refs: Vec<&WfDoc> = items.iter().collect();
+            hpj::fcat_bracketed(lead, sep, finish, &refs, cell_doc)
+        }
+        WfDoc::Fact { lead, args } => {
+            let body = hpj::fsep(hpj::punctuate(
+                Doc::char(','),
+                args.iter().map(cell_doc).collect(),
+            ));
+            hpj::nest_short_doc(lead, ")", body)
+        }
+    }
+}
 
 /// HS `prettyLNFact = prettyFact prettyNTerm` (Theory/Model/Fact.hs:581-582):
 /// the fact's
@@ -44,7 +170,9 @@ fn wf_fact_doc(fa: &Fact, ac: &AcSyms) -> WfDoc {
 /// [`wf_fact_doc`] laid out flat: `!Name( arg, arg, ... )` for persistent,
 /// `Name( arg, arg, ... )` for linear.
 fn pp_wf_fact(fa: &Fact, ac: &AcSyms) -> String {
-    wf_fact_doc(fa, ac).to_flat()
+    let mut out = String::new();
+    wf_fact_doc(fa, ac).write_flat(&mut out);
+    out
 }
 
 /// HS `prettyTerm`'s `split` (Term/Term.hs:323-324): the operand list a
@@ -589,6 +717,11 @@ fn reserved_report(thy: &Theory) -> WfReport {
 const KLOG_NAMES: &[&str] = &["KU", "KD", "K"];
 
 fn reserved_fact_name_rules(thy: &Theory) -> WfReport {
+    // HS builds the report as a plain `Doc`: `prettyWfErrorReport`'s text
+    // never passes through the escaping `Document (HtmlDoc d)` instance
+    // (Html.hs:102-105), so a pair term inside a fact keeps its raw `<`/`>`
+    // on the web routes, which render under an active `HtmlDocGuard`.
+    let _plain = hpj::HtmlDocGuard::disable();
     let ac = user_ac_fun_names(thy);
     let mut out = Vec::new();
     for r in theory_rules(thy) {
@@ -624,7 +757,7 @@ fn reserved_fact_name_rules(thy: &Theory) -> WfReport {
                 // grouped/nested by `prettyWfErrorReport` (text topic $-$
                 // nest 2 body): the rule line gets 2-space indent, the fact
                 // line 4-space (2 from ppTopic + 2 from the inner nest 2).
-                let facts: Vec<WfDoc> = fs.iter().map(|f| wf_fact_doc(f, &ac)).collect();
+                let facts: Vec<Doc> = fs.iter().map(|f| cell_doc(&wf_fact_doc(f, &ac))).collect();
                 // Headerless body (no trailing newline); `format_wf_block`
                 // emits the single "Reserved names" header for the group and
                 // joins per-rule/side bodies with the 2-space blank separator.
@@ -647,6 +780,9 @@ fn reserved_fact_name_rules(thy: &Theory) -> WfReport {
 // =============================================================================
 
 fn special_facts_usage(thy: &Theory) -> WfReport {
+    // Plain mode for the same reason as the `reserved_fact_name_rules`
+    // sibling: the fill's cells are built and laid out here.
+    let _plain = hpj::HtmlDocGuard::disable();
     let ac = user_ac_fun_names(thy);
     let mut out = Vec::new();
     for r in theory_rules(thy) {
@@ -670,7 +806,7 @@ fn special_facts_usage(thy: &Theory) -> WfReport {
                 // grouped/nested by `prettyWfErrorReport` exactly like the
                 // "Reserved names" sibling.  Note HS uses lowercase `"rule "`
                 // here (vs capital `"Rule "` for reserved names).
-                let facts: Vec<WfDoc> = fs.iter().map(|f| wf_fact_doc(f, &ac)).collect();
+                let facts: Vec<Doc> = fs.iter().map(|f| cell_doc(&wf_fact_doc(f, &ac))).collect();
                 // Headerless body (no trailing newline); `format_wf_block`
                 // emits the single "Special facts" header for the group and
                 // joins per-rule/side bodies with the 2-space blank separator.

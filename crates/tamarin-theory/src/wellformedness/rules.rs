@@ -22,7 +22,7 @@
 //!
 //! [`unbound_report`]'s body is HS's `text info $-$ nest 2 (prettyVarList
 //! vars)` paragraph fill, so it hands its variable cells to
-//! [`crate::wf_fill`] and lets the HughesPJ engine break them.
+//! [`WfError::filled`] and lets the HughesPJ engine break them.
 //! [`nat_well_sorted_report`] renders its own `<>` chain at the same width —
 //! the style `addComment` bakes the wellformedness comment in with, HughesPJ's
 //! library default `lineLength = 100`, `ribbonsPerLine = 1.5`
@@ -50,7 +50,7 @@ use crate::theory::Theory;
 
 use super::{
     grouped_topic_block, numbered_index_width, render_var, rule_facts, theory_rules,
-    underline_topic, WfDoc, WfError, WfReport,
+    underline_topic, WfError, WfReport,
 };
 
 /// `lineLength` of the style HughesPJ's `render` uses, reached from HS
@@ -141,16 +141,20 @@ fn unbound_vars(ru: &ProtoRuleE) -> Vec<LVar> {
 /// emits the underlined header once per topic group and nests the bodies by 2
 /// (Wellformedness.hs:118-125).  `prettyVarList = fsep . punctuate comma . map
 /// prettyLVar` (TheoryObject.hs:858-859) is the paragraph fill
-/// [`crate::wf_fill`] lays out, and `prettyLVar = text . show`
+/// [`WfError::filled`] lays out, and `prettyLVar = text . show`
 /// (LTerm.hs:922-923) makes each cell a leaf.
 pub fn unbound_report(thy: &Theory) -> Vec<WfError> {
+    // Plain mode for the same reason as [`nat_well_sorted_report`]: the body
+    // is a `Doc` built and laid out here, and the web routes render under an
+    // active `HtmlDocGuard`.
+    let _plain = hpj::HtmlDocGuard::disable();
     let mut out = Vec::new();
     for ru in thy_proto_rules(thy) {
         let unbound = unbound_vars(ru);
         if unbound.is_empty() {
             continue;
         }
-        let cells: Vec<WfDoc> = unbound.iter().map(|v| WfDoc::Text(v.to_string())).collect();
+        let cells: Vec<Doc> = unbound.iter().map(|v| Doc::text(v.to_string())).collect();
         out.push(WfError::filled(
             "Unbound variables",
             format!(

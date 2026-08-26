@@ -2,7 +2,7 @@
 // of the tamarin-prover sources this file cites; list them with:
 //   scripts/gen_license_headers.py --authors <this file>
 
-use super::super::{check_theory, WfFill};
+use super::super::check_theory;
 use super::*;
 use crate::sapic::{ProcessParsedAnnotation, SapicLVar};
 use crate::theory::TheoryItem;
@@ -22,10 +22,7 @@ fn bodies(report: &[WfError]) -> String {
     assert!(!report.is_empty(), "empty report");
     report
         .iter()
-        .map(|e| match &e.fill {
-            Some(fill) => crate::wf_fill::fill_body(fill),
-            None => e.message.clone(),
-        })
+        .map(|e| e.message.clone())
         .collect::<Vec<_>>()
         .join("\n  \n")
 }
@@ -121,12 +118,8 @@ fn lookup_binder_is_not_unbound() {
     }
     let report = unbound_report(&thy);
     assert_eq!(report.len(), 1);
-    let Some(WfFill::Paragraph { cells, .. }) = report[0].fill.as_ref() else {
-        panic!("unbound entry carries its cells: {report:?}");
-    };
     assert_eq!(
-        *cells,
-        vec![WfDoc::Text("w.2".to_string())],
+        report[0].message, "  rule `L' has unbound variables: \n    w.2",
         "only the non-binder variable is reported: {report:?}"
     );
 }
