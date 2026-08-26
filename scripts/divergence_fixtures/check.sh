@@ -44,16 +44,69 @@ census_fixture_dir
 # here asserts nothing more than "the two files differ".  The fallthrough is
 # therefore a failure.
 divergence_shape() {
+    local hs="$expected/$1.$2.hs.txt" rs="$expected/$1.$2.rs.txt"
+    local clean="/* All wellformedness checks were successful. */"
     case "$1.$2" in
     ac_marker_collapse.theory)
         # Documented upstream bug: upstream rebuilds the Maude reply as an AC
         # term and `fAppAC _ [a] = a` deletes the unary application, so the
         # oracle's closed rule outputs the bare argument; the port keeps the
         # application.
-        grep -qF "Out( (a++y) )"            "$expected/$1.$2.hs.txt" \
+        grep -qF "Out( (a++y) )"            "$hs" \
             || { echo "    oracle side no longer collapses tamXCAbar(a) — expected \`Out( (a++y) )\`" >&2; return 1; }
-        grep -qF "Out( (y++tamXCAbar(a)) )" "$expected/$1.$2.rs.txt" \
+        grep -qF "Out( (y++tamXCAbar(a)) )" "$rs" \
             || { echo "    port side no longer keeps tamXCAbar(a) — expected \`Out( (y++tamXCAbar(a)) )\`" >&2; return 1; }
+        ;;
+    s8_restrict_sort_clash.wf)
+        # The oracle folds a rule's `_restrict` formulas into `frees ru`; the
+        # port reads the rule's variables out of its facts, and `#NOW` reaches
+        # none of them.
+        grep -qF "Variable with mismatching sorts or capitalization" "$hs" \
+            || { echo "    oracle side lacks the sort-clash topic — expected \`Variable with mismatching sorts or capitalization'" >&2; return 1; }
+        grep -qF "1. ~now, #NOW" "$hs" \
+            || { echo "    oracle side does not group \`~now' with \`#NOW'" >&2; return 1; }
+        grep -qF "$clean" "$rs" \
+            || { echo "    port side reports a topic — the sort-clash gap may be closed" >&2; return 1; }
+        ;;
+    s8_restrict_fresh_name.wf)
+        # The oracle's name walk reaches a rule's `_restrict` formulas; the
+        # port's does not.  Both reach `~'foo'` through the generated
+        # restriction, so `Formula terms` stands on both sides.
+        grep -qF "rule \`R': fresh public constants are not allowed: ~'foo'" "$hs" \
+            || { echo "    oracle side lacks the \`Fresh public constants' body for rule R" >&2; return 1; }
+        grep -qF "Fresh public constants" "$rs" \
+            && { echo "    port side reports \`Fresh public constants' — the gap may be closed" >&2; return 1; }
+        grep -qF "Formula terms" "$rs" \
+            || { echo "    port side lacks \`Formula terms', so the two sides differ for another reason" >&2; return 1; }
+        ;;
+    s8_two_reuse_exists_lemmas.summary)
+        # One report entry per offending lemma upstream, one entry carrying
+        # both bodies in the port; the `Lemma annotations` block is identical
+        # and only the count differs.
+        grep -qF "WARNING: 2 wellformedness check failed!" "$hs" \
+            || { echo "    oracle side does not count 2 wellformedness checks" >&2; return 1; }
+        grep -qF "WARNING: 1 wellformedness check failed!" "$rs" \
+            || { echo "    port side does not count 1 wellformedness check" >&2; return 1; }
+        ;;
+    s8_sapic_generated_rule_wf.wf)
+        # The oracle checks the rules the SAPIC translation generates; the port
+        # checks the theory before that translation.  This theory writes no
+        # rule, so every rule the oracle names is generated.
+        grep -qF "rule \`newn_0_': fresh public constants are not allowed: ~'foo'" "$hs" \
+            || { echo "    oracle side lacks the \`Fresh public constants' body for the generated rule newn_0_" >&2; return 1; }
+        grep -qF "$clean" "$rs" \
+            || { echo "    port side reports a topic — the generated-rule gap may be closed" >&2; return 1; }
+        ;;
+    s8_acc_generated_lemma.wf)
+        # The argument names a lemma the accountability translation generates,
+        # so the oracle finds it and the port, which checks the arguments
+        # against the untranslated theory, does not.
+        grep -qF "$clean" "$hs" \
+            || { echo "    oracle side reports a topic — expected the success line" >&2; return 1; }
+        grep -qF "Check presence of the --prove/--lemma arguments in theory" "$rs" \
+            || { echo "    port side lacks the \`Check presence of the --prove/--lemma arguments in theory' topic" >&2; return 1; }
+        grep -qF "'acc_verif_empty' from arguments" "$rs" \
+            || { echo "    port side does not name acc_verif_empty as the unmatched argument" >&2; return 1; }
         ;;
     *)  echo "    no documented shape for the $1.$2 divergence — add an arm here" >&2; return 1 ;;
     esac

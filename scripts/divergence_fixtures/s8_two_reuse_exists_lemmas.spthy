@@ -1,0 +1,29 @@
+// Two lemmas that are both `reuse` and `exists-trace`.
+//
+// `lemmaAttributeReport` (Theory/Tools/Wellformedness.hs:924-932) is a
+// list-monad `do` over the theory's lemmas, so it yields one report ENTRY per
+// offending lemma.  The trailing count line is `length rep`
+// (Main/Mode/Batch.hs:246), which therefore counts two.  The port collects
+// both bodies into a single entry, so the two engines print the same
+// `Lemma annotations` block and different counts.
+//
+// Mode `diverge`: the oracle's summary says `WARNING: 2 wellformedness check
+// failed!`, the port's says `WARNING: 1`.
+//
+// Compared slice: the run summary, which is where the count is printed; the wf
+// report block is byte-identical on both engines.
+
+
+theory S8TwoReuseExistsLemmas
+begin
+
+rule R:
+  [ Fr(~x) ] --[ A(~x) ]-> [ Out(~x) ]
+
+lemma one [reuse]:
+  exists-trace "Ex x #i. A(x) @ #i"
+
+lemma two [reuse]:
+  exists-trace "Ex y #j. A(y) @ #j"
+
+end

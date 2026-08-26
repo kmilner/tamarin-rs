@@ -1,0 +1,12 @@
+WARNING: the following wellformedness checks failed!
+
+Fresh public constants
+======================
+
+  rule `Init': fresh public constants are not allowed: ~'foo'
+  
+  rule `newn_0_': fresh public constants are not allowed: ~'foo'
+  
+  rule `outnfoo_0_1': fresh public constants are not allowed: ~'foo',
+    ~'foo'
+*/

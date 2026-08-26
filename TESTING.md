@@ -130,7 +130,7 @@ fast gates do need the oracle binary present to address it.**
 | `cargo fmt --all --check` | formatting (CI enforces it) | seconds |
 | `cargo clippy --workspace --all-targets -- -D warnings` | lints (CI enforces it) | seconds warm |
 | `MAUDE_PATH=$(command -v maude) cargo test --profile ci --workspace` | Rust unit + integration suites | minutes |
-| `scripts/divergence_fixtures/check.sh` | 37 corner fixtures vs committed oracle captures (CI runs this too) | ~10 s |
+| `scripts/divergence_fixtures/check.sh` | 52 corner fixtures vs committed oracle captures (CI runs this too) | ~10 s |
 | `scripts/wf_gate.sh` | wellformedness block, 432 files, vs the shared load cache | ~45 s |
 | `scripts/pretty_gate.sh` | `theory … end` echo, 432 files, vs the same load cache | ~45 s |
 
@@ -466,7 +466,7 @@ oracle and the port both run.
 ## Corner fixtures (no oracle, no proving)
 
 ```bash
-scripts/divergence_fixtures/check.sh          # ~10 s, 36 fixtures
+scripts/divergence_fixtures/check.sh          # ~10 s, 52 fixtures
 ```
 
 Behaviour that no theory under the submodule's `examples/` tree reaches, so
@@ -474,9 +474,9 @@ Behaviour that no theory under the submodule's `examples/` tree reaches, so
 in any of it. Only the port runs: the oracle side is captured bytes committed
 under `divergence_fixtures/expected/`, stamped with the pin they came from
 (`expected/oracle_rev`) — `check.sh` refuses to run when that stamp no longer
-matches the submodule pin, so a bump forces a fresh `capture.sh`. One fixture,
-`ac_marker_collapse`, must NOT match — the check asserts both sides of a
-deliberate divergence, which a MATCH-only corpus gate cannot express.
+matches the submodule pin, so a bump forces a fresh `capture.sh`. The rows
+the manifest marks `diverge` must NOT match — the check asserts both sides of
+a deliberate divergence, which a MATCH-only corpus gate cannot express.
 
 It is the cheapest real assertion in the tree, and the only oracle-byte
 comparison CI makes: the `test` job's `Divergence fixtures` step builds

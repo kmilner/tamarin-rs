@@ -4,6 +4,7 @@
 # slice   comma-separated list of blocks cut from ONE theory load:
 #           wf      the wellformedness report block (wf_gate.sh's slice)
 #           theory  the `theory … end` echo (pretty_gate.sh's slice)
+#           summary the run summary, which carries the wellformedness count
 # mode    match    the port must reproduce the captured oracle bytes
 #         diverge  the port must reproduce <name>.<slice>.rs.txt, which must
 #                  still differ from the captured oracle bytes.  mode is per
@@ -60,3 +61,8 @@ s6_restrict_let_two	theory	match	--derivcheck-timeout=0
 s7_pe_macro_rule	theory	match	--partial-evaluation=summary --derivcheck-timeout=0
 s7_intruder_rule_block	wf,theory	match	--derivcheck-timeout=0
 s7_sapic_macro_rule	wf,theory	match	--derivcheck-timeout=0
+s8_restrict_sort_clash	wf	diverge	--derivcheck-timeout=0
+s8_restrict_fresh_name	wf	diverge	--derivcheck-timeout=0
+s8_two_reuse_exists_lemmas	summary	diverge	--derivcheck-timeout=0
+s8_sapic_generated_rule_wf	wf	diverge	--derivcheck-timeout=0
+s8_acc_generated_lemma	wf	diverge	--lemma=acc_verif_empty --derivcheck-timeout=0

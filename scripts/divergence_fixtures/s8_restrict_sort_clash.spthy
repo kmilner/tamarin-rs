@@ -1,0 +1,34 @@
+// A rule variable that only the rule's `_restrict` formula mentions.
+//
+// `liftedAddProtoRule` (Theory/Text/Parser.hs:175-192) leaves the `_restrict`
+// formula in the rule's `_preRestriction` field (Theory/Model/Rule.hs:424) and
+// adds the action fact `fromRuleRestriction` builds
+// (Theory/Model/Restriction.hs:141-162).  That fact carries the formula's free
+// variables minus `varNow` (Theory/Model/Restriction.hs:87-88,159-160), so
+// `#NOW` is the one variable a `_restrict` can introduce that reaches no fact
+// of the rule.
+//
+// `ruleSortsReport` (Theory/Tools/Wellformedness.hs:275-279) folds the whole
+// rule through `frees`; `HasFrees (Rule i)` folds the rule info first
+// (Theory/Model/Rule.hs:291-297) and `HasFrees ProtoRuleEInfo`
+// (Theory/Model/Rule.hs:491-498) folds the restrictions inside it.  `~now` and
+// `#NOW` share a lowercased name and an index and differ in sort, so
+// `sortsClashCheck` (Theory/Tools/Wellformedness.hs:258-272) groups them.  The
+// port collects a rule's variables from its premises, actions and conclusions,
+// so it sees `~now` alone.
+//
+// Mode `diverge`: the oracle reports `Variable with mismatching sorts or
+// capitalization` for `~now, #NOW`; the port reports nothing.
+//
+// Compared slice: the wf report block.
+
+
+theory S8RestrictSortClash
+begin
+
+rule R:
+  [ Fr(~now) ]
+  --[ _restrict( Ex #j. A() @ #j & #j < #NOW ) ]->
+  [ Out(~now) ]
+
+end
