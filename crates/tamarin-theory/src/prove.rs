@@ -706,32 +706,33 @@ pub struct PrecomputationStats {
 /// present.  Otherwise fall back to per-lemma `[heuristic=..]` > theory-level
 /// `heuristic:` > None (`getProofContext.specifiedHeuristic`,
 /// ClosedTheory.hs:123-131); `None` becomes `SmartRanking False` downstream.
-/// The in-file fallback resolves oracle paths against the theory dir and
-/// `{name}` tactic rankings against `tactics`.
+/// The lemma attribute keeps its source text, so it is parsed here, with
+/// `{name}` tactic rankings resolved against `tactics`; the theory's header
+/// is already parsed.  Both have their oracle paths resolved against the
+/// theory dir.
 fn resolve_heuristic(
     cli: &CliHeuristic,
     lemma: &crate::theory::Lemma,
-    theory_heuristic_first: Option<&str>,
+    theory_heuristic: &[crate::constraint::solver::goals::GoalRanking],
     tactics: &[crate::tactic::Tactic],
     in_file: &str,
 ) -> Option<Vec<crate::constraint::solver::goals::GoalRanking>> {
-    match resolve_cli_heuristic(cli, in_file, tactics) {
-        Some(rankings) => Some(rankings),
-        None => {
-            let lemma_heuristic: Option<&str> = lemma.attributes.iter().find_map(|a| match a {
-                crate::theory::LemmaAttr::Heuristic(s) => Some(s.as_str()),
-                _ => None,
-            });
-            lemma_heuristic.or(theory_heuristic_first).map(|h| {
-                let mut rankings =
-                    crate::constraint::solver::goals::parse_heuristic_str_with_tactics(
-                        h, in_file, tactics,
-                    );
-                prepend_theory_dir_to_oracle_paths(&mut rankings, in_file);
-                rankings
-            })
-        }
+    if let Some(rankings) = resolve_cli_heuristic(cli, in_file, tactics) {
+        return Some(rankings);
     }
+    let lemma_heuristic: Option<&str> = lemma.attributes.iter().find_map(|a| match a {
+        crate::theory::LemmaAttr::Heuristic(s) => Some(s.as_str()),
+        _ => None,
+    });
+    let mut rankings = match lemma_heuristic {
+        Some(h) => {
+            crate::constraint::solver::goals::parse_heuristic_str_with_tactics(h, in_file, tactics)
+        }
+        None if !theory_heuristic.is_empty() => theory_heuristic.to_vec(),
+        None => return None,
+    };
+    prepend_theory_dir_to_oracle_paths(&mut rankings, in_file);
+    Some(rankings)
 }
 
 impl ProverSession {
@@ -926,7 +927,7 @@ impl ProverSession {
         ctx.heuristic = resolve_heuristic(
             &self.cli_heuristic,
             lemma,
-            theory.heuristic.first().map(|s| s.as_str()),
+            &theory.heuristic,
             &theory.tactic,
             session_in_file,
         );
@@ -1554,16 +1555,14 @@ pub fn prove_lemma_with_pool_file_heuristic(
     // theory heuristic when present.  Otherwise (`getProofContext.
     // specifiedHeuristic`, ClosedTheory.hs:123-131): per-lemma `[heuristic=..]`
     // > theory-level `heuristic:` > None.  `None` falls back to `SmartRanking
-    // False` in `rank_goals_with` (= HS's `defaultHeuristic False`).
-    // `parse_heuristic_str_with_tactics` returns the full list for
-    // round-robin scheduling (HS `roundRobinHeuristic`/`useHeuristic`,
-    // ProofMethod.hs:576-595), resolves oracle paths, and resolves
-    // `{name}` tactic rankings against `theory.tactic`.
+    // False` in `rank_goals_with` (= HS's `defaultHeuristic False`).  The
+    // whole ranking list is kept for round-robin scheduling (HS
+    // `roundRobinHeuristic`/`useHeuristic`, ProofMethod.hs:576-595).
     let in_file = &theory.in_file;
     ctx.heuristic = resolve_heuristic(
         cli_heuristic,
         lemma,
-        theory.heuristic.first().map(|s| s.as_str()),
+        &theory.heuristic,
         &theory.tactic,
         in_file,
     );

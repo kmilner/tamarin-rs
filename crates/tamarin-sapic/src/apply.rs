@@ -214,7 +214,8 @@ pub fn apply_sapic(thy: &mut Theory, user_set_heuristic: bool) -> Result<Vec<WfE
     // (sapic/src/Sapic.hs:45-101, see line 82).  `SapicRanking` renders as `p`
     // and drives the prover's goal ranking.
     if !user_set_heuristic && thy.heuristic.is_empty() {
-        thy.heuristic.push("p".to_string());
+        thy.heuristic
+            .push(tamarin_theory::constraint::solver::goals::GoalRanking::Sapic);
     }
 
     Ok(wf_report)

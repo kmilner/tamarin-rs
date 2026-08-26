@@ -389,3 +389,54 @@ fn goal_ord_disj_var_sort_uses_lsort_ord() {
     );
     assert_eq!(fresh_disj.cmp(&pub_disj), Ordering::Greater);
 }
+
+/// A `{name}` ranking keeps the name written between the braces — HS
+/// `internalTacticRanking` (Parser/Signature.hs:313-318) and
+/// `filterHeuristic` (System.hs:679-683) both build
+/// `InternalTacticRanking False (Tactic <name> (SmartRanking False) [] [])`
+/// — and takes the body of the declared tactic of that name when the theory
+/// has one (HS `chosenTactic`, ProofMethod.hs:490-503).
+#[test]
+fn tactic_ranking_keeps_the_braced_name() {
+    use crate::tactic::{PrioBlock, SelectorExpr, SelectorLeaf, Tactic};
+    let declared = Tactic {
+        name: "rank".to_string(),
+        presort: 'C',
+        prios: vec![PrioBlock {
+            ranking: "id".to_string(),
+            disjuncts: vec!["regex \"Out\"".to_string()],
+            selectors: vec![SelectorExpr::Leaf(SelectorLeaf {
+                name: "regex".to_string(),
+                params: vec!["Out".to_string()],
+            })],
+        }],
+        deprios: vec![],
+    };
+    let names = |s: &str| -> Vec<String> {
+        parse_heuristic_str_with_tactics(s, "t.spthy", std::slice::from_ref(&declared))
+            .into_iter()
+            .map(|r| match r {
+                GoalRanking::Tactic { tactic, .. } => tactic.name.clone(),
+                other => panic!("expected a tactic ranking, got {:?}", other),
+            })
+            .collect()
+    };
+    assert_eq!(names("{.}"), vec![".".to_string()]);
+    assert_eq!(names("{undeclared}"), vec!["undeclared".to_string()]);
+    assert_eq!(names("{rank}"), vec!["rank".to_string()]);
+
+    // The declared tactic supplies the body; an unknown name gets HS's
+    // `defaultTactic` body, which reorders nothing.
+    let body = |s: &str| match parse_heuristic_str_with_tactics(
+        s,
+        "t.spthy",
+        std::slice::from_ref(&declared),
+    )
+    .remove(0)
+    {
+        GoalRanking::Tactic { tactic, .. } => (tactic.presort, tactic.prios.len()),
+        other => panic!("expected a tactic ranking, got {:?}", other),
+    };
+    assert_eq!(body("{rank}"), ('C', 1));
+    assert_eq!(body("{undeclared}"), ('s', 0));
+}

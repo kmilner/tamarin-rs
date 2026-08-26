@@ -38,7 +38,7 @@ use std::time::Instant;
 use tamarin_term::maude_proc::{MaudeHandle, MaudePool, SharedMaudeCaches};
 use tamarin_theory::constraint::solver::context::annotate_theory_loop_breakers;
 use tamarin_theory::constraint::system::System;
-use tamarin_theory::elaborate::elaborate;
+use tamarin_theory::elaborate::elaborate_with_in_file;
 use tamarin_theory::module::ModuleType;
 
 use crate::cli::{lemma_matches, Args, Subcommand};
@@ -2207,7 +2207,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             // signature + hoisted heuristic/tactic headers + the arity-1
             // fold set — elaboration is RS's signature-construction step
             // (HS builds the same `SignaturePure` during parsing).
-            let elaborated = elaborate(&parsed).map_err(|e| {
+            let elaborated = elaborate_with_in_file(&parsed, in_file).map_err(|e| {
                 RunError(format!("elaboration error in {}: {}", in_file, e.message))
             })?;
             let body = tamarin_theory::pretty_theory::pretty_open_theory(&elaborated, in_file);
@@ -2269,7 +2269,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             }
             lines
         }));
-        let mut elaborated = elaborate(&parsed)
+        let mut elaborated = elaborate_with_in_file(&parsed, in_file)
             .map_err(|e| RunError(format!("elaboration error in {}: {}", in_file, e.message)))?;
         DEFERRED_HS_ERROR_MARKERS.take();
 

@@ -391,7 +391,10 @@ impl Default for Options {
 pub struct Theory<R = OpenProtoRule, P = ProofSkeleton, S = TranslationElement> {
     pub name: String,
     pub in_file: String,
-    pub heuristic: Vec<String>,
+    /// The `heuristic:` header's goal rankings (HS `_thyHeuristic ::
+    /// [GoalRanking ProofContext]`, TheoryObject.hs:185), parsed when the
+    /// theory is built.
+    pub heuristic: Vec<crate::constraint::solver::goals::GoalRanking>,
     pub tactic: Vec<crate::tactic::Tactic>,
     pub signature: SignaturePure,
     pub items: Vec<TheoryItem<R, P, S>>,
@@ -798,7 +801,10 @@ pub struct DiffTheory<R = OpenProtoRule, R2 = OpenProtoRule, P = ProofSkeleton, 
 {
     pub name: String,
     pub in_file: String,
-    pub heuristic: Vec<String>,
+    /// The `heuristic:` header's goal rankings (HS `_thyHeuristic ::
+    /// [GoalRanking ProofContext]`, TheoryObject.hs:185), parsed when the
+    /// theory is built.
+    pub heuristic: Vec<crate::constraint::solver::goals::GoalRanking>,
     pub tactic: Vec<crate::tactic::Tactic>,
     pub signature: SignaturePure,
     pub items: Vec<DiffTheoryItem<R, R2, P, P2>>,

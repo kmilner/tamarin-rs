@@ -229,11 +229,16 @@ pub fn parse_heuristic_str_with_tactics(
             break;
         }
         // Tactic ranking `{name}` / `{.}` — HS `internalTacticRanking`
-        // (Parser/Signature.hs:313-318).  Resolve the name against the theory's
-        // tactic list (HS `chosenTactic`).  `{.}` (or name "." ) → HS
-        // `defaultTactic`.  quitOnEmpty is always False from parsing
-        // (HS `("{.}", InternalTacticRanking False defaultTactic)`,
-        // System.hs:584-597, see line 596).
+        // (Parser/Signature.hs:313-318) keeps the name written between the
+        // braces (`{.}` gives the name "."), which is what
+        // `prettyGoalRanking` prints (System.hs:709-714).  HS pairs that name
+        // with `defaultTactic`'s body (Smart presort, no prios) and looks the
+        // declared tactic up at ranking time (`chosenTactic`,
+        // ProofMethod.hs:490-503); resolving the body here against `tactics`
+        // is that lookup, done once.  A name no declared tactic carries keeps
+        // the default body, which reorders nothing.  quitOnEmpty is always
+        // False from parsing (HS `("{.}", InternalTacticRanking False
+        // defaultTactic)`, System.hs:584-597, see line 596).
         if c == '{' {
             i += 1;
             while i < chars.len() && chars[i] == ' ' {
@@ -243,32 +248,26 @@ pub fn parse_heuristic_str_with_tactics(
             while i < chars.len() && chars[i] != '}' {
                 i += 1;
             }
-            let name: String = chars[start..i]
-                .iter()
-                .collect::<String>()
-                .trim()
-                .to_string();
+            let name: String = chars[start..i].iter().collect();
             if i < chars.len() {
                 i += 1;
             } // consume '}'
             while i < chars.len() && chars[i] == ' ' {
                 i += 1;
             }
-            let resolved = if name.is_empty() || name == "." {
-                // HS defaultTactic — Smart presort, no prios.  With no
-                // prios/deprios `itRanking` leaves the presort order
-                // unchanged, so this is equivalent to Smart(false).
-                GoalRanking::Smart(false)
-            } else {
-                match tactics.iter().find(|t| t.name == name) {
-                    Some(t) => GoalRanking::Tactic {
-                        quit_on_empty: false,
-                        tactic: std::sync::Arc::new(t.clone()),
-                    },
-                    None => GoalRanking::Smart(false),
-                }
+            // HS's `noneOf` keeps a space written before the closing brace
+            // in the name; the lookup ignores spaces around it.
+            let declared = tactics.iter().find(|t| t.name == name.trim());
+            let tactic = crate::tactic::Tactic {
+                name,
+                presort: declared.map_or('s', |t| t.presort),
+                prios: declared.map(|t| t.prios.clone()).unwrap_or_default(),
+                deprios: declared.map(|t| t.deprios.clone()).unwrap_or_default(),
             };
-            out.push(resolved);
+            out.push(GoalRanking::Tactic {
+                quit_on_empty: false,
+                tactic: std::sync::Arc::new(tactic),
+            });
             continue;
         }
         // Standalone oracle ranking with optional quoted path.  HS's

@@ -229,18 +229,29 @@ pub(crate) fn collect_process_names(p: &crate::sapic::PlainProcess, out: &mut Ve
     });
 }
 
+/// Elaborate a parser theory with no source path ([`elaborate_with_in_file`]
+/// with an empty one): a `heuristic:` header's bare `o` ranking then falls
+/// back to the plain `oracle` name.
+pub fn elaborate(parser_thy: &p::Theory) -> Result<Theory, ElabError> {
+    elaborate_with_in_file(parser_thy, "")
+}
+
 /// Elaborate a parser theory into a typed `Theory`. The signature is
 /// initialised from the union of `builtins:` declarations, and every
 /// formula-bearing item is expanded against the `predicates:` declared before
 /// it (`elaborate_items`).
-pub fn elaborate(parser_thy: &p::Theory) -> Result<Theory, ElabError> {
+///
+/// `in_file` is the theory's source path.  HS's parser resolves the
+/// `heuristic:` header's default oracle names against it while building the
+/// theory (`defaultOracleNames`, Theory/Text/Parser.hs:249-250).
+pub fn elaborate_with_in_file(parser_thy: &p::Theory, in_file: &str) -> Result<Theory, ElabError> {
     let mut sig = SignaturePure::empty(parser_thy.is_diff);
     if parser_thy.is_diff {
         sig.maude_sig = sig.maude_sig.merge(enable_diff_maude_sig());
     }
 
     let mut thy: Theory = Theory::new(parser_thy.name.clone(), sig);
-    thy.in_file = String::new();
+    thy.in_file = in_file.to_string();
     // HS sets `_thyIsSapic = True` only for EXACTLY ONE top-level
     // process: `translate` matches on `theoryProcesses th`
     // (= `[i | ProcessItem i <- ...]`, only top-level ProcessItems,
@@ -261,6 +272,22 @@ pub fn elaborate(parser_thy: &p::Theory) -> Result<Theory, ElabError> {
     }
 
     elaborate_items(&parser_thy.items, &mut thy)?;
+    // The `heuristic:` headers, parsed once the whole item list is known so
+    // that a `{name}` ranking finds a `tactic:` declared after it.  HS parses
+    // them into `[GoalRanking ProofContext]` in the parser itself
+    // (`heuristic`, Theory/Text/Parser/Signature.hs:305-306) and stores that
+    // list (`addHeuristic`, TheoryObject.hs:598-600).
+    for item in &parser_thy.items {
+        if let p::TheoryItem::Heuristic(h) = item {
+            thy.heuristic.extend(
+                crate::constraint::solver::goals::parse_heuristic_str_with_tactics(
+                    h,
+                    in_file,
+                    &thy.tactic,
+                ),
+            );
+        }
+    }
     Ok(thy)
 }
 
@@ -598,9 +625,9 @@ fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), Elab
                 }
                 out.options = o;
             }
-            p::TheoryItem::Heuristic(h) => {
-                out.heuristic.push(h.clone());
-            }
+            // The `heuristic:` header is parsed after the item walk, where
+            // the theory's whole tactic list is known.
+            p::TheoryItem::Heuristic(_) => {}
             p::TheoryItem::Tactic(t) => {
                 out.tactic
                     .push(crate::tactic::Tactic::parse(&t.name, &t.raw));

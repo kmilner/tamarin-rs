@@ -307,17 +307,20 @@ impl ProofState {
                 LemmaAttr::Heuristic(s) => Some(s.as_str()),
                 _ => None,
             });
-            let heuristic_raw: Option<String> = match lemma_heuristic {
-                Some(h) => Some(h.to_string()),
-                None => typed.heuristic.first().cloned(),
-            };
-            let heuristic = heuristic_raw.map(|h| {
-                let mut rankings =
+            let heuristic = match lemma_heuristic {
+                // The lemma attribute keeps its source text; the theory's
+                // `heuristic:` header is parsed when the theory is built.
+                Some(h) => Some(
                     tamarin_theory::constraint::solver::goals::parse_heuristic_str_with_tactics(
-                        &h,
+                        h,
                         in_file,
                         &typed.tactic,
-                    );
+                    ),
+                ),
+                None if !typed.heuristic.is_empty() => Some(typed.heuristic.clone()),
+                None => None,
+            }
+            .map(|mut rankings| {
                 // Oracle paths resolve against the theory file's directory
                 // (HS `oraclePath = workDir </> relPath`, System.hs:573-574)
                 // — same prefixing the batch session applies

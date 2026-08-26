@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use tamarin_parser::parse_theory_with_base;
 use tamarin_term::maude_proc::MaudeHandle;
-use tamarin_theory::elaborate::elaborate;
+use tamarin_theory::elaborate::elaborate_with_in_file;
 use tamarin_theory::wellformedness::WfError;
 
 use crate::state::{TheoryEntry, TheoryOrigin};
@@ -210,7 +210,14 @@ pub fn load_from_source(
     // prints before `processOpenTheory` runs); RS's `elaborate` is that
     // translation step.
     eprintln!("[Theory {}] Theory translated", parsed.name);
-    let mut typed = elaborate(&parsed).map_err(|e| LoadError::Elaborate(e.message))?;
+    // Oracle path resolution base: HS threads the parser's `inFile` into
+    // `defaultOracleNames` (Theory/Text/Parser.hs:249-250), so a
+    // `heuristic: o "./oracle-…"` resolves against the theory's own
+    // directory (`hs_take_directory`).  Local files carry their on-disk
+    // path; uploads keep the bare filename (dir "." — as in HS, where an
+    // uploaded theory has no on-disk home).
+    let mut typed = elaborate_with_in_file(&parsed, &origin.label())
+        .map_err(|e| LoadError::Elaborate(e.message))?;
 
     // Everything downstream of `elaborate` reads the internal theory; the
     // parser AST ends here.
@@ -225,13 +232,6 @@ pub fn load_from_source(
     // becomes the loaded theory's `_lemmasToProve`.  [`LEMMAS_TO_PROVE`]
     // carries it here.
     typed.options.lemmas_to_prove = lemmas_to_prove();
-    // Oracle path resolution base: HS threads the parser's `inFile` into
-    // `defaultOracleNames` (Theory/Text/Parser.hs:250), so a
-    // `heuristic: o "./oracle-…"` resolves against the theory's own
-    // directory (`hs_take_directory`).  Local files carry their on-disk
-    // path; uploads keep the bare filename (dir "." — as in HS, where an
-    // uploaded theory has no on-disk home).
-    typed.in_file = origin.label();
 
     // SAPIC `process:` translation — mirror `run_batch`'s CLI-side pass so
     // the web load path renders SAPIC theories exactly like `--prove`.  Runs

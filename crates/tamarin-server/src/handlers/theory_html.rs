@@ -560,11 +560,11 @@ fn render_attrs(attrs: &[LemmaAttr], in_file: &str) -> String {
             // HS prints the STORED ranking value, whose oracle name was resolved
             // at parse time; RS keeps the raw source string, so it must be
             // re-rendered with the oracle name expanded — the same
-            // `pretty_goal_rankings` the batch printer's `lemma_attr_docs` uses
+            // `pretty_heuristic_str` the batch printer's `lemma_attr_docs` uses
             // (`heuristic=O` alone would drop the oracle file name).
             LemmaAttr::Heuristic(s) => format!(
                 "heuristic={}",
-                tamarin_theory::pretty_theory::pretty_goal_rankings(s, in_file)
+                tamarin_theory::pretty_theory::pretty_heuristic_str(s, in_file)
             ),
             LemmaAttr::Output(xs) => format!("output={}", xs.join(",")),
             LemmaAttr::Left => "left".into(),

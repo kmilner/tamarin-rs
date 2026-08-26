@@ -57,6 +57,7 @@
 //! and in the trailing wellformedness / `Generated from:` / `end` handling,
 //! and each is about thirty lines, so they stay apart.
 
+use crate::constraint::solver::goals::GoalRanking;
 use crate::pretty_formula as pf;
 use crate::theory::{Theory, TheoryItem, TranslationElement};
 use tamarin_term::pretty::pretty_nterm;
@@ -134,119 +135,49 @@ pub(crate) fn oracle_name_for_theory(in_file: &str) -> String {
     }
 }
 
-/// Render a single `GoalRanking` token from the raw heuristic string.
-///
-/// Mirrors HS `prettyGoalRanking` (System.hs:710-728):
-/// - `OracleRanking`/`OracleSmartRanking` → `<char> "<oraclename>"`
-/// - `InternalTacticRanking`              → `{<name>}`
-/// - all others                           → single char
-///
-/// `oracle_name` is the already-computed default oracle name for the theory
-/// (from `oracle_name_for_theory`); it is used when the ranking carries no
-/// explicit name.
-fn render_single_ranking(ch: char, explicit_oracle: Option<&str>, oracle_name: &str) -> String {
-    match ch {
-        'o' | 'O' => {
-            let name = explicit_oracle.unwrap_or(oracle_name);
-            format!("{} \"{}\"", ch, name)
-        }
-        _ => ch.to_string(),
+/// Render one `GoalRanking` as the heuristic token that names it, mirroring
+/// HS `prettyGoalRanking` (System.hs:709-714): an oracle ranking as its
+/// letter plus the quoted relative oracle path, a tactic ranking as its
+/// braced name, every other ranking as the single letter
+/// `goalRankingIdentifiers` maps to it (System.hs:584-597).
+fn pretty_goal_ranking(r: &GoalRanking) -> String {
+    match r {
+        GoalRanking::Smart(false) => "s".to_string(),
+        GoalRanking::Smart(true) => "S".to_string(),
+        GoalRanking::Inj(false) => "i".to_string(),
+        GoalRanking::Inj(true) => "I".to_string(),
+        GoalRanking::Sapic => "p".to_string(),
+        GoalRanking::SapicPKCS11 => "P".to_string(),
+        GoalRanking::GoalNr => "C".to_string(),
+        GoalRanking::UsefulGoalNr => "c".to_string(),
+        GoalRanking::Oracle { oracle_path, .. } => format!("o \"{}\"", oracle_path),
+        GoalRanking::OracleSmart { oracle_path, .. } => format!("O \"{}\"", oracle_path),
+        GoalRanking::Tactic { tactic, .. } => format!("{{{}}}", tactic.name),
     }
 }
 
-/// Parse a raw heuristic string and re-render it in HS style.
+/// HS `prettyGoalRankings rs = unwords (map prettyGoalRanking rs)`
+/// (System.hs:706-707).
+pub fn pretty_goal_rankings(rankings: &[GoalRanking]) -> String {
+    rankings
+        .iter()
+        .map(pretty_goal_ranking)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Render the verbatim text of a `heuristic=` lemma attribute in HS style.
 ///
-/// Mirrors `prettyGoalRankings rs = unwords (map prettyGoalRanking rs)`
-/// (System.hs:706-707).  The raw string is the verbatim text stored after
-/// `heuristic:` / `heuristic=` in the source file.  It may be compact
-/// (`"osopo"`) or already-expanded (`"o \"oracle\" s"`).
-///
-/// Grammar (mirrors HS `goalRanking` in Parser/Signature.hs:308-326):
-///   rankings     ::= ranking+
-///   ranking      ::= oracle_ranking | tactic_ranking | letter
-///   oracle_ranking ::= ('o' | 'O') ws* ('"' name '"' ws*)?
-///   tactic_ranking ::= '{' [^}]* '}'
-///   letter       ::= [a-zA-Z] ws*
-pub fn pretty_goal_rankings(raw: &str, in_file: &str) -> String {
-    let oracle_name = oracle_name_for_theory(in_file);
-    let mut result = Vec::new();
-    let chars: Vec<char> = raw.chars().collect();
-    let mut i = 0;
-    while i < chars.len() {
-        let c = chars[i];
-        if c.is_whitespace() {
-            i += 1;
-            continue;
-        }
-        // Skip comments.  HS's lexer consumes `/* … */` block and `// …`
-        // line comments BETWEEN ranking tokens before parsing them, so a
-        // heuristic like `p /* note for SAPIC */` parses to just `[p]`.
-        // The raw string RS stores is read verbatim to end-of-line, so we
-        // must skip comments here too — otherwise the comment's letters are
-        // mis-tokenised as bogus rankings (and an `o` even as an oracle).
-        if c == '/' && i + 1 < chars.len() && chars[i + 1] == '*' {
-            i += 2;
-            while i + 1 < chars.len() && !(chars[i] == '*' && chars[i + 1] == '/') {
-                i += 1;
-            }
-            i = (i + 2).min(chars.len()); // consume closing `*/`
-            continue;
-        }
-        if c == '/' && i + 1 < chars.len() && chars[i + 1] == '/' {
-            // Line comment runs to the end of the (single-line) raw string.
-            break;
-        }
-        if c == '{' {
-            // Tactic ranking: `'{' ++ _name tactic ++ "}"` (System.hs:710-728, see line 714).
-            // HS's parser does `string "{" <* skipMany (char ' ')` before
-            // capturing `tacticName <- many1 (noneOf "\"\n\r{}")`
-            // (Parser/Signature.hs:313-315), so it STRIPS leading space(s) after `{`
-            // but PRESERVES any trailing space (`noneOf` does not exclude
-            // space).  Mirror that: skip leading spaces, then re-emit the rest
-            // verbatim up to `}`.
-            i += 1; // consume '{'
-            while i < chars.len() && chars[i] == ' ' {
-                i += 1;
-            }
-            let name_start = i;
-            while i < chars.len() && chars[i] != '}' {
-                i += 1;
-            }
-            let name: String = chars[name_start..i].iter().collect();
-            if i < chars.len() {
-                i += 1; // consume '}'
-            }
-            result.push(format!("{{{}}}", name));
-        } else if c == 'o' || c == 'O' {
-            i += 1;
-            // Skip whitespace
-            while i < chars.len() && chars[i] == ' ' {
-                i += 1;
-            }
-            // Look for optional quoted oracle name
-            if i < chars.len() && chars[i] == '"' {
-                i += 1; // consume opening '"'
-                let name_start = i;
-                while i < chars.len() && chars[i] != '"' && chars[i] != '\n' && chars[i] != '\r' {
-                    i += 1;
-                }
-                let explicit_name: String = chars[name_start..i].iter().collect();
-                if i < chars.len() && chars[i] == '"' {
-                    i += 1;
-                } // consume closing '"'
-                result.push(render_single_ranking(c, Some(&explicit_name), &oracle_name));
-            } else {
-                result.push(render_single_ranking(c, None, &oracle_name));
-            }
-        } else if c.is_ascii_alphabetic() {
-            result.push(c.to_string());
-            i += 1;
-        } else {
-            // Unknown character — skip
-            i += 1;
-        }
-    }
-    result.join(" ")
+/// HS stores that attribute as the `[GoalRanking ProofContext]` its parser
+/// built (`LemmaHeuristic`, lib/theory/src/Lemma.hs:103); the port keeps the
+/// source text, so it is parsed here — with the theory's `in_file` for the
+/// default oracle name — and rendered through [`pretty_goal_rankings`].  A
+/// `{name}` ranking prints its name whether or not the theory declares that
+/// tactic, so the tactic list is not needed.
+pub fn pretty_heuristic_str(raw: &str, in_file: &str) -> String {
+    pretty_goal_rankings(
+        &crate::constraint::solver::goals::parse_heuristic_str_with_tactics(raw, in_file, &[]),
+    )
 }
 
 // =============================================================================
@@ -304,18 +235,10 @@ pub fn pretty_closed_theory(
         out.push('\n');
     }
     if !thy.heuristic.is_empty() {
-        // HS `TheoryObject.hs:756-768, see line 764`: `text "heuristic: " <> text (prettyGoalRankings thyH)`
-        // where `prettyGoalRankings = unwords . map prettyGoalRanking` (System.hs:706-707).
-        // Each ranking in the Vec is a raw heuristic string; join their expansions with a
-        // space.  (In practice there is only one `heuristic:` item per theory.)
-        let rendered: Vec<String> = thy
-            .heuristic
-            .iter()
-            .map(|raw| pretty_goal_rankings(raw, in_file))
-            .collect();
+        // HS `TheoryObject.hs:756-768, see line 764`: `text "heuristic: " <> text (prettyGoalRankings thyH)`.
         out.push('\n');
         out.push_str("heuristic: ");
-        out.push_str(&rendered.join(" "));
+        out.push_str(&pretty_goal_rankings(&thy.heuristic));
         out.push('\n');
     }
     let inj_block = render_injective_fact_insts(thy);
@@ -592,12 +515,10 @@ fn open_theory_blocks<S: Sync + Clone>(
         blocks.push(tblocks.join("\n"));
     }
     if !thy.heuristic.is_empty() {
-        let rendered: Vec<String> = thy
-            .heuristic
-            .iter()
-            .map(|raw| pretty_goal_rankings(raw, in_file))
-            .collect();
-        blocks.push(format!("heuristic: {}", rendered.join(" ")));
+        blocks.push(format!(
+            "heuristic: {}",
+            pretty_goal_rankings(&thy.heuristic)
+        ));
     }
     // `ppCache = const emptyDoc` (OpenTheory.hs:872) — nothing here.
     blocks.extend(pretty_theory_items(
@@ -1661,7 +1582,7 @@ fn lemma_attr_docs(
             HideLemma(s) => Some(format!("hide_lemma={}", s)),
             // HS `text ("heuristic=" ++ prettyGoalRankings h)` (`:103`),
             // space-separated and with the oracle name expanded.
-            Heuristic(s) => Some(format!("heuristic={}", pretty_goal_rankings(s, in_file))),
+            Heuristic(s) => Some(format!("heuristic={}", pretty_heuristic_str(s, in_file))),
             Output(modules) => Some(format!("output=[{}]", modules.join(","))),
             Left => Some("left".into()),
             Right => Some("right".into()),
@@ -3080,6 +3001,37 @@ end\n";
                  /*\nguarded formula characterizing all satisfying traces:\n\
                  \"∃ x y m #i. (A( m ) @ #i) ∧ (m = <x, y>) ∧ (m = <'t', x, y>)\"\n*/\nby sorry",
             ]
+        );
+    }
+}
+
+#[cfg(test)]
+mod heuristic_header_tests {
+    use super::*;
+
+    /// The `heuristic:` header prints the theory's stored rankings (HS `text
+    /// "heuristic: " <> text (prettyGoalRankings thyH)`,
+    /// TheoryObject.hs:756-768, see line 764): a letter run spells its
+    /// rankings out one per token, an oracle ranking adds its quoted path —
+    /// the theory file's default oracle name when the source names none — and
+    /// a tactic ranking prints the name between its braces, whether or not the
+    /// theory declares a tactic of that name.  The `tactic:` block sits after
+    /// the header, so the header's `{rank}` resolves against a declaration
+    /// the parser has not reached yet.
+    #[test]
+    fn the_header_prints_the_stored_rankings() {
+        let src = "theory T\nbegin\n\n\
+                   heuristic: sop {rank} O \"./my-oracle\" {.}\n\n\
+                   tactic: rank\npresort: C\nprio:\n    regex \"Out\"\n\n\
+                   lemma L: exists-trace \"T\"\n\nend";
+        let parsed = tamarin_parser::parser::parse_theory(src, &[]).expect("theory parses");
+        let thy = crate::elaborate::elaborate_with_in_file(&parsed, "f.spthy")
+            .expect("theory elaborates");
+        assert!(
+            pretty_open_theory(&thy, "f.spthy")
+                .contains("heuristic: s o \"oracle\" p {rank} O \"./my-oracle\" {.}"),
+            "{}",
+            pretty_open_theory(&thy, "f.spthy")
         );
     }
 }
