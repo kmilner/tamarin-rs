@@ -95,6 +95,7 @@ fn render_report(name: &str) -> String {
     );
     format_wf_block(&tamarin_theory::wellformedness::check_wellformedness(
         &elaborated,
+        None,
     ))
 }
 

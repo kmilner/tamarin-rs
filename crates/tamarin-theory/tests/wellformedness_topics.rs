@@ -160,7 +160,7 @@ fn every_fixture_parses_and_matches() {
                 continue;
             }
         };
-        let topics: BTreeSet<String> = wf::topics(&wf::check_wellformedness(&elaborated))
+        let topics: BTreeSet<String> = wf::topics(&wf::check_wellformedness(&elaborated, None))
             .into_iter()
             .map(|s| norm(&s))
             .collect();

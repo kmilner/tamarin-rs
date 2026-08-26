@@ -281,7 +281,10 @@ fn parse(src: &str) -> p::Theory {
 /// The whole wellformedness report of a parsed theory, elaborated the way
 /// the drivers elaborate it.
 fn check(parsed: &p::Theory) -> WfReport {
-    check_wellformedness(&crate::elaborate::elaborate(parsed).expect("elaborate"))
+    check_wellformedness(
+        &crate::elaborate::elaborate(parsed).expect("elaborate"),
+        None,
+    )
 }
 
 /// Return the single `WfError` whose topic matches `topic`.

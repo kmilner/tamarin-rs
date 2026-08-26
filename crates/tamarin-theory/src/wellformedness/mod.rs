@@ -19,9 +19,9 @@
 //! batch CLI (`run.rs`) and the web server's theory load (`theory_io.rs`) —
 //! call it once, after the SAPIC and accountability translations, so the
 //! rules SAPIC generated and the lemmas accountability appended are in
-//! scope.  The batch path additionally splices a Maude-dependent "Rule
-//! variants" block into the result at HS position 6; that stays at its call
-//! site, with [`AFTER_VARIANTS_TOPICS`] and [`insert_wf_before`].
+//! scope.  The batch path hands it the file's Maude handle, which HS's
+//! `ruleVariantsReport` needs; the web load path passes `None` and that one
+//! check reports nothing.
 //!
 //! Every check reads the theory's items through `Theory::items`,
 //! [`Theory::rules`] and [`Theory::lemmas`], which hand them out in item
@@ -29,6 +29,8 @@
 //! `Theory::items` is its identity, and the report follows it.
 
 use std::collections::BTreeSet;
+
+use tamarin_term::maude_proc::MaudeHandle;
 
 use crate::pretty_hpj::{self as hpj, Doc};
 use crate::rule::{pretty_proto_rule_name, ProtoRuleE};
@@ -133,17 +135,17 @@ pub type WfReport = Vec<WfError>;
 /// Wellformedness.hs:1003, :1113, :1211-1214), which is what
 /// `thy.signature.maude_sig` is here.
 ///
-/// `ruleVariantsReport` (HS position 6) needs a live Maude process, so the
-/// batch driver runs it and splices its findings into the result with
-/// [`insert_wf_before`] and [`AFTER_VARIANTS_TOPICS`]; the web load path
-/// produces no such block.
-pub fn check_wellformedness(thy: &Theory) -> WfReport {
+/// `ruleVariantsReport` (HS position 6) is the one check that needs a live
+/// Maude process, hence `maude`: the batch driver passes the handle it
+/// spawned for the file, the web load path passes `None`.
+pub fn check_wellformedness(thy: &Theory, maude: Option<&MaudeHandle>) -> WfReport {
     let sig = &thy.signature.maude_sig;
     let mut report = lemmas::check_if_lemmas_in_theory(thy);
     report.extend(rules::unbound_report(thy));
     report.extend(rules::fresh_names_report(thy));
     report.extend(rules::public_names_report(thy));
     report.extend(rules::rule_sorts_report(thy));
+    report.extend(rules::rule_variants_report(thy, maude));
     report.extend(facts::fact_reports(thy));
     report.extend(formulas::formula_reports(thy, sig));
     report.extend(lemmas::lemma_attribute_report(thy));
@@ -151,47 +153,6 @@ pub fn check_wellformedness(thy: &Theory) -> WfReport {
     report.extend(rules::nat_well_sorted_report(thy));
     report.extend(equations::subterm_convergence_report(sig));
     report
-}
-
-/// Anchor list for the batch driver's `ruleVariantsReport` splice: every
-/// topic [`check_wellformedness`] emits from a check HS runs AFTER it
-/// (Wellformedness.hs:1272-1285) — the `factReports` group, `formulaReports`,
-/// `lemmaAttributeReport`, `multRestrictedReport`, `natWellSortedReport` and
-/// `checkEquationsSubtermConvergence`.  [`insert_wf_before`] tests membership
-/// only, so the topics of the five earlier checks are absent from this list
-/// and cannot act as a boundary.
-pub const AFTER_VARIANTS_TOPICS: &[&str] = &[
-    "Reserved names",
-    "Fr facts must only use a fresh- or a msg-variable",
-    "Special facts",
-    "Fact capitalization issues",
-    "Fact arity issues",
-    "Fact multiplicity issues",
-    "Facts occur in the left-hand-side but not in any right-hand-side ",
-    "Quantifier sorts",
-    "Formula terms",
-    " Formula guardedness",
-    "Lemma annotations",
-    "Multiplication restriction of rules",
-    "Nat Sorts",
-    "Subterm Convergence Warning",
-];
-
-/// Splice `errors` into `report` immediately before the first existing entry
-/// whose `topic` is one of `anchors`, or at the end if none match, preserving
-/// the relative order of both the existing tail and the inserted errors.
-/// No-op when `errors` is empty.
-pub fn insert_wf_before(report: &mut Vec<WfError>, errors: Vec<WfError>, anchors: &[&str]) {
-    if errors.is_empty() {
-        return;
-    }
-    let insert_before = report
-        .iter()
-        .position(|e| anchors.contains(&e.topic.as_str()))
-        .unwrap_or(report.len());
-    let tail = report.split_off(insert_before);
-    report.extend(errors);
-    report.extend(tail);
 }
 
 /// The ordered set of distinct topic strings present in `report`.

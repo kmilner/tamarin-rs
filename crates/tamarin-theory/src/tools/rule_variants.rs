@@ -34,7 +34,7 @@ use tamarin_term::term::Term;
 
 use crate::fact::Fact;
 use crate::rule::{ProtoRuleAC, ProtoRuleACInfo, ProtoRuleE};
-use crate::theory::{Theory, TheoryItem};
+use crate::theory::{OpenProtoRule, Theory, TheoryItem};
 
 type LNSubst = Subst<Name, LVar>;
 
@@ -1116,6 +1116,21 @@ pub fn rule_has_no_variants_for_wf_with(
         return no_variants;
     }
     matches!(abstract_rule_and_variants(maude, rule), Ok(None))
+}
+
+/// [`rule_has_no_variants_for_wf_with`] for a theory rule that
+/// [`populate_rule_variants`] has already visited: the reducible-path
+/// verdict is read off the [`OpenProtoRule`], so no rule costs a second
+/// `get variants` query.
+///
+/// `populate_rule_variants` returns before touching any rule when the
+/// signature has no reducible function symbols; the verdict is then absent
+/// and the syntactic path of [`rule_has_no_variants_for_wf_with`] answers on
+/// its own.
+pub fn open_rule_has_no_variants(maude: &MaudeHandle, opr: &OpenProtoRule) -> bool {
+    let reducible_has_no_variants = (!maude.maude_sig().reducible_fun_syms.is_empty())
+        .then(|| opr.abstracted_rule.is_none() && opr.variant_substs.is_empty());
+    rule_has_no_variants_for_wf_with(maude, &opr.rule, reducible_has_no_variants)
 }
 
 #[cfg(test)]

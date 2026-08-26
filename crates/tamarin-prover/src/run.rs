@@ -40,7 +40,6 @@ use tamarin_theory::constraint::solver::context::annotate_theory_loop_breakers;
 use tamarin_theory::constraint::system::System;
 use tamarin_theory::elaborate::elaborate;
 use tamarin_theory::module::ModuleType;
-use tamarin_theory::wellformedness::{insert_wf_before, AFTER_VARIANTS_TOPICS};
 
 use crate::cli::{lemma_matches, Args, Subcommand};
 
@@ -1332,30 +1331,18 @@ impl TheoryPipeline<'_> {
         Ok(())
     }
 
-    /// HS `checkTranslatedTheory` (TheoryLoader.hs:553-615): the
-    /// wellformedness re-runs over the TRANSLATED theory, the per-file Maude
-    /// spawn (the `SignatureWithMaude` analog), the rule-variant
-    /// pre-computation + `Rule has no variants` check, the once-per-theory
-    /// NDC pass, and the dynamic Message Derivation Checks.  The NDC-joined
-    /// signature is NOT applied here: `ndc_funs` is stashed for
-    /// `close_translated_theory`, mirroring how HS's `closeTheory` adopts
-    /// this stage's `sign'` while `translateAndCheckTheory` discards it.
+    /// HS `checkTranslatedTheory` (TheoryLoader.hs:553-615): the per-file
+    /// Maude spawn (the `SignatureWithMaude` analog), the rule-variant
+    /// pre-computation, the wellformedness pass over the TRANSLATED theory,
+    /// the once-per-theory NDC pass, and the dynamic Message Derivation
+    /// Checks.  The NDC-joined signature is NOT applied here: `ndc_funs` is
+    /// stashed for `close_translated_theory`, mirroring how HS's `closeTheory`
+    /// adopts this stage's `sign'` while `translateAndCheckTheory` discards
+    /// it.
     ///
     /// [`Self::translate_module`] gates only the loop-breaker annotation —
     /// see the comment at that block.
     fn check_translated_theory(&mut self) {
-        // HS `postReport`: the full `checkWellformedness` over the TRANSLATED
-        // theory (TheoryLoader.hs:553-565, `checkTranslatedTheory`), i.e. after
-        // SAPIC `translate` injected the generated rules and `Acc.translate`
-        // the generated lemmas, and after the `-m msr` lemma filter.  The pass
-        // is shared with the web load path — see
-        // `tamarin_theory::wellformedness`.  Its one Maude-dependent member,
-        // `ruleVariantsReport`, is batch-only and splices in below.
-        self.wf_report
-            .extend(tamarin_theory::wellformedness::check_wellformedness(
-                &self.elaborated,
-            ));
-
         // Spawn a single Maude handle for this file.  Used by:
         //   - the rule-variants computation that populates each rule's
         //     `variant_substs` + `abstracted_rule` (so the pretty-printer
@@ -1437,108 +1424,39 @@ impl TheoryPipeline<'_> {
             );
         }
 
-        // Port of HS `ruleVariantsReport` / `variantsCheck`
-        // (Wellformedness.hs:354-372, 375-394).
-        //
-        // Sub-check 1: "Rule has no variants" — HS's
-        // `guard (null recomputedVariants)`, which holds exactly when
-        // `variantsProtoRule hnd ruE` is `Nothing`, i.e. when the variant
-        // computation ends with an EMPTY substitution set because
-        // `isFreshRedundant` filtered every candidate.  The canonical case is
-        // a rule with both `Fr(~x)` and `In(~x)` among its premises: `~x`
-        // cannot be sent before it is generated, so even the identity
-        // substitution is fresh-redundant.  `abstract_rule_and_variants`
-        // returns `None` on the same input, leaving `abstracted_rule` `None`
-        // and `variant_substs` empty; `rule_has_no_variants_for_wf_with`
-        // reads that verdict, or runs the equivalent syntactic check when the
-        // rule has no reducible-headed sub-term (see `sig_has_reducible`).
-        //
-        // Sub-check 2: "Variants mismatch" — `ruAC` (a variants block written
-        // out in the rule body) present and disagreeing with the recomputed
-        // set.  NOT PORTED: it needs the parsed `rule.variants` compared
-        // against `abstracted_rule` + `variant_substs`; no corpus file writes
-        // such a block.
-        if let Some(ref wf_maude) = self.file_maude {
+        // HS `postReport`: the full `checkWellformedness` over the TRANSLATED
+        // theory (TheoryLoader.hs:553-565, `checkTranslatedTheory`), i.e. after
+        // SAPIC `translate` injected the generated rules and `Acc.translate`
+        // the generated lemmas, and after the `-m msr` lemma filter.  The pass
+        // is shared with the web load path — see
+        // `tamarin_theory::wellformedness`.  Its `ruleVariantsReport` member
+        // reads the variants `populate_rule_variants` recorded above, so the
+        // pass sits between that call and the three stages below.  That is the
+        // HS Maude call ORDER: the variant queries first, then the loop-breaker
+        // annotation, the NDC pass and the derivation checks, all of which
+        // consume `file_maude`'s shared fresh-variable counter.
+        self.wf_report
+            .extend(tamarin_theory::wellformedness::check_wellformedness(
+                &self.elaborated,
+                self.file_maude.as_ref(),
+            ));
+
+        // HS `closeProtoRule` (lib/theory/src/Rule.hs:82-86, see line 84):
+        // `ClosedProtoRule ruE <$> maybeToList (variantsProtoRule hnd ruE)` — a
+        // rule with NO variants produces NO closed rule.  It is dropped from
+        // the closed theory entirely: it participates in neither rendering nor
+        // proof search.  The drop reads the same verdict
+        // `wellformedness::rules::rule_variants_report` reports on, and runs
+        // after it, because HS warns on the OPEN theory and drops while
+        // closing.
+        if let Some(wf_maude) = self.file_maude.as_ref() {
             use tamarin_theory::theory::TheoryItem;
-            use tamarin_theory::wellformedness::underline_topic;
-            use tamarin_theory::wellformedness::WfError as WfE;
-
-            let mut variants_errors: Vec<WfE> = Vec::new();
-            let mut no_variant_rules: Vec<String> = Vec::new();
-
-            // `populate_rule_variants` (above) already ran
-            // `abstract_rule_and_variants` for every rule when the
-            // signature has reducible function symbols, recording its
-            // result on each `OpenProtoRule` (`abstracted_rule` is `Some`
-            // iff it returned `Ok(Some(_))`).  Reuse that result for the
-            // reducible (Maude) path of the WF "Rule has no variants"
-            // check so we don't issue a SECOND `get variants` query per
-            // rule.  When the signature has NO reducible funs,
-            // `populate_rule_variants` returned early without populating
-            // those fields, but then no rule is reducible either — the WF
-            // check takes its syntactic (no-Maude) path, so the precomputed
-            // value is never consulted.
-            let sig_has_reducible = !wf_maude.maude_sig().reducible_fun_syms.is_empty();
-
-            for item in &self.elaborated.items {
-                let TheoryItem::Rule(opr) = item else {
-                    continue;
-                };
-
-                // Sub-check 1 (see the block above): HS `variantsCheck`'s
-                // `guard (null recomputedVariants) $> ...`
-                // (Wellformedness.hs:354-372, see line 362).
-                let precomputed_no_variants = if sig_has_reducible {
-                    Some(opr.abstracted_rule.is_none() && opr.variant_substs.is_empty())
-                } else {
-                    None
-                };
-                if tamarin_theory::tools::rule_variants::rule_has_no_variants_for_wf_with(
-                    wf_maude,
-                    &opr.rule,
-                    precomputed_no_variants,
-                ) {
-                    // HS message (Wellformedness.hs:363-366):
-                    //   text "Rule " <> prettyRuleName ruE <> text " has no variants."
-                    //   $--$  text "Most likely, ..."
-                    //   <> text "For exaple, ..."
-                    // "For exaple" is a typo in HS source, preserved faithfully.
-                    let rule_name = opr.name().to_string();
-                    no_variant_rules.push(rule_name.clone());
-                    let topic = "Rule has no variants";
-                    let body = format!(
-                        "  Rule {} has no variants.\n  \n  Most likely, this means that \
-                         the rule's use of fresh variables is contradictory. For exaple, \
-                         a rule with the premises In(~x) and Fr(~x) has no variants \
-                         because ~x cannot be sent before it is generated.",
-                        rule_name,
-                    );
-                    let mut msg = String::new();
-                    msg.push_str(&underline_topic(topic));
-                    msg.push('\n');
-                    msg.push_str(&body);
-                    msg.push('\n');
-                    variants_errors.push(WfE::new(topic, msg));
+            self.elaborated.items.retain(|item| match item {
+                TheoryItem::Rule(opr) => {
+                    !tamarin_theory::tools::rule_variants::open_rule_has_no_variants(wf_maude, opr)
                 }
-            }
-
-            // HS position 6: ruleVariantsReport comes BEFORE factReports
-            // (position 7) and AFTER ruleSortsReport (position 5), so the
-            // findings go in front of the first entry from a later check.
-            insert_wf_before(&mut self.wf_report, variants_errors, AFTER_VARIANTS_TOPICS);
-
-            // HS `closeProtoRule` (lib/theory/src/Rule.hs:82-86, see line 84): `ClosedProtoRule ruE <$>
-            // maybeToList (variantsProtoRule hnd ruE)` — a rule with NO
-            // variants produces NO closed rule.  It is dropped from the
-            // closed theory entirely: it participates in neither rendering
-            // nor proof search.  (The wf warning above fires on the OPEN
-            // theory, before closing, so it is emitted regardless.)
-            if !no_variant_rules.is_empty() {
-                self.elaborated.items.retain(|item| match item {
-                    TheoryItem::Rule(r) => !no_variant_rules.iter().any(|n| n == r.name()),
-                    _ => true,
-                });
-            }
+                _ => true,
+            });
         }
 
         // Annotate per-rule loop breakers on the OUTER theory so

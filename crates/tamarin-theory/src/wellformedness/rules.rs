@@ -34,6 +34,7 @@ use std::collections::BTreeSet;
 
 use tamarin_term::function_symbols::{nat_one_sym, AcSym, FunSym};
 use tamarin_term::lterm::{frees, frees_list, sort_of_name, LNTerm, LSort, LVar, Name};
+use tamarin_term::maude_proc::MaudeHandle;
 use tamarin_term::pretty::pretty_nterm;
 use tamarin_term::term::Term;
 use tamarin_term::vterm::Lit;
@@ -44,6 +45,7 @@ use crate::pretty_hpj::{self as hpj, Doc};
 use crate::rule::{proto_rule_e_frees, ProtoRuleE};
 use crate::sapic::{Process, ProcessCombinator};
 use crate::theory::Theory;
+use crate::tools::rule_variants::open_rule_has_no_variants;
 
 use super::{
     grouped_topic_block, numbered_index_width, quote, show_rule_case_name, thy_proto_rules,
@@ -548,6 +550,57 @@ pub fn rule_sorts_report(thy: &Theory) -> WfReport {
             format!("rule {}: ", quote(&show_rule_case_name(ru))),
             &proto_rule_e_frees(ru),
         ));
+    }
+    out
+}
+
+// =============================================================================
+// Rule variants
+// =============================================================================
+
+/// Port of HS `ruleVariantsReport` (Wellformedness.hs:375-382): HS's
+/// `variantsCheck` (Wellformedness.hs:354-372) over every rule item, with a
+/// live Maude behind the variant recomputation.
+///
+/// Only the `guard (null recomputedVariants)` arm (Wellformedness.hs:362-366)
+/// is ported.  The other arm, "Variants", compares a `variants (modulo AC)`
+/// block written out in the rule body against the recomputed set; no corpus
+/// file writes such a block, and the internal rule's `rule_ac` half would have
+/// to be re-abstracted to compare it.
+///
+/// `maude` is `None` on the web load path, which produces no such block.
+/// [`open_rule_has_no_variants`] answers from the verdict
+/// `populate_rule_variants` recorded on each rule, so the check issues no
+/// Maude query of its own; the driver keys the no-variant rule drop off the
+/// same predicate (HS `closeProtoRule`, lib/theory/src/Rule.hs:82-86).
+pub fn rule_variants_report(thy: &Theory, maude: Option<&MaudeHandle>) -> WfReport {
+    let Some(maude) = maude else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for opr in thy.rules() {
+        if !open_rule_has_no_variants(maude, opr) {
+            continue;
+        }
+        // HS `text "Rule " <> prettyRuleName ruE <> text " has no variants."
+        // $--$ text "Most likely, ..." <> text "For exaple, ..."`
+        // (Wellformedness.hs:363-366).  Every piece is a `text`, which
+        // HughesPJ never breaks, so the paragraph is one long line and the
+        // `$--$` blank line carries the group's `nest 2` indent.  "For exaple"
+        // is spelled that way in the HS source.
+        let topic = "Rule has no variants";
+        let body = format!(
+            "  Rule {} has no variants.\n  \n  Most likely, this means that \
+             the rule's use of fresh variables is contradictory. For exaple, \
+             a rule with the premises In(~x) and Fr(~x) has no variants \
+             because ~x cannot be sent before it is generated.",
+            show_rule_case_name(&opr.rule),
+        );
+        let mut msg = underline_topic(topic);
+        msg.push('\n');
+        msg.push_str(&body);
+        msg.push('\n');
+        out.push(WfError::new(topic, msg));
     }
     out
 }

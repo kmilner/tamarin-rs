@@ -26,6 +26,7 @@ fn wf_block(src: &str) -> String {
     let elaborated = tamarin_theory::elaborate::elaborate(&parsed).expect("probe elaborates");
     format_wf_block(&tamarin_theory::wellformedness::check_wellformedness(
         &elaborated,
+        None,
     ))
 }
 

@@ -62,7 +62,7 @@ fn main() {
             Ok(t) => t,
             Err(_) => continue,
         };
-        let rust_topics = wf::topics(&wf::check_wellformedness(&elaborated));
+        let rust_topics = wf::topics(&wf::check_wellformedness(&elaborated, None));
         if !rust_topics.is_empty() {
             rust_flagged += 1;
         }

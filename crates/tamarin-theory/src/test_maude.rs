@@ -95,6 +95,9 @@ mod tests {
     ///   intruder rules through two maude handles of its own.
     /// - `crates/tamarin-theory/tests/oracle_solver.rs` — the integration
     ///   mirror of that probe.
+    /// - `crates/tamarin-theory/tests/rule_variants_report.rs` — the
+    ///   `ruleVariantsReport` pin, which needs a handle on the probe theory's
+    ///   own signature.
     /// - `crates/tamarin-theory/examples/common/mod.rs` — the loader for the
     ///   examples.  See [`SKIPS_SILENTLY`] for why it is not in
     ///   [`MUST_BE_LOUD`].
@@ -109,7 +112,7 @@ mod tests {
     /// - `crates/tamarin-term/src/test_maude.rs` — the bottom crate's own
     ///   shared probe, and the twin of this file.  It is in
     ///   [`SKIPS_SILENTLY`].
-    const ALLOWED: [&str; 9] = [
+    const ALLOWED: [&str; 10] = [
         "crates/tamarin-prover/tests/common/mod.rs",
         "crates/tamarin-server/src/handlers/proof_tree.rs",
         "crates/tamarin-server/tests/common/mod.rs",
@@ -119,6 +122,7 @@ mod tests {
         "crates/tamarin-theory/src/test_maude.rs",
         "crates/tamarin-theory/tests/intruder_variants_render.rs",
         "crates/tamarin-theory/tests/oracle_solver.rs",
+        "crates/tamarin-theory/tests/rule_variants_report.rs",
     ];
 
     /// The [`ALLOWED`] probes that panic when they resolve no maude.  Each of
@@ -129,7 +133,7 @@ mod tests {
     /// the ladder of candidates.  A `MAUDE_PATH` that is set but names a file
     /// that does not exist must panic.  A probe that resolves nothing at all
     /// must also panic, unless the opt-out is named.
-    const MUST_BE_LOUD: [&str; 7] = [
+    const MUST_BE_LOUD: [&str; 8] = [
         "crates/tamarin-prover/tests/common/mod.rs",
         "crates/tamarin-server/src/handlers/proof_tree.rs",
         "crates/tamarin-server/tests/common/mod.rs",
@@ -137,6 +141,7 @@ mod tests {
         "crates/tamarin-theory/src/test_maude.rs",
         "crates/tamarin-theory/tests/intruder_variants_render.rs",
         "crates/tamarin-theory/tests/oracle_solver.rs",
+        "crates/tamarin-theory/tests/rule_variants_report.rs",
     ];
 
     /// The [`ALLOWED`] probes that do not carry the policy of

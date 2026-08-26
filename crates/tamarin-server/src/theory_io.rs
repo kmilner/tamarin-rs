@@ -271,7 +271,8 @@ pub fn load_from_source(
     // are in scope (`checkTranslatedTheory`, TheoryLoader.hs:553-565).  The
     // pass is shared with the batch path (`run_batch`) — see
     // `tamarin_theory::wellformedness`.  Its `ruleVariantsReport` member needs
-    // a Maude process the batch path spawns; the web load emits no such block.
+    // a live Maude, which the batch path spawns per file and the load path has
+    // not started here, so it gets `None` and reports nothing.
     //
     // The result feeds two renderings: the `/* WARNING: ... */` comment in the
     // source/message routes (`format_wf_block`) and the
@@ -279,7 +280,9 @@ pub fn load_from_source(
     // (`errors_html`).
     let mut wf_report = sapic_wf;
     wf_report.extend(acc_wf);
-    wf_report.extend(tamarin_theory::wellformedness::check_wellformedness(&typed));
+    wf_report.extend(tamarin_theory::wellformedness::check_wellformedness(
+        &typed, None,
+    ));
 
     // The theory's once-per-load NDC-checked intruder cache
     // (`check_close_intr_rule` below).  Stored on the `TheoryEntry` so
