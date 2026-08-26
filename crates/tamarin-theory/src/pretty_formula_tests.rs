@@ -45,8 +45,10 @@ fn user_app(name: &str, args: Vec<BLNTerm>) -> BLNTerm {
 
 #[test]
 fn trivial_formulas() {
-    assert_eq!(pretty_formula(&p::Formula::True), "\u{22A4}");
-    assert_eq!(pretty_formula(&p::Formula::False), "\u{22A5}");
+    let ltrue: LNFormula = ProtoFormula::ltrue();
+    let lfalse: LNFormula = ProtoFormula::lfalse();
+    assert_eq!(pretty_lnformula(&ltrue), "\u{22A4}");
+    assert_eq!(pretty_lnformula(&lfalse), "\u{22A5}");
 }
 
 #[test]
@@ -99,35 +101,27 @@ fn step_unann_breaks_past_ribbon() {
 
 #[test]
 fn forall_with_action() {
-    // ∀ ni #i. F(ni)@#i ⇒ ⊥
-    let fa = p::Fact {
-        persistent: false,
-        name: "F".into(),
-        args: vec![p::Term::Var(v("ni", LSort::Msg))],
-        annotations: vec![],
-    };
-    let body = p::Formula::Implies(
-        Box::new(p::Formula::Atom(p::Atom::Action(
-            fa,
-            p::Term::Var(v("i", LSort::Node)),
-        ))),
-        Box::new(p::Formula::False),
-    );
-    let f = p::Formula::Forall(
-        vec![v("ni", LSort::Msg), v("i", LSort::Node)],
-        Box::new(body),
-    );
+    use crate::formula::from_parser;
+    use tamarin_parser::parser::parse_formula_str;
+    use tamarin_term::maude_sig::pair_maude_sig;
+
+    let f = parse_formula_str("All ni #i. Fa(ni) @ #i ==> F", &pair_maude_sig()).unwrap();
+    let ln = from_parser(&f, &pair_maude_sig()).unwrap();
     // The output follows HS.  `Name( args )` keeps the internal spaces, and
     // `ppImp` puts parentheses on both sides of the `⇒`.  The expected bytes
     // come from the oracle (Git revision ef3f0468).
     assert_eq!(
-        pretty_formula(&f),
-        "\u{2200} ni #i. (F( ni ) @ #i) \u{21D2} (\u{22A5})"
+        syntactic_lnformula_doc(&ln).render_with(FLAT_WIDTH, FLAT_WIDTH),
+        "\u{2200} ni #i. (Fa( ni ) @ #i) \u{21D2} (\u{22A5})"
     );
 }
 
 #[test]
 fn long_quantifier_varlist_wraps() {
+    use crate::formula::from_parser;
+    use tamarin_parser::parser::parse_formula_str;
+    use tamarin_term::maude_sig::pair_maude_sig;
+
     // HS `ppVars = fsep . map (text . show)` (Theory/Model/Formula.hs:503-511, see line 511): a long
     // bound-var list wraps across lines, the continuation aligned after
     // the `∃ ` prefix (column 2, the `<>` nesting offset).  Build an
@@ -137,10 +131,14 @@ fn long_quantifier_varlist_wraps() {
         "sndcode2", "ess", "hv1", "hv2", "hy1", "hy2", "x1", "x2", "adv1", "adv2", "ek", "bb",
         "sks", "y1", "y2", "aa", "ea", "el", "em",
     ];
-    let vs: Vec<p::VarSpec> = names.iter().map(|n| v(n, LSort::Msg)).collect();
-    let f = p::Formula::Exists(vs, Box::new(p::Formula::False));
-    let out =
-        formula_doc(&f).render_at(crate::pretty_hpj::LINE_LENGTH, crate::pretty_hpj::RIBBON, 0);
+    let src = format!("Ex {}. F", names.join(" "));
+    let f = parse_formula_str(&src, &pair_maude_sig()).unwrap();
+    let ln = from_parser(&f, &pair_maude_sig()).unwrap();
+    let out = syntactic_lnformula_doc(&ln).render_at(
+        crate::pretty_hpj::LINE_LENGTH,
+        crate::pretty_hpj::RIBBON,
+        0,
+    );
     let lines: Vec<&str> = out.split('\n').collect();
     assert!(lines.len() >= 2, "long var list must wrap: {out:?}");
     // First line opens with the existential symbol and a space.
@@ -199,7 +197,7 @@ fn user_ac_symbol_renders_infix() {
     let t = f_app_ac(AcSym::AcFct(sym), vec![x, y]);
 
     let ast = crate::elaborate::lnterm_to_parser(&t);
-    assert_eq!(term_to_doc(&ast, &[]).render(), "(x add y)");
+    assert_eq!(term_to_doc(&ast).render(), "(x add y)");
 
     // The same infix form must reach a rendered fact.
     let fa = p::Fact {
@@ -208,7 +206,7 @@ fn user_ac_symbol_renders_infix() {
         args: vec![ast],
         annotations: Vec::new(),
     };
-    assert_eq!(fact_to_doc(&fa, &[]).render(), "F( (x add y) )");
+    assert_eq!(fact_to_doc(&fa).render(), "F( (x add y) )");
 }
 
 /// A NULLARY user-AC symbol is HS `FApp (AC (ACfct (f,_))) [] ->
@@ -228,7 +226,7 @@ fn user_ac_symbol_nullary_renders_bare_name() {
     );
     let t = Term::App(FunSym::Ac(AcSym::AcFct(sym)), Vec::new().into());
     let ast = crate::elaborate::lnterm_to_parser(&t);
-    assert_eq!(term_to_doc(&ast, &[]).render(), "add");
+    assert_eq!(term_to_doc(&ast).render(), "add");
 }
 
 /// HS `prettyTerm` renders an AC operand list with the operator between the
@@ -311,7 +309,7 @@ fn ac_union_chain_wraps_in_rule_term() {
     // deep indent the chain must break; HS puts `++` at the end of each
     // non-last element's lines and `(`-wraps the whole chain.
     let t = ac_chain_term();
-    let doc = term_to_doc(&t, &[]);
+    let doc = term_to_doc(&t);
     // place at column 20 (a typical proof-tree/rule indent) so it wraps.
     let s = doc.render_at(LINE_LENGTH, RIBBON, 20);
     assert!(
@@ -373,7 +371,7 @@ fn exp_with_ac_exponent_wraps_inside_fun() {
             p::Term::Var(v("longSaltArgumentName", LSort::Fresh)),
         ],
     );
-    let doc = term_to_doc(&t, &[]);
+    let doc = term_to_doc(&t);
     // Deep indent (col 30) so the flat term overruns and the `*`-operands
     // must each break onto their own line at `nest 1` (HS layout).
     let s = doc.render_at(LINE_LENGTH, RIBBON, 30);
@@ -394,7 +392,7 @@ fn exp_with_ac_exponent_wraps_inside_fun() {
         );
     }
     // The plain (well-fitting) exp still renders flat with no wrap.
-    let flat = term_to_doc(&exp, &[]).render_at(LINE_LENGTH, RIBBON, 0);
+    let flat = term_to_doc(&exp).render_at(LINE_LENGTH, RIBBON, 0);
     assert_eq!(flat, "'g'^(~longFreshPrivKeyOne*~longFreshPrivKeyTwo)");
 }
 
@@ -436,7 +434,7 @@ fn algapp_renders_function_form_doc_term() {
         Box::new(p::Term::Var(v("body", LSort::Msg))),
         Box::new(p::Term::Var(v("key", LSort::Msg))),
     );
-    assert_eq!(term_to_doc(&t, &[]).render(), "sdec(body, key)");
+    assert_eq!(term_to_doc(&t).render(), "sdec(body, key)");
 }
 
 #[test]
@@ -484,25 +482,19 @@ fn fact_annotations_render_in_ord_order() {
             p::FactAnnotation::NoSources, // duplicate: deduped like S.fromList
         ],
     };
-    assert_eq!(fact_to_doc(&fa, &[]).render(), "F( a )[+, no_precomp]");
+    assert_eq!(fact_to_doc(&fa).render(), "F( a )[+, no_precomp]");
 }
 
 // =============================================================================
 // Locally-nameless printer
 // =============================================================================
 
-/// The AST printer's `Doc` for a formula, as the production renderers build
-/// it.
-fn ast_doc(f: &p::Formula) -> Doc {
-    formula_to_doc(f, &[], &mut avoid_precise_formula(f))
-}
-
-/// Every sample printed through the AST printer and through the
-/// locally-nameless printers, compared through both production wrappers
-/// and pinned to the oracle's `--parse-only` render of the lemma-header
-/// shape (probe `S0_printer_samples.spthy`).
+/// Every sample printed through both locally-nameless printers, pinned to
+/// the oracle's `--parse-only` render of the lemma-header shape (probe
+/// `S0_printer_samples.spthy`), and the two printers compared through the
+/// nested restriction-body wrapper as well.
 #[test]
-fn lnformula_doc_matches_ast_doc_on_samples() {
+fn lnformula_doc_renders_the_lemma_header_samples() {
     use crate::formula::{from_parser, to_lnformula};
     use tamarin_parser::parser::parse_formula_str;
     use tamarin_term::maude_sig::pair_maude_sig;
@@ -589,18 +581,8 @@ fn lnformula_doc_matches_ast_doc_on_samples() {
         let f = parse_formula_str(src, &pair_maude_sig()).unwrap();
         let ln = from_parser(&f, &pair_maude_sig()).unwrap();
         assert_eq!(
-            lemma_header_line_doc("all-traces", ast_doc(&f)),
-            expected,
-            "AST printer on {src}"
-        );
-        assert_eq!(
             lemma_header_line_doc("all-traces", syntactic_lnformula_doc(&ln)),
             expected,
-            "syntactic_lnformula_doc on {src}"
-        );
-        assert_eq!(
-            doublequoted_nested_doc(syntactic_lnformula_doc(&ln), 2),
-            doublequoted_nested_doc(ast_doc(&f), 2),
             "syntactic_lnformula_doc on {src}"
         );
         if let Some(plain) = to_lnformula(&ln) {
@@ -611,8 +593,8 @@ fn lnformula_doc_matches_ast_doc_on_samples() {
             );
             assert_eq!(
                 doublequoted_nested_doc(lnformula_doc(&plain), 2),
-                doublequoted_nested_doc(ast_doc(&f), 2),
-                "lnformula_doc on {src}"
+                doublequoted_nested_doc(syntactic_lnformula_doc(&ln), 2),
+                "nested body on {src}"
             );
         }
     }
@@ -627,7 +609,7 @@ fn lnformula_doc_matches_ast_doc_on_samples() {
 /// nullary user symbol inside a fact, and a binder whose source index is not
 /// its display index.
 #[test]
-fn lnformula_doc_matches_ast_doc_on_atom_and_scope_samples() {
+fn lnformula_doc_renders_the_atom_and_scope_samples() {
     use crate::formula::{from_parser, to_lnformula};
     use tamarin_parser::parser::{parse_formula_str, parse_theory};
 
@@ -690,11 +672,6 @@ fn lnformula_doc_matches_ast_doc_on_atom_and_scope_samples() {
         let f = parse_formula_str(src, &msig).unwrap();
         let ln = from_parser(&f, &msig).unwrap();
         assert_eq!(
-            lemma_header_line_doc("all-traces", ast_doc(&f)),
-            expected,
-            "AST printer on {src}"
-        );
-        assert_eq!(
             lemma_header_line_doc("all-traces", syntactic_lnformula_doc(&ln)),
             expected,
             "syntactic_lnformula_doc on {src}"
@@ -712,7 +689,7 @@ fn lnformula_doc_matches_ast_doc_on_atom_and_scope_samples() {
 /// render of the probe `S0_bare_name_under_node_binder.spthy`: the right
 /// operand of a node equality is a `nodevar` and binds to the `#l` binder,
 /// while a fact argument is a `msgvar` that stays free and renames the
-/// binder to `#l.1`.  All three printers render every sample alike.
+/// binder to `#l.1`.  Both printers render every sample alike.
 #[test]
 fn lnformula_doc_bare_name_under_node_binder() {
     use crate::formula::{from_parser, to_lnformula};
@@ -781,11 +758,6 @@ fn lnformula_doc_bare_name_under_node_binder() {
             expected,
             "lnformula_doc on {src}"
         );
-        assert_eq!(
-            lemma_header_line_doc(quant, ast_doc(&f)),
-            expected,
-            "AST printer on {src}"
-        );
     }
 }
 
@@ -826,6 +798,7 @@ fn lnformula_doc_panics_on_unbound_index() {
 /// Oracle bytes (pinned build): probe `S1_binder_sort_capture.spthy`.
 #[test]
 fn binder_does_not_capture_a_different_sort() {
+    use crate::formula::from_parser;
     use tamarin_parser::parser::parse_formula_str;
     use tamarin_term::maude_sig::pair_maude_sig;
 
@@ -834,8 +807,13 @@ fn binder_does_not_capture_a_different_sort() {
         ("Ex $k #i. Made(k) @ i", "∃ $k.1 #i. Made( k ) @ #i"),
     ] {
         let f = parse_formula_str(src, &pair_maude_sig()).unwrap();
-        assert_eq!(pretty_formula(&f), want, "on {src}");
-        assert_eq!(ast_doc(&f).render(), want, "on {src}");
+        let ln = from_parser(&f, &pair_maude_sig()).unwrap();
+        assert_eq!(
+            syntactic_lnformula_doc(&ln).render_with(FLAT_WIDTH, FLAT_WIDTH),
+            want,
+            "on {src}"
+        );
+        assert_eq!(syntactic_lnformula_doc(&ln).render(), want, "on {src}");
     }
 }
 
@@ -846,12 +824,14 @@ fn binder_does_not_capture_a_different_sort() {
 /// Oracle bytes (pinned build): fixture `s1_temporal_positions`.
 #[test]
 fn bare_binder_used_as_timepoint_is_renamed() {
+    use crate::formula::from_parser;
     use tamarin_parser::parser::parse_formula_str;
     use tamarin_term::maude_sig::pair_maude_sig;
 
     let f = parse_formula_str("All x y. Alive(y) @ x ==> last(x)", &pair_maude_sig()).unwrap();
+    let ln = from_parser(&f, &pair_maude_sig()).unwrap();
     assert_eq!(
-        pretty_formula(&f),
+        syntactic_lnformula_doc(&ln).render_with(FLAT_WIDTH, FLAT_WIDTH),
         "∀ x.1 y. (Alive( y ) @ #x) ⇒ (last(#x))"
     );
 }
@@ -865,7 +845,7 @@ fn bare_binder_used_as_timepoint_is_renamed() {
 /// Oracle bytes (pinned build): probe `S1_ac_binder_operand_order.spthy`.
 #[test]
 fn existential_binder_keeps_ac_operand_order() {
-    use crate::elaborate::canonicalize_ac_in_formula;
+    use crate::formula::from_parser;
     use crate::guarded::formula_to_guarded_parsed;
     use tamarin_parser::parser::parse_formula_str;
     use tamarin_term::maude_sig::pair_maude_sig;
@@ -880,8 +860,9 @@ fn existential_binder_keeps_ac_operand_order() {
         &sig,
     )
     .unwrap();
+    let ln = from_parser(&f, &sig).unwrap();
     assert_eq!(
-        doublequoted_nested_doc(formula_doc(&canonicalize_ac_in_formula(&f)), 2),
+        doublequoted_nested_doc(syntactic_lnformula_doc(&ln), 2),
         want
     );
     // `formulaToGuarded` on the negation is what the solver stores and what
@@ -912,10 +893,30 @@ fn mset_maude_sig() -> tamarin_term::maude_sig::MaudeSig {
         .maude_sig
 }
 
-/// Each binder of the reopened formula carries the display name the printer
-/// gives it, and each occurrence carries that binder's identity: printing the
-/// reopened AST reproduces the locally-nameless render, and closing it again
-/// reproduces the formula.
+/// The binder `VarSpec`s of a parser-AST formula, outermost first.
+fn binder_specs(f: &p::Formula) -> Vec<(String, u64, LSort)> {
+    use p::Formula::*;
+    match f {
+        True | False | Atom(_) => Vec::new(),
+        Not(g) => binder_specs(g),
+        And(a, b) | Or(a, b) | Implies(a, b) | Iff(a, b) => {
+            let mut out = binder_specs(a);
+            out.extend(binder_specs(b));
+            out
+        }
+        Forall(vs, body) | Exists(vs, body) => {
+            let mut out: Vec<(String, u64, LSort)> =
+                vs.iter().map(|v| (v.name.clone(), v.idx, v.sort)).collect();
+            out.extend(binder_specs(body));
+            out
+        }
+    }
+}
+
+/// Each binder of the reopened formula carries the display variable the
+/// printer shows for it — the `x`/`x.1` pair of a shadowed name, the fresh
+/// variables of a `_restrict` prefix, a binder pushed past a free variable of
+/// the same name — and closing the reopened AST again reproduces the formula.
 #[test]
 fn to_parser_reopens_the_binders_the_printer_shows() {
     use crate::formula::from_parser;
@@ -923,29 +924,56 @@ fn to_parser_reopens_the_binders_the_printer_shows() {
     use tamarin_term::maude_sig::pair_maude_sig;
 
     let msig = pair_maude_sig();
-    for src in [
-        "All x y #i. A(x, y) @ #i",
+    let samples: &[(&str, &[(&str, u64, LSort)])] = &[
+        (
+            "All x y #i. A(x, y) @ #i",
+            &[
+                ("x", 0, LSort::Msg),
+                ("y", 0, LSort::Msg),
+                ("i", 0, LSort::Node),
+            ],
+        ),
         // The inner binder shadows the outer one: `x` and `x.1`.
-        "All x. Ex x. A(x) @ #i",
+        (
+            "All x. Ex x. A(x) @ #i",
+            &[("x", 0, LSort::Msg), ("x", 1, LSort::Msg)],
+        ),
         // A free `x` seeds the supply, so the binder is displayed `x.1`.
-        "(Ex x. A(x) @ #i) & B(x) @ #j",
+        ("(Ex x. A(x) @ #i) & B(x) @ #j", &[("x", 1, LSort::Msg)]),
         // The shape the `_restrict` lifting builds, with its `x`/`x.1` fresh
         // variables and the `#NOW` timepoint.
-        "All x #NOW x.1. Restr_C_2_1(x, x.1) @ NOW ==> x = x.1",
-        "All x. P(x, y)",
-        "All x y. (x + y) = z",
-        "All #i #j. last(#i) & #i < #j",
-        "All x y. x << y",
-        "not (Ex x. A(x) @ #i) ==> (F | T)",
-    ] {
+        (
+            "All x #NOW x.1. Restr_C_2_1(x, x.1) @ NOW ==> x = x.1",
+            &[
+                ("x", 0, LSort::Msg),
+                ("NOW", 0, LSort::Node),
+                ("x", 1, LSort::Msg),
+            ],
+        ),
+        ("All x. P(x, y)", &[("x", 0, LSort::Msg)]),
+        (
+            "All x y. (x + y) = z",
+            &[("x", 0, LSort::Msg), ("y", 0, LSort::Msg)],
+        ),
+        (
+            "All #i #j. last(#i) & #i < #j",
+            &[("i", 0, LSort::Node), ("j", 0, LSort::Node)],
+        ),
+        (
+            "All x y. x << y",
+            &[("x", 0, LSort::Msg), ("y", 0, LSort::Msg)],
+        ),
+        ("not (Ex x. A(x) @ #i) ==> (F | T)", &[("x", 0, LSort::Msg)]),
+    ];
+    for (src, binders) in samples {
         let f = parse_formula_str(src, &msig).unwrap();
         let ln = from_parser(&f, &msig).unwrap();
         let back = syntactic_lnformula_to_parser(&ln);
-        assert_eq!(
-            pretty_formula(&back),
-            syntactic_lnformula_doc(&ln).render(),
-            "render of the reopened AST on {src}"
-        );
+        let want: Vec<(String, u64, LSort)> = binders
+            .iter()
+            .map(|(n, i, s)| ((*n).to_string(), *i, *s))
+            .collect();
+        assert_eq!(binder_specs(&back), want, "reopened binders on {src}");
         assert_eq!(
             from_parser(&back, &msig).unwrap(),
             ln,

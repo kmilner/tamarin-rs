@@ -1746,9 +1746,8 @@ pub fn canonicalize_ac_in_pterm(t: &p::Term) -> p::Term {
 }
 
 /// Shared structural walker: rebuild a parser-AST fact, mapping `g` over
-/// every arg.  The single traversal shape behind [`canonicalize_ac_in_pfact`]
-/// and `macro_expand::apply_macros_fact` (each supplies its own leaf
-/// `&Term -> Term`).
+/// every arg.  The traversal shape behind [`canonicalize_ac_in_pfact`], which
+/// supplies its own leaf `&Term -> Term`.
 pub(crate) fn map_fact_terms(f: &p::Fact, g: &dyn Fn(&p::Term) -> p::Term) -> p::Fact {
     p::Fact {
         persistent: f.persistent,

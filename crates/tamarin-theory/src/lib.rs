@@ -14,7 +14,6 @@
 //! - [`restriction`] ← `Theory.Model.Restriction`;
 //!   [`rule_restriction`] ← `Theory.Model.Restriction` `liftedAddProtoRule`
 //!   (surface-formula → `LNFormula` rewrite-then-quantify)
-//! - [`macro_expand`] ← `Term.Macro` `applyMacros`
 //! - [`rule`] ← `Theory.Model.Rule` (data layer + indices + info types);
 //!   instantiation (`someRuleACInst*`) lives in
 //!   [`constraint::solver::reduction`]
@@ -62,7 +61,6 @@ pub mod formula;
 pub mod guarded;
 pub mod intruder_rules;
 pub mod intruder_variants;
-pub mod macro_expand;
 pub mod module;
 pub mod predicate;
 pub mod pretty_formula;

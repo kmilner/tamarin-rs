@@ -982,6 +982,57 @@ end\n";
     assert_eq!(shown(&rules[1].rule_e().conclusions[0]), "Out( ~k )");
 }
 
+/// HS `nullaryApp` (Theory/Text/Parser/Term.hs:151,158-163) parses a bare
+/// arity-0 macro name as a 0-ary application, so `konst` and `konst()` are
+/// the same call and reach the internal rule expanded.  `nullaryApp` claims
+/// the bare name outright, which makes `konst.1` and `konst:pub` a parse
+/// error upstream; the port reads them as variables, and no macro matches a
+/// variable.
+#[test]
+fn a_bare_nullary_macro_name_reaches_the_internal_rule_expanded() {
+    use crate::pretty_hpj::FLAT_WIDTH;
+
+    let src = "theory T\n\
+begin\n\
+builtins: hashing\n\
+macros:\n  konst() = h('seed')\n\
+rule R:\n  [ In( konst ) ] --[ M( konst.1, konst:pub ) ]-> [ ]\n\
+end\n";
+    let thy = elaborate(&parse_theory(src, &[]).unwrap()).unwrap();
+    let rule = thy.rules().next().expect("elaborated rule");
+    let shown = |fa: &crate::fact::LNFact| {
+        crate::fact::pretty_lnfact(fa).render_with(FLAT_WIDTH, FLAT_WIDTH)
+    };
+    assert_eq!(shown(&rule.rule.premises[0]), "In( h('seed') )");
+    assert_eq!(shown(&rule.rule.actions[0]), "M( konst.1, $konst )");
+    assert_eq!(shown(&rule.rule_e().premises[0]), "In( konst )");
+}
+
+/// The parser splices a live `#ifdef` branch into the top-level item stream,
+/// as HS's `ifdef` adds the branch's items to the theory it is parsing
+/// (Theory/Text/Parser.hs:350-361), so the macro call-sites of a rule written
+/// inside one are expanded like any other rule's.
+#[test]
+fn a_macro_call_inside_a_live_ifdef_branch_is_expanded() {
+    use crate::pretty_hpj::FLAT_WIDTH;
+
+    let src = "theory T\n\
+begin\n\
+functions: id/1\n\
+macros:\n  idm(x) = id(x)\n\
+#ifdef FLAG\n\
+rule R:\n  [ In( idm(a) ) ] --> [ Out( a ) ]\n\
+#endif\n\
+end\n";
+    let thy = elaborate(&parse_theory(src, &["FLAG"]).unwrap()).unwrap();
+    let rule = thy.rules().next().expect("rule from the live ifdef branch");
+    let shown = |fa: &crate::fact::LNFact| {
+        crate::fact::pretty_lnfact(fa).render_with(FLAT_WIDTH, FLAT_WIDTH)
+    };
+    assert_eq!(shown(&rule.rule.premises[0]), "In( id(a) )");
+    assert_eq!(shown(&rule.rule_e().premises[0]), "In( idm(a) )");
+}
+
 /// A `variants` block is parsed into `_oprRuleAC` (`protoRule`,
 /// Theory/Text/Parser/Rule.hs:126-135, see line 134) and reaches the close
 /// untouched: `closeProtoRule`'s third equation maps `ClosedProtoRule ruE`

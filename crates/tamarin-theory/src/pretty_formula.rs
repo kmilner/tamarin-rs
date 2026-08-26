@@ -2,10 +2,9 @@
 // of the tamarin-prover sources this file cites; list them with:
 //   scripts/gen_license_headers.py --authors <this file>
 
-//! Pretty-printer for the three formula representations of the port:
-//! the parser AST `tamarin_parser::ast::Formula`, the solver's
-//! `tamarin_theory::guarded::Guarded` and the locally-nameless
-//! [`LNFormula`]/[`SyntacticLNFormula`].
+//! Pretty-printer for the two formula representations of the port: the
+//! locally-nameless [`LNFormula`]/[`SyntacticLNFormula`] and the solver's
+//! `tamarin_theory::guarded::Guarded`.
 //!
 //! Ports of Haskell `prettyLNFormula`/`prettySyntacticLNFormula`
 //! (`lib/theory/src/Theory/Model/Formula.hs:474-525`) and `prettyGuarded`
@@ -15,15 +14,18 @@
 //!   `∀`, `∃`, `⇒`, `∧`, `∨`, `¬`, `⊤`, `⊥`, `@`, `<`, `=`, `⊏`,
 //!   `last(...)`.
 //!
-//! The AST path renders its term arguments from `tamarin_parser::ast::Term`
-//! with [`term_to_doc`].  The `Guarded` path opens each binder through
-//! `guarded::open_guarded` (HS `openGuarded`, Guarded.hs:364-373) and prints
-//! the resulting parser-AST atoms with the same [`atom_to_doc`].  The
-//! locally-nameless path ([`lnformula_doc`], [`syntactic_lnformula_doc`])
-//! opens each atom's bound variables against the binders in scope and hands
-//! the resulting `LNTerm` atom to
-//! `atom::pretty_natom`/`atom::pretty_syntactic_natom`, which print through
+//! Both paths hand their atoms to `atom::pretty_natom` /
+//! `atom::pretty_syntactic_natom`, which print through
 //! `tamarin_term::pretty::pretty_term` and `fact::pretty_fact`.
+//!
+//! [`lnformula_doc`] and [`syntactic_lnformula_doc`] open each atom's bound
+//! variables against the binders in scope; the `Guarded` path opens each
+//! binder through `guarded::open_guarded` (HS `openGuarded`,
+//! Guarded.hs:364-373).
+//!
+//! [`term_doc`] and [`fact_doc`] render a `tamarin_parser::ast::Term` /
+//! `Fact` — the projection a print site holding an internal value builds
+//! with `elaborate::lnterm_to_parser` / `elaborate::lnfact_to_parser`.
 
 use tamarin_parser::ast as p;
 use tamarin_term::lterm::{sort_prefix, LNTerm, LSort, LVar};
@@ -38,47 +40,6 @@ use crate::formula::{
 };
 use crate::guarded::{bvar_to_lvar, open_guarded, Guarded};
 use crate::pretty_hpj::{self as hpj, Doc, FLAT_WIDTH};
-
-/// A scope entry: the binder's source name + sort, plus the *display* name
-/// used to render bound occurrences in the body.  HS-faithful: the display
-/// name is allocated by `Precise.freshIdent` at binder-entry; if the source
-/// name was already in scope (or in the free-var seed), the display name
-/// receives a `.<idx>` suffix per HS `show LVar` (LTerm.hs:550-557).
-///
-/// Mirrors HS `LVar`'s role inside the `Precise.Fresh` monad used by
-/// `prettyLNFormula` (Theory/Model/Formula.hs:474-520, see line 511).
-/// `(source_name, sort, display_name, source_idx)`.  The `source_idx` is
-/// the binder var's ORIGINAL index (HS `lvarIdx`); it lets the body-var
-/// scope lookup distinguish two binders that share a name+sort but differ
-/// by index — e.g. the `x`(idx 0) / `x.1`(idx 1) fresh vars minted by
-/// `restriction::rewrite` (HS `freshLVar "x" LSortMsg` from counter
-/// 0).  Matching on the full LVar identity also fixes shadowing of
-/// idx-bearing source binders, mirroring HS's positional (De-Bruijn)
-/// resolution.
-type Bind = (String, LSort, String, u64);
-
-/// [`formula_doc`] laid out flat — the one-line string of a parser-AST
-/// formula, the parser-AST twin of [`pretty_lnformula`].
-pub fn pretty_formula(f: &p::Formula) -> String {
-    formula_doc(f).render_with(FLAT_WIDTH, FLAT_WIDTH)
-}
-
-/// The `Doc` of a parser-AST formula.  Mirrors Haskell's `prettyLNFormula`
-/// (Theory/Model/Formula.hs:518-520):
-///
-/// ```text
-/// prettyLNFormula fm =
-///     Precise.evalFresh (prettyLFormula prettyNAtom fm) (avoidPrecise fm)
-/// ```
-///
-/// The Precise fresh state is seeded with the formula's free-var names
-/// (`avoidPrecise = avoidPreciseVars . frees`, LTerm.hs:714-715), so each
-/// `Forall`/`Exists` does `scopeFreshness` and allocates display names that
-/// respect both the free-var seed and any outer-binder allocations.
-pub(crate) fn formula_doc(f: &p::Formula) -> Doc {
-    let mut state = avoid_precise_formula(f);
-    formula_to_doc(f, &[], &mut state)
-}
 
 /// Render the lemma-header line, mirroring HS `prettyLemma`
 /// (lib/theory/src/Lemma.hs:119-122):
@@ -283,15 +244,14 @@ pub fn step_line_with_unann(
     rendered[strip..].to_string()
 }
 
-/// Public accessor for the Doc-based fact renderer (HS `prettyLNFact` /
-/// `prettyFact`), for use building goal Docs in pretty_theory.rs.
+/// The Doc of a parser-AST fact (HS `prettyLNFact` / `prettyFact`).
 pub fn fact_doc(fa: &p::Fact) -> crate::pretty_hpj::Doc {
-    fact_to_doc(fa, &[])
+    fact_to_doc(fa)
 }
 
-/// Public accessor for the Doc-based term renderer (HS `prettyLNTerm`).
+/// The Doc of a parser-AST term (HS `prettyLNTerm`).
 pub fn term_doc(t: &p::Term) -> crate::pretty_hpj::Doc {
-    term_to_doc(t, &[])
+    term_to_doc(t)
 }
 
 /// [`term_doc`] laid out flat, for a caller that splices the term into a
@@ -372,347 +332,18 @@ pub fn pretty_intruder_variants(rules: &[crate::rule::IntrRuleAC]) -> String {
         .join("\n\n")
 }
 
-// =============================================================================
-// Precise-Fresh state seeding (HS `avoidPrecise = avoidPreciseVars . frees`,
-// LTerm.hs:714-715).  We seed `name -> maxIdx+1` for every free-var name
-// occurring in the formula.  At each binder, `freshIdent name` returns the
-// current value (default 0) and bumps; so a name seeded at `1` produces
-// display `name.1`, matching HS `show LVar` (LTerm.hs:550-557).
-// =============================================================================
-
-/// Insert `name -> max(existing, idx+1)` into a Precise state map — mirrors
-/// HS `avoidPreciseVars` `M'.insertWith max name (lvarIdx v + 1) m`
-/// (LTerm.hs:706-709).
-fn avoid_precise_insert(state: &mut PreciseFreshState, name: &str, idx: u64) {
-    let want = idx + 1;
-    // `PreciseFreshState` exposes no direct "set"; emulate `insertWith max`
-    // via repeated `fresh_ident` until the counter reaches `want`.  Read the
-    // current value ONCE (default 0) and early-return when it already meets
-    // `want` — no double lookup.
-    let cur = state.as_map().get(name).copied().unwrap_or(0);
-    if cur >= want {
-        return;
-    }
-    for _ in cur..want {
-        let _ = state.fresh_ident(name);
-    }
-}
-
-/// Walk a parser-AST formula collecting free-var (name, idx) pairs into a
-/// Precise state.  "Free" = used in an atom and not closed by an enclosing
-/// `Forall`/`Exists` binder.  A binder closes an occurrence when the two
-/// agree in name, index AND sort, which is what HS's `quantify` captures
-/// with (`v == x` at `Eq LVar`, Theory/Model/Formula.hs:347-351): under
-/// `∀ x.` an occurrence of `x.1` or `#x` is a DIFFERENT variable and stays
-/// free.  Matches HS `frees fm` semantics for `LNFormula` — bound LVars are
-/// `BVar::Bound` and don't appear.
-fn avoid_precise_formula(f: &p::Formula) -> PreciseFreshState {
-    let mut state = PreciseFreshState::nothing_used();
-    let mut bound: Vec<VarIdent> = Vec::new();
-    collect_free_vars_formula(f, &mut bound, &mut state);
-    state
-}
-
-/// The full identity of a variable: `(name, idx, sort)`.
-type VarIdent = (String, u64, LSort);
-
-fn var_ident(v: &p::VarSpec) -> VarIdent {
-    (v.name.clone(), v.idx, v.sort)
-}
-
-fn collect_free_vars_formula(
-    f: &p::Formula,
-    bound: &mut Vec<VarIdent>,
-    state: &mut PreciseFreshState,
-) {
-    use p::Formula::*;
-    match f {
-        True | False => {}
-        Atom(a) => collect_free_vars_atom(a, bound, state),
-        Not(p_) => collect_free_vars_formula(p_, bound, state),
-        And(l, r) | Or(l, r) | Implies(l, r) | Iff(l, r) => {
-            collect_free_vars_formula(l, bound, state);
-            collect_free_vars_formula(r, bound, state);
-        }
-        Forall(vs, body) | Exists(vs, body) => {
-            let saved_len = bound.len();
-            bound.extend(vs.iter().map(var_ident));
-            collect_free_vars_formula(body, bound, state);
-            bound.truncate(saved_len);
-        }
-    }
-}
-
-fn collect_free_vars_atom(a: &p::Atom, bound: &[VarIdent], state: &mut PreciseFreshState) {
-    use p::Atom::*;
-    match a {
-        Eq(l, r) | Less(l, r) | LessMset(l, r) | Subterm(l, r) => {
-            collect_free_vars_term(l, bound, state);
-            collect_free_vars_term(r, bound, state);
-        }
-        Action(fa, t) => {
-            for arg in &fa.args {
-                collect_free_vars_term(arg, bound, state);
-            }
-            collect_free_vars_term(t, bound, state);
-        }
-        Last(t) => collect_free_vars_term(t, bound, state),
-        Pred(fa) => {
-            for arg in &fa.args {
-                collect_free_vars_term(arg, bound, state);
-            }
-        }
-    }
-}
-
-fn collect_free_vars_term(t: &p::Term, bound: &[VarIdent], state: &mut PreciseFreshState) {
-    use p::Term::*;
-    match t {
-        Var(v) => {
-            if !bound.iter().any(|b| b == &var_ident(v)) {
-                avoid_precise_insert(state, &v.name, v.idx);
-            }
-        }
-        PubLit(_) | FreshLit(_) | NatLit(_) | Number(_) | NumberOne | NatOne | DhNeutral => {}
-        Pair(items) => {
-            for it in items {
-                collect_free_vars_term(it, bound, state);
-            }
-        }
-        App(_, args) => {
-            for a in args {
-                collect_free_vars_term(a, bound, state);
-            }
-        }
-        AlgApp(_, l, r) | Diff(l, r) | BinOp(_, l, r) => {
-            collect_free_vars_term(l, bound, state);
-            collect_free_vars_term(r, bound, state);
-        }
-        PatMatch(inner) => collect_free_vars_term(inner, bound, state),
-    }
-}
-
 /// HS `avoidPrecise = avoidPreciseVars . frees` (LTerm.hs:706-709,:714-715) on
-/// a guarded formula: the free variables seed the per-name counters, so a
-/// binder whose name a free variable uses is drawn with a larger index.
+/// a guarded formula: every free variable seeds its name's counter with
+/// `maxIdx + 1`, so a binder whose name a free variable uses is drawn with a
+/// larger index.  `fresh_ident name` returns the counter (default 0) and
+/// bumps it, so a name seeded at 1 displays as `name.1` (HS `show LVar`,
+/// LTerm.hs:550-557).
 fn avoid_precise_guarded(g: &Guarded) -> PreciseFreshState {
     PreciseFreshState::avoid_precise(
         tamarin_term::lterm::frees(g)
             .into_iter()
             .map(|v| (v.name.to_string(), v.idx)),
     )
-}
-
-// =============================================================================
-// Formula (parser AST) — HughesPJ Doc engine
-// =============================================================================
-//
-// Build a `pretty_hpj::Doc` tree mirroring HS's `prettyLFormula`
-// (Theory/Model/Formula.hs:474-514): Conn → `sep [opParens p <-> op, opParens q]`,
-// Qua → `sep [quantifier, nest 1 body]`.  The Doc engine handles
-// per-NilAbove `w`-shrinkage (HS get1 NilAbove:
-// `nilAbove_ (get (w - sl) p)`) which is required for HS-byte-exact
-// wireguard output (the deeply-nested And case).
-
-/// Peel consecutive same-kind quantifier nodes, mirroring HS
-/// `openFormulaPrefix` (Theory/Model/Formula.hs:296-309): `∀ x. ∀ y. P` is one binder
-/// block `∀ x y. P`.  The parser builds nested `Forall([x], Forall([y], P))`
-/// (one keyword per node), so we greedily collect the var-specs of all
-/// directly-nested same-kind nodes and return the innermost body.
-fn open_formula_prefix<'a>(
-    is_forall: bool,
-    vs: &'a [p::VarSpec],
-    body: &'a p::Formula,
-) -> (Vec<&'a p::VarSpec>, &'a p::Formula) {
-    let mut collected: Vec<&p::VarSpec> = vs.iter().collect();
-    let mut cur = body;
-    loop {
-        match cur {
-            p::Formula::Forall(vs2, body2) if is_forall => {
-                collected.extend(vs2.iter());
-                cur = body2.as_ref();
-            }
-            p::Formula::Exists(vs2, body2) if !is_forall => {
-                collected.extend(vs2.iter());
-                cur = body2.as_ref();
-            }
-            _ => break,
-        }
-    }
-    (collected, cur)
-}
-
-/// Allocate display names for a list of binder var refs (the collapsed
-/// binder block from `open_formula_prefix`), mirroring HS `openFormulaPrefix`'s
-/// loop of `freshLVar n s` calls (Theory/Model/Formula.hs:296-309, LTerm.hs:301-302).
-/// `idx==0` → just name; else `name.idx` (HS `show LVar`, LTerm.hs:550-557).
-fn allocate_formula_binders_refs(
-    vs: &[&p::VarSpec],
-    scope: &[Bind],
-    state: &mut PreciseFreshState,
-) -> Vec<Bind> {
-    let mut out: Vec<Bind> = scope.to_vec();
-    for v in vs {
-        let idx = state.fresh_ident(&v.name);
-        let display = if idx == 0 {
-            v.name.clone()
-        } else {
-            format!("{}.{}", v.name, idx)
-        };
-        // 4th element = source_idx (predicate-fix `Bind`): carry the parsed
-        // var's idx so `var_display` can resolve body-var occurrences by
-        // full identity (name, idx, sort) — distinguishing fresh `x` vs `x.1`
-        // in `_restrict`/predicate rendering.
-        out.push((v.name.clone(), v.sort, display, v.idx));
-    }
-    out
-}
-
-/// HS `prettyLFormula ppAtom` (Theory/Model/Formula.hs:474-514) over the
-/// parser AST.  The formula-structural nodes (Conn / Qua / Not) produce the
-/// sep-Unions where wrap decisions happen; the atoms carry the break points
-/// of their own facts and terms.
-fn formula_to_doc(
-    f: &p::Formula,
-    scope: &[Bind],
-    state: &mut PreciseFreshState,
-) -> crate::pretty_hpj::Doc {
-    use crate::pretty_hpj as hpj;
-    use p::Formula::*;
-    match f {
-        // HS `pp (TF True) = operator_ "⊤"` / `pp (TF False) = operator_ "⊥"`
-        // (Theory/Model/Formula.hs:485-486) — `hl_operator` spans in HtmlDoc mode.
-        True => hpj::operator_("\u{22A4}"),
-        False => hpj::operator_("\u{22A5}"),
-        Atom(a) => atom_to_doc(a, scope),
-        Not(p_) => {
-            // HS: `operator_ "¬" <> opParens p'` — `<>` is no-break
-            // beside.  The inner opParens is unconditional.
-            let inner = formula_to_doc_opparens(p_, scope, state);
-            hpj::operator_("\u{00AC}").beside(inner)
-        }
-        And(l, r) => binop_to_doc(l, r, "\u{2227}", scope, state),
-        Or(l, r) => binop_to_doc(l, r, "\u{2228}", scope, state),
-        Implies(l, r) => binop_to_doc(l, r, "\u{21D2}", scope, state),
-        Iff(l, r) => binop_to_doc(l, r, "\u{21D4}", scope, state),
-        Forall(vs, body) | Exists(vs, body) => {
-            // HS Qua: `sep [quantifier, nest 1 body]` —
-            // `quantifier = ppQ <> ppVars vs <> "."`, body indented +1.
-            // HS `pp (Qua _ _ _) = scopeFreshness $ do ...`
-            // (Theory/Model/Formula.hs:503-514) — every Qua saves/restores state.
-            // HS `ppQuant qua <> ppVars vs <> operator_ "."` where
-            // `ppVars = fsep . map (text . show)` (Theory/Model/Formula.hs:508,511) and
-            // `opExists = operator_ "∃ "` / `opForall = operator_ "∀ "`
-            // (Theory/Text/Pretty.hs:177-178) carry their own trailing space.  The
-            // `fsep` makes the bound-var list BREAKABLE, so a long var list
-            // wraps across lines (continuation aligned after the `∃ ` prefix
-            // via `<>`'s nesting offset) — matching HS byte-for-byte.
-            let is_forall = matches!(f, Forall(_, _));
-            let sym = if is_forall { "\u{2200} " } else { "\u{2203} " };
-            state.scope_freshness(|state| {
-                // HS `openFormulaPrefix` (Theory/Model/Formula.hs:296-309) collapses
-                // `∀ x. ∀ y. P` to one binder block `∀ x y. P`.
-                let (all_vs, inner_body) = open_formula_prefix(is_forall, vs, body);
-                let new_scope = allocate_formula_binders_refs(&all_vs, scope, state);
-                let var_docs: Vec<hpj::Doc> = new_scope[scope.len()..]
-                    .iter()
-                    .map(|b| {
-                        let mut s = String::new();
-                        s.push_str(sort_prefix(b.1));
-                        s.push_str(&b.2);
-                        Doc::text(s)
-                    })
-                    .collect();
-                // HS `ppQuant qua <> ppVars vs <> operator_ "."`: `opForall`/
-                // `opExists` (`operator_ "∀ "` / `"∃ "`, trailing space) and
-                // `opDot` (`operator_ "."`) are `hl_operator` spans.
-                let quant = hpj::operator_(sym)
-                    .beside(hpj::fsep(var_docs))
-                    .beside(hpj::operator_("."));
-                let body_doc = formula_to_doc(inner_body, &new_scope, state);
-                hpj::sep(vec![quant, body_doc.nest(1)])
-            })
-        }
-    }
-}
-
-/// Build a breakable `Doc` for a formula atom, mirroring HS
-/// `prettyProtoAtom` (Theory/Model/Atom.hs:216-224).  Crucially the
-/// fact/term sub-Docs are the SAME breakable `fact_to_doc`/`term_to_doc`
-/// used elsewhere, so a fact like `F( a, b, c )` can drop its closing `)`
-/// onto its own line (HS `prettyFact`'s `nestShort'`) when the ribbon is
-/// exceeded — e.g. spdm Attack_Session_Mode_Switch's deeply-nested
-/// conjunction.  When the atom fits on the line it renders as the flat
-/// string; only over-wide atoms break (matching HS).
-fn atom_to_doc(a: &p::Atom, scope: &[Bind]) -> crate::pretty_hpj::Doc {
-    use crate::pretty_hpj::{self as hpj, Doc};
-    use p::Atom::*;
-    match a {
-        // HS `EqE l r -> sep [ppT l <-> opEqual, ppT r]` (Atom.hs:219-220).
-        Eq(l, r) => hpj::sep(vec![
-            term_to_doc(l, scope).beside_sp(hpj::operator_("=")),
-            term_to_doc(r, scope),
-        ]),
-        // HS `Subterm l r -> sep [ppT l <-> opSubterm, ppT r]` (Atom.hs:212-224, see line 222).
-        Subterm(l, r) => hpj::sep(vec![
-            term_to_doc(l, scope).beside_sp(hpj::operator_("\u{228F}")),
-            term_to_doc(r, scope),
-        ]),
-        // HS `Less u v -> text (show u) <-> opLess <-> text (show v)`
-        // (Atom.hs:212-224, see line 223) — `<->` is `<+>`, no break.
-        Less(l, r) => term_to_doc(l, scope)
-            .beside_sp(hpj::operator_("<"))
-            .beside_sp(term_to_doc(r, scope)),
-        // Multiset `(<)`.  HS has NO printer for this: `smallerp`
-        // (Theory/Text/Parser/Formula.hs:30-38) parses `(<)` to
-        // `Pred Smaller`, and `expandFormula` (Predicate.hs:82-93) rewrites
-        // it to `∃ z. r = l ++ z` BEFORE any pretty-printing — see
-        // `predicate::expand_formula`, which every elaborated lemma and
-        // restriction formula goes through.
-        // So this arm is unreachable on the elaborated formula/restriction
-        // path; it is a defensive fallback that renders the pre-expansion
-        // shape only if a raw `LessMset` is ever printed directly.
-        LessMset(l, r) => term_to_doc(l, scope)
-            .beside_sp(Doc::text("(<)"))
-            .beside_sp(term_to_doc(r, scope)),
-        // HS `Action v fa -> prettyFact ppT fa <-> opAction <-> text (show v)`
-        // (Atom.hs:216-217).  Breakability lives inside `prettyFact`.
-        Action(fa, t) => fact_to_doc(fa, scope)
-            .beside_sp(hpj::operator_("@"))
-            .beside_sp(term_to_doc(t, scope)),
-        // HS `Last i -> operator_ "last" <> parens (text (show i))`
-        // (Atom.hs:212-224, see line 224) — `<>` is no-space beside; `parens` is plain.
-        Last(t) => hpj::operator_("last").beside(hpj::parens(term_to_doc(t, scope))),
-        // HS syntactic-sugar predicate: `prettyPred (Pred fa) = prettyNFact fa`.
-        Pred(fa) => fact_to_doc(fa, scope),
-    }
-}
-
-/// HS opParens (unconditional `(` / `)` wrap).
-/// HS Highlight.hs:58-59: `opParens d = operator_ "(" <> d <> operator_ ")"`
-/// — wraps everything unconditionally, including `True`/`False` atoms.
-fn formula_to_doc_opparens(
-    f: &p::Formula,
-    scope: &[Bind],
-    state: &mut PreciseFreshState,
-) -> crate::pretty_hpj::Doc {
-    hpj::op_parens(formula_to_doc(f, scope, state))
-}
-
-fn binop_to_doc(
-    l: &p::Formula,
-    r: &p::Formula,
-    op: &str,
-    scope: &[Bind],
-    state: &mut PreciseFreshState,
-) -> crate::pretty_hpj::Doc {
-    use crate::pretty_hpj as hpj;
-    // HS Conn: `sep [opParens p <-> op, opParens q]`.  `<->` is `<+>`
-    // (beside with single space).
-    let l_doc = formula_to_doc_opparens(l, scope, state);
-    let r_doc = formula_to_doc_opparens(r, scope, state);
-    // HS `op` here is `opLAnd`/`opLOr`/`opImp`/`opIff` = `operator_ "∧"` etc.
-    hpj::sep(vec![l_doc.beside_sp(hpj::operator_(op)), r_doc])
 }
 
 // =============================================================================
@@ -731,11 +362,9 @@ pub fn lnformula_doc(f: &LNFormula) -> Doc {
     )
 }
 
-/// [`lnformula_doc`] laid out flat — the string [`pretty_formula`] writes for
-/// the parser AST the formula was closed from
-/// (`corpus_lnformula_doc_matches_ast_printer` compares the two over the
-/// examples tree).  The prove-time guarded-conversion error quotes it on
-/// stderr; the printed theory renders the same Doc at its own width.
+/// [`lnformula_doc`] laid out flat — the one-line string the prove-time
+/// guarded-conversion error quotes on stderr.  The printed theory renders
+/// the same Doc at its own width.
 pub fn pretty_lnformula(f: &LNFormula) -> String {
     lnformula_doc(f).render_with(FLAT_WIDTH, FLAT_WIDTH)
 }
@@ -957,23 +586,7 @@ pub const LINE_LENGTH: usize = 110;
 /// The spelling of a parser-AST variable occurrence: HS `show LVar`
 /// (LTerm.hs:550-557), `sortPrefix ++ name` with a `.<idx>` suffix for a
 /// non-zero index.
-///
-/// A binder in `scope` matching the occurrence's FULL source identity
-/// (name, idx, sort), innermost first, lends it the display name allocated
-/// at binder entry — HS's De Bruijn lookup, where a `Bound` var resolves to
-/// its binder's freshly-allocated `LVar`.  Matching on `idx` distinguishes
-/// two binders that share a name and sort but differ by index — the
-/// `x`(idx 0) / `x.1`(idx 1) fresh vars `restriction::rewrite` mints
-/// (HS `freshLVar "x" LSortMsg`); ordinary same-(name,idx) shadowing still
-/// resolves to the inner binder, source binders carrying idx 0.  A var no
-/// binder matches (the common case: free vars like `#vk.6`) keeps its
-/// source name and index.
-fn var_display(v: &p::VarSpec, scope: &[Bind]) -> String {
-    for b in scope.iter().rev() {
-        if b.0 == v.name && b.3 == v.idx && b.1 == v.sort {
-            return format!("{}{}", sort_prefix(b.1), b.2);
-        }
-    }
+fn var_display(v: &p::VarSpec) -> String {
     let mut s = String::from(sort_prefix(v.sort));
     s.push_str(&v.name);
     if v.idx > 0 {
@@ -1049,16 +662,15 @@ fn fact_annotations_suffix(annotations: &[p::FactAnnotation]) -> Option<String> 
 }
 
 /// Pretty-print a parser-AST term as a `pretty_hpj::Doc`.  Faithful to HS
-/// `prettyTerm`.  `scope` carries bound-var display names (empty for rule
-/// bodies; populated when rendering proof-tree/formula terms).
-pub fn term_to_doc(t: &p::Term, scope: &[Bind]) -> crate::pretty_hpj::Doc {
+/// `prettyTerm`.
+fn term_to_doc(t: &p::Term) -> crate::pretty_hpj::Doc {
     use crate::pretty_hpj::Doc;
     use p::Term::*;
     match t {
         // HS `prettyTerm` (Term/Term.hs:299-303) sends a literal to `ppLit`,
         // which for `prettyNTerm` is `text . show` (Term/LTerm.hs:930-931) —
         // one unbreakable `text`.
-        Var(v) => Doc::text(var_display(v, scope)),
+        Var(v) => Doc::text(var_display(v)),
         PubLit(s) => Doc::text(format!("'{s}'")),
         FreshLit(s) => Doc::text(format!("~'{s}'")),
         NatLit(s) => Doc::text(format!("%'{s}'")),
@@ -1086,7 +698,7 @@ pub fn term_to_doc(t: &p::Term, scope: &[Bind]) -> crate::pretty_hpj::Doc {
         // substitution left under the `=`.
         PatMatch(inner) => Doc::text(format!(
             "={}",
-            term_to_doc(inner, scope).render_with(FLAT_WIDTH, FLAT_WIDTH)
+            term_to_doc(inner).render_with(FLAT_WIDTH, FLAT_WIDTH)
         )),
         // HS `prettyTerm` (Term/Term.hs:313):
         //   `FApp (NoEq s) _ | s == pairSym -> ppTerms ", " 1 "<" ">" (split t)`
@@ -1095,10 +707,8 @@ pub fn term_to_doc(t: &p::Term, scope: &[Bind]) -> crate::pretty_hpj::Doc {
         // (`flatten_pair_terms`) walks the right spine of either form.  The
         // `App` case precedes the generic `App` arm below, which would
         // otherwise print `pair(a, b)` through `ppFun`.
-        Pair(_) => pair_doc(&flatten_pair_terms(t), scope),
-        App(name, args) if name == "pair" && args.len() == 2 => {
-            pair_doc(&flatten_pair_terms(t), scope)
-        }
+        Pair(_) => pair_doc(&flatten_pair_terms(t)),
+        App(name, args) if name == "pair" && args.len() == 2 => pair_doc(&flatten_pair_terms(t)),
         App(name, args) => {
             if args.is_empty() {
                 // HS checks `s == natOneSym` BEFORE the generic nullary
@@ -1114,19 +724,19 @@ pub fn term_to_doc(t: &p::Term, scope: &[Bind]) -> crate::pretty_hpj::Doc {
                     Doc::text(name.clone())
                 }
             } else {
-                fun_doc(name, args, scope)
+                fun_doc(name, args)
             }
         }
-        AlgApp(name, l, r) => fun_doc_two(name, l, r, scope),
+        AlgApp(name, l, r) => fun_doc_two(name, l, r),
         // HS `prettyTerm` dedicated diff case (Term/Term.hs:298-327, see line 311):
         //   `... | s == diffSym -> text "diff" <> "(" <> ppTerm t1 <>
         //         ", " <> ppTerm t2 <> ")"` — all `<>` (no `fsep`), so it is
         //   fully flat and never breaks at the comma (unlike the generic
         //   `ppFun`/`fun_doc` path which joins args with a breakable `fsep`).
         Diff(l, r) => Doc::text("diff(")
-            .beside(term_to_doc(l, scope))
+            .beside(term_to_doc(l))
             .beside(Doc::text(", "))
-            .beside(term_to_doc(r, scope))
+            .beside(term_to_doc(r))
             .beside(Doc::text(")")),
         BinOp(op, l, r) => {
             // HS `prettyTerm` (Term/Term.hs:305-310):
@@ -1147,16 +757,14 @@ pub fn term_to_doc(t: &p::Term, scope: &[Bind]) -> crate::pretty_hpj::Doc {
                 // `*`-operands wrap when the term overruns at deep indent.
                 // Composing the operand Docs with `beside` (HS `<>`) preserves
                 // that inner fcat.
-                term_to_doc(l, scope)
-                    .beside(Doc::text("^"))
-                    .beside(term_to_doc(r, scope))
+                term_to_doc(l).beside(Doc::text("^")).beside(term_to_doc(r))
             } else {
                 // Flatten same-op children to the n-ary chain HS's `viewTerm`
                 // exposes for AC symbols.
                 let mut flat: Vec<&p::Term> = Vec::new();
                 flatten_ac_terms(*op, l, &mut flat);
                 flatten_ac_terms(*op, r, &mut flat);
-                ac_op_doc(binop_symbol(*op), &flat, scope)
+                ac_op_doc(binop_symbol(*op), &flat)
             }
         }
     }
@@ -1215,43 +823,43 @@ fn flatten_pair_terms(t: &p::Term) -> Vec<&p::Term> {
 /// and `text ")"`.  Structurally identical to `pair_doc` with different
 /// lead/finish/separator.  The AC-op symbol carries NO surrounding spaces
 /// (HS `punctuate (text sepa)` with `sepa = "++"`/`"*"`/`"⊕"`/`"%+"`).
-fn ac_op_doc(sym: &str, flat: &[&p::Term], scope: &[Bind]) -> crate::pretty_hpj::Doc {
-    crate::pretty_hpj::fcat_bracketed("(", sym, ")", flat, |t| term_to_doc(t, scope))
+fn ac_op_doc(sym: &str, flat: &[&p::Term]) -> crate::pretty_hpj::Doc {
+    crate::pretty_hpj::fcat_bracketed("(", sym, ")", flat, term_to_doc)
 }
 
 /// HS `ppTerms ", " 1 "<" ">" flat` (Term/Term.hs:313,319-321) — a fcat of
 /// `text "<"`, each element `nest 1`'d and comma-suffixed (except last),
 /// and `text ">"`.
-fn pair_doc(flat: &[&p::Term], scope: &[Bind]) -> crate::pretty_hpj::Doc {
+fn pair_doc(flat: &[&p::Term]) -> crate::pretty_hpj::Doc {
     // HS punctuates with `text ", "`, so all but the last element get a
     // trailing ", "; then each is `nest 1`.
-    crate::pretty_hpj::fcat_bracketed("<", ", ", ">", flat, |t| term_to_doc(t, scope))
+    crate::pretty_hpj::fcat_bracketed("<", ", ", ">", flat, term_to_doc)
 }
 
 /// HS `ppFun f ts = text (f ++ "(") <> fsep (punctuate comma (map ppTerm ts))
 /// <> text ")"` (Term/Term.hs:326-327), over a slice of `&Term` so callers
 /// (incl. the boxed-pair binary shapes) need not clone the subtrees.
-fn fun_doc_refs(name: &str, args: &[&p::Term], scope: &[Bind]) -> crate::pretty_hpj::Doc {
-    crate::pretty_hpj::fun_app_doc(name, args, |a| term_to_doc(a, scope))
+fn fun_doc_refs(name: &str, args: &[&p::Term]) -> crate::pretty_hpj::Doc {
+    crate::pretty_hpj::fun_app_doc(name, args, term_to_doc)
 }
 
 /// As `fun_doc_refs`, for callers holding an owned `&[p::Term]`.
-fn fun_doc(name: &str, args: &[p::Term], scope: &[Bind]) -> crate::pretty_hpj::Doc {
+fn fun_doc(name: &str, args: &[p::Term]) -> crate::pretty_hpj::Doc {
     let refs: Vec<&p::Term> = args.iter().collect();
-    fun_doc_refs(name, &refs, scope)
+    fun_doc_refs(name, &refs)
 }
 
 /// `fun_doc` for the binary algebraic / diff shapes that the parser stores
 /// as boxed pairs rather than a `Vec` — passes the operands by reference
 /// (no subtree clone).
-fn fun_doc_two(name: &str, l: &p::Term, r: &p::Term, scope: &[Bind]) -> crate::pretty_hpj::Doc {
-    fun_doc_refs(name, &[l, r], scope)
+fn fun_doc_two(name: &str, l: &p::Term, r: &p::Term) -> crate::pretty_hpj::Doc {
+    fun_doc_refs(name, &[l, r])
 }
 
 /// Pretty-print a fact as a `pretty_hpj::Doc`.  Faithful to HS `prettyFact`
 /// / `ppFact` (Theory/Model/Fact.hs:567-574) with `nestShort'`
 /// (Text/PrettyPrint/Class.hs:218-223).
-pub fn fact_to_doc(fa: &p::Fact, scope: &[Bind]) -> crate::pretty_hpj::Doc {
+fn fact_to_doc(fa: &p::Fact) -> crate::pretty_hpj::Doc {
     use crate::pretty_hpj::{self as hpj, Doc};
     let lead = {
         let mut s = String::new();
@@ -1262,7 +870,7 @@ pub fn fact_to_doc(fa: &p::Fact, scope: &[Bind]) -> crate::pretty_hpj::Doc {
         s.push('(');
         s
     };
-    let arg_docs: Vec<Doc> = fa.args.iter().map(|a| term_to_doc(a, scope)).collect();
+    let arg_docs: Vec<Doc> = fa.args.iter().map(term_to_doc).collect();
     let body = hpj::fsep(hpj::punctuate(comma_doc(), arg_docs));
     let mut d = hpj::nest_short_doc(&lead, ")", body);
     // Fact annotations: `<> ppAnn an = brackets . fsep . punctuate comma` in
