@@ -31,7 +31,6 @@
 use std::collections::BTreeSet;
 
 use tamarin_parser::ast as p;
-use tamarin_term::lterm::sort_prefix;
 use tamarin_term::maude_sig::MaudeSig;
 
 use crate::pretty_hpj::{self as hpj, Doc};
@@ -295,20 +294,8 @@ pub fn topics(report: &WfReport) -> BTreeSet<String> {
 }
 
 // =============================================================================
-// Helpers — collecting facts and variables
+// Helpers — rules and report formatting
 // =============================================================================
-
-/// The theory's protocol rules, HS `theoryRules` (TheoryObject.hs:304-306).
-/// A top-level `rule (modulo AC)` block is an intruder rule: the parser puts
-/// it in the theory's intruder-rule cache (`addIntrRuleACs`,
-/// Theory/Text/Parser.hs:287, OpenTheory.hs:750-751), and `theoryRules` folds
-/// over the items only, so no wellformedness check reads it.
-fn theory_rules(thy: &p::Theory) -> impl Iterator<Item = &p::Rule> {
-    thy.items.iter().filter_map(|it| match it {
-        p::TheoryItem::Rule(r) => Some(r),
-        _ => None,
-    })
-}
 
 /// HS `thyProtoRules` (Wellformedness.hs:133-134): the macro-applied E-rule
 /// of every rule item, in item order.
@@ -326,33 +313,6 @@ pub(super) fn show_rule_case_name(ru: &ProtoRuleE) -> String {
 /// HS `quote cs = '`' : cs ++ "'"` (Wellformedness.hs:164-165).
 pub(super) fn quote(s: &str) -> String {
     format!("`{}'", s)
-}
-
-fn theory_lemmas(thy: &p::Theory) -> impl Iterator<Item = &p::Lemma> {
-    thy.items.iter().filter_map(|it| match it {
-        p::TheoryItem::Lemma(l) => Some(l),
-        _ => None,
-    })
-}
-
-/// Every fact of a rule in HS `ruleFacts`' order — `concatMap (`get` ru)
-/// [rPrems, rActs, rConcs]` (Wellformedness.hs:585-587).
-fn rule_facts(r: &p::Rule) -> impl Iterator<Item = &p::Fact> {
-    r.premises
-        .iter()
-        .chain(r.actions.iter())
-        .chain(r.conclusions.iter())
-}
-
-/// An `LVar` as HS `show` prints it — the sort prefix, the name, and the
-/// index when it is nonzero (LTerm.hs:550-557).
-fn render_var(v: &p::VarSpec) -> String {
-    let prefix = sort_prefix(v.sort);
-    if v.idx == 0 {
-        format!("{}{}", prefix, v.name)
-    } else {
-        format!("{}{}.{}", prefix, v.name, v.idx)
-    }
 }
 
 /// Build an HS `underlineTopic` block: `"<title>\n<====>\n"` where the
