@@ -526,9 +526,14 @@ fn arg_matches_any_lemma(arg: &str, theory_lemmas: &[&str]) -> bool {
 // Helpers — collecting facts and variables
 // =============================================================================
 
+/// The theory's protocol rules, HS `theoryRules` (TheoryObject.hs:304-306).
+/// A top-level `rule (modulo AC)` block is an intruder rule: the parser puts
+/// it in the theory's intruder-rule cache (`addIntrRuleACs`,
+/// Theory/Text/Parser.hs:287, OpenTheory.hs:750-751), and `theoryRules` folds
+/// over the items only, so no wellformedness check reads it.
 fn theory_rules(thy: &Theory) -> impl Iterator<Item = &Rule> {
     thy.items.iter().filter_map(|it| match it {
-        TheoryItem::Rule(r) | TheoryItem::IntrRule(r) => Some(r),
+        TheoryItem::Rule(r) => Some(r),
         _ => None,
     })
 }

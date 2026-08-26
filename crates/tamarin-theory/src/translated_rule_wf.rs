@@ -35,7 +35,7 @@ use tamarin_term::vterm::Lit;
 use crate::fact::{fact_tag_multiplicity, fact_tag_name, FactTag, LNFact, Multiplicity};
 use crate::formula::formula_frees_list;
 use crate::pretty_hpj::{self as hpj, Doc};
-use crate::rule::{prefix_if_reserved, ProtoRuleE, ProtoRuleName};
+use crate::rule::{pretty_proto_rule_name, ProtoRuleE};
 use crate::sapic::{Process, ProcessCombinator};
 use crate::theory::Theory;
 
@@ -51,13 +51,11 @@ fn thy_proto_rules(thy: &Theory) -> impl Iterator<Item = &ProtoRuleE> {
     thy.rules().map(|opr| &opr.rule)
 }
 
-/// HS `showRuleCaseName` (Theory/Model/Rule.hs:1338-1340), which for a
-/// protocol rule is `prettyProtoRuleName` (Theory/Model/Rule.hs:1287-1290).
+/// HS `showRuleCaseName` (Theory/Model/Rule.hs:1337-1340): `render
+/// . ruleInfo prettyProtoRuleName prettyIntrRuleACInfo . ruleName`, whose
+/// protocol-rule arm is all a [`ProtoRuleE`] reaches.
 fn show_rule_case_name(ru: &ProtoRuleE) -> String {
-    match ru.info.name {
-        ProtoRuleName::Fresh => "Fresh".to_string(),
-        ProtoRuleName::Stand(n) => prefix_if_reserved(n),
-    }
+    pretty_proto_rule_name(&ru.info.name).render()
 }
 
 /// HS `quote cs = '`' : cs ++ "'"` (Wellformedness.hs:164-165).

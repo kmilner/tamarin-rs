@@ -920,7 +920,7 @@ pub fn pretty_rule_restr_gen(prems: &[LNFact], acts: &[LNFact], concls: &[LNFact
 /// HS `prettyProtoRuleName` (Theory/Model/Rule.hs:1287-1290): the reserved
 /// `Fresh` rule prints under its own name, a user rule under
 /// [`prefix_if_reserved`].
-fn pretty_proto_rule_name(name: &ProtoRuleName) -> Doc {
+pub(crate) fn pretty_proto_rule_name(name: &ProtoRuleName) -> Doc {
     match name {
         ProtoRuleName::Fresh => Doc::text("Fresh"),
         ProtoRuleName::Stand(n) => Doc::text(prefix_if_reserved(n)),

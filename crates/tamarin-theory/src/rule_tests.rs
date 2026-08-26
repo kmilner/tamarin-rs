@@ -770,3 +770,46 @@ fn merge_open_proto_rules_groups_consecutive_equal_e_rules() {
         other => panic!("expected a rule item, got {other:?}"),
     }
 }
+
+/// `closeProtoRule` maps `ClosedProtoRule ruE` over the `variants (modulo AC)`
+/// blocks the source writes and reaches `variantsProtoRule` only for a rule
+/// that writes none (lib/theory/src/Rule.hs:82-86), so a written variant keeps
+/// the disjunction its parser gave it — `Disj [emptySubstVFresh]`
+/// (`protoRuleACInfo`, Theory/Text/Parser/Rule.hs:138-143, see line 142).
+/// `prettyOpenProtoRuleAsClosedRule` then takes its `length disj == 1` arm and
+/// annotates the rule instead of quoting a `variants (modulo AC)` block
+/// (OpenTheory.hs:836-843).  The rule here also carries a narrowing
+/// disjunction, which is what `populate_rule_variants` leaves on every rule
+/// item whose E rule holds a reducible sub-term.
+#[test]
+fn manual_variant_keeps_the_trivial_disjunction() {
+    let opr = crate::theory::OpenProtoRule {
+        rule: Rule::new(
+            ProtoRuleEInfo::standard("R"),
+            vec![in_fact(msg_var("c", 0))],
+            vec![out_fact(msg_var("c", 0))],
+            vec![],
+        ),
+        variant_substs: vec![tamarin_term::subst_vfresh::LNSubstVFresh::from_list([(
+            LVar::new("c", tamarin_term::lterm::LSort::Msg, 0),
+            msg_var("z", 4),
+        )])],
+        abstracted_rule: None,
+        loop_breakers: Vec::new(),
+        rule_e: None,
+        rule_ac: vec![Rule::new(
+            ProtoRuleEInfo::standard("R___VARIANT_1"),
+            vec![in_fact(msg_var("z", 0))],
+            vec![out_fact(msg_var("z", 0))],
+            vec![],
+        )],
+    };
+    let merged = crate::theory::open_proto_rule(&opr);
+    assert_eq!(
+        merged.rule_ac[0].info.variants,
+        vec![tamarin_term::subst_vfresh::LNSubstVFresh::empty()]
+    );
+    let out = pretty_open_proto_rule_as_closed_rule(&merged).render();
+    assert!(out.contains("has exactly the trivial AC variant"), "{out}");
+    assert!(!out.contains("variants (modulo AC)"), "{out}");
+}

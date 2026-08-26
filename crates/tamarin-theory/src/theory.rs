@@ -299,6 +299,25 @@ pub enum TheoryItem<R = OpenProtoRule, P = ProofSkeleton, S = TranslationElement
     Translation(S),
 }
 
+impl<R, P: Clone, S: Clone> TheoryItem<R, P, S> {
+    /// The non-rule half of HS `mapTheoryItem f id` (TheoryObject.hs:269-271):
+    /// a rule item hands its payload back as `Err`, every other item is cloned
+    /// into the target rule type at its position.  Callers supply the rule arm,
+    /// which may yield one item or several.
+    pub fn split_rule<R2>(&self) -> Result<TheoryItem<R2, P, S>, &R> {
+        match self {
+            TheoryItem::Rule(r) => Err(r),
+            TheoryItem::Lemma(x) => Ok(TheoryItem::Lemma(x.clone())),
+            TheoryItem::Restriction(x) => Ok(TheoryItem::Restriction(x.clone())),
+            TheoryItem::Text(x) => Ok(TheoryItem::Text(x.clone())),
+            TheoryItem::ConfigBlock(x) => Ok(TheoryItem::ConfigBlock(x.clone())),
+            TheoryItem::Predicate(x) => Ok(TheoryItem::Predicate(x.clone())),
+            TheoryItem::Macros(x) => Ok(TheoryItem::Macros(x.clone())),
+            TheoryItem::Translation(x) => Ok(TheoryItem::Translation(x.clone())),
+        }
+    }
+}
+
 /// `DiffTheoryItem` — one top-level construct in a diff theory.
 #[derive(Debug, Clone, PartialEq)]
 pub enum DiffTheoryItem<
@@ -575,40 +594,51 @@ pub struct MergedProtoRule {
 /// `closeProtoRule` turns into one closed rule each (lib/theory/src/Rule.hs:86),
 /// otherwise the single narrowed form — the abstracted body when Maude found
 /// reducible sub-terms, else the rule itself.  The info carries the rule's own
-/// name and attributes, the variant disjunction and the loop breakers, and an
-/// empty `variant_substs` stands for HS's `Disj [emptySubstVFresh]`.
+/// name and attributes, the variant disjunction and the loop breakers.
+///
+/// `closeProtoRule` reaches `variantsProtoRule` only for a rule that writes no
+/// `variants (modulo AC)` block (lib/theory/src/Rule.hs:82-86), so a written
+/// block keeps the disjunction its parser gave it — `Disj [emptySubstVFresh]`
+/// (`protoRuleACInfo`, Theory/Text/Parser/Rule.hs:138-143, see line 142) —
+/// and the narrowing [`crate::tools::rule_variants::populate_rule_variants`]
+/// ran on the E rule stays out of it.  For every other rule an empty
+/// `variant_substs` stands for that same trivial disjunction.
 pub fn closed_rules_ac(r: &OpenProtoRule) -> Vec<crate::rule::ProtoRuleAC> {
-    let variants = if r.variant_substs.is_empty() {
-        vec![tamarin_term::subst_vfresh::LNSubstVFresh::empty()]
-    } else {
-        r.variant_substs.clone()
+    let info = |e: &ProtoRuleE, variants: Vec<tamarin_term::subst_vfresh::LNSubstVFresh>| {
+        crate::rule::ProtoRuleACInfo {
+            name: e.info.name,
+            attributes: e.info.attributes.clone(),
+            variants,
+            loop_breakers: r.loop_breakers.clone(),
+        }
     };
-    let info = |e: &ProtoRuleE| crate::rule::ProtoRuleACInfo {
-        name: e.info.name,
-        attributes: e.info.attributes.clone(),
-        variants: variants.clone(),
-        loop_breakers: r.loop_breakers.clone(),
-    };
+    let trivial = || vec![tamarin_term::subst_vfresh::LNSubstVFresh::empty()];
     if r.rule_ac.is_empty() {
+        let variants = if r.variant_substs.is_empty() {
+            trivial()
+        } else {
+            r.variant_substs.clone()
+        };
         let ac = r.abstracted_rule.as_ref().unwrap_or(&r.rule);
-        vec![crate::rule::Rule {
-            info: info(&r.rule),
-            premises: ac.premises.clone(),
-            conclusions: ac.conclusions.clone(),
-            actions: ac.actions.clone(),
-            new_vars: ac.new_vars.clone(),
-        }]
+        vec![rule_ac_under(ac, info(&r.rule, variants))]
     } else {
         r.rule_ac
             .iter()
-            .map(|ac| crate::rule::Rule {
-                info: info(ac),
-                premises: ac.premises.clone(),
-                conclusions: ac.conclusions.clone(),
-                actions: ac.actions.clone(),
-                new_vars: ac.new_vars.clone(),
-            })
+            .map(|ac| rule_ac_under(ac, info(ac, trivial())))
             .collect()
+    }
+}
+
+/// A rule's facts under a `ProtoRuleAC` info.  HS types both halves as one
+/// `Rule` over two infos (Theory/Model/Rule.hs:635-638), so only the info
+/// changes.
+fn rule_ac_under(e: &ProtoRuleE, info: crate::rule::ProtoRuleACInfo) -> crate::rule::ProtoRuleAC {
+    crate::rule::Rule {
+        info,
+        premises: e.premises.clone(),
+        conclusions: e.conclusions.clone(),
+        actions: e.actions.clone(),
+        new_vars: e.new_vars.clone(),
     }
 }
 
@@ -643,20 +673,14 @@ pub fn close_proto_rules<P: Clone, S: Clone>(
 ) -> Vec<TheoryItem<ClosedProtoRule, P, S>> {
     let mut out: Vec<TheoryItem<ClosedProtoRule, P, S>> = Vec::new();
     for item in items {
-        match item {
-            TheoryItem::Rule(r) => out.extend(closed_rules_ac(r).into_iter().map(|ac| {
+        match item.split_rule() {
+            Ok(other) => out.push(other),
+            Err(r) => out.extend(closed_rules_ac(r).into_iter().map(|ac| {
                 TheoryItem::Rule(ClosedProtoRule {
                     rule_e: r.rule_e().clone(),
                     rule_ac: ac,
                 })
             })),
-            TheoryItem::Lemma(x) => out.push(TheoryItem::Lemma(x.clone())),
-            TheoryItem::Restriction(x) => out.push(TheoryItem::Restriction(x.clone())),
-            TheoryItem::Text(x) => out.push(TheoryItem::Text(x.clone())),
-            TheoryItem::ConfigBlock(x) => out.push(TheoryItem::ConfigBlock(x.clone())),
-            TheoryItem::Predicate(x) => out.push(TheoryItem::Predicate(x.clone())),
-            TheoryItem::Macros(x) => out.push(TheoryItem::Macros(x.clone())),
-            TheoryItem::Translation(x) => out.push(TheoryItem::Translation(x.clone())),
         }
     }
     out
@@ -672,36 +696,12 @@ pub fn merge_open_proto_rules<P: Clone, S: Clone>(
 ) -> Vec<TheoryItem<MergedProtoRule, P, S>> {
     let mut out: Vec<TheoryItem<MergedProtoRule, P, S>> = Vec::new();
     for item in items {
-        let opened = match item {
-            TheoryItem::Rule(r) => open_proto_rule(r),
-            TheoryItem::Lemma(x) => {
-                out.push(TheoryItem::Lemma(x.clone()));
+        let opened = match item.split_rule() {
+            Ok(other) => {
+                out.push(other);
                 continue;
             }
-            TheoryItem::Restriction(x) => {
-                out.push(TheoryItem::Restriction(x.clone()));
-                continue;
-            }
-            TheoryItem::Text(x) => {
-                out.push(TheoryItem::Text(x.clone()));
-                continue;
-            }
-            TheoryItem::ConfigBlock(x) => {
-                out.push(TheoryItem::ConfigBlock(x.clone()));
-                continue;
-            }
-            TheoryItem::Predicate(x) => {
-                out.push(TheoryItem::Predicate(x.clone()));
-                continue;
-            }
-            TheoryItem::Macros(x) => {
-                out.push(TheoryItem::Macros(x.clone()));
-                continue;
-            }
-            TheoryItem::Translation(x) => {
-                out.push(TheoryItem::Translation(x.clone()));
-                continue;
-            }
+            Err(r) => open_proto_rule(r),
         };
         // `groupBy comp` compares each element against the group's FIRST, and
         // the fold leaves that element's E rule in place, so the accumulated
@@ -725,17 +725,16 @@ pub fn merge_open_proto_rules<P: Clone, S: Clone>(
 pub fn manual_rule_variants(r: &OpenProtoRule) -> Vec<crate::rule::ProtoRuleAC> {
     r.rule_ac
         .iter()
-        .map(|v| crate::rule::Rule {
-            info: crate::rule::ProtoRuleACInfo {
-                name: v.info.name,
-                attributes: v.info.attributes.clone(),
-                variants: vec![tamarin_term::subst_vfresh::LNSubstVFresh::empty()],
-                loop_breakers: Vec::new(),
-            },
-            premises: v.premises.clone(),
-            conclusions: v.conclusions.clone(),
-            actions: v.actions.clone(),
-            new_vars: v.new_vars.clone(),
+        .map(|v| {
+            rule_ac_under(
+                v,
+                crate::rule::ProtoRuleACInfo {
+                    name: v.info.name,
+                    attributes: v.info.attributes.clone(),
+                    variants: vec![tamarin_term::subst_vfresh::LNSubstVFresh::empty()],
+                    loop_breakers: Vec::new(),
+                },
+            )
         })
         .collect()
 }

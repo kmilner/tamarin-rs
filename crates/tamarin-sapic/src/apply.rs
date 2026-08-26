@@ -30,7 +30,6 @@ use tamarin_theory::predicate::{expand_formula, Predicate};
 use tamarin_theory::restriction::{apply_macro_in_restriction, Restriction};
 use tamarin_theory::rule::{apply_macro_in_rule, ProtoRuleName};
 use tamarin_theory::rule_restriction::rule_restrictions;
-use tamarin_theory::sapic::PlainProcess;
 use tamarin_theory::theory::{LNMacro, OpenProtoRule, Theory, TheoryItem};
 
 use crate::translate::{needs_in_ev_res, translate, TranslateOptions};
@@ -47,11 +46,12 @@ use crate::typing::{collect_user_fun_typings, type_and_rename_process};
 /// translating path ([`apply_sapic`]) and the `-m spthy` / `-m spthytyped`
 /// paths that skip translation report exactly these warnings.
 ///
-/// Returns the report together with the process the caller goes on to type and
-/// translate, or `None` when the theory carries no top-level process.
-pub fn sapic_pre_report(thy: &Theory) -> Option<(Vec<WfError>, PlainProcess)> {
-    let top = thy.processes().next()?.clone();
-    Some((crate::warnings::check_wellformedness(&top), top))
+/// Empty when the theory carries no top-level process.
+pub fn sapic_pre_report(thy: &Theory) -> Vec<WfError> {
+    match thy.processes().next() {
+        Some(top) => crate::warnings::check_wellformedness(top),
+        None => Vec::new(),
+    }
 }
 
 /// Apply the SAPIC `process:` translation to a theory that contains exactly one
@@ -76,9 +76,10 @@ pub fn apply_sapic(thy: &mut Theory, user_set_heuristic: bool) -> Result<Vec<WfE
     // report is returned to the caller and translation proceeds regardless
     // (these are warnings, not hard errors).  `is_sapic` set with no
     // `TopLevelProcess` is a defensive no-op.
-    let Some((wf_report, plain)) = sapic_pre_report(thy) else {
+    let Some(plain) = thy.processes().next().cloned() else {
         return Ok(Vec::new());
     };
+    let wf_report = sapic_pre_report(thy);
 
     // `typeTheory` (renameUnique + type inference), using the theory
     // signature's MaudeSig (HS `initTEFromSig`).  The user `functions:` typing
@@ -268,7 +269,7 @@ mod tests {
         // The same translation `apply_sapic` runs, so the rule it injects can
         // be compared against the values the translation produced.
         let maude_sig = thy.signature.maude_sig.clone();
-        let (_, plain) = sapic_pre_report(&thy).unwrap();
+        let plain = thy.processes().next().unwrap().clone();
         let typed = type_and_rename_process(&maude_sig, &[], &plain).unwrap();
         let translation = translate(
             &typed,

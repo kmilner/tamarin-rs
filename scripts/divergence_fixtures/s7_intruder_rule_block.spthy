@@ -22,8 +22,11 @@
  *
  * Mode `match`: the two engines agree on the echo.
  *
- * Compared slice: the `theory … end` echo, which is where an item built for
- * the block would show up.
+ * Compared slices: the `theory … end` echo, which is where an item built for
+ * the block would show up, and the wellformedness report — `theoryRules`
+ * folds over the items (TheoryObject.hs:304-306), so the checks read the
+ * protocol rules only and the `!KD`/`!KU` facts here raise no reserved-name
+ * error.
  */
 theory S7IntruderRuleBlock
 begin

@@ -1232,14 +1232,11 @@ impl TheoryPipeline<'_> {
                 // `translateTheory`'s preReport (`Sapic.checkWellformedness t`,
                 // Warnings.hs:37-38) still runs on the pre-translation process
                 // — the same inlined `PlainProcess` `apply_sapic` checks.
-                let mut wf: Vec<tamarin_parser::wf::WfError> = Vec::new();
-                if self.elaborated.is_sapic {
-                    if let Some((report, _)) =
-                        tamarin_sapic::apply::sapic_pre_report(&self.elaborated)
-                    {
-                        wf = report;
-                    }
-                }
+                let wf: Vec<tamarin_parser::wf::WfError> = if self.elaborated.is_sapic {
+                    tamarin_sapic::apply::sapic_pre_report(&self.elaborated)
+                } else {
+                    Vec::new()
+                };
                 if translate_module == Some(TranslateModule::SpthyTyped) {
                     // `Sapic.typeTheory` (`typeTheoryEnv`, Typing.hs:204-226):
                     // the typed and renamed processes replace the parse-time
@@ -1843,9 +1840,10 @@ impl TheoryPipeline<'_> {
             // typing assumptions.
             //
             // Fall-through path: if `build_prover_session` errors we
-            // fall back to the per-lemma `prove_lemma_with_pool` path,
-            // which re-runs the same setup for each lemma.  Almost
-            // never hits in practice.
+            // fall back to the per-lemma
+            // `prove_lemma_with_pool_file_heuristic` path, which re-runs
+            // the same setup for each lemma.  Almost never hits in
+            // practice.
             let cli_heuristic = self.cli_heuristic();
             let session = self.build_prover_session(maude.clone()).ok();
 

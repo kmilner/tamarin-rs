@@ -58,6 +58,25 @@ fn reserved_name_detected() {
     assert!(topics(&r).contains("Reserved names"));
 }
 
+/// A top-level `rule (modulo AC)` block is an intruder rule.  The parser puts
+/// it in the theory's intruder-rule cache (`addIntrRuleACs`,
+/// Theory/Text/Parser.hs:287) and `theoryRules` folds over the theory items
+/// only (TheoryObject.hs:304-306), so the checks read the protocol rules and
+/// the `!KU`/`!KD` facts of the block raise nothing.  The end-to-end pin is
+/// `scripts/divergence_fixtures/s7_intruder_rule_block`.
+#[test]
+fn intruder_rule_block_reaches_no_check() {
+    let t = parse(
+        r#"theory T begin
+            builtins: symmetric-encryption
+            rule (modulo AC) d_0_sdec:
+              [ !KD( senc(m, k) ), !KU( k ) ] --> [ !KD( m ) ]
+        end"#,
+    );
+    let r = check_theory(&t);
+    assert!(r.is_empty(), "report: {r:?}");
+}
+
 /// The cross-operator order `binop_rank` gives AC operands is the one
 /// `tamarin_theory::guarded::funsym_key` encodes from HS's `Ord FunSym`:
 /// `Exp < Union < Mult < Xor < NatPlus < AcFct`, with two `AcFct` heads

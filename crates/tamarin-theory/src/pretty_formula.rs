@@ -860,9 +860,6 @@ pub fn lnformula_to_parser(f: &LNFormula) -> p::Formula {
 }
 
 /// [`lnformula_to_parser`] at the parser's sugar, keeping the `Pred` atoms.
-///
-/// `tamarin_accountability` crosses back here for the lemmas its generator
-/// builds (stage 7).
 pub fn syntactic_lnformula_to_parser(f: &SyntacticLNFormula) -> p::Formula {
     formula_to_parser(f, &mut Vec::new(), &mut avoid_precise_lnformula(f))
 }
