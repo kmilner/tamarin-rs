@@ -497,7 +497,11 @@ fn fact_annotations_render_in_ord_order() {
 fn lnformula_doc_renders_the_lemma_header_samples() {
     use crate::formula::{from_parser, to_lnformula};
     use tamarin_parser::parser::parse_formula_str;
-    use tamarin_term::maude_sig::pair_maude_sig;
+    use tamarin_term::maude_sig::{mset_maude_sig, pair_maude_sig};
+
+    // The union sample needs the signature bit `builtins: multiset` sets, the
+    // one that opens `msetterm`'s `+` level (Theory/Text/Parser/Term.hs:195-200).
+    let msig = pair_maude_sig().merge(mset_maude_sig());
 
     let samples: &[(&str, &[&str])] = &[
         ("T", &["  all-traces \"⊤\""]),
@@ -578,8 +582,8 @@ fn lnformula_doc_renders_the_lemma_header_samples() {
     ];
     for (src, expected_lines) in samples {
         let expected = expected_lines.join("\n");
-        let f = parse_formula_str(src, &pair_maude_sig()).unwrap();
-        let ln = from_parser(&f, &pair_maude_sig()).unwrap();
+        let f = parse_formula_str(src, &msig).unwrap();
+        let ln = from_parser(&f, &msig).unwrap();
         assert_eq!(
             lemma_header_line_doc("all-traces", syntactic_lnformula_doc(&ln)),
             expected,
@@ -848,12 +852,14 @@ fn existential_binder_keeps_ac_operand_order() {
     use crate::formula::from_parser;
     use crate::guarded::formula_to_guarded_parsed;
     use tamarin_parser::parser::parse_formula_str;
-    use tamarin_term::maude_sig::pair_maude_sig;
+    use tamarin_term::maude_sig::{mset_maude_sig, pair_maude_sig};
 
     let want = "  \"∀ A B seq1 seq2 #i #j.\n    \
         (((Seq_Sent( A, B, seq1 ) @ #i) ∧ (Seq_Sent( A, B, seq2 ) @ #j)) ∧\n     \
         (#i < #j)) ⇒\n    (∃ dif. seq2 = (dif++seq1))\"";
-    let sig = pair_maude_sig();
+    // That theory declares `builtins: multiset`, the bit `msetterm`'s `+`
+    // level needs (Theory/Text/Parser/Term.hs:195-200).
+    let sig = pair_maude_sig().merge(mset_maude_sig());
     let f = parse_formula_str(
         "All A B seq1 seq2 #i #j.(Seq_Sent(A, B, seq1) @ #i \
          & Seq_Sent(A, B, seq2) @ #j & #i < #j ==> Ex dif. seq2 = seq1 + dif )",
@@ -921,9 +927,11 @@ fn binder_specs(f: &p::Formula) -> Vec<(String, u64, LSort)> {
 fn to_parser_reopens_the_binders_the_printer_shows() {
     use crate::formula::from_parser;
     use tamarin_parser::parser::parse_formula_str;
-    use tamarin_term::maude_sig::pair_maude_sig;
+    use tamarin_term::maude_sig::{mset_maude_sig, pair_maude_sig};
 
-    let msig = pair_maude_sig();
+    // The union sample needs the signature bit `builtins: multiset` sets, the
+    // one that opens `msetterm`'s `+` level (Theory/Text/Parser/Term.hs:195-200).
+    let msig = pair_maude_sig().merge(mset_maude_sig());
     let samples: &[(&str, &[(&str, u64, LSort)])] = &[
         (
             "All x y #i. A(x, y) @ #i",

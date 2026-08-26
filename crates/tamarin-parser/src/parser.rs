@@ -852,15 +852,21 @@ pub struct Parser<'a> {
     /// The `enableDH`/`enableBP`/`enableXor`/`enableMSet`/`enableNat` bits of
     /// HS's parse-time `MaudeSig` (Term/Maude/Signature.hs:90-108), flipped by
     /// the `builtins:` names whose signatures carry only these flags
-    /// (Term/Maude/Signature.hs:191-196).  The term chain levels themselves
-    /// deliberately stay open (`!eqn` only), so the structural parser accepts
-    /// every operator: these mirror the HS signature bits exactly, for the two
-    /// places where that state reaches output bytes — the theory-level function
-    /// symbols `userDefinedFunSyms` contributes to the macro-name conflict
-    /// check (Theory/Text/Parser/Macro.hs:43 via `funSyms`,
-    /// Term/Maude/Signature.hs:110-125,163-164), and the operator `expecting`
-    /// labels the enabled `chainl1` levels leave in that check's parse error
-    /// (Theory/Text/Parser/Term.hs:176-208).
+    /// (Term/Maude/Signature.hs:200-205).
+    ///
+    /// Each one opens its own term chain level: `*` and `^`
+    /// ([`Parser::multterm`], [`Parser::expterm`]), `XOR`/`⊕`
+    /// ([`Parser::xorterm`]), `%+` ([`Parser::natterm`]) and `++`/`+`
+    /// ([`Parser::msetterm_inner`]), each level falling through to the next one
+    /// down while its bit is clear (Theory/Text/Parser/Term.hs:179-208).  They
+    /// also select the theory-level function symbols `funSyms` contributes to
+    /// the macro-name conflict check (Theory/Text/Parser/Macro.hs:43,
+    /// Term/Maude/Signature.hs:110-125,163-164) and the operator `expecting`
+    /// labels the open levels leave behind ([`Parser::term_carry_labels`]).
+    ///
+    /// `sig_enable_dh` covers `enableBP` too: the `maudeSig` smart constructor
+    /// sets `enableDH = enableDH || enableBP` (Term/Maude/Signature.hs:110-112),
+    /// so `builtins: bilinear-pairing` sets both bits here.
     sig_enable_dh: bool,
     sig_enable_bp: bool,
     sig_enable_xor: bool,
@@ -990,10 +996,6 @@ impl<'a> Parser<'a> {
         for f in flags {
             flags_set.insert((*f).to_string());
         }
-        // Always enable parse-time recognition of the operators. The parser is
-        // syntactic — semantic gating against builtin enablement happens at
-        // elaboration. This follows the practice of accepting more than the
-        // strict Haskell grammar at the syntax level.
         Parser {
             lx: Lexer::new(src),
             enable_diff: is_diff || flags_set.contains("diff"),
@@ -1206,7 +1208,7 @@ impl<'a> Parser<'a> {
             labels.push(Message::Expect(format!("\"{name}\"")));
         }
         if !eqn {
-            if self.sig_enable_dh || self.sig_enable_bp {
+            if self.sig_enable_dh {
                 labels.push(Message::Expect("\"^\"".to_string()));
                 labels.push(Message::Expect("\"*\"".to_string()));
             }
@@ -1990,7 +1992,12 @@ impl<'a> Parser<'a> {
         // (Theory/Text/Parser/Signature.hs:102-148).
         match name {
             "diffie-hellman" => self.sig_enable_dh = true,
-            "bilinear-pairing" => self.sig_enable_bp = true,
+            // `maudeSig` sets `enableDH = enableDH || enableBP`
+            // (Term/Maude/Signature.hs:110-112).
+            "bilinear-pairing" => {
+                self.sig_enable_bp = true;
+                self.sig_enable_dh = true;
+            }
             "xor" => self.sig_enable_xor = true,
             "multiset" => self.sig_enable_mset = true,
             "natural-numbers" => self.sig_enable_nat = true,
@@ -2116,7 +2123,7 @@ impl<'a> Parser<'a> {
                 )
             })
             .collect();
-        self.sig_enable_dh = sig.enable_dh;
+        self.sig_enable_dh = sig.enable_dh || sig.enable_bp;
         self.sig_enable_bp = sig.enable_bp;
         self.sig_enable_xor = sig.enable_xor;
         self.sig_enable_mset = sig.enable_mset;
@@ -3045,7 +3052,7 @@ impl<'a> Parser<'a> {
             expects.push(Message::Expect(format!("\"{sym}\"")));
         }
         let mut ops: Vec<&str> = Vec::new();
-        if self.sig_enable_dh || self.sig_enable_bp {
+        if self.sig_enable_dh {
             ops.extend(["^", "*"]);
         }
         if self.sig_enable_xor {
@@ -4993,8 +5000,9 @@ impl<'a> Parser<'a> {
 
     /// Top-level term parser.  `eqn` indicates we're inside an `equations:`
     /// block, which closes the builtin algebraic operators (`++`, `%+`, `⊕`,
-    /// `*`, `^`); the user-declared `[AC]` infix operators of [`Self::acterm`]
-    /// stay open, as in HS's `acterm True llitNoPub`.
+    /// `*`, `^`) that the signature bits would otherwise open; the
+    /// user-declared `[AC]` infix operators of [`Self::acterm`] stay open, as
+    /// in HS's `acterm True llitNoPub`.
     fn term(&mut self, eqn: bool) -> Result<Term, ParseError> {
         self.tupleterm(eqn)
     }
@@ -5036,9 +5044,12 @@ impl<'a> Parser<'a> {
         Ok(lhs)
     }
 
+    /// HS `msetterm` (Theory/Text/Parser/Term.hs:195-200): the union level runs
+    /// only under `enableMSet && not eqn`, otherwise the parser drops straight
+    /// to [`Self::natterm`] and `++`/`+` are not term operators at all.
     fn msetterm_inner(&mut self, eqn: bool) -> Result<Term, ParseError> {
         let mut lhs = self.natterm(eqn)?;
-        if !eqn {
+        if self.sig_enable_mset && !eqn {
             loop {
                 self.skip_ws();
                 // `++` or `+` (as multiset union); careful with `+` for NDC
@@ -5064,9 +5075,11 @@ impl<'a> Parser<'a> {
         Ok(lhs)
     }
 
+    /// HS `natterm` (Theory/Text/Parser/Term.hs:203-208): `%+` needs
+    /// `enableNat && not eqn`.
     fn natterm(&mut self, eqn: bool) -> Result<Term, ParseError> {
         let mut lhs = self.xorterm(eqn)?;
-        if !eqn {
+        if self.sig_enable_nat && !eqn {
             while self.try_punct("%+") {
                 let rhs = self.xorterm(eqn)?;
                 lhs = Term::BinOp(BinOp::NatPlus, Box::new(lhs), Box::new(rhs));
@@ -5075,9 +5088,11 @@ impl<'a> Parser<'a> {
         Ok(lhs)
     }
 
+    /// HS `xorterm` (Theory/Text/Parser/Term.hs:187-192): `XOR`/`⊕` need
+    /// `enableXor && not eqn`.
     fn xorterm(&mut self, eqn: bool) -> Result<Term, ParseError> {
         let mut lhs = self.multterm(eqn)?;
-        if !eqn {
+        if self.sig_enable_xor && !eqn {
             while self.try_kw("XOR") || self.try_punct("⊕") {
                 let rhs = self.multterm(eqn)?;
                 lhs = Term::BinOp(BinOp::Xor, Box::new(lhs), Box::new(rhs));
@@ -5086,8 +5101,11 @@ impl<'a> Parser<'a> {
         Ok(lhs)
     }
 
+    /// HS `multterm` (Theory/Text/Parser/Term.hs:179-185): without
+    /// `enableDH && not eqn` the parser skips BOTH this level and
+    /// [`Self::expterm`], so neither `*` nor `^` is a term operator.
     fn multterm(&mut self, eqn: bool) -> Result<Term, ParseError> {
-        if eqn {
+        if !self.sig_enable_dh || eqn {
             return self.acterm(eqn);
         }
         let mut lhs = self.expterm(eqn)?;
@@ -5312,7 +5330,7 @@ impl<'a> Parser<'a> {
     fn enabled_theory_noeq_syms(&self) -> impl Iterator<Item = &'static NoEqSym> {
         let syms = theory_noeq_syms();
         [
-            (self.sig_enable_dh || self.sig_enable_bp, &syms.dh),
+            (self.sig_enable_dh, &syms.dh),
             (self.sig_enable_bp, &syms.bp),
             (self.sig_enable_xor, &syms.xor),
             (self.sig_enable_nat, &syms.nat),
@@ -6439,13 +6457,13 @@ enum FactOrRestr {
 ///
 /// Lemmas and restrictions store their formula as a quoted string; this is the
 /// entry point used to recover the AST from that text.  Errors on any trailing
-/// input after the formula.  The term chain levels are always open outside
-/// `equations:` blocks, so every algebraic operator parses here.
+/// input after the formula.
 ///
 /// `msig` is the signature the text was rendered against, seeded as HS
 /// `parseString` seeds one (Theory/Text/Parser/Token.hs:250-258): it supplies
-/// the `[AC]` symbols' infix spelling and the arity-0 constants `nullaryApp`
-/// claims.
+/// the `[AC]` symbols' infix spelling, the arity-0 constants `nullaryApp`
+/// claims, and the enable bits that open the algebraic term levels, so text
+/// rendered from a theory reparses under that theory's operators.
 pub fn parse_formula_str(s: &str, msig: &MaudeSig) -> Result<Formula, ParseError> {
     let mut p = Parser::new(s, &[], false);
     p.seed_signature(msig);

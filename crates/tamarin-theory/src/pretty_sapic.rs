@@ -501,14 +501,22 @@ mod tests {
     ///   `process="if Eq( ('a' add 'b' add k.1), k.1 )"`.
     #[test]
     fn cond_renders_user_ac_flattened_sorted_and_infix() {
+        // `^` is a term operator only under `builtins: diffie-hellman`
+        // (Theory/Text/Parser/Term.hs:179-185).
         // With `add` an ordinary function symbol the application stays
         // prefix, which is what makes the AC assertions below discriminating.
         assert_eq!(
-            cond_render("Eq(<'g'^k.1, add(k.1,'a')>, k.1)", "functions: add/2"),
+            cond_render(
+                "Eq(<'g'^k.1, add(k.1,'a')>, k.1)",
+                "builtins: diffie-hellman\nfunctions: add/2"
+            ),
             "if Eq( <'g'^k.1, add(k.1, 'a')>, k.1 )"
         );
         assert_eq!(
-            cond_render("Eq(<'g'^k.1, add(k.1,'a')>, k.1)", "functions: add/2 [AC]"),
+            cond_render(
+                "Eq(<'g'^k.1, add(k.1,'a')>, k.1)",
+                "builtins: diffie-hellman\nfunctions: add/2 [AC]"
+            ),
             "if Eq( <'g'^k.1, ('a' add k.1)>, k.1 )"
         );
         // A nested chain flattens to three operands under one AC node.

@@ -91,7 +91,7 @@ fn pair_ac_operands_order_by_the_nested_spine() {
 #[test]
 fn pair_operands_keep_their_place_among_other_ac_heads() {
     let src = "theory MixedAc begin\n\
-               builtins: multiset\n\
+               builtins: multiset, diffie-hellman\n\
                rule SameHead:\n\
                \x20 [ Out( ((b*c)*a) ++ (b*z) ++ <a,b,c> ++ <a,z> ++ h ) ] --[ ]-> []\n\
                end\n";

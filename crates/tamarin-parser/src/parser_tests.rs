@@ -1667,9 +1667,12 @@ fn nullary_symbol_name_in_a_timepoint_position_is_a_variable() {
 /// printed operand order of `seq1 + dif` follows from them.
 #[test]
 fn bare_binder_and_bare_message_operand_are_msg_sorted() {
-    let f = parse_formula_str_sig(
+    // That theory declares `builtins: multiset`, which is what opens the `+`
+    // level of `msetterm` (Theory/Text/Parser/Term.hs:195-200).
+    let f = parse_formula_str(
         "All A B seq1 seq2 #i #j.(Seq_Sent(A, B, seq1) @ #i \
          & Seq_Sent(A, B, seq2) @ #j & #i < #j ==> Ex dif. seq2 = seq1 + dif )",
+        &pair_maude_sig().merge(tamarin_term::maude_sig::mset_maude_sig()),
     )
     .expect("parses");
     let Formula::Forall(_, body) = &f else {
