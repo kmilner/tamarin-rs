@@ -250,9 +250,8 @@ fn probe(path: &Path, root: &Path) -> FileProbe {
     };
     let found = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let user_set_heuristic = !elab.heuristic.is_empty();
-        tamarin_sapic::apply::apply_sapic(&mut parsed, &mut elab, user_set_heuristic)
-            .map_err(|e| e.message)?;
-        tamarin_accountability::translate(&mut parsed, &mut elab).map_err(|e| e.to_string())?;
+        tamarin_sapic::apply::apply_sapic(&mut elab, user_set_heuristic).map_err(|e| e.message)?;
+        tamarin_accountability::translate(&mut elab).map_err(|e| e.to_string())?;
         let file = rel(path, root).display().to_string();
         Ok::<_, String>(compare_theory(&elab, &|what: &str| {
             format!("{file}: {what}")

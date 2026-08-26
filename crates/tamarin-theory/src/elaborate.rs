@@ -885,13 +885,12 @@ pub fn elaborate_lemma_attr(a: &p::LemmaAttr) -> LemmaAttr {
 /// `fold` combines via the `RuleAttributes` `Semigroup` (Theory/Model/Rule.hs:382-396):
 /// later duplicates win on the `Option` fields (`preferRight`), bools `||`.
 ///
-/// This restores the SAPIC display attributes (role / color / issapicrule) onto
-/// the re-elaborated proving rules — HS's `toRule` bakes them straight into the
-/// `ProtoRuleE`, but the RS pipeline round-trips SAPIC rules through the parser
-/// AST (`apply_sapic`'s `proto_rule_to_parsed`) and re-elaborates the parser theory
-/// for proving (`prove.rs`), so they must be re-read here.  Display-only: no
-/// solver / `--prove`-text path reads these fields (only the web graph renderer
-/// does), so populating them is `--prove`-inert.
+/// This carries the SAPIC display attributes (role / color / issapicrule) of a
+/// rule that reaches the parser AST through `proto_rule_to_parsed` — HS's
+/// `toRule` bakes them straight into the `ProtoRuleE`, and the projection keeps
+/// them, so elaborating that rule reads them back.  Display-only: no solver /
+/// `--prove`-text path reads these fields (only the web graph renderer does),
+/// so populating them is `--prove`-inert.
 fn rule_attributes_from_parser(attrs: &[p::RuleAttr]) -> RuleAttributes {
     let mut out = RuleAttributes::empty();
     for a in attrs {

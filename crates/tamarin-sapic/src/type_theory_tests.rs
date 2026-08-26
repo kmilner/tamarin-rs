@@ -219,9 +219,9 @@ end";
 /// rules, and `single_session` render.
 #[test]
 fn msr_typing4_bytes() {
-    let mut parsed = tamarin_parser::parse_theory(TYPING4, &[]).unwrap();
+    let parsed = tamarin_parser::parse_theory(TYPING4, &[]).unwrap();
     let mut elaborated = tamarin_theory::elaborate::elaborate(&parsed).unwrap();
-    let wf = crate::apply::apply_sapic(&mut parsed, &mut elaborated, false).unwrap();
+    let wf = crate::apply::apply_sapic(&mut elaborated, false).unwrap();
     assert!(wf.is_empty());
     let expected = "theory Typing
 

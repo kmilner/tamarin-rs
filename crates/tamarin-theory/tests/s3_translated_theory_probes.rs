@@ -2,29 +2,29 @@
 // of the tamarin-prover sources this file cites; list them with:
 //   scripts/gen_license_headers.py --authors <this file>
 
-//! Corpus probes over the TRANSLATED theory pair — the parser theory and
-//! the elaborated theory as the driver leaves them after
-//! `lift_rule_restrictions`, `elaborate`, `apply_sapic` and
-//! `tamarin_accountability::translate` (run.rs `translate_theory`).  The
+//! Corpus probes over the TRANSLATED theory — the internal theory as the
+//! driver leaves it after `lift_rule_restrictions`, `elaborate`, `apply_sapic`
+//! and `tamarin_accountability::translate` (run.rs `translate_theory`).  The
 //! lemmas and restrictions those two translations inject are the ones the
-//! other corpus nets do not reach, and they are the ones an
-//! internal-formula lemma field has to hold.
+//! other corpus nets do not reach.
 //!
-//! `from_parser_is_total_after_translation` builds both formulas such an
-//! item stores — the macro- and predicate-expanded one and the
-//! predicate-only one — for every lemma and restriction of the translated
-//! parser theory.  `every_parsed_lemma_and_restriction_has_one_elaborated_twin`
-//! checks the lookup a printer that reads the elaborated item by name
-//! depends on (`Theory::lookup_lemma` / `lookup_restriction`).
+//! `translated_items_carry_both_formulas` walks the two formulas such an item
+//! stores — `_lFormula` / `_rstrFormula`, macro- and predicate-expanded, and
+//! the `_lOriginalFormula` / `_rstrOriginalFormula` that
+//! `applyMacroInLemma` / `applyMacroInRestriction` record for every item of a
+//! closed theory (lib/theory/src/Lemma.hs:83-89,
+//! Theory/Model/Restriction.hs:164-166).
+//! `every_translated_item_has_one_lookup` checks the lookup a printer that
+//! reads an item by name depends on (`Theory::lookup_lemma` /
+//! `lookup_restriction`) over everything the two translations add.
 
 use rayon::prelude::*;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
-use tamarin_parser::ast as p;
-use tamarin_theory::formula::from_parser;
-use tamarin_theory::predicate::Predicate;
-use tamarin_theory::theory::{LemmaAttr, Theory, TheoryItem};
+use tamarin_theory::formula::LNFormula;
+use tamarin_theory::pretty_formula::pretty_lnformula;
+use tamarin_theory::theory::{Theory, TheoryItem};
 
 /// Examples beyond this test's budget, relative to the corpus root and
 /// reported as `skipped_listed`: the accountability lemmas of the mixvote
@@ -77,14 +77,15 @@ enum Outcome {
 /// Both probes' findings for one file, plus what they counted.
 struct FileProbe {
     outcome: Outcome,
-    /// Formulas converted by [`from_parser_is_total_after_translation`].
+    /// Formulas walked by [`translated_items_carry_both_formulas`].
     items: usize,
-    /// Items paired by [`every_parsed_lemma_and_restriction_has_one_elaborated_twin`].
+    /// Names looked up by [`every_translated_item_has_one_lookup`].
     pairs: usize,
-    /// Items that carry a `left` / `right` attribute, counted and not paired.
+    /// Names the translations leave as they found them, counted and not
+    /// looked up.
     sided: usize,
-    conversions: Vec<String>,
-    twins: Vec<String>,
+    formulas: Vec<String>,
+    lookups: Vec<String>,
     elapsed: Duration,
 }
 
@@ -95,60 +96,51 @@ impl FileProbe {
             items: 0,
             pairs: 0,
             sided: 0,
-            conversions: Vec::new(),
-            twins: Vec::new(),
+            formulas: Vec::new(),
+            lookups: Vec::new(),
             elapsed: Duration::ZERO,
         }
     }
 }
 
-/// The lemma and restriction formulas of a parser theory, each labelled the
-/// way a wellformedness report names its item.
-fn formulas(thy: &p::Theory) -> Vec<(String, &p::Formula)> {
+/// The lemmas and restrictions of a theory: each labelled the way a
+/// wellformedness report names its item, with the two formulas it stores.
+fn items(thy: &Theory) -> Vec<(String, &LNFormula, Option<&LNFormula>)> {
     thy.items
         .iter()
         .filter_map(|item| match item {
-            p::TheoryItem::Lemma(l) => Some((format!("lemma `{}'", l.name), &l.formula)),
-            p::TheoryItem::Restriction(r) | p::TheoryItem::LegacyAxiom(r) => {
-                Some((format!("restriction `{}'", r.name), &r.formula))
-            }
+            TheoryItem::Lemma(l) => Some((
+                format!("lemma `{}'", l.name),
+                &l.formula,
+                l.original_formula.as_ref(),
+            )),
+            TheoryItem::Restriction(r) => Some((
+                format!("restriction `{}'", r.name),
+                &r.formula,
+                r.original_formula.as_ref(),
+            )),
             _ => None,
         })
         .collect()
 }
 
-/// The two formulas an internal-formula lemma or restriction stores, for
-/// every lemma and restriction of `parsed`: `formula` is macro- and
-/// predicate-expanded, as `elaborate` builds it, and `original_formula` is
-/// the predicate-only one HS's `applyMacroInLemma` records
-/// (lib/theory/src/Lemma.hs:83-89).  Both have to reach `LNFormula`.
-fn probe_conversions(
-    parsed: &p::Theory,
-    elab: &Theory,
-    at: &dyn Fn(&str) -> String,
-) -> Vec<String> {
-    let msig = &elab.signature.maude_sig;
+/// Both formulas of every lemma and restriction of the translated theory:
+/// each is present and renders, which walks every atom and term it holds.
+/// The original one is what HS's `applyMacroInLemma` /
+/// `applyMacroInRestriction` fill in for every item of a closed theory, the
+/// injected ones included (CloseRule.hs:82-85).
+fn probe_formulas(thy: &Theory, at: &dyn Fn(&str) -> String) -> Vec<String> {
     let mut out = Vec::new();
-    let mut expanded = parsed.clone();
-    tamarin_theory::macro_expand::expand_theory_macros(&mut expanded);
-    // `expand_items` rewrites the item list in place and adds and removes
-    // nothing (macro_expand.rs), which is what lets the predicate-only list
-    // below pair with this one positionally.
-    if expanded.items.len() != parsed.items.len() {
-        out.push(at("macro expansion changed the item count"));
-    }
-    let predicates: Vec<Predicate> = elab.predicates().cloned().collect();
-    for (which, thy) in [("formula", &expanded), ("original_formula", parsed)] {
-        for (label, f) in formulas(thy) {
-            let where_ = |what: &str| at(&format!("{label} [{which}]: {what}"));
-            match from_parser(f, msig) {
-                Err(e) => out.push(where_(&format!("from_parser: {}", e.message))),
-                // The expansion is what strips the `Pred` sugar, so a
-                // formula it accepts is the `LNFormula` the item stores.
-                Ok(ln) => {
-                    if let Err(e) = tamarin_theory::predicate::expand_formula(&predicates, &ln) {
-                        out.push(where_(&format!("predicate expansion failed: {e}")));
-                    }
+    for (label, formula, original) in items(thy) {
+        let where_ = |what: &str| at(&format!("{label}: {what}"));
+        if pretty_lnformula(formula).is_empty() {
+            out.push(where_("formula renders empty"));
+        }
+        match original {
+            None => out.push(where_("no original formula")),
+            Some(o) => {
+                if pretty_lnformula(o).is_empty() {
+                    out.push(where_("original_formula renders empty"));
                 }
             }
         }
@@ -156,72 +148,66 @@ fn probe_conversions(
     out
 }
 
-/// A `left` / `right` lemma or restriction attribute: HS keys such an item
-/// by `(Side, name)` inside a diff theory (`EitherLemmaItem` /
-/// `EitherRestrictionItem`, Items/TheoryItem.hs:78-79), so the name repeats
-/// across the two sides, and `elaborate` lowers both into the one flat
-/// `Theory`.
-fn is_sided(item: &p::TheoryItem) -> bool {
-    match item {
-        p::TheoryItem::Lemma(l) => l
-            .attributes
-            .iter()
-            .any(|a| matches!(a, p::LemmaAttr::Left | p::LemmaAttr::Right)),
-        p::TheoryItem::Restriction(r) | p::TheoryItem::LegacyAxiom(r) => !r.attributes.is_empty(),
-        _ => false,
-    }
+/// The `(kind, name)` list of the theory's lemmas and restrictions, in item
+/// order.
+fn item_names(thy: &Theory) -> Vec<(&'static str, &str)> {
+    thy.items
+        .iter()
+        .filter_map(|item| match item {
+            TheoryItem::Lemma(l) => Some(("lemma", l.name.as_str())),
+            TheoryItem::Restriction(r) => Some(("restriction", r.name.as_str())),
+            _ => None,
+        })
+        .collect()
 }
 
-/// Every parsed lemma and restriction that is not a diff-theory side item
-/// resolves to exactly one elaborated item of the same kind and name — the
-/// lookup `Theory::lookup_lemma`/`lookup_restriction` performs.  Returns the
-/// findings, the number of items paired and the number of side items.
-fn probe_twins(
-    parsed: &p::Theory,
-    elab: &Theory,
+/// Every lemma and restriction the two translations add is found exactly once
+/// under its own name — the lookup `Theory::lookup_lemma` /
+/// `lookup_restriction` performs.  A name the translations leave alone keeps
+/// whatever multiplicity the source gave it: a diff theory declares one name
+/// per side, HS keys those by `(Side, name)` (`EitherLemmaItem` /
+/// `EitherRestrictionItem`, Items/TheoryItem.hs:78-79), and the flat internal
+/// theory holds both — it carries no side attribute, the non-diff restriction
+/// parser accepting none (Theory/Text/Parser/Restriction.hs:77-81).  Returns
+/// the findings, the number of names looked up and the number carried over
+/// untouched.
+fn probe_lookups(
+    before: &[(&'static str, &str)],
+    after: &[(&'static str, &str)],
     at: &dyn Fn(&str) -> String,
 ) -> (Vec<String>, usize, usize) {
+    let occurrences = |xs: &[(&str, &str)], kind: &str, name: &str| {
+        xs.iter().filter(|(k, n)| *k == kind && *n == name).count()
+    };
     let mut out = Vec::new();
-    let (mut pairs, mut sided) = (0usize, 0usize);
-    for item in &parsed.items {
-        let (kind, name) = match item {
-            p::TheoryItem::Lemma(l) => ("lemma", &l.name),
-            p::TheoryItem::Restriction(r) | p::TheoryItem::LegacyAxiom(r) => {
-                ("restriction", &r.name)
-            }
-            _ => continue,
-        };
-        if is_sided(item) {
-            sided += 1;
+    let (mut pairs, mut carried) = (0usize, 0usize);
+    let mut seen: Vec<(&str, &str)> = Vec::new();
+    for (kind, name) in after {
+        if seen.contains(&(kind, name)) {
+            continue;
+        }
+        seen.push((kind, name));
+        let found = occurrences(after, kind, name);
+        if found == 1 {
+            pairs += 1;
+            continue;
+        }
+        if found == occurrences(before, kind, name) {
+            carried += 1;
             continue;
         }
         pairs += 1;
-        let twins = elab
-            .items
-            .iter()
-            .filter(|i| match (kind, i) {
-                ("lemma", TheoryItem::Lemma(l)) => {
-                    &l.name == name
-                        && !l
-                            .attributes
-                            .iter()
-                            .any(|a| matches!(a, LemmaAttr::Left | LemmaAttr::Right))
-                }
-                ("restriction", TheoryItem::Restriction(r)) => &r.name == name,
-                _ => false,
-            })
-            .count();
-        if twins != 1 {
-            out.push(at(&format!("{kind} `{name}' has {twins} elaborated twins")));
-        }
+        out.push(at(&format!(
+            "{kind} `{name}' occurs {found} times after translation"
+        )));
     }
-    (out, pairs, sided)
+    (out, pairs, carried)
 }
 
 /// The driver's load pipeline for one file, up to the point where the
-/// theory pair is complete — parse, lift the embedded restrictions,
+/// translated theory is complete — parse, lift the embedded restrictions,
 /// elaborate, translate the SAPIC process, translate the accountability
-/// lemmas (run.rs `translate_theory`) — then both probes over that pair.
+/// lemmas (run.rs `translate_theory`) — then both probes over that theory.
 /// A diff-operator theory is parsed again with the `diff` define, the way
 /// `-D=diff` enables the operator on the CLI.
 fn probe(path: &Path, root: &Path) -> FileProbe {
@@ -252,29 +238,35 @@ fn probe(path: &Path, root: &Path) -> FileProbe {
         return FileProbe::skipped(Outcome::SkippedElab);
     };
     let found = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        // The names the source declares, against which the translations'
+        // additions are read.
+        let before: Vec<(&str, String)> = item_names(&elab)
+            .into_iter()
+            .map(|(k, n)| (k, n.to_string()))
+            .collect();
         let user_set_heuristic = !elab.heuristic.is_empty();
-        tamarin_sapic::apply::apply_sapic(&mut parsed, &mut elab, user_set_heuristic)
-            .map_err(|e| e.message)?;
-        tamarin_accountability::translate(&mut parsed, &mut elab).map_err(|e| e.to_string())?;
+        tamarin_sapic::apply::apply_sapic(&mut elab, user_set_heuristic).map_err(|e| e.message)?;
+        tamarin_accountability::translate(&mut elab).map_err(|e| e.to_string())?;
         let file = rel(path, root).display().to_string();
         let at = |what: &str| format!("{file}: {what}");
+        let before: Vec<(&str, &str)> = before.iter().map(|(k, n)| (*k, n.as_str())).collect();
         Ok::<_, String>((
-            formulas(&parsed).len(),
-            probe_conversions(&parsed, &elab, &at),
-            probe_twins(&parsed, &elab, &at),
+            items(&elab).len(),
+            probe_formulas(&elab, &at),
+            probe_lookups(&before, &item_names(&elab), &at),
         ))
     }));
-    let Ok(Ok((items, conversions, (twins, pairs, sided)))) = found else {
+    let Ok(Ok((count, formulas, (lookups, pairs, sided)))) = found else {
         return FileProbe::skipped(Outcome::SkippedTranslate);
     };
     FileProbe {
         outcome: Outcome::Translated,
-        // Both the expanded and the predicate-only list are converted.
-        items: 2 * items,
+        // Both the stored and the original formula are walked.
+        items: 2 * count,
         pairs,
         sided,
-        conversions,
-        twins,
+        formulas,
+        lookups,
         elapsed: start.elapsed(),
     }
 }
@@ -325,8 +317,9 @@ fn assert_corpus_covered(loaded: usize, files: usize) {
     );
 }
 
-/// The header both probes print: how many files reached the pair, where the
-/// rest stopped, and the file the load pipeline spent longest on.
+/// The header both probes print: how many files reached the translated
+/// theory, where the rest stopped, and the file the load pipeline spent
+/// longest on.
 fn census(corpus: &Corpus) -> String {
     let (root, files, probes) = corpus;
     let count = |f: fn(&Outcome) -> bool| probes.iter().filter(|p| f(&p.outcome)).count();
@@ -355,7 +348,7 @@ fn census(corpus: &Corpus) -> String {
     )
 }
 
-/// The files that reached the theory pair, and the whole tree.
+/// The files that reached the translated theory, and the whole tree.
 fn coverage(probes: &[FileProbe]) -> (usize, usize) {
     let loaded = probes
         .iter()
@@ -365,15 +358,15 @@ fn coverage(probes: &[FileProbe]) -> (usize, usize) {
 }
 
 #[test]
-fn from_parser_is_total_after_translation() {
+fn translated_items_carry_both_formulas() {
     let Some(corpus) = corpus() else {
         return;
     };
     let probes = &corpus.2;
     let items: usize = probes.iter().map(|p| p.items).sum();
-    let failures: Vec<&String> = probes.iter().flat_map(|p| &p.conversions).collect();
+    let failures: Vec<&String> = probes.iter().flat_map(|p| &p.formulas).collect();
     eprintln!(
-        "s3 from_parser: {} items={items} failures={}",
+        "s3 formulas: {} items={items} failures={}",
         census(corpus),
         failures.len()
     );
@@ -382,26 +375,26 @@ fn from_parser_is_total_after_translation() {
     }
     let (loaded, files) = coverage(probes);
     assert_corpus_covered(loaded, files);
-    assert!(items > 0, "no formulas converted");
+    assert!(items > 0, "no formulas walked");
     assert!(
         failures.is_empty(),
-        "{} conversions failed; first: {}",
+        "{} formulas missing or unrenderable; first: {}",
         failures.len(),
         failures[0]
     );
 }
 
 #[test]
-fn every_parsed_lemma_and_restriction_has_one_elaborated_twin() {
+fn every_translated_item_has_one_lookup() {
     let Some(corpus) = corpus() else {
         return;
     };
     let probes = &corpus.2;
     let pairs: usize = probes.iter().map(|p| p.pairs).sum();
-    let sided: usize = probes.iter().map(|p| p.sided).sum();
-    let failures: Vec<&String> = probes.iter().flat_map(|p| &p.twins).collect();
+    let carried: usize = probes.iter().map(|p| p.sided).sum();
+    let failures: Vec<&String> = probes.iter().flat_map(|p| &p.lookups).collect();
     eprintln!(
-        "s3 twins: {} pairs={pairs} sided={sided} failures={}",
+        "s3 lookups: {} pairs={pairs} carried={carried} failures={}",
         census(corpus),
         failures.len()
     );
@@ -410,10 +403,10 @@ fn every_parsed_lemma_and_restriction_has_one_elaborated_twin() {
     }
     let (loaded, files) = coverage(probes);
     assert_corpus_covered(loaded, files);
-    assert!(pairs > 0, "no items paired");
+    assert!(pairs > 0, "no names looked up");
     assert!(
         failures.is_empty(),
-        "{} items without exactly one twin; first: {}",
+        "{} names without exactly one lookup; first: {}",
         failures.len(),
         failures[0]
     );

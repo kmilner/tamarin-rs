@@ -1202,8 +1202,8 @@ impl TheoryPipeline<'_> {
         // TheoryLoader.hs:468-485, see line 472).  Runs ONLY for `is_sapic` theories (exactly one
         // top-level `process:`); a no-op otherwise, so non-process theories are
         // byte-unchanged.  Injects the generated rules + `single_session`
-        // restriction + `heuristic: p` into BOTH `parsed` (for rendering) and
-        // `elaborated` (for solving / AC-variant pre-computation), so it MUST
+        // restriction + `heuristic: p` into `elaborated`, which the renderers,
+        // the solver and the AC-variant pre-computation all read, so it MUST
         // run before the variant pre-computation in
         // `check_translated_theory`.  `user_set_heuristic` is
         // true iff a `heuristic:` item already populated `elaborated.heuristic`
@@ -1217,8 +1217,7 @@ impl TheoryPipeline<'_> {
             // SAPIC-generated rules (a pure-SAPIC theory has no MSR rules at this
             // point, so `rulesContainPubConst` / `caseTestsInstantiatedByPubVars`
             // scan an empty rule set).  Compute it here, before the mutation.
-            let acc_wf =
-                tamarin_accountability::check_wellformedness(&self.parsed, &self.elaborated);
+            let acc_wf = tamarin_accountability::check_wellformedness(&self.elaborated);
 
             let user_set_heuristic = !self.elaborated.heuristic.is_empty();
             // Which translation steps run depends on the output module
@@ -1259,11 +1258,7 @@ impl TheoryPipeline<'_> {
                 }
                 wf
             } else {
-                match tamarin_sapic::apply::apply_sapic(
-                    &mut self.parsed,
-                    &mut self.elaborated,
-                    user_set_heuristic,
-                ) {
+                match tamarin_sapic::apply::apply_sapic(&mut self.elaborated, user_set_heuristic) {
                     Ok(w) => w,
                     // HS: exceptions SAPIC `translate` raises — e.g. the
                     // `addProtoRule` name clash on inserting a generated rule
@@ -1278,8 +1273,8 @@ impl TheoryPipeline<'_> {
             // Accountability translation (HS `Acc.translate`, TheoryLoader.hs:468-485, see line 472):
             // `Sapic.translate >=> Acc.translate`.  Expands each
             // `... accounts for` lemma into its verification-condition lemmas +
-            // case-test predicates, injecting into BOTH `parsed` (rendering) and
-            // `elaborated` (prove loop).  A no-op for theories with neither
+            // case-test predicates, appending them to `elaborated`, which the
+            // renderers and the prove loop read.  A no-op for theories with neither
             // accountability lemmas nor case tests (a `test` without any acc
             // lemma still gets its predicate appended, as in HS).  Runs inside
             // the user-funs guard so the generated lemmas' embedded case-test
@@ -1287,9 +1282,7 @@ impl TheoryPipeline<'_> {
             // private/destructor flags.  Not part of `processOpenTheory`'s
             // `spthy` / `spthytyped` arms, so those translate modes skip it.
             if !skip_translation {
-                if let Err(e) =
-                    tamarin_accountability::translate(&mut self.parsed, &mut self.elaborated)
-                {
+                if let Err(e) = tamarin_accountability::translate(&mut self.elaborated) {
                     // HS: the exceptions `Acc.translate` throws — `CaseTestsUndefined`
                     // (lib/accountability/src/Accountability.hs:42-49, see line 45) and the `UndefinedPredicate` /
                     // `DuplicateItem` parsing exceptions its `liftedAddLemma` /

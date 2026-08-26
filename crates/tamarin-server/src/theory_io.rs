@@ -221,33 +221,30 @@ pub fn load_from_source(
     // `apply_sapic` returns `Ok(vec![])` when
     // `!typed.is_sapic`, so it is safe to call unconditionally and leaves
     // non-process theories byte-unchanged.  It injects the generated MSR
-    // rules + `single_session` restriction + `heuristic: p` into BOTH
-    // `parser_theory` and `typed`; `typed` is what the web renderers and the
-    // AC-variant pre-computation read, so it MUST run before
-    // `populate_rule_variants` below.  `user_set_heuristic` is true iff
-    // a `heuristic:` item already populated `typed.heuristic` (HS
+    // rules + `single_session` restriction + `heuristic: p` into `typed`,
+    // which the web renderers and the AC-variant pre-computation read, so it
+    // MUST run before `populate_rule_variants` below.  `user_set_heuristic`
+    // is true iff a `heuristic:` item already populated `typed.heuristic` (HS
     // `addHeuristic` returns `Nothing` in that case).
     // HS `Acc.checkWellformedness t` (translateTheory, TheoryLoader.hs:494-500, see line 497)
     // runs on the PRE-translation theory — before `apply_sapic` injects the
     // SAPIC-generated rules (mirrors run.rs's CLI-side placement).
-    let acc_wf = tamarin_accountability::check_wellformedness(&parser_theory, &typed);
+    let acc_wf = tamarin_accountability::check_wellformedness(&typed);
     let user_set_heuristic = !typed.heuristic.is_empty();
     // HS `Sapic.checkWellformedness` (Warnings.hs) is part of `preReport`, which
     // is PREPENDED to the rest of the report (as in `run_batch`).  A hard
     // translation error still propagates as `LoadError::Elaborate`.
-    let sapic_wf =
-        tamarin_sapic::apply::apply_sapic(&mut parser_theory, &mut typed, user_set_heuristic)
-            .map_err(|e| LoadError::Elaborate(e.message))?;
+    let sapic_wf = tamarin_sapic::apply::apply_sapic(&mut typed, user_set_heuristic)
+        .map_err(|e| LoadError::Elaborate(e.message))?;
     // Accountability translation (HS `Sapic.translate >=> Acc.translate`,
     // `processOpenTheory`, TheoryLoader.hs:470-484, see line 472): expands each
     // `… accounts for` lemma into its
-    // verification-condition lemmas + case-test predicates, injecting into
-    // BOTH `parser_theory` and `typed`, which carries the lemma list, the
-    // proof state and everything the web renderers read.  Without this the
-    // web UI has no pages for the VC sub-lemmas
-    // batch `--prove` proves.  No-op for theories without accountability
-    // lemmas / case tests.
-    tamarin_accountability::translate(&mut parser_theory, &mut typed)
+    // verification-condition lemmas + case-test predicates, appending them to
+    // `typed`, which carries the lemma list, the proof state and everything
+    // the web renderers read.  Without this the web UI has no pages for the
+    // VC sub-lemmas batch `--prove` proves.  No-op for theories without
+    // accountability lemmas / case tests.
+    tamarin_accountability::translate(&mut typed)
         .map_err(|e| LoadError::Elaborate(e.to_string()))?;
     // `preReport` order (as in `run_batch`): SAPIC warnings, then the
     // accountability RP check, then the rest.

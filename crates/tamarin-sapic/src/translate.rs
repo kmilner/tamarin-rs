@@ -22,8 +22,7 @@
 //!      and `reliableChannelRestr`.
 //!
 //! The caller ([`crate::apply::apply_sapic`]) injects the rules + restrictions
-//! into both the parsed and the elaborated theory, and adds `heuristic: p` when
-//! the user set none.
+//! into the theory, and adds `heuristic: p` when the user set none.
 
 use std::collections::BTreeSet;
 
@@ -350,7 +349,7 @@ pub struct Translation {
     /// formulas.  HS attaches these as the rule's `_preRestriction`
     /// (sapic/src/Sapic/Facts.hs:376-379); the port pairs them with the rule
     /// here, and `apply_sapic` runs the `_restrict` expansion (HS
-    /// `liftedAddProtoRule`) over both theories from them.
+    /// `liftedAddProtoRule`) over them.
     pub rules: Vec<(ProtoRuleE, Vec<SyntacticLNFormula>)>,
     pub restrictions: Vec<tamarin_parser::ast::Restriction>,
 }

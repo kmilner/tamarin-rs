@@ -40,9 +40,9 @@ pub(crate) struct AccData {
     pub(crate) case_tests: Vec<CaseTestData>,
 }
 
-/// One generated lemma (HS `ProtoLemma SyntacticLNFormula ProofSkeleton`);
-/// the formula is still locally-nameless and gets opened to `p::Formula` by the
-/// caller.
+/// One generated lemma (HS `ProtoLemma SyntacticLNFormula ProofSkeleton`),
+/// as `generate_accountability_lemmas` builds it: the injection step in
+/// `lib.rs` predicate-expands the formula and applies the theory's macros.
 pub(crate) struct GenLemma {
     pub(crate) name: String,
     pub(crate) quantifier: p::TraceQuantifier,
