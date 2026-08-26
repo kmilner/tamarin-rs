@@ -258,6 +258,33 @@ fn for_each_atom_term<S: SugarTerms<T>, T>(a: &ProtoAtom<S, T>, f: &mut dyn FnMu
     }
 }
 
+/// HS `formulaFacts` (Theory/Tools/Wellformedness.hs:893-906): the fact of
+/// every `Action` atom, in `foldFormula` order.  A `Syntactic` atom carries a
+/// fact too, and it is deliberately skipped — HS's comment at
+/// Theory/Tools/Wellformedness.hs:902 reads "the 'facts' in a predicate atom
+/// are not real facts".
+pub fn formula_facts<S, H, C, V>(fm: &ProtoFormula<S, H, C, V>) -> Vec<&Fact<VTerm<C, BVar<V>>>> {
+    let mut out = Vec::new();
+    collect_formula_facts(fm, &mut out);
+    out
+}
+
+fn collect_formula_facts<'a, S, H, C, V>(
+    fm: &'a ProtoFormula<S, H, C, V>,
+    out: &mut Vec<&'a Fact<VTerm<C, BVar<V>>>>,
+) {
+    match fm {
+        ProtoFormula::Atom(ProtoAtom::Action(_, fa)) => out.push(fa),
+        ProtoFormula::Atom(_) | ProtoFormula::Tf(_) => {}
+        ProtoFormula::Not(p) => collect_formula_facts(p, out),
+        ProtoFormula::Conn(_, p, q) => {
+            collect_formula_facts(p, out);
+            collect_formula_facts(q, out);
+        }
+        ProtoFormula::Qua(_, _, p) => collect_formula_facts(p, out),
+    }
+}
+
 /// HS `formulaTerms` (Theory/Tools/Wellformedness.hs:918-920): the terms of
 /// every atom, in `foldFormula` order.  Its atom step is `atomTerms`
 /// (Theory/Tools/Wellformedness.hs:908-915), which yields NOTHING for a
@@ -1770,5 +1797,46 @@ mod tests {
             Quantifier::All < Quantifier::Ex,
             "All MUST sort before Ex (Theory/Model/Formula.hs:111)"
         );
+    }
+
+    /// `A(x) @ i` as an atom over `BVar` terms.
+    fn action_atom(name: &'static str) -> SyntacticAtom<BLNTerm> {
+        use crate::fact::{Fact, FactTag, Multiplicity};
+        use tamarin_term::vterm::var_term;
+
+        ProtoAtom::Action(
+            var_term(BVar::Free(LVar::new("i", LSort::Node, 0))),
+            Fact::new(
+                FactTag::Proto(Multiplicity::Linear, name, 1),
+                vec![var_term(BVar::Free(x_var()))],
+            ),
+        )
+    }
+
+    /// `formulaFacts` yields the fact of an `Action` atom and of nothing else.
+    /// A `Syntactic` atom carries a fact too and is skipped, which is the one
+    /// arm HS spells out (Theory/Tools/Wellformedness.hs:902).  The facts come
+    /// out in `foldFormula` order: left operand before right, through `Not`
+    /// and through a binder.
+    #[test]
+    fn formula_facts_collects_action_atoms_only() {
+        use crate::fact::fact_tag_name;
+        use tamarin_term::vterm::var_term;
+
+        let eq: SyntacticLNFormula = ProtoFormula::Atom(ProtoAtom::EqE(
+            var_term(BVar::Free(x_var())),
+            var_term(BVar::Free(x_var())),
+        ));
+        let fm: SyntacticLNFormula = ProtoFormula::exists(
+            ("x".to_string(), LSort::Msg),
+            ProtoFormula::Atom(action_atom("A"))
+                .and(ProtoFormula::Atom(pred_atom(BVar::Free(x_var()))).or(eq))
+                .implies(ProtoFormula::Atom(action_atom("B")).not()),
+        );
+        let names: Vec<String> = formula_facts(&fm)
+            .iter()
+            .map(|fa| fact_tag_name(&fa.tag))
+            .collect();
+        assert_eq!(names, vec!["A".to_string(), "B".to_string()]);
     }
 }

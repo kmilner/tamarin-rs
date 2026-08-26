@@ -556,3 +556,70 @@ fn pretty_fact_takes_the_argument_printer() {
     );
     assert_eq!(doc.render(), "F( A, B )");
 }
+
+/// The `Fact arity issues` and `Fact multiplicity issues` blocks render a
+/// LEMMA's fact through HS's derived `Show`, not through `prettyLNFact`.
+/// Oracle ef3f0468, on a theory whose rules use `B` at arity 1 and at arity 2
+/// and whose lemma reads `Ex x #i. B(x, 'c') @ i`, prints the cell
+/// `Fact {factTag = ProtoFact Linear "B" 2, factAnnotations = fromList [],
+/// factTerms = [Bound 1,'c']}` — record syntax, a bare comma between the
+/// terms, and the bound variable as its De Bruijn index.
+#[test]
+fn show_bl_fact_matches_the_derived_show() {
+    use tamarin_term::lterm::{pub_term, BVar};
+    use tamarin_term::vterm::var_term;
+
+    let fa = Fact::new(
+        FactTag::Proto(Multiplicity::Linear, "B", 2),
+        vec![var_term(BVar::Bound(1)), pub_term("c")],
+    );
+    assert_eq!(
+        show_bl_fact(&fa),
+        "Fact {factTag = ProtoFact Linear \"B\" 2, factAnnotations = fromList [], \
+         factTerms = [Bound 1,'c']}"
+    );
+}
+
+/// An annotation reaches the derived `Show` as its constructor name, and the
+/// set renders in `Ord` order with a bare comma between elements.  Oracle
+/// ef3f0468, on the same shape of theory with the lemma action written
+/// `A(x)[+, no_precomp] @ i`, prints
+/// `factAnnotations = fromList [SolveFirst,NoSources]`.
+#[test]
+fn show_bl_fact_renders_a_nonempty_annotation_set() {
+    use tamarin_term::lterm::BVar;
+    use tamarin_term::vterm::var_term;
+
+    let fa = Fact::new(
+        FactTag::Proto(Multiplicity::Linear, "A", 1),
+        vec![var_term(BVar::Bound(1))],
+    )
+    .annotate(FactAnnotation::NoSources)
+    .annotate(FactAnnotation::SolveFirst);
+    assert_eq!(
+        show_bl_fact(&fa),
+        "Fact {factTag = ProtoFact Linear \"A\" 1, \
+         factAnnotations = fromList [SolveFirst,NoSources], factTerms = [Bound 1]}"
+    );
+}
+
+/// `isKLogFact` is `isProtoFact` narrowed to the name `K`
+/// (Theory/Model/Fact.hs:348-350), which is the tag [`k_log_fact`] builds.
+/// The special tags are not protocol facts at all, and `KU`/`KD` do not
+/// qualify despite their names.
+#[test]
+fn is_k_log_fact_is_the_proto_fact_named_k() {
+    let k = k_log_fact(msg_var("m", 0));
+    assert!(is_proto_fact(&k) && is_k_log_fact(&k));
+    let p = proto_fact(Multiplicity::Linear, "P", vec![msg_var("m", 0)]);
+    assert!(is_proto_fact(&p) && !is_k_log_fact(&p));
+    for f in [
+        fresh_fact(msg_var("m", 0)),
+        in_fact(msg_var("m", 0)),
+        out_fact(msg_var("m", 0)),
+        ku_fact(msg_var("m", 0)),
+        kd_fact(msg_var("m", 0)),
+    ] {
+        assert!(!is_proto_fact(&f) && !is_k_log_fact(&f), "{f:?}");
+    }
+}

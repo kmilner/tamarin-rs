@@ -32,7 +32,9 @@ use tamarin_term::pretty::pretty_nterm;
 use tamarin_term::term::Term;
 use tamarin_term::vterm::Lit;
 
-use crate::fact::{fact_tag_multiplicity, fact_tag_name, FactTag, LNFact, Multiplicity};
+use crate::fact::{
+    fact_tag_multiplicity, fact_tag_name, is_proto_fact, FactTag, LNFact, Multiplicity,
+};
 use crate::formula::formula_frees_list;
 use crate::pretty_hpj::{self as hpj, Doc};
 use crate::rule::{pretty_proto_rule_name, ProtoRuleE};
@@ -152,13 +154,6 @@ pub fn unbound_report(thy: &Theory) -> Vec<WfError> {
 // =============================================================================
 // Facts occurring in a left-hand side but in no right-hand side
 // =============================================================================
-
-/// HS `isProtoFact` (Theory/Model/Fact.hs:339-341): a fact tagged
-/// `ProtoFact`, which the reserved-named `K` is too (`isKLogFact`,
-/// Theory/Model/Fact.hs:349-350).
-fn is_proto_fact(f: &LNFact) -> bool {
-    matches!(f.tag, FactTag::Proto(..))
-}
 
 /// HS `show` of `Multiplicity` (Theory/Model/Fact.hs:133-134).
 fn show_multiplicity(m: Multiplicity) -> &'static str {

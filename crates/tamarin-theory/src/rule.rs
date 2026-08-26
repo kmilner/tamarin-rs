@@ -21,7 +21,7 @@ use tamarin_term::macro_expand::LNMacro;
 use tamarin_utils::color::Rgb;
 
 use crate::fact::{apply_macro_in_fact, pretty_lnfact, FactTag, LNFact, Multiplicity};
-use crate::formula::SyntacticLNFormula;
+use crate::formula::{formula_frees_list, SyntacticLNFormula};
 use crate::pretty_hpj::{
     above_blank, fsep, hcat, kw_rule_modulo, kw_variants, line_comment_, multi_comment,
     multi_comment_, numbered_prime, operator_, punctuate, sep, vcat, Doc,
@@ -185,6 +185,25 @@ impl<I: Clone> HasFrees for Rule<I> {
                 .collect(),
         }
     }
+}
+
+/// HS `frees` at `Rule ProtoRuleEInfo` (Theory/Model/Rule.hs:291-298): the
+/// info's free variables, then the premises', conclusions', actions' and new
+/// variables', `sortednub`bed (`frees = sortednub . freesList`,
+/// Term/LTerm.hs:613-614).  `HasFrees ProtoRuleEInfo`
+/// (Theory/Model/Rule.hs:491-494) folds the rule name and the attributes,
+/// whose own instances yield nothing (Theory/Model/Rule.hs:462-465, :470-473),
+/// so the info contributes exactly the `_restrict` formulas' free variables —
+/// the ones the [`HasFrees`] impl above cannot reach.
+pub fn proto_rule_e_frees(ru: &ProtoRuleE) -> Vec<LVar> {
+    let mut out: Vec<LVar> = Vec::new();
+    for r in &ru.info.restrictions {
+        out.extend(formula_frees_list(r));
+    }
+    ru.for_each_free(&mut |v| out.push(*v));
+    out.sort();
+    out.dedup();
+    out
 }
 
 /// HS `instance Apply LNSubst i => Apply LNSubst (Rule i)`

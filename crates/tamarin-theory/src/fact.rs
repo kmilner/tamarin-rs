@@ -12,8 +12,10 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use tamarin_term::lterm::{HasFrees, LNTerm, LVar};
+use tamarin_term::lterm::{BVar, HasFrees, LNTerm, LVar, Name};
 use tamarin_term::macro_expand::LNMacro;
+use tamarin_term::term::show_term;
+use tamarin_term::vterm::VTerm;
 
 use crate::pretty_hpj::{fsep, nest_short_doc, punctuate, Doc};
 
@@ -468,11 +470,6 @@ impl<T> Fact<T> {
     pub fn is_persistent(&self) -> bool {
         fact_tag_multiplicity(&self.tag) == Multiplicity::Persistent
     }
-    // Used by the graph's protocol-edge classification
-    // (`constraint::system::json`).
-    pub fn is_proto(&self) -> bool {
-        matches!(self.tag, FactTag::Proto(_, _, _))
-    }
     pub fn is_k_fact(&self) -> bool {
         matches!(self.tag, FactTag::Ku | FactTag::Kd)
     }
@@ -490,6 +487,21 @@ impl<T> Fact<T> {
     pub fn is_no_sources(&self) -> bool {
         self.annotations.contains(&FactAnnotation::NoSources)
     }
+}
+
+/// HS `isProtoFact` (Theory/Model/Fact.hs:338-341): a fact tagged
+/// `ProtoFact`, i.e. one of the theory's own facts rather than a special
+/// tag.
+pub fn is_proto_fact<T>(f: &Fact<T>) -> bool {
+    matches!(f.tag, FactTag::Proto(..))
+}
+
+/// HS `isKLogFact` (Theory/Model/Fact.hs:348-350): the protocol fact named
+/// `K`, which the intruder rule `isend` emits as an action
+/// ([`k_log_fact`]).  Its tag is a `ProtoFact`, so [`is_proto_fact`] holds of
+/// it too.
+pub fn is_k_log_fact<T>(f: &Fact<T>) -> bool {
+    is_proto_fact(f) && fact_tag_name(&f.tag) == "K"
 }
 
 /// Mirrors Haskell `Theory.Model.Fact.isKDXorFact` (Theory/Model/Fact.hs:262-265):
@@ -690,6 +702,40 @@ fn show_fact_tag_derived(t: &FactTag) -> String {
         FactTag::Ded => "DedFact".to_string(),
         FactTag::Term => "TermFact".to_string(),
     }
+}
+
+/// HS's DERIVED `Show FactAnnotation` (Theory/Model/Fact.hs:154-155) — the
+/// constructor spelling, which is a different string from the concrete
+/// syntax [`show_fact_annotation`] writes.
+fn show_fact_annotation_derived(a: FactAnnotation) -> &'static str {
+    match a {
+        FactAnnotation::SolveFirst => "SolveFirst",
+        FactAnnotation::SolveLast => "SolveLast",
+        FactAnnotation::NoSources => "NoSources",
+    }
+}
+
+/// HS's DERIVED `Show (Fact t)` (Theory/Model/Fact.hs:158-163) at
+/// `t = VTerm Name (BVar LVar)`, the fact type a formula's `Action` atom
+/// carries.  Record syntax, each field at precedence 0: the tag through
+/// [`show_fact_tag_derived`], the annotation set as `fromList ` before the
+/// derived list `show` of its elements in `Ord` order (`Show (Set a)`,
+/// containers `Data.Set.Internal`), and the terms through
+/// [`tamarin_term::term::show_term`].  Both lists separate their elements
+/// with a bare comma, as Haskell's `showList__` does.
+pub fn show_bl_fact(fa: &Fact<VTerm<Name, BVar<LVar>>>) -> String {
+    let ann: Vec<&str> = fa
+        .annotations
+        .iter()
+        .map(|a| show_fact_annotation_derived(*a))
+        .collect();
+    let terms: Vec<String> = fa.terms.iter().map(show_term).collect();
+    format!(
+        "Fact {{factTag = {}, factAnnotations = fromList [{}], factTerms = [{}]}}",
+        show_fact_tag_derived(&fa.tag),
+        ann.join(","),
+        terms.join(","),
+    )
 }
 
 /// HS `ppFact n t = nestShort' (n ++ "(") ")" . fsep . punctuate comma $

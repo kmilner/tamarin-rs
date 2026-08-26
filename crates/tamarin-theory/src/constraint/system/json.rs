@@ -37,7 +37,9 @@ use tamarin_term::term::{show_term, Term};
 use tamarin_term::vterm::Lit;
 
 use crate::constraint::constraints::{NodeConc, NodeId, NodePrem, Reason};
-use crate::fact::{fact_tag_multiplicity, show_fact_tag, FactTag, LNFact, Multiplicity};
+use crate::fact::{
+    fact_tag_multiplicity, is_proto_fact, show_fact_tag, FactTag, LNFact, Multiplicity,
+};
 use crate::pretty_hpj::{fsep, punctuate, Doc, DEFAULT_LINE_LENGTH, DEFAULT_RIBBON};
 use crate::rule::{
     is_coerce_rule_info, is_constr_rule_info, is_destr_rule_info, is_fresh_constr_rule_info,
@@ -245,7 +247,7 @@ fn classify_edge(edge: &GEdge, rules: &NodeRuleMap<'_>) -> EdgeClass {
                 EdgeClass::SystemK
             } else if edge_fact_check(prem, conc, LNFact::is_persistent) {
                 EdgeClass::SystemPersistent
-            } else if edge_fact_check(prem, conc, LNFact::is_proto) {
+            } else if edge_fact_check(prem, conc, is_proto_fact) {
                 EdgeClass::SystemProto
             } else {
                 EdgeClass::SystemDefault

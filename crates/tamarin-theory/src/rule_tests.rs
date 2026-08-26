@@ -813,3 +813,52 @@ fn manual_variant_keeps_the_trivial_disjunction() {
     assert!(out.contains("has exactly the trivial AC variant"), "{out}");
     assert!(!out.contains("variants (modulo AC)"), "{out}");
 }
+
+/// HS `frees` at `Rule ProtoRuleEInfo` folds the info before the four fact
+/// and new-variable lists, and `HasFrees ProtoRuleEInfo` reaches the
+/// `_restrict` formulas (Theory/Model/Rule.hs:291-298, :491-494).  The
+/// [`HasFrees`] impl on `Rule<I>` skips the info, so a variable that occurs
+/// only in a restriction is visible to `proto_rule_e_frees` and to nothing
+/// else; one that occurs in both is listed once.
+#[test]
+fn proto_rule_e_frees_folds_the_rule_restrictions() {
+    use crate::atom::ProtoAtom;
+    use crate::formula::ProtoFormula;
+    use tamarin_term::lterm::{frees, BVar, LSort};
+    use tamarin_term::vterm::var_term;
+
+    let a = LVar::new("a", LSort::Msg, 0);
+    let t = LVar::new("t", LSort::Node, 9);
+    let mut r = rule_with_a_var_in_every_list(0);
+    r.info.restrictions = vec![
+        ProtoFormula::Atom(ProtoAtom::Last(var_term(BVar::Free(t)))).and(ProtoFormula::Atom(
+            ProtoAtom::EqE(var_term(BVar::Free(a)), var_term(BVar::Free(a))),
+        )),
+    ];
+
+    let listed = |names: &[(&str, LSort, u64)]| -> Vec<LVar> {
+        names
+            .iter()
+            .map(|(n, s, i)| LVar::new(*n, *s, *i))
+            .collect()
+    };
+    assert_eq!(
+        frees(&r),
+        listed(&[
+            ("a", LSort::Msg, 0),
+            ("b", LSort::Msg, 1),
+            ("c", LSort::Msg, 2),
+            ("d", LSort::Msg, 3),
+        ])
+    );
+    assert_eq!(
+        proto_rule_e_frees(&r),
+        listed(&[
+            ("a", LSort::Msg, 0),
+            ("b", LSort::Msg, 1),
+            ("c", LSort::Msg, 2),
+            ("d", LSort::Msg, 3),
+            ("t", LSort::Node, 9),
+        ])
+    );
+}
