@@ -2337,30 +2337,6 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         let auto_sources = opts.auto_sources || config_block.auto_sources;
         let cut = effective_cut(&opts, &config_block)?;
 
-        // Wellformedness checks — mirrors HS `checkWellformedness`
-        // (`Theory.Tools.Wellformedness:1270`).  Runs on every file that
-        // reaches the close pipeline, so a malformed theory is surfaced
-        // even without proving.  The shared pass (`wellformedness`) clones
-        // `parsed` with macros expanded first — HS's `thyProtoRules`
-        // applies `applyMacroInRule (theoryMacros thy)` before the checks,
-        // so `Fr(test())` where `test() = ~x` becomes `Fr(~x)` and passes.
-        // (`--parse-only` never reaches this point — it `continue`d above,
-        // before any wellformedness runs, matching HS Batch.hs:91-95.)
-        let mut wf_report = tamarin_theory::wellformedness::pre_translation_wf_report(&parsed);
-        // HS `checkIfLemmasInTheory` (Wellformedness.hs:1156-1171) — FIRST
-        // in HS's checkWellformedness list (line 1272).  Checks that every
-        // --prove=X / --lemma=X name corresponds to a theory lemma.  This
-        // check needs the CLI args (not embedded in the parser AST), so we
-        // call it separately and PREPEND the result so it sorts first —
-        // matching HS's `checkIfLemmasInTheory : ...` order.
-        tamarin_theory::wellformedness::prepend_wf_report(
-            &mut wf_report,
-            tamarin_theory::wellformedness::lemmas::check_if_lemmas_in_theory(
-                &opts.lemma_names,
-                &parsed,
-            ),
-        );
-
         // Elaborate (mainly to get the protocol-specific MaudeSig).  This is
         // where the port first builds LNTerms, so an HS-`error`-class defect
         // (`Term.fAppAC: empty argument list`) panics HERE — but GHC, lazy,
@@ -2381,8 +2357,33 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         let mut elaborated = elaborate(&parsed)
             .map_err(|e| RunError(format!("elaboration error in {}: {}", in_file, e.message)))?;
         DEFERRED_HS_ERROR_MARKERS.take();
-        // Everything downstream of elaboration reads the internal theory; the
-        // parser AST ends here.
+
+        // Wellformedness checks — mirrors HS `checkWellformedness`
+        // (`Theory.Tools.Wellformedness:1270`).  Runs on every file that
+        // reaches the close pipeline, so a malformed theory is surfaced
+        // even without proving.  The shared pass (`wellformedness`) clones
+        // `parsed` with macros expanded first — HS's `thyProtoRules`
+        // applies `applyMacroInRule (theoryMacros thy)` before the checks,
+        // so `Fr(test())` where `test() = ~x` becomes `Fr(~x)` and passes.
+        // (`--parse-only` never reaches this point — it `continue`d above,
+        // before any wellformedness runs, matching HS Batch.hs:91-95.)
+        let mut wf_report =
+            tamarin_theory::wellformedness::pre_translation_wf_report(&elaborated, &parsed);
+        // HS `checkIfLemmasInTheory` (Wellformedness.hs:1156-1171) — FIRST
+        // in HS's checkWellformedness list (line 1272).  Checks that every
+        // --prove=X / --lemma=X name corresponds to a theory lemma.  This
+        // check needs the CLI args (not embedded in the parser AST), so we
+        // call it separately and PREPEND the result so it sorts first —
+        // matching HS's `checkIfLemmasInTheory : ...` order.
+        tamarin_theory::wellformedness::prepend_wf_report(
+            &mut wf_report,
+            tamarin_theory::wellformedness::lemmas::check_if_lemmas_in_theory(
+                &opts.lemma_names,
+                &parsed,
+            ),
+        );
+        // Everything downstream of the wellformedness pass reads the internal
+        // theory; the parser AST ends here.
         drop(parsed);
         // HS `addParamsOptions`' `addNdcOption` (TheoryLoader.hs:821-826):
         // `--no-ndc` disables the no-deconstruction-chain check for this theory.

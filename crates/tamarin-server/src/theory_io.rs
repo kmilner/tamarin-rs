@@ -176,6 +176,12 @@ pub fn load_from_source(
     // during parsing, so post-lift here is the same point).
     eprintln!("[Theory {}] Theory loaded", parsed.name);
 
+    // "Theory translated" at the START of translation (TheoryLoader.hs:494-500, see line 496
+    // prints before `processOpenTheory` runs); RS's `elaborate` is that
+    // translation step.
+    eprintln!("[Theory {}] Theory translated", parsed.name);
+    let mut typed = elaborate(&parsed).map_err(|e| LoadError::Elaborate(e.message))?;
+
     // Wellformedness report — computed by the SAME pipeline `--prove` runs
     // (`run.rs`'s `checkWellformedness`, mirroring HS `TheoryLoader.hs`), so the
     // interactive web UI surfaces exactly the warnings HS does.  HS runs
@@ -185,19 +191,12 @@ pub fn load_from_source(
     // comment in the source/message routes (`format_wf_block`) and the
     // `<div class="wf-warning">` header banner in help/overview (`errors_html`).
     //
-    // Static checks run on the PRE-translation parsed theory (HS runs
-    // `check_theory` BEFORE the SAPIC `translate` pass; `run_batch` opens
-    // with the same shared pass — macro-expanded clone, then
-    // `check_theory`).
-    let mut wf_report = tamarin_theory::wellformedness::pre_translation_wf_report(&parsed);
-
-    // "Theory translated" at the START of translation (TheoryLoader.hs:494-500, see line 496
-    // prints before `processOpenTheory` runs); RS's `elaborate` is that
-    // translation step.
-    eprintln!("[Theory {}] Theory translated", parsed.name);
-    let mut typed = elaborate(&parsed).map_err(|e| LoadError::Elaborate(e.message))?;
-    // Everything downstream of elaboration reads the internal theory; the
-    // parser AST ends here.
+    // Static checks run on the theory as written, before the SAPIC
+    // `translate` pass extends it; `run_batch` runs the same shared pass —
+    // macro-expanded clone, then `check_theory`.
+    let mut wf_report = tamarin_theory::wellformedness::pre_translation_wf_report(&typed, &parsed);
+    // Everything downstream of the wellformedness pass reads the internal
+    // theory; the parser AST ends here.
     drop(parsed);
     // HS `addParamsOptions`' `addNdcOption` (TheoryLoader.hs:821-826), the last
     // step of `loadTheory` (TheoryLoader.hs:449-452): the CLI's `ndcCheck`

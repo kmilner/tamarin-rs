@@ -189,7 +189,14 @@ fn every_fixture_parses_and_matches() {
                 continue;
             }
         };
-        let topics: BTreeSet<String> = wf::topics(&wf::check_theory(&thy))
+        let elaborated = match tamarin_theory::elaborate::elaborate(&thy) {
+            Ok(t) => t,
+            Err(e) => {
+                failures.push(format!("ELAB   {}: {}", fx.name, e.message));
+                continue;
+            }
+        };
+        let topics: BTreeSet<String> = wf::topics(&wf::check_theory(&elaborated, &thy))
             .into_iter()
             .map(|s| norm(&s))
             .collect();

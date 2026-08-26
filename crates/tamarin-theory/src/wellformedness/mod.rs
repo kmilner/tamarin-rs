@@ -339,9 +339,10 @@ pub fn after_unbound_topics() -> Vec<&'static str> {
         .collect()
 }
 
-/// Run every wellformedness check against `thy`. Topics from the result
+/// Run every wellformedness check against the theory, held as the
+/// elaborated `elab` and the parser AST `parsed`. Topics from the result
 /// can be compared directly against `tamarin-prover`'s output.
-pub fn check_theory(thy: &p::Theory) -> WfReport {
+pub fn check_theory(elab: &Theory, parsed: &p::Theory) -> WfReport {
     // Mirrors HS `Theory.Tools.Wellformedness.checkWellformedness`
     // (Wellformedness.hs:1270-1286) in HS check order: unbound, freshNames,
     // publicNames, ruleSorts (variable_sort_clashes), factReports,
@@ -352,7 +353,7 @@ pub fn check_theory(thy: &p::Theory) -> WfReport {
     // (`rules::unbound_report`, anchored by `after_unbound_topics`): it reads
     // the TRANSLATED theory's rules, so the ones SAPIC's process translation
     // generates are in scope.
-    report.extend(rules::fresh_names_report(thy));
+    report.extend(rules::fresh_names_report(elab, parsed));
     // publicNamesReport — spliced by `splice_translated_wf_reports`
     // (`rules::translated_public_names_report`, anchored by
     // `after_public_names_topics`): it reads the TRANSLATED rules, whose
@@ -362,24 +363,20 @@ pub fn check_theory(thy: &p::Theory) -> WfReport {
     // and BEFORE factReports (Wellformedness.hs:1270-1286, see line 1275/1256).  It is ported as
     // `variable_sort_clashes` ("Variable with mismatching sorts or
     // capitalization").
-    report.extend(rules::variable_sort_clashes(thy));
+    report.extend(rules::variable_sort_clashes(elab, parsed));
     // ruleVariantsReport — spliced by the batch load pipeline (`run.rs`,
     // anchored by `after_variants_topics`): it needs a MaudeHandle and the
     // variant solver.
-    // factReports group:
-    report.extend(facts::reserved_report(thy));
-    report.extend(facts::reserved_fact_name_rules(thy));
-    report.extend(facts::fresh_fact_arguments(thy));
-    report.extend(facts::special_facts_usage(thy));
-    report.extend(facts::fact_usage(thy));
-    // factLhsOccurNoRhs — spliced by `splice_translated_wf_reports`
+    // factReports group (Wellformedness.hs:579-583).  Its last member,
+    // factLhsOccurNoRhs, is spliced by `splice_translated_wf_reports`
     // (`rules::fact_lhs_occur_no_rhs`): same reason as unboundReport above.
+    report.extend(facts::fact_reports(elab, parsed));
     // formulaReports group (checkQuantifiers / checkTerms / checkGuarded) —
     // spliced by `splice_translated_wf_reports` as one interleaved per-formula
     // pass (`formulas::formula_reports`): it needs the elaborated signature's
     // irreducible funsyms and the TRANSLATED theory's formulas.
     // lemmaAttributeReport:
-    report.extend(lemmas::lemma_attribute_report(thy));
+    report.extend(lemmas::lemma_attribute_report(elab, parsed));
     // multRestrictedReport — spliced by `splice_translated_wf_reports`
     // (`mult::mult_restricted_report`): it needs the elaborated signature's
     // irreducible funsyms and the HughesPJ rule renderer.
@@ -542,15 +539,17 @@ fn fsep_comma_fill(items: &[String]) -> String {
     out
 }
 
-/// The PRE-translation static wellformedness pass both drivers open with:
-/// clone `parsed` with macros expanded — HS `thyProtoRules`
-/// (Wellformedness.hs:133-134) applies `applyMacroInRule` to every rule
-/// before the checks — and run `check_theory` on the clone.
+/// The static wellformedness pass over the theory as written, before the
+/// SAPIC and accountability translations extend it: clone `parsed` with
+/// macros expanded — HS `thyProtoRules` (Wellformedness.hs:133-134) applies
+/// `applyMacroInRule` to every rule before the checks — and run
+/// [`check_theory`] on the clone.  `elab` is the elaborated theory of the
+/// same source, which both drivers build before this pass runs.
 ///
 /// The sole caller of [`crate::macro_expand::macro_expanded_clone`].
-pub fn pre_translation_wf_report(parsed: &p::Theory) -> Vec<WfError> {
+pub fn pre_translation_wf_report(elab: &Theory, parsed: &p::Theory) -> Vec<WfError> {
     let parsed_for_wf = crate::macro_expand::macro_expanded_clone(parsed);
-    check_theory(&parsed_for_wf)
+    check_theory(elab, &parsed_for_wf)
 }
 
 /// Append the signature-driven "Subterm Convergence Warning", once

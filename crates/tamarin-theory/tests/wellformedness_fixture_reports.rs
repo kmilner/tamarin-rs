@@ -90,7 +90,6 @@ fn render_report(name: &str) -> String {
     let src = fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
     let parsed = parse_theory(&src, &["diff"]).unwrap_or_else(|e| panic!("{name}: parse: {e}"));
 
-    let mut report = tamarin_theory::wellformedness::pre_translation_wf_report(&parsed);
     let elaborated = tamarin_theory::elaborate::elaborate(&parsed)
         .unwrap_or_else(|e| panic!("{name}: elaborate: {}", e.message));
     assert!(
@@ -99,6 +98,8 @@ fn render_report(name: &str) -> String {
          translation stage `run.rs` runs before `splice_translated_wf_reports`, so its \
          report would be missing the generated rules' findings",
     );
+    let mut report =
+        tamarin_theory::wellformedness::pre_translation_wf_report(&elaborated, &parsed);
     let maude_sig = elaborated.signature.maude_sig.clone();
     tamarin_theory::wellformedness::append_subterm_convergence_report(&mut report, &maude_sig);
     tamarin_theory::wellformedness::splice_translated_wf_reports(

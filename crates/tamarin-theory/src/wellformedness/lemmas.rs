@@ -122,7 +122,7 @@ fn arg_matches_any_lemma(arg: &str, theory_lemmas: &[&str]) -> bool {
 // Lemma annotations — reuse on exists-trace
 // =============================================================================
 
-pub fn lemma_attribute_report(thy: &Theory) -> WfReport {
+pub fn lemma_attribute_report(_elab: &crate::theory::Theory, parsed: &Theory) -> WfReport {
     // HS `lemmaAttributeReport` (Wellformedness.hs:924-932): each
     // exists-trace lemma tagged `reuse` yields a body line
     //   `Lemma `<name>': cannot reuse 'exists-trace' lemmas`
@@ -133,7 +133,7 @@ pub fn lemma_attribute_report(thy: &Theory) -> WfReport {
     // blank-line-separated.  Emit a single `WfError` carrying that whole
     // block so the header appears exactly once even with several lemmas.
     let topic = "Lemma annotations";
-    let bodies: Vec<String> = theory_lemmas(thy)
+    let bodies: Vec<String> = theory_lemmas(parsed)
         .filter(|l| {
             matches!(l.trace_quantifier, TraceQuantifier::ExistsTrace)
                 && l.attributes.iter().any(|a| matches!(a, LemmaAttr::Reuse))

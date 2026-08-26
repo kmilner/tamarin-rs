@@ -357,6 +357,14 @@ fn parse(src: &str) -> p::Theory {
     tamarin_parser::parse_theory(src, &["diff"]).expect("parse")
 }
 
+/// The whole pre-translation report of a parsed theory.  [`check_theory`]
+/// takes both representations of the same source, so the harness elaborates
+/// the theory the way the drivers do.
+fn check(parsed: &p::Theory) -> WfReport {
+    let elaborated = crate::elaborate::elaborate(parsed).expect("elaborate");
+    check_theory(&elaborated, parsed)
+}
+
 /// Return the single `WfError` whose topic matches `topic`.
 fn only(report: &WfReport, topic: &str) -> String {
     let hits: Vec<&WfError> = report.iter().filter(|e| e.topic == topic).collect();
@@ -379,7 +387,7 @@ fn fresh_public_constants_message_format() {
         "theory T begin \
             rule R: [ Fr(~k) ] --[ ]-> [ Out(<~k, ~'foo'>) ] end",
     );
-    let msg = only(&check_theory(&t), "Fresh public constants");
+    let msg = only(&check(&t), "Fresh public constants");
     assert_eq!(
         msg,
         "Fresh public constants\n======================\n\n  \

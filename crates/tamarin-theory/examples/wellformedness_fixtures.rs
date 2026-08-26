@@ -215,7 +215,14 @@ fn main() {
         // 2. Our Rust wf checker must emit every expected topic and none of
         // the fixture's negative pins.  [`POST_ELABORATION_TOPICS`] are
         // dropped from the positive side; step 3 still verifies them.
-        let rust_topics: BTreeSet<String> = wf::topics(&wf::check_theory(&thy))
+        let elaborated = match tamarin_theory::elaborate::elaborate(&thy) {
+            Ok(t) => t,
+            Err(e) => {
+                fail_lines.push(format!("ELAB   {}: {}", name, e.message));
+                continue;
+            }
+        };
+        let rust_topics: BTreeSet<String> = wf::topics(&wf::check_theory(&elaborated, &thy))
             .into_iter()
             .map(|s| norm(&s))
             .collect();

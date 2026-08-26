@@ -58,7 +58,11 @@ fn main() {
             tamarin_clean += 1;
         }
 
-        let rust_topics = wf::topics(&wf::check_theory(&thy));
+        let elaborated = match tamarin_theory::elaborate::elaborate(&thy) {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        let rust_topics = wf::topics(&wf::check_theory(&elaborated, &thy));
         if !rust_topics.is_empty() {
             rust_flagged += 1;
         }

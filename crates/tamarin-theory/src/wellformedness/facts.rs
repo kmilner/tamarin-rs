@@ -528,6 +528,22 @@ fn cmp_term_lists<T: std::borrow::Borrow<Term>>(
 }
 
 // =============================================================================
+// The factReports group
+// =============================================================================
+
+/// Port of HS `factReports` (Wellformedness.hs:579-583), in HS's member
+/// order.  Its last member, `factLhsOccurNoRhs`, reads the elaborated rules
+/// and lives in [`super::rules`].
+pub fn fact_reports(_elab: &crate::theory::Theory, parsed: &Theory) -> WfReport {
+    let mut report = reserved_report(parsed);
+    report.extend(reserved_fact_name_rules(parsed));
+    report.extend(fresh_fact_arguments(parsed));
+    report.extend(special_facts_usage(parsed));
+    report.extend(fact_usage(parsed));
+    report
+}
+
+// =============================================================================
 // Reserved fact names — Tamarin reserves 'fr', 'ku', 'kd', 'out', 'in'
 // =============================================================================
 
@@ -535,7 +551,7 @@ fn cmp_term_lists<T: std::borrow::Borrow<Term>>(
 /// whose lowercased tag name is one of these is reserved.
 const RESERVED_FACT_NAMES: &[&str] = &["fr", "ku", "kd", "out", "in"];
 
-pub fn reserved_report(thy: &Theory) -> WfReport {
+fn reserved_report(thy: &Theory) -> WfReport {
     let mut out = Vec::new();
     for r in theory_rules(thy) {
         for f in rule_facts(r) {
@@ -572,7 +588,7 @@ pub fn reserved_report(thy: &Theory) -> WfReport {
 // is in NONE of those sets, so it must NOT appear here.
 const KLOG_NAMES: &[&str] = &["KU", "KD", "K"];
 
-pub fn reserved_fact_name_rules(thy: &Theory) -> WfReport {
+fn reserved_fact_name_rules(thy: &Theory) -> WfReport {
     let ac = user_ac_fun_names(thy);
     let mut out = Vec::new();
     for r in theory_rules(thy) {
@@ -630,7 +646,7 @@ pub fn reserved_fact_name_rules(thy: &Theory) -> WfReport {
 // Special facts misuse
 // =============================================================================
 
-pub fn special_facts_usage(thy: &Theory) -> WfReport {
+fn special_facts_usage(thy: &Theory) -> WfReport {
     let ac = user_ac_fun_names(thy);
     let mut out = Vec::new();
     for r in theory_rules(thy) {
@@ -673,7 +689,7 @@ pub fn special_facts_usage(thy: &Theory) -> WfReport {
 // Fr facts must use a fresh- or msg-variable
 // =============================================================================
 
-pub fn fresh_fact_arguments(thy: &Theory) -> WfReport {
+fn fresh_fact_arguments(thy: &Theory) -> WfReport {
     let ac = user_ac_fun_names(thy);
     let mut out = Vec::new();
     for r in theory_rules(thy) {
@@ -990,7 +1006,7 @@ fn show_debruijn_fact(fa: &Fact, dbterms: &[String]) -> String {
     )
 }
 
-pub fn fact_usage(thy: &Theory) -> WfReport {
+fn fact_usage(thy: &Theory) -> WfReport {
     let observations = collect_fact_observations(thy);
     let mut groups: BTreeMap<String, Vec<&FactObservation>> = BTreeMap::new();
     for obs in &observations {

@@ -511,7 +511,7 @@ fn rule_name_lits(r: &p::Rule) -> Vec<(NameKind, String)> {
 // Fresh public constants — `~'foo'` is forbidden
 // =============================================================================
 
-pub fn fresh_names_report(thy: &p::Theory) -> WfReport {
+pub fn fresh_names_report(_elab: &Theory, parsed: &p::Theory) -> WfReport {
     // HS `freshNamesReport'` (Wellformedness.hs:444-452): one WfError per
     // offending rule, body = `fsep` of
     //   text ("rule " ++ quote (showRuleCaseName ru) ++ ": fresh public \
@@ -524,7 +524,7 @@ pub fn fresh_names_report(thy: &p::Theory) -> WfReport {
     // WfError so the default `format_wf_block` path reproduces the exact bytes.
     let topic = "Fresh public constants";
     let mut bodies: Vec<String> = Vec::new();
-    for r in theory_rules(thy) {
+    for r in theory_rules(parsed) {
         // HS `show (Name FreshName n) = "~'" ++ n ++ "'"` for each fresh name,
         // joined by `punctuate comma` (`, `) under the `fsep`.
         let fresh_lits: Vec<String> = rule_name_lits(r)
@@ -693,9 +693,9 @@ pub fn translated_public_names_report(thy: &Theory) -> Vec<WfError> {
 /// WARNING count matches HS, Batch.hs:87-316, see line 245), all sharing the topic
 /// "Variable with mismatching sorts or capitalization"; `format_wf_block`
 /// renders the header + "Possible reasons" preamble ONCE for the group.
-pub fn variable_sort_clashes(thy: &p::Theory) -> WfReport {
+pub fn variable_sort_clashes(_elab: &Theory, parsed: &p::Theory) -> WfReport {
     let mut out = Vec::new();
-    for r in theory_rules(thy) {
+    for r in theory_rules(parsed) {
         // Pair each var with its lowercase name ONCE, so the sort/group steps
         // below don't re-allocate a `to_lowercase` string per comparison/probe.
         let mut vars: Vec<(String, p::VarSpec)> = Vec::new();

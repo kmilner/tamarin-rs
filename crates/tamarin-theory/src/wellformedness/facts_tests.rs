@@ -11,6 +11,14 @@ fn parse(src: &str) -> Theory {
     parse_theory(src, &["diff"]).expect("parse")
 }
 
+/// The whole pre-translation report of a parsed theory.  [`check_theory`]
+/// takes both representations of the same source, so the harness elaborates
+/// the theory the way the drivers do.
+fn check(parsed: &Theory) -> WfReport {
+    let elaborated = crate::elaborate::elaborate(parsed).expect("elaborate");
+    check_theory(&elaborated, parsed)
+}
+
 /// The parser inlines a rule's `let` bindings into the body it builds
 /// (`apply subst (ps0,as0,cs0,rs0)`, Theory/Text/Parser/Rule.hs:119), so the
 /// checks read the substituted facts: `Fr(m)` passes the fresh-argument check
@@ -24,7 +32,7 @@ fn let_inlining_reaches_the_fresh_fact_check() {
             rule Reuse: let m = h(~k) in [Fr(m)] --[ ]-> [Out(m)]
         end"#,
     );
-    let r = check_theory(&t);
+    let r = check(&t);
     assert!(
         topics(&r).contains("Fr facts must only use a fresh- or a msg-variable"),
         "report: {r:?}"
@@ -42,7 +50,7 @@ fn fact_arity_clash_detected() {
             rule R2: [Fr(~x), Fr(~y)] --[ ]-> [Foo(~x, ~y)]
         end"#,
     );
-    let r = check_theory(&t);
+    let r = check(&t);
     assert!(topics(&r).contains("Fact arity issues"));
 }
 
@@ -56,7 +64,7 @@ fn reserved_name_detected() {
             rule R: [Fr(~k)] --[ ]-> [KU(~k)]
         end"#,
     );
-    let r = check_theory(&t);
+    let r = check(&t);
     assert!(topics(&r).contains("Reserved names"));
 }
 
@@ -75,7 +83,7 @@ fn intruder_rule_block_reaches_no_check() {
               [ !KD( senc(m, k) ), !KU( k ) ] --> [ !KD( m ) ]
         end"#,
     );
-    let r = check_theory(&t);
+    let r = check(&t);
     assert!(r.is_empty(), "report: {r:?}");
 }
 
@@ -120,7 +128,7 @@ fn wf_entry_sorts_fapp_operands_by_funsym_name_like_haskell() {
             rule Test: [ Out( <a,b> ++ (c^d) ++ h(e) ++ zz(f) ++ 1 ) ] --[ ]-> [] end",
     );
     assert_eq!(
-        only(&check_theory(&t), "Special facts"),
+        only(&check(&t), "Special facts"),
         "  rule `Test' uses disallowed facts on left-hand-side:\n    \
              Out( (c^d++h(e)++one++<a, b>++zz(f)) )"
     );
@@ -132,7 +140,7 @@ fn wf_entry_sorts_fapp_operands_by_funsym_name_like_haskell() {
             rule Test: [ Out( <a,b> ++ (c^d) ++ h(e) ++ (u XOR v) ++ aenc{m}pk ) ] --[ ]-> [] end",
     );
     assert_eq!(
-        only(&check_theory(&t), "Special facts"),
+        only(&check(&t), "Special facts"),
         "  rule `Test' uses disallowed facts on left-hand-side:\n    \
              Out( (aenc(m, pk)++c^d++h(e)++<a, b>++(u⊕v)) )"
     );
@@ -144,7 +152,7 @@ fn wf_entry_sorts_fapp_operands_by_funsym_name_like_haskell() {
             rule Test: [ Out( em(a,b) ++ h(c) ++ zz(d) ++ 1 ++ DH_neutral ) ] --[ ]-> [] end",
     );
     assert_eq!(
-        only(&check_theory(&t), "Special facts"),
+        only(&check(&t), "Special facts"),
         "  rule `Test' uses disallowed facts on left-hand-side:\n    \
              Out( (DH_neutral++h(c)++one++zz(d)++em(a, b)) )"
     );
@@ -155,7 +163,7 @@ fn wf_entry_sorts_fapp_operands_by_funsym_name_like_haskell() {
             rule Test: [ Out( <a,b> ++ h(c) ++ zz(d) ++ %1 ) ] --[ ]-> [] end",
     );
     assert_eq!(
-        only(&check_theory(&t), "Special facts"),
+        only(&check(&t), "Special facts"),
         "  rule `Test' uses disallowed facts on left-hand-side:\n    \
              Out( (h(c)++<a, b>++%1++zz(d)) )"
     );
@@ -174,7 +182,7 @@ fn wf_entry_compares_same_head_operands_on_hs_argument_lists() {
             rule Test: [ Out( ((b*c)*a) ++ (b*z) ) ] --[ ]-> [] end",
     );
     assert_eq!(
-        only(&check_theory(&t), "Special facts"),
+        only(&check(&t), "Special facts"),
         "  rule `Test' uses disallowed facts on left-hand-side:\n    \
              Out( ((a*b*c)++(b*z)) )"
     );
@@ -186,7 +194,7 @@ fn wf_entry_compares_same_head_operands_on_hs_argument_lists() {
             rule Test: [ Out( <a,b,c> ++ <a,z> ) ] --[ ]-> [] end",
     );
     assert_eq!(
-        only(&check_theory(&t), "Special facts"),
+        only(&check(&t), "Special facts"),
         "  rule `Test' uses disallowed facts on left-hand-side:\n    \
              Out( (<a, z>++<a, b, c>) )"
     );
@@ -212,7 +220,7 @@ fn wf_entry_fills_comma_lists_at_the_report_ribbon() {
         list(20, &|i| format!("Out( a{i:02} )"))
     ));
     assert_eq!(
-        only(&check_theory(&t), "Special facts"),
+        only(&check(&t), "Special facts"),
         "  rule `R' uses disallowed facts on left-hand-side:\n\
              \x20   Out( a01 ), Out( a02 ), Out( a03 ), Out( a04 ), Out( a05 ),\n\
              \x20   Out( a06 ), Out( a07 ), Out( a08 ), Out( a09 ), Out( a10 ),\n\
@@ -226,7 +234,7 @@ fn wf_entry_fills_comma_lists_at_the_report_ribbon() {
         list(20, &|i| format!("K( a{i:02} )"))
     ));
     assert_eq!(
-        only(&check_theory(&t), "Reserved names"),
+        only(&check(&t), "Reserved names"),
         "  Rule `R' contains facts with reserved names on the middle:\n\
              \x20   K( a01 ), K( a02 ), K( a03 ), K( a04 ), K( a05 ), K( a06 ),\n\
              \x20   K( a07 ), K( a08 ), K( a09 ), K( a10 ), K( a11 ), K( a12 ),\n\
@@ -240,7 +248,7 @@ fn wf_entry_fills_comma_lists_at_the_report_ribbon() {
             "theory T begin rule R: [ Out( a ), Out( '{}' ) ] --[ ]-> [] end",
             "b".repeat(n)
         ));
-        only(&check_theory(&t), "Special facts")
+        only(&check(&t), "Special facts")
     };
     assert_eq!(
         boundary(48),
@@ -267,7 +275,7 @@ fn wf_entry_fills_comma_lists_at_the_report_ribbon() {
             .join(", ")
     ));
     assert_eq!(
-        only(&check_theory(&t), "Special facts"),
+        only(&check(&t), "Special facts"),
         format!(
             "  rule `R' uses disallowed facts on left-hand-side:\n\
                  \x20   Out( 'c0z' ), Out( 'w0{wide}' ), Out( 'c1z' ),\n\
@@ -291,7 +299,7 @@ fn filled_entries_carry_their_cells_for_the_layout_engine() {
     let t = parse(&format!(
         "theory T begin rule R: [ Out( '{wide}' ), Out( a ) ] --[ ]-> [] end"
     ));
-    let report = check_theory(&t);
+    let report = check(&t);
     let entry = report
         .iter()
         .find(|e| e.topic == "Special facts")
@@ -336,7 +344,7 @@ fn nullary_fact_keeps_only_the_sep_space() {
              rule R2: [ A( x ) ] --[ ]-> [] end",
     );
     assert_eq!(
-        only(&check_theory(&t), "Fact arity issues"),
+        only(&check(&t), "Fact arity issues"),
         "Fact arity issues\n=================\n\n\
              Same fact is used with different arities, i.e., Fact('A','B') is \
              different from Fact('A'). \nCheck the arguments of your facts.\n  \n\n\
@@ -362,7 +370,7 @@ fn wf_entry_renders_user_ac_symbols_infix_like_haskell() {
                  functions: add/2 [AC], mix/2 [AC], zz/1 \
                  rule Test: [ Out( {src} ) ] --[ ]-> [] end"
         ));
-        only(&check_theory(&t), "Special facts")
+        only(&check(&t), "Special facts")
             .strip_prefix("  rule `Test' uses disallowed facts on left-hand-side:\n    ")
             .expect("Special facts body")
             .to_string()
@@ -413,7 +421,7 @@ fn wf_entry_sorts_cross_operator_ac_operands_like_haskell() {
             rule Test: [ Out( (x*y) XOR (a++b) ) ] --[ ]-> [] end",
     );
     assert_eq!(
-        only(&check_theory(&t), "Special facts"),
+        only(&check(&t), "Special facts"),
         "  rule `Test' uses disallowed facts on left-hand-side:\n    \
              Out( ((a++b)⊕(x*y)) )"
     );
@@ -422,7 +430,7 @@ fn wf_entry_sorts_cross_operator_ac_operands_like_haskell() {
             rule Test: [ Out( (x*y) ++ (a XOR b) ++ (c^d) ++ (%e %+ %f) ) ] --[ ]-> [] end",
     );
     assert_eq!(
-        only(&check_theory(&t), "Special facts"),
+        only(&check(&t), "Special facts"),
         "  rule `Test' uses disallowed facts on left-hand-side:\n    \
              Out( (c^d++(x*y)++(a⊕b)++(%e%+%f)) )"
     );
@@ -441,7 +449,7 @@ fn wf_entry_renders_pair_headed_terms_in_angle_form() {
             rule Test: [ Out( pair(a,b) ++ <c,d> ++ fst(<e,f>) ) ] --[ ]-> [] end",
     );
     assert_eq!(
-        only(&check_theory(&t), "Special facts"),
+        only(&check(&t), "Special facts"),
         "  rule `Test' uses disallowed facts on left-hand-side:\n    \
              Out( (fst(<e, f>)++<a, b>++<c, d>) )"
     );
@@ -454,7 +462,7 @@ fn wf_entry_renders_pair_headed_terms_in_angle_form() {
             Out( <pair(a,b), c> ) ] --[ ]-> [] end",
     );
     assert_eq!(
-        only(&check_theory(&t), "Special facts"),
+        only(&check(&t), "Special facts"),
         "  rule `Test' uses disallowed facts on left-hand-side:\n    \
              Out( <<a, b>, c> ), Out( <a, b, c> ), Out( <<a, b>, c> )"
     );
@@ -466,7 +474,7 @@ fn wf_entry_renders_pair_headed_terms_in_angle_form() {
             Out( pair(a,b) ) ] --[ ]-> [] end",
     );
     assert_eq!(
-        only(&check_theory(&t), "Special facts"),
+        only(&check(&t), "Special facts"),
         "  rule `Test' uses disallowed facts on left-hand-side:\n    \
              Out( <a, b, c> ), Out( <a, b, c> ), Out( <a, b> )"
     );
@@ -481,7 +489,7 @@ fn wf_pair_headed_terms_render_in_angle_form() {
     let t = parse("theory T begin rule Test: [ Fr( pair(a,b) ) ] --[ ]-> [] end");
     assert_eq!(
         only(
-            &check_theory(&t),
+            &check(&t),
             "Fr facts must only use a fresh- or a msg-variable"
         ),
         "rule `Test' fact: Fr( <a, b> )"
@@ -498,7 +506,7 @@ fn wf_lemma_fact_show_form_nests_pairs_right() {
         "theory T begin rule Test: [ ] --[ A(x, y) ]-> [ ] \
             lemma L: exists-trace \"Ex #i. A(<x,y,z>) @ i\" end",
     );
-    let r = check_theory(&t);
+    let r = check(&t);
     let arity = only(&r, "Fact arity issues");
     assert!(
         arity.contains(
@@ -529,7 +537,7 @@ fn wf_lemma_fact_show_form_canonicalises_ac_and_c_heads() {
                  rule Test: [ Fr(~n) ] --[ A(~n) ]-> [ Out(~n) ] \
                  lemma L: all-traces \"All {binders} #i. A({src}, 'p') @ i ==> F\" end"
         ));
-        let arity = only(&check_theory(&t), "Fact arity issues");
+        let arity = only(&check(&t), "Fact arity issues");
         let head = "factTerms = [";
         let at = arity.find(head).expect("factTerms") + head.len();
         let rest = &arity[at..];
@@ -585,7 +593,7 @@ fn fresh_fact_argument_renders_the_whole_fact_like_prettylnfact() {
                  rule R: [ In(<a,b,c>), Fr( {src} ) ] --> [ ] end"
         ));
         let msg = only(
-            &check_theory(&t),
+            &check(&t),
             "Fr facts must only use a fresh- or a msg-variable",
         );
         let at = msg.find("fact: ").expect("fact:") + "fact: ".len();

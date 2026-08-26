@@ -24,8 +24,9 @@ use tamarin_theory::pretty_theory::format_wf_block;
 /// pass, then the translated-theory splice.
 fn load_wf_block(src: &str) -> String {
     let parsed = parse_theory(src, &[]).expect("parse");
-    let mut report = tamarin_theory::wellformedness::pre_translation_wf_report(&parsed);
     let elaborated = tamarin_theory::elaborate::elaborate(&parsed).expect("elaborate");
+    let mut report =
+        tamarin_theory::wellformedness::pre_translation_wf_report(&elaborated, &parsed);
     let maude_sig = elaborated.signature.maude_sig.clone();
     tamarin_theory::wellformedness::splice_translated_wf_reports(
         &elaborated,
@@ -83,7 +84,8 @@ fn fr_fact_topic_prints_its_underlined_header_once() {
                rule T2: [ Fr( 'c' ) ] --[ ]-> []\n\
                end\n";
     let thy = parse_theory(src, &[]).expect("parse");
-    let report = tamarin_theory::wellformedness::check_theory(&thy);
+    let elaborated = tamarin_theory::elaborate::elaborate(&thy).expect("elaborate");
+    let report = tamarin_theory::wellformedness::check_theory(&elaborated, &thy);
     assert_eq!(
         format_wf_block(&report),
         "/*\nWARNING: the following wellformedness checks failed!\n\n\
