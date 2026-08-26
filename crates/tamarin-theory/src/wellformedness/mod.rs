@@ -35,6 +35,7 @@ use tamarin_term::lterm::sort_prefix;
 use tamarin_term::maude_sig::MaudeSig;
 
 use crate::pretty_hpj::{self as hpj, Doc};
+use crate::rule::{pretty_proto_rule_name, ProtoRuleE};
 use crate::theory::Theory;
 
 pub mod check_terms;
@@ -113,9 +114,9 @@ impl WfError {
 
 /// `lineLength` of the style HughesPJ's `render` uses, reached from HS through
 /// `addComment`'s `render` (TheoryObject.hs:717-718).
-const WF_LINE_LENGTH: usize = 100;
+pub(super) const WF_LINE_LENGTH: usize = 100;
 /// `ribbonLen = round (100 / 1.5) = 67` for [`WF_LINE_LENGTH`].
-const WF_RIBBON: usize = 67;
+pub(super) const WF_RIBBON: usize = 67;
 
 pub type WfReport = Vec<WfError>;
 
@@ -270,7 +271,7 @@ pub fn check_theory(elab: &Theory, parsed: &p::Theory) -> WfReport {
     // variant solver.
     // factReports group (Wellformedness.hs:579-583).  Its last member,
     // factLhsOccurNoRhs, is spliced by `splice_translated_wf_reports`
-    // (`rules::fact_lhs_occur_no_rhs`): same reason as unboundReport above.
+    // (`facts::fact_lhs_occur_no_rhs`): same reason as unboundReport above.
     report.extend(facts::fact_reports(elab, parsed));
     // formulaReports group (checkQuantifiers / checkTerms / checkGuarded) —
     // spliced by `splice_translated_wf_reports` as one interleaved per-formula
@@ -309,6 +310,24 @@ fn theory_rules(thy: &p::Theory) -> impl Iterator<Item = &p::Rule> {
         p::TheoryItem::Rule(r) => Some(r),
         _ => None,
     })
+}
+
+/// HS `thyProtoRules` (Wellformedness.hs:133-134): the macro-applied E-rule
+/// of every rule item, in item order.
+pub(super) fn thy_proto_rules(thy: &Theory) -> impl Iterator<Item = &ProtoRuleE> {
+    thy.rules().map(|opr| &opr.rule)
+}
+
+/// HS `showRuleCaseName` (Theory/Model/Rule.hs:1337-1340): `render
+/// . ruleInfo prettyProtoRuleName prettyIntrRuleACInfo . ruleName`, whose
+/// protocol-rule arm is all a [`ProtoRuleE`] reaches.
+pub(super) fn show_rule_case_name(ru: &ProtoRuleE) -> String {
+    pretty_proto_rule_name(&ru.info.name).render()
+}
+
+/// HS `quote cs = '`' : cs ++ "'"` (Wellformedness.hs:164-165).
+pub(super) fn quote(s: &str) -> String {
+    format!("`{}'", s)
 }
 
 fn theory_lemmas(thy: &p::Theory) -> impl Iterator<Item = &p::Lemma> {
@@ -451,7 +470,7 @@ pub fn splice_translated_wf_reports(
     // `Message( c, m )` consumed by an `in(c,m)` with no producing `out` —
     // are surfaced too.  Position: the factReports group (after fact_usage,
     // before formulaReports), matching HS check order.
-    let lhs_rhs = rules::fact_lhs_occur_no_rhs(elaborated);
+    let lhs_rhs = facts::fact_lhs_occur_no_rhs(elaborated);
     insert_wf_before(wf_report, lhs_rhs, &WF_TOPIC_ORDER[WF_AFTER_FACT_LHS..]);
 
     // Port of HS `publicNamesReport` (Wellformedness.hs:485-486, over the

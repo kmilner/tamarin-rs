@@ -7,16 +7,46 @@ use tamarin_parser::parse_theory;
 use super::super::{check_theory, topics};
 use super::*;
 
-fn parse(src: &str) -> Theory {
+fn parse(src: &str) -> p::Theory {
     parse_theory(src, &["diff"]).expect("parse")
+}
+
+/// The elaborated theory for `src`, as a loader holds it before translation.
+fn elaborated(src: &str) -> Theory {
+    crate::elaborate::elaborate(&parse(src)).expect("elaborate")
 }
 
 /// The whole pre-translation report of a parsed theory.  [`check_theory`]
 /// takes both representations of the same source, so the harness elaborates
 /// the theory the way the drivers do.
-fn check(parsed: &Theory) -> WfReport {
-    let elaborated = crate::elaborate::elaborate(parsed).expect("elaborate");
-    check_theory(&elaborated, parsed)
+fn check(parsed: &p::Theory) -> WfReport {
+    let elab = crate::elaborate::elaborate(parsed).expect("elaborate");
+    check_theory(&elab, parsed)
+}
+
+/// Return the single `WfError` whose topic matches `topic`.
+fn only(report: &WfReport, topic: &str) -> String {
+    let hits: Vec<&WfError> = report.iter().filter(|e| e.topic == topic).collect();
+    assert_eq!(
+        hits.len(),
+        1,
+        "expected exactly one {:?} entry, got {:?}",
+        topic,
+        report
+    );
+    hits[0].message.clone()
+}
+
+/// The report's bodies joined the way `prettyWfErrorReport` joins a topic
+/// group — `intersperse (text "")` under one header, which at the group's
+/// 2-space nest is a two-space line (Wellformedness.hs:118-125).
+fn bodies(report: &[WfError]) -> String {
+    assert!(!report.is_empty(), "empty report");
+    report
+        .iter()
+        .map(|e| e.message.clone())
+        .collect::<Vec<_>>()
+        .join("\n  \n")
 }
 
 /// The parser inlines a rule's `let` bindings into the body it builds
@@ -85,119 +115,6 @@ fn intruder_rule_block_reaches_no_check() {
     );
     let r = check(&t);
     assert!(r.is_empty(), "report: {r:?}");
-}
-
-/// The cross-operator order `binop_rank` gives AC operands is the one
-/// `tamarin_theory::guarded::funsym_key` encodes from HS's `Ord FunSym`:
-/// `Exp < Union < Mult < Xor < NatPlus < AcFct`, with two `AcFct` heads
-/// separated by name.  `funsym_key` is the source of truth over internal
-/// terms; `binop_rank` restates the order for the parser AST, so this test
-/// spells it out for that copy.
-#[test]
-fn binop_rank_matches_funsym_key_order() {
-    use ast::BinOp as B;
-    let ordered = [
-        B::Exp,
-        B::Union,
-        B::Mult,
-        B::Xor,
-        B::NatPlus,
-        B::AcFct("add"),
-    ];
-    for w in ordered.windows(2) {
-        assert!(
-            binop_rank(&w[0]) < binop_rank(&w[1]),
-            "{:?} must rank before {:?}",
-            w[0],
-            w[1]
-        );
-    }
-    assert!(binop_rank(&B::AcFct("add")) < binop_rank(&B::AcFct("mix")));
-}
-
-/// A FAPP-class operand is ordered by its HS `FunSym` NAME, so `exp` sorts
-/// before `pair` and `em` (the sole `C` symbol) after every `NoEq` one.
-/// Each body is byte-pinned to the pinned oracle (ef3f0468).
-#[test]
-fn wf_entry_sorts_fapp_operands_by_funsym_name_like_haskell() {
-    // Oracle: `Out( (c^d++h(e)++one++<a, b>++zz(f)) )`
-    //   — exp < h < one < pair < zz.
-    let t = parse(
-        "theory T begin builtins: multiset, diffie-hellman, hashing \
-            functions: zz/1 \
-            rule Test: [ Out( <a,b> ++ (c^d) ++ h(e) ++ zz(f) ++ 1 ) ] --[ ]-> [] end",
-    );
-    assert_eq!(
-        only(&check(&t), "Special facts"),
-        "  rule `Test' uses disallowed facts on left-hand-side:\n    \
-             Out( (c^d++h(e)++one++<a, b>++zz(f)) )"
-    );
-    // Oracle: `Out( (aenc(m, pk)++c^d++h(e)++<a, b>++(u⊕v)) )`
-    //   — the four NoEq heads by name, then the AC-headed operand.
-    let t = parse(
-        "theory T begin builtins: multiset, diffie-hellman, hashing, xor, \
-            asymmetric-encryption \
-            rule Test: [ Out( <a,b> ++ (c^d) ++ h(e) ++ (u XOR v) ++ aenc{m}pk ) ] --[ ]-> [] end",
-    );
-    assert_eq!(
-        only(&check(&t), "Special facts"),
-        "  rule `Test' uses disallowed facts on left-hand-side:\n    \
-             Out( (aenc(m, pk)++c^d++h(e)++<a, b>++(u⊕v)) )"
-    );
-    // Oracle: `Out( (DH_neutral++h(c)++one++zz(d)++em(a, b)) )`
-    //   — `em` is `C EMap`, which outranks every `NoEq` head.
-    let t = parse(
-        "theory T begin builtins: multiset, bilinear-pairing, hashing \
-            functions: zz/1 \
-            rule Test: [ Out( em(a,b) ++ h(c) ++ zz(d) ++ 1 ++ DH_neutral ) ] --[ ]-> [] end",
-    );
-    assert_eq!(
-        only(&check(&t), "Special facts"),
-        "  rule `Test' uses disallowed facts on left-hand-side:\n    \
-             Out( (DH_neutral++h(c)++one++zz(d)++em(a, b)) )"
-    );
-    // Oracle: `Out( (h(c)++<a, b>++%1++zz(d)) )` — `%1` is `tone`.
-    let t = parse(
-        "theory T begin builtins: multiset, natural-numbers, hashing \
-            functions: zz/1 \
-            rule Test: [ Out( <a,b> ++ h(c) ++ zz(d) ++ %1 ) ] --[ ]-> [] end",
-    );
-    assert_eq!(
-        only(&check(&t), "Special facts"),
-        "  rule `Test' uses disallowed facts on left-hand-side:\n    \
-             Out( (h(c)++<a, b>++%1++zz(d)) )"
-    );
-}
-
-/// Two same-head operands compare their HS argument lists, which for an AC
-/// head is the flattened+sorted multiset and for `pair` the right-nested
-/// `pair(a, pair(b, c))` shape.  Both bodies are byte-pinned to the pinned
-/// oracle (ef3f0468).
-#[test]
-fn wf_entry_compares_same_head_operands_on_hs_argument_lists() {
-    // Oracle: `Out( ((a*b*c)++(b*z)) )` — the `*` operands compare as the
-    // sorted lists [a,b,c] vs [b,z], not as their parser binary trees.
-    let t = parse(
-        "theory T begin builtins: multiset, diffie-hellman \
-            rule Test: [ Out( ((b*c)*a) ++ (b*z) ) ] --[ ]-> [] end",
-    );
-    assert_eq!(
-        only(&check(&t), "Special facts"),
-        "  rule `Test' uses disallowed facts on left-hand-side:\n    \
-             Out( ((a*b*c)++(b*z)) )"
-    );
-    // Oracle: `Out( (<a, z>++<a, b, c>) )` — `<a, b, c>` is
-    // `pair(a, pair(b, c))`, whose second argument is a FAPP term and so
-    // sorts after the variable `z`.
-    let t = parse(
-        "theory T begin builtins: multiset \
-            rule Test: [ Out( <a,b,c> ++ <a,z> ) ] --[ ]-> [] end",
-    );
-    assert_eq!(
-        only(&check(&t), "Special facts"),
-        "  rule `Test' uses disallowed facts on left-hand-side:\n    \
-             Out( (<a, z>++<a, b, c>) )"
-    );
 }
 
 /// The fact lists of `specialFactsUsage'` and `reservedFactNameRules'` are
@@ -388,34 +305,6 @@ fn wf_entry_renders_user_ac_symbols_infix_like_haskell() {
     );
 }
 
-/// `cmp_wf_term` only consults `binop_rank` when two operands of one AC
-/// chain are headed by DIFFERENT operators, which a wellformedness entry
-/// reaches through `pp_wf_fact`.  Both bodies are byte-pinned to the
-/// pinned oracle (ef3f0468; the 1.12.0 release emits the same bytes),
-/// which reports `Out( ((a++b)⊕(x*y)) )` and
-/// `Out( (c^d++(x*y)++(a⊕b)++(%e%+%f)) )` for the two rules below.
-#[test]
-fn wf_entry_sorts_cross_operator_ac_operands_like_haskell() {
-    let t = parse(
-        "theory T begin builtins: multiset, xor, diffie-hellman \
-            rule Test: [ Out( (x*y) XOR (a++b) ) ] --[ ]-> [] end",
-    );
-    assert_eq!(
-        only(&check(&t), "Special facts"),
-        "  rule `Test' uses disallowed facts on left-hand-side:\n    \
-             Out( ((a++b)⊕(x*y)) )"
-    );
-    let t = parse(
-        "theory T begin builtins: multiset, xor, diffie-hellman, natural-numbers \
-            rule Test: [ Out( (x*y) ++ (a XOR b) ++ (c^d) ++ (%e %+ %f) ) ] --[ ]-> [] end",
-    );
-    assert_eq!(
-        only(&check(&t), "Special facts"),
-        "  rule `Test' uses disallowed facts on left-hand-side:\n    \
-             Out( (c^d++(x*y)++(a⊕b)++(%e%+%f)) )"
-    );
-}
-
 /// HS `prettyTerm`'s pair arm keys on the term SHAPE, so the source
 /// spellings `pair(a, b)` and `<a, b>` — which the parser AST keeps apart —
 /// both render `<a, b>`, and `split` flattens the right spine across both.
@@ -460,9 +349,9 @@ fn wf_entry_renders_pair_headed_terms_in_angle_form() {
     );
 }
 
-/// The `Fr`-argument check reaches the terms through its own printer, which
-/// is HS `prettyLNTerm` and so carries the shape-keyed pair arm.  Byte-pinned
-/// to the pinned oracle (ef3f0468).
+/// The `Fr`-argument check renders the whole fact with `prettyLNFact`, which
+/// carries the shape-keyed pair arm.  Byte-pinned to the pinned oracle
+/// (ef3f0468).
 #[test]
 fn wf_pair_headed_terms_render_in_angle_form() {
     // Oracle: `rule `Test' fact: Fr( <a, b> )`.
@@ -477,9 +366,8 @@ fn wf_pair_headed_terms_render_in_angle_form() {
 }
 
 /// The De Bruijn `show` form HS prints for a LEMMA fact is the derived
-/// `Show`, which has NO pair arm — every node prints `pair(_,_)`, so the
-/// flat parser tuple must be re-nested.  Oracle (ef3f0468) prints
-/// `factTerms = [pair(Free x,pair(Free y,Free z))]`.
+/// `Show`, which has NO pair arm — every node prints `pair(_,_)`.  Oracle
+/// (ef3f0468) prints `factTerms = [pair(Free x,pair(Free y,Free z))]`.
 #[test]
 fn wf_lemma_fact_show_form_nests_pairs_right() {
     let t = parse(
@@ -587,15 +475,147 @@ fn fresh_fact_argument_renders_the_whole_fact_like_prettylnfact() {
     assert_eq!(body("zz(x.1)"), "Fr( zz(x.1) )");
 }
 
-/// Return the single `WfError` whose topic matches `topic`.
-fn only(report: &WfReport, topic: &str) -> String {
-    let hits: Vec<&WfError> = report.iter().filter(|e| e.topic == topic).collect();
+/// HS's `mkProtoFact` dispatches on `map toUpper f`
+/// (Theory/Text/Parser/Fact.hs:56-63), so every source spelling of `Ku`
+/// carries the `KUFact` tag and no `.spthy` file reaches `reservedFactName`'s
+/// `ProtoFact _ name _` pattern (Wellformedness.hs:621-624).  The tag is set
+/// here directly.  The expected bytes are HS's `wrappedText header $--$
+/// nest 2 (ppFa $-$ text ("show:" ++ show info))` under
+/// `prettyWfErrorReport`'s `nest 2`.
+#[test]
+fn reserved_report_groups_by_origin() {
+    use crate::theory::TheoryItem;
+
+    let mut thy = elaborated("theory T begin rule Bad: [ Fr( ~k ) ] --[ ]-> [ Foo( ~k ) ] end");
+    for item in &mut thy.items {
+        if let TheoryItem::Rule(opr) = item {
+            opr.rule.conclusions = opr
+                .rule
+                .conclusions
+                .iter()
+                .map(|fa| {
+                    Fact::fresh(
+                        FactTag::Proto(
+                            Multiplicity::Linear,
+                            tamarin_term::intern::intern_str("Ku"),
+                            1,
+                        ),
+                        fa.terms.to_vec(),
+                    )
+                })
+                .collect();
+        }
+    }
+    let report = reserved_report(&theory_facts(&thy));
+    assert_eq!(report.len(), 1, "report: {report:?}");
+    assert_eq!(report[0].topic, "Reserved names");
     assert_eq!(
-        hits.len(),
-        1,
-        "expected exactly one {:?} entry, got {:?}",
-        topic,
-        report
+        report[0].message,
+        "  The Rule `Bad' contains facts with reserved names:\n  \n    \
+         Ku( ~k )\n    show:(ProtoFact Linear \"Ku\" 1,1,Linear)"
     );
-    hits[0].message.clone()
+}
+
+/// HS reads a lemma's facts off `_lFormula`, which `applyMacroInLemma` only
+/// rewrites in `closeTheoryItem` (CloseRule.hs:85) — after
+/// `checkWellformedness`.  `Lemma::original_formula` holds that pre-macro
+/// formula, so the cell shows the macro application rather than its body.
+#[test]
+fn lemma_action_facts_come_from_the_pre_macro_formula() {
+    let thy = elaborated(
+        "theory T begin builtins: hashing \
+             macros: MAC(x) = h(x) \
+             rule One: [ ] --[ A(x) ]-> [ ] \
+             rule Two: [ ] --[ A(x, y) ]-> [ ] \
+             lemma L: exists-trace \"Ex x #i. A(MAC(x)) @ i\" end",
+    );
+    let lemma = thy.lemmas().next().expect("lemma");
+    assert_eq!(
+        show_bl_fact(formula_facts(lemma.original_formula.as_ref().expect("original"))[0]),
+        "Fact {factTag = ProtoFact Linear \"A\" 1, factAnnotations = fromList [], \
+         factTerms = [MAC(Bound 1)]}"
+    );
+    assert_eq!(
+        show_bl_fact(formula_facts(&lemma.formula)[0]),
+        "Fact {factTag = ProtoFact Linear \"A\" 1, factAnnotations = fromList [], \
+         factTerms = [h(Bound 1)]}"
+    );
+    let report = fact_usage(&theory_facts(&thy));
+    assert!(
+        only(&report, "Fact arity issues").contains("factTerms = [MAC(Bound 1)]"),
+        "report: {report:?}"
+    );
+}
+/// This is `underlineTopic` of HS's source-literal topic plus the `$-$`
+/// blank line that opens the body.  The title is 65 characters long, its
+/// trailing space included, so the rule below it is 65 `=` characters.
+const LHS_NO_RHS_HEADER: &str =
+    "Facts occur in the left-hand-side but not in any right-hand-side \n\
+     =================================================================\n\n";
+
+/// The suggestion arm picks the right-hand-side fact with the smallest
+/// name distance, not the first one.  `Sesion` is 1 edit from `Session`
+/// and 2 from `Section`, which the source lists earlier.  Byte-pinned to
+/// the pinned oracle (ef3f0468).
+#[test]
+fn fact_lhs_no_rhs_suggests_the_smallest_edit_distance_not_the_first() {
+    let thy = elaborated(
+        r#"theory T begin
+        rule A: [ Sesion(x) ] --[ ]-> [ ]
+        rule B: [ ] --[ ]-> [ Section(x) ]
+        rule C: [ ] --[ ]-> [ Session(x) ]
+    end"#,
+    );
+    assert_eq!(
+        bodies(&fact_lhs_occur_no_rhs(&thy)),
+        format!(
+            "{LHS_NO_RHS_HEADER}  1. in rule \"A\":  factName `Sesion' arity: 1 \
+             multiplicity: Linear. Perhaps you want to use the fact in rule \"C\":  \
+             factName `Session' arity: 1 multiplicity: Linear\n"
+        )
+    );
+}
+
+/// HS `isSimilar` keeps the nearest right-hand-side name only at distance
+/// `<= 3` (Wellformedness.hs:192-196).  `Abc` is 4 edits from `Abcdefg`,
+/// the only such name, so the line carries no suggestion.  Byte-pinned to
+/// the pinned oracle (ef3f0468).
+#[test]
+fn fact_lhs_no_rhs_drops_the_suggestion_past_distance_three() {
+    let thy = elaborated(
+        r#"theory T begin
+        rule A: [ Abc(x) ] --[ ]-> [ ]
+        rule B: [ ] --[ ]-> [ Abcdefg(x) ]
+    end"#,
+    );
+    assert_eq!(
+        bodies(&fact_lhs_occur_no_rhs(&thy)),
+        format!(
+            "{LHS_NO_RHS_HEADER}  1. in rule \"A\":  factName `Abc' arity: 1 \
+             multiplicity: Linear\n"
+        )
+    );
+}
+
+/// Both right-hand-side names are 1 edit from `Aaa`, and the tie goes to
+/// the first of them: HS `minimalEdFact` takes `listToMaybe . sortOn snd`
+/// (Wellformedness.hs:200-201), a stable sort.  Byte-pinned to the pinned
+/// oracle (ef3f0468).
+#[test]
+fn fact_lhs_no_rhs_breaks_distance_ties_by_rhs_source_order() {
+    let thy = elaborated(
+        r#"theory T begin
+        rule A: [ Aaa(x) ] --[ ]-> [ ]
+        rule B: [ ] --[ ]-> [ Aax(x) ]
+        rule C: [ ] --[ ]-> [ Aay(x) ]
+    end"#,
+    );
+    assert_eq!(
+        bodies(&fact_lhs_occur_no_rhs(&thy)),
+        format!(
+            "{LHS_NO_RHS_HEADER}  1. in rule \"A\":  factName `Aaa' arity: 1 \
+             multiplicity: Linear. Perhaps you want to use the fact in rule \"B\":  \
+             factName `Aax' arity: 1 multiplicity: Linear\n"
+        )
+    );
 }

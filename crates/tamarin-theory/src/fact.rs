@@ -685,7 +685,7 @@ fn show_fact_annotation(a: FactAnnotation) -> &'static str {
 /// (Theory/Model/Fact.hs:569), which is a different string from
 /// [`show_fact_tag`].  A `Proto` name is an identifier, so Haskell's `show`
 /// for its `String` field is the name in double quotes.
-fn show_fact_tag_derived(t: &FactTag) -> String {
+pub(crate) fn show_fact_tag_derived(t: &FactTag) -> String {
     match t {
         FactTag::Proto(m, n, arity) => {
             let mult = match m {

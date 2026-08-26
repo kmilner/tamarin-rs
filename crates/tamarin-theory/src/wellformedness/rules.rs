@@ -4,8 +4,7 @@
 
 //! The wellformedness checks that walk a theory's rules.
 //!
-//! HS `unboundReport` (Wellformedness.hs:514-519), `factLhsOccurNoRhs'`
-//! (Wellformedness.hs:214-256) and `natWellSortedReport`
+//! HS `unboundReport` (Wellformedness.hs:514-519) and `natWellSortedReport`
 //! (Wellformedness.hs:319-333) read `thyProtoRules thy`
 //! (Wellformedness.hs:133-134) — the macro-applied `oprRuleE` of every rule
 //! item of the `OpenTranslatedTheory`.  The elaborated [`Theory`]'s rules are
@@ -26,9 +25,7 @@
 //! [`nat_well_sorted_report`] renders its own `<>` chain at the same width —
 //! the style `addComment` bakes the wellformedness comment in with, HughesPJ's
 //! library default `lineLength = 100`, `ribbonsPerLine = 1.5`
-//! (TheoryObject.hs:717-718).  [`fact_lhs_occur_no_rhs`] builds a block of
-//! `text` leaves, which the layout engine cannot break, and so renders it
-//! directly.
+//! (TheoryObject.hs:717-718).
 
 use std::collections::BTreeSet;
 
@@ -39,43 +36,16 @@ use tamarin_term::pretty::pretty_nterm;
 use tamarin_term::term::Term;
 use tamarin_term::vterm::Lit;
 
-use crate::fact::{
-    fact_tag_multiplicity, fact_tag_name, is_proto_fact, FactTag, LNFact, Multiplicity,
-};
 use crate::formula::formula_frees_list;
 use crate::pretty_hpj::{self as hpj, Doc};
-use crate::rule::{pretty_proto_rule_name, ProtoRuleE};
+use crate::rule::ProtoRuleE;
 use crate::sapic::{Process, ProcessCombinator};
 use crate::theory::Theory;
 
 use super::{
-    grouped_topic_block, numbered_index_width, render_var, rule_facts, theory_rules,
-    underline_topic, WfError, WfReport,
+    grouped_topic_block, numbered_index_width, quote, render_var, rule_facts, show_rule_case_name,
+    theory_rules, thy_proto_rules, underline_topic, WfError, WfReport, WF_LINE_LENGTH, WF_RIBBON,
 };
-
-/// `lineLength` of the style HughesPJ's `render` uses, reached from HS
-/// through `addComment`'s `render` (TheoryObject.hs:717-718).
-const WF_LINE_LENGTH: usize = 100;
-/// `ribbonLen = round (100 / 1.5) = 67` for [`WF_LINE_LENGTH`].
-const WF_RIBBON: usize = 67;
-
-/// HS `thyProtoRules` (Wellformedness.hs:133-134): the macro-applied E-rule
-/// of every rule item, in item order.
-fn thy_proto_rules(thy: &Theory) -> impl Iterator<Item = &ProtoRuleE> {
-    thy.rules().map(|opr| &opr.rule)
-}
-
-/// HS `showRuleCaseName` (Theory/Model/Rule.hs:1337-1340): `render
-/// . ruleInfo prettyProtoRuleName prettyIntrRuleACInfo . ruleName`, whose
-/// protocol-rule arm is all a [`ProtoRuleE`] reaches.
-fn show_rule_case_name(ru: &ProtoRuleE) -> String {
-    pretty_proto_rule_name(&ru.info.name).render()
-}
-
-/// HS `quote cs = '`' : cs ++ "'"` (Wellformedness.hs:164-165).
-fn quote(s: &str) -> String {
-    format!("`{}'", s)
-}
 
 // =============================================================================
 // Unbound variables
@@ -165,138 +135,6 @@ pub fn unbound_report(thy: &Theory) -> Vec<WfError> {
         ));
     }
     out
-}
-
-// =============================================================================
-// Facts occurring in a left-hand side but in no right-hand side
-// =============================================================================
-
-/// HS `show` of `Multiplicity` (Theory/Model/Fact.hs:133-134).
-fn show_multiplicity(m: Multiplicity) -> &'static str {
-    match m {
-        Multiplicity::Persistent => "Persistent",
-        Multiplicity::Linear => "Linear",
-    }
-}
-
-/// HS `showFactInfo` (Wellformedness.hs:248-251) over `factInfo fa =
-/// (factTag fa, factArity fa, factMultiplicity fa)`
-/// (Wellformedness.hs:174-175), which for a `ProtoFact` the tag alone
-/// determines.  The leading space is HS's.
-fn show_fact_info(f: &LNFact) -> String {
-    format!(
-        " factName {} arity: {} multiplicity: {}",
-        quote(&fact_tag_name(&f.tag)),
-        f.arity(),
-        show_multiplicity(fact_tag_multiplicity(&f.tag)),
-    )
-}
-
-/// HS `editDistance` (Utils/Misc.hs:164-174): the Levenshtein distance, over
-/// two rows of the dynamic-programming table.
-fn edit_distance(a: &str, b: &str) -> usize {
-    let a: Vec<char> = a.chars().collect();
-    let b: Vec<char> = b.chars().collect();
-    let (n, m) = (a.len(), b.len());
-    let mut prev: Vec<usize> = (0..=m).collect();
-    let mut cur = vec![0usize; m + 1];
-    for i in 1..=n {
-        cur[0] = i;
-        for j in 1..=m {
-            let cost = usize::from(a[i - 1] != b[j - 1]);
-            cur[j] = (prev[j] + 1).min(cur[j - 1] + 1).min(prev[j - 1] + cost);
-        }
-        std::mem::swap(&mut prev, &mut cur);
-    }
-    prev[m]
-}
-
-/// Port of HS `factLhsOccurNoRhs'` (Wellformedness.hs:214-256): every proto
-/// PREMISE fact whose `factInfo` no rule's conclusions produce, each paired
-/// with the conclusion fact of smallest name edit distance
-/// (`mostSimilarName`, Wellformedness.hs:180-210), kept only at distance
-/// `<= 3`.
-///
-/// The single entry bakes in the underlined header and the `numbered'`
-/// layout: `numbered (text "")` separates the items by a `text ""` line,
-/// which at `prettyWfErrorReport`'s 2-space body nest renders as two spaces.
-pub fn fact_lhs_occur_no_rhs(thy: &Theory) -> Vec<WfError> {
-    // The topic's trailing space is HS's source literal
-    // (Wellformedness.hs:221).
-    let title = "Facts occur in the left-hand-side but not in any right-hand-side ";
-
-    let names: Vec<String> = thy_proto_rules(thy).map(show_rule_case_name).collect();
-    // HS `regroup (getFacts rConcs ru)`: every proto conclusion fact with its
-    // rule's case name, in item order.  Each fact's `factTagName` is the
-    // edit-distance operand below, so it is taken once here rather than once
-    // per premise.
-    let mut rhs: Vec<(&str, &LNFact, String)> = Vec::new();
-    for (ru, name) in thy_proto_rules(thy).zip(&names) {
-        for f in &ru.conclusions {
-            if is_proto_fact(f) {
-                rhs.push((name.as_str(), f, fact_tag_name(&f.tag)));
-            }
-        }
-    }
-    let rhs_info: BTreeSet<FactTag> = rhs.iter().map(|(_, f, _)| f.tag).collect();
-
-    let mut orphans: Vec<(&str, &LNFact, Option<(&str, &LNFact)>)> = Vec::new();
-    for (ru, name) in thy_proto_rules(thy).zip(&names) {
-        for f in &ru.premises {
-            if !is_proto_fact(f) {
-                continue;
-            }
-            // HS `removeSame`: a premise whose `factInfo` occurs in some
-            // right-hand side is not an orphan.
-            if rhs_info.contains(&f.tag) {
-                continue;
-            }
-            // HS `minimalEdFact` is `listToMaybe . sortOn snd`, a STABLE sort,
-            // so a tie goes to the earliest right-hand side; `min_by_key`
-            // keeps the first minimum too.  `isSimilar` drops it past 3.
-            let fact_name = fact_tag_name(&f.tag);
-            let suggestion = rhs
-                .iter()
-                .map(|(rn, rf, rname)| (edit_distance(&fact_name, rname), *rn, *rf))
-                .min_by_key(|(d, _, _)| *d)
-                .filter(|(d, _, _)| *d <= 3)
-                .map(|(_, rn, rf)| (rn, rf));
-            orphans.push((name.as_str(), f, suggestion));
-        }
-    }
-
-    if orphans.is_empty() {
-        return Vec::new();
-    }
-
-    let mut s = underline_topic(title);
-    s.push('\n');
-    let w = numbered_index_width(orphans.len());
-    for (i, (rule_name, fa, suggestion)) in orphans.iter().enumerate() {
-        // HS `showRuleAndFact` (Wellformedness.hs:239-247): `show ruName`
-        // wraps the rule name in double quotes.
-        let mut line = format!(
-            "  {:>w$}. in rule \"{}\": {}",
-            i + 1,
-            rule_name,
-            show_fact_info(fa),
-            w = w,
-        );
-        if let Some((sug_rule, sug_fa)) = suggestion {
-            line.push_str(&format!(
-                ". Perhaps you want to use the fact in rule \"{}\": {}",
-                sug_rule,
-                show_fact_info(sug_fa),
-            ));
-        }
-        s.push_str(&line);
-        s.push('\n');
-        if i + 1 < orphans.len() {
-            s.push_str("  \n");
-        }
-    }
-
-    vec![WfError::new(title, s)]
 }
 
 // =============================================================================
