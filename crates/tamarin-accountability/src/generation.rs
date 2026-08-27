@@ -261,37 +261,17 @@ pub(crate) fn generate_accountability_lemmas(acc: &AccData) -> Vec<GenLemma> {
 // simplification it ends in (Theory/Model/Formula.hs:379-412)
 // =============================================================================
 
-fn pull_l(
+/// HS `pull_l`/`pull_r`/`pull_2` (Generation.hs:285-287): bind `x` over
+/// `p op q` and keep pulling inside.  The three HS variants differ only in
+/// which operand's free indices shift under the new binder, which the callers
+/// below do.
+fn pull(
+    quans: &[Quant],
     qua: Quant,
     op: Conn,
     x: (String, LSort),
     p_: SyntacticLNFormula,
     q: SyntacticLNFormula,
-    quans: &[Quant],
-) -> SyntacticLNFormula {
-    let combined = ProtoFormula::Conn(op, Box::new(p_), Box::new(shift_free_indices(1, q)));
-    ProtoFormula::Qua(qua, x, Box::new(pull_quantifiers(quans, combined)))
-}
-
-fn pull_r(
-    qua: Quant,
-    op: Conn,
-    x: (String, LSort),
-    p_: SyntacticLNFormula,
-    q: SyntacticLNFormula,
-    quans: &[Quant],
-) -> SyntacticLNFormula {
-    let combined = ProtoFormula::Conn(op, Box::new(shift_free_indices(1, p_)), Box::new(q));
-    ProtoFormula::Qua(qua, x, Box::new(pull_quantifiers(quans, combined)))
-}
-
-fn pull_2(
-    qua: Quant,
-    op: Conn,
-    x: (String, LSort),
-    p_: SyntacticLNFormula,
-    q: SyntacticLNFormula,
-    quans: &[Quant],
 ) -> SyntacticLNFormula {
     let combined = ProtoFormula::Conn(op, Box::new(p_), Box::new(q));
     ProtoFormula::Qua(qua, x, Box::new(pull_quantifiers(quans, combined)))
@@ -306,28 +286,33 @@ fn pull_quantifiers(quans: &[Quant], fm: SyntacticLNFormula) -> SyntacticLNFormu
         (Conn::And, ProtoFormula::Qua(Quant::All, x, p_), ProtoFormula::Qua(Quant::All, x2, q))
             if x == x2 =>
         {
-            pull_2(Quant::All, Conn::And, x, *p_, *q, quans)
+            pull(quans, Quant::All, Conn::And, x, *p_, *q)
         }
         (Conn::Or, ProtoFormula::Qua(Quant::Ex, x, p_), ProtoFormula::Qua(Quant::Ex, x2, q))
             if x == x2 =>
         {
-            pull_2(Quant::Ex, Conn::Or, x, *p_, *q, quans)
+            pull(quans, Quant::Ex, Conn::Or, x, *p_, *q)
         }
         (Conn::And, ProtoFormula::Qua(qua, x, p_), q) if quans.contains(&qua) => {
-            pull_l(qua, Conn::And, x, *p_, q, quans)
+            pull(quans, qua, Conn::And, x, *p_, shift_free_indices(1, q))
         }
         (Conn::And, p_, ProtoFormula::Qua(qua, x, q)) if quans.contains(&qua) => {
-            pull_r(qua, Conn::And, x, p_, *q, quans)
+            pull(quans, qua, Conn::And, x, shift_free_indices(1, p_), *q)
         }
         (Conn::Or, ProtoFormula::Qua(qua, x, p_), q) if quans.contains(&qua) => {
-            pull_l(qua, Conn::Or, x, *p_, q, quans)
+            pull(quans, qua, Conn::Or, x, *p_, shift_free_indices(1, q))
         }
         (Conn::Or, p_, ProtoFormula::Qua(qua, x, q)) if quans.contains(&qua) => {
-            pull_r(qua, Conn::Or, x, p_, *q, quans)
+            pull(quans, qua, Conn::Or, x, shift_free_indices(1, p_), *q)
         }
-        (Conn::Imp, ProtoFormula::Qua(Quant::Ex, x, p_), q) if quans.contains(&Quant::All) => {
-            pull_l(Quant::All, Conn::Imp, x, *p_, q, quans)
-        }
+        (Conn::Imp, ProtoFormula::Qua(Quant::Ex, x, p_), q) if quans.contains(&Quant::All) => pull(
+            quans,
+            Quant::All,
+            Conn::Imp,
+            x,
+            *p_,
+            shift_free_indices(1, q),
+        ),
         (c, a, b) => ProtoFormula::Conn(c, Box::new(a), Box::new(b)),
     }
 }
@@ -343,26 +328,10 @@ fn merge_quantifiers1(quans: &[Quant], fm: SyntacticLNFormula) -> SyntacticLNFor
         ProtoFormula::Qua(qua, x, p_) => {
             ProtoFormula::Qua(qua, x, Box::new(merge_quantifiers1(&[qua], *p_)))
         }
-        ProtoFormula::Conn(Conn::And, p_, q) => pull_quantifiers(
+        ProtoFormula::Conn(c @ (Conn::And | Conn::Or | Conn::Imp), p_, q) => pull_quantifiers(
             quans,
             ProtoFormula::Conn(
-                Conn::And,
-                Box::new(merge_quantifiers1(quans, *p_)),
-                Box::new(merge_quantifiers1(quans, *q)),
-            ),
-        ),
-        ProtoFormula::Conn(Conn::Or, p_, q) => pull_quantifiers(
-            quans,
-            ProtoFormula::Conn(
-                Conn::Or,
-                Box::new(merge_quantifiers1(quans, *p_)),
-                Box::new(merge_quantifiers1(quans, *q)),
-            ),
-        ),
-        ProtoFormula::Conn(Conn::Imp, p_, q) => pull_quantifiers(
-            quans,
-            ProtoFormula::Conn(
-                Conn::Imp,
+                c,
                 Box::new(merge_quantifiers1(quans, *p_)),
                 Box::new(merge_quantifiers1(quans, *q)),
             ),
