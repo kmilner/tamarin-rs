@@ -59,8 +59,7 @@ fn collect_node_ids(
 }
 
 /// Grafted-edge producer-conclusion ⇆ consumer-premise fact equalities.
-/// Shared by the action-path (`conjoin_refine_arm`) and premise-path
-/// (`apply_source_case_premise`) E.5 steps: walk every edge in `sys`, skip
+/// Used by `conjoin_refine_arm`'s E.5 step: walk every edge in `sys`, skip
 /// pre-existing LIVE-LIVE edges (both endpoints in `live_node_ids`), and emit
 /// a fact `Equal` for each grafted edge whose conclusion/premise facts share
 /// tag+arity but aren't already syntactically equal.  See the E.5 comments at
@@ -2513,8 +2512,9 @@ fn string_to_name_list(name: &str) -> Vec<String> {
 /// conclusion fact rather than running unification here (we don't have
 /// a `&mut Reduction` at this layer).
 /// Haskell-faithful `applySource` driver for Premise goals.  Walks
-/// the source's cases, invoking `apply_source_case_premise` per case
-/// (which mirrors `matchToGoal` + `_applySource` from Sources.hs).
+/// the source's cases, running `refine_source_case` then
+/// `conjoin_refine_arm` per case (together they mirror `matchToGoal` +
+/// `_applySource` from Sources.hs).
 ///
 /// Returns `(case_name, fully_conjoined_system, branch_counter)` per
 /// case that successfully matched + conjoined.  The system is already
@@ -3174,7 +3174,7 @@ fn some_inst_system(
 /// `PremiseG` — and `_applySource` (Sources.hs:344-350) is shared; the
 /// RS-only edge and counter compensations in [`refine_source_case`] and
 /// [`conjoin_refine_arm`] key off the same distinction.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy)]
 enum SourceGoalKind {
     Action,
     Premise,
@@ -3816,12 +3816,9 @@ fn conjoin_refine_arm(
         branch_counter: _,
     } = arm;
 
-    // Fourth tuple element: HS FreshT-threading (task #23, A(ii)) —
-    // the OUTPUT arm's continuation counter (this branch's fork + its
-    // own someInst + conjoin + E.5 + close-chains draws).  Every
-    // output arm is its own DisjT branch in HS, so each carries its
-    // own thread position; the caller hands it to the adopting
-    // caller's per-case `new_inheriting`.
+    // Every output arm is its own DisjT branch in HS, so each carries its
+    // own thread position in `ConjoinedArm::cont`; the caller hands it to
+    // the adopting caller's per-case `new_inheriting`.
     let mut out_arms: Vec<ConjoinedArm> = Vec::new();
 
     // ---------------------------------------------------------------

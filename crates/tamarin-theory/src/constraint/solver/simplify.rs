@@ -4297,13 +4297,13 @@ fn dedupe_formulas_pass(red: &mut Reduction) -> ChangeIndicator {
 /// by `simpSplitNegSt`, SubtermStore.hs:187-204, see line 189) decides
 /// which entries this pass (re-)splits.
 fn propagate_subterm_obvious(red: &mut Reduction) -> ChangeIndicator {
+    use crate::tools::subterm_store::{split_subterm, subterm_step, SubtermSplit};
     use tamarin_term::lterm::{is_msg_var, sort_of_lnterm, LSort};
     let mut changed = ChangeIndicator::Unchanged;
     if red.sys.subterm_store.contradictory {
         return changed;
     }
     let reducible = red.ctx.maude.maude_sig().reducible_fun_syms_fast.clone();
-    use crate::tools::subterm_store::{split_subterm, subterm_step, SubtermSplit};
 
     let mut new_formulas: Vec<crate::guarded::Guarded> = Vec::new();
     // Build an Eq atom from two LNTerms.
@@ -4487,9 +4487,9 @@ fn propagate_subterm_obvious(red: &mut Reduction) -> ChangeIndicator {
     // -------------------------------------------------------------
     // Drive every positive constraint off its ONE-STEP split, exactly
     // as Haskell `simpSplitPosSt` (SubtermStore.hs:170-183) does with
-    // `splitSubterm reducible True` (noRecurse).  `step_split` runs
-    // `is_true_false` first, so the trivial cases surface as:
-    //   Some([True_])  — trivially true  → toRemoveAsTrue (HS:176,179);
+    // `splitSubterm reducible True` (noRecurse).  `subterm_step` runs
+    // `isTrueFalse` first, so the trivial cases surface as:
+    //   Some([TrueD])  — trivially true  → toRemoveAsTrue (HS:176,179);
     //                    pair leaves the live set (RS keeps a
     //                    `propagated` copy in solved_subterms).
     //   Some([])       — trivially false (incl. small == big) →

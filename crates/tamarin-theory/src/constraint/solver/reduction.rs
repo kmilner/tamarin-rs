@@ -155,8 +155,7 @@ pub struct Reduction<'ctx> {
     /// Fix: when step 12 returns `Cases(arms)`, install `arms[0]`
     /// in-place (the main `conjoin_system` return value), and stash a
     /// per-arm clone of the post-step-13 system here, one per `arms[i]`
-    /// where i ≥ 1.  The caller (`apply_source_case_action` /
-    /// `apply_source_case_premise`) drains this Vec after
+    /// where i ≥ 1.  The caller (`conjoin_refine_arm`) drains this Vec after
     /// `conjoin_system` returns and replays the post-conjoin work
     /// (E.5 edge_eqs, F close_trivial_chains, output push) per stashed
     /// system.  Each stashed system has had `subst_system` already run
@@ -6358,8 +6357,8 @@ impl<'ctx> Reduction<'ctx> {
         // → `applySource` (Sources.hs:326-351): match the live goal
         // against the source's abstract `cdGoal`, refine the case via
         // `refineSubst`, someInst with keepVarBindings, then
-        // `conjoinSystem`.  Implemented in
-        // `apply_source_case_premise` (sources.rs).
+        // `conjoinSystem`.  Implemented in `refine_source_case` and
+        // `conjoin_refine_arm` (sources.rs).
         //
         // The returned systems are already fact-aligned + edge-coherent
         // (with a defensive `chain_eqs` pass).
