@@ -445,10 +445,6 @@ impl<'ctx> Reduction<'ctx> {
                 self.sys.eq_store.is_false()
             );
         }
-        // Rust-only execution trace (no Haskell counterpart).  Emitted
-        // once per edge (we're per-edge here, n=1) before running
-        // `solveFactEqs` on the edge facts, to aid divergence debugging.
-        crate::constraint::solver::trace::trace_exec("insertEdges n=1");
         // Look up the conclusion fact (source) and premise fact (target).
         let fa_conc = self
             .sys
@@ -548,7 +544,6 @@ impl<'ctx> Reduction<'ctx> {
                 self.sys.eq_store.is_false()
             );
         }
-        crate::constraint::solver::trace::trace_exec("insertEdges n=1");
         self.insert_edge_tail(site, e, Some(fa_conc), Some(fa_prem))
     }
 
@@ -2085,9 +2080,6 @@ impl<'ctx> Reduction<'ctx> {
                     "insert_formula_inner empty-Disj arm: the entry guard \
                      already excludes formulas-membership"
                 );
-                crate::constraint::solver::trace::trace_form("Disj", || {
-                    crate::constraint::solver::trace::guarded_repr(&g)
-                });
                 if tamarin_utils::env_gate!("TAM_RS_TRACE_GFALSE") {
                     eprintln!(
                         "[RS_GFALSE] path={} gfalse inserted",
@@ -2116,9 +2108,6 @@ impl<'ctx> Reduction<'ctx> {
                     "insert_formula_inner Disj arm: the entry guard \
                      already excludes formulas-membership"
                 );
-                crate::constraint::solver::trace::trace_form("Disj", || {
-                    crate::constraint::solver::trace::guarded_repr(&g)
-                });
                 // Pure ADD (formula push): bump.
                 self.sys.bump_cache_guarded(&g);
                 self.sys.formulas_mut().push(std::sync::Arc::new(g.clone()));
@@ -2206,14 +2195,6 @@ impl<'ctx> Reduction<'ctx> {
                 // the bound vars, substitute Bound → Free in guards/body,
                 // and recurse on `gconj([atoms..., body])`.
                 let outer = g.clone();
-                if tamarin_utils::env_gate!("TAM_RS_DBG_EX_INSERT") {
-                    eprintln!(
-                        "[RS_EX_INSERT] path={} mark={} fm={}",
-                        crate::constraint::solver::trace::case_path_string(),
-                        mark,
-                        crate::constraint::solver::trace::guarded_repr(&outer)
-                    );
-                }
                 if tamarin_utils::env_gate!("TAM_DBG_EX_DECOMP") {
                     eprintln!(
                         "[EX-DECOMP] ENTER mark={} vars={:?}",
@@ -2699,12 +2680,6 @@ impl<'ctx> Reduction<'ctx> {
         }
         if pending.is_empty() {
             return Ok(SolveOutcome::Linear(ChangeIndicator::Unchanged));
-        }
-        if crate::constraint::solver::trace::exec_enabled() {
-            crate::constraint::solver::trace::trace_exec(&format!(
-                "solveTermEqs n={}",
-                pending.len()
-            ));
         }
 
         // Take eq_store out of self, mutate it, put it back, then
@@ -5005,65 +4980,6 @@ pub fn chain_direct_case_name(fa_conc: &crate::fact::LNFact) -> Option<String> {
     })
 }
 
-/// Emit the per-premise exploitPrem traces that HS would emit for a
-/// rule whose Disj-monad branch will mzero (action/conclusion mismatch
-/// against the goal fact).  HS `labelNodeId` runs `exploitPrems i ru`
-/// BEFORE the action-mismatch check, so each premise of every dead
-/// rule still emits a `exploitPrem InFact` or `exploitPrem FreshFact
-/// isFresh=...` trace.  We synthesise the matching traces here so the
-/// exec-trace counts align between HS and Rust without Rust actually
-/// instantiating the dead rule.
-fn emit_dead_rule_premise_traces(rule: &crate::rule::RuleACInst) {
-    // Entirely a trace-synthesis helper: every body statement is a
-    // `trace_exec` (a no-op unless TAM_RS_TRACE_EXEC is set).  Bail out
-    // before the per-premise scan / `is_fresh` computation on the common
-    // untraced path.
-    if !crate::constraint::solver::trace::exec_enabled() {
-        return;
-    }
-    use crate::fact::FactTag;
-    use tamarin_term::lterm::LSort;
-    use tamarin_term::term::Term;
-    use tamarin_term::vterm::Lit;
-    for fa in &rule.premises {
-        match &fa.tag {
-            FactTag::Fresh => {
-                // Check if the Fresh arg is already a Fresh-sorted
-                // var to determine the isFresh flag, matching HS.
-                let is_fresh = match fa.terms.first() {
-                    Some(Term::Lit(Lit::Var(v))) => v.sort == LSort::Fresh,
-                    Some(Term::Lit(Lit::Con(c))) => {
-                        matches!(c.tag, tamarin_term::lterm::NameTag::Fresh)
-                    }
-                    _ => false,
-                };
-                crate::constraint::solver::trace::trace_exec(&format!(
-                    "exploitPrem FreshFact isFresh={}",
-                    if is_fresh { "True" } else { "False" }
-                ));
-            }
-            FactTag::In => {
-                crate::constraint::solver::trace::trace_exec("exploitPrem InFact");
-                // HS-faithful (Reduction.hs:246-248): `exploitPrem
-                // InFact` does `ruKnows <- mkISendRuleAC ann m;
-                // modM sNodes (M.insert j ruKnows); modM sEdges
-                // (S.insert ...); exploitPrems j ruKnows`.  The
-                // recursive `exploitPrems` (Reduction.hs:217-270, see line 239) then runs
-                // for the ISend supplier rule `Send`
-                // — even when the OUTER rule's action mismatches
-                // the goal (HS's Disj-monad branch still runs the
-                // body before `solveFactEqs` mzero's the branch).
-                // The dead-rule path must mirror that trace.  ISend's
-                // only premise is KU(x), which goes via `insertAction`
-                // and emits no exploitPrem-* trace, so no further
-                // recursion needed.
-                crate::constraint::solver::trace::trace_exec("exploitPrems rule=Send");
-            }
-            _ => { /* HS doesn't trace other premise types */ }
-        }
-    }
-}
-
 /// Derive a Haskell-style case name for a rule-instantiation case.
 /// Matches `Theory.Constraint.Solver.Reduction.casName` conventions:
 /// protocol rules use their declared name, intruder constructors use
@@ -5105,42 +5021,6 @@ pub fn rule_case_name(rule: &crate::rule::RuleACInst) -> String {
             IntrRuleACInfo::FreshConstr => "fresh".to_string(),
             IntrRuleACInfo::IEquality => "iequality".to_string(),
         },
-    }
-}
-
-/// HS-faithful port of `Theory.Model.Rule.getRuleName`
-/// (lib/theory/src/Theory/Model/Rule.hs:796-811).  Distinct from
-/// `rule_case_name` (which mirrors HS `showRuleCaseName` ≡
-/// `prettyIntrRuleACInfo` — lowercase "isend", "c_fst", ...).
-/// HS uses `getRuleName` ONLY at the `[EXEC] exploitPrems rule=X`
-/// trace site (Reduction.hs:217-270, see line 244) and a few other internal log
-/// points; everywhere else (proof tree case names, dot rendering,
-/// HTML output) HS uses `showRuleCaseName`.  We mirror that split.
-///
-/// Naming:
-///   ConstrRule x   → "Constr" ++ prefixIfReserved('c' : x)
-///   DestrRule  x .. → "Destr" ++ prefixIfReserved('d' : x)
-///   CoerceRule     → "Coerce"
-///   IRecvRule      → "Recv"
-///   ISendRule      → "Send"
-///   PubConstrRule  → "PubConstr"
-///   NatConstrRule  → "NatConstr"
-///   FreshConstrRule→ "FreshConstr"
-///   IEqualityRule  → "Equality"
-///   FreshRule      → "FreshRule"
-///   StandRule s    → s   (no prefixIfReserved — that's the pretty path)
-///
-/// The `x` for Constr/Destr is stored with HS's leading underscore
-/// (see `intruder_rules.rs`), so `ConstrRule { name: b"_fst", .. }` yields
-/// `c` + `_fst` = `c_fst` and `prefixIfReserved` leaves it as-is.
-pub fn rule_trace_name(rule: &crate::rule::RuleACInst) -> String {
-    use crate::rule::{ProtoRuleName, RuleInfo};
-    match &rule.info {
-        RuleInfo::Proto(p) => match &p.name {
-            ProtoRuleName::Fresh => "FreshRule".to_string(),
-            ProtoRuleName::Stand(s) => s.to_string(),
-        },
-        RuleInfo::Intr(i) => crate::rule::intr_rule_name_string(i),
     }
 }
 
@@ -5265,12 +5145,6 @@ impl<'ctx> Reduction<'ctx> {
     ///   fresh node `j` with `j < i`.
     /// - Otherwise → insert a `Goal::Premise((i, idx), fact)`.
     pub fn exploit_prems(&mut self, i: &crate::constraint::constraints::NodeId, rule: &RuleACInst) {
-        if crate::constraint::solver::trace::exec_enabled() {
-            crate::constraint::solver::trace::trace_exec(&format!(
-                "exploitPrems rule={}",
-                rule_trace_name(rule)
-            ));
-        }
         // HS-faithful (Reduction.hs:241-268): `exploitPrem i ru (v, fa)`
         // uses `fa` from `enumPrems ru` directly — no substitution
         // applied at this point.  The substitution is applied later
@@ -5310,7 +5184,6 @@ impl<'ctx> Reduction<'ctx> {
                 self.add_fresh_supplier_for(i, idx, fa);
             }
             FactTag::In => {
-                crate::constraint::solver::trace::trace_exec("exploitPrem InFact");
                 self.add_isend_supplier_for(i, idx, fa);
             }
             FactTag::Ku => {
@@ -5409,18 +5282,11 @@ impl<'ctx> Reduction<'ctx> {
                 _ => false,
             }
         };
-        if crate::constraint::solver::trace::exec_enabled() {
-            crate::constraint::solver::trace::trace_exec(&format!(
-                "exploitPrem FreshFact isFresh={}",
-                if is_fresh_var_or_lit { "True" } else { "False" }
-            ));
-        }
         if !is_fresh_var_or_lit {
             let next_n = bounds_max(&self.sys).saturating_add(1);
             let n_var =
                 tamarin_term::lterm::LVar::new("n", tamarin_term::lterm::LSort::Fresh, next_n);
             let n_term = tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(n_var));
-            crate::constraint::solver::trace::trace_exec("FrNarrow");
             if tamarin_utils::env_gate!("TAM_RS_TRACE_FR_NARROW") {
                 eprintln!(
                     "[RS-FR-NARROW] Fr({}_{}:{:?}) narrowed to ~n.{}",
@@ -5486,17 +5352,6 @@ impl<'ctx> Reduction<'ctx> {
         let next = self.next_fresh_node_idx();
         let j = tamarin_term::lterm::LVar::new("vf", tamarin_term::lterm::LSort::Node, next);
         let rule = make_isend_rule(m.clone());
-        // Mirrors Haskell `exploitPrems j ruKnows` (Reduction.hs:217-270, see line 248) —
-        // after creating the ISend supplier node, HS recursively exploits
-        // the supplier rule's premises (which dispatches to add_ku_action
-        // for the KU(m) premise).  Rust does the equivalent inline via
-        // add_ku_action_before below, so emit the matching trace here.
-        if crate::constraint::solver::trace::exec_enabled() {
-            crate::constraint::solver::trace::trace_exec(&format!(
-                "exploitPrems rule={}",
-                rule_trace_name(&rule)
-            ));
-        }
         self.sys.add_node(j, rule);
         // HS-faithful (Reduction.hs:217-270, see line 247): `exploitPrem InFact` does a
         // RAW `modM sEdges (S.insert $ Edge (j, ConcIdx 0) (i, v))` —
@@ -6081,18 +5936,6 @@ impl<'ctx> Reduction<'ctx> {
                         .iter()
                         .any(|a| a.tag == fa.tag && a.terms.len() == fa.terms.len())
                     {
-                        // For non-matching rules: synthesise the
-                        // exploitPrems + per-Fresh/In premise traces
-                        // HS emits in the dead Disj branch before
-                        // mzero, so trace counts align.  Rust still
-                        // skips the actual instantiation work.
-                        if crate::constraint::solver::trace::exec_enabled() {
-                            crate::constraint::solver::trace::trace_exec(&format!(
-                                "exploitPrems rule={}",
-                                rule_trace_name(&rule)
-                            ));
-                            emit_dead_rule_premise_traces(&rule);
-                        }
                         continue;
                     }
                     // Matching rules: rely on the trace emitted from
@@ -6461,21 +6304,6 @@ impl<'ctx> Reduction<'ctx> {
                 .enumerate_conclusions()
                 .any(|(_, fc)| fc.tag == fa_prem.tag && fc.terms.len() == fa_prem.terms.len());
             if !any_conc_match {
-                if crate::constraint::solver::trace::exec_enabled() {
-                    crate::constraint::solver::trace::trace_exec(&format!(
-                        "exploitPrems rule={}",
-                        rule_trace_name(rule)
-                    ));
-                    emit_dead_rule_premise_traces(rule);
-                }
-                // Rust-only trace: `insertEdges n=1` is emitted (per
-                // enumerated conclusion) before `solveFactEqs` mzero's the
-                // branch, mirroring the per-edge `insertEdges`
-                // (Reduction.hs:278-281) called from solvePremise/solveChain
-                // (Goals.hs).  Haskell emits no such trace.
-                for _ in rule.enumerate_conclusions() {
-                    crate::constraint::solver::trace::trace_exec("insertEdges n=1");
-                }
                 continue;
             }
             // HS-faithful labelNodeId order (Reduction.hs:222-230):
@@ -6533,11 +6361,6 @@ impl<'ctx> Reduction<'ctx> {
                 let conc_matches =
                     fa_conc.tag == fa_prem.tag && fa_conc.terms.len() == fa_prem.terms.len();
                 if !conc_matches {
-                    // Dead-conclusion sub-branch: HS still runs the
-                    // per-edge `insertEdges` (Reduction.hs:278-281), whose
-                    // `solveFactEqs` mzero's the branch.  Emit the Rust-only
-                    // trace here to keep the per-edge count aligned.
-                    crate::constraint::solver::trace::trace_exec("insertEdges n=1");
                     continue;
                 }
                 let mut sub = Reduction::new_inheriting(self.ctx, label_sys.clone(), label_counter);
@@ -6686,7 +6509,6 @@ impl<'ctx> Reduction<'ctx> {
                 .count();
             eprintln!("[RS-CHAIN] ENTER faConc={:?} nRules={}", fa_conc, n_destr);
         }
-        crate::constraint::solver::trace::trace_exec("solveChain ENTER");
 
         let mut all_cases: Vec<(String, crate::constraint::system::System)> = Vec::new();
         // HS FreshT-threading: per pushed case, the branch's final fresh
@@ -6752,12 +6574,6 @@ impl<'ctx> Reduction<'ctx> {
                             }
                             if trace_chains {
                                 eprintln!("[RS-CHAIN] DIRECT {}", case_name);
-                            }
-                            if crate::constraint::solver::trace::exec_enabled() {
-                                crate::constraint::solver::trace::trace_exec(&format!(
-                                    "solveChain DIRECT {}",
-                                    case_name
-                                ));
                             }
                             all_cases.push((case_name.clone(), arm_sys));
                             all_case_counters.push(post_edge_counter);
@@ -6900,12 +6716,6 @@ impl<'ctx> Reduction<'ctx> {
                     if trace_chains {
                         eprintln!("[RS-CHAIN] UNION {}", case_name);
                     }
-                    if crate::constraint::solver::trace::exec_enabled() {
-                        crate::constraint::solver::trace::trace_exec(&format!(
-                            "solveChain UNION {}",
-                            case_name
-                        ));
-                    }
                     all_cases.push((case_name.clone(), arm_sys));
                     all_case_counters.push(arm_counter);
                 }
@@ -6966,21 +6776,6 @@ impl<'ctx> Reduction<'ctx> {
                         ru_renamed
                     }
                 };
-                // Mirror HS `insertFreshNode rules (Just cRule)` (Goals.hs `insertFreshNode`)
-                // which calls labelNodeId → exploitPrems for every destructor
-                // rule, BEFORE the forbiddenEdge / prem-tag mismatch checks
-                // mzero the branch.  For dead-branch destructors, synthesize
-                // the matching exploitPrems + per-premise traces so trace
-                // counts align; HS emits exactly one exploitPrems per rule.
-                let trace_dead = |ru: &crate::rule::RuleACInst| {
-                    if crate::constraint::solver::trace::exec_enabled() {
-                        crate::constraint::solver::trace::trace_exec(&format!(
-                            "exploitPrems rule={}",
-                            rule_trace_name(ru)
-                        ));
-                        emit_dead_rule_premise_traces(ru);
-                    }
-                };
                 let dbg_filter = tamarin_utils::env_gate!("TAM_RS_DBG_CHAIN_EXT_FILTER");
                 let prem0 = match ru_renamed.premises.first() {
                     Some(f) => f.clone(),
@@ -6991,7 +6786,6 @@ impl<'ctx> Reduction<'ctx> {
                                 rule_case_name(&ru_renamed)
                             );
                         }
-                        trace_dead(&ru_renamed);
                         continue;
                     }
                 };
@@ -7002,7 +6796,6 @@ impl<'ctx> Reduction<'ctx> {
                             prem0.tag, prem0.terms.len(),
                             fa_conc.tag, fa_conc.terms.len());
                     }
-                    trace_dead(&ru_renamed);
                     continue;
                 }
                 if forbidden_edge(&c_rule, &ru_renamed) {
@@ -7013,7 +6806,6 @@ impl<'ctx> Reduction<'ctx> {
                             rule_case_name(&c_rule)
                         );
                     }
-                    trace_dead(&ru_renamed);
                     continue;
                 }
                 if ru_renamed.conclusions.is_empty() {
@@ -7023,7 +6815,6 @@ impl<'ctx> Reduction<'ctx> {
                             rule_case_name(&ru_renamed)
                         );
                     }
-                    trace_dead(&ru_renamed);
                     continue;
                 }
                 if dbg_filter {
@@ -7166,12 +6957,6 @@ impl<'ctx> Reduction<'ctx> {
                     }
                     if trace_chains {
                         eprintln!("[RS-CHAIN] EXTEND {} prem=PremIdx(0)", case_name);
-                    }
-                    if crate::constraint::solver::trace::exec_enabled() {
-                        crate::constraint::solver::trace::trace_exec(&format!(
-                            "solveChain EXTEND {}",
-                            case_name
-                        ));
                     }
                     all_cases.push((case_name.clone(), arm_sys));
                     all_case_counters.push(arm_counter);

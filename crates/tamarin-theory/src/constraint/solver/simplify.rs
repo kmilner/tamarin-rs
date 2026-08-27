@@ -80,7 +80,6 @@ fn is_dead_for_trace(red: &Reduction) -> bool {
 /// no iteration bound. (HS's `n` counter feeds `traceIfLooping` at n>10
 /// only.) The underlying `while_changing` is itself uncapped.
 pub fn simplify_system(red: &mut Reduction) {
-    crate::constraint::solver::trace::trace_exec("simplifySystem");
     red.while_changing(|r| {
         // One simplify iteration, factored into the same helpers the
         // fan-out driver uses so the byte-critical pass order has a
@@ -291,8 +290,6 @@ pub fn simplify_system_with_fanout_seeded(
 /// the recursive cases each start with a fresh `Reduction` whose
 /// FreshT counter is properly aligned to that case's `bounds_max`.
 fn simplify_system_fan_out_inner(red: &mut Reduction) -> Vec<crate::constraint::system::System> {
-    crate::constraint::solver::trace::trace_exec("simplifySystem");
-
     let ctx = red.ctx;
 
     // Manual while_changing loop so we can break out on fan-out.
@@ -1676,13 +1673,6 @@ fn try_match_all_guards(
             // (HS 150f5eba pre-check normalisation).  Held as `Cow` so an
             // already-canonical candidate is borrowed until it survives dedup.
             let canon = implied_apply_canon_cow(&implied);
-            // TAM_RS_TRACE_FORM=1 also emits an `Impl-candidate` event
-            // for every successful match BEFORE dedup — so the count
-            // diffs against HS's [IMPL-FIRE] count reveal whether Rust's
-            // matcher finds the same number of candidates HS finds.
-            crate::constraint::solver::trace::trace_form("Impl-candidate", || {
-                crate::constraint::solver::trace::guarded_repr(&implied)
-            });
             // Canonicalisation-based dedup is necessary in RS (vs HS's
             // bare `Eq Guarded`): RS's Maude unification draws witness
             // idxs from a GLOBAL atomic `fresh_counter` (maude_proc.rs),

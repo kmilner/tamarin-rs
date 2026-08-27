@@ -602,33 +602,6 @@ fn initial_source_cases_impl(
     // BEFORE invoking the solver, since unification inside the solver
     // can rewrite the goal's fact terms.
     red.mark_goal_as_solved(goal);
-    // RS emits a solveGoal trace label here for diffing; HS's `solveGoal`
-    // (Goals.hs:200-213) only does `markGoalAsSolved "directly" goal` and
-    // dispatches — it has no trace emission (no traceExecM/goalKind exist
-    // in HS).
-    // Gate the whole label build behind the cached `TAM_RS_TRACE_EXEC`
-    // flag: the `format!` + fact-head allocs fire on every source-case goal
-    // dispatch, and are dead work unless the trace is on.
-    if crate::constraint::solver::trace::exec_enabled() {
-        use crate::constraint::solver::trace::trace_exec;
-        let label = match goal {
-            Goal::Action(_, fa) => format!(
-                "solveGoal kind=Action fact={}({})",
-                crate::constraint::solver::goals::fact_tag_haskell_pub(fa),
-                crate::constraint::solver::goals::fact_term_head_pub(fa)
-            ),
-            Goal::Premise(_, fa) => format!(
-                "solveGoal kind=Premise fact={}({})",
-                crate::constraint::solver::goals::fact_tag_haskell_pub(fa),
-                crate::constraint::solver::goals::fact_term_head_pub(fa)
-            ),
-            Goal::Chain(_, _) => "solveGoal kind=Chain".to_string(),
-            Goal::Split(_) => "solveGoal kind=Split".to_string(),
-            Goal::Disj(_) => "solveGoal kind=Disj".to_string(),
-            Goal::Subterm(_) => "solveGoal kind=Subterm".to_string(),
-        };
-        trace_exec(&label);
-    }
 
     let outcome = match goal {
         Goal::Action(node, fa) => red.solve_action_goal(node, fa),
@@ -643,15 +616,6 @@ fn initial_source_cases_impl(
         let mut r = Reduction::new(ctx, sys);
         r.sys.insert_lemmas(safety_only.clone());
         r.subst_system();
-        // HS-faithful: HS `initialSource`'s `runReduction instantiate`
-        // does NOT call `simplifySystem` between the `solveGoal goal`
-        // step and case readout — `simplifySystem` runs only when the
-        // lemma proof's `runReduction` path invokes it (proof method
-        // dispatch / `solveAllSafeGoals` saturate loop).  But our case
-        // normalisation here *does* need simplify to settle subst /
-        // contradiction markers, so we run it but trace separately to
-        // match HS's per-call trace convention.
-        crate::constraint::solver::trace::trace_exec("simplifySystem");
         crate::constraint::solver::simplify::simplify_system(&mut r);
         if r.sys.eq_store.is_false() {
             return None;

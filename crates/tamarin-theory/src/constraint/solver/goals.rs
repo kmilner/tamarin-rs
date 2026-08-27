@@ -2740,41 +2740,6 @@ pub fn dispatch_solve_goal(
             }
         }
     }
-    // TAM_RS_TRACE_EXEC mirror of Haskell `solveGoal` `T.traceExecM`
-    // (Goals.hs:200-212, see line 206).  Same canonical-data form as the Haskell side so
-    // the two outputs diff cleanly.
-    //
-    // Fact rendering mirrors Haskell `show FactTag`:
-    //   - `Ku`   → "KUFact"
-    //   - `Kd`   → "KDFact"
-    //   - `Fresh`→ "FreshFact"
-    //   - `Out`  → "OutFact"
-    //   - `In`   → "InFact"
-    //   - `Proto(mult, name, _)` → "ProtoFact <Mult> \"<name>\" <arity>"
-    // Gate the whole label build behind the cached `TAM_RS_TRACE_EXEC`
-    // flag: the `format!` + `fact_tag_haskell`/`fact_term_head` allocs fire
-    // on every goal dispatch, and are dead work unless the trace is on.
-    if crate::constraint::solver::trace::exec_enabled() {
-        use crate::constraint::solver::trace::trace_exec;
-        use tamarin_term::lterm::sort_prefix;
-        let label = match g {
-            Goal::Action(_, fa) => format!(
-                "solveGoal kind=Action fact={}({})",
-                fact_tag_haskell(fa),
-                fact_term_head(fa, sort_prefix)
-            ),
-            Goal::Premise(_, fa) => format!(
-                "solveGoal kind=Premise fact={}({})",
-                fact_tag_haskell(fa),
-                fact_term_head(fa, sort_prefix)
-            ),
-            Goal::Chain(_, _) => "solveGoal kind=Chain".to_string(),
-            Goal::Split(_) => "solveGoal kind=Split".to_string(),
-            Goal::Disj(_) => "solveGoal kind=Disj".to_string(),
-            Goal::Subterm(_) => "solveGoal kind=Subterm".to_string(),
-        };
-        trace_exec(&label);
-    }
     match g {
         Goal::Action(i, fa) => red.solve_action_goal(i, fa),
         Goal::Premise(p, fa) => red.solve_premise_goal(p, fa),
@@ -2782,63 +2747,6 @@ pub fn dispatch_solve_goal(
         Goal::Split(id) => red.solve_split_goal(*id),
         Goal::Disj(d) => red.solve_disj_goal(d),
         Goal::Subterm(st) => red.solve_subterm_goal(st),
-    }
-}
-
-// Public wrappers so sites outside this module (e.g. sources.rs's
-// direct solve_*_goal calls that bypass dispatch_solve_goal) can emit
-// the same EXEC-trace format.
-pub fn fact_tag_haskell_pub(fa: &crate::fact::LNFact) -> String {
-    fact_tag_haskell(fa)
-}
-pub fn fact_term_head_pub(fa: &crate::fact::LNFact) -> String {
-    use tamarin_term::lterm::sort_prefix;
-    fact_term_head(fa, sort_prefix)
-}
-
-// Haskell `Show FactTag` mirror (Fact.hs).  Used only by the trace; not
-// visible elsewhere.  Keep aligned with Haskell so the EXEC diff doesn't
-// show spurious format-only differences.
-fn fact_tag_haskell(fa: &crate::fact::LNFact) -> String {
-    use crate::fact::{FactTag, Multiplicity};
-    match &fa.tag {
-        FactTag::Ku => "KUFact".to_string(),
-        FactTag::Kd => "KDFact".to_string(),
-        FactTag::Fresh => "FreshFact".to_string(),
-        FactTag::Out => "OutFact".to_string(),
-        FactTag::In => "InFact".to_string(),
-        FactTag::Ded => "DedFact".to_string(),
-        FactTag::Term => "TermFact".to_string(),
-        FactTag::Proto(mult, name, arity) => {
-            let m = match mult {
-                Multiplicity::Linear => "Linear",
-                Multiplicity::Persistent => "Persistent",
-            };
-            format!("ProtoFact {} \"{}\" {}", m, name, arity)
-        }
-    }
-}
-
-// Canonical head-symbol rendering for the EXEC trace.  Mirrors Haskell's
-// `termHeadStr` in Goals.hs (Var → `sortPrefix ++ name`, Const → `<const>`,
-// App → `showFunSymName`).  Used only by the trace; not visible elsewhere.
-fn fact_term_head(
-    fa: &crate::fact::LNFact,
-    sort_prefix: fn(tamarin_term::lterm::LSort) -> &'static str,
-) -> String {
-    use tamarin_term::function_symbols::FunSym;
-    use tamarin_term::term::Term;
-    use tamarin_term::vterm::Lit;
-    match fa.terms.first() {
-        None => String::new(),
-        Some(Term::Lit(Lit::Var(v))) => format!("{}{}", sort_prefix(v.sort), v.name),
-        Some(Term::Lit(Lit::Con(_))) => "<const>".to_string(),
-        Some(Term::App(sym, _)) => match sym {
-            FunSym::NoEq(noeq) => String::from_utf8_lossy(noeq.name).into_owned(),
-            FunSym::Ac(op) => format!("{:?}", op),
-            FunSym::C(op) => format!("{:?}", op),
-            FunSym::List => "List".to_string(),
-        },
     }
 }
 

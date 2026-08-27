@@ -355,14 +355,6 @@ pub fn exec_proof_method(
         ProofMethod::Sorry(_) | ProofMethod::Finished(_) => Some(Vec::new()),
         ProofMethod::Invalidated => None,
         ProofMethod::Simplify => {
-            // HS-faithful: `simplifySystem` (Simplify.hs:56-57) emits
-            // its `traceExecM "simplifySystem"` ONCE per call; its
-            // internal `go`-loop runs CR-rules to a fixpoint without
-            // re-tracing.  We mirror that by tracing here (the logical
-            // invocation site) and leaving `simplify_system` un-traced,
-            // so the outer fixpoint loop below doesn't duplicate the
-            // line.
-            crate::constraint::solver::trace::trace_exec("simplifySystem");
             // HS-faithful simplify-time fan-out.  When
             // `solveUniqueActions` calls `solveGoal (ActionG i fa)`,
             // the `Reduction = StateT System (FreshT (DisjT ...))`
