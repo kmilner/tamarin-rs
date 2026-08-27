@@ -156,7 +156,7 @@ fn without_key(s: &LNSubstVFresh, v: &LVar) -> Vec<(LVar, LNTerm)> {
 
 /// One entry in the disjunctive part of the store: a `SplitId`
 /// alongside the set of substitutions making up that disjunction.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct EqDisj {
     pub split_id: SplitId,
     pub substs: Vec<LNSubstVFresh>,
@@ -232,7 +232,7 @@ pub(crate) fn ordered_substs(substs: &[LNSubstVFresh]) -> Vec<&LNSubstVFresh> {
 
 /// `EqStore`. Mirrors Haskell's `EqStore { _eqsSubst, _eqsConj,
 /// _eqsNextSplitId }`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct EquationStore {
     /// "Free" substitution — currently-fixed bindings of the global
     /// variables. Composes with everything else.

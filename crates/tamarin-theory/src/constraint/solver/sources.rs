@@ -2830,8 +2830,8 @@ pub fn solve_with_source_cases_action_with_ctx(
             let msig = ctx.maude.maude_sig();
             // A 0/1-arm list is a dedup fixpoint: `sortednubBy` keeps it
             // verbatim and survivors = (0..len), so skip building
-            // stable_vars/keys entirely — byte-identical to the full path,
-            // since compute_compare_systems_key is pure/call-local.
+            // stable_vars and the normed systems entirely — byte-identical
+            // to the full path, since `norm_sys_for_compare` is pure.
             if (msig.enable_bp || msig.enable_mset) && refine_arms.len() >= 2 {
                 use tamarin_term::lterm::HasFrees;
                 let stable_vars: std::collections::BTreeSet<tamarin_term::lterm::LVar> = {
@@ -2846,25 +2846,22 @@ pub fn solve_with_source_cases_action_with_ctx(
                 // `sortednubBy compareSystemsUpToNewVars` keeps the LAST
                 // element of an EQ-run, then `sortOn fst` restores
                 // original-index order (last-wins per EQ-run).
-                // Carry the previous arm's key length as a capacity hint
-                // (sibling keys are similarly sized); 0 first == no reserve.
-                let mut cap_hint = 0usize;
-                let keyed: Vec<(usize, String)> = refine_arms
+                let normed: Vec<(usize, crate::constraint::system::System)> = refine_arms
                     .iter()
                     .enumerate()
                     .map(|(idx, (_label, arm))| {
-                        let key = compute_compare_systems_key(
-                            &arm.refined_case_for_dedup,
-                            &stable_vars,
-                            cap_hint,
-                        );
-                        cap_hint = key.len();
-                        (idx, key)
+                        (
+                            idx,
+                            norm_sys_for_compare(&arm.refined_case_for_dedup, &stable_vars),
+                        )
                     })
                     .collect();
                 let deduped = sortednub_by(
-                    &|a: &(usize, String), b: &(usize, String)| a.1.cmp(&b.1),
-                    keyed,
+                    &|a: &(usize, crate::constraint::system::System),
+                      b: &(usize, crate::constraint::system::System)| {
+                        compare_systems_up_to_new_vars(&a.1, &b.1)
+                    },
+                    normed,
                 );
                 deduped.into_iter().map(|(idx, _)| idx).collect()
             } else {
@@ -4306,21 +4303,21 @@ fn graft_case_into_action(
 //
 // Implementation strategy (per HS):
 //   1. Gate on BP/MSet — non-BP/MSet returns cases0 as-is.
-//   2. For each case build a canonical key from the normalised system.
-//      The normalisation walks free vars in HS-determined order
-//      (varOccurences-ordered first, then foldFrees), assigning each a
-//      fresh idx with empty name. Then keys excluding rule.new_vars
-//      capture exactly what `compareSystemsUpToNewVars` compares.
+//   2. For each case build the normalised system.  The normalisation
+//      walks free vars in HS-determined order (varOccurences-ordered
+//      first, then foldFrees), assigning each a fresh idx with empty
+//      name.
 //   3. Run a verbatim port of HS `sortednubBy` (`sortednub_by`) over the
-//      index-decorated list, comparing on the canonical key, then
+//      index-decorated list, comparing with
+//      `compare_systems_up_to_new_vars`, then
 //      `sortOn fst` to restore original-index order (matches `sortOn fst`
 //      in HS).  NOTE: `sortednubBy` does NOT keep the first element of an
 //      EQ-group — its run-detection phase (`sequences`) does
 //      `EQ -> sequences xs`, dropping the earlier element and keeping the
 //      LATER one; the `merge` phase drops the right-list element on EQ.
-//      Since every EQ-group member has an identical key and `sortOn fst`
+//      Since the members of an EQ-group compare equal and `sortOn fst`
 //      washes out cross-group order, the observable effect is "keep the
-//      highest-original-index member of each equal-key group".  (A
+//      highest-original-index member of each group".  (A
 //      first-wins dedup — e.g. via `BTreeSet` — would be unfaithful: it
 //      flips the surviving representative on symmetric AC peers, e.g.
 //      Joux/Scott `Session_Key_Secrecy_PFS`'s B↔C mirror.)
@@ -4631,89 +4628,8 @@ fn var_occurrences_nodes(
     out.into_iter().collect()
 }
 
-/// Append the base-10 rendering of `v` — byte-identical to
-/// `write!(out, "{}", v)` without the `core::fmt` dyn-dispatch machinery
-/// (a measurable cost when fired per node/edge/var of every candidate
-/// system key).
-fn push_u64(out: &mut String, mut v: u64) {
-    let mut buf = [0u8; 20];
-    let mut i = buf.len();
-    loop {
-        i -= 1;
-        buf[i] = b'0' + (v % 10) as u8;
-        v /= 10;
-        if v == 0 {
-            break;
-        }
-    }
-    // Digits are pure ASCII, so the validation scan is a trivially-true
-    // ~20-byte check.
-    out.push_str(std::str::from_utf8(&buf[i..]).expect("ASCII digits"));
-}
-
-/// Append the base-10 rendering of a signed value (`SplitId` payload) —
-/// byte-identical to `write!(out, "{}", v)`.
-fn push_i64(out: &mut String, v: i64) {
-    if v < 0 {
-        out.push('-');
-    }
-    push_u64(out, v.unsigned_abs());
-}
-
-/// `{:?}` of an `LSort` as a static str (the derived `Debug` prints the
-/// bare variant name), avoiding the formatter round-trip per var leaf.
-fn lsort_key_str(s: tamarin_term::lterm::LSort) -> &'static str {
-    use tamarin_term::lterm::LSort;
-    match s {
-        LSort::Pub => "Pub",
-        LSort::Fresh => "Fresh",
-        LSort::Msg => "Msg",
-        LSort::Node => "Node",
-        LSort::Nat => "Nat",
-    }
-}
-
-/// `{}` of a bool as a static str.
-fn bool_key_str(b: bool) -> &'static str {
-    if b {
-        "true"
-    } else {
-        "false"
-    }
-}
-
-/// The sort of a binder, spelled into the system key as `Debug` spells it,
-/// through static strs so the key costs no formatter.
-fn push_sort_dbg(out: &mut String, s: tamarin_term::lterm::LSort) {
-    use tamarin_term::lterm::LSort;
-    out.push_str(match s {
-        LSort::Msg => "Msg",
-        LSort::Pub => "Pub",
-        LSort::Fresh => "Fresh",
-        LSort::Node => "Node",
-        LSort::Nat => "Nat",
-    });
-}
-
-/// Append the pre-rendered `scratch` element `ranges` to `out` in sorted
-/// byte order, pushing `sep` after each element.  `str` Ord IS byte-wise
-/// lexicographic (== `[u8]` Ord) and the sort is stable, so the appended
-/// bytes are identical to collecting per-element `String`s, `sort()`ing
-/// the `Vec<String>` and joining — while the N per-element allocations
-/// collapse into the one shared `scratch` buffer (same shape as the
-/// AC-child sort in `write_term_to_key_with`).
-fn push_sorted_ranges(out: &mut String, scratch: &str, ranges: &mut [(usize, usize)], sep: char) {
-    let bytes = scratch.as_bytes();
-    ranges.sort_by(|&(s1, l1), &(s2, l2)| bytes[s1..s1 + l1].cmp(&bytes[s2..s2 + l2]));
-    for &(s, l) in ranges.iter() {
-        out.push_str(&scratch[s..s + l]);
-        out.push(sep);
-    }
-}
-
-/// `renameDropNameHints sys` (Sources.hs:252-258) as a binding store the
-/// `write_*_to_key` serialisers consult, instead of the renamed `System` HS
-/// builds:
+/// The variable rename of `renameDropNameHints sys` (Sources.hs:252-258),
+/// as a binding store [`norm_sys_for_compare`] maps the system through:
 ///   1. `stableVarBindings`: every stable variable binds to itself.
 ///   2. `evalFresh … (avoid stableVars)`: the supply starts above the largest
 ///      stable index.
@@ -4757,360 +4673,104 @@ fn rn(rename: &Bindings, v: &tamarin_term::lterm::LVar) -> tamarin_term::lterm::
     rename.get(v).unwrap_or(*v)
 }
 
-/// Write a term to the key buffer with renamed vars.
+/// HS `addNormSys` (Sources.hs:246):
+/// `(modify sEqStore dropNameHintsBound) . renameDropNameHints`.
 ///
-/// For AC and C function symbols, child renderings are sorted alphabetically
-/// post-rename so that the key is invariant under permutation of AC args
-/// (HS's `renameDropNameHints` calls `fAppAC` which re-canonicalizes the
-/// term under the renamed-var Ord; our pre-rendered Vec retains the
-/// pre-rename order, so we sort the rendered children here to match).
-/// Without this, two systems that differ ONLY by which renamed var ends
-/// up in which AC slot (e.g. `Union(v4, v5)` vs `Union(v5, v4)` after
-/// renaming `B↔C` to `v4↔v5`) get distinct keys and survive
-/// `removeRedundantCases`.
-/// Shared term-key serializer owning the `App`/`Con` arms (including the
-/// AC/C "render children, sort, join" permutation-invariance logic).  The
-/// `Var` leaf is delegated to `leaf`, letting callers choose the name-
-/// including vs name-dropping rendering; the recursive structure is
-/// therefore edited in exactly one place.
-fn write_term_to_key_with(
-    t: &tamarin_term::lterm::LNTerm,
-    out: &mut String,
-    leaf: &dyn Fn(&tamarin_term::lterm::LVar, &mut String),
-) {
-    use std::fmt::Write as _;
-    use tamarin_term::term::Term;
-    use tamarin_term::vterm::Lit;
-    match t {
-        Term::Lit(Lit::Var(v)) => leaf(v, out),
-        Term::Lit(Lit::Con(c)) => {
-            let _ = write!(out, "{:?}", c);
-        }
-        Term::App(sym, args) => {
-            let _ = write!(out, "{:?}(", sym);
-            // For AC/C symbols, sort child renderings (post-rename) to
-            // make the key permutation-invariant.  Render each child
-            // contiguously into ONE scratch buffer, recording (start,len)
-            // ranges, then sort the ranges by byte-slice compare.  `str`
-            // Ord IS byte-wise lexicographic (== `[u8]` Ord), and the join
-            // is stable, so the comma-joined bytes are byte-identical to
-            // sorting a `Vec<String>` of per-child renderings — while the
-            // per-child String allocs collapse to one scratch + one range
-            // Vec per AC/C node.
-            if sym.is_ac() || sym.is_c() {
-                let mut scratch = String::new();
-                let mut ranges: Vec<(usize, usize)> = Vec::with_capacity(args.len());
-                for a in args.iter() {
-                    let start = scratch.len();
-                    write_term_to_key_with(a, &mut scratch, leaf);
-                    ranges.push((start, scratch.len() - start));
-                }
-                let bytes = scratch.as_bytes();
-                ranges.sort_by(|&(s1, l1), &(s2, l2)| bytes[s1..s1 + l1].cmp(&bytes[s2..s2 + l2]));
-                for (i, &(s, l)) in ranges.iter().enumerate() {
-                    if i > 0 {
-                        out.push(',');
-                    }
-                    out.push_str(&scratch[s..s + l]);
-                }
-            } else {
-                for (i, a) in args.iter().enumerate() {
-                    if i > 0 {
-                        out.push(',');
-                    }
-                    write_term_to_key_with(a, out, leaf);
-                }
-            }
-            out.push(')');
-        }
-    }
-}
-
-fn write_term_to_key(t: &tamarin_term::lterm::LNTerm, rename: &Bindings, out: &mut String) {
-    write_term_to_key_with(t, out, &|v, out| {
-        let rv = rn(rename, v);
-        // Include the var NAME.  HS's `LVar` Ord is (idx, sort, name)
-        // and `renameDropNamehint` (Term/LTerm.hs:738-740) renames each
-        // DISTINCT `LVar` via `importBinding` (keyed on full identity),
-        // giving non-stable vars an EMPTY name but keeping stable vars
-        // bound to themselves (`stableVarBindings`, Sources.hs:254-258)
-        // with their ORIGINAL name.  Two distinct stable public vars —
-        // e.g. `$A.1` and `$B.1` — share (idx=1, sort=Pub) and differ
-        // ONLY in name; `compareSystemsUpToNewVars` therefore keeps them
-        // apart.  Dropping the name here conflated them, so the two
-        // symmetric commutative-`em` source-graft arms
-        // (`em(hp($A.1),hp($B.1))` = `em(x,y)` has two Maude matchings)
-        // produced byte-identical dedup keys and `removeRedundantCases`
-        // collapsed `c_em_case_1`/`c_em_case_2` into one `c_em` on
-        // Scott::key_secrecy.  `compute_rename_map` assigns non-stable
-        // vars an empty name, so appending it is a no-op for them and
-        // only restores HS's stable-var name discrimination.
-        // (Manual pushes are byte-identical to the previous
-        // `write!(out, "v{}:{:?}:{}", ...)` — see `push_u64`.)
-        out.push('v');
-        push_u64(out, rv.idx);
-        out.push(':');
-        out.push_str(lsort_key_str(rv.sort));
-        out.push(':');
-        out.push_str(rv.name);
-    });
-}
-
-fn write_fact_to_key(f: &crate::fact::LNFact, rename: &Bindings, out: &mut String) {
-    use std::fmt::Write as _;
-    let _ = write!(out, "{:?}:{:?}[", f.tag, f.annotations);
-    for (i, t) in f.terms.iter().enumerate() {
-        if i > 0 {
-            out.push(',');
-        }
-        write_term_to_key(t, rename, out);
-    }
-    out.push(']');
-}
-
-fn write_rule_to_key_excl_new_vars(
-    r: &crate::rule::RuleACInst,
-    rename: &Bindings,
-    out: &mut String,
-) {
-    use std::fmt::Write as _;
-    let _ = write!(out, "info={:?};", r.info);
-    out.push_str("ps:[");
-    for (i, p) in r.premises.iter().enumerate() {
-        if i > 0 {
-            out.push(',');
-        }
-        write_fact_to_key(p, rename, out);
-    }
-    out.push_str("];cs:[");
-    for (i, c) in r.conclusions.iter().enumerate() {
-        if i > 0 {
-            out.push(',');
-        }
-        write_fact_to_key(c, rename, out);
-    }
-    out.push_str("];as:[");
-    for (i, a) in r.actions.iter().enumerate() {
-        if i > 0 {
-            out.push(',');
-        }
-        write_fact_to_key(a, rename, out);
-    }
-    out.push(']');
-    // Crucial: rule.new_vars EXCLUDED per `compareRulesUpToNewVars`.
-}
-
-/// Look up the renamed identity of a free variable leaf and write it.
-fn write_gfree_var(v: &tamarin_term::lterm::LVar, rename: &Bindings, out: &mut String) {
-    let rv = rename.get(v).unwrap_or(*v);
-    // Encode the renamed identity (name + idx + sort) of a Free leaf.
-    out.push('F');
-    out.push_str(rv.name);
-    out.push('#');
-    push_u64(out, rv.idx);
-    out.push(':');
-    out.push_str(lsort_key_str(rv.sort));
-}
-
-/// Write a locally-nameless term into the key buffer, renaming free leaves in
-/// place.
-///
-/// The argument lists are written POSITIONALLY, including the AC and `C` ones:
-/// the key must partition formulas the way the guarded store's own `==` does,
-/// and a stored formula's AC list is sorted under the ORIGINAL variables, not
-/// the renamed ones.  Re-sorting the rendered children (as
-/// [`write_term_to_key_with`] does for a system term, whose HS counterpart
-/// really is rebuilt through `fAppAC`) would make the partition coarser and
-/// drop cases the port keeps.
-///
-/// The `App` arm writes the `FunSym`'s full identity, so the encoding is
-/// injective over everything the term holds.
-fn write_gterm_struct(t: &crate::formula::BLNTerm, rename: &Bindings, out: &mut String) {
-    use std::fmt::Write as _;
-    use tamarin_term::lterm::BVar;
-    use tamarin_term::term::Term;
-    use tamarin_term::vterm::Lit;
-    match t {
-        Term::Lit(Lit::Var(BVar::Free(v))) => write_gfree_var(v, rename, out),
-        Term::Lit(Lit::Var(BVar::Bound(n))) => {
-            out.push('B');
-            push_u64(out, *n);
-        }
-        Term::Lit(Lit::Con(c)) => {
-            let _ = write!(out, "{:?}", c);
-        }
-        Term::App(sym, args) => {
-            let _ = write!(out, "{:?}(", sym);
-            for (i, a) in args.iter().enumerate() {
-                if i > 0 {
-                    out.push(',');
-                }
-                write_gterm_struct(a, rename, out);
-            }
-            out.push(')');
-        }
-    }
-}
-
-fn write_gfact_struct(
-    f: &crate::fact::Fact<crate::formula::BLNTerm>,
-    rename: &Bindings,
-    out: &mut String,
-) {
-    use std::fmt::Write as _;
-    // `{:?}` of the `FactTag` writes the multiplicity, the name and the arity;
-    // the annotations follow, so the pair is injective over everything the fact
-    // holds beside its terms.
-    let _ = write!(out, "{:?}:{:?}", f.tag, f.annotations);
-    out.push('[');
-    for (i, t) in f.terms.iter().enumerate() {
-        if i > 0 {
-            out.push(',');
-        }
-        write_gterm_struct(t, rename, out);
-    }
-    out.push(']');
-}
-
-fn write_gatom_struct(
-    a: &crate::atom::Atom<crate::formula::BLNTerm>,
-    rename: &Bindings,
-    out: &mut String,
-) {
-    use crate::atom::ProtoAtom;
-    let bin =
-        |tag: &str, x: &crate::formula::BLNTerm, y: &crate::formula::BLNTerm, out: &mut String| {
-            out.push_str(tag);
-            out.push('(');
-            write_gterm_struct(x, rename, out);
-            out.push(',');
-            write_gterm_struct(y, rename, out);
-            out.push(')');
-        };
-    match a {
-        ProtoAtom::EqE(x, y) => bin("EQ", x, y, out),
-        ProtoAtom::Less(x, y) => bin("LT", x, y, out),
-        ProtoAtom::Subterm(x, y) => bin("SUB", x, y, out),
-        ProtoAtom::Action(t, f) => {
-            out.push_str("ACT(");
-            write_gfact_struct(f, rename, out);
-            out.push('@');
-            write_gterm_struct(t, rename, out);
-            out.push(')');
-        }
-        ProtoAtom::Last(t) => {
-            out.push_str("LAST(");
-            write_gterm_struct(t, rename, out);
-            out.push(')');
-        }
-        ProtoAtom::Syntactic(_) => out.push_str("SYN"),
-    }
-}
-
-/// Render a `Guarded` formula into the redundant-case dedup key buffer,
-/// applying the free-var alpha-`rename` INLINE.
-///
-/// PERF/FAITHFULNESS: this is a direct structural serializer — it walks the
-/// formula once, renaming free LVar leaves in place and writing a compact
-/// structural fingerprint, with NO formula clone and NO `Debug` dispatch.
-/// Cloning the formula via `subst_guarded` to apply the rename and then
-/// `format!("{:?}", _)`-ing it through the derived `Debug` machinery would be
-/// far slower (term clone churn, the generic `Debug` formatter builders, and
-/// an intermediate `String` per formula).
-///
-/// The key BYTES are an arbitrary internal fingerprint:
-/// `compute_compare_systems_key` keys never reach `--prove` output and are
-/// only ever compared for equality/ordering against other keys from the
-/// SAME `removeRedundantCases` call, so ANY injective encoding induces the
-/// same equivalence partition.  The `rename` map is a var→var alpha
-/// renaming (`compute_rename_map`), and this serializer renames exactly those
-/// free vars in place: it never re-sorts an AC argument list, which a
-/// `subst_guarded` rebuild through `fApp` would.  Keeping the argument order
-/// keeps the partition as fine as the guarded store's own `==`.
-fn write_guarded_struct(g: &crate::guarded::Guarded, rename: &Bindings, out: &mut String) {
-    use crate::guarded::Guarded;
-    match g {
-        Guarded::Atom(a) => {
-            out.push_str("A{");
-            write_gatom_struct(a, rename, out);
-            out.push('}');
-        }
-        Guarded::Disj(items) => {
-            out.push_str("OR[");
-            for (i, it) in items.iter().enumerate() {
-                if i > 0 {
-                    out.push(';');
-                }
-                write_guarded_struct(it, rename, out);
-            }
-            out.push(']');
-        }
-        Guarded::Conj(items) => {
-            out.push_str("AND[");
-            for (i, it) in items.iter().enumerate() {
-                if i > 0 {
-                    out.push(';');
-                }
-                write_guarded_struct(it, rename, out);
-            }
-            out.push(']');
-        }
-        Guarded::GGuarded {
-            qua,
-            vars,
-            guards,
-            body,
-        } => {
-            out.push('G');
-            // `{:?}` of `Quantifier` is the bare variant name.
-            out.push_str(match qua {
-                crate::formula::Quantifier::All => "All",
-                crate::formula::Quantifier::Ex => "Ex",
-            });
-            out.push('(');
-            for (i, b) in vars.iter().enumerate() {
-                if i > 0 {
-                    out.push(',');
-                }
-                out.push_str(&b.0);
-                out.push(':');
-                push_sort_dbg(out, b.1);
-            }
-            out.push_str("){");
-            for (i, a) in guards.iter().enumerate() {
-                if i > 0 {
-                    out.push(';');
-                }
-                write_gatom_struct(a, rename, out);
-            }
-            out.push_str("}=>");
-            write_guarded_struct(body, rename, out);
-        }
-    }
-}
-
-/// Build the canonical key used to identify a system up to alpha-renaming
-/// of non-stable vars and modulo rule.new_vars.  Two systems with the
-/// same key are considered redundant per HS's `compareSystemsUpToNewVars`
-/// + `renameDropNameHints` + `dropNameHintsBound`.
-fn compute_compare_systems_key(
+/// `renameDropNameHints` maps the system's free variables through the
+/// canonical rename (`compute_rename_map`).  HS holds the set-like stores in
+/// `Data.Set` / `Data.Map`, so its `mapFrees` rebuilds them and the renamed
+/// stores come back sorted and duplicate-free; the port holds them in `Vec`s,
+/// so this sorts and dedups them after the rename.  `dropNameHintsBound`
+/// then rewrites every equation-store disjunct substitution into its
+/// name-hint-free canonical form.
+fn norm_sys_for_compare(
     sys: &crate::constraint::system::System,
     stable_vars: &std::collections::BTreeSet<tamarin_term::lterm::LVar>,
-    cap_hint: usize,
-) -> String {
-    use std::fmt::Write as _;
+) -> crate::constraint::system::System {
+    use std::sync::Arc;
+    use tamarin_term::lterm::HasFrees;
     let rename = compute_rename_map(sys, stable_vars);
-    // Exhaustive destructure of the system's content (no `..`): adding a
-    // `SystemContent` field becomes a compile error here until its role in the
-    // comparison key is decided (serialise it, or bind it to `_name` with a
-    // reason).  Every content field currently participates in the key, so all
-    // bindings are used below.  System-level fields not in `SystemContent`
-    // (`source_kind`, `side`, `next_goal_nr`) are read via `sys.` and their
-    // additions are caught by the exhaustive destructures in
-    // `impl Clone`/`impl PartialEq for System`.  `&**sys` derefs `&System` →
-    // `&SystemContent`.
+    let mut s = sys.clone().map_free(&mut |v| rn(&rename, &v));
+    {
+        let c = s.content_mut();
+        Arc::make_mut(&mut c.nodes).sort_by_key(|a| a.0);
+        c.edges.sort();
+        c.edges.dedup();
+        c.less_atoms.sort();
+        c.less_atoms.dedup();
+        for store in [&mut c.formulas, &mut c.solved_formulas, &mut c.lemmas] {
+            store.sort();
+            store.dedup();
+        }
+        let goals = Arc::make_mut(&mut c.goals);
+        goals.sort_by(|a, b| a.0.cmp(&b.0));
+        goals.dedup_by(|a, b| a.0 == b.0);
+    }
+    {
+        let st = s.subterm_store_mut();
+        for cs in [&mut st.subterms, &mut st.solved_subterms] {
+            cs.sort_by(|a, b| a.hs_pair().cmp(&b.hs_pair()));
+            cs.dedup_by(|a, b| a.hs_pair() == b.hs_pair());
+        }
+    }
+    {
+        let es = s.eq_store_mut();
+        for disj in &mut es.conj {
+            for sub in &mut disj.substs {
+                *sub = sub.drop_name_hints();
+            }
+            disj.substs.sort();
+            disj.substs.dedup();
+        }
+    }
+    s
+}
+
+/// HS `compareRulesUpToNewVars` (Theory/Model/Rule.hs:273-284): the info, the
+/// premises, the conclusions and the actions, with `new_vars` left out.
+fn compare_rules_up_to_new_vars(
+    a: &crate::rule::RuleACInst,
+    b: &crate::rule::RuleACInst,
+) -> std::cmp::Ordering {
+    a.info
+        .cmp(&b.info)
+        .then_with(|| a.premises.cmp(&b.premises))
+        .then_with(|| a.conclusions.cmp(&b.conclusions))
+        .then_with(|| a.actions.cmp(&b.actions))
+}
+
+/// HS `compareSystemsUpToNewVars` (System.hs:1909-1922) over two systems that
+/// `norm_sys_for_compare` has already normalised.  The nodes compare through
+/// `compare_rules_up_to_new_vars` over both maps in `M.toAscList` order (HS
+/// `compareNodesUpToNewVars`/`compareListsUpToNewVars`, System.hs:1894-1907,
+/// which is the lexicographic order on the two lists).  When the nodes tie,
+/// HS blanks that field in both records and falls back to the derived
+/// `Ord System`, so the rest compares in HS's declaration order
+/// (System.hs:382-396): edges, lessAtoms, lastAtom, subtermStore, eqStore,
+/// formulas, solvedFormulas, lemmas, goals, nextGoalNr, sourceKind,
+/// diffSystem.  `SystemContent` declares its fields in another order, so the
+/// chain below names the HS one field by field.
+fn compare_systems_up_to_new_vars(
+    a: &crate::constraint::system::System,
+    b: &crate::constraint::system::System,
+) -> std::cmp::Ordering {
+    let nodes = a
+        .nodes
+        .iter()
+        .zip(b.nodes.iter())
+        .map(|((x1, x2), (y1, y2))| {
+            x1.cmp(y1)
+                .then_with(|| compare_rules_up_to_new_vars(x2, y2))
+        })
+        .find(|o| o.is_ne())
+        .unwrap_or_else(|| a.nodes.len().cmp(&b.nodes.len()));
+    if nodes.is_ne() {
+        return nodes;
+    }
+    // Exhaustive destructure (no `..`): a new `SystemContent` field becomes a
+    // compile error here until its role in the comparison is decided.
     let crate::constraint::system::SystemContent {
-        nodes,
+        nodes: _,
         edges,
         less_atoms,
         formulas,
@@ -5120,323 +4780,32 @@ fn compute_compare_systems_key(
         eq_store,
         subterm_store,
         goals,
-    } = &**sys;
-    // `cap_hint` pre-sizes the key buffer to a sibling case's key length
-    // (keys within one `removeRedundantCases` call have similar sizes),
-    // avoiding the ~10 doubling reallocs of a growing key.  Reserve is
-    // byte-neutral: only the backing capacity changes, never the content.
-    let mut out = String::with_capacity(cap_hint);
-    // NODES (with renamed ids, excluding rule.new_vars).
-    out.push_str("NODES:[");
-    let mut nodes_sorted: Vec<&(tamarin_term::lterm::LVar, crate::rule::RuleACInst)> =
-        nodes.iter().collect();
-    // `sort_by_cached_key` is stable like `sort_by_key` (same order) but
-    // pays ONE `rn` lookup + LVar clone per node instead of one per
-    // comparison.
-    nodes_sorted.sort_by_cached_key(|a| rn(&rename, &a.0));
-    for (nid, rule) in &nodes_sorted {
-        let rid = rn(&rename, nid);
-        out.push_str("{id=");
-        push_u64(&mut out, rid.idx);
-        out.push(':');
-        out.push_str(lsort_key_str(rid.sort));
-        out.push(';');
-        write_rule_to_key_excl_new_vars(rule, &rename, &mut out);
-        out.push_str("};");
-    }
-    out.push(']');
-    // EDGES.  Rendered as `{idx}:{sort:?}.{ConcIdx:?}->{idx}:{sort:?}.{PremIdx:?};`
-    // — the `ConcIdx(_)`/`PremIdx(_)` derived-Debug wrappers are pushed as
-    // static text around the payload digits.
-    out.push_str(";EDGES:[");
-    let mut edges_renamed: Vec<(
-        tamarin_term::lterm::LVar,
-        crate::rule::ConcIdx,
-        tamarin_term::lterm::LVar,
-        crate::rule::PremIdx,
-    )> = edges
-        .iter()
-        .map(|e| {
-            (
-                rn(&rename, &e.src.0),
-                e.src.1,
-                rn(&rename, &e.tgt.0),
-                e.tgt.1,
-            )
-        })
-        .collect();
-    edges_renamed.sort();
-    for (s, si, t, ti) in &edges_renamed {
-        push_u64(&mut out, s.idx);
-        out.push(':');
-        out.push_str(lsort_key_str(s.sort));
-        out.push_str(".ConcIdx(");
-        push_u64(&mut out, si.0 as u64);
-        out.push_str(")->");
-        push_u64(&mut out, t.idx);
-        out.push(':');
-        out.push_str(lsort_key_str(t.sort));
-        out.push_str(".PremIdx(");
-        push_u64(&mut out, ti.0 as u64);
-        out.push_str(");");
-    }
-    out.push(']');
-    // LESS.
-    out.push_str(";LESS:[");
-    let mut less_renamed: Vec<(
-        tamarin_term::lterm::LVar,
-        tamarin_term::lterm::LVar,
-        crate::constraint::constraints::Reason,
-    )> = less_atoms
-        .iter()
-        .map(|la| (rn(&rename, &la.smaller), rn(&rename, &la.larger), la.reason))
-        .collect();
-    less_renamed.sort_by(|a, b| (&a.0, &a.1).cmp(&(&b.0, &b.1)));
-    for (s, t, _r) in &less_renamed {
-        push_u64(&mut out, s.idx);
-        out.push('<');
-        push_u64(&mut out, t.idx);
-        out.push(';');
-    }
-    out.push(']');
-    // LAST.
-    out.push_str(";LAST:");
-    if let Some(j) = last_atom {
-        let r = rn(&rename, j);
-        push_u64(&mut out, r.idx);
-    }
-    // SUBTERM STORE.
-    out.push_str(";STORE:[");
-    for st in &subterm_store.subterms {
-        write_term_to_key(&st.small, &rename, &mut out);
-        out.push_str("<<");
-        write_term_to_key(&st.big, &rename, &mut out);
-        out.push(';');
-    }
-    out.push_str("]/SOLVED:[");
-    for st in &subterm_store.solved_subterms {
-        write_term_to_key(&st.small, &rename, &mut out);
-        out.push_str("<<");
-        write_term_to_key(&st.big, &rename, &mut out);
-        out.push(';');
-    }
-    out.push(']');
-    // EQSTORE.subst (free subst).
-    out.push_str(";SUBST:[");
-    // Re-key by renamed var, then sort.
-    let mut subst_keyed: Vec<(tamarin_term::lterm::LVar, tamarin_term::lterm::LNTerm)> = eq_store
-        .subst
-        .to_list()
-        .into_iter()
-        .map(|(v, t)| (rn(&rename, &v), t))
-        .collect();
-    subst_keyed.sort_by_key(|a| a.0);
-    for (v, t) in &subst_keyed {
-        push_u64(&mut out, v.idx);
-        out.push(':');
-        out.push_str(lsort_key_str(v.sort));
-        out.push('=');
-        write_term_to_key(t, &rename, &mut out);
-        out.push(',');
-    }
-    out.push(']');
-    // EQSTORE.conj — domain vars renamed; range is VFresh so name-hints
-    // are dropped (we serialise range structurally with empty names).
-    out.push_str(";CONJ:[");
-    // Sorted-section scratch: elements are rendered contiguously into ONE
-    // buffer as (start, len) ranges and joined via `push_sorted_ranges`,
-    // replacing a `Vec<String>` (one alloc per element) per section.  The
-    // buffer and range Vec are reused across all sorted sections below.
-    let mut scratch = String::new();
-    let mut ranges: Vec<(usize, usize)> = Vec::new();
-    for disj in &eq_store.conj {
-        out.push_str("id=SplitId(");
-        push_i64(&mut out, disj.split_id.0);
-        out.push_str(");");
-        scratch.clear();
-        ranges.clear();
-        for sub in &disj.substs {
-            let start = scratch.len();
-            let mut entries: Vec<(tamarin_term::lterm::LVar, tamarin_term::lterm::LNTerm)> = sub
-                .to_list()
-                .into_iter()
-                .map(|(v, t)| (rn(&rename, &v), t))
-                .collect();
-            entries.sort_by_key(|a| a.0);
-            for (v, t) in &entries {
-                push_u64(&mut scratch, v.idx);
-                scratch.push(':');
-                scratch.push_str(lsort_key_str(v.sort));
-                scratch.push('=');
-                // For VFresh range vars: strip name hints by writing
-                // "v{idx}" — `renameDropNamehint` (LTerm.hs:737-740) over the
-                // range term alone.  The store is per RANGE TERM: its free
-                // vars, in DFS order, take empty-name indices restarting at 0.
-                let mut local_ren = Bindings::new();
-                let mut local_fresh = tamarin_utils::fresh::FastFreshState::nothing_used();
-                use tamarin_term::lterm::HasFrees;
-                t.for_each_free(&mut |v| {
-                    local_ren.import_drop_namehint(v, &mut local_fresh);
-                });
-                write_term_to_key_local(t, &local_ren, &mut scratch);
-                scratch.push(',');
-            }
-            ranges.push((start, scratch.len() - start));
-        }
-        push_sorted_ranges(&mut out, &scratch, &mut ranges, '|');
-        out.push(';');
-    }
-    out.push(']');
-    // FORMULAS / SOLVED FORMULAS / LEMMAS: identical shape — render each
-    // guarded formula into the shared scratch buffer as a sorted section.
-    let push_guarded_section = |out: &mut String,
-                                items: &[std::sync::Arc<crate::guarded::Guarded>],
-                                scratch: &mut String,
-                                ranges: &mut Vec<(usize, usize)>| {
-        scratch.clear();
-        ranges.clear();
-        for g in items {
-            let start = scratch.len();
-            write_guarded_struct(g, &rename, scratch);
-            ranges.push((start, scratch.len() - start));
-        }
-        push_sorted_ranges(out, scratch, ranges, ';');
-    };
-    out.push_str(";FORMS:[");
-    push_guarded_section(&mut out, formulas, &mut scratch, &mut ranges);
-    out.push(']');
-    out.push_str(";SOLV_FORMS:[");
-    push_guarded_section(&mut out, solved_formulas, &mut scratch, &mut ranges);
-    out.push(']');
-    out.push_str(";LEMMAS:[");
-    push_guarded_section(&mut out, lemmas, &mut scratch, &mut ranges);
-    out.push(']');
-    // GOALS (deterministic order, renamed-var keyed).
-    // HS structural Ord on System includes `_sGoals :: Map Goal
-    // GoalStatus` — both the Goal key AND the GoalStatus value
-    // participate.  GoalStatus = (gsSolved, gsNr, gsLoopBreaker)
-    // per System.hs:370-380.  Status fields must be included, or
-    // cases with the same goals but different goal-status (e.g.
-    // differing gsNr from creation order) would under-discriminate.
-    out.push_str(";GOALS:[");
-    scratch.clear();
-    ranges.clear();
-    for (g, st) in goals.iter() {
-        let start = scratch.len();
-        write_goal_to_key(g, &rename, &mut scratch);
-        scratch.push_str(":st=");
-        scratch.push_str(bool_key_str(st.solved));
-        scratch.push(',');
-        push_u64(&mut scratch, st.nr);
-        scratch.push(',');
-        scratch.push_str(bool_key_str(st.looping));
-        ranges.push((start, scratch.len() - start));
-    }
-    push_sorted_ranges(&mut out, &scratch, &mut ranges, ';');
-    out.push(']');
-    // HS also includes `_sNextGoalNr :: Integer` in the structural Ord
-    // (System.hs:383-401, see line 394).  Include for faithfulness.
-    out.push_str(";NEXT_NR=");
-    push_u64(&mut out, sys.next_goal_nr);
-    // SOURCE KIND / DIFF — affect compareSystemsUpToNewVars only via
-    // structural fallthrough when m != False.
-    let _ = write!(out, ";SK={:?};SIDE={:?}", sys.source_kind, sys.side);
-    out
-}
-
-/// Serialise a Goal with renamed vars.
-fn write_goal_to_key(
-    g: &crate::constraint::constraints::Goal,
-    rename: &Bindings,
-    out: &mut String,
-) {
-    use crate::constraint::constraints::Goal;
-    match g {
-        Goal::Action(i, fa) => {
-            let ri = rn(rename, i);
-            out.push_str("A(");
-            push_u64(out, ri.idx);
-            out.push(':');
-            out.push_str(lsort_key_str(ri.sort));
-            out.push(',');
-            write_fact_to_key(fa, rename, out);
-            out.push(')');
-        }
-        Goal::Premise(p, fa) => {
-            let ri = rn(rename, &p.0);
-            out.push_str("P(");
-            push_u64(out, ri.idx);
-            out.push(':');
-            out.push_str(lsort_key_str(ri.sort));
-            out.push_str(".PremIdx(");
-            push_u64(out, p.1 .0 as u64);
-            out.push_str("),");
-            write_fact_to_key(fa, rename, out);
-            out.push(')');
-        }
-        Goal::Chain(c, p) => {
-            let rc = rn(rename, &c.0);
-            let rp = rn(rename, &p.0);
-            out.push_str("C(");
-            push_u64(out, rc.idx);
-            out.push(':');
-            out.push_str(lsort_key_str(rc.sort));
-            out.push_str(".ConcIdx(");
-            push_u64(out, c.1 .0 as u64);
-            out.push_str(")->");
-            push_u64(out, rp.idx);
-            out.push(':');
-            out.push_str(lsort_key_str(rp.sort));
-            out.push_str(".PremIdx(");
-            push_u64(out, p.1 .0 as u64);
-            out.push_str("))");
-        }
-        Goal::Subterm((a, b)) => {
-            out.push_str("S(");
-            write_term_to_key(a, rename, out);
-            out.push_str("<<");
-            write_term_to_key(b, rename, out);
-            out.push(')');
-        }
-        Goal::Split(id) => {
-            out.push_str("Sp(SplitId(");
-            push_i64(out, id.0);
-            out.push_str("))");
-        }
-        Goal::Disj(d) => {
-            // HS `DisjG (Disj [LNGuarded])` participates in the structural
-            // `Ord System` (via `_sGoals :: Map Goal GoalStatus`) as an
-            // ORDERED disjunct list — `renameDropNamehint` (mapFrees,
-            // Term/LTerm.hs:738-740) preserves disjunct order, and `Disj`
-            // derives `Ord` element-wise.  So serialise the alternatives IN
-            // ORDER, not sorted: sorting would conflate `A ∨ B` with
-            // `B ∨ A`, and two alpha-equivalent sibling cases whose
-            // disjunction goals map to swapped `gsNr` under the canonical
-            // rename must stay distinct per HS's `Map Goal GoalStatus` Ord.
-            out.push_str("D[");
-            for (i, alt) in d.0.iter().enumerate() {
-                if i > 0 {
-                    out.push('|');
-                }
-                write_guarded_struct(alt, rename, out);
-            }
-            out.push(']');
-        }
-    }
-}
-
-/// Local variant of `write_term_to_key` that uses a local rename map
-/// for VFresh range vars (no fallback to identity).
-fn write_term_to_key_local(t: &tamarin_term::lterm::LNTerm, rename: &Bindings, out: &mut String) {
-    // Same App/Con recursion as `write_term_to_key`, but the Var leaf drops
-    // the name (local dedup keys use idx:sort only).
-    write_term_to_key_with(t, out, &|v, out| {
-        let rv = rename.get(v).unwrap_or(*v);
-        out.push('v');
-        push_u64(out, rv.idx);
-        out.push(':');
-        out.push_str(lsort_key_str(rv.sort));
-    });
+    } = &**a;
+    let crate::constraint::system::SystemContent {
+        nodes: _,
+        edges: b_edges,
+        less_atoms: b_less_atoms,
+        formulas: b_formulas,
+        solved_formulas: b_solved_formulas,
+        lemmas: b_lemmas,
+        last_atom: b_last_atom,
+        eq_store: b_eq_store,
+        subterm_store: b_subterm_store,
+        goals: b_goals,
+    } = &**b;
+    edges
+        .cmp(b_edges)
+        .then_with(|| less_atoms.cmp(b_less_atoms))
+        .then_with(|| last_atom.cmp(b_last_atom))
+        .then_with(|| subterm_store.cmp(b_subterm_store))
+        .then_with(|| eq_store.cmp(b_eq_store))
+        .then_with(|| formulas.cmp(b_formulas))
+        .then_with(|| solved_formulas.cmp(b_solved_formulas))
+        .then_with(|| lemmas.cmp(b_lemmas))
+        .then_with(|| goals.cmp(b_goals))
+        .then_with(|| a.next_goal_nr.cmp(&b.next_goal_nr))
+        .then_with(|| a.source_kind.cmp(&b.source_kind))
+        .then_with(|| a.side.cmp(&b.side))
 }
 
 /// Direct port of HS `sortednubBy` (`lib/utils/src/Extension/Prelude.hs:52-87`,
@@ -5611,11 +4980,9 @@ where
 /// which is the LAST element of an `EQ`-run, not the first
 /// (cf. Joux/Scott `Session_Key_Secrecy_PFS` B↔C mirror).  We port `sortednubBy` verbatim
 /// rather than approximate it: for the common case (an `EQ`-group of pure
-/// alpha-duplicates with identical keys) this keeps the LAST member and,
-/// after `sortOn fst`, emits survivors in original-index order — the exact
-/// flip the Joux/Scott mirror needed.  (The string key encodes what
-/// `compareSystemsUpToNewVars` distinguishes, so two cases compare `EQ`
-/// here iff they are alpha-equivalent there.)
+/// alpha-duplicates) this keeps the LAST member and, after `sortOn fst`,
+/// emits survivors in original-index order — the exact flip the Joux/Scott
+/// mirror needed.
 pub fn remove_redundant_cases<T, F>(
     enable_bp: bool,
     enable_mset: bool,
@@ -5630,31 +4997,26 @@ where
         return cases;
     }
     // A 0- or 1-element list is a dedup fixpoint: `sortednubBy` then
-    // `sortOn fst` are the identity on it, so skip the full-system keying
-    // (compute_compare_systems_key is pure/call-local, so eliding it for
-    // len<2 cannot perturb fresh-var numbering, goal order, or stdout).
+    // `sortOn fst` are the identity on it, so skip the normalisation
+    // (`norm_sys_for_compare` is pure, so eliding it for len<2 cannot
+    // perturb fresh-var numbering, goal order, or stdout).
     if cases.len() < 2 {
         return cases;
     }
     let pre = cases.len();
-    // Decorate with (original index, canonical key).  HS:
+    // Decorate with (original index, normed system).  HS:
     //   decoratedCases = map (second addNormSys) $ zip [0..] cases0
-    // where addNormSys produces the renamed/normed system; we precompute
-    // the string key (which encodes exactly what compareSystemsUpToNewVars
-    // distinguishes) instead of carrying the normed System.
-    let mut decorated: Vec<(usize, String, T)> = Vec::with_capacity(pre);
-    // Carry the previous case's key length as a capacity hint (sibling keys
-    // in one call are similarly sized); 0 for the first case == no reserve.
-    let mut cap_hint = 0usize;
+    let mut decorated: Vec<(usize, crate::constraint::system::System, T)> = Vec::with_capacity(pre);
     for (idx, c) in cases.into_iter().enumerate() {
-        let key = compute_compare_systems_key(get_sys(&c), stable_vars, cap_hint);
-        cap_hint = key.len();
-        decorated.push((idx, key, c));
+        let normed = norm_sys_for_compare(get_sys(&c), stable_vars);
+        decorated.push((idx, normed, c));
     }
-    // sortednubBy (\(_,x) (_,y) -> compare x y)  -- compare on the key only,
-    // matching HS comparing on the normed system via compareSystemsUpToNewVars.
+    // sortednubBy (\(_,(_,x)) (_,(_,y)) -> compareSystemsUpToNewVars x y)
     let mut deduped = sortednub_by(
-        &|a: &(usize, String, T), b: &(usize, String, T)| a.1.cmp(&b.1),
+        &|a: &(usize, crate::constraint::system::System, T),
+          b: &(usize, crate::constraint::system::System, T)| {
+            compare_systems_up_to_new_vars(&a.1, &b.1)
+        },
         decorated,
     );
     // sortOn fst : restore original-index order.

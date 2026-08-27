@@ -291,8 +291,8 @@ pub type PlainProcess = LProcess<ProcessParsedAnnotation>;
 ///
 /// A SAPIC-generated rule carries the process it was generated from
 /// ([`crate::rule::RuleAttributes::process`]), and the solver renders a rule's
-/// info into a system comparison key and into an occurrence path once per node
-/// of every candidate system.  The rendering here is the process's derived
+/// info into an occurrence path once per node of every candidate system.  The
+/// rendering here is the process's derived
 /// `Debug` output, so [`Debug`](std::fmt::Debug) writes those bytes instead of
 /// walking the tree again, and [`Deref`](std::ops::Deref) hands out the process
 /// itself to the wellformedness pass and the printers.
@@ -329,6 +329,22 @@ impl PartialEq for SharedProcess {
 }
 
 impl Eq for SharedProcess {}
+
+// `Ord` reads the stored rendering rather than walking the tree a second
+// time.  The derived `Debug` of a process is a function of its value and
+// spells every field out, so two processes render alike exactly when they are
+// equal — which is what the `PartialEq` above compares.
+impl PartialOrd for SharedProcess {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for SharedProcess {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.debug.cmp(&other.debug)
+    }
+}
 
 impl<Ann, V> Process<Ann, V> {
     pub fn null(ann: Ann) -> Self {

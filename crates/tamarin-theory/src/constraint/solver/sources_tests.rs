@@ -461,29 +461,6 @@ fn case_name_list_to_string_is_intercalate_underscore() {
     assert_eq!(case_name_list_to_string(&[]), "");
 }
 
-/// The system key spells the sort of every quantifier binder, so the five
-/// sorts have to key apart: two systems whose binders differ only in sort are
-/// distinct and must not be deduplicated against each other.
-#[test]
-fn binder_sorts_key_apart() {
-    use std::collections::BTreeSet;
-    use tamarin_term::lterm::LSort;
-    let key = |s: &LSort| {
-        let mut out = String::new();
-        push_sort_dbg(&mut out, *s);
-        out
-    };
-    let sorts = [
-        LSort::Pub,
-        LSort::Fresh,
-        LSort::Msg,
-        LSort::Node,
-        LSort::Nat,
-    ];
-    let keys: BTreeSet<String> = sorts.iter().map(key).collect();
-    assert_eq!(keys.len(), sorts.len());
-}
-
 // =========================================================================
 // rename_system_by
 // =========================================================================
@@ -893,80 +870,121 @@ fn source_bounds_takes_the_max_over_cases_only() {
     assert_eq!(source_bounds(&src, &cases), (Some(5), Some(61)));
 }
 
-/// [`write_guarded_struct`] applies the alpha-rename to each free leaf in
-/// place and writes every argument list positionally.  A stored formula's AC
-/// list is sorted under the ORIGINAL variables, so a rebuild through `fApp`
-/// under the renamed ones would move the operands and merge two cases the
-/// guarded store's own `==` keeps apart.
+/// `norm_sys_for_compare`'s rename is HS `renameDropNamehint`
+/// (LTerm.hs:738-740), a `mapFrees (Arbitrary _)`; that variant rebuilds an
+/// application through `fApp` (LTerm.hs:788-791), so renaming a free leaf
+/// past its AC siblings re-sorts the operands.
 #[test]
-fn the_redundant_case_key_renames_without_resorting_ac_arguments() {
+fn the_case_rename_ac_normalises_the_operands() {
     use crate::atom::ProtoAtom;
     use crate::formula::BLNTerm;
-    use crate::guarded::Guarded;
-    use tamarin_term::bind::Bindings;
     use tamarin_term::function_symbols::AcSym;
-    use tamarin_term::lterm::{BVar, LVar};
-    use tamarin_term::term::{f_app_ac, Term};
+    use tamarin_term::lterm::BVar;
+    use tamarin_term::term::f_app_ac;
     use tamarin_term::vterm::var_term;
 
     let a = LVar::new("a", LSort::Msg, 0);
     let b = LVar::new("b", LSort::Msg, 0);
+    let z = LVar::new("z", LSort::Msg, 0);
     let leaf = |v: LVar| -> BLNTerm { var_term(BVar::Free(v)) };
     // `a * b` is stored in that order; the rename sends `a` past `b`.
-    let stored = f_app_ac(AcSym::Mult, vec![leaf(a), leaf(b)]);
-    let Term::App(_, args) = &stored else {
-        panic!("an application")
+    let stored = Guarded::Atom(ProtoAtom::Last(f_app_ac(
+        AcSym::Mult,
+        vec![leaf(a), leaf(b)],
+    )));
+    let renamed = stored.map_free(&mut |v| if v == a { z } else { v });
+    let Guarded::Atom(ProtoAtom::Last(Term::App(_, args))) = &renamed else {
+        panic!("an application under a Last atom")
     };
-    assert_eq!(args.as_ref(), &[leaf(a), leaf(b)]);
-
-    let mut rename = Bindings::new();
-    rename.insert(a, LVar::new("z", LSort::Msg, 0));
-    let g = Guarded::Atom(ProtoAtom::Last(stored));
-    let mut key = String::new();
-    write_guarded_struct(&g, &rename, &mut key);
-
-    let mut renamed_in_place = String::new();
-    write_guarded_struct(
-        &Guarded::Atom(ProtoAtom::Last(f_app_ac(
-            AcSym::Mult,
-            vec![leaf(LVar::new("z", LSort::Msg, 0)), leaf(b)],
-        ))),
-        &Bindings::new(),
-        &mut renamed_in_place,
-    );
-    // `fAppAC` sorts `z` after `b`, so the rebuilt operand order differs from
-    // the one the key writes.
-    assert_ne!(key, renamed_in_place);
-    assert!(key.contains("Fz#0:"), "the free leaf is renamed: {key}");
-    assert!(
-        key.find("Fz#0:").unwrap() < key.find("Fb#0:").unwrap(),
-        "the stored operand order survives the rename: {key}"
-    );
+    assert_eq!(args.as_ref(), &[leaf(b), leaf(z)]);
 }
 
-/// The `App` arm writes the `FunSym`'s full identity, so two AC applications
-/// that differ only in their head take different keys and stay separate
-/// cases.
+/// The comparison reaches the sort of every quantifier binder, so two systems
+/// whose formulas differ only there stay distinct cases: `Ord Guarded` is
+/// HS's own derived one and walks the binder list, whose sorts separate under
+/// `Ord LSort` (LTerm.hs:165-170).
 #[test]
-fn redundant_case_key_separates_two_ac_heads() {
+fn binder_sorts_keep_two_systems_apart() {
+    use crate::formula::Quantifier;
+    use crate::guarded::gtrue;
+
+    let sys_binding = |sort: LSort| {
+        let mut sys = system_with_a_variable_per_field(mterm(11));
+        sys.content_mut().formulas = vec![Arc::new(Guarded::GGuarded {
+            qua: Quantifier::Ex,
+            vars: Arc::from(vec![("x".to_string(), sort)]),
+            guards: Arc::from(Vec::new()),
+            body: Arc::new(gtrue()),
+        })];
+        sys
+    };
+    let systems: Vec<System> = [
+        LSort::Pub,
+        LSort::Fresh,
+        LSort::Msg,
+        LSort::Node,
+        LSort::Nat,
+    ]
+    .into_iter()
+    .map(sys_binding)
+    .collect();
+    for (i, a) in systems.iter().enumerate() {
+        for b in &systems[i + 1..] {
+            assert!(compare_systems_up_to_new_vars(a, b).is_ne());
+        }
+    }
+}
+
+/// The comparison reaches the head of an application, so two systems whose
+/// formulas differ only in which AC symbol they apply stay distinct cases.
+#[test]
+fn two_ac_heads_keep_two_systems_apart() {
     use crate::atom::ProtoAtom;
     use crate::formula::BLNTerm;
-    use crate::guarded::Guarded;
-    use tamarin_term::bind::Bindings;
     use tamarin_term::function_symbols::AcSym;
-    use tamarin_term::lterm::{BVar, LVar};
+    use tamarin_term::lterm::BVar;
     use tamarin_term::term::f_app_ac;
     use tamarin_term::vterm::var_term;
 
     let leaf = |n: &str| -> BLNTerm { var_term(BVar::Free(LVar::new(n, LSort::Msg, 0))) };
-    let key_of = |sym: AcSym| {
-        let g = Guarded::Atom(ProtoAtom::Last(f_app_ac(sym, vec![leaf("a"), leaf("b")])));
-        let mut out = String::new();
-        write_guarded_struct(&g, &Bindings::new(), &mut out);
-        out
+    let sys_applying = |sym: AcSym| {
+        let mut sys = system_with_a_variable_per_field(mterm(11));
+        sys.content_mut().formulas = vec![Arc::new(Guarded::Atom(ProtoAtom::Last(f_app_ac(
+            sym,
+            vec![leaf("a"), leaf("b")],
+        ))))];
+        sys
     };
-    assert_ne!(key_of(AcSym::Mult), key_of(AcSym::Union));
-    assert_ne!(key_of(AcSym::Mult), key_of(AcSym::Xor));
+    assert!(compare_systems_up_to_new_vars(
+        &sys_applying(AcSym::Mult),
+        &sys_applying(AcSym::Union)
+    )
+    .is_ne());
+    assert!(
+        compare_systems_up_to_new_vars(&sys_applying(AcSym::Mult), &sys_applying(AcSym::Xor))
+            .is_ne()
+    );
+}
+
+/// Once the nodes tie, HS compares the remaining fields in its own record
+/// order (System.hs:382-396), where `_sLastAtom` comes fourth and
+/// `_sFormulas` seventh.  `SystemContent` declares them the other way round,
+/// so a pair whose `last_atom` and `formulas` disagree in opposite directions
+/// settles on `last_atom`.
+#[test]
+fn compare_systems_up_to_new_vars_follows_the_hs_field_order() {
+    let build = |last: NodeId, formula: u64| {
+        let mut sys = system_with_a_variable_per_field(mterm(11));
+        sys.content_mut().last_atom = Some(last);
+        sys.content_mut().formulas = vec![Arc::new(last_formula(formula))];
+        sys
+    };
+    let smaller_last_atom = build(nvar(50), 121);
+    let smaller_formula = build(nvar(51), 120);
+    assert_eq!(
+        compare_systems_up_to_new_vars(&smaller_last_atom, &smaller_formula),
+        std::cmp::Ordering::Less
+    );
 }
 
 /// `Seg`'s manual `Eq`/`Ord` read the segment text, never the variant tag:

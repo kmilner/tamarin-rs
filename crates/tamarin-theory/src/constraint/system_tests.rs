@@ -1133,3 +1133,25 @@ fn bounds_max_covers_every_field_except_disj_goals() {
         "the twin skips a disjunction goal"
     );
 }
+
+/// HS derives `Ord GoalStatus` over `_gsSolved`, `_gsNr`, `_gsLoopBreaker`
+/// (System.hs:369-379).  The port declares `looping` first, so a pair whose
+/// `solved` and `looping` disagree in opposite directions settles on
+/// `solved`.
+#[test]
+fn goal_status_ord_follows_the_hs_field_order() {
+    let looping_and_unsolved = GoalStatus {
+        looping: true,
+        solved: false,
+        nr: 0,
+    };
+    let solved_and_not_looping = GoalStatus {
+        looping: false,
+        solved: true,
+        nr: 0,
+    };
+    assert_eq!(
+        looping_and_unsolved.cmp(&solved_and_not_looping),
+        std::cmp::Ordering::Less
+    );
+}

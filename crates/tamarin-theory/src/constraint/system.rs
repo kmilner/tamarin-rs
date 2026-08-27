@@ -126,7 +126,7 @@ pub enum Side {
 /// comparison is a content comparison (`Arc`'s `PartialEq` forwards to the
 /// inner `EquationStore` value), preserving goal/case dedup equality
 /// semantics.
-#[derive(PartialEq)]
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
 pub struct SealedEqStore(Arc<EquationStore>);
 
 impl std::ops::Deref for SealedEqStore {
@@ -420,8 +420,8 @@ pub struct System {
     /// cache-maintenance chokepoints the max-var-idx cache already funnels
     /// every content mutation through (see `bump_content_stamp`).  Powers the
     /// verified-identity `subst_system` skip (reduction.rs).  Excluded from
-    /// `PartialEq` / serialized keys / `compute_compare_systems_key` exactly
-    /// like the cache Cells.  `Cell` so read-path bump helpers need no `&mut`.
+    /// `PartialEq` and from the case-dedup comparison exactly like the cache
+    /// Cells.  `Cell` so read-path bump helpers need no `&mut`.
     /// Private: all access goes through the stamp/marker methods below.
     content_stamp: Cell<u64>,
     /// Value-version of `eq_store.subst`.  Fresh `next_stamp()` on every subst
@@ -601,7 +601,7 @@ impl std::ops::Deref for System {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Ord, PartialOrd, Hash)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct GoalStatus {
     /// Whether the goal is currently "loop-marked".
     pub looping: bool,
@@ -616,6 +616,24 @@ pub struct GoalStatus {
     /// position.  This is the canonical tie-break within a heuristic
     /// priority class.
     pub nr: u64,
+}
+
+impl PartialOrd for GoalStatus {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+/// HS derives `Ord GoalStatus` over `_gsSolved`, `_gsNr`, `_gsLoopBreaker`
+/// (System.hs:369-379).  The port declares `looping` first, so the order is
+/// written out here instead of derived.
+impl Ord for GoalStatus {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.solved
+            .cmp(&other.solved)
+            .then_with(|| self.nr.cmp(&other.nr))
+            .then_with(|| self.looping.cmp(&other.looping))
+    }
 }
 
 // =============================================================================

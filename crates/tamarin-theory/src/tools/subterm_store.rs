@@ -34,6 +34,16 @@ pub struct SubtermConstraint {
     pub propagated: bool,
 }
 
+impl SubtermConstraint {
+    /// The pair HS stores in `_posSubterms` / `_solvedSubterms`
+    /// (`S.Set (LNTerm, LNTerm)`, SubtermStore.hs:90-96).  `propagated` is
+    /// port-only and outside it, so every comparison that has to be as fine
+    /// as HS's — and no finer — goes through this pair.
+    pub fn hs_pair(&self) -> (&LNTerm, &LNTerm) {
+        (&self.small, &self.big)
+    }
+}
+
 /// HS reaches a stored constraint through `Apply LNSubst SubtermStore`
 /// (SubtermStore.hs:560-561) and the pair instance (SubstVFree.hs:316-317):
 /// the small side then the big one.  `propagated` is not part of the HS value
@@ -80,9 +90,10 @@ impl HasFrees for SubtermConstraint {
 /// there is no `push` / `&mut Vec` / `iter_mut` accessor.  Every mutator
 /// (`insert`, `remove_at`, `rebuild_from`) re-establishes the sorted-unique
 /// invariant, making an unsorted state unconstructible; reads go through the
-/// slice `Deref`.  Derives mirror `SubtermStore`'s so it slots into the derived
-/// impls (order-sensitive `PartialEq` is exact because the set is always sorted).
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// slice `Deref`.  The sorted-unique invariant is what makes the derived,
+/// position-sensitive `PartialEq`/`Ord` agree with HS's `S.Set` equality and
+/// order on the same pairs.
+#[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SortedPairSet {
     inner: Vec<(LNTerm, LNTerm)>,
 }
@@ -161,6 +172,34 @@ pub struct SubtermStore {
     /// `neg_subterms \ old_neg_subterms` is the change-detection
     /// mechanism deciding which negative subterms get (re-)split.
     pub old_neg_subterms: SortedPairSet,
+}
+
+impl PartialOrd for SubtermStore {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+/// HS derives `Ord SubtermStore` over `_negSubterms`, `_posSubterms`,
+/// `_solvedSubterms`, `_isContradictory`, `_oldNegSubterms`
+/// (SubtermStore.hs:90-97).  The port declares those five fields in another
+/// order, and its two `Vec<SubtermConstraint>` fields carry a `propagated`
+/// marker that HS's `S.Set (LNTerm, LNTerm)` has no room for, so both are
+/// compared through [`SubtermConstraint::hs_pair`].
+impl Ord for SubtermStore {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        fn cmp_pairs(a: &[SubtermConstraint], b: &[SubtermConstraint]) -> std::cmp::Ordering {
+            a.iter()
+                .map(|c| c.hs_pair())
+                .cmp(b.iter().map(|c| c.hs_pair()))
+        }
+        self.neg_subterms
+            .cmp(&other.neg_subterms)
+            .then_with(|| cmp_pairs(&self.subterms, &other.subterms))
+            .then_with(|| cmp_pairs(&self.solved_subterms, &other.solved_subterms))
+            .then_with(|| self.contradictory.cmp(&other.contradictory))
+            .then_with(|| self.old_neg_subterms.cmp(&other.old_neg_subterms))
+    }
 }
 
 impl SubtermStore {
@@ -266,10 +305,11 @@ impl HasFrees for SubtermStore {
 /// The constraints of `cs` ordered by `(small, big)`, the order HS's
 /// `S.Set (LNTerm, LNTerm)` enumerates the same pairs in
 /// (SubtermStore.hs:90-96).  `SubtermConstraint` carries a `propagated`
-/// marker that is not part of that pair and so is no `Ord` key.
+/// marker that is not part of that pair, so the sort reads
+/// [`SubtermConstraint::hs_pair`].
 fn sorted_by_pair(cs: &[SubtermConstraint]) -> Vec<&SubtermConstraint> {
     let mut out: Vec<&SubtermConstraint> = cs.iter().collect();
-    out.sort_by(|a, b| (&a.small, &a.big).cmp(&(&b.small, &b.big)));
+    out.sort_by(|a, b| a.hs_pair().cmp(&b.hs_pair()));
     out
 }
 
@@ -1096,5 +1136,33 @@ mod tests {
             "oldNegSubterms is carried over by `pure`"
         );
         assert!(mapped.contradictory);
+    }
+
+    /// HS derives `Ord SubtermStore` over `_negSubterms`, `_posSubterms`,
+    /// `_solvedSubterms`, `_isContradictory`, `_oldNegSubterms`
+    /// (SubtermStore.hs:90-97).  The port declares `subterms` first and
+    /// `neg_subterms` fourth, so a pair whose negative and positive sets
+    /// disagree in opposite directions settles on the negative one.
+    #[test]
+    fn subterm_store_ord_follows_the_hs_field_order() {
+        let store = |neg: u64, pos: u64| SubtermStore {
+            subterms: vec![cst(pos, pos + 1, false)],
+            neg_subterms: SortedPairSet::rebuild_from(vec![(xt(neg), xt(neg + 1))]),
+            ..SubtermStore::empty()
+        };
+        assert_eq!(store(20, 31).cmp(&store(22, 30)), std::cmp::Ordering::Less);
+    }
+
+    /// `propagated` is port-only: HS holds the positive and solved sets as
+    /// `S.Set (LNTerm, LNTerm)` (SubtermStore.hs:90-96), so two stores that
+    /// differ only in that marker compare equal.
+    #[test]
+    fn subterm_store_ord_ignores_the_propagated_marker() {
+        let store = |propagated: bool| SubtermStore {
+            subterms: vec![cst(2, 3, propagated)],
+            solved_subterms: vec![cst(4, 5, propagated)],
+            ..SubtermStore::empty()
+        };
+        assert_eq!(store(false).cmp(&store(true)), std::cmp::Ordering::Equal);
     }
 }

@@ -24,7 +24,7 @@ use crate::vterm::{Lit, VTerm};
 /// A substitution mapping variables of type `V` to terms of type
 /// `VTerm<C, V>`. The Haskell newtype is kept transparent here — callers
 /// usually want to inspect or build the mapping.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Subst<C, V> {
     map: BTreeMap<V, VTerm<C, V>>,
 }

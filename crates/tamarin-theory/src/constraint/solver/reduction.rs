@@ -991,10 +991,9 @@ impl<'ctx> Reduction<'ctx> {
         //
         // RS's `less_atoms: Vec<LessAtom>` doesn't auto-dedupe, so
         // post-subst duplicates survive.  Mirror HS by deduping after
-        // the in-place rewrite.  Without this, `compute_compare_systems_key`
-        // (used by `removeRedundantCases`) serialises duplicate
-        // `s<l` entries, producing different keys for systems that
-        // HS considers redundant.
+        // the in-place rewrite.  Without this, the case-dedup comparison
+        // (`removeRedundantCases`) sees duplicate `s<l` entries and keeps
+        // systems that HS considers redundant apart.
         //
         // Triggering case: Scott::key_secrecy.  Two source-cases'
         // saturated systems that HS dedupes (75→73 in

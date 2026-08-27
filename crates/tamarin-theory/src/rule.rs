@@ -342,6 +342,36 @@ pub struct RuleAttributes {
     pub role: Option<String>,
 }
 
+impl Eq for RuleAttributes {}
+
+impl PartialOrd for RuleAttributes {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+/// HS derives `Ord RuleAttributes` over `ruleColor`, `ruleProcess`,
+/// `ignoreDerivChecks`, `isSAPiCRule`, `role` (Theory/Model/Rule.hs:367-379),
+/// which is this struct's declaration order.  HS's colour is an
+/// `RGB Rational` and totally ordered; [`Rgb`] holds `f64`s and so offers
+/// only `PartialOrd`, so an incomparable pair counts as equal here.
+impl Ord for RuleAttributes {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        use std::cmp::Ordering;
+        let color = match (&self.color, &other.color) {
+            (None, None) => Ordering::Equal,
+            (None, Some(_)) => Ordering::Less,
+            (Some(_), None) => Ordering::Greater,
+            (Some(a), Some(b)) => a.partial_cmp(b).unwrap_or(Ordering::Equal),
+        };
+        color
+            .then_with(|| self.process.cmp(&other.process))
+            .then_with(|| self.ignore_deriv_checks.cmp(&other.ignore_deriv_checks))
+            .then_with(|| self.is_sapic_rule.cmp(&other.is_sapic_rule))
+            .then_with(|| self.role.cmp(&other.role))
+    }
+}
+
 impl RuleAttributes {
     pub fn empty() -> Self {
         Self::default()
@@ -416,6 +446,26 @@ pub struct ProtoRuleACInstInfo {
     pub name: ProtoRuleName,
     pub attributes: RuleAttributes,
     pub loop_breakers: Vec<PremIdx>,
+}
+
+impl Eq for ProtoRuleACInstInfo {}
+
+impl PartialOrd for ProtoRuleACInstInfo {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+/// HS derives `Ord ProtoRuleACInstInfo` over `_praciName`,
+/// `_praciAttributes`, `_praciLoopBreakers` (Theory/Model/Rule.hs:444-449),
+/// which is this struct's declaration order.
+impl Ord for ProtoRuleACInstInfo {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.name
+            .cmp(&other.name)
+            .then_with(|| self.attributes.cmp(&other.attributes))
+            .then_with(|| self.loop_breakers.cmp(&other.loop_breakers))
+    }
 }
 
 // =============================================================================
