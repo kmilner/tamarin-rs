@@ -1388,70 +1388,64 @@ impl System {
         }
     }
 
-    /// Bump the cache for a newly-added LVar.  No-op if invalidated.
+    /// Shared body of the `bump_cache_*` helpers: bump `content_stamp`, then
+    /// raise the cached max-var idx to whatever `walk` leaves in its
+    /// argument.  No-op on the cache if it is invalidated.
+    ///
+    /// CONTENT-axis choke (additive): these helpers are called on every
+    /// content-growing write (add_node/edge/less/goal, insert_last, ...).
+    /// The stamp bump is UNCONDITIONAL — even when the added value's idx is
+    /// <= the cached max (numeric no-op), the field still grew, so the
+    /// marker must invalidate.
     #[inline]
-    pub fn bump_cache_lvar(&self, v: &tamarin_term::lterm::LVar) {
-        // CONTENT-axis choke (additive): called on every content-growing write
-        // (add_node/edge/less/goal, insert_last, ...).  Bump UNCONDITIONALLY —
-        // even when the new var's idx is <= the cached max (numeric no-op), the
-        // field still grew, so the marker must invalidate.
+    fn bump_cache_with(&self, walk: impl FnOnce(&mut u64)) {
         self.bump_content_stamp();
         if let Some(cur) = self.max_var_idx_cache.get() {
-            if v.idx > cur {
-                self.max_var_idx_cache.set(Some(v.idx));
+            let mut m = cur;
+            walk(&mut m);
+            if m != cur {
+                self.max_var_idx_cache.set(Some(m));
             }
         }
+    }
+
+    /// Bump the cache for a newly-added LVar.
+    #[inline]
+    pub fn bump_cache_lvar(&self, v: &tamarin_term::lterm::LVar) {
+        self.bump_cache_with(|m| {
+            if v.idx > *m {
+                *m = v.idx;
+            }
+        });
     }
 
     /// Bump the cache by walking a term.
     #[inline]
     pub fn bump_cache_term(&self, t: &tamarin_term::lterm::LNTerm) {
-        self.bump_content_stamp();
-        if let Some(cur) = self.max_var_idx_cache.get() {
-            let mut m = cur;
-            crate::constraint::solver::reduction::bm_term_pub(t, &mut m);
-            if m != cur {
-                self.max_var_idx_cache.set(Some(m));
-            }
-        }
+        self.bump_cache_with(|m| crate::constraint::solver::reduction::bm_term_pub(t, m));
     }
 
     /// Bump the cache by walking a fact's terms.
     #[inline]
     pub fn bump_cache_fact(&self, fa: &crate::fact::LNFact) {
-        self.bump_content_stamp();
-        if let Some(cur) = self.max_var_idx_cache.get() {
-            let mut m = cur;
-            crate::constraint::solver::reduction::bm_fact_pub(fa, &mut m);
-            if m != cur {
-                self.max_var_idx_cache.set(Some(m));
-            }
-        }
+        self.bump_cache_with(|m| crate::constraint::solver::reduction::bm_fact_pub(fa, m));
     }
 
     /// Bump the cache by walking a rule's free vars.
     #[inline]
     pub fn bump_cache_rule(&self, r: &crate::rule::RuleACInst) {
-        self.bump_content_stamp();
-        if let Some(cur) = self.max_var_idx_cache.get() {
-            let mut m = cur;
-            crate::constraint::solver::reduction::bm_rule_pub(r, &mut m);
-            if m != cur {
-                self.max_var_idx_cache.set(Some(m));
-            }
-        }
+        self.bump_cache_with(|m| crate::constraint::solver::reduction::bm_rule_pub(r, m));
     }
 
     /// Bump the cache by walking a guarded formula.
     #[inline]
     pub fn bump_cache_guarded(&self, f: &Guarded) {
-        self.bump_content_stamp();
-        if let Some(cur) = self.max_var_idx_cache.get() {
+        self.bump_cache_with(|m| {
             let n = crate::guarded::max_var_idx(f);
-            if n > cur {
-                self.max_var_idx_cache.set(Some(n));
+            if n > *m {
+                *m = n;
             }
-        }
+        });
     }
 
     /// Bump the cache by walking a goal.
