@@ -33,14 +33,14 @@ use parking_lot::Mutex;
 use tamarin_term::maude_proc::MaudeHandle;
 use tamarin_theory::constraint::constraints::Goal;
 use tamarin_theory::constraint::solver::context::{ProofContext, UseInduction};
-use tamarin_theory::constraint::solver::goals::GoalRanking;
+use tamarin_theory::constraint::solver::goals::{ranking_at_depth, GoalRanking};
 use tamarin_theory::constraint::solver::proof_method::{
     exec_proof_method, finished_subterms, is_finished, ProofMethod,
 };
 use tamarin_theory::constraint::solver::search::{
     candidate_methods_with_expl, NodeStatus, ProofNode,
 };
-use tamarin_theory::constraint::system::{formula_to_system, SourceKind, System};
+use tamarin_theory::constraint::system::{formula_to_system, System};
 use tamarin_theory::guarded::{formula_to_guarded, Guarded};
 use tamarin_theory::pretty_system::pretty_non_graph_system;
 use tamarin_theory::theory::{LemmaAttr, OpenProtoRule, TheoryItem, TraceQuantifier};
@@ -62,12 +62,10 @@ pub(crate) struct LemmaProofState {
 /// `pcHeuristic` from the lemma's attributes + the theory's `heuristic:`
 /// directive.  Without these the shared ctx defaults to `AvoidInduction` +
 /// `Smart`, which diverges from HS at the display / method-index sites that
-/// recompute `candidate_methods*` / `ranking_for_depth`.
+/// recompute `candidate_methods*` / `ranking_at_depth`.
 ///
 /// Mirrors `tamarin_theory::prove::prove_lemma`:
-///   - `use_induction`: `UseInduction` iff the lemma carries `[use_induction]`
-///     or `[sources]` (`prove_lemma`'s `force_induction` check); else the
-///     `AvoidInduction` default.
+///   - `use_induction`: `prove::induction_hint` on the lemma.
 ///   - `heuristic`: per-lemma `[heuristic=..]` > theory-level `heuristic:`
 ///     directive, parsed via `parse_heuristic_str_with_tactics`
 ///     (prove.rs's `resolve_heuristic`, minus the CLI `--heuristic` the web
@@ -292,34 +290,16 @@ impl ProofState {
             // --- Per-lemma search settings (see `LemmaSearchSettings`) ------
             let use_induction = tamarin_theory::prove::induction_hint(lemma);
             // `heuristic`: per-lemma `[heuristic=..]` > theory `heuristic:`.
-            // There is no CLI `--heuristic` on the web path, so the CLI
-            // override branch of `prove::prove_lemma` is skipped entirely.
-            let lemma_heuristic: Option<&str> = lemma.attributes.iter().find_map(|a| match a {
-                LemmaAttr::Heuristic(s) => Some(s.as_str()),
-                _ => None,
-            });
-            let heuristic = match lemma_heuristic {
-                // The lemma attribute keeps its source text; the theory's
-                // `heuristic:` header is parsed when the theory is built.
-                Some(h) => Some(
-                    tamarin_theory::constraint::solver::goals::parse_heuristic_str_with_tactics(
-                        h,
-                        in_file,
-                        &typed.tactic,
-                    ),
-                ),
-                None if !typed.heuristic.is_empty() => Some(typed.heuristic.clone()),
-                None => None,
-            }
-            .map(|mut rankings| {
-                // Oracle paths resolve against the theory file's directory
-                // (HS `oraclePath = workDir </> relPath`, System.hs:573-574)
-                // — same prefixing the batch session applies
-                // (prove.rs `resolve_heuristic`); without it the dmn
-                // family's `heuristic: o "./oracle-…"` exec fails cwd-relative.
-                tamarin_theory::prove::prepend_theory_dir_to_oracle_paths(&mut rankings, in_file);
-                rankings
-            });
+            // There is no CLI `--heuristic` on the web path, so
+            // `resolve_heuristic` gets an empty `CliHeuristic` and its
+            // override branch never fires.
+            let heuristic = tamarin_theory::prove::resolve_heuristic(
+                &tamarin_theory::prove::CliHeuristic::default(),
+                lemma,
+                &typed.heuristic,
+                &typed.tactic,
+                in_file,
+            );
             lemma_settings.insert(
                 lname.clone(),
                 LemmaSearchSettings {
@@ -339,22 +319,9 @@ impl ProofState {
                 Ok(g) => g,
                 Err(_) => continue,
             };
-            // HS `getProofContext` / `lemmaSourceKind` (ClosedTheory.hs:97-138, see line 116,
-            // lib/theory/src/Lemma.hs:38-41): a `sources` lemma is proved under RAW sources;
-            // every other lemma under REFINED sources.  `mkSystem` builds the
-            // initial system with `pcSourceKind ctxt` (CloseRule.hs:167-176,
-            // see line 175), and
-            // the system's `sSourceKind` shows in the sequent as
+            // The system's `sSourceKind` shows in the sequent as
             // `allowed cases: raw|refined`.
-            let source_kind = if lemma
-                .attributes
-                .iter()
-                .any(|a| matches!(a, LemmaAttr::Sources))
-            {
-                SourceKind::RawSources
-            } else {
-                SourceKind::RefinedSources
-            };
+            let source_kind = tamarin_theory::prove::lemma_source_kind(lemma);
             let mut sys = formula_to_system(
                 restrictions_g.clone(),
                 source_kind,
@@ -865,10 +832,8 @@ fn write_applicable_methods(
     use tamarin_theory::pretty_hpj::{self as hpj, Doc};
     // The ranking used at this proof depth (HS `subProofSnippet`:
     // `ranking = useHeuristic heuristic (length proofPath)`,
-    // `Web/Theory.hs:606-608`).  Round-robin over the heuristic list
-    // exactly as `rank_goals_with_inner` (goals.rs) does, defaulting to
-    // `SmartRanking False` when no heuristic is configured.
-    let ranking = ranking_for_depth(ctx, depth);
+    // `Web/Theory.hs:606-608`).
+    let ranking = ranking_at_depth(Some(ctx), depth);
     // Match Haskell `rankProofMethods` (`ProofMethod.hs:519-534`):
     //   stoppingMethod = Finished <$> isFinished ctxt sys
     //   in execMethods $ maybe proofMethods ((:[]) . (,"")) stoppingMethod
@@ -1047,24 +1012,6 @@ fn write_autoprove_links(
          (S. <a class=\"internal-link characterization-all\" href=\"/thy/trace/{idx}/autoproveAll/characterize/0/proof/{l}{p}\">{fas}</a>)  for all lemmas ",
         ap = kw("autoprove"), fas = kw("for all solutions"),
     ));
-}
-
-/// The `GoalRanking` used at proof `depth`, mirroring HS `useHeuristic
-/// (Heuristic rankings) depth = rankings !! (depth mod n)`
-/// (ProofMethod.hs:580-589) — the same selection `rank_goals_with_inner`
-/// performs (goals.rs).  Defaults to `SmartRanking False`.
-fn ranking_for_depth(ctx: &ProofContext, depth: usize) -> GoalRanking {
-    ctx.heuristic
-        .as_ref()
-        .and_then(|h| {
-            let n = h.len();
-            if n == 0 {
-                None
-            } else {
-                Some(h[depth % n].clone())
-            }
-        })
-        .unwrap_or(GoalRanking::Smart(false))
 }
 
 /// HS `usesOracle` (lib/theory/src/Theory/Constraint/System.hs:536-537):

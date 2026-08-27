@@ -563,7 +563,7 @@ pub struct ProverSession {
 /// (CloseRule.hs:167-188, see line 175).  In RS `SourceKind`, `RawSources < RefinedSources`,
 /// matching HS's `RawSource < RefinedSource` Ord (System.hs:362-365), so it
 /// can be used directly as the `lemmaSourceKind lem <= kind` bound below.
-fn lemma_source_kind(lemma: &crate::theory::Lemma) -> SourceKind {
+pub fn lemma_source_kind(lemma: &crate::theory::Lemma) -> SourceKind {
     if lemma
         .attributes
         .iter()
@@ -734,7 +734,7 @@ pub struct PrecomputationStats {
 /// `{name}` tactic rankings resolved against `tactics`; the theory's header
 /// is already parsed.  Both have their oracle paths resolved against the
 /// theory dir.
-fn resolve_heuristic(
+pub fn resolve_heuristic(
     cli: &CliHeuristic,
     lemma: &crate::theory::Lemma,
     theory_heuristic: &[crate::constraint::solver::goals::GoalRanking],

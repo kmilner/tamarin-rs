@@ -465,19 +465,16 @@ fn sort_useful_goal_nr(ags: &mut [AnnotatedGoal]) {
     });
 }
 
-fn rank_goals_with_inner(
-    sys: &System,
+/// The ranking that governs proof `depth`: HS `useHeuristic (Heuristic
+/// rankings) i = rankings !! (i `mod` n)` (ProofMethod.hs:578-589),
+/// round-robin over the lemma's ranking list.  A context with no heuristic,
+/// or none at all, gives `SmartRanking False` — HS's `defaultHeuristic False
+/// = Heuristic [SmartRanking False]` (System.hs:526-528, see line 527).
+pub fn ranking_at_depth(
     ctx: Option<&crate::constraint::solver::context::ProofContext>,
     depth: usize,
-) -> Result<Vec<AnnotatedGoal>, OracleError> {
-    // Round-robin heuristic scheduling: `useHeuristic (Heuristic rankings) depth =
-    // rankings !! (depth mod n)` (ProofMethod.hs:578-589).
-    // When no context (or no heuristic) is supplied we default to
-    // `SmartRanking False` — exactly HS's
-    // `defaultHeuristic False = Heuristic [SmartRanking False]`
-    // (System.hs:526-528, see line 527).
-    let ranking = ctx
-        .and_then(|c| c.heuristic.as_ref())
+) -> GoalRanking {
+    ctx.and_then(|c| c.heuristic.as_ref())
         .and_then(|h| {
             let n = h.len();
             if n == 0 {
@@ -487,7 +484,15 @@ fn rank_goals_with_inner(
             }
         })
         .cloned()
-        .unwrap_or(GoalRanking::Smart(false));
+        .unwrap_or(GoalRanking::Smart(false))
+}
+
+fn rank_goals_with_inner(
+    sys: &System,
+    ctx: Option<&crate::constraint::solver::context::ProofContext>,
+    depth: usize,
+) -> Result<Vec<AnnotatedGoal>, OracleError> {
+    let ranking = ranking_at_depth(ctx, depth);
     match ranking {
         GoalRanking::Inj(use_loop_breakers) => Ok(inj_ranking(sys, ctx, use_loop_breakers)),
         GoalRanking::Smart(use_loop_breakers) => Ok(smart_ranking(sys, ctx, use_loop_breakers)),
