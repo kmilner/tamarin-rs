@@ -291,6 +291,11 @@ impl<R, P: Clone, S: Clone> TheoryItem<R, P, S> {
 // =============================================================================
 
 /// `Option` block — translation/proof-driver options set per theory.
+///
+/// HS `Option` (Items/OptionItem.hs:21-38) declares fourteen fields in another
+/// order and derives `Ord` over them.  Only equality is derived here, and it
+/// is order-insensitive, so an ordering for this struct has to be written out
+/// rather than derived.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Options {
     pub trans_progress: bool,
