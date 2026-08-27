@@ -458,7 +458,7 @@ pub(crate) fn compute_basic_graph_repr(sys: &System) -> GraphRepr {
     // sorting the filtered subset reproduces that.  `Ord` on the
     // `(NodeConc, NodePrem)` pair is exactly `Ord Goal`'s `Chain` arm, so
     // sorting the extracted pairs is the same order as sorting the goals.
-    let mut chains = sys.unsolved_chains();
+    let mut chains: Vec<_> = sys.unsolved_chains().collect();
     chains.sort();
     for (src, tgt) in chains {
         edges.push(GEdge::UnsolvedChain(src, tgt));

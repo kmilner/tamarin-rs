@@ -72,25 +72,6 @@ fn drop_entailed_ord_constraints(mut sys: RenderSystem) -> RenderSystem {
     sys
 }
 
-/// `(from, to)` node pairs of unsolved chain goals — mirror of
-/// `unsolvedChains` (System.hs:1601-1605) projected to node ids via
-/// `nodeConcNode *** nodePremNode`.
-fn unsolved_chain_pairs(sys: &System) -> Vec<(NodeId, NodeId)> {
-    sys.goals
-        .iter()
-        .filter_map(|(g, st)| {
-            if st.solved {
-                return None;
-            }
-            if let Goal::Chain(src, tgt) = g {
-                Some((src.0, tgt.0))
-            } else {
-                None
-            }
-        })
-        .collect()
-}
-
 /// Adjacency for `rawEdgeRel sys = edges ++ unsolvedChains sys`
 /// (System.hs:1613-1616).
 fn build_raw_edge_adjacency(sys: &System) -> BTreeMap<NodeId, Vec<NodeId>> {
@@ -98,8 +79,10 @@ fn build_raw_edge_adjacency(sys: &System) -> BTreeMap<NodeId, Vec<NodeId>> {
     for e in &sys.edges {
         adj.entry(e.src.0).or_default().push(e.tgt.0);
     }
-    for (from, to) in unsolved_chain_pairs(sys) {
-        adj.entry(from).or_default().push(to);
+    // `unsolvedChains` (System.hs:1601-1605) projected to node ids via
+    // `nodeConcNode *** nodePremNode`.
+    for (from, to) in sys.unsolved_chains() {
+        adj.entry(from.0).or_default().push(to.0);
     }
     adj
 }
@@ -155,16 +138,8 @@ fn try_hide_node_id(v: &NodeId, sys: RenderSystem) -> RenderSystem {
 }
 
 fn mentioned_in_unsolved_chains(v: &NodeId, sys: &System) -> bool {
-    sys.goals.iter().any(|(g, st)| {
-        if st.solved {
-            return false;
-        }
-        if let Goal::Chain(src, tgt) = g {
-            &src.0 == v || &tgt.0 == v
-        } else {
-            false
-        }
-    })
+    sys.unsolved_chains()
+        .any(|(src, tgt)| &src.0 == v || &tgt.0 == v)
 }
 
 fn mentioned_in_formulas(v: &NodeId, formulas: &[std::sync::Arc<crate::guarded::Guarded>]) -> bool {
@@ -180,19 +155,9 @@ fn mentioned_in_formulas(v: &NodeId, formulas: &[std::sync::Arc<crate::guarded::
 fn try_hide_action(v: &NodeId, sys: RenderSystem) -> Result<RenderSystem, RenderSystem> {
     // Collect KU action atoms at v.
     let ku_actions: Vec<(NodeId, crate::fact::LNFact)> = sys
-        .goals
-        .iter()
-        .filter_map(|(g, st)| {
-            if st.solved {
-                return None;
-            }
-            if let Goal::Action(n, fa) = g {
-                if n == v && matches!(fa.tag, FactTag::Ku) && !fa.terms.is_empty() {
-                    return Some((*n, fa.clone()));
-                }
-            }
-            None
-        })
+        .unsolved_action_atoms()
+        .filter(|(n, fa)| n == v && matches!(fa.tag, FactTag::Ku) && !fa.terms.is_empty())
+        .map(|(n, fa)| (n, fa.clone()))
         .collect();
     if ku_actions.is_empty() {
         return Err(sys);
@@ -206,16 +171,10 @@ fn try_hide_action(v: &NodeId, sys: RenderSystem) -> Result<RenderSystem, Render
     }
     // Other restrictions: no standard action atoms mentioning v;
     // no last-atom = v; no edges referencing v.
-    if sys.goals.iter().any(|(g, st)| {
-        if st.solved {
-            return false;
-        }
-        if let Goal::Action(n, fa) = g {
-            n == v && !matches!(fa.tag, FactTag::Ku)
-        } else {
-            false
-        }
-    }) {
+    if sys
+        .unsolved_action_atoms()
+        .any(|(n, fa)| n == *v && !matches!(fa.tag, FactTag::Ku))
+    {
         return Err(sys);
     }
     if sys.last_atom.as_ref() == Some(v) {
@@ -335,16 +294,7 @@ fn try_hide_rule(
     {
         return Err(sys);
     }
-    if sys.goals.iter().any(|(g, st)| {
-        if st.solved {
-            return false;
-        }
-        if let Goal::Action(n, _) = g {
-            n == v
-        } else {
-            false
-        }
-    }) {
+    if sys.unsolved_action_atoms().any(|(n, _)| n == *v) {
         return Err(sys);
     }
     // Apply.
@@ -434,7 +384,7 @@ fn transitive_reduction(sys: RenderSystem, total_red: bool) -> RenderSystem {
     for e in &sys.edges {
         old_lesses.push((e.src.0, e.tgt.0));
     }
-    old_lesses.extend(unsolved_chain_pairs(&sys));
+    old_lesses.extend(sys.unsolved_chains().map(|(from, to)| (from.0, to.0)));
     // If there's a cycle in the combined graph we bail, matching Haskell's
     // `Dag.cyclic` guard (Simplification.hs:61-74).
     if tamarin_utils::dag::cyclic(&old_lesses) {

@@ -128,17 +128,12 @@ pub fn contradictions(_ctxt: &ProofContext, sys: &System) -> Vec<Contradiction> 
     // relation for cycle detection. Without this, RS misses cycles HS
     // catches when the cycle goes through an open chain. Root cause of
     // StatVerif KU(pcs) saturate over-enumeration.
-    for (g, st) in sys.goals.iter() {
-        if st.solved {
-            continue;
-        }
-        if let crate::constraint::constraints::Goal::Chain(c, p) = g {
-            all_less.push(LessAtom {
-                smaller: resolve(&c.0),
-                larger: resolve(&p.0),
-                reason: crate::constraint::constraints::Reason::Adversary,
-            });
-        }
+    for (c, p) in sys.unsolved_chains() {
+        all_less.push(LessAtom {
+            smaller: resolve(&c.0),
+            larger: resolve(&p.0),
+            reason: crate::constraint::constraints::Reason::Adversary,
+        });
     }
     if cyclic(&all_less) {
         out.push(Contradiction::Cyclic);
@@ -466,14 +461,9 @@ fn has_impossible_chain<'a>(
     sys: &'a System,
     node_rules: &std::cell::OnceCell<NodeRuleMap<'a>>,
 ) -> bool {
-    use crate::constraint::constraints::Goal;
     use crate::fact::FactTag;
 
-    for (g, st) in sys.goals.iter() {
-        if st.solved {
-            continue;
-        }
-        let Goal::Chain(c, p) = g else { continue };
+    for (c, p) in sys.unsolved_chains() {
         // First unsolved chain goal forces the shared map; both lookups
         // take the FIRST rule stored for an id, exactly as the
         // `nodes.iter().find` scans they replace did.
@@ -1013,7 +1003,6 @@ fn has_forbidden_chain<'a>(
     ab_adj: &crate::constraint::system::PrebuiltAdj,
     node_rules: &std::cell::OnceCell<NodeRuleMap<'a>>,
 ) -> bool {
-    use crate::constraint::constraints::Goal;
     use crate::fact::FactTag;
     use tamarin_term::lterm::is_msg_var;
     use tamarin_term::term::Term;
@@ -1091,11 +1080,7 @@ fn has_forbidden_chain<'a>(
     // The `alwaysBefore` adjacency (`ab_adj`) is built once by the caller
     // (`contradictions`) and shared across all ordering checks; queried here
     // via `always_before_with` in the chain/node/goal loops below.
-    for (g, st) in sys.goals.iter() {
-        if st.solved {
-            continue;
-        }
-        let Goal::Chain(c, p) = g else { continue };
+    for (c, p) in sys.unsolved_chains() {
         // Look up the chain-conc and chain-prem rules.  The shared map
         // keeps the FIRST rule stored for an id, exactly as the
         // `nodes.iter().find` scans it replaces did.
@@ -1193,11 +1178,7 @@ fn has_forbidden_chain<'a>(
             }
         }
         // Then walk unsolved ActionG goals (HS's `unsolvedActionAtoms`):
-        for (g, gst) in sys.goals.iter() {
-            if gst.solved {
-                continue;
-            }
-            let Goal::Action(id, fa) = g else { continue };
+        for (id, fa) in sys.unsolved_action_atoms() {
             if !matches!(fa.tag, FactTag::Ku) {
                 continue;
             }
@@ -1208,10 +1189,10 @@ fn has_forbidden_chain<'a>(
             if !candidate_terms.contains(t_ku) {
                 continue;
             }
-            if id == &c.0 {
+            if id == c.0 {
                 continue;
             }
-            if sys.always_before_with(ab_adj, id, &c.0) {
+            if sys.always_before_with(ab_adj, &id, &c.0) {
                 return true;
             }
         }
@@ -1298,15 +1279,10 @@ fn has_forbidden_exp(sys: &System, ab_adj: &crate::constraint::system::PrebuiltA
     // `rActs` lists of each node.  Returns (NodeId, fact, term).
     // For "knownEarlier" we only need (NodeId, term).
     let mut all_ku: Vec<(NodeId, LNTerm)> = Vec::new();
-    for (g, st) in sys.goals.iter() {
-        if st.solved {
-            continue;
-        }
-        if let crate::constraint::constraints::Goal::Action(i, fa) = g {
-            if matches!(fa.tag, FactTag::Ku) {
-                if let Some(m) = fa.terms.first() {
-                    all_ku.push((*i, m.clone()));
-                }
+    for (i, fa) in sys.unsolved_action_atoms() {
+        if matches!(fa.tag, FactTag::Ku) {
+            if let Some(m) = fa.terms.first() {
+                all_ku.push((i, m.clone()));
             }
         }
     }
@@ -2261,13 +2237,8 @@ fn node_after_last(sys: &System, adj: &BTreeMap<NodeId, Vec<NodeId>>) -> Vec<Con
         in_trace.insert(*id);
     }
     in_trace.insert(last); // isLast is true for `last`
-    for (g, st) in sys.goals.iter() {
-        if st.solved {
-            continue;
-        }
-        if let crate::constraint::constraints::Goal::Action(id, _) = g {
-            in_trace.insert(*id);
-        }
+    for (id, _) in sys.unsolved_action_atoms() {
+        in_trace.insert(id);
     }
     // Strictly-reachable set from `last` (seed removed) via the shared routine.
     let visited = crate::constraint::solver::goals::reachable_set_adj(adj, &last, false);

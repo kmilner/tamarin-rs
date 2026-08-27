@@ -1231,24 +1231,33 @@ impl System {
     ///
     /// ORDER: `goals` INSERTION order, where HS walks `M.toList sGoals`
     /// (ascending `Goal`).  A caller that needs the HS sequence sorts the
-    /// result — see `graph::repr::compute_basic_graph_repr`.
+    /// collected pairs — see `graph::repr::compute_basic_graph_repr`.
     pub fn unsolved_chains(
         &self,
-    ) -> Vec<(
-        crate::constraint::constraints::NodeConc,
-        crate::constraint::constraints::NodePrem,
-    )> {
+    ) -> impl Iterator<
+        Item = (
+            crate::constraint::constraints::NodeConc,
+            crate::constraint::constraints::NodePrem,
+        ),
+    > + '_ {
         use crate::constraint::constraints::Goal;
-        let mut out = Vec::new();
-        for (g, status) in self.goals.iter() {
-            if status.solved {
-                continue;
-            }
-            if let Goal::Chain(from, to) = g {
-                out.push((*from, *to));
-            }
-        }
-        out
+        self.goals.iter().filter_map(|(g, status)| match g {
+            Goal::Chain(from, to) if !status.solved => Some((*from, *to)),
+            _ => None,
+        })
+    }
+
+    /// All unsolved action atoms, as `(NodeId, &LNFact)`. Port of HS
+    /// `unsolvedActionAtoms` (System.hs:1567-1571).  Same insertion-order
+    /// caveat as [`unsolved_chains`](Self::unsolved_chains).
+    pub fn unsolved_action_atoms(
+        &self,
+    ) -> impl Iterator<Item = (NodeId, &crate::fact::LNFact)> + '_ {
+        use crate::constraint::constraints::Goal;
+        self.goals.iter().filter_map(|(g, status)| match g {
+            Goal::Action(i, fa) if !status.solved => Some((*i, fa)),
+            _ => None,
+        })
     }
 
     /// All unsolved premise goals, as `(NodePrem, LNFact)`. Port of HS
@@ -1668,13 +1677,8 @@ impl System {
         }
         // HS-faithful `unsolvedChains` contribution to rawEdgeRel
         // (`System.hs`).
-        for (g, st) in self.goals.iter() {
-            if st.solved {
-                continue;
-            }
-            if let crate::constraint::constraints::Goal::Chain(c, p) = g {
-                adj.entry(c.0).or_default().push(p.0);
-            }
+        for (c, p) in self.unsolved_chains() {
+            adj.entry(c.0).or_default().push(p.0);
         }
         PrebuiltAdj { adj }
     }

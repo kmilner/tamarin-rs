@@ -273,11 +273,7 @@ impl IntegerParameters {
 /// :: Source -> [Int]` at Sources.hs:87-89, which maps over a Source's
 /// cases.)
 pub fn unsolved_chain_constraints(sys: &System) -> usize {
-    use crate::constraint::constraints::Goal;
-    sys.goals
-        .iter()
-        .filter(|(g, status)| !status.solved && matches!(g, Goal::Chain(_, _)))
-        .count()
+    sys.unsolved_chains().count()
 }
 
 /// `Source` — one precomputed case distinction. The Haskell version
@@ -2005,11 +2001,7 @@ fn run_solve_all_safe_goals_disj_with_progress(
             .cloned()
             .collect();
         // Unfiltered chains view — Haskell's `unsolvedChains`.
-        let any_unsolved_chain = red
-            .sys
-            .goals
-            .iter()
-            .any(|(g, st)| !st.solved && matches!(g, Goal::Chain(_, _)));
+        let any_unsolved_chain = red.sys.unsolved_chains().next().is_some();
         let any_chain_goal = goals.iter().any(|(g, _)| matches!(g, Goal::Chain(_, _)));
         let split_allowed = !any_chain_goal && any_unsolved_chain;
         // Haskell parity (Sources.hs:169-170, 159).
