@@ -4523,19 +4523,14 @@ impl<'a> Parser<'a> {
         }
         if self.try_kw("if") {
             // Try equality: t = t else formula
-            let cond_save = self.save();
-            let cond = match (|| -> Result<Condition, ParseError> {
-                let t1 = self.term(false)?;
-                self.require_punct("=")?;
-                let t2 = self.term(false)?;
+            let cond = match self.attempt(|p| {
+                let t1 = p.term(false)?;
+                p.require_punct("=")?;
+                let t2 = p.term(false)?;
                 Ok(Condition::Eq(t1, t2))
-            })() {
-                Ok(c) => c,
-                Err(_) => {
-                    self.restore(cond_save);
-                    let phi = self.formula()?;
-                    Condition::Formula(phi)
-                }
+            }) {
+                Some(c) => c,
+                None => Condition::Formula(self.formula()?),
             };
             self.require_kw("then")?;
             let p = self.process()?;
@@ -4567,13 +4562,9 @@ impl<'a> Parser<'a> {
                 }
                 // Try to parse one more binding; backtrack if it doesn't parse
                 // (matching `many1`'s greedy-with-backtrack behaviour).
-                let probe = self.save();
-                match self.let_definition() {
-                    Ok(b) => bindings.push(b),
-                    Err(_) => {
-                        self.restore(probe);
-                        break;
-                    }
+                match self.attempt(|p| p.let_definition()) {
+                    Some(b) => bindings.push(b),
+                    None => break,
                 }
             }
             self.require_kw("in")?;
