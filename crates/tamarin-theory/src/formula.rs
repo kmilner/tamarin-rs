@@ -392,6 +392,21 @@ fn map_atoms_at<S, S2, H, C, C2, V, V2>(
     }
 }
 
+/// [`map_atoms`] over [`map_atom`]: rebuild the formula with `f` applied to
+/// every term of every atom, at the atom's De Bruijn depth.  This is the shape
+/// HS writes as `mapAtoms (\i a -> fmap (g i) a)`
+/// (Theory/Model/Formula.hs:267-270 over the `Functor (ProtoAtom s)` instance,
+/// Atom.hs:121-127) in each of the formula rewrites below.
+fn map_formula_terms<S, H, C, V>(
+    fm: ProtoFormula<S, H, C, V>,
+    f: &mut dyn FnMut(u64, &VTerm<C, BVar<V>>) -> VTerm<C, BVar<V>>,
+) -> ProtoFormula<S, H, C, V>
+where
+    S: MapSugar<VTerm<C, BVar<V>>, VTerm<C, BVar<V>>, Mapped = S>,
+{
+    map_atoms(fm, &mut |i, a| map_atom(a, &mut |t| f(i, t)))
+}
+
 /// HS `quantify x` (Theory/Model/Formula.hs:347-352): turn the free variable `x` into a
 /// bound one, using the De Bruijn index of the binder that is about to be put
 /// in front of the formula.
@@ -404,17 +419,14 @@ where
     C: Ord + Clone,
     V: Ord + Clone,
 {
-    map_atoms(fm, &mut |i, a| {
-        // `mapLits (fmap (>>= subst i))` (Theory/Model/Formula.hs:349-352): the
-        // free occurrences of `x` become the index `i`; constants and
-        // already-bound indices are untouched, and the `f_app` rebuild
-        // inside `map_lits` re-sorts AC arguments (`Bound` sorts before
-        // `Free`).
-        map_atom(a, &mut |t| {
-            map_lits(t, &mut |l| match l {
-                Lit::Var(BVar::Free(v)) if v == x => Lit::Var(BVar::Bound(i)),
-                other => other.clone(),
-            })
+    // `mapLits (fmap (>>= subst i))` (Theory/Model/Formula.hs:349-352): the
+    // free occurrences of `x` become the index `i`; constants and already-bound
+    // indices are untouched, and the `f_app` rebuild inside `map_lits` re-sorts
+    // AC arguments (`Bound` sorts before `Free`).
+    map_formula_terms(fm, &mut |i, t| {
+        map_lits(t, &mut |l| match l {
+            Lit::Var(BVar::Free(v)) if v == x => Lit::Var(BVar::Bound(i)),
+            other => other.clone(),
         })
     })
 }
@@ -429,9 +441,7 @@ pub fn apply_macro_in_formula(macros: &[LNMacro], fm: LNFormula) -> LNFormula {
         return fm;
     }
     let bn = ln_macros_to_bn_macros(macros);
-    map_atoms(fm, &mut |_, a| {
-        map_atom(a, &mut |t| apply_macros(&bn, t.clone()))
-    })
+    map_formula_terms(fm, &mut |_, t| apply_macros(&bn, t.clone()))
 }
 
 /// HS `exists hint x` (Theory/Model/Formula.hs:359-360): `Qua Ex hint . quantify x`.
@@ -477,7 +487,7 @@ where
     C: Ord + Clone,
     V: Ord + Clone,
 {
-    map_atoms(fm, &mut |_, a| map_atom(a, &mut |t| apply_bvterm(s, t)))
+    map_formula_terms(fm, &mut |_, t| apply_bvterm(s, t))
 }
 
 /// The same `Apply s (ProtoFormula syn h c v)` instance
@@ -496,12 +506,10 @@ where
     C: Ord + Clone,
     V: Ord + Clone,
 {
-    map_atoms(fm, &mut |_, a| {
-        map_atom(a, &mut |t| {
-            map_lits(t, &mut |l| match l {
-                Lit::Con(c) => Lit::Con(c.clone()),
-                Lit::Var(v) => Lit::Var(apply_bvar(v, &mut *rename)),
-            })
+    map_formula_terms(fm, &mut |_, t| {
+        map_lits(t, &mut |l| match l {
+            Lit::Con(c) => Lit::Con(c.clone()),
+            Lit::Var(v) => Lit::Var(apply_bvar(v, &mut *rename)),
         })
     })
 }
@@ -520,12 +528,10 @@ where
     C: Ord + Clone,
     V: Ord + Clone,
 {
-    map_atoms(fm, &mut |i, a| {
-        map_atom(a, &mut |t| {
-            map_lits(t, &mut |l| match l {
-                Lit::Var(BVar::Bound(j)) if *j >= i => Lit::Var(BVar::Bound(j + n)),
-                other => other.clone(),
-            })
+    map_formula_terms(fm, &mut |i, t| {
+        map_lits(t, &mut |l| match l {
+            Lit::Var(BVar::Bound(j)) if *j >= i => Lit::Var(BVar::Bound(j + n)),
+            other => other.clone(),
         })
     })
 }
