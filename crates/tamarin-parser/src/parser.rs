@@ -146,6 +146,18 @@ pub struct ParseError {
 }
 
 impl ParseError {
+    /// A parsec failure carrying `messages` at `pos`.
+    fn at(pos: Pos, messages: Vec<Message>) -> ParseError {
+        ParseError {
+            line: pos.line,
+            col: pos.col,
+            offset: pos.offset,
+            source: String::new(),
+            messages,
+            ghc_error: None,
+        }
+    }
+
     /// Attach the source-file name parsec prints in the header.  Each surface
     /// injects the path it knows (batch: the CLI arg; server eager-load: the
     /// on-disk path; web upload: the uploaded filename) — the same value HS
@@ -1095,15 +1107,7 @@ impl<'a> Parser<'a> {
     /// `unexpected …`/`expecting …` pair.  Used by the many hand-coded error
     /// sites that do not (yet) track a parsec-style expected set.
     fn err(&self, msg: impl Into<String>) -> ParseError {
-        let pos = self.lx.pos();
-        ParseError {
-            line: pos.line,
-            col: pos.col,
-            offset: pos.offset,
-            source: String::new(),
-            messages: vec![Message::Message(msg.into())],
-            ghc_error: None,
-        }
+        ParseError::at(self.lx.pos(), vec![Message::Message(msg.into())])
     }
 
     /// The `SysUnExpect` token parsec's Char-stream primitives fill in at the
@@ -1133,14 +1137,7 @@ impl<'a> Parser<'a> {
         for e in expects {
             messages.push(Message::Expect((*e).to_string()));
         }
-        ParseError {
-            line: pos.line,
-            col: pos.col,
-            offset: pos.offset,
-            source: String::new(),
-            messages,
-            ghc_error: None,
-        }
+        ParseError::at(pos, messages)
     }
 
     /// The error parsec's `fail` raises immediately after a lexeme.
@@ -1155,17 +1152,13 @@ impl<'a> Parser<'a> {
         self.skip_ws();
         let pos = self.lx.pos();
         let unexpected = self.unexpected_token();
-        ParseError {
-            line: pos.line,
-            col: pos.col,
-            offset: pos.offset,
-            source: String::new(),
-            messages: vec![
+        ParseError::at(
+            pos,
+            vec![
                 Message::SysUnExpect(unexpected),
                 Message::Message(msg.into()),
             ],
-            ghc_error: None,
-        }
+        )
     }
 
     /// The error value for a GHC `error` raised inside a parser action (see
@@ -1173,14 +1166,9 @@ impl<'a> Parser<'a> {
     /// HS discards it, since the exception bypasses parsec's error machinery
     /// altogether, and so does every rendering of this error.
     fn err_ghc(&self, message: String, call_site: String) -> ParseError {
-        let pos = self.lx.pos();
         ParseError {
-            line: pos.line,
-            col: pos.col,
-            offset: pos.offset,
-            source: String::new(),
-            messages: Vec::new(),
             ghc_error: Some(GhcError { message, call_site }),
+            ..ParseError::at(self.lx.pos(), Vec::new())
         }
     }
 
@@ -1302,14 +1290,7 @@ impl<'a> Parser<'a> {
                 .iter()
                 .map(|l| Message::Expect((*l).to_string())),
         );
-        ParseError {
-            line: pos.line,
-            col: pos.col,
-            offset: pos.offset,
-            source: String::new(),
-            messages,
-            ghc_error: None,
-        }
+        ParseError::at(pos, messages)
     }
 
     /// The parse error parsec produces at a top-level *item* position when no
@@ -1343,18 +1324,14 @@ impl<'a> Parser<'a> {
         }
         if saw_letter {
             let pos = self.lx.pos();
-            return ParseError {
-                line: pos.line,
-                col: pos.col,
-                offset: pos.offset,
-                source: String::new(),
-                messages: vec![
+            return ParseError::at(
+                pos,
+                vec![
                     Message::SysUnExpect(self.unexpected_token()),
                     Message::Expect("letter".to_string()),
                     Message::Expect("\"{*\"".to_string()),
                 ],
-                ghc_error: None,
-            };
+            );
         }
         self.restore(start);
         let mut e = self.err_expect(TOP_LEVEL_ITEM_EXPECTS);
@@ -1543,17 +1520,13 @@ impl<'a> Parser<'a> {
         if !is_reserved_name(&word) {
             return None;
         }
-        Some(ParseError {
-            line: pos.line,
-            col: pos.col,
-            offset: pos.offset,
-            source: String::new(),
-            messages: vec![
+        Some(ParseError::at(
+            pos,
+            vec![
                 Message::UnExpect(format!("reserved word \"{word}\"")),
                 Message::Expect("letter or digit".to_string()),
             ],
-            ghc_error: None,
-        })
+        ))
     }
 
     fn string_literal(&mut self) -> Result<String, ParseError> {
@@ -3323,14 +3296,7 @@ impl<'a> Parser<'a> {
         ] {
             messages.push(Message::Expect(l.to_string()));
         }
-        ParseError {
-            line: pos.line,
-            col: pos.col,
-            offset: pos.offset,
-            source: String::new(),
-            messages,
-            ghc_error: None,
-        }
+        ParseError::at(pos, messages)
     }
 
     // -------------------- Rule --------------------
@@ -5133,14 +5099,7 @@ impl<'a> Parser<'a> {
                 messages.push(Message::Expect("\".\"".to_string()));
             }
             messages.push(Message::Expect("\"=\"".to_string()));
-            return ParseError {
-                line: pos.line,
-                col: pos.col,
-                offset: pos.offset,
-                source: String::new(),
-                messages,
-                ghc_error: None,
-            };
+            return ParseError::at(pos, messages);
         }
         self.restore(after_lhs);
         let mut labels: Vec<&str> = vec!["subterm predicate"];
@@ -5739,14 +5698,7 @@ impl<'a> Parser<'a> {
             if pos.offset == after_word.offset {
                 messages.push(Message::UnExpect("reserved word \"diff\"".to_string()));
             }
-            return Err(ParseError {
-                line: pos.line,
-                col: pos.col,
-                offset: pos.offset,
-                source: String::new(),
-                messages,
-                ghc_error: None,
-            });
+            return Err(ParseError::at(pos, messages));
         }
         // Identifier — could be: function application f(...), algebraic
         // application f{a}b, sort-suffixed var x:msg, or a bare variable /
