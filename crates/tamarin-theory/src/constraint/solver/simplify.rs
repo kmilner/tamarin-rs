@@ -18,61 +18,6 @@
 use crate::constraint::solver::reduction::{ChangeIndicator, Reduction};
 use crate::tools::equation_store::LNSubst;
 
-/// Labeled variant — emits a `[SIMP_CONTRA]` trace under
-/// `TAM_RS_TRACE_SIMP_CONTRA=1` so per-pass contradiction firings can be
-/// attributed against HS's `[CONTRA-FIRE]` histogram.
-fn mark_contradictory_labeled(red: &mut Reduction, pass: &'static str) {
-    if tamarin_utils::env_gate!("TAM_RS_TRACE_SIMP_CONTRA") {
-        eprintln!(
-            "[SIMP_CONTRA] path={} pass={}",
-            crate::constraint::solver::trace::case_path_string(),
-            pass
-        );
-    }
-    red.mark_contradictory();
-}
-
-/// `TAM_RS_TRACE_SIMPLIFY=1` — per-subpass enter/exit traces matching
-/// HS's `tracePassPair` format.  Lets us count contradiction-firing per
-/// pass via `delta = enter - exit` (an exit MISSING means the pass
-/// mzero'd via contradictoryIfT in HS, or marked contradictory in Rust).
-// Generic over the pass return type `R` (`ChangeIndicator` for the plain
-// passes, `Result<ChangeIndicator, T>` for the fan-out variant): the
-// dead-state bookkeeping never inspects the returned value, so the same
-// tracing shell serves both.
-fn trace_subpass<R, F: FnOnce(&mut Reduction) -> R>(
-    label: &'static str,
-    red: &mut Reduction,
-    f: F,
-) -> R {
-    // Tracing off (the default): skip the two `is_dead_for_trace` scans
-    // entirely — they are only observed through the `&& on` guard below.
-    if !tamarin_utils::env_gate!("TAM_RS_TRACE_SIMPLIFY") {
-        return f(red);
-    }
-    eprintln!("[SUBPASS] enter {}", label);
-    let was_dead_before = is_dead_for_trace(red);
-    let r = f(red);
-    let dead_after = is_dead_for_trace(red);
-    // Mirror HS's `tracePassPair` semantics: exit is only emitted if the
-    // monadic action ran to completion WITHOUT mzero'ing.  In Rust,
-    // mark_contradictory is the closest analog — if the pass marked
-    // contradictory (and wasn't already), it "mzero'd" mid-pass.
-    if was_dead_before || !dead_after {
-        eprintln!("[SUBPASS] exit  {}", label);
-    }
-    r
-}
-
-fn is_dead_for_trace(red: &Reduction) -> bool {
-    red.sys.eq_store.is_false()
-        || red
-            .sys
-            .formulas
-            .iter()
-            .any(|f| matches!(f.as_ref(), crate::guarded::Guarded::Disj(v) if v.is_empty()))
-}
-
 /// `simplifySystem` — run all non-case-splitting CR-rules to a fixpoint.
 ///
 /// HS-faithful (Simplify.hs:73-77): the loop terminates ONLY when a full
@@ -88,11 +33,7 @@ pub fn simplify_system(red: &mut Reduction) {
         // `simp_iteration_pre_unique_actions` /
         // `simp_iteration_post_unique_actions` for the documented order.
         let mut c = simp_iteration_pre_unique_actions(r);
-        c = c.or(trace_subpass(
-            "solveUniqueActions",
-            r,
-            solve_unique_actions_pass,
-        ));
+        c = c.or(solve_unique_actions_pass(r));
         c = c.or(simp_iteration_post_unique_actions(r));
         c
     });
@@ -130,31 +71,12 @@ pub fn simplify_system(red: &mut Reduction) {
 /// `enforceNodeUniqueness` returns (c1, c2, c3) = (fresh-DG4, KD-N5↓,
 /// KU-N5↑), here the fresh/kd/ku passes.
 fn simp_iteration_pre_unique_actions(r: &mut Reduction) -> ChangeIndicator {
-    trace_subpass("substSystem", r, |r| {
-        r.subst_system();
-        ChangeIndicator::Unchanged
-    });
+    r.subst_system();
     let mut c = ChangeIndicator::Unchanged;
-    c = c.or(trace_subpass(
-        "enforceFreshNodeUniqueness",
-        r,
-        enforce_fresh_node_uniqueness_pass,
-    ));
-    c = c.or(trace_subpass(
-        "enforceKdFactUniqueness",
-        r,
-        enforce_kd_fact_uniqueness_pass,
-    ));
-    c = c.or(trace_subpass(
-        "enforceKuActionUniqueness",
-        r,
-        enforce_ku_action_uniqueness_pass,
-    ));
-    c = c.or(trace_subpass(
-        "enforceEdgeUniqueness",
-        r,
-        enforce_edge_uniqueness_pass,
-    ));
+    c = c.or(enforce_fresh_node_uniqueness_pass(r));
+    c = c.or(enforce_kd_fact_uniqueness_pass(r));
+    c = c.or(enforce_ku_action_uniqueness_pass(r));
+    c = c.or(enforce_edge_uniqueness_pass(r));
     c
 }
 
@@ -162,43 +84,15 @@ fn simp_iteration_pre_unique_actions(r: &mut Reduction) -> ChangeIndicator {
 /// between `simplify_system` and `simplify_system_fan_out`.
 fn simp_iteration_post_unique_actions(r: &mut Reduction) -> ChangeIndicator {
     let mut c = ChangeIndicator::Unchanged;
-    c = c.or(trace_subpass("reduceFormulas", r, reduce_formulas_pass));
-    c = c.or(trace_subpass(
-        "evalFormulaAtoms",
-        r,
-        eval_formula_atoms_pass,
-    ));
-    c = c.or(trace_subpass(
-        "insertImpliedFormulas",
-        r,
-        insert_implied_formulas_pass,
-    ));
-    c = c.or(trace_subpass(
-        "enforceFreshOrdering",
-        r,
-        enforce_fresh_ordering_pass,
-    ));
-    c = c.or(trace_subpass(
-        "propagateSubtermObvious",
-        r,
-        propagate_subterm_obvious,
-    ));
-    c = c.or(trace_subpass(
-        "simpInjectiveFactEqMon",
-        r,
-        simp_injective_fact_eq_mon_pass,
-    ));
-    c = c.or(trace_subpass("dedupeFormulas", r, dedupe_formulas_pass));
-    c = c.or(trace_subpass(
-        "dropTriviallyTrueFormulas",
-        r,
-        drop_trivially_true_formulas_pass,
-    ));
-    c = c.or(trace_subpass(
-        "normaliseLessAtoms",
-        r,
-        normalise_less_atoms_pass,
-    ));
+    c = c.or(reduce_formulas_pass(r));
+    c = c.or(eval_formula_atoms_pass(r));
+    c = c.or(insert_implied_formulas_pass(r));
+    c = c.or(enforce_fresh_ordering_pass(r));
+    c = c.or(propagate_subterm_obvious(r));
+    c = c.or(simp_injective_fact_eq_mon_pass(r));
+    c = c.or(dedupe_formulas_pass(r));
+    c = c.or(drop_trivially_true_formulas_pass(r));
+    c = c.or(normalise_less_atoms_pass(r));
     c
 }
 
@@ -306,7 +200,7 @@ fn simplify_system_fan_out_inner(red: &mut Reduction) -> Vec<crate::constraint::
             return fan_out_on_pending_eq_arms(red, ctx);
         }
         // solveUniqueActions — may fan out.
-        match trace_subpass("solveUniqueActions", red, solve_unique_actions_pass_fan_out) {
+        match solve_unique_actions_pass_fan_out(red) {
             Ok(_c) => { /* no fan-out, continue */ }
             Err(case_systems) => {
                 // FAN-OUT: per HS, each case continues independently
@@ -314,9 +208,6 @@ fn simplify_system_fan_out_inner(red: &mut Reduction) -> Vec<crate::constraint::
                 // Recursively run `simplify_system_with_fanout` per
                 // case; each call rebuilds a fresh Reduction with its
                 // own FreshT counter (`bounds_max(sys)`).
-                if tamarin_utils::env_gate!("TAM_RS_DBG_SUA") {
-                    eprintln!("[SSFO] sua fanout -> {} case systems", case_systems.len());
-                }
                 let mut out: Vec<crate::constraint::system::System> = Vec::new();
                 for (case_sys, case_seed) in case_systems {
                     if case_sys.eq_store.is_false() {
@@ -371,9 +262,6 @@ fn fan_out_on_pending_eq_arms(
     // the fork point's counter (HS's DisjT copies the FreshT state).
     let fork_seed = red.maude.fresh_counter_peek();
     let pending = std::mem::take(&mut red.pending_eq_arms);
-    if tamarin_utils::env_gate!("TAM_RS_DBG_SUA") {
-        eprintln!("[SSFO] eq-arm fanout -> {} arms", pending.len() + 1);
-    }
     let arm0_sys = std::mem::replace(&mut red.sys, crate::constraint::system::System::empty());
     let mut all_arm_systems: Vec<crate::constraint::system::System> =
         Vec::with_capacity(1 + pending.len());
@@ -2533,7 +2421,7 @@ fn enforce_fresh_node_uniqueness_pass(red: &mut Reduction) -> ChangeIndicator {
         changed = changed.or(ChangeIndicator::Changed);
     }
     if hit_contra {
-        mark_contradictory_labeled(red, "enforce_fresh_node_uniqueness");
+        red.mark_contradictory();
         changed = ChangeIndicator::Changed;
     }
     changed
@@ -2674,7 +2562,7 @@ fn enforce_ku_action_uniqueness_pass(red: &mut Reduction) -> ChangeIndicator {
         }
     }
     if hit_contra {
-        mark_contradictory_labeled(red, "enforce_ku_action_uniqueness");
+        red.mark_contradictory();
         changed = ChangeIndicator::Changed;
     }
 
@@ -2699,8 +2587,6 @@ fn enforce_ku_action_uniqueness_pass(red: &mut Reduction) -> ChangeIndicator {
 /// resolve it in-place during simplify.  Removes a level of
 /// case-fork per unique action across the entire proof.
 fn solve_unique_actions_pass(red: &mut Reduction) -> ChangeIndicator {
-    use crate::constraint::constraints::Goal;
-
     // Snapshot the unsolved unique Action goals up-front (sorted in
     // Haskell `Goal`-Ord); calling solve_action_goal mutates the goal
     // list.  Stop_unique (Minimal_Loop) hits a spurious Cyclic if
@@ -2729,21 +2615,11 @@ fn solve_unique_actions_pass(red: &mut Reduction) -> ChangeIndicator {
         // surface the Contradictory by injecting gfalse so the next
         // contradictions check picks it up (`FormulasFalse`).
         let outcome = red.solve_action_goal(&i, &fa);
-        if tamarin_utils::env_gate!("TAM_RS_DBG_SUA") {
-            let oc = goal_cases_dbg(&outcome);
-            let now_solved = red.sys.goals.iter().any(|(g, st)| {
-                matches!(g, Goal::Action(gi, gfa) if gi == &i && gfa == &fa) && st.solved
-            });
-            eprintln!(
-                "[SUA] i={}.{} tag={:?} outcome={} solved_after={}",
-                i.name, i.idx, fa.tag, oc, now_solved
-            );
-        }
         if matches!(
             outcome,
             crate::constraint::solver::reduction::GoalCases::Contradictory
         ) {
-            mark_contradictory_labeled(red, "solve_unique_actions");
+            red.mark_contradictory();
         }
         changed = ChangeIndicator::Changed;
     }
@@ -2809,16 +2685,9 @@ fn solve_unique_actions_pass_fan_out(
         // `ru.actions.contains(fa)` arm in `solve_action_goal`).
         let outcome = red.solve_action_goal(&i, &fa);
         use crate::constraint::solver::reduction::GoalCases;
-        if tamarin_utils::env_gate!("TAM_RS_DBG_SUA") {
-            let oc = goal_cases_dbg(&outcome);
-            eprintln!(
-                "[SUA/fo] i={}.{} tag={:?} outcome={}",
-                i.name, i.idx, fa.tag, oc
-            );
-        }
         match outcome {
             GoalCases::Contradictory => {
-                mark_contradictory_labeled(red, "solve_unique_actions");
+                red.mark_contradictory();
                 changed = ChangeIndicator::Changed;
             }
             GoalCases::Linear | GoalCases::LinearNamed(_) => {
@@ -2930,16 +2799,9 @@ fn drain_remaining_actions(
             continue;
         }
         let outcome = red.solve_action_goal(i, fa);
-        if tamarin_utils::env_gate!("TAM_RS_DBG_SUA") {
-            let oc = goal_cases_dbg(&outcome);
-            eprintln!(
-                "[SUA/drain] i={}.{} tag={:?} outcome={}",
-                i.name, i.idx, fa.tag, oc
-            );
-        }
         match outcome {
             GoalCases::Contradictory => {
-                mark_contradictory_labeled(&mut red, "solve_unique_actions");
+                red.mark_contradictory();
             }
             GoalCases::Linear | GoalCases::LinearNamed(_) => {
                 // `red.sys` mutated in place — continue.
@@ -2974,21 +2836,6 @@ fn drain_remaining_actions(
         std::mem::replace(&mut red.sys, crate::constraint::system::System::empty()),
         final_counter,
     )]
-}
-
-/// Render a `GoalCases` outcome into the short debug string shared by
-/// the three `TAM_RS_DBG_SUA` eprintln sites (`solve_unique_actions_pass`,
-/// `solve_unique_actions_pass_fan_out`, `drain_remaining_actions`).
-/// Debug-only: the string is only ever consumed inside `env_gate!`-guarded
-/// `eprintln!` bodies and never touches proof state or output.
-fn goal_cases_dbg(oc: &crate::constraint::solver::reduction::GoalCases) -> String {
-    use crate::constraint::solver::reduction::GoalCases;
-    match oc {
-        GoalCases::Contradictory => "Contradictory".to_string(),
-        GoalCases::Linear => "Linear".to_string(),
-        GoalCases::LinearNamed(n) => format!("LinearNamed({})", n),
-        GoalCases::Cases(cs) => format!("Cases({})", cs.len()),
-    }
 }
 
 /// Collect the unsolved unique Action-goal candidates in Haskell
@@ -3189,7 +3036,7 @@ fn enforce_kd_fact_uniqueness_pass(red: &mut Reduction) -> ChangeIndicator {
         absorb_solve_outcome(red, res, &mut hit_contra);
     }
     if hit_contra {
-        mark_contradictory_labeled(red, "enforce_kd_fact_uniqueness");
+        red.mark_contradictory();
     }
     ChangeIndicator::Changed
 }
@@ -3546,29 +3393,6 @@ fn enforce_fresh_ordering_pass(red: &mut Reduction) -> ChangeIndicator {
 /// — observed in TPM_Exclusive_Secrets::left_reachable.
 fn enforce_edge_uniqueness_pass(red: &mut Reduction) -> ChangeIndicator {
     use crate::fact::FactTag;
-    // `TAM_RS_TRACE_EDGES=1`: dump the full edge list at pass entry —
-    // pair of HS's `TAM_HS_TRACE_EDGES` hook (Simplify.hs:372-376),
-    // for locating the first edge-set divergence inside a branch.
-    if tamarin_utils::env_gate!("TAM_RS_TRACE_EDGES") {
-        let mut es: Vec<String> = red
-            .sys
-            .edges
-            .iter()
-            .map(|e| {
-                format!(
-                    "({}.{},{})->({}.{},{})",
-                    e.src.0.name, e.src.0.idx, e.src.1 .0, e.tgt.0.name, e.tgt.0.idx, e.tgt.1 .0
-                )
-            })
-            .collect();
-        es.sort();
-        eprintln!(
-            "[RS_EDGES_ENTER] path={} edges={} {}",
-            crate::constraint::solver::trace::case_path_string(),
-            es.len(),
-            es.join(" ")
-        );
-    }
     // Lookup: is this conclusion of this node a persistent fact?
     // Haskell `factTagMultiplicity` (Theory/Model/Fact.hs:383-388):
     //   ProtoFact multi _ _ -> multi
@@ -3634,7 +3458,7 @@ fn enforce_edge_uniqueness_pass(red: &mut Reduction) -> ChangeIndicator {
         }
     }
     if conc_idx_clash {
-        mark_contradictory_labeled(red, "enforce_edge_uniqueness:conc_idx_clash");
+        red.mark_contradictory();
         return ChangeIndicator::Changed;
     }
     // Pass 2 (Haskell's second `mergeNodes eTgt eSrc` filtered to
@@ -3660,7 +3484,7 @@ fn enforce_edge_uniqueness_pass(red: &mut Reduction) -> ChangeIndicator {
         }
     }
     if prem_idx_clash {
-        mark_contradictory_labeled(red, "enforce_edge_uniqueness:prem_idx_clash");
+        red.mark_contradictory();
         return ChangeIndicator::Changed;
     }
     node_eqs.retain(|e| e.lhs != e.rhs);
@@ -3672,7 +3496,7 @@ fn enforce_edge_uniqueness_pass(red: &mut Reduction) -> ChangeIndicator {
         res,
         Err(_) | Ok(crate::constraint::solver::reduction::SolveOutcome::Contradictory)
     ) {
-        mark_contradictory_labeled(red, "enforce_edge_uniqueness:node_id_eqs_contradictory");
+        red.mark_contradictory();
         return ChangeIndicator::Changed;
     }
     if let Ok(crate::constraint::solver::reduction::SolveOutcome::Cases(arms)) = res {

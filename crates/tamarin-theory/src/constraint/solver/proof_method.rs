@@ -321,36 +321,6 @@ pub fn exec_proof_method(
     let avoid = crate::constraint::solver::reduction::avoid_fresh_state(sys);
     ctx.maude.reset_counter_to(avoid);
 
-    let dbg_sua = tamarin_utils::env_gate!("TAM_RS_DBG_SUA");
-    if dbg_sua {
-        let mname = match method {
-            ProofMethod::Sorry(_) => "Sorry",
-            ProofMethod::Finished(_) => "Finished",
-            ProofMethod::Invalidated => "Invalidated",
-            ProofMethod::Simplify => "Simplify",
-            ProofMethod::Induction => "Induction",
-            ProofMethod::SolveGoal(_) => "SolveGoal",
-        };
-        eprintln!(
-            "[EXECPM] enter method={} goals={} nodes={} avoid={}",
-            mname,
-            sys.goals.iter().count(),
-            sys.nodes.iter().count(),
-            avoid
-        );
-    }
-    let _execpm_exit = if dbg_sua {
-        struct ExitLog(std::time::Instant);
-        impl Drop for ExitLog {
-            fn drop(&mut self) {
-                eprintln!("[EXECPM] exit after {:?}", self.0.elapsed());
-            }
-        }
-        Some(ExitLog(std::time::Instant::now()))
-    } else {
-        None
-    };
-
     match method {
         ProofMethod::Sorry(_) | ProofMethod::Finished(_) => Some(Vec::new()),
         ProofMethod::Invalidated => None,
@@ -539,12 +509,7 @@ pub fn exec_proof_method(
             // `Finished(Contradictory(_))` leaves.  Do *not* filter those
             // here, or the proof tree loses siblings whose contradiction
             // reason Haskell renders.
-            let keep = |sys: &System, name: &str| -> bool {
-                let r = !sys.eq_store.is_false();
-                let op = if r { "case_keep" } else { "case_drop" };
-                crate::state_trace::emit_case(op, name, Some(g), sys);
-                r
-            };
+            let keep = |sys: &System| -> bool { !sys.eq_store.is_false() };
             // HS-faithful: `process` (ProofMethod.hs:301-307) treats
             // EVERY `solveGoal` result UNIFORMLY — the solve yields ONE
             // `CaseName`, then `runReduction (m <* simplifySystem)` fans the
@@ -603,33 +568,12 @@ pub fn exec_proof_method(
                 let kept_raw: Vec<(String, System)> = cases
                     .into_iter()
                     .flat_map(|(name, sys, seed)| {
-                        // `TAM_RS_TRACE_CASE_SIMP=1`: bracket each
-                        // per-case simplify so interleaved trace hooks
-                        // (EDGES/SIMP_CONTRA/SET_NODES) attribute to a
-                        // named case.
-                        let dbg = tamarin_utils::env_gate!("TAM_RS_TRACE_CASE_SIMP");
-                        if dbg {
-                            eprintln!(
-                                "[CASE_SIMP] begin name={} path={}",
-                                name,
-                                crate::constraint::solver::trace::case_path_string()
-                            );
-                        }
                         let systems = simplify(sys, seed);
-                        let n_arms = systems.len();
                         let out: Vec<(String, System)> = systems
                             .into_iter()
-                            .filter(|s| keep(s, &name))
+                            .filter(|s| keep(s))
                             .map(|s| (name.clone(), s))
                             .collect();
-                        if dbg {
-                            eprintln!(
-                                "[CASE_SIMP] end name={} arms={} kept={}",
-                                name,
-                                n_arms,
-                                out.len()
-                            );
-                        }
                         out
                     })
                     .collect();

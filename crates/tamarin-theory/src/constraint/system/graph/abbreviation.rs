@@ -158,9 +158,6 @@ fn abbreviate_term(
             let v = LVar::new(candidate, LSort::Msg, 0);
             return (prefix_map, Term::Lit(Lit::Var(v)));
         }
-        if tamarin_utils::env_gate!("TAM_RS_DBG_ABBREV") {
-            eprintln!("collision: {}", candidate);
-        }
         idx += 1;
     }
 }
@@ -416,11 +413,6 @@ pub fn compute_abbreviations(repr: &GraphRepr, opts: &AbbreviationOptions) -> Ab
         entry.0 += 1;
     }
     let all_names = collect_all_names(repr);
-    let dbg = tamarin_utils::env_gate!("TAM_RS_DBG_ABBREV");
-    if dbg {
-        let joined: Vec<&str> = all_names.iter().map(|s| s.as_str()).collect();
-        eprintln!("allNames: {}", joined.join(" "));
-    }
     let mut abbrevs: BTreeMap<LNTerm, LNTerm> = BTreeMap::new();
     let mut prefix_map: PrefixMap = BTreeMap::new();
     // Iteratively pick the best candidate.
@@ -450,24 +442,10 @@ pub fn compute_abbreviations(repr: &GraphRepr, opts: &AbbreviationOptions) -> Ab
             None => break,
         };
         if weight < opts.always_abbrev_weight && abbrevs.len() >= opts.abbrevs_soft_limit {
-            if dbg {
-                eprintln!("stop: weight={} nabbrevs={}", weight, abbrevs.len());
-            }
             break;
         }
         let (new_pmap, abbrev_name) = abbreviate_term(opts, &all_names, prefix_map, &candidate);
         prefix_map = new_pmap;
-        if dbg {
-            let lookup = |k: &LNTerm| abbrevs.get(k).cloned();
-            let replaced = apply_abbreviations_term(&lookup, &candidate);
-            eprintln!(
-                "pick: weight={} len={} name={} term={}",
-                weight,
-                rendered_term_len(&replaced),
-                pretty_lnterm(&abbrev_name),
-                pretty_lnterm(&candidate)
-            );
-        }
         // Decrement subterm counts in legend_occs for every other term.
         // Drop the chosen candidate, then push one sub-count onto each
         // surviving entry in place — `iter_mut` visits keys in the same

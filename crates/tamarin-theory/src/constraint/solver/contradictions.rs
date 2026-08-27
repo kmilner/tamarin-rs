@@ -141,17 +141,6 @@ pub fn contradictions(_ctxt: &ProofContext, sys: &System) -> Vec<Contradiction> 
         }
     }
     if cyclic(&all_less) {
-        // H14-style diagnostic: dump the actual cycle path so a missing
-        // less_atom (vs HS) can be identified by diffing the paths.
-        if tamarin_utils::env_gate!("TAM_RS_DBG_CYCLE_PATH") {
-            let cp = crate::constraint::solver::trace::case_path_string();
-            let path = cyclic_with_path(&all_less);
-            let path_str: Vec<String> = path
-                .iter()
-                .map(|n| format!("{}_{}", n.name, n.idx))
-                .collect();
-            eprintln!("[CYCLE_PATH] path={} cycle: {}", cp, path_str.join(" → "));
-        }
         out.push(Contradiction::Cyclic);
     }
     // HS-faithful enumeration ORDER (`contradictions`, Contradictions.hs):
@@ -479,7 +468,6 @@ fn has_impossible_chain<'a>(
 ) -> bool {
     use crate::constraint::constraints::Goal;
     use crate::fact::FactTag;
-    let dbg = tamarin_utils::env_gate!("TAM_RS_DBG_IMPOSSIBLE_CHAIN");
 
     for (g, st) in sys.goals.iter() {
         if st.solved {
@@ -519,16 +507,6 @@ fn has_impossible_chain<'a>(
             None => continue,
         };
         let poss_opt = possible_root_syms(t_start);
-        if dbg {
-            use tamarin_term::pretty::pretty_lnterm;
-            eprintln!(
-                "[ic] t_start={} t_end={} poss_root={:?} pc_true_subterm={}",
-                pretty_lnterm(t_start),
-                pretty_lnterm(t_end),
-                poss_opt.is_some(),
-                ctx.pc_true_subterm
-            );
-        }
         let Some(poss) = poss_opt else { continue };
         // Haskell:
         //   if pcTrueSubterm
@@ -551,9 +529,6 @@ fn has_impossible_chain<'a>(
                 None => false,
             }
         };
-        if dbg {
-            eprintln!("[ic] fires={}", fires);
-        }
         if fires {
             return true;
         }
@@ -916,17 +891,6 @@ fn extract_ac_constr_pairs<'a>(
             let conc = subst_fact(r1.conclusions.first()?);
             let prems2: Vec<Cow<'a, crate::fact::LNFact>> =
                 r2.premises.iter().map(&subst_fact).collect();
-            if tamarin_utils::env_gate!("TAM_RS_DBG_ACCHAIN") {
-                eprintln!(
-                    "[RS_ACCHAIN] path={} pair {:?}<{:?} conc={:?} prems2={:?} contains={}",
-                    crate::constraint::solver::trace::case_path_string(),
-                    n1,
-                    n2,
-                    conc,
-                    prems2,
-                    prems2.contains(&conc)
-                );
-            }
             if prems2.contains(&conc) {
                 let prems1: Vec<crate::fact::LNFact> = r1
                     .premises
@@ -973,28 +937,6 @@ fn ac_constr_chain_fixpoint(extracted: &[AcConstrPair]) -> bool {
         map.insert(*n2, (*n2, trivial(p2, n, *n2), *n));
     }
 
-    if tamarin_utils::env_gate!("TAM_RS_DBG_ACCHAIN") && !extracted.is_empty() {
-        let trivias: Vec<String> = map
-            .iter()
-            .map(|(k, (root, tset, _))| {
-                format!(
-                    "{}_{}→root {}_{} triv={:?}",
-                    k.name,
-                    k.idx,
-                    root.name,
-                    root.idx,
-                    tset.iter().map(|v| v.idx).collect::<Vec<_>>()
-                )
-            })
-            .collect();
-        eprintln!(
-            "[RS_ACCHAIN_MAP] path={} pairs={} init: {}",
-            crate::constraint::solver::trace::case_path_string(),
-            extracted.len(),
-            trivias.join(" | ")
-        );
-    }
-
     // `finalMap = fixpoint (\x -> foldr updateMap x extracted) (False, initialMap)`.
     let mut found = false;
     loop {
@@ -1036,13 +978,6 @@ fn ac_constr_chain_fixpoint(extracted: &[AcConstrPair]) -> bool {
         // Once `found` is set the loop above breaks on its first statement, so
         // no later pass can touch the map or the verdict.
         if found || before.iter().all(|(k, v)| map.get(k) == v.as_ref()) {
-            if tamarin_utils::env_gate!("TAM_RS_DBG_ACCHAIN") && !extracted.is_empty() {
-                eprintln!(
-                    "[RS_ACCHAIN_RES] path={} found={}",
-                    crate::constraint::solver::trace::case_path_string(),
-                    found
-                );
-            }
             return found;
         }
     }
@@ -1475,9 +1410,6 @@ fn has_forbidden_exp(sys: &System, ab_adj: &crate::constraint::system::PrebuiltA
         };
 
         if forbidden {
-            if tamarin_utils::env_gate!("TAM_RS_DBG_FORBIDDEN_EXP") {
-                eprintln!("[FORBIDDEN_EXP] node={:?} ru_concl={:?}", i, conc_term);
-            }
             return true;
         }
     }
@@ -1507,9 +1439,6 @@ fn has_forbidden_exp(sys: &System, ab_adj: &crate::constraint::system::PrebuiltA
 /// RS kept 5 cases where HS keeps 2 — diverging the proof shape.
 fn has_forbidden_bp(sys: &System) -> bool {
     if sys.nodes.iter().any(|(_, ru)| is_forbidden_d_pmult(ru)) {
-        if tamarin_utils::env_gate!("TAM_RS_DBG_FORBIDDEN_BP") {
-            eprintln!("[FORBIDDEN_BP] dPMult fired");
-        }
         return true;
     }
     if sys
@@ -1517,9 +1446,6 @@ fn has_forbidden_bp(sys: &System) -> bool {
         .iter()
         .any(|(i, ru)| is_forbidden_d_emap(sys, i, ru))
     {
-        if tamarin_utils::env_gate!("TAM_RS_DBG_FORBIDDEN_BP") {
-            eprintln!("[FORBIDDEN_BP] dEMap fired");
-        }
         return true;
     }
     if sys
@@ -1527,9 +1453,6 @@ fn has_forbidden_bp(sys: &System) -> bool {
         .iter()
         .any(|(i, ru)| is_forbidden_d_emap_order(sys, i, ru))
     {
-        if tamarin_utils::env_gate!("TAM_RS_DBG_FORBIDDEN_BP") {
-            eprintln!("[FORBIDDEN_BP] dEMapOrder fired");
-        }
         return true;
     }
     false
@@ -2569,9 +2492,6 @@ impl SubstNfChecker {
             let is_nf =
                 tamarin_term::norm::nf_via_haskell_maude_with_sig(&sig, &self.maude, &t_prime);
             if !is_nf {
-                if tamarin_utils::env_gate!("TAM_RS_DBG_SUBST_NF") {
-                    eprintln!("[rs-subst-nf] CREATES t={:?} t_prime={:?}", t, t_prime);
-                }
                 return true;
             }
         }

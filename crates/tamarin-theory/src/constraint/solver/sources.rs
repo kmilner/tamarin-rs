@@ -2593,7 +2593,7 @@ pub fn solve_with_source_cases_ctx(
         // verbatim — never re-split on `_` (would corrupt funsyms containing `_`).
         let case_label = name.clone();
         let arms = refine_source_case(
-            ctx, sys, src, &case_sys, &live_goal, red_maude, src_bounds, fork_base,
+            ctx, src, &case_sys, &live_goal, red_maude, src_bounds, fork_base,
         );
         // HS-faithful: refineSubst's multi-arm fanout (Reduction.hs:742-744
         // `disjunctionOfList performSplit`) produces one System per AC
@@ -2818,7 +2818,7 @@ pub fn solve_with_source_cases_action_with_ctx(
             // against the source's ABSTRACT `cdGoal` (`src.goal`) — NOT a
             // case-specific action — mirroring `matchToGoal` (Sources.hs:268-317).
             let arms = refine_source_case(
-                ctx, sys, src, &case_sys, &live_goal, red_maude, src_bounds, fork_base,
+                ctx, src, &case_sys, &live_goal, red_maude, src_bounds, fork_base,
             );
             for arm in arms {
                 refine_arms.push((case_label.clone(), arm));
@@ -3144,48 +3144,6 @@ enum SourceGoalKind {
     Premise,
 }
 
-/// `[STATE]` trace op names plus the `TAM_RS_DBG_FOLD_DRAWS` label for one
-/// goal kind.  `state_trace` op names line up with the out-of-tree Haskell
-/// instrumentation patch, so each kind keeps its own set.
-struct ApplySourceOps {
-    enter: &'static str,
-    refined: &'static str,
-    pre_conjoin: &'static str,
-    dropped: &'static str,
-    dropped_edge_eqs: &'static str,
-    out: &'static str,
-    draws: &'static str,
-}
-
-const ACTION_OPS: ApplySourceOps = ApplySourceOps {
-    enter: "applySource_in",
-    refined: "applySource_refined",
-    pre_conjoin: "applySource_pre_conjoin",
-    dropped: "applySource_drop",
-    dropped_edge_eqs: "applySource_drop_edge_eqs",
-    out: "applySource_out",
-    draws: "ACTION",
-};
-
-const PREMISE_OPS: ApplySourceOps = ApplySourceOps {
-    enter: "applySource_prem_in",
-    refined: "applySource_prem_refined",
-    pre_conjoin: "applySource_prem_pre_conjoin",
-    dropped: "applySource_prem_drop",
-    dropped_edge_eqs: "applySource_prem_drop_edge_eqs",
-    out: "applySource_prem_out",
-    draws: "PREMISE",
-};
-
-impl SourceGoalKind {
-    fn ops(self) -> &'static ApplySourceOps {
-        match self {
-            SourceGoalKind::Action => &ACTION_OPS,
-            SourceGoalKind::Premise => &PREMISE_OPS,
-        }
-    }
-}
-
 /// One refineSubst arm produced by [`refine_source_case`] — the
 /// per-arm state at the conjoin boundary of HS's `_applySource`
 /// (Sources.hs:344-350), BEFORE `conjoinSystem`.  HS runs
@@ -3325,7 +3283,6 @@ struct ConjoinedArm {
 /// see line 335).
 fn refine_source_case(
     ctx: &crate::constraint::solver::context::ProofContext,
-    live_sys: &System,
     src: &Source,
     case_sys: &System,
     live_goal: &crate::constraint::constraints::Goal,
@@ -3358,14 +3315,11 @@ fn refine_source_case(
                 return Vec::new();
             }
         };
-    let ops = kind.ops();
     if fa_live.tag != abstract_fact_orig.tag
         || fa_live.terms.len() != abstract_fact_orig.terms.len()
     {
         return Vec::new();
     }
-
-    crate::state_trace::emit(ops.enter, Some(live_goal), live_sys);
 
     // ---------------------------------------------------------------
     // A.1 — `rename th0` in matchToGoal (Sources.hs:268-317, see line 307):
@@ -3640,7 +3594,6 @@ fn refine_source_case(
         // during precompute and renamed via Step A.1.
         let runtime_stable = frees(&(*live_node, fa_live.clone()));
         restrict_eq_store_to_stable_vars(&mut refined.sys, &runtime_stable);
-        crate::state_trace::emit(ops.refined, Some(live_goal), &refined.sys);
         let refined_case = refined.sys;
         // The post-refineSubst+restrict case sub-system, the dedup key the
         // caller feeds to HS's `removeRedundantCases ctxt stableVars`.
@@ -3677,21 +3630,8 @@ fn refine_source_case(
         if let Some(fb) = fork_base {
             red_m.reset_counter_to(fb);
         }
-        if tamarin_utils::env_gate!("TAM_RS_DBG_FOLD_DRAWS") {
-            eprintln!(
-                "[rs-fold] SOMEINST-{} counter_before={}",
-                ops.draws,
-                red_m.fresh_counter_peek()
-            );
-        }
         let freshened_case = some_inst_system(&refined_case, &keep_vars, red_m);
         let branch_counter = red_m.fresh_counter_peek();
-        if tamarin_utils::env_gate!("TAM_RS_DBG_FOLD_DRAWS") {
-            eprintln!(
-                "[rs-fold] SOMEINST-{}-DONE counter_after={}",
-                ops.draws, branch_counter
-            );
-        }
 
         // The live action fact an Action goal's caller drives: the KU
         // action at `live_node` in the freshened case (the abstract node
@@ -3769,7 +3709,6 @@ fn conjoin_refine_arm(
             return Vec::new();
         }
     };
-    let ops = kind.ops();
 
     // `branch_counter` was consumed by the caller (its per-branch
     // `reset_counter_to` before this call).
@@ -3829,22 +3768,8 @@ fn conjoin_refine_arm(
             slot.1.solved = true;
         }
     }
-    crate::state_trace::emit(ops.pre_conjoin, Some(live_goal), &freshened_case);
-    if tamarin_utils::env_gate!("TAM_RS_DBG_FOLD_DRAWS") {
-        eprintln!(
-            "[rs-fold] CONJOIN counter_before={}",
-            r.maude.fresh_counter_peek()
-        );
-    }
     let res = r.conjoin_system(&freshened_case);
-    if tamarin_utils::env_gate!("TAM_RS_DBG_FOLD_DRAWS") {
-        eprintln!(
-            "[rs-fold] CONJOIN-DONE counter_after={}",
-            r.maude.fresh_counter_peek()
-        );
-    }
     if matches!(res, Err(_) | Ok(SolveOutcome::Contradictory)) {
-        crate::state_trace::emit(ops.dropped, Some(live_goal), &r.sys);
         return out_arms;
     }
 
@@ -3961,25 +3886,9 @@ fn conjoin_refine_arm(
                 SourceGoalKind::Action => SplitStrategy::SplitNow,
                 SourceGoalKind::Premise => SplitStrategy::SplitLater,
             };
-            if tamarin_utils::env_gate!("TAM_RS_DBG_FOLD_DRAWS") {
-                eprintln!(
-                    "[rs-fold] E5-{} edge_eqs={} counter_before={}",
-                    ops.draws,
-                    edge_eqs.len(),
-                    r.maude.fresh_counter_peek()
-                );
-            }
             let res = r.solve_fact_eqs(split, &edge_eqs);
-            if tamarin_utils::env_gate!("TAM_RS_DBG_FOLD_DRAWS") {
-                eprintln!(
-                    "[rs-fold] E5-{}-DONE counter_after={}",
-                    ops.draws,
-                    r.maude.fresh_counter_peek()
-                );
-            }
             match res {
                 Err(_) | Ok(SolveOutcome::Contradictory) => {
-                    crate::state_trace::emit(ops.dropped_edge_eqs, Some(live_goal), &r.sys);
                     continue;
                 }
                 Ok(SolveOutcome::Cases(arms)) if matches!(kind, SourceGoalKind::Action) => {
@@ -4088,7 +3997,6 @@ fn conjoin_refine_arm(
                     })
                     .unwrap_or_else(|| la.clone())
             });
-            crate::state_trace::emit(ops.out, Some(live_goal), &r.sys);
             // Per-output-arm continuation counter: the branch thread including
             // this arm's close-chains draws (HS FreshT-threading, task #23
             // A(ii)) — consumed by the adopting caller's per-case

@@ -43,7 +43,6 @@
 //!   [`pretty_sapic`] ← `Theory.Sapic.{Term,Process}` pretty-printing
 //! - [`auto_sources`] ← `OpenTheory` `addAutoSourcesLemma` (`--auto-sources`)
 //! - [`module`] ← `Theory.Module` (the `--output-module` selector)
-//! - [`state_trace`] ← solver state tracing
 //!
 //! The `.spthy` parser lives in the sibling `tamarin-parser` crate.
 //!
@@ -79,7 +78,6 @@ pub mod rule;
 pub mod rule_restriction;
 pub mod sapic;
 pub mod signature;
-pub mod state_trace;
 pub mod tactic;
 #[cfg(test)]
 pub(crate) mod test_corpus;

@@ -623,24 +623,6 @@ pub struct GoalStatus {
     pub nr: u64,
 }
 
-// --- Cached debug env flags for the goal insertion hot path -------
-// `add_goal`/`add_goal_with_loop_flag` insert goals per KU-decomposition /
-// conjoinSystem.  These diagnostic env vars are constant for the
-// process, so each accessor caches its presence via `env_gate!` instead
-// of an env-lock + `String` alloc per insertion.
-#[inline]
-fn dbg_insert_goal() -> bool {
-    tamarin_utils::env_gate!("TAM_RS_DBG_INSERT_GOAL")
-}
-#[inline]
-fn dbg_insert_goal_include_precompute() -> bool {
-    tamarin_utils::env_gate!("TAM_RS_DBG_INSERT_GOAL_INCLUDE_PRECOMPUTE")
-}
-#[inline]
-fn trace_goal_insert() -> bool {
-    tamarin_utils::env_gate!("TAM_RS_TRACE_GOAL_INSERT")
-}
-
 // =============================================================================
 // HS `M.Map` / `Data.Set` iteration order
 // =============================================================================
@@ -809,18 +791,6 @@ impl System {
     /// raw `.eq_store =` write in the solver that bypasses this.
     #[inline]
     pub fn set_eq_store(&mut self, es: Arc<EquationStore>) {
-        // `TAM_DBG_EQ_FALSE_WIPE=1`: a false (mzero-marked) store being
-        // replaced by a non-false one resurrects a dead case — print the
-        // installing call chain (RUST_BACKTRACE=1 for symbols).
-        if tamarin_utils::env_gate!("TAM_DBG_EQ_FALSE_WIPE")
-            && self.content.eq_store.0.is_false()
-            && !es.is_false()
-        {
-            eprintln!(
-                "[EQ_FALSE_WIPE] set_eq_store false->ok\n{}",
-                std::backtrace::Backtrace::force_capture()
-            );
-        }
         // Module-private `SealedEqStore` constructor: the only place (with
         // `take_eq_store`/`eq_store_mut`) a sealed value is produced.
         self.content.eq_store = SealedEqStore(es);
@@ -1552,37 +1522,7 @@ impl System {
         // combineGoalStatus` keeps the existing — smaller — nr).
         let age = self.next_goal_nr;
         self.next_goal_nr = self.next_goal_nr.wrapping_add(1);
-        if dbg_insert_goal() {
-            let in_pre = crate::constraint::solver::sources::in_precompute_mode()
-                || crate::constraint::solver::sources::in_initial_source_cases();
-            let want_pre = dbg_insert_goal_include_precompute();
-            if !in_pre || want_pre {
-                let tag = if in_pre { "<precompute>" } else { "<proof>" };
-                eprintln!(
-                    "[RS_INS_GOAL] lemma={} gsNr={} solved=false loops={} goal={:?}",
-                    tag, age, looping, g
-                );
-            }
-        }
-        // One dedup scan feeds both the trace below and the merge/push
-        // decision.
         let slot_idx = self.goals.iter().position(|(existing, _)| *existing == g);
-        if trace_goal_insert() {
-            let kindstr = match &g {
-                Goal::Action(i, fa) => format!("Action {:?} {:?}", i, fa),
-                Goal::Premise(p, fa) => format!("Premise {:?} {:?}", p, fa),
-                Goal::Chain(c, p) => format!("Chain {:?}->{:?}", c, p),
-                Goal::Split(sid) => format!("Split {:?}", sid),
-                Goal::Disj(_) => "Disj".to_string(),
-                Goal::Subterm(_) => "Subterm".to_string(),
-            };
-            eprintln!(
-                "[RS_GOAL_INSERT] gsNr={} isNew={} kind={}",
-                age,
-                slot_idx.is_none(),
-                kindstr
-            );
-        }
         if let Some(idx) = slot_idx {
             let slot = &mut self.goals_mut()[idx];
             slot.1.looping = slot.1.looping || looping;
@@ -1621,15 +1561,11 @@ impl System {
     }
 
     /// Add an edge if not already present.  Low-level raw insert
-    /// equivalent of HS `modM sEdges (S.insert e)`.  Does NOT emit the
-    /// Rust-only `[EXEC] insertEdges n=K` trace — that is added by
-    /// `Reduction::insert_edge_labeled`, the Rust wrapper around HS's
-    /// `insertEdges` (Reduction.hs:278-281, which runs `solveFactEqs`).
-    /// Callers that mirror HS's `insertEdges` must use
-    /// `Reduction::insert_edge_labeled` (emits the trace + runs
-    /// `solveFactEqs`); callers that mirror HS's raw `modM sEdges`
-    /// (e.g. `exploitPrem InFact` / `exploitPrem FreshFact`) should use
-    /// this directly.
+    /// equivalent of HS `modM sEdges (S.insert e)`.  Callers that mirror
+    /// HS's `insertEdges` (Reduction.hs:278-281, which runs
+    /// `solveFactEqs`) must use `Reduction::insert_edge`; callers that
+    /// mirror HS's raw `modM sEdges` (e.g. `exploitPrem InFact` /
+    /// `exploitPrem FreshFact`) should use this directly.
     pub fn add_edge(&mut self, e: Edge) {
         if !self.edges.contains(&e) {
             self.bump_cache_lvar(&e.src.0);

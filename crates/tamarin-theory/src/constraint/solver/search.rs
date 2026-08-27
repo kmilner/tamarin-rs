@@ -987,7 +987,6 @@ fn expand_inner(
     deadline: &std::time::Instant,
     depth: usize,
 ) {
-    crate::state_trace::emit("expand", None, &node.sys);
     // Rust-only diagnostic [STATE] emission (gated by TAM_RS_TRACE_STATE)
     // placed at every prove entry so Simplify / Induction / Finished
     // steps are recorded, not just SolveGoal dispatch (proof_method.rs).

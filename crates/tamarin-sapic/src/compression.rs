@@ -17,7 +17,7 @@
 use std::collections::BTreeSet;
 
 use tamarin_theory::fact::{FactTag, LNFact, Multiplicity};
-use tamarin_theory::rule::{ProtoRuleEInfo, ProtoRuleName, Rule, RuleAttributes};
+use tamarin_theory::rule::{ProtoRuleEInfo, Rule, RuleAttributes};
 
 use crate::base_translation::list_union;
 use crate::facts::{is_let_fact, is_lock_fact, is_out_fact, is_state_fact};
@@ -224,28 +224,9 @@ fn compress(
     mut compressed_facts: BTreeSet<LNFact>,
     mut msr: Vec<ERule>,
 ) -> Vec<ERule> {
-    let dbg = tamarin_utils::env_gate!("TAM_COMPRESS_DBG");
     while !worklist.is_empty() {
         let fact = worklist.remove(0);
         let remainder = worklist; // the tail
-        if dbg {
-            eprintln!(
-                "[compress] fact={} | msr=[{}] | worklist_tail=[{}]",
-                tamarin_theory::fact::fact_tag_name(&fact.tag),
-                msr.iter()
-                    .map(|r| match &r.info.name {
-                        ProtoRuleName::Stand(n) => n.to_string(),
-                        _ => "?".to_string(),
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", "),
-                remainder
-                    .iter()
-                    .map(|f| tamarin_theory::fact::fact_tag_name(&f.tag))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            );
-        }
         let (new_msr, new_facts) = compress_one(comp_events, &fact, msr);
         msr = new_msr;
         compressed_facts.insert(fact.clone());
