@@ -597,67 +597,54 @@ fn show_attrs(attrs: &[&str]) -> String {
     }
 }
 
-/// HS `unionExceptPairSym` (Term/Maude/Signature.hs:143, with the
-/// `removeIfNecessary` helpers at 146-150):
-///
-///   unionExceptPairSym st1 st2 =
-///       removeIfNecessary (removeIfNecessary st1 st2 fstSym fstDestSym)
-///                         st2 sndSym sndDestSym
-///   removeIfNecessary st1 st2 x y =
-///       removeIfNecessary' (removeIfNecessary' st1 st2 x y) st2 y x
-///   removeIfNecessary' st1 st2 toAdd toRemove =
-///       if toAdd `member` st2 then union (delete toRemove st1) st2
-///                             else union st1 st2
+/// HS `removeIfNecessary'` (Term/Maude/Signature.hs:147-150): if `to_add` is a
+/// member of `st2`, drop `to_remove` from `st1` before unioning `st2` in.
+/// Union is left-biased, as `S.union` is.
+fn remove_if_necessary_prime<T: Ord + Clone>(
+    st1: &BTreeSet<T>,
+    st2: &BTreeSet<T>,
+    to_add: &T,
+    to_remove: &T,
+) -> BTreeSet<T> {
+    let mut out = st1.clone();
+    if st2.contains(to_add) {
+        out.remove(to_remove);
+    }
+    out.extend(st2.iter().cloned());
+    out
+}
+
+/// HS `removeIfNecessary` (Term/Maude/Signature.hs:146): run
+/// `removeIfNecessary'` once each way round, so `x` and `y` are mutually
+/// exclusive in the result.
+fn remove_if_necessary<T: Ord + Clone>(
+    st1: &BTreeSet<T>,
+    st2: &BTreeSet<T>,
+    x: &T,
+    y: &T,
+) -> BTreeSet<T> {
+    let s = remove_if_necessary_prime(st1, st2, x, y);
+    remove_if_necessary_prime(&s, st2, y, x)
+}
+
+/// HS `unionExceptPairSym` (Term/Maude/Signature.hs:143).
 ///
 /// The `fst`/`snd` constructor and destructor variants are mutually
 /// exclusive: whichever variant `st2` carries WINS, and the opposite
 /// variant is removed from `st1`.  This is asymmetric in `st2`, matching
 /// HS's monoid `<>` (where the right operand is the newly-added symbol).
 fn union_except_pair_sym(a: &BTreeSet<NoEqSym>, b: &BTreeSet<NoEqSym>) -> BTreeSet<NoEqSym> {
-    // removeIfNecessary' st1 st2 toAdd toRemove
-    fn remove_if_necessary_prime(
-        st1: &BTreeSet<NoEqSym>,
-        st2: &BTreeSet<NoEqSym>,
-        to_add: &NoEqSym,
-        to_remove: &NoEqSym,
-    ) -> BTreeSet<NoEqSym> {
-        if st2.contains(to_add) {
-            let mut out: BTreeSet<NoEqSym> = st1.clone();
-            out.remove(to_remove);
-            out.extend(st2.iter().copied());
-            out
-        } else {
-            st1.union(st2).copied().collect()
-        }
-    }
-    // removeIfNecessary st1 st2 x y
-    fn remove_if_necessary(
-        st1: &BTreeSet<NoEqSym>,
-        st2: &BTreeSet<NoEqSym>,
-        x: &NoEqSym,
-        y: &NoEqSym,
-    ) -> BTreeSet<NoEqSym> {
-        let s = remove_if_necessary_prime(st1, st2, x, y);
-        remove_if_necessary_prime(&s, st2, y, x)
-    }
     let after_fst = remove_if_necessary(a, b, &fst_sym(), &fst_dest_sym());
     remove_if_necessary(&after_fst, b, &snd_sym(), &snd_dest_sym())
 }
 
-/// HS `unionExceptPairRules` (Term/Maude/Signature.hs:144, with the
-/// `removeIfNecessary` helpers at 146-150):
-///
-///   unionExceptPairRules st1 st2 =
-///       removeIfNecessary (removeIfNecessary st1 st2 fstDestRule fstRule)
-///                         st2 sndRule sndDestRule
+/// HS `unionExceptPairRules` (Term/Maude/Signature.hs:144).
 ///
 /// The constructor/destructor pair REWRITE RULES are mutually exclusive
-/// exactly like the symbols (`unionExceptPairSym`): whichever variant
-/// `st2` (the right/newly-added operand) carries WINS, and the opposite
-/// variant is removed from `st1`.  Without this, merging `pairing`
-/// (`fstRule`/`sndRule`) with `dest-pairing` (`fstDestRule`/`sndDestRule`)
-/// would keep BOTH variants, emitting both `fst` rewrite variants and
-/// diverging the reducible/irreducible sets from Haskell.
+/// exactly like the symbols (`unionExceptPairSym`).  Without this, merging
+/// `pairing` (`fstRule`/`sndRule`) with `dest-pairing` (`fstDestRule`/
+/// `sndDestRule`) would keep BOTH variants, emitting both `fst` rewrite
+/// variants and diverging the reducible/irreducible sets from Haskell.
 ///
 /// Note the rule version's `removeIfNecessary` argument order differs
 /// from the symbol version: `fstDestRule fstRule` (vs `fstSym fstDestSym`)
@@ -666,32 +653,6 @@ fn union_except_pair_rules(
     a: &BTreeSet<CtxtStRule>,
     b: &BTreeSet<CtxtStRule>,
 ) -> BTreeSet<CtxtStRule> {
-    // removeIfNecessary' st1 st2 toAdd toRemove
-    fn remove_if_necessary_prime(
-        st1: &BTreeSet<CtxtStRule>,
-        st2: &BTreeSet<CtxtStRule>,
-        to_add: &CtxtStRule,
-        to_remove: &CtxtStRule,
-    ) -> BTreeSet<CtxtStRule> {
-        if st2.contains(to_add) {
-            let mut out: BTreeSet<CtxtStRule> = st1.clone();
-            out.remove(to_remove);
-            out.extend(st2.iter().cloned());
-            out
-        } else {
-            st1.union(st2).cloned().collect()
-        }
-    }
-    // removeIfNecessary st1 st2 x y
-    fn remove_if_necessary(
-        st1: &BTreeSet<CtxtStRule>,
-        st2: &BTreeSet<CtxtStRule>,
-        x: &CtxtStRule,
-        y: &CtxtStRule,
-    ) -> BTreeSet<CtxtStRule> {
-        let s = remove_if_necessary_prime(st1, st2, x, y);
-        remove_if_necessary_prime(&s, st2, y, x)
-    }
     let after_fst = remove_if_necessary(a, b, &fst_dest_rule(), &fst_rule());
     remove_if_necessary(&after_fst, b, &snd_rule(), &snd_dest_rule())
 }
