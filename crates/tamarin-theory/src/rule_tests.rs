@@ -887,3 +887,48 @@ fn proto_rule_e_frees_folds_the_rule_restrictions() {
         ])
     );
 }
+
+/// `RuleAttributes`'s hand-written `Ord` walks HS's declaration order
+/// `ruleColor`, `ruleProcess`, `ignoreDerivChecks`, `isSAPiCRule`, `role`
+/// (Theory/Model/Rule.hs:367-379).  Each pair below sets one field and
+/// contradicts every field after it, so a chain in any other order fails.
+#[test]
+fn rule_attributes_ord_follows_the_haskell_field_order() {
+    use std::sync::Arc;
+    use tamarin_utils::color::Rgb;
+    let shared = Arc::new(crate::sapic::SharedProcess::new(
+        crate::sapic::Process::Null(crate::sapic::ProcessParsedAnnotation::empty()),
+    ));
+    let attrs = |color: Option<Rgb>,
+                 process: Option<Arc<crate::sapic::SharedProcess>>,
+                 ignore_deriv_checks: bool,
+                 is_sapic_rule: bool,
+                 role: Option<&str>| RuleAttributes {
+        color,
+        process,
+        ignore_deriv_checks,
+        is_sapic_rule,
+        role: role.map(str::to_string),
+    };
+    let blue = Some(Rgb::new(0.0, 0.0, 1.0));
+    let red = Some(Rgb::new(1.0, 0.0, 0.0));
+    // No colour ranks before any colour, and the colour outranks every later
+    // field.
+    assert!(
+        attrs(None, Some(shared.clone()), true, true, Some("z"))
+            < attrs(red, None, false, false, None)
+    );
+    assert!(
+        attrs(blue, Some(shared.clone()), true, true, Some("z"))
+            < attrs(red, None, false, false, None)
+    );
+    // The process outranks the three fields after it.
+    assert!(
+        attrs(red, None, true, true, Some("z"))
+            < attrs(red, Some(shared.clone()), false, false, None)
+    );
+    // `ignore_deriv_checks`, then `is_sapic_rule`, then `role`.
+    assert!(attrs(red, None, false, true, Some("z")) < attrs(red, None, true, false, None));
+    assert!(attrs(red, None, false, false, Some("z")) < attrs(red, None, false, true, None));
+    assert!(attrs(red, None, false, false, None) < attrs(red, None, false, false, Some("a")));
+}

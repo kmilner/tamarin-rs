@@ -106,7 +106,9 @@ impl std::fmt::Display for Reason {
 /// `i < j` ordering atom on node ids, with a reason tag.
 ///
 /// Equality and ordering ignore the reason tag — two atoms are "the
-/// same" iff they constrain the same pair, mirroring Haskell.
+/// same" iff they constrain the same pair.  HS hand-writes both instances
+/// over `(smaller, larger)` for that reason (Constraints.hs:126-130); a
+/// derive over the three fields would rank atoms by their reason.
 #[derive(Debug, Clone)]
 pub struct LessAtom {
     pub smaller: NodeId,
@@ -395,6 +397,10 @@ mod tests {
         let a = LessAtom::new(node("i"), node("j"), Reason::Fresh);
         let b = LessAtom::new(node("i"), node("j"), Reason::Formula);
         assert_eq!(a, b);
+        // The `Ord` reads the same two endpoints, so the atoms tie; a derive
+        // over the three fields would rank them by the reason instead.
+        assert_eq!(a.cmp(&b), std::cmp::Ordering::Equal);
+        assert!(a < LessAtom::new(node("i"), node("k"), Reason::Fresh));
     }
 
     #[test]

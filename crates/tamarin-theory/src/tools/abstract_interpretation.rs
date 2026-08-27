@@ -40,10 +40,11 @@
 //! * **Rule ordering key**: HS sorts `getProtoRuleEs` under the derived
 //!   `Ord (Rule i)` = (info, prems, concs, acts, newVars) with
 //!   `Ord ProtoRuleEInfo` = (name, attributes, restrictions).  RS
-//!   `RuleAttributes`/`SyntacticLNFormula` have no `Ord`; the sort key here
-//!   is (name, prems, concs, acts, new_vars).  The attribute/restriction
-//!   tiebreak is unreachable: duplicate rule names are rejected at parse
-//!   time, so the name alone already discriminates the input.
+//!   `SyntacticLNFormula` has no `Ord`, so the restrictions cannot enter a
+//!   sort key and this one is (name, prems, concs, acts, new_vars).  The
+//!   attribute/restriction tiebreak is unreachable: duplicate rule names are
+//!   rejected at parse time, so the name alone already discriminates the
+//!   input.
 
 use std::collections::BTreeSet;
 

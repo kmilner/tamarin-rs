@@ -309,6 +309,8 @@ pub struct Options {
     pub lemmas_to_prove: Vec<String>,
 }
 
+/// HS `defaultOption` (OpenTheory.hs:546-547), whose tenth field is the
+/// `True` of `_deductionChainCheck`.
 impl Default for Options {
     fn default() -> Self {
         Options {

@@ -169,6 +169,11 @@ impl std::fmt::Debug for SealedEqStore {
 // byte-identical to the derived versions (an `Arc` refcount bump / a fresh
 // default `Arc`).  `Debug`/`PartialEq` are still derived (the wrapper provides
 // both, delegating to the inner `Arc`).
+/// The fields of HS `System` (System.hs:382-400) plus the port's own
+/// `Arc` wrappers, in a different order from HS's declaration.  Only equality
+/// is derived here, which is order-insensitive; HS's ordering chain is spelled
+/// out by `compare_systems_up_to_new_vars`, so no order may be derived on this
+/// struct.
 #[derive(Debug, PartialEq)]
 pub struct SystemContent {
     /// Node id → rule instance providing its conclusion.

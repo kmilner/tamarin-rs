@@ -215,7 +215,7 @@ pub struct IntegerParameters {
 impl Default for IntegerParameters {
     fn default() -> Self {
         // Defaults match Haskell's `defaultTheoryLoadOptions`
-        // (TheoryLoader.hs:244-245): openChain=10, saturation=5.
+        // (TheoryLoader.hs:273-274): openChain=10, saturation=5.
         IntegerParameters {
             open_chains_limit: 10,
             saturation_limit: 5,
@@ -329,26 +329,6 @@ impl Clone for Source {
             cases_cell: std::sync::Mutex::new(v),
             incomplete: self.incomplete,
         }
-    }
-}
-
-impl PartialEq for Source {
-    fn eq(&self, other: &Self) -> bool {
-        // Destructure without `..` so a new `Source` field forces an equality
-        // decision here; all three fields participate.
-        let Source {
-            goal,
-            cases_cell,
-            incomplete,
-        } = self;
-        let Source {
-            goal: other_goal,
-            cases_cell: other_cases_cell,
-            incomplete: other_incomplete,
-        } = other;
-        let a = cases_cell.lock().unwrap().clone();
-        let b = other_cases_cell.lock().unwrap().clone();
-        goal == other_goal && incomplete == other_incomplete && a == b
     }
 }
 

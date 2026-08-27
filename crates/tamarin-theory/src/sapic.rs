@@ -323,7 +323,11 @@ impl Eq for SharedProcess {}
 // `Ord` reads the stored rendering rather than walking the tree a second
 // time.  The derived `Debug` of a process is a function of its value and
 // spells every field out, so two processes render alike exactly when they are
-// equal — which is what the `PartialEq` above compares.
+// equal — which is what the `PartialEq` above compares.  The resulting TOTAL
+// order is the text order, not the structural order of HS's
+// `deriving instance Ord (Process ann v)` (Theory/Sapic/Process.hs:121): the
+// two agree on which processes are equal and not on how distinct ones rank,
+// so a consumer may depend on the equality classes only.
 impl PartialOrd for SharedProcess {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
@@ -725,9 +729,9 @@ mod tests {
     use tamarin_term::lterm::LSort;
 
     /// The whole point of [`SharedProcess`] is that its `Debug` writes what
-    /// the process's own derived `Debug` writes: the solver's system
-    /// comparison keys and occurrence paths embed that rendering, so a
-    /// different spelling would reorder them.
+    /// the process's own derived `Debug` writes: the occurrence paths the
+    /// solver builds from a rule's info embed that rendering, so a different
+    /// spelling would reorder them.
     #[test]
     fn shared_process_debug_is_the_process_debug() {
         let inner = Process::Action(
@@ -737,7 +741,7 @@ mod tests {
         );
         let shared = SharedProcess::new(inner.clone());
         assert_eq!(format!("{:?}", shared), format!("{:?}", inner));
-        // The comparison key embeds the rule attributes' derived `Debug`,
+        // The occurrence path embeds the rule attributes' derived `Debug`,
         // which reaches the process as `Option<Arc<SharedProcess>>` — the
         // same `Some(…)` bytes the bare process writes.
         assert_eq!(

@@ -354,7 +354,10 @@ impl PartialOrd for RuleAttributes {
 /// `ignoreDerivChecks`, `isSAPiCRule`, `role` (Theory/Model/Rule.hs:367-379),
 /// which is this struct's declaration order.  HS's colour is an
 /// `RGB Rational` and totally ordered; [`Rgb`] holds `f64`s and so offers
-/// only `PartialOrd`, so an incomparable pair counts as equal here.
+/// only `PartialOrd`, so an incomparable pair counts as equal here.  The two
+/// producers of a colour are the hex parser and the HSV conversion, neither of
+/// which can yield a NaN, so the relation is total on the values that occur
+/// and the `Eq` above is sound.
 impl Ord for RuleAttributes {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         use std::cmp::Ordering;

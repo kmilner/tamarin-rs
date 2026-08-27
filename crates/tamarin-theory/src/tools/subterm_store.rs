@@ -186,6 +186,12 @@ impl PartialOrd for SubtermStore {
 /// order, and its two `Vec<SubtermConstraint>` fields carry a `propagated`
 /// marker that HS's `S.Set (LNTerm, LNTerm)` has no room for, so both are
 /// compared through [`SubtermConstraint::hs_pair`].
+///
+/// This makes the order COARSER than the derived `PartialEq` above, which
+/// reads `propagated` too: two stores can be `Ordering::Equal` and not `==`.
+/// The two relations have disjoint consumers — the order is read only by
+/// `compare_systems_up_to_new_vars`, equality only through `System` — and a
+/// container keyed on a `SubtermStore` would need them reconciled first.
 impl Ord for SubtermStore {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         fn cmp_pairs(a: &[SubtermConstraint], b: &[SubtermConstraint]) -> std::cmp::Ordering {

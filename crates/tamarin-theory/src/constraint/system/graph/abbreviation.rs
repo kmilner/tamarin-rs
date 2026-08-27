@@ -47,6 +47,7 @@ pub struct AbbreviationOptions {
     pub prefix_length: usize,
 }
 
+/// HS `defaultAbbreviationOptions` (Abbreviation.hs:66-72).
 impl Default for AbbreviationOptions {
     fn default() -> Self {
         AbbreviationOptions {
