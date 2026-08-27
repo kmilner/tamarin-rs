@@ -319,25 +319,20 @@ fn install_pass_cases_arms(
 /// (arm[0] → eq-store, rest → `pending_eq_arms`; see
 /// `install_pass_cases_arms`) and funnels `Contradictory`/`Err` into
 /// `*hit_contra` — the mzero proxy, with each caller's
-/// `mark_contradictory` firing once at the end.  Returns whether the
-/// merge made progress (`true` for `Cases`/`Linear`, `false` for
-/// `Contradictory`/`Err`) so callers that track a `changed` flag can set
-/// it; the fresh/KD callers ignore the bool.
+/// `mark_contradictory` firing once at the end.
 fn absorb_solve_outcome<E>(
     red: &mut Reduction,
     res: std::result::Result<crate::constraint::solver::reduction::SolveOutcome, E>,
     hit_contra: &mut bool,
-) -> bool {
+) {
     match res {
         Ok(crate::constraint::solver::reduction::SolveOutcome::Contradictory) | Err(_) => {
             *hit_contra = true;
-            false
         }
         Ok(crate::constraint::solver::reduction::SolveOutcome::Cases(arms)) => {
             install_pass_cases_arms(red, arms);
-            true
         }
-        Ok(crate::constraint::solver::reduction::SolveOutcome::Linear(_)) => true,
+        Ok(crate::constraint::solver::reduction::SolveOutcome::Linear(_)) => {}
     }
 }
 
@@ -2345,6 +2340,92 @@ fn normalise_less_atoms_pass(red: &mut Reduction) -> ChangeIndicator {
     changed
 }
 
+/// HS's `merge solver candidates` (Simplify.hs:194-207):
+///
+/// ```haskell
+/// merge solver candidates = do
+///     changes <- gets (map mergers . groupSortOn fst . candidates)
+///     mconcat <$> sequence changes
+///   where
+///     mergers ((_,(xKeep, iKeep)):remove) =
+///         mappend <$> solver         (map (Equal xKeep . fst . snd) remove)
+///                 <*> solveNodeIdEqs (map (Equal iKeep . snd . snd) remove)
+/// ```
+///
+/// `candidates` arrive as `(key, payload, node)`.  `groupSortOn fst` is the
+/// `BTreeMap` grouping: ascending key, and within a key the order the pass
+/// appends its candidates in, so the group's first entry is `xKeep` /
+/// `iKeep` and the rest are merged onto it.  `solve_payload_eqs` is the
+/// per-pass `solver`; the node-id equalities go through
+/// `solve_node_id_eqs_broadcast`, which reaches the arms a payload split
+/// stashed as well as arm0 (HS solves them inside each forked `DisjT`
+/// continuation).  Trivial equalities are dropped, and `Contradictory`/`Err`
+/// from either solver fires one `mark_contradictory` — the mzero proxy.
+fn merge_candidates<K, P, E>(
+    red: &mut Reduction,
+    candidates: Vec<(K, P, crate::constraint::constraints::NodeId)>,
+    solve_payload_eqs: impl FnOnce(
+        &mut Reduction,
+        &[tamarin_term::rewriting::Equal<P>],
+    ) -> std::result::Result<
+        crate::constraint::solver::reduction::SolveOutcome,
+        E,
+    >,
+) -> ChangeIndicator
+where
+    K: Ord,
+    P: Clone + PartialEq,
+{
+    use crate::constraint::constraints::NodeId;
+    if candidates.len() < 2 {
+        return ChangeIndicator::Unchanged;
+    }
+    let mut by_key: std::collections::BTreeMap<K, Vec<(NodeId, P)>> =
+        std::collections::BTreeMap::new();
+    for (key, payload, i) in candidates {
+        by_key.entry(key).or_default().push((i, payload));
+    }
+    let mut node_eqs: Vec<tamarin_term::rewriting::Equal<NodeId>> = Vec::new();
+    let mut payload_eqs: Vec<tamarin_term::rewriting::Equal<P>> = Vec::new();
+    for (_key, group) in by_key {
+        if group.len() < 2 {
+            continue;
+        }
+        let (keep_id, keep_payload) = &group[0];
+        for (i, payload) in group.iter().skip(1) {
+            if i != keep_id {
+                node_eqs.push(tamarin_term::rewriting::Equal {
+                    lhs: *keep_id,
+                    rhs: *i,
+                });
+            }
+            if payload != keep_payload {
+                payload_eqs.push(tamarin_term::rewriting::Equal {
+                    lhs: keep_payload.clone(),
+                    rhs: payload.clone(),
+                });
+            }
+        }
+    }
+    node_eqs.retain(|e| e.lhs != e.rhs);
+    if node_eqs.is_empty() && payload_eqs.is_empty() {
+        return ChangeIndicator::Unchanged;
+    }
+    let mut hit_contra = false;
+    if !payload_eqs.is_empty() {
+        let res = solve_payload_eqs(red, &payload_eqs);
+        absorb_solve_outcome(red, res, &mut hit_contra);
+    }
+    if !node_eqs.is_empty() {
+        let res = red.solve_node_id_eqs_broadcast(&node_eqs);
+        absorb_solve_outcome(red, res, &mut hit_contra);
+    }
+    if hit_contra {
+        red.mark_contradictory();
+    }
+    ChangeIndicator::Changed
+}
+
 /// CR-rule *DG4*: every `Fr(~k)` value is produced by exactly one
 /// node. Find pairs of Fresh-rule nodes whose conclusion term matches
 /// (after applying the eq-store's free substitution) and equate their
@@ -2442,7 +2523,7 @@ fn enforce_fresh_node_uniqueness_pass(red: &mut Reduction) -> ChangeIndicator {
 /// pattern from `enforce_edge_uniqueness_pass` to avoid spurious
 /// `Changed` flags that would re-fire the simplify loop forever).
 fn enforce_ku_action_uniqueness_pass(red: &mut Reduction) -> ChangeIndicator {
-    use crate::constraint::constraints::{Goal, NodeId};
+    use crate::constraint::constraints::NodeId;
     use crate::fact::{FactTag, LNFact};
     use tamarin_term::lterm::LNTerm;
 
@@ -2470,16 +2551,11 @@ fn enforce_ku_action_uniqueness_pass(red: &mut Reduction) -> ChangeIndicator {
     // `vk.X` that dedup-merges with a grafted solved goal.  See
     // Simplify.hs (`kuActions se = (\(i,fa,m) -> (m,(fa,i)))
     // <$> allKUActions se`).
-    let mut acts: Vec<(NodeId, LNFact, LNTerm)> = Vec::new();
-    for (g, st) in red.sys.goals.iter() {
-        if st.solved {
-            continue;
-        }
-        if let Goal::Action(i, fa) = g {
-            if matches!(fa.tag, FactTag::Ku) {
-                if let Some(m) = fa.terms.first() {
-                    acts.push((*i, fa.clone(), apply_subst(m)));
-                }
+    let mut acts: Vec<(LNTerm, LNFact, NodeId)> = Vec::new();
+    for (i, fa) in red.sys.unsolved_action_atoms() {
+        if matches!(fa.tag, FactTag::Ku) {
+            if let Some(m) = fa.terms.first() {
+                acts.push((apply_subst(m), fa.clone(), i));
             }
         }
     }
@@ -2499,74 +2575,19 @@ fn enforce_ku_action_uniqueness_pass(red: &mut Reduction) -> ChangeIndicator {
         for fa in &rule.actions {
             if matches!(fa.tag, FactTag::Ku) {
                 if let Some(m) = fa.terms.first() {
-                    acts.push((*id, fa.clone(), apply_subst(m)));
+                    acts.push((apply_subst(m), fa.clone(), *id));
                 }
             }
         }
     }
-    if acts.len() < 2 {
-        return ChangeIndicator::Unchanged;
-    }
-    // Group by term. (LNTerm is Ord/Eq from term::Term.)
-    use std::collections::BTreeMap;
-    let mut by_term: BTreeMap<LNTerm, Vec<(NodeId, LNFact)>> = BTreeMap::new();
-    for (i, fa, m) in acts {
-        by_term.entry(m).or_default().push((i, fa));
-    }
-    let mut node_eqs: Vec<tamarin_term::rewriting::Equal<NodeId>> = Vec::new();
-    let mut fact_eqs: Vec<tamarin_term::rewriting::Equal<LNFact>> = Vec::new();
-    for (_m, group) in by_term {
-        if group.len() < 2 {
-            continue;
-        }
-        let (keep_id, keep_fa) = &group[0];
-        for (rid, rfa) in group.iter().skip(1) {
-            if rid != keep_id {
-                node_eqs.push(tamarin_term::rewriting::Equal {
-                    lhs: *keep_id,
-                    rhs: *rid,
-                });
-            }
-            if rfa != keep_fa {
-                fact_eqs.push(tamarin_term::rewriting::Equal {
-                    lhs: keep_fa.clone(),
-                    rhs: rfa.clone(),
-                });
-            }
-        }
-    }
-    node_eqs.retain(|e| e.lhs != e.rhs);
-    if node_eqs.is_empty() && fact_eqs.is_empty() {
-        return ChangeIndicator::Unchanged;
-    }
-    let mut changed = ChangeIndicator::Unchanged;
-    let mut hit_contra = false;
-    if !fact_eqs.is_empty() {
-        // Haskell's `enforceFreshAndKuNodeUniqueness` uses `merge solver
-        // candidates` where solver is `solveFactEqs SplitNow`; the
-        // monadic bind propagates contradictions via mzero.  We surface
-        // it as gfalse — match `Ok(Contradictory)` and `Err(_)` explicitly
-        // so a unification failure is not silently swallowed.
-        let res = red.solve_fact_eqs(
+    // Haskell's `enforceFreshAndKuNodeUniqueness` merges the KU actions with
+    // `solveFactEqs SplitNow` as the `merge` solver.
+    merge_candidates(red, acts, |red, eqs| {
+        red.solve_fact_eqs(
             crate::constraint::solver::reduction::SplitStrategy::SplitNow,
-            &fact_eqs,
-        );
-        if absorb_solve_outcome(red, res, &mut hit_contra) {
-            changed = ChangeIndicator::Changed;
-        }
-    }
-    if !node_eqs.is_empty() {
-        let res = red.solve_node_id_eqs_broadcast(&node_eqs);
-        if absorb_solve_outcome(red, res, &mut hit_contra) {
-            changed = ChangeIndicator::Changed;
-        }
-    }
-    if hit_contra {
-        red.mark_contradictory();
-        changed = ChangeIndicator::Changed;
-    }
-
-    changed
+            eqs,
+        )
+    })
 }
 
 /// CR-rule *S_@* (`solveUniqueActions`).  Mirrors Haskell's
@@ -2970,75 +2991,30 @@ fn enforce_kd_fact_uniqueness_pass(red: &mut Reduction) -> ChangeIndicator {
     // KD-conc rules are unified at the rule level.
     //
     // Collect (node, rule, term) for every KD-conc.
-    let mut kd_concs: Vec<(NodeId, RuleACInst, LNTerm)> = Vec::new();
+    let mut kd_concs: Vec<(LNTerm, RuleACInst, NodeId)> = Vec::new();
     for (id, rule) in red.sys.nodes.iter() {
         for fa in &rule.conclusions {
             if matches!(fa.tag, FactTag::Kd) {
                 if let Some(m) = fa.terms.first() {
-                    kd_concs.push((*id, rule.clone(), m.clone()));
+                    kd_concs.push((m.clone(), rule.clone(), *id));
                 }
             }
         }
     }
-    if kd_concs.len() < 2 {
-        return ChangeIndicator::Unchanged;
-    }
-    use std::collections::BTreeMap;
-    let mut by_term: BTreeMap<LNTerm, Vec<(NodeId, RuleACInst)>> = BTreeMap::new();
-    for (i, r, m) in kd_concs {
-        by_term.entry(m).or_default().push((i, r));
-    }
-    let mut node_eqs: Vec<tamarin_term::rewriting::Equal<NodeId>> = Vec::new();
-    let mut rule_eqs: Vec<tamarin_term::rewriting::Equal<RuleACInst>> = Vec::new();
-    for (_m, group) in by_term {
-        if group.len() < 2 {
-            continue;
-        }
-        let (keep_id, keep_rule) = &group[0];
-        for (rid, rrule) in group.iter().skip(1) {
-            if rid != keep_id {
-                node_eqs.push(tamarin_term::rewriting::Equal {
-                    lhs: *keep_id,
-                    rhs: *rid,
-                });
-            }
-            if keep_rule != rrule {
-                rule_eqs.push(tamarin_term::rewriting::Equal {
-                    lhs: keep_rule.clone(),
-                    rhs: rrule.clone(),
-                });
-            }
-        }
-    }
-    node_eqs.retain(|e| e.lhs != e.rhs);
-    if node_eqs.is_empty() && rule_eqs.is_empty() {
-        return ChangeIndicator::Unchanged;
-    }
-    let mut hit_contra = false;
-    if !rule_eqs.is_empty() {
-        // Haskell uses `solveRuleEqs SplitNow` for the kdConcs merger
-        // (Simplify.hs `merge (solveRuleEqs SplitNow) kdConcs`).
-        // Multi-arm AC unifications fork the DisjT continuation in HS
-        // (Reduction.hs:723-725); mirror via install + pending_eq_arms.
-        // Joux_EphkRev: ignoring `Cases` here left the
-        // `mem::take`'d default eq-store (conj=[], next_split=0)
-        // installed — the next substSystem then parked its setNodes
-        // rule-eq disjunctions at SplitId(0)/(1)/(2) as spurious
-        // splitEqs goals HS never has.
-        let res = red.solve_rule_eqs(
+    // Haskell uses `solveRuleEqs SplitNow` for the kdConcs merger
+    // (Simplify.hs `merge (solveRuleEqs SplitNow) kdConcs`).  Multi-arm AC
+    // unifications fork the DisjT continuation in HS (Reduction.hs:723-725);
+    // `merge_candidates` mirrors that via install + pending_eq_arms.
+    // Joux_EphkRev: dropping a `Cases` result here leaves the `mem::take`'d
+    // default eq-store (conj=[], next_split=0) installed — the next
+    // substSystem then parks its setNodes rule-eq disjunctions at
+    // SplitId(0)/(1)/(2) as spurious splitEqs goals HS never has.
+    merge_candidates(red, kd_concs, |red, eqs| {
+        red.solve_rule_eqs(
             crate::constraint::solver::reduction::SplitStrategy::SplitNow,
-            &rule_eqs,
-        );
-        absorb_solve_outcome(red, res, &mut hit_contra);
-    }
-    if !node_eqs.is_empty() {
-        let res = red.solve_node_id_eqs_broadcast(&node_eqs);
-        absorb_solve_outcome(red, res, &mut hit_contra);
-    }
-    if hit_contra {
-        red.mark_contradictory();
-    }
-    ChangeIndicator::Changed
+            eqs,
+        )
+    })
 }
 
 /// CR-rule *S_fresh-order / freshOrdering*: enforce that the unique
