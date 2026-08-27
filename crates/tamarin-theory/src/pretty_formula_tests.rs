@@ -5,18 +5,10 @@
 use super::*;
 use crate::atom::Unit2;
 use crate::formula::BLNTerm;
+use tamarin_parser::ast as p;
 use tamarin_term::function_symbols::{Constructability, NoEqSym, Privacy};
 use tamarin_term::lterm::{Name, NameTag};
 use tamarin_term::term::f_app_no_eq;
-
-fn v(name: &str, sort: LSort) -> p::VarSpec {
-    p::VarSpec {
-        name: name.into(),
-        idx: 0,
-        sort,
-        typ: None,
-    }
-}
 
 /// A free variable leaf of a guarded formula's term.
 fn bvar(name: &str, sort: LSort) -> BLNTerm {
@@ -166,85 +158,6 @@ fn long_quantifier_varlist_wraps() {
 }
 
 #[test]
-fn pair_term() {
-    let t = p::Term::Pair(vec![
-        p::Term::Var(v("a", LSort::Msg)),
-        p::Term::Var(v("b", LSort::Msg)),
-    ]);
-    assert_eq!(pretty_term(&t), "<a, b>");
-}
-
-/// HS `prettyTerm` renders a user-declared `[AC]` symbol INFIX:
-/// `FApp (AC (ACfct (f,_))) ts -> ppTerms (" " ++ BC.unpack f ++ " ") 1
-/// "(" ")" ts` (Term/Term.hs:305), so `add(x, y)` prints as `(x add y)`.
-/// `lnterm_to_parser` must therefore project it onto the AC-BinOp path,
-/// not onto a prefix `App`.
-#[test]
-fn user_ac_symbol_renders_infix() {
-    use tamarin_term::function_symbols::{AcFctSym, AcSym, Constructability, NdcState, Privacy};
-    use tamarin_term::lterm::{LSort, LVar};
-    use tamarin_term::term::f_app_ac;
-    use tamarin_term::vterm::var_term;
-
-    let sym = AcFctSym::new(
-        b"add".to_vec(),
-        Privacy::Public,
-        Constructability::Constructor,
-        NdcState::NotNdc,
-    );
-    let x = var_term(LVar::new("x", LSort::Msg, 0));
-    let y = var_term(LVar::new("y", LSort::Msg, 0));
-    let t = f_app_ac(AcSym::AcFct(sym), vec![x, y]);
-
-    let ast = crate::elaborate::lnterm_to_parser(&t);
-    assert_eq!(term_to_doc(&ast).render(), "(x add y)");
-
-    // The same infix form must reach a rendered fact.
-    let fa = p::Fact {
-        persistent: false,
-        name: "F".to_string(),
-        args: vec![ast],
-        annotations: Vec::new(),
-    };
-    assert_eq!(fact_to_doc(&fa).render(), "F( (x add y) )");
-}
-
-/// A NULLARY user-AC symbol is HS `FApp (AC (ACfct (f,_))) [] ->
-/// text (BC.unpack f)` (Term/Term.hs:304) — the bare name.
-#[test]
-fn user_ac_symbol_nullary_renders_bare_name() {
-    use tamarin_term::function_symbols::{
-        AcFctSym, AcSym, Constructability, FunSym, NdcState, Privacy,
-    };
-    use tamarin_term::term::Term;
-
-    let sym = AcFctSym::new(
-        b"add".to_vec(),
-        Privacy::Public,
-        Constructability::Constructor,
-        NdcState::NotNdc,
-    );
-    let t = Term::App(FunSym::Ac(AcSym::AcFct(sym)), Vec::new().into());
-    let ast = crate::elaborate::lnterm_to_parser(&t);
-    assert_eq!(term_to_doc(&ast).render(), "add");
-}
-
-/// HS `prettyTerm` renders an AC operand list with the operator between the
-/// arguments.  It puts the complete application in parentheses
-/// (Term/Term.hs:305-309).  `a XOR b` is therefore `(a⊕b)`, with no spaces and
-/// with the outer parentheses kept.  The expected bytes come from the oracle
-/// (Git revision ef3f0468).
-#[test]
-fn binop_xor() {
-    let t = p::Term::BinOp(
-        p::BinOp::Xor,
-        Box::new(p::Term::Var(v("a", LSort::Msg))),
-        Box::new(p::Term::Var(v("b", LSort::Msg))),
-    );
-    assert_eq!(pretty_term(&t), "(a\u{2295}b)");
-}
-
-#[test]
 fn guarded_negation_shortcut() {
     // ∀ [] [Less(i,j)] ⊥  ⇒  rendered as `¬(i < j)`.
     let g = Guarded::GGuarded {
@@ -284,48 +197,6 @@ fn ac_chain_bterm() -> BLNTerm {
     )
 }
 
-fn ac_chain_term() -> p::Term {
-    let pair = |n: &str, payload: &str| {
-        p::Term::Pair(vec![
-            p::Term::PubLit(n.into()),
-            p::Term::Var(v(payload, LSort::Fresh)),
-        ])
-    };
-    // ((p1 ++ p2) ++ p3) — binary, same-op; renderer flattens to n-ary.
-    p::Term::BinOp(
-        p::BinOp::Union,
-        Box::new(p::Term::BinOp(
-            p::BinOp::Union,
-            Box::new(pair("1", "longPayloadNameNumberOne")),
-            Box::new(pair("2", "longPayloadNameNumberTwo")),
-        )),
-        Box::new(pair("3", "longPayloadNameNumberThree")),
-    )
-}
-
-#[test]
-fn ac_union_chain_wraps_in_rule_term() {
-    // term_to_doc routes AC ops through ac_op_doc (fcat).  Rendered at a
-    // deep indent the chain must break; HS puts `++` at the end of each
-    // non-last element's lines and `(`-wraps the whole chain.
-    let t = ac_chain_term();
-    let doc = term_to_doc(&t);
-    // place at column 20 (a typical proof-tree/rule indent) so it wraps.
-    let s = doc.render_at(LINE_LENGTH, RIBBON, 20);
-    assert!(
-        s.contains("++\n"),
-        "AC chain did not wrap with ++ at line end:\n{s}"
-    );
-    assert!(s.starts_with('('), "AC chain missing leading paren:\n{s}");
-    assert!(
-        s.trim_end().ends_with(')'),
-        "AC chain missing trailing paren:\n{s}"
-    );
-    // Each pair element renders fully (its payload var appears).
-    assert!(s.contains("~longPayloadNameNumberOne"));
-    assert!(s.contains("~longPayloadNameNumberThree"));
-}
-
 #[test]
 fn ac_union_chain_wraps_in_guarded_formula() {
     // The guarded path must wrap the SAME AC chain identically, since HS
@@ -354,27 +225,36 @@ fn ac_union_chain_wraps_in_guarded_formula() {
 /// `hmac('g'^(~newPrivKey*~respPrivKey), ...)` proof-line divergence.
 #[test]
 fn exp_with_ac_exponent_wraps_inside_fun() {
+    use tamarin_term::function_symbols::{exp_sym, AcSym};
+    use tamarin_term::lterm::LVar;
+    use tamarin_term::pretty::pretty_nterm;
+    use tamarin_term::term::{f_app_ac, f_app_no_eq};
+    use tamarin_term::vterm::{const_term, var_term};
+
+    let fresh = |n: &str| var_term(LVar::new(n, LSort::Fresh, 0));
     // hmac('g'^(~longFreshPrivKeyOne*~longFreshPrivKeyTwo), ~longSaltArgument)
-    let exp = p::Term::BinOp(
-        p::BinOp::Exp,
-        Box::new(p::Term::PubLit("g".into())),
-        Box::new(p::Term::BinOp(
-            p::BinOp::Mult,
-            Box::new(p::Term::Var(v("longFreshPrivKeyOne", LSort::Fresh))),
-            Box::new(p::Term::Var(v("longFreshPrivKeyTwo", LSort::Fresh))),
-        )),
-    );
-    let t = p::Term::App(
-        "hmac".into(),
+    let exp = f_app_no_eq(
+        exp_sym(),
         vec![
-            exp.clone(),
-            p::Term::Var(v("longSaltArgumentName", LSort::Fresh)),
+            const_term(Name::new(NameTag::Pub, "g")),
+            f_app_ac(
+                AcSym::Mult,
+                vec![fresh("longFreshPrivKeyOne"), fresh("longFreshPrivKeyTwo")],
+            ),
         ],
     );
-    let doc = term_to_doc(&t);
+    let t = f_app_no_eq(
+        NoEqSym::new(
+            b"hmac".to_vec(),
+            2,
+            Privacy::Public,
+            Constructability::Constructor,
+        ),
+        vec![exp.clone(), fresh("longSaltArgumentName")],
+    );
     // Deep indent (col 30) so the flat term overruns and the `*`-operands
     // must each break onto their own line at `nest 1` (HS layout).
-    let s = doc.render_at(LINE_LENGTH, RIBBON, 30);
+    let s = pretty_nterm(&t).render_at(LINE_LENGTH, RIBBON, 30);
     assert!(
         s.contains("*\n"),
         "AC `*` exponent inside exp did not wrap:\n{s}"
@@ -392,49 +272,8 @@ fn exp_with_ac_exponent_wraps_inside_fun() {
         );
     }
     // The plain (well-fitting) exp still renders flat with no wrap.
-    let flat = term_to_doc(&exp).render_at(LINE_LENGTH, RIBBON, 0);
+    let flat = pretty_nterm(&exp).render_at(LINE_LENGTH, RIBBON, 0);
     assert_eq!(flat, "'g'^(~longFreshPrivKeyOne*~longFreshPrivKeyTwo)");
-}
-
-// The curly-brace form `name{a}b` in the source is parser-only sugar (the
-// `{` branch of `atom_term` in `parser.rs`); HS `prettyTerm`/`ppFun`
-// (Term/Term.hs:298-327) has no brace case
-// and re-emits these NoEq applications in function form
-// `name(a, b)`.  Every term renderer (flat + Doc, parser-AST + guarded
-// formula) must match that.
-#[test]
-fn algapp_renders_function_form_flat_term() {
-    // sdec{body}key  ->  sdec(body, key)
-    let t = p::Term::AlgApp(
-        "sdec".into(),
-        Box::new(p::Term::Var(v("body", LSort::Msg))),
-        Box::new(p::Term::Var(v("key", LSort::Msg))),
-    );
-    assert_eq!(pretty_term(&t), "sdec(body, key)");
-}
-
-#[test]
-fn algapp_pair_arg_renders_function_form_flat_term() {
-    // senc{a,b}k  ->  AlgApp(senc, <a, b>, k)  ->  senc(<a, b>, k)
-    let t = p::Term::AlgApp(
-        "senc".into(),
-        Box::new(p::Term::Pair(vec![
-            p::Term::Var(v("a", LSort::Msg)),
-            p::Term::Var(v("b", LSort::Msg)),
-        ])),
-        Box::new(p::Term::Var(v("k", LSort::Msg))),
-    );
-    assert_eq!(pretty_term(&t), "senc(<a, b>, k)");
-}
-
-#[test]
-fn algapp_renders_function_form_doc_term() {
-    let t = p::Term::AlgApp(
-        "sdec".into(),
-        Box::new(p::Term::Var(v("body", LSort::Msg))),
-        Box::new(p::Term::Var(v("key", LSort::Msg))),
-    );
-    assert_eq!(term_to_doc(&t).render(), "sdec(body, key)");
 }
 
 #[test]
@@ -464,25 +303,6 @@ fn algapp_pair_arg_renders_function_form_doc_guarded_term() {
     );
     let a = Guarded::Atom(crate::atom::ProtoAtom::EqE(g, bpub("z")));
     assert_eq!(guarded_doc(&a).render(), "senc(<a, b>, k) = 'z'");
-}
-
-#[test]
-fn fact_annotations_render_in_ord_order() {
-    // HS `ppAnn` iterates `S.toList ann`, i.e. `FactAnnotation` Ord order
-    // (SolveFirst < SolveLast < NoSources), regardless of input order.
-    // Supply the annotations scrambled and assert the rendered suffix is
-    // sorted (and deduped).
-    let fa = p::Fact {
-        persistent: false,
-        name: "F".into(),
-        args: vec![p::Term::Var(v("a", LSort::Msg))],
-        annotations: vec![
-            p::FactAnnotation::NoSources,
-            p::FactAnnotation::SolveFirst,
-            p::FactAnnotation::NoSources, // duplicate: deduped like S.fromList
-        ],
-    };
-    assert_eq!(fact_to_doc(&fa).render(), "F( a )[+, no_precomp]");
 }
 
 // =============================================================================
@@ -882,252 +702,4 @@ fn existential_binder_keeps_ac_operand_order() {
          (Seq_Sent( A, B, seq1 ) @ #i) ∧ (Seq_Sent( A, B, seq2 ) @ #j)\n \
          ∧\n  (#i < #j) ∧ (∀ dif. (seq2 = (dif++seq1)) ⇒ ⊥)\""
     );
-}
-
-// =============================================================================
-// Locally-nameless → parser AST
-// =============================================================================
-
-/// The signature of `builtins: multiset`, under which the parser reads the
-/// `(<)` operator.
-fn mset_maude_sig() -> tamarin_term::maude_sig::MaudeSig {
-    let thy = tamarin_parser::parser::parse_theory("theory T begin\nbuiltins: multiset\nend", &[])
-        .unwrap();
-    crate::elaborate::elaborate(&thy)
-        .unwrap()
-        .signature
-        .maude_sig
-}
-
-/// The binder `VarSpec`s of a parser-AST formula, outermost first.
-fn binder_specs(f: &p::Formula) -> Vec<(String, u64, LSort)> {
-    use p::Formula::*;
-    match f {
-        True | False | Atom(_) => Vec::new(),
-        Not(g) => binder_specs(g),
-        And(a, b) | Or(a, b) | Implies(a, b) | Iff(a, b) => {
-            let mut out = binder_specs(a);
-            out.extend(binder_specs(b));
-            out
-        }
-        Forall(vs, body) | Exists(vs, body) => {
-            let mut out: Vec<(String, u64, LSort)> =
-                vs.iter().map(|v| (v.name.clone(), v.idx, v.sort)).collect();
-            out.extend(binder_specs(body));
-            out
-        }
-    }
-}
-
-/// Each binder of the reopened formula carries the display variable the
-/// printer shows for it — the `x`/`x.1` pair of a shadowed name, the fresh
-/// variables of a `_restrict` prefix, a binder pushed past a free variable of
-/// the same name — and closing the reopened AST again reproduces the formula.
-#[test]
-fn to_parser_reopens_the_binders_the_printer_shows() {
-    use crate::formula::from_parser;
-    use tamarin_parser::parser::parse_formula_str;
-    use tamarin_term::maude_sig::{mset_maude_sig, pair_maude_sig};
-
-    // The union sample needs the signature bit `builtins: multiset` sets, the
-    // one that opens `msetterm`'s `+` level (Theory/Text/Parser/Term.hs:195-200).
-    let msig = pair_maude_sig().merge(mset_maude_sig());
-    let samples: &[(&str, &[(&str, u64, LSort)])] = &[
-        (
-            "All x y #i. A(x, y) @ #i",
-            &[
-                ("x", 0, LSort::Msg),
-                ("y", 0, LSort::Msg),
-                ("i", 0, LSort::Node),
-            ],
-        ),
-        // The inner binder shadows the outer one: `x` and `x.1`.
-        (
-            "All x. Ex x. A(x) @ #i",
-            &[("x", 0, LSort::Msg), ("x", 1, LSort::Msg)],
-        ),
-        // A free `x` seeds the supply, so the binder is displayed `x.1`.
-        ("(Ex x. A(x) @ #i) & B(x) @ #j", &[("x", 1, LSort::Msg)]),
-        // The shape the `_restrict` lifting builds, with its `x`/`x.1` fresh
-        // variables and the `#NOW` timepoint.
-        (
-            "All x #NOW x.1. Restr_C_2_1(x, x.1) @ NOW ==> x = x.1",
-            &[
-                ("x", 0, LSort::Msg),
-                ("NOW", 0, LSort::Node),
-                ("x", 1, LSort::Msg),
-            ],
-        ),
-        ("All x. P(x, y)", &[("x", 0, LSort::Msg)]),
-        (
-            "All x y. (x + y) = z",
-            &[("x", 0, LSort::Msg), ("y", 0, LSort::Msg)],
-        ),
-        (
-            "All #i #j. last(#i) & #i < #j",
-            &[("i", 0, LSort::Node), ("j", 0, LSort::Node)],
-        ),
-        (
-            "All x y. x << y",
-            &[("x", 0, LSort::Msg), ("y", 0, LSort::Msg)],
-        ),
-        ("not (Ex x. A(x) @ #i) ==> (F | T)", &[("x", 0, LSort::Msg)]),
-    ];
-    for (src, binders) in samples {
-        let f = parse_formula_str(src, &msig).unwrap();
-        let ln = from_parser(&f, &msig).unwrap();
-        let back = syntactic_lnformula_to_parser(&ln);
-        let want: Vec<(String, u64, LSort)> = binders
-            .iter()
-            .map(|(n, i, s)| ((*n).to_string(), *i, *s))
-            .collect();
-        assert_eq!(binder_specs(&back), want, "reopened binders on {src}");
-        assert_eq!(
-            from_parser(&back, &msig).unwrap(),
-            ln,
-            "closing the reopened AST on {src}"
-        );
-    }
-}
-
-/// HS closes a binder list with `foldr (hinted q) f vs`
-/// (Theory/Text/Parser/Formula.hs:73-77), one `Qua` node per variable.
-/// Reopening collects the run back into one binder list, and stops at the
-/// first binder of the other quantifier.
-#[test]
-fn to_parser_groups_consecutive_binders_of_one_quantifier() {
-    use crate::formula::from_parser;
-    use tamarin_parser::parser::parse_formula_str;
-    use tamarin_term::maude_sig::pair_maude_sig;
-
-    let msig = pair_maude_sig();
-    let f = parse_formula_str("All x y #i. A(x, y) @ #i", &msig).unwrap();
-    let ln = from_parser(&f, &msig).unwrap();
-    // Three nested `Qua` nodes closed the three binders.
-    assert!(matches!(
-        &ln,
-        ProtoFormula::Qua(_, _, b1)
-            if matches!(b1.as_ref(), ProtoFormula::Qua(_, _, b2)
-                if matches!(b2.as_ref(), ProtoFormula::Qua(_, _, _)))
-    ));
-    let p::Formula::Forall(vs, body) = syntactic_lnformula_to_parser(&ln) else {
-        panic!("expected one universal binder list");
-    };
-    assert_eq!(
-        vs,
-        vec![v("x", LSort::Msg), v("y", LSort::Msg), v("i", LSort::Node)]
-    );
-    assert!(matches!(*body, p::Formula::Atom(p::Atom::Action(_, _))));
-
-    let f = parse_formula_str("All x. Ex y. A(x, y) @ #i", &msig).unwrap();
-    let ln = from_parser(&f, &msig).unwrap();
-    let p::Formula::Forall(vs, body) = syntactic_lnformula_to_parser(&ln) else {
-        panic!("expected a universal binder list");
-    };
-    assert_eq!(vs, vec![v("x", LSort::Msg)]);
-    let p::Formula::Exists(vs, _) = *body else {
-        panic!("expected an existential binder list");
-    };
-    assert_eq!(vs, vec![v("y", LSort::Msg)]);
-}
-
-/// The only sugar a `SyntacticLNFormula` carries is `Pred`, and it is
-/// `blatom`'s predicate atom (Theory/Text/Parser/Formula.hs:52).  The
-/// multiset `(<)` is parsed into the `Smaller` predicate (`smallerp`,
-/// Theory/Text/Parser/Formula.hs:30-38), so it comes back as that predicate,
-/// not as the AST's own `(<)` atom.
-#[test]
-fn to_parser_writes_a_sugar_predicate_back_as_a_predicate_atom() {
-    use crate::formula::from_parser;
-    use tamarin_parser::parser::parse_formula_str;
-
-    let msig = mset_maude_sig();
-    let f = parse_formula_str("All x. P(x, y)", &msig).unwrap();
-    let ln = from_parser(&f, &msig).unwrap();
-    let p::Formula::Forall(_, body) = syntactic_lnformula_to_parser(&ln) else {
-        panic!("expected the universal binder");
-    };
-    let p::Formula::Atom(p::Atom::Pred(fa)) = *body else {
-        panic!("expected a predicate atom");
-    };
-    assert_eq!(fa.name, "P");
-    assert_eq!(fa.args.len(), 2);
-
-    // The AST's own `(<)` atom closes into the same `Smaller` predicate, so
-    // it too comes back as a predicate atom.
-    let mset = p::Formula::Atom(p::Atom::LessMset(
-        p::Term::Var(v("x", LSort::Msg)),
-        p::Term::Var(v("y", LSort::Msg)),
-    ));
-    for f in [parse_formula_str("x (<) y", &msig).unwrap(), mset] {
-        let ln = from_parser(&f, &msig).unwrap();
-        let p::Formula::Atom(p::Atom::Pred(fa)) = syntactic_lnformula_to_parser(&ln) else {
-            panic!("expected the Smaller predicate atom for {f:?}");
-        };
-        assert_eq!(fa.name, "Smaller");
-        assert_eq!(
-            fa.args,
-            vec![
-                p::Term::Var(v("x", LSort::Msg)),
-                p::Term::Var(v("y", LSort::Msg))
-            ]
-        );
-    }
-}
-
-/// The fresh supply is seeded with the formula's free variables
-/// (`avoidPrecise`, LTerm.hs:714-715), so a reopened binder never takes the
-/// name of a free variable: the binder of `Ex x. A(x)` beside a free `x` is
-/// displayed `x.1`, the free occurrence keeps `x`, and closing the reopened
-/// AST binds the same occurrence it started with.
-#[test]
-fn to_parser_cannot_capture_a_free_variable_with_a_binder_name() {
-    use crate::formula::{formula_frees, from_parser};
-    use tamarin_parser::parser::parse_formula_str;
-    use tamarin_term::maude_sig::pair_maude_sig;
-
-    let msig = pair_maude_sig();
-    let f = parse_formula_str("(Ex x. A(x) @ #i) & B(x) @ #j", &msig).unwrap();
-    let ln = from_parser(&f, &msig).unwrap();
-    let p::Formula::And(left, right) = syntactic_lnformula_to_parser(&ln) else {
-        panic!("expected the conjunction");
-    };
-    let p::Formula::Exists(vs, body) = *left else {
-        panic!("expected the existential binder");
-    };
-    assert_eq!(
-        vs,
-        vec![p::VarSpec {
-            name: "x".to_string(),
-            idx: 1,
-            sort: LSort::Msg,
-            typ: None,
-        }]
-    );
-    let p::Formula::Atom(p::Atom::Action(fa, _)) = *body else {
-        panic!("expected the bound action atom");
-    };
-    assert_eq!(fa.args, vec![p::Term::Var(bound_x1())]);
-    let p::Formula::Atom(p::Atom::Action(fa, _)) = *right else {
-        panic!("expected the free action atom");
-    };
-    assert_eq!(fa.args, vec![p::Term::Var(v("x", LSort::Msg))]);
-
-    let back = syntactic_lnformula_to_parser(&ln);
-    assert_eq!(from_parser(&back, &msig).unwrap(), ln);
-    assert_eq!(
-        formula_frees(&from_parser(&back, &msig).unwrap()),
-        formula_frees(&ln)
-    );
-}
-
-/// The `x.1` display name a binder takes when the free `x` already holds
-/// index 0.
-fn bound_x1() -> p::VarSpec {
-    p::VarSpec {
-        name: "x".to_string(),
-        idx: 1,
-        sort: LSort::Msg,
-        typ: None,
-    }
 }

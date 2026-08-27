@@ -546,13 +546,12 @@ mod tests {
     use tamarin_parser::ast as p;
     use tamarin_term::lterm::LSort;
 
-    /// The case test `Ex #i. A(x)@i`, with `x` free, makes the round trip
-    /// every generated lemma takes: elaboration closes the temporal binder to
-    /// a De Bruijn index, and the projection back to the parser AST reopens it
-    /// under the same name, sort and index.  So the comparison is against the
-    /// whole source formula, not only its outermost constructor: that catches
-    /// a binder renamed to a generated name, a dropped body, and an index that
-    /// resolves to the wrong binder.
+    /// The case test `Ex #i. A(x)@i`, with `x` free, is stored as the
+    /// locally-nameless formula every generated lemma is built from:
+    /// elaboration closes the temporal binder to a De Bruijn index and leaves
+    /// `x` free.  The comparison is against the whole closed source formula,
+    /// not only its outermost constructor, so a dropped body and an index that
+    /// resolves to the wrong binder both fail here.
     #[test]
     fn case_test_round_trip() {
         const ROUND_TRIP_SRC: &str = "theory AccRoundTrip\n\
@@ -578,10 +577,9 @@ end\n";
                 _ => None,
             })
             .expect("the case test is parsed");
-        assert_eq!(
-            &tamarin_theory::pretty_formula::syntactic_lnformula_to_parser(fm),
-            source
-        );
+        let closed = tamarin_theory::formula::from_parser(source, &elaborated.signature.maude_sig)
+            .expect("the case test closes");
+        assert_eq!(fm, &closed);
     }
 
     /// A case test carrying a user predicate, so every lemma

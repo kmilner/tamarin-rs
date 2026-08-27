@@ -264,7 +264,7 @@ fn pkcs11_eleven_tuple_close_bracket_glue() {
     // 11-tuple `<x.16, …, x.26>` breaks BEFORE x.26 (gluing `>`).
     // Confirms the engine reproduces the HS structure
     // byte-for-byte (verified against Text.PrettyPrint.HughesPJ ll=110).
-    // term_doc = pair_doc(11 elements) = fcat([ "<", e0", ", ... e10, ">" ]).
+    // The term Doc of an 11-tuple is fcat([ "<", e0, ", ", ... e10, ">" ]).
     // Elements x.16..x.26 are 4 chars each, nest(1)'d, comma-suffixed.
     let mk_pair = || {
         let n = 11;

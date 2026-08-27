@@ -602,20 +602,37 @@ mod tests {
     // entities decoded, hl-spans stripped).
     #[test]
     fn um3_subst_term_wraps_like_hs() {
-        use tamarin_parser::ast as p;
-
-        let var = |name: &str, idx: u64, sort: LSort| {
-            p::Term::Var(p::VarSpec {
-                name: name.to_string(),
-                idx,
-                sort,
-                typ: None,
-            })
+        use tamarin_term::function_symbols::{
+            exp_sym, pair_sym, AcSym, Constructability, NoEqSym, Privacy,
         };
-        let pube = |s: &str| p::Term::PubLit(s.to_string());
-        let app = |n: &str, args: Vec<p::Term>| p::Term::App(n.to_string(), args);
-        let pair = p::Term::Pair;
-        let exp = |l: p::Term, r: p::Term| p::Term::BinOp(p::BinOp::Exp, Box::new(l), Box::new(r));
+        use tamarin_term::lterm::{LNTerm, LVar, Name, NameTag};
+        use tamarin_term::term::{f_app_ac, f_app_no_eq};
+        use tamarin_term::vterm::{const_term, var_term};
+
+        let var = |name: &str, idx: u64, sort: LSort| var_term(LVar::new(name, sort, idx));
+        let pube = |s: &str| const_term(Name::new(NameTag::Pub, s));
+        let app = |n: &str, args: Vec<LNTerm>| {
+            f_app_no_eq(
+                NoEqSym::new(
+                    n.as_bytes().to_vec(),
+                    args.len(),
+                    Privacy::Public,
+                    Constructability::Constructor,
+                ),
+                args,
+            )
+        };
+        // HS `fAppPair` is arity 2 (Term/Term.hs:163), so `<a, b, c>` is the
+        // right-nested chain `prettyTerm`'s `split` walks back out.
+        let pair = |items: Vec<LNTerm>| {
+            let mut it = items.into_iter().rev();
+            let mut acc = it.next().expect("a tuple has at least one element");
+            for prev in it {
+                acc = f_app_no_eq(pair_sym(), vec![prev, acc]);
+            }
+            acc
+        };
+        let exp = |l: LNTerm, r: LNTerm| f_app_no_eq(exp_sym(), vec![l, r]);
         let a5 = || var("A", 5, LSort::Pub);
         let b5 = || var("B", 5, LSort::Pub);
         let y5 = || var("Y", 5, LSort::Msg);
@@ -625,15 +642,14 @@ mod tests {
         let g_eax5 = || {
             exp(
                 pube("g"),
-                p::Term::BinOp(
-                    p::BinOp::Mult,
-                    Box::new(var("ea", 5, LSort::Fresh)),
-                    Box::new(var("x", 5, LSort::Fresh)),
+                f_app_ac(
+                    AcSym::Mult,
+                    vec![var("ea", 5, LSort::Fresh), var("x", 5, LSort::Fresh)],
                 ),
             )
         };
         let h_arg = || pair(vec![z5(), g_eax5(), a5(), b5(), g_ex5(), y5()]);
-        let mac = |snd: p::Term| {
+        let mac = |snd: LNTerm| {
             app(
                 "MAC",
                 vec![app("first", vec![app("h", vec![h_arg()])]), snd],
@@ -649,18 +665,14 @@ mod tests {
             pube("3"),
             mac(pair(vec![pube("R"), b5(), a5(), y5(), g_ex5()])),
         ]);
-        let union = p::Term::BinOp(
-            p::BinOp::Union,
-            Box::new(p::Term::BinOp(p::BinOp::Union, Box::new(t1), Box::new(t2))),
-            Box::new(t3),
-        );
+        let union = f_app_ac(AcSym::Union, vec![t1, t2, t3]);
         let term = pair(vec![pube("UM3"), a5(), b5(), union]);
 
         // Build under the entity-width guard (HS HtmlDoc measures escaped
         // widths at `text` time; RS captures fill widths at Doc build).
         let _g = crate::pretty_hpj::HtmlEntityWidthGuard::enable();
         // The `prettySubst` mapping line (SubstVFree.hs:354-360).
-        let line = crate::pretty_formula::term_doc(&term)
+        let line = pretty_nterm(&term)
             .beside_sp(Doc::text(" <~ {"))
             .beside(fsep(punctuate(Doc::text(","), vec![Doc::text("t.1")])))
             .beside(Doc::text("}"));

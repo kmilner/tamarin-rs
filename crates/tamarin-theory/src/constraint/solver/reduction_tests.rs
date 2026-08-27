@@ -944,9 +944,7 @@ fn insert_atom_ignores_a_syntactic_atom() {
 }
 
 /// A `NameTag::Node` constant reaches the eq-store as itself.  It is the tag
-/// Maude mints for a skolemised timepoint (maude_proc.rs), and the parser AST
-/// has no spelling of its own for it: `elaborate::lnterm_to_parser` writes such
-/// a name as a `Pub` literal.
+/// Maude mints for a skolemised timepoint (maude_proc.rs).
 #[test]
 fn insert_atom_eq_keeps_the_node_name_tag() {
     let ctx = match ctx() {

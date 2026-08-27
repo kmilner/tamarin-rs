@@ -3,23 +3,18 @@
 //   scripts/gen_license_headers.py --authors <this file>
 
 //! Corpus net for the locally-nameless formula conversions: every formula
-//! of every `.spthy` under the examples tree, built exactly as the
-//! production renderers build their `Doc` input, is
+//! of every `.spthy` under the examples tree is
 //!
 //!   * converted with `from_parser`, printed through
 //!     `syntactic_lnformula_doc` and (where the sugar strips)
 //!     `lnformula_doc`, and the two renders compared through all three
 //!     production shapes — the lemma header, the nested restriction body
 //!     and the flat one-line string;
-//!   * reopened with `syntactic_lnformula_to_parser` and closed again, and
-//!     the reopened formula's render compared with the original's;
-//!   * converted with `from_parser` from both the raw and the
-//!     print-preprocessed parser AST, and the two results compared;
-//!   * checked for the two parser-AST shapes the round trip cannot carry
-//!     back — source-order fact annotations and a `VarSpec` type tag.
+//!   * checked for the two parser-AST shapes the conversion does not carry
+//!     into the internal formula — source-order fact annotations and a
+//!     `VarSpec` type tag.
 
 use super::*;
-use crate::elaborate::canonicalize_ac_in_formula as canon;
 use crate::fact::FactAnnotation;
 use crate::formula::{from_parser, sapic_from_parser, to_lnformula};
 use crate::pretty_sapic::render_sapic;
@@ -29,69 +24,19 @@ use rayon::prelude::*;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
+use tamarin_parser::ast as p;
 
-/// Predicate-expand a parser-AST formula through the internal expander,
-/// mirroring HS `expandFormula` (Theory/Syntactic/Predicate.hs:82-105) as
-/// applied by `expandRestriction` / `expandLemma` (TheoryObject.hs:430-446),
-/// so a header item enters the net as the formula `elaborate` stores for
-/// that lemma or restriction.
-///
-/// A formula with no such atom is returned as written: there is nothing to
-/// expand, and the round trip through the internal formula would re-derive
-/// its binder display names for nothing.  The parse already succeeded (so
-/// every referenced predicate is defined and arities match); should the
-/// conversion or the expansion nonetheless fail, fall back to the
-/// un-expanded formula rather than panic.
-fn expand_predicates_for_display(
-    f: &p::Formula,
-    predicates: &[crate::predicate::Predicate],
-    msig: &tamarin_term::maude_sig::MaudeSig,
-) -> p::Formula {
-    if !has_predicate_atom(f) {
-        return f.clone();
-    }
-    let expanded = crate::formula::from_parser(f, msig)
-        .ok()
-        .and_then(|syn| crate::predicate::expand_formula(predicates, &syn).ok());
-    match expanded {
-        Some(ln) => crate::pretty_formula::lnformula_to_parser(&ln),
-        None => f.clone(),
-    }
-}
-
-/// Whether `f` carries an atom the predicate expansion rewrites: a predicate
-/// use site, or the multiset `(<)` the built-in `Smaller` predicate expands.
-fn has_predicate_atom(f: &p::Formula) -> bool {
-    match f {
-        p::Formula::True | p::Formula::False => false,
-        p::Formula::Atom(a) => matches!(a, p::Atom::Pred(_) | p::Atom::LessMset(_, _)),
-        p::Formula::Not(g) => has_predicate_atom(g),
-        p::Formula::And(a, b)
-        | p::Formula::Or(a, b)
-        | p::Formula::Implies(a, b)
-        | p::Formula::Iff(a, b) => has_predicate_atom(a) || has_predicate_atom(b),
-        p::Formula::Forall(_, b) | p::Formula::Exists(_, b) => has_predicate_atom(b),
-    }
-}
-
-/// One formula to compare, tagged with where it came from.
-///
-/// `pre` is the formula before the printer's own preprocessing — for a
-/// lemma or restriction header the predicate-expanded formula, for a SAPIC
-/// condition or embedded `_restrict` the formula as written.  `formula` is
-/// `pre` after the arity-1 fold and the AC canonicalisation the matching
-/// renderer applies.  `sapic` marks the items a SAPIC process prints, whose
-/// internal form is built by [`sapic_from_parser`].
+/// One formula to compare, tagged with where it came from.  `sapic` marks
+/// the items a SAPIC process prints, whose internal form is built by
+/// [`sapic_from_parser`].
 struct Item {
     label: String,
     formula: p::Formula,
-    pre: p::Formula,
     sapic: bool,
 }
 
-/// SAPIC condition formulas and embedded-rule restrictions of a process,
-/// both as written and AC-canonicalised the way the `Msr` and `Cond` arms
-/// of `pretty_sapic` render them.
+/// SAPIC condition formulas and embedded-rule restrictions of a process, as
+/// written.
 fn process_formulas(proc_: &p::Process, label: &str, out: &mut Vec<Item>) {
     match proc_ {
         p::Process::Null | p::Process::Call { .. } => {}
@@ -100,8 +45,7 @@ fn process_formulas(proc_: &p::Process, label: &str, out: &mut Vec<Item>) {
                 for (i, f) in restrictions.iter().enumerate() {
                     out.push(Item {
                         label: format!("{label}/msr-restriction-{i}"),
-                        formula: canon(f),
-                        pre: f.clone(),
+                        formula: f.clone(),
                         sapic: true,
                     });
                 }
@@ -112,8 +56,7 @@ fn process_formulas(proc_: &p::Process, label: &str, out: &mut Vec<Item>) {
             if let p::ProcessComb::Cond(p::Condition::Formula(f)) = comb {
                 out.push(Item {
                     label: format!("{label}/cond"),
-                    formula: canon(f),
-                    pre: f.clone(),
+                    formula: f.clone(),
                     sapic: true,
                 });
             }
@@ -126,50 +69,35 @@ fn process_formulas(proc_: &p::Process, label: &str, out: &mut Vec<Item>) {
     }
 }
 
-/// Every formula the theory prints, built as the production renderers build
-/// it: lemma and restriction headers are predicate-expanded and
-/// AC-canonicalised; accountability lemmas and case tests are canonicalised;
-/// predicate bodies are taken as parsed.  The theory parser resolves arities
-/// at parse time (its `lookup_arity` `k == 1` branch parses
-/// an arity-1 application's surplus arguments as one tuple, as HS `naryOpApp`
+/// Every formula the theory carries, as parsed.  The theory parser resolves
+/// arities at parse time (its `lookup_arity` `k == 1` branch parses an
+/// arity-1 application's surplus arguments as one tuple, as HS `naryOpApp`
 /// does — Theory/Text/Parser/Term.hs:94-96), so no arity fold is needed here.
-fn theory_formulas(
-    parsed: &p::Theory,
-    predicates: &[crate::predicate::Predicate],
-    msig: &tamarin_term::maude_sig::MaudeSig,
-) -> Vec<Item> {
-    let item = |label: String, pre: p::Formula, formula: p::Formula| Item {
+fn theory_formulas(parsed: &p::Theory) -> Vec<Item> {
+    let item = |label: String, formula: p::Formula| Item {
         label,
         formula,
-        pre,
         sapic: false,
-    };
-    let header_items = |out: &mut Vec<Item>, kind: &str, name: &str, f: &p::Formula| {
-        let pre = expand_predicates_for_display(f, predicates, msig);
-        out.push(item(format!("{kind} {name}"), pre.clone(), canon(&pre)));
     };
     let mut out = Vec::new();
     for it in &parsed.items {
         match it {
-            p::TheoryItem::Lemma(lem) => header_items(&mut out, "lemma", &lem.name, &lem.formula),
-            p::TheoryItem::Restriction(r) | p::TheoryItem::LegacyAxiom(r) => {
-                header_items(&mut out, "restriction", &r.name, &r.formula)
+            p::TheoryItem::Lemma(lem) => {
+                out.push(item(format!("lemma {}", lem.name), lem.formula.clone()))
             }
-            p::TheoryItem::AccLemma(al) => out.push(item(
-                format!("acclemma {}", al.name),
-                al.formula.clone(),
-                canon(&al.formula),
-            )),
-            p::TheoryItem::CaseTest(ct) => out.push(item(
-                format!("casetest {}", ct.name),
-                ct.formula.clone(),
-                canon(&ct.formula),
-            )),
+            p::TheoryItem::Restriction(r) | p::TheoryItem::LegacyAxiom(r) => {
+                out.push(item(format!("restriction {}", r.name), r.formula.clone()))
+            }
+            p::TheoryItem::AccLemma(al) => {
+                out.push(item(format!("acclemma {}", al.name), al.formula.clone()))
+            }
+            p::TheoryItem::CaseTest(ct) => {
+                out.push(item(format!("casetest {}", ct.name), ct.formula.clone()))
+            }
             p::TheoryItem::Predicates(ps) => {
                 for pr in ps {
                     out.push(item(
                         format!("predicate {}", pr.fact.name),
-                        pr.formula.clone(),
                         pr.formula.clone(),
                     ));
                 }
@@ -229,8 +157,7 @@ fn file_phase(path: &Path, root: &Path) -> FileReport {
         return rep;
     };
     rep.msig = std::sync::Arc::new(elab.signature.maude_sig.clone());
-    let predicates: Vec<crate::predicate::Predicate> = elab.predicates().cloned().collect();
-    rep.items = theory_formulas(&parsed, &predicates, elab.signature.maude_sig());
+    rep.items = theory_formulas(&parsed);
     rep.outcome = Outcome::Parsed;
     rep.elapsed = start.elapsed();
     rep
@@ -336,10 +263,7 @@ fn shapes_of(doc: Doc) -> [String; 3] {
 }
 
 /// One formula converted and printed: the sugar-stripped `lnformula_doc`
-/// must render what `syntactic_lnformula_doc` renders, and so must the
-/// formula reopened onto the parser AST and closed again — the round trip
-/// the `_restrict` lifting and the accountability translation write back
-/// into a theory.
+/// must render what `syntactic_lnformula_doc` renders.
 fn compare(item: &Item, msig: &tamarin_term::maude_sig::MaudeSig) -> Vec<Mismatch> {
     let f = &item.formula;
     let ln = match from_parser(f, msig) {
@@ -356,16 +280,6 @@ fn compare(item: &Item, msig: &tamarin_term::maude_sig::MaudeSig) -> Vec<Mismatc
     let mut docs = Vec::new();
     if let Some(plain) = to_lnformula(&ln) {
         docs.push(("plain", lnformula_doc(&plain)));
-    }
-    match from_parser(&syntactic_lnformula_to_parser(&ln), msig) {
-        Ok(back) => docs.push(("reopened", syntactic_lnformula_doc(&back))),
-        Err(e) => {
-            return vec![(
-                format!("{} [reopened from_parser]", item.label),
-                String::new(),
-                e.message,
-            )]
-        }
     }
     let mut mismatches = Vec::new();
     for (kind, doc) in docs {
@@ -444,51 +358,6 @@ fn corpus_lnformula_doc_renders_every_theory_formula() {
         "{} mismatches; first: {:#?}",
         mismatches.len(),
         mismatches.iter().take(20).collect::<Vec<_>>()
-    );
-}
-
-#[test]
-fn corpus_from_parser_absorbs_the_print_preprocessing() {
-    let start = Instant::now();
-    let Some(corpus) = corpus() else {
-        return;
-    };
-    let (parsed, files) = file_counts(&corpus.2);
-    let work = all_items(corpus);
-    let formulas = work.len();
-    let build = |f: &p::Formula, msig: &tamarin_term::maude_sig::MaudeSig| {
-        from_parser(f, msig).map_err(|e| e.message)
-    };
-    let mismatches: Vec<String> = deep_pool().install(|| {
-        work.par_iter()
-            .filter_map(|(i, item)| {
-                let msig = &corpus.2[*i].msig;
-                let raw = build(&item.pre, msig);
-                let pre_passed = build(&item.formula, msig);
-                (raw != pre_passed).then(|| {
-                    format!(
-                        "MISMATCH {}\n--- from_parser(pre)\n{raw:?}\n--- from_parser(preprocessed)\n{pre_passed:?}",
-                        at(corpus, *i, &item.label)
-                    )
-                })
-            })
-            .collect()
-    });
-    eprintln!(
-        "corpus from_parser: files={files} parsed={parsed} formulas={formulas} mismatches={} wall={:?}",
-        mismatches.len(),
-        start.elapsed()
-    );
-    for m in &mismatches {
-        eprintln!("{m}");
-    }
-    assert_corpus_covered(parsed, files);
-    assert!(formulas > 0, "no formulas compared");
-    assert!(
-        mismatches.is_empty(),
-        "{} mismatches; first: {}",
-        mismatches.len(),
-        mismatches[0]
     );
 }
 
@@ -715,7 +584,7 @@ fn corpus_no_typed_varspec_in_theory_formulas() {
 /// (`prettySyntacticSapicFormula`, Theory/Sapic/Term.hs:174-175).  Dropping
 /// them has to land on the formula [`from_parser`] builds directly.
 fn compare_sapic(item: &Item, msig: &tamarin_term::maude_sig::MaudeSig) -> Result<bool, Mismatch> {
-    let raw = &item.pre;
+    let raw = &item.formula;
     let label = |what: &str| format!("{} [{what}]", item.label);
     let sapic = match sapic_from_parser(raw, msig) {
         Ok(f) => f,

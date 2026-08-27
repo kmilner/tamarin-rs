@@ -68,9 +68,6 @@ pub mod pretty_formula;
 pub mod pretty_hpj;
 pub mod pretty_sapic;
 pub mod pretty_system;
-#[cfg(test)]
-#[path = "pretty_term_corpus_tests.rs"]
-mod pretty_term_corpus_tests;
 pub mod pretty_theory;
 pub mod process_convert;
 pub mod process_inline;
