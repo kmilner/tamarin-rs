@@ -326,7 +326,16 @@ fn pretty_sapic_comb(c: &ProcessCombinator<SapicLVar>) -> String {
 
 /// `prettySapicTopLevel' prettyRule'` (Theory/Sapic/Process.hs:514-524).  Only inspects the
 /// TOP node.
+///
+/// Every `Doc` this module builds and hands to [`render_sapic`] is built and
+/// laid out in plain mode, whatever the caller's rendering context.  HS's
+/// inner `render` is the plain `P.render` on a plain `Doc`
+/// (Text/PrettyPrint/Class.hs:77-78), so the process text carries raw `<`,
+/// `>` and `'` at their visible widths; the callers put that string back into
+/// a `Doc::text`, which is where `Document (HtmlDoc d)` (Html.hs:102-104)
+/// escapes it — once.
 fn pretty_sapic_top_level_with(p: &PlainProcess, printer: MsrPrinter) -> String {
+    let _plain = hpj::HtmlDocGuard::disable();
     match p {
         Process::Null(_) => "0".to_string(),
         Process::Comb(c, _, _, _) => pretty_sapic_comb(c),
@@ -664,6 +673,36 @@ mod tests {
         assert_eq!(
             name,
             "Evxxxxxxxxxxrestrictaaaaaaaaaaxxxxxxxxxxbbbbbbbbbbyyyyyyyyyycccccccccczzzzzzzzzzaaaaaaaaaayyyyyyyyyy"
+        );
+    }
+
+    /// The `process="..."` rule attribute and the `process:` block are plain
+    /// text inside the page's `Doc`: an interactive-server page render holds
+    /// an [`hpj::HtmlDocGuard`], and the process text must still reach that
+    /// `Doc` unescaped and measured at its visible width, so the page escapes
+    /// each metacharacter exactly once.
+    #[test]
+    fn top_level_attr_is_plain_text_under_html_mode() {
+        use tamarin_term::function_symbols::pair_sym;
+        use tamarin_term::lterm::{Name, NameTag};
+        let msg = f_app_no_eq(
+            pair_sym(),
+            vec![
+                VTerm::Lit(Lit::Con(Name::new(NameTag::Pub, "p"))),
+                VTerm::Lit(Lit::Var(sv("x", 1, None))),
+            ],
+        );
+        let p: PlainProcess = Process::Action(
+            SapicAction::ChOut { chan: None, msg },
+            ProcessParsedAnnotation::empty(),
+            Box::new(Process::Null(ProcessParsedAnnotation::empty())),
+        );
+        let _html = hpj::HtmlDocGuard::enable();
+        let attr = pretty_sapic_top_level_attr(&p);
+        assert_eq!(attr, "out(<'p', x.1>);");
+        assert_eq!(
+            Doc::text(format!("process=\"{attr}\"")).render_with(200, 200),
+            "process=&quot;out(&lt;&#39;p&#39;, x.1&gt;);&quot;"
         );
     }
 }
