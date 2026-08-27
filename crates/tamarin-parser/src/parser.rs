@@ -2199,28 +2199,28 @@ impl<'a> Parser<'a> {
         self.enable_diff = parent.enable_diff;
     }
 
+    /// Whether the lexer sits on the `-` of a hyphenated identifier: a dash
+    /// with a letter directly after it.
+    fn at_hyphen_join(&self) -> bool {
+        if self.lx.peek() != Some('-') {
+            return false;
+        }
+        let mut probe = self.lx.clone();
+        probe.bump();
+        probe.peek().is_some_and(|c| c.is_alphabetic())
+    }
+
     /// Identifier that may contain hyphens (e.g. `asymmetric-encryption`,
-    /// `diffie-hellman`, `dest-pairing`). Hyphens are concatenated into the
-    /// returned name with no whitespace allowed across the boundary.
+    /// `diffie-hellman`, `dest-pairing`).  Each segment is an
+    /// [`Self::ident`], whose lexeme skips the whitespace after it, so a
+    /// space may precede a joining dash but never follow one.
     fn hyphen_identifier(&mut self) -> Result<String, ParseError> {
         let mut s = self.ident()?;
-        loop {
-            // Look for `-<ident>` immediately after with no whitespace.
-            if self.lx.peek() != Some('-') {
-                break;
-            }
-            // We need to peek the char *after* the dash without consuming.
-            let mut probe = self.lx.clone();
-            probe.bump();
-            match probe.peek() {
-                Some(c) if c.is_alphabetic() => {
-                    self.lx.bump(); // consume `-`
-                    s.push('-');
-                    let id = self.ident()?;
-                    s.push_str(&id);
-                }
-                _ => break,
-            }
+        while self.at_hyphen_join() {
+            self.lx.bump(); // consume `-`
+            s.push('-');
+            let id = self.ident()?;
+            s.push_str(&id);
         }
         Ok(s)
     }
@@ -4354,16 +4354,9 @@ impl<'a> Parser<'a> {
                     s.push(c);
                     self.lx.bump();
                 }
-                Some('-') => {
-                    let mut probe = self.lx.clone();
-                    probe.bump();
-                    match probe.peek() {
-                        Some(c) if c.is_alphabetic() => {
-                            self.lx.bump();
-                            s.push('-');
-                        }
-                        _ => break,
-                    }
+                _ if self.at_hyphen_join() => {
+                    self.lx.bump();
+                    s.push('-');
                 }
                 _ => break,
             }
