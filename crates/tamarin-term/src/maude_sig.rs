@@ -121,6 +121,10 @@ impl FromIterator<CtxtStRule> for StRules {
     }
 }
 
+/// HS `data MaudeSig` (Term/Maude/Signature.hs:90-108); the field order is
+/// HS's declaration order, which its derived `Ord` reads off.  The trailing
+/// fields have no HS counterpart: they are lookup mirrors of the sets above
+/// them, rebuilt by [`MaudeSig::refresh`].
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct MaudeSig {
     pub enable_dh: bool,
@@ -137,8 +141,8 @@ pub struct MaudeSig {
     /// The subterm rewrite rules, each carrying the Ac/C-freeness of its LHS
     /// (see [`StRules`]).
     pub st_rules: StRules,
-    pub macro_names: BTreeSet<NoEqSym>,
     pub eq_convergent: bool,
+    pub macro_names: BTreeSet<NoEqSym>,
     pub fun_syms: FunSig,
     pub irreducible_fun_syms: FunSig,
     pub reducible_fun_syms: FunSig,

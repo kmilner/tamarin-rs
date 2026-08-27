@@ -11,17 +11,19 @@
 //! types that hold them.
 
 /// HS `TraceQuantifier` (Items/LemmaItem.hs:42-44): whether a lemma claims
-/// validity over all traces or satisfiability by one.
+/// validity over all traces or satisfiability by one.  The variant order is
+/// HS's declaration order, which its derived `Ord` reads off.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TraceQuantifier {
-    AllTraces,
     ExistsTrace,
+    AllTraces,
 }
 
 /// HS `LemmaAttribute` (Items/LemmaItem.hs:27-40): an attribute written in a
 /// lemma's `[...]` list.  HS's `LemmaTactic` has no counterpart here: no
 /// spelling in `lemmaAttribute` (Theory/Text/Parser/Lemma.hs:38-53) builds
-/// one, so nothing can carry it.
+/// one, so nothing can carry it.  The variant order is HS's declaration order
+/// with that one gap, which its derived `Ord` reads off.
 #[derive(Debug, Clone, PartialEq)]
 pub enum LemmaAttr {
     /// `SourceLemma`, spelled `sources` or `typing`.
@@ -34,14 +36,14 @@ pub enum LemmaAttr {
     UseInduction,
     /// `HideLemma`.
     HideLemma(String),
-    /// `LemmaHeuristic`, holding the goal-ranking string as written.
-    Heuristic(String),
-    /// `LemmaModule`, holding the module names of `output=[...]`.
-    Output(Vec<String>),
     /// `LHSLemma`, spelled `left`.
     Left,
     /// `RHSLemma`, spelled `right`.
     Right,
+    /// `LemmaHeuristic`, holding the goal-ranking string as written.
+    Heuristic(String),
+    /// `LemmaModule`, holding the module names of `output=[...]`.
+    Output(Vec<String>),
 }
 
 /// HS `FactAnnotation` (Theory/Model/Fact.hs:151-155): a property carried
