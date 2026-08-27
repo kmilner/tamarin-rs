@@ -23,7 +23,8 @@ use tamarin_utils::fresh::PreciseFreshState;
 use tamarin_theory::formula::{apply_rename, formula_frees};
 use tamarin_theory::sapic::PlainProcess;
 use tamarin_theory::sapic::{
-    Process, ProcessCombinator, SapicAction, SapicLVar, SapicTerm, SapicType,
+    map_terms_action, map_terms_comb, traverse_terms_action, traverse_terms_comb, Process,
+    ProcessCombinator, SapicAction, SapicLVar, SapicTerm, SapicType,
 };
 
 use crate::bindings::{bindings_act, bindings_comb};
@@ -202,97 +203,32 @@ fn rename_sv(subst: &BTreeMap<LVar, LVar>, sv: &SapicLVar) -> SapicLVar {
     SapicLVar::new(new_lv, sv.stype.clone())
 }
 
-fn rename_fact(
-    subst: &BTreeMap<LVar, LVar>,
-    f: &tamarin_theory::sapic::SapicLNFact,
-) -> tamarin_theory::sapic::SapicLNFact {
-    f.map_ref(|t| rename_term(subst, t))
-}
-
 fn rename_action(
     subst: &BTreeMap<LVar, LVar>,
     a: &SapicAction<SapicLVar>,
 ) -> SapicAction<SapicLVar> {
-    match a {
-        SapicAction::New(v) => SapicAction::New(rename_sv(subst, v)),
-        SapicAction::Event(f) => SapicAction::Event(rename_fact(subst, f)),
-        SapicAction::ChOut { chan, msg } => SapicAction::ChOut {
-            chan: chan.as_ref().map(|t| rename_term(subst, t)),
-            msg: rename_term(subst, msg),
-        },
-        SapicAction::ChIn {
-            chan,
-            msg,
-            match_vars,
-        } => SapicAction::ChIn {
-            chan: chan.as_ref().map(|t| rename_term(subst, t)),
-            msg: rename_term(subst, msg),
-            match_vars: match_vars.iter().map(|v| rename_sv(subst, v)).collect(),
-        },
-        SapicAction::Insert(a, b) => {
-            SapicAction::Insert(rename_term(subst, a), rename_term(subst, b))
-        }
-        SapicAction::Delete(t) => SapicAction::Delete(rename_term(subst, t)),
-        SapicAction::Lock(t) => SapicAction::Lock(rename_term(subst, t)),
-        SapicAction::Unlock(t) => SapicAction::Unlock(rename_term(subst, t)),
-        SapicAction::ProcessCall(n, ts) => SapicAction::ProcessCall(
-            n.clone(),
-            ts.iter().map(|t| rename_term(subst, t)).collect(),
-        ),
-        SapicAction::Msr {
-            prems,
-            acts,
-            concs,
-            rest,
-            match_vars,
-        } => SapicAction::Msr {
-            prems: prems.iter().map(|f| rename_fact(subst, f)).collect(),
-            acts: acts.iter().map(|f| rename_fact(subst, f)).collect(),
-            concs: concs.iter().map(|f| rename_fact(subst, f)).collect(),
-            // HS `mapTermsAction f ff fv (MSR l a r rest mv) = MSR .. (fmap ff
-            // rest) ..` (Sapic/Process.hs:155) maps the embedded restriction formulas
-            // with the SAME substitution as the fact rows, so the formula's free
-            // variables alpha-rename along with the rule body.  `apply` on a
-            // `SapicLVar` renames the `LVar` and keeps the type tag
-            // (Theory/Sapic/Term.hs:115-117).
-            rest: rest
-                .iter()
-                .map(|f| apply_rename(f.clone(), &mut |v| rename_sv(subst, v)))
-                .collect(),
-            match_vars: match_vars.iter().map(|v| rename_sv(subst, v)).collect(),
-        },
-        SapicAction::Rep => SapicAction::Rep,
-    }
+    map_terms_action(
+        |t| rename_term(subst, t),
+        // HS `apply subst` on a formula (Sapic/Process.hs:319-321) renames the
+        // free variables of an embedded `_restrict` along with the fact rows
+        // that mention them; a bound De Bruijn index and its binder hint cross
+        // unchanged.
+        |f| apply_rename(f.clone(), &mut |v| rename_sv(subst, v)),
+        |v| rename_sv(subst, v),
+        a,
+    )
 }
 
 fn rename_comb(
     subst: &BTreeMap<LVar, LVar>,
     c: &ProcessCombinator<SapicLVar>,
 ) -> ProcessCombinator<SapicLVar> {
-    match c {
-        ProcessCombinator::Lookup(t, v) => {
-            ProcessCombinator::Lookup(rename_term(subst, t), rename_sv(subst, v))
-        }
-        ProcessCombinator::Let {
-            left,
-            right,
-            match_vars,
-        } => ProcessCombinator::Let {
-            left: rename_term(subst, left),
-            right: rename_term(subst, right),
-            match_vars: match_vars.iter().map(|v| rename_sv(subst, v)).collect(),
-        },
-        ProcessCombinator::CondEq(a, b) => {
-            ProcessCombinator::CondEq(rename_term(subst, a), rename_term(subst, b))
-        }
-        // HS `mapTermsComb (apply subst) ... (Cond fa) = Cond (apply subst fa)`
-        // (Sapic/Process.hs:165), where `apply` on a `SapicLVar` renames the
-        // `LVar` and keeps the type tag (Theory/Sapic/Term.hs:115-117).
-        ProcessCombinator::Cond(f) => {
-            ProcessCombinator::Cond(apply_rename(f.clone(), &mut |v| rename_sv(subst, v)))
-        }
-        other => other.clone(),
-    }
+    map_terms_comb(
+        |t| rename_term(subst, t),
+        |f| apply_rename(f.clone(), &mut |v| rename_sv(subst, v)),
+        |v| rename_sv(subst, v),
+        c,
+    )
 }
 
 /// `renameUnique'` (Typing.hs:242-261).  `subst` is the *outstanding* renaming
@@ -647,111 +583,40 @@ fn type_with_var(v: &SapicLVar) -> SapicLVar {
     }
 }
 
-/// `traverseTermsAction` (Sapic/Process.hs:242-268) specialised to the typing
-/// handlers `typeWith'` (terms), `typeWithVar` (standalone vars).
+/// `traverseTermsAction (typeWith' ..) typeWithFact typeWithVar`
+/// (Typing.hs:145-150).  `typeWithFact = return` (Typing.hs:161) leaves an
+/// MSR's embedded `_restrict` formulas untyped, because a quantified variable
+/// has no entry in `env.vars`.
 fn type_action(
     env: &mut TypingEnvironment,
     a: &SapicAction<SapicLVar>,
 ) -> Result<SapicAction<SapicLVar>, String> {
-    match a {
-        SapicAction::New(v) => Ok(SapicAction::New(type_with_var(v))),
-        // `Event <$> traverse ft fa` (Sapic/Process.hs:257): the event fact's TERMS
-        // are typed via `ft = typeWith'` — NOT `typeWithFact` (which only
-        // handles MSR's `rest` formulas).  This is what propagates `:lol` onto
-        // the `Test( x.1 )` references.
-        SapicAction::Event(f) => Ok(SapicAction::Event(type_event_fact(env, f)?)),
-        SapicAction::ChOut { chan, msg } => Ok(SapicAction::ChOut {
-            chan: chan.as_ref().map(|t| type_term(env, t)).transpose()?,
-            msg: type_term(env, msg)?,
-        }),
-        SapicAction::ChIn {
-            chan,
-            msg,
-            match_vars,
-        } => Ok(SapicAction::ChIn {
-            chan: chan.as_ref().map(|t| type_term(env, t)).transpose()?,
-            msg: type_term(env, msg)?,
-            match_vars: match_vars.iter().map(type_with_var).collect(),
-        }),
-        SapicAction::Insert(a, b) => {
-            Ok(SapicAction::Insert(type_term(env, a)?, type_term(env, b)?))
-        }
-        SapicAction::Delete(t) => Ok(SapicAction::Delete(type_term(env, t)?)),
-        SapicAction::Lock(t) => Ok(SapicAction::Lock(type_term(env, t)?)),
-        SapicAction::Unlock(t) => Ok(SapicAction::Unlock(type_term(env, t)?)),
-        SapicAction::ProcessCall(n, ts) => Ok(SapicAction::ProcessCall(
-            n.clone(),
-            ts.iter()
-                .map(|t| type_term(env, t))
-                .collect::<Result<_, _>>()?,
-        )),
-        SapicAction::Msr {
-            prems,
-            acts,
-            concs,
-            rest,
-            match_vars,
-        } => Ok(SapicAction::Msr {
-            prems: prems
-                .iter()
-                .map(|f| type_event_fact(env, f))
-                .collect::<Result<_, _>>()?,
-            acts: acts
-                .iter()
-                .map(|f| type_event_fact(env, f))
-                .collect::<Result<_, _>>()?,
-            concs: concs
-                .iter()
-                .map(|f| type_event_fact(env, f))
-                .collect::<Result<_, _>>()?,
-            // `rest` formulas use `typeWithFact = return` (Typing.hs:135-168, see line 161) — left
-            // untyped, matching HS.
-            rest: rest.clone(),
-            match_vars: match_vars.iter().map(type_with_var).collect(),
-        }),
-        SapicAction::Rep => Ok(SapicAction::Rep),
-    }
+    traverse_terms_action(
+        |t| type_term(env, t),
+        |f| Ok(f.clone()),
+        |v| Ok(type_with_var(v)),
+        a,
+    )
 }
 
+/// `traverseTermsComb (typeWith' ..) typeWithFact typeWithVar`
+/// (Typing.hs:153-155).
 fn type_comb(
     env: &mut TypingEnvironment,
     c: &ProcessCombinator<SapicLVar>,
 ) -> Result<ProcessCombinator<SapicLVar>, String> {
-    match c {
-        ProcessCombinator::Lookup(t, v) => Ok(ProcessCombinator::Lookup(
-            type_term(env, t)?,
-            type_with_var(v),
-        )),
-        ProcessCombinator::Let {
-            left,
-            right,
-            match_vars,
-        } => Ok(ProcessCombinator::Let {
-            left: type_term(env, left)?,
-            right: type_term(env, right)?,
-            match_vars: match_vars.iter().map(type_with_var).collect(),
-        }),
-        ProcessCombinator::CondEq(a, b) => Ok(ProcessCombinator::CondEq(
-            type_term(env, a)?,
-            type_term(env, b)?,
-        )),
-        other => Ok(other.clone()),
-    }
+    traverse_terms_comb(
+        |t| type_term(env, t),
+        |f| Ok(f.clone()),
+        |v| Ok(type_with_var(v)),
+        c,
+    )
 }
 
 /// `typeWith' t = fst <$> typeWith t Nothing` (Typing.hs:135-168, see line 157).
 fn type_term(env: &mut TypingEnvironment, t: &SapicTerm) -> Result<SapicTerm, String> {
     let (t1, _) = type_with(env, t, &None)?;
     Ok(t1)
-}
-
-/// Type every term of a fact via `ft = typeWith'` — this is the `traverse ft fa`
-/// path used by `traverseTermsAction` for `Event` (and per-fact terms in MSR).
-fn type_event_fact(
-    env: &mut TypingEnvironment,
-    f: &tamarin_theory::sapic::SapicLNFact,
-) -> Result<tamarin_theory::sapic::SapicLNFact, String> {
-    f.try_map_ref(|t| type_term(env, t))
 }
 
 // =============================================================================

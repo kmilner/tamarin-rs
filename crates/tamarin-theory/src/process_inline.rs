@@ -40,8 +40,8 @@ use crate::process_convert::{
     action as convert_action, combinator as convert_combinator, term as convert_term, ConvertError,
 };
 use crate::sapic::{
-    apply_match_vars_with, subst_fact, subst_term, PlainProcess, Process, ProcessCombinator,
-    SapicAction, SapicLVar, SapicSubst, SapicTerm,
+    apply_match_vars_with, subst_term, traverse_terms_action, traverse_terms_comb, PlainProcess,
+    Process, ProcessCombinator, SapicAction, SapicLVar, SapicSubst, SapicTerm,
 };
 
 /// Look up each process definition by name (HS `lookupProcessDef`,
@@ -191,12 +191,12 @@ fn apply_m_process(subst: &SapicSubst, p: PlainProcess) -> Result<PlainProcess, 
     match p {
         Process::Null(a) => Ok(Process::Null(a)),
         Process::Action(ac, a, body) => {
-            let ac1 = apply_m_action(subst, ac)?;
+            let ac1 = apply_m_action(subst, &ac)?;
             let body1 = apply_m_process(subst, *body)?;
             Ok(Process::Action(ac1, a, Box::new(body1)))
         }
         Process::Comb(c, a, l, r) => {
-            let c1 = apply_m_comb(subst, c)?;
+            let c1 = apply_m_comb(subst, &c)?;
             let l1 = apply_m_process(subst, *l)?;
             let r1 = apply_m_process(subst, *r)?;
             Ok(Process::Comb(c1, a, Box::new(l1), Box::new(r1)))
@@ -210,28 +210,25 @@ fn in_domain(subst: &SapicSubst, v: &SapicLVar) -> bool {
     subst.image_of(v).is_some() || subst.image_of(&SapicLVar::untyped(v.var)).is_some()
 }
 
-/// `applyM` for `SapicAction` (Sapic/Process.hs:392-408): substitute terms, raising
-/// `CapturedNew` / `CapturedIn` on capture.
+/// `applyM` for `SapicAction` (Sapic/Process.hs:392-408): substitute terms,
+/// raising `CapturedNew` / `CapturedIn` on capture.  Everything the capture
+/// checks do not claim falls through to `apply subst`
+/// (Sapic/Process.hs:319-321).
 fn apply_m_action(
     subst: &SapicSubst,
-    ac: SapicAction<SapicLVar>,
+    ac: &SapicAction<SapicLVar>,
 ) -> Result<SapicAction<SapicLVar>, ConvertError> {
     match ac {
         // `New v` with `v ∈ dom subst` would be captured (Sapic/Process.hs:395-398).
         SapicAction::New(v) => {
-            if in_domain(subst, &v) {
+            if in_domain(subst, v) {
                 return Err(ConvertError::new(format!(
                     "captured variable {} in process call (new)",
                     v.var.name
                 )));
             }
-            Ok(SapicAction::New(v))
+            Ok(SapicAction::New(v.clone()))
         }
-        SapicAction::Event(f) => Ok(SapicAction::Event(subst_fact(subst, &f))),
-        SapicAction::ChOut { chan, msg } => Ok(SapicAction::ChOut {
-            chan: chan.map(|t| subst_term(subst, &t)),
-            msg: subst_term(subst, &msg),
-        }),
         // `ChIn` of a single captured var is captured unless its name starts
         // with `pat_` (Sapic/Process.hs:399-406).
         SapicAction::ChIn {
@@ -239,7 +236,7 @@ fn apply_m_action(
             msg,
             match_vars,
         } => {
-            if let VTerm::Lit(Lit::Var(v)) = &msg {
+            if let VTerm::Lit(Lit::Var(v)) = msg {
                 if in_domain(subst, v) && !v.var.name.starts_with("pat_") {
                     return Err(ConvertError::new(format!(
                         "captured variable {} in process call (in)",
@@ -248,8 +245,8 @@ fn apply_m_action(
                 }
             }
             Ok(SapicAction::ChIn {
-                chan: chan.map(|t| subst_term(subst, &t)),
-                msg: subst_term(subst, &msg),
+                chan: chan.as_ref().map(|t| subst_term(subst, t)),
+                msg: subst_term(subst, msg),
                 // HS special-cases `ChIn` in `Apply SapicSubst (SapicAction
                 // SapicLVar)` (Sapic/Process.hs:319-321) to reach this rewrite.
                 // When inlining a call like `Q(h(a))` into `in(<y, =x>)`, the
@@ -258,41 +255,21 @@ fn apply_m_action(
                 // bound `a` is NOT rebound (Bindings.hs:21-26, see line 24).  Without this the
                 // stale `{x}` would leave `a` looking unbound, rebinding it to a
                 // fresh `a.N` and adding a spurious state-fact variable.
-                match_vars: apply_match_vars_with(|v| call_image(subst, v), &match_vars),
+                match_vars: apply_match_vars_with(|v| call_image(subst, v), match_vars),
             })
         }
-        SapicAction::Insert(a, b) => Ok(SapicAction::Insert(
-            subst_term(subst, &a),
-            subst_term(subst, &b),
-        )),
-        SapicAction::Delete(t) => Ok(SapicAction::Delete(subst_term(subst, &t))),
-        SapicAction::Lock(t) => Ok(SapicAction::Lock(subst_term(subst, &t))),
-        SapicAction::Unlock(t) => Ok(SapicAction::Unlock(subst_term(subst, &t))),
-        SapicAction::ProcessCall(n, ts) => Ok(SapicAction::ProcessCall(
-            n,
-            ts.iter().map(|t| subst_term(subst, t)).collect(),
-        )),
-        SapicAction::Msr {
-            prems,
-            acts,
-            concs,
-            rest,
-            match_vars,
-        } => Ok(SapicAction::Msr {
-            prems: prems.iter().map(|f| subst_fact(subst, f)).collect(),
-            acts: acts.iter().map(|f| subst_fact(subst, f)).collect(),
-            concs: concs.iter().map(|f| subst_fact(subst, f)).collect(),
-            // HS `mapTermsAction f ff fv (MSR l a r rest mv) = MSR .. (fmap
-            // ff rest) ..` (Sapic/Process.hs:155) with `ff = apply subst`
-            // (Sapic/Process.hs:319-321): the call's arguments replace the
-            // formal parameters inside an embedded `_restrict` as they do in
-            // the fact rows.  A quantifier binder is a `Bound` De Bruijn
-            // index, outside the substitution's domain, so it cannot capture
-            // a variable of an argument.
-            rest: rest.into_iter().map(|f| apply_subst(subst, f)).collect(),
-            match_vars,
-        }),
-        SapicAction::Rep => Ok(SapicAction::Rep),
+        _ => traverse_terms_action(
+            |t| Ok(subst_term(subst, t)),
+            // The call's arguments replace the formal parameters inside an
+            // embedded `_restrict` as they do in the fact rows.  A quantifier
+            // binder is a `Bound` De Bruijn index, outside the substitution's
+            // domain, so it cannot capture a variable of an argument.
+            |f| Ok(apply_subst(subst, f.clone())),
+            // A variable the action binds on its own is either rejected above
+            // or outside the substitution's domain.
+            |v| Ok(v.clone()),
+            ac,
+        ),
     }
 }
 
@@ -300,43 +277,26 @@ fn apply_m_action(
 /// being captured raises `CapturedLookup`.
 fn apply_m_comb(
     subst: &SapicSubst,
-    c: ProcessCombinator<SapicLVar>,
+    c: &ProcessCombinator<SapicLVar>,
 ) -> Result<ProcessCombinator<SapicLVar>, ConvertError> {
     match c {
         ProcessCombinator::Lookup(t, v) => {
-            if in_domain(subst, &v) {
+            if in_domain(subst, v) {
                 return Err(ConvertError::new(format!(
                     "captured variable {} in process call (lookup)",
                     v.var.name
                 )));
             }
-            Ok(ProcessCombinator::Lookup(subst_term(subst, &t), v))
+            Ok(ProcessCombinator::Lookup(subst_term(subst, t), v.clone()))
         }
-        ProcessCombinator::Let {
-            left,
-            right,
-            match_vars,
-        } => Ok(ProcessCombinator::Let {
-            left: subst_term(subst, &left),
-            right: subst_term(subst, &right),
-            match_vars,
-        }),
-        ProcessCombinator::CondEq(a, b) => Ok(ProcessCombinator::CondEq(
-            subst_term(subst, &a),
-            subst_term(subst, &b),
-        )),
-        // HS `mapTermsComb f ff fv (Cond fa) = Cond (ff fa)`
-        // (Sapic/Process.hs:165) with `ff = apply subst`
-        // (Sapic/Process.hs:330-334), reached from `applyM`'s fallthrough
-        // (Sapic/Process.hs:382-389): the call's arguments replace the formal
-        // parameters inside the conditional's formula.  A quantifier binder is
-        // a `Bound` De Bruijn index, outside the substitution's domain, so it
-        // cannot capture a variable of an argument.
-        ProcessCombinator::Cond(f) => Ok(ProcessCombinator::Cond(apply_subst(subst, f))),
-        // Parallel/Ndc carry no terms, so substitution is the identity.
-        // Enumerated (no wildcard) so a new term-carrying variant must decide
-        // its substitution here.
-        other @ (ProcessCombinator::Parallel | ProcessCombinator::Ndc) => Ok(other),
+        _ => traverse_terms_comb(
+            |t| Ok(subst_term(subst, t)),
+            // The call's arguments replace the formal parameters inside the
+            // conditional's formula.
+            |f| Ok(apply_subst(subst, f.clone())),
+            |v| Ok(v.clone()),
+            c,
+        ),
     }
 }
 

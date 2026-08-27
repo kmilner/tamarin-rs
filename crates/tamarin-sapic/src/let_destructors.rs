@@ -39,7 +39,8 @@ use tamarin_term::subterm_rule::CtxtStRule;
 use tamarin_term::vterm::{Lit, VTerm};
 use tamarin_theory::formula::apply_subst;
 use tamarin_theory::sapic::{
-    apply_match_vars, subst_fact, subst_term, Process, ProcessCombinator, SapicLVar, SapicTerm,
+    apply_match_vars, map_terms_action, map_terms_comb, subst_term, Process, ProcessCombinator,
+    SapicLVar, SapicTerm,
 };
 
 use crate::annotation::{AnnotatedProcess, ProcessAnnotation};
@@ -280,11 +281,11 @@ fn apply_subst_process(
     match p {
         Process::Null(a) => Process::Null(a),
         Process::Action(ac, a, body) => {
-            let ac1 = subst_action(subst, ac);
+            let ac1 = subst_action(subst, &ac);
             Process::Action(ac1, a, Box::new(apply_subst_process(subst, *body)))
         }
         Process::Comb(c, a, l, r) => {
-            let c1 = subst_comb(subst, c);
+            let c1 = subst_comb(subst, &c);
             Process::Comb(
                 c1,
                 a,
@@ -295,91 +296,59 @@ fn apply_subst_process(
     }
 }
 
+/// `apply subst` for a `SapicAction SapicLVar` (Sapic/Process.hs:319-321):
+/// `mapTermsAction`, with `ChIn`'s match variables rewritten by
+/// [`apply_match_vars`].
 fn subst_action(
     subst: &Subst<Name, SapicLVar>,
-    ac: tamarin_theory::sapic::SapicAction<SapicLVar>,
+    ac: &tamarin_theory::sapic::SapicAction<SapicLVar>,
 ) -> tamarin_theory::sapic::SapicAction<SapicLVar> {
     use tamarin_theory::sapic::SapicAction as A;
-    match ac {
-        A::New(v) => A::New(v),
-        A::Event(f) => A::Event(subst_fact(subst, &f)),
-        A::ChOut { chan, msg } => A::ChOut {
-            chan: chan.map(|t| subst_term(subst, &t)),
-            msg: subst_term(subst, &msg),
-        },
-        A::ChIn {
-            chan,
-            msg,
-            match_vars,
-        } => A::ChIn {
-            chan: chan.map(|t| subst_term(subst, &t)),
-            msg: subst_term(subst, &msg),
+    if let A::ChIn {
+        chan,
+        msg,
+        match_vars,
+    } = ac
+    {
+        return A::ChIn {
+            chan: chan.as_ref().map(|t| subst_term(subst, t)),
+            msg: subst_term(subst, msg),
             // HS special-cases `ChIn` in `Apply SapicSubst (SapicAction
             // SapicLVar)` (Sapic/Process.hs:319-321) to reach this rewrite: a
             // `let`-bound match var `=t` (where `t = <a,'test'>`) becomes the
             // match-var set `{a}`.
-            match_vars: apply_match_vars(subst, &match_vars),
-        },
-        A::Insert(a, b) => A::Insert(subst_term(subst, &a), subst_term(subst, &b)),
-        A::Delete(t) => A::Delete(subst_term(subst, &t)),
-        A::Lock(t) => A::Lock(subst_term(subst, &t)),
-        A::Unlock(t) => A::Unlock(subst_term(subst, &t)),
-        A::ProcessCall(n, ts) => {
-            A::ProcessCall(n, ts.iter().map(|t| subst_term(subst, t)).collect())
-        }
-        A::Msr {
-            prems,
-            acts,
-            concs,
-            rest,
-            match_vars,
-        } => A::Msr {
-            prems: prems.iter().map(|f| subst_fact(subst, f)).collect(),
-            acts: acts.iter().map(|f| subst_fact(subst, f)).collect(),
-            concs: concs.iter().map(|f| subst_fact(subst, f)).collect(),
-            // HS `mapTermsAction f ff fv (MSR l a r rest mv) = MSR .. (fmap ff
-            // rest) ..` (Sapic/Process.hs:155) reached through `apply subst`
-            // (Sapic/Process.hs:319-321): a `let`-bound value the embedded
-            // restriction mentions is rewritten there as it is in the fact
-            // rows.
-            rest: rest.into_iter().map(|f| apply_subst(subst, f)).collect(),
-            match_vars,
-        },
-        A::Rep => A::Rep,
+            match_vars: apply_match_vars(subst, match_vars),
+        };
     }
+    map_terms_action(
+        |t| subst_term(subst, t),
+        // A `let`-bound value that an embedded `_restrict` mentions is
+        // rewritten there as it is in the fact rows.  A quantifier binder is a
+        // `Bound` De Bruijn index, outside the substitution's domain, so it
+        // cannot capture a variable of the image.
+        |f| apply_subst(subst, f.clone()),
+        // The `let` pass substitutes values, not binders, so a variable the
+        // action binds on its own stands for itself.
+        |v| v.clone(),
+        ac,
+    )
 }
 
+/// `apply subst` for a `ProcessCombinator SapicLVar` (Sapic/Process.hs:330-334).
 fn subst_comb(
     subst: &Subst<Name, SapicLVar>,
-    c: ProcessCombinator<SapicLVar>,
+    c: &ProcessCombinator<SapicLVar>,
 ) -> ProcessCombinator<SapicLVar> {
-    match c {
-        ProcessCombinator::Lookup(t, v) => ProcessCombinator::Lookup(subst_term(subst, &t), v),
-        ProcessCombinator::Let {
-            left,
-            right,
-            match_vars,
-        } => ProcessCombinator::Let {
-            left: subst_term(subst, &left),
-            right: subst_term(subst, &right),
-            match_vars,
-        },
-        ProcessCombinator::CondEq(a, b) => {
-            ProcessCombinator::CondEq(subst_term(subst, &a), subst_term(subst, &b))
-        }
-        // HS `apply subst (Cond fa) = Cond (apply subst fa)` (Sapic/Process.hs:165):
-        // a Case-B `let`-elimination (`let z = t in P`) must rewrite the free
-        // variable `z` inside any downstream conditional's formula too — `z` is
-        // a value bound by the `let`, not a process binder, so the `Cond`
-        // payload's `z` references the same `let`-bound value.  A quantifier
-        // binder is a `Bound` De Bruijn index and is outside the substitution's
-        // domain, so it cannot capture a variable of the image.
-        ProcessCombinator::Cond(f) => ProcessCombinator::Cond(apply_subst(subst, f)),
-        // Parallel/Ndc carry no terms, so substitution is the identity.
-        // Enumerated (no wildcard) so a new term-carrying variant must decide
-        // its substitution here.
-        other @ (ProcessCombinator::Parallel | ProcessCombinator::Ndc) => other,
-    }
+    map_terms_comb(
+        |t| subst_term(subst, t),
+        // A Case-B `let`-elimination (`let z = t in P`) rewrites the free
+        // variable `z` inside a downstream conditional's formula too: `z` is a
+        // value bound by the `let`, not a process binder, so the `Cond`
+        // payload's `z` references the same value.
+        |f| apply_subst(subst, f.clone()),
+        |v| v.clone(),
+        c,
+    )
 }
 
 /// Lift an `LNTerm` (untyped) back to a SAPIC term (all variables untyped).

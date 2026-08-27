@@ -17,9 +17,10 @@
 //! - `Theory.Sapic.Annotation` — `ProcessParsedAnnotation` and the
 //!   `GoodAnnotation` trait
 //! - `Theory.Sapic.Process` — the `Process<Ann, V>` data type,
-//!   `SapicAction`/`ProcessCombinator`, `pfoldMap` and the `applyMatchVars`
-//!   pair. The Haskell traversal helpers (`foldProcess`,
-//!   `traverseTermsAction`, etc.) are not ported.
+//!   `SapicAction`/`ProcessCombinator`, the term traversals
+//!   (`mapTermsAction`/`mapTermsComb` and their `traverse` twins),
+//!   `pfoldMap` and the `applyMatchVars` pair. `mapTerms`, `foldProcess`,
+//!   `foldMProcess` and `traverseProcess` are not ported.
 
 use std::collections::BTreeSet;
 
@@ -338,6 +339,182 @@ impl<Ann, V> Process<Ann, V> {
             Process::Null(a) | Process::Comb(_, a, _, _) | Process::Action(_, a, _) => a,
         }
     }
+}
+
+// =============================================================================
+// Term traversals
+// =============================================================================
+
+/// `mapTermsAction ft ff fv ac` (Theory/Sapic/Process.hs:140-157): rebuild an
+/// action, sending every term through `ft`, every embedded formula through
+/// `ff` and every variable the action carries on its own through `fv`.
+pub fn map_terms_action<T, V>(
+    mut ft: impl FnMut(&SapicNTerm<T>) -> SapicNTerm<V>,
+    mut ff: impl FnMut(&SapicNFormula<T>) -> SapicNFormula<V>,
+    mut fv: impl FnMut(&T) -> V,
+    ac: &SapicAction<T>,
+) -> SapicAction<V>
+where
+    V: Ord,
+{
+    match ac {
+        SapicAction::New(v) => SapicAction::New(fv(v)),
+        SapicAction::ChIn {
+            chan,
+            msg,
+            match_vars,
+        } => SapicAction::ChIn {
+            chan: chan.as_ref().map(&mut ft),
+            msg: ft(msg),
+            match_vars: match_vars.iter().map(&mut fv).collect(),
+        },
+        SapicAction::ChOut { chan, msg } => SapicAction::ChOut {
+            chan: chan.as_ref().map(&mut ft),
+            msg: ft(msg),
+        },
+        SapicAction::Insert(t1, t2) => SapicAction::Insert(ft(t1), ft(t2)),
+        SapicAction::Delete(t) => SapicAction::Delete(ft(t)),
+        SapicAction::Lock(t) => SapicAction::Lock(ft(t)),
+        SapicAction::Unlock(t) => SapicAction::Unlock(ft(t)),
+        SapicAction::Event(fa) => SapicAction::Event(fa.map_ref(&mut ft)),
+        SapicAction::ProcessCall(s, ts) => {
+            SapicAction::ProcessCall(s.clone(), ts.iter().map(&mut ft).collect())
+        }
+        SapicAction::Msr {
+            prems,
+            acts,
+            concs,
+            rest,
+            match_vars,
+        } => SapicAction::Msr {
+            prems: prems.iter().map(|fa| fa.map_ref(&mut ft)).collect(),
+            acts: acts.iter().map(|fa| fa.map_ref(&mut ft)).collect(),
+            concs: concs.iter().map(|fa| fa.map_ref(&mut ft)).collect(),
+            rest: rest.iter().map(&mut ff).collect(),
+            match_vars: match_vars.iter().map(&mut fv).collect(),
+        },
+        SapicAction::Rep => SapicAction::Rep,
+    }
+}
+
+/// `mapTermsComb ft ff fv c` (Theory/Sapic/Process.hs:159-170): the
+/// [`map_terms_action`] counterpart for a process combinator.
+pub fn map_terms_comb<T, V>(
+    mut ft: impl FnMut(&SapicNTerm<T>) -> SapicNTerm<V>,
+    mut ff: impl FnMut(&SapicNFormula<T>) -> SapicNFormula<V>,
+    mut fv: impl FnMut(&T) -> V,
+    c: &ProcessCombinator<T>,
+) -> ProcessCombinator<V>
+where
+    V: Ord,
+{
+    match c {
+        ProcessCombinator::Cond(fa) => ProcessCombinator::Cond(ff(fa)),
+        ProcessCombinator::CondEq(t1, t2) => ProcessCombinator::CondEq(ft(t1), ft(t2)),
+        ProcessCombinator::Let {
+            left,
+            right,
+            match_vars,
+        } => ProcessCombinator::Let {
+            left: ft(left),
+            right: ft(right),
+            match_vars: match_vars.iter().map(&mut fv).collect(),
+        },
+        ProcessCombinator::Lookup(t, v) => ProcessCombinator::Lookup(ft(t), fv(v)),
+        ProcessCombinator::Parallel => ProcessCombinator::Parallel,
+        ProcessCombinator::Ndc => ProcessCombinator::Ndc,
+    }
+}
+
+/// `traverseTermsAction ft ff fv ac` (Theory/Sapic/Process.hs:242-268) over the
+/// `Either` applicative: [`map_terms_action`] with fallible handlers, stopping
+/// at the first error in the visit order HS's `<*>` chain fixes.
+pub fn traverse_terms_action<T, V, E>(
+    mut ft: impl FnMut(&SapicNTerm<T>) -> Result<SapicNTerm<V>, E>,
+    mut ff: impl FnMut(&SapicNFormula<T>) -> Result<SapicNFormula<V>, E>,
+    mut fv: impl FnMut(&T) -> Result<V, E>,
+    ac: &SapicAction<T>,
+) -> Result<SapicAction<V>, E>
+where
+    V: Ord,
+{
+    Ok(match ac {
+        SapicAction::New(v) => SapicAction::New(fv(v)?),
+        SapicAction::ChIn {
+            chan,
+            msg,
+            match_vars,
+        } => SapicAction::ChIn {
+            chan: chan.as_ref().map(&mut ft).transpose()?,
+            msg: ft(msg)?,
+            match_vars: match_vars.iter().map(&mut fv).collect::<Result<_, _>>()?,
+        },
+        SapicAction::ChOut { chan, msg } => SapicAction::ChOut {
+            chan: chan.as_ref().map(&mut ft).transpose()?,
+            msg: ft(msg)?,
+        },
+        SapicAction::Insert(t1, t2) => SapicAction::Insert(ft(t1)?, ft(t2)?),
+        SapicAction::Delete(t) => SapicAction::Delete(ft(t)?),
+        SapicAction::Lock(t) => SapicAction::Lock(ft(t)?),
+        SapicAction::Unlock(t) => SapicAction::Unlock(ft(t)?),
+        SapicAction::Event(fa) => SapicAction::Event(fa.try_map_ref(&mut ft)?),
+        SapicAction::Msr {
+            prems,
+            acts,
+            concs,
+            rest,
+            match_vars,
+        } => SapicAction::Msr {
+            prems: prems
+                .iter()
+                .map(|fa| fa.try_map_ref(&mut ft))
+                .collect::<Result<_, _>>()?,
+            acts: acts
+                .iter()
+                .map(|fa| fa.try_map_ref(&mut ft))
+                .collect::<Result<_, _>>()?,
+            concs: concs
+                .iter()
+                .map(|fa| fa.try_map_ref(&mut ft))
+                .collect::<Result<_, _>>()?,
+            rest: rest.iter().map(&mut ff).collect::<Result<_, _>>()?,
+            match_vars: match_vars.iter().map(&mut fv).collect::<Result<_, _>>()?,
+        },
+        SapicAction::Rep => SapicAction::Rep,
+        SapicAction::ProcessCall(s, ts) => {
+            SapicAction::ProcessCall(s.clone(), ts.iter().map(&mut ft).collect::<Result<_, _>>()?)
+        }
+    })
+}
+
+/// `traverseTermsComb ft ff fv c` (Theory/Sapic/Process.hs:270-283) over the
+/// `Either` applicative: the [`traverse_terms_action`] counterpart for a
+/// process combinator.
+pub fn traverse_terms_comb<T, V, E>(
+    mut ft: impl FnMut(&SapicNTerm<T>) -> Result<SapicNTerm<V>, E>,
+    mut ff: impl FnMut(&SapicNFormula<T>) -> Result<SapicNFormula<V>, E>,
+    mut fv: impl FnMut(&T) -> Result<V, E>,
+    c: &ProcessCombinator<T>,
+) -> Result<ProcessCombinator<V>, E>
+where
+    V: Ord,
+{
+    Ok(match c {
+        ProcessCombinator::Cond(fa) => ProcessCombinator::Cond(ff(fa)?),
+        ProcessCombinator::CondEq(t1, t2) => ProcessCombinator::CondEq(ft(t1)?, ft(t2)?),
+        ProcessCombinator::Let {
+            left,
+            right,
+            match_vars,
+        } => ProcessCombinator::Let {
+            left: ft(left)?,
+            right: ft(right)?,
+            match_vars: match_vars.iter().map(&mut fv).collect::<Result<_, _>>()?,
+        },
+        ProcessCombinator::Lookup(t, v) => ProcessCombinator::Lookup(ft(t)?, fv(v)?),
+        ProcessCombinator::Parallel => ProcessCombinator::Parallel,
+        ProcessCombinator::Ndc => ProcessCombinator::Ndc,
+    })
 }
 
 /// `pfoldMap`: visit every node in the process tree calling `f`,
