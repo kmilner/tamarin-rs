@@ -874,24 +874,9 @@ impl<'ctx> Reduction<'ctx> {
                     } else {
                         // Collect per component; concatenated conc++prem++act
                         // after the loop to match Haskell `solveRuleEqs`.
-                        for (a, b) in kept.conclusions.iter().zip(rule.conclusions.iter()) {
-                            conc_eqs.push(tamarin_term::rewriting::Equal {
-                                lhs: a.clone(),
-                                rhs: b.clone(),
-                            });
-                        }
-                        for (a, b) in kept.premises.iter().zip(rule.premises.iter()) {
-                            prem_eqs.push(tamarin_term::rewriting::Equal {
-                                lhs: a.clone(),
-                                rhs: b.clone(),
-                            });
-                        }
-                        for (a, b) in kept.actions.iter().zip(rule.actions.iter()) {
-                            act_eqs.push(tamarin_term::rewriting::Equal {
-                                lhs: a.clone(),
-                                rhs: b.clone(),
-                            });
-                        }
+                        flatten_list_eq(&kept.conclusions, &rule.conclusions, &mut conc_eqs);
+                        flatten_list_eq(&kept.premises, &rule.premises, &mut prem_eqs);
+                        flatten_list_eq(&kept.actions, &rule.actions, &mut act_eqs);
                     }
                 }
                 None => {
@@ -2305,6 +2290,24 @@ fn ku_vars(rule: &crate::rule::RuleACInst) -> IsAcConstructor {
     }
 }
 
+/// `flatten` from HS `solveListEqs` (Reduction.hs:781-786): a list equality
+/// becomes one equality per position, `zipWith Equal l r`, appended to `out`.
+/// Positions beyond the shorter list are dropped, so a caller that owes HS's
+/// `contradictoryIf (not $ all evalEqual $ map (fmap length) eqs)` checks the
+/// lengths itself before calling.
+fn flatten_list_eq<T: Clone>(
+    lhs: &[T],
+    rhs: &[T],
+    out: &mut Vec<tamarin_term::rewriting::Equal<T>>,
+) {
+    for (a, b) in lhs.iter().zip(rhs.iter()) {
+        out.push(tamarin_term::rewriting::Equal {
+            lhs: a.clone(),
+            rhs: b.clone(),
+        });
+    }
+}
+
 /// Outcome of an equality-solving step.
 #[derive(Debug)]
 pub enum SolveOutcome {
@@ -2649,12 +2652,7 @@ impl<'ctx> Reduction<'ctx> {
         }
         let mut flat = Vec::new();
         for e in eqs {
-            for (a, b) in e.lhs.terms.iter().zip(e.rhs.terms.iter()) {
-                flat.push(tamarin_term::rewriting::Equal {
-                    lhs: a.clone(),
-                    rhs: b.clone(),
-                });
-            }
+            flatten_list_eq(&e.lhs.terms, &e.rhs.terms, &mut flat);
         }
         self.solve_term_eqs_ac(strategy, is_ac, &flat)
     }
@@ -2694,24 +2692,9 @@ impl<'ctx> Reduction<'ctx> {
         let mut prem_eqs: Vec<tamarin_term::rewriting::Equal<crate::fact::LNFact>> = Vec::new();
         let mut act_eqs: Vec<tamarin_term::rewriting::Equal<crate::fact::LNFact>> = Vec::new();
         for e in eqs {
-            for (a, b) in e.lhs.conclusions.iter().zip(e.rhs.conclusions.iter()) {
-                conc_eqs.push(tamarin_term::rewriting::Equal {
-                    lhs: a.clone(),
-                    rhs: b.clone(),
-                });
-            }
-            for (a, b) in e.lhs.premises.iter().zip(e.rhs.premises.iter()) {
-                prem_eqs.push(tamarin_term::rewriting::Equal {
-                    lhs: a.clone(),
-                    rhs: b.clone(),
-                });
-            }
-            for (a, b) in e.lhs.actions.iter().zip(e.rhs.actions.iter()) {
-                act_eqs.push(tamarin_term::rewriting::Equal {
-                    lhs: a.clone(),
-                    rhs: b.clone(),
-                });
-            }
+            flatten_list_eq(&e.lhs.conclusions, &e.rhs.conclusions, &mut conc_eqs);
+            flatten_list_eq(&e.lhs.premises, &e.rhs.premises, &mut prem_eqs);
+            flatten_list_eq(&e.lhs.actions, &e.rhs.actions, &mut act_eqs);
         }
         let mut fact_eqs: Vec<tamarin_term::rewriting::Equal<crate::fact::LNFact>> =
             Vec::with_capacity(conc_eqs.len() + prem_eqs.len() + act_eqs.len());
