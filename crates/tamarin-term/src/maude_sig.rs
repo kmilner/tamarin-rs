@@ -13,10 +13,11 @@ use std::collections::BTreeSet;
 
 use crate::builtin::{
     asym_enc_dest_rules, asym_enc_fun_dest_sig, asym_enc_fun_sig, asym_enc_rules, bp_rules,
-    dh_rules, hash_fun_sig, location_report_fun_sig, location_report_rules, mset_rules,
-    pair_dest_rules, pair_rules, reveal_signature_fun_sig, reveal_signature_rules,
-    signature_dest_rules, signature_fun_dest_sig, signature_fun_sig, signature_rules,
-    sym_enc_dest_rules, sym_enc_fun_dest_sig, sym_enc_fun_sig, sym_enc_rules, xor_rules,
+    dh_rules, fst_dest_rule, fst_rule, hash_fun_sig, location_report_fun_sig,
+    location_report_rules, mset_rules, pair_dest_rules, pair_rules, reveal_signature_fun_sig,
+    reveal_signature_rules, signature_dest_rules, signature_fun_dest_sig, signature_fun_sig,
+    signature_rules, snd_dest_rule, snd_rule, sym_enc_dest_rules, sym_enc_fun_dest_sig,
+    sym_enc_fun_sig, sym_enc_rules, xor_rules,
 };
 use crate::function_symbols::{
     bp_fun_sig, bp_reducible_fun_sig, dh_fun_sig, dh_reducible_fun_sig, fst_dest_sym, fst_sym,
@@ -658,66 +659,6 @@ fn union_except_pair_rules(
 ) -> BTreeSet<CtxtStRule> {
     let after_fst = remove_if_necessary(a, b, &fst_dest_rule(), &fst_rule());
     remove_if_necessary(&after_fst, b, &snd_rule(), &snd_dest_rule())
-}
-
-// The four individual constructor/destructor pair rules
-// (Term/Builtin/Rules.hs:101-104), used only by `union_except_pair_rules`.
-// `pair_rules`/`pair_dest_rules` in builtin.rs build the *sets*; these
-// reconstruct the individual `CtxtStRule`s so the union dedup can target
-// them precisely.
-fn fst_rule() -> CtxtStRule {
-    use crate::builtin::{fst, msg_var, pair};
-    use crate::subterm_rule::StRhs;
-    let x1 = msg_var("x", 1);
-    let x2 = msg_var("x", 2);
-    CtxtStRule::new(
-        fst(pair(x1.clone(), x2.clone())),
-        StRhs {
-            positions: vec![vec![0, 0]],
-            term: x1,
-        },
-    )
-}
-fn snd_rule() -> CtxtStRule {
-    use crate::builtin::{msg_var, pair, snd};
-    use crate::subterm_rule::StRhs;
-    let x1 = msg_var("x", 1);
-    let x2 = msg_var("x", 2);
-    CtxtStRule::new(
-        snd(pair(x1.clone(), x2.clone())),
-        StRhs {
-            positions: vec![vec![0, 1]],
-            term: x2,
-        },
-    )
-}
-fn fst_dest_rule() -> CtxtStRule {
-    use crate::builtin::{msg_var, pair};
-    use crate::subterm_rule::StRhs;
-    use crate::term::f_app_no_eq;
-    let x1 = msg_var("x", 1);
-    let x2 = msg_var("x", 2);
-    CtxtStRule::new(
-        f_app_no_eq(fst_dest_sym(), vec![pair(x1.clone(), x2.clone())]),
-        StRhs {
-            positions: vec![vec![0, 0]],
-            term: x1,
-        },
-    )
-}
-fn snd_dest_rule() -> CtxtStRule {
-    use crate::builtin::{msg_var, pair};
-    use crate::subterm_rule::StRhs;
-    use crate::term::f_app_no_eq;
-    let x1 = msg_var("x", 1);
-    let x2 = msg_var("x", 2);
-    CtxtStRule::new(
-        f_app_no_eq(snd_dest_sym(), vec![pair(x1.clone(), x2.clone())]),
-        StRhs {
-            positions: vec![vec![0, 1]],
-            term: x2,
-        },
-    )
 }
 
 // =============================================================================
