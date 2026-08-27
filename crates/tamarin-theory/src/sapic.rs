@@ -148,7 +148,7 @@ pub fn to_lformula(f: &SapicFormula) -> SyntacticLNFormula {
 // Annotation
 // =============================================================================
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ProcessParsedAnnotation {
     /// Identifiers that produced this subprocess via inlined `let`-bindings.
     pub process_names: Vec<String>,
@@ -157,16 +157,6 @@ pub struct ProcessParsedAnnotation {
     /// Substitution that maps renamed variables back to the user's
     /// original names. Empty until uniqueness renaming has run.
     pub back_substitution: Subst<Name, LVar>,
-}
-
-impl Default for ProcessParsedAnnotation {
-    fn default() -> Self {
-        ProcessParsedAnnotation {
-            process_names: Vec::new(),
-            location: None,
-            back_substitution: Subst::empty(),
-        }
-    }
 }
 
 impl ProcessParsedAnnotation {

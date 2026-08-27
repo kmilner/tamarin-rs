@@ -441,31 +441,15 @@ pub struct ProtoRuleACInfo {
 }
 
 /// Information for instances of protocol rules modulo AC.
-#[derive(Debug, Clone, PartialEq)]
+///
+/// HS derives `Ord ProtoRuleACInstInfo` over `_praciName`,
+/// `_praciAttributes`, `_praciLoopBreakers` (Theory/Model/Rule.hs:444-449),
+/// which is this struct's declaration order.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ProtoRuleACInstInfo {
     pub name: ProtoRuleName,
     pub attributes: RuleAttributes,
     pub loop_breakers: Vec<PremIdx>,
-}
-
-impl Eq for ProtoRuleACInstInfo {}
-
-impl PartialOrd for ProtoRuleACInstInfo {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-/// HS derives `Ord ProtoRuleACInstInfo` over `_praciName`,
-/// `_praciAttributes`, `_praciLoopBreakers` (Theory/Model/Rule.hs:444-449),
-/// which is this struct's declaration order.
-impl Ord for ProtoRuleACInstInfo {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.name
-            .cmp(&other.name)
-            .then_with(|| self.attributes.cmp(&other.attributes))
-            .then_with(|| self.loop_breakers.cmp(&other.loop_breakers))
-    }
 }
 
 // =============================================================================
