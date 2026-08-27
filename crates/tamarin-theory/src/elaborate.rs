@@ -528,27 +528,6 @@ fn maude_sig_step(item: &p::TheoryItem, out: &mut Theory) -> Result<Vec<LNMacro>
     Ok(Vec::new())
 }
 
-/// The `MaudeSig` a parsed theory's declarations build, without elaborating
-/// the theory: [`maude_sig_step`] folded over `thy`'s items from the empty,
-/// diff-seeded signature [`elaborate`] starts from.
-///
-/// It equals `elaborate(thy)?.signature.maude_sig`: those are the only four
-/// item kinds that touch the signature, and `elaborate_items` runs the same
-/// step over the same items in the same order.
-/// `elaborate_tests::parse_time_signature_matches_elaboration` pins that over
-/// the examples tree.
-pub fn parse_time_signature(thy: &p::Theory) -> Result<MaudeSig, ElabError> {
-    let mut sig = SignaturePure::empty(thy.is_diff);
-    if thy.is_diff {
-        sig.maude_sig = sig.maude_sig.merge(enable_diff_maude_sig());
-    }
-    let mut scratch: Theory = Theory::new(thy.name.clone(), sig);
-    for item in &thy.items {
-        maude_sig_step(item, &mut scratch)?;
-    }
-    Ok(scratch.signature.maude_sig)
-}
-
 fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), ElabError> {
     // The predicates declared so far, in source order.  HS expands a lemma or
     // restriction against `theoryPredicates thy` as it is added

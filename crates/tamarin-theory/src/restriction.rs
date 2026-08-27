@@ -224,33 +224,22 @@ pub fn from_rule_restriction(rname: &str, f: &LNFormula) -> (Restriction, LNFact
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::elaborate::parse_time_signature;
     use crate::fact::show_fact_tag;
     use crate::formula::{Connective, Quantifier};
     use crate::predicate::{expand_formula, Predicate};
     use crate::pretty_formula::pretty_lnformula;
-    use tamarin_parser::ast as p;
     use tamarin_parser::parser::parse_formula_str;
     use tamarin_term::function_symbols::FunSym;
     use tamarin_term::maude_sig::MaudeSig;
 
     /// The signature and the predicates of a theory that declares nothing
-    /// else, closed the way `elaborate_items` closes them.
+    /// else, as `elaborate` builds them.
     fn theory(decls: &str) -> (MaudeSig, Vec<Predicate>) {
         let src = format!("theory T begin\n{decls}\nend");
         let thy = tamarin_parser::parse_theory(&src, &[]).unwrap();
-        let sig = parse_time_signature(&thy).unwrap();
-        let preds = thy
-            .items
-            .iter()
-            .filter_map(|it| match it {
-                p::TheoryItem::Predicates(ps) => Some(ps),
-                _ => None,
-            })
-            .flatten()
-            .map(|pd| crate::predicate::from_parser(pd, &sig).unwrap())
-            .collect();
-        (sig, preds)
+        let elab = crate::elaborate::elaborate(&thy).unwrap();
+        let preds = elab.predicates().cloned().collect();
+        (elab.signature.maude_sig, preds)
     }
 
     /// One `_restrict` formula as the lifting sees it: parsed, closed against
