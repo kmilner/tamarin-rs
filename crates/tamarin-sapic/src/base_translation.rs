@@ -78,22 +78,6 @@ pub(crate) fn to_ln_fact(f: &tamarin_theory::sapic::SapicLNFact) -> tamarin_theo
     f.map_ref(to_ln_term)
 }
 
-/// Apply a SAPIC substitution to a SAPIC term.
-pub(crate) fn subst_term(
-    subst: &tamarin_term::subst::Subst<tamarin_term::lterm::Name, SapicLVar>,
-    t: &SapicTerm,
-) -> SapicTerm {
-    tamarin_term::subst::apply_vterm(subst, t.clone())
-}
-
-/// Apply a SAPIC substitution to a SAPIC fact (tag + annotations preserved).
-pub(crate) fn subst_fact(
-    subst: &tamarin_term::subst::Subst<tamarin_term::lterm::Name, SapicLVar>,
-    f: &tamarin_theory::sapic::SapicLNFact,
-) -> tamarin_theory::sapic::SapicLNFact {
-    f.map_ref(|t| subst_term(subst, t))
-}
-
 /// `Data.List.union xs ys = xs ++ filter (`notElem` xs) (nub ys)`: keep `xs` in
 /// order (duplicates preserved), then append each element of `ys` that is not
 /// already present (deduped within the appended tail too, via the growing

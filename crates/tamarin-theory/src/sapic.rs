@@ -464,6 +464,19 @@ pub fn frees_sapic_fact(f: &Fact<SapicTerm>) -> Vec<SapicLVar> {
     out
 }
 
+/// A substitution mapping SAPIC variables to SAPIC terms.
+pub type SapicSubst = Subst<Name, SapicLVar>;
+
+/// Apply a SAPIC substitution to a SAPIC term.
+pub fn subst_term(subst: &SapicSubst, t: &SapicTerm) -> SapicTerm {
+    tamarin_term::subst::apply_vterm(subst, t.clone())
+}
+
+/// Apply a SAPIC substitution to a SAPIC fact (tag and annotations kept).
+pub fn subst_fact(subst: &SapicSubst, f: &SapicLNFact) -> SapicLNFact {
+    f.map_ref(|t| subst_term(subst, t))
+}
+
 // =============================================================================
 // Action / combinator predicates (mirroring Sapic.ProcessUtils)
 //

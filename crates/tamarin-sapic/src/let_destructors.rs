@@ -32,14 +32,15 @@
 //! AFTER `propagateNames` and BEFORE `annotateLocks`, over the already
 //! type-/rename-unique'd process.
 
-use crate::base_translation::{subst_fact, subst_term};
 use tamarin_term::function_symbols::{Constructability, FunSym};
 use tamarin_term::lterm::{LNTerm, LVar, Name};
 use tamarin_term::subst::{apply_vterm, Subst};
 use tamarin_term::subterm_rule::CtxtStRule;
 use tamarin_term::vterm::{Lit, VTerm};
 use tamarin_theory::formula::apply_subst;
-use tamarin_theory::sapic::{Process, ProcessCombinator, SapicLVar, SapicTerm};
+use tamarin_theory::sapic::{
+    subst_fact, subst_term, Process, ProcessCombinator, SapicLVar, SapicTerm,
+};
 
 use crate::annotation::{AnnotatedProcess, ProcessAnnotation};
 

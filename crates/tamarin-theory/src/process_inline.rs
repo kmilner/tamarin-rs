@@ -32,9 +32,7 @@
 use std::collections::BTreeMap;
 
 use tamarin_parser::ast as p;
-use tamarin_term::lterm::Name;
 use tamarin_term::maude_sig::MaudeSig;
-use tamarin_term::subst::{apply_vterm, Subst};
 use tamarin_term::vterm::{Lit, VTerm};
 
 use crate::formula::apply_subst;
@@ -42,21 +40,9 @@ use crate::process_convert::{
     action as convert_action, combinator as convert_combinator, term as convert_term, ConvertError,
 };
 use crate::sapic::{
-    PlainProcess, Process, ProcessCombinator, SapicAction, SapicLNFact, SapicLVar, SapicTerm,
+    subst_fact, subst_term, PlainProcess, Process, ProcessCombinator, SapicAction, SapicLVar,
+    SapicSubst, SapicTerm,
 };
-
-/// A substitution mapping SAPIC parameter variables to argument terms.
-type SapicSubst = Subst<Name, SapicLVar>;
-
-/// Apply a SAPIC substitution to a SAPIC term.
-fn subst_term(subst: &SapicSubst, t: &SapicTerm) -> SapicTerm {
-    apply_vterm(subst, t.clone())
-}
-
-/// Apply a SAPIC substitution to a SAPIC fact (tag and annotations kept).
-fn subst_fact(subst: &SapicSubst, f: &SapicLNFact) -> SapicLNFact {
-    f.map_ref(|t| subst_term(subst, t))
-}
 
 /// Look up each process definition by name (HS `lookupProcessDef`,
 /// `TheoryObject.hs:693-694`).  Built once from the parsed theory's `ProcessDef`
