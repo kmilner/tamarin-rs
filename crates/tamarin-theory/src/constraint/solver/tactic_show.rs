@@ -39,8 +39,9 @@ use crate::guarded::Guarded;
 // =============================================================================
 
 /// HS derived `show FactTag`.  For `ProtoFact m n a` this is
-/// `ProtoFact <show m> "<n>" <a>` (with the multiplicity constructor name
-/// and the Haskell-quoted/escaped string literal).
+/// `ProtoFact <show m> "<n>" <a>`, the multiplicity constructor name and the
+/// name through the `Show String` instance
+/// ([`tamarin_parser::parser::show_lit_string`]).
 pub fn show_fact_tag(t: &FactTag) -> String {
     match t {
         FactTag::Proto(m, n, a) => {
@@ -48,7 +49,12 @@ pub fn show_fact_tag(t: &FactTag) -> String {
                 Multiplicity::Persistent => "Persistent",
                 Multiplicity::Linear => "Linear",
             };
-            format!("ProtoFact {} {} {}", mult, show_haskell_string(n), a)
+            format!(
+                "ProtoFact {} {} {}",
+                mult,
+                tamarin_parser::parser::show_lit_string(n),
+                a
+            )
         }
         FactTag::Fresh => "FreshFact".into(),
         FactTag::Out => "OutFact".into(),
@@ -58,27 +64,6 @@ pub fn show_fact_tag(t: &FactTag) -> String {
         FactTag::Ded => "DedFact".into(),
         FactTag::Term => "TermFact".into(),
     }
-}
-
-/// Haskell's `show :: String -> String` (the `Show String` instance):
-/// surrounds with double-quotes and escapes the standard control/quote
-/// characters.  Protocol fact names are plain identifiers so the common
-/// case is just `"<name>"`, but we escape to stay faithful.
-fn show_haskell_string(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 2);
-    out.push('"');
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\t' => out.push_str("\\t"),
-            '\r' => out.push_str("\\r"),
-            _ => out.push(c),
-        }
-    }
-    out.push('"');
-    out
 }
 
 // =============================================================================
@@ -262,6 +247,15 @@ mod tests {
 
     fn pub_name(name: &str) -> BLNTerm {
         const_term(Name::new(NameTag::Pub, name))
+    }
+
+    /// The derived `Show FactTag` puts the protocol fact's name through the
+    /// `Show String` instance, so a control character in the name comes out
+    /// as its GHC escape.
+    #[test]
+    fn show_fact_tag_escapes_the_protocol_fact_name() {
+        let tag = FactTag::Proto(Multiplicity::Linear, "a\u{0B}b", 2);
+        assert_eq!(show_fact_tag(&tag), "ProtoFact Linear \"a\\vb\" 2");
     }
 
     /// `show LVar` is `sortPrefix s ++ body`.  Each sort has one prefix; Msg

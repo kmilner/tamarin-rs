@@ -783,6 +783,21 @@ fn show_char_token_escapes_like_haskell() {
     assert_eq!(show_char_token('\t'), "\"\\t\"");
 }
 
+/// GHC `show :: String -> String` over a whole string: the named control
+/// escapes, a decimal escape for a character above `\DEL`, and the `\&`
+/// separator before a digit that would otherwise extend that escape.
+#[test]
+fn show_lit_string_escapes_like_haskell() {
+    assert_eq!(show_lit_string("ab"), "\"ab\"");
+    assert_eq!(
+        show_lit_string("\u{0B}\u{0C}\u{07}\u{08}"),
+        "\"\\v\\f\\a\\b\""
+    );
+    assert_eq!(show_lit_string("a\"b\\c"), "\"a\\\"b\\\\c\"");
+    assert_eq!(show_lit_string("\u{100}"), "\"\\256\"");
+    assert_eq!(show_lit_string("\u{100}7"), "\"\\256\\&7\"");
+}
+
 #[test]
 fn theory_keyword_error_matches_parsec() {
     // End-to-end: the top-level `theory` keyword mismatch renders exactly

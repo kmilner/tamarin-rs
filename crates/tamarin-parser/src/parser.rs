@@ -339,17 +339,31 @@ fn pred_fact_text(f: &Fact) -> String {
 }
 
 fn show_char_token(c: char) -> String {
-    let mut s = String::from('"');
-    show_lit_char(c, &mut s);
-    s.push('"');
-    s
+    show_lit_string(&c.to_string())
+}
+
+/// GHC's `show :: String -> String`: the string in double quotes, every
+/// character through [`show_lit_char`], and the `\&` separator GHC's
+/// `showLitString` puts between a numeric escape and a following decimal digit
+/// so the two do not read as one longer escape.
+pub fn show_lit_string(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        let numeric = show_lit_char(c, &mut out);
+        if numeric && chars.peek().is_some_and(|n| n.is_ascii_digit()) {
+            out.push_str("\\&");
+        }
+    }
+    out.push('"');
+    out
 }
 
 /// Port of GHC's `showLitChar` for the characters that appear inside a
-/// double-quoted string literal (`show :: String -> String`).  We only ever
-/// show a *single* char, so the `\&` empty-string separator (only emitted
-/// between a numeric escape and a following digit) never applies.
-fn show_lit_char(c: char, out: &mut String) {
+/// double-quoted string literal.  Returns whether it wrote a decimal escape,
+/// which is what [`show_lit_string`] guards with `\&`.
+fn show_lit_char(c: char, out: &mut String) -> bool {
     match c {
         '"' => out.push_str("\\\""),
         '\\' => out.push_str("\\\\"),
@@ -365,8 +379,10 @@ fn show_lit_char(c: char, out: &mut String) {
         c => {
             out.push('\\');
             out.push_str(&(c as u32).to_string());
+            return true;
         }
     }
+    false
 }
 
 /// The merged `expecting` labels of the top-level item alternation, in HS's
