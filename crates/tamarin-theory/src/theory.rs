@@ -12,6 +12,8 @@
 //! where polymorphism actually matters (open vs closed, diff vs trace)
 //! we model with explicit enums or distinct types.
 
+pub use tamarin_term::tags::{LemmaAttr, TraceQuantifier};
+
 use crate::formula::{LNFormula, SyntacticLNFormula};
 use crate::predicate::Predicate;
 use crate::restriction::Restriction;
@@ -163,29 +165,6 @@ pub enum TranslationElement {
         tag: String,
         body: String,
     },
-}
-
-/// Trace quantifier on lemmas.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TraceQuantifier {
-    AllTraces,
-    ExistsTrace,
-}
-
-/// Attribute on a lemma.
-#[derive(Debug, Clone, PartialEq)]
-pub enum LemmaAttr {
-    Sources,
-    Reuse,
-    DiffReuse,
-    UseInduction,
-    HideLemma(String),
-    Heuristic(String),
-    Output(Vec<String>),
-    Left,
-    Right,
-    /// Free-form attribute we don't recognize.
-    Hint(String),
 }
 
 /// A typed lemma. `proof` is a proof skeleton the prover may attempt

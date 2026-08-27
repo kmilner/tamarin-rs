@@ -28,6 +28,9 @@
 //! - [`norm`] ← `Term.Rewriting.Norm` (calls into Maude)
 //! - [`intern`] ← (no HS analog) global write-once intern pools for
 //!   symbol/variable names
+//! - [`tags`] ← the lemma and fact tag enums of `Items/LemmaItem.hs` and
+//!   `Theory/Model/Fact.hs`, kept here because `tamarin-parser` and
+//!   `tamarin-theory` both carry them
 //!
 //! Not yet ported:
 //! - `Term.Narrowing.{Variants, Variants.Check, Variants.Compute, Narrow}`
@@ -53,6 +56,7 @@ pub mod subst;
 pub mod subst_vfresh;
 pub mod subsumption;
 pub mod subterm_rule;
+pub mod tags;
 pub mod term;
 #[cfg(test)]
 mod test_maude;

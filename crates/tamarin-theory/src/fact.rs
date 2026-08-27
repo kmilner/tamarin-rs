@@ -15,6 +15,7 @@ use std::sync::Arc;
 use tamarin_term::apply::Apply;
 use tamarin_term::lterm::{BVar, HasFrees, LNTerm, LVar, Name};
 use tamarin_term::macro_expand::LNMacro;
+pub use tamarin_term::tags::FactAnnotation;
 use tamarin_term::term::show_term;
 use tamarin_term::vterm::VTerm;
 
@@ -43,13 +44,6 @@ pub enum FactTag {
     Ded,
     /// Internal: only for converting terms to facts during analysis.
     Term,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum FactAnnotation {
-    SolveFirst,
-    SolveLast,
-    NoSources,
 }
 
 /// Variable fingerprint bit (cached-bloom skip).

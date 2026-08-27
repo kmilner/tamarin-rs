@@ -57,8 +57,8 @@ use crate::rule::{
 };
 use crate::signature::SignaturePure;
 use crate::theory::{
-    apply_macro_in_lemma, AccLemma, CaseTest, LNMacro, Lemma, LemmaAttr, OpenProtoRule, ProcessDef,
-    ProofTree, SapicFunSym, Theory, TheoryItem, TraceQuantifier, TranslationElement,
+    apply_macro_in_lemma, AccLemma, CaseTest, LNMacro, Lemma, OpenProtoRule, ProcessDef, ProofTree,
+    SapicFunSym, Theory, TheoryItem, TranslationElement,
 };
 
 #[derive(Debug, Clone)]
@@ -664,11 +664,8 @@ fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), Elab
                 let msig = &out.signature.maude_sig;
                 let lem: Lemma = Lemma {
                     name: l.name.clone(),
-                    attributes: l.attributes.iter().map(elaborate_lemma_attr).collect(),
-                    trace_quantifier: match l.trace_quantifier {
-                        p::TraceQuantifier::AllTraces => TraceQuantifier::AllTraces,
-                        p::TraceQuantifier::ExistsTrace => TraceQuantifier::ExistsTrace,
-                    },
+                    attributes: l.attributes.clone(),
+                    trace_quantifier: l.trace_quantifier,
                     formula: item_formula(&l.formula, msig, &preds)?,
                     original_formula: None,
                     proof: match l.proof.as_ref().and_then(|p| p.tree.as_ref()) {
@@ -696,7 +693,7 @@ fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), Elab
             p::TheoryItem::AccLemma(a) => {
                 let acc = AccLemma {
                     name: a.name.clone(),
-                    attributes: a.attributes.iter().map(elaborate_lemma_attr).collect(),
+                    attributes: a.attributes.clone(),
                     formula: crate::formula::from_parser(&a.formula, &out.signature.maude_sig)?,
                     case_test_idents: a.case_test_idents.clone(),
                 };
@@ -802,23 +799,6 @@ fn elaborate_process(
     crate::process_inline::convert_process_with_defs(proc, defs, sig).map_err(|e| ElabError {
         message: format!("SAPIC translation: {}", e.message),
     })
-}
-
-/// Map a parser-AST lemma attribute to the elaborated form (the two enums
-/// are 1:1).  `pub` for `tamarin-accountability`'s lemma injection.
-pub fn elaborate_lemma_attr(a: &p::LemmaAttr) -> LemmaAttr {
-    match a {
-        p::LemmaAttr::Sources => LemmaAttr::Sources,
-        p::LemmaAttr::Reuse => LemmaAttr::Reuse,
-        p::LemmaAttr::DiffReuse => LemmaAttr::DiffReuse,
-        p::LemmaAttr::UseInduction => LemmaAttr::UseInduction,
-        p::LemmaAttr::HideLemma(s) => LemmaAttr::HideLemma(s.clone()),
-        p::LemmaAttr::Heuristic(s) => LemmaAttr::Heuristic(s.clone()),
-        p::LemmaAttr::Output(v) => LemmaAttr::Output(v.clone()),
-        p::LemmaAttr::Left => LemmaAttr::Left,
-        p::LemmaAttr::Right => LemmaAttr::Right,
-        p::LemmaAttr::Hint(s) => LemmaAttr::Hint(s.clone()),
-    }
 }
 
 // =============================================================================
@@ -941,18 +921,11 @@ pub fn fact_tag_of(f: &p::Fact) -> crate::fact::FactTag {
     }
 }
 
-/// Copy a parser fact's annotations into the typed `FactAnnotation` set.
+/// A parser fact's annotation list as the `S.Set FactAnnotation` a
+/// `Theory.Model.Fact` holds (Theory/Model/Fact.hs:157-162).
 /// Shared by [`fact_to_lnfact`] and [`fact_to_sapic_fact`].
 pub(crate) fn copy_fact_annotations(f: &p::Fact) -> BTreeSet<crate::fact::FactAnnotation> {
-    let mut anns: BTreeSet<crate::fact::FactAnnotation> = BTreeSet::new();
-    for ann in &f.annotations {
-        anns.insert(match ann {
-            p::FactAnnotation::SolveFirst => crate::fact::FactAnnotation::SolveFirst,
-            p::FactAnnotation::SolveLast => crate::fact::FactAnnotation::SolveLast,
-            p::FactAnnotation::NoSources => crate::fact::FactAnnotation::NoSources,
-        });
-    }
-    anns
+    f.annotations.iter().copied().collect()
 }
 
 pub fn fact_to_lnfact(f: &p::Fact, sig: &MaudeSig) -> Result<crate::fact::LNFact, ElabError> {

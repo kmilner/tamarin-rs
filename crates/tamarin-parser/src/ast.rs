@@ -11,6 +11,7 @@
 //! the root; every other type hangs off its [`TheoryItem`] stream.
 
 use tamarin_term::lterm::LSort;
+pub use tamarin_term::tags::{FactAnnotation, LemmaAttr, TraceQuantifier};
 
 // =============================================================================
 // Top-level theory
@@ -198,26 +199,6 @@ pub struct AccLemma {
 pub struct CaseTest {
     pub name: String,
     pub formula: Formula,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum TraceQuantifier {
-    AllTraces,
-    ExistsTrace,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum LemmaAttr {
-    Sources,
-    Reuse,
-    DiffReuse,
-    UseInduction,
-    HideLemma(String),
-    Heuristic(String),
-    Output(Vec<String>),
-    Left,
-    Right,
-    Hint(String),
 }
 
 /// Structured skeleton parse — mirrors HS's
@@ -420,13 +401,6 @@ pub struct Fact {
     pub name: String,
     pub args: Vec<Term>,
     pub annotations: Vec<FactAnnotation>,
-}
-
-#[derive(Debug, Clone, PartialEq, Hash)]
-pub enum FactAnnotation {
-    SolveFirst,
-    SolveLast,
-    NoSources,
 }
 
 // =============================================================================

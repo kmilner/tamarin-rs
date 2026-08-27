@@ -3,6 +3,7 @@
 //   scripts/gen_license_headers.py --authors <this file>
 
 use super::*;
+use crate::theory::TraceQuantifier;
 use tamarin_parser::parse_theory;
 use tamarin_term::lterm::{sort_of_name, LSort};
 use tamarin_term::maude_sig::pair_maude_sig;
