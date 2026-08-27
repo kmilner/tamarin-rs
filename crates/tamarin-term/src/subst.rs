@@ -11,16 +11,14 @@
 //! [`apply_bvterm`] and [`apply_bvar`] apply one to a term whose variables
 //! are [`BVar`]s.
 //!
-//! The Haskell `Apply` typeclass and the `LSubst`/`LNSubst` aliases live in
-//! later modules that depend on `LTerm`.
+//! The Haskell `Apply` typeclass is [`crate::apply`]; the `LSubst`/`LNSubst`
+//! aliases live in later modules that depend on `LTerm`.
 
 use std::collections::BTreeMap;
 
-use tamarin_utils::cow::cow_map_vec;
-
-use crate::function_symbols::FunSym;
+use crate::apply::Apply;
 use crate::lterm::{BVar, HasFrees, LVar};
-use crate::term::{f_app, f_app_ac, f_app_c, f_app_list, f_app_no_eq, map_lits, Term};
+use crate::term::{f_app, map_lits, Term};
 use crate::vterm::{Lit, VTerm};
 
 /// A substitution mapping variables of type `V` to terms of type
@@ -184,96 +182,29 @@ fn equal_to_var<C, V: PartialEq>(t: &VTerm<C, V>, v: &V) -> bool {
 
 /// `applyVTerm`: substitute through a whole term, re-AC-normalising.
 pub fn apply_vterm<C: Ord + Clone, V: Ord + Clone>(s: &Subst<C, V>, t: VTerm<C, V>) -> VTerm<C, V> {
-    apply_vterm_map(&s.map, t)
+    t.apply(s)
 }
 
-/// `applyVTerm` with change detection: returns `Some(new_term)` only when
-/// `s` actually changes `t`, and `None` when `t` is left structurally
-/// unchanged.  The borrowing, non-cloning counterpart of [`apply_vterm`] —
-/// callers reuse the original `t` on `None` instead of cloning it and
-/// deep-comparing against the applied result.  Thin single-term wrapper over
-/// [`apply_vterm_map_changed`], sharing its exact `None`-when-unchanged
-/// convention (empty/absent binding ⇒ `None`).
+/// `applyVTerm` with change detection: `Some(new_term)` only when `s` actually
+/// changes `t`, and `None` when `t` is left structurally unchanged.  The
+/// borrowing, non-cloning counterpart of [`apply_vterm`] — callers reuse the
+/// original `t` on `None` instead of cloning it and deep-comparing against the
+/// applied result.
 pub fn apply_vterm_changed<C: Ord + Clone, V: Ord + Clone>(
     s: &Subst<C, V>,
     t: &VTerm<C, V>,
 ) -> Option<VTerm<C, V>> {
-    apply_vterm_map_changed(&s.map, t)
+    t.apply_changed(s)
 }
 
-/// `applyVTerm` against a raw substitution map — the borrowing
-/// counterpart of [`apply_vterm`], producing byte-identical output.
-///
-/// Two short-circuits mirror Haskell's `applyVTerm` (SubstVFree.hs) so we
-/// only allocate on the part of the term the substitution actually touches:
-///
-/// 1. **Empty-map fast path:** an empty substitution is the identity, so we
-///    return `t` untouched (it is already AC-normal).
-/// 2. **Unchanged-subterm sharing:** [`apply_vterm_map_changed`] returns
-///    `None` when the substitution leaves a subterm structurally unchanged;
-///    in that case we reuse the original `Arc<[_]>` instead of rebuilding and
-///    re-AC-sorting it.  This is sound because an unchanged term is already in
-///    AC-normal form, and the resulting *value* is identical to the
-///    full-rebuild path (only the `Arc` identity differs, which is invisible
-///    to callers and to `--prove` output).
-///
-/// They matter because the solver applies the (idempotent) eq-store
-/// substitution across the whole constraint system on every step; without
-/// the short-circuits that reallocates and re-AC-sorts every node even when
-/// nothing changed, dominating the allocator in DH/classic/xor theories.
+/// `applyVTerm` against a raw substitution map — the entry point the
+/// unification accumulator and the variant-subst walks use, where the mapping
+/// exists only as a `BTreeMap`.
 pub fn apply_vterm_map<C: Ord + Clone, V: Ord + Clone>(
     map: &BTreeMap<V, VTerm<C, V>>,
     t: VTerm<C, V>,
 ) -> VTerm<C, V> {
-    if map.is_empty() {
-        return t;
-    }
-    match apply_vterm_map_changed(map, &t) {
-        Some(changed) => changed,
-        None => t,
-    }
-}
-
-/// Apply `map` to `t`, returning `Some(new_term)` only when the substitution
-/// actually changes `t`, and `None` when `t` is left structurally unchanged.
-///
-/// Callers reuse the original term (sharing its `Arc`) on `None`.  An `App`
-/// node is rebuilt — and re-AC-normalised through the smart constructors,
-/// exactly as the non-sharing path did — only when at least one child changed.
-fn apply_vterm_map_changed<C: Ord + Clone, V: Ord + Clone>(
-    map: &BTreeMap<V, VTerm<C, V>>,
-    t: &VTerm<C, V>,
-) -> Option<VTerm<C, V>> {
-    match t {
-        Term::Lit(l) => apply_lit_map_changed(map, l),
-        Term::App(fsym, args) => {
-            // COW-rebuild the argument vector: the shared `cow_map_vec` helper
-            // clones only the unchanged prefix on the first change and returns
-            // `None` when every child is left structurally unchanged.
-            cow_map_vec(&args[..], |a| apply_vterm_map_changed(map, a)).map(|mapped| match fsym {
-                FunSym::Ac(o) => f_app_ac(*o, mapped),
-                FunSym::C(o) => f_app_c(*o, mapped),
-                FunSym::NoEq(o) => f_app_no_eq(*o, mapped),
-                FunSym::List => f_app_list(mapped),
-            })
-        }
-    }
-}
-
-/// `applyLit` (SubstVFree.hs:100-102) against a raw map, returning `Some`
-/// only when the literal is a domain variable (and thus replaced).
-///
-/// `from_map`/`from_list` drop trivial `x ~> x` entries and the unification
-/// accumulator never inserts one, so a found binding is always a genuine
-/// change — making `Some`/`None` here exactly track "did the term change".
-fn apply_lit_map_changed<C: Ord + Clone, V: Ord + Clone>(
-    map: &BTreeMap<V, VTerm<C, V>>,
-    l: &Lit<C, V>,
-) -> Option<VTerm<C, V>> {
-    match l {
-        Lit::Var(v) => map.get(v).cloned(),
-        Lit::Con(_) => None,
-    }
+    t.apply(map)
 }
 
 /// HS's overlappable `Apply s (BVar v)` (SubstVFree.hs:293-295): a bound De
@@ -364,34 +295,16 @@ where
         self.map.get(v).copied()
     }
 
-    /// [`apply_vterm_map`] against the view: same empty-map fast path, same
+    /// [`apply_vterm`] against the view: same empty-map fast path, same
     /// reuse-original-on-unchanged behaviour, byte-identical output.
     pub fn apply(&self, t: VTerm<C, V>) -> VTerm<C, V> {
-        if self.map.is_empty() {
-            return t;
-        }
-        match self.apply_changed(&t) {
-            Some(changed) => changed,
-            None => t,
-        }
+        t.apply(self)
     }
 
-    /// [`apply_vterm_map_changed`] against the view: identical recursion,
-    /// identical `Some`-iff-rebuilt convention; only the per-leaf probe
-    /// container differs.
+    /// [`apply_vterm_changed`] against the view: same `Some`-iff-rebuilt
+    /// convention; only the per-leaf probe container differs.
     pub fn apply_changed(&self, t: &VTerm<C, V>) -> Option<VTerm<C, V>> {
-        match t {
-            Term::Lit(Lit::Var(v)) => self.map.get(v).map(|img| (*img).clone()),
-            Term::Lit(Lit::Con(_)) => None,
-            Term::App(fsym, args) => {
-                cow_map_vec(&args[..], |a| self.apply_changed(a)).map(|mapped| match fsym {
-                    FunSym::Ac(o) => f_app_ac(*o, mapped),
-                    FunSym::C(o) => f_app_c(*o, mapped),
-                    FunSym::NoEq(o) => f_app_no_eq(*o, mapped),
-                    FunSym::List => f_app_list(mapped),
-                })
-            }
-        }
+        t.apply_changed(self)
     }
 }
 

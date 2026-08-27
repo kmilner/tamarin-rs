@@ -35,6 +35,7 @@
 //!   (variant computation as a standalone module; the variant-unification
 //!   entry point Tamarin needs lives in [`maude_proc`])
 
+pub mod apply;
 pub mod bind;
 pub mod builtin;
 pub mod function_symbols;
