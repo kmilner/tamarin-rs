@@ -494,7 +494,7 @@ fn reduce_nf_fast_path_on_ac_signature() {
 // var) must AC-match subject `code2 ++ x ++ <a,b>` by binding
 // `codeOther -> code2 ++ x`, matching HS's Maude matchAction.
 #[test]
-fn match_eqs_const_subject_mset_var_to_submultiset() {
+fn match_eqs_skolemize_both_mset_var_to_submultiset() {
     let path = match maude_path() {
         Some(p) => p,
         None => {
@@ -534,7 +534,7 @@ fn match_eqs_const_subject_mset_var_to_submultiset() {
     let mut pattern_vars = std::collections::BTreeSet::new();
     pattern_vars.insert(("codeOther".to_string(), 89u64));
     let res = h
-        .match_eqs_const_subject(
+        .match_eqs_skolemize_both(
             &[Equal {
                 lhs: pat,
                 rhs: subj,
@@ -560,9 +560,8 @@ fn match_eqs_const_subject_mset_var_to_submultiset() {
 // HS's `impliedFormulas` runs `skolemizeGuarded` over the WHOLE clause
 // (`System.hs:1110-1144, see line 1121`): every FREE (non-universal) LVar of the guard
 // pattern becomes a Maude *constant*; only universal-bound vars stay
-// bindable. `match_eqs_const_subject` over-matches such guards (treats
-// free vars as Maude variables); `match_eqs_skolemize_both` treats them
-// as distinct constants, matching HS's `skolemizeGuarded`-then-match.
+// bindable.  `match_eqs_skolemize_both` treats those free vars as
+// distinct constants, matching HS's `skolemizeGuarded`-then-match.
 //
 // Mirrors the real STS_MAC_fix2 `AcceptedR` guard match (sent as
 // per-argument equations, one for each fact position).  The guard
@@ -572,12 +571,12 @@ fn match_eqs_const_subject_mset_var_to_submultiset() {
 // system vars (`x`,`tid`).  Two equations:
 //   eq1:  exp(g, ekI)  <=?  exp(g, x)     (pattern free ekI vs x)
 //   eq2:  exp(g, ekR)  <=?  exp(g, tid)   (pattern free ekR vs tid)
-// With `match_eqs_const_subject` the pattern's `ekI`,`ekR` are Maude
-// VARIABLES, so Maude binds `ekI->x`, `ekR->tid` and the match
-// SUCCEEDS — the spurious match that fired `gfalse` one step early.
-// With `match_eqs_skolemize_both` every free var is a distinct
-// CONSTANT, so `exp(g,c_ekI)` != `exp(g,c_x)` and the match FAILS,
-// exactly as HS's `skolemizeGuarded`-then-`matchAction` does.
+// Skolemizing the subject side alone would leave the pattern's
+// `ekI`,`ekR` as Maude VARIABLES, so Maude would bind `ekI->x`,
+// `ekR->tid` and the match would SUCCEED — a spurious match that fires
+// `gfalse` one step early.  Skolemizing both sides makes every free var
+// a distinct CONSTANT, so `exp(g,c_ekI)` != `exp(g,c_x)` and the match
+// FAILS, exactly as HS's `skolemizeGuarded`-then-`matchAction` does.
 #[test]
 fn impl_guard_match_skolemizes_pattern_free_vars() {
     let path = match maude_path() {
@@ -616,13 +615,6 @@ fn impl_guard_match_skolemizes_pattern_free_vars() {
     ];
     // No universal-bound vars in these positions.
     let pattern_vars: std::collections::BTreeSet<(String, u64)> = std::collections::BTreeSet::new();
-    // const_subject OVER-MATCHES: the pattern's free `ekI`,`ekR` are
-    // Maude variables binding to x,tid.
-    let over = h.match_eqs_const_subject(&eqs, &pattern_vars).expect("m1");
-    assert!(
-        !over.is_empty(),
-        "sanity: const_subject is expected to OVER-match here (the bug)"
-    );
     // skolemize_both: ekI,ekR,x,tid are distinct constants, so neither
     // equation can be satisfied → NO match, matching HS.
     let fixed = h.match_eqs_skolemize_both(&eqs, &pattern_vars).expect("m2");
@@ -648,7 +640,7 @@ fn impl_guard_match_skolemizes_pattern_free_vars() {
 ///
 /// Pins the directionality: `t matchWith p` is `Equal { lhs: t, rhs: p }`
 /// (RS `Equal`'s HS-faithful subject,pattern order), not the
-/// pattern,subject order used by the `const_subject` sibling.
+/// pattern,subject order used by `match_eqs_skolemize_both`.
 #[test]
 fn match_eqs_direction_matches_hs() {
     let path = match maude_path() {

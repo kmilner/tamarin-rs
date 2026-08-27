@@ -1220,96 +1220,6 @@ impl MaudeHandle {
         Ok(out)
     }
 
-    /// Match where the subject side (`rhs` of each `Equal`) is treated
-    /// as ground: any free LVar on the subject side that is *not* in
-    /// `pattern_vars` is encoded as a fresh `MaudeConst` so Maude
-    /// treats it as a constant.  Bindings returned by Maude are then
-    /// "un-skolemized" — each synthetic constant maps back to its
-    /// original LVar in the result terms.
-    ///
-    /// This exists because Maude's `match` requires the subject to be
-    /// ground.  When the system's actions contain free variables (e.g.
-    /// fresh `~k` not yet bound to a Fresh-rule node), plain
-    /// `match_eqs` returns no match — even though the formula's
-    /// universal var would happily bind to that subject variable.
-    /// Tamarin's Haskell side handles this by treating subject vars as
-    /// constants of a special "skolem" sort; we mirror that with the
-    /// synthetic-Name trick.
-    ///
-    /// NOT wired into any production path; the only callers are this file's
-    /// in-module tests.  Kept because it mirrors a real HS distinction:
-    /// HS's `matchAction`/`matchTerm` (Guarded.hs:805-817) delegate to Maude
-    /// via `solveMatchLTerm`, with HS's `SkConst` encoding from
-    /// `skolemizeGuarded` represented here as synthetic named constants.
-    pub fn match_eqs_const_subject(
-        &self,
-        eqs: &[Equal<LNTerm>],
-        pattern_vars: &std::collections::BTreeSet<(String, u64)>,
-    ) -> Result<Vec<Vec<(crate::lterm::LVar, LNTerm)>>, MaudeError> {
-        use crate::lterm::LVar;
-        if eqs.is_empty() {
-            return Ok(vec![Vec::new()]);
-        }
-        // Skolemize subject-side free vars not in `pattern_vars`:
-        // walk each rhs LNTerm and replace such LVars with a public
-        // `Name`-constant tagged with a deterministic synthetic
-        // string so the same LVar maps to the same constant across
-        // multiple eqs in this call.  Build the reverse map at the
-        // same time so we can translate the match output back.
-        let mut subject_vars: std::collections::BTreeSet<LVar> = std::collections::BTreeSet::new();
-        for eq in eqs {
-            collect_free_non_pattern_vars(&eq.rhs, pattern_vars, &mut subject_vars);
-        }
-        let (skolem_map, reverse) = build_skolem_maps(&subject_vars);
-        let rewritten_eqs: Vec<Equal<LNTerm>> = eqs
-            .iter()
-            .map(|eq| Equal {
-                lhs: eq.lhs.clone(),
-                rhs: rewrite_skolem(&eq.rhs, &skolem_map),
-            })
-            .collect();
-
-        let mut inner = self.inner.lock().unwrap();
-        let mut ctx = ConvCtx::new();
-        let mut t1s: Vec<MTerm> = Vec::with_capacity(rewritten_eqs.len());
-        let mut t2s: Vec<MTerm> = Vec::with_capacity(rewritten_eqs.len());
-        for eq in &rewritten_eqs {
-            t1s.push(lterm_to_mterm_global(&eq.lhs, &mut ctx));
-            t2s.push(lterm_to_mterm_global(&eq.rhs, &mut ctx));
-        }
-        // Maude's `match A <=? B` finds σ with `B == σ(A)`: A is the
-        // PATTERN (whose vars get bound), B is the SUBJECT (treated as
-        // ground).  This routine's `Equal` convention is
-        // `{ lhs = pattern, rhs = subject }` (the opposite of `match_eqs`',
-        // and the same as `match_eqs_skolemize_both`'s), and it skolemizes
-        // the SUBJECT side (`eq.rhs`) into ground constants above.  So the
-        // command must be
-        //   match  <pattern = t1s = lhs>  <=?  <subject = t2s = rhs>.
-        //
-        // Do NOT swap the two sides: placing the (ground, skolemized)
-        // subject in the pattern slot makes Maude treat the pattern's
-        // vars as opaque constants, so any AC match where a pattern var
-        // must ABSORB a sub-multiset fails: e.g. matching the guard
-        //   BB_Cs(BB, <'codes', codeOther ++ <cp(..),cp(..)>>)
-        // against a system action with a 3-element multiset
-        //   <'codes', code2 ++ x ++ <cp(..),cp(..)>>
-        // needs `codeOther → code2 ++ x`, which Maude only does when
-        // `codeOther` sits on the PATTERN side.  HS sends
-        // `match pattern <=? subject` (`matchCmd`, Maude/Process.hs:227-229).
-        let cmd = pp_match_cmd(&t1s, &t2s);
-        let reply = inner.execute_memo(&cmd, |s| s.match_count += 1)?;
-        drop(inner);
-        let msubsts = maude_parse::parse_match_reply(&reply)?;
-        let mut out = Vec::with_capacity(msubsts.len());
-        for ms in &msubsts {
-            let lnsubst = msubst_to_lnsubst(ms, &mut ctx)?;
-            // Un-skolemize: walk each binding's range and replace
-            // synthetic Pub-Name constants with their original LVars.
-            out.push(unskolemize_subst(lnsubst, &reverse));
-        }
-        Ok(out)
-    }
-
     /// Match where BOTH the pattern and subject sides have their free
     /// non-pattern-vars skolemized to synthetic constants — using the
     /// SAME mapping for both sides, so that occurrences of the same
@@ -1328,11 +1238,6 @@ impl MaudeHandle {
     /// spuriously binding the pattern's `y` to anything (it's a
     /// constant on both sides).
     ///
-    /// Pure `match_eqs_const_subject` only skolemizes the subject
-    /// side, leaving the pattern's free non-pattern LVars as Maude
-    /// variables — Maude binds them freely, producing a different
-    /// match (or no match if the pattern non-pattern-var sort
-    /// constrains against the subject's skolemized counterpart).
     /// Used by `insert_implied_formulas_pass`'s Eq-guard branch to
     /// handle AC-symbol patterns (e.g. multiset `y++z` against
     /// `'1'++y++h(y)`) faithfully.
@@ -1409,14 +1314,11 @@ impl MaudeHandle {
         // So A is the PATTERN (left), B is the SUBJECT (right).
         // Callers of THIS routine pass `Equal { lhs = pattern, rhs =
         // subject }`, so the command is `match pattern(lhs) <=?
-        // subject(rhs)`.  CONVENTION: `match_eqs_const_subject` ALSO uses
-        // `Equal { lhs = pattern, rhs = subject }` and emits
-        // `match pattern <=? subject` — same as
-        // here.  But the plain `match_eqs` uses the OPPOSITE `Equal`
+        // subject(rhs)`.  The plain `match_eqs` uses the OPPOSITE `Equal`
         // field order (`lhs = subject, rhs = pattern`, faithful to HS's
         // `Equal a b = Equal subject pattern`); it still emits
         // `match PATTERN <=? SUBJECT` on the wire, just sourced from the
-        // flipped fields.  So all three matchers emit pattern-on-the-left,
+        // flipped fields.  So both matchers emit pattern-on-the-left,
         // which is what Maude requires (vars bind in the left operand).
         let cmd = pp_match_cmd(&pats, &subjs);
         let reply = inner.execute_memo(&cmd, |s| s.match_count += 1)?;
@@ -1618,7 +1520,7 @@ fn skolem_name(counter: u64, lv: &crate::lterm::LVar) -> crate::lterm::Name {
 
 /// Walk an `LNTerm` and replace any `Lit::Con(name)` whose `name` is in
 /// `reverse` with the corresponding original `Lit::Var(lv)`.  Used to
-/// un-skolemize match results from `match_eqs_const_subject`.
+/// un-skolemize match results from `match_eqs_skolemize_both`.
 fn unskolemize(
     t: &LNTerm,
     reverse: &std::collections::BTreeMap<crate::lterm::Name, crate::lterm::LVar>,
@@ -1641,9 +1543,8 @@ fn unskolemize(
 }
 
 /// Collect every free `LVar` in `t` whose `(name, idx)` is NOT in
-/// `pattern_vars`, appending into `out`.  Shared by the two skolemizing
-/// matchers (`match_eqs_const_subject` scans the subject side only;
-/// `match_eqs_skolemize_both` scans both sides).
+/// `pattern_vars`, appending into `out`.  `match_eqs_skolemize_both` calls
+/// it once per side.
 fn collect_free_non_pattern_vars(
     t: &LNTerm,
     pattern_vars: &std::collections::BTreeSet<(String, u64)>,

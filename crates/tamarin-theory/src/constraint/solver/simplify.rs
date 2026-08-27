@@ -1866,10 +1866,10 @@ fn try_match_all_guards(
                 // at System.hs:1110-1144, see line 1121).  HS skolemizes both pattern and
                 // subject so co-occurring free system vars (e.g. `y`
                 // in both `(y++z) = ('1'++y++h(y))`) map to the same
-                // constant; `match_eqs_const_subject` only skolemizes
-                // the subject, leaving the pattern's free non-pattern
-                // LVars as Maude variables that Maude would bind
-                // freely (producing a different match).
+                // constant; skolemizing the subject alone would leave
+                // the pattern's free non-pattern LVars as Maude
+                // variables that Maude binds freely, producing a
+                // different match.
                 //
                 // Each Maude matcher becomes its own continuation,
                 // mirroring HS's `candidateSubsts` list-monad iteration
@@ -2331,9 +2331,9 @@ fn match_atom_via_maude(
             // Therefore both sides must be skolemized with a SHARED map (same
             // LVar ⇒ same constant on both sides, so a free var occurring in
             // BOTH still matches itself) — exactly `match_eqs_skolemize_both`.
-            // `match_eqs_const_subject` skolemizes only the SUBJECT, leaving
-            // the pattern's free non-universal vars as Maude VARIABLES that
-            // Maude binds to anything, so it over-matches here.  On DH
+            // Skolemizing only the SUBJECT would leave the pattern's free
+            // non-universal vars as Maude VARIABLES that Maude binds to
+            // anything, so it would over-match here.  On DH
             // key-exchange lemmas (csf12/STS_MAC_fix2, sp14/group_joux,
             // csf12/JKL_TS1_*) the multi-guard `∀ … SesskRev(tpartner)@i3 ∧
             // AcceptedR(tpartner,I,R,hki,hkr,kpartner)@i4 ⇒ ⊥` universal faces
