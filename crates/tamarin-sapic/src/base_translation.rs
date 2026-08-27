@@ -406,19 +406,10 @@ pub(crate) fn base_trans_action(
             );
             Ok((vec![body], tildex.clone()))
         }
-        // (Lock _) | pureState -> silent passthrough.
+        // (Lock _) | pureState and (Unlock _) | pureState -> silent
+        // passthrough (Basetranslation.hs:170-174 gives both the same rule):
         //   [([def_state], [], [def_state' tildex], [])]
-        SapicAction::Lock(_) if an.pure_state => {
-            let body: RuleBody = (
-                vec![def_state(tildex)],
-                vec![],
-                vec![def_state_next(tildex)],
-                vec![],
-            );
-            Ok((vec![body], tildex.clone()))
-        }
-        // (Unlock _) | pureState -> silent passthrough.
-        SapicAction::Unlock(_) if an.pure_state => {
+        SapicAction::Lock(_) | SapicAction::Unlock(_) if an.pure_state => {
             let body: RuleBody = (
                 vec![def_state(tildex)],
                 vec![],
