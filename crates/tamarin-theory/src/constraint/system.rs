@@ -120,9 +120,13 @@ pub enum Side {
 /// `System::set_eq_store` / `take_eq_store` / `eq_store_mut`, each of which
 /// bumps `subst_stamp`.
 ///
-/// `Debug`/`PartialEq` are implemented manually, delegating to the inner
-/// `Arc`, so `SystemContent`'s derived `Debug`/`PartialEq` behave exactly as
-/// they would over a bare `Arc<EquationStore>` field.
+/// `Debug` is implemented manually and `PartialEq` is derived; both delegate
+/// to the inner `Arc`, so `SystemContent`'s derived `Debug`/`PartialEq` behave
+/// exactly as they would over a bare `Arc<EquationStore>` field.  The derived
+/// comparison is a content comparison (`Arc`'s `PartialEq` forwards to the
+/// inner `EquationStore` value), preserving goal/case dedup equality
+/// semantics.
+#[derive(PartialEq)]
 pub struct SealedEqStore(Arc<EquationStore>);
 
 impl std::ops::Deref for SealedEqStore {
@@ -139,15 +143,6 @@ impl std::fmt::Debug for SealedEqStore {
     #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         std::fmt::Debug::fmt(&self.0, f)
-    }
-}
-
-// Content comparison (forwards to `Arc`'s `PartialEq`, i.e. the inner
-// `EquationStore` value), preserving goal/case dedup equality semantics.
-impl PartialEq for SealedEqStore {
-    #[inline]
-    fn eq(&self, other: &Self) -> bool {
-        self.0 == other.0
     }
 }
 
