@@ -130,7 +130,7 @@ fn file_census(path: &Path, root: &Path) -> FileCensus {
         rep.skipped_listed = true;
         return rep;
     }
-    let Some(mut parsed) = parse_file(path) else {
+    let Some(parsed) = parse_file(path) else {
         rep.unparsed = true;
         return rep;
     };
@@ -152,16 +152,12 @@ fn file_census(path: &Path, root: &Path) -> FileCensus {
     if rep.regular.skeletons + rep.diff.skeletons == 0 {
         return rep;
     }
-    // The two steps the production drivers run between the parse and any
-    // reader of a stored goal.
-    let lifted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        crate::rule_restriction::lift_rule_restrictions(&mut parsed).is_ok()
-    }));
-    let elaborated = matches!(lifted, Ok(true))
-        && matches!(
-            std::panic::catch_unwind(|| crate::elaborate::elaborate(&parsed).is_ok()),
-            Ok(true)
-        );
+    // The step the production drivers run between the parse and any reader
+    // of a stored goal.
+    let elaborated = matches!(
+        std::panic::catch_unwind(|| crate::elaborate::elaborate(&parsed).is_ok()),
+        Ok(true)
+    );
     rep.unelaborated = !elaborated;
     rep
 }

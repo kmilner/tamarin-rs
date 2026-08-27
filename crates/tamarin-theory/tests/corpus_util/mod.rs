@@ -101,22 +101,13 @@ pub enum LoadSkip {
     Listed,
     /// The read failed, neither parse succeeded, or the parser panicked.
     Parse,
-    /// Lifting the embedded restrictions failed or panicked.
-    Lift,
     /// Elaboration failed or panicked.
     Elab,
 }
 
-/// Lift the embedded restrictions of a parsed theory and elaborate it, the
-/// two steps the driver runs after the parse; a failure or panic in either
-/// is the matching [`LoadSkip`].
-pub fn lift_and_elaborate(parsed: &mut p::Theory) -> Result<Theory, LoadSkip> {
-    let lifted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        tamarin_theory::rule_restriction::lift_rule_restrictions(parsed).is_ok()
-    }));
-    if !matches!(lifted, Ok(true)) {
-        return Err(LoadSkip::Lift);
-    }
+/// Elaborate a parsed theory, the step the driver runs after the parse; a
+/// failure or a panic in it is [`LoadSkip::Elab`].
+pub fn elaborate_parsed(parsed: &p::Theory) -> Result<Theory, LoadSkip> {
     let elab = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         tamarin_theory::elaborate::elaborate(parsed).ok()
     }));
@@ -127,14 +118,14 @@ pub fn lift_and_elaborate(parsed: &mut p::Theory) -> Result<Theory, LoadSkip> {
 }
 
 /// Run one file through the whole load ladder — the budget list, the parse,
-/// the lifting, the elaboration — handing back the lifted parse tree beside
-/// the internal theory for the nets that read both.
+/// the elaboration — handing back the parse tree beside the internal theory
+/// for the nets that read both.
 pub fn load_elaborated(path: &Path, root: &Path) -> Result<(p::Theory, Theory), LoadSkip> {
     if beyond_budget(path, root) {
         return Err(LoadSkip::Listed);
     }
-    let mut parsed = parse_file(path).ok_or(LoadSkip::Parse)?;
-    let elab = lift_and_elaborate(&mut parsed)?;
+    let parsed = parse_file(path).ok_or(LoadSkip::Parse)?;
+    let elab = elaborate_parsed(&parsed)?;
     Ok((parsed, elab))
 }
 

@@ -239,8 +239,9 @@ pub enum SapicAction<V> {
         /// over the process's own variable type, with the parser's `Pred`
         /// sugar left un-expanded — the base translation (`baseTransAction`
         /// MSR, Basetranslation.hs:200-203) hands them to the rule's 4th
-        /// (restriction) component, where `lift_rule_restrictions`
-        /// (HS `liftedAddProtoRule`) expands the predicates.
+        /// (restriction) component, where the SAPIC rule injection
+        /// (`tamarin_sapic::apply`, HS `liftedAddProtoRule`) expands the
+        /// predicates.
         rest: Vec<SapicNFormula<V>>,
         match_vars: BTreeSet<V>,
     },
@@ -254,9 +255,9 @@ pub enum ProcessCombinator<V> {
     /// `if <formula> then .. else ..`.  HS `Cond (SapicNFormula v)`
     /// (Theory/Sapic/Process.hs:94): the condition is a
     /// locally-nameless formula over the process's own variable type, with
-    /// the parser's `Pred` sugar left un-expanded — `lift_rule_restrictions`
-    /// (HS `liftedAddProtoRule`) expands it once the base translation has
-    /// made it a rule's restriction.
+    /// the parser's `Pred` sugar left un-expanded — the SAPIC rule injection
+    /// (`tamarin_sapic::apply`, HS `liftedAddProtoRule`) expands it once the
+    /// base translation has made it a rule's restriction.
     Cond(SapicNFormula<V>),
     CondEq(SapicNTerm<V>, SapicNTerm<V>),
     Lookup(SapicNTerm<V>, V),

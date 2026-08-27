@@ -253,12 +253,11 @@ fn census(label: &str) -> Option<&'static [FileReport]> {
         .unwrap_or_default();
     eprintln!(
         "guarded payload [{label}]: files={} elaborated={elaborated} skipped_listed={} \
-         skipped_parse={} skipped_lift={} skipped_elab={} formulas={formulas} \
+         skipped_parse={} skipped_elab={} formulas={formulas} \
          unguardable={unguardable} facts={facts} slowest_file={slowest}",
         files.len(),
         count(|o| matches!(o, Outcome::Skipped(LoadSkip::Listed))),
         count(|o| matches!(o, Outcome::Skipped(LoadSkip::Parse))),
-        count(|o| matches!(o, Outcome::Skipped(LoadSkip::Lift))),
         count(|o| matches!(o, Outcome::Skipped(LoadSkip::Elab))),
     );
     corpus_util::assert_corpus_covered(elaborated, files.len());

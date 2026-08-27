@@ -247,12 +247,11 @@ fn corpus_internal_facts_render_the_same_with_and_without_the_ac_resort() {
         .unwrap_or_default();
     eprintln!(
         "internal AC re-sort: files={} translated={translated} skipped_listed={} \
-         skipped_parse={} skipped_lift={} skipped_elab={} skipped_translate={} \
+         skipped_parse={} skipped_elab={} skipped_translate={} \
          facts={facts} terms={terms} findings={} wall={:?} slowest_file={slowest}",
         files.len(),
         count(|o| matches!(o, Outcome::Skipped(LoadSkip::Listed))),
         count(|o| matches!(o, Outcome::Skipped(LoadSkip::Parse))),
-        count(|o| matches!(o, Outcome::Skipped(LoadSkip::Lift))),
         count(|o| matches!(o, Outcome::Skipped(LoadSkip::Elab))),
         count(|o| matches!(o, Outcome::SkippedTranslate)),
         findings.len(),

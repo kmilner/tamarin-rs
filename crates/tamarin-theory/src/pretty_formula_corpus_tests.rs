@@ -194,7 +194,6 @@ enum Outcome {
     Parsed,
     SkippedListed,
     SkippedParse,
-    SkippedLift,
     SkippedElab,
 }
 
@@ -221,16 +220,9 @@ fn file_phase(path: &Path, root: &Path) -> FileReport {
         rep.outcome = Outcome::SkippedListed;
         return rep;
     }
-    let Some(mut parsed) = parse_file(path) else {
+    let Some(parsed) = parse_file(path) else {
         return rep;
     };
-    let lifted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        crate::rule_restriction::lift_rule_restrictions(&mut parsed).is_ok()
-    }));
-    if !matches!(lifted, Ok(true)) {
-        rep.outcome = Outcome::SkippedLift;
-        return rep;
-    }
     let elab = std::panic::catch_unwind(|| crate::elaborate::elaborate(&parsed).ok());
     let Ok(Some(elab)) = elab else {
         rep.outcome = Outcome::SkippedElab;
@@ -402,7 +394,6 @@ fn corpus_lnformula_doc_renders_every_theory_formula() {
     let parsed = count(|o| matches!(o, Outcome::Parsed));
     let skipped_listed = count(|o| matches!(o, Outcome::SkippedListed));
     let skipped_parse = count(|o| matches!(o, Outcome::SkippedParse));
-    let skipped_lift = count(|o| matches!(o, Outcome::SkippedLift));
     let skipped_elab = count(|o| matches!(o, Outcome::SkippedElab));
     let slowest_file = reports
         .iter()
@@ -437,7 +428,7 @@ fn corpus_lnformula_doc_renders_every_theory_formula() {
         .collect();
     eprintln!(
         "corpus: files={} parsed={parsed} skipped_listed={skipped_listed} skipped_parse={skipped_parse} \
-         skipped_lift={skipped_lift} skipped_elab={skipped_elab} formulas={formulas} mismatches={} \
+         skipped_elab={skipped_elab} formulas={formulas} mismatches={} \
          wall={:?} slowest_file={slowest_file} slowest_formula={slowest_formula}",
         files.len(),
         mismatches.len(),

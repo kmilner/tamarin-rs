@@ -12,8 +12,8 @@
 //! - [`guarded`] ← `Theory.Model.Formula` (guarded
 //!   formulas)
 //! - [`restriction`] ← `Theory.Model.Restriction`;
-//!   [`rule_restriction`] ← `Theory.Model.Restriction` `liftedAddProtoRule`
-//!   (surface-formula → `LNFormula` rewrite-then-quantify)
+//!   [`rule_restriction`] ← `Theory.Text.Parser` `liftedAddProtoRule`
+//!   (a rule's `_restrict` formulas → global restrictions + actions)
 //! - [`rule`] ← `Theory.Model.Rule` (data layer + indices + info types);
 //!   instantiation (`someRuleACInst*`) lives in
 //!   [`constraint::solver::reduction`]

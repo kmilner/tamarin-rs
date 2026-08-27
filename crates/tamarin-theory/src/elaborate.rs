@@ -652,12 +652,21 @@ fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), Elab
             // set.
             p::TheoryItem::IntrRule(_) => {}
             p::TheoryItem::Rule(r) => {
+                let mut e = rule_to_proto_rule_e(r, &out.signature.maude_sig)?;
+                // HS `liftedAddProtoRule` (Theory/Text/Parser.hs:175-193) adds
+                // one restriction per `_restrict` formula BEFORE the rule and
+                // appends the actions that reach them to the rule.
+                for restr in crate::rule_restriction::lift_rule_restrictions(&mut e, &preds)? {
+                    out.items
+                        .push(TheoryItem::Restriction(apply_macro_in_restriction(
+                            &macros, restr,
+                        )));
+                }
                 // `closeProtoRule` narrows `applyMacroInRule macros ruE` into
                 // the AC half and keeps `ruE` itself as the `cprRuleE` half
                 // (lib/theory/src/Rule.hs:82-86).  A theory that declares no
                 // macro, or a rule whose body calls none, leaves the two
                 // identical.
-                let e = rule_to_proto_rule_e(r, &out.signature.maude_sig)?;
                 let mut opr =
                     OpenProtoRule::new(crate::rule::apply_macro_in_rule(&macros, e.clone()));
                 if opr.rule != e {

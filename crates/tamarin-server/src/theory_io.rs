@@ -186,24 +186,11 @@ pub(crate) fn load_from_source(
         TheoryOrigin::Local(p) => p.parent().map(|d| d.to_path_buf()),
         _ => None,
     };
-    let mut parsed = parse_theory_with_base(src, &flags, base_dir)
+    let parsed = parse_theory_with_base(src, &flags, base_dir)
         .map_err(|e| LoadError::Parse(e.with_source(source_name).to_string()))?;
 
-    // HS `liftedAddProtoRule` (Theory/Text/Parser.hs:175-193) expands each
-    // rule's `_restrict(φ)` into a fresh `Restr_<rule>_<i>` restriction
-    // (inserted before the rule) and rewrites the rule's actions DURING
-    // parsing.  RS captures `_restrict` into `Rule.embedded_restrictions`
-    // at parse time; run the lifting pass here, immediately after parse and
-    // BEFORE the wellformedness clone / elaboration / SAPIC translation —
-    // the exact position `run_batch` in run.rs uses — so the lifted
-    // restrictions reach `elaborate` and through it every web renderer
-    // (rules / source / message / graphs / sequents).
-    tamarin_theory::rule_restriction::lift_rule_restrictions(&mut parsed)
-        .map_err(|e| LoadError::Parse(format!("_restrict expansion failed: {}", e.message)))?;
-
     // HS lifecycle markers, stderr via `traceM`: "Theory loaded" right
-    // after parsing (TheoryLoader.hs:449-452, see line 451; `liftedAddProtoRule` runs
-    // during parsing, so post-lift here is the same point).
+    // after parsing (TheoryLoader.hs:449-452, see line 451).
     eprintln!("[Theory {}] Theory loaded", parsed.name);
 
     // "Theory translated" at the START of translation (TheoryLoader.hs:494-500, see line 496

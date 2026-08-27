@@ -3,8 +3,8 @@
 //   scripts/gen_license_headers.py --authors <this file>
 
 //! Corpus probes over the TRANSLATED theory — the internal theory as the
-//! driver leaves it after `lift_rule_restrictions`, `elaborate`, `apply_sapic`
-//! and `tamarin_accountability::translate` (run.rs `translate_theory`).  The
+//! driver leaves it after `elaborate`, `apply_sapic` and
+//! `tamarin_accountability::translate` (run.rs `translate_theory`).  The
 //! lemmas and restrictions those two translations inject are the ones the
 //! other corpus nets do not reach.
 //!
@@ -250,13 +250,12 @@ fn census(corpus: &Corpus) -> String {
         .map(|(_, path)| rel(path, root).display().to_string())
         .collect();
     format!(
-        "files={} loaded={} skipped_listed={} skipped_parse={} skipped_lift={} skipped_elab={} \
+        "files={} loaded={} skipped_listed={} skipped_parse={} skipped_elab={} \
          skipped_translate={:?} slowest_file={slowest}",
         files.len(),
         count(|o| matches!(o, Outcome::Translated)),
         count(|o| matches!(o, Outcome::Skipped(LoadSkip::Listed))),
         count(|o| matches!(o, Outcome::Skipped(LoadSkip::Parse))),
-        count(|o| matches!(o, Outcome::Skipped(LoadSkip::Lift))),
         count(|o| matches!(o, Outcome::Skipped(LoadSkip::Elab))),
         rejected,
     )

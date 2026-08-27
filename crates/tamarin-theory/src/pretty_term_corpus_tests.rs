@@ -140,7 +140,6 @@ enum Outcome {
     Elaborated,
     SkippedListed,
     SkippedParse,
-    SkippedLift,
     SkippedElab,
 }
 
@@ -170,15 +169,9 @@ fn probe(path: &Path, root: &Path) -> FileProbe {
     if beyond_budget(path, root) {
         return FileProbe::skipped(Outcome::SkippedListed);
     }
-    let Some(mut parsed) = parse_file(path) else {
+    let Some(parsed) = parse_file(path) else {
         return FileProbe::skipped(Outcome::SkippedParse);
     };
-    let lifted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        crate::rule_restriction::lift_rule_restrictions(&mut parsed).is_ok()
-    }));
-    if !matches!(lifted, Ok(true)) {
-        return FileProbe::skipped(Outcome::SkippedLift);
-    }
     let elab = std::panic::catch_unwind(|| crate::elaborate::elaborate(&parsed).ok());
     let Ok(Some(elab)) = elab else {
         return FileProbe::skipped(Outcome::SkippedElab);
@@ -256,13 +249,12 @@ fn census(what: &str, start: Instant) -> usize {
         .map(|(p, path)| format!("{} ({:?})", rel(path, root).display(), p.elapsed))
         .unwrap_or_default();
     eprintln!(
-        "{what}: files={} elaborated={} skipped_listed={} skipped_parse={} skipped_lift={} \
+        "{what}: files={} elaborated={} skipped_listed={} skipped_parse={} \
          skipped_elab={} terms={terms} wall={:?} slowest_file={slowest}",
         files.len(),
         count(|o| matches!(o, Outcome::Elaborated)),
         count(|o| matches!(o, Outcome::SkippedListed)),
         count(|o| matches!(o, Outcome::SkippedParse)),
-        count(|o| matches!(o, Outcome::SkippedLift)),
         count(|o| matches!(o, Outcome::SkippedElab)),
         start.elapsed()
     );

@@ -201,8 +201,9 @@ pub(crate) fn combinator(
         // `standardFormula sapicvar sapicnodevar`
         // (Theory/Text/Parser/Sapic.hs:252-255), which is `sapic_from_parser`:
         // the variables carry their SAPIC type tag and a timepoint operand is
-        // tagged `node`.  Predicate atoms stay sugar until
-        // `lift_rule_restrictions` expands them (HS `liftedExpandFormula`).
+        // tagged `node`.  Predicate atoms stay sugar until the SAPIC rule
+        // injection (`tamarin_sapic::apply`) expands them (HS
+        // `liftedExpandFormula`).
         p::ProcessComb::Cond(p::Condition::Formula(f)) => Ok(ProcessCombinator::Cond(
             sapic_from_parser(f, sig).map_err(|e| ConvertError::new(e.message))?,
         )),
@@ -502,7 +503,7 @@ mod tests {
         // `if <formula> then E else 0` converts to ProcessCombinator::Cond,
         // whose payload is the locally-nameless SAPIC formula the condition
         // parser builds.  A predicate atom stays `SyntacticSugar::Pred` until
-        // `lift_rule_restrictions` expands it.
+        // the SAPIC rule injection (`tamarin_sapic::apply`) expands it.
         let frml = p::Formula::Atom(p::Atom::Pred(p::Fact {
             persistent: false,
             name: "P".into(),

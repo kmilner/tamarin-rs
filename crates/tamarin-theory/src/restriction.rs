@@ -235,8 +235,7 @@ mod tests {
     use tamarin_term::maude_sig::MaudeSig;
 
     /// The signature and the predicates of a theory that declares nothing
-    /// else, closed the way `rule_restriction::lift_rule_restrictions` closes
-    /// them.
+    /// else, closed the way `elaborate_items` closes them.
     fn theory(decls: &str) -> (MaudeSig, Vec<Predicate>) {
         let src = format!("theory T begin\n{decls}\nend");
         let thy = tamarin_parser::parse_theory(&src, &[]).unwrap();

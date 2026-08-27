@@ -134,15 +134,14 @@ fn file_phase(path: &Path) -> FileReport {
         msig: MaudeSig::default(),
         skipped: false,
     };
-    let Some(mut parsed) = corpus_util::parse_file(path) else {
+    let Some(parsed) = corpus_util::parse_file(path) else {
         return rep;
     };
     let items = theory_formulas(&parsed);
     if items.is_empty() {
         return rep;
     }
-    // Elaboration runs on the lifted theory, as the production path does.
-    let Ok(elab) = corpus_util::lift_and_elaborate(&mut parsed) else {
+    let Ok(elab) = corpus_util::elaborate_parsed(&parsed) else {
         rep.skipped = true;
         return rep;
     };

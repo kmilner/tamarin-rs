@@ -2163,8 +2163,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         let base_dir = std::path::Path::new(in_file)
             .parent()
             .map(|p| p.to_path_buf());
-        let mut parsed = match tamarin_parser::parse_theory_with_base(&src, &parser_flags, base_dir)
-        {
+        let parsed = match tamarin_parser::parse_theory_with_base(&src, &parser_flags, base_dir) {
             Ok(thy) => thy,
             Err(e) => {
                 if let Some(g) = &e.ghc_error {
@@ -2186,20 +2185,6 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
                 return Ok(1);
             }
         };
-        // HS `liftedAddProtoRule` (Theory/Text/Parser.hs:166-193) runs per
-        // rule DURING parsing: it expands each rule's `_restrict(φ)`
-        // embedded restriction into a fresh `Restr_<rule>_<i>` restriction
-        // (inserted before the rule) and rewrites the rule's actions to
-        // reference it.  RS captures `_restrict` into
-        // `Rule.embedded_restrictions` at parse time; run the equivalent
-        // lifting pass here, BEFORE wellformedness and elaboration, so the
-        // lifted restrictions reach both.
-        tamarin_theory::rule_restriction::lift_rule_restrictions(&mut parsed).map_err(|e| {
-            RunError(format!(
-                "_restrict expansion failed in {}: {}",
-                in_file, e.message
-            ))
-        })?;
         // HS emits this trace marker as soon as the theory parses
         // (TheoryLoader.hs:451).
         let theory_name = parsed.name.clone();

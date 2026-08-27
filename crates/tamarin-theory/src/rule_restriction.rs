@@ -4,99 +4,57 @@
 
 //! Port of HS `liftedAddProtoRule` (Theory/Text/Parser.hs:175-193).
 //!
-//! For every rule carrying `_restrict(φ)` formulas — which the parser keeps in
-//! `Rule.embedded_restrictions` (parser `ast.rs`) — each formula is closed
-//! against the theory's signature, its predicate atoms are expanded
-//! (`liftedExpandFormula`, Theory/Text/Parser.hs:178), and
-//! [`crate::restriction::from_rule_restriction`] turns it into the global
-//! restriction `Restr_<rule>_<i>` plus the action fact that reaches it.  The
-//! restrictions are added before the rule and the actions are appended to it.
+//! A rule carries its `_restrict(φ)` formulas in its own info
+//! (`_preRestriction`, Theory/Model/Rule.hs:424).  Each formula has its
+//! predicate atoms expanded (`liftedExpandFormula`,
+//! Theory/Text/Parser.hs:178) and [`crate::restriction::from_rule_restriction`]
+//! turns it into the global restriction `Restr_<rule>_<i>` plus the action
+//! fact that reaches it.  The restrictions go into the theory before the rule
+//! and the actions are appended to the rule (Theory/Text/Parser.hs:179-180).
 //!
-//! HS does this DURING parsing, building the `OpenTheory` rule by rule.  The
-//! port runs it over the parser-AST theory right after `parse_theory`, so the
-//! transformed theory drives wellformedness, elaboration and the renderer
-//! alike, and projects the generated values back into that AST.
-//!
-//! Run it exactly ONCE per parsed theory: `addActions` rebuilds only `rActs`
-//! (Theory/Text/Parser.hs:188), so the rule keeps its `_restrict` formulas and
-//! a second call would generate a second copy of every restriction.  The
-//! production callers are `run.rs`'s per-file pipeline and the web server's
-//! `theory_io`.
-//!
-//! The predicates come from the WHOLE theory, where HS's `liftedExpandFormula`
-//! reads `theoryPredicates thy` — the ones parsed so far
-//! (Theory/Text/Parser.hs:112-114).  Three corpus theories declare a second
-//! `predicates:` block after their `_restrict`s, and none of them calls a late
-//! predicate from an early `_restrict`, so the two readings agree on the
-//! corpus.
+//! HS runs this as it adds each parsed rule to the theory
+//! (Theory/Text/Parser.hs:283-284), so the predicates are the ones declared
+//! before the rule (`theoryPredicates thy`, Theory/Text/Parser.hs:112-114) and
+//! the rule keeps its `_restrict` formulas, since `addActions` rebuilds `rActs`
+//! alone (Theory/Text/Parser.hs:188).  `elaborate_items` is where the port
+//! builds the theory rule by rule and calls this; `tamarin_sapic::apply` runs
+//! the same lift over the rules the SAPIC translation generates.
 
-use tamarin_parser::ast as p;
-use tamarin_term::maude_sig::MaudeSig;
-
-use crate::elaborate::{lnfact_to_parser, parse_time_signature, ElabError};
+use crate::elaborate::ElabError;
 use crate::fact::LNFact;
 use crate::formula::LNFormula;
 use crate::predicate::Predicate;
-use crate::pretty_formula::lnformula_to_parser;
 use crate::restriction::{from_rule_restriction, Restriction};
+use crate::rule::{ProtoRuleE, ProtoRuleName};
 
-/// Run the `_restrict` lifting pass over a parsed theory in place.
-pub fn lift_rule_restrictions(thy: &mut p::Theory) -> Result<(), ElabError> {
-    let sig = parse_time_signature(thy)?;
-    let mut predicates: Vec<Predicate> = Vec::new();
-    for item in &thy.items {
-        if let p::TheoryItem::Predicates(ps) = item {
-            for pd in ps {
-                predicates.push(crate::predicate::from_parser(pd, &sig)?);
-            }
-        }
-    }
-    let mut new_items: Vec<p::TheoryItem> = Vec::with_capacity(thy.items.len());
-    for item in std::mem::take(&mut thy.items) {
-        match item {
-            p::TheoryItem::Rule(rule) if !rule.embedded_restrictions.is_empty() => {
-                let (restrs, new_rule) = lift_one_rule(rule, &predicates, &sig)?;
-                // HS adds the generated restrictions to the theory accumulated
-                // so far and the rule after them.
-                for r in restrs {
-                    new_items.push(p::TheoryItem::Restriction(r));
-                }
-                new_items.push(p::TheoryItem::Rule(new_rule));
-            }
-            other => new_items.push(other),
-        }
-    }
-    thy.items = new_items;
-    Ok(())
-}
-
-/// Lift one rule's embedded restrictions, projecting both outputs back into
-/// the parser AST: the generated restrictions in `1..n` order and the rule
-/// with the `Restr_<rule>_<i>` actions appended.
-fn lift_one_rule(
-    mut rule: p::Rule,
+/// Lift one rule's `_restrict` formulas: expand their predicate atoms against
+/// `predicates`, append the action fact of each to `rule` and hand back the
+/// restrictions they generate, in `1..n` order.
+pub(crate) fn lift_rule_restrictions(
+    rule: &mut ProtoRuleE,
     predicates: &[Predicate],
-    sig: &MaudeSig,
-) -> Result<(Vec<p::Restriction>, p::Rule), ElabError> {
-    let mut closed: Vec<LNFormula> = Vec::with_capacity(rule.embedded_restrictions.len());
-    for phi in &rule.embedded_restrictions {
-        let syn = crate::formula::from_parser(phi, sig)?;
+) -> Result<Vec<Restriction>, ElabError> {
+    let rname = match rule.info.name {
+        ProtoRuleName::Stand(n) => n,
+        // HS `liftedAddProtoRule` throws `TryingToAddFreshRule` for the
+        // reserved name (Theory/Text/Parser.hs:182); the parser rejects the
+        // reserved rule names, so a parsed rule never reaches this arm.
+        ProtoRuleName::Fresh => "Fresh",
+    };
+    let mut closed: Vec<LNFormula> = Vec::with_capacity(rule.info.restrictions.len());
+    for phi in &rule.info.restrictions {
         closed.push(
-            crate::predicate::expand_formula(predicates, &syn).map_err(|e| ElabError {
+            crate::predicate::expand_formula(predicates, phi).map_err(|e| ElabError {
                 message: e.to_string(),
             })?,
         );
     }
     let mut restrictions = Vec::with_capacity(closed.len());
-    for (restr, action) in rule_restrictions(&rule.name, &closed) {
-        restrictions.push(p::Restriction {
-            name: restr.name,
-            formula: lnformula_to_parser(&restr.formula),
-            attributes: Vec::new(),
-        });
-        rule.actions.push(lnfact_to_parser(&action));
+    for (restr, action) in rule_restrictions(rname, &closed) {
+        restrictions.push(restr);
+        rule.actions.push(action);
     }
-    Ok((restrictions, rule))
+    Ok(restrictions)
 }
 
 /// HS `restrictions`/`actions` over `counter = zip [1..]`
@@ -112,7 +70,7 @@ pub fn rule_restrictions(rname: &str, formulas: &[LNFormula]) -> Vec<(Restrictio
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::theory::TheoryItem;
 
     #[test]
     fn lift_inserts_restriction_before_rule() {
@@ -122,36 +80,46 @@ mod tests {
             predicate: True(x) <=> (x = true())\n\
             rule A:\n  [In(x)] --[ _restrict(True(eq(x,x))) ]-> []\n\
             end";
-        let mut thy = tamarin_parser::parse_theory(src, &[]).unwrap();
-        lift_rule_restrictions(&mut thy).unwrap();
+        let parsed = tamarin_parser::parse_theory(src, &[]).unwrap();
+        let thy = crate::elaborate::elaborate(&parsed).unwrap();
         let restr_pos = thy
             .items
             .iter()
-            .position(|i| matches!(i, p::TheoryItem::Restriction(r) if r.name == "Restr_A_1"))
+            .position(|i| matches!(i, TheoryItem::Restriction(r) if r.name == "Restr_A_1"))
             .expect("restriction not generated");
         let rule_pos = thy
             .items
             .iter()
-            .position(|i| matches!(i, p::TheoryItem::Rule(r) if r.name == "A"))
+            .position(|i| matches!(i, TheoryItem::Rule(r) if r.name() == "A"))
             .expect("rule missing");
         // HS adds the generated restrictions to the accumulated theory, and it
         // adds the rule after them.  The restriction is therefore immediately
         // before the rule.
         assert_eq!(restr_pos + 1, rule_pos, "restriction must precede rule");
-        // The pass appends the rule action and leaves the `_restrict` formula
+        // The lift appends the rule action and leaves the `_restrict` formula
         // on the rule.
-        let p::TheoryItem::Rule(r) = &thy.items[rule_pos] else {
+        let TheoryItem::Rule(r) = &thy.items[rule_pos] else {
             panic!("item at {rule_pos} is not the rule");
         };
-        assert_eq!(r.embedded_restrictions.len(), 1);
-        assert_eq!(r.actions.len(), 1);
-        assert_eq!(r.actions[0].name, "Restr_A_1");
+        assert_eq!(r.rule.info.restrictions.len(), 1);
+        assert_eq!(r.rule.actions.len(), 1);
+        assert_eq!(
+            crate::fact::fact_tag_name(&r.rule.actions[0].tag),
+            "Restr_A_1"
+        );
         // The action carries the original term, without abstraction.
-        assert_eq!(r.actions[0].args.len(), 1);
+        assert_eq!(r.rule.actions[0].terms.len(), 1);
+        let t = &r.rule.actions[0].terms[0];
+        let eq_of_two = match t {
+            tamarin_term::term::Term::App(
+                tamarin_term::function_symbols::FunSym::NoEq(sym),
+                args,
+            ) => sym.name == b"eq" && args.len() == 2,
+            _ => false,
+        };
         assert!(
-            matches!(&r.actions[0].args[0], p::Term::App(n, args) if n == "eq" && args.len() == 2),
-            "action arg must be the original eq(x,x), got {:?}",
-            r.actions[0].args[0]
+            eq_of_two,
+            "action arg must be the original eq(x,x), got {t:?}"
         );
     }
 }

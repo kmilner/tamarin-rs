@@ -582,8 +582,7 @@ fn elaborated_rule_carries_its_restrict_formulas() {
                functions: eq/2\n\
                rule A:\n  [In(x)] --[ _restrict(Ex #i. Act(eq(x,x)) @ #i) ]-> []\n\
                end";
-    let mut parsed = tamarin_parser::parse_theory(src, &[]).unwrap();
-    crate::rule_restriction::lift_rule_restrictions(&mut parsed).unwrap();
+    let parsed = tamarin_parser::parse_theory(src, &[]).unwrap();
     let elab = crate::elaborate::elaborate(&parsed).unwrap();
     let source = parsed
         .items
