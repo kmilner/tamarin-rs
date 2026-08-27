@@ -7,7 +7,7 @@ use crate::constraint::solver::context::ProofContext;
 use crate::constraint::system::System;
 use tamarin_term::maude_sig::pair_maude_sig;
 
-use crate::test_maude::maude_path;
+use tamarin_test_support::require_maude_path;
 
 /// Returns a maude that speaks the pair signature.  Returns `None` when this
 /// run accepts the no-maude skip.  [`maude_path`] panics when `MAUDE_PATH` is
@@ -21,7 +21,7 @@ fn maude() -> Option<tamarin_term::maude_proc::MaudeHandle> {
 fn maude_with_sig(
     sig: tamarin_term::maude_sig::MaudeSig,
 ) -> Option<tamarin_term::maude_proc::MaudeHandle> {
-    let path = maude_path()?;
+    let path = require_maude_path()?;
     Some(
         tamarin_term::maude_proc::MaudeHandle::start(&path, sig).unwrap_or_else(|e| {
             panic!(

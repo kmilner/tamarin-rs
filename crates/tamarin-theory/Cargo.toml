@@ -17,6 +17,7 @@ fancy-regex = "0.18"
 serde_json = "1"
 
 [dev-dependencies]
+tamarin-test-support = { workspace = true }
 # Dev-only cycle back onto the crates that consume this one: the stage-3
 # probes run the driver's translation pipeline (`apply_sapic`, then
 # `tamarin_accountability::translate`) over the examples tree.

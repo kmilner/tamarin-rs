@@ -4,7 +4,7 @@
 
 use super::*;
 use crate::constraint::system::System;
-use crate::test_maude::maude_path;
+use tamarin_test_support::require_maude_path;
 
 #[test]
 fn single_goal_returned() {
@@ -73,7 +73,7 @@ fn dispatch_solve_goal_marks_solved_then_routes() {
     use crate::constraint::solver::reduction::{GoalCases, Reduction};
     use tamarin_term::maude_sig::pair_maude_sig;
 
-    let path = match maude_path() {
+    let path = match require_maude_path() {
         Some(p) => p,
         None => return,
     };

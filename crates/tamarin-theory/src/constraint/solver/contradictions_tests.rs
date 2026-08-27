@@ -104,7 +104,7 @@ fn non_injective_fact_witness_emitted() {
     sys.add_less(LessAtom::new(j, k, Reason::Adversary));
 
     // Build the proof context that knows `Inj` is injective.
-    let mp = match crate::test_maude::maude_path() {
+    let mp = match tamarin_test_support::require_maude_path() {
         Some(p) => p,
         None => return,
     };
@@ -209,7 +209,7 @@ fn nf_memo_agrees_with_unmemoized_verdicts() {
     use tamarin_term::rewriting::RRule;
     use tamarin_term::term::f_app_acfct;
 
-    let Some(mp) = crate::test_maude::maude_path() else {
+    let Some(mp) = tamarin_test_support::require_maude_path() else {
         return;
     };
 

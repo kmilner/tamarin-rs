@@ -5,10 +5,10 @@
 use super::*;
 use tamarin_term::maude_sig::pair_maude_sig;
 
-use crate::test_maude::maude_path;
+use tamarin_test_support::require_maude_path;
 
 fn ctx() -> Option<ProofContext> {
-    let path = maude_path()?;
+    let path = require_maude_path()?;
     // A maude that resolved but will not start is the same misconfiguration
     // as a dangling MAUDE_PATH: swallowing it with `.ok()?` would silently
     // skip every maude-backed test in this file, so fail loudly instead.

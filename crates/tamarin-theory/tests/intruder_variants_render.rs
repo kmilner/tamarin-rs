@@ -20,70 +20,9 @@
 
 use std::path::{Path, PathBuf};
 
+use tamarin_test_support::require_maude_path;
 use tamarin_theory::intruder_rules::{bp_intruder_rules, dh_intruder_rules};
 use tamarin_theory::pretty_formula::pretty_intruder_variants;
-
-/// Absolute maude locations probed before `PATH` is walked.
-///
-/// This probe mirrors the crate-shared `src/test_maude.rs` one (an
-/// integration test cannot see a `#[cfg(test)]` module of the library it
-/// links) — keep the two in sync.
-const MAUDE_CANDIDATES: [&str; 2] = ["/usr/local/bin/maude", "/usr/bin/maude"];
-
-/// Last resort, after `PATH`: the linuxbrew prefix this project's maude lives
-/// under on the development box, which is deliberately not on `PATH`.
-const MAUDE_LINUXBREW: &str = "/home/linuxbrew/.linuxbrew/bin/maude";
-
-/// The maude the case below runs against: `$MAUDE_PATH`, else the first
-/// existing [`MAUDE_CANDIDATES`] entry, else a `PATH` walk, else
-/// [`MAUDE_LINUXBREW`].
-///
-/// Resolving NOTHING is a misconfiguration, not a reason to skip: the case
-/// opens with `let mp = match maude_path() { Some(p) => p, None => return }`,
-/// so a `None` here reports the same green run with and without maude
-/// installed.  Panic instead — unless `TAM_ALLOW_NO_MAUDE=1` explicitly asks
-/// for the silent skip (a box that genuinely has no maude).  A `MAUDE_PATH`
-/// naming a file that does not exist is the same misconfiguration and panics
-/// too.
-fn maude_path() -> Option<String> {
-    if let Ok(p) = std::env::var("MAUDE_PATH") {
-        assert!(
-            std::path::Path::new(&p).exists(),
-            "MAUDE_PATH={p} does not exist; unset it to fall back to \
-             {MAUDE_CANDIDATES:?} / PATH / {MAUDE_LINUXBREW}, or point it at a \
-             real maude — skipping every maude-gated case here would report \
-             green vacuously"
-        );
-        return Some(p);
-    }
-    if let Some(c) = MAUDE_CANDIDATES
-        .iter()
-        .find(|c| std::path::Path::new(c).exists())
-    {
-        return Some((*c).to_string());
-    }
-    // `PATH` walk, kept dependency-free like every other copy of this probe.
-    if let Some(p) = std::env::var_os("PATH").and_then(|paths| {
-        std::env::split_paths(&paths)
-            .map(|d| d.join("maude"))
-            .find(|p| p.is_file())
-    }) {
-        return Some(p.to_string_lossy().into_owned());
-    }
-    if std::path::Path::new(MAUDE_LINUXBREW).exists() {
-        return Some(MAUDE_LINUXBREW.to_string());
-    }
-    if std::env::var("TAM_ALLOW_NO_MAUDE").as_deref() == Ok("1") {
-        return None;
-    }
-    panic!(
-        "no maude found: MAUDE_PATH unset, none of {MAUDE_CANDIDATES:?} exist, \
-         nothing named `maude` on PATH, and no {MAUDE_LINUXBREW}. Every \
-         maude-gated case in this file would skip and the run would be green \
-         having proved nothing. Install maude, set MAUDE_PATH, or set \
-         TAM_ALLOW_NO_MAUDE=1 to accept the silent skip."
-    );
-}
 
 /// The expected bytes: the asset minus its leading `//` provenance header.
 fn expected() -> String {
@@ -111,7 +50,7 @@ fn expected() -> String {
 /// `putStrLn` adds the single trailing one.
 #[test]
 fn variants_stdout_matches_the_oracle_bytes() {
-    let mp = match maude_path() {
+    let mp = match require_maude_path() {
         Some(p) => p,
         None => return,
     };

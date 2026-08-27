@@ -7,7 +7,7 @@ use crate::lterm::{LSort, LVar};
 use crate::maude_sig::pair_maude_sig;
 use crate::vterm::Lit;
 
-use crate::test_maude::maude_path;
+use tamarin_test_support::require_maude_path;
 
 /// `fst(pair(a, b))` over [`pair_maude_sig`].  The pairing signature really
 /// rewrites this term.  `reduce` therefore cannot answer it from either of
@@ -48,7 +48,7 @@ fn reducible_fst_pair(a: &str, b: &str) -> LNTerm {
 /// would talk to nothing.
 #[test]
 fn spawn_and_reduce_pair() {
-    let path = match maude_path() {
+    let path = match require_maude_path() {
         Some(p) => p,
         None => {
             eprintln!("skipping: no maude");
@@ -72,7 +72,7 @@ fn spawn_and_reduce_pair() {
 /// returns the first.
 #[test]
 fn maude_handle_fresh_idents_is_reserve_idxs() {
-    let path = match maude_path() {
+    let path = match require_maude_path() {
         Some(p) => p,
         None => {
             eprintln!("skipping: no maude");
@@ -91,7 +91,7 @@ fn maude_handle_fresh_idents_is_reserve_idxs() {
 
 #[test]
 fn unify_two_vars() {
-    let path = match maude_path() {
+    let path = match require_maude_path() {
         Some(p) => p,
         None => {
             eprintln!("skipping: no maude");
@@ -125,7 +125,7 @@ fn unify_two_vars() {
 
 #[test]
 fn unify_xor_terms_ac() {
-    let path = match maude_path() {
+    let path = match require_maude_path() {
         Some(p) => p,
         None => {
             eprintln!("skipping: no maude");
@@ -178,7 +178,7 @@ fn unify_xor_terms_ac() {
 /// x:Msg with y:Pub should narrow x → ?:Pub.
 #[test]
 fn unify_narrows_msg_var_to_pub() {
-    let path = match maude_path() {
+    let path = match require_maude_path() {
         Some(p) => p,
         None => return,
     };
@@ -212,7 +212,7 @@ fn unify_narrows_msg_var_to_pub() {
 /// (Pub ⊂ Msg, but `pk(_)` is not Pub).
 #[test]
 fn unify_pub_var_with_pk_msg_term_fails() {
-    let path = match maude_path() {
+    let path = match require_maude_path() {
         Some(p) => p,
         None => return,
     };
@@ -245,7 +245,7 @@ fn unify_pub_var_with_pk_msg_term_fails() {
 /// round of the same size therefore reuses those members and spawns no more.
 #[test]
 fn pool_acquire_release_size() {
-    let path = match maude_path() {
+    let path = match require_maude_path() {
         Some(p) => p,
         None => {
             eprintln!("skipping: no maude");
@@ -294,7 +294,7 @@ fn pool_acquire_release_size() {
 /// keeps reporting the TARGET, while `spawned()` stays at 1.
 #[test]
 fn pool_sequential_reuse_stays_at_one_spawned() {
-    let path = match maude_path() {
+    let path = match require_maude_path() {
         Some(p) => p,
         None => {
             eprintln!("skipping: no maude");
@@ -331,7 +331,7 @@ fn pool_sequential_reuse_stays_at_one_spawned() {
 /// so `reduce` cannot answer it locally.
 #[test]
 fn pool_parallel_reduce_returns_correct_results() {
-    let path = match maude_path() {
+    let path = match require_maude_path() {
         Some(p) => p,
         None => {
             eprintln!("skipping: no maude");
@@ -371,7 +371,7 @@ fn pool_parallel_reduce_returns_correct_results() {
 
 #[test]
 fn pool_blocks_when_exhausted() {
-    let path = match maude_path() {
+    let path = match require_maude_path() {
         Some(p) => p,
         None => {
             eprintln!("skipping: no maude");
@@ -417,7 +417,7 @@ fn pool_blocks_when_exhausted() {
 /// genuinely goes to Maude.
 #[test]
 fn shared_caches_elide_round_trip_across_handles() {
-    let path = match maude_path() {
+    let path = match require_maude_path() {
         Some(p) => p,
         None => {
             eprintln!("skipping: no maude");
@@ -459,7 +459,7 @@ fn shared_caches_elide_round_trip_across_handles() {
 /// to Maude's reduced result.
 #[test]
 fn reduce_nf_fast_path_on_ac_signature() {
-    let path = match maude_path() {
+    let path = match require_maude_path() {
         Some(p) => p,
         None => {
             eprintln!("skipping: no maude");
@@ -495,7 +495,7 @@ fn reduce_nf_fast_path_on_ac_signature() {
 // `codeOther -> code2 ++ x`, matching HS's Maude matchAction.
 #[test]
 fn match_eqs_skolemize_both_mset_var_to_submultiset() {
-    let path = match maude_path() {
+    let path = match require_maude_path() {
         Some(p) => p,
         None => {
             eprintln!("skipping: no maude");
@@ -579,7 +579,7 @@ fn match_eqs_skolemize_both_mset_var_to_submultiset() {
 // FAILS, exactly as HS's `skolemizeGuarded`-then-`matchAction` does.
 #[test]
 fn impl_guard_match_skolemizes_pattern_free_vars() {
-    let path = match maude_path() {
+    let path = match require_maude_path() {
         Some(p) => p,
         None => {
             eprintln!("skipping: no maude");
@@ -643,7 +643,7 @@ fn impl_guard_match_skolemizes_pattern_free_vars() {
 /// pattern,subject order used by `match_eqs_skolemize_both`.
 #[test]
 fn match_eqs_direction_matches_hs() {
-    let path = match maude_path() {
+    let path = match require_maude_path() {
         Some(p) => p,
         None => {
             eprintln!("skipping: no maude");

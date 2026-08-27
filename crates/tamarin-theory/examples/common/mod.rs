@@ -40,16 +40,21 @@ pub fn collect_spthy(root: &Path) -> Vec<PathBuf> {
 }
 
 /// Read, parse, and elaborate `theory_path`, then start Maude on the
-/// elaborated signature (`$MAUDE_PATH` overrides the binary, else `maude`
-/// on `PATH`).  The elaborated signature carries the full `MaudeSig`
-/// (aenc/pk/user-declared symbols); booting Maude on the default sig would
-/// leave those symbols unparseable and corrupt any downstream unification.
+/// elaborated signature.  The elaborated signature carries the full
+/// `MaudeSig` (aenc/pk/user-declared symbols); booting Maude on the default
+/// sig would leave those symbols unparseable and corrupt any downstream
+/// unification.
+///
+/// The binary comes from `tamarin_test_support::maude_path`, and a bare
+/// `maude` for the OS to look up on `$PATH` is the last resort.  An example
+/// never skips: whatever it resolved goes to `MaudeHandle::start`, and a
+/// machine with no maude stops with that error.
 #[allow(dead_code)]
 pub fn load_theory_with_maude(theory_path: &str) -> (tamarin_theory::theory::Theory, MaudeHandle) {
     let source = std::fs::read_to_string(theory_path).expect("read theory");
     let parsed = tamarin_parser::parse_theory(&source, &[]).expect("parse theory");
     let elaborated = tamarin_theory::elaborate::elaborate(&parsed).expect("elaborate");
-    let maude_path = std::env::var("MAUDE_PATH").unwrap_or_else(|_| "maude".to_string());
+    let maude_path = tamarin_test_support::maude_path().unwrap_or_else(|| "maude".to_string());
     let maude = MaudeHandle::start(&maude_path, elaborated.signature.maude_sig.clone())
         .expect("start maude");
     (elaborated, maude)

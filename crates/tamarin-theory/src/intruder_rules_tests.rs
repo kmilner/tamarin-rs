@@ -645,10 +645,10 @@ fn destruction_rules_pair_emits_exactly_two_destructors() {
 // Pin both ends of the predicate: a positive (two rules differing only
 // in variable names) and a negative (structurally different).
 // =========================================================================
-use crate::test_maude::maude_path;
+use tamarin_test_support::require_maude_path;
 
 /// A maude that speaks `sig`, or `None` when no maude resolved at all.  The
-/// `None` case is the accepted skip.  See [`crate::test_maude::maude_path`].
+/// `None` case is the accepted skip.  See [`tamarin_test_support::require_maude_path`].
 ///
 /// A maude that resolves but does not start is the same misconfiguration as
 /// a dangling `MAUDE_PATH`.  An `.ok()` here would silently skip every pin in
@@ -656,7 +656,7 @@ use crate::test_maude::maude_path;
 fn maude_handle_for(
     sig: tamarin_term::maude_sig::MaudeSig,
 ) -> Option<tamarin_term::maude_proc::MaudeHandle> {
-    let path = maude_path()?;
+    let path = require_maude_path()?;
     Some(
         tamarin_term::maude_proc::MaudeHandle::start(&path, sig).unwrap_or_else(|e| {
             panic!(

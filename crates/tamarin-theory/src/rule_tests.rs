@@ -266,11 +266,11 @@ fn reserved_names_match_hs() {
     );
 }
 
-use crate::test_maude::maude_path;
+use tamarin_test_support::require_maude_path;
 
 #[test]
 fn unify_ln_fact_eqs_tag_mismatch_no_unifiers() {
-    let path = match maude_path() {
+    let path = match require_maude_path() {
         Some(p) => p,
         None => return,
     };
@@ -287,7 +287,7 @@ fn unify_ln_fact_eqs_tag_mismatch_no_unifiers() {
 /// premise with a nullary fact unsolvable.
 #[test]
 fn unify_ln_fact_eqs_nullary_facts_yield_one_trivial_unifier() {
-    let path = match maude_path() {
+    let path = match require_maude_path() {
         Some(p) => p,
         None => return,
     };
@@ -307,7 +307,7 @@ fn unify_ln_fact_eqs_nullary_facts_yield_one_trivial_unifier() {
 
 #[test]
 fn unify_ln_fact_eqs_two_vars() {
-    let path = match maude_path() {
+    let path = match require_maude_path() {
         Some(p) => p,
         None => return,
     };
@@ -322,7 +322,7 @@ fn unify_ln_fact_eqs_two_vars() {
 
 #[test]
 fn unifiable_ln_facts_yes_no() {
-    let path = match maude_path() {
+    let path = match require_maude_path() {
         Some(p) => p,
         None => return,
     };
@@ -336,7 +336,7 @@ fn unifiable_ln_facts_yes_no() {
 
 #[test]
 fn unifiable_rule_ac_insts_same_shape() {
-    let path = match maude_path() {
+    let path = match require_maude_path() {
         Some(p) => p,
         None => return,
     };
@@ -358,7 +358,7 @@ fn unifiable_rule_ac_insts_same_shape() {
 
 #[test]
 fn unifiable_rule_ac_insts_different_info_no() {
-    let path = match maude_path() {
+    let path = match require_maude_path() {
         Some(p) => p,
         None => return,
     };

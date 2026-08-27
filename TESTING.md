@@ -66,27 +66,24 @@ an error:
   export PATH="/home/linuxbrew/.linuxbrew/bin:$PATH"
   ```
 
-- *The Rust suite* mostly ignores `PATH`. 28 files under `crates/` resolve
-  maude, and they do not all do it alike. 13 test sites — both
-  `tests/common/mod.rs` harnesses, `tamarin-theory`'s `oracle_solver`, and ten
-  `#[cfg(test)]` modules under `tamarin-theory` and `tamarin-server` — probe
-  `$MAUDE_PATH` → `/usr/local/bin/maude` → `/usr/bin/maude` → `$PATH` →
-  `/home/linuxbrew/.linuxbrew/bin/maude`, and **panic** when none of them
-  resolves rather than skipping. The other 15 (the remaining in-crate test
-  modules, plus the production probe in `tamarin-prover/src/run.rs` and the
-  server example) still read `$MAUDE_PATH` and the two `/usr` paths and
-  nothing else, so on a host whose maude is elsewhere they return early and
-  the run still prints `ok`. Set it — it is the one thing every probe honours:
+- *The Rust suite* resolves maude in one place: `tamarin-test-support`, a
+  dev-dependency of every crate that has a maude-gated test. Its
+  `require_maude_path` probes `$MAUDE_PATH` → `/usr/local/bin/maude` →
+  `/usr/bin/maude` → `$PATH` → `/home/linuxbrew/.linuxbrew/bin/maude` →
+  `/opt/homebrew/bin/maude`, and **panics** when none of them resolves rather
+  than skipping. A `MAUDE_PATH` that is set but names a missing file is an
+  assertion failure. The binary under test resolves its own default
+  separately, and reads no environment variable — `default_maude_path`
+  (`tamarin-prover/src/run.rs`) walks the two `/usr` paths and then a bare
+  `maude` for the OS to find on `$PATH`. Setting `MAUDE_PATH` is what makes
+  the two agree:
 
   ```bash
   MAUDE_PATH="$(command -v maude)" cargo test --profile ci --workspace
   ```
 
-  `TAM_ALLOW_NO_MAUDE=1` is the escape hatch for the 13: it restores their old
-  silent skip, and is the only way a machine with no maude at all gets a green
-  run. A `MAUDE_PATH` that is set but names a missing file is an assertion
-  failure at 11 of the 13 (`rule_tests.rs` and `rule_variants.rs` still pass it
-  through unchecked) and a silent fallback everywhere else.
+  `TAM_ALLOW_NO_MAUDE=1` is the escape hatch: it turns the panic back into a
+  skip, and is the only way a machine with no maude at all gets a green run.
 
 ## The correctness criterion
 
@@ -227,11 +224,12 @@ also gets its own target tree, so alternating between plain `cargo test`
 (dev), `--release` and `--profile ci` builds the suite three times over —
 `target/debug` alone runs to tens of gigabytes. Pick one and stay on it.
 
-`MAUDE_PATH` is not optional at the 15 sites that still probe only two `/usr`
-paths; see Prerequisites. Without it, `cargo test -p tamarin-prover --test
-output_module` prints `14 passed` in 0.02 s, the same count a real run needs
-0.43 s to produce. At the 13 widened sites an unresolvable maude is now a
-panic naming `TAM_ALLOW_NO_MAUDE=1`, so those cannot report a vacuous green.
+`MAUDE_PATH` is what points the binary under test at the same maude the
+harness resolved; see Prerequisites. An unresolvable maude is a panic naming
+`TAM_ALLOW_NO_MAUDE=1`, so no maude-gated test can report a vacuous green.
+`tamarin-test-support`'s own `maude_path_is_read_in_one_place` holds that
+line: it walks every `.rs` file under `crates/` and fails when any file
+outside the support crate reads `$MAUDE_PATH`.
 
 The oracle-backed cases in `oracle_solver` still skip silently when no HS
 binary is reachable — the HS skip is deliberate, only the maude one was

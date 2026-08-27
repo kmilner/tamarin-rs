@@ -58,7 +58,5 @@ pub mod subsumption;
 pub mod subterm_rule;
 pub mod tags;
 pub mod term;
-#[cfg(test)]
-mod test_maude;
 pub mod unification;
 pub mod vterm;

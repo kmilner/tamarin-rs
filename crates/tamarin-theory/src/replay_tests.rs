@@ -11,9 +11,9 @@ use tamarin_term::maude_sig::pair_maude_sig;
 
 /// A maude handle for the pins below, or `None` only when the run has
 /// explicitly opted out via `TAM_ALLOW_NO_MAUDE=1` — resolution and the
-/// loud-failure policy live in [`crate::test_maude::maude_path`].
+/// loud-failure policy live in [`tamarin_test_support::require_maude_path`].
 fn maude() -> Option<MaudeHandle> {
-    let path = crate::test_maude::maude_path()?;
+    let path = tamarin_test_support::require_maude_path()?;
     // A maude that resolved but will not start is the same misconfiguration
     // as a dangling MAUDE_PATH: swallowing it with `.ok()` would silently
     // skip every pin in this file, so fail loudly instead.

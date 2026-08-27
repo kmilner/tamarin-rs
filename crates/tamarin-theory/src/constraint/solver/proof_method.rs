@@ -732,7 +732,7 @@ mod tests {
     use super::*;
     use tamarin_term::maude_sig::pair_maude_sig;
 
-    use crate::test_maude::maude_path;
+    use tamarin_test_support::require_maude_path;
 
     /// The result is `None` only when [`maude_path`] resolves nothing.  That
     /// case is the documented `TAM_ALLOW_NO_MAUDE` skip.  A maude that
@@ -740,7 +740,7 @@ mod tests {
     /// `MAUDE_PATH`.  An `.ok()?` here would silently skip every maude-backed
     /// test in this file.
     fn ctx() -> Option<ProofContext> {
-        let path = maude_path()?;
+        let path = require_maude_path()?;
         let h = tamarin_term::maude_proc::MaudeHandle::start(&path, pair_maude_sig())
             .unwrap_or_else(|e| {
                 panic!(

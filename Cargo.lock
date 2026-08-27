@@ -1174,6 +1174,7 @@ dependencies = [
  "tamarin-sapic",
  "tamarin-server",
  "tamarin-term",
+ "tamarin-test-support",
  "tamarin-theory",
  "tamarin-utils",
  "tokio",
@@ -1204,6 +1205,7 @@ dependencies = [
  "tamarin-parser",
  "tamarin-sapic",
  "tamarin-term",
+ "tamarin-test-support",
  "tamarin-theory",
  "tamarin-utils",
  "tokio",
@@ -1216,8 +1218,13 @@ dependencies = [
 name = "tamarin-term"
 version = "1.13.0"
 dependencies = [
+ "tamarin-test-support",
  "tamarin-utils",
 ]
+
+[[package]]
+name = "tamarin-test-support"
+version = "1.13.0"
 
 [[package]]
 name = "tamarin-theory"
@@ -1231,6 +1238,7 @@ dependencies = [
  "tamarin-parser",
  "tamarin-sapic",
  "tamarin-term",
+ "tamarin-test-support",
  "tamarin-utils",
  "walkdir",
 ]

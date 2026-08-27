@@ -317,11 +317,11 @@ fn structural_lemma_closes_dotted_and_cross_sort_binders() {
 /// and NDC-mark every xorr destructor rule in the returned cache.
 #[test]
 fn check_close_intr_rule_tags_xorr_on_kcl07_signature() {
-    // The resolution policy lives in [`crate::test_maude::maude_path`]. That
+    // The resolution policy lives in [`tamarin_test_support::require_maude_path`]. That
     // policy covers a `MAUDE_PATH` that points nowhere, and it covers a
     // machine with no maude at all. This test calls that one helper so that a
     // private copy of the policy here cannot drift from it.
-    let Some(mp) = crate::test_maude::maude_path() else {
+    let Some(mp) = tamarin_test_support::require_maude_path() else {
         return;
     };
     let (sig, _probe) = xorr_parent();

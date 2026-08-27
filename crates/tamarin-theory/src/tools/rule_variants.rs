@@ -1143,7 +1143,7 @@ mod tests {
     use crate::fact::{Fact, FactTag};
     use crate::rule::{ProtoRuleEInfo, ProtoRuleName, Rule, RuleAttributes};
 
-    use crate::test_maude::maude_path;
+    use tamarin_test_support::require_maude_path;
 
     fn empty_rule(name: &str) -> ProtoRuleE {
         let info = ProtoRuleEInfo {
@@ -1161,7 +1161,9 @@ mod tests {
     /// `commonSubst`.
     #[test]
     fn variants_of_rule_with_no_terms_is_identity() {
-        let Some(path) = maude_path() else { return };
+        let Some(path) = require_maude_path() else {
+            return;
+        };
         let h = MaudeHandle::start(&path, pair_maude_sig()).unwrap();
         let rule = empty_rule("R");
         let ac = variants_proto_rule(&h, &rule).expect("variants").unwrap();
@@ -1180,7 +1182,9 @@ mod tests {
     /// the rule body instead survive as a `SplitG` goal.
     #[test]
     fn variants_of_simple_rule_via_maude() {
-        let Some(path) = maude_path() else { return };
+        let Some(path) = require_maude_path() else {
+            return;
+        };
         let h = MaudeHandle::start(&path, pair_maude_sig()).unwrap();
         // Rule: [Fr(~k)] --> [Out(~k)]
         let k = LVar::new("k", LSort::Fresh, 0);

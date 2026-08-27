@@ -12,20 +12,20 @@
 
 use super::*;
 use crate::constraint::solver::search::NodeStatus;
-use crate::test_maude::maude_path;
 use tamarin_term::maude_proc::MaudeHandle;
 use tamarin_term::maude_sig::{pair_maude_sig, MaudeSig};
+use tamarin_test_support::require_maude_path;
 
 /// Returns a maude handle on `sig`.  Returns `None` only when the run opts
 /// out explicitly with `TAM_ALLOW_NO_MAUDE=1`.  Path resolution and the
-/// policy that panics both live in [`crate::test_maude::maude_path`].
+/// policy that panics both live in [`tamarin_test_support::require_maude_path`].
 ///
 /// A maude that resolves but does not start is the same misconfiguration as
 /// a dangling `MAUDE_PATH`.  A `.ok()` here would hide that error, and every
 /// check in this file would then skip without notice.  This function panics
 /// instead.
 fn maude_with(sig: MaudeSig) -> Option<MaudeHandle> {
-    let path = maude_path()?;
+    let path = require_maude_path()?;
     Some(MaudeHandle::start(&path, sig).unwrap_or_else(|e| {
         panic!("maude at {path} failed to start: {e:?} — every maude-backed pin here would otherwise skip silently")
     }))

@@ -344,6 +344,7 @@ tamarin-parser/         .spthy AST + lexer + parser + #include resolver + wellfo
 tamarin-theory/         elaborator, constraint system, solver, simplify, sources, replay
 tamarin-sapic/          SAPiC process: frontend — translation to multiset-rewrite rules
 tamarin-accountability/ accountability frontend — case tests → VC lemmas
+tamarin-test-support/   maude resolution shared by every crate's maude-gated tests
 tamarin-server/         interactive HTTP server (Axum)
 tamarin-prover/         the binary: CLI parser + run dispatch
 ```

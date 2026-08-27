@@ -17,7 +17,7 @@
 //!
 //! The harness skips silently when the pinned oracle has not been built
 //! (`./setup.sh testing`), so the test stays fast in environments without it.
-//! A missing *maude* is a different matter — see [`maude_path`]: it panics
+//! A missing *maude* is a different matter — see [`require_maude_path`]: it panics
 //! rather than skip, because skipping there greens the whole file.
 
 #[global_allocator]
@@ -27,6 +27,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use tamarin_parser::parse_theory;
+use tamarin_test_support::require_maude_path;
 use tamarin_theory::formula::Quantifier;
 use tamarin_theory::guarded::{formula_to_guarded_parsed, Guarded};
 
@@ -40,69 +41,6 @@ fn corpus_root() -> PathBuf {
         .unwrap_or_else(|_| {
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tamarin-prover/examples")
         })
-}
-
-/// Absolute maude locations probed before `PATH` is walked.
-///
-/// This probe mirrors the crate-shared `src/test_maude.rs` one (an
-/// integration test cannot see a `#[cfg(test)]` module of the library it
-/// links) — keep the two in sync.
-const MAUDE_CANDIDATES: [&str; 2] = ["/usr/local/bin/maude", "/usr/bin/maude"];
-
-/// Last resort, after `PATH`: the linuxbrew prefix this project's maude lives
-/// under on the development box, which is deliberately not on `PATH`.
-const MAUDE_LINUXBREW: &str = "/home/linuxbrew/.linuxbrew/bin/maude";
-
-/// The maude every maude-gated case below runs against: `$MAUDE_PATH`, else
-/// the first existing [`MAUDE_CANDIDATES`] entry, else a `PATH` walk, else
-/// [`MAUDE_LINUXBREW`].
-///
-/// Resolving NOTHING is a misconfiguration, not a reason to skip: every
-/// maude-gated test in this file opens with `let mp = match maude_path() {
-/// Some(p) => p, None => return }`, so a `None` here reports the same green
-/// run with and without maude installed.  Panic instead — unless
-/// `TAM_ALLOW_NO_MAUDE=1` explicitly asks for the old silent skip (a box that
-/// genuinely has no maude and only wants the maude-free cases).  A
-/// `MAUDE_PATH` naming a file that does not exist is the same
-/// misconfiguration and panics too.
-fn maude_path() -> Option<String> {
-    if let Ok(p) = std::env::var("MAUDE_PATH") {
-        assert!(
-            std::path::Path::new(&p).exists(),
-            "MAUDE_PATH={p} does not exist; unset it to fall back to \
-             {MAUDE_CANDIDATES:?} / PATH / {MAUDE_LINUXBREW}, or point it at a \
-             real maude — skipping every maude-gated case here would report \
-             green vacuously"
-        );
-        return Some(p);
-    }
-    if let Some(c) = MAUDE_CANDIDATES
-        .iter()
-        .find(|c| std::path::Path::new(c).exists())
-    {
-        return Some((*c).to_string());
-    }
-    // `PATH` walk, kept dependency-free like every other copy of this probe.
-    if let Some(p) = std::env::var_os("PATH").and_then(|paths| {
-        std::env::split_paths(&paths)
-            .map(|d| d.join("maude"))
-            .find(|p| p.is_file())
-    }) {
-        return Some(p.to_string_lossy().into_owned());
-    }
-    if std::path::Path::new(MAUDE_LINUXBREW).exists() {
-        return Some(MAUDE_LINUXBREW.to_string());
-    }
-    if std::env::var("TAM_ALLOW_NO_MAUDE").as_deref() == Ok("1") {
-        return None;
-    }
-    panic!(
-        "no maude found: MAUDE_PATH unset, none of {MAUDE_CANDIDATES:?} exist, \
-         nothing named `maude` on PATH, and no {MAUDE_LINUXBREW}. Every \
-         maude-gated case in this file would skip and the run would be green \
-         having proved nothing. Install maude, set MAUDE_PATH, or set \
-         TAM_ALLOW_NO_MAUDE=1 to accept the silent skip."
-    );
 }
 
 /// The pinned oracle, discovered the way every parity script discovers it:
@@ -142,7 +80,7 @@ fn oracle_binary() -> Option<PathBuf> {
 /// `PATH` — the same `MAUDE_PATH` override the rest of the suite uses.
 fn oracle_command() -> Option<Command> {
     let mut cmd = Command::new(oracle_binary()?);
-    if let Some(m) = maude_path() {
+    if let Some(m) = require_maude_path() {
         cmd.arg(format!("--with-maude={m}"));
     }
     Some(cmd)
@@ -155,7 +93,7 @@ fn oracle_command() -> Option<Command> {
 fn oracle_command_within(secs: u32) -> Option<Command> {
     let mut cmd = Command::new("timeout");
     cmd.arg(format!("{secs}s")).arg(oracle_binary()?);
-    if let Some(m) = maude_path() {
+    if let Some(m) = require_maude_path() {
         cmd.arg(format!("--with-maude={m}"));
     }
     Some(cmd)
@@ -493,12 +431,12 @@ fn spawn_kill_watchdog(
 /// signature.  The reduction and search unit cases below use this context.
 /// They test the constraint-system machinery, not rule instantiation.
 ///
-/// The result is `None` only when maude does not resolve.  [`maude_path`]
+/// The result is `None` only when maude does not resolve.  [`require_maude_path`]
 /// already restricts that case to the explicit `TAM_ALLOW_NO_MAUDE=1`
 /// opt-out.
 fn rule_free_context() -> Option<tamarin_theory::constraint::solver::context::ProofContext> {
     let h = tamarin_term::maude_proc::MaudeHandle::start(
-        &maude_path()?,
+        &require_maude_path()?,
         tamarin_term::maude_sig::pair_maude_sig(),
     )
     .unwrap();
@@ -872,7 +810,7 @@ fn verdict_match_suite_all_solved_against_tamarin() {
     use tamarin_theory::constraint::solver::search::NodeStatus;
     use tamarin_theory::prove::prove_lemma;
 
-    let mp = match maude_path() {
+    let mp = match require_maude_path() {
         Some(p) => p,
         None => return,
     };
@@ -1179,7 +1117,7 @@ fn corpus_proof_skeleton_match_probe() {
         .stack_size(64 * 1024 * 1024)
         .build_global();
 
-    let mp = match maude_path() {
+    let mp = match require_maude_path() {
         Some(p) => p,
         None => return,
     };
@@ -1461,7 +1399,7 @@ fn prove_lemma_tiny_setup_verdict_matches_tamarin() {
     use tamarin_theory::constraint::solver::search::NodeStatus;
     use tamarin_theory::prove::prove_lemma;
 
-    let mp = match maude_path() {
+    let mp = match require_maude_path() {
         Some(p) => p,
         None => return,
     };
@@ -1579,7 +1517,7 @@ fn atom_decomposition_creates_action_goal_in_simplify() {
 fn prove_lemma_disj_lemma_terminates_and_tamarin_verifies() {
     use tamarin_theory::prove::prove_lemma;
 
-    let mp = match maude_path() {
+    let mp = match require_maude_path() {
         Some(p) => p,
         None => return,
     };
@@ -1785,7 +1723,7 @@ fn solve_premise_goal_against_fixture_matches_rule_count() {
     use tamarin_theory::constraint::solver::reduction::{GoalCases, Reduction};
     use tamarin_theory::constraint::system::System;
 
-    let path = match maude_path() {
+    let path = match require_maude_path() {
         Some(p) => p,
         None => return,
     };
@@ -1929,7 +1867,7 @@ fn fixture_nat_sort_reuse_lemma_derives_implied_fact() {
     use tamarin_theory::constraint::solver::search::{NodeStatus, ProofNode};
     use tamarin_theory::prove::prove_lemma;
 
-    let mp = match maude_path() {
+    let mp = match require_maude_path() {
         Some(p) => p,
         None => return,
     };

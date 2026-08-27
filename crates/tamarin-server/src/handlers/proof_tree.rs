@@ -1192,54 +1192,7 @@ fn goal_summary(g: &Goal) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Absolute maude locations probed when `MAUDE_PATH` is unset.
-    const MAUDE_CANDIDATES: [&str; 4] = [
-        "/usr/local/bin/maude",
-        "/opt/homebrew/bin/maude",
-        "/usr/bin/maude",
-        "/home/linuxbrew/.linuxbrew/bin/maude",
-    ];
-
-    /// The maude the maude-backed tests in this module run against.
-    ///
-    /// Resolution order: `$MAUDE_PATH`, then [`MAUDE_CANDIDATES`], then a
-    /// `$PATH` walk.  Resolving nothing is a MISCONFIGURATION, not a reason
-    /// to skip: a silent `None` makes every maude-backed test here report
-    /// green having built nothing.  Panic instead, unless
-    /// `TAM_ALLOW_NO_MAUDE=1` explicitly asks for the silent skip.
-    fn maude_path() -> Option<String> {
-        if let Ok(p) = std::env::var("MAUDE_PATH") {
-            assert!(
-                std::path::Path::new(&p).exists(),
-                "MAUDE_PATH={p} does not exist; unset it to fall back to \
-                 {MAUDE_CANDIDATES:?}, or point it at a real maude"
-            );
-            return Some(p);
-        }
-        if let Some(c) = MAUDE_CANDIDATES
-            .iter()
-            .find(|c| std::path::Path::new(c).exists())
-        {
-            return Some((*c).to_string());
-        }
-        if let Some(path) = std::env::var_os("PATH") {
-            for dir in std::env::split_paths(&path) {
-                let cand = dir.join("maude");
-                if cand.exists() {
-                    return Some(cand.to_string_lossy().into_owned());
-                }
-            }
-        }
-        assert_eq!(
-            std::env::var("TAM_ALLOW_NO_MAUDE").as_deref(),
-            Ok("1"),
-            "no maude found: set MAUDE_PATH, put maude on $PATH, or set \
-             TAM_ALLOW_NO_MAUDE=1 to skip the maude-backed tests here — \
-             skipping silently would report green having run nothing"
-        );
-        None
-    }
+    use tamarin_test_support::require_maude_path;
 
     /// The theory that the two `ProofState` tests below use.  It has one
     /// rule and one exists-trace lemma.  The function closes it against `mp`.
@@ -1275,7 +1228,7 @@ end
 
     #[test]
     fn build_state_for_trivial_theory() {
-        let mp = match maude_path() {
+        let mp = match require_maude_path() {
             Some(p) => p,
             None => return,
         };
@@ -1288,7 +1241,7 @@ end
 
     #[test]
     fn apply_simplify_step() {
-        let mp = match maude_path() {
+        let mp = match require_maude_path() {
             Some(p) => p,
             None => return,
         };

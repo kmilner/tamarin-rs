@@ -4,7 +4,7 @@
 
 use super::*;
 
-use crate::test_maude::maude_path;
+use tamarin_test_support::require_maude_path;
 
 #[test]
 fn default_parameters_match_haskell() {
@@ -60,7 +60,10 @@ fn make_rule(name: &str, conc_tag: crate::fact::FactTag) -> crate::theory::OpenP
 fn ctx_with_rules(
     rules: Vec<crate::theory::OpenProtoRule>,
 ) -> Option<crate::constraint::solver::context::ProofContext> {
-    let h = start_maude(&maude_path()?, tamarin_term::maude_sig::pair_maude_sig());
+    let h = start_maude(
+        &require_maude_path()?,
+        tamarin_term::maude_sig::pair_maude_sig(),
+    );
     Some(crate::constraint::solver::context::ProofContext::new(
         h, rules,
     ))
@@ -145,7 +148,7 @@ fn precompute_full_sources_emits_per_tag_entries() {
     use crate::rule::{ProtoRuleE, ProtoRuleEInfo, Rule};
     use tamarin_term::builtin::msg_var;
 
-    let path = match maude_path() {
+    let path = match require_maude_path() {
         Some(p) => p,
         None => return,
     };
@@ -211,7 +214,7 @@ fn precompute_full_sources_emits_em_only_when_bp_enabled() {
     use crate::rule::{ProtoRuleE, ProtoRuleEInfo, Rule};
     use tamarin_term::builtin::msg_var;
 
-    let path = match maude_path() {
+    let path = match require_maude_path() {
         Some(p) => p,
         None => return,
     };
@@ -733,7 +736,7 @@ fn saturate_shift_carries_the_node_component_cache() {
 /// charged nothing (Control/Monad/Bind.hs:134-140).
 #[test]
 fn some_inst_system_keeps_the_seeded_vars_and_draws_in_hs_field_order() {
-    let path = match maude_path() {
+    let path = match require_maude_path() {
         Some(p) => p,
         None => return,
     };

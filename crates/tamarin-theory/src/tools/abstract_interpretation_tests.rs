@@ -5,10 +5,11 @@
 //! Out-of-line tests for `tools::abstract_interpretation`.  The expected
 //! byte strings are the v1.13.0 oracle's observed output for the same
 //! shapes (`--partial-evaluation` stderr traces and the `text{*…*}`
-//! report body).  Maude-backed tests need a maude: the crate-shared
-//! [`crate::test_maude::maude_path`] probe resolves one from `$MAUDE_PATH`,
-//! the system prefixes, `$PATH` or linuxbrew, and PANICS when none of those
-//! hits.  Set `TAM_ALLOW_NO_MAUDE=1` to skip them silently instead.
+//! report body).  Maude-backed tests need a maude:
+//! [`tamarin_test_support::require_maude_path`] resolves one from
+//! `$MAUDE_PATH`, the system prefixes, `$PATH` or the package-manager
+//! prefixes, and PANICS when none of those hits.  Set
+//! `TAM_ALLOW_NO_MAUDE=1` to skip them silently instead.
 
 use super::*;
 use crate::fact::{proto_fact, Multiplicity};
@@ -18,8 +19,7 @@ use tamarin_term::builtin::{fresh_var, msg_var};
 use tamarin_term::lterm::pub_term;
 use tamarin_term::maude_sig::{hash_maude_sig, pair_maude_sig};
 use tamarin_term::term::f_app_no_eq;
-
-use crate::test_maude::maude_path;
+use tamarin_test_support::require_maude_path;
 
 // =============================================================================
 // Doc helpers (numbered' / $--$)
@@ -289,7 +289,9 @@ fn proto_rule_key_sorts_alphabetically_by_name() {
 /// between styles.
 #[test]
 fn partial_evaluation_trace_bytes_and_style_invariance() {
-    let Some(path) = maude_path() else { return };
+    let Some(path) = require_maude_path() else {
+        return;
+    };
     let h = MaudeHandle::start(&path, pair_maude_sig()).unwrap();
     let init: ProtoRuleE = Rule::new(
         ProtoRuleEInfo::standard("Init"),
@@ -339,7 +341,9 @@ fn partial_evaluation_trace_bytes_and_style_invariance() {
 /// `1. St( ~k )[+]`, i.e. B's annotated form, even though A sorts first.
 #[test]
 fn abstract_state_keeps_the_last_inserted_annotations() {
-    let Some(path) = maude_path() else { return };
+    let Some(path) = require_maude_path() else {
+        return;
+    };
     let h = MaudeHandle::start(&path, pair_maude_sig()).unwrap();
     let st_plain = proto_fact(Multiplicity::Linear, "St", vec![fresh_var("k", 0)]);
     let st_marked = LNFact::fresh_annotated(
@@ -375,7 +379,9 @@ fn abstract_state_keeps_the_last_inserted_annotations() {
 /// minimum index to 0.
 #[test]
 fn partial_evaluation_rule_multiplication_and_name_hints() {
-    let Some(path) = maude_path() else { return };
+    let Some(path) = require_maude_path() else {
+        return;
+    };
     let sig = pair_maude_sig().merge(hash_maude_sig());
     let h = MaudeHandle::start(&path, sig).unwrap();
     let hh = |t: LNTerm| f_app_no_eq(tamarin_term::builtin::hash_sym(), vec![t]);
@@ -489,7 +495,9 @@ fn text_item(tag: &str) -> TheoryItem {
 /// come out alphabetically (§3 rows 1, 3).
 #[test]
 fn apply_partial_evaluation_splices_at_first_rule_item() {
-    let Some(path) = maude_path() else { return };
+    let Some(path) = require_maude_path() else {
+        return;
+    };
     let h = MaudeHandle::start(&path, pair_maude_sig()).unwrap();
 
     let zebra: ProtoRuleE = Rule::new(
@@ -560,7 +568,9 @@ fn apply_partial_evaluation_splices_at_first_rule_item() {
 /// without a `rule (modulo AC)` block.
 #[test]
 fn a_refined_rule_keeps_its_pre_macro_e_half() {
-    let Some(path) = maude_path() else { return };
+    let Some(path) = require_maude_path() else {
+        return;
+    };
     let h = MaudeHandle::start(&path, pair_maude_sig()).unwrap();
 
     // `macros: dup(y) = <y, y>` and a rule whose conclusion calls it.
@@ -613,7 +623,9 @@ fn a_refined_rule_keeps_its_pre_macro_e_half() {
 /// A theory with no rule items is a no-op (HS `replaceProtoRules [] = []`).
 #[test]
 fn apply_partial_evaluation_no_rules_is_noop() {
-    let Some(path) = maude_path() else { return };
+    let Some(path) = require_maude_path() else {
+        return;
+    };
     let h = MaudeHandle::start(&path, pair_maude_sig()).unwrap();
     let mut elab: Theory = Theory::new("T", SignaturePure::empty(false));
     elab.items = vec![text_item("only")];
@@ -673,7 +685,9 @@ fn info_frees_are_in_occurrence_order() {
 /// free-less `_restrict` formula renders `[ In( x ) ]`.
 #[test]
 fn info_frees_floor_the_final_rename() {
-    let Some(path) = maude_path() else { return };
+    let Some(path) = require_maude_path() else {
+        return;
+    };
     let sig = pair_maude_sig().merge(hash_maude_sig());
     let h = MaudeHandle::start(&path, sig).unwrap();
     let hh = |t: LNTerm| f_app_no_eq(tamarin_term::builtin::hash_sym(), vec![t]);
@@ -742,7 +756,9 @@ fn loop_breakers_key_same_named_refined_rules_apart() {
     use crate::constraint::solver::context::annotate_loop_breakers;
     use crate::rule::PremIdx;
     use crate::theory::OpenProtoRule;
-    let Some(path) = maude_path() else { return };
+    let Some(path) = require_maude_path() else {
+        return;
+    };
     let h = MaudeHandle::start(&path, pair_maude_sig()).unwrap();
     let fact = |name: &'static str, arg: LNTerm| -> LNFact {
         proto_fact(Multiplicity::Linear, name, vec![arg])

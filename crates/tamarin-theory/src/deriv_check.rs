@@ -500,7 +500,7 @@ mod tests {
     use super::*;
     use tamarin_parser::parse_theory;
 
-    use crate::test_maude::maude_path;
+    use tamarin_test_support::require_maude_path;
 
     /// A pair-signature handle.  The result is `None` only when
     /// [`maude_path`] resolves nothing.  That case is the documented
@@ -510,7 +510,7 @@ mod tests {
     /// test in this file.
     fn maude() -> Option<MaudeHandle> {
         Some(start_maude(
-            &maude_path()?,
+            &require_maude_path()?,
             tamarin_term::maude_sig::pair_maude_sig(),
         ))
     }
@@ -647,7 +647,7 @@ mod tests {
     /// `elaborated.signature.maude_sig` (run.rs).  The function skips on the
     /// same terms as [`maude`].
     fn theory_and_maude(src: &str) -> Option<(Theory, MaudeHandle)> {
-        let p = maude_path()?;
+        let p = require_maude_path()?;
         let thy = theory(src);
         let sig = thy.signature.maude_sig.clone();
         Some((thy, start_maude(&p, sig)))

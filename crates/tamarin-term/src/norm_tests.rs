@@ -7,11 +7,11 @@ use crate::lterm::{LNTerm, LSort, LVar};
 use crate::maude_sig::pair_maude_sig;
 use crate::vterm::Lit;
 
-use crate::test_maude::maude_path;
+use tamarin_test_support::require_maude_path;
 
 #[test]
 fn norm_var_skips_maude() {
-    let path = match maude_path() {
+    let path = match require_maude_path() {
         Some(p) => p,
         None => return,
     };
@@ -25,7 +25,7 @@ fn norm_var_skips_maude() {
 #[test]
 #[allow(non_snake_case)]
 fn nf_via_haskell_detects_inverse_cancellation() {
-    let path = match maude_path() {
+    let path = match require_maude_path() {
         Some(p) => p,
         None => return,
     };
@@ -67,7 +67,7 @@ fn nf_via_haskell_detects_inverse_cancellation() {
 fn nf_via_haskell_maude_matches_user_ac_strule() {
     use crate::function_symbols::{AcFctSym, Constructability, NdcState, NoEqSym, Privacy};
     use crate::rewriting::RRule;
-    let path = match maude_path() {
+    let path = match require_maude_path() {
         Some(p) => p,
         None => return,
     };
@@ -147,7 +147,7 @@ fn nf_via_haskell_maude_matches_user_ac_strule() {
 fn cross_ac_symbol_strule_never_applies() {
     use crate::function_symbols::{AcFctSym, Constructability, NdcState, NoEqSym, Privacy};
     use crate::rewriting::{Equal, RRule};
-    let path = match maude_path() {
+    let path = match require_maude_path() {
         Some(p) => p,
         None => return,
     };
@@ -288,7 +288,7 @@ fn bare_variable_strule_lhs_never_reduces_builtin_ac_or_c_terms() {
     // [variant]` into the MSG module makes every Maude `reduce` diverge
     // (the Haskell prover hangs on the equivalent `.spthy`), and the gate
     // means no rule of `sig` is ever sent over IPC anyway.
-    let path = match maude_path() {
+    let path = match require_maude_path() {
         Some(p) => p,
         None => return,
     };

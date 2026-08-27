@@ -31,6 +31,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 
 [dev-dependencies]
+tamarin-test-support = { workspace = true }
 reqwest = { version = "0.12", default-features = false, features = ["json", "multipart"] }
 
 [lints]

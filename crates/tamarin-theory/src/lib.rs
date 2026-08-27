@@ -81,8 +81,6 @@ pub mod signature;
 pub mod tactic;
 #[cfg(test)]
 pub(crate) mod test_corpus;
-#[cfg(test)]
-pub(crate) mod test_maude;
 pub mod theory;
 pub mod tools;
 pub mod wellformedness;

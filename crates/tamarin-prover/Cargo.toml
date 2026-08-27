@@ -28,5 +28,8 @@ mimalloc = { version = "0.1", default-features = false }
 rayon = { workspace = true }
 clap = { workspace = true }
 
+[dev-dependencies]
+tamarin-test-support = { workspace = true }
+
 [lints]
 workspace = true

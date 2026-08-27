@@ -3,9 +3,9 @@
 //   scripts/gen_license_headers.py --authors <this file>
 
 use super::*;
-use crate::test_maude::maude_path;
 use tamarin_term::lterm::LSort;
 use tamarin_term::subst_vfresh::SubstVFresh;
+use tamarin_test_support::require_maude_path;
 
 fn fresh_subst() -> LNSubstVFresh {
     let v = LVar::new("x", LSort::Msg, 0);
@@ -250,7 +250,9 @@ fn simp_abstract_name_factors_common_constant() {
 
 #[test]
 fn add_eqs_xor_produces_disjunction() {
-    let Some(path) = maude_path() else { return };
+    let Some(path) = require_maude_path() else {
+        return;
+    };
     let sig = tamarin_term::maude_sig::xor_maude_sig();
     let h = tamarin_term::maude_proc::MaudeHandle::start(&path, sig).expect("start");
     // x XOR a =? b XOR y has multiple AC unifiers.
@@ -283,7 +285,9 @@ fn add_eqs_xor_produces_disjunction() {
 /// domain size are never permutations of each other and survive.
 #[test]
 fn remove_permutations_drops_renamed_variants() {
-    let Some(path) = maude_path() else { return };
+    let Some(path) = require_maude_path() else {
+        return;
+    };
     let sig = tamarin_term::maude_sig::pair_maude_sig();
     let h = tamarin_term::maude_proc::MaudeHandle::start(&path, sig).expect("start");
     use tamarin_term::function_symbols::{pair_sym, FunSym};
@@ -337,7 +341,9 @@ fn remove_permutations_drops_renamed_variants() {
 /// silently appear in the corpus.**
 #[test]
 fn add_eqs_ac_free_var_var_uses_haskell_orientation() {
-    let Some(path) = maude_path() else { return };
+    let Some(path) = require_maude_path() else {
+        return;
+    };
     let sig = tamarin_term::maude_sig::pair_maude_sig();
     let h = tamarin_term::maude_proc::MaudeHandle::start(&path, sig).expect("start");
 
@@ -388,7 +394,9 @@ fn add_eqs_ac_free_var_var_uses_haskell_orientation() {
 /// distinct (the TLS_Handshake prem_idx_clash class).
 #[test]
 fn add_eqs_ac_free_var_var_does_not_introduce_witness() {
-    let Some(path) = maude_path() else { return };
+    let Some(path) = require_maude_path() else {
+        return;
+    };
     let sig = tamarin_term::maude_sig::pair_maude_sig();
     let h = tamarin_term::maude_proc::MaudeHandle::start(&path, sig).expect("start");
     let x = LVar::new("x", LSort::Msg, 0);
@@ -443,7 +451,9 @@ fn add_eqs_ac_free_var_var_does_not_introduce_witness() {
 /// chain in `add_eqs_inner` (we apply `self.subst` to inputs first).
 #[test]
 fn add_eqs_idempotent_for_already_implied_eq() {
-    let Some(path) = maude_path() else { return };
+    let Some(path) = require_maude_path() else {
+        return;
+    };
     let sig = tamarin_term::maude_sig::pair_maude_sig();
     let h = tamarin_term::maude_proc::MaudeHandle::start(&path, sig).expect("start");
     let x = LVar::new("x", LSort::Msg, 0);
@@ -487,7 +497,9 @@ fn add_eqs_idempotent_for_already_implied_eq() {
 /// silently succeed.
 #[test]
 fn add_eqs_unsatisfiable_sets_store_false() {
-    let Some(path) = maude_path() else { return };
+    let Some(path) = require_maude_path() else {
+        return;
+    };
     let sig = tamarin_term::maude_sig::pair_maude_sig();
     let h = tamarin_term::maude_proc::MaudeHandle::start(&path, sig).expect("start");
     use tamarin_term::builtin::{msg_var, pair, pk};

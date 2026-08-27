@@ -893,7 +893,7 @@ mod tests {
         use tamarin_term::maude_proc::MaudeHandle;
         use tamarin_term::maude_sig::pair_maude_sig;
 
-        let Some(path) = crate::test_maude::maude_path() else {
+        let Some(path) = tamarin_test_support::require_maude_path() else {
             eprintln!("skipping: no maude");
             return;
         };
