@@ -12,9 +12,11 @@
 use std::collections::BTreeSet;
 
 use crate::builtin::{
-    asym_enc_fun_dest_sig, asym_enc_fun_sig, bp_rules, dh_rules, hash_fun_sig,
-    location_report_fun_sig, mset_rules, reveal_signature_fun_sig, signature_fun_dest_sig,
-    signature_fun_sig, sym_enc_fun_dest_sig, sym_enc_fun_sig, xor_rules,
+    asym_enc_dest_rules, asym_enc_fun_dest_sig, asym_enc_fun_sig, asym_enc_rules, bp_rules,
+    dh_rules, hash_fun_sig, location_report_fun_sig, location_report_rules, mset_rules,
+    pair_dest_rules, pair_rules, reveal_signature_fun_sig, reveal_signature_rules,
+    signature_dest_rules, signature_fun_dest_sig, signature_fun_sig, signature_rules,
+    sym_enc_dest_rules, sym_enc_fun_dest_sig, sym_enc_fun_sig, sym_enc_rules, xor_rules,
 };
 use crate::function_symbols::{
     bp_fun_sig, bp_reducible_fun_sig, dh_fun_sig, dh_reducible_fun_sig, fst_dest_sym, fst_sym,
@@ -184,8 +186,9 @@ impl MaudeSig {
         self.st_rules.all_lhs_ac_c_free()
     }
 
-    /// Refresh the cached `fun_syms` / `irreducible_fun_syms` /
-    /// `reducible_fun_syms` from the source-of-truth flags.
+    /// HS `maudeSig` (Term/Maude/Signature.hs:110-125#maudeSig): recompute the
+    /// cached `fun_syms` / `irreducible_fun_syms` / `reducible_fun_syms` from
+    /// the source-of-truth flags.
     pub fn refresh(mut self) -> Self {
         if self.enable_bp {
             self.enable_dh = true;
@@ -721,160 +724,86 @@ fn snd_dest_rule() -> CtxtStRule {
 // Predefined signatures
 // =============================================================================
 
+/// HS writes every builtin signature as `maudeSig $ mempty {…}`
+/// (Term/Maude/Signature.hs:199-231): a record update of `mempty` handed to
+/// the smart constructor.  This macro is that shape in Rust — the named fields
+/// over `MaudeSig::default()`, then [`MaudeSig::refresh`].
+macro_rules! maude_sig {
+    ($($field:ident : $value:expr),* $(,)?) => {
+        MaudeSig { $($field: $value,)* ..MaudeSig::default() }.refresh()
+    };
+}
+
 pub fn dh_maude_sig() -> MaudeSig {
-    MaudeSig {
-        enable_dh: true,
-        ..MaudeSig::default()
-    }
-    .refresh()
+    maude_sig!(enable_dh: true)
 }
 pub fn bp_maude_sig() -> MaudeSig {
-    MaudeSig {
-        enable_bp: true,
-        ..MaudeSig::default()
-    }
-    .refresh()
+    maude_sig!(enable_bp: true)
 }
 pub fn mset_maude_sig() -> MaudeSig {
-    MaudeSig {
-        enable_mset: true,
-        ..MaudeSig::default()
-    }
-    .refresh()
+    maude_sig!(enable_mset: true)
 }
 pub fn nat_maude_sig() -> MaudeSig {
-    MaudeSig {
-        enable_nat: true,
-        ..MaudeSig::default()
-    }
-    .refresh()
+    maude_sig!(enable_nat: true)
 }
 pub fn xor_maude_sig() -> MaudeSig {
-    MaudeSig {
-        enable_xor: true,
-        ..MaudeSig::default()
-    }
-    .refresh()
+    maude_sig!(enable_xor: true)
 }
 
 pub fn pair_maude_sig() -> MaudeSig {
-    MaudeSig {
-        st_fun_syms: pair_fun_sig(),
-        st_rules: crate::builtin::pair_rules().into(),
-        ..MaudeSig::default()
-    }
-    .refresh()
+    maude_sig!(st_fun_syms: pair_fun_sig(), st_rules: pair_rules().into())
 }
 
 /// `pairDestMaudeSig` (Term/Maude/Signature.hs:221): the `dest-pairing` variant —
 /// fst/snd are DESTRUCTORS (`pair_fun_dest_sig`) with the destructor
 /// rewrite rules (`pair_dest_rules`), rather than constructors.
 pub fn pair_dest_maude_sig() -> MaudeSig {
-    MaudeSig {
-        st_fun_syms: pair_fun_dest_sig(),
-        st_rules: crate::builtin::pair_dest_rules().into(),
-        ..MaudeSig::default()
-    }
-    .refresh()
+    maude_sig!(st_fun_syms: pair_fun_dest_sig(), st_rules: pair_dest_rules().into())
 }
 
+/// Hash is one-way: no rewrite rules.
 pub fn hash_maude_sig() -> MaudeSig {
-    MaudeSig {
-        st_fun_syms: hash_fun_sig(),
-        // Hash is one-way: no destructor rules.
-        ..MaudeSig::default()
-    }
-    .refresh()
+    maude_sig!(st_fun_syms: hash_fun_sig())
 }
 
 pub fn sym_enc_maude_sig() -> MaudeSig {
-    MaudeSig {
-        st_fun_syms: sym_enc_fun_sig(),
-        st_rules: crate::builtin::sym_enc_rules().into(),
-        ..MaudeSig::default()
-    }
-    .refresh()
+    maude_sig!(st_fun_syms: sym_enc_fun_sig(), st_rules: sym_enc_rules().into())
 }
 
 pub fn asym_enc_maude_sig() -> MaudeSig {
-    MaudeSig {
-        st_fun_syms: asym_enc_fun_sig(),
-        st_rules: crate::builtin::asym_enc_rules().into(),
-        ..MaudeSig::default()
-    }
-    .refresh()
+    maude_sig!(st_fun_syms: asym_enc_fun_sig(), st_rules: asym_enc_rules().into())
 }
 
 pub fn signature_maude_sig() -> MaudeSig {
-    MaudeSig {
-        st_fun_syms: signature_fun_sig(),
-        st_rules: crate::builtin::signature_rules().into(),
-        ..MaudeSig::default()
-    }
-    .refresh()
+    maude_sig!(st_fun_syms: signature_fun_sig(), st_rules: signature_rules().into())
 }
 
 pub fn reveal_signature_maude_sig() -> MaudeSig {
-    MaudeSig {
-        st_fun_syms: reveal_signature_fun_sig(),
-        st_rules: crate::builtin::reveal_signature_rules().into(),
-        ..MaudeSig::default()
-    }
-    .refresh()
+    maude_sig!(st_fun_syms: reveal_signature_fun_sig(), st_rules: reveal_signature_rules().into())
 }
 
 pub fn location_report_maude_sig() -> MaudeSig {
-    MaudeSig {
-        st_fun_syms: location_report_fun_sig(),
-        st_rules: crate::builtin::location_report_rules().into(),
-        ..MaudeSig::default()
-    }
-    .refresh()
+    maude_sig!(st_fun_syms: location_report_fun_sig(), st_rules: location_report_rules().into())
 }
 
 pub fn sym_enc_dest_maude_sig() -> MaudeSig {
-    MaudeSig {
-        st_fun_syms: sym_enc_fun_dest_sig(),
-        st_rules: crate::builtin::sym_enc_dest_rules().into(),
-        ..MaudeSig::default()
-    }
-    .refresh()
+    maude_sig!(st_fun_syms: sym_enc_fun_dest_sig(), st_rules: sym_enc_dest_rules().into())
 }
 
 pub fn asym_enc_dest_maude_sig() -> MaudeSig {
-    MaudeSig {
-        st_fun_syms: asym_enc_fun_dest_sig(),
-        st_rules: crate::builtin::asym_enc_dest_rules().into(),
-        ..MaudeSig::default()
-    }
-    .refresh()
+    maude_sig!(st_fun_syms: asym_enc_fun_dest_sig(), st_rules: asym_enc_dest_rules().into())
 }
 
 pub fn signature_dest_maude_sig() -> MaudeSig {
-    MaudeSig {
-        st_fun_syms: signature_fun_dest_sig(),
-        st_rules: crate::builtin::signature_dest_rules().into(),
-        ..MaudeSig::default()
-    }
-    .refresh()
+    maude_sig!(st_fun_syms: signature_fun_dest_sig(), st_rules: signature_dest_rules().into())
 }
 
 pub fn minimal_maude_sig(diff: bool) -> MaudeSig {
-    MaudeSig {
-        enable_diff: diff,
-        st_fun_syms: pair_fun_sig(),
-        st_rules: crate::builtin::pair_rules().into(),
-        ..MaudeSig::default()
-    }
-    .refresh()
+    maude_sig!(enable_diff: diff, st_fun_syms: pair_fun_sig(), st_rules: pair_rules().into())
 }
 
 pub fn enable_diff_maude_sig() -> MaudeSig {
-    MaudeSig {
-        enable_diff: true,
-        ..MaudeSig::default()
-    }
-    .refresh()
+    maude_sig!(enable_diff: true)
 }
 
 #[cfg(test)]
