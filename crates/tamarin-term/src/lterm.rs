@@ -470,6 +470,14 @@ pub fn frees_list<T: HasFrees>(t: &T) -> Vec<LVar> {
     out
 }
 
+/// `getAny . foldFrees (Any . (v ==))` (Simplification.hs:96): whether `v` is
+/// one of the free `LVar`s of `t`, compared on name, sort and index.
+pub fn occurs_free<T: HasFrees + ?Sized>(v: &LVar, t: &T) -> bool {
+    let mut found = false;
+    t.for_each_free(&mut |w| found |= w == v);
+    found
+}
+
 /// `frees`: deduplicated, sorted free `LVar`s.
 pub fn frees<T: HasFrees>(t: &T) -> Vec<LVar> {
     let mut out = frees_list(t);

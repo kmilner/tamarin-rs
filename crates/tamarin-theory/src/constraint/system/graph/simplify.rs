@@ -168,52 +168,9 @@ fn mentioned_in_unsolved_chains(v: &NodeId, sys: &System) -> bool {
 }
 
 fn mentioned_in_formulas(v: &NodeId, formulas: &[std::sync::Arc<crate::guarded::Guarded>]) -> bool {
-    formulas.iter().any(|g| guarded_mentions_node(v, g))
-}
-
-fn guarded_mentions_node(v: &NodeId, g: &crate::guarded::Guarded) -> bool {
-    use crate::guarded::Guarded;
-    match g {
-        Guarded::Conj(items) | Guarded::Disj(items) => {
-            items.iter().any(|x| guarded_mentions_node(v, x))
-        }
-        Guarded::GGuarded { guards, body, .. } => {
-            // HS `foldFrees` over the `Foldable (Guarded s c)` instance folds
-            // BOTH the guard atoms and the body (Guarded.hs:259-263), so a
-            // free node-sort var occurring only in a guard atom must count.
-            guards.iter().any(|a| atom_mentions_node(v, a)) || guarded_mentions_node(v, body)
-        }
-        Guarded::Atom(at) => atom_mentions_node(v, at),
-    }
-}
-
-fn atom_mentions_node(v: &NodeId, at: &crate::atom::Atom<crate::formula::BLNTerm>) -> bool {
-    use crate::atom::ProtoAtom;
-    use tamarin_term::lterm::BVar;
-    use tamarin_term::term::Term;
-    use tamarin_term::vterm::Lit;
-    let mentions_term = |t: &crate::formula::BLNTerm| -> bool {
-        if let Term::Lit(Lit::Var(BVar::Free(spec))) = t {
-            // HS `notOccursIn proj = not $ getAny $ foldFrees (Any . (v ==))
-            // (proj se)` (Simplification.hs:95-96) folds FULL `LVar` equality
-            // (name AND idx AND sort) over the formula's free vars. Comparing
-            // the NAME ONLY spuriously matches a different index — e.g. node
-            // `#vr.4` matched a formula mentioning `#vr` (idx 0), wrongly
-            // rejecting `#vr.4` from compression and keeping a transfer node
-            // (`d_0_snd`) HS hides. Match name AND idx (both are node-sort
-            // here: `v` is a NodeId and only node vars can equal it).
-            return spec.name == v.name && spec.idx == v.idx;
-        }
-        false
-    };
-    match at {
-        ProtoAtom::Action(t, _) => mentions_term(t),
-        ProtoAtom::Last(t) => mentions_term(t),
-        ProtoAtom::EqE(a, b) | ProtoAtom::Less(a, b) | ProtoAtom::Subterm(a, b) => {
-            mentions_term(a) || mentions_term(b)
-        }
-        ProtoAtom::Syntactic(_) => false,
-    }
+    formulas
+        .iter()
+        .any(|g| tamarin_term::lterm::occurs_free(v, &**g))
 }
 
 // ---------------------------------------------------------------------
