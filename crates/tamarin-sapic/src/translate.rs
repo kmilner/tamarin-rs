@@ -33,6 +33,7 @@ use tamarin_theory::rule::ProtoRuleE;
 use tamarin_theory::sapic::{
     process_at, GoodAnnotation, PlainProcess, Process, ProcessPosition, SapicLVar,
 };
+use tamarin_utils::prelude_ext::nub_on;
 
 use tamarin_theory::sapic::ProcessCombinator;
 
@@ -318,14 +319,7 @@ fn get_unlock_positions(p: &Process<ProcessAnnotation<LVar>, SapicLVar>) -> Vec<
         vec![]
     };
     let raw = tamarin_theory::sapic::pfold_map(p, &mut get_unlock);
-    // `List.nub` — keep first occurrence, preserve order.
-    let mut seen: Vec<LVar> = Vec::new();
-    for v in raw {
-        if !seen.contains(&v) {
-            seen.push(v);
-        }
-    }
-    seen
+    nub_on(&raw, |v| *v)
 }
 
 /// The result of translating a single top-level process.
