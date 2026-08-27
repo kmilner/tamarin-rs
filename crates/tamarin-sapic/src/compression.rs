@@ -17,7 +17,7 @@
 use std::collections::BTreeSet;
 
 use tamarin_theory::fact::{FactTag, LNFact, Multiplicity};
-use tamarin_theory::rule::{ProtoRuleEInfo, Rule, RuleAttributes};
+use tamarin_theory::rule::{ProtoRuleEInfo, Rule};
 
 use crate::base_translation::list_union;
 use crate::facts::{is_let_fact, is_lock_fact, is_out_fact, is_state_fact};
@@ -284,33 +284,78 @@ fn cmp_rule(a: &ERule, b: &ERule) -> std::cmp::Ordering {
 }
 
 fn cmp_info(a: &ProtoRuleEInfo, b: &ProtoRuleEInfo) -> std::cmp::Ordering {
-    // `ProtoRuleEInfo` Ord = (name, attributes, restrictions).  The SAPIC rules
-    // reaching compression carry NO `info.restrictions` (the per-rule `_restrict`
-    // formulas live in `AnnotatedRule.restr`, lifted separately), so comparing by
-    // length is a faithful proxy — `SyntacticLNFormula` has no `Ord` and the
-    // non-empty case never arises here.
+    // `ProtoRuleEInfo` Ord = (name, attributes, restrictions).  The attributes
+    // compare through `Ord RuleAttributes`, which walks HS's own field chain
+    // (Theory/Model/Rule.hs:367-379) and reads the whole process.  The SAPIC
+    // rules reaching compression carry NO `info.restrictions` (the per-rule
+    // `_restrict` formulas live in `AnnotatedRule.restr`, lifted separately), so
+    // comparing by length is a faithful proxy — `SyntacticLNFormula` has no
+    // `Ord` and the non-empty case never arises here.
     a.name
         .cmp(&b.name)
-        .then_with(|| cmp_attrs(&a.attributes, &b.attributes))
+        .then_with(|| a.attributes.cmp(&b.attributes))
         .then_with(|| a.restrictions.len().cmp(&b.restrictions.len()))
 }
 
-/// `Ord RuleAttributes` = `(ruleColor, ruleProcess, ignoreDerivChecks,
-/// isSAPiCRule, role)`.  Color compared by rendered hex (a total order), process
-/// by its top-level rendering.
-fn cmp_attrs(a: &RuleAttributes, b: &RuleAttributes) -> std::cmp::Ordering {
-    use tamarin_theory::pretty_sapic::pretty_sapic_top_level_attr;
-    let color_key = |c: &Option<tamarin_utils::color::Rgb>| {
-        c.as_ref().map(|c| tamarin_utils::color::rgb_to_hex(*c))
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use tamarin_term::lterm::{LSort, LVar};
+    use tamarin_theory::sapic::{
+        PlainProcess, Process, ProcessParsedAnnotation, SapicAction, SapicLVar, SharedProcess,
     };
-    color_key(&a.color)
-        .cmp(&color_key(&b.color))
-        .then_with(|| {
-            let pa = a.process.as_deref().map(|p| pretty_sapic_top_level_attr(p));
-            let pb = b.process.as_deref().map(|p| pretty_sapic_top_level_attr(p));
-            pa.cmp(&pb)
-        })
-        .then_with(|| a.ignore_deriv_checks.cmp(&b.ignore_deriv_checks))
-        .then_with(|| a.is_sapic_rule.cmp(&b.is_sapic_rule))
-        .then_with(|| a.role.cmp(&b.role))
+
+    fn new_action(name: &str, rest: PlainProcess) -> PlainProcess {
+        Process::Action(
+            SapicAction::New(SapicLVar::untyped(LVar::new(name, LSort::Msg, 0))),
+            ProcessParsedAnnotation::empty(),
+            Box::new(rest),
+        )
+    }
+
+    fn rule_with_process(name: &str, p: PlainProcess) -> ERule {
+        let mut info = ProtoRuleEInfo::standard(name);
+        info.attributes.is_sapic_rule = true;
+        info.attributes.process = Some(Arc::new(SharedProcess::new(p)));
+        Rule::new(info, Vec::new(), Vec::new(), Vec::new())
+    }
+
+    /// `set_insert` dedups like HS's `S.Set (Rule ProtoRuleEInfo)`, so two
+    /// rules whose processes differ only BELOW the top node are two elements:
+    /// HS's `Ord RuleAttributes` (Theory/Model/Rule.hs:367-379) compares the
+    /// whole process (Theory/Sapic/Process.hs:121).  A key reading the top node
+    /// alone ties them, and the second rule is then dropped.
+    #[test]
+    fn set_insert_keeps_rules_whose_processes_differ_below_the_top_node() {
+        let null = Process::Null(ProcessParsedAnnotation::empty());
+        let shallow = new_action("x", null.clone());
+        let deep = new_action("x", new_action("y", null));
+        let mut set = Vec::new();
+        set_insert(&mut set, rule_with_process("R", shallow));
+        set_insert(&mut set, rule_with_process("R", deep));
+        assert_eq!(set.len(), 2);
+    }
+
+    /// `cmp_info` walks HS's `(name, attributes, restrictions)`: the name
+    /// outranks the attributes, and a rule with no process sorts before one
+    /// that has one.
+    #[test]
+    fn cmp_info_compares_the_name_before_the_attributes() {
+        let null = Process::Null(ProcessParsedAnnotation::empty());
+        let with_process = rule_with_process("A", null);
+        let mut bare = ProtoRuleEInfo::standard("B");
+        bare.attributes.is_sapic_rule = true;
+        assert_eq!(
+            cmp_info(&with_process.info, &bare),
+            std::cmp::Ordering::Less,
+            "the name decides before the attributes"
+        );
+        let no_process = ProtoRuleEInfo::standard("A");
+        assert_eq!(
+            cmp_info(&no_process, &with_process.info),
+            std::cmp::Ordering::Less,
+            "no process ranks before some process"
+        );
+    }
 }
