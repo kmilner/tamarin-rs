@@ -22,10 +22,17 @@ use tamarin_term::lterm::{LVar, Name};
 use tamarin_term::subst::SubstView;
 use tamarin_term::vterm::VTerm;
 
-use crate::constraint::solver::reduction::{FP_FACT_DESCENTS, FP_FACT_SKIPS};
 use crate::fact::LNFact;
 use crate::guarded::Guarded;
 use crate::tools::equation_store::LNSubst;
+
+/// Fact descents the [`Apply`] instance reaches, under `TAM_RS_FP_STATS`;
+/// `constraint::solver::reduction` prints them.
+pub(crate) static FP_FACT_DESCENTS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+/// Descents the bloom fast path skipped (`bloom & dom_bloom == 0`).
+pub(crate) static FP_FACT_SKIPS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
 
 /// One whole-system substitution pass.
 ///

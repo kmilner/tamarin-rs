@@ -639,8 +639,8 @@ impl<'ctx> Reduction<'ctx> {
             use std::sync::atomic::Ordering::Relaxed;
             let calls = FP_STATS_CALLS.fetch_add(1, Relaxed) + 1;
             if calls % 5_000 == 0 {
-                let d = FP_FACT_DESCENTS.load(Relaxed);
-                let s = FP_FACT_SKIPS.load(Relaxed);
+                let d = crate::apply::FP_FACT_DESCENTS.load(Relaxed);
+                let s = crate::apply::FP_FACT_SKIPS.load(Relaxed);
                 eprintln!(
                     "[FP_STATS] fact_descents={} fact_skips={} ({:.1}%)",
                     d,
@@ -4391,12 +4391,6 @@ impl Drop for FpSkipDisableGuard {
 fn fp_stats_enabled() -> bool {
     tamarin_utils::env_gate!("TAM_RS_FP_STATS")
 }
-/// Fact descents the `Apply` instance reaches.
-pub(crate) static FP_FACT_DESCENTS: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(0);
-/// Descents the bloom fast-path skipped (`bloom & dom == 0`).
-pub(crate) static FP_FACT_SKIPS: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(0);
 /// `subst_system` call counter for the FP-stats print cadence.
 pub(crate) static FP_STATS_CALLS: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
