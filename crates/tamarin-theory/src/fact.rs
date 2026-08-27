@@ -405,8 +405,9 @@ impl<T: HasFrees + Clone> HasFrees for Fact<T> {
 
 /// HS `Apply s t => Apply s (Fact t)` (Theory/Model/Fact.hs:196-197): the
 /// substitution reaches the fact's terms.  A rewritten fact goes through the
-/// computing constructor, which derives both cached fingerprints from the new
-/// terms — the free variables have changed, so the old ones do not carry over.
+/// computing constructor, which derives both cached fingerprints from the
+/// rewritten terms: their free variables differ from this fact's, so this
+/// fact's fingerprints do not describe them.
 impl Apply<SystemSubst<'_>> for LNFact {
     fn apply_changed(&self, subst: &SystemSubst<'_>) -> Option<Self> {
         if subst.skips_fact(self) {

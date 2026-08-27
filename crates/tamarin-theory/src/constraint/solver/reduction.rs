@@ -995,6 +995,14 @@ impl<'ctx> Reduction<'ctx> {
         // rules' fact terms (mirrors HS's `M.map . apply` AFTER
         // substNodeIds).  A rule the substitution does not touch keeps its
         // value, sharing its `Arc`s with no rebuild.
+        //
+        // The rewritten facts are NOT normalised: HS's `substSystem`
+        // (Reduction.hs:571-595) does not, and `normDG` (System.hs:1284-1288)
+        // runs only inside `impliedOrInitial` (System.hs:1279-1282) and the
+        // diff-mode mirror.  A normalise here would reduce e.g.
+        // `checksign(sign(m,k), pk(k))` to `m`, losing the head shape
+        // source-case matching reads, and would erase the non-normal term
+        // shapes `has_non_normal_terms` contradicts on.
         for (_, rule) in new_nodes.iter_mut() {
             if let Some(new_rule) = rule.apply_changed(&pass) {
                 nodes_value_changed = true;
@@ -1297,103 +1305,16 @@ impl<'ctx> Reduction<'ctx> {
         // return: set true iff a formula/solved-formula/lemma value changed.
         let mut formulas_value_changed = false;
         if !formula_subst.is_empty() {
-            // Iterate per-formula until subst_guarded reaches a fixpoint
-            // — eq-store entries can form chains (e.g. `x:1 → x:13`,
-            // `x:13 → ~n:28`); a single application only reduces by one
-            // step.  Haskell's `substSystem` operates on a transitively-
-            // closed substitution by construction; our `compose` is
-            // closed at insert time but later `restrict_*` / cleanup
-            // passes can prune intermediate entries leaving a
-            // partially-applied formula-subst.  Bounded loop (16 steps)
-            // to defend against degenerate cycles.
-            // Copy-on-write: returns `None` when the formula is wholly
-            // unchanged (the subst touches no leaf), so the caller skips the
-            // store entirely with zero allocation.  This replaces two
-            // unconditional deep rebuilds (clone + subst) per stored formula
-            // per `subst_system` call — the dominant residual guarded-clone
-            // cost after the dedup-canon hoist.  Byte-identical:
-            // `subst_guarded_cow == None` ⇔ the original loop broke immediately
-            // (`nxt == cur`).
-            let apply_to_fixpoint = |f: &Guarded| -> Option<Guarded> {
-                let mut cur = crate::guarded::subst_guarded_cow(f, &formula_subst)?;
-                // One subst pass already applied; continue to the fixpoint
-                // (the original ran up to 16 passes total).
-                for _ in 0..15 {
-                    match crate::guarded::subst_guarded_cow(&cur, &formula_subst) {
-                        None => break,
-                        Some(nxt) => cur = nxt,
-                    }
-                }
-                // Re-normalise the connective structure — the stored-state
-                // substitution boundary of HS 150f5eba (substFormulas =
-                // `S.map (normaliseStoredFormula . apply subst)`): a subst
-                // that identifies two variables can make sibling conjuncts
-                // equal, and the raw rebuild keeps both copies.
-                Some(crate::guarded::normalise_stored_formula_owned(cur))
-            };
-            // Change bit for the conditional cache invalidation — the
-            // `dedup_preserve_order` calls below drop only formulas EQUAL
-            // to kept ones, which cannot change the max free-var idx.
-            // (Declared above the enclosing `if` for the `raised` return.)
-            for f in self.sys.formulas_mut_untracked().iter_mut() {
-                if let Some(new_f) = apply_to_fixpoint(f) {
-                    if new_f != **f {
-                        *f = std::sync::Arc::new(new_f);
-                        self.changed = ChangeIndicator::Changed;
-                        formulas_value_changed = true;
-                    }
-                }
-            }
-            for f in self.sys.solved_formulas_mut_untracked().iter_mut() {
-                if let Some(new_f) = apply_to_fixpoint(f) {
-                    if new_f != **f {
-                        *f = std::sync::Arc::new(new_f);
-                        self.changed = ChangeIndicator::Changed;
-                        formulas_value_changed = true;
-                    }
-                }
-            }
-            for f in self.sys.content_mut_untracked().lemmas.iter_mut() {
-                if let Some(new_f) = apply_to_fixpoint(f) {
-                    if new_f != **f {
-                        *f = std::sync::Arc::new(new_f);
-                        self.changed = ChangeIndicator::Changed;
-                        formulas_value_changed = true;
-                    }
-                }
-            }
+            formulas_value_changed |=
+                subst_stored_formulas(self.sys.formulas_mut_untracked(), &formula_subst);
+            formulas_value_changed |=
+                subst_stored_formulas(self.sys.solved_formulas_mut_untracked(), &formula_subst);
+            formulas_value_changed |=
+                subst_stored_formulas(&mut self.sys.content_mut_untracked().lemmas, &formula_subst);
             if formulas_value_changed {
                 self.sys.invalidate_max_var_idx_cache();
+                self.changed = ChangeIndicator::Changed;
             }
-            // HS-faithful: `substFormulas`/`substSolvedFormulas`/`substLemmas`
-            // apply via `Apply LNSubst (Set Guarded)` (Reduction.hs:598-607, see line 605),
-            // which in Haskell is `S.map (apply subst)`.  `S.map` rebuilds the
-            // Set, dropping entries that collide post-substitution.  Without
-            // this dedup, RS's Vec retains structurally-identical formulas
-            // produced by substitution-induced equality — e.g. two
-            // `impliedFormulas` matches that produced distinct
-            // `Ex.PCR_Write(h(<'pcr0',~n#1>))` and
-            // `Ex.PCR_Write(h(<'pcr0',~n#0>))` formulas which collapse to
-            // the same `Ex.PCR_Write(h(<'pcr0',~n#0>))` once eq_store binds
-            // `~n#1 → ~n#0`.  HS dedups via Set semantics; the dedup below
-            // mirrors that.
-            //
-            // Concrete trigger: Envelope.spthy::Secret_and_Denied_exclusive
-            // at path `/.../PCR_Quote/PCR_Extend/Alice2` — two distinct
-            // `Ex.PCR_Write(h(<'pcr0',~n#1>))` / `...~n#0` formulas collapse
-            // to the same formula once eq_store binds `~n#1 → ~n#0`; without
-            // dedup, both survive in RS's Vec though HS's Set stores one.
-            //
-            // Note: the dedup alone does not close the Envelope proof-tree
-            // diff — the divergent goal pick at the cascading
-            // `/Alice2/CreateLockedKey` state involves additional state
-            // differences (HS has an Action(PCR_Write('pcr0')) goal RS lacks;
-            // upstream the smart-ranker tie-breaker on Premise(PCR/1) NRs
-            // also differs).  It is nonetheless load-bearing for many other
-            // lemmas via formula-count parity.
-            dedup_preserve_order(self.sys.formulas_mut_untracked());
-            dedup_preserve_order(self.sys.solved_formulas_mut_untracked());
-            dedup_preserve_order(&mut self.sys.content_mut_untracked().lemmas);
         }
         // 5b. SubtermStore substitution — port of Haskell's
         // `instance Apply LNSubst SubtermStore` (`SubtermStore.hs:560-561`):
@@ -1413,13 +1334,8 @@ impl<'ctx> Reduction<'ctx> {
         // verdict on `Sinvalid`-class lemmas (HS reports `simplify, by
         // contradiction /* contradictory subterm store */`).
         //
-        // Use a direct subst application (not the `apply_term` closure
-        // above) so the borrow of `self.maude` from `apply_term` doesn't
-        // outlive the `self.insert_goal_with_loop_flag` call above.  HS's
-        // `Apply LNSubst SubtermStore` doesn't normalise — neither do
-        // we.  (`apply_term`'s normalise path is only used when the
-        // eager-normalise env var is set; HS-default is non-normalising.)
-        // COW probe + compare-on-rebuild: `apply_changed == None` means
+        // HS's `Apply LNSubst SubtermStore` does not normalise, and neither
+        // does this.  COW probe + compare-on-rebuild: `apply_changed == None` means
         // applying the subst leaves the term unchanged, so an `!=` compare
         // could not hold — both the pre-apply clone and the deep compare
         // are skipped on unchanged terms.  On `Some`, the value compare is
@@ -1964,12 +1880,8 @@ impl<'ctx> Reduction<'ctx> {
                 // pre-normal is rule-variant computation (`variants in
                 // MSG` yields reduced action terms) plus eq-store
                 // bindings being Maude-unifier outputs.  HS's
-                // `substSystem`/`setNodes` deliberately does NOT
-                // normalise — documented at the `apply_to_fact` comment
-                // above (eager-normalise in `substNodes` was tried and
-                // reverted: it lost source-case head shapes in test4 and
-                // blocked the `hasNonNormalTerms` contradiction in
-                // Responder_secrecy).
+                // `substSystem`/`setNodes` does NOT normalise, as the node
+                // section of `subst_system_once` records.
                 //
                 // Because Rust does not yet compute reduced rule variants,
                 // a fact's terms can still carry non-normal shapes (e.g.
@@ -3875,6 +3787,58 @@ fn make_fresh_rule(m: tamarin_term::lterm::LNTerm) -> RuleACInst {
 /// formulas become structurally equal after substitution, `S.map` rebuilds
 /// the Set and only one survives.  Our `Vec<Guarded>` storage does NOT
 /// auto-dedup, so we need to mirror this explicitly after subst.
+/// One stored-formula list under `subst`: HS's `substFormulas`,
+/// `substSolvedFormulas` and `substLemmas` (Reduction.hs:598-607, see line
+/// 605), whose `Apply LNSubst (Set Guarded)` is `S.map (apply subst)`.
+/// Answers whether any formula's VALUE changed.
+///
+/// Each formula is re-substituted until `subst_guarded` reaches a fixpoint:
+/// eq-store entries can form chains (`x:1 → x:13`, `x:13 → ~n:28`) and a
+/// single application only reduces by one step.  Haskell's `substSystem`
+/// operates on a transitively closed substitution by construction; the port's
+/// `compose` is closed at insert time, but a later `restrict_*` / cleanup pass
+/// can prune intermediate entries and leave a partially applied
+/// formula-subst.  The bound defends against a degenerate cycle.  Each
+/// rewritten formula is then re-normalised — the stored-state substitution
+/// boundary of HS 150f5eba (`substFormulas = S.map (normaliseStoredFormula .
+/// apply subst)`): a subst that identifies two variables can make sibling
+/// conjuncts equal, and the raw rebuild keeps both copies.
+///
+/// `S.map` rebuilds the Set, dropping entries that collide post-substitution,
+/// which the final dedup mirrors.  Without it the `Vec` retains
+/// structurally identical formulas produced by substitution-induced equality
+/// — e.g. Envelope.spthy::Secret_and_Denied_exclusive at path
+/// `/…/PCR_Quote/PCR_Extend/Alice2`, where distinct
+/// `Ex.PCR_Write(h(<'pcr0',~n#1>))` and `…~n#0` formulas collapse once
+/// eq_store binds `~n#1 → ~n#0`.
+fn subst_stored_formulas(
+    store: &mut Vec<std::sync::Arc<Guarded>>,
+    subst: &crate::tools::equation_store::LNSubst,
+) -> bool {
+    let mut changed = false;
+    for f in store.iter_mut() {
+        // Copy-on-write: `subst_guarded_cow == None` means the subst touches
+        // no leaf, which is exactly where the fixpoint loop would break
+        // immediately, so the formula is left untouched with no allocation.
+        let Some(mut cur) = crate::guarded::subst_guarded_cow(f, subst) else {
+            continue;
+        };
+        for _ in 0..15 {
+            match crate::guarded::subst_guarded_cow(&cur, subst) {
+                None => break,
+                Some(nxt) => cur = nxt,
+            }
+        }
+        let new_f = crate::guarded::normalise_stored_formula_owned(cur);
+        if new_f != **f {
+            *f = std::sync::Arc::new(new_f);
+            changed = true;
+        }
+    }
+    dedup_preserve_order(store);
+    changed
+}
+
 fn dedup_preserve_order<T: PartialEq>(v: &mut Vec<T>) {
     // Keep the FIRST occurrence of each distinct element (preserving
     // first-occurrence order).  Two-pointer in-place compaction: for each
