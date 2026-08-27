@@ -39,7 +39,7 @@ use tamarin_term::subterm_rule::CtxtStRule;
 use tamarin_term::vterm::{Lit, VTerm};
 use tamarin_theory::formula::apply_subst;
 use tamarin_theory::sapic::{
-    subst_fact, subst_term, Process, ProcessCombinator, SapicLVar, SapicTerm,
+    apply_match_vars, subst_fact, subst_term, Process, ProcessCombinator, SapicLVar, SapicTerm,
 };
 
 use crate::annotation::{AnnotatedProcess, ProcessAnnotation};
@@ -295,29 +295,6 @@ fn apply_subst_process(
     }
 }
 
-/// `applyMatchVars subst vs` (Sapic/Process.hs:304-309): rewrite a set of match
-/// variables under a substitution.  Each `v` is replaced by the variables of
-/// `subst(v)` if `v` is in the substitution's domain, else kept as-is.
-fn apply_match_vars(
-    subst: &Subst<Name, SapicLVar>,
-    vs: &std::collections::BTreeSet<SapicLVar>,
-) -> std::collections::BTreeSet<SapicLVar> {
-    let mut out = std::collections::BTreeSet::new();
-    for v in vs {
-        match subst.image_of(v) {
-            Some(img) => {
-                for w in tamarin_term::vterm::vars_vterm_in_order(img) {
-                    out.insert(w);
-                }
-            }
-            None => {
-                out.insert(v.clone());
-            }
-        }
-    }
-    out
-}
-
 fn subst_action(
     subst: &Subst<Name, SapicLVar>,
     ac: tamarin_theory::sapic::SapicAction<SapicLVar>,
@@ -337,9 +314,8 @@ fn subst_action(
         } => A::ChIn {
             chan: chan.map(|t| subst_term(subst, &t)),
             msg: subst_term(subst, &msg),
-            // HS `applyMatchVars subst vs` (Sapic/Process.hs:304-309, 320): a match var
-            // `v` whose image under `subst` is a (compound) term is replaced by
-            // ALL the variables of that image; an undefined `v` is kept.  So a
+            // HS special-cases `ChIn` in `Apply SapicSubst (SapicAction
+            // SapicLVar)` (Sapic/Process.hs:319-321) to reach this rewrite: a
             // `let`-bound match var `=t` (where `t = <a,'test'>`) becomes the
             // match-var set `{a}`.
             match_vars: apply_match_vars(subst, &match_vars),

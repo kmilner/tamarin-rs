@@ -40,8 +40,8 @@ use crate::process_convert::{
     action as convert_action, combinator as convert_combinator, term as convert_term, ConvertError,
 };
 use crate::sapic::{
-    subst_fact, subst_term, PlainProcess, Process, ProcessCombinator, SapicAction, SapicLVar,
-    SapicSubst, SapicTerm,
+    apply_match_vars_with, subst_fact, subst_term, PlainProcess, Process, ProcessCombinator,
+    SapicAction, SapicLVar, SapicSubst, SapicTerm,
 };
 
 /// Look up each process definition by name (HS `lookupProcessDef`,
@@ -250,16 +250,15 @@ fn apply_m_action(
             Ok(SapicAction::ChIn {
                 chan: chan.map(|t| subst_term(subst, &t)),
                 msg: subst_term(subst, &msg),
-                // HS `apply subst (ChIn mt t vs) = ChIn … (applyMatchVars subst vs)`
-                // (Sapic/Process.hs:319-321, see line 320): each match var `v` is replaced by the
-                // variables of its image `subst(v)` (or kept if undefined).  When
-                // inlining a call like `Q(h(a))` into `in(<y, =x>)`, the param
-                // match-var `x` becomes the vars of `h(a)` (= `{a}`) so that
+                // HS special-cases `ChIn` in `Apply SapicSubst (SapicAction
+                // SapicLVar)` (Sapic/Process.hs:319-321) to reach this rewrite.
+                // When inlining a call like `Q(h(a))` into `in(<y, =x>)`, the
+                // param match-var `x` becomes the vars of `h(a)` (= `{a}`) so that
                 // `bindingsAct = frees(<y,h(a)>) \ {a} = {y}` — i.e. the already-
                 // bound `a` is NOT rebound (Bindings.hs:21-26, see line 24).  Without this the
                 // stale `{x}` would leave `a` looking unbound, rebinding it to a
                 // fresh `a.N` and adding a spurious state-fact variable.
-                match_vars: apply_match_vars(subst, &match_vars),
+                match_vars: apply_match_vars_with(|v| call_image(subst, v), &match_vars),
             })
         }
         SapicAction::Insert(a, b) => Ok(SapicAction::Insert(
@@ -341,32 +340,19 @@ fn apply_m_comb(
     }
 }
 
-/// `applyMatchVars subst vs` (Sapic/Process.hs:304-309): `fromList . concatMap
-/// extractVars . toList` where `extractVars v = maybe [v] varsVTerm (imageOf
-/// subst v)`.  A match var `v` is replaced by ALL the variables of its image
-/// `subst(v)`; an undefined `v` is kept.  Probes both the typed and untyped
-/// substitution keys (the call subst carries both forms).
-fn apply_match_vars(
-    subst: &SapicSubst,
-    vs: &std::collections::BTreeSet<SapicLVar>,
-) -> std::collections::BTreeSet<SapicLVar> {
-    let mut out = std::collections::BTreeSet::new();
-    for v in vs {
-        let img = subst
-            .image_of(v)
-            .or_else(|| subst.image_of(&SapicLVar::untyped(v.var)));
-        match img {
-            Some(t) => {
-                for w in tamarin_term::vterm::vars_vterm_in_order(t) {
-                    out.insert(w);
-                }
-            }
-            None => {
-                out.insert(v.clone());
-            }
-        }
-    }
-    out
+/// The image of `v` under the parameter substitution.  `extend_sup`
+/// (Theory/Text/Parser/Sapic.hs:299-306) keys a typed formal under both its
+/// typed and its untyped spelling, so a variable resolves against either.  A
+/// variable the substitution does not define stands for itself.
+///
+/// This is the `f . varTerm` that [`apply_match_vars_with`] (HS
+/// `applyMatchVars'`, Theory/Sapic/Process.hs:313-317) drives.
+fn call_image(subst: &SapicSubst, v: &SapicLVar) -> SapicTerm {
+    subst
+        .image_of(v)
+        .or_else(|| subst.image_of(&SapicLVar::untyped(v.var)))
+        .cloned()
+        .unwrap_or_else(|| tamarin_term::vterm::var_term(v.clone()))
 }
 
 #[cfg(test)]

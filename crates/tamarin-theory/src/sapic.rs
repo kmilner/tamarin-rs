@@ -16,9 +16,10 @@
 //!   The `toLNTerm` converter is not ported yet.
 //! - `Theory.Sapic.Annotation` — `ProcessParsedAnnotation` and the
 //!   `GoodAnnotation` trait
-//! - `Theory.Sapic.Process` — the `Process<Ann, V>` data type and
-//!   `SapicAction`/`ProcessCombinator`. The Haskell traversal helpers
-//!   (`foldProcess`, `traverseTermsAction`, etc.) are not ported.
+//! - `Theory.Sapic.Process` — the `Process<Ann, V>` data type,
+//!   `SapicAction`/`ProcessCombinator`, `pfoldMap` and the `applyMatchVars`
+//!   pair. The Haskell traversal helpers (`foldProcess`,
+//!   `traverseTermsAction`, etc.) are not ported.
 
 use std::collections::BTreeSet;
 
@@ -477,6 +478,46 @@ pub fn subst_fact(subst: &SapicSubst, f: &SapicLNFact) -> SapicLNFact {
     f.map_ref(|t| subst_term(subst, t))
 }
 
+/// `applyMatchVars subst vs` (Theory/Sapic/Process.hs:304-309): a match
+/// variable is replaced by every variable of its image under `subst`, and kept
+/// as it is when `subst` does not define it.  Matching `=t` against a
+/// substituted compound term binds the term's own variables instead of the
+/// match variable that no longer occurs.
+pub fn apply_match_vars<C, V>(subst: &Subst<C, V>, vs: &BTreeSet<V>) -> BTreeSet<V>
+where
+    C: Ord + Clone,
+    V: Ord + Clone,
+{
+    let mut out = BTreeSet::new();
+    for v in vs {
+        match subst.image_of(v) {
+            Some(img) => out.extend(tamarin_term::vterm::vars_vterm_in_order(img)),
+            None => {
+                out.insert(v.clone());
+            }
+        }
+    }
+    out
+}
+
+/// `applyMatchVars' f vs` (Theory/Sapic/Process.hs:313-317): the same rewrite
+/// driven by a caller-supplied rewrite instead of a substitution.  HS applies
+/// `f` to `varTerm v` and keeps the variables of the result, so the parameter
+/// here is that composite `f . varTerm`.
+pub fn apply_match_vars_with<C, V>(
+    mut f: impl FnMut(&V) -> VTerm<C, V>,
+    vs: &BTreeSet<V>,
+) -> BTreeSet<V>
+where
+    V: Ord + Clone,
+{
+    let mut out = BTreeSet::new();
+    for v in vs {
+        out.extend(tamarin_term::vterm::vars_vterm_in_order(&f(v)));
+    }
+    out
+}
+
 // =============================================================================
 // Action / combinator predicates (mirroring Sapic.ProcessUtils)
 //
@@ -691,6 +732,36 @@ mod tests {
         let p = lock_action("k");
         assert!(process_contains(&p, is_lock));
         assert!(!process_contains(&null_proc(), is_lock));
+    }
+
+    /// A match variable stands for whatever its image binds: a compound image
+    /// contributes all of its variables, and an image that is itself a
+    /// variable contributes that one. A variable the substitution does not
+    /// define survives. `apply_match_vars_with` reaches the same result
+    /// through a caller-supplied rewrite, which is what lets a caller resolve
+    /// a variable against a key spelling of its own.
+    #[test]
+    fn apply_match_vars_replaces_a_variable_by_the_variables_of_its_image() {
+        use tamarin_term::term::f_app_list;
+        use tamarin_term::vterm::var_term;
+
+        let v = |n: &str| SapicLVar::untyped(LVar::new(n, LSort::Msg, 0));
+        let pair: SapicTerm = f_app_list(vec![var_term(v("a")), var_term(v("b"))]);
+        let subst = SapicSubst::from_list([(v("x"), pair), (v("y"), var_term(v("c")))]);
+        let vs: BTreeSet<SapicLVar> = [v("x"), v("y"), v("z")].into_iter().collect();
+        let want: BTreeSet<SapicLVar> = [v("a"), v("b"), v("c"), v("z")].into_iter().collect();
+
+        assert_eq!(apply_match_vars(&subst, &vs), want);
+        assert_eq!(
+            apply_match_vars_with(
+                |w| subst
+                    .image_of(w)
+                    .cloned()
+                    .unwrap_or_else(|| var_term(w.clone())),
+                &vs
+            ),
+            want
+        );
     }
 
     #[test]
