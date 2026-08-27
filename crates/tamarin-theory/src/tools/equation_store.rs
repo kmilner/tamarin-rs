@@ -2448,21 +2448,6 @@ impl EquationStore {
                     }
                     m
                 };
-                // Find min idx across all RHS terms' vars.
-                let rhs_min: Option<u64> = {
-                    use tamarin_term::lterm::HasFrees;
-                    let mut min: Option<u64> = None;
-                    for (_, t) in &bindings {
-                        t.for_each_free(&mut |v| {
-                            min = Some(min.map_or(v.idx, |m| m.min(v.idx)));
-                        });
-                    }
-                    min
-                };
-                // Apply uniform shift to all RHS terms.  Haskell-faithful:
-                // shift = freshStart - rhs_min, where freshStart = avoid_max + 1.
-                // Shift may be negative (rhs already above avoid); use i128.
-                //
                 // HS `applyBound` (EquationStore.hs `applyEqStore`):
                 //   ran = renameAvoiding (map snd slist) avoidSet
                 // where `renameAvoiding s t = evalFreshAvoiding (rename s) t`
@@ -2470,47 +2455,21 @@ impl EquationStore {
                 // SINGLE uniform monotone shift over the WHOLE range list:
                 //   freshStart <- freshIdents (succ (maxVarIdx - minVarIdx))
                 //   mapFrees (Monotone $ incVar (freshStart - minVarIdx))
-                // seeded by `avoid avoidSet = succ (max idx in avoidSet)`.
-                // So shift = (avoid_max + 1) - minVarIdx applied to EVERY
-                // free var with NO exclusion — `Monotone incVar` has no
-                // special case for any var.  Do NOT preserve
-                // `new_subst_range_vars` (system vars): excluding them from
-                // the shift causes two distinct variant cases to collapse
-                // onto the same witness idx (the `~k.30` collision in
-                // Responder_secrecy), because the preserved system var keeps
-                // its (shared) idx while the other range vars shift away.
-                // Apply HS's plain uniform shift.
-                let renamed_rhs: Vec<LNTerm> = if let Some(min) = rhs_min {
-                    let fresh_start: i128 = avoid_max as i128 + 1;
-                    let shift: i128 = fresh_start - (min as i128);
-                    if shift != 0 {
-                        use tamarin_term::lterm::HasFrees;
-                        bindings
-                            .iter()
-                            .map(|&(_, t)| {
-                                t.clone().map_free(&mut |v| {
-                                    let new_idx: i128 = (v.idx as i128) + shift;
-                                    let new_idx_u64 = if new_idx < 0 {
-                                        0
-                                    } else if new_idx > u64::MAX as i128 {
-                                        u64::MAX
-                                    } else {
-                                        new_idx as u64
-                                    };
-                                    LVar {
-                                        name: v.name,
-                                        sort: v.sort,
-                                        idx: new_idx_u64,
-                                    }
-                                })
-                            })
-                            .collect()
-                    } else {
-                        bindings.iter().map(|&(_, t)| t.clone()).collect()
-                    }
-                } else {
-                    bindings.iter().map(|&(_, t)| t.clone()).collect()
-                };
+                // seeded by `avoid avoidSet = succ (max idx in avoidSet)`,
+                // which `FastFreshState::seeded` supplies from the
+                // `avoid_max` computed above.  The shift reaches EVERY free
+                // var with NO exclusion — `Monotone incVar` has no special
+                // case for any var.  Do NOT preserve `new_subst_range_vars`
+                // (system vars): excluding them from the shift causes two
+                // distinct variant cases to collapse onto the same witness
+                // idx (the `~k.30` collision in Responder_secrecy), because
+                // the preserved system var keeps its (shared) idx while the
+                // other range vars shift away.
+                let mut fresh = tamarin_utils::fresh::FastFreshState::seeded(avoid_max + 1);
+                let renamed_rhs: Vec<LNTerm> = tamarin_term::lterm::rename(
+                    bindings.iter().map(|&(_, t)| t.clone()).collect::<Vec<_>>(),
+                    &mut fresh,
+                );
                 // Build equations.  LHS = `apply new_subst (Var lv)`,
                 // RHS = renamed `t`.
                 let eqs: Vec<Equal<LNTerm>> = bindings
@@ -2588,6 +2547,16 @@ impl EquationStore {
                 // diagnose witness idx divergence vs HS (split_case ordering).
                 let detail_dbg = aes_dbg_detail();
                 if detail_dbg {
+                    let rhs_min = {
+                        use tamarin_term::lterm::HasFrees;
+                        let mut min: Option<u64> = None;
+                        for (_, t) in &bindings {
+                            t.for_each_free(&mut |v| {
+                                min = Some(min.map_or(v.idx, |m| m.min(v.idx)));
+                            });
+                        }
+                        min
+                    };
                     eprintln!(
                         "[rs-aes-detail] avoid_max={} rhs_min={:?} max_idx={} counter_before={}",
                         avoid_max,
