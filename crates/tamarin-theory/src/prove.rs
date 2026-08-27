@@ -575,6 +575,26 @@ fn lemma_source_kind(lemma: &crate::theory::Lemma) -> SourceKind {
     }
 }
 
+/// HS `inductionHint` (ClosedTheory.hs:119-121): a lemma tagged
+/// `[use_induction]` (`InvariantLemma`) or `[sources]` (`SourceLemma`) is
+/// proved with `pcUseInduction = UseInduction`, so its first proof method is
+/// Induction; every other lemma avoids it.
+pub fn induction_hint(
+    lemma: &crate::theory::Lemma,
+) -> crate::constraint::solver::context::UseInduction {
+    use crate::constraint::solver::context::UseInduction;
+    if lemma.attributes.iter().any(|a| {
+        matches!(
+            a,
+            crate::theory::LemmaAttr::UseInduction | crate::theory::LemmaAttr::Sources
+        )
+    }) {
+        UseInduction::UseInduction
+    } else {
+        UseInduction::AvoidInduction
+    }
+}
+
 /// Gather the `[reuse]` lemmas declared BEFORE `lemma_name`, mirroring HS
 /// `gatherReusableLemmas $ L.get sSourceKind sys` (CloseRule.hs:179-188):
 ///
@@ -1166,15 +1186,7 @@ pub fn prove_system_in_session(
     // including the delta==0 cache-write gate.
     let cache_disabled = tamarin_utils::env_gate!("TAM_RS_NO_SOURCE_CACHE");
     session.restore_or_saturate_sources(&mut ctx, source_key, cache_disabled);
-    let force_induction = lemma.attributes.iter().any(|a| {
-        matches!(
-            a,
-            crate::theory::LemmaAttr::UseInduction | crate::theory::LemmaAttr::Sources
-        )
-    });
-    if force_induction {
-        ctx.use_induction = crate::constraint::solver::context::UseInduction::UseInduction;
-    }
+    ctx.use_induction = induction_hint(lemma);
     Ok(run_proof_search(&ctx, sys, proof_bound))
 }
 
@@ -1255,15 +1267,7 @@ fn prove_lemma_in_session_mode(
         // source; for the bare-sorry early return it never fires.
         session.restore_or_saturate_sources(&mut ctx, source_key, cache_disabled);
     }
-    let force_induction = lemma.attributes.iter().any(|a| {
-        matches!(
-            a,
-            crate::theory::LemmaAttr::UseInduction | crate::theory::LemmaAttr::Sources
-        )
-    });
-    if force_induction {
-        ctx.use_induction = crate::constraint::solver::context::UseInduction::UseInduction;
-    }
+    ctx.use_induction = induction_hint(lemma);
     // Skeleton replay: same logic as in `prove_lemma_with_pool_file_heuristic`.
     if let Some(tree) = lemma.proof.clone() {
         if auto_prove {
@@ -1495,20 +1499,7 @@ pub fn prove_lemma_with_pool_file_heuristic(
     // ctx is per-lemma.
     ctx.typing_assumptions = typing_assumptions;
     ctx.ensure_saturated();
-    // Honour the `[use_induction]` and `[sources]` attributes by
-    // forcing the first proof method to be Induction. Haskell's
-    // `ClosedTheory.hs` flips `pcUseInduction = UseInduction` for
-    // `SourceLemma` and `InvariantLemma`-tagged lemmas — sources
-    // proofs essentially always run via induction.
-    let force_induction = lemma.attributes.iter().any(|a| {
-        matches!(
-            a,
-            crate::theory::LemmaAttr::UseInduction | crate::theory::LemmaAttr::Sources
-        )
-    });
-    if force_induction {
-        ctx.use_induction = crate::constraint::solver::context::UseInduction::UseInduction;
-    }
+    ctx.use_induction = induction_hint(lemma);
 
     // HS-faithful `replaceSorryProver` (Theory/Proof.hs:642-650):
     // when the lemma carries a parsed skeleton, walk that skeleton and

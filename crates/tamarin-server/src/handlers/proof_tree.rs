@@ -290,16 +290,7 @@ impl ProofState {
         for lemma in typed.lemmas() {
             let lname = lemma.name.clone();
             // --- Per-lemma search settings (see `LemmaSearchSettings`) ------
-            // `use_induction`: forced on by `[use_induction]` or `[sources]`.
-            let use_induction = if lemma
-                .attributes
-                .iter()
-                .any(|a| matches!(a, LemmaAttr::UseInduction | LemmaAttr::Sources))
-            {
-                UseInduction::UseInduction
-            } else {
-                UseInduction::AvoidInduction
-            };
+            let use_induction = tamarin_theory::prove::induction_hint(lemma);
             // `heuristic`: per-lemma `[heuristic=..]` > theory `heuristic:`.
             // There is no CLI `--heuristic` on the web path, so the CLI
             // override branch of `prove::prove_lemma` is skipped entirely.
