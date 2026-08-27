@@ -170,7 +170,7 @@ pub struct SharedMaudeCaches {
     /// answer.
     unifiable: Mutex<tamarin_utils::FastMap<Vec<(LNTerm, LNTerm)>, bool>>,
     /// Memo for the RAW REPLY BYTES of the witness-producing Maude commands
-    /// (`unify in MSG`, `variant unify in MSG`, `get variants in MSG`, and the
+    /// (`unify in MSG`, `get variants in MSG`, and the
     /// three `match in MSG` matchers), keyed by the *exact command
     /// byte-string*.  Maude's reply to one of these
     /// commands is a deterministic, command-local function of the theory
@@ -278,8 +278,8 @@ impl MaudeProcessInner {
         // `TAM_DBG_MAUDE_IO=1` — truncated trace (200 chars).
         // `TAM_DBG_MAUDE_IO=full` — full command + response, for HS↔RS
         //   side-by-side Maude command comparison.
-        // `TAM_DBG_MAUDE_IO_FILTER=unify` — only dump unify/variant unify
-        //   calls (suppresses set/show/reduce noise).  Matches HS's
+        // `TAM_DBG_MAUDE_IO_FILTER=unify` — only dump unify calls
+        //   (suppresses set/show/reduce noise).  Matches HS's
         //   `TAM_HS_DBG_MAUDE_IO` semantics.
         let &(trace_enabled, trace_full, ref filter) = maude_io_trace_config();
         // Only materialise the full command string when something will
@@ -1095,52 +1095,6 @@ impl MaudeHandle {
         Ok(renamed)
     }
 
-    /// Variant unification — uses Maude's `variant unify in M : t1 =? t2 .`
-    /// which unifies modulo the `[variant]` equations from the builtin
-    /// theory (e.g. `verify(sign(m,sk), m, pk(sk)) = true`). Standard
-    /// `unify` doesn't apply these eqs; variant unify does narrowing.
-    ///
-    /// Used as a fallback for chain-edge unification when the standard
-    /// `unify_eqs` returns no unifier — typically for cases involving
-    /// `verify(...) = true` chain artifacts from rules like Receiver0b
-    /// (TESLA) which have `verify(signature, ...)` in conclusions whose
-    /// chain target consumes `true`. Without variant unification, the
-    /// chain edge is rejected as sort-incompatible and the case is
-    /// dropped → search loses witness paths.
-    ///
-    /// NOTE: this is a public-API entry point for the variant-unification
-    /// path that the (not-yet-ported) `Term.Narrowing.*` machinery needs
-    /// (see the crate-level "Not yet ported" note in `lib.rs`).  It has no
-    /// in-crate caller today and is intentionally kept wired so the entry
-    /// point is ready when narrowing lands; do not remove it as "dead code"
-    /// without also dropping the `lib.rs` doc reference.
-    pub fn variant_unify_eqs(
-        &self,
-        eqs: &[Equal<LNTerm>],
-    ) -> Result<Vec<Vec<(crate::lterm::LVar, LNTerm)>>, MaudeError> {
-        if eqs.is_empty() {
-            return Ok(vec![Vec::new()]);
-        }
-        if eqs.iter().all(|eq| eq.lhs == eq.rhs) {
-            return Ok(vec![Vec::new()]);
-        }
-        let mut inner = self.inner.lock().unwrap();
-        let mut ctx = ConvCtx::new();
-        let cmd = build_conj_eqs_cmd(b"variant unify in MSG : ", eqs, &mut ctx);
-        // Raw-reply memo (see `SharedMaudeCaches::reply`): same as the `unify` path — the
-        // shared-`ctx` back-conversion below still runs per call, so caching the
-        // `variant unify in MSG` reply bytes is transparent.
-        let reply = inner.execute_memo(&cmd, |s| s.unify_count += 1)?;
-        drop(inner);
-        let msubsts = maude_parse::parse_unify_reply(&reply)?;
-        let mut out = Vec::with_capacity(msubsts.len());
-        for ms in &msubsts {
-            // VFresh (unify) path → canonical domain sort.
-            out.push(msubst_to_lnsubst_unify(ms, &mut ctx)?);
-        }
-        Ok(out)
-    }
-
     /// Compute AC matchers for a batch of `(subject, pattern)` problems.
     ///
     /// **Convention — faithful to Haskell.** Each `Equal { lhs, rhs }`
@@ -1411,9 +1365,8 @@ fn sort_tag(s: crate::lterm::LSort) -> &'static str {
 }
 
 /// Build a conjunction-equation Maude command: `<prefix>lhs =? rhs /\ ... .\n`.
-/// Shared by `unify` (with the AC residual eqs) and `variant_unify_eqs`; each
-/// side is converted via `lterm_to_mterm_global` threading the shared `ctx`,
-/// so both call sites emit one identical wire encoding.
+/// Each side is converted via `lterm_to_mterm_global` threading the shared
+/// `ctx`, so one wire encoding serves the whole conjunction.
 fn build_conj_eqs_cmd(prefix: &[u8], eqs: &[Equal<LNTerm>], ctx: &mut ConvCtx) -> Vec<u8> {
     let mut cmd = prefix.to_vec();
     for (i, eq) in eqs.iter().enumerate() {

@@ -17,8 +17,7 @@
 //! - [`maude_sig`] ← `Term.Maude.Signature`
 //! - [`maude_proc`] ← `Term.Maude.Process` (spawns/drives the Maude
 //!   subprocess; backs AC unification / matching / variants via
-//!   `unify` / `unifiable` / `match_eqs` /
-//!   `variant_unify_eqs`)
+//!   `unify` / `unifiable` / `match_eqs`)
 //! - [`maude_parse`] / [`maude_print`] / [`maude_types`] ←
 //!   `Term.Maude.{Parser, ...}` (Maude reply parsing, term printing,
 //!   and the LNTerm↔Maude conversion context)
@@ -32,8 +31,7 @@
 //!
 //! Not yet ported:
 //! - `Term.Narrowing.{Variants, Variants.Check, Variants.Compute, Narrow}`
-//!   (variant computation as a standalone module; the variant-unification
-//!   entry point Tamarin needs lives in [`maude_proc`])
+//!   (variant computation as a standalone module)
 
 pub mod apply;
 pub mod bind;
