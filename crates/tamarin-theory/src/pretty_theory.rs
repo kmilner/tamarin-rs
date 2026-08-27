@@ -191,62 +191,13 @@ pub fn pretty_closed_theory(
     build: &BuildInfo,
     in_file: &str,
 ) -> String {
-    let mut out = String::new();
-
-    // HS `prettyTheory` (TheoryObject.hs:747-783):
-    //   vsep [ kwTheoryName name
-    //        , ...configBlocks...  (filter isConfigBlock thyItems, before begin)
-    //        , kwTheoryBegin, ... ]
-    out.push_str("theory ");
-    out.push_str(&thy.name);
-    for item in &thy.items {
-        if let TheoryItem::ConfigBlock(cfg) = item {
-            // HS `prettyConfigBlock cb = text "configuration: " <>
-            // doubleQuotes (text cb)` (TheoryObject.hs:921-922), emitted via
-            // `vsep` and so blank-line separated from the theory name and
-            // from `begin`.
-            out.push_str("\n\nconfiguration: \"");
-            out.push_str(cfg);
-            out.push('"');
-        }
-    }
-    out.push_str("\n\nbegin\n\n");
-
-    // // Function signature and definition of the equational theory E\n\n
-    out.push_str("// Function signature and definition of the equational theory E\n\n");
-
-    // builtins / functions / equations — render_signature already ends
-    // with a trailing '\n' after each line so we don't add another here.
-    out.push_str(&render_signature(&thy.signature.maude_sig));
-
-    // HS `prettyTheory` (TheoryObject.hs:756-768) emits, between the
-    // signature and the cache block, in this order:
-    //   - `vcat $ map prettyTactic thyT` (only if non-empty tactics)
-    //   - `heuristic: <ranking>` line (only if non-empty heuristic)
-    //   - `ppCache` (the "looping facts with injective instances" comment).
-    // `vsep` separates each non-empty element with a blank line.
-    // Mirror that here.
-    if !thy.tactic.is_empty() {
-        // `vcat $ map prettyTactic thyT`: tactics joined by a single
-        // newline (no blank line between them).
-        let blocks: Vec<String> = thy.tactic.iter().map(|t| t.render()).collect();
-        out.push('\n');
-        out.push_str(&blocks.join("\n"));
-        out.push('\n');
-    }
-    if !thy.heuristic.is_empty() {
-        // HS `TheoryObject.hs:756-768, see line 764`: `text "heuristic: " <> text (prettyGoalRankings thyH)`.
-        out.push('\n');
-        out.push_str("heuristic: ");
-        out.push_str(&pretty_goal_rankings(&thy.heuristic));
-        out.push('\n');
-    }
-    let inj_block = render_injective_fact_insts(thy);
-    if !inj_block.is_empty() {
-        out.push('\n');
-        out.push_str(&inj_block);
-        out.push('\n');
-    }
+    // `ppCache` for a closed theory is `ppInjectiveFactInsts`, the "looping
+    // facts with injective instances" comment (ClosedTheory.hs:413-418).  The
+    // header's blocks are `vsep`-separated, which this route writes as the
+    // "\n\n" join plus the trailing newline every following block is written
+    // against.
+    let mut out = theory_header_blocks(thy, &render_injective_fact_insts(thy)).join("\n\n");
+    out.push('\n');
 
     // HS `prettyClosedTheory` (ClosedTheory.hs:383-402) renders the merged
     // rule items through `prettyOpenProtoRuleAsClosedRule` when some of them
@@ -472,42 +423,38 @@ pub fn pretty_open_translated_theory_by_module(
     blocks.join("\n\n")
 }
 
-/// Shared block list of the open print: everything from `theory <name>` up to
-/// (but not including) the final `end`, one `vsep` block per entry.
-fn open_theory_blocks<S: Sync + Clone>(
-    thy: &Theory<crate::theory::OpenProtoRule, crate::theory::ProofSkeleton, S>,
-    in_file: &str,
-    translation: &(dyn Fn(&S) -> String + Sync),
-) -> Vec<String> {
-    // HS `prettyTheory` (TheoryObject.hs:757-770) = `vsep` over:
-    //   [ kwTheoryName, configBlocks…, kwTheoryBegin, lineComment_ "…",
-    //     ppSig, tactics?, heuristic?, ppCache ] ++ items ++ [kwEnd].
-    // `vsep = foldr ($--$) emptyDoc` skips empty docs and separates the
-    // non-empty blocks with exactly one blank line — modelled here as a
-    // Vec<String> of newline-free-trailing blocks joined with "\n\n".
+/// The header blocks of HS's one `prettyTheory` (TheoryObject.hs:757-765):
+/// `vsep` over the theory name, the `configuration:` items, `begin`, the
+/// equational-theory line comment, `ppSig`, the tactics, the `heuristic:` line
+/// and `ppCache`, in that order.  `vsep = foldr ($--$) emptyDoc` skips empty
+/// docs and puts exactly one blank line between the rest, so an entry that
+/// would render empty is left out here and the caller joins with "\n\n".
+/// `cache` is HS's `ppCache` applied to the theory's rule cache; an empty
+/// string is HS's `const emptyDoc`.
+fn theory_header_blocks<R, P, S>(thy: &Theory<R, P, S>, cache: &str) -> Vec<String> {
     let mut blocks: Vec<String> = Vec::new();
     blocks.push(format!("theory {}", thy.name));
     for item in &thy.items {
         if let TheoryItem::ConfigBlock(cfg) = item {
-            // `prettyConfigBlock cb = text "configuration: " <> doubleQuotes (text cb)`
-            // (TheoryObject.hs:921-922), filtered BEFORE `begin` (line 760).
+            // `prettyConfigBlock cb = text "configuration: " <> doubleQuotes
+            // (text cb)` (TheoryObject.hs:921-922), filtered BEFORE `begin`
+            // (line 759).
             blocks.push(format!("configuration: \"{}\"", cfg));
         }
     }
     blocks.push("begin".to_string());
     blocks.push("// Function signature and definition of the equational theory E".to_string());
-    // `prettySignaturePure = prettyMaudeSig . sigpMaudeSig`
-    // (Theory/Model/Signature.hs:173-175)
-    // — the same three-line `builtins:/functions:/equations:` vcat the closed
-    // print emits (`render_signature`), whose sub-blocks are single-newline
-    // separated; strip the trailing '\n' so the block joins via the vsep glue.
+    // `ppSig` = `prettySignaturePure = prettyMaudeSig . sigpMaudeSig`
+    // (Theory/Model/Signature.hs:173-175): the `builtins:`/`functions:`/
+    // `equations:` lines, single-newline separated, so the trailing newline
+    // comes off and the vsep glue supplies the blank line.
     let sig_block = render_signature(&thy.signature.maude_sig);
     let sig_trimmed = sig_block.trim_end_matches('\n');
     if !sig_trimmed.is_empty() {
         blocks.push(sig_trimmed.to_string());
     }
-    // `vcat $ map prettyTactic thyT` (TheoryObject.hs:764) — single-newline
-    // joined tactic blocks; then the `heuristic:` line (line 765).  Both are
+    // `vcat $ map prettyTactic thyT` (TheoryObject.hs:763) — single-newline
+    // joined tactic blocks; then the `heuristic:` line (line 764).  Both are
     // hoisted header fields in HS (never item-positioned), which `elaborate`
     // mirrors by collecting the parser's Tactic/Heuristic items.
     if !thy.tactic.is_empty() {
@@ -520,7 +467,22 @@ fn open_theory_blocks<S: Sync + Clone>(
             pretty_goal_rankings(&thy.heuristic)
         ));
     }
-    // `ppCache = const emptyDoc` (OpenTheory.hs:872) — nothing here.
+    if !cache.is_empty() {
+        blocks.push(cache.to_string());
+    }
+    blocks
+}
+
+/// Shared block list of the open print: everything from `theory <name>` up to
+/// (but not including) the final `end`, one `vsep` block per entry.
+fn open_theory_blocks<S: Sync + Clone>(
+    thy: &Theory<crate::theory::OpenProtoRule, crate::theory::ProofSkeleton, S>,
+    in_file: &str,
+    translation: &(dyn Fn(&S) -> String + Sync),
+) -> Vec<String> {
+    // `ppCache = const emptyDoc` (OpenTheory.hs:872) — the open print has no
+    // cache block.
+    let mut blocks = theory_header_blocks(thy, "");
     blocks.extend(pretty_theory_items(
         &open_view_items(&thy.items),
         &ItemPrinters {
