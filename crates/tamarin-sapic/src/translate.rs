@@ -30,7 +30,9 @@ use tamarin_term::lterm::LVar;
 
 use tamarin_theory::formula::{LNFormula, SyntacticLNFormula};
 use tamarin_theory::rule::ProtoRuleE;
-use tamarin_theory::sapic::{GoodAnnotation, PlainProcess, Process, ProcessPosition, SapicLVar};
+use tamarin_theory::sapic::{
+    process_at, GoodAnnotation, PlainProcess, Process, ProcessPosition, SapicLVar,
+};
 
 use tamarin_theory::sapic::ProcessCombinator;
 
@@ -101,23 +103,6 @@ fn set_names<A: GoodAnnotation>(ann: A, names: Vec<String>) -> A {
     let mut parsed = ann.parsed().clone();
     parsed.process_names = names;
     ann.set_parsed(parsed)
-}
-
-/// `processAt` over the annotated process (theory-side helper is generic).
-fn process_at<'a>(
-    p: &'a Process<ProcessAnnotation<LVar>, SapicLVar>,
-    pos: &[i64],
-) -> Option<&'a Process<ProcessAnnotation<LVar>, SapicLVar>> {
-    if pos.is_empty() {
-        return Some(p);
-    }
-    match (p, pos[0]) {
-        (Process::Null(_), _) => None,
-        (Process::Action(_, _, body), 1) => process_at(body, &pos[1..]),
-        (Process::Comb(_, _, l, _), 1) => process_at(l, &pos[1..]),
-        (Process::Comb(_, _, _, r), 2) => process_at(r, &pos[1..]),
-        _ => None,
-    }
 }
 
 /// `mapToAnnotatedRule` (sapic/src/Sapic.hs:149-150): tag each rule body with its index.
