@@ -71,6 +71,18 @@ impl WfError {
         }
     }
 
+    /// A `WfError` whose body is a ready `Doc`, framed the way
+    /// `prettyWfErrorReport` frames a topic group: `text topic $-$ nest 2
+    /// body` (Wellformedness.hs:118-125), rendered into
+    /// [`WfError::message`].
+    pub fn block(topic: impl Into<String>, body: Doc) -> Self {
+        let topic = topic.into();
+        let message = Doc::text(&topic)
+            .above_g(body.nest(2))
+            .render_with(WF_LINE_LENGTH, WF_RIBBON);
+        WfError { topic, message }
+    }
+
     /// A `WfError` whose body is HS's `text info $-$ nest 2 (fsep $ punctuate
     /// comma cells)` paragraph fill — `unboundCheck`
     /// (Wellformedness.hs:497-498), `reservedFactNameRules'`

@@ -22,6 +22,7 @@ mod generation;
 use tamarin_term::lterm::{is_pub_const, is_pub_var, BVar, LNTerm, LVar};
 use tamarin_term::term::Term;
 use tamarin_term::vterm::Lit;
+use tamarin_theory::pretty_hpj::{self as hpj, Doc};
 use tamarin_theory::wellformedness::WfError;
 
 use tamarin_theory::fact::{fact_tag_arity, fact_tag_name, Fact, LNFact};
@@ -414,37 +415,38 @@ fn acc_rp_report(thy: &Theory) -> Vec<WfError> {
         return Vec::new();
     }
 
-    // HS renders `text topic $-$ nest 2 (vcat warnings $--$ detailedExplanation)`
-    // (prettyWfErrorReport, Wellformedness.hs:118-125).  `$--$` inserts one blank
-    // line; `nest 2` indents every body line — including blanks — by two spaces.
-    let mut body_lines: Vec<String> = warnings;
-    body_lines.push(String::new());
-    for line in DETAILED_EXPLANATION {
-        body_lines.push(line.to_string());
-    }
-    let body = body_lines
-        .iter()
-        .map(|l| format!("  {}", l))
-        .collect::<Vec<_>>()
-        .join("\n");
-    let message = format!("{ACC_RP_TOPIC}\n{body}");
-    vec![WfError::new(ACC_RP_TOPIC, message)]
+    // HS `vcat warnings $--$ detailedExplanation` (Generation.hs:326), framed
+    // by `prettyWfErrorReport` as `text topic $-$ nest 2 body`
+    // (Wellformedness.hs:118-125).
+    let body = hpj::above_blank(
+        hpj::vcat(warnings.into_iter().map(Doc::text).collect()),
+        detailed_explanation(),
+    );
+    vec![WfError::block(ACC_RP_TOPIC, body)]
 }
 
 const ACC_RP_TOPIC: &str = "Accountability (RP check)";
 
-/// HS `detailedExplanation` (Generation.hs:337-343), with the leading blank
-/// line HS's `$--$` inserts between "Please verify …" and the "For each …"
-/// paragraph.  Right single quotation marks (U+2019) are copied verbatim.
-const DETAILED_EXPLANATION: &[&str] = &[
-    "Please verify manually that your protocol fulfills the following condition:",
-    "",
-    "For each case test \u{03c4}, traces t, t\u{2019}, and instantiations \u{03c1}, \u{03c1}\u{2019}:",
-    "If \u{03c4} holds on t with \u{03c1}, and \u{03c4} single-matches with \u{03c1}\u{2019} on t\u{2019}, then",
-    "there exists a trace t\u{2019}\u{2019} such that \u{03c4} single-matches with \u{03c1} on t\u{2019}\u{2019}",
-    "and the parties corrupted in t\u{2019}\u{2019} are the same as the parties",
-    "corrupted in t\u{2019} renamed from rng(\u{03c1}\u{2019}) to rng(\u{03c1}).",
-];
+/// HS `detailedExplanation` (Generation.hs:337-343): the first line, then a
+/// `$--$` blank line, then the five `$-$`-joined lines of the condition.
+/// Right single quotation marks (U+2019) are copied verbatim.
+fn detailed_explanation() -> Doc {
+    hpj::above_blank(
+        Doc::text("Please verify manually that your protocol fulfills the following condition:"),
+        hpj::vcat(
+            [
+                "For each case test \u{03c4}, traces t, t\u{2019}, and instantiations \u{03c1}, \u{03c1}\u{2019}:",
+                "If \u{03c4} holds on t with \u{03c1}, and \u{03c4} single-matches with \u{03c1}\u{2019} on t\u{2019}, then",
+                "there exists a trace t\u{2019}\u{2019} such that \u{03c4} single-matches with \u{03c1} on t\u{2019}\u{2019}",
+                "and the parties corrupted in t\u{2019}\u{2019} are the same as the parties",
+                "corrupted in t\u{2019} renamed from rng(\u{03c1}\u{2019}) to rng(\u{03c1}).",
+            ]
+            .into_iter()
+            .map(Doc::text)
+            .collect(),
+        ),
+    )
+}
 
 /// HS `not $ null $ theoryRestrictions thy`.
 fn theory_has_restrictions(thy: &Theory) -> bool {
