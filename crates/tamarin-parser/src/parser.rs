@@ -5493,18 +5493,11 @@ impl<'a> Parser<'a> {
                 // (Theory/Text/Parser/Term.hs:157) with
                 // `tupleterm = chainr1 (msetterm ...) (... <$ comma)`
                 // (Theory/Text/Parser/Term.hs:211-212). `chainr1` requires >=1
-                // operand, so the
-                // operand loop always runs: an empty `<>` fails to parse
-                // (matching HS, where no other `term` alternative starts with
-                // `<`), and a singleton `<a>` collapses to `a`.
-                let mut items = Vec::new();
-                loop {
-                    let t = self.msetterm(eqn)?;
-                    items.push(t);
-                    if !self.try_punct(",") {
-                        break;
-                    }
-                }
+                // operand, so [`Self::tuple_contents`] always reads one: an
+                // empty `<>` fails to parse (matching HS, where no other
+                // `term` alternative starts with `<`), and a singleton `<a>`
+                // collapses to `a`.
+                let t = self.tuple_contents(eqn)?;
                 // `chainr1`'s failed `comma` and `angled`'s closing `symbol
                 // ">"` both sit at the last operand's stop position, merged
                 // with its hangovers.
@@ -5514,10 +5507,7 @@ impl<'a> Parser<'a> {
                 // The atom's last lexeme is the `>`, even when a singleton
                 // `<a>` collapses to its operand's node.
                 self.var_dot_hangover = false;
-                if items.len() == 1 {
-                    return Ok(items.into_iter().next().unwrap());
-                }
-                return Ok(Term::Pair(items));
+                return Ok(t);
             }
         }
         // Special tokens
