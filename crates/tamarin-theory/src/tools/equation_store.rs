@@ -62,7 +62,6 @@ fn freshen_witness_range(
 ) -> Vec<(LVar, LNTerm)> {
     use std::collections::BTreeMap;
     use tamarin_term::lterm::HasFrees;
-    let trace = tamarin_utils::env_gate!("TAM_DBG_FRESHEN_WITNESS");
     let domain: BTreeSet<LVar> = raw.iter().map(|(v, _)| *v).collect();
     // Witnesses = range-only vars that are neither a domain key nor an
     // input var (i.e. auxiliaries the Maude unifier introduced); these are
@@ -90,9 +89,6 @@ fn freshen_witness_range(
         let next = maude.fresh_idx();
         renames.insert(v, LVar { idx: next, ..v });
     }
-    if trace && !renames.is_empty() {
-        eprintln!("[freshen_witness] {} witness renames", renames.len());
-    }
     // Apply the rename across each (var, term).  Keys get renamed too.
     raw.into_iter()
         .map(|(v, t)| {
@@ -101,29 +97,6 @@ fn freshen_witness_range(
             (new_v, new_t)
         })
         .collect()
-}
-
-// ============================================================================
-// TAM_RS_DBG_IMPURE_FOLD=1 — pure-fresh-range invariant probes.
-//
-// HS enforces that every var in a VFresh subst's RANGE is fresh (to be
-// renamed at application time): Maude unifiers go through
-// `msubstToLSubstVFresh` which ERRORS on non-fresh range vars
-// (Maude/Types.hs:137-146, see line 143), and `composeVFresh` lifts live vars entering a
-// VFresh range via `extendWithRenaming (varsRange s2) s1_0`
-// (Term/Substitution.hs:41-47).  Any RS site that stores a disjunction subst
-// whose range references a LIVE system var violates this invariant; when
-// `simpSingleton` later folds such a subst, `fresh_to_free_avoiding`
-// renames the live var and severs its linkage to the system.
-//
-// These probes are zero-cost when the env var is unset.  The origin
-// registry maps a subst fingerprint to the label of the site that created
-// it, so an impure FOLD can be traced back to its CREATION site.
-// ============================================================================
-
-#[inline]
-pub(crate) fn impure_dbg_enabled() -> bool {
-    tamarin_utils::env_gate!("TAM_RS_DBG_IMPURE_FOLD")
 }
 
 // --- Cached kill-switch / debug env flags for apply_eq_store -----------
@@ -150,118 +123,8 @@ fn aes_dbg_filter_substantive() -> bool {
     })
 }
 #[inline]
-fn aes_dbg_variant() -> bool {
-    tamarin_utils::env_gate!("TAM_DBG_AES_VARIANT")
-}
-#[inline]
-fn aes_dbg_detail() -> bool {
-    tamarin_utils::env_gate!("TAM_RS_DBG_AES_DETAIL")
-}
-#[inline]
-fn aes_dbg_raw_unifier() -> bool {
-    tamarin_utils::env_gate!("TAM_DBG_RAW_UNIFIER")
-}
-#[inline]
 fn aes_dbg_variants() -> bool {
     tamarin_utils::env_gate!("TAM_DBG_AES_VARIANTS")
-}
-#[inline]
-fn aes_dbg_bad_disj() -> bool {
-    tamarin_utils::env_gate!("TAM_DBG_BAD_DISJ")
-}
-#[inline]
-fn aes_dbg_add_disj_full() -> bool {
-    tamarin_utils::env_gate!("TAM_DBG_ADD_DISJ_FULL")
-}
-#[inline]
-fn aes_dbg_add_disj() -> bool {
-    tamarin_utils::env_gate!("TAM_DBG_ADD_DISJ")
-}
-/// `TAM_TRACE_SET_FALSE` debug flag (opt-IN), read on the solve-path
-/// `set_false`.  Cached so the steady-state cost is an atomic load.
-#[inline]
-fn aes_trace_set_false() -> bool {
-    tamarin_utils::env_gate!("TAM_TRACE_SET_FALSE")
-}
-/// `TAM_TRACE_SET_FALSE_FULL` debug flag (opt-IN), read on the solve-path
-/// `set_false`.  Cached so the steady-state cost is an atomic load.
-#[inline]
-fn aes_trace_set_false_full() -> bool {
-    tamarin_utils::env_gate!("TAM_TRACE_SET_FALSE_FULL")
-}
-/// Backtrace-frame filter for the `set_false` traces: our own crates, minus
-/// the `set_false` frames themselves.
-#[inline]
-fn is_own_frame(line: &str) -> bool {
-    (line.contains("tamarin_theory")
-        || line.contains("tamarin-theory")
-        || line.contains("tamarin_term"))
-        && !line.contains("set_false")
-}
-
-// debug-only keyed registry; never reaches prover output;
-// std kept (byte-inert) — iteration order never reaches output.
-#[allow(clippy::disallowed_types)]
-fn impure_dbg_registry() -> &'static std::sync::Mutex<std::collections::HashMap<String, String>> {
-    static REG: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, String>>> =
-        std::sync::OnceLock::new();
-    REG.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
-}
-
-fn impure_dbg_fp(s: &SubstVFresh<Name, LVar>) -> String {
-    format!("{:?}", s.to_list())
-}
-
-/// Register `s` as having been created/last-transformed at `label`.
-/// First-wins: pass-through sites (e.g. perform_split) re-register the
-/// same fingerprint, preserving the ORIGINAL creator's label.
-pub fn dbg_register_subst_origin(label: &str, s: &SubstVFresh<Name, LVar>) {
-    if !impure_dbg_enabled() {
-        return;
-    }
-    impure_dbg_registry()
-        .lock()
-        .unwrap()
-        .entry(impure_dbg_fp(s))
-        .or_insert_with(|| label.to_string());
-}
-
-/// Chain-register: a transformation site registers its OUTPUT subst with
-/// a label that includes the INPUT subst's origin, preserving provenance
-/// across rewrites (applyBound, simp passes).
-pub fn dbg_register_subst_transform(
-    label: &str,
-    input: &SubstVFresh<Name, LVar>,
-    output: &SubstVFresh<Name, LVar>,
-) {
-    if !impure_dbg_enabled() {
-        return;
-    }
-    let mut reg = impure_dbg_registry().lock().unwrap();
-    let in_origin = reg
-        .get(&impure_dbg_fp(input))
-        .cloned()
-        .unwrap_or_else(|| "?".to_string());
-    reg.entry(impure_dbg_fp(output))
-        .or_insert_with(|| format!("{}<-{}", label, in_origin));
-}
-
-pub fn dbg_subst_origin(s: &SubstVFresh<Name, LVar>) -> String {
-    impure_dbg_registry()
-        .lock()
-        .unwrap()
-        .get(&impure_dbg_fp(s))
-        .cloned()
-        .unwrap_or_else(|| "unknown".to_string())
-}
-
-/// Range vars of `s` that intersect `live` — nonempty means the
-/// pure-fresh-range invariant is violated w.r.t. that live set.
-pub fn dbg_impure_range_vars(s: &SubstVFresh<Name, LVar>, live: &BTreeSet<LVar>) -> Vec<LVar> {
-    s.vars_range()
-        .into_iter()
-        .filter(|v| live.contains(v))
-        .collect()
 }
 
 /// Index of a disjunction in the equation store.
@@ -430,150 +293,14 @@ impl EquationStore {
 
     /// Set the store to logical false. Returns the modified store.
     pub fn set_false(mut self) -> Self {
-        if aes_trace_set_false() && !self.is_false() {
-            let bt = std::backtrace::Backtrace::force_capture();
-            let bt_s = format!("{bt}");
-            let caller = bt_s
-                .lines()
-                .find(|l| is_own_frame(l))
-                .unwrap_or("(no frame)")
-                .trim();
-            eprintln!("[set_false] caller={}", caller);
-        }
-        if aes_trace_set_false_full() && !self.is_false() {
-            let bt = std::backtrace::Backtrace::force_capture();
-            let bt_s = format!("{bt}");
-            let cpath = crate::constraint::solver::trace::case_path_string();
-            let frames: Vec<&str> = bt_s
-                .lines()
-                .filter(|l| is_own_frame(l) && !l.contains("std::"))
-                .take(8)
-                .map(|s| s.trim())
-                .collect();
-            eprintln!(
-                "[set_false_full] path={} frames=[ {} ]",
-                cpath,
-                frames.join(" | ")
-            );
-        }
         self.conj = Self::false_conj();
         self
     }
 
     /// Add a new disjunction to the front of the conjunction. Returns
     /// the resulting store and the new split id.
-    ///
-    /// TAM_DBG_ADD_DISJ=1 logs each add_disj call's substs at runtime.
     pub fn add_disj(&mut self, substs: Vec<LNSubstVFresh>) -> SplitId {
         let id = self.next_split;
-        // TAM_DBG_BAD_DISJ=1: print backtrace when a disj subst has two
-        // distinct keys mapping to the same VTerm value (the canonical
-        // KAS-divergence pattern: ~ltkA.0 and ~ltkA.1 both → ~ltkA.X).
-        if aes_dbg_bad_disj() {
-            for s in &substs {
-                let entries: Vec<(LVar, LNTerm)> = s.to_list();
-                let mut seen: std::collections::BTreeMap<String, (LVar, LVar)> =
-                    std::collections::BTreeMap::new();
-                let mut found_bad = false;
-                for (k, v) in &entries {
-                    if let tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(vv)) = v {
-                        let v_str = format!("{}.{}", vv.name, vv.idx);
-                        if let Some((prev_k, _)) = seen.get(&v_str) {
-                            if prev_k.name == k.name && prev_k != k {
-                                eprintln!(
-                                    "[BAD_DISJ] FOUND collision: {}.{} and {}.{} both → {}",
-                                    prev_k.name, prev_k.idx, k.name, k.idx, v_str
-                                );
-                                found_bad = true;
-                                break;
-                            }
-                        }
-                        seen.insert(v_str, (*k, *vv));
-                    }
-                }
-                if found_bad {
-                    eprintln!("[BAD_DISJ] full subst:");
-                    for (k, v) in &entries {
-                        eprintln!(
-                            "[BAD_DISJ]   {}.{}/{:?} → {:?}",
-                            k.name,
-                            k.idx,
-                            k.sort,
-                            format!("{:?}", v).chars().take(80).collect::<String>()
-                        );
-                    }
-                    let bt = std::backtrace::Backtrace::force_capture();
-                    let bt_s = format!("{}", bt);
-                    let frames: Vec<&str> = bt_s
-                        .lines()
-                        .filter(|l| l.contains("tamarin_") || l.contains(".rs:"))
-                        .take(30)
-                        .collect();
-                    eprintln!("[BAD_DISJ] backtrace:\n{}", frames.join("\n"));
-                }
-            }
-        }
-        if aes_dbg_add_disj_full() {
-            // Full backtrace + pre-state for every call.
-            let bt = std::backtrace::Backtrace::force_capture();
-            let bt_s = format!("{}", bt);
-            let frames: Vec<&str> = bt_s
-                .lines()
-                .filter(|l| l.contains("tamarin_theory") || l.contains("add_disj"))
-                .take(8)
-                .collect();
-            let self_id = self as *const _ as usize;
-            eprintln!(
-                "[add_disj-full-bt] eq_store@{:x} {}",
-                self_id,
-                frames.join(" | ")
-            );
-            eprintln!(
-                "[add_disj-full-pre] eq_store@{:x} eqsSubst: {:?}",
-                self_id,
-                self.subst.to_list()
-            );
-            eprintln!(
-                "[add_disj-full-pre] eq_store@{:x} {} existing disjs, next_split={:?}",
-                self_id,
-                self.conj.len(),
-                self.next_split
-            );
-        }
-        if aes_dbg_add_disj() {
-            // TAM_DBG_ADD_DISJ=stack also prints a short backtrace of the
-            // caller chain, filtered to tamarin-theory frames.
-            if std::env::var("TAM_DBG_ADD_DISJ")
-                .map(|s| s == "stack")
-                .unwrap_or(false)
-            {
-                let bt = std::backtrace::Backtrace::force_capture();
-                let bt_s = format!("{}", bt);
-                let frames: Vec<&str> = bt_s
-                    .lines()
-                    .filter(|l| l.contains("tamarin_theory") || l.contains("equation_store"))
-                    .take(10)
-                    .collect();
-                eprintln!("[add_disj-bt] {}", frames.join(" | "));
-            }
-            eprintln!("[add_disj] split_id={:?} {} substs", id, substs.len());
-            for (i, s) in substs.iter().enumerate() {
-                let pairs: Vec<String> = s
-                    .to_list()
-                    .iter()
-                    .map(|(k, v)| {
-                        format!(
-                            "{}:{:?}:{}→{:?}",
-                            k.name,
-                            k.sort,
-                            k.idx,
-                            format!("{:?}", v).chars().take(80).collect::<String>()
-                        )
-                    })
-                    .collect();
-                eprintln!("[add_disj]   [{}]: {}", i, pairs.join(" ; "));
-            }
-        }
         // HS-faithful Set ordering of variant substs.
         // HS's `addDisj` (EquationStore.hs) does `addDisj eqStore
         // (S.fromList substs)` — substs go into a Set, sorted by Ord
@@ -856,11 +583,6 @@ impl EquationStore {
         // empty-empty case must NOT be short-circuited — skipping this
         // lift is observable on the LAK06::noninjectiveagreementTAG path.
         if ac_residuals.is_empty() {
-            if !local_subst.is_empty() {
-                log_fresh_bindings("local", &local_subst);
-                log_s_pub_bindings("local", &local_subst);
-                log_vr_node_bindings("local", &local_subst);
-            }
             if self.conj.is_empty() {
                 if aes_dbg() {
                     let filter = aes_dbg_filter_substantive();
@@ -898,14 +620,6 @@ impl EquationStore {
             .map_err(|e| AddEqsError::Maude(format!("{}", e)))?;
 
         if unifiers.is_empty() {
-            if tamarin_utils::env_gate!("TAM_DBG_NOUNIFY") {
-                eprintln!("[nounify] add_eqs found 0 unifiers for:");
-                for e in &applied {
-                    let l = format!("{:?}", e.lhs).chars().take(150).collect::<String>();
-                    let r = format!("{:?}", e.rhs).chars().take(150).collect::<String>();
-                    eprintln!("[nounify]   {} = {}", l, r);
-                }
-            }
             // No unifiers → contradiction.
             *self = self.clone().set_false();
             return Ok(None);
@@ -973,9 +687,6 @@ impl EquationStore {
             // (Term/Unification.hs:168-170, see line 170 `flattenUnif` =
             // `map (\`composeVFresh\` subst) substs`).
             let subst = maude_subst.compose(&local_subst);
-            log_fresh_bindings("maude_single", &subst);
-            log_s_pub_bindings("maude_single", &subst);
-            log_vr_node_bindings("maude_single", &subst);
             // Haskell-faithful: call applyEqStore so existing disj substs
             // get re-unified against the new free subst.  Without it,
             // SplitG variants whose domain intersects with `subst.dom`
@@ -1039,21 +750,7 @@ impl EquationStore {
         let mut substs: Vec<LNSubstVFresh> = Vec::with_capacity(unifiers.len());
         for raw in unifiers {
             let s = LNSubstVFresh::from_list(raw);
-            dbg_register_subst_origin("addEqs.disj", &s);
             substs.push(s);
-        }
-        if tamarin_utils::env_gate!("TAM_DBG_ADDEQS_VARIANTS") {
-            eprintln!(
-                "[addEqs_variants] inserted {} variants for eqs:",
-                substs.len()
-            );
-            for (i, e) in applied.iter().enumerate() {
-                eprintln!("[addEqs_variants]   eq[{}]: {:?} = {:?}", i, e.lhs, e.rhs);
-            }
-            eprintln!("[addEqs_variants] local_subst: {:?}", local_subst.to_list());
-            for (i, s) in substs.iter().enumerate() {
-                eprintln!("[addEqs_variants]   variant[{}]: {:?}", i, s.to_list());
-            }
         }
         Ok(Some(self.add_disj(substs)))
     }
@@ -1273,24 +970,17 @@ impl EquationStore {
         }
     }
 
-    /// Shared tail of the `simp_abstract_*`/`simp_identify` passes: register
-    /// the old→new subst transforms under `label` (impure-dbg only), replace
+    /// Shared tail of the `simp_abstract_*`/`simp_identify` passes: replace
     /// disjunction `idx` with `new_substs`, then apply `factor` via
     /// `apply_factor_or_compose`.  Preserves the HS `foreachDisj`
-    /// register-then-replace-then-apply order.  Always returns `true`.
+    /// replace-then-apply order.  Always returns `true`.
     fn replace_disj_and_apply(
         &mut self,
         idx: usize,
         new_substs: Vec<LNSubstVFresh>,
         factor: &LNSubst,
-        label: &str,
         maude: Option<&tamarin_term::maude_proc::MaudeHandle>,
     ) -> bool {
-        if impure_dbg_enabled() {
-            for (i, o) in self.conj[idx].substs.iter().zip(new_substs.iter()) {
-                dbg_register_subst_transform(label, i, o);
-            }
-        }
         self.conj[idx].substs = new_substs;
         self.apply_factor_or_compose(factor, maude);
         true
@@ -1359,7 +1049,7 @@ impl EquationStore {
                 LNSubstVFresh::from_list(kept)
             })
             .collect();
-        self.replace_disj_and_apply(idx, new_substs, &factor, "simpAbstractName", maude)
+        self.replace_disj_and_apply(idx, new_substs, &factor, maude)
     }
 
     /// `simpIdentify`: if every subst in a disjunction has two
@@ -1380,63 +1070,6 @@ impl EquationStore {
         &mut self,
         maude: Option<&tamarin_term::maude_proc::MaudeHandle>,
     ) -> bool {
-        // TAM_RS_DBG_SIMP_IDENTIFY=1: dump same-image probe results
-        // per disj — used to confirm that RS variants never
-        // contain same-image pairs (whereas HS's do after equation
-        // reduction).
-        let dbg = tamarin_utils::env_gate!("TAM_RS_DBG_SIMP_IDENTIFY");
-        if dbg && self.conj.iter().any(|d| d.substs.len() >= 2) {
-            for (idx, d) in self.conj.iter().enumerate() {
-                if d.substs.len() < 2 {
-                    continue;
-                }
-                let first = &d.substs[0];
-                let entries = first.to_list();
-                let mut pairs_found = 0u32;
-                for (i, (v, t)) in entries.iter().enumerate() {
-                    for (v2, t2) in entries.iter().skip(i + 1) {
-                        if t == t2 && v < v2 {
-                            pairs_found += 1;
-                            let all_agree = d.substs.iter().skip(1).all(|s| {
-                                let i1 = s.image_of(v);
-                                let i2 = s.image_of(v2);
-                                i1.is_some() && i1 == i2
-                            });
-                            if all_agree {
-                                eprintln!(
-                                    "[simp_id_probe] disj[{}] FIRE: ({}.{}, {}.{}) -> {:?}",
-                                    idx,
-                                    v.name,
-                                    v.idx,
-                                    v2.name,
-                                    v2.idx,
-                                    format!("{:?}", t).chars().take(120).collect::<String>()
-                                );
-                            }
-                        }
-                    }
-                }
-                if pairs_found == 0 {
-                    eprintln!("[simp_id_probe] disj[{}] NO_PAIRS: no same-image pairs in first subst ({} entries, {} substs)",
-                        idx, entries.len(), d.substs.len());
-                    if entries.len() >= 8
-                        && tamarin_utils::env_gate!("TAM_RS_DBG_SIMP_IDENTIFY_FULL")
-                    {
-                        for (sidx, s) in d.substs.iter().enumerate() {
-                            eprintln!("[simp_id_probe]   subst[{}]:", sidx);
-                            for (k, v) in s.to_list() {
-                                eprintln!(
-                                    "[simp_id_probe]     {}.{} -> {:?}",
-                                    k.name,
-                                    k.idx,
-                                    format!("{:?}", v).chars().take(200).collect::<String>()
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-        }
         let mut to_apply: Option<(LVar, LVar, usize)> = None;
         for (idx, d) in self.conj.iter().enumerate() {
             if d.substs.is_empty() {
@@ -1508,7 +1141,7 @@ impl EquationStore {
                 LNSubstVFresh::from_list(kept)
             })
             .collect();
-        self.replace_disj_and_apply(idx, new_substs, &factor, "simpIdentify", maude)
+        self.replace_disj_and_apply(idx, new_substs, &factor, maude)
     }
 
     /// `simpAbstractSortedVar`: if every substitution `si` in a
@@ -1605,12 +1238,6 @@ impl EquationStore {
             sort: s,
             idx: new_idx,
         };
-        if tamarin_utils::env_gate!("TAM_RS_DBG_FOLD_DRAWS") {
-            eprintln!(
-                "[rs-fold] simpAbstractSortedVar v={}.{} fv={}.{}/{:?}",
-                v.name, v.idx, fv.name, fv.idx, fv.sort
-            );
-        }
         // Compose {v → Var(fv)} into the free substitution.
         let factor = LNSubst::from_list(vec![(v, Term::Lit(Lit::Var(fv)))]);
         // HS-faithful: foreachDisj (EquationStore.hs) REPLACES
@@ -1630,7 +1257,7 @@ impl EquationStore {
                 LNSubstVFresh::from_list(kept)
             })
             .collect();
-        self.replace_disj_and_apply(idx, new_substs, &factor, "simpAbstractSortedVar", maude)
+        self.replace_disj_and_apply(idx, new_substs, &factor, maude)
     }
 
     /// `simpAbstractFun`: if every substitution in a disjunction maps
@@ -1718,17 +1345,6 @@ impl EquationStore {
                     idx: idx_alloc,
                 });
             }
-            if tamarin_utils::env_gate!("TAM_RS_DBG_FOLD_DRAWS") {
-                eprintln!(
-                    "[rs-fold] simpAbstractFun v={}.{} fvars={:?}",
-                    v.name,
-                    v.idx,
-                    fvars
-                        .iter()
-                        .map(|f| format!("{}.{}", f.name, f.idx))
-                        .collect::<Vec<_>>()
-                );
-            }
             // Build factor `{v → op(x1, ..., xk)}`.
             let factor = LNSubst::from_list(vec![(
                 v,
@@ -1774,7 +1390,7 @@ impl EquationStore {
                     LNSubstVFresh::from_list(kept)
                 })
                 .collect();
-            self.replace_disj_and_apply(idx, new_substs, &factor, "simpAbstractFun", maude)
+            self.replace_disj_and_apply(idx, new_substs, &factor, maude)
         } else {
             // AC operator with varying arity: factor first two args.
             let fv1_idx = alloc(1);
@@ -1789,12 +1405,6 @@ impl EquationStore {
                 sort: LSort::Msg,
                 idx: fv2_idx,
             };
-            if tamarin_utils::env_gate!("TAM_RS_DBG_FOLD_DRAWS") {
-                eprintln!(
-                    "[rs-fold] simpAbstractFun.AC v={}.{} fvars=[\"{}.{}\", \"{}.{}\"]",
-                    v.name, v.idx, fv1.name, fv1.idx, fv2.name, fv2.idx
-                );
-            }
             // Factor: `{v → op(fv1, fv2)}`
             let factor = LNSubst::from_list(vec![(
                 v,
@@ -1835,7 +1445,7 @@ impl EquationStore {
                     LNSubstVFresh::from_list(kept)
                 })
                 .collect();
-            self.replace_disj_and_apply(idx, new_substs, &factor, "simpAbstractFunAC", maude)
+            self.replace_disj_and_apply(idx, new_substs, &factor, maude)
         }
     }
 
@@ -1849,30 +1459,16 @@ impl EquationStore {
     /// `MaudeHandle::reserve_idxs`) because `freshToFree` renames range
     /// vars to distinct LVar idxs.
     ///
-    /// Takes an extra `external_preserve`
-    /// set — live system free vars that must NOT be treated as fresh
-    /// witnesses when `simp_singleton` folds a singleton disjunction
-    /// into the free subst.  Pattern_matching::Responder_secrecy was
-    /// wrong-falsified by `fresh_to_free` renaming `k:Fresh#0` (a
-    /// Setup_Key conclusion var) inside the variant's range.
     pub fn simp_with_fresh_avoiding<F, G>(
         mut self,
         is_contr: F,
         mut alloc: G,
-        external_preserve: &BTreeSet<LVar>,
         maude: Option<&tamarin_term::maude_proc::MaudeHandle>,
     ) -> Self
     where
         F: Fn(&LNSubst, &LNSubstVFresh) -> bool,
         G: FnMut(u64) -> u64,
     {
-        let dbg_simp_disj = tamarin_utils::env_gate!("TAM_RS_DBG_SIMP_DISJ");
-        if dbg_simp_disj {
-            let sizes: Vec<usize> = self.conj.iter().map(|d| d.substs.len()).collect();
-            if sizes.iter().any(|n| *n >= 2) {
-                eprintln!("[SIMP_DISJ_IN] sizes={:?}", sizes);
-            }
-        }
         // HS-faithful pass order (EquationStore.hs `simp1`):
         //   1. simpMinimize
         //   2. simpRemoveRenamings
@@ -1911,7 +1507,7 @@ impl EquationStore {
             // every disj (EquationStore.hs `simp1`), with NO precompute guard;
             // `simpSingleton [subst0]` folds a singleton disj via
             // `freshToFree` into the free subst (EquationStore.hs `simpSingleton`).
-            if self.simp_singleton_avoiding(&mut alloc, external_preserve, maude) {
+            if self.simp_singleton_avoiding(&mut alloc, maude) {
                 changed = true;
                 self.sort_disj_substs();
             }
@@ -1932,12 +1528,6 @@ impl EquationStore {
                 self.sort_disj_substs();
             }
             if !changed {
-                if dbg_simp_disj {
-                    let sizes: Vec<usize> = self.conj.iter().map(|d| d.substs.len()).collect();
-                    if sizes.iter().any(|n| *n >= 2) {
-                        eprintln!("[SIMP_DISJ_OUT] sizes={:?}", sizes);
-                    }
-                }
                 return self;
             }
         }
@@ -1962,10 +1552,6 @@ impl EquationStore {
     /// directly — this is sound when the new subst's domain is
     /// disjoint from `self.subst`'s range.
     ///
-    /// Accepts an `external_preserve`
-    /// set — typically the system's free vars — to PROTECT from
-    /// renaming in `fresh_to_free`.  See `simp_with_fresh_avoiding`.
-    ///
     /// If `maude` is `Some`, after composing the folded factor into the
     /// free subst, also re-unifies any REMAINING disj substs against
     /// the new free subst via `apply_eq_store`.  HS-faithful:
@@ -1977,7 +1563,6 @@ impl EquationStore {
     pub fn simp_singleton_avoiding<F: FnMut(u64) -> u64>(
         &mut self,
         alloc: &mut F,
-        external_preserve: &BTreeSet<LVar>,
         maude: Option<&tamarin_term::maude_proc::MaudeHandle>,
     ) -> bool {
         // Find the first singleton disjunction (1 subst).
@@ -1986,32 +1571,6 @@ impl EquationStore {
             return false;
         };
         let subst_vf = self.conj[pos].substs[0].clone();
-        if tamarin_utils::env_gate!("TAM_DBG_APPLY_EQ") {
-            let pairs: Vec<String> = subst_vf
-                .to_list()
-                .iter()
-                .take(8)
-                .map(|(k, v)| {
-                    format!(
-                        "{}_{} → {}",
-                        k.name,
-                        k.idx,
-                        format!("{:?}", v).chars().take(40).collect::<String>()
-                    )
-                })
-                .collect();
-            eprintln!("[simp_singleton] folding: {:?}", pairs);
-            let pre_pairs: Vec<String> = external_preserve
-                .iter()
-                .take(5)
-                .map(|v| format!("{}_{}", v.name, v.idx))
-                .collect();
-            eprintln!(
-                "[simp_singleton] preserve subset: {:?} (total {})",
-                pre_pairs,
-                external_preserve.len()
-            );
-        }
         // Drop the singleton disjunction.
         self.conj.remove(pos);
         if subst_vf.is_empty() {
@@ -2038,52 +1597,6 @@ impl EquationStore {
                 let _ = self.apply_eq_store(m, &LNSubst::empty());
             }
             return true;
-        }
-        if tamarin_utils::env_gate!("TAM_DBG_FOLD_VARIANT") {
-            let pairs: Vec<String> = subst_vf
-                .to_list()
-                .iter()
-                .filter(|(k, _)| k.name.contains("ltkS") || k.name.contains("request"))
-                .map(|(k, v)| {
-                    format!(
-                        "{}.{} → {}",
-                        k.name,
-                        k.idx,
-                        format!("{:?}", v).chars().take(100).collect::<String>()
-                    )
-                })
-                .collect();
-            if !pairs.is_empty() {
-                eprintln!("[fold_variant] BEFORE fresh_to_free: {:?}", pairs);
-                let pre_ltks: Vec<String> = external_preserve
-                    .iter()
-                    .filter(|v| v.name.contains("ltkS") || v.name.contains("request"))
-                    .map(|v| format!("{}.{}", v.name, v.idx))
-                    .collect();
-                eprintln!("[fold_variant]   preserve(ltkS/request): {:?}", pre_ltks);
-            }
-        }
-        // TAM_RS_DBG_IMPURE_FOLD=1: detect folding of a disj subst whose
-        // RANGE references live system vars (external_preserve).  Under
-        // HS's pure-fresh-range invariant this never happens; in RS it
-        // means a creation site stored an impure subst and the rename
-        // below severs a live linkage.
-        if impure_dbg_enabled() {
-            let bad = dbg_impure_range_vars(&subst_vf, external_preserve);
-            if !bad.is_empty() {
-                let path = crate::constraint::solver::trace::case_path_string();
-                let bad_s: Vec<String> = bad
-                    .iter()
-                    .map(|v| format!("{}.{}/{:?}", v.name, v.idx, v.sort))
-                    .collect();
-                eprintln!(
-                    "[IMPURE_FOLD] origin={} path={} bad_range_vars=[{}] subst={:?}",
-                    dbg_subst_origin(&subst_vf),
-                    path,
-                    bad_s.join(","),
-                    subst_vf.to_list()
-                );
-            }
         }
         // HS-faithful witness-freshening floor for the already-folded free
         // subst.  `simpSingleton` folds this disj via `freshToFree`, which in
@@ -2122,10 +1635,6 @@ impl EquationStore {
         // feedback that inflated the KU(em(_,_)) bilinear source's witness span
         // ~7x/pass (peak x.4393 vs HS x.653), diverging the `main/cases`
         // raw/refined pages (task #18).
-        // TAM_RS_DBG_FOLD_DRAWS=1: trace every session-counter draw batch
-        // feeding the free eqsSubst RANGE (fold draws) plus the RS-specific
-        // ensure_above counter jumps.  Pair with HS's TAM_HS_DBG_FOLD_DRAWS.
-        let fold_dbg = tamarin_utils::env_gate!("TAM_RS_DBG_FOLD_DRAWS");
         if let Some(m) = maude {
             use tamarin_term::lterm::HasFrees;
             let mut floor = 0u64;
@@ -2137,53 +1646,10 @@ impl EquationStore {
                 });
             }
             if floor > 0 {
-                if fold_dbg {
-                    let cur = m.fresh_counter_peek();
-                    if cur < floor.saturating_add(1) {
-                        eprintln!(
-                            "[rs-fold] ensure_above MOVES counter {} -> {} (floor={})",
-                            cur,
-                            floor.saturating_add(1),
-                            floor
-                        );
-                    }
-                }
                 m.ensure_above(floor);
             }
         }
-        let fold_counter_before = if fold_dbg {
-            maude.map(|m| m.fresh_counter_peek())
-        } else {
-            None
-        };
         let new_subst = subst_vf.fresh_to_free_avoiding(&mut *alloc);
-        if fold_dbg {
-            eprintln!(
-                "[rs-fold] simpSingleton in={:?} out={:?} counter_before={:?} counter_after={:?}",
-                subst_vf.to_list(),
-                new_subst.to_list(),
-                fold_counter_before,
-                maude.map(|m| m.fresh_counter_peek())
-            );
-        }
-        if tamarin_utils::env_gate!("TAM_DBG_FOLD_VARIANT") {
-            let pairs: Vec<String> = new_subst
-                .to_list()
-                .iter()
-                .filter(|(k, _)| k.name.contains("ltkS") || k.name.contains("request"))
-                .map(|(k, v)| {
-                    format!(
-                        "{}.{} → {}",
-                        k.name,
-                        k.idx,
-                        format!("{:?}", v).chars().take(100).collect::<String>()
-                    )
-                })
-                .collect();
-            if !pairs.is_empty() {
-                eprintln!("[fold_variant]  AFTER fresh_to_free: {:?}", pairs);
-            }
-        }
         // HS-faithful: foreachDisj at EquationStore.hs calls
         // `MS.modify (applyEqStore hnd msubst)` after replacing the
         // singleton disj.  applyEqStore composes msubst into eqsSubst
@@ -2226,7 +1692,7 @@ impl EquationStore {
         let mut store = EquationStore::empty();
         let _ = store.add_disj(substs);
         let alloc = |n: u64| maude.reserve_idxs(n);
-        let store = store.simp_with_fresh_avoiding(is_contr, alloc, &BTreeSet::new(), Some(maude));
+        let store = store.simp_with_fresh_avoiding(is_contr, alloc, Some(maude));
         let free = store.subst.clone();
         match store.conj.as_slice() {
             [] => (free, None),
@@ -2528,50 +1994,6 @@ impl EquationStore {
                 if let Some(input) = &dbg_in {
                     eprintln!("[rs-aes-applyBound] IN  : {:?}", input);
                 }
-                if aes_dbg_variant() {
-                    let pairs: Vec<String> = bindings
-                        .iter()
-                        .map(|(k, v)| {
-                            format!(
-                                "{}.{} → {}",
-                                k.name,
-                                k.idx,
-                                format!("{:?}", v).chars().take(80).collect::<String>()
-                            )
-                        })
-                        .collect();
-                    eprintln!("[aes_variant] applyBound bindings: {:?}", pairs);
-                }
-                // TAM_RS_DBG_AES_DETAIL=1: dump per-variant rhs_min, shift,
-                // avoid_max, max_idx, counter before/after Maude.  Used to
-                // diagnose witness idx divergence vs HS (split_case ordering).
-                let detail_dbg = aes_dbg_detail();
-                if detail_dbg {
-                    let rhs_min = {
-                        use tamarin_term::lterm::HasFrees;
-                        let mut min: Option<u64> = None;
-                        for (_, t) in &bindings {
-                            t.for_each_free(&mut |v| {
-                                min = Some(min.map_or(v.idx, |m| m.min(v.idx)));
-                            });
-                        }
-                        min
-                    };
-                    eprintln!(
-                        "[rs-aes-detail] avoid_max={} rhs_min={:?} max_idx={} counter_before={}",
-                        avoid_max,
-                        rhs_min,
-                        max_idx,
-                        maude.fresh_counter_peek()
-                    );
-                    eprintln!(
-                        "[rs-aes-detail]   eqs: {:?}",
-                        eqs.iter()
-                            .map(|e| format!("{:?} =? {:?}", e.lhs, e.rhs))
-                            .collect::<Vec<_>>()
-                    );
-                }
-                let counter_before_maude = aes_maude.fresh_counter_peek();
                 // HS `applyBound` (EquationStore.hs:281-291, see line 282): `unifiers =
                 // unifyLNTerm eqs` — NO avoid.  The RHS terms were already
                 // rebased above `avoidSet` by the uniform-shift rename above
@@ -2586,19 +2008,6 @@ impl EquationStore {
                     Ok(u) => u,
                     Err(e) => return Err(AddEqsError::Maude(format!("{}", e))),
                 };
-                if detail_dbg {
-                    eprintln!(
-                        "[rs-aes-detail] counter_after={} delta={} #unifiers={}",
-                        aes_maude.fresh_counter_peek(),
-                        aes_maude
-                            .fresh_counter_peek()
-                            .saturating_sub(counter_before_maude),
-                        unifiers.len()
-                    );
-                    for (i, u) in unifiers.iter().enumerate() {
-                        eprintln!("[rs-aes-detail]   unifier[{}]: {:?}", i, u);
-                    }
-                }
                 if dbg_in.is_some() {
                     eprintln!("  {} unifiers from Maude", unifiers.len());
                 }
@@ -2627,19 +2036,6 @@ impl EquationStore {
                 let orig_dom: tamarin_utils::FastSet<LVar> =
                     bindings.iter().map(|&(k, _)| *k).collect();
                 for raw in unifiers {
-                    // TAM_DBG_RAW_UNIFIER=1: dump Maude's raw output.
-                    if aes_dbg_raw_unifier() {
-                        eprintln!("[rs-raw-unifier] sid={:?} raw entries:", d.split_id);
-                        for (k, t) in &raw {
-                            eprintln!(
-                                "[rs-raw-unifier]   {}.{}/{:?} → {:?}",
-                                k.name,
-                                k.idx,
-                                k.sort,
-                                format!("{:?}", t).chars().take(80).collect::<String>()
-                            );
-                        }
-                    }
                     // EXTRACT-SYSTEM-VARS-TO-DOMAIN: the AC-free local
                     // unifier path (maude_proc.rs, the AC-free fast path
                     // in `unify`) doesn't
@@ -2714,18 +2110,6 @@ impl EquationStore {
                     let mut witnesses: Vec<(LVar, LVar)> = Vec::new();
                     if !to_lift.is_empty() {
                         let base = aes_maude.reserve_idxs(to_lift.len() as u64);
-                        if tamarin_utils::env_gate!("TAM_RS_DBG_FOLD_DRAWS") {
-                            eprintln!(
-                                "[rs-fold] to_lift len={} base={} avoid_max={} vars={:?}",
-                                to_lift.len(),
-                                base,
-                                avoid_max,
-                                to_lift
-                                    .iter()
-                                    .map(|s| format!("{}.{}", s.name, s.idx))
-                                    .collect::<Vec<_>>()
-                            );
-                        }
                         for (i, s) in to_lift.iter().enumerate() {
                             let w = LVar {
                                 name: s.name,
@@ -2773,7 +2157,6 @@ impl EquationStore {
                     if dbg_in.is_some() {
                         eprintln!("  OUT: {:?}", out_subst.to_list());
                     }
-                    dbg_register_subst_transform("applyBound", s, &out_subst);
                     new_substs.push(out_subst);
                 }
             }
@@ -2832,55 +2215,6 @@ impl EquationStore {
                     eprintln!("  out[{}]: {:?}", j, s.to_list());
                 }
             }
-            // TAM_DBG_BAD_DISJ=1: detect collision in new_substs.
-            if aes_dbg_bad_disj() {
-                for s in &new_substs {
-                    let entries: Vec<(LVar, LNTerm)> = s.to_list();
-                    let mut seen: std::collections::BTreeMap<String, LVar> =
-                        std::collections::BTreeMap::new();
-                    for (k, v) in &entries {
-                        if let tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(vv)) = v
-                        {
-                            let v_str = format!("{}.{}", vv.name, vv.idx);
-                            if let Some(prev_k) = seen.get(&v_str) {
-                                if prev_k.name == k.name && prev_k != k {
-                                    eprintln!(
-                                        "[BAD_DISJ_AES] sid={:?} collision: {}.{} + {}.{} → {}",
-                                        d.split_id, prev_k.name, prev_k.idx, k.name, k.idx, v_str
-                                    );
-                                    eprintln!("[BAD_DISJ_AES] subst:");
-                                    for (k2, v2) in &entries {
-                                        eprintln!(
-                                            "[BAD_DISJ_AES]   {}.{}/{:?} → {:?}",
-                                            k2.name,
-                                            k2.idx,
-                                            k2.sort,
-                                            format!("{:?}", v2)
-                                                .chars()
-                                                .take(80)
-                                                .collect::<String>()
-                                        );
-                                    }
-                                    eprintln!("[BAD_DISJ_AES] asubst={:?}", asubst.to_list());
-                                    eprintln!(
-                                        "[BAD_DISJ_AES] input subst (pre-aes) for this variant:"
-                                    );
-                                    let bt = std::backtrace::Backtrace::force_capture();
-                                    let bt_s = format!("{}", bt);
-                                    let frames: Vec<&str> = bt_s
-                                        .lines()
-                                        .filter(|l| l.contains("tamarin_") || l.contains(".rs:"))
-                                        .take(20)
-                                        .collect();
-                                    eprintln!("[BAD_DISJ_AES] backtrace:\n{}", frames.join("\n"));
-                                    break;
-                                }
-                            }
-                            seen.insert(v_str, *k);
-                        }
-                    }
-                }
-            }
             new_conj.push(EqDisj {
                 split_id: d.split_id,
                 substs: new_substs,
@@ -2909,104 +2243,6 @@ fn is_constant_term(t: &LNTerm) -> bool {
         t,
         tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Con(_))
     )
-}
-
-/// `TAM_RS_TRACE_FRESH_BIND=1`: log every binding being composed into
-/// the eq-store whose key or value is Fresh-sorted.  Used to find the
-/// upstream binding that equates two distinct protocol rules' fresh
-/// variables (which then causes `enforce_fresh_node_uniqueness` to
-/// merge their suppliers and `enforce_edge_uniqueness` to fire
-/// prem_idx_clash false-positives).
-fn log_fresh_bindings(site: &str, subst: &LNSubst) {
-    if !tamarin_utils::env_gate!("TAM_RS_TRACE_FRESH_BIND") {
-        return;
-    }
-    use tamarin_term::lterm::LSort;
-    use tamarin_term::term::Term;
-    use tamarin_term::vterm::Lit;
-    for (v, t) in subst.to_list() {
-        // Find any Fresh-sort var on either side.
-        let lhs_fresh = v.sort == LSort::Fresh;
-        let mut rhs_has_fresh = false;
-        if let Term::Lit(Lit::Var(rv)) = &t {
-            if rv.sort == LSort::Fresh {
-                rhs_has_fresh = true;
-            }
-        }
-        if lhs_fresh || rhs_has_fresh {
-            let t_str: String = format!("{:?}", t).chars().take(120).collect();
-            eprintln!(
-                "[FRESH_BIND] site={} {}.{}/{:?} → {}",
-                site, v.name, v.idx, v.sort, t_str
-            );
-        }
-    }
-}
-
-/// TAM_RS_TRACE_S_BIND: log every binding where lhs OR rhs mentions an
-/// LVar with name="S" and sort=Pub.  Used to pinpoint the moment a
-/// freshly-grafted Serv_1's $S diverges from the lemma's $S.
-pub(crate) fn log_s_pub_bindings(site: &str, subst: &LNSubst) {
-    if !tamarin_utils::env_gate!("TAM_RS_TRACE_S_BIND") {
-        return;
-    }
-    use tamarin_term::lterm::{HasFrees, LSort};
-    for (v, t) in subst.to_list() {
-        let v_is_s = v.name == "S" && v.sort == LSort::Pub;
-        let mut t_has_s = false;
-        t.for_each_free(&mut |w: &tamarin_term::lterm::LVar| {
-            if w.name == "S" && w.sort == LSort::Pub {
-                t_has_s = true;
-            }
-        });
-        if v_is_s || t_has_s {
-            let path = crate::constraint::solver::trace::case_path_string();
-            let bt = std::backtrace::Backtrace::force_capture();
-            let bt_str = format!("{}", bt);
-            // Trim the backtrace to the most relevant 4 frames
-            // (caller's call stack into the eq_store).
-            let bt_short: String = bt_str
-                .lines()
-                .filter(|l| l.contains("tamarin_") && !l.contains(".cargo"))
-                .take(6)
-                .collect::<Vec<_>>()
-                .join(" | ");
-            let t_str: String = format!("{:?}", t).chars().take(120).collect();
-            eprintln!(
-                "[S_BIND] path={} site={} {}.{}/{:?} → {}  | bt={}",
-                path, site, v.name, v.idx, v.sort, t_str, bt_short
-            );
-        }
-    }
-}
-
-/// TAM_RS_TRACE_VR_BIND: log every binding where lhs is a Node LVar with
-/// name "vr" (rule-instance node ids).  Used to pinpoint when grafted
-/// Serv_1 node ids get renamed to low-idx values that collide with
-/// pre-existing instances.
-pub(crate) fn log_vr_node_bindings(site: &str, subst: &LNSubst) {
-    if !tamarin_utils::env_gate!("TAM_RS_TRACE_VR_BIND") {
-        return;
-    }
-    use tamarin_term::lterm::LSort;
-    for (v, t) in subst.to_list() {
-        if v.name == "vr" && v.sort == LSort::Node {
-            let path = crate::constraint::solver::trace::case_path_string();
-            let bt = std::backtrace::Backtrace::force_capture();
-            let bt_str = format!("{}", bt);
-            let bt_short: String = bt_str
-                .lines()
-                .filter(|l| l.contains("tamarin_") && !l.contains(".cargo"))
-                .take(6)
-                .collect::<Vec<_>>()
-                .join(" | ");
-            let t_str: String = format!("{:?}", t).chars().take(60).collect();
-            eprintln!(
-                "[VR_BIND] path={} site={} vr.{} → {}  | bt={}",
-                path, site, v.idx, t_str, bt_short
-            );
-        }
-    }
 }
 
 /// Re-export sort comparison from the term layer for `simp_identify`.

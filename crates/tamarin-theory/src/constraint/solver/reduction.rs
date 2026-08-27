@@ -1559,11 +1559,6 @@ impl<'ctx> Reduction<'ctx> {
                 eprintln!("[vs-dump]   [{}]: {}", i, pairs.join(" ; "));
             }
         }
-        if crate::tools::equation_store::impure_dbg_enabled() {
-            for s in &substs {
-                crate::tools::equation_store::dbg_register_subst_origin("solveRuleConstraints", s);
-            }
-        }
         let id = self.sys.eq_store_mut().add_disj(substs);
         // HS-faithful order (Reduction.hs:788-797): `solveRuleConstraints
         // (Just eqConstr)` is
@@ -1594,39 +1589,6 @@ impl<'ctx> Reduction<'ctx> {
         self.insert_goal(Goal::Split(id));
         let folded;
         {
-            use tamarin_term::lterm::HasFrees;
-            // Functionally-dead preserve set (here the deliberately narrower
-            // no-goals variant): `simp_singleton_avoiding` reads it only
-            // under the three debug gates — the fold calls
-            // `fresh_to_free_avoiding`, which ignores it — so build it only
-            // when a gate is on.  The debug-branch body performs the full
-            // inline walk, so debug traces stay identical.
-            let sys_vars: std::collections::BTreeSet<tamarin_term::lterm::LVar> =
-                if preserve_dbg_gates_enabled() {
-                    let mut sys_vars: std::collections::BTreeSet<tamarin_term::lterm::LVar> =
-                        std::collections::BTreeSet::new();
-                    let mut visit = |v: &tamarin_term::lterm::LVar| {
-                        sys_vars.insert(*v);
-                    };
-                    for (id, rule) in self.sys.nodes.iter() {
-                        id.for_each_free(&mut visit);
-                        rule.for_each_free(&mut visit);
-                    }
-                    for e in &self.sys.edges {
-                        e.src.0.for_each_free(&mut visit);
-                        e.tgt.0.for_each_free(&mut visit);
-                    }
-                    for l in &self.sys.less_atoms {
-                        l.smaller.for_each_free(&mut visit);
-                        l.larger.for_each_free(&mut visit);
-                    }
-                    if let Some(la) = &self.sys.last_atom {
-                        la.for_each_free(&mut visit);
-                    }
-                    sys_vars
-                } else {
-                    std::collections::BTreeSet::new()
-                };
             let maude = self.maude.clone();
             let store = std::sync::Arc::unwrap_or_clone(self.sys.take_eq_store());
             self.sys.invalidate_max_var_idx_cache();
@@ -1637,7 +1599,6 @@ impl<'ctx> Reduction<'ctx> {
                 .set_eq_store(std::sync::Arc::new(store.simp_with_fresh_avoiding(
                     |_, _| false,
                     |n| maude.reserve_idxs(n),
-                    &sys_vars,
                     Some(&maude),
                 )));
             // eq_store simp can rewrite/drop subst entries → max may lower.
@@ -2718,18 +2679,6 @@ impl<'ctx> Reduction<'ctx> {
         let nf_checker = has_reducible.then(|| {
             crate::constraint::solver::contradictions::SubstNfChecker::new(&maude, &self.sys)
         });
-        // Collect live system vars so `simp_singleton`'s `fresh_to_free`
-        // doesn't rename them.  Mirrors `solve_split_goal`'s approach.
-        // Functionally dead in production: `simp_singleton_avoiding` reads
-        // this set ONLY inside its three debug gates (the fold itself calls
-        // `fresh_to_free_avoiding`, which ignores it), so only pay the
-        // whole-System walk when a gate is on — see
-        // `preserve_dbg_gates_enabled`.
-        let system_vars = if preserve_dbg_gates_enabled() {
-            collect_live_system_vars(&self.sys)
-        } else {
-            std::collections::BTreeSet::new()
-        };
         let store = std::sync::Arc::unwrap_or_clone(self.sys.take_eq_store());
         // Use `simp_with_fresh_avoiding` so singleton SplitG disjunctions
         // get folded into `subst` via `simp_singleton`.  Haskell's `simp`
@@ -2740,7 +2689,7 @@ impl<'ctx> Reduction<'ctx> {
         // emits an extra `solve` step for it (e.g. issue193::debug).
         let maude_alloc = maude.clone();
         // Closure-style helper: simp one EquationStore with the same
-        // non-normal-terms predicate + system_vars.  Reused for both
+        // non-normal-terms predicate.  Reused for both
         // the no-split branch and the per-arm SplitNow loop below.
         // `nf_checker.is_some()` iff `has_reducible` (built via
         // `has_reducible.then(...)`), so the checker's presence IS the
@@ -2748,7 +2697,7 @@ impl<'ctx> Reduction<'ctx> {
         // the non-normal-terms check must run.
         let do_simp = |s: crate::tools::equation_store::EquationStore|
                 -> crate::tools::equation_store::EquationStore {
-            simp_store(s, nf_checker.as_ref(), &maude_alloc, &system_vars)
+            simp_store(s, nf_checker.as_ref(), &maude_alloc)
         };
 
         match (split, strategy) {
@@ -3451,11 +3400,6 @@ impl<'ctx> Reduction<'ctx> {
                         j,
                         pairs.join(", ")
                     );
-                }
-            }
-            if crate::tools::equation_store::impure_dbg_enabled() {
-                for s in &disj.substs {
-                    crate::tools::equation_store::dbg_register_subst_origin("conjoinSystem", s);
                 }
             }
             let id = self.sys.eq_store_mut().add_disj(disj.substs.clone());
@@ -4644,72 +4588,6 @@ fn freshen_rule(
     freshen_rule_with_constrs(rule, None, avoid_max, maude).0
 }
 
-/// True iff one of the three debug gates that actually READ the
-/// `system_vars` / `external_preserve` set is enabled: `TAM_DBG_APPLY_EQ`,
-/// `TAM_DBG_FOLD_VARIANT`, or `TAM_RS_DBG_IMPURE_FOLD`.  Everywhere else the
-/// set is functionally dead: `EquationStore::simp_singleton_avoiding` reads
-/// `external_preserve` ONLY inside those three gates, and the actual fold
-/// calls `SubstVFresh::fresh_to_free_avoiding`, which builds its own (empty)
-/// preserve and ignores the passed-in set (HS has no "preserve" concept).
-/// Gating the whole-System live-var walk on this keeps production `--prove`
-/// output byte-identical while reproducing identical debug traces when a
-/// flag is on.
-fn preserve_dbg_gates_enabled() -> bool {
-    tamarin_utils::env_gate!("TAM_DBG_APPLY_EQ")
-        || tamarin_utils::env_gate!("TAM_DBG_FOLD_VARIANT")
-        || crate::tools::equation_store::impure_dbg_enabled()
-}
-
-/// Collect the LIVE free system vars — node ids, rule
-/// premise/conclusion/action vars, edges, less atoms, last atom, and
-/// goals — into an (order-insensitive) `BTreeSet`.  Passed to
-/// `simp_with_fresh_avoiding` as `system_vars` so the singleton fold's
-/// `fresh_to_free` doesn't rename them.  Shared verbatim by
-/// `solve_term_eqs` and `solve_split_goal`; `solve_rule_constraints`
-/// keeps a deliberately narrower no-goals variant inline (adding goal
-/// vars there would change its `fresh_to_free` renaming), so it is NOT
-/// folded in here.
-fn collect_live_system_vars(sys: &System) -> std::collections::BTreeSet<tamarin_term::lterm::LVar> {
-    use tamarin_term::lterm::HasFrees;
-    let mut s = std::collections::BTreeSet::new();
-    let mut visit = |v: &tamarin_term::lterm::LVar| {
-        s.insert(*v);
-    };
-    for (id, rule) in sys.nodes.iter() {
-        id.for_each_free(&mut visit);
-        rule.for_each_free(&mut visit);
-    }
-    for e in &sys.edges {
-        e.src.0.for_each_free(&mut visit);
-        e.tgt.0.for_each_free(&mut visit);
-    }
-    for l in &sys.less_atoms {
-        l.smaller.for_each_free(&mut visit);
-        l.larger.for_each_free(&mut visit);
-    }
-    if let Some(la) = &sys.last_atom {
-        la.for_each_free(&mut visit);
-    }
-    for (g, _) in sys.goals.iter() {
-        match g {
-            crate::constraint::constraints::Goal::Action(n, fa) => {
-                n.for_each_free(&mut visit);
-                fa.for_each_free(&mut visit);
-            }
-            crate::constraint::constraints::Goal::Premise(p, fa) => {
-                p.0.for_each_free(&mut visit);
-                fa.for_each_free(&mut visit);
-            }
-            crate::constraint::constraints::Goal::Chain(c, p) => {
-                c.0.for_each_free(&mut visit);
-                p.0.for_each_free(&mut visit);
-            }
-            _ => {}
-        }
-    }
-    s
-}
-
 /// Fan a solve outcome into one system per equation-store arm.  `Cases`
 /// clones `base` per arm and installs that arm's eq_store (same order,
 /// same `Arc` wrapping); every other outcome yields the single `base`.
@@ -4734,31 +4612,26 @@ fn fanout_arm_systems(outcome: SolveOutcome, base: System) -> Vec<System> {
     }
 }
 
-/// simp one `EquationStore` with `simp_with_fresh_avoiding`, using the
-/// shared `system_vars` fresh-avoid set and the same `reserve_idxs`
-/// counter draw.  `Some(checker)` wires the `substCreatesNonNormalTerms`
-/// predicate; `None` disables it (`|_,_| false`), mirroring the
-/// `has_reducible` gate at the call sites.  Shared by `solve_term_eqs`'s
-/// `do_simp` and `solve_split_goal`'s `simplify_picked`.
+/// simp one `EquationStore` with `simp_with_fresh_avoiding`, drawing fresh
+/// indices from the same `reserve_idxs` counter.  `Some(checker)` wires the
+/// `substCreatesNonNormalTerms` predicate; `None` disables it
+/// (`|_,_| false`), mirroring the `has_reducible` gate at the call sites.
+/// Shared by `solve_term_eqs`'s `do_simp` and `solve_split_goal`'s
+/// `simplify_picked`.
 fn simp_store(
     store: crate::tools::equation_store::EquationStore,
     checker: Option<&crate::constraint::solver::contradictions::SubstNfChecker>,
     maude: &tamarin_term::maude_proc::MaudeHandle,
-    vars: &std::collections::BTreeSet<tamarin_term::lterm::LVar>,
 ) -> crate::tools::equation_store::EquationStore {
     match checker {
         Some(checker) => store.simp_with_fresh_avoiding(
             |fs, vfs| checker.check(fs, vfs),
             |n| maude.reserve_idxs(n),
-            vars,
             Some(maude),
         ),
-        None => store.simp_with_fresh_avoiding(
-            |_, _| false,
-            |n| maude.reserve_idxs(n),
-            vars,
-            Some(maude),
-        ),
+        None => {
+            store.simp_with_fresh_avoiding(|_, _| false, |n| maude.reserve_idxs(n), Some(maude))
+        }
     }
 }
 
@@ -7172,30 +7045,12 @@ impl<'ctx> Reduction<'ctx> {
         let nf_checker = has_reducible.then(|| {
             crate::constraint::solver::contradictions::SubstNfChecker::new(&maude, &self.sys)
         });
-        // Collect the system's free vars — these are LIVE system vars
-        // (node ids, rule premise/conclusion/action vars, edges, less
-        // atoms, goals, formulas).  Pass to `simp_with_fresh_avoiding`
-        // so the singleton fold's `fresh_to_free` doesn't rename them.
-        // Pattern_matching::Responder_secrecy bug:  Setup_Key's `k:F#0`
-        // got baked into the variant subst's range via `apply_eq_store`,
-        // then `fresh_to_free` renamed it, desyncing the rule's two
-        // premises.
-        // Functionally dead in production: `simp_singleton_avoiding` reads
-        // this set ONLY inside its three debug gates (the fold itself calls
-        // `fresh_to_free_avoiding`, which ignores it), so only pay the
-        // whole-System walk when a gate is on — see
-        // `preserve_dbg_gates_enabled`.
-        let system_vars = if preserve_dbg_gates_enabled() {
-            collect_live_system_vars(&self.sys)
-        } else {
-            std::collections::BTreeSet::new()
-        };
         // `nf_checker.is_some()` iff `has_reducible`, so `as_ref()` is
         // `Some` exactly when the non-normal-terms check must run.
         let simplify_picked = |store: crate::tools::equation_store::EquationStore|
             -> crate::tools::equation_store::EquationStore
         {
-            simp_store(store, nf_checker.as_ref(), &maude, &system_vars)
+            simp_store(store, nf_checker.as_ref(), &maude)
         };
         if cases.len() == 1 {
             if tamarin_utils::env_gate!("TAM_RS_DBG_FOLD_DRAWS") {
