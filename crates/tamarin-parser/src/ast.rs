@@ -395,6 +395,13 @@ pub enum Condition {
 // Facts
 // =============================================================================
 
+/// HS `Fact` ignores its annotations in equality and ordering
+/// (Theory/Model/Fact.hs:169-174) and holds them in a `S.Set`, where they
+/// have no order at all; the derive here reads `annotations` as an ordered
+/// list, so this equality is finer than HS's.  Only test assertions compare a
+/// parsed fact — the elaborated `tamarin_theory::fact::Fact` that production
+/// code compares does drop them, through a hand-written `PartialEq` carrying
+/// the same cite.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Fact {
     pub persistent: bool,
@@ -464,7 +471,7 @@ pub enum Term {
     PatMatch(Box<Term>),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinOp {
     Exp,     // ^
     Mult,    // *
@@ -504,7 +511,7 @@ impl BinOp {
 
 /// A variable occurrence: HS `LVar` plus the SAPIC type annotation HS keeps
 /// beside it in `SapicLVar` (Theory/Sapic/Term.hs:64-65).
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VarSpec {
     pub name: String,
     pub idx: u64,

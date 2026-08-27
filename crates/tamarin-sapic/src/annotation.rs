@@ -15,7 +15,7 @@ use tamarin_theory::sapic::{
 
 /// Variable annotation wrapper. Semantics: when combined with itself the
 /// rightmost wins (matches Haskell `instance Semigroup AnVar`).
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AnVar<V>(pub V);
 
 /// Annotations attached to a process during translation.
@@ -47,6 +47,9 @@ pub(crate) struct ProcessAnnotation<V> {
     pub is_state_channel: Option<SapicTerm>,
 }
 
+/// HS `instance Monoid (ProcessAnnotation v)` sets `elseBranch` to `True` in
+/// `mempty` (sapic/src/Sapic/Annotation.hs:73-74), which no derive can
+/// express, and a derive would also demand `V: Default`.
 impl<V> Default for ProcessAnnotation<V> {
     fn default() -> Self {
         ProcessAnnotation {
