@@ -569,7 +569,6 @@ fn render_attrs(attrs: &[LemmaAttr], in_file: &str) -> String {
             LemmaAttr::Output(xs) => format!("output={}", xs.join(",")),
             LemmaAttr::Left => "left".into(),
             LemmaAttr::Right => "right".into(),
-            LemmaAttr::Hint(s) => s.clone(),
         })
         .collect();
     format!(" [{}]", parts.join(", "))

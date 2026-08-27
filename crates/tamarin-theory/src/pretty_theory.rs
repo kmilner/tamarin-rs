@@ -1525,34 +1525,30 @@ fn lemma_head(
     out
 }
 
-/// HS `prettyLemmaAttribute` (lib/theory/src/Lemma.hs:97-107) over the
-/// theory's own attribute type; an attribute HS has no case for renders
-/// nothing (`prettyLemmaAttribute _ = emptyDoc`, `:106`).
+/// HS `prettyLemmaAttribute` (lib/theory/src/Lemma.hs:97-106) over the
+/// theory's own attribute type.
 fn lemma_attr_docs(
     attrs: &[crate::theory::LemmaAttr],
     in_file: &str,
 ) -> Vec<crate::pretty_hpj::Doc> {
     use crate::pretty_hpj::Doc;
+    use crate::theory::LemmaAttr::*;
     let mut out = Vec::new();
     for a in attrs {
-        use crate::theory::LemmaAttr::*;
-        let s: Option<String> = match a {
-            Sources => Some("sources".into()),
-            Reuse => Some("reuse".into()),
-            DiffReuse => Some("diff_reuse".into()),
-            UseInduction => Some("use_induction".into()),
-            HideLemma(s) => Some(format!("hide_lemma={}", s)),
+        let s: String = match a {
+            Sources => "sources".into(),
+            Reuse => "reuse".into(),
+            DiffReuse => "diff_reuse".into(),
+            UseInduction => "use_induction".into(),
+            HideLemma(s) => format!("hide_lemma={}", s),
             // HS `text ("heuristic=" ++ prettyGoalRankings h)` (`:103`),
             // space-separated and with the oracle name expanded.
-            Heuristic(s) => Some(format!("heuristic={}", pretty_heuristic_str(s, in_file))),
-            Output(modules) => Some(format!("output=[{}]", modules.join(","))),
-            Left => Some("left".into()),
-            Right => Some("right".into()),
-            Hint(_) => None,
+            Heuristic(s) => format!("heuristic={}", pretty_heuristic_str(s, in_file)),
+            Output(modules) => format!("output=[{}]", modules.join(",")),
+            Left => "left".into(),
+            Right => "right".into(),
         };
-        if let Some(s) = s {
-            out.push(Doc::text(s));
-        }
+        out.push(Doc::text(s));
     }
     out
 }

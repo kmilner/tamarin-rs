@@ -19,7 +19,9 @@ pub enum TraceQuantifier {
 }
 
 /// HS `LemmaAttribute` (Items/LemmaItem.hs:27-40): an attribute written in a
-/// lemma's `[...]` list.
+/// lemma's `[...]` list.  HS's `LemmaTactic` has no counterpart here: no
+/// spelling in `lemmaAttribute` (Theory/Text/Parser/Lemma.hs:38-53) builds
+/// one, so nothing can carry it.
 #[derive(Debug, Clone, PartialEq)]
 pub enum LemmaAttr {
     /// `SourceLemma`, spelled `sources` or `typing`.
@@ -40,8 +42,6 @@ pub enum LemmaAttr {
     Left,
     /// `RHSLemma`, spelled `right`.
     Right,
-    /// `LemmaTactic`.
-    Hint(String),
 }
 
 /// HS `FactAnnotation` (Theory/Model/Fact.hs:151-155): a property carried
