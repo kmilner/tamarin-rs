@@ -20,6 +20,7 @@ use tamarin_theory::fact::{FactTag, LNFact, Multiplicity};
 use tamarin_theory::rule::{ProtoRuleEInfo, ProtoRuleName, Rule, RuleAttributes};
 
 use crate::base_translation::list_union;
+use crate::facts::{is_let_fact, is_lock_fact, is_out_fact, is_state_fact};
 
 type ERule = Rule<ProtoRuleEInfo>;
 
@@ -34,43 +35,6 @@ fn is_sapic_no_compress(f: &LNFact) -> bool {
     } else {
         false
     }
-}
-
-/// `isStateFact` (Facts.hs:291-295): name starts with `State` or `Semistate`.
-fn is_state_fact(f: &LNFact) -> bool {
-    if let FactTag::Proto(_, name, _) = &f.tag {
-        name.starts_with("State") || name.starts_with("Semistate")
-    } else {
-        false
-    }
-}
-
-/// `isLetFact` (Facts.hs:286-289): name starts with `Let`.
-fn is_let_fact(f: &LNFact) -> bool {
-    if let FactTag::Proto(_, name, _) = &f.tag {
-        name.starts_with("Let")
-    } else {
-        false
-    }
-}
-
-/// `isLockFact` (Facts.hs:297-300): name starts with `L_CellLocked`.
-fn is_lock_fact(f: &LNFact) -> bool {
-    if let FactTag::Proto(_, name, _) = &f.tag {
-        name.starts_with("L_CellLocked")
-    } else {
-        false
-    }
-}
-
-/// `isOutFact` (Facts.hs:278-280).
-fn is_out_fact(f: &LNFact) -> bool {
-    matches!(f.tag, FactTag::Out)
-}
-
-/// `isPersistentFact`: a persistent-multiplicity fact.
-fn is_persistent_fact(f: &LNFact) -> bool {
-    matches!(&f.tag, FactTag::Proto(Multiplicity::Persistent, _, _))
 }
 
 /// `isStateProcessFact f = isStateFact f || isLetFact f` (Compression.hs:37-38).
@@ -231,7 +195,8 @@ fn compress_one(
     // `new_facts` are SHARED across both guards — the persistent case returns the
     // UNCOMPRESSED `msr` but STILL computes `new_facts` from the merge of the
     // fact's prem/concs rules (NOT `getProducedFacts msr`).
-    let persistent = is_persistent_fact(fact);
+    // `isPersistentFact` (Theory/Model/Fact.hs:379-380).
+    let persistent = fact.is_persistent();
     if persistent {
         // Compute `new_facts` from the merge, but return the ORIGINAL `msr`
         // unchanged — so partition a CLONE with the same prem/concs helpers the

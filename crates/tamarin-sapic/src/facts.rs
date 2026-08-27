@@ -368,6 +368,36 @@ pub(crate) fn is_non_semi_state(f: &TransFact) -> bool {
     matches!(f, TransFact::State(kind, _, _) if !kind.is_semi_state())
 }
 
+/// `isOutFact` (Facts.hs:278-280).
+pub(crate) fn is_out_fact(f: &LNFact) -> bool {
+    matches!(f.tag, tamarin_theory::fact::FactTag::Out)
+}
+
+/// `isLetFact` (Facts.hs:286-289): name starts with `Let`.
+pub(crate) fn is_let_fact(f: &LNFact) -> bool {
+    proto_name_starts_with(f, &["Let"])
+}
+
+/// `isStateFact` (Facts.hs:291-295): name starts with `State` or `Semistate`.
+pub(crate) fn is_state_fact(f: &LNFact) -> bool {
+    proto_name_starts_with(f, &["State", "Semistate"])
+}
+
+/// `isLockFact` (Facts.hs:297-300): name starts with `L_CellLocked`.
+pub(crate) fn is_lock_fact(f: &LNFact) -> bool {
+    proto_name_starts_with(f, &["L_CellLocked"])
+}
+
+/// True when `f` is a proto fact whose name starts with one of `prefixes`.
+fn proto_name_starts_with(f: &LNFact, prefixes: &[&str]) -> bool {
+    match &f.tag {
+        tamarin_theory::fact::FactTag::Proto(_, name, _) => {
+            prefixes.iter().any(|p| name.starts_with(p))
+        }
+        _ => false,
+    }
+}
+
 /// `addVarToState v' (State kind pos vs) = State kind pos (v' `S.insert` vs)`
 /// (Facts.hs:162-164): insert a variable into a `State` fact's variable set;
 /// other facts unchanged.
