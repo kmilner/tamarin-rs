@@ -2290,6 +2290,23 @@ fn ku_vars(rule: &crate::rule::RuleACInst) -> IsAcConstructor {
     }
 }
 
+/// The `updateStatus` half of HS `markGoalAsSolved` (Reduction.hs:529-560)
+/// applied to one case's system: set `gsSolved` on the goal's status entry.
+/// HS's `sGoals` is a map, so its insert hits the single entry for the goal;
+/// RS's goal list can hold the same goal twice, so the first entry that still
+/// carries it unsolved is the one updated.  The `sFormulas`/`sSolvedFormulas`
+/// bookkeeping of the `DisjG` arm and the `ChainG`/KD-`PremiseG` deletes
+/// belong to [`Reduction::mark_goal_as_solved`], which `dispatch_solve_goal`
+/// runs on the live system before a goal solver forks its cases.
+fn set_goal_solved(sys: &mut crate::constraint::system::System, g: &Goal) {
+    for (existing, status) in sys.goals_mut().iter_mut() {
+        if existing == g && !status.solved {
+            status.solved = true;
+            break;
+        }
+    }
+}
+
 /// `flatten` from HS `solveListEqs` (Reduction.hs:781-786): a list equality
 /// becomes one equality per position, `zipWith Equal l r`, appended to `out`.
 /// Positions beyond the shorter list are dropped, so a caller that owes HS's
@@ -4396,12 +4413,7 @@ impl<'ctx> Reduction<'ctx> {
                         self.sys.clone(),
                         self.maude.fresh_counter_peek(),
                     );
-                    for (existing, status) in sub.sys.goals_mut().iter_mut() {
-                        if existing == &g && !status.solved {
-                            status.solved = true;
-                            break;
-                        }
-                    }
+                    set_goal_solved(&mut sub.sys, &g);
                     // Disj-formula bookkeeping (delete from sys.formulas,
                     // insert into sys.solved_formulas) is already done by
                     // `dispatch_solve_goal`'s `mark_goal_as_solved(g)` call
@@ -4815,12 +4827,7 @@ impl<'ctx> Reduction<'ctx> {
                         let mut sys = post_sys.clone();
                         sys.invalidate_max_var_idx_cache();
                         sys.set_eq_store(std::sync::Arc::new(arm_eq));
-                        for (existing, status) in sys.goals_mut().iter_mut() {
-                            if existing == &g && !status.solved {
-                                status.solved = true;
-                                break;
-                            }
-                        }
+                        set_goal_solved(&mut sys, &g);
                         cases.push((rule_name.clone(), sys));
                         case_counters.push(branch_counter);
                     }
@@ -5266,12 +5273,7 @@ impl<'ctx> Reduction<'ctx> {
                             let mut sys = post_sys.clone();
                             sys.invalidate_max_var_idx_cache();
                             sys.set_eq_store(std::sync::Arc::new(arm_eq));
-                            for (existing, status) in sys.goals_mut().iter_mut() {
-                                if existing == &g && !status.solved {
-                                    status.solved = true;
-                                    break;
-                                }
-                            }
+                            set_goal_solved(&mut sys, &g);
                             cases.push((case_name.clone(), sys));
                             case_counters.push(branch_counter);
                         }
@@ -5601,12 +5603,7 @@ impl<'ctx> Reduction<'ctx> {
                         let post_edge_counter = sub.maude.fresh_counter_peek();
                         let arm_systems = fanout_arm_systems(outcome, post_edge_sys);
                         for mut sys in arm_systems {
-                            for (existing, status) in sys.goals_mut().iter_mut() {
-                                if existing == &g && !status.solved {
-                                    status.solved = true;
-                                    break;
-                                }
-                            }
+                            set_goal_solved(&mut sys, &g);
                             // Subst_system per arm so the variant subst
                             // gets baked into node/edge/goal terms before
                             // saving.  Mirrors `solve_chain_goal`'s
@@ -5734,12 +5731,7 @@ impl<'ctx> Reduction<'ctx> {
                             _ => vec![post_edge_sys],
                         };
                         for mut arm_sys in arm_systems {
-                            for (existing, status) in arm_sys.goals_mut().iter_mut() {
-                                if existing == &g && !status.solved {
-                                    status.solved = true;
-                                    break;
-                                }
-                            }
+                            set_goal_solved(&mut arm_sys, &g);
                             all_cases.push((case_name.clone(), arm_sys));
                             all_case_counters.push(post_edge_counter);
                         }
@@ -5869,12 +5861,7 @@ impl<'ctx> Reduction<'ctx> {
                     arm_sub.insert_goal(Goal::Chain((new_node, crate::rule::ConcIdx(0)), *p));
                     let arm_counter = arm_sub.maude.fresh_counter_peek();
                     arm_sys = arm_sub.sys;
-                    for (existing, status) in arm_sys.goals_mut().iter_mut() {
-                        if existing == &g && !status.solved {
-                            status.solved = true;
-                            break;
-                        }
-                    }
+                    set_goal_solved(&mut arm_sys, &g);
                     all_cases.push((case_name.clone(), arm_sys));
                     all_case_counters.push(arm_counter);
                 }
@@ -6047,12 +6034,7 @@ impl<'ctx> Reduction<'ctx> {
                     arm_sys = arm_sub.sys;
                     // Mark the original chain goal as solved in this case
                     // (it's been extended, not closed).
-                    for (existing, status) in arm_sys.goals_mut().iter_mut() {
-                        if existing == &g && !status.solved {
-                            status.solved = true;
-                            break;
-                        }
-                    }
+                    set_goal_solved(&mut arm_sys, &g);
                     all_cases.push((case_name.clone(), arm_sys));
                     all_case_counters.push(arm_counter);
                 }
@@ -6306,12 +6288,7 @@ impl<'ctx> Reduction<'ctx> {
             sys.invalidate_max_var_idx_cache();
             sys.set_eq_store(std::sync::Arc::new(simplify_picked(store)));
             let branch_counter = self.maude.fresh_counter_peek();
-            for (existing, status) in sys.goals_mut().iter_mut() {
-                if existing == &g && !status.solved {
-                    status.solved = true;
-                    break;
-                }
-            }
+            set_goal_solved(&mut sys, &g);
             // Propagate variant subst into nodes/edges/goals for each
             // case before saving.
             let mut sub = Reduction::new(self.ctx, sys);
