@@ -1377,6 +1377,25 @@ impl<'a> Parser<'a> {
         self.lx.skip_ws();
     }
 
+    /// parsec `chainl1 p op` (`Text.Parsec.Combinator`): one `operand`, then
+    /// as many `op`-then-`operand` pairs as parse, folded left.  `op` consumes
+    /// the operator and names it, or returns `None` to end the chain; `build`
+    /// turns that name and the two operands into the combined value, standing
+    /// for the combining function parsec's `op` yields.
+    fn chainl1<T, O>(
+        &mut self,
+        mut operand: impl FnMut(&mut Self) -> Result<T, ParseError>,
+        mut op: impl FnMut(&mut Self) -> Option<O>,
+        build: impl Fn(O, T, T) -> T,
+    ) -> Result<T, ParseError> {
+        let mut lhs = operand(self)?;
+        while let Some(o) = op(self) {
+            let rhs = operand(self)?;
+            lhs = build(o, lhs, rhs);
+        }
+        Ok(lhs)
+    }
+
     fn at_keyword(&mut self, kw: &str) -> bool {
         // Single non-consuming probe: scan the keyword once, check the
         // trailing-`-` boundary, then always restore.
@@ -4455,40 +4474,31 @@ impl<'a> Parser<'a> {
         self.with_sapic_var_types(|p| p.process_body())
     }
 
+    /// Left-associative parallel / NDC composition.
     fn process_body(&mut self) -> Result<Process, ParseError> {
-        // Left-associative parallel / NDC composition.
-        let mut left = self.action_process()?;
-        loop {
-            self.skip_ws();
-            if self.try_punct("||") {
-                let right = self.action_process()?;
-                left = Process::Comb {
-                    comb: ProcessComb::Parallel,
-                    left: Box::new(left),
-                    right: Box::new(right),
-                };
-            } else if self.lx.peek() == Some('|') && self.lx.peek2() != Some('|') {
-                // Single `|` parallel
-                self.lx.bump();
-                self.skip_ws();
-                let right = self.action_process()?;
-                left = Process::Comb {
-                    comb: ProcessComb::Parallel,
-                    left: Box::new(left),
-                    right: Box::new(right),
-                };
-            } else if self.try_punct("+") {
-                let right = self.action_process()?;
-                left = Process::Comb {
-                    comb: ProcessComb::Ndc,
-                    left: Box::new(left),
-                    right: Box::new(right),
-                };
-            } else {
-                break;
-            }
-        }
-        Ok(left)
+        self.chainl1(
+            |p| p.action_process(),
+            |p| {
+                p.skip_ws();
+                if p.try_punct("||") {
+                    Some(ProcessComb::Parallel)
+                } else if p.lx.peek() == Some('|') && p.lx.peek2() != Some('|') {
+                    // Single `|` parallel
+                    p.lx.bump();
+                    p.skip_ws();
+                    Some(ProcessComb::Parallel)
+                } else if p.try_punct("+") {
+                    Some(ProcessComb::Ndc)
+                } else {
+                    None
+                }
+            },
+            |comb, left, right| Process::Comb {
+                comb,
+                left: Box::new(left),
+                right: Box::new(right),
+            },
+        )
     }
 
     fn action_process(&mut self) -> Result<Process, ParseError> {
@@ -4863,30 +4873,20 @@ impl<'a> Parser<'a> {
     }
 
     fn disjuncts(&mut self) -> Result<Formula, ParseError> {
-        let mut lhs = self.conjuncts()?;
-        loop {
+        self.chainl1(
+            |p| p.conjuncts(),
             // `|` is also process parallel — but inside formulas it's OR.
-            if self.try_punct("|") || self.try_punct("∨") {
-                let rhs = self.conjuncts()?;
-                lhs = Formula::Or(Box::new(lhs), Box::new(rhs));
-            } else {
-                break;
-            }
-        }
-        Ok(lhs)
+            |p| (p.try_punct("|") || p.try_punct("∨")).then_some(()),
+            |(), lhs, rhs| Formula::Or(Box::new(lhs), Box::new(rhs)),
+        )
     }
 
     fn conjuncts(&mut self) -> Result<Formula, ParseError> {
-        let mut lhs = self.negation()?;
-        loop {
-            if self.try_punct("&") || self.try_punct("∧") {
-                let rhs = self.negation()?;
-                lhs = Formula::And(Box::new(lhs), Box::new(rhs));
-            } else {
-                break;
-            }
-        }
-        Ok(lhs)
+        self.chainl1(
+            |p| p.negation(),
+            |p| (p.try_punct("&") || p.try_punct("∧")).then_some(()),
+            |(), lhs, rhs| Formula::And(Box::new(lhs), Box::new(rhs)),
+        )
     }
 
     fn negation(&mut self) -> Result<Formula, ParseError> {
@@ -5151,6 +5151,11 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// [`Self::chainl1`]'s fold for the infix term operators.
+    fn bin_op_term(op: BinOp, lhs: Term, rhs: Term) -> Term {
+        Term::BinOp(op, Box::new(lhs), Box::new(rhs))
+    }
+
     fn msetterm(&mut self, eqn: bool) -> Result<Term, ParseError> {
         let lhs = self.msetterm_inner(eqn)?;
         // The outermost chain level finishing records the carried error the
@@ -5164,57 +5169,58 @@ impl<'a> Parser<'a> {
     /// only under `enableMSet && not eqn`, otherwise the parser drops straight
     /// to [`Self::natterm`] and `++`/`+` are not term operators at all.
     fn msetterm_inner(&mut self, eqn: bool) -> Result<Term, ParseError> {
-        let mut lhs = self.natterm(eqn)?;
-        if self.sig_enable_mset && !eqn {
-            loop {
-                self.skip_ws();
+        if !self.sig_enable_mset || eqn {
+            return self.natterm(eqn);
+        }
+        self.chainl1(
+            |p| p.natterm(eqn),
+            |p| {
+                p.skip_ws();
                 // `++` or `+` (as multiset union); careful with `+` for NDC
                 // and `%+` for nat plus, which are handled separately.
-                if self.lx.rest().starts_with("++") {
-                    self.lx.bump();
-                    self.lx.bump();
-                    self.skip_ws();
-                    let rhs = self.natterm(eqn)?;
-                    lhs = Term::BinOp(BinOp::Union, Box::new(lhs), Box::new(rhs));
-                } else if self.lx.rest().starts_with('+') && !self.lx.rest().starts_with("+>") {
+                if p.lx.rest().starts_with("++") {
+                    p.lx.bump();
+                    p.lx.bump();
+                    p.skip_ws();
+                    Some(BinOp::Union)
+                } else if p.lx.rest().starts_with('+') && !p.lx.rest().starts_with("+>") {
                     // Avoid `+` that's part of process NDC. At term level
                     // we always treat `+` as union.
-                    self.lx.bump();
-                    self.skip_ws();
-                    let rhs = self.natterm(eqn)?;
-                    lhs = Term::BinOp(BinOp::Union, Box::new(lhs), Box::new(rhs));
+                    p.lx.bump();
+                    p.skip_ws();
+                    Some(BinOp::Union)
                 } else {
-                    break;
+                    None
                 }
-            }
-        }
-        Ok(lhs)
+            },
+            Self::bin_op_term,
+        )
     }
 
     /// HS `natterm` (Theory/Text/Parser/Term.hs:203-208): `%+` needs
     /// `enableNat && not eqn`.
     fn natterm(&mut self, eqn: bool) -> Result<Term, ParseError> {
-        let mut lhs = self.xorterm(eqn)?;
-        if self.sig_enable_nat && !eqn {
-            while self.try_punct("%+") {
-                let rhs = self.xorterm(eqn)?;
-                lhs = Term::BinOp(BinOp::NatPlus, Box::new(lhs), Box::new(rhs));
-            }
+        if !self.sig_enable_nat || eqn {
+            return self.xorterm(eqn);
         }
-        Ok(lhs)
+        self.chainl1(
+            |p| p.xorterm(eqn),
+            |p| p.try_punct("%+").then_some(BinOp::NatPlus),
+            Self::bin_op_term,
+        )
     }
 
     /// HS `xorterm` (Theory/Text/Parser/Term.hs:187-192): `XOR`/`⊕` need
     /// `enableXor && not eqn`.
     fn xorterm(&mut self, eqn: bool) -> Result<Term, ParseError> {
-        let mut lhs = self.multterm(eqn)?;
-        if self.sig_enable_xor && !eqn {
-            while self.try_kw("XOR") || self.try_punct("⊕") {
-                let rhs = self.multterm(eqn)?;
-                lhs = Term::BinOp(BinOp::Xor, Box::new(lhs), Box::new(rhs));
-            }
+        if !self.sig_enable_xor || eqn {
+            return self.multterm(eqn);
         }
-        Ok(lhs)
+        self.chainl1(
+            |p| p.multterm(eqn),
+            |p| (p.try_kw("XOR") || p.try_punct("⊕")).then_some(BinOp::Xor),
+            Self::bin_op_term,
+        )
     }
 
     /// HS `multterm` (Theory/Text/Parser/Term.hs:179-185): without
@@ -5224,32 +5230,32 @@ impl<'a> Parser<'a> {
         if !self.sig_enable_dh || eqn {
             return self.acterm(eqn);
         }
-        let mut lhs = self.expterm(eqn)?;
-        loop {
-            self.skip_ws();
-            // Multiplication is `*` but not `**`. Avoid consuming `*}` (formal-comment end).
-            if self.lx.peek() == Some('*') && self.lx.peek2() != Some('}') {
-                self.lx.bump();
-                self.skip_ws();
-                let rhs = self.expterm(eqn)?;
-                lhs = Term::BinOp(BinOp::Mult, Box::new(lhs), Box::new(rhs));
-            } else {
-                break;
-            }
-        }
-        Ok(lhs)
+        self.chainl1(
+            |p| p.expterm(eqn),
+            |p| {
+                p.skip_ws();
+                // Multiplication is `*`, except for the `*}` that closes a
+                // formal comment.
+                if p.lx.peek() == Some('*') && p.lx.peek2() != Some('}') {
+                    p.lx.bump();
+                    p.skip_ws();
+                    Some(BinOp::Mult)
+                } else {
+                    None
+                }
+            },
+            Self::bin_op_term,
+        )
     }
 
+    /// HS `expterm` is "a left-associative sequence of exponentiations"
+    /// (`chainl1`, Parser/Term.hs:174-176).
     fn expterm(&mut self, eqn: bool) -> Result<Term, ParseError> {
-        let mut lhs = self.acterm(eqn)?;
-        // HS `expterm` is "a left-associative sequence of exponentiations"
-        // (`chainl1`, Parser/Term.hs:174-176), so build left-associative
-        // `^` trees here to match.
-        while self.try_punct("^") {
-            let rhs = self.acterm(eqn)?;
-            lhs = Term::BinOp(BinOp::Exp, Box::new(lhs), Box::new(rhs));
-        }
-        Ok(lhs)
+        self.chainl1(
+            |p| p.acterm(eqn),
+            |p| p.try_punct("^").then_some(BinOp::Exp),
+            Self::bin_op_term,
+        )
     }
 
     /// A left-associative sequence of user-defined AC operators — the infix
@@ -5295,21 +5301,17 @@ impl<'a> Parser<'a> {
         let Some(op) = self.ac_fun_syms.get(level).cloned() else {
             return self.atom_term(eqn);
         };
-        let mut lhs = self.ac_chain(level + 1, eqn)?;
-        // HS `opAC (op, _) = symbol_ (BC.unpack op)`, i.e. the symbol's own name
-        // as a plain token.  `try_kw` adds a word boundary that HS's `symbol`
-        // lacks, so HS would also accept the name as a PREFIX of the following
-        // token (`f(x) fg(y)` parsing as `f(f(x), g(y))` for an AC symbol `f`);
-        // such input is not valid syntax in any theory and errors here instead.
-        while self.try_kw(&op) {
-            let rhs = self.ac_chain(level + 1, eqn)?;
-            lhs = Term::BinOp(
-                BinOp::AcFct(intern_ac_name(&op)),
-                Box::new(lhs),
-                Box::new(rhs),
-            );
-        }
-        Ok(lhs)
+        self.chainl1(
+            |p| p.ac_chain(level + 1, eqn),
+            // HS `opAC (op, _) = symbol_ (BC.unpack op)`, i.e. the symbol's own
+            // name as a plain token.  `try_kw` adds a word boundary that HS's
+            // `symbol` lacks, so HS would also accept the name as a PREFIX of
+            // the following token (`f(x) fg(y)` parsing as `f(f(x), g(y))` for
+            // an AC symbol `f`); such input is not valid syntax in any theory
+            // and errors here instead.
+            |p| p.try_kw(&op).then(|| BinOp::AcFct(intern_ac_name(&op))),
+            Self::bin_op_term,
+        )
     }
 
     /// One atomic term, maintaining [`Parser::var_dot_hangover`]: the variable
@@ -6175,21 +6177,19 @@ impl<'a> Parser<'a> {
     // =========================================================================
 
     fn flag_disjuncts(&mut self) -> Result<FlagFormula, ParseError> {
-        let mut lhs = self.flag_conjuncts()?;
-        while self.try_punct("|") || self.try_punct("∨") {
-            let rhs = self.flag_conjuncts()?;
-            lhs = FlagFormula::Or(Box::new(lhs), Box::new(rhs));
-        }
-        Ok(lhs)
+        self.chainl1(
+            |p| p.flag_conjuncts(),
+            |p| (p.try_punct("|") || p.try_punct("∨")).then_some(()),
+            |(), lhs, rhs| FlagFormula::Or(Box::new(lhs), Box::new(rhs)),
+        )
     }
 
     fn flag_conjuncts(&mut self) -> Result<FlagFormula, ParseError> {
-        let mut lhs = self.flag_negation()?;
-        while self.try_punct("&") || self.try_punct("∧") {
-            let rhs = self.flag_negation()?;
-            lhs = FlagFormula::And(Box::new(lhs), Box::new(rhs));
-        }
-        Ok(lhs)
+        self.chainl1(
+            |p| p.flag_negation(),
+            |p| (p.try_punct("&") || p.try_punct("∧")).then_some(()),
+            |(), lhs, rhs| FlagFormula::And(Box::new(lhs), Box::new(rhs)),
+        )
     }
 
     fn flag_negation(&mut self) -> Result<FlagFormula, ParseError> {
