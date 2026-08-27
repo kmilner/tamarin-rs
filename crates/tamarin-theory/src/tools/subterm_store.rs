@@ -10,10 +10,11 @@
 //! constraint accumulation (`add`/`add_neg`), `conjoin` (HS
 //! `conjoinSubtermStores`), the subterm-cycle check `has_subterm_cycle`
 //! (HS `hasSubtermCycle`, the CR-rule S_chain test), and the
-//! `elem_not_below_reducible` predicate (HS `Term.elemNotBelowReducible`).
-//! The simplification passes that depend on AC-unification —
-//! `simpSubtermStore`, `simpSplitNegSt`, and the recursive `splitSubterm`
-//! — are ported in `constraint::solver::simplify` rather than here.
+//! `elem_not_below_reducible` predicate (HS `Term.elemNotBelowReducible`),
+//! the `isTrueFalse` classifier and the `splitSubterm` decomposition both
+//! solver passes drive.  The simplification passes that depend on
+//! AC-unification — `simpSubtermStore` and `simpSplitNegSt` — are ported in
+//! `constraint::solver::simplify` rather than here.
 
 use tamarin_term::apply::Apply;
 use tamarin_term::function_symbols::FunSym;
@@ -301,6 +302,214 @@ pub fn elem_not_below_reducible(
     }
 }
 
+/// `processACSubterm f (small, big)` — HS SubtermStore.hs:313-328.
+/// Returns `Err(false)` / `Err(true)` for the trivially-false /
+/// trivially-true reductions, or `Ok((nSmall, nBig))` for the
+/// terms with common AC children removed (both re-wrapped under `f`).
+pub fn process_ac_subterm(
+    f: tamarin_term::function_symbols::AcSym,
+    small: &LNTerm,
+    big: &LNTerm,
+) -> Result<(LNTerm, LNTerm), bool> {
+    use tamarin_term::lterm::flattened_ac_terms;
+    use tamarin_term::term::f_app_ac;
+    let mut l_small: Vec<LNTerm> = flattened_ac_terms(f, small).into_iter().cloned().collect();
+    let mut l_big: Vec<LNTerm> = flattened_ac_terms(f, big).into_iter().cloned().collect();
+    l_small.sort();
+    l_big.sort();
+    // removeSame over the two sorted lists.
+    let mut s_rem: Vec<LNTerm> = Vec::new();
+    let mut b_rem: Vec<LNTerm> = Vec::new();
+    let mut i = 0usize;
+    let mut j = 0usize;
+    while i < l_small.len() && j < l_big.len() {
+        match l_small[i].cmp(&l_big[j]) {
+            std::cmp::Ordering::Equal => {
+                i += 1;
+                j += 1;
+            }
+            std::cmp::Ordering::Less => {
+                s_rem.push(l_small[i].clone());
+                i += 1;
+            }
+            std::cmp::Ordering::Greater => {
+                b_rem.push(l_big[j].clone());
+                j += 1;
+            }
+        }
+    }
+    while i < l_small.len() {
+        s_rem.push(l_small[i].clone());
+        i += 1;
+    }
+    while j < l_big.len() {
+        b_rem.push(l_big[j].clone());
+        j += 1;
+    }
+    // case lists of (_, []) -> Right False; ([], _) -> Right True; ...
+    if b_rem.is_empty() {
+        return Err(false);
+    }
+    if s_rem.is_empty() {
+        return Err(true);
+    }
+    Ok((f_app_ac(f, s_rem), f_app_ac(f, b_rem)))
+}
+
+/// One leaf of [`split_subterm`] — direct port of HS `SubtermSplit`
+/// (SubtermStore.hs:250-255).  The disjunction-over-list ordering in
+/// `solveSubterm` (`SubtermSplit{i}` case names) depends on the
+/// constructor order being preserved, so the variants and their
+/// `Ord` (derived) must follow HS exactly:
+/// `SubtermD < NatSubtermD < EqualD < ACNewVarD < TrueD`.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub enum SubtermSplit {
+    SubtermD(LNTerm, LNTerm),
+    NatSubtermD(LNTerm, LNTerm),
+    EqualD(LNTerm, LNTerm),
+    /// `((small+newVar, big), newVar)` — HS `ACNewVarD`.
+    AcNewVarD(LNTerm, LNTerm, LVar),
+    TrueD,
+}
+
+/// `step` of HS `splitSubterm` (SubtermStore.hs:279-308).  Allocates a
+/// fresh `newVar` for the AC-recurse arm via `mk_fresh` (a closure
+/// mirroring `MonadFresh`'s `freshLVar "newVar" (sortOfLNTerm big)`).
+/// Returns `None` when `(small, big)` cannot be decomposed further, or
+/// `Some(set)` — sorted and deduped, mirroring HS's `S.Set SubtermSplit`.
+pub fn subterm_step(
+    reducible: &FastSet<FunSym>,
+    small: &LNTerm,
+    big: &LNTerm,
+    mk_fresh: &mut dyn FnMut(tamarin_term::lterm::LSort) -> LVar,
+) -> Option<Vec<SubtermSplit>> {
+    use tamarin_term::function_symbols::AcSym;
+    use tamarin_term::lterm::{flattened_ac_terms, is_msg_var, sort_of_lnterm, LSort};
+    use tamarin_term::term::f_app_ac;
+    use tamarin_term::vterm::{var_term, Lit};
+    // isTrueFalse arms (SubtermStore.hs:280-281).
+    match is_true_false(reducible, small, big) {
+        Some(true) => return Some(vec![SubtermSplit::TrueD]),
+        Some(false) => return Some(vec![]),
+        None => {}
+    }
+    // CR-rule S_nat delayed (SubtermStore.hs:282-286).
+    let small_nat_or_msg = sort_of_lnterm(small) == LSort::Nat || is_msg_var(small);
+    if small_nat_or_msg && sort_of_lnterm(big) == LSort::Nat {
+        return match process_ac_subterm(AcSym::NatPlus, small, big) {
+            Ok((s, t)) => Some(vec![SubtermSplit::NatSubtermD(s, t)]),
+            // HS: Right _ -> error "isTrueFalse did not catch this case 1".
+            // `is_true_false` already handled the reducible cases above; treat
+            // as undecidable rather than panicking to stay total.
+            Err(_) => None,
+        };
+    }
+    let mut out: Vec<SubtermSplit> = match big {
+        // variable big: do not recurse further (SubtermStore.hs:287).
+        Term::Lit(Lit::Var(_)) => return None,
+        // AC big, non-reducible head: S_subterm-ac-recurse
+        // (SubtermStore.hs:289-296).
+        Term::App(FunSym::Ac(f), _) if !reducible.contains(&FunSym::Ac(*f)) => {
+            let f = *f;
+            let big_flat: Vec<LNTerm> = flattened_ac_terms(f, big).into_iter().cloned().collect();
+            let big_norm = f_app_ac(f, big_flat.clone());
+            match process_ac_subterm(f, small, &big_norm) {
+                // Right _ -> error "isTrueFalse did not catch this case 2".
+                Err(_) => return None,
+                Ok((n_small, n_big)) => {
+                    let new_var = mk_fresh(sort_of_lnterm(big));
+                    let small_plus = f_app_ac(f, vec![n_small, var_term(new_var)]);
+                    let mut out: Vec<SubtermSplit> = Vec::with_capacity(1 + big_flat.len());
+                    out.push(SubtermSplit::AcNewVarD(small_plus, n_big, new_var));
+                    // map (curry SubtermD small) (flattenedACTerms f big)
+                    for child in big_flat {
+                        out.push(SubtermSplit::SubtermD(small.clone(), child));
+                    }
+                    out
+                }
+            }
+        }
+        // NoEq big, non-reducible head: S_subterm-recurse
+        // (SubtermStore.hs:297-299), whose leaves come from `eqOrSubterm`
+        // (SubtermStore.hs:307-308).
+        Term::App(fs @ FunSym::NoEq(_), ts) if !reducible.contains(fs) => {
+            let mut out: Vec<SubtermSplit> = Vec::with_capacity(2 * ts.len());
+            for ti in ts.iter() {
+                out.push(SubtermSplit::SubtermD(small.clone(), ti.clone()));
+                out.push(SubtermSplit::EqualD(small.clone(), ti.clone()));
+            }
+            out
+        }
+        // C (commutative but not associative, SubtermStore.hs:300), List
+        // (SubtermStore.hs:302), and any reducible head (SubtermStore.hs:304).
+        _ => return None,
+    };
+    // HS builds each arm as an `S.Set`.
+    out.sort();
+    out.dedup();
+    Some(out)
+}
+
+/// `splitSubterm reducible noRecurse (small, big)` — HS
+/// SubtermStore.hs:261-274.  Returns the sorted-deduped leaf list (HS
+/// `S.toList`) whose disjunction is equivalent to `small ⊏ big`: an empty
+/// list for a trivially false subterm, `[TrueD]` for a trivially true one.
+///
+/// `recurse` is HS's `noRecurse` inverted: `false` takes HS's `singleStep`
+/// (one `step`, used by `solveSubterm` and `simpSplitPosSt`), `true` takes
+/// HS's `recurse`, which re-`step`s every `SubtermD` leaf until it stops
+/// decomposing (used by `simpSplitNegSt`).  `mk_fresh` allocates the
+/// AC-recurse arm's fresh vars, mirroring `MonadFresh`.
+pub fn split_subterm(
+    reducible: &FastSet<FunSym>,
+    recurse: bool,
+    small: &LNTerm,
+    big: &LNTerm,
+    mk_fresh: &mut dyn FnMut(tamarin_term::lterm::LSort) -> LVar,
+) -> Vec<SubtermSplit> {
+    let mut out: Vec<SubtermSplit> = Vec::new();
+    if recurse {
+        recurse_subterm(reducible, small, big, mk_fresh, &mut out);
+    } else {
+        // singleStep (SubtermStore.hs:264-266):
+        //   fromMaybe (S.singleton (SubtermD st)) <$> step st
+        match subterm_step(reducible, small, big, mk_fresh) {
+            Some(v) => out = v,
+            None => out.push(SubtermSplit::SubtermD(small.clone(), big.clone())),
+        }
+    }
+    // Mirror `S.toList`: sort + dedup by the derived Ord.
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// HS `recurse` (SubtermStore.hs:268-274): re-`step` every `SubtermD`
+/// entry, keep every other leaf as it is, and stop where `step` returns
+/// `Nothing`.  Entries are visited in `S.toList` order, which
+/// [`subterm_step`] already produces.
+fn recurse_subterm(
+    reducible: &FastSet<FunSym>,
+    small: &LNTerm,
+    big: &LNTerm,
+    mk_fresh: &mut dyn FnMut(tamarin_term::lterm::LSort) -> LVar,
+    out: &mut Vec<SubtermSplit>,
+) {
+    match subterm_step(reducible, small, big, mk_fresh) {
+        Some(entries) => {
+            for e in entries {
+                match e {
+                    SubtermSplit::SubtermD(s, t) => {
+                        recurse_subterm(reducible, &s, &t, mk_fresh, out)
+                    }
+                    other => out.push(other),
+                }
+            }
+        }
+        None => out.push(SubtermSplit::SubtermD(small.clone(), big.clone())),
+    }
+}
+
 /// The Nat guards of HS `isTrueFalse reducible Nothing` (SubtermStore.hs:335-340),
 /// which fire BEFORE the `redElem` cases:
 ///
@@ -338,10 +547,7 @@ pub fn nat_guards(small: &LNTerm, big: &LNTerm) -> Option<Option<bool>> {
         // -> True, otherwise inconclusive.  The rebuilt `Ok` terms are the
         // caller's business (`splitSubterm`'s `step` re-runs it for the
         // `NatSubtermD` leaf).
-        return Some(
-            crate::constraint::solver::reduction::process_ac_subterm(AcSym::NatPlus, small, big)
-                .err(),
-        );
+        return Some(process_ac_subterm(AcSym::NatPlus, small, big).err());
     }
     None
 }
@@ -389,8 +595,7 @@ pub fn is_true_false_structural(
     // processACSubterm; the rebuilt `Ok` terms are the caller's business.
     if let Term::App(FunSym::Ac(ac_sym), _) = big {
         if !reducible.contains(&FunSym::Ac(*ac_sym)) {
-            return crate::constraint::solver::reduction::process_ac_subterm(*ac_sym, small, big)
-                .err();
+            return process_ac_subterm(*ac_sym, small, big).err();
         }
     }
     None
@@ -540,6 +745,68 @@ mod tests {
     /// The reducible set that contains `h` alone.
     fn reducible_h() -> FastSet<FunSym> {
         [FunSym::NoEq(hash_sym())].into_iter().collect()
+    }
+
+    fn nat_var(name: &str) -> LNTerm {
+        Term::Lit(Lit::Var(LVar::new(name, LSort::Nat, 0)))
+    }
+
+    /// `%x %+ %y %+ ...` — the AC smart constructor collapses a singleton.
+    fn nat_plus(args: Vec<LNTerm>) -> LNTerm {
+        tamarin_term::term::f_app_ac(tamarin_term::function_symbols::AcSym::NatPlus, args)
+    }
+
+    fn nat_one() -> LNTerm {
+        f_app_no_eq(tamarin_term::function_symbols::nat_one_sym(), vec![])
+    }
+
+    /// The AC-recurse arm is the only one that draws, and no test below
+    /// reaches it.
+    fn no_fresh(_sort: LSort) -> LVar {
+        LVar::new("newVar", LSort::Msg, 0)
+    }
+
+    /// CR-rule S_nat (SubtermStore.hs:282-286) hands `NatSubtermD` the pair
+    /// `processACSubterm NatPlus` returns, i.e. with the summands both sides
+    /// share removed: `%x %+ %1 ⊏ %y %+ %1` becomes the leaf `%x ⊏ %y`.
+    /// Keeping the original pair leaves the shared `%1` on both sides, and
+    /// `simpSplitNegSt` then stores — and renders — the unreduced goal.
+    #[test]
+    fn recursive_split_reduces_a_nat_subterm_leaf() {
+        let none: FastSet<FunSym> = FastSet::default();
+        let x = nat_var("x");
+        let y = nat_var("y");
+        let small = nat_plus(vec![x.clone(), nat_one()]);
+        let big = nat_plus(vec![y.clone(), nat_one()]);
+        let mut mk_fresh = no_fresh;
+        assert_eq!(
+            split_subterm(&none, true, &small, &big, &mut mk_fresh),
+            vec![SubtermSplit::NatSubtermD(x, y)]
+        );
+    }
+
+    /// `splitSubterm` returns `S.toList` of a `S.Set SubtermSplit`
+    /// (SubtermStore.hs:262), so the leaves come out in the derived
+    /// constructor order — every `SubtermD` before every `EqualD` — and not
+    /// in the order `eqOrSubterm` (SubtermStore.hs:307-308) pushed them per
+    /// argument.
+    #[test]
+    fn recursive_split_lists_its_leaves_in_set_order() {
+        let none: FastSet<FunSym> = FastSet::default();
+        let x = var("x");
+        let a = var("a");
+        let b = var("b");
+        let mut mk_fresh = no_fresh;
+        let leaves = split_subterm(&none, true, &x, &pair(b.clone(), a.clone()), &mut mk_fresh);
+        assert_eq!(
+            leaves,
+            vec![
+                SubtermSplit::SubtermD(x.clone(), a.clone()),
+                SubtermSplit::SubtermD(x.clone(), b.clone()),
+                SubtermSplit::EqualD(x.clone(), a),
+                SubtermSplit::EqualD(x, b),
+            ]
+        );
     }
 
     /// A store starts consistent and empty.  `add` records the constraint as

@@ -4788,188 +4788,6 @@ fn simp_store(
     }
 }
 
-// =============================================================================
-// splitSubterm (HS Theory.Tools.SubtermStore.splitSubterm) — singleStep
-// variant used by `solveSubterm`.
-// =============================================================================
-
-/// One leaf of `splitSubterm` — direct port of HS `SubtermSplit`
-/// (SubtermStore.hs:250-255).  The disjunction-over-list ordering in
-/// `solveSubterm` (`SubtermSplit{i}` case names) depends on the
-/// constructor order being preserved, so the variants and their
-/// `Ord` (derived) must follow HS exactly:
-/// `SubtermD < NatSubtermD < EqualD < ACNewVarD < TrueD`.
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
-enum SubtermSplit {
-    SubtermD(tamarin_term::lterm::LNTerm, tamarin_term::lterm::LNTerm),
-    NatSubtermD(tamarin_term::lterm::LNTerm, tamarin_term::lterm::LNTerm),
-    EqualD(tamarin_term::lterm::LNTerm, tamarin_term::lterm::LNTerm),
-    /// `((small+newVar, big), newVar)` — HS `ACNewVarD`.
-    AcNewVarD(
-        tamarin_term::lterm::LNTerm,
-        tamarin_term::lterm::LNTerm,
-        tamarin_term::lterm::LVar,
-    ),
-    TrueD,
-}
-
-/// `processACSubterm f (small, big)` — HS SubtermStore.hs:313-328.
-/// Returns `Err(false)` / `Err(true)` for the trivially-false /
-/// trivially-true reductions, or `Ok((nSmall, nBig))` for the
-/// terms with common AC children removed (both re-wrapped under `f`).
-pub(crate) fn process_ac_subterm(
-    f: tamarin_term::function_symbols::AcSym,
-    small: &tamarin_term::lterm::LNTerm,
-    big: &tamarin_term::lterm::LNTerm,
-) -> Result<(tamarin_term::lterm::LNTerm, tamarin_term::lterm::LNTerm), bool> {
-    use tamarin_term::lterm::flattened_ac_terms;
-    use tamarin_term::term::f_app_ac;
-    let mut l_small: Vec<tamarin_term::lterm::LNTerm> =
-        flattened_ac_terms(f, small).into_iter().cloned().collect();
-    let mut l_big: Vec<tamarin_term::lterm::LNTerm> =
-        flattened_ac_terms(f, big).into_iter().cloned().collect();
-    l_small.sort();
-    l_big.sort();
-    // removeSame over the two sorted lists.
-    let mut s_rem: Vec<tamarin_term::lterm::LNTerm> = Vec::new();
-    let mut b_rem: Vec<tamarin_term::lterm::LNTerm> = Vec::new();
-    let mut i = 0usize;
-    let mut j = 0usize;
-    while i < l_small.len() && j < l_big.len() {
-        match l_small[i].cmp(&l_big[j]) {
-            std::cmp::Ordering::Equal => {
-                i += 1;
-                j += 1;
-            }
-            std::cmp::Ordering::Less => {
-                s_rem.push(l_small[i].clone());
-                i += 1;
-            }
-            std::cmp::Ordering::Greater => {
-                b_rem.push(l_big[j].clone());
-                j += 1;
-            }
-        }
-    }
-    while i < l_small.len() {
-        s_rem.push(l_small[i].clone());
-        i += 1;
-    }
-    while j < l_big.len() {
-        b_rem.push(l_big[j].clone());
-        j += 1;
-    }
-    // case lists of (_, []) -> Right False; ([], _) -> Right True; ...
-    if b_rem.is_empty() {
-        return Err(false);
-    }
-    if s_rem.is_empty() {
-        return Err(true);
-    }
-    Ok((f_app_ac(f, s_rem), f_app_ac(f, b_rem)))
-}
-
-/// `step` of HS `splitSubterm` (SubtermStore.hs:279-305).  Allocates a
-/// fresh `newVar` for the AC-recurse arm via `mk_fresh` (a closure
-/// mirroring `MonadFresh`'s `freshLVar "newVar" (sortOfLNTerm big)`).
-/// Returns `None` when `(small, big)` cannot be decomposed further, or
-/// `Some(set)` (deduped, HS uses `S.Set` so duplicates collapse but
-/// iteration is sorted — we keep insertion order then sort+dedup at the
-/// call site to mirror `S.toList`).
-fn subterm_step(
-    reducible: &tamarin_utils::FastSet<tamarin_term::function_symbols::FunSym>,
-    small: &tamarin_term::lterm::LNTerm,
-    big: &tamarin_term::lterm::LNTerm,
-    mk_fresh: &mut dyn FnMut(tamarin_term::lterm::LSort) -> tamarin_term::lterm::LVar,
-) -> Option<Vec<SubtermSplit>> {
-    use tamarin_term::function_symbols::{AcSym, FunSym};
-    use tamarin_term::lterm::{flattened_ac_terms, is_msg_var, sort_of_lnterm, LSort};
-    use tamarin_term::term::{f_app_ac, Term};
-    use tamarin_term::vterm::{var_term, Lit};
-    // isTrueFalse arms (lines 280-281).
-    match crate::tools::subterm_store::is_true_false(reducible, small, big) {
-        Some(true) => return Some(vec![SubtermSplit::TrueD]),
-        Some(false) => return Some(vec![]),
-        None => {}
-    }
-    // CR-rule S_nat delayed (lines 282-286).
-    let small_nat_or_msg = sort_of_lnterm(small) == LSort::Nat || is_msg_var(small);
-    if small_nat_or_msg && sort_of_lnterm(big) == LSort::Nat {
-        return match process_ac_subterm(AcSym::NatPlus, small, big) {
-            Ok((s, t)) => Some(vec![SubtermSplit::NatSubtermD(s, t)]),
-            // HS: Right _ -> error "isTrueFalse did not catch this case 1".
-            // isTrueFalse already handled the reducible cases above; treat
-            // as undecidable rather than panicking to stay total.
-            Err(_) => None,
-        };
-    }
-    match big {
-        // variable big: do not recurse further (line 287).
-        Term::Lit(Lit::Var(_)) => None,
-        // AC big, non-reducible head: S_subterm-ac-recurse (lines 289-296).
-        Term::App(FunSym::Ac(f), _) if !reducible.contains(&FunSym::Ac(*f)) => {
-            let f = *f;
-            let big_flat: Vec<tamarin_term::lterm::LNTerm> =
-                flattened_ac_terms(f, big).into_iter().cloned().collect();
-            let big_norm = f_app_ac(f, big_flat.clone());
-            match process_ac_subterm(f, small, &big_norm) {
-                // Right _ -> error "isTrueFalse did not catch this case 2".
-                Err(_) => None,
-                Ok((n_small, n_big)) => {
-                    let new_var = mk_fresh(sort_of_lnterm(big));
-                    let small_plus = f_app_ac(f, vec![n_small, var_term(new_var)]);
-                    let mut out: Vec<SubtermSplit> = Vec::new();
-                    out.push(SubtermSplit::AcNewVarD(small_plus, n_big, new_var));
-                    // map (curry SubtermD small) (flattenedACTerms f big)
-                    for child in &big_flat {
-                        out.push(SubtermSplit::SubtermD(small.clone(), child.clone()));
-                    }
-                    Some(out)
-                }
-            }
-        }
-        // NoEq big, non-reducible head: S_subterm-recurse (lines 297-299).
-        Term::App(fs @ FunSym::NoEq(_), ts) if !reducible.contains(fs) => {
-            let mut out: Vec<SubtermSplit> = Vec::new();
-            for ti in ts.iter() {
-                // eqOrSubterm small ti (line 307-308).
-                out.push(SubtermSplit::SubtermD(small.clone(), ti.clone()));
-                out.push(SubtermSplit::EqualD(small.clone(), ti.clone()));
-            }
-            Some(out)
-        }
-        // C (commutative but not associative) — reducible (line 300).
-        Term::App(FunSym::C(_), _) => None,
-        // List (line 302).
-        Term::App(FunSym::List, _) => None,
-        // reducible function symbol observed (line 304).
-        _ => None,
-    }
-}
-
-/// `splitSubterm reducible True subterm` — singleStep variant
-/// (SubtermStore.hs:262-266).  Returns the sorted-deduped leaf list
-/// (HS `S.toList`).  `mk_fresh` allocates fresh vars for the AC arm,
-/// mirroring `MonadFresh`.
-fn split_subterm_single(
-    reducible: &tamarin_utils::FastSet<tamarin_term::function_symbols::FunSym>,
-    small: &tamarin_term::lterm::LNTerm,
-    big: &tamarin_term::lterm::LNTerm,
-    mk_fresh: &mut dyn FnMut(tamarin_term::lterm::LSort) -> tamarin_term::lterm::LVar,
-) -> Vec<SubtermSplit> {
-    // singleStep (SubtermStore.hs:264-266):
-    //   fromMaybe (S.singleton (SubtermD st)) <$> step st
-    let set = match subterm_step(reducible, small, big, mk_fresh) {
-        Some(v) => v,
-        None => vec![SubtermSplit::SubtermD(small.clone(), big.clone())],
-    };
-    // Mirror `S.toList`: sort + dedup by the derived Ord.
-    let mut out = set;
-    out.sort();
-    out.dedup();
-    out
-}
-
 /// Build `closeGuarded Ex [newVar] [EqE l r] gtrue` (HS Goals.hs `closeGuarded`).
 /// `newVar` is the single existentially-bound variable; `l`/`r` are the
 /// equation sides, free until `close_guarded` binds them.
@@ -7441,6 +7259,7 @@ impl<'ctx> Reduction<'ctx> {
 
         // splitList <- splitSubterm reducible True st.  Fresh vars for the
         // AC-recurse arm come from the maude counter (HS `freshLVar`).
+        use crate::tools::subterm_store::SubtermSplit;
         let reducible = self.maude.maude_sig().reducible_fun_syms_fast.clone();
         let split_list = {
             let avoid_max = self.fresh_var_baseline();
@@ -7448,7 +7267,13 @@ impl<'ctx> Reduction<'ctx> {
             let maude = self.maude.clone();
             let mut mk_fresh =
                 |sort: LSort| -> LVar { LVar::new("newVar", sort, maude.fresh_idx()) };
-            split_subterm_single(&reducible, &st.0, &st.1, &mut mk_fresh)
+            crate::tools::subterm_store::split_subterm(
+                &reducible,
+                false,
+                &st.0,
+                &st.1,
+                &mut mk_fresh,
+            )
         };
 
         // disjunctionOfList [] -> Contradictory.

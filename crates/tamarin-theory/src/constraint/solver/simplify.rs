@@ -4268,7 +4268,7 @@ fn dedupe_formulas_pass(red: &mut Reduction) -> ChangeIndicator {
 ///     if the step returns `Just [TrueD]` ⇒ remove from store
 ///     (moved to solvedSubterms here);
 ///     arity-one-deduction (SubtermStore.hs:170-183, see line 177): for splits of the form
-///     `[SubtermD st, EqualD (l,r)]` (sorted, NoEq big-side, recurse-step),
+///     `[SubtermD st, EqualD (l,r)]` (sorted, NoEq big-side, single step),
 ///     when `st ∈ negSubterms` we emit `l = r` as an equality formula.
 ///   - `simpSplitNegSt` (SubtermStore.hs:187-204) recurse step on each
 ///     negSubterm: if the recursive split contains `TrueD`, the negation
@@ -4289,11 +4289,6 @@ fn dedupe_formulas_pass(red: &mut Reduction) -> ChangeIndicator {
 ///     emitted as `EqE` formulas, mirroring HS `simpNatCycles`
 ///     (Theory.Tools.SubtermStore.hs:206-211).
 ///
-/// What is intentionally *not* yet ported (and where it impacts):
-///   - Full recursive `splitSubterm` driver for posSt — we only do one
-///     unrolled level via `step_split`, which suffices for the corpus
-///     because `simpSubterms` is fixpointed by `simplifySystem`.
-///
 /// Negative subterms live in the store's `neg_subterms` field, exactly
 /// as HS's `_negSubterms` — `insert_formula` consumes the
 /// `∀[].[Subterm i j].⊥` shape into the store at insert time
@@ -4308,176 +4303,7 @@ fn propagate_subterm_obvious(red: &mut Reduction) -> ChangeIndicator {
         return changed;
     }
     let reducible = red.ctx.maude.maude_sig().reducible_fun_syms_fast.clone();
-
-    // -------------------------------------------------------------
-    // isTrueFalse — HS SubtermStore.hs:334-355 (Nothing sst branch).
-    // -------------------------------------------------------------
-    // Returns Some(true) for trivially-true (s appears in t not below
-    // reducible), Some(false) for trivially-false (constant big, atom
-    // var big, or AC-flattened big empties out), None if undecidable.
-    let is_true_false =
-        |s: &tamarin_term::lterm::LNTerm, t: &tamarin_term::lterm::LNTerm| -> Option<bool> {
-            crate::tools::subterm_store::is_true_false_structural(&reducible, s, t)
-        };
-
-    // -------------------------------------------------------------
-    // Recursive splitSubterm (recurse=True) — HS SubtermStore.hs:261-305.
-    // Used by simpSplitNegSt to flatten a `¬(s ⊏ t)` constraint into
-    // the disjunction of structural sub-cases.  Returns the multiset
-    // (as a sorted-deduped Vec) of leaf SubtermSplits.  Includes
-    // TrueD when the recursion bottoms out on a trivially-true pair,
-    // and EqualD entries for the recurse-into-Pair / NoEq case.
-    // -------------------------------------------------------------
-    #[derive(Clone, PartialEq, Eq, Hash, Debug)]
-    enum Split {
-        True_,
-        SubD(tamarin_term::lterm::LNTerm, tamarin_term::lterm::LNTerm),
-        EqD(tamarin_term::lterm::LNTerm, tamarin_term::lterm::LNTerm),
-        NatD(tamarin_term::lterm::LNTerm, tamarin_term::lterm::LNTerm),
-        /// HS `ACNewVarD ((small+newVar, big), newVar)` — the
-        /// existential-variable leaf of the S_subterm-ac-recurse
-        /// CR-rule (SubtermStore.hs:250-255, see line 253; emitted by
-        /// `splitSubterm`'s `step`, SubtermStore.hs:289-296, see line 295).
-        AcNewVar(
-            tamarin_term::lterm::LNTerm,
-            tamarin_term::lterm::LNTerm,
-            tamarin_term::lterm::LVar,
-        ),
-    }
-    // step (single unfolding): returns Some(set) where set is the
-    // disjunction of immediate decompositions of `(small, big)`, or
-    // None when `(small, big)` cannot be decomposed further.
-    // Mirrors HS `step` (SubtermStore.hs:279-305) closely.
-    fn step_split(
-        reducible: &tamarin_utils::FastSet<tamarin_term::function_symbols::FunSym>,
-        is_true_false: &impl Fn(
-            &tamarin_term::lterm::LNTerm,
-            &tamarin_term::lterm::LNTerm,
-        ) -> Option<bool>,
-        mk_fresh: &mut dyn FnMut(tamarin_term::lterm::LSort) -> tamarin_term::lterm::LVar,
-        small: &tamarin_term::lterm::LNTerm,
-        big: &tamarin_term::lterm::LNTerm,
-    ) -> Option<Vec<Split>> {
-        use tamarin_term::function_symbols::FunSym;
-        use tamarin_term::lterm::{flattened_ac_terms, is_msg_var, sort_of_lnterm, LSort};
-        use tamarin_term::term::{f_app_ac, Term};
-        use tamarin_term::vterm::{var_term, Lit};
-        match is_true_false(small, big) {
-            Some(true) => return Some(vec![Split::True_]),
-            Some(false) => return Some(vec![]),
-            None => {}
-        }
-        // Nat case (delayed S_nat): both Nat (or msgVar small) and Nat big.
-        let small_nat_ok = sort_of_lnterm(small) == LSort::Nat || is_msg_var(small);
-        if small_nat_ok && sort_of_lnterm(big) == LSort::Nat {
-            return Some(vec![Split::NatD(small.clone(), big.clone())]);
-        }
-        match big {
-            // Variable big: undecidable → no decomposition.
-            Term::Lit(Lit::Var(_)) => None,
-            // AC big with non-reducible head: S_subterm-ac-recurse.
-            // Port of HS `step` (SubtermStore.hs:289-296), mirroring the
-            // already-correct `reduction.rs::subterm_step`:
-            //   processACSubterm f (small, fAppAC f (flattenedACTerms f big));
-            //   on `Left (nSmall, nBig)` allocate a fresh `newVar` of sort
-            //   `sortOfLNTerm big` and emit BOTH the `ACNewVarD
-            //   ((nSmall+newVar, nBig), newVar)` leaf AND one `SubtermD
-            //   (small, ti)` per flattened child `ti`.  A `Right _`
-            //   (trivially true/false) is already caught by `is_true_false`
-            //   above, so treat it as undecidable (None) rather than panic.
-            Term::App(FunSym::Ac(f), _) if !reducible.contains(&FunSym::Ac(*f)) => {
-                let f = *f;
-                let big_flat: Vec<tamarin_term::lterm::LNTerm> =
-                    flattened_ac_terms(f, big).into_iter().cloned().collect();
-                let big_norm = f_app_ac(f, big_flat.clone());
-                match crate::constraint::solver::reduction::process_ac_subterm(f, small, &big_norm)
-                {
-                    Err(_) => None,
-                    Ok((n_small, n_big)) => {
-                        let new_var = mk_fresh(sort_of_lnterm(big));
-                        let small_plus = f_app_ac(f, vec![n_small, var_term(new_var)]);
-                        let mut out: Vec<Split> = Vec::new();
-                        out.push(Split::AcNewVar(small_plus, n_big, new_var));
-                        // map (curry SubtermD small) (flattenedACTerms f big)
-                        for child in &big_flat {
-                            let sd = Split::SubD(small.clone(), child.clone());
-                            if !out.contains(&sd) {
-                                out.push(sd);
-                            }
-                        }
-                        Some(out)
-                    }
-                }
-            }
-            // AC big with reducible head: undecidable.
-            Term::App(FunSym::Ac(_), _) => None,
-            // C (commutative but not associative): treated as reducible
-            // (HS line 300) — undecidable.
-            Term::App(FunSym::C(_), _) => None,
-            // List big: HS comment says "list seems to be unused (?)".
-            Term::App(FunSym::List, _) => None,
-            // NoEq big with non-reducible head: S_subterm-recurse.
-            // Emit `(small ⊏ ti) ∨ (small = ti)` for each immediate
-            // child ti of big.  The dedupe set merges equal arms.
-            Term::App(FunSym::NoEq(_), args) => {
-                let fs = match big {
-                    Term::App(fs, _) => *fs,
-                    _ => unreachable!(),
-                };
-                if reducible.contains(&fs) {
-                    return None;
-                }
-                let mut out: Vec<Split> = Vec::new();
-                for ti in args.iter() {
-                    let sd = Split::SubD(small.clone(), ti.clone());
-                    let ed = Split::EqD(small.clone(), ti.clone());
-                    if !out.contains(&sd) {
-                        out.push(sd);
-                    }
-                    if !out.contains(&ed) {
-                        out.push(ed);
-                    }
-                }
-                Some(out)
-            }
-            // Lit Con / NoEq nullary: caught by is_true_false branches above.
-            _ => None,
-        }
-    }
-    fn recurse_split(
-        reducible: &tamarin_utils::FastSet<tamarin_term::function_symbols::FunSym>,
-        is_true_false: &impl Fn(
-            &tamarin_term::lterm::LNTerm,
-            &tamarin_term::lterm::LNTerm,
-        ) -> Option<bool>,
-        mk_fresh: &mut dyn FnMut(tamarin_term::lterm::LSort) -> tamarin_term::lterm::LVar,
-        small: tamarin_term::lterm::LNTerm,
-        big: tamarin_term::lterm::LNTerm,
-    ) -> Vec<Split> {
-        // Mirrors HS `recurse` (SubtermStore.hs:268-274) — only
-        // SubtermD continues to recurse; TrueD/EqualD/NatD/ACNewVarD
-        // are stop-points.
-        match step_split(reducible, is_true_false, mk_fresh, &small, &big) {
-            Some(entries) => {
-                let mut out: Vec<Split> = Vec::new();
-                for e in entries {
-                    let sub = match &e {
-                        Split::SubD(s, t) => {
-                            recurse_split(reducible, is_true_false, mk_fresh, s.clone(), t.clone())
-                        }
-                        _ => vec![e],
-                    };
-                    for x in sub {
-                        if !out.contains(&x) {
-                            out.push(x);
-                        }
-                    }
-                }
-                out
-            }
-            None => vec![Split::SubD(small, big)],
-        }
-    }
+    use crate::tools::subterm_store::{split_subterm, subterm_step, SubtermSplit};
 
     let mut new_formulas: Vec<crate::guarded::Guarded> = Vec::new();
     // Build an Eq atom from two LNTerms.
@@ -4560,28 +4386,22 @@ fn propagate_subterm_obvious(red: &mut Reduction) -> ChangeIndicator {
             })
             .cloned()
             .collect();
-        let mut splits_all: Vec<Split> = Vec::new();
+        let mut splits_all: Vec<SubtermSplit> = Vec::new();
         let mut already_false: Vec<Pair> = Vec::new();
         for (s, t) in &changed_negs {
-            let splits = recurse_split(
-                &reducible,
-                &is_true_false,
-                &mut mk_fresh,
-                s.clone(),
-                t.clone(),
-            );
+            let splits = split_subterm(&reducible, true, s, t, &mut mk_fresh);
             if splits.is_empty() {
                 already_false.push((s.clone(), t.clone()));
             }
             splits_all.extend(splits);
         }
-        if splits_all.iter().any(|x| matches!(x, Split::True_)) {
+        if splits_all.iter().any(|x| matches!(x, SubtermSplit::TrueD)) {
             contradictory = true;
             changed = ChangeIndicator::Changed;
         }
         // eqFormulas — ¬(x = y) for each EqualD (HS line 193).
         for x in &splits_all {
-            if let Split::EqD(l, r) = x {
+            if let SubtermSplit::EqualD(l, r) = x {
                 let prev = new_formulas.len();
                 emit_neg_eq(l.clone(), r.clone(), &mut new_formulas);
                 if new_formulas.len() > prev {
@@ -4592,7 +4412,7 @@ fn propagate_subterm_obvious(red: &mut Reduction) -> ChangeIndicator {
         // acFormulas — `∀ newVar. smallPlus = big ⇒ ⊥` for each
         // ACNewVarD (HS line 194).
         for x in &splits_all {
-            if let Split::AcNewVar(small_plus, big, new_var) = x {
+            if let SubtermSplit::AcNewVarD(small_plus, big, new_var) = x {
                 let prev = new_formulas.len();
                 emit_ac_neg(small_plus, big, new_var, &mut new_formulas);
                 if new_formulas.len() > prev {
@@ -4603,7 +4423,7 @@ fn propagate_subterm_obvious(red: &mut Reduction) -> ChangeIndicator {
         // flippedNatSubterms — `(t, s %+ 1)` for NatSubtermD with
         // isNatSubterm (HS line 192), unioned into posSubterms (line 198).
         for x in &splits_all {
-            if let Split::NatD(ns, nt) = x {
+            if let SubtermSplit::NatSubtermD(ns, nt) = x {
                 let s_is_nat_or_msg = matches!(sort_of_lnterm(ns), LSort::Nat) || is_msg_var(ns);
                 let t_is_nat = matches!(sort_of_lnterm(nt), LSort::Nat);
                 if s_is_nat_or_msg && t_is_nat {
@@ -4640,7 +4460,7 @@ fn propagate_subterm_obvious(red: &mut Reduction) -> ChangeIndicator {
         // splitSubterms — SubD + NatD leaves union into negSubterms
         // (HS line 191,199).
         for x in &splits_all {
-            if let Split::SubD(s, t) | Split::NatD(s, t) = x {
+            if let SubtermSplit::SubtermD(s, t) | SubtermSplit::NatSubtermD(s, t) = x {
                 red.sys.invalidate_max_var_idx_cache();
                 if red.sys.subterm_store_mut().add_neg(s.clone(), t.clone()) {
                     changed = ChangeIndicator::Changed;
@@ -4693,9 +4513,11 @@ fn propagate_subterm_obvious(red: &mut Reduction) -> ChangeIndicator {
     // list handed back to `simpSubterms` for goal reconciliation below.
     let mut subterm_goals: Vec<crate::constraint::constraints::Goal> = Vec::new();
     for c in subs {
-        let split = step_split(&reducible, &is_true_false, &mut mk_fresh, &c.small, &c.big);
+        let split = subterm_step(&reducible, &c.small, &c.big, &mut mk_fresh);
         match split {
-            Some(ref entries) if entries.len() == 1 && matches!(entries[0], Split::True_) => {
+            Some(ref entries)
+                if entries.len() == 1 && matches!(entries[0], SubtermSplit::TrueD) =>
+            {
                 // toRemoveAsTrue (HS:176,179): the pair is DELETED from
                 // posSubterms and goes NOWHERE — HS's solvedSubterms is
                 // populated only by `solveSubtermGoal` (a solved proof
@@ -4722,17 +4544,11 @@ fn propagate_subterm_obvious(red: &mut Reduction) -> ChangeIndicator {
                 // arity-one-deduction (SubtermStore.hs:170-183, see line 177): a single-level
                 // recurse step that yields exactly `[SubtermD st, EqualD (l,r)]`
                 // for some sub-pair, and where `st ∈ negSubterms`, emits
-                // `l = r` as an equality formula.  HS uses sorted-list pattern
-                // matching with SubtermD < EqualD (SubtermSplit.Ord, SubtermStore.hs:250-255).
-                let mut ss = splits.clone();
-                ss.sort_by_key(|s| match s {
-                    Split::SubD(_, _) => 0,
-                    Split::EqD(_, _) => 1,
-                    Split::NatD(_, _) => 2,
-                    Split::AcNewVar(_, _, _) => 3,
-                    Split::True_ => 4,
-                });
-                if let (Some(Split::SubD(s1, b1)), Some(Split::EqD(s2, b2))) =
+                // `l = r` as an equality formula.  HS pattern-matches the
+                // sorted list; `subterm_step` returns `S.toList` order, in
+                // which SubtermD precedes EqualD (SubtermStore.hs:250-255).
+                let ss = &splits;
+                if let (Some(SubtermSplit::SubtermD(s1, b1)), Some(SubtermSplit::EqualD(s2, b2))) =
                     (ss.first(), ss.get(1))
                 {
                     if ss.len() == 2 && s1 == s2 && b1 == b2 {
