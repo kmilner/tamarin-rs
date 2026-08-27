@@ -145,9 +145,9 @@ pub struct Fact<T> {
 // whose line-169 comment reads "Ignore annotations in equality and ord
 // testing"); `bloom` is excluded because it is an out-of-band skip fingerprint
 // of the terms' frees (a superset of them, or the `u64::MAX` sentinel), not
-// part of a fact's value — HS `LNFact` carries no such field.  Each impl
-// destructures without `..` so a new `Fact` field forces an inclusion decision
-// in every sibling impl at once.
+// part of a fact's value — HS `LNFact` carries no such field.  All four impls
+// read [`Fact::cmp_key`], so one field list drives equality, ordering and
+// hashing together.
 //
 // `Hash` is hand-written rather than derived so it reads EXACTLY the fields
 // `PartialEq` reads: equal values must hash equal, because the implied-formula
@@ -156,8 +156,10 @@ pub struct Fact<T> {
 // that folded in `annotations` would let two equal formulas hash apart, the
 // dedup would never fire, and the pass would re-insert the same formula on
 // every simplifier round.
-impl<T: PartialEq> PartialEq for Fact<T> {
-    fn eq(&self, other: &Self) -> bool {
+impl<T> Fact<T> {
+    /// The fields the comparison impls read, in comparison order.  Destructured
+    /// without `..` so a new `Fact` field forces an inclusion decision here.
+    fn cmp_key(&self) -> (&FactTag, &Arc<[T]>) {
         let Fact {
             tag,
             terms,
@@ -165,69 +167,29 @@ impl<T: PartialEq> PartialEq for Fact<T> {
             bloom: _,
             max_var: _,
         } = self;
-        let Fact {
-            tag: other_tag,
-            terms: other_terms,
-            annotations: _,
-            bloom: _,
-            max_var: _,
-        } = other;
-        tag == other_tag && terms == other_terms
+        (tag, terms)
+    }
+}
+
+impl<T: PartialEq> PartialEq for Fact<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp_key() == other.cmp_key()
     }
 }
 impl<T: Eq> Eq for Fact<T> {}
 impl<T: PartialOrd> PartialOrd for Fact<T> {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        let Fact {
-            tag,
-            terms,
-            annotations: _,
-            bloom: _,
-            max_var: _,
-        } = self;
-        let Fact {
-            tag: other_tag,
-            terms: other_terms,
-            annotations: _,
-            bloom: _,
-            max_var: _,
-        } = other;
-        match tag.partial_cmp(other_tag) {
-            Some(std::cmp::Ordering::Equal) => terms.partial_cmp(other_terms),
-            ord => ord,
-        }
+        self.cmp_key().partial_cmp(&other.cmp_key())
     }
 }
 impl<T: Ord> Ord for Fact<T> {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        let Fact {
-            tag,
-            terms,
-            annotations: _,
-            bloom: _,
-            max_var: _,
-        } = self;
-        let Fact {
-            tag: other_tag,
-            terms: other_terms,
-            annotations: _,
-            bloom: _,
-            max_var: _,
-        } = other;
-        tag.cmp(other_tag).then(terms.cmp(other_terms))
+        self.cmp_key().cmp(&other.cmp_key())
     }
 }
 impl<T: std::hash::Hash> std::hash::Hash for Fact<T> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        let Fact {
-            tag,
-            terms,
-            annotations: _,
-            bloom: _,
-            max_var: _,
-        } = self;
-        tag.hash(state);
-        terms.hash(state);
+        self.cmp_key().hash(state);
     }
 }
 
