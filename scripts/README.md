@@ -289,10 +289,9 @@ a rename-only migration.
   for one lemma (needs the trace-instrumented builds).
 - **`diff_aes_calls.sh`** — compare `apply_eq_store` call counts per labeled
   site between engines; deep-solver flow triage.
-- **`corpus_full_trace_diff.sh`** + **`canonicalize_trace.py`** +
-  **`diff_trace.py`** — canonicalized `[EXEC]` solver-trace diffing across
-  the corpus; the most detailed comparison, for locating the exact solver
-  step where two runs diverge.
+- **`corpus_full_trace_diff.sh`** — canonicalized proof-tree diffing for
+  every lemma across the corpus; the most detailed comparison, for locating
+  the exact solver step where two runs diverge.
 - **`diff_proof_tree.sh`** + **`canon_proof_tree.py`** +
   **`corpus_diff_proof_trees.sh`** — STRUCTURAL proof-tree comparison from
   the pre-byte-parity era; superseded by the byte gates (identical bytes ⇒

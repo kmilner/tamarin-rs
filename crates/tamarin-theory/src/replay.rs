@@ -73,7 +73,6 @@ use crate::constraint::solver::proof_method::{
 };
 use crate::constraint::solver::search::{run_proof_search, NodeStatus, ProofNode};
 use crate::constraint::system::System;
-use crate::fact::fact_tag_name;
 use crate::theory::ProofTree;
 
 /// Drive a single lemma's skeleton.  Equivalent of HS
@@ -503,53 +502,8 @@ fn exec_method_for(
     sys: &System,
     ctx: &ProofContext,
 ) -> Option<(ProofMethod, Vec<(String, System)>)> {
-    let dbg = tamarin_utils::env_gate!("TAM_DBG_REPLAY");
     let method = resolve_method(stored, sys)?;
-    match exec_proof_method(ctx, &method, sys) {
-        Some(cases) => {
-            if dbg {
-                let names: Vec<&str> = cases.iter().map(|(n, _)| n.as_str()).collect();
-                eprintln!(
-                    "[replay] direct {:?} → {} cases: {:?}",
-                    method_kind(&method),
-                    cases.len(),
-                    names
-                );
-            }
-            Some((method, cases))
-        }
-        None => {
-            if dbg {
-                eprintln!(
-                    "[replay] direct {:?} → exec returned None",
-                    method_kind(&method)
-                );
-            }
-            None
-        }
-    }
-}
-
-fn method_kind(m: &ProofMethod) -> String {
-    match m {
-        ProofMethod::Simplify => "Simplify".into(),
-        ProofMethod::Induction => "Induction".into(),
-        ProofMethod::Sorry(_) => "Sorry".into(),
-        ProofMethod::Finished(_) => "Finished".into(),
-        ProofMethod::Invalidated => "Invalidated".into(),
-        ProofMethod::SolveGoal(g) => format!("SolveGoal({})", goal_kind(g)),
-    }
-}
-
-fn goal_kind(g: &Goal) -> String {
-    match g {
-        Goal::Action(_, f) => format!("Action({})", fact_tag_name(&f.tag)),
-        Goal::Premise(np, f) => format!("Premise(prem={},{})", (np.1).0, fact_tag_name(&f.tag)),
-        Goal::Chain(_, _) => "Chain".into(),
-        Goal::Split(_) => "Split".into(),
-        Goal::Disj(_) => "Disj".into(),
-        Goal::Subterm(_) => "Subterm".into(),
-    }
+    exec_proof_method(ctx, &method, sys).map(|cases| (method, cases))
 }
 
 /// Resolve one stored [`ProofMethod`] against `sys`.

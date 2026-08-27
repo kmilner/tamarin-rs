@@ -705,8 +705,8 @@ self-check of the optimisation machinery as well. The `TAM_RS_NO_*` switches
 are the A/B complement — they force the pre-optimisation reference path, whose
 output must stay byte-identical.
 
-The list is not exhaustive — grep the sources for `TAM_DBG_` / `TAM_RS_` /
-`TAM_HS_` for the full set.
+The Rust side of the table is the whole set; the instrumented Haskell build
+carries more — grep `patches/tamarin-prover-fixes.patch` for `TAM_HS_`.
 
 ## Script index
 
@@ -758,7 +758,7 @@ exits 2 rather than running with a private fallback.
 | `compare_parity_tsv.py` | compare two gate TSVs by (file, lemma) |
 | `diff_maude_io.sh` / `diff_aes_calls.sh` | Maude-IPC and eq-store call-site diffs |
 | `diff_proof_tree.sh` / `canon_proof_tree.py` / `corpus_diff_proof_trees.sh` | structural proof-tree diffs, pre-byte-parity era; superseded by the byte gates and only worth reaching for when output diverges too grossly to read |
-| `corpus_full_trace_diff.sh` / `canonicalize_trace.py` / `diff_trace.py` | canonicalised `[EXEC]` trace diffing; the most detailed comparison |
+| `corpus_full_trace_diff.sh` | canonicalised proof-tree diffing for every lemma; the most detailed comparison |
 
 **Maintenance**
 

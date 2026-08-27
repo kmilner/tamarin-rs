@@ -89,17 +89,7 @@ pub fn check_message_derivation(
         return Vec::new();
     }
     let timeout = Duration::from_secs(timeout_secs as u64);
-    let dbg = tamarin_utils::env_gate!("TAM_DBG_DERIV_CHECK");
-    // TAM_DBG_DERIV_TIMING=1: emit per-rule / per-variable wall-clock
-    // timings on stderr.  Off-path when env var is absent.
-    let dbg_timing = tamarin_utils::env_gate!("TAM_DBG_DERIV_TIMING");
-    let t_total_start = std::time::Instant::now();
-
     let mut per_rule: Vec<(String, Vec<String>)> = Vec::new();
-    let mut rule_count = 0usize;
-    let mut var_count = 0usize;
-    let mut total_synth = Duration::ZERO;
-    let mut total_prove = Duration::ZERO;
     // HS `originalRules = map (applyMacroInProtoRule (theoryMacros thy)) $
     // theoryRules thy` (MessageDerivationChecks.hs:36-50, see line 40): the
     // rules with the theory's `macros:` applied, which is the form
@@ -118,37 +108,11 @@ pub fn check_message_derivation(
         if free_vars.is_empty() {
             continue;
         }
-        rule_count += 1;
         let rule_name = opr.name();
 
         // Build the probe ONCE per rule (it holds all the per-variable
         // lemmas): one rule and N formulas over the parent theory's terms.
-        let t_synth = std::time::Instant::now();
         let probe = synthesise_probe(rule, idx, &free_vars);
-        let synth_dt = t_synth.elapsed();
-        total_synth += synth_dt;
-        if dbg {
-            eprintln!(
-                "[deriv] rule={} free_vars={:?}",
-                rule_name,
-                free_vars.iter().map(|v| v.name).collect::<Vec<_>>()
-            );
-            eprintln!("[deriv] probe theory items:");
-            eprintln!(
-                "  rule {}: prem={} act={} conc={}",
-                probe_rule_name(idx),
-                probe.rule.premises.len(),
-                probe.rule.actions.len(),
-                probe.rule.conclusions.len()
-            );
-            for k in 0..probe.lemmas.len() {
-                eprintln!(
-                    "  lemma {} ({:?})",
-                    lemma_name(idx, k),
-                    TraceQuantifier::ExistsTrace
-                );
-            }
-        }
 
         // Try each variable's lemma.  HS's "TraceFound" status maps
         // to RS's `NodeStatus::Solved` for exists-trace lemmas.
@@ -160,41 +124,17 @@ pub fn check_message_derivation(
         // sources/cache — `CloseRule.hs:144-155`).  `prove_probe` mirrors
         // this: build the `ProofContext` + run `ensure_saturated()` ONCE
         // per probe, then iterate the per-variable lemmas reusing it.
-        let outcome = prove_probe(
+        let undecidable = prove_probe(
             &probe,
             maude.clone(),
             &free_vars,
             timeout,
-            dbg_timing,
             rule_name,
             ndc_cache.as_ref(),
         );
-        // Fold the probe's debug-only timing/count into the running totals.
-        total_prove += outcome.prove_time;
-        var_count += outcome.var_count;
-        if dbg_timing {
-            eprintln!(
-                "[deriv-timing] rule={} synth={:.3}s nvars={} prove={:.3}s",
-                rule_name,
-                synth_dt.as_secs_f64(),
-                free_vars.len(),
-                outcome.prove_time.as_secs_f64(),
-            );
-        }
-        let undecidable = outcome.undecidable;
         if !undecidable.is_empty() {
             per_rule.push((rule_name.to_string(), undecidable));
         }
-    }
-    if dbg_timing {
-        eprintln!(
-            "[deriv-timing] TOTAL rules={} vars={} synth={:.3}s prove={:.3}s wall={:.3}s",
-            rule_count,
-            var_count,
-            total_synth.as_secs_f64(),
-            total_prove.as_secs_f64(),
-            t_total_start.elapsed().as_secs_f64(),
-        );
     }
     format_deriv_report(&per_rule)
 }
@@ -267,12 +207,6 @@ fn rename_term_to_probe(t: LNTerm, map: &tamarin_utils::FastMap<LVar, LVar>) -> 
 /// names it `StandRule (show idx)` (MessageDerivationChecks.hs:170-171).
 fn probe_rule_name(idx: usize) -> String {
     format!("Probe_{}", idx)
-}
-
-/// The per-variable lemma's name, keyed by the free var's INDEX so
-/// same-named vars of different sorts do not collide.
-fn lemma_name(idx: usize, k: usize) -> String {
-    format!("deriv_check_{}_{}", idx, k)
 }
 
 /// The per-rule probe: HS's generated rule plus one exists-trace formula per
@@ -431,18 +365,6 @@ fn synthesise_probe(rule: &ProtoRuleE, idx: usize, free_vars: &[LVar]) -> Probe 
     }
 }
 
-/// Result of probing a single rule: the non-derivable variable names plus
-/// debug-only timing/count accumulators (folded into the caller's running
-/// totals at the call site).
-struct ProbeOutcome {
-    /// Variable names whose lemma did NOT find a trace (= non-derivable).
-    undecidable: Vec<String>,
-    /// Wall-clock spent in `run_proof_search` across this probe's lemmas.
-    prove_time: Duration,
-    /// Number of per-variable proof attempts made for this probe.
-    var_count: usize,
-}
-
 /// HS-faithful per-probe prover.  Builds a single `ProofContext` (with one
 /// `ensure_saturated` call) over the probe's rule, then iterates the
 /// per-variable lemmas, invoking `run_proof_search` directly on each lemma's
@@ -458,10 +380,9 @@ fn prove_probe(
     maude: MaudeHandle,
     free_vars: &[LVar],
     timeout: Duration,
-    dbg_timing: bool,
     rule_name: &str,
     ndc_cache: Option<&IntrRuleCache>,
-) -> ProbeOutcome {
+) -> Vec<String> {
     use crate::constraint::solver::context::ProofContext;
     use crate::constraint::solver::search::{run_proof_search, NodeStatus};
     use crate::constraint::system::{formula_to_system, SourceKind};
@@ -496,8 +417,6 @@ fn prove_probe(
     ctx.ensure_saturated();
 
     let mut undecidable = Vec::new();
-    let mut prove_time = Duration::ZERO;
-    let mut var_count = 0usize;
     for (v, fm) in free_vars.iter().zip(probe.lemmas.iter()) {
         let g = match formula_to_guarded(fm) {
             Ok(g) => g,
@@ -510,7 +429,6 @@ fn prove_probe(
             false,
             &g,
         );
-        let t_prove = std::time::Instant::now();
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             run_proof_search(&ctx, sys, 1000)
         }));
@@ -529,18 +447,6 @@ fn prove_probe(
             );
         }
         let ok = matches!(result, Ok(ref n) if matches!(n.status, NodeStatus::Solved));
-        let prove_dt = t_prove.elapsed();
-        prove_time += prove_dt;
-        var_count += 1;
-        if dbg_timing {
-            eprintln!(
-                "[deriv-timing] rule={} var={} prove={:.3}s ok={}",
-                rule_name,
-                v.name,
-                prove_dt.as_secs_f64(),
-                ok,
-            );
-        }
         if !ok {
             // HS reports `show LVar` for the undecidable variable
             // (MessageDerivationChecks.hs:131-133, see line 133); `Display
@@ -549,11 +455,7 @@ fn prove_probe(
         }
     }
 
-    ProbeOutcome {
-        undecidable,
-        prove_time,
-        var_count,
-    }
+    undecidable
 }
 
 fn format_deriv_report(per_rule: &[(String, Vec<String>)]) -> Vec<WfError> {

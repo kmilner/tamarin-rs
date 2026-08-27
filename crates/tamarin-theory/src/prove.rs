@@ -944,9 +944,9 @@ impl ProverSession {
     /// Restore the refined source cases for `source_key` from the session
     /// cache, or saturate them and (when the fresh-counter delta is 0) write
     /// them back.  Returns whether the cache was hit.  Shared by both session
-    /// entry points; the `TAM_DBG_SAT_COUNTER` diagnostics live here.  The
-    /// caller must have already gated out the `will_emit_bare_sorry` case
-    /// (which forces no source and must skip this entirely).
+    /// entry points.  The caller must have already gated out the
+    /// `will_emit_bare_sorry` case (which forces no source and must skip this
+    /// entirely).
     fn restore_or_saturate_sources(
         &self,
         ctx: &mut ProofContext,
@@ -981,12 +981,6 @@ impl ProverSession {
             let cnt_before = ctx.maude.fresh_counter_peek();
             ctx.ensure_saturated();
             let delta = ctx.maude.fresh_counter_peek().saturating_sub(cnt_before);
-            if tamarin_utils::env_gate!("TAM_DBG_SAT_COUNTER") {
-                eprintln!(
-                    "[SAT_COUNTER] lemma={} key={:?} delta={} (computed)",
-                    ctx.lemma_name, source_key, delta
-                );
-            }
             // Only cache results that allocated NO fresh vars — those are the
             // ones safe to replay byte-identically (counter unperturbed, cases
             // carry only template-sourced var indices).  Sources lemmas (delta
@@ -1003,11 +997,6 @@ impl ProverSession {
                     .entry(source_key)
                     .or_insert(CachedSources { sources: snapshot });
             }
-        } else if tamarin_utils::env_gate!("TAM_DBG_SAT_COUNTER") {
-            eprintln!(
-                "[SAT_COUNTER] lemma={} key={:?} (cache hit)",
-                ctx.lemma_name, source_key
-            );
         }
         cache_hit
     }
@@ -1176,7 +1165,7 @@ pub fn prove_system_in_session(
     // the `will_emit_bare_sorry == false` arm of `prove_lemma_in_session_mode`,
     // including the delta==0 cache-write gate.
     let cache_disabled = tamarin_utils::env_gate!("TAM_RS_NO_SOURCE_CACHE");
-    let _cache_hit = session.restore_or_saturate_sources(&mut ctx, source_key, cache_disabled);
+    session.restore_or_saturate_sources(&mut ctx, source_key, cache_disabled);
     let force_induction = lemma.attributes.iter().any(|a| {
         matches!(
             a,
@@ -1195,13 +1184,6 @@ fn prove_lemma_in_session_mode(
     proof_bound: usize,
     auto_prove: bool,
 ) -> Result<ProofNode, ProveError> {
-    let trace = tamarin_utils::env_gate!("TAM_DBG_PHASE");
-    let t_phase: Option<std::time::Instant> = if trace {
-        Some(std::time::Instant::now())
-    } else {
-        None
-    };
-
     let theory = &session.theory;
     let lemma = theory
         .lookup_lemma(lemma_name)
@@ -1230,17 +1212,6 @@ fn prove_lemma_in_session_mode(
     );
     sys.insert_lemmas(reuse_lemmas);
 
-    if trace {
-        eprintln!(
-            "[phase] (session) formula_to_system done dt={:.3}s",
-            t_phase.as_ref().map_or(0.0, |t| t.elapsed().as_secs_f64())
-        );
-    }
-    let t_ctx: Option<std::time::Instant> = if trace {
-        Some(std::time::Instant::now())
-    } else {
-        None
-    };
     // Per-lemma ProofContext: clone the template (built once at session
     // construction with raw, unsaturated `full_sources` — each source's
     // `cases_cell = None`), give it its OWN fresh-counter Arc floored at the
@@ -1252,17 +1223,6 @@ fn prove_lemma_in_session_mode(
     // no cross-lemma contamination.
     let (mut ctx, source_key) =
         session.setup_per_lemma_ctx(lemma, lemma_name, lemma_source_kind)?;
-    if trace {
-        eprintln!(
-            "[phase] (session) ProofContext clone dt={:.3}s",
-            t_ctx.as_ref().map_or(0.0, |t| t.elapsed().as_secs_f64())
-        );
-    }
-    let t_sat: Option<std::time::Instant> = if trace {
-        Some(std::time::Instant::now())
-    } else {
-        None
-    };
     // HS-faithful laziness: refined sources are a lazy `where`-bound thunk
     // in HS's `ClosedRuleCache` (`refinedSources` = `precomputeSources` →
     // `refineWithSourceAsms`, CloseRule.hs:426-427), forced ONLY when a proof
@@ -1288,30 +1248,12 @@ fn prove_lemma_in_session_mode(
     // exists for this exact `source_key`.  See [`CachedSources`] for why a
     // hit is byte-identical (only delta==0 results are ever cached).
     let cache_disabled = tamarin_utils::env_gate!("TAM_RS_NO_SOURCE_CACHE");
-    let cache_hit = if will_emit_bare_sorry {
-        // Skip the eager saturate + cache entirely — this lemma forces no
-        // source case (matches HS's lazy `pcSources`).  Leave the lazy
-        // `cases(ctx)` hook in place in case some future path consults a
+    if !will_emit_bare_sorry {
+        // A bare-sorry lemma skips the eager saturate + cache entirely — it
+        // forces no source case (matches HS's lazy `pcSources`).  The lazy
+        // `cases(ctx)` hook stays in place for any path that does consult a
         // source; for the bare-sorry early return it never fires.
-        if tamarin_utils::env_gate!("TAM_DBG_SAT_COUNTER") {
-            eprintln!(
-                "[SAT_COUNTER] lemma={} key={:?} (bare-sorry, saturation deferred)",
-                lemma_name, source_key
-            );
-        }
-        false
-    } else {
-        session.restore_or_saturate_sources(&mut ctx, source_key, cache_disabled)
-    };
-    if trace {
-        eprintln!(
-            "[phase] (session) ensure_saturated dt={:.3}s hit={}",
-            t_sat.as_ref().map_or(0.0, |t| t.elapsed().as_secs_f64()),
-            cache_hit
-        );
-    }
-    if tamarin_utils::env_gate!("TAM_RS_DBG_PHASE") {
-        eprintln!("[rs-phase] lemma-proof START");
+        session.restore_or_saturate_sources(&mut ctx, source_key, cache_disabled);
     }
     let force_induction = lemma.attributes.iter().any(|a| {
         matches!(
@@ -1351,19 +1293,7 @@ fn prove_lemma_in_session_mode(
         // the start system, so it renders as plain `by sorry`).
         return Ok(crate::replay::annotated_sorry_root(sys));
     }
-    let t_search: Option<std::time::Instant> = if trace {
-        Some(std::time::Instant::now())
-    } else {
-        None
-    };
     let r = run_proof_search(&ctx, sys, proof_bound);
-    if trace {
-        eprintln!(
-            "[phase] (session) run_proof_search dt={:.3}s total={:.3}s",
-            t_search.as_ref().map_or(0.0, |t| t.elapsed().as_secs_f64()),
-            t_phase.as_ref().map_or(0.0, |t| t.elapsed().as_secs_f64())
-        );
-    }
     Ok(r)
 }
 
@@ -1417,26 +1347,12 @@ pub fn prove_lemma_with_pool_file_heuristic(
     cut: crate::constraint::solver::context::CutStrategy,
     ndc_cache: Option<&IntrRuleCache>,
 ) -> Result<ProofNode, ProveError> {
-    let trace = tamarin_utils::env_gate!("TAM_DBG_PHASE");
-    // Per-phase wall-clock instrumentation, gated by TAM_DBG_PHASE.
-    // `Option<Instant>` keeps the disabled-path branch-predictable to
-    // a single `if let Some(_)` check at each phase boundary.
-    let t_phase: Option<std::time::Instant> = if trace {
-        Some(std::time::Instant::now())
-    } else {
-        None
-    };
     // in_file for oracle path resolution (HS Theory/Text/Parser.hs:309);
     // the theory's own path fills in when the caller passes none.
     let in_file = if in_file.is_empty() {
         theory.in_file.as_str()
     } else {
         in_file
-    };
-    let t_setup: Option<std::time::Instant> = if trace {
-        Some(std::time::Instant::now())
-    } else {
-        None
     };
 
     let lemma = theory
@@ -1500,17 +1416,6 @@ pub fn prove_lemma_with_pool_file_heuristic(
     // `ctx.ensure_saturated()` call over `ctx.full_sources`).
     sys.insert_lemmas(reuse_lemmas);
 
-    if trace {
-        eprintln!(
-            "[phase] formula_to_system done dt={:.3}s; ProofContext::new start",
-            t_setup.as_ref().map_or(0.0, |t| t.elapsed().as_secs_f64())
-        );
-    }
-    let t_ctx: Option<std::time::Instant> = if trace {
-        Some(std::time::Instant::now())
-    } else {
-        None
-    };
     // Bridge the elaborated theory's rules into the proof context.
     let rules: Vec<OpenProtoRule> = theory.rules().cloned().collect();
     // HS `setforcedInjectiveFacts {L_PureState, L_CellLocked}`
@@ -1534,12 +1439,6 @@ pub fn prove_lemma_with_pool_file_heuristic(
         &forced_injective_facts,
         ndc_cache.cloned(),
     );
-    if trace {
-        eprintln!(
-            "[phase] ProofContext::new done dt={:.3}s",
-            t_ctx.as_ref().map_or(0.0, |t| t.elapsed().as_secs_f64())
-        );
-    }
     // Propagate the lemma's trace quantifier so `is_finished` can
     // decide whether the Fresh-conflation case-drop should convert
     // Contradictory→Unfinishable (sound only on exists-trace where
@@ -1595,34 +1494,7 @@ pub fn prove_lemma_with_pool_file_heuristic(
     // Done` at theory-close time — Rust does it per-lemma because the
     // ctx is per-lemma.
     ctx.typing_assumptions = typing_assumptions;
-    let t_sat: Option<std::time::Instant> = if trace {
-        Some(std::time::Instant::now())
-    } else {
-        None
-    };
     ctx.ensure_saturated();
-    if trace {
-        eprintln!(
-            "[phase] ensure_saturated done dt={:.3}s",
-            t_sat.as_ref().map_or(0.0, |t| t.elapsed().as_secs_f64())
-        );
-    }
-    let t_search: Option<std::time::Instant> = if trace {
-        Some(std::time::Instant::now())
-    } else {
-        None
-    };
-    if trace {
-        eprintln!("[phase] run_proof_search start");
-    }
-    // Phase marker so TAM_RS_DBG_* counts can be filtered to the
-    // lemma-proof phase only.  Pair with HS's `[Saturating Sources]
-    // Done` marker for HS↔Rust diffing of just the lemma proof
-    // (excludes precompute/saturation).  Gated behind TAM_RS_DBG_PHASE
-    // so default --prove stderr stays HS-faithful.
-    if tamarin_utils::env_gate!("TAM_RS_DBG_PHASE") {
-        eprintln!("[rs-phase] lemma-proof START");
-    }
     // Honour the `[use_induction]` and `[sources]` attributes by
     // forcing the first proof method to be Induction. Haskell's
     // `ClosedTheory.hs` flips `pcUseInduction = UseInduction` for
@@ -1644,29 +1516,14 @@ pub fn prove_lemma_with_pool_file_heuristic(
     // skeleton or parser couldn't structure it) fall through to the
     // pre-existing auto-prover-from-scratch behavior.
     if let Some(tree) = lemma.proof.clone() {
-        if tamarin_utils::env_gate!("TAM_DBG_REPLAY") {
-            eprintln!("[replay] firing skeleton replay for `{}`", lemma_name);
-        }
         return Ok(crate::replay::replace_sorry_prove(
             &ctx,
             sys,
             &tree,
             proof_bound,
         ));
-    } else if tamarin_utils::env_gate!("TAM_DBG_REPLAY") {
-        eprintln!(
-            "[replay] NO tree on `{}` — falling through to auto-prover",
-            lemma_name
-        );
     }
     let r = run_proof_search(&ctx, sys, proof_bound);
-    if trace {
-        eprintln!(
-            "[phase] run_proof_search done dt={:.3}s total={:.3}s",
-            t_search.as_ref().map_or(0.0, |t| t.elapsed().as_secs_f64()),
-            t_phase.as_ref().map_or(0.0, |t| t.elapsed().as_secs_f64())
-        );
-    }
     Ok(r)
 }
 
