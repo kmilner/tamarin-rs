@@ -830,6 +830,283 @@ pub fn is_trivial_proto_variant_ac(ru_ac: &ProtoRuleAC, ru_e: &ProtoRuleE) -> bo
         && ru_ac.new_vars == ru_e.new_vars
 }
 
+/// Set-subset check: every distinct element of `a` is `==` to some element of
+/// `b`.  Mirrors Haskell's `subsetOf` (Utils/Misc.hs:90-92):
+/// `subsetOf xs ys = (S.fromList xs) `S.isSubsetOf` (S.fromList ys)` —
+/// `S.fromList` deduplicates BOTH arguments, so multiplicity is ignored on both
+/// sides.  This is a SET subset, not a multiset/list subset.
+pub(crate) fn is_subset_of(a: &[crate::fact::LNFact], b: &[crate::fact::LNFact]) -> bool {
+    a.iter().all(|fa| b.iter().any(|fb| fa == fb))
+}
+
+/// `map fst (varOccurences ru)` — a rule's distinct variables, sorted.
+fn rule_vars(r: &IntrRuleAC) -> Vec<LVar> {
+    use tamarin_term::lterm::HasFrees;
+    let mut s: std::collections::BTreeSet<LVar> = std::collections::BTreeSet::new();
+    r.for_each_free(&mut |v| {
+        s.insert(*v);
+    });
+    s.into_iter().collect()
+}
+
+/// `rPrems ++ rConcs ++ rActs` — the fact sequence HS's `matchFacts` walks,
+/// concatenated across section boundaries.
+pub(crate) fn rule_facts(r: &IntrRuleAC) -> impl Iterator<Item = &LNFact> {
+    r.premises
+        .iter()
+        .chain(r.conclusions.iter())
+        .chain(r.actions.iter())
+}
+
+/// `equalRuleUpToRenamingIgnoringNames` — port of
+/// `Theory.Model.Rule.equalRuleUpToRenamingIgnoringNames` (Rule.hs).
+///
+/// Two rules are equal up to variable renaming (their `info`/names NOT
+/// considered) iff:
+///   - Zipped (premises ++ concs ++ acts) have matching fact tags, and the
+///     element-wise term-equalities admit a unifier that is a renaming
+///     when restricted to either rule's variable occurrences (sorted).
+///   - `new_vars` are also zipped into equalities (in HS, `nvs1` zipped
+///     with `nvs2` start the equation list).
+///
+/// HS `matchFacts` only fails (`Nothing`) on a fact-TAG mismatch; the
+/// `zipWith Equal`/`zip` over `(pr1++co1++ac1)`/`(pr2++co2++ac2)` and over
+/// `nvs1`/`nvs2` silently TRUNCATE to the shorter list on a count or arity
+/// mismatch (they never force False), and the concatenations are zipped
+/// across section boundaries.  We mirror that exactly with truncating
+/// `zip`s and no length guards.  (In practice every caller compares
+/// variants of the same base rule, so counts/arities always agree.)
+///
+/// HS:
+/// ```haskell
+/// equalRuleUpToRenamingIgnoringNames r1 r2 = reader $ \hnd ->
+///   case eqs of
+///     Nothing   -> False
+///     Just eqs' -> any isRenamingPerRule (unifs eqs' hnd)
+/// ```
+pub fn equal_rule_up_to_renaming_ignoring_names(
+    maude: &tamarin_term::maude_proc::MaudeHandle,
+    r1: &IntrRuleAC,
+    r2: &IntrRuleAC,
+) -> bool {
+    use tamarin_term::rewriting::Equal;
+    use tamarin_term::subst_vfresh::LNSubstVFresh;
+
+    // HS's `eqs` is initialised with `zipWith Equal nvs1 nvs2` (truncating),
+    // then each tag-matching fact pair extends it by `zipWith Equal t1 t2`
+    // (also truncating).  `matchFacts` only fails on a TAG mismatch — never
+    // on a count/arity mismatch — so we use truncating `zip`s with no length
+    // guards, and zip the section concatenations across boundaries.
+    let mut term_eqs: Vec<Equal<LNTerm>> = Vec::new();
+    for (a, b) in r1.new_vars.iter().zip(r2.new_vars.iter()) {
+        term_eqs.push(Equal {
+            lhs: a.clone(),
+            rhs: b.clone(),
+        });
+    }
+    for (f1, f2) in rule_facts(r1).zip(rule_facts(r2)) {
+        if f1.tag != f2.tag {
+            return false;
+        }
+        for (a, b) in f1.terms.iter().zip(f2.terms.iter()) {
+            term_eqs.push(Equal {
+                lhs: a.clone(),
+                rhs: b.clone(),
+            });
+        }
+    }
+
+    // Trivial case: no constraints → identity unifier is trivially a
+    // renaming (empty), so result is True.
+    if term_eqs.is_empty() {
+        return true;
+    }
+
+    let vars_r1 = rule_vars(r1);
+    let vars_r2 = rule_vars(r2);
+    let unifs = match maude.unify(&term_eqs) {
+        Ok(u) => u,
+        Err(_) => return false,
+    };
+    // For each unifier `subst`: check `isRenaming (restrictVFresh vars_r1 subst)
+    //                       && isRenaming (restrictVFresh vars_r2 subst)`.
+    // The unifier comes back as `Vec<(LVar, LNTerm)>` — treat as VFresh.
+    for u_pairs in &unifs {
+        let s_fresh = LNSubstVFresh::from_list(u_pairs.clone());
+        let r1_rest = s_fresh.restrict(&vars_r1);
+        let r2_rest = s_fresh.restrict(&vars_r2);
+        if r1_rest.is_renaming() && r2_rest.is_renaming() {
+            return true;
+        }
+    }
+    false
+}
+
+/// `equalRuleUpToRenaming` — port of
+/// `Theory.Model.Rule.equalRuleUpToRenaming` (Rule.hs):
+///
+/// ```haskell
+/// equalRuleUpToRenaming r1@(Rule rn1 _ _ _ _) r2@(Rule rn2 _ _ _ _) =
+///   if rn1 == rn2 then equalRuleUpToRenamingIgnoringNames r1 r2
+///                 else return False
+/// ```
+pub fn equal_rule_up_to_renaming(
+    maude: &tamarin_term::maude_proc::MaudeHandle,
+    r1: &IntrRuleAC,
+    r2: &IntrRuleAC,
+) -> bool {
+    r1.info == r2.info && equal_rule_up_to_renaming_ignoring_names(maude, r1, r2)
+}
+
+/// `equalDuplicateRuleUpToRenaming` — port of
+/// `Theory.Model.Rule.equalDuplicateRuleUpToRenaming` (Rule.hs):
+///
+/// ```haskell
+/// equalDuplicateRuleUpToRenaming r1 r2 =
+///     equalRuleUpToRenamingIgnoringNames r1 (r2 `renameAvoiding` r1)
+/// ```
+///
+/// `r2` is renamed apart from `r1` first, so rules that merely share
+/// variable identities do not compare equal by accident.
+pub fn equal_duplicate_rule_up_to_renaming(
+    maude: &tamarin_term::maude_proc::MaudeHandle,
+    r1: &IntrRuleAC,
+    r2: &IntrRuleAC,
+) -> bool {
+    // Early reject, pure filter: `rename_avoiding` preserves fact tags and
+    // section lengths, so the `matchFacts` tag test that
+    // `equal_rule_up_to_renaming_ignoring_names` applies to the zipped
+    // `(prems++concs++acts)` pairs evaluates identically on the un-renamed
+    // rules — any tag mismatch forces that check to `false`.  This skips
+    // the rule clone/rename and the Maude round trip for such pairs.
+    let tags_match = rule_facts(r1)
+        .zip(rule_facts(r2))
+        .all(|(f1, f2)| f1.tag == f2.tag);
+    if !tags_match {
+        return false;
+    }
+    let r2_apart = tamarin_term::lterm::rename_avoiding(r2.clone(), r1);
+    equal_rule_up_to_renaming_ignoring_names(maude, r1, &r2_apart)
+}
+
+/// `equalSubsetRuleUpToRenaming` — port of
+/// `Theory.Model.Rule.equalSubsetRuleUpToRenaming` (Rule.hs):
+///
+/// ```haskell
+/// equalSubsetRuleUpToRenaming r1@(Rule _ _ co1 _ _) r2@(Rule _ _ co2 _ _) = reader $ \hnd ->
+///   case unifyLNFactEqs [Equal (head co2) (head co1)] `runReader` hnd of
+///       []    -> False
+///       subst -> any (\x -> isRenamingPerRule x && premSubst x) subst
+///     where
+///       premSubst sub = srpr2 `subsetOf` spr1
+///         where
+///           (Rule _ spr1 _ _ _, Rule _ srpr2 _ _ _) =
+///               evalFreshAvoiding (appSubst sub r1 r2) (r1, r2)
+///           appSubst x inst0 inst1 = do
+///             s <- freshToFree x
+///             return (apply s (inst0, inst1))
+/// ```
+///
+/// True iff the head conclusions unify by a renaming-per-rule AND, after
+/// converting that unifier to a free substitution (fresh vars avoiding
+/// BOTH rules) and applying it to both rules, `r2`'s premises are a SET
+/// subset of `r1`'s premises — i.e. the peer `r2` subsumes `r1`.
+pub fn equal_subset_rule_up_to_renaming(
+    maude: &tamarin_term::maude_proc::MaudeHandle,
+    r1: &IntrRuleAC,
+    r2: &IntrRuleAC,
+) -> bool {
+    use tamarin_term::rewriting::Equal;
+    use tamarin_term::subst::apply_vterm;
+    use tamarin_term::subst_vfresh::LNSubstVFresh;
+
+    // `unifyLNFactEqs [Equal (head co2) (head co1)]`.  HS's `head` `error`s on
+    // a conclusion-free rule; the `false` arm here reads as "not subsumed" and
+    // keeps it instead.  `minimize_intruder_rules`, the only non-test caller,
+    // states the exactly-one-conclusion precondition in its contract and
+    // `debug_assert!`s it, so the arm is unreachable from the production pass.
+    let (co1, co2) = match (r1.conclusions.first(), r2.conclusions.first()) {
+        (Some(a), Some(b)) => (a, b),
+        _ => return false,
+    };
+    // Early rejects, pure filters:
+    //  (a) mirrors the tag/term-count guards `unify_ln_fact_eqs` itself
+    //      applies before calling Maude — on a mismatch it yields zero
+    //      unifiers, i.e. HS `[] -> False` — evaluated here before the
+    //      fact clones are built;
+    //  (b) `premSubst` needs `srpr2 `subsetOf` spr1`, and substitution
+    //      preserves each fact's tag and term count while fact equality
+    //      implies both — so every `r2` premise must have an `r1` premise
+    //      with equal tag and term count, checkable before the Maude
+    //      round trip.
+    if co1.tag != co2.tag || co1.terms.len() != co2.terms.len() {
+        return false;
+    }
+    let prems_coverable = r2.premises.iter().all(|p2| {
+        r1.premises
+            .iter()
+            .any(|p1| p1.tag == p2.tag && p1.terms.len() == p2.terms.len())
+    });
+    if !prems_coverable {
+        return false;
+    }
+    let unifs = match unify_ln_fact_eqs(
+        maude,
+        &[Equal {
+            lhs: co2.clone(),
+            rhs: co1.clone(),
+        }],
+    ) {
+        Ok(u) => u,
+        Err(_) => return false,
+    };
+    if unifs.is_empty() {
+        return false;
+    }
+
+    let vars_r1 = rule_vars(r1);
+    let vars_r2 = rule_vars(r2);
+
+    // `evalFreshAvoiding ... (r1, r2)` — fresh idx allocation starts above
+    // the maximum index occurring in either rule.
+    let max_idx = vars_r1.iter().chain(vars_r2.iter()).map(|v| v.idx).max();
+
+    for u_pairs in &unifs {
+        let s_fresh = LNSubstVFresh::from_list(u_pairs.clone());
+        // `isRenamingPerRule`.
+        if !(s_fresh.restrict(&vars_r1).is_renaming() && s_fresh.restrict(&vars_r2).is_renaming()) {
+            continue;
+        }
+        // `premSubst`: freshToFree the unifier avoiding (r1, r2), apply to
+        // both rules' premises, then `srpr2 `subsetOf` spr1`.
+        let mut counter = max_idx.map(|m| m + 1).unwrap_or(0);
+        let sigma = s_fresh.fresh_to_free_avoiding(|n| {
+            let b = counter;
+            counter += n;
+            b
+        });
+        let subst_prems = |fs: &[LNFact]| -> Vec<LNFact> {
+            fs.iter()
+                .map(|f| {
+                    // subst rebuild — frees can change; recompute the bloom.
+                    let terms: Vec<LNTerm> = f
+                        .terms
+                        .iter()
+                        .map(|t| apply_vterm(&sigma, t.clone()))
+                        .collect();
+                    LNFact::fresh_annotated(f.tag, f.annotations.clone(), terms)
+                })
+                .collect()
+        };
+        let spr1 = subst_prems(&r1.premises);
+        let srpr2 = subst_prems(&r2.premises);
+        if is_subset_of(&srpr2, &spr1) {
+            return true;
+        }
+    }
+    false
+}
+
 // =============================================================================
 // Maude-backed unification helpers — port of `unifiableRuleACInsts`,
 // `unifyLNFactEqs`, `unifiableLNFacts`.

@@ -3,6 +3,7 @@
 //   scripts/gen_license_headers.py --authors <this file>
 
 use super::*;
+use crate::rule::{equal_rule_up_to_renaming_ignoring_names, is_subset_of};
 
 /// Pins every `show_fun_sym_name` arm to the display name HS
 /// `showFunSymName` (Term/Term.hs:286-296) produces.  The arms read
