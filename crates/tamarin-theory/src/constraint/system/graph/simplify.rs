@@ -145,9 +145,9 @@ fn try_hide_node_id(v: &NodeId, sys: RenderSystem) -> RenderSystem {
     }
     // Try hideRule first if v has a node entry, else hideAction.  Either way
     // the `Err` arm carries the untouched system back, so both are kept.
-    let node_rule = sys.nodes.iter().find(|(id, _)| id == v).cloned();
+    let node_rule = sys.node_rule_safe(v).cloned();
     let attempt = match node_rule {
-        Some((_, ru)) => try_hide_rule(v, ru, sys),
+        Some(ru) => try_hide_rule(v, ru, sys),
         None => try_hide_action(v, sys),
     };
     let (Ok(out) | Err(out)) = attempt;

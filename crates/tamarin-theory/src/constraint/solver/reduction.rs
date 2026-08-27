@@ -5687,16 +5687,11 @@ impl<'ctx> Reduction<'ctx> {
         let _op_guard =
             crate::constraint::solver::trace::OpLabelGuard::new("insertEdges:solveChain");
         let g = Goal::Chain(*c, *p);
-        let c_rule = match self.sys.nodes.iter().find(|(id, _)| id == &c.0) {
-            Some((_, r)) => r.clone(),
+        let c_rule = match self.sys.node_rule_safe(&c.0) {
+            Some(r) => r.clone(),
             None => return GoalCases::Contradictory,
         };
-        let p_rule_opt = self
-            .sys
-            .nodes
-            .iter()
-            .find(|(id, _)| id == &p.0)
-            .map(|(_, r)| r.clone());
+        let p_rule_opt = self.sys.node_rule_safe(&p.0).cloned();
         let fa_conc = match c_rule.lookup_conclusion(c.1) {
             Some(f) => f.clone(),
             None => return GoalCases::Contradictory,

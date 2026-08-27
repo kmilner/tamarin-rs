@@ -1566,7 +1566,7 @@ fn is_forbidden_d_emap(
     let Some(ns) = edge_ns else {
         return false;
     };
-    let Some((_, ru_emap)) = sys.nodes.iter().find(|(n, _)| n == &ns) else {
+    let Some(ru_emap) = sys.node_rule_safe(&ns) else {
         return false;
     };
     if !is_d_emap_rule(ru_emap) {
@@ -1717,10 +1717,8 @@ fn is_forbidden_d_emap_order(
         return false;
     };
 
-    let ru_proto1 = lookup_prem_provider(&j1, PremIdx(0))
-        .and_then(|n| sys.nodes.iter().find(|(nn, _)| nn == &n).map(|(_, r)| r));
-    let ru_proto2 = lookup_prem_provider(&j2, PremIdx(0))
-        .and_then(|n| sys.nodes.iter().find(|(nn, _)| nn == &n).map(|(_, r)| r));
+    let ru_proto1 = lookup_prem_provider(&j1, PremIdx(0)).and_then(|n| sys.node_rule_safe(&n));
+    let ru_proto2 = lookup_prem_provider(&j2, PremIdx(0)).and_then(|n| sys.node_rule_safe(&n));
     let (Some(rp1), Some(rp2)) = (ru_proto1, ru_proto2) else {
         return false;
     };

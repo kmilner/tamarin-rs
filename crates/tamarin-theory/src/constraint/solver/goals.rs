@@ -2038,7 +2038,7 @@ fn chain_kd_conc_term(
 ) -> Option<tamarin_term::lterm::LNTerm> {
     use crate::fact::FactTag;
     let (id, idx) = (&c.0, &c.1);
-    let rule = sys.nodes.iter().find(|(n, _)| n == id).map(|(_, r)| r)?;
+    let rule = sys.node_rule_safe(id)?;
     let fact = rule.conclusions.get(idx.0)?;
     if fact.tag != FactTag::Kd {
         return None;
@@ -2101,8 +2101,7 @@ fn chain_to_equality(
 ) -> bool {
     // Look up the premise's rule. If it's NOT an IEquality rule,
     // chainToEquality returns False (chain is auto-handled).
-    let p_rule = sys.nodes.iter().find(|(n, _)| n == &p.0).map(|(_, r)| r);
-    let Some(p_rule) = p_rule else {
+    let Some(p_rule) = sys.node_rule_safe(&p.0) else {
         return false;
     };
     let is_equality = matches!(

@@ -1663,7 +1663,7 @@ fn k_conc_term_for_chain(
 ) -> Option<tamarin_term::lterm::LNTerm> {
     use crate::fact::FactTag;
     let (id, idx) = (&c.0, &c.1);
-    let rule = sys.nodes.iter().find(|(n, _)| n == id).map(|(_, r)| r)?;
+    let rule = sys.node_rule_safe(id)?;
     let fact = rule.conclusions.get(idx.0)?;
     if !matches!(fact.tag, FactTag::Ku | FactTag::Kd) {
         return None;
@@ -2309,8 +2309,8 @@ fn run_solve_all_safe_goals_disj_with_progress(
                 .edges
                 .iter()
                 .filter_map(|e| {
-                    let (_, src_rule) = sub.sys.nodes.iter().find(|(n, _)| n == &e.src.0)?;
-                    let (_, tgt_rule) = sub.sys.nodes.iter().find(|(n, _)| n == &e.tgt.0)?;
+                    let src_rule = sub.sys.node_rule_safe(&e.src.0)?;
+                    let tgt_rule = sub.sys.node_rule_safe(&e.tgt.0)?;
                     let fc = src_rule.conclusions.get(e.src.1 .0)?.clone();
                     let fp = tgt_rule.premises.get(e.tgt.1 .0)?.clone();
                     if fc.tag != fp.tag || fc.terms.len() != fp.terms.len() {
