@@ -594,12 +594,12 @@ where
     fn map_free_with(self, f: &mut dyn FnMut(LVar) -> LVar, monotone: bool) -> Self {
         // Copy-on-write: when `f` is identity on every free leaf of a subtree,
         // that subtree is unchanged, so reuse it (the owned `self`) instead of
-        // cloning all args and re-running `f_app`/`unsafe_f_app`.  Mirrors
-        // `subst::apply_vterm_map_changed`.  Byte-identical: a subtree with no
+        // cloning all args and re-running `f_app`/`unsafe_f_app`.  Mirrors the
+        // `Apply` instance for `VTerm`.  Byte-identical: a subtree with no
         // remapped leaf is already in `f_app`-normal form (the monotone path
         // never re-sorts; the non-monotone path's `f_app` re-sort of unchanged,
-        // already-normal args yields the same term — the same invariant
-        // `apply_vterm_map_changed` relies on).
+        // already-normal args yields the same term — the same invariant that
+        // instance relies on).
         match map_free_term_cow(&self, f, monotone) {
             Some(t) => t,
             None => self,

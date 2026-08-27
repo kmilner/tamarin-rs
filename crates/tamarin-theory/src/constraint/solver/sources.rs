@@ -2719,7 +2719,7 @@ pub fn solve_with_source_cases_action(
 }
 
 /// Variant that takes an optional `ProofContext` to enable the
-/// Haskell-faithful `applySource` path (`refine_source_case_action`).
+/// Haskell-faithful `applySource` path (`refine_source_case`).
 /// When `ctx_opt = Some(ctx)`, uses one-way Maude matching +
 /// `someInst keepVarBindings` + `conjoinSystem` setNodes-collision
 /// rule-eqs. When `None`, falls back to the legacy graft (preserves

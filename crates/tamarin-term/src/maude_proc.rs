@@ -713,9 +713,8 @@ impl MaudeHandle {
             //
             // Returning `t.clone()` is byte-identical to the round-trip
             // because both sides of the comparison are f_app-canonical:
-            // reduce inputs are rebuilt through the smart constructors
-            // (subst.rs `apply_vterm_map_changed` /
-            // `SubstView::apply_changed` route `FunSym::Ac`/`C` through
+            // reduce inputs are rebuilt through the smart constructors (the
+            // `Apply` instance for `VTerm` routes `FunSym::Ac`/`C` through
             // `f_app_ac`/`f_app_c`), and Maude replies are reparsed
             // through the SAME constructors (maude_parse.rs `build_app` →
             // `f_app_ac`/`f_app_c`; maude_types.rs `mterm_to_lnterm` →

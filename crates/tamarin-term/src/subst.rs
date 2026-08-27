@@ -249,7 +249,7 @@ pub fn apply_bvterm<C: Ord + Clone, V: Ord + Clone>(
 
 /// Pass-invariant hashed lookup view over a [`Subst`].
 ///
-/// [`apply_vterm_map_changed`] pays a `BTreeMap` descent per `Lit::Var`
+/// [`apply_vterm_map`] pays a `BTreeMap` descent per `Lit::Var`
 /// leaf — `LVar`-style keys compare idx-then-sort-then-name, so each probe
 /// is ~log n pointer-chasing node hops of multi-field compares.
 /// Whole-system passes (`subst_system_once`, `rename_precise_system`
@@ -259,11 +259,11 @@ pub fn apply_bvterm<C: Ord + Clone, V: Ord + Clone>(
 ///
 /// Value-identity: the view borrows the same `(var, term)` entries as the
 /// backing `BTreeMap` (`Hash`/`Eq` on `V` agree with the map's key
-/// equality), and [`Self::apply_changed`] mirrors
-/// [`apply_vterm_map_changed`]'s recursion and `None`-when-unchanged
-/// convention exactly — only the leaf-probe container differs, which is
-/// invisible to callers.  The view is consumed by keyed `get` only (never
-/// iterated), so the hash order cannot reach output.
+/// equality), and [`Self::apply_changed`] runs the same [`Apply`] instance
+/// as [`apply_vterm_map`] does, down to the `None`-when-unchanged
+/// convention — only the leaf-probe container differs, which is invisible
+/// to callers.  The view is consumed by keyed `get` only (never iterated),
+/// so the hash order cannot reach output.
 ///
 /// Memory: a pass-local of `subst.len()` borrowed pointer pairs, dropped
 /// with the pass — no persistence, no growth across steps.
