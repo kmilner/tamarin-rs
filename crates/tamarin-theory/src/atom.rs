@@ -7,6 +7,8 @@
 //! Atoms of trace formulas. A `ProtoAtom<S, T>` is parameterised over a
 //! syntactic-sugar wrapper `S` and a term type `T`. Stripping the sugar
 //! (`Atom<T>` ≡ `ProtoAtom<Unit, T>`) yields the form used after parsing.
+//! The sugar's own `Functor`/`Foldable` instances are [`MapSugar`] and
+//! [`SugarTerms`].
 
 use std::fmt;
 
@@ -84,6 +86,25 @@ impl<T, U> MapSugar<T, U> for SyntacticSugar<T> {
     }
 }
 
+/// The `Foldable` instance of a sugar type, which both `SyntacticSugar` and
+/// `Unit2` derive (Atom.hs:87-94) and which `Foldable (ProtoAtom s)` descends
+/// into at `Syntactic` (Atom.hs:136).  The `Functor` half is [`MapSugar`].
+pub trait SugarTerms<T>: Sized {
+    /// Visit every term held by the sugar, left to right.
+    fn for_each_term<'a>(&'a self, f: &mut dyn FnMut(&'a T));
+}
+
+impl<T> SugarTerms<T> for Unit2 {
+    fn for_each_term<'a>(&'a self, _f: &mut dyn FnMut(&'a T)) {}
+}
+
+impl<T> SugarTerms<T> for SyntacticSugar<T> {
+    fn for_each_term<'a>(&'a self, f: &mut dyn FnMut(&'a T)) {
+        let SyntacticSugar::Pred(fa) = self;
+        fa.terms.iter().for_each(f);
+    }
+}
+
 /// HS `Functor (ProtoAtom s)` (Atom.hs:121-127), borrowing its input.
 /// `Action` maps its time point before the fact's terms, the binary atoms map
 /// left before right, and `Syntactic` maps the sugar — the order a mapping
@@ -105,12 +126,15 @@ pub fn map_atom<S: MapSugar<T, U>, T, U>(
     }
 }
 
-/// HS `Foldable (ProtoAtom s)` (Atom.hs:129-136) at the `Unit2` sugar, whose
-/// own `Foldable` (Atom.hs:92-94) contributes nothing: `Action` folds the
-/// time point before the fact's terms, and each binary atom folds its left
-/// operand before its right — the order a folding function with a counter
-/// sees.
-pub fn fold_atom<T>(a: &Atom<T>, f: &mut dyn FnMut(&T)) {
+/// The term ladder HS's two atom traversals share: `Action` gives the time
+/// point before the fact's terms, each binary atom gives its left operand
+/// before its right, and `Last` gives its single term.  `syntactic` is the one
+/// arm the two differ in.
+fn fold_atom_ladder<'a, S, T>(
+    a: &'a ProtoAtom<S, T>,
+    f: &mut dyn FnMut(&'a T),
+    syntactic: &mut dyn FnMut(&'a S, &mut dyn FnMut(&'a T)),
+) {
     match a {
         ProtoAtom::Action(t, fa) => {
             f(t);
@@ -123,8 +147,21 @@ pub fn fold_atom<T>(a: &Atom<T>, f: &mut dyn FnMut(&T)) {
             f(r);
         }
         ProtoAtom::Last(t) => f(t),
-        ProtoAtom::Syntactic(Unit2) => {}
+        ProtoAtom::Syntactic(s) => syntactic(s, f),
     }
+}
+
+/// HS `Foldable (ProtoAtom s)` (Atom.hs:129-136): the ladder with the sugar's
+/// own `Foldable` (Atom.hs:87-94) run at `Syntactic` — the order a folding
+/// function with a counter sees.
+pub fn fold_atom<'a, S: SugarTerms<T>, T>(a: &'a ProtoAtom<S, T>, f: &mut dyn FnMut(&'a T)) {
+    fold_atom_ladder(a, f, &mut |s, g| s.for_each_term(g));
+}
+
+/// HS `atomTerms` (Theory/Tools/Wellformedness.hs:908-915): the ladder with a
+/// `Syntactic` atom giving no terms, appending to `out`.
+pub fn collect_atom_terms<'a, S, T>(a: &'a ProtoAtom<S, T>, out: &mut Vec<&'a T>) {
+    fold_atom_ladder(a, &mut |t| out.push(t), &mut |_, _| {});
 }
 
 /// HS `instance HasFrees t => HasFrees (Atom t)` (Atom.hs:156-161): both

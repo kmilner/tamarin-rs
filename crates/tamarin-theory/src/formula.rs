@@ -4,9 +4,8 @@
 
 //! Port of `Theory.Model.Formula` from
 //! `lib/theory/src/Theory/Model/Formula.hs`: the formula data type with its
-//! `LNFormula`/`SyntacticLNFormula` instances, the basic builders, the
-//! sugar traversal ([`SugarTerms`]), free variables ([`formula_frees`]), the
-//! quantifier-introduction helpers (`quantify`, `exists`, `forAll`), the
+//! `LNFormula`/`SyntacticLNFormula` instances, the basic builders, free
+//! variables ([`formula_frees`]), the quantifier-introduction helpers (`quantify`, `exists`, `forAll`), the
 //! De Bruijn lift [`shift_free_indices`], the sugar-stripping
 //! [`to_lnformula`], the closing of the parser AST into a
 //! [`SyntacticLNFormula`]
@@ -26,7 +25,10 @@
 //! guarded-formula simplifier `simplifyGuarded` is a different HS function,
 //! ported as `simplify_guarded_with` in guarded.rs.)
 
-use crate::atom::{map_atom, to_atom, MapSugar, ProtoAtom, SyntacticAtom, SyntacticSugar, Unit2};
+use crate::atom::{
+    collect_atom_terms, fold_atom, map_atom, to_atom, MapSugar, ProtoAtom, SugarTerms,
+    SyntacticAtom, SyntacticSugar, Unit2,
+};
 use crate::elaborate::{
     fact_to_lnfact, fact_to_sapic_fact, term_to_lnterm, term_to_sapic_term, varspec_to_lvar,
     varspec_to_sapic, ElabError,
@@ -141,26 +143,6 @@ impl<S, H, C, V> ProtoFormula<S, H, C, V> {
 // (Theory/Model/Formula.hs:369-373).
 // =============================================================================
 
-/// The `Foldable` instance of a sugar type, which both `SyntacticSugar` and
-/// `Unit2` derive (Atom.hs:87-94) and which `Foldable (ProtoAtom s)` descends
-/// into at `Syntactic` (Atom.hs:136).  The `Functor` half is
-/// [`crate::atom::MapSugar`].
-pub trait SugarTerms<T>: Sized {
-    /// Visit every term held by the sugar, left to right.
-    fn for_each_term(&self, f: &mut dyn FnMut(&T));
-}
-
-impl<T> SugarTerms<T> for Unit2 {
-    fn for_each_term(&self, _f: &mut dyn FnMut(&T)) {}
-}
-
-impl<T> SugarTerms<T> for SyntacticSugar<T> {
-    fn for_each_term(&self, f: &mut dyn FnMut(&T)) {
-        let SyntacticSugar::Pred(fa) = self;
-        fa.terms.iter().for_each(f);
-    }
-}
-
 /// HS `frees` on a formula: its `HasFrees` instance
 /// (Theory/Model/Formula.hs:321-333) at `V = LVar`, and HS `freesSapicTerm`
 /// (Theory/Sapic/Term.hs:131-132) at a variable type `HasFrees` does not
@@ -226,7 +208,7 @@ pub(crate) fn for_each_formula_term<S, C, V>(
     S: SugarTerms<VTerm<C, BVar<V>>>,
 {
     match fm {
-        ProtoFormula::Atom(a) => for_each_atom_term(a, f),
+        ProtoFormula::Atom(a) => fold_atom(a, f),
         ProtoFormula::Tf(_) => {}
         ProtoFormula::Not(p) => for_each_formula_term(p, f),
         ProtoFormula::Conn(_, p, q) => {
@@ -234,26 +216,6 @@ pub(crate) fn for_each_formula_term<S, C, V>(
             for_each_formula_term(q, f);
         }
         ProtoFormula::Qua(_, _, p) => for_each_formula_term(p, f),
-    }
-}
-
-/// The `Foldable (ProtoAtom s)` traversal order (Atom.hs:129-136): `Action`
-/// visits its time-point term before the fact's terms; the binary atoms visit
-/// left then right; `Syntactic` visits the sugar's terms.
-fn for_each_atom_term<S: SugarTerms<T>, T>(a: &ProtoAtom<S, T>, f: &mut dyn FnMut(&T)) {
-    match a {
-        ProtoAtom::Action(t, fa) => {
-            f(t);
-            for t2 in fa.terms.iter() {
-                f(t2);
-            }
-        }
-        ProtoAtom::EqE(l, r) | ProtoAtom::Subterm(l, r) | ProtoAtom::Less(l, r) => {
-            f(l);
-            f(r);
-        }
-        ProtoAtom::Last(t) => f(t),
-        ProtoAtom::Syntactic(s) => s.for_each_term(f),
     }
 }
 
@@ -308,24 +270,6 @@ fn collect_formula_terms<'a, S, H, C, V>(
             collect_formula_terms(q, out);
         }
         ProtoFormula::Qua(_, _, p) => collect_formula_terms(p, out),
-    }
-}
-
-/// HS `atomTerms` (Theory/Tools/Wellformedness.hs:908-915): an `Action` gives
-/// its time-point term before the fact's terms, the binary atoms give left
-/// then right, and a `Syntactic` atom gives none.
-fn collect_atom_terms<'a, S, T>(a: &'a ProtoAtom<S, T>, out: &mut Vec<&'a T>) {
-    match a {
-        ProtoAtom::Action(t, fa) => {
-            out.push(t);
-            out.extend(fa.terms.iter());
-        }
-        ProtoAtom::EqE(l, r) | ProtoAtom::Subterm(l, r) | ProtoAtom::Less(l, r) => {
-            out.push(l);
-            out.push(r);
-        }
-        ProtoAtom::Last(t) => out.push(t),
-        ProtoAtom::Syntactic(_) => {}
     }
 }
 
