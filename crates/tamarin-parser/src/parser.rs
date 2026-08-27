@@ -3557,29 +3557,9 @@ impl<'a> Parser<'a> {
         self.skip_ws();
         let kw_end = self.lx.pos().offset + "rule".len();
         self.require_kw("rule")?;
-        let modulo = self.try_modulo();
-        let name = self.rule_name_ident(kw_end)?;
-        let had_attributes = self.peek_punct("[");
-        let attributes = self.rule_attributes()?;
-        self.require_rule_colon(had_attributes)?;
-        // Optional let block.
-        let (lets, mut premises) = if self.at_keyword("let") {
-            (self.let_bindings()?, self.fact_list()?)
-        } else {
-            (vec![], self.premises_after_absent_let()?)
-        };
-        // Actions / restrictions either `--[..]->` or `-->`
-        let (mut actions, mut embedded_restrictions) = self.parse_actions_and_restrictions()?;
-        let mut conclusions = self.fact_list()?;
-        apply_let_bindings(
-            &lets,
-            &mut premises,
-            &mut actions,
-            &mut conclusions,
-            &mut embedded_restrictions,
-        );
+        let mut rule = self.rule_after_kw(kw_end)?;
         // Optional variants
-        let variants = if self.try_kw("variants") {
+        rule.variants = if self.try_kw("variants") {
             let mut vs = Vec::new();
             loop {
                 let v = self.parse_rule_ac()?;
@@ -3605,25 +3585,13 @@ impl<'a> Parser<'a> {
             vec![]
         };
         // Optional `left ... right ...` for diff rules
-        let left_right = if self.try_kw("left") {
+        if self.try_kw("left") {
             let l = self.parse_rule()?;
             self.require_kw("right")?;
             let r = self.parse_rule()?;
-            Some((Box::new(l), Box::new(r)))
-        } else {
-            None
-        };
-        Ok(Rule {
-            name,
-            modulo,
-            attributes,
-            premises,
-            actions,
-            conclusions,
-            embedded_restrictions,
-            variants,
-            left_right,
-        })
+            rule.left_right = Some((Box::new(l), Box::new(r)));
+        }
+        Ok(rule)
     }
 
     fn parse_rule_ac(&mut self) -> Result<Rule, ParseError> {
@@ -3634,16 +3602,33 @@ impl<'a> Parser<'a> {
         // This port relaxes that: `try_modulo` returns `None` when the
         // `(modulo AC)` head is absent and parsing proceeds. (More lenient than
         // Haskell, but still accepts all valid Haskell input.)
+        self.rule_after_kw(usize::MAX)
+    }
+
+    /// The rule header and body that follow the `rule` keyword, shared by
+    /// `protoRule` (Theory/Text/Parser/Rule.hs:126-135) and `protoRuleAC`
+    /// (Theory/Text/Parser/Rule.hs:146-154): the optional `(modulo ...)` head,
+    /// the name, the attribute list and the closing colon of `protoRuleInfo` /
+    /// `protoRuleACInfo` (Theory/Text/Parser/Rule.hs:100-107 / 138-143), then
+    /// `option emptySubst letBlock`, the premises, the actions and embedded
+    /// restrictions, the conclusions and the `apply subst` of the bindings.
+    /// `kw_end` is the offset just past the `rule` letters, which
+    /// [`Self::rule_name_ident`] uses to place the `formalComment` labels.
+    /// `variants` and `left_right` are empty; only `protoRule` has them, and
+    /// [`Self::parse_rule`] fills them in.
+    fn rule_after_kw(&mut self, kw_end: usize) -> Result<Rule, ParseError> {
         let modulo = self.try_modulo();
-        let name = self.rule_name_ident(usize::MAX)?;
+        let name = self.rule_name_ident(kw_end)?;
         let had_attributes = self.peek_punct("[");
         let attributes = self.rule_attributes()?;
         self.require_rule_colon(had_attributes)?;
+        // Optional let block.
         let (lets, mut premises) = if self.at_keyword("let") {
             (self.let_bindings()?, self.fact_list()?)
         } else {
             (vec![], self.premises_after_absent_let()?)
         };
+        // Actions / restrictions either `--[..]->` or `-->`
         let (mut actions, mut embedded_restrictions) = self.parse_actions_and_restrictions()?;
         let mut conclusions = self.fact_list()?;
         apply_let_bindings(
