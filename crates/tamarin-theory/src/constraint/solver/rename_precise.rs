@@ -18,8 +18,9 @@
 //! note `M.fromListWith (error "case names not unique")` there *errors* on a
 //! duplicate case name rather than deduping.
 
+use tamarin_term::apply::Apply;
 use tamarin_term::bind::Bindings;
-use tamarin_term::lterm::{HasFrees, LNTerm, LVar};
+use tamarin_term::lterm::{LNTerm, LVar};
 use tamarin_term::subst::Subst;
 use tamarin_term::term::Term;
 use tamarin_term::vterm::Lit;
@@ -27,7 +28,7 @@ use tamarin_utils::fresh::PreciseFreshState;
 
 use crate::constraint::constraints::Goal;
 use crate::constraint::system::System;
-use crate::guarded::subst_guarded_cow;
+use crate::guarded::{subst_guarded_cow, Guarded};
 
 /// Canonicalise the free `LVar`s of `sys` so that two systems differing
 /// only by variable numbering compare equal.
@@ -99,14 +100,22 @@ pub fn rename_precise_system(sys: &mut System) {
             .iter()
             .map(|(old, new)| (old, Term::Lit(Lit::Var(new)))),
     );
-    // Hashed leaf-lookup view over the pass-invariant rename subst
-    // (`SubstView`): Phase 2 applies this ONE fixed var→var substitution to
-    // every goal/eq-store/subterm-store term, so a single FxHash probe per
-    // `Lit::Var` leaf replaces the `BTreeMap` descent — identical lookups,
-    // byte-identical output.  (`from_list` above already drops identity
-    // `x ~> x` entries, so the view's hit set matches the map's exactly.)
-    let term_view = tamarin_term::subst::SubstView::new(&term_subst);
+    // A `Disj` goal's alternatives are renamed one pass each, with no
+    // fixpoint and no re-normalisation: the rename is a bijection on
+    // variables, so one pass reaches every leaf and cannot make two
+    // alternatives equal.
+    let disj = |alts: &[Guarded]| -> Option<Vec<Guarded>> {
+        tamarin_utils::cow::cow_map_vec(alts, |g| subst_guarded_cow(g, &term_subst))
+    };
+    // Phase 2 applies this ONE fixed variable-to-variable substitution to
+    // every node, goal, edge and stored term, which is what the pass's hashed
+    // leaf view is for.  The cached-bloom fact fast path is off: the domain is
+    // every free variable of the system, so it could only ever skip a
+    // variable-free fact.
+    let pass = crate::apply::SystemSubst::new(&term_subst, false, &disj);
 
+    // `from_list` above drops identity `x ~> x` entries, so the substitution
+    // rewrites a variable exactly where the binding map remaps it.
     let map_var = |v: LVar| -> LVar { bindings.get(&v).unwrap_or(v) };
 
     // 1. Nodes — id + rule.
@@ -121,12 +130,8 @@ pub fn rename_precise_system(sys: &mut System) {
     // some iterate directly).  Mirror HS by sorting here.
     //
     // Identity fast path: when the node rename is the identity
-    // (`nodes_identity`), `map_var` maps every node id + rule var to itself,
-    // so the per-rule `map_free` re-walk is a value no-op.  `map_free` is the
-    // non-monotone (`Arbitrary`) map, which AC-re-sorts on rebuild, but a
-    // stored node term is always `f_app`-normal (every term is built through
-    // `f_app`; the monotone paths preserve normal form), so re-sorting under
-    // an identity var-map reproduces the same normal form.  The only
+    // (`nodes_identity`), the substitution binds no node id and no rule
+    // variable, so the per-rule walk would rewrite nothing.  The only
     // remaining effect is the ascending-NodeId re-sort; if `sys.nodes` is
     // already so sorted the whole step is a no-op and the `Arc` stays shared
     // with the parent (no deep clone, no rebuild), and — since the nodes are
@@ -158,11 +163,7 @@ pub fn rename_precise_system(sys: &mut System) {
             crate::rule::RuleACInst,
         )> = nodes
             .into_iter()
-            .map(|(id, rule)| {
-                let new_id = map_var(id);
-                let new_rule = rule.map_free(&mut |v| map_var(v));
-                (new_id, new_rule)
-            })
+            .map(|(id, rule)| (id.apply(&pass), rule.apply(&pass)))
             .collect();
         renamed.sort_by_key(|a| a.0);
         sys.content_mut_untracked().nodes = std::sync::Arc::new(renamed);
@@ -170,8 +171,9 @@ pub fn rename_precise_system(sys: &mut System) {
 
     // 2. Edges.
     for e in sys.content_mut_untracked().edges.iter_mut() {
-        e.src.0 = map_var(e.src.0);
-        e.tgt.0 = map_var(e.tgt.0);
+        if let Some(new_edge) = e.apply_changed(&pass) {
+            *e = new_edge;
+        }
     }
     // Dedup after rename — sort + dedup (matches subst_system).
     let mut tmp: Vec<_> = std::mem::take(&mut sys.content_mut_untracked().edges);
@@ -181,7 +183,7 @@ pub fn rename_precise_system(sys: &mut System) {
 
     // 3. Last atom.
     if let Some(la) = sys.content_mut_untracked().last_atom.take() {
-        sys.content_mut_untracked().last_atom = Some(map_var(la));
+        sys.content_mut_untracked().last_atom = Some(la.apply(&pass));
     }
 
     // 4. Less atoms.
@@ -195,10 +197,8 @@ pub fn rename_precise_system(sys: &mut System) {
     // (Term/LTerm.hs:898-903, see line 903 `fmap S.fromList . mapFrees f . S.toList`).
     let mut new_less: Vec<crate::constraint::constraints::LessAtom> =
         Vec::with_capacity(sys.less_atoms.len());
-    for mut la in std::mem::take(&mut sys.content_mut_untracked().less_atoms) {
-        la.smaller = map_var(la.smaller);
-        la.larger = map_var(la.larger);
-        new_less.push(la);
+    for la in std::mem::take(&mut sys.content_mut_untracked().less_atoms) {
+        new_less.push(la.apply(&pass));
     }
     // Sort + dedup (O(n log n)), matching HS's `S.fromList` over the renamed
     // set rather than an O(n^2) membership scan.
@@ -209,36 +209,10 @@ pub fn rename_precise_system(sys: &mut System) {
     // 5. Goals — per-variant rewrite.
     let goals =
         std::sync::Arc::unwrap_or_clone(std::mem::take(&mut sys.content_mut_untracked().goals));
-    let apply_term = |t: LNTerm| -> LNTerm { term_view.apply(t) };
-    let apply_fact = |fa: crate::fact::LNFact| -> crate::fact::LNFact {
-        // Var→var rename is a frees-changing rebuild, so the fact must be
-        // rebuilt through the computing constructor `fresh_annotated`, which
-        // derives the bloom from the renamed terms — never copy `fa`'s stale one.
-        let terms: Vec<LNTerm> = fa.terms.iter().cloned().map(&apply_term).collect();
-        crate::fact::Fact::fresh_annotated(fa.tag, fa.annotations, terms)
-    };
-    let mut new_goals: Vec<(Goal, crate::constraint::system::GoalStatus)> =
-        Vec::with_capacity(goals.len());
-    for (g, st) in goals {
-        let g2 = match g {
-            Goal::Action(i, fa) => Goal::Action(map_var(i), apply_fact(fa)),
-            Goal::Premise(p, fa) => Goal::Premise((map_var(p.0), p.1), apply_fact(fa)),
-            Goal::Chain(c, p) => Goal::Chain((map_var(c.0), c.1), (map_var(p.0), p.1)),
-            Goal::Disj(d) => {
-                // COW: an identity rename (or one that touches no Disj leaf)
-                // reuses the owned `g` with zero rebuild; `Some` is byte-
-                // identical to the eager `subst_guarded`.
-                let items: Vec<crate::guarded::Guarded> =
-                    d.0.into_iter()
-                        .map(|g| subst_guarded_cow(&g, &term_subst).unwrap_or(g))
-                        .collect();
-                Goal::Disj(crate::constraint::constraints::Disj(items))
-            }
-            Goal::Split(s) => Goal::Split(s),
-            Goal::Subterm((s, t)) => Goal::Subterm((apply_term(s), apply_term(t))),
-        };
-        new_goals.push((g2, st));
-    }
+    let mut new_goals: Vec<(Goal, crate::constraint::system::GoalStatus)> = goals
+        .into_iter()
+        .map(|(g, st)| (g.apply(&pass), st))
+        .collect();
     // HS-faithful: `mapFrees (M.Map Goal GoalStatus)`
     // = `fmap M.fromList . mapFrees f . M.toList` (Term/LTerm.hs:905-914, see line 914).
     // `M.fromList` builds a Map keyed by Ord Goal, so post-rename the
@@ -286,7 +260,7 @@ pub fn rename_precise_system(sys: &mut System) {
     let pairs: Vec<(LVar, LNTerm)> = old_subst
         .to_list()
         .into_iter()
-        .map(|(k, v)| (map_var(k), apply_term(v)))
+        .map(|(k, v)| (map_var(k), v.apply(&pass)))
         .collect();
     sys.eq_store_mut().subst = Subst::from_list(pairs);
 
@@ -335,8 +309,9 @@ pub fn rename_precise_system(sys: &mut System) {
     // `Set SubtermD` for both pos and neg).  `mapFrees (S.Set a) =
     // fmap S.fromList . mapFrees f . S.toList` — sort + dedup post-rename.
     for c in sys.subterm_store_mut().subterms.iter_mut() {
-        c.small = apply_term(c.small.clone());
-        c.big = apply_term(c.big.clone());
+        if let Some(nc) = c.apply_changed(&pass) {
+            *c = nc;
+        }
     }
     sys.subterm_store_mut()
         .subterms
@@ -345,8 +320,9 @@ pub fn rename_precise_system(sys: &mut System) {
         .subterms
         .dedup_by(|a, b| (&a.small, &a.big) == (&b.small, &b.big));
     for c in sys.subterm_store_mut().solved_subterms.iter_mut() {
-        c.small = apply_term(c.small.clone());
-        c.big = apply_term(c.big.clone());
+        if let Some(nc) = c.apply_changed(&pass) {
+            *c = nc;
+        }
     }
     sys.subterm_store_mut()
         .solved_subterms
@@ -360,7 +336,7 @@ pub fn rename_precise_system(sys: &mut System) {
     // set invariant on the rewritten pairs.
     let mapped: Vec<(LNTerm, LNTerm)> = std::mem::take(&mut sys.subterm_store_mut().neg_subterms)
         .into_iter()
-        .map(|(s, t)| (apply_term(s), apply_term(t)))
+        .map(|pair| pair.apply(&pass))
         .collect();
     sys.subterm_store_mut().neg_subterms =
         crate::tools::subterm_store::SortedPairSet::rebuild_from(mapped);
