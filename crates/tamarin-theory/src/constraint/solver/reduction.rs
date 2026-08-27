@@ -4869,76 +4869,6 @@ pub(crate) fn process_ac_subterm(
     Ok((f_app_ac(f, s_rem), f_app_ac(f, b_rem)))
 }
 
-/// `isTrueFalse reducible Nothing (small, big)` — HS SubtermStore.hs:335-355.
-/// Returns `Some(true)`/`Some(false)` for trivially true/false subterms,
-/// `None` when undecidable.
-fn subterm_is_true_false(
-    reducible: &tamarin_utils::FastSet<tamarin_term::function_symbols::FunSym>,
-    small: &tamarin_term::lterm::LNTerm,
-    big: &tamarin_term::lterm::LNTerm,
-) -> Option<bool> {
-    use crate::tools::subterm_store::elem_not_below_reducible;
-    use tamarin_term::function_symbols::{nat_one_sym, AcSym, FunSym};
-    use tamarin_term::lterm::{
-        flattened_ac_terms, is_fresh_var, is_msg_var, is_pub_var, sort_of_lnterm, LSort,
-    };
-    use tamarin_term::term::{f_app_ac, Term};
-    use tamarin_term::vterm::Lit;
-    // First guarded equation group (lines 335-346).
-    let small_nat_or_msg = sort_of_lnterm(small) == LSort::Nat || is_msg_var(small);
-    let big_nat = sort_of_lnterm(big) == LSort::Nat;
-    // onlyOnes small && l small < l big && big::Nat  (line 336)
-    let small_flat_np = flattened_ac_terms(AcSym::NatPlus, small);
-    let big_flat_np = flattened_ac_terms(AcSym::NatPlus, big);
-    let only_ones = small_flat_np.iter().all(|t| {
-        matches!(t, Term::App(FunSym::NoEq(s), args)
-            if args.is_empty() && *s == nat_one_sym())
-    });
-    if only_ones && small_flat_np.len() < big_flat_np.len() && big_nat {
-        return Some(true);
-    }
-    if small_nat_or_msg && big_nat {
-        // CR-rule S_nat (delayed): processACSubterm NatPlus
-        match process_ac_subterm(AcSym::NatPlus, small, big) {
-            Err(res) => return Some(res),
-            Ok(_) => return None,
-        }
-    }
-    // big `redElem` small -> False (includes big == small)
-    if elem_not_below_reducible(reducible, big, small) {
-        return Some(false);
-    }
-    // small `redElem` big -> True
-    if elem_not_below_reducible(reducible, small, big) {
-        return Some(true);
-    }
-    // nothing can be a strict subterm of a constant (line 347)
-    if let Term::Lit(Lit::Con(_)) = big {
-        return Some(false);
-    }
-    // CR-rule S_invalid (lines 348-349)
-    if let Term::Lit(Lit::Var(_)) = big {
-        let invalid = is_pub_var(big) || is_fresh_var(big) || (!small_nat_or_msg && big_nat);
-        if invalid {
-            return Some(false);
-        }
-    }
-    // CR-rule S_subterm-ac-recurse (lines 350-354)
-    if let Term::App(FunSym::Ac(f), _) = big {
-        let f = *f;
-        if !reducible.contains(&FunSym::Ac(f)) {
-            let big_flat: Vec<tamarin_term::lterm::LNTerm> =
-                flattened_ac_terms(f, big).into_iter().cloned().collect();
-            let big_norm = f_app_ac(f, big_flat);
-            match process_ac_subterm(f, small, &big_norm) {
-                Err(res) => return Some(res),
-                Ok(_) => return None,
-            }
-        }
-    }
-    None
-}
-
 /// `step` of HS `splitSubterm` (SubtermStore.hs:279-305).  Allocates a
 /// fresh `newVar` for the AC-recurse arm via `mk_fresh` (a closure
 /// mirroring `MonadFresh`'s `freshLVar "newVar" (sortOfLNTerm big)`).
@@ -4957,7 +4887,7 @@ fn subterm_step(
     use tamarin_term::term::{f_app_ac, Term};
     use tamarin_term::vterm::{var_term, Lit};
     // isTrueFalse arms (lines 280-281).
-    match subterm_is_true_false(reducible, small, big) {
+    match crate::tools::subterm_store::is_true_false(reducible, small, big) {
         Some(true) => return Some(vec![SubtermSplit::TrueD]),
         Some(false) => return Some(vec![]),
         None => {}

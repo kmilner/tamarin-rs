@@ -301,6 +301,112 @@ pub fn elem_not_below_reducible(
     }
 }
 
+/// The Nat guards of HS `isTrueFalse reducible Nothing` (SubtermStore.hs:335-340),
+/// which fire BEFORE the `redElem` cases:
+///
+/// ```haskell
+/// | onlyOnes small && l small < l big && sortOfLNTerm big == LSortNat = Just True
+/// | (sortOfLNTerm small == LSortNat || isMsgVar small) && sortOfLNTerm big == LSortNat =
+///     case processACSubterm NatPlus (small, big) of
+///       Right res -> Just res
+///       Left _    -> Nothing
+/// ```
+///
+/// A matching guard is the WHOLE answer for the pair, inconclusive
+/// (`Some(None)`) included — HS's guarded equation does not fall through to
+/// the later `redElem` / constructor equations.  `None` means neither guard
+/// applies, so the caller continues with [`is_true_false_structural`].
+pub fn nat_guards(small: &LNTerm, big: &LNTerm) -> Option<Option<bool>> {
+    use tamarin_term::function_symbols::{nat_one_sym, AcSym};
+    use tamarin_term::lterm::{flattened_ac_terms, is_msg_var, sort_of_lnterm, LSort};
+    let big_nat = sort_of_lnterm(big) == LSort::Nat;
+    if !big_nat {
+        return None;
+    }
+    let small_flat = flattened_ac_terms(AcSym::NatPlus, small);
+    let big_flat = flattened_ac_terms(AcSym::NatPlus, big);
+    let only_ones = small_flat.iter().all(|t| {
+        matches!(t, Term::App(FunSym::NoEq(s), args)
+            if args.is_empty() && *s == nat_one_sym())
+    });
+    if only_ones && small_flat.len() < big_flat.len() {
+        return Some(Some(true));
+    }
+    if sort_of_lnterm(small) == LSort::Nat || is_msg_var(small) {
+        // processACSubterm NatPlus (SubtermStore.hs:313-318): sort +
+        // removeSame on flattenedACTerms; empty big -> False, empty small
+        // -> True, otherwise inconclusive.  The rebuilt `Ok` terms are the
+        // caller's business (`splitSubterm`'s `step` re-runs it for the
+        // `NatSubtermD` leaf).
+        return Some(
+            crate::constraint::solver::reduction::process_ac_subterm(AcSym::NatPlus, small, big)
+                .err(),
+        );
+    }
+    None
+}
+
+/// The structural guards of HS `isTrueFalse reducible Nothing`
+/// (SubtermStore.hs:341-355), i.e. everything after the Nat guards: the
+/// `redElem` pair, the constant big side, CR-rule S_invalid on a variable
+/// big side, and CR-rule S_subterm-ac-recurse on a non-reducible AC big
+/// side.  `None` when the pair is undecidable.
+///
+/// `simp_injective_fact_eq_mon_pass` (Simplify.hs:555-556) splices this
+/// between the Nat guards and HS's `(Just sst)` store-membership arms
+/// (SubtermStore.hs:356-371); `propagate_subterm_obvious` calls it alone.
+pub fn is_true_false_structural(
+    reducible: &FastSet<FunSym>,
+    small: &LNTerm,
+    big: &LNTerm,
+) -> Option<bool> {
+    use tamarin_term::function_symbols::FunSym;
+    use tamarin_term::lterm::{is_fresh_var, is_msg_var, is_pub_var, sort_of_lnterm, LSort};
+    use tamarin_term::vterm::Lit;
+    // `big redElem small` covers `small == big`.
+    if elem_not_below_reducible(reducible, big, small) {
+        return Some(false);
+    }
+    if elem_not_below_reducible(reducible, small, big) {
+        return Some(true);
+    }
+    // Nothing can be a strict subterm of a constant.
+    if let Term::Lit(Lit::Con(_)) = big {
+        return Some(false);
+    }
+    // CR-rule S_invalid: a pub/fresh var (atom var) has no subterms, and a
+    // Nat-sorted big with a non-Nat/non-MsgVar small is invalid.
+    if let Term::Lit(Lit::Var(_)) = big {
+        if is_pub_var(big) || is_fresh_var(big) {
+            return Some(false);
+        }
+        let small_ok = sort_of_lnterm(small) == LSort::Nat || is_msg_var(small);
+        if !small_ok && sort_of_lnterm(big) == LSort::Nat {
+            return Some(false);
+        }
+    }
+    // CR-rule S_subterm-ac-recurse: an AC big side goes through
+    // processACSubterm; the rebuilt `Ok` terms are the caller's business.
+    if let Term::App(FunSym::Ac(ac_sym), _) = big {
+        if !reducible.contains(&FunSym::Ac(*ac_sym)) {
+            return crate::constraint::solver::reduction::process_ac_subterm(*ac_sym, small, big)
+                .err();
+        }
+    }
+    None
+}
+
+/// `isTrueFalse reducible Nothing (small, big)` — HS SubtermStore.hs:335-355,
+/// the Nat guards followed by the structural ones.  `Some(true)` /
+/// `Some(false)` for a trivially true / false subterm relation, `None` when
+/// it depends on the substitution.
+pub fn is_true_false(reducible: &FastSet<FunSym>, small: &LNTerm, big: &LNTerm) -> Option<bool> {
+    match nat_guards(small, big) {
+        Some(verdict) => verdict,
+        None => is_true_false_structural(reducible, small, big),
+    }
+}
+
 /// Collector companion to [`elem_not_below_reducible`], specialised for the
 /// case where `inner` is a **Fresh-sort variable leaf**.
 ///

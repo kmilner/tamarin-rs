@@ -3898,41 +3898,18 @@ fn simp_injective_fact_eq_mon_pass(red: &mut Reduction) -> ChangeIndicator {
     let is_true_false = |s: &tamarin_term::lterm::LNTerm,
                          t: &tamarin_term::lterm::LNTerm|
      -> Option<bool> {
-        use tamarin_term::function_symbols::AcSym;
-        use tamarin_term::lterm::{flattened_ac_terms, is_msg_var, sort_of_lnterm, LSort};
         if s == t {
             return Some(false);
         }
-        // HS `isTrueFalse reducible Nothing` Nat guards (SubtermStore.hs:336-340),
-        // which fire BEFORE the redElem cases:
-        //   | onlyOnes small && l small < l big && big::Nat -> Just True
-        //   | (small::Nat || isMsgVar small) && big::Nat ->
-        //         processACSubterm NatPlus (small, big)
-        let nat_one: tamarin_term::lterm::LNTerm =
-            tamarin_term::term::f_app_no_eq(tamarin_term::function_symbols::nat_one_sym(), vec![]);
-        let only_ones = |x: &tamarin_term::lterm::LNTerm| {
-            flattened_ac_terms(AcSym::NatPlus, x)
-                .iter()
-                .all(|e| **e == nat_one)
-        };
-        let nat_len = |x: &tamarin_term::lterm::LNTerm| flattened_ac_terms(AcSym::NatPlus, x).len();
-        if only_ones(s) && nat_len(s) < nat_len(t) && sort_of_lnterm(t) == LSort::Nat {
-            return Some(true);
+        // HS `isTrueFalse reducible Nothing` (SubtermStore.hs:335-355): the
+        // Nat guards, then the structural ones, spliced in at the same
+        // position in the check order — before the store-membership arm
+        // below.  `s==t` inside the structural half is unreachable here
+        // (already returned).
+        if let Some(verdict) = crate::tools::subterm_store::nat_guards(s, t) {
+            return verdict;
         }
-        if (sort_of_lnterm(s) == LSort::Nat || is_msg_var(s)) && sort_of_lnterm(t) == LSort::Nat {
-            // processACSubterm NatPlus (SubtermStore.hs:313-318): sort +
-            // removeSame on flattenedACTerms; empty big -> False, empty
-            // small -> True, otherwise inconclusive (None).  The rebuilt
-            // `Ok` terms are unused here.
-            return crate::constraint::solver::reduction::process_ac_subterm(AcSym::NatPlus, s, t)
-                .err();
-        }
-        // Shared structural core (redElem / Con / atom-var / non-reducible
-        // AC big), spliced back at the same position in the check order —
-        // after the nat guards above, before the store-membership arm
-        // below.  `s==t` inside the core is unreachable here (already
-        // returned).  See `is_true_false_core`.
-        if let Some(r) = is_true_false_core(&reducible, s, t) {
+        if let Some(r) = crate::tools::subterm_store::is_true_false_structural(&reducible, s, t) {
             return Some(r);
         }
         // HS `isTrueFalse reducible (Just sst)` membership arm
@@ -4267,67 +4244,6 @@ fn dedupe_formulas_pass(red: &mut Reduction) -> ChangeIndicator {
     }
 }
 
-/// Shared structural core of `isTrueFalse` (HS SubtermStore.hs:334-355,
-/// the `Nothing` sst branch): the `s==t`, `elem_not_below_reducible`,
-/// constant-big, atom-var-big, and non-reducible AC-big checks common to
-/// `propagate_subterm_obvious` and `simp_injective_fact_eq_mon_pass`.
-/// Returns `Some(true)`/`Some(false)` for a trivially-(un)satisfied
-/// subterm relation, `None` when undecidable.  `simp_injective` wraps
-/// this with its extra nat-plus guards (before) and store-membership arms
-/// (after); `propagate` uses it directly.
-fn is_true_false_core(
-    reducible: &tamarin_utils::FastSet<tamarin_term::function_symbols::FunSym>,
-    s: &tamarin_term::lterm::LNTerm,
-    t: &tamarin_term::lterm::LNTerm,
-) -> Option<bool> {
-    use crate::tools::subterm_store::elem_not_below_reducible;
-    use tamarin_term::function_symbols::FunSym;
-    use tamarin_term::lterm::{is_fresh_var, is_msg_var, is_pub_var, sort_of_lnterm, LSort};
-    use tamarin_term::term::Term;
-    use tamarin_term::vterm::Lit;
-    if s == t {
-        return Some(false);
-    }
-    if elem_not_below_reducible(reducible, t, s) {
-        return Some(false);
-    }
-    if elem_not_below_reducible(reducible, s, t) {
-        return Some(true);
-    }
-    // Constants have no strict subterms.
-    if let Term::Lit(Lit::Con(_)) = t {
-        return Some(false);
-    }
-    // CR-rule S_invalid: pub/fresh var (atom var) has no subterms;
-    // similarly, a Nat-sorted big with a non-Nat/non-MsgVar small is
-    // invalid (HS SubtermStore.hs:334-371, see line 349).
-    if let Term::Lit(Lit::Var(_)) = t {
-        if is_pub_var(t) || is_fresh_var(t) {
-            return Some(false);
-        }
-        let small_ok = sort_of_lnterm(s) == LSort::Nat || is_msg_var(s);
-        if !small_ok && sort_of_lnterm(t) == LSort::Nat {
-            return Some(false);
-        }
-    }
-    // CR-rule S_subterm-ac-recurse: AC big-side processed via
-    // processACSubterm (SubtermStore.hs:313-318).
-    if let Term::App(FunSym::Ac(ac_sym), _) = t {
-        let ac_fun_sym = FunSym::Ac(*ac_sym);
-        if !reducible.contains(&ac_fun_sym) {
-            // processACSubterm (SubtermStore.hs:313-318): empty big
-            // -> False, empty small -> True; the rebuilt `Ok` terms
-            // are unused — fall through to `None` below.
-            match crate::constraint::solver::reduction::process_ac_subterm(*ac_sym, s, t) {
-                Err(false) => return Some(false),
-                Err(true) => return Some(true),
-                Ok(_) => {}
-            }
-        }
-    }
-    None
-}
-
 /// Subterm-store simplification — partial port of Haskell's
 /// `simpSubtermStore` (`Theory.Tools.SubtermStore.simpSubtermStore`,
 /// SubtermStore.hs:144-157).
@@ -4399,9 +4315,10 @@ fn propagate_subterm_obvious(red: &mut Reduction) -> ChangeIndicator {
     // Returns Some(true) for trivially-true (s appears in t not below
     // reducible), Some(false) for trivially-false (constant big, atom
     // var big, or AC-flattened big empties out), None if undecidable.
-    let is_true_false = |s: &tamarin_term::lterm::LNTerm,
-                         t: &tamarin_term::lterm::LNTerm|
-     -> Option<bool> { is_true_false_core(&reducible, s, t) };
+    let is_true_false =
+        |s: &tamarin_term::lterm::LNTerm, t: &tamarin_term::lterm::LNTerm| -> Option<bool> {
+            crate::tools::subterm_store::is_true_false_structural(&reducible, s, t)
+        };
 
     // -------------------------------------------------------------
     // Recursive splitSubterm (recurse=True) — HS SubtermStore.hs:261-305.
