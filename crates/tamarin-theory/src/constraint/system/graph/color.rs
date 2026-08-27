@@ -103,21 +103,12 @@ fn class_key(info: &RInfo) -> ClassKey<'_> {
 ///   * `isFreshRule` (proto `Fresh`) or `isISendRule`           → 3
 ///   * otherwise (protocol rules, IRecv, …)                     → 1
 fn group_idx(ru: &RuleACInst) -> usize {
-    use crate::rule::{
-        is_coerce_rule_info, is_constr_rule_info, is_destr_rule_info, is_fresh_constr_rule_info,
-        is_iequality_rule_info, is_isend_rule_info, is_nat_constr_rule_info,
-        is_pub_constr_rule_info,
-    };
+    use crate::rule::{is_constr_rule, is_destr_rule, is_isend_rule_info};
     match &ru.info {
         RuleInfo::Intr(i) => {
-            if is_destr_rule_info(i) || is_iequality_rule_info(i) {
+            if is_destr_rule(i) {
                 0
-            } else if is_constr_rule_info(i)
-                || is_fresh_constr_rule_info(i)
-                || is_pub_constr_rule_info(i)
-                || is_nat_constr_rule_info(i)
-                || is_coerce_rule_info(i)
-            {
+            } else if is_constr_rule(i) {
                 2
             } else if is_isend_rule_info(i) {
                 3

@@ -773,23 +773,13 @@ impl ProverSession {
         // everything that is neither a construction rule (`isConstrRule`,
         // Model/Rule.hs:707-714) nor a destruction rule (`isDestrRule`,
         // Model/Rule.hs:694-698), i.e. ISend/IRecv/IRecvNC/Fresh.
-        use crate::rule::IntrRuleACInfo as I;
         let rules = self.theory.rules().count()
             + self
                 .template_ctx
                 .intruder_rules
                 .iter()
                 .filter(|ir| {
-                    !matches!(
-                        ir.info,
-                        I::ConstrRule { .. }
-                            | I::FreshConstr
-                            | I::PubConstr
-                            | I::NatConstr
-                            | I::Coerce
-                            | I::DestrRule { .. }
-                            | I::IEquality
-                    )
+                    !crate::rule::is_constr_rule(&ir.info) && !crate::rule::is_destr_rule(&ir.info)
                 })
                 .count();
 

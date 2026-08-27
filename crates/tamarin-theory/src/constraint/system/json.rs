@@ -42,9 +42,8 @@ use crate::fact::{
 };
 use crate::pretty_hpj::{fsep, punctuate, Doc, DEFAULT_LINE_LENGTH, DEFAULT_RIBBON};
 use crate::rule::{
-    is_coerce_rule_info, is_constr_rule_info, is_destr_rule_info, is_fresh_constr_rule_info,
-    is_iequality_rule_info, is_irecv_rule_info, is_isend_rule_info, is_nat_constr_rule_info,
-    is_pub_constr_rule_info, rule_name_string, ProtoRuleName, RuleACInst, RuleInfo,
+    is_constr_rule, is_destr_rule, is_irecv_rule_info, is_isend_rule_info, rule_name_string,
+    ProtoRuleName, RuleACInst, RuleInfo,
 };
 
 use crate::constraint::system::graph::abbreviation::order_abbreviations_for_json;
@@ -160,15 +159,9 @@ fn show_lit(l: &Lit<Name, LVar>) -> String {
 fn get_rule_type(ru: &RuleACInst) -> &'static str {
     match &ru.info {
         RuleInfo::Intr(i) => {
-            // HS `isDestrRule` (Theory/Model/Rule.hs:694-698) also covers `IEqualityRule`.
-            if is_destr_rule_info(i) || is_iequality_rule_info(i) {
+            if is_destr_rule(i) {
                 "isDestrRule"
-            } else if is_constr_rule_info(i)
-                || is_fresh_constr_rule_info(i)
-                || is_pub_constr_rule_info(i)
-                || is_nat_constr_rule_info(i)
-                || is_coerce_rule_info(i)
-            {
+            } else if is_constr_rule(i) {
                 "isConstrRule"
             } else if is_irecv_rule_info(i) {
                 "isIRecvRule"

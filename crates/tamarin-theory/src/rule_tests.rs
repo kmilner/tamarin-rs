@@ -178,6 +178,16 @@ fn intruder_predicates() {
         name: b"f".to_vec(),
         fun: f
     }));
+    // The HS-faithful pair covers a whole class: `isDestrRule` takes
+    // `IEquality` too and `isConstrRule` takes the four non-`ConstrRule`
+    // constructors, while neither takes an `IRecv`.
+    assert!(is_destr_rule(&IntrRuleACInfo::IEquality));
+    assert!(is_constr_rule(&IntrRuleACInfo::Coerce));
+    assert!(is_constr_rule(&IntrRuleACInfo::FreshConstr));
+    assert!(is_constr_rule(&IntrRuleACInfo::PubConstr));
+    assert!(is_constr_rule(&IntrRuleACInfo::NatConstr));
+    assert!(!is_constr_rule(&IntrRuleACInfo::IRecv));
+    assert!(!is_destr_rule(&IntrRuleACInfo::IRecv));
 }
 
 /// `IntrRuleACInfo`'s derived `Ord`/`Hash` walk the variants in

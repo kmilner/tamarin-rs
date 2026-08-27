@@ -193,7 +193,7 @@ fn proto_rule_count(entry: &TheoryEntry) -> usize {
         let ctx = ps.ctx.lock();
         ctx.intruder_rules
             .iter()
-            .filter(|ir| !is_constr_intr(&ir.info) && !is_destr_intr(&ir.info))
+            .filter(|ir| !is_constr_rule(&ir.info) && !is_destr_rule(&ir.info))
             .count()
     });
     proto + extra
@@ -801,28 +801,7 @@ pub(crate) fn proof_html(entry: &TheoryEntry, lemma: &str, sub: &[String]) -> St
 // module only adds the surrounding HTML tags HS's `withTag`/`ppSection` emit.
 // ---------------------------------------------------------------------
 
-use tamarin_theory::rule::{IntrRuleAC, IntrRuleACInfo};
-
-/// HS `isConstrRule` for the message-page classification (Model/Rule.hs:707-714):
-/// `_crConstruct` = ConstrRule | FreshConstr | PubConstr | NatConstr | Coerce.
-fn is_constr_intr(info: &IntrRuleACInfo) -> bool {
-    matches!(
-        info,
-        IntrRuleACInfo::ConstrRule { .. }
-            | IntrRuleACInfo::FreshConstr
-            | IntrRuleACInfo::PubConstr
-            | IntrRuleACInfo::NatConstr
-            | IntrRuleACInfo::Coerce
-    )
-}
-
-/// HS `isDestrRule` (Model/Rule.hs:694-698): `_crDestruct` = DestrRule | IEquality.
-fn is_destr_intr(info: &IntrRuleACInfo) -> bool {
-    matches!(
-        info,
-        IntrRuleACInfo::DestrRule { .. } | IntrRuleACInfo::IEquality
-    )
-}
+use tamarin_theory::rule::{is_constr_rule, is_destr_rule, IntrRuleAC};
 
 /// HS `ppSection header s = withTag "h2" [] (text header) $$ withTag "p"
 /// [("class","monospace rules")] body` (Web/Theory.hs:934-937), rendered
@@ -884,9 +863,9 @@ fn message_html(entry: &TheoryEntry) -> String {
     if let Some(ps) = &entry.proof_state {
         let ctx = ps.ctx.lock();
         for ir in &ctx.intruder_rules {
-            if is_constr_intr(&ir.info) {
+            if is_constr_rule(&ir.info) {
                 construct.push(ir.clone());
-            } else if is_destr_intr(&ir.info) {
+            } else if is_destr_rule(&ir.info) {
                 destruct.push(ir.clone());
             }
         }
@@ -973,7 +952,7 @@ fn rules_html(entry: &TheoryEntry) -> String {
         // (`\n`) with the other rules below.
         let comment = multi_comment_(&["has exactly the trivial AC variant"]).render();
         for ir in &ctx.intruder_rules {
-            if is_constr_intr(&ir.info) || is_destr_intr(&ir.info) {
+            if is_constr_rule(&ir.info) || is_destr_rule(&ir.info) {
                 continue;
             }
             let body =

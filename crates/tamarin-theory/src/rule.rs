@@ -499,6 +499,30 @@ pub fn rule_ac_intr_to_rule_ac(r: IntrRuleAC) -> RuleAC {
 // Predicates / queries
 // =============================================================================
 
+/// HS `isDestrRule` (Model/Rule.hs:694-698): the `_crDestruct` class —
+/// a `DestrRule` or the `IEquality` rule.
+pub fn is_destr_rule(info: &IntrRuleACInfo) -> bool {
+    matches!(
+        info,
+        IntrRuleACInfo::DestrRule { .. } | IntrRuleACInfo::IEquality
+    )
+}
+
+/// HS `isConstrRule` (Model/Rule.hs:707-714): the `_crConstruct` class —
+/// a `ConstrRule`, `FreshConstr`, `PubConstr`, `NatConstr` or `Coerce`.
+pub fn is_constr_rule(info: &IntrRuleACInfo) -> bool {
+    matches!(
+        info,
+        IntrRuleACInfo::ConstrRule { .. }
+            | IntrRuleACInfo::FreshConstr
+            | IntrRuleACInfo::PubConstr
+            | IntrRuleACInfo::NatConstr
+            | IntrRuleACInfo::Coerce
+    )
+}
+
+/// True for the `DestrRule` variant alone, which is narrower than HS
+/// `isDestrRule` [`is_destr_rule`].
 pub fn is_destr_rule_info(info: &IntrRuleACInfo) -> bool {
     matches!(info, IntrRuleACInfo::DestrRule { .. })
 }
@@ -519,15 +543,6 @@ pub fn is_subterm_rule_info(info: &IntrRuleACInfo) -> bool {
 pub fn is_constr_rule_info(info: &IntrRuleACInfo) -> bool {
     matches!(info, IntrRuleACInfo::ConstrRule { .. })
 }
-pub fn is_pub_constr_rule_info(info: &IntrRuleACInfo) -> bool {
-    matches!(info, IntrRuleACInfo::PubConstr)
-}
-pub fn is_nat_constr_rule_info(info: &IntrRuleACInfo) -> bool {
-    matches!(info, IntrRuleACInfo::NatConstr)
-}
-pub fn is_fresh_constr_rule_info(info: &IntrRuleACInfo) -> bool {
-    matches!(info, IntrRuleACInfo::FreshConstr)
-}
 pub fn is_irecv_rule_info(info: &IntrRuleACInfo) -> bool {
     matches!(info, IntrRuleACInfo::IRecv)
 }
@@ -536,9 +551,6 @@ pub fn is_isend_rule_info(info: &IntrRuleACInfo) -> bool {
 }
 pub fn is_coerce_rule_info(info: &IntrRuleACInfo) -> bool {
     matches!(info, IntrRuleACInfo::Coerce)
-}
-pub fn is_iequality_rule_info(info: &IntrRuleACInfo) -> bool {
-    matches!(info, IntrRuleACInfo::IEquality)
 }
 
 /// `isACConstrRule`: the function symbol iff the rule is a construction rule

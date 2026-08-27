@@ -3067,36 +3067,13 @@ fn rule_insts_with_constrs<F: Fn(&RuleACInst) -> bool>(
 /// (ISend, IRecv) come BEFORE the protocol rules.  See
 /// `Theory/Constraint/System.hs:314-317`.
 ///
-/// HS's `isConstrRule` matches `ConstrRule _ | FreshConstrRule |
-/// PubConstrRule | NatConstrRule | CoerceRule` (Model/Rule.hs:707-708);
-/// `isDestrRule` matches `DestrRule _ _ _ _ | IEqualityRule`
-/// (Model/Rule.hs:694-695).  We use HS-local predicates here so the
-/// existing `is_constr_rule_info` / `is_destr_rule_info` callers
-/// (dot.rs, context.rs's pc_true_subterm, chain handling) keep their
-/// current — narrower — behaviour pending a separate audit.
 fn non_silent_rule_insts_with_constrs(
     ctx: &crate::constraint::solver::context::ProofContext,
 ) -> Vec<(
     RuleACInst,
     Option<Vec<tamarin_term::subst_vfresh::LNSubstVFresh>>,
 )> {
-    use crate::rule::IntrRuleACInfo;
-    let is_constr_hs = |info: &IntrRuleACInfo| {
-        matches!(
-            info,
-            IntrRuleACInfo::ConstrRule { .. }
-                | IntrRuleACInfo::FreshConstr
-                | IntrRuleACInfo::PubConstr
-                | IntrRuleACInfo::NatConstr
-                | IntrRuleACInfo::Coerce
-        )
-    };
-    let is_destr_hs = |info: &IntrRuleACInfo| {
-        matches!(
-            info,
-            IntrRuleACInfo::DestrRule { .. } | IntrRuleACInfo::IEquality
-        )
-    };
+    use crate::rule::{is_constr_rule, is_destr_rule};
 
     // crProtocol arm: intruder-non-cd ++ protocol (rulesAC order).
     let mut cr_protocol: Vec<(RuleACInst, Option<_>)> = Vec::new();
@@ -3104,7 +3081,7 @@ fn non_silent_rule_insts_with_constrs(
         if ir.actions.is_empty() {
             continue;
         }
-        if is_constr_hs(&ir.info) || is_destr_hs(&ir.info) {
+        if is_constr_rule(&ir.info) || is_destr_rule(&ir.info) {
             continue;
         }
         cr_protocol.push((intr_rule_to_rule_ac_inst(ir.clone()), None));
@@ -3120,9 +3097,9 @@ fn non_silent_rule_insts_with_constrs(
         if ir.actions.is_empty() {
             continue;
         }
-        if is_destr_hs(&ir.info) {
+        if is_destr_rule(&ir.info) {
             cr_destruct.push((intr_rule_to_rule_ac_inst(ir.clone()), None));
-        } else if is_constr_hs(&ir.info) {
+        } else if is_constr_rule(&ir.info) {
             cr_construct.push((intr_rule_to_rule_ac_inst(ir.clone()), None));
         }
     }
@@ -3413,12 +3390,8 @@ fn premise_solving_rule_insts_with_constrs(
     )> = Vec::new();
     // crProtocol intruder rules first.
     for ir in &ctx.intruder_rules {
-        let is_crprotocol_intr = !crate::rule::is_destr_rule_info(&ir.info)
-            && !crate::rule::is_constr_rule_info(&ir.info)
-            && !crate::rule::is_pub_constr_rule_info(&ir.info)
-            && !crate::rule::is_nat_constr_rule_info(&ir.info)
-            && !crate::rule::is_fresh_constr_rule_info(&ir.info)
-            && !crate::rule::is_coerce_rule_info(&ir.info);
+        let is_crprotocol_intr =
+            !crate::rule::is_destr_rule_info(&ir.info) && !crate::rule::is_constr_rule(&ir.info);
         if is_crprotocol_intr {
             out.push((intr_rule_to_rule_ac_inst(ir.clone()), None));
         }
@@ -3428,12 +3401,7 @@ fn premise_solving_rule_insts_with_constrs(
     // Then crConstruct intruder rules (Coerce, PubConstr, FreshConstr,
     // NatConstr, ConstrRule).
     for ir in &ctx.intruder_rules {
-        let is_constr = crate::rule::is_constr_rule_info(&ir.info)
-            || crate::rule::is_pub_constr_rule_info(&ir.info)
-            || crate::rule::is_nat_constr_rule_info(&ir.info)
-            || crate::rule::is_fresh_constr_rule_info(&ir.info)
-            || crate::rule::is_coerce_rule_info(&ir.info);
-        if is_constr {
+        if crate::rule::is_constr_rule(&ir.info) {
             out.push((intr_rule_to_rule_ac_inst(ir.clone()), None));
         }
     }

@@ -1123,7 +1123,7 @@ impl ProofContext {
         // strict variant of `hasImpossibleChain` applies.
         let pc_true_subterm = intruder_rules
             .iter()
-            .filter(|r| crate::rule::is_destr_rule_info(&r.info))
+            .filter(|r| crate::rule::is_destr_rule(&r.info))
             .all(|r| crate::rule::is_subterm_rule_info(&r.info));
         let mut ctx = ProofContext {
             maude,
