@@ -76,7 +76,9 @@ impl NdcState {
 
 /// Free (no-equation) function symbol — name plus arity, privacy,
 /// constructability, and NDC property. Mirrors the Haskell tuple
-/// `(ByteString, (Int, Privacy, Constructability, NDCstate))`.
+/// `(ByteString, (Int, Privacy, Constructability, NDCstate))`
+/// (FunctionSymbols.hs:132); the field order is that tuple's, which `Ord`
+/// reads off.
 #[derive(Clone, Copy)]
 pub struct NoEqSym {
     /// Interned into a global pool and held as a `&'static [u8]`, so a clone
@@ -207,8 +209,9 @@ impl NoEqSym {
 
 /// User-defined AC function symbol — name plus privacy, constructability,
 /// and NDC property (arity is always 2). Mirrors the Haskell tuple
-/// `(ByteString, (Privacy, Constructability, NDCstate))`; the field order is
-/// that tuple's, which `Ord` reads off.
+/// `(ByteString, (Privacy, Constructability, NDCstate))`
+/// (FunctionSymbols.hs:135); the field order is that tuple's, which `Ord`
+/// reads off.
 #[derive(Clone, Copy)]
 pub struct AcFctSym {
     /// Interned like `NoEqSym::name` (see there for the rationale).

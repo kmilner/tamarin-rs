@@ -33,7 +33,8 @@ use crate::lterm::LNTerm;
 //     range var, the SET of context paths (`Occurence = [String]`) in
 //     which it appears.  The context path for a var is built innermost-
 //     first by `foldFreesOcc` (LTerm.hs:782-785 + the `[a]` instance
-//     LTerm.hs:840-845, see line 843): the outer `[VTerm]` list prepends `show listIdx`,
+//     LTerm.hs:877-882, see line 880): the outer `[VTerm]` list prepends
+//     `show listIdx`,
 //     a `FApp (NoEq o)` prepends `unpack (fst o)` (the symbol name),
 //     and a `FApp (AC|C) o` prepends `show o` (the Haskell `Show` of
 //     the whole `FunSym`, e.g. `"AC Mult"` / `"C EMap"`), then descends

@@ -16,6 +16,11 @@ use crate::vterm::Lit;
 
 /// One literal in a Maude term — either an interned variable, a fresh
 /// variable produced by Maude in a substitution, or an interned constant.
+///
+/// HS `data MaudeLit = MaudeVar Integer LSort | FreshVar Integer LSort |
+/// MaudeConst Integer LSort` derives `Ord` in that variant and field order
+/// (Term/Maude/Types.hs:42-45); it orders the `ConvCtx` maps and the AC
+/// arguments of the terms sent over the Maude wire.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum MaudeLit {
     MaudeVar(u64, LSort),
@@ -312,6 +317,17 @@ pub fn lookup_canonical_var_lit(ctx: &ConvCtx, sort: LSort, idx: u64) -> Option<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The variant order `MaudeVar < FreshVar < MaudeConst`, and inside a
+    /// variant the index before the sort, as HS's `MaudeLit` declares them.
+    /// It orders the `ConvCtx` maps and the AC arguments of a wire term.
+    #[test]
+    fn maude_lit_ord_follows_the_haskell_declaration_order() {
+        assert!(MaudeLit::MaudeVar(9, LSort::Msg) < MaudeLit::FreshVar(0, LSort::Msg));
+        assert!(MaudeLit::FreshVar(9, LSort::Msg) < MaudeLit::MaudeConst(0, LSort::Msg));
+        assert!(MaudeLit::MaudeVar(0, LSort::Node) < MaudeLit::MaudeVar(1, LSort::Pub));
+        assert!(MaudeLit::MaudeVar(0, LSort::Pub) < MaudeLit::MaudeVar(0, LSort::Fresh));
+    }
 
     #[test]
     fn skolem_msg_constant_sorts_as_msg() {

@@ -81,6 +81,8 @@ pub fn sort_suffix(s: LSort) -> &'static str {
 // Names
 // =============================================================================
 
+/// HS `newtype NameId = NameId { getNameId :: String }` with a derived `Ord`
+/// (LTerm.hs:215-216).
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct NameId(pub &'static str);
 
@@ -109,6 +111,9 @@ pub enum NameTag {
     Abbrev,
 }
 
+/// HS `data Name = Name {nTag :: NameTag, nId :: NameId}` with a derived `Ord`
+/// (LTerm.hs:223-224): the tag decides first, then the identifier.  This order
+/// reaches printed output through `Term`'s `Ord`, which sorts AC arguments.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Name {
     pub tag: NameTag,
@@ -383,6 +388,8 @@ pub fn lterm_node_id<C>(t: &crate::term::Term<crate::vterm::Lit<C, LVar>>) -> Op
 // BVar — bound or free variable (for binders / formulas)
 // =============================================================================
 
+/// HS `data BVar v = Bound Integer | Free v` derives `Ord` in that variant
+/// order (LTerm.hs:476-478), which orders the terms inside a formula.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum BVar<V> {
     Bound(u64),
@@ -767,6 +774,26 @@ mod tests {
     use crate::function_symbols::pair_sym;
     use crate::term::f_app_no_eq;
     use crate::vterm::var_term;
+
+    /// `Name`'s derived `Ord` compares the tag before the identifier, and
+    /// `NameId`'s compares its one string, as HS's declarations do.
+    #[test]
+    fn name_ord_compares_the_tag_before_the_id() {
+        let fresh_z = Name::new(NameTag::Fresh, "z");
+        let pub_a = Name::new(NameTag::Pub, "a");
+        assert!(fresh_z < pub_a, "the tag decides before the identifier");
+        assert!(Name::new(NameTag::Pub, "a") < Name::new(NameTag::Pub, "b"));
+        assert!(NameId::new("a") < NameId::new("b"));
+    }
+
+    /// `Bound` before `Free`, the variant order of HS's `BVar v`.
+    #[test]
+    fn bvar_ord_puts_bound_before_free() {
+        let bound: BVar<LVar> = BVar::Bound(9);
+        let free = BVar::Free(LVar::new("x", LSort::Msg, 0));
+        assert!(bound < free);
+        assert!(BVar::<LVar>::Bound(0) < BVar::Bound(1));
+    }
 
     #[test]
     fn name_sort_mapping() {

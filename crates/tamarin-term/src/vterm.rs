@@ -12,6 +12,10 @@ use std::fmt;
 use crate::term::{lit, Term, TermView};
 
 /// Literal: either a constant `Con(c)` or a variable `Var(v)`.
+///
+/// HS `data Lit c v = Con c | Var v` derives `Eq`/`Ord` in that variant order
+/// (VTerm.hs:56-57), and `Term`'s own `Ord` reads it, so `Con < Var` decides
+/// the argument order of every printed AC term.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Lit<C, V> {
     Con(C),
@@ -145,6 +149,16 @@ mod tests {
 
     type V = &'static str;
     type C = u32;
+
+    /// `Con` before `Var`, the variant order of HS's `Lit c v`.  `Term`'s
+    /// `Ord` reads this when it sorts the arguments of an AC term, so it
+    /// decides printed argument order.
+    #[test]
+    fn lit_ord_puts_constants_before_variables() {
+        let c: Lit<C, V> = Lit::Con(1);
+        let v: Lit<C, V> = Lit::Var("x");
+        assert!(c < v);
+    }
 
     #[test]
     fn var_and_const_terms() {

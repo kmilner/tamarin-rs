@@ -58,7 +58,8 @@ pub enum Term<A> {
 // allocation ⇒ identical contents, so the answer equals the purely
 // content-based one; on a pointer mismatch we fall back to the full structural
 // comparison.  Variant order (Lit < App) and field order match the derived
-// impls exactly.
+// impls exactly, which is HS `data Term a = LIT a | FAPP FunSym [Term a]`
+// with a derived `Eq`/`Ord` (Term/Term/Raw.hs:73-75).
 impl<A: PartialEq> PartialEq for Term<A> {
     #[inline]
     fn eq(&self, other: &Self) -> bool {
