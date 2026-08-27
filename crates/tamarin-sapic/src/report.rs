@@ -31,7 +31,7 @@
 use std::collections::BTreeSet;
 
 use tamarin_term::lterm::{BVar, LNTerm, LSort, LVar};
-use tamarin_term::vterm::{Lit, VTerm};
+use tamarin_term::vterm::{var_term, VTerm};
 
 use tamarin_theory::atom::{ProtoAtom, SyntacticSugar};
 use tamarin_theory::fact::{Fact, FactTag, Multiplicity};
@@ -61,8 +61,8 @@ pub(crate) fn report_init(
     // `x`, `loc` :: LVar _ LSortMsg 0.
     let x = LVar::new("x", LSort::Msg, 0);
     let loc = LVar::new("loc", LSort::Msg, 0);
-    let xt: LNTerm = VTerm::Lit(Lit::Var(x));
-    let loct: LNTerm = VTerm::Lit(Lit::Var(loc));
+    let xt: LNTerm = var_term(x);
+    let loct: LNTerm = var_term(loc);
 
     // prem: In( <x, loc> )
     let prem = TransFact::In(tamarin_term::builtin::pair(xt.clone(), loct.clone()));
@@ -75,10 +75,7 @@ pub(crate) fn report_init(
     // (`apply.rs`) binds it to the user `Report` predicate.
     let report_pred = ProtoFormula::Atom(ProtoAtom::Syntactic(SyntacticSugar::Pred(Fact::new(
         FactTag::Proto(Multiplicity::Linear, "Report", 2),
-        vec![
-            VTerm::Lit(Lit::Var(BVar::Free(x))),
-            VTerm::Lit(Lit::Var(BVar::Free(loc))),
-        ],
+        vec![var_term(BVar::Free(x)), var_term(BVar::Free(loc))],
     ))));
 
     let report_rule = AnnotatedRule {
@@ -304,7 +301,7 @@ mod tests {
         };
         assert_eq!(fa.tag, FactTag::Proto(Multiplicity::Linear, "Report", 2));
         assert!(fa.annotations.is_empty());
-        let free = |n: &str| VTerm::Lit(Lit::Var(BVar::Free(LVar::new(n, LSort::Msg, 0))));
+        let free = |n: &str| var_term(BVar::Free(LVar::new(n, LSort::Msg, 0)));
         assert_eq!(fa.terms.as_ref(), &[free("x"), free("loc")]);
     }
 

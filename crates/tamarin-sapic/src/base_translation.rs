@@ -19,7 +19,7 @@
 use std::collections::BTreeSet;
 
 use tamarin_term::lterm::{LNTerm, LSort, LVar};
-use tamarin_term::vterm::{Lit, VTerm};
+use tamarin_term::vterm::{var_term, Lit, VTerm};
 
 use tamarin_theory::atom::ProtoAtom;
 use tamarin_theory::formula::{
@@ -58,7 +58,7 @@ pub(crate) fn base_trans_null(p: &ProcessPosition, tildex: &BTreeSet<LVar>) -> V
 /// SAPIC term to a plain `LNTerm` (drop the type tag).
 pub(crate) fn to_ln_term(t: &SapicTerm) -> LNTerm {
     match t {
-        VTerm::Lit(Lit::Var(sv)) => VTerm::Lit(Lit::Var(sv.var)),
+        VTerm::Lit(Lit::Var(sv)) => var_term(sv.var),
         VTerm::Lit(Lit::Con(c)) => VTerm::Lit(Lit::Con(*c)),
         VTerm::App(sym, args) => {
             let new_args: Vec<LNTerm> = args.iter().map(to_ln_term).collect();
@@ -191,9 +191,9 @@ pub(crate) fn base_trans_action(
         } => {
             // `x = evalFreshAvoiding (freshLVar "x" LSortMsg) tildex`.
             let x = fresh_msg_var_avoiding("x", tildex);
-            let xt: LNTerm = VTerm::Lit(Lit::Var(x));
+            let xt: LNTerm = var_term(x);
             // `xTerm = varTerm (SapicLVar { slvar = x, stype = Nothing })`.
-            let x_sapic: SapicTerm = VTerm::Lit(Lit::Var(SapicLVar::untyped(x)));
+            let x_sapic: SapicTerm = var_term(SapicLVar::untyped(x));
             // `(rules, tx', _) = baseTransComb (Let t' xTerm matchVar) (an {elseBranch=False}) p tildex`.
             let let_comb = tamarin_theory::sapic::ProcessCombinator::Let {
                 left: msg.clone(),
@@ -385,7 +385,7 @@ pub(crate) fn base_trans_action(
             let body: RuleBody = (
                 vec![
                     def_state(tildex),
-                    TransFact::CellLocked(lt1.clone(), VTerm::Lit(Lit::Var(v))),
+                    TransFact::CellLocked(lt1.clone(), var_term(v)),
                 ],
                 vec![],
                 vec![def_state_next(&tx2), TransFact::PureCell(lt1, lt2)],
@@ -684,13 +684,13 @@ pub(crate) fn base_trans_comb(
             let body: RuleBody = (
                 vec![
                     def_state(tildex),
-                    TransFact::PureCell(lt.clone(), VTerm::Lit(Lit::Var(lv))),
+                    TransFact::PureCell(lt.clone(), var_term(lv)),
                     TransFact::Fr(vs),
                 ],
                 vec![],
                 vec![
                     def_state1(&tx_prime),
-                    TransFact::CellLocked(lt, VTerm::Lit(Lit::Var(vs))),
+                    TransFact::CellLocked(lt, var_term(vs)),
                 ],
                 vec![],
             );
@@ -1084,7 +1084,7 @@ mod tests {
         LVar::new(name, LSort::Msg, idx)
     }
     fn svar(name: &str) -> SapicTerm {
-        VTerm::Lit(Lit::Var(SapicLVar::untyped(lv(name, 0))))
+        var_term(SapicLVar::untyped(lv(name, 0)))
     }
 
     /// The hard-coded restriction strings lower to the internal formulas the
@@ -1283,7 +1283,6 @@ mod tests {
         use tamarin_term::function_symbols::{Constructability, NoEqSym, Privacy};
         use tamarin_term::lterm::BVar;
         use tamarin_term::term::f_app_no_eq;
-        use tamarin_term::vterm::var_term;
         use tamarin_theory::formula::{Connective, Quantifier};
 
         let x = lv("x", 0);

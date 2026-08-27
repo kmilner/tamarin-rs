@@ -9,7 +9,7 @@
 //! `ProtoRuleE` with HS-exact name / color / process / role attributes.
 
 use tamarin_term::lterm::{LNTerm, LVar};
-use tamarin_term::vterm::{Lit, VTerm};
+use tamarin_term::vterm::var_term;
 use tamarin_utils::color::{hsv_to_rgb, rgb_to_hsv, Hsv, Rgb};
 
 use tamarin_theory::fact::{fresh_fact, in_fact, out_fact, proto_fact, LNFact, Multiplicity};
@@ -168,7 +168,7 @@ fn sorted_unique(mut vs: Vec<LVar>) -> Vec<LVar> {
 /// `factToFact` (Facts.hs:253-270).
 pub(crate) fn fact_to_fact(f: &TransFact) -> LNFact {
     match f {
-        TransFact::Fr(v) => fresh_fact(VTerm::Lit(Lit::Var(*v))),
+        TransFact::Fr(v) => fresh_fact(var_term(*v)),
         TransFact::In(t) => in_fact(t.clone()),
         TransFact::Out(t) => out_fact(t.clone()),
         TransFact::State(kind, p, vars) => {
@@ -180,7 +180,7 @@ pub(crate) fn fact_to_fact(f: &TransFact) -> LNFact {
             let full = format!("{}_{}", name, pretty_position(p));
             let ts: Vec<LNTerm> = sorted_unique(vars.clone())
                 .into_iter()
-                .map(|v| VTerm::Lit(Lit::Var(v)))
+                .map(var_term)
                 .collect();
             // multiplicity from the state kind.
             proto_fact_mult(kind.multiplicity(), &full, ts)
@@ -205,11 +205,7 @@ pub(crate) fn fact_to_fact(f: &TransFact) -> LNFact {
         TransFact::FLet(p, t, vars) => {
             let full = format!("Let_{}", pretty_position(p));
             let mut ts: Vec<LNTerm> = vec![t.clone()];
-            ts.extend(
-                sorted_unique(vars.clone())
-                    .into_iter()
-                    .map(|v| VTerm::Lit(Lit::Var(v))),
-            );
+            ts.extend(sorted_unique(vars.clone()).into_iter().map(var_term));
             proto_fact(Multiplicity::Linear, &full, ts)
         }
         // `factToFact (Message t t') = protoFact Linear "Message" [t, t']`
@@ -229,14 +225,14 @@ pub(crate) fn fact_to_fact(f: &TransFact) -> LNFact {
         TransFact::MessageIDSender(p) => proto_fact(
             Multiplicity::Linear,
             "MID_Sender",
-            vec![VTerm::Lit(Lit::Var(var_mid(p)))],
+            vec![var_term(var_mid(p))],
         ),
         // `factToFact (MessageIDReceiver p) = protoFact Linear "MID_Receiver" [varTerm $ varMID p]`
         // (Facts.hs:253-270, see line 263).
         TransFact::MessageIDReceiver(p) => proto_fact(
             Multiplicity::Linear,
             "MID_Receiver",
-            vec![VTerm::Lit(Lit::Var(var_mid(p)))],
+            vec![var_term(var_mid(p))],
         ),
     }
 }
@@ -255,11 +251,9 @@ pub(crate) fn action_to_fact(a: &TransAction) -> LNFact {
         TransAction::NegPredicateA(f) => map_fact_name(f, "Pred_Not_"),
         // `actionToFact (IsIn t v) = protoFact Linear "IsIn" [t, varTerm v]`
         // (Facts.hs:213-234, see line 220).
-        TransAction::IsIn(t, v) => proto_fact(
-            Multiplicity::Linear,
-            "IsIn",
-            vec![t.clone(), VTerm::Lit(Lit::Var(*v))],
-        ),
+        TransAction::IsIn(t, v) => {
+            proto_fact(Multiplicity::Linear, "IsIn", vec![t.clone(), var_term(*v)])
+        }
         // `actionToFact (IsNotSet t) = protoFact Linear "IsNotSet" [t]` (Facts.hs:213-234, see line 221).
         TransAction::IsNotSet(t) => proto_fact(Multiplicity::Linear, "IsNotSet", vec![t.clone()]),
         // `actionToFact (InsertA t1 t2) = protoFact Linear "Insert" [t1, t2]`
@@ -275,14 +269,14 @@ pub(crate) fn action_to_fact(a: &TransAction) -> LNFact {
         TransAction::LockNamed(t, v) => proto_fact(
             Multiplicity::Linear,
             &lock_fact_name(v),
-            vec![lock_pub_term(v), VTerm::Lit(Lit::Var(*v)), t.clone()],
+            vec![lock_pub_term(v), var_term(*v), t.clone()],
         ),
         // `actionToFact (LockUnnamed t v) =
         //    protoFact Linear "Lock" [lockPubTerm v, varTerm v, t]` (Facts.hs:213-234, see line 229).
         TransAction::LockUnnamed(t, v) => proto_fact(
             Multiplicity::Linear,
             "Lock",
-            vec![lock_pub_term(v), VTerm::Lit(Lit::Var(*v)), t.clone()],
+            vec![lock_pub_term(v), var_term(*v), t.clone()],
         ),
         // `actionToFact (UnlockNamed t v) =
         //    protoFact Linear (unlockFactName v) [lockPubTerm v, varTerm v, t]`
@@ -290,14 +284,14 @@ pub(crate) fn action_to_fact(a: &TransAction) -> LNFact {
         TransAction::UnlockNamed(t, v) => proto_fact(
             Multiplicity::Linear,
             &unlock_fact_name(v),
-            vec![lock_pub_term(v), VTerm::Lit(Lit::Var(*v)), t.clone()],
+            vec![lock_pub_term(v), var_term(*v), t.clone()],
         ),
         // `actionToFact (UnlockUnnamed t v) =
         //    protoFact Linear "Unlock" [lockPubTerm v, varTerm v, t]` (Facts.hs:213-234, see line 231).
         TransAction::UnlockUnnamed(t, v) => proto_fact(
             Multiplicity::Linear,
             "Unlock",
-            vec![lock_pub_term(v), VTerm::Lit(Lit::Var(*v)), t.clone()],
+            vec![lock_pub_term(v), var_term(*v), t.clone()],
         ),
         // `actionToFact (ChannelIn t) = protoFact Linear "ChannelIn" [t]`
         // (Facts.hs:213-234, see line 224).
@@ -308,7 +302,7 @@ pub(crate) fn action_to_fact(a: &TransAction) -> LNFact {
         TransAction::ProgressFrom(p) => proto_fact(
             Multiplicity::Linear,
             &format!("ProgressFrom_{}", pretty_position(p)),
-            vec![VTerm::Lit(Lit::Var(var_progress(p)))],
+            vec![var_term(var_progress(p))],
         ),
         // `actionToFact (ProgressTo p pf) =
         //    protoFact Linear ("ProgressTo_" ++ prettyPosition p) [varTerm $ varProgress pf]`
@@ -316,21 +310,21 @@ pub(crate) fn action_to_fact(a: &TransAction) -> LNFact {
         TransAction::ProgressTo(p, pf) => proto_fact(
             Multiplicity::Linear,
             &format!("ProgressTo_{}", pretty_position(p)),
-            vec![VTerm::Lit(Lit::Var(var_progress(pf)))],
+            vec![var_term(var_progress(pf))],
         ),
         // `actionToFact (Send p t) = protoFact Linear "Send" [varTerm $ varMsgId p, t]`
         // (Facts.hs:213-234, see line 218).
         TransAction::Send(p, t) => proto_fact(
             Multiplicity::Linear,
             "Send",
-            vec![VTerm::Lit(Lit::Var(var_mid(p))), t.clone()],
+            vec![var_term(var_mid(p)), t.clone()],
         ),
         // `actionToFact (Receive p t) = protoFact Linear "Receive" [varTerm $ varMsgId p, t]`
         // (Facts.hs:213-234, see line 219).
         TransAction::Receive(p, t) => proto_fact(
             Multiplicity::Linear,
             "Receive",
-            vec![VTerm::Lit(Lit::Var(var_mid(p))), t.clone()],
+            vec![var_term(var_mid(p)), t.clone()],
         ),
     }
 }
@@ -711,7 +705,6 @@ mod tests {
     #[test]
     fn to_rule_new_vars_ignore_action_only_variables() {
         use tamarin_term::lterm::LSort;
-        use tamarin_term::vterm::var_term;
 
         let x = LVar::new("x", LSort::Msg, 0);
         let y = LVar::new("y", LSort::Msg, 0);

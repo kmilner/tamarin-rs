@@ -36,7 +36,7 @@ use tamarin_term::function_symbols::{Constructability, FunSym};
 use tamarin_term::lterm::{LNTerm, LVar, Name};
 use tamarin_term::subst::{apply_vterm, Subst};
 use tamarin_term::subterm_rule::CtxtStRule;
-use tamarin_term::vterm::{Lit, VTerm};
+use tamarin_term::vterm::{var_term, Lit, VTerm};
 use tamarin_theory::formula::apply_subst;
 use tamarin_theory::sapic::{
     apply_match_vars, map_terms_action, map_terms_comb, subst_term, Process, ProcessCombinator,
@@ -354,7 +354,7 @@ fn subst_comb(
 /// Lift an `LNTerm` (untyped) back to a SAPIC term (all variables untyped).
 fn ln_to_sapic(t: &LNTerm) -> SapicTerm {
     match t {
-        VTerm::Lit(Lit::Var(v)) => VTerm::Lit(Lit::Var(SapicLVar::untyped(*v))),
+        VTerm::Lit(Lit::Var(v)) => var_term(SapicLVar::untyped(*v)),
         VTerm::Lit(Lit::Con(c)) => VTerm::Lit(Lit::Con(*c)),
         VTerm::App(sym, args) => {
             let new_args: Vec<SapicTerm> = args.iter().map(ln_to_sapic).collect();
@@ -373,7 +373,6 @@ mod tests {
     use super::*;
     use std::collections::BTreeSet;
     use tamarin_term::lterm::{LSort, NameTag};
-    use tamarin_term::vterm::var_term;
     use tamarin_theory::sapic::{ProcessParsedAnnotation, SapicAction};
 
     fn ann() -> ProcessAnnotation<LVar> {
@@ -444,7 +443,7 @@ mod tests {
             vec![var_term(h.clone())],
         );
         let restr = ProtoFormula::Atom(ProtoAtom::EqE(
-            VTerm::Lit(Lit::Var(tamarin_term::lterm::BVar::Free(h.clone()))),
+            var_term(tamarin_term::lterm::BVar::Free(h.clone())),
             VTerm::Lit(Lit::Con(Name::new(NameTag::Pub, "b"))),
         ));
         let msr = Process::Action(

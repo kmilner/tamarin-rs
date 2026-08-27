@@ -17,7 +17,7 @@ use std::collections::BTreeMap;
 
 use tamarin_term::function_symbols::{NoEqSym, UserDefinedSym};
 use tamarin_term::lterm::{LSort, LVar, Name};
-use tamarin_term::vterm::{Lit, VTerm};
+use tamarin_term::vterm::{var_term, Lit, VTerm};
 use tamarin_utils::fresh::PreciseFreshState;
 
 use tamarin_theory::formula::{apply_rename, formula_frees};
@@ -187,7 +187,7 @@ fn rename_term(subst: &BTreeMap<LVar, LVar>, t: &SapicTerm) -> SapicTerm {
     match t {
         VTerm::Lit(Lit::Var(sv)) => {
             let new_lv = subst.get(&sv.var).copied().unwrap_or(sv.var);
-            VTerm::Lit(Lit::Var(SapicLVar::new(new_lv, sv.stype.clone())))
+            var_term(SapicLVar::new(new_lv, sv.stype.clone()))
         }
         VTerm::Lit(Lit::Con(c)) => VTerm::Lit(Lit::Con(*c)),
         VTerm::App(sym, args) => {
@@ -302,7 +302,7 @@ fn mk_subst(
         let lv = &sv.var;
         let v_new = tamarin_term::lterm::fresh_lvar(fresh, lv.name, lv.sort);
         fwd.insert(*lv, v_new);
-        inv_pairs.push((v_new, VTerm::Lit(Lit::Var(*lv))));
+        inv_pairs.push((v_new, var_term(*lv)));
     }
     let inv = tamarin_term::subst::Subst::from_list(inv_pairs);
     (fwd, inv)
@@ -407,10 +407,7 @@ fn type_with(
             };
             let merged = sqcap(&stype, tt)?;
             env.vars.insert(*lvar, merged.clone());
-            Ok((
-                VTerm::Lit(Lit::Var(SapicLVar::new(*lvar, merged.clone()))),
-                merged,
-            ))
+            Ok((var_term(SapicLVar::new(*lvar, merged.clone())), merged))
         }
         VTerm::App(sym, args) => {
             use tamarin_term::function_symbols::FunSym;
@@ -632,7 +629,7 @@ pub(crate) type UserFunTyping = (String, Vec<SapicType>, SapicType);
 /// untyped `SapicLVar`s (a structure-preserving `fmap`).
 fn to_sapic_term(t: &tamarin_term::lterm::LNTerm) -> SapicTerm {
     match t {
-        VTerm::Lit(Lit::Var(v)) => VTerm::Lit(Lit::Var(SapicLVar::untyped(*v))),
+        VTerm::Lit(Lit::Var(v)) => var_term(SapicLVar::untyped(*v)),
         VTerm::Lit(Lit::Con(c)) => VTerm::Lit(Lit::Con(*c)),
         VTerm::App(sym, args) => VTerm::App(*sym, args.iter().map(to_sapic_term).collect()),
     }
@@ -830,7 +827,7 @@ mod tests {
 
         // `k = 'b'`, with `k` the process variable the enclosing `new` binds.
         let restr = ProtoFormula::Atom(ProtoAtom::EqE(
-            VTerm::Lit(Lit::Var(tamarin_term::lterm::BVar::Free(slv("k", 0, None)))),
+            var_term(tamarin_term::lterm::BVar::Free(slv("k", 0, None))),
             VTerm::Lit(Lit::Con(Name::new(tamarin_term::lterm::NameTag::Pub, "b"))),
         ));
         let ev = tamarin_theory::fact::Fact::new(
@@ -839,7 +836,7 @@ mod tests {
                 "Ev",
                 1,
             ),
-            vec![VTerm::Lit(Lit::Var(slv("k", 0, None)))],
+            vec![var_term(slv("k", 0, None))],
         );
         let msr = Process::Action(
             SapicAction::Msr {
@@ -868,7 +865,7 @@ mod tests {
         // The action row renamed...
         assert_eq!(
             acts[0].terms[0],
-            VTerm::Lit(Lit::Var(slv("k", 1, None))),
+            var_term(slv("k", 1, None)),
             "Ev's argument must be k.1"
         );
         // ...and so did the embedded restriction.
@@ -888,7 +885,7 @@ mod tests {
         let x = slv("x", 0, Some("lol"));
         let run = Fact::new(
             FactTag::Proto(Multiplicity::Linear, "Run", 1),
-            vec![VTerm::Lit(Lit::Var(slv("x", 0, None)))],
+            vec![var_term(slv("x", 0, None))],
         );
         let proc = Process::Action(
             SapicAction::New(x),
@@ -922,7 +919,6 @@ mod tests {
         use tamarin_term::function_symbols::{Constructability, FunSym, Privacy};
         use tamarin_term::subterm_rule::{CtxtStRule, StRhs};
         use tamarin_term::term::f_app;
-        use tamarin_term::vterm::var_term;
 
         let f = NoEqSym::new(
             b"f".to_vec(),
