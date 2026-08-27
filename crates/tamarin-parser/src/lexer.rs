@@ -355,6 +355,20 @@ impl<'a> Lexer<'a> {
     /// Note: export bodies use a *different*, stricter character grammar — see
     /// [`Lexer::export_body`].
     pub fn string_literal(&mut self) -> Option<String> {
+        self.quoted(Self::string_escape)
+    }
+
+    /// A double-quoted run: every char up to the closing `"` is taken
+    /// verbatim except `\`, which is consumed and the rest of the escape
+    /// handed to `escape`.  `escape` returns `Some(Some(c))` for a produced
+    /// char, `Some(None)` for an escape that produces nothing, and `None` to
+    /// fail the whole literal.  A failure — an unterminated run included —
+    /// restores the position, so the caller can offer another alternative.
+    /// Both quotes are lexemes, so trailing whitespace is consumed.
+    fn quoted<F>(&mut self, mut escape: F) -> Option<String>
+    where
+        F: FnMut(&mut Self) -> Option<Option<char>>,
+    {
         self.skip_ws();
         let save = self.pos;
         if !self.eat('"') {
@@ -375,9 +389,9 @@ impl<'a> Lexer<'a> {
                 }
                 Some('\\') => {
                     self.bump();
-                    match self.string_escape() {
+                    match escape(self) {
                         Some(Some(c)) => s.push(c),
-                        Some(None) => {} // empty escape `\&` or gap `\  \`
+                        Some(None) => {}
                         None => {
                             self.pos = save;
                             return None;
@@ -562,46 +576,16 @@ impl<'a> Lexer<'a> {
     /// the backslash dropped); a bare `"` terminates the body and any other `\x`
     /// fails the whole parse. Used for `export <tag>: "..."` blocks.
     pub fn export_body(&mut self) -> Option<String> {
-        self.skip_ws();
-        let save = self.pos;
-        if !self.eat('"') {
-            self.pos = save;
-            return None;
-        }
-        let mut s = String::new();
-        loop {
-            match self.peek() {
-                None => {
-                    self.pos = save;
-                    return None;
-                }
-                Some('"') => {
-                    self.bump();
-                    self.skip_ws();
-                    return Some(s);
-                }
-                Some('\\') => {
-                    self.bump();
-                    match self.peek() {
-                        Some(c @ '\\') | Some(c @ '"') => {
-                            s.push(c);
-                            self.bump();
-                        }
-                        // Any other `\x` makes `bodyChar` (wrapped in `try`)
-                        // backtrack, so `many bodyChar` stops and the closing
-                        // `"` is never found at this position — the export fails.
-                        _ => {
-                            self.pos = save;
-                            return None;
-                        }
-                    }
-                }
-                Some(c) => {
-                    s.push(c);
-                    self.bump();
-                }
+        self.quoted(|lx| match lx.peek() {
+            Some(c @ ('\\' | '"')) => {
+                lx.bump();
+                Some(Some(c))
             }
-        }
+            // Any other `\x` makes `bodyChar` (wrapped in `try`) backtrack, so
+            // `many bodyChar` stops and the closing `"` is never found at this
+            // position — the export fails.
+            _ => None,
+        })
     }
 
     /// Single-quoted string literal — not allowing single-quote or newline inside.
