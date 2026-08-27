@@ -319,12 +319,14 @@ refined sources are computed once and shared across lemmas.
 - **`diff(...)` / `--diff`** — observational-equivalence mode.
 - Export modules: `-m proverif`/`proverifequiv`/`deepsec` and their
   satellite flags (`--replication-bound`, the `--proverif-no-*`
-  family) — the HS `Export.hs` backend. The pinned upstream oracle
-  crashes on all 21 of its own `examples/sapic/export/` theories (its
-  `builtins` table has no arm for the `dest-*` or `natural-numbers`
-  names), and `-m deepsec` emits nothing anywhere in the corpus, so the
-  reference output that does exist is thin — see the
-  `tamarin-export` crate docs for the measured breakdown.
+  family) — the HS `Export.hs` backend. The three values parse; a run
+  that reaches them fails with a "not yet ported" message. The reference
+  output the pinned oracle offers is thin: over the 1042-file corpus
+  `-m proverif` and `-m proverifequiv` produce output for the same 44
+  files, none of which has an `equivLemma`; `-m deepsec` emits nothing
+  anywhere; and 38 of the 123 process-bearing files, including all 21
+  under `examples/sapic/export/`, crash the oracle, whose `builtins`
+  table has no arm for the `dest-*` or `natural-numbers` names.
 
 Diff theories are recorded with their canonical `--diff` invocation in
 `scripts/file_flags.tsv`; they join `scripts/parity_corpus.txt` once the
@@ -342,8 +344,6 @@ tamarin-parser/         .spthy AST + lexer + parser + #include resolver + wellfo
 tamarin-theory/         elaborator, constraint system, solver, simplify, sources, replay
 tamarin-sapic/          SAPiC process: frontend — translation to multiset-rewrite rules
 tamarin-accountability/ accountability frontend — case tests → VC lemmas
-tamarin-export/         ProVerif / DeepSec export — headers only so far, not yet wired
-                        into the binary
 tamarin-server/         interactive HTTP server (Axum)
 tamarin-prover/         the binary: CLI parser + run dispatch
 ```

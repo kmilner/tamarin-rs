@@ -332,7 +332,7 @@ pub(crate) fn rename_unique(p: &PlainProcess) -> PlainProcess {
 /// `Map.insert tag …`, Typing.hs:149 — later events overwrite earlier ones).
 /// `events` has no RS reader: its consumer is `loadHeaders`'
 /// `event e(t1,…)` emission (Export.hs:2743-2754), part of the unported
-/// export backends — see `tamarin_export`'s module doc.
+/// ProVerif / DeepSec export backends.
 pub struct TypingEnvironment {
     pub vars: BTreeMap<LVar, SapicType>,
     pub funs: BTreeMap<UserDefinedSym, (Vec<SapicType>, SapicType)>,

@@ -6,7 +6,6 @@ members = [
     "crates/tamarin-theory",
     "crates/tamarin-sapic",
     "crates/tamarin-accountability",
-    "crates/tamarin-export",
     "crates/tamarin-parser",
     "crates/tamarin-server",
     "crates/tamarin-prover",
@@ -25,7 +24,6 @@ tamarin-term = { path = "crates/tamarin-term", version = "1.13.0" }
 tamarin-theory = { path = "crates/tamarin-theory", version = "1.13.0" }
 tamarin-sapic = { path = "crates/tamarin-sapic", version = "1.13.0" }
 tamarin-accountability = { path = "crates/tamarin-accountability", version = "1.13.0" }
-tamarin-export = { path = "crates/tamarin-export", version = "1.13.0" }
 tamarin-parser = { path = "crates/tamarin-parser", version = "1.13.0" }
 tamarin-server = { path = "crates/tamarin-server", version = "1.13.0" }
 
