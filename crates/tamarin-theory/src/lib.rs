@@ -50,6 +50,7 @@
 //! Not yet ported:
 //! - Remaining `Theory.Sapic.*` (Substitution, Print)
 
+pub mod apply;
 pub mod atom;
 pub mod auto_sources;
 pub mod close_rule;

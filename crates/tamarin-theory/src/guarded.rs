@@ -894,7 +894,7 @@ pub fn normalise_disj_list(items: &[Guarded]) -> Vec<Guarded> {
 /// (every disjunct normalises in place, none is a nested `Disj` to flatten,
 /// no duplicate to drop), `Some(rebuilt)` otherwise.  BYTE-IDENTICAL to
 /// `normalise_disj_list(items)` in the `Some` case.
-fn normalise_disj_list_cow(items: &[Guarded]) -> Option<Vec<Guarded>> {
+pub(crate) fn normalise_disj_list_cow(items: &[Guarded]) -> Option<Vec<Guarded>> {
     // Normalise each disjunct (COW); `children` is the normalised list — the
     // originals when `mapped` is `None` (all disjuncts unchanged).
     let mapped = cow_map_vec(items, normalise_guarded_cow);

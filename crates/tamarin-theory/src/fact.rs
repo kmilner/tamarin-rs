@@ -12,11 +12,15 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+use tamarin_term::apply::Apply;
 use tamarin_term::lterm::{BVar, HasFrees, LNTerm, LVar, Name};
 use tamarin_term::macro_expand::LNMacro;
 use tamarin_term::term::show_term;
 use tamarin_term::vterm::VTerm;
 
+use tamarin_utils::cow::cow_map_vec;
+
+use crate::apply::SystemSubst;
 use crate::pretty_hpj::{fsep, nest_short_doc, punctuate, Doc};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -396,6 +400,24 @@ impl<T: HasFrees + Clone> HasFrees for Fact<T> {
             bloom,
             max_var,
         }
+    }
+}
+
+/// HS `Apply s t => Apply s (Fact t)` (Theory/Model/Fact.hs:196-197): the
+/// substitution reaches the fact's terms.  A rewritten fact goes through the
+/// computing constructor, which derives both cached fingerprints from the new
+/// terms — the free variables have changed, so the old ones do not carry over.
+impl Apply<SystemSubst<'_>> for LNFact {
+    fn apply_changed(&self, subst: &SystemSubst<'_>) -> Option<Self> {
+        if subst.skips_fact(self) {
+            return None;
+        }
+        let terms = cow_map_vec(&self.terms[..], |t| t.apply_changed(subst))?;
+        Some(Fact::fresh_annotated(
+            self.tag,
+            self.annotations.clone(),
+            terms,
+        ))
     }
 }
 

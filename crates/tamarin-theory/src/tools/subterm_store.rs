@@ -15,10 +15,14 @@
 //! `simpSubtermStore`, `simpSplitNegSt`, and the recursive `splitSubterm`
 //! — are ported in `constraint::solver::simplify` rather than here.
 
+use tamarin_term::apply::Apply;
 use tamarin_term::function_symbols::FunSym;
 use tamarin_term::lterm::{HasFrees, LNTerm, LVar};
 use tamarin_term::term::Term;
+use tamarin_utils::cow::cow_pair;
 use tamarin_utils::FastSet;
+
+use crate::apply::SystemSubst;
 
 /// One stored subterm constraint: `small ⊏ big`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -27,6 +31,26 @@ pub struct SubtermConstraint {
     pub big: LNTerm,
     /// Whether this constraint has already been propagated.
     pub propagated: bool,
+}
+
+/// HS reaches a stored constraint through `Apply LNSubst SubtermStore`
+/// (SubtermStore.hs:560-561) and the pair instance (SubstVFree.hs:316-317):
+/// the small side then the big one.  `propagated` is not part of the HS value
+/// and is carried over unchanged.
+impl Apply<SystemSubst<'_>> for SubtermConstraint {
+    fn apply_changed(&self, subst: &SystemSubst<'_>) -> Option<Self> {
+        cow_pair(
+            &self.small,
+            self.small.apply_changed(subst),
+            &self.big,
+            self.big.apply_changed(subst),
+        )
+        .map(|(small, big)| SubtermConstraint {
+            small,
+            big,
+            propagated: self.propagated,
+        })
+    }
 }
 
 /// One element of the `_posSubterms` / `_solvedSubterms` sets, which HS holds

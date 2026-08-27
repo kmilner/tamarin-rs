@@ -13,8 +13,11 @@
 //! in `constraint::solver::reduction` (`subst_system` / `subst_system_once`,
 //! mirroring Haskell's `substSystem`).
 
+use tamarin_term::apply::Apply;
 use tamarin_term::lterm::{HasFrees, LNTerm, LVar};
+use tamarin_utils::cow::cow_pair;
 
+use crate::apply::SystemSubst;
 use crate::fact::LNFact;
 use crate::guarded::Guarded;
 use crate::rule::{ConcIdx, PremIdx};
@@ -39,6 +42,21 @@ pub type NodeConc = (NodeId, ConcIdx);
 pub struct Edge {
     pub src: NodeConc,
     pub tgt: NodePrem,
+}
+
+/// HS `Apply LNSubst Edge` (Constraints.hs:107-108): both ends through the
+/// pair instance (SubstVFree.hs:316-317), which reaches the node id and
+/// leaves the conclusion / premise index alone.
+impl Apply<SystemSubst<'_>> for Edge {
+    fn apply_changed(&self, subst: &SystemSubst<'_>) -> Option<Self> {
+        cow_pair(
+            &self.src,
+            self.src.apply_changed(subst),
+            &self.tgt,
+            self.tgt.apply_changed(subst),
+        )
+        .map(|(src, tgt)| Edge { src, tgt })
+    }
 }
 
 /// `instance HasFrees Edge` (Constraints.hs:110-115): the source conclusion
@@ -130,6 +148,24 @@ impl PartialOrd for LessAtom {
 /// `instance HasFrees LessAtom` (Constraints.hs:145-150): the smaller node id
 /// then the larger one.  The reason tag holds no variable and is carried over
 /// by `pure`.
+/// HS `Apply LNSubst LessAtom` (Constraints.hs:142-143): both endpoints,
+/// with the reason tag carried over.
+impl Apply<SystemSubst<'_>> for LessAtom {
+    fn apply_changed(&self, subst: &SystemSubst<'_>) -> Option<Self> {
+        cow_pair(
+            &self.smaller,
+            self.smaller.apply_changed(subst),
+            &self.larger,
+            self.larger.apply_changed(subst),
+        )
+        .map(|(smaller, larger)| LessAtom {
+            smaller,
+            larger,
+            reason: self.reason,
+        })
+    }
+}
+
 impl HasFrees for LessAtom {
     fn for_each_free(&self, f: &mut dyn FnMut(&LVar)) {
         self.smaller.for_each_free(f);
@@ -281,6 +317,29 @@ impl Goal {
 /// `Int`, so only the node id of such a pair is a variable
 /// (LTerm.hs:820-823).  `Split` carries a `SplitId`, whose instance is `const
 /// mempty` / `pure` (EquationStore.hs:91-94).
+/// HS `Apply LNSubst Goal` (Constraints.hs:234-241).  A `SplitG` carries a
+/// split id, which is not a variable
+/// (Theory/Tools/EquationStore.hs:152-153).  The `DisjG` arm is the pass's
+/// own rewrite of the alternatives, which differs between the two whole-system
+/// passes — see [`SystemSubst`].
+impl Apply<SystemSubst<'_>> for Goal {
+    fn apply_changed(&self, subst: &SystemSubst<'_>) -> Option<Self> {
+        match self {
+            Goal::Action(i, fa) => cow_pair(i, i.apply_changed(subst), fa, fa.apply_changed(subst))
+                .map(|(i, fa)| Goal::Action(i, fa)),
+            Goal::Chain(c, p) => cow_pair(c, c.apply_changed(subst), p, p.apply_changed(subst))
+                .map(|(c, p)| Goal::Chain(c, p)),
+            Goal::Premise(p, fa) => {
+                cow_pair(p, p.apply_changed(subst), fa, fa.apply_changed(subst))
+                    .map(|(p, fa)| Goal::Premise(p, fa))
+            }
+            Goal::Split(_) => None,
+            Goal::Disj(d) => subst.apply_disj(&d.0).map(|alts| Goal::Disj(Disj(alts))),
+            Goal::Subterm(p) => p.apply_changed(subst).map(Goal::Subterm),
+        }
+    }
+}
+
 impl HasFrees for Goal {
     fn for_each_free(&self, f: &mut dyn FnMut(&LVar)) {
         match self {

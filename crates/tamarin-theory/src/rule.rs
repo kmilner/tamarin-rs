@@ -15,11 +15,13 @@
 //! The Haskell version uses `fclabels` lenses heavily; we replace those
 //! with public fields plus accessor methods.
 
+use tamarin_term::apply::Apply;
 use tamarin_term::function_symbols::{FunSym, NdcState};
 use tamarin_term::lterm::{HasFrees, LNTerm, LVar, Name};
 use tamarin_term::macro_expand::LNMacro;
 use tamarin_utils::color::Rgb;
 
+use crate::apply::SystemSubst;
 use crate::fact::{apply_macro_in_fact, pretty_lnfact, FactTag, LNFact, Multiplicity};
 use crate::formula::{formula_frees_list, SyntacticLNFormula};
 use crate::pretty_hpj::{
@@ -189,6 +191,30 @@ impl<I: Clone> HasFrees for Rule<I> {
     }
 }
 
+/// HS `Apply LNSubst i => Apply LNSubst (Rule i)`
+/// (Theory/Model/Rule.hs:308-310).  At `RuleACInst` the info is a
+/// `ProtoRuleACInstInfo`, whose instance (Theory/Model/Rule.hs:517-519)
+/// rewrites only the rule name, and a rule name is not a variable
+/// (Theory/Model/Rule.hs:467-468) — so the info comes through untouched.
+impl<I: Clone> Apply<SystemSubst<'_>> for Rule<I> {
+    fn apply_changed(&self, subst: &SystemSubst<'_>) -> Option<Self> {
+        let premises = self.premises.apply_changed(subst);
+        let conclusions = self.conclusions.apply_changed(subst);
+        let actions = self.actions.apply_changed(subst);
+        let new_vars = self.new_vars.apply_changed(subst);
+        if premises.is_none() && conclusions.is_none() && actions.is_none() && new_vars.is_none() {
+            return None;
+        }
+        Some(Rule {
+            info: self.info.clone(),
+            premises: premises.unwrap_or_else(|| self.premises.clone()),
+            conclusions: conclusions.unwrap_or_else(|| self.conclusions.clone()),
+            actions: actions.unwrap_or_else(|| self.actions.clone()),
+            new_vars: new_vars.unwrap_or_else(|| self.new_vars.clone()),
+        })
+    }
+}
+
 /// HS `frees` at `Rule ProtoRuleEInfo` (Theory/Model/Rule.hs:291-298): the
 /// info's free variables, then the premises', conclusions', actions' and new
 /// variables', `sortednub`bed (`frees = sortednub . freesList`,
@@ -252,6 +278,22 @@ pub struct PremIdx(pub usize);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ConcIdx(pub usize);
+
+/// HS `Apply s PremIdx` (Theory/Model/Rule.hs:475-476) and `Apply s ConcIdx`
+/// (Theory/Model/Rule.hs:483-484): an index is not a variable, so a
+/// substitution leaves it alone.  The `NodePrem` / `NodeConc` pairs reach
+/// these through the pair instance (SubstVFree.hs:316-317).
+impl Apply<SystemSubst<'_>> for PremIdx {
+    fn apply_changed(&self, _subst: &SystemSubst<'_>) -> Option<Self> {
+        None
+    }
+}
+
+impl Apply<SystemSubst<'_>> for ConcIdx {
+    fn apply_changed(&self, _subst: &SystemSubst<'_>) -> Option<Self> {
+        None
+    }
+}
 
 /// Position of a term inside a rule: `(premise, fact-arg-index, term-position)`.
 pub type ExtendedPosition = (PremIdx, usize, tamarin_term::positions::Position);
