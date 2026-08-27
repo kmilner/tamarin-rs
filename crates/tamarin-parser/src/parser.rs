@@ -6253,6 +6253,23 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// The `try (head <* sep) *> tail` shape of `stSplitGoal`, `premiseGoal`,
+    /// `actionGoal` and `chainGoal` (Theory/Text/Parser/Proof.hs:49-68):
+    /// `head` reads the goal's first operand AND its separator under one
+    /// `try`, so failing either restores the input and yields `None` for
+    /// [`Self::goal`] to move on to the next alternative, while `tail` reads
+    /// the rest outside the `try`, where a failure is the whole goal's.
+    fn goal_after<H>(
+        &mut self,
+        head: impl FnOnce(&mut Self) -> Result<H, ParseError>,
+        tail: impl FnOnce(&mut Self, H) -> Result<GoalSpec, ParseError>,
+    ) -> Result<Option<GoalSpec>, ParseError> {
+        match self.attempt(head) {
+            Some(h) => tail(self, h).map(Some),
+            None => Ok(None),
+        }
+    }
+
     /// HS `disjSplitGoal` (Theory/Text/Parser/Proof.hs:61):
     /// `(DisjG . Disj) <$> sepBy1 guardedFormula (symbol "∥")`.  A disjunct is
     /// a `plainFormula`; the `formulaToGuarded` half of `guardedFormula`
@@ -6270,55 +6287,52 @@ impl<'a> Parser<'a> {
     /// `msetterm False (vlit msgvar)` terms around `opSubterm`
     /// (`<<` or `⊏`, Token.hs:574-576), the first of them under the `try`.
     fn subterm_goal(&mut self) -> Result<Option<GoalSpec>, ParseError> {
-        let Some(small) = self.attempt(|p| {
-            let t = p.msetterm(false)?;
-            if !p.try_punct("<<") && !p.try_punct("\u{228F}") {
-                return Err(p.err("expected `⊏`"));
-            }
-            Ok(t)
-        }) else {
-            return Ok(None);
-        };
-        let big = self.msetterm(false)?;
-        Ok(Some(GoalSpec::Subterm(small, big)))
+        self.goal_after(
+            |p| {
+                let t = p.msetterm(false)?;
+                if !p.try_punct("<<") && !p.try_punct("\u{228F}") {
+                    return Err(p.err("expected `⊏`"));
+                }
+                Ok(t)
+            },
+            |p, small| Ok(GoalSpec::Subterm(small, p.msetterm(false)?)),
+        )
     }
 
     /// HS `premiseGoal` (Theory/Text/Parser/Proof.hs:54-57): a `fact llit`
     /// followed by `opRequires` (`▶` and a subscript natural,
     /// Token.hs:618-619), both under the `try`, then a `nodevar`.
     fn premise_goal(&mut self) -> Result<Option<GoalSpec>, ParseError> {
-        let Some((fa, v)) = self.attempt(|p| {
-            let fa = p.fact()?;
-            p.skip_ws();
-            if !p.lx.eat_str("\u{25B6}") {
-                return Err(p.err("expected `▶`"));
-            }
-            let v =
-                p.lx.natural_subscript()
-                    .ok_or_else(|| p.err("expected a subscript premise index"))?;
-            Ok((fa, v))
-        }) else {
-            return Ok(None);
-        };
-        let i = self.nodevar()?;
-        Ok(Some(GoalSpec::Premise((i, v), fa)))
+        self.goal_after(
+            |p| {
+                let fa = p.fact()?;
+                p.skip_ws();
+                if !p.lx.eat_str("\u{25B6}") {
+                    return Err(p.err("expected `▶`"));
+                }
+                let v =
+                    p.lx.natural_subscript()
+                        .ok_or_else(|| p.err("expected a subscript premise index"))?;
+                Ok((fa, v))
+            },
+            |p, (fa, v)| Ok(GoalSpec::Premise((p.nodevar()?, v), fa)),
+        )
     }
 
     /// HS `actionGoal` (Theory/Text/Parser/Proof.hs:49-52): a `fact llit`
     /// followed by `opAt` (`@`, Token.hs:566-568) under the `try`, then a
     /// `nodevar`.
     fn action_goal(&mut self) -> Result<Option<GoalSpec>, ParseError> {
-        let Some(fa) = self.attempt(|p| {
-            let fa = p.fact()?;
-            if !p.try_punct("@") {
-                return Err(p.err("expected `@`"));
-            }
-            Ok(fa)
-        }) else {
-            return Ok(None);
-        };
-        let i = self.nodevar()?;
-        Ok(Some(GoalSpec::Action(i, fa)))
+        self.goal_after(
+            |p| {
+                let fa = p.fact()?;
+                if !p.try_punct("@") {
+                    return Err(p.err("expected `@`"));
+                }
+                Ok(fa)
+            },
+            |p, fa| Ok(GoalSpec::Action(p.nodevar()?, fa)),
+        )
     }
 
     /// HS `chainGoal` (Theory/Text/Parser/Proof.hs:59): a `nodeConc` and
@@ -6326,17 +6340,16 @@ impl<'a> Parser<'a> {
     /// Each endpoint is `parens ((,) <$> nodevar <*> (comma *> natural))`
     /// (Theory/Text/Parser/Proof.hs:28-36).
     fn chain_goal(&mut self) -> Result<Option<GoalSpec>, ParseError> {
-        let Some(conc) = self.attempt(|p| {
-            let conc = p.node_idx_pair()?;
-            if !p.try_punct("~~>") {
-                return Err(p.err("expected `~~>`"));
-            }
-            Ok(conc)
-        }) else {
-            return Ok(None);
-        };
-        let prem = self.node_idx_pair()?;
-        Ok(Some(GoalSpec::Chain(conc, prem)))
+        self.goal_after(
+            |p| {
+                let conc = p.node_idx_pair()?;
+                if !p.try_punct("~~>") {
+                    return Err(p.err("expected `~~>`"));
+                }
+                Ok(conc)
+            },
+            |p, conc| Ok(GoalSpec::Chain(conc, p.node_idx_pair()?)),
+        )
     }
 
     /// HS `nodePrem`/`nodeConc` (Theory/Text/Parser/Proof.hs:28-36):
