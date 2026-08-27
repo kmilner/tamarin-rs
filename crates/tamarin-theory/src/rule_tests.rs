@@ -162,7 +162,7 @@ fn intruder_predicates() {
         name: b"f".to_vec(),
         fun: f
     }));
-    assert!(is_destr_rule_info(&IntrRuleACInfo::DestrRule {
+    assert!(is_destr_rule(&IntrRuleACInfo::DestrRule {
         name: b"f".to_vec(),
         remaining_applications: 0,
         rhs_is_proper_subterm: true,
@@ -170,10 +170,11 @@ fn intruder_predicates() {
         funs: vec![f]
     }));
     assert!(is_coerce_rule_info(&IntrRuleACInfo::Coerce));
-    // Each predicate accepts only its own variant.  An over-broad `matches!`
-    // arm fails here.  A predicate that always returns `true` also fails here.
+    // Each predicate rejects the variants outside its class.  An over-broad
+    // `matches!` arm fails here.  A predicate that always returns `true` also
+    // fails here.
     assert!(!is_constr_rule_info(&IntrRuleACInfo::Coerce));
-    assert!(!is_destr_rule_info(&IntrRuleACInfo::Coerce));
+    assert!(!is_destr_rule(&IntrRuleACInfo::Coerce));
     assert!(!is_coerce_rule_info(&IntrRuleACInfo::ConstrRule {
         name: b"f".to_vec(),
         fun: f
@@ -188,6 +189,19 @@ fn intruder_predicates() {
     assert!(is_constr_rule(&IntrRuleACInfo::NatConstr));
     assert!(!is_constr_rule(&IntrRuleACInfo::IRecv));
     assert!(!is_destr_rule(&IntrRuleACInfo::IRecv));
+}
+
+/// HS classifies the rules by partitioning them with `isDestrRule` and
+/// `isConstrRule` (CloseRule.hs:435-436): a rule `isDestrRule` accepts and
+/// `isConstrRule` rejects lands in `crDestruct`, and the intruder rules
+/// both reject land in `crProtocol`.  `isDestrRule` accepts `IEqualityRule`
+/// (Theory/Model/Rule.hs:694-698), so the `IEquality` rule belongs to
+/// `crDestruct`: `solveChain` iterates it (Goals.hs:209) and `solvePremise`
+/// does not (Goals.hs:208).
+#[test]
+fn iequality_belongs_to_the_destruction_class() {
+    assert!(is_destr_rule(&IntrRuleACInfo::IEquality));
+    assert!(!is_constr_rule(&IntrRuleACInfo::IEquality));
 }
 
 /// `IntrRuleACInfo`'s derived `Ord`/`Hash` walk the variants in

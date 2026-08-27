@@ -500,7 +500,10 @@ pub fn rule_ac_intr_to_rule_ac(r: IntrRuleAC) -> RuleAC {
 // =============================================================================
 
 /// HS `isDestrRule` (Model/Rule.hs:694-698): the `_crDestruct` class —
-/// a `DestrRule` or the `IEquality` rule.
+/// a `DestrRule` or the `IEquality` rule.  HS partitions the rules with
+/// `isDestrRule` and `isConstrRule` (CloseRule.hs:435-436), so the
+/// `IEquality` rule is classified as a destruction rule, not a protocol
+/// rule.
 pub fn is_destr_rule(info: &IntrRuleACInfo) -> bool {
     matches!(
         info,
@@ -521,11 +524,6 @@ pub fn is_constr_rule(info: &IntrRuleACInfo) -> bool {
     )
 }
 
-/// True for the `DestrRule` variant alone, which is narrower than HS
-/// `isDestrRule` [`is_destr_rule`].
-pub fn is_destr_rule_info(info: &IntrRuleACInfo) -> bool {
-    matches!(info, IntrRuleACInfo::DestrRule { .. })
-}
 /// `isSubtermRule`: True iff the rule is a destruction rule whose
 /// RHS is a true subterm of the LHS, or the IEquality rule.
 /// Mirrors Haskell's `Theory.Model.Rule.isSubtermRule`

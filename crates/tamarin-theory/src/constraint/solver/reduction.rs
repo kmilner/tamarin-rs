@@ -3369,21 +3369,22 @@ fn premise_solving_rule_insts_with_constrs(
     Option<Vec<tamarin_term::subst_vfresh::LNSubstVFresh>>,
 )> {
     // HS-faithful: `solvePremise (crProtocol ++ crConstruct)` iterates
-    // crProtocol intruder rules (ISend, IRecv, IEquality) regardless of
+    // the crProtocol intruder rules (ISend, IRecv) regardless of
     // conclusion-tag — the `labelNodeId` trace `exploitPrems rule=Send`/
     // `Recv` fires before the conclusion unification mzero's.
     //
     // HS-faithful: HS iterates ALL `crProtocol ++ crConstruct` rules
-    // per `solveGoal kind=Premise ...` (Goals.hs:200-212, see line 211).  With single-
-    // threaded HS (`+RTS -N1`) the lazy ListT enumeration is
+    // per `solveGoal kind=Premise ...` (Goals.hs:200-212#solveGoal, see line 208).
+    // With single-threaded HS (`+RTS -N1`) the lazy ListT enumeration is
     // deterministic and forces all branches.  Mirror that ordering
-    // and inclusion set here:
+    // and inclusion set, as HS partitions it (CloseRule.hs:435-436):
     //   crProtocol  = non-destr, non-constr intruder rules (ISend,
-    //                  IRecv, IEquality) ++ protocol rules
+    //                  IRecv) ++ protocol rules
     //   crConstruct = constructor intruder rules (Coerce, PubConstr,
     //                  FreshConstr, NatConstr, ConstrRule(*))
-    // Note: crDestruct (destructor rules) is NOT iterated for Premise
-    // goals — those are reserved for `solveChain` (Goals.hs:284-287).
+    // Note: crDestruct (the destructor rules and `IEquality`) is NOT
+    // iterated for Premise goals — those are reserved for `solveChain`
+    // (Goals.hs:284-287#solveChain).
     let mut out: Vec<(
         RuleACInst,
         Option<Vec<tamarin_term::subst_vfresh::LNSubstVFresh>>,
@@ -3391,7 +3392,7 @@ fn premise_solving_rule_insts_with_constrs(
     // crProtocol intruder rules first.
     for ir in &ctx.intruder_rules {
         let is_crprotocol_intr =
-            !crate::rule::is_destr_rule_info(&ir.info) && !crate::rule::is_constr_rule(&ir.info);
+            !crate::rule::is_destr_rule(&ir.info) && !crate::rule::is_constr_rule(&ir.info);
         if is_crprotocol_intr {
             out.push((intr_rule_to_rule_ac_inst(ir.clone()), None));
         }
@@ -5845,18 +5846,23 @@ impl<'ctx> Reduction<'ctx> {
         }
         if !conc_term_is_msg_var {
             let avoid_max = bounds_max(&self.sys);
-            // HS `solveChain` EXTEND (Goals.hs:393-397, see line 394): `insertFreshNode rules
-            // (Just cRule)` allocates `i <- freshLVar "vr"` ONCE, before the
-            // `disjunctionOfList rules` inside `labelNodeId`.  So every
-            // destructor-extension case shares the same `#vr` id, and each
-            // destructor's `importRule` (= rename) reserves its var range from
-            // the single post-`freshLVar` counter state (independent forks).
+            // HS `solveChain` EXTEND (Goals.hs:284-332#solveChain, see line 327):
+            // `insertFreshNode rules (Just cRule)` allocates
+            // `i <- freshLVar "vr"` ONCE (Reduction.hs:210-213), before the
+            // `disjunctionOfList rules` inside `labelNodeId`
+            // (Reduction.hs:220-222).  So every destructor-extension case
+            // shares the same `#vr` id, and each destructor's `importRule`
+            // (= rename) reserves its var range from the single
+            // post-`freshLVar` counter state (independent forks).
             self.maude.ensure_above(avoid_max);
             let vr_idx = self.maude.fresh_idx();
             let post_vr_counter = self.maude.fresh_counter_peek();
             let mut counter_high_water = post_vr_counter;
             for ir in &self.ctx.intruder_rules {
-                if !crate::rule::is_destr_rule_info(&ir.info) {
+                // `rules` is `crDestruct` (Goals.hs:209): the intruder rules
+                // `isDestrRule` accepts, which are the `DestrRule`s and the
+                // `IEquality` rule (CloseRule.hs:435-436).
+                if !crate::rule::is_destr_rule(&ir.info) {
                     continue;
                 }
                 let ru_inst = intr_rule_to_rule_ac_inst(ir.clone());
