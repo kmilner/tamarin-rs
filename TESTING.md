@@ -691,22 +691,31 @@ instrumented Haskell build, the rest on the Rust binary:
 | `TAM_RS_VERIFY_FP=1` | panic if a bloom-skipped fact descent would actually have changed the fact |
 | `TAM_RS_VERIFY_FACT_MAX=1` | panic if a Fact's cached `max_var` diverges from a full walk of its terms |
 | `TAM_RS_VERIFY_CANON_TABLES=1` | panic if a per-store incremental canon table diverges from a full rebuild |
+| `TAM_RS_VERIFY_REDUCE_NF=1` | panic if a normal-form fast path elided a Maude reduce that would have changed the term |
 | `TAM_RS_NO_SIMP_NOOP_SKIP=1` | force the full Simplify pass (disable the no-op shortcut; A/B oracle) |
 | `TAM_RS_NO_SOURCE_CACHE=1` | disable the session source cache + presaturation pre-pass (per-lemma recompute) |
+| `TAM_RS_DISABLE_BOUNDS_CACHE=1` | force the full `bounds_max` walk (disable the cache; A/B oracle) |
+| `TAM_RS_DISABLE_PARALLEL_EXPAND=1` | expand proof-tree siblings serially instead of per-child in parallel |
+| `TAM_RS_KEEP_SYS=1` | keep every proof node's `System` instead of dropping the ones the search no longer needs |
 | `TAM_RS_SUBST_SKIP_STATS=1` | `subst_system` call/skip counters to stderr |
 | `TAM_RS_FP_STATS=1` | fact-descent bloom-skip counters to stderr |
 | `TAM_RS_SIMP_NOOP_STATS=1` | Simplify no-op shortcut hit/miss counters to stderr |
 | `TAM_RS_CANON_TABLE_STATS=1` | canon-table cache hit/rebuild counters to stderr |
+| `TAM_MAUDE_CACHE_STATS=1` | one Maude reduce/unify/reply cache hit-rate line per subprocess at teardown |
+| `TAM_SATURATION_LIMIT=<n>` | source-saturation step cap; outranks the CLI `-s=` |
+| `TAM_PROVE_DEADLINE_MS=<n>` | per-search wall-clock cap (co-operative) |
+| `TAM_PROVE_DEADLINE_HARD_KILL=1` | arm a watchdog that aborts the process once the deadline plus grace elapses |
+| `TAM_PROVE_DEADLINE_GRACE_MS=<n>` | the watchdog's grace period (default 30000) |
 
 The `TAM_RS_VERIFY_*` hooks certify the solver's internal caches and skip
 optimisations: exporting them during a full corpus-gate run re-executes every
 skipped computation and panics on any divergence, turning the byte gate into a
-self-check of the optimisation machinery as well. The `TAM_RS_NO_*` switches
-are the A/B complement — they force the pre-optimisation reference path, whose
-output must stay byte-identical.
+self-check of the optimisation machinery as well. The `TAM_RS_NO_*` /
+`TAM_RS_DISABLE_*` switches are the A/B complement — they force the
+pre-optimisation reference path, whose output must stay byte-identical.
 
-The Rust side of the table is the whole set; the instrumented Haskell build
-carries more — grep `patches/tamarin-prover-fixes.patch` for `TAM_HS_`.
+The table lists every Rust-side flag; the instrumented Haskell build carries
+many more — grep `patches/tamarin-prover-fixes.patch` for `TAM_HS_`.
 
 ## Script index
 
