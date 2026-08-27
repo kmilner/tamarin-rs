@@ -4575,19 +4575,17 @@ impl<'ctx> Reduction<'ctx> {
         self.sys.add_node(j, rule);
         // HS-faithful (Reduction.hs:220-273, see line 261): `exploitPrem FreshFact` does
         // a raw `modM sEdges (S.insert $ Edge (j, ConcIdx 0) (i,v))` —
-        // NO `insertEdges` (so NO solveFactEqs).  Routing through
-        // `insert_edge` here was non-HS-faithful: it unified
-        // the supplier's conc fact with the consumer's prem fact,
-        // adding bindings to the eq_store that HS doesn't have.  On
-        // NSPK3 the extra bindings transitively chained `~ltkA = ~nr`,
-        // causing `enforce_fresh_node_uniqueness` (DG4) to merge two
-        // distinct Fresh suppliers, which then fired a false-positive
-        // `enforce_edge_uniqueness:prem_idx_clash` and dropped the
-        // Lowe-attack cases as FormulasFalse.
-        // Use `add_edge` (dedup + incremental cache bump) to mirror
-        // Haskell's `S.insert` semantics.  `j` is freshly minted so a
-        // duplicate is impossible in practice; this matches the
-        // `add_isend_supplier_for` path and avoids a full cache recompute.
+        // NO `insertEdges`, so NO solveFactEqs.  `insert_edge` would unify
+        // the supplier's conc fact with the consumer's prem fact and add
+        // bindings HS does not have; on NSPK3 those bindings transitively
+        // chain `~ltkA = ~nr`, so `enforce_fresh_node_uniqueness` (DG4)
+        // merges two distinct Fresh suppliers, fires a false-positive
+        // `enforce_edge_uniqueness:prem_idx_clash` and drops the
+        // Lowe-attack cases as FormulasFalse.  `add_edge` (dedup +
+        // incremental cache bump) mirrors Haskell's `S.insert` semantics.
+        // `j` is freshly minted so a duplicate is impossible in practice;
+        // this matches the `add_isend_supplier_for` path and avoids a full
+        // cache recompute.
         self.sys.add_edge(crate::constraint::constraints::Edge {
             src: (j, crate::rule::ConcIdx(0)),
             tgt: (*i, idx),
