@@ -62,8 +62,8 @@ where
     }
 
     /// `substFromMap`: drop trivial `x ~> x` mappings.
-    pub fn from_map(m: BTreeMap<V, VTerm<C, V>>) -> Self {
-        let m = m.into_iter().filter(|(v, t)| !equal_to_var(t, v)).collect();
+    pub fn from_map(mut m: BTreeMap<V, VTerm<C, V>>) -> Self {
+        m.retain(|v, t| !equal_to_var(t, v));
         Subst { map: m }
     }
 
