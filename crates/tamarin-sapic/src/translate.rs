@@ -66,10 +66,10 @@ struct TransCtx {
 
 /// `propagateNames` (Facts.hs:327-341): push each node's process-names down to
 /// its children so every node carries the names of all its ancestors.
-pub(crate) fn propagate_names<A: GoodAnnotation + Clone>(
+pub(crate) fn propagate_names<A: GoodAnnotation>(
     p: Process<A, SapicLVar>,
 ) -> Process<A, SapicLVar> {
-    fn go<A: GoodAnnotation + Clone>(
+    fn go<A: GoodAnnotation>(
         prefix: Vec<String>,
         p: Process<A, SapicLVar>,
     ) -> Process<A, SapicLVar> {

@@ -183,13 +183,6 @@ impl HasFrees for LessAtom {
     }
 }
 
-/// Project the relation: just the `(smaller, larger)` pairs.
-/// Reachable only from its own unit test in production; kept as a mirror
-/// of the HS `getLessRel`-style projection (`to_edge` likewise).
-pub fn get_less_rel(atoms: &[LessAtom]) -> Vec<(NodeId, NodeId)> {
-    atoms.iter().map(|a| a.to_edge()).collect()
-}
-
 // =============================================================================
 // Equation-store split identifiers
 // =============================================================================
@@ -373,22 +366,6 @@ mod tests {
         // over the three fields would rank them by the reason instead.
         assert_eq!(a.cmp(&b), std::cmp::Ordering::Equal);
         assert!(a < LessAtom::new(node("i"), node("k"), Reason::Fresh));
-    }
-
-    #[test]
-    fn less_rel_projection() {
-        let atoms = vec![
-            LessAtom::new(node("i"), node("j"), Reason::Fresh),
-            LessAtom::new(node("j"), node("k"), Reason::Formula),
-        ];
-        // The test compares the complete projection.  The order of the pair
-        // inside an atom is the direction of the ordering edge.  The order
-        // of the atoms is the iteration order of the relation.  A check of
-        // two endpoints alone leaves both of these orders unchecked.
-        assert_eq!(
-            get_less_rel(&atoms),
-            vec![(node("i"), node("j")), (node("j"), node("k"))]
-        );
     }
 
     // HS's derived `Ord Goal` ranks by constructor first, in declaration

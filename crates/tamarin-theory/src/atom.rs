@@ -230,7 +230,7 @@ pub fn pretty_proto_atom<S, A: ShowLit>(
 
 /// HS `prettyAtom = prettyProtoAtom (const emptyDoc)` (Atom.hs:226-229): the
 /// `Unit2` sugar of a post-parsing atom carries nothing to print.
-pub fn pretty_atom<A: ShowLit>(pp_t: &dyn Fn(&Term<A>) -> Doc, a: &Atom<Term<A>>) -> Doc {
+pub(crate) fn pretty_atom<A: ShowLit>(pp_t: &dyn Fn(&Term<A>) -> Doc, a: &Atom<Term<A>>) -> Doc {
     pretty_proto_atom(&|_: &Unit2| Doc::empty(), pp_t, a)
 }
 

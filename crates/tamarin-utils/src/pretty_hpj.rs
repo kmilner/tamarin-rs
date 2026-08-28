@@ -916,46 +916,6 @@ pub fn fcat(ds: Vec<Doc>) -> Doc {
     fill(false, ds)
 }
 
-/// HS `ppTerms sepa n lead finish ts` (Term/Term.hs:319-321): an `fcat` of
-/// `text lead`, each element rendered and `nest(1)`'d (all but the last
-/// `sep`-suffixed), and `text finish`.  Shared by the pair (`<`/`, `/`>`)
-/// and AC-op (`(`/op/`)`) builders across the parser-AST and SAPIC term
-/// renderers — they differ only in these three strings and the per-element
-/// `render` fn, so every caller stays byte-identical.
-pub fn fcat_bracketed<T>(
-    lead: &str,
-    sep: &str,
-    finish: &str,
-    items: &[&T],
-    render: impl Fn(&T) -> Doc,
-) -> Doc {
-    let n = items.len();
-    let mut parts: Vec<Doc> = Vec::with_capacity(n + 2);
-    parts.push(Doc::text(lead));
-    for (i, t) in items.iter().enumerate() {
-        let mut d = render(t);
-        if i + 1 < n {
-            d = d.beside(Doc::text(sep));
-        }
-        parts.push(d.nest(1));
-    }
-    parts.push(Doc::text(finish));
-    fcat(parts)
-}
-
-/// HS `ppFun f ts = text (f ++ "(") <> fsep (punctuate comma (map ppTerm ts))
-/// <> text ")"` (Term/Term.hs:326-327).  Shared by the parser-AST and SAPIC
-/// function-application renderers — they differ only in the per-element
-/// `render` fn, so the common `text(name++"(") <> fsep(punctuate ',' …) <>
-/// text ")"` Doc shape lives here (HS `comma = char ','`).
-pub fn fun_app_doc<T>(name: &str, args: &[&T], render: impl Fn(&T) -> Doc) -> Doc {
-    let arg_docs: Vec<Doc> = args.iter().map(|a| render(a)).collect();
-    let body = fsep(punctuate(Doc::char(','), arg_docs));
-    Doc::text(format!("{}(", name))
-        .beside(body)
-        .beside(Doc::text(")"))
-}
-
 /// HS `nestShort' lead finish body =
 ///   nestShort (length lead + 1) (text lead) (text finish) body
 ///   = sep [ text lead $$ nest n body, text finish ]`

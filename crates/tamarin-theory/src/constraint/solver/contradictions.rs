@@ -2145,59 +2145,6 @@ pub fn cyclic(less: &[LessAtom]) -> bool {
     false
 }
 
-/// `cyclic_with_path` — same as `cyclic` but returns the cycle path
-/// when one exists.  Intended for H14-style diagnostics: when HS
-/// detects a Cyclic contradiction at some cn but RS doesn't, comparing
-/// HS's cycle path against RS's available less_atoms shows EXACTLY
-/// which less_atom is missing in RS.
-///
-/// Returns the cycle as a `Vec<NodeId>` where the first and last
-/// entries are equal (the back-edge node).  Empty if no cycle.
-pub fn cyclic_with_path(less: &[LessAtom]) -> Vec<NodeId> {
-    let mut adj: BTreeMap<NodeId, Vec<NodeId>> = BTreeMap::new();
-    for l in less {
-        adj.entry(l.smaller).or_default().push(l.larger);
-    }
-    let mut color: BTreeMap<NodeId, u8> = BTreeMap::new();
-    let mut path: Vec<NodeId> = Vec::new();
-    let nodes: Vec<NodeId> = adj.keys().copied().collect();
-    fn dfs(
-        node: &NodeId,
-        adj: &BTreeMap<NodeId, Vec<NodeId>>,
-        color: &mut BTreeMap<NodeId, u8>,
-        path: &mut Vec<NodeId>,
-    ) -> Option<NodeId> {
-        match color.get(node).copied().unwrap_or(0) {
-            1 => return Some(*node), // back-edge target
-            2 => return None,
-            _ => {}
-        }
-        color.insert(*node, 1);
-        path.push(*node);
-        if let Some(succs) = adj.get(node) {
-            for s in succs {
-                if let Some(target) = dfs(s, adj, color, path) {
-                    return Some(target);
-                }
-            }
-        }
-        color.insert(*node, 2);
-        path.pop();
-        None
-    }
-    for n in &nodes {
-        if let Some(target) = dfs(n, &adj, &mut color, &mut path) {
-            // Truncate path to the cycle (from `target` onwards).
-            if let Some(start) = path.iter().position(|x| x == &target) {
-                let mut cycle: Vec<NodeId> = path[start..].to_vec();
-                cycle.push(target);
-                return cycle;
-            }
-        }
-    }
-    Vec::new()
-}
-
 /// Detect any node that is strictly after `last(_)`. Mirrors Haskell's
 /// `nodesAfterLast`.
 ///

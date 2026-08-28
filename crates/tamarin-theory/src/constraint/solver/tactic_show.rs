@@ -177,7 +177,7 @@ fn show_term_list(args: &[BLNTerm]) -> String {
 
 /// HS `getFactTerms_ goal` for `reasonableNoncesNoise` (Tactics.hs:184-186):
 /// the fact terms of an `ActionG _ (Fact { factTerms = ft })`, else `[]`.
-pub fn action_goal_fact_terms(goal: &crate::constraint::constraints::Goal) -> Vec<LNTerm> {
+pub(crate) fn action_goal_fact_terms(goal: &crate::constraint::constraints::Goal) -> Vec<LNTerm> {
     if let crate::constraint::constraints::Goal::Action(_, fa) = goal {
         fa.terms.to_vec()
     } else {
@@ -187,7 +187,9 @@ pub fn action_goal_fact_terms(goal: &crate::constraint::constraints::Goal) -> Ve
 
 /// Accessor for the single-term action fact used by `isInFactTerms`
 /// (Tactics.hs:218-220): `ActionG _ (Fact { factTerms = [test] })`.
-pub fn action_goal_single_term(goal: &crate::constraint::constraints::Goal) -> Option<&LNTerm> {
+pub(crate) fn action_goal_single_term(
+    goal: &crate::constraint::constraints::Goal,
+) -> Option<&LNTerm> {
     if let crate::constraint::constraints::Goal::Action(_, fa) = goal {
         if fa.terms.len() == 1 {
             return Some(&fa.terms[0]);

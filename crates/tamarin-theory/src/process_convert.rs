@@ -24,7 +24,6 @@
 use std::collections::BTreeSet;
 
 use tamarin_parser::ast as p;
-use tamarin_term::lterm::LVar;
 use tamarin_term::maude_sig::MaudeSig;
 // A variable literal of a SAPIC term and a SAPIC binder are the same reading
 // of a `VarSpec`, so both come from one definition.
@@ -46,16 +45,6 @@ pub struct ConvertError {
 impl ConvertError {
     pub(crate) fn new(s: impl Into<String>) -> Self {
         ConvertError { message: s.into() }
-    }
-}
-
-/// `LVar` → parser `VarSpec` (name/idx/sort carried over, no SAPIC type).
-pub fn lvar_to_varspec(v: &LVar) -> p::VarSpec {
-    p::VarSpec {
-        name: v.name.to_string(),
-        idx: v.idx,
-        sort: v.sort,
-        typ: None,
     }
 }
 
@@ -363,6 +352,7 @@ pub(crate) fn add_root_annotation(
 mod tests {
     use super::*;
     use tamarin_term::lterm::LSort;
+    use tamarin_term::lterm::LVar;
     use tamarin_term::maude_sig::pair_maude_sig;
 
     /// The signature a def-less conversion runs against: `minimalMaudeSig`

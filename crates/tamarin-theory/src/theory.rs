@@ -595,7 +595,7 @@ pub fn merge_open_proto_rules<P: Clone, S: Clone>(
 /// rule's own name and attributes, the identity substitution as its variant
 /// disjunction and an empty loop-breaker list
 /// (Theory/Text/Parser/Rule.hs:137-143, see line 142).
-pub fn manual_rule_variants(r: &OpenProtoRule) -> Vec<crate::rule::ProtoRuleAC> {
+pub(crate) fn manual_rule_variants(r: &OpenProtoRule) -> Vec<crate::rule::ProtoRuleAC> {
     r.rule_ac
         .iter()
         .map(|v| {

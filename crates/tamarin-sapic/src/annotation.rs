@@ -66,7 +66,7 @@ impl<V> Default for ProcessAnnotation<V> {
     }
 }
 
-impl<V: Clone> ProcessAnnotation<V> {
+impl<V> ProcessAnnotation<V> {
     pub(crate) fn empty() -> Self {
         Self::default()
     }
@@ -129,7 +129,7 @@ impl<V: Clone> ProcessAnnotation<V> {
     }
 }
 
-impl<V: Clone> GoodAnnotation for ProcessAnnotation<V> {
+impl<V> GoodAnnotation for ProcessAnnotation<V> {
     fn parsed(&self) -> &ProcessParsedAnnotation {
         &self.parsing_ann
     }
@@ -138,9 +138,6 @@ impl<V: Clone> GoodAnnotation for ProcessAnnotation<V> {
             parsing_ann: p,
             ..self
         }
-    }
-    fn default_annotation() -> Self {
-        Self::default()
     }
 }
 

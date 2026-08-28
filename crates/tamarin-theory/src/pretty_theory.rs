@@ -951,7 +951,7 @@ pub fn pretty_function_typing_info(fti: &crate::theory::SapicFunSym) -> crate::p
     fn print_type(t: &crate::sapic::SapicType) -> Doc {
         match t {
             Some(ty) => Doc::text(ty),
-            None => Doc::text(crate::sapic::default_sapic_type_string()),
+            None => Doc::text(crate::sapic::DEFAULT_SAPIC_TYPE),
         }
     }
     fn show_priv(p: Privacy) -> &'static str {

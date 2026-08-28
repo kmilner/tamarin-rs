@@ -101,7 +101,7 @@ fn to_facts_term(out_name: &str, inner: LNFormula) -> LNFormula {
 
 /// `addForm` protected-subterm case with NO matching outputs
 /// (OpenTheory.hs:395-417): `∀ x m i. AUTO_IN_TERM(m,x) @ i ⇒ orKU`.
-pub fn term_input_form_no_outputs(in_name: &str) -> LNFormula {
+pub(crate) fn term_input_form_no_outputs(in_name: &str) -> LNFormula {
     let in_fact = auto_fact(in_name, vec![bound(1), bound(2)]);
     all(
         "x",
@@ -117,7 +117,7 @@ pub fn term_input_form_no_outputs(in_name: &str) -> LNFormula {
 /// `addForm` protected-subterm case WITH matching outputs
 /// (OpenTheory.hs:419-441): `∀ x m i. AUTO_IN_TERM(m,x) @ i ⇒
 /// (orKU ∨ (∃ j. AUTO_OUT_TERM(m) @ j ∧ j < i))`.
-pub fn term_input_form_with_outputs(in_name: &str, out_name: &str) -> LNFormula {
+pub(crate) fn term_input_form_with_outputs(in_name: &str, out_name: &str) -> LNFormula {
     let in_fact = auto_fact(in_name, vec![bound(1), bound(2)]);
     all(
         "x",
@@ -284,7 +284,7 @@ fn rule_e_name(o: &OpenProtoRule) -> &str {
 /// Port of `addAutoSourcesLemma`'s body (OpenTheory.hs:144-538) without the
 /// theory-item plumbing: given the protocol rules and the open-chain cases,
 /// compute the rule AUTO annotations and the source-lemma formula.
-pub fn add_auto_sources_lemma(
+pub(crate) fn add_auto_sources_lemma(
     maude: &MaudeHandle,
     rules: &[OpenProtoRule],
     chains: &[((NodeConc, NodePrem), System)],
@@ -548,7 +548,7 @@ pub fn add_auto_sources_lemma(
 /// AllTraces formula`, OpenTheory.hs:138-538, see line 157).  `unprovenLemma`
 /// seeds `_lOriginalFormula` with the same formula
 /// (Theory/ProofSkeleton.hs:59-61).
-pub fn build_source_lemma(name: &str, formula: LNFormula) -> crate::theory::Lemma {
+pub(crate) fn build_source_lemma(name: &str, formula: LNFormula) -> crate::theory::Lemma {
     use crate::theory::{Lemma, LemmaAttr, TraceQuantifier};
     Lemma {
         name: name.to_string(),
@@ -565,7 +565,7 @@ pub fn build_source_lemma(name: &str, formula: LNFormula) -> crate::theory::Lemm
 
 /// Whether the theory already contains a lemma named `name`
 /// (HS `find lemma items`, OpenTheory.hs:138-538, see line 146).
-pub fn has_lemma_named(items: &[TheoryItem], name: &str) -> bool {
+pub(crate) fn has_lemma_named(items: &[TheoryItem], name: &str) -> bool {
     items
         .iter()
         .any(|it| matches!(it, TheoryItem::Lemma(l) if l.name == name))

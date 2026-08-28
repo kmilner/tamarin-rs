@@ -683,7 +683,7 @@ pub fn get_conc_fact(rule: &IntrRuleAC) -> &LNFact {
 
 /// `getRuleName` restricted to intruder-rule infos (used where only an
 /// `IntrRuleAC` is at hand).
-pub fn intr_rule_name_string(info: &IntrRuleACInfo) -> String {
+pub(crate) fn intr_rule_name_string(info: &IntrRuleACInfo) -> String {
     match info {
         IntrRuleACInfo::ConstrRule { name, .. } => format!(
             "Constr{}",

@@ -1026,7 +1026,7 @@ fn system_max_idx(sys: &System) -> u64 {
             Goal::Disj(_) | Goal::Split(_) => {}
         }
     }
-    // Formulas (Guarded over parser AST) — use the explicit max helper.
+    // Locally nameless guarded formulas use the explicit max helper.
     for f in sys
         .formulas
         .iter()

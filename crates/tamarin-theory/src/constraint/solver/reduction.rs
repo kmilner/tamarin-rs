@@ -3512,11 +3512,11 @@ fn bm_rule(r: &crate::rule::RuleACInst, max: &mut u64) {
 // Public re-exports so `system.rs`'s incremental cache bumpers can
 // reuse the inline walkers.
 #[inline(always)]
-pub fn bm_term_pub(t: &tamarin_term::lterm::LNTerm, max: &mut u64) {
+pub(crate) fn bm_term_pub(t: &tamarin_term::lterm::LNTerm, max: &mut u64) {
     bm_term(t, max);
 }
 #[inline(always)]
-pub fn bm_fact_pub(fa: &crate::fact::LNFact, max: &mut u64) {
+pub(crate) fn bm_fact_pub(fa: &crate::fact::LNFact, max: &mut u64) {
     bm_fact(fa, max);
 }
 #[inline(always)]

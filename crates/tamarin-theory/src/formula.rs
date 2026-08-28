@@ -83,8 +83,7 @@ pub enum ProtoFormula<S, H, C, V> {
 
 /// `Formula` after parsing: no syntactic sugar.
 pub type Formula<H, C, V> = ProtoFormula<Unit2, H, C, V>;
-pub type LFormula<C> = Formula<(String, LSort), C, LVar>;
-pub type LNFormula = LFormula<Name>;
+pub type LNFormula = Formula<(String, LSort), Name, LVar>;
 
 /// The term type of an [`LNFormula`] atom: variables are `BVar`s, so a term
 /// mentions both the enclosing binders' De Bruijn indices and free `LVar`s.

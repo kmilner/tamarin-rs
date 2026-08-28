@@ -46,7 +46,7 @@ pub fn multi_comment(d: Doc) -> Doc {
 
 /// HS `closedComment_ s = comment $ fsep [text "/*", text s, text "*/"]`
 /// (`Theory/Text/Pretty.hs:111-112`).
-pub fn closed_comment_(s: &str) -> Doc {
+pub(crate) fn closed_comment_(s: &str) -> Doc {
     comment(fsep(vec![Doc::text("/*"), Doc::text(s), Doc::text("*/")]))
 }
 

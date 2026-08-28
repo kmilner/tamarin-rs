@@ -151,7 +151,7 @@ pub fn case_path_pop() {
     });
 }
 
-pub fn case_path_string() -> String {
+pub(crate) fn case_path_string() -> String {
     CASE_PATH.with(|p| {
         let v = p.borrow();
         if v.is_empty() {
@@ -165,7 +165,7 @@ pub fn case_path_string() -> String {
 /// Snapshot the current case-path stack — used by parallel `expand`
 /// to seed worker threads with the parent thread's proof-tree path so
 /// trace output remains coherent across thread boundaries.
-pub fn case_path_snapshot() -> Vec<String> {
+pub(crate) fn case_path_snapshot() -> Vec<String> {
     CASE_PATH.with(|p| p.borrow().clone())
 }
 

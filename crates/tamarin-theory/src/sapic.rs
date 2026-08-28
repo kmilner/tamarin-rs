@@ -58,16 +58,10 @@ pub fn pretty_position(p: &ProcessPosition) -> String {
 /// SAPIC variables carry an optional type tag (`Some("node")`, `Some("Any")`, …).
 pub type SapicType = Option<String>;
 
-/// HS `defaultSapicTypeS` (Theory/Sapic/Term.hs:94-95) — the type printed for an
-/// undeclared argument / return type (see
-/// `pretty_theory::pretty_function_typing_info`).
-pub fn default_sapic_type_string() -> String {
-    "Any".to_string()
-}
-pub fn default_sapic_type() -> SapicType {
-    None
-}
-pub fn default_sapic_node_type() -> SapicType {
+/// HS `defaultSapicTypeS` (Theory/Sapic/Term.hs:94-95).
+pub(crate) const DEFAULT_SAPIC_TYPE: &str = "Any";
+
+pub(crate) fn default_sapic_node_type() -> SapicType {
     Some("node".to_string())
 }
 
@@ -169,7 +163,6 @@ impl ProcessParsedAnnotation {
 pub trait GoodAnnotation: Sized {
     fn parsed(&self) -> &ProcessParsedAnnotation;
     fn set_parsed(self, p: ProcessParsedAnnotation) -> Self;
-    fn default_annotation() -> Self;
 }
 
 impl GoodAnnotation for ProcessParsedAnnotation {
@@ -178,9 +171,6 @@ impl GoodAnnotation for ProcessParsedAnnotation {
     }
     fn set_parsed(self, p: ProcessParsedAnnotation) -> Self {
         p
-    }
-    fn default_annotation() -> Self {
-        Self::default()
     }
 }
 
@@ -752,7 +742,6 @@ mod tests {
         let v = LVar::new("x", LSort::Msg, 0);
         let sv = SapicLVar::untyped(v);
         assert_eq!(sv.stype, None);
-        assert_eq!(sv.stype, default_sapic_type());
         assert_eq!(sv.to_lvar(), v);
         // A tagged variable keeps its tag. `to_lvar` still returns the `LVar`
         // without the tag.
@@ -856,14 +845,7 @@ mod tests {
                 .location,
             Some(loc("l2"))
         );
-        assert_eq!(ProcessParsedAnnotation::empty(), ann_empty());
-    }
-
-    /// `empty()` and `Default` must stay the same value.
-    /// `GoodAnnotation::default_annotation` goes through `Default`. The
-    /// `Process::null` call sites go through `empty()`.
-    fn ann_empty() -> ProcessParsedAnnotation {
-        <ProcessParsedAnnotation as GoodAnnotation>::default_annotation()
+        assert_eq!(ProcessParsedAnnotation::empty(), Default::default());
     }
 
     fn null_proc() -> PlainProcess {
@@ -956,10 +938,10 @@ mod tests {
                     rest: vec![rest],
                     match_vars: BTreeSet::new(),
                 },
-                ann_empty(),
+                ProcessParsedAnnotation::empty(),
                 Box::new(Process::Comb(
                     ProcessCombinator::Cond(cond),
-                    ann_empty(),
+                    ProcessParsedAnnotation::empty(),
                     Box::new(null_proc()),
                     Box::new(null_proc()),
                 )),

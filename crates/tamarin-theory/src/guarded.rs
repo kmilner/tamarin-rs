@@ -464,7 +464,7 @@ pub fn bterm_to_lterm(t: &BLNTerm) -> LNTerm {
 
 /// HS `unbindAtom` (Guarded.hs:351-352): the atom over plain `LVar`s when it
 /// carries no `Bound` leaf, `None` otherwise.
-pub fn unbind_atom(a: &Atom<BLNTerm>) -> Option<Atom<LNTerm>> {
+pub(crate) fn unbind_atom(a: &Atom<BLNTerm>) -> Option<Atom<LNTerm>> {
     fn has_bound(t: &BLNTerm) -> bool {
         match t {
             Term::Lit(Lit::Var(BVar::Bound(_))) => true,
@@ -492,7 +492,7 @@ pub fn lift_free_atom(a: &Atom<LNTerm>) -> Atom<BLNTerm> {
 /// `dom(s)` by the De Bruijn index `s` gives it.  `fmap (fmapTerm (fmap …))`
 /// rebuilds each application through `fApp`, so an AC or `C` argument list is
 /// re-sorted under `Bound i < Free x` (LTerm.hs:476-478, Raw.hs:119-134).
-pub fn subst_free_atom(s: &[(LVar, u64)], a: &Atom<BLNTerm>) -> Atom<BLNTerm> {
+pub(crate) fn subst_free_atom(s: &[(LVar, u64)], a: &Atom<BLNTerm>) -> Atom<BLNTerm> {
     subst_free_atom_at(s, 0, a)
 }
 
@@ -510,14 +510,14 @@ fn subst_free_atom_at(s: &[(LVar, u64)], depth: u64, a: &Atom<BLNTerm>) -> Atom<
 
 /// HS `substFree` (Guarded.hs:319-320): [`subst_free_atom`] at every atom,
 /// with the index shifted by the number of binders crossed.
-pub fn subst_free(s: &[(LVar, u64)], g: &Guarded) -> Guarded {
+pub(crate) fn subst_free(s: &[(LVar, u64)], g: &Guarded) -> Guarded {
     map_guarded_atoms(g, &mut |j, a| subst_free_atom_at(s, j, a))
 }
 
 /// HS `substBoundAtom` (Guarded.hs:289-296): replace every bound index in
 /// `dom(s)` by the free variable `s` gives it, rebuilding through `fApp` as
 /// [`subst_free_atom`] does.
-pub fn subst_bound_atom(s: &[(u64, LVar)], a: &Atom<BLNTerm>) -> Atom<BLNTerm> {
+pub(crate) fn subst_bound_atom(s: &[(u64, LVar)], a: &Atom<BLNTerm>) -> Atom<BLNTerm> {
     subst_bound_atom_at(s, 0, a)
 }
 
@@ -537,7 +537,7 @@ fn subst_bound_atom_at(s: &[(u64, LVar)], depth: u64, a: &Atom<BLNTerm>) -> Atom
 
 /// HS `substBound` (Guarded.hs:301-302): [`subst_bound_atom`] at every atom,
 /// with the index shifted by the number of binders crossed.
-pub fn subst_bound(s: &[(u64, LVar)], g: &Guarded) -> Guarded {
+pub(crate) fn subst_bound(s: &[(u64, LVar)], g: &Guarded) -> Guarded {
     map_guarded_atoms(g, &mut |j, a| subst_bound_atom_at(s, j, a))
 }
 

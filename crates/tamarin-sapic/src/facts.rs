@@ -555,7 +555,7 @@ fn strip_non_alphabetic(s: &str) -> String {
 }
 
 /// The HS-faithful rule name (Facts.hs:381-388).
-pub(crate) fn rule_name<Ann: GoodAnnotation + Clone>(r: &AnnotatedRule<Ann>) -> String {
+pub(crate) fn rule_name<Ann: GoodAnnotation>(r: &AnnotatedRule<Ann>) -> String {
     match &r.process_name {
         Some(s) => s.clone(),
         None => generated_rule_name(&to_parsed(&r.process), r.index, &r.position),
