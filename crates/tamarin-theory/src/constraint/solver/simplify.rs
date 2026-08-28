@@ -2282,15 +2282,9 @@ fn normalise_less_atoms_pass(red: &mut Reduction) -> ChangeIndicator {
         // whole-System borrow and fail to compile.
         let c = red.sys.content_mut_untracked();
         let subst = &c.eq_store.subst;
-        let normalize = |id: &crate::constraint::constraints::NodeId| -> crate::constraint::constraints::NodeId {
-            let t = tamarin_term::term::Term::Lit(
-                tamarin_term::vterm::Lit::Var(*id));
-            let mapped = tamarin_term::subst::apply_vterm(subst, t);
-            if let tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(v)) = mapped {
-                v
-            } else {
-                *id
-            }
+        let normalize = |id: &crate::constraint::constraints::NodeId| match subst.image_of(id) {
+            Some(tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(v))) => *v,
+            _ => *id,
         };
         for la in c.less_atoms.iter_mut() {
             let new_smaller = normalize(&la.smaller);
