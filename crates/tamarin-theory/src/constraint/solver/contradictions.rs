@@ -21,7 +21,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::constraint::constraints::{LessAtom, NodeId};
+use crate::constraint::constraints::NodeId;
 use crate::constraint::solver::context::ProofContext;
 use crate::constraint::system::{NodeRuleMap, System};
 
@@ -107,21 +107,13 @@ pub fn contradictions(_ctxt: &ProofContext, sys: &System) -> Vec<Contradiction> 
     // every `contradictions` call.
     let subst = &sys.eq_store.subst;
     let resolve = |v: &NodeId| resolve_node_id(subst, v);
-    let mut all_less: Vec<LessAtom> = sys
+    let mut all_less: tamarin_utils::dag::Relation<NodeId> = sys
         .less_atoms
         .iter()
-        .map(|l| LessAtom {
-            smaller: resolve(&l.smaller),
-            larger: resolve(&l.larger),
-            reason: l.reason,
-        })
+        .map(|l| (resolve(&l.smaller), resolve(&l.larger)))
         .collect();
     for e in &sys.edges {
-        all_less.push(LessAtom {
-            smaller: resolve(&e.src.0),
-            larger: resolve(&e.tgt.0),
-            reason: crate::constraint::constraints::Reason::Adversary,
-        });
+        all_less.push((resolve(&e.src.0), resolve(&e.tgt.0)));
     }
     // HS-faithful: `rawEdgeRel = sEdges ++ unsolvedChains` (System.hs:1613-
     // 1616) — unsolved chain goals contribute (c.0, p.0) to the less-
@@ -129,13 +121,9 @@ pub fn contradictions(_ctxt: &ProofContext, sys: &System) -> Vec<Contradiction> 
     // catches when the cycle goes through an open chain. Root cause of
     // StatVerif KU(pcs) saturate over-enumeration.
     for (c, p) in sys.unsolved_chains() {
-        all_less.push(LessAtom {
-            smaller: resolve(&c.0),
-            larger: resolve(&p.0),
-            reason: crate::constraint::constraints::Reason::Adversary,
-        });
+        all_less.push((resolve(&c.0), resolve(&p.0)));
     }
-    if cyclic(&all_less) {
+    if tamarin_utils::dag::cyclic(&all_less) {
         out.push(Contradiction::Cyclic);
     }
     // HS-faithful enumeration ORDER (`contradictions`, Contradictions.hs):
@@ -2100,45 +2088,6 @@ fn has_incompatible_edge_facts<'a>(
             None => continue,
         };
         if fc.tag != fp.tag || fc.terms.len() != fp.terms.len() {
-            return true;
-        }
-    }
-    false
-}
-
-/// True if the strict `<` partial order has a cycle.
-pub fn cyclic(less: &[LessAtom]) -> bool {
-    // Build adjacency list keyed by NodeId.
-    let mut adj: BTreeMap<NodeId, Vec<NodeId>> = BTreeMap::new();
-    for l in less {
-        adj.entry(l.smaller).or_default().push(l.larger);
-    }
-    // Run DFS detecting back-edges.
-    let mut color: BTreeMap<NodeId, u8> = BTreeMap::new(); // 0=white,1=gray,2=black
-    let nodes: Vec<NodeId> = adj.keys().copied().collect();
-    fn dfs(
-        node: &NodeId,
-        adj: &BTreeMap<NodeId, Vec<NodeId>>,
-        color: &mut BTreeMap<NodeId, u8>,
-    ) -> bool {
-        match color.get(node).copied().unwrap_or(0) {
-            1 => return true,  // gray ancestor → back-edge
-            2 => return false, // already explored
-            _ => {}
-        }
-        color.insert(*node, 1);
-        if let Some(succs) = adj.get(node) {
-            for s in succs {
-                if dfs(s, adj, color) {
-                    return true;
-                }
-            }
-        }
-        color.insert(*node, 2);
-        false
-    }
-    for n in &nodes {
-        if dfs(n, &adj, &mut color) {
             return true;
         }
     }

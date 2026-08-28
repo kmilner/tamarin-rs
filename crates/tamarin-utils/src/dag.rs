@@ -15,7 +15,7 @@
 //! The remaining operations cover the subset of `Data.DAG.Simple` used by
 //! the port.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub type Relation<T> = Vec<(T, T)>;
 
@@ -44,40 +44,37 @@ pub fn reachable_set<T: Ord + Clone>(start: &[T], rel: &Relation<T>) -> BTreeSet
 
 /// `cyclic rel`: whether `rel` contains a directed cycle.
 pub fn cyclic<T: Ord + Clone>(rel: &Relation<T>) -> bool {
-    fn find_loop<T: Ord + Clone>(
-        rel: &Relation<T>,
-        parents: &mut BTreeSet<T>,
-        visited: &mut BTreeSet<T>,
-        x: T,
+    let mut adj: BTreeMap<T, Vec<T>> = BTreeMap::new();
+    for (a, b) in rel {
+        adj.entry(a.clone()).or_default().push(b.clone());
+    }
+
+    fn visit<T: Ord + Clone>(
+        node: &T,
+        adj: &BTreeMap<T, Vec<T>>,
+        color: &mut BTreeMap<T, u8>,
     ) -> bool {
-        if parents.contains(&x) {
-            return true;
+        match color.get(node).copied().unwrap_or(0) {
+            1 => return true,
+            2 => return false,
+            _ => {}
         }
-        if visited.contains(&x) {
-            return false;
-        }
-        parents.insert(x.clone());
-        // Inlined `image(&x, rel)`: scan `rel` front-to-back, recursing into each
-        // successor in the same order (no `visited` guard here, matching the
-        // original `image` snapshot which has none). `rel` is not mutated during
-        // the scan, so the snapshot and the inlined scan are equivalent.
-        for (a, b) in rel {
-            if a == &x && find_loop(rel, parents, visited, b.clone()) {
-                return true;
+        color.insert(node.clone(), 1);
+        if let Some(succs) = adj.get(node) {
+            for succ in succs {
+                if visit(succ, adj, color) {
+                    return true;
+                }
             }
         }
-        parents.remove(&x);
-        visited.insert(x);
+        color.insert(node.clone(), 2);
         false
     }
 
-    let mut visited = BTreeSet::new();
-    for (src, _) in rel {
-        if !visited.contains(src) {
-            let mut parents = BTreeSet::new();
-            if find_loop(rel, &mut parents, &mut visited, src.clone()) {
-                return true;
-            }
+    let mut color = BTreeMap::new();
+    for node in adj.keys() {
+        if color.get(node).copied().unwrap_or(0) == 0 && visit(node, &adj, &mut color) {
+            return true;
         }
     }
     false

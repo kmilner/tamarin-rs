@@ -71,7 +71,6 @@ fn exploit_unique_msg_order_inserts_the_reflexive_self_edge() {
         Some(c) => c,
         None => return,
     };
-    use crate::constraint::solver::contradictions::cyclic;
     use tamarin_term::builtin::msg_var;
     let info = || {
         crate::rule::RuleInfo::Proto(crate::rule::ProtoRuleACInstInfo {
@@ -105,7 +104,13 @@ fn exploit_unique_msg_order_inserts_the_reflexive_self_edge() {
     exploit_unique_msg_order(&mut r);
     assert_eq!(pairs(&r), vec![(1, 1)], "the self-edge must be inserted");
     assert!(
-        cyclic(&r.sys.less_atoms),
+        tamarin_utils::dag::cyclic(
+            &r.sys
+                .less_atoms
+                .iter()
+                .map(|atom| (atom.smaller, atom.larger))
+                .collect()
+        ),
         "the self-edge is only useful because it makes rawLessRel cyclic"
     );
     assert_eq!(

@@ -3,7 +3,7 @@
 //   scripts/gen_license_headers.py --authors <this file>
 
 use super::*;
-use crate::constraint::constraints::Reason;
+use crate::constraint::constraints::{LessAtom, Reason};
 use tamarin_term::lterm::{LSort, LVar};
 
 fn n(name: &str) -> NodeId {
@@ -29,7 +29,11 @@ fn cyclic_sees_closed_orderings_only() {
         ("reflexive a<a", vec![aa], true),
         ("single edge", vec![ab], false),
     ] {
-        assert_eq!(cyclic(&atoms), want, "{label}");
+        let relation = atoms
+            .iter()
+            .map(|atom| (atom.smaller, atom.larger))
+            .collect();
+        assert_eq!(tamarin_utils::dag::cyclic(&relation), want, "{label}");
     }
 }
 
