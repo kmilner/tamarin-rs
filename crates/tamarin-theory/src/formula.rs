@@ -207,15 +207,24 @@ pub(crate) fn for_each_formula_term<S, C, V>(
 ) where
     S: SugarTerms<VTerm<C, BVar<V>>>,
 {
+    for_each_formula_atom(fm, &mut |a| fold_atom(a, f));
+}
+
+/// Visit every atom in formula order.  This is the shared structural walk for
+/// read-only atom folds; each caller decides which payloads of an atom count.
+fn for_each_formula_atom<'a, S, H, C, V>(
+    fm: &'a ProtoFormula<S, H, C, V>,
+    f: &mut impl FnMut(&'a ProtoAtom<S, VTerm<C, BVar<V>>>),
+) {
     match fm {
-        ProtoFormula::Atom(a) => fold_atom(a, f),
+        ProtoFormula::Atom(a) => f(a),
         ProtoFormula::Tf(_) => {}
-        ProtoFormula::Not(p) => for_each_formula_term(p, f),
+        ProtoFormula::Not(p) => for_each_formula_atom(p, f),
         ProtoFormula::Conn(_, p, q) => {
-            for_each_formula_term(p, f);
-            for_each_formula_term(q, f);
+            for_each_formula_atom(p, f);
+            for_each_formula_atom(q, f);
         }
-        ProtoFormula::Qua(_, _, p) => for_each_formula_term(p, f),
+        ProtoFormula::Qua(_, _, p) => for_each_formula_atom(p, f),
     }
 }
 
@@ -226,24 +235,12 @@ pub(crate) fn for_each_formula_term<S, C, V>(
 /// are not real facts".
 pub fn formula_facts<S, H, C, V>(fm: &ProtoFormula<S, H, C, V>) -> Vec<&Fact<VTerm<C, BVar<V>>>> {
     let mut out = Vec::new();
-    collect_formula_facts(fm, &mut out);
-    out
-}
-
-fn collect_formula_facts<'a, S, H, C, V>(
-    fm: &'a ProtoFormula<S, H, C, V>,
-    out: &mut Vec<&'a Fact<VTerm<C, BVar<V>>>>,
-) {
-    match fm {
-        ProtoFormula::Atom(ProtoAtom::Action(_, fa)) => out.push(fa),
-        ProtoFormula::Atom(_) | ProtoFormula::Tf(_) => {}
-        ProtoFormula::Not(p) => collect_formula_facts(p, out),
-        ProtoFormula::Conn(_, p, q) => {
-            collect_formula_facts(p, out);
-            collect_formula_facts(q, out);
+    for_each_formula_atom(fm, &mut |a| {
+        if let ProtoAtom::Action(_, fa) = a {
+            out.push(fa);
         }
-        ProtoFormula::Qua(_, _, p) => collect_formula_facts(p, out),
-    }
+    });
+    out
 }
 
 /// HS `formulaTerms` (Theory/Tools/Wellformedness.hs:918-920): the terms of
@@ -253,24 +250,8 @@ fn collect_formula_facts<'a, S, H, C, V>(
 /// instance [`for_each_formula_term`] runs.
 pub(crate) fn formula_terms<S, H, C, V>(fm: &ProtoFormula<S, H, C, V>) -> Vec<&VTerm<C, BVar<V>>> {
     let mut out = Vec::new();
-    collect_formula_terms(fm, &mut out);
+    for_each_formula_atom(fm, &mut |a| collect_atom_terms(a, &mut out));
     out
-}
-
-fn collect_formula_terms<'a, S, H, C, V>(
-    fm: &'a ProtoFormula<S, H, C, V>,
-    out: &mut Vec<&'a VTerm<C, BVar<V>>>,
-) {
-    match fm {
-        ProtoFormula::Atom(a) => collect_atom_terms(a, out),
-        ProtoFormula::Tf(_) => {}
-        ProtoFormula::Not(p) => collect_formula_terms(p, out),
-        ProtoFormula::Conn(_, p, q) => {
-            collect_formula_terms(p, out);
-            collect_formula_terms(q, out);
-        }
-        ProtoFormula::Qua(_, _, p) => collect_formula_terms(p, out),
-    }
 }
 
 /// HS `traverseFormulaAtom` (Theory/Model/Formula.hs:212-219#traverseFormulaAtom):
