@@ -261,12 +261,12 @@ pub enum Process<Ann, V> {
 /// Rebuild a process while transforming every action, combinator and
 /// annotation. The process shape and left-to-right traversal order are fixed;
 /// passes only supply the payload transformations.
-pub fn try_map_process<Ann, V, E>(
+pub fn try_map_process<Ann, V, Ann2, V2, E>(
     p: &Process<Ann, V>,
-    map_action: &mut impl FnMut(&SapicAction<V>) -> Result<SapicAction<V>, E>,
-    map_comb: &mut impl FnMut(&ProcessCombinator<V>) -> Result<ProcessCombinator<V>, E>,
-    map_ann: &mut impl FnMut(&Ann) -> Result<Ann, E>,
-) -> Result<Process<Ann, V>, E> {
+    map_action: &mut impl FnMut(&SapicAction<V>) -> Result<SapicAction<V2>, E>,
+    map_comb: &mut impl FnMut(&ProcessCombinator<V>) -> Result<ProcessCombinator<V2>, E>,
+    map_ann: &mut impl FnMut(&Ann) -> Result<Ann2, E>,
+) -> Result<Process<Ann2, V2>, E> {
     match p {
         Process::Null(ann) => Ok(Process::Null(map_ann(ann)?)),
         Process::Action(action, ann, body) => {
@@ -289,12 +289,12 @@ pub fn try_map_process<Ann, V, E>(
 }
 
 /// Infallible form of [`try_map_process`].
-pub fn map_process<Ann, V>(
+pub fn map_process<Ann, V, Ann2, V2>(
     p: &Process<Ann, V>,
-    map_action: &mut impl FnMut(&SapicAction<V>) -> SapicAction<V>,
-    map_comb: &mut impl FnMut(&ProcessCombinator<V>) -> ProcessCombinator<V>,
-    map_ann: &mut impl FnMut(&Ann) -> Ann,
-) -> Process<Ann, V> {
+    map_action: &mut impl FnMut(&SapicAction<V>) -> SapicAction<V2>,
+    map_comb: &mut impl FnMut(&ProcessCombinator<V>) -> ProcessCombinator<V2>,
+    map_ann: &mut impl FnMut(&Ann) -> Ann2,
+) -> Process<Ann2, V2> {
     let mut action = |a: &SapicAction<V>| Ok::<_, std::convert::Infallible>(map_action(a));
     let mut comb = |c: &ProcessCombinator<V>| Ok::<_, std::convert::Infallible>(map_comb(c));
     let mut ann = |a: &Ann| Ok::<_, std::convert::Infallible>(map_ann(a));

@@ -10,7 +10,7 @@
 
 use tamarin_term::lterm::LNTerm;
 use tamarin_theory::sapic::{
-    GoodAnnotation, Process, ProcessParsedAnnotation, SapicLVar, SapicTerm,
+    map_process, GoodAnnotation, Process, ProcessParsedAnnotation, SapicLVar, SapicTerm,
 };
 
 /// Variable annotation wrapper. Semantics: when combined with itself the
@@ -151,37 +151,15 @@ pub(crate) type AnnotatedProcess<V> = Process<ProcessAnnotation<V>, SapicLVar>;
 /// `toAnProcess` (sapic/src/Sapic/Annotation.hs:135-139): lift a parsed process into a
 /// translation annotation by wrapping the parsed annotation in
 /// `ProcessAnnotation`.
-pub(crate) fn to_annotated<V: Clone>(
-    p: Process<ProcessParsedAnnotation, SapicLVar>,
+pub(crate) fn to_annotated<V>(
+    p: &Process<ProcessParsedAnnotation, SapicLVar>,
 ) -> Process<ProcessAnnotation<V>, SapicLVar> {
-    fn go<V: Clone>(
-        p: Process<ProcessParsedAnnotation, SapicLVar>,
-    ) -> Process<ProcessAnnotation<V>, SapicLVar> {
-        match p {
-            Process::Null(ann) => Process::Null(ProcessAnnotation {
-                parsing_ann: ann,
-                ..Default::default()
-            }),
-            Process::Action(a, ann, body) => Process::Action(
-                a,
-                ProcessAnnotation {
-                    parsing_ann: ann,
-                    ..Default::default()
-                },
-                Box::new(go(*body)),
-            ),
-            Process::Comb(c, ann, l, r) => Process::Comb(
-                c,
-                ProcessAnnotation {
-                    parsing_ann: ann,
-                    ..Default::default()
-                },
-                Box::new(go(*l)),
-                Box::new(go(*r)),
-            ),
+    map_process(p, &mut Clone::clone, &mut Clone::clone, &mut |ann| {
+        ProcessAnnotation {
+            parsing_ann: ann.clone(),
+            ..Default::default()
         }
-    }
-    go(p)
+    })
 }
 
 /// `toProcess` (sapic/src/Sapic/Annotation.hs:141-144): drop the translation
@@ -191,18 +169,9 @@ pub(crate) fn to_annotated<V: Clone>(
 pub(crate) fn to_parsed<Ann: GoodAnnotation>(
     p: &Process<Ann, SapicLVar>,
 ) -> Process<ProcessParsedAnnotation, SapicLVar> {
-    match p {
-        Process::Null(a) => Process::Null(a.parsed().clone()),
-        Process::Action(ac, a, body) => {
-            Process::Action(ac.clone(), a.parsed().clone(), Box::new(to_parsed(body)))
-        }
-        Process::Comb(c, a, l, r) => Process::Comb(
-            c.clone(),
-            a.parsed().clone(),
-            Box::new(to_parsed(l)),
-            Box::new(to_parsed(r)),
-        ),
-    }
+    map_process(p, &mut Clone::clone, &mut Clone::clone, &mut |ann| {
+        ann.parsed().clone()
+    })
 }
 
 #[cfg(test)]
@@ -254,7 +223,7 @@ mod tests {
             )),
             Box::new(Process::Null(named("right"))),
         );
-        let annotated: Process<ProcessAnnotation<V>, SapicLVar> = to_annotated(parsed.clone());
+        let annotated: Process<ProcessAnnotation<V>, SapicLVar> = to_annotated(&parsed);
         // The lift wraps the parsed annotation, and does not replace it.  The
         // parsed part is reachable unchanged at the root.  The translation
         // fields start at their default values.

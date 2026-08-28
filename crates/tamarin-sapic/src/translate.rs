@@ -371,7 +371,7 @@ pub(crate) fn translate(
     // propagateNames, annotateSecretChannels, annotatePureStates,
     // translateTermsReport, translateLetDestr — then annotateLocks.
     let an_proc_pre: Process<ProcessAnnotation<LVar>, SapicLVar> =
-        propagate_names(to_annotated::<LVar>(plain.clone()));
+        propagate_names(to_annotated::<LVar>(plain));
     // annotateSecretChannels (sapic/src/Sapic.hs:45-101, see line 58): attach
     // `secret_channel` to every ChIn/ChOut whose channel is an always-secret
     // fresh variable.
