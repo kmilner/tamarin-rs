@@ -52,6 +52,12 @@
 #                  theory carry different node URLs and pair as MISSING_*
 #                  rather than as page divergence. Same underlying numbering
 #                  class as witness-index, seen through the URL space.
+#   error-page     The crawl plan asks for a source-case index past the
+#                  theory's last case. HS crashes on the out-of-range index and
+#                  answers 500 with `Prelude.!!: index too large` raised in
+#                  Web/Theory.hs; RS declines the URL and answers 404 naming the
+#                  path. Neither side renders proof content, so the pair holds no
+#                  proof state to compare.
 #   watch          No divergence observed at the baseline. The entry exists so
 #                  the path stays enumerated with the rest of the residue set;
 #                  it excuses nothing, so any divergence on these files fails
@@ -60,12 +66,19 @@
 # Baseline: scripts/results/websweep_ef3f0468_cert_20260805.tsv (submodule pin
 # ef3f0468, 86 files / 69,615 rows). Every symptom and count below is read off
 # that sweep; the 77 paths are the set websweep_residual.txt enumerates.
+#
+# Second sweep: scripts/results/websweep_ef3f0468_full_20260828.tsv (same
+# submodule pin, the whole 432-file corpus, 183,491 rows). Entries tagged
+# full_20260828 are read off that sweep.
+../../crates/tamarin-theory/tests/fixtures/nat_sort_regression.spthy	witness-index	DIFF	13 pages at full_20260828, 2 of them SVG where the wider witness label shifts every graphviz coordinate
+accountability/csf21-acc-unbounded/mixnets/basic/dmn-basic.spthy	witness-index	DIFF	10 pages at full_20260828
 accountability/masters-thesis-morio/CentralizedMonitor.spthy	witness-index	DIFF	15 pages at cert_20260805
 ake/bilinear/Joux.spthy	witness-index	DIFF	8 pages at cert_20260805
 ake/bilinear/Joux_EphkRev.spthy	witness-index	DIFF	5 pages at cert_20260805
 ake/bilinear/RYY.spthy	witness-index	DIFF	2 pages at cert_20260805
 ake/bilinear/Scott.spthy	witness-index	DIFF	125 pages at cert_20260805
 ake/bilinear/Scott_EphkRev.spthy	witness-index	DIFF	4 pages at cert_20260805
+ake/dh/DHKEA_NAXOS_C_eCK_PFS_keyreg_partially_matching.spthy	witness-index	DIFF	3 pages at full_20260828
 ake/dh/DHKEA_NAXOS_C_eCK_PFS_partially_matching.spthy	witness-index	DIFF	3 pages at cert_20260805
 ake/dh/NAXOS_eCK.spthy	witness-index	DIFF	17 pages at cert_20260805
 ake/dh/NAXOS_eCK_PFS.spthy	witness-index	DIFF	4 pages at cert_20260805
@@ -97,6 +110,12 @@ csf19-wrapping/gcm.spthy	witness-index	DIFF	4 pages at cert_20260805
 csf19-wrapping/siv.spthy	witness-index	DIFF	7 pages at cert_20260805
 csf20-disputeResolution/mixvote_ShHm.spthy	watch	none	crawled clean at cert_20260805
 csf23-subterms/ParserTests.spthy	witness-index	DIFF	1 page at cert_20260805
+csf26-ac/fast/DHKEA_NAXOS_C_eCK_PFS_keyreg_partially_matching.spthy	witness-index	DIFF	3 pages at full_20260828
+csf26-ac/fast/DHKEA_NAXOS_C_eCK_PFS_partially_matching.spthy	witness-index	DIFF	3 pages at full_20260828
+csf26-ac/fast/Joux.spthy	witness-index	DIFF	8 pages at full_20260828
+csf26-ac/fast/Joux_EphkRev.spthy	witness-index	DIFF	5 pages at full_20260828
+csf26-ac/fast/UM_three_pass.spthy	witness-index	DIFF	64 pages at full_20260828
+csf26-ac/fast/UM_three_pass_combined_fixed.spthy	witness-index	DIFF	27 pages at full_20260828
 experiments/JKL_TS2_2008-KI.spthy	witness-index	DIFF	5 pages at cert_20260805
 experiments/MTI_C0_eCK.spthy	witness-index	DIFF	4 pages at cert_20260805
 experiments/SignedDH_test_no_builtin.spthy	witness-index	DIFF	2 pages at cert_20260805
@@ -116,6 +135,7 @@ loops/Minimal_Loop_Example.spthy	watch	none	crawled clean at cert_20260805
 post17/chaum_unforgeability.spthy	witness-index	DIFF	4 pages at cert_20260805
 regression/diff/issue223.spthy	witness-index	DIFF	4 pages at cert_20260805
 regression/trace/issue216.spthy	witness-index	DIFF	4 pages at cert_20260805
+regression/trace/issue532.spthy	error-page	DIFF	6 pages at full_20260828
 related_work/StatVerif_ARR_CSF11/StatVerif_GM_Contract_Signing.spthy	witness-index	DIFF	4 pages at cert_20260805
 related_work/TPM_DKRS_CSF11/Envelope.spthy	witness-index	DIFF	1 page at cert_20260805
 related_work/TPM_DKRS_CSF11/TPM_Exclusive_Secrets.spthy	watch	none	crawled clean at cert_20260805
@@ -123,6 +143,9 @@ related_work/YubiSecure_KS_STM12/Yubikey_and_YubiHSM_multiset.spthy	watch	none	c
 related_work/YubiSecure_KS_STM12/Yubikey_multiset.spthy	witness-index	DIFF	40 pages at cert_20260805
 sapic/fast/SCADA/opc_ua_secure_conversation.spthy	witness-index	DIFF	149 pages at cert_20260805
 sapic/fast/Yubikey/Yubikey.spthy	witness-index	DIFF	1 page at cert_20260805
+sapic/fast/basic/channels2.spthy	error-page	DIFF	6 pages at full_20260828
+sapic/fast/feature-ass-immediate/test-all.spthy	error-page	DIFF	6 pages at full_20260828
+sapic/fast/feature-inevent-restriction/inevent-restriction-private-channel.spthy	error-page	DIFF	6 pages at full_20260828
 sapic/fast/feature-locations/AC.spthy	watch	none	crawled clean at cert_20260805
 sapic/fast/feature-locations/AC_counter_with_attack.spthy	watch	none	crawled clean at cert_20260805
 sapic/fast/feature-locations/OTP.spthy	witness-index	DIFF	14 pages at cert_20260805
@@ -135,6 +158,19 @@ sp14/Scott.spthy	witness-index	DIFF	4 pages at cert_20260805
 sp14/Scott_EphkRev.spthy	witness-index	DIFF	4 pages at cert_20260805
 thesis-LaraSchmid-evoting/chapter3_Alethea/alethea_sel_SmHh.spthy	witness-index	DIFF	4 pages at cert_20260805
 thesis-LaraSchmid-evoting/chapter3_Alethea/alethea_vot_ShHh.spthy	witness-index	DIFF	1 page at cert_20260805
+thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/Cronto_EA.spthy	error-page	DIFF	6 pages at full_20260828
+thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/Cronto_MA.spthy	error-page	DIFF	6 pages at full_20260828
+thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/Google2Step_EA.spthy	error-page	DIFF	6 pages at full_20260828
+thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/Google2Step_MA.spthy	error-page	DIFF	6 pages at full_20260828
+thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/MPAuth_EA.spthy	error-page	DIFF	6 pages at full_20260828
+thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/MPAuth_MA.spthy	error-page	DIFF	6 pages at full_20260828
+thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/MPAuth_MA_NoTellExceptOK.spthy	error-page	DIFF	6 pages at full_20260828
+thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/MPAuth_MA_NoTellOK.spthy	error-page	DIFF	6 pages at full_20260828
 thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/MPAuth_VC.spthy	witness-index	DIFF	6 pages at cert_20260805
+thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/OTPoverSMS_EA.spthy	error-page	DIFF	6 pages at full_20260828
+thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/OTPoverSMS_MA.spthy	error-page	DIFF	6 pages at full_20260828
+thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/Phoolproof_EA.spthy	error-page	DIFF	6 pages at full_20260828
+thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/Soundproof_EA.spthy	error-page	DIFF	6 pages at full_20260828
+thesis-LaraSchmid-evoting/chapter5_HumanErrors/HPagree.spthy	error-page	DIFF	6 pages at full_20260828
 wireguard/wireguard.spthy	witness-index	DIFF	80 pages at cert_20260805
 wisec21-5G-handover/inter-5G/EPS_to_5GS_over_N26/5G_handover.spthy	watch	none	crawled clean at cert_20260805
