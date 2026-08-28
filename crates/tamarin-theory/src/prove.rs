@@ -490,7 +490,7 @@ struct CachedSources {
     /// Per source: (goal join-key, refined case list, incomplete flag).
     sources: Vec<(
         crate::constraint::constraints::Goal,
-        Vec<(Vec<String>, crate::constraint::system::System)>,
+        crate::constraint::solver::sources::SourceCases,
         bool,
     )>,
 }
@@ -769,6 +769,43 @@ pub fn resolve_heuristic(
 }
 
 impl ProverSession {
+    /// Read the theory-wide, unspecialised context built by this session.
+    ///
+    /// This is intended for web views which only inspect immutable
+    /// close-time data. Lemma proof operations must use
+    /// [`Self::context_for_lemma`].
+    pub fn template_context(&self) -> &ProofContext {
+        &self.template_ctx
+    }
+
+    /// Build the same per-lemma context used by batch proving, including
+    /// refined-source cache restoration/saturation.
+    pub fn context_for_lemma(&self, lemma_name: &str) -> Result<ProofContext, ProveError> {
+        let lemma = self
+            .theory
+            .lookup_lemma(lemma_name)
+            .ok_or_else(|| ProveError::LemmaNotFound(lemma_name.to_string()))?;
+        let source_kind = lemma_source_kind(lemma);
+        let (mut ctx, source_key) = self.setup_per_lemma_ctx(lemma, lemma_name, source_kind)?;
+        let cache_disabled = tamarin_utils::env_gate!("TAM_RS_NO_SOURCE_CACHE");
+        self.restore_or_saturate_sources(&mut ctx, source_key, cache_disabled);
+        ctx.use_induction = induction_hint(lemma);
+        Ok(ctx)
+    }
+
+    /// Build a disposable raw-source context for interactive source views.
+    /// The session template stays pristine for later lemma specialisation;
+    /// materialised cases are reused through the session source cache.
+    pub fn context_for_raw_sources(&self) -> ProofContext {
+        let mut ctx = self.template_ctx.clone();
+        ctx.maude = ctx.maude.with_fresh_counter_from(0);
+        ctx.maude
+            .ensure_above(self.setup_counter_before.saturating_sub(1));
+        let cache_disabled = tamarin_utils::env_gate!("TAM_RS_NO_SOURCE_CACHE");
+        self.restore_or_saturate_sources(&mut ctx, Vec::new(), cache_disabled);
+        ctx
+    }
+
     /// Compute the `--precompute-only` stats (HS `prettyPrecomputation`,
     /// ClosedTheory.hs:553-575).  Forces the template's source cells
     /// (`ensure_saturated`), so it is intended for the precompute-only
@@ -979,16 +1016,11 @@ impl ProverSession {
                 // Restore cached cases onto this clone's lazy sources by goal,
                 // then mark saturation Done so `cases(ctx)` reads them directly
                 // and the expensive `ensure_saturated` pass is skipped.
-                // `ctx` is a fresh `template_ctx.clone()` (deep copy), so its
-                // shared bundle is uniquely owned; `Arc::get_mut` succeeds and
-                // the `src.incomplete = …` write cannot reach a sibling lemma.
-                let shared = std::sync::Arc::get_mut(&mut ctx.shared)
-                    .expect("per-lemma ctx uniquely owns its source bundle before search");
-                for src in &mut shared.full_sources {
+                for src in &mut ctx.full_sources {
                     if let Some((_, cases, incomplete)) =
                         entry.sources.iter().find(|(g, _, _)| *g == src.goal)
                     {
-                        src.cases_set_list(cases.clone());
+                        src.cases_set_shared(std::sync::Arc::clone(cases));
                         src.incomplete = *incomplete;
                     }
                 }
@@ -1008,7 +1040,7 @@ impl ProverSession {
                 let snapshot: Vec<_> = ctx
                     .full_sources
                     .iter()
-                    .map(|s| (s.goal.clone(), s.cases_or_empty_list(), s.incomplete))
+                    .map(|s| (s.goal.clone(), s.cases_shared_or_empty(), s.incomplete))
                     .collect();
                 self.source_cache
                     .lock()
@@ -1166,26 +1198,7 @@ pub fn prove_system_in_session(
     sys: crate::constraint::system::System,
     proof_bound: usize,
 ) -> Result<ProofNode, ProveError> {
-    let theory = &session.theory;
-    let lemma = theory
-        .lookup_lemma(lemma_name)
-        .ok_or_else(|| ProveError::LemmaNotFound(lemma_name.to_string()))?;
-    let lemma_source_kind = lemma_source_kind(lemma);
-
-    // --- Per-lemma ProofContext, mirroring `prove_lemma_in_session_mode`
-    // step for step (see the comments there for the HS citations). ------
-    // `[sources]` lemmas prove against RAW sources (no typing assumptions);
-    // all others fold in every prior `[sources]` lemma — the `source_key`
-    // gate is inside `setup_per_lemma_ctx`.
-    let (mut ctx, source_key) =
-        session.setup_per_lemma_ctx(lemma, lemma_name, lemma_source_kind)?;
-    // Saturate (or restore from the session's refined-source cache) — the
-    // search below always consults source cases, so this is unconditionally
-    // the `will_emit_bare_sorry == false` arm of `prove_lemma_in_session_mode`,
-    // including the delta==0 cache-write gate.
-    let cache_disabled = tamarin_utils::env_gate!("TAM_RS_NO_SOURCE_CACHE");
-    session.restore_or_saturate_sources(&mut ctx, source_key, cache_disabled);
-    ctx.use_induction = induction_hint(lemma);
+    let ctx = session.context_for_lemma(lemma_name)?;
     Ok(run_proof_search(&ctx, sys, proof_bound))
 }
 
@@ -1218,7 +1231,6 @@ fn prove_lemma_in_session_mode(
         session.restrictions.clone(),
         lemma_source_kind,
         lemma.trace_quantifier,
-        false,
         &g,
     );
     sys.insert_lemmas(reuse_lemmas);
@@ -1405,7 +1417,6 @@ pub fn prove_lemma_with_pool_file_heuristic(
         restrictions.clone(),
         lemma_source_kind,
         lemma.trace_quantifier,
-        false,
         &g,
     );
     // Haskell's `addLemmas`: push reuse lemmas into `sLemmas`. They

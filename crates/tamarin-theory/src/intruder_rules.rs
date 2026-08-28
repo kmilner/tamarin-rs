@@ -95,33 +95,6 @@ pub fn special_intruder_rules(diff: bool) -> Vec<IntrRuleAC> {
     out
 }
 
-/// `natIntruderRules` — direct port of
-/// `Theory.Tools.IntruderRules.natIntruderRules` (IntruderRules.hs:116-122):
-/// when the natural-numbers plugin is enabled, ONE constructor
-///
-/// ```text
-///   rule nat: [ ] --[ KU( x:nat ) ]-> [ KU( x:nat ) ]
-/// ```
-///
-/// built with the same `kuRule` shape as `PubConstr` (`kuRule
-/// NatConstrRule [] x_nat_var [x_nat_var]` — the nat variable is a
-/// rule-new variable).
-///
-/// Intentionally retained without a caller: HS wires `natIntruderRules`
-/// only into the diff-mode assembly (TheoryLoader.hs:933), and diff mode
-/// is not ported.
-pub fn nat_intruder_rules() -> Vec<IntrRuleAC> {
-    let x_nat = var_term(LVar::new("x", LSort::Nat, 0));
-    let mut r = Rule::new(
-        IntrRuleACInfo::NatConstr,
-        vec![],
-        vec![ku_fact(x_nat.clone())],
-        vec![ku_fact(x_nat.clone())],
-    );
-    r.new_vars = vec![x_nat];
-    vec![r]
-}
-
 /// `destructionRules diff st` — direct port of
 /// `Theory.Tools.IntruderRules.destructionRules`.  Walks the LHS of a
 /// context-subterm rewrite rule and emits a destructor `IntrRuleAC`

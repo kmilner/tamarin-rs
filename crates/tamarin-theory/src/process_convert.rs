@@ -289,21 +289,41 @@ fn strip_pat_match(t: &p::Term, match_vars: &mut BTreeSet<SapicLVar>) -> p::Term
     }
 }
 
-/// Convert a parser process into a `PlainProcess`.  Each node carries an empty
-/// [`ProcessParsedAnnotation`]; names/back-substitution are filled in by later
-/// passes (`propagate_names`, `rename_unique`).
+/// Convert a parser process into a `PlainProcess`. Nodes start with an empty
+/// [`ProcessParsedAnnotation`] except that `(P) @ location` sets the root
+/// node's location. Names/back-substitution are filled in by later passes
+/// (`propagate_names`, `rename_unique`).
 pub fn convert_process(proc: &p::Process, sig: &MaudeSig) -> Result<PlainProcess, ConvertError> {
+    convert_process_with(proc, sig, &mut |_, _, _| {
+        Err(ConvertError::new(
+            "process calls require convert_process_with_defs",
+        ))
+    })
+}
+
+/// Shared recursive parser-process conversion. Process-call policy is the
+/// only part that depends on the surrounding definition environment, so it is
+/// supplied by the caller rather than duplicating this complete tree walk in
+/// `process_inline`.
+pub(crate) fn convert_process_with<F>(
+    proc: &p::Process,
+    sig: &MaudeSig,
+    resolve_call: &mut F,
+) -> Result<PlainProcess, ConvertError>
+where
+    F: FnMut(&str, &[p::Term], &MaudeSig) -> Result<PlainProcess, ConvertError>,
+{
     let ann = ProcessParsedAnnotation::empty();
     match proc {
         p::Process::Null => Ok(Process::Null(ann)),
         p::Process::Action { action: act, body } => Ok(Process::Action(
             action(act, sig)?,
             ann,
-            Box::new(convert_process(body, sig)?),
+            Box::new(convert_process_with(body, sig, resolve_call)?),
         )),
         p::Process::Comb { comb, left, right } => {
-            let l = Box::new(convert_process(left, sig)?);
-            let r = Box::new(convert_process(right, sig)?);
+            let l = Box::new(convert_process_with(left, sig, resolve_call)?);
+            let r = Box::new(convert_process_with(right, sig, resolve_call)?);
             let c = combinator(comb, sig)?;
             Ok(Process::Comb(c, ann, l, r))
         }
@@ -313,21 +333,29 @@ pub fn convert_process(proc: &p::Process, sig: &MaudeSig) -> Result<PlainProcess
         p::Process::Replication(body) => Ok(Process::Action(
             SapicAction::Rep,
             ann,
-            Box::new(convert_process(body, sig)?),
+            Box::new(convert_process_with(body, sig, resolve_call)?),
         )),
-        p::Process::Call { .. } => {
-            // Process-call inlining requires the theory's process-definition
-            // map; the real pipeline goes through
-            // `process_inline::convert_process_with_defs`.  This def-less
-            // entry point (used by unit tests) cannot resolve a call.
-            Err(ConvertError::new(
-                "process calls require convert_process_with_defs",
-            ))
+        p::Process::Call { name, args } => resolve_call(name, args, sig),
+        p::Process::AtAnnotation(inner, location) => {
+            // HS `processAddAnnotation p (mempty { location = Just m })`:
+            // attach the converted location to the root of the parenthesised
+            // process, preserving any annotation already present there.
+            let converted = convert_process_with(inner, sig, resolve_call)?;
+            let mut location_ann = ProcessParsedAnnotation::empty();
+            location_ann.location = Some(term(location, sig)?);
+            Ok(add_root_annotation(converted, location_ann))
         }
-        p::Process::AtAnnotation(inner, _) => {
-            // Location annotation (`@ loc`) — drop the location and descend.
-            convert_process(inner, sig)
-        }
+    }
+}
+
+pub(crate) fn add_root_annotation(
+    p: PlainProcess,
+    ann_add: ProcessParsedAnnotation,
+) -> PlainProcess {
+    match p {
+        Process::Null(a) => Process::Null(a.append(ann_add)),
+        Process::Action(ac, a, body) => Process::Action(ac, a.append(ann_add), body),
+        Process::Comb(c, a, l, r) => Process::Comb(c, a.append(ann_add), l, r),
     }
 }
 
@@ -469,6 +497,21 @@ mod tests {
             panic!("expected the replicated event as Rep's child");
         };
         assert_eq!(crate::fact::fact_tag_name(&f.tag), "A");
+    }
+
+    #[test]
+    fn convert_at_annotation_sets_the_root_location() {
+        let location = p::Term::Pair(vec![
+            p::Term::PubLit("site".into()),
+            p::Term::PubLit("device".into()),
+        ]);
+        let src = p::Process::AtAnnotation(Box::new(event("A")), location.clone());
+
+        let converted = convert_process(&src, &msig()).unwrap();
+        assert_eq!(
+            converted.annotation().location,
+            Some(term(&location, &msig()).unwrap())
+        );
     }
 
     #[test]

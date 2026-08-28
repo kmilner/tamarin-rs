@@ -1210,6 +1210,51 @@ fn process_items_keep_their_source_position() {
     assert_eq!(*msg, args[0]);
 }
 
+#[test]
+fn process_calls_only_see_preceding_definitions() {
+    let prior = "theory T begin\n\
+                 let P = out('ok')\n\
+                 process: P\n\
+                 end\n";
+    elaborate(&parse_theory(prior, &[]).unwrap()).expect("a prior definition is visible");
+
+    let forward = "theory T begin\n\
+                   process: P\n\
+                   let P = out('too-late')\n\
+                   end\n";
+    let err = elaborate(&parse_theory(forward, &[]).unwrap()).unwrap_err();
+    assert!(err.message.contains("process not defined: P"), "{err}");
+}
+
+#[test]
+fn recursive_process_definitions_fail_cleanly() {
+    let self_recursive = "theory T begin\n\
+                          let P = P\n\
+                          end\n";
+    let err = elaborate(&parse_theory(self_recursive, &[]).unwrap()).unwrap_err();
+    assert!(err.message.contains("process not defined: P"), "{err}");
+
+    let mutually_recursive = "theory T begin\n\
+                              let P = Q\n\
+                              let Q = P\n\
+                              end\n";
+    let err = elaborate(&parse_theory(mutually_recursive, &[]).unwrap()).unwrap_err();
+    assert!(err.message.contains("process not defined: Q"), "{err}");
+}
+
+#[test]
+fn duplicate_process_definitions_are_rejected() {
+    let src = "theory T begin\n\
+               let P = 0\n\
+               let P = 0\n\
+               end\n";
+    let err = elaborate(&parse_theory(src, &[]).unwrap()).unwrap_err();
+    assert!(
+        err.message.contains("duplicate process definition: P"),
+        "{err}"
+    );
+}
+
 /// One process-bearing item as the comparison below reads it.
 #[derive(Debug, PartialEq)]
 enum ProcessProbe {
@@ -1223,31 +1268,52 @@ enum ProcessProbe {
     DiffEquiv(crate::sapic::PlainProcess),
 }
 
-/// The process-bearing parsed items converted against the FINISHED signature,
-/// which is the signature every caller outside `elaborate` holds.
+/// The process-bearing parsed items converted in source order against the
+/// FINISHED signature. This independently mirrors the elaborator's definition
+/// visibility while keeping the corpus test's signature comparison.
 fn parsed_process_probes(
     thy: &p::Theory,
     sig: &tamarin_term::maude_sig::MaudeSig,
 ) -> Result<Vec<ProcessProbe>, String> {
-    let defs = crate::process_inline::collect_process_defs(&thy.items);
-    let conv = |pr: &p::Process| {
-        crate::process_inline::convert_process_with_defs(pr, &defs, sig).map_err(|e| e.message)
-    };
+    let mut defs = crate::process_inline::ProcessDefMap::new();
     let mut out = Vec::new();
     for item in &thy.items {
         match item {
-            p::TheoryItem::TopLevelProcess(pr) => out.push(ProcessProbe::Process(conv(pr)?)),
-            p::TheoryItem::ProcessDef(d) => out.push(ProcessProbe::Def(
-                d.name.clone(),
-                d.vars
-                    .as_ref()
-                    .map(|vs| vs.iter().map(varspec_to_sapic).collect()),
-                conv(&d.body)?,
-            )),
-            p::TheoryItem::EquivLemma(p1, p2) => {
-                out.push(ProcessProbe::Equiv(conv(p1)?, conv(p2)?))
+            p::TheoryItem::TopLevelProcess(pr) => {
+                let p = crate::process_inline::convert_process_with_defs(pr, &defs, sig)
+                    .map_err(|e| e.message)?;
+                out.push(ProcessProbe::Process(p));
             }
-            p::TheoryItem::DiffEquivLemma(pr) => out.push(ProcessProbe::DiffEquiv(conv(pr)?)),
+            p::TheoryItem::ProcessDef(d) => {
+                if defs.contains_key(&d.name) {
+                    return Err(format!("duplicate process definition: {}", d.name));
+                }
+                let vars = d
+                    .vars
+                    .as_ref()
+                    .map(|vs| vs.iter().map(varspec_to_sapic).collect());
+                let body = crate::process_inline::convert_process_with_defs(&d.body, &defs, sig)
+                    .map_err(|e| e.message)?;
+                let def = crate::theory::ProcessDef {
+                    name: d.name.clone(),
+                    vars: vars.clone(),
+                    body: body.clone(),
+                };
+                defs.insert(d.name.clone(), def);
+                out.push(ProcessProbe::Def(d.name.clone(), vars, body));
+            }
+            p::TheoryItem::EquivLemma(p1, p2) => {
+                let p1 = crate::process_inline::convert_process_with_defs(p1, &defs, sig)
+                    .map_err(|e| e.message)?;
+                let p2 = crate::process_inline::convert_process_with_defs(p2, &defs, sig)
+                    .map_err(|e| e.message)?;
+                out.push(ProcessProbe::Equiv(p1, p2))
+            }
+            p::TheoryItem::DiffEquivLemma(pr) => {
+                let p = crate::process_inline::convert_process_with_defs(pr, &defs, sig)
+                    .map_err(|e| e.message)?;
+                out.push(ProcessProbe::DiffEquiv(p));
+            }
             _ => {}
         }
     }

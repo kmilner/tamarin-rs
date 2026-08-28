@@ -8,10 +8,8 @@
 //!   - `baseTransAction` (94-214) — every `SapicAction` arm
 //!   - `baseTransComb`   (226-306) — every `ProcessCombinator` arm
 //!   - the hardcoded restrictions `baseRestr` (449-485) selects from:
-//!     `single_session` and `predicate_eq`/`predicate_not_eq` are built
-//!     directly as parser-AST restrictions, while `set_in`/`set_notin`,
-//!     `in_event` and `locking_<idx>` go through `parse_formula_str` on HS's
-//!     verbatim restriction text (as HS's own `toEx`/`parseRestriction` does).
+//!     `single_session`, state, predicate, event and locking restrictions are
+//!     built directly in the theory's internal formula representation.
 //!
 //! `baseRestr`'s selection logic itself lives in `translate`, which owns the
 //! process-shape predicates (`contains isLookup` etc.) it dispatches on.
@@ -914,44 +912,47 @@ pub(crate) fn base_init(
 /// The `single_session` restriction `resSingleSession`
 /// (Basetranslation.hs:361-364), one of the hard-coded restrictions
 /// `baseRestr` assembles (Basetranslation.hs:449-479, see line 459).  The
-/// formula body is HS's hardcoded string, parsed as HS's
-/// `toEx`/`parseRestriction` parses it.
-pub(crate) fn single_session_restriction() -> tamarin_parser::ast::Restriction {
-    parse_restriction("single_session", "All #i #j. Init()@i & Init()@j ==> #i=#j")
+/// formula body is HS's hardcoded formula.
+pub(crate) fn single_session_restriction() -> tamarin_theory::restriction::Restriction {
+    use crate::restriction_builder as rb;
+    let i = rb::node("i");
+    let j = rb::node("j");
+    rb::restriction(
+        "single_session",
+        rb::all(
+            &[i, j],
+            rb::action("Init", &[], i)
+                .and(rb::action("Init", &[], j))
+                .implies(rb::eq(i, j)),
+        ),
+    )
 }
 
 /// The two conditional-equality restrictions `resEq` / `resNotEq`
 /// (Basetranslation.hs:427-436), added by `baseRestr` when the process
 /// `contains isEq` (a `CondEq` combinator).  The formula bodies are HS's
 /// hardcoded strings, parsed as HS's `toEx`/`parseRestriction` parses them.
-pub(crate) fn predicate_restrictions() -> Vec<tamarin_parser::ast::Restriction> {
+pub(crate) fn predicate_restrictions() -> Vec<tamarin_theory::restriction::Restriction> {
+    use crate::restriction_builder as rb;
+    let i = rb::node("i");
+    let a = rb::msg("a");
+    let b = rb::msg("b");
     vec![
-        parse_restriction("predicate_eq", "All #i a b. Pred_Eq(a,b)@i ==> a = b"),
-        parse_restriction(
+        rb::restriction(
+            "predicate_eq",
+            rb::all(
+                &[i, a, b],
+                rb::action("Pred_Eq", &[a, b], i).implies(rb::eq(a, b)),
+            ),
+        ),
+        rb::restriction(
             "predicate_not_eq",
-            "All #i a b. Pred_Not_Eq(a,b)@i ==> not(a = b)",
+            rb::all(
+                &[i, a, b],
+                rb::action("Pred_Not_Eq", &[a, b], i).implies(rb::eq(a, b).not()),
+            ),
         ),
     ]
-}
-
-/// Parse one of the hard-coded restriction strings (`parseRestriction`'s job in
-/// HS) and wrap it in a named `Restriction`.  Shared by every hard-coded
-/// restriction builder so the parse+panic+wrap shape lives in one place.
-///
-/// HS `parseRestriction = parseString [] …` (Theory/Text/Parser/Restriction.hs:65-66)
-/// and `parseString` seeds the parser state with `pairMaudeSig`
-/// (Theory/Text/Parser/Token.hs:250-258), not the theory's signature, so
-/// these strings are read against the pair signature alone.
-fn parse_restriction(name: &str, src: &str) -> tamarin_parser::ast::Restriction {
-    use tamarin_parser::ast as p;
-    let formula =
-        tamarin_parser::parser::parse_formula_str(src, &tamarin_term::maude_sig::pair_maude_sig())
-            .unwrap_or_else(|e| panic!("Error parsing hard-coded restriction {name}: {e:?}"));
-    p::Restriction {
-        name: name.to_string(),
-        formula,
-        attributes: vec![],
-    }
 }
 
 /// The `set_in` / `set_notin` restrictions (Basetranslation.hs:332-359), added
@@ -961,38 +962,66 @@ fn parse_restriction(name: &str, src: &str) -> tamarin_parser::ast::Restriction 
 /// byte-identical to HS's hand-written strings, and AC/sort handling matches the
 /// parser path).  `has_delete` selects the full variants (the process also
 /// `contains isDelete`) over the NoDelete variants.
-pub(crate) fn state_restrictions(has_delete: bool) -> Vec<tamarin_parser::ast::Restriction> {
-    // `parseRestriction`'s formula body, verbatim from Basetranslation.hs.
-    let (set_in_src, set_notin_src) = if has_delete {
-        (
-            // resSetIn (Basetranslation.hs:333-338)
-            "All x y #t3 . IsIn(x,y)@t3 ==>\n\
-             (Ex #t2 . Insert(x,y)@t2 & #t2<#t3\n\
-             & ( All #t1 . Delete(x)@t1 ==> (#t1<#t2 |  #t3<#t1))\n\
-             & ( All #t1 yp . Insert(x,yp)@t1 ==> (#t1<#t2 | #t1=#t2 | #t3<#t1))\n\
-             )",
-            // resSetNotIn (Basetranslation.hs:341-345)
-            "All x #t3 . IsNotSet(x)@t3 ==>\n\
-             (All #t1 y . Insert(x,y)@t1 ==>  #t3<#t1 )\n\
-             | ( Ex #t1 .   Delete(x)@t1 & #t1<#t3\n\
-             &  (All #t2 y . Insert(x,y)@t2 & #t2<#t3 ==>  #t2<#t1))",
-        )
+pub(crate) fn state_restrictions(
+    has_delete: bool,
+) -> Vec<tamarin_theory::restriction::Restriction> {
+    use crate::restriction_builder as rb;
+    let x = rb::msg("x");
+    let y = rb::msg("y");
+    let yp = rb::msg("yp");
+    let t1 = rb::node("t1");
+    let t2 = rb::node("t2");
+    let t3 = rb::node("t3");
+
+    let later_insert = rb::all(
+        &[t1, yp],
+        rb::action("Insert", &[x, yp], t1)
+            .implies(rb::less(t1, t2).or(rb::eq(t1, t2)).or(rb::less(t3, t1))),
+    );
+    let mut set_in_body = rb::action("Insert", &[x, y], t2).and(rb::less(t2, t3));
+    if has_delete {
+        set_in_body = set_in_body.and(rb::all(
+            &[t1],
+            rb::action("Delete", &[x], t1).implies(rb::less(t1, t2).or(rb::less(t3, t1))),
+        ));
+    }
+    set_in_body = set_in_body.and(later_insert);
+    let set_in = rb::restriction(
+        "set_in",
+        rb::all(
+            &[x, y, t3],
+            rb::action("IsIn", &[x, y], t3).implies(rb::exists(&[t2], set_in_body)),
+        ),
+    );
+
+    let future_insert = rb::all(
+        &[t1, y],
+        rb::action("Insert", &[x, y], t1).implies(rb::less(t3, t1)),
+    );
+    let set_notin_body = if has_delete {
+        future_insert.or(rb::exists(
+            &[t1],
+            rb::action("Delete", &[x], t1)
+                .and(rb::less(t1, t3))
+                .and(rb::all(
+                    &[t2, y],
+                    rb::action("Insert", &[x, y], t2)
+                        .and(rb::less(t2, t3))
+                        .implies(rb::less(t2, t1)),
+                )),
+        ))
     } else {
-        (
-            // resSetInNoDelete (Basetranslation.hs:349-353)
-            "All x y #t3 . IsIn(x,y)@t3 ==>\n\
-             (Ex #t2 . Insert(x,y)@t2 & #t2<#t3\n\
-             & ( All #t1 yp . Insert(x,yp)@t1 ==> (#t1<#t2 | #t1=#t2 | #t3<#t1))\n\
-             )",
-            // resSetNotInNoDelete (Basetranslation.hs:356-358)
-            "All x #t3 . IsNotSet(x)@t3 ==>\n\
-             (All #t1 y . Insert(x,y)@t1 ==>  #t3<#t1 )",
-        )
+        future_insert
     };
-    vec![
-        parse_restriction("set_in", set_in_src),
-        parse_restriction("set_notin", set_notin_src),
-    ]
+    let set_notin = rb::restriction(
+        "set_notin",
+        rb::all(
+            &[x, t3],
+            rb::action("IsNotSet", &[x], t3).implies(set_notin_body),
+        ),
+    );
+
+    vec![set_in, set_notin]
 }
 
 /// The `in_event` restriction `resInEv` (Basetranslation.hs:439-444), added by
@@ -1000,11 +1029,31 @@ pub(crate) fn state_restrictions(has_delete: bool) -> Vec<tamarin_parser::ast::R
 /// the other hardcoded restrictions, HS parses the string with
 /// `parseRestriction`; we parse the same formula body so the rendered output is
 /// byte-identical to HS.
-pub(crate) fn in_event_restriction() -> tamarin_parser::ast::Restriction {
-    let src = "All x #t3. ChannelIn(x)@t3 ==> (Ex #t2. K(x)@t2 & #t2 < #t3\n\
-               & (All #t1. Event()@t1  ==> #t1 < #t2 | #t3 < #t1)\n\
-               & (All #t1 xp. K(xp)@t1 ==> #t1 < #t2 | #t1 = #t2 | #t3 < #t1))";
-    parse_restriction("in_event", src)
+pub(crate) fn in_event_restriction() -> tamarin_theory::restriction::Restriction {
+    use crate::restriction_builder as rb;
+    let x = rb::msg("x");
+    let xp = rb::msg("xp");
+    let t1 = rb::node("t1");
+    let t2 = rb::node("t2");
+    let t3 = rb::node("t3");
+    let rhs = rb::action("K", &[x], t2)
+        .and(rb::less(t2, t3))
+        .and(rb::all(
+            &[t1],
+            rb::action("Event", &[], t1).implies(rb::less(t1, t2).or(rb::less(t3, t1))),
+        ))
+        .and(rb::all(
+            &[t1, xp],
+            rb::action("K", &[xp], t1)
+                .implies(rb::less(t1, t2).or(rb::eq(t1, t2)).or(rb::less(t3, t1))),
+        ));
+    rb::restriction(
+        "in_event",
+        rb::all(
+            &[x, t3],
+            rb::action("ChannelIn", &[x], t3).implies(rb::exists(&[t2], rhs)),
+        ),
+    )
 }
 
 // =============================================================================
@@ -1014,64 +1063,60 @@ pub(crate) fn in_event_restriction() -> tamarin_parser::ast::Restriction {
 /// `resLockingPOS` (Basetranslation.hs:368-376): the per-lock locking
 /// restriction.  `LockPOS`/`UnlockPOS` are placeholder fact names that
 /// `resLocking` rewrites to `Lock_<idx>`/`Unlock_<idx>` for the given lock var.
-const RES_LOCKING_POS: &str = "All p pp l x lp #t1 #t3. LockPOS(p, l, x)@t1 & Lock(pp, lp, x)@t3 ==>\n\
-        (#t1<#t3 & (Ex #t2. UnlockPOS(p, l, x)@t2 & #t1 < #t2 & #t2 < #t3\n\
-                   & (All #t0 pp. Unlock(pp, l, x)@t0 ==> #t0 = #t2)\n\
-                   & (All pp lpp #t0. Lock(pp, lpp, x)@t0 ==> #t0 < #t1 | #t0 = #t1 | #t2 < #t0)\n\
-                   & (All pp lpp #t0. Unlock(pp, lpp, x)@t0 ==> #t0 < #t1 | #t2 < #t0 | #t2 = #t0 )))\n\
-      | #t3<#t1 | #t1=#t3";
-
-/// `resLockingPOSNoUnlock` (Basetranslation.hs:379-383): the locking
-/// restriction for a lock with no matching unlock.
-const RES_LOCKING_POS_NO_UNLOCK: &str =
-    "All p pp l x lp #t1 #t3. LockPOS(p, l, x)@t1 & Lock(pp, lp, x)@t3 ==>\n\
-        #t3<#t1 | #t1=#t3";
-
 /// `resLocking hasUnlock v` (Basetranslation.hs:406-425): produce the
-/// `locking_<idx v>` restriction by parsing `resLockingPOS` (or the NoUnlock
-/// variant) and rewriting the `LockPOS`/`UnlockPOS` action facts to
-/// `Lock_<idx>`/`Unlock_<idx>` (HS `mapAtoms subst`, with
+/// `locking_<idx v>` restriction with `Lock_<idx>`/`Unlock_<idx>` action facts
+/// (HS `mapAtoms subst`, with
 /// `hardcode s = s ++ "_" ++ show (lvarIdx v)`).
-pub(crate) fn res_locking(has_unlock: bool, v: &LVar) -> tamarin_parser::ast::Restriction {
-    let src = if has_unlock {
-        RES_LOCKING_POS
-    } else {
-        RES_LOCKING_POS_NO_UNLOCK
-    };
+pub(crate) fn res_locking(has_unlock: bool, v: &LVar) -> tamarin_theory::restriction::Restriction {
+    use crate::restriction_builder as rb;
     let idx = v.idx;
-    let mut restr = parse_restriction(&format!("locking_{idx}"), src);
-    rename_lock_pos_atoms(&mut restr.formula, idx);
-    restr
-}
+    let p = rb::msg("p");
+    let pp = rb::msg("pp");
+    let l = rb::msg("l");
+    let lpp = rb::msg("lpp");
+    let x = rb::msg("x");
+    let lp = rb::msg("lp");
+    let t0 = rb::node("t0");
+    let t1 = rb::node("t1");
+    let t2 = rb::node("t2");
+    let t3 = rb::node("t3");
+    let lock_pos = format!("Lock_{idx}");
+    let unlock_pos = format!("Unlock_{idx}");
 
-/// HS `subst` inside `resLocking` (Basetranslation.hs:414-422): rewrite the
-/// `LockPOS` 3-ary action fact name to `Lock_<idx>` and `UnlockPOS` to
-/// `Unlock_<idx>`.  Non-POS `Lock`/`Unlock` facts are left untouched.
-fn rename_lock_pos_atoms(f: &mut tamarin_parser::ast::Formula, idx: u64) {
-    use tamarin_parser::ast as p;
-    fn walk_atom(a: &mut p::Atom, idx: u64) {
-        if let p::Atom::Action(fact, _) = a {
-            if fact.name == "LockPOS" && fact.args.len() == 3 {
-                fact.name = format!("Lock_{idx}");
-            } else if fact.name == "UnlockPOS" && fact.args.len() == 3 {
-                fact.name = format!("Unlock_{idx}");
-            }
-        }
-    }
-    fn walk(f: &mut p::Formula, idx: u64) {
-        use p::Formula::*;
-        match f {
-            True | False => {}
-            Atom(a) => walk_atom(a, idx),
-            Not(g) => walk(g, idx),
-            And(a, b) | Or(a, b) | Implies(a, b) | Iff(a, b) => {
-                walk(a, idx);
-                walk(b, idx);
-            }
-            Forall(_, body) | Exists(_, body) => walk(body, idx),
-        }
-    }
-    walk(f, idx);
+    let rhs = if has_unlock {
+        let between = rb::action(&unlock_pos, &[p, l, x], t2)
+            .and(rb::less(t1, t2))
+            .and(rb::less(t2, t3))
+            .and(rb::all(
+                &[t0, pp],
+                rb::action("Unlock", &[pp, l, x], t0).implies(rb::eq(t0, t2)),
+            ))
+            .and(rb::all(
+                &[pp, lpp, t0],
+                rb::action("Lock", &[pp, lpp, x], t0)
+                    .implies(rb::less(t0, t1).or(rb::eq(t0, t1)).or(rb::less(t2, t0))),
+            ))
+            .and(rb::all(
+                &[pp, lpp, t0],
+                rb::action("Unlock", &[pp, lpp, x], t0)
+                    .implies(rb::less(t0, t1).or(rb::less(t2, t0)).or(rb::eq(t2, t0))),
+            ));
+        rb::less(t1, t3)
+            .and(rb::exists(&[t2], between))
+            .or(rb::less(t3, t1))
+            .or(rb::eq(t1, t3))
+    } else {
+        rb::less(t3, t1).or(rb::eq(t1, t3))
+    };
+    rb::restriction(
+        format!("locking_{idx}"),
+        rb::all(
+            &[p, pp, l, x, lp, t1, t3],
+            rb::action(&lock_pos, &[p, l, x], t1)
+                .and(rb::action("Lock", &[pp, lp, x], t3))
+                .implies(rhs),
+        ),
+    )
 }
 
 #[cfg(test)]
@@ -1094,21 +1139,17 @@ mod tests {
     /// `All #i` binders introduce.
     #[test]
     fn hardcoded_restrictions_lower_to_the_oracle_formulas() {
-        use tamarin_theory::formula::{from_parser, to_lnformula};
         use tamarin_theory::pretty_formula::pretty_lnformula;
-        let msig = tamarin_term::maude_sig::pair_maude_sig();
-        let lower = |r: &tamarin_parser::ast::Restriction| {
-            pretty_lnformula(&to_lnformula(&from_parser(&r.formula, &msig).unwrap()).unwrap())
-        };
+        let pretty = |r: &tamarin_theory::restriction::Restriction| pretty_lnformula(&r.formula);
         assert_eq!(
-            lower(&single_session_restriction()),
+            pretty(&single_session_restriction()),
             "\u{2200} #i #j. ((Init( ) @ #i) \u{2227} (Init( ) @ #j)) \u{21d2} (#i = #j)"
         );
         let preds = predicate_restrictions();
         assert_eq!(
             preds
                 .iter()
-                .map(|r| (r.name.as_str(), lower(r)))
+                .map(|r| (r.name.as_str(), pretty(r)))
                 .collect::<Vec<_>>(),
             [
                 (
@@ -1121,6 +1162,101 @@ mod tests {
                         .to_string()
                 ),
             ]
+        );
+    }
+
+    /// The direct internal builders preserve the exact formula trees produced
+    /// by the former hard-coded-string -> parser AST -> internal formula path.
+    /// This pins connective associativity, quantifier order and the shadowed
+    /// binders in the state and locking restrictions.
+    #[test]
+    fn direct_restriction_builders_match_previous_parser_lowering() {
+        use tamarin_theory::formula::{from_parser, to_lnformula, LNFormula};
+
+        let msig = tamarin_term::maude_sig::pair_maude_sig();
+        let lower = |src: &str| -> LNFormula {
+            let parsed = tamarin_parser::parser::parse_formula_str(src, &msig)
+                .expect("former hard-coded restriction parses");
+            to_lnformula(&from_parser(&parsed, &msig).expect("restriction lowers"))
+                .expect("hard-coded restriction contains no predicate sugar")
+        };
+        let same = |restriction: tamarin_theory::restriction::Restriction, src: &str| {
+            assert_eq!(restriction.formula, lower(src), "{}", restriction.name);
+        };
+
+        same(
+            single_session_restriction(),
+            "All #i #j. Init()@i & Init()@j ==> #i=#j",
+        );
+        let predicates = predicate_restrictions();
+        assert_eq!(
+            predicates[0].formula,
+            lower("All #i a b. Pred_Eq(a,b)@i ==> a = b")
+        );
+        assert_eq!(
+            predicates[1].formula,
+            lower("All #i a b. Pred_Not_Eq(a,b)@i ==> not(a = b)")
+        );
+
+        let with_delete = state_restrictions(true);
+        assert_eq!(
+            with_delete[0].formula,
+            lower(
+                "All x y #t3 . IsIn(x,y)@t3 ==>\n\
+                 (Ex #t2 . Insert(x,y)@t2 & #t2<#t3\n\
+                 & ( All #t1 . Delete(x)@t1 ==> (#t1<#t2 | #t3<#t1))\n\
+                 & ( All #t1 yp . Insert(x,yp)@t1 ==> (#t1<#t2 | #t1=#t2 | #t3<#t1))\n\
+                 )"
+            )
+        );
+        assert_eq!(
+            with_delete[1].formula,
+            lower(
+                "All x #t3 . IsNotSet(x)@t3 ==>\n\
+                 (All #t1 y . Insert(x,y)@t1 ==> #t3<#t1)\n\
+                 | (Ex #t1 . Delete(x)@t1 & #t1<#t3\n\
+                 & (All #t2 y . Insert(x,y)@t2 & #t2<#t3 ==> #t2<#t1))"
+            )
+        );
+
+        let without_delete = state_restrictions(false);
+        assert_eq!(
+            without_delete[0].formula,
+            lower(
+                "All x y #t3 . IsIn(x,y)@t3 ==>\n\
+                 (Ex #t2 . Insert(x,y)@t2 & #t2<#t3\n\
+                 & (All #t1 yp . Insert(x,yp)@t1 ==> (#t1<#t2 | #t1=#t2 | #t3<#t1)))"
+            )
+        );
+        assert_eq!(
+            without_delete[1].formula,
+            lower(
+                "All x #t3 . IsNotSet(x)@t3 ==>\n\
+                 (All #t1 y . Insert(x,y)@t1 ==> #t3<#t1)"
+            )
+        );
+
+        same(
+            in_event_restriction(),
+            "All x #t3. ChannelIn(x)@t3 ==> (Ex #t2. K(x)@t2 & #t2 < #t3\n\
+             & (All #t1. Event()@t1 ==> #t1 < #t2 | #t3 < #t1)\n\
+             & (All #t1 xp. K(xp)@t1 ==> #t1 < #t2 | #t1 = #t2 | #t3 < #t1))",
+        );
+
+        let lock = LVar::new("lock", LSort::Msg, 7);
+        same(
+            res_locking(true, &lock),
+            "All p pp l x lp #t1 #t3. Lock_7(p, l, x)@t1 & Lock(pp, lp, x)@t3 ==>\n\
+             (#t1<#t3 & (Ex #t2. Unlock_7(p, l, x)@t2 & #t1 < #t2 & #t2 < #t3\n\
+             & (All #t0 pp. Unlock(pp, l, x)@t0 ==> #t0 = #t2)\n\
+             & (All pp lpp #t0. Lock(pp, lpp, x)@t0 ==> #t0 < #t1 | #t0 = #t1 | #t2 < #t0)\n\
+             & (All pp lpp #t0. Unlock(pp, lpp, x)@t0 ==> #t0 < #t1 | #t2 < #t0 | #t2 = #t0)))\n\
+             | #t3<#t1 | #t1=#t3",
+        );
+        same(
+            res_locking(false, &lock),
+            "All p pp l x lp #t1 #t3. Lock_7(p, l, x)@t1 & Lock(pp, lp, x)@t3 ==>\n\
+             #t3<#t1 | #t1=#t3",
         );
     }
 

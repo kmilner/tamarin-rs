@@ -68,21 +68,6 @@ where
         SubstVFresh { map }
     }
 
-    /// `mapRangeVFresh`: rewrite the range elements; result variables are
-    /// considered fresh.
-    ///
-    /// Intentionally retained for parity with HS `mapRangeVFresh`; no current
-    /// Rust caller (the live `Subst::map_range` is the distinct free-subst
-    /// variant).
-    pub fn map_range<F: FnMut(VTerm<C, V>) -> VTerm<C, V>>(&self, mut f: F) -> Self {
-        let map = self
-            .map
-            .iter()
-            .map(|(v, t)| (v.clone(), f(t.clone())))
-            .collect();
-        SubstVFresh { map }
-    }
-
     pub fn dom(&self) -> impl Iterator<Item = &V> {
         self.map.keys()
     }

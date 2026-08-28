@@ -525,7 +525,6 @@ fn prove_deduction_theory(
         restrictions,
         SourceKind::RefinedSources,
         crate::theory::TraceQuantifier::AllTraces,
-        false,
         &g,
     );
     let root = run_proof_search(&ctx, sys, usize::MAX);

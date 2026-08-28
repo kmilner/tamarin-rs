@@ -11,11 +11,8 @@
 //!   1. `translateTermsReport` (Report.hs:100-101): `reportMapTerms subst
 //!      Nothing` — propagate the per-process `@location` annotation down the
 //!      tree and, where a `Just loc` is in scope, rewrite every `report(t)`
-//!      term to `rep(subst loc t, loc)` (`subst`, Report.hs:91-98).  Nothing in
-//!      the port yet writes `ProcessParsedAnnotation::location`, so `opt_loc`
-//!      only ever yields `Nothing` and `subst` is the identity — `report`
-//!      survives verbatim.  The rewrite is ported in full so that a `(p)@loc`
-//!      annotation, once parsed into that field, needs no change here.
+//!      term to `rep(subst loc t, loc)` (`subst`, Report.hs:91-98). This also
+//!      reaches condition and embedded-MSR formulas, matching upstream #922.
 //!
 //!   2. `reportInit` (Report.hs:28-41): prepend the fixed `ReportRule`
 //!         [ In( <x, loc> ) ] --[ <Report(x,loc) predicate restriction> ]->
@@ -30,13 +27,16 @@
 
 use std::collections::BTreeSet;
 
-use tamarin_term::lterm::{BVar, LNTerm, LSort, LVar};
-use tamarin_term::vterm::{var_term, VTerm};
+use tamarin_term::lterm::{BVar, LNTerm, LSort, LVar, Name};
+use tamarin_term::term::map_lits;
+use tamarin_term::vterm::{var_term, Lit, VTerm};
 
-use tamarin_theory::atom::{ProtoAtom, SyntacticSugar};
+use tamarin_theory::atom::{map_atom, ProtoAtom, SyntacticSugar};
 use tamarin_theory::fact::{Fact, FactTag, Multiplicity};
-use tamarin_theory::formula::ProtoFormula;
-use tamarin_theory::sapic::{Process, ProcessCombinator, SapicAction, SapicLVar, SapicTerm};
+use tamarin_theory::formula::{map_atoms, ProtoFormula};
+use tamarin_theory::sapic::{
+    Process, ProcessCombinator, SapicAction, SapicFormula, SapicLVar, SapicTerm,
+};
 
 use crate::annotation::ProcessAnnotation;
 use crate::facts::{AnnotatedRule, RulePosition, SpecialPosition, TransFact};
@@ -140,9 +140,8 @@ fn report_map_terms(loc: Option<SapicTerm>, p: AnnProc) -> AnnProc {
 }
 
 /// `reportMapTermsAction f loc ac` (Report.hs:60-79): apply `subst loc` to the
-/// terms of each action.  `New`, `Rep`, `ProcessCall` are identity; `MSR`'s
-/// restriction-formula map is `undefined` in HS (never exercised) and left
-/// unchanged here.
+/// terms of each action.  `New`, `Rep`, `ProcessCall` are identity.
+/// Upstream #922 also maps embedded MSR restriction formulas.
 fn report_map_terms_action(
     loc: &Option<SapicTerm>,
     ac: SapicAction<SapicLVar>,
@@ -179,21 +178,23 @@ fn report_map_terms_action(
             prems: prems.into_iter().map(|f| map_fact_terms(loc, f)).collect(),
             acts: acts.into_iter().map(|f| map_fact_terms(loc, f)).collect(),
             concs: concs.into_iter().map(|f| map_fact_terms(loc, f)).collect(),
-            // HS `formulaMap = undefined` — never forced; leave unchanged.
-            rest,
+            rest: rest
+                .into_iter()
+                .map(|formula| subst_formula(loc, formula))
+                .collect(),
             match_vars,
         },
     }
 }
 
 /// `reportMapTermsComb f loc c` (Report.hs:80-89): `CondEq`, `Let`, `Lookup`
-/// have their terms `subst`'d; `Cond` is `undefined` in HS (never forced) and
-/// every other combinator is identity.
+/// have their terms `subst`'d; upstream #922 maps formula terms in `Cond`.
 fn report_map_terms_comb(
     loc: &Option<SapicTerm>,
     c: ProcessCombinator<SapicLVar>,
 ) -> ProcessCombinator<SapicLVar> {
     match c {
+        ProcessCombinator::Cond(formula) => ProcessCombinator::Cond(subst_formula(loc, formula)),
         ProcessCombinator::CondEq(t1, t2) => {
             ProcessCombinator::CondEq(subst(loc, &t1), subst(loc, &t2))
         }
@@ -207,9 +208,6 @@ fn report_map_terms_comb(
             match_vars,
         },
         ProcessCombinator::Lookup(t, v) => ProcessCombinator::Lookup(subst(loc, &t), v),
-        // `Cond _` is `undefined` in HS (Report.hs:80-89, see line 85); never reached because
-        // location-report theories use `if t1 = t2` (CondEq) conditionals.
-        // Leave any other combinator unchanged.
         other => other,
     }
 }
@@ -222,10 +220,24 @@ fn map_fact_terms(
     fa.map(|t| subst(loc, &t))
 }
 
+/// Upstream #922's `substFormula`: lift the location's free variables into
+/// the formula term representation, then rewrite every atom term.
+fn subst_formula(loc: &Option<SapicTerm>, formula: SapicFormula) -> SapicFormula {
+    let formula_loc = loc.as_ref().map(|location| {
+        map_lits(location, &mut |lit| match lit {
+            Lit::Con(name) => Lit::Con(*name),
+            Lit::Var(var) => Lit::Var(BVar::Free(var.clone())),
+        })
+    });
+    map_atoms(formula, &mut |_, atom| {
+        map_atom(atom, &mut |term| subst(&formula_loc, term))
+    })
+}
+
 /// `subst` (Report.hs:91-98): rewrite `report(a)` to `rep(subst loc a, loc)`
 /// when a `Just loc` is in scope.  With `Nothing` location it is the identity
 /// (`subst Nothing t = t`).
-fn subst(loc: &Option<SapicTerm>, t: &SapicTerm) -> SapicTerm {
+fn subst<V: Clone + Ord>(loc: &Option<VTerm<Name, V>>, t: &VTerm<Name, V>) -> VTerm<Name, V> {
     match loc {
         Some(loc) => subst_at(loc, t),
         None => t.clone(),
@@ -233,34 +245,24 @@ fn subst(loc: &Option<SapicTerm>, t: &SapicTerm) -> SapicTerm {
 }
 
 /// The `subst (Just loc)` arm (Report.hs:93-98).
-fn subst_at(loc: &SapicTerm, t: &SapicTerm) -> SapicTerm {
+fn subst_at<V: Clone + Ord>(loc: &VTerm<Name, V>, t: &VTerm<Name, V>) -> VTerm<Name, V> {
     use tamarin_term::function_symbols::FunSym;
     match t {
         // `Lit _ -> t`.
         VTerm::Lit(_) => t.clone(),
-        // `FApp (NoEq sym) [a] -> if sym == reportSym then rep(subst loc a, loc)
-        //                        else t` — this UNARY-NoEq case shadows the
-        // generic `FApp k as` one below, so a unary NoEq application that is not
-        // `report` is returned UNCHANGED, arguments and all.
-        VTerm::App(FunSym::NoEq(s), args) if args.len() == 1 => {
-            if s.name == b"report" {
-                tamarin_term::term::f_app_no_eq(
-                    tamarin_term::builtin::rep_sym(),
-                    vec![subst_at(loc, &args[0]), loc.clone()],
-                )
-            } else {
-                t.clone()
-            }
+        // Upstream #922 makes only the actual report symbol special; another
+        // unary application falls through to generic recursion.
+        VTerm::App(FunSym::NoEq(s), args) if args.len() == 1 && s.name == b"report" => {
+            tamarin_term::term::f_app_no_eq(
+                tamarin_term::builtin::rep_sym(),
+                vec![subst_at(loc, &args[0]), loc.clone()],
+            )
         }
-        // `FApp k as -> FApp k (map (subst loc) as)`.
+        // `FApp k as -> fApp k (map (subst loc) as)`: use smart constructors
+        // so rewriting below an AC symbol leaves its arguments normalised.
         VTerm::App(sym, args) => {
-            let new_args: Vec<SapicTerm> = args.iter().map(|a| subst_at(loc, a)).collect();
-            match sym {
-                FunSym::Ac(o) => tamarin_term::term::f_app_ac(*o, new_args),
-                FunSym::C(o) => tamarin_term::term::f_app_c(*o, new_args),
-                FunSym::NoEq(o) => tamarin_term::term::f_app_no_eq(*o, new_args),
-                FunSym::List => tamarin_term::term::f_app_list(new_args),
-            }
+            let new_args = args.iter().map(|a| subst_at(loc, a)).collect();
+            tamarin_term::term::f_app(*sym, new_args)
         }
     }
 }
@@ -333,15 +335,10 @@ mod tests {
         }
     }
 
-    /// The `FApp (NoEq sym) [a]` arm in HS (Report.hs:93-97) comes before the
-    /// generic `FApp k as` recursion and hides it.  So, for a unary NoEq
-    /// application that is not a `report`, HS returns the term unchanged.  HS
-    /// never descends into the argument of that application, even when the
-    /// argument holds a `report`.  Every other arity still recurses.  A unary
-    /// arm that recurses "for consistency" rewrites terms that HS leaves
-    /// alone, and it gives no warning.
+    /// Upstream #922 restricts the unary special case to `report` itself, so
+    /// another unary application recurses into its argument.
     #[test]
-    fn subst_unary_noeq_arm_shadows_the_generic_recursion() {
+    fn subst_recurses_through_other_unary_applications() {
         use tamarin_term::function_symbols::{Constructability, NoEqSym, Privacy};
         use tamarin_term::term::f_app_no_eq;
 
@@ -357,10 +354,19 @@ mod tests {
         let c: SapicTerm = tamarin_term::lterm::pub_term("c");
         let report_c = f_app_no_eq(tamarin_term::builtin::report_sym(), vec![c.clone()]);
 
-        // The unary `h(report('c'))` stays unchanged, together with the
-        // `report` inside it.
+        // The unary `h(report('c'))` keeps h and rewrites its argument.
         let unary = f_app_no_eq(sym(b"h", 1), vec![report_c.clone()]);
-        assert_eq!(subst(&Some(loc.clone()), &unary), unary);
+        let rewritten = subst(&Some(loc.clone()), &unary);
+        let VTerm::App(_, args) = &rewritten else {
+            panic!("expected h(..) to survive as an application");
+        };
+        assert_eq!(
+            args[0],
+            f_app_no_eq(
+                tamarin_term::builtin::rep_sym(),
+                vec![c.clone(), loc.clone()]
+            )
+        );
 
         // In the binary `g(report('c'), 'c')`, the generic arm rewrites the
         // nested `report`.  That difference is what makes the unary case
@@ -376,5 +382,25 @@ mod tests {
             f_app_no_eq(tamarin_term::builtin::rep_sym(), vec![c.clone(), loc])
         );
         assert_eq!(args[1], c);
+    }
+
+    #[test]
+    fn subst_formula_rewrites_report_terms() {
+        let c = tamarin_term::lterm::pub_term("c");
+        let report_c =
+            tamarin_term::term::f_app_no_eq(tamarin_term::builtin::report_sym(), vec![c.clone()]);
+        let formula: SapicFormula = ProtoFormula::Atom(ProtoAtom::EqE(report_c.clone(), report_c));
+        let loc: SapicTerm = tamarin_term::lterm::pub_term("loc");
+        let expected = tamarin_term::term::f_app_no_eq(
+            tamarin_term::builtin::rep_sym(),
+            vec![c, tamarin_term::lterm::pub_term("loc")],
+        );
+
+        let ProtoFormula::Atom(ProtoAtom::EqE(left, right)) = subst_formula(&Some(loc), formula)
+        else {
+            panic!("expected equality formula");
+        };
+        assert_eq!(left, expected);
+        assert_eq!(right, expected);
     }
 }

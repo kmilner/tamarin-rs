@@ -76,34 +76,10 @@ impl<'a> IntoIterator for &'a IntrRuleCache {
 
 /// Read-only, immutable-after-build bundle of a `ProofContext`.
 ///
-/// These fields are computed once at theory-load time (in
-/// `ProofContext::new_with_restrictions_pool_forced`) and never
-/// structurally mutated for the rest of the proof.  They are held
-/// behind an `Arc<ProofContextShared>` on every `ProofContext` so that
-/// [`ProofContext::with_swapped_maude`] — called once per child case at
-/// every wide parallel search node — becomes an `Arc` refcount bump
-/// instead of a deep clone of `full_sources` (whose `Source::clone`
-/// deep-copies each case `System`, the biggest single cost on the
-/// with-swapped-maude spine).
-///
-/// IMPORTANT — sharing vs cloning semantics:
-///  * `ProofContext::clone` DEEP-COPIES this bundle (a fresh `Arc` with
-///    cloned contents), so per-lemma clones (`template_ctx.clone()`) stay
-///    fully independent — each lemma's `ensure_saturated` populates ITS
-///    OWN `full_sources` cells under ITS OWN `typing_assumptions`, with
-///    no cross-lemma contamination.  `intruder_rules` is the one member
-///    that stays shared across such a clone: it is an [`IntrRuleCache`]
-///    handle over read-only rules with no interior mutability, so no
-///    lemma can observe another's use of it.
-///  * `with_swapped_maude` SHARES this bundle (`Arc::clone`).  Its clones
-///    are created only DURING a lemma's proof search — after
-///    `ensure_saturated` has run and set `saturate_state = Done` — so the
-///    shared `full_sources` cells are already fully materialised and
-///    read-only, and every shared clone's `ensure_saturated()` hits the
-///    `Done => return` fast path (no re-forcing, no `InProgress` race).
-///    Sharing therefore cannot change WHICH cases are computed or their
-///    ORDER; it only avoids re-deep-copying identical read-only data.
-#[derive(Debug)]
+/// These fields are computed once at theory-load time and shared unchanged by
+/// every lemma and proof-search worker. Mutable source materialisation lives
+/// directly on [`ProofContext`], outside this bundle.
+#[derive(Debug, Clone)]
 pub struct ProofContextShared {
     /// The theory's intruder-rule cache: either the once-per-load
     /// NDC-checked cache injected by the loader, or
@@ -120,24 +96,6 @@ pub struct ProofContextShared {
     /// one producing rule, we cache the producer name. Lets goal
     /// solving short-circuit candidate enumeration.
     pub unique_sources: Vec<crate::constraint::solver::sources::UniqueSource>,
-    /// Whether this is a diff-mode proof. Reserved for `--diff`
-    /// (observational equivalence), which is not yet ported, so no code
-    /// reads it to change behavior yet; it is the canonical carrier of
-    /// diff-mode state.
-    pub is_diff: bool,
-    /// Precomputed source-case enumerations.  For each non-special
-    /// protocol-fact tag, holds the disjunction of derivation cases
-    /// computed once at theory-load time.  `solve_premise_goal`
-    /// consults this cache before enumerating rules — finite, fixed
-    /// cases let the search graft a precomputed subsystem rather than
-    /// re-deriving it (and recursing through copy-rules ad infinitum).
-    ///
-    /// The `Vec` itself is assigned once at build; its `Source` cells
-    /// are interior-mutable (`cases_cell: Mutex<…>`, `incomplete`) and
-    /// filled per-lemma by `ensure_saturated` / the source cache BEFORE
-    /// any `with_swapped_maude` fan-out (i.e. while the owning
-    /// `ProofContext` uniquely holds this `Arc`).
-    pub full_sources: Vec<crate::constraint::solver::sources::Source>,
     /// Theory-level restrictions (safety formulas), in guarded form.
     /// Mirrors Haskell's `pcRestrictions` — passed to `initialSource`
     /// so each precomputed source-case starts from a system with the
@@ -157,35 +115,9 @@ pub struct ProofContextShared {
     /// when False, all possible subterm syms of the chain-end are
     /// checked for intersection (a more LENIENT test).
     pub pc_true_subterm: bool,
-    /// `saturate_state` — gates the lazy `ensure_saturated()` call.
-    /// HS's `saturateSources` is lazy in `cdCases`: it only emits
-    /// `[EXEC] solveGoal / exploitPrems / ...` traces when a consumer
-    /// pattern-matches on a source's `cdCases` (forcing the thunk).
-    /// To match, we defer the saturate run from `ProofContext::new`
-    /// to the first `Source::cases(ctx)` call.  Sets to `Done` once
-    /// run; subsequent calls no-op.  Lives here alongside the
-    /// `full_sources` cells it guards so that a shared clone
-    /// (`with_swapped_maude`) sees the same `Done` gate as the cells.
-    pub(crate) saturate_state: std::sync::Mutex<SaturateState>,
     /// Cached saturation limit (from `IntegerParameters::current()` — the
     /// HS default 5 unless `-s/--saturation` overrode it).
     pub(crate) saturation_limit: usize,
-}
-
-impl Clone for ProofContextShared {
-    fn clone(&self) -> Self {
-        let state = *self.saturate_state.lock().unwrap();
-        ProofContextShared {
-            intruder_rules: self.intruder_rules.clone(),
-            unique_sources: self.unique_sources.clone(),
-            is_diff: self.is_diff,
-            full_sources: self.full_sources.clone(),
-            restrictions: self.restrictions.clone(),
-            pc_true_subterm: self.pc_true_subterm,
-            saturate_state: std::sync::Mutex::new(state),
-            saturation_limit: self.saturation_limit,
-        }
-    }
 }
 
 /// Minimum-viable context for the solver loop.
@@ -267,24 +199,19 @@ pub struct ProofContext {
     /// (HS Theory/Text/Parser.hs:309, System.hs:573-574).  Stored as the absolute
     /// path passed to `--prove`.  Per-lemma, so owned.
     pub theory_file: String,
-    /// The read-only, immutable-after-build bundle
-    /// (`intruder_rules`, `unique_sources`, `full_sources`,
-    /// `restrictions`, …).  Shared behind an `Arc` so
-    /// [`ProofContext::with_swapped_maude`] is a refcount bump rather
-    /// than a deep clone.  Field access to the bundle's members is
-    /// transparent via the [`std::ops::Deref`] impl below, so call
-    /// sites keep writing `ctx.full_sources`, `ctx.intruder_rules`, ….
+    /// Per-lemma source cells. Their materialised case vectors are immutable
+    /// `Arc`s, so context clones share the heavy systems while keeping their
+    /// own lazy cell and incomplete flag.
+    pub full_sources: Vec<crate::constraint::solver::sources::Source>,
+    /// Per-context lazy saturation gate.
+    pub(crate) saturate_state: std::sync::Mutex<SaturateState>,
+    /// Read-only theory data (`intruder_rules`, `unique_sources`,
+    /// `restrictions`, …), shared behind an `Arc`. Field reads are
+    /// transparent through the [`std::ops::Deref`] implementation below.
     pub shared: std::sync::Arc<ProofContextShared>,
 }
 
-/// Transparent read access to the shared bundle: `ctx.full_sources`,
-/// `ctx.intruder_rules`, `ctx.restrictions`, `ctx.is_diff`,
-/// `ctx.pc_true_subterm`, `ctx.saturate_state`, `ctx.saturation_limit`,
-/// and `ctx.unique_sources` all resolve here.  We deliberately do NOT
-/// implement `DerefMut`: the shared bundle is immutable-after-build, and
-/// the few build-time / per-lemma writes go through `Arc::get_mut` on a
-/// uniquely-owned `Arc` (see the constructor and the source-cache
-/// restore in `prove.rs`).
+/// Transparent read access to immutable theory data.
 impl std::ops::Deref for ProofContext {
     type Target = ProofContextShared;
     fn deref(&self) -> &ProofContextShared {
@@ -300,14 +227,8 @@ pub(crate) enum SaturateState {
 }
 
 impl Clone for ProofContext {
-    /// DEEP clone: the owned fields are cloned by value and the shared
-    /// bundle is re-materialised into a FRESH `Arc` (`Arc::new(…clone)`),
-    /// NOT refcount-bumped.  This keeps per-lemma clones
-    /// (`template_ctx.clone()`) fully independent, so each lemma saturates
-    /// its own `full_sources` under its own `typing_assumptions`.  The
-    /// cheap refcount-bump form lives only in
-    /// [`Self::with_swapped_maude`].
     fn clone(&self) -> Self {
+        let saturate_state = *self.saturate_state.lock().unwrap();
         ProofContext {
             maude: self.maude.clone(),
             maude_pool: self.maude_pool.clone(),
@@ -320,7 +241,9 @@ impl Clone for ProofContext {
             heuristic: self.heuristic.clone(),
             lemma_name: self.lemma_name.clone(),
             theory_file: self.theory_file.clone(),
-            shared: std::sync::Arc::new((*self.shared).clone()),
+            full_sources: self.full_sources.clone(),
+            saturate_state: std::sync::Mutex::new(saturate_state),
+            shared: std::sync::Arc::clone(&self.shared),
         }
     }
 }
@@ -387,24 +310,8 @@ impl ProofContext {
     /// `maude_pool`) for the duration of one task, so workers don't
     /// serialise on a single Maude's IPC mutex.
     ///
-    /// This is an `Arc` refcount bump of the read-only bundle
-    /// ([`ProofContextShared`] — `full_sources`, `intruder_rules`,
-    /// `unique_sources`, `restrictions`, …), NOT a deep clone.  A deep
-    /// clone would re-copy every read-only `Vec` — notably each
-    /// `Source`'s `cases_cell` (a `Mutex<Option<Vec<(Vec<String>,
-    /// System)>>>`, each `System` heavy) — once per child case inside
-    /// `cases.into_par_iter()` in search.rs, the top `System::clone`
-    /// cost on this spine; the `Arc` bump avoids that.
-    /// Sharing is safe here: `with_swapped_maude` clones are created only
-    /// DURING a lemma's proof search — after `ensure_saturated` has run
-    /// and set `saturate_state = Done` — so the shared `full_sources`
-    /// cells are already materialised and read-only, and every clone's
-    /// `ensure_saturated()` hits the `Done => return` fast path.  See
-    /// [`ProofContextShared`] for the full sharing-vs-cloning argument.
-    ///
-    /// The small owned fields (`rules`, `injective_fact_insts`,
-    /// per-lemma `typing_assumptions` / `heuristic` / names) are cloned by
-    /// value.
+    /// Immutable theory data and materialised source-case vectors remain
+    /// shared through `Arc`; the small per-context cells are independent.
     ///
     /// The new context drops `maude_pool` (set to None): the worker
     /// already owns a per-task subprocess for the task's duration, and
@@ -413,20 +320,10 @@ impl ProofContext {
     /// what prevents deadlock when the pool is smaller than the rayon
     /// worker count.
     pub fn with_swapped_maude(&self, maude: MaudeHandle) -> Self {
-        ProofContext {
-            maude,
-            maude_pool: None,
-            rules: self.rules.clone(),
-            use_induction: self.use_induction,
-            injective_fact_insts: self.injective_fact_insts.clone(),
-            is_exists_trace: self.is_exists_trace,
-            cut: self.cut,
-            typing_assumptions: self.typing_assumptions.clone(),
-            heuristic: self.heuristic.clone(),
-            lemma_name: self.lemma_name.clone(),
-            theory_file: self.theory_file.clone(),
-            shared: std::sync::Arc::clone(&self.shared),
-        }
+        let mut cloned = self.clone();
+        cloned.maude = maude;
+        cloned.maude_pool = None;
+        cloned
     }
 
     /// HS-faithful lazy `saturateSources` (Sources.hs:355-384, see line 373).  Runs at
@@ -544,7 +441,7 @@ impl ProofContext {
             // than blanking an unrelated cell — but on the HS-faithful path
             // the match always succeeds.
             if let Some(s) = sat {
-                orig.cases_set(s.cases_or_empty());
+                orig.cases_set_shared(s.cases_shared_or_empty());
             }
         }
         // Restore the fresh counter to its pre-saturation value (see the
@@ -793,7 +690,13 @@ impl ProofContext {
                 .lock()
                 .unwrap()
                 .as_ref()
-                .map(|cs| cs.iter().map(|(ns, _)| ns.join("_")).collect())
+                .map(|cs| {
+                    cs.lock()
+                        .unwrap()
+                        .iter()
+                        .map(|(ns, _)| ns.join("_"))
+                        .collect()
+                })
                 .unwrap_or_default();
             eprintln!(
                 "[SRCDUMP] {} goal=<{}> ncases={} names={:?}",
@@ -1137,14 +1040,13 @@ impl ProofContext {
             heuristic: None,
             lemma_name: String::new(),
             theory_file: String::new(),
+            full_sources: Vec::new(),
+            saturate_state: std::sync::Mutex::new(SaturateState::Pending),
             shared: std::sync::Arc::new(ProofContextShared {
                 intruder_rules,
                 unique_sources: Vec::new(),
-                is_diff: false,
-                full_sources: Vec::new(),
                 restrictions,
                 pc_true_subterm,
-                saturate_state: std::sync::Mutex::new(SaturateState::Pending),
                 // The debug env knob outranks the CLI `-s` (a developer
                 // setting it mid-bisect expects it to win); `current()`
                 // folds the CLI override over the HS default.
@@ -1202,8 +1104,6 @@ impl ProofContext {
             }
         }
         let raw_sources = crate::constraint::solver::sources::precompute_full_sources(&ctx);
-        // (assigned into the shared bundle below via `Arc::get_mut` — still
-        // uniquely owned during construction.)
         // HS-faithful lazy precompute: `saturateSources` (Sources.hs:355-384, see line 373)
         // is *lazy in cdCases* — its `refineSource ctxt solver`
         // applications produce `Source`s whose updated `cdCases` is
@@ -1225,9 +1125,7 @@ impl ProofContext {
         // exploitPrems / ...` lines fire here — they only fire when a
         // lemma proof forces a source's cases via pattern-matching on its
         // `cdCases` (HS-faithful).
-        std::sync::Arc::get_mut(&mut ctx.shared)
-            .expect("ProofContext shared bundle is uniquely owned during construction")
-            .full_sources = raw_sources;
+        ctx.full_sources = raw_sources;
         // No saturation here — `ctx.full_sources` holds unsaturated
         // raw sources.  `prove_lemma` calls `ctx.ensure_saturated()`
         // AFTER assigning `ctx.typing_assumptions` so that

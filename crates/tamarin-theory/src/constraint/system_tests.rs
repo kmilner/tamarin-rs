@@ -746,7 +746,6 @@ fn formula_to_system_exists_trace_keeps_formula() {
         Vec::new(),
         SourceKind::RawSources,
         TraceQuantifier::ExistsTrace,
-        false,
         &f,
     );
     // ExistsTrace ⇒ formula kept as-is.
@@ -763,7 +762,6 @@ fn formula_to_system_all_traces_negates() {
         Vec::new(),
         SourceKind::RawSources,
         TraceQuantifier::AllTraces,
-        false,
         &f,
     );
     assert_eq!(sys.formulas.len(), 1);
@@ -795,7 +793,6 @@ fn formula_to_system_partitions_safety_restrictions() {
         restrictions,
         SourceKind::RawSources,
         TraceQuantifier::ExistsTrace,
-        false,
         &goal,
     );
     // The code conjoins the non-safety restriction onto the goal formula.

@@ -669,8 +669,8 @@ fn bare_binder_used_as_timepoint_is_renamed() {
 /// Oracle bytes (pinned build): probe `S1_ac_binder_operand_order.spthy`.
 #[test]
 fn existential_binder_keeps_ac_operand_order() {
+    use crate::elaborate::formula_to_guarded_parsed;
     use crate::formula::from_parser;
-    use crate::guarded::formula_to_guarded_parsed;
     use tamarin_parser::parser::parse_formula_str;
     use tamarin_term::maude_sig::{mset_maude_sig, pair_maude_sig};
 

@@ -215,9 +215,9 @@ MAUDE_PATH="$(command -v maude)" cargo test --profile ci --workspace
 MAUDE_PATH="$(command -v maude)" cargo test -p tamarin-theory --test oracle_solver
 ```
 
-The workspace holds 1566 tests. One of them carries the `#[ignore]`
-attribute, so an ordinary run reports 1565 passed. CI uses `--profile ci`,
-and it is the profile to
+The exact test inventory evolves with the workspace; use Cargo's summary as
+the authoritative count. Tests carrying `#[ignore]` are omitted by an
+ordinary run. CI uses `--profile ci`, and it is the profile to
 prefer locally: it is release optimisation without fat LTO, which the release
 profile would re-run at every one of the ~44 test-binary links. Each profile
 also gets its own target tree, so alternating between plain `cargo test`
@@ -230,6 +230,19 @@ harness resolved; see Prerequisites. An unresolvable maude is a panic naming
 `tamarin-test-support`'s own `maude_path_is_read_in_one_place` holds that
 line: it walks every `.rs` file under `crates/` and fails when any file
 outside the support crate reads `$MAUDE_PATH`.
+
+Whole-corpus structural audits live under one integration-test target so they
+can share expensive theory loading:
+
+```bash
+MAUDE_PATH="$(command -v maude)" cargo test --profile ci -p tamarin-theory --test corpus_audits
+```
+
+`tests/corpus_audits.rs` registers the audit modules under
+`tests/corpus_audits/`. Their common loader keeps a process-wide, per-path
+single-flight parse/elaboration cache, so concurrent audits elaborate each
+theory once without serialising unrelated theories. Add another whole-corpus
+audit to this target rather than creating a separate integration-test binary.
 
 The oracle-backed cases in `oracle_solver` still skip silently when no HS
 binary is reachable — the HS skip is deliberate, only the maude one was

@@ -365,14 +365,6 @@ impl<R, P, S> Theory<R, P, S> {
             is_sapic: false,
         }
     }
-
-    /// Builder helper to append an item. Currently no callers inside the
-    /// port (elaboration pushes to `items` directly); retained as public
-    /// builder API.
-    pub fn add_item(&mut self, item: TheoryItem<R, P, S>) -> &mut Self {
-        self.items.push(item);
-        self
-    }
 }
 
 impl<R, P, S> Theory<R, P, S> {
@@ -420,80 +412,8 @@ impl<R, P, S> Theory<R, P, S> {
 
     /// Look up a restriction by name (HS `lookupRestriction`,
     /// TheoryObject.hs:671-672).
-    ///
-    /// [`Theory::add_restriction`] uses it as the duplicate-name guard.
     pub fn lookup_restriction(&self, name: &str) -> Option<&Restriction> {
         self.restrictions().find(|r| r.name == name)
-    }
-
-    /// HS `addRules` (TheoryObject.hs:470-471): append rule items, in order.
-    ///
-    /// Intentionally retained: faithful mirror of HS `addRules`
-    /// (TheoryObject.hs:470-471); no caller yet.
-    pub fn add_rules(&mut self, rules: impl IntoIterator<Item = R>) -> &mut Self {
-        self.items.extend(rules.into_iter().map(TheoryItem::Rule));
-        self
-    }
-
-    /// HS `addLemma` (TheoryObject.hs:462-465): append the lemma unless one of
-    /// that name is already present.  Returns whether it was added.
-    ///
-    /// HS returns `Maybe (Theory ...)`; the `bool` here is that `Just`/`Nothing`
-    /// distinction on an in-place update.
-    ///
-    /// Intentionally retained: faithful mirror of HS `addLemma`
-    /// (TheoryObject.hs:462-465); its only caller is the equally caller-less
-    /// [`Theory::add_lemmas`].
-    pub fn add_lemma(&mut self, l: Lemma<P>) -> bool {
-        if self.lookup_lemma(&l.name).is_some() {
-            return false;
-        }
-        self.items.push(TheoryItem::Lemma(l));
-        true
-    }
-
-    /// HS `addLemmas` (TheoryObject.hs:467-468): add each lemma in turn.  HS
-    /// folds `addLemma` through a `Maybe` and `fromJust`s it, so a name clash
-    /// leaves the theory as it was (and, mid-list, is a hard error); here a
-    /// clashing lemma is simply skipped.
-    ///
-    /// Intentionally retained: faithful mirror of HS `addLemmas`
-    /// (TheoryObject.hs:467-468); no caller yet.
-    pub fn add_lemmas(&mut self, lemmas: impl IntoIterator<Item = Lemma<P>>) -> &mut Self {
-        for l in lemmas {
-            self.add_lemma(l);
-        }
-        self
-    }
-
-    /// HS `addRestriction` (TheoryObject.hs:453-456): append the restriction
-    /// unless one of that name is already present.  Returns whether it was
-    /// added.
-    ///
-    /// Intentionally retained: faithful mirror of HS `addRestriction`
-    /// (TheoryObject.hs:453-456); its only caller is the equally caller-less
-    /// [`Theory::add_restrictions`].
-    pub fn add_restriction(&mut self, r: Restriction) -> bool {
-        if self.lookup_restriction(&r.name).is_some() {
-            return false;
-        }
-        self.items.push(TheoryItem::Restriction(r));
-        true
-    }
-
-    /// HS `addRestrictions` (TheoryObject.hs:458-459): add each restriction in
-    /// turn, skipping name clashes (see [`Theory::add_lemmas`]).
-    ///
-    /// Intentionally retained: faithful mirror of HS `addRestrictions`
-    /// (TheoryObject.hs:458-459); no caller yet.
-    pub fn add_restrictions(
-        &mut self,
-        restrictions: impl IntoIterator<Item = Restriction>,
-    ) -> &mut Self {
-        for r in restrictions {
-            self.add_restriction(r);
-        }
-        self
     }
 }
 
@@ -796,11 +716,13 @@ mod tests {
         assert_eq!(t.items.len(), 0);
         assert_eq!(t.rules().count(), 0);
 
-        t.add_item(TheoryItem::Rule(7))
-            .add_item(TheoryItem::Lemma(lemma("L")))
-            .add_item(TheoryItem::Restriction(restriction("R")))
-            .add_item(TheoryItem::Macros(vec![lnmacro("m1"), lnmacro("m2")]))
-            .add_item(TheoryItem::Translation('t'));
+        t.items = vec![
+            TheoryItem::Rule(7),
+            TheoryItem::Lemma(lemma("L")),
+            TheoryItem::Restriction(restriction("R")),
+            TheoryItem::Macros(vec![lnmacro("m1"), lnmacro("m2")]),
+            TheoryItem::Translation('t'),
+        ];
 
         assert_eq!(t.rules().copied().collect::<Vec<_>>(), vec![7]);
         assert_eq!(
@@ -826,40 +748,6 @@ mod tests {
             Some("R")
         );
         assert_eq!(t.lookup_restriction("L"), None);
-    }
-
-    /// HS `addLemma` and `addRestriction` (TheoryObject.hs:453-465) refuse a
-    /// name that is already present, and they report the refusal.  `addRules`
-    /// has no such check.  It always appends.
-    #[test]
-    fn add_lemma_and_add_restriction_refuse_a_duplicate_name() {
-        let mut t: TestTheory = Theory::new("Foo", SignaturePure::empty(false));
-        assert!(t.add_lemma(lemma("L")));
-        assert!(!t.add_lemma(lemma("L")), "second `L` must be refused");
-        assert!(t.add_lemma(lemma("L2")));
-        assert!(t.add_restriction(restriction("R")));
-        assert!(!t.add_restriction(restriction("R")));
-
-        // `add_lemmas` and `add_restrictions` fold the singular form.  They
-        // skip the entries whose names clash.  They add the new entries in
-        // order.
-        t.add_lemmas([lemma("L"), lemma("L3")]);
-        t.add_restrictions([restriction("R"), restriction("R2")]);
-        assert_eq!(
-            t.lemmas().map(|l| l.name.as_str()).collect::<Vec<_>>(),
-            vec!["L", "L2", "L3"]
-        );
-        assert_eq!(
-            t.restrictions()
-                .map(|r| r.name.as_str())
-                .collect::<Vec<_>>(),
-            vec!["R", "R2"]
-        );
-
-        // `add_rules` removes no duplicates.  It adds both copies after the
-        // items that are already present.
-        t.add_rules([7, 7]);
-        assert_eq!(t.rules().copied().collect::<Vec<_>>(), vec![7, 7]);
     }
 
     #[test]

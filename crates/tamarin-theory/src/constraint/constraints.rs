@@ -275,39 +275,11 @@ pub enum Goal {
 }
 
 impl Goal {
-    // `is_split`/`is_disj`/`is_subterm`/`is_premise` mirror the HS `Goal`
-    // predicate set (`isSplitGoal`/`isDisjGoal`/`isSubtermGoal`); no caller
-    // yet, kept for parity with the sibling live predicates.
     pub fn is_action(&self) -> bool {
         matches!(self, Goal::Action(_, _))
     }
-    pub fn is_premise(&self) -> bool {
-        matches!(self, Goal::Premise(_, _))
-    }
     pub fn is_chain(&self) -> bool {
         matches!(self, Goal::Chain(_, _))
-    }
-    pub fn is_split(&self) -> bool {
-        matches!(self, Goal::Split(_))
-    }
-    pub fn is_disj(&self) -> bool {
-        matches!(self, Goal::Disj(_))
-    }
-    // HS's `isSubtermGoal` (Constraints.hs) erroneously matches `DisjG _`
-    // (a copy-paste of `isDisjGoal`); we match the semantically-correct
-    // `Goal::Subterm`. The divergence is inert (no caller yet).
-    pub fn is_subterm(&self) -> bool {
-        matches!(self, Goal::Subterm(_))
-    }
-
-    /// "Standard" action goals are non-`KU` actions — `KU(_)` is
-    /// special-cased by the solver (intruder-knowledge goals).
-    pub fn is_standard_action(&self) -> bool {
-        if let Goal::Action(_, fa) = self {
-            !matches!(fa.tag, crate::fact::FactTag::Ku)
-        } else {
-            false
-        }
     }
 }
 
@@ -478,13 +450,10 @@ mod tests {
         );
     }
 
-    /// Each `is_*` predicate matches its own variant and no other variant.
-    /// The failure mode is a copied `matches!` arm that names the
-    /// neighbouring variant.  HS ships exactly that bug in `isSubtermGoal`,
-    /// which is a copy of `isDisjGoal`.  See the note on
-    /// [`Goal::is_subterm`].
+    /// The goal-kind predicates used by production code match their own
+    /// variant and no other variant.
     #[test]
-    fn goal_kind_predicates() {
+    fn live_goal_kind_predicates() {
         use crate::fact::{FactTag, LNFact};
         use crate::guarded::gtrue;
         use crate::rule::{ConcIdx, PremIdx};
@@ -495,50 +464,27 @@ mod tests {
         let i = node("i");
         let t = lit(Lit::Var(LVar::new("x", LSort::Msg, 0)));
         let out = LNFact::new(FactTag::Out, vec![t.clone()]);
-        // The columns are in this order: action, premise, chain, split,
-        // disj, subterm.
+        // The columns are in this order: action, chain.
         let cases = [
-            ("Action", Goal::Action(i, out.clone()), [1, 0, 0, 0, 0, 0]),
+            ("Action", Goal::Action(i, out.clone()), [1, 0]),
             (
                 "Chain",
                 Goal::Chain((i, ConcIdx(0)), (i, PremIdx(0))),
-                [0, 0, 1, 0, 0, 0],
+                [0, 1],
             ),
             (
                 "Premise",
                 Goal::Premise((i, PremIdx(0)), out.clone()),
-                [0, 1, 0, 0, 0, 0],
+                [0, 0],
             ),
-            ("Split", Goal::Split(SplitId(0)), [0, 0, 0, 1, 0, 0]),
-            (
-                "Disj",
-                Goal::Disj(Disj::new(vec![gtrue()])),
-                [0, 0, 0, 0, 1, 0],
-            ),
-            (
-                "Subterm",
-                Goal::Subterm((t.clone(), t.clone())),
-                [0, 0, 0, 0, 0, 1],
-            ),
+            ("Split", Goal::Split(SplitId(0)), [0, 0]),
+            ("Disj", Goal::Disj(Disj::new(vec![gtrue()])), [0, 0]),
+            ("Subterm", Goal::Subterm((t.clone(), t.clone())), [0, 0]),
         ];
         for (name, g, want) in &cases {
-            let got = [
-                g.is_action(),
-                g.is_premise(),
-                g.is_chain(),
-                g.is_split(),
-                g.is_disj(),
-                g.is_subterm(),
-            ];
+            let got = [g.is_action(), g.is_chain()];
             assert_eq!(got, want.map(|b| b == 1), "{name}");
         }
-        // `is_standard_action` is the only predicate that does more than a
-        // variant match.  `KU(_)` action goals are the intruder-knowledge
-        // goals that the solver handles as a special case.  They are not
-        // standard.
-        assert!(Goal::Action(i, out).is_standard_action());
-        assert!(!Goal::Action(i, LNFact::new(FactTag::Ku, vec![t])).is_standard_action());
-        assert!(!Goal::Split(SplitId(0)).is_standard_action());
     }
 
     // =========================================================================

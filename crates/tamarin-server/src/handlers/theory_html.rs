@@ -190,7 +190,7 @@ fn proof_state(entry: &TheoryEntry) -> String {
 fn proto_rule_count(entry: &TheoryEntry) -> usize {
     let proto = tamarin_theory::pretty_theory::web_proto_rules(&entry.typed_theory).len();
     let extra = entry.proof_state.as_ref().map_or(0, |ps| {
-        let ctx = ps.ctx.lock();
+        let ctx = ps.template_context();
         ctx.intruder_rules
             .iter()
             .filter(|ir| !is_constr_rule(&ir.info) && !is_destr_rule(&ir.info))
@@ -270,7 +270,7 @@ fn lemma_index(
     let live_root = entry
         .proof_state
         .as_ref()
-        .and_then(|ps| ps.get_root(&l.name));
+        .and_then(|ps| ps.peek_root(&l.name));
     match live_root {
         Some(root) => {
             let cx = PpCtx {
@@ -775,15 +775,13 @@ pub(crate) fn proof_html(entry: &TheoryEntry, lemma: &str, sub: &[String]) -> St
     if let Some(ps) = &entry.proof_state {
         if let Some(root) = ps.get_root(lemma) {
             if let Some(n) = crate::handlers::proof_tree::navigate_at(&root, sub) {
-                // Install this lemma's per-lemma `use_induction`/`heuristic`
-                // into the shared ctx before ranking (HS `getProofContext`);
-                // otherwise the Applicable Proof Methods order + ranking name
-                // default to `AvoidInduction`/`Smart` and diverge from HS.
-                let mut ctx_guard = ps.ctx.lock();
-                ps.install_lemma_settings(&mut ctx_guard, lemma);
-                return crate::handlers::proof_tree::render_sub_proof_snippet(
-                    entry.idx, lemma, sub, n, &ctx_guard,
-                );
+                // Build the lemma-specialised context used by batch proving
+                // before ranking (HS `getProofContext`).
+                if let Ok(ctx) = ps.context_for_lemma(lemma) {
+                    return crate::handlers::proof_tree::render_sub_proof_snippet(
+                        entry.idx, lemma, sub, n, &ctx,
+                    );
+                }
             }
         }
     }
@@ -860,7 +858,7 @@ fn message_html(entry: &TheoryEntry) -> String {
     let mut construct: Vec<IntrRuleAC> = Vec::new();
     let mut destruct: Vec<IntrRuleAC> = Vec::new();
     if let Some(ps) = &entry.proof_state {
-        let ctx = ps.ctx.lock();
+        let ctx = ps.template_context();
         for ir in &ctx.intruder_rules {
             if is_constr_rule(&ir.info) {
                 construct.push(ir.clone());
@@ -933,7 +931,7 @@ fn rules_html(entry: &TheoryEntry) -> String {
     let mut inj_body = String::from("None");
     let mut extra_ac: Vec<String> = Vec::new();
     if let Some(ps) = &entry.proof_state {
-        let ctx = ps.ctx.lock();
+        let ctx = ps.template_context();
         // `getInjectiveFactInsts thy` — already computed on the context.
         if !ctx.injective_fact_insts.is_empty() {
             let items: Vec<String> = ctx
@@ -1036,21 +1034,32 @@ pub(crate) fn compute_source_lists(
     let Some(ps) = &entry.proof_state else {
         return Vec::new();
     };
-    let ctx = ps.ctx.lock();
+    let ctx = ps.context_for_raw_sources();
     let typ_asms = source_typ_asms(entry, want_refined);
+    let rendered_cases = |cases: Vec<tamarin_theory::constraint::solver::sources::SourceCase>| {
+        cases
+            .iter()
+            .map(|(name, system)| {
+                (
+                    tamarin_theory::constraint::solver::sources::case_name_list_to_string(name),
+                    system.clone(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
 
     // `getSource kind thy`: raw = `ctx.full_sources` (precomputed + saturated);
     // refined = raw with `refineWithSourceAsms` applied (or relabeled).
     if want_refined && !typ_asms.is_empty() {
         refined_sources(&ctx, &typ_asms)
             .iter()
-            .map(|s| (s.goal.clone(), s.cases_or_empty()))
+            .map(|s| (s.goal.clone(), rendered_cases(s.cases_or_empty())))
             .collect()
     } else {
         ctx.full_sources
             .iter()
             .map(|s| {
-                let mut cases = s.cases(&ctx);
+                let mut cases = rendered_cases(s.cases(&ctx));
                 if want_refined {
                     for (_, sys) in cases.iter_mut() {
                         sys.source_kind = Some(SysSourceKind::RefinedSources);
@@ -1120,7 +1129,7 @@ pub(crate) fn source_list_case(
 ) -> Option<tamarin_theory::constraint::system::System> {
     use tamarin_theory::constraint::system::SourceKind as SysSourceKind;
     let ps = entry.proof_state.as_ref()?;
-    let ctx = ps.ctx.lock();
+    let ctx = ps.context_for_raw_sources();
     let typ_asms = source_typ_asms(entry, want_refined);
     if want_refined && !typ_asms.is_empty() {
         nth_case_system(&refined_sources(&ctx, &typ_asms), src_idx, case_idx)

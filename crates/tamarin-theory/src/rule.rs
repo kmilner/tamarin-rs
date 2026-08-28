@@ -657,17 +657,6 @@ pub fn is_ndc_rule<I>(rule: &Rule<RuleInfo<I, IntrRuleACInfo>>) -> Option<NdcSta
         .then_some(NdcState::IsNdc)
 }
 
-/// `isNDCDiffRule` (IntruderRules.hs:524-527): `Just IsNDCDiff` iff the head
-/// function has the diff-mode NDC property.
-///
-/// Intentionally retained: faithful mirror of HS `isNDCDiffRule`
-/// (IntruderRules.hs:524-527); no caller yet.
-pub fn is_ndc_diff_rule<I>(rule: &Rule<RuleInfo<I, IntrRuleACInfo>>) -> Option<NdcState> {
-    destr_rule_head(rule)
-        .is_some_and(FunSym::is_ndc_diff_fun_sym)
-        .then_some(NdcState::IsNdcDiff)
-}
-
 /// `getDeconstrRuleKDPrem`: the first premise fact of an intruder rule (the
 /// KD fact for a deconstruction rule).
 pub fn get_deconstr_rule_kd_prem(rule: &IntrRuleAC) -> &LNFact {

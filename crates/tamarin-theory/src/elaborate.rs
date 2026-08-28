@@ -50,7 +50,7 @@ use tamarin_term::vterm::{Lit, VTerm};
 
 use crate::constraint::constraints::{Disj, Goal, SplitId};
 use crate::formula::LNFormula;
-use crate::guarded::{formula_to_guarded, formula_to_guarded_parsed};
+use crate::guarded::{formula_to_guarded, GuardError};
 use crate::restriction::{apply_macro_in_restriction, Restriction};
 use crate::rule::{
     ConcIdx, PremIdx, ProtoRuleE, ProtoRuleEInfo, ProtoRuleName, Rule, RuleAttributes,
@@ -541,11 +541,12 @@ fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), Elab
     // (`lookupArity`, Theory/Text/Parser/Term.hs:62-66), so the two lists
     // agree on every theory that parses.
     let mut macros: Vec<LNMacro> = Vec::new();
-    // HS's parser inlines a `P(args)` call against the definitions the theory
-    // holds when the call is read (`checkProcess`, Theory/Text/Parser/Sapic.hs:
-    // 314-317); the RS parser keeps the call, so the whole item list supplies
-    // the definitions here.
-    let process_defs = crate::process_inline::collect_process_defs(items);
+    // HS's parser inlines a `P(args)` call against only the definitions the
+    // theory holds when the call is read (`checkProcess`,
+    // Theory/Text/Parser/Sapic.hs:314-317). The RS parser keeps calls, so this
+    // environment grows in source order. It stores already-converted bodies:
+    // later definitions cannot retroactively satisfy an earlier call.
+    let mut process_defs = crate::process_inline::ProcessDefMap::new();
     for item in items.iter() {
         match item {
             p::TheoryItem::Builtins(names) => {
@@ -720,19 +721,24 @@ fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), Elab
                 // `processDef` stores the body and the declared formals
                 // (Theory/Text/Parser/Sapic.hs:64-72); `_pVars` is `Nothing`
                 // for a `let P = …` written without a parameter list.
+                if process_defs.contains_key(&d.name) {
+                    return Err(ElabError {
+                        message: format!("duplicate process definition: {}", d.name),
+                    });
+                }
                 let body = elaborate_process(&d.body, &process_defs, &out.signature.maude_sig)?;
                 let vars = d
                     .vars
                     .as_ref()
                     .map(|vs| vs.iter().map(varspec_to_sapic).collect());
+                let def = ProcessDef {
+                    name: d.name.clone(),
+                    vars,
+                    body,
+                };
+                process_defs.insert(d.name.clone(), def.clone());
                 out.items
-                    .push(TheoryItem::Translation(TranslationElement::ProcessDef(
-                        ProcessDef {
-                            name: d.name.clone(),
-                            vars,
-                            body,
-                        },
-                    )));
+                    .push(TheoryItem::Translation(TranslationElement::ProcessDef(def)));
             }
             p::TheoryItem::EquivLemma(p1, p2) => {
                 // `equivLemma` (Theory/Text/Parser/Sapic.hs:203-209).
@@ -793,7 +799,7 @@ fn item_formula(
 /// against the signature the declarations before the item have built.
 fn elaborate_process(
     proc: &p::Process,
-    defs: &crate::process_inline::ProcessDefMap<'_>,
+    defs: &crate::process_inline::ProcessDefMap,
     sig: &MaudeSig,
 ) -> Result<crate::sapic::PlainProcess, ElabError> {
     crate::process_inline::convert_process_with_defs(proc, defs, sig).map_err(|e| ElabError {
@@ -990,6 +996,18 @@ pub fn goal_from_parsed(g: &p::GoalSpec, sig: &MaudeSig) -> Result<Goal, ElabErr
             Ok(Goal::Disj(Disj::new(gfs)))
         }
     }
+}
+
+/// Close and desugar a surface formula at the parser-to-theory boundary,
+/// then convert the internal formula to guarded form.
+pub fn formula_to_guarded_parsed(
+    f: &p::Formula,
+    sig: &MaudeSig,
+) -> Result<crate::guarded::Guarded, GuardError> {
+    let syn = crate::formula::from_parser(f, sig).map_err(|e| crate::guarded::err(e.message))?;
+    let plain = crate::formula::to_lnformula(&syn)
+        .ok_or_else(|| crate::guarded::err("unexpanded predicate"))?;
+    formula_to_guarded(&plain)
 }
 
 /// The internal [`ProofMethod`](crate::constraint::solver::proof_method::ProofMethod)

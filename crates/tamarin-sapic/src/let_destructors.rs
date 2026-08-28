@@ -39,8 +39,8 @@ use tamarin_term::subterm_rule::CtxtStRule;
 use tamarin_term::vterm::{var_term, Lit, VTerm};
 use tamarin_theory::formula::apply_subst;
 use tamarin_theory::sapic::{
-    apply_match_vars, map_terms_action, map_terms_comb, subst_term, Process, ProcessCombinator,
-    SapicLVar, SapicTerm,
+    apply_match_vars, map_process, map_terms_action, map_terms_comb, subst_term, Process,
+    ProcessCombinator, SapicLVar, SapicTerm,
 };
 
 use crate::annotation::{AnnotatedProcess, ProcessAnnotation};
@@ -270,30 +270,32 @@ fn make_let_subst(svar: &SapicLVar, t2: &SapicTerm) -> Subst<Name, SapicLVar> {
     Subst::from_list(pairs)
 }
 
-/// Apply a SAPIC substitution to every term in a process subtree.  HS `applyM`
-/// here is capture-checking, but Case B only substitutes a `let`-bound variable
+/// Apply a SAPIC substitution to every term in a process subtree. HS `applyM`
+/// also applies ordinary term substitution to parsed location annotations
+/// (fixed upstream in #922). Case B only substitutes a `let`-bound variable
 /// that, by typing, does not occur as an inner binder of `pl` — so a plain
 /// substitution is faithful for the in-scope cases.
 fn apply_subst_process(
     subst: &Subst<Name, SapicLVar>,
     p: AnnotatedProcess<LVar>,
 ) -> AnnotatedProcess<LVar> {
-    match p {
-        Process::Null(a) => Process::Null(a),
-        Process::Action(ac, a, body) => {
-            let ac1 = subst_action(subst, &ac);
-            Process::Action(ac1, a, Box::new(apply_subst_process(subst, *body)))
-        }
-        Process::Comb(c, a, l, r) => {
-            let c1 = subst_comb(subst, &c);
-            Process::Comb(
-                c1,
-                a,
-                Box::new(apply_subst_process(subst, *l)),
-                Box::new(apply_subst_process(subst, *r)),
-            )
-        }
-    }
+    map_process(
+        &p,
+        &mut |action| subst_action(subst, action),
+        &mut |comb| subst_comb(subst, comb),
+        &mut |ann| subst_annotation(subst, ann.clone()),
+    )
+}
+
+fn subst_annotation(
+    subst: &Subst<Name, SapicLVar>,
+    mut ann: ProcessAnnotation<LVar>,
+) -> ProcessAnnotation<LVar> {
+    ann.parsing_ann.location = ann
+        .parsing_ann
+        .location
+        .map(|location| subst_term(subst, &location));
+    ann
 }
 
 /// `apply subst` for a `SapicAction SapicLVar` (Sapic/Process.hs:319-321):
@@ -421,6 +423,37 @@ mod tests {
         };
         assert_eq!(msg, pub_name("t"), "h must be replaced by 't'");
         assert!(matches!(*body, Process::Null(_)));
+    }
+
+    #[test]
+    fn let_elimination_substitutes_compound_location() {
+        // Upstream #922: annotations use ordinary term substitution, so an
+        // eliminated let may replace its location variable with a pair.
+        let h = svar("h");
+        let location = tamarin_term::builtin::pair(pub_name("site"), pub_name("device"));
+        let mut body_ann = ann();
+        body_ann.parsing_ann.location = Some(var_term(h.clone()));
+        let body = Process::Action(
+            SapicAction::ChOut {
+                chan: None,
+                msg: pub_name("payload"),
+            },
+            body_ann,
+            Box::new(Process::Null(ann())),
+        );
+        let lett = Process::Comb(
+            ProcessCombinator::Let {
+                left: var_term(h),
+                right: location.clone(),
+                match_vars: BTreeSet::new(),
+            },
+            ann(),
+            Box::new(body),
+            Box::new(Process::Null(ann())),
+        );
+
+        let out = translate_let_destr(&BTreeSet::new(), lett);
+        assert_eq!(out.annotation().parsing_ann.location, Some(location));
     }
 
     /// HS `mapTermsAction .. (fmap ff rest) ..` (Sapic/Process.hs:155) under

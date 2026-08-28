@@ -23,8 +23,9 @@ use tamarin_utils::fresh::PreciseFreshState;
 use tamarin_theory::formula::{apply_rename, formula_frees};
 use tamarin_theory::sapic::PlainProcess;
 use tamarin_theory::sapic::{
-    map_terms_action, map_terms_comb, traverse_terms_action, traverse_terms_comb, Process,
-    ProcessCombinator, SapicAction, SapicLVar, SapicTerm, SapicType,
+    map_process, map_terms_action, map_terms_comb, traverse_terms_action, traverse_terms_comb,
+    Process, ProcessCombinator, ProcessParsedAnnotation, SapicAction, SapicLVar, SapicTerm,
+    SapicType,
 };
 
 use crate::bindings::{bindings_act, bindings_comb};
@@ -270,23 +271,27 @@ fn rename_unique_go(
 }
 
 /// `apply subst p` over an entire process subtree (terms + bound vars), used to
-/// mirror HS's `apply initSubst p` (Typing.hs:242-261, see line 246).  Annotations are untouched
-/// here — `renameUnique_go` updates `back_substitution` per node afterwards.
+/// mirror HS's `apply initSubst p` (Typing.hs:242-261, see line 246).
+/// Parsed location annotations are terms too, so they receive the same rename;
+/// `renameUnique_go` updates `back_substitution` per node afterwards.
 fn rename_process_full(subst: &BTreeMap<LVar, LVar>, p: &PlainProcess) -> PlainProcess {
-    match p {
-        Process::Null(ann) => Process::Null(ann.clone()),
-        Process::Action(ac, ann, body) => Process::Action(
-            rename_action(subst, ac),
-            ann.clone(),
-            Box::new(rename_process_full(subst, body)),
-        ),
-        Process::Comb(c, ann, l, r) => Process::Comb(
-            rename_comb(subst, c),
-            ann.clone(),
-            Box::new(rename_process_full(subst, l)),
-            Box::new(rename_process_full(subst, r)),
-        ),
-    }
+    map_process(
+        p,
+        &mut |action| rename_action(subst, action),
+        &mut |comb| rename_comb(subst, comb),
+        &mut |ann| rename_annotation(subst, ann),
+    )
+}
+
+fn rename_annotation(
+    subst: &BTreeMap<LVar, LVar>,
+    ann: &ProcessParsedAnnotation,
+) -> ProcessParsedAnnotation {
+    let mut renamed = ann.clone();
+    renamed.location = renamed
+        .location
+        .map(|location| rename_term(subst, &location));
+    renamed
 }
 
 /// `mkSubst` (Typing.hs:266-272): for each bound variable mint a fresh LVar
@@ -809,6 +814,25 @@ mod tests {
         } else {
             panic!("expected New action");
         }
+    }
+
+    #[test]
+    fn rename_unique_renames_location_terms() {
+        let mut body_ann = ProcessParsedAnnotation::empty();
+        body_ann.location = Some(var_term(slv("x", 0, None)));
+        let proc = Process::Action(
+            SapicAction::New(slv("x", 0, None)),
+            ProcessParsedAnnotation::empty(),
+            Box::new(Process::Null(body_ann)),
+        );
+
+        let Process::Action(_, _, body) = rename_unique(&proc) else {
+            panic!("expected New action");
+        };
+        assert_eq!(
+            body.annotation().location,
+            Some(var_term(slv("x", 1, None)))
+        );
     }
 
     /// An MSR's embedded `_restrict(...)` alpha-renames with the rest of the

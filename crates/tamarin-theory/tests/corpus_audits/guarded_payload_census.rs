@@ -23,9 +23,8 @@
 //!   `C` argument lists are not the ones `fApp` builds
 //!   (`Term/Term/Raw.hs:111-115`, `:119-134`).
 
-mod corpus_util;
-
-use corpus_util::{deep_pool, rel, LoadSkip};
+use crate::corpus_util;
+use crate::corpus_util::{deep_pool, rel, LoadSkip};
 use rayon::prelude::*;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -159,7 +158,7 @@ impl FileReport {
 /// the solver converts.
 fn file_phase(path: &Path, root: &Path) -> FileReport {
     let start = Instant::now();
-    let (_, elab) = match corpus_util::load_elaborated(path, root) {
+    let elab = match corpus_util::load_elaborated(path, root) {
         Ok(loaded) => loaded,
         Err(skip) => return FileReport::skipped(Outcome::Skipped(skip)),
     };

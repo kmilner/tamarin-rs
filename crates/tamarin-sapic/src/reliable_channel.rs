@@ -15,9 +15,9 @@
 
 use std::collections::BTreeSet;
 
-use tamarin_parser::ast as p;
-use tamarin_term::lterm::{LSort, LVar, NameTag};
+use tamarin_term::lterm::{LVar, NameTag};
 use tamarin_term::vterm::{Lit, VTerm};
+use tamarin_theory::restriction::Restriction;
 use tamarin_theory::sapic::{
     process_contains, Process, ProcessPosition, SapicAction, SapicLVar, SapicTerm,
 };
@@ -173,8 +173,8 @@ pub(crate) fn reliable_channel_trans_act(
 /// add the `reliable` restriction iff the process contains a reliable OUT.
 pub(crate) fn reliable_channel_restr(
     an_proc: &AProc,
-    mut restrictions: Vec<p::Restriction>,
-) -> Vec<p::Restriction> {
+    mut restrictions: Vec<Restriction>,
+) -> Vec<Restriction> {
     // `isReliableTrans (ProcessAction (ChOut (Just 'r') _) _ _) = True`
     let has_reliable_out = process_contains(an_proc, |proc| {
         matches!(
@@ -191,48 +191,15 @@ pub(crate) fn reliable_channel_restr(
 
 /// `resReliable` (ReliableChannelTranslation.hs:97-100):
 ///   `∀ #i x y. Send(x,y)@#i ⇒ ∃ #j. Receive(x,y)@#j ∧ #i < #j`
-fn res_reliable() -> p::Restriction {
-    let tvar = |name: &str, idx: u64| p::VarSpec {
-        name: name.into(),
-        idx,
-        sort: LSort::Node,
-        typ: None,
-    };
-    let mvar = |name: &str| p::VarSpec {
-        name: name.into(),
-        idx: 0,
-        sort: LSort::Msg,
-        typ: None,
-    };
-    let send = p::Formula::Atom(p::Atom::Action(
-        p::Fact {
-            persistent: false,
-            name: "Send".into(),
-            args: vec![p::Term::Var(mvar("x")), p::Term::Var(mvar("y"))],
-            annotations: vec![],
-        },
-        p::Term::Var(tvar("i", 0)),
+fn res_reliable() -> Restriction {
+    use crate::restriction_builder as rb;
+    let i = rb::node("i");
+    let j = rb::node("j");
+    let x = rb::msg("x");
+    let y = rb::msg("y");
+    let body = rb::action("Send", &[x, y], i).implies(rb::exists(
+        &[j],
+        rb::action("Receive", &[x, y], j).and(rb::less(i, j)),
     ));
-    let recv = p::Formula::Atom(p::Atom::Action(
-        p::Fact {
-            persistent: false,
-            name: "Receive".into(),
-            args: vec![p::Term::Var(mvar("x")), p::Term::Var(mvar("y"))],
-            annotations: vec![],
-        },
-        p::Term::Var(tvar("j", 0)),
-    ));
-    let less = p::Formula::Atom(p::Atom::Less(
-        p::Term::Var(tvar("i", 0)),
-        p::Term::Var(tvar("j", 0)),
-    ));
-    let conj = p::Formula::And(Box::new(recv), Box::new(less));
-    let exists = p::Formula::Exists(vec![tvar("j", 0)], Box::new(conj));
-    let body = p::Formula::Implies(Box::new(send), Box::new(exists));
-    let formula = p::Formula::Forall(vec![tvar("i", 0), mvar("x"), mvar("y")], Box::new(body));
-    p::Restriction {
-        name: "reliable".to_string(),
-        formula,
-        attributes: vec![],
-    }
+    rb::restriction("reliable", rb::all(&[i, x, y], body))
 }

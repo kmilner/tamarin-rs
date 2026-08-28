@@ -24,7 +24,6 @@ use crate::atom::{fold_atom, map_atom, Atom, ProtoAtom};
 use crate::fact::Fact;
 use crate::formula::{lift_free, BLNTerm, Quantifier};
 use crate::tools::equation_store::LNSubst;
-use tamarin_parser::ast as p;
 use tamarin_term::lterm::{frees, BVar, HasFrees, LNTerm, LSort, LVar};
 use tamarin_term::term::{f_app, map_lits, Term};
 use tamarin_term::vterm::{var_term, Lit};
@@ -427,7 +426,7 @@ impl std::fmt::Display for GuardError {
 }
 impl std::error::Error for GuardError {}
 
-fn err(msg: impl Into<String>) -> GuardError {
+pub(crate) fn err(msg: impl Into<String>) -> GuardError {
     GuardError {
         message: msg.into(),
         subject_formula: None,
@@ -982,25 +981,6 @@ pub fn normalise_stored_formula_owned(g: Guarded) -> Guarded {
 pub fn formula_to_guarded(f: &crate::formula::LNFormula) -> Result<Guarded, GuardError> {
     let mut fresh = crate::formula::avoid_precise_lnformula(f);
     convert(false, f, &mut fresh)
-}
-
-/// [`formula_to_guarded`] on a parser-AST formula, closed by
-/// [`crate::formula::from_parser`] and stripped of its sugar by
-/// [`crate::formula::to_lnformula`].  Both steps report a [`GuardError`], so
-/// a caller that cannot build the internal formula still renders the same
-/// block a guardedness failure renders.
-///
-/// Caller: the disjunction arm of `elaborate::goal_from_parsed`, which reads
-/// a stored goal's disjuncts against the theory's signature — the route HS's
-/// proof parser takes through `guardedFormula`
-/// (Theory/Text/Parser/Formula.hs:122-127).
-pub fn formula_to_guarded_parsed(
-    f: &p::Formula,
-    sig: &tamarin_term::maude_sig::MaudeSig,
-) -> Result<Guarded, GuardError> {
-    let syn = crate::formula::from_parser(f, sig).map_err(|e| err(e.message))?;
-    let plain = crate::formula::to_lnformula(&syn).ok_or_else(|| err("unexpanded predicate"))?;
-    formula_to_guarded(&plain)
 }
 
 /// HS `convert` (Guarded.hs:481-505,565-566).  `polarity` is the implicit

@@ -644,17 +644,6 @@ pub fn proto_or_out_fact_view(fa: &LNFact) -> Option<Vec<LNTerm>> {
     }
 }
 
-/// Mirrors Haskell `freesToFresh = map (freshFact . lvarToLnterm)`
-/// (Theory/Model/Fact.hs:327-329): one `Fr`-premise per variable, with nat-sorted variables
-/// reinterpreted as fresh ones (see [`lvar_to_lnterm`]).
-///
-/// Intentionally retained: faithful mirror of HS `freesToFresh`
-/// (Theory/Model/Fact.hs:327-329); no production caller yet (exercised only by the unit test
-/// below).
-pub fn frees_to_fresh(vs: &[LVar]) -> Vec<LNFact> {
-    vs.iter().map(|v| fresh_fact(lvar_to_lnterm(v))).collect()
-}
-
 /// Mirrors Haskell `lvarToLnterm` (Theory/Model/Fact.hs:331-333): a variable as a term, with
 /// `LSortNat` variables re-sorted to `LSortFresh` (so they can be bound by an
 /// `Fr`-premise); every other sort is kept as is.

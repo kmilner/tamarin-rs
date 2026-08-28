@@ -18,7 +18,7 @@
 //! (`tamarin-prover` at the submodule pin, plain no-prove render).
 
 use tamarin_parser::parse_theory;
-use tamarin_theory::guarded::formula_to_guarded_parsed;
+use tamarin_theory::elaborate::formula_to_guarded_parsed;
 
 /// Convert lemma `name` of `theory` and return the rejection's first line.
 fn unguarded_message(theory: &str, name: &str) -> String {

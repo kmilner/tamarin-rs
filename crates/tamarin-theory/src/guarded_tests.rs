@@ -3,6 +3,8 @@
 //   scripts/gen_license_headers.py --authors <this file>
 
 use super::*;
+use crate::elaborate::formula_to_guarded_parsed;
+use tamarin_parser::ast as p;
 use tamarin_parser::parser::parse_formula_str;
 use tamarin_term::function_symbols::{AcSym, CSym, Constructability, NoEqSym, Privacy};
 use tamarin_term::lterm::pub_term;

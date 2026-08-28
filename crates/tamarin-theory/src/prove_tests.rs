@@ -322,6 +322,41 @@ fn session_from(src: &str) -> Option<ProverSession> {
     .ok()
 }
 
+#[test]
+fn session_context_factory_installs_lemma_state_without_mutating_template() {
+    let Some(session) = session_from(
+        "theory T begin\n\
+rule R: [ Fr(~k) ] --[ A(~k) ]-> [ ]\n\
+lemma inductive [use_induction]: \"All k #i. A(k) @ #i ==> A(k) @ #i\"\n\
+end",
+    ) else {
+        return;
+    };
+
+    assert_eq!(
+        session.template_context().use_induction,
+        crate::constraint::solver::context::UseInduction::AvoidInduction
+    );
+    let ctx = session.context_for_lemma("inductive").expect("context");
+    assert!(std::sync::Arc::ptr_eq(
+        &session.template_context().shared,
+        &ctx.shared
+    ));
+    assert_eq!(
+        ctx.use_induction,
+        crate::constraint::solver::context::UseInduction::UseInduction
+    );
+    assert_eq!(ctx.lemma_name, "inductive");
+    assert_eq!(
+        session.template_context().use_induction,
+        crate::constraint::solver::context::UseInduction::AvoidInduction
+    );
+    assert!(matches!(
+        session.context_for_lemma("missing"),
+        Err(ProveError::LemmaNotFound(name)) if name == "missing"
+    ));
+}
+
 /// HS `closeProtoRule` (lib/theory/src/Rule.hs:82-86, see line 84) builds
 /// `ClosedProtoRule ruE <$> maybeToList (variantsProtoRule hnd ruE)`, so a
 /// rule with no variants yields NO closed rule: it is in neither the closed
@@ -412,6 +447,21 @@ fn presaturate_dedups_shared_source_key() {
         hit,
         "lemma b must restore from the pre-seeded shared-key cache"
     );
+    let cache = session.source_cache.lock().unwrap();
+    let cached = cache
+        .values()
+        .next()
+        .and_then(|entry| entry.sources.first())
+        .expect("cached source");
+    let restored = ctx
+        .full_sources
+        .iter()
+        .find(|source| source.goal == cached.0)
+        .expect("restored source");
+    assert!(std::sync::Arc::ptr_eq(
+        &cached.1,
+        &restored.cases_shared_or_empty()
+    ));
 }
 
 /// A lemma that would emit a bare `sorry` (not a `--prove` target and with

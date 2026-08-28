@@ -43,6 +43,7 @@ pub mod progress_function;
 pub mod progress_translation;
 pub mod reliable_channel;
 pub mod report;
+mod restriction_builder;
 pub mod secret_channels;
 pub mod states;
 pub mod translate;

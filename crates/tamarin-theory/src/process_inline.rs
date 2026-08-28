@@ -22,7 +22,10 @@
 //! The RS parser does NOT inline (it produces a `p::Process::Call { name, args }`
 //! node), so we reproduce HS's inlining here, on the way from the parser AST to
 //! the theory AST.  [`convert_process_with_defs`] resolves every `Call` against
-//! the collected `ProcessDef`s and substitutes the parameters.
+//! the already-elaborated definitions that precede the call and substitutes the
+//! parameters. Keeping resolved internal bodies in the environment is important:
+//! a definition cannot acquire visibility of a later definition retroactively,
+//! and recursive cycles cannot send conversion into unbounded recursion.
 //!
 //! The `extend_sup` "type-erasure doubling" of
 //! `Theory/Text/Parser/Sapic.hs:299-306` is mirrored:
@@ -36,62 +39,33 @@ use tamarin_term::maude_sig::MaudeSig;
 use tamarin_term::vterm::{Lit, VTerm};
 
 use crate::formula::apply_subst;
+#[cfg(test)]
+use crate::process_convert::{action as convert_action, combinator as convert_combinator};
 use crate::process_convert::{
-    action as convert_action, combinator as convert_combinator, term as convert_term, ConvertError,
+    add_root_annotation, convert_process_with, term as convert_term, ConvertError,
 };
 use crate::sapic::{
-    apply_match_vars_with, subst_term, traverse_terms_action, traverse_terms_comb, PlainProcess,
-    Process, ProcessCombinator, SapicAction, SapicLVar, SapicSubst, SapicTerm,
+    apply_match_vars_with, subst_term, traverse_terms_action, traverse_terms_comb, try_map_process,
+    PlainProcess, Process, ProcessCombinator, SapicAction, SapicLVar, SapicSubst, SapicTerm,
 };
+use crate::theory::ProcessDef;
 
-/// Look up each process definition by name (HS `lookupProcessDef`,
-/// `TheoryObject.hs:693-694`).  Built once from the parsed theory's `ProcessDef`
-/// items, threaded into [`convert_process_with_defs`].
-pub type ProcessDefMap<'a> = BTreeMap<String, &'a p::ProcessDef>;
-
-/// Collect every `ProcessDef` of a parsed item list into a lookup map.
-pub fn collect_process_defs(items: &[p::TheoryItem]) -> ProcessDefMap<'_> {
-    let mut m = BTreeMap::new();
-    for item in items {
-        if let p::TheoryItem::ProcessDef(d) = item {
-            // HS `addProcessDef` rejects duplicate names; the first definition
-            // wins for our lookup (a well-formed theory has no duplicates).
-            m.entry(d.name.clone()).or_insert(d);
-        }
-    }
-    m
-}
+/// Definitions visible at the current source position (HS `lookupProcessDef`,
+/// `TheoryObject.hs:693-694`). Each body was elaborated when its declaration
+/// was encountered, against the environment that existed immediately before
+/// it. The item walk inserts a definition only after elaborating its body.
+pub type ProcessDefMap = BTreeMap<String, ProcessDef>;
 
 /// `convert_process` with process-definition resolution.  Identical to
 /// `convert_process` for every node except `Call`, which is inlined here.
 pub fn convert_process_with_defs(
     proc: &p::Process,
-    defs: &ProcessDefMap<'_>,
+    defs: &ProcessDefMap,
     sig: &MaudeSig,
 ) -> Result<PlainProcess, ConvertError> {
-    use crate::sapic::ProcessParsedAnnotation;
-    let ann = ProcessParsedAnnotation::empty();
-    match proc {
-        p::Process::Null => Ok(Process::Null(ann)),
-        p::Process::Action { action: act, body } => Ok(Process::Action(
-            convert_action(act, sig)?,
-            ann,
-            Box::new(convert_process_with_defs(body, defs, sig)?),
-        )),
-        p::Process::Comb { comb, left, right } => {
-            let l = Box::new(convert_process_with_defs(left, defs, sig)?);
-            let r = Box::new(convert_process_with_defs(right, defs, sig)?);
-            let c = convert_combinator(comb, sig)?;
-            Ok(Process::Comb(c, ann, l, r))
-        }
-        p::Process::Replication(body) => Ok(Process::Action(
-            SapicAction::Rep,
-            ann,
-            Box::new(convert_process_with_defs(body, defs, sig)?),
-        )),
-        p::Process::Call { name, args } => inline_call(name, args, defs, sig),
-        p::Process::AtAnnotation(inner, _) => convert_process_with_defs(inner, defs, sig),
-    }
+    convert_process_with(proc, sig, &mut |name, args, sig| {
+        inline_call(name, args, defs, sig)
+    })
 }
 
 /// Inline one `P(args)` call (HS `actionprocess` identifier branch,
@@ -99,7 +73,7 @@ pub fn convert_process_with_defs(
 fn inline_call(
     name: &str,
     args: &[p::Term],
-    defs: &ProcessDefMap<'_>,
+    defs: &ProcessDefMap,
     sig: &MaudeSig,
 ) -> Result<PlainProcess, ConvertError> {
     use crate::sapic::ProcessParsedAnnotation;
@@ -117,11 +91,7 @@ fn inline_call(
         .collect::<Result<_, _>>()?;
 
     // Convert the formal parameters (HS `fromMaybe [] (get pVars p)`).
-    let params: Vec<SapicLVar> = def
-        .vars
-        .as_ref()
-        .map(|vs| vs.iter().map(crate::elaborate::varspec_to_sapic).collect())
-        .unwrap_or_default();
+    let params: Vec<SapicLVar> = def.vars.clone().unwrap_or_default();
 
     if params.len() != sapic_args.len() {
         return Err(ConvertError::new(format!(
@@ -131,8 +101,11 @@ fn inline_call(
         )));
     }
 
-    // Recursively inline the definition body (a def may call other defs).
-    let body = convert_process_with_defs(&def.body, defs, sig)?;
+    // The body was converted when its definition was read. Any calls it
+    // contains were therefore resolved against precisely the earlier
+    // definitions visible there; clone that resolved body rather than
+    // re-reading it against the caller's newer environment.
+    let body = def.body.clone();
 
     // Build the parameter substitution with HS's `extend_sup` type-erasure
     // doubling (Theory/Text/Parser/Sapic.hs:299-306): a typed formal
@@ -153,7 +126,7 @@ fn inline_call(
     // body's root node with the call name (drives `role=` / colour).
     let mut name_ann = ProcessParsedAnnotation::empty();
     name_ann.process_names = vec![name.to_string()];
-    let annotated = process_add_annotation(substituted, name_ann);
+    let annotated = add_root_annotation(substituted, name_ann);
 
     // Wrap in the `ProcessCall` marker action
     // (Theory/Text/Parser/Sapic.hs:308-311).
@@ -162,19 +135,6 @@ fn inline_call(
         ProcessParsedAnnotation::empty(),
         Box::new(annotated),
     ))
-}
-
-/// `processAddAnnotation p ann'` (Process.hs): mappend `ann'` onto the root
-/// node's annotation.  Only the FRONT node is touched (HS mappends at the root).
-fn process_add_annotation(
-    p: PlainProcess,
-    ann_add: crate::sapic::ProcessParsedAnnotation,
-) -> PlainProcess {
-    match p {
-        Process::Null(a) => Process::Null(a.append(ann_add)),
-        Process::Action(ac, a, body) => Process::Action(ac, a.append(ann_add), body),
-        Process::Comb(c, a, l, r) => Process::Comb(c, a.append(ann_add), l, r),
-    }
 }
 
 /// `applyM subst p` over an `LProcess` (Sapic/Process.hs:411-424): apply `subst` to
@@ -188,20 +148,24 @@ fn apply_m_process(subst: &SapicSubst, p: PlainProcess) -> Result<PlainProcess, 
     if subst.is_empty() {
         return Ok(p);
     }
-    match p {
-        Process::Null(a) => Ok(Process::Null(a)),
-        Process::Action(ac, a, body) => {
-            let ac1 = apply_m_action(subst, &ac)?;
-            let body1 = apply_m_process(subst, *body)?;
-            Ok(Process::Action(ac1, a, Box::new(body1)))
-        }
-        Process::Comb(c, a, l, r) => {
-            let c1 = apply_m_comb(subst, &c)?;
-            let l1 = apply_m_process(subst, *l)?;
-            let r1 = apply_m_process(subst, *r)?;
-            Ok(Process::Comb(c1, a, Box::new(l1), Box::new(r1)))
-        }
-    }
+    try_map_process(
+        &p,
+        &mut |action| apply_m_action(subst, action),
+        &mut |comb| apply_m_comb(subst, comb),
+        &mut |ann| Ok(apply_annotation(subst, ann.clone())),
+    )
+}
+
+/// Upstream #922's `applyMProcessParsedAnnotation`: locations are ordinary
+/// terms, so substitution may replace a location variable by any term (not
+/// merely another variable). Process names and the back-substitution are
+/// deliberately left untouched.
+fn apply_annotation(
+    subst: &SapicSubst,
+    mut ann: crate::sapic::ProcessParsedAnnotation,
+) -> crate::sapic::ProcessParsedAnnotation {
+    ann.location = ann.location.map(|loc| subst_term(subst, &loc));
+    ann
 }
 
 /// True iff a substitution maps `v` (in either typed or untyped form) — i.e.
@@ -351,18 +315,30 @@ mod tests {
         }
     }
 
+    fn resolved_def(def: &p::ProcessDef, sig: &MaudeSig) -> ProcessDef {
+        ProcessDef {
+            name: def.name.clone(),
+            vars: def
+                .vars
+                .as_ref()
+                .map(|vs| vs.iter().map(crate::elaborate::varspec_to_sapic).collect()),
+            body: crate::process_convert::convert_process(&def.body, sig).unwrap(),
+        }
+    }
+
     #[test]
     fn inlines_call_substituting_param() {
         // def `P(x) = out(x)`; call `P('t')` should inline to
         // ProcessCall("P", ['t']) over body `out('t')`.
         let def = out_x_def("P", "x");
+        let sig = pair_maude_sig();
         let mut defs: ProcessDefMap = BTreeMap::new();
-        defs.insert("P".to_string(), &def);
+        defs.insert("P".to_string(), resolved_def(&def, &sig));
         let call = p::Process::Call {
             name: "P".into(),
             args: vec![pub_lit("t")],
         };
-        let inlined = convert_process_with_defs(&call, &defs, &pair_maude_sig()).unwrap();
+        let inlined = convert_process_with_defs(&call, &defs, &sig).unwrap();
         match inlined {
             Process::Action(SapicAction::ProcessCall(n, args), _, body) => {
                 assert_eq!(n, "P");
@@ -420,13 +396,13 @@ mod tests {
                 right: Box::new(p::Process::Null),
             },
         };
+        let sig = pair_maude_sig();
         let mut defs: ProcessDefMap = BTreeMap::new();
-        defs.insert("P".to_string(), &def);
+        defs.insert("P".to_string(), resolved_def(&def, &sig));
         let call = p::Process::Call {
             name: "P".into(),
             args: vec![pub_lit("t")],
         };
-        let sig = pair_maude_sig();
         let Process::Action(SapicAction::ProcessCall(..), _, body) =
             convert_process_with_defs(&call, &defs, &sig).unwrap()
         else {
@@ -465,13 +441,13 @@ mod tests {
                 body: Box::new(p::Process::Null),
             },
         };
+        let sig = pair_maude_sig();
         let mut defs: ProcessDefMap = BTreeMap::new();
-        defs.insert("P".to_string(), &def);
+        defs.insert("P".to_string(), resolved_def(&def, &sig));
         let call = p::Process::Call {
             name: "P".into(),
             args: vec![pub_lit("t")],
         };
-        let sig = pair_maude_sig();
         let Process::Action(SapicAction::ProcessCall(..), _, body) =
             convert_process_with_defs(&call, &defs, &sig).unwrap()
         else {
@@ -497,14 +473,46 @@ mod tests {
     #[test]
     fn arity_mismatch_errors() {
         let def = out_x_def("P", "x");
+        let sig = pair_maude_sig();
         let mut defs: ProcessDefMap = BTreeMap::new();
-        defs.insert("P".to_string(), &def);
+        defs.insert("P".to_string(), resolved_def(&def, &sig));
         // P expects 1 arg, give 0.
         let call = p::Process::Call {
             name: "P".into(),
             args: vec![],
         };
-        let err = convert_process_with_defs(&call, &defs, &pair_maude_sig()).unwrap_err();
+        let err = convert_process_with_defs(&call, &defs, &sig).unwrap_err();
         assert!(err.message.contains("expected 1 argument"));
+    }
+
+    #[test]
+    fn call_substitutes_compound_term_into_location() {
+        // Upstream #922: `applyMProcessParsedAnnotation` uses ordinary term
+        // substitution, so a location parameter can become a pair rather than
+        // failing as a variable-only substitution.
+        let l = msg_var("l");
+        let def = p::ProcessDef {
+            name: "P".into(),
+            vars: Some(vec![l.clone()]),
+            body: p::Process::AtAnnotation(Box::new(p::Process::Null), p::Term::Var(l)),
+        };
+        let sig = pair_maude_sig();
+        let mut defs = ProcessDefMap::new();
+        defs.insert("P".into(), resolved_def(&def, &sig));
+        let location = p::Term::Pair(vec![pub_lit("loc"), pub_lit("a")]);
+        let call = p::Process::Call {
+            name: "P".into(),
+            args: vec![location.clone()],
+        };
+
+        let Process::Action(SapicAction::ProcessCall(..), _, body) =
+            convert_process_with_defs(&call, &defs, &sig).unwrap()
+        else {
+            panic!("expected a ProcessCall action");
+        };
+        assert_eq!(
+            body.annotation().location,
+            Some(convert_term(&location, &sig).unwrap())
+        );
     }
 }

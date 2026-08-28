@@ -1900,7 +1900,6 @@ pub fn formula_to_system(
     restrictions: Vec<Guarded>,
     source_kind: SourceKind,
     trace_quantifier: crate::theory::TraceQuantifier,
-    is_diff: bool,
     fm: &Guarded,
 ) -> System {
     use crate::guarded::{gconj, gnot, is_safety_formula};
@@ -1908,13 +1907,6 @@ pub fn formula_to_system(
 
     let mut sys = System::empty();
     sys.source_kind = Some(source_kind);
-    // HS stores `_sDiffSystem = isdiff` on its `System` record
-    // (System.hs:821-824/396).  The Rust `System` has no such field —
-    // `side` encodes LHS/RHS, not diff — so diff-mode is carried on
-    // `ProofContext.is_diff` (context.rs) instead.  Nothing about
-    // `is_diff` is recorded on the System here.
-    let _ = is_diff;
-
     // Partition restrictions into safety / non-safety.
     let (safety, other_restrictions): (Vec<Guarded>, Vec<Guarded>) =
         restrictions.into_iter().partition(is_safety_formula);

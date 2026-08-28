@@ -29,6 +29,7 @@ use std::collections::BTreeSet;
 use tamarin_term::lterm::LVar;
 
 use tamarin_theory::formula::{LNFormula, SyntacticLNFormula};
+use tamarin_theory::restriction::Restriction;
 use tamarin_theory::rule::ProtoRuleE;
 use tamarin_theory::sapic::{
     process_at, GoodAnnotation, PlainProcess, Process, ProcessPosition, SapicLVar,
@@ -330,7 +331,7 @@ pub(crate) struct Translation {
     /// here, and `apply_sapic` runs the `_restrict` expansion (HS
     /// `liftedAddProtoRule`) over them.
     pub rules: Vec<(ProtoRuleE, Vec<SyntacticLNFormula>)>,
-    pub restrictions: Vec<tamarin_parser::ast::Restriction>,
+    pub restrictions: Vec<Restriction>,
 }
 
 /// Translation options threaded from the theory (HS `_thyOptions`).  Defaults
@@ -631,6 +632,7 @@ mod tests {
     use tamarin_parser::ast as p;
     use tamarin_term::lterm::LSort;
     use tamarin_theory::process_convert::convert_process;
+    use tamarin_theory::sapic::ProcessParsedAnnotation;
 
     fn typing2_process() -> p::Process {
         let xspec = p::VarSpec {
@@ -667,6 +669,25 @@ mod tests {
                 }),
             }),
         }
+    }
+
+    #[test]
+    fn propagate_names_preserves_location() {
+        // The first patch of upstream #922: setting propagated process names
+        // updates only that field of the parsed annotation.
+        let location = tamarin_term::lterm::pub_term("site");
+        let ann = ProcessParsedAnnotation {
+            process_names: vec!["P".into()],
+            location: Some(location.clone()),
+            ..ProcessParsedAnnotation::empty()
+        };
+        let process: PlainProcess = Process::Null(ann);
+
+        let Process::Null(propagated) = propagate_names(process) else {
+            unreachable!()
+        };
+        assert_eq!(propagated.process_names, ["P"]);
+        assert_eq!(propagated.location, Some(location));
     }
 
     #[test]

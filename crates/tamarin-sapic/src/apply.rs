@@ -20,8 +20,6 @@
 //! injection applies them here too, recording the pre-macro rule as the
 //! `cprRuleE` half `closeProtoRule` keeps (lib/theory/src/Rule.hs:82-86).
 
-use tamarin_parser::ast as p;
-use tamarin_term::maude_sig::MaudeSig;
 use tamarin_theory::wellformedness::WfError;
 
 use tamarin_theory::elaborate::ElabError;
@@ -203,10 +201,10 @@ pub fn apply_sapic(thy: &mut Theory, user_set_heuristic: bool) -> Result<Vec<WfE
     // Inject the global restrictions (set_in/set_notin, predicate_eq/not_eq,
     // single_session).
     for restr in &translation.restrictions {
-        let elab_restr = elaborate_restriction(restr, &thy.signature.maude_sig)?;
         thy.items
             .push(TheoryItem::Restriction(apply_macro_in_restriction(
-                &macros, elab_restr,
+                &macros,
+                restr.clone(),
             )));
     }
 
@@ -219,28 +217,6 @@ pub fn apply_sapic(thy: &mut Theory, user_set_heuristic: bool) -> Result<Vec<WfE
     }
 
     Ok(wf_report)
-}
-
-/// Lower one of the translation's global restrictions — `baseRestr`'s
-/// hardcoded and locking ones (Basetranslation.hs:449-468) plus the progress
-/// and reliable-channel ones — into the theory's [`Restriction`]: the
-/// parser-AST formula those builders write is closed by `from_parser`.
-/// `original_formula` is left to `applyMacroInRestriction`, which HS runs over
-/// every restriction of a closed theory (Theory/Model/Restriction.hs:164-166,
-/// CloseRule.hs:84).
-fn elaborate_restriction(r: &p::Restriction, msig: &MaudeSig) -> Result<Restriction, ElabError> {
-    let syn = tamarin_theory::formula::from_parser(&r.formula, msig)?;
-    let formula = tamarin_theory::formula::to_lnformula(&syn).ok_or_else(|| ElabError {
-        message: format!(
-            "SAPIC restriction {} carries an unexpanded predicate atom",
-            r.name
-        ),
-    })?;
-    Ok(Restriction {
-        name: r.name.clone(),
-        original_formula: None,
-        formula,
-    })
 }
 
 #[cfg(test)]

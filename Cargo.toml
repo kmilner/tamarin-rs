@@ -86,5 +86,5 @@ codegen-units = 16
 # CI test job is the only place where the workspace's `debug_assert!`s run at
 # all, because the documented local gate is `--release`.  Those assertions
 # include differential guards such as `compose_vfresh`'s empty-s1 fast path
-# check.  A measurement shows no cost.  The suite is unchanged at 1553 passing.
+# check.  Measurements show no material cost.
 debug-assertions = true

@@ -165,8 +165,6 @@ pub struct MaudeSig {
     /// no name and are not part of `userDefinedFunSyms` — are absent.  Filled
     /// by [`MaudeSig::refresh`] and read through [`MaudeSig::fun_sym_named`].
     ///
-    /// [`MaudeSig::user_defined_fun_syms`] answers the same question by
-    /// building two `BTreeSet`s per call; a lookup here allocates nothing.
     pub fun_syms_by_name: tamarin_utils::FastMap<&'static [u8], FunSym>,
 }
 
@@ -341,31 +339,9 @@ impl MaudeSig {
         })
     }
 
-    /// HS `userDefinedFunSyms`: every free symbol of the signature plus every
-    /// user-defined AC symbol, tagged with which kind it is.
-    ///
-    /// Intentionally retained: faithful mirror of HS `userDefinedFunSyms`
-    /// (Term/Maude/Signature.hs:163-164).  No call site in the port — HS calls
-    /// it from the parser (Theory/Text/Parser/Macro.hs:43,
-    /// Theory/Text/Parser/Term.hs:65), whereas the port answers the same
-    /// question through [`MaudeSig::fun_syms_by_name`], which allocates
-    /// nothing.  [`MaudeSig::user_defined_st_fun_syms`] is the variant
-    /// intruder-rule generation uses.
-    pub fn user_defined_fun_syms(&self) -> UserDefinedSig {
-        self.no_eq_fun_syms()
-            .into_iter()
-            .map(UserDefinedSym::NoEqUser)
-            .chain(
-                self.ac_user_fun_syms()
-                    .into_iter()
-                    .map(UserDefinedSym::AcFctUser),
-            )
-            .collect()
-    }
-
-    /// HS `userDefinedSTFunSyms`: like [`MaudeSig::user_defined_fun_syms`], but
-    /// the free part is the SUBTERM-theory signature (`st_fun_syms`), i.e. it
-    /// excludes the symbols contributed by the built-in theories.
+    /// HS `userDefinedSTFunSyms`: the free part is the SUBTERM-theory
+    /// signature (`st_fun_syms`), so it excludes symbols contributed by the
+    /// built-in theories, plus every user-defined AC symbol.
     pub fn user_defined_st_fun_syms(&self) -> UserDefinedSig {
         self.st_fun_syms
             .iter()

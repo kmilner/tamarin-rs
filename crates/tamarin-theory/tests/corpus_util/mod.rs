@@ -6,7 +6,9 @@
 //! allowed per binary.
 #![allow(dead_code)]
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
 use tamarin_parser::ast as p;
 use tamarin_theory::theory::Theory;
 
@@ -95,7 +97,7 @@ pub fn parse_file(path: &Path) -> Option<p::Theory> {
 }
 
 /// Why a file dropped out of the load ladder.
-#[derive(PartialEq)]
+#[derive(Clone, PartialEq)]
 pub enum LoadSkip {
     /// The file is one of [`BEYOND_BUDGET`].
     Listed,
@@ -117,16 +119,32 @@ pub fn elaborate_parsed(parsed: &p::Theory) -> Result<Theory, LoadSkip> {
     }
 }
 
-/// Run one file through the whole load ladder — the budget list, the parse,
-/// the elaboration — handing back the parse tree beside the internal theory
-/// for the nets that read both.
-pub fn load_elaborated(path: &Path, root: &Path) -> Result<(p::Theory, Theory), LoadSkip> {
+/// Run one file through the load ladder once per integration-test process.
+/// Concurrent audits share a per-path `OnceLock`, so parsing and elaboration
+/// are single-flight without serialising different files.
+pub fn load_elaborated(path: &Path, root: &Path) -> Result<Arc<Theory>, LoadSkip> {
     if beyond_budget(path, root) {
         return Err(LoadSkip::Listed);
     }
-    let parsed = parse_file(path).ok_or(LoadSkip::Parse)?;
-    let elab = elaborate_parsed(&parsed)?;
-    Ok((parsed, elab))
+    type Entry = Arc<OnceLock<Result<Arc<Theory>, LoadSkip>>>;
+    static CACHE: OnceLock<Mutex<BTreeMap<PathBuf, Entry>>> = OnceLock::new();
+    let entry = {
+        let mut cache = CACHE
+            .get_or_init(|| Mutex::new(BTreeMap::new()))
+            .lock()
+            .unwrap();
+        Arc::clone(
+            cache
+                .entry(path.to_path_buf())
+                .or_insert_with(|| Arc::new(OnceLock::new())),
+        )
+    };
+    entry
+        .get_or_init(|| {
+            let parsed = parse_file(path).ok_or(LoadSkip::Parse)?;
+            elaborate_parsed(&parsed).map(Arc::new)
+        })
+        .clone()
 }
 
 /// A comparison over the corpus is a net only while it covers the tree: a

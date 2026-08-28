@@ -180,10 +180,7 @@ impl<T: HasFrees + Clone> HasFrees for Atom<T> {
 
 // -- Predicates ---------------------------------------------------------------
 //
-// The predicates of Haskell's `Theory.Model.Atom`.  `to_induction_hypothesis`
-// reads `is_last`; the rest complete the family (the live
-// `is_action`/`is_eq`/`is_subterm` elsewhere are on `Goal`/`Process`/`Term`,
-// not `Atom`).
+// The predicates of Haskell's `Theory.Model.Atom` used by the Rust port.
 
 impl<T> Atom<T> {
     pub fn is_action(&self) -> bool {
@@ -200,11 +197,6 @@ impl<T> Atom<T> {
     }
     pub fn is_last(&self) -> bool {
         matches!(self, ProtoAtom::Last(_))
-    }
-    /// Retained for parity with Haskell's exported `isSyntacticSugar`; no Rust
-    /// call site currently uses it.
-    pub fn is_syntactic_sugar(&self) -> bool {
-        matches!(self, ProtoAtom::Syntactic(_))
     }
 }
 
@@ -284,10 +276,8 @@ mod tests {
         lit(Lit::Var(LVar::new(name, LSort::Node, 0)))
     }
 
-    /// Every predicate matches exactly its own variant.  The test asserts the
-    /// full variant × predicate diagonal.  This catches a predicate that is
-    /// wired to the wrong constructor.  It also catches a predicate that
-    /// degenerates to a constant.
+    /// Every predicate used by production code matches exactly its own
+    /// variant. The syntactic-sugar variant matches none of them.
     #[test]
     fn atom_predicates() {
         let atoms: Vec<Atom<LNTerm>> = vec![
@@ -305,7 +295,6 @@ mod tests {
                 a.is_subterm(),
                 a.is_less(),
                 a.is_last(),
-                a.is_syntactic_sugar(),
             ];
             for (j, hit) in row.iter().enumerate() {
                 assert_eq!(*hit, i == j, "predicate {j} on {a:?}");

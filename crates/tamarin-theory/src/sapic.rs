@@ -39,20 +39,6 @@ use crate::formula::{map_atoms, SyntacticLNFormula, SyntacticNFormula};
 
 pub type ProcessPosition = Vec<i64>;
 
-/// `lhsP p`: append `1` to `p` (left branch).
-// Intentionally retained: faithful HS port; exercised only by tests so far.
-pub fn lhs_position(mut p: ProcessPosition) -> ProcessPosition {
-    p.push(1);
-    p
-}
-
-/// `rhsP p`: append `2` to `p` (right branch).
-// Intentionally retained: faithful HS port; exercised only by tests so far.
-pub fn rhs_position(mut p: ProcessPosition) -> ProcessPosition {
-    p.push(2);
-    p
-}
-
 /// `descendant child parent`: whether `parent` is a prefix of `child`.
 pub fn descendant<T: PartialEq>(child: &[T], parent: &[T]) -> bool {
     if parent.len() > child.len() {
@@ -272,8 +258,52 @@ pub enum Process<Ann, V> {
     Action(SapicAction<V>, Ann, Box<Process<Ann, V>>),
 }
 
-pub type LSapicAction = SapicAction<SapicLVar>;
-pub type LProcessCombinator = ProcessCombinator<SapicLVar>;
+/// Rebuild a process while transforming every action, combinator and
+/// annotation. The process shape and left-to-right traversal order are fixed;
+/// passes only supply the payload transformations.
+pub fn try_map_process<Ann, V, E>(
+    p: &Process<Ann, V>,
+    map_action: &mut impl FnMut(&SapicAction<V>) -> Result<SapicAction<V>, E>,
+    map_comb: &mut impl FnMut(&ProcessCombinator<V>) -> Result<ProcessCombinator<V>, E>,
+    map_ann: &mut impl FnMut(&Ann) -> Result<Ann, E>,
+) -> Result<Process<Ann, V>, E> {
+    match p {
+        Process::Null(ann) => Ok(Process::Null(map_ann(ann)?)),
+        Process::Action(action, ann, body) => {
+            let action = map_action(action)?;
+            let body = try_map_process(body, map_action, map_comb, map_ann)?;
+            Ok(Process::Action(action, map_ann(ann)?, Box::new(body)))
+        }
+        Process::Comb(comb, ann, left, right) => {
+            let comb = map_comb(comb)?;
+            let left = try_map_process(left, map_action, map_comb, map_ann)?;
+            let right = try_map_process(right, map_action, map_comb, map_ann)?;
+            Ok(Process::Comb(
+                comb,
+                map_ann(ann)?,
+                Box::new(left),
+                Box::new(right),
+            ))
+        }
+    }
+}
+
+/// Infallible form of [`try_map_process`].
+pub fn map_process<Ann, V>(
+    p: &Process<Ann, V>,
+    map_action: &mut impl FnMut(&SapicAction<V>) -> SapicAction<V>,
+    map_comb: &mut impl FnMut(&ProcessCombinator<V>) -> ProcessCombinator<V>,
+    map_ann: &mut impl FnMut(&Ann) -> Ann,
+) -> Process<Ann, V> {
+    let mut action = |a: &SapicAction<V>| Ok::<_, std::convert::Infallible>(map_action(a));
+    let mut comb = |c: &ProcessCombinator<V>| Ok::<_, std::convert::Infallible>(map_comb(c));
+    let mut ann = |a: &Ann| Ok::<_, std::convert::Infallible>(map_ann(a));
+    match try_map_process(p, &mut action, &mut comb, &mut ann) {
+        Ok(mapped) => mapped,
+        Err(never) => match never {},
+    }
+}
+
 pub type LProcess<Ann> = Process<Ann, SapicLVar>;
 pub type PlainProcess = LProcess<ProcessParsedAnnotation>;
 
@@ -621,12 +651,6 @@ impl PatternSapicLVar {
     }
 }
 
-/// `unpatternVar`: drop the bind/match tag.
-// Intentionally retained: faithful HS port; exercised only by tests so far.
-pub fn unpattern_var(p: PatternSapicLVar) -> SapicLVar {
-    p.into_var()
-}
-
 /// `freesSapicTerm`: free variables of a SAPIC term, in source order, with
 /// duplicates (HS Sapic/Term.hs:131-132, `freesSapicTerm = foldMap (: [])` —
 /// a plain in-order traversal, neither sorted nor deduplicated).
@@ -751,9 +775,7 @@ mod tests {
     }
 
     #[test]
-    fn position_helpers() {
-        assert_eq!(lhs_position(vec![1, 2]), vec![1, 2, 1]);
-        assert_eq!(rhs_position(vec![1, 2]), vec![1, 2, 2]);
+    fn position_relations_and_rendering() {
         assert!(descendant(&[1, 2, 3], &[1, 2]));
         assert!(!descendant(&[1, 2], &[1, 2, 3]));
         assert_eq!(pretty_position(&vec![1, 2, 1]), "121");
@@ -949,15 +971,6 @@ mod tests {
             ),
             want
         );
-    }
-
-    #[test]
-    fn pattern_var_round_trip() {
-        let v = SapicLVar::untyped(LVar::new("x", LSort::Msg, 0));
-        let pb = PatternSapicLVar::Bind(v.clone());
-        let pm = PatternSapicLVar::Match(v.clone());
-        assert_eq!(unpattern_var(pb), v);
-        assert_eq!(unpattern_var(pm), v);
     }
 
     /// A process tree is `Eq`, and the comparison descends into the formulas

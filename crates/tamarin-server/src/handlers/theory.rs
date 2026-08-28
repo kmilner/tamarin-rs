@@ -177,13 +177,10 @@ fn apply_method_and_redirect(
     // Without filtering here the numbering would drift on Sorry/no-op
     // candidates that the UI omits.
     let method = {
-        let mut ctx_guard = src_ps.ctx.lock();
-        // Install this lemma's per-lemma `use_induction`/`heuristic` into the
-        // shared ctx BEFORE ranking, so the method-index → method mapping
-        // matches HS (and the numbering `write_applicable_methods` displays).
-        // Without this the mapping ranks under `AvoidInduction`/`Smart`, so a
-        // `[use_induction]` lemma's method `1` resolves to the wrong method.
-        src_ps.install_lemma_settings(&mut ctx_guard, lemma);
+        let ctx = match src_ps.context_for_lemma(lemma) {
+            Ok(ctx) => ctx,
+            Err(e) => return json_resp::alert(e),
+        };
         // Haskell `applyMethodAtPath` ranks with `useHeuristic heuristic
         // (length proofPath)` (Web/Theory.hs:96); the depth selects
         // which ranking of a multi-ranking heuristic is active
@@ -191,7 +188,7 @@ fn apply_method_and_redirect(
         // the proof-path length, not a hardcoded 0.
         let methods: Vec<_> = tamarin_theory::constraint::solver::search::candidate_methods(
             &sys_at_path,
-            &ctx_guard,
+            &ctx,
             sub.len(),
         )
         .into_iter()
@@ -200,7 +197,7 @@ fn apply_method_and_redirect(
         // selects the same method the user saw.
         .filter(|m| {
             tamarin_theory::constraint::solver::proof_method::is_applicable_for_display(
-                &ctx_guard,
+                &ctx,
                 m,
                 &sys_at_path,
             )
@@ -627,17 +624,12 @@ pub async fn autoprove(
     // `ProverSession` (see `ProofState::session`): HS's prover runs
     // under `getProofContext l thy` — with the `typing_assumptions`-
     // refined source cases gated on `lemmaSourceKind`, per-lemma
-    // `is_exists_trace` / heuristic / `use_induction` — NOT under the
-    // display-oriented shared web ctx (whose empty `typing_assumptions`
-    // made e.g. NSPK3's `nonce_secrecy` search blow up on unrefined
-    // KU-chain enumeration).
+    // `is_exists_trace` / heuristic / `use_induction`.
     let lemma_owned = lemma_name.clone();
     let sub_owned = sub.clone();
     let ps_for_search = new_ps.clone();
     let result = tokio::task::spawn_blocking(move || -> Result<NodeStatus, String> {
-        let Some(session) = ps_for_search.session.clone() else {
-            return Err("prover session unavailable".to_string());
-        };
+        let session = ps_for_search.session.clone();
         let subtree = tamarin_theory::prove::prove_system_in_session(
             &session,
             &lemma_owned,
@@ -841,10 +833,7 @@ pub async fn autoprove_all(
     let _ = tokio::task::spawn_blocking(move || {
         // Per-lemma contexts from the retained session, exactly as
         // `autoprove` (HS runs each fold step under `getProofContext`).
-        let Some(session) = ps_for_search.session.clone() else {
-            tracing::warn!("autoproveAll: prover session unavailable; leaving trees as-is");
-            return;
-        };
+        let session = ps_for_search.session.clone();
         for lname in &lemma_names_owned {
             // Root system for this lemma — path `[]` is HS's
             // `focus [] prover = prover`, run on `psInfo (root prf)`.
@@ -1988,14 +1977,12 @@ pub async fn proof_step(
         Some(n) => n,
         None => return json_resp::alert(format!("no node at path {:?} after step", case_path)),
     };
-    // Install this lemma's per-lemma `use_induction`/`heuristic` into the
-    // shared ctx before ranking the re-rendered snippet (HS `getProofContext`).
-    let mut ctx_guard = ps.ctx.lock();
-    ps.install_lemma_settings(&mut ctx_guard, &lemma);
-    let mut html = crate::handlers::proof_tree::render_sub_proof_snippet(
-        idx, &lemma, &case_path, node, &ctx_guard,
-    );
-    drop(ctx_guard);
+    let ctx = match ps.context_for_lemma(&lemma) {
+        Ok(ctx) => ctx,
+        Err(e) => return json_resp::alert(e),
+    };
+    let mut html =
+        crate::handlers::proof_tree::render_sub_proof_snippet(idx, &lemma, &case_path, node, &ctx);
     html.push_str("<hr><h3>Proof tree</h3>\n");
     html.push_str(&crate::handlers::proof_tree::render_proof_tree_html(
         idx, &lemma, &root,

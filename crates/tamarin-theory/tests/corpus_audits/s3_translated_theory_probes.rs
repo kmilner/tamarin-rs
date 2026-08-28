@@ -18,9 +18,8 @@
 //! reads an item by name depends on (`Theory::lookup_lemma` /
 //! `lookup_restriction`) over everything the two translations add.
 
-mod corpus_util;
-
-use corpus_util::{deep_pool, rel, LoadSkip};
+use crate::corpus_util;
+use crate::corpus_util::{deep_pool, rel, LoadSkip};
 use rayon::prelude::*;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -175,8 +174,8 @@ fn probe_lookups(
 /// probes over that theory.
 fn probe(path: &Path, root: &Path) -> FileProbe {
     let start = Instant::now();
-    let (_, mut elab) = match corpus_util::load_elaborated(path, root) {
-        Ok(loaded) => loaded,
+    let mut elab = match corpus_util::load_elaborated(path, root) {
+        Ok(loaded) => (*loaded).clone(),
         Err(skip) => return FileProbe::skipped(Outcome::Skipped(skip)),
     };
     let found = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

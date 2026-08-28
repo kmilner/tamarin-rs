@@ -13,19 +13,6 @@ use crate::function_symbols::{AcFctSym, AcSym, CSym, FunSym, NoEqSym, EMAP_SYM_S
 use std::borrow::Cow;
 use std::sync::Arc;
 
-/// Diff annotation — whether the left or right interpretation of `diff` is
-/// in scope.
-///
-/// Ported for parity with HS `Term.Term.Raw` `DiffType`; no Rust consumer
-/// yet (diff-mode is not exercised by the port).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum DiffType {
-    Left,
-    Right,
-    None,
-    Both,
-}
-
 /// A term over literal type `A`. Construct via [`lit`] / [`f_app`] /
 /// [`f_app_no_eq`] / [`f_app_list`] — never via the variants directly,
 /// because [`Term::App`] expects AC-normalised argument lists.

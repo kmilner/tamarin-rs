@@ -28,8 +28,9 @@ use std::process::Command;
 
 use tamarin_parser::parse_theory;
 use tamarin_test_support::require_maude_path;
+use tamarin_theory::elaborate::formula_to_guarded_parsed;
 use tamarin_theory::formula::Quantifier;
-use tamarin_theory::guarded::{formula_to_guarded_parsed, Guarded};
+use tamarin_theory::guarded::Guarded;
 
 fn fixtures_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
@@ -116,30 +117,16 @@ type ProbeLedger = Option<&'static [&'static str]>;
 
 /// Expected structural mismatches for `corpus_proof_skeleton_match_probe`.
 ///
-/// Enumerated 2026-08-10 (60s oracle timeout, release; identity-stable across
-/// two enumerations — 815/837 and 819/841 matched, same 22-identity multiset
-/// both times, corpus mirror copies listed individually).
+/// Re-enumerated 2026-08-28 on `internal-repr` (60s oracle timeout, CI
+/// profile): 825/833 matched, leaving the eight identities below. Corpus
+/// mirror copies are listed individually.
 const STRUCTURAL_MISMATCH_LEDGER: ProbeLedger = Some(&[
-    "accountability/csf21-acc-unbounded/mixvote/mixvote_SmHh-multi-session.spthy::EligVerif",
-    "accountability/csf21-acc-unbounded/mixvote/mixvote_SmHh-multi-session.spthy::TimelyP",
-    "accountability/csf21-acc-unbounded/mixvote/mixvote_SmHh-multi-session.spthy::Uniqueness",
-    "accountability/csf21-acc-unbounded/mixvote/mixvote_SmHh-multi-session.spthy::VoterC",
-    "accountability/csf21-acc-unbounded/mixvote/mixvote_SmHh-multi-session.spthy::ballotsFromVoters",
-    "accountability/csf21-acc-unbounded/mixvote/mixvote_SmHh-multi-session.spthy::indivVerif",
-    "accountability/csf21-acc-unbounded/mixvote/mixvote_SmHh-multi-session.spthy::secretSskD",
     "asiaccs20-POIDC/OIDC_Implicit.spthy::Intent_Consent_and_Correct_Browser",
     "asiaccs20-POIDC/proofs/PROOF_OIDC_Implicit.spthy::executable",
     "csf26-ac/fast/Yubikey_multiset.spthy::Login_invalidates_smaller_counters",
     "csf26-ac/multiset-UD/YubiSecure_KS_STM12/Yubikey_multiset.spthy::Login_invalidates_smaller_counters",
     "features/auto-sources/tamarin-repo/asiaccs20-POIDC/OIDC_Implicit.spthy::Intent_Consent_and_Correct_Browser",
-    "features/auto-sources/tamarin-repo/loops/JCS12_Typing_Example.spthy::Client_session_key_secrecy_raw",
-    "features/auto-sources/tamarin-repo/loops/JCS12_Typing_Example.spthy::typing_assertion",
     "features/auto-sources/tamarin-repo/thesis-SvenHammann-POIDC/OIDC_Implicit.spthy::User_Authentication",
-    "loops/JCS12_Typing_Example.spthy::Client_session_key_secrecy_raw",
-    "loops/JCS12_Typing_Example.spthy::typing_assertion",
-    "post17/foo_eligibility.spthy::eligibility",
-    "post17/foo_eligibility.spthy::exec",
-    "post17/foo_eligibility.spthy::types",
     "thesis-SvenHammann-POIDC/OIDC_Implicit.spthy::User_Authentication",
     "thesis-SvenHammann-POIDC/proofs/PROOF_OIDC_Implicit.spthy::executable",
 ]);
@@ -463,7 +450,7 @@ fn fixture_lemma_system(name: &str) -> tamarin_theory::constraint::system::Syste
     let g = formula_to_guarded_parsed(&lemma.formula, &elaborated.signature.maude_sig)
         .expect("guarded");
     let tq = elaborated.lemmas().next().expect("lemma").trace_quantifier;
-    formula_to_system(Vec::new(), SourceKind::RawSources, tq, false, &g)
+    formula_to_system(Vec::new(), SourceKind::RawSources, tq, &g)
 }
 
 /// Our parser and the oracle's `--parse-only` echo must find the same number
@@ -1657,7 +1644,7 @@ fn formula_to_system_pipes_parsed_lemmas() {
                     .find(|el| el.name == l.name)
                     .expect("elaborated lemma")
                     .trace_quantifier;
-                let sys = formula_to_system(Vec::new(), SourceKind::RawSources, tq, false, &g);
+                let sys = formula_to_system(Vec::new(), SourceKind::RawSources, tq, &g);
                 // Initial system always has exactly one formula.
                 assert_eq!(sys.formulas.len(), 1, "{}: lemma {}", name, l.name);
                 // No nodes, edges, or goals yet.

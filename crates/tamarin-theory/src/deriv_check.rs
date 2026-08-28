@@ -426,7 +426,6 @@ fn prove_probe(
             Vec::new(),
             SourceKind::RawSources,
             TraceQuantifier::ExistsTrace,
-            false,
             &g,
         );
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

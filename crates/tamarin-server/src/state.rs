@@ -72,18 +72,15 @@ pub struct TheoryEntry {
     pub errors_html: String,
     /// The theory's once-per-load NDC-checked intruder cache
     /// (`close_rule::check_close_intr_rule`, run in `theory_io` before
-    /// the derivation checks).  Injected into every `ProofContext` the
-    /// lazily built [`ProofState`] constructs (web session + shared
-    /// display ctx) so no context re-runs the check.  `None` when the
+    /// the derivation checks). Injected into the lazily built prover session,
+    /// whose context factory reuses it for every operation. `None` when the
     /// load-time Maude boot failed.
     pub ndc_cache: Option<Arc<Vec<tamarin_theory::rule::IntrRuleAC>>>,
     /// Live proof state — built lazily on first request that needs it
     /// (theory load → only kept-around-but-empty until `ensure_proof_state`
     /// is asked for).  `None` here means "not yet built"; on first
-    /// access we boot Maude and precompute the per-lemma initial
-    /// systems.  Building this eagerly at load time would cost ~1s
-    /// per theory for Maude startup + source precompute, which is
-    /// fine but pushes start-of-server latency.
+    /// access we boot Maude and precompute theory-wide sources. Per-lemma
+    /// systems remain lazy until their proof is visited or edited.
     pub proof_state: Option<Arc<ProofState>>,
 }
 
@@ -212,8 +209,8 @@ impl TheoryStore {
 
     /// Like [`clone_at_new_idx`] but, when the source idx has a
     /// materialised `proof_state`, also fork it into the clone — share
-    /// the `ProofContext` (Maude handle + precomputed sources) but
-    /// deep-copy the per-lemma trees so subsequent mutations on the
+    /// the prover session but deep-copy the already-materialised per-lemma
+    /// trees so subsequent mutations on the
     /// clone don't leak back into the source.  Used by the method-apply
     /// route so the post-step proof tree contains the SAME tree shape
     /// as the source idx (i.e. retains all children produced by prior
@@ -273,9 +270,7 @@ impl TheoryStore {
                 entry.ndc_cache.clone(),
             )
         };
-        // The entry's `Arc` becomes the `ProofState`'s cache handle
-        // directly — the web session and the shared display context both
-        // share this allocation instead of copying the rule list.
+        // The entry's `Arc` becomes the session's cache handle directly.
         let ndc_cache =
             ndc_cache.map(tamarin_theory::constraint::solver::context::IntrRuleCache::from);
         let ps = Arc::new(ProofState::new(

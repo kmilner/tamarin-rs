@@ -278,31 +278,31 @@ pub fn unsolved_chain_constraints(sys: &System) -> usize {
 
 /// `Source` — one precomputed case distinction. The Haskell version
 /// is `Source { _cdGoal :: Goal, _cdCases :: Disj (M.Map CaseName System) }`.
-/// `cdCases` is a lazy thunk in HS; matched here by `cases_cell`, a
-/// `OnceLock` that's filled on the first `cases(ctx)` call.  Trivial
+/// `cdCases` is a lazy thunk in HS; matched here by `cases_cell`, which is
+/// filled on the first `cases(ctx)` call. Trivial
 /// protocols never force `KU(t:Fresh)`-style sources (HS's
 /// `smartRanking.getMsgOneCase` pattern-matches on `FApp o _` before
 /// touching `cdCases`, so Var-headed sources never trigger the thunk);
 /// Rust matches by deferring `solve_action_goal` / `solve_premise_goal`
 /// out of `precompute_full_sources` into the lazy initialiser.
+pub type SourceCase = (Vec<String>, System);
+pub(crate) type SourceCases = std::sync::Arc<std::sync::Mutex<Vec<SourceCase>>>;
+
 pub struct Source {
     pub goal: crate::constraint::constraints::Goal,
     /// Lazy cases — wrapped in `Mutex<Option<…>>` for interior
-    /// mutability.  `Mutex` (over `OnceLock`) lets `cases_set` /
-    /// `cases_take` mutate the cell after initial materialisation,
-    /// which `ProofContext::ensure_saturated`'s post-saturate writeback
-    /// requires.
+    /// mutability. The inner shared backing lets session cache hits and
+    /// proof-context clones reuse the heavy systems; taking a list for a
+    /// mutating saturation pass unwraps it when unique and clones otherwise.
     /// Internally stores case names as `Vec<String>` — HS's
     /// `caseNames :: [String]` (the `caseNames` parameter of `solve` at
     /// Sources.hs:144-225, see line 175; `[String]` type at Sources.hs:144-225).  The list
     /// representation is critical for `combine`'s truncation rule
     /// `combine (n:_) _ = [n]` (Sources.hs:113-137, see line 137): without per-element
     /// boundaries, multi-step accumulated names can't be truncated
-    /// to a single element across refineSource iters.  External
-    /// callers using `cases_or_empty()` see
-    /// the joined `String` (intercalated with "_"); saturate-internal
-    /// code uses the `_list` variants that preserve list structure.
-    pub(crate) cases_cell: std::sync::Mutex<Option<Vec<(Vec<String>, System)>>>,
+    /// to a single element across refineSource iterations. Names are joined
+    /// only by presentation and proof-case-label code.
+    pub(crate) cases_cell: std::sync::Mutex<Option<SourceCases>>,
     /// `true` iff case enumeration was truncated.  Search must not return
     /// `Verified` for any proof tree that consumed an incomplete
     /// source — the dropped cases could contain attack witnesses.
@@ -344,40 +344,18 @@ impl Source {
         }
     }
 
-    /// Build a Source with cases already computed.  Used by saturate
-    /// internals that produce already-materialised case sets.
-    ///
-    /// Takes `Vec<(String, System)>`: each `String` becomes a
-    /// single-element `Vec<String>` in the internal list
-    /// representation.  Use [`Source::eager_list`] to pass an actual
-    /// `Vec<(Vec<String>, System)>`.
+    /// Build a Source with cases already computed. Case-name component
+    /// boundaries are retained until the rendering boundary.
     pub fn eager(
         goal: crate::constraint::constraints::Goal,
-        cases: Vec<(String, System)>,
-        incomplete: bool,
-    ) -> Self {
-        let list: Vec<(Vec<String>, System)> = cases
-            .into_iter()
-            .map(|(n, s)| (string_to_name_list(&n), s))
-            .collect();
-        Source {
-            goal,
-            cases_cell: std::sync::Mutex::new(Some(list)),
-            incomplete,
-        }
-    }
-
-    /// Build a Source with case-name LISTS already computed.  Used by
-    /// saturate-internal code that preserves HS's `[String]` list
-    /// structure across refineSource iters.
-    pub fn eager_list(
-        goal: crate::constraint::constraints::Goal,
-        cases: Vec<(Vec<String>, System)>,
+        cases: Vec<SourceCase>,
         incomplete: bool,
     ) -> Self {
         Source {
             goal,
-            cases_cell: std::sync::Mutex::new(Some(cases)),
+            cases_cell: std::sync::Mutex::new(Some(std::sync::Arc::new(std::sync::Mutex::new(
+                cases,
+            )))),
             incomplete,
         }
     }
@@ -389,31 +367,20 @@ impl Source {
     /// (state machine returns immediately when Done) and handles
     /// odd code paths that bypass `prove_lemma` (tests, probes).
     ///
-    /// Returns by-value (`Vec<…>`) rather than `&Vec<…>` because the
-    /// cell is a `Mutex` and we can't hold the lock for the caller's
-    /// lifetime.  Callers iterate the returned Vec normally.
-    pub fn cases(
-        &self,
-        ctx: &crate::constraint::solver::context::ProofContext,
-    ) -> Vec<(String, System)> {
-        cases_list_to_string_list(self.cases_list(ctx))
-    }
-
-    /// HS-faithful: returns cases with name-LISTS preserved.  Use this
-    /// when the per-element list structure matters for `combine`
-    /// (`combine_case_names_list`) at refineSource boundaries.
-    pub fn cases_list(
-        &self,
-        ctx: &crate::constraint::solver::context::ProofContext,
-    ) -> Vec<(Vec<String>, System)> {
+    /// Returns an owned working copy. The stored list itself remains shared
+    /// across context clones and cache hits; solver consumers generally mutate
+    /// their returned systems while grafting them into a branch.
+    pub fn cases(&self, ctx: &crate::constraint::solver::context::ProofContext) -> Vec<SourceCase> {
         ctx.ensure_saturated();
         let g = self.cases_cell.lock().unwrap();
         match &*g {
-            Some(v) => v.clone(),
+            Some(v) => v.lock().unwrap().clone(),
             None => {
                 drop(g);
                 let init_list = self.compute_cases(ctx);
-                *self.cases_cell.lock().unwrap() = Some(init_list.clone());
+                *self.cases_cell.lock().unwrap() = Some(std::sync::Arc::new(
+                    std::sync::Mutex::new(init_list.clone()),
+                ));
                 init_list
             }
         }
@@ -436,9 +403,9 @@ impl Source {
 
     /// Force materialisation WITHOUT returning the cases: callers that
     /// only need the cell forced (e.g. to then read [`Source::cases_len`])
-    /// skip [`Source::cases_list`]'s deep clone of every case `System`.
+    /// skip returning even a shared case-list handle.
     /// The already-materialised path is a lock/check/unlock; the compute
-    /// path mirrors `cases_list` exactly — `initial_source_cases` runs
+    /// path mirrors `cases` exactly — `initial_source_cases` runs
     /// the goal-specific solvers, so it must not execute under the cell
     /// lock, and the unconditional re-lock/overwrite is deterministic
     /// because the computed value is.
@@ -448,26 +415,38 @@ impl Source {
             return;
         }
         let init_list = self.compute_cases(ctx);
-        *self.cases_cell.lock().unwrap() = Some(init_list);
+        *self.cases_cell.lock().unwrap() =
+            Some(std::sync::Arc::new(std::sync::Mutex::new(init_list)));
     }
 
-    /// Read-only clone that returns `vec![]` when the cell hasn't
-    /// been forced yet.  External-facing form (joined-String).
-    pub fn cases_or_empty(&self) -> Vec<(String, System)> {
-        cases_list_to_string_list(self.cases_or_empty_list())
+    /// Shared read-only cases, or an empty list when still lazy.
+    pub fn cases_or_empty(&self) -> Vec<SourceCase> {
+        self.cases_cell
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|cases| cases.lock().unwrap().clone())
+            .unwrap_or_default()
     }
 
-    /// HS-faithful: same as `cases_or_empty` but preserves the
-    /// per-element list structure.
-    pub fn cases_or_empty_list(&self) -> Vec<(Vec<String>, System)> {
-        self.cases_cell.lock().unwrap().clone().unwrap_or_default()
+    /// Shared backing storage for source-cache snapshots and restoration.
+    pub(crate) fn cases_shared_or_empty(&self) -> SourceCases {
+        self.cases_cell
+            .lock()
+            .unwrap()
+            .clone()
+            .unwrap_or_else(|| std::sync::Arc::new(std::sync::Mutex::new(Vec::new())))
     }
 
     /// Number of materialised cases — equal to `cases_or_empty().len()`
     /// but WITHOUT deep-cloning every case `System` to count them.
     /// Returns 0 when the cell hasn't been forced yet.  O(1).
     pub fn cases_len(&self) -> usize {
-        self.cases_cell.lock().unwrap().as_ref().map_or(0, Vec::len)
+        self.cases_cell
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map_or(0, |cases| cases.lock().unwrap().len())
     }
 
     /// The `n`-th materialised case's system — `cases_or_empty()[n].1`
@@ -475,49 +454,36 @@ impl Source {
     /// when the cell hasn't been forced yet or `n` is past the end.
     pub fn case_system_at(&self, n: usize) -> Option<System> {
         let g = self.cases_cell.lock().unwrap();
-        let (_, sys) = g.as_ref()?.get(n)?;
+        let cases = g.as_ref()?.lock().unwrap();
+        let (_, sys) = cases.get(n)?;
         Some(sys.clone())
     }
 
-    /// Drain the materialised cases out of the cell, leaving it as
-    /// `None`.  Used by saturate internals that re-build the cases
-    /// list per iteration.  External-facing form (joined-String).
-    pub fn cases_take(&self) -> Vec<(String, System)> {
-        cases_list_to_string_list(self.cases_take_list())
-    }
-
-    /// HS-faithful: same as `cases_take` but preserves list structure.
-    pub fn cases_take_list(&self) -> Vec<(Vec<String>, System)> {
-        self.cases_cell.lock().unwrap().take().unwrap_or_default()
+    /// Drain the materialised cases out of the cell, leaving it lazy again.
+    pub fn cases_take(&self) -> Vec<SourceCase> {
+        self.cases_cell
+            .lock()
+            .unwrap()
+            .take()
+            .map(|cases| match std::sync::Arc::try_unwrap(cases) {
+                Ok(cases) => cases.into_inner().unwrap(),
+                Err(cases) => cases.lock().unwrap().clone(),
+            })
+            .unwrap_or_default()
     }
 
     /// Replace the cases cell with a new value.  Used by saturate to
     /// install a refined case set, AND by `ensure_saturated`'s post-
     /// saturate writeback.  Takes `&self` (not `&mut`) so it works
     /// through immutable `ctx.full_sources` borrows.
-    /// External-facing form: each `String` name is wrapped as a
-    /// single-element list.
-    pub fn cases_set(&self, cases: Vec<(String, System)>) {
-        let list: Vec<(Vec<String>, System)> = cases
-            .into_iter()
-            .map(|(n, s)| (string_to_name_list(&n), s))
-            .collect();
-        *self.cases_cell.lock().unwrap() = Some(list);
+    pub fn cases_set(&self, cases: Vec<SourceCase>) {
+        self.cases_set_shared(std::sync::Arc::new(std::sync::Mutex::new(cases)));
     }
 
-    /// HS-faithful: same as `cases_set` but takes the list form
-    /// directly, preserving per-element boundaries.
-    pub fn cases_set_list(&self, cases: Vec<(Vec<String>, System)>) {
+    /// Install a case list shared with the session cache.
+    pub(crate) fn cases_set_shared(&self, cases: SourceCases) {
         *self.cases_cell.lock().unwrap() = Some(cases);
     }
-}
-
-/// Convert `(Vec<String>, System)` case-list to the external
-/// `(String, System)` form via HS's `intercalate "_"` join.
-fn cases_list_to_string_list(list: Vec<(Vec<String>, System)>) -> Vec<(String, System)> {
-    list.into_iter()
-        .map(|(n, s)| (case_name_list_to_string(&n), s))
-        .collect()
 }
 
 /// HS-faithful port of `initialSource ctxt restrictions goal`
@@ -532,8 +498,11 @@ fn cases_list_to_string_list(list: Vec<(Vec<String>, System)>) -> Vec<(String, S
 pub(crate) fn initial_source_cases_pub(
     goal: &crate::constraint::constraints::Goal,
     ctx: &crate::constraint::solver::context::ProofContext,
-) -> Vec<(String, System)> {
+) -> Vec<SourceCase> {
     initial_source_cases(goal, ctx)
+        .into_iter()
+        .map(|(name, system)| (string_to_name_list(&name), system))
+        .collect()
 }
 
 fn initial_source_cases(
@@ -961,7 +930,7 @@ fn ku_source_label_for_fa(fa: &crate::fact::LNFact) -> Option<String> {
 /// from a `HasFrees` impl on `Source`, because a source's cases sit behind a
 /// `Mutex` that only a `ProofContext` fills: `cases` must be the source's
 /// materialised case list (`src.cases(ctx)`).
-fn source_bounds(src: &Source, cases: &[(String, System)]) -> (Option<u64>, Option<u64>) {
+fn source_bounds(src: &Source, cases: &[SourceCase]) -> (Option<u64>, Option<u64>) {
     use tamarin_term::lterm::bounds_var_idx;
     let mut min: Option<u64> = bounds_var_idx(&src.goal).map(|(lo, _)| lo);
     let mut cases_max: Option<u64> = None;
@@ -1149,7 +1118,7 @@ pub fn refine_with_source_asms(
     // violation only surfaces after exhaustive Disj exploration.
     let mut intermediate: Vec<Source> = Vec::new();
     for src in sources {
-        let mut new_cases: Vec<(String, System)> = Vec::new();
+        let mut new_cases: Vec<SourceCase> = Vec::new();
         for (name, mut sys) in src.cases_take() {
             for a in assumptions {
                 if !crate::guarded::stores_contains(&sys.formulas, a)
@@ -1191,7 +1160,7 @@ pub fn refine_with_source_asms(
     // from the assumptions.
     let mut out: Vec<Source> = Vec::new();
     for src in saturated {
-        let mut new_cases: Vec<(String, System)> = Vec::new();
+        let mut new_cases: Vec<SourceCase> = Vec::new();
         for (name, mut sys) in src.cases_take().into_iter() {
             sys.formulas_mut().clear();
             sys.solved_formulas_mut().clear();
@@ -1273,7 +1242,7 @@ fn refine_one_source(
             stable_vars.insert(*v);
         });
     }
-    let all_cases = src.cases_take_list();
+    let all_cases = src.cases_take();
     // HS `refineSource` (Sources.hs:113-137, see line 128): `fs = avoid th` — the fresh seed
     // for EVERY case is the max var idx over the WHOLE source `th` (all its
     // cases), NOT the per-case `avoid se`.  Compute it once here and thread
@@ -1577,7 +1546,7 @@ fn saturate_sources_with_simp_opt(
             // Dropping it would leave the STALE *initial* cases in the cell
             // (e.g. a builtin `check_rep`/`get_rep` coerce case), inflating the
             // locations-report SAPiC proofs.
-            next.push(Source::eager_list(src_goal, new_cases, src_incomplete));
+            next.push(Source::eager(src_goal, new_cases, src_incomplete));
         }
         // HS trace guards (Sources.hs:361-377), with n = iter_n + 1 (HS's
         // `go thsInit 1` is 1-based):
@@ -1616,14 +1585,14 @@ fn saturate_sources_with_simp_opt(
     // truncate as a name-only pass matches HS's final case-name
     // display without re-running solveAllSafeGoals.
     for src in current.iter_mut() {
-        if let Some(cases) = src.cases_cell.lock().unwrap().as_mut() {
-            for (name_list, _) in cases.iter_mut() {
-                if name_list.len() > 1 {
-                    let truncated = combine_case_names_list(name_list, &[]);
-                    *name_list = truncated;
-                }
+        let mut cases = src.cases_take();
+        for (name_list, _) in &mut cases {
+            if name_list.len() > 1 {
+                let truncated = combine_case_names_list(name_list, &[]);
+                *name_list = truncated;
             }
         }
+        src.cases_set(cases);
     }
     current
 }
@@ -2560,12 +2529,10 @@ pub fn solve_with_source_cases_ctx(
     // `fork_base` in `solve_with_source_cases_action_with_ctx`.
     let fork_base = red_maude.map(|m| m.fresh_counter_peek());
     let live_goal = Goal::Premise((*goal_node, goal_prem_idx), fa_prem.clone());
-    for (name, case_sys) in cases {
-        // HS-faithful: use the stored (already-`combine`d, `_`-joined) case name
-        // verbatim — never re-split on `_` (would corrupt funsyms containing `_`).
-        let case_label = name.clone();
+    for (name, case_sys) in cases.iter() {
+        let case_label = case_name_list_to_string(name);
         let arms = refine_source_case(
-            ctx, src, &case_sys, &live_goal, red_maude, src_bounds, fork_base,
+            ctx, src, case_sys, &live_goal, red_maude, src_bounds, fork_base,
         );
         // HS-faithful: refineSubst's multi-arm fanout (Reduction.hs:742-744
         // `disjunctionOfList performSplit`) produces one System per AC
@@ -2726,7 +2693,7 @@ pub fn solve_with_source_cases_action_with_ctx(
     // pattern on an existence-only lemma whose live goal is `KU(x:Msg)`
     // — sort mismatch, no match) the saturate work is never triggered,
     // matching HS's lazy-thunk behaviour.
-    let cases_iter: Vec<(String, System)> = if let Some(c) = ctx_opt {
+    let cases_iter = if let Some(c) = ctx_opt {
         src.cases(c)
     } else {
         src.cases_or_empty()
@@ -2770,7 +2737,7 @@ pub fn solve_with_source_cases_action_with_ctx(
         // HS `matchToGoal` renames th0 ONCE for the whole source; the
         // shift's min is over `cdGoal` + ALL cases (HasFrees Source).
         // Compute it here so every case shares the same rebase.
-        let src_bounds = source_bounds(src, &cases_iter);
+        let src_bounds = source_bounds(src, cases_iter.as_slice());
         // HS FreshT-threading (`_applySource`, Sources.hs:344-350): the
         // live counter at the pick.  `disjunctionOfList cdCases` forks
         // the DisjT layer BELOW FreshT, so every (case × arm) branch's
@@ -2780,17 +2747,17 @@ pub fn solve_with_source_cases_action_with_ctx(
         // Step 3, and returned per output entry to the adopting caller).
         let fork_base = red_maude.map(|m| m.fresh_counter_peek());
         let live_goal = Goal::Action(*goal_node, fa_live.clone());
-        for (name, case_sys) in cases_iter {
+        for (name, case_sys) in cases_iter.iter() {
             // HS-faithful: the stored case name is ALREADY the final display
             // name — `refineSource` applied `combine` (Sources.hs:135-139) and
             // the list was joined via `intercalate "_"` (ProofMethod.hs:505-515, see line 511).
             // HS NEVER re-splits a name on `_`, so use it verbatim.
-            let case_label = name.clone();
+            let case_label = case_name_list_to_string(name);
             // Haskell-faithful `applySource` path: matches the live goal
             // against the source's ABSTRACT `cdGoal` (`src.goal`) — NOT a
             // case-specific action — mirroring `matchToGoal` (Sources.hs:268-317).
             let arms = refine_source_case(
-                ctx, src, &case_sys, &live_goal, red_maude, src_bounds, fork_base,
+                ctx, src, case_sys, &live_goal, red_maude, src_bounds, fork_base,
             );
             for arm in arms {
                 refine_arms.push((case_label.clone(), arm));
@@ -2889,11 +2856,11 @@ pub fn solve_with_source_cases_action_with_ctx(
         // Used at saturate time (no ProofContext).  No conjoin-time dedup
         // (the saturate-time `refine_one_source` path already
         // deduplicates).
-        for (name, case_sys) in cases_iter {
+        for (name, case_sys) in cases_iter.iter() {
             // HS-faithful: stored case name is already final; use verbatim
             // (no `_`-splitting).  See note at the action-goal call site.
-            let case_label = name.clone();
-            let renamed = rename_system_above(&case_sys, avoid_max);
+            let case_label = case_name_list_to_string(name);
+            let renamed = rename_system_above(case_sys, avoid_max);
             let abstract_renamed = {
                 let mut v = abstract_orig;
                 v.idx = v.idx.saturating_add(avoid_max.saturating_add(1));
@@ -2938,7 +2905,7 @@ fn append_step_name_list(names: &mut Vec<String>, sub_name: &str) {
 
 /// Render a step-name list as a single user-facing case-name string,
 /// matching HS's `intercalate "_" names'` (ProofMethod.hs:282-339, see line 318).
-pub(crate) fn case_name_list_to_string(names: &[String]) -> String {
+pub fn case_name_list_to_string(names: &[String]) -> String {
     names.join("_")
 }
 

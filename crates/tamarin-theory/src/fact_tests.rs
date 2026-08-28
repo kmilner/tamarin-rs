@@ -81,7 +81,7 @@ fn lvar_to_lnterm_resorts_nat_to_fresh() {
     let m = LVar::new("m", LSort::Msg, 0);
     assert_eq!(lvar_to_lnterm(&m), var_term(m));
 
-    assert_eq!(frees_to_fresh(&[n]), vec![fresh_fact(expected)]);
+    assert_eq!(fresh_fact(lvar_to_lnterm(&n)), fresh_fact(expected));
 }
 
 #[test]
