@@ -507,29 +507,23 @@ where
     })
 }
 
-/// `pfoldMap`: visit every node in the process tree calling `f`,
-/// concatenating outputs. Traversal order matches Haskell
+/// Visit every node in the process tree. Traversal order matches Haskell
 /// `pfoldMap` (Theory/Sapic/Process.hs:285-296):
-/// - `Null`: just `f(self)`.
-/// - `Action`: self first, then the body (`f self <> pfoldMap body`).
+/// - `Null`: just the node itself.
+/// - `Action`: self first, then the body.
 /// - `Comb`: in-order — left subtree, then self, then right subtree
-///   (`pfoldMap pl <> f self <> pfoldMap pr`).
-pub fn pfold_map<Ann, V, T, F: FnMut(&Process<Ann, V>) -> Vec<T>>(
-    p: &Process<Ann, V>,
-    f: &mut F,
-) -> Vec<T> {
+///   (`pfoldMap pl <> f self <> pfoldMap pr` in HS).
+pub fn for_each_process<Ann, V>(p: &Process<Ann, V>, f: &mut impl FnMut(&Process<Ann, V>)) {
     match p {
         Process::Null(_) => f(p),
         Process::Action(_, _, body) => {
-            let mut out = f(p);
-            out.extend(pfold_map(body, f));
-            out
+            f(p);
+            for_each_process(body, f);
         }
         Process::Comb(_, _, l, r) => {
-            let mut out = pfold_map(l, f);
-            out.extend(f(p));
-            out.extend(pfold_map(r, f));
-            out
+            for_each_process(l, f);
+            f(p);
+            for_each_process(r, f);
         }
     }
 }

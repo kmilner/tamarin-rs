@@ -291,17 +291,17 @@ fn subst_state_pos_fact(f: TransFact, p_old: &[i64], p_new: &[i64]) -> TransFact
 /// annotation, in `pfoldMap` order, NOT deduplicated.
 fn get_lock_positions(p: &Process<ProcessAnnotation<LVar>, SapicLVar>) -> Vec<LVar> {
     use tamarin_theory::sapic::SapicAction;
-    let mut get_lock = |proc: &Process<ProcessAnnotation<LVar>, SapicLVar>| -> Vec<LVar> {
+    let mut out = Vec::new();
+    tamarin_theory::sapic::for_each_process(p, &mut |proc| {
         if let Process::Action(SapicAction::Lock(_), an, _) = proc {
             if !an.pure_state {
                 if let Some(v) = &an.lock {
-                    return vec![v.0];
+                    out.push(v.0);
                 }
             }
         }
-        vec![]
-    };
-    tamarin_theory::sapic::pfold_map(p, &mut get_lock)
+    });
+    out
 }
 
 /// `nub $ getUnlockPositions` (Basetranslation.hs:449-479, see line 463): the lock variables of
@@ -309,17 +309,16 @@ fn get_lock_positions(p: &Process<ProcessAnnotation<LVar>, SapicLVar>) -> Vec<LV
 /// `pfoldMap` order, first-occurrence deduplicated (HS `List.nub`).
 fn get_unlock_positions(p: &Process<ProcessAnnotation<LVar>, SapicLVar>) -> Vec<LVar> {
     use tamarin_theory::sapic::SapicAction;
-    let mut get_unlock = |proc: &Process<ProcessAnnotation<LVar>, SapicLVar>| -> Vec<LVar> {
+    let mut raw = Vec::new();
+    tamarin_theory::sapic::for_each_process(p, &mut |proc| {
         if let Process::Action(SapicAction::Unlock(_), an, _) = proc {
             if !an.pure_state {
                 if let Some(v) = &an.unlock {
-                    return vec![v.0];
+                    raw.push(v.0);
                 }
             }
         }
-        vec![]
-    };
-    let raw = tamarin_theory::sapic::pfold_map(p, &mut get_unlock);
+    });
     nub_on(&raw, |v| *v)
 }
 

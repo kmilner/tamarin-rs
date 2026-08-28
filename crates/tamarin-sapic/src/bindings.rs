@@ -12,8 +12,8 @@ use std::collections::BTreeSet;
 
 use crate::base_translation::{list_intersect, list_union};
 use tamarin_theory::sapic::{
-    frees_sapic_fact, frees_sapic_term, pfold_map, GoodAnnotation, Process, ProcessCombinator,
-    SapicAction, SapicLVar,
+    for_each_process, frees_sapic_fact, frees_sapic_term, GoodAnnotation, Process,
+    ProcessCombinator, SapicAction, SapicLVar,
 };
 use tamarin_utils::prelude_ext::nub_on;
 
@@ -85,10 +85,12 @@ pub(crate) fn bindings_comb(c: &ProcessCombinator<SapicLVar>) -> Vec<SapicLVar> 
 /// Mirrors Haskell `accBindings = pfoldMap bindings` (Bindings.hs). `pfoldMap`
 /// (Sapic/Process.hs:285-296) visits a `ProcessComb` *in-order*
 /// (`pfoldMap f pl <> f node <> pfoldMap f pr`) and a `ProcessAction`
-/// self-first (`f node <> pfoldMap f p`); `tamarin_theory::sapic::pfold_map`
+/// self-first (`f node <> pfoldMap f p`); `tamarin_theory::sapic::for_each_process`
 /// implements exactly that order, so the bound-variable sequence matches HS.
 pub(crate) fn acc_bindings<A: GoodAnnotation>(p: &Process<A, SapicLVar>) -> Vec<SapicLVar> {
-    pfold_map(p, &mut |node| bindings(node))
+    let mut out = Vec::new();
+    for_each_process(p, &mut |node| out.extend(bindings(node)));
+    out
 }
 
 /// `capturedVariablesAt` (Bindings.hs:40-43): the variables bound *at this
@@ -118,7 +120,9 @@ fn captured_variables_at<A: GoodAnnotation>(p: &Process<A, SapicLVar>) -> Vec<Sa
 /// `pfoldMap` order.  A variable appearing here is bound twice (captured) on
 /// some path and yields a `WFBoundTwice` warning.
 pub(crate) fn captured_variables<A: GoodAnnotation>(p: &Process<A, SapicLVar>) -> Vec<SapicLVar> {
-    pfold_map(p, &mut captured_variables_at)
+    let mut out = Vec::new();
+    for_each_process(p, &mut |node| out.extend(captured_variables_at(node)));
+    out
 }
 
 /// HS `nub xs \\ S.toList drop`: keep the first occurrence of each variable

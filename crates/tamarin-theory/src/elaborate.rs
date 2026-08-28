@@ -145,7 +145,7 @@ pub(crate) fn collect_names<V>(t: &VTerm<Name, V>, out: &mut Vec<Name>) {
 /// formulas (all `Data` in HS), so those are harvested here too.
 pub(crate) fn collect_process_names(p: &crate::sapic::PlainProcess, out: &mut Vec<Name>) {
     use crate::sapic::{Process, ProcessCombinator as PC, SapicAction as SA};
-    crate::sapic::pfold_map(p, &mut |node| {
+    crate::sapic::for_each_process(p, &mut |node| {
         let ann = match node {
             Process::Null(a) => a,
             Process::Action(_, a, _) => a,
@@ -225,7 +225,6 @@ pub(crate) fn collect_process_names(p: &crate::sapic::PlainProcess, out: &mut Ve
                 PC::Parallel | PC::Ndc => {}
             },
         }
-        Vec::<()>::new()
     });
 }
 
