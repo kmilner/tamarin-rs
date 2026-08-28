@@ -108,7 +108,7 @@ pub struct ProofContextShared {
     /// `pcTrueSubterm` — True iff every destructor rule has its
     /// RHS as a proper subterm of its LHS (`all isSubtermRule $
     /// filter isDestrRule $ intruder_rules`).  Mirrors Haskell's
-    /// `_pcTrueSubterm` (System.hs:746-766, see line 762) and gates the
+    /// `_pcTrueSubterm` (System.hs:748-768, see line 764) and gates the
     /// `has_impossible_chain` analysis: when True, only the chain-end
     /// root symbol is checked against the chain-start's possible
     /// decomposition root syms (a STRICTER test that fires more often);
@@ -189,7 +189,7 @@ pub struct ProofContext {
     pub lemma_name: String,
     /// Path to the theory file being proved.  Used to resolve the
     /// oracle script path as `takeDirectory theory_file </> oracle_rel_path`
-    /// (HS Theory/Text/Parser.hs:309, System.hs:573-574).  Stored as the absolute
+    /// (HS Theory/Text/Parser.hs:309, System.hs:575-576).  Stored as the absolute
     /// path passed to `--prove`.  Per-lemma, so owned.
     pub theory_file: String,
     /// Per-lemma source cells. Their materialised case vectors are immutable

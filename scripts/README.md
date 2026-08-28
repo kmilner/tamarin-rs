@@ -66,8 +66,8 @@ triage tools (`diff_proof_raw.sh`, `corpus_raw_diff.sh`,
 read it exits 2 rather than falling back to a private copy. The
 `proof_diff_common.sh` additionally owns the one `.hs_canon_cache` key and
 nested-comment-aware lemma scanner shared by the raw and canonical proof-diff
-tools. The remaining structural helpers (`corpus_diff_proof_trees.sh`,
-`diff_aes_calls.sh`) and `divergence_fixtures/_common.sh` keep their own small
+tools. The remaining structural helper (`corpus_diff_proof_trees.sh`) and
+`divergence_fixtures/_common.sh` keep their own small
 setups.
 
 Two consumers deliberately do NOT use the shared maude resolver:
@@ -298,10 +298,6 @@ a rename-only migration.
   binary is required even on a warm cache — its fingerprint is part of the key
   — and missing is `exit 2`. Env: `PRE`, `POST`, `HS`, `CACHE`, `FLAGS_MAP`,
   `FT` (300 s), `DERIV` (30 s), `CORPUS`, `ROOT`.
-- **`diff_maude_io.sh`** — side-by-side HS↔RS Maude command/response trace
-  for one lemma (needs the trace-instrumented builds).
-- **`diff_aes_calls.sh`** — compare `apply_eq_store` call counts per labeled
-  site between engines; deep-solver flow triage.
 - **`corpus_full_trace_diff.sh`** — canonicalized proof-tree diffing for
   every lemma across the corpus; the most detailed comparison, for locating
   the exact solver step where two runs diverge.
@@ -313,9 +309,9 @@ a rename-only migration.
 
 ## Maintenance & measurement
 
-- **`bump_submodule.sh`** — submodule bump workflow: rebases
-  `patches/tamarin-prover-fixes.patch`, rebuilds the oracle, remaps HS line
-  cites across `crates/`, and prints the 6-step re-certification checklist
+- **`bump_submodule.sh`** — submodule bump workflow: checks each entry in
+  `patches/series`, rebuilds the oracle, remaps HS line cites across `crates/`,
+  and prints the re-certification checklist
   (batch gate, web ladder, divergence fixtures, and — step 5 — re-capturing
   the tamarin-server HTTP fixtures, which re-stamps their `oracle_rev` and
   without which `cargo test -p tamarin-server` goes red). The gate caches are

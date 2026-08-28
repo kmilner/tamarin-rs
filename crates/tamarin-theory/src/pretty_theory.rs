@@ -120,10 +120,10 @@ fn oracle_candidate_for_theory(in_file: &str) -> String {
 }
 
 /// Render one `GoalRanking` as the heuristic token that names it, mirroring
-/// HS `prettyGoalRanking` (System.hs:709-714): an oracle ranking as its
+/// HS `prettyGoalRanking` (System.hs:711-716): an oracle ranking as its
 /// letter plus the quoted relative oracle path, a tactic ranking as its
 /// braced name, every other ranking as the single letter
-/// `goalRankingIdentifiers` maps to it (System.hs:584-597).
+/// `goalRankingIdentifiers` maps to it (System.hs:586-599).
 fn pretty_goal_ranking(r: &GoalRanking) -> String {
     match r {
         GoalRanking::Smart(false) => "s".to_string(),
@@ -141,7 +141,7 @@ fn pretty_goal_ranking(r: &GoalRanking) -> String {
 }
 
 /// HS `prettyGoalRankings rs = unwords (map prettyGoalRanking rs)`
-/// (System.hs:706-707).
+/// (System.hs:708-709).
 pub fn pretty_goal_rankings(rankings: &[GoalRanking]) -> String {
     rankings
         .iter()
@@ -268,7 +268,7 @@ pub struct ItemPrinters<'a, R> {
     pub translation: &'a (dyn Fn(&TranslationElement) -> String + Sync),
     /// The theory's file name, which a `heuristic=` lemma attribute needs to
     /// resolve a bare `o`/`O` ranking's default oracle (`defaultOracleNames`,
-    /// System.hs:551-561).
+    /// System.hs:551-563).
     pub in_file: &'a str,
     /// Render the pre-macro formula without an `expanded formula` block.
     pub open_formulas: bool,
@@ -508,7 +508,7 @@ fn open_proof_body(lem: &crate::theory::Lemma) -> String {
 
 /// HS `prettyTranslationElement` (TheoryObject.hs:785-841).  `in_file`
 /// resolves a bare `o`/`O` ranking inside an accountability lemma's
-/// `heuristic=` attribute (`defaultOracleNames`, System.hs:551-561).
+/// `heuristic=` attribute (`defaultOracleNames`, System.hs:551-563).
 fn pretty_translation_element(el: &TranslationElement, in_file: &str) -> String {
     use crate::pretty_hpj::{self as hpj, Doc};
     match el {

@@ -16,17 +16,14 @@
 #                         The submodule itself is never modified, so it stays
 #                         trivially in sync with upstream.
 #
-# The patch (patches/tamarin-prover-fixes.patch) carries local fixes the port
-# is byte-compared against that are not yet merged upstream: stored-formula
-# normalisation and gconj idempotence, assorted solver and equation-store
-# fixes, and the solver trace instrumentation used by the diff harnesses.
-# Only the testing oracle needs it; nothing in the patch affects the web
-# assets or the corpus.
+# The files in patches/series mirror fixes that are still under upstream
+# review. Keeping one patch per PR makes each fix easy to drop after it lands.
+# Only the testing oracle needs them; the submodule stays pristine.
 set -eu
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 sub="$root/tamarin-prover"
 testdir="$root/tamarin-prover-testing"
-patch="$root/patches/tamarin-prover-fixes.patch"
+series="$root/patches/series"
 
 git -C "$root" submodule update --init tamarin-prover
 echo "submodule ready (pristine upstream @ $(git -C "$sub" rev-parse --short HEAD))"
@@ -41,27 +38,33 @@ if [ ! -d "$testdir" ]; then
     git -C "$sub" worktree add --detach "$testdir" "$pinned"
 fi
 
-# This is a generated worktree. Move it back to this branch's pin after
-# switching between branches that use different Tamarin revisions, while
-# retaining ignored .stack-work build artifacts as a durable compiler cache.
-# Leave an already-correct tree alone: resetting it would force avoidable
-# recompilation on every invocation.
-current="$(git -C "$testdir" rev-parse HEAD)"
-if [ "$current" != "$pinned" ]; then
-    echo "resetting testing tree to this branch's Tamarin pin"
-    git -C "$testdir" reset --hard -q "$pinned"
-    git -C "$testdir" clean -fdq
-fi
+# This is a generated worktree. Reset tracked and untracked patch output on
+# every run, while retaining ignored .stack-work build artifacts as a durable
+# compiler cache.
+git -C "$testdir" reset --hard -q "$pinned"
+git -C "$testdir" clean -fdq
 
-if git -C "$testdir" apply --reverse --check "$patch" 2>/dev/null; then
-    echo "testing tree already patched"
-elif git -C "$testdir" apply --check "$patch" 2>/dev/null; then
-    git -C "$testdir" apply "$patch"
-    echo "patched testing tree ($(basename "$patch"))"
-else
-    echo "ERROR: $(basename "$patch") does not apply cleanly to pinned Tamarin $pinned." >&2
-    exit 1
-fi
+applied=0
+while IFS= read -r name || [ -n "$name" ]; do
+    case "$name" in ''|'#'*) continue ;; esac
+    patch="$root/patches/$name"
+    if [ ! -f "$patch" ]; then
+        echo "ERROR: patch listed in patches/series is missing: $name" >&2
+        exit 1
+    fi
+    if git -C "$testdir" apply --reverse --check "$patch" 2>/dev/null; then
+        echo "already upstream/applied: $name"
+    elif git -C "$testdir" apply --check "$patch" 2>/dev/null; then
+        git -C "$testdir" apply "$patch"
+        echo "applied: $name"
+        applied=$((applied + 1))
+    else
+        echo "ERROR: $name does not apply cleanly in $testdir." >&2
+        echo "Run scripts/bump_submodule.sh --check for a per-patch report." >&2
+        exit 1
+    fi
+done < "$series"
+echo "testing tree patched ($applied patch(es))"
 
 echo "building the patched Haskell oracle (first build takes a while)..."
 ( cd "$testdir" && stack build )

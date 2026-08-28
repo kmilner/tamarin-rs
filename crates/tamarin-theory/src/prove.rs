@@ -134,7 +134,7 @@ fn hs_normalise_relative(p: &str) -> String {
 /// as its workDir; an `o`/`O` inside a compact letter run carries no workDir.
 ///
 /// Mirrors HS `oraclePath oracle = fromMaybe "." workDir </> normalise relPath`
-/// (System.hs:574-575) with `workDir = takeDirectory inFile`.  Producing the
+/// (System.hs:576-577) with `workDir = takeDirectory inFile`.  Producing the
 /// `"."`-for-no-dir prefix (via [`hs_take_directory`]) is what gives the
 /// oracle path its leading `./` so Unix `exec` resolves it from the CWD rather
 /// than doing a PATH lookup.
@@ -327,7 +327,7 @@ pub struct CliHeuristic {
 /// mirroring HS's CLI heuristic pipeline:
 ///
 ///   1. `filterHeuristic diff rawRankings` — parse the ranking string char
-///      by char (System.hs:680-684).  RS `parse_heuristic_str_with_tactics`.
+///      by char (System.hs:682-686).  RS `parse_heuristic_str_with_tactics`.
 ///   2. `map (mapOracleRanking (maybeSetOracleRelPath oraclename))` — set the
 ///      oracle relPath from `--oraclename` (TheoryLoader.hs:337-344, see line 343).
 ///   3. `defaultOracleNames srcThyInFileName` (TheoryLoader.hs:744-746, see line 746) — fill any
@@ -406,7 +406,7 @@ fn resolve_cli_heuristic(
 }
 
 /// Validate the CLI `--heuristic` string against the set HS actually
-/// accepts (`filterHeuristic`, System.hs:679-683): identifier characters
+/// accepts (`filterHeuristic`, System.hs:681-685): identifier characters
 /// from `goalRankingIdentifiers` plus `{tactic}` groups whose name is
 /// declared by the theory (`chosenTactic`, ProofMethod.hs:493-502; names
 /// match verbatim, no trim).  The shared parser
@@ -1331,7 +1331,7 @@ pub fn prove_lemma(
 /// Like [`prove_lemma`] but accepts a `MaudePool` (consulted ONLY inside
 /// `par_iter` closures — see `sources.rs::saturate_sources_with_simp_opt`),
 /// the source file path (oracle path resolution, HS `oraclePath oracle =
-/// takeDirectory inFile </> normalise relPath`, System.hs:574-575,
+/// takeDirectory inFile </> normalise relPath`, System.hs:576-577,
 /// Theory/Text/Parser.hs:309), and the CLI
 /// `--heuristic`/`--oraclename`/`--oracle-only` (HS `AutoProver`).  This is
 /// the per-lemma (non-session) fallback path; when `cli_heuristic.raw` is

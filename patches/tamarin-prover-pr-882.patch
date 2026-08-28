@@ -1,0 +1,131 @@
+diff --git a/lib/theory/src/Theory/Constraint/Solver/Reduction.hs b/lib/theory/src/Theory/Constraint/Solver/Reduction.hs
+index 678460dadb0e6ea77c3854b09c13dbf00c087494..b037b5faba8730b23dd0471b3f538e68c6040e66 100644
+--- a/lib/theory/src/Theory/Constraint/Solver/Reduction.hs
++++ b/lib/theory/src/Theory/Constraint/Solver/Reduction.hs
+@@ -426,7 +426,7 @@ insertAtom ato = case ato of
+ -- formula is marked as solved. Other intermediate formulas are not marked.
+ insertFormula :: LNGuarded -> Reduction ()
+ insertFormula = do
+-    insert True
++    insert True . normaliseStoredFormula
+   where
+     insert mark fm = do
+         formulas       <- getM sFormulas
+@@ -602,11 +602,20 @@ substEdges          = substPart sEdges
+ substLessAtoms      = substPart sLessAtoms
+ substSubtermStore   = substPart sSubtermStore
+ substLastAtom       = substPart sLastAtom
+-substFormulas       = substPart sFormulas
+-substSolvedFormulas = substPart sSolvedFormulas
+-substLemmas         = substPart sLemmas
++substFormulas       = substFormulaPart sFormulas
++substSolvedFormulas = substFormulaPart sSolvedFormulas
++substLemmas         = substFormulaPart sLemmas
+ substNextGoalNr     = return ()
+ 
++-- | 'substPart' for guarded-formula sets. Always re-normalise after applying
++-- the substitution: formula-producing paths outside 'insertFormula' can
++-- still supply a raw formula, and keeping those values raw can desynchronise
++-- a stored 'GDisj' from its 'DisjG' goal.
++substFormulaPart :: (System :-> S.Set LNGuarded) -> Reduction ()
++substFormulaPart l = do
++    subst <- getM sSubst
++    modM l (S.map (normaliseStoredFormula . apply subst))
++
+ -- | Apply the current substitution of the equation store to a part of the
+ -- sequent. This is an internal function.
+ substPart :: Apply LNSubst a => (System :-> a) -> Reduction ()
+@@ -656,6 +665,12 @@ substGoals = do
+         ActionG i fa@(kFactView -> Just (UpK, m))
+           | (isMsgVar m || isProduct m || isUnion m {--|| isXor m-}) && (apply subst m /= m) ->
+               insertAction i (apply subst fa)
++        -- Disjunction goals are normalised in lockstep with the stored
++        -- formulas they mirror.
++        DisjG disj -> do
++            let disj' = normaliseDisjList (apply subst disj)
++            modM sGoals $ M'.insertWith combineGoalStatus (DisjG disj') status
++            return Unchanged
+         _ -> do modM sGoals $
+                   M'.insertWith combineGoalStatus (apply subst goal) status
+                 return Unchanged
+diff --git a/lib/theory/src/Theory/Constraint/Solver/Simplify.hs b/lib/theory/src/Theory/Constraint/Solver/Simplify.hs
+index 3e26834904d2a314aef784b606217e9e785936e6..c30ce6f46701967caf14e7df738136d1b71a40d7 100644
+--- a/lib/theory/src/Theory/Constraint/Solver/Simplify.hs
++++ b/lib/theory/src/Theory/Constraint/Solver/Simplify.hs
+@@ -411,7 +411,7 @@ insertImpliedFormulas = do
+     applyChangeList $ do
+         clause  <- (S.toList $ get sFormulas sys) ++
+                    (S.toList $ get sLemmas sys)
+-        implied <- impliedFormulas hnd sys clause
++        implied <- map normaliseStoredFormula (impliedFormulas hnd sys clause)
+         if ( implied `S.notMember` get sFormulas sys &&
+              implied `S.notMember` get sSolvedFormulas sys )
+           then return (insertFormula implied)
+diff --git a/lib/theory/src/Theory/Constraint/System/Guarded.hs b/lib/theory/src/Theory/Constraint/System/Guarded.hs
+index b66cb6baee485a46341e0db8d55b9c77f19549cb..aa3948917bf75194e0bac08dfce8226a362d7dc8 100644
+--- a/lib/theory/src/Theory/Constraint/System/Guarded.hs
++++ b/lib/theory/src/Theory/Constraint/System/Guarded.hs
+@@ -40,6 +40,9 @@ module Theory.Constraint.System.Guarded (
+   -- ** Transformation
+   , simplifyGuarded
+   , simplifyGuardedOrReturn
++  , normaliseGuarded
++  , normaliseStoredFormula
++  , normaliseDisjList
+ 
+   , mapGuardedAtoms
+ 
+@@ -390,6 +393,39 @@ closeGuarded qua vs as gf =
+ 
+ type LNGuarded = Guarded (String,LSort) Name LVar
+ 
++-- | Rebuild a guarded formula bottom-up with the 'gconj' smart
++-- constructor, restoring the normal form that 'formulaToGuarded'
++-- establishes (flattened, duplicate-free conjunctions/disjunctions).
++--
++-- This is necessary because parsing renormalises goals. If two sides of
++-- a conjuct become identical during a proof (because of terms unifying,
++-- e.g. A ∧ B -> A ∧ A) then without normalisation this formula will be
++-- preserved and printed. When parsed later it is constructed via gconj
++-- below which nubs gconj [A, A] to [A], which would not match the
++-- unnormalised formula in the system and therefore be considered an invalid
++-- proof step.
++normaliseGuarded :: (Ord s, Ord c, Ord v) => Guarded s c v -> Guarded s c v
++normaliseGuarded = foldGuarded GAto (GDisj . normaliseDisj) (gconj . getConj) GGuarded
++
++-- | Flatten nested disjunctions and drop duplicate disjuncts.
++-- Note this works differently than gconj because disjunctions are
++-- also associated with a DisjG, so disjunctions have to be preserved.
++normaliseDisj :: (Ord s, Ord c, Ord v) => Disj (Guarded s c v) -> Disj (Guarded s c v)
++normaliseDisj (Disj gfs) =
++    Disj . nub . concatMap flat $ gfs
++  where
++    flat (GDisj (Disj ds)) = ds
++    flat gf                = [gf]
++
++normaliseDisjList :: (Ord s, Ord c, Ord v) => Disj (Guarded s c v) -> Disj (Guarded s c v)
++normaliseDisjList (Disj gfs) = normaliseDisj (Disj (map normaliseGuarded gfs))
++
++-- | Normalise a formula for storage in the constraint system.
++-- Disjunctions have to be preserved to match their associated DisjG goal.
++normaliseStoredFormula :: LNGuarded -> LNGuarded
++normaliseStoredFormula (GDisj d) = GDisj (normaliseDisjList d)
++normaliseStoredFormula gf        = normaliseGuarded gf
++
+ instance Apply LNSubst LNGuarded where
+   apply subst = mapGuardedAtoms (const $ apply subst)
+ 
+@@ -413,11 +449,11 @@ gnotAtom a  = GGuarded All [] [a] gfalse
+ 
+ -- | @gconj gfs@ smart constructor for the conjunction of gfs.
+ gconj :: (Ord s, Ord c, Ord v) => [Guarded s c v] -> Guarded s c v
+-gconj gfs0 = case concatMap flatten gfs0 of
++gconj gfs0 = case nub (concatMap flatten gfs0) of
+     [gf]                      -> gf
+     gfs | any (gfalse ==) gfs -> gfalse
+         -- FIXME: See 'sortednub' below.
+-        | otherwise           -> GConj $ Conj $ nub gfs
++        | otherwise           -> GConj $ Conj gfs
+   where
+     flatten (GConj conj) = concatMap flatten $ getConj conj
+     flatten gf           = [gf]

@@ -8,10 +8,10 @@
 //!
 //! Two passes, both run only when `_transReport` is set:
 //!
-//!   1. `translateTermsReport` (Report.hs:100-101): `reportMapTerms subst
+//!   1. `translateTermsReport` (Report.hs:104-105): `reportMapTerms subst
 //!      Nothing` — propagate the per-process `@location` annotation down the
 //!      tree and, where a `Just loc` is in scope, rewrite every `report(t)`
-//!      term to `rep(subst loc t, loc)` (`subst`, Report.hs:91-98). This also
+//!      term to `rep(subst loc t, loc)` (`subst`, Report.hs:92-97). This also
 //!      reaches condition and embedded-MSR formulas, matching upstream #922.
 //!
 //!   2. `reportInit` (Report.hs:28-41): prepend the fixed `ReportRule`
@@ -97,10 +97,10 @@ pub(crate) fn report_init(
 }
 
 // =============================================================================
-// translateTermsReport (Report.hs:50-101)
+// translateTermsReport (Report.hs:50-105)
 // =============================================================================
 
-/// `translateTermsReport = reportMapTerms subst Nothing` (Report.hs:100-101):
+/// `translateTermsReport = reportMapTerms subst Nothing` (Report.hs:104-105):
 /// walk the process, threading the in-scope `@location` annotation down via
 /// `opt_loc`, and rewrite `report(t)` terms in actions / combinators to
 /// `rep(subst loc t, loc)` wherever a `Just loc` is in scope.
@@ -117,7 +117,7 @@ fn opt_loc(loc: &Option<SapicTerm>, ann: &ProcessAnnotation<LVar>) -> Option<Sap
     }
 }
 
-/// `reportMapTerms f loc` (Report.hs:54-59).  `f = subst`.
+/// `reportMapTerms loc` (Report.hs:52-60).
 fn report_map_terms(loc: Option<SapicTerm>, p: AnnProc) -> AnnProc {
     match p {
         Process::Null(ann) => Process::Null(ann),
@@ -139,7 +139,7 @@ fn report_map_terms(loc: Option<SapicTerm>, p: AnnProc) -> AnnProc {
     }
 }
 
-/// `reportMapTermsAction f loc ac` (Report.hs:60-79): apply `subst loc` to the
+/// `reportMapTermsAction f loc ac` (Report.hs:61-77): apply `subst loc` to the
 /// terms of each action.  `New`, `Rep`, `ProcessCall` are identity.
 /// Upstream #922 also maps embedded MSR restriction formulas.
 fn report_map_terms_action(
@@ -187,7 +187,7 @@ fn report_map_terms_action(
     }
 }
 
-/// `reportMapTermsComb f loc c` (Report.hs:80-89): `CondEq`, `Let`, `Lookup`
+/// `reportMapTermsComb f loc c` (Report.hs:78-87): `CondEq`, `Let`, `Lookup`
 /// have their terms `subst`'d; upstream #922 maps formula terms in `Cond`.
 fn report_map_terms_comb(
     loc: &Option<SapicTerm>,
@@ -234,7 +234,7 @@ fn subst_formula(loc: &Option<SapicTerm>, formula: SapicFormula) -> SapicFormula
     })
 }
 
-/// `subst` (Report.hs:91-98): rewrite `report(a)` to `rep(subst loc a, loc)`
+/// `subst` (Report.hs:92-97): rewrite `report(a)` to `rep(subst loc a, loc)`
 /// when a `Just loc` is in scope.  With `Nothing` location it is the identity
 /// (`subst Nothing t = t`).
 fn subst<V: Clone + Ord>(loc: &Option<VTerm<Name, V>>, t: &VTerm<Name, V>) -> VTerm<Name, V> {
@@ -244,7 +244,7 @@ fn subst<V: Clone + Ord>(loc: &Option<VTerm<Name, V>>, t: &VTerm<Name, V>) -> VT
     }
 }
 
-/// The `subst (Just loc)` arm (Report.hs:93-98).
+/// The `subst (Just loc)` arm (Report.hs:94-97).
 fn subst_at<V: Clone + Ord>(loc: &VTerm<Name, V>, t: &VTerm<Name, V>) -> VTerm<Name, V> {
     use tamarin_term::function_symbols::FunSym;
     match t {

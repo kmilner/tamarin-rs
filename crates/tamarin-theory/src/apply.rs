@@ -3,7 +3,7 @@
 //   scripts/gen_license_headers.py --authors <this file>
 
 //! The substitution a whole-system pass applies, as
-//! `instance Apply LNSubst System` (System.hs:1813-1820) reaches the parts of
+//! `instance Apply LNSubst System` (System.hs:1815-1822) reaches the parts of
 //! a constraint system.
 //!
 //! Haskell threads a bare `LNSubst` through those instances.  The port's pass

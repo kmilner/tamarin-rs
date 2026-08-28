@@ -940,7 +940,7 @@ fn one_variable_per_field_system() -> System {
     s
 }
 
-/// `instance HasFrees System`'s fold (System.hs:1834-1847) over the record at
+/// `instance HasFrees System`'s fold (System.hs:1836-1849) over the record at
 /// System.hs:383-395: the ten variable-bearing fields in declaration order,
 /// each `Data.Set` / `Data.Map` field in its container order rather than in
 /// the port's insertion order.  `old_neg_subterms` and the domain-only rule
@@ -1005,7 +1005,7 @@ fn for_each_free_walks_fields_in_system_hs_order() {
     );
 }
 
-/// `instance HasFrees System`'s map (System.hs:1864-1877) rebuilds each
+/// `instance HasFrees System`'s map (System.hs:1866-1879) rebuilds each
 /// `Vec`-backed field where it stands, where HS re-establishes the container
 /// with `S.fromList` / `M.fromList` (LTerm.hs:903, LTerm.hs:914).  The ranges
 /// of the equation store's disjunctions and `old_neg_subterms` are carried

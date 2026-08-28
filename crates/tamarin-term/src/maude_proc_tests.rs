@@ -558,7 +558,7 @@ fn match_eqs_skolemize_both_mset_var_to_submultiset() {
 }
 
 // HS's `impliedFormulas` runs `skolemizeGuarded` over the WHOLE clause
-// (`System.hs:1110-1144, see line 1121`): every FREE (non-universal) LVar of the guard
+// (`System.hs:1112-1146, see line 1123`): every FREE (non-universal) LVar of the guard
 // pattern becomes a Maude *constant*; only universal-bound vars stay
 // bindable.  `match_eqs_skolemize_both` treats those free vars as
 // distinct constants, matching HS's `skolemizeGuarded`-then-match.

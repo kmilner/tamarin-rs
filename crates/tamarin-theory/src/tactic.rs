@@ -193,7 +193,7 @@ deprio:\n\
     }
 
     /// Locks the corpus-relevant presort chars (`C`, `c`, `s`) which
-    /// round-trip identically through `goalRankingToChar` (System.hs:647-649).
+    /// round-trip identically through `goalRankingToChar` (System.hs:649-651).
     #[test]
     fn presort_char_round_trips() {
         let t = parse("x", "presort: C\nprio:\n  regex \"a\"\n");

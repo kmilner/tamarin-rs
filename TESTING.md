@@ -428,11 +428,11 @@ every included file, transitively, and `__o` (present only when relevant files
 exist) digests executable-oracle contents and modes — where `HS_FP` is
 `stat -c '%s.%Y'` of the oracle binary — `gate_common.sh`'s
 `hs_fingerprint`, the one definition every cached gate sources. A rebuilt
-oracle, whether a bump or a
-`patches/tamarin-prover-fixes.patch` edit re-applied by `./setup.sh testing`,
-is a clean MISS per entry rather than a silently stale hit. Nothing is archived
-and nothing is wiped: `bump_submodule.sh` deliberately leaves the caches in
-place. Both fast gates therefore need the oracle binary even on a warm cache —
+oracle, whether a bump or a `patches/series` edit re-applied by
+`./setup.sh testing`, is a clean MISS per entry rather than a silently stale
+hit. Nothing is archived and nothing is wiped: `bump_submodule.sh`
+deliberately leaves the caches in place. Both fast gates therefore need the
+oracle binary even on a warm cache —
 its fingerprint is part of the address — and exit 2 without one,
 `NO_HS_FILL=1` included.
 
@@ -706,41 +706,18 @@ target/release/examples/dump_proof <file> <lemma> | python3 scripts/canon_proof_
 regression corpus (PASS/FAIL tally); `scripts/corpus_full_trace_diff.sh`
 does it for every lemma in the corpus.
 
-**Proof-search state trace** — both provers emit a `[STATE]` line at every
-proof-method expansion; diffing them pinpoints the first divergence:
-
-```bash
-TAM_HS_TRACE_STATE=1 <hs-binary>                 --prove=<lemma> <file> 2>&1 | grep '^\[STATE\]' > /tmp/hs.trace
-TAM_RS_TRACE_STATE=1 target/release/tamarin-rs --prove=<lemma> <file> 2>&1 | grep '^\[STATE\]' > /tmp/rs.trace
-diff /tmp/hs.trace /tmp/rs.trace | head
-```
-
-**Maude IPC trace** — lock-step command/response comparison:
-
-```bash
-TAM_DBG_MAUDE_IO=full TAM_DBG_MAUDE_IO_FILTER=unify target/release/tamarin-rs --prove <file>
-scripts/diff_maude_io.sh <file> <lemma>       # side-by-side HS↔RS Maude traffic
-scripts/diff_aes_calls.sh <file> <lemma>      # apply_eq_store call counts per site
-```
-
-See `crates/tamarin-term/src/maude_proc.rs` for the env-gated trace points.
-
 **Diagnostic env flags** (all off by default; solving behavior is never
 env-configurable — these only dump, count, verify-and-panic, or force a
-reference path whose output is byte-identical). `TAM_HS_*` work on the
-instrumented Haskell build, the rest on the Rust binary:
+reference path whose output is byte-identical):
 
 | Variable | Effect |
 |---|---|
 | `TAM_RS_DBG_INTR_DUMP=1` | assembled intruder-rule cache (index, kind, budget/flags, facts) |
 | `TAM_RS_DBG_SOURCES_DUMP=1` | per-source goal + refined case names after `ensure_saturated` |
 | `TAM_DBG_PERFORM_SPLIT=1` | perform_split case lists (RS) |
-| `TAM_HS_DBG_PERFORM_SPLIT=1` | same, HS side |
 | `TAM_RS_DBG_APPLY_EQ_STORE=1` | applyEqStore IN/OUT (RS) |
 | `TAM_RS_DBG_APPLY_EQ_STORE_FILTER=substantive` | limit that dump to calls with equations or substitutions |
-| `TAM_HS_DBG_APPLY_EQ_STORE=1` | same, HS side |
 | `TAM_DBG_AES_VARIANTS=1` | apply_eq_store variant before→after counts |
-| `TAM_HS_TRACE_CHAINS=1` | HS-side solveChain enter/extend |
 | `TAM_RS_VERIFY_BOUNDS_CACHE=1` | panic if the bounds_max cache diverges from a full recompute |
 | `TAM_RS_VERIFY_SUBST_SKIP=1` | panic if a marker-skipped `subst_system` pass was not a bit-identical no-op |
 | `TAM_RS_VERIFY_FP=1` | panic if a bloom-skipped fact descent would actually have changed the fact |
@@ -769,9 +746,8 @@ self-check of the optimisation machinery as well. The `TAM_RS_NO_*` /
 `TAM_RS_DISABLE_*` switches are the A/B complement — they force the
 pre-optimisation reference path, whose output must stay byte-identical.
 
-The table lists every Rust-side diagnostic/solver flag; the instrumented
-Haskell build carries many more — grep `patches/tamarin-prover-fixes.patch`
-for `TAM_HS_`. Test-only dependency escape hatches are separate:
+The table lists every Rust-side diagnostic/solver flag. Test-only dependency
+escape hatches are separate:
 `TAM_ALLOW_NO_MAUDE=1`, `TAM_ALLOW_NO_CORPUS=1`, and
 `TAM_ALLOW_NO_DOT=1` explicitly permit the corresponding tests to skip when
 that external dependency is unavailable. They should not be set for a gate.
@@ -824,7 +800,6 @@ exits 2 rather than running with a private fallback.
 | `diff_proof_raw.sh` | one lemma, raw HS↔RS diff |
 | `corpus_raw_diff.sh` | raw per-lemma diff across the corpus |
 | `compare_parity_tsv.py` | compare two gate TSVs by (file, lemma) |
-| `diff_maude_io.sh` / `diff_aes_calls.sh` | Maude-IPC and eq-store call-site diffs |
 | `diff_proof_tree.sh` / `canon_proof_tree.py` / `corpus_diff_proof_trees.sh` | structural proof-tree diffs, pre-byte-parity era; superseded by the byte gates and only worth reaching for when output diverges too grossly to read |
 | `corpus_full_trace_diff.sh` | canonicalised proof-tree diffing for every lemma; the most detailed comparison |
 

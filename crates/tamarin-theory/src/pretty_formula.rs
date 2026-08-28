@@ -125,7 +125,7 @@ pub fn pretty_guarded_doublequoted(g: &Guarded) -> String {
 /// HS bare `prettyGuarded gf` (Guarded.hs:824-866) as a Doc — WITHOUT the
 /// lemma path's `doubleQuotes` wrap.  This is what
 /// `prettyNonGraphSystem` renders the `sFormulas` / `sLemmas` /
-/// `sSolvedFormulas` sections with (System.hs:1672-1685, see line 1675/1678/1680), so the
+/// `sSolvedFormulas` sections with (System.hs:1674-1687, see line 1677/1678/1680), so the
 /// formula participates in the surrounding pane Doc and wraps at the
 /// pane's width/nesting exactly as in HS.
 pub(crate) fn guarded_doc(g: &Guarded) -> crate::pretty_hpj::Doc {

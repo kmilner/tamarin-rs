@@ -446,7 +446,7 @@ fn classify_edge(
     }
 }
 
-/// HS `resolveNodeConcFact` (System.hs:930-931) reached through Graph.hs:93-96,
+/// HS `resolveNodeConcFact` (System.hs:932-933) reached through Graph.hs:93-96,
 /// keeping only the tag `dotEdge`'s predicates test.
 fn lookup_conc_tag(
     orig_node_map: &NodeRuleMap<'_>,
@@ -457,7 +457,7 @@ fn lookup_conc_tag(
     ru.conclusions.get(idx.0).map(|fa| fa.tag)
 }
 
-/// HS `resolveNodePremFact` (System.hs:926-927) reached through Graph.hs:87-90,
+/// HS `resolveNodePremFact` (System.hs:928-929) reached through Graph.hs:87-90,
 /// keeping only the tag `dotEdge`'s predicates test.
 fn lookup_prem_tag(
     orig_node_map: &NodeRuleMap<'_>,

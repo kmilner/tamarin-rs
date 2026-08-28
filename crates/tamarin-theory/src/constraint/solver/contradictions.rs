@@ -86,7 +86,7 @@ pub fn contradictions(_ctxt: &ProofContext, sys: &System) -> Vec<Contradiction> 
     // HS's `contradictions` calls `D.cyclic $ rawLessRel sys` directly
     // (Contradictions.hs), and `rawLessRel`/`rawEdgeRel`/`nodeConcNode`/
     // `nodePremNode` are pure projections that apply NO eq-store subst
-    // (System.hs:1613-1622 `rawEdgeRel`/`rawLessRel`, 923-942
+    // (System.hs:1615-1624 `rawEdgeRel`/`rawLessRel`, 923-942
     // `nodePremNode = fst`/`nodeConcNode = fst`; Constraints.hs:133-138
     // `lessAtomToEdge`/`getLessRel`).  HS achieves canonical node
     // identity instead by running `substSystem` — which applies the
@@ -116,7 +116,7 @@ pub fn contradictions(_ctxt: &ProofContext, sys: &System) -> Vec<Contradiction> 
     for e in &sys.edges {
         all_less.push((resolve(&e.src.0), resolve(&e.tgt.0)));
     }
-    // HS-faithful: `rawEdgeRel = sEdges ++ unsolvedChains` (System.hs:1613-
+    // HS-faithful: `rawEdgeRel = sEdges ++ unsolvedChains` (System.hs:1615-
     // 1616) — unsolved chain goals contribute (c.0, p.0) to the less-
     // relation for cycle detection. Without this, RS misses cycles HS
     // catches when the cycle goes through an open chain. Root cause of
@@ -1099,7 +1099,7 @@ fn has_forbidden_chain<'a>(
         // substituted by `substSystem` (Reduction.hs:609-611 `modM sNodes . M.map
         // . apply =<< getM sSubst`, run after every reduction/variant fold),
         // and the contradiction check runs after simplifySystem→substSystem
-        // (Sources.hs:177-178), so HS's `nodeConcFact` (System.hs:937-938, a
+        // (Sources.hs:177-178), so HS's `nodeConcFact` (System.hs:939-940, a
         // plain `nodeRule` lookup that does NOT apply eqsSubst at read time)
         // already returns the canonical term.  RS mirrors substNodes in
         // `subst_system_once`; apply eq_store.subst here so t_start matches
@@ -1141,7 +1141,7 @@ fn has_forbidden_chain<'a>(
             .map(|v| Term::Lit(Lit::Var(*v)))
             .collect();
         // (3) Some KU(t_start) action node precedes the chain
-        // start `c.0`.  HS-faithful: `allKUActions` (System.hs:1582-1585)
+        // start `c.0`.  HS-faithful: `allKUActions` (System.hs:1584-1587)
         // unions BOTH `unsolvedActionAtoms` (unsolved ActionG goals)
         // AND node `rActs` lists.
         //
@@ -1263,7 +1263,7 @@ fn has_forbidden_exp(sys: &System, ab_adj: &crate::constraint::system::PrebuiltA
         None
     }
 
-    // `allKUActions`: HS System.hs:1582-1585.  Unions
+    // `allKUActions`: HS System.hs:1584-1587.  Unions
     // `unsolvedActionAtoms sys` (open KU goals) and the
     // `rActs` lists of each node.  Returns (NodeId, fact, term).
     // For "knownEarlier" we only need (NodeId, term).
