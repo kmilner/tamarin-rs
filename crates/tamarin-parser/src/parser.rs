@@ -3901,13 +3901,18 @@ impl<'a> Parser<'a> {
     /// `genericletBlock` (Theory/Text/Parser/Let.hs:24-31): an indexed
     /// identifier with an optional sort prefix or `:sort` suffix, never an
     /// application or a compound term.  HS's sort list here is `[LSortMsg,
-    /// LSortNat]`; this parser takes any sort.  `Ok(None)` means no variable
-    /// starts here, which ends the definition list.
+    /// LSortNat]`. `Ok(None)` means no variable starts here, which ends the
+    /// definition list.
     fn let_binder(&mut self) -> Result<Option<VarSpec>, ParseError> {
+        let start = self.save();
         let Some(v) = self.try_var_spec()? else {
             return Ok(None);
         };
         let v = self.attach_sort_suffix(v)?;
+        if !matches!(v.sort, LSort::Msg | LSort::Nat) {
+            self.restore(start);
+            return Err(self.err_expect(&["identifier", "\"%\""]));
+        }
         self.note_var_dot_hangover(&v);
         Ok(Some(v))
     }
@@ -3925,31 +3930,18 @@ impl<'a> Parser<'a> {
             if self.at_keyword("in") {
                 break;
             }
-            // End-of-block sentinels (defensive — the canonical terminator is
-            // `in`, but malformed inputs shouldn't loop forever).
-            if self.lx.peek() == Some('[')
-                || self.lx.rest().starts_with("-->")
-                || self.lx.rest().starts_with("--[")
-            {
-                break;
-            }
-            let lhs_save = self.save();
-            let lhs = match self.let_binder() {
-                Ok(Some(v)) => Term::Var(v),
-                Ok(None) | Err(_) => {
-                    self.restore(lhs_save);
-                    break;
-                }
+            let lhs = match self.let_binder()? {
+                Some(v) => Term::Var(v),
+                None => break,
             };
-            if !self.try_punct("=") {
-                self.restore(lhs_save);
-                break;
-            }
+            self.require_punct("=")?;
             let rhs = self.term(false)?;
             bs.push((lhs, rhs));
         }
-        // Consume the `in` terminator if present.
-        let _ = self.try_kw("in");
+        if bs.is_empty() {
+            return Err(self.err_expect(&["identifier", "\"%\""]));
+        }
+        self.require_kw("in")?;
         Ok(bs)
     }
 
@@ -6492,7 +6484,190 @@ fn subst_let_formula(phi: &mut Formula, key: &Term, val: &Term) {
             subst_let_formula(a, key, val);
             subst_let_formula(b, key, val);
         }
-        Formula::Forall(_, body) | Formula::Exists(_, body) => subst_let_formula(body, key, val),
+        Formula::Forall(vars, body) | Formula::Exists(vars, body) => {
+            let Term::Var(key_var) = key else {
+                subst_let_formula(body, key, val);
+                return;
+            };
+            // A rule-let substitution is a free-variable substitution. A
+            // quantifier for its domain shadows every occurrence below it.
+            if vars.contains(key_var) {
+                return;
+            }
+
+            // Parser formulas still carry named variables. Alpha-rename any
+            // binder that occurs free in the replacement before descending,
+            // otherwise `let x = y in Ex y. ...x...` captures the inserted y.
+            let mut replacement_vars = Vec::new();
+            collect_term_vars(val, &mut replacement_vars);
+            let mut used_vars = replacement_vars.clone();
+            collect_formula_vars(body, &mut used_vars);
+            for var in vars.iter() {
+                if !used_vars.contains(var) {
+                    used_vars.push(var.clone());
+                }
+            }
+            if !used_vars.contains(key_var) {
+                used_vars.push(key_var.clone());
+            }
+            for var in vars.iter_mut() {
+                if replacement_vars.contains(var) {
+                    let old = var.clone();
+                    let fresh = fresh_formula_var(&used_vars, &old);
+                    rename_bound_formula(body, &old, &fresh);
+                    used_vars.push(fresh.clone());
+                    *var = fresh;
+                }
+            }
+            subst_let_formula(body, key, val);
+        }
+    }
+}
+
+fn collect_term_vars(term: &Term, out: &mut Vec<VarSpec>) {
+    match term {
+        Term::Var(v) => {
+            if !out.contains(v) {
+                out.push(v.clone());
+            }
+        }
+        Term::App(_, args) | Term::Pair(args) => {
+            for arg in args {
+                collect_term_vars(arg, out);
+            }
+        }
+        Term::AlgApp(_, a, b) | Term::Diff(a, b) | Term::BinOp(_, a, b) => {
+            collect_term_vars(a, out);
+            collect_term_vars(b, out);
+        }
+        Term::PatMatch(t) => collect_term_vars(t, out),
+        Term::PubLit(_)
+        | Term::FreshLit(_)
+        | Term::NatLit(_)
+        | Term::Number(_)
+        | Term::NumberOne
+        | Term::NatOne
+        | Term::DhNeutral => {}
+    }
+}
+
+fn collect_formula_vars(formula: &Formula, out: &mut Vec<VarSpec>) {
+    match formula {
+        Formula::False | Formula::True => {}
+        Formula::Atom(atom) => collect_atom_vars(atom, out),
+        Formula::Not(body) => collect_formula_vars(body, out),
+        Formula::And(a, b) | Formula::Or(a, b) | Formula::Implies(a, b) | Formula::Iff(a, b) => {
+            collect_formula_vars(a, out);
+            collect_formula_vars(b, out);
+        }
+        Formula::Forall(vars, body) | Formula::Exists(vars, body) => {
+            for var in vars {
+                if !out.contains(var) {
+                    out.push(var.clone());
+                }
+            }
+            collect_formula_vars(body, out);
+        }
+    }
+}
+
+fn collect_atom_vars(atom: &Atom, out: &mut Vec<VarSpec>) {
+    match atom {
+        Atom::Eq(a, b) | Atom::Less(a, b) | Atom::LessMset(a, b) | Atom::Subterm(a, b) => {
+            collect_term_vars(a, out);
+            collect_term_vars(b, out);
+        }
+        Atom::Action(fact, node) => {
+            for arg in &fact.args {
+                collect_term_vars(arg, out);
+            }
+            collect_term_vars(node, out);
+        }
+        Atom::Last(node) => collect_term_vars(node, out),
+        Atom::Pred(fact) => {
+            for arg in &fact.args {
+                collect_term_vars(arg, out);
+            }
+        }
+    }
+}
+
+fn fresh_formula_var(used: &[VarSpec], old: &VarSpec) -> VarSpec {
+    let mut fresh = old.clone();
+    fresh.idx = used
+        .iter()
+        .filter(|v| v.name == old.name && v.sort == old.sort)
+        .map(|v| v.idx)
+        .max()
+        .unwrap_or(old.idx)
+        .saturating_add(1);
+    while used.contains(&fresh) {
+        fresh.idx = fresh.idx.saturating_add(1);
+    }
+    fresh
+}
+
+/// Rename occurrences bound by the current quantifier. A nested quantifier
+/// for the same variable starts a new scope and stops the traversal there.
+fn rename_bound_formula(formula: &mut Formula, old: &VarSpec, new: &VarSpec) {
+    match formula {
+        Formula::False | Formula::True => {}
+        Formula::Atom(atom) => rename_atom_var(atom, old, new),
+        Formula::Not(body) => rename_bound_formula(body, old, new),
+        Formula::And(a, b) | Formula::Or(a, b) | Formula::Implies(a, b) | Formula::Iff(a, b) => {
+            rename_bound_formula(a, old, new);
+            rename_bound_formula(b, old, new);
+        }
+        Formula::Forall(vars, body) | Formula::Exists(vars, body) => {
+            if !vars.contains(old) {
+                rename_bound_formula(body, old, new);
+            }
+        }
+    }
+}
+
+fn rename_atom_var(atom: &mut Atom, old: &VarSpec, new: &VarSpec) {
+    match atom {
+        Atom::Eq(a, b) | Atom::Less(a, b) | Atom::LessMset(a, b) | Atom::Subterm(a, b) => {
+            rename_term_var(a, old, new);
+            rename_term_var(b, old, new);
+        }
+        Atom::Action(fact, node) => {
+            for arg in &mut fact.args {
+                rename_term_var(arg, old, new);
+            }
+            rename_term_var(node, old, new);
+        }
+        Atom::Last(node) => rename_term_var(node, old, new),
+        Atom::Pred(fact) => {
+            for arg in &mut fact.args {
+                rename_term_var(arg, old, new);
+            }
+        }
+    }
+}
+
+fn rename_term_var(term: &mut Term, old: &VarSpec, new: &VarSpec) {
+    match term {
+        Term::Var(v) if v == old => *v = new.clone(),
+        Term::App(_, args) | Term::Pair(args) => {
+            for arg in args {
+                rename_term_var(arg, old, new);
+            }
+        }
+        Term::AlgApp(_, a, b) | Term::Diff(a, b) | Term::BinOp(_, a, b) => {
+            rename_term_var(a, old, new);
+            rename_term_var(b, old, new);
+        }
+        Term::PatMatch(t) => rename_term_var(t, old, new),
+        Term::Var(_)
+        | Term::PubLit(_)
+        | Term::FreshLit(_)
+        | Term::NatLit(_)
+        | Term::Number(_)
+        | Term::NumberOne
+        | Term::NatOne
+        | Term::DhNeutral => {}
     }
 }
 

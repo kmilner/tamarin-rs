@@ -42,9 +42,10 @@ See [License](#license) if you are interested in future prospects for redistribu
   a small documented cosmetic residue, enumerated theory-by-theory in
   `scripts/websweep_residual.txt` (77 files) and re-checked by a ≈69,600-page
   crawl sweep — see [Parity status](#parity-status).
-- **Performance:** 4.3–80× faster than the most recent Tamarin release
-  (1.12.0) across 1–16 cores (median ≈16×), with peak memory 4.3–45×
-  lower at one core — see [Performance](#performance).
+- **Performance:** 4.5–88× faster than the most recent Tamarin release
+  (1.12.0) across 1–16 cores (median ≈19×), with peak memory 3.4–30×
+  lower at one core and 2.4–16× lower at sixteen — see
+  [Performance](#performance).
 - **Not yet ported:** observational equivalence (`--diff`) and the
   ProVerif / DeepSec export modules — see
   [Not yet ported](#not-yet-ported).
@@ -173,8 +174,11 @@ is smaller than these tables show.
 
 Both provers prove every lemma (--prove --derivcheck-timeout=30); HS at
 `+RTS -Nk`, RS at `--processors=k`; wall-clock + peak RSS come from
-`/usr/bin/time -v` (the prover process only — Maude is a separate subprocess on
-both sides and is excluded). Single run per cell (wall-clock is noisy ±10%).
+`/usr/bin/time -v`. These existing tables record GNU time's maximum resident
+set value, which may include waited-for descendants but is not a simultaneous
+sum across Maude workers. New runs of `scripts/bench.sh` use a 20 ms
+process-tree sampler for that sum. Single run per cell (wall-clock is noisy
+±10%).
 The RS+HS columns measure ./prove_and_reverify.sh (THREADS=k): prove with RS,
 then re-CHECK the emitted proofs with HS — i.e. the total cost of a proof you
 did not have to trust the port for; its peak RSS is the max across both
@@ -226,9 +230,9 @@ the scripts/bench.sh header).
 
 <!-- BENCH:END -->
 
-Memory is the maximum resident set of the prover process; Maude runs as a
-separate subprocess on both sides and is excluded. Across all theories and
-core counts the Rust port is 4.5–88× faster than the 1.12.0 release
+Memory in the tables above is GNU time's maximum resident-set value; see the
+methodology note in the generated block. Across all theories and core counts
+the Rust port is 4.5–88× faster than the 1.12.0 release
 (median ≈19×); peak memory is 3.4–30× lower at one core and 2.4–16× lower
 at sixteen. The smallest gains are on `Joux`, whose runtime is dominated
 by AC-heavy Maude queries both provers pay for equally.
@@ -340,8 +344,8 @@ crate, distinct from the `tamarin-prover/` submodule at the repository root):
 ```
 tamarin-utils/          fresh-name state, pretty-printer, DAG/dot helpers, small util types
 tamarin-term/           Term/LTerm/LNTerm, MaudeSig, Maude IPC, normalisation
-tamarin-parser/         .spthy AST + lexer + parser + #include resolver + wellformedness
-tamarin-theory/         elaborator, constraint system, solver, simplify, sources, replay
+tamarin-parser/         .spthy AST + lexer + parser + #include resolver
+tamarin-theory/         elaborator, wellformedness, constraint system, solver, simplify, sources, replay
 tamarin-sapic/          SAPiC process: frontend — translation to multiset-rewrite rules
 tamarin-accountability/ accountability frontend — case tests → VC lemmas
 tamarin-test-support/   maude resolution shared by every crate's maude-gated tests

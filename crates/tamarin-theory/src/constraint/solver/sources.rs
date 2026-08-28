@@ -292,8 +292,10 @@ pub struct Source {
     pub goal: crate::constraint::constraints::Goal,
     /// Lazy cases — wrapped in `Mutex<Option<…>>` for interior
     /// mutability. The inner shared backing lets session cache hits and
-    /// proof-context clones reuse the heavy systems; taking a list for a
-    /// mutating saturation pass unwraps it when unique and clones otherwise.
+    /// proof-context worker snapshots reuse the heavy systems; taking a list
+    /// for a mutating saturation pass unwraps it when unique and clones
+    /// otherwise. The inner mutex is also what makes non-`Sync` `System`
+    /// caches safe to carry in a context shared by rayon workers.
     /// Internally stores case names as `Vec<String>` — HS's
     /// `caseNames :: [String]` (the `caseNames` parameter of `solve` at
     /// Sources.hs:144-225, see line 175; `[String]` type at Sources.hs:144-225).  The list
@@ -303,12 +305,6 @@ pub struct Source {
     /// to a single element across refineSource iterations. Names are joined
     /// only by presentation and proof-case-label code.
     pub(crate) cases_cell: std::sync::Mutex<Option<SourceCases>>,
-    /// `true` iff case enumeration was truncated.  Search must not return
-    /// `Verified` for any proof tree that consumed an incomplete
-    /// source — the dropped cases could contain attack witnesses.
-    /// Used to prevent wrong-VERIFIED on user-equation files where the
-    /// destructor-chain explosion forces truncation.
-    pub incomplete: bool,
 }
 
 impl std::fmt::Debug for Source {
@@ -316,7 +312,6 @@ impl std::fmt::Debug for Source {
         f.debug_struct("Source")
             .field("goal", &self.goal)
             .field("cases", &self.cases_cell.lock().ok().as_deref())
-            .field("incomplete", &self.incomplete)
             .finish()
     }
 }
@@ -327,7 +322,6 @@ impl Clone for Source {
         Source {
             goal: self.goal.clone(),
             cases_cell: std::sync::Mutex::new(v),
-            incomplete: self.incomplete,
         }
     }
 }
@@ -340,23 +334,17 @@ impl Source {
         Source {
             goal,
             cases_cell: std::sync::Mutex::new(None),
-            incomplete: false,
         }
     }
 
     /// Build a Source with cases already computed. Case-name component
     /// boundaries are retained until the rendering boundary.
-    pub fn eager(
-        goal: crate::constraint::constraints::Goal,
-        cases: Vec<SourceCase>,
-        incomplete: bool,
-    ) -> Self {
+    pub fn eager(goal: crate::constraint::constraints::Goal, cases: Vec<SourceCase>) -> Self {
         Source {
             goal,
             cases_cell: std::sync::Mutex::new(Some(std::sync::Arc::new(std::sync::Mutex::new(
                 cases,
             )))),
-            incomplete,
         }
     }
 
@@ -1140,7 +1128,7 @@ pub fn refine_with_source_asms(
         // KU(e1/e2/e3)), and starves `solve_with_source_cases_*`'s
         // `Some([])` zero-case match (goal closes) into a `None`
         // fall-through (runtime rule enumeration).
-        intermediate.push(Source::eager(src.goal, new_cases, src.incomplete));
+        intermediate.push(Source::eager(src.goal, new_cases));
     }
 
     // Step 2 (Haskell `saturateSources`): re-saturate with the
@@ -1170,7 +1158,7 @@ pub fn refine_with_source_asms(
             new_cases.push((name, sys));
         }
         // Keep zero-case sources — see the Step-1 note above.
-        out.push(Source::eager(src.goal, new_cases, src.incomplete));
+        out.push(Source::eager(src.goal, new_cases));
     }
     out
 }
@@ -1474,10 +1462,8 @@ fn saturate_sources_with_simp_opt(
         // `src_meta[i]` lines up with `per_source[i]`.  This lets us move
         // `current`'s Systems into `refine_one_source` (which consumes
         // them) instead of deep-cloning every source first.
-        let src_meta: Vec<(crate::constraint::constraints::Goal, bool)> = current
-            .iter()
-            .map(|s| (s.goal.clone(), s.incomplete))
-            .collect();
+        let src_goals: Vec<crate::constraint::constraints::Goal> =
+            current.iter().map(|s| s.goal.clone()).collect();
         let saturated_indexed: Vec<(usize, Source)> = std::mem::take(&mut current)
             .into_iter()
             .enumerate()
@@ -1514,9 +1500,7 @@ fn saturate_sources_with_simp_opt(
                 }
             })
             .collect();
-        for ((new_cases, per_changed, _), (src_goal, src_incomplete)) in
-            per_source.into_iter().zip(src_meta)
-        {
+        for ((new_cases, per_changed, _), src_goal) in per_source.into_iter().zip(src_goals) {
             // HS `saturateSources` (Sources.hs:355-384) derives its
             // per-source change bit SOLELY from the solver's result:
             //   solver = do names <- solveAllSafeGoals …
@@ -1546,7 +1530,7 @@ fn saturate_sources_with_simp_opt(
             // Dropping it would leave the STALE *initial* cases in the cell
             // (e.g. a builtin `check_rep`/`get_rep` coerce case), inflating the
             // locations-report SAPiC proofs.
-            next.push(Source::eager(src_goal, new_cases, src_incomplete));
+            next.push(Source::eager(src_goal, new_cases));
         }
         // HS trace guards (Sources.hs:361-377), with n = iter_n + 1 (HS's
         // `go thsInit 1` is 1-based):

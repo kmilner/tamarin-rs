@@ -1137,7 +1137,7 @@ pub(crate) fn source_list_case(
         // `ensure_cases` is `cases()`'s materialisation without its per-case
         // clone: the sources this request does not serve are forced exactly as
         // the whole-list build forces them, and none of them is copied out.
-        for s in &ctx.full_sources {
+        for s in ctx.full_sources.iter() {
             s.ensure_cases(&ctx);
         }
         let mut sys = nth_case_system(&ctx.full_sources, src_idx, case_idx)?;

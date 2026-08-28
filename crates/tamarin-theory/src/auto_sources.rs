@@ -761,7 +761,7 @@ pub fn apply_auto_sources(
     // cases.
     fn collect_chains(ctx: &ProofContext) -> Vec<((NodeConc, NodePrem), System)> {
         let mut chains = Vec::new();
-        for src in &ctx.full_sources {
+        for src in ctx.full_sources.iter() {
             for (_name, sys) in src.cases(ctx).iter() {
                 for ch in sys.unsolved_chains() {
                     chains.push((ch, sys.clone()));

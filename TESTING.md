@@ -147,19 +147,17 @@ fast gates do need the oracle binary present to address it.**
 | `ALLOWLIST=<filelist> scripts/web_parity.sh` | interactive-mode gate: crawl + semantic diff |
 | `scripts/bench.sh` | performance tables (see README) |
 
-**What CI enforces is `cargo fmt`, clippy, `cargo test --workspace`,
-`scripts/divergence_fixtures/check.sh` and `rs_ref_check.sh check`.** Only one
-of those is a comparison against Haskell bytes, and it is a frozen one: the
-`Divergence fixtures` step in the `test` job builds `--profile ci --bin
-tamarin-rs` and runs the fixture check against captures committed in-tree, so
-it catches drift on 19 corners (and a bump landing without a re-capture — see
-below) but sees nothing outside them. `rs_ref_check.sh` diffs this branch's
-output hashes against `ci_ref_fast.tsv`, a reference generated from *main's
-own binary*; it is a self-consistency check, and after a deliberate output
-change the documented fix is to regenerate the reference from the very binary
-whose output moved. `cargo test`'s oracle-backed cases skip themselves when no
-oracle is present, which is CI's state. General oracle parity is therefore a
-*local* property, established only by the gates above.
+**CI enforces `cargo fmt`, clippy, HS citation integrity, licence headers,
+`cargo test --workspace`, the 18-file wellformedness roster,
+`scripts/divergence_fixtures/check.sh`, and `rs_ref_check.sh check`.** It runs
+no live Haskell binary. The divergence step compares 55 corner cases with
+committed oracle captures (and rejects a submodule bump without a recapture),
+while wellformedness and several unit suites also pin committed oracle output.
+`rs_ref_check.sh` compares this branch's hashes with `ci_ref_fast.tsv`, a
+reference generated from *main's own binary*; it is a cross-branch regression
+check, not independent Haskell evidence. Tests requiring a live oracle skip
+when it is absent, as it is in CI. General live-oracle parity is therefore a
+local property established by the gates above.
 
 When a gate goes red, drop to "Debugging a divergence" below.
 

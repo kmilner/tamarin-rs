@@ -487,11 +487,10 @@ pub fn validate_cli_heuristic(
 ///     e.g. NSLPK3 `types` delta=5, and carry a self-excluded key) are
 ///     never cached and keep recomputing — they are rare and proved once.
 struct CachedSources {
-    /// Per source: (goal join-key, refined case list, incomplete flag).
+    /// Per source: (goal join-key, refined case list).
     sources: Vec<(
         crate::constraint::constraints::Goal,
         crate::constraint::solver::sources::SourceCases,
-        bool,
     )>,
 }
 
@@ -1016,12 +1015,9 @@ impl ProverSession {
                 // Restore cached cases onto this clone's lazy sources by goal,
                 // then mark saturation Done so `cases(ctx)` reads them directly
                 // and the expensive `ensure_saturated` pass is skipped.
-                for src in &mut ctx.full_sources {
-                    if let Some((_, cases, incomplete)) =
-                        entry.sources.iter().find(|(g, _, _)| *g == src.goal)
-                    {
+                for src in ctx.full_sources.iter() {
+                    if let Some((_, cases)) = entry.sources.iter().find(|(g, _)| *g == src.goal) {
                         src.cases_set_shared(std::sync::Arc::clone(cases));
-                        src.incomplete = *incomplete;
                     }
                 }
                 ctx.mark_saturated_done();
@@ -1040,7 +1036,7 @@ impl ProverSession {
                 let snapshot: Vec<_> = ctx
                     .full_sources
                     .iter()
-                    .map(|s| (s.goal.clone(), s.cases_shared_or_empty(), s.incomplete))
+                    .map(|s| (s.goal.clone(), s.cases_shared_or_empty()))
                     .collect();
                 self.source_cache
                     .lock()

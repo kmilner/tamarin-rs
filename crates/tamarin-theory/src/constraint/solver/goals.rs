@@ -1486,7 +1486,7 @@ fn collect_one_case_syms(
     use tamarin_term::function_symbols::FunSym;
     use tamarin_term::term::Term;
     let mut out = std::collections::BTreeSet::new();
-    for src in &ctx.full_sources {
+    for src in ctx.full_sources.iter() {
         // HS-faithful order — `smartRanking.getMsgOneCase`
         // (ProofMethod.hs:1056-1059) pattern-matches on `cdGoal` BEFORE
         // touching `cdCases`:

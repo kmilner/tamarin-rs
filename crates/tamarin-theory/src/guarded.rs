@@ -97,8 +97,8 @@ pub fn gtf(b: bool) -> Guarded {
 }
 
 /// Content-membership test for the `Arc`-wrapped formula stores
-/// (`System::formulas` / `solved_formulas` / `lemmas` /
-/// `sources_lemma_universals`).  The per-element `Arc` is transparent:
+/// (`System::formulas` / `solved_formulas` / `lemmas`). The per-element `Arc`
+/// is transparent:
 /// the comparison dereferences to the underlying `Guarded` value (via
 /// `Arc`'s `Deref`), so this is identical to a plain
 /// `Vec<Guarded>::contains` — content equality, never pointer identity.

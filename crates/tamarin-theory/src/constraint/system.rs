@@ -378,21 +378,6 @@ pub struct System {
     /// internal KU goals re-spawn at runtime will pick the same case
     /// again, looping until depth-limit.
     pub used_sources: Vec<String>,
-    /// Provenance tracking: universals in `lemmas` that
-    /// came from `[sources]`-tagged lemma bodies.  Haskell never adds
-    /// these to `sLemmas` (only `[reuse]` lemmas go there via
-    /// `gatherReusableLemmas`), so its runtime `insertImpliedFormulas`
-    /// never fires them — they're only consulted via
-    /// `refineWithSourceAsms` at precompute.  We add them to `lemmas`
-    /// as a workaround for our weaker refine; tagging them here lets
-    /// `insertImpliedFormulas` skip them at runtime (when
-    /// `!in_precompute_mode`) while still firing them during refine's
-    /// Step 1 simplify (where it's needed to drop typing-violating
-    /// cases).  Matching Haskell's runtime behaviour eliminates the
-    /// spurious `case case_1`/`case case_2` Disj-decomposition steps
-    /// that appear in our proof trees for ~10 corpus lemmas.
-    /// Per-element `Arc` — see `formulas`.
-    pub sources_lemma_universals: Vec<Arc<Guarded>>,
     /// Cached max free-var idx across the system.  `None` means
     /// "invalid — lazily recompute on next `bounds_max` call".
     /// Maintained incrementally on additive mutations and
@@ -499,7 +484,6 @@ impl Clone for System {
             side,
             next_goal_nr,
             used_sources,
-            sources_lemma_universals,
             max_var_idx_cache,
             node_max_cache,
             content_stamp,
@@ -516,7 +500,6 @@ impl Clone for System {
             side: *side,
             next_goal_nr: *next_goal_nr,
             used_sources: used_sources.clone(),
-            sources_lemma_universals: sources_lemma_universals.clone(),
             // The cache/stamp Cells are COPIED verbatim (NOT invalidated): a
             // clone is content-identical to its parent, so it inherits both
             // stamps AND the marker — if the parent had a verified no-op
@@ -559,7 +542,6 @@ impl PartialEq for System {
             side,
             next_goal_nr,
             used_sources,
-            sources_lemma_universals,
             // DELIBERATELY excluded from equality: two systems with identical
             // content but different cache/stamp state (e.g. one freshly cloned,
             // one after `bounds_max` populated its cache) must compare equal —
@@ -583,7 +565,6 @@ impl PartialEq for System {
             && *content == other.content
             && *next_goal_nr == other.next_goal_nr
             && *used_sources == other.used_sources
-            && *sources_lemma_universals == other.sources_lemma_universals
     }
 }
 
@@ -1298,7 +1279,7 @@ impl System {
     /// otherwise hands out a `&mut` to the existing storage.  Use this
     /// for any in-place mutation of the node list.
     #[inline]
-    pub fn nodes_mut(&mut self) -> &mut Vec<(NodeId, RuleACInst)> {
+    pub(crate) fn nodes_mut(&mut self) -> &mut Vec<(NodeId, RuleACInst)> {
         // Structural content-mutation choke: any `&mut` node access bumps
         // `content_stamp` (unconditional — `subst_system_once` reassigns
         // `self.sys.nodes` directly, never via `nodes_mut`, so this never
@@ -1307,9 +1288,21 @@ impl System {
         Arc::make_mut(&mut self.content.nodes)
     }
 
+    /// Mutate each stored rule while preserving the `System` cache contract.
+    /// Intended for presentation transforms in downstream crates, which need
+    /// to rewrite node payloads but must not receive unrestricted access to
+    /// the cache-sensitive node container.
+    pub fn for_each_node_rule_mut(&mut self, mut f: impl FnMut(&mut RuleACInst)) {
+        self.invalidate_max_var_idx_cache();
+        self.invalidate_node_max_cache();
+        for (_, rule) in self.nodes_mut() {
+            f(rule);
+        }
+    }
+
     /// Copy-on-write mutable access to `goals` (see `nodes_mut`).
     #[inline]
-    pub fn goals_mut(&mut self) -> &mut Vec<(Goal, GoalStatus)> {
+    pub(crate) fn goals_mut(&mut self) -> &mut Vec<(Goal, GoalStatus)> {
         Arc::make_mut(&mut self.content.goals)
     }
 
@@ -1329,7 +1322,7 @@ impl System {
 
     /// Copy-on-write mutable access to `subterm_store` (see `nodes_mut`).
     #[inline]
-    pub fn subterm_store_mut(&mut self) -> &mut SubtermStore {
+    pub(crate) fn subterm_store_mut(&mut self) -> &mut SubtermStore {
         // Structural content-mutation choke for the subterm store: EVERY
         // subterm mutation (external adds, the conjoin graft, AND
         // `subst_system_once`'s own subterm rewrite) routes through here, so
@@ -1819,8 +1812,8 @@ impl HasFrees for GoalStatus {
 /// them.  A caller that wants the Haskell rebuild performs it itself, as
 /// `rename_precise_system` does.
 ///
-/// `used_sources` and `sources_lemma_universals` have no Haskell counterpart
-/// and are carried over untouched, as is `side`.
+/// `used_sources` has no Haskell counterpart and is carried over untouched,
+/// as is `side`.
 ///
 /// The epilogue owns the derived state the rewritten fields invalidate: both
 /// max-var-idx caches (the map may LOWER a maximum) and every stamp, since a

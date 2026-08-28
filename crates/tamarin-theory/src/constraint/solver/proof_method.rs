@@ -63,9 +63,7 @@ pub fn is_finished(ctx: &ProofContext, sys: &System) -> Option<Result> {
     if let Some(c) = cs.into_iter().next() {
         // Mirror Haskell `contradictorySystem`: any contradiction
         // closes the branch as `Contradictory`.  Haskell's `isFinished`
-        // does not gate this on incomplete-source consumption —
-        // `Source.incomplete` only affects diagnostic warnings, not the
-        // search verdict.
+        // does not gate this on source-case diagnostics.
         return Some(Result::Contradictory(Some(c)));
     }
     // Direct port of Haskell `isFinished` (ProofMethod.hs):
@@ -82,9 +80,7 @@ pub fn is_finished(ctx: &ProofContext, sys: &System) -> Option<Result> {
     let no_open_goals = open_goals(sys).is_empty();
     let sub_finished = finished_subterms(ctx, sys);
     if no_open_goals && sub_finished {
-        // Haskell's `isFinished` doesn't gate Solved on `incomplete`
-        // source consumption — `Source.incomplete` is diagnostic-only
-        // there.  Match that.
+        // Haskell's `isFinished` returns Solved directly here.
         Some(Result::Solved)
     } else if no_open_goals && !sub_finished {
         Some(Result::Unfinishable)

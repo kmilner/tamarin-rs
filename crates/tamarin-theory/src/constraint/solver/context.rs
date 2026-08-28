@@ -201,10 +201,10 @@ pub struct ProofContext {
     pub theory_file: String,
     /// Per-lemma source cells. Their materialised case vectors are immutable
     /// `Arc`s, so context clones share the heavy systems while keeping their
-    /// own lazy cell and incomplete flag.
-    pub full_sources: Vec<crate::constraint::solver::sources::Source>,
+    /// own lazy cell.
+    pub full_sources: std::sync::Arc<Vec<crate::constraint::solver::sources::Source>>,
     /// Per-context lazy saturation gate.
-    pub(crate) saturate_state: std::sync::Mutex<SaturateState>,
+    pub(crate) saturate_gate: SaturateGate,
     /// Read-only theory data (`intruder_rules`, `unique_sources`,
     /// `restrictions`, …), shared behind an `Arc`. Field reads are
     /// transparent through the [`std::ops::Deref`] implementation below.
@@ -222,13 +222,53 @@ impl std::ops::Deref for ProofContext {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SaturateState {
     Pending,
-    InProgress,
+    InProgress(std::thread::ThreadId),
     Done,
+}
+
+#[derive(Debug)]
+pub(crate) struct SaturateGate {
+    state: std::sync::Mutex<SaturateState>,
+    ready: std::sync::Condvar,
+}
+
+impl SaturateGate {
+    fn new(state: SaturateState) -> Self {
+        Self {
+            state: std::sync::Mutex::new(state),
+            ready: std::sync::Condvar::new(),
+        }
+    }
 }
 
 impl Clone for ProofContext {
     fn clone(&self) -> Self {
-        let saturate_state = *self.saturate_state.lock().unwrap();
+        let current_thread = std::thread::current().id();
+        let mut state = self
+            .saturate_gate
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let cloned_state = loop {
+            match *state {
+                SaturateState::Pending => break SaturateState::Pending,
+                SaturateState::Done => break SaturateState::Done,
+                SaturateState::InProgress(owner) if owner == current_thread => {
+                    // A same-thread clone can only be used by saturation's
+                    // recursive machinery. Its source cells are a coherent
+                    // snapshot of the previous fix-point iteration.
+                    break SaturateState::Done;
+                }
+                SaturateState::InProgress(_) => {
+                    state = self
+                        .saturate_gate
+                        .ready
+                        .wait(state)
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                }
+            }
+        };
+        drop(state);
         ProofContext {
             maude: self.maude.clone(),
             maude_pool: self.maude_pool.clone(),
@@ -241,10 +281,57 @@ impl Clone for ProofContext {
             heuristic: self.heuristic.clone(),
             lemma_name: self.lemma_name.clone(),
             theory_file: self.theory_file.clone(),
-            full_sources: self.full_sources.clone(),
-            saturate_state: std::sync::Mutex::new(saturate_state),
+            full_sources: std::sync::Arc::new(self.full_sources.iter().cloned().collect()),
+            saturate_gate: SaturateGate::new(cloned_state),
             shared: std::sync::Arc::clone(&self.shared),
         }
+    }
+}
+
+/// Restores saturation's logically local fresh counter and wakes waiters on
+/// both normal completion and unwinding. A failed pass becomes retryable
+/// instead of leaving the context permanently in progress.
+struct SaturationRun<'a> {
+    ctx: &'a ProofContext,
+    counter_before: u64,
+    completed: bool,
+}
+
+impl<'a> SaturationRun<'a> {
+    fn new(ctx: &'a ProofContext, counter_before: u64) -> Self {
+        Self {
+            ctx,
+            counter_before,
+            completed: false,
+        }
+    }
+
+    fn finish(mut self) {
+        self.ctx.maude.reset_counter_to(self.counter_before);
+        *self
+            .ctx
+            .saturate_gate
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = SaturateState::Done;
+        self.completed = true;
+        self.ctx.saturate_gate.ready.notify_all();
+    }
+}
+
+impl Drop for SaturationRun<'_> {
+    fn drop(&mut self) {
+        if self.completed {
+            return;
+        }
+        self.ctx.maude.reset_counter_to(self.counter_before);
+        *self
+            .ctx
+            .saturate_gate
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = SaturateState::Pending;
+        self.ctx.saturate_gate.ready.notify_all();
     }
 }
 
@@ -310,8 +397,9 @@ impl ProofContext {
     /// `maude_pool`) for the duration of one task, so workers don't
     /// serialise on a single Maude's IPC mutex.
     ///
-    /// Immutable theory data and materialised source-case vectors remain
-    /// shared through `Arc`; the small per-context cells are independent.
+    /// Immutable theory data remains shared through `Arc`. Completed or
+    /// active source snapshots are shared with workers; a defensive call
+    /// before saturation instead gives the worker independent source cells.
     ///
     /// The new context drops `maude_pool` (set to None): the worker
     /// already owns a per-task subprocess for the task's duration, and
@@ -320,10 +408,41 @@ impl ProofContext {
     /// what prevents deadlock when the pool is smaller than the rayon
     /// worker count.
     pub fn with_swapped_maude(&self, maude: MaudeHandle) -> Self {
-        let mut cloned = self.clone();
-        cloned.maude = maude;
-        cloned.maude_pool = None;
-        cloned
+        let parent_state = *self
+            .saturate_gate
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let (full_sources, worker_state) = match parent_state {
+            SaturateState::Pending => (
+                std::sync::Arc::new(self.full_sources.iter().cloned().collect()),
+                SaturateState::Pending,
+            ),
+            SaturateState::InProgress(_) | SaturateState::Done => (
+                std::sync::Arc::clone(&self.full_sources),
+                SaturateState::Done,
+            ),
+        };
+        ProofContext {
+            maude,
+            maude_pool: None,
+            rules: self.rules.clone(),
+            use_induction: self.use_induction,
+            injective_fact_insts: self.injective_fact_insts.clone(),
+            is_exists_trace: self.is_exists_trace,
+            cut: self.cut,
+            typing_assumptions: self.typing_assumptions.clone(),
+            heuristic: self.heuristic.clone(),
+            lemma_name: self.lemma_name.clone(),
+            theory_file: self.theory_file.clone(),
+            full_sources,
+            // Saturation workers read the previous iteration's source cells;
+            // proof-search workers inherit an already-complete set. Both are
+            // O(1) refcount bumps. A defensive pre-saturation call instead
+            // receives independent lazy cells and remains Pending.
+            saturate_gate: SaturateGate::new(worker_state),
+            shared: std::sync::Arc::clone(&self.shared),
+        }
     }
 
     /// HS-faithful lazy `saturateSources` (Sources.hs:355-384, see line 373).  Runs at
@@ -338,23 +457,40 @@ impl ProofContext {
     /// lemma) never call this, so zero saturate-time `[EXEC]` lines
     /// fire — matching HS's lazy-thunk behaviour.
     pub fn ensure_saturated(&self) {
+        let saturate_cnt_before = self.maude.fresh_counter_peek();
         {
-            let mut state = self.saturate_state.lock().unwrap();
-            match *state {
-                SaturateState::Done => return,
-                SaturateState::InProgress => {
-                    // Re-entrant call from inside saturate's own
-                    // source-case grafting.  Return without re-running
-                    // — the caller sees the partially-populated cells,
-                    // matching HS's lazy fix-point semantics where
-                    // iteration N forces iteration N-1's cached value.
-                    return;
-                }
-                SaturateState::Pending => {
-                    *state = SaturateState::InProgress;
+            let current_thread = std::thread::current().id();
+            let mut state = self
+                .saturate_gate
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            loop {
+                match *state {
+                    SaturateState::Done => return,
+                    SaturateState::InProgress(owner) if owner == current_thread => {
+                        // Re-entrant call from inside saturate's own
+                        // source-case grafting.  Return without re-running
+                        // — the caller sees the partially-populated cells,
+                        // matching HS's lazy fix-point semantics where
+                        // iteration N forces iteration N-1's cached value.
+                        return;
+                    }
+                    SaturateState::InProgress(_) => {
+                        state = self
+                            .saturate_gate
+                            .ready
+                            .wait(state)
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    }
+                    SaturateState::Pending => {
+                        *state = SaturateState::InProgress(current_thread);
+                        break;
+                    }
                 }
             }
         }
+        let run = SaturationRun::new(self, saturate_cnt_before);
         // HS-FAITHFUL PURITY: source refinement (`precomputeSources` /
         // `saturateSources` / `refineWithSourceAsms`, Sources.hs) is a PURE
         // `[Source] -> [Source]` computation with LOCAL `evalFresh (avoid
@@ -369,7 +505,6 @@ impl ProofContext {
         // Snapshot the counter and restore it after saturation so the refine
         // is counter-neutral exactly as in HS — making the post-saturation
         // counter (hence cache reuse vs recompute) byte-identical regardless.
-        let saturate_cnt_before = self.maude.fresh_counter_peek();
         // Pre-populate every source's cell with `Some(vec![])` BEFORE
         // running `initial_source_cases` on any of them.  This breaks
         // the recursion: when `initial_source_cases` for source A
@@ -380,12 +515,12 @@ impl ProofContext {
         // pass we run the second pass that fills each cell with the
         // actual unsaturated `initialSource` cases — HS's `mapM`
         // over the lazy list under the iterative fix-point.
-        for src in &self.full_sources {
+        for src in self.full_sources.iter() {
             if src.cases_cell.lock().unwrap().is_none() {
                 src.cases_set(Vec::new());
             }
         }
-        for src in &self.full_sources {
+        for src in self.full_sources.iter() {
             let init =
                 crate::constraint::solver::sources::initial_source_cases_pub(&src.goal, self);
             src.cases_set(init);
@@ -425,7 +560,7 @@ impl ProofContext {
         // so the saturated list can be SHORTER than `full_sources`.  HS
         // keeps `cdGoal` stable across saturate iters (only `cdCases`
         // changes), so `cdGoal` is the join key.
-        for orig in &self.full_sources {
+        for orig in self.full_sources.iter() {
             let sat = refined.iter().find(|s| s.goal == orig.goal);
             // HS-faithful: `saturateSources` maps `refineSource` over its
             // input one-for-one (Sources.hs:379) and `refineSource` returns
@@ -448,9 +583,8 @@ impl ProofContext {
         // HS-FAITHFUL PURITY note above): the refine consumed idxs only for
         // the stored cases, which are re-freshened from `avoid(live_sys)` on
         // every apply, so the global counter must not retain the advance.
-        self.maude.reset_counter_to(saturate_cnt_before);
         self.dump_sources();
-        *self.saturate_state.lock().unwrap() = SaturateState::Done;
+        run.finish();
     }
 
     /// Mark this context's sources as already saturated, bypassing the
@@ -459,8 +593,13 @@ impl ProofContext {
     /// lemma's identical computation, set the state to `Done` so later
     /// `cases(ctx)` calls read the restored cells directly instead of
     /// re-running the (expensive) `saturate_sources_with_simp` pass.
-    pub fn mark_saturated_done(&self) {
-        *self.saturate_state.lock().unwrap() = SaturateState::Done;
+    pub(crate) fn mark_saturated_done(&self) {
+        *self
+            .saturate_gate
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = SaturateState::Done;
+        self.saturate_gate.ready.notify_all();
     }
 
     /// Variant that accepts the theory-level restrictions.  Mirrors
@@ -1040,8 +1179,8 @@ impl ProofContext {
             heuristic: None,
             lemma_name: String::new(),
             theory_file: String::new(),
-            full_sources: Vec::new(),
-            saturate_state: std::sync::Mutex::new(SaturateState::Pending),
+            full_sources: std::sync::Arc::new(Vec::new()),
+            saturate_gate: SaturateGate::new(SaturateState::Pending),
             shared: std::sync::Arc::new(ProofContextShared {
                 intruder_rules,
                 unique_sources: Vec::new(),
@@ -1125,7 +1264,7 @@ impl ProofContext {
         // exploitPrems / ...` lines fire here — they only fire when a
         // lemma proof forces a source's cases via pattern-matching on its
         // `cdCases` (HS-faithful).
-        ctx.full_sources = raw_sources;
+        ctx.full_sources = std::sync::Arc::new(raw_sources);
         // No saturation here — `ctx.full_sources` holds unsaturated
         // raw sources.  `prove_lemma` calls `ctx.ensure_saturated()`
         // AFTER assigning `ctx.typing_assumptions` so that
@@ -1404,8 +1543,9 @@ pub fn annotate_theory_loop_breakers(
 
 #[cfg(test)]
 mod tests {
-    use super::IntrRuleCache;
+    use super::{IntrRuleCache, ProofContext, SaturateState, SaturationRun};
     use crate::rule::IntrRuleAC;
+    use tamarin_test_support::require_maude_path;
 
     /// A small Maude-free rule list: the special intruder rules
     /// (`coerce`, `pub`, `fresh`, `isend`, `irecv`).
@@ -1440,5 +1580,99 @@ mod tests {
         let cache = IntrRuleCache::from(shared.clone());
         assert_eq!(cache.as_ptr(), shared.as_ptr());
         assert_eq!(&*cache, shared.as_slice());
+    }
+
+    #[test]
+    fn worker_snapshot_shares_sources_but_normal_clone_does_not() {
+        let Some(path) = require_maude_path() else {
+            return;
+        };
+        let ctx = ProofContext::new(
+            tamarin_term::maude_proc::MaudeHandle::start(
+                &path,
+                tamarin_term::maude_sig::pair_maude_sig(),
+            )
+            .unwrap(),
+            Vec::new(),
+        );
+        ctx.mark_saturated_done();
+        let worker = ctx.with_swapped_maude(ctx.maude.clone());
+        let independent = ctx.clone();
+
+        assert!(std::sync::Arc::ptr_eq(
+            &ctx.full_sources,
+            &worker.full_sources
+        ));
+        assert!(!std::sync::Arc::ptr_eq(
+            &ctx.full_sources,
+            &independent.full_sources
+        ));
+        assert_eq!(
+            *worker.saturate_gate.state.lock().unwrap(),
+            SaturateState::Done
+        );
+    }
+
+    #[test]
+    fn clone_waits_for_another_threads_saturation() {
+        let Some(path) = require_maude_path() else {
+            return;
+        };
+        let ctx = std::sync::Arc::new(ProofContext::new(
+            tamarin_term::maude_proc::MaudeHandle::start(
+                &path,
+                tamarin_term::maude_sig::pair_maude_sig(),
+            )
+            .unwrap(),
+            Vec::new(),
+        ));
+        *ctx.saturate_gate.state.lock().unwrap() =
+            SaturateState::InProgress(std::thread::current().id());
+
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let other = std::sync::Arc::clone(&ctx);
+        let join = std::thread::spawn(move || {
+            ready_tx.send(()).unwrap();
+            let cloned = other.as_ref().clone();
+            done_tx
+                .send(*cloned.saturate_gate.state.lock().unwrap())
+                .unwrap();
+        });
+        ready_rx.recv().unwrap();
+        assert!(done_rx
+            .recv_timeout(std::time::Duration::from_millis(25))
+            .is_err());
+        ctx.mark_saturated_done();
+        assert_eq!(done_rx.recv().unwrap(), SaturateState::Done);
+        join.join().unwrap();
+    }
+
+    #[test]
+    fn aborted_saturation_is_retryable_and_counter_neutral() {
+        let Some(path) = require_maude_path() else {
+            return;
+        };
+        let ctx = ProofContext::new(
+            tamarin_term::maude_proc::MaudeHandle::start(
+                &path,
+                tamarin_term::maude_sig::pair_maude_sig(),
+            )
+            .unwrap(),
+            Vec::new(),
+        );
+        let before = ctx.maude.fresh_counter_peek();
+        *ctx.saturate_gate.state.lock().unwrap() =
+            SaturateState::InProgress(std::thread::current().id());
+        {
+            let _run = SaturationRun::new(&ctx, before);
+            ctx.maude.ensure_above(before.saturating_add(50));
+        }
+
+        assert_eq!(ctx.maude.fresh_counter_peek(), before);
+        assert_eq!(
+            *ctx.saturate_gate.state.lock().unwrap(),
+            SaturateState::Pending
+        );
     }
 }

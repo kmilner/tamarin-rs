@@ -85,8 +85,8 @@ jobs:
         env:
           MAUDE_PATH: /opt/maude/maude
       # Wellformedness fixture roster, port side (~2s; the step above has
-      # already built this example).  `cargo test` runs the same 21 fixtures
-      # through crates/tamarin-parser/tests/wellformedness.rs.  The one thing
+      # already built this example). `cargo test` runs the same 18 fixtures
+      # through tamarin-theory's wellformedness fixture tests. The one thing
       # this runner adds is its EMPTY_RUST_EXPECTATION_ALLOWLIST, and that
       # harness has no equivalent of it.  A fixture whose every expected topic
       # is post-elaboration must appear in that list with a reason.  A listed

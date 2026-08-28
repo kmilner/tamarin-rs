@@ -1133,6 +1133,18 @@ pub fn open_rule_has_no_variants(maude: &MaudeHandle, opr: &OpenProtoRule) -> bo
     rule_has_no_variants_for_wf_with(maude, &opr.rule, reducible_has_no_variants)
 }
 
+/// Apply `closeProtoRule`'s zero-variant filter to each rule in place.
+///
+/// This deliberately inspects each item rather than collecting rule names:
+/// partial evaluation may emit several distinct refined rules with the same
+/// name, and each has its own variant result.
+pub fn retain_rules_with_variants(theory: &mut Theory, maude: &MaudeHandle) {
+    theory.items.retain(|item| match item {
+        TheoryItem::Rule(rule) => !open_rule_has_no_variants(maude, rule),
+        _ => true,
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1221,5 +1233,45 @@ mod tests {
 
         assert_eq!(renamed_substs[0].to_list(), vec![(mvar(0), mterm(7))]);
         assert_eq!(renamed.premises[0].terms[0], mterm(1));
+    }
+
+    #[test]
+    fn zero_variant_filter_treats_duplicate_names_independently() {
+        let Some(path) = require_maude_path() else {
+            return;
+        };
+        let mut sig = pair_maude_sig();
+        sig.reducible_fun_syms
+            .insert(tamarin_term::function_symbols::FunSym::List);
+        sig = sig.refresh();
+        let h = MaudeHandle::start(&path, sig.clone()).unwrap();
+
+        let mut rule = empty_rule("refined");
+        rule.conclusions.push(Fact::new(
+            FactTag::Out,
+            vec![Term::App(
+                tamarin_term::function_symbols::FunSym::List,
+                vec![Term::Lit(Lit::Var(LVar::new("x", LSort::Msg, 0)))].into(),
+            )],
+        ));
+        let without_variants = OpenProtoRule::new(rule.clone());
+        let mut with_variants = OpenProtoRule::new(rule.clone());
+        with_variants.abstracted_rule = Some(rule);
+
+        let mut theory: Theory =
+            Theory::new("T", crate::signature::SignaturePure { maude_sig: sig });
+        theory.items = vec![
+            TheoryItem::Rule(without_variants),
+            TheoryItem::Text(("separator".to_string(), String::new())),
+            TheoryItem::Rule(with_variants),
+        ];
+
+        retain_rules_with_variants(&mut theory, &h);
+        assert_eq!(theory.items.len(), 2);
+        assert!(matches!(theory.items[0], TheoryItem::Text(_)));
+        assert!(matches!(
+            &theory.items[1],
+            TheoryItem::Rule(rule) if rule.abstracted_rule.is_some()
+        ));
     }
 }

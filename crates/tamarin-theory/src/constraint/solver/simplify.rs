@@ -1049,19 +1049,6 @@ fn insert_implied_formulas_pass(red: &mut Reduction) -> ChangeIndicator {
     // can arise as residuals (e.g. `gall [] otherAtoms succedent` from a
     // previous `impliedFormulas` round, or from a multi-guard formula whose
     // bound vars have all been substituted away).
-    // Haskell-faithful: at runtime (NOT in_precompute_mode), SKIP
-    // universals from `[sources]`-tagged lemma bodies.  Haskell only
-    // adds `[reuse]` to sLemmas (gatherReusableLemmas in Prover.hs:221-226, see line 224),
-    // so its runtime `insertImpliedFormulas` never fires `[sources]`.
-    // Refine fires them at precompute (drives typing-violation drops).
-    //
-    // Skip `[sources]`-tagged universals at runtime unconditionally
-    // (refine fires them at precompute); the runtime path matches HS,
-    // which only puts `[reuse]` in sLemmas.  A weaker refine that timed
-    // out without this would be a refine-strength bug to fix at refine,
-    // not papered over by runtime [sources] firings.
-    let skip_sources = !crate::constraint::solver::sources::in_precompute_mode()
-        && !red.sys.sources_lemma_universals.is_empty();
     // Mirror Haskell's `openGuarded` (Guarded.hs:openGuarded): allocate
     // FRESH LVar idxs for each bound var BEFORE matching, then
     // substitute the antecedent + body.  Without this freshening, the
@@ -1103,11 +1090,6 @@ fn insert_implied_formulas_pass(red: &mut Reduction) -> ChangeIndicator {
                 qua: Quantifier::All,
                 ..
             } => {
-                if skip_sources
-                    && crate::guarded::stores_contains(&red.sys.sources_lemma_universals, f)
-                {
-                    return None;
-                }
                 let (_, xs, new_guards, new_body) = crate::guarded::open_guarded(f, &mut fresh)
                     .expect("the arm matched a universal GGuarded");
                 Some((xs, new_guards, new_body))

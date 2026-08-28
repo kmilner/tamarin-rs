@@ -868,11 +868,7 @@ fn source_bounds_takes_the_max_over_cases_only() {
     case_sys.content_mut().last_atom = Some(nvar(20));
     case_sys.subterm_store_mut().neg_subterms =
         SortedPairSet::rebuild_from(vec![(mterm(60), mterm(61))]);
-    let src = Source::eager(
-        goal,
-        vec![(vec!["case".to_string()], case_sys.clone())],
-        false,
-    );
+    let src = Source::eager(goal, vec![(vec!["case".to_string()], case_sys.clone())]);
 
     let cases = vec![(vec!["case".to_string()], case_sys)];
     assert_eq!(source_bounds(&src, &cases), (Some(5), Some(61)));
@@ -883,7 +879,6 @@ fn source_clone_shares_cases_but_owns_its_lazy_cell() {
     let source = Source::eager(
         Goal::Action(nvar(0), LNFact::new(FactTag::Out, vec![mterm(0)])),
         vec![(vec!["case".to_string()], System::empty())],
-        false,
     );
     let cloned = source.clone();
     assert!(std::sync::Arc::ptr_eq(

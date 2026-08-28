@@ -67,7 +67,7 @@ pub enum Quantifier {
 /// - `H`: name/sort hint stored at each binder
 /// - `C`: constant type for terms
 /// - `V`: free-variable type for terms
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ProtoFormula<S, H, C, V> {
     Atom(ProtoAtom<S, VTerm<C, BVar<V>>>),
     /// `true`/`false`.

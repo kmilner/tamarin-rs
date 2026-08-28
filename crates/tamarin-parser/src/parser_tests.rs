@@ -2033,6 +2033,76 @@ fn let_inlining_reaches_an_embedded_restriction() {
     }
 }
 
+#[test]
+fn let_inlining_respects_quantifier_shadowing() {
+    let r = only_rule(
+        r#"theory T begin
+            rule R: let x = 'value' in []
+              --[ _restrict(Ex x #i. A(x) @ i) ]-> []
+        end"#,
+    );
+    match &r.embedded_restrictions[0] {
+        Formula::Exists(vars, body) => {
+            let x = vars.iter().find(|v| v.name == "x").expect("bound x");
+            match body.as_ref() {
+                Formula::Atom(Atom::Action(fact, _)) => {
+                    assert_eq!(fact.args, vec![Term::Var(x.clone())]);
+                }
+                other => panic!("expected an action atom, got {other:?}"),
+            }
+        }
+        other => panic!("expected an existential, got {other:?}"),
+    }
+}
+
+#[test]
+fn let_inlining_avoids_capture_by_quantifiers() {
+    let r = only_rule(
+        r#"theory T begin
+            rule R: let x = y in []
+              --[ _restrict(Ex y #i. A(x,y) @ i) ]-> []
+        end"#,
+    );
+    match &r.embedded_restrictions[0] {
+        Formula::Exists(vars, body) => {
+            let bound_y = vars.iter().find(|v| v.name == "y").expect("bound y");
+            match body.as_ref() {
+                Formula::Atom(Atom::Action(fact, _)) => {
+                    let [Term::Var(inserted_y), Term::Var(original_y)] = fact.args.as_slice()
+                    else {
+                        panic!("expected two variable arguments, got {:?}", fact.args);
+                    };
+                    assert_ne!(inserted_y, bound_y, "replacement y was captured");
+                    assert_eq!(original_y, bound_y, "bound occurrence was not renamed");
+                }
+                other => panic!("expected an action atom, got {other:?}"),
+            }
+        }
+        other => panic!("expected an existential, got {other:?}"),
+    }
+}
+
+#[test]
+fn rule_let_requires_a_binding_and_in_terminator() {
+    for src in [
+        "theory T begin rule R: let in [] --[]-> [] end",
+        "theory T begin rule R: let x = y [] --[]-> [] end",
+    ] {
+        assert!(parse_theory(src, &[]).is_err(), "unexpectedly parsed {src}");
+    }
+}
+
+#[test]
+fn rule_let_rejects_sorts_outside_msg_and_nat() {
+    for binder in ["$x", "~x", "#x"] {
+        let src = format!("theory T begin rule R: let {binder} = y in [] --[]-> [] end");
+        assert!(
+            parse_theory(&src, &[]).is_err(),
+            "unexpectedly parsed {src}"
+        );
+    }
+}
+
 /// HS's rule `let` binds a variable — `sortedLVar [LSortMsg, LSortNat]` under
 /// `genericletBlock` (Theory/Text/Parser/Let.hs:24-31) — while the rule body
 /// reads a declared arity-0 symbol as `nullaryApp`'s constant

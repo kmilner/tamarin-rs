@@ -128,7 +128,7 @@ pub fn to_lformula(f: &SapicFormula) -> SyntacticLNFormula {
 // Annotation
 // =============================================================================
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ProcessParsedAnnotation {
     /// Identifiers that produced this subprocess via inlined `let`-bindings.
     pub process_names: Vec<String>,
@@ -178,7 +178,7 @@ impl GoodAnnotation for ProcessParsedAnnotation {
 // Process
 // =============================================================================
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SapicAction<V> {
     Rep,
     New(V),
@@ -215,7 +215,7 @@ pub enum SapicAction<V> {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ProcessCombinator<V> {
     Parallel,
     /// Non-deterministic choice.
@@ -236,7 +236,7 @@ pub enum ProcessCombinator<V> {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Process<Ann, V> {
     Null(Ann),
     Comb(
@@ -340,14 +340,6 @@ impl PartialEq for SharedProcess {
 
 impl Eq for SharedProcess {}
 
-// `Ord` reads the stored rendering rather than walking the tree a second
-// time.  The derived `Debug` of a process is a function of its value and
-// spells every field out, so two processes render alike exactly when they are
-// equal — which is what the `PartialEq` above compares.  The resulting TOTAL
-// order is the text order, not the structural order of HS's
-// `deriving instance Ord (Process ann v)` (Theory/Sapic/Process.hs:121): the
-// two agree on which processes are equal and not on how distinct ones rank,
-// so a consumer may depend on the equality classes only.
 impl PartialOrd for SharedProcess {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
@@ -356,7 +348,7 @@ impl PartialOrd for SharedProcess {
 
 impl Ord for SharedProcess {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.debug.cmp(&other.debug)
+        self.process.cmp(&other.process)
     }
 }
 
@@ -368,6 +360,41 @@ impl<Ann, V> Process<Ann, V> {
         match self {
             Process::Null(a) | Process::Comb(_, a, _, _) | Process::Action(_, a, _) => a,
         }
+    }
+}
+
+#[cfg(test)]
+mod shared_process_order_tests {
+    use super::*;
+
+    fn ann(name: &str) -> ProcessParsedAnnotation {
+        ProcessParsedAnnotation {
+            process_names: vec![name.to_string()],
+            ..ProcessParsedAnnotation::empty()
+        }
+    }
+
+    #[test]
+    fn shared_process_uses_haskell_constructor_order() {
+        let null = SharedProcess::new(Process::Null(ann("z")));
+        let comb = SharedProcess::new(Process::Comb(
+            ProcessCombinator::Parallel,
+            ann("a"),
+            Box::new(Process::Null(ann("a"))),
+            Box::new(Process::Null(ann("a"))),
+        ));
+        let action = SharedProcess::new(Process::Action(
+            SapicAction::Rep,
+            ann("a"),
+            Box::new(Process::Null(ann("a"))),
+        ));
+
+        // Haskell derives Ord from declaration order:
+        // ProcessNull < ProcessComb < ProcessAction. Debug text has a
+        // different lexical order, so this also guards against regressing to
+        // comparison of the cached rendering.
+        assert!(null < comb);
+        assert!(comb < action);
     }
 }
 

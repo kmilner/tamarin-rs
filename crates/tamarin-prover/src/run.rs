@@ -1461,17 +1461,10 @@ impl TheoryPipeline<'_> {
         // after it, because HS warns on the OPEN theory and drops while
         // closing.
         if let Some(wf_maude) = self.file_maude.as_ref() {
-            use tamarin_theory::theory::TheoryItem;
-            std::sync::Arc::make_mut(&mut self.elaborated)
-                .items
-                .retain(|item| match item {
-                    TheoryItem::Rule(opr) => {
-                        !tamarin_theory::tools::rule_variants::open_rule_has_no_variants(
-                            wf_maude, opr,
-                        )
-                    }
-                    _ => true,
-                });
+            tamarin_theory::tools::rule_variants::retain_rules_with_variants(
+                std::sync::Arc::make_mut(&mut self.elaborated),
+                wf_maude,
+            );
         }
 
         // Annotate per-rule loop breakers on the OUTER theory so
@@ -1684,17 +1677,18 @@ impl TheoryPipeline<'_> {
             // whose refined dataflow graph is still cyclic, e.g.
             // loops/Minimal_Loop_Example.spthy).  Variants must be populated
             // first: the breaker relation's `instances` iterate each rule's
-            // variant substitutions.  The no-variant drop is NOT redone:
-            // HS's re-close reaches `closeProtoRule` and drops a refined rule
-            // whose variant set comes back empty
-            // (lib/theory/src/Rule.hs:82-86), while the port's drop sits in
-            // `check_translated_theory`, runs once on the pre-evaluation
-            // theory and is keyed by rule name, which partial evaluation
-            // makes non-unique.
+            // variant substitutions. HS's re-close also reaches
+            // `closeProtoRule`, so refined rules whose own variant set is
+            // empty must be dropped independently even when several refined
+            // items share a name.
             tamarin_theory::tools::rule_variants::populate_rule_variants(
                 std::sync::Arc::make_mut(&mut self.elaborated),
                 m,
                 self.file_maude_pool.as_deref(),
+            );
+            tamarin_theory::tools::rule_variants::retain_rules_with_variants(
+                std::sync::Arc::make_mut(&mut self.elaborated),
+                m,
             );
             annotate_theory_loop_breakers(std::sync::Arc::make_mut(&mut self.elaborated), m);
 
