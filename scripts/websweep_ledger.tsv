@@ -69,7 +69,10 @@
 #
 # Second sweep: scripts/results/websweep_ef3f0468_full_20260828.tsv (same
 # submodule pin, the whole 432-file corpus, 183,491 rows). Entries tagged
-# full_20260828 are read off that sweep.
+# full_20260828 are read off that sweep. Entries tagged recover_20260828 come
+# from its recovery pass over the 38 files whose HS crawl had failed,
+# scripts/results/websweep_ef3f0468_recover_20260828.tsv, which compared 8 of
+# them.
 ../../crates/tamarin-theory/tests/fixtures/nat_sort_regression.spthy	witness-index	DIFF	13 pages at full_20260828, 2 of them SVG where the wider witness label shifts every graphviz coordinate
 accountability/csf21-acc-unbounded/mixnets/basic/dmn-basic.spthy	witness-index	DIFF	10 pages at full_20260828
 accountability/masters-thesis-morio/CentralizedMonitor.spthy	witness-index	DIFF	15 pages at cert_20260805
@@ -116,6 +119,7 @@ csf26-ac/fast/Joux.spthy	witness-index	DIFF	8 pages at full_20260828
 csf26-ac/fast/Joux_EphkRev.spthy	witness-index	DIFF	5 pages at full_20260828
 csf26-ac/fast/UM_three_pass.spthy	witness-index	DIFF	64 pages at full_20260828
 csf26-ac/fast/UM_three_pass_combined_fixed.spthy	witness-index	DIFF	27 pages at full_20260828
+csf26-ac/fast/chaum_offline_anonymity.spthy	witness-index	DIFF	2 pages at recover_20260828
 experiments/JKL_TS2_2008-KI.spthy	witness-index	DIFF	5 pages at cert_20260805
 experiments/MTI_C0_eCK.spthy	witness-index	DIFF	4 pages at cert_20260805
 experiments/SignedDH_test_no_builtin.spthy	witness-index	DIFF	2 pages at cert_20260805
