@@ -1176,47 +1176,36 @@ impl System {
         ordered
     }
 
-    /// The `sNodes` half of [`HasFrees::for_each_free`] for a `System`: each
-    /// node id, then the free variables of the rule instance it maps to
-    /// (System.hs:1834-1835 over the record at System.hs:383).
-    ///
-    /// Split from [`for_each_free_rest`](Self::for_each_free_rest) — as
-    /// `bounds_max_nodes` is split from `bounds_max_rest`
-    /// (`constraint::solver::reduction`) — so `rename_precise_system` can read
-    /// its binding store between the two halves and learn whether the node
-    /// rename alone is the identity.
-    pub(crate) fn for_each_free_nodes(&self, f: &mut dyn FnMut(&LVar)) {
+    /// Walk the free variables of every Haskell `System` field in record order.
+    /// `nodes_done` runs between `sNodes` and the remaining fields so
+    /// `rename_precise_system` can retain its node-only identity fast path.
+    pub(crate) fn for_each_free_with_node_boundary<S: ?Sized>(
+        &self,
+        state: &mut S,
+        mut visit: impl FnMut(&mut S, &LVar),
+        nodes_done: impl FnOnce(&mut S),
+    ) {
         for (id, rule) in self.nodes_in_map_order() {
-            id.for_each_free(f);
-            rule.for_each_free(f);
+            id.for_each_free(&mut |v| visit(state, v));
+            rule.for_each_free(&mut |v| visit(state, v));
         }
-    }
-
-    /// The rest of [`HasFrees::for_each_free`] for a `System`: `sEdges`,
-    /// `sLessAtoms`, `sLastAtom`, `sSubtermStore`, `sEqStore`, `sFormulas`,
-    /// `sSolvedFormulas`, `sLemmas` and `sGoals`, in the field order of the
-    /// Haskell record (System.hs:1836-1844 over System.hs:384-392).
-    ///
-    /// The `Vec`-backed fields are walked through the container-order views,
-    /// which is the order the Haskell `Data.Set` / `Data.Map` folds see
-    /// (LTerm.hs:898-914).
-    pub(crate) fn for_each_free_rest(&self, f: &mut dyn FnMut(&LVar)) {
+        nodes_done(state);
         for e in self.edges_in_set_order() {
-            e.for_each_free(f);
+            e.for_each_free(&mut |v| visit(state, v));
         }
         for la in self.less_atoms_in_set_order() {
-            la.for_each_free(f);
+            la.for_each_free(&mut |v| visit(state, v));
         }
-        self.last_atom.for_each_free(f);
-        self.subterm_store.for_each_free(f);
-        self.eq_store.for_each_free(f);
+        self.last_atom.for_each_free(&mut |v| visit(state, v));
+        self.subterm_store.for_each_free(&mut |v| visit(state, v));
+        self.eq_store.for_each_free(&mut |v| visit(state, v));
         for store in [&self.formulas, &self.solved_formulas, &self.lemmas] {
             for g in formulas_in_set_order(store) {
-                g.for_each_free(f);
+                g.for_each_free(&mut |v| visit(state, v));
             }
         }
         for entry in self.goals_in_map_order() {
-            entry.for_each_free(f);
+            entry.for_each_free(&mut |v| visit(state, v));
         }
     }
 
@@ -1821,9 +1810,7 @@ impl HasFrees for GoalStatus {
 ///
 /// The fold visits the thirteen fields of the Haskell record in declaration
 /// order (System.hs:383-395); the last three — `sNextGoalNr`, `sSourceKind`
-/// and `sDiffSystem` — hold no variable.  It is split in two halves,
-/// [`System::for_each_free_nodes`] and [`System::for_each_free_rest`], for the
-/// benefit of `rename_precise_system`.
+/// and `sDiffSystem` — hold no variable.
 ///
 /// The map rebuilds each `Vec`-backed field in its own STORAGE order, where
 /// HS re-establishes the container with `S.fromList` / `M.fromList`
@@ -1843,8 +1830,7 @@ impl HasFrees for GoalStatus {
 /// write path for that field.
 impl HasFrees for System {
     fn for_each_free(&self, f: &mut dyn FnMut(&LVar)) {
-        self.for_each_free_nodes(f);
-        self.for_each_free_rest(f);
+        self.for_each_free_with_node_boundary(f, |f, v| f(v), |_| {});
     }
 
     fn map_free_with(mut self, f: &mut dyn FnMut(LVar) -> LVar, monotone: bool) -> Self {

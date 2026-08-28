@@ -59,17 +59,14 @@ pub fn rename_precise_system(sys: &mut System) {
     // idx HS assigns it, and the `Vec`-backed fields are visited in their
     // `Data.Set` / `Data.Map` order rather than in insertion order.
     // ----------------------------------------------------------------------
-    sys.for_each_free_nodes(&mut |v| {
-        bindings.import(v, &mut fresh);
-    });
-    // Nodes are the FIRST field walked, so `!bindings.changed()` here means every
-    // node var (ids + rule vars) was bound to its own idx — the node rename
-    // is the identity.  Snapshotted before any later field can flip the flag,
-    // enabling the Phase 2 step-1 identity fast path.
-    let nodes_identity = !bindings.changed();
-    sys.for_each_free_rest(&mut |v| {
-        bindings.import(v, &mut fresh);
-    });
+    let mut nodes_identity = false;
+    sys.for_each_free_with_node_boundary(
+        &mut (&mut bindings, &mut fresh, &mut nodes_identity),
+        |state, v| {
+            state.0.import(v, state.1);
+        },
+        |state| *state.2 = !state.0.changed(),
+    );
 
     // ----------------------------------------------------------------------
     // Phase 2 — apply the renaming map.
@@ -388,5 +385,13 @@ mod tests {
         let once = a.clone();
         rename_precise_system(&mut a);
         assert_eq!(a, once);
+    }
+
+    #[test]
+    fn a_rest_only_rename_keeps_the_nodes_shared() {
+        let mut sys = less_sys(7, 8);
+        let nodes = std::sync::Arc::clone(&sys.nodes);
+        rename_precise_system(&mut sys);
+        assert!(std::sync::Arc::ptr_eq(&nodes, &sys.nodes));
     }
 }
