@@ -73,6 +73,10 @@
 # from its recovery pass over the 38 files whose HS crawl had failed,
 # scripts/results/websweep_ef3f0468_recover_20260828.tsv, which compared 8 of
 # them.
+#
+# Third pass: scripts/results/websweep_ef3f0468_idbased_20260828.tsv, the three
+# idbased/BP_IBS_{2,3,4} theories at commit 438478a (same submodule pin, 5,000
+# rows). Entries tagged idbased_20260828 are read off that run.
 ../../crates/tamarin-theory/tests/fixtures/nat_sort_regression.spthy	witness-index	DIFF	13 pages at full_20260828, 2 of them SVG where the wider witness label shifts every graphviz coordinate
 accountability/csf21-acc-unbounded/mixnets/basic/dmn-basic.spthy	witness-index	DIFF	10 pages at full_20260828
 accountability/masters-thesis-morio/CentralizedMonitor.spthy	witness-index	DIFF	15 pages at cert_20260805
@@ -131,9 +135,9 @@ features/multiset/NumberSubtermTests.spthy	witness-index	DIFF	1 page at cert_202
 features/multiset/counter.spthy	watch	none	crawled clean at cert_20260805
 features/noise/secrecy_4_passiveINpsk1.spthy	witness-index	DIFF	71 pages at cert_20260805
 features/noise/secrecy_4_passiveINpsk1_proof.spthy	witness-index	DIFF	71 pages at cert_20260805
-idbased/BP_IBS_4.spthy	proof-path	MISSING_HS	48 URLs at cert_20260805
-idbased/BP_IBS_4.spthy	proof-path	MISSING_RS	48 URLs at cert_20260805
-idbased/BP_IBS_4.spthy	witness-index	DIFF	129 pages at cert_20260805
+idbased/BP_IBS_2.spthy	witness-index	DIFF	64 pages at idbased_20260828, every one byte-identical once digits are normalised
+idbased/BP_IBS_3.spthy	witness-index	DIFF	50 pages at idbased_20260828, every one byte-identical once digits are normalised
+idbased/BP_IBS_4.spthy	witness-index	DIFF	111 pages at idbased_20260828, every one byte-identical once digits are normalised
 loops/Minimal_Create_Use_Destroy.spthy	watch	none	crawled clean at cert_20260805
 loops/Minimal_Loop_Example.spthy	watch	none	crawled clean at cert_20260805
 post17/chaum_unforgeability.spthy	witness-index	DIFF	4 pages at cert_20260805
