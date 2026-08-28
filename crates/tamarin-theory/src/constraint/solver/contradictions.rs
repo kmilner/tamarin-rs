@@ -1815,7 +1815,7 @@ fn bp_over_complicated(
 fn non_injective_fact_instances<'a>(
     ctxt: &ProofContext,
     sys: &'a System,
-    adj: &BTreeMap<NodeId, Vec<NodeId>>,
+    adj: &tamarin_utils::FastMap<NodeId, Vec<NodeId>>,
     node_rules: &std::cell::OnceCell<NodeRuleMap<'a>>,
 ) -> Vec<Contradiction> {
     let mut out = Vec::new();
@@ -2103,7 +2103,10 @@ fn has_incompatible_edge_facts<'a>(
 /// at a node that has chain successors via edges (but no explicit
 /// `LessAtom`) would survive — losing the contradiction Haskell uses
 /// to prune typing-class source cases at precompute.
-fn node_after_last(sys: &System, adj: &BTreeMap<NodeId, Vec<NodeId>>) -> Vec<Contradiction> {
+fn node_after_last(
+    sys: &System,
+    adj: &tamarin_utils::FastMap<NodeId, Vec<NodeId>>,
+) -> Vec<Contradiction> {
     let last = match &sys.last_atom {
         Some(l) => *l,
         None => return Vec::new(),

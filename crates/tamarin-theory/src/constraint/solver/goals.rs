@@ -365,7 +365,7 @@ pub fn open_goals(sys: &System) -> Vec<AnnotatedGoal> {
     // the always-before adjacency are the SAME map (identical build), and
     // `sys` is read-only across this pass, so one `PrebuiltAdj` feeds both:
     // `is_open_in_sys` takes the `&PrebuiltAdj` (BFS via `always_before_with`)
-    // and `goal_usefulness_with_adj` takes its inner `&BTreeMap` via `.map()`.
+    // and `goal_usefulness_with_adj` takes its inner map via `.map()`.
     let ab_adj = sys.build_always_before_adj();
     for (goal, status) in sys.goals.iter() {
         if status.solved {
@@ -2544,7 +2544,7 @@ fn toplevel_terms(t: &tamarin_term::lterm::LNTerm) -> Vec<tamarin_term::lterm::L
 /// `open_goals`) via `.map()` and thread it through
 /// `goal_usefulness_with_adj` — the `rawLessRel` map and the always-before
 /// adjacency are the SAME relation, built identically.
-type RawLessAdj = std::collections::BTreeMap<
+type RawLessAdj = tamarin_utils::FastMap<
     crate::constraint::constraints::NodeId,
     Vec<crate::constraint::constraints::NodeId>,
 >;

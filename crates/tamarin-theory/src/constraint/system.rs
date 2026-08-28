@@ -47,17 +47,16 @@ pub mod json;
 /// hoisted result is identical to rebuilding the adjacency on every query.
 #[derive(Debug, Clone, Default)]
 pub struct PrebuiltAdj {
-    adj: std::collections::BTreeMap<NodeId, Vec<NodeId>>,
+    adj: tamarin_utils::FastMap<NodeId, Vec<NodeId>>,
 }
 
 impl PrebuiltAdj {
     /// The inner `rawLessRel` adjacency (`from -> [to]` successor lists).
     /// Consumers that walk the relation directly (rather than through the
-    /// `always_before_with` BFS) take this `&BTreeMap` so a single build
-    /// feeds both query styles. The map is identical to the standalone
-    /// `rawLessRel` builders — same insertion sequence (less_atoms, edges,
-    /// unsolved Chain goals) into the same container.
-    pub(crate) fn map(&self) -> &std::collections::BTreeMap<NodeId, Vec<NodeId>> {
+    /// `always_before_with` BFS) take this map so a single build
+    /// feeds both query styles. It stores the same relation and preserves
+    /// each node's successor order: less atoms, edges, then unsolved chains.
+    pub(crate) fn map(&self) -> &tamarin_utils::FastMap<NodeId, Vec<NodeId>> {
         &self.adj
     }
 }
@@ -1679,8 +1678,8 @@ impl System {
     /// relation depends only on `&self`, never on the `i`/`j` query
     /// arguments.
     pub fn build_always_before_adj(&self) -> PrebuiltAdj {
-        let mut adj: std::collections::BTreeMap<NodeId, Vec<NodeId>> =
-            std::collections::BTreeMap::new();
+        let mut adj: tamarin_utils::FastMap<NodeId, Vec<NodeId>> =
+            tamarin_utils::FastMap::default();
         for l in &self.less_atoms {
             adj.entry(l.smaller).or_default().push(l.larger);
         }
@@ -1715,7 +1714,7 @@ impl System {
         let adj = &adj.adj;
         // BFS from i until j.
         let mut frontier: std::collections::VecDeque<NodeId> = std::collections::VecDeque::new();
-        let mut visited: std::collections::BTreeSet<NodeId> = std::collections::BTreeSet::new();
+        let mut visited = tamarin_utils::FastSet::default();
         frontier.push_back(*i);
         visited.insert(*i);
         while let Some(n) = frontier.pop_front() {
