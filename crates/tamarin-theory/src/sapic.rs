@@ -397,43 +397,12 @@ pub fn map_terms_action<T, V>(
 where
     V: Ord,
 {
-    match ac {
-        SapicAction::New(v) => SapicAction::New(fv(v)),
-        SapicAction::ChIn {
-            chan,
-            msg,
-            match_vars,
-        } => SapicAction::ChIn {
-            chan: chan.as_ref().map(&mut ft),
-            msg: ft(msg),
-            match_vars: match_vars.iter().map(&mut fv).collect(),
-        },
-        SapicAction::ChOut { chan, msg } => SapicAction::ChOut {
-            chan: chan.as_ref().map(&mut ft),
-            msg: ft(msg),
-        },
-        SapicAction::Insert(t1, t2) => SapicAction::Insert(ft(t1), ft(t2)),
-        SapicAction::Delete(t) => SapicAction::Delete(ft(t)),
-        SapicAction::Lock(t) => SapicAction::Lock(ft(t)),
-        SapicAction::Unlock(t) => SapicAction::Unlock(ft(t)),
-        SapicAction::Event(fa) => SapicAction::Event(fa.map_ref(&mut ft)),
-        SapicAction::ProcessCall(s, ts) => {
-            SapicAction::ProcessCall(s.clone(), ts.iter().map(&mut ft).collect())
-        }
-        SapicAction::Msr {
-            prems,
-            acts,
-            concs,
-            rest,
-            match_vars,
-        } => SapicAction::Msr {
-            prems: prems.iter().map(|fa| fa.map_ref(&mut ft)).collect(),
-            acts: acts.iter().map(|fa| fa.map_ref(&mut ft)).collect(),
-            concs: concs.iter().map(|fa| fa.map_ref(&mut ft)).collect(),
-            rest: rest.iter().map(&mut ff).collect(),
-            match_vars: match_vars.iter().map(&mut fv).collect(),
-        },
-        SapicAction::Rep => SapicAction::Rep,
+    let mut try_term = |t: &SapicNTerm<T>| Ok::<_, std::convert::Infallible>(ft(t));
+    let mut try_formula = |f: &SapicNFormula<T>| Ok::<_, std::convert::Infallible>(ff(f));
+    let mut try_var = |v: &T| Ok::<_, std::convert::Infallible>(fv(v));
+    match traverse_terms_action(&mut try_term, &mut try_formula, &mut try_var, ac) {
+        Ok(mapped) => mapped,
+        Err(never) => match never {},
     }
 }
 
@@ -448,21 +417,12 @@ pub fn map_terms_comb<T, V>(
 where
     V: Ord,
 {
-    match c {
-        ProcessCombinator::Cond(fa) => ProcessCombinator::Cond(ff(fa)),
-        ProcessCombinator::CondEq(t1, t2) => ProcessCombinator::CondEq(ft(t1), ft(t2)),
-        ProcessCombinator::Let {
-            left,
-            right,
-            match_vars,
-        } => ProcessCombinator::Let {
-            left: ft(left),
-            right: ft(right),
-            match_vars: match_vars.iter().map(&mut fv).collect(),
-        },
-        ProcessCombinator::Lookup(t, v) => ProcessCombinator::Lookup(ft(t), fv(v)),
-        ProcessCombinator::Parallel => ProcessCombinator::Parallel,
-        ProcessCombinator::Ndc => ProcessCombinator::Ndc,
+    let mut try_term = |t: &SapicNTerm<T>| Ok::<_, std::convert::Infallible>(ft(t));
+    let mut try_formula = |f: &SapicNFormula<T>| Ok::<_, std::convert::Infallible>(ff(f));
+    let mut try_var = |v: &T| Ok::<_, std::convert::Infallible>(fv(v));
+    match traverse_terms_comb(&mut try_term, &mut try_formula, &mut try_var, c) {
+        Ok(mapped) => mapped,
+        Err(never) => match never {},
     }
 }
 
