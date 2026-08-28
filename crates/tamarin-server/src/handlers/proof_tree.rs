@@ -43,7 +43,7 @@ use tamarin_theory::constraint::solver::search::{
 use tamarin_theory::constraint::system::{formula_to_system, System};
 use tamarin_theory::guarded::{formula_to_guarded, Guarded};
 use tamarin_theory::pretty_system::pretty_non_graph_system;
-use tamarin_theory::theory::{LemmaAttr, OpenProtoRule, TheoryItem, TraceQuantifier};
+use tamarin_theory::theory::{OpenProtoRule, TheoryItem};
 
 use crate::handlers::path_parse::{encode_sub_path, url_path_escape};
 use crate::handlers::root::html_escape;
@@ -329,26 +329,21 @@ impl ProofState {
                 false,
                 &g,
             );
-            // Reuse lemmas from earlier in the theory.
-            let mut reuse: Vec<Guarded> = Vec::new();
-            for prior in typed.lemmas() {
-                if prior.name == lname {
-                    break;
-                }
-                if !prior
-                    .attributes
-                    .iter()
-                    .any(|a| matches!(a, LemmaAttr::Reuse))
-                {
-                    continue;
-                }
-                if !matches!(prior.trace_quantifier, TraceQuantifier::AllTraces) {
-                    continue;
-                }
-                if let Ok(rg) = formula_to_guarded(&prior.formula) {
-                    reuse.push(rg);
-                }
-            }
+            // `[reuse]` lemmas declared before this one, under all four of
+            // HS's guards (source-kind bound, `[reuse]`, `all traces`,
+            // `[hide_lemma=..]`).  HS's interactive server builds the root
+            // system with the batch prover's `mkSystem`
+            // (Handler.hs:160#mkSystem, Prover.hs:358#mkSystem), so both
+            // paths gather through one implementation; the port calls the
+            // `--prove` path's `gather_reusable_lemmas` here for the same
+            // reason.  A non-guardable reuse formula makes it fail, and the
+            // lemma is skipped like one with a non-guardable formula of its
+            // own.
+            let reuse =
+                match tamarin_theory::prove::gather_reusable_lemmas(typed, &lname, source_kind) {
+                    Ok(reuse) => reuse,
+                    Err(_) => continue,
+                };
             sys.insert_lemmas(reuse);
             // Root method is the unproven `sorry` (no reason) until the
             // user (or autoprover) applies a method.  Mirrors HS

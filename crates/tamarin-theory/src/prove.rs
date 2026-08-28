@@ -611,7 +611,16 @@ pub fn induction_hint(
 /// HS uses `formulaToGuarded_` (fail-loud) on each reuse formula, so a
 /// non-guardable reuse formula propagates a `ProveError` rather than being
 /// silently dropped.
-fn gather_reusable_lemmas(
+///
+/// HS keeps ONE implementation of the gather, inside `mkSystem`
+/// (CloseRule.hs:167-188#mkSystem).  The batch prover reaches it through
+/// `proveTheory` (CloseRule.hs:162#mkSystem); the interactive server reaches
+/// the same function through `modifyLemmaProof`
+/// (Prover.hs:349-360#modifyLemmaProof, see line 358) and through its own
+/// `import Prover (mkSystem)` (Handler.hs:160#mkSystem) at
+/// Handler.hs:205#mkSystem and Handler.hs:265#mkSystem.  The web server crate
+/// calls this function so that the port keeps one implementation too.
+pub fn gather_reusable_lemmas(
     theory: &crate::theory::Theory,
     lemma_name: &str,
     kind: SourceKind,
