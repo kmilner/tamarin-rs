@@ -239,7 +239,8 @@ MAUDE_PATH="$(command -v maude)" cargo test --profile ci -p tamarin-theory --tes
 ```
 
 `tests/corpus_audits.rs` registers the audit modules under
-`tests/corpus_audits/`. Their common loader keeps a process-wide, per-path
+`tests/corpus_audits/`. Corpus discovery and parsing share their implementation
+with the in-crate tests; each test binary keeps a process-wide, per-path
 single-flight parse/elaboration cache, so concurrent audits elaborate each
 theory once without serialising unrelated theories. Add another whole-corpus
 audit to this target rather than creating a separate integration-test binary.
