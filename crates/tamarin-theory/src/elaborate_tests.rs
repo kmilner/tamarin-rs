@@ -1355,7 +1355,9 @@ fn internal_process_probes(thy: &Theory) -> Vec<ProcessProbe> {
 /// passing on fewer files.
 #[test]
 fn corpus_process_items_match_the_converted_parsed_items() {
-    use crate::test_corpus::{beyond_budget, corpus_root, parse_file, rel, spthy_files};
+    use crate::test_corpus::{
+        beyond_budget, corpus_root, elaborate_file, parse_file, rel, spthy_files,
+    };
     use rayon::prelude::*;
 
     let root = corpus_root();
@@ -1395,10 +1397,10 @@ fn corpus_process_items_match_the_converted_parsed_items() {
                             | p::TheoryItem::DiffEquivLemma(_)
                     )
                 });
-                let elab = match elaborate(&thy) {
+                let elab = match elaborate_file(path) {
                     Ok(e) => e,
                     Err(e) if carries_process => {
-                        findings.push(format!("{at}: elaboration rejects it: {}", e.message));
+                        findings.push(format!("{at}: elaboration rejects it: {e}"));
                         return (0, findings);
                     }
                     Err(_) => return (0, findings),

@@ -4,7 +4,9 @@
 //! from `tests/corpus_util/mod.rs`, which crate privacy keeps separate
 //! from this one.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
 use tamarin_parser::ast as p;
 
 /// Examples beyond the corpus tests' budget, reported as `skipped_listed`:
@@ -54,13 +56,65 @@ pub(crate) fn beyond_budget(path: &Path, root: &Path) -> bool {
 /// own directory.  `None` when the read fails, when neither parse succeeds
 /// or when the parser panics.  A diff-operator theory is parsed again with
 /// the `diff` define, the way `-D=diff` enables the operator on the CLI.
-pub(crate) fn parse_file(path: &Path) -> Option<p::Theory> {
-    let src = std::fs::read_to_string(path).ok()?;
-    let base = path.parent().map(Path::to_path_buf);
-    let parsed = std::panic::catch_unwind(|| {
-        tamarin_parser::parser::parse_theory_with_base(&src, &[], base.clone())
-            .or_else(|_| tamarin_parser::parser::parse_theory_with_base(&src, &["diff"], base))
+pub(crate) fn parse_file(path: &Path) -> Option<Arc<p::Theory>> {
+    type Entry = Arc<OnceLock<Option<Arc<p::Theory>>>>;
+    static CACHE: OnceLock<Mutex<BTreeMap<PathBuf, Entry>>> = OnceLock::new();
+    let entry = {
+        let mut cache = CACHE
+            .get_or_init(|| Mutex::new(BTreeMap::new()))
+            .lock()
+            .unwrap();
+        Arc::clone(
+            cache
+                .entry(path.to_path_buf())
+                .or_insert_with(|| Arc::new(OnceLock::new())),
+        )
+    };
+    entry
+        .get_or_init(|| {
+            let src = std::fs::read_to_string(path).ok()?;
+            let base = path.parent().map(Path::to_path_buf);
+            std::panic::catch_unwind(|| {
+                tamarin_parser::parser::parse_theory_with_base(&src, &[], base.clone())
+                    .or_else(|_| {
+                        tamarin_parser::parser::parse_theory_with_base(&src, &["diff"], base)
+                    })
+                    .ok()
+                    .map(Arc::new)
+            })
             .ok()
-    });
-    parsed.ok().flatten()
+            .flatten()
+        })
+        .clone()
+}
+
+/// Elaborate a cached parse once per path. Concurrent corpus tests share the
+/// result, including a stable description of an elaboration failure or panic.
+pub(crate) fn elaborate_file(path: &Path) -> Result<Arc<crate::theory::Theory>, Arc<str>> {
+    type Outcome = Result<Arc<crate::theory::Theory>, Arc<str>>;
+    type Entry = Arc<OnceLock<Outcome>>;
+    static CACHE: OnceLock<Mutex<BTreeMap<PathBuf, Entry>>> = OnceLock::new();
+    let entry = {
+        let mut cache = CACHE
+            .get_or_init(|| Mutex::new(BTreeMap::new()))
+            .lock()
+            .unwrap();
+        Arc::clone(
+            cache
+                .entry(path.to_path_buf())
+                .or_insert_with(|| Arc::new(OnceLock::new())),
+        )
+    };
+    entry
+        .get_or_init(|| {
+            let parsed = parse_file(path).ok_or_else(|| Arc::from("parse failed"))?;
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                crate::elaborate::elaborate(&parsed)
+            })) {
+                Ok(Ok(theory)) => Ok(Arc::new(theory)),
+                Ok(Err(error)) => Err(Arc::from(error.message)),
+                Err(_) => Err(Arc::from("elaboration panicked")),
+            }
+        })
+        .clone()
 }

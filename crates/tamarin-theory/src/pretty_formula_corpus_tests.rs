@@ -19,7 +19,9 @@ use crate::fact::FactAnnotation;
 use crate::formula::{from_parser, sapic_from_parser, to_lnformula};
 use crate::pretty_sapic::render_sapic;
 use crate::sapic::to_lformula;
-use crate::test_corpus::{beyond_budget, corpus_root, parse_file, rel, spthy_files};
+use crate::test_corpus::{
+    beyond_budget, corpus_root, elaborate_file, parse_file, rel, spthy_files,
+};
 use rayon::prelude::*;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -151,8 +153,7 @@ fn file_phase(path: &Path, root: &Path) -> FileReport {
     let Some(parsed) = parse_file(path) else {
         return rep;
     };
-    let elab = std::panic::catch_unwind(|| crate::elaborate::elaborate(&parsed).ok());
-    let Ok(Some(elab)) = elab else {
+    let Ok(elab) = elaborate_file(path) else {
         rep.outcome = Outcome::SkippedElab;
         return rep;
     };

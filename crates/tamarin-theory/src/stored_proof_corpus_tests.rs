@@ -25,7 +25,9 @@
 //! grep -rlE '(^|[^A-Za-z0-9_])(solve\(|qed|SOLVED)' tamarin-prover/examples --include='*.spthy'
 //! ```
 
-use crate::test_corpus::{beyond_budget, corpus_root, parse_file, rel, spthy_files};
+use crate::test_corpus::{
+    beyond_budget, corpus_root, elaborate_file, parse_file, rel, spthy_files,
+};
 use rayon::prelude::*;
 use std::path::Path;
 use std::time::Instant;
@@ -154,10 +156,7 @@ fn file_census(path: &Path, root: &Path) -> FileCensus {
     }
     // The step the production drivers run between the parse and any reader
     // of a stored goal.
-    let elaborated = matches!(
-        std::panic::catch_unwind(|| crate::elaborate::elaborate(&parsed).is_ok()),
-        Ok(true)
-    );
+    let elaborated = elaborate_file(path).is_ok();
     rep.unelaborated = !elaborated;
     rep
 }
