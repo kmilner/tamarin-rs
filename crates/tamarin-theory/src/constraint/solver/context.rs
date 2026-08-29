@@ -1004,20 +1004,8 @@ impl ProofContext {
         // `rename_precise_rule_if_changed` / `variant_substs_for_rule`.
         // No rule is skipped; see the HS-faithfulness note on that loop
         // for why skipping one would desynchronise `sNextGoalNr`.
-        let reducible_syms: std::collections::BTreeSet<_> =
-            sig.reducible_fun_syms.iter().copied().collect();
         let term_has_reducible = |t: &tamarin_term::lterm::LNTerm| -> bool {
-            fn rec(
-                t: &tamarin_term::lterm::LNTerm,
-                rs: &std::collections::BTreeSet<tamarin_term::function_symbols::FunSym>,
-            ) -> bool {
-                use tamarin_term::term::Term;
-                match t {
-                    Term::Lit(_) => false,
-                    Term::App(f, args) => rs.contains(f) || args.iter().any(|a| rec(a, rs)),
-                }
-            }
-            rec(t, &reducible_syms)
+            t.any_fun_sym(|f| sig.reducible_fun_syms_fast.contains(f))
         };
         // Rules with destructors anywhere — conclusions, premises,
         // ACTIONS, or new_vars — benefit from rule-variant plumbing.

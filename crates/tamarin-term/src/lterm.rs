@@ -299,23 +299,13 @@ pub fn get_var(t: &LNTerm) -> Option<&LVar> {
 
 /// `containsPrivate t`: any private NoEq symbol anywhere in `t`?
 pub fn contains_private<A>(t: &Term<A>) -> bool {
-    match t {
-        Term::Lit(_) => false,
-        Term::App(FunSym::NoEq(s), args) => {
-            s.privacy == Privacy::Private || args.iter().any(contains_private)
-        }
-        Term::App(_, args) => args.iter().any(contains_private),
-    }
+    t.any_fun_sym(|f| matches!(f, FunSym::NoEq(s) if s.privacy == Privacy::Private))
 }
 
 /// `containsOnlyNoEq t`: does `t` contain only NoEq function symbols (i.e.
 /// no AC and no C symbol)?  A literal trivially qualifies.
 pub fn contains_only_no_eq<A>(t: &Term<A>) -> bool {
-    match t {
-        Term::Lit(_) => true,
-        Term::App(FunSym::NoEq(_), args) => args.iter().all(contains_only_no_eq),
-        Term::App(_, _) => false,
-    }
+    t.all_fun_syms(|f| matches!(f, FunSym::NoEq(_)))
 }
 
 /// `containsNoPrivateExcept funs t`: does `t` contain no private function
@@ -323,13 +313,9 @@ pub fn contains_only_no_eq<A>(t: &Term<A>) -> bool {
 /// `FunSym`, so a symbol differing in arity/constructability/NDC state from
 /// its `funs` entry is not exempted.
 pub fn contains_no_private_except<A>(funs: &[FunSym], t: &Term<A>) -> bool {
-    match t {
-        Term::Lit(_) => true,
-        Term::App(f @ FunSym::NoEq(s), args) if s.privacy == Privacy::Private => {
-            funs.contains(f) && args.iter().all(|a| contains_no_private_except(funs, a))
-        }
-        Term::App(_, args) => args.iter().all(|a| contains_no_private_except(funs, a)),
-    }
+    t.all_fun_syms(|f| {
+        !matches!(f, FunSym::NoEq(s) if s.privacy == Privacy::Private) || funs.contains(f)
+    })
 }
 
 /// `isTrivialFunSymTerm t sym`: is `t` an application of `sym` whose

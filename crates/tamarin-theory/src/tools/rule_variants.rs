@@ -1059,27 +1059,15 @@ pub fn rule_has_no_variants_for_wf_with(
     // `removeRenamings`.  `isFreshRedundant {}` = True iff any
     // Fr-introduced term also appears in a non-Fr premise.
     let has_reducible = {
-        fn term_has_red(
-            t: &LNTerm,
-            irred: &std::collections::BTreeSet<tamarin_term::function_symbols::FunSym>,
-        ) -> bool {
-            use tamarin_term::term::Term;
-            if let Term::App(f, args) = t {
-                if !irred.contains(f) {
-                    return true;
-                }
-                args.iter().any(|a| term_has_red(a, irred))
-            } else {
-                false
-            }
-        }
-        let irred = &maude.maude_sig().irreducible_fun_syms;
+        let sig = maude.maude_sig();
+        let term_has_red =
+            |t: &LNTerm| t.any_fun_sym(|f| !sig.irreducible_fun_syms_fast.contains(f));
         rule.premises
             .iter()
             .chain(rule.actions.iter())
             .chain(rule.conclusions.iter())
-            .any(|f| f.terms.iter().any(|t| term_has_red(t, irred)))
-            || rule.new_vars.iter().any(|t| term_has_red(t, irred))
+            .any(|f| f.terms.iter().any(&term_has_red))
+            || rule.new_vars.iter().any(term_has_red)
     };
 
     if !has_reducible {

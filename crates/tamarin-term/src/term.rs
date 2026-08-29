@@ -145,6 +145,28 @@ pub enum TermView<'a, A> {
 }
 
 impl<A> Term<A> {
+    /// Whether any application in this term has a symbol accepted by `f`.
+    pub fn any_fun_sym(&self, mut f: impl FnMut(&FunSym) -> bool) -> bool {
+        fn go<A>(term: &Term<A>, f: &mut impl FnMut(&FunSym) -> bool) -> bool {
+            match term {
+                Term::Lit(_) => false,
+                Term::App(sym, args) => f(sym) || args.iter().any(|arg| go(arg, f)),
+            }
+        }
+        go(self, &mut f)
+    }
+
+    /// Whether every application in this term has a symbol accepted by `f`.
+    pub fn all_fun_syms(&self, mut f: impl FnMut(&FunSym) -> bool) -> bool {
+        fn go<A>(term: &Term<A>, f: &mut impl FnMut(&FunSym) -> bool) -> bool {
+            match term {
+                Term::Lit(_) => true,
+                Term::App(sym, args) => f(sym) && args.iter().all(|arg| go(arg, f)),
+            }
+        }
+        go(self, &mut f)
+    }
+
     pub fn view(&self) -> TermView<'_, A> {
         match self {
             Term::Lit(l) => TermView::Lit(l),

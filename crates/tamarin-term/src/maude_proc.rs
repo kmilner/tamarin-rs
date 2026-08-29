@@ -66,14 +66,7 @@ impl From<maude_parse::ParseError> for MaudeError {
 /// term contains no reducible symbols at all, `reduce` is the
 /// identity, and we can skip the Maude IPC round-trip.
 fn term_has_reducible_sym(t: &LNTerm, reducible: &crate::function_symbols::FunSig) -> bool {
-    use crate::term::Term;
-    fn rec(t: &LNTerm, reducible: &crate::function_symbols::FunSig) -> bool {
-        match t {
-            Term::Lit(_) => false,
-            Term::App(f, args) => reducible.contains(f) || args.iter().any(|a| rec(a, reducible)),
-        }
-    }
-    rec(t, reducible)
+    t.any_fun_sym(|f| reducible.contains(f))
 }
 
 /// True if `t` contains NO Ac- or C-headed application anywhere.  Backs
@@ -87,12 +80,7 @@ fn term_has_reducible_sym(t: &LNTerm, reducible: &crate::function_symbols::FunSi
 /// need the Maude-backed path (`norm::rule_applies_ac`).
 pub(crate) fn term_ac_c_free(t: &LNTerm) -> bool {
     use crate::function_symbols::FunSym;
-    use crate::term::Term;
-    match t {
-        Term::Lit(_) => true,
-        Term::App(FunSym::Ac(_) | FunSym::C(_), _) => false,
-        Term::App(_, args) => args.iter().all(term_ac_c_free),
-    }
+    t.all_fun_syms(|f| !matches!(f, FunSym::Ac(_) | FunSym::C(_)))
 }
 
 /// Statistics on Maude operations performed via this handle.
