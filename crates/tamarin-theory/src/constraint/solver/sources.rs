@@ -4728,7 +4728,7 @@ fn compare_systems_up_to_new_vars(
         .cmp(b_edges)
         .then_with(|| less_atoms.cmp(b_less_atoms))
         .then_with(|| last_atom.cmp(b_last_atom))
-        .then_with(|| subterm_store.cmp(b_subterm_store))
+        .then_with(|| subterm_store.cmp_hs(b_subterm_store))
         .then_with(|| eq_store.cmp(b_eq_store))
         .then_with(|| formulas.cmp(b_formulas))
         .then_with(|| solved_formulas.cmp(b_solved_formulas))

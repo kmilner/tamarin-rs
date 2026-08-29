@@ -174,26 +174,17 @@ pub struct SubtermStore {
     pub old_neg_subterms: SortedPairSet,
 }
 
-impl PartialOrd for SubtermStore {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-/// HS derives `Ord SubtermStore` over `_negSubterms`, `_posSubterms`,
-/// `_solvedSubterms`, `_isContradictory`, `_oldNegSubterms`
-/// (SubtermStore.hs:90-97).  The port declares those five fields in another
-/// order, and its two `Vec<SubtermConstraint>` fields carry a `propagated`
-/// marker that HS's `S.Set (LNTerm, LNTerm)` has no room for, so both are
-/// compared through [`SubtermConstraint::hs_pair`].
-///
-/// This makes the order COARSER than the derived `PartialEq` above, which
-/// reads `propagated` too: two stores can be `Ordering::Equal` and not `==`.
-/// The two relations have disjoint consumers — the order is read only by
-/// `compare_systems_up_to_new_vars`, equality only through `System` — and a
-/// container keyed on a `SubtermStore` would need them reconciled first.
-impl Ord for SubtermStore {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+impl SubtermStore {
+    /// Compare in HS's derived `Ord SubtermStore` order: `_negSubterms`,
+    /// `_posSubterms`, `_solvedSubterms`, `_isContradictory`, then
+    /// `_oldNegSubterms` (SubtermStore.hs:90-97).
+    ///
+    /// The port-only `propagated` marker is deliberately absent from this
+    /// comparison because HS stores only `(LNTerm, LNTerm)` pairs.  Keep this
+    /// as a named, crate-local operation rather than implementing Rust's
+    /// [`Ord`]: derived [`PartialEq`] does include the marker, so the HS order
+    /// is intentionally coarser than Rust equality.
+    pub(crate) fn cmp_hs(&self, other: &Self) -> std::cmp::Ordering {
         fn cmp_pairs(a: &[SubtermConstraint], b: &[SubtermConstraint]) -> std::cmp::Ordering {
             a.iter()
                 .map(|c| c.hs_pair())
@@ -206,9 +197,7 @@ impl Ord for SubtermStore {
             .then_with(|| self.contradictory.cmp(&other.contradictory))
             .then_with(|| self.old_neg_subterms.cmp(&other.old_neg_subterms))
     }
-}
 
-impl SubtermStore {
     pub fn empty() -> Self {
         Self::default()
     }
@@ -1150,25 +1139,31 @@ mod tests {
     /// `neg_subterms` fourth, so a pair whose negative and positive sets
     /// disagree in opposite directions settles on the negative one.
     #[test]
-    fn subterm_store_ord_follows_the_hs_field_order() {
+    fn subterm_store_hs_comparison_follows_the_hs_field_order() {
         let store = |neg: u64, pos: u64| SubtermStore {
             subterms: vec![cst(pos, pos + 1, false)],
             neg_subterms: SortedPairSet::rebuild_from(vec![(xt(neg), xt(neg + 1))]),
             ..SubtermStore::empty()
         };
-        assert_eq!(store(20, 31).cmp(&store(22, 30)), std::cmp::Ordering::Less);
+        assert_eq!(
+            store(20, 31).cmp_hs(&store(22, 30)),
+            std::cmp::Ordering::Less
+        );
     }
 
     /// `propagated` is port-only: HS holds the positive and solved sets as
     /// `S.Set (LNTerm, LNTerm)` (SubtermStore.hs:90-96), so two stores that
     /// differ only in that marker compare equal.
     #[test]
-    fn subterm_store_ord_ignores_the_propagated_marker() {
+    fn subterm_store_hs_comparison_ignores_the_propagated_marker() {
         let store = |propagated: bool| SubtermStore {
             subterms: vec![cst(2, 3, propagated)],
             solved_subterms: vec![cst(4, 5, propagated)],
             ..SubtermStore::empty()
         };
-        assert_eq!(store(false).cmp(&store(true)), std::cmp::Ordering::Equal);
+        let plain = store(false);
+        let propagated = store(true);
+        assert_ne!(plain, propagated, "Rust equality includes the marker");
+        assert_eq!(plain.cmp_hs(&propagated), std::cmp::Ordering::Equal);
     }
 }
