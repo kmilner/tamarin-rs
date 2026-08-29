@@ -581,16 +581,46 @@ impl<'a> Lexer<'a> {
     /// the backslash dropped); a bare `"` terminates the body and any other `\x`
     /// fails the whole parse. Used for `export <tag>: "..."` blocks.
     pub fn export_body(&mut self) -> Option<String> {
-        self.quoted(true, |lx| match lx.peek() {
-            Some(c @ ('\\' | '"')) => {
-                lx.bump();
-                Some(Some(c))
+        self.skip_ws();
+        let save = self.pos;
+        if !self.eat('"') {
+            self.pos = save;
+            return None;
+        }
+
+        // Unlike ordinary quoted strings, the opening quote is not a lexeme:
+        // whitespace and comments immediately inside it belong to the body.
+        let mut body = String::new();
+        loop {
+            match self.peek() {
+                None => {
+                    self.pos = save;
+                    return None;
+                }
+                Some('"') => {
+                    self.bump();
+                    self.skip_ws();
+                    return Some(body);
+                }
+                Some('\\') => {
+                    self.bump();
+                    match self.peek() {
+                        Some(c @ ('\\' | '"')) => {
+                            body.push(c);
+                            self.bump();
+                        }
+                        _ => {
+                            self.pos = save;
+                            return None;
+                        }
+                    }
+                }
+                Some(c) => {
+                    body.push(c);
+                    self.bump();
+                }
             }
-            // Any other `\x` makes `bodyChar` (wrapped in `try`) backtrack, so
-            // `many bodyChar` stops and the closing `"` is never found at this
-            // position — the export fails.
-            _ => None,
-        })
+        }
     }
 
     /// Single-quoted string literal — not allowing single-quote or newline inside.
@@ -852,15 +882,10 @@ mod tests {
     }
 
     #[test]
-    fn export_body_treats_the_opening_quote_as_a_lexeme() {
-        let mut l = Lexer::new("\"  /* discarded */  body\"");
-        assert_eq!(l.export_body().as_deref(), Some("body"));
-
-        let mut literal = Lexer::new("\"  /* retained */  body\"");
-        assert_eq!(
-            literal.string_literal().as_deref(),
-            Some("  /* retained */  body")
-        );
+    fn export_body_preserves_leading_whitespace_and_comments() {
+        let mut l = Lexer::new("\"  // body text\nnext\"  tail");
+        assert_eq!(l.export_body().as_deref(), Some("  // body text\nnext"));
+        assert_eq!(l.rest(), "tail");
     }
 
     #[test]

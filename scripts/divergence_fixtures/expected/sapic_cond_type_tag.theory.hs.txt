@@ -11,24 +11,33 @@ predicate: Eq( a, b )<=>a = b
 
 predicate: Pred( a, b )<=>a = a
 
-let  P (x.1:foo) = out('yes') if Eq( x.1, 'a' ) out('no')
+let  P (x.1:foo) = if Eq( x.1, 'a' ) then
+                       out('yes')
+                   else
+                       out('no')
 
-let  S (#k.1:node,#l.1:node) = out('yes') if #k.1 < #l.1 out('no')
+let  S (#k.1:node,#l.1:node) = if #k.1 < #l.1 then
+                                   out('yes')
+                               else
+                                   out('no')
 
-let  T (#m.1:node) = out('yes') if last(#m.1) out('no')
+let  T (#m.1:node) = if last(#m.1) then
+                         out('yes')
+                     else
+                         out('no')
 
-let  U (x.1,#n.1:node) = out('yes') if Ev( x.1 ) @ #n.1 out('no')
+let  U (x.1,#n.1:node) = if Ev( x.1 ) @ #n.1 then
+                             out('yes')
+                         else
+                             out('no')
 
-let  V (y.1,#p.1) = out('yes') if Pred( #p.1, y.1 ) out('no')
+let  V (y.1,#p.1:node) = if Pred( #p.1, y.1 ) then
+                             out('yes')
+                         else
+                             out('no')
 
 process:
   out('done')
-
-function: snd (Any) : Any   
-
-function: pair (Any, Any) : Any   
-
-function: fst (Any) : Any   
 
 
 

@@ -605,9 +605,8 @@ pub fn from_parser(f: &p::Formula, sig: &MaudeSig) -> Result<SyntacticLNFormula,
 ///
 /// A binder closes exactly the occurrences equal to its whole `SapicLVar`,
 /// type tag included (HS `quantify`'s `v == x`,
-/// Theory/Model/Formula.hs:350-352), so a binder written `#j` does not close
-/// the `@`-operand `#j` that `sapicnodevar` tagged `node` (probe
-/// `S2_cond_quantified_timepoint.spthy`).
+/// Theory/Model/Formula.hs:350-352). Current `sapicvar` defaults a node-sorted
+/// binder to type `node`, matching `sapicnodevar` at its occurrences.
 pub fn sapic_from_parser(f: &p::Formula, sig: &MaudeSig) -> Result<SapicFormula, ElabError> {
     from_parser_with::<SapicVars>(f, sig)
 }
@@ -1247,7 +1246,29 @@ mod tests {
 
     fn sapic_parsed(src: &str) -> SapicFormula {
         let msig = pair_maude_sig();
-        sapic_from_parser(&parse_formula_str(src, &msig).unwrap(), &msig).unwrap()
+        let parsed = tamarin_parser::parse_theory(
+            &format!("theory T begin process: if {src} then 0 end"),
+            &[],
+        )
+        .unwrap();
+        let condition = parsed
+            .items
+            .iter()
+            .find_map(|item| match item {
+                p::TheoryItem::TopLevelProcess(p::Process::Comb {
+                    comb: p::ProcessComb::Cond(condition),
+                    ..
+                }) => Some(condition),
+                _ => None,
+            })
+            .unwrap();
+        let formula = match condition {
+            p::Condition::Formula(formula) => formula.clone(),
+            p::Condition::Eq(left, right) => {
+                p::Formula::Atom(p::Atom::Eq(left.clone(), right.clone()))
+            }
+        };
+        sapic_from_parser(&formula, &msig).unwrap()
     }
 
     fn sapic_free(name: &str, sort: LSort, typ: Option<&str>) -> VTerm<Name, BVar<SapicLVar>> {
@@ -1305,37 +1326,30 @@ mod tests {
         );
     }
 
-    /// A predicate's arguments are read by `varp = sapicvar` alone
-    /// (`fact (vlit (try varp <|> nodep))`,
-    /// Theory/Text/Parser/Formula.hs:52, where `lvarNoSuffix` accepts every
-    /// sigil), so a timepoint argument carries no type tag.
+    /// A predicate's arguments are read by `varp = sapicvar`; current
+    /// `sapicvar` defaults a node-sorted variable to type `node`.
     #[test]
-    fn sapic_from_parser_leaves_a_predicate_argument_untagged() {
+    fn sapic_from_parser_tags_a_node_sorted_predicate_argument() {
         assert_eq!(
             sapic_parsed("P(#p, y)"),
             sapic_pred(
                 "P",
                 vec![
-                    sapic_free("p", LSort::Node, None),
+                    sapic_free("p", LSort::Node, Some("node")),
                     sapic_free("y", LSort::Msg, None)
                 ]
             )
         );
     }
 
-    /// A quantifier binder is `sapicvar`'s untagged reading while the `@`
-    /// operand is `sapicnodevar`'s tagged one, and `quantify` compares the
-    /// whole `SapicLVar` (Theory/Model/Formula.hs:350-352), so the binder
-    /// closes nothing and the timepoint stays free.  The oracle rejects such
-    /// a condition (probe `S2_cond_quantified_timepoint.spthy`:
-    /// `The variable(s) #j are not bound.`).
+    /// The node-defaulting fix makes a `sapicvar` quantifier binder equal to
+    /// the tagged `sapicnodevar` occurrence, so `quantify` closes it.
     #[test]
-    fn a_sapic_binder_does_not_close_a_tagged_timepoint_occurrence() {
-        let j = sapic_free("j", LSort::Node, Some("node"));
+    fn a_sapic_node_binder_closes_a_tagged_timepoint_occurrence() {
         let want = ProtoFormula::exists(
             hint("j", LSort::Node),
             ProtoFormula::Atom(ProtoAtom::Action(
-                j.clone(),
+                sapic_bound(0),
                 proto_fact("Foo", vec![sapic_free("x", LSort::Msg, None)]),
             )),
         );
@@ -1343,16 +1357,12 @@ mod tests {
         assert_eq!(got, want);
         assert_eq!(
             formula_frees(&got),
-            vec![
-                SapicLVar::untyped(LVar::new("x", LSort::Msg, 0)),
-                SapicLVar::new(LVar::new("j", LSort::Node, 0), Some("node".to_string())),
-            ]
+            vec![SapicLVar::untyped(LVar::new("x", LSort::Msg, 0))]
         );
     }
 
     /// The two instantiations of the closing walk agree once `toLFormula`
-    /// drops the tags.  A quantified timepoint is where they part company —
-    /// see `a_sapic_binder_does_not_close_a_tagged_timepoint_occurrence`.
+    /// drops the tags.
     #[test]
     fn to_lformula_of_sapic_from_parser_equals_from_parser() {
         for src in [
@@ -1362,6 +1372,7 @@ mod tests {
             "x:foo = 'a'",
             "All x:foo. P(x:foo)",
             "Ex ~k. K(~k) @ #i & #i < #j",
+            "Ex #j. Foo(x) @ #j",
         ] {
             assert_eq!(
                 crate::sapic::to_lformula(&sapic_parsed(src)),

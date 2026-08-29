@@ -330,6 +330,14 @@ impl Options {
         true
     }
 
+    pub(crate) fn declared(&self) -> Vec<&'static str> {
+        tamarin_parser::DeclarableOption::ALL
+            .into_iter()
+            .filter(|option| self.declarable[*option as usize])
+            .map(tamarin_parser::DeclarableOption::as_str)
+            .collect()
+    }
+
     pub fn trans_progress(&self) -> bool {
         self.declarable[tamarin_parser::DeclarableOption::TranslationProgress as usize]
     }

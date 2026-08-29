@@ -67,10 +67,9 @@ end
 "#;
 
 /// `-m spthytyped` on typing4 — oracle stdout (pinned build ef3f0468), minus
-/// `putStrLn`'s trailing newline.  Exercises: typed/renamed processes
-/// (`x.2:lol`…), source-positioned `function:` items DELETED, the six
-/// recomputed items appended after the lemma in REVERSE-alphabetical
-/// (descending `UserDefinedSym`) order, then the wf + version comments.
+/// `putStrLn`'s trailing newline, with the reparsable-output fixes applied.
+/// Exercises typed/renamed processes (`x.2:lol`…) and omission of redundant
+/// default function typings.
 #[test]
 fn spthytyped_typing4_bytes() {
     let thy = typed(TYPING4);
@@ -84,14 +83,12 @@ builtins: multiset
 functions: f/1, fst/1, g/1, h/1, pair/2, snd/1
 equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
 
-builtin  multiset
-
 process:
-  new x.2:lol;
-  out(x.2:lol) | new x.3:lol;
-                 new x.4:lol;
-                 event Run( x.3:lol, x.4:lol );
-                 out(<x.3:lol, x.4:lol>)
+  (new x.2:lol;
+   out(x.2:lol)) | (new x.3:lol;
+                    new x.4:lol;
+                    event Run( x.3:lol, x.4:lol );
+                    out(<x.3:lol, x.4:lol>))
 
 lemma sanity:
   exists-trace \"\u{2203} x y #i. (Run( x, y ) @ #i) \u{2227} (\u{ac}(x = y))\"
@@ -101,17 +98,9 @@ guarded formula characterizing all satisfying traces:
 */
 by sorry
 
-function: snd (Any) : Any  \u{20}
+function: g (lol) : lol
 
-function: pair (Any, Any) : Any  \u{20}
-
-function: h (Any) : Any  \u{20}
-
-function: g (lol) : lol  \u{20}
-
-function: fst (Any) : Any  \u{20}
-
-function: f (bitstring) : bitstring  \u{20}
+function: f (bitstring) : bitstring
 
 /* All wellformedness checks were successful. */
 
@@ -188,12 +177,6 @@ guarded formula characterizing all satisfying traces:
 \"\u{2203} x #i. (Received( x ) @ #i)\"
 */
 by sorry
-
-function: snd (Any) : Any  \u{20}
-
-function: pair (Any, Any) : Any  \u{20}
-
-function: fst (Any) : Any  \u{20}
 
 /* All wellformedness checks were successful. */
 
@@ -376,17 +359,10 @@ builtins: natural-numbers
 functions: fst/1, pair/2, snd/1
 equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
 
-builtin  natural-numbers
-
 process:
   in(%c.1);
-   (event E( cnext.1:nat ) let cnext.1:nat=(%c.1%+%1) 0)
-
-function: snd (Any) : Any  \u{20}
-
-function: pair (Any, Any) : Any  \u{20}
-
-function: fst (Any) : Any  \u{20}
+  let cnext.1:nat=(%c.1%+%1) in
+      event E( cnext.1:nat )
 
 /* All wellformedness checks were successful. */
 
@@ -410,11 +386,9 @@ end";
 /// with `show :: SapicLVar` (TheoryObject.hs:791-799,
 /// Theory/Sapic/Term.hs:108-110).  A timepoint operand of `<` is read by
 /// `sapicnodevar` and so carries `node`
-/// (Theory/Sapic/Term.hs:99-100#defaultSapicNodeType), while a predicate
-/// argument takes `sapicvar` and stays untagged.
-///
-/// Oracle bytes (pinned build, Git revision ef3f0468; fixture
-/// `sapic_cond_type_tag`).
+/// (Theory/Sapic/Term.hs:99-100#defaultSapicNodeType). Current upstream also
+/// defaults every node-sorted `sapicvar` to that type, including a predicate
+/// argument such as `#p`.
 #[test]
 fn a_process_def_formal_from_a_condition_keeps_its_type_tag() {
     let src = r#"theory T
@@ -433,11 +407,11 @@ end
 "#;
     let thy = typed(src);
     let out = render(&thy);
-    for line in [
-        "let  P (x.1:foo) = out('yes') if Eq( x.1, 'a' ) out('no')",
-        "let  S (#k.1:node,#l.1:node) = out('yes') if #k.1 < #l.1 out('no')",
-        "let  V (y.1,#p.1) = out('yes') if Pred( #p.1, y.1 ) out('no')",
+    for block in [
+        "let  P (x.1:foo) = if Eq( x.1, 'a' ) then\n                       out('yes')\n                   else\n                       out('no')",
+        "let  S (#k.1:node,#l.1:node) = if #k.1 < #l.1 then\n                                   out('yes')\n                               else\n                                   out('no')",
+        "let  V (y.1,#p.1:node) = if Pred( #p.1, y.1 ) then\n                             out('yes')\n                         else\n                             out('no')",
     ] {
-        assert!(out.contains(line), "missing `{line}` in:\n{out}");
+        assert!(out.contains(block), "missing `{block}` in:\n{out}");
     }
 }

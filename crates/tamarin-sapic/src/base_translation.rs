@@ -1456,24 +1456,34 @@ mod tests {
         assert_eq!(*b, lift_free(&t2));
     }
 
-    /// A quantifier binder in a SAPIC condition is read by `sapicvar` and
-    /// carries no type tag (Theory/Text/Parser/Token.hs:506-510#sapicvar),
-    /// while a timepoint operand is read by `sapicnodevar` and is tagged
-    /// `node` (Theory/Text/Parser/Token.hs:522-525#sapicnodevar,
-    /// Theory/Sapic/Term.hs:99-100#defaultSapicNodeType).  `quantify`
-    /// compares the WHOLE variable (Theory/Model/Formula.hs:346-352), so the
-    /// binder closes nothing and the timepoint reaches the `⊆ tildex` check.
-    ///
-    /// Oracle (pinned build, Git revision ef3f0468) on
-    /// `in(x); event Foo(x); if (Ex #j. Foo(x)@#j) then out('yes') else out('no')`:
-    /// `tamarin-prover: The variable(s) #j are not bound.`, exit 1
-    /// (probe `S2_cond_quantified_timepoint`).
+    /// Current `sapicvar` defaults node-sorted binders to type `node`, so a
+    /// quantified `#j` now matches and closes the `sapicnodevar` occurrence.
     #[test]
-    fn a_quantified_timepoint_in_a_cond_is_not_bound_by_its_binder() {
+    fn a_quantified_timepoint_in_a_cond_is_bound_by_its_binder() {
         let msig = tamarin_term::maude_sig::pair_maude_sig();
         let cond = |src: &str| {
-            let f = tamarin_parser::parser::parse_formula_str(src, &msig).unwrap();
-            ProcessCombinator::Cond(tamarin_theory::formula::sapic_from_parser(&f, &msig).unwrap())
+            let parsed = tamarin_parser::parse_theory(
+                &format!("theory T begin process: if {src} then 0 end"),
+                &[],
+            )
+            .unwrap();
+            let condition = parsed
+                .items
+                .iter()
+                .find_map(|item| match item {
+                    tamarin_parser::TheoryItem::TopLevelProcess(
+                        tamarin_parser::Process::Comb {
+                            comb: tamarin_parser::ProcessComb::Cond(condition),
+                            ..
+                        },
+                    ) => Some(condition),
+                    _ => None,
+                })
+                .unwrap();
+            let tamarin_parser::Condition::Formula(f) = condition else {
+                panic!("expected a formula condition")
+            };
+            ProcessCombinator::Cond(tamarin_theory::formula::sapic_from_parser(f, &msig).unwrap())
         };
         let an = ProcessAnnotation::<LVar>::empty();
         let pos: Vec<i64> = vec![];
@@ -1486,8 +1496,7 @@ mod tests {
         // below discriminating.
         assert!(base_trans_comb(&cond("Ex y. Eq(y, x)"), &an, &pos, &tx).is_ok());
 
-        let err = base_trans_comb(&cond("Ex #j. Foo(x) @ #j"), &an, &pos, &tx).unwrap_err();
-        assert_eq!(err, "The variable(s) #j are not bound.");
+        assert!(base_trans_comb(&cond("Ex #j. Foo(x) @ #j"), &an, &pos, &tx).is_ok());
     }
 
     // A user-`[AC]` symbol prints INFIX, as HS `prettyTerm` renders it

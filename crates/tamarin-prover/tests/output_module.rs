@@ -156,11 +156,9 @@ const EXPECTED_SPTHY: &[&str] = &[
     "end",
 ];
 
-/// Oracle stdout for `-m=spthytyped`: variables renamed (`s` → `s.1`), and
-/// the recomputed `function:` items appended after the lemma in DESCENDING
-/// `UserDefinedSym` order (`Map.foldrWithKey` + append, Typing.hs:210,226).
-/// The three trailing spaces on each `function:` line are HS's
-/// `prettyTranslationElement` bytes.
+/// Oracle stdout for `-m=spthytyped`: variables renamed (`s` → `s.1`).
+/// Default typing items are omitted because the signature already declares
+/// the same functions.
 const EXPECTED_SPTHYTYPED: &[&str] = &[
     "theory Replication",
     "",
@@ -184,12 +182,6 @@ const EXPECTED_SPTHYTYPED: &[&str] = &[
     "\"\u{2203} #i #j x y. (Secret( x ) @ #i) \u{2227} (Secret( y ) @ #j) \u{2227} \u{ac}(x = y)\"",
     "*/",
     "by sorry",
-    "",
-    "function: snd (Any) : Any   ",
-    "",
-    "function: pair (Any, Any) : Any   ",
-    "",
-    "function: fst (Any) : Any   ",
     "",
     "/* All wellformedness checks were successful. */",
     "",
@@ -328,12 +320,6 @@ const EXPECTED_PATTERNS_SPTHYTYPED: &[&str] = &[
     "   [ In( z.1 ) ] --> [ ];",
     "   [ In( =z.1 ) ] --> [ ]",
     "",
-    "function: snd (Any) : Any   ",
-    "",
-    "function: pair (Any, Any) : Any   ",
-    "",
-    "function: fst (Any) : Any   ",
-    "",
     "/* All wellformedness checks were successful. */",
     "",
     "/*",
@@ -367,8 +353,8 @@ end
 /// print WITHOUT `[destructor]` while `dec` keeps it: HS's `function`
 /// short-circuit for those two names returns `NoEqUser (f, kp')` — the
 /// EXISTING pair-projection symbol `(1, Public, Constructor, NotNDC)` — so the
-/// requested attributes never reach the `FunctionTypingInfo` item
-/// (Theory/Text/Parser/Signature.hs:217, printed by TheoryObject.hs:820-838).
+/// requested attributes never reach the signature
+/// (Theory/Text/Parser/Signature.hs:217).
 /// The signature echo agrees: `fst/1` and `snd/1` list no attributes there
 /// either, because the short-circuit also skips `addFunSym`.
 const EXPECTED_FST_SND_ATTRS_SPTHY: &[&str] = &[
@@ -384,14 +370,6 @@ const EXPECTED_FST_SND_ATTRS_SPTHY: &[&str] = &[
     "    dec(g(x.1), x.2) = x.1,",
     "    fst(<x.1, x.2>) = x.1,",
     "    snd(<x.1, x.2>) = x.2",
-    "",
-    "function: fst (Any) : Any   ",
-    "",
-    "function: snd (Any) : Any   ",
-    "",
-    "function: dec (Any, Any) : Any   [destructor] ",
-    "",
-    "function: g (Any) : Any  [private]  ",
     "",
     "rule (modulo E) R:",
     "   [ In( x ) ] --> [ Out( fst(x) ) ]",
@@ -485,7 +463,7 @@ fn spthy_module_echoes_the_process_block() {
 }
 
 #[test]
-fn spthytyped_module_appends_function_type_lines() {
+fn spthytyped_module_omits_redundant_default_type_lines() {
     if !maude_available() {
         eprintln!("skipping: maude not on path");
         return;

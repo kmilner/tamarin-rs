@@ -180,7 +180,7 @@ pub fn pretty_closed_theory(
     // header's blocks are `vsep`-separated, which this route writes as the
     // "\n\n" join plus the trailing newline every following block is written
     // against.
-    let mut out = theory_header_blocks(thy, &render_injective_fact_insts(thy)).join("\n\n");
+    let mut out = theory_header_blocks(thy, &render_injective_fact_insts(thy), false).join("\n\n");
     out.push('\n');
 
     // HS `prettyClosedTheory` (ClosedTheory.hs:383-402) renders the merged
@@ -362,9 +362,9 @@ fn pretty_formal_comment(fc: &crate::theory::FormalComment) -> String {
 //     quoted formula, guarded characterization and safety test, and writes no
 //     `expanded formula:` block;
 //   - `TranslationItem`s render via `prettyTranslationElement`
-//     (TheoryObject.hs:785-841): `builtin  <name>`, `function: …` typing
-//     lines, `process:`/`let` blocks, `export:`, accountability lemmas and
-//     `test` case tests;
+//     (TheoryObject.hs:785-841): signature-irreducible builtins, explicit
+//     function types, `process:`/`let` blocks, exports, accountability lemmas
+//     and `test` case tests;
 //   - `--parse-only` prints no wellformedness block and no `Generated from:`
 //     footer (Batch.hs:91-95 prints the doc alone), while the `-m` prints add
 //     both.
@@ -376,7 +376,7 @@ fn pretty_formal_comment(fc: &crate::theory::FormalComment) -> String {
 pub fn pretty_open_theory(thy: &Theory) -> String {
     let in_file = thy.in_file.as_str();
     let translation = |el: &TranslationElement| pretty_translation_element(el, in_file);
-    let mut blocks = open_theory_blocks(thy, in_file, &translation);
+    let mut blocks = open_theory_blocks(thy, in_file, true, &translation);
     blocks.push("end".to_string());
     blocks.join("\n\n")
 }
@@ -392,7 +392,7 @@ pub fn pretty_open_theory(thy: &Theory) -> String {
 pub fn pretty_open_theory_by_module(thy: &Theory, wf_block: &str, build: &BuildInfo) -> String {
     let in_file = thy.in_file.as_str();
     let translation = |el: &TranslationElement| pretty_translation_element(el, in_file);
-    let mut blocks = open_theory_blocks(thy, in_file, &translation);
+    let mut blocks = open_theory_blocks(thy, in_file, true, &translation);
     blocks.push(wf_block.to_string());
     blocks.push(render_generated_from(build));
     blocks.push("end".to_string());
@@ -411,7 +411,7 @@ pub fn pretty_open_translated_theory_by_module(
 ) -> String {
     let in_file = thy.in_file.as_str();
     let translation = |_: &TranslationElement| String::new();
-    let mut blocks = open_theory_blocks(thy, in_file, &translation);
+    let mut blocks = open_theory_blocks(thy, in_file, false, &translation);
     blocks.push(wf_block.to_string());
     blocks.push(render_generated_from(build));
     blocks.push("end".to_string());
@@ -426,7 +426,7 @@ pub fn pretty_open_translated_theory_by_module(
 /// would render empty is left out here and the caller joins with "\n\n".
 /// `cache` is HS's `ppCache` applied to the theory's rule cache; an empty
 /// string is HS's `const emptyDoc`.
-fn theory_header_blocks<R>(thy: &Theory<R>, cache: &str) -> Vec<String> {
+fn theory_header_blocks<R>(thy: &Theory<R>, cache: &str, include_options: bool) -> Vec<String> {
     let mut blocks: Vec<String> = Vec::new();
     blocks.push(format!("theory {}", thy.name));
     for item in &thy.items {
@@ -447,6 +447,12 @@ fn theory_header_blocks<R>(thy: &Theory<R>, cache: &str) -> Vec<String> {
     let sig_trimmed = sig_block.trim_end_matches('\n');
     if !sig_trimmed.is_empty() {
         blocks.push(sig_trimmed.to_string());
+    }
+    if include_options {
+        let declared = thy.options.declared();
+        if !declared.is_empty() {
+            blocks.push(wrap_with_lead("options:", &declared));
+        }
     }
     // `vcat $ map prettyTactic thyT` (TheoryObject.hs:763) — single-newline
     // joined tactic blocks; then the `heuristic:` line (line 764).  Both are
@@ -473,11 +479,12 @@ fn theory_header_blocks<R>(thy: &Theory<R>, cache: &str) -> Vec<String> {
 fn open_theory_blocks(
     thy: &Theory,
     in_file: &str,
+    include_options: bool,
     translation: &(dyn Fn(&TranslationElement) -> String + Sync),
 ) -> Vec<String> {
     // `ppCache = const emptyDoc` (OpenTheory.hs:872) — the open print has no
     // cache block.
-    let mut blocks = theory_header_blocks(thy, "");
+    let mut blocks = theory_header_blocks(thy, "", include_options);
     blocks.extend(pretty_theory_items(
         &thy.items,
         &ItemPrinters {
@@ -522,8 +529,8 @@ fn pretty_translation_element(el: &TranslationElement, in_file: &str) -> String 
             .render(),
         // `text "equivLemma" <> colon $-$ (nest 2 p1) $$ (nest 2 p2)` (`:788`).
         TranslationElement::EquivLemma(p1, p2) => Doc::text("equivLemma:")
-            .above_g(open_process_doc(p1).nest(2))
-            .above(open_process_doc(p2).nest(2))
+            .above_g(hpj::parens(open_process_doc(p1)).nest(2))
+            .above(hpj::parens(open_process_doc(p2)).nest(2))
             .render(),
         // `text "let " <-> name <-> vars? <-> text "=" <-> nest 2 (prettyProcess body)`
         // (`:791-799`) — `text "let "` keeps its own trailing space, so `<->`
@@ -540,18 +547,24 @@ fn pretty_translation_element(el: &TranslationElement, in_file: &str) -> String 
                 .beside_sp(open_process_doc(&pd.body).nest(2))
                 .render()
         }
-        // `(text "builtin ") <-> (text s)` (`:843`) = two spaces.
-        TranslationElement::SignatureBuiltin(name) => format!("builtin  {}", name),
+        TranslationElement::SignatureBuiltin(name) => match name.as_str() {
+            "locations-report" | "reliable-channel" | "dest-pairing" => {
+                format!("builtins: {name}")
+            }
+            _ => String::new(),
+        },
         // The two `FunctionTypingInfo` cases (`:800-838`).
         TranslationElement::FunctionTypingInfo(fti) => pretty_function_typing_info(fti).render(),
-        // `(text "export: ") <-> tag <-> nest 2 (doubleQuotes body)`
-        // (`:839-842`) — all flat text chunks, so the layout is a plain
-        // concatenation with `<->`'s single spaces (`export:  tag "body"`,
-        // double space after the colon from `"export: "`'s own trailing
-        // space).  The body is emitted verbatim (embedded newlines stay at
-        // column 0 — HughesPJ cannot re-indent inside one `text` chunk).
         TranslationElement::ExportInfo { tag, body } => {
-            format!("export:  {} \"{}\"", tag, body)
+            let mut escaped = String::with_capacity(body.len());
+            for c in body.chars() {
+                match c {
+                    '\\' => escaped.push_str("\\\\"),
+                    '"' => escaped.push_str("\\\""),
+                    _ => escaped.push(c),
+                }
+            }
+            format!("export {tag} : \"{escaped}\"")
         }
         // `prettyAccLemma` (Items/AccLemmaItem.hs:47-57):
         //   kwLemma <-> name[attrs] <> colon $-$ nest 2 (
@@ -594,25 +607,12 @@ fn pretty_translation_element(el: &TranslationElement, in_file: &str) -> String 
     }
 }
 
-/// HS `prettySapic'` (Theory/Sapic/Process.hs:485-502) as a Doc:
+/// HS `prettySapic'` (Theory/Sapic/Process.hs) as a Doc. Parentheses encode
+/// the parser's precedence and right extent, branch combinators regain their
+/// `then`/`in` keywords, and an annotated process prints as `(process)@term`.
 ///
-/// ```haskell
-/// prettySapic' ppRR p
-///     | (ProcessNull _) <- p = text "0"
-///     | (ProcessComb c _ pl pr) <- p = r pl <-> text (prettySapicComb c) <-> r pr
-///     | (ProcessAction Rep _ p') <- p = ppAct Rep <> parens (r p')
-///     | (ProcessAction a@ProcessCall {} _ _ ) <- p = ppAct a
-///     | (ProcessAction a _ (ProcessNull _)) <- p = ppAct a
-///     | (ProcessAction a _ p'@ProcessComb {}) <- p = ppAct a <> semi $-$ nest 1 (parens (r p'))
-///     | (ProcessAction a _ p') <- p = ppAct a <> semi $-$ r p'
-/// ```
-///
-/// The action/combinator TEXT comes from [`crate::pretty_sapic::pretty_sapic_top_level`]
-/// (the byte-faithful `prettySapicTopLevel'` port, which appends `";"` to a
-/// non-`!` action — stripped here, since `prettySapic'` adds `semi` itself
-/// only on the continuation cases).  This reproduces upstream's layout
-/// verbatim, including the surprising `then-branch if-cond else-branch`
-/// operand order of `ProcessComb` (oracle-verified).
+/// The action/combinator text shares the byte-faithful top-level action
+/// renderer, without first appending and then stripping a semicolon.
 ///
 /// `prettyProcess = prettySapic = prettySapic' rulePrinter`
 /// (TheoryObject.hs:851-852, Print.hs:52-53), so an embedded MSR renders its
@@ -622,30 +622,107 @@ fn pretty_translation_element(el: &TranslationElement, in_file: &str) -> String 
 /// `process="..."` rule attribute uses the other one.
 fn open_process_doc(pr: &crate::sapic::PlainProcess) -> crate::pretty_hpj::Doc {
     use crate::pretty_hpj::{parens, Doc};
-    use crate::sapic::{Process, SapicAction};
-    // `prettySapicTopLevel'` text for this node, without the trailing `;` it
-    // appends to non-`!` actions (no action string otherwise ends in ';').
-    let node_text = |p: &crate::sapic::PlainProcess| -> String {
-        let s = crate::pretty_sapic::pretty_sapic_top_level(p);
-        s.strip_suffix(';').map(str::to_string).unwrap_or(s)
-    };
-    match pr {
-        Process::Null(_) => Doc::text("0"),
-        Process::Comb(_, _, pl, pr2) => open_process_doc(pl)
-            .beside_sp(Doc::text(node_text(pr)))
-            .beside_sp(open_process_doc(pr2)),
-        Process::Action(SapicAction::Rep, _, p2) => {
-            Doc::text("!").beside(parens(open_process_doc(p2)))
-        }
-        // A `ProcessCall`'s continuation is NEVER printed (Theory/Sapic/Process.hs:496).
-        Process::Action(SapicAction::ProcessCall(_, _), _, _) => Doc::text(node_text(pr)),
-        Process::Action(_, _, p2) => match p2.as_ref() {
-            Process::Null(_) => Doc::text(node_text(pr)),
-            Process::Comb(_, _, _, _) => Doc::text(format!("{};", node_text(pr)))
-                .above_g(parens(open_process_doc(p2)).nest(1)),
-            _ => Doc::text(format!("{};", node_text(pr))).above_g(open_process_doc(p2)),
-        },
+    use crate::sapic::{Process, ProcessCombinator, SapicAction};
+    fn node_text(p: &crate::sapic::PlainProcess) -> String {
+        crate::pretty_sapic::pretty_sapic_open_node(p)
     }
+    fn annotation(pr: &crate::sapic::PlainProcess) -> &crate::sapic::ProcessParsedAnnotation {
+        match pr {
+            Process::Null(a) | Process::Comb(_, a, _, _) | Process::Action(_, a, _) => a,
+        }
+    }
+    fn is_chain(pr: &crate::sapic::PlainProcess) -> bool {
+        matches!(
+            pr,
+            Process::Comb(
+                ProcessCombinator::Parallel | ProcessCombinator::Ndc,
+                a,
+                _,
+                _
+            ) if a.location.is_none()
+        )
+    }
+    fn is_delimited(pr: &crate::sapic::PlainProcess) -> bool {
+        match pr {
+            Process::Null(_) | Process::Action(SapicAction::ProcessCall(_, _), _, _) => true,
+            Process::Action(action, _, body) if matches!(body.as_ref(), Process::Null(_)) => {
+                matches!(
+                    action,
+                    SapicAction::New(_)
+                        | SapicAction::ChIn { .. }
+                        | SapicAction::ChOut { .. }
+                        | SapicAction::Event(_)
+                )
+            }
+            _ => false,
+        }
+    }
+    fn located(pr: &crate::sapic::PlainProcess, loc: &crate::sapic::SapicTerm) -> Doc {
+        parens(form(pr))
+            .beside(Doc::text("@"))
+            .beside(Doc::text(crate::pretty_sapic::pretty_sapic_term(loc)))
+    }
+    fn pp(pr: &crate::sapic::PlainProcess) -> Doc {
+        match annotation(pr).location.as_ref() {
+            Some(loc) => located(pr, loc),
+            None => form(pr),
+        }
+    }
+    fn delimited(pr: &crate::sapic::PlainProcess) -> Doc {
+        match annotation(pr).location.as_ref() {
+            Some(loc) => parens(located(pr, loc)),
+            None if is_delimited(pr) => form(pr),
+            None => parens(form(pr)),
+        }
+    }
+    fn left_op(pr: &crate::sapic::PlainProcess) -> Doc {
+        if is_chain(pr) {
+            form(pr)
+        } else {
+            delimited(pr)
+        }
+    }
+    fn form(pr: &crate::sapic::PlainProcess) -> Doc {
+        match pr {
+            Process::Null(_) => Doc::text("0"),
+            Process::Comb(ProcessCombinator::Parallel | ProcessCombinator::Ndc, _, left, right) => {
+                left_op(left)
+                    .beside_sp(Doc::text(node_text(pr)))
+                    .beside_sp(delimited(right))
+            }
+            Process::Comb(comb, _, left, right) => {
+                let keyword = match comb {
+                    ProcessCombinator::Cond(_) | ProcessCombinator::CondEq(_, _) => "then",
+                    ProcessCombinator::Lookup(_, _) | ProcessCombinator::Let { .. } => "in",
+                    ProcessCombinator::Parallel | ProcessCombinator::Ndc => unreachable!(),
+                };
+                let header = Doc::text(node_text(pr)).beside_sp(Doc::text(keyword));
+                if matches!(right.as_ref(), Process::Null(_)) {
+                    header.above_g(pp(left).nest(4))
+                } else {
+                    header
+                        .above_g(delimited(left).nest(4))
+                        .above_g(Doc::text("else"))
+                        .above_g(pp(right).nest(4))
+                }
+            }
+            Process::Action(SapicAction::Rep, _, body) => Doc::text("!").beside(parens(pp(body))),
+            Process::Action(SapicAction::ProcessCall(_, _), _, _) => Doc::text(node_text(pr)),
+            Process::Action(_, _, body) if matches!(body.as_ref(), Process::Null(_)) => {
+                Doc::text(node_text(pr))
+            }
+            Process::Action(_, _, body) => {
+                let next = if is_chain(body) {
+                    parens(form(body)).nest(1)
+                } else {
+                    pp(body)
+                };
+                Doc::text(format!("{};", node_text(pr))).above_g(next)
+            }
+        }
+    }
+
+    pp(pr)
 }
 
 // =============================================================================
@@ -874,27 +951,10 @@ fn render_fun_syms(sig: &tamarin_term::maude_sig::MaudeSig) -> Vec<String> {
     sig.pretty_fun_syms_except(&std::collections::BTreeSet::new())
 }
 
-/// HS `prettyTranslationElement`, the two `FunctionTypingInfo` cases
-/// (TheoryObject.hs:800-819 for a user-defined AC symbol, 820-838 for a free
-/// one): the `function: f(t1, t2): t` typing line of a SAPIC theory, followed by
-/// the symbol's attributes.
-///
-/// Intentionally retained: faithful mirror of those two cases, exercised only
-/// by the unit tests below.  RS never produces
-/// `TranslationElement::FunctionTypingInfo`.  In HS these items only reach a
-/// printer through the OPEN theory (`typeTheoryEnv`
-/// rebuilds them from the typing environment, Typing.hs:204-226, see line 210);
-/// `removeTranslationItems` strips every translation item before a theory is
-/// closed, so `--prove` output never carries them.  This is the faithful printer
-/// for whenever open-theory rendering is ported.
-///
-/// SPACING.  HS glues the parts with `<->` = HughesPJ `<+>`, whose `text ""`
-/// is a zero-width run rather than `empty`, so an ABSENT attribute still
-/// contributes its separating space: a public constructor with no NDC state
-/// renders `function: f (Any) : Any` plus three trailing spaces.  The
-/// attribute strings themselves also carry a LEADING space in HS, which is why
-/// a present `[private]` ends up two spaces from the out type.  `Doc::text_hs`
-/// is the constructor that keeps an empty run present.
+/// HS `prettyTranslationElement` for `FunctionTypingInfo`: explicit SAPIC
+/// types are rendered as `function: f (t1, t2) : t [attributes]`. An item
+/// containing only default `Any` types is omitted because the signature has
+/// already declared it. Attributes share one parser-compatible list.
 pub fn pretty_function_typing_info(fti: &crate::theory::SapicFunSym) -> crate::pretty_hpj::Doc {
     use crate::pretty_hpj::{fsep, parens, punctuate, Doc};
     use tamarin_term::function_symbols::{Constructability, NdcState, Privacy, UserDefinedSym};
@@ -906,25 +966,8 @@ pub fn pretty_function_typing_info(fti: &crate::theory::SapicFunSym) -> crate::p
             None => Doc::text(crate::sapic::DEFAULT_SAPIC_TYPE),
         }
     }
-    fn show_priv(p: Privacy) -> &'static str {
-        match p {
-            Privacy::Private => " [private]",
-            Privacy::Public => "",
-        }
-    }
-    fn show_const(c: Constructability) -> &'static str {
-        match c {
-            Constructability::Constructor => "",
-            Constructability::Destructor => " [destructor]",
-        }
-    }
-    fn show_ndc(n: NdcState) -> &'static str {
-        match n {
-            NdcState::NotNdc => "",
-            NdcState::IsNdc => " [NDC]",
-            NdcState::IsNdcDiff => " [NDC-Diff]",
-            NdcState::IsNdcBoth => " [NDC,NDC-Diff]",
-        }
+    if fti.out_type.is_none() && fti.arg_types.iter().all(Option::is_none) {
+        return Doc::Empty;
     }
 
     let (privacy, constructability, ndc, is_ac) = match fti.sym {
@@ -933,18 +976,32 @@ pub fn pretty_function_typing_info(fti: &crate::theory::SapicFunSym) -> crate::p
     };
     let name = String::from_utf8_lossy(fti.sym.name());
     let args: Vec<Doc> = fti.arg_types.iter().map(print_type).collect();
+    let mut attrs = Vec::new();
+    if privacy == Privacy::Private {
+        attrs.push("private");
+    }
+    if constructability == Constructability::Destructor {
+        attrs.push("destructor");
+    }
+    if is_ac {
+        attrs.push("AC");
+    }
+    if matches!(ndc, NdcState::IsNdc | NdcState::IsNdcBoth) {
+        attrs.push("NDC");
+    }
+    if matches!(ndc, NdcState::IsNdcDiff | NdcState::IsNdcBoth) {
+        attrs.push("NDC-diff");
+    }
+
     let mut d = Doc::text("function:")
         .beside_sp(Doc::text(name))
         .beside_sp(parens(fsep(punctuate(Doc::text(","), args))))
         .beside_sp(Doc::text(":"))
         .beside_sp(print_type(&fti.out_type));
-    // The AC marker sits between the out type and the privacy attribute.
-    if is_ac {
-        d = d.beside_sp(Doc::text_hs(" [AC]"));
+    if !attrs.is_empty() {
+        d = d.beside(Doc::text(format!(" [{}]", attrs.join(","))));
     }
-    d = d.beside_sp(Doc::text_hs(show_priv(privacy)));
-    d = d.beside_sp(Doc::text_hs(show_const(constructability)));
-    d.beside_sp(Doc::text_hs(show_ndc(ndc)))
+    d
 }
 
 #[cfg(test)]
@@ -1000,7 +1057,9 @@ mod open_item_tests {
             }),
             TheoryItem::Text((String::new(), "keep".to_string())),
         ]);
-        let blocks = open_theory_blocks(&thy, "f.spthy", &|_: &TranslationElement| String::new());
+        let blocks = open_theory_blocks(&thy, "f.spthy", false, &|_: &TranslationElement| {
+            String::new()
+        });
         assert_eq!(
             blocks.last().map(String::as_str),
             Some("/*\nkeep\n*/"),
@@ -1017,7 +1076,14 @@ mod open_item_tests {
                 &TranslationElement::SignatureBuiltin("multiset".to_string()),
                 "f.spthy"
             ),
-            "builtin  multiset"
+            ""
+        );
+        assert_eq!(
+            pretty_translation_element(
+                &TranslationElement::SignatureBuiltin("locations-report".to_string()),
+                "f.spthy"
+            ),
+            "builtins: locations-report"
         );
         assert_eq!(
             pretty_translation_element(
@@ -1027,7 +1093,7 @@ mod open_item_tests {
                 },
                 "f.spthy"
             ),
-            "export:  queries \"q\""
+            "export queries : \" q\""
         );
         assert_eq!(
             pretty_translation_element(&TranslationElement::Process(null_proc()), "f.spthy"),
@@ -1063,9 +1129,8 @@ mod function_typing_info_tests {
         .render()
     }
 
-    /// A public constructor with no NDC state: the three absent attributes
-    /// still contribute their `<+>` separator, so the line carries three
-    /// trailing spaces.
+    /// Default-only typing information duplicates the signature and is not
+    /// printed.
     #[test]
     fn free_symbol_absent_attributes_keep_their_spaces() {
         let sym = NoEqSym::new(
@@ -1074,14 +1139,11 @@ mod function_typing_info_tests {
             Privacy::Public,
             Constructability::Constructor,
         );
-        assert_eq!(
-            render(UserDefinedSym::NoEqUser(sym), vec![None, None]),
-            "function: f (Any, Any) : Any   "
-        );
+        assert_eq!(render(UserDefinedSym::NoEqUser(sym), vec![None, None]), "");
     }
 
-    /// Declared argument types print verbatim, and each present attribute
-    /// carries its own leading space on top of the separator.
+    /// Declared argument types print verbatim, with all attributes in one
+    /// parser-compatible list.
     #[test]
     fn free_symbol_with_types_and_every_attribute() {
         let sym = NoEqSym::new(
@@ -1093,11 +1155,11 @@ mod function_typing_info_tests {
         .with_ndc(NdcState::IsNdcBoth);
         assert_eq!(
             render(UserDefinedSym::NoEqUser(sym), vec![Some("Key".to_string())]),
-            "function: h (Key) : Any  [private]  [destructor]  [NDC,NDC-Diff]"
+            "function: h (Key) : Any [private,destructor,NDC,NDC-diff]"
         );
     }
 
-    /// The `[AC]` marker sits between the out type and the privacy attribute.
+    /// The `AC` marker joins the same attribute list.
     #[test]
     fn user_ac_symbol_carries_the_ac_marker() {
         let sym = AcFctSym::new(
@@ -1107,8 +1169,11 @@ mod function_typing_info_tests {
             NdcState::IsNdc,
         );
         assert_eq!(
-            render(UserDefinedSym::AcFctUser(sym), vec![None, None]),
-            "function: g (Any, Any) : Any  [AC]    [NDC]"
+            render(
+                UserDefinedSym::AcFctUser(sym),
+                vec![Some("Key".to_string()), None]
+            ),
+            "function: g (Key, Any) : Any [AC,NDC]"
         );
     }
 }

@@ -23,7 +23,7 @@ index 678460dadb0e6ea77c3854b09c13dbf00c087494..b037b5faba8730b23dd0471b3f538e68
 +substLemmas         = substFormulaPart sLemmas
  substNextGoalNr     = return ()
  
-+-- | 'substPart' for guarded-formula sets. Always re-normalise after applying
++-- | 'substPart' for the guarded-formula sets. Always re-normalise after applying
 +-- the substitution: formula-producing paths outside 'insertFormula' can
 +-- still supply a raw formula, and keeping those values raw can desynchronise
 +-- a stored 'GDisj' from its 'DisjG' goal.
