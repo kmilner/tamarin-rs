@@ -5056,7 +5056,6 @@ impl<'ctx> Reduction<'ctx> {
                                                 if r3.sys.eq_store.is_false() {
                                                     continue;
                                                 }
-                                                r3.sys.used_sources.push(case_name.clone());
                                                 out_counters.push(r3.maude.fresh_counter_peek());
                                                 out.push((case_name.clone(), r3.sys));
                                             }
@@ -5068,7 +5067,6 @@ impl<'ctx> Reduction<'ctx> {
                                 // Haskell-faithful: push every case
                                 // and let the next simplify+contradictions
                                 // pass catch any real impossibilities.
-                                sub.sys.used_sources.push(case_name.clone());
                                 out_counters.push(sub.maude.fresh_counter_peek());
                                 out.push((case_name.clone(), sub.sys));
                             }
@@ -5416,11 +5414,10 @@ impl<'ctx> Reduction<'ctx> {
                 // fork + THAT case's own someInst/conjoin draws — not
                 // at the shared handle's post-ALL-cases position.
                 let mut out_counters: Vec<u64> = Vec::new();
-                for (case_name, mut sys, branch_counter) in case_pairs {
+                for (case_name, sys, branch_counter) in case_pairs {
                     if has_fresh_consumer_conflation(&sys, &self.maude) {
                         continue;
                     }
-                    sys.used_sources.push(case_name.clone());
                     out.push((case_name, sys));
                     out_counters.push(branch_counter);
                 }

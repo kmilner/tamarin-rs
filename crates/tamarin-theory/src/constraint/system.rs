@@ -370,14 +370,6 @@ pub struct System {
     /// Reduction.hs:516-521 always `succ`s it).  Each new goal records
     /// the current value as its `GoalStatus.nr`.
     pub next_goal_nr: u64,
-    /// Source-case names already grafted into this branch.  Mirrors
-    /// Haskell's `filterCases` invariant in `solveAllSafeGoals`: once
-    /// a precomputed case has been used to discharge a goal, it is
-    /// removed from the available source list for the remainder of
-    /// the search branch.  Without this, a chain-saturated case whose
-    /// internal KU goals re-spawn at runtime will pick the same case
-    /// again, looping until depth-limit.
-    pub used_sources: Vec<String>,
     /// Cached max free-var idx across the system.  `None` means
     /// "invalid — lazily recompute on next `bounds_max` call".
     /// Maintained incrementally on additive mutations and
@@ -483,7 +475,6 @@ impl Clone for System {
             source_kind,
             side,
             next_goal_nr,
-            used_sources,
             max_var_idx_cache,
             node_max_cache,
             content_stamp,
@@ -499,7 +490,6 @@ impl Clone for System {
             source_kind: *source_kind,
             side: *side,
             next_goal_nr: *next_goal_nr,
-            used_sources: used_sources.clone(),
             // The cache/stamp Cells are COPIED verbatim (NOT invalidated): a
             // clone is content-identical to its parent, so it inherits both
             // stamps AND the marker — if the parent had a verified no-op
@@ -541,7 +531,6 @@ impl PartialEq for System {
             source_kind,
             side,
             next_goal_nr,
-            used_sources,
             // DELIBERATELY excluded from equality: two systems with identical
             // content but different cache/stamp state (e.g. one freshly cloned,
             // one after `bounds_max` populated its cache) must compare equal —
@@ -564,7 +553,6 @@ impl PartialEq for System {
             && *side == other.side
             && *content == other.content
             && *next_goal_nr == other.next_goal_nr
-            && *used_sources == other.used_sources
     }
 }
 
@@ -1812,8 +1800,8 @@ impl HasFrees for GoalStatus {
 /// them.  A caller that wants the Haskell rebuild performs it itself, as
 /// `rename_precise_system` does.
 ///
-/// `used_sources` has no Haskell counterpart and is carried over untouched,
-/// as is `side`.
+/// `side` has no counterpart in the non-diff Haskell system and is carried
+/// over untouched.
 ///
 /// The epilogue owns the derived state the rewritten fields invalidate: both
 /// max-var-idx caches (the map may LOWER a maximum) and every stamp, since a

@@ -2437,12 +2437,8 @@ pub fn solve_with_source_cases_ctx(
     // positions is normal HS behaviour: each saturated case has its
     // internal premise goals pre-marked solved, so `conjoinSystem` +
     // `simplifySystem`'s DG4-Fresh-uniqueness → DG3 cascade collapses
-    // the grafted case onto existing nodes.  A runtime `used_sources`
-    // filter forces fall-through to fresh rule enumeration, creating
-    // unmerged Step/Start/Fresh nodes (NoStep_with_induction
-    // divergence: extra `solve case Start` after the inner `case
-    // Step`).  Removing the filter eliminates that divergence and
-    // also closes a similar gap on KAS1.
+    // the grafted case onto existing nodes.  Filtering already-used cases
+    // here would instead create unmerged Step/Start/Fresh nodes.
 
     let src = sources.iter().find(|s| match &s.goal {
         Goal::Premise(_, fa) => fa.tag == fa_prem.tag,
