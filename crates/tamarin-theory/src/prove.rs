@@ -499,7 +499,7 @@ struct CachedSources {
 
 /// Per-file shared prover state — the bits of work that depend only on
 /// the theory, not on which lemma is being proved.  Built once via
-/// [`ProverSession::build_with_in_file_and_heuristic`] and reused across
+/// [`ProverSession::build_with_heuristic`] and reused across
 /// `prove_lemma_in_session` calls so each lemma in a multi-lemma `--prove`
 /// run pays the heavy setup cost only ONCE.
 ///
@@ -515,9 +515,6 @@ pub struct ProverSession {
     /// rules, heuristic.  Shares the caller's allocation (`Arc`); the
     /// session never mutates it.
     pub theory: std::sync::Arc<crate::theory::Theory>,
-    /// Input file path for oracle path resolution (HS
-    /// Theory/Text/Parser.hs:309).
-    in_file: String,
     /// CLI `--heuristic`/`--oraclename`/`--oracle-only` (HS `AutoProver`
     /// fields).  When `cli_heuristic.raw` is `Some`, it OVERRIDES the per-lemma
     /// / theory heuristic for EVERY lemma (HS `selectHeuristic`,
@@ -878,8 +875,8 @@ impl ProverSession {
         })
     }
 
-    /// Build the shared per-file state, carrying `in_file` for
-    /// oracle path resolution (HS Theory/Text/Parser.hs).  Does the expensive
+    /// Build the shared per-file state. The theory's `in_file` resolves oracle
+    /// paths (HS Theory/Text/Parser.hs). Does the expensive
     /// once-per-file work: restriction conversion and full `ProofContext`
     /// construction (which runs intruder rule generation,
     /// `close_intr_rule`, DH/BP cached variants, per-rule variant
@@ -897,11 +894,10 @@ impl ProverSession {
     // keyed source cache constructor; lookup-only map;
     // std kept (byte-inert) — iteration order never reaches output.
     #[allow(clippy::disallowed_types)]
-    pub fn build_with_in_file_and_heuristic(
+    pub fn build_with_heuristic(
         theory: std::sync::Arc<crate::theory::Theory>,
         maude: tamarin_term::maude_proc::MaudeHandle,
         pool: Option<std::sync::Arc<tamarin_term::maude_proc::MaudePool>>,
-        in_file: &str,
         cli_heuristic: CliHeuristic,
         cut: crate::constraint::solver::context::CutStrategy,
         ndc_cache: Option<&IntrRuleCache>,
@@ -948,7 +944,6 @@ impl ProverSession {
         maude.reset_counter_to(setup_counter_before);
         Ok(ProverSession {
             theory,
-            in_file: in_file.to_string(),
             cli_heuristic,
             cut,
             restrictions,
@@ -983,7 +978,7 @@ impl ProverSession {
         // HS `apCut` is theory-global (one `TheoryLoadOptions.stopOnTrace`),
         // so stamp the session's cut onto every per-lemma context.
         ctx.cut = self.cut;
-        let session_in_file = &self.in_file;
+        let session_in_file = self.theory.in_file.as_str();
         ctx.heuristic = resolve_heuristic(
             &self.cli_heuristic,
             lemma,
@@ -992,7 +987,7 @@ impl ProverSession {
             session_in_file,
         );
         ctx.lemma_name = lemma_name.to_string();
-        ctx.theory_file = session_in_file.clone();
+        ctx.theory_file = session_in_file.to_string();
         let (typing_assumptions, source_key) =
             gather_typing_assumptions(theory, lemma_name, lemma_source_kind)?;
         ctx.typing_assumptions = typing_assumptions;
@@ -1141,7 +1136,7 @@ impl ProverSession {
 }
 
 /// Prove a single lemma using a pre-built `ProverSession`.  Skips the
-/// expensive theory-level setup (which `ProverSession::build_with_in_file_and_heuristic`
+/// expensive theory-level setup (which `ProverSession::build_with_heuristic`
 /// did) and runs only the per-lemma work: guarded conversion of lemma+reuse
 /// formulas, `formula_to_system`, ProofContext clone +
 /// per-lemma-field setup, `ensure_saturated` (typing-asm refinement),

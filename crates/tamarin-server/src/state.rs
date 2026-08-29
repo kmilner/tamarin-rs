@@ -254,7 +254,7 @@ impl TheoryStore {
         // `ProofState::new` (Maude boot + source precompute) so unrelated
         // handlers — and other tokio workers — aren't blocked for its
         // duration.
-        let (typed_theory, prover_maude_sig, in_file, ndc_cache) = {
+        let (typed_theory, prover_maude_sig, ndc_cache) = {
             let inner = self.inner.lock();
             let entry = inner
                 .by_idx
@@ -266,7 +266,6 @@ impl TheoryStore {
             (
                 entry.typed_theory.clone(),
                 entry.prover_maude_sig.clone(),
-                entry.origin.label(),
                 entry.ndc_cache.clone(),
             )
         };
@@ -278,7 +277,6 @@ impl TheoryStore {
             prover_maude_sig,
             &cfg.maude_path,
             cfg.stop_on_trace,
-            &in_file,
             ndc_cache.as_ref(),
         )?);
         // Re-lock and double-check: another thread may have built (and

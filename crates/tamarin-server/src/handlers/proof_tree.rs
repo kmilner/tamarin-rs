@@ -75,7 +75,6 @@ impl ProofState {
         maude_sig: tamarin_term::maude_sig::MaudeSig,
         maude_path: &str,
         cli_cut: Option<tamarin_theory::constraint::solver::context::CutStrategy>,
-        in_file: &str,
         ndc_cache: Option<&tamarin_theory::constraint::solver::context::IntrRuleCache>,
     ) -> Result<Self, String> {
         // Effective cut strategy — HS `closeTheory` precedence
@@ -98,11 +97,10 @@ impl ProofState {
         };
         let maude = tamarin_term::maude_proc::MaudeHandle::start(maude_path, maude_sig)
             .map_err(|e| format!("maude start: {:?}", e))?;
-        let session = tamarin_theory::prove::ProverSession::build_with_in_file_and_heuristic(
+        let session = tamarin_theory::prove::ProverSession::build_with_heuristic(
             typed.clone(),
             maude,
             None,
-            in_file,
             tamarin_theory::prove::CliHeuristic::default(),
             cut,
             ndc_cache,
@@ -998,7 +996,6 @@ end
             entry.prover_maude_sig.clone(),
             mp,
             None,
-            "",
             entry
                 .ndc_cache
                 .clone()

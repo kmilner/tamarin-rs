@@ -310,11 +310,10 @@ end
 fn session_from(src: &str) -> Option<ProverSession> {
     let h = maude()?;
     let pt = tamarin_parser::parse_theory(src, &[]).expect("parse");
-    ProverSession::build_with_in_file_and_heuristic(
+    ProverSession::build_with_heuristic(
         std::sync::Arc::new(elaborated(&pt)),
         h,
         None,
-        "",
         CliHeuristic::default(),
         crate::constraint::solver::context::CutStrategy::Dfs,
         None,
@@ -391,11 +390,10 @@ end",
         _ => true,
     });
 
-    let session = ProverSession::build_with_in_file_and_heuristic(
+    let session = ProverSession::build_with_heuristic(
         std::sync::Arc::new(theory),
         h,
         None,
-        "",
         CliHeuristic::default(),
         crate::constraint::solver::context::CutStrategy::Dfs,
         None,

@@ -1177,11 +1177,10 @@ impl TheoryPipeline<'_> {
         &self,
         maude: MaudeHandle,
     ) -> Result<tamarin_theory::prove::ProverSession, tamarin_theory::prove::ProveError> {
-        tamarin_theory::prove::ProverSession::build_with_in_file_and_heuristic(
+        tamarin_theory::prove::ProverSession::build_with_heuristic(
             self.elaborated.clone(),
             maude,
             self.file_maude_pool.clone(),
-            self.in_file,
             self.cli_heuristic(),
             self.cut,
             self.ndc_cache.as_ref(),
