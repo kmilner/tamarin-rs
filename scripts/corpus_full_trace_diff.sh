@@ -27,7 +27,7 @@
 #   corpus_full_trace_diff.sh file1 [file2..] # sweep only the given .spthy files
 #
 # Env:
-#   TIMEOUT=<secs>   per-lemma (RS) + per-file-scaled (HS) wall-clock cap (default 120)
+#   TIMEOUT=<secs>   per-lemma HS and RS wall-clock cap (default 120)
 #   JOBS=<n>         parallel workers (default: nproc)
 #   EXTRA_ENV="..."  extra env passed to the RS dump_proof binary (e.g.
 #                    EXTRA_ENV="TAM_PROVE_DEADLINE_MS=900000")
