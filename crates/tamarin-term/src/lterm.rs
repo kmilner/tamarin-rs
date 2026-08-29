@@ -20,7 +20,7 @@
 use std::cmp::Ordering;
 
 use crate::function_symbols::{AcSym, FunSym, Privacy};
-use crate::term::{Term, TermView};
+use crate::term::Term;
 use crate::vterm::{const_term, Lit, VTerm};
 use tamarin_utils::cow::cow_map_vec;
 use tamarin_utils::fresh::MonadFresh;
@@ -271,7 +271,7 @@ pub fn sort_of_lterm<C, F: Fn(&C) -> LSort>(t: &LTerm<C>, sort_of_const: F) -> L
 
 /// `t` is a single variable with the given sort.
 fn is_var_of_sort(t: &LNTerm, want: LSort) -> bool {
-    matches!(t.view(), TermView::Lit(Lit::Var(v)) if v.sort == want)
+    matches!(t, Term::Lit(Lit::Var(v)) if v.sort == want)
 }
 
 pub fn is_msg_var(t: &LNTerm) -> bool {
@@ -285,12 +285,12 @@ pub fn is_fresh_var(t: &LNTerm) -> bool {
 }
 
 pub fn is_pub_const(t: &LNTerm) -> bool {
-    matches!(t.view(), TermView::Lit(Lit::Con(n)) if sort_of_name(n) == LSort::Pub)
+    matches!(t, Term::Lit(Lit::Con(n)) if sort_of_name(n) == LSort::Pub)
 }
 
 /// If `t` is a single variable, return it.
 pub fn get_var(t: &LNTerm) -> Option<&LVar> {
-    if let TermView::Lit(Lit::Var(v)) = t.view() {
+    if let Term::Lit(Lit::Var(v)) = t {
         Some(v)
     } else {
         None

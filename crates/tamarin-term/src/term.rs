@@ -135,15 +135,6 @@ impl<A: std::hash::Hash> std::hash::Hash for Term<A> {
     }
 }
 
-/// Mirror view that distinguishes the two cases — kept for parity with the
-/// Haskell `TermView`. Since Rust's `match` already lets you destructure
-/// `Term::Lit`/`Term::App` directly, this is mostly here for documentation.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub enum TermView<'a, A> {
-    Lit(&'a A),
-    App(&'a FunSym, &'a [Term<A>]),
-}
-
 impl<A> Term<A> {
     /// Whether any application in this term has a symbol accepted by `f`.
     pub fn any_fun_sym(&self, mut f: impl FnMut(&FunSym) -> bool) -> bool {
@@ -165,13 +156,6 @@ impl<A> Term<A> {
             }
         }
         go(self, &mut f)
-    }
-
-    pub fn view(&self) -> TermView<'_, A> {
-        match self {
-            Term::Lit(l) => TermView::Lit(l),
-            Term::App(s, ts) => TermView::App(s, ts),
-        }
     }
 }
 

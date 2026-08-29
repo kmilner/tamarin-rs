@@ -95,8 +95,8 @@ fn get_pair_terms(t: &tamarin_term::lterm::LNTerm) -> Vec<&tamarin_term::lterm::
     let mut out = Vec::new();
     let mut cur = t;
     loop {
-        match cur.view() {
-            tamarin_term::term::TermView::App(
+        match cur {
+            tamarin_term::term::Term::App(
                 tamarin_term::function_symbols::FunSym::NoEq(s),
                 args,
             ) if *s == tamarin_term::function_symbols::pair_sym() && args.len() == 2 => {
@@ -123,8 +123,8 @@ pub fn shape_term(t: &tamarin_term::lterm::LNTerm, n: usize) -> Vec<tamarin_term
     let mut cur = t.clone();
     let mut x = n;
     while x > 1 {
-        match cur.view() {
-            tamarin_term::term::TermView::App(
+        match &cur {
+            tamarin_term::term::Term::App(
                 tamarin_term::function_symbols::FunSym::NoEq(s),
                 args,
             ) if *s == tamarin_term::function_symbols::pair_sym() && args.len() == 2 => {
