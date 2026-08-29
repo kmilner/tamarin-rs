@@ -81,6 +81,10 @@ impl<'a> IntoIterator for &'a IntrRuleCache {
 /// directly on [`ProofContext`], outside this bundle.
 #[derive(Debug, Clone)]
 pub struct ProofContextShared {
+    /// Protocol rules after loop-breaker and variant annotation. They become
+    /// immutable before source precomputation and are shared by every lemma
+    /// and proof-search worker.
+    pub rules: Vec<OpenProtoRule>,
     /// The theory's intruder-rule cache: either the once-per-load
     /// NDC-checked cache injected by the loader, or
     /// [`ProofContext::assemble_intruder_rules`] (subterm constructor rules,
@@ -133,13 +137,6 @@ pub struct ProofContext {
     /// pool member's `with_fresh_counter_from(avoid_max)` still gives
     /// HS-faithful per-call witness allocation.
     pub maude_pool: Option<std::sync::Arc<MaudePool>>,
-    /// All protocol rules in scope, including their AC variants.
-    ///
-    /// Kept as an owned field (NOT in [`ProofContextShared`]) because a
-    /// handful of unit tests replace it after construction
-    /// (`ctx.rules = vec![…]`); duty-3 keeps any post-construction-mutated
-    /// field out of the shared bundle.
-    pub rules: Vec<OpenProtoRule>,
     /// Whether the solver should attempt induction at the start of a
     /// proof. Mirrors Haskell's `pcUseInduction` flag.  Set per-lemma
     /// (`force_induction`), so owned rather than shared.
@@ -268,7 +265,6 @@ impl Clone for ProofContext {
         ProofContext {
             maude: self.maude.clone(),
             maude_pool: self.maude_pool.clone(),
-            rules: self.rules.clone(),
             use_induction: self.use_induction,
             injective_fact_insts: self.injective_fact_insts.clone(),
             is_exists_trace: self.is_exists_trace,
@@ -422,7 +418,6 @@ impl ProofContext {
         ProofContext {
             maude,
             maude_pool: None,
-            rules: self.rules.clone(),
             use_induction: self.use_induction,
             injective_fact_insts: self.injective_fact_insts.clone(),
             is_exists_trace: self.is_exists_trace,
@@ -1151,10 +1146,18 @@ impl ProofContext {
             .iter()
             .filter(|r| crate::rule::is_destr_rule(&r.info))
             .all(|r| crate::rule::is_subterm_rule_info(&r.info));
+        // Finish annotating the local rule vector before sharing it. Solver
+        // contexts never mutate rules after construction.
+        for (idx, substs) in computed_variant_substs {
+            rules[idx].variant_substs = substs;
+        }
+        for (idx, abstr, av_substs) in computed_abstracted_rules {
+            rules[idx].abstracted_rule = Some(abstr);
+            rules[idx].variant_substs = av_substs;
+        }
         let mut ctx = ProofContext {
             maude,
             maude_pool,
-            rules,
             use_induction: UseInduction::AvoidInduction,
             injective_fact_insts,
             is_exists_trace: false,
@@ -1166,6 +1169,7 @@ impl ProofContext {
             full_sources: std::sync::Arc::new(Vec::new()),
             saturate_gate: SaturateGate::new(SaturateState::Pending),
             shared: std::sync::Arc::new(ProofContextShared {
+                rules,
                 intruder_rules,
                 restrictions,
                 pc_true_subterm,
@@ -1191,28 +1195,6 @@ impl ProofContext {
         // rule set, matching HS (whose
         // precompute runs over `cprRuleAC`; Items/RuleItem.hs:56-59, see line 58).
         //
-        // Install the variant substitutions in their disjunction form.
-        // These are consumed by `solve_rule_constraints` at search time
-        // (`rule_insts_with_constrs` in reduction.rs).  For reducible
-        // rules the disjunction comes from the abstracted-rule install
-        // below; for non-reducible rules it is the trivial
-        // `[emptySubstVFresh]` computed above.
-        for (idx, substs) in &computed_variant_substs {
-            if let Some(o) = ctx.rules.get_mut(*idx) {
-                o.variant_substs = substs.clone();
-            }
-        }
-        // Install abstracted rules + their variant disjunctions.
-        // Overrides `variant_substs` with the abstraction-composed
-        // disjunction (whose domain is the abstracted rule's fresh
-        // z_i vars) — `canonical_rule_inst` checks `abstracted_rule`
-        // first when present.
-        for (idx, abstr, av_substs) in &computed_abstracted_rules {
-            if let Some(o) = ctx.rules.get_mut(*idx) {
-                o.abstracted_rule = Some(abstr.clone());
-                o.variant_substs = av_substs.clone();
-            }
-        }
         let raw_sources = crate::constraint::solver::sources::precompute_full_sources(&ctx);
         // HS-faithful lazy precompute: `saturateSources` (Sources.hs:355-384, see line 373)
         // is *lazy in cdCases* — its `refineSource ctxt solver`

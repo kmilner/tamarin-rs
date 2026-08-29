@@ -684,8 +684,7 @@ fn solve_action_goal_no_node_with_matching_rule_unifies() {
         vec![fact_y],
     );
     let open = crate::theory::OpenProtoRule::new(rule);
-    let mut ctx2 = ctx_no.clone();
-    ctx2.rules = vec![open];
+    let ctx2 = ProofContext::new(ctx_no.maude.clone(), vec![open]);
     let mut r = Reduction::new(&ctx2, System::empty());
     // Goal: Out(x) at fresh node i.
     let i = tamarin_term::lterm::LVar::new("i", tamarin_term::lterm::LSort::Node, 0);
@@ -777,8 +776,7 @@ fn solve_premise_goal_with_matching_rule_inserts_edge() {
         vec![],
     );
     let open = crate::theory::OpenProtoRule::new(rule);
-    let mut ctx2 = base.clone();
-    ctx2.rules = vec![open];
+    let ctx2 = ProofContext::new(base.maude.clone(), vec![open]);
     let mut r = Reduction::new(&ctx2, System::empty());
     // Premise: Out(x) at node i, premise idx 0.
     let i = tamarin_term::lterm::LVar::new("i", tamarin_term::lterm::LSort::Node, 5);
@@ -1033,8 +1031,7 @@ fn solve_action_with_fresh_premise_adds_fresh_supplier() {
         vec![act],
     );
     let open = crate::theory::OpenProtoRule::new(rule);
-    let mut ctx2 = base.clone();
-    ctx2.rules = vec![open];
+    let ctx2 = ProofContext::new(base.maude.clone(), vec![open]);
     let mut r = Reduction::new(&ctx2, System::empty());
 
     // Goal: Setup(x) at fresh node i.
