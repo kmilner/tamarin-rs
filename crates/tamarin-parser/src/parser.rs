@@ -2275,16 +2275,143 @@ impl<'a> Parser<'a> {
     }
 
     fn tactic(&mut self) -> Result<TheoryItem, ParseError> {
-        // tactic: <name>\n  presort: ...\n  prio: ...\n  ...
-        // We recognise the structure by reading until we hit an end-of-tactic
-        // marker — tactics terminate when a keyword that starts a new theory
-        // item appears at the top of a line. Pragmatic: read until next
-        // top-level keyword.
         self.require_kw("tactic")?;
         self.require_punct(":")?;
         let name = self.ident()?;
-        let raw = self.read_until_next_top_level();
-        Ok(TheoryItem::Tactic(Tactic { name, raw }))
+        let mut presort = 's';
+        if self.try_kw("presort") {
+            self.require_punct(":")?;
+            let start = self.save();
+            let word = self.lx.ascii_alpha_run();
+            if word.is_empty() {
+                return Err(ParseError::at(
+                    start,
+                    vec![Message::Expect("letter".to_string())],
+                ));
+            }
+            self.skip_ws();
+            presort = word.chars().next().expect("non-empty presort");
+        }
+
+        let mut prios = Vec::new();
+        while self.try_kw("prio") {
+            prios.push(self.tactic_prio_block()?);
+        }
+        let mut deprios = Vec::new();
+        while self.try_kw("deprio") {
+            deprios.push(self.tactic_prio_block()?);
+        }
+        Ok(TheoryItem::Tactic(Tactic {
+            name,
+            presort,
+            prios,
+            deprios,
+        }))
+    }
+
+    fn tactic_prio_block(&mut self) -> Result<PrioBlock, ParseError> {
+        self.require_punct(":")?;
+        let ranking = if self.try_punct("{") {
+            let ranking = self.ident()?;
+            self.require_punct("}")?;
+            ranking
+        } else {
+            "id".to_string()
+        };
+        let mut selectors = Vec::new();
+        loop {
+            if self.at_keyword("prio") || self.at_keyword("deprio") || self.at_keyword("presort") {
+                break;
+            }
+            let Some(selector) = self.tactic_disjunction()? else {
+                break;
+            };
+            selectors.push(selector);
+        }
+        Ok(PrioBlock { ranking, selectors })
+    }
+
+    fn tactic_disjunction(&mut self) -> Result<Option<SelectorExpr>, ParseError> {
+        let Some(mut expr) = self.tactic_conjunction()? else {
+            return Ok(None);
+        };
+        while self.try_punct("|") || self.try_punct("∨") {
+            let Some(right) = self.tactic_conjunction()? else {
+                return Err(self.err("expected tactic selector after disjunction"));
+            };
+            expr = SelectorExpr::Or(Box::new(expr), Box::new(right));
+        }
+        Ok(Some(expr))
+    }
+
+    fn tactic_conjunction(&mut self) -> Result<Option<SelectorExpr>, ParseError> {
+        let Some(mut expr) = self.tactic_negation()? else {
+            return Ok(None);
+        };
+        while self.try_punct("&") || self.try_punct("∧") {
+            let Some(right) = self.tactic_negation()? else {
+                return Err(self.err("expected tactic selector after conjunction"));
+            };
+            expr = SelectorExpr::And(Box::new(expr), Box::new(right));
+        }
+        Ok(Some(expr))
+    }
+
+    fn tactic_negation(&mut self) -> Result<Option<SelectorExpr>, ParseError> {
+        if self.try_kw("not") || self.try_punct("¬") {
+            let Some(expr) = self.tactic_function()? else {
+                return Err(self.err("expected tactic selector after negation"));
+            };
+            Ok(Some(SelectorExpr::Not(Box::new(expr))))
+        } else {
+            self.tactic_function()
+        }
+    }
+
+    fn tactic_function(&mut self) -> Result<Option<SelectorExpr>, ParseError> {
+        let start = self.save();
+        let Some(name) = self.lx.identifier() else {
+            self.restore(start);
+            return Ok(None);
+        };
+        let mut params = Vec::new();
+        while let Some(param) = self.tactic_function_param() {
+            params.push(param);
+        }
+        if params.is_empty() {
+            self.restore(start);
+            return Ok(None);
+        }
+        Ok(Some(SelectorExpr::Leaf(SelectorLeaf { name, params })))
+    }
+
+    /// Tactic function values are deliberately not Haskell string literals:
+    /// every character except the closing quote is literal, including `\\`.
+    fn tactic_function_param(&mut self) -> Option<String> {
+        self.skip_ws();
+        let start = self.save();
+        if !self.lx.eat('"') {
+            self.restore(start);
+            return None;
+        }
+        let mut param = String::new();
+        loop {
+            match self.lx.peek() {
+                Some('"') => {
+                    self.lx.bump();
+                    self.skip_ws();
+                    return Some(param);
+                }
+                Some(c) => {
+                    param.push(c);
+                    self.lx.bump();
+                }
+                None => {
+                    self.restore(start);
+                    return None;
+                }
+            }
+        }
     }
 
     /// Read raw text until we see an identifier at a word boundary that is

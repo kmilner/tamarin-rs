@@ -432,7 +432,7 @@ fn theory_header_blocks<R, P, S>(thy: &Theory<R, P, S>, cache: &str) -> Vec<Stri
     // hoisted header fields in HS (never item-positioned), which `elaborate`
     // mirrors by collecting the parser's Tactic/Heuristic items.
     if !thy.tactic.is_empty() {
-        let tblocks: Vec<String> = thy.tactic.iter().map(|t| t.render()).collect();
+        let tblocks: Vec<String> = thy.tactic.iter().map(crate::tactic::render).collect();
         blocks.push(tblocks.join("\n"));
     }
     if !thy.heuristic.is_empty() {

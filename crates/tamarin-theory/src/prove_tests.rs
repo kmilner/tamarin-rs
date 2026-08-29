@@ -580,7 +580,12 @@ fn validate_cli_heuristic_accepts_and_rejects_like_filter_heuristic() {
         raw: Some(raw.to_string()),
         ..CliHeuristic::default()
     };
-    let t = |name: &str| crate::tactic::Tactic::parse(name, "");
+    let t = |name: &str| crate::tactic::Tactic {
+        name: name.to_string(),
+        presort: 's',
+        prios: Vec::new(),
+        deprios: Vec::new(),
+    };
     // Every identifier char, compact runs included; a declared tactic.
     assert_eq!(validate_cli_heuristic(&cli("sSoOpPcCiI"), &[]), Ok(()));
     assert_eq!(

@@ -1224,18 +1224,13 @@ end"#;
             _ => None,
         })
         .expect("tactic present");
-    assert!(
-        tac.raw.contains(r#"regex "cp\(""#),
-        "tactic body truncated: {:?}",
-        tac.raw
-    );
-    // The `(` inside the regex string must not leak the following rule into
-    // the tactic capture.
-    assert!(
-        !tac.raw.contains("rule R"),
-        "next item leaked into tactic capture: {:?}",
-        tac.raw
-    );
+    assert_eq!(tac.prios.len(), 2);
+    let SelectorExpr::Leaf(second) = &tac.prios[1].selectors[0] else {
+        panic!("expected regex selector")
+    };
+    assert_eq!(second.name, "regex");
+    assert_eq!(second.params, [r#"cp\("#]);
+    // The `(` inside the regex string must not consume the following rule.
     let rule = t
         .items
         .iter()

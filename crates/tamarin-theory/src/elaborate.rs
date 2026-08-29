@@ -599,8 +599,7 @@ fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), Elab
             // the theory's whole tactic list is known.
             p::TheoryItem::Heuristic(_) => {}
             p::TheoryItem::Tactic(t) => {
-                out.tactic
-                    .push(crate::tactic::Tactic::parse(&t.name, &t.raw));
+                out.tactic.push(t.clone());
             }
             p::TheoryItem::Restriction(r) | p::TheoryItem::LegacyAxiom(r) => {
                 let restr = Restriction {

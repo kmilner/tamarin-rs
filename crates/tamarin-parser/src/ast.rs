@@ -344,10 +344,36 @@ pub enum GoalSpec {
 // Tactics
 // =============================================================================
 
-#[derive(Debug, Clone, PartialEq)]
+/// A single selector function as written in a tactic, e.g. `regex "In_S"`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SelectorLeaf {
+    pub name: String,
+    pub params: Vec<String>,
+}
+
+/// A boolean selector expression from one line of a priority block.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SelectorExpr {
+    Leaf(SelectorLeaf),
+    Not(Box<SelectorExpr>),
+    And(Box<SelectorExpr>, Box<SelectorExpr>),
+    Or(Box<SelectorExpr>, Box<SelectorExpr>),
+}
+
+/// A parsed `prio:`/`deprio:` block.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrioBlock {
+    pub ranking: String,
+    pub selectors: Vec<SelectorExpr>,
+}
+
+/// A structured tactic declaration.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Tactic {
     pub name: String,
-    pub raw: String,
+    pub presort: char,
+    pub prios: Vec<PrioBlock>,
+    pub deprios: Vec<PrioBlock>,
 }
 
 // =============================================================================
