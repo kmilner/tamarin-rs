@@ -197,6 +197,7 @@ pub fn pretty_closed_theory(
                 proof: &proof,
                 translation: &translation,
                 in_file,
+                open_formulas: false,
             },
         )
     } else {
@@ -209,6 +210,7 @@ pub fn pretty_closed_theory(
                 proof: &proof,
                 translation: &translation,
                 in_file,
+                open_formulas: false,
             },
         )
     };
@@ -258,6 +260,8 @@ pub struct ItemPrinters<'a, R> {
     /// resolve a bare `o`/`O` ranking's default oracle (`defaultOracleNames`,
     /// System.hs:551-561).
     pub in_file: &'a str,
+    /// Render the pre-macro formula without an `expanded formula` block.
+    pub open_formulas: bool,
 }
 
 /// HS `parMap rdeepseq ppItem (filter (not . isConfigBlock) (thyItems thy))`
@@ -288,8 +292,23 @@ fn pretty_theory_item<R>(
 ) -> String {
     match item {
         TheoryItem::Rule(r) => (pp.rule)(r),
-        TheoryItem::Restriction(r) => pretty_restriction(r),
-        TheoryItem::Lemma(l) => pretty_lemma(l, &(pp.proof)(l), pp.in_file),
+        TheoryItem::Restriction(r) => {
+            if pp.open_formulas {
+                let formula = r.original_formula.as_ref().unwrap_or(&r.formula);
+                pretty_restriction_view(r, formula, None)
+            } else {
+                pretty_restriction(r)
+            }
+        }
+        TheoryItem::Lemma(l) => {
+            let proof = (pp.proof)(l);
+            if pp.open_formulas {
+                let formula = l.original_formula.as_ref().unwrap_or(&l.formula);
+                pretty_lemma_formulas(l, formula, formula, &proof, pp.in_file)
+            } else {
+                pretty_lemma(l, &proof, pp.in_file)
+            }
+        }
         TheoryItem::Text(fc) => pretty_formal_comment(fc),
         TheoryItem::ConfigBlock(_) => String::new(),
         TheoryItem::Predicate(pr) => pretty_predicate(pr),
@@ -332,9 +351,9 @@ fn pretty_formal_comment(fc: &crate::theory::FormalComment) -> String {
 //     variants (OpenTheory.hs:814-824);
 //   - lemmas carry their stored proof skeleton (`prettyProof`), `by sorry`
 //     when none was written;
-//   - the lemma and restriction items are taken through [`open_view_items`],
-//     so their quoted formula, guarded characterization and safety test read
-//     the pre-macro formula and no `expanded formula:` block is written;
+//   - lemma and restriction rendering borrows their pre-macro formula for the
+//     quoted formula, guarded characterization and safety test, and writes no
+//     `expanded formula:` block;
 //   - `TranslationItem`s render via `prettyTranslationElement`
 //     (TheoryObject.hs:785-841): `builtin  <name>`, `function: …` typing
 //     lines, `process:`/`let` blocks, `export:`, accountability lemmas and
@@ -456,56 +475,16 @@ fn open_theory_blocks(
     // cache block.
     let mut blocks = theory_header_blocks(thy, "");
     blocks.extend(pretty_theory_items(
-        &open_view_items(&thy.items),
+        &thy.items,
         &ItemPrinters {
             rule: &|r| crate::rule::pretty_open_proto_rule(r).render(),
             proof: &open_proof_body,
             translation,
             in_file,
+            open_formulas: true,
         },
     ));
     blocks
-}
-
-/// HS's `OpenTheory` VALUE of the items a theory carries once elaboration has
-/// applied the macros: a lemma's `_lFormula` and a restriction's
-/// `_rstrFormula` are the formula as the source wrote it, and
-/// `_lOriginalFormula` / `_rstrOriginalFormula` are `Nothing`.
-/// `applyMacroInLemma` (lib/theory/src/Lemma.hs:83-88) and
-/// `applyMacroInRestriction` (Theory/Model/Restriction.hs:164-166) build the
-/// closed shape from exactly this one, so undoing them is what makes
-/// `prettyLemma` and `prettyRestriction` reproduce the parse-time bytes: the
-/// quoted header formula, the guarded characterization, the restriction body
-/// and the safety test all read the pre-macro formula, and the
-/// `expanded formula:` block stays unwritten (HS emits it only for
-/// `Just` — TheoryObject.hs:895-898).
-fn open_view_items<R: Clone>(
-    items: &[TheoryItem<R, crate::theory::ProofSkeleton>],
-) -> Vec<TheoryItem<R, crate::theory::ProofSkeleton>> {
-    items
-        .iter()
-        .map(|item| match item {
-            TheoryItem::Lemma(l) => TheoryItem::Lemma(crate::theory::Lemma {
-                formula: l
-                    .original_formula
-                    .clone()
-                    .unwrap_or_else(|| l.formula.clone()),
-                original_formula: None,
-                ..l.clone()
-            }),
-            TheoryItem::Restriction(r) => {
-                TheoryItem::Restriction(crate::restriction::Restriction {
-                    name: r.name.clone(),
-                    formula: r
-                        .original_formula
-                        .clone()
-                        .unwrap_or_else(|| r.formula.clone()),
-                    original_formula: None,
-                })
-            }
-            other => other.clone(),
-        })
-        .collect()
 }
 
 /// HS `prettyProof` over a lemma's stored `ProofSkeleton`: a lemma written
@@ -1430,12 +1409,22 @@ const ORACLE_RIBBON: usize = 67;
 /// block converts `_lFormula` (`:125`).
 fn pretty_lemma(lem: &crate::theory::Lemma, proof: &str, in_file: &str) -> String {
     let original = lem.original_formula.as_ref().unwrap_or(&lem.formula);
+    pretty_lemma_formulas(lem, original, &lem.formula, proof, in_file)
+}
+
+fn pretty_lemma_formulas(
+    lem: &crate::theory::Lemma,
+    displayed: &crate::formula::LNFormula,
+    guarded: &crate::formula::LNFormula,
+    proof: &str,
+    in_file: &str,
+) -> String {
     let mut out = lemma_head(
         &lem.name,
         lemma_attr_docs(&lem.attributes, in_file),
         trace_quantifier_keyword(lem.trace_quantifier),
-        pf::lnformula_doc(original),
-        &render_guarded_block(lem),
+        pf::lnformula_doc(displayed),
+        &render_guarded_block(lem.trace_quantifier, guarded),
     );
     out.push('\n');
     out.push_str(proof);
@@ -1531,14 +1520,17 @@ fn trace_quantifier_keyword(q: crate::theory::TraceQuantifier) -> &'static str {
 
 /// HS `ppLNFormulaGuarded` (lib/theory/src/Lemma.hs:131-141) over the
 /// ELABORATED lemma's `_lFormula`.
-fn render_guarded_block(lem: &crate::theory::Lemma) -> String {
+fn render_guarded_block(
+    trace_quantifier: crate::theory::TraceQuantifier,
+    formula: &crate::formula::LNFormula,
+) -> String {
     guarded_block_comment(
         matches!(
-            lem.trace_quantifier,
+            trace_quantifier,
             crate::theory::TraceQuantifier::ExistsTrace
         ),
-        crate::guarded::formula_to_guarded(&lem.formula),
-        || crate::pretty_formula::lnformula_doc(&lem.formula),
+        crate::guarded::formula_to_guarded(formula),
+        || crate::pretty_formula::lnformula_doc(formula),
     )
 }
 
@@ -1623,6 +1615,15 @@ fn guarded_block_comment(
 /// diff parser does (`diffRestriction`, `:95-100`).
 fn pretty_restriction(r: &crate::restriction::Restriction) -> String {
     let original = r.original_formula.as_ref().unwrap_or(&r.formula);
+    let expanded = r.original_formula.as_ref().map(|_| &r.formula);
+    pretty_restriction_view(r, original, expanded)
+}
+
+fn pretty_restriction_view(
+    r: &crate::restriction::Restriction,
+    displayed: &crate::formula::LNFormula,
+    expanded: Option<&crate::formula::LNFormula>,
+) -> String {
     use crate::pretty_hpj::{
         escape_html_entities, hl_close, hl_open, html_mode, keyword_, line_comment_, Hl,
     };
@@ -1638,10 +1639,13 @@ fn pretty_restriction(r: &crate::restriction::Restriction) -> String {
         out.push_str(&r.name);
     }
     out.push_str(":\n");
-    out.push_str(&pf::doublequoted_nested_doc(pf::lnformula_doc(original), 2));
+    out.push_str(&pf::doublequoted_nested_doc(
+        pf::lnformula_doc(displayed),
+        2,
+    ));
     // `nest 2 (if safety then lineComment_ "safety formula" else emptyDoc)`
     // (TheoryObject.hs:894).
-    if is_safety_formula(&r.formula) {
+    if is_safety_formula(expanded.unwrap_or(displayed)) {
         out.push_str("\n  ");
         out.push_str(&line_comment_("safety formula").render());
     }
@@ -1649,14 +1653,11 @@ fn pretty_restriction(r: &crate::restriction::Restriction) -> String {
     // (prettyLNFormula expandedFormula)))` (TheoryObject.hs:896-897).
     // `multiComment = comment (…)` wraps the whole `/* … */` in an
     // `hl_comment` span; the inner formula still carries its own operator spans.
-    if r.original_formula.is_some() {
+    if let Some(expanded) = expanded {
         out.push_str("\n\n  ");
         out.push_str(&hl_open(Hl::Comment));
         out.push_str("/*\n  expanded formula:\n");
-        out.push_str(&pf::doublequoted_nested_doc(
-            pf::lnformula_doc(&r.formula),
-            2,
-        ));
+        out.push_str(&pf::doublequoted_nested_doc(pf::lnformula_doc(expanded), 2));
         out.push_str("\n  */");
         out.push_str(&hl_close(Hl::Comment));
     }
