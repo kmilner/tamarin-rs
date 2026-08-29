@@ -519,7 +519,7 @@ pub(crate) fn add_auto_sources_lemma(
                     vin,
                     outs,
                 } => {
-                    let (in_name, out_name) = auto_names(m, pos, &rin_name);
+                    let (in_name, out_name) = auto_names(m, pos, rin_name);
                     grp.push((
                         rin_name.to_string(),
                         ln_proto(&in_name, vec![protterm.clone(), vin.clone()]),
