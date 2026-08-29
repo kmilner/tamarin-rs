@@ -1038,11 +1038,11 @@ pub(crate) fn compute_source_lists(
     let typ_asms = source_typ_asms(entry, want_refined);
     let rendered_cases = |cases: Vec<tamarin_theory::constraint::solver::sources::SourceCase>| {
         cases
-            .iter()
+            .into_iter()
             .map(|(name, system)| {
                 (
-                    tamarin_theory::constraint::solver::sources::case_name_list_to_string(name),
-                    system.clone(),
+                    tamarin_theory::constraint::solver::sources::case_name_list_to_string(&name),
+                    system,
                 )
             })
             .collect::<Vec<_>>()
