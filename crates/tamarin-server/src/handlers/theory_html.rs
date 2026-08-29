@@ -31,7 +31,7 @@ pub(crate) fn overview_page(entry: &TheoryEntry, path: &TheoryPath) -> String {
     // ` </div></div></div>` pane closers.  Volatile substitutions: the theory
     // name in the title, and — inside `{header}` — the `{version}` field.
     default_layout(
-        &format!("Theory: {}", html_escape(&entry.name)),
+        &format!("Theory: {}", html_escape(&entry.typed_theory.name)),
         &format!(
             r##"<div class="ui-layout-north">{header}</div><div class="ui-layout-west"><h1 class="pane-head">Proof scripts</h1><div class="scroll-wrapper" id="proof-wrapper"><div class="monospace" id="proof">{proof_state} </div></div></div><div class="ui-layout-east"><h1 class="pane-head">&nbsp;Debug information</h1><div class="scroll-wrapper" id="debug-wrapper"><div id="ui-debug-display"></div></div></div><div class="ui-layout-center"><h1 class="pane-head" id="main-title">Visualization display</h1><div class="scroll-wrapper" id="main-wrapper" tabindex="0"><div id="ui-main-display">{main_view} </div></div></div>"##,
             header = header_html,
@@ -54,7 +54,7 @@ fn header(entry: &TheoryEntry) -> String {
     // the `abstr-toggle` entry.
     let is_local = matches!(entry.origin, crate::state::TheoryOrigin::Local(_));
     let idx = entry.idx;
-    let filename = html_escape(&format!("{}.spthy", entry.name));
+    let filename = html_escape(&format!("{}.spthy", entry.typed_theory.name));
     let reload_form = if is_local {
         format!(
             "<li><form class=\"ajax-form ajax-form-full reload-confirm\" method=\"POST\" action=\"/thy/trace/{idx}/reload\"><button class=\"nav-button\" type=\"submit\">Reload file</button></form></li>")
@@ -124,7 +124,7 @@ fn proof_state(entry: &TheoryEntry) -> String {
     elems.push(format!(
         "{theory} <a class=\"internal-link help\" href=\"/thy/trace/{idx}/main/help\">{name}</a> {begin}",
         theory = kw("theory"), begin = kw("begin"),
-        idx = idx, name = html_escape(&entry.name)));
+        idx = idx, name = html_escape(&entry.typed_theory.name)));
     elems.push(String::new());
     // `overview n info p = linkToPath … [] (bold n <-> info)`; `bold = withTag
     // "strong" [] . text`.  Message / Tactic pass `text ""` as info (a trailing
@@ -743,7 +743,7 @@ fn help_html(entry: &TheoryEntry) -> String {
     // `</span>` after the Tamarin span that HS's Hamlet emits).
     let env_line = format!(
         "<p>Theory: {name} (Loaded at {time} from {origin}) {errors}</p>",
-        name = html_escape(&entry.name),
+        name = html_escape(&entry.typed_theory.name),
         time = html_escape(&time),
         origin = html_escape(&origin),
         errors = entry.errors_html,

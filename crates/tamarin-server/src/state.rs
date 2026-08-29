@@ -34,8 +34,6 @@ use crate::handlers::proof_tree::ProofState;
 pub struct TheoryEntry {
     /// Stable index used in URLs.  Set by `TheoryStore::insert`.
     pub idx: usize,
-    /// Theory name from the `.spthy` source.
-    pub name: String,
     /// Elaborated, typed theory — the accessor helpers' source and the
     /// theory the lazily built [`ProofState`] proves.  Wrapped in `Arc`
     /// so we can clone the entry cheaply.
@@ -155,7 +153,11 @@ impl TheoryStore {
     ///
     /// [`get`]: Self::get
     pub fn name(&self, idx: usize) -> Option<String> {
-        self.inner.lock().by_idx.get(&idx).map(|e| e.name.clone())
+        self.inner
+            .lock()
+            .by_idx
+            .get(&idx)
+            .map(|e| e.typed_theory.name.clone())
     }
 
     pub fn list(&self) -> Vec<TheoryEntry> {

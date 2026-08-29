@@ -179,7 +179,7 @@ fn render_index(state: &AppState) -> String {
             rows.push_str(&format!(
                 "<tr><td><a href=\"{link}\">{name}</a></td><td>{time}</td>{primary}<td>{origin}</td></tr>",
                 link = html_escape(&link),
-                name = html_escape(&t.name),
+                name = html_escape(&t.typed_theory.name),
                 origin = html_escape(&t.origin.label()),
             ));
         }

@@ -355,7 +355,6 @@ pub(crate) fn load_from_source(
 
     Ok(TheoryEntry {
         idx: 0,
-        name: typed.name.clone(),
         typed_theory: Arc::new(typed),
         prover_maude_sig,
         origin,

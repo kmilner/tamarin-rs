@@ -305,7 +305,7 @@ fn title_for(entry: &crate::state::TheoryEntry, path: &path_parse::TheoryPath) -
     use path_parse::TheoryPath::*;
     match path {
         // TheoryHelp -> "Theory: " ++ thy._thyName
-        Help => format!("Theory: {}", entry.name),
+        Help => format!("Theory: {}", entry.typed_theory.name),
         // TheoryRules -> "Multiset rewriting rules and restrictions"
         Rules => "Multiset rewriting rules and restrictions".to_string(),
         // TheoryMessage -> "Message theory"
@@ -930,7 +930,7 @@ pub async fn verify(
         // synthesised Help path.
         _ => {
             let help_path = path_parse::TheoryPath::Help;
-            let title = format!("Theory: {}", entry.name);
+            let title = format!("Theory: {}", entry.typed_theory.name);
             let body = crate::handlers::theory_html::path_html(&entry, &help_path);
             json_resp::html(title, body).into_response()
         }
@@ -1541,7 +1541,7 @@ pub async fn graph(
     // the image.  There is no `fdp` retry on this branch (`_ -> return
     // False`), and a failure is `Nothing` → HS's generic `notFound`.
     if let Some(json_cmd) = state.cfg.json_path.clone() {
-        let label = resolved.json_label(&theory.name);
+        let label = resolved.json_label(&theory.typed_theory.name);
         let Some(sys) = resolved.into_system() else {
             return not_found();
         };
@@ -1640,7 +1640,7 @@ pub async fn graph_json(
         Ok(r) => r,
         Err(message) => return internal_server_error(&message),
     };
-    let label = resolved.json_label(&theory.name);
+    let label = resolved.json_label(&theory.typed_theory.name);
     match resolved {
         // HS `proofPathCode`: `fromMaybe BL.empty`, i.e. an unresolvable proof
         // path is a 200 with an empty body.
