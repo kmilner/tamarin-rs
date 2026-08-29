@@ -98,8 +98,8 @@ finalize() {
 
     # The gate caches (scripts/.hs_file_cache, .web_hs_cache, .hs_pretty_cache)
     # are deliberately left alone: every entry carries a fingerprint of the
-    # oracle binary (in the cache KEY for the file/pretty caches, in the
-    # .hs.fp sidecar web_parity.sh and pane_byte_check.sh verify for the web
+    # oracle binary (in the cache KEY for the file/pretty caches, in an
+    # automatically selected profile plus the .hs.fp sidecar for the web
     # cache), and `./setup.sh testing` below rebuilds the oracle, so every
     # pre-bump entry reads as a clean MISS rather than a silently stale hit.
     # Archiving them here would only hide that mechanism failing.
@@ -168,7 +168,7 @@ Verify before committing:
   2. RESULTS_TSV=scripts/results/fullgate_bump.tsv scripts/corpus_file_diff.sh   # full batch gate, cold cache
      - heavy files (BP_IBS_2/3, alethea_votingphase_malS_abstain) need FILE_TIMEOUT>=600 cold
      - retries short-circuit on cached markers: find scripts/.hs_file_cache -name '*.timeout' -delete first
-  3. Web ladder: guards -> family files -> scripts/websweep_residual.txt (regenerates scripts/.web_hs_cache)
+  3. Web ladder: guards -> family files -> scripts/websweep_residual.txt (fills the new oracle's cache profile)
   4. scripts/divergence_fixtures/capture.sh && scripts/divergence_fixtures/check.sh
      - the corners no corpus theory reaches; capture.sh re-reads them from
        the NEW oracle, so review git diff scripts/divergence_fixtures/expected/

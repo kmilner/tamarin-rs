@@ -24,22 +24,29 @@ Five, all gitignored, none keyed alike:
 |---|---|---|
 | `.hs_file_cache/` | `corpus_file_diff.sh` | theory sha + every `#include`d file's sha + flags hash + **oracle-binary fingerprint**; the oracle's exit status sits beside each entry as `.rc` |
 | `.hs_pretty_cache/` | `pretty_gate.sh` and `wf_gate.sh` (either fills `.load.gz`; `pretty_gate.sh` derives `.theory.gz` from it) | theory sha + every `#include`d file's sha + flags hash + **oracle-binary fingerprint** |
-| `.web_hs_cache/` | `web_parity.sh` writes; `pane_byte_check.sh` reads | theory sha; the **oracle fingerprint** lives in a `.hs.fp` sidecar both scripts verify before reusing a manifest |
+| `.web_hs_cache/` | `web_parity.sh` writes; `pane_byte_check.sh` reads | profile = **oracle + Maude binary SHA-256 + crawl plan/settings**; entry = theory + transitive includes + oracle scripts |
 | `.hs_canon_cache/` | `diff_proof_raw.sh`, `corpus_raw_diff.sh`, `corpus_full_trace_diff.sh` (one key form; flagless entries are exchanged, a `diff_proof_raw.sh` run with canonical flags salts `__f` and stays distinct) | theory sha + lemma + cache version + **oracle-binary fingerprint** |
 | `.hs_sweep_cache/` | the three flag sweeps | theory sha + every `#include`d file's sha + flags + **oracle-binary fingerprint** + the RESOLVED maude's path (so a sweep pointed at a different maude misses rather than reusing) |
 
-The oracle-binary fingerprint is `stat -c '%s.%Y'` of the HS binary
+The general oracle-binary fingerprint is `stat -c '%s.%Y'` of the HS binary
 (`gate_common.sh`'s `hs_fingerprint`, the one definition every cached gate
 sources), so a rebuilt oracle — bump or patch rebuild alike — turns every
-pre-rebuild entry into a clean MISS (or, for `.web_hs_cache/`, a re-crawl)
-instead of a silently stale hit; nothing is archived or wiped, and
+pre-rebuild entry into a clean MISS instead of a silently stale hit. The web
+cache is stronger: `web_cache.sh` selects a directory by the oracle binary's
+content SHA-256, Maude content, and crawl settings, so the harness preserves
+and automatically reselects caches for alternating Tamarin builds.
+Linked worktrees share the main checkout's pool. Old flat `.web_hs_cache*`
+entries are adopted lazily with hard links when their oracle/plan stamps prove
+they fit; dependency-bearing entries are re-crawled because the old key could
+not prove those inputs. `CACHE=` remains an exact-directory compatibility
+override; `WEB_CACHE_ROOT=` moves the whole profile pool. Nothing is archived
+or wiped, and
 `bump_submodule.sh` deliberately leaves the caches alone.
 `scripts/migrate_hs_cache_fp.sh` is the one-time rename of pre-fingerprint
-entries onto the new keys. One gap remains: `.hs_canon_cache/` and
-`.web_hs_cache/` still key an `#include`ing theory on the includer alone, so
-an edit below `testParser/include/` leaves those two serving the pre-edit
-oracle; the gate caches, the sweep cache and `rs_ref_check.sh`'s reference
-keys digest the included files (`gate_common.sh`'s `include_shas`).
+entries onto the new keys. One gap remains: `.hs_canon_cache/` still keys an
+`#include`ing theory on the includer alone. The web cache, gate caches, sweep
+cache and `rs_ref_check.sh` references digest included files; the web cache
+also digests executable oracle inputs and stages both through one helper.
 
 `gate_common.sh` owns the shared plumbing: the OOM prologue, the three
 environment-line strip policies (`strip_env` deletes all four volatile lines,
@@ -137,8 +144,9 @@ a rename-only migration.
   `FAIL_ON_CAPPED=1`. Its results TSV is 7 columns —
   `file url status hs_http rs_http kind class`, `class` being the ledger class
   of a `LEDGERED` row and `-` elsewhere. Cached HS manifests are reused only
-  while both the crawl-plan stamp and the `.hs.fp` oracle-fingerprint sidecar
-  match, so the first run after an oracle rebuild re-crawls the whole HS side.
+  from the automatically selected oracle/settings profile, with a sidecar
+  check as defence in depth. Switching oracle binaries reselects the earlier
+  profile instead of overwriting it; valid flat caches are adopted by hard link.
   `WEB_LEDGER` picks another ledger, or `none` to run without one (which makes
   every DIFF undocumented by definition); an unreadable or malformed ledger is
   `exit 2` before any crawling, with file:line diagnostics. `ALLOWLIST` files
@@ -231,6 +239,8 @@ a rename-only migration.
 
 ## Web-gate internals (invoked by the gates, rarely by hand)
 
+- **`web_cache.sh`** — shared profile selection, complete input keys, legacy
+  hard-link adoption, and theory/include/oracle staging for both web gates.
 - **`web_crawl.py`** — crawls a running server into a response manifest.
 - **`web_diff.py`** / **`web_normalize.py`** — semantic manifest diff and the
   normalizer it uses. Markup routes compare structurally; the `dot` and

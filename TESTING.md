@@ -416,12 +416,10 @@ idempotent. Every tool that touches `.hs_file_cache/` computes the same
 fingerprinted key, `triage_diff_vs_hs.sh` included, so nothing writes entries
 the migration would have to chase.
 
-One gap remains: `.hs_canon_cache/` and `.web_hs_cache/` still key an
-`#include`ing theory on the includer alone, so an edit below
-`testParser/include/` leaves those two serving the pre-edit oracle. The gate
-caches above, the sweeps' `.hs_sweep_cache/` and `rs_ref_check.sh`'s
-reference keys all digest the included files (`gate_common.sh`'s
-`include_shas`).
+One gap remains: `.hs_canon_cache/` still keys an `#include`ing theory on the
+includer alone. The web cache, gate caches above, sweep cache and
+`rs_ref_check.sh` references digest included files; the web cache also digests
+and stages executable oracle inputs.
 
 ## Fast gates (run on every build)
 
@@ -604,12 +602,17 @@ Boots both servers on the same theory (HS on port 3021, RS on 3022), crawls
 every proof-tree / constraint-system / graph / source page — autoproving
 each lemma along the way — and diffs the pages semantically
 (`web_crawl.py` / `web_normalize.py` / `web_diff.py`). HS crawl manifests are
-cached content-keyed under `scripts/.web_hs_cache/`, each with a
-`<sha256>.hs.fp` sidecar naming the oracle that produced it; an unstamped or
-foreign-stamped manifest is re-crawled rather than reused, so the first run
-after an oracle rebuild re-crawls the whole HS side (hours on the 77-file
-milestone list). Env knobs: `FILE_TIMEOUT`, `READY_TIMEOUT`, `HS_PORT`,
-`RS_PORT`, `MAX_NODES` (400 proof-node visits per theory), `CACHE`,
+cached in profiles under `scripts/.web_hs_cache/`. `web_cache.sh` selects a
+profile from the oracle and Maude binaries' content SHA-256 plus the crawl
+plan/timeouts and node cap; entry keys cover the theory, transitive
+includes, and executable oracle inputs. Linked worktrees share the main
+checkout's pool, so switching Tamarin versions automatically reselects the
+corresponding cache instead of overwriting it. Valid old flat
+`.web_hs_cache*` entries are adopted lazily by hard link when their old stamps
+are sufficient; dependency-bearing entries are re-crawled once. Env knobs:
+`FILE_TIMEOUT`, `READY_TIMEOUT`, `HS_PORT`, `RS_PORT`, `MAX_NODES` (400
+proof-node visits per theory), `WEB_CACHE_ROOT`, `CACHE` (exact-directory
+compatibility override),
 `DIFFDIR`, `DERIVCHECK_TIMEOUT`, `SERVER_MEM_KB` (per-server address-space
 cap, 24 GiB), `HS_PATH`, `RS_PATH`, `MAUDE_PATH`, `CORPUS_ROOT`,
 `TAM_RS_NO_AUTO_BUILD` (it rebuilds the port by default, unlike every other
@@ -641,10 +644,17 @@ The file list is **required** — no argument is `exit 2`, because the old
 default was `websweep_residual.txt`, exactly the set where a DIFF is expected.
 It ends in `DONE_PANE_BYTE_CHECK verdict=<...>` and exits nonzero on DIFF,
 `MISSING_*`, any `SKIP_*` and any `FILE-COUNT`/`ROW-COUNT` shortfall, so a
-missing `.web_hs_cache/` (all rows `SKIP_NO_CACHE`) is a red run rather than a
-clean-looking histogram. It reads the same `.hs.fp` sidecar and cannot
+missing selected cache profile (all rows `SKIP_NO_CACHE`) is a red run rather
+than a clean-looking histogram. It reads the same `.hs.fp` sidecar and cannot
 re-crawl, so a manifest from another oracle is `SKIP_STALE_CACHE`; it needs
-the oracle binary present to check that, even though it only boots the port.
+the oracle binary present to select and check that profile, even though it only
+boots the port.
+
+The pure diff-artifact regression checks require no server:
+
+```bash
+python3 scripts/test_web_harness.py
+```
 
 ## Debugging a divergence
 
