@@ -92,10 +92,6 @@ pub struct ProofContextShared {
     /// shared [`IntrRuleCache`] handle, so cloning the bundle shares the
     /// rule list instead of copying it.
     pub intruder_rules: IntrRuleCache,
-    /// Precomputed unique sources — for each fact tag with exactly
-    /// one producing rule, we cache the producer name. Lets goal
-    /// solving short-circuit candidate enumeration.
-    pub unique_sources: Vec<crate::constraint::solver::sources::UniqueSource>,
     /// Theory-level restrictions (safety formulas), in guarded form.
     /// Mirrors Haskell's `pcRestrictions` — passed to `initialSource`
     /// so each precomputed source-case starts from a system with the
@@ -205,8 +201,8 @@ pub struct ProofContext {
     pub full_sources: std::sync::Arc<Vec<crate::constraint::solver::sources::Source>>,
     /// Per-context lazy saturation gate.
     pub(crate) saturate_gate: SaturateGate,
-    /// Read-only theory data (`intruder_rules`, `unique_sources`,
-    /// `restrictions`, …), shared behind an `Arc`. Field reads are
+    /// Read-only theory data (`intruder_rules`, `restrictions`, …), shared
+    /// behind an `Arc`. Field reads are
     /// transparent through the [`std::ops::Deref`] implementation below.
     pub shared: std::sync::Arc<ProofContextShared>,
 }
@@ -1057,8 +1053,8 @@ impl ProofContext {
         // T&D::Public_part_public).
         // Compute the variants up front; they are installed onto
         // `ctx.rules` BEFORE source precomputation so that
-        // `precompute_full_sources`/`precompute_sources` see the
-        // variant-expanded rule set, matching HS (whose precompute runs
+        // `precompute_full_sources` sees the variant-expanded rule set,
+        // matching HS (whose precompute runs
         // over `cprRuleAC` = the variant-expanded AC rules;
         // Items/RuleItem.hs:56-59, see line 58).
         let mut computed_variant_substs: Vec<(
@@ -1183,7 +1179,6 @@ impl ProofContext {
             saturate_gate: SaturateGate::new(SaturateState::Pending),
             shared: std::sync::Arc::new(ProofContextShared {
                 intruder_rules,
-                unique_sources: Vec::new(),
                 restrictions,
                 pc_true_subterm,
                 // The debug env knob outranks the CLI `-s` (a developer
@@ -1198,26 +1193,14 @@ impl ProofContext {
                     }),
             }),
         };
-        // Precompute unique sources from the protocol rules.  The shared
-        // bundle is uniquely owned during construction (refcount 1, no
-        // `with_swapped_maude` clone exists yet), so `Arc::get_mut`
-        // always succeeds here.  `precompute_sources` borrows `&ctx`
-        // immutably and returns before we take the `&mut`.
-        let params = crate::constraint::solver::sources::IntegerParameters::current();
-        let unique_sources = crate::constraint::solver::sources::precompute_sources(&params, &ctx);
-        std::sync::Arc::get_mut(&mut ctx.shared)
-            .expect("ProofContext shared bundle is uniquely owned during construction")
-            .unique_sources = unique_sources;
         // Precompute full source-case enumerations.  Runs *after*
-        // `unique_sources` so per-tag expansion can use the unique-
-        // source cache; runs with an empty `full_sources` itself so
-        // there's no recursive lookup during precomputation. Saturates
-        // the cases via `saturate_sources` so recursive Loop-style
-        // chains fold into a finite enumeration of self-contained
-        // sub-systems.
+        // rule construction and with an empty `full_sources` itself so there's
+        // no recursive lookup during precomputation. Saturates the cases via
+        // `saturate_sources` so recursive Loop-style chains fold into a finite
+        // enumeration of self-contained sub-systems.
         // Install rule variants BEFORE precompute, so
-        // `precompute_full_sources`/`precompute_sources` see the
-        // variant-expanded (abstracted) rule set, matching HS (whose
+        // `precompute_full_sources` sees the variant-expanded (abstracted)
+        // rule set, matching HS (whose
         // precompute runs over `cprRuleAC`; Items/RuleItem.hs:56-59, see line 58).
         //
         // Install the variant substitutions in their disjunction form.

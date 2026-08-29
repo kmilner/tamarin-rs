@@ -11,7 +11,6 @@ fn default_parameters_match_haskell() {
     let p = IntegerParameters::default();
     assert_eq!(p.open_chains_limit, 10);
     assert_eq!(p.saturation_limit, 5);
-    assert!(!p.show_saturation_steps);
 }
 
 /// `unsolved_chain_constraints` counts exactly the open `Chain` goals.  It
@@ -39,37 +38,7 @@ fn chain_goal_counted() {
     assert_eq!(unsolved_chain_constraints(&s), 0);
 }
 
-// =========================================================================
-// precompute_sources: unique-source caching correctness
-// =========================================================================
-
-fn make_rule(name: &str, conc_tag: crate::fact::FactTag) -> crate::theory::OpenProtoRule {
-    use crate::fact::Fact;
-    use crate::rule::{ProtoRuleE, ProtoRuleEInfo, Rule};
-    let conc = Fact::new(conc_tag, vec![]);
-    let r: ProtoRuleE = Rule::new(ProtoRuleEInfo::standard(name), vec![], vec![conc], vec![]);
-    crate::theory::OpenProtoRule::new(r)
-}
-
-/// A `ProofContext` over `rules` with the pair signature.  The result is
-/// `None` only when [`maude_path`] resolves nothing.  That case is the
-/// documented `TAM_ALLOW_NO_MAUDE` skip.  A maude that resolves but does not
-/// start is the same misconfiguration as a dangling `MAUDE_PATH`.  This
-/// function therefore panics.  A skip would leave every maude-backed test in
-/// this file unrun, and no message would report that.
-fn ctx_with_rules(
-    rules: Vec<crate::theory::OpenProtoRule>,
-) -> Option<crate::constraint::solver::context::ProofContext> {
-    let h = start_maude(
-        &require_maude_path()?,
-        tamarin_term::maude_sig::pair_maude_sig(),
-    );
-    Some(crate::constraint::solver::context::ProofContext::new(
-        h, rules,
-    ))
-}
-
-/// See [`ctx_with_rules`] for why a failed start is a panic, not a skip.
+/// A resolved Maude that fails to start is a configuration error, not a skip.
 fn start_maude(
     path: &str,
     sig: tamarin_term::maude_sig::MaudeSig,
@@ -80,61 +49,6 @@ fn start_maude(
              test here would otherwise skip silently"
         )
     })
-}
-
-#[test]
-fn precompute_sources_picks_single_producer() {
-    use crate::fact::{FactTag, Multiplicity};
-    let tag = FactTag::Proto(Multiplicity::Linear, "Foo", 0);
-    let rules = vec![make_rule("MakeFoo", tag)];
-    let ctx = match ctx_with_rules(rules) {
-        Some(c) => c,
-        None => return,
-    };
-    // Foo is produced by exactly one rule → unique-source entry.
-    let entries: Vec<_> = ctx
-        .unique_sources
-        .iter()
-        .filter(|s| s.fact_tag == tag)
-        .collect();
-    assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0].rule_name, "MakeFoo");
-}
-
-#[test]
-fn precompute_sources_drops_multi_producer() {
-    use crate::fact::{FactTag, Multiplicity};
-    let bar = FactTag::Proto(Multiplicity::Linear, "Bar", 0);
-    let foo = FactTag::Proto(Multiplicity::Linear, "Foo", 0);
-    let rules = vec![
-        make_rule("MakeBarA", bar),
-        make_rule("MakeBarB", bar),
-        make_rule("MakeFoo", foo),
-    ];
-    let ctx = match ctx_with_rules(rules) {
-        Some(c) => c,
-        None => return,
-    };
-    // Bar is produced by 2 rules → no unique-source entry.
-    let entries: Vec<_> = ctx
-        .unique_sources
-        .iter()
-        .filter(|s| s.fact_tag == bar)
-        .collect();
-    assert!(
-        entries.is_empty(),
-        "expected no entry for multi-producer tag, got {:?}",
-        entries
-    );
-    // Foo has a single producer in the same context.  So the empty result
-    // above cannot come from a cache that skipped every rule.
-    assert_eq!(
-        ctx.unique_sources
-            .iter()
-            .filter(|s| s.fact_tag == foo)
-            .count(),
-        1
-    );
 }
 
 /// `precompute_full_sources` pushes one lazy `Source` for each protocol-fact
@@ -259,27 +173,6 @@ fn precompute_full_sources_emits_em_only_when_bp_enabled() {
     };
     assert_eq!(em_sources(tamarin_term::maude_sig::bp_maude_sig()), 1);
     assert_eq!(em_sources(tamarin_term::maude_sig::pair_maude_sig()), 0);
-}
-
-#[test]
-fn precompute_sources_handles_multiple_unique_tags() {
-    use crate::fact::{FactTag, Multiplicity};
-    let tag_a = FactTag::Proto(Multiplicity::Linear, "A", 0);
-    let tag_b = FactTag::Proto(Multiplicity::Linear, "B", 0);
-    let rules = vec![make_rule("MakeA", tag_a), make_rule("MakeB", tag_b)];
-    let ctx = match ctx_with_rules(rules) {
-        Some(c) => c,
-        None => return,
-    };
-    // Both A and B should appear.
-    let names: Vec<_> = ctx
-        .unique_sources
-        .iter()
-        .filter(|s| s.fact_tag == tag_a || s.fact_tag == tag_b)
-        .map(|s| &s.rule_name[..])
-        .collect();
-    assert!(names.contains(&"MakeA"));
-    assert!(names.contains(&"MakeB"));
 }
 
 // =========================================================================

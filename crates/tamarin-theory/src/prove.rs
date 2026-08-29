@@ -505,7 +505,7 @@ struct CachedSources {
 ///
 /// The expensive part is `ProofContext::new` (intruder rules,
 /// `close_intr_rule` Maude variants, DH/BP cached variants, per-rule
-/// variant precomputation, `precompute_sources`, `precompute_full_sources`) —
+/// variant precomputation and `precompute_full_sources`) —
 /// seconds per call, which HS amortises across the whole file.  Sharing the
 /// template `ProofContext` recovers that; per-lemma we still run the
 /// lightweight `ensure_saturated` (each lemma needs its own
@@ -532,7 +532,7 @@ pub struct ProverSession {
     restrictions: Vec<Guarded>,
     /// Template `ProofContext` carrying the expensive precompute:
     /// `rules` (with variants installed), `intruder_rules`,
-    /// `unique_sources`, `full_sources` (raw, unsaturated cells), etc.
+    /// `full_sources` (raw, unsaturated cells), etc.
     /// Cloned per lemma; each clone sets its own
     /// `typing_assumptions`/`heuristic`/`is_exists_trace`/`use_induction`
     /// and runs `ensure_saturated` to materialise lemma-specific

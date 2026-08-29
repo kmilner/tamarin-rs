@@ -3356,10 +3356,7 @@ fn illegal_coerce(p_rule: &RuleACInst, fa_conc: &crate::fact::LNFact) -> bool {
 /// SplitG-aware premise-solving rule enumeration: returns the
 /// canonical (possibly abstracted) rule per `OpenProtoRule` plus its
 /// variant disjunction.  Intruder rules carry `None` (no variants).
-/// For non-K premises this favours protocol rules with non-K
-/// conclusions and honours the `UniqueSource` source-cache
-/// short-circuit (Haskell's `solveWithSource`); for K-premises it
-/// includes the intruder rules.
+/// For K-premises this includes the intruder rules.
 fn premise_solving_rule_insts_with_constrs(
     ctx: &crate::constraint::solver::context::ProofContext,
     _fa_prem: &crate::fact::LNFact,

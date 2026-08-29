@@ -205,11 +205,6 @@ pub struct IntegerParameters {
     /// Maximum saturation iterations during source refinement (HS
     /// `paramSaturationLimit`, fed from `-s/--saturation`).
     pub saturation_limit: i64,
-    /// HS-shape field; the live trace gate is the process-global
-    /// [`set_show_saturation_steps`] (the flag is toggled dynamically
-    /// around the precompute-only forcing, which a value snapshotted at
-    /// context construction couldn't express).
-    pub show_saturation_steps: bool,
 }
 
 impl Default for IntegerParameters {
@@ -219,7 +214,6 @@ impl Default for IntegerParameters {
         IntegerParameters {
             open_chains_limit: 10,
             saturation_limit: 5,
-            show_saturation_steps: false,
         }
     }
 }
@@ -587,51 +581,6 @@ fn initial_source_cases_impl(
             .collect(),
         GoalCases::Contradictory => Vec::new(),
     }
-}
-
-/// Build the structural unique-source map. For every conclusion fact
-/// tag across the proof context's rules, count how many rules produce
-/// it; each tag with exactly one producer yields a `UniqueSource`
-/// recording the fact tag and the sole producing rule's name. The
-/// result is sorted and deduplicated by fact tag.
-///
-/// This is a lightweight one-rule-one-source mapping, distinct from the
-/// full case-distinction enumeration in `precompute_full_sources`. It is
-/// stored on the `ProofContext` as `unique_sources`.
-pub fn precompute_sources(
-    _params: &IntegerParameters,
-    ctx: &crate::constraint::solver::context::ProofContext,
-) -> Vec<UniqueSource> {
-    use std::collections::BTreeMap;
-    let mut counts: BTreeMap<crate::fact::FactTag, u32> = BTreeMap::new();
-    for o in &ctx.rules {
-        for c in &o.rule.conclusions {
-            *counts.entry(c.tag).or_insert(0) += 1;
-        }
-    }
-    let mut out = Vec::new();
-    for o in &ctx.rules {
-        for c in &o.rule.conclusions {
-            if counts.get(&c.tag).copied() == Some(1) {
-                out.push(UniqueSource {
-                    fact_tag: c.tag,
-                    rule_name: o.name().to_string(),
-                });
-            }
-        }
-    }
-    // Dedup.
-    out.sort_by_key(|a| a.fact_tag);
-    out.dedup_by(|a, b| a.fact_tag == b.fact_tag);
-    out
-}
-
-/// One structural unique-source entry: a fact tag whose only producer
-/// is the named rule.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UniqueSource {
-    pub fact_tag: crate::fact::FactTag,
-    pub rule_name: String,
 }
 
 /// `precomputeSources` (full).  Direct port of Haskell's
