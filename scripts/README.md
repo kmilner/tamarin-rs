@@ -25,7 +25,7 @@ Five, all gitignored, none keyed alike:
 | `.hs_file_cache/` | `corpus_file_diff.sh` | theory sha + every `#include`d file's sha + oracle-script digest + flags hash + **oracle-binary fingerprint**; the oracle's exit status sits beside each entry as `.rc` |
 | `.hs_pretty_cache/` | `pretty_gate.sh` and `wf_gate.sh` (either fills `.load.gz`; `pretty_gate.sh` derives `.theory.gz` from it) | theory sha + every `#include`d file's sha + oracle-script digest + flags hash + **oracle-binary fingerprint** |
 | `.web_hs_cache/` | `web_parity.sh` writes; `pane_byte_check.sh` reads | profile = **oracle + Maude binary SHA-256 + crawl plan/settings**; entry = theory + transitive includes + oracle scripts |
-| `.hs_canon_cache/` | `diff_proof_raw.sh`, `corpus_raw_diff.sh`, `corpus_full_trace_diff.sh` (one key form; flagless entries are exchanged, a `diff_proof_raw.sh` run with canonical flags salts `__f` and stays distinct) | theory sha + every `#include`d file's sha + oracle-script digest + lemma + cache version + **oracle-binary fingerprint** |
+| `.hs_canon_cache/` | `diff_proof_raw.sh` and `corpus_raw_diff.sh` (one key form; flagless entries are exchanged, a `diff_proof_raw.sh` run with canonical flags salts `__f` and stays distinct) | theory sha + every `#include`d file's sha + oracle-script digest + lemma + cache version + **oracle-binary fingerprint** |
 | `.hs_sweep_cache/` | the three flag sweeps | theory sha + every `#include`d file's sha + oracle-script digest + flags + **oracle-binary fingerprint** + the RESOLVED maude's path (so a sweep pointed at a different maude misses rather than reusing) |
 
 The general oracle-binary fingerprint is `stat -c '%s.%Y'` of the HS binary
@@ -61,7 +61,7 @@ prepends the RESOLVED binary's own directory, so an operator's maude wins over
 linuxbrew instead of being overridden by it. Every gate here sources it, the
 three flag sweeps through `sweep_common.sh`, and so do the cache-touching
 triage tools (`diff_proof_raw.sh`, `corpus_raw_diff.sh`,
-`corpus_full_trace_diff.sh`, `triage_diff_vs_hs.sh`) plus
+`triage_diff_vs_hs.sh`) plus
 `capture_cli_refs.sh` and `migrate_hs_cache_fp.sh`; a consumer that cannot
 read it exits 2 rather than falling back to a private copy. The
 `proof_diff_common.sh` additionally owns the one `.hs_canon_cache` key and
@@ -268,10 +268,9 @@ a rename-only migration.
   triage tool, not a finding.
 
   Both carry the gates' OOM prologue (`oom_score_adj=1000` plus a 24 GiB
-  `ulimit -v`, inherited by every prover child), as do
-  `corpus_full_trace_diff.sh` and `triage_diff_vs_hs.sh`: a prover that
-  outgrows the cap dies alone — in the two corpus sweeps as a `SKIP_RS_ERR`
-  row — instead of taking the session with it.
+  `ulimit -v`, inherited by every prover child), as does
+  `triage_diff_vs_hs.sh`: a prover that outgrows the cap dies alone — in the
+  corpus sweep as a `SKIP_RS_ERR` row — instead of taking the session with it.
 - **`compare_parity_tsv.py`** — diff two `corpus_raw_diff` TSVs to list
   regressions/improvements between two runs.
 - **`rs_vs_rs_diff.sh`** — sweep TWO Rust binaries (pre/post refactor, via
@@ -298,9 +297,6 @@ a rename-only migration.
   binary is required even on a warm cache — its fingerprint is part of the key
   — and missing is `exit 2`. Env: `PRE`, `POST`, `HS`, `CACHE`, `FLAGS_MAP`,
   `FT` (300 s), `DERIV` (30 s), `CORPUS`, `ROOT`.
-- **`corpus_full_trace_diff.sh`** — canonicalized proof-tree diffing for
-  every lemma across the corpus; the most detailed comparison, for locating
-  the exact solver step where two runs diverge.
 - **`diff_proof_tree.sh`** + **`canon_proof_tree.py`** +
   **`corpus_diff_proof_trees.sh`** — STRUCTURAL proof-tree comparison from
   the pre-byte-parity era; superseded by the byte gates (identical bytes ⇒

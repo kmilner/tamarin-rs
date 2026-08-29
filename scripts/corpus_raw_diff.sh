@@ -8,10 +8,8 @@
 # no lemma slicing. Anything else that differs is a rendering or proof-search
 # divergence to fix.
 #
-# HS results are cached as RAW gzipped stdout (<key>.full.gz) in the same cache
-# dir as corpus_full_trace_diff.sh, with the same key scheme — one HS run feeds
-# both the canon and the raw comparison. Existing <key>.timeout markers are
-# honoured.
+# HS results are cached as RAW gzipped stdout (<key>.full.gz) in the cache
+# shared with diff_proof_raw.sh. Existing <key>.timeout markers are honoured.
 #
 # Usage:
 #   corpus_raw_diff.sh                 # smaller corpus (pre-expansion 17-dir list)
@@ -85,11 +83,10 @@ if [ ! -x "$rs_path" ]; then
     exit 2
 fi
 
-# --- Cache key: identical scheme to corpus_full_trace_diff.sh, carrying the
+# --- Cache key: identical to diff_proof_raw.sh's flagless form. It carries the
 # oracle-binary fingerprint (gate_common's hs_fingerprint) so a rebuilt oracle
-# is a MISS, not a stale hit — the same __b suffix diff_proof_raw.sh salts in
-# and scripts/migrate_hs_cache_fp.sh rekeyed the older entries onto, so the
-# three tools exchange flagless entries again.
+# is a MISS, not a stale hit; scripts/migrate_hs_cache_fp.sh rekeyed older
+# entries onto the same form.
 hs_fingerprint "$hs_path"
 
 # --- strip_env_lines (gate_common.sh): delete the only lines that
@@ -189,7 +186,7 @@ worker() {
 }
 export -f worker
 
-# --- File-content filter (same as corpus_full_trace_diff.sh).
+# --- File-content filter.
 file_is_comparable() {
     local f="$1"
     grep -q 'diff('       "$f" 2>/dev/null && return 1

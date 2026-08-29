@@ -22,9 +22,9 @@
 #   HS_CANON_CACHE    cache dir (default <script_dir>/.hs_canon_cache); HS raw
 #                     stdout is cached/reused as <key>.full.gz, where key is
 #                     sha256(theory)[__i<includes>][__o<oracle scripts>]__<lemma>__v<CACHE_VERSION>[__f<flags>]
-#                     __b<oracle-binary fingerprint>.  corpus_raw_diff.sh and
-#                     corpus_full_trace_diff.sh fingerprint the same way, so
-#                     their FLAGLESS entries are exchanged with this script's
+#                     __b<oracle-binary fingerprint>. corpus_raw_diff.sh
+#                     fingerprints its flagless entries the same way, so they
+#                     are exchanged with this script's
 #                     (a flagged run salts __f and stays distinct).
 #   TAM_RS_NO_AUTO_BUILD=1  skip the cargo rebuild of the RS binary
 set -uo pipefail

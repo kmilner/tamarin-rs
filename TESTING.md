@@ -83,7 +83,7 @@ an error:
 
   Two things are plain `PATH` lookups: `dot`, which the web servers
   invoke by name, and the per-lemma triage tools (`diff_proof_raw.sh`,
-  `corpus_raw_diff.sh`, `corpus_full_trace_diff.sh`, `triage_diff_vs_hs.sh`),
+  `corpus_raw_diff.sh`, `triage_diff_vs_hs.sh`),
   which run the provers on whatever they inherit. On hosts where these come
   from linuxbrew and it is *not* on `PATH` by default:
 
@@ -362,27 +362,22 @@ Raw byte-for-byte diff of one lemma's `--prove` output; exit 0 = identical.
 `cargo build --release -p tamarin-prover`; pass `TAM_RS_NO_AUTO_BUILD=1` to
 diff a binary you built yourself.
 
-All three `.hs_canon_cache/` users — `diff_proof_raw.sh`,
-`corpus_raw_diff.sh` and `corpus_full_trace_diff.sh` — key on the oracle
-fingerprint, so a rebuilt oracle is a MISS rather than a stale hit, and their
+Both `.hs_canon_cache/` users — `diff_proof_raw.sh` and
+`corpus_raw_diff.sh` — key on the oracle fingerprint, so a rebuilt oracle is a
+MISS rather than a stale hit, and their
 flagless entries are exchanged (a `diff_proof_raw.sh` run under the file's
-canonical flags salts `__f` into the key and stays distinct). All three carry
-the gates' `oom_prologue` as well — as does `triage_diff_vs_hs.sh` — so a
+canonical flags salts `__f` into the key and stays distinct). Both carry the
+gates' `oom_prologue` as well — as does `triage_diff_vs_hs.sh` — so a
 prover that outgrows the 24 GiB cap dies alone.
 Their common key and nested-comment-aware lemma scanner live in
 `scripts/proof_diff_common.sh`; oracle discovery lives in `gate_common.sh`.
 
 Do **not** treat `.hs_canon_cache/` as a cache that must be exhaustively warmed
-after every oracle rebuild. It belongs to the per-lemma triage tools above;
-`corpus_full_trace_diff.sh` invokes Haskell separately for every lemma (more
-than ten thousand across the current corpus), so a cold full run can take days
-at memory-safe concurrency. A per-file all-lemma pre-pass was tried previously
-but abandoned after concurrent `jcs18` theories exceeded 15 GiB each and
-triggered the OOM killer. For the routine post-bump milestone gate, run
-`corpus_file_diff.sh` instead: it proves all lemmas once per theory, fills
-`.hs_file_cache/`, and its byte-for-byte comparison is stronger than the
-canonical proof-tree comparison. Populate `.hs_canon_cache/` on demand while
-triaging a divergence, or schedule an exhaustive run deliberately.
+after every oracle rebuild. It belongs to the per-lemma triage tools above and
+should be populated on demand while investigating a divergence. For the
+routine post-bump milestone gate, run `corpus_file_diff.sh`: it proves all
+lemmas once per theory, fills `.hs_file_cache/`, and its byte-for-byte
+comparison is stronger than canonical proof-tree comparison.
 
 ## Corpus gate (the batch parity metric)
 
@@ -714,9 +709,8 @@ scripts/diff_proof_tree.sh <file> <lemma> "TAM_RS_DBG_APPLY_EQ_STORE=1"   # extr
 target/release/examples/dump_proof <file> <lemma> | python3 scripts/canon_proof_tree.py
 ```
 
-`scripts/corpus_diff_proof_trees.sh` runs the same diff over a hand-picked
-regression corpus (PASS/FAIL tally); `scripts/corpus_full_trace_diff.sh`
-does it for every lemma in the corpus.
+`scripts/corpus_diff_proof_trees.sh` runs the same diff over a small,
+hand-picked regression corpus (PASS/FAIL tally).
 
 **Diagnostic env flags** (all off by default; solving behavior is never
 env-configurable — these only dump, count, verify-and-panic, or force a
@@ -813,8 +807,6 @@ exits 2 rather than running with a private fallback.
 | `corpus_raw_diff.sh` | raw per-lemma diff across the corpus |
 | `compare_parity_tsv.py` | compare two gate TSVs by (file, lemma) |
 | `diff_proof_tree.sh` / `canon_proof_tree.py` / `corpus_diff_proof_trees.sh` | structural proof-tree diffs, pre-byte-parity era; superseded by the byte gates and only worth reaching for when output diverges too grossly to read |
-| `corpus_full_trace_diff.sh` | canonicalised proof-tree diffing for every lemma; the most detailed comparison |
-
 **Maintenance**
 
 | Script | Purpose |
