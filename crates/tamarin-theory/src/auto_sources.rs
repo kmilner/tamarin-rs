@@ -307,14 +307,20 @@ pub(crate) fn add_auto_sources_lemma(
             }
         }
     }
+    let mut rule_by_name: tamarin_utils::FastMap<&str, usize> = Default::default();
+    for (ri, rule) in rules.iter().enumerate() {
+        rule_by_name.entry(rule.name()).or_insert(ri);
+    }
 
     let mut formula = LNFormula::ltrue();
     let mut annotation_groups: Vec<Vec<(String, LNFact)>> = Vec::new();
-    let mut done: Vec<(String, ExtendedPosition)> = Vec::new();
+    let mut done: tamarin_utils::FastMap<&str, tamarin_utils::FastSet<ExtendedPosition>> =
+        Default::default();
 
     for ((conc, _prem), source) in chains {
+        let node_rules = source.node_rule_map();
         // v = head $ getFactTerms $ nodeConcFact conc source
-        let Some(c_rule) = source.node_rule_safe(&conc.0) else {
+        let Some(c_rule) = node_rules.get(&conc.0) else {
             continue;
         };
         let Some(conc_fact) = c_rule.conclusions.get(conc.1 .0) else {
@@ -325,7 +331,7 @@ pub(crate) fn add_auto_sources_lemma(
         };
 
         // unsolved premises of this source (for the fact-case guard).
-        let unsolved_prem_keys: Vec<NodePrem> = source
+        let unsolved_prem_keys: tamarin_utils::FastSet<NodePrem> = source
             .unsolved_premises()
             .into_iter()
             .map(|(np, _)| np)
@@ -342,14 +348,14 @@ pub(crate) fn add_auto_sources_lemma(
             let Some(positions) = find_pos(&v, &term) else {
                 continue;
             };
-            let Some(rule_sys) = source.node_rule_safe(&nodeid) else {
+            let Some(rule_sys) = node_rules.get(&nodeid) else {
                 continue;
             };
             let sys_name = rule_name_string(rule_sys);
-            let Some((ri, rule)) = rules.iter().enumerate().find(|(_, r)| r.name() == sys_name)
-            else {
+            let Some(&ri) = rule_by_name.get(sys_name.as_str()) else {
                 continue;
             };
+            let rule = &rules[ri];
             let Some(premise) = ac_prems(rule).get(pid.0) else {
                 continue;
             };
@@ -407,7 +413,10 @@ pub(crate) fn add_auto_sources_lemma(
         let mut matches: Vec<(usize, Matched, ExtendedPosition)> = Vec::new();
         for (ri, u, pos) in &premise_term_u {
             let rin_name = rules[*ri].name();
-            let already_done = || done.iter().any(|(n, p)| n == rin_name && p == pos);
+            let already_done = || {
+                done.get(rin_name)
+                    .is_some_and(|positions| positions.contains(pos))
+            };
             match u {
                 Unify::Term(protterm, vin) => {
                     if already_done() {
@@ -503,7 +512,7 @@ pub(crate) fn add_auto_sources_lemma(
         // addLabels + addCases (this chain's acts as one group).
         let mut grp: Vec<(String, LNFact)> = Vec::new();
         for (ri, m, pos) in &matches {
-            let rin_name = rules[*ri].name().to_string();
+            let rin_name = rules[*ri].name();
             match m {
                 Matched::Term {
                     protterm,
@@ -512,7 +521,7 @@ pub(crate) fn add_auto_sources_lemma(
                 } => {
                     let (in_name, out_name) = auto_names(m, pos, &rin_name);
                     grp.push((
-                        rin_name.clone(),
+                        rin_name.to_string(),
                         ln_proto(&in_name, vec![protterm.clone(), vin.clone()]),
                     ));
                     for (rout_i, tout) in outs {
@@ -523,8 +532,11 @@ pub(crate) fn add_auto_sources_lemma(
                     }
                 }
                 Matched::Fact { fact, outs } => {
-                    let (in_name, out_name) = auto_names(m, pos, &rin_name);
-                    grp.push((rin_name.clone(), ln_proto(&in_name, fact.terms.to_vec())));
+                    let (in_name, out_name) = auto_names(m, pos, rin_name);
+                    grp.push((
+                        rin_name.to_string(),
+                        ln_proto(&in_name, fact.terms.to_vec()),
+                    ));
                     for (rout_i, fout) in outs {
                         grp.push((
                             rules[*rout_i].name().to_string(),
@@ -533,7 +545,7 @@ pub(crate) fn add_auto_sources_lemma(
                     }
                 }
             }
-            done.push((rin_name, pos.clone()));
+            done.entry(rin_name).or_default().insert(pos.clone());
         }
         annotation_groups.push(grp);
     }
