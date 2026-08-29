@@ -522,7 +522,7 @@ fn initial_source_cases_impl(
         .filter(|r| crate::guarded::is_safety_formula(r))
         .cloned()
         .collect();
-    sys.insert_lemmas(safety_restrictions.clone());
+    sys.insert_lemmas(safety_restrictions);
     let mut red = Reduction::new(ctx, sys);
     red.insert_goal(goal.clone());
     // HS-faithful: `solveGoal goal` (Goals.hs:201-213) marks the goal
@@ -536,12 +536,10 @@ fn initial_source_cases_impl(
         _ => return Vec::new(),
     };
 
-    // Same HS-faithful filter — safety only — for normalize_and_keep;
-    // reuse the list computed above (identical filter over `ctx.restrictions`).
-    let safety_only = safety_restrictions;
+    // Every solver branch descends from `red.sys`, so it already carries the
+    // safety restrictions installed above.
     let normalize_and_keep = |sys: System| -> Option<System> {
         let mut r = Reduction::new(ctx, sys);
-        r.sys.insert_lemmas(safety_only.clone());
         r.subst_system();
         crate::constraint::solver::simplify::simplify_system(&mut r);
         if r.sys.eq_store.is_false() {
