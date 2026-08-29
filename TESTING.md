@@ -372,6 +372,18 @@ prover that outgrows the 24 GiB cap dies alone.
 Their common key and nested-comment-aware lemma scanner live in
 `scripts/proof_diff_common.sh`; oracle discovery lives in `gate_common.sh`.
 
+Do **not** treat `.hs_canon_cache/` as a cache that must be exhaustively warmed
+after every oracle rebuild. It belongs to the per-lemma triage tools above;
+`corpus_full_trace_diff.sh` invokes Haskell separately for every lemma (more
+than ten thousand across the current corpus), so a cold full run can take days
+at memory-safe concurrency. A per-file all-lemma pre-pass was tried previously
+but abandoned after concurrent `jcs18` theories exceeded 15 GiB each and
+triggered the OOM killer. For the routine post-bump milestone gate, run
+`corpus_file_diff.sh` instead: it proves all lemmas once per theory, fills
+`.hs_file_cache/`, and its byte-for-byte comparison is stronger than the
+canonical proof-tree comparison. Populate `.hs_canon_cache/` on demand while
+triaging a divergence, or schedule an exhaustive run deliberately.
+
 ## Corpus gate (the batch parity metric)
 
 ```bash
