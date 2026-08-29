@@ -643,12 +643,12 @@ mod tests {
     /// Start a Maude handle whose signature is the theory's own (so the
     /// theory's `functions:`/`equations:` symbols — including a private
     /// destructor — are present), exactly as the real driver does via
-    /// `elaborated.signature.maude_sig` (run.rs).  The function skips on the
+    /// `elaborated.signature` (run.rs).  The function skips on the
     /// same terms as [`maude`].
     fn theory_and_maude(src: &str) -> Option<(Theory, MaudeHandle)> {
         let p = require_maude_path()?;
         let thy = theory(src);
-        let sig = thy.signature.maude_sig.clone();
+        let sig = thy.signature.clone();
         Some((thy, start_maude(&p, sig)))
     }
 

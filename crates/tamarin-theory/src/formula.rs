@@ -1194,7 +1194,7 @@ mod tests {
         let elab = crate::elaborate::elaborate(&thy).unwrap();
 
         let ProtoFormula::Qua(Quantifier::All, h, body) =
-            parsed_with("All zero. P(zero)", &elab.signature.maude_sig)
+            parsed_with("All zero. P(zero)", &elab.signature)
         else {
             panic!("expected a universal quantifier");
         };

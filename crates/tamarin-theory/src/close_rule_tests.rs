@@ -33,7 +33,7 @@ fn xorr_parent() -> (tamarin_term::maude_sig::MaudeSig, Vec<LNTerm>) {
     let rule = elab.rules().next().expect("Seed rule present");
     let probe = rule.rule.actions[0].terms.to_vec();
     assert_eq!(probe.len(), 5, "Probe carries five terms");
-    (elab.signature.maude_sig, probe)
+    (elab.signature, probe)
 }
 
 fn kd(t: LNTerm) -> LNFact {

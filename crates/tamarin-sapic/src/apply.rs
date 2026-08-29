@@ -85,7 +85,7 @@ pub fn apply_sapic(thy: &mut Theory, user_set_heuristic: bool) -> Result<Vec<WfE
     // seed the function-typing environment so `typeWith` can back-propagate a
     // declared argument/return type onto the bound variables.
     let user_fun_typings = collect_user_fun_typings(thy);
-    let maude_sig = &thy.signature.maude_sig;
+    let maude_sig = &thy.signature;
     let typed =
         type_and_rename_process(maude_sig, &user_fun_typings, &plain).map_err(|e| ElabError {
             message: format!("SAPIC typing: {e}"),
@@ -245,7 +245,7 @@ mod tests {
 
         // The same translation `apply_sapic` runs, so the rule it injects can
         // be compared against the values the translation produced.
-        let maude_sig = thy.signature.maude_sig.clone();
+        let maude_sig = thy.signature.clone();
         let plain = thy.processes().next().unwrap().clone();
         let typed = type_and_rename_process(&maude_sig, &[], &plain).unwrap();
         let translation = translate(

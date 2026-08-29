@@ -279,7 +279,7 @@ pub(crate) fn load_from_source(
     // The signature every Maude process for this theory loads its module
     // from, taken before the NDC join below — see
     // `TheoryEntry::prover_maude_sig` for why the join must not reach it.
-    let prover_maude_sig = typed.signature.maude_sig.clone();
+    let prover_maude_sig = typed.signature.clone();
     if let Ok(maude) = MaudeHandle::start(maude_path, prover_maude_sig.clone()) {
         tamarin_theory::tools::rule_variants::populate_rule_variants(&mut typed, &maude, None);
         // Annotate per-rule loop breakers on the stored theory so the web
@@ -307,11 +307,11 @@ pub(crate) fn load_from_source(
             typed.options.deduction_chain_check,
         );
         if !checked.ndc_funs.is_empty() {
-            let mut sig = std::mem::take(&mut typed.signature.maude_sig);
+            let mut sig = std::mem::take(&mut typed.signature);
             for f in &checked.ndc_funs {
                 sig = sig.join_ndc_in_sig(*f, tamarin_term::function_symbols::NdcState::IsNdc);
             }
-            typed.signature.maude_sig = sig;
+            typed.signature = sig;
         }
         ndc_cache = Some(Arc::new(checked.cache));
 

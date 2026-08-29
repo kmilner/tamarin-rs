@@ -447,8 +447,7 @@ fn fixture_lemma_system(name: &str) -> tamarin_theory::constraint::system::Syste
         })
         .expect("lemma");
     let elaborated = tamarin_theory::elaborate::elaborate(&theory).expect("elaborate");
-    let g = formula_to_guarded_parsed(&lemma.formula, &elaborated.signature.maude_sig)
-        .expect("guarded");
+    let g = formula_to_guarded_parsed(&lemma.formula, &elaborated.signature).expect("guarded");
     let tq = elaborated.lemmas().next().expect("lemma").trace_quantifier;
     formula_to_system(Vec::new(), SourceKind::RawSources, tq, &g)
 }
@@ -704,8 +703,7 @@ fn guarded_quantifier_structure_matches_tamarin() {
             })
             .unwrap_or_else(|| panic!("{name}: lemma `{lemma}` present"));
         let elaborated = tamarin_theory::elaborate::elaborate(&theory).expect("elaborate");
-        let g = formula_to_guarded_parsed(&l.formula, &elaborated.signature.maude_sig)
-            .expect("guarded conv");
+        let g = formula_to_guarded_parsed(&l.formula, &elaborated.signature).expect("guarded conv");
         assert_eq!(
             count_quantifiers(&g),
             (*ex_blocks, *ex_vars, *all_blocks, *all_vars),
@@ -1248,13 +1246,11 @@ fn corpus_proof_skeleton_match_probe() {
     let outcomes: Vec<Outcome> = lemmas
         .par_iter()
         .map(|w| {
-            let h = match tamarin_term::maude_proc::MaudeHandle::start(
-                &mp,
-                w.elab.signature.maude_sig.clone(),
-            ) {
-                Ok(h) => h,
-                Err(_) => return Outcome::Incomparable,
-            };
+            let h =
+                match tamarin_term::maude_proc::MaudeHandle::start(&mp, w.elab.signature.clone()) {
+                    Ok(h) => h,
+                    Err(_) => return Outcome::Incomparable,
+                };
             let watchdog = spawn_kill_watchdog(h.clone(), std::time::Duration::from_secs(20));
             // Catch panics — pre-existing overflow bugs in
             // reduction.rs::bounds_max+1 sites surface on some corpus
@@ -1637,8 +1633,8 @@ fn formula_to_system_pipes_parsed_lemmas() {
         let elaborated = tamarin_theory::elaborate::elaborate(&theory).expect("elaborate");
         for it in &theory.items {
             if let tamarin_parser::ast::TheoryItem::Lemma(l) = it {
-                let g = formula_to_guarded_parsed(&l.formula, &elaborated.signature.maude_sig)
-                    .expect("guarded");
+                let g =
+                    formula_to_guarded_parsed(&l.formula, &elaborated.signature).expect("guarded");
                 let tq = elaborated
                     .lemmas()
                     .find(|el| el.name == l.name)
@@ -1826,8 +1822,8 @@ end
         })
         .expect("lemma");
     let elaborated = tamarin_theory::elaborate::elaborate(&theory).expect("elaborate");
-    let err = formula_to_guarded_parsed(&lemma.formula, &elaborated.signature.maude_sig)
-        .expect_err("should fail");
+    let err =
+        formula_to_guarded_parsed(&lemma.formula, &elaborated.signature).expect_err("should fail");
     assert!(
         err.message.contains("unguarded variable"),
         "expected 'unguarded variable' in our error:\n{:?}",
@@ -1862,8 +1858,7 @@ fn fixture_nat_sort_reuse_lemma_derives_implied_fact() {
     let src = std::fs::read_to_string(&path).expect("read fixture");
     let theory = parse_theory(&src, &[]).expect("parse");
     let elab = tamarin_theory::elaborate::elaborate(&theory).expect("elaborate");
-    let h = tamarin_term::maude_proc::MaudeHandle::start(&mp, elab.signature.maude_sig.clone())
-        .unwrap();
+    let h = tamarin_term::maude_proc::MaudeHandle::start(&mp, elab.signature.clone()).unwrap();
     let root = prove_lemma(&elab, "CanForgeAndPost", h, 500).expect("prove_lemma");
     assert_eq!(root.status, NodeStatus::Solved, "expected a witness trace");
 

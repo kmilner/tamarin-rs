@@ -100,7 +100,7 @@ fn injectivity_corpus_example_is_contradictory() {
 fn cr_external_recentalive_converges_and_holds() {
     let pt = fixture_theory("CR_external.spthy");
     let elab = crate::elaborate::elaborate(&pt).expect("elaborate");
-    let Some(h) = maude_with(elab.signature.maude_sig.clone()) else {
+    let Some(h) = maude_with(elab.signature.clone()) else {
         return;
     };
     let t0 = std::time::Instant::now();
@@ -123,7 +123,7 @@ fn cr_external_recentalive_converges_and_holds() {
 fn sig_minimal_tautology_is_contradictory() {
     let pt = fixture_theory("sig_minimal.spthy");
     let elab = crate::elaborate::elaborate(&pt).expect("elaborate");
-    let Some(h) = maude_with(elab.signature.maude_sig.clone()) else {
+    let Some(h) = maude_with(elab.signature.clone()) else {
         return;
     };
     let root = prove_lemma(&elab, "a_self", h, 50).expect("prove");

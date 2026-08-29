@@ -55,8 +55,7 @@ pub fn load_theory_with_maude(theory_path: &str) -> (tamarin_theory::theory::The
     let parsed = tamarin_parser::parse_theory(&source, &[]).expect("parse theory");
     let elaborated = tamarin_theory::elaborate::elaborate(&parsed).expect("elaborate");
     let maude_path = tamarin_test_support::maude_path().unwrap_or_else(|| "maude".to_string());
-    let maude = MaudeHandle::start(&maude_path, elaborated.signature.maude_sig.clone())
-        .expect("start maude");
+    let maude = MaudeHandle::start(&maude_path, elaborated.signature.clone()).expect("start maude");
     (elaborated, maude)
 }
 

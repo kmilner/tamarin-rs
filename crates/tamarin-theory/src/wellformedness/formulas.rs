@@ -92,7 +92,7 @@ fn ann_formulas(thy: &Theory) -> Vec<(String, &LNFormula)> {
 /// `checkTerms` classifies against the theory's own signature (HS `get
 /// (sigpMaudeSig . thySignature) thy`, Wellformedness.hs:1003).
 pub fn formula_reports(thy: &Theory) -> Vec<WfError> {
-    let sig = &thy.signature.maude_sig;
+    let sig = &thy.signature;
     let mut out: Vec<WfError> = Vec::new();
     for (header, fm) in ann_formulas(thy) {
         // HS `msum [checkQuantifiers, checkTerms, checkGuarded]` = `concat`:

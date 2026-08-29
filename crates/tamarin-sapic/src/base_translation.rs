@@ -1381,8 +1381,7 @@ mod tests {
                 tamarin_parser::parse_theory(&format!("theory T begin\n{decl}\nend"), &[]).unwrap();
             let msig = tamarin_theory::elaborate::elaborate(&thy)
                 .unwrap()
-                .signature
-                .maude_sig;
+                .signature;
             // `Eq(nil, k)` — the predicate atom the surface `if Eq(nil, k)`
             // parses to.
             let f = tamarin_parser::parser::parse_formula_str("Eq(nil, k)", &msig).unwrap();

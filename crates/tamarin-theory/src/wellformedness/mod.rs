@@ -145,7 +145,7 @@ pub type WfReport = Vec<WfError>;
 /// `ruleVariantsReport`; every other check that needs the signature reads it
 /// off the theory (`get (sigpMaudeSig . thySignature) thy`,
 /// Wellformedness.hs:1003, :1113, :1211-1214), which is what
-/// `thy.signature.maude_sig` is here.
+/// `thy.signature` is here.
 ///
 /// `ruleVariantsReport` (HS position 6) is the one check that needs a live
 /// Maude process, hence `maude`: the batch driver passes the handle it
@@ -162,9 +162,7 @@ pub fn check_wellformedness(thy: &Theory, maude: Option<&MaudeHandle>) -> WfRepo
     report.extend(lemmas::lemma_attribute_report(thy));
     report.extend(mult::mult_restricted_report(thy));
     report.extend(rules::nat_well_sorted_report(thy));
-    report.extend(equations::subterm_convergence_report(
-        &thy.signature.maude_sig,
-    ));
+    report.extend(equations::subterm_convergence_report(&thy.signature));
     report
 }
 

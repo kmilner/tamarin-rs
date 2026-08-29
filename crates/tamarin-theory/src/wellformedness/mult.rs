@@ -69,7 +69,7 @@ const TOPIC: &str = "Multiplication restriction of rules";
 /// `prettyRuleName ru <> prettyRuleAttributes ru` off the rule
 /// (Theory/Model/Rule.hs:1397-1398).
 pub fn mult_restricted_report(elab: &Theory) -> Vec<WfError> {
-    let irreducible = &elab.signature.maude_sig.irreducible_fun_syms;
+    let irreducible = &elab.signature.irreducible_fun_syms;
     let mut out = Vec::new();
     for opr in elab.rules() {
         let ru = &opr.rule;

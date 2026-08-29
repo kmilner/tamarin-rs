@@ -14,7 +14,6 @@ fn theory_msig(src: &str) -> tamarin_term::maude_sig::MaudeSig {
     elaborate(&parse_theory(src, &[]).unwrap())
         .unwrap()
         .signature
-        .maude_sig
 }
 
 /// The spellings are read from a parsed rule, because the resolution they
@@ -273,7 +272,6 @@ fn elaborate_empty_theory() {
     assert!(t.items.is_empty());
     let mut funs: Vec<String> = t
         .signature
-        .maude_sig
         .st_fun_syms
         .iter()
         .map(|s| String::from_utf8_lossy(s.name).to_string())
@@ -289,7 +287,6 @@ fn elaborate_builtins() {
     // hashing adds h/1, signing adds sign/2 etc.
     let funs: Vec<String> = t
         .signature
-        .maude_sig
         .st_fun_syms
         .iter()
         .map(|s| String::from_utf8_lossy(s.name).to_string())
@@ -314,7 +311,6 @@ fn builtin_matching_redeclaration_accepted() {
         let t = elaborate(&p).unwrap();
         let hs = t
             .signature
-            .maude_sig
             .st_fun_syms
             .iter()
             .filter(|s| s.name == b"h")
@@ -337,7 +333,6 @@ fn dest_pairing_exempt_from_builtins_arm_check() {
         let t = elaborate(&p).unwrap();
         let fst = t
             .signature
-            .maude_sig
             .st_fun_syms
             .iter()
             .find(|s| s.name == b"fst")
@@ -360,7 +355,6 @@ fn enable_flag_builtins_reserve_no_names() {
     let t = elaborate(&p).unwrap();
     assert!(t
         .signature
-        .maude_sig
         .st_fun_syms
         .iter()
         .any(|s| s.name == b"exp" && s.arity == 3));
@@ -378,7 +372,6 @@ fn fst_destructor_redeclaration_leaves_signature_untouched() {
     let t = elaborate(&p).unwrap();
     let fst = t
         .signature
-        .maude_sig
         .st_fun_syms
         .iter()
         .find(|s| s.name == b"fst")
@@ -1406,7 +1399,7 @@ fn corpus_process_items_match_the_converted_parsed_items() {
                     Err(_) => return (0, findings),
                 };
                 let internal = internal_process_probes(&elab);
-                match parsed_process_probes(&thy, &elab.signature.maude_sig) {
+                match parsed_process_probes(&thy, &elab.signature) {
                     Ok(parsed) if parsed == internal => (parsed.len(), findings),
                     Ok(parsed) => {
                         for (i, (a, b)) in parsed.iter().zip(&internal).enumerate() {

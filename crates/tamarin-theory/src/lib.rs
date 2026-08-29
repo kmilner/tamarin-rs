@@ -5,7 +5,6 @@
 //! Theory representation for the Tamarin prover (Rust port).
 //!
 //! Modules ported (mapping to Haskell):
-//! - [`signature`] ← `Theory.Model.Signature`
 //! - [`fact`] ← `Theory.Model.Fact`
 //! - [`atom`] ← `Theory.Model.Atom`
 //! - [`formula`] ← `Theory.Model.Formula` (data type + builders)
@@ -77,7 +76,6 @@ pub mod restriction;
 pub mod rule;
 pub mod rule_restriction;
 pub mod sapic;
-pub mod signature;
 pub mod tactic;
 #[cfg(test)]
 pub(crate) mod test_corpus;

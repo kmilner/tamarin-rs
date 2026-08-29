@@ -1604,8 +1604,8 @@ impl TheoryPipeline<'_> {
         // symbols.
         for f in &self.ndc_funs {
             let elab = std::sync::Arc::make_mut(&mut self.elaborated);
-            let sig = std::mem::take(&mut elab.signature.maude_sig);
-            elab.signature.maude_sig =
+            let sig = std::mem::take(&mut elab.signature);
+            elab.signature =
                 sig.join_ndc_in_sig(*f, tamarin_term::function_symbols::NdcState::IsNdc);
         }
 
@@ -2203,7 +2203,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             // The elaborated theory here only supplies the parse-time
             // signature + hoisted heuristic/tactic headers + the arity-1
             // fold set — elaboration is RS's signature-construction step
-            // (HS builds the same `SignaturePure` during parsing).
+            // (HS builds the same pure signature during parsing).
             let elaborated = elaborate_with_in_file(&parsed, in_file).map_err(|e| {
                 RunError(format!("elaboration error in {}: {}", in_file, e.message))
             })?;
@@ -2290,7 +2290,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         // (Wellformedness.hs:1168).  The interactive path writes the same
         // field through `tamarin_server::theory_io::set_lemmas_to_prove`.
         elaborated.options.lemmas_to_prove = opts.lemma_names.clone();
-        let maude_sig = elaborated.signature.maude_sig.clone();
+        let maude_sig = elaborated.signature.clone();
 
         // The per-file pipeline state.  From here the loop follows HS's
         // stage names: `translate_theory` → `check_translated_theory` →

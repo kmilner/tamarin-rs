@@ -14,7 +14,6 @@
 use super::*;
 use crate::fact::{proto_fact, Multiplicity};
 use crate::rule::{ProtoRuleEInfo, ProtoRuleName, Rule};
-use crate::signature::SignaturePure;
 use tamarin_term::builtin::{fresh_var, msg_var};
 use tamarin_term::lterm::pub_term;
 use tamarin_term::maude_sig::{hash_maude_sig, pair_maude_sig};
@@ -517,7 +516,7 @@ fn apply_partial_evaluation_splices_at_first_rule_item() {
         vec![],
     );
 
-    let mut elab: Theory = Theory::new("T", SignaturePure::empty(false));
+    let mut elab: Theory = Theory::new("T", tamarin_term::maude_sig::minimal_maude_sig(false));
     elab.items = vec![
         text_item("before"),
         TheoryItem::Rule(OpenProtoRule::new(zebra)),
@@ -595,7 +594,7 @@ fn a_refined_rule_keeps_its_pre_macro_e_half() {
         vec![],
     );
 
-    let mut elab: Theory = Theory::new("T", SignaturePure::empty(false));
+    let mut elab: Theory = Theory::new("T", tamarin_term::maude_sig::minimal_maude_sig(false));
     elab.items = vec![
         TheoryItem::Macros(vec![dup]),
         TheoryItem::Rule(OpenProtoRule::new(macroed)),
@@ -627,7 +626,7 @@ fn apply_partial_evaluation_no_rules_is_noop() {
         return;
     };
     let h = MaudeHandle::start(&path, pair_maude_sig()).unwrap();
-    let mut elab: Theory = Theory::new("T", SignaturePure::empty(false));
+    let mut elab: Theory = Theory::new("T", tamarin_term::maude_sig::minimal_maude_sig(false));
     elab.items = vec![text_item("only")];
     let elab_before = elab.clone();
     let trace = apply_partial_evaluation(&mut elab, &h, EvaluationStyle::Tracing).unwrap();

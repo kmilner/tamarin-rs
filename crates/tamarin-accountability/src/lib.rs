@@ -579,7 +579,7 @@ end\n";
                 _ => None,
             })
             .expect("the case test is parsed");
-        let closed = tamarin_theory::formula::from_parser(source, &elaborated.signature.maude_sig)
+        let closed = tamarin_theory::formula::from_parser(source, &elaborated.signature)
             .expect("the case test closes");
         assert_eq!(fm, &closed);
     }

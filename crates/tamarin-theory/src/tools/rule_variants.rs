@@ -1258,8 +1258,7 @@ mod tests {
         let mut with_variants = OpenProtoRule::new(rule.clone());
         with_variants.abstracted_rule = Some(rule);
 
-        let mut theory: Theory =
-            Theory::new("T", crate::signature::SignaturePure { maude_sig: sig });
+        let mut theory: Theory = Theory::new("T", sig);
         theory.items = vec![
             TheoryItem::Rule(without_variants),
             TheoryItem::Text(("separator".to_string(), String::new())),

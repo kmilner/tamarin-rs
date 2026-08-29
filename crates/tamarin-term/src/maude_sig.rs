@@ -723,10 +723,6 @@ pub fn minimal_maude_sig(diff: bool) -> MaudeSig {
     maude_sig!(enable_diff: diff, st_fun_syms: pair_fun_sig(), st_rules: pair_rules().into())
 }
 
-pub fn enable_diff_maude_sig() -> MaudeSig {
-    maude_sig!(enable_diff: true)
-}
-
 #[cfg(test)]
 #[path = "maude_sig_tests.rs"]
 mod tests;

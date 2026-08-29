@@ -322,7 +322,7 @@ fn pretty_formal_comment(fc: &crate::theory::FormalComment) -> String {
 // `prettyTheory prettySignaturePure (const emptyDoc) prettyOpenProtoRule
 // prettyProof prettyTranslationElement` (TheoryObject.hs:747-783).
 // Differences from the closed print:
-//   - the signature is the PARSE-time `SignaturePure` (same `prettyMaudeSig`
+//   - the signature is the PARSE-time pure signature (same `prettyMaudeSig`
 //     renderer — for a theory that has not been closed the two signatures
 //     have equal content);
 //   - `ppCache = const emptyDoc`: no "looping facts with injective instances"
@@ -422,7 +422,7 @@ fn theory_header_blocks<R, P, S>(thy: &Theory<R, P, S>, cache: &str) -> Vec<Stri
     // (Theory/Model/Signature.hs:173-175): the `builtins:`/`functions:`/
     // `equations:` lines, single-newline separated, so the trailing newline
     // comes off and the vsep glue supplies the blank line.
-    let sig_block = render_signature(&thy.signature.maude_sig);
+    let sig_block = render_signature(&thy.signature);
     let sig_trimmed = sig_block.trim_end_matches('\n');
     if !sig_trimmed.is_empty() {
         blocks.push(sig_trimmed.to_string());
@@ -788,7 +788,7 @@ fn render_injective_fact_insts(elab: &Theory) -> String {
     let proto_rules: Vec<&crate::rule::ProtoRuleE> = elab.rules().map(|r| &r.rule).collect();
     let mut tags = crate::tools::injective_fact_instances::simple_injective_fact_instances(
         &proto_rules,
-        &elab.signature.maude_sig.reducible_fun_syms_fast,
+        &elab.signature.reducible_fun_syms_fast,
     );
     // HS `closeRuleCache` (CloseRule.hs:417-420): union the FORCED injective facts
     // (`setforcedInjectiveFacts {L_PureState, L_CellLocked}`,
@@ -997,7 +997,7 @@ mod open_item_tests {
     }
 
     fn theory_with(items: Vec<TheoryItem>) -> Theory {
-        let mut thy = Theory::new("T", crate::signature::SignaturePure::empty(false));
+        let mut thy = Theory::new("T", tamarin_term::maude_sig::minimal_maude_sig(false));
         thy.items = items;
         thy
     }

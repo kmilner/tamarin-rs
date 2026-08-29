@@ -12,6 +12,7 @@
 //! where polymorphism actually matters (open vs closed, diff vs trace)
 //! we model with explicit enums or distinct types.
 
+use tamarin_term::maude_sig::MaudeSig;
 pub use tamarin_term::tags::{LemmaAttr, TraceQuantifier};
 
 use crate::formula::{LNFormula, SyntacticLNFormula};
@@ -19,7 +20,6 @@ use crate::predicate::Predicate;
 use crate::restriction::Restriction;
 use crate::rule::ProtoRuleE;
 use crate::sapic::PlainProcess;
-use crate::signature::SignaturePure;
 
 /// A protocol rule modulo E with its variant machinery.  Mirrors the
 /// `ProtoRuleE` half of HS's `OpenProtoRule = (ProtoRuleE, [ProtoRuleAC])`;
@@ -369,14 +369,14 @@ pub struct Theory<R = OpenProtoRule, P = ProofSkeleton, S = TranslationElement> 
     /// theory is built.
     pub heuristic: Vec<crate::constraint::solver::goals::GoalRanking>,
     pub tactic: Vec<crate::tactic::Tactic>,
-    pub signature: SignaturePure,
+    pub signature: MaudeSig,
     pub items: Vec<TheoryItem<R, P, S>>,
     pub options: Options,
     pub is_sapic: bool,
 }
 
 impl<R, P, S> Theory<R, P, S> {
-    pub fn new(name: impl Into<String>, signature: SignaturePure) -> Self {
+    pub fn new(name: impl Into<String>, signature: MaudeSig) -> Self {
         Theory {
             name: name.into(),
             in_file: String::new(),
@@ -734,7 +734,8 @@ mod tests {
     /// list and not count the item.
     #[test]
     fn accessors_select_only_their_own_item_kind() {
-        let mut t: TestTheory = Theory::new("Foo", SignaturePure::empty(false));
+        let mut t: TestTheory =
+            Theory::new("Foo", tamarin_term::maude_sig::minimal_maude_sig(false));
         assert_eq!(t.name, "Foo");
         assert_eq!(t.items.len(), 0);
         assert_eq!(t.rules().count(), 0);

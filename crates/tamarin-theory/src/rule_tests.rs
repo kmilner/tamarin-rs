@@ -618,8 +618,7 @@ fn elaborated_rule_carries_its_restrict_formulas() {
         .expect("parsed rule A");
     assert_eq!(source.embedded_restrictions.len(), 1);
     let expected =
-        crate::formula::from_parser(&source.embedded_restrictions[0], &elab.signature.maude_sig)
-            .unwrap();
+        crate::formula::from_parser(&source.embedded_restrictions[0], &elab.signature).unwrap();
     let rule = elab.rules().find(|r| r.name() == "A").expect("rule A");
     assert_eq!(rule.rule.info.restrictions, vec![expected]);
 }

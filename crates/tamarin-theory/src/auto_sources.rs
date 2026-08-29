@@ -928,7 +928,7 @@ mod tests {
             vec![],
         ));
 
-        let mut elab: Theory = Theory::new("T", crate::signature::SignaturePure::empty(false));
+        let mut elab: Theory = Theory::new("T", tamarin_term::maude_sig::minimal_maude_sig(false));
         elab.items = vec![TheoryItem::Rule(nt), TheoryItem::Rule(tr.clone())];
 
         assert!(unfold_rule_variants(&mut elab));

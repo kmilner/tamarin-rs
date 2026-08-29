@@ -23,7 +23,7 @@ use tamarin_theory::wellformedness::equations::subterm_convergence_report;
 fn message(src: &str) -> Option<String> {
     let parsed = parse_theory(src, &[]).expect("parse");
     let elaborated = tamarin_theory::elaborate::elaborate(&parsed).expect("elaborate");
-    let mut errs = subterm_convergence_report(&elaborated.signature.maude_sig);
+    let mut errs = subterm_convergence_report(&elaborated.signature);
     assert!(errs.len() <= 1, "expected at most one entry, got {errs:?}");
     let entry = errs.pop()?;
     assert_eq!(entry.topic, "Subterm Convergence Warning");

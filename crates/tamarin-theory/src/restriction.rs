@@ -239,7 +239,7 @@ mod tests {
         let thy = tamarin_parser::parse_theory(&src, &[]).unwrap();
         let elab = crate::elaborate::elaborate(&thy).unwrap();
         let preds = elab.predicates().cloned().collect();
-        (elab.signature.maude_sig, preds)
+        (elab.signature, preds)
     }
 
     /// One `_restrict` formula as the lifting sees it: parsed, closed against

@@ -54,7 +54,7 @@ fn fixture() -> PathBuf {
 /// message page's "Signature" section renders (`web_signature_block`), where
 /// the NDC pass's tags surface as ` [AC,NDC]`.
 fn functions_line(entry: &TheoryEntry) -> String {
-    tamarin_theory::pretty_theory::web_signature_block(&entry.typed_theory.signature.maude_sig)
+    tamarin_theory::pretty_theory::web_signature_block(&entry.typed_theory.signature)
         .lines()
         .find(|l| l.starts_with("functions:"))
         .expect("signature block carries a functions: line")

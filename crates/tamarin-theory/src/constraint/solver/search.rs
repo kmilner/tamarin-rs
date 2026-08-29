@@ -1643,8 +1643,7 @@ mod tests {
         .expect("parses");
         let msig = crate::elaborate::elaborate(&thy)
             .expect("elaborates")
-            .signature
-            .maude_sig;
+            .signature;
         let term = thy
             .items
             .iter()

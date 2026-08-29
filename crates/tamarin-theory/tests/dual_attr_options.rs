@@ -69,7 +69,7 @@ fn head_maude_op(t: &LNTerm) -> String {
 /// load pipelines hand the converter).
 fn action_arg_ops(src: &str, rule: &str) -> Vec<String> {
     let thy = parse_theory(src, &[]).expect("parse");
-    let msig = elaborate(&thy).expect("elaborate").signature.maude_sig;
+    let msig = elaborate(&thy).expect("elaborate").signature;
     let r = thy
         .items
         .iter()
@@ -91,8 +91,8 @@ fn signature_and_module(src: &str) -> (String, String) {
     let thy = parse_theory(src, &[]).expect("parse");
     let elaborated = elaborate(&thy).expect("elaborate");
     (
-        web_signature_block(&elaborated.signature.maude_sig),
-        pp_theory(&elaborated.signature.maude_sig),
+        web_signature_block(&elaborated.signature),
+        pp_theory(&elaborated.signature),
     )
 }
 

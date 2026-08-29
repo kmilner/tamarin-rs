@@ -10,7 +10,7 @@
 //!
 //! - Theory header (`name`, `in_file`, `is_diff`)
 //! - `builtins:` → `MaudeSig` (we record the names; full sig
-//!   composition is handled by `signature::SignaturePure::empty`)
+//!   composition starts from `minimal_maude_sig`)
 //! - `functions:`/`equations:`/`macros:` → signature registration
 //!   (`st_fun_syms`, `CtxtStRule`s when convertible, macro definitions), plus a
 //!   `TranslationElement::FunctionTypingInfo` item per `functions:` declaration
@@ -40,9 +40,9 @@ use tamarin_term::lterm::LVar;
 
 use tamarin_term::lterm::{Name, NameTag};
 use tamarin_term::maude_sig::{
-    asym_enc_dest_maude_sig, asym_enc_maude_sig, bp_maude_sig, dh_maude_sig, enable_diff_maude_sig,
-    hash_maude_sig, location_report_maude_sig, mset_maude_sig, nat_maude_sig, pair_dest_maude_sig,
-    reveal_signature_maude_sig, signature_dest_maude_sig, signature_maude_sig,
+    asym_enc_dest_maude_sig, asym_enc_maude_sig, bp_maude_sig, dh_maude_sig, hash_maude_sig,
+    location_report_maude_sig, minimal_maude_sig, mset_maude_sig, nat_maude_sig,
+    pair_dest_maude_sig, reveal_signature_maude_sig, signature_dest_maude_sig, signature_maude_sig,
     sym_enc_dest_maude_sig, sym_enc_maude_sig, xor_maude_sig, MaudeSig,
 };
 use tamarin_term::term::{f_app_no_eq, Term};
@@ -55,7 +55,6 @@ use crate::restriction::{apply_macro_in_restriction, Restriction};
 use crate::rule::{
     ConcIdx, PremIdx, ProtoRuleE, ProtoRuleEInfo, ProtoRuleName, Rule, RuleAttributes,
 };
-use crate::signature::SignaturePure;
 use crate::theory::{
     apply_macro_in_lemma, AccLemma, CaseTest, LNMacro, Lemma, OpenProtoRule, ProcessDef, ProofTree,
     SapicFunSym, Theory, TheoryItem, TranslationElement,
@@ -244,11 +243,7 @@ pub fn elaborate(parser_thy: &p::Theory) -> Result<Theory, ElabError> {
 /// `heuristic:` header's default oracle names against it while building the
 /// theory (`defaultOracleNames`, Theory/Text/Parser.hs:249-250).
 pub fn elaborate_with_in_file(parser_thy: &p::Theory, in_file: &str) -> Result<Theory, ElabError> {
-    let mut sig = SignaturePure::empty(parser_thy.is_diff);
-    if parser_thy.is_diff {
-        sig.maude_sig = sig.maude_sig.merge(enable_diff_maude_sig());
-    }
-
+    let sig = minimal_maude_sig(parser_thy.is_diff);
     let mut thy: Theory = Theory::new(parser_thy.name.clone(), sig);
     thy.in_file = in_file.to_string();
     // HS sets `_thyIsSapic = True` only for EXACTLY ONE top-level
@@ -349,7 +344,7 @@ pub(crate) fn function_decl_typing_info(d: &p::FunctionDecl) -> SapicFunSym {
 
 /// The signature and translation-option contribution of one theory item.
 /// `builtins:`, `functions:`, `equations:` and `macros:` declarations build
-/// `out.signature.maude_sig` and `out.options`; every other item kind leaves
+/// `out.signature` and `out.options`; every other item kind leaves
 /// `out` untouched.
 ///
 /// The returned macros are a `macros:` item's declarations elaborated against
@@ -365,7 +360,7 @@ pub(crate) fn function_decl_typing_info(d: &p::FunctionDecl) -> SapicFunSym {
 fn maude_sig_step(item: &p::TheoryItem, out: &mut Theory) -> Result<Vec<LNMacro>, ElabError> {
     match item {
         p::TheoryItem::Builtins(names) => {
-            let mut s = out.signature.maude_sig.clone();
+            let mut s = out.signature.clone();
             for name in names {
                 if let Some(sig) = builtin_sig(name) {
                     s = s.merge(sig);
@@ -385,9 +380,9 @@ fn maude_sig_step(item: &p::TheoryItem, out: &mut Theory) -> Result<Vec<LNMacro>
                 // Theory/Text/Parser/Signature.hs:58-76, see line 62),
                 // and `merge` ORs `enable_dh`, so no explicit force is
                 // needed here.  `diff` is a header/CLI flag handled via
-                // `enable_diff_maude_sig`, never a `builtins:` entry.
+                // the base signature's diff bit, never a `builtins:` entry.
             }
-            out.signature.maude_sig = s;
+            out.signature = s;
         }
         p::TheoryItem::Functions(decls) => {
             use tamarin_term::function_symbols::UserDefinedSym;
@@ -414,7 +409,6 @@ fn maude_sig_step(item: &p::TheoryItem, out: &mut Theory) -> Result<Vec<LNMacro>
                 if (d.name == "fst" || d.name == "snd")
                     && out
                         .signature
-                        .maude_sig
                         .st_fun_syms
                         .iter()
                         .any(|s| s.name == d.name.as_bytes())
@@ -438,8 +432,8 @@ fn maude_sig_step(item: &p::TheoryItem, out: &mut Theory) -> Result<Vec<LNMacro>
                 // current sig out via `take` to avoid a per-declaration
                 // deep clone of the whole MaudeSig.  Output order and
                 // dedup are unchanged (same `add_fun_sym` path).
-                let cur = std::mem::take(&mut out.signature.maude_sig);
-                out.signature.maude_sig = cur.add_fun_sym(user_sym);
+                let cur = std::mem::take(&mut out.signature);
+                out.signature = cur.add_fun_sym(user_sym);
             }
         }
         p::TheoryItem::Equations { eqs, convergent } => {
@@ -448,8 +442,8 @@ fn maude_sig_step(item: &p::TheoryItem, out: &mut Theory) -> Result<Vec<LNMacro>
             // `rrule_to_ctxt_st_rule` and install it on the MaudeSig
             // so Maude sees the rewrite rule in its `fmod MSG ...`
             // module.  Convergent flag is stored as informational.
-            out.signature.maude_sig.eq_convergent = *convergent;
-            let mut s = out.signature.maude_sig.clone();
+            out.signature.eq_convergent = *convergent;
+            let mut s = out.signature.clone();
             for eq in eqs {
                 // Haskell's `equation` parser hard-fails with
                 // "Not a correct equation: ..." when an LHS=RHS pair
@@ -457,8 +451,8 @@ fn maude_sig_step(item: &p::TheoryItem, out: &mut Theory) -> Result<Vec<LNMacro>
                 // (Theory/Text/Parser/Signature.hs:245-249, see line 249).  Match
                 // that failure behaviour rather than silently dropping.
                 let (Some(l), Some(r)) = (
-                    term_to_lnterm(&eq.lhs, &out.signature.maude_sig),
-                    term_to_lnterm(&eq.rhs, &out.signature.maude_sig),
+                    term_to_lnterm(&eq.lhs, &out.signature),
+                    term_to_lnterm(&eq.rhs, &out.signature),
                 ) else {
                     return Err(ElabError {
                         message: "Not a correct equation".to_string(),
@@ -474,7 +468,7 @@ fn maude_sig_step(item: &p::TheoryItem, out: &mut Theory) -> Result<Vec<LNMacro>
                     }
                 }
             }
-            out.signature.maude_sig = s.refresh();
+            out.signature = s.refresh();
         }
         p::TheoryItem::Macros(macros) => {
             let mut ms = Vec::new();
@@ -490,7 +484,7 @@ fn maude_sig_step(item: &p::TheoryItem, out: &mut Theory) -> Result<Vec<LNMacro>
                 // the `LNMacro` push and the fun-sym registration.
                 // `term_to_lnterm` returns None only on `PatMatch`, which
                 // the surface macro parser never places in a body.
-                let body = match term_to_lnterm(&m.body, &out.signature.maude_sig) {
+                let body = match term_to_lnterm(&m.body, &out.signature) {
                     Some(t) => t,
                     None => {
                         return Err(ElabError {
@@ -516,8 +510,8 @@ fn maude_sig_step(item: &p::TheoryItem, out: &mut Theory) -> Result<Vec<LNMacro>
                 // Move the sig out via `take` (add_macro_sym consumes
                 // `self`) to avoid a per-macro deep clone; behaviour and
                 // ordering are identical.
-                let cur = std::mem::take(&mut out.signature.maude_sig);
-                out.signature.maude_sig = cur.add_macro_sym(sym);
+                let cur = std::mem::take(&mut out.signature);
+                out.signature = cur.add_macro_sym(sym);
                 ms.push(LNMacro::new(m.name.as_bytes().to_vec(), args, body));
             }
             return Ok(ms);
@@ -583,7 +577,7 @@ fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), Elab
                 // block (Theory/Text/Parser/Signature.hs:277-283), which
                 // appends a `PredicateItem` per declaration.
                 for pd in predicates {
-                    let pred = crate::predicate::from_parser(pd, &out.signature.maude_sig)?;
+                    let pred = crate::predicate::from_parser(pd, &out.signature)?;
                     preds.push(pred.clone());
                     out.items.push(TheoryItem::Predicate(pred));
                 }
@@ -604,7 +598,7 @@ fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), Elab
             p::TheoryItem::Restriction(r) | p::TheoryItem::LegacyAxiom(r) => {
                 let restr = Restriction {
                     name: r.name.clone(),
-                    formula: item_formula(&r.formula, &out.signature.maude_sig, &preds)?,
+                    formula: item_formula(&r.formula, &out.signature, &preds)?,
                     original_formula: None,
                 };
                 out.items
@@ -621,7 +615,7 @@ fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), Elab
             // set.
             p::TheoryItem::IntrRule(_) => {}
             p::TheoryItem::Rule(r) => {
-                let mut e = rule_to_proto_rule_e(r, &out.signature.maude_sig)?;
+                let mut e = rule_to_proto_rule_e(r, &out.signature)?;
                 // HS `liftedAddProtoRule` (Theory/Text/Parser.hs:175-193) adds
                 // one restriction per `_restrict` formula BEFORE the rule and
                 // appends the actions that reach them to the rule.
@@ -646,12 +640,12 @@ fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), Elab
                 opr.rule_ac = r
                     .variants
                     .iter()
-                    .map(|v| rule_to_proto_rule_e(v, &out.signature.maude_sig))
+                    .map(|v| rule_to_proto_rule_e(v, &out.signature))
                     .collect::<Result<Vec<_>, _>>()?;
                 out.items.push(TheoryItem::Rule(opr));
             }
             p::TheoryItem::Lemma(l) => {
-                let msig = &out.signature.maude_sig;
+                let msig = &out.signature;
                 let lem: Lemma = Lemma {
                     name: l.name.clone(),
                     attributes: l.attributes.clone(),
@@ -684,7 +678,7 @@ fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), Elab
                 let acc = AccLemma {
                     name: a.name.clone(),
                     attributes: a.attributes.clone(),
-                    formula: crate::formula::from_parser(&a.formula, &out.signature.maude_sig)?,
+                    formula: crate::formula::from_parser(&a.formula, &out.signature)?,
                     case_test_idents: a.case_test_idents.clone(),
                 };
                 out.items
@@ -693,7 +687,7 @@ fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), Elab
             p::TheoryItem::CaseTest(c) => {
                 let ct = CaseTest {
                     name: c.name.clone(),
-                    formula: crate::formula::from_parser(&c.formula, &out.signature.maude_sig)?,
+                    formula: crate::formula::from_parser(&c.formula, &out.signature)?,
                 };
                 out.items
                     .push(TheoryItem::Translation(TranslationElement::CaseTest(ct)));
@@ -702,7 +696,7 @@ fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), Elab
                 // `toplevelprocess` adds a `ProcessItem`
                 // (Theory/Text/Parser/Sapic.hs:73-78,
                 // Theory/Text/Parser.hs:290-291).
-                let pp = elaborate_process(proc, &process_defs, &out.signature.maude_sig)?;
+                let pp = elaborate_process(proc, &process_defs, &out.signature)?;
                 out.items
                     .push(TheoryItem::Translation(TranslationElement::Process(pp)));
             }
@@ -715,7 +709,7 @@ fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), Elab
                         message: format!("duplicate process definition: {}", d.name),
                     });
                 }
-                let body = elaborate_process(&d.body, &process_defs, &out.signature.maude_sig)?;
+                let body = elaborate_process(&d.body, &process_defs, &out.signature)?;
                 let vars = d
                     .vars
                     .as_ref()
@@ -731,7 +725,7 @@ fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), Elab
             }
             p::TheoryItem::EquivLemma(p1, p2) => {
                 // `equivLemma` (Theory/Text/Parser/Sapic.hs:203-209).
-                let msig = &out.signature.maude_sig;
+                let msig = &out.signature;
                 let c1 = elaborate_process(p1, &process_defs, msig)?;
                 let c2 = elaborate_process(p2, &process_defs, msig)?;
                 out.items
@@ -741,7 +735,7 @@ fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), Elab
             }
             p::TheoryItem::DiffEquivLemma(proc) => {
                 // `diffEquivLemma` (Theory/Text/Parser/Sapic.hs:211-218).
-                let pp = elaborate_process(proc, &process_defs, &out.signature.maude_sig)?;
+                let pp = elaborate_process(proc, &process_defs, &out.signature)?;
                 out.items
                     .push(TheoryItem::Translation(TranslationElement::DiffEquivLemma(
                         pp,

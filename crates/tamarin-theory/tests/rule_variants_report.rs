@@ -35,8 +35,7 @@ const SRC: &str = "theory NoVariants\nbegin\n\
 fn loaded(mp: &str) -> (Theory, MaudeHandle) {
     let parsed = parse_theory(SRC, &[]).expect("parse");
     let mut elaborated = tamarin_theory::elaborate::elaborate(&parsed).expect("elaborate");
-    let maude =
-        MaudeHandle::start(mp, elaborated.signature.maude_sig.clone()).expect("start maude");
+    let maude = MaudeHandle::start(mp, elaborated.signature.clone()).expect("start maude");
     populate_rule_variants(&mut elaborated, &maude, None);
     (elaborated, maude)
 }

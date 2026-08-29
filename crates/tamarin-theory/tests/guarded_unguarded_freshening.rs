@@ -32,7 +32,7 @@ fn unguarded_message(theory: &str, name: &str) -> String {
             _ => None,
         })
         .unwrap_or_else(|| panic!("lemma `{}` present", name));
-    formula_to_guarded_parsed(&lemma.formula, &elaborated.signature.maude_sig)
+    formula_to_guarded_parsed(&lemma.formula, &elaborated.signature)
         .expect_err("formula is unguardable")
         .message
 }

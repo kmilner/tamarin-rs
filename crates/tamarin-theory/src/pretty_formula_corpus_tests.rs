@@ -158,7 +158,7 @@ fn file_phase(path: &Path, root: &Path) -> FileReport {
         rep.outcome = Outcome::SkippedElab;
         return rep;
     };
-    rep.msig = std::sync::Arc::new(elab.signature.maude_sig.clone());
+    rep.msig = std::sync::Arc::new(elab.signature.clone());
     rep.items = theory_formulas(&parsed);
     rep.outcome = Outcome::Parsed;
     rep.elapsed = start.elapsed();

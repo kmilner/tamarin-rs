@@ -272,7 +272,7 @@ fn an_equation_over_the_dual_name_registers_under_the_noeq_symbol() {
     let thy = parse_theory(src, &[]).expect("parse");
     let elaborated = elaborate(&thy).expect("elaborate");
     assert_eq!(
-        web_signature_block(&elaborated.signature.maude_sig),
+        web_signature_block(&elaborated.signature),
         "functions: f/2, fst/1, pair/2, snd/1, f/2 [AC]\n\
          equations: f(x, y) = x, fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2"
     );

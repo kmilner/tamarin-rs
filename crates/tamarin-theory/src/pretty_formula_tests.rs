@@ -442,10 +442,7 @@ fn lnformula_doc_renders_the_atom_and_scope_samples() {
         &[],
     )
     .unwrap();
-    let msig = crate::elaborate::elaborate(&thy)
-        .unwrap()
-        .signature
-        .maude_sig;
+    let msig = crate::elaborate::elaborate(&thy).unwrap().signature;
 
     let samples: &[(&str, &[&str])] = &[
         (

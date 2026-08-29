@@ -596,7 +596,11 @@ pub(crate) fn path_html(entry: &TheoryEntry, path: &TheoryPath) -> String {
             let body = typed
                 .tactic
                 .iter()
-                .map(|t| tamarin_theory::pretty_hpj::escape_html_entities(&t.render()))
+                .map(|t| {
+                    tamarin_theory::pretty_hpj::escape_html_entities(
+                        &tamarin_theory::tactic::render(t),
+                    )
+                })
                 .collect::<Vec<_>>()
                 .join("\n\n");
             assemble_pane(vec![Some(section_fragment(
@@ -851,7 +855,7 @@ fn message_html(entry: &TheoryEntry) -> String {
     // `prettySignatureWithMaude thy._thySignature` — the same signature block
     // the theory body prints.
     let sig_block =
-        tamarin_theory::pretty_theory::web_signature_block(&entry.typed_theory.signature.maude_sig);
+        tamarin_theory::pretty_theory::web_signature_block(&entry.typed_theory.signature);
     // `getClassifiedRules thy`'s `_crConstruct` / `_crDestruct`.  RS stores
     // proto rules separately, so `ctx.intruder_rules` is exactly HS's
     // `intrRulesAC`; an order-preserving filter reproduces the classification.

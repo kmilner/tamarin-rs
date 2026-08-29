@@ -50,10 +50,9 @@ use crate::typing::{
 /// `function:` items recomputed from the signature-seeded environment.
 pub fn type_theory_env(thy: &mut Theory) -> Result<TypingEnvironment, ElabError> {
     let user_fun_typings = collect_user_fun_typings(thy);
-    let mut env =
-        init_te_from_sig(&thy.signature.maude_sig, &user_fun_typings).map_err(|e| ElabError {
-            message: format!("SAPIC typing: {e}"),
-        })?;
+    let mut env = init_te_from_sig(&thy.signature, &user_fun_typings).map_err(|e| ElabError {
+        message: format!("SAPIC typing: {e}"),
+    })?;
 
     // Pass 1 — `mapMProcesses typeAndRenameProcess` (TheoryObject.hs:279-291):
     // every process-bearing item typed in item order; `EquivLemma` types its

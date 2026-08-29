@@ -609,10 +609,7 @@ mod tests {
         let cond = |decl: &str| {
             let thy =
                 tamarin_parser::parse_theory(&format!("theory T begin\n{decl}\nend"), &[]).unwrap();
-            let msig = crate::elaborate::elaborate(&thy)
-                .unwrap()
-                .signature
-                .maude_sig;
+            let msig = crate::elaborate::elaborate(&thy).unwrap().signature;
             let f = tamarin_parser::parser::parse_formula_str("Eq(c, k)", &msig).unwrap();
             sapic_from_parser(&f, &msig).unwrap()
         };

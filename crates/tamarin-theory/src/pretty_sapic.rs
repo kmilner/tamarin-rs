@@ -448,10 +448,7 @@ mod tests {
     fn sig_of(decl: &str) -> tamarin_term::maude_sig::MaudeSig {
         let thy =
             tamarin_parser::parse_theory(&format!("theory T begin\n{decl}\nend"), &[]).unwrap();
-        crate::elaborate::elaborate(&thy)
-            .unwrap()
-            .signature
-            .maude_sig
+        crate::elaborate::elaborate(&thy).unwrap().signature
     }
 
     /// `if <formula>` as the process printer renders it, with `formula` read
