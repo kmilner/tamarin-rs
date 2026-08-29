@@ -55,6 +55,109 @@ fn simplify_empty_is_no_op() {
     );
 }
 
+#[test]
+fn plain_route_does_not_truncate_long_linear_chains() {
+    use crate::constraint::constraints::NodeId;
+    use crate::rule::ConcIdx;
+    use std::collections::{BTreeMap, BTreeSet};
+    use tamarin_term::lterm::{LSort, LVar};
+
+    let node = |idx| LVar::new("i", LSort::Node, idx);
+    let linear: BTreeSet<NodeId> = (0..40).map(node).collect();
+    let edges: BTreeMap<_, _> = (0..40)
+        .map(|idx| ((node(idx), ConcIdx(0)), node(idx + 1)))
+        .collect();
+
+    let route = plain_route(node(0), &linear, &edges);
+    assert_eq!(route.len(), 41);
+    assert_eq!(route.last(), Some(&node(40)));
+
+    // A malformed cycle terminates at the first repeated node.
+    let cyclic = BTreeMap::from([
+        ((node(0), ConcIdx(0)), node(1)),
+        ((node(1), ConcIdx(0)), node(0)),
+    ]);
+    assert_eq!(
+        plain_route(node(0), &linear, &cyclic),
+        vec![node(0), node(1)]
+    );
+}
+
+#[test]
+fn fresh_ordering_follows_transitive_positive_subterms() {
+    use crate::fact::{Fact, FactTag, Multiplicity};
+    use crate::rule::{ProtoRuleACInstInfo, ProtoRuleName, Rule, RuleAttributes, RuleInfo};
+    use crate::tools::subterm_store::SubtermConstraint;
+    use tamarin_term::lterm::{LSort, LVar};
+    use tamarin_term::term::Term;
+    use tamarin_term::vterm::Lit;
+
+    let ctx = match ctx() {
+        Some(c) => c,
+        None => return,
+    };
+    let term = |name, sort| Term::Lit(Lit::Var(LVar::new(name, sort, 0)));
+    let fresh = term("x", LSort::Fresh);
+    let middle = term("middle", LSort::Msg);
+    let outer = term("outer", LSort::Msg);
+    let node = |name, idx| LVar::new(name, LSort::Node, idx);
+    let info = |name| {
+        RuleInfo::Proto(ProtoRuleACInstInfo {
+            name: ProtoRuleName::Stand(name),
+            attributes: RuleAttributes::empty(),
+            loop_breakers: Vec::new(),
+        })
+    };
+
+    let supplier = node("supplier", 0);
+    let consumer = node("consumer", 0);
+    let mut sys = System::empty();
+    sys.add_node(
+        supplier,
+        Rule::new(
+            info("Supplier"),
+            vec![Fact::new(FactTag::Fresh, vec![fresh.clone()])],
+            Vec::new(),
+            Vec::new(),
+        ),
+    );
+    sys.add_node(
+        consumer,
+        Rule::new(
+            info("Consumer"),
+            vec![Fact::new(
+                FactTag::Proto(Multiplicity::Linear, "P", 1),
+                vec![outer.clone()],
+            )],
+            Vec::new(),
+            Vec::new(),
+        ),
+    );
+    sys.subterm_store_mut().subterms = vec![
+        SubtermConstraint {
+            small: fresh,
+            big: middle.clone(),
+            propagated: false,
+        },
+        SubtermConstraint {
+            small: middle,
+            big: outer,
+            propagated: false,
+        },
+    ];
+
+    let mut reduction = Reduction::new(&ctx, sys);
+    assert_eq!(
+        enforce_fresh_ordering_pass(&mut reduction),
+        ChangeIndicator::Changed
+    );
+    assert!(reduction
+        .sys
+        .less_atoms
+        .iter()
+        .any(|atom| atom.smaller == supplier && atom.larger == consumer));
+}
+
 /// CR-rule *N6* `exploitUniqueMsgOrder` (Simplify.hs:166-169) inserts
 /// `i_kd < i_ku` for every message that is both a KD conclusion and a KU
 /// action.  HS's `F.mapM_ insertLess … M.intersectionWith` has no condition.

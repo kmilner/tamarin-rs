@@ -25,6 +25,44 @@ pub struct Theory {
     pub items: Vec<TheoryItem>,
 }
 
+/// Theory options accepted by the surface grammar, in canonical print order.
+///
+/// Keeping their spelling and ordering here gives the parser and the semantic
+/// theory representation one source of truth.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(usize)]
+pub enum DeclarableOption {
+    TranslationProgress,
+    TranslationAllowPatternLookups,
+    TranslationStateOptimisation,
+    TranslationAsynchronousChannels,
+    TranslationCompressEvents,
+}
+
+impl DeclarableOption {
+    pub const ALL: [Self; 5] = [
+        Self::TranslationProgress,
+        Self::TranslationAllowPatternLookups,
+        Self::TranslationStateOptimisation,
+        Self::TranslationAsynchronousChannels,
+        Self::TranslationCompressEvents,
+    ];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::TranslationProgress => "translation-progress",
+            Self::TranslationAllowPatternLookups => "translation-allow-pattern-lookups",
+            Self::TranslationStateOptimisation => "translation-state-optimisation",
+            Self::TranslationAsynchronousChannels => "translation-asynchronous-channels",
+            Self::TranslationCompressEvents => "translation-compress-events",
+        }
+    }
+
+    pub fn parse(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|option| option.as_str() == name)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum TheoryItem {
     Builtins(Vec<String>),

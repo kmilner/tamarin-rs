@@ -614,3 +614,57 @@ fn validate_cli_heuristic_accepts_and_rejects_like_filter_heuristic() {
     let e = validate_cli_heuristic(&cli("{oops"), &[]).unwrap_err();
     assert!(e.contains("unterminated '{'"), "{e}");
 }
+
+#[test]
+fn cli_default_oracle_is_theory_relative_but_oraclename_is_cwd_relative() {
+    use crate::constraint::solver::goals::GoalRanking;
+
+    let root = std::env::temp_dir().join(format!(
+        "tamarin_rs_cli_default_oracle_{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let theory = root.join("protocol.spthy");
+    std::fs::write(&theory, "theory T begin end").unwrap();
+    std::fs::write(root.join("protocol.oracle"), "#!/bin/sh\n").unwrap();
+
+    let cli = CliHeuristic {
+        raw: Some("o".to_string()),
+        ..CliHeuristic::default()
+    };
+    let rankings = resolve_cli_heuristic(&cli, theory.to_str().unwrap(), &[]).unwrap();
+    assert!(matches!(
+        &rankings[0],
+        GoalRanking::Oracle { oracle_path, .. }
+            if oracle_path == root.join("protocol.oracle").to_str().unwrap()
+    ));
+
+    let explicit = CliHeuristic {
+        raw: Some("o".to_string()),
+        oracle_name: Some("chosen.oracle".to_string()),
+        ..CliHeuristic::default()
+    };
+    let rankings = resolve_cli_heuristic(&explicit, theory.to_str().unwrap(), &[]).unwrap();
+    assert!(matches!(
+        &rankings[0],
+        GoalRanking::Oracle { oracle_path, .. } if oracle_path == "./chosen.oracle"
+    ));
+
+    let compact = CliHeuristic {
+        raw: Some("so".to_string()),
+        oracle_name: Some("chosen.oracle".to_string()),
+        ..CliHeuristic::default()
+    };
+    let rankings = resolve_cli_heuristic(&compact, theory.to_str().unwrap(), &[]).unwrap();
+    assert!(matches!(
+        &rankings[1],
+        GoalRanking::Oracle {
+            oracle_path,
+            display_path: Some(display_path),
+            ..
+        } if oracle_path == "./chosen.oracle" && display_path == "./chosen.oracle"
+    ));
+
+    std::fs::remove_dir_all(root).unwrap();
+}

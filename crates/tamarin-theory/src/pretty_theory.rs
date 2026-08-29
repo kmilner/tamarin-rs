@@ -90,45 +90,19 @@ pub struct ProvedLemma {
 
 /// Compute the default oracle name for a theory file.
 ///
-/// Mirrors HS `defaultOracleNames` (System.hs:551-561): when an oracle
-/// ranking carries no explicit relative-path, the name is derived from the
-/// theory file path by the following algorithm (faithful port of the HS
-/// `groupBy` computation):
-///
-/// 1. Take the prefix before the first `.` in `in_file`.
-/// 2. Take the suffix after the last `/` in that prefix.
-/// 3. Append `".oracle"`.
-/// 4. If that file exists on disk → use it; otherwise → fall back to `"oracle"`.
-///
-/// For absolute paths the step-2 suffix starts with `/` (e.g. `/defaultoracle`),
-/// so the resulting path `"/defaultoracle.oracle"` almost never exists, and the
-/// function returns `"oracle"` — matching observed HS behaviour.
+/// Mirrors current HS `defaultOracleNames` (System.hs): derive
+/// `<theory-basename>.oracle`, look for it beside the theory, and otherwise
+/// fall back to `oracle`. The returned value is the relative name stored in
+/// the ranking; execution resolves it against the theory directory later.
 pub(crate) fn oracle_name_for_theory(in_file: &str) -> String {
-    // Step 1: HS `head $ groupBy (\_ b -> b /= '.') srcThyInFileName`.
-    // `groupBy` always keeps the first character in the head group, then
-    // extends it up to (not including) the first '.' at position >= 1.  So
-    // a LEADING '.' (e.g. "./foo.spthy") belongs to the prefix and is NOT a
-    // terminator — the prefix is "./foo".  Mirror that by ignoring a '.' at
-    // char-position 0.
-    let split = in_file
-        .char_indices()
-        .enumerate()
-        .find(|(pos, (_, ch))| *pos >= 1 && *ch == '.')
-        .map(|(_, (byte, _))| byte)
-        .unwrap_or(in_file.len());
-    let before_dot = &in_file[..split];
-    // Step 2: suffix after last '/' in before_dot.
-    // HS `groupBy (\_ b -> b /= '/') s` splits `s` at every '/', then `last`
-    // takes the final segment.  For absolute paths this segment starts with
-    // '/' (e.g. "/defaultoracle"), so `inFileOracleName` is "/defaultoracle.oracle".
-    let after_slash = match before_dot.rfind('/') {
-        Some(i) => &before_dot[i..], // includes the '/' prefix, mirroring HS
-        None => before_dot,
-    };
-    // Step 3: append ".oracle"
-    let candidate = format!("{}.oracle", after_slash);
-    // Step 4: existence check
-    if std::path::Path::new(&candidate).exists() {
+    let path = std::path::Path::new(in_file);
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+    let candidate = format!("{stem}.oracle");
+    let dir = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| std::path::Path::new("."));
+    if dir.join(&candidate).is_file() {
         candidate
     } else {
         "oracle".to_string()
@@ -820,7 +794,7 @@ fn render_injective_fact_insts(elab: &Theory) -> String {
     // (`setforcedInjectiveFacts {L_PureState, L_CellLocked}`,
     // lib/sapic/src/Sapic.hs:84) when
     // the state-channel optimisation is on.
-    if elab.options.state_channel_opt {
+    if elab.options.state_channel_opt() {
         tags = crate::tools::injective_fact_instances::union_forced_injective_fact_instances(
             tags,
             &crate::tools::injective_fact_instances::pure_state_forced_fact_tags(),
@@ -2966,6 +2940,16 @@ end\n";
 #[cfg(test)]
 mod heuristic_header_tests {
     use super::*;
+
+    #[test]
+    fn default_oracle_is_resolved_beside_the_theory() {
+        let theory = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tamarin-prover/examples/regression/trace/defaultoracle.spthy"
+        );
+        assert_eq!(oracle_name_for_theory(theory), "defaultoracle.oracle");
+        assert_eq!(oracle_name_for_theory("missing.spthy"), "oracle");
+    }
 
     /// The `heuristic:` header prints the theory's stored rankings (HS `text
     /// "heuristic: " <> text (prettyGoalRankings thyH)`,

@@ -298,13 +298,9 @@ impl<R, P: Clone, S: Clone> TheoryItem<R, P, S> {
 /// rather than derived.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Options {
-    pub trans_progress: bool,
+    declarable: [bool; tamarin_parser::DeclarableOption::ALL.len()],
     pub trans_report: bool,
     pub trans_reliable: bool,
-    pub trans_allow_pattern_matching_in_lookup: bool,
-    pub state_channel_opt: bool,
-    pub asynchronous_channels: bool,
-    pub compress_events: bool,
     /// HS `_deductionChainCheck`: run the no-deconstruction-chain (NDC)
     /// check at theory load. Enabled by default; `--no-ndc` disables it.
     /// Consulted by the load paths that run the once-per-theory
@@ -319,16 +315,43 @@ pub struct Options {
 impl Default for Options {
     fn default() -> Self {
         Options {
-            trans_progress: false,
+            declarable: [false; tamarin_parser::DeclarableOption::ALL.len()],
             trans_report: false,
             trans_reliable: false,
-            trans_allow_pattern_matching_in_lookup: false,
-            state_channel_opt: false,
-            asynchronous_channels: false,
-            compress_events: false,
             deduction_chain_check: true,
             lemmas_to_prove: Vec::new(),
         }
+    }
+}
+
+impl Options {
+    /// Record an option already validated by the surface parser.
+    pub(crate) fn set_declarable(&mut self, name: &str) -> bool {
+        let Some(option) = tamarin_parser::DeclarableOption::parse(name) else {
+            return false;
+        };
+        self.declarable[option as usize] = true;
+        true
+    }
+
+    pub fn trans_progress(&self) -> bool {
+        self.declarable[tamarin_parser::DeclarableOption::TranslationProgress as usize]
+    }
+
+    pub fn trans_allow_pattern_matching_in_lookup(&self) -> bool {
+        self.declarable[tamarin_parser::DeclarableOption::TranslationAllowPatternLookups as usize]
+    }
+
+    pub fn state_channel_opt(&self) -> bool {
+        self.declarable[tamarin_parser::DeclarableOption::TranslationStateOptimisation as usize]
+    }
+
+    pub fn asynchronous_channels(&self) -> bool {
+        self.declarable[tamarin_parser::DeclarableOption::TranslationAsynchronousChannels as usize]
+    }
+
+    pub fn compress_events(&self) -> bool {
+        self.declarable[tamarin_parser::DeclarableOption::TranslationCompressEvents as usize]
     }
 }
 
@@ -753,8 +776,8 @@ mod tests {
     #[test]
     fn options_default_flags() {
         let o = Options::default();
-        assert!(!o.trans_progress);
-        assert!(!o.compress_events);
+        assert!(!o.trans_progress());
+        assert!(!o.compress_events());
         // `--no-ndc` opts out; the check is on by default.
         assert!(o.deduction_chain_check);
         assert!(o.lemmas_to_prove.is_empty());

@@ -2242,9 +2242,14 @@ impl<'a> Parser<'a> {
     }
 
     fn options(&mut self) -> Result<TheoryItem, ParseError> {
-        Ok(TheoryItem::Options(
-            self.comma_sep_hyphen_idents("options")?,
-        ))
+        let names = self.comma_sep_hyphen_idents("options")?;
+        if let Some(name) = names
+            .iter()
+            .find(|name| DeclarableOption::parse(name).is_none())
+        {
+            return Err(self.err(format!("unknown theory option `{name}`")));
+        }
+        Ok(TheoryItem::Options(names))
     }
 
     fn heuristic(&mut self) -> Result<TheoryItem, ParseError> {

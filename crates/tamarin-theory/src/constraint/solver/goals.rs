@@ -63,9 +63,8 @@ pub enum GoalRanking {
     /// bare `defaultOracle` with `workDir = Nothing`, so `printOracle`
     /// (System.hs:701-704) shows the `"."`-joined name (`./oracle`);
     /// only a STANDALONE `o`/`O` token keeps the parse-time workDir and
-    /// displays the resolved path.  (HS would also exec the compact form
-    /// CWD-relative; we exec the resolved path — the usable superset —
-    /// and keep just the display faithful.)
+    /// displays the resolved path. `defaultOracleNames` later supplies the
+    /// theory workDir for unnamed CLI oracles too.
     Oracle {
         quit_on_empty: bool,
         oracle_path: String,

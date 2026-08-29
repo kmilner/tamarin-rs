@@ -10,7 +10,10 @@ use std::sync::{Arc, Mutex, OnceLock};
 use tamarin_parser::ast as p;
 use tamarin_theory::theory::Theory;
 
-pub use common::{beyond_budget, corpus_root, parse_file, rel, spthy_files};
+pub use common::{
+    beyond_budget, corpus_root, parse_file, rel, spthy_files, EXPECTED_LOAD_SKIPS, SKIP_ELAB,
+    SKIP_LISTED, SKIP_PARSE,
+};
 
 /// The corpus root and its `.spthy` files, with an explicit opt-out when the
 /// examples submodule is unavailable.
@@ -39,11 +42,21 @@ pub fn deep_pool() -> rayon::ThreadPool {
 }
 
 /// Why a file dropped out of the load ladder.
-#[derive(Clone, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum LoadSkip {
     Listed,
     Parse,
     Elab,
+}
+
+impl LoadSkip {
+    pub fn reason(self) -> &'static str {
+        match self {
+            LoadSkip::Listed => SKIP_LISTED,
+            LoadSkip::Parse => SKIP_PARSE,
+            LoadSkip::Elab => SKIP_ELAB,
+        }
+    }
 }
 
 fn elaborate_parsed(parsed: &p::Theory) -> Result<Theory, LoadSkip> {
@@ -81,10 +94,23 @@ pub fn load_elaborated(path: &Path, root: &Path) -> Result<Arc<Theory>, LoadSkip
         .clone()
 }
 
-/// Fail rather than silently shrinking a corpus comparison.
-pub fn assert_corpus_covered(reached: usize, files: usize) {
-    assert!(
-        reached * 20 >= files * 19,
-        "only {reached} of {files} files reached the comparison"
-    );
+/// Require the exact reviewed set of files that may stop before an audit.
+/// A percentage floor lets a new rejection silently replace a repaired one;
+/// comparing `(path, reason)` rows makes every change to coverage explicit.
+pub fn assert_expected_skips<'a>(
+    root: &Path,
+    observed: impl IntoIterator<Item = (&'a Path, &'static str)>,
+    expected: &[(&str, &str)],
+) {
+    let mut actual: Vec<(String, &'static str)> = observed
+        .into_iter()
+        .map(|(path, reason)| (rel(path, root).display().to_string(), reason))
+        .collect();
+    actual.sort();
+    let mut expected: Vec<(String, &str)> = expected
+        .iter()
+        .map(|(path, reason)| ((*path).to_owned(), *reason))
+        .collect();
+    expected.sort();
+    assert_eq!(actual, expected, "corpus skip ledger changed");
 }

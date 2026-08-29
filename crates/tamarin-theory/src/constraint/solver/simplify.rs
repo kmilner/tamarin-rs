@@ -2993,6 +2993,88 @@ fn enforce_kd_fact_uniqueness_pass(red: &mut Reduction) -> ChangeIndicator {
     })
 }
 
+fn plain_route(
+    start: crate::constraint::constraints::NodeId,
+    single_linear_conc: &std::collections::BTreeSet<crate::constraint::constraints::NodeId>,
+    edge_map: &std::collections::BTreeMap<
+        crate::constraint::constraints::NodeConc,
+        crate::constraint::constraints::NodeId,
+    >,
+) -> Vec<crate::constraint::constraints::NodeId> {
+    let mut route = Vec::new();
+    let mut visited = std::collections::BTreeSet::new();
+    let mut current = start;
+    loop {
+        // Valid constraint systems are acyclic, but stopping at a repeated
+        // node makes malformed input finite without truncating valid routes.
+        if !visited.insert(current) {
+            break;
+        }
+        route.push(current);
+        if !single_linear_conc.contains(&current) {
+            break;
+        }
+        let Some(next) = edge_map.get(&(current, crate::rule::ConcIdx(0))) else {
+            break;
+        };
+        current = *next;
+    }
+    route
+}
+
+type FreshSubtermGraph = std::collections::BTreeMap<tamarin_term::lterm::LNTerm, Vec<usize>>;
+
+/// Build HS `freshOrdering`'s shared graph once.  Each right-hand term maps
+/// to the positive subterm edges whose left side contains it without crossing
+/// a reducible head.  Fresh roots are keys too (HS adds `(fresh, fresh)` fake
+/// edges); those self-edges need not be stored because each traversal seeds
+/// its root explicitly.
+fn fresh_subterm_graph(
+    raw_subterms: &[(tamarin_term::lterm::LNTerm, tamarin_term::lterm::LNTerm)],
+    fresh_roots: impl IntoIterator<Item = tamarin_term::lterm::LNTerm>,
+    reducible: &tamarin_utils::FastSet<tamarin_term::function_symbols::FunSym>,
+) -> FreshSubtermGraph {
+    let mut keys: std::collections::BTreeSet<_> =
+        raw_subterms.iter().map(|(_, big)| big.clone()).collect();
+    keys.extend(fresh_roots);
+    keys.into_iter()
+        .map(|key| {
+            let successors = raw_subterms
+                .iter()
+                .enumerate()
+                .filter_map(|(index, (small, _))| {
+                    crate::tools::subterm_store::elem_not_below_reducible(reducible, &key, small)
+                        .then_some(index)
+                })
+                .collect();
+            (key, successors)
+        })
+        .collect()
+}
+
+/// HS `freshOrdering`'s `floodFill`: all right-hand terms transitively
+/// reachable from the fake `(fresh, fresh)` edge through the shared graph.
+fn terms_containing_fresh(
+    fresh: &tamarin_term::lterm::LNTerm,
+    raw_subterms: &[(tamarin_term::lterm::LNTerm, tamarin_term::lterm::LNTerm)],
+    graph: &FreshSubtermGraph,
+) -> Vec<tamarin_term::lterm::LNTerm> {
+    let mut containing = std::collections::BTreeSet::from([fresh.clone()]);
+    let mut visited = std::collections::BTreeSet::new();
+    let mut pending: Vec<_> = graph.get(fresh).into_iter().flatten().copied().collect();
+    while let Some(index) = pending.pop() {
+        if !visited.insert(index) {
+            continue;
+        }
+        let edge = &raw_subterms[index];
+        containing.insert(edge.1.clone());
+        if let Some(successors) = graph.get(&edge.1) {
+            pending.extend(successors.iter().copied());
+        }
+    }
+    containing.into_iter().collect()
+}
+
 /// CR-rule *S_fresh-order / freshOrdering*: enforce that the unique
 /// consumer of a fresh `~x` must temporally precede every other node
 /// whose premises/actions reference the same `~x`.
@@ -3064,26 +3146,6 @@ fn enforce_fresh_ordering_pass(red: &mut Reduction) -> ChangeIndicator {
     // whose conclusion is `Fr(~x)`, isn't picked up as a "mentioning"
     // node — only the data-flow successors are).
     //
-    // KNOWN GAP: Haskell additionally `floodFill`s over the subterm
-    // graph (Simplify.hs:443-445, 477-480: `termsContaining` = floodFill
-    // of `(~x, ~x)` over `posSubterms` edges keyed by
-    // `elemNotBelowReducible`) so transitively-contained subterms (via
-    // `⊏`-chains) are picked up as "containing ~x" too.  Rust only does
-    // direct `elem_not_below_reducible(~x, t')` matching against the
-    // consumer's `rPrems ++ rActs` terms (i.e. `containing = [~x]`, no
-    // transitive expansion).
-    //
-    // This produces BYTE-IDENTICAL output on the active corpus even
-    // though the `⊏`-using files ARE present (csf23-subterms and
-    // csf18-alethea are both in corpus_raw_diff.sh's default
-    // `target_dirs`).  Reason: (a) the subterm-using files
-    // (ParserTests.spthy, FreshOrderingTest.spthy, YellowTest.spthy)
-    // route their fresh vars through direct facts caught by the direct
-    // match above, never via `⊏`-chains; and (b) the other csf18-alethea
-    // files use zero `⊏` constraints, so `posSubterms` stays empty and
-    // floodFill would be the identity.  Port the floodFill graph if a
-    // wrong-VERDICT ever surfaces on a `⊏`-chain-using lemma.
-    //
     // The `nonUnifiableNodes i j` side condition is essential for
     // soundness: two distinct nodes that both consume `Fr(~x)` might
     // be the *same* instance, in which case adding `i < j` AND `j < i`
@@ -3118,34 +3180,6 @@ fn enforce_fresh_ordering_pass(red: &mut Reduction) -> ChangeIndicator {
         crate::constraint::constraints::NodeConc,
         crate::constraint::constraints::NodeId,
     > = red.sys.edges.iter().map(|e| (e.src, e.tgt.0)).collect();
-    fn plain_route(
-        nid: &crate::constraint::constraints::NodeId,
-        single_linear_conc: &std::collections::BTreeSet<crate::constraint::constraints::NodeId>,
-        edge_map: &std::collections::BTreeMap<
-            crate::constraint::constraints::NodeConc,
-            crate::constraint::constraints::NodeId,
-        >,
-        depth: usize,
-    ) -> Vec<crate::constraint::constraints::NodeId> {
-        // Defensive depth bound — proto chains rarely exceed 16 in
-        // practice; this stops on cyclic edges (shouldn't happen
-        // in a well-formed system, but defensive).  A node continues the route
-        // iff it has a single linear conclusion (precomputed) — i.e. `nid`'s
-        // rule has exactly one, linear conclusion.
-        if depth > 32 || !single_linear_conc.contains(nid) {
-            return vec![*nid];
-        }
-        let conc_key = (*nid, crate::rule::ConcIdx(0));
-        match edge_map.get(&conc_key) {
-            Some(next) => {
-                let mut out = vec![*nid];
-                out.extend(plain_route(next, single_linear_conc, edge_map, depth + 1));
-                out
-            }
-            None => vec![*nid],
-        }
-    }
-
     // Collect newLesses first so we can iterate to compute enhanced.
     // Each entry: (sup_id, other_id) where sup_id < other_id was added.
     let mut new_lesses: Vec<(
@@ -3160,9 +3194,8 @@ fn enforce_fresh_ordering_pass(red: &mut Reduction) -> ChangeIndicator {
     // `t `elemNotBelowReducible` t'` for some t' in the consumer's
     // `rPrems ++ rActs` terms (Simplify.hs).
     //
-    // We approximate the floodFill by starting with `containing = [~x]` (no
-    // transitive ⊏-subterm expansion — see the "KNOWN GAP" comment above), but
-    // we MUST still respect the `elemNotBelowReducible` filter: ~x appearing
+    // The floodFill and final membership test both respect the
+    // `elemNotBelowReducible` filter: ~x appearing
     // under a reducible function symbol (e.g. `exp` in DH) does NOT count as
     // "contained", because the equational theory could rewrite the enclosing
     // term and eliminate ~x.
@@ -3175,35 +3208,64 @@ fn enforce_fresh_ordering_pass(red: &mut Reduction) -> ChangeIndicator {
     // input ⇒ HS sees no cycle (freshs are under `exp`), Rust sees a 4-edge
     // cycle ⇒ premature `by contradiction /* cyclic */`.
     //
-    // LOOP INVERSION: the per-supplier inner walk was
-    // `elem_not_below_reducible(reducible, fresh_term, t)` where `fresh_term` is
-    // ALWAYS `Lit(Var(fresh_var))` with `fresh_var.sort == Fresh`.  For a Var
-    // `inner`, `elem_not_below_reducible`'s `inner == outer` base case can only
-    // fire at a Var leaf, so the predicate is exactly "`fresh_var` occurs in `t`
-    // on a root-to-leaf path never crossing a reducible-headed App" — a
-    // condition on `t` alone, INDEPENDENT of which fresh var is queried.  So,
-    // ONCE per pass, collect each node's qualifying Fresh-var set (union over
-    // its `rPrems ++ rActs` terms — conclusions excluded, mirroring the walk's
-    // fact selection EXACTLY), parallel to `nodes_snapshot`, and the inner test
-    // becomes an O(1) hash membership.  This is byte-identical: insertion never
-    // depended on WHICH fact/term matched, only on the any-term boolean, which
-    // set membership reproduces — so the inserted less-atoms and their insertion
-    // order are unchanged.
     let reducible = &maude.maude_sig().reducible_fun_syms_fast;
+    let raw_subterms: Vec<_> = red
+        .sys
+        .subterm_store
+        .subterms
+        .iter()
+        .map(|constraint| (constraint.small.clone(), constraint.big.clone()))
+        .collect();
+    let graph = if raw_subterms.is_empty() {
+        FreshSubtermGraph::new()
+    } else {
+        fresh_subterm_graph(
+            &raw_subterms,
+            suppliers
+                .iter()
+                .map(|(_, fresh_var)| Term::Lit(Lit::Var(*fresh_var))),
+            reducible,
+        )
+    };
+    let mut containing_by_fresh = std::collections::BTreeMap::new();
+    if !raw_subterms.is_empty() {
+        for (_, fresh_var) in &suppliers {
+            containing_by_fresh.entry(*fresh_var).or_insert_with(|| {
+                let fresh_term = Term::Lit(Lit::Var(*fresh_var));
+                terms_containing_fresh(&fresh_term, &raw_subterms, &graph)
+            });
+        }
+    }
+    // Preserve the former O(1) direct-fresh probe.  Only a supplier whose
+    // flood-fill reached additional terms pays for the general term checks.
     let node_fresh_vars: Vec<tamarin_utils::FastSet<LVar>> = nodes_snapshot
         .iter()
         .map(|(_, rule)| {
             let mut out = tamarin_utils::FastSet::default();
-            for f in rule.premises.iter().chain(rule.actions.iter()) {
-                for t in f.terms.iter() {
+            for fact in rule.premises.iter().chain(rule.actions.iter()) {
+                for term in fact.terms.iter() {
                     crate::tools::subterm_store::collect_fresh_vars_not_below_reducible(
-                        reducible, t, &mut out,
+                        reducible, term, &mut out,
                     );
                 }
             }
             out
         })
         .collect();
+    let node_terms: Vec<Vec<&tamarin_term::lterm::LNTerm>> = if raw_subterms.is_empty() {
+        Vec::new()
+    } else {
+        nodes_snapshot
+            .iter()
+            .map(|(_, rule)| {
+                rule.premises
+                    .iter()
+                    .chain(rule.actions.iter())
+                    .flat_map(|fact| fact.terms.iter())
+                    .collect()
+            })
+            .collect()
+    };
 
     // O(1) probe index for the insert storm below: Steps 2/3 issue
     // suppliers×mentioning-nodes `insert_less` calls, mostly dedup HITS after
@@ -3225,12 +3287,20 @@ fn enforce_fresh_ordering_pass(red: &mut Reduction) -> ChangeIndicator {
             if other_id == sup_id {
                 continue;
             }
-            // Loop-inversion membership test (see the `node_fresh_vars`
-            // precompute above): true iff `fresh_var` occurs in one of this
-            // node's `rPrems ++ rActs` terms not below a reducible head —
-            // the any-term result of `elem_not_below_reducible` over this
-            // node, precomputed so the probe here is an O(1) hash lookup.
-            if !node_fresh_vars[idx].contains(fresh_var) {
+            let direct = node_fresh_vars[idx].contains(fresh_var);
+            let transitive = containing_by_fresh
+                .get(fresh_var)
+                .is_some_and(|containing| {
+                    containing.len() > 1
+                        && containing.iter().any(|term| {
+                            node_terms[idx].iter().any(|outer| {
+                                crate::tools::subterm_store::elem_not_below_reducible(
+                                    reducible, term, outer,
+                                )
+                            })
+                        })
+                });
+            if !direct && !transitive {
                 continue;
             }
             match crate::rule::unifiable_rule_ac_insts(&maude, sup_rule, other_rule) {
@@ -3284,7 +3354,7 @@ fn enforce_fresh_ordering_pass(red: &mut Reduction) -> ChangeIndicator {
         if !supplier_ids.contains(i) {
             continue;
         } // i must be a frI
-        let rs = plain_route(i, &single_linear_conc, &edge_map, 0);
+        let rs = plain_route(*i, &single_linear_conc, &edge_map);
         if rs.len() <= 1 {
             continue;
         }

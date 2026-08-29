@@ -101,12 +101,12 @@ pub fn apply_sapic(thy: &mut Theory, user_set_heuristic: bool) -> Result<Vec<WfE
     let st_rules = &maude_sig.st_rules;
     // Thread the theory options (HS `_thyOptions`) into the translation.
     let opts = TranslateOptions {
-        trans_progress: thy.options.trans_progress,
+        trans_progress: thy.options.trans_progress(),
         trans_reliable: thy.options.trans_reliable,
-        async_channels: thy.options.asynchronous_channels,
-        compress_events: thy.options.compress_events,
+        async_channels: thy.options.asynchronous_channels(),
+        compress_events: thy.options.compress_events(),
         trans_report: thy.options.trans_report,
-        state_channel_opt: thy.options.state_channel_opt,
+        state_channel_opt: thy.options.state_channel_opt(),
     };
     let translation = translate(&typed, needs_in_ev, st_rules, opts).map_err(|e| ElabError {
         message: format!("SAPIC translation: {e}"),

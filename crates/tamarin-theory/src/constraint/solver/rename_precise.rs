@@ -80,9 +80,6 @@ pub fn rename_precise_system(sys: &mut System) {
     // false value proves the whole rename is the identity — see the
     // invalidation note at the top of this function.
     let any_remap = bindings.changed();
-    if bindings.is_empty() {
-        return;
-    }
     if any_remap {
         sys.invalidate_max_var_idx_cache();
         // Whole-system alpha-rename: no inherited verified-no-op verdict
@@ -365,6 +362,28 @@ mod tests {
         let mut sys = System::empty();
         rename_precise_system(&mut sys);
         assert_eq!(sys, System::empty());
+    }
+
+    #[test]
+    fn variable_free_system_still_rebuilds_set_backed_fields() {
+        use crate::guarded::{gfalse, gtrue};
+
+        let mut sys = System::empty();
+        sys.content_mut().formulas = vec![
+            std::sync::Arc::new(gtrue()),
+            std::sync::Arc::new(gfalse()),
+            std::sync::Arc::new(gtrue()),
+        ];
+
+        rename_precise_system(&mut sys);
+
+        assert_eq!(
+            sys.formulas
+                .iter()
+                .map(|formula| formula.as_ref().clone())
+                .collect::<Vec<_>>(),
+            vec![gfalse(), gtrue()]
+        );
     }
 
     /// Two systems that differ only in their node-id indices must compare

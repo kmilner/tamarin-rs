@@ -2829,7 +2829,14 @@ mod tests {
         let (dir, e) = create_dirs(std::path::Path::new("/nonexistentdir/sub/deep"))
             .expect_err("/ is not writable in the test environment");
         assert_eq!(dir, std::path::Path::new("/nonexistentdir"));
-        assert_eq!(e.kind(), std::io::ErrorKind::PermissionDenied);
+        assert!(
+            matches!(
+                e.kind(),
+                std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::ReadOnlyFilesystem
+            ),
+            "unexpected error kind: {:?}",
+            e.kind()
+        );
 
         // ENOTDIR is not ENOENT, so the walk stops where it hit — one level
         // BELOW the regular file, not at the file itself.

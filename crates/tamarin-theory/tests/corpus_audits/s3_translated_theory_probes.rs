@@ -38,6 +38,32 @@ enum Outcome {
     SkippedTranslate,
 }
 
+const SKIP_TRANSLATE: &str = "SAPIC/accountability translation rejects this example";
+const EXPECTED_TRANSLATION_SKIPS: &[(&str, &str)] = &[
+    (
+        "sapic/not-suitable-for-regression/issue-missing-unlock.spthy",
+        SKIP_TRANSLATE,
+    ),
+    (
+        "sapic/not-working/fairexchange-asw/asw-mod-weak-locks.spthy",
+        SKIP_TRANSLATE,
+    ),
+    (
+        "sapic/not-working/fairexchange-asw/aswAB-mod.spthy",
+        SKIP_TRANSLATE,
+    ),
+    (
+        "sapic/not-working/fairexchange-asw/aswAB.spthy",
+        SKIP_TRANSLATE,
+    ),
+    (
+        "sapic/not-working/fairexchange-gjm/gjm-locks-fakepcsbranch.spthy",
+        SKIP_TRANSLATE,
+    ),
+    ("sapic/not-working/fairexchange-km/km.spthy", SKIP_TRANSLATE),
+    ("testParser/right-assoc.spthy", SKIP_TRANSLATE),
+];
+
 /// Both probes' findings for one file, plus what they counted.
 struct FileProbe {
     outcome: Outcome,
@@ -136,6 +162,7 @@ fn item_names(thy: &Theory) -> Vec<(&'static str, &str)> {
 /// the findings, the number of names looked up and the number carried over
 /// untouched.
 fn probe_lookups(
+    thy: &Theory,
     before: &[(&'static str, &str)],
     after: &[(&'static str, &str)],
     at: &dyn Fn(&str) -> String,
@@ -154,6 +181,16 @@ fn probe_lookups(
         let found = occurrences(after, kind, name);
         if found == 1 {
             pairs += 1;
+            let looked_up = match *kind {
+                "lemma" => thy.lookup_lemma(name).map(|item| item.name.as_str()),
+                "restriction" => thy.lookup_restriction(name).map(|item| item.name.as_str()),
+                _ => unreachable!("item_names returns only lemmas and restrictions"),
+            };
+            if looked_up != Some(*name) {
+                out.push(at(&format!(
+                    "{kind} `{name}' lookup returned {looked_up:?}"
+                )));
+            }
             continue;
         }
         if found == occurrences(before, kind, name) {
@@ -194,7 +231,7 @@ fn probe(path: &Path, root: &Path) -> FileProbe {
         Ok::<_, String>((
             items(&elab).len(),
             probe_formulas(&elab, &at),
-            probe_lookups(&before, &item_names(&elab), &at),
+            probe_lookups(&elab, &before, &item_names(&elab), &at),
         ))
     }));
     let Ok(Ok((count, formulas, (lookups, pairs, sided)))) = found else {
@@ -261,12 +298,25 @@ fn census(corpus: &Corpus) -> String {
 }
 
 /// The files that reached the translated theory, and the whole tree.
-fn coverage(probes: &[FileProbe]) -> (usize, usize) {
-    let loaded = probes
+fn assert_expected_skips(corpus: &Corpus) {
+    let (root, files, probes) = corpus;
+    let expected: Vec<_> = corpus_util::EXPECTED_LOAD_SKIPS
         .iter()
-        .filter(|p| p.outcome == Outcome::Translated)
-        .count();
-    (loaded, probes.len())
+        .chain(EXPECTED_TRANSLATION_SKIPS)
+        .copied()
+        .collect();
+    corpus_util::assert_expected_skips(
+        root,
+        files.iter().zip(probes).filter_map(|(path, probe)| {
+            let reason = match probe.outcome {
+                Outcome::Translated => return None,
+                Outcome::Skipped(skip) => skip.reason(),
+                Outcome::SkippedTranslate => SKIP_TRANSLATE,
+            };
+            Some((path.as_path(), reason))
+        }),
+        &expected,
+    );
 }
 
 #[test]
@@ -285,8 +335,7 @@ fn translated_items_carry_both_formulas() {
     for f in &failures {
         eprintln!("FAILURE {f}");
     }
-    let (loaded, files) = coverage(probes);
-    corpus_util::assert_corpus_covered(loaded, files);
+    assert_expected_skips(corpus);
     assert!(items > 0, "no formulas walked");
     assert!(
         failures.is_empty(),
@@ -313,8 +362,7 @@ fn every_translated_item_has_one_lookup() {
     for f in &failures {
         eprintln!("FAILURE {f}");
     }
-    let (loaded, files) = coverage(probes);
-    corpus_util::assert_corpus_covered(loaded, files);
+    assert_expected_skips(corpus);
     assert!(pairs > 0, "no names looked up");
     assert!(
         failures.is_empty(),

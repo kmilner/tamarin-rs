@@ -20,7 +20,8 @@ use crate::formula::{from_parser, sapic_from_parser, to_lnformula};
 use crate::pretty_sapic::render_sapic;
 use crate::sapic::to_lformula;
 use crate::test_corpus::{
-    beyond_budget, corpus_root, elaborate_file, parse_file, rel, spthy_files,
+    beyond_budget, corpus_root, elaborate_file, parse_file, rel, spthy_files, EXPECTED_LOAD_SKIPS,
+    SKIP_ELAB, SKIP_LISTED, SKIP_PARSE,
 };
 use rayon::prelude::*;
 use std::path::{Path, PathBuf};
@@ -219,15 +220,31 @@ fn file_counts(reports: &[FileReport]) -> (usize, usize) {
     (parsed, reports.len())
 }
 
-/// A comparison over the corpus is a net only while it covers the tree: a
-/// change that makes the parser, the lifting or the elaboration reject
-/// files has to fail here instead of shrinking the comparison.  The tree
-/// has 19 parser rejects in 1037 files.
-fn assert_corpus_covered(parsed: usize, files: usize) {
-    assert!(
-        parsed * 20 >= files * 19,
-        "only {parsed} of {files} files reached the comparison"
-    );
+/// A comparison over the corpus is a net only while it covers the same
+/// reviewed files.  Match every skip by path and stage so a new rejection
+/// cannot hide behind a percentage floor or replace a repaired one.
+fn assert_corpus_covered(corpus: &Corpus) {
+    let (root, files, reports) = corpus;
+    let mut actual: Vec<(String, &'static str)> = files
+        .iter()
+        .zip(reports)
+        .filter_map(|(path, report)| {
+            let reason = match report.outcome {
+                Outcome::Parsed => return None,
+                Outcome::SkippedListed => SKIP_LISTED,
+                Outcome::SkippedParse => SKIP_PARSE,
+                Outcome::SkippedElab => SKIP_ELAB,
+            };
+            Some((rel(path, root).display().to_string(), reason))
+        })
+        .collect();
+    actual.sort();
+    let mut expected: Vec<(String, &str)> = EXPECTED_LOAD_SKIPS
+        .iter()
+        .map(|(path, reason)| ((*path).to_owned(), *reason))
+        .collect();
+    expected.sort();
+    assert_eq!(actual, expected, "corpus skip ledger changed");
 }
 
 /// Every item of the tree, each with the index of the file it came from —
@@ -352,7 +369,7 @@ fn corpus_lnformula_doc_renders_every_theory_formula() {
     for (where_, want, got) in &mismatches {
         eprintln!("MISMATCH {where_}\n--- expected\n{want}\n--- got\n{got}");
     }
-    assert_corpus_covered(parsed, files.len());
+    assert_corpus_covered(corpus);
     assert!(formulas > 0, "no formulas compared");
     assert!(
         mismatches.is_empty(),
@@ -512,7 +529,7 @@ fn corpus_fact_annotations_are_ord_sorted() {
     for m in &mismatches {
         eprintln!("{m}");
     }
-    assert_corpus_covered(parsed, files);
+    assert_corpus_covered(corpus);
     assert!(formulas > 0, "no formulas walked");
     assert!(
         mismatches.is_empty(),
@@ -565,7 +582,7 @@ fn corpus_no_typed_varspec_in_theory_formulas() {
     for m in &mismatches {
         eprintln!("{m}");
     }
-    assert_corpus_covered(parsed, files);
+    assert_corpus_covered(corpus);
     assert!(vars > 0, "no variables walked");
     assert!(
         mismatches.is_empty(),
@@ -658,7 +675,7 @@ fn corpus_sapic_condition_drops_onto_the_internal_formula() {
     for m in &mismatches {
         eprintln!("{m}");
     }
-    assert_corpus_covered(parsed, files);
+    assert_corpus_covered(corpus);
     assert!(sapic_items > 0, "no SAPIC formulas compared");
     assert!(
         mismatches.is_empty(),

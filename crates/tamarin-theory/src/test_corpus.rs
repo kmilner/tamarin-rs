@@ -5,7 +5,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
 pub(crate) use crate::test_corpus_common::{
-    beyond_budget, corpus_root, parse_file, rel, spthy_files,
+    beyond_budget, corpus_root, parse_file, rel, spthy_files, EXPECTED_LOAD_SKIPS, SKIP_ELAB,
+    SKIP_LISTED, SKIP_PARSE,
 };
 
 /// Elaborate a cached parse once per path. Concurrent corpus tests share the

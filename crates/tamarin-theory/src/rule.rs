@@ -353,11 +353,9 @@ impl PartialOrd for RuleAttributes {
 /// HS derives `Ord RuleAttributes` over `ruleColor`, `ruleProcess`,
 /// `ignoreDerivChecks`, `isSAPiCRule`, `role` (Theory/Model/Rule.hs:367-379),
 /// which is this struct's declaration order.  HS's colour is an
-/// `RGB Rational` and totally ordered; [`Rgb`] holds `f64`s and so offers
-/// only `PartialOrd`, so an incomparable pair counts as equal here.  The two
-/// producers of a colour are the hex parser and the HSV conversion, neither of
-/// which can yield a NaN, so the relation is total on the values that occur
-/// and the `Eq` above is sound.
+/// `RGB Rational` and totally ordered; [`Rgb`] uses `f64::total_cmp` so the
+/// relation remains total even for values public Rust callers construct
+/// directly (including NaNs).
 impl Ord for RuleAttributes {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         use std::cmp::Ordering;
@@ -365,7 +363,7 @@ impl Ord for RuleAttributes {
             (None, None) => Ordering::Equal,
             (None, Some(_)) => Ordering::Less,
             (Some(_), None) => Ordering::Greater,
-            (Some(a), Some(b)) => a.partial_cmp(b).unwrap_or(Ordering::Equal),
+            (Some(a), Some(b)) => a.cmp(b),
         };
         color
             .then_with(|| self.process.cmp(&other.process))

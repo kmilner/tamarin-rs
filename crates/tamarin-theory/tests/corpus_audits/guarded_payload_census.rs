@@ -259,7 +259,17 @@ fn census(label: &str) -> Option<&'static [FileReport]> {
         count(|o| matches!(o, Outcome::Skipped(LoadSkip::Parse))),
         count(|o| matches!(o, Outcome::Skipped(LoadSkip::Elab))),
     );
-    corpus_util::assert_corpus_covered(elaborated, files.len());
+    corpus_util::assert_expected_skips(
+        root,
+        files
+            .iter()
+            .zip(reports)
+            .filter_map(|(path, report)| match report.outcome.as_ref()? {
+                Outcome::Elaborated => None,
+                Outcome::Skipped(skip) => Some((path.as_path(), skip.reason())),
+            }),
+        corpus_util::EXPECTED_LOAD_SKIPS,
+    );
     assert!(elaborated > 400, "only {elaborated} files reached the walk");
     assert!(formulas > 400, "only {formulas} formulas walked");
     assert!(facts > 0, "no facts walked");

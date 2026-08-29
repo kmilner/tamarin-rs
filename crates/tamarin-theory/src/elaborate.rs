@@ -591,16 +591,7 @@ fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), Elab
             p::TheoryItem::Options(opts) => {
                 let mut o = out.options.clone();
                 for n in opts {
-                    match n.as_str() {
-                        "translation-progress" => o.trans_progress = true,
-                        "translation-allow-pattern-lookups" => {
-                            o.trans_allow_pattern_matching_in_lookup = true
-                        }
-                        "translation-state-optimisation" => o.state_channel_opt = true,
-                        "translation-asynchronous-channels" => o.asynchronous_channels = true,
-                        "translation-compress-events" => o.compress_events = true,
-                        _ => {}
-                    }
+                    o.set_declarable(n);
                 }
                 out.options = o;
             }

@@ -103,9 +103,8 @@ fn hs_combine(a: &str, b: &str) -> String {
 
 /// Resolve an oracle ranking's relPath against a workDir, mirroring HS
 /// `oraclePath oracle = fromMaybe "." workDir </> normalise relPath`
-/// (System.hs:574-575).  `work_dir` is `Some(dir)` for the in-file heuristic
-/// (= `takeDirectory inFile`, Theory/Text/Parser.hs:309) or `None` for the CLI
-/// heuristic (HS `defaultOracle = Oracle Nothing Nothing` ⇒ `fromMaybe "."`).
+/// (System.hs:576-577). `work_dir` is the directory attached to the oracle;
+/// an absent directory falls back to `"."`.
 /// The relPath is normalised BEFORE the join (`normalise "./oracle-x"` =
 /// `"oracle-x"`), so a `heuristic: o "./oracle-x"` under a real theory dir
 /// yields `<dir>/oracle-x` — the web sequent pane prints this path verbatim
@@ -335,11 +334,9 @@ pub struct CliHeuristic {
 ///   3. `defaultOracleNames srcThyInFileName` (TheoryLoader.hs:744-746, see line 746) — fill any
 ///      oracle ranking that STILL has no relPath with the default `.oracle`
 ///      name (theory-basename `.oracle` if it exists on disk, else `"oracle"`).
-///   4. `oraclePath = fromMaybe "." workDir </> normalise relPath`
-///      (System.hs:574-575).  The CLI heuristic's `defaultOracle = Oracle
-///      Nothing Nothing` (System.hs:546-547, see line 547) has workDir `Nothing` ⇒ `"."`, so
-///      its oracle exec path is CWD-relative (`./<name>`), NOT theory-dir
-///      relative (unlike the in-file heuristic).
+///   4. `defaultOracleNames` gives an unnamed oracle the theory directory as
+///      its workDir; an explicit `--oraclename` retains the CLI oracle's
+///      absent workDir and is therefore CWD-relative.
 ///   5. `setQuitOnEmpty` (Theory/Proof.hs:709-716) — `--oracle-only` sets
 ///      `quitOnEmpty` on every oracle / tactic ranking.
 fn resolve_cli_heuristic(
@@ -352,9 +349,10 @@ fn resolve_cli_heuristic(
     // Step 1: parse the ranking string.  `parse_heuristic_str_with_tactics`
     // also computes the default `.oracle` name (HS `defaultOracleNames`) for
     // oracle rankings without an inline `"path"` — which covers BOTH HS step 2
-    // (oraclename, applied below) and step 3 (default name).  We post-process
-    // to (a) override the parsed default with `--oraclename` where given, and
-    // (b) resolve every relPath against workDir `"."` (CLI-heuristic workDir).
+    // (oraclename, applied below) and step 3 (default name). We post-process
+    // to preserve the workDir distinction that the flattened Rust ranking
+    // does not store: defaults are theory-relative, explicit names are
+    // CWD-relative.
     let mut rankings =
         crate::constraint::solver::goals::parse_heuristic_str_with_tactics(raw, in_file, tactics);
     // The CLI `--oraclename` (`Just "" -> Nothing`, TheoryLoader.hs:347-349, see line 348).
@@ -365,30 +363,35 @@ fn resolve_cli_heuristic(
     // Default `.oracle` name (HS `defaultOracleNames`) for oracle rankings
     // that carried no inline `"path"` AND get no `--oraclename`.
     let default_name = crate::pretty_theory::oracle_name_for_theory(in_file);
+    let default_work_dir = hs_take_directory(in_file);
     for r in rankings.iter_mut() {
         match r {
             GoalRanking::Oracle {
                 oracle_path,
+                display_path,
                 quit_on_empty,
                 ..
             }
             | GoalRanking::OracleSmart {
                 oracle_path,
+                display_path,
                 quit_on_empty,
                 ..
             } => {
-                // Step 2/3: relPath = --oraclename if given, else the default
-                // name (the parser already filled the default name, but for a
-                // bare `O`/`o` from the CLI string it set the default — so we
-                // only OVERRIDE when --oraclename is present; if --oraclename
-                // is absent, the parser's default-name value stands).
                 if let Some(name) = oraclename {
                     *oracle_path = name.to_string();
-                } else if oracle_path.is_empty() {
+                    *oracle_path = resolve_oracle_path(oracle_path, None);
+                    if display_path.is_some() {
+                        *display_path = Some(oracle_path.clone());
+                    }
+                } else {
                     *oracle_path = default_name.clone();
+                    *oracle_path = resolve_oracle_path(oracle_path, Some(&default_work_dir));
+                    // Current `defaultOracleNames` also supplies this workDir
+                    // to compact-run oracle rankings, so their displayed path
+                    // is the resolved theory-relative one too.
+                    *display_path = None;
                 }
-                // Step 4: workDir = "." for the CLI heuristic (Oracle Nothing).
-                *oracle_path = resolve_oracle_path(oracle_path, None);
                 // Step 5: --oracle-only quitOnEmpty (Theory/Proof.hs:713-714).
                 if cli.oracle_only {
                     *quit_on_empty = true;
@@ -918,12 +921,12 @@ impl ProverSession {
         // (lib/sapic/src/Sapic.hs:84): when the state-channel optimisation is
         // on, those two facts are forced
         // injective for the WHOLE proof (`closeRuleCache`, CloseRule.hs:417-420).
-        let forced_injective_facts: Vec<crate::fact::FactTag> = if theory.options.state_channel_opt
-        {
-            crate::tools::injective_fact_instances::pure_state_forced_fact_tags()
-        } else {
-            Vec::new()
-        };
+        let forced_injective_facts: Vec<crate::fact::FactTag> =
+            if theory.options.state_channel_opt() {
+                crate::tools::injective_fact_instances::pure_state_forced_fact_tags()
+            } else {
+                Vec::new()
+            };
         // HS-FAITHFUL PURITY (mirrors the source-refinement purity in
         // `ensure_saturated`): HS closes the theory ONCE and each lemma's
         // proof independently resets fresh to `avoid sys` per step
@@ -1431,7 +1434,7 @@ pub fn prove_lemma_with_pool_file_heuristic(
     // HS `setforcedInjectiveFacts {L_PureState, L_CellLocked}`
     // (lib/sapic/src/Sapic.hs:84):
     // force those facts injective when the state-channel optimisation is on.
-    let forced_injective_facts: Vec<crate::fact::FactTag> = if theory.options.state_channel_opt {
+    let forced_injective_facts: Vec<crate::fact::FactTag> = if theory.options.state_channel_opt() {
         crate::tools::injective_fact_instances::pure_state_forced_fact_tags()
     } else {
         Vec::new()

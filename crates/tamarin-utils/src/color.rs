@@ -8,11 +8,38 @@
 //! Floats are used throughout (`f64`); the original is generic over
 //! `Fractional`/`RealFrac`.
 
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+#[derive(Debug, Clone, Copy)]
 pub struct Rgb {
     pub r: f64,
     pub g: f64,
     pub b: f64,
+}
+
+// `Rgb` is public and its fields are public, so callers can construct every
+// IEEE-754 value, including NaNs and signed zero.  Use `f64::total_cmp` for a
+// genuine total representation instead of deriving `PartialEq` and later
+// pretending incomparable colours are equal in an `Ord` consumer.
+impl PartialEq for Rgb {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other).is_eq()
+    }
+}
+
+impl Eq for Rgb {}
+
+impl PartialOrd for Rgb {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Rgb {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.r
+            .total_cmp(&other.r)
+            .then_with(|| self.g.total_cmp(&other.g))
+            .then_with(|| self.b.total_cmp(&other.b))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]

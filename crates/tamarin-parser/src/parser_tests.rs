@@ -435,6 +435,20 @@ fn matching_and_exempt_function_declarations_are_accepted() {
     }
 }
 
+#[test]
+fn theory_options_are_limited_to_the_shared_declarable_set() {
+    let all = DeclarableOption::ALL
+        .map(DeclarableOption::as_str)
+        .join(", ");
+    assert!(parse_theory(&format!("theory P begin\noptions: {all}\nend"), &[]).is_ok());
+
+    let err = parse_theory("theory P begin\noptions: unknown-option\nend", &[])
+        .expect_err("unknown option must fail");
+    assert!(err
+        .to_string()
+        .contains("unknown theory option `unknown-option`"));
+}
+
 /// HS `T.identifier` (Token.hs:393-394) rejects the reserved names
 /// `["in","let","rule","diff"]` (Token.hs:214-230, see line 225) with an
 /// `unexpected reserved word "…"` whose position is the word's end — the

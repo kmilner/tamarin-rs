@@ -932,3 +932,24 @@ fn rule_attributes_ord_follows_the_haskell_field_order() {
     assert!(attrs(red, None, false, false, Some("z")) < attrs(red, None, false, true, None));
     assert!(attrs(red, None, false, false, None) < attrs(red, None, false, false, Some("a")));
 }
+
+/// Public callers can construct colours containing any `f64`.  In particular,
+/// NaN colours must not compare equal to finite colours: doing so while
+/// `PartialEq` says otherwise violates the `Eq`/`Ord` contract and can corrupt
+/// ordered collections of rule attributes.
+#[test]
+fn rule_attributes_ord_is_total_for_publicly_constructible_colours() {
+    use std::cmp::Ordering;
+    use tamarin_utils::color::Rgb;
+
+    let attrs = |r| RuleAttributes {
+        color: Some(Rgb::new(r, 0.0, 0.0)),
+        ..RuleAttributes::empty()
+    };
+    let nan = attrs(f64::NAN);
+    let finite = attrs(1.0);
+    assert_ne!(nan, finite);
+    assert_ne!(nan.cmp(&finite), Ordering::Equal);
+    assert_eq!(nan.partial_cmp(&finite), Some(nan.cmp(&finite)));
+    assert_eq!(nan == finite, nan.cmp(&finite) == Ordering::Equal);
+}
