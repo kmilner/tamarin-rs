@@ -345,7 +345,7 @@ pub(crate) fn function_decl_typing_info(d: &p::FunctionDecl) -> SapicFunSym {
 fn maude_sig_step(item: &p::TheoryItem, out: &mut Theory) -> Result<Vec<LNMacro>, ElabError> {
     match item {
         p::TheoryItem::Builtins(names) => {
-            let mut s = out.signature.clone();
+            let mut s = std::mem::take(&mut out.signature);
             for name in names {
                 if let Some(sig) = builtin_sig(name) {
                     s = s.merge(sig);
@@ -418,18 +418,16 @@ fn maude_sig_step(item: &p::TheoryItem, out: &mut Theory) -> Result<Vec<LNMacro>
             // `rrule_to_ctxt_st_rule` and install it on the MaudeSig
             // so Maude sees the rewrite rule in its `fmod MSG ...`
             // module.  Convergent flag is stored as informational.
-            out.signature.eq_convergent = *convergent;
-            let mut s = out.signature.clone();
+            let mut s = std::mem::take(&mut out.signature);
+            s.eq_convergent = *convergent;
             for eq in eqs {
                 // Haskell's `equation` parser hard-fails with
                 // "Not a correct equation: ..." when an LHS=RHS pair
                 // cannot be converted to a CtxtStRule
                 // (Theory/Text/Parser/Signature.hs:245-249, see line 249).  Match
                 // that failure behaviour rather than silently dropping.
-                let (Some(l), Some(r)) = (
-                    term_to_lnterm(&eq.lhs, &out.signature),
-                    term_to_lnterm(&eq.rhs, &out.signature),
-                ) else {
+                let (Some(l), Some(r)) = (term_to_lnterm(&eq.lhs, &s), term_to_lnterm(&eq.rhs, &s))
+                else {
                     return Err(ElabError {
                         message: "Not a correct equation".to_string(),
                     });
@@ -444,7 +442,7 @@ fn maude_sig_step(item: &p::TheoryItem, out: &mut Theory) -> Result<Vec<LNMacro>
                     }
                 }
             }
-            out.signature = s.refresh();
+            out.signature = s;
         }
         p::TheoryItem::Macros(macros) => {
             let mut ms = Vec::new();
