@@ -22,14 +22,13 @@ fn oracle_build_info() -> BuildInfo {
 
 fn build(input: &str) -> Theory {
     let parsed = tamarin_parser::parse_theory(input, &[]).unwrap();
-    tamarin_theory::elaborate::elaborate(&parsed).unwrap()
+    tamarin_theory::elaborate::elaborate_with_in_file(&parsed, "test.spthy").unwrap()
 }
 
 /// `prettyOpenTheoryByModule`'s `spthy`/`spthytyped` arm.
 fn render(thy: &Theory) -> String {
     pretty_open_theory_by_module(
         thy,
-        "test.spthy",
         "/* All wellformedness checks were successful. */",
         &oracle_build_info(),
     )
@@ -39,7 +38,6 @@ fn render(thy: &Theory) -> String {
 fn render_msr(thy: &Theory) -> String {
     pretty_open_translated_theory_by_module(
         thy,
-        "test.spthy",
         "/* All wellformedness checks were successful. */",
         &oracle_build_info(),
     )

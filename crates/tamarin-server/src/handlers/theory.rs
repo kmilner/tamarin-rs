@@ -431,7 +431,6 @@ fn render_theory_source(entry: &crate::state::TheoryEntry) -> String {
         compiled_at: String::new(),
     };
     let wf_block = tamarin_theory::pretty_theory::format_wf_block(&entry.wf_report);
-    let in_file = entry.origin.label();
     // Live proof bodies (HS `prettyClosedTheory` prints the stored
     // `IncrementalProof` of every lemma; see doc comment above).
     let proved: Vec<tamarin_theory::pretty_theory::ProvedLemma> = match &entry.proof_state {
@@ -453,7 +452,6 @@ fn render_theory_source(entry: &crate::state::TheoryEntry) -> String {
         &proved,
         &wf_block,
         &build,
-        &in_file,
     );
     // `getTheorySourceR` / `getTheoryMessageDeductionR` / `getDownloadTheoryR`
     // are all `render . prettyClosedTheory` (Handler.hs:1015-1022, :1050-1055,

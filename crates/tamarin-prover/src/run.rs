@@ -2205,7 +2205,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             let elaborated = elaborate_with_in_file(&parsed, in_file).map_err(|e| {
                 RunError(format!("elaboration error in {}: {}", in_file, e.message))
             })?;
-            let body = tamarin_theory::pretty_theory::pretty_open_theory(&elaborated, in_file);
+            let body = tamarin_theory::pretty_theory::pretty_open_theory(&elaborated);
             parse_only_docs.push(body);
             file_results.push(FileResult {
                 in_file: in_file.clone(),
@@ -2365,7 +2365,6 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
                     TranslateModule::Msr => {
                         tamarin_theory::pretty_theory::pretty_open_translated_theory_by_module(
                             &st.elaborated,
-                            in_file,
                             &wf_block,
                             &build_info,
                         )
@@ -2373,7 +2372,6 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
                     TranslateModule::Spthy | TranslateModule::SpthyTyped => {
                         tamarin_theory::pretty_theory::pretty_open_theory_by_module(
                             &st.elaborated,
-                            in_file,
                             &wf_block,
                             &build_info,
                         )
@@ -2438,7 +2436,6 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
                         &closed.proved_lemmas,
                         &wf_block,
                         &build_info,
-                        in_file,
                     );
                     // HS normal mode: `writeOutput` is true whenever `-o`/`-O` was
                     // given (Batch.hs:168), and a `mkOutPath` miss — `-o=` with no

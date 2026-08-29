@@ -163,8 +163,8 @@ pub fn pretty_closed_theory(
     proved: &[ProvedLemma],
     wf_block: &str,
     build: &BuildInfo,
-    in_file: &str,
 ) -> String {
+    let in_file = thy.in_file.as_str();
     // `ppCache` for a closed theory is `ppInjectiveFactInsts`, the "looping
     // facts with injective instances" comment (ClosedTheory.hs:413-418).  The
     // header's blocks are `vsep`-separated, which this route writes as the
@@ -363,7 +363,8 @@ fn pretty_formal_comment(fc: &crate::theory::FormalComment) -> String {
 /// HS `prettyOpenTheory` (OpenTheory.hs:869-877) as `--parse-only` emits it
 /// (Batch.hs:91-95 `putStrLn . renderDoc`): the returned string carries NO
 /// trailing newline, the caller's `println!` supplies `putStrLn`'s.
-pub fn pretty_open_theory(thy: &Theory, in_file: &str) -> String {
+pub fn pretty_open_theory(thy: &Theory) -> String {
+    let in_file = thy.in_file.as_str();
     let translation = |el: &TranslationElement| pretty_translation_element(el, in_file);
     let mut blocks = open_theory_blocks(thy, in_file, &translation);
     blocks.push("end".to_string());
@@ -378,12 +379,8 @@ pub fn pretty_open_theory(thy: &Theory, in_file: &str) -> String {
 /// (TheoryLoader.hs:783-801) both land here; they differ only in the theory
 /// VALUE, which `tamarin_sapic::type_theory::type_theory_env` has rewritten
 /// for `spthytyped`.
-pub fn pretty_open_theory_by_module(
-    thy: &Theory,
-    in_file: &str,
-    wf_block: &str,
-    build: &BuildInfo,
-) -> String {
+pub fn pretty_open_theory_by_module(thy: &Theory, wf_block: &str, build: &BuildInfo) -> String {
+    let in_file = thy.in_file.as_str();
     let translation = |el: &TranslationElement| pretty_translation_element(el, in_file);
     let mut blocks = open_theory_blocks(thy, in_file, &translation);
     blocks.push(wf_block.to_string());
@@ -399,10 +396,10 @@ pub fn pretty_open_theory_by_module(
 /// (lib/theory/src/Pretty.hs:24-25), so translation items render nothing.
 pub fn pretty_open_translated_theory_by_module(
     thy: &Theory,
-    in_file: &str,
     wf_block: &str,
     build: &BuildInfo,
 ) -> String {
+    let in_file = thy.in_file.as_str();
     let translation = |_: &TranslationElement| String::new();
     let mut blocks = open_theory_blocks(thy, in_file, &translation);
     blocks.push(wf_block.to_string());
@@ -2729,7 +2726,7 @@ mod stored_proof_reparse_tests {
             )
         };
         let thy = tamarin_parser::parser::parse_theory(&src("functions: add/2 [AC]"), &[]).unwrap();
-        let echo = pretty_open_theory(&crate::elaborate::elaborate(&thy).unwrap(), "f.spthy");
+        let echo = pretty_open_theory(&crate::elaborate::elaborate(&thy).unwrap());
         assert!(
             echo.contains("solve( !KU( (x add y) ) @ #i )"),
             "the stored wrapping must not survive the echo: {echo}"
@@ -2867,7 +2864,7 @@ end\n";
             "closed print: {}",
             closed[0]
         );
-        let open = pretty_open_theory(&elaborated, "f.spthy");
+        let open = pretty_open_theory(&elaborated);
         assert!(open.contains("restriction Sided:\n"), "open print: {open}");
         assert!(!open.contains("[left]"), "open print: {open}");
     }
@@ -2959,10 +2956,10 @@ mod heuristic_header_tests {
         let thy = crate::elaborate::elaborate_with_in_file(&parsed, "f.spthy")
             .expect("theory elaborates");
         assert!(
-            pretty_open_theory(&thy, "f.spthy")
+            pretty_open_theory(&thy)
                 .contains("heuristic: s o \"oracle\" p {rank} O \"./my-oracle\" {.}"),
             "{}",
-            pretty_open_theory(&thy, "f.spthy")
+            pretty_open_theory(&thy)
         );
     }
 }
