@@ -7,7 +7,6 @@ use super::*;
 use tamarin_theory::pretty_theory::{
     pretty_open_theory_by_module, pretty_open_translated_theory_by_module, BuildInfo,
 };
-use tamarin_theory::theory::remove_translation_items;
 
 /// The pinned oracle build's `Generated from:` facts (Git revision ef3f0468),
 /// so the byte expectations below match the captured stdout verbatim.
@@ -39,7 +38,7 @@ fn render(thy: &Theory) -> String {
 /// `prettyOpenTheoryByModule`'s `msr` arm.
 fn render_msr(thy: &Theory) -> String {
     pretty_open_translated_theory_by_module(
-        &remove_translation_items(thy),
+        thy,
         "test.spthy",
         "/* All wellformedness checks were successful. */",
         &oracle_build_info(),

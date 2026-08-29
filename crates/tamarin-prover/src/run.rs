@@ -2363,12 +2363,12 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
                 //
                 // `spthy` and `spthytyped` share `prettyOpenTheory` and differ
                 // only in the theory value `translate_theory` left behind;
-                // `msr` is `prettyOpenTranslatedTheory . removeTranslationItems`.
+                // `msr` renders every translation item as empty.
                 let wf_block = tamarin_theory::pretty_theory::format_wf_block(&st.wf_report);
                 let body = match module {
                     TranslateModule::Msr => {
                         tamarin_theory::pretty_theory::pretty_open_translated_theory_by_module(
-                            &tamarin_theory::theory::remove_translation_items(&st.elaborated),
+                            &st.elaborated,
                             in_file,
                             &wf_block,
                             &build_info,

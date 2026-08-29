@@ -246,14 +246,14 @@ pub fn pretty_closed_theory(
 /// HS applies `ppPrf` to the lemma's own proof; RS's closed print takes the
 /// proof body from the prover's result list instead, so the slot is handed
 /// the whole lemma.
-pub struct ItemPrinters<'a, R, S> {
+pub struct ItemPrinters<'a, R> {
     /// HS `ppRule`.
     pub rule: &'a (dyn Fn(&R) -> String + Sync),
     /// HS `ppPrf`, the body `prettyLemma` puts under the lemma
     /// (lib/theory/src/Lemma.hs:116-141, see line 130).
     pub proof: &'a (dyn Fn(&crate::theory::Lemma) -> String + Sync),
     /// HS `ppSap`.
-    pub translation: &'a (dyn Fn(&S) -> String + Sync),
+    pub translation: &'a (dyn Fn(&TranslationElement) -> String + Sync),
     /// The theory's file name, which a `heuristic=` lemma attribute needs to
     /// resolve a bare `o`/`O` ranking's default oracle (`defaultOracleNames`,
     /// System.hs:551-561).
@@ -265,9 +265,9 @@ pub struct ItemPrinters<'a, R, S> {
 /// `vsep` is `foldr ($--$) emptyDoc` over those blocks and `$--$` drops an
 /// empty operand (Theory/Text/Pretty.hs:83-84), so an item that renders
 /// nothing contributes no block and no blank line.
-pub fn pretty_theory_items<R: Sync, S: Sync>(
-    items: &[TheoryItem<R, crate::theory::ProofSkeleton, S>],
-    pp: &ItemPrinters<'_, R, S>,
+pub fn pretty_theory_items<R: Sync>(
+    items: &[TheoryItem<R, crate::theory::ProofSkeleton>],
+    pp: &ItemPrinters<'_, R>,
 ) -> Vec<String> {
     use rayon::prelude::*;
     items
@@ -282,9 +282,9 @@ pub fn pretty_theory_items<R: Sync, S: Sync>(
 /// prettyMacros ppSap` (TheoryObject.hs:772-781).  The config blocks are
 /// printed before `begin` (TheoryObject.hs:759), so the item stream skips
 /// them.
-fn pretty_theory_item<R, S>(
-    item: &TheoryItem<R, crate::theory::ProofSkeleton, S>,
-    pp: &ItemPrinters<'_, R, S>,
+fn pretty_theory_item<R>(
+    item: &TheoryItem<R, crate::theory::ProofSkeleton>,
+    pp: &ItemPrinters<'_, R>,
 ) -> String {
     match item {
         TheoryItem::Rule(r) => (pp.rule)(r),
@@ -379,17 +379,15 @@ pub fn pretty_open_theory_by_module(
 /// HS `prettyOpenTranslatedTheory` (OpenTheory.hs:891-899) with the same two
 /// trailing comment items: `prettyOpenTheoryByModule`'s `msr` arm, which is
 /// `prettyOpenTranslatedTheory . removeTranslationItems`
-/// (TheoryLoader.hs:786,789).  `ppSap` is `emptyString`
-/// (lib/theory/src/Pretty.hs:24-25), so every translation item renders
-/// nothing; take the theory through
-/// [`crate::theory::remove_translation_items`].
+/// (TheoryLoader.hs:786,789). `ppSap` is `emptyString`
+/// (lib/theory/src/Pretty.hs:24-25), so translation items render nothing.
 pub fn pretty_open_translated_theory_by_module(
-    thy: &Theory<crate::theory::OpenProtoRule, crate::theory::ProofSkeleton, ()>,
+    thy: &Theory,
     in_file: &str,
     wf_block: &str,
     build: &BuildInfo,
 ) -> String {
-    let translation = |_: &()| String::new();
+    let translation = |_: &TranslationElement| String::new();
     let mut blocks = open_theory_blocks(thy, in_file, &translation);
     blocks.push(wf_block.to_string());
     blocks.push(render_generated_from(build));
@@ -405,7 +403,7 @@ pub fn pretty_open_translated_theory_by_module(
 /// would render empty is left out here and the caller joins with "\n\n".
 /// `cache` is HS's `ppCache` applied to the theory's rule cache; an empty
 /// string is HS's `const emptyDoc`.
-fn theory_header_blocks<R, P, S>(thy: &Theory<R, P, S>, cache: &str) -> Vec<String> {
+fn theory_header_blocks<R, P>(thy: &Theory<R, P>, cache: &str) -> Vec<String> {
     let mut blocks: Vec<String> = Vec::new();
     blocks.push(format!("theory {}", thy.name));
     for item in &thy.items {
@@ -449,10 +447,10 @@ fn theory_header_blocks<R, P, S>(thy: &Theory<R, P, S>, cache: &str) -> Vec<Stri
 
 /// Shared block list of the open print: everything from `theory <name>` up to
 /// (but not including) the final `end`, one `vsep` block per entry.
-fn open_theory_blocks<S: Sync + Clone>(
-    thy: &Theory<crate::theory::OpenProtoRule, crate::theory::ProofSkeleton, S>,
+fn open_theory_blocks(
+    thy: &Theory,
     in_file: &str,
-    translation: &(dyn Fn(&S) -> String + Sync),
+    translation: &(dyn Fn(&TranslationElement) -> String + Sync),
 ) -> Vec<String> {
     // `ppCache = const emptyDoc` (OpenTheory.hs:872) — the open print has no
     // cache block.
@@ -481,9 +479,9 @@ fn open_theory_blocks<S: Sync + Clone>(
 /// and the safety test all read the pre-macro formula, and the
 /// `expanded formula:` block stays unwritten (HS emits it only for
 /// `Just` — TheoryObject.hs:895-898).
-fn open_view_items<R: Clone, S: Clone>(
-    items: &[TheoryItem<R, crate::theory::ProofSkeleton, S>],
-) -> Vec<TheoryItem<R, crate::theory::ProofSkeleton, S>> {
+fn open_view_items<R: Clone>(
+    items: &[TheoryItem<R, crate::theory::ProofSkeleton>],
+) -> Vec<TheoryItem<R, crate::theory::ProofSkeleton>> {
     items
         .iter()
         .map(|item| match item {
@@ -973,9 +971,7 @@ pub fn pretty_function_typing_info(fti: &crate::theory::SapicFunSym) -> crate::p
 mod open_item_tests {
     use super::*;
     use crate::sapic::{Process, ProcessParsedAnnotation};
-    use crate::theory::{
-        remove_translation_items, ProcessDef, SapicFunSym, Theory, TheoryItem, TranslationElement,
-    };
+    use crate::theory::{ProcessDef, SapicFunSym, Theory, TheoryItem, TranslationElement};
     use tamarin_term::function_symbols::{Constructability, NdcState, NoEqSym, Privacy};
 
     fn null_proc() -> crate::sapic::PlainProcess {
@@ -1002,10 +998,9 @@ mod open_item_tests {
         thy
     }
 
-    /// `msr`: `removeTranslationItems` replaces every `TranslationElement`
-    /// with `()` (OpenTheory.hs:46-52), which `prettyOpenTranslatedTheory`
-    /// prints through `emptyString` (OpenTheory.hs:891-899); every other item
-    /// is kept and rendered.
+    /// `msr`: `prettyOpenTranslatedTheory` prints every translation item
+    /// through `emptyString` (OpenTheory.hs:891-899); every other item is kept
+    /// and rendered.
     #[test]
     fn the_translated_theory_prints_no_translation_item() {
         let thy = theory_with(vec![
@@ -1025,8 +1020,7 @@ mod open_item_tests {
             }),
             TheoryItem::Text((String::new(), "keep".to_string())),
         ]);
-        let translated = remove_translation_items(&thy);
-        let blocks = open_theory_blocks(&translated, "f.spthy", &|_: &()| String::new());
+        let blocks = open_theory_blocks(&thy, "f.spthy", &|_: &TranslationElement| String::new());
         assert_eq!(
             blocks.last().map(String::as_str),
             Some("/*\nkeep\n*/"),
@@ -2528,10 +2522,9 @@ mod manual_rule_variants_tests {
     use crate::rule::{ProtoRuleE, ProtoRuleEInfo, Rule};
     use crate::theory::{
         contains_manual_rule_variants, merge_open_proto_rules, OpenProtoRule, ProofSkeleton,
-        TranslationElement,
     };
 
-    type Item = TheoryItem<OpenProtoRule, ProofSkeleton, TranslationElement>;
+    type Item = TheoryItem<OpenProtoRule, ProofSkeleton>;
 
     /// A rule item whose AC half carries `action_names` on top of the E half —
     /// the shape `addActionClosedProtoRule` leaves behind, which adds the

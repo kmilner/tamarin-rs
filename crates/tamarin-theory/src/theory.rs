@@ -256,7 +256,7 @@ pub type ProofSkeleton = Option<ProofTree>;
 
 /// `TheoryItem` — one top-level construct in a (non-diff) theory.
 #[derive(Debug, Clone, PartialEq)]
-pub enum TheoryItem<R = OpenProtoRule, P = ProofSkeleton, S = TranslationElement> {
+pub enum TheoryItem<R = OpenProtoRule, P = ProofSkeleton> {
     Rule(R),
     Lemma(Lemma<P>),
     Restriction(Restriction),
@@ -264,15 +264,15 @@ pub enum TheoryItem<R = OpenProtoRule, P = ProofSkeleton, S = TranslationElement
     ConfigBlock(ConfigBlock),
     Predicate(Predicate),
     Macros(Vec<LNMacro>),
-    Translation(S),
+    Translation(TranslationElement),
 }
 
-impl<R, P: Clone, S: Clone> TheoryItem<R, P, S> {
+impl<R, P: Clone> TheoryItem<R, P> {
     /// The non-rule half of HS `mapTheoryItem f id` (TheoryObject.hs:269-271):
     /// a rule item hands its payload back as `Err`, every other item is cloned
     /// into the target rule type at its position.  Callers supply the rule arm,
     /// which may yield one item or several.
-    pub fn split_rule<R2>(&self) -> Result<TheoryItem<R2, P, S>, &R> {
+    pub fn split_rule<R2>(&self) -> Result<TheoryItem<R2, P>, &R> {
         match self {
             TheoryItem::Rule(r) => Err(r),
             TheoryItem::Lemma(x) => Ok(TheoryItem::Lemma(x.clone())),
@@ -361,7 +361,7 @@ impl Options {
 /// underlying storage is order-preserving so pretty-printing matches
 /// Haskell's output (which preserves source order).
 #[derive(Debug, Clone, PartialEq)]
-pub struct Theory<R = OpenProtoRule, P = ProofSkeleton, S = TranslationElement> {
+pub struct Theory<R = OpenProtoRule, P = ProofSkeleton> {
     pub name: String,
     pub in_file: String,
     /// The `heuristic:` header's goal rankings (HS `_thyHeuristic ::
@@ -370,12 +370,12 @@ pub struct Theory<R = OpenProtoRule, P = ProofSkeleton, S = TranslationElement> 
     pub heuristic: Vec<crate::constraint::solver::goals::GoalRanking>,
     pub tactic: Vec<crate::tactic::Tactic>,
     pub signature: MaudeSig,
-    pub items: Vec<TheoryItem<R, P, S>>,
+    pub items: Vec<TheoryItem<R, P>>,
     pub options: Options,
     pub is_sapic: bool,
 }
 
-impl<R, P, S> Theory<R, P, S> {
+impl<R, P> Theory<R, P> {
     pub fn new(name: impl Into<String>, signature: MaudeSig) -> Self {
         Theory {
             name: name.into(),
@@ -390,7 +390,7 @@ impl<R, P, S> Theory<R, P, S> {
     }
 }
 
-impl<R, P, S> Theory<R, P, S> {
+impl<R, P> Theory<R, P> {
     /// Iterate every rule item. Returns references so callers can
     /// further specialise on the rule type.
     pub fn rules(&self) -> impl Iterator<Item = &R> {
@@ -440,7 +440,7 @@ impl<R, P, S> Theory<R, P, S> {
     }
 }
 
-impl<R, P> Theory<R, P, TranslationElement> {
+impl<R, P> Theory<R, P> {
     /// HS `theoryFunctionTypingInfos` (TheoryObject.hs:368-369): the
     /// `SapicFunSym` of every `functions:` declaration, in source order.
     pub fn function_typing_infos(&self) -> impl Iterator<Item = &SapicFunSym> {
@@ -564,10 +564,10 @@ pub struct ClosedProtoRule {
 /// rule it closes into — one for a computed narrowing, one per `variants
 /// (modulo AC)` block the source writes — each carrying the item's E half.
 /// Every other item passes through at its position.
-pub fn close_proto_rules<P: Clone, S: Clone>(
-    items: &[TheoryItem<OpenProtoRule, P, S>],
-) -> Vec<TheoryItem<ClosedProtoRule, P, S>> {
-    let mut out: Vec<TheoryItem<ClosedProtoRule, P, S>> = Vec::new();
+pub fn close_proto_rules<P: Clone>(
+    items: &[TheoryItem<OpenProtoRule, P>],
+) -> Vec<TheoryItem<ClosedProtoRule, P>> {
+    let mut out: Vec<TheoryItem<ClosedProtoRule, P>> = Vec::new();
     for item in items {
         match item.split_rule() {
             Ok(other) => out.push(other),
@@ -587,10 +587,10 @@ pub fn close_proto_rules<P: Clone, S: Clone>(
 /// runs of consecutive rule items sharing an E rule collapsed into one item
 /// whose AC list is their concatenation.  Every other item passes through at
 /// its position.
-pub fn merge_open_proto_rules<P: Clone, S: Clone>(
-    items: &[TheoryItem<OpenProtoRule, P, S>],
-) -> Vec<TheoryItem<MergedProtoRule, P, S>> {
-    let mut out: Vec<TheoryItem<MergedProtoRule, P, S>> = Vec::new();
+pub fn merge_open_proto_rules<P: Clone>(
+    items: &[TheoryItem<OpenProtoRule, P>],
+) -> Vec<TheoryItem<MergedProtoRule, P>> {
+    let mut out: Vec<TheoryItem<MergedProtoRule, P>> = Vec::new();
     for item in items {
         let opened = match item.split_rule() {
             Ok(other) => {
@@ -635,40 +635,9 @@ pub(crate) fn manual_rule_variants(r: &OpenProtoRule) -> Vec<crate::rule::ProtoR
         .collect()
 }
 
-/// HS `removeTranslationItems` (OpenTheory.hs:46-52): every `TranslationItem`
-/// carries `()` and every other item is kept as it stands.
-/// `prettyOpenTranslatedTheory` renders the unit payload as `emptyString`
-/// (OpenTheory.hs:891-899), so the whole `TranslationElement` set disappears
-/// from the `-m msr` print.
-pub fn remove_translation_items(thy: &Theory) -> Theory<OpenProtoRule, ProofSkeleton, ()> {
-    Theory {
-        name: thy.name.clone(),
-        in_file: thy.in_file.clone(),
-        heuristic: thy.heuristic.clone(),
-        tactic: thy.tactic.clone(),
-        signature: thy.signature.clone(),
-        items: thy
-            .items
-            .iter()
-            .map(|item| match item {
-                TheoryItem::Rule(x) => TheoryItem::Rule(x.clone()),
-                TheoryItem::Lemma(x) => TheoryItem::Lemma(x.clone()),
-                TheoryItem::Restriction(x) => TheoryItem::Restriction(x.clone()),
-                TheoryItem::Text(x) => TheoryItem::Text(x.clone()),
-                TheoryItem::ConfigBlock(x) => TheoryItem::ConfigBlock(x.clone()),
-                TheoryItem::Predicate(x) => TheoryItem::Predicate(x.clone()),
-                TheoryItem::Macros(x) => TheoryItem::Macros(x.clone()),
-                TheoryItem::Translation(_) => TheoryItem::Translation(()),
-            })
-            .collect(),
-        options: thy.options.clone(),
-        is_sapic: thy.is_sapic,
-    }
-}
-
 /// HS `clearFunctionTypingInfos` (TheoryObject.hs:504-508): drop every
 /// source-positioned `FunctionTypingInfo` item.
-pub fn clear_function_typing_infos<R, P>(thy: &mut Theory<R, P, TranslationElement>) {
+pub fn clear_function_typing_infos<R, P>(thy: &mut Theory<R, P>) {
     thy.items.retain(|i| {
         !matches!(
             i,
@@ -679,7 +648,7 @@ pub fn clear_function_typing_infos<R, P>(thy: &mut Theory<R, P, TranslationEleme
 
 /// HS `containsManualRuleVariants` (OpenTheory.hs:584-589): whether any rule
 /// item carries an AC rule of its own.
-pub fn contains_manual_rule_variants<P, S>(items: &[TheoryItem<MergedProtoRule, P, S>]) -> bool {
+pub fn contains_manual_rule_variants<P>(items: &[TheoryItem<MergedProtoRule, P>]) -> bool {
     items
         .iter()
         .any(|i| matches!(i, TheoryItem::Rule(r) if !r.rule_ac.is_empty()))
@@ -690,9 +659,9 @@ mod tests {
     use super::*;
 
     /// A theory over simple stand-in type parameters.  The accessors are
-    /// generic over `R`/`P`/`S`.  The item payloads therefore do not have to
-    /// be real rules or proofs.
-    type TestTheory = Theory<i32, (), char>;
+    /// generic over `R`/`P`.  The item payloads therefore do not have to be
+    /// real rules or proofs.
+    type TestTheory = Theory<i32, ()>;
 
     fn lemma(name: &str) -> Lemma<()> {
         Lemma {
@@ -745,7 +714,7 @@ mod tests {
             TheoryItem::Lemma(lemma("L")),
             TheoryItem::Restriction(restriction("R")),
             TheoryItem::Macros(vec![lnmacro("m1"), lnmacro("m2")]),
-            TheoryItem::Translation('t'),
+            TheoryItem::Translation(TranslationElement::SignatureBuiltin("t".to_string())),
         ];
 
         assert_eq!(t.rules().copied().collect::<Vec<_>>(), vec![7]);
