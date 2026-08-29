@@ -12,11 +12,8 @@
 //!   - pretty:     `prettyTactic` (lib/theory/src/TheoryObject.hs:924-942)
 //!
 //! The Rust parser captures the raw tactic body verbatim; this module
-//! re-parses that body into the same structure HS keeps (presort char +
-//! a list of prio/deprio blocks, each carrying a ranking name and the
-//! per-disjuncts *string representations* exactly as HS builds them in
-//! `function`/`functionNot`/`functionAnd`/`functionOr`), then renders it
-//! through the ported `prettyTactic` so output is byte-identical.
+//! re-parses that body into a presort and selector expressions, then renders
+//! it through the ported `prettyTactic` so output is byte-identical.
 
 /// A single selector function as written in a tactic, e.g.
 /// `regex "In_S"` or `dhreNoise "curve"`.  Mirrors HS `function`
@@ -43,11 +40,7 @@ pub enum SelectorExpr {
 /// A parsed `prio:`/`deprio:` block.
 ///
 /// `ranking` is the `{...}` selector name (HS `stringRankingPrio`,
-/// defaulting to `"id"`); `disjuncts` are the per-line string
-/// representations HS stores in `stringsPrio` — one entry per parsed
-/// `disjuncts` (a `f "p" | g "q"` chain) in source order.
-///
-/// `selectors` is the EVALUABLE form of those same disjuncts — one
+/// defaulting to `"id"`). `selectors` contains one
 /// `SelectorExpr` per `disjuncts` line, in the same order, mirroring HS
 /// `functionsPrio :: [(AnnotatedGoal, ctx, System) -> Bool]`
 /// (System.hs:439-446, see line 442).  The prio recognises a goal iff ANY of these
@@ -56,7 +49,6 @@ pub enum SelectorExpr {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PrioBlock {
     pub ranking: String,
-    pub disjuncts: Vec<String>,
     pub selectors: Vec<SelectorExpr>,
 }
 
@@ -135,29 +127,55 @@ fn render_block(kw: &str, b: &PrioBlock) -> String {
     out.push_str(": {");
     out.push_str(&b.ranking);
     out.push('}');
-    for d in &b.disjuncts {
+    for selector in &b.selectors {
         out.push('\n');
         out.push_str("  ");
-        out.push_str(&prettify(d));
+        render_selector(&mut out, selector);
     }
     out
 }
 
-/// HS `prettify` (TheoryObject.hs:947-952): split on whitespace (`words`),
-/// then concatenate tokens with operator tokens (`|`, `&`, `not`)
-/// rendered with their canonical spacing and all other tokens joined
-/// with no separator.
-fn prettify(s: &str) -> String {
-    let mut out = String::new();
-    for tok in s.split_whitespace() {
-        match tok {
-            "|" => out.push_str(" | "),
-            "&" => out.push_str(" & "),
-            "not" => out.push_str("not "),
-            other => out.push_str(other),
+/// Render a parsed selector in the canonical form produced by HS
+/// `prettify` (TheoryObject.hs:947-952).
+fn render_selector(out: &mut String, selector: &SelectorExpr) {
+    match selector {
+        SelectorExpr::Leaf(leaf) => {
+            out.push_str(&leaf.name);
+            for param in &leaf.params {
+                out.push('"');
+                let mut words = param.split_whitespace().peekable();
+                let mut first = true;
+                while let Some(word) = words.next() {
+                    // In HS the opening and closing quotes are attached to
+                    // the first and last words, so only an interior word can
+                    // itself be recognised as an operator by `prettify`.
+                    let interior = !first && words.peek().is_some();
+                    match (interior, word) {
+                        (true, "|") => out.push_str(" | "),
+                        (true, "&") => out.push_str(" & "),
+                        (true, "not") => out.push_str("not "),
+                        _ => out.push_str(word),
+                    }
+                    first = false;
+                }
+                out.push('"');
+            }
+        }
+        SelectorExpr::Not(expr) => {
+            out.push_str("not ");
+            render_selector(out, expr);
+        }
+        SelectorExpr::And(left, right) => {
+            render_selector(out, left);
+            out.push_str(" & ");
+            render_selector(out, right);
+        }
+        SelectorExpr::Or(left, right) => {
+            render_selector(out, left);
+            out.push_str(" | ");
+            render_selector(out, right);
         }
     }
-    out
 }
 
 /// Map a presort token (HS `goalRankingPresort`, parsed with `noOracle`)
@@ -289,7 +307,6 @@ impl<'a> TacticParser<'a> {
         self.eat_colon();
         // option "id" (braced identifier)
         let ranking = self.braced_ident().unwrap_or_else(|| "id".to_string());
-        let mut disjuncts = Vec::new();
         let mut selectors = Vec::new();
         // many1 disjuncts — keep parsing until a block keyword or EOF.
         loop {
@@ -304,18 +321,11 @@ impl<'a> TacticParser<'a> {
                 }
             }
             match self.disjuncts() {
-                Some((d, e)) => {
-                    disjuncts.push(d);
-                    selectors.push(e);
-                }
+                Some(selector) => selectors.push(selector),
                 None => break,
             }
         }
-        PrioBlock {
-            ranking,
-            disjuncts,
-            selectors,
-        }
+        PrioBlock { ranking, selectors }
     }
 
     /// Optional `{ident}` (HS `braced identifier`).
@@ -341,47 +351,43 @@ impl<'a> TacticParser<'a> {
     }
 
     /// `disjuncts = chainl1 conjuncts opLOr`; `conjuncts = chainl1
-    /// negation opLAnd`; `negation = opLNot? function`. We build the HS
-    /// *string representation* (Tactics.hs:70-91) for the whole chain.
-    fn disjuncts(&mut self) -> Option<(String, SelectorExpr)> {
-        let (mut s, mut e) = self.conjuncts()?;
+    /// negation opLAnd`; `negation = opLNot? function`.
+    fn disjuncts(&mut self) -> Option<SelectorExpr> {
+        let mut expr = self.conjuncts()?;
         loop {
             self.skip_ws();
             // HS opLOr = `|` <|> `∨` (Token.hs:599-600, see line 600). `∨` = U+2228 = E2 88 A8.
             if self.eat_op(b"|") || self.eat_op("\u{2228}".as_bytes()) {
-                let (rs, re) = self.conjuncts()?;
-                s = format!("{} | {}", s, rs);
-                e = SelectorExpr::Or(Box::new(e), Box::new(re));
+                let right = self.conjuncts()?;
+                expr = SelectorExpr::Or(Box::new(expr), Box::new(right));
             } else {
                 break;
             }
         }
-        Some((s, e))
+        Some(expr)
     }
 
-    fn conjuncts(&mut self) -> Option<(String, SelectorExpr)> {
-        let (mut s, mut e) = self.negation()?;
+    fn conjuncts(&mut self) -> Option<SelectorExpr> {
+        let mut expr = self.negation()?;
         loop {
             self.skip_ws();
             // HS opLAnd = `&` <|> `∧` (Token.hs:595-596, see line 596). `∧` = U+2227 = E2 88 A7.
             if self.eat_op(b"&") || self.eat_op("\u{2227}".as_bytes()) {
-                let (rs, re) = self.negation()?;
-                s = format!("{} & {}", s, rs);
-                e = SelectorExpr::And(Box::new(e), Box::new(re));
+                let right = self.negation()?;
+                expr = SelectorExpr::And(Box::new(expr), Box::new(right));
             } else {
                 break;
             }
         }
-        Some((s, e))
+        Some(expr)
     }
 
-    fn negation(&mut self) -> Option<(String, SelectorExpr)> {
+    fn negation(&mut self) -> Option<SelectorExpr> {
         // HS opLNot = `¬` <|> `not` (Token.hs:603-604, see line 604). The ASCII `not` is an
         // identifier word (needs a word boundary, hence try_kw); `¬`
         // (U+00AC = C2 AC) is a non-identifier symbol matched directly.
         if self.try_kw("not") || self.eat_op("\u{00AC}".as_bytes()) {
-            let (s, e) = self.function()?;
-            Some((format!("not {}", s), SelectorExpr::Not(Box::new(e))))
+            Some(SelectorExpr::Not(Box::new(self.function()?)))
         } else {
             self.function()
         }
@@ -402,7 +408,7 @@ impl<'a> TacticParser<'a> {
 
     /// `function = identifier (doubleQuoted functionValue)+`
     /// rendered as `f "p1" "p2"` (Tactics.hs:66-70).
-    fn function(&mut self) -> Option<(String, SelectorExpr)> {
+    fn function(&mut self) -> Option<SelectorExpr> {
         self.skip_ws();
         let start = self.i;
         while self.i < self.s.len() && is_ident_byte(self.s[self.i]) {
@@ -435,14 +441,7 @@ impl<'a> TacticParser<'a> {
             // Not a valid function (no params): bail so the caller stops.
             return None;
         }
-        // HS: f++" \""++intercalate "\" \"" param++"\""
-        let mut s = String::with_capacity(name.len() + 8);
-        s.push_str(&name);
-        s.push_str(" \"");
-        s.push_str(&params.join("\" \""));
-        s.push('"');
-        let leaf = SelectorExpr::Leaf(SelectorLeaf { name, params });
-        Some((s, leaf))
+        Some(SelectorExpr::Leaf(SelectorLeaf { name, params }))
     }
 }
 
@@ -501,6 +500,15 @@ prio:\n\
              regex\".*!K.\\(\\(.*~r0\\.1.*\" | \
              regex\".*!K.\\(\\(.*~r0.*\" | \
              regex\".*!K.\\(~r.*\""
+        );
+    }
+
+    #[test]
+    fn selector_rendering_preserves_prettify_boundaries() {
+        let raw = "prio:\n  regex \"not a | b not c & d\"\n";
+        assert_eq!(
+            Tactic::parse("x", raw).render(),
+            "tactic: x\npresort: s\nprio: {id}\n  regex\"nota | bnot c & d\""
         );
     }
 

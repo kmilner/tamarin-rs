@@ -202,7 +202,6 @@ fn it_ranking_prio_nonranked_deprio_order() {
 
     let prio = |pat: &str| PrioBlock {
         ranking: "id".to_string(),
-        disjuncts: vec![format!("regex \"{}\"", pat)],
         selectors: vec![SelectorExpr::Leaf(SelectorLeaf {
             name: "regex".to_string(),
             params: vec![pat.to_string()],
@@ -252,7 +251,6 @@ fn it_ranking_nonranked_preserved() {
     let g_a = mk("a", 2); // matches prio → moves to front
     let prio = PrioBlock {
         ranking: "id".to_string(),
-        disjuncts: vec!["regex \"~'a'\"".to_string()],
         selectors: vec![SelectorExpr::Leaf(SelectorLeaf {
             name: "regex".to_string(),
             params: vec!["~'a'".to_string()],
@@ -404,7 +402,6 @@ fn tactic_ranking_keeps_the_braced_name() {
         presort: 'C',
         prios: vec![PrioBlock {
             ranking: "id".to_string(),
-            disjuncts: vec!["regex \"Out\"".to_string()],
             selectors: vec![SelectorExpr::Leaf(SelectorLeaf {
                 name: "regex".to_string(),
                 params: vec!["Out".to_string()],
