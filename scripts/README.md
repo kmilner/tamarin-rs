@@ -38,7 +38,9 @@ and automatically reselects caches for alternating Tamarin builds.
 Linked worktrees share the main checkout's pool. Old flat `.web_hs_cache*`
 entries are adopted lazily with hard links when their oracle/plan stamps prove
 they fit; dependency-bearing entries are re-crawled because the old key could
-not prove those inputs. `CACHE=` remains an exact-directory compatibility
+not prove those inputs. Cache entries are locked per key and published
+atomically, so fills and readers may run concurrently across worktrees.
+`CACHE=` remains an exact-directory compatibility
 override; `WEB_CACHE_ROOT=` moves the whole profile pool. Nothing is archived
 or wiped, and
 `bump_submodule.sh` deliberately leaves the caches alone.

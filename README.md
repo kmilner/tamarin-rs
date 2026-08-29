@@ -102,7 +102,9 @@ Rust build itself:
 
 This materialises a git worktree of the pinned commit at
 `tamarin-prover-testing/`, applies `patches/tamarin-prover-fixes.patch` there
-(the submodule itself stays untouched), and builds it with stack. The parity
+(the submodule itself stays untouched), and builds it with stack. When needed,
+the testing worktree is reset to the current branch's pin; ignored
+`.stack-work/` artifacts remain as the compiler cache. The parity
 scripts discover that binary automatically; `HS_PATH=<binary>` overrides.
 
 ## Parity status

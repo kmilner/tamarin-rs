@@ -83,6 +83,82 @@ test "$first_cache" != "$CACHE"
                 text=True,
             )
 
+    def test_cache_publication_is_atomic_and_locked(self):
+        with tempfile.TemporaryDirectory() as td:
+            env = os.environ.copy()
+            env["HARNESS_TMP"] = td
+            subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    r'''
+set -e
+. scripts/web_cache.sh
+CACHE=$HARNESS_TMP/cache
+WEB_CACHE_ORACLE_STAMP=oracle
+mkdir -p "$CACHE"
+printf '%s\n' '{"generation":0}' > "$HARNESS_TMP/a.json"
+printf '%s\n' '{"generation":1}' > "$HARNESS_TMP/b.json"
+
+# A second process cannot enter the same key while its lock is held.
+web_cache_lock key
+(
+    # Do not retain the parent's lock descriptor in the contender.
+    exec {WEB_CACHE_LOCK_FD}>&-
+    : > "$HARNESS_TMP/attempted"
+    web_cache_lock key
+    : > "$HARNESS_TMP/acquired"
+    web_cache_unlock
+) & blocked_pid=$!
+for _ in {1..100}; do
+    [ ! -e "$HARNESS_TMP/attempted" ] || break
+    sleep 0.01
+done
+test -e "$HARNESS_TMP/attempted"
+test ! -e "$HARNESS_TMP/acquired"
+web_cache_unlock
+wait "$blocked_pid"
+test -e "$HARNESS_TMP/acquired"
+
+writer() {
+    local i source
+    for ((i=0; i<100; i++)); do
+        source=$HARNESS_TMP/a.json
+        ((i % 2)) && source=$HARNESS_TMP/b.json
+        web_cache_lock key
+        web_cache_publish key "$source"
+        web_cache_unlock
+    done
+}
+
+reader() {
+    local i snapshot
+    for ((i=0; i<100; i++)); do
+        snapshot=$(mktemp "$HARNESS_TMP/read.XXXXXX")
+        web_cache_lock key
+        if [ -f "$CACHE/key.hs.fp" ]; then
+            test "$(cat "$CACHE/key.hs.fp")" = "$WEB_CACHE_ORACLE_STAMP"
+            cp "$CACHE/key.hs.json" "$snapshot"
+        fi
+        web_cache_unlock
+        [ ! -s "$snapshot" ] || python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$snapshot"
+        rm -f "$snapshot"
+    done
+}
+
+writer & writer_pid=$!
+reader & reader_pid=$!
+wait "$writer_pid"
+wait "$reader_pid"
+''',
+                ],
+                cwd=HERE.parent,
+                env=env,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

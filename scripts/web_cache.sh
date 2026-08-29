@@ -72,6 +72,59 @@ web_cache_init() {
         WEB_CACHE_PROFILE WEB_CACHE_MODE
 }
 
+# Serialize access to one shared cache entry. Locks are advisory and remain as
+# empty files in the cache; the kernel releases them if a gate is interrupted.
+web_cache_lock() {
+    local key=$1 fd
+    exec {fd}>"$CACHE/$key.hs.lock" || return 1
+    if ! flock "$fd"; then
+        exec {fd}>&-
+        return 1
+    fi
+    WEB_CACHE_LOCK_FD=$fd
+}
+
+web_cache_unlock() {
+    [ -n "${WEB_CACHE_LOCK_FD:-}" ] || return 0
+    flock -u "$WEB_CACHE_LOCK_FD"
+    exec {WEB_CACHE_LOCK_FD}>&-
+}
+
+# Publish the manifest before its commit marker, with both renames occurring
+# from the cache filesystem. Callers hold the entry lock, so readers either
+# copy the old committed entry or the new one, never an in-progress crawl.
+web_cache_publish() {
+    local key=$1 source=$2 tmp
+    tmp=$(mktemp -d "$CACHE/.${key}.publish.XXXXXX") || return 1
+    if ! ln "$source" "$tmp/manifest" 2>/dev/null \
+            && ! cp "$source" "$tmp/manifest"; then
+        rmdir "$tmp"
+        return 1
+    fi
+    if ! printf '%s\n' "$WEB_CACHE_ORACLE_STAMP" > "$tmp/stamp"; then
+        rm -f "$tmp/manifest"
+        rmdir "$tmp"
+        return 1
+    fi
+    # Invalidate the old entry before replacing either half. If this process
+    # dies between the two renames, the complete manifest remains uncommitted
+    # and will be regenerated instead of being paired with an old stamp.
+    rm -f "$CACHE/$key.hs.fp"
+    if ! mv -f "$tmp/manifest" "$CACHE/$key.hs.json" \
+            || ! mv -f "$tmp/stamp" "$CACHE/$key.hs.fp"; then
+        rm -f "$tmp/manifest" "$tmp/stamp"
+        rmdir "$tmp"
+        return 1
+    fi
+    rmdir "$tmp"
+}
+
+web_cache_invalidate() {
+    local key=$1
+    # The stamp is the commit marker, so remove it before the manifest.
+    rm -f "$CACHE/$key.hs.fp" "$CACHE/$key.hs.json"
+}
+
 # web_stage_inputs <source-theory> <destination-directory>
 # Copy the theory, its transitive includes, and its executable oracle inputs
 # into the temporary server tree. Both web consumers use this one spelling so
@@ -185,8 +238,7 @@ print(value)
 PY
         ) || continue
         [ "$cached_plan" = "$plan" ] || continue
-        if ln "$manifest" "$CACHE/$key.hs.json" 2>/dev/null; then
-            printf '%s\n' "$WEB_CACHE_ORACLE_STAMP" > "$CACHE/$key.hs.fp"
+        if web_cache_publish "$key" "$manifest"; then
             echo "  adopted legacy HS manifest from $legacy" >&2
             return 0
         fi

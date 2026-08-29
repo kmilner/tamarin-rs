@@ -7,9 +7,34 @@ the pristine Haskell sources and the examples corpus live in the
 
 ## Prerequisites
 
+**Supported host.** The shell harness currently supports GNU/Linux and is
+exercised on Ubuntu in CI. macOS is not currently supported: the scripts rely
+on Bash 4.3+ and GNU/Linux utilities and interfaces including `sha256sum`,
+`stat -c`, `timeout`, `setsid`, `flock`, `nproc`, GNU `xargs`, and `/proc`.
+Installing individual GNU tools with Homebrew is therefore not yet a supported
+configuration.
+
+On Ubuntu or Debian, install the harness's system tools with:
+
+```bash
+sudo apt-get update
+sudo apt-get install bash build-essential ca-certificates coreutils curl \
+    diffutils findutils gawk git graphviz grep gzip libgmp-dev pkg-config \
+    procps python3 sed unzip util-linux zlib1g-dev
+```
+
+You also need a stable Rust toolchain (including Cargo, rustfmt and Clippy),
+Stack for `./setup.sh testing`, and Maude; Maude 3.5.1 matches CI. Set
+`MAUDE_PATH` if Maude is not installed at a location described below.
+GNU `time` is required only for `scripts/bench.sh` (`sudo apt-get install time`),
+and `lld` is an optional but substantially faster linker for the full Rust
+suite (`sudo apt-get install lld`).
+
 **The Haskell oracle.** `./setup.sh testing` materialises a patched copy of
 the prover at `tamarin-prover-testing/` (the submodule itself is never
-modified); build it with stack. Parity scripts auto-discover the binary under
+modified). That directory is disposable: when its revision differs, setup
+resets it to the current branch's submodule pin while retaining its ignored
+`.stack-work/` compiler cache. Parity scripts auto-discover the binary under
 `tamarin-prover-testing/.stack-work/`; set `HS_PATH` to point them at a
 specific binary instead.
 
@@ -607,7 +632,9 @@ profile from the oracle and Maude binaries' content SHA-256 plus the crawl
 plan/timeouts and node cap; entry keys cover the theory, transitive
 includes, and executable oracle inputs. Linked worktrees share the main
 checkout's pool, so switching Tamarin versions automatically reselects the
-corresponding cache instead of overwriting it. Valid old flat
+corresponding cache instead of overwriting it. Per-entry locks and atomic
+publication let background fills and readers safely use that shared pool at
+the same time. Valid old flat
 `.web_hs_cache*` entries are adopted lazily by hard link when their old stamps
 are sufficient; dependency-bearing entries are re-crawled once. Env knobs:
 `FILE_TIMEOUT`, `READY_TIMEOUT`, `HS_PORT`, `RS_PORT`, `MAX_NODES` (400

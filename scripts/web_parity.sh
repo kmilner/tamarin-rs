@@ -258,7 +258,6 @@ one_file() {
     export CRAWL_EXTRA_ARGS
     local key; key=$(web_cache_key "$rel" "$f")
     local hs_manifest="$CACHE/$key.hs.json" hs_fp_file="$CACHE/$key.hs.fp"
-    web_cache_adopt_legacy "$key" "$f" "$PLAN_VERSION" || true
     local wd; wd=$(mktemp -d)
     mkdir -p "$wd/thy"
     if ! web_stage_inputs "$f" "$wd/thy"; then
@@ -271,11 +270,16 @@ one_file() {
     # fingerprint sidecar was crawled before the stamp existed, by an oracle
     # nothing recorded — indistinguishable from one crawled by a stale binary,
     # so it is re-crawled rather than trusted.
+    if ! web_cache_lock "$key"; then
+        rm -rf "$wd"
+        printf '%s\t-\tSKIP_CACHE_LOCK\t-\t-\t-\n' "$rel"; return 0
+    fi
+    web_cache_adopt_legacy "$key" "$f" "$PLAN_VERSION" || true
     if [ -f "$hs_manifest" ]; then
         local hs_plan; hs_plan=$(cached_plan_version "$hs_manifest")
         if [ "$hs_plan" != "$PLAN_VERSION" ]; then
             echo "  stale HS manifest (crawl plan ${hs_plan:-?} != $PLAN_VERSION) — re-crawling" >&2
-            rm -f "$hs_manifest" "$hs_fp_file"
+            web_cache_invalidate "$key"
         fi
     fi
     if [ -f "$hs_manifest" ]; then
@@ -283,16 +287,24 @@ one_file() {
         [ -f "$hs_fp_file" ] && read -r hs_fp < "$hs_fp_file"
         if [ "$hs_fp" != "$WEB_CACHE_ORACLE_STAMP" ]; then
             echo "  stale HS manifest (oracle ${hs_fp:-unstamped} != $WEB_CACHE_ORACLE_STAMP) — re-crawling" >&2
-            rm -f "$hs_manifest" "$hs_fp_file"
+            web_cache_invalidate "$key"
         fi
     fi
     if [ ! -f "$hs_manifest" ]; then
-        if ! MAUDE_PATH="$MAUDE_PATH" boot_crawl "$HS_PATH" "$HS_PORT" "$wd" "$hs_manifest" hs; then
-            rm -f "$hs_manifest" "$hs_fp_file"; rm -rf "$wd"
+        if ! MAUDE_PATH="$MAUDE_PATH" boot_crawl "$HS_PATH" "$HS_PORT" "$wd" "$wd/hs-new.json" hs; then
+            web_cache_unlock; rm -rf "$wd"
             printf '%s\t-\tSKIP_HS_FAIL\t-\t-\t-\n' "$rel"; return 0
         fi
-        printf '%s\n' "$WEB_CACHE_ORACLE_STAMP" > "$hs_fp_file"
+        if ! web_cache_publish "$key" "$wd/hs-new.json"; then
+            web_cache_unlock; rm -rf "$wd"
+            printf '%s\t-\tSKIP_CACHE_WRITE\t-\t-\t-\n' "$rel"; return 0
+        fi
     fi
+    if ! cp "$hs_manifest" "$wd/hs.json"; then
+        web_cache_unlock; rm -rf "$wd"
+        printf '%s\t-\tSKIP_CACHE_READ\t-\t-\t-\n' "$rel"; return 0
+    fi
+    web_cache_unlock
     # Phase 2: RS
     local rs_manifest="$wd/rs.json"
     if ! boot_crawl "$RS_PATH" "$RS_PORT" "$wd" "$rs_manifest" rs; then
@@ -302,7 +314,7 @@ one_file() {
     # diff. Both crawls succeeded, so an empty or absent parity.tsv means the
     # differ itself fell over — which used to emit no rows for the file at all,
     # a file that silently left the run rather than a file that matched.
-    python3 "$script_dir/web_diff.py" "$hs_manifest" "$rs_manifest" \
+    python3 "$script_dir/web_diff.py" "$wd/hs.json" "$rs_manifest" \
         "$wd/parity.tsv" "$DIFFDIR/$rel" >/dev/null 2>&1
     if [ ! -s "$wd/parity.tsv" ]; then
         rm -rf "$wd"

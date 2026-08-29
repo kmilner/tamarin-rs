@@ -125,8 +125,15 @@ one_file() {
     [ -f "$f" ] || { printf '%s\t-\tSKIP_NO_FILE\t-\n' "$rel"; return 0; }
     local key; key=$(web_cache_key "$rel" "$f")
     local hs_manifest="$CACHE/$key.hs.json"
+    local wd; wd=$(mktemp -d)
+    if ! web_cache_lock "$key"; then
+        rm -rf "$wd"; printf '%s\t-\tSKIP_CACHE_LOCK\t-\n' "$rel"; return 0
+    fi
     web_cache_adopt_legacy "$key" "$f" "$PLAN_VERSION" || true
-    [ -f "$hs_manifest" ] || { printf '%s\t-\tSKIP_NO_CACHE\t-\n' "$rel"; return 0; }
+    if [ ! -f "$hs_manifest" ]; then
+        web_cache_unlock; rm -rf "$wd"
+        printf '%s\t-\tSKIP_NO_CACHE\t-\n' "$rel"; return 0
+    fi
     # Same reuse contract as web_parity.sh (which stamps the sidecar): a
     # manifest that is unstamped, or stamped by a different oracle binary, is
     # not this oracle's evidence.  web_parity re-crawls it; this script cannot
@@ -135,13 +142,18 @@ one_file() {
     local hs_fp=''
     [ -f "$CACHE/$key.hs.fp" ] && read -r hs_fp < "$CACHE/$key.hs.fp"
     if [ "$hs_fp" != "$WEB_CACHE_ORACLE_STAMP" ]; then
+        web_cache_unlock; rm -rf "$wd"
         printf '%s\t-\tSKIP_STALE_CACHE\t-\n' "$rel"; return 0
     fi
+    if ! cp "$hs_manifest" "$wd/hs.json"; then
+        web_cache_unlock; rm -rf "$wd"
+        printf '%s\t-\tSKIP_CACHE_READ\t-\n' "$rel"; return 0
+    fi
+    web_cache_unlock
     local CRAWL_EXTRA_ARGS=""
     grep -qE '^[[:space:]]*(lemma|equivLemma|diffLemma)([[:space:]]|\[|:)' "$f" \
         || CRAWL_EXTRA_ARGS="--allow-no-lemmas"
     export CRAWL_EXTRA_ARGS
-    local wd; wd=$(mktemp -d)
     mkdir -p "$wd/thy"
     if ! web_stage_inputs "$f" "$wd/thy"; then
         rm -rf "$wd"; printf '%s\t-\tSKIP_INPUT_STAGE\t-\n' "$rel"; return 0
@@ -149,7 +161,7 @@ one_file() {
     if ! boot_crawl "$RS_PATH" "$RS_PORT" "$wd" "$wd/rs.json"; then
         rm -rf "$wd"; printf '%s\t-\tSKIP_RS_FAIL\t-\n' "$rel"; return 0
     fi
-    python3 - "$rel" "$hs_manifest" "$wd/rs.json" "$DIFFDIR" <<'PY'
+    python3 - "$rel" "$wd/hs.json" "$wd/rs.json" "$DIFFDIR" <<'PY'
 import hashlib,json,sys,os
 rel,hsp,rsp,diffdir=sys.argv[1:5]
 hs=json.load(open(hsp))['manifest']; rs=json.load(open(rsp))['manifest']

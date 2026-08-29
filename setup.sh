@@ -40,15 +40,26 @@ pinned="$(git -C "$sub" rev-parse HEAD)"
 if [ ! -d "$testdir" ]; then
     git -C "$sub" worktree add --detach "$testdir" "$pinned"
 fi
+
+# This is a generated worktree. Move it back to this branch's pin after
+# switching between branches that use different Tamarin revisions, while
+# retaining ignored .stack-work build artifacts as a durable compiler cache.
+# Leave an already-correct tree alone: resetting it would force avoidable
+# recompilation on every invocation.
+current="$(git -C "$testdir" rev-parse HEAD)"
+if [ "$current" != "$pinned" ]; then
+    echo "resetting testing tree to this branch's Tamarin pin"
+    git -C "$testdir" reset --hard -q "$pinned"
+    git -C "$testdir" clean -fdq
+fi
+
 if git -C "$testdir" apply --reverse --check "$patch" 2>/dev/null; then
     echo "testing tree already patched"
 elif git -C "$testdir" apply --check "$patch" 2>/dev/null; then
     git -C "$testdir" apply "$patch"
     echo "patched testing tree ($(basename "$patch"))"
 else
-    echo "ERROR: patch neither applies nor is already applied in $testdir." >&2
-    echo "Reset it with:  git -C tamarin-prover-testing checkout -- . \\" >&2
-    echo "                && git -C tamarin-prover-testing clean -fd    " >&2
+    echo "ERROR: $(basename "$patch") does not apply cleanly to pinned Tamarin $pinned." >&2
     exit 1
 fi
 
