@@ -119,49 +119,6 @@ impl<C: Ord + Clone> HasFrees for SubstVFresh<C, LVar> {
     }
 }
 
-/// Rename every variable in `t` to a canonical fresh variable (empty name
-/// hint, sort preserved), assigning indices 0,1,2,… in order of FIRST
-/// appearance, threading `bindings`/`counter` so repeated occurrences (and
-/// later range terms in the same substitution) reuse earlier assignments.
-/// Left-to-right depth-first traversal mirrors HS `mapFrees`/`HasFrees`.
-fn rename_term_drop_hint<C: Ord + Clone>(
-    t: &VTerm<C, LVar>,
-    bindings: &mut BTreeMap<LVar, LVar>,
-    counter: &mut u64,
-) -> VTerm<C, LVar> {
-    match t {
-        Term::Lit(Lit::Con(c)) => Term::Lit(Lit::Con(c.clone())),
-        Term::Lit(Lit::Var(v)) => {
-            let nv = match bindings.get(v) {
-                Some(nv) => *nv,
-                None => {
-                    let nv = LVar {
-                        name: "",
-                        sort: v.sort,
-                        idx: *counter,
-                    };
-                    *counter += 1;
-                    bindings.insert(*v, nv);
-                    nv
-                }
-            };
-            Term::Lit(Lit::Var(nv))
-        }
-        Term::App(sym, args) => {
-            let new_args: Vec<VTerm<C, LVar>> = args
-                .iter()
-                .map(|a| rename_term_drop_hint(a, bindings, counter))
-                .collect();
-            // Route through the AC/C-sorting smart constructor, matching
-            // HS `mapFrees f@(Arbitrary _) (FApp o l) = fApp o <$> ...`
-            // (LTerm.hs:790).  Renaming assigns fresh idxs by first
-            // appearance, so an AC/C arg list sorted under the OLD vars
-            // can become unsorted under the new ones; `fApp` re-sorts.
-            crate::term::f_app(*sym, new_args)
-        }
-    }
-}
-
 impl<C: Ord + Clone> LSubstVFresh<C> {
     /// `dropNameHintsLNSubstVFresh` (EquationStore.hs:143-147): the canonical
     /// form used as the split-case sort key. Renames every RANGE variable to a
@@ -179,7 +136,20 @@ impl<C: Ord + Clone> LSubstVFresh<C> {
         let renamed: Vec<(LVar, VTerm<C, LVar>)> = self
             .map
             .iter()
-            .map(|(k, t)| (*k, rename_term_drop_hint(t, &mut bindings, &mut counter)))
+            .map(|(k, t)| {
+                let t = t.clone().map_free(&mut |v| {
+                    *bindings.entry(v).or_insert_with(|| {
+                        let renamed = LVar {
+                            name: "",
+                            sort: v.sort,
+                            idx: counter,
+                        };
+                        counter += 1;
+                        renamed
+                    })
+                });
+                (*k, t)
+            })
             .collect();
         Self::from_list(renamed)
     }
@@ -369,11 +339,12 @@ impl<C: Ord + Clone> LSubstVFresh<C> {
             rename.insert(*old, new);
         }
         let mut pairs: Vec<(LVar, VTerm<C, LVar>)> = Vec::with_capacity(self.len());
-        // Borrowing walk: the rename rebuilds every range term anyway, so read
-        // the entries in place (`iter`) rather than cloning them up front with
-        // `to_list`.
+        // Borrow the entries in place; `map_free_monotone` takes only a shallow
+        // clone and reuses any unchanged subtree.
         for (v, t) in self.iter() {
-            let renamed = rename_lvars_in_vterm(t, &rename);
+            let renamed = t
+                .clone()
+                .map_free_monotone(&mut |v| rename.get(&v).copied().unwrap_or(v));
             pairs.push((*v, renamed));
         }
         Subst::from_list(pairs)
@@ -473,13 +444,17 @@ impl<C: Ord + Clone> LSubstVFresh<C> {
         for (lv, t) in slist.into_iter() {
             // Determine the namehint mode based on the OUTER term shape.
             let outer_is_singleton_var = matches!(&t, Term::Lit(Lit::Var(_)));
-            let renamed = rename_lvars_with_hint(
-                &t,
-                &mut rename,
-                &mut alloc_idxs,
-                outer_is_singleton_var,
-                &lv,
-            );
+            let renamed = t.map_free(&mut |v| {
+                *rename.entry(v).or_insert_with(|| LVar {
+                    name: if outer_is_singleton_var {
+                        lv.name
+                    } else {
+                        v.name
+                    },
+                    sort: v.sort,
+                    idx: alloc_idxs(1),
+                })
+            });
             pairs.push((lv, renamed));
         }
         Subst::from_list(pairs)
@@ -498,60 +473,6 @@ fn shifted_idx(idx: u64, shift: i128) -> u64 {
         u64::MAX
     } else {
         new_idx_signed as u64
-    }
-}
-
-/// Walk a VTerm, renaming each var via the rename map.  If a var
-/// isn't yet in the rename map, allocate a fresh idx for it and
-/// record the binding.  `outer_is_singleton_var` + `lv` together
-/// implement HS's `namehint v = if (Lit (Var _) == t) then lvarName lv
-/// else lvarName v` rule (Term/Substitution.hs:64-66).
-fn rename_lvars_with_hint<C: Ord + Clone, F: FnMut(u64) -> u64>(
-    t: &VTerm<C, LVar>,
-    rename: &mut BTreeMap<LVar, LVar>,
-    alloc_idxs: &mut F,
-    outer_is_singleton_var: bool,
-    lv: &LVar,
-) -> VTerm<C, LVar> {
-    match t {
-        Term::Lit(Lit::Var(v)) => {
-            if let Some(new) = rename.get(v).copied() {
-                Term::Lit(Lit::Var(new))
-            } else {
-                // Allocate a fresh idx; name hint depends on outer
-                // term shape.
-                let idx = alloc_idxs(1);
-                let name = if outer_is_singleton_var {
-                    lv.name
-                } else {
-                    v.name
-                };
-                let new = LVar {
-                    name,
-                    sort: v.sort,
-                    idx,
-                };
-                rename.insert(*v, new);
-                Term::Lit(Lit::Var(new))
-            }
-        }
-        Term::Lit(Lit::Con(c)) => Term::Lit(Lit::Con(c.clone())),
-        Term::App(f, args) => {
-            let new_args: Vec<_> = args
-                .iter()
-                .map(|a| rename_lvars_with_hint(a, rename, alloc_idxs, outer_is_singleton_var, lv))
-                .collect();
-            // Route through the smart constructor so AC/C argument lists
-            // are re-sorted: freshToFree allocates a brand-new, non-
-            // monotone idx per range var, so children that were sorted
-            // under the old vars are no longer canonical under the new
-            // ones.  HS does the same via `mapFrees (Arbitrary _)
-            // (FApp o l) = fApp o <$> ...` (LTerm.hs).  (The sibling
-            // `rename_lvars_in_vterm` stays raw — it mirrors HS's
-            // Monotone `unsafefApp` path under a uniform, order-
-            // preserving shift, where re-sorting is unnecessary.)
-            crate::term::f_app(*f, new_args)
-        }
     }
 }
 
@@ -791,26 +712,6 @@ where
     let s1 = extended.fresh_to_free_uniform_shift(fresh_start);
     let composed = s1.compose(s2);
     free_to_fresh_raw(composed)
-}
-
-/// Walk a VTerm, applying a LVar→LVar rename.
-fn rename_lvars_in_vterm<C: Clone>(
-    t: &VTerm<C, LVar>,
-    rename: &tamarin_utils::FastMap<LVar, LVar>,
-) -> VTerm<C, LVar> {
-    match t {
-        Term::Lit(Lit::Var(v)) => {
-            let new = rename.get(v).copied().unwrap_or(*v);
-            Term::Lit(Lit::Var(new))
-        }
-        Term::Lit(other) => Term::Lit(other.clone()),
-        Term::App(f, args) => Term::App(
-            *f,
-            args.iter()
-                .map(|a| rename_lvars_in_vterm(a, rename))
-                .collect(),
-        ),
-    }
 }
 
 #[cfg(test)]
