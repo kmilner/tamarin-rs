@@ -2175,14 +2175,15 @@ fn run_solve_all_safe_goals_disj_with_progress(
             if matches!(res, Err(_) | Ok(SolveOutcome::Contradictory)) {
                 continue;
             }
+            let node_rules = sub.sys.node_rule_map();
             let mut tag_mismatch_edge = false;
             let chain_eqs: Vec<_> = sub
                 .sys
                 .edges
                 .iter()
                 .filter_map(|e| {
-                    let src_rule = sub.sys.node_rule_safe(&e.src.0)?;
-                    let tgt_rule = sub.sys.node_rule_safe(&e.tgt.0)?;
+                    let src_rule = node_rules.get(&e.src.0)?;
+                    let tgt_rule = node_rules.get(&e.tgt.0)?;
                     let fc = src_rule.conclusions.get(e.src.1 .0)?.clone();
                     let fp = tgt_rule.premises.get(e.tgt.1 .0)?.clone();
                     if fc.tag != fp.tag || fc.terms.len() != fp.terms.len() {
