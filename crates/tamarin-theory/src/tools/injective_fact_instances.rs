@@ -297,41 +297,16 @@ pub fn simple_injective_fact_instances(
     // top-level atom are an implementation error in HS; we drop the
     // restriction instead of panicking.
     fn extract_constraints(f: &crate::formula::SyntacticLNFormula) -> Vec<(LNTerm, LNTerm)> {
-        use crate::atom::ProtoAtom;
+        use crate::atom::{to_atom, ProtoAtom};
         use crate::formula::ProtoFormula;
-        match f {
-            ProtoFormula::Atom(ProtoAtom::Subterm(t1, t2)) => {
-                match (bvar_term_to_lnterm(t1), bvar_term_to_lnterm(t2)) {
-                    (Some(a), Some(b)) => vec![(a, b)],
-                    _ => vec![],
-                }
-            }
-            _ => vec![],
-        }
-    }
-
-    // HS `bvarToLVar` (InjectiveFactInstances.hs:59-61): map a top-level
-    // atom term `VTerm Name (BVar LVar)` to `LNTerm`, treating every Bound
-    // var as an implementation error.  Returns `None` (drop the
-    // constraint) instead of `error`/panic.
-    fn bvar_term_to_lnterm(
-        t: &tamarin_term::vterm::VTerm<
-            tamarin_term::lterm::Name,
-            tamarin_term::lterm::BVar<tamarin_term::lterm::LVar>,
-        >,
-    ) -> Option<LNTerm> {
-        use tamarin_term::lterm::BVar;
-        use tamarin_term::term::Term;
-        use tamarin_term::vterm::Lit;
-        match t {
-            Term::Lit(Lit::Con(n)) => Some(Term::Lit(Lit::Con(*n))),
-            Term::Lit(Lit::Var(BVar::Free(v))) => Some(Term::Lit(Lit::Var(*v))),
-            Term::Lit(Lit::Var(BVar::Bound(_))) => None,
-            Term::App(sym, args) => {
-                let mapped: Option<Vec<LNTerm>> = args.iter().map(bvar_term_to_lnterm).collect();
-                mapped.map(|a| Term::App(*sym, a.into()))
-            }
-        }
+        let ProtoFormula::Atom(atom @ ProtoAtom::Subterm(_, _)) = f else {
+            return vec![];
+        };
+        let Some(ProtoAtom::Subterm(t1, t2)) = crate::guarded::unbind_atom(&to_atom(atom.clone()))
+        else {
+            return vec![];
+        };
+        vec![(t1, t2)]
     }
 
     // Candidate tags + their default shape.  Mirrors HS `candidates`
