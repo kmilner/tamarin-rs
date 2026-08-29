@@ -1097,8 +1097,6 @@ struct TheoryPipeline<'a> {
     /// guards outrank (Batch.hs:91-113); every stage below reads this field so
     /// no arm can re-derive the answer differently.
     translate_module: Option<TranslateModule>,
-    in_file: &'a str,
-    theory_name: String,
     /// Elaborated typed theory.  Behind `Arc` so the `ProverSession` shares
     /// it without a copy; the translate/check stages mutate it through
     /// `Arc::make_mut` while this pipeline holds the only reference.
@@ -1130,7 +1128,7 @@ struct TheoryPipeline<'a> {
 impl TheoryPipeline<'_> {
     /// `[Theory X] MSG` stderr marker for this file's theory.
     fn marker(&self, msg: &str) {
-        theory_marker(&self.theory_name, msg);
+        theory_marker(&self.elaborated.name, msg);
     }
 
     /// `[Theory X] Theory closed` (TheoryLoader.hs:668-715, see line 696)
@@ -1520,7 +1518,7 @@ impl TheoryPipeline<'_> {
         if let Some(m) = self.file_maude.as_ref() {
             let checked = tamarin_theory::close_rule::check_close_intr_rule(
                 m,
-                Some(self.theory_name.as_str()),
+                Some(self.elaborated.name.as_str()),
                 self.elaborated.options.deduction_chain_check,
             );
             self.ndc_funs = checked.ndc_funs;
@@ -1560,7 +1558,7 @@ impl TheoryPipeline<'_> {
     /// (TheoryLoader.hs:768-781) — so `--partial-evaluation` and
     /// `--auto-sources` are inert there even though the flags are still read.
     fn close_translated_theory(&mut self) -> Result<ClosedOutcome, RunError> {
-        let in_file = self.in_file;
+        let in_file = self.elaborated.in_file.clone();
         let want_traces = wants_trace_output(self.args);
 
         // The close proper: HS's `closeTranslatedTheory` (TheoryLoader.hs:679),
@@ -1784,7 +1782,7 @@ impl TheoryPipeline<'_> {
             self.closed_marker(&pe_trace);
 
             let elaborated = &self.elaborated;
-            let theory_name = self.theory_name.as_str();
+            let theory_name = self.elaborated.name.as_str();
             let cut = self.cut;
             let ndc_cache = self.ndc_cache.as_ref();
             let file_maude_pool = &self.file_maude_pool;
@@ -1852,7 +1850,7 @@ impl TheoryPipeline<'_> {
                         maude.clone(),
                         file_maude_pool.clone(),
                         if is_target { target_bound } else { usize::MAX },
-                        in_file,
+                        &in_file,
                         &cli_heuristic,
                         cut,
                         ndc_cache,
@@ -2299,8 +2297,6 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             args,
             opts: &opts,
             translate_module,
-            in_file: in_file.as_str(),
-            theory_name,
             elaborated: std::sync::Arc::new(elaborated),
             wf_report: Vec::new(),
             maude_sig,
