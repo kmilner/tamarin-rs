@@ -69,6 +69,7 @@ RS_PATH="${RS_PATH:-$repo_root/target/release/tamarin-rs}"
 # maude for the whole run and put its directory on PATH for the children.
 MAUDE=$(resolve_maude) || exit 2
 maude_on_path "$MAUDE"
+oracle_rev_check "$HS_PATH" "$MAUDE" "$repo_root"
 # Oracle-binary fingerprint (gate_common's hs_fingerprint), folded into every
 # cache key below.  Without it the key is sha256(theory)+flags, which cannot
 # see the ORACLE changing: a rebuilt oracle keeps answering out of entries the

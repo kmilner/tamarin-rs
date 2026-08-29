@@ -24,6 +24,9 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 sub="$root/tamarin-prover"
 testdir="$root/tamarin-prover-testing"
 series="$root/patches/series"
+[ -r "$root/scripts/gate_common.sh" ] || {
+    echo "ERROR: missing scripts/gate_common.sh" >&2; exit 1; }
+. "$root/scripts/gate_common.sh"
 
 git -C "$root" submodule update --init tamarin-prover
 echo "submodule ready (pristine upstream @ $(git -C "$sub" rev-parse --short HEAD))"
@@ -68,5 +71,20 @@ echo "testing tree patched ($applied patch(es))"
 
 echo "building the patched Haskell oracle (first build takes a while)..."
 ( cd "$testdir" && stack build )
+install_root="$(cd "$testdir" && stack path --local-install-root)"
+oracle="$install_root/bin/tamarin-prover"
+[ -x "$oracle" ] || {
+    echo "ERROR: stack build produced no oracle at $oracle" >&2; exit 1; }
+patch_fp=$(patch_series_fingerprint "$root") || {
+    echo "ERROR: cannot fingerprint patches/series" >&2; exit 1; }
+binary_fp=$(sha256sum "$oracle" | cut -d' ' -f1)
+stamp="${oracle}.tamarin-rs-oracle"
+stamp_tmp="${stamp}.tmp.$$"
+{
+    printf 'pin=%s\n' "$pinned"
+    printf 'patch_series_sha256=%s\n' "$patch_fp"
+    printf 'binary_sha256=%s\n' "$binary_fp"
+} > "$stamp_tmp"
+mv "$stamp_tmp" "$stamp"
 echo "done. scripts/*.sh discover the oracle under tamarin-prover-testing/"
 echo "automatically; override with HS_PATH=<binary> if needed."

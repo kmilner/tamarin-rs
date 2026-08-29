@@ -1089,7 +1089,7 @@ mod open_item_tests {
             pretty_translation_element(
                 &TranslationElement::ExportInfo {
                     tag: "queries".to_string(),
-                    body: "q".to_string(),
+                    body: " q".to_string(),
                 },
                 "f.spthy"
             ),

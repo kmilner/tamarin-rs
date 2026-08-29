@@ -51,11 +51,9 @@ web_cache_init() {
         # marker and use the stable content stamp.
         if find "$CACHE" -maxdepth 1 -name '*.hs.json' -print -quit 2>/dev/null | grep -q . \
                 && [ ! -f "$CACHE/PROFILE" ]; then
-            WEB_CACHE_ORACLE_STAMP="$HS_FP"
             WEB_CACHE_MODE=legacy-explicit
-        else
-            WEB_CACHE_ORACLE_STAMP="$WEB_ORACLE_SHA256"
         fi
+        WEB_CACHE_ORACLE_STAMP="$WEB_ORACLE_SHA256"
     fi
 
     mkdir -p "$CACHE" || return 1
@@ -124,6 +122,16 @@ web_cache_invalidate() {
     local key=$1
     # The stamp is the commit marker, so remove it before the manifest.
     rm -f "$CACHE/$key.hs.fp" "$CACHE/$key.hs.json"
+}
+
+# web_cache_stamp_matches <stamp>
+# Profiled caches require their stable content stamp. An explicitly selected
+# old flat cache may still carry the former size+mtime stamp; accept it only in
+# that compatibility mode, while stamping every newly crawled manifest with
+# the content SHA-256.
+web_cache_stamp_matches() {
+    [ "$1" = "$WEB_CACHE_ORACLE_STAMP" ] && return 0
+    [ "$WEB_CACHE_MODE" = legacy-explicit ] && [ "$1" = "$HS_FP_LEGACY" ]
 }
 
 # web_stage_inputs <source-theory> <destination-directory>
@@ -225,7 +233,7 @@ web_cache_adopt_legacy() {
         stamp=
         [ -f "$legacy/$old_key.hs.fp" ] && read -r stamp < "$legacy/$old_key.hs.fp"
         case $stamp in
-            "$HS_FP"|"$WEB_ORACLE_SHA256") ;;
+            "$HS_FP_LEGACY"|"$HS_FP"|"$WEB_ORACLE_SHA256") ;;
             *) continue ;;
         esac
         cached_plan=$(python3 - "$manifest" "$plan" <<'PY'

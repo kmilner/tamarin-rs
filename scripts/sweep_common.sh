@@ -270,10 +270,22 @@ hs_fingerprint "$HS_BIN"
 #   excluding volatile paths (pass e.g. "json+dot", not the tmp-dir flags).
 hs_run() {
   local wd=$1 f=$2 tag=$3; shift 3
-  local key
+  local key legacy_key legacy_dir
   key=$( { sha256sum "$f" | cut -d' ' -f1; echo "$tag"; echo "$HS_FP"; echo "$MAUDE"
            include_shas "$f"; oracle_shas "$f" "$*"; } | sha256sum | cut -d' ' -f1 )
   local dir="$HS_CACHE/${key:0:2}/$key"
+  # Preserve the costly cache generated before hs_fingerprint switched from
+  # size+mtime to binary SHA-256. The source attestation preflight has already
+  # established that this exact binary is the intended oracle; copy-on-read
+  # promotes only the legacy key computed from that same executable.
+  legacy_key=$( { sha256sum "$f" | cut -d' ' -f1; echo "$tag"; echo "$HS_FP_LEGACY"; echo "$MAUDE"
+                  include_shas "$f"; } | sha256sum | cut -d' ' -f1 )
+  legacy_dir="$HS_CACHE/${legacy_key:0:2}/$legacy_key"
+  if [ ! -f "$dir/rc" ] && [ -f "$legacy_dir/rc" ]; then
+    local promote="$dir.promote.$$"
+    mkdir -p "$(dirname "$dir")" && cp -a "$legacy_dir" "$promote" \
+      && mv -T "$promote" "$dir" || rm -rf "$promote"
+  fi
   if [ -f "$dir/rc" ]; then
     local crc ccap
     crc=$(cat "$dir/rc"); ccap=$(cat "$dir/cap")
@@ -386,7 +398,7 @@ sweep_out() {
 sweep_export() {
   export -f one row grun oom_prologue norm nerr io_diff infra_abort nonempty_compared \
             nocompare_check include_shas oracle_shas hs_run sweep_one "$@"
-  export HS_BIN RS_BIN MAUDE OUT TIMEOUT HS_CACHE HS_FP
+  export HS_BIN RS_BIN MAUDE OUT TIMEOUT HS_CACHE HS_FP HS_FP_LEGACY
 }
 
 # sweep_retry <out.tsv> <status-col>

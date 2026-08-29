@@ -61,6 +61,7 @@ HS_PATH=$(resolve_hs_oracle "$repo_root") || exit 2
 # Oracle-binary fingerprint (gate_common's hs_fingerprint), folded into every
 # cache key: a rebuilt oracle must MISS, not answer out of the previous one's
 # entries.  Loop-invariant, so taken once.
+oracle_rev_check "$HS_PATH" "$MAUDE" "$repo_root"
 hs_fingerprint "$HS_PATH"
 export RS_PATH HS_PATH HS_CACHE CORPUS_ROOT FLAGS_MAP FILE_TIMEOUT \
        HS_FILL_TIMEOUT DERIVCHECK_TIMEOUT HS_FP HS_FP_SALT

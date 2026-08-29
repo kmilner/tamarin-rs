@@ -20,9 +20,10 @@ testdir="$root/tamarin-prover-testing"
 rebasedir="$root/tamarin-prover-rebase"
 series="$root/patches/series"
 tmp="$(mktemp -d)"
+owns_rebasedir=0
 
 cleanup() {
-    if [ -d "$rebasedir" ]; then
+    if [ "$owns_rebasedir" = 1 ] && [ -d "$rebasedir" ]; then
         git -C "$sub" worktree remove --force "$rebasedir" 2>/dev/null || true
     fi
     rm -rf "$tmp"
@@ -86,6 +87,7 @@ oldshort="$(git -C "$sub" rev-parse --short "$old")"
 newshort="$(git -C "$sub" rev-parse --short "$new")"
 
 git -C "$sub" worktree add -q --detach "$rebasedir" "$new"
+owns_rebasedir=1
 echo "== checking patch series: $oldshort -> $newshort =="
 apply_series "$rebasedir"
 
@@ -99,6 +101,7 @@ if [ "$mode" = check ]; then
 fi
 
 git -C "$sub" worktree remove --force "$rebasedir"
+owns_rebasedir=0
 git -C "$sub" checkout -q --detach "$new"
 git -C "$root" add tamarin-prover
 
@@ -142,6 +145,13 @@ staged (not committed): tamarin-prover gitlink
 review: $remap_report and any Haskell cite rewrites
 
 The rebuilt oracle has a new fingerprint, so old cache entries are safe but
-will miss. Re-run the batch, proof-output divergence, and web parity gates to
-populate and certify the new cache generation.
+will miss; run scripts/migrate_hs_cache_fp.sh when preserving a compatible
+local cache generation. Re-certify the new source/cache generation:
+  1. scripts/divergence_fixtures/capture.sh && git diff -- scripts/divergence_fixtures/expected
+  2. scripts/capture_cli_refs.sh && cargo test -p tamarin-prover --test cli_e2e
+  3. scripts/corpus_file_diff.sh 2>&1 | tee /tmp/fullgate.log
+     scripts/rs_ref_check.sh generate --certified-by /tmp/fullgate.log
+  4. scripts/wf_gate.sh && scripts/pretty_gate.sh; run all three flag sweeps
+  5. crates/tamarin-server/tests/capture_haskell_fixtures.sh && cargo test -p tamarin-server
+  6. run web_parity.sh on the milestone list and pane_byte_check.sh on its captures
 EOF

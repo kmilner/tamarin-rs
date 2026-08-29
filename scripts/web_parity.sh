@@ -100,10 +100,10 @@ RS_PATH="${RS_PATH:-$repo_root/target/release/tamarin-rs}"
 MAUDE_PATH=$(resolve_maude) || exit 2
 maude_on_path "$MAUDE_PATH"
 
-# Keep gate_common's legacy size.mtime fingerprint for safe adoption of old
-# flat caches. web_cache.sh additionally hashes the complete binary: that
-# stable content identity selects the profile and stamps new sidecars, while
-# pane_byte_check.sh uses the same helper and therefore cannot drift.
+# Refuse an oracle that was not built by setup.sh from the pinned submodule and
+# current patch series. The binary SHA-256 also keys the general gate caches;
+# web_cache.sh folds it into a profile shared with pane_byte_check.sh.
+oracle_rev_check "$HS_PATH" "$MAUDE_PATH" "$repo_root"
 hs_fingerprint "$HS_PATH" \
     || { echo "cannot fingerprint HS binary '$HS_PATH'" >&2; exit 2; }
 [ -r "$script_dir/web_cache.sh" ] || { echo "web_parity: missing $script_dir/web_cache.sh" >&2; exit 2; }
@@ -279,7 +279,7 @@ one_file() {
     if [ -f "$hs_manifest" ]; then
         local hs_fp=''
         [ -f "$hs_fp_file" ] && read -r hs_fp < "$hs_fp_file"
-        if [ "$hs_fp" != "$WEB_CACHE_ORACLE_STAMP" ]; then
+        if ! web_cache_stamp_matches "$hs_fp"; then
             echo "  stale HS manifest (oracle ${hs_fp:-unstamped} != $WEB_CACHE_ORACLE_STAMP) — re-crawling" >&2
             web_cache_invalidate "$key"
         fi

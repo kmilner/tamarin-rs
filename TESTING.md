@@ -429,12 +429,12 @@ raising it.
 
 **Cache keys carry the oracle.** `.hs_file_cache/` and `.hs_pretty_cache/`
 entries are named
-`<sha256(theory)>[__i<12 hex sha256(include shas)>][__o<12 hex sha256(oracle scripts)>][__f<12 hex sha256(flags)>]__b<12 hex sha256(HS_FP)>.<suffix>`
+`<sha256(theory)>[__i<12 hex sha256(include shas)>][__o<12 hex sha256(oracle scripts)>][__f<12 hex sha256(flags)>]__b<first 12 hex of HS_FP>.<suffix>`
 — the `__i` component (present only on `#include`-carrying theories) digests
 every included file, transitively, and `__o` (present only when relevant files
 exist) digests executable-oracle contents and modes — where `HS_FP` is
-`stat -c '%s.%Y'` of the oracle binary — `gate_common.sh`'s
-`hs_fingerprint`, the one definition every cached gate sources. A rebuilt
+SHA-256 — `gate_common.sh`'s `hs_fingerprint`, the one definition every
+cached gate sources. A changed
 oracle, whether a bump or a `patches/series` edit re-applied by
 `./setup.sh testing`, is a clean MISS per entry rather than a silently stale
 hit. Nothing is archived and nothing is wiped: `bump_submodule.sh`
@@ -443,14 +443,24 @@ oracle binary even on a warm cache —
 its fingerprint is part of the address — and exit 2 without one,
 `NO_HS_FILL=1` included.
 
-**Run the migration once.** Entries written under the pre-fingerprint key are
-unreachable. `scripts/migrate_hs_cache_fp.sh` renames them onto the current
-names — `mv` only, it never runs the oracle — and must run before the next
-gate run, or the caches regenerate from scratch. It refuses (exit 2) unless
-the checked-out oracle is the submodule pin, since that premise is what makes
-adopting the old entries legitimate;
+`./setup.sh testing` writes a source attestation beside that binary: the
+submodule pin, the ordered patch-series SHA-256 and the binary SHA-256.
+`oracle_rev_check` verifies all three. This distinguishes the intended patched
+oracle from an arbitrary dirty worktree whose `Git revision:` happens to have
+the same base commit.
+
+**Migrate an older cache generation.** Entries written under the
+pre-fingerprint or former size+mtime key are otherwise unreachable.
+`scripts/migrate_hs_cache_fp.sh` renames them onto the current binary-SHA
+names and upgrades matching web fingerprint sidecars; it never runs the
+oracle or rewrites captured output. Run it before the next gate, or those
+entries regenerate from scratch. Sweep-cache directories hash the whole key,
+so `sweep_common.sh` instead promotes a matching legacy entry on first read.
+The migration refuses (exit 2) unless the oracle's setup attestation matches
+the submodule pin, current patch series and executable, since that premise is
+what makes adopting the old entries legitimate;
 `ALLOW_ORACLE_REV_MISMATCH=1` overrides, `DRY_RUN=1` reports without moving,
-and it prints per-cache migrated/already/other-oracle/collided/unrecognised/
+and it prints per-cache migrated/upgraded/already/other-oracle/collided/unrecognised/
 failed counts plus `DONE_MIGRATE_HS_CACHE_FP verdict=OK|FAILED`. It is
 idempotent. Every tool that touches `.hs_file_cache/` computes the same
 fingerprinted key, `triage_diff_vs_hs.sh` included, so nothing writes entries
@@ -458,7 +468,10 @@ the migration would have to chase.
 
 The `.hs_canon_cache/`, web, gate and sweep caches, plus `rs_ref_check.sh`
 references, all digest included files transitively and executable oracle
-inputs. The web cache additionally stages both dependency classes.
+inputs. Include-free and oracle-free keys retain their previous dependency
+components, so adding these identities does not invalidate the bulk of the
+expensive corpus cache. The web cache additionally stages both dependency
+classes through one helper shared by both consumers.
 
 ## Fast gates (run on every build)
 
@@ -584,7 +597,8 @@ and `migrate_hs_cache_fp.sh`'s rename log (never runs the oracle) by name —
 AND carry `files=<n>` covering at least every file being baselined, so an OK
 from a `FAMILY=1`/narrowed-`ALLOWLIST` run cannot certify the unscoped
 corpus. The log's path, its verdict and `HS_PATH`'s fingerprint — revision-
-checked against the submodule pin (`gate_common.sh`'s `oracle_rev_check`,
+checked against the submodule pin and current patch series
+(`gate_common.sh`'s `oracle_rev_check`,
 `ALLOW_ORACLE_REV_MISMATCH=1` to override) — are stamped into the reference
 header beside `# maude:`. Without all that, `generate` would launder whatever
 this binary does today into the baseline. `rs_ref_check.sh`'s own
@@ -811,8 +825,8 @@ exits 2 rather than running with a private fallback.
 
 | Script | Purpose |
 |---|---|
-| `bump_submodule.sh` | submodule bump: patch rebase, oracle rebuild, cite remap, 6-step re-certification checklist (the caches self-invalidate, so none is archived) |
-| `migrate_hs_cache_fp.sh` | one-time re-keying of the HS caches onto the fingerprint-bearing names |
+| `bump_submodule.sh` | submodule bump: patch rebase, oracle rebuild, cite remap, explicit 6-step re-certification checklist (the caches self-invalidate, so none is archived) |
+| `migrate_hs_cache_fp.sh` | idempotent re-keying of older HS caches onto binary-SHA identities |
 | `bench.sh` | RS-vs-HS wall-clock + memory tables (`--write` regenerates the README block) |
 | `check_hs_cites.py` / `remap_hs_cites.py` / `extend_anchor_citations.py` | upstream line-cite validation and remapping |
 | `gen_license_headers.py` (+ `header_identities.json`) | GPL notice maintenance (`--check` for staleness) |

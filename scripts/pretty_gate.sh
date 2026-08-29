@@ -74,15 +74,10 @@ RS_PATH="${RS_PATH:-$repo_root/target/release/tamarin-rs}"
 }
 export RS_PATH HS_PATH HS_CACHE CORPUS_ROOT FLAGS_MAP FILE_TIMEOUT DERIVCHECK_TIMEOUT
 
-# Oracle handshake. The dependency digest sees theory-side scripts, but only
-# the binary fingerprint sees a rebuilt ORACLE — without it a bump that alters
-# pretty output would leave stale entries under unchanged keys.
-# This used to be a `Git revision:` stamp on the cache dir, which could never
-# fire: setup.sh git-APPLIES patches/ without committing, so every patched
-# build bakes in exactly the submodule pin and the stamp matched an oracle it
-# had never seen.  The binary's own size.mtime (gate_common's hs_fingerprint)
-# changes whenever the oracle is rebuilt, patched or not; folded into the key
-# it turns a changed oracle into a MISS per entry instead of a dir-wide wipe.
+# Oracle handshake. The dependency digest sees theory-side scripts, while the
+# provenance check verifies the submodule pin and patch series. The binary's
+# SHA-256 turns every distinct build into a cache miss per entry.
+oracle_rev_check "$HS_PATH" "$MAUDE" "$repo_root"
 hs_fingerprint "$HS_PATH"
 export HS_FP HS_FP_SALT
 
