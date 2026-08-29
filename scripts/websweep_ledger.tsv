@@ -129,7 +129,6 @@ experiments/MTI_C0_eCK.spthy	witness-index	DIFF	4 pages at cert_20260805
 experiments/SignedDH_test_no_builtin.spthy	witness-index	DIFF	2 pages at cert_20260805
 features/auto-sources/spore/SpliceAS.spthy	watch	none	not crawled at cert_20260805
 features/auto-sources/tamarin-repo/loops/RFID_Simple-without-SL.spthy	watch	none	crawled clean at cert_20260805
-features/auto-sources/tamarin-repo/related_work/TPM_DKRS_CSF11/Envelope.spthy	witness-index	DIFF	1 page at cert_20260805
 features/auto-sources/tamarin-repo/related_work/TPM_DKRS_CSF11/TPM_Exclusive_Secrets.spthy	watch	none	crawled clean at cert_20260805
 features/multiset/NumberSubtermTests.spthy	witness-index	DIFF	1 page at cert_20260805
 features/multiset/counter.spthy	watch	none	crawled clean at cert_20260805
@@ -145,7 +144,6 @@ regression/diff/issue223.spthy	witness-index	DIFF	4 pages at cert_20260805
 regression/trace/issue216.spthy	witness-index	DIFF	4 pages at cert_20260805
 regression/trace/issue532.spthy	error-page	DIFF	6 pages at full_20260828
 related_work/StatVerif_ARR_CSF11/StatVerif_GM_Contract_Signing.spthy	witness-index	DIFF	4 pages at cert_20260805
-related_work/TPM_DKRS_CSF11/Envelope.spthy	witness-index	DIFF	1 page at cert_20260805
 related_work/TPM_DKRS_CSF11/TPM_Exclusive_Secrets.spthy	watch	none	crawled clean at cert_20260805
 related_work/YubiSecure_KS_STM12/Yubikey_and_YubiHSM_multiset.spthy	watch	none	crawled clean at cert_20260805
 related_work/YubiSecure_KS_STM12/Yubikey_multiset.spthy	witness-index	DIFF	40 pages at cert_20260805

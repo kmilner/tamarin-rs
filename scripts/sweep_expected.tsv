@@ -57,37 +57,16 @@
 #    before filing one under #874.)
 #   sapic-export-echo      sapic/export corner files whose -m echo/rc diverged
 #                          before this campaign (PRE-binary evidence).
-#   stored-proof-echo      stored-proof echo divergence. Two distinct causes
-#                          remain. (a) pe/module Yubikey rows: AC multiset
-#                          arguments are echoed in a different order. (b) the
-#                          four json UM_three_pass rows are an UPSTREAM printer
-#                          bug. HS's prettyTerm brackets a user-AC APPLICATION
-#                          but not its arguments (Term.hs:305,310), while the
-#                          grammar puts user-AC operators BELOW `^`
-#                          (Parser/Term.hs:176), so an exponentiation argument
-#                          is printed undelimited: `add(rest,'g'^~ex)` prints
-#                          `(rest add 'g'^~ex)`, which reads back as
-#                          `('g' add rest)^~ex`. HS cannot re-read its own
-#                          file and emits "invalid proof step encountered"
-#                          against itself, 5x on UM_three_pass_combined_fixed.
-#                          NOT a parser divergence: RS parses that text to the
-#                          SAME term HS does (verified on a minimal repro).
-#                          RS survives only because disj replay matches STORED
-#                          TEXT against freshly RENDERED text (replay.rs
-#                          match_goal disj arm) instead of parsing the text to
-#                          a term and looking it up — string comparison is
-#                          invariant under a non-round-tripping printer.
-#                          Write-up: ~/upstream-bug-ac-exponent-precedence.md.
-#                          FILED UPSTREAM 2026-08-09. The expected fix is on
-#                          the printer, and OUR printer currently reproduces
-#                          the buggy form byte-for-byte — so the next submodule
-#                          bump must port the same bracketing or every user-AC
-#                          file goes red. These 4 rows should then go
-#                          LEDGER-STALE; see [[bump-playbook]] before touching.
-#                          To go bug-compatible, round-trip the stored alt text
-#                          through parse+render before comparing; that is a
-#                          deliberate corruption step, so it needs a decision
-#                          against the never-port-an-upstream-bug policy.
+#   oracle-path-resolution RS resolves an implicit oracle beside the theory and
+#                          renders that executable path; the pinned HS oracle
+#                          still echoes the generic `oracle` fallback.
+#   sapic-locations-report upstream #922 rewrites `report(t)` to
+#                          `rep(t, location)` throughout the translated MSR.
+#                          The pinned HS oracle predates that fix.
+#   stored-proof-echo      stored-proof replay divergence: RS adds an unmatched
+#                          `by sorry` branch and `/* unannotated */` markers to
+#                          the echoed proof. The exported JSON and DOT agree;
+#                          this class is narrowed to the stdout symptom.
 #   (No stderr-saturating-sources class exists: sweep_common.sh's `nerr` drops
 #    "[Saturating Sources]" lines on both sides, so that divergence — both
 #    sides trace, with structurally different sequence counts — never reaches a
@@ -174,7 +153,6 @@ pe	examples/csf17/counter-protocol.spthy	oracle-timeout	hs=124 at the 600s seria
 pe	examples/sp14/STR.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs=124 (600s timeout, guarded serial run 2026-08-10)		timeout/kill
 pe	examples/sp14/STR_signed.spthy	oracle-timeout	hs=124 at the 600s serial retry, rs=124 (600s timeout, guarded serial run 2026-08-10)		timeout/kill
 pe	examples/sp14/group_joux.spthy	capacity	PE explodes both sides: rs=134 at the 16GiB guard, hs=124 at 600s (251 when the box is loaded)		timeout/kill
-pe	examples/related_work/YubiSecure_KS_STM12/Yubikey_and_YubiHSM_multiset.spthy	stored-proof-echo	AC multiset args reorder in the echoed proof (tc2 vs otc2++z.1, tc1++z vs otc1++z++z.2); HS also marks a step "invalid proof step encountered" and annotates "/* unannotated */"		stdout
 #
 # module sweep (-m): all attributed pre-existing at a10cc1b with PRE-binary evidence
 module	examples/accountability/csf21-acc-unbounded/mixnets/basic/dmn-basic.spthy	stderr-oracle-calls	-		stderr
@@ -187,11 +165,24 @@ module	examples/accountability/csf21-acc-unbounded/mixnets/message-tracing/dmn-m
 module	examples/accountability/csf21-acc-unbounded/mixnets/message-tracing/dmn-message-tracing-first-2.spthy	stderr-oracle-calls	-		stderr
 module	examples/features/heuristic/OracleRanking.spthy	stderr-oracle-calls	-		stderr
 module	examples/features/macros/MacroTestWithOracleRanking.spthy	stderr-oracle-calls	-		stderr
+module	examples/regression/trace/defaultoracle.spthy	oracle-path-resolution	theory-adjacent defaultoracle.oracle; pre-round binary identical		stdout
 module	examples/sapic/deprecated/csf21-acc-unbounded/mixvote/mixvote_SmHh-multi-session-5-fixed.spthy	capacity	deep process recursion, rs=134 at plain load		timeout/kill
 module	examples/sapic/export/5G_AKA/5G_AKA.spthy	sapic-export-echo	all three modules		stdout
 module	examples/sapic/export/ExistingSapicModels/AKE.spthy	sapic-export-echo	-	msr	stdout
 module	examples/sapic/export/KEMTLS/kemtls-noaead.spthy	sapic-export-echo	-	msr	stdout
 module	examples/sapic/export/KEMTLS/kemtls.spthy	sapic-export-echo	-	msr	stdout
+module	examples/sapic/export/ExistingSapicModels/AC.spthy	sapic-locations-report	upstream #922 behavior; pre-round binary identical	msr	stdout
+module	examples/sapic/export/ExistingSapicModels/AC_counter_with_attack.spthy	sapic-locations-report	upstream #922 behavior; pre-round binary identical	msr	stdout
+module	examples/sapic/export/ExistingSapicModels/AC_sid_with_attack.spthy	sapic-locations-report	upstream #922 behavior; pre-round binary identical	msr	stdout
+module	examples/sapic/export/ExistingSapicModels/OTP.spthy	sapic-locations-report	upstream #922 behavior; pre-round binary identical	msr	stdout
+module	examples/sapic/export/SSH/ssh-with-forwarding-bounded.spthy	sapic-locations-report	upstream #922 behavior; pre-round binary identical	msr	stdout
+module	examples/sapic/fast/feature-locations/AC.spthy	sapic-locations-report	upstream #922 behavior; pre-round binary identical	msr	stdout
+module	examples/sapic/fast/feature-locations/AC_counter_with_attack.spthy	sapic-locations-report	upstream #922 behavior; pre-round binary identical	msr	stdout
+module	examples/sapic/fast/feature-locations/AKE.spthy	sapic-locations-report	upstream #922 behavior; pre-round binary identical	msr	stdout
+module	examples/sapic/fast/feature-locations/OTP.spthy	sapic-locations-report	upstream #922 behavior; pre-round binary identical	msr	stdout
+module	examples/sapic/fast/feature-locations/SOC.spthy	sapic-locations-report	upstream #922 behavior; pre-round binary identical	msr	stdout
+module	examples/sapic/fast/feature-locations/licensing.spthy	sapic-locations-report	upstream #922 behavior; pre-round binary identical	msr	stdout
+module	examples/sapic/slow/feature-locations/AC_sid_with_attack.spthy	sapic-locations-report	upstream #922 behavior; pre-round binary identical	msr	stdout
 module	examples/sapic/manual-proofs/fairexchange-gjm/GJMLocks_a1b1.spthy	stderr-open-chains	rs prints the warning during deriv checks, hs never does		stderr
 module	examples/sapic/manual-proofs/fairexchange-gjm/GJMLocks_a2b2.spthy	stderr-open-chains	rs prints the warning during deriv checks, hs never does		stderr
 module	examples/sapic/manual-proofs/fairexchange-gjm/GJMLocks_a3b3.spthy	stderr-open-chains	rs prints the warning during deriv checks, hs never does		stderr
@@ -203,8 +194,6 @@ module	examples/sapic/manual-proofs/fairexchange-gjm/GJMLocks_fakepcs_fullfairne
 module	examples/sapic/manual-proofs/fairexchange-gjm/GJMLocks_fakepcs_timelinessA.spthy	stderr-open-chains	rs prints the warning during deriv checks, hs never does		stderr
 module	examples/sapic/manual-proofs/fairexchange-gjm/GJMLocks_fakepcs_timelinessB.spthy	stderr-open-chains	rs prints the warning during deriv checks, hs never does		stderr
 module	examples/thesis-LaraSchmid-evoting/chapter3_Alethea/aletheaD_sel_ShHh.spthy	stderr-open-chains	hs prints the warning 2x, rs 0x		stderr
-module	examples/sapic/manual-proofs/Yubikey/complete_proof.spthy	stored-proof-echo	AC multiset args reorder: tc1++z vs z++tc1		stdout
-module	examples/sapic/manual-proofs/Yubikey/manual_part.spthy	stored-proof-echo	AC multiset args reorder: tc1++z vs z++tc1		stdout
 module	examples/sapic/export/States/scytl-voting-system.spthy	hs-derivcheck-timeout	same stdout at --derivcheck-timeout=300		stdout
 module	examples/sapic/not-working/fairexchange-gjm/gjm-locks-fakepcsbranch.spthy	hs-parse-rejects	hs stops at line 193 col 42, rs translates	spthy	rc
 module	examples/sapic/not-working/fairexchange-gjm/gjm-locks-fakepcsbranch.spthy	hs-parse-rejects	hs stops at line 193 col 42, rs translates	spthytyped	stderr
@@ -214,14 +203,13 @@ module	examples/sapic/not-working/fairexchange-gjm/gjm-locks-fakepcsbranch.spthy
 json	case-studies-regression/accountability/csf21-acc-unbounded/previous/whodunit_analyzed.spthy	capacity	both sides hit the cap		timeout/kill
 json	case-studies-regression/fast-tests/sapic/fast/feature-secret-channel/U2F_analyzed.spthy	stderr-simplifier-trace	HS traces the simplifier from iteration 11; RS has no port of it		stderr
 json	case-studies-regression/sapic/fast/feature-secret-channel/U2F_analyzed.spthy	stderr-simplifier-trace	HS traces the simplifier from iteration 11; RS has no port of it		stderr
-json	case-studies-regression/sapic/slow/encWrapDecUnwrap/encwrapdecunwrap_analyzed.spthy	capacity	rs=134		timeout/kill
-json	case-studies-regression/sapic/slow/PKCS11/pkcs11-templates_analyzed.spthy	capacity	hs=124 rs=134		timeout/kill
+json	case-studies-regression/sapic/slow/encWrapDecUnwrap/encwrapdecunwrap_analyzed.spthy	stored-proof-echo	extra sorry branch and unannotated replay markers; pre-round binary identical		stdout
+json	case-studies-regression/sapic/slow/PKCS11/pkcs11-templates_analyzed.spthy	stored-proof-echo	extra sorry branch and unannotated replay markers; pre-round binary identical		stdout
 module	examples/sapic/export/SSH/ssh-with-one-forwarding.spthy	sapic-eq-pattern	all three modules		stdout
 module	examples/sapic/export/SSH/ssh-without-forwarding.spthy	sapic-eq-pattern	all three modules		stdout
 module	examples/sapic/export/LAKE/lake-edhoc.spthy	sapic-skey-sort	-	msr	stdout
 module	examples/sapic/export/LAKE/lake-edhoc-DHmode-FS-KCI.spthy	sapic-skey-sort	-	msr	stdout
 module	examples/sapic/export/KEMTLS/kemtls-clientauth.spthy	derivcheck-missing	-	msr	stdout
-module	examples/sapic/slow/PKCS11/pkcs11-templates.spthy	pred-wrapping	all three modules		stdout
 module	examples/sapic/not-suitable-for-regression/issue-missing-unlock.spthy	sapic-wf-missing	lock over replication	spthy	stdout
 module	examples/sapic/not-suitable-for-regression/issue-missing-unlock.spthy	sapic-wf-missing	lock over replication	spthytyped	stdout
 module	examples/sapic/not-suitable-for-regression/issue-missing-unlock.spthy	sapic-wf-text	fatal error text differs	msr	stderr
@@ -241,10 +229,6 @@ module	examples/sapic/not-working/fairexchange-gjm/gjm-locks-unfairness-A.spthy	
 # a plain run (the Aug-6 build stubs --output-json, so it cannot be compared
 # through the flag path itself).
 json	case-studies-regression/accountability/csf21-acc-unbounded/previous/ct_analyzed.spthy	stderr-simplifier-trace	HS traces the simplifier from iteration 11; RS has no port of it		stderr
-json	case-studies-regression/csf26-ac/fast/UM_three_pass_combined_fixed_analyzed.spthy	stored-proof-echo	stored-proof replay: HS marks a step "invalid proof step encountered" and AC multiset args render differently		stdout
-json	case-studies-regression/csf26-ac/fast/UM_three_pass_analyzed.spthy	stored-proof-echo	stored-proof replay: HS marks a step "invalid proof step encountered" and AC multiset args render differently		stdout
-json	case-studies-regression/fast-tests/csf26-ac/fast/UM_three_pass_combined_fixed_analyzed.spthy	stored-proof-echo	stored-proof replay: HS marks a step "invalid proof step encountered" and AC multiset args render differently		stdout
-json	case-studies-regression/fast-tests/csf26-ac/fast/UM_three_pass_analyzed.spthy	stored-proof-echo	stored-proof replay: HS marks a step "invalid proof step encountered" and AC multiset args render differently		stdout
 json	case-studies-regression/fast-tests/sapic/fast/feature-locations/OTP_analyzed.spthy	stderr-simplifier-trace	HS traces the simplifier from iteration 11; RS has no port of it		stderr
 json	case-studies-regression/sapic/fast/feature-locations/OTP_analyzed.spthy	stderr-simplifier-trace	HS traces the simplifier from iteration 11; RS has no port of it		stderr
 json	case-studies-regression/sapic/slow/encWrapDecUnwrap/encwrapdecunwrap-nolocks_analyzed.spthy	stderr-simplifier-trace	HS traces the simplifier from iteration 11; RS has no port of it		stderr
