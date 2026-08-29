@@ -215,11 +215,7 @@ fn cases_info(n_cases: usize, n_chains: usize) -> String {
 /// links, the `proofIndex` tree, then a trailing `add lemma`.  The header +
 /// edit/delete are wrapped by HS in `markStatus (root color)` — a `hl_*` span
 /// the normalizer unwraps, so we emit them plain.
-fn lemma_index(
-    out: &mut String,
-    entry: &TheoryEntry,
-    l: &tamarin_theory::theory::Lemma<tamarin_theory::theory::ProofSkeleton>,
-) {
+fn lemma_index(out: &mut String, entry: &TheoryEntry, l: &tamarin_theory::theory::Lemma) {
     let idx = entry.idx;
     let tq = match l.trace_quantifier {
         TraceQuantifier::AllTraces => "all-traces",

@@ -729,7 +729,7 @@ fn equal_up_to_terms_ignores_terms() {
 /// ends the run, and every other item keeps its place.
 #[test]
 fn merge_open_proto_rules_groups_consecutive_equal_e_rules() {
-    use crate::theory::{merge_open_proto_rules, OpenProtoRule, ProofSkeleton, TheoryItem};
+    use crate::theory::{merge_open_proto_rules, OpenProtoRule, TheoryItem};
     // Two rules whose E half is the same `Send` rule and whose AC halves are
     // the two Maude narrowings `unfoldRuleVariants` names `Send___VARIANT_<i>`
     // (lib/theory/src/Rule.hs:63-79).
@@ -755,7 +755,7 @@ fn merge_open_proto_rules_groups_consecutive_equal_e_rules() {
         vec![],
         vec![],
     ));
-    let items: Vec<TheoryItem<OpenProtoRule, ProofSkeleton>> = vec![
+    let items: Vec<TheoryItem<OpenProtoRule>> = vec![
         TheoryItem::Rule(variant(1)),
         TheoryItem::Rule(variant(2)),
         TheoryItem::Text(("".to_string(), "between".to_string())),

@@ -270,7 +270,7 @@ pub struct ItemPrinters<'a, R> {
 /// empty operand (Theory/Text/Pretty.hs:83-84), so an item that renders
 /// nothing contributes no block and no blank line.
 pub fn pretty_theory_items<R: Sync>(
-    items: &[TheoryItem<R, crate::theory::ProofSkeleton>],
+    items: &[TheoryItem<R>],
     pp: &ItemPrinters<'_, R>,
 ) -> Vec<String> {
     use rayon::prelude::*;
@@ -286,10 +286,7 @@ pub fn pretty_theory_items<R: Sync>(
 /// prettyMacros ppSap` (TheoryObject.hs:772-781).  The config blocks are
 /// printed before `begin` (TheoryObject.hs:759), so the item stream skips
 /// them.
-fn pretty_theory_item<R>(
-    item: &TheoryItem<R, crate::theory::ProofSkeleton>,
-    pp: &ItemPrinters<'_, R>,
-) -> String {
+fn pretty_theory_item<R>(item: &TheoryItem<R>, pp: &ItemPrinters<'_, R>) -> String {
     match item {
         TheoryItem::Rule(r) => (pp.rule)(r),
         TheoryItem::Restriction(r) => {
@@ -422,7 +419,7 @@ pub fn pretty_open_translated_theory_by_module(
 /// would render empty is left out here and the caller joins with "\n\n".
 /// `cache` is HS's `ppCache` applied to the theory's rule cache; an empty
 /// string is HS's `const emptyDoc`.
-fn theory_header_blocks<R, P>(thy: &Theory<R, P>, cache: &str) -> Vec<String> {
+fn theory_header_blocks<R>(thy: &Theory<R>, cache: &str) -> Vec<String> {
     let mut blocks: Vec<String> = Vec::new();
     blocks.push(format!("theory {}", thy.name));
     for item in &thy.items {
@@ -2521,11 +2518,9 @@ mod manual_rule_variants_tests {
     use super::*;
     use crate::fact::{proto_fact, Multiplicity};
     use crate::rule::{ProtoRuleE, ProtoRuleEInfo, Rule};
-    use crate::theory::{
-        contains_manual_rule_variants, merge_open_proto_rules, OpenProtoRule, ProofSkeleton,
-    };
+    use crate::theory::{contains_manual_rule_variants, merge_open_proto_rules, OpenProtoRule};
 
-    type Item = TheoryItem<OpenProtoRule, ProofSkeleton>;
+    type Item = TheoryItem<OpenProtoRule>;
 
     /// A rule item whose AC half carries `action_names` on top of the E half —
     /// the shape `addActionClosedProtoRule` leaves behind, which adds the

@@ -1789,7 +1789,7 @@ impl TheoryPipeline<'_> {
             let ndc_cache = self.ndc_cache.as_ref();
             let file_maude_pool = &self.file_maude_pool;
 
-            let run_lemma = |l: &tamarin_theory::theory::Lemma<_>| -> (
+            let run_lemma = |l: &tamarin_theory::theory::Lemma| -> (
                 tamarin_theory::pretty_theory::ProvedLemma,
                 LemmaResult,
                 Vec<(String, System)>,
@@ -1936,7 +1936,7 @@ impl TheoryPipeline<'_> {
                 sess.presaturate_shared_sources(cache_disabled, |name| {
                     prove_anything && lemma_matches(lemma_filter, name)
                 });
-                let specs: Vec<&tamarin_theory::theory::Lemma<_>> = elaborated.lemmas().collect();
+                let specs: Vec<&tamarin_theory::theory::Lemma> = elaborated.lemmas().collect();
                 let mut out: Vec<(
                     usize,
                     tamarin_theory::pretty_theory::ProvedLemma,
