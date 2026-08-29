@@ -246,21 +246,6 @@ pub fn elaborate_with_in_file(parser_thy: &p::Theory, in_file: &str) -> Result<T
     let sig = minimal_maude_sig(parser_thy.is_diff);
     let mut thy: Theory = Theory::new(parser_thy.name.clone(), sig);
     thy.in_file = in_file.to_string();
-    // HS sets `_thyIsSapic = True` only for EXACTLY ONE top-level
-    // process: `translate` matches on `theoryProcesses th`
-    // (= `[i | ProcessItem i <- ...]`, only top-level ProcessItems,
-    // not ProcessDefItems), reaching the `True` assignment solely in
-    // the single-process `[p]` branch; `[]` leaves the default False
-    // and `>=2` throws MoreThanOneProcess (lib/sapic/src/Sapic.hs:48,85,87). Mirror
-    // that: count only TopLevelProcess items, true iff exactly one.
-    // Read downstream to gate SAPIC translation (run.rs, apply.rs).
-    thy.is_sapic = parser_thy
-        .items
-        .iter()
-        .filter(|i| matches!(i, p::TheoryItem::TopLevelProcess(_)))
-        .count()
-        == 1;
-
     if let Some(cfg) = &parser_thy.configuration {
         thy.items.push(TheoryItem::ConfigBlock(cfg.clone()));
     }
@@ -364,15 +349,6 @@ fn maude_sig_step(item: &p::TheoryItem, out: &mut Theory) -> Result<Vec<LNMacro>
             for name in names {
                 if let Some(sig) = builtin_sig(name) {
                     s = s.merge(sig);
-                }
-                // HS `builtinsNames` (Theory/Text/Parser/Signature.hs:78-85)
-                // maps two builtins to translation options:
-                //   `reliable-channel` → `_transReliable`
-                //   `locations-report` → `_transReport`
-                match name.as_str() {
-                    "reliable-channel" => out.options.trans_reliable = true,
-                    "locations-report" => out.options.trans_report = true,
-                    _ => {}
                 }
                 // NOTE: `diffie-hellman` already arrives with `enable_dh`
                 // set (its MaudeSig is `dh_maude_sig`, see

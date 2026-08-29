@@ -10,9 +10,8 @@
 //!   - `foldM liftedAddRestriction th1 rest`
 //!   - `addHeuristic [SapicRanking]` unless the user set one
 //!
-//! HS's final `_thyIsSapic = True` has no counterpart here: `Theory::is_sapic`
-//! is already set while elaborating the parsed theory (elaborate.rs), and this
-//! module reads it as the gate that decides whether to translate at all.
+//! HS's final `_thyIsSapic = True` has no stored counterpart here: the theory
+//! derives the translation gate from its top-level process items.
 //!
 //! HS adds these items to the OPEN theory and applies the theory's macros to
 //! every rule and restriction at close time (`closeTheoryItem`,
@@ -53,7 +52,7 @@ pub fn sapic_pre_report(thy: &Theory) -> Vec<WfError> {
 }
 
 /// Apply the SAPIC `process:` translation to a theory that contains exactly one
-/// top-level process.  A no-op for non-process theories (`thy.is_sapic` is
+/// top-level process.  A no-op for non-process theories (`thy.is_sapic()` is
 /// false), so non-SAPIC corpus files are byte-unchanged.
 ///
 /// `user_set_heuristic` is true when the source / CLI already fixed a heuristic
@@ -66,14 +65,13 @@ pub fn sapic_pre_report(thy: &Theory) -> Vec<WfError> {
 /// `preReport ++ postReport` at :730-732).  Empty for a well-formed (or
 /// non-SAPIC) theory.
 pub fn apply_sapic(thy: &mut Theory, user_set_heuristic: bool) -> Result<Vec<WfError>, ElabError> {
-    if !thy.is_sapic {
+    if !thy.is_sapic() {
         return Ok(Vec::new());
     }
 
     // The single top-level process, inlined, plus its warning report — the
     // report is returned to the caller and translation proceeds regardless
-    // (these are warnings, not hard errors).  `is_sapic` set with no
-    // `TopLevelProcess` is a defensive no-op.
+    // (these are warnings, not hard errors).
     let Some(plain) = thy.processes().next().cloned() else {
         return Ok(Vec::new());
     };
@@ -102,10 +100,10 @@ pub fn apply_sapic(thy: &mut Theory, user_set_heuristic: bool) -> Result<Vec<WfE
     // Thread the theory options (HS `_thyOptions`) into the translation.
     let opts = TranslateOptions {
         trans_progress: thy.options.trans_progress(),
-        trans_reliable: thy.options.trans_reliable,
+        trans_reliable: thy.has_signature_builtin("reliable-channel"),
         async_channels: thy.options.asynchronous_channels(),
         compress_events: thy.options.compress_events(),
-        trans_report: thy.options.trans_report,
+        trans_report: thy.has_signature_builtin("locations-report"),
         state_channel_opt: thy.options.state_channel_opt(),
     };
     let translation = translate(&typed, needs_in_ev, st_rules, opts).map_err(|e| ElabError {

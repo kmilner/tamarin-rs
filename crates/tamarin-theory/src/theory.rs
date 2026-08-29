@@ -299,8 +299,6 @@ impl<R> TheoryItem<R> {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Options {
     declarable: [bool; tamarin_parser::DeclarableOption::ALL.len()],
-    pub trans_report: bool,
-    pub trans_reliable: bool,
     /// HS `_deductionChainCheck`: run the no-deconstruction-chain (NDC)
     /// check at theory load. Enabled by default; `--no-ndc` disables it.
     /// Consulted by the load paths that run the once-per-theory
@@ -316,8 +314,6 @@ impl Default for Options {
     fn default() -> Self {
         Options {
             declarable: [false; tamarin_parser::DeclarableOption::ALL.len()],
-            trans_report: false,
-            trans_reliable: false,
             deduction_chain_check: true,
             lemmas_to_prove: Vec::new(),
         }
@@ -372,7 +368,6 @@ pub struct Theory<R = OpenProtoRule> {
     pub signature: MaudeSig,
     pub items: Vec<TheoryItem<R>>,
     pub options: Options,
-    pub is_sapic: bool,
 }
 
 impl<R> Theory<R> {
@@ -385,7 +380,6 @@ impl<R> Theory<R> {
             signature,
             items: Vec::new(),
             options: Options::default(),
-            is_sapic: false,
         }
     }
 }
@@ -437,6 +431,21 @@ impl<R> Theory<R> {
     /// TheoryObject.hs:671-672).
     pub fn lookup_restriction(&self, name: &str) -> Option<&Restriction> {
         self.restrictions().find(|r| r.name == name)
+    }
+
+    /// Whether the theory contains exactly one top-level process.
+    pub fn is_sapic(&self) -> bool {
+        let mut processes = self.processes();
+        processes.next().is_some() && processes.next().is_none()
+    }
+
+    /// Whether a `builtins:` declaration contains `name`.
+    pub fn has_signature_builtin(&self, name: &str) -> bool {
+        self.items.iter().any(|item| {
+            matches!(item,
+                TheoryItem::Translation(TranslationElement::SignatureBuiltin(builtin))
+                    if builtin == name)
+        })
     }
 }
 

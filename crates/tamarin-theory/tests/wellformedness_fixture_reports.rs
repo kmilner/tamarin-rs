@@ -88,7 +88,7 @@ fn render_report(name: &str) -> String {
     let elaborated = tamarin_theory::elaborate::elaborate(&parsed)
         .unwrap_or_else(|e| panic!("{name}: elaborate: {}", e.message));
     assert!(
-        !elaborated.is_sapic,
+        !elaborated.is_sapic(),
         "{name}: declares a process, but this harness omits the SAPIC/accountability \
          translation stage both drivers run before the wellformedness pass, so its \
          report would be missing the generated rules' findings",

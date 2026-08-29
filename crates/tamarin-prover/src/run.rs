@@ -1239,7 +1239,8 @@ impl TheoryPipeline<'_> {
                 // `translateTheory`'s preReport (`Sapic.checkWellformedness t`,
                 // Warnings.hs:37-38) still runs on the pre-translation process
                 // — the same inlined `PlainProcess` `apply_sapic` checks.
-                let wf: Vec<tamarin_theory::wellformedness::WfError> = if self.elaborated.is_sapic {
+                let wf: Vec<tamarin_theory::wellformedness::WfError> = if self.elaborated.is_sapic()
+                {
                     tamarin_sapic::apply::sapic_pre_report(&self.elaborated)
                 } else {
                     Vec::new()

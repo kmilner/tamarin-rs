@@ -222,9 +222,9 @@ pub(crate) fn load_from_source(
 
     // SAPIC `process:` translation — mirror `run_batch`'s CLI-side pass so
     // the web load path renders SAPIC theories exactly like `--prove`.  Runs
-    // ONLY for `is_sapic` theories (exactly one top-level `process:`);
-    // `apply_sapic` returns `Ok(vec![])` when
-    // `!typed.is_sapic`, so it is safe to call unconditionally and leaves
+    // ONLY for theories with exactly one top-level `process:`;
+    // `apply_sapic` returns `Ok(vec![])` otherwise, so it is safe to call
+    // unconditionally and leaves
     // non-process theories byte-unchanged.  It injects the generated MSR
     // rules + `single_session` restriction + `heuristic: p` into `typed`,
     // which the web renderers and the AC-variant pre-computation read, so it
