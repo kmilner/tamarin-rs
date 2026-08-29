@@ -53,42 +53,42 @@ fn render_block(kw: &str, b: &PrioBlock) -> String {
 /// Render a parsed selector in the canonical form produced by HS
 /// `prettify` (TheoryObject.hs:947-952).
 fn render_selector(out: &mut String, selector: &SelectorExpr) {
+    let mut raw = String::new();
+    render_selector_raw(&mut raw, selector);
+    for word in raw.split_whitespace() {
+        match word {
+            "|" => out.push_str(" | "),
+            "&" => out.push_str(" & "),
+            "not" => out.push_str("not "),
+            _ => out.push_str(word),
+        }
+    }
+}
+
+/// Rebuild the selector text stored by HS's tactic parser before `prettify`.
+fn render_selector_raw(out: &mut String, selector: &SelectorExpr) {
     match selector {
         SelectorExpr::Leaf(leaf) => {
             out.push_str(&leaf.name);
             for param in &leaf.params {
-                out.push('"');
-                let mut words = param.split_whitespace().peekable();
-                let mut first = true;
-                while let Some(word) = words.next() {
-                    // In HS the opening and closing quotes are attached to
-                    // the first and last words, so only an interior word can
-                    // itself be recognised as an operator by `prettify`.
-                    let interior = !first && words.peek().is_some();
-                    match (interior, word) {
-                        (true, "|") => out.push_str(" | "),
-                        (true, "&") => out.push_str(" & "),
-                        (true, "not") => out.push_str("not "),
-                        _ => out.push_str(word),
-                    }
-                    first = false;
-                }
+                out.push_str(" \"");
+                out.push_str(param);
                 out.push('"');
             }
         }
         SelectorExpr::Not(expr) => {
             out.push_str("not ");
-            render_selector(out, expr);
+            render_selector_raw(out, expr);
         }
         SelectorExpr::And(left, right) => {
-            render_selector(out, left);
+            render_selector_raw(out, left);
             out.push_str(" & ");
-            render_selector(out, right);
+            render_selector_raw(out, right);
         }
         SelectorExpr::Or(left, right) => {
-            render_selector(out, left);
+            render_selector_raw(out, left);
             out.push_str(" | ");
-            render_selector(out, right);
+            render_selector_raw(out, right);
         }
     }
 }
@@ -163,6 +163,15 @@ prio:\n\
         assert_eq!(
             render(&parse("x", raw)),
             "tactic: x\npresort: s\nprio: {id}\n  regex\"nota | bnot c & d\""
+        );
+    }
+
+    #[test]
+    fn selector_rendering_preserves_quoted_boundary_whitespace() {
+        let raw = "prio:\n  regex \" | \" \" & \" \" not \"\n";
+        assert_eq!(
+            render(&parse("x", raw)),
+            "tactic: x\npresort: s\nprio: {id}\n  regex\" | \"\" & \"\"not \""
         );
     }
 
