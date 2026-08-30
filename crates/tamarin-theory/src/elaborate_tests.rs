@@ -1248,6 +1248,16 @@ fn duplicate_process_definitions_are_rejected() {
     );
 }
 
+#[test]
+fn duplicate_heuristic_headers_are_rejected() {
+    let src = "theory T begin\n\
+               heuristic: s\n\
+               heuristic: c\n\
+               end\n";
+    let err = elaborate(&parse_theory(src, &[]).unwrap()).unwrap_err();
+    assert_eq!(err.message, "default heuristic already defined");
+}
+
 /// One process-bearing item as the comparison below reads it.
 #[derive(Debug, PartialEq)]
 enum ProcessProbe {

@@ -256,16 +256,21 @@ pub fn elaborate_with_in_file(parser_thy: &p::Theory, in_file: &str) -> Result<T
     // them into `[GoalRanking ProofContext]` in the parser itself
     // (`heuristic`, Theory/Text/Parser/Signature.hs:305-306) and stores that
     // list (`addHeuristic`, TheoryObject.hs:598-600).
-    for item in &parser_thy.items {
-        if let p::TheoryItem::Heuristic(h) = item {
-            thy.heuristic.extend(
-                crate::constraint::solver::goals::parse_heuristic_str_with_tactics(
-                    h,
-                    in_file,
-                    &thy.tactic,
-                ),
-            );
-        }
+    let mut heuristic_headers = parser_thy.items.iter().filter_map(|item| match item {
+        p::TheoryItem::Heuristic(h) => Some(h),
+        _ => None,
+    });
+    if let Some(h) = heuristic_headers.next() {
+        thy.heuristic = crate::constraint::solver::goals::parse_heuristic_str_with_tactics(
+            h,
+            in_file,
+            &thy.tactic,
+        );
+    }
+    if heuristic_headers.next().is_some() {
+        return Err(ElabError {
+            message: "default heuristic already defined".to_string(),
+        });
     }
     Ok(thy)
 }
