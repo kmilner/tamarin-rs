@@ -180,19 +180,19 @@ pub fn pretty_closed_theory(
     // rule items through `prettyOpenProtoRuleAsClosedRule` when some of them
     // carries an AC rule of its own, and the closed items through
     // `prettyClosedProtoRule` otherwise.
-    let proof = |lem: &crate::theory::Lemma| match proved
+    let proof_bodies: std::collections::HashMap<&str, &str> = proved
         .iter()
-        .find(|p| p.name == lem.name)
-        .and_then(|p| p.proof_body.as_ref())
-    {
-        Some(b) => b.clone(),
+        .filter_map(|p| Some((p.name.as_str(), p.proof_body.as_deref()?)))
+        .collect();
+    let proof = |lem: &crate::theory::Lemma| match proof_bodies.get(lem.name.as_str()) {
+        Some(b) => (*b).to_string(),
         None => "by sorry".to_string(),
     };
     // HS `emptyString` (lib/theory/src/Pretty.hs:24-25) as `ppSap`
     // (ClosedTheory.hs:390, :398).
     let translation = |_: &TranslationElement| String::new();
-    let merged = crate::theory::merge_open_proto_rules(&thy.items);
-    let blocks = if crate::theory::contains_manual_rule_variants(&merged) {
+    let blocks = if crate::theory::contains_open_rule_variants(&thy.items) {
+        let merged = crate::theory::merge_open_proto_rules(&thy.items);
         pretty_theory_items(
             &merged,
             &ItemPrinters {
@@ -2517,7 +2517,10 @@ mod manual_rule_variants_tests {
     use super::*;
     use crate::fact::{proto_fact, Multiplicity};
     use crate::rule::{ProtoRuleE, ProtoRuleEInfo, Rule};
-    use crate::theory::{contains_manual_rule_variants, merge_open_proto_rules, OpenProtoRule};
+    use crate::theory::{
+        contains_manual_rule_variants, contains_open_rule_variants, merge_open_proto_rules,
+        OpenProtoRule,
+    };
 
     type Item = TheoryItem<OpenProtoRule>;
 
@@ -2538,7 +2541,9 @@ mod manual_rule_variants_tests {
     }
 
     fn gate(items: &[Item]) -> bool {
-        contains_manual_rule_variants(&merge_open_proto_rules(items))
+        let old = contains_manual_rule_variants(&merge_open_proto_rules(items));
+        assert_eq!(contains_open_rule_variants(items), old);
+        old
     }
 
     /// `containsManualRuleVariants` (OpenTheory.hs:584-589) is the OR over the

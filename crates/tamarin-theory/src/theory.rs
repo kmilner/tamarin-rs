@@ -661,6 +661,34 @@ pub fn contains_manual_rule_variants(items: &[TheoryItem<MergedProtoRule>]) -> b
         .any(|i| matches!(i, TheoryItem::Rule(r) if !r.rule_ac.is_empty()))
 }
 
+/// Whether opening any stored rule would retain an AC half. This is the
+/// allocation-free gate for [`merge_open_proto_rules`]: `equalUpToTerms`
+/// compares only the rule name and the fact-tag shapes, so constructing and
+/// cloning the closed AC rules is unnecessary merely to choose a printer.
+pub fn contains_open_rule_variants(items: &[TheoryItem<OpenProtoRule>]) -> bool {
+    fn same_tags(xs: &[crate::fact::LNFact], ys: &[crate::fact::LNFact]) -> bool {
+        xs.len() == ys.len() && xs.iter().zip(ys).all(|(x, y)| x.tag == y.tag)
+    }
+    fn differs(ac: &ProtoRuleE, e: &ProtoRuleE) -> bool {
+        ac.info.name != e.info.name
+            || !same_tags(&ac.premises, &e.premises)
+            || !same_tags(&ac.conclusions, &e.conclusions)
+            || !same_tags(&ac.actions, &e.actions)
+    }
+
+    items.iter().any(|item| {
+        let TheoryItem::Rule(rule) = item else {
+            return false;
+        };
+        let e = rule.rule_e();
+        if rule.rule_ac.is_empty() {
+            differs(rule.abstracted_rule.as_ref().unwrap_or(&rule.rule), e)
+        } else {
+            rule.rule_ac.iter().any(|ac| differs(ac, e))
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
