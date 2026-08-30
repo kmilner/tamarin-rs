@@ -18,7 +18,7 @@ use std::sync::{Arc, Condvar, Mutex};
 
 use crate::lterm::LNTerm;
 use crate::maude_parse;
-use crate::maude_print::{pp_mterm, pp_mterm_list, pp_theory};
+use crate::maude_print::{pp_mterm_into, pp_mterm_list_into, pp_theory};
 use crate::maude_sig::MaudeSig;
 use crate::maude_types::{lterm_to_mterm_global, mterm_to_lnterm, ConvCtx, MSubst, MTerm};
 use crate::rewriting::Equal;
@@ -719,7 +719,7 @@ impl MaudeHandle {
                 if tamarin_utils::env_gate!("TAM_RS_VERIFY_REDUCE_NF") {
                     let mt = lterm_to_mterm_global(t, &mut ctx);
                     let mut cmd = b"reduce ".to_vec();
-                    cmd.extend(pp_mterm(&mt));
+                    pp_mterm_into(&mt, &mut cmd);
                     cmd.extend_from_slice(b" .\n");
                     let reply = inner.execute(&cmd)?;
                     let mt_back = maude_parse::parse_reduce_reply(&reply)?;
@@ -738,7 +738,7 @@ impl MaudeHandle {
             }
             let mt = lterm_to_mterm_global(t, &mut ctx);
             let mut cmd = b"reduce ".to_vec();
-            cmd.extend(pp_mterm(&mt));
+            pp_mterm_into(&mt, &mut cmd);
             cmd.extend_from_slice(b" .\n");
             let reply = inner.execute(&cmd)?;
             inner.stats.norm_count += 1;
@@ -1286,7 +1286,7 @@ impl MaudeHandle {
         let mut ctx = ConvCtx::new();
         let mt = lterm_to_mterm_global(t, &mut ctx);
         let mut cmd = b"get variants in MSG : ".to_vec();
-        cmd.extend(pp_mterm(&mt));
+        pp_mterm_into(&mt, &mut cmd);
         cmd.extend_from_slice(b" .\n");
         // Raw-reply memo (see `SharedMaudeCaches::reply`): `get variants in MSG` replies are
         // command-local and deterministic, and each variant is back-converted
@@ -1363,9 +1363,9 @@ fn build_conj_eqs_cmd(prefix: &[u8], eqs: &[Equal<LNTerm>], ctx: &mut ConvCtx) -
         }
         let lm = lterm_to_mterm_global(&eq.lhs, ctx);
         let rm = lterm_to_mterm_global(&eq.rhs, ctx);
-        cmd.extend(pp_mterm(&lm));
+        pp_mterm_into(&lm, &mut cmd);
         cmd.extend_from_slice(b" =? ");
-        cmd.extend(pp_mterm(&rm));
+        pp_mterm_into(&rm, &mut cmd);
     }
     cmd.extend_from_slice(b" .\n");
     cmd
@@ -1377,9 +1377,9 @@ fn build_conj_eqs_cmd(prefix: &[u8], eqs: &[Equal<LNTerm>], ctx: &mut ConvCtx) -
 /// shared list formatter.
 fn pp_match_cmd(pats: &[MTerm], subjs: &[MTerm]) -> Vec<u8> {
     let mut cmd = b"match in MSG : ".to_vec();
-    cmd.extend(pp_mterm_list(pats));
+    pp_mterm_list_into(pats, &mut cmd);
     cmd.extend_from_slice(b" <=? ");
-    cmd.extend(pp_mterm_list(subjs));
+    pp_mterm_list_into(subjs, &mut cmd);
     cmd.extend_from_slice(b" .\n");
     cmd
 }
