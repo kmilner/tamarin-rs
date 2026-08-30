@@ -48,8 +48,8 @@ use crate::theory::Theory;
 use crate::tools::rule_variants::open_rule_has_no_variants;
 
 use super::{
-    grouped_topic_block, numbered_index_width, quote, show_rule_case_name, thy_proto_rules,
-    underline_topic, WfError, WfReport, WF_LINE_LENGTH, WF_RIBBON,
+    numbered_index_width, quote, show_rule_case_name, thy_proto_rules, underline_topic, WfError,
+    WfReport, WF_LINE_LENGTH, WF_RIBBON,
 };
 
 // =============================================================================
@@ -307,7 +307,7 @@ pub fn fresh_names_report(thy: &Theory) -> WfReport {
     // active `HtmlDocGuard`.
     let _plain = hpj::HtmlDocGuard::disable();
     let topic = "Fresh public constants";
-    let mut bodies: Vec<String> = Vec::new();
+    let mut report = Vec::new();
     for ru in thy_proto_rules(thy) {
         let names: Vec<Name> = rule_names(ru)
             .into_iter()
@@ -327,13 +327,14 @@ pub fn fresh_names_report(thy: &Theory) -> WfReport {
                 .map(|n| Doc::text(n.to_string()).nest(2))
                 .collect(),
         ));
-        bodies.push(
+        report.push(WfError::new(
+            topic,
             hpj::fsep(cells)
                 .nest(2)
                 .render_with(WF_LINE_LENGTH, WF_RIBBON),
-        );
+        ));
     }
-    grouped_topic_block(topic, bodies)
+    report
 }
 
 // =============================================================================

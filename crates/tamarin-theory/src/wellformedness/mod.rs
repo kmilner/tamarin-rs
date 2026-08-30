@@ -208,23 +208,6 @@ pub fn underline_topic(title: &str) -> String {
     s
 }
 
-/// Assemble a topic-grouped `WfReport` from pre-built body strings (empty
-/// `bodies` yields an empty report).  `underline_topic` already ends the
-/// `====` rule with a newline, so the extra `\n` is HS's `$-$` blank line
-/// before the bodies; the bodies are joined by the `\n  \n` that HS's
-/// `nest 2 (vcat (intersperse (text "") …))` renders a blank separator line
-/// as (a 2-space `nest 2`'d `text ""`).  Each body already carries its own
-/// 2-space `nest 2` indent.
-fn grouped_topic_block(topic: &str, bodies: Vec<String>) -> WfReport {
-    if bodies.is_empty() {
-        return Vec::new();
-    }
-    let mut msg = underline_topic(topic);
-    msg.push('\n');
-    msg.push_str(&bodies.join("\n  \n"));
-    vec![WfError::new(topic, msg)]
-}
-
 /// HS `numbered'` index width: `nWidth = length (show n)` where `n` is the
 /// number of items (PrettyPrint/Class.hs:257-258).  Each index is rendered as
 /// `flushRight nWidth (show i)` — i.e. left-padded with spaces to this width —

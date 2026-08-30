@@ -1281,9 +1281,8 @@ fn wf_headerless_preamble(topic: &str) -> Option<(String, bool)> {
         | "Reserved names"
         | "Special facts"
         | "Nat Sorts"
-        | "Multiplication restriction of rules" => {
-            Some((format!("{}\n", underline_topic(topic)), false))
-        }
+        | "Multiplication restriction of rules"
+        | "Fresh public constants" => Some((format!("{}\n", underline_topic(topic)), false)),
         // HS `freshFactArguments'` (Wellformedness.hs:569-576, see line 574)
         // and `lemmaAttributeReport` (Wellformedness.hs:924-932, see lines
         // 930-931) pair the underlined topic with a body that carries neither

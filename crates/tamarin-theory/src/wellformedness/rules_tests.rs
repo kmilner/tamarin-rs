@@ -389,8 +389,7 @@ fn fresh_names_report_sees_a_restrict_name() {
     );
     assert_eq!(
         bodies(&fresh_names_report(&thy)),
-        "Fresh public constants\n======================\n\n  \
-         rule `R': fresh public constants are not allowed: ~'foo'"
+        "  rule `R': fresh public constants are not allowed: ~'foo'"
     );
 }
 
@@ -447,8 +446,7 @@ fn fresh_names_report_walks_the_process_attribute() {
     }
     assert_eq!(
         bodies(&fresh_names_report(&thy)),
-        "Fresh public constants\n======================\n\n  \
-         rule `R': fresh public constants are not allowed: ~'foo'"
+        "  rule `R': fresh public constants are not allowed: ~'foo'"
     );
 }
 
@@ -466,7 +464,24 @@ fn fresh_names_report_fills_at_the_report_ribbon() {
     );
     assert_eq!(
         bodies(&fresh_names_report(&thy)),
+        "  rule `outnfoo_0_1': fresh public constants are not allowed: ~'foo',\n    ~'foo'"
+    );
+}
+
+#[test]
+fn fresh_names_report_counts_each_offending_rule() {
+    let thy = elaborated(
+        "theory T begin \
+         rule R1: [ ] --> [ Out(~'one') ] \
+         rule R2: [ ] --> [ Out(~'two') ] \
+         end",
+    );
+    let report = fresh_names_report(&thy);
+    assert_eq!(report.len(), 2);
+    assert_eq!(
+        crate::pretty_theory::render_wf_error_report(&report),
         "Fresh public constants\n======================\n\n  \
-         rule `outnfoo_0_1': fresh public constants are not allowed: ~'foo',\n    ~'foo'"
+         rule `R1': fresh public constants are not allowed: ~'one'\n  \n  \
+         rule `R2': fresh public constants are not allowed: ~'two'\n"
     );
 }
