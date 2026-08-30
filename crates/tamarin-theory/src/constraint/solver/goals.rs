@@ -79,10 +79,12 @@ pub enum GoalRanking {
     },
     /// `InternalTacticRanking quitOnEmpty (Tactic …)` (rankGoals dispatch ProofMethod.hs:479-502, see line 490).
     /// The resolved per-lemma tactic (presort + prio/deprio selectors).
-    /// `quit_on_empty` is True for the `{.}` form, False for `{name}`.
+    /// `resolution_error` records a failed declaration lookup; HS raises
+    /// `chooseError` only when an unresolved ranking is selected.
     Tactic {
         quit_on_empty: bool,
         tactic: std::sync::Arc<crate::tactic::Tactic>,
+        resolution_error: Option<std::sync::Arc<str>>,
     },
 }
 
@@ -193,11 +195,9 @@ fn loop_status(b: bool) -> String {
 ///   letter      ::= [a-zA-Z]
 ///
 /// `{name}` tactic rankings keep the name written between the braces and take
-/// the body of the theory's declared tactic of that name (HS looks it up at
-/// ranking time — `chosenTactic`, ProofMethod.hs:490-503).  A name no declared
-/// tactic carries — `{.}` included — keeps HS `defaultTactic`'s body
-/// (`Tactic "default" (SmartRanking False) [] []`, System.hs:533-534),
-/// which reorders nothing.
+/// the body of the theory's declared tactic of that name. An unresolved name
+/// retains the placeholder body but is marked so ranking can raise HS's lazy
+/// `chosenTactic` error (ProofMethod.hs:490-503).
 pub fn parse_heuristic_str_with_tactics(
     s: &str,
     theory_file: &str,
@@ -233,8 +233,9 @@ pub fn parse_heuristic_str_with_tactics(
         // with `defaultTactic`'s body (Smart presort, no prios) and looks the
         // declared tactic up at ranking time (`chosenTactic`,
         // ProofMethod.hs:490-503); resolving the body here against `tactics`
-        // is that lookup, done once.  A name no declared tactic carries keeps
-        // the default body, which reorders nothing.  quitOnEmpty is always
+        // is that lookup, done once. An unknown name remains marked
+        // unresolved so the ranking dispatch raises `chooseError` only if it
+        // is selected. quitOnEmpty is always
         // False from parsing (HS `("{.}", InternalTacticRanking False
         // defaultTactic)`, System.hs:584-597, see line 596).
         if c == '{' {
@@ -253,18 +254,36 @@ pub fn parse_heuristic_str_with_tactics(
             while i < chars.len() && chars[i] == ' ' {
                 i += 1;
             }
-            // HS's `noneOf` keeps a space written before the closing brace
-            // in the name; the lookup ignores spaces around it.
-            let declared = tactics.iter().find(|t| t.name == name.trim());
+            // HS's `noneOf` keeps a space written before the closing brace in
+            // the name, and `chosenTactic` compares it verbatim.
+            let declared = tactics.iter().find(|t| t.name == name);
             let tactic = crate::tactic::Tactic {
                 name,
                 presort: declared.map_or('s', |t| t.presort),
                 prios: declared.map(|t| t.prios.clone()).unwrap_or_default(),
                 deprios: declared.map(|t| t.deprios.clone()).unwrap_or_default(),
             };
+            let resolution_error = declared.is_none().then(|| {
+                if tactics.is_empty() {
+                    std::sync::Arc::from("No tactic has been written in the theory file")
+                } else {
+                    let names = tactics
+                        .iter()
+                        .rev()
+                        .map(|t| t.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(",");
+                    std::sync::Arc::from(format!(
+                        "The tactic specified ( {:?} ) is not written in the theory file, \
+                         please chose among the following: {:?}",
+                        tactic.name, names
+                    ))
+                }
+            });
             out.push(GoalRanking::Tactic {
                 quit_on_empty: false,
                 tactic: std::sync::Arc::new(tactic),
+                resolution_error,
             });
             continue;
         }
@@ -525,10 +544,14 @@ fn rank_goals_with_inner(
         GoalRanking::Tactic {
             quit_on_empty,
             tactic,
+            resolution_error,
         } => {
             // HS `InternalTacticRanking quitOnEmpty tactic ->
             //   internalTacticRanking (chosenTactic ..) quitOnEmpty ..`
             // (ProofMethod.hs:479-502, see line 490; ProofMethod.hs:694).
+            if let Some(message) = resolution_error {
+                return Err(OracleError(message.to_string()));
+            }
             internal_tactic_ranking(&tactic, quit_on_empty, ctx, sys)
         }
         GoalRanking::Oracle {

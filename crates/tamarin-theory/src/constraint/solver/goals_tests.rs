@@ -422,8 +422,8 @@ fn tactic_ranking_keeps_the_braced_name() {
     assert_eq!(names("{undeclared}"), vec!["undeclared".to_string()]);
     assert_eq!(names("{rank}"), vec!["rank".to_string()]);
 
-    // The declared tactic supplies the body; an unknown name gets HS's
-    // `defaultTactic` body, which reorders nothing.
+    // The declared tactic supplies the body; an unknown name retains HS's
+    // `defaultTactic` placeholder body until ranking reports `chooseError`.
     let body = |s: &str| match parse_heuristic_str_with_tactics(
         s,
         "t.spthy",
@@ -436,6 +436,22 @@ fn tactic_ranking_keeps_the_braced_name() {
     };
     assert_eq!(body("{rank}"), ('C', 1));
     assert_eq!(body("{undeclared}"), ('s', 0));
+}
+
+#[test]
+fn an_unknown_tactic_fails_when_its_ranking_is_selected() {
+    use crate::constraint::solver::context::ProofContext;
+    use tamarin_term::maude_sig::pair_maude_sig;
+
+    let Some(path) = require_maude_path() else {
+        return;
+    };
+    let ranking = parse_heuristic_str_with_tactics("{missing}", "t.spthy", &[]);
+    let handle = tamarin_term::maude_proc::MaudeHandle::start(&path, pair_maude_sig()).unwrap();
+    let mut ctx = ProofContext::new(handle, Vec::new());
+    ctx.heuristic = Some(ranking);
+    let err = rank_goals_with(&System::empty(), Some(&ctx), 0).unwrap_err();
+    assert_eq!(err.0, "No tactic has been written in the theory file");
 }
 
 /// `pretty_goal_rankings` writes back the token each stored ranking parsed
