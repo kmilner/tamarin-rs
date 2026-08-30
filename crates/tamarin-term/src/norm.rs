@@ -324,41 +324,29 @@ fn is_xor(t: &LNTerm) -> bool {
 /// are not in NF due to inverse cancellation.
 fn invalid_mult(ts: &[LNTerm]) -> bool {
     use crate::function_symbols::AcSym;
-    // Partition into (inverses, non-inverses).
-    let (inverses, factors): (Vec<&LNTerm>, Vec<&LNTerm>) =
-        ts.iter().partition(|t| crate::term::is_inverse(t));
-    match inverses.len() {
-        0 => false,
-        1 => {
-            // Single inverse: peel its inner.
-            let inv_arg = match inverses[0] {
-                Term::App(_, a) if !a.is_empty() => &a[0],
-                _ => return false,
-            };
-            // Case: inv(mult(ifactors)) — check ifactors vs factors overlap
-            if let Term::App(FunSym::Ac(AcSym::Mult), ifactors) = inv_arg {
-                let ifactors_refs: Vec<&LNTerm> = ifactors.iter().collect();
-                // (ifactors \\ factors /= ifactors) ||
-                // (factors  \\ ifactors /= factors)
-                // i.e. the multiset-difference removes something on either side.
-                return multiset_diff_changes(&ifactors_refs, &factors)
-                    || multiset_diff_changes(&factors, &ifactors_refs);
+    let mut inverse_arg = None;
+    for term in ts {
+        if crate::term::is_inverse(term) {
+            if inverse_arg.is_some() {
+                return true;
             }
-            // Case: inv(t) — invalid if t `elem` factors.
-            factors.iter().any(|f| **f == *inv_arg)
+            inverse_arg = match term {
+                Term::App(_, args) => args.first(),
+                _ => None,
+            };
         }
-        _ => true, // 2+ inverses → invalid
     }
-}
-
-/// Returns true iff multiset-difference `xs \\ ys` differs from `xs`,
-/// i.e. at least one element of `xs` is also in `ys`.  Mirrors Haskell
-/// `(\\)` (Data.List) on the underlying multisets.
-fn multiset_diff_changes(xs: &[&LNTerm], ys: &[&LNTerm]) -> bool {
-    // `xs \\ ys` drops at most one `xs` element per matching `ys` element, so
-    // it differs from `xs` exactly when some element is shared — which
-    // occurrence gets consumed never changes that verdict.
-    xs.iter().any(|x| ys.iter().any(|y| **x == **y))
+    let Some(inverse_arg) = inverse_arg else {
+        return false;
+    };
+    let factors = ts.iter().filter(|term| !crate::term::is_inverse(term));
+    if let Term::App(FunSym::Ac(AcSym::Mult), inverse_factors) = inverse_arg {
+        inverse_factors
+            .iter()
+            .any(|inverse_factor| factors.clone().any(|factor| factor == inverse_factor))
+    } else {
+        factors.into_iter().any(|factor| factor == inverse_arg)
+    }
 }
 
 /// `invalidXor` — HS `Norm.hs:123-126`.  True iff `ts` contains

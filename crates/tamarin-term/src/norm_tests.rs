@@ -10,6 +10,24 @@ use crate::vterm::Lit;
 use tamarin_test_support::require_maude_path;
 
 #[test]
+fn invalid_mult_detects_only_cancellable_products() {
+    use crate::builtin::{inv, msg_var, mult};
+
+    let a = msg_var("a", 0);
+    let b = msg_var("b", 0);
+    let c = msg_var("c", 0);
+    assert!(!invalid_mult(&[]));
+    assert!(!invalid_mult(&[inv(a.clone()), b.clone()]));
+    assert!(invalid_mult(&[inv(a.clone()), a.clone()]));
+    assert!(invalid_mult(&[
+        inv(mult(a.clone(), b.clone())),
+        b.clone(),
+        c
+    ]));
+    assert!(invalid_mult(&[inv(a), inv(b)]));
+}
+
+#[test]
 fn norm_var_skips_maude() {
     let path = match require_maude_path() {
         Some(p) => p,
