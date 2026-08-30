@@ -1580,10 +1580,9 @@ impl<'ctx> Reduction<'ctx> {
     /// - `Subterm(s, b)` → `insertSubterm`
     /// - `Syntactic(_)`  → nothing
     ///
-    /// Returns `true` when the atom became a constraint.  HS reads the three
-    /// timepoints with `ltermNodeId'`, which errors on any other sort; the
+    /// HS reads the three timepoints with `ltermNodeId'`, which errors on any other sort; the
     /// total [`lterm_node_id`] answers `None` there and the atom is dropped.
-    pub fn insert_atom(&mut self, a: &crate::atom::Atom<tamarin_term::lterm::LNTerm>) -> bool {
+    pub fn insert_atom(&mut self, a: &crate::atom::Atom<tamarin_term::lterm::LNTerm>) {
         use crate::atom::ProtoAtom;
         match a {
             ProtoAtom::EqE(x, y) => {
@@ -1658,11 +1657,10 @@ impl<'ctx> Reduction<'ctx> {
                     }
                 }
                 self.changed = ChangeIndicator::Changed;
-                true
             }
             ProtoAtom::Less(i, j) => {
                 let (Some(ni), Some(nj)) = (lterm_node_id(i), lterm_node_id(j)) else {
-                    return false;
+                    return;
                 };
                 // Normalise through the eq-store substitution so any
                 // earlier node-id merges propagate to this fresh atom.
@@ -1673,22 +1671,19 @@ impl<'ctx> Reduction<'ctx> {
                     nj,
                     crate::constraint::constraints::Reason::Formula,
                 ));
-                true
             }
             ProtoAtom::Last(t) => {
                 let Some(n) = lterm_node_id(t) else {
-                    return false;
+                    return;
                 };
                 // HS-faithful insertLast (Reduction.hs:402-407).
                 let _ = self.insert_last(n);
-                true
             }
             ProtoAtom::Action(t, fact) => {
                 let Some(n) = lterm_node_id(t) else {
-                    return false;
+                    return;
                 };
                 self.insert_goal(Goal::Action(n, fact.clone()));
-                true
             }
             ProtoAtom::Subterm(s, b) => {
                 // Pure ADD (`SubtermStore::add` is a plain push, no
@@ -1698,13 +1693,12 @@ impl<'ctx> Reduction<'ctx> {
                 self.sys.bump_cache_term(b);
                 self.sys.subterm_store_mut().add(s.clone(), b.clone());
                 self.changed = ChangeIndicator::Changed;
-                true
             }
             // HS `Syntactic _ -> return ()` (Reduction.hs:421): the sugar
             // carries no constraint.  `to_lnformula` refuses a formula that
             // still holds one (formula.rs), so no atom of a guarded formula
             // reaches this arm.
-            ProtoAtom::Syntactic(_) => false,
+            ProtoAtom::Syntactic(_) => {}
         }
     }
 
@@ -1815,7 +1809,7 @@ impl<'ctx> Reduction<'ctx> {
                 // HS `GAto ato -> markAsSolved; insertAtom (bvarToLVar ato)`
                 // (Reduction.hs:441-442): a top-level atom of a stored formula
                 // has no `Bound` leaf left for `bvarToLVar` to reject.
-                let _ = self.insert_atom(&crate::guarded::bvar_to_lvar(ga));
+                self.insert_atom(&crate::guarded::bvar_to_lvar(ga));
                 // Haskell-faithful: only mark the OUTER formula as
                 // solved (mark=True at top-level `insert_formula`).
                 // Inner recursion (mark=False, from Conj/Ex body) does

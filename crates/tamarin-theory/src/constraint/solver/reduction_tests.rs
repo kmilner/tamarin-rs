@@ -916,8 +916,7 @@ fn insert_atom_action_creates_action_goal() {
             vec![mkvar_ln("k", LSort::Msg)],
         ),
     );
-    let ok = r.insert_atom(&action);
-    assert!(ok);
+    r.insert_atom(&action);
     assert_eq!(r.sys.goals.len(), 1);
     assert!(matches!(&r.sys.goals[0].0, Goal::Action(_, fact)
             if fact.tag == crate::fact::FactTag::Proto(
@@ -934,7 +933,7 @@ fn insert_atom_ignores_a_syntactic_atom() {
     };
     let mut r = Reduction::new(&ctx, System::empty());
     let a = crate::atom::ProtoAtom::Syntactic(crate::atom::Unit2);
-    assert!(!r.insert_atom(&a));
+    r.insert_atom(&a);
     assert!(r.sys.goals.is_empty());
     assert!(r.sys.less_atoms.is_empty());
     assert_eq!(r.sys.last_atom, None);
@@ -954,7 +953,7 @@ fn insert_atom_eq_keeps_the_node_name_tag() {
     let node_name: tamarin_term::lterm::LNTerm =
         tamarin_term::vterm::const_term(Name::new(NameTag::Node, "n1"));
     let a = crate::atom::ProtoAtom::EqE(mkvar_ln("i", LSort::Node), node_name.clone());
-    assert!(r.insert_atom(&a));
+    r.insert_atom(&a);
     let i = tamarin_term::lterm::LVar::new("i", LSort::Node, 0);
     assert_eq!(
         r.sys.eq_store.subst.image_of(&i),
@@ -973,8 +972,7 @@ fn insert_atom_less_creates_less_atom() {
     use crate::atom::ProtoAtom;
     use tamarin_term::lterm::LSort;
     let less = ProtoAtom::Less(mkvar_ln("i", LSort::Node), mkvar_ln("j", LSort::Node));
-    let ok = r.insert_atom(&less);
-    assert!(ok);
+    r.insert_atom(&less);
     assert_eq!(r.sys.less_atoms.len(), 1);
     // The order of the endpoints is the complete content of a `Less` atom.
     // The pretty-printer uses the reason tag to tell the user where the
@@ -996,7 +994,7 @@ fn insert_atom_last_sets_last_atom() {
     use crate::atom::ProtoAtom;
     use tamarin_term::lterm::LSort;
     let last = ProtoAtom::Last(mkvar_ln("i", LSort::Node));
-    assert!(r.insert_atom(&last));
+    r.insert_atom(&last);
     assert_eq!(
         r.sys.last_atom,
         Some(tamarin_term::lterm::LVar::new(
