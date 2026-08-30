@@ -1497,7 +1497,7 @@ fn is_no_large_split_goal(a: &AnnotatedGoal, sys: &System) -> bool {
 /// in the one-case set.
 fn collect_one_case_syms(
     ctx: &crate::constraint::solver::context::ProofContext,
-) -> std::collections::BTreeSet<Vec<u8>> {
+) -> std::collections::BTreeSet<&'static [u8]> {
     use crate::constraint::constraints::Goal as G;
     use crate::fact::FactTag;
     use tamarin_term::function_symbols::FunSym;
@@ -1541,7 +1541,7 @@ fn collect_one_case_syms(
         if src.cases_len() != 1 {
             continue;
         }
-        out.insert(s.name.to_vec());
+        out.insert(s.name);
     }
     out
 }
@@ -1562,7 +1562,7 @@ fn collect_one_case_syms(
 fn lazy_one_case_syms(
     goals: &[AnnotatedGoal],
     ctx: Option<&crate::constraint::solver::context::ProofContext>,
-) -> std::collections::BTreeSet<Vec<u8>> {
+) -> std::collections::BTreeSet<&'static [u8]> {
     use crate::constraint::constraints::Goal;
     use crate::fact::FactTag;
     let any_ku_action_goal = goals
@@ -1580,7 +1580,7 @@ fn lazy_one_case_syms(
 
 fn is_msg_one_case_goal(
     a: &AnnotatedGoal,
-    one_case_syms: &std::collections::BTreeSet<Vec<u8>>,
+    one_case_syms: &std::collections::BTreeSet<&'static [u8]>,
 ) -> bool {
     use crate::constraint::constraints::Goal;
     use crate::fact::FactTag;
@@ -1602,7 +1602,7 @@ fn is_msg_one_case_goal(
         return false;
     };
     if let Term::App(FunSym::NoEq(s), _) = t {
-        return one_case_syms.contains(s.name);
+        return one_case_syms.contains(&s.name);
     }
     false
 }
@@ -1940,7 +1940,7 @@ fn is_high_priority_goal(a: &AnnotatedGoal) -> bool {
 fn is_med_priority_goal(
     a: &AnnotatedGoal,
     sys: &System,
-    one_case_syms: &std::collections::BTreeSet<Vec<u8>>,
+    one_case_syms: &std::collections::BTreeSet<&'static [u8]>,
 ) -> bool {
     is_standard_action_goal(a)
         || is_disj_goal(a)
