@@ -20,6 +20,7 @@
 //! see the per-check note at the IncompatibleEqs push in `contradictions`.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::rc::Rc;
 
 use crate::constraint::constraints::NodeId;
 use crate::constraint::solver::context::ProofContext;
@@ -1834,17 +1835,22 @@ fn non_injective_fact_instances<'a>(
     // once per reachable `j`, with the same `j` recurring across edges.
     // The cache stores the exact value the un-memoized closure returned
     // (the set with `from` removed), so this is a pure speedup.
-    let reach_cache: std::cell::RefCell<BTreeMap<NodeId, BTreeSet<NodeId>>> =
-        std::cell::RefCell::new(BTreeMap::new());
-    let reachable = |from: &NodeId| -> BTreeSet<NodeId> {
-        if let Some(cached) = reach_cache.borrow().get(from) {
-            return cached.clone();
+    fn reachable(
+        cache: &mut BTreeMap<NodeId, Rc<BTreeSet<NodeId>>>,
+        adj: &tamarin_utils::FastMap<NodeId, Vec<NodeId>>,
+        from: &NodeId,
+    ) -> Rc<BTreeSet<NodeId>> {
+        if let Some(cached) = cache.get(from) {
+            return Rc::clone(cached);
         }
         // Strictly-reachable set (seed removed) via the shared routine.
-        let out = crate::constraint::solver::goals::reachable_set_adj(adj, from, false);
-        reach_cache.borrow_mut().insert(*from, out.clone());
+        let out = Rc::new(crate::constraint::solver::goals::reachable_set_adj(
+            adj, from, false,
+        ));
+        cache.insert(*from, Rc::clone(&out));
         out
-    };
+    }
+    let mut reach_cache: BTreeMap<NodeId, Rc<BTreeSet<NodeId>>> = BTreeMap::new();
     // Resolve node-id → rule via the pass-shared map (forced here, after
     // the `inj_tags` early-out) instead of a linear `nodes.iter().find`
     // per `i`/`j`.
@@ -1872,8 +1878,8 @@ fn non_injective_fact_instances<'a>(
             None => continue,
         };
         // Reachable set from i.
-        let reach = reachable(&i);
-        for j in &reach {
+        let reach = reachable(&mut reach_cache, adj, &i);
+        for j in reach.iter() {
             if j == &i || j == &k {
                 continue;
             }
@@ -1891,7 +1897,7 @@ fn non_injective_fact_instances<'a>(
                 continue;
             }
             // k reachable from j OR k is the last node.
-            let j_reach = reachable(j);
+            let j_reach = reachable(&mut reach_cache, adj, j);
             let k_after_j = j_reach.contains(&k);
             let k_is_last = sys.last_atom.as_ref() == Some(&k);
             if k_after_j || k_is_last {
