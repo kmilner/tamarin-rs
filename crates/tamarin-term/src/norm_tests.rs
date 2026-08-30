@@ -28,6 +28,18 @@ fn invalid_mult_detects_only_cancellable_products() {
 }
 
 #[test]
+fn invalid_xor_handles_canonical_and_unsafe_argument_order() {
+    use crate::builtin::msg_var;
+
+    let a = msg_var("a", 0);
+    let b = msg_var("b", 1);
+    let c = msg_var("c", 2);
+    assert!(!invalid_xor(&[a.clone(), b.clone(), c]));
+    assert!(invalid_xor(&[a.clone(), a.clone(), b.clone()]));
+    assert!(invalid_xor(&[a.clone(), b, a]));
+}
+
+#[test]
 fn norm_var_skips_maude() {
     let path = match require_maude_path() {
         Some(p) => p,

@@ -352,15 +352,25 @@ fn invalid_mult(ts: &[LNTerm]) -> bool {
 /// `invalidXor` — HS `Norm.hs:123-126`.  True iff `ts` contains
 /// duplicates.
 fn invalid_xor(ts: &[LNTerm]) -> bool {
-    // O(n^2) is fine here — typical xor arities are tiny.
-    for i in 0..ts.len() {
-        for j in (i + 1)..ts.len() {
-            if ts[i] == ts[j] {
-                return true;
+    // Smart constructors keep AC arguments sorted, so duplicates are adjacent
+    // on the normal path. Keep the quadratic fallback for terms made through
+    // `unsafe_f_app` or another invariant-bypassing caller.
+    let mut canonical = true;
+    for pair in ts.windows(2) {
+        match pair[0].cmp(&pair[1]) {
+            std::cmp::Ordering::Equal => return true,
+            std::cmp::Ordering::Greater => {
+                canonical = false;
+                break;
             }
+            std::cmp::Ordering::Less => {}
         }
     }
-    false
+    !canonical
+        && ts
+            .iter()
+            .enumerate()
+            .any(|(i, term)| ts[i + 1..].contains(term))
 }
 
 /// `struleApplicable` — HS `Norm.hs:107-113`.  Returns true iff the
