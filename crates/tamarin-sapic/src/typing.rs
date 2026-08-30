@@ -282,11 +282,8 @@ fn rename_annotation(
     subst: &BTreeMap<LVar, LVar>,
     ann: &ProcessParsedAnnotation,
 ) -> ProcessParsedAnnotation {
-    let mut renamed = ann.clone();
-    renamed.location = renamed
-        .location
-        .map(|location| rename_term(subst, &location));
-    renamed
+    ann.clone()
+        .map_location(|location| rename_term(subst, &location))
 }
 
 /// `mkSubst` (Typing.hs:266-272): for each bound variable mint a fresh LVar

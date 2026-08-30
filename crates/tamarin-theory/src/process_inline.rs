@@ -162,10 +162,9 @@ fn apply_m_process(subst: &SapicSubst, p: PlainProcess) -> Result<PlainProcess, 
 /// deliberately left untouched.
 fn apply_annotation(
     subst: &SapicSubst,
-    mut ann: crate::sapic::ProcessParsedAnnotation,
+    ann: crate::sapic::ProcessParsedAnnotation,
 ) -> crate::sapic::ProcessParsedAnnotation {
-    ann.location = ann.location.map(|loc| subst_term(subst, &loc));
-    ann
+    ann.map_location(|loc| subst_term(subst, &loc))
 }
 
 /// True iff a substitution maps `v` (in either typed or untyped form) — i.e.

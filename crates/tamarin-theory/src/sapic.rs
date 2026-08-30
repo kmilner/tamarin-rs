@@ -143,6 +143,12 @@ impl ProcessParsedAnnotation {
     pub fn empty() -> Self {
         Self::default()
     }
+
+    pub fn map_location(mut self, f: impl FnOnce(SapicTerm) -> SapicTerm) -> Self {
+        self.location = self.location.map(f);
+        self
+    }
+
     pub fn append(self, other: Self) -> Self {
         let mut names = self.process_names;
         names.extend(other.process_names);

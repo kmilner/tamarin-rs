@@ -291,10 +291,9 @@ fn subst_annotation(
     subst: &Subst<Name, SapicLVar>,
     mut ann: ProcessAnnotation<LVar>,
 ) -> ProcessAnnotation<LVar> {
-    ann.parsing_ann.location = ann
+    ann.parsing_ann = ann
         .parsing_ann
-        .location
-        .map(|location| subst_term(subst, &location));
+        .map_location(|location| subst_term(subst, &location));
     ann
 }
 
@@ -396,6 +395,7 @@ mod tests {
     use super::*;
     use std::collections::BTreeSet;
     use tamarin_term::lterm::{LSort, NameTag};
+    use tamarin_term::vterm::var_term;
     use tamarin_theory::sapic::{ProcessParsedAnnotation, SapicAction};
 
     fn ann() -> ProcessAnnotation<LVar> {
