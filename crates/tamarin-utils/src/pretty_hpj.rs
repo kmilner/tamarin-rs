@@ -80,7 +80,7 @@ pub const DEFAULT_RIBBON: usize = 67;
 /// HughesPJ's `OneLineMode` ([`Doc::one_line_render`]) is a different string:
 /// it takes each `Union`'s line-breaking branch and turns every break into
 /// one space.
-pub const FLAT_WIDTH: usize = 1 << 40;
+pub const FLAT_WIDTH: usize = usize::MAX / 4;
 
 /// Override the bare-`render()` display width process-wide (see
 /// [`DISPLAY_LINE_LENGTH`]).  Called once by the interactive server with
