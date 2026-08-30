@@ -26,9 +26,8 @@
 //! See [`crate::ast::ParsedProofTree`] / [`crate::ast::ParsedMethod`]
 //! for the shape of the structured output; the `goal` inside a
 //! `solve( ... )` step is read by [`crate::parser::parse_parens_goal`].
-//! A token this grammar does not accept fails the parse, as it does in HS;
-//! the caller (parser.rs `try_proof_skeleton`) downgrades the failure to
-//! `tree: None`.
+//! A token this grammar does not accept fails the containing theory parse, as
+//! it does in HS.
 
 use crate::ast::{ParsedMethod, ParsedProofTree};
 use crate::lexer::{is_ident_char, Lexer};
@@ -52,11 +51,8 @@ impl std::fmt::Display for ProofTreeParseError {
 }
 impl std::error::Error for ProofTreeParseError {}
 
-/// Parse the raw skeleton text into a [`ParsedProofTree`].  Returns
-/// `Err` if the token stream doesn't conform to the HS grammar — the
-/// caller (parser.rs `try_proof_skeleton`) downgrades the failure to
-/// `tree: None` so the lemma is at least readable, and replay falls
-/// back to auto-prover at the top.
+/// Parse the raw skeleton text into a [`ParsedProofTree`]. Returns `Err` if
+/// the complete token stream does not conform to the HS grammar.
 ///
 /// `parent` is the theory parser the skeleton text came out of, whose symbol
 /// state [`crate::parser::parse_parens_goal`] needs to read the goal inside a
@@ -71,10 +67,10 @@ pub fn parse_proof_tree<'a>(
         parent,
     };
     let tree = p.proof_skeleton()?;
-    // Any trailing junk is tolerated — likely the outer `qed` from a
-    // higher-level case block.  HS proofSkeleton consumes proper `qed`
-    // inside interProof; anything left is fine for our purposes (caller's
-    // `read_until_next_top_level` already framed the input).
+    p.lx.skip_ws();
+    if !p.lx.is_eof() {
+        return Err(p.err("unexpected trailing proof text"));
+    }
     Ok(tree)
 }
 
@@ -139,10 +135,7 @@ impl<'a> TreeParser<'a> {
         // following proofSkeleton parses, HS `interProof` fails (verified
         // against the v1.13.0 prover: a bare `simplify` with no child is a
         // parse error, "expecting case/qed/by/...").  We mirror that by
-        // failing here; the caller (parser.rs `try_proof_skeleton`)
-        // downgrades the `Err` to `tree: None` and replays via the
-        // auto-prover — matching HS, where a failed skeleton parse yields
-        // no usable tree.
+        // failing here; the containing theory parse fails as HS's does.
         let sub = self.proof_skeleton()?;
         Ok(ParsedProofTree {
             method: m,

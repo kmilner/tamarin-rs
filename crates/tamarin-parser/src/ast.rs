@@ -252,9 +252,8 @@ pub struct CaseTest {
 pub struct ProofSkeleton {
     /// Raw source text of the proof skeleton.
     pub raw: String,
-    /// Structured parse of `raw`.  `None` only if `try_proof_skeleton`
-    /// failed to interpret the token stream (we always set this for
-    /// well-formed proofs).
+    /// Structured parse of `raw`. Always `Some` for parser-produced theories;
+    /// optional only for compatibility with programmatically built ASTs.
     pub tree: Option<ParsedProofTree>,
 }
 

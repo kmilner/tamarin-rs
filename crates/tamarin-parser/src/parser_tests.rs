@@ -1090,6 +1090,17 @@ fn lemma_proof_raw(thy: &Theory) -> &str {
     &l.proof.as_ref().expect("lemma has a proof skeleton").raw
 }
 
+#[test]
+fn malformed_stored_proof_fails_theory_parse() {
+    let src = "theory T begin\nlemma L: \"T\"\nsimplify\nend";
+    let err = parse_theory(src, &[]).expect_err("a bare intermediate method needs a child");
+    assert_eq!((err.line, err.col), (4, 1));
+
+    let src = "theory T begin\nlemma L: \"T\"\nby sorry trailing\nend";
+    let err = parse_theory(src, &[]).expect_err("trailing proof text must not be discarded");
+    assert!(err.to_string().contains("unexpected trailing proof text"));
+}
+
 /// Reports whether the parser split a top-level `test` CaseTest item out of
 /// the theory.  That is the symptom of a capture that stopped at a `test`
 /// token inside a proof body.

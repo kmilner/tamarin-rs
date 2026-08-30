@@ -342,6 +342,24 @@ fn show_char_token(c: char) -> String {
     show_lit_string(&c.to_string())
 }
 
+/// Byte offset of the 1-based `(line, col)` position in `text`.
+fn offset_at_line_col(text: &str, line: u32, col: u32) -> usize {
+    let mut current_line = 1;
+    let mut current_col = 1;
+    for (offset, ch) in text.char_indices() {
+        if current_line == line && current_col == col {
+            return offset;
+        }
+        if ch == '\n' {
+            current_line += 1;
+            current_col = 1;
+        } else {
+            current_col += 1;
+        }
+    }
+    text.len()
+}
+
 /// GHC's `show :: String -> String`: the string in double quotes, every
 /// character through [`show_lit_char`], and the `\&` separator GHC's
 /// `showLitString` puts between a numeric escape and a following decimal digit
@@ -4457,6 +4475,7 @@ impl<'a> Parser<'a> {
             self.restore(save);
             return Ok(None);
         }
+        let proof_start = self.lx.pos();
         let raw = self.read_until_next_top_level();
         // Structured parse of `raw`.  Mirrors HS's `startProofSkeleton`
         // (Theory/Text/Parser/Proof.hs:90-95) which calls `proofSkeleton`
@@ -4467,10 +4486,25 @@ impl<'a> Parser<'a> {
         // top-level boundary detection (`read_until_next_top_level`)
         // controls termination.
         //
-        // If the structured parse fails we still keep the raw text,
-        // and `replace_sorry_prove` will fall back to the auto-prover.
-        let tree = parse_proof_tree(&raw, self).ok();
-        Ok(Some(ProofSkeleton { raw, tree }))
+        let tree = parse_proof_tree(&raw, self).map_err(|e| {
+            let rel_offset = offset_at_line_col(&raw, e.line, e.col);
+            ParseError::at(
+                Pos {
+                    offset: proof_start.offset + rel_offset,
+                    line: proof_start.line + e.line - 1,
+                    col: if e.line == 1 {
+                        proof_start.col + e.col - 1
+                    } else {
+                        e.col
+                    },
+                },
+                vec![Message::Message(e.msg)],
+            )
+        })?;
+        Ok(Some(ProofSkeleton {
+            raw,
+            tree: Some(tree),
+        }))
     }
 
     /// Peek a possibly-hyphenated identifier without consuming.
