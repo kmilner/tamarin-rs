@@ -1049,8 +1049,8 @@ fn map_free_keeps_storage_order_and_conj_ranges() {
     );
     assert_eq!(
         mapped.eq_store.conj[0].substs[0].to_list(),
-        vec![(mvar(1112), mterm(113))],
-        "a disjunction's substitution keeps its range"
+        vec![(mvar(1110), mterm(111))],
+        "a disjunction rebuilds set order while keeping its ranges"
     );
 }
 
