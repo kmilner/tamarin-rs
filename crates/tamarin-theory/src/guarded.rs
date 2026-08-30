@@ -72,6 +72,8 @@ pub enum Guarded {
 /// hot constants never contend on a single cache line.
 static EMPTY_CONJ: std::sync::OnceLock<std::sync::Arc<[Guarded]>> = std::sync::OnceLock::new();
 static EMPTY_DISJ: std::sync::OnceLock<std::sync::Arc<[Guarded]>> = std::sync::OnceLock::new();
+static EMPTY_VARS: std::sync::OnceLock<std::sync::Arc<[(String, LSort)]>> =
+    std::sync::OnceLock::new();
 
 /// Boolean atom helper.
 pub fn gtrue() -> Guarded {
@@ -741,7 +743,10 @@ fn remaining_unguarded(xs: &[LVar], atoms: &[Atom<LNTerm>]) -> Vec<usize> {
             // HS `frees (a, fa)` over `GAction a fa`: every variable of the
             // timepoint and of the fact.
             ProtoAtom::Action(t, fact) => {
-                for v in frees(&(t.clone(), fact.clone())) {
+                for v in frees(t) {
+                    unguarded.remove(&v);
+                }
+                for v in frees(fact) {
                     unguarded.remove(&v);
                 }
             }
@@ -1084,7 +1089,7 @@ fn convert_ex(
         return Err(unguarded_error(&unguarded, xs));
     }
     let mut converted = Vec::with_capacity(others.len());
-    for f in &others {
+    for f in others {
         converted.push(convert(polarity, f, fresh)?);
     }
     let body_guarded = if polarity {
@@ -1114,7 +1119,7 @@ fn convert_all(
         return Err(unguarded_error(&unguarded, xs));
     }
     let mut sub = Vec::with_capacity(ante_others.len() + 1);
-    for f in &ante_others {
+    for f in ante_others {
         sub.push(convert(!polarity, f, fresh)?);
     }
     sub.push(convert(polarity, succ, fresh)?);
@@ -1127,14 +1132,14 @@ fn convert_all(
 /// that cannot.  Each guarding atom is read over plain variables
 /// ([`bvar_to_lvar`], HS `Left $ bvarToLVar a`, Guarded.hs:517-518), which is
 /// what [`remaining_unguarded`] and [`close_guarded`] take.
-fn split_conj_actions_eqs(
-    f: &crate::formula::LNFormula,
-) -> (Vec<Atom<LNTerm>>, Vec<crate::formula::LNFormula>) {
+fn split_conj_actions_eqs<'a>(
+    f: &'a crate::formula::LNFormula,
+) -> (Vec<Atom<LNTerm>>, Vec<&'a crate::formula::LNFormula>) {
     use crate::formula::{Connective, ProtoFormula};
-    fn rec(
-        f: &crate::formula::LNFormula,
+    fn rec<'a>(
+        f: &'a crate::formula::LNFormula,
         atoms: &mut Vec<Atom<LNTerm>>,
-        others: &mut Vec<crate::formula::LNFormula>,
+        others: &mut Vec<&'a crate::formula::LNFormula>,
     ) {
         match f {
             ProtoFormula::Conn(Connective::And, a, b) => {
@@ -1144,7 +1149,7 @@ fn split_conj_actions_eqs(
             ProtoFormula::Atom(a @ (ProtoAtom::Action(_, _) | ProtoAtom::EqE(_, _))) => {
                 atoms.push(bvar_to_lvar(a))
             }
-            other => others.push(other.clone()),
+            other => others.push(other),
         }
     }
     let mut atoms = Vec::new();
@@ -1179,7 +1184,9 @@ fn split_conj_actions_eqs(
 fn gnot_atom(a: &Atom<BLNTerm>) -> Guarded {
     Guarded::GGuarded {
         qua: Quantifier::All,
-        vars: Vec::new().into(),
+        vars: EMPTY_VARS
+            .get_or_init(|| std::sync::Arc::from(Vec::new()))
+            .clone(),
         guards: vec![a.clone()].into(),
         body: std::sync::Arc::new(gfalse()),
     }
