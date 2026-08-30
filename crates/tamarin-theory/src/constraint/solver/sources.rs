@@ -43,7 +43,7 @@ thread_local! {
     // case computation never short-circuits via source-case dispatch.
     // Rust mirrors this by gating dispatch in `solve_premise_goal` on
     // `!in_initial_source_cases()`.  Saturate refinement
-    // (`saturate_sources_with_simp_public`) does NOT set this flag, so
+    // (`saturate_sources_with_simp`) does NOT set this flag, so
     // dispatch fires there exactly like HS's `solveAllSafeGoals`.
     static IN_INITIAL_SOURCE_CASES: std::cell::Cell<bool>
         = const { std::cell::Cell::new(false) };
@@ -622,10 +622,10 @@ pub fn precompute_full_sources(
     // path), zero `[EXEC] solveGoal kind=Action fact=KUFact(...)`
     // lines fire — matching HS's output line-for-line.
     //
-    // Saturation (`saturate_sources_with_simp_public`) is a separate
+    // Saturation (`saturate_sources_with_simp`) is a separate
     // concern: it iterates `cases` and would defeat the laziness if
     // run here.  This precompute function does not run it; `context.rs`
-    // invokes `saturate_sources_with_simp_public` separately.
+    // invokes `saturate_sources_with_simp` separately.
     //
     // The guard drops at function return, restoring the saved `IN_PRECOMPUTE`
     // value; nothing between the final `out` build and the return reads the flag.
@@ -1110,29 +1110,7 @@ pub fn refine_with_source_asms(
     out
 }
 
-/// Variant of `saturate_sources` that re-simplifies every grafted
-/// case so that any newly-fired implied formulas (from the assumption
-/// universals) get a chance to prune.  Mirrors Haskell's
-/// `saturateSources` invocation inside `refineWithSourceAsms`.
-fn saturate_sources_with_simp(
-    sources: Vec<Source>,
-    limit: usize,
-    ctx: &crate::constraint::solver::context::ProofContext,
-) -> Vec<Source> {
-    saturate_sources_with_simp_opt(sources, limit, ctx, /*aggressive_drop=*/ false)
-}
-
-/// `pub` re-export of [`saturate_sources_with_simp`] for
-/// `ProofContext::ensure_saturated`.
-pub fn saturate_sources_with_simp_public(
-    sources: Vec<Source>,
-    limit: usize,
-    ctx: &crate::constraint::solver::context::ProofContext,
-) -> Vec<Source> {
-    saturate_sources_with_simp(sources, limit, ctx)
-}
-
-/// Per-source body of `saturate_sources_with_simp_opt`'s inner loop —
+/// Per-source body of `saturate_sources_with_simp`'s inner loop —
 /// extracted so it can run in parallel via rayon (mirroring HS's
 /// `changes \`using\` parList rdeepseq` at Sources.hs).
 ///
@@ -1154,9 +1132,7 @@ fn refine_one_source(
     src: Source,
     ths_snapshot: &[Source],
     branch_cap: usize,
-    aggressive_drop: bool,
 ) -> (Vec<(Vec<String>, System)>, bool, usize) {
-    use crate::constraint::solver::contradictions::contradictions;
     let mut new_cases: Vec<(Vec<String>, System)> = Vec::new();
     let mut changed = false;
     // HS-faithful `refineSource` (Sources.hs:131-148): the Reduction
@@ -1241,10 +1217,6 @@ fn refine_one_source(
         // across the flat preDedup list (after the loop, see below).
         // `stable_vars` was computed once before the loop above.
         for (mut branch_sys, branch_name_list) in branches {
-            if aggressive_drop && !contradictions(ctx, &branch_sys).is_empty() {
-                changed = true;
-                continue;
-            }
             // Apply `restrict stableVars` to the branch's subst.
             let restricted_pairs: Vec<_> = branch_sys
                 .eq_store
@@ -1302,11 +1274,12 @@ pub fn set_show_saturation_steps(on: bool) {
     SHOW_SATURATION_STEPS.store(on, std::sync::atomic::Ordering::Relaxed);
 }
 
-fn saturate_sources_with_simp_opt(
+/// Re-simplify every grafted source case so newly-fired implied formulas can
+/// prune it. Mirrors Haskell's `saturateSources`, including its iteration cap.
+pub fn saturate_sources_with_simp(
     sources: Vec<Source>,
     limit: usize,
     ctx: &crate::constraint::solver::context::ProofContext,
-    aggressive_drop: bool,
 ) -> Vec<Source> {
     use rayon::prelude::*;
     let show_steps = SHOW_SATURATION_STEPS.load(std::sync::atomic::Ordering::Relaxed);
@@ -1398,7 +1371,7 @@ fn saturate_sources_with_simp_opt(
         // `PrecomputeModeGuard` toggles the `thread_local!` `IN_PRECOMPUTE`
         // cell, so each worker's flag is independent.  `ctx`, `ths_snapshot`,
         // `branch_cap`,
-        // `aggressive_drop` are read-only.
+        // The task inputs are read-only.
         // `run_solve_all_safe_goals_disj_with_progress` builds its own
         // Reduction over an owned System, no aliasing.  Maude IPC
         // serialises via `MaudeHandle::inner` (Arc<Mutex>) — workers
@@ -1441,9 +1414,9 @@ fn saturate_sources_with_simp_opt(
                     // order-dependent and breaks under parallel lemma proving.
                     let task_ctx =
                         ctx.with_swapped_maude(pooled.handle().with_fresh_counter_from(0));
-                    refine_one_source(&task_ctx, src, &ths_snapshot, branch_cap, aggressive_drop)
+                    refine_one_source(&task_ctx, src, &ths_snapshot, branch_cap)
                 } else {
-                    refine_one_source(ctx, src, &ths_snapshot, branch_cap, aggressive_drop)
+                    refine_one_source(ctx, src, &ths_snapshot, branch_cap)
                 }
             })
             .collect();

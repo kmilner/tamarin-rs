@@ -523,7 +523,7 @@ impl ProofContext {
         // emitted trace matches HS's saturation rather than collapsing
         // it into a single graft operation.
         let raw: Vec<crate::constraint::solver::sources::Source> = self.full_sources.to_vec();
-        let saturated = crate::constraint::solver::sources::saturate_sources_with_simp_public(
+        let saturated = crate::constraint::solver::sources::saturate_sources_with_simp(
             raw,
             self.saturation_limit,
             self,
