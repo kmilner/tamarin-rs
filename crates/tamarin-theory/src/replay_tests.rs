@@ -121,7 +121,7 @@ fn contradiction_leaf_without_contradiction_falls_back_to_auto() {
 
 // Every stored goal below is a `Goal` value, the shape
 // `elaborate::goal_from_parsed` builds, and `match_goal` looks it up among
-// the system's open goals by structural equality — HS's `M.member`
+// all of the system's goals by structural equality — HS's `M.member`
 // (ProofMethod.hs:253-258).
 
 /// Match an Action goal whose fact takes no arguments.
@@ -152,10 +152,10 @@ fn no_match_returns_none() {
     assert!(match_goal(&goal("WrongName"), &sys).is_none());
 }
 
-/// A goal already marked solved is out of the lookup's reach, which is the
-/// one place it ranges over less than HS's `sGoals`.
+/// HS's membership check ranges over all of `sGoals`, including entries whose
+/// status says that simplification has already solved them.
 #[test]
-fn match_goal_skips_a_solved_goal() {
+fn match_goal_includes_a_solved_goal() {
     use crate::fact::{Fact, FactTag, Multiplicity};
     let tag = FactTag::Proto(Multiplicity::Linear, "Setup", 0);
     let goal = Goal::Action(LVar::new("t", LSort::Node, 0), Fact::new(tag, Vec::new()));
@@ -165,7 +165,26 @@ fn match_goal_skips_a_solved_goal() {
         ..Default::default()
     };
     sys.goals_mut().push((goal.clone(), status));
-    assert!(match_goal(&goal, &sys).is_none());
+    assert_eq!(match_goal(&goal, &sys), Some(goal));
+}
+
+/// Stored induction is valid only at HS's initial-system shape. In
+/// particular, a solved formula means replay must reject the step before
+/// `exec_proof_method` can apply `ginduct` to a remaining formula.
+#[test]
+fn replay_checks_induction_applicability() {
+    let h = match maude() {
+        Some(m) => m,
+        None => return,
+    };
+    let ctx = ProofContext::new(h, Vec::new());
+    let mut sys = System::empty();
+    sys.formulas_mut()
+        .push(std::sync::Arc::new(crate::guarded::gtrue()));
+    sys.solved_formulas_mut()
+        .push(std::sync::Arc::new(crate::guarded::gtrue()));
+
+    assert!(exec_method_for(&ProofMethod::Induction, &sys, &ctx).is_none());
 }
 
 /// Two same-fact-name Action goals at different timepoints: the stored goal

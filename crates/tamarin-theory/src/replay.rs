@@ -69,7 +69,7 @@ use std::collections::BTreeMap;
 use crate::constraint::constraints::Goal;
 use crate::constraint::solver::context::ProofContext;
 use crate::constraint::solver::proof_method::{
-    exec_proof_method, is_finished, ProofMethod, Result as MethodResult,
+    check_and_exec_proof_method, is_finished, ProofMethod, Result as MethodResult,
 };
 use crate::constraint::solver::search::{run_proof_search, NodeStatus, ProofNode};
 use crate::constraint::system::System;
@@ -496,14 +496,14 @@ fn replay_node(
 /// HS `checkAndExecProofMethod` (Theory/Proof.hs:447-467, see line 456) runs
 /// the stored `ProofMethod` itself; [`resolve_method`] is the `SolveGoal`
 /// half of that, binding the stored goal to the equal one among `sys`'s
-/// goals before `exec_proof_method` runs it.
+/// goals before `check_and_exec_proof_method` validates and runs it.
 fn exec_method_for(
     stored: &ProofMethod,
     sys: &System,
     ctx: &ProofContext,
 ) -> Option<(ProofMethod, Vec<(String, System)>)> {
     let method = resolve_method(stored, sys)?;
-    exec_proof_method(ctx, &method, sys).map(|cases| (method, cases))
+    check_and_exec_proof_method(ctx, &method, sys).map(|cases| (method, cases))
 }
 
 /// Resolve one stored [`ProofMethod`] against `sys`.
@@ -526,16 +526,6 @@ fn resolve_method(stored: &ProofMethod, sys: &System) -> Option<ProofMethod> {
     }
 }
 
-/// The OPEN goals of `sys`, in `sGoals` creation order — the search space
-/// [`match_goal`] ranges over, mirroring HS's `M.member`/`M.toList` over
-/// `sGoals`.
-fn open_goals(sys: &System) -> impl Iterator<Item = &Goal> {
-    sys.goals
-        .iter()
-        .filter(|(_, st)| !st.solved)
-        .map(|(g, _)| g)
-}
-
 /// Find the goal of `sys` that the stored `solve( ... )` step names.
 ///
 /// HS looks the parsed `Goal` up with
@@ -544,15 +534,16 @@ fn open_goals(sys: &System) -> impl Iterator<Item = &Goal> {
 /// method carries the value `sys.goals` holds (`Fact` equality ignores the
 /// annotations, so the two can differ there).
 ///
-/// [`open_goals`] skips goals already marked solved, which is the one place
-/// this lookup ranges over less than HS's `sGoals`.
-///
 /// `None` means the stored step names a goal this system does not have, and
 /// the caller emits `sorry /* invalid proof step encountered */` over the
 /// verbatim stored subtree — HS `checkProof`'s `Nothing` branch
 /// (Theory/Proof.hs:456-467).
 fn match_goal(stored: &Goal, sys: &System) -> Option<Goal> {
-    open_goals(sys).find(|live| *live == stored).cloned()
+    sys.goals
+        .iter()
+        .map(|(goal, _)| goal)
+        .find(|live| *live == stored)
+        .cloned()
 }
 
 #[cfg(test)]
