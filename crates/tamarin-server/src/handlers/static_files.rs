@@ -120,7 +120,10 @@ async fn try_file(path: &Path, method: &Method, headers: &HeaderMap) -> Option<R
         .ok()?;
     *request.headers_mut() = headers.clone();
     let response = ServeFile::new(path).try_call(request).await.ok()?;
-    if response.status() == StatusCode::NOT_FOUND {
+    // Match the old `fs::read(path).ok()?` fallback: a missing or unreadable
+    // preferred asset lets the data directory try the same name rather than
+    // turning the preferred path's I/O failure into the final response.
+    if response.status() == StatusCode::NOT_FOUND || response.status().is_server_error() {
         return None;
     }
     let (parts, body) = response.into_parts();
