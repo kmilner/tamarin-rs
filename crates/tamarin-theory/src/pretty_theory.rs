@@ -1685,7 +1685,7 @@ fn pretty_predicate(pr: &crate::predicate::Predicate) -> String {
     let factstr = crate::fact::pretty_fact(&pp_var, &pr.fact)
         .render_with(hpj::DEFAULT_LINE_LENGTH, hpj::DEFAULT_RIBBON);
     let formulastr =
-        pf::lnformula_doc(&pr.formula).render_at(hpj::DEFAULT_LINE_LENGTH, hpj::DEFAULT_RIBBON, 0);
+        pf::lnformula_doc(&pr.formula).render_with(hpj::DEFAULT_LINE_LENGTH, hpj::DEFAULT_RIBBON);
     format!("predicate: {}<=>{}", factstr, formulastr)
 }
 
