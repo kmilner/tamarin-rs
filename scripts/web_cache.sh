@@ -38,6 +38,7 @@ web_cache_init() {
             WEB_CACHE_ROOT="$scripts/.web_hs_cache"
         fi
     fi
+    WEB_CACHE_LOCAL_LEGACY="$scripts/.web_hs_cache"
 
     if [ -z "${CACHE:-}" ]; then
         CACHE="$WEB_CACHE_ROOT/oracle-${WEB_ORACLE_SHA256:0:16}/profile-$WEB_CACHE_PROFILE"
@@ -69,7 +70,7 @@ web_cache_init() {
         printf '%s\n' "$profile_text" > "$marker" || return 1
     fi
     export CACHE WEB_CACHE_ROOT WEB_ORACLE_SHA256 WEB_CACHE_ORACLE_STAMP \
-        WEB_CACHE_PROFILE WEB_CACHE_MODE
+        WEB_CACHE_PROFILE WEB_CACHE_MODE WEB_CACHE_LOCAL_LEGACY
 }
 
 # Serialize access to one shared cache entry. Locks are advisory and remain as
@@ -182,11 +183,11 @@ web_cache_key() {
     deps=$(include_shas "$theory")
 
     for p in "$dir"/oracle*; do
-        [ -f "$p" ] && deps="${deps}${deps:+$'\n'}$(sha256sum "$p" | cut -d' ' -f1) ${p#$dir/}"
+        [ -f "$p" ] && deps="${deps}${deps:+$'\n'}$(sha256sum "$p" | cut -d' ' -f1) ${p#"$dir"/}"
     done
     p="${theory%.spthy}.oracle"
     if [ -f "$p" ]; then
-        deps="${deps}${deps:+$'\n'}$(sha256sum "$p" | cut -d' ' -f1) ${p#$dir/}"
+        deps="${deps}${deps:+$'\n'}$(sha256sum "$p" | cut -d' ' -f1) ${p#"$dir"/}"
     fi
     while IFS= read -r q; do
         p="$dir/$q"
@@ -215,7 +216,8 @@ web_cache_adopt_legacy() {
     old_key=$(sha256sum "$theory" | cut -d' ' -f1) || return 1
     [ "$key" = "$old_key" ] || return 1
 
-    for legacy in "$WEB_CACHE_ROOT" "$WEB_CACHE_ROOT"_*; do
+    for legacy in "$WEB_CACHE_ROOT" "$WEB_CACHE_ROOT"_* \
+            "$WEB_CACHE_LOCAL_LEGACY" "$WEB_CACHE_LOCAL_LEGACY"_*; do
         [ -d "$legacy" ] || continue
         [ "$legacy" != "$CACHE" ] || continue
         manifest="$legacy/$old_key.hs.json"
