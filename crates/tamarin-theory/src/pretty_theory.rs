@@ -2740,17 +2740,9 @@ mod stored_proof_reparse_tests {
         );
 
         // Without the declaration the infix spelling is not a term, so the
-        // goal grammar rejects it and the skeleton keeps no tree.
-        let thy = tamarin_parser::parser::parse_theory(&src("functions: add/2"), &[]).unwrap();
-        let lemma = thy
-            .items
-            .iter()
-            .find_map(|it| match it {
-                tamarin_parser::ast::TheoryItem::Lemma(l) => Some(l),
-                _ => None,
-            })
-            .expect("no lemma");
-        assert!(lemma.proof.as_ref().is_some_and(|ps| ps.tree.is_none()));
+        // goal grammar rejects it, so the stored proof makes the entire
+        // theory invalid just as it does in Haskell.
+        assert!(tamarin_parser::parser::parse_theory(&src("functions: add/2"), &[]).is_err());
     }
 }
 
