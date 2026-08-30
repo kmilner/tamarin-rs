@@ -31,7 +31,7 @@
 
 use std::collections::BTreeSet;
 
-use tamarin_term::lterm::{HasFrees, LNTerm, LVar, Name};
+use tamarin_term::lterm::{sort_compare, HasFrees, LNTerm, LVar, Name};
 use tamarin_term::subst::Subst;
 use tamarin_term::subst_vfresh::SubstVFresh;
 
@@ -2247,14 +2247,6 @@ fn is_constant_term(t: &LNTerm) -> bool {
         t,
         tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Con(_))
     )
-}
-
-/// Re-export sort comparison from the term layer for `simp_identify`.
-fn sort_compare(
-    a: tamarin_term::lterm::LSort,
-    b: tamarin_term::lterm::LSort,
-) -> Option<std::cmp::Ordering> {
-    tamarin_term::lterm::sort_compare(a, b)
 }
 
 /// `isPerm` (inside `removePermutations`, EquationStore.hs): `s2` is a
