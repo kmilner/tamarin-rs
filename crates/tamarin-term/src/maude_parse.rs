@@ -240,7 +240,7 @@ fn parse_variants_reply_from(c: &mut Cursor<'_>) -> Result<Vec<MSubst>, ParseErr
         if !c.eat_str(b": ") {
             return Err(ParseError("expected `: ` in reprinted term".into()));
         }
-        let _ = parse_term(c)?;
+        skip_term(c)?;
         let _ = c.skip_eol();
         // Then bindings: `xN:Sort --> term\n` until empty line.
         let mut subst = MSubst::new();
@@ -454,6 +454,62 @@ fn parse_term(c: &mut Cursor) -> Result<MTerm, ParseError> {
     }
 }
 
+/// Consume one term using the same grammar as [`parse_term`] without building
+/// an AST. Variant replies repeat the input term before the bindings, and that
+/// copy is validation-only.
+fn skip_term(c: &mut Cursor) -> Result<(), ParseError> {
+    if c.eat(b'#') || c.eat(b'%') {
+        c.read_decimal()
+            .ok_or_else(|| ParseError("fresh var idx".into()))?;
+        if !c.eat_str(b":") {
+            return Err(ParseError("expected `:` after fresh idx".into()));
+        }
+        parse_sort(c)?;
+        return Ok(());
+    }
+    let ident = c.take_while(|b| !matches!(b, b':' | b'(' | b',' | b')' | b'\n' | b' '));
+    if ident.is_empty() {
+        return Err(ParseError("empty identifier".into()));
+    }
+    if c.eat(b'(') {
+        if std::str::from_utf8(ident)
+            .ok()
+            .and_then(parse_lsort_sym)
+            .is_some()
+        {
+            c.read_decimal()
+                .ok_or_else(|| ParseError("const idx".into()))?;
+            if !c.eat(b')') {
+                return Err(ParseError("expected `)` after const".into()));
+            }
+            return Ok(());
+        }
+        loop {
+            skip_term(c)?;
+            if c.eat_str(b", ") || c.eat(b',') {
+                continue;
+            }
+            break;
+        }
+        if !c.eat(b')') {
+            return Err(ParseError("expected `)` after args".into()));
+        }
+    } else if c.eat_str(b":") {
+        parse_sort(c)?;
+        let Some(rest) = ident.strip_prefix(b"x") else {
+            return Err(ParseError("variable identifier must start with `x`".into()));
+        };
+        if std::str::from_utf8(rest)
+            .ok()
+            .and_then(|s| s.parse::<u64>().ok())
+            .is_none()
+        {
+            return Err(ParseError("invalid variable index".into()));
+        }
+    }
+    Ok(())
+}
+
 fn build_app(sig: Option<&MaudeSig>, ident: &[u8], args: Vec<MTerm>) -> MTerm {
     // AC/C operators are all `tam`-prefixed.  Strip the prefix once and
     // compare the suffix against the (compile-time) symbol-name constants,
@@ -615,6 +671,35 @@ fn flatten_cons(t: &MTerm) -> Vec<MTerm> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn skipped_terms_accept_and_consume_the_parse_term_grammar() {
+        for src in [
+            &b"x18446744073709551615:Msg"[..],
+            b"#3:Fresh",
+            b"p(0)",
+            b"tamXCFUpair(c(2), tamXCFUfst(x1:Msg))",
+            b"list(cons(c(1),cons(%2:Pub,nil)))",
+            b"tamXCFUzero",
+        ] {
+            let mut parsed = Cursor::new(src);
+            parse_term(&mut parsed).unwrap();
+            let mut skipped = Cursor::new(src);
+            skip_term(&mut skipped).unwrap();
+            assert_eq!(skipped.pos, parsed.pos, "{}", String::from_utf8_lossy(src));
+            assert!(skipped.is_eof());
+        }
+        for src in [&b"#x:Msg"[..], b"bad:Msg", b"c(x)", b"f(c(1)"] {
+            let mut parsed = Cursor::new(src);
+            let mut skipped = Cursor::new(src);
+            assert_eq!(
+                skip_term(&mut skipped).is_err(),
+                parse_term(&mut parsed).is_err(),
+                "{}",
+                String::from_utf8_lossy(src)
+            );
+        }
+    }
 
     #[test]
     fn parse_no_unifier() {
