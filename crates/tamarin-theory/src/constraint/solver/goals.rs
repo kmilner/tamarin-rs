@@ -1365,17 +1365,16 @@ fn sapic_ranking(
 /// matching the LAST predicate, …, then goals matching the FIRST predicate.
 fn sort_decision_tree_last_dyn(
     ps: &[Box<dyn Fn(&AnnotatedGoal) -> bool + '_>],
-    xs: Vec<AnnotatedGoal>,
+    mut xs: Vec<AnnotatedGoal>,
 ) -> Vec<AnnotatedGoal> {
-    // HS: sortDecisionTreeLast (p:ps) xs = sortDecisionTreeLast ps nonsat ++ sat
-    if let Some((p, rest)) = ps.split_first() {
-        let (sat, nonsat): (Vec<_>, Vec<_>) = xs.into_iter().partition(|a| p(a));
-        let mut out = sort_decision_tree_last_dyn(rest, nonsat);
-        out.extend(sat);
-        out
-    } else {
-        xs
-    }
+    // Each item belongs to its first matching predicate. The recursive HS
+    // partitions then order unmatched items first and matched classes in
+    // reverse predicate order; a stable cached-key sort is equivalent.
+    xs.sort_by_cached_key(|a| match ps.iter().position(|p| p(a)) {
+        Some(i) => ps.len() - i,
+        None => 0,
+    });
+    xs
 }
 
 /// Port of HS `injRanking ctxt allowLoopBreakers sys`
@@ -1453,17 +1452,12 @@ fn inj_ranking(
 /// Stable partition for closure-based predicate list.
 fn sort_decision_tree_dyn(
     ps: &[Box<dyn Fn(&AnnotatedGoal) -> bool + '_>],
-    xs: Vec<AnnotatedGoal>,
+    mut xs: Vec<AnnotatedGoal>,
 ) -> Vec<AnnotatedGoal> {
-    let mut result = Vec::with_capacity(xs.len());
-    let mut rest = xs;
-    for p in ps {
-        let (sat, nonsat): (Vec<_>, Vec<_>) = rest.into_iter().partition(|a| p(a));
-        result.extend(sat);
-        rest = nonsat;
-    }
-    result.extend(rest);
-    result
+    // The repeated stable partitions classify each item by its first matching
+    // predicate. Cache that class once and perform the equivalent stable sort.
+    xs.sort_by_cached_key(|a| ps.iter().position(|p| p(a)).unwrap_or(ps.len()));
+    xs
 }
 
 /// `isSplitGoalSmall`: a `Goal::Split(id)` is small if its
