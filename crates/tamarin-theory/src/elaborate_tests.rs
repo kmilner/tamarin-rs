@@ -299,6 +299,16 @@ fn elaborate_builtins() {
     );
 }
 
+#[test]
+fn every_parser_builtin_has_an_elaboration_signature() {
+    for name in tamarin_parser::parser::BUILTIN_MAUDE_SIG_NAMES {
+        assert!(
+            builtin_sig(name).is_some(),
+            "parser builtin `{name}` is missing from elaboration"
+        );
+    }
+}
+
 // Matching-tuple redeclarations stay legal in BOTH orders (corpus
 // regression fixtures issue753-5 / issue753-6, oracle probe td).
 #[test]

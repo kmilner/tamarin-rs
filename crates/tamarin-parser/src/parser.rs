@@ -679,23 +679,38 @@ impl FunOptions {
 /// `reliable-channel` is absent on purpose: it maps to `Nothing`
 /// (Theory/Text/Parser/Signature.hs:84), so it neither merges a signature nor
 /// reserves anything.
-const BUILTIN_MAUDE_SIGS: &[(&str, fn() -> MaudeSig)] = &[
-    ("locations-report", location_report_maude_sig),
-    ("diffie-hellman", dh_maude_sig),
-    ("bilinear-pairing", bp_maude_sig),
-    ("multiset", mset_maude_sig),
-    ("xor", xor_maude_sig),
-    ("symmetric-encryption", sym_enc_maude_sig),
-    ("asymmetric-encryption", asym_enc_maude_sig),
-    ("signing", signature_maude_sig),
-    ("dest-pairing", pair_dest_maude_sig),
-    ("dest-symmetric-encryption", sym_enc_dest_maude_sig),
-    ("dest-asymmetric-encryption", asym_enc_dest_maude_sig),
-    ("dest-signing", signature_dest_maude_sig),
-    ("revealing-signing", reveal_signature_maude_sig),
-    ("hashing", hash_maude_sig),
-    ("natural-numbers", nat_maude_sig),
-];
+macro_rules! builtin_maude_sigs {
+    ($($name:literal => $sig:path),+ $(,)?) => {
+        /// Names whose parser builtin contributes a Maude signature.
+        ///
+        /// Exposed so elaboration can test that its independently maintained
+        /// name-to-signature dispatch remains complete.
+        #[doc(hidden)]
+        pub const BUILTIN_MAUDE_SIG_NAMES: &[&str] = &[$($name),+];
+
+        const BUILTIN_MAUDE_SIGS: &[(&str, fn() -> MaudeSig)] = &[
+            $(($name, $sig)),+
+        ];
+    };
+}
+
+builtin_maude_sigs! {
+    "locations-report" => location_report_maude_sig,
+    "diffie-hellman" => dh_maude_sig,
+    "bilinear-pairing" => bp_maude_sig,
+    "multiset" => mset_maude_sig,
+    "xor" => xor_maude_sig,
+    "symmetric-encryption" => sym_enc_maude_sig,
+    "asymmetric-encryption" => asym_enc_maude_sig,
+    "signing" => signature_maude_sig,
+    "dest-pairing" => pair_dest_maude_sig,
+    "dest-symmetric-encryption" => sym_enc_dest_maude_sig,
+    "dest-asymmetric-encryption" => asym_enc_dest_maude_sig,
+    "dest-signing" => signature_dest_maude_sig,
+    "revealing-signing" => reveal_signature_maude_sig,
+    "hashing" => hash_maude_sig,
+    "natural-numbers" => nat_maude_sig,
+}
 
 /// The `stFunSyms` of every [`BUILTIN_MAUDE_SIGS`] row, i.e. the free function
 /// symbols enabling that builtin adds to the parse-time signature, each row in
