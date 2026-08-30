@@ -5,6 +5,14 @@
 use super::*;
 use crate::constraint::system::System;
 
+#[test]
+fn sapic_suffix_trimming_preserves_haskell_edge_cases() {
+    assert_eq!(trim_sapic_name("role_step_12_3"), "role_step");
+    assert_eq!(trim_sapic_name("role_step_x_3"), "role_step_x_3");
+    assert_eq!(trim_sapic_name("role__"), "role");
+    assert_eq!(trim_sapic_name("plain"), "plain");
+}
+
 /// An empty system renders as the bare container with no clusters.  It holds
 /// the `setDefaultAttributes` preamble (System/Dot.hs:132-138) and `showDot`'s
 /// blank line before the closing brace.  It holds nothing else.  There is no
