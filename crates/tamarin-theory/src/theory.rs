@@ -366,6 +366,9 @@ pub struct Theory<R = OpenProtoRule> {
     pub heuristic: Vec<crate::constraint::solver::goals::GoalRanking>,
     pub tactic: Vec<crate::tactic::Tactic>,
     pub signature: MaudeSig,
+    /// Intruder rules declared as top-level `rule (modulo AC)` blocks. HS
+    /// keeps these in `_thyCache`, outside the printable item stream.
+    pub intruder_rules: Vec<crate::rule::IntrRuleAC>,
     pub items: Vec<TheoryItem<R>>,
     pub options: Options,
 }
@@ -378,6 +381,7 @@ impl<R> Theory<R> {
             heuristic: Vec::new(),
             tactic: Vec::new(),
             signature,
+            intruder_rules: Vec::new(),
             items: Vec::new(),
             options: Options::default(),
         }

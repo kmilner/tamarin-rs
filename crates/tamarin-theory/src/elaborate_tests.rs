@@ -309,6 +309,32 @@ fn every_parser_builtin_has_an_elaboration_signature() {
     }
 }
 
+#[test]
+fn top_level_intruder_rules_enter_the_hidden_cache() {
+    let parsed = tamarin_parser::parse_theory(
+        "theory T begin\n\
+         builtins: diffie-hellman\n\
+         rule (modulo AC) c_exp:\n\
+           [ !KU(x) ] --> [ !KU(x) ]\n\
+         end",
+        &[],
+    )
+    .expect("parse");
+    let theory = elaborate(&parsed).expect("elaborate");
+    assert_eq!(theory.intruder_rules.len(), 1);
+    assert!(matches!(
+        &theory.intruder_rules[0].info,
+        crate::rule::IntrRuleACInfo::ConstrRule { name, .. } if name == b"_exp"
+    ));
+    assert!(
+        theory
+            .items
+            .iter()
+            .all(|item| !matches!(item, crate::theory::TheoryItem::Rule(_))),
+        "cache entries are not printable rule items"
+    );
+}
+
 // Matching-tuple redeclarations stay legal in BOTH orders (corpus
 // regression fixtures issue753-5 / issue753-6, oracle probe td).
 #[test]

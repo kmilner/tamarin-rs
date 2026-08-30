@@ -393,6 +393,12 @@ fn ast_rule_to_intr_rule_ac(
     Ok(Rule::new(info, prems, concs, acts).with_new_vars(new_vars))
 }
 
+/// Elaborate one top-level `rule (modulo AC)` parsed in an ordinary theory.
+pub(crate) fn intr_rule_from_ast(msig: &MaudeSig, r: &p::Rule) -> Result<IntrRuleAC, String> {
+    let known_funs = KnownFuns::new(msig.fun_syms.iter().copied().collect());
+    ast_rule_to_intr_rule_ac(&known_funs, msig, r)
+}
+
 // =============================================================================
 // Tests
 // =============================================================================

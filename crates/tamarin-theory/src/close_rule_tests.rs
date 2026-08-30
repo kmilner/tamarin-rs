@@ -327,7 +327,7 @@ fn check_close_intr_rule_tags_xorr_on_kcl07_signature() {
     let (sig, _probe) = xorr_parent();
     let maude = tamarin_term::maude_proc::MaudeHandle::start(&mp, sig)
         .expect("maude starts on the KCL07 signature");
-    let checked = check_close_intr_rule(&maude, None, true);
+    let checked = check_close_intr_rule(&maude, None, true, &[]);
     let names: Vec<String> = checked
         .ndc_funs
         .iter()
@@ -350,6 +350,18 @@ fn check_close_intr_rule_tags_xorr_on_kcl07_signature() {
         xorr_destr.iter().all(|r| is_ndc_cache_rule(r)),
         "every xorr destructor rule carries the NDC-tagged head"
     );
+}
+
+#[test]
+fn close_keeps_source_declared_intruder_rules_first() {
+    let Some(mp) = tamarin_test_support::require_maude_path() else {
+        return;
+    };
+    let (sig, _probe) = xorr_parent();
+    let maude = tamarin_term::maude_proc::MaudeHandle::start(&mp, sig).expect("maude starts");
+    let manual = crate::rule::Rule::new(IntrRuleACInfo::IEquality, vec![], vec![], vec![]);
+    let checked = check_close_intr_rule(&maude, None, false, std::slice::from_ref(&manual));
+    assert_eq!(checked.cache.first(), Some(&manual));
 }
 
 fn pretty_term(t: &LNTerm) -> String {

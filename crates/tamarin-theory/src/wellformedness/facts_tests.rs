@@ -102,10 +102,8 @@ fn reserved_name_detected() {
 
 /// A top-level `rule (modulo AC)` block is an intruder rule.  The parser puts
 /// it in the theory's intruder-rule cache (`addIntrRuleACs`,
-/// Theory/Text/Parser.hs:287) and `theoryRules` folds over the theory items
-/// only (TheoryObject.hs:304-306), so the checks read the protocol rules and
-/// the `!KU`/`!KD` facts of the block raise nothing.  The end-to-end pin is
-/// `scripts/divergence_fixtures/s7_intruder_rule_block`.
+/// Theory/Text/Parser.hs:287). `theoryFacts` does inspect that cache, but the
+/// special `!KU`/`!KD` facts below are valid and raise nothing.
 #[test]
 fn intruder_rule_block_reaches_no_check() {
     let t = parse(
@@ -117,6 +115,21 @@ fn intruder_rule_block_reaches_no_check() {
     );
     let r = check(&t);
     assert!(r.is_empty(), "report: {r:?}");
+}
+
+#[test]
+fn intruder_rule_cache_contributes_to_fact_usage() {
+    let t = parse(
+        r#"theory T begin
+            builtins: symmetric-encryption
+            rule (modulo AC) c_senc:
+              [ !KU(x) ] --> [ Foo(x) ]
+            rule (modulo AC) c_senc:
+              [ !KU(x), !KU(y) ] --> [ Foo(x, y) ]
+        end"#,
+    );
+    let report = check(&t);
+    assert!(topics(&report).contains("Fact arity issues"));
 }
 
 /// The fact lists of `specialFactsUsage'` and `reservedFactNameRules'` are

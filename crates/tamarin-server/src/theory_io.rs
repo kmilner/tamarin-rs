@@ -306,6 +306,7 @@ pub(crate) fn load_from_source(
             &maude,
             Some(&typed.name),
             typed.options.deduction_chain_check,
+            &typed.intruder_rules,
         );
         if !checked.ndc_funs.is_empty() {
             let mut sig = std::mem::take(&mut typed.signature);

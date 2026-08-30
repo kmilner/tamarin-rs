@@ -96,10 +96,12 @@ pub fn check_close_intr_rule(
     maude: &MaudeHandle,
     theory_name: Option<&str>,
     deduction_chain_check: bool,
+    initial: &[IntrRuleAC],
 ) -> NdcCheckedCache {
     let assembled = crate::constraint::solver::context::ProofContext::assemble_intruder_rules(
         &maude.maude_sig(),
         maude,
+        initial,
     );
     if !deduction_chain_check {
         return NdcCheckedCache {

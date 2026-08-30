@@ -28,7 +28,7 @@ use crate::fact::{
 };
 use crate::formula::{formula_facts, BLNTerm};
 use crate::pretty_hpj::{self as hpj, Doc};
-use crate::rule::ProtoRuleE;
+use crate::rule::{intr_rule_name_string, Rule};
 use crate::theory::Theory;
 
 // =============================================================================
@@ -99,7 +99,7 @@ fn show_multiplicity(m: Multiplicity) -> &'static str {
 
 /// HS `ruleFacts` (Wellformedness.hs:585-587): `concatMap (`get` ru) [rPrems,
 /// rActs, rConcs]`.
-fn rule_facts(ru: &ProtoRuleE) -> impl Iterator<Item = &LNFact> {
+fn rule_facts<I>(ru: &Rule<I>) -> impl Iterator<Item = &LNFact> {
     ru.premises
         .iter()
         .chain(ru.actions.iter())
@@ -114,12 +114,21 @@ fn rule_facts(ru: &ProtoRuleE) -> impl Iterator<Item = &LNFact> {
 /// (`applyMacroInLemma` runs in `closeTheoryItem`, CloseRule.hs:85);
 /// `Lemma::original_formula` is exactly that formula.
 ///
-/// HS also folds in `thyCache` and each rule item's `oprRuleAC`.  The cache
-/// holds the intruder rules, and `_oprRuleAC` at this point holds only a
-/// `variants` block written in the source; neither is read here.
 fn theory_facts(thy: &Theory) -> Vec<(String, Vec<FactCell>)> {
     let mut out: Vec<(String, Vec<FactCell>)> = Vec::new();
+    for ru in &thy.intruder_rules {
+        out.push((
+            format!("Rule {}", quote(&intr_rule_name_string(&ru.info))),
+            rule_facts(ru).map(FactCell::of_rule_fact).collect(),
+        ));
+    }
     for ru in thy_proto_rules(thy) {
+        out.push((
+            format!("Rule {}", quote(&show_rule_case_name(ru))),
+            rule_facts(ru).map(FactCell::of_rule_fact).collect(),
+        ));
+    }
+    for ru in thy.rules().flat_map(|opr| &opr.rule_ac) {
         out.push((
             format!("Rule {}", quote(&show_rule_case_name(ru))),
             rule_facts(ru).map(FactCell::of_rule_fact).collect(),

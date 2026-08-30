@@ -666,6 +666,7 @@ impl ProofContext {
     pub(crate) fn assemble_intruder_rules(
         sig: &tamarin_term::maude_sig::MaudeSig,
         maude: &MaudeHandle,
+        initial: &[IntrRuleAC],
     ) -> Vec<IntrRuleAC> {
         let mut intruder_rules =
             crate::intruder_rules::subterm_constructor_rules(false, maude, sig);
@@ -753,7 +754,16 @@ impl ProofContext {
         } else if sig.enable_dh {
             intruder_rules.extend(crate::intruder_variants::mk_dh_intruder_variants(sig));
         }
-        intruder_rules
+        // HS `addIntrRuleACsAfterTranslate rs'` is `nub (rs ++ rs')`:
+        // source-declared cache entries lead, generated rules follow, and the
+        // first structurally equal rule survives.
+        let mut assembled = initial.to_vec();
+        for rule in intruder_rules {
+            if !assembled.contains(&rule) {
+                assembled.push(rule);
+            }
+        }
+        assembled
     }
 
     /// Debug dump of the context's final intruder-rule cache, gated by
@@ -950,7 +960,7 @@ impl ProofContext {
         let intruder_rules: IntrRuleCache = match intr_override {
             Some(cache) => cache,
             None => IntrRuleCache::from(Self::ndc_check_cache_order(
-                Self::assemble_intruder_rules(&sig, &maude),
+                Self::assemble_intruder_rules(&sig, &maude, &[]),
             )),
         };
         Self::dump_intruder_rules(&intruder_rules);

@@ -585,14 +585,15 @@ fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), Elab
                         &macros, restr,
                     )));
             }
-            // A top-level `rule (modulo AC)` block is an intruder rule: HS's
-            // parser routes it into `_thyCache` through `addIntrRuleACs`
-            // (`intrRule`, Theory/Text/Parser/Rule.hs:156-161;
-            // Theory/Text/Parser.hs:287; OpenTheory.hs:750-751), so it becomes
-            // no theory item, reaches neither print (`ppCache = const
-            // emptyDoc`, OpenTheory.hs:869-874) and joins no protocol rule
-            // set.
-            p::TheoryItem::IntrRule(_) => {}
+            // HS routes these into `_thyCache`, outside the printable item
+            // stream; the close pass appends generated deduction rules later.
+            p::TheoryItem::IntrRule(r) => {
+                let rule = crate::intruder_variants::intr_rule_from_ast(&out.signature, r)
+                    .map_err(|message| ElabError { message })?;
+                if !out.intruder_rules.contains(&rule) {
+                    out.intruder_rules.push(rule);
+                }
+            }
             p::TheoryItem::Rule(r) => {
                 let mut e = rule_to_proto_rule_e(r, &out.signature)?;
                 // HS `liftedAddProtoRule` (Theory/Text/Parser.hs:175-193) adds

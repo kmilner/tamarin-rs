@@ -1520,6 +1520,7 @@ impl TheoryPipeline<'_> {
                 m,
                 Some(self.elaborated.name.as_str()),
                 self.elaborated.options.deduction_chain_check,
+                &self.elaborated.intruder_rules,
             );
             self.ndc_funs = checked.ndc_funs;
             self.ndc_cache = Some(checked.cache.into());
