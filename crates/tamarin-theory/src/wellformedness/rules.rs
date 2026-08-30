@@ -48,8 +48,8 @@ use crate::theory::Theory;
 use crate::tools::rule_variants::open_rule_has_no_variants;
 
 use super::{
-    numbered_index_width, quote, show_rule_case_name, thy_proto_rules, underline_topic, WfError,
-    WfReport, WF_LINE_LENGTH, WF_RIBBON,
+    quote, show_rule_case_name, thy_proto_rules, underline_topic, WfError, WfReport,
+    WF_LINE_LENGTH, WF_RIBBON,
 };
 
 // =============================================================================
@@ -401,13 +401,11 @@ fn public_names_report_from_pairs(pairs: Vec<(String, String)>) -> WfReport {
         Check the capitalization of your identifiers.\n",
     );
     s.push('\n');
-    let w = numbered_index_width(clashes.len());
-    let items: Vec<String> = clashes
+    let items: Vec<Doc> = clashes
         .iter()
-        .enumerate()
-        .map(|(k, grp)| {
+        .map(|grp| {
             // groupOn fst: list each rule's names together.
-            let mut parts: Vec<String> = Vec::new();
+            let mut parts: Vec<Doc> = Vec::new();
             let mut m = 0;
             while m < grp.len() {
                 let rule = &grp[m].0;
@@ -417,13 +415,21 @@ fn public_names_report_from_pairs(pairs: Vec<(String, String)>) -> WfReport {
                     names.push(shw(&grp[n2].1));
                     n2 += 1;
                 }
-                parts.push(format!("rule \"{}\":  name {}", rule, names.join(", ")));
+                parts.push(Doc::text(format!(
+                    "rule \"{}\":  name {}",
+                    rule,
+                    names.join(", ")
+                )));
                 m = n2;
             }
-            format!("  {:>w$}. {}", k + 1, parts.join(", "), w = w)
+            hpj::fsep(hpj::punctuate(Doc::char(','), parts)).nest(2)
         })
         .collect();
-    s.push_str(&items.join("\n  \n"));
+    s.push_str(
+        &hpj::numbered_prime(items)
+            .nest(2)
+            .render_with(WF_LINE_LENGTH, WF_RIBBON),
+    );
     s.push('\n');
     vec![WfError::new(topic, s)]
 }

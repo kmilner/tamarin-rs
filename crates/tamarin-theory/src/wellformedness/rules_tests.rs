@@ -416,6 +416,27 @@ fn public_names_report_sees_a_restrict_name() {
     );
 }
 
+#[test]
+fn public_names_report_wraps_long_clash_groups() {
+    let report = public_names_report_from_pairs(vec![
+        (
+            "A_rule_with_a_deliberately_long_name".to_string(),
+            "Identifier".to_string(),
+        ),
+        (
+            "Another_rule_with_a_deliberately_long_name".to_string(),
+            "identifier".to_string(),
+        ),
+    ]);
+    let rendered = bodies(&report);
+    let item = rendered
+        .lines()
+        .skip_while(|line| !line.starts_with("  1."))
+        .collect::<Vec<_>>();
+    assert!(item.len() > 1, "the clash stayed on one line: {rendered}");
+    assert!(item.iter().all(|line| line.len() <= WF_LINE_LENGTH));
+}
+
 /// The name walk descends into the source subprocess a SAPIC-generated rule
 /// carries, which is where the constant of a rule that mints no fact for it
 /// lives.  The parser never mints that attribute, so the generated shape is
