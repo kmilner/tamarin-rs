@@ -175,7 +175,6 @@ module	examples/sapic/export/ExistingSapicModels/AC.spthy	sapic-locations-report
 module	examples/sapic/export/ExistingSapicModels/AC_counter_with_attack.spthy	sapic-locations-report	upstream #922 behavior; pre-round binary identical	msr	stdout
 module	examples/sapic/export/ExistingSapicModels/AC_sid_with_attack.spthy	sapic-locations-report	upstream #922 behavior; pre-round binary identical	msr	stdout
 module	examples/sapic/export/ExistingSapicModels/OTP.spthy	sapic-locations-report	upstream #922 behavior; pre-round binary identical	msr	stdout
-module	examples/sapic/export/SSH/ssh-with-forwarding-bounded.spthy	sapic-locations-report	upstream #922 behavior; pre-round binary identical	msr	stdout
 module	examples/sapic/fast/feature-locations/AC.spthy	sapic-locations-report	upstream #922 behavior; pre-round binary identical	msr	stdout
 module	examples/sapic/fast/feature-locations/AC_counter_with_attack.spthy	sapic-locations-report	upstream #922 behavior; pre-round binary identical	msr	stdout
 module	examples/sapic/fast/feature-locations/AKE.spthy	sapic-locations-report	upstream #922 behavior; pre-round binary identical	msr	stdout
