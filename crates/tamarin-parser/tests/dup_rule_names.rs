@@ -273,6 +273,18 @@ fn duplicate_lemma_with_proof_has_a_bare_frame() {
     );
 }
 
+#[test]
+fn sided_lemmas_still_share_the_regular_lemma_namespace() {
+    let src = "theory T begin\n\
+               lemma l [left]: exists-trace \"Ex #i. A() @ #i\"\n\
+               lemma l [left]: exists-trace \"Ex #i. A() @ #i\"\n\
+               end\n";
+    assert!(
+        err(src, "dup.spthy").contains("duplicate lemma: l"),
+        "a non-diff theory must reject duplicate sided lemmas"
+    );
+}
+
 /// A second `restriction` item with a reused name dies at `addRestriction`'s
 /// name guard (TheoryObject.hs:453-456, reached through
 /// `liftedAddRestriction`, Theory/Text/Parser.hs:129-134).  The closing

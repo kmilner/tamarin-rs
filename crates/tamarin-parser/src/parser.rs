@@ -4204,15 +4204,12 @@ impl<'a> Parser<'a> {
         // name guard (TheoryObject.hs:462-465) on each parsed lemma;
         // accountability lemmas are TranslationItems, which `lookupLemma`
         // (TheoryObject.hs:675-676) does not see, so they neither feed nor hit
-        // this set.  A `left`/`right` attribute marks the diff-theory shape,
-        // which a diff parse routes through `liftedAddLemma'`
-        // (Theory/Text/Parser.hs:438,532), splitting the sides instead of
-        // comparing names; the guard leaves those lemmas, and every lemma of a
-        // diff parse, alone.
-        let sided = attrs
-            .iter()
-            .any(|a| matches!(a, LemmaAttr::Left | LemmaAttr::Right));
-        if !self.is_diff && !sided {
+        // this set. A diff parse routes sided lemmas through
+        // `liftedAddLemma'` (Theory/Text/Parser.hs:438,532), whose per-side
+        // stores enforce their own duplicate guards. In a regular parse,
+        // `left`/`right` are ordinary attributes and `liftedAddLemma` still
+        // checks the shared lemma namespace.
+        if !self.is_diff {
             if self.seen_lemma_names.iter().any(|n| n == &name) {
                 return Err(self.item_fail(format!("duplicate lemma: {name}")));
             }
