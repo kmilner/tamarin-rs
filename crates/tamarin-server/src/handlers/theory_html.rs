@@ -15,7 +15,7 @@ use crate::handlers::{default_layout, OPTIONS_MENU_ITEMS};
 use crate::state::TheoryEntry;
 
 use tamarin_theory::constraint::solver::proof_method::{ProofMethod, Result as MethodResult};
-use tamarin_theory::constraint::solver::search::{proof_status, ProofNode, ProofStatus};
+use tamarin_theory::constraint::solver::search::ProofStatus;
 use tamarin_theory::theory::{LemmaAttr, TraceQuantifier};
 
 /// Full overview/framing page (the one served at `/thy/trace/<idx>/overview/...`).
@@ -263,11 +263,11 @@ fn lemma_index(out: &mut String, entry: &TheoryEntry, l: &tamarin_theory::theory
         idx = idx, n_url = n_url));
     // `proofIndex l._lName tidx renderUrl mkRoute annPrf` — the annotated
     // proof tree, rendered by `prettyProofWith ppStep ppCase . insertPaths`.
-    let live_root = entry
+    let index_root = entry
         .proof_state
         .as_ref()
-        .and_then(|ps| ps.peek_root(&l.name));
-    match live_root {
+        .and_then(|ps| ps.proof_index_root(&l.name));
+    match index_root {
         Some(root) => {
             let cx = PpCtx {
                 idx,
@@ -345,11 +345,14 @@ fn interpret_color(tq: TraceQuantifier, status: ProofStatus) -> StepColor {
 ///   (Just _, Yellow)   -> hl_medium
 ///   (Just _, Unmarked) -> id               (no wrapping span)
 /// Returns the (open, close) tag pair; `("","")` for the identity case.
-fn mark_wrap(cx: &PpCtx, node: &ProofNode) -> (&'static str, &'static str) {
+fn mark_wrap(
+    cx: &PpCtx,
+    node: &crate::handlers::proof_tree::ProofIndexNode,
+) -> (&'static str, &'static str) {
     if !node.annotated {
         return ("<span class=\"hl_superfluous\">", "</span>");
     }
-    match interpret_color(cx.tq, proof_status(node)) {
+    match interpret_color(cx.tq, node.proof_status()) {
         StepColor::Unmarked => ("", ""),
         StepColor::Green => ("<span class=\"hl_good\">", "</span>"),
         StepColor::Red => ("<span class=\"hl_bad\">", "</span>"),
@@ -361,7 +364,13 @@ fn mark_wrap(cx: &PpCtx, node: &ProofNode) -> (&'static str, &'static str) {
 /// dispatch on the node's children shape.  `depth` counts the named-case
 /// `nest 2` levels the subtree sits under (HS `ppCase`), which shifts the
 /// method text's wrap budget — see `pp_step`.
-fn pp_prf(out: &mut String, cx: &PpCtx, path: &[String], node: &ProofNode, depth: usize) {
+fn pp_prf(
+    out: &mut String,
+    cx: &PpCtx,
+    path: &[String],
+    node: &crate::handlers::proof_tree::ProofIndexNode,
+    depth: usize,
+) {
     use tamarin_theory::pretty_hpj as hpj;
     // Nest indent for `next`/`qed` at this level (HS `nest 2` per named case).
     let ind = "  ".repeat(depth);
@@ -422,7 +431,7 @@ fn pp_case(
     cx: &PpCtx,
     path: &[String],
     name: &str,
-    child: &ProofNode,
+    child: &crate::handlers::proof_tree::ProofIndexNode,
     depth: usize,
 ) {
     use tamarin_theory::pretty_hpj as hpj;
@@ -466,7 +475,7 @@ fn pp_step(
     out: &mut String,
     cx: &PpCtx,
     path: &[String],
-    node: &ProofNode,
+    node: &crate::handlers::proof_tree::ProofIndexNode,
     depth: usize,
     by_prefix: bool,
 ) {
@@ -514,7 +523,7 @@ fn pp_step(
         // one empty remove-step anchor per node in HS's /overview/help.
         out.push_str(&format!("<span class=\"hl_superfluous\">{label}</span>"));
     } else {
-        let color = interpret_color(cx.tq, proof_status(node));
+        let color = interpret_color(cx.tq, node.proof_status());
         let cls = match color {
             StepColor::Unmarked => "sorry-step",
             StepColor::Green => "hl_good",
@@ -1245,4 +1254,55 @@ fn render_html_source(
         ));
     }
     parts.join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use tamarin_test_support::require_maude_path;
+
+    #[test]
+    fn first_proof_index_render_shows_checked_stored_proof() {
+        let Some(maude) = require_maude_path() else {
+            return;
+        };
+        let src = r#"
+theory T begin
+rule Setup: [Fr(~k)] --[Setup(~k)]-> [Out(~k)]
+lemma stored: exists-trace
+  "Ex k #i. Setup(k) @ #i"
+  simplify
+  by sorry
+end
+"#;
+        let mut entry = crate::theory_io::load_from_source(
+            src,
+            crate::state::TheoryOrigin::Upload("stored.spthy".into()),
+            &maude,
+            0,
+        )
+        .expect("load");
+        entry.idx = 1;
+        let ndc_cache = entry
+            .ndc_cache
+            .clone()
+            .map(tamarin_theory::constraint::solver::context::IntrRuleCache::from);
+        let state = Arc::new(
+            crate::handlers::proof_tree::ProofState::new(
+                &entry.typed_theory,
+                entry.prover_maude_sig.clone(),
+                &maude,
+                None,
+                ndc_cache.as_ref(),
+            )
+            .expect("proof state"),
+        );
+        entry.proof_state = Some(state.clone());
+
+        let html = proof_state(&entry);
+        assert!(html.contains("/main/proof/stored"));
+        assert!(html.contains("simplify"));
+        assert!(state.peek_root("stored").is_none());
+    }
 }

@@ -37,7 +37,7 @@ use tamarin_theory::constraint::solver::proof_method::{
     exec_proof_method, finished_subterms, is_finished, ProofMethod,
 };
 use tamarin_theory::constraint::solver::search::{
-    candidate_methods_with_expl, NodeStatus, ProofNode,
+    candidate_methods_with_expl, NodeStatus, ProofNode, ProofStatus,
 };
 use tamarin_theory::constraint::system::System;
 use tamarin_theory::pretty_system::pretty_non_graph_system;
@@ -51,10 +51,74 @@ pub(crate) struct LemmaProofState {
     pub root: ProofNode,
 }
 
+/// The immutable part of a proof node needed by the left-hand proof index.
+///
+/// In particular, this cannot retain a [`System`]. A stored proof can be
+/// replayed once for faithful first-page rendering and then reduced to this
+/// lightweight tree, leaving full systems lazy until an interactive proof
+/// route actually needs one.
+#[derive(Debug, Clone)]
+pub(crate) struct ProofIndexNode {
+    pub method: ProofMethod,
+    pub children: BTreeMap<String, ProofIndexNode>,
+    pub annotated: bool,
+}
+
+impl ProofIndexNode {
+    fn from_proof_node(node: &ProofNode) -> Self {
+        Self {
+            method: node.method.clone(),
+            children: node
+                .children
+                .iter()
+                .map(|(name, child)| (name.clone(), Self::from_proof_node(child)))
+                .collect(),
+            annotated: node.annotated,
+        }
+    }
+
+    /// HS `getProofStatus = foldMap proofStepStatus`, restricted to the
+    /// fields retained by the proof index snapshot.
+    pub fn proof_status(&self) -> ProofStatus {
+        fn step(node: &ProofIndexNode) -> ProofStatus {
+            if !node.annotated {
+                return ProofStatus::Undetermined;
+            }
+            match &node.method {
+                ProofMethod::Finished(
+                    tamarin_theory::constraint::solver::proof_method::Result::Solved,
+                ) => ProofStatus::TraceFound,
+                ProofMethod::Finished(
+                    tamarin_theory::constraint::solver::proof_method::Result::Unfinishable,
+                ) => ProofStatus::Unfinishable,
+                ProofMethod::Sorry(_) => ProofStatus::Incomplete,
+                ProofMethod::Invalidated => ProofStatus::Invalidated,
+                _ => ProofStatus::Complete,
+            }
+        }
+        fn combine(a: ProofStatus, b: ProofStatus) -> ProofStatus {
+            use ProofStatus::*;
+            match (a, b) {
+                (Invalidated, _) | (_, Invalidated) => Invalidated,
+                (TraceFound, _) | (_, TraceFound) => TraceFound,
+                (Incomplete, _) | (_, Incomplete) => Incomplete,
+                (Unfinishable, _) | (_, Unfinishable) => Unfinishable,
+                (Complete, _) | (_, Complete) => Complete,
+                (Undetermined, Undetermined) => Undetermined,
+            }
+        }
+
+        self.children.values().fold(step(self), |status, child| {
+            combine(status, child.proof_status())
+        })
+    }
+}
+
 /// Each theory entry carries one of these. The retained session is the sole
 /// theory-wide context owner; proof roots are materialised on first use.
 pub struct ProofState {
     pub(crate) by_lemma: Arc<Mutex<BTreeMap<String, LemmaProofState>>>,
+    proof_index_by_lemma: Arc<Mutex<BTreeMap<String, Arc<ProofIndexNode>>>>,
     pub session: Arc<tamarin_theory::prove::ProverSession>,
 }
 
@@ -109,6 +173,7 @@ impl ProofState {
         .map_err(|e| format!("prover session: {e}"))?;
         Ok(ProofState {
             by_lemma: Arc::new(Mutex::new(BTreeMap::new())),
+            proof_index_by_lemma: Arc::new(Mutex::new(BTreeMap::new())),
             session,
         })
     }
@@ -222,9 +287,10 @@ impl ProofState {
         Ok(())
     }
 
-    /// Fork this proof state: share the same session but deep-copy only the
-    /// roots that have actually been materialised. Unvisited lemmas remain
-    /// lazy in both forks. Mirrors Haskell `modifyTheory`'s value-typed
+    /// Fork this proof state: share the same session and immutable proof-index
+    /// snapshots, but deep-copy only roots that have actually been
+    /// materialised. Unvisited full systems remain lazy in both forks.
+    /// Mirrors Haskell `modifyTheory`'s value-typed
     /// `IncrementalProof` semantics: each version-fork sees the source
     /// tree at the moment of fork, then evolves independently.
     pub fn fork(&self) -> Self {
@@ -242,6 +308,7 @@ impl ProofState {
             .collect();
         ProofState {
             by_lemma: Arc::new(Mutex::new(clone)),
+            proof_index_by_lemma: Arc::new(Mutex::new(self.proof_index_by_lemma.lock().clone())),
             session: self.session.clone(),
         }
     }
@@ -251,6 +318,47 @@ impl ProofState {
     /// does not retain every lemma's proof system.
     pub fn peek_root(&self, lemma: &str) -> Option<ProofNode> {
         self.by_lemma.lock().get(lemma).map(|lp| lp.root.clone())
+    }
+
+    /// Return the tree needed by the overview's proof index.
+    ///
+    /// A live root wins. Otherwise a stored skeleton is checked once, stripped
+    /// of every constraint system, and cached in its lightweight form. Lemmas
+    /// without a stored proof return `None`, preserving the fresh `by sorry`
+    /// fast path without allocating their initial system.
+    pub(crate) fn proof_index_root(&self, lemma: &str) -> Option<Arc<ProofIndexNode>> {
+        {
+            let live = self.by_lemma.lock();
+            if let Some(root) = live.get(lemma) {
+                return Some(Arc::new(ProofIndexNode::from_proof_node(&root.root)));
+            }
+        }
+        if let Some(root) = self.proof_index_by_lemma.lock().get(lemma).cloned() {
+            return Some(root);
+        }
+        let _stored_proof = self.session.theory.lookup_lemma(lemma)?.proof.as_ref()?;
+        let root = tamarin_theory::prove::check_and_extend_lemma_in_session(
+            &self.session,
+            lemma,
+            usize::MAX,
+        )
+        .ok()?;
+        let snapshot = Arc::new(ProofIndexNode::from_proof_node(&root));
+        // Replay ran without either map lock. Lock in the same order as
+        // materialize_root below: a concurrent live edit wins; otherwise the
+        // first concurrent snapshot wins.
+        let live = self.by_lemma.lock();
+        if let Some(root) = live.get(lemma) {
+            return Some(Arc::new(ProofIndexNode::from_proof_node(&root.root)));
+        }
+        let snapshot = self
+            .proof_index_by_lemma
+            .lock()
+            .entry(lemma.to_string())
+            .or_insert(snapshot)
+            .clone();
+        drop(live);
+        Some(snapshot)
     }
 
     /// Read the root ProofNode for a lemma, materialising and replaying its
@@ -293,6 +401,8 @@ impl ProofState {
             .lock()
             .entry(lemma.to_string())
             .or_insert(LemmaProofState { root });
+        // The live root now supplies the proof index too.
+        self.proof_index_by_lemma.lock().remove(lemma);
         Ok(())
     }
 
@@ -982,6 +1092,10 @@ lemma trivial: exists-trace
   "Ex k #i. Setup(k) @ #i"
 lemma second: exists-trace
   "Ex k #i. Setup(k) @ #i"
+lemma stored: exists-trace
+  "Ex k #i. Setup(k) @ #i"
+  simplify
+  by sorry
 end
 "#;
         let entry = crate::theory_io::load_from_source(
@@ -1039,6 +1153,36 @@ end
             "root method after simplify: {:?}",
             root.method
         );
+    }
+
+    #[test]
+    fn proof_index_replays_stored_proof_without_materializing_systems() {
+        let Some(mp) = require_maude_path() else {
+            return;
+        };
+        let state = trivial_proof_state(&mp);
+
+        let root = state
+            .proof_index_root("stored")
+            .expect("stored proof index");
+        assert!(matches!(root.method, ProofMethod::Simplify));
+        assert!(state.peek_root("stored").is_none());
+        assert_eq!(state.by_lemma.lock().len(), 0);
+        assert_eq!(state.proof_index_by_lemma.lock().len(), 1);
+
+        // The immutable snapshot is reused until an interactive route asks
+        // for the live system-bearing tree.
+        let again = state
+            .proof_index_root("stored")
+            .expect("cached proof index");
+        assert!(Arc::ptr_eq(&root, &again));
+        let live = state.get_root("stored").expect("live stored proof");
+        assert_eq!(
+            root.proof_status(),
+            tamarin_theory::constraint::solver::search::proof_status(&live)
+        );
+        assert!(state.peek_root("stored").is_some());
+        assert!(state.proof_index_by_lemma.lock().is_empty());
     }
 
     #[test]
