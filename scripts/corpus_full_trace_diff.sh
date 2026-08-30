@@ -5,7 +5,7 @@
 # Cached, parallelised HS pipeline (same output format / classification):
 #   #1  HS canon CACHE keyed by (file-content-sha256, lemma, CACHE_VERSION,
 #       oracle-binary fingerprint).  HS is canonical and its proof depends
-#       only on the .spthy file, so its canon tree is stable across RS-fix
+#       only on the theory and its includes, so its canon tree is stable across RS-fix
 #       iterations -> on repeat runs HS is essentially free.  (The fingerprint
 #       in the key means any HS rebuild — instrumentation included — refills
 #       its entries rather than answering out of the old binary's.)
@@ -100,15 +100,17 @@ if [ ! -x "$rs_path" ]; then
     exit 2
 fi
 
-# --- HS canon cache key: sha256(file content) + lemma + CACHE_VERSION +
+# --- HS canon cache key: sha256(file content) + include digest + lemma + CACHE_VERSION +
 #     the oracle-binary fingerprint (gate_common's hs_fingerprint), so a
 #     rebuilt oracle is a MISS rather than a stale hit — the same __b suffix
 #     diff_proof_raw.sh / corpus_raw_diff.sh use and migrate_hs_cache_fp.sh
 #     rekeyed the older entries onto.
 hs_fingerprint "$hs_path"
 hs_cache_key() {
-    local f="$1" lemma="$2" h
+    local f="$1" lemma="$2" h inc
     h=$(sha256sum "$f" 2>/dev/null | cut -d' ' -f1)
+    inc=$(include_shas "$f")
+    if [ -n "$inc" ]; then h="${h}__i$(printf '%s' "$inc" | sha256sum | cut -c1-12)"; fi
     printf '%s__%s__v%s__b%s.canon' "$h" "$lemma" "$CACHE_VERSION" "$HS_FP_SALT"
 }
 
@@ -160,7 +162,7 @@ slice_canon() {
     awk -v lem="^lemma ${lemma}( |\\[|:)" '$0 ~ lem {p=1} p && /^lemma / && !($0 ~ lem) {exit} p' \
         "$src" | python3 "$CANON" > "$dst" 2>/dev/null
 }
-export -f hs_cache_key lemmas_of slice_canon
+export -f hs_cache_key include_shas lemmas_of slice_canon
 export HS_PATH="$hs_path" RS_PATH="$rs_path" CANON="$canon" TIMEOUT EXTRA_ENV \
        HS_CANON_CACHE CACHE_VERSION NO_HS_CACHE HS_FP_SALT
 

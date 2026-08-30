@@ -25,7 +25,7 @@ Five, all gitignored, none keyed alike:
 | `.hs_file_cache/` | `corpus_file_diff.sh` | theory sha + every `#include`d file's sha + flags hash + **oracle-binary fingerprint**; the oracle's exit status sits beside each entry as `.rc` |
 | `.hs_pretty_cache/` | `pretty_gate.sh` and `wf_gate.sh` (either fills `.load.gz`; `pretty_gate.sh` derives `.theory.gz` from it) | theory sha + every `#include`d file's sha + flags hash + **oracle-binary fingerprint** |
 | `.web_hs_cache/` | `web_parity.sh` writes; `pane_byte_check.sh` reads | profile = **oracle + Maude binary SHA-256 + crawl plan/settings**; entry = theory + transitive includes + oracle scripts |
-| `.hs_canon_cache/` | `diff_proof_raw.sh`, `corpus_raw_diff.sh`, `corpus_full_trace_diff.sh` (one key form; flagless entries are exchanged, a `diff_proof_raw.sh` run with canonical flags salts `__f` and stays distinct) | theory sha + lemma + cache version + **oracle-binary fingerprint** |
+| `.hs_canon_cache/` | `diff_proof_raw.sh`, `corpus_raw_diff.sh`, `corpus_full_trace_diff.sh` (one key form; flagless entries are exchanged, a `diff_proof_raw.sh` run with canonical flags salts `__f` and stays distinct) | theory sha + every `#include`d file's sha + lemma + cache version + **oracle-binary fingerprint** |
 | `.hs_sweep_cache/` | the three flag sweeps | theory sha + every `#include`d file's sha + flags + **oracle-binary fingerprint** + the RESOLVED maude's path (so a sweep pointed at a different maude misses rather than reusing) |
 
 The general oracle-binary fingerprint is `stat -c '%s.%Y'` of the HS binary
@@ -45,9 +45,7 @@ override; `WEB_CACHE_ROOT=` moves the whole profile pool. Nothing is archived
 or wiped, and
 `bump_submodule.sh` deliberately leaves the caches alone.
 `scripts/migrate_hs_cache_fp.sh` is the one-time rename of pre-fingerprint
-entries onto the new keys. One gap remains: `.hs_canon_cache/` still keys an
-`#include`ing theory on the includer alone. The web cache, gate caches, sweep
-cache and `rs_ref_check.sh` references digest included files; the web cache
+entries onto the new keys. Every cache digests included files; the web cache
 also digests executable oracle inputs and stages both through one helper.
 
 `gate_common.sh` owns the shared plumbing: the OOM prologue, the three

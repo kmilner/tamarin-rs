@@ -441,9 +441,8 @@ idempotent. Every tool that touches `.hs_file_cache/` computes the same
 fingerprinted key, `triage_diff_vs_hs.sh` included, so nothing writes entries
 the migration would have to chase.
 
-One gap remains: `.hs_canon_cache/` still keys an `#include`ing theory on the
-includer alone. The web cache, gate caches above, sweep cache and
-`rs_ref_check.sh` references digest included files; the web cache also digests
+The `.hs_canon_cache/`, web, gate and sweep caches, plus `rs_ref_check.sh`
+references, all digest included files transitively. The web cache also digests
 and stages executable oracle inputs.
 
 ## Fast gates (run on every build)

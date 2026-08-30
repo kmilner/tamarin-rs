@@ -21,7 +21,7 @@
 #   NO_HS_CACHE=1     ignore the raw HS cache
 #   HS_CANON_CACHE    cache dir (default <script_dir>/.hs_canon_cache); HS raw
 #                     stdout is cached/reused as <key>.full.gz, where key is
-#                     sha256(theory)__<lemma>__v<CACHE_VERSION>[__f<flags>]
+#                     sha256(theory)[__i<includes>]__<lemma>__v<CACHE_VERSION>[__f<flags>]
 #                     __b<oracle-binary fingerprint>.  corpus_raw_diff.sh and
 #                     corpus_full_trace_diff.sh fingerprint the same way, so
 #                     their FLAGLESS entries are exchanged with this script's
@@ -129,6 +129,8 @@ trap 'rm -rf "$tmp"' EXIT
 key=""
 if [ -z "$NO_HS_CACHE" ]; then
     h=$(sha256sum "$file" 2>/dev/null | cut -d' ' -f1)
+    inc=$(include_shas "$file")
+    if [ -n "$inc" ]; then h="${h}__i$(printf '%s' "$inc" | sha256sum | cut -c1-12)"; fi
     key="$HS_CANON_CACHE/${h}__${lemma}__v${CACHE_VERSION}${FLAGS_SALT}__b${HS_FP_SALT}"
 fi
 if [ -n "$key" ] && [ -f "$key.full.gz" ]; then

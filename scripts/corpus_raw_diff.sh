@@ -112,8 +112,10 @@ fi
 # three tools exchange flagless entries again.
 hs_fingerprint "$hs_path"
 hs_cache_key() {
-    local f="$1" lemma="$2" h
+    local f="$1" lemma="$2" h inc
     h=$(sha256sum "$f" 2>/dev/null | cut -d' ' -f1)
+    inc=$(include_shas "$f")
+    if [ -n "$inc" ]; then h="${h}__i$(printf '%s' "$inc" | sha256sum | cut -c1-12)"; fi
     printf '%s__%s__v%s__b%s.canon' "$h" "$lemma" "$CACHE_VERSION" "$HS_FP_SALT"
 }
 
@@ -156,7 +158,7 @@ lemmas_of() {
 # --- strip_env_lines (gate_common.sh): delete the only lines that
 # legitimately differ between the two binaries, keeping `analyzed:` visible
 # (the cache hit rewrites its path to this invocation's).
-export -f hs_cache_key lemmas_of strip_env_lines
+export -f hs_cache_key include_shas lemmas_of strip_env_lines
 export HS_PATH="$hs_path" RS_PATH="$rs_path" TIMEOUT RS_TIMEOUT EXTRA_ENV \
        HS_CANON_CACHE CACHE_VERSION NO_HS_CACHE DERIVCHECK_TIMEOUT HS_RTS HS_FP_SALT
 
