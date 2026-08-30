@@ -124,7 +124,6 @@ impl LessAtom {
             reason,
         }
     }
-
 }
 
 impl PartialEq for LessAtom {
