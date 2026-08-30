@@ -3710,16 +3710,26 @@ fn simp_injective_fact_eq_mon_pass(red: &mut Reduction) -> ChangeIndicator {
     // Cloned out of `red.sys` so the closure does not hold a borrow that
     // would conflict with the `red.insert_formula`/`insert_less` calls
     // later in this pass.
-    let pos_subterms: Vec<(tamarin_term::lterm::LNTerm, tamarin_term::lterm::LNTerm)> = red
+    let active_subterms: Vec<(tamarin_term::lterm::LNTerm, tamarin_term::lterm::LNTerm)> = red
         .sys
         .subterm_store
         .subterms
         .iter()
-        .chain(red.sys.subterm_store.solved_subterms.iter())
         .map(|c| (c.small.clone(), c.big.clone()))
         .collect();
+    let mut pos_subterms = active_subterms.clone();
+    pos_subterms.extend(
+        red.sys
+            .subterm_store
+            .solved_subterms
+            .iter()
+            .map(|c| (c.small.clone(), c.big.clone())),
+    );
     let neg_subterms: Vec<(tamarin_term::lterm::LNTerm, tamarin_term::lterm::LNTerm)> =
         red.sys.subterm_store.neg_subterms.to_vec();
+    let active_cycle =
+        crate::tools::subterm_store::has_subterm_cycle(&reducible, &red.sys.subterm_store);
+    let active_nat_inconsistent = nat_subterm_equalities(&active_subterms).is_none();
     // Mirror of HS `isTrueFalse reducible (Just sst) (small, big)`
     // (SubtermStore.hs:334-371) — the cheap structural classification
     // used by `triviallySmaller` / `triviallyNotSmaller` inside
@@ -3729,10 +3739,6 @@ fn simp_injective_fact_eq_mon_pass(red: &mut Reduction) -> ChangeIndicator {
     // solvedSubterms / negSubterms (added at the end of the closure):
     //   isInside && !isNegatedInside → Just True
     //   isNegatedInside && !isInside → Just False
-    // The `cyclic || natCyclic → Just False` arm (SubtermStore.hs:334-371, see line 361,
-    // 365-366) is deliberately deferred to propagate_subterm_obvious /
-    // the contradiction pass — same porting strategy as the `Subterm` arm
-    // of `partial_atom_valuation_with`.
     let is_true_false = |s: &tamarin_term::lterm::LNTerm,
                          t: &tamarin_term::lterm::LNTerm|
      -> Option<bool> {
@@ -3761,6 +3767,33 @@ fn simp_injective_fact_eq_mon_pass(red: &mut Reduction) -> ChangeIndicator {
             return Some(true);
         }
         if is_negated_inside && !is_inside {
+            return Some(false);
+        }
+        // HS next tests the positive store after inserting this candidate:
+        // a structural cycle or an inconsistent natural-number cycle makes
+        // the relation false immediately (SubtermStore.hs:361,365-366).
+        if active_cycle
+            || crate::tools::subterm_store::has_subterm_cycle_with_pairs(
+                &reducible,
+                &active_subterms,
+                (s, t),
+            )
+        {
+            return Some(false);
+        }
+        use tamarin_term::lterm::{is_msg_var, sort_of_lnterm, LSort};
+        let candidate_is_nat =
+            (sort_of_lnterm(s) == LSort::Nat || is_msg_var(s)) && sort_of_lnterm(t) == LSort::Nat;
+        if active_nat_inconsistent
+            || candidate_is_nat && {
+                let mut relation = Vec::with_capacity(active_subterms.len() + 1);
+                relation.extend_from_slice(&active_subterms);
+                if !relation.iter().any(|(a, b)| a == s && b == t) {
+                    relation.push((s.clone(), t.clone()));
+                }
+                nat_subterm_equalities(&relation).is_none()
+            }
+        {
             return Some(false);
         }
         None

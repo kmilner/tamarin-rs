@@ -704,21 +704,58 @@ pub fn collect_fresh_vars_not_below_reducible(
 /// while still detecting back-edges into the current recursion
 /// stack.
 pub fn has_subterm_cycle(reducible: &FastSet<FunSym>, store: &SubtermStore) -> bool {
+    has_subterm_cycle_with(reducible, store, None)
+}
+
+/// [`has_subterm_cycle`] after hypothetically adding one active positive
+/// subterm. This is the `hasSubtermCycle (insertSubterm st sst)` probe used by
+/// `isTrueFalse` without cloning the entire store.
+pub(crate) fn has_subterm_cycle_with(
+    reducible: &FastSet<FunSym>,
+    store: &SubtermStore,
+    extra: Option<(&LNTerm, &LNTerm)>,
+) -> bool {
     // Build the dag from positive subterms — every active (small, big)
     // constraint is an edge in the dependency dag.
-    let dag: Vec<(LNTerm, LNTerm)> = store
-        .subterms
-        .iter()
-        .map(|c| (c.small.clone(), c.big.clone()))
-        .collect();
+    let mut dag: Vec<(LNTerm, LNTerm)> = Vec::with_capacity(store.subterms.len() + 1);
+    dag.extend(
+        store
+            .subterms
+            .iter()
+            .map(|c| (c.small.clone(), c.big.clone())),
+    );
+    if let Some((small, big)) = extra {
+        if !dag.iter().any(|(s, t)| s == small && t == big) {
+            dag.push((small.clone(), big.clone()));
+        }
+    }
+    has_subterm_cycle_in_dag(reducible, &dag)
+}
+
+/// Pair-slice form of [`has_subterm_cycle_with`] for callers that already
+/// hold the active store projection.
+pub(crate) fn has_subterm_cycle_with_pairs(
+    reducible: &FastSet<FunSym>,
+    pairs: &[(LNTerm, LNTerm)],
+    extra: (&LNTerm, &LNTerm),
+) -> bool {
+    let mut dag = Vec::with_capacity(pairs.len() + 1);
+    dag.extend_from_slice(pairs);
+    if !dag.iter().any(|(s, t)| s == extra.0 && t == extra.1) {
+        dag.push((extra.0.clone(), extra.1.clone()));
+    }
+    has_subterm_cycle_in_dag(reducible, &dag)
+}
+
+fn has_subterm_cycle_in_dag(reducible: &FastSet<FunSym>, dag: &[(LNTerm, LNTerm)]) -> bool {
     if dag.is_empty() {
         return false;
     }
     let mut visited: std::collections::BTreeSet<(LNTerm, LNTerm)> =
         std::collections::BTreeSet::new();
-    for edge in &dag {
+    for edge in dag {
         let mut parents = std::collections::BTreeSet::new();
-        if find_loop(reducible, &dag, edge, &mut parents, &mut visited).is_none() {
+        if find_loop(reducible, dag, edge, &mut parents, &mut visited).is_none() {
             return true;
         }
     }
