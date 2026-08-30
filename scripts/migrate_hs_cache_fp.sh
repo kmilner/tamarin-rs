@@ -62,8 +62,7 @@ rev_check() {
     local pin binrev
     pin=$(git -C "$repo_root" rev-parse :tamarin-prover 2>/dev/null) || pin=
     if [ -x "$MAUDE" ]; then
-        binrev=$(timeout 60 "$HS_PATH" --with-maude="$MAUDE" --version 2>/dev/null \
-                 | sed -n 's/^Git revision: \([^,]*\),.*/\1/p')
+        binrev=$(oracle_revision "$HS_PATH" "$MAUDE")
     else
         binrev=""
     fi

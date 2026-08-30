@@ -73,8 +73,7 @@ fi
 # An oracle built from a different upstream revision certifies the port against
 # the wrong specification.  Same check as sweep_common.sh's preflight.
 pin=$(git -C "$repo_root" rev-parse :tamarin-prover 2>/dev/null) || pin=
-binrev=$(timeout 60 "$HS_PATH" --with-maude="$MAUDE" --version 2>/dev/null \
-         | sed -n 's/^Git revision: \([^,]*\),.*/\1/p')
+binrev=$(oracle_revision "$HS_PATH" "$MAUDE")
 rev_note="matches submodule pin"
 if [ -n "$pin" ] && [ -n "$binrev" ] && [ "$pin" != "$binrev" ]; then
     rev_note="MISMATCH: oracle is $binrev, submodule pin is $pin"

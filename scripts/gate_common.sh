@@ -196,6 +196,15 @@ resolve_maude() {
 maude_on_path() { PATH="$(dirname "$1"):$PATH"; export PATH; }
 
 # --- preflights --------------------------------------------------------------
+# oracle_revision <hs-bin> <maude>
+#   Print the revision token embedded in an oracle binary. Development builds
+#   may append a dirty-worktree note before the branch comma, so parse the
+#   first token after the label rather than everything before that comma.
+oracle_revision() {
+    timeout 60 "$1" --with-maude="$2" --version 2>/dev/null \
+        | sed -n 's/^Git revision: \([^[:space:],]*\).*/\1/p'
+}
+
 # oracle_rev_check <hs-bin> <maude> <repo-root>
 #   The oracle IS the specification, so it has to be the build of the submodule
 #   pin: an oracle from another revision compares the port against a different
@@ -213,8 +222,7 @@ maude_on_path() { PATH="$(dirname "$1"):$PATH"; export PATH; }
 oracle_rev_check() {
     local hs=$1 maude=$2 repo=$3 pin binrev
     pin=$(git -C "$repo" rev-parse :tamarin-prover 2>/dev/null) || pin=
-    binrev=$(timeout 60 "$hs" --with-maude="$maude" --version 2>/dev/null \
-             | sed -n 's/^Git revision: \([^,]*\),.*/\1/p')
+    binrev=$(oracle_revision "$hs" "$maude")
     if [ -n "$pin" ] && [ -n "$binrev" ] && [ "$pin" != "$binrev" ]; then
         echo "ERROR: oracle '$hs' is revision $binrev but the submodule pin is $pin" \
              "— it would certify the port against the wrong upstream" \
