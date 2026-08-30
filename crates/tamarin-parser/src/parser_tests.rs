@@ -1242,6 +1242,30 @@ end"#;
     assert_eq!(rule.name, "R");
 }
 
+#[test]
+fn tactic_blocks_require_a_selector() {
+    for block in ["prio:", "deprio: {id}"] {
+        let src = format!("theory T begin\ntactic: rank\n{block}\nrule R: [ ] --> [ ]\nend");
+        let err = parse_theory(&src, &[]).expect_err("empty tactic block must fail");
+        assert!(err
+            .to_string()
+            .contains("expected at least one tactic selector"));
+    }
+}
+
+#[test]
+fn tactic_presort_requires_one_known_non_oracle_ranking() {
+    for presort in ["sx", "z", "o"] {
+        let src = format!("theory T begin\ntactic: rank\npresort: {presort}\nend");
+        let err = parse_theory(&src, &[]).expect_err("invalid presort must fail");
+        assert!(err.to_string().contains("unknown proof method ranking"));
+    }
+    for presort in ["s", "S", "p", "P", "c", "C", "i", "I"] {
+        let src = format!("theory T begin\ntactic: rank\npresort: {presort}\nend");
+        parse_theory(&src, &[]).unwrap_or_else(|e| panic!("valid presort {presort}: {e}"));
+    }
+}
+
 // Regression: a proof CASE LABEL that collides with a top-level keyword must
 // not truncate the capture.  HS parses `oneCase = symbol "case" *> identifier`
 // (Theory/Text/Parser/Proof.hs:98-115, see line 115) structurally, so the identifier after

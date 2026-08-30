@@ -2290,7 +2290,11 @@ impl<'a> Parser<'a> {
                 ));
             }
             self.skip_ws();
-            presort = word.chars().next().expect("non-empty presort");
+            let allowed = if self.is_diff { "sScC" } else { "sSpPcCiI" };
+            if word.chars().count() != 1 || !allowed.contains(&word) {
+                return Err(self.err(format!("unknown proof method ranking `{word}`")));
+            }
+            presort = word.chars().next().expect("validated presort");
         }
 
         let mut prios = Vec::new();
@@ -2327,6 +2331,9 @@ impl<'a> Parser<'a> {
                 break;
             };
             selectors.push(selector);
+        }
+        if selectors.is_empty() {
+            return Err(self.err("expected at least one tactic selector"));
         }
         Ok(PrioBlock { ranking, selectors })
     }
