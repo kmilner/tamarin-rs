@@ -169,8 +169,12 @@ pub fn gconj(items: Vec<Guarded>) -> Guarded {
             return gfalse();
         }
     }
-    // HS-faithful: mirror `gconj`'s `nub` BEFORE the `[gf] -> gf`
-    // singleton unwrap, so the result is a fixpoint of `gconj` itself:
+    // Port normal form: run `nub` BEFORE the `[gf] -> gf` singleton unwrap,
+    // so the result is a fixpoint of `gconj` itself. The pinned Haskell
+    // implementation unwraps based on the pre-`nub` length, but that can
+    // leave `GConj [a]` after `gconj [a, a]`; this representation instead
+    // normalizes it to `a` because `normalise_guarded_cow` relies on one-pass
+    // idempotence:
     // `gconj [a, a]` must be `a`, not the non-normal singleton `Conj [a]`
     // that only a second application would unwrap.  `normalise_guarded_cow`
     // relies on this one-pass idempotence.
