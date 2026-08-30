@@ -15,10 +15,11 @@ use tamarin_term::function_symbols::pair_sym;
 use tamarin_term::lterm::{BVar, LSort, LVar};
 use tamarin_term::term::f_app_no_eq;
 use tamarin_term::vterm::var_term;
-use tamarin_theory::atom::{ProtoAtom, SyntacticAtom, SyntacticSugar};
+use tamarin_theory::atom::{ProtoAtom, SyntacticSugar};
 use tamarin_theory::fact::{Fact, FactTag, Multiplicity};
 use tamarin_theory::formula::{
-    apply_rename, exists_var, for_all_var, formula_frees, BLNTerm, ProtoFormula, SyntacticLNFormula,
+    apply_rename, exists_var, for_all_var, for_each_formula_atom, formula_facts, formula_frees,
+    BLNTerm, ProtoFormula, SyntacticLNFormula,
 };
 
 // The connective/quantifier enums (HS Theory/Model/Formula.hs:107,111) are
@@ -221,13 +222,7 @@ pub(crate) fn rename(fm: &SyntacticLNFormula, counter: &mut u64) -> SyntacticLNF
 /// HS `formulaActionFacts` (Generation.hs:112-118): the `Fact`s appearing in
 /// `Action` atoms of a formula.
 pub(crate) fn formula_action_facts(fm: &SyntacticLNFormula) -> Vec<Fact<BLNTerm>> {
-    let mut out = Vec::new();
-    for_each_atom(fm, &mut |a| {
-        if let ProtoAtom::Action(_, f) = a {
-            out.push(f.clone());
-        }
-    });
-    out
+    formula_facts(fm).into_iter().cloned().collect()
 }
 
 /// The `Fact`s appearing in the predicate-sugar atoms of a formula — the
@@ -235,27 +230,12 @@ pub(crate) fn formula_action_facts(fm: &SyntacticLNFormula) -> Vec<Fact<BLNTerm>
 /// (Theory/Syntactic/Predicate.hs:82-92).
 pub(crate) fn formula_pred_facts(fm: &SyntacticLNFormula) -> Vec<Fact<BLNTerm>> {
     let mut out = Vec::new();
-    for_each_atom(fm, &mut |a| {
+    for_each_formula_atom(fm, &mut |a| {
         if let ProtoAtom::Syntactic(SyntacticSugar::Pred(f)) = a {
             out.push(f.clone());
         }
     });
     out
-}
-
-/// The atoms of a formula, left to right — the `fAto` step of HS
-/// `foldFormula` (Theory/Model/Formula.hs:149-156).
-fn for_each_atom(fm: &SyntacticLNFormula, f: &mut dyn FnMut(&SyntacticAtom<BLNTerm>)) {
-    match fm {
-        ProtoFormula::Atom(a) => f(a),
-        ProtoFormula::Tf(_) => {}
-        ProtoFormula::Not(p) => for_each_atom(p, f),
-        ProtoFormula::Conn(_, a, b) => {
-            for_each_atom(a, f);
-            for_each_atom(b, f);
-        }
-        ProtoFormula::Qua(_, _, body) => for_each_atom(body, f),
-    }
 }
 
 #[cfg(test)]

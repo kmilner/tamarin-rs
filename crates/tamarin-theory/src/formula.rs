@@ -211,7 +211,7 @@ pub(crate) fn for_each_formula_term<S, C, V>(
 
 /// Visit every atom in formula order.  This is the shared structural walk for
 /// read-only atom folds; each caller decides which payloads of an atom count.
-fn for_each_formula_atom<'a, S, H, C, V>(
+pub fn for_each_formula_atom<'a, S, H, C, V>(
     fm: &'a ProtoFormula<S, H, C, V>,
     f: &mut impl FnMut(&'a ProtoAtom<S, VTerm<C, BVar<V>>>),
 ) {
