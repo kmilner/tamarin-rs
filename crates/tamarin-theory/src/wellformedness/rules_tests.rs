@@ -331,8 +331,7 @@ fn fresh_public_constants_message_format() {
     let msg = only(&check(&t), "Fresh public constants");
     assert_eq!(
         msg,
-        "Fresh public constants\n======================\n\n  \
-             rule `R': fresh public constants are not allowed: ~'foo'"
+        "  rule `R': fresh public constants are not allowed: ~'foo'"
     );
 }
 
