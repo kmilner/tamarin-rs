@@ -90,23 +90,26 @@ pub struct ProvedLemma {
 
 /// Compute the default oracle name for a theory file.
 ///
-/// Mirrors current HS `defaultOracleNames` (System.hs): derive
-/// `<theory-basename>.oracle`, look for it beside the theory, and otherwise
-/// fall back to `oracle`. The returned value is the relative name stored in
-/// the ranking; execution resolves it against the theory directory later.
+/// Mirrors HS `defaultOracleNames` (System.hs:550-560) exactly: take the
+/// prefix before the first dot in the complete input path, then the final
+/// slash-delimited group (including its leading slash), and probe that name
+/// from the process CWD. This intentionally preserves upstream's surprising
+/// behavior for paths containing directories or multiple dots.
 pub(crate) fn oracle_name_for_theory(in_file: &str) -> String {
-    let path = std::path::Path::new(in_file);
-    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-    let candidate = format!("{stem}.oracle");
-    let dir = path
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or_else(|| std::path::Path::new("."));
-    if dir.join(&candidate).is_file() {
+    let candidate = oracle_candidate_for_theory(in_file);
+    if std::path::Path::new(&candidate).is_file() {
         candidate
     } else {
         "oracle".to_string()
     }
+}
+
+fn oracle_candidate_for_theory(in_file: &str) -> String {
+    let before_dot = in_file.split('.').next().unwrap_or(in_file);
+    let final_group = before_dot
+        .rfind('/')
+        .map_or(before_dot, |slash| &before_dot[slash..]);
+    format!("{final_group}.oracle")
 }
 
 /// Render one `GoalRanking` as the heuristic token that names it, mirroring
@@ -2928,12 +2931,14 @@ mod heuristic_header_tests {
     use super::*;
 
     #[test]
-    fn default_oracle_is_resolved_beside_the_theory() {
-        let theory = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../tamarin-prover/examples/regression/trace/defaultoracle.spthy"
+    fn default_oracle_name_matches_haskell_path_splitting() {
+        assert_eq!(oracle_candidate_for_theory("thy.spthy"), "thy.oracle");
+        assert_eq!(oracle_candidate_for_theory("a.b.spthy"), "a.oracle");
+        assert_eq!(oracle_candidate_for_theory("dir/thy.spthy"), "/thy.oracle");
+        assert_eq!(
+            oracle_candidate_for_theory("dir.v2/foo.spthy"),
+            "dir.oracle"
         );
-        assert_eq!(oracle_name_for_theory(theory), "defaultoracle.oracle");
         assert_eq!(oracle_name_for_theory("missing.spthy"), "oracle");
     }
 

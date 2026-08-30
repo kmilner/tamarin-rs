@@ -63,8 +63,8 @@ pub enum GoalRanking {
     /// bare `defaultOracle` with `workDir = Nothing`, so `printOracle`
     /// (System.hs:701-704) shows the `"."`-joined name (`./oracle`);
     /// only a STANDALONE `o`/`O` token keeps the parse-time workDir and
-    /// displays the resolved path. `defaultOracleNames` later supplies the
-    /// theory workDir for unnamed CLI oracles too.
+    /// displays the resolved path. `defaultOracleNames` fills the relative
+    /// path without changing that workDir.
     Oracle {
         quit_on_empty: bool,
         oracle_path: String,
@@ -304,8 +304,8 @@ pub fn parse_heuristic_str_with_tactics(
         // `defaultOracle` (workDir = Nothing) and displays as the
         // `"."`-joined name (`./oracle`), unlike the standalone form
         // above.  The exec path is still resolved later
-        // (`prepend_theory_dir_to_oracle_paths`); only the display keeps
-        // the workDir-less form.
+        // (`prepend_theory_dir_to_oracle_paths`) using its absent workDir;
+        // `display_path` records that distinction from a standalone oracle.
         if c.is_ascii_alphabetic() {
             while i < chars.len() && chars[i].is_ascii_alphabetic() {
                 let mut r = GoalRanking::from_char_with_oracle(chars[i], &default_oracle);

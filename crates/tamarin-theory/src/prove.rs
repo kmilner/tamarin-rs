@@ -135,9 +135,9 @@ fn hs_normalise_relative(p: &str) -> String {
     }
 }
 
-/// Prepend the theory file's directory to any Oracle/OracleSmart rankings
-/// whose path is not already absolute.  Used for the IN-FILE `heuristic:`
-/// block whose oracle workDir is `takeDirectory inFile` (Theory/Text/Parser.hs:309).
+/// Resolve Oracle/OracleSmart rankings parsed from an in-file `heuristic:` or
+/// lemma attribute. A standalone oracle token carries `takeDirectory inFile`
+/// as its workDir; an `o`/`O` inside a compact letter run carries no workDir.
 ///
 /// Mirrors HS `oraclePath oracle = fromMaybe "." workDir </> normalise relPath`
 /// (System.hs:574-575) with `workDir = takeDirectory inFile`.  Producing the
@@ -152,13 +152,18 @@ pub fn prepend_theory_dir_to_oracle_paths(
     let work_dir = hs_take_directory(in_file);
     for r in rankings.iter_mut() {
         match r {
-            GoalRanking::Oracle { oracle_path, .. }
-            | GoalRanking::OracleSmart { oracle_path, .. } => {
-                // `display_path` (set at parse for compact-run oracles) is
-                // deliberately NOT touched: those rankings display the
-                // workDir-less `./…` form even after the exec path is
-                // resolved here.
-                *oracle_path = resolve_oracle_path(oracle_path, Some(&work_dir));
+            GoalRanking::Oracle {
+                oracle_path,
+                display_path,
+                ..
+            }
+            | GoalRanking::OracleSmart {
+                oracle_path,
+                display_path,
+                ..
+            } => {
+                let ranking_work_dir = display_path.is_none().then_some(work_dir.as_str());
+                *oracle_path = resolve_oracle_path(oracle_path, ranking_work_dir);
             }
             _ => {}
         }
@@ -349,10 +354,7 @@ fn resolve_cli_heuristic(
     // Step 1: parse the ranking string.  `parse_heuristic_str_with_tactics`
     // also computes the default `.oracle` name (HS `defaultOracleNames`) for
     // oracle rankings without an inline `"path"` — which covers BOTH HS step 2
-    // (oraclename, applied below) and step 3 (default name). We post-process
-    // to preserve the workDir distinction that the flattened Rust ranking
-    // does not store: defaults are theory-relative, explicit names are
-    // CWD-relative.
+    // (oraclename, applied below) and step 3 (default name).
     let mut rankings =
         crate::constraint::solver::goals::parse_heuristic_str_with_tactics(raw, in_file, tactics);
     // The CLI `--oraclename` (`Just "" -> Nothing`, TheoryLoader.hs:347-349, see line 348).
@@ -362,8 +364,6 @@ fn resolve_cli_heuristic(
     };
     // Default `.oracle` name (HS `defaultOracleNames`) for oracle rankings
     // that carried no inline `"path"` AND get no `--oraclename`.
-    let default_name = crate::pretty_theory::oracle_name_for_theory(in_file);
-    let default_work_dir = hs_take_directory(in_file);
     for r in rankings.iter_mut() {
         match r {
             GoalRanking::Oracle {
@@ -385,12 +385,13 @@ fn resolve_cli_heuristic(
                         *display_path = Some(oracle_path.clone());
                     }
                 } else {
-                    *oracle_path = default_name.clone();
-                    *oracle_path = resolve_oracle_path(oracle_path, Some(&default_work_dir));
-                    // Current `defaultOracleNames` also supplies this workDir
-                    // to compact-run oracle rankings, so their displayed path
-                    // is the resolved theory-relative one too.
-                    *display_path = None;
+                    // CLI rankings are parsed with `workDir = Nothing` in HS.
+                    // `defaultOracleNames` fills only the relative name and
+                    // preserves that absent workDir, so execution is CWD-relative.
+                    *oracle_path = resolve_oracle_path(oracle_path, None);
+                    if display_path.is_some() {
+                        *display_path = Some(oracle_path.clone());
+                    }
                 }
                 // Step 5: --oracle-only quitOnEmpty (Theory/Proof.hs:713-714).
                 if cli.oracle_only {

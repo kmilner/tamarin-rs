@@ -619,7 +619,7 @@ fn validate_cli_heuristic_accepts_and_rejects_like_filter_heuristic() {
 }
 
 #[test]
-fn cli_default_oracle_is_theory_relative_but_oraclename_is_cwd_relative() {
+fn cli_oracles_are_cwd_relative() {
     use crate::constraint::solver::goals::GoalRanking;
 
     let root = std::env::temp_dir().join(format!(
@@ -640,7 +640,7 @@ fn cli_default_oracle_is_theory_relative_but_oraclename_is_cwd_relative() {
     assert!(matches!(
         &rankings[0],
         GoalRanking::Oracle { oracle_path, .. }
-            if oracle_path == root.join("protocol.oracle").to_str().unwrap()
+            if oracle_path == "./oracle"
     ));
 
     let explicit = CliHeuristic {
@@ -670,4 +670,32 @@ fn cli_default_oracle_is_theory_relative_but_oraclename_is_cwd_relative() {
     ));
 
     std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn in_file_oracle_work_dir_depends_on_token_form() {
+    use crate::constraint::solver::goals::GoalRanking;
+
+    let mut rankings = vec![
+        GoalRanking::Oracle {
+            quit_on_empty: false,
+            oracle_path: "oracle".to_string(),
+            display_path: None,
+        },
+        GoalRanking::Oracle {
+            quit_on_empty: false,
+            oracle_path: "oracle".to_string(),
+            display_path: Some("./oracle".to_string()),
+        },
+    ];
+    prepend_theory_dir_to_oracle_paths(&mut rankings, "dir/theory.spthy");
+
+    assert!(matches!(
+        &rankings[0],
+        GoalRanking::Oracle { oracle_path, .. } if oracle_path == "dir/oracle"
+    ));
+    assert!(matches!(
+        &rankings[1],
+        GoalRanking::Oracle { oracle_path, .. } if oracle_path == "./oracle"
+    ));
 }
