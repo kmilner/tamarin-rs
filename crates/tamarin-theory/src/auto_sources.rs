@@ -684,6 +684,32 @@ fn unfold_one_rule_variants(o: &OpenProtoRule) -> Vec<OpenProtoRule> {
         .collect()
 }
 
+/// Re-express one closed AC half as the split open representation consumed by
+/// [`unfold_one_rule_variants`]. This also covers source-declared
+/// `variants (modulo AC)` blocks, whose bodies do not live in
+/// `abstracted_rule`/`variant_substs` on their parent.
+fn closed_rule_as_open(parent: &OpenProtoRule, ac: &crate::rule::ProtoRuleAC) -> OpenProtoRule {
+    let rule = crate::rule::Rule {
+        info: crate::rule::ProtoRuleEInfo {
+            name: ac.info.name,
+            attributes: ac.info.attributes.clone(),
+            restrictions: parent.rule.info.restrictions.clone(),
+        },
+        premises: ac.premises.clone(),
+        conclusions: ac.conclusions.clone(),
+        actions: ac.actions.clone(),
+        new_vars: ac.new_vars.clone(),
+    };
+    OpenProtoRule {
+        rule,
+        variant_substs: ac.info.variants.clone(),
+        abstracted_rule: None,
+        loop_breakers: ac.info.loop_breakers.clone(),
+        rule_e: Some(Box::new(parent.rule_e().clone())),
+        rule_ac: Vec::new(),
+    }
+}
+
 /// HS `unfoldRules items` (CloseRule.hs:106-110) over the theory's item
 /// list: replace every closed rule whose AC variant is non-trivial
 /// (`isTrivialProtoVariantAC`, Theory/Model/Rule.hs:789-793) by its
@@ -710,14 +736,24 @@ fn unfold_rule_variants(elaborated: &mut crate::theory::Theory) -> bool {
         // closes into (lib/theory/src/Rule.hs:82-86): a rule declaring its own
         // `variants (modulo AC)` blocks yields one closed rule per block, and
         // the item is left alone when every one of them is trivial.
-        let trivial = crate::theory::closed_rules_ac(o)
+        let closed = crate::theory::closed_rules_ac(o);
+        if closed
             .iter()
-            .all(|ac| crate::rule::is_trivial_proto_variant_ac(ac, o.rule_e()));
-        if trivial {
+            .all(|ac| crate::rule::is_trivial_proto_variant_ac(ac, o.rule_e()))
+        {
             elab_repl.push(None);
             continue;
         }
-        elab_repl.push(Some(unfold_one_rule_variants(o)));
+        let mut unfolded = Vec::new();
+        for ac in &closed {
+            let open = closed_rule_as_open(o, ac);
+            if crate::rule::is_trivial_proto_variant_ac(ac, o.rule_e()) {
+                unfolded.push(open);
+            } else {
+                unfolded.extend(unfold_one_rule_variants(&open));
+            }
+        }
+        elab_repl.push(Some(unfolded));
     }
     if elab_repl.iter().all(|r| r.is_none()) {
         return false;
@@ -988,6 +1024,37 @@ mod tests {
         // `mergeOpenProtoRules` collapse the run back into one item
         // (OpenTheory.hs:592-603).
         assert!(variants.windows(2).all(|w| w[0].rule_e() == w[1].rule_e()));
+    }
+
+    #[test]
+    fn unfold_uses_source_declared_variant_bodies() {
+        use crate::fact::{in_fact, out_fact};
+        use crate::rule::{ProtoRuleEInfo, Rule};
+        use crate::theory::{OpenProtoRule, Theory, TheoryItem};
+        use tamarin_term::builtin::msg_var;
+
+        let original = Rule::new(
+            ProtoRuleEInfo::standard("R"),
+            vec![in_fact(msg_var("x", 0))],
+            vec![out_fact(msg_var("x", 0))],
+            vec![],
+        );
+        let declared = Rule::new(
+            ProtoRuleEInfo::standard("R"),
+            vec![in_fact(msg_var("x", 0)), in_fact(msg_var("y", 0))],
+            vec![out_fact(msg_var("x", 0))],
+            vec![],
+        );
+        let mut open = OpenProtoRule::new(original.clone());
+        open.rule_ac.push(declared.clone());
+        let mut theory = Theory::new("T", tamarin_term::maude_sig::minimal_maude_sig(false));
+        theory.items.push(TheoryItem::Rule(open));
+
+        assert!(unfold_rule_variants(&mut theory));
+        let unfolded = theory.rules().next().expect("unfolded rule");
+        assert_eq!(unfolded.name(), "R___VARIANT_1");
+        assert_eq!(unfolded.rule.premises, declared.premises);
+        assert_eq!(unfolded.rule_e.as_deref(), Some(&original));
     }
 
     // Ground truth: the `AUTO_typing` lemma body emitted by the Haskell
