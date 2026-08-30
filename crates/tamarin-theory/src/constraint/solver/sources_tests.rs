@@ -901,6 +901,20 @@ fn compare_systems_up_to_new_vars_follows_the_hs_field_order() {
     );
 }
 
+#[test]
+fn comparison_uses_only_haskells_diff_system_bit() {
+    use crate::constraint::system::Side;
+
+    let mut lhs = system_with_a_variable_per_field(mterm(11));
+    lhs.side = Some(Side::LHS);
+    let mut rhs = lhs.clone();
+    rhs.side = Some(Side::RHS);
+    assert_eq!(
+        compare_systems_up_to_new_vars(&lhs, &rhs),
+        std::cmp::Ordering::Equal
+    );
+}
+
 /// `Seg`'s manual `Eq`/`Ord` read the segment text, never the variant tag:
 /// an occurrence path mirrors HS's `[String]`, where a static context string
 /// and a rendered one carrying the same bytes are the same element.  A user

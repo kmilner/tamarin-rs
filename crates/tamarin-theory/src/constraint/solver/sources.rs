@@ -4579,6 +4579,9 @@ fn norm_sys_for_compare(
         }
         let goals = Arc::make_mut(&mut c.goals);
         goals.sort_by(|a, b| a.0.cmp(&b.0));
+        // `rename` is injective, so equal keys can only have been duplicate
+        // before this pass. The survivor therefore cannot expose Rust's
+        // first-wins `dedup_by` versus HS `M.fromList`'s last-wins choice.
         goals.dedup_by(|a, b| a.0 == b.0);
     }
     {
@@ -4680,7 +4683,9 @@ fn compare_systems_up_to_new_vars(
         .then_with(|| goals.cmp(b_goals))
         .then_with(|| a.next_goal_nr.cmp(&b.next_goal_nr))
         .then_with(|| a.source_kind.cmp(&b.source_kind))
-        .then_with(|| a.side.cmp(&b.side))
+        // Rust carries the selected diff side; HS stores only whether this is
+        // a diff system, so LHS and RHS compare equal at this final field.
+        .then_with(|| a.side.is_some().cmp(&b.side.is_some()))
 }
 
 /// Direct port of HS `sortednubBy` (`lib/utils/src/Extension/Prelude.hs:52-87`,
