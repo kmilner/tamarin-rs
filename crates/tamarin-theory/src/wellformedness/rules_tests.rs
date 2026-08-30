@@ -164,6 +164,21 @@ fn nat_sorts_flags_nat_literal() {
     );
 }
 
+#[test]
+fn nat_well_sorted_report_checks_formula_items() {
+    let thy = elaborated(
+        "theory T begin builtins: natural-numbers \
+         lemma L: \"All #i. A() @ #i ==> (%x %+ 'bad') = %x\" \
+         restriction R: \"All #i. B() @ #i ==> (%y %+ 'also_bad') = %y\" \
+         end",
+    );
+    assert_eq!(
+        bodies(&nat_well_sorted_report(&thy)),
+        "  'bad' in term ('bad'%+%x) must be of sort nat\n  \n  \
+         'also_bad' in term ('also_bad'%+%y) must be of sort nat"
+    );
+}
+
 /// Both the offender and the enclosing term print through `prettyLNTerm`
 /// over the canonical term, and `nonWellSorted` walks the canonical
 /// operand list, so an AC chain appears flattened and sorted and several

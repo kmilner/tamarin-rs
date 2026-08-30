@@ -44,7 +44,7 @@ use crate::formula::{for_each_formula_term, formula_frees_list};
 use crate::pretty_hpj::{self as hpj, Doc};
 use crate::rule::{proto_rule_e_frees, ProtoRuleE};
 use crate::sapic::{Process, ProcessCombinator};
-use crate::theory::Theory;
+use crate::theory::{Theory, TheoryItem};
 use crate::tools::rule_variants::open_rule_has_no_variants;
 
 use super::{
@@ -218,8 +218,6 @@ fn rule_terms(ru: &ProtoRuleE) -> impl Iterator<Item = &LNTerm> {
 /// " <> prettyLNTerm t <> text " must be of sort nat"`, with the rule name
 /// absent and `t` the whole fact argument.
 ///
-/// `getItemTerms`' other half — the bound terms of the lemma, restriction and
-/// predicate formulas (Wellformedness.hs:325-331) — is outside this walk.
 pub fn nat_well_sorted_report(thy: &Theory) -> Vec<WfError> {
     // HS builds the report as a plain `Doc`: `prettyWfErrorReport`'s text
     // never passes through the escaping `Document (HtmlDoc d)` instance
@@ -227,28 +225,77 @@ pub fn nat_well_sorted_report(thy: &Theory) -> Vec<WfError> {
     // on the web routes, which render under an active `HtmlDocGuard`.
     let _plain = hpj::HtmlDocGuard::disable();
     let mut out = Vec::new();
+    let mut report_term = |t: &LNTerm| {
+        let mut errs: Vec<&LNTerm> = Vec::new();
+        non_well_sorted(t, &mut errs);
+        for err in errs {
+            // `nest 2` is `prettyWfErrorReport`'s per-body indent, baked
+            // in so the engine's width decisions are made at the body's
+            // true column.
+            let body = hpj::hcat(vec![
+                pretty_nterm(err),
+                Doc::text(" in term "),
+                pretty_nterm(t),
+                Doc::text(" must be of sort nat"),
+            ]);
+            out.push(WfError::new(
+                "Nat Sorts",
+                body.nest(2).render_with(WF_LINE_LENGTH, WF_RIBBON),
+            ));
+        }
+    };
     for ru in thy_proto_rules(thy) {
         for t in rule_terms(ru) {
-            let mut errs: Vec<&LNTerm> = Vec::new();
-            non_well_sorted(t, &mut errs);
-            for err in errs {
-                // `nest 2` is `prettyWfErrorReport`'s per-body indent, baked
-                // in so the engine's width decisions are made at the body's
-                // true column.
-                let body = hpj::hcat(vec![
-                    pretty_nterm(err),
-                    Doc::text(" in term "),
-                    pretty_nterm(t),
-                    Doc::text(" must be of sort nat"),
-                ]);
-                out.push(WfError::new(
-                    "Nat Sorts",
-                    body.nest(2).render_with(WF_LINE_LENGTH, WF_RIBBON),
-                ));
-            }
+            report_term(t);
+        }
+    }
+    for item in &thy.items {
+        let formula = match item {
+            TheoryItem::Lemma(l) => Some(&l.formula),
+            TheoryItem::Restriction(r) => Some(&r.formula),
+            TheoryItem::Predicate(p) => Some(&p.formula),
+            _ => None,
+        };
+        if let Some(guarded) = formula.and_then(|f| crate::guarded::formula_to_guarded(f).ok()) {
+            for_each_bound_guarded_term(&guarded, &[], &mut report_term);
         }
     }
     out
+}
+
+/// HS `boundTerms` (Wellformedness.hs:283-290): open each guarded block's
+/// locally nameless binders, then visit the terms of atom bodies. Guard atoms
+/// are excluded exactly as in the reference implementation.
+fn for_each_bound_guarded_term(
+    guarded: &crate::guarded::Guarded,
+    binders: &[(u64, LVar)],
+    f: &mut dyn FnMut(&LNTerm),
+) {
+    use crate::guarded::Guarded;
+    match guarded {
+        Guarded::Atom(atom) => {
+            let atom = crate::guarded::subst_bound_atom(binders, atom);
+            crate::atom::fold_atom(&atom, &mut |term| {
+                let term = crate::guarded::bterm_to_lterm(term);
+                f(&term);
+            });
+        }
+        Guarded::Disj(items) | Guarded::Conj(items) => {
+            for item in items.iter() {
+                for_each_bound_guarded_term(item, binders, f);
+            }
+        }
+        Guarded::GGuarded { vars, body, .. } => {
+            let mut extended: Vec<(u64, LVar)> = vars
+                .iter()
+                .rev()
+                .enumerate()
+                .map(|(i, (name, sort))| (i as u64, LVar::new(name, *sort, 0)))
+                .collect();
+            extended.extend_from_slice(binders);
+            for_each_bound_guarded_term(body, &extended, f);
+        }
+    }
 }
 
 // =============================================================================
