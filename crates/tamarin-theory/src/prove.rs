@@ -1274,12 +1274,12 @@ fn prove_lemma_in_session_mode(
     }
     ctx.use_induction = induction_hint(lemma);
     // Skeleton replay: same logic as in `prove_lemma_with_pool_file_heuristic`.
-    if let Some(tree) = lemma.proof.clone() {
+    if let Some(tree) = &lemma.proof {
         if auto_prove {
             return Ok(crate::replay::replace_sorry_prove(
                 &ctx,
                 sys,
-                &tree,
+                tree,
                 proof_bound,
             ));
         } else {
@@ -1288,7 +1288,7 @@ fn prove_lemma_in_session_mode(
             return Ok(crate::replay::check_and_extend(
                 &ctx,
                 sys,
-                &tree,
+                tree,
                 proof_bound,
             ));
         }
@@ -1510,11 +1510,11 @@ pub fn prove_lemma_with_pool_file_heuristic(
     // invoke the auto-prover only at `by sorry` leaves.  Otherwise (no
     // skeleton or parser couldn't structure it) fall through to the
     // pre-existing auto-prover-from-scratch behavior.
-    if let Some(tree) = lemma.proof.clone() {
+    if let Some(tree) = &lemma.proof {
         return Ok(crate::replay::replace_sorry_prove(
             &ctx,
             sys,
-            &tree,
+            tree,
             proof_bound,
         ));
     }

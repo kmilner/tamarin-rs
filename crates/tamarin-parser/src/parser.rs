@@ -2416,15 +2416,15 @@ impl<'a> Parser<'a> {
 
     /// Read raw text until we see an identifier at a word boundary that is
     /// one of the recognised top-level keywords, or a `#`-prefixed
-    /// preprocessor directive. Used for tactics, proof skeletons, etc.
+    /// preprocessor directive. Used to capture a proof skeleton's raw text.
     fn read_until_next_top_level(&mut self) -> String {
         // NOTE: the top-level `let X = ...` process definition (dispatched by
         // `theory_item`) is deliberately OMITTED here. `let` is overloaded —
         // it also begins `let`-bindings inside rules/processes — and a bare
         // `let` token can never legitimately appear inside the proof-skeleton
-        // or tactic-body grammars this scanner captures, so the only effect of
+        // grammar this scanner captures, so the only effect of
         // adding it would be to risk truncating a capture mid-body. A top-level
-        // `let` following a tactic/proof block (then needing this stop word) is
+        // `let` following a proof block (then needing this stop word) is
         // unattested in the corpus; keep the conservative set.
         const KW: &[&str] = &[
             "end",
@@ -2496,11 +2496,7 @@ impl<'a> Parser<'a> {
         // capture and the main parser resumes by consuming `test` as a CaseTest
         // declaration → `expected ':'`.  This is the only in-script position
         // where a bare keyword can sit at depth 0: every proof method is a fixed
-        // keyword or `solve( <goal> )` whose goal is paren-nested (depth > 0),
-        // and tactic blocks (the other user of this scanner) carry only the
-        // fixed keywords `presort`/`prio`/`deprio`, the fixed tactic-function
-        // names, braced ranking names, and double-quoted (opaque) arguments —
-        // none of which collide with `KW`.
+        // keyword or `solve( <goal> )` whose goal is paren-nested (depth > 0).
         let mut expect_case_name = false;
         loop {
             if self.lx.is_eof() {

@@ -29,8 +29,8 @@
 //! `term_to_lnterm` and the SAPIC term/fact converters
 //! (`term_to_sapic_term`/`fact_to_sapic_fact`).
 //!
-//! Returned errors describe the surface offence (e.g. "duplicate rule
-//! `R`"), with no internal panics.
+//! Returned errors describe the surface offence (e.g. "duplicate process
+//! definition: P"), with no internal panics.
 
 use std::collections::BTreeSet;
 
@@ -1347,15 +1347,10 @@ where
                 // spelling.  It reads the same user-function signature for
                 // the symbol's privacy / constructability / NDC flags.
                 p::BinOp::AcFct(name) => Some(f_app_acfct(ac_fct_sym(sig, name), vec![aa, bb])),
-                p::BinOp::Exp => {
-                    let sym = NoEqSym::new(
-                        b"exp".to_vec(),
-                        2,
-                        Privacy::Public,
-                        Constructability::Constructor,
-                    );
-                    Some(f_app_no_eq(sym, vec![aa, bb]))
-                }
+                p::BinOp::Exp => Some(f_app_no_eq(
+                    tamarin_term::function_symbols::exp_sym(),
+                    vec![aa, bb],
+                )),
             }
         }
         p::Term::PatMatch(_) => None,

@@ -184,6 +184,12 @@ impl SubtermStore {
     /// as a named, crate-local operation rather than implementing Rust's
     /// [`Ord`]: derived [`PartialEq`] does include the marker, so the HS order
     /// is intentionally coarser than Rust equality.
+    ///
+    /// PRECONDITION: comparing the Vec-backed pair lists in element order is
+    /// faithful to HS's `Set` comparison only when both stores hold their
+    /// `hs_pair`s sorted and deduplicated — i.e. after
+    /// `norm_sys_for_compare`'s normalisation, the only context this is
+    /// called from.
     pub(crate) fn cmp_hs(&self, other: &Self) -> std::cmp::Ordering {
         fn cmp_pairs(a: &[SubtermConstraint], b: &[SubtermConstraint]) -> std::cmp::Ordering {
             a.iter()

@@ -159,7 +159,7 @@ pub struct SharedMaudeCaches {
     unifiable: Mutex<tamarin_utils::FastMap<Vec<(LNTerm, LNTerm)>, bool>>,
     /// Memo for the RAW REPLY BYTES of the witness-producing Maude commands
     /// (`unify in MSG`, `get variants in MSG`, and the
-    /// three `match in MSG` matchers), keyed by the *exact command
+    /// two `match in MSG` matchers), keyed by the *exact command
     /// byte-string*.  Maude's reply to one of these
     /// commands is a deterministic, command-local function of the theory
     /// module — which is fixed for the life of the session (`sig` is
@@ -1373,7 +1373,7 @@ fn build_conj_eqs_cmd(prefix: &[u8], eqs: &[Equal<LNTerm>], ctx: &mut ConvCtx) -
 
 /// Build a `match in MSG : <pats> <=? <subjs> .\n` command.  Pattern list on the
 /// LEFT (vars bind), subject list on the RIGHT (ground) — the convention shared
-/// by all three matchers (see `match_eqs`' doc-comment).  `pp_mterm_list` is the
+/// by both matchers (see `match_eqs`' doc-comment).  `pp_mterm_list_into` is the
 /// shared list formatter.
 fn pp_match_cmd(pats: &[MTerm], subjs: &[MTerm]) -> Vec<u8> {
     let mut cmd = b"match in MSG : ".to_vec();
@@ -1386,7 +1386,7 @@ fn pp_match_cmd(pats: &[MTerm], subjs: &[MTerm]) -> Vec<u8> {
 
 /// Build the forward (LVar→skolem `Name`) and reverse (`Name`→LVar) skolem maps
 /// for `vars`, assigning synthetic constants in BTreeSet iteration order via
-/// `skolem_name`.  Shared by the two skolemizing matchers.
+/// `skolem_name`.  Used by `match_eqs_skolemize_both`.
 fn build_skolem_maps(
     vars: &std::collections::BTreeSet<crate::lterm::LVar>,
 ) -> (
@@ -1404,8 +1404,8 @@ fn build_skolem_maps(
 }
 
 /// Un-skolemize the range of each binding in `sub`, mapping synthetic
-/// constants back to their original LVars via `reverse`.  Shared by the two
-/// skolemizing matchers' result loops.
+/// constants back to their original LVars via `reverse`.  Used by
+/// `match_eqs_skolemize_both`'s result loop.
 fn unskolemize_subst(
     sub: Vec<(crate::lterm::LVar, LNTerm)>,
     reverse: &std::collections::BTreeMap<crate::lterm::Name, crate::lterm::LVar>,
@@ -1508,7 +1508,7 @@ fn collect_free_non_pattern_vars(
 
 /// Rewrite `t`, replacing each `LVar` bound in `map` with its synthetic
 /// skolem `Con` constant (leaving all other subterms untouched).  Shared
-/// by the two skolemizing matchers.
+/// by `match_eqs_skolemize_both`.
 fn rewrite_skolem(
     t: &LNTerm,
     map: &std::collections::BTreeMap<crate::lterm::LVar, crate::lterm::Name>,

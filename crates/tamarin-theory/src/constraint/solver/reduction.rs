@@ -3131,13 +3131,6 @@ fn make_fresh_rule(m: tamarin_term::lterm::LNTerm) -> RuleACInst {
     crate::rule::Rule::new(info, vec![], vec![conc], vec![]).with_new_vars(vec![m])
 }
 
-/// Dedup a Vec in place while preserving the FIRST occurrence's position.
-///
-/// Mirrors HS's `S.map` behaviour on `Set Guarded` in `substFormulas` /
-/// `substSolvedFormulas` / `substLemmas` (Reduction.hs:598-607, see line 605): when two
-/// formulas become structurally equal after substitution, `S.map` rebuilds
-/// the Set and only one survives.  Our `Vec<Guarded>` storage does NOT
-/// auto-dedup, so we need to mirror this explicitly after subst.
 /// One stored-formula list under `subst`: HS's `substFormulas`,
 /// `substSolvedFormulas` and `substLemmas` (Reduction.hs:598-607, see line
 /// 605), whose `Apply LNSubst (Set Guarded)` is `S.map (apply subst)`.
@@ -3190,6 +3183,7 @@ fn subst_stored_formulas(
     changed
 }
 
+/// Dedup a Vec in place while preserving the FIRST occurrence's position.
 fn dedup_preserve_order<T: PartialEq>(v: &mut Vec<T>) {
     // Keep the FIRST occurrence of each distinct element (preserving
     // first-occurrence order).  Two-pointer in-place compaction: for each

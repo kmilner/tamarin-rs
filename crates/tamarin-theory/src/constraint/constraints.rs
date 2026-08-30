@@ -125,9 +125,6 @@ impl LessAtom {
         }
     }
 
-    pub fn to_edge(&self) -> (NodeId, NodeId) {
-        (self.smaller, self.larger)
-    }
 }
 
 impl PartialEq for LessAtom {

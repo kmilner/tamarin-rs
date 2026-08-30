@@ -164,7 +164,6 @@ pub struct MaudeSig {
     /// of that order wins, and the built-in AC/C/`List` symbols — which carry
     /// no name and are not part of `userDefinedFunSyms` — are absent.  Filled
     /// by [`MaudeSig::refresh`] and read through [`MaudeSig::fun_sym_named`].
-    ///
     pub fun_syms_by_name: tamarin_utils::FastMap<&'static [u8], FunSym>,
     /// Exact Maude wire identifier to the symbol declared by this signature.
     /// Reply parsing uses this to reuse interned symbols rather than decode,

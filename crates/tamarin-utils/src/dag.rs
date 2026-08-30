@@ -11,7 +11,7 @@
 //! `trans_red` back the display-graph compression pass
 //! (`tamarin-theory`'s
 //! `constraint::system::graph::simplify::transitive_reduction`); `trans_red`
-//! in turn drives `toposort` (and thus `inverse`) and `reachable_set`. The
+//! in turn drives `toposort` (and thus `inverse`) and `reachable_set`.
 //! The remaining operations cover the subset of `Data.DAG.Simple` used by
 //! the port.
 

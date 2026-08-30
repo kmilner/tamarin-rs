@@ -166,9 +166,9 @@ pub fn positions<C, V>(t: &VTerm<C, V>) -> Vec<Position> {
     collect_positions(t)
 }
 
-/// Pre-order walk emitting one position per node. AC nodes index their children through the
-/// right-leaning
-/// binary encoding ([`ac_position`]), every other node by argument index.
+/// Pre-order walk emitting one position per node. AC nodes index their
+/// children through the right-leaning binary encoding ([`ac_position`]),
+/// every other node by argument index.
 fn collect_positions<C, V>(t: &VTerm<C, V>) -> Vec<Position> {
     fn go<C, V>(t: &VTerm<C, V>, out: &mut Vec<Position>, prefix: &mut Vec<i64>) {
         match t {

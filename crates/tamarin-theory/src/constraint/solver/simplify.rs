@@ -3288,19 +3288,21 @@ fn enforce_fresh_ordering_pass(red: &mut Reduction) -> ChangeIndicator {
                 continue;
             }
             let direct = node_fresh_vars[idx].contains(fresh_var);
-            let transitive = containing_by_fresh
-                .get(fresh_var)
-                .is_some_and(|containing| {
-                    containing.len() > 1
-                        && containing.iter().any(|term| {
-                            node_terms[idx].iter().any(|outer| {
-                                crate::tools::subterm_store::elem_not_below_reducible(
-                                    reducible, term, outer,
-                                )
+            let transitive = || {
+                containing_by_fresh
+                    .get(fresh_var)
+                    .is_some_and(|containing| {
+                        containing.len() > 1
+                            && containing.iter().any(|term| {
+                                node_terms[idx].iter().any(|outer| {
+                                    crate::tools::subterm_store::elem_not_below_reducible(
+                                        reducible, term, outer,
+                                    )
+                                })
                             })
-                        })
-                });
-            if !direct && !transitive {
+                    })
+            };
+            if !direct && !transitive() {
                 continue;
             }
             match crate::rule::unifiable_rule_ac_insts(&maude, sup_rule, other_rule) {
