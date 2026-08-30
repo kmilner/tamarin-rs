@@ -5,7 +5,8 @@
 # copies (which drifted): the OOM prologue, the three environment-line
 # strip policies, flags_for, the oracle fingerprint recipe, the `#include`
 # digest + the gate cache key, the gate file list, the maude resolver, the
-# stale-RS-binary check and the oracle-rev-vs-pin preflight. Policy DIFFERENCES between the old copies
+# Haskell-oracle and Maude resolvers, stale-RS-binary check and the
+# oracle-rev-vs-pin preflight. Policy DIFFERENCES between the old copies
 # are deliberate and stay separate named functions here (the three strip
 # policies); only drifted duplicates were unified.
 #
@@ -133,6 +134,37 @@ filelist() {
 }
 
 # --- maude resolver ----------------------------------------------------------
+# resolve_hs_oracle [repo-root] — print the oracle binary selected for a run.
+# An explicit HS_PATH is authoritative and a broken value is a hard failure.
+# Otherwise prefer this worktree's build, then the main worktree's shared build,
+# then tamarin-prover on PATH.
+resolve_hs_oracle() {
+    local repo=${1:-$(cd "$GATE_COMMON_DIR/.." && pwd)} main c
+    if [ -n "${HS_PATH:-}" ]; then
+        if [ -x "$HS_PATH" ]; then printf '%s\n' "$HS_PATH"; return 0; fi
+        echo "resolve_hs_oracle: HS_PATH='$HS_PATH' is not executable" >&2
+        return 2
+    fi
+    for c in "$repo"/tamarin-prover-testing/.stack-work/install/*/*/*/bin/tamarin-prover \
+             "$repo"/tamarin-prover-testing/.stack-work/dist/*/ghc-*/build/tamarin-prover/tamarin-prover; do
+        if [ -x "$c" ]; then printf '%s\n' "$c"; return 0; fi
+    done
+    main=$(git -C "$repo" worktree list --porcelain 2>/dev/null \
+        | awk '/^worktree/{print $2; exit}')
+    if [ -n "$main" ] && [ "$main" != "$repo" ]; then
+        for c in "$main"/tamarin-prover-testing/.stack-work/install/*/*/*/bin/tamarin-prover \
+                 "$main"/tamarin-prover-testing/.stack-work/dist/*/ghc-*/build/tamarin-prover/tamarin-prover; do
+            if [ -x "$c" ]; then printf '%s\n' "$c"; return 0; fi
+        done
+    fi
+    if c=$(command -v tamarin-prover 2>/dev/null) && [ -n "$c" ]; then
+        printf '%s\n' "$c"; return 0
+    fi
+    echo "resolve_hs_oracle: no Haskell tamarin-prover found in this worktree," \
+         "the main worktree, or PATH" >&2
+    return 2
+}
+
 # resolve_maude — print the one maude this run uses. Resolution order:
 #     1. $MAUDE_PATH when set. Set-but-unusable is a HARD FAIL, never a
 #        silent fall-through: a wrong MAUDE_PATH must not quietly become
