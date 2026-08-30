@@ -737,6 +737,7 @@ instrumented Haskell build, the rest on the Rust binary:
 | `TAM_DBG_PERFORM_SPLIT=1` | perform_split case lists (RS) |
 | `TAM_HS_DBG_PERFORM_SPLIT=1` | same, HS side |
 | `TAM_RS_DBG_APPLY_EQ_STORE=1` | applyEqStore IN/OUT (RS) |
+| `TAM_RS_DBG_APPLY_EQ_STORE_FILTER=substantive` | limit that dump to calls with equations or substitutions |
 | `TAM_HS_DBG_APPLY_EQ_STORE=1` | same, HS side |
 | `TAM_DBG_AES_VARIANTS=1` | apply_eq_store variant before→after counts |
 | `TAM_HS_TRACE_CHAINS=1` | HS-side solveChain enter/extend |
@@ -768,8 +769,12 @@ self-check of the optimisation machinery as well. The `TAM_RS_NO_*` /
 `TAM_RS_DISABLE_*` switches are the A/B complement — they force the
 pre-optimisation reference path, whose output must stay byte-identical.
 
-The table lists every Rust-side flag; the instrumented Haskell build carries
-many more — grep `patches/tamarin-prover-fixes.patch` for `TAM_HS_`.
+The table lists every Rust-side diagnostic/solver flag; the instrumented
+Haskell build carries many more — grep `patches/tamarin-prover-fixes.patch`
+for `TAM_HS_`. Test-only dependency escape hatches are separate:
+`TAM_ALLOW_NO_MAUDE=1`, `TAM_ALLOW_NO_CORPUS=1`, and
+`TAM_ALLOW_NO_DOT=1` explicitly permit the corresponding tests to skip when
+that external dependency is unavailable. They should not be set for a gate.
 
 ## Script index
 

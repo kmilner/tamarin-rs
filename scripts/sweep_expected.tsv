@@ -127,8 +127,6 @@
 #                          replication; unbound-variable acceptance in msr).
 #   derivcheck-missing     RS's message-derivation check misses
 #                          non-derivable-variable findings HS reports.
-#   pred-wrapping          long predicate/if argument lists are not
-#                          width-wrapped as HS's HughesPJ layout wraps them.
 #
 # pe sweep
 pe	examples/features/heuristic/OracleRanking.spthy	stderr-oracle-calls	-		stderr
