@@ -398,6 +398,11 @@ output is computed once per file-content hash and cached under
 Theories whose upstream recipe needs extra arguments get them from
 `scripts/file_flags.tsv`, applied identically to both provers.
 
+Oracle timeout markers record the cap that produced them. A later run with
+the same or a lower `FILE_TIMEOUT` reuses that result; raising the cap retries
+the entry and replaces the marker or publishes the completed cache payload.
+Legacy empty markers are retried once and upgraded automatically.
+
 Env knobs (full list in the script header): `ALLOWLIST` (one relative path
 per line; unset uses `scripts/parity_corpus.txt`, set-but-unreadable is
 `exit 2`), `RESULTS_TSV`, `JOBS` (4), `HS_N` (RTS cores per oracle, 4),

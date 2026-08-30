@@ -16,7 +16,7 @@
 #   Phase 1 (HS): run HS on every allowlisted file, cache stripped stdout by
 #                 ckey (theory sha + flags + ORACLE-BINARY FINGERPRINT) under
 #                 .hs_file_cache/.  JOBS concurrent, -N$HS_N cores each.
-#                 Timeout → .timeout marker; empty/no output (diff theory /
+#                 Timeout → cap-aware .timeout marker; empty/no output (diff theory /
 #                 include fragment / error) → .nohs; the oracle's exit status
 #                 is recorded beside the entry as .rc.
 #   Phase 2 (RS): run RS on every file, diff against the cached HS output and
@@ -111,11 +111,18 @@ filelist_fallback() {
 
 # --- Phase 1: HS ---
 hs_one() {
-    local rel="$1" f="$CORPUS_ROOT/$1" key out rc fl
+    local rel="$1" f="$CORPUS_ROOT/$1" key out rc fl old_cap
     [ -f "$f" ] || return 0
     key=$(ckey "$rel" "$f"); fl=$(flags_for "$rel")
     [ -f "$CACHE/$key.full.gz" ] && return 0
-    [ -f "$CACHE/$key.timeout" ] && return 0
+    if [ -f "$CACHE/$key.timeout" ]; then
+        old_cap=$(cat "$CACHE/$key.timeout")
+        case "$old_cap" in
+            ''|*[!0-9]*) ;; # Legacy/invalid marker: retry once and upgrade it.
+            *) [ "$old_cap" -ge "$FILE_TIMEOUT" ] && return 0 ;;
+        esac
+        rm -f "$CACHE/$key.timeout"
+    fi
     [ -f "$CACHE/$key.nohs" ] && return 0
     # Record the flags this entry was generated with, so the cache is
     # self-documenting (we don't "lose track" of what each file needs).
@@ -152,7 +159,8 @@ hs_one() {
     # Phase 2 compares RS's status against it (RC_DIFF).
     printf '%s' "$rc" > "$CACHE/$key.rc"
     if [ "$rc" = "124" ]; then
-        touch "$CACHE/$key.timeout"; echo "  HS TIMEOUT  $rel" >&2
+        printf '%s\n' "$FILE_TIMEOUT" > "$CACHE/$key.timeout"
+        echo "  HS TIMEOUT  $rel" >&2
     elif [ -z "$out" ]; then
         touch "$CACHE/$key.nohs"; echo "  HS EMPTY!   $rel${fl:+  (flags: $fl)}" >&2
     else
