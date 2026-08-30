@@ -561,10 +561,10 @@ fn eq_disj_walks_its_substitution_domains_in_ord_order() {
     );
 }
 
-/// The map rewrites the domain keys where the substitutions stand, keeping the
-/// disjunction's insertion order, the ranges and the split id.
+/// An arbitrary map rebuilds the substitution set in ascending order, while
+/// preserving ranges and the split id.
 #[test]
-fn eq_disj_map_keeps_insertion_order_the_ranges_and_the_split_id() {
+fn eq_disj_map_rebuilds_set_order_and_keeps_ranges_and_split_id() {
     let mapped = hf_shifted(hf_disj());
     assert_eq!(mapped.split_id, SplitId(5));
     assert_eq!(
@@ -574,10 +574,20 @@ fn eq_disj_map_keeps_insertion_order_the_ranges_and_the_split_id() {
             .map(|s| s.to_list())
             .collect::<Vec<_>>(),
         vec![
-            vec![(hf_var("x", 102), hf_term("y", 8))],
             vec![(hf_var("x", 101), hf_term("y", 7))],
+            vec![(hf_var("x", 102), hf_term("y", 8))],
         ]
     );
+}
+
+#[test]
+fn eq_disj_arbitrary_map_deduplicates_collapsed_substitutions() {
+    let mapped = EqDisj {
+        split_id: SplitId(5),
+        substs: vec![hf_subst(1, 7), hf_subst(2, 7)],
+    }
+    .map_free(&mut |_| hf_var("x", 0));
+    assert_eq!(mapped.substs, vec![hf_subst(0, 7)]);
 }
 
 /// `instance HasFrees EqStore` (EquationStore.hs:155-164): the free

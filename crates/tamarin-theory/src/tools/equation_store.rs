@@ -172,10 +172,9 @@ pub struct EqDisj {
 /// exposes its domain keys alone (SubstVFresh.hs:196-202), which keeps the
 /// witness indices of the ranges.
 ///
-/// The map rewrites each substitution where it stands.  HS's set map
-/// re-establishes the set with `S.fromList` (LTerm.hs:903), where the port
-/// keeps the `Vec`'s insertion order, which the store's own passes probe by
-/// position (`simp_identify` reads `d.substs[0]`).
+/// Arbitrary maps re-sort and deduplicate the result, matching HS's
+/// `S.fromList` rebuild (LTerm.hs:903). Monotone maps preserve the existing
+/// set order and cannot introduce duplicates.
 impl HasFrees for EqDisj {
     fn for_each_free(&self, f: &mut dyn FnMut(&LVar)) {
         let mut substs: Vec<&LNSubstVFresh> = self.substs.iter().collect();
@@ -186,9 +185,14 @@ impl HasFrees for EqDisj {
     }
 
     fn map_free_with(self, f: &mut dyn FnMut(LVar) -> LVar, monotone: bool) -> Self {
+        let mut substs = self.substs.map_free_with(f, monotone);
+        if !monotone {
+            substs.sort();
+            substs.dedup();
+        }
         EqDisj {
             split_id: self.split_id,
-            substs: self.substs.map_free_with(f, monotone),
+            substs,
         }
     }
 }
