@@ -81,7 +81,7 @@ pub enum NodeStatus {
 }
 
 /// Map a terminal `is_finished` result to its leaf [`NodeStatus`].
-fn node_status_of(r: &MethodResult) -> NodeStatus {
+pub(crate) fn node_status_of(r: &MethodResult) -> NodeStatus {
     match r {
         MethodResult::Solved => NodeStatus::Solved,
         MethodResult::Contradictory(_) => NodeStatus::Contradictory,

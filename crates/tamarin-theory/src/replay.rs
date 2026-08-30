@@ -71,7 +71,7 @@ use crate::constraint::solver::context::ProofContext;
 use crate::constraint::solver::proof_method::{
     check_and_exec_proof_method, is_finished, ProofMethod, Result as MethodResult,
 };
-use crate::constraint::solver::search::{run_proof_search, NodeStatus, ProofNode};
+use crate::constraint::solver::search::{node_status_of, run_proof_search, NodeStatus, ProofNode};
 use crate::constraint::system::System;
 use crate::theory::ProofTree;
 
@@ -166,7 +166,7 @@ fn invalid_step_node(node: &ProofTree, sys: System) -> ProofNode {
 fn parsed_to_unannotated(node: &ProofTree, sys: System) -> ProofNode {
     let method = node.method.clone();
     let status = match &method {
-        ProofMethod::Finished(r) => finished_status(r),
+        ProofMethod::Finished(r) => node_status_of(r),
         ProofMethod::Sorry(_) if node.cases.is_empty() => NodeStatus::Sorry,
         _ => NodeStatus::Open,
     };
@@ -220,20 +220,11 @@ fn finished_leaf(
             method: ProofMethod::Finished(stored.clone()),
             sys,
             children: BTreeMap::new(),
-            status: finished_status(stored),
+            status: node_status_of(stored),
             annotated: true,
         },
         _ if !auto_prove => invalid_step_node(node, sys),
         _ => run_proof_search(ctx, sys, proof_bound),
-    }
-}
-
-/// The [`NodeStatus`] a `Finished` step of each kind closes with.
-fn finished_status(r: &MethodResult) -> NodeStatus {
-    match r {
-        MethodResult::Solved => NodeStatus::Solved,
-        MethodResult::Contradictory(_) => NodeStatus::Contradictory,
-        MethodResult::Unfinishable => NodeStatus::Unfinishable,
     }
 }
 
