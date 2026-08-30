@@ -222,6 +222,23 @@ fn apply_m_action(
                 match_vars: apply_match_vars_with(|v| call_image(subst, v), match_vars),
             })
         }
+        SapicAction::Msr { match_vars, .. } => {
+            let mut mapped = traverse_terms_action(
+                |t| Ok(subst_term(subst, t)),
+                |f| Ok(apply_subst(subst, f.clone())),
+                |v| Ok(v.clone()),
+                ac,
+            )?;
+            let SapicAction::Msr {
+                match_vars: mapped_match_vars,
+                ..
+            } = &mut mapped
+            else {
+                unreachable!("traversing an MSR action preserves its constructor")
+            };
+            *mapped_match_vars = apply_match_vars_with(|v| call_image(subst, v), match_vars);
+            Ok(mapped)
+        }
         _ => traverse_terms_action(
             |t| Ok(subst_term(subst, t)),
             // The call's arguments replace the formal parameters inside an
@@ -253,6 +270,23 @@ fn apply_m_comb(
             }
             Ok(ProcessCombinator::Lookup(subst_term(subst, t), v.clone()))
         }
+        ProcessCombinator::Let { match_vars, .. } => {
+            let mut mapped = traverse_terms_comb(
+                |t| Ok(subst_term(subst, t)),
+                |f| Ok(apply_subst(subst, f.clone())),
+                |v| Ok(v.clone()),
+                c,
+            )?;
+            let ProcessCombinator::Let {
+                match_vars: mapped_match_vars,
+                ..
+            } = &mut mapped
+            else {
+                unreachable!("traversing a Let combinator preserves its constructor")
+            };
+            *mapped_match_vars = apply_match_vars_with(|v| call_image(subst, v), match_vars);
+            Ok(mapped)
+        }
         _ => traverse_terms_comb(
             |t| Ok(subst_term(subst, t)),
             // The call's arguments replace the formal parameters inside the
@@ -282,6 +316,7 @@ fn call_image(subst: &SapicSubst, v: &SapicLVar) -> SapicTerm {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeSet;
     use tamarin_term::lterm::LSort;
     use tamarin_term::maude_sig::pair_maude_sig;
 
@@ -514,5 +549,39 @@ mod tests {
             body.annotation().location,
             Some(convert_term(&location, &sig).unwrap())
         );
+    }
+
+    #[test]
+    fn call_substitution_rewrites_let_and_msr_match_vars() {
+        let x = SapicLVar::untyped(tamarin_term::lterm::LVar::new("x", LSort::Msg, 0));
+        let a = SapicLVar::untyped(tamarin_term::lterm::LVar::new("a", LSort::Msg, 0));
+        let image = tamarin_term::builtin::pair(
+            tamarin_term::vterm::var_term(a.clone()),
+            tamarin_term::lterm::pub_term("tag"),
+        );
+        let subst = SapicSubst::from_list(vec![(x.clone(), image)]);
+        let match_vars = BTreeSet::from([x.clone()]);
+
+        let comb = ProcessCombinator::Let {
+            left: tamarin_term::vterm::var_term(x.clone()),
+            right: tamarin_term::lterm::pub_term("message"),
+            match_vars: match_vars.clone(),
+        };
+        let ProcessCombinator::Let { match_vars, .. } = apply_m_comb(&subst, &comb).unwrap() else {
+            panic!("expected Let")
+        };
+        assert_eq!(match_vars, BTreeSet::from([a.clone()]));
+
+        let action = SapicAction::Msr {
+            prems: Vec::new(),
+            acts: Vec::new(),
+            concs: Vec::new(),
+            rest: Vec::new(),
+            match_vars: BTreeSet::from([x]),
+        };
+        let SapicAction::Msr { match_vars, .. } = apply_m_action(&subst, &action).unwrap() else {
+            panic!("expected MSR")
+        };
+        assert_eq!(match_vars, BTreeSet::from([a]));
     }
 }

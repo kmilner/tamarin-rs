@@ -306,21 +306,40 @@ fn subst_action(
     ac: &tamarin_theory::sapic::SapicAction<SapicLVar>,
 ) -> tamarin_theory::sapic::SapicAction<SapicLVar> {
     use tamarin_theory::sapic::SapicAction as A;
-    if let A::ChIn {
-        chan,
-        msg,
-        match_vars,
-    } = ac
-    {
-        return A::ChIn {
-            chan: chan.as_ref().map(|t| subst_term(subst, t)),
-            msg: subst_term(subst, msg),
-            // HS special-cases `ChIn` in `Apply SapicSubst (SapicAction
-            // SapicLVar)` (Sapic/Process.hs:319-321) to reach this rewrite: a
-            // `let`-bound match var `=t` (where `t = <a,'test'>`) becomes the
-            // match-var set `{a}`.
-            match_vars: apply_match_vars(subst, match_vars),
-        };
+    match ac {
+        A::ChIn {
+            chan,
+            msg,
+            match_vars,
+        } => {
+            return A::ChIn {
+                chan: chan.as_ref().map(|t| subst_term(subst, t)),
+                msg: subst_term(subst, msg),
+                // HS special-cases `ChIn` in `Apply SapicSubst (SapicAction
+                // SapicLVar)` (Sapic/Process.hs:319-321) to reach this rewrite: a
+                // `let`-bound match var `=t` (where `t = <a,'test'>`) becomes the
+                // match-var set `{a}`.
+                match_vars: apply_match_vars(subst, match_vars),
+            };
+        }
+        A::Msr { match_vars, .. } => {
+            let mut mapped = map_terms_action(
+                |t| subst_term(subst, t),
+                |f| apply_subst(subst, f.clone()),
+                |v| v.clone(),
+                ac,
+            );
+            let A::Msr {
+                match_vars: mapped_match_vars,
+                ..
+            } = &mut mapped
+            else {
+                unreachable!("mapping an MSR action preserves its constructor")
+            };
+            *mapped_match_vars = apply_match_vars(subst, match_vars);
+            return mapped;
+        }
+        _ => {}
     }
     map_terms_action(
         |t| subst_term(subst, t),
@@ -341,7 +360,7 @@ fn subst_comb(
     subst: &Subst<Name, SapicLVar>,
     c: &ProcessCombinator<SapicLVar>,
 ) -> ProcessCombinator<SapicLVar> {
-    map_terms_comb(
+    let mut mapped = map_terms_comb(
         |t| subst_term(subst, t),
         // A Case-B `let`-elimination (`let z = t in P`) rewrites the free
         // variable `z` inside a downstream conditional's formula too: `z` is a
@@ -350,7 +369,18 @@ fn subst_comb(
         |f| apply_subst(subst, f.clone()),
         |v| v.clone(),
         c,
-    )
+    );
+    if let ProcessCombinator::Let { match_vars, .. } = c {
+        let ProcessCombinator::Let {
+            match_vars: mapped_match_vars,
+            ..
+        } = &mut mapped
+        else {
+            unreachable!("mapping a Let combinator preserves its constructor")
+        };
+        *mapped_match_vars = apply_match_vars(subst, match_vars);
+    }
+    mapped
 }
 
 /// Lift an `LNTerm` (untyped) back to a SAPIC term (all variables untyped).
@@ -519,6 +549,36 @@ mod tests {
             )),
             "and so is the embedded restriction"
         );
+    }
+
+    #[test]
+    fn let_substitution_rewrites_nested_let_and_msr_match_vars() {
+        let x = svar("x");
+        let a = svar("a");
+        let image = tamarin_term::builtin::pair(var_term(a.clone()), pub_name("tag"));
+        let subst = make_let_subst(&x, &image);
+
+        let comb = ProcessCombinator::Let {
+            left: var_term(x.clone()),
+            right: pub_name("message"),
+            match_vars: BTreeSet::from([x.clone()]),
+        };
+        let ProcessCombinator::Let { match_vars, .. } = subst_comb(&subst, &comb) else {
+            panic!("expected Let")
+        };
+        assert_eq!(match_vars, BTreeSet::from([a.clone()]));
+
+        let action = SapicAction::Msr {
+            prems: Vec::new(),
+            acts: Vec::new(),
+            concs: Vec::new(),
+            rest: Vec::new(),
+            match_vars: BTreeSet::from([x]),
+        };
+        let SapicAction::Msr { match_vars, .. } = subst_action(&subst, &action) else {
+            panic!("expected MSR")
+        };
+        assert_eq!(match_vars, BTreeSet::from([a]));
     }
 
     #[test]
