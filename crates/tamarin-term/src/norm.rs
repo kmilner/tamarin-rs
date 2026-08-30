@@ -323,23 +323,28 @@ fn is_xor(t: &LNTerm) -> bool {
 /// `invalidMult` — HS `Norm.hs:115-121`.  Detects mult patterns that
 /// are not in NF due to inverse cancellation.
 fn invalid_mult(ts: &[LNTerm]) -> bool {
-    use crate::function_symbols::AcSym;
+    use crate::function_symbols::{AcSym, INV_SYM_STRING};
+    fn inverse_args(term: &LNTerm) -> Option<&[LNTerm]> {
+        match term {
+            Term::App(FunSym::NoEq(sym), args) if sym.name == INV_SYM_STRING => Some(args.as_ref()),
+            _ => None,
+        }
+    }
     let mut inverse_arg = None;
+    let mut saw_inverse = false;
     for term in ts {
-        if crate::term::is_inverse(term) {
-            if inverse_arg.is_some() {
+        if let Some(args) = inverse_args(term) {
+            if saw_inverse {
                 return true;
             }
-            inverse_arg = match term {
-                Term::App(_, args) => args.first(),
-                _ => None,
-            };
+            saw_inverse = true;
+            inverse_arg = args.first();
         }
     }
     let Some(inverse_arg) = inverse_arg else {
         return false;
     };
-    let factors = ts.iter().filter(|term| !crate::term::is_inverse(term));
+    let factors = ts.iter().filter(|term| inverse_args(term).is_none());
     if let Term::App(FunSym::Ac(AcSym::Mult), inverse_factors) = inverse_arg {
         inverse_factors
             .iter()

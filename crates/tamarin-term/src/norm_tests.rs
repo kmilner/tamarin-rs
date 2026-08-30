@@ -22,9 +22,15 @@ fn invalid_mult_detects_only_cancellable_products() {
     assert!(invalid_mult(&[
         inv(mult(a.clone(), b.clone())),
         b.clone(),
-        c
+        c.clone()
     ]));
     assert!(invalid_mult(&[inv(a), inv(b)]));
+
+    // Even an invariant-bypassing nullary `inv` still counts as an inverse
+    // for the two-inverses rejection rule.
+    let malformed_inv =
+        crate::term::unsafe_f_app(FunSym::NoEq(crate::function_symbols::inv_sym()), Vec::new());
+    assert!(invalid_mult(&[malformed_inv, inv(c)]));
 }
 
 #[test]
