@@ -239,12 +239,20 @@ impl SubtermStore {
     /// `isContradictory` OR, `oldNegSubterms` set-union.
     pub fn conjoin(&mut self, other: &SubtermStore) {
         for st in &other.subterms {
-            if !self.subterms.contains(st) {
+            if !self
+                .subterms
+                .iter()
+                .any(|own| own.hs_pair() == st.hs_pair())
+            {
                 self.subterms.push(st.clone());
             }
         }
         for st in &other.solved_subterms {
-            if !self.solved_subterms.contains(st) {
+            if !self
+                .solved_subterms
+                .iter()
+                .any(|own| own.hs_pair() == st.hs_pair())
+            {
                 self.solved_subterms.push(st.clone());
             }
         }
@@ -1041,7 +1049,11 @@ mod tests {
         let mut right = SubtermStore::empty();
         // The right store has one positive constraint that the left store also
         // has, and one new one.  The union must not duplicate the shared one.
-        right.add(a.clone(), b.clone());
+        right.subterms.push(SubtermConstraint {
+            small: a.clone(),
+            big: b.clone(),
+            propagated: true,
+        });
         right.add(b.clone(), c.clone());
         right.solved_subterms.push(solved(b.clone(), c.clone()));
         right.add_neg(c.clone(), a.clone());
