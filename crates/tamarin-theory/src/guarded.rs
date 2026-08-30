@@ -480,7 +480,7 @@ pub fn bterm_to_lterm(t: &BLNTerm) -> LNTerm {
     map_lits(t, &mut |l| match l {
         Lit::Con(c) => Lit::Con(*c),
         Lit::Var(BVar::Free(v)) => Lit::Var(*v),
-        Lit::Var(BVar::Bound(i)) => panic!("bvarToLVar: left-over bound variable '{i}'"),
+        Lit::Var(BVar::Bound(i)) => panic!("bTermToLTerm: left-over bound variable '{i}'"),
     })
 }
 
@@ -522,7 +522,9 @@ fn subst_free_atom_at(s: &[(LVar, u64)], depth: u64, a: &Atom<BLNTerm>) -> Atom<
     map_atom(a, &mut |t| {
         map_lits(t, &mut |l| match l {
             Lit::Var(BVar::Free(x)) => match s.iter().find(|(v, _)| v == x) {
-                Some((_, i)) => Lit::Var(BVar::Bound(i + depth)),
+                Some((_, i)) => Lit::Var(BVar::Bound(
+                    i.checked_add(depth).expect("guarded binder depth overflow"),
+                )),
                 None => l.clone(),
             },
             _ => l.clone(),
