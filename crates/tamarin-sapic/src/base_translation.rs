@@ -757,8 +757,6 @@ pub(crate) fn base_trans_comb(
             // `tildexl = frees t1or ∪ tildex`
             let mut tildexl = tildex.clone();
             tildexl.extend(ln_term_vars(&t1or));
-            // `faN = ∀ freevars. ((t1 = t2) ⇒ ⊥)`
-            let fa_n = let_else_restriction(&t1, &t2, &freevars);
             // `pos = p ++ [1]`
             let pos = p1.clone();
             let body0: RuleBody = (
@@ -771,6 +769,10 @@ pub(crate) fn base_trans_comb(
                 )],
                 vec![],
             );
+            // The failure restriction is unused when no else rule is emitted.
+            let fa_n = an
+                .else_branch
+                .then(|| let_else_restriction(&t1, &t2, &freevars));
             let body1: RuleBody = (
                 vec![TransFact::FLet(
                     pos.clone(),
@@ -786,7 +788,7 @@ pub(crate) fn base_trans_comb(
                     vec![TransFact::FLet(pos, t2, tildex.iter().copied().collect())],
                     vec![],
                     vec![def_state2(tildex)],
-                    vec![fa_n],
+                    vec![fa_n.expect("else-branch restriction was built")],
                 );
                 Ok((vec![body0, body1, body2], tildexl, Some(tildex.clone())))
             } else {
