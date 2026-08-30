@@ -41,6 +41,21 @@ const MAUDE_PREFIXES: [&str; 2] = [
 /// [`require_maude_path`] back into a skip.
 const ALLOW_NO_MAUDE_ENV: &str = "TAM_ALLOW_NO_MAUDE";
 
+/// Whether Graphviz's `dot` can run. Missing Graphviz is an error unless
+/// `TAM_ALLOW_NO_DOT=1` explicitly allows Graphviz-backed tests to skip.
+pub fn dot_available() -> bool {
+    if std::process::Command::new("dot").arg("-V").output().is_ok() {
+        return true;
+    }
+    assert_eq!(
+        std::env::var("TAM_ALLOW_NO_DOT").as_deref(),
+        Ok("1"),
+        "no runnable `dot` on $PATH: Graphviz-backed tests would report green \
+         vacuously. Install graphviz, or set TAM_ALLOW_NO_DOT=1 to skip them."
+    );
+    false
+}
+
 /// The first `maude` on `$PATH`, if any.
 fn maude_on_path() -> Option<String> {
     let path = std::env::var_os("PATH")?;

@@ -18,11 +18,6 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// Escape hatch in the environment: `TAM_ALLOW_NO_DOT=1` turns a `dot` that
-/// cannot run back into a silent skip.  Use it on a machine that truly has no
-/// Graphviz.
-pub const ALLOW_NO_DOT_ENV: &str = "TAM_ALLOW_NO_DOT";
-
 /// Reports whether the `dot` that the port resolves can really run.  The port
 /// resolves a bare `dot` and leaves the lookup to `$PATH`.  This is what the
 /// default of `--with-dot` records.
@@ -33,16 +28,7 @@ pub const ALLOW_NO_DOT_ENV: &str = "TAM_ALLOW_NO_DOT";
 /// would therefore make `cargo test` pass in the same way with Graphviz and
 /// without it.  Set `TAM_ALLOW_NO_DOT=1` to skip those tests deliberately.
 pub fn dot_available() -> bool {
-    if Command::new("dot").arg("-V").output().is_ok() {
-        return true;
-    }
-    assert!(
-        std::env::var(ALLOW_NO_DOT_ENV).as_deref() == Ok("1"),
-        "no runnable `dot` on $PATH: the Graphviz-backed pins here would skip \
-         and report green vacuously. Install graphviz, or set \
-         {ALLOW_NO_DOT_ENV}=1 to skip them deliberately."
-    );
-    false
+    tamarin_test_support::dot_available()
 }
 
 /// True when a maude binary was resolved.  Every maude-backed pin uses this as
