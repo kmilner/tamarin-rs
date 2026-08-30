@@ -17,7 +17,7 @@
 use std::collections::BTreeSet;
 
 use tamarin_term::lterm::{LNTerm, LSort, LVar};
-use tamarin_term::vterm::{var_term, Lit, VTerm};
+use tamarin_term::vterm::{var_term, Lit};
 
 use tamarin_theory::atom::ProtoAtom;
 use tamarin_theory::formula::{
@@ -55,20 +55,10 @@ pub(crate) fn base_trans_null(p: &ProcessPosition, tildex: &BTreeSet<LVar>) -> V
 /// translation calls `toLNTerm` / `toLVar` on SAPIC terms.  Convert a typed
 /// SAPIC term to a plain `LNTerm` (drop the type tag).
 pub(crate) fn to_ln_term(t: &SapicTerm) -> LNTerm {
-    match t {
-        VTerm::Lit(Lit::Var(sv)) => var_term(sv.var),
-        VTerm::Lit(Lit::Con(c)) => VTerm::Lit(Lit::Con(*c)),
-        VTerm::App(sym, args) => {
-            let new_args: Vec<LNTerm> = args.iter().map(to_ln_term).collect();
-            use tamarin_term::function_symbols::FunSym;
-            match sym {
-                FunSym::Ac(o) => tamarin_term::term::f_app_ac(*o, new_args),
-                FunSym::C(o) => tamarin_term::term::f_app_c(*o, new_args),
-                FunSym::NoEq(o) => tamarin_term::term::f_app_no_eq(*o, new_args),
-                FunSym::List => tamarin_term::term::f_app_list(new_args),
-            }
-        }
-    }
+    tamarin_term::term::map_lits(t, &mut |lit| match lit {
+        Lit::Var(sv) => Lit::Var(sv.var),
+        Lit::Con(c) => Lit::Con(*c),
+    })
 }
 
 /// `toLNFact` over a SAPIC fact (drop type tags from every term).

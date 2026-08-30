@@ -36,7 +36,7 @@ use tamarin_term::function_symbols::{Constructability, FunSym};
 use tamarin_term::lterm::{LNTerm, LVar, Name};
 use tamarin_term::subst::{apply_vterm, Subst};
 use tamarin_term::subterm_rule::CtxtStRule;
-use tamarin_term::vterm::{var_term, Lit, VTerm};
+use tamarin_term::vterm::{Lit, VTerm};
 use tamarin_theory::formula::apply_subst;
 use tamarin_theory::sapic::{
     apply_match_vars, map_process, map_terms_action, map_terms_comb, subst_term, Process,
@@ -385,19 +385,10 @@ fn subst_comb(
 
 /// Lift an `LNTerm` (untyped) back to a SAPIC term (all variables untyped).
 fn ln_to_sapic(t: &LNTerm) -> SapicTerm {
-    match t {
-        VTerm::Lit(Lit::Var(v)) => var_term(SapicLVar::untyped(*v)),
-        VTerm::Lit(Lit::Con(c)) => VTerm::Lit(Lit::Con(*c)),
-        VTerm::App(sym, args) => {
-            let new_args: Vec<SapicTerm> = args.iter().map(ln_to_sapic).collect();
-            match sym {
-                FunSym::Ac(o) => tamarin_term::term::f_app_ac(*o, new_args),
-                FunSym::C(o) => tamarin_term::term::f_app_c(*o, new_args),
-                FunSym::NoEq(o) => tamarin_term::term::f_app_no_eq(*o, new_args),
-                FunSym::List => tamarin_term::term::f_app_list(new_args),
-            }
-        }
-    }
+    tamarin_term::term::map_lits(t, &mut |lit| match lit {
+        Lit::Var(v) => Lit::Var(SapicLVar::untyped(*v)),
+        Lit::Con(c) => Lit::Con(*c),
+    })
 }
 
 #[cfg(test)]

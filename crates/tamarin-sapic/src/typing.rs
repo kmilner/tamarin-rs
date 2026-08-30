@@ -185,18 +185,13 @@ fn collect_comb_vars(
 /// `apply subst`, where `subst` only ever maps to `varTerm v'` (a renaming),
 /// so a structural LVar→LVar rewrite is faithful.
 fn rename_term(subst: &BTreeMap<LVar, LVar>, t: &SapicTerm) -> SapicTerm {
-    match t {
-        VTerm::Lit(Lit::Var(sv)) => {
+    tamarin_term::term::map_lits(t, &mut |lit| match lit {
+        Lit::Var(sv) => {
             let new_lv = subst.get(&sv.var).copied().unwrap_or(sv.var);
-            var_term(SapicLVar::new(new_lv, sv.stype.clone()))
+            Lit::Var(SapicLVar::new(new_lv, sv.stype.clone()))
         }
-        VTerm::Lit(Lit::Con(c)) => VTerm::Lit(Lit::Con(*c)),
-        VTerm::App(sym, args) => {
-            let new_args: Vec<SapicTerm> = args.iter().map(|a| rename_term(subst, a)).collect();
-            // Rebuild through the smart constructor so AC normal form is kept.
-            tamarin_term::term::f_app(*sym, new_args)
-        }
-    }
+        Lit::Con(c) => Lit::Con(*c),
+    })
 }
 
 fn rename_sv(subst: &BTreeMap<LVar, LVar>, sv: &SapicLVar) -> SapicLVar {
@@ -633,11 +628,10 @@ pub(crate) type UserFunTyping = (String, Vec<SapicType>, SapicType);
 /// `toSapicTerm` (Typing.hs:173-178): re-tag an `LNTerm`'s variables as
 /// untyped `SapicLVar`s (a structure-preserving `fmap`).
 fn to_sapic_term(t: &tamarin_term::lterm::LNTerm) -> SapicTerm {
-    match t {
-        VTerm::Lit(Lit::Var(v)) => var_term(SapicLVar::untyped(*v)),
-        VTerm::Lit(Lit::Con(c)) => VTerm::Lit(Lit::Con(*c)),
-        VTerm::App(sym, args) => VTerm::App(*sym, args.iter().map(to_sapic_term).collect()),
-    }
+    tamarin_term::term::map_lits(t, &mut |lit| match lit {
+        Lit::Var(v) => Lit::Var(SapicLVar::untyped(*v)),
+        Lit::Con(c) => Lit::Con(*c),
+    })
 }
 
 /// `typeTermsWithEnv` (Typing.hs:128-134): type a term list against `env`,
