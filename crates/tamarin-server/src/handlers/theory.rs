@@ -489,18 +489,6 @@ pub async fn source_(State(state): State<Arc<AppState>>, Path(idx): Path<usize>)
     text_response(render_theory_source(&entry))
 }
 
-pub async fn message_deduction(
-    State(state): State<Arc<AppState>>,
-    Path(idx): Path<usize>,
-) -> Response {
-    // See `source_` — identical output, identical proof-state need.
-    let _ = state.store.ensure_proof_state(idx, &state.cfg);
-    let Some(entry) = load_theory(&state, idx) else {
-        return not_found();
-    };
-    text_response(render_theory_source(&entry))
-}
-
 // ---------------------------------------------------------------------
 // Autoprove
 // ---------------------------------------------------------------------
