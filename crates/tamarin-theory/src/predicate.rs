@@ -237,7 +237,7 @@ mod tests {
     use crate::pretty_formula::pretty_lnformula;
     use crate::theory::TheoryItem;
     use tamarin_parser::parser::parse_formula_str;
-    use tamarin_term::maude_sig::pair_maude_sig;
+    use tamarin_term::maude_sig::{mset_maude_sig, pair_maude_sig};
     use tamarin_term::term::Term;
 
     /// The predicates of a theory that declares nothing else.
@@ -256,8 +256,9 @@ mod tests {
     }
 
     fn closed(src: &str) -> SyntacticLNFormula {
-        let f = parse_formula_str(src, &pair_maude_sig()).unwrap();
-        crate::formula::from_parser(&f, &pair_maude_sig()).unwrap()
+        let sig = mset_maude_sig();
+        let f = parse_formula_str(src, &sig).unwrap();
+        crate::formula::from_parser(&f, &sig).unwrap()
     }
 
     fn has_pred_atom<H>(f: &ProtoFormula<SyntacticSugar<BLNTerm>, H, Name, LVar>) -> bool {
