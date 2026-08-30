@@ -50,3 +50,24 @@ proof_lemmas_of() {
         | grep '^lemma ' \
         | sed -E 's/^lemma[[:space:]]+([A-Za-z0-9_]+).*/\1/'
 }
+
+# proof_lemma_block <lemma> <rendered-theory>
+#   Print one rendered lemma through (but not including) the next lemma. Keep
+#   the lemma name out of a dynamic regular expression: awks disagree about
+#   whether a backslash in a `-v` string survives to escape `[`, and lemma
+#   names need only an exact prefix plus one of Tamarin's header delimiters.
+proof_lemma_block() {
+    awk -v lemma="$1" '
+        BEGIN { prefix = "lemma " lemma }
+        {
+            target = index($0, prefix) == 1
+            if (target) {
+                delim = substr($0, length(prefix) + 1, 1)
+                target = delim == " " || delim == "[" || delim == ":"
+            }
+            if (target) capture = 1
+            else if (capture && /^lemma /) exit
+            if (capture) print
+        }
+    ' "$2"
+}

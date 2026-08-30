@@ -89,10 +89,11 @@ hs_fingerprint "$hs_path"
 # --- Slice one lemma's proof block out of a rendered theory and canonicalize.
 slice_canon() {
     local lemma="$1" src="$2" dst="$3"
-    awk -v lem="^lemma ${lemma}( |\\[|:)" '$0 ~ lem {p=1} p && /^lemma / && !($0 ~ lem) {exit} p' \
-        "$src" | python3 "$CANON" > "$dst" 2>/dev/null
+    proof_lemma_block "$lemma" "$src" | python3 "$CANON" > "$dst" 2>/dev/null
+    local -a rc=("${PIPESTATUS[@]}")
+    [ "${rc[0]}" -eq 0 ] && [ "${rc[1]}" -eq 0 ]
 }
-export -f proof_cache_key proof_lemmas_of include_shas slice_canon
+export -f proof_cache_key proof_lemmas_of proof_lemma_block include_shas slice_canon
 export HS_PATH="$hs_path" RS_PATH="$rs_path" CANON="$canon" TIMEOUT EXTRA_ENV \
        HS_CANON_CACHE CACHE_VERSION NO_HS_CACHE HS_FP_SALT
 
@@ -144,8 +145,11 @@ worker() {
         # Derive the canon entry from the cached raw output (written by this
         # script or by corpus_raw_diff.sh) instead of re-running HS.
         gzip -dc "${key%.canon}.full.gz" 2>/dev/null > "$tmp/hs.full"
-        slice_canon "$lemma" "$tmp/hs.full" "$tmp/hs.canon"
-        if [ "$(grep -c . "$tmp/hs.canon")" -gt 0 ]; then
+        local slice_ok=0
+        slice_canon "$lemma" "$tmp/hs.full" "$tmp/hs.canon" && slice_ok=1
+        if [ "$slice_ok" -eq 0 ]; then
+            echo "HS proof slice failed: $f::$lemma" >&2
+        elif [ "$(grep -c . "$tmp/hs.canon")" -gt 0 ]; then
             cp -f "$tmp/hs.canon" "$key" 2>/dev/null || true
         else
             : > "$key_empty" 2>/dev/null || true
@@ -155,7 +159,8 @@ worker() {
         timeout "$TIMEOUT" "$HS_PATH" +RTS -N1 -RTS --prove="$lemma" "$f" 2>/dev/null > "$tmp/hs.out"
         hs_rc=$?
         hs_ms=$(( $(date +%s%3N) - hs_t0 ))
-        slice_canon "$lemma" "$tmp/hs.out" "$tmp/hs.canon"
+        local slice_ok=0
+        slice_canon "$lemma" "$tmp/hs.out" "$tmp/hs.canon" && slice_ok=1
         if [ -n "$key" ]; then
             # >=128 is a signal death (OOM's 137), which truncates stdout the
             # same way the timeout does: marker, never the partial payload.
@@ -163,7 +168,9 @@ worker() {
                 : > "$key_timeout" 2>/dev/null || true
             else
                 gzip -c "$tmp/hs.out" > "${key%.canon}.full.gz" 2>/dev/null || true
-                if [ "$(grep -c . "$tmp/hs.canon")" -gt 0 ]; then
+                if [ "$slice_ok" -eq 0 ]; then
+                    echo "HS proof slice failed: $f::$lemma" >&2
+                elif [ "$(grep -c . "$tmp/hs.canon")" -gt 0 ]; then
                     cp -f "$tmp/hs.canon" "$key" 2>/dev/null || true
                 else
                     : > "$key_empty" 2>/dev/null || true

@@ -21,6 +21,8 @@ repo_root="$(cd "$script_dir/.." && pwd)"
 canon="$script_dir/canon_proof_tree.py"
 [ -r "$script_dir/gate_common.sh" ] || { echo "diff_proof_tree: missing gate_common.sh" >&2; exit 2; }
 . "$script_dir/gate_common.sh"
+[ -r "$script_dir/proof_diff_common.sh" ] || { echo "diff_proof_tree: missing proof_diff_common.sh" >&2; exit 2; }
+. "$script_dir/proof_diff_common.sh"
 
 hs_path=$(resolve_hs_oracle "$repo_root") || exit 2
 
@@ -59,8 +61,7 @@ if [ -z "$hs_timeout_s" ]; then
     fi
 fi
 timeout --kill-after=5 "$hs_timeout_s" "$hs_path" +RTS -N1 -RTS --prove="$lemma" "$f" 2>/dev/null > "$tmp/hs.out" || true
-awk -v lem="^lemma ${lemma}( |\\[|:)" '$0 ~ lem {p=1} p && /^lemma / && !($0 ~ lem) {exit} p' \
-    "$tmp/hs.out" | python3 "$canon" > "$tmp/hs.canon"
+proof_lemma_block "$lemma" "$tmp/hs.out" | python3 "$canon" > "$tmp/hs.canon"
 # RS's TAM_PROVE_DEADLINE_MS is internal-only — doesn't trigger when RS is blocked
 # on Maude IPC. Wrap in `timeout` matching the HS deadline. Override via DIFF_RS_TIMEOUT_S.
 rs_timeout_s="${DIFF_RS_TIMEOUT_S:-$hs_timeout_s}"
