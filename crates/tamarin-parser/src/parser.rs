@@ -9,6 +9,7 @@
 #[allow(clippy::disallowed_types)]
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use tamarin_term::function_symbols::{
     bp_fun_sig, dh_fun_sig, nat_fun_sig, xor_fun_sig, Constructability, FunSig, FunSym, NdcState,
@@ -913,7 +914,7 @@ pub struct Parser<'a> {
     /// consumes — `ACfctSym`'s `Ord` compares the name first, so set order is
     /// name order.  The order is load-bearing: the LAST symbol in the list binds
     /// tightest.
-    ac_fun_syms: Vec<String>,
+    ac_fun_syms: Arc<Vec<String>>,
     /// The free function symbols known at this point of the parse, the
     /// parse-time slice of HS's `stFunSyms . sig <$> getState` that
     /// `function`'s conflict check reads (Theory/Text/Parser/Signature.hs:212).
@@ -931,13 +932,13 @@ pub struct Parser<'a> {
     /// FIRST match, and one name can carry two entries (e.g. `builtins:
     /// symmetric-encryption, dest-symmetric-encryption` leaves both the
     /// constructor and the destructor `sdec`).
-    fun_syms: Vec<(String, FunOptions)>,
+    fun_syms: Arc<Vec<(String, FunOptions)>>,
     /// The macro names known at this point of the parse (HS `macroNames`),
     /// each registered as `(k, Private, Destructor, NotNDC)`
     /// (Theory/Text/Parser/Macro.hs:46).  Searched after [`Parser::fun_syms`],
     /// matching HS's `lookup f (S.toList (stFunSyms sign) ++ S.toList
     /// (macroNames sign))` (Theory/Text/Parser/Signature.hs:212).
-    macro_syms: Vec<(String, FunOptions)>,
+    macro_syms: Arc<Vec<(String, FunOptions)>>,
     /// HS `reservedBuiltinNames` (Theory/Text/Parser/Token.hs parser state):
     /// the names of the `stFunSyms` of every builtin a `builtins:` item has
     /// enabled so far, appended by `extendSig`
@@ -1117,13 +1118,13 @@ impl<'a> Parser<'a> {
             flags: flags_set,
             is_diff,
             base_dir: None,
-            ac_fun_syms: Vec::new(),
-            fun_syms: vec![
+            ac_fun_syms: Arc::new(Vec::new()),
+            fun_syms: Arc::new(vec![
                 ("fst".to_string(), FunOptions::plain(1)),
                 ("pair".to_string(), FunOptions::plain(2)),
                 ("snd".to_string(), FunOptions::plain(1)),
-            ],
-            macro_syms: Vec::new(),
+            ]),
+            macro_syms: Arc::new(Vec::new()),
             reserved_builtin_names: Vec::new(),
             sig_enable_dh: false,
             sig_enable_bp: false,
@@ -2117,7 +2118,7 @@ impl<'a> Parser<'a> {
                 let mut clashes: Vec<&str> = Vec::new();
                 for s in syms {
                     let want = FunOptions::of_no_eq(s);
-                    for (n, o) in &self.fun_syms {
+                    for (n, o) in self.fun_syms.iter() {
                         if n.as_bytes() == s.name && *o != want {
                             clashes.push(sym_name(s));
                         }
@@ -2168,8 +2169,7 @@ impl<'a> Parser<'a> {
                     destructor: !opts.destructor,
                     ..opts
                 };
-                self.fun_syms
-                    .retain(|(n, o)| !(n == fname && *o == evicted));
+                Arc::make_mut(&mut self.fun_syms).retain(|(n, o)| !(n == fname && *o == evicted));
             }
             self.insert_fun_sym(fname, FunOptions::of_no_eq(s));
         }
@@ -2186,7 +2186,7 @@ impl<'a> Parser<'a> {
             .binary_search_by(|(n, o)| (n.as_bytes(), o.ord_key()).cmp(&key))
         {
             Ok(_) => {}
-            Err(idx) => self.fun_syms.insert(idx, (name.to_string(), opts)),
+            Err(idx) => Arc::make_mut(&mut self.fun_syms).insert(idx, (name.to_string(), opts)),
         }
     }
 
@@ -2203,27 +2203,30 @@ impl<'a> Parser<'a> {
     /// symbols come with the enable flags, as they do in HS's `funSyms`
     /// (Term/Maude/Signature.hs:110-125).
     pub(crate) fn seed_signature(&mut self, sig: &MaudeSig) {
-        self.fun_syms.clear();
+        Arc::make_mut(&mut self.fun_syms).clear();
         for f in &sig.st_fun_syms {
             self.insert_fun_sym(&String::from_utf8_lossy(f.name), FunOptions::of_no_eq(f));
         }
-        self.ac_fun_syms = sig
-            .st_ac_fun_syms
-            .iter()
-            .map(|a| String::from_utf8_lossy(a.name).into_owned())
-            .collect();
-        self.ac_fun_syms.sort();
-        self.ac_fun_syms.dedup();
-        self.macro_syms = sig
-            .macro_names
-            .iter()
-            .map(|m| {
-                (
-                    String::from_utf8_lossy(m.name).into_owned(),
-                    FunOptions::of_no_eq(m),
-                )
-            })
-            .collect();
+        self.ac_fun_syms = Arc::new(
+            sig.st_ac_fun_syms
+                .iter()
+                .map(|a| String::from_utf8_lossy(a.name).into_owned())
+                .collect(),
+        );
+        let ac_fun_syms = Arc::make_mut(&mut self.ac_fun_syms);
+        ac_fun_syms.sort();
+        ac_fun_syms.dedup();
+        self.macro_syms = Arc::new(
+            sig.macro_names
+                .iter()
+                .map(|m| {
+                    (
+                        String::from_utf8_lossy(m.name).into_owned(),
+                        FunOptions::of_no_eq(m),
+                    )
+                })
+                .collect(),
+        );
         self.sig_enable_dh = sig.enable_dh || sig.enable_bp;
         self.sig_enable_bp = sig.enable_bp;
         self.sig_enable_xor = sig.enable_xor;
@@ -2983,8 +2986,9 @@ impl<'a> Parser<'a> {
             // that follow, mirroring HS's `modifyStateSig $ addFunSym (ACfctUser
             // ...)`, which likewise runs only in the `IsAC` branch.
             if !self.ac_fun_syms.contains(&name) {
-                self.ac_fun_syms.push(name.clone());
-                self.ac_fun_syms.sort();
+                let names = Arc::make_mut(&mut self.ac_fun_syms);
+                names.push(name.clone());
+                names.sort();
             }
         } else {
             // HS's `NotAC` branch instead files the symbol under `stFunSyms`
@@ -3154,7 +3158,7 @@ impl<'a> Parser<'a> {
             // (Theory/Text/Parser/Macro.hs:46), which
             // `function`'s conflict check then sees
             // (Theory/Text/Parser/Signature.hs:212).
-            self.macro_syms.push((
+            Arc::make_mut(&mut self.macro_syms).push((
                 name.clone(),
                 FunOptions {
                     arity: args.len(),
@@ -5577,7 +5581,7 @@ impl<'a> Parser<'a> {
                 best = Some(o);
             }
         };
-        for (n, o) in &self.fun_syms {
+        for (n, o) in self.fun_syms.iter() {
             if n == op {
                 consider(*o);
             }

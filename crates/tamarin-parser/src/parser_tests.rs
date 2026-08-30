@@ -1147,18 +1147,16 @@ end"#;
     assert!(raw.contains("qed"), "proof raw missing `qed`: {raw:?}");
 }
 
-// The paren-depth guard must cover the full spread of message-argument
-// sorts a printed goal can carry — fresh `~k`, public `$A`, nat `%n`,
-// indexed `k.1` — mixed with several bare identifiers that collide with
-// top-level keywords (`test`, `rule`, `function`).  None may truncate the
-// capture.
+// The paren-depth guard must also cover indexed message arguments alongside
+// the `test` top-level keyword. (`actionGoal` uses HS `llit`, so other sorts
+// and reserved identifiers are not valid in this stored-goal shape.)
 #[test]
-fn proof_skeleton_captures_mixed_sorted_indexed_and_keyword_args() {
+fn proof_skeleton_captures_indexed_and_keyword_args() {
     let s = r#"theory T begin
   lemma L:
     "All x #i. Start(x) @ #i ==> F"
   simplify
-  solve( Foo( ~k, $A, %n, k.1, test, rule, function ) @ #i1 )
+  solve( Foo( k.1, test, sid ) @ #i1 )
     case c
     by sorry
   qed
@@ -1167,7 +1165,7 @@ end"#;
     assert!(!has_casetest(&t));
     let raw = lemma_proof_raw(&t);
     assert!(
-        raw.contains("Foo( ~k, $A, %n, k.1, test, rule, function )"),
+        raw.contains("Foo( k.1, test, sid )"),
         "mixed-arg goal truncated: {raw:?}"
     );
     assert!(raw.contains("qed"), "missing qed: {raw:?}");
