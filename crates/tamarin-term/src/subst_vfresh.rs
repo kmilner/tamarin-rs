@@ -11,6 +11,9 @@
 
 use std::collections::BTreeMap;
 
+use tamarin_utils::fresh::FastFreshState;
+
+use crate::bind::Bindings;
 use crate::lterm::{HasFrees, LVar, Name};
 use crate::term::{Term, TermSize};
 use crate::vterm::{Lit, VTerm};
@@ -131,23 +134,15 @@ impl<C: Ord + Clone> LSubstVFresh<C> {
     /// (= HS `sortOnMemo dropNameHintsLNSubstVFresh`) orders the split cases
     /// structurally, independent of the fresh-allocation counter.
     pub fn drop_name_hints(&self) -> Self {
-        let mut bindings: BTreeMap<LVar, LVar> = BTreeMap::new();
-        let mut counter: u64 = 0;
+        let mut bindings = Bindings::new();
+        let mut fresh = FastFreshState::nothing_used();
         let renamed: Vec<(LVar, VTerm<C, LVar>)> = self
             .map
             .iter()
             .map(|(k, t)| {
-                let t = t.clone().map_free(&mut |v| {
-                    *bindings.entry(v).or_insert_with(|| {
-                        let renamed = LVar {
-                            name: "",
-                            sort: v.sort,
-                            idx: counter,
-                        };
-                        counter += 1;
-                        renamed
-                    })
-                });
+                let t = t
+                    .clone()
+                    .map_free(&mut |v| bindings.import_drop_namehint(&v, &mut fresh));
                 (*k, t)
             })
             .collect();
