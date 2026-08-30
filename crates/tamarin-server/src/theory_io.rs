@@ -253,13 +253,9 @@ pub(crate) fn load_from_source(
         .map_err(|e| LoadError::Elaborate(e.to_string()))?;
     // HS `preReport ++ postReport` (TheoryLoader.hs:726-732), as in
     // `run_batch`: SAPIC warnings, then the accountability RP check, then the
-    // whole `checkWellformedness` pass over the TRANSLATED theory, so the
-    // rules `apply_sapic` generates and the lemmas `Acc::translate` appends
-    // are in scope (`checkTranslatedTheory`, TheoryLoader.hs:553-565).  The
-    // pass is shared with the batch path (`run_batch`) — see
-    // `tamarin_theory::wellformedness`.  Its `ruleVariantsReport` member needs
-    // a live Maude, which the batch path spawns per file and the load path has
-    // not started here, so it gets `None` and reports nothing.
+    // whole `checkWellformedness` pass over the TRANSLATED theory. The latter
+    // runs below after variant computation so `ruleVariantsReport` sees its
+    // live Maude result, and before zero-variant rules are removed.
     //
     // The result feeds two renderings: the `/* WARNING: ... */` comment in the
     // source/message routes (`format_wf_block`) and the
@@ -267,9 +263,6 @@ pub(crate) fn load_from_source(
     // (`errors_html`).
     let mut wf_report = sapic_wf;
     wf_report.extend(acc_wf);
-    wf_report.extend(tamarin_theory::wellformedness::check_wellformedness(
-        &typed, None,
-    ));
 
     // The theory's once-per-load NDC-checked intruder cache
     // (`check_close_intr_rule` below).  Stored on the `TheoryEntry` so
@@ -282,6 +275,14 @@ pub(crate) fn load_from_source(
     let prover_maude_sig = typed.signature.clone();
     if let Ok(maude) = MaudeHandle::start(maude_path, prover_maude_sig.clone()) {
         tamarin_theory::tools::rule_variants::populate_rule_variants(&mut typed, &maude, None);
+        // `checkTranslatedTheory` reports contradictory zero-variant rules,
+        // then `closeTheory` drops them from the closed theory. Keep that
+        // order: filtering first would erase the warning as well as the rule.
+        wf_report.extend(tamarin_theory::wellformedness::check_wellformedness(
+            &typed,
+            Some(&maude),
+        ));
+        tamarin_theory::tools::rule_variants::retain_rules_with_variants(&mut typed, &maude);
         // Annotate per-rule loop breakers on the stored theory so the web
         // rules / source / message renderers emit HS's `// loop breaker: [<n>]`
         // comments — HS `prettyClosedProtoRule` reads them from the
@@ -344,6 +345,13 @@ pub(crate) fn load_from_source(
         if derivcheck_timeout > 0 {
             eprintln!("[Theory {}] Derivation checks ended", typed.name);
         }
+    } else {
+        // Loading remains best-effort when Maude is unavailable. All
+        // Maude-independent checks still run; only the variant report/filter
+        // and the later Maude-backed close passes are absent.
+        wf_report.extend(tamarin_theory::wellformedness::check_wellformedness(
+            &typed, None,
+        ));
     }
 
     // HS `makeWfErrorsHtml` (src/Web/Handler.hs:469-475) — the header-banner
@@ -420,6 +428,7 @@ fn make_wf_errors_html(report: &[WfError]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tamarin_test_support::require_maude_path;
 
     /// The interactive `TheoryLoadOptions` plumbing added for HS parity:
     /// `-D` defines reach `#ifdef` evaluation via [`set_parser_flags`]
@@ -466,5 +475,32 @@ mod tests {
             .expect("include resolves against the theory's dir");
         assert_eq!(rule_count(&entry), 1);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn web_load_reports_then_drops_rules_without_variants() {
+        let Some(maude) = require_maude_path() else {
+            return;
+        };
+        let src = "theory NoVariants\n\
+                   begin\n\
+                   builtins: symmetric-encryption\n\
+                   rule NoVar:\n  [ In(~x), Fr(~x) ] --[ N(~x) ]-> [ ]\n\
+                   rule Ok:\n  [ Fr(~k), In(c) ] --[ O(~k) ]-> [ Out(sdec(c, ~k)) ]\n\
+                   end\n";
+        let entry = load_from_source(
+            src,
+            TheoryOrigin::Upload("no-variants.spthy".into()),
+            &maude,
+            0,
+        )
+        .expect("theory loads");
+
+        assert!(entry
+            .wf_report
+            .iter()
+            .any(|warning| warning.topic == "Rule has no variants"));
+        let names: Vec<&str> = entry.typed_theory.rules().map(|rule| rule.name()).collect();
+        assert_eq!(names, vec!["Ok"]);
     }
 }
