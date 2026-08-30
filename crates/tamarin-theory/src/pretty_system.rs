@@ -346,6 +346,8 @@ fn pretty_goals(sys: &System, want_solved: bool) -> Doc {
         .collect();
     ordered.sort_by(|a, b| a.0.cmp(&b.0));
     let mut items: Vec<Doc> = Vec::with_capacity(ordered.len());
+    let adj = sys.build_always_before_adj();
+    let has_ku_guards = crate::constraint::solver::goals::has_ku_guards(sys);
     for (g, st) in ordered {
         // sourceRule = HS `goalRule sys goal` → `nodeRuleSafe (goalNodeId g)`.
         // `goalNodeId` is the node of a Premise/Action goal; other goals have
@@ -359,7 +361,13 @@ fn pretty_goals(sys: &System, want_solved: bool) -> Doc {
         };
         let loop_breaker = if st.looping { " (loop breaker)" } else { "" };
         // `show useful` — HS wraps the annotation string in literal quotes.
-        let useful = crate::constraint::solver::goals::goal_useful_annotation(g, st.looping, sys);
+        let useful = crate::constraint::solver::goals::goal_useful_annotation(
+            g,
+            st.looping,
+            sys,
+            adj.map(),
+            has_ku_guards,
+        );
         // HS `prettyGoal goal <-> lineComment_ (...)` where `lineComment_ =
         // lineComment . text` and `lineComment d = comment $ text "//" <-> d`
         // (Theory/Text/Pretty.hs:96-100).  The comment is PART of the goal's Doc, so its

@@ -385,6 +385,7 @@ pub fn open_goals(sys: &System) -> Vec<AnnotatedGoal> {
     // `is_open_in_sys` takes the `&PrebuiltAdj` (BFS via `always_before_with`)
     // and `goal_usefulness_with_adj` takes its inner map via `.map()`.
     let ab_adj = sys.build_always_before_adj();
+    let has_ku_guards = has_ku_guards(sys);
     for (goal, status) in sys.goals.iter() {
         if status.solved {
             continue;
@@ -392,7 +393,7 @@ pub fn open_goals(sys: &System) -> Vec<AnnotatedGoal> {
         if !is_open_in_sys(goal, sys, &ab_adj) {
             continue;
         }
-        let u = goal_usefulness_with_adj(goal, status.looping, sys, ab_adj.map());
+        let u = goal_usefulness_with_adj(goal, status.looping, sys, ab_adj.map(), has_ku_guards);
         // Use the persistent goal-number (`_gsNr`), NOT the Vec
         // position.  Haskell's `openGoals` returns `(goal, (gsNr,
         // useful))` (Goals.hs) and the rankings begin with
@@ -2353,7 +2354,7 @@ pub fn goal_usefulness(g: &Goal, looping: bool, sys: &System) -> Usefulness {
     // `goal_usefulness_with_adj` to share it across all goals (mirroring
     // HS's `existingDeps = rawLessRel sys` shared in `openGoals`).
     let adj = sys.build_always_before_adj();
-    goal_usefulness_with_adj(g, looping, sys, adj.map())
+    goal_usefulness_with_adj(g, looping, sys, adj.map(), has_ku_guards(sys))
 }
 
 /// HS `prettyGoals`'s `useful` annotation STRING (System.hs:1744-1751) for
@@ -2371,18 +2372,23 @@ pub fn goal_usefulness(g: &Goal, looping: bool, sys: &System) -> Usefulness {
 ///       | currentlyDeducible i m -> " (currently deducible)"
 ///       | probablyConstructible m -> " (probably constructible)"
 ///     _                         -> " (useful2)"
-pub fn goal_useful_annotation(g: &Goal, gs_loop_breaker: bool, sys: &System) -> &'static str {
+pub(crate) fn goal_useful_annotation(
+    g: &Goal,
+    gs_loop_breaker: bool,
+    sys: &System,
+    adj: &RawLessAdj,
+    has_ku_guards: bool,
+) -> &'static str {
     if gs_loop_breaker {
         return " (loop breaker)";
     }
     if let Goal::Action(i, fa) = g {
         if fa.is_ku() {
-            if has_ku_guards(sys) {
+            if has_ku_guards {
                 return " (useful1)";
             }
             if let Some(m) = fa.terms.first() {
-                let adj = sys.build_always_before_adj();
-                if currently_deducible(sys, adj.map(), i, m) {
+                if currently_deducible(sys, adj, i, m) {
                     return " (currently deducible)";
                 }
                 if probably_constructible(m) {
@@ -2396,7 +2402,13 @@ pub fn goal_useful_annotation(g: &Goal, gs_loop_breaker: bool, sys: &System) -> 
 
 /// Like [`goal_usefulness`] but reuses a prebuilt `rawLessRel`
 /// adjacency (`existingDeps`, Goals.hs:66-182, see line 120) instead of rebuilding it.
-fn goal_usefulness_with_adj(g: &Goal, looping: bool, sys: &System, adj: &RawLessAdj) -> Usefulness {
+fn goal_usefulness_with_adj(
+    g: &Goal,
+    looping: bool,
+    sys: &System,
+    adj: &RawLessAdj,
+    has_ku_guards: bool,
+) -> Usefulness {
     if looping {
         return Usefulness::LoopBreaker;
     }
@@ -2409,7 +2421,7 @@ fn goal_usefulness_with_adj(g: &Goal, looping: bool, sys: &System, adj: &RawLess
             // `probablyConstructible` — those tests are SHORT-CIRCUITED.
             // Typing-class IHs (`All m j. KU(m,j) ⇒ ...`) always have
             // such guards; the order matters for proof-search bias.
-            if has_ku_guards(sys) {
+            if has_ku_guards {
                 return Usefulness::Useful;
             }
             if let Some(m) = fa.terms.first() {
@@ -2443,7 +2455,7 @@ fn goal_usefulness_with_adj(g: &Goal, looping: bool, sys: &System, adj: &RawLess
 /// promoted to `Useful` and `currentlyDeducible` / `probablyConstructible`
 /// demotion never fires.  Walks recursively, surfacing KU action atoms
 /// from inside `GGuarded`/atom/`Conj`/`Disj` structures.
-fn has_ku_guards(sys: &System) -> bool {
+pub(crate) fn has_ku_guards(sys: &System) -> bool {
     use crate::atom::ProtoAtom;
     use crate::guarded::Guarded;
     fn walk_guards(g: &Guarded) -> bool {
@@ -2517,35 +2529,39 @@ fn extractible(
                 continue;
             }
             let Some(t) = fa.terms.first() else { continue };
-            for sub in toplevel_terms(t) {
-                if sub == *m {
-                    return true;
-                }
+            if contains_toplevel_term(t, m) {
+                return true;
             }
         }
     }
     false
 }
 
-/// `toplevelTerms t` — direct port of `Goals.hs:66-182, see line 157`. Walks pair/inv
-/// at the top level only (other function applications are leaves).
-fn toplevel_terms(t: &tamarin_term::lterm::LNTerm) -> Vec<tamarin_term::lterm::LNTerm> {
+/// Test membership in `toplevelTerms t` (`Goals.hs:66-182, see line 157`)
+/// without materializing that list. Walks pair/inv at the top level only
+/// (other function applications are leaves).
+fn contains_toplevel_term(
+    t: &tamarin_term::lterm::LNTerm,
+    needle: &tamarin_term::lterm::LNTerm,
+) -> bool {
     use tamarin_term::function_symbols::{FunSym, NoEqSym};
     use tamarin_term::term::Term;
-    let mut out = vec![t.clone()];
+    if t == needle {
+        return true;
+    }
     if let Term::App(FunSym::NoEq(NoEqSym { name, .. }), args) = t {
         match &**name {
             b"pair" if args.len() == 2 => {
-                out.extend(toplevel_terms(&args[0]));
-                out.extend(toplevel_terms(&args[1]));
+                return contains_toplevel_term(&args[0], needle)
+                    || contains_toplevel_term(&args[1], needle);
             }
             b"inv" if args.len() == 1 => {
-                out.extend(toplevel_terms(&args[0]));
+                return contains_toplevel_term(&args[0], needle);
             }
             _ => {}
         }
     }
-    out
+    false
 }
 
 /// The `rawLessRel` adjacency: `from -> [to]` successor lists.
