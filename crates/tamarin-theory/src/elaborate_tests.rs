@@ -1242,10 +1242,7 @@ fn duplicate_process_definitions_are_rejected() {
                let P = 0\n\
                end\n";
     let err = elaborate(&parse_theory(src, &[]).unwrap()).unwrap_err();
-    assert!(
-        err.message.contains("duplicate process definition: P"),
-        "{err}"
-    );
+    assert!(err.message.contains("duplicate process: P"), "{err}");
 }
 
 #[test]
@@ -1289,7 +1286,7 @@ fn parsed_process_probes(
             }
             p::TheoryItem::ProcessDef(d) => {
                 if defs.contains_key(&d.name) {
-                    return Err(format!("duplicate process definition: {}", d.name));
+                    return Err(format!("duplicate process: {}", d.name));
                 }
                 let vars = d
                     .vars

@@ -1383,7 +1383,10 @@ fn formula_to_guarded_parsed_reports_a_residual_predicate_atom() {
     let sig = pair_maude_sig();
     let f = parse_formula_str("Ex x #i. A(x) @ #i & P(x)", &sig).expect("parse");
     let e = formula_to_guarded_parsed(&f, &sig).expect_err("the predicate atom is sugar");
-    assert_eq!(e.message, "unexpanded predicate");
+    assert_eq!(
+        e.message,
+        "Syntactic sugar is not allowed, guarded formula expected."
+    );
 }
 
 /// HS `noUnguardedVars` names the survivors of the prefix `openFormulaPrefix`

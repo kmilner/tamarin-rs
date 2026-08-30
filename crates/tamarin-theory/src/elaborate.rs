@@ -29,8 +29,8 @@
 //! `term_to_lnterm` and the SAPIC term/fact converters
 //! (`term_to_sapic_term`/`fact_to_sapic_fact`).
 //!
-//! Returned errors describe the surface offence (e.g. "duplicate process
-//! definition: P"), with no internal panics.
+//! Returned errors describe the surface offence (e.g. "duplicate process:
+//! P"), with no internal panics.
 
 use std::collections::BTreeSet;
 
@@ -685,7 +685,7 @@ fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), Elab
                 // for a `let P = …` written without a parameter list.
                 if process_defs.contains_key(&d.name) {
                     return Err(ElabError {
-                        message: format!("duplicate process definition: {}", d.name),
+                        message: format!("duplicate process: {}", d.name),
                     });
                 }
                 let body = elaborate_process(&d.body, &process_defs, &out.signature)?;
@@ -967,8 +967,9 @@ pub fn formula_to_guarded_parsed(
     sig: &MaudeSig,
 ) -> Result<crate::guarded::Guarded, GuardError> {
     let syn = crate::formula::from_parser(f, sig).map_err(|e| crate::guarded::err(e.message))?;
-    let plain = crate::formula::to_lnformula(&syn)
-        .ok_or_else(|| crate::guarded::err("unexpanded predicate"))?;
+    let plain = crate::formula::to_lnformula(&syn).ok_or_else(|| {
+        crate::guarded::err("Syntactic sugar is not allowed, guarded formula expected.")
+    })?;
     formula_to_guarded(&plain)
 }
 
