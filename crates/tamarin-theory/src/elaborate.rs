@@ -562,11 +562,9 @@ fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), Elab
                 }
             }
             p::TheoryItem::Options(opts) => {
-                let mut o = out.options.clone();
                 for n in opts {
-                    o.set_declarable(n);
+                    out.options.set_declarable(n);
                 }
-                out.options = o;
             }
             // The `heuristic:` header is parsed after the item walk, where
             // the theory's whole tactic list is known.
