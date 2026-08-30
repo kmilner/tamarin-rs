@@ -1653,10 +1653,18 @@ fn timepoint_positions_are_node_sorted() {
     assert_eq!(sort_of("last(i)"), vec![LSort::Node]);
     assert_eq!(sort_of("i < j"), vec![LSort::Node, LSort::Node]);
     assert_eq!(sort_of("#k = l"), vec![LSort::Node, LSort::Node]);
+    assert_eq!(sort_of("k = #l"), vec![LSort::Node, LSort::Node]);
     assert_eq!(sort_of("k:node = l"), vec![LSort::Node, LSort::Node]);
     // The "term equality" alternative reads both operands with `msgvar`, so
     // two bare names are message variables.
     assert_eq!(sort_of("k = l"), vec![LSort::Msg, LSort::Msg]);
+
+    for invalid in ["$i < $j", "f(i) < j", "$i = #j", "f(i) = #j"] {
+        assert!(
+            parse_formula_str_sig(invalid).is_err(),
+            "accepted non-node operands in {invalid}"
+        );
+    }
 }
 
 /// `nodevar` reads a bare name with `indexedIdentifier` (Token.hs:445-447),

@@ -5016,10 +5016,8 @@ impl<'a> Parser<'a> {
     /// signature, so a name that is also an arity-0 symbol is a timepoint
     /// variable here rather than the constant `nullaryApp` builds for it
     /// elsewhere (Theory/Text/Parser/Term.hs:158-163) — the zero-argument
-    /// application arm below.  This parser is wider: it takes a variable
-    /// under any sigil, and a non-variable term (see [`Self::fatom`]'s `<`
-    /// arm), which is left as written.  The two agree on every timepoint HS
-    /// accepts.
+    /// application arm below. Callers that must enforce `nodevarTerm` syntax
+    /// validate the parsed shape with [`Self::node_operand`] first.
     fn node_sorted(t: Term) -> Term {
         match t {
             Term::Var(mut v) => {
@@ -5033,6 +5031,19 @@ impl<'a> Parser<'a> {
                 typ: None,
             }),
             other => other,
+        }
+    }
+
+    /// Accept the shapes HS `nodevarTerm` can read after a relational
+    /// alternative backtracks: a node/bare variable, or a bare identifier
+    /// that the ordinary term parser had resolved as a nullary symbol.
+    fn node_operand(t: Term) -> Option<Term> {
+        match t {
+            Term::Var(v) if matches!(v.sort, LSort::Msg | LSort::Node) => {
+                Some(Self::node_sorted(Term::Var(v)))
+            }
+            Term::App(_, ref args) if args.is_empty() => Some(Self::node_sorted(t)),
+            _ => None,
         }
     }
 
@@ -5106,8 +5117,14 @@ impl<'a> Parser<'a> {
             // left operand is one is the LAST alternative, "node equality"
             // (Theory/Text/Parser/Formula.hs:51,56): `nodevarTerm` on both
             // sides, which reads a bare right operand as a timepoint.
-            if matches!(&lhs, Term::Var(v) if v.sort == LSort::Node) {
-                return Ok(Formula::Atom(Atom::Eq(lhs, Self::node_sorted(rhs))));
+            if matches!(&lhs, Term::Var(v) if v.sort == LSort::Node)
+                || matches!(&rhs, Term::Var(v) if v.sort == LSort::Node)
+            {
+                let lhs = Self::node_operand(lhs)
+                    .ok_or_else(|| self.err("expected node variable before `=`"))?;
+                let rhs = Self::node_operand(rhs)
+                    .ok_or_else(|| self.err("expected node variable after `=`"))?;
+                return Ok(Formula::Atom(Atom::Eq(lhs, rhs)));
             }
             return Ok(Formula::Atom(Atom::Eq(lhs, rhs)));
         }
@@ -5143,15 +5160,15 @@ impl<'a> Parser<'a> {
             // HS `blatom` (Theory/Text/Parser/Formula.hs:44-60, see line 49)
             // restricts both operands of `<` to
             // node/timepoint variables: `Less <$> try (nodevarTerm <* opLess)
-            // <*> nodevarTerm`. This structural port intentionally accepts any
-            // `term` on both sides (parser-level permissiveness); a variable
-            // operand takes the timepoint sort `nodevarTerm` gives it. Valid
-            // theories (which use timepoint vars with `<`) parse identically.
+            // <*> nodevarTerm`. We parse terms first so the earlier atom
+            // alternatives can share this prefix, then validate the two
+            // operands against exactly the shapes `nodevarTerm` accepts.
             let rhs = self.term(false)?;
-            return Ok(Formula::Atom(Atom::Less(
-                Self::node_sorted(lhs),
-                Self::node_sorted(rhs),
-            )));
+            let lhs = Self::node_operand(lhs)
+                .ok_or_else(|| self.err("expected node variable before `<`"))?;
+            let rhs = Self::node_operand(rhs)
+                .ok_or_else(|| self.err("expected node variable after `<`"))?;
+            return Ok(Formula::Atom(Atom::Less(lhs, rhs)));
         }
         // No relational operator follows the term.  HS `blatom`'s remaining
         // alternatives (Theory/Text/Parser/Formula.hs:45-57): the `Pred` fact
