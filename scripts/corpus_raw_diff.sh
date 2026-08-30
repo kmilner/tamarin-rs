@@ -95,7 +95,7 @@ hs_fingerprint "$hs_path"
 # --- strip_env_lines (gate_common.sh): delete the only lines that
 # legitimately differ between the two binaries, keeping `analyzed:` visible
 # (the cache hit rewrites its path to this invocation's).
-export -f proof_cache_key proof_lemmas_of include_shas strip_env_lines
+export -f proof_now_ms proof_cache_key proof_lemmas_of include_shas strip_env_lines
 export HS_PATH="$hs_path" RS_PATH="$rs_path" TIMEOUT RS_TIMEOUT EXTRA_ENV \
        HS_CANON_CACHE CACHE_VERSION NO_HS_CACHE DERIVCHECK_TIMEOUT HS_RTS HS_FP_SALT
 
@@ -125,10 +125,10 @@ worker() {
             | awk -v f="$f" '/^analyzed: / { print "analyzed: " f; next } { print }' \
             > "$hs_out"
     else
-        local hs_t0; hs_t0=$(date +%s%3N)
+        local hs_t0; hs_t0=$(proof_now_ms)
         timeout "$TIMEOUT" "$HS_PATH" +RTS $HS_RTS -RTS --derivcheck-timeout="$DERIVCHECK_TIMEOUT" --prove="$lemma" "$f" 2>/dev/null > "$hs_out"
         hs_rc=$?
-        hs_ms=$(( $(date +%s%3N) - hs_t0 ))
+        hs_ms=$(( $(proof_now_ms) - hs_t0 ))
         if [ -n "$key" ]; then
             # >=128 is a signal death (OOM's 137), which truncates stdout the
             # same way the timeout does: marker, never the partial payload.
@@ -153,10 +153,10 @@ worker() {
         return 0
     fi
 
-    local rs_t0; rs_t0=$(date +%s%3N)
+    local rs_t0; rs_t0=$(proof_now_ms)
     timeout "$RS_TIMEOUT" env $EXTRA_ENV "$RS_PATH" --derivcheck-timeout="$DERIVCHECK_TIMEOUT" --prove="$lemma" "$f" 2>/dev/null > "$tmp/rs.out"
     local rs_rc=$?
-    local rs_ms=$(( $(date +%s%3N) - rs_t0 ))
+    local rs_ms=$(( $(proof_now_ms) - rs_t0 ))
 
     strip_env_lines "$hs_out"    > "$tmp/hs.cmp"
     strip_env_lines "$tmp/rs.out" > "$tmp/rs.cmp"

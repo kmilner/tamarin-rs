@@ -93,7 +93,7 @@ slice_canon() {
     local -a rc=("${PIPESTATUS[@]}")
     [ "${rc[0]}" -eq 0 ] && [ "${rc[1]}" -eq 0 ]
 }
-export -f proof_cache_key proof_lemmas_of proof_lemma_block include_shas slice_canon
+export -f proof_now_ms proof_cache_key proof_lemmas_of proof_lemma_block include_shas slice_canon
 export HS_PATH="$hs_path" RS_PATH="$rs_path" CANON="$canon" TIMEOUT EXTRA_ENV \
        HS_CANON_CACHE CACHE_VERSION NO_HS_CACHE HS_FP_SALT
 
@@ -155,10 +155,10 @@ worker() {
             : > "$key_empty" 2>/dev/null || true
         fi
     else
-        local hs_t0; hs_t0=$(date +%s%3N)
+        local hs_t0; hs_t0=$(proof_now_ms)
         timeout "$TIMEOUT" "$HS_PATH" +RTS -N1 -RTS --prove="$lemma" "$f" 2>/dev/null > "$tmp/hs.out"
         hs_rc=$?
-        hs_ms=$(( $(date +%s%3N) - hs_t0 ))
+        hs_ms=$(( $(proof_now_ms) - hs_t0 ))
         local slice_ok=0
         slice_canon "$lemma" "$tmp/hs.out" "$tmp/hs.canon" && slice_ok=1
         if [ -n "$key" ]; then
@@ -189,10 +189,10 @@ worker() {
     fi
 
     # --- RS: dump_proof emits only the proof tree for this lemma (per-lemma).
-    local rs_t0; rs_t0=$(date +%s%3N)
+    local rs_t0; rs_t0=$(proof_now_ms)
     timeout "$TIMEOUT" env $EXTRA_ENV "$RS_PATH" "$f" "$lemma" 2>/dev/null | python3 "$CANON" > "$tmp/rs.canon" 2>/dev/null
     local rs_rc=${PIPESTATUS[0]}
-    local rs_ms=$(( $(date +%s%3N) - rs_t0 ))
+    local rs_ms=$(( $(proof_now_ms) - rs_t0 ))
 
     local hs_lines rs_lines d
     hs_lines=$(grep -c . "$hs_canon"); hs_lines=${hs_lines// /}

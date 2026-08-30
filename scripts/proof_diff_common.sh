@@ -1,6 +1,20 @@
 # Shared helpers for the raw and canonical proof-differential tools. Source
 # gate_common.sh first: proof_cache_key uses its include and oracle digests.
 
+# proof_now_ms
+#   Monotonicity is unnecessary for elapsed prover timings, but millisecond
+#   units must be stable across GNU and uutils `date`. uutils ignores the field
+#   width in `%3N`; divide the full nanosecond timestamp instead. BSD date does
+#   not implement `%N`, so keep a Python fallback for diagnostics on macOS.
+proof_now_ms() {
+    local ns
+    ns=$(date +%s%N 2>/dev/null)
+    case "$ns" in
+        ''|*[!0-9]*) python3 -c 'import time; print(time.time_ns() // 1_000_000)' ;;
+        *) printf '%s\n' "$((ns / 1000000))" ;;
+    esac
+}
+
 # proof_cache_key <theory> <lemma> [flags]
 #   The extension-free key shared by all three .hs_canon_cache users.
 proof_cache_key() {
