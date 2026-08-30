@@ -120,10 +120,6 @@ fn unbound_vars(ru: &ProtoRuleE) -> Vec<LVar> {
 /// [`WfError::filled`] lays out, and `prettyLVar = text . show`
 /// (LTerm.hs:922-923) makes each cell a leaf.
 pub fn unbound_report(thy: &Theory) -> Vec<WfError> {
-    // Plain mode for the same reason as [`nat_well_sorted_report`]: the body
-    // is a `Doc` built and laid out here, and the web routes render under an
-    // active `HtmlDocGuard`.
-    let _plain = hpj::HtmlDocGuard::disable();
     let mut out = Vec::new();
     for ru in thy_proto_rules(thy) {
         let unbound = unbound_vars(ru);
@@ -219,11 +215,6 @@ fn rule_terms(ru: &ProtoRuleE) -> impl Iterator<Item = &LNTerm> {
 /// absent and `t` the whole fact argument.
 ///
 pub fn nat_well_sorted_report(thy: &Theory) -> Vec<WfError> {
-    // HS builds the report as a plain `Doc`: `prettyWfErrorReport`'s text
-    // never passes through the escaping `Document (HtmlDoc d)` instance
-    // (Html.hs:102-105), so a pair term inside a body keeps its raw `<`/`>`
-    // on the web routes, which render under an active `HtmlDocGuard`.
-    let _plain = hpj::HtmlDocGuard::disable();
     let mut out = Vec::new();
     let mut report_term = |t: &LNTerm| {
         let mut errs: Vec<&LNTerm> = Vec::new();
@@ -349,10 +340,6 @@ fn rule_names(ru: &ProtoRuleE) -> Vec<Name> {
 /// depend on the body's absolute column.  [`grouped_topic_block`] joins the
 /// rendered bodies under the one `underlineTopic` header.
 pub fn fresh_names_report(thy: &Theory) -> WfReport {
-    // Plain mode for the same reason as [`nat_well_sorted_report`]: the body
-    // is a `Doc` built and laid out here, and the web routes render under an
-    // active `HtmlDocGuard`.
-    let _plain = hpj::HtmlDocGuard::disable();
     let topic = "Fresh public constants";
     let mut report = Vec::new();
     for ru in thy_proto_rules(thy) {
@@ -565,10 +552,6 @@ fn sorts_clash_check(info: String, vars: &[LVar]) -> Vec<WfError> {
 /// and so reaches a variable that occurs only in a `_restrict` formula
 /// ([`proto_rule_e_frees`]).
 pub fn rule_sorts_report(thy: &Theory) -> WfReport {
-    // Plain mode for the same reason as [`nat_well_sorted_report`]: the body
-    // is a `Doc` built and laid out here, and the web routes render under an
-    // active `HtmlDocGuard`.
-    let _plain = hpj::HtmlDocGuard::disable();
     let mut out = Vec::new();
     for ru in thy_proto_rules(thy) {
         out.extend(sorts_clash_check(

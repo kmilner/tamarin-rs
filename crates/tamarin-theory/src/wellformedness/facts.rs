@@ -41,11 +41,6 @@ use crate::theory::Theory;
 /// `theoryFacts` is one shared binding in HS's `where`, so the cells are
 /// built once for the two members that read them.
 pub fn fact_reports(thy: &Theory) -> WfReport {
-    // Every cell and body below is a plain `Doc`: HS's `prettyWfErrorReport`
-    // text never passes through the escaping `Document (HtmlDoc d)` instance
-    // (Html.hs:102-105), so a pair term inside a fact keeps its raw `<`/`>`
-    // on the web routes, which render under an active `HtmlDocGuard`.
-    let _plain = hpj::HtmlDocGuard::disable();
     let facts = theory_facts(thy);
     let mut report = reserved_report(&facts);
     report.extend(reserved_fact_name_rules(thy));

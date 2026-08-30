@@ -149,8 +149,12 @@ pub type WfReport = Vec<WfError>;
 ///
 /// `ruleVariantsReport` (HS position 6) is the one check that needs a live
 /// Maude process, hence `maude`: the batch driver passes the handle it
-/// spawned for the file, the web load path passes `None`.
+/// spawned for the file, and the web load path passes its load-time handle.
 pub fn check_wellformedness(thy: &Theory, maude: Option<&MaudeHandle>) -> WfReport {
+    // WF reports are plain text even when the interactive caller is building
+    // an HTML document. Keep that invariant at the pass boundary so every
+    // current and future sub-report is covered uniformly.
+    let _plain = crate::pretty_hpj::HtmlDocGuard::disable();
     let mut report = lemmas::check_if_lemmas_in_theory(thy);
     report.extend(rules::unbound_report(thy));
     report.extend(rules::fresh_names_report(thy));
