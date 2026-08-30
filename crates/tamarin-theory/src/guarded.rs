@@ -419,6 +419,26 @@ impl GuardError {
         parts.extend(["in", "the", "subformula"].into_iter().map(Doc::text));
         fsep(parts)
     }
+
+    /// HS `ppError` from `formulaToGuarded`: the error payload, its failing
+    /// quantified subformula, and the original formula as one wrapping Doc.
+    pub fn full_doc(&self, original: &crate::formula::LNFormula) -> crate::pretty_hpj::Doc {
+        use crate::pretty_formula::lnformula_doc;
+        use crate::pretty_hpj::Doc;
+
+        let quoted = |formula| {
+            Doc::char('"')
+                .beside(lnformula_doc(formula))
+                .beside(Doc::char('"'))
+                .nest(2)
+        };
+        let mut doc = self.message_doc();
+        if let Some(subject) = &self.subject_formula {
+            doc = doc.above_g(quoted(subject));
+        }
+        doc.above_g(Doc::text("in the formula"))
+            .above_g(quoted(original))
+    }
 }
 
 impl std::fmt::Display for GuardError {

@@ -64,15 +64,6 @@ pub(crate) fn doublequoted_nested_doc(formula_doc: Doc, nest_n: usize) -> String
     doublequoted_nested(formula_doc, nest_n).render()
 }
 
-/// [`doublequoted_nested_doc`] at the HughesPJ default page width, for the
-/// text HS builds with the plain `render` (Text/PrettyPrint/Class.hs:77-78)
-/// rather than with the console's `renderDoc` — the wellformedness report,
-/// which `Main/TheoryLoader.hs` folds into the theory as a comment string.
-pub(crate) fn doublequoted_nested_doc_default_width(formula_doc: Doc, nest_n: usize) -> String {
-    doublequoted_nested(formula_doc, nest_n)
-        .render_with(hpj::DEFAULT_LINE_LENGTH, hpj::DEFAULT_RIBBON)
-}
-
 fn doublequoted_nested(formula_doc: Doc, nest_n: usize) -> Doc {
     let dq = Doc::text("\"").beside(formula_doc).beside(Doc::text("\""));
     dq.nest(nest_n as isize)

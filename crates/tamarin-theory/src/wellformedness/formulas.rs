@@ -125,25 +125,12 @@ pub fn formula_reports(thy: &Theory) -> Vec<WfError> {
 /// Indentation: 2 (`prettyWfErrorReport`'s `nest 2`) + 2 (`checkGuarded`'s
 /// `nest 2 err`) + 2 (`ppFormula`'s `nest 2`) = 6 spaces for formula text.
 fn check_guarded_entry(header: &str, formula: &LNFormula) -> Option<WfError> {
-    use crate::pretty_formula::{doublequoted_nested_doc_default_width, lnformula_doc};
     use crate::pretty_hpj as hpj;
 
     let e = match crate::guarded::formula_to_guarded(formula) {
         Ok(_) => return None,
         Err(e) => e,
     };
-
-    let full_formula_doc = lnformula_doc(formula);
-
-    // HS `ppFormula f0` (Guarded.hs:513, :562) quotes the innermost failing
-    // quantifier; `ppError`'s own `ppFormula fmOrig` (Guarded.hs:479) quotes
-    // the whole formula.  A failure outside a quantifier quotes the whole
-    // formula in both places.
-    let sub_formula_doc = e
-        .subject_formula
-        .as_ref()
-        .map(lnformula_doc)
-        .unwrap_or_else(|| full_formula_doc.clone());
 
     // The `underlineTopic` of " Formula guardedness" includes the trailing
     // newline; the blank line after it is `ppTopic`'s `$-$` in
@@ -158,20 +145,13 @@ fn check_guarded_entry(header: &str, formula: &LNFormula) -> Option<WfError> {
 
     // `nest 2` (`prettyWfErrorReport`) + `nest 2 err` (`checkGuarded`) over
     // the thrown message Doc.
+    // `full_doc` is HS `ppError`; the report contributes two enclosing
+    // `nest 2`s, yielding four spaces for prose and six for quoted formulas.
     msg.push_str(
-        &e.message_doc()
+        &e.full_doc(formula)
             .nest(4)
             .render_with(hpj::DEFAULT_LINE_LENGTH, hpj::DEFAULT_RIBBON),
     );
-    msg.push('\n');
-
-    // Each formula is `nest 2 . doubleQuotes . prettyLNFormula`
-    // (Guarded.hs:476-477) under the two enclosing `nest 2`s, so it is a
-    // `Doc` laid out at nesting 6 and wraps at the page width.
-    msg.push_str(&doublequoted_nested_doc_default_width(sub_formula_doc, 6));
-    msg.push('\n');
-    msg.push_str("    in the formula\n");
-    msg.push_str(&doublequoted_nested_doc_default_width(full_formula_doc, 6));
     msg.push('\n');
 
     Some(WfError::new(topic, msg))
