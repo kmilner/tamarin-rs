@@ -369,6 +369,8 @@ flagless entries are exchanged (a `diff_proof_raw.sh` run under the file's
 canonical flags salts `__f` into the key and stays distinct). All three carry
 the gates' `oom_prologue` as well — as does `triage_diff_vs_hs.sh` — so a
 prover that outgrows the 24 GiB cap dies alone.
+Their common key and nested-comment-aware lemma scanner live in
+`scripts/proof_diff_common.sh`; oracle discovery lives in `gate_common.sh`.
 
 ## Corpus gate (the batch parity metric)
 

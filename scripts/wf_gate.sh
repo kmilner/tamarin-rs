@@ -51,14 +51,7 @@ NO_HS_FILL="${NO_HS_FILL:-}"
 mkdir -p "$(dirname "$RESULTS_TSV")" "$HS_CACHE"
 [ -x "$RS_PATH" ] || { echo "no RS binary at $RS_PATH" >&2; exit 2; }
 
-find_hs_bin() {
-    local root="$1" c
-    for c in "$root"/tamarin-prover-testing/.stack-work/install/*/*/*/bin/tamarin-prover \
-             "$root"/tamarin-prover-testing/.stack-work/dist/*/ghc-*/build/tamarin-prover/tamarin-prover; do
-        [ -x "$c" ] && { echo "$c"; return 0; }
-    done; return 1
-}
-HS_PATH="${HS_PATH:-$(find_hs_bin "$repo_root")}" || true
+HS_PATH=$(resolve_hs_oracle "$repo_root") || exit 2
 # Required even under NO_HS_FILL: the oracle binary's fingerprint is part of
 # the cache key, so without it no entry can be ADDRESSED, let alone filled.
 [ -x "${HS_PATH:-/nonexistent}" ] || {

@@ -54,14 +54,7 @@ mkdir -p "$DIFFDIR"
 # that stamp needs the oracle binary itself — required here even though only
 # the RS server is ever booted, because without it a manifest crawled by a
 # long-gone oracle would be compared as if it were the reference.
-find_hs_bin() {
-    local c
-    for c in "$repo_root"/tamarin-prover-testing/.stack-work/install/*/*/*/bin/tamarin-prover \
-             "$repo_root"/tamarin-prover-testing/.stack-work/dist/*/ghc-*/build/tamarin-prover/tamarin-prover; do
-        [ -x "$c" ] && { echo "$c"; return 0; }
-    done; return 1
-}
-HS_PATH="${HS_PATH:-$(find_hs_bin)}" || true
+HS_PATH=$(resolve_hs_oracle "$repo_root") || exit 2
 [ -x "${HS_PATH:-/nonexistent}" ] || {
     echo "pane_byte_check: no HS oracle binary (set HS_PATH) — the cached HS" \
          "manifests carry the crawling oracle's fingerprint, which cannot be" \

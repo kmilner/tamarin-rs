@@ -19,35 +19,10 @@ extra_env="${3:-}"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
 canon="$script_dir/canon_proof_tree.py"
+[ -r "$script_dir/gate_common.sh" ] || { echo "diff_proof_tree: missing gate_common.sh" >&2; exit 2; }
+. "$script_dir/gate_common.sh"
 
-# Locate the HS binary. Search worktree-local .stack-work first; fall back to the
-# main worktree's .stack-work (git worktree doesn't copy untracked dirs like
-# .stack-work, so isolated agent worktrees won't have it). Final fallback: $PATH.
-find_hs_bin() {
-    local root="$1"
-    local c
-    for c in "$root"/tamarin-prover-testing/.stack-work/install/*/*/*/bin/tamarin-prover \
-             "$root"/tamarin-prover-testing/.stack-work/dist/*/ghc-*/build/tamarin-prover/tamarin-prover; do
-        if [ -x "$c" ]; then echo "$c"; return 0; fi
-    done
-    return 1
-}
-
-hs_path="$(find_hs_bin "$repo_root" 2>/dev/null || true)"
-if [ -z "$hs_path" ]; then
-    # Fall back to main worktree (first entry of `git worktree list --porcelain`).
-    main_root="$(git -C "$repo_root" worktree list --porcelain 2>/dev/null | awk '/^worktree/{print $2; exit}')"
-    if [ -n "$main_root" ] && [ "$main_root" != "$repo_root" ]; then
-        hs_path="$(find_hs_bin "$main_root" 2>/dev/null || true)"
-    fi
-fi
-if [ -z "$hs_path" ]; then
-    hs_path="$(command -v tamarin-prover 2>/dev/null || true)"
-fi
-if [ -z "$hs_path" ]; then
-    echo "diff_proof_tree.sh: no HS tamarin-prover binary found" >&2
-    exit 2
-fi
+hs_path=$(resolve_hs_oracle "$repo_root") || exit 2
 
 # Always (re)build dump_proof before measuring — plain `cargo build --release`
 # does NOT rebuild examples, which has silently produced stale-binary

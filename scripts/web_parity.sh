@@ -93,13 +93,7 @@ print(v)' \
         "$1" "$script_dir" 2>/dev/null
 }
 
-find_hs_bin() {
-    local c
-    for c in "$repo_root"/tamarin-prover-testing/.stack-work/install/*/*/*/bin/tamarin-prover; do
-        [ -x "$c" ] && { echo "$c"; return 0; }
-    done; return 1
-}
-HS_PATH="${HS_PATH:-$(find_hs_bin)}" || { echo "no HS binary" >&2; exit 2; }
+HS_PATH=$(resolve_hs_oracle "$repo_root") || exit 2
 RS_PATH="${RS_PATH:-$repo_root/target/release/tamarin-rs}"
 # Both servers probe `maude` by name; resolve one (MAUDE_PATH > PATH >
 # linuxbrew, hard fail otherwise) and put its directory on PATH for them.

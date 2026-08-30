@@ -59,14 +59,7 @@ PREV_TSV="${PREV_TSV:-/tmp/corpus_file_diff.PREV.tsv}"
 ALLOWLIST="${ALLOWLIST:-}"
 mkdir -p "$CACHE"
 
-find_hs_bin() {
-    local root="$1" c
-    for c in "$root"/tamarin-prover-testing/.stack-work/install/*/*/*/bin/tamarin-prover \
-             "$root"/tamarin-prover-testing/.stack-work/dist/*/ghc-*/build/tamarin-prover/tamarin-prover; do
-        [ -x "$c" ] && { echo "$c"; return 0; }
-    done; return 1
-}
-HS_PATH="${HS_PATH:-$(find_hs_bin "$repo_root")}" || { echo "no HS binary" >&2; exit 2; }
+HS_PATH=$(resolve_hs_oracle "$repo_root") || exit 2
 [ -x "$HS_PATH" ] || { echo "no HS binary at $HS_PATH" >&2; exit 2; }
 RS_PATH="${RS_PATH:-$repo_root/target/release/tamarin-rs}"
 [ -x "$RS_PATH" ] || { echo "no RS binary at $RS_PATH" >&2; exit 2; }

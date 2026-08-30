@@ -44,6 +44,8 @@ repo_root="$(cd "$script_dir/.." && pwd)"
 # fingerprint recipe the cache key carries.
 [ -r "$script_dir/gate_common.sh" ] || { echo "corpus_full_trace_diff: missing $script_dir/gate_common.sh (owns the shared gate helpers)" >&2; exit 2; }
 . "$script_dir/gate_common.sh"
+[ -r "$script_dir/proof_diff_common.sh" ] || { echo "corpus_full_trace_diff: missing proof_diff_common.sh" >&2; exit 2; }
+. "$script_dir/proof_diff_common.sh"
 # OOM discipline: every prover child inherits the cap and dies alone.
 oom_prologue
 canon="$script_dir/canon_proof_tree.py"
@@ -57,30 +59,7 @@ HS_CANON_CACHE="${HS_CANON_CACHE:-$script_dir/.hs_canon_cache}"
 NO_HS_CACHE="${NO_HS_CACHE:-}"
 [ -n "$NO_HS_CACHE" ] || mkdir -p "$HS_CANON_CACHE" 2>/dev/null || true
 
-# --- Locate the HS binary. Search worktree-local .stack-work first; fall back to
-# the main worktree's .stack-work (git worktree doesn't copy untracked dirs).
-find_hs_bin() {
-    local root="$1" c
-    for c in "$root"/tamarin-prover-testing/.stack-work/install/*/*/*/bin/tamarin-prover \
-             "$root"/tamarin-prover-testing/.stack-work/dist/*/ghc-*/build/tamarin-prover/tamarin-prover; do
-        if [ -x "$c" ]; then echo "$c"; return 0; fi
-    done
-    return 1
-}
-hs_path="$(find_hs_bin "$repo_root" 2>/dev/null || true)"
-if [ -z "$hs_path" ]; then
-    main_root="$(git -C "$repo_root" worktree list --porcelain 2>/dev/null | awk '/^worktree/{print $2; exit}')"
-    if [ -n "$main_root" ] && [ "$main_root" != "$repo_root" ]; then
-        hs_path="$(find_hs_bin "$main_root" 2>/dev/null || true)"
-    fi
-fi
-if [ -z "$hs_path" ]; then
-    hs_path="$(command -v tamarin-prover 2>/dev/null || true)"
-fi
-if [ -z "$hs_path" ]; then
-    echo "corpus_full_trace_diff.sh: no HS tamarin-prover binary found" >&2
-    exit 2
-fi
+hs_path=$(resolve_hs_oracle "$repo_root") || exit 2
 
 # --- Locate the RS dump_proof binary.
 # Always (re)build it first — plain `cargo build --release` does NOT rebuild
@@ -106,55 +85,6 @@ fi
 #     diff_proof_raw.sh / corpus_raw_diff.sh use and migrate_hs_cache_fp.sh
 #     rekeyed the older entries onto.
 hs_fingerprint "$hs_path"
-hs_cache_key() {
-    local f="$1" lemma="$2" h inc
-    h=$(sha256sum "$f" 2>/dev/null | cut -d' ' -f1)
-    inc=$(include_shas "$f")
-    if [ -n "$inc" ]; then h="${h}__i$(printf '%s' "$inc" | sha256sum | cut -c1-12)"; fi
-    printf '%s__%s__v%s__b%s.canon' "$h" "$lemma" "$CACHE_VERSION" "$HS_FP_SALT"
-}
-
-# --- Robust lemma-name list for a file (handles "lemma Foo:", "lemma Foo [..]:",
-#     "lemma Foo[..]:", "lemma Foo :").  Strips block comments first so
-#     `lemma Foo` inside `/* ... */` doesn't get enumerated (HS-faithful:
-#     both provers parse-skip these, so they'd false-categorise as
-#     "no HS skeleton" otherwise).  Block comments NEST in Tamarin's
-#     grammar (`Theory.Text.Parser.Token.commentStyle`).
-lemmas_of() {
-    awk '
-        BEGIN { depth = 0 }
-        {
-            line = $0
-            while (length(line) > 0) {
-                if (depth > 0) {
-                    o = index(line, "/*")
-                    c = index(line, "*/")
-                    if (c == 0 && o == 0) { line = ""; break }
-                    if (o > 0 && (c == 0 || o < c)) {
-                        depth++; line = substr(line, o + 2)
-                    } else {
-                        depth--; line = substr(line, c + 2)
-                    }
-                } else {
-                    # Find earliest of //, /*, *
-                    lc = index(line, "//")
-                    bc = index(line, "/*")
-                    if (lc > 0 && (bc == 0 || lc < bc)) {
-                        print substr(line, 1, lc - 1); line = ""; break
-                    }
-                    if (bc > 0) {
-                        print substr(line, 1, bc - 1)
-                        depth++; line = substr(line, bc + 2)
-                    } else {
-                        print line; line = ""; break
-                    }
-                }
-            }
-        }
-    ' "$1" 2>/dev/null \
-        | grep '^lemma ' \
-        | sed -E 's/^lemma[[:space:]]+([A-Za-z0-9_]+).*/\1/'
-}
 
 # --- Slice one lemma's proof block out of a rendered theory and canonicalize.
 slice_canon() {
@@ -162,7 +92,7 @@ slice_canon() {
     awk -v lem="^lemma ${lemma}( |\\[|:)" '$0 ~ lem {p=1} p && /^lemma / && !($0 ~ lem) {exit} p' \
         "$src" | python3 "$CANON" > "$dst" 2>/dev/null
 }
-export -f hs_cache_key include_shas lemmas_of slice_canon
+export -f proof_cache_key proof_lemmas_of include_shas slice_canon
 export HS_PATH="$hs_path" RS_PATH="$rs_path" CANON="$canon" TIMEOUT EXTRA_ENV \
        HS_CANON_CACHE CACHE_VERSION NO_HS_CACHE HS_FP_SALT
 
@@ -196,7 +126,7 @@ worker() {
     local hs_canon="$tmp/hs.canon" hs_rc=0 hs_ms="-"
     local key="" key_empty="" key_timeout=""
     if [ -z "$NO_HS_CACHE" ]; then
-        key="$HS_CANON_CACHE/$(hs_cache_key "$f" "$lemma")"
+        key="$HS_CANON_CACHE/$(proof_cache_key "$f" "$lemma").canon"
         key_empty="${key%.canon}.empty"
         key_timeout="${key%.canon}.timeout"
     fi
@@ -338,7 +268,7 @@ for f in "${files[@]}"; do
     printf '%s\n' "$f" >> "$filelist"
     while IFS= read -r lem; do
         [ -n "$lem" ] && printf '%s\t%s\n' "$f" "$lem" >> "$tasklist"
-    done < <(lemmas_of "$f")
+    done < <(proof_lemmas_of "$f")
 done
 
 n_tasks=$(wc -l < "$tasklist"); n_tasks=${n_tasks// /}

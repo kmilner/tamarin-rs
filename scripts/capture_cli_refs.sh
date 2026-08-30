@@ -53,17 +53,7 @@ FILE_TIMEOUT="${FILE_TIMEOUT:-120}"
 [ -f "$CASES" ] || { echo "capture_cli_refs: no case table at $CASES" >&2; exit 2; }
 
 # --- oracle binary -----------------------------------------------------------
-find_hs_bin() {
-    local c
-    for c in "$repo_root"/tamarin-prover-testing/.stack-work/install/*/*/*/bin/tamarin-prover \
-             "$repo_root"/tamarin-prover-testing/.stack-work/dist/*/ghc-*/build/tamarin-prover/tamarin-prover; do
-        [ -x "$c" ] && { echo "$c"; return 0; }
-    done
-    return 1
-}
-HS_PATH="${HS_PATH:-$(find_hs_bin)}" || {
-    echo "capture_cli_refs: no oracle binary under tamarin-prover-testing/.stack-work" \
-         "— build it with ./setup.sh testing, or set HS_PATH" >&2; exit 2; }
+HS_PATH=$(resolve_hs_oracle "$repo_root") || exit 2
 [ -x "$HS_PATH" ] || { echo "capture_cli_refs: HS_PATH '$HS_PATH' is not executable" >&2; exit 2; }
 
 # --- maude -------------------------------------------------------------------

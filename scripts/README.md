@@ -53,7 +53,8 @@ environment-line strip policies (`strip_env` deletes all four volatile lines,
 `strip_env_lines` keeps `analyzed:` for the triage tools, `norm` blanks to
 placeholders for the sweeps), `flags_for`/`include_shas`/`ckey`, `hs_fingerprint`,
 `allowlist_guard` + the gate `filelist`, `rs_stale_check`, `oracle_rev_check`,
-and the maude resolver — `MAUDE_PATH` if set (set-but-unusable is a hard fail,
+the Haskell-oracle resolver and the maude resolver — `MAUDE_PATH` if set
+(set-but-unusable is a hard fail,
 never a silent fall-through), else `maude` on `PATH`, else the linuxbrew
 install, else a hard fail naming all three steps; `maude_on_path` then
 prepends the RESOLVED binary's own directory, so an operator's maude wins over
@@ -63,9 +64,11 @@ triage tools (`diff_proof_raw.sh`, `corpus_raw_diff.sh`,
 `corpus_full_trace_diff.sh`, `triage_diff_vs_hs.sh`) plus
 `capture_cli_refs.sh` and `migrate_hs_cache_fp.sh`; a consumer that cannot
 read it exits 2 rather than falling back to a private copy. The
-structural-diff tools (`diff_proof_tree.sh`, `corpus_diff_proof_trees.sh`,
-`diff_maude_io.sh`, `diff_aes_calls.sh`) and `divergence_fixtures/_common.sh`
-stand outside it and keep their own small setups.
+`proof_diff_common.sh` additionally owns the one `.hs_canon_cache` key and
+nested-comment-aware lemma scanner shared by the raw and canonical proof-diff
+tools. The remaining structural helpers (`corpus_diff_proof_trees.sh`,
+`diff_aes_calls.sh`) and `divergence_fixtures/_common.sh` keep their own small
+setups.
 
 Two consumers deliberately do NOT use the shared maude resolver:
 `capture_cli_refs.sh` walks the RS test harness's ladder instead (its captures
