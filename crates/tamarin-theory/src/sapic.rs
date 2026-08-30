@@ -610,11 +610,6 @@ pub enum PatternSapicLVar {
 }
 
 impl PatternSapicLVar {
-    pub fn into_var(self) -> SapicLVar {
-        match self {
-            PatternSapicLVar::Bind(v) | PatternSapicLVar::Match(v) => v,
-        }
-    }
     pub fn as_var(&self) -> &SapicLVar {
         match self {
             PatternSapicLVar::Bind(v) | PatternSapicLVar::Match(v) => v,

@@ -494,7 +494,7 @@ impl Doc {
 // Highlighting + HTML markup (port of Text.PrettyPrint.Highlight / .Html).
 // All markup is emitted as ZERO-WIDTH text so it never perturbs the layout
 // the plain `--prove` path already produces byte-for-byte.  The highlight
-// combinators are the identity in plain mode; the `with_tag`/`closed_tag`
+// combinators are the identity in plain mode; the `with_tag`
 // helpers are web-pane-only (never reached from `--prove`) and always emit
 // their tags, mirroring HS's `HtmlDoc`/`NoHtmlDoc` split.
 // ============================================================================
@@ -553,17 +553,6 @@ pub fn with_tag(tag: &str, attrs: &[(&str, &str)], inner: Doc) -> Doc {
     Doc::text_w(&open, 0)
         .beside(inner)
         .beside(Doc::text_w(&close, 0))
-}
-
-/// HS `closedTag tag attrs` (`Html.hs:71-73`): `<tag …/>` as zero-width text.
-pub fn closed_tag(tag: &str, attrs: &[(&str, &str)]) -> Doc {
-    let mut s = String::from("<");
-    s.push_str(tag);
-    for (k, v) in attrs {
-        push_attribute(&mut s, k, v);
-    }
-    s.push_str("/>");
-    Doc::text_w(&s, 0)
 }
 
 /// The opening `<span class="hl_*">` tag for a highlight style, or the empty
@@ -899,11 +888,6 @@ fn one_liner(d: Doc) -> Doc {
 /// HS `sep` — try one line (separated by spaces); else vertical.
 pub fn sep(ds: Vec<Doc>) -> Doc {
     sep_x(true, ds)
-}
-
-/// HS `cat` — try one line (no separator); else vertical.
-pub fn cat(ds: Vec<Doc>) -> Doc {
-    sep_x(false, ds)
 }
 
 /// HS `fsep` — fill-style paragraph (greedy wrap), space-separated.

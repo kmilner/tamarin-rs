@@ -334,10 +334,6 @@ impl Options {
         self.declarable[tamarin_parser::DeclarableOption::TranslationProgress as usize]
     }
 
-    pub fn trans_allow_pattern_matching_in_lookup(&self) -> bool {
-        self.declarable[tamarin_parser::DeclarableOption::TranslationAllowPatternLookups as usize]
-    }
-
     pub fn state_channel_opt(&self) -> bool {
         self.declarable[tamarin_parser::DeclarableOption::TranslationStateOptimisation as usize]
     }

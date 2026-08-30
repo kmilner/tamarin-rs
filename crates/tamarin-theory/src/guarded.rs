@@ -824,7 +824,7 @@ fn unguarded_error(positions: &[usize], freshened: &[LVar]) -> GuardError {
 /// (`convert`) establishes at creation: flattened, duplicate-free
 /// connectives.  Port of HS `normaliseGuarded` (150f5eba).
 /// NOTE: disjunctions are normalised CONSTRUCTOR-PRESERVING at every
-/// level (`normalise_disj_list`), not via the full `gdisj`: a singleton
+/// level (`normalise_disj_list_cow`), not via the full `gdisj`: a singleton
 /// disjunction wrapping a conjunction is load-bearing for the S_∀
 /// saturation dedup — `insert_formula` STORES disjunctions (formula +
 /// `Goal::Disj` twin) but DECOMPOSES bare conjunctions without storing
@@ -909,15 +909,11 @@ fn gconj_is_structural_noop(items: &[Guarded]) -> bool {
 /// `Goal::Disj` twin (same payload, different wrapper) stay in LOCKSTEP.
 /// Port of HS `normaliseDisjList` (150f5eba); see that commit for why
 /// full `gdisj` here desynchronises the twin stores (gcm livelock).
-pub fn normalise_disj_list(items: &[Guarded]) -> Vec<Guarded> {
-    normalise_disj_list_cow(items).unwrap_or_else(|| items.to_vec())
-}
-
-/// Copy-on-write variant of [`normalise_disj_list`]: `None` when the
+/// Copy-on-write disjunction normalization: `None` when the
 /// constructor-preserving normalisation leaves the disjunct list unchanged
 /// (every disjunct normalises in place, none is a nested `Disj` to flatten,
 /// no duplicate to drop), `Some(rebuilt)` otherwise.  BYTE-IDENTICAL to
-/// `normalise_disj_list(items)` in the `Some` case.
+/// a freshly rebuilt list in the `Some` case.
 pub(crate) fn normalise_disj_list_cow(items: &[Guarded]) -> Option<Vec<Guarded>> {
     // Normalise each disjunct (COW); `children` is the normalised list — the
     // originals when `mapped` is `None` (all disjuncts unchanged).
@@ -949,7 +945,7 @@ fn disj_flatten_is_structural_noop(items: &[Guarded]) -> bool {
 
 /// One-level flatten of nested `Disj`s + duplicate drop over an
 /// already-normalised disjunct list.  This is the outer-loop body of
-/// `normalise_disj_list` factored out so it runs on the COW-normalised
+/// disjunction normalizer factored out so it runs on the COW-normalised
 /// children; BYTE-IDENTICAL to that original loop (same push/dedup order).
 fn flatten_dedup_disj(children: &[Guarded]) -> Vec<Guarded> {
     fn push(g: Guarded, out: &mut Vec<Guarded>) {

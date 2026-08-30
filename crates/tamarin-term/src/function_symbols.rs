@@ -434,11 +434,6 @@ impl FunSym {
         self.ndc_state().is_some_and(NdcState::has_ndc)
     }
 
-    /// HS `isNDCDiffFunSym`: NDC property (diff mode) of the symbol.
-    pub fn is_ndc_diff_fun_sym(&self) -> bool {
-        self.ndc_state().is_some_and(NdcState::has_ndc_diff)
-    }
-
     /// HS `setNDC`: overwrite the NDC state (no-op on non-user symbols).
     pub fn set_ndc(self, ndc: NdcState) -> FunSym {
         match self {

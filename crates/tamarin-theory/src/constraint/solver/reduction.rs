@@ -1064,7 +1064,7 @@ impl<'ctx> Reduction<'ctx> {
         let mut new_goals: Vec<(Goal, crate::constraint::system::GoalStatus)> =
             Vec::with_capacity(goals.len());
         // Change bit for the goal section's conditional cache
-        // invalidation.  Goal merges and `normalise_disj_list` dedups drop
+        // invalidation.  Goal merges and disjunction normalization drop
         // only values EQUAL to kept ones, and the pre-loop sort is
         // order-only — neither can change the max free-var idx, so only
         // genuine term/id rewrites count.

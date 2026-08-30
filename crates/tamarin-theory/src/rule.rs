@@ -503,34 +503,6 @@ pub type RuleAC = Rule<RuleInfo<ProtoRuleACInfo, IntrRuleACInfo>>;
 pub type RuleACInst = Rule<RuleInfo<ProtoRuleACInstInfo, IntrRuleACInfo>>;
 
 // =============================================================================
-// Conversions
-// =============================================================================
-
-pub fn rule_ac_to_intr_rule_ac(r: RuleAC) -> Option<IntrRuleAC> {
-    if let RuleInfo::Intr(i) = r.info {
-        Some(Rule {
-            info: i,
-            premises: r.premises,
-            conclusions: r.conclusions,
-            actions: r.actions,
-            new_vars: r.new_vars,
-        })
-    } else {
-        None
-    }
-}
-
-pub fn rule_ac_intr_to_rule_ac(r: IntrRuleAC) -> RuleAC {
-    Rule {
-        info: RuleInfo::Intr(r.info),
-        premises: r.premises,
-        conclusions: r.conclusions,
-        actions: r.actions,
-        new_vars: r.new_vars,
-    }
-}
-
-// =============================================================================
 // Predicates / queries
 // =============================================================================
 

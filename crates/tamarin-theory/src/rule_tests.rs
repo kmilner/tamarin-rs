@@ -129,28 +129,6 @@ fn rule_attributes_merge_prefers_right_but_keeps_left() {
 }
 
 #[test]
-fn rule_info_conversion_round_trip() {
-    let intr: IntrRuleAC = Rule::new(IntrRuleACInfo::Coerce, vec![], vec![], vec![]);
-    let lifted: RuleAC = rule_ac_intr_to_rule_ac(intr.clone());
-    let back = rule_ac_to_intr_rule_ac(lifted).unwrap();
-    assert_eq!(back, intr);
-    // The down-conversion is a filter, not a cast.  A protocol rule has no
-    // intruder info, so the conversion returns `None`.
-    let proto: RuleAC = Rule::new(
-        RuleInfo::Proto(ProtoRuleACInfo {
-            name: ProtoRuleName::Stand("P"),
-            attributes: RuleAttributes::empty(),
-            variants: Vec::new(),
-            loop_breakers: Vec::new(),
-        }),
-        vec![],
-        vec![],
-        vec![],
-    );
-    assert!(rule_ac_to_intr_rule_ac(proto).is_none());
-}
-
-#[test]
 fn intruder_predicates() {
     let f = FunSym::NoEq(tamarin_term::function_symbols::NoEqSym::new(
         b"f".to_vec(),
