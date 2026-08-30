@@ -131,20 +131,23 @@ web_cache_invalidate() {
 # cache identity and staged inputs cannot drift apart.
 web_stage_inputs() {
     local src=$1 dest_dir=$2
-    web_stage_includes "$src" "$dest_dir/$(basename "$src")" 0 || return 1
+    local -A _web_include_seen=()
+    web_stage_includes "$src" "$dest_dir/$(basename "$src")" || return 1
     web_stage_oracles "$src" "$dest_dir"
 }
 
 web_stage_includes() {
-    local src=$1 dst=$2 depth=$3 inc
-    [ "$depth" -lt 8 ] || { echo "web cache: include nesting exceeds 8 at $src" >&2; return 1; }
+    local src=$1 dst=$2 inc key
+    key="$src|$dst"
+    [ -z "${_web_include_seen[$key]+x}" ] || return 0
+    _web_include_seen[$key]=1
     mkdir -p "$(dirname "$dst")" && cp "$src" "$dst" || return 1
     while IFS= read -r inc; do
         [ -n "$inc" ] || continue
         [ -f "$(dirname "$src")/$inc" ] || {
             echo "web cache: missing include '$inc' from $src" >&2; return 1;
         }
-        web_stage_includes "$(dirname "$src")/$inc" "$(dirname "$dst")/$inc" $((depth + 1)) \
+        web_stage_includes "$(dirname "$src")/$inc" "$(dirname "$dst")/$inc" \
             || return 1
     done < <(grep -oE '#include[[:space:]]*"[^"]+"' "$src" 2>/dev/null \
              | sed 's/.*"\(.*\)"/\1/')

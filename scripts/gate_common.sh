@@ -75,7 +75,7 @@ hs_fingerprint() {
     HS_FP=$(stat -c '%s.%Y' "$1") || return 1
     HS_FP_SALT=$(printf '%s' "$HS_FP" | sha256sum | cut -c1-12)
 }
-# include_shas <theory> [depth]
+# include_shas <theory>
 #   sha + name of every file the theory pulls in with `#include "..."`, depth
 #   first and transitively, resolved against the INCLUDING file's directory
 #   (the spelling upstream uses: examples/testParser/include/include1.spthy,
@@ -88,13 +88,22 @@ hs_fingerprint() {
 #   digest in sweep_common.sh, rs_ref_check.sh's ikey) are byte-identical to
 #   the pre-include ones and the existing entries/rows stay valid.
 include_shas() {
-    local f=$1 depth=${2:-0} dir inc
-    [ "$depth" -ge 8 ] && return 0
+    local -A _include_seen=()
+    _include_shas_walk "$1"
+}
+_include_shas_walk() {
+    local f=$1 dir inc dep key
     dir=$(dirname "$f")
     while IFS= read -r inc; do
-        [ -n "$inc" ] && [ -f "$dir/$inc" ] || continue
-        printf '%s %s\n' "$(sha256sum "$dir/$inc" | cut -d' ' -f1)" "$inc"
-        include_shas "$dir/$inc" $((depth + 1))
+        [ -n "$inc" ] || continue
+        dep="$dir/$inc"
+        [ -f "$dep" ] || continue
+        key=$(cd "$(dirname "$dep")" && printf '%s/%s' "$PWD" "$(basename "$dep")") \
+            || return 1
+        [ -z "${_include_seen[$key]+x}" ] || continue
+        _include_seen[$key]=1
+        printf '%s %s\n' "$(sha256sum "$dep" | cut -d' ' -f1)" "$inc"
+        _include_shas_walk "$dep" || return 1
     done < <(grep -oE '#include[[:space:]]*"[^"]+"' "$f" 2>/dev/null \
              | sed 's/.*"\(.*\)"/\1/')
 }

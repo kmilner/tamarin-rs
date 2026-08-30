@@ -30,6 +30,42 @@ class DiffArtifactNames(unittest.TestCase):
 
 
 class CacheProfiles(unittest.TestCase):
+    def test_deep_and_cyclic_includes_are_fully_keyed_and_staged(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = pathlib.Path(td)
+            (root / "root.spthy").write_text('#include "i1.spthy"\n')
+            for i in range(1, 11):
+                next_include = f'#include "i{i + 1}.spthy"\n' if i < 10 else '#include "i1.spthy"\n'
+                (root / f"i{i}.spthy").write_text(f"level {i}\n{next_include}")
+            env = os.environ.copy()
+            env["HARNESS_TMP"] = td
+            subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    r'''
+set -e
+. scripts/gate_common.sh
+. scripts/web_cache.sh
+t=$HARNESS_TMP
+HS_FP_SALT=fingerprint
+test "$(include_shas "$t/root.spthy" | wc -l)" -eq 10
+k1=$(ckey root.spthy "$t/root.spthy")
+printf '%s\n' changed '#include "i1.spthy"' > "$t/i10.spthy"
+k2=$(ckey root.spthy "$t/root.spthy")
+test "$k1" != "$k2"
+mkdir "$t/staged"
+web_stage_inputs "$t/root.spthy" "$t/staged"
+test -f "$t/staged/i10.spthy"
+''',
+                ],
+                cwd=HERE.parent,
+                env=env,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+
     def test_nonweb_cache_keys_include_oracle_scripts(self):
         with tempfile.TemporaryDirectory() as td:
             env = os.environ.copy()
