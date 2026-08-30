@@ -532,7 +532,7 @@ fn match_eqs_skolemize_both_mset_var_to_submultiset() {
     let xv = LVar::new("x", LSort::Msg, 9);
     let subj = crate::term::f_app_ac(AcSym::Union, vec![mk(code2), mk(xv), payload.clone()]);
     let mut pattern_vars = std::collections::BTreeSet::new();
-    pattern_vars.insert(("codeOther".to_string(), 89u64));
+    pattern_vars.insert(("codeOther", 89u64));
     let res = h
         .match_eqs_skolemize_both(
             &[Equal {
@@ -614,7 +614,8 @@ fn impl_guard_match_skolemizes_pattern_free_vars() {
         },
     ];
     // No universal-bound vars in these positions.
-    let pattern_vars: std::collections::BTreeSet<(String, u64)> = std::collections::BTreeSet::new();
+    let pattern_vars: std::collections::BTreeSet<(&'static str, u64)> =
+        std::collections::BTreeSet::new();
     // skolemize_both: ekI,ekR,x,tid are distinct constants, so neither
     // equation can be satisfied → NO match, matching HS.
     let fixed = h.match_eqs_skolemize_both(&eqs, &pattern_vars).expect("m2");

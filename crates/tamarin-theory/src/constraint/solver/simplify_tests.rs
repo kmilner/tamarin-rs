@@ -480,8 +480,8 @@ fn simplify_marks_subterm_self_contradiction() {
 /// to `match_atom_via_maude` in production.
 fn mk_pattern_vars(
     vars: &[tamarin_term::lterm::LVar],
-) -> std::collections::BTreeSet<(String, u64)> {
-    vars.iter().map(|v| (v.name.to_string(), v.idx)).collect()
+) -> std::collections::BTreeSet<(&'static str, u64)> {
+    vars.iter().map(|v| (v.name, v.idx)).collect()
 }
 fn mk_var_l(name: &str, idx: u64, sort: tamarin_term::lterm::LSort) -> tamarin_term::lterm::LNTerm {
     tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(

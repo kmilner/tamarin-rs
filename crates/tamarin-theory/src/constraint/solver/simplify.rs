@@ -1433,14 +1433,15 @@ fn try_match_all_guards(
     // per-(guard, action) matching calls: it depends only on `vars` —
     // invariant across the whole recursion — so `match_atom_via_maude` and
     // the Eq arm take it as a parameter instead of each rebuilding it
-    // (String clones included) per invocation.
-    let pattern_vars: std::collections::BTreeSet<(String, u64)> =
-        vars.iter().map(|v| (v.name.to_string(), v.idx)).collect();
+    // per invocation. LVar names are interned, so the set can borrow their
+    // process-lifetime strings without allocating owned copies.
+    let pattern_vars: std::collections::BTreeSet<(&'static str, u64)> =
+        vars.iter().map(|v| (v.name, v.idx)).collect();
 
     fn rec(
         maude: &tamarin_term::maude_proc::MaudeHandle,
         vars: &[tamarin_term::lterm::LVar],
-        pattern_vars: &std::collections::BTreeSet<(String, u64)>,
+        pattern_vars: &std::collections::BTreeSet<(&'static str, u64)>,
         guards: &[&crate::atom::Atom<tamarin_term::lterm::LNTerm>],
         guard_idx: usize,
         sys_actions: &[(crate::constraint::constraints::NodeId, crate::fact::LNFact)],
@@ -1927,7 +1928,7 @@ enum StructMatch {
 fn structural_match(
     pat: &tamarin_term::lterm::LNTerm,
     subj: &tamarin_term::lterm::LNTerm,
-    pattern_vars: &std::collections::BTreeSet<(String, u64)>,
+    pattern_vars: &std::collections::BTreeSet<(&'static str, u64)>,
     subst: &mut std::collections::BTreeMap<tamarin_term::lterm::LVar, tamarin_term::lterm::LNTerm>,
 ) -> StructMatch {
     use tamarin_term::function_symbols::FunSym;
@@ -1952,7 +1953,7 @@ fn structural_match(
     fn match_args(
         p_args: &[tamarin_term::lterm::LNTerm],
         s_args: &[tamarin_term::lterm::LNTerm],
-        pattern_vars: &std::collections::BTreeSet<(String, u64)>,
+        pattern_vars: &std::collections::BTreeSet<(&'static str, u64)>,
         subst: &mut std::collections::BTreeMap<
             tamarin_term::lterm::LVar,
             tamarin_term::lterm::LNTerm,
@@ -1976,7 +1977,7 @@ fn structural_match(
         // natively (never `NeedsAc`).  After `skolemizeGuarded`
         // (System.hs:1110-1144, see line 1121 + Guarded.hs:743-744) the universal's bound
         // vars remain `Var`; free system vars become `SkConst`.
-        (Term::Lit(Lit::Var(pv)), _) if pattern_vars.contains(&(pv.name.to_string(), pv.idx)) => {
+        (Term::Lit(Lit::Var(pv)), _) if pattern_vars.contains(&(pv.name, pv.idx)) => {
             let subj_sort = tamarin_term::lterm::sort_of_lnterm(subj);
             if !sort_compatible(pv.sort, subj_sort) {
                 return StructMatch::NoMatcher;
@@ -2054,7 +2055,7 @@ fn structural_match(
 fn match_atom_via_maude(
     maude: &tamarin_term::maude_proc::MaudeHandle,
     vars: &[tamarin_term::lterm::LVar],
-    pattern_vars: &std::collections::BTreeSet<(String, u64)>,
+    pattern_vars: &std::collections::BTreeSet<(&'static str, u64)>,
     g_fact: &crate::fact::LNFact,
     g_time: &tamarin_term::lterm::LNTerm,
     i: &crate::constraint::constraints::NodeId,
@@ -2236,7 +2237,7 @@ fn match_atom_via_maude(
     for m in ms {
         let mut subst = base_subst.clone();
         for (lv, lt) in m {
-            if !pattern_vars.contains(&(lv.name.to_string(), lv.idx)) {
+            if !pattern_vars.contains(&(lv.name, lv.idx)) {
                 continue;
             }
             subst.insert(lv, lt);

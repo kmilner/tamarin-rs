@@ -1185,7 +1185,7 @@ impl MaudeHandle {
     pub fn match_eqs_skolemize_both(
         &self,
         eqs: &[Equal<LNTerm>],
-        pattern_vars: &std::collections::BTreeSet<(String, u64)>,
+        pattern_vars: &std::collections::BTreeSet<(&'static str, u64)>,
     ) -> Result<Vec<Vec<(crate::lterm::LVar, LNTerm)>>, MaudeError> {
         use crate::lterm::LVar;
         if eqs.is_empty() {
@@ -1208,13 +1208,11 @@ impl MaudeHandle {
         // un-skolemization (there are no bindings).
         fn has_pattern_var(
             t: &LNTerm,
-            pattern_vars: &std::collections::BTreeSet<(String, u64)>,
+            pattern_vars: &std::collections::BTreeSet<(&'static str, u64)>,
         ) -> bool {
             use crate::vterm::Lit;
             match t {
-                crate::term::Term::Lit(Lit::Var(lv)) => {
-                    pattern_vars.contains(&(lv.name.to_string(), lv.idx))
-                }
+                crate::term::Term::Lit(Lit::Var(lv)) => pattern_vars.contains(&(lv.name, lv.idx)),
                 crate::term::Term::App(_, args) => {
                     args.iter().any(|a| has_pattern_var(a, pattern_vars))
                 }
@@ -1487,14 +1485,12 @@ fn unskolemize(
 /// it once per side.
 fn collect_free_non_pattern_vars(
     t: &LNTerm,
-    pattern_vars: &std::collections::BTreeSet<(String, u64)>,
+    pattern_vars: &std::collections::BTreeSet<(&'static str, u64)>,
     out: &mut std::collections::BTreeSet<crate::lterm::LVar>,
 ) {
     use crate::vterm::Lit;
     match t {
-        crate::term::Term::Lit(Lit::Var(lv))
-            if !pattern_vars.contains(&(lv.name.to_string(), lv.idx)) =>
-        {
+        crate::term::Term::Lit(Lit::Var(lv)) if !pattern_vars.contains(&(lv.name, lv.idx)) => {
             out.insert(*lv);
         }
         crate::term::Term::App(_, args) => {
