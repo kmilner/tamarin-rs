@@ -447,10 +447,11 @@ pub fn subterm_step(
     if small_nat_or_msg && sort_of_lnterm(big) == LSort::Nat {
         return match process_ac_subterm(AcSym::NatPlus, small, big) {
             Ok((s, t)) => Some(vec![SubtermSplit::NatSubtermD(s, t)]),
-            // HS: Right _ -> error "isTrueFalse did not catch this case 1".
-            // `is_true_false` already handled the reducible cases above; treat
-            // as undecidable rather than panicking to stay total.
-            Err(_) => None,
+            // HS errors here: the preceding classification must catch it.
+            Err(_) => {
+                debug_assert!(false, "is_true_false missed a reducible Nat subterm");
+                None
+            }
         };
     }
     let mut out: Vec<SubtermSplit> = match big {
@@ -463,8 +464,11 @@ pub fn subterm_step(
             let big_flat: Vec<LNTerm> = flattened_ac_terms(f, big).into_iter().cloned().collect();
             let big_norm = f_app_ac(f, big_flat.clone());
             match process_ac_subterm(f, small, &big_norm) {
-                // Right _ -> error "isTrueFalse did not catch this case 2".
-                Err(_) => return None,
+                // HS errors here: the preceding classification must catch it.
+                Err(_) => {
+                    debug_assert!(false, "is_true_false missed a reducible AC subterm");
+                    return None;
+                }
                 Ok((n_small, n_big)) => {
                     let new_var = mk_fresh(sort_of_lnterm(big));
                     let small_plus = f_app_ac(f, vec![n_small, var_term(new_var)]);

@@ -107,7 +107,11 @@ impl<S: LeafSubst<Var = LVar>> Apply<S> for LVar {
     fn apply_changed(&self, subst: &S) -> Option<Self> {
         match subst.image_of(self) {
             Some(Term::Lit(Lit::Var(w))) if w != self => Some(*w),
-            _ => None,
+            Some(Term::Lit(Lit::Var(_))) | None => None,
+            Some(_) => {
+                debug_assert!(false, "bare variable mapped to a non-variable term");
+                None
+            }
         }
     }
 }
