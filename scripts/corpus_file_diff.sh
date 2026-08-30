@@ -76,6 +76,26 @@ maude_on_path "$MAUDE"
 # that is no longer checked out.  Loop-invariant, so taken once.
 hs_fingerprint "$HS_PATH"
 export HS_PATH RS_PATH FILE_TIMEOUT DERIVCHECK_TIMEOUT HS_RTS CACHE CORPUS_ROOT
+
+# GNU timeout accepts integer s/m/h/d suffixes. Convert those spellings for
+# comparing a cached timeout cap with the current one; invalid legacy markers
+# return failure and are retried once.
+duration_seconds() {
+    local value=$1 number unit factor
+    if [[ "$value" =~ ^([0-9]+)([smhd]?)$ ]]; then
+        number=${BASH_REMATCH[1]}
+        unit=${BASH_REMATCH[2]}
+        case $unit in
+            ''|s) factor=1 ;;
+            m) factor=60 ;;
+            h) factor=3600 ;;
+            d) factor=86400 ;;
+        esac
+        printf '%s\n' "$((number * factor))"
+    else
+        return 1
+    fi
+}
 export HS_FP HS_FP_SALT
 
 # strip_env (gate_common.sh): DELETE the four volatile header lines.
@@ -111,16 +131,18 @@ filelist_fallback() {
 
 # --- Phase 1: HS ---
 hs_one() {
-    local rel="$1" f="$CORPUS_ROOT/$1" key out rc fl old_cap
+    local rel="$1" f="$CORPUS_ROOT/$1" key out rc fl old_cap old_seconds current_seconds
     [ -f "$f" ] || return 0
     key=$(ckey "$rel" "$f"); fl=$(flags_for "$rel")
     [ -f "$CACHE/$key.full.gz" ] && return 0
     if [ -f "$CACHE/$key.timeout" ]; then
         old_cap=$(cat "$CACHE/$key.timeout")
-        case "$old_cap" in
-            ''|*[!0-9]*) ;; # Legacy/invalid marker: retry once and upgrade it.
-            *) [ "$old_cap" -ge "$FILE_TIMEOUT" ] && return 0 ;;
-        esac
+        old_seconds=$(duration_seconds "$old_cap") || old_seconds=
+        current_seconds=$(duration_seconds "$FILE_TIMEOUT") || current_seconds=
+        if [ -n "$old_seconds" ] && [ -n "$current_seconds" ] \
+                && [ "$old_seconds" -ge "$current_seconds" ]; then
+            return 0
+        fi
         rm -f "$CACHE/$key.timeout"
     fi
     [ -f "$CACHE/$key.nohs" ] && return 0
@@ -151,7 +173,7 @@ hs_one() {
     # keeps its sticky .timeout marker below — same guard wf_gate.sh and
     # pretty_gate.sh apply to their load fills.)
     if [ "$rc" -ge 128 ]; then
-        echo "  HS KILLED   $rel (rc=$rc, cap ${FILE_TIMEOUT}s) — nothing cached" >&2
+        echo "  HS KILLED   $rel (rc=$rc, cap $FILE_TIMEOUT) — nothing cached" >&2
         return 0
     fi
     # Record the oracle's exit status beside the entry, BEFORE the payload, so
@@ -167,7 +189,7 @@ hs_one() {
         printf '%s' "$out" | gzip > "$CACHE/$key.full.gz"
     fi
 }
-export -f hs_one
+export -f duration_seconds hs_one
 
 # --- Phase 2: RS + diff ---
 rs_one() {
@@ -213,7 +235,7 @@ N=$(filelist | grep -c .)
 # Zero files is the whole-run form of comparing nothing: no rows, an empty
 # summary, and a DONE line that reads exactly like a clean gate.
 [ "$N" -gt 0 ] || { echo "the file list resolved to 0 entries — nothing to compare" >&2; exit 2; }
-echo "corpus_file_diff: $N files, JOBS=$JOBS, -N$HS_N, FILE_TIMEOUT=${FILE_TIMEOUT}s, cache=$CACHE"
+echo "corpus_file_diff: $N files, JOBS=$JOBS, -N$HS_N, FILE_TIMEOUT=$FILE_TIMEOUT, cache=$CACHE"
 echo "=== PHASE 1: Haskell (all files first, no RS) ==="
 filelist | grep . | xargs -P "$JOBS" -I{} bash -c 'hs_one "$@"' _ {}
 echo "=== PHASE 2: Rust + diff ==="
