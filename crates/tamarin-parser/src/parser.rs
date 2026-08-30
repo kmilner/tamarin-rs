@@ -5116,6 +5116,11 @@ impl<'a> Parser<'a> {
             return Ok(Formula::Atom(Atom::Subterm(lhs, rhs)));
         }
         if self.try_punct("(<)") {
+            if !self.sig_enable_mset {
+                return Err(
+                    self.err("Need builtins: multiset to use multiset comparison operator.")
+                );
+            }
             let rhs = self.term(false)?;
             // HS `smallerp` (Theory/Text/Parser/Formula.hs:30-38): the multiset
             // comparison operator `a (<) b` desugars DIRECTLY into the built-in
@@ -5639,9 +5644,19 @@ impl<'a> Parser<'a> {
             return Ok(Term::DhNeutral);
         }
         if self.try_punct("1:nat") {
+            if !self.sig_enable_nat {
+                return Err(
+                    self.err("natural-number literal 1:nat requires the natural-numbers builtin")
+                );
+            }
             return Ok(Term::NatOne);
         }
         if self.try_punct("%1") {
+            if !self.sig_enable_nat {
+                return Err(
+                    self.err("natural-number literal %1 requires the natural-numbers builtin")
+                );
+            }
             return Ok(Term::NatOne);
         }
         // `1` only valid when DH is enabled; we accept it always at parse level.
@@ -5698,6 +5713,9 @@ impl<'a> Parser<'a> {
             probe.bump();
             match probe.peek() {
                 Some('\'') => {
+                    if !self.sig_enable_nat {
+                        return Err(self.err("nat names require the natural-numbers builtin"));
+                    }
                     self.lx.bump();
                     let s = self
                         .lx
@@ -5706,6 +5724,11 @@ impl<'a> Parser<'a> {
                     return Ok(Term::NatLit(s));
                 }
                 Some(c) if c.is_ascii_alphabetic() => {
+                    if !self.sig_enable_nat {
+                        return Err(
+                            self.err("nat-sorted variables require the natural-numbers builtin")
+                        );
+                    }
                     if let Some(v) = self.try_var_spec()? {
                         let v = self.attach_sort_suffix(v)?;
                         self.note_var_dot_hangover(&v);
@@ -6131,6 +6154,11 @@ impl<'a> Parser<'a> {
                 ("nat", LSort::Nat),
             ] {
                 if self.try_kw(kw) {
+                    if sort == LSort::Nat && !self.sig_enable_nat {
+                        return Err(
+                            self.err("nat-sorted variables require the natural-numbers builtin")
+                        );
+                    }
                     v.sort = sort;
                     self.sort_suffix_consumed = true;
                     return Ok(v);
@@ -6172,6 +6200,10 @@ impl<'a> Parser<'a> {
                 match probe.peek() {
                     Some('\'') | Some('1') => return Ok(None), // handled by literal/atom path
                     Some(c) if c.is_ascii_alphabetic() => {
+                        if !self.sig_enable_nat {
+                            return Err(self
+                                .err("nat-sorted variables require the natural-numbers builtin"));
+                        }
                         self.lx.bump();
                         LSort::Nat
                     }

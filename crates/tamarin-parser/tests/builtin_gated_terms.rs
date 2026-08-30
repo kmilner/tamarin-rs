@@ -81,6 +81,30 @@ fn nat_plus_needs_its_builtin() {
     );
 }
 
+#[test]
+fn nat_literals_and_variables_need_their_builtin() {
+    for term in ["1:nat", "%1", "%n", "n:nat", "%'n'"] {
+        let without = format!("theory T begin\nrule R: [ ] --> [ Out({term}) ]\nend");
+        assert!(
+            parse_theory(&without, &[]).is_err(),
+            "accepted {term} without nat"
+        );
+        let with = format!(
+            "theory T begin\nbuiltins: natural-numbers\nrule R: [ ] --> [ Out({term}) ]\nend"
+        );
+        parse_theory(&with, &[]).unwrap_or_else(|e| panic!("rejected {term} with nat: {e}"));
+    }
+}
+
+#[test]
+fn multiset_comparison_needs_its_builtin() {
+    let body = |builtin: &str| {
+        format!("theory T begin\n{builtin}restriction R: \"All x y. x (<) y\"\nend")
+    };
+    assert!(parse_theory(&body(""), &[]).is_err());
+    parse_theory(&body("builtins: multiset\n"), &[]).expect("multiset comparison");
+}
+
 /// Both spellings of the xor operator (`opXor`, Token.hs:555-556) need
 /// `builtins: xor`.
 #[test]
