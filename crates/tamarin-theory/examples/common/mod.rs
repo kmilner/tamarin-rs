@@ -14,16 +14,9 @@ use std::process::Command;
 
 use tamarin_term::maude_proc::MaudeHandle;
 
-/// The examples corpus root: `$CORPUS_ROOT` if set, else the
-/// `tamarin-prover/examples/` directory in the submodule, relative to this
-/// crate's manifest.
 #[allow(dead_code)]
 pub fn corpus_root() -> PathBuf {
-    std::env::var("CORPUS_ROOT")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| {
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tamarin-prover/examples")
-        })
+    tamarin_test_support::corpus_root()
 }
 
 /// Collect every `.spthy` file under `root`, sorted by path.

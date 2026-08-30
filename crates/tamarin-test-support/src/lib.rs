@@ -13,6 +13,15 @@
 //! `TAM_ALLOW_NO_MAUDE=1` turns the panic back into a skip, for a machine
 //! that genuinely has no maude.
 
+/// The examples corpus used by workspace tests: `$CORPUS_ROOT` when set,
+/// otherwise the `tamarin-prover` submodule's examples directory.
+pub fn corpus_root() -> std::path::PathBuf {
+    std::env::var("CORPUS_ROOT").map_or_else(
+        |_| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tamarin-prover/examples"),
+        std::path::PathBuf::from,
+    )
+}
+
 /// Absolute maude locations probed when `MAUDE_PATH` is unset, ahead of
 /// `$PATH`.  These two are the pair the port's own `default_maude_path`
 /// (tamarin-prover's `run.rs`) walks, so a test that resolves a maude here
@@ -199,6 +208,37 @@ mod tests {
              `maude_path`, `require_maude_path` or `maude_available` instead \
              — a local copy drifts, and the drift shows up as a green run \
              that tested nothing.",
+            offenders.join(", ")
+        );
+    }
+
+    #[test]
+    fn corpus_root_is_read_in_one_place() {
+        let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .nth(2)
+            .expect("this crate sits at <workspace>/crates/<name>");
+        let needles = [
+            ["var(", "\"", "CORPUS_ROOT", "\""].concat(),
+            ["var_os(", "\"", "CORPUS_ROOT", "\""].concat(),
+        ];
+        let mut hits = 0usize;
+        let mut offenders = Vec::new();
+        for path in rs_files(&workspace.join("crates")) {
+            let rel = path.strip_prefix(workspace).expect("workspace source");
+            let text = std::fs::read_to_string(&path).expect("read source");
+            let count: usize = needles.iter().map(|n| text.matches(n).count()).sum();
+            if rel == Path::new(PROBE) {
+                hits += count;
+            } else if count > 0 {
+                offenders.push(rel.display().to_string());
+            }
+        }
+        assert!(hits > 0, "no `$CORPUS_ROOT` read in {PROBE}");
+        assert!(
+            offenders.is_empty(),
+            "these files read `$CORPUS_ROOT` directly instead of calling \
+             tamarin_test_support::corpus_root: {}",
             offenders.join(", ")
         );
     }

@@ -47,13 +47,7 @@ pub const EXPECTED_LOAD_SKIPS: &[(&str, &str)] = &[
     ("testParser/include/include_2.spthy", SKIP_PARSE),
 ];
 
-/// The examples tree, or the override in `CORPUS_ROOT`.
-pub fn corpus_root() -> PathBuf {
-    std::env::var("CORPUS_ROOT").map_or_else(
-        |_| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tamarin-prover/examples"),
-        PathBuf::from,
-    )
-}
+pub use tamarin_test_support::corpus_root;
 
 /// `path` relative to the corpus root, as reports name it.
 pub fn rel<'a>(path: &'a Path, root: &Path) -> &'a Path {

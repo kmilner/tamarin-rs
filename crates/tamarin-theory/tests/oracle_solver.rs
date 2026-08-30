@@ -27,21 +27,13 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use tamarin_parser::parse_theory;
-use tamarin_test_support::require_maude_path;
+use tamarin_test_support::{corpus_root, require_maude_path};
 use tamarin_theory::elaborate::formula_to_guarded_parsed;
 use tamarin_theory::formula::Quantifier;
 use tamarin_theory::guarded::Guarded;
 
 fn fixtures_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
-}
-
-fn corpus_root() -> PathBuf {
-    std::env::var("CORPUS_ROOT")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| {
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tamarin-prover/examples")
-        })
 }
 
 /// The pinned oracle, discovered the way every parity script discovers it:

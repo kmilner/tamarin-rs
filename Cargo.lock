@@ -1159,6 +1159,7 @@ name = "tamarin-parser"
 version = "1.13.0"
 dependencies = [
  "tamarin-term",
+ "tamarin-test-support",
  "walkdir",
 ]
 

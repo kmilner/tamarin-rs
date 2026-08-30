@@ -11,6 +11,7 @@ description = "Theory-file parser for the Tamarin prover (Rust port)."
 tamarin-term = { workspace = true }
 
 [dev-dependencies]
+tamarin-test-support = { workspace = true }
 walkdir = "2"
 
 [lints]
