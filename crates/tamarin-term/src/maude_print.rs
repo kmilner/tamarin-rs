@@ -222,6 +222,17 @@ fn pp_maude_c_sym_into(c: CSym, buf: &mut Vec<u8>) {
     }
 }
 
+/// Append the wire identifier for a signature-defined free or AC symbol.
+/// Built-in AC/C/List symbols are dispatched separately by the reply parser.
+pub(crate) fn pp_maude_sig_sym_into(sym: FunSym, buf: &mut Vec<u8>) -> bool {
+    match sym {
+        FunSym::NoEq(sym) => pp_maude_no_eq_sym_into(&sym, buf),
+        FunSym::Ac(AcSym::AcFct(sym)) => pp_maude_ac_sym_into(AcSym::AcFct(sym), buf),
+        _ => return false,
+    }
+    true
+}
+
 // =============================================================================
 // Term pretty printing
 // =============================================================================

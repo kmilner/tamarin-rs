@@ -722,7 +722,7 @@ impl MaudeHandle {
                     pp_mterm_into(&mt, &mut cmd);
                     cmd.extend_from_slice(b" .\n");
                     let reply = inner.execute(&cmd)?;
-                    let mt_back = maude_parse::parse_reduce_reply(&reply)?;
+                    let mt_back = maude_parse::parse_reduce_reply_with_sig(&reply, &inner.sig)?;
                     let mut next = 0;
                     let maude_result = mterm_to_lnterm(&mt_back, &mut ctx, "z", &mut next);
                     if maude_result != *t {
@@ -744,7 +744,7 @@ impl MaudeHandle {
             inner.stats.norm_count += 1;
             reply
         };
-        let mt_back = maude_parse::parse_reduce_reply(&reply)?;
+        let mt_back = maude_parse::parse_reduce_reply_with_sig(&reply, &self.sig)?;
         let mut next = 0;
         let result = mterm_to_lnterm(&mt_back, &mut ctx, "z", &mut next);
         let mut inner = self.inner.lock().unwrap();
@@ -980,7 +980,7 @@ impl MaudeHandle {
         // still runs on every call, so a hit is bit-for-bit a real round-trip.
         let reply = inner.execute_memo(&cmd, |s| s.unify_count += 1)?;
         drop(inner);
-        let msubsts = maude_parse::parse_unify_reply(&reply)?;
+        let msubsts = maude_parse::parse_unify_reply_with_sig(&reply, &self.sig)?;
         // HS `avoid (M.elems bindings)` (`runBackConversion`,
         // Term/Maude/Types.hs:123-127, via
         // LTerm.hs:680-681 `avoid = maybe 0 (succ . snd) . boundsVarIdx`):
@@ -1153,7 +1153,7 @@ impl MaudeHandle {
         let cmd = pp_match_cmd(&pats, &subjs);
         let reply = inner.execute_memo(&cmd, |s| s.match_count += 1)?;
         drop(inner);
-        let msubsts = maude_parse::parse_match_reply(&reply)?;
+        let msubsts = maude_parse::parse_match_reply_with_sig(&reply, &self.sig)?;
         let mut out = Vec::with_capacity(msubsts.len());
         for ms in &msubsts {
             out.push(msubst_to_lnsubst(ms, &mut ctx)?);
@@ -1264,7 +1264,7 @@ impl MaudeHandle {
         let cmd = pp_match_cmd(&pats, &subjs);
         let reply = inner.execute_memo(&cmd, |s| s.match_count += 1)?;
         drop(inner);
-        let msubsts = maude_parse::parse_match_reply(&reply)?;
+        let msubsts = maude_parse::parse_match_reply_with_sig(&reply, &self.sig)?;
         let mut out = Vec::with_capacity(msubsts.len());
         for ms in &msubsts {
             let lnsubst = msubst_to_lnsubst(ms, &mut ctx)?;
@@ -1296,7 +1296,7 @@ impl MaudeHandle {
         // once in the derivcheck phase, once at main close).
         let reply = inner.execute_memo(&cmd, |s| s.var_count += 1)?;
         drop(inner);
-        let msubsts = maude_parse::parse_variants_reply(&reply)?;
+        let msubsts = maude_parse::parse_variants_reply_with_sig(&reply, &self.sig)?;
         let mut out = Vec::with_capacity(msubsts.len());
         // HS-faithful: each variant's back-conversion uses a fresh ctx
         // clone.  Mirrors HS `msubstToLSubstVFresh` (Maude/Types.hs:137-157, see line 146)

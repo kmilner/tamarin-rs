@@ -166,6 +166,10 @@ pub struct MaudeSig {
     /// by [`MaudeSig::refresh`] and read through [`MaudeSig::fun_sym_named`].
     ///
     pub fun_syms_by_name: tamarin_utils::FastMap<&'static [u8], FunSym>,
+    /// Exact Maude wire identifier to the symbol declared by this signature.
+    /// Reply parsing uses this to reuse interned symbols rather than decode,
+    /// rewrite and intern every occurrence returned by Maude.
+    pub(crate) fun_syms_by_wire: tamarin_utils::FastMap<&'static [u8], FunSym>,
 }
 
 impl MaudeSig {
@@ -265,6 +269,14 @@ impl MaudeSig {
             }
         }
         self.fun_syms_by_name = by_name;
+        let mut by_wire = tamarin_utils::FastMap::default();
+        for sym in all_funs.iter().copied() {
+            let mut wire = Vec::new();
+            if crate::maude_print::pp_maude_sig_sym_into(sym, &mut wire) {
+                by_wire.insert(crate::intern::intern_bytes(&wire), sym);
+            }
+        }
+        self.fun_syms_by_wire = by_wire;
         self.fun_syms = all_funs;
         self.irreducible_fun_syms = irreducible;
         self.reducible_fun_syms = reducible;
@@ -326,6 +338,10 @@ impl MaudeSig {
     /// signature itself declares it.
     pub fn fun_sym_named(&self, name: &[u8]) -> Option<FunSym> {
         self.fun_syms_by_name.get(name).copied()
+    }
+
+    pub(crate) fn fun_sym_by_wire(&self, ident: &[u8]) -> Option<FunSym> {
+        self.fun_syms_by_wire.get(ident).copied()
     }
 
     /// The user-defined AC symbol of this name, read off `fun_syms` like HS
@@ -543,6 +559,7 @@ impl MaudeSig {
             irreducible_fun_syms_fast: tamarin_utils::FastSet::default(),
             reducible_fun_syms_fast: tamarin_utils::FastSet::default(),
             fun_syms_by_name: tamarin_utils::FastMap::default(),
+            fun_syms_by_wire: tamarin_utils::FastMap::default(),
         };
         merged.refresh()
     }

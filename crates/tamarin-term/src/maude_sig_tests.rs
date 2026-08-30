@@ -35,6 +35,17 @@ fn empty_signature_has_no_rules() {
     assert!(sig.rrules().is_empty());
 }
 
+#[test]
+fn wire_index_covers_every_emitted_signature_symbol() {
+    let sig = dh_maude_sig().merge(pair_maude_sig());
+    for sym in sig.fun_syms.iter().copied() {
+        let mut wire = Vec::new();
+        if crate::maude_print::pp_maude_sig_sym_into(sym, &mut wire) {
+            assert_eq!(sig.fun_sym_by_wire(&wire), Some(sym));
+        }
+    }
+}
+
 /// HS `addFunSym`/`addMacroSym` route through the monoid `<>`
 /// (Term/Maude/Signature.hs:170-178), which rebuilds from `mempty`
 /// (eqConvergent=False, line 153) and so RESETS eqConvergent to false.
