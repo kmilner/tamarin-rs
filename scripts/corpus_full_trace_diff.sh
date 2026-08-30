@@ -79,7 +79,7 @@ if [ ! -x "$rs_path" ]; then
     exit 2
 fi
 
-# --- HS canon cache key: sha256(file content) + include digest + lemma + CACHE_VERSION +
+# --- HS canon cache key: sha256(file content) + dependency digests + lemma + CACHE_VERSION +
 #     the oracle-binary fingerprint (gate_common's hs_fingerprint), so a
 #     rebuilt oracle is a MISS rather than a stale hit — the same __b suffix
 #     diff_proof_raw.sh / corpus_raw_diff.sh use and migrate_hs_cache_fp.sh
@@ -93,7 +93,7 @@ slice_canon() {
     local -a rc=("${PIPESTATUS[@]}")
     [ "${rc[0]}" -eq 0 ] && [ "${rc[1]}" -eq 0 ]
 }
-export -f proof_now_ms proof_cache_key proof_lemmas_of proof_lemma_block include_shas slice_canon
+export -f proof_now_ms proof_cache_key proof_lemmas_of proof_lemma_block include_shas oracle_shas slice_canon
 export HS_PATH="$hs_path" RS_PATH="$rs_path" CANON="$canon" TIMEOUT EXTRA_ENV \
        HS_CANON_CACHE CACHE_VERSION NO_HS_CACHE HS_FP_SALT
 

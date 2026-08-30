@@ -95,7 +95,7 @@ hs_fingerprint "$hs_path"
 # --- strip_env_lines (gate_common.sh): delete the only lines that
 # legitimately differ between the two binaries, keeping `analyzed:` visible
 # (the cache hit rewrites its path to this invocation's).
-export -f proof_now_ms proof_cache_key proof_lemmas_of include_shas strip_env_lines
+export -f proof_now_ms proof_cache_key proof_lemmas_of include_shas oracle_shas strip_env_lines
 export HS_PATH="$hs_path" RS_PATH="$rs_path" TIMEOUT RS_TIMEOUT EXTRA_ENV \
        HS_CANON_CACHE CACHE_VERSION NO_HS_CACHE DERIVCHECK_TIMEOUT HS_RTS HS_FP_SALT
 

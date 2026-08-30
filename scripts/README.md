@@ -22,11 +22,11 @@ Five, all gitignored, none keyed alike:
 
 | Cache | Fed by / read by | Key |
 |---|---|---|
-| `.hs_file_cache/` | `corpus_file_diff.sh` | theory sha + every `#include`d file's sha + flags hash + **oracle-binary fingerprint**; the oracle's exit status sits beside each entry as `.rc` |
-| `.hs_pretty_cache/` | `pretty_gate.sh` and `wf_gate.sh` (either fills `.load.gz`; `pretty_gate.sh` derives `.theory.gz` from it) | theory sha + every `#include`d file's sha + flags hash + **oracle-binary fingerprint** |
+| `.hs_file_cache/` | `corpus_file_diff.sh` | theory sha + every `#include`d file's sha + oracle-script digest + flags hash + **oracle-binary fingerprint**; the oracle's exit status sits beside each entry as `.rc` |
+| `.hs_pretty_cache/` | `pretty_gate.sh` and `wf_gate.sh` (either fills `.load.gz`; `pretty_gate.sh` derives `.theory.gz` from it) | theory sha + every `#include`d file's sha + oracle-script digest + flags hash + **oracle-binary fingerprint** |
 | `.web_hs_cache/` | `web_parity.sh` writes; `pane_byte_check.sh` reads | profile = **oracle + Maude binary SHA-256 + crawl plan/settings**; entry = theory + transitive includes + oracle scripts |
-| `.hs_canon_cache/` | `diff_proof_raw.sh`, `corpus_raw_diff.sh`, `corpus_full_trace_diff.sh` (one key form; flagless entries are exchanged, a `diff_proof_raw.sh` run with canonical flags salts `__f` and stays distinct) | theory sha + every `#include`d file's sha + lemma + cache version + **oracle-binary fingerprint** |
-| `.hs_sweep_cache/` | the three flag sweeps | theory sha + every `#include`d file's sha + flags + **oracle-binary fingerprint** + the RESOLVED maude's path (so a sweep pointed at a different maude misses rather than reusing) |
+| `.hs_canon_cache/` | `diff_proof_raw.sh`, `corpus_raw_diff.sh`, `corpus_full_trace_diff.sh` (one key form; flagless entries are exchanged, a `diff_proof_raw.sh` run with canonical flags salts `__f` and stays distinct) | theory sha + every `#include`d file's sha + oracle-script digest + lemma + cache version + **oracle-binary fingerprint** |
+| `.hs_sweep_cache/` | the three flag sweeps | theory sha + every `#include`d file's sha + oracle-script digest + flags + **oracle-binary fingerprint** + the RESOLVED maude's path (so a sweep pointed at a different maude misses rather than reusing) |
 
 The general oracle-binary fingerprint is `stat -c '%s.%Y'` of the HS binary
 (`gate_common.sh`'s `hs_fingerprint`, the one definition every cached gate
@@ -45,13 +45,13 @@ override; `WEB_CACHE_ROOT=` moves the whole profile pool. Nothing is archived
 or wiped, and
 `bump_submodule.sh` deliberately leaves the caches alone.
 `scripts/migrate_hs_cache_fp.sh` is the one-time rename of pre-fingerprint
-entries onto the new keys. Every cache digests included files; the web cache
-also digests executable oracle inputs and stages both through one helper.
+entries onto the new keys. Every cache digests included files and executable
+oracle inputs; the web cache stages both through one helper.
 
 `gate_common.sh` owns the shared plumbing: the OOM prologue, the three
 environment-line strip policies (`strip_env` deletes all four volatile lines,
 `strip_env_lines` keeps `analyzed:` for the triage tools, `norm` blanks to
-placeholders for the sweeps), `flags_for`/`include_shas`/`ckey`, `hs_fingerprint`,
+placeholders for the sweeps), `flags_for`/`include_shas`/`oracle_shas`/`ckey`, `hs_fingerprint`,
 `allowlist_guard` + the gate `filelist`, `rs_stale_check`, `oracle_rev_check`,
 the Haskell-oracle resolver and the maude resolver — `MAUDE_PATH` if set
 (set-but-unusable is a hard fail,
@@ -583,7 +583,7 @@ then upstream behaviour moving under them.
   proving in ≤1.5 s (plus the fastest member of otherwise-absent families);
   sized so a GitHub runner finishes in minutes.
 - **`ci_ref_fast.tsv`** — committed reference for `rs_ref_check.sh`: per file,
-  an input key (theory sha + flags hash) and the sha256 of main's stripped
+  an input key (theory sha + dependency and flags hashes) and the sha256 of main's stripped
   `--prove` stdout. Its header records the maude version `check` enforces and,
   from the next `generate` on, the oracle fingerprint (`# oracle:`) and the
   `--certified-by` log and verdict (`# certified-by:`) that justified the

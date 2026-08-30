@@ -74,9 +74,9 @@ RS_PATH="${RS_PATH:-$repo_root/target/release/tamarin-rs}"
 }
 export RS_PATH HS_PATH HS_CACHE CORPUS_ROOT FLAGS_MAP FILE_TIMEOUT DERIVCHECK_TIMEOUT
 
-# Oracle handshake.  The cache key is sha256(theory)+flags, which cannot see an
-# ORACLE change — a bump that alters pretty output would leave stale entries
-# under unchanged keys, surfacing as false DIFFs rather than cache misses.
+# Oracle handshake. The dependency digest sees theory-side scripts, but only
+# the binary fingerprint sees a rebuilt ORACLE — without it a bump that alters
+# pretty output would leave stale entries under unchanged keys.
 # This used to be a `Git revision:` stamp on the cache dir, which could never
 # fire: setup.sh git-APPLIES patches/ without committing, so every patched
 # build bakes in exactly the submodule pin and the stamp matched an oracle it
@@ -112,7 +112,7 @@ extract_theory() {
 }
 # flags_for / ckey come from gate_common.sh — one key format for this gate,
 # wf_gate.sh (which reads THIS cache) and corpus_file_diff.sh.
-export -f strip_env extract_theory flags_for include_shas ckey
+export -f strip_env extract_theory flags_for include_shas oracle_shas ckey
 
 # --- Phase 0: fill any MISSING no-prove HS reference (fast; warm-cache reused).
 # TWO artifacts per key, from ONE oracle run:

@@ -78,7 +78,7 @@ wf_block() {
 }
 # flags_for / ckey come from gate_common.sh — one key format for this gate,
 # pretty_gate.sh (whose cache this gate READS) and corpus_file_diff.sh.
-export -f strip_env wf_block flags_for include_shas ckey
+export -f strip_env wf_block flags_for include_shas oracle_shas ckey
 
 # --- PHASE 0: fill any MISSING <key>.load.gz with one oracle LOAD.
 # Same artifact and same key pretty_gate.sh PHASE 0 writes, so whichever gate

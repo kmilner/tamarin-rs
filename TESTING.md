@@ -422,10 +422,11 @@ raising it.
 
 **Cache keys carry the oracle.** `.hs_file_cache/` and `.hs_pretty_cache/`
 entries are named
-`<sha256(theory)>[__i<12 hex sha256(include shas)>][__f<12 hex sha256(flags)>]__b<12 hex sha256(HS_FP)>.<suffix>`
+`<sha256(theory)>[__i<12 hex sha256(include shas)>][__o<12 hex sha256(oracle scripts)>][__f<12 hex sha256(flags)>]__b<12 hex sha256(HS_FP)>.<suffix>`
 — the `__i` component (present only on `#include`-carrying theories) digests
-every included file, transitively — where `HS_FP` is `stat -c '%s.%Y'` of the
-oracle binary — `gate_common.sh`'s
+every included file, transitively, and `__o` (present only when relevant files
+exist) digests executable-oracle contents and modes — where `HS_FP` is
+`stat -c '%s.%Y'` of the oracle binary — `gate_common.sh`'s
 `hs_fingerprint`, the one definition every cached gate sources. A rebuilt
 oracle, whether a bump or a
 `patches/tamarin-prover-fixes.patch` edit re-applied by `./setup.sh testing`,
@@ -449,8 +450,8 @@ fingerprinted key, `triage_diff_vs_hs.sh` included, so nothing writes entries
 the migration would have to chase.
 
 The `.hs_canon_cache/`, web, gate and sweep caches, plus `rs_ref_check.sh`
-references, all digest included files transitively. The web cache also digests
-and stages executable oracle inputs.
+references, all digest included files transitively and executable oracle
+inputs. The web cache additionally stages both dependency classes.
 
 ## Fast gates (run on every build)
 

@@ -98,18 +98,78 @@ include_shas() {
     done < <(grep -oE '#include[[:space:]]*"[^"]+"' "$f" 2>/dev/null \
              | sed 's/.*"\(.*\)"/\1/')
 }
+# oracle_shas <theory> [flags]
+#   Content + mode of every executable-oracle input that can affect this
+#   invocation: theory-adjacent/CWD `oracle*` files, quoted heuristic paths,
+#   the exact upstream default-oracle candidate, and CLI `--oraclename`.
+#   Some entries are conservative extras; over-invalidation is preferable to
+#   serving a proof produced by an older oracle script.
+oracle_shas() {
+    local theory=$1 flags=${2:-} theory_dir run_dir farg p q word next prefix group
+    theory_dir=$(dirname "$theory")
+    run_dir=$PWD
+    farg=$theory
+    if [[ " $flags " == *" @cd "* || "$flags" == "@cd" ]]; then
+        run_dir=$theory_dir
+        farg=$(basename "$theory")
+    fi
+    {
+        for p in "$theory_dir"/oracle* "$run_dir"/oracle*; do
+            [ -f "$p" ] || continue
+            printf '%s %s scan:%s\n' "$(sha256sum "$p" | cut -d' ' -f1)" \
+                "$(stat -c '%a' "$p")" "${p##*/}"
+        done
+
+        # HS defaultOracleNames: prefix before the first dot, then the final
+        # slash group INCLUDING its slash. Probe it from the invocation CWD.
+        prefix=${farg%%.*}
+        if [[ "$prefix" == */* ]]; then group="/${prefix##*/}"; else group=$prefix; fi
+        p="${group}.oracle"
+        [[ "$p" == /* ]] || p="$run_dir/$p"
+        if [ -f "$p" ]; then
+            printf '%s %s default:%s\n' "$(sha256sum "$p" | cut -d' ' -f1)" \
+                "$(stat -c '%a' "$p")" "$group.oracle"
+        fi
+
+        while IFS= read -r q; do
+            [ -n "$q" ] || continue
+            if [[ "$q" == /* ]]; then p=$q; else p="$theory_dir/$q"; fi
+            [ -f "$p" ] || continue
+            printf '%s %s quoted:%s\n' "$(sha256sum "$p" | cut -d' ' -f1)" \
+                "$(stat -c '%a' "$p")" "$q"
+        done < <(grep -E 'heuristic' "$theory" 2>/dev/null | grep -oE '"[^"]+"' | tr -d '"' | sort -u)
+
+        next=0
+        for word in $flags; do
+            q=
+            case "$word" in
+                --oraclename=*) q=${word#--oraclename=} ;;
+                --oraclename) next=1; continue ;;
+                *) if [ "$next" = 1 ]; then q=$word; next=0; fi ;;
+            esac
+            [ -n "$q" ] || continue
+            if [[ "$q" == /* ]]; then p=$q; else p="$run_dir/$q"; fi
+            [ -f "$p" ] || continue
+            printf '%s %s cli:%s\n' "$(sha256sum "$p" | cut -d' ' -f1)" \
+                "$(stat -c '%a' "$p")" "$q"
+        done
+    } | sort -u
+}
 # ckey <relpath> <abs-file> — the gate cache key. Uses $HS_FP_SALT (set by
-#   hs_fingerprint), include_shas and flags_for, so an entry whose included
-#   fragments changed, a flagged entry and an entry produced by a different
-#   oracle are all a MISS, never a stale hit. KEY FORMAT (shared by
+#   hs_fingerprint), include_shas, oracle_shas and flags_for, so an entry whose
+#   included fragments or oracle scripts changed, a flagged entry and an entry
+#   produced by a different oracle binary are all a MISS. KEY FORMAT (shared by
 #   corpus_file_diff.sh, wf_gate.sh, pretty_gate.sh, triage_diff_vs_hs.sh,
 #   and scripts/migrate_hs_cache_fp.sh which rekeyed older entries onto it):
 #     <sha256(theory)>[__i<12 hex of sha256(include shas)>]
+#                     [__o<12 hex of sha256(oracle shas)>]
 #                     [__f<12 hex of sha256(flags)>]__b<12 hex of sha256(HS_FP)>
 ckey() {
-    local h fl inc; h=$(sha256sum "$2" | cut -d' ' -f1); fl=$(flags_for "$1")
+    local h fl inc ora; h=$(sha256sum "$2" | cut -d' ' -f1); fl=$(flags_for "$1")
     inc=$(include_shas "$2")
+    ora=$(oracle_shas "$2" "$fl")
     if [ -n "$inc" ]; then h="${h}__i$(printf '%s' "$inc" | sha256sum | cut -c1-12)"; fi
+    if [ -n "$ora" ]; then h="${h}__o$(printf '%s' "$ora" | sha256sum | cut -c1-12)"; fi
     if [ -n "$fl" ]; then h="${h}__f$(printf '%s' "$fl" | sha256sum | cut -c1-12)"; fi
     printf '%s__b%s' "$h" "$HS_FP_SALT"
 }

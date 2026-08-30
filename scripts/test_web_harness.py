@@ -30,6 +30,56 @@ class DiffArtifactNames(unittest.TestCase):
 
 
 class CacheProfiles(unittest.TestCase):
+    def test_nonweb_cache_keys_include_oracle_scripts(self):
+        with tempfile.TemporaryDirectory() as td:
+            env = os.environ.copy()
+            env["HARNESS_TMP"] = td
+            subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    r'''
+set -e
+. scripts/gate_common.sh
+. scripts/proof_diff_common.sh
+t=$HARNESS_TMP
+mkdir -p "$t/corpus"
+printf '%s\n' 'theory T begin' 'heuristic: o' 'end' > "$t/corpus/t.spthy"
+printf '%s\n' 't.spthy	@cd' > "$t/flags.tsv"
+printf '%s\n' '#!/bin/sh' 'echo first' > "$t/corpus/t.oracle"
+chmod +x "$t/corpus/t.oracle"
+FLAGS_MAP="$t/flags.tsv"
+HS_FP_SALT=fingerprint
+
+k1=$(ckey t.spthy "$t/corpus/t.spthy")
+p1=$(proof_cache_key "$t/corpus/t.spthy" lemma @cd)
+printf '%s\n' '#!/bin/sh' 'echo second' > "$t/corpus/t.oracle"
+k2=$(ckey t.spthy "$t/corpus/t.spthy")
+p2=$(proof_cache_key "$t/corpus/t.spthy" lemma @cd)
+test "$k1" != "$k2"
+test "$p1" != "$p2"
+
+printf '%s\n' 'theory Q begin' 'heuristic: o "rank.sh"' 'end' > "$t/corpus/q.spthy"
+printf '%s\n' '#!/bin/sh' 'echo first' > "$t/corpus/rank.sh"
+q1=$(ckey q.spthy "$t/corpus/q.spthy")
+printf '%s\n' '#!/bin/sh' 'echo second' > "$t/corpus/rank.sh"
+q2=$(ckey q.spthy "$t/corpus/q.spthy")
+test "$q1" != "$q2"
+
+printf '%s\n' '#!/bin/sh' 'echo first' > "$t/custom-ranker"
+c1=$(proof_cache_key "$t/corpus/q.spthy" lemma "--oraclename=$t/custom-ranker")
+printf '%s\n' '#!/bin/sh' 'echo second' > "$t/custom-ranker"
+c2=$(proof_cache_key "$t/corpus/q.spthy" lemma "--oraclename=$t/custom-ranker")
+test "$c1" != "$c2"
+''',
+                ],
+                cwd=HERE.parent,
+                env=env,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+
     def test_profiles_keys_and_legacy_adoption(self):
         with tempfile.TemporaryDirectory() as td:
             root = pathlib.Path(td)

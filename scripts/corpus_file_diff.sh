@@ -14,7 +14,7 @@
 #
 # Two strictly-sequential phases so HS and RS never contend:
 #   Phase 1 (HS): run HS on every allowlisted file, cache stripped stdout by
-#                 ckey (theory sha + flags + ORACLE-BINARY FINGERPRINT) under
+#                 ckey (theory + dependency shas + flags + ORACLE-BINARY FINGERPRINT) under
 #                 .hs_file_cache/.  JOBS concurrent, -N$HS_N cores each.
 #                 Timeout → cap-aware .timeout marker; empty/no output (diff theory /
 #                 include fragment / error) → .nohs; the oracle's exit status
@@ -93,7 +93,7 @@ export -f strip_env
 # the flag list before invocation; still salts the cache key.
 FLAGS_MAP="${FLAGS_MAP:-$script_dir/file_flags.tsv}"
 export FLAGS_MAP
-export -f flags_for include_shas ckey
+export -f flags_for include_shas oracle_shas ckey
 
 # --- file list (allowlist) ---
 # gate_common's filelist: explicit ALLOWLIST env > committed canonical corpus

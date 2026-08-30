@@ -18,10 +18,12 @@ proof_now_ms() {
 # proof_cache_key <theory> <lemma> [flags]
 #   The extension-free key shared by all three .hs_canon_cache users.
 proof_cache_key() {
-    local theory=$1 lemma=$2 flags=${3:-} h inc flag_salt=
+    local theory=$1 lemma=$2 flags=${3:-} h inc ora flag_salt=
     h=$(sha256sum "$theory" 2>/dev/null | cut -d' ' -f1)
     inc=$(include_shas "$theory")
+    ora=$(oracle_shas "$theory" "$flags")
     if [ -n "$inc" ]; then h="${h}__i$(printf '%s' "$inc" | sha256sum | cut -c1-12)"; fi
+    if [ -n "$ora" ]; then h="${h}__o$(printf '%s' "$ora" | sha256sum | cut -c1-12)"; fi
     if [ -n "$flags" ]; then
         flag_salt="__f$(printf '%s' "$flags" | sha256sum | cut -c1-12)"
     fi
