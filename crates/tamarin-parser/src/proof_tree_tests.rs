@@ -48,6 +48,14 @@ fn malformed_diff_proof_is_rejected() {
 }
 
 #[test]
+fn zero_case_blocks_are_accepted() {
+    let tree = parse_proof_tree("simplify qed", &bare_parser()).expect("ordinary zero-case block");
+    assert_eq!(tree.method, ParsedMethod::Simplify);
+    assert!(tree.cases.is_empty());
+    validate_diff_proof_tree("rule-equivalence qed", &bare_parser()).expect("diff zero-case block");
+}
+
+#[test]
 fn induction_with_case_block() {
     let src = "
             induction

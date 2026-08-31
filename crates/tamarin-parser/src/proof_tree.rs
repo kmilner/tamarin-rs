@@ -131,20 +131,21 @@ impl<'a> TreeParser<'a> {
         let m = self.proof_method()?;
         // HS: `cases <- (sepBy oneCase "next" <* "qed") <|>
         //               ((return . (,) "") <$> proofSkeleton)`
-        // (Theory/Text/Parser/Proof.hs:111-112).  `oneCase` starts with
-        // `case <ident>`, so a `case` token here means the case-block
-        // branch.  Otherwise HS
+        // (Theory/Text/Parser/Proof.hs:111-112). `oneCase` starts with
+        // `case <ident>`, while `sepBy` also accepts zero cases followed
+        // immediately by `qed`. Otherwise HS
         // *requires* a recursive `proofSkeleton` (the inline single-child
         // subproof, named ""); there is NO childless-leaf branch — an
         // interProof method must be followed by a child.
         self.lx.skip_ws();
-        if self.peek_kw("case") {
+        if self.peek_kw("case") || self.peek_kw("qed") {
             let mut cases: Vec<(String, ParsedProofTree)> = Vec::new();
             // HS: sepBy oneCase "next" <* "qed"
-            // First case (mandatory at least one):
-            cases.push(self.one_case()?);
-            while self.try_kw("next") {
+            if self.peek_kw("case") {
                 cases.push(self.one_case()?);
+                while self.try_kw("next") {
+                    cases.push(self.one_case()?);
+                }
             }
             self.require_kw("qed")?;
             return Ok(ParsedProofTree { method: m, cases });
@@ -230,10 +231,12 @@ impl<'a> TreeParser<'a> {
         }
         self.diff_proof_method()?;
         self.lx.skip_ws();
-        if self.peek_kw("case") {
-            self.diff_one_case()?;
-            while self.try_kw("next") {
+        if self.peek_kw("case") || self.peek_kw("qed") {
+            if self.peek_kw("case") {
                 self.diff_one_case()?;
+                while self.try_kw("next") {
+                    self.diff_one_case()?;
+                }
             }
             return self.require_kw("qed");
         }
