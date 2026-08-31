@@ -9,9 +9,8 @@
 //! Diff lemmas are tallied in their own row and asserted on nowhere: a
 //! diff proof is written in the `rule-equivalence` / `backward-search` /
 //! `step( ... )` grammar, which `parse_proof_tree` does not accept, so
-//! every such skeleton is `tree: None` and none of the `solve(...)` text
-//! inside one becomes a `GoalSpec`.  The diff skeletons that do carry a
-//! tree are the bare `by sorry` ones.
+//! every such skeleton is validated separately and stored with `tree: None`,
+//! so none of the `solve(...)` text inside one becomes a `GoalSpec`.
 //!
 //! A `tree_none` of zero over the regular lemmas is what makes the strict
 //! grammar safe: every stored step is a method `proof_method` reads and

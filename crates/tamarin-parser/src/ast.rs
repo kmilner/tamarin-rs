@@ -252,8 +252,9 @@ pub struct CaseTest {
 pub struct ProofSkeleton {
     /// Raw source text of the proof skeleton.
     pub raw: String,
-    /// Structured parse of `raw`. Always `Some` for parser-produced theories;
-    /// optional only for compatibility with programmatically built ASTs.
+    /// Structured regular-proof parse of `raw`. Always `Some` for a regular
+    /// lemma parsed from source; diff lemmas keep this as `None` because their
+    /// separately validated methods are not executable by regular replay.
     pub tree: Option<ParsedProofTree>,
 }
 

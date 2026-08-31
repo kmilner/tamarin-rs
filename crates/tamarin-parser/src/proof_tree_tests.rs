@@ -23,6 +23,31 @@ fn leaf_forms() {
 }
 
 #[test]
+fn diff_proof_uses_its_own_methods() {
+    let src = "
+        rule-equivalence
+        case Rule
+        backward-search
+        case LHS
+        step( simplify )
+        by step( solve( !KU(x) @ #i ) )
+        qed
+        next
+        case RHS
+        MIRRORED
+        qed
+    ";
+    validate_diff_proof_tree(src, &bare_parser()).expect("parse diff proof");
+    assert!(parse_proof_tree(src, &bare_parser()).is_err());
+}
+
+#[test]
+fn malformed_diff_proof_is_rejected() {
+    assert!(validate_diff_proof_tree("rule-equivalence", &bare_parser()).is_err());
+    assert!(validate_diff_proof_tree("by step( SOLVED )", &bare_parser()).is_err());
+}
+
+#[test]
 fn induction_with_case_block() {
     let src = "
             induction
@@ -64,8 +89,8 @@ fn bare_inter_method_without_child_is_err() {
     // or a recursive `proofSkeleton`.  A bare `simplify` with nothing
     // after it is a parse error in the v1.13.0 prover ("unexpected ...,
     // expecting case/qed/SOLVED/by/sorry/simplify/solve/...").  We must
-    // mirror that failure (the caller downgrades `Err` to `tree: None`
-    // and replays via the auto-prover), so it must NOT parse to a leaf.
+    // mirror that failure (the containing theory parse rejects it), so it
+    // must NOT parse to a leaf.
     assert!(parse_proof_tree("simplify", &bare_parser()).is_err());
     assert!(parse_proof_tree("induction", &bare_parser()).is_err());
     // A method followed by an inline sub-proof DOES parse (the inline

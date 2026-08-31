@@ -3,6 +3,26 @@
 //   scripts/gen_license_headers.py --authors <this file>
 
 use super::*;
+
+#[test]
+fn diff_theory_validates_but_does_not_lower_diff_proofs() {
+    let src = "theory D begin
+        diffLemma observational_equivalence:
+        rule-equivalence
+        case Rule
+        by sorry
+        qed
+        end";
+    let parsed = parse_diff_theory(src, &[]).expect("parse diff theory");
+    assert!(parsed.is_diff);
+    let TheoryItem::DiffLemma(lemma) = &parsed.items[0] else {
+        panic!("expected diff lemma");
+    };
+    let proof = lemma.proof.as_ref().expect("stored diff proof");
+    assert!(proof.tree.is_none());
+
+    assert!(parse_diff_theory("theory D begin diffLemma E: rule-equivalence end", &[]).is_err());
+}
 use tamarin_term::maude_sig::pair_maude_sig;
 
 /// [`parse_formula_str`] against the signature HS `parseString` installs

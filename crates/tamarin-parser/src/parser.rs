@@ -25,7 +25,7 @@ use tamarin_term::maude_sig::{
 
 use crate::ast::*;
 use crate::lexer::{is_ident_char, is_reserved_name, Lexer, Pos};
-use crate::proof_tree::parse_proof_tree;
+use crate::proof_tree::{parse_proof_tree, validate_diff_proof_tree};
 
 // =============================================================================
 // Errors
@@ -467,6 +467,15 @@ pub fn parse_theory(input: &str, flags: &[&str]) -> Result<Theory, ParseError> {
     Ok(thy)
 }
 
+/// Parse a diff theory, enabling both the `diff(a, b)` term and the diff-only
+/// top-level namespaces. This is the syntax-level counterpart of HS
+/// `parseOpenDiffTheoryString` (`Theory/Text/Parser.hs:84-86`).
+pub fn parse_diff_theory(input: &str, flags: &[&str]) -> Result<Theory, ParseError> {
+    let mut p = Parser::new(input, flags, true);
+    let thy = p.theory()?;
+    Ok(thy)
+}
+
 /// Like [`parse_theory`], but threads the **including file's directory** so that
 /// `#include "file"` directives resolve relative to it.
 ///
@@ -482,6 +491,18 @@ pub fn parse_theory_with_base(
     base_dir: Option<PathBuf>,
 ) -> Result<Theory, ParseError> {
     let mut p = Parser::new(input, flags, false);
+    p.base_dir = base_dir;
+    let thy = p.theory()?;
+    Ok(thy)
+}
+
+/// Like [`parse_diff_theory`], but resolves includes relative to `base_dir`.
+pub fn parse_diff_theory_with_base(
+    input: &str,
+    flags: &[&str],
+    base_dir: Option<PathBuf>,
+) -> Result<Theory, ParseError> {
+    let mut p = Parser::new(input, flags, true);
     p.base_dir = base_dir;
     let thy = p.theory()?;
     Ok(thy)
@@ -4322,7 +4343,7 @@ impl<'a> Parser<'a> {
         let name = self.ident()?;
         let attributes = self.lemma_attributes()?;
         self.require_punct(":")?;
-        let proof = self.try_proof_skeleton()?;
+        let proof = self.try_diff_proof_skeleton()?;
         Ok(TheoryItem::DiffLemma(DiffLemma {
             name,
             attributes,
@@ -4430,20 +4451,13 @@ impl<'a> Parser<'a> {
         self.skip_ws();
         let save = self.save();
         // First-token set that can START a stored proof skeleton, matching HS.
-        // This gate is shared by `lemma_item` (regular proofs) and
-        // `diff_lemma_item` (diff proofs), so it is the union of both:
+        // This gate is for `lemma_item`'s regular proof grammar:
         //   - regular `proofMethod` (Theory/Text/Parser/Proof.hs:77-85): sorry,
         //     simplify, solve,
         //     contradiction, induction, INVALIDATED, UNFINISHABLE
         //   - regular skeleton extras (Theory/Text/Parser/Proof.hs:99-115):
         //     `by` (finalProof),
         //     `SOLVED` (solvedProof)
-        //   - diff `diffProofMethod` (Theory/Text/Parser/Proof.hs:119-126):
-        //     sorry, rule-equivalence,
-        //     backward-search, step, ATTACK, UNFINISHABLEdiff
-        //   - diff skeleton extras (Theory/Text/Parser/Proof.hs:130-144):
-        //     `by` (finalProof),
-        //     `MIRRORED` (solvedProof)
         // `case`/`next`/`qed` are intentionally absent: they only appear INSIDE
         // an interProof block, never as a proof body's first token. `rule` is
         // excluded (a bare `rule:` is a rule declaration; only the hyphenated
@@ -4460,14 +4474,6 @@ impl<'a> Parser<'a> {
             // regular skeleton extras
             "by",
             "SOLVED",
-            // diff proofMethod
-            "rule-equivalence",
-            "backward-search",
-            "step",
-            "ATTACK",
-            "UNFINISHABLEdiff",
-            // diff skeleton extras
-            "MIRRORED",
         ];
         // Check for hyphenated proof identifiers.
         let probe = self.peek_hyphen_identifier();
@@ -4509,6 +4515,49 @@ impl<'a> Parser<'a> {
             raw,
             tree: Some(tree),
         }))
+    }
+
+    /// Capture and validate HS's separate diff-proof grammar. The regular
+    /// replay AST has no diff methods, so a valid diff proof intentionally
+    /// retains only its raw text.
+    fn try_diff_proof_skeleton(&mut self) -> Result<Option<ProofSkeleton>, ParseError> {
+        self.skip_ws();
+        let save = self.save();
+        let starters = [
+            "sorry",
+            "rule-equivalence",
+            "backward-search",
+            "step",
+            "ATTACK",
+            "UNFINISHABLEdiff",
+            "by",
+            "MIRRORED",
+        ];
+        let starts = self
+            .peek_hyphen_identifier()
+            .is_some_and(|id| starters.contains(&id.as_str()));
+        if !starts {
+            self.restore(save);
+            return Ok(None);
+        }
+        let proof_start = self.lx.pos();
+        let raw = self.read_until_next_top_level();
+        validate_diff_proof_tree(&raw, self).map_err(|e| {
+            let rel_offset = offset_at_line_col(&raw, e.line, e.col);
+            ParseError::at(
+                Pos {
+                    offset: proof_start.offset + rel_offset,
+                    line: proof_start.line + e.line - 1,
+                    col: if e.line == 1 {
+                        proof_start.col + e.col - 1
+                    } else {
+                        e.col
+                    },
+                },
+                vec![Message::Message(e.msg)],
+            )
+        })?;
+        Ok(Some(ProofSkeleton { raw, tree: None }))
     }
 
     /// Peek a possibly-hyphenated identifier without consuming.

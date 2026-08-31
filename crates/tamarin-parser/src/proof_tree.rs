@@ -74,6 +74,26 @@ pub fn parse_proof_tree<'a>(
     Ok(tree)
 }
 
+/// Validate a stored diff-proof skeleton against HS `diffProofSkeleton`
+/// (`Theory/Text/Parser/Proof.hs:128-144`). Diff proofs have their own method
+/// type and are not executable by the regular Rust replay engine, so callers
+/// retain their raw text rather than manufacturing a [`ParsedProofTree`].
+pub(crate) fn validate_diff_proof_tree<'a>(
+    raw: &'a str,
+    parent: &'a Parser<'a>,
+) -> Result<(), ProofTreeParseError> {
+    let mut p = TreeParser {
+        lx: Lexer::new(raw),
+        parent,
+    };
+    p.diff_proof_skeleton()?;
+    p.lx.skip_ws();
+    if !p.lx.is_eof() {
+        return Err(p.err("unexpected trailing proof text"));
+    }
+    Ok(())
+}
+
 struct TreeParser<'a> {
     lx: Lexer<'a>,
     parent: &'a Parser<'a>,
@@ -197,6 +217,58 @@ impl<'a> TreeParser<'a> {
         // HS `proofMethod` (Theory/Text/Parser/Proof.hs:75-85) has no
         // catch-all alternative, so any other token fails the skeleton parse.
         Err(self.err("expected proof method"))
+    }
+
+    /// HS `diffProofSkeleton` (Theory/Text/Parser/Proof.hs:128-144).
+    fn diff_proof_skeleton(&mut self) -> Result<(), ProofTreeParseError> {
+        self.lx.skip_ws();
+        if self.try_kw("MIRRORED") {
+            return Ok(());
+        }
+        if self.try_kw("by") {
+            return self.diff_proof_method();
+        }
+        self.diff_proof_method()?;
+        self.lx.skip_ws();
+        if self.peek_kw("case") {
+            self.diff_one_case()?;
+            while self.try_kw("next") {
+                self.diff_one_case()?;
+            }
+            return self.require_kw("qed");
+        }
+        self.diff_proof_skeleton()
+    }
+
+    fn diff_one_case(&mut self) -> Result<(), ProofTreeParseError> {
+        self.require_kw("case")?;
+        self.identifier_extended()?;
+        self.diff_proof_skeleton()
+    }
+
+    /// HS `diffProofMethod` (Theory/Text/Parser/Proof.hs:118-126). A `step`
+    /// wraps one ordinary proof method, not an ordinary proof skeleton.
+    fn diff_proof_method(&mut self) -> Result<(), ProofTreeParseError> {
+        self.lx.skip_ws();
+        if self.try_kw("sorry")
+            || self.try_kw("rule-equivalence")
+            || self.try_kw("backward-search")
+            || self.try_kw("ATTACK")
+            || self.try_kw("UNFINISHABLEdiff")
+        {
+            return Ok(());
+        }
+        if self.try_kw("step") {
+            if !self.lx.try_symbol("(") {
+                return Err(self.err("expected `(`"));
+            }
+            self.proof_method()?;
+            if !self.lx.try_symbol(")") {
+                return Err(self.err("expected `)`"));
+            }
+            return Ok(());
+        }
+        Err(self.err("expected diff proof method"))
     }
 
     // -------- helpers --------

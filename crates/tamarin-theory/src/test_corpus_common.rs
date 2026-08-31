@@ -96,12 +96,11 @@ fn uses_diff_operator(src: &str) -> bool {
 }
 
 fn parse_source(src: &str, base: Option<PathBuf>) -> Option<p::Theory> {
-    let flags = if uses_diff_operator(src) {
-        &["diff"][..]
+    if uses_diff_operator(src) {
+        tamarin_parser::parser::parse_diff_theory_with_base(src, &[], base).ok()
     } else {
-        &[][..]
-    };
-    tamarin_parser::parser::parse_theory_with_base(src, flags, base).ok()
+        tamarin_parser::parser::parse_theory_with_base(src, &[], base).ok()
+    }
 }
 
 /// Read and parse one example file once per test process, resolving includes
@@ -140,7 +139,8 @@ mod tests {
     fn corpus_parser_selects_diff_mode_for_a_diff_operator() {
         let src = "theory D begin\nrule R: [ In(x) ] --> [ Out(diff(x, x)) ]\nend\n";
         assert!(tamarin_parser::parser::parse_theory(src, &[]).is_err());
-        parse_source(src, None).expect("the diff-gate failure selects diff mode");
+        let parsed = parse_source(src, None).expect("the diff operator selects diff mode");
+        assert!(parsed.is_diff);
     }
 
     #[test]
