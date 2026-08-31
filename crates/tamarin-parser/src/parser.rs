@@ -2397,6 +2397,9 @@ impl<'a> Parser<'a> {
             self.skip_ws();
             let allowed = if self.is_diff { "sScC" } else { "sSpPcCiI" };
             if word.chars().count() != 1 || !allowed.contains(&word) {
+                // HS feeds this word to the partial `stringToGoalRanking` and
+                // aborts. Reject the same invalid declaration as a structured
+                // parse error instead of reproducing that runtime crash.
                 return Err(self.err(format!("unknown proof method ranking `{word}`")));
             }
             presort = word.chars().next().expect("validated presort");
@@ -2438,7 +2441,11 @@ impl<'a> Parser<'a> {
             selectors.push(selector);
         }
         if selectors.is_empty() {
-            return Err(self.err("expected at least one tactic selector"));
+            // HS's `many1 disjuncts` has already consumed `prio:` here, so its
+            // first identifier parser supplies the precise reserved-word/EOF
+            // error. Reuse the same parser rather than inventing a diagnostic.
+            self.ident()?;
+            unreachable!("an identifier would have produced a selector")
         }
         Ok(PrioBlock { ranking, selectors })
     }

@@ -500,6 +500,7 @@ fn theory_options_are_limited_to_the_shared_declarable_set() {
          \"translation-state-optimisation\", \"translation-asynchronous-channels\" or \
          \"translation-compress-events\""
     );
+
 }
 
 /// HS `T.identifier` (Token.hs:393-394) rejects the reserved names
@@ -1309,9 +1310,10 @@ fn tactic_blocks_require_a_selector() {
     for block in ["prio:", "deprio: {id}"] {
         let src = format!("theory T begin\ntactic: rank\n{block}\nrule R: [ ] --> [ ]\nend");
         let err = parse_theory(&src, &[]).expect_err("empty tactic block must fail");
-        assert!(err
-            .to_string()
-            .contains("expected at least one tactic selector"));
+        assert_eq!(
+            err.to_string(),
+            "(line 4, column 5):\nunexpected reserved word \"rule\"\nexpecting letter or digit"
+        );
     }
 }
 
