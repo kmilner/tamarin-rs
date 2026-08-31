@@ -784,6 +784,18 @@ fn source_clone_shares_cases_but_owns_its_lazy_cell() {
     assert_eq!(source.cases_len(), 1);
 }
 
+#[test]
+fn source_debug_hides_mutex_internals() {
+    let goal = Goal::Action(nvar(0), LNFact::new(FactTag::Out, vec![mterm(0)]));
+    let lazy = format!("{:?}", Source::lazy(goal.clone()));
+    assert!(lazy.contains("cases: \"<lazy>\""), "{lazy}");
+    assert!(!lazy.contains("Mutex"), "{lazy}");
+
+    let eager = format!("{:?}", Source::eager(goal, Vec::new()));
+    assert!(eager.contains("cases: []"), "{eager}");
+    assert!(!eager.contains("Mutex"), "{eager}");
+}
+
 /// `norm_sys_for_compare`'s rename is HS `renameDropNamehint`
 /// (LTerm.hs:738-740), a `mapFrees (Arbitrary _)`; that variant rebuilds an
 /// application through `fApp` (LTerm.hs:788-791), so renaming a free leaf

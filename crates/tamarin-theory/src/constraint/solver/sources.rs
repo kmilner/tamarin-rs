@@ -303,10 +303,19 @@ pub struct Source {
 
 impl std::fmt::Debug for Source {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Source")
-            .field("goal", &self.goal)
-            .field("cases", &self.cases_cell.lock().ok().as_deref())
-            .finish()
+        let mut out = f.debug_struct("Source");
+        out.field("goal", &self.goal);
+        match self.cases_cell.lock() {
+            Err(_) => out.field("cases", &"<poisoned>"),
+            Ok(cases) => match cases.as_ref() {
+                None => out.field("cases", &"<lazy>"),
+                Some(cases) => match cases.lock() {
+                    Ok(cases) => out.field("cases", &*cases),
+                    Err(_) => out.field("cases", &"<poisoned>"),
+                },
+            },
+        };
+        out.finish()
     }
 }
 
