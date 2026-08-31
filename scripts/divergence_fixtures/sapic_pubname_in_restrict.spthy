@@ -1,0 +1,26 @@
+// A public name that only an embedded `_restrict` formula mentions.
+//
+// The capitalization check harvests every public name of a translated rule
+// with `universeBi ru` (Wellformedness.hs:463-483#publicNamesReport'), a
+// whole-value traversal, so it reaches the source subprocess the rule carries
+// in its `ruleProcess` attribute (Sapic/Facts.hs:376-388#toRule) and with it
+// the `_restrict` formula's terms.  `'Foo'` therefore clashes with the
+// `'foo'` of the `out`, and the report names them:
+// `1. rule "Init":  name 'Foo', 'foo'`.
+//
+// Compared slice: the wf report block.  The `theory … end` echo agrees on
+// both engines — the report is the only place the harvest is visible — so
+// this row pins that block alone.  No process under tamarin-prover/examples
+// carries an embedded `_restrict`, so no gate row reaches this reach.
+
+theory SapicPubnameInRestrict
+begin
+
+predicates: P(a) <=> a = a
+
+process:
+  in(x);
+  [ ] --[ Ev(x), _restrict( P('Foo') ) ]-> [ ];
+  out(<'foo', x>)
+
+end

@@ -67,7 +67,7 @@ const EXPECTED_EXISTENTIAL: &str = r#"restriction Existential:
 fn safety_formula_comment_matches_oracle() {
     let parsed = parse_theory(THEORY, &[]).expect("theory parses");
     let elaborated = elaborate(&parsed).expect("theory elaborates");
-    let rendered = web_restrictions(&parsed, &elaborated);
+    let rendered = web_restrictions(&elaborated);
     assert_eq!(rendered.len(), 3, "three restrictions rendered");
     assert_eq!(rendered[0], EXPECTED_CLOSED);
     assert_eq!(rendered[1], EXPECTED_FREE_VAR);

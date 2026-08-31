@@ -6,16 +6,18 @@
 //! graph-constraint primitives (`Edge`, `LessAtom`), goal types
 //! (`Goal`), and small helpers.
 //!
-//! These types do not carry generic `Apply LNSubst` / `HasFrees`
-//! instances. The substitution layer is ported (`apply_vterm` in
-//! `tamarin_term::subst`, the `HasFrees` trait in
-//! `tamarin_term::lterm`); the solver applies substitutions to these
-//! constraints directly in `constraint::solver::reduction`
-//! (`subst_system` / `subst_system_once`, mirroring Haskell's
-//! `substSystem`).
+//! `Edge`, `LessAtom`, `Disj` and `Goal` carry the `HasFrees` instances
+//! Haskell declares for them; the trait itself lives in
+//! `tamarin_term::lterm`.  None of them carries a generic `Apply LNSubst`
+//! instance: the solver applies substitutions to these constraints directly
+//! in `constraint::solver::reduction` (`subst_system` / `subst_system_once`,
+//! mirroring Haskell's `substSystem`).
 
-use tamarin_term::lterm::{LNTerm, LVar};
+use tamarin_term::apply::Apply;
+use tamarin_term::lterm::{HasFrees, LNTerm, LVar};
+use tamarin_utils::cow::cow_pair;
 
+use crate::apply::SystemSubst;
 use crate::fact::LNFact;
 use crate::guarded::Guarded;
 use crate::rule::{ConcIdx, PremIdx};
@@ -40,6 +42,39 @@ pub type NodeConc = (NodeId, ConcIdx);
 pub struct Edge {
     pub src: NodeConc,
     pub tgt: NodePrem,
+}
+
+/// HS `Apply LNSubst Edge` (Constraints.hs:107-108): both ends through the
+/// pair instance (SubstVFree.hs:316-317), which reaches the node id and
+/// leaves the conclusion / premise index alone.
+impl Apply<SystemSubst<'_>> for Edge {
+    fn apply_changed(&self, subst: &SystemSubst<'_>) -> Option<Self> {
+        cow_pair(
+            &self.src,
+            self.src.apply_changed(subst),
+            &self.tgt,
+            self.tgt.apply_changed(subst),
+        )
+        .map(|(src, tgt)| Edge { src, tgt })
+    }
+}
+
+/// `instance HasFrees Edge` (Constraints.hs:110-115): the source conclusion
+/// before the target premise.  Only the node id of each end is a variable —
+/// the conclusion and premise indices are `Int`s, whose instance contributes
+/// nothing to the fold and maps to itself (LTerm.hs:820-823).
+impl HasFrees for Edge {
+    fn for_each_free(&self, f: &mut dyn FnMut(&LVar)) {
+        self.src.0.for_each_free(f);
+        self.tgt.0.for_each_free(f);
+    }
+
+    fn map_free_with(self, f: &mut dyn FnMut(LVar) -> LVar, monotone: bool) -> Self {
+        Edge {
+            src: (self.src.0.map_free_with(f, monotone), self.src.1),
+            tgt: (self.tgt.0.map_free_with(f, monotone), self.tgt.1),
+        }
+    }
 }
 
 /// Why two nodes are ordered. Used to attribute `LessAtom`s to their
@@ -71,7 +106,9 @@ impl std::fmt::Display for Reason {
 /// `i < j` ordering atom on node ids, with a reason tag.
 ///
 /// Equality and ordering ignore the reason tag — two atoms are "the
-/// same" iff they constrain the same pair, mirroring Haskell.
+/// same" iff they constrain the same pair.  HS hand-writes both instances
+/// over `(smaller, larger)` for that reason (Constraints.hs:126-130); a
+/// derive over the three fields would rank atoms by their reason.
 #[derive(Debug, Clone)]
 pub struct LessAtom {
     pub smaller: NodeId,
@@ -86,10 +123,6 @@ impl LessAtom {
             larger,
             reason,
         }
-    }
-
-    pub fn to_edge(&self) -> (NodeId, NodeId) {
-        (self.smaller, self.larger)
     }
 }
 
@@ -110,11 +143,40 @@ impl PartialOrd for LessAtom {
     }
 }
 
-/// Project the relation: just the `(smaller, larger)` pairs.
-/// Reachable only from its own unit test in production; kept as a mirror
-/// of the HS `getLessRel`-style projection (`to_edge` likewise).
-pub fn get_less_rel(atoms: &[LessAtom]) -> Vec<(NodeId, NodeId)> {
-    atoms.iter().map(|a| a.to_edge()).collect()
+/// `instance HasFrees LessAtom` (Constraints.hs:145-150): the smaller node id
+/// then the larger one.  The reason tag holds no variable and is carried over
+/// by `pure`.
+/// HS `Apply LNSubst LessAtom` (Constraints.hs:142-143): both endpoints,
+/// with the reason tag carried over.
+impl Apply<SystemSubst<'_>> for LessAtom {
+    fn apply_changed(&self, subst: &SystemSubst<'_>) -> Option<Self> {
+        cow_pair(
+            &self.smaller,
+            self.smaller.apply_changed(subst),
+            &self.larger,
+            self.larger.apply_changed(subst),
+        )
+        .map(|(smaller, larger)| LessAtom {
+            smaller,
+            larger,
+            reason: self.reason,
+        })
+    }
+}
+
+impl HasFrees for LessAtom {
+    fn for_each_free(&self, f: &mut dyn FnMut(&LVar)) {
+        self.smaller.for_each_free(f);
+        self.larger.for_each_free(f);
+    }
+
+    fn map_free_with(self, f: &mut dyn FnMut(LVar) -> LVar, monotone: bool) -> Self {
+        LessAtom {
+            smaller: self.smaller.map_free_with(f, monotone),
+            larger: self.larger.map_free_with(f, monotone),
+            reason: self.reason,
+        }
+    }
 }
 
 // =============================================================================
@@ -139,12 +201,53 @@ impl<T> Disj<T> {
     }
 }
 
+/// `instance HasFrees a => HasFrees (Disj a)` (LTerm.hs:884-889): the
+/// disjuncts in list order, through the `Vec` instance.
+impl<T: HasFrees> HasFrees for Disj<T> {
+    fn for_each_free(&self, f: &mut dyn FnMut(&LVar)) {
+        self.0.for_each_free(f);
+    }
+
+    fn map_free_with(self, f: &mut dyn FnMut(LVar) -> LVar, monotone: bool) -> Self {
+        Disj(self.0.map_free_with(f, monotone))
+    }
+}
+
 // =============================================================================
 // Goals
 // =============================================================================
 
 /// A `Goal` denotes that a constraint reduction rule is applicable.
-#[derive(Debug, Clone, PartialEq)]
+///
+/// The derived `Ord` mirrors HS's derived `Ord Goal` (Constraints.hs:159-172):
+/// constructor rank is declaration order — `ActionG < ChainG < PremiseG <
+/// SplitG < DisjG < SubtermG` — so the variants below MUST stay in HS's
+/// declaration order (every goal sort in the solver routes through this
+/// `Ord`; reordering silently changes the proof shape).  Within a
+/// constructor the payloads compare left to right, each through an `Ord`
+/// that mirrors its HS counterpart:
+///
+/// - `LVar` — manual `Ord` = `(idx, sort, name)` (LTerm.hs:546-548).
+/// - `LNFact` — manual `Ord` = tag then terms, annotations IGNORED, which is
+///   HS's manual `instance Ord (Fact t)` (Model/Fact.hs:173-174), not a derived
+///   one; `FactTag`'s derived `Ord` matches HS's constructor and payload
+///   order (Model/Fact.hs:137-148), as does `Multiplicity`'s
+///   (Model/Fact.hs:133-134).
+/// - `NodeConc` / `NodePrem` — `(LVar, ConcIdx/PremIdx)` tuples; the index
+///   newtypes derive `Ord` over their integer, as HS's do
+///   (Model/Rule.hs:233-238).
+/// - `SplitId` — newtype over an integer, derived both sides
+///   (EquationStore.hs:88-89).
+/// - `LNTerm` — `Lit < App`, then symbol then arguments, mirroring the
+///   derived `Ord (Term a)` / `Ord (Lit c v)` (Raw.hs:73-75, VTerm.hs:56-58).
+/// - `Guarded` — its own derived `Ord` (Guarded.hs:129); HS's `Disj` is a
+///   newtype over a list, so the wrapper compares lexicographically.
+///
+/// HS holds `sGoals` in a `Map Goal GoalStatus`, so any `M.toList` walk of
+/// it is in ascending `Goal` order; this crate's goal store is a `Vec` in
+/// insertion order, so a caller mirroring such a walk sorts by this `Ord`
+/// first.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Goal {
     /// An action that must exist in the trace.
     Action(LVar, LNFact),
@@ -161,131 +264,83 @@ pub enum Goal {
 }
 
 impl Goal {
-    // `is_split`/`is_disj`/`is_subterm`/`is_premise` mirror the HS `Goal`
-    // predicate set (`isSplitGoal`/`isDisjGoal`/`isSubtermGoal`); no caller
-    // yet, kept for parity with the sibling live predicates.
     pub fn is_action(&self) -> bool {
         matches!(self, Goal::Action(_, _))
-    }
-    pub fn is_premise(&self) -> bool {
-        matches!(self, Goal::Premise(_, _))
     }
     pub fn is_chain(&self) -> bool {
         matches!(self, Goal::Chain(_, _))
     }
-    pub fn is_split(&self) -> bool {
-        matches!(self, Goal::Split(_))
-    }
-    pub fn is_disj(&self) -> bool {
-        matches!(self, Goal::Disj(_))
-    }
-    // HS's `isSubtermGoal` (Constraints.hs) erroneously matches `DisjG _`
-    // (a copy-paste of `isDisjGoal`); we match the semantically-correct
-    // `Goal::Subterm`. The divergence is inert (no caller yet).
-    pub fn is_subterm(&self) -> bool {
-        matches!(self, Goal::Subterm(_))
-    }
+}
 
-    /// "Standard" action goals are non-`KU` actions — `KU(_)` is
-    /// special-cased by the solver (intruder-knowledge goals).
-    pub fn is_standard_action(&self) -> bool {
-        if let Goal::Action(_, fa) = self {
-            !matches!(fa.tag, crate::fact::FactTag::Ku)
-        } else {
-            false
+/// `instance HasFrees Goal` (Constraints.hs:210-232): every variant folds and
+/// maps its payloads left to right — the timepoint before the fact of an
+/// `Action`, the node id of a `Premise`'s premise before its fact, the
+/// conclusion's node id before the premise's for a `Chain`, and both sides of
+/// a `Subterm` pair (LTerm.hs:855-860).  A `Premise`/`Chain` index is an
+/// `Int`, so only the node id of such a pair is a variable
+/// (LTerm.hs:820-823).  `Split` carries a `SplitId`, whose instance is `const
+/// mempty` / `pure` (EquationStore.hs:91-94).
+/// HS `Apply LNSubst Goal` (Constraints.hs:234-241).  A `SplitG` carries a
+/// split id, which is not a variable
+/// (Theory/Tools/EquationStore.hs:152-153).  The `DisjG` arm is the pass's
+/// own rewrite of the alternatives, which differs between the two whole-system
+/// passes — see [`SystemSubst`].
+impl Apply<SystemSubst<'_>> for Goal {
+    fn apply_changed(&self, subst: &SystemSubst<'_>) -> Option<Self> {
+        match self {
+            Goal::Action(i, fa) => cow_pair(i, i.apply_changed(subst), fa, fa.apply_changed(subst))
+                .map(|(i, fa)| Goal::Action(i, fa)),
+            Goal::Chain(c, p) => cow_pair(c, c.apply_changed(subst), p, p.apply_changed(subst))
+                .map(|(c, p)| Goal::Chain(c, p)),
+            Goal::Premise(p, fa) => {
+                cow_pair(p, p.apply_changed(subst), fa, fa.apply_changed(subst))
+                    .map(|(p, fa)| Goal::Premise(p, fa))
+            }
+            Goal::Split(_) => None,
+            Goal::Disj(d) => subst.apply_disj(&d.0).map(|alts| Goal::Disj(Disj(alts))),
+            Goal::Subterm(p) => p.apply_changed(subst).map(Goal::Subterm),
         }
     }
 }
 
-/// HS-faithful structural comparison for [`Goal`], mirroring the derived
-/// `Ord Goal` (Constraints.hs:159-172).
-///
-/// Constructor rank is `ActionG < ChainG < PremiseG < SplitG < DisjG <
-/// SubtermG`, which is this enum's declaration order; within a constructor
-/// the payloads compare left to right.  Every payload comparison below
-/// delegates to an `Ord` that already mirrors its HS counterpart:
-///
-/// - `LVar` — manual `Ord` = `(idx, sort, name)` (LTerm.hs:546-548).
-/// - `LNFact` — manual `Ord` = tag then terms, annotations IGNORED, which is
-///   HS's manual `instance Ord (Fact t)` (Model/Fact.hs:173-174), not a derived
-///   one; `FactTag`'s derived `Ord` matches HS's constructor and payload
-///   order (Model/Fact.hs:137-148), as does `Multiplicity`'s
-///   (Model/Fact.hs:133-134).
-/// - `NodeConc` / `NodePrem` — `(LVar, ConcIdx/PremIdx)` tuples; the index
-///   newtypes derive `Ord` over their integer, as HS's do
-///   (Model/Rule.hs:233-238).
-/// - `SplitId` — newtype over an integer, derived both sides
-///   (EquationStore.hs:88-89).
-/// - `LNTerm` — `Lit < App`, then symbol then arguments, mirroring the
-///   derived `Ord (Term a)` / `Ord (Lit c v)` (Raw.hs:73-75, VTerm.hs:56-58).
-///
-/// `Disj` bottoms out in `Guarded`, whose HS-faithful comparison is
-/// [`crate::guarded::cmp_guarded`]; HS's `Disj` is a newtype over a list, so
-/// the wrapper compares lexicographically.
-///
-/// This is a free function rather than an `Ord` impl because `Ord` requires
-/// `Eq`, and `Guarded` carries no `Eq` — the same reason `cmp_guarded` is a
-/// free function.
-///
-/// HS holds `sGoals` in a `Map Goal GoalStatus`, so any `M.toList` walk of it
-/// is in ascending `Goal` order; this crate's goal store is a `Vec` in
-/// insertion order, so a caller mirroring such a walk sorts with this first.
-pub fn cmp_goal(a: &Goal, b: &Goal) -> std::cmp::Ordering {
-    let (ta, tb) = (goal_tag(a), goal_tag(b));
-    if ta != tb {
-        return ta.cmp(&tb);
-    }
-    // Tag equality above guarantees the same variant, so each `let … else`
-    // binding of `b` is infallible.  Match `a` exhaustively (no wildcard) so a
-    // new `Goal` variant forces a comparison here.
-    match a {
-        Goal::Action(i1, f1) => {
-            let Goal::Action(i2, f2) = b else {
-                unreachable!("goal tag matched Action")
-            };
-            i1.cmp(i2).then_with(|| f1.cmp(f2))
-        }
-        Goal::Chain(c1, p1) => {
-            let Goal::Chain(c2, p2) = b else {
-                unreachable!("goal tag matched Chain")
-            };
-            c1.cmp(c2).then_with(|| p1.cmp(p2))
-        }
-        Goal::Premise(p1, f1) => {
-            let Goal::Premise(p2, f2) = b else {
-                unreachable!("goal tag matched Premise")
-            };
-            p1.cmp(p2).then_with(|| f1.cmp(f2))
-        }
-        Goal::Split(s1) => {
-            let Goal::Split(s2) = b else {
-                unreachable!("goal tag matched Split")
-            };
-            s1.cmp(s2)
-        }
-        Goal::Disj(d1) => {
-            let Goal::Disj(d2) = b else {
-                unreachable!("goal tag matched Disj")
-            };
-            crate::guarded::cmp_slice(&d1.0, &d2.0, crate::guarded::cmp_guarded)
-        }
-        Goal::Subterm((s1, t1)) => {
-            let Goal::Subterm((s2, t2)) = b else {
-                unreachable!("goal tag matched Subterm")
-            };
-            s1.cmp(s2).then_with(|| t1.cmp(t2))
+impl HasFrees for Goal {
+    fn for_each_free(&self, f: &mut dyn FnMut(&LVar)) {
+        match self {
+            Goal::Action(i, fa) => {
+                i.for_each_free(f);
+                fa.for_each_free(f);
+            }
+            Goal::Premise(p, fa) => {
+                p.0.for_each_free(f);
+                fa.for_each_free(f);
+            }
+            Goal::Chain(c, p) => {
+                c.0.for_each_free(f);
+                p.0.for_each_free(f);
+            }
+            Goal::Split(_) => {}
+            Goal::Disj(x) => x.for_each_free(f),
+            Goal::Subterm(p) => p.for_each_free(f),
         }
     }
-}
 
-fn goal_tag(g: &Goal) -> u8 {
-    match g {
-        Goal::Action(_, _) => 0,
-        Goal::Chain(_, _) => 1,
-        Goal::Premise(_, _) => 2,
-        Goal::Split(_) => 3,
-        Goal::Disj(_) => 4,
-        Goal::Subterm(_) => 5,
+    fn map_free_with(self, f: &mut dyn FnMut(LVar) -> LVar, monotone: bool) -> Self {
+        match self {
+            Goal::Action(i, fa) => {
+                Goal::Action(i.map_free_with(f, monotone), fa.map_free_with(f, monotone))
+            }
+            Goal::Premise((n, i), fa) => Goal::Premise(
+                (n.map_free_with(f, monotone), i),
+                fa.map_free_with(f, monotone),
+            ),
+            Goal::Chain((cn, ci), (pn, pi)) => Goal::Chain(
+                (cn.map_free_with(f, monotone), ci),
+                (pn.map_free_with(f, monotone), pi),
+            ),
+            Goal::Split(i) => Goal::Split(i),
+            Goal::Disj(x) => Goal::Disj(x.map_free_with(f, monotone)),
+            Goal::Subterm(p) => Goal::Subterm(p.map_free_with(f, monotone)),
+        }
     }
 }
 
@@ -303,29 +358,17 @@ mod tests {
         let a = LessAtom::new(node("i"), node("j"), Reason::Fresh);
         let b = LessAtom::new(node("i"), node("j"), Reason::Formula);
         assert_eq!(a, b);
-    }
-
-    #[test]
-    fn less_rel_projection() {
-        let atoms = vec![
-            LessAtom::new(node("i"), node("j"), Reason::Fresh),
-            LessAtom::new(node("j"), node("k"), Reason::Formula),
-        ];
-        // The test compares the complete projection.  The order of the pair
-        // inside an atom is the direction of the ordering edge.  The order
-        // of the atoms is the iteration order of the relation.  A check of
-        // two endpoints alone leaves both of these orders unchecked.
-        assert_eq!(
-            get_less_rel(&atoms),
-            vec![(node("i"), node("j")), (node("j"), node("k"))]
-        );
+        // The `Ord` reads the same two endpoints, so the atoms tie; a derive
+        // over the three fields would rank them by the reason instead.
+        assert_eq!(a.cmp(&b), std::cmp::Ordering::Equal);
+        assert!(a < LessAtom::new(node("i"), node("k"), Reason::Fresh));
     }
 
     // HS's derived `Ord Goal` ranks by constructor first, in declaration
     // order `ActionG < ChainG < PremiseG < SplitG < DisjG < SubtermG`
     // (Constraints.hs:159-172), and only then by payload.
     #[test]
-    fn cmp_goal_ranks_constructors_in_haskell_order() {
+    fn goal_ord_ranks_constructors_in_haskell_order() {
         use crate::fact::{FactTag, LNFact};
         use crate::guarded::gtrue;
         use crate::rule::{ConcIdx, PremIdx};
@@ -347,7 +390,7 @@ mod tests {
         for (i, a) in ordered.iter().enumerate() {
             for (j, b) in ordered.iter().enumerate() {
                 assert_eq!(
-                    cmp_goal(a, b),
+                    a.cmp(b),
                     i.cmp(&j),
                     "constructor rank {i} vs {j}: {a:?} / {b:?}"
                 );
@@ -359,37 +402,31 @@ mod tests {
         // `#a.2` despite sorting after it by name.
         let lo = Goal::Action(LVar::new("i", LSort::Node, 1), fa.clone());
         let hi = Goal::Action(LVar::new("a", LSort::Node, 2), fa.clone());
-        assert_eq!(cmp_goal(&lo, &hi), Ordering::Less);
+        assert_eq!(lo.cmp(&hi), Ordering::Less);
         // Equal node ids fall through to the fact, which orders by tag then
         // terms with annotations ignored (Model/Fact.hs:173-174).
         let fresh = LNFact::new(FactTag::Fresh, vec![t.clone()]);
         let a_out = Goal::Action(node("i"), fa);
         let a_fresh = Goal::Action(node("i"), fresh);
-        assert_eq!(cmp_goal(&a_fresh, &a_out), Ordering::Less);
-        assert_eq!(cmp_goal(&a_out, &a_out), Ordering::Equal);
+        assert_eq!(a_fresh.cmp(&a_out), Ordering::Less);
+        assert_eq!(a_out.cmp(&a_out), Ordering::Equal);
 
         // `SplitG` compares its id; `SubtermG` its term pair left to right.
         assert_eq!(
-            cmp_goal(&Goal::Split(SplitId(1)), &Goal::Split(SplitId(2))),
+            Goal::Split(SplitId(1)).cmp(&Goal::Split(SplitId(2))),
             Ordering::Less
         );
         let u = lit(Lit::Var(LVar::new("y", LSort::Msg, 0)));
         assert_eq!(
-            cmp_goal(
-                &Goal::Subterm((t.clone(), t.clone())),
-                &Goal::Subterm((t.clone(), u))
-            ),
+            Goal::Subterm((t.clone(), t.clone())).cmp(&Goal::Subterm((t.clone(), u))),
             Ordering::Less
         );
     }
 
-    /// Each `is_*` predicate matches its own variant and no other variant.
-    /// The failure mode is a copied `matches!` arm that names the
-    /// neighbouring variant.  HS ships exactly that bug in `isSubtermGoal`,
-    /// which is a copy of `isDisjGoal`.  See the note on
-    /// [`Goal::is_subterm`].
+    /// The goal-kind predicates used by production code match their own
+    /// variant and no other variant.
     #[test]
-    fn goal_kind_predicates() {
+    fn live_goal_kind_predicates() {
         use crate::fact::{FactTag, LNFact};
         use crate::guarded::gtrue;
         use crate::rule::{ConcIdx, PremIdx};
@@ -400,49 +437,180 @@ mod tests {
         let i = node("i");
         let t = lit(Lit::Var(LVar::new("x", LSort::Msg, 0)));
         let out = LNFact::new(FactTag::Out, vec![t.clone()]);
-        // The columns are in this order: action, premise, chain, split,
-        // disj, subterm.
+        // The columns are in this order: action, chain.
         let cases = [
-            ("Action", Goal::Action(i, out.clone()), [1, 0, 0, 0, 0, 0]),
+            ("Action", Goal::Action(i, out.clone()), [1, 0]),
             (
                 "Chain",
                 Goal::Chain((i, ConcIdx(0)), (i, PremIdx(0))),
-                [0, 0, 1, 0, 0, 0],
+                [0, 1],
             ),
             (
                 "Premise",
                 Goal::Premise((i, PremIdx(0)), out.clone()),
-                [0, 1, 0, 0, 0, 0],
+                [0, 0],
             ),
-            ("Split", Goal::Split(SplitId(0)), [0, 0, 0, 1, 0, 0]),
-            (
-                "Disj",
-                Goal::Disj(Disj::new(vec![gtrue()])),
-                [0, 0, 0, 0, 1, 0],
-            ),
-            (
-                "Subterm",
-                Goal::Subterm((t.clone(), t.clone())),
-                [0, 0, 0, 0, 0, 1],
-            ),
+            ("Split", Goal::Split(SplitId(0)), [0, 0]),
+            ("Disj", Goal::Disj(Disj::new(vec![gtrue()])), [0, 0]),
+            ("Subterm", Goal::Subterm((t.clone(), t.clone())), [0, 0]),
         ];
         for (name, g, want) in &cases {
-            let got = [
-                g.is_action(),
-                g.is_premise(),
-                g.is_chain(),
-                g.is_split(),
-                g.is_disj(),
-                g.is_subterm(),
-            ];
+            let got = [g.is_action(), g.is_chain()];
             assert_eq!(got, want.map(|b| b == 1), "{name}");
         }
-        // `is_standard_action` is the only predicate that does more than a
-        // variant match.  `KU(_)` action goals are the intruder-knowledge
-        // goals that the solver handles as a special case.  They are not
-        // standard.
-        assert!(Goal::Action(i, out).is_standard_action());
-        assert!(!Goal::Action(i, LNFact::new(FactTag::Ku, vec![t])).is_standard_action());
-        assert!(!Goal::Split(SplitId(0)).is_standard_action());
+    }
+
+    // =========================================================================
+    // HasFrees instances
+    // =========================================================================
+
+    use tamarin_term::lterm::frees_list;
+
+    fn node_at(name: &str, idx: u64) -> NodeId {
+        LVar::new(name, LSort::Node, idx)
+    }
+
+    fn msg_var(name: &str, idx: u64) -> LVar {
+        LVar::new(name, LSort::Msg, idx)
+    }
+
+    fn msg_term(name: &str, idx: u64) -> LNTerm {
+        tamarin_term::term::lit(tamarin_term::vterm::Lit::Var(msg_var(name, idx)))
+    }
+
+    /// An `Out` fact whose two arguments carry a variable each, so a walk that
+    /// visits the fact shows both of them in argument order.
+    fn out_fact() -> crate::fact::LNFact {
+        crate::fact::LNFact::new(
+            crate::fact::FactTag::Out,
+            vec![msg_term("x", 5), msg_term("y", 6)],
+        )
+    }
+
+    /// A guarded atom over two free node leaves.
+    fn guarded_pair() -> Guarded {
+        use crate::atom::ProtoAtom;
+        use tamarin_term::lterm::{BVar, LSort, LVar};
+        use tamarin_term::vterm::var_term;
+        let leaf = |name: &str, idx: u64| var_term(BVar::Free(LVar::new(name, LSort::Node, idx)));
+        Guarded::Atom(ProtoAtom::Less(leaf("g", 8), leaf("h", 9)))
+    }
+
+    /// Add 100 to the index of every variable the map reaches.  The rename is
+    /// injective, so a payload the map leaves alone keeps its own index and the
+    /// assertions can tell the two apart.
+    fn shifted<T: HasFrees>(t: T) -> T {
+        t.map_free(&mut |v: LVar| LVar::new(v.name, v.sort, v.idx + 100))
+    }
+
+    /// `instance HasFrees Edge` (Constraints.hs:110-115): source then target,
+    /// and the two indices are not variables.
+    #[test]
+    fn edge_visits_the_source_before_the_target() {
+        let e = Edge {
+            src: (node_at("i", 1), ConcIdx(2)),
+            tgt: (node_at("j", 3), PremIdx(4)),
+        };
+        assert_eq!(frees_list(&e), vec![node_at("i", 1), node_at("j", 3)]);
+        assert_eq!(
+            shifted(e),
+            Edge {
+                src: (node_at("i", 101), ConcIdx(2)),
+                tgt: (node_at("j", 103), PremIdx(4)),
+            }
+        );
+    }
+
+    /// `instance HasFrees LessAtom` (Constraints.hs:145-150): smaller then
+    /// larger, with the reason carried over.  `PartialEq LessAtom` ignores the
+    /// reason, so the fields are compared one by one.
+    #[test]
+    fn less_atom_visits_smaller_then_larger_and_keeps_the_reason() {
+        let la = LessAtom::new(node_at("i", 1), node_at("j", 2), Reason::InjectiveFacts);
+        assert_eq!(frees_list(&la), vec![node_at("i", 1), node_at("j", 2)]);
+        let mapped = shifted(la);
+        assert_eq!(mapped.smaller, node_at("i", 101));
+        assert_eq!(mapped.larger, node_at("j", 102));
+        assert_eq!(mapped.reason, Reason::InjectiveFacts);
+    }
+
+    /// `instance HasFrees a => HasFrees (Disj a)` (LTerm.hs:884-889): list
+    /// order in both directions, with no sorting of the disjuncts.
+    #[test]
+    fn disj_visits_its_items_in_list_order() {
+        let d = Disj::new(vec![node_at("b", 2), node_at("a", 1)]);
+        assert_eq!(frees_list(&d), vec![node_at("b", 2), node_at("a", 1)]);
+        assert_eq!(shifted(d).0, vec![node_at("b", 102), node_at("a", 101)]);
+    }
+
+    /// `instance HasFrees Goal`'s fold (Constraints.hs:210-218), one variant
+    /// per row and a variable of its own in every payload, so the sequence
+    /// pins which payload comes first.
+    #[test]
+    fn goal_visits_its_payloads_in_haskell_order() {
+        let cases: Vec<(Goal, Vec<LVar>)> = vec![
+            (
+                Goal::Action(node_at("i", 1), out_fact()),
+                vec![node_at("i", 1), msg_var("x", 5), msg_var("y", 6)],
+            ),
+            (
+                Goal::Premise((node_at("i", 1), PremIdx(7)), out_fact()),
+                vec![node_at("i", 1), msg_var("x", 5), msg_var("y", 6)],
+            ),
+            (
+                Goal::Chain((node_at("i", 1), ConcIdx(7)), (node_at("j", 2), PremIdx(8))),
+                vec![node_at("i", 1), node_at("j", 2)],
+            ),
+            (Goal::Split(SplitId(3)), vec![]),
+            (
+                Goal::Disj(Disj::new(vec![guarded_pair()])),
+                vec![node_at("g", 8), node_at("h", 9)],
+            ),
+            (
+                Goal::Subterm((msg_term("s", 3), msg_term("t", 4))),
+                vec![msg_var("s", 3), msg_var("t", 4)],
+            ),
+        ];
+        for (g, want) in cases {
+            assert_eq!(frees_list(&g), want, "{g:?}");
+        }
+    }
+
+    /// `instance HasFrees Goal`'s map (Constraints.hs:226-232): every payload
+    /// is rewritten, the premise and conclusion indices stay, and a `SplitG`
+    /// keeps its id.
+    #[test]
+    fn goal_map_free_rewrites_every_payload() {
+        let shifted_fact = crate::fact::LNFact::new(
+            crate::fact::FactTag::Out,
+            vec![msg_term("x", 105), msg_term("y", 106)],
+        );
+        assert_eq!(
+            shifted(Goal::Action(node_at("i", 1), out_fact())),
+            Goal::Action(node_at("i", 101), shifted_fact.clone())
+        );
+        assert_eq!(
+            shifted(Goal::Premise((node_at("i", 1), PremIdx(7)), out_fact())),
+            Goal::Premise((node_at("i", 101), PremIdx(7)), shifted_fact)
+        );
+        assert_eq!(
+            shifted(Goal::Chain(
+                (node_at("i", 1), ConcIdx(7)),
+                (node_at("j", 2), PremIdx(8))
+            )),
+            Goal::Chain(
+                (node_at("i", 101), ConcIdx(7)),
+                (node_at("j", 102), PremIdx(8))
+            )
+        );
+        assert_eq!(shifted(Goal::Split(SplitId(3))), Goal::Split(SplitId(3)));
+        assert_eq!(
+            frees_list(&shifted(Goal::Disj(Disj::new(vec![guarded_pair()])))),
+            vec![node_at("g", 108), node_at("h", 109)]
+        );
+        assert_eq!(
+            shifted(Goal::Subterm((msg_term("s", 3), msg_term("t", 4)))),
+            Goal::Subterm((msg_term("s", 103), msg_term("t", 104)))
+        );
     }
 }

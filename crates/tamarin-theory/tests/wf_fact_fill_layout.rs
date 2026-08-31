@@ -6,8 +6,8 @@
 //! `text info $-$ nest 2 (fsep $ punctuate comma cells)` for
 //! `specialFactsUsage'` (Wellformedness.hs:563), `reservedFactNameRules'`
 //! (Wellformedness.hs:546) and `unboundCheck` (Wellformedness.hs:497-498),
-//! laid out by `tamarin_theory::wf_fill` at `addComment`'s 100/67
-//! (TheoryObject.hs:717-718).
+//! laid out by `tamarin_theory::wellformedness::WfError::filled` at
+//! `addComment`'s 100/67 (TheoryObject.hs:717-718).
 //!
 //! Every expected block is the pinned oracle's (`ef3f0468`) `/* WARNING … */`
 //! comment verbatim, so the fill's break points — between cells, and INSIDE a
@@ -15,18 +15,19 @@
 
 use tamarin_theory::pretty_theory::format_wf_block;
 
-/// The `/* WARNING … */` comment `check_theory`'s report renders to, i.e. the
-/// block the theory output carries between the source body and the summary.
+/// The `/* WARNING … */` comment the load pipelines render, i.e. the block the
+/// theory output carries between the source body and the summary.
 ///
-/// The load pipelines drop `check_theory`'s STATIC "Message Derivation Checks"
-/// placeholder and re-add the dynamic check's own entries, which
-/// `--derivcheck-timeout=0` — how the expected blocks below were captured —
-/// produces none of; the same drop here keeps the probes comparable.
+/// The dynamic "Message Derivation Checks" entries both pipelines append are
+/// absent here: `--derivcheck-timeout=0` — how the expected blocks below were
+/// captured — produces none of them.
 fn wf_block(src: &str) -> String {
-    let thy = tamarin_parser::parse_theory(src, &[]).expect("probe parses");
-    let mut report = tamarin_parser::wf::check_theory(&thy);
-    report.retain(|e| e.topic != "Message Derivation Checks");
-    format_wf_block(&report)
+    let parsed = tamarin_parser::parse_theory(src, &[]).expect("probe parses");
+    let elaborated = tamarin_theory::elaborate::elaborate(&parsed).expect("probe elaborates");
+    format_wf_block(&tamarin_theory::wellformedness::check_wellformedness(
+        &elaborated,
+        None,
+    ))
 }
 
 /// Cells that each fit the 67-column ribbon: `fsep` packs them greedily and

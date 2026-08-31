@@ -222,6 +222,17 @@ fn pp_maude_c_sym_into(c: CSym, buf: &mut Vec<u8>) {
     }
 }
 
+/// Append the wire identifier for a signature-defined free or AC symbol.
+/// Built-in AC/C/List symbols are dispatched separately by the reply parser.
+pub(crate) fn pp_maude_sig_sym_into(sym: FunSym, buf: &mut Vec<u8>) -> bool {
+    match sym {
+        FunSym::NoEq(sym) => pp_maude_no_eq_sym_into(&sym, buf),
+        FunSym::Ac(AcSym::AcFct(sym)) => pp_maude_ac_sym_into(AcSym::AcFct(sym), buf),
+        _ => return false,
+    }
+    true
+}
+
 // =============================================================================
 // Term pretty printing
 // =============================================================================
@@ -238,24 +249,28 @@ pub fn pp_mterm(t: &Term<MaudeLit>) -> Vec<u8> {
 /// would require.  Byte-identical to `pp_mterm(&Term::App(FunSym::List, items))`.
 pub fn pp_mterm_list(items: &[Term<MaudeLit>]) -> Vec<u8> {
     let mut buf = Vec::new();
-    buf.extend_from_slice(b"list(");
-    pp_list(items, &mut buf);
-    buf.push(b')');
+    pp_mterm_list_into(items, &mut buf);
     buf
 }
 
-fn pp_mterm_into(t: &Term<MaudeLit>, buf: &mut Vec<u8>) {
+pub(crate) fn pp_mterm_list_into(items: &[Term<MaudeLit>], buf: &mut Vec<u8>) {
+    buf.extend_from_slice(b"list(");
+    pp_list(items, buf);
+    buf.push(b')');
+}
+
+pub(crate) fn pp_mterm_into(t: &Term<MaudeLit>, buf: &mut Vec<u8>) {
     match t {
         Term::Lit(MaudeLit::MaudeVar(i, sort)) => {
             buf.push(b'x');
-            buf.extend(i.to_string().as_bytes());
+            push_u64(*i, buf);
             buf.push(b':');
             buf.extend(pp_lsort(*sort).as_bytes());
         }
         Term::Lit(MaudeLit::MaudeConst(i, sort)) => {
             buf.extend(pp_lsort_sym(*sort).as_bytes());
             buf.push(b'(');
-            buf.extend(i.to_string().as_bytes());
+            push_u64(*i, buf);
             buf.push(b')');
         }
         Term::Lit(MaudeLit::FreshVar(_, _)) => {
@@ -286,6 +301,20 @@ fn pp_mterm_into(t: &Term<MaudeLit>, buf: &mut Vec<u8>) {
     }
 }
 
+fn push_u64(mut value: u64, buf: &mut Vec<u8>) {
+    let mut digits = [0; 20];
+    let mut start = digits.len();
+    loop {
+        start -= 1;
+        digits[start] = b'0' + (value % 10) as u8;
+        value /= 10;
+        if value == 0 {
+            buf.extend_from_slice(&digits[start..]);
+            return;
+        }
+    }
+}
+
 fn pp_args(args: &[Term<MaudeLit>], buf: &mut Vec<u8>) {
     buf.push(b'(');
     for (i, a) in args.iter().enumerate() {
@@ -298,15 +327,13 @@ fn pp_args(args: &[Term<MaudeLit>], buf: &mut Vec<u8>) {
 }
 
 fn pp_list(args: &[Term<MaudeLit>], buf: &mut Vec<u8>) {
-    if args.is_empty() {
-        buf.extend_from_slice(b"nil");
-        return;
+    for arg in args {
+        buf.extend_from_slice(b"cons(");
+        pp_mterm_into(arg, buf);
+        buf.push(b',');
     }
-    buf.extend_from_slice(b"cons(");
-    pp_mterm_into(&args[0], buf);
-    buf.push(b',');
-    pp_list(&args[1..], buf);
-    buf.push(b')');
+    buf.extend_from_slice(b"nil");
+    buf.extend(std::iter::repeat(b')').take(args.len()));
 }
 
 // =============================================================================
@@ -500,6 +527,21 @@ fn emit_rrule(out: &mut String, rule: &RRule<crate::lterm::LNTerm>) {
 mod tests {
     use super::*;
     use crate::maude_sig::{bp_maude_sig, dh_maude_sig, pair_maude_sig};
+
+    #[test]
+    fn term_writer_handles_full_width_ids_and_lists() {
+        let items = [
+            Term::Lit(MaudeLit::MaudeVar(u64::MAX, LSort::Msg)),
+            Term::Lit(MaudeLit::MaudeConst(0, LSort::Fresh)),
+        ];
+        let mut appended = b"prefix:".to_vec();
+        pp_mterm_list_into(&items, &mut appended);
+        assert_eq!(
+            appended,
+            b"prefix:list(cons(x18446744073709551615:Msg,cons(f(0),nil)))"
+        );
+        assert_eq!(pp_mterm_list(&items), &appended[b"prefix:".len()..]);
+    }
 
     #[test]
     fn dh_neutral_op_has_two_spaces_before_colon() {

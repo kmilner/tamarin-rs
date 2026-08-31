@@ -1,0 +1,65 @@
+theory S3MacroLemmaHeader
+
+begin
+
+// Function signature and definition of the equational theory E
+
+functions: fst/1, pair/2, snd/1
+equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
+
+predicate: IsPairOf( m, a, b )<=>m = <a, b>
+
+macros: tag( x ) =  <'t', x>,
+        wrap( x, y ) =  tag(<x, y>)
+
+rule (modulo E) A:
+   [ In( <x, y> ) ] --[ A( wrap(x, y) ) ]-> [ Out( tag(x) ) ]
+
+  /*
+  rule (modulo AC) A:
+     [ In( <x, y> ) ] --[ A( <'t', x, y> ) ]-> [ Out( <'t', x> ) ]
+  */
+
+restriction PlainRestriction:
+  "∀ m #i. (A( m ) @ #i) ⇒ (¬(m = 'no'))"
+  // safety formula
+
+  /*
+  expanded formula:
+  "∀ m #i. (A( m ) @ #i) ⇒ (¬(m = 'no'))"
+  */
+
+rule (modulo E) B:
+   [ In( z ) ] --[ B( z ) ]-> [ ]
+
+  /* has exactly the trivial AC variant */
+
+restriction MacroRestriction:
+  "∀ m x y #i. ((A( m ) @ #i) ∧ (m = <x, y>)) ⇒ (m = wrap(x, y))"
+  // safety formula
+
+  /*
+  expanded formula:
+  "∀ m x y #i. ((A( m ) @ #i) ∧ (m = <x, y>)) ⇒ (m = <'t', x, y>)"
+  */
+
+lemma PlainLemma:
+  all-traces "∀ z #i. (B( z ) @ #i) ⇒ (∃ #j. A( z ) @ #j)"
+/*
+guarded formula characterizing all counter-examples:
+"∃ z #i. (B( z ) @ #i) ∧ ∀ #j. (A( z ) @ #j) ⇒ ⊥"
+*/
+by sorry
+
+lemma MacroLemma:
+  exists-trace
+  "∃ x y m #i. ((A( m ) @ #i) ∧ (m = <x, y>)) ∧ (m = wrap(x, y))"
+/*
+guarded formula characterizing all satisfying traces:
+"∃ x y m #i. (A( m ) @ #i) ∧ (m = <x, y>) ∧ (m = <'t', x, y>)"
+*/
+by sorry
+
+
+
+end

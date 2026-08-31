@@ -25,7 +25,13 @@ pub fn cow_map_vec<T: Clone>(xs: &[T], mut f: impl FnMut(&T) -> Option<T>) -> Op
     let mut out: Option<Vec<T>> = None;
     for (i, x) in xs.iter().enumerate() {
         match f(x) {
-            Some(g) => out.get_or_insert_with(|| xs[..i].to_vec()).push(g),
+            Some(g) => out
+                .get_or_insert_with(|| {
+                    let mut rebuilt = Vec::with_capacity(xs.len());
+                    rebuilt.extend_from_slice(&xs[..i]);
+                    rebuilt
+                })
+                .push(g),
             None => {
                 if let Some(v) = out.as_mut() {
                     v.push(x.clone());
@@ -91,6 +97,12 @@ mod tests {
             .collect();
         assert_eq!(got, Some(eager));
         assert_eq!(got, Some(vec![1, -4, 5]));
+    }
+
+    #[test]
+    fn rebuilt_reserves_the_complete_slice() {
+        let got = cow_map_vec(&[1, 3, 4, 5], neg_even).unwrap();
+        assert!(got.capacity() >= 4);
     }
 
     #[test]

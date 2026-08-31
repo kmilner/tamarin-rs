@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 # Byte-exact check of the interactive server's main/message + main/rules pane
-# bodies (the JSON {html,title} envelope) against the HS reference cache
-# (scripts/.web_hs_cache), content-keyed by sha256(file).  Boots RS per file
+# bodies (the JSON {html,title} envelope) against the automatically selected HS
+# reference-cache profile. Boots RS per file
 # (reusing web_parity's boot/crawl), then compares the two URL bodies byte-for-
 # byte.  Each cached manifest carries a <key>.hs.fp sidecar naming the oracle
-# binary (size.mtime) that crawled it — web_parity.sh stamps it and refuses to
+# binary (SHA-256) that crawled it — web_parity.sh stamps it and refuses to
 # reuse a manifest that is unstamped or stamped by another binary, and this
 # script honours the same contract (SKIP_STALE_CACHE): it cannot re-crawl the
-# HS side, and a manifest from a long-gone oracle is not a reference.
+# HS side, and a manifest from a long-gone oracle or changed transitive include
+# is not a reference.
 #
 #   scripts/pane_byte_check.sh <file-list>      (or ALLOWLIST=<file-list> ...)
 #
@@ -36,7 +37,6 @@ READY_TIMEOUT="${READY_TIMEOUT:-90}"
 FILE_TIMEOUT="${FILE_TIMEOUT:-300}"
 RS_PORT="${RS_PORT:-3044}"
 CORPUS_ROOT="${CORPUS_ROOT:-$repo_root/tamarin-prover/examples}"
-CACHE="${CACHE:-$script_dir/.web_hs_cache}"
 RESULTS_TSV="${RESULTS_TSV:-/tmp/pane_byte.tsv}"
 DIFFDIR="${DIFFDIR:-/tmp/pane_byte_diffs}"
 MAX_NODES="${MAX_NODES:-400}"
@@ -55,21 +55,23 @@ mkdir -p "$DIFFDIR"
 # that stamp needs the oracle binary itself — required here even though only
 # the RS server is ever booted, because without it a manifest crawled by a
 # long-gone oracle would be compared as if it were the reference.
-find_hs_bin() {
-    local c
-    for c in "$repo_root"/tamarin-prover-testing/.stack-work/install/*/*/*/bin/tamarin-prover \
-             "$repo_root"/tamarin-prover-testing/.stack-work/dist/*/ghc-*/build/tamarin-prover/tamarin-prover; do
-        [ -x "$c" ] && { echo "$c"; return 0; }
-    done; return 1
-}
-HS_PATH="${HS_PATH:-$(find_hs_bin)}" || true
+HS_PATH=$(resolve_hs_oracle "$repo_root") || exit 2
 [ -x "${HS_PATH:-/nonexistent}" ] || {
     echo "pane_byte_check: no HS oracle binary (set HS_PATH) — the cached HS" \
          "manifests carry the crawling oracle's fingerprint, which cannot be" \
          "verified without it" >&2
     exit 2
 }
-hs_fingerprint "$HS_PATH"
+oracle_rev_check "$HS_PATH" "$MAUDE_PATH" "$repo_root"
+# Keep cache selection identical to web_parity.sh. The plan version is part of
+# the profile even though this script only consumes manifests.
+PLAN_VERSION="$(python3 -c \
+    'import sys; sys.path.insert(0,sys.argv[1]); import web_crawl; print(web_crawl.PLAN_VERSION)' \
+    "$script_dir")"
+[ -r "$script_dir/web_cache.sh" ] || { echo "pane_byte_check: missing $script_dir/web_cache.sh" >&2; exit 2; }
+. "$script_dir/web_cache.sh"
+web_cache_init "$repo_root" "$script_dir" "$HS_PATH" "$PLAN_VERSION" \
+    || { echo "pane_byte_check: cannot select HS web cache" >&2; exit 2; }
 if [ -z "$ALLOWLIST" ]; then
     echo "usage: $0 <file-list>   (or ALLOWLIST=<file-list> $0)" >&2
     echo "pane_byte_check: no file list given, and there is no default —" \
@@ -115,9 +117,17 @@ boot_crawl() {
 one_file() {
     local rel="$1" f="$CORPUS_ROOT/$1"
     [ -f "$f" ] || { printf '%s\t-\tSKIP_NO_FILE\t-\n' "$rel"; return 0; }
-    local key; key=$(sha256sum "$f" | cut -d' ' -f1)
+    local key; key=$(web_cache_key "$rel" "$f")
     local hs_manifest="$CACHE/$key.hs.json"
-    [ -f "$hs_manifest" ] || { printf '%s\t-\tSKIP_NO_CACHE\t-\n' "$rel"; return 0; }
+    local wd; wd=$(mktemp -d)
+    if ! web_cache_lock "$key"; then
+        rm -rf "$wd"; printf '%s\t-\tSKIP_CACHE_LOCK\t-\n' "$rel"; return 0
+    fi
+    web_cache_adopt_legacy "$key" "$f" "$PLAN_VERSION" || true
+    if [ ! -f "$hs_manifest" ]; then
+        web_cache_unlock; rm -rf "$wd"
+        printf '%s\t-\tSKIP_NO_CACHE\t-\n' "$rel"; return 0
+    fi
     # Same reuse contract as web_parity.sh (which stamps the sidecar): a
     # manifest that is unstamped, or stamped by a different oracle binary, is
     # not this oracle's evidence.  web_parity re-crawls it; this script cannot
@@ -125,33 +135,28 @@ one_file() {
     # rather than being compared against a reference nothing vouches for.
     local hs_fp=''
     [ -f "$CACHE/$key.hs.fp" ] && read -r hs_fp < "$CACHE/$key.hs.fp"
-    if [ "$hs_fp" != "$HS_FP" ]; then
+    if ! web_cache_stamp_matches "$hs_fp"; then
+        web_cache_unlock; rm -rf "$wd"
         printf '%s\t-\tSKIP_STALE_CACHE\t-\n' "$rel"; return 0
     fi
+    if ! cp "$hs_manifest" "$wd/hs.json"; then
+        web_cache_unlock; rm -rf "$wd"
+        printf '%s\t-\tSKIP_CACHE_READ\t-\n' "$rel"; return 0
+    fi
+    web_cache_unlock
     local CRAWL_EXTRA_ARGS=""
     grep -qE '^[[:space:]]*(lemma|equivLemma|diffLemma)([[:space:]]|\[|:)' "$f" \
         || CRAWL_EXTRA_ARGS="--allow-no-lemmas"
     export CRAWL_EXTRA_ARGS
-    local wd; wd=$(mktemp -d)
-    mkdir -p "$wd/thy"; cp "$f" "$wd/thy/"
-    # Oracle staging — keep in lockstep with web_parity.sh: sibling
-    # oracle* glob, `<stem>.oracle` under the plain-`oracle` fallback
-    # name, and quoted relative refs staged at their relative location.
-    local __of __q
-    for __of in "$(dirname "$f")"/oracle*; do [ -f "$__of" ] && cp "$__of" "$wd/thy/"; done
-    if [ -f "${f%.spthy}.oracle" ] && [ ! -e "$wd/thy/oracle" ]; then
-        cp "${f%.spthy}.oracle" "$wd/thy/oracle"
+    mkdir -p "$wd/thy"
+    if ! web_stage_inputs "$f" "$wd/thy"; then
+        rm -rf "$wd"; printf '%s\t-\tSKIP_INPUT_STAGE\t-\n' "$rel"; return 0
     fi
-    while IFS= read -r __q; do
-        [ -f "$(dirname "$f")/$__q" ] || continue
-        mkdir -p "$wd/thy/$(dirname "$__q")"
-        cp "$(dirname "$f")/$__q" "$wd/thy/$__q"
-    done < <(grep -E 'heuristic' "$f" | grep -oE '"[^"]+"' | tr -d '"' | sort -u)
     if ! boot_crawl "$RS_PATH" "$RS_PORT" "$wd" "$wd/rs.json"; then
         rm -rf "$wd"; printf '%s\t-\tSKIP_RS_FAIL\t-\n' "$rel"; return 0
     fi
-    python3 - "$rel" "$hs_manifest" "$wd/rs.json" "$DIFFDIR" <<'PY'
-import json,sys,os
+    python3 - "$rel" "$wd/hs.json" "$wd/rs.json" "$DIFFDIR" <<'PY'
+import hashlib,json,sys,os
 rel,hsp,rsp,diffdir=sys.argv[1:5]
 hs=json.load(open(hsp))['manifest']; rs=json.load(open(rsp))['manifest']
 for url in ['/thy/trace/#/main/message','/thy/trace/#/main/rules']:
@@ -164,7 +169,8 @@ for url in ['/thy/trace/#/main/message','/thy/trace/#/main/rules']:
     else:
         fd=next((i for i in range(min(len(hb),len(rb))) if hb[i]!=rb[i]), min(len(hb),len(rb)))
         print(f"{rel}\t{tag}\tDIFF\t{fd}")
-        safe=rel.replace('/','_')
+        safe=(rel.replace('/','_')[:120] + '__'
+              + hashlib.sha256(rel.encode()).hexdigest()[:16])
         with open(os.path.join(diffdir,f"{safe}.{tag}.hs"),'w') as o: o.write(hb)
         with open(os.path.join(diffdir,f"{safe}.{tag}.rs"),'w') as o: o.write(rb)
 PY
@@ -188,6 +194,7 @@ done
 echo "=== SUMMARY ===" >&2
 awk -F'\t' '{c[$3]++} END{for(k in c) printf "  %-14s %d\n", k, c[k]}' "$RESULTS_TSV" >&2
 echo "  results: $RESULTS_TSV  diffs: $DIFFDIR" >&2
+echo "  HS cache: $CACHE  mode=$WEB_CACHE_MODE" >&2
 
 # Verdict — the histogram above is the whole story only if someone reads it,
 # and every non-MATCH row here is a pane that was NOT shown to agree. DIFF and

@@ -2,15 +2,13 @@
 // of the tamarin-prover sources this file cites; list them with:
 //   scripts/gen_license_headers.py --authors <this file>
 
-//! End-to-end stderr / exit-code parity for the duplicate-rule guards.
+//! End-to-end diagnostics and exit codes for duplicate-rule guards.
 //!
 //! Parse time: `liftedAddProtoRule` (Theory/Text/Parser.hs:175-193) rejects a
 //! second, DIFFERENT rule under an existing name via `addOpenProtoRule`
-//! (OpenTheory.hs:691-702).  The port raises
-//! `ParseError::ConflictingDeclarations` (rule context), rendered as a
-//! codespan diagnostic labelling both occurrences on stderr —
-//! exit 1, no stdout.  An identical duplicate is accepted and appended
-//! again.
+//! (OpenTheory.hs:691-702); batch mode's `handleError` `die`s on the
+//! resulting parser error. The port renders a semantic diagnostic on stderr
+//! and exits 1. An identical duplicate is accepted and appended again.
 //!
 //! Translate time: SAPIC's `translate` folds its generated rules through the
 //! same guard (`foldM liftedAddProtoRule`, lib/sapic/src/Sapic.hs:75), so a user rule named
@@ -39,8 +37,8 @@ fn run_binary(stem: &str, src: &str) -> (i32, String, String) {
     (code, stdout, strip_maude_banner(&stderr))
 }
 
-/// Two different rules under one name: the parse-time guard rejects the
-/// second, rendered as a codespan diagnostic labelling both occurrences.
+/// Two different rules under one name produce the structured conflict
+/// diagnostic.
 #[test]
 fn duplicate_rule_prints_a_diagnostic_and_exits_1() {
     if !maude_available() {
@@ -56,10 +54,9 @@ fn duplicate_rule_prints_a_diagnostic_and_exits_1() {
     );
     assert_eq!(code, 1);
     assert!(
-        stderr.contains("Conflicting rule declaration")
-            && stderr.contains("conflicting rule declaration for `R1`")
-            && stderr.contains("first declaration of `R1`"),
-        "expected the duplicate-rule diagnostic:\n{stderr}"
+        stderr.contains("error: Conflicting rule")
+            && stderr.contains("`R1` was already declared incompatibly"),
+        "unexpected stderr:\n{stderr}"
     );
 }
 

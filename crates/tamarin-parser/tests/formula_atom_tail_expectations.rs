@@ -2,9 +2,9 @@
 // of the tamarin-prover sources this file cites; list them with:
 //   scripts/gen_license_headers.py --authors <this file>
 
-//! Parity for the formula-atom tail error — what `blatom`'s alternation
-//! (Theory/Text/Parser/Formula.hs:44-60) reports when no relational operator
-//! follows an atom's leading term.  Two regimes:
+//! Byte-pinned parity for the formula-atom tail error — the frame HS's
+//! `blatom` alternation (Parser/Formula.hs:44-60) reports when no relational
+//! operator follows an atom's leading term.  Two regimes:
 //!
 //! * A `nodevar`-consumable head (bare or `#`-prefixed identifier): the
 //!   un-`try`'d node-equality alternative consumes it, so `opEqual`'s failure
@@ -15,43 +15,23 @@
 //!   `subterm predicate` (, `multiset comparisson` — sic, only with the
 //!   multiset builtin) and `term equality`.
 //!
-//! Every position and expectation set below is the pinned oracle's (Git
-//! revision ef3f0468) for the same source.
+//! Each expectation below is the pinned oracle's stderr for the same source,
+//! verbatim (probed 2026-08-05, the whole matrix byte-identical).
 
-use tamarin_parser::{parse_theory, ParseError};
+use tamarin_parser::parse_theory;
 
-/// Asserts `src` fails with the [`ParseError::Expected`] bridge variant at
-/// `line`:`col`, on a token starting with `found`, carrying exactly the
-/// `expected` labels.
-#[track_caller]
-fn assert_expected(src: &str, line: u32, col: u32, found: &str, expected: &[&str]) {
-    let e = parse_theory(src, &[]).expect_err("the probes below must all fail to parse");
-    assert!(
-        matches!(&e, ParseError::Expected { .. }),
-        "expected the `Expected` variant, got {e:?}"
-    );
-    let at = e.location();
-    assert_eq!((at.line, at.col), (line, col), "position of {e:?}");
-    let got = e.found().unwrap_or("");
-    assert!(
-        got.starts_with(found),
-        "offending token {got:?} should start with {found:?}"
-    );
-    let labels = e.expected().unwrap_or_default();
-    assert_eq!(
-        labels.iter().map(String::as_str).collect::<Vec<_>>(),
-        expected
-    );
+fn frame(name: &str, src: &str) -> String {
+    parse_theory(src, &[])
+        .expect_err("the probes below must all fail to parse")
+        .with_source(name)
+        .to_string()
 }
 
 #[test]
-fn a_bare_temporal_variable_atom_is_the_consumed_node_equality_set() {
-    assert_expected(
-        "theory A begin\nlemma L: \"All #i. #i\"\nend\n",
-        2,
-        21,
-        "\"",
-        &["letter or digit", "\".\"", "\"=\""],
+fn a_bare_temporal_variable_atom_is_the_consumed_node_equality_frame() {
+    assert_eq!(
+        frame("f.spthy", "theory A begin\nlemma L: \"All #i. #i\"\nend\n"),
+        "\"f.spthy\" (line 2, column 21):\nunexpected \"\\\"\"\nexpecting letter or digit, \".\" or \"=\""
     );
 }
 
@@ -63,25 +43,39 @@ fn sigil_headed_atoms_keep_the_relational_alternative_labels() {
         ("theory D begin\nlemma L: \"Ex x. 'c'\"\nend\n", 20),
         ("theory E begin\nlemma L: \"Ex x. <x, x>\"\nend\n", 23),
     ] {
-        assert_expected(src, 2, col, "\"", &["subterm predicate", "term equality"]);
+        assert_eq!(
+            frame("f.spthy", src),
+            format!(
+                "\"f.spthy\" (line 2, column {col}):\nunexpected \"\\\"\"\nexpecting subterm predicate or term equality"
+            ),
+            "{src:?}"
+        );
     }
     // A connective after the sigil head errors at the connective, same set.
-    assert_expected(
-        "theory F begin\nlemma L: \"Ex x. ~x & T\"\nend\n",
-        2,
-        20,
-        "&",
-        &["subterm predicate", "term equality"],
+    assert_eq!(
+        frame("f.spthy", "theory F begin\nlemma L: \"Ex x. ~x & T\"\nend\n"),
+        "\"f.spthy\" (line 2, column 20):\nunexpected \"&\"\nexpecting subterm predicate or term equality"
     );
 }
 
 #[test]
-fn a_nat_sigil_head_without_the_builtin_word_keeps_the_two_label_set() {
-    assert_expected(
-        "theory H begin\nbuiltins: natural-numbers\nlemma L: \"Ex x. %x\"\nend\n",
-        3,
-        19,
-        "\"",
-        &["subterm predicate", "term equality"],
+fn the_multiset_builtin_adds_the_misspelled_comparisson_label() {
+    assert_eq!(
+        frame(
+            "f.spthy",
+            "theory G begin\nbuiltins: multiset\nlemma L: \"Ex x. ~x\"\nend\n"
+        ),
+        "\"f.spthy\" (line 3, column 19):\nunexpected \"\\\"\"\nexpecting subterm predicate, multiset comparisson or term equality"
+    );
+}
+
+#[test]
+fn a_nat_sigil_head_without_the_builtin_word_is_the_same_empty_failure() {
+    assert_eq!(
+        frame(
+            "f.spthy",
+            "theory H begin\nbuiltins: natural-numbers\nlemma L: \"Ex x. %x\"\nend\n"
+        ),
+        "\"f.spthy\" (line 3, column 19):\nunexpected \"\\\"\"\nexpecting subterm predicate or term equality"
     );
 }

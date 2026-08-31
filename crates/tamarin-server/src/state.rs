@@ -8,10 +8,9 @@
 //! frontend reads/writes these indices in URLs like
 //! `/thy/trace/<idx>/main/...`.
 //!
-//! We keep both the parser AST and the elaborated typed theory.  The
-//! parser AST is what [`ProofState::new`] re-elaborates to build the live
-//! prover session; the elaborated theory is used for accessor helpers
-//! (lemma list, restriction count, …).
+//! The elaborated typed theory is what [`ProofState::new`] builds the
+//! live prover session from, what the web renderers print, and what the
+//! accessor helpers (lemma list, restriction count, …) read.
 //!
 //! Concurrency: `parking_lot::Mutex` — interactive single-user UI, no
 //! need for an async lock.  Only the autoprover (`autoprove` /
@@ -26,7 +25,6 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Local};
 
-use tamarin_parser::ast as p;
 use tamarin_theory::theory::Theory as TypedTheory;
 
 use crate::handlers::proof_tree::ProofState;
@@ -36,14 +34,17 @@ use crate::handlers::proof_tree::ProofState;
 pub struct TheoryEntry {
     /// Stable index used in URLs.  Set by `TheoryStore::insert`.
     pub idx: usize,
-    /// Theory name from the `.spthy` source.
-    pub name: String,
-    /// Parser AST — kept verbatim so the lazily built [`ProofState`] can
-    /// re-elaborate exactly the shape the CLI prover would.
-    pub parser_theory: Arc<p::Theory>,
-    /// Elaborated, typed theory — used for accessor helpers.  Wrapped
-    /// in `Arc` so we can clone the entry cheaply.
+    /// Elaborated, typed theory — the accessor helpers' source and the
+    /// theory the lazily built [`ProofState`] proves.  Wrapped in `Arc`
+    /// so we can clone the entry cheaply.
     pub typed_theory: Arc<TypedTheory>,
+    /// The signature every Maude process for this theory loads its module
+    /// from, taken before the load joins `check_close_intr_rule`'s verdicts
+    /// into [`typed_theory`](Self::typed_theory)'s signature.  A symbol's NDC
+    /// state is part of its Maude operator name, while the signature's rewrite
+    /// rules and the theory's terms keep their untagged symbols, so a module
+    /// built from the joined signature declares operators nothing else names.
+    pub prover_maude_sig: tamarin_term::maude_sig::MaudeSig,
     /// Where the theory came from.
     pub origin: TheoryOrigin,
     /// Load time for the UI.
@@ -57,7 +58,7 @@ pub struct TheoryEntry {
     /// the `source`/`message` routes (`format_wf_block`) and the
     /// `<div class="wf-warning">` header banner in the `help`/`overview` routes
     /// (`errors_html`).  Empty ⇒ no warnings (theory is well-formed).
-    pub wf_report: Vec<tamarin_parser::wf::WfError>,
+    pub wf_report: Vec<tamarin_theory::wellformedness::WfError>,
     /// HTML for the wellformedness warning banner shown in the theory
     /// page header (HS `errorsHtml`, rendered raw via
     /// `preEscapedToMarkup info.errorsHtml` at `src/Web/Theory.hs`).
@@ -69,45 +70,16 @@ pub struct TheoryEntry {
     pub errors_html: String,
     /// The theory's once-per-load NDC-checked intruder cache
     /// (`close_rule::check_close_intr_rule`, run in `theory_io` before
-    /// the derivation checks).  Injected into every `ProofContext` the
-    /// lazily built [`ProofState`] constructs (web session + shared
-    /// display ctx) so no context re-runs the check.  `None` when the
+    /// the derivation checks). Injected into the lazily built prover session,
+    /// whose context factory reuses it for every operation. `None` when the
     /// load-time Maude boot failed.
     pub ndc_cache: Option<Arc<Vec<tamarin_theory::rule::IntrRuleAC>>>,
     /// Live proof state — built lazily on first request that needs it
     /// (theory load → only kept-around-but-empty until `ensure_proof_state`
     /// is asked for).  `None` here means "not yet built"; on first
-    /// access we boot Maude and precompute the per-lemma initial
-    /// systems.  Building this eagerly at load time would cost ~1s
-    /// per theory for Maude startup + source precompute, which is
-    /// fine but pushes start-of-server latency.
+    /// access we boot Maude and precompute theory-wide sources. Per-lemma
+    /// systems remain lazy until their proof is visited or edited.
     pub proof_state: Option<Arc<ProofState>>,
-}
-
-impl TheoryEntry {
-    /// Install this theory's user-declared function-symbol sets into the
-    /// calling thread's thread-locals, returning an RAII guard that restores
-    /// the previous values on drop.
-    ///
-    /// Request handlers run on axum worker threads, whose sets start EMPTY;
-    /// the renderers they reach resolve a declared `[AC]` / nullary / unary
-    /// symbol through those thread-locals (`CollectedUserFuns::is_user_ac_fun` in
-    /// `canonicalize_ac_in_pterm`, `term_to_lnterm`, `term_to_gterm_free`).  An
-    /// unset `[AC]` symbol prints prefix (`add(x, z)`) instead of the infix
-    /// form HS's `prettyTerm` emits (`(x add z)`, Term/Term.hs:305).
-    ///
-    /// Uses the [`ProofState`]'s cached sets when the proof state is built,
-    /// and re-collects them from the parser theory otherwise.
-    ///
-    /// The per-theory handlers install this at their boundary, on the lookup
-    /// that puts the entry in hand (`handlers::theory::load_theory`); the
-    /// renderers reached from there install again and nest harmlessly.
-    pub fn install_user_funs(&self) -> tamarin_theory::elaborate::UserFunsForTheoryGuard {
-        match &self.proof_state {
-            Some(ps) => ps.install_user_funs(),
-            None => tamarin_theory::elaborate::set_user_funs_for_theory(&self.parser_theory),
-        }
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -181,7 +153,11 @@ impl TheoryStore {
     ///
     /// [`get`]: Self::get
     pub fn name(&self, idx: usize) -> Option<String> {
-        self.inner.lock().by_idx.get(&idx).map(|e| e.name.clone())
+        self.inner
+            .lock()
+            .by_idx
+            .get(&idx)
+            .map(|e| e.typed_theory.name.clone())
     }
 
     pub fn list(&self) -> Vec<TheoryEntry> {
@@ -235,8 +211,8 @@ impl TheoryStore {
 
     /// Like [`clone_at_new_idx`] but, when the source idx has a
     /// materialised `proof_state`, also fork it into the clone — share
-    /// the `ProofContext` (Maude handle + precomputed sources) but
-    /// deep-copy the per-lemma trees so subsequent mutations on the
+    /// the prover session but deep-copy the already-materialised per-lemma
+    /// trees so subsequent mutations on the
     /// clone don't leak back into the source.  Used by the method-apply
     /// route so the post-step proof tree contains the SAME tree shape
     /// as the source idx (i.e. retains all children produced by prior
@@ -280,7 +256,7 @@ impl TheoryStore {
         // `ProofState::new` (Maude boot + source precompute) so unrelated
         // handlers — and other tokio workers — aren't blocked for its
         // duration.
-        let (parser_theory, in_file, ndc_cache) = {
+        let (typed_theory, prover_maude_sig, ndc_cache) = {
             let inner = self.inner.lock();
             let entry = inner
                 .by_idx
@@ -290,21 +266,19 @@ impl TheoryStore {
                 return Ok(ps.clone());
             }
             (
-                entry.parser_theory.clone(),
-                entry.origin.label(),
+                entry.typed_theory.clone(),
+                entry.prover_maude_sig.clone(),
                 entry.ndc_cache.clone(),
             )
         };
-        // The entry's `Arc` becomes the `ProofState`'s cache handle
-        // directly — the web session and the shared display context both
-        // share this allocation instead of copying the rule list.
+        // The entry's `Arc` becomes the session's cache handle directly.
         let ndc_cache =
             ndc_cache.map(tamarin_theory::constraint::solver::context::IntrRuleCache::from);
         let ps = Arc::new(ProofState::new(
-            &parser_theory,
+            &typed_theory,
+            prover_maude_sig,
             &cfg.maude_path,
             cfg.stop_on_trace,
-            &in_file,
             ndc_cache.as_ref(),
         )?);
         // Re-lock and double-check: another thread may have built (and

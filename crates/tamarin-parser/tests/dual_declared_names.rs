@@ -14,12 +14,11 @@
 //! declaration's requested tuple conflicts — and only in the NoEq-first
 //! order, where `stFunSyms` already holds it.
 //!
-//! WHICH theories are rejected (and which load) is pinned to the Haskell
-//! oracle (Git revision ef3f0468).  The positions are the port's own: they
-//! point at the two declarations.
+//! Expected error strings are the stderr the pinned Haskell oracle
+//! (Git revision ef3f0468) prints for the same theory, minus the three
+//! `maude tool:` banner lines.
 
-use tamarin_parser::parser::ParseContext;
-use tamarin_parser::{parse_theory, ParseError, TheoryItem};
+use tamarin_parser::{parse_theory, TheoryItem};
 
 /// The two `f` declarations of a parsed dual theory, `(ac, arity)` per decl
 /// in source order.
@@ -59,27 +58,20 @@ fn both_declaration_orders_are_accepted() {
 
 /// The NoEq-first order at a different arity DOES conflict: the `[AC]`
 /// declaration's requested tuple is compared against the `stFunSyms` entry
-/// (Parser/Signature.hs:212-215; oracle probe `p_orderconf`).  The port
-/// reports [`ParseError::ConflictingDeclarations`] with both declaration
-/// sites.
+/// (Parser/Signature.hs:212-215).  Oracle bytes: probe `p_orderconf`.
 #[test]
 fn a_noeq_first_arity_mismatch_conflicts() {
-    let e = parse_theory("theory T begin\n\nfunctions: f/3, f/2 [AC]\n\nend\n", &[])
-        .expect_err("the NoEq-first order conflicts");
-    let ParseError::ConflictingDeclarations {
-        name,
-        first_context: ParseContext::FunctionDeclaration,
-        second_context: ParseContext::FunctionDeclaration,
-        first_at,
-        second_at,
-    } = e
-    else {
-        panic!("expected the conflict variant, got {e:?}");
-    };
-    assert_eq!(name, "f");
-    let first_at = first_at.expect("the NoEq declaration has a site");
-    assert_eq!((first_at.line, first_at.col), (3, 12));
-    assert_eq!((second_at.line, second_at.col), (3, 17));
+    let err = parse_theory("theory T begin\n\nfunctions: f/3, f/2 [AC]\n\nend\n", &[])
+        .unwrap_err()
+        .with_source("p_orderconf.spthy")
+        .to_string();
+    assert_eq!(
+        err,
+        "\"p_orderconf.spthy\" (line 5, column 1):\nunexpected \"e\"\n\
+         conflicting arities/options (3,Public,Constructor,NotNDC) and \
+         (2,Public,Constructor,NotNDC) for `f`. Please choose a different name \
+         for this function."
+    );
 }
 
 /// The AST keeps the two spellings of a dual name apart: prefix is a plain

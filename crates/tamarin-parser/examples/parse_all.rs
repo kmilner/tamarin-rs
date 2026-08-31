@@ -20,13 +20,9 @@ use walkdir::WalkDir;
 mod common;
 use common::corpus_root;
 
+/// A semantic failure category for corpus-level bucketing.
 fn error_key_source(e: &tamarin_parser::ParseError) -> String {
-    let found = e.found().unwrap_or("<none>");
-    let expected = e
-        .expected()
-        .map(|items| items.join(", "))
-        .unwrap_or_default();
-    format!("{} | {}", found, expected)
+    e.diagnostic_message()
 }
 
 fn main() {

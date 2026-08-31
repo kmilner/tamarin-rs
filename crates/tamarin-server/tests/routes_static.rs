@@ -12,6 +12,7 @@ mod common;
 
 use common::*;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 fn data_dir() -> PathBuf {
     workspace_root().join("tamarin-prover/data")
@@ -58,4 +59,50 @@ async fn test_static_assets_are_served_from_the_data_dir() {
             "{url} must serve data/{rel} verbatim"
         );
     }
+}
+
+#[tokio::test]
+async fn test_frontend_dist_assets_stream_and_fall_back_to_data() {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let root = std::env::temp_dir().join(format!(
+        "tamarin-static-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    let dist = root.join("dist");
+    let data = root.join("data");
+    std::fs::create_dir_all(data.join("js")).unwrap();
+    std::fs::create_dir_all(data.join("css")).unwrap();
+    std::fs::create_dir_all(&dist).unwrap();
+    std::fs::write(dist.join("intdot-graph.es.js"), b"dist-contents").unwrap();
+    std::fs::write(data.join("js/intdot-graph.es.js"), b"data-contents").unwrap();
+    std::fs::write(data.join("js/ordinary.js"), b"ordinary-data").unwrap();
+
+    let s = start_server_with_theory_and("issue193.spthy", |cfg| {
+        cfg.data_dir = data;
+        cfg.frontend_dist = Some(dist);
+    })
+    .await;
+
+    let dist_response = s
+        .client
+        .get(s.url("/static/js/intdot-graph.es.js"))
+        .header("range", "bytes=5-12")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(dist_response.status(), 206);
+    assert_eq!(dist_response.bytes().await.unwrap(), &b"contents"[..]);
+
+    let fallback = s
+        .client
+        .get(s.url("/static/js/ordinary.js"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(fallback.status(), 200);
+    assert_eq!(fallback.bytes().await.unwrap(), &b"ordinary-data"[..]);
+
+    drop(s);
+    std::fs::remove_dir_all(root).unwrap();
 }

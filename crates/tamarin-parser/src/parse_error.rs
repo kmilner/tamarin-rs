@@ -1,868 +1,442 @@
-//! Shared locations and diagnostics for parsing `.spthy` files.
+//! Structured diagnostics for `.spthy` parse failures.
 
-use std::borrow::Cow;
+use std::fmt;
+use std::sync::Arc;
 
-use crate::ast::*;
-use crate::lexer::Pos;
+use crate::parser::{Message, ParseError};
 
-pub const DUMMY_LOCATION: Location = Location {
-    line: u32::MAX,
-    col: u32::MAX,
-    start: usize::MAX,
-    end: usize::MAX,
-};
-
-#[derive(Debug, Clone, Copy)]
-pub struct Location {
-    pub line: u32,
-    pub col: u32,
-    pub start: usize,
-    pub end: usize,
+/// A half-open byte range in one source file.
+///
+/// Spans stay parser-owned and are deliberately absent from the semantic
+/// theory representation. Line and column numbers are derived from the source
+/// only when a diagnostic is rendered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Span {
+    pub start: u32,
+    pub end: u32,
 }
 
-impl Location {
-    pub fn location_of<S>(word: &Option<S>, pos: Pos) -> Self
-    where
-        S: AsRef<str>,
-    {
-        Self {
-            line: pos.line,
-            col: pos.col,
-            start: pos.offset,
-            end: pos.offset + word.as_ref().map_or(0, |s| s.as_ref().len()),
-        }
+impl Span {
+    pub(crate) fn point(offset: usize) -> Self {
+        let start = u32::try_from(offset).unwrap_or(u32::MAX);
+        Self { start, end: start }
     }
 
-    pub fn from_positions(start: Pos, end: Pos) -> Self {
-        Self {
-            line: start.line,
-            col: start.col,
-            start: start.offset,
-            end: end.offset,
-        }
-    }
-
-    pub fn from_locations(start: Self, end: Self) -> Self {
-        Self {
-            line: start.line,
-            col: start.col,
-            start: start.start,
-            end: end.end,
-        }
+    pub fn as_range(self) -> std::ops::Range<usize> {
+        self.start as usize..self.end as usize
     }
 }
 
-impl From<Pos> for Location {
-    fn from(pos: Pos) -> Self {
-        Self {
-            line: pos.line,
-            col: pos.col,
-            start: pos.offset.saturating_sub(1),
-            end: pos.offset,
-        }
-    }
-}
-
-/// An enum to give `[ParseError]` variants context of where the error occured
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Copy)]
+/// The grammar construct being parsed when a generic error occurred.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ParseContext {
-    ModuloKind,
-    TermAtom,
-    FormulaAtom,
-    ExportItem,
     Theory,
-    Formula,
-    Process,
-    HexColor,
+    TheoryItem,
+    Identifier,
+    FunctionDeclaration,
     Equation,
-    Restriction,
+    Builtin,
     Macro,
     Rule,
-    Lemma,
-    FunctionDeclaration,
-    Builtin,
-    RestrictionAttribute,
-    LemmaAttribute,
     RuleAttribute,
+    Restriction,
+    RestrictionAttribute,
+    Lemma,
+    LemmaAttribute,
+    Formula,
     Term,
-    FreshLiteral,
-    NatLiteral,
-    PublicLiteral,
-    Variable,
-    Identifier,
-    StringLiteral,
-    TheoryItem,
-    PreprocessorDirective,
-    TypeAnnotation,
-    PredicateDeclaration,
-    ExportBody,
-    // The context of an included file, with the path of the included file.
-    // Static lifetime to keep the enum copy.
-    IncludedFile(Option<&'static str>),
+    Process,
+    Include,
 }
 
 impl ParseContext {
-    pub fn as_str(&self) -> &'static str {
+    pub fn description(self) -> &'static str {
         match self {
-            ParseContext::Theory => "spthy theory",
-            ParseContext::Formula => "formula",
-            ParseContext::Process => "process",
-            ParseContext::HexColor => "hex color",
-            ParseContext::Equation => "equation",
-            ParseContext::Restriction => "restriction",
-            ParseContext::Macro => "macro",
-            ParseContext::Rule => "rule",
-            ParseContext::Lemma => "lemma",
-            ParseContext::FunctionDeclaration => "function",
-            ParseContext::Builtin => "builtin",
-            ParseContext::RestrictionAttribute => "restriction attribute",
-            ParseContext::LemmaAttribute => "lemma attribute",
-            ParseContext::RuleAttribute => "rule attribute",
-            ParseContext::Term => "term",
-            ParseContext::FreshLiteral => "fresh literal",
-            ParseContext::NatLiteral => "nat literal",
-            ParseContext::PublicLiteral => "public literal",
-            ParseContext::Variable => "variable",
-            ParseContext::Identifier => "identifier",
-            ParseContext::StringLiteral => "string literal",
-            ParseContext::TheoryItem => "theory item",
-            ParseContext::PreprocessorDirective => "preprocessor directive",
-            ParseContext::TypeAnnotation => "type annotation",
-            ParseContext::PredicateDeclaration => "predicate declaration",
-            ParseContext::ExportBody => "export body",
-            ParseContext::IncludedFile(_) => "included file",
-            ParseContext::TermAtom => "atomic term",
-            ParseContext::FormulaAtom => "atomic formula",
-            ParseContext::ExportItem => "export item",
-            ParseContext::ModuloKind => "modulo annotation",
-        }
-    }
-
-    pub fn as_str_plural(&self) -> &'static str {
-        match self {
-            ParseContext::Formula => "formulas",
-            ParseContext::Process => "processes",
-            ParseContext::HexColor => "hex colors",
-            ParseContext::Equation => "equations",
-            ParseContext::Restriction => "restrictions",
-            ParseContext::Macro => "macros",
-            ParseContext::Rule => "rules",
-            ParseContext::Lemma => "lemmas",
-            ParseContext::FunctionDeclaration => "functions",
-            ParseContext::Builtin => "builtins",
-            ParseContext::RestrictionAttribute => "restriction attributes",
-            ParseContext::LemmaAttribute => "lemma attributes",
-            ParseContext::RuleAttribute => "rule attributes",
-            ParseContext::Term => "terms",
-            ParseContext::FreshLiteral => "fresh literals",
-            ParseContext::NatLiteral => "nat literals",
-            ParseContext::PublicLiteral => "public literals",
-            ParseContext::Variable => "variables",
-            ParseContext::Identifier => "identifiers",
-            ParseContext::StringLiteral => "string literals",
-            ParseContext::TheoryItem => "theory items",
-            ParseContext::PreprocessorDirective => "preprocessor directives",
-            ParseContext::TypeAnnotation => "type annotations",
-            ParseContext::PredicateDeclaration => "predicate declarations",
-            ParseContext::ExportBody => "export bodies",
-            ParseContext::IncludedFile(_) => "included files",
-            ParseContext::Theory => "theories",
-            ParseContext::TermAtom => "atomic terms",
-            ParseContext::FormulaAtom => "atomic formulas",
-            ParseContext::ExportItem => "export items",
-            ParseContext::ModuloKind => "modulo annotations",
-        }
-    }
-
-    pub fn as_str_with_article(&self) -> &'static str {
-        match self {
-            ParseContext::Formula => "a formula",
-            ParseContext::Process => "a process",
-            ParseContext::HexColor => "a hex color",
-            ParseContext::Equation => "an equation",
-            ParseContext::Restriction => "a restriction",
-            ParseContext::Macro => "a macro",
-            ParseContext::Rule => "a rule",
-            ParseContext::Lemma => "a lemma",
-            ParseContext::FunctionDeclaration => "a function",
-            ParseContext::Builtin => "a builtin",
-            ParseContext::RestrictionAttribute => "a restriction attribute",
-            ParseContext::LemmaAttribute => "a lemma attribute",
-            ParseContext::RuleAttribute => "a rule attribute",
-            ParseContext::Term => "a term",
-            ParseContext::FreshLiteral => "a fresh literal",
-            ParseContext::NatLiteral => "a nat literal",
-            ParseContext::PublicLiteral => "a public literal",
-            ParseContext::Variable => "a variable",
-            ParseContext::Identifier => "an identifier",
-            ParseContext::StringLiteral => "a string literal",
-            ParseContext::TheoryItem => "a theory item",
-            ParseContext::PreprocessorDirective => "a preprocessor directive",
-            ParseContext::TypeAnnotation => "a type annotation",
-            ParseContext::PredicateDeclaration => "a predicate declaration",
-            ParseContext::ExportBody => "an export body",
-            ParseContext::IncludedFile(_) => "an included file",
-            ParseContext::Theory => "a theory",
-            ParseContext::TermAtom => "an atomic term",
-            ParseContext::FormulaAtom => "an atomic formula",
-            ParseContext::ExportItem => "an export item",
-            ParseContext::ModuloKind => "a modulo annotation",
-        }
-    }
-
-    /// The names this context accepts, for the `expected` list of a
-    /// [`ParseError::UnknownItem`].  A context that names no fixed vocabulary
-    /// has no such list.
-    fn expected(&self) -> Vec<&'static str> {
-        match self {
-            ParseContext::Builtin => BuiltinKind::iter().map(|b| b.as_str()).collect(),
-            ParseContext::RestrictionAttribute => {
-                RestrictionAttr::iter().map(|r| r.as_str()).collect()
-            }
-            ParseContext::LemmaAttribute => LemmaAttr::expected(),
-            ParseContext::RuleAttribute => RuleAttr::expected(),
-            ParseContext::Formula
-            | ParseContext::Process
-            | ParseContext::HexColor
-            | ParseContext::Equation
-            | ParseContext::Theory
-            | ParseContext::Restriction
-            | ParseContext::Macro
-            | ParseContext::Rule
-            | ParseContext::Lemma
-            | ParseContext::FunctionDeclaration
-            | ParseContext::Term
-            | ParseContext::FreshLiteral
-            | ParseContext::NatLiteral
-            | ParseContext::PublicLiteral
-            | ParseContext::Variable
-            | ParseContext::Identifier
-            | ParseContext::StringLiteral
-            | ParseContext::TheoryItem
-            | ParseContext::PreprocessorDirective
-            | ParseContext::TypeAnnotation
-            | ParseContext::PredicateDeclaration
-            | ParseContext::ExportBody
-            | ParseContext::TermAtom
-            | ParseContext::FormulaAtom
-            | ParseContext::ExportItem
-            | ParseContext::IncludedFile(_) => vec![],
-            ParseContext::ModuloKind => vec!["AC", "E"],
+            Self::Theory => "theory",
+            Self::TheoryItem => "theory item",
+            Self::Identifier => "identifier",
+            Self::FunctionDeclaration => "function declaration",
+            Self::Equation => "equation",
+            Self::Builtin => "builtin",
+            Self::Macro => "macro",
+            Self::Rule => "rule",
+            Self::RuleAttribute => "rule attribute",
+            Self::Restriction => "restriction",
+            Self::RestrictionAttribute => "restriction attribute",
+            Self::Lemma => "lemma",
+            Self::LemmaAttribute => "lemma attribute",
+            Self::Formula => "formula",
+            Self::Term => "term",
+            Self::Process => "process",
+            Self::Include => "included file",
         }
     }
 }
 
-#[derive(Debug, Clone)]
-pub enum ParseError {
-    UsedReservedKeyword {
-        found: String,
-        expected: Vec<String>,
-        at: Location,
+/// Semantic classification for failures where the parser has more useful
+/// information than a generic expected-token set.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ParseErrorKind {
+    Expected {
+        context: ParseContext,
+    },
+    ReservedKeyword {
+        keyword: String,
     },
     IllegalDiffOperator {
-        /// Was the diff flag set when parsing
-        diff_set: bool,
-        /// If present, the `diff` operator is not allowed in the context
-        //  Currently, only used with `ParseContext::Equation`
-        context: Option<ParseContext>,
-        at: Location,
+        diff_enabled: bool,
+        in_equation: bool,
     },
-    DuplicateMacroArg {
-        arg: String,
-        first_at: Location,
-        second_at: Location,
+    DuplicateMacroArgument {
+        argument: String,
     },
     UndeclaredFunction {
         name: String,
-        at: Location,
     },
-    UsedReservedBuiltin {
-        f: String,
-        at: Location,
+    ReservedBuiltin {
+        name: String,
         context: ParseContext,
     },
     MalformedHexColor {
-        msg: String,
-        at: Location,
+        reason: String,
     },
-    FunctionUsedWithWrongArity {
+    WrongFunctionArity {
         name: String,
-        declared_arity: usize,
-        used_arity: usize,
-        declared_at: Option<Location>,
-        used_at: Location,
+        declared: usize,
+        used: usize,
     },
-    ConflictingDeclarations {
+    ConflictingDeclaration {
         name: String,
-        first_context: ParseContext,
-        second_context: ParseContext,
-        first_at: Option<Location>,
-        second_at: Location,
+        context: ParseContext,
     },
-    WrongArityforACFunctionDeclaration {
+    DuplicateDeclaration {
         name: String,
-        found_arity: usize,
-        at: Location,
+        context: ParseContext,
+    },
+    NonBinaryAcFunction {
+        name: String,
+        arity: usize,
     },
     UnclosedDelimiter {
         opening: String,
-        opening_at: Location,
-        found: Option<String>,
-        found_at: Location,
-        expected: Vec<String>,
+        opening_span: Span,
+        closing: String,
     },
     UnknownItem {
-        item_kind: ParseContext,
-        unknown_item: String,
-        at: Location,
+        item: String,
+        context: ParseContext,
     },
-    FactNameMustStartWithUppercase {
+    InvalidFactName {
         name: String,
-        at: Location,
     },
-    FreshFactCannotBePersistent {
-        at: Location,
-    },
-    FactArityMismatch {
+    PersistentFreshFact,
+    FactArity {
         name: String,
         arity: usize,
-        at: Location,
     },
-    IoError {
+    IncludeIo {
         path: String,
+        reason: String,
+    },
+    Custom,
+    Abort {
         message: String,
-        at: Location,
     },
-    /// Bridge for parser sites not yet converted to a dedicated variant: an
-    /// expected-set failure at a location.
-    Expected {
-        found: Option<String>,
-        expected: Vec<String>,
-        at: Location,
-        when_parsing: ParseContext,
-    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiagnosticLabel {
+    pub span: Span,
+    pub message: String,
+    pub primary: bool,
 }
 
 #[derive(Debug, Clone)]
-pub struct ParseErrorLabel {
-    pub at: Location,
-    pub message: String,
-    pub is_primary: bool,
+pub(crate) struct DiagnosticSource {
+    pub name: String,
+    pub contents: Arc<str>,
+}
+
+impl ParseErrorKind {
+    fn headline(&self) -> String {
+        match self {
+            Self::Expected { context } => {
+                format!("Unexpected input while parsing {}", context.description())
+            }
+            Self::ReservedKeyword { .. } => "Reserved keyword used as an identifier".into(),
+            Self::IllegalDiffOperator { .. } => "Illegal diff operator".into(),
+            Self::DuplicateMacroArgument { .. } => "Duplicate macro argument".into(),
+            Self::UndeclaredFunction { .. } => "Undeclared function".into(),
+            Self::ReservedBuiltin { context, .. } => {
+                format!("Reserved builtin used in {}", context.description())
+            }
+            Self::MalformedHexColor { .. } => "Malformed hex color".into(),
+            Self::WrongFunctionArity { .. } => "Function used with the wrong arity".into(),
+            Self::ConflictingDeclaration { context, .. } => {
+                format!("Conflicting {}", context.description())
+            }
+            Self::DuplicateDeclaration { context, .. } => {
+                format!("Duplicate {}", context.description())
+            }
+            Self::NonBinaryAcFunction { .. } => "Non-binary AC function declaration".into(),
+            Self::UnclosedDelimiter { .. } => "Unclosed delimiter".into(),
+            Self::UnknownItem { context, item } => {
+                format!("Unknown {} `{item}`", context.description())
+            }
+            Self::InvalidFactName { .. } => "Fact name must start with uppercase".into(),
+            Self::PersistentFreshFact => "Fresh fact cannot be persistent".into(),
+            Self::FactArity { .. } => "Fact arity mismatch".into(),
+            Self::IncludeIo { .. } => "Could not read included file".into(),
+            Self::Custom => "Parser error".into(),
+            Self::Abort { message } => message.clone(),
+        }
+    }
 }
 
 impl ParseError {
-    /// Add an expected item to the error's `expected` list, if it has one.
-    pub(crate) fn add_expected(&mut self, exp: impl Into<String>) {
-        match self {
-            ParseError::Expected { expected, .. }
-            | ParseError::UsedReservedKeyword { expected, .. }
-            | ParseError::UnclosedDelimiter { expected, .. } => {
-                let exp = exp.into();
-                if !expected.contains(&exp) {
-                    expected.push(exp);
+    pub(crate) fn set_kind(&mut self, kind: ParseErrorKind) {
+        self.kind = kind;
+    }
+
+    pub(crate) fn with_kind(mut self, kind: ParseErrorKind) -> Self {
+        self.kind = kind;
+        self
+    }
+
+    pub fn kind(&self) -> &ParseErrorKind {
+        &self.kind
+    }
+
+    pub fn span(&self) -> Span {
+        let mut span = self.span;
+        if span.start == span.end {
+            if let Some(source) = &self.diagnostic_source {
+                let start = span.start as usize;
+                if let Some(ch) = source.contents.get(start..).and_then(|s| s.chars().next()) {
+                    span.end = span.start.saturating_add(ch.len_utf8() as u32);
                 }
             }
-            // Explicity match to force compile-time error for new variants
-            ParseError::IllegalDiffOperator { .. }
-            | ParseError::FactNameMustStartWithUppercase { .. }
-            | ParseError::FreshFactCannotBePersistent { .. }
-            | ParseError::FactArityMismatch { .. }
-            | ParseError::UnknownItem { .. }
-            | ParseError::ConflictingDeclarations { .. }
-            | ParseError::IoError { .. }
-            | ParseError::UsedReservedBuiltin { .. }
-            | ParseError::FunctionUsedWithWrongArity { .. }
-            | ParseError::WrongArityforACFunctionDeclaration { .. }
-            | ParseError::MalformedHexColor { .. }
-            | ParseError::UndeclaredFunction { .. }
-            | ParseError::DuplicateMacroArg { .. } => {}
         }
+        span
     }
 
-    pub fn location(&self) -> &Location {
-        match self {
-            ParseError::UsedReservedKeyword { at, .. }
-            | ParseError::IllegalDiffOperator { at, .. }
-            | ParseError::FactNameMustStartWithUppercase { at, .. }
-            | ParseError::FreshFactCannotBePersistent { at }
-            | ParseError::FactArityMismatch { at, .. }
-            | ParseError::IoError { at, .. }
-            | ParseError::UnknownItem { at, .. }
-            | ParseError::Expected { at, .. }
-            | ParseError::UsedReservedBuiltin { at, .. }
-            | ParseError::UndeclaredFunction { at, .. }
-            | ParseError::MalformedHexColor { at, .. }
-            | ParseError::WrongArityforACFunctionDeclaration { at, .. }
-            | ParseError::UnclosedDelimiter { found_at: at, .. } => at,
-            ParseError::DuplicateMacroArg { second_at, .. } => second_at,
-            ParseError::ConflictingDeclarations { second_at, .. } => second_at,
-            ParseError::FunctionUsedWithWrongArity { used_at, .. } => used_at,
+    /// Attach the source bytes at the API boundary. Existing include-source
+    /// metadata wins, so a nested failure is never relabelled as the root file.
+    pub fn with_source_text(
+        mut self,
+        name: impl Into<String>,
+        contents: impl Into<Arc<str>>,
+    ) -> Self {
+        if self.diagnostic_source.is_none() {
+            self.diagnostic_source = Some(DiagnosticSource {
+                name: name.into(),
+                contents: contents.into(),
+            });
         }
+        self
     }
 
-    pub(crate) fn into_found(self) -> Option<String> {
-        match self {
-            ParseError::Expected { found, .. } | ParseError::UnclosedDelimiter { found, .. } => {
-                found
-            }
-            ParseError::UnknownItem {
-                unknown_item: item, ..
-            } => Some(item),
-            ParseError::UsedReservedKeyword { found, .. } => Some(found),
-            ParseError::FactNameMustStartWithUppercase { name, .. }
-            | ParseError::FactArityMismatch { name, .. } => Some(name),
-            ParseError::IllegalDiffOperator { .. }
-            | ParseError::FreshFactCannotBePersistent { .. }
-            | ParseError::IoError { .. }
-            | ParseError::MalformedHexColor { .. }
-            | ParseError::DuplicateMacroArg { .. }
-            | ParseError::WrongArityforACFunctionDeclaration { .. }
-            | ParseError::UsedReservedBuiltin { .. }
-            | ParseError::UndeclaredFunction { .. }
-            | ParseError::ConflictingDeclarations { .. }
-            | ParseError::FunctionUsedWithWrongArity { .. } => None,
-        }
+    pub(crate) fn with_input(self, contents: &str) -> Self {
+        self.with_source_text(String::new(), Arc::<str>::from(contents))
     }
 
-    pub fn found(&self) -> Option<&str> {
-        match self {
-            ParseError::Expected { found, .. } | ParseError::UnclosedDelimiter { found, .. } => {
-                found.as_deref()
-            }
-            ParseError::UnknownItem {
-                unknown_item: item, ..
-            } => Some(item.as_str()),
-            ParseError::UsedReservedKeyword { found, .. } => Some(found.as_str()),
-            ParseError::FactNameMustStartWithUppercase { name, .. }
-            | ParseError::FactArityMismatch { name, .. } => Some(name.as_str()),
-            ParseError::IllegalDiffOperator { .. }
-            | ParseError::FreshFactCannotBePersistent { .. }
-            | ParseError::IoError { .. }
-            | ParseError::DuplicateMacroArg { .. }
-            | ParseError::WrongArityforACFunctionDeclaration { .. }
-            | ParseError::MalformedHexColor { .. }
-            | ParseError::FunctionUsedWithWrongArity { .. }
-            | ParseError::UndeclaredFunction { .. }
-            | ParseError::UsedReservedBuiltin { .. }
-            | ParseError::ConflictingDeclarations { .. } => None,
-        }
+    pub fn source_name(&self) -> Option<&str> {
+        self.diagnostic_source
+            .as_ref()
+            .map(|s| s.name.as_str())
+            .filter(|name| !name.is_empty())
     }
 
-    pub fn expected(&self) -> Option<Vec<String>> {
-        let raw_expected = match self {
-            ParseError::UsedReservedKeyword { expected, .. }
-            | ParseError::Expected { expected, .. }
-            | ParseError::UnclosedDelimiter { expected, .. } => Some(expected.clone()),
-            ParseError::UnknownItem {
-                item_kind: kind, ..
-            } => Some(kind.expected().into_iter().map(|s| s.to_string()).collect()),
-            ParseError::FactNameMustStartWithUppercase { .. }
-            | ParseError::IllegalDiffOperator { .. }
-            | ParseError::FreshFactCannotBePersistent { .. }
-            | ParseError::FactArityMismatch { .. }
-            | ParseError::IoError { .. }
-            | ParseError::DuplicateMacroArg { .. }
-            | ParseError::FunctionUsedWithWrongArity { .. }
-            | ParseError::MalformedHexColor { .. }
-            | ParseError::WrongArityforACFunctionDeclaration { .. }
-            | ParseError::UndeclaredFunction { .. }
-            | ParseError::ConflictingDeclarations { .. }
-            | ParseError::UsedReservedBuiltin { .. } => None,
-        }?;
-        // Typo suggestions: the two variants whose lists enumerate every known
-        // name are ranked by edit distance to the found token and cut to the
-        // closest 3.  Grammar expectation sets pass through whole, in HS's
-        // order.
-        let rank_expected = match self {
-            ParseError::Expected { expected, .. } => is_theory_item_expected(expected),
-            ParseError::UnknownItem { .. } => true,
-            _ => false,
+    pub fn source_text(&self) -> Option<&str> {
+        self.diagnostic_source.as_ref().map(|s| s.contents.as_ref())
+    }
+
+    pub fn line_column(&self) -> (u32, u32) {
+        let Some(source) = &self.diagnostic_source else {
+            return (self.line, self.col);
         };
-        match self {
-            _ if rank_expected => Some(match self.found() {
-                Some(found) => {
-                    let mut ranked: Vec<(usize, usize, String)> = raw_expected
-                        .into_iter()
-                        .enumerate()
-                        .map(|(idx, exp)| (edit_distance(found, &exp), idx, exp))
-                        .collect();
-                    ranked.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
-                    ranked.into_iter().take(3).map(|(_, _, exp)| exp).collect()
-                }
-                None => raw_expected.into_iter().take(3).collect(),
-            }),
-            _ => Some(raw_expected),
+        line_column(source.contents.as_ref(), self.span.start as usize)
+    }
+
+    pub fn diagnostic_message(&self) -> String {
+        if matches!(self.kind, ParseErrorKind::Custom) {
+            self.messages
+                .iter()
+                .find_map(|message| match message {
+                    Message::Message(message) => Some(message.clone()),
+                    _ => None,
+                })
+                .unwrap_or_else(|| self.kind.headline())
+        } else {
+            self.kind.headline()
         }
     }
 
-    /// The error's headline, borrowed from the fixed table below except where
-    /// the offending name is part of the message.
-    pub fn description(&self) -> Cow<'static, str> {
-        Cow::Borrowed(match self {
-            ParseError::UsedReservedKeyword { .. } => "Used reserved keyword",
-            ParseError::IllegalDiffOperator { .. } => "Illegal diff operator",
-            ParseError::UnclosedDelimiter { .. } => "Unterminated delimiter",
-            ParseError::UnknownItem {
-                unknown_item,
-                item_kind,
+    pub fn diagnostic_labels(&self) -> Vec<DiagnosticLabel> {
+        let primary = DiagnosticLabel {
+            span: self.span(),
+            message: self.diagnostic_message(),
+            primary: true,
+        };
+        match &self.kind {
+            ParseErrorKind::UnclosedDelimiter {
+                opening,
+                opening_span,
                 ..
-            } => {
-                // The offending name is part of the headline, so this one is
-                // built per error rather than borrowed.
-                return Cow::Owned(format!("Unknown {} `{}`", item_kind.as_str(), unknown_item));
-            }
-            ParseError::FactNameMustStartWithUppercase { .. } => {
-                "Fact name must start with uppercase"
-            }
-            ParseError::FreshFactCannotBePersistent { .. } => "Fresh fact cannot be persistent",
-            ParseError::FactArityMismatch { .. } => "Fact arity mismatch",
-            ParseError::IoError { .. } => "I/O error",
-            ParseError::Expected { when_parsing, .. } => {
-                return Cow::Owned(format!(
-                    "Unexpected input when parsing {}",
-                    when_parsing.as_str()
-                ))
-            }
-            ParseError::ConflictingDeclarations { second_context, .. } => {
-                return Cow::Owned(format!(
-                    "Conflicting {} declaration",
-                    second_context.as_str()
-                ))
-            }
-            ParseError::WrongArityforACFunctionDeclaration { .. } => {
-                "Non-binary AC function declaration"
-            }
-            ParseError::MalformedHexColor { .. } => "Malformed hex color",
-            ParseError::FunctionUsedWithWrongArity { .. } => "Function used with wrong arity",
-            ParseError::UsedReservedBuiltin { context, .. } => {
-                return Cow::Owned(format!("Reserved builtin function in {}", context.as_str()))
-            }
-            ParseError::UndeclaredFunction { .. } => "Undeclared function",
-            ParseError::DuplicateMacroArg { .. } => "Duplicate macro argument",
-        })
+            } => vec![
+                primary,
+                DiagnosticLabel {
+                    span: *opening_span,
+                    message: format!("`{opening}` opened here"),
+                    primary: false,
+                },
+            ],
+            _ => vec![primary],
+        }
     }
 
-    pub fn labels(&self) -> Vec<ParseErrorLabel> {
-        match self {
-            ParseError::UsedReservedKeyword { found, .. } => vec![ParseErrorLabel {
-                at: *self.location(),
-                message: format!("Used reserved keyword `{}`", found),
-                is_primary: true,
-            }],
-            ParseError::IllegalDiffOperator { .. } => vec![ParseErrorLabel {
-                at: *self.location(),
-                message: self.description().to_string(),
-                is_primary: true,
-            }],
-            ParseError::UnclosedDelimiter {
-                opening,
-                opening_at,
-                found,
-                found_at,
-                expected,
+    pub fn diagnostic_notes(&self) -> Vec<String> {
+        let mut notes = match &self.kind {
+            ParseErrorKind::ReservedKeyword { keyword } => vec![format!(
+                "`{keyword}` is reserved and cannot be used as an identifier"
+            )],
+            ParseErrorKind::IllegalDiffOperator {
+                in_equation: true, ..
             } => {
-                let primary_at = if found.is_some() {
-                    *found_at
+                vec!["the `diff` operator is not allowed in equations".into()]
+            }
+            ParseErrorKind::IllegalDiffOperator {
+                diff_enabled: false,
+                ..
+            } => {
+                vec!["the `diff` operator requires diff mode".into()]
+            }
+            ParseErrorKind::DuplicateMacroArgument { argument } => {
+                vec![format!(
+                    "macro argument `{argument}` is listed more than once"
+                )]
+            }
+            ParseErrorKind::UndeclaredFunction { name } => {
+                vec![format!("declare function `{name}` before using it")]
+            }
+            ParseErrorKind::ReservedBuiltin { name, .. } => {
+                vec![format!("builtin function `{name}` is reserved")]
+            }
+            ParseErrorKind::MalformedHexColor { reason } => vec![reason.clone()],
+            ParseErrorKind::WrongFunctionArity {
+                name,
+                declared,
+                used,
+            } => vec![format!(
+                "`{name}` was declared with arity {declared}, but used with arity {used}"
+            )],
+            ParseErrorKind::ConflictingDeclaration { name, .. } => {
+                vec![format!("`{name}` was already declared incompatibly")]
+            }
+            ParseErrorKind::DuplicateDeclaration { name, .. } => {
+                vec![format!("`{name}` was already declared")]
+            }
+            ParseErrorKind::NonBinaryAcFunction { name, arity } => vec![format!(
+                "AC function `{name}` has arity {arity}; AC functions must be binary"
+            )],
+            ParseErrorKind::UnclosedDelimiter { closing, .. } => {
+                vec![format!("expected closing delimiter `{closing}`")]
+            }
+            ParseErrorKind::UnknownItem { item, .. } => {
+                vec![format!("`{item}` is not valid in this context")]
+            }
+            ParseErrorKind::InvalidFactName { name } => vec![format!(
+                "fact name `{name}` must start with an uppercase letter"
+            )],
+            ParseErrorKind::PersistentFreshFact => {
+                vec!["the builtin `Fr` fact cannot be persistent".into()]
+            }
+            ParseErrorKind::FactArity { name, arity } => vec![format!(
+                "fact `{name}` has arity {arity}, but this fact requires arity 1"
+            )],
+            ParseErrorKind::IncludeIo { path, reason } => {
+                vec![format!("failed to read `{path}`: {reason}")]
+            }
+            ParseErrorKind::Abort { message } => {
+                if message == &self.kind.headline() {
+                    Vec::new()
                 } else {
-                    *opening_at
-                };
-                vec![
-                    ParseErrorLabel {
-                        at: primary_at,
-                        message: format!("expected closing {}", format_expected_list(expected)),
-                        is_primary: true,
-                    },
-                    ParseErrorLabel {
-                        at: *opening_at,
-                        message: format!("opening `{opening}` starts here"),
-                        is_primary: false,
-                    },
-                ]
-            }
-            ParseError::DuplicateMacroArg {
-                arg,
-                first_at,
-                second_at,
-            } => {
-                vec![
-                    ParseErrorLabel {
-                        at: *second_at,
-                        message: format!("duplicate macro argument `{arg}`"),
-                        is_primary: true,
-                    },
-                    ParseErrorLabel {
-                        at: *first_at,
-                        message: format!("first occurrence of argument `{arg}`"),
-                        is_primary: false,
-                    },
-                ]
-            }
-            ParseError::ConflictingDeclarations {
-                name,
-                first_context,
-                second_context,
-                first_at,
-                second_at,
-            } => {
-                let kind = second_context.as_str();
-                let msg = format!("conflicting {kind} declaration for `{name}`",);
-                let mut lbls = vec![ParseErrorLabel {
-                    at: *second_at,
-                    message: msg,
-                    is_primary: true,
-                }];
-                if let Some(first_at) = first_at {
-                    lbls.push(ParseErrorLabel {
-                        at: *first_at,
-                        message: format!(
-                            "first declaration of `{name}` as {}",
-                            first_context.as_str_with_article()
-                        ),
-                        is_primary: false,
-                    });
+                    vec![message.clone()]
                 }
-                lbls
             }
-            ParseError::MalformedHexColor { msg, at } => {
-                let lbls = vec![ParseErrorLabel {
-                    at: *at,
-                    message: format!("malformed hex color: {msg}"),
-                    is_primary: true,
-                }];
-                lbls
+            ParseErrorKind::Custom => Vec::new(),
+            ParseErrorKind::Expected { .. } | ParseErrorKind::IllegalDiffOperator { .. } => {
+                Vec::new()
             }
-            ParseError::FunctionUsedWithWrongArity {
-                name,
-                declared_arity,
-                used_arity,
-                declared_at,
-                used_at,
-            } => {
-                let mut lbls = vec![ParseErrorLabel {
-                    at: *used_at,
-                    message: format!("function `{name}` was used with arity {used_arity}, but it has arity {declared_arity}"),
-                    is_primary: true,
-                }];
-                if let Some(declared_at) = declared_at {
-                    lbls.push(ParseErrorLabel {
-                        at: *declared_at,
-                        message: format!("declared with arity {declared_arity} here"),
-                        is_primary: false,
-                    });
-                }
-                lbls
-            }
-            ParseError::UsedReservedBuiltin { f, at, context } => {
-                vec![ParseErrorLabel {
-                    at: *at,
-                    message: format!(
-                        "reserved builtin function `{f}` was used in {}",
-                        context.as_str_with_article()
-                    )
-                    .to_string(),
-                    is_primary: true,
-                }]
-            }
-            ParseError::UndeclaredFunction { name, at } => {
-                vec![ParseErrorLabel {
-                    at: *at,
-                    message: format!("`{name}` is not a declared function symbol"),
-                    is_primary: true,
-                }]
-            }
-            _ => vec![ParseErrorLabel {
-                at: *self.location(),
-                message: self.description().to_string(),
-                is_primary: true,
-            }],
-        }
-    }
+        };
 
-    pub fn notes(&self) -> Vec<String> {
-        match self {
-            ParseError::UsedReservedKeyword { found, .. } => vec![format!(
-                "`{found}` is a reserved word and cannot be used as an identifier"
-            )],
-            ParseError::IllegalDiffOperator {
-                diff_set, context, ..
-            } => {
-                let mut notes = vec![];
-                if let Some(c) = context {
-                    notes.push(format!(
-                        "diff operator is not allowed in {}",
-                        c.as_str_plural()
-                    ));
-                }
-                if !*diff_set {
-                    notes.push("diff operator found, but flag diff not set".to_string());
-                }
-                notes
-            }
-            ParseError::UndeclaredFunction { .. } => {
-                vec!["functions must be declared before use".to_string()]
-            }
-            ParseError::Expected {
-                found, expected, ..
-            } => {
-                let list = format_expected_list(expected);
-                vec![match found {
-                    Some(found) => format!("expected {list}, but found `{found}`"),
-                    None => format!("expected {list}"),
-                }]
-            }
-            ParseError::UnclosedDelimiter {
-                opening,
-                opening_at,
-                found,
-                found_at,
-                expected,
-            } => {
-                let mut notes = vec![format!(
-                    "delimiter `{opening}` was opened at line {}, column {} and needs closing {}",
-                    opening_at.line,
-                    opening_at.col,
-                    format_expected_list(expected)
-                )];
-                if let Some(found) = found {
-                    notes.push(format!(
-                        "encountered `{found}` at line {}, column {} before a closing delimiter",
-                        found_at.line, found_at.col
-                    ));
-                }
-                notes
-            }
-            ParseError::UnknownItem {
-                unknown_item: found,
-                item_kind: kind,
-                ..
-            } => vec![format_found_expected_note(
-                kind.as_str(),
-                Some(found),
-                &self.expected().unwrap_or_default(),
-            )],
-            ParseError::FactNameMustStartWithUppercase { name, .. } => {
-                vec![format!(
-                    "fact name `{name}` must start with an uppercase letter"
-                )]
-            }
-            ParseError::FreshFactCannotBePersistent { .. } => {
-                vec!["fresh facts (`Fr`) cannot be persistent facts".to_string()]
-            }
-            ParseError::FactArityMismatch { name, arity, .. } => {
-                vec![format!(
-                    "fact `{name}` was used with arity {arity}, but it must have arity 1"
-                )]
-            }
-            ParseError::IoError { path, message, .. } => {
-                vec![format!("failed to read included file `{path}`: {message}")]
-            }
-            ParseError::ConflictingDeclarations { second_context, .. } => {
-                let tail = match second_context {
-                    ParseContext::Macro => "unique",
-                    _ => "unique or consistent",
-                };
-                vec![format!(
-                    "{} declarations must be {}",
-                    second_context.as_str(),
-                    tail
-                )]
-            }
-            ParseError::WrongArityforACFunctionDeclaration { .. } => {
-                vec!["AC function declarations must be binary".into()]
-            }
-            ParseError::MalformedHexColor { .. } => {
-                vec!["Hex color literals must be in the format `#RRGGBB`".into()]
-            }
-            ParseError::FunctionUsedWithWrongArity { .. } => {
-                vec!["Function must be used with the declared arity".into()]
-            }
-            ParseError::UsedReservedBuiltin { context, .. } => {
-                vec![format!(
-                    "Reserved builtin functions cannot be used in {}",
-                    context.as_str_plural()
-                )]
-            }
-            ParseError::DuplicateMacroArg { .. } => {
-                vec!["Macro arguments must be unique".into()]
+        if matches!(self.kind, ParseErrorKind::Expected { .. }) {
+            let found = self.messages.iter().find_map(|message| match message {
+                Message::SysUnExpect(s) | Message::UnExpect(s) if !s.is_empty() => Some(s.as_str()),
+                _ => None,
+            });
+            let expected: Vec<&str> = self
+                .messages
+                .iter()
+                .filter_map(|message| match message {
+                    Message::Expect(s) if !s.is_empty() => Some(s.as_str()),
+                    _ => None,
+                })
+                .collect();
+            if !expected.is_empty() {
+                let expected = expected.join(", ");
+                notes.push(match found {
+                    Some(found) => format!("expected {expected}; found {found}"),
+                    None => format!("expected {expected}"),
+                });
             }
         }
+        notes
     }
 
-    pub fn message(&self) -> String {
-        self.description().to_string()
-    }
-
-    pub fn label_message(&self) -> String {
-        self.description().to_string()
-    }
-}
-
-impl std::fmt::Display for ParseError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.message())
-    }
-}
-
-fn is_theory_item_expected(expected: &[String]) -> bool {
-    expected.contains(&"\"heuristic\"".to_string())
-        && expected.contains(&"\"lemma\"".to_string())
-        && expected.contains(&"\"rule\"".to_string())
-        && expected.contains(&"\"end\"".to_string())
-}
-
-fn format_expected_list(expected: &[String]) -> String {
-    match expected.len() {
-        0 => "EOF".to_string(),
-        1 => format!("`{}`", expected[0]),
-        2 => format!("`{}` or `{}`", expected[0], expected[1]),
-        _ => {
-            let mut s = String::new();
-            for (idx, item) in expected.iter().enumerate() {
-                if idx > 0 {
-                    if idx == expected.len() - 1 {
-                        s.push_str(", or ");
-                    } else {
-                        s.push_str(", ");
-                    }
-                }
-                s.push('`');
-                s.push_str(item);
-                s.push('`');
+    pub fn render_plain(&self) -> String {
+        let (line, col) = self.line_column();
+        let name = self.source_name().unwrap_or("<input>");
+        let mut out = format!("{name}:{line}:{col}: {}", self.diagnostic_message());
+        if let Some(source) = &self.diagnostic_source {
+            for label in self
+                .diagnostic_labels()
+                .into_iter()
+                .filter(|label| !label.primary)
+            {
+                let (line, col) = line_column(source.contents.as_ref(), label.span.start as usize);
+                out.push_str(&format!(
+                    "\n  = label: {name}:{line}:{col}: {}",
+                    label.message
+                ));
             }
-            s
+        }
+        for note in self.diagnostic_notes() {
+            out.push_str("\n  = note: ");
+            out.push_str(&note);
+        }
+        out
+    }
+}
+
+fn line_column(source: &str, offset: usize) -> (u32, u32) {
+    let mut line = 1u32;
+    let mut col = 1u32;
+    for ch in source[..offset.min(source.len())].chars() {
+        match ch {
+            '\n' => {
+                line += 1;
+                col = 1;
+            }
+            '\t' => col += 8 - ((col - 1) % 8),
+            _ => col += 1,
         }
     }
+    (line, col)
 }
 
-fn format_found_expected_note(kind: &str, found: Option<&str>, expected: &[String]) -> String {
-    match found {
-        Some(found) => format!(
-            "expected {kind} {}, but found `{found}`",
-            format_expected_list(expected)
-        ),
-        None => format!("expected {kind} {}", format_expected_list(expected)),
+impl fmt::Display for ParseErrorKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.headline())
     }
 }
-
-fn edit_distance(a: &str, b: &str) -> usize {
-    let a_chars: Vec<char> = a.chars().collect();
-    let b_chars: Vec<char> = b.chars().collect();
-    let mut prev: Vec<usize> = (0..=b_chars.len()).collect();
-    let mut curr = vec![0; b_chars.len() + 1];
-
-    for (i, a_ch) in a_chars.iter().enumerate() {
-        curr[0] = i + 1;
-        for (j, b_ch) in b_chars.iter().enumerate() {
-            let cost = if a_ch == b_ch { 0 } else { 1 };
-            let del = prev[j + 1] + 1;
-            let ins = curr[j] + 1;
-            let sub = prev[j] + cost;
-            curr[j + 1] = del.min(ins).min(sub);
-        }
-        std::mem::swap(&mut prev, &mut curr);
-    }
-
-    prev[b_chars.len()]
-}
-
-impl std::error::Error for ParseError {}

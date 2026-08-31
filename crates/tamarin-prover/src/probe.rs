@@ -303,7 +303,7 @@ fn check_maude_install(err: &str) -> Result<String, String> {
 /// `getVersionIO` puts in the `Generated from:` block — the raw
 /// `maude --version` stdout (newline included) when both probes passed, else
 /// `unknown version\n` or `<version> (unsupported)\n`.
-pub fn ensure_maude(maude: &str, exec: &str) -> (bool, String) {
+pub(crate) fn ensure_maude(maude: &str, exec: &str) -> (bool, String) {
     eprintln!("maude tool: '{maude}'");
     // HS `errMsg'` (Console.hs:178): one default message shared by both
     // probes, reached only through the bad-exit-code reason.
@@ -405,7 +405,7 @@ fn stderr_contains(needle: &str, ok_msg: &str, err: &str) -> Result<String, Stri
 ///
 /// Returns HS's `Maybe String`; both callers only look at whether it is
 /// `Some`.
-pub fn ensure_graph_viz_dot(dot: &str) -> Option<String> {
+pub(crate) fn ensure_graph_viz_dot(dot: &str) -> Option<String> {
     eprintln!("GraphViz tool: '{dot}'");
     let dot_exists = test_process(
         |_, err| stderr_contains("graphviz", "", err),
@@ -441,7 +441,7 @@ pub fn ensure_graph_viz_dot(dot: &str) -> Option<String> {
 /// maude/dot checks, carries no leading space and no trailing newline.  The
 /// verdict is discarded by Interactive.hs:106-108, so this never aborts
 /// startup.
-pub fn ensure_graph_command(cmd: &str) -> Option<String> {
+pub(crate) fn ensure_graph_command(cmd: &str) -> Option<String> {
     eprintln!("Graph rendering command: {cmd}");
     test_process(
         |_, err| {

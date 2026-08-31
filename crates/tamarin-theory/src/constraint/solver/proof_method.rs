@@ -51,14 +51,6 @@ pub enum ProofMethod {
     Induction,
     Finished(Result),
     Invalidated,
-    /// Display-only: `solve( <raw_inner> )`.  Used for HS-faithful
-    /// unannotated subtree display (replay.rs `parsed_to_unannotated`)
-    /// where we have the original skeleton text but no live Goal object.
-    /// HS `noSystemPrf` (Theory/Proof.hs:447-467, see line 467) clears the per-node system info
-    /// (`mapProofInfo (\i -> (Just i, Nothing))`); the ProofMethod itself
-    /// is preserved by the proof-tree node, not by `noSystemPrf`.  RS uses
-    /// raw inner text as the closest equivalent.
-    RawSolve(String),
 }
 
 /// `isFinished`: returns the appropriate `Result` if the system is in
@@ -71,9 +63,7 @@ pub fn is_finished(ctx: &ProofContext, sys: &System) -> Option<Result> {
     if let Some(c) = cs.into_iter().next() {
         // Mirror Haskell `contradictorySystem`: any contradiction
         // closes the branch as `Contradictory`.  Haskell's `isFinished`
-        // does not gate this on incomplete-source consumption —
-        // `Source.incomplete` only affects diagnostic warnings, not the
-        // search verdict.
+        // does not gate this on source-case diagnostics.
         return Some(Result::Contradictory(Some(c)));
     }
     // Direct port of Haskell `isFinished` (ProofMethod.hs):
@@ -90,9 +80,7 @@ pub fn is_finished(ctx: &ProofContext, sys: &System) -> Option<Result> {
     let no_open_goals = open_goals(sys).is_empty();
     let sub_finished = finished_subterms(ctx, sys);
     if no_open_goals && sub_finished {
-        // Haskell's `isFinished` doesn't gate Solved on `incomplete`
-        // source consumption — `Source.incomplete` is diagnostic-only
-        // there.  Match that.
+        // Haskell's `isFinished` returns Solved directly here.
         Some(Result::Solved)
     } else if no_open_goals && !sub_finished {
         Some(Result::Unfinishable)
@@ -179,7 +167,7 @@ pub fn is_applicable_for_display(ctx: &ProofContext, method: &ProofMethod, sys: 
             exec_proof_method(ctx, method, sys).is_some()
         }
         ProofMethod::Sorry(_) | ProofMethod::Finished(_) => true,
-        ProofMethod::Invalidated | ProofMethod::RawSolve(_) => false,
+        ProofMethod::Invalidated => false,
     }
 }
 
@@ -329,49 +317,10 @@ pub fn exec_proof_method(
     let avoid = crate::constraint::solver::reduction::avoid_fresh_state(sys);
     ctx.maude.reset_counter_to(avoid);
 
-    let dbg_sua = tamarin_utils::env_gate!("TAM_RS_DBG_SUA");
-    if dbg_sua {
-        let mname = match method {
-            ProofMethod::Sorry(_) => "Sorry",
-            ProofMethod::Finished(_) => "Finished",
-            ProofMethod::Invalidated => "Invalidated",
-            ProofMethod::RawSolve(_) => "RawSolve",
-            ProofMethod::Simplify => "Simplify",
-            ProofMethod::Induction => "Induction",
-            ProofMethod::SolveGoal(_) => "SolveGoal",
-        };
-        eprintln!(
-            "[EXECPM] enter method={} goals={} nodes={} avoid={}",
-            mname,
-            sys.goals.iter().count(),
-            sys.nodes.iter().count(),
-            avoid
-        );
-    }
-    let _execpm_exit = if dbg_sua {
-        struct ExitLog(std::time::Instant);
-        impl Drop for ExitLog {
-            fn drop(&mut self) {
-                eprintln!("[EXECPM] exit after {:?}", self.0.elapsed());
-            }
-        }
-        Some(ExitLog(std::time::Instant::now()))
-    } else {
-        None
-    };
-
     match method {
         ProofMethod::Sorry(_) | ProofMethod::Finished(_) => Some(Vec::new()),
-        ProofMethod::Invalidated | ProofMethod::RawSolve(_) => None,
+        ProofMethod::Invalidated => None,
         ProofMethod::Simplify => {
-            // HS-faithful: `simplifySystem` (Simplify.hs:56-57) emits
-            // its `traceExecM "simplifySystem"` ONCE per call; its
-            // internal `go`-loop runs CR-rules to a fixpoint without
-            // re-tracing.  We mirror that by tracing here (the logical
-            // invocation site) and leaving `simplify_system` un-traced,
-            // so the outer fixpoint loop below doesn't duplicate the
-            // line.
-            crate::constraint::solver::trace::trace_exec("simplifySystem");
             // HS-faithful simplify-time fan-out.  When
             // `solveUniqueActions` calls `solveGoal (ActionG i fa)`,
             // the `Reduction = StateT System (FreshT (DisjT ...))`
@@ -556,12 +505,7 @@ pub fn exec_proof_method(
             // `Finished(Contradictory(_))` leaves.  Do *not* filter those
             // here, or the proof tree loses siblings whose contradiction
             // reason Haskell renders.
-            let keep = |sys: &System, name: &str| -> bool {
-                let r = !sys.eq_store.is_false();
-                let op = if r { "case_keep" } else { "case_drop" };
-                crate::state_trace::emit_case(op, name, Some(g), sys);
-                r
-            };
+            let keep = |sys: &System| -> bool { !sys.eq_store.is_false() };
             // HS-faithful: `process` (ProofMethod.hs:301-307) treats
             // EVERY `solveGoal` result UNIFORMLY — the solve yields ONE
             // `CaseName`, then `runReduction (m <* simplifySystem)` fans the
@@ -620,33 +564,12 @@ pub fn exec_proof_method(
                 let kept_raw: Vec<(String, System)> = cases
                     .into_iter()
                     .flat_map(|(name, sys, seed)| {
-                        // `TAM_RS_TRACE_CASE_SIMP=1`: bracket each
-                        // per-case simplify so interleaved trace hooks
-                        // (EDGES/SIMP_CONTRA/SET_NODES) attribute to a
-                        // named case.
-                        let dbg = tamarin_utils::env_gate!("TAM_RS_TRACE_CASE_SIMP");
-                        if dbg {
-                            eprintln!(
-                                "[CASE_SIMP] begin name={} path={}",
-                                name,
-                                crate::constraint::solver::trace::case_path_string()
-                            );
-                        }
                         let systems = simplify(sys, seed);
-                        let n_arms = systems.len();
                         let out: Vec<(String, System)> = systems
                             .into_iter()
-                            .filter(|s| keep(s, &name))
+                            .filter(|s| keep(s))
                             .map(|s| (name.clone(), s))
                             .collect();
-                        if dbg {
-                            eprintln!(
-                                "[CASE_SIMP] end name={} arms={} kept={}",
-                                name,
-                                n_arms,
-                                out.len()
-                            );
-                        }
                         out
                     })
                     .collect();
@@ -787,7 +710,6 @@ pub fn check_and_exec_proof_method(
             }
         }
         ProofMethod::Simplify | ProofMethod::Sorry(_) | ProofMethod::Invalidated => {}
-        ProofMethod::RawSolve(_) => return None,
     }
     exec_proof_method(ctx, method, sys)
 }
@@ -804,10 +726,9 @@ fn same_kind(a: &Result, b: &Result) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tamarin_parser::DUMMY_LOCATION;
     use tamarin_term::maude_sig::pair_maude_sig;
 
-    use crate::test_maude::maude_path;
+    use tamarin_test_support::require_maude_path;
 
     /// The result is `None` only when [`maude_path`] resolves nothing.  That
     /// case is the documented `TAM_ALLOW_NO_MAUDE` skip.  A maude that
@@ -815,7 +736,7 @@ mod tests {
     /// `MAUDE_PATH`.  An `.ok()?` here would silently skip every maude-backed
     /// test in this file.
     fn ctx() -> Option<ProofContext> {
-        let path = maude_path()?;
+        let path = require_maude_path()?;
         let h = tamarin_term::maude_proc::MaudeHandle::start(&path, pair_maude_sig())
             .unwrap_or_else(|e| {
                 panic!(
@@ -930,47 +851,22 @@ mod tests {
         // Build a closed action-bearing formula:
         //   Ex k #i. Setup(k) @ #i
         // tracked as a guarded GGuarded::Ex with a single Action guard.
-        use tamarin_parser::ast::{Atom, Fact, SortHint, Term, VarSpec};
-        let mkvar = |n: &str, sort: SortHint| {
-            Term::Var(VarSpec {
-                name: n.to_string(),
-                idx: 0,
-                sort,
-                typ: None,
-                location: DUMMY_LOCATION,
-            })
-        };
-        let action_atom = Atom::Action(
-            Fact {
-                persistent: false,
-                annotations: Vec::new(),
-                name: "Setup".into(),
-                args: vec![mkvar("k", SortHint::Msg)],
-                location: tamarin_parser::DUMMY_LOCATION,
-            },
-            mkvar("i", SortHint::Node),
+        use crate::atom::ProtoAtom;
+        use crate::fact::{proto_fact, Multiplicity};
+        use tamarin_term::lterm::{LSort, LVar};
+        use tamarin_term::vterm::var_term;
+        let k = LVar::new("k", LSort::Msg, 0);
+        let i = LVar::new("i", LSort::Node, 0);
+        let action_atom = ProtoAtom::Action(
+            var_term(i),
+            proto_fact(Multiplicity::Linear, "Setup", vec![var_term(k)]),
         );
         let body = crate::guarded::Guarded::Conj(Vec::new().into());
         // Build with close_guarded so the binder's `k` and `i` are
         // properly substituted to `Bound` in the guard atom.
         let fm = crate::guarded::close_guarded(
-            crate::guarded::Quant::Ex,
-            vec![
-                VarSpec {
-                    name: "k".into(),
-                    idx: 0,
-                    sort: SortHint::Msg,
-                    typ: None,
-                    location: DUMMY_LOCATION,
-                },
-                VarSpec {
-                    name: "i".into(),
-                    idx: 0,
-                    sort: SortHint::Node,
-                    typ: None,
-                    location: DUMMY_LOCATION,
-                },
-            ],
+            crate::formula::Quantifier::Ex,
+            vec![k, i],
             vec![action_atom],
             body,
         );

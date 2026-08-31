@@ -1,0 +1,19 @@
+theory HideReuseLemma
+begin
+
+rule Register:
+  [ Fr( ~k ) ] --[ Reg( ~k ), Helper( ~k ) ]-> [ Out( ~k ) ]
+
+lemma helper [reuse]:
+  all-traces
+  "All k #i #j. Helper( k ) @ #i & Helper( k ) @ #j ==> #i = #j"
+
+lemma keeps_helper:
+  all-traces
+  "All k #i #j. Reg( k ) @ #i & Reg( k ) @ #j ==> #i = #j"
+
+lemma hides_helper [hide_lemma=helper]:
+  all-traces
+  "All k #i #j. Reg( k ) @ #i & Reg( k ) @ #j ==> #i = #j"
+
+end

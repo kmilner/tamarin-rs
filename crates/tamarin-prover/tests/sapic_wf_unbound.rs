@@ -17,7 +17,8 @@
 //!     appends its rules to `thyItems`;
 //!   - the whole group still sorts at HS check index 2, ahead of `factReports`
 //!     entries;
-//!   - and ahead of `ruleVariantsReport`'s (index 6) "Rule has no variants";
+//!   - and ahead of `ruleVariantsReport`'s (index 6) "Rule has no variants",
+//!     whose rule `closeProtoRule` drops from the closed theory;
 //!   - the variable a `lookup t as v` combinator binds is NOT reported, per
 //!     `originatesFromLookup` (Wellformedness.hs:501-510).
 //!
@@ -149,6 +150,13 @@ fn sapic_restrict_unbound_sorts_before_rule_variants() {
         body.contains(&expected),
         "the generated-rule `Unbound variables` group must splice ahead of \
          `Rule has no variants`.\nexpected:\n{expected}\ngot:\n{body}"
+    );
+    // HS `closeProtoRule` (lib/theory/src/Rule.hs:82-86, see line 84) makes no
+    // closed rule for a rule with no variants, so `NoVar` reaches the report
+    // but not the printed theory.  The oracle prints the same.
+    assert!(
+        !body.contains("rule (modulo E) NoVar"),
+        "a rule with no variants is dropped from the closed theory\ngot:\n{body}"
     );
 }
 

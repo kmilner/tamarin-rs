@@ -72,26 +72,6 @@ impl<'a> Lexer<'a> {
         it.next()
     }
 
-    pub fn peek_until(&self, mut f: impl FnMut(char) -> bool) -> Option<&'a str> {
-        let rest = self.rest();
-        if rest.is_empty() {
-            return None;
-        }
-        let mut end = 0;
-        for c in rest.chars() {
-            if f(c) {
-                break;
-            }
-            end += c.len_utf8();
-        }
-        Some(&rest[..end])
-    }
-
-    /// Peek the next run of non-whitespace chars without advancing.
-    pub fn peek_until_ws(&self) -> Option<&'a str> {
-        self.peek_until(|c| c.is_whitespace())
-    }
-
     /// Advance one char, updating line/col.
     ///
     /// Columns follow parsec's `updatePosChar` (Text/Parsec/Pos.hs): `\n`
@@ -375,6 +355,33 @@ impl<'a> Lexer<'a> {
     /// Note: export bodies use a *different*, stricter character grammar — see
     /// [`Lexer::export_body`].
     pub fn string_literal(&mut self) -> Option<String> {
+        self.quoted(Self::string_escape)
+    }
+
+    /// Parse a string literal and also return its exact half-open source range,
+    /// including the quotes but excluding trailing whitespace.
+    pub fn string_literal_spanned(&mut self) -> Option<(String, std::ops::Range<usize>)> {
+        self.quoted_spanned(Self::string_escape)
+    }
+
+    /// A double-quoted run: every char up to the closing `"` is taken
+    /// verbatim except `\`, which is consumed and the rest of the escape
+    /// handed to `escape`.  `escape` returns `Some(Some(c))` for a produced
+    /// char, `Some(None)` for an escape that produces nothing, and `None` to
+    /// fail the whole literal. A failure — an unterminated run included —
+    /// restores the position, so the caller can offer another alternative.
+    /// Trailing whitespace after the closing quote is always consumed.
+    fn quoted<F>(&mut self, mut escape: F) -> Option<String>
+    where
+        F: FnMut(&mut Self) -> Option<Option<char>>,
+    {
+        self.quoted_spanned(&mut escape).map(|(value, _)| value)
+    }
+
+    fn quoted_spanned<F>(&mut self, mut escape: F) -> Option<(String, std::ops::Range<usize>)>
+    where
+        F: FnMut(&mut Self) -> Option<Option<char>>,
+    {
         self.skip_ws();
         let save = self.pos;
         if !self.eat('"') {
@@ -390,14 +397,15 @@ impl<'a> Lexer<'a> {
                 }
                 Some('"') => {
                     self.bump();
+                    let end = self.pos.offset;
                     self.skip_ws();
-                    return Some(s);
+                    return Some((s, save.offset..end));
                 }
                 Some('\\') => {
                     self.bump();
-                    match self.string_escape() {
+                    match escape(self) {
                         Some(Some(c)) => s.push(c),
-                        Some(None) => {} // empty escape `\&` or gap `\  \`
+                        Some(None) => {}
                         None => {
                             self.pos = save;
                             return None;
@@ -582,46 +590,13 @@ impl<'a> Lexer<'a> {
     /// the backslash dropped); a bare `"` terminates the body and any other `\x`
     /// fails the whole parse. Used for `export <tag>: "..."` blocks.
     pub fn export_body(&mut self) -> Option<String> {
-        self.skip_ws();
-        let save = self.pos;
-        if !self.eat('"') {
-            self.pos = save;
-            return None;
-        }
-        let mut s = String::new();
-        loop {
-            match self.peek() {
-                None => {
-                    self.pos = save;
-                    return None;
-                }
-                Some('"') => {
-                    self.bump();
-                    self.skip_ws();
-                    return Some(s);
-                }
-                Some('\\') => {
-                    self.bump();
-                    match self.peek() {
-                        Some(c @ '\\') | Some(c @ '"') => {
-                            s.push(c);
-                            self.bump();
-                        }
-                        // Any other `\x` makes `bodyChar` (wrapped in `try`)
-                        // backtrack, so `many bodyChar` stops and the closing
-                        // `"` is never found at this position — the export fails.
-                        _ => {
-                            self.pos = save;
-                            return None;
-                        }
-                    }
-                }
-                Some(c) => {
-                    s.push(c);
-                    self.bump();
-                }
+        self.quoted(|lexer| match lexer.peek() {
+            Some(c @ ('\\' | '"')) => {
+                lexer.bump();
+                Some(Some(c))
             }
-        }
+            _ => None,
+        })
     }
 
     /// Single-quoted string literal — not allowing single-quote or newline inside.
@@ -743,14 +718,14 @@ impl<'a> Lexer<'a> {
 }
 
 #[inline]
-pub fn is_ident_char(c: char) -> bool {
+pub(crate) fn is_ident_char(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
 }
 
 /// Reserved names that `T.identifier spthy` rejects (Token.hs:214-230, see line 225). A word equal
 /// to one of these is not a valid identifier.
 #[inline]
-pub fn is_reserved_name(s: &str) -> bool {
+pub(crate) fn is_reserved_name(s: &str) -> bool {
     matches!(s, "in" | "let" | "rule" | "diff")
 }
 
@@ -880,6 +855,13 @@ mod tests {
         // HS export `bodyChar`: `\\`->`\`, `\"`->`"`.
         let mut l = Lexer::new("\"a\\\\b\\\"c\"");
         assert_eq!(l.export_body().as_deref(), Some("a\\b\"c"));
+    }
+
+    #[test]
+    fn export_body_preserves_leading_whitespace_and_comments() {
+        let mut l = Lexer::new("\"  // body text\nnext\"  tail");
+        assert_eq!(l.export_body().as_deref(), Some("  // body text\nnext"));
+        assert_eq!(l.rest(), "tail");
     }
 
     #[test]

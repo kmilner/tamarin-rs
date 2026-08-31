@@ -10,8 +10,10 @@ description = "SAPIC process calculus for the Tamarin prover (Rust port)."
 [dependencies]
 tamarin-utils = { workspace = true }
 tamarin-term = { workspace = true }
-tamarin-parser = { workspace = true }
 tamarin-theory = { workspace = true }
+
+[dev-dependencies]
+tamarin-parser = { workspace = true }
 
 [lints]
 workspace = true

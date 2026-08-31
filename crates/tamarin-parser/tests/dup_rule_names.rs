@@ -2,7 +2,7 @@
 // of the tamarin-prover sources this file cites; list them with:
 //   scripts/gen_license_headers.py --authors <this file>
 
-//! Parity for the duplicate-rule / duplicate-restriction guards
+//! Byte-pinned parity for the duplicate-rule / duplicate-restriction guards
 //! `liftedAddProtoRule` (Theory/Text/Parser.hs:175-193) runs after each
 //! protocol rule parses:
 //!
@@ -11,79 +11,35 @@
 //!     guard and is appended a second time;
 //!   * each `_restrict` formula's minted `Restr_<rule>_<i>` restriction goes
 //!     through `addRestriction` (TheoryObject.hs:453-456) FIRST, which rejects
-//!     on an existing NAME alone;
-//!   * an explicit `restriction` (or legacy `axiom`) item goes through the
-//!     same guard via `liftedAddRestriction` (Theory/Text/Parser.hs:129-134),
-//!     so it also rejects on any existing restriction name, minted ones
-//!     included.
+//!     on an existing NAME alone.
 //!
 //! Both rejections are `throwM` → `fail (show e)` (Token.hs:210-211) with
-//! `show (DuplicateItem …)` (Parser/Exceptions.hs:38-40): a recoverable
-//! failure, which the port reports as [`ParseError::ConflictingDeclarations`]
-//! (context [`ParseContext::Rule`] / [`ParseContext::Restriction`]) carrying
-//! both items' source spans.
+//! `show (DuplicateItem …)` (Parser/Exceptions.hs:38-40): an ordinary parsec
+//! `fail` at the position after the rule, merging the trailing
+//! `option [] $ symbol "variants" …` label (Parser/Rule.hs:134).
 //!
-//! Which theories are rejected (and which load) is pinned to the Haskell
-//! oracle (Git revision ef3f0468); every accepted theory loads with exit 0
-//! there.
+//! The item-level guards work the same way: `liftedAddLemma`
+//! (Theory/Text/Parser.hs:141-147) and `liftedAddRestriction`
+//! (Theory/Text/Parser.hs:129-134) reject a reused lemma/restriction NAME,
+//! and `liftedAddPredicate` (Theory/Text/Parser/Signature.hs:328-331)
+//! rejects a redeclared predicate fact TAG — each failing at the position
+//! past its item, merging whatever labels stand there.
+//!
+//! Every expected
+//! string below is the stderr the pinned Haskell oracle (Git revision
+//! ef3f0468) prints for the same theory, minus the three `maude tool:` banner
+//! lines; every accepted theory loads with exit 0 there.
 
 use tamarin_parser::ast::TheoryItem;
-use tamarin_parser::parser::ParseContext;
-use tamarin_parser::{parse_theory, ParseError};
+use tamarin_parser::parse_theory;
 
-/// The `(name, first_at, second_at)` of `src`'s duplicate-rule
-/// [`ParseError::ConflictingDeclarations`], positions flattened to
-/// `(line, col)`.
-#[track_caller]
-fn dup_rule_err(src: &str) -> (String, (u32, u32), (u32, u32)) {
-    dup_rule_check(parse_theory(src, &[]))
-}
-
-/// [`dup_rule_err`] for an already-run parse.
-#[track_caller]
-fn dup_rule_check<T>(res: Result<T, ParseError>) -> (String, (u32, u32), (u32, u32)) {
-    let e = match res {
-        Ok(_) => panic!("the probes below must all fail to parse"),
-        Err(e) => e,
-    };
-    let ParseError::ConflictingDeclarations {
-        name,
-        first_context: ParseContext::Rule,
-        second_context: ParseContext::Rule,
-        first_at,
-        second_at,
-    } = e
-    else {
-        panic!("expected the duplicate-rule variant, got {e:?}");
-    };
-    let first_at = first_at.expect("a duplicate rule has a first site");
-    (
-        name,
-        (first_at.line, first_at.col),
-        (second_at.line, second_at.col),
-    )
-}
-
-/// The same for the duplicate-restriction context.
-#[track_caller]
-fn dup_restriction_err(src: &str) -> (String, (u32, u32), (u32, u32)) {
-    let e = parse_theory(src, &[]).expect_err("the probes below must all fail to parse");
-    let ParseError::ConflictingDeclarations {
-        name,
-        first_context: ParseContext::Restriction,
-        second_context: ParseContext::Restriction,
-        first_at,
-        second_at,
-    } = e
-    else {
-        panic!("expected the duplicate-restriction variant, got {e:?}");
-    };
-    let first_at = first_at.expect("a duplicate restriction has a first site");
-    (
-        name,
-        (first_at.line, first_at.col),
-        (second_at.line, second_at.col),
-    )
+/// The parse error for `src`, rendered with `file` as parsec's `SourcePos`
+/// name — the same string HS's `show err` produces (and the RS CLI prints).
+fn err(src: &str, file: &str) -> String {
+    parse_theory(src, &[])
+        .unwrap_err()
+        .with_source(file)
+        .to_string()
 }
 
 /// The names of the protocol-rule items in `src`'s parsed theory.
@@ -101,15 +57,21 @@ fn rule_names(src: &str) -> Vec<String> {
 
 /// Same name, different `color=` attribute: attributes are part of the
 /// `ProtoRuleE` the guard compares (`ru ==`, OpenTheory.hs:697), so this is a
-/// different rule and dies at the second rule's add, with both rules' spans
-/// in the error.
+/// different rule and dies at the second rule's add — the fail sits at the
+/// next token (`end`), after the second rule's trailing `variants` attempt.
 #[test]
 fn different_color_same_name_is_a_duplicate() {
     let src = "theory T begin\n\n\
                rule R1[color=ff0000]: [ ] --> [ ]\n\
                rule R1[color=00ff00]: [ ] --> [ ]\n\n\
                end\n";
-    assert_eq!(dup_rule_err(src), ("R1".to_string(), (3, 1), (4, 1)));
+    assert_eq!(
+        err(src, "dup.spthy"),
+        "\"dup.spthy\" (line 6, column 1):\n\
+         unexpected \"e\"\n\
+         expecting \"variants\"\n\
+         duplicate rule: R1"
+    );
 }
 
 /// Same name, different conclusions.
@@ -119,11 +81,18 @@ fn different_body_same_name_is_a_duplicate() {
                rule R1: [ ] --> [ Out('a') ]\n\
                rule R1: [ ] --> [ Out('b') ]\n\n\
                end\n";
-    assert_eq!(dup_rule_err(src), ("R1".to_string(), (3, 1), (4, 1)));
+    assert_eq!(
+        err(src, "dup.spthy"),
+        "\"dup.spthy\" (line 6, column 1):\n\
+         unexpected \"e\"\n\
+         expecting \"variants\"\n\
+         duplicate rule: R1"
+    );
 }
 
 /// The guard fires as soon as the second rule has parsed — mid-file, before a
-/// later parse error is ever reached.
+/// later parse error is ever reached (`unexpected "r"` is the following
+/// `rule` keyword's first char).
 #[test]
 fn duplicate_fires_before_a_later_parse_error() {
     let src = "theory T begin\n\n\
@@ -131,7 +100,13 @@ fn duplicate_fires_before_a_later_parse_error() {
                rule R1: [ ] --> [ Out('b') ]\n\n\
                rule Broken: [ ] --> [\n\
                end\n";
-    assert_eq!(dup_rule_err(src), ("R1".to_string(), (3, 1), (4, 1)));
+    assert_eq!(
+        err(src, "dup.spthy"),
+        "\"dup.spthy\" (line 6, column 1):\n\
+         unexpected \"r\"\n\
+         expecting \"variants\"\n\
+         duplicate rule: R1"
+    );
 }
 
 /// A byte-identical duplicate passes `addOpenProtoRule`'s
@@ -177,8 +152,11 @@ fn identical_restrict_duplicate_dies_at_the_restriction() {
                rule R1: [ ] --[ _restrict( All x #i #j. A(x) @ #i & A(x) @ #j ==> #i = #j ) ]-> [ Out('a') ]\n\n\
                end\n";
     assert_eq!(
-        dup_restriction_err(src),
-        ("Restr_R1_1".to_string(), (3, 29), (4, 29))
+        err(src, "dup.spthy"),
+        "\"dup.spthy\" (line 6, column 1):\n\
+         unexpected \"e\"\n\
+         expecting \"variants\"\n\
+         duplicate restriction: Restr_R1_1"
     );
 }
 
@@ -192,11 +170,12 @@ fn user_restriction_blocks_restrict_expansion() {
                \"All x #i #j. B(x) @ #i & B(x) @ #j ==> #i = #j\"\n\n\
                rule R1: [ ] --[ _restrict( All x #i #j. A(x) @ #i & A(x) @ #j ==> #i = #j ) ]-> [ Out('a') ]\n\n\
                end\n";
-    // `first_at` is the user restriction's own span; `second_at` the minted
-    // restriction's origin, the `_restrict(…)` action.
     assert_eq!(
-        dup_restriction_err(src),
-        ("Restr_R1_1".to_string(), (3, 1), (6, 29))
+        err(src, "dup.spthy"),
+        "\"dup.spthy\" (line 8, column 1):\n\
+         unexpected \"e\"\n\
+         expecting \"variants\"\n\
+         duplicate restriction: Restr_R1_1"
     );
 }
 
@@ -209,14 +188,19 @@ fn second_rule_with_restrict_is_a_duplicate_rule() {
                rule R1: [ ] --> [ Out('a') ]\n\
                rule R1: [ ] --[ _restrict( All x #i #j. A(x) @ #i & A(x) @ #j ==> #i = #j ) ]-> [ Out('a') ]\n\n\
                end\n";
-    assert_eq!(dup_rule_err(src), ("R1".to_string(), (3, 1), (4, 1)));
+    assert_eq!(
+        err(src, "dup.spthy"),
+        "\"dup.spthy\" (line 6, column 1):\n\
+         unexpected \"e\"\n\
+         expecting \"variants\"\n\
+         duplicate rule: R1"
+    );
 }
 
 /// The guard spans `#include` fragments: HS runs one `addItems` accumulation
 /// across included files, so a rule in the fragment collides with a
-/// different same-named rule in the including file.  `first_at` carries the
-/// included rule's position in the FRAGMENT's own coordinates (a known rough
-/// edge: the error does not record which file that span belongs to).
+/// different same-named rule in the including file.  The error sits in the
+/// including file, at the token after its rule.
 #[test]
 fn duplicate_across_include_is_rejected() {
     let dir = std::env::temp_dir().join(format!(
@@ -233,81 +217,198 @@ fn duplicate_across_include_is_rejected() {
                #include \"frag.spthy\"\n\n\
                rule R1[color=00ff00]: [ ] --> [ ]\n\n\
                end\n";
+    let e = tamarin_parser::parse_theory_with_base(src, &[], Some(dir.clone()))
+        .unwrap_err()
+        .with_source("dup.spthy")
+        .to_string();
     assert_eq!(
-        dup_rule_check(tamarin_parser::parse_theory_with_base(
-            src,
-            &[],
-            Some(dir.clone())
-        )),
-        ("R1".to_string(), (1, 1), (5, 1))
+        e,
+        "\"dup.spthy\" (line 7, column 1):\n\
+         unexpected \"e\"\n\
+         expecting \"variants\"\n\
+         duplicate rule: R1"
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// Two explicit restrictions under one name die at the second one's add —
-/// HS `addRestriction` rejects on the NAME alone (TheoryObject.hs:453-456).
+/// A second lemma with a reused name dies at `addLemma`'s name guard
+/// (TheoryObject.hs:462-465, reached through `liftedAddLemma`,
+/// Theory/Text/Parser.hs:280-282).  Neither lemma carries a proof, so the
+/// unmatched `startProofSkeleton` alternatives
+/// (Theory/Text/Parser/Lemma.hs:85, Theory/Text/Parser/Proof.hs:76-115) leave
+/// their labels at the item's end, and the fail merges them in.
 #[test]
-fn duplicate_explicit_restrictions_conflict() {
+fn duplicate_lemma_without_proof_carries_the_skeleton_labels() {
     let src = "theory T begin\n\
-               restriction R: \"All x #i #j. A(x) @ #i & A(x) @ #j ==> #i = #j\"\n\
-               restriction R: \"All x #i #j. B(x) @ #i & B(x) @ #j ==> #i = #j\"\n\
-               rule Rl: [ ] --[ A('a') ]-> [ ]\n\
-               end\n";
-    assert_eq!(dup_restriction_err(src), ("R".to_string(), (2, 1), (3, 1)));
-}
-
-/// The legacy `axiom` spelling adds through the same guard
-/// (`liftedAddRestriction`, Theory/Text/Parser.hs:270), so it shares the
-/// restriction name space.
-#[test]
-fn axiom_and_restriction_share_one_name_space() {
-    let src = "theory T begin\n\
-               axiom R: \"All x #i #j. A(x) @ #i & A(x) @ #j ==> #i = #j\"\n\
-               restriction R: \"All x #i #j. B(x) @ #i & B(x) @ #j ==> #i = #j\"\n\
-               rule Rl: [ ] --[ A('a') ]-> [ ]\n\
-               end\n";
-    assert_eq!(dup_restriction_err(src), ("R".to_string(), (2, 1), (3, 1)));
-}
-
-/// The reverse of [`user_restriction_blocks_restrict_expansion`]: a minted
-/// `Restr_<rule>_<i>` name blocks a LATER explicit restriction, since the
-/// guard checks against ALL restrictions added so far.  `first_at` is the
-/// minted restriction's origin, the `_restrict(…)` formula.
-#[test]
-fn minted_restriction_blocks_a_later_explicit_one() {
-    let src = "theory T begin\n\
-               rule R1: [ ] --[ _restrict( All x #i #j. A(x) @ #i & A(x) @ #j ==> #i = #j ) ]-> [ Out('a') ]\n\
-               restriction Restr_R1_1: \"All x #i #j. B(x) @ #i & B(x) @ #j ==> #i = #j\"\n\
+               rule r: [ Fr(~k) ] --> [ Out(~k) ]\n\
+               lemma l: exists-trace \"Ex #i x. K(x)@i\"\n\
+               lemma l: exists-trace \"Ex #i x. K(x)@i\"\n\
                end\n";
     assert_eq!(
-        dup_restriction_err(src),
-        ("Restr_R1_1".to_string(), (2, 29), (3, 1))
+        err(src, "dup.spthy"),
+        "\"dup.spthy\" (line 5, column 1):\n\
+         unexpected \"e\"\n\
+         expecting \"SOLVED\", \"by\", \"sorry\", \"simplify\", \"solve\", \"contradiction\", \
+         \"induction\", \"INVALIDATED\" or \"UNFINISHABLE\"\n\
+         duplicate lemma: l"
     );
 }
 
-/// Lemmas and restrictions have separate name spaces (`lookupRestriction`
-/// searches restriction items only) — a lemma named like a minted
-/// restriction loads.  The oracle accepts this theory at exit 0.
+/// When the second lemma DOES carry a proof, the skeleton alternatives were
+/// consumed, no labels stand at the item's end, and the frame is bare.
 #[test]
-fn lemma_named_like_a_minted_restriction_is_accepted() {
+fn duplicate_lemma_with_proof_has_a_bare_frame() {
     let src = "theory T begin\n\
-               rule R1: [ ] --[ _restrict( All x #i #j. A(x) @ #i & A(x) @ #j ==> #i = #j ) ]-> [ Out('a') ]\n\
-               lemma Restr_R1_1: \"All x #i. A(x) @ #i ==> Ex #j. A(x) @ #j\"\n\
+               rule r: [ Fr(~k) ] --> [ Out(~k) ]\n\
+               lemma l: exists-trace \"Ex #i x. K(x)@i\"\n\
+               lemma l: exists-trace \"Ex #i x. K(x)@i\"\n\
+               simplify\n\
+               by sorry\n\
                end\n";
-    parse_theory(src, &[]).expect("lemma and restriction name spaces are separate");
+    assert_eq!(
+        err(src, "dup.spthy"),
+        "\"dup.spthy\" (line 7, column 1):\n\
+         unexpected \"e\"\n\
+         duplicate lemma: l"
+    );
 }
 
-/// Side-attributed restrictions dedup PER SIDE in HS (`addRestrictionDiff`,
-/// Theory/Text/Parser.hs:546-558), which this port does not implement, and
-/// HS's non-diff grammar has no attribute list at all — so a `[left]`/
-/// `[right]` pair under one name stays accepted here (the diff corpus
-/// carries this shape in every jcs19-xor diff model).
 #[test]
-fn side_attributed_restrictions_are_not_deduplicated() {
+fn sided_lemmas_still_share_the_regular_lemma_namespace() {
     let src = "theory T begin\n\
-               rule R: [ In(x) ] --[ Eq(x, x) ]-> [ ]\n\
-               restriction equality [right]: \"All x y #i. Eq(x, y) @ #i ==> x = y\"\n\
-               restriction equality [left]: \"All x y #i. Eq(x, y) @ #i ==> x = y\"\n\
+               lemma l [left]: exists-trace \"Ex #i. A() @ #i\"\n\
+               lemma l [left]: exists-trace \"Ex #i. A() @ #i\"\n\
                end\n";
-    parse_theory(src, &[]).expect("side-attributed restrictions do not name-conflict");
+    assert!(
+        err(src, "dup.spthy").contains("duplicate lemma: l"),
+        "a non-diff theory must reject duplicate sided lemmas"
+    );
+}
+
+/// A second `restriction` item with a reused name dies at `addRestriction`'s
+/// name guard (TheoryObject.hs:453-456, reached through
+/// `liftedAddRestriction`, Theory/Text/Parser.hs:129-134).  The closing
+/// quote's lexeme leaves no labels, so the frame is bare.
+#[test]
+fn duplicate_restriction_item_is_rejected() {
+    let src = "theory T begin\n\
+               rule r: [ Fr(~k) ] --> [ Out(~k) ]\n\
+               restriction one: \"All #i #j x. A(x)@i & A(x)@j ==> #i = #j\"\n\
+               restriction one: \"All #i #j x. A(x)@i & A(x)@j ==> #i = #j\"\n\
+               end\n";
+    assert_eq!(
+        err(src, "dup.spthy"),
+        "\"dup.spthy\" (line 5, column 1):\n\
+         unexpected \"e\"\n\
+         duplicate restriction: one"
+    );
+}
+
+/// Lemmas and restrictions have separate name spaces: `lookupLemma` only
+/// sees `LemmaItem`s and `lookupRestriction` only `RestrictionItem`s
+/// (TheoryObject.hs:671-676), so a lemma may reuse a restriction's name.
+#[test]
+fn lemma_and_restriction_names_do_not_collide() {
+    let src = "theory T begin\n\
+               rule r: [ Fr(~k) ] --> [ Out(~k) ]\n\
+               restriction Smaller: \"All #i #j x. A(x)@i & A(x)@j ==> #i = #j\"\n\
+               lemma l: exists-trace \"Ex #i x. K(x)@i\"\n\
+               lemma Smaller: exists-trace \"Ex #i x. K(x)@i\"\n\
+               end\n";
+    assert!(parse_theory(src, &[]).is_ok());
+}
+
+/// A predicate redeclared in a LATER block dies at `addPredicate`'s tag guard
+/// (TheoryObject.hs:540-543 via `lookupPredicate`,
+/// Theory/Syntactic/Predicate.hs:77-80), raised past the second block.  The
+/// last formula ends right after the timepoint variable `#i`, whose pending
+/// dot-index attempt contributes the leading `"."` label ahead of the formula
+/// operators and `commaSep1`'s comma.
+#[test]
+fn duplicate_predicate_across_blocks_is_rejected() {
+    let src = "theory T begin\n\
+               predicates: P(x) <=> Ex #i. A(x)@i\n\
+               predicates: P(x) <=> Ex #i. A(x)@i\n\
+               rule r: [ In(x) ] --> [ Out(x) ]\n\
+               end\n";
+    assert_eq!(
+        err(src, "dup.spthy"),
+        "\"dup.spthy\" (line 4, column 1):\n\
+         unexpected \"r\"\n\
+         expecting \".\", \"&\", \"∧\", \"|\", \"∨\", \"==>\", \"⇒\", \"<=>\", \"⇔\" or \",\"\n\
+         duplicate predicate: P( x )"
+    );
+}
+
+/// The same collision with the formula ending in a closing paren: the paren's
+/// lexeme moved past the variable's dot-index attempt, so no `"."` label.
+#[test]
+fn duplicate_predicate_after_paren_has_no_dot_label() {
+    let src = "theory T begin\n\
+               predicates: P(x) <=> (Ex #i. A(x)@i)\n\
+               predicates: P(x) <=> (Ex #i. A(x)@i)\n\
+               rule r: [ In(x) ] --> [ Out(x) ]\n\
+               end\n";
+    assert_eq!(
+        err(src, "dup.spthy"),
+        "\"dup.spthy\" (line 4, column 1):\n\
+         unexpected \"r\"\n\
+         expecting \"&\", \"∧\", \"|\", \"∨\", \"==>\", \"⇒\", \"<=>\", \"⇔\" or \",\"\n\
+         duplicate predicate: P( x )"
+    );
+}
+
+#[test]
+fn duplicate_predicate_renders_annotations() {
+    let src = "theory T begin\n\
+               predicates: P(x)[-] <=> x = x\n\
+               predicates: P(y)[+] <=> y = y\n\
+               end\n";
+    assert_eq!(
+        err(src, "dup.spthy"),
+        "\"dup.spthy\" (line 4, column 1):\n\
+         unexpected \"e\"\n\
+         expecting \".\", \"&\", \"∧\", \"|\", \"∨\", \"==>\", \"⇒\", \"<=>\", \"⇔\" or \",\"\n\
+         duplicate predicate: P( y )[+]"
+    );
+}
+
+/// `lookupPredicate` appends the builtin predicates to the lookup list
+/// (Theory/Syntactic/Predicate.hs:58-67,78), so declaring `Smaller/2`
+/// collides with the builtin.  The formula's last term ends after a message
+/// variable, so the enabled multiset operator labels sit between the dot
+/// attempt and the formula operators.
+#[test]
+fn predicate_collides_with_builtin_smaller() {
+    let src = "theory T begin\n\
+               builtins: multiset\n\
+               predicates: Smaller(x,y) <=> Ex z. y = x ++ z\n\
+               rule r: [ In(x) ] --> [ Out(x) ]\n\
+               end\n";
+    assert_eq!(
+        err(src, "dup.spthy"),
+        "\"dup.spthy\" (line 4, column 1):\n\
+         unexpected \"r\"\n\
+         expecting \".\", \"++\", \"+\", \"&\", \"∧\", \"|\", \"∨\", \"==>\", \"⇒\", \"<=>\", \"⇔\" or \",\"\n\
+         duplicate predicate: Smaller( x, y )"
+    );
+}
+
+/// The duplicate key is the fact TAG (`sameName` is tag equality,
+/// Theory/Syntactic/Predicate.hs:78-80), so a persistent head only collides
+/// with a persistent head, and the message renders `showFactTag`'s `!`.
+#[test]
+fn duplicate_persistent_predicate_renders_the_bang() {
+    let src = "theory T begin\n\
+               predicates: !P(x) <=> Ex #i. A(x)@i\n\
+               predicates: !P(x) <=> Ex #i. A(x)@i\n\
+               rule r: [ In(x) ] --> [ Out(x) ]\n\
+               end\n";
+    assert_eq!(
+        err(src, "dup.spthy"),
+        "\"dup.spthy\" (line 4, column 1):\n\
+         unexpected \"r\"\n\
+         expecting \".\", \"&\", \"∧\", \"|\", \"∨\", \"==>\", \"⇒\", \"<=>\", \"⇔\" or \",\"\n\
+         duplicate predicate: !P( x )"
+    );
 }

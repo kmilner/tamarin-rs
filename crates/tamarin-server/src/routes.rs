@@ -112,10 +112,7 @@ fn theory_routes() -> Vec<(&'static str, MethodRouter<Arc<AppState>>)> {
             get(handlers::theory::theory_path_main),
         ),
         ("/thy/trace/:idx/source", get(handlers::theory::source_)),
-        (
-            "/thy/trace/:idx/message",
-            get(handlers::theory::message_deduction),
-        ),
+        ("/thy/trace/:idx/message", get(handlers::theory::source_)),
         (
             "/thy/trace/:idx/autoprove/:extractor/:bound/:quit/*path",
             get(handlers::theory::autoprove),

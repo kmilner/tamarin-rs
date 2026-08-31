@@ -1,0 +1,127 @@
+theory SapicMacroRule
+
+begin
+
+// Function signature and definition of the equational theory E
+
+functions: fst/1, pair/2, sdec/2, senc/2, snd/1
+equations:
+    fst(<x.1, x.2>) = x.1,
+    sdec(senc(x.1, x.2), x.2) = x.1,
+    snd(<x.1, x.2>) = x.2
+
+heuristic: p
+
+macros: wrap( x, k ) =  senc(x, k),
+        tag( y ) =  <'T', y>
+
+lemma reach:
+  exists-trace "∃ m #i. Got( m ) @ #i"
+/*
+guarded formula characterizing all satisfying traces:
+"∃ m #i. (Got( m ) @ #i)"
+*/
+by sorry
+
+rule (modulo E) Init[color=#ffffff, process="new k.1;", issapicrule,
+                     role='Process']:
+   [ ] --[ Init( ) ]-> [ State_( ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) newk_0_[color=#ffffff, process="new k.1;", issapicrule,
+                        role='Process']:
+   [ State_( ), Fr( k.1 ) ] --> [ State_1( k.1 ) ]
+
+  /*
+  rule (modulo AC) newk_0_[color=#ffffff, process="new k.1;", issapicrule,
+                           role='Process']:
+     [ State_( ), Fr( k ) ] --> [ State_1( k ) ]
+  */
+
+rule (modulo E) p_0_1[color=#ffffff, process="!", issapicrule,
+                      role='Process']:
+   [ State_1( k.1 ) ] --> [ !Semistate_11( k.1 ) ]
+
+  /*
+  rule (modulo AC) p_0_1[color=#ffffff, process="!", issapicrule,
+                         role='Process']:
+     [ State_1( k ) ] --> [ !Semistate_11( k ) ]
+  */
+
+rule (modulo E) p_1_1[color=#ffffff, process="!", issapicrule,
+                      role='Process']:
+   [ !Semistate_11( k.1 ) ] --> [ State_11( k.1 ) ]
+
+  /*
+  rule (modulo AC) p_1_1[color=#ffffff, process="!", issapicrule,
+                         role='Process']:
+     [ !Semistate_11( k ) ] --> [ State_11( k ) ]
+  */
+
+rule (modulo E) Pk_0_11[color=#ffffff, process="P(k.1);", issapicrule,
+                        role='Process']:
+   [ State_11( k.1 ) ] --> [ State_111( k.1 ) ]
+
+  /*
+  rule (modulo AC) Pk_0_11[color=#ffffff, process="P(k.1);", issapicrule,
+                           role='Process']:
+     [ State_11( k ) ] --> [ State_111( k ) ]
+  */
+
+rule (modulo E) inm_0_111[color=#6c8040, process="in(m.1);", issapicrule,
+                          role='P']:
+   [ State_111( k.1 ), In( m.1 ) ] --> [ State_1111( k.1, m.1 ) ]
+
+  /*
+  rule (modulo AC) inm_0_111[color=#6c8040, process="in(m.1);",
+                             issapicrule, role='P']:
+     [ State_111( k ), In( m ) ] --> [ State_1111( k, m ) ]
+  */
+
+rule (modulo E) eventGottagm_0_1111[color=#6c8040,
+                                    process="event Got( tag(m.1) );", issapicrule, role='P']:
+   [ State_1111( k.1, m.1 ) ]
+  --[ Got( tag(m.1) ) ]->
+   [ State_11111( k.1, m.1 ) ]
+
+  /*
+  rule (modulo AC) eventGottagm_0_1111[color=#6c8040,
+                                       process="event Got( tag(m.1) );", issapicrule, role='P']:
+     [ State_1111( k, m ) ] --[ Got( <'T', m> ) ]-> [ State_11111( k, m ) ]
+  */
+
+rule (modulo E) outwrapmk_0_11111[color=#6c8040,
+                                  process="out(wrap(m.1, k.1));", issapicrule, role='P']:
+   [ State_11111( k.1, m.1 ) ]
+  -->
+   [ State_111111( k.1, m.1 ), Out( wrap(m.1, k.1) ) ]
+
+  /*
+  rule (modulo AC) outwrapmk_0_11111[color=#6c8040,
+                                     process="out(wrap(m.1, k.1));", issapicrule, role='P']:
+     [ State_11111( k, m ) ] --> [ State_111111( k, m ), Out( senc(m, k) ) ]
+  */
+
+rule (modulo E) p_0_111111[color=#6c8040, process="0", issapicrule,
+                           role='P']:
+   [ State_111111( k.1, m.1 ) ] --> [ ]
+
+  /*
+  rule (modulo AC) p_0_111111[color=#6c8040, process="0", issapicrule,
+                              role='P']:
+     [ State_111111( k, m ) ] --> [ ]
+  */
+
+restriction single_session:
+  "∀ #i #j. ((Init( ) @ #i) ∧ (Init( ) @ #j)) ⇒ (#i = #j)"
+  // safety formula
+
+  /*
+  expanded formula:
+  "∀ #i #j. ((Init( ) @ #i) ∧ (Init( ) @ #j)) ⇒ (#i = #j)"
+  */
+
+
+
+end

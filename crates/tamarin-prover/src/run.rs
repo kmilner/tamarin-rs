@@ -35,11 +35,10 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::Instant;
 
-use tamarin_parser::wf::{after_variants_topics, insert_wf_before};
 use tamarin_term::maude_proc::{MaudeHandle, MaudePool, SharedMaudeCaches};
 use tamarin_theory::constraint::solver::context::annotate_theory_loop_breakers;
 use tamarin_theory::constraint::system::System;
-use tamarin_theory::elaborate::elaborate;
+use tamarin_theory::elaborate::elaborate_with_in_file;
 use tamarin_theory::module::ModuleType;
 
 use crate::cli::{lemma_matches, Args, Subcommand};
@@ -80,7 +79,7 @@ impl std::error::Error for RunError {}
 /// Outcome of proving a single lemma. Mirrors the columns of Haskell's
 /// `summary of summaries:` block.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum LemmaVerdict {
+pub(crate) enum LemmaVerdict {
     Verified,
     Falsified,
     /// We exhausted the search budget or hit `Sorry`.
@@ -175,7 +174,7 @@ fn lemma_verdict(
 }
 
 #[derive(Debug, Clone)]
-pub struct LemmaResult {
+pub(crate) struct LemmaResult {
     pub name: String,
     pub verdict: LemmaVerdict,
     /// Proof-tree node count — matches HS's "(N steps)" in
@@ -188,7 +187,7 @@ pub struct LemmaResult {
 }
 
 #[derive(Debug, Clone)]
-pub struct FileResult {
+pub(crate) struct FileResult {
     pub in_file: String,
     pub out_file: Option<String>,
     pub results: Vec<LemmaResult>,
@@ -435,6 +434,12 @@ fn run_interactive(args: &Args) -> Result<i32, RunError> {
     // `ndcCheck` = `not (--no-ndc)` (TheoryLoader.hs:365-366) into each loaded
     // theory's `_deductionChainCheck`.  Set before the eager load below.
     tamarin_server::theory_io::set_ndc_check(!args.no_ndc);
+    // `--prove` / `--lemma` — `addLemmaToProve` (TheoryLoader.hs:835-838) is
+    // the `addNdcOption` sibling in that same `addParamsOptions`, and
+    // `theoryLoadFlags` (TheoryLoader.hs:94-107) is part of this mode's flag
+    // set (Interactive.hs:70), so the selection reaches every web load's
+    // `_lemmasToProve`.
+    tamarin_server::theory_io::set_lemmas_to_prove(args.lemma_names.clone());
     // `-D/--defines` + `--quit-on-warning` — the rest of `toParserFlags
     // thyOpts` (TheoryLoader.hs:285-291) in that same captured closure, so
     // every web load (startup, upload, reload) evaluates `#ifdef` blocks
@@ -1092,24 +1097,19 @@ struct TheoryPipeline<'a> {
     /// guards outrank (Batch.hs:91-113); every stage below reads this field so
     /// no arm can re-derive the answer differently.
     translate_module: Option<TranslateModule>,
-    in_file: &'a str,
-    theory_name: String,
-    parsed: tamarin_parser::ast::Theory,
-    elaborated: tamarin_theory::theory::Theory,
-    wf_report: Vec<tamarin_parser::wf::WfError>,
+    /// Elaborated typed theory.  Behind `Arc` so the `ProverSession` shares
+    /// it without a copy; the translate/check stages mutate it through
+    /// `Arc::make_mut` while this pipeline holds the only reference.
+    elaborated: std::sync::Arc<tamarin_theory::theory::Theory>,
+    wf_report: Vec<tamarin_theory::wellformedness::WfError>,
     /// The theory's `MaudeSig`, cloned from `elaborated` before SAPIC
-    /// translation runs; drives the translated-wf splices and the per-file
-    /// Maude spawns.
+    /// translation runs; drives the per-file Maude spawns.
     maude_sig: tamarin_term::maude_sig::MaudeSig,
     /// Effective per-theory cut strategy + auto-sources: CLI flags merged
     /// with the in-file `configuration:` block ([`effective_cut`] /
     /// `configAutoSources`).
     cut: tamarin_theory::constraint::solver::context::CutStrategy,
     auto_sources: bool,
-    /// The `_restrict` formulas' free variables per rule, captured before
-    /// `lift_rule_restrictions` cleared them; partial evaluation's
-    /// rename/dedup reads them (see `restriction_frees_by_rule`).
-    restriction_frees: std::collections::BTreeMap<String, Vec<tamarin_term::lterm::LVar>>,
     /// The maude binary this run invokes (`--with-maude` or the probed
     /// default), resolved once per run and reused by every spawn and
     /// spawn-failure message.
@@ -1128,7 +1128,7 @@ struct TheoryPipeline<'a> {
 impl TheoryPipeline<'_> {
     /// `[Theory X] MSG` stderr marker for this file's theory.
     fn marker(&self, msg: &str) {
-        theory_marker(&self.theory_name, msg);
+        theory_marker(&self.elaborated.name, msg);
     }
 
     /// `[Theory X] Theory closed` (TheoryLoader.hs:668-715, see line 696)
@@ -1175,11 +1175,10 @@ impl TheoryPipeline<'_> {
         &self,
         maude: MaudeHandle,
     ) -> Result<tamarin_theory::prove::ProverSession, tamarin_theory::prove::ProveError> {
-        tamarin_theory::prove::ProverSession::build_with_in_file_and_heuristic(
-            &self.parsed,
+        tamarin_theory::prove::ProverSession::build_with_heuristic(
+            self.elaborated.clone(),
             maude,
             self.file_maude_pool.clone(),
-            self.in_file,
             self.cli_heuristic(),
             self.cut,
             self.ndc_cache.as_ref(),
@@ -1190,25 +1189,13 @@ impl TheoryPipeline<'_> {
     /// `removeTranslationItems` / lemma-filter behaviour its
     /// `processOpenTheory` dispatch implies (TheoryLoader.hs:470-484): emit
     /// the `Theory translated` marker, run the per-module SAPIC typing /
-    /// translation and the accountability translation, and PREPEND the
-    /// pre-translation `Sapic.checkWellformedness ++ Acc.checkWellformedness`
-    /// report.
+    /// translation and the accountability translation, and open the report
+    /// with the pre-translation
+    /// `Sapic.checkWellformedness ++ Acc.checkWellformedness`.
     ///
-    /// Returns the translate-mode render options (`Some` iff `-m` is in
-    /// force) and the user-funs guard installed for the translation, which
-    /// the caller holds for the rest of the file's pipeline (the variant
-    /// pre-computation and the final render resolve user function symbols
-    /// through the same thread-local).  `Err` is a process exit code whose
-    /// message is already on stderr (the GHC-exception shape).
-    fn translate_theory(
-        &mut self,
-    ) -> Result<
-        (
-            Option<tamarin_theory::pretty_theory::OpenPrintOpts>,
-            tamarin_theory::elaborate::UserFunsForTheoryGuard,
-        ),
-        i32,
-    > {
+    /// `Err` is a process exit code whose message is already on stderr (the
+    /// GHC-exception shape).
+    fn translate_theory(&mut self) -> Result<(), i32> {
         let translate_module = self.translate_module;
         // HS emits this marker at the top of `translateTheory`
         // (TheoryLoader.hs:487-502, see line 496).
@@ -1218,44 +1205,12 @@ impl TheoryPipeline<'_> {
         // TheoryLoader.hs:468-485, see line 472).  Runs ONLY for `is_sapic` theories (exactly one
         // top-level `process:`); a no-op otherwise, so non-process theories are
         // byte-unchanged.  Injects the generated rules + `single_session`
-        // restriction + `heuristic: p` into BOTH `parsed` (for rendering) and
-        // `elaborated` (for solving / AC-variant pre-computation), so it MUST
+        // restriction + `heuristic: p` into `elaborated`, which the renderers,
+        // the solver and the AC-variant pre-computation all read, so it MUST
         // run before the variant pre-computation in
         // `check_translated_theory`.  `user_set_heuristic` is
         // true iff a `heuristic:` item already populated `elaborated.heuristic`
         // (HS `addHeuristic` returns `Nothing` in that case).
-        // Install the user/builtin function-symbol flag sets (the
-        // `CollectedUserFuns` bundle) for the duration of SAPIC translation
-        // AND — via the caller, which holds the returned guard — the variant
-        // pre-computation and final render.  That thread-local drives
-        // `term_to_lnterm`'s symbol resolution (privacy / constructability);
-        // `elaborate()` sets it only for its own scope, so without
-        // re-installing it here the SAPIC-injected rules' builtin symbols
-        // (`rep` private, `check_rep` / `get_rep` destructors from
-        // `locations-report`) re-elaborate with the default
-        // public-constructor flags, serialising as `tamXC..` — which Maude
-        // rejects, leaving the rule with "no variants".
-        let sapic_funs_guard = tamarin_theory::elaborate::set_user_funs_for_theory(&self.parsed);
-        // The translate-mode render's print options, one per module
-        // (`prettyOpenTheoryByModule`, TheoryLoader.hs:783-801).  `Some` iff
-        // `-m` is in force: `spthy` and `msr` are fixed, while `spthytyped`
-        // carries `Sapic.typeTheory`'s per-file result and is therefore filled
-        // by the SAPIC block below, at the position where HS runs the typing.
-        // `None` in every other mode.
-        let mut print_opts: Option<tamarin_theory::pretty_theory::OpenPrintOpts> =
-            match translate_module {
-                // `spthy`: the plain open print (`prettyOpenTheory`).
-                Some(TranslateModule::Spthy) => {
-                    Some(tamarin_theory::pretty_theory::OpenPrintOpts::default())
-                }
-                // `msr`: drop the TranslationElement set
-                // (`prettyOpenTranslatedTheory . removeTranslationItems`).
-                Some(TranslateModule::Msr) => Some(tamarin_theory::pretty_theory::OpenPrintOpts {
-                    drop_translation_items: true,
-                    ..Default::default()
-                }),
-                Some(TranslateModule::SpthyTyped) | None => None,
-            };
         {
             // HS `Acc.checkWellformedness t` (translateTheory, TheoryLoader.hs:487-502, see line 497)
             // runs on the PRE-translation theory `t` — the report is computed
@@ -1265,7 +1220,7 @@ impl TheoryPipeline<'_> {
             // SAPIC-generated rules (a pure-SAPIC theory has no MSR rules at this
             // point, so `rulesContainPubConst` / `caseTestsInstantiatedByPubVars`
             // scan an empty rule set).  Compute it here, before the mutation.
-            let acc_wf = tamarin_accountability::check_wellformedness(&self.parsed);
+            let acc_wf = tamarin_accountability::check_wellformedness(&self.elaborated);
 
             let user_set_heuristic = !self.elaborated.heuristic.is_empty();
             // Which translation steps run depends on the output module
@@ -1281,44 +1236,31 @@ impl TheoryPipeline<'_> {
                 // `translateTheory`'s preReport (`Sapic.checkWellformedness t`,
                 // Warnings.hs:37-38) still runs on the pre-translation process
                 // — the same inlined `PlainProcess` `apply_sapic` checks.
-                let mut wf: Vec<tamarin_parser::wf::WfError> = Vec::new();
-                if self.elaborated.is_sapic {
-                    match tamarin_sapic::apply::sapic_pre_report(&self.parsed) {
-                        Ok(Some((report, _))) => wf = report,
-                        // `is_sapic` set with no `TopLevelProcess`.
-                        Ok(None) => {}
-                        // Same GHC-exception shape as the apply_sapic arm below.
-                        Err(e) => return Err(ghc_exception(&e.message)),
-                    }
-                }
+                let wf: Vec<tamarin_theory::wellformedness::WfError> = if self.elaborated.is_sapic()
+                {
+                    tamarin_sapic::apply::sapic_pre_report(&self.elaborated)
+                } else {
+                    Vec::new()
+                };
                 if translate_module == Some(TranslateModule::SpthyTyped) {
-                    // `Sapic.typeTheory` (`typeTheoryEnv`, Typing.hs:204-226)
-                    // over the SAME parsed theory the renderer sees — the
-                    // parser AST stays untouched, the typed processes/defs
-                    // ride the overlay, and the recomputed `function:` items
-                    // are appended in descending key order.
-                    match tamarin_sapic::type_theory::type_theory_env(
-                        &self.parsed,
-                        &self.elaborated,
+                    // `Sapic.typeTheory` (`typeTheoryEnv`, Typing.hs:204-226):
+                    // the typed and renamed processes replace the parse-time
+                    // ones in place, and the recomputed `function:` items
+                    // replace the source-positioned ones at the end of the
+                    // item list.
+                    if let Err(e) = tamarin_sapic::type_theory::type_theory_env(
+                        std::sync::Arc::make_mut(&mut self.elaborated),
                     ) {
-                        Ok(r) => {
-                            print_opts = Some(tamarin_theory::pretty_theory::OpenPrintOpts {
-                                typed: Some(r.overlay),
-                                extra_function_items: r.fun_items,
-                                drop_translation_items: false,
-                            })
-                        }
                         // HS: `ProcessNotWellformed` / typing exceptions
                         // escape to GHC's runtime — `tamarin-prover: …`,
                         // exit 1.
-                        Err(e) => return Err(ghc_exception(&e.message)),
+                        return Err(ghc_exception(&e.message));
                     }
                 }
                 wf
             } else {
                 match tamarin_sapic::apply::apply_sapic(
-                    &mut self.parsed,
-                    &mut self.elaborated,
+                    std::sync::Arc::make_mut(&mut self.elaborated),
                     user_set_heuristic,
                 ) {
                     Ok(w) => w,
@@ -1335,8 +1277,8 @@ impl TheoryPipeline<'_> {
             // Accountability translation (HS `Acc.translate`, TheoryLoader.hs:468-485, see line 472):
             // `Sapic.translate >=> Acc.translate`.  Expands each
             // `... accounts for` lemma into its verification-condition lemmas +
-            // case-test predicates, injecting into BOTH `parsed` (rendering) and
-            // `elaborated` (prove loop).  A no-op for theories with neither
+            // case-test predicates, appending them to `elaborated`, which the
+            // renderers and the prove loop read.  A no-op for theories with neither
             // accountability lemmas nor case tests (a `test` without any acc
             // lemma still gets its predicate appended, as in HS).  Runs inside
             // the user-funs guard so the generated lemmas' embedded case-test
@@ -1344,9 +1286,9 @@ impl TheoryPipeline<'_> {
             // private/destructor flags.  Not part of `processOpenTheory`'s
             // `spthy` / `spthytyped` arms, so those translate modes skip it.
             if !skip_translation {
-                if let Err(e) =
-                    tamarin_accountability::translate(&mut self.parsed, &mut self.elaborated)
-                {
+                if let Err(e) = tamarin_accountability::translate(std::sync::Arc::make_mut(
+                    &mut self.elaborated,
+                )) {
                     // HS: the exceptions `Acc.translate` throws — `CaseTestsUndefined`
                     // (lib/accountability/src/Accountability.hs:42-49, see line 45) and the `UndefinedPredicate` /
                     // `DuplicateItem` parsing exceptions its `liftedAddLemma` /
@@ -1361,14 +1303,14 @@ impl TheoryPipeline<'_> {
             }
 
             // HS `preReport = Sapic.checkWellformedness t ++ Acc.checkWellformedness t`
-            // (TheoryLoader.hs:487-502, see line 497), PREPENDED to the rest of the report
-            // (`preReport ++ postReport`): SAPIC-process warnings first, then the
-            // accountability RP check (computed above, pre-translation), then
-            // every other wellformedness entry.  The trailing `N wellformedness
-            // check failed` summary counts them via `wf_report.len()`.
-            let mut pre_report = sapic_wf;
-            pre_report.extend(acc_wf);
-            tamarin_theory::translated_wf::prepend_wf_report(&mut self.wf_report, pre_report);
+            // (TheoryLoader.hs:487-502, see line 497), the FRONT of the report
+            // (`preReport ++ postReport`, TheoryLoader.hs:726-732): SAPIC-process
+            // warnings first, then the accountability RP check (computed above,
+            // pre-translation).  `check_translated_theory` appends `postReport`
+            // behind them.  The trailing `N wellformedness check failed` summary
+            // counts them via `wf_report.len()`.
+            self.wf_report.extend(sapic_wf);
+            self.wf_report.extend(acc_wf);
         }
 
         // `-m msr` keeps only the selected lemmas (`processOpenTheory`'s
@@ -1385,43 +1327,31 @@ impl TheoryPipeline<'_> {
         // (TheoryLoader.hs:702-703), which translate mode never reaches.
         if translate_module == Some(TranslateModule::Msr) {
             let lemma_names: &[String] = &self.opts.lemma_names;
-            self.parsed.items.retain(|i| match i {
-                tamarin_parser::ast::TheoryItem::Lemma(l) => lemma_matches(lemma_names, &l.name),
-                _ => true,
-            });
+            std::sync::Arc::make_mut(&mut self.elaborated)
+                .items
+                .retain(|i| match i {
+                    tamarin_theory::theory::TheoryItem::Lemma(l) => {
+                        lemma_matches(lemma_names, &l.name)
+                    }
+                    _ => true,
+                });
         }
 
-        Ok((print_opts, sapic_funs_guard))
+        Ok(())
     }
 
-    /// HS `checkTranslatedTheory` (TheoryLoader.hs:553-615): the
-    /// wellformedness re-runs over the TRANSLATED theory, the per-file Maude
-    /// spawn (the `SignatureWithMaude` analog), the rule-variant
-    /// pre-computation + `Rule has no variants` check, the once-per-theory
-    /// NDC pass, and the dynamic Message Derivation Checks.  The NDC-joined
-    /// signature is NOT applied here: `ndc_funs` is stashed for
-    /// `close_translated_theory`, mirroring how HS's `closeTheory` adopts
-    /// this stage's `sign'` while `translateAndCheckTheory` discards it.
+    /// HS `checkTranslatedTheory` (TheoryLoader.hs:553-615): the per-file
+    /// Maude spawn (the `SignatureWithMaude` analog), the rule-variant
+    /// pre-computation, the wellformedness pass over the TRANSLATED theory,
+    /// the once-per-theory NDC pass, and the dynamic Message Derivation
+    /// Checks.  The NDC-joined signature is NOT applied here: `ndc_funs` is
+    /// stashed for `close_translated_theory`, mirroring how HS's `closeTheory`
+    /// adopts this stage's `sign'` while `translateAndCheckTheory` discards
+    /// it.
     ///
     /// [`Self::translate_module`] gates only the loop-breaker annotation —
     /// see the comment at that block.
     fn check_translated_theory(&mut self) {
-        // HS runs the full `checkWellformedness` on the TRANSLATED theory
-        // (TheoryLoader.hs:553-565, `checkTranslatedTheory`), i.e. AFTER SAPIC
-        // `translate` has injected the generated rules, whereas our
-        // `check_theory` runs earlier on the PRE-translation theory (in the
-        // file loop, before `apply_sapic`), where the SAPIC rules are
-        // invisible to the rule-dependent checks.  The six re-runs and their
-        // splice positions are shared with the web load path — see
-        // `tamarin_theory::translated_wf`.  The seventh, Maude-dependent
-        // "Rule variants" block is batch-only and stays below.
-        tamarin_theory::translated_wf::splice_translated_wf_reports(
-            &self.parsed,
-            &self.elaborated,
-            &self.maude_sig,
-            &mut self.wf_report,
-        );
-
         // Spawn a single Maude handle for this file.  Used by:
         //   - the rule-variants computation that populates each rule's
         //     `variant_substs` + `abstracted_rule` (so the pretty-printer
@@ -1497,119 +1427,42 @@ impl TheoryPipeline<'_> {
         // (ClosedTheory.hs `closeTheory`).
         if let Some(m) = self.file_maude.as_ref() {
             tamarin_theory::tools::rule_variants::populate_rule_variants(
-                &mut self.elaborated,
+                std::sync::Arc::make_mut(&mut self.elaborated),
                 m,
                 self.file_maude_pool.as_deref(),
             );
         }
 
-        // Port of HS `ruleVariantsReport` / `variantsCheck`
-        // (Wellformedness.hs:354-372, 375-394).
-        //
-        // Sub-check 1: "Rule has no variants" — HS's
-        // `guard (null recomputedVariants)`, which holds exactly when
-        // `variantsProtoRule hnd ruE` is `Nothing`, i.e. when the variant
-        // computation ends with an EMPTY substitution set because
-        // `isFreshRedundant` filtered every candidate.  The canonical case is
-        // a rule with both `Fr(~x)` and `In(~x)` among its premises: `~x`
-        // cannot be sent before it is generated, so even the identity
-        // substitution is fresh-redundant.  `abstract_rule_and_variants`
-        // returns `None` on the same input, leaving `abstracted_rule` `None`
-        // and `variant_substs` empty; `rule_has_no_variants_for_wf_with`
-        // reads that verdict, or runs the equivalent syntactic check when the
-        // rule has no reducible-headed sub-term (see `sig_has_reducible`).
-        //
-        // Sub-check 2: "Variants mismatch" — `ruAC` (a variants block written
-        // out in the rule body) present and disagreeing with the recomputed
-        // set.  NOT PORTED: it needs the parsed `rule.variants` compared
-        // against `abstracted_rule` + `variant_substs`; no corpus file writes
-        // such a block.
-        if let Some(ref wf_maude) = self.file_maude {
-            use tamarin_parser::wf::underline_topic;
-            use tamarin_parser::wf::WfError as WfE;
-            use tamarin_theory::theory::TheoryItem;
+        // HS `postReport`: the full `checkWellformedness` over the TRANSLATED
+        // theory (TheoryLoader.hs:553-565, `checkTranslatedTheory`), i.e. after
+        // SAPIC `translate` injected the generated rules and `Acc.translate`
+        // the generated lemmas, and after the `-m msr` lemma filter.  The pass
+        // is shared with the web load path — see
+        // `tamarin_theory::wellformedness`.  Its `ruleVariantsReport` member
+        // reads the variants `populate_rule_variants` recorded above, so the
+        // pass sits between that call and the three stages below.  That is the
+        // HS Maude call ORDER: the variant queries first, then the loop-breaker
+        // annotation, the NDC pass and the derivation checks, all of which
+        // consume `file_maude`'s shared fresh-variable counter.
+        self.wf_report
+            .extend(tamarin_theory::wellformedness::check_wellformedness(
+                &self.elaborated,
+                self.file_maude.as_ref(),
+            ));
 
-            let mut variants_errors: Vec<WfE> = Vec::new();
-            let mut no_variant_rules: Vec<String> = Vec::new();
-
-            // `populate_rule_variants` (above) already ran
-            // `abstract_rule_and_variants` for every rule when the
-            // signature has reducible function symbols, recording its
-            // result on each `OpenProtoRule` (`abstracted_rule` is `Some`
-            // iff it returned `Ok(Some(_))`).  Reuse that result for the
-            // reducible (Maude) path of the WF "Rule has no variants"
-            // check so we don't issue a SECOND `get variants` query per
-            // rule.  When the signature has NO reducible funs,
-            // `populate_rule_variants` returned early without populating
-            // those fields, but then no rule is reducible either — the WF
-            // check takes its syntactic (no-Maude) path, so the precomputed
-            // value is never consulted.
-            let sig_has_reducible = !wf_maude.maude_sig().reducible_fun_syms.is_empty();
-
-            for item in &self.elaborated.items {
-                let TheoryItem::Rule(opr) = item else {
-                    continue;
-                };
-
-                // Sub-check 1 (see the block above): HS `variantsCheck`'s
-                // `guard (null recomputedVariants) $> ...`
-                // (Wellformedness.hs:354-372, see line 362).
-                let precomputed_no_variants = if sig_has_reducible {
-                    Some(opr.abstracted_rule.is_none() && opr.variant_substs.is_empty())
-                } else {
-                    None
-                };
-                if tamarin_theory::tools::rule_variants::rule_has_no_variants_for_wf_with(
-                    wf_maude,
-                    &opr.rule,
-                    precomputed_no_variants,
-                ) {
-                    // HS message (Wellformedness.hs:363-366):
-                    //   text "Rule " <> prettyRuleName ruE <> text " has no variants."
-                    //   $--$  text "Most likely, ..."
-                    //   <> text "For exaple, ..."
-                    // "For exaple" is a typo in HS source, preserved faithfully.
-                    let rule_name = opr.name().to_string();
-                    no_variant_rules.push(rule_name.clone());
-                    let topic = "Rule has no variants";
-                    let body = format!(
-                        "  Rule {} has no variants.\n  \n  Most likely, this means that \
-                         the rule's use of fresh variables is contradictory. For exaple, \
-                         a rule with the premises In(~x) and Fr(~x) has no variants \
-                         because ~x cannot be sent before it is generated.",
-                        rule_name,
-                    );
-                    let mut msg = String::new();
-                    msg.push_str(&underline_topic(topic));
-                    msg.push('\n');
-                    msg.push_str(&body);
-                    msg.push('\n');
-                    variants_errors.push(WfE::new(topic, msg));
-                }
-            }
-
-            // HS position 6: ruleVariantsReport comes BEFORE factReports
-            // (position 7) and AFTER unboundReport (position 2), so the
-            // anchors are every `WF_TOPIC_ORDER` topic but "Unbound
-            // variables".
-            insert_wf_before(
-                &mut self.wf_report,
-                variants_errors,
-                &after_variants_topics(),
+        // HS `closeProtoRule` (lib/theory/src/Rule.hs:82-86, see line 84):
+        // `ClosedProtoRule ruE <$> maybeToList (variantsProtoRule hnd ruE)` — a
+        // rule with NO variants produces NO closed rule.  It is dropped from
+        // the closed theory entirely: it participates in neither rendering nor
+        // proof search.  The drop reads the same verdict
+        // `wellformedness::rules::rule_variants_report` reports on, and runs
+        // after it, because HS warns on the OPEN theory and drops while
+        // closing.
+        if let Some(wf_maude) = self.file_maude.as_ref() {
+            tamarin_theory::tools::rule_variants::retain_rules_with_variants(
+                std::sync::Arc::make_mut(&mut self.elaborated),
+                wf_maude,
             );
-
-            // HS `closeProtoRule` (lib/theory/src/Rule.hs:82-86, see line 84): `ClosedProtoRule ruE <$>
-            // maybeToList (variantsProtoRule hnd ruE)` — a rule with NO
-            // variants produces NO closed rule.  It is dropped from the
-            // closed theory entirely: it participates in neither rendering
-            // nor proof search.  (The wf warning above fires on the OPEN
-            // theory, before closing, so it is emitted regardless.)
-            if !no_variant_rules.is_empty() {
-                self.elaborated.items.retain(|item| match item {
-                    TheoryItem::Rule(r) => !no_variant_rules.iter().any(|n| n == r.name()),
-                    _ => true,
-                });
-            }
         }
 
         // Annotate per-rule loop breakers on the OUTER theory so
@@ -1631,7 +1484,7 @@ impl TheoryPipeline<'_> {
         // loop-breaker comments, so the pass is skipped there.
         let translate_mode = self.translate_module.is_some();
         if let Some(m) = self.file_maude.as_ref().filter(|_| !translate_mode) {
-            annotate_theory_loop_breakers(&mut self.elaborated, m);
+            annotate_theory_loop_breakers(std::sync::Arc::make_mut(&mut self.elaborated), m);
         }
 
         // `showSaturation` is the last argument of `closeTheoryWithMaude`
@@ -1665,8 +1518,9 @@ impl TheoryPipeline<'_> {
         if let Some(m) = self.file_maude.as_ref() {
             let checked = tamarin_theory::close_rule::check_close_intr_rule(
                 m,
-                Some(self.theory_name.as_str()),
+                Some(self.elaborated.name.as_str()),
                 self.elaborated.options.deduction_chain_check,
+                &self.elaborated.intruder_rules,
             );
             self.ndc_funs = checked.ndc_funs;
             self.ndc_cache = Some(checked.cache.into());
@@ -1684,7 +1538,7 @@ impl TheoryPipeline<'_> {
             self.marker("Derivation checks started");
             if let Some(m) = self.file_maude.as_ref() {
                 let extra = tamarin_theory::deriv_check::check_message_derivation(
-                    &self.parsed,
+                    &self.elaborated,
                     m,
                     deriv_timeout,
                     self.ndc_cache.clone(),
@@ -1705,7 +1559,7 @@ impl TheoryPipeline<'_> {
     /// (TheoryLoader.hs:768-781) — so `--partial-evaluation` and
     /// `--auto-sources` are inert there even though the flags are still read.
     fn close_translated_theory(&mut self) -> Result<ClosedOutcome, RunError> {
-        let in_file = self.in_file;
+        let in_file = self.elaborated.in_file.clone();
         let want_traces = wants_trace_output(self.args);
 
         // The close proper: HS's `closeTranslatedTheory` (TheoryLoader.hs:679),
@@ -1748,8 +1602,9 @@ impl TheoryPipeline<'_> {
         // no-prove and `--precompute-only` paths — shows `[NDC]` on tagged
         // symbols.
         for f in &self.ndc_funs {
-            let sig = std::mem::take(&mut self.elaborated.signature.maude_sig);
-            self.elaborated.signature.maude_sig =
+            let elab = std::sync::Arc::make_mut(&mut self.elaborated);
+            let sig = std::mem::take(&mut elab.signature);
+            elab.signature =
                 sig.join_ndc_in_sig(*f, tamarin_term::function_symbols::NdcState::IsNdc);
         }
 
@@ -1772,8 +1627,7 @@ impl TheoryPipeline<'_> {
         if self.auto_sources {
             let m = self.require_maude()?;
             tamarin_theory::auto_sources::apply_auto_sources(
-                &mut self.parsed,
-                &mut self.elaborated,
+                std::sync::Arc::make_mut(&mut self.elaborated),
                 m,
                 self.file_maude_pool.clone(),
                 self.ndc_cache.as_ref(),
@@ -1806,11 +1660,9 @@ impl TheoryPipeline<'_> {
                 crate::cli::PartialEval::Verbose => tamarin_theory::tools::EvaluationStyle::Tracing,
             };
             pe_trace = tamarin_theory::tools::apply_partial_evaluation(
-                &mut self.parsed,
-                &mut self.elaborated,
+                std::sync::Arc::make_mut(&mut self.elaborated),
                 m,
                 style,
-                &self.restriction_frees,
             )
             .map_err(|e| RunError(format!("partial evaluation of {} failed: {}", in_file, e)))?;
 
@@ -1824,18 +1676,20 @@ impl TheoryPipeline<'_> {
             // whose refined dataflow graph is still cyclic, e.g.
             // loops/Minimal_Loop_Example.spthy).  Variants must be populated
             // first: the breaker relation's `instances` iterate each rule's
-            // variant substitutions.  The no-variant drop in
-            // `check_translated_theory` is NOT redone: it is name-keyed and
-            // touches `elaborated` only, while partial evaluation can give
-            // two refined rules the same name — dropping one side would break
-            // the positional parsed↔elaborated rule pairing the
-            // closed-theory renderer relies on.
+            // variant substitutions. HS's re-close also reaches
+            // `closeProtoRule`, so refined rules whose own variant set is
+            // empty must be dropped independently even when several refined
+            // items share a name.
             tamarin_theory::tools::rule_variants::populate_rule_variants(
-                &mut self.elaborated,
+                std::sync::Arc::make_mut(&mut self.elaborated),
                 m,
                 self.file_maude_pool.as_deref(),
             );
-            annotate_theory_loop_breakers(&mut self.elaborated, m);
+            tamarin_theory::tools::rule_variants::retain_rules_with_variants(
+                std::sync::Arc::make_mut(&mut self.elaborated),
+                m,
+            );
+            annotate_theory_loop_breakers(std::sync::Arc::make_mut(&mut self.elaborated), m);
 
             // HS's re-close passes `autoSources` again
             // (`applyPartialEvaluation style autoSources`, TheoryLoader.hs:684-688;
@@ -1846,8 +1700,7 @@ impl TheoryPipeline<'_> {
             if self.auto_sources {
                 let m2 = self.require_maude()?;
                 tamarin_theory::auto_sources::apply_auto_sources(
-                    &mut self.parsed,
-                    &mut self.elaborated,
+                    std::sync::Arc::make_mut(&mut self.elaborated),
                     m2,
                     self.file_maude_pool.clone(),
                     self.ndc_cache.as_ref(),
@@ -1864,7 +1717,7 @@ impl TheoryPipeline<'_> {
         // output is identical either way (every lemma is a 1-step sorry).
         let lemma_filter: &[String] = &self.opts.lemma_names;
         let prove_anything = self.opts.prove_mode;
-        let any_stored_proof = self.elaborated.lemmas().any(|l| l.proof.tree.is_some());
+        let any_stored_proof = self.elaborated.lemmas().any(|l| l.proof.is_some());
         // The modes that skip the prove loop entirely: `--precompute-only`
         // renders stats instead, and a plain load with no stored skeleton to
         // replay has nothing to run.
@@ -1913,10 +1766,10 @@ impl TheoryPipeline<'_> {
             // typing assumptions.
             //
             // Fall-through path: if `build_prover_session` errors we
-            // fall back to the per-lemma `prove_lemma_with_pool` path
-            // (which re-runs the setup per lemma but is more tolerant
-            // of theories where elaboration fails on a subset of
-            // lemmas).  Almost never hits in practice.
+            // fall back to the per-lemma
+            // `prove_lemma_with_pool_file_heuristic` path, which re-runs
+            // the same setup for each lemma.  Almost never hits in
+            // practice.
             let cli_heuristic = self.cli_heuristic();
             let session = self.build_prover_session(maude.clone()).ok();
 
@@ -1929,14 +1782,13 @@ impl TheoryPipeline<'_> {
             // stderr order.
             self.closed_marker(&pe_trace);
 
-            let parsed = &self.parsed;
             let elaborated = &self.elaborated;
-            let theory_name = self.theory_name.as_str();
+            let theory_name = self.elaborated.name.as_str();
             let cut = self.cut;
             let ndc_cache = self.ndc_cache.as_ref();
             let file_maude_pool = &self.file_maude_pool;
 
-            let run_lemma = |l: &tamarin_theory::theory::Lemma<_>| -> (
+            let run_lemma = |l: &tamarin_theory::theory::Lemma| -> (
                 tamarin_theory::pretty_theory::ProvedLemma,
                 LemmaResult,
                 Vec<(String, System)>,
@@ -1994,12 +1846,12 @@ impl TheoryPipeline<'_> {
                         usize::MAX,
                     ),
                     (None, _) => tamarin_theory::prove::prove_lemma_with_pool_file_heuristic(
-                        parsed,
+                        elaborated,
                         &lemma_name,
                         maude.clone(),
                         file_maude_pool.clone(),
                         if is_target { target_bound } else { usize::MAX },
-                        in_file,
+                        &in_file,
                         &cli_heuristic,
                         cut,
                         ndc_cache,
@@ -2083,7 +1935,7 @@ impl TheoryPipeline<'_> {
                 sess.presaturate_shared_sources(cache_disabled, |name| {
                     prove_anything && lemma_matches(lemma_filter, name)
                 });
-                let specs: Vec<&tamarin_theory::theory::Lemma<_>> = elaborated.lemmas().collect();
+                let specs: Vec<&tamarin_theory::theory::Lemma> = elaborated.lemmas().collect();
                 let mut out: Vec<(
                     usize,
                     tamarin_theory::pretty_theory::ProvedLemma,
@@ -2206,13 +2058,9 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
     // skipping the summary block.  The doc's stats force the saturation
     // lazily at that renderDoc, so each file's `[Saturating Sources]`
     // stderr trace fires in the PRINT phase (after every file's markers),
-    // not during its loop iteration — stash the session + parsed theory +
-    // wf-failure count here and defer the stats computation to match.
-    let mut precompute_pending: Vec<(
-        tamarin_theory::prove::ProverSession,
-        tamarin_parser::ast::Theory,
-        usize,
-    )> = Vec::new();
+    // not during its loop iteration — stash the session and the wf-failure
+    // count here and defer the stats computation to match.
+    let mut precompute_pending: Vec<(tamarin_theory::prove::ProverSession, usize)> = Vec::new();
 
     // The maude binary this run invokes is argv-constant, and resolving the
     // default probes the filesystem — resolve it ONCE here and lend it to the
@@ -2308,43 +2156,13 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         let base_dir = std::path::Path::new(in_file)
             .parent()
             .map(|p| p.to_path_buf());
-        let mut parsed = match tamarin_parser::parse_theory_with_base(&src, &parser_flags, base_dir)
-        {
+        let parsed = match tamarin_parser::parse_theory_with_base(&src, &parser_flags, base_dir) {
             Ok(thy) => thy,
             Err(e) => {
-                // All parse failures — including the rejections HS raises as
-                // GHC `error`s (`ParseError::Abort`) — render as a codespan
-                // diagnostic on stderr, exit code 1.
-                report_parser_error(e, in_file, &src);
+                report_parser_error(e.with_source(in_file.clone()));
                 return Ok(1);
             }
         };
-        // HS `liftedAddProtoRule` (Theory/Text/Parser.hs:166-193) runs per
-        // rule DURING parsing: it expands each rule's `_restrict(φ)`
-        // embedded restriction into a fresh `Restr_<rule>_<i>` restriction
-        // (inserted before the rule) and rewrites the rule's actions to
-        // reference it.  RS captures `_restrict` into
-        // `Rule.embedded_restrictions` at parse time; run the equivalent
-        // lifting pass here, BEFORE wellformedness / elaboration / rendering,
-        // so the transformed parser theory drives all three (the renderer
-        // iterates `parsed.items`).
-        // Capture the `_restrict` formulas' free variables per rule BEFORE
-        // the lift clears them: HS keeps the formulas on the rule
-        // (`preRestriction`) and partial evaluation's rename/dedup depends
-        // on their frees (see `restriction_frees_by_rule`) — its only
-        // consumer, so the walk runs only under `--partial-evaluation`.  The
-        // position is fixed: the frees are gone once the lift below runs.
-        let restriction_frees = if opts.partial_evaluation.is_some() {
-            tamarin_theory::rule_restriction::restriction_frees_by_rule(&parsed)
-        } else {
-            Default::default()
-        };
-        tamarin_theory::rule_restriction::lift_rule_restrictions(&mut parsed).map_err(|e| {
-            RunError(format!(
-                "_restrict expansion failed in {}: {}",
-                in_file, e.message
-            ))
-        })?;
         // HS emits this trace marker as soon as the theory parses
         // (TheoryLoader.hs:451).
         let theory_name = parsed.name.clone();
@@ -2369,38 +2187,11 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             // The elaborated theory here only supplies the parse-time
             // signature + hoisted heuristic/tactic headers + the arity-1
             // fold set — elaboration is RS's signature-construction step
-            // (HS builds the same `SignaturePure` during parsing).
-            let elaborated = elaborate(&parsed).map_err(|e| {
+            // (HS builds the same pure signature during parsing).
+            let elaborated = elaborate_with_in_file(&parsed, in_file).map_err(|e| {
                 RunError(format!("elaboration error in {}: {}", in_file, e.message))
             })?;
-            // Formula→guarded conversion inside the lemma/restriction
-            // renderers resolves user function symbols through this
-            // thread-local (same guard the closed path installs).
-            let _user_funs_guard = tamarin_theory::elaborate::set_user_funs_for_theory(&parsed);
-            // Parsed `process:` / `let` bodies are converted to SAPIC
-            // `PlainProcess` for the Doc-based `prettySapic'` port; the
-            // conversion lives in `tamarin-sapic` (dependency direction).
-            // `convert_process_with_defs` mirrors HS's PARSER, which inlines
-            // each `P(args)` call and wraps it in a `ProcessCall` marker
-            // action (Theory/Text/Parser/Sapic.hs:293-312) — `prettySapic'`
-            // then prints just `P(args)` for the marker (Theory/Sapic/Process.hs:496).
-            let process_defs = tamarin_sapic::inline::collect_process_defs(&parsed);
-            let conv = |proc: &tamarin_parser::ast::Process| {
-                tamarin_sapic::inline::convert_process_with_defs(proc, &process_defs)
-                    .map_err(|e| e.message)
-            };
-            let body = tamarin_theory::pretty_theory::pretty_open_theory(
-                &parsed,
-                &elaborated,
-                in_file,
-                &conv,
-            )
-            .map_err(|e| {
-                RunError(format!(
-                    "open-theory rendering of {} failed: {}",
-                    in_file, e
-                ))
-            })?;
+            let body = tamarin_theory::pretty_theory::pretty_open_theory(&elaborated);
             parse_only_docs.push(body);
             file_results.push(FileResult {
                 in_file: in_file.clone(),
@@ -2442,29 +2233,6 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         let auto_sources = opts.auto_sources || config_block.auto_sources;
         let cut = effective_cut(&opts, &config_block)?;
 
-        // Wellformedness checks — mirrors HS `checkWellformedness`
-        // (`Theory.Tools.Wellformedness:1270`).  Runs on every file that
-        // reaches the close pipeline, so a malformed theory is surfaced
-        // even without proving.  The shared pass (`translated_wf`) clones
-        // `parsed` with macros expanded first — HS's `thyProtoRules`
-        // applies `applyMacroInRule (theoryMacros thy)` before the checks,
-        // so `Fr(test())` where `test() = ~x` becomes `Fr(~x)` and passes —
-        // and drops the static "Message Derivation Checks" entry the
-        // dynamic check below replaces.  (`--parse-only` never reaches
-        // this point — it `continue`d above, before any wellformedness
-        // runs, matching HS Batch.hs:91-95.)
-        let mut wf_report = tamarin_theory::translated_wf::pre_translation_wf_report(&parsed);
-        // HS `checkIfLemmasInTheory` (Wellformedness.hs:1156-1171) — FIRST
-        // in HS's checkWellformedness list (line 1272).  Checks that every
-        // --prove=X / --lemma=X name corresponds to a theory lemma.  This
-        // check needs the CLI args (not embedded in the parser AST), so we
-        // call it separately and PREPEND the result so it sorts first —
-        // matching HS's `checkIfLemmasInTheory : ...` order.
-        tamarin_theory::translated_wf::prepend_wf_report(
-            &mut wf_report,
-            tamarin_parser::wf::check_if_lemmas_in_theory(&opts.lemma_names, &parsed),
-        );
-
         // Elaborate (mainly to get the protocol-specific MaudeSig).  This is
         // where the port first builds LNTerms, so an HS-`error`-class defect
         // (`Term.fAppAC: empty argument list`) panics HERE — but GHC, lazy,
@@ -2482,9 +2250,13 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             }
             lines
         }));
-        let mut elaborated = elaborate(&parsed)
+        let mut elaborated = elaborate_with_in_file(&parsed, in_file)
             .map_err(|e| RunError(format!("elaboration error in {}: {}", in_file, e.message)))?;
         DEFERRED_HS_ERROR_MARKERS.take();
+
+        // Everything downstream of `elaborate` reads the internal theory; the
+        // parser AST ends here.
+        drop(parsed);
         // HS `addParamsOptions`' `addNdcOption` (TheoryLoader.hs:821-826):
         // `--no-ndc` disables the no-deconstruction-chain check for this theory.
         //
@@ -2495,13 +2267,14 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         if !opts.ndc_check {
             elaborated.options.deduction_chain_check = false;
         }
-        let maude_sig = elaborated.signature.maude_sig.clone();
-
-        // Replace `check_theory`'s AST-level "Subterm Convergence Warning"
-        // placeholder with the signature-driven version now that the
-        // `MaudeSig` exists (the shared swap in `translated_wf` — see its
-        // doc for the `Ord CtxtStRule` order / width-wrap rationale).
-        tamarin_theory::translated_wf::swap_subterm_convergence_report(&mut wf_report, &maude_sig);
+        // The same `addParamsOptions`' `addLemmaToProve`
+        // (TheoryLoader.hs:835-838): the `--prove=X` / `--lemma=X` values
+        // become the theory's own
+        // `_lemmasToProve`, which `checkIfLemmasInTheory` reads back
+        // (Wellformedness.hs:1168).  The interactive path writes the same
+        // field through `tamarin_server::theory_io::set_lemmas_to_prove`.
+        elaborated.options.lemmas_to_prove = opts.lemma_names.clone();
+        let maude_sig = elaborated.signature.clone();
 
         // The per-file pipeline state.  From here the loop follows HS's
         // stage names: `translate_theory` → `check_translated_theory` →
@@ -2510,15 +2283,11 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             args,
             opts: &opts,
             translate_module,
-            in_file: in_file.as_str(),
-            theory_name,
-            parsed,
-            elaborated,
-            wf_report,
+            elaborated: std::sync::Arc::new(elaborated),
+            wf_report: Vec::new(),
             maude_sig,
             cut,
             auto_sources,
-            restriction_frees,
             maude_path: &maude_path,
             file_maude: None,
             file_maude_pool: None,
@@ -2526,10 +2295,9 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             ndc_funs: Vec::new(),
         };
 
-        let (print_opts, _sapic_funs_guard) = match st.translate_theory() {
-            Ok(v) => v,
-            Err(code) => return Ok(code),
-        };
+        if let Err(code) = st.translate_theory() {
+            return Ok(code);
+        }
 
         st.check_translated_theory();
 
@@ -2561,7 +2329,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         // Per-file summary rows for `file_results`.  Translate mode records
         // skipped rows too, though its output phase never prints a summary.
         let results: Vec<LemmaResult> = match translate_module {
-            Some(_) => {
+            Some(module) => {
                 // HS `translateAndCheckTheory` never closes, never proves
                 // and never replays stored skeletons — it skips
                 // `closeTranslatedTheory`'s `proveTheory` entirely
@@ -2573,35 +2341,28 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
                 // TheoryLoader.hs:783-801, followed by `withVersionAndReport`'s
                 // two trailing comment items, TheoryLoader.hs:636-660).  The doc
                 // is BUFFERED — Batch.hs:101-113 processes every file before any
-                // doc is printed or written.  `_sapic_funs_guard` is still held
-                // here, so formula→guarded conversion inside the lemma renderers
-                // resolves user symbols exactly as the parse-only path does.
+                // doc is printed or written.
                 //
-                // `translate_theory` fills the print options for every module
-                // it can return from (`spthy`/`msr` statically, `spthytyped`
-                // from the typing result), so they are always present here.
-                let popts = print_opts.expect("translate mode always fills its print options");
+                // `spthy` and `spthytyped` share `prettyOpenTheory` and differ
+                // only in the theory value `translate_theory` left behind;
+                // `msr` renders every translation item as empty.
                 let wf_block = tamarin_theory::pretty_theory::format_wf_block(&st.wf_report);
-                let process_defs = tamarin_sapic::inline::collect_process_defs(&st.parsed);
-                let conv = |proc: &tamarin_parser::ast::Process| {
-                    tamarin_sapic::inline::convert_process_with_defs(proc, &process_defs)
-                        .map_err(|e| e.message)
+                let body = match module {
+                    TranslateModule::Msr => {
+                        tamarin_theory::pretty_theory::pretty_open_translated_theory_by_module(
+                            &st.elaborated,
+                            &wf_block,
+                            &build_info,
+                        )
+                    }
+                    TranslateModule::Spthy | TranslateModule::SpthyTyped => {
+                        tamarin_theory::pretty_theory::pretty_open_theory_by_module(
+                            &st.elaborated,
+                            &wf_block,
+                            &build_info,
+                        )
+                    }
                 };
-                let body = tamarin_theory::pretty_theory::pretty_open_theory_by_module(
-                    &st.parsed,
-                    &st.elaborated,
-                    in_file,
-                    &conv,
-                    &popts,
-                    &wf_block,
-                    &build_info,
-                )
-                .map_err(|e| {
-                    RunError(format!(
-                        "open-theory rendering of {} failed: {}",
-                        in_file, e
-                    ))
-                })?;
                 translate_docs.push(body);
                 results
             }
@@ -2632,7 +2393,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
                         .build_prover_session(maude)
                         .map_err(|e| RunError(e.to_string()))?;
                     let wf_len = st.wf_report.len();
-                    precompute_pending.push((session, st.parsed, wf_len));
+                    precompute_pending.push((session, wf_len));
                 } else {
                     // HS `outputTraces` (Batch.hs:224-226) runs in `processThy`'s
                     // close-and-prove `else` — the ONLY branch that reaches it.
@@ -2657,13 +2418,10 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
                     // Generated-from footer.
                     let wf_block = tamarin_theory::pretty_theory::format_wf_block(&st.wf_report);
                     let body = tamarin_theory::pretty_theory::pretty_closed_theory(
-                        &st.parsed,
                         &st.elaborated,
                         &closed.proved_lemmas,
                         &wf_block,
                         &build_info,
-                        in_file,
-                        st.auto_sources,
                     );
                     // HS normal mode: `writeOutput` is true whenever `-o`/`-O` was
                     // given (Batch.hs:168), and a `mkOutPath` miss — `-o=` with no
@@ -2711,12 +2469,12 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         // docs to stdout after the file loop, no summary block.  Forcing
         // each file's stats here (traces, then its doc) reproduces HS's
         // renderDoc-time stderr order — see `precompute_pending`.
-        for (session, parsed, wf_len) in &precompute_pending {
+        for (session, wf_len) in &precompute_pending {
             // The trace is already armed: each file's `close_translated_theory`
             // left it on, matching HS, where this forcing happens inside the
             // same `showSaturation = True` close.
             let stats = session
-                .precomputation_stats(parsed)
+                .precomputation_stats()
                 .map_err(|e| RunError(e.to_string()))?;
             // HS `casesInfo` (ClosedTheory.hs:563-570).
             let chain_info = |n: usize| -> String {
@@ -2833,8 +2591,17 @@ fn init_rayon_pool(args: &Args) {
     // even if N matches.  We swallow the error: the first invocation
     // wins (which is the desired behaviour — RS runs `run_batch` once
     // per process, and tests install their own pool).
+    // `stack_size`: the theory item fold renders each item as ONE HughesPJ
+    // Doc on a worker (HS `parMap rdeepseq ppItem`, TheoryObject.hs:767), and
+    // the eager Doc builders (`beside`/`above_g`) recurse along the left
+    // operand's token spine, so depth scales with the item's size.  GHC grows
+    // its stack on demand; rayon's default worker stacks do not, and overflow
+    // on equation- and formula-heavy theories (`jcs18/trace-existence.spthy`).
+    // 64 MiB is reserved virtual address space only, committed on use — the
+    // same size the interactive server gives its tokio workers.
     let _ = rayon::ThreadPoolBuilder::new()
         .num_threads(n)
+        .stack_size(64 * 1024 * 1024)
         .thread_name(|i| format!("tamarin-rayon-{}", i))
         .build_global();
 }
@@ -2871,7 +2638,7 @@ fn emit_output(args: &Args, in_file: &str, body: &str) -> Result<(), String> {
 
 /// Resolve the output path for `in_file` given the user's `-o` / `-O`
 /// flags. Returns `None` when output should go to stdout.
-pub fn out_path_for(args: &Args, in_file: &str) -> Option<String> {
+pub(crate) fn out_path_for(args: &Args, in_file: &str) -> Option<String> {
     if let Some(of) = &args.output_file {
         if !of.is_empty() {
             return Some(of.clone());
@@ -2950,44 +2717,107 @@ fn print_overall_summary(file_results: &[FileResult], prove_mode: bool) {
     println!("{}", line);
 }
 
-/// Render a parse error as a codespan diagnostic on stderr: the error's
-/// labels become primary/secondary source spans, its notes the footer.
-fn report_parser_error(err: tamarin_parser::ParseError, src_name: &str, src_content: &str) {
+/// Render the parser's semantic diagnostic with source-labelled spans.
+fn report_parser_error(err: tamarin_parser::ParseError) {
+    use codespan_reporting::term::termcolor::{ColorChoice, StandardStream};
+
+    let writer = StandardStream::stderr(ColorChoice::Auto);
+    emit_parser_error(&mut writer.lock(), &err).expect("write parser diagnostic");
+}
+
+struct ParserDiagnosticFile<'a> {
+    inner: codespan_reporting::files::SimpleFile<&'a str, &'a str>,
+}
+
+impl<'a> ParserDiagnosticFile<'a> {
+    fn new(name: &'a str, source: &'a str) -> Self {
+        Self {
+            inner: codespan_reporting::files::SimpleFile::new(name, source),
+        }
+    }
+}
+
+impl<'a> codespan_reporting::files::Files<'a> for ParserDiagnosticFile<'a> {
+    type FileId = ();
+    type Name = &'a str;
+    type Source = &'a str;
+
+    fn name(&'a self, id: ()) -> Result<Self::Name, codespan_reporting::files::Error> {
+        codespan_reporting::files::Files::name(&self.inner, id)
+    }
+
+    fn source(&'a self, id: ()) -> Result<Self::Source, codespan_reporting::files::Error> {
+        codespan_reporting::files::Files::source(&self.inner, id)
+    }
+
+    fn line_index(
+        &'a self,
+        id: (),
+        byte_index: usize,
+    ) -> Result<usize, codespan_reporting::files::Error> {
+        codespan_reporting::files::Files::line_index(&self.inner, id, byte_index)
+    }
+
+    fn line_range(
+        &'a self,
+        id: (),
+        line_index: usize,
+    ) -> Result<std::ops::Range<usize>, codespan_reporting::files::Error> {
+        codespan_reporting::files::Files::line_range(&self.inner, id, line_index)
+    }
+
+    fn column_number(
+        &'a self,
+        id: (),
+        line_index: usize,
+        byte_index: usize,
+    ) -> Result<usize, codespan_reporting::files::Error> {
+        let source = codespan_reporting::files::Files::source(&self.inner, id)?;
+        let line = codespan_reporting::files::Files::line_range(&self.inner, id, line_index)?;
+        let mut column = 1usize;
+        for ch in source[line.start..byte_index.clamp(line.start, line.end)].chars() {
+            if ch == '\t' {
+                column += 8 - ((column - 1) % 8);
+            } else {
+                column += 1;
+            }
+        }
+        Ok(column)
+    }
+}
+
+fn emit_parser_error(
+    writer: &mut impl codespan_reporting::term::termcolor::WriteColor,
+    err: &tamarin_parser::ParseError,
+) -> Result<(), codespan_reporting::files::Error> {
     use codespan_reporting::diagnostic::{Diagnostic, Label};
-    use codespan_reporting::files::SimpleFiles;
-    use codespan_reporting::term::{
-        self,
-        termcolor::{ColorChoice, StandardStream},
-    };
+    use codespan_reporting::term;
 
-    let mut files = SimpleFiles::new();
-    let file_id = files.add(src_name, src_content);
-
-    let labels: Vec<Label<usize>> = err
-        .labels()
+    let source_name = err.source_name().unwrap_or("<input>");
+    let source_text = err.source_text().unwrap_or("");
+    let files = ParserDiagnosticFile::new(source_name, source_text);
+    let file_id = ();
+    let labels = err
+        .diagnostic_labels()
         .into_iter()
         .map(|label| {
-            let range = label.at.start..label.at.end;
-            if label.is_primary {
+            let range = label.span.as_range();
+            if label.primary {
                 Label::primary(file_id, range).with_message(label.message)
             } else {
                 Label::secondary(file_id, range).with_message(label.message)
             }
         })
         .collect();
-
     let diagnostic = Diagnostic::error()
-        .with_message(err.message())
+        .with_message(err.diagnostic_message())
         .with_labels(labels)
-        .with_notes(err.notes());
-
-    // `Auto` asks termcolor's environment check: colours unless `TERM` is
-    // unset or `dumb`, or `NO_COLOR` is set.
-    let writer = StandardStream::stderr(ColorChoice::Auto);
-    let config = codespan_reporting::term::Config::default();
-
-    term::emit_to_write_style(&mut writer.lock(), &config, &files, &diagnostic)
-        .expect("Failed to report parse errors.");
+        .with_notes(err.diagnostic_notes());
+    let config = term::Config {
+        tab_width: 8,
+        ..term::Config::default()
+    };
+    term::emit_to_write_style(writer, &config, &files, &diagnostic)
 }
 
 #[cfg(test)]
@@ -3006,6 +2836,38 @@ mod tests {
     /// second `cargo test` is such a run.
     fn scratch(name: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!("tamarin_rs_{}_{}", name, std::process::id()))
+    }
+
+    #[test]
+    fn parser_diagnostic_renders_the_source_span_and_note() {
+        use codespan_reporting::term::termcolor::Buffer;
+
+        let source = "theory T begin\nbuiltins: hasing\nend\n";
+        let error = tamarin_parser::parse_theory(source, &[])
+            .expect_err("unknown builtin must fail")
+            .with_source("bad.spthy");
+        let mut buffer = Buffer::no_color();
+        emit_parser_error(&mut buffer, &error).expect("render diagnostic");
+        let rendered = std::str::from_utf8(buffer.as_slice()).expect("UTF-8 diagnostic");
+
+        assert!(rendered.contains("error: Unknown builtin `hasing`"));
+        assert!(rendered.contains("bad.spthy:2:11"));
+        assert!(rendered.contains("hasing"));
+    }
+
+    #[test]
+    fn parser_diagnostic_uses_parsec_tab_stops() {
+        use codespan_reporting::term::termcolor::Buffer;
+
+        let source = "theory T begin\n\tunknown: x\nend\n";
+        let error = tamarin_parser::parse_theory(source, &[])
+            .expect_err("unknown item must fail")
+            .with_source("bad.spthy");
+        let mut buffer = Buffer::no_color();
+        emit_parser_error(&mut buffer, &error).expect("render diagnostic");
+        let rendered = std::str::from_utf8(buffer.as_slice()).expect("UTF-8 diagnostic");
+
+        assert!(rendered.contains("bad.spthy:2:9"), "{rendered}");
     }
 
     #[test]
@@ -3081,7 +2943,14 @@ mod tests {
         let (dir, e) = create_dirs(std::path::Path::new("/nonexistentdir/sub/deep"))
             .expect_err("/ is not writable in the test environment");
         assert_eq!(dir, std::path::Path::new("/nonexistentdir"));
-        assert_eq!(e.kind(), std::io::ErrorKind::PermissionDenied);
+        assert!(
+            matches!(
+                e.kind(),
+                std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::ReadOnlyFilesystem
+            ),
+            "unexpected error kind: {:?}",
+            e.kind()
+        );
 
         // ENOTDIR is not ENOENT, so the walk stops where it hit — one level
         // BELOW the regular file, not at the file itself.

@@ -80,8 +80,8 @@ qed
 Generated from:
 Tamarin version 1.13.0
 Maude version 3.5.1
-Git revision: ef3f0468f6f12b81f43289aa64f5d1b9e53eaf59, branch: HEAD
-Compiled at: 2026-07-31 12:54:17.256348115 UTC
+Git revision: 573a43953195d83e62fdbe32fc98253031bca60f (with uncommited changes), branch: HEAD
+Compiled at: 2026-08-28 23:09:34.558175069 UTC
 */
 
 end
@@ -89,9 +89,9 @@ end
 ==============================================================================
 summary of summaries:
 
-analyzed: /home/kamilner/tamarin-rs-2/crates/tamarin-prover/tests/fixtures/cli_flags_chan.spthy
+analyzed: /home/kamilner/tamarin-rs/crates/tamarin-prover/tests/fixtures/cli_flags_chan.spthy
 
-  processing time: 0.14s
+  processing time: 0.12s
   
   secrecy (all-traces): verified (5 steps)
   exec (exists-trace): verified (6 steps)

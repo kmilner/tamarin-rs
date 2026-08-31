@@ -15,210 +15,184 @@
 //! to the adversary's knowledge (`!KU`). Rules gain `AUTO_IN_*`/`AUTO_OUT_*`
 //! action labels so the lemma can refer to those input/output events.
 //!
-//! This module builds the lemma **formula** as a parser-AST [`p::Formula`]
-//! (the form RS stores and renders lemmas in), constructed to render
-//! byte-identically to HS's `prettyLNFormula` of the `LNFormula` it builds.
-//! The variable binders use HS's names (`x`, `m`/`m1..mn`, `i`, `j`).
+//! This module builds the lemma **formula** as an [`LNFormula`] over De
+//! Bruijn binders, the shape `addAutoSourcesLemma` writes out directly. The
+//! binder hints use HS's names (`x`, `m`/`m1..mn`, `i`, `j`).
 
+use crate::atom::ProtoAtom;
 use crate::constraint::constraints::{NodeConc, NodePrem};
 use crate::constraint::system::System;
-use crate::fact::{proto_or_in_fact_view, proto_or_out_fact_view, FactTag, LNFact, Multiplicity};
+use crate::fact::{
+    proto_or_in_fact_view, proto_or_out_fact_view, Fact, FactTag, LNFact, Multiplicity,
+};
+use crate::formula::{BLNTerm, LNFormula};
 use crate::rule::{print_fact_position, print_position, rule_name_string, ExtendedPosition};
 use crate::theory::{OpenProtoRule, TheoryItem};
-use tamarin_parser::{ast as p, DUMMY_LOCATION};
-use tamarin_term::lterm::{rename_avoiding, LNTerm};
+use tamarin_term::lterm::{rename_avoiding, BVar, LNTerm, LSort};
 use tamarin_term::maude_proc::MaudeHandle;
 use tamarin_term::positions::{at_pos, deepest_prot_subterm, find_pos};
 use tamarin_term::rewriting::Equal;
 use tamarin_term::term::all_prot_subterms;
+use tamarin_term::vterm::var_term;
 
-/// Bound-variable names, matching HS's quantifier binders in
-/// `addAutoSourcesLemma` (`OpenTheory.hs:399-535`).
-fn var(name: &str, sort: p::SortHint) -> p::VarSpec {
-    p::VarSpec {
-        name: name.to_string(),
-        idx: 0,
-        sort,
-        typ: None,
-        location: DUMMY_LOCATION,
-    }
-}
-fn var_term(name: &str, sort: p::SortHint) -> p::Term {
-    p::Term::Var(var(name, sort))
+const MSG: LSort = LSort::Msg;
+const NODE: LSort = LSort::Node;
+
+/// `varTerm (Bound i)`: the occurrence of the binder `i` levels further out,
+/// `0` being the innermost one.
+fn bound(i: u64) -> BLNTerm {
+    var_term(BVar::Bound(i))
 }
 
-/// `inputFactTerm pos ru terms var` (OpenTheory.hs:138-538, see line 313): a linear proto fact
-/// `AUTO_IN_TERM_<pos>_<rule>( terms.. , var )`.
-fn input_fact_term(name: &str, terms: Vec<p::Term>, v: p::Term) -> p::Fact {
-    let mut args = terms;
-    args.push(v);
-    p::Fact {
-        persistent: false,
-        name: name.to_string(),
-        args,
-        annotations: Vec::new(),
-        location: DUMMY_LOCATION,
-    }
+/// `Qua All (name, sort)` (OpenTheory.hs:395-417).
+fn all(name: &str, sort: LSort, body: LNFormula) -> LNFormula {
+    LNFormula::for_all((name.to_string(), sort), body)
 }
 
-/// `outputFactTerm pos ru terms` (OpenTheory.hs:138-538, see line 333).
-fn output_fact_term(name: &str, terms: Vec<p::Term>) -> p::Fact {
-    p::Fact {
-        persistent: false,
-        name: name.to_string(),
-        args: terms,
-        annotations: Vec::new(),
-        location: DUMMY_LOCATION,
-    }
+/// `Qua Ex (name, sort)` (OpenTheory.hs:484-501).
+fn ex(name: &str, sort: LSort, body: LNFormula) -> LNFormula {
+    LNFormula::exists((name.to_string(), sort), body)
 }
 
-fn action(fa: p::Fact, tp: p::Term) -> p::Formula {
-    p::Formula::atom(p::Atom::Action(fa, tp), DUMMY_LOCATION)
-}
-fn less(a: p::Term, b: p::Term) -> p::Formula {
-    p::Formula::atom(p::Atom::Less(a, b), DUMMY_LOCATION)
+/// `Ato (Action tp fa)` (OpenTheory.hs:404-412).
+fn action(fa: Fact<BLNTerm>, tp: BLNTerm) -> LNFormula {
+    LNFormula::Atom(ProtoAtom::Action(tp, fa))
 }
 
-const MSG: p::SortHint = p::SortHint::Msg;
-const NODE: p::SortHint = p::SortHint::Node;
+/// `Ato (Less a b)` (OpenTheory.hs:500).
+fn less(a: BLNTerm, b: BLNTerm) -> LNFormula {
+    LNFormula::Atom(ProtoAtom::Less(a, b))
+}
 
-/// `orKU` (OpenTheory.hs:138-538, see line 484): `∃ j. !KU(x) @ j ∧ j < i`. Here `i` is the
-/// input timepoint and `x` the input-term variable.
-fn or_ku() -> p::Formula {
-    let ku = p::Fact {
-        persistent: true,
-        name: "KU".to_string(),
-        args: vec![var_term("x", MSG)],
-        annotations: Vec::new(),
-        location: DUMMY_LOCATION,
-    };
-    p::Formula::exists(
-        vec![var("j", NODE)],
-        p::Formula::and(
-            action(ku, var_term("j", NODE)),
-            less(var_term("j", NODE), var_term("i", NODE)),
+/// The four AUTO action facts — `inputFactTerm`, `inputFactFact`,
+/// `outputFactTerm` and `outputFactFact` (OpenTheory.hs:313-352): a linear
+/// proto fact of the given name over the given terms.
+fn auto_fact(name: &str, terms: Vec<BLNTerm>) -> Fact<BLNTerm> {
+    Fact::new(
+        FactTag::Proto(
+            Multiplicity::Linear,
+            tamarin_term::intern::intern_str(name),
+            terms.len(),
         ),
-        DUMMY_LOCATION,
+        terms,
     )
 }
 
-/// `toFactsTerm ru p f''` (OpenTheory.hs:138-538, see line 502): `f'' ∨ (∃ j. AUTO_OUT_TERM(m) @ j ∧ j < i)`.
-fn to_facts_term(out_name: &str, inner: p::Formula) -> p::Formula {
-    let out = output_fact_term(out_name, vec![var_term("m", MSG)]);
-    p::Formula::or(
-        inner,
-        p::Formula::exists(
-            vec![var("j", NODE)],
-            p::Formula::and(
-                action(out, var_term("j", NODE)),
-                less(var_term("j", NODE), var_term("i", NODE)),
+/// `orKU` (OpenTheory.hs:484-501): `∃ j. !KU(x) @ j ∧ j < i`, read under the
+/// `x`, `m`, `i` prefix that `Bound 3` and `Bound 1` point back into.
+fn or_ku() -> LNFormula {
+    let ku = Fact::new(FactTag::Ku, vec![bound(3)]);
+    ex(
+        "j",
+        NODE,
+        action(ku, bound(0)).and(less(bound(0), bound(1))),
+    )
+}
+
+/// `toFactsTerm ru p f''` (OpenTheory.hs:502-519):
+/// `f'' ∨ (∃ j. AUTO_OUT_TERM(m) @ j ∧ j < i)`.
+fn to_facts_term(out_name: &str, inner: LNFormula) -> LNFormula {
+    inner.or(ex(
+        "j",
+        NODE,
+        action(auto_fact(out_name, vec![bound(2)]), bound(0)).and(less(bound(0), bound(1))),
+    ))
+}
+
+/// `addForm` protected-subterm case with NO matching outputs
+/// (OpenTheory.hs:395-417): `∀ x m i. AUTO_IN_TERM(m,x) @ i ⇒ orKU`.
+pub(crate) fn term_input_form_no_outputs(in_name: &str) -> LNFormula {
+    let in_fact = auto_fact(in_name, vec![bound(1), bound(2)]);
+    all(
+        "x",
+        MSG,
+        all(
+            "m",
+            MSG,
+            all("i", NODE, action(in_fact, bound(0)).implies(or_ku())),
+        ),
+    )
+}
+
+/// `addForm` protected-subterm case WITH matching outputs
+/// (OpenTheory.hs:419-441): `∀ x m i. AUTO_IN_TERM(m,x) @ i ⇒
+/// (orKU ∨ (∃ j. AUTO_OUT_TERM(m) @ j ∧ j < i))`.
+pub(crate) fn term_input_form_with_outputs(in_name: &str, out_name: &str) -> LNFormula {
+    let in_fact = auto_fact(in_name, vec![bound(1), bound(2)]);
+    all(
+        "x",
+        MSG,
+        all(
+            "m",
+            MSG,
+            all(
+                "i",
+                NODE,
+                action(in_fact, bound(0)).implies(to_facts_term(out_name, or_ku())),
             ),
-            DUMMY_LOCATION,
         ),
-    )
-}
-
-/// `addForm` protected-subterm case WITH matching outputs (OpenTheory.hs:138-538, see line 419):
-/// `∀ x m i. AUTO_IN_TERM(m,x) @ i ⇒ (orKU ∨ (∃ j. AUTO_OUT_TERM(m) @ j ∧ j < i))`.
-pub fn term_input_form_with_outputs(in_name: &str, out_name: &str) -> p::Formula {
-    let in_fact = input_fact_term(in_name, vec![var_term("m", MSG)], var_term("x", MSG));
-    p::Formula::forall(
-        vec![var("x", MSG), var("m", MSG), var("i", NODE)],
-        p::Formula::implies(
-            action(in_fact, var_term("i", NODE)),
-            to_facts_term(out_name, or_ku()),
-        ),
-        DUMMY_LOCATION,
-    )
-}
-
-/// `addForm` protected-subterm case with NO matching outputs (OpenTheory.hs:138-538, see line 395):
-/// `∀ x m i. AUTO_IN_TERM(m,x) @ i ⇒ orKU`.
-pub fn term_input_form_no_outputs(in_name: &str) -> p::Formula {
-    let in_fact = input_fact_term(in_name, vec![var_term("m", MSG)], var_term("x", MSG));
-    p::Formula::forall(
-        vec![var("x", MSG), var("m", MSG), var("i", NODE)],
-        p::Formula::implies(action(in_fact, var_term("i", NODE)), or_ku()),
-        DUMMY_LOCATION,
     )
 }
 
 // ---------------------------------------------------------------------------
 // Fact-input cases (AUTO_*_FACT) — HS `addForm (_, Right _, _)` and
-// `formulaMultArity` / `toFactsFact` (OpenTheory.hs:443-533).
+// `formulaMultArity` / `toFactsFact` (OpenTheory.hs:443-483, 520-533).
 // ---------------------------------------------------------------------------
 
-/// `listOfM n` (OpenTheory.hs:138-538, see line 380): `["m1", "m2", ..., "mn"]`.
+/// `listOfM n` (OpenTheory.hs:380-381): `["m1", "m2", ..., "mn"]`.
 fn list_of_m(n: usize) -> Vec<String> {
     (1..=n).map(|k| format!("m{}", k)).collect()
 }
 
-fn input_fact_fact_ast(name: &str, ms: &[p::VarSpec]) -> p::Fact {
-    p::Fact {
-        persistent: false,
-        name: name.to_string(),
-        args: ms.iter().map(|v| p::Term::Var(v.clone())).collect(),
-        annotations: Vec::new(),
-        location: DUMMY_LOCATION,
-    }
+/// `listVarTerm q s` (OpenTheory.hs:534-535): the occurrences `Bound q` down
+/// to `Bound s`.
+fn list_var_term(q: u64, s: u64) -> Vec<BLNTerm> {
+    (s..=q).rev().map(bound).collect()
 }
 
-/// `addForm (_, Right (_, []), _)` (OpenTheory.hs:138-538, see line 443): no matching outputs →
-/// `∀ m1..mn i. AUTO_IN_FACT(m1..mn) @ i ⇒ ⊥`.
-fn fact_input_form_no_outputs(in_name: &str, arity: usize) -> p::Formula {
-    let ms: Vec<p::VarSpec> = list_of_m(arity).iter().map(|n| var(n, MSG)).collect();
-    let in_fact = input_fact_fact_ast(in_name, &ms);
-    let mut binders = ms;
-    binders.push(var("i", NODE));
-    p::Formula::forall(
-        binders,
-        p::Formula::implies(
-            action(in_fact, var_term("i", NODE)),
-            p::Formula::r#false(DUMMY_LOCATION),
-        ),
-        DUMMY_LOCATION,
+/// `formulaMultArity nb` (OpenTheory.hs:445-462): the `∀ m1..mn.` prefix with
+/// `m1` outermost, wrapped around `∀ i.` and `body`.
+fn formula_mult_arity(nb: usize, body: LNFormula) -> LNFormula {
+    list_of_m(nb)
+        .iter()
+        .rev()
+        .fold(all("i", NODE, body), |acc, h| all(h, MSG, acc))
+}
+
+/// `addForm (_, Right (_, []), _)` (OpenTheory.hs:443-462): no matching
+/// outputs → `∀ m1..mn i. AUTO_IN_FACT(m1..mn) @ i ⇒ ⊥`.
+fn fact_input_form_no_outputs(in_name: &str, arity: usize) -> LNFormula {
+    let in_fact = auto_fact(in_name, list_var_term(arity as u64, 1));
+    formula_mult_arity(
+        arity,
+        action(in_fact, bound(0)).implies(LNFormula::lfalse()),
     )
 }
 
-/// `addForm (_, Right (_, outs:_), _)` (OpenTheory.hs:138-538, see line 464): with a matching
-/// output → `∀ m1..mn i. AUTO_IN_FACT(m1..mn) @ i ⇒ toFactsFact`.
-/// `toFactsFact` (OpenTheory.hs): `∃ j. AUTO_OUT_FACT(m1..m{out_arity}) @ j ∧ j < i`
-/// — the output fact references the input binders `m1..m{out_arity}`, highest first.
+/// `toFactsFact ru p outn` (OpenTheory.hs:520-533): `∃ j. AUTO_OUT_FACT(…) @ j
+/// ∧ j < i`, the output fact over the input binders `Bound (1 + arity)` down
+/// to `Bound 2`.
+fn to_facts_fact(out_name: &str, out_arity: usize) -> LNFormula {
+    let out_fact = auto_fact(out_name, list_var_term(1 + out_arity as u64, 2));
+    ex(
+        "j",
+        NODE,
+        action(out_fact, bound(0)).and(less(bound(0), bound(1))),
+    )
+}
+
+/// `addForm (_, Right (_, outs:_), _)` (OpenTheory.hs:464-483): with a
+/// matching output → `∀ m1..mn i. AUTO_IN_FACT(m1..mn) @ i ⇒ toFactsFact`.
 fn fact_input_form_with_outputs(
     in_name: &str,
     out_name: &str,
     in_arity: usize,
     out_arity: usize,
-) -> p::Formula {
-    let ms: Vec<p::VarSpec> = list_of_m(in_arity).iter().map(|n| var(n, MSG)).collect();
-    let in_fact = input_fact_fact_ast(in_name, &ms);
-    // toFactsFact: AUTO_OUT_FACT( listVarTerm (1 + out_arity) 2 ) — de-Bruijn
-    // Bound (1+out_arity)..Bound 2 with j=Bound 0, i=Bound 1. So the output
-    // fact references m1..m{out_arity} (the input binders), highest first.
-    let out_ms: Vec<p::Term> = (1..=out_arity)
-        .map(|k| var_term(&format!("m{}", k), MSG))
-        .collect();
-    let out_fact = p::Fact {
-        persistent: false,
-        name: out_name.to_string(),
-        args: out_ms,
-        annotations: Vec::new(),
-        location: DUMMY_LOCATION,
-    };
-    let to_facts = p::Formula::exists(
-        vec![var("j", NODE)],
-        p::Formula::and(
-            action(out_fact, var_term("j", NODE)),
-            less(var_term("j", NODE), var_term("i", NODE)),
-        ),
-        DUMMY_LOCATION,
-    );
-    let mut binders = ms;
-    binders.push(var("i", NODE));
-    p::Formula::forall(
-        binders,
-        p::Formula::implies(action(in_fact, var_term("i", NODE)), to_facts),
-        DUMMY_LOCATION,
+) -> LNFormula {
+    let in_fact = auto_fact(in_name, list_var_term(in_arity as u64, 1));
+    formula_mult_arity(
+        in_arity,
+        action(in_fact, bound(0)).implies(to_facts_fact(out_name, out_arity)),
     )
 }
 
@@ -234,8 +208,8 @@ pub struct AutoSourcesResult {
     /// `addLabels` per chain (foldr-prepend), so the caller must too — apply
     /// each group in order, reverse-iterating within the group and prepending.
     pub annotation_groups: Vec<Vec<(String, LNFact)>>,
-    /// The source-lemma formula (parser AST), starting from `⊤`.
-    pub formula: p::Formula,
+    /// The source-lemma formula, starting from `⊤`.
+    pub formula: LNFormula,
 }
 
 fn ac_concs(o: &OpenProtoRule) -> &[LNFact] {
@@ -301,19 +275,16 @@ fn auto_names(m: &Matched, pos: &ExtendedPosition, rin_name: &str) -> (String, S
 /// AUTO fact names, `addLabels`' targeting, the `done` cases — uses the AC
 /// name, `getRuleName (cprRuleAC ru)`).
 fn rule_e_name(o: &OpenProtoRule) -> &str {
-    match o.rule_e.as_deref() {
-        Some(re) => match &re.info.name {
-            crate::rule::ProtoRuleName::Stand(n) => n,
-            crate::rule::ProtoRuleName::Fresh => "Fresh",
-        },
-        None => o.name(),
+    match &o.rule_e().info.name {
+        crate::rule::ProtoRuleName::Stand(n) => n,
+        crate::rule::ProtoRuleName::Fresh => "Fresh",
     }
 }
 
 /// Port of `addAutoSourcesLemma`'s body (OpenTheory.hs:144-538) without the
 /// theory-item plumbing: given the protocol rules and the open-chain cases,
 /// compute the rule AUTO annotations and the source-lemma formula.
-pub fn add_auto_sources_lemma(
+pub(crate) fn add_auto_sources_lemma(
     maude: &MaudeHandle,
     rules: &[OpenProtoRule],
     chains: &[((NodeConc, NodePrem), System)],
@@ -336,14 +307,20 @@ pub fn add_auto_sources_lemma(
             }
         }
     }
+    let mut rule_by_name: tamarin_utils::FastMap<&str, usize> = Default::default();
+    for (ri, rule) in rules.iter().enumerate() {
+        rule_by_name.entry(rule.name()).or_insert(ri);
+    }
 
-    let mut formula = p::Formula::r#true(DUMMY_LOCATION);
+    let mut formula = LNFormula::ltrue();
     let mut annotation_groups: Vec<Vec<(String, LNFact)>> = Vec::new();
-    let mut done: Vec<(String, ExtendedPosition)> = Vec::new();
+    let mut done: tamarin_utils::FastMap<&str, tamarin_utils::FastSet<ExtendedPosition>> =
+        Default::default();
 
     for ((conc, _prem), source) in chains {
+        let node_rules = source.node_rule_map();
         // v = head $ getFactTerms $ nodeConcFact conc source
-        let Some(c_rule) = source.node_rule_safe(&conc.0) else {
+        let Some(c_rule) = node_rules.get(&conc.0) else {
             continue;
         };
         let Some(conc_fact) = c_rule.conclusions.get(conc.1 .0) else {
@@ -354,7 +331,7 @@ pub fn add_auto_sources_lemma(
         };
 
         // unsolved premises of this source (for the fact-case guard).
-        let unsolved_prem_keys: Vec<NodePrem> = source
+        let unsolved_prem_keys: tamarin_utils::FastSet<NodePrem> = source
             .unsolved_premises()
             .into_iter()
             .map(|(np, _)| np)
@@ -371,14 +348,14 @@ pub fn add_auto_sources_lemma(
             let Some(positions) = find_pos(&v, &term) else {
                 continue;
             };
-            let Some(rule_sys) = source.node_rule_safe(&nodeid) else {
+            let Some(rule_sys) = node_rules.get(&nodeid) else {
                 continue;
             };
             let sys_name = rule_name_string(rule_sys);
-            let Some((ri, rule)) = rules.iter().enumerate().find(|(_, r)| r.name() == sys_name)
-            else {
+            let Some(&ri) = rule_by_name.get(sys_name.as_str()) else {
                 continue;
             };
+            let rule = &rules[ri];
             let Some(premise) = ac_prems(rule).get(pid.0) else {
                 continue;
             };
@@ -436,7 +413,10 @@ pub fn add_auto_sources_lemma(
         let mut matches: Vec<(usize, Matched, ExtendedPosition)> = Vec::new();
         for (ri, u, pos) in &premise_term_u {
             let rin_name = rules[*ri].name();
-            let already_done = || done.iter().any(|(n, p)| n == rin_name && p == pos);
+            let already_done = || {
+                done.get(rin_name)
+                    .is_some_and(|positions| positions.contains(pos))
+            };
             match u {
                 Unify::Term(protterm, vin) => {
                     if already_done() {
@@ -526,22 +506,22 @@ pub fn add_auto_sources_lemma(
                     }
                 }
             };
-            formula = p::Formula::and(formula, part);
+            formula = formula.and(part);
         }
 
         // addLabels + addCases (this chain's acts as one group).
         let mut grp: Vec<(String, LNFact)> = Vec::new();
         for (ri, m, pos) in &matches {
-            let rin_name = rules[*ri].name().to_string();
+            let rin_name = rules[*ri].name();
             match m {
                 Matched::Term {
                     protterm,
                     vin,
                     outs,
                 } => {
-                    let (in_name, out_name) = auto_names(m, pos, &rin_name);
+                    let (in_name, out_name) = auto_names(m, pos, rin_name);
                     grp.push((
-                        rin_name.clone(),
+                        rin_name.to_string(),
                         ln_proto(&in_name, vec![protterm.clone(), vin.clone()]),
                     ));
                     for (rout_i, tout) in outs {
@@ -552,8 +532,11 @@ pub fn add_auto_sources_lemma(
                     }
                 }
                 Matched::Fact { fact, outs } => {
-                    let (in_name, out_name) = auto_names(m, pos, &rin_name);
-                    grp.push((rin_name.clone(), ln_proto(&in_name, fact.terms.to_vec())));
+                    let (in_name, out_name) = auto_names(m, pos, rin_name);
+                    grp.push((
+                        rin_name.to_string(),
+                        ln_proto(&in_name, fact.terms.to_vec()),
+                    ));
                     for (rout_i, fout) in outs {
                         grp.push((
                             rules[*rout_i].name().to_string(),
@@ -562,7 +545,7 @@ pub fn add_auto_sources_lemma(
                     }
                 }
             }
-            done.push((rin_name, pos.clone()));
+            done.entry(rin_name).or_default().insert(pos.clone());
         }
         annotation_groups.push(grp);
     }
@@ -574,16 +557,18 @@ pub fn add_auto_sources_lemma(
 }
 
 /// Build the AUTO source lemma item (HS `unprovenLemma lemmaName [SourceLemma]
-/// AllTraces formula`, OpenTheory.hs:138-538, see line 157).
-pub fn build_source_lemma(name: &str, formula: p::Formula) -> crate::theory::Lemma {
+/// AllTraces formula`, OpenTheory.hs:138-538, see line 157).  `unprovenLemma`
+/// seeds `_lOriginalFormula` with the same formula
+/// (Theory/ProofSkeleton.hs:59-61).
+pub(crate) fn build_source_lemma(name: &str, formula: LNFormula) -> crate::theory::Lemma {
     use crate::theory::{Lemma, LemmaAttr, TraceQuantifier};
     Lemma {
         name: name.to_string(),
-        modulo: None,
         attributes: vec![LemmaAttr::Sources],
         trace_quantifier: TraceQuantifier::AllTraces,
+        original_formula: Some(formula.clone()),
         formula,
-        proof: crate::theory::ProofSkeleton::unproven(),
+        proof: None,
         // HS `unprovenLemma` seeds `_lPlaintext` with "Unpr_inSkeleton"
         // (`Theory/ProofSkeleton.hs:59-61, see line 61`).
         plaintext: "Unpr_inSkeleton".to_string(),
@@ -592,7 +577,7 @@ pub fn build_source_lemma(name: &str, formula: p::Formula) -> crate::theory::Lem
 
 /// Whether the theory already contains a lemma named `name`
 /// (HS `find lemma items`, OpenTheory.hs:138-538, see line 146).
-pub fn has_lemma_named(items: &[TheoryItem], name: &str) -> bool {
+pub(crate) fn has_lemma_named(items: &[TheoryItem], name: &str) -> bool {
     items
         .iter()
         .any(|it| matches!(it, TheoryItem::Lemma(l) if l.name == name))
@@ -602,10 +587,10 @@ pub fn has_lemma_named(items: &[TheoryItem], name: &str) -> bool {
 /// `cprRuleAC` only (`addActionClosedProtoRule`, lib/theory/src/Rule.hs:97-99);
 /// for a trivial-variant rule (no
 /// abstracted form) that is the rule itself, which renders as
-/// `rule (modulo E)` and propagates to its instances.  The pristine body is
-/// snapshotted into `rule_e` first — HS's untouched `cprRuleE` half, which
-/// partial evaluation's `getProtoRuleEs` must keep reading (see the field
-/// doc).
+/// `rule (modulo E)` and propagates to its instances.  A rule that still IS
+/// its own E half gets the pristine body snapshotted into `rule_e` first —
+/// HS's untouched `cprRuleE`, which partial evaluation's `getProtoRuleEs`
+/// must keep reading (see the field doc).
 fn add_action_to_open_rule(o: &mut OpenProtoRule, action: LNFact) {
     if o.rule_e.is_none() {
         o.rule_e = Some(Box::new(o.rule.clone()));
@@ -614,28 +599,6 @@ fn add_action_to_open_rule(o: &mut OpenProtoRule, action: LNFact) {
         ar.add_action(action.clone());
     }
     o.rule.add_action(action);
-}
-
-/// Add an AUTO action (as an AST fact) to a parsed rule, prepended unless
-/// already present — the parser-AST analogue of HS `addAction` used for the
-/// rendered theory.
-fn add_action_to_parsed_rule(r: &mut p::Rule, action: &p::Fact) {
-    if !r.actions.contains(action) {
-        r.actions.insert(0, action.clone());
-    }
-}
-
-/// Build the parser-AST `AUTO_typing [sources]` lemma for the rendered theory.
-fn build_parsed_source_lemma(name: &str, formula: p::Formula) -> p::Lemma {
-    p::Lemma {
-        name: name.to_string(),
-        modulo: None,
-        attributes: vec![p::LemmaAttr::Sources],
-        trace_quantifier: p::TraceQuantifier::AllTraces,
-        formula,
-        proof: None,
-        plaintext: String::new(),
-    }
 }
 
 /// HS `unfoldRuleVariants` on ONE closed rule (lib/theory/src/Rule.hs:63-79),
@@ -708,118 +671,95 @@ fn unfold_one_rule_variants(o: &OpenProtoRule) -> Vec<OpenProtoRule> {
                 variant_substs: vec![LNSubstVFresh::empty()],
                 abstracted_rule: None,
                 loop_breakers: o.loop_breakers.clone(),
-                unfolded_variant: true,
                 // `toClosedProtoRule` keeps the ORIGINAL rule as every
                 // variant's `cprRuleE` (lib/theory/src/Rule.hs:75-76) — the
                 // half `getProtoRuleEs` dedups back to one copy.
-                rule_e: o.rule_e.clone().or_else(|| Some(Box::new(o.rule.clone()))),
+                rule_e: Some(Box::new(o.rule_e().clone())),
+                // `unfoldRuleVariants` runs on a rule whose variants Maude
+                // computed, which `closeProtoRule` reaches only for a rule
+                // that declared none (lib/theory/src/Rule.hs:82-86).
+                rule_ac: Vec::new(),
             }
         })
         .collect()
 }
 
-/// HS `unfoldRules items` (CloseRule.hs:106-110) over the paired
-/// parsed/elaborated theories: replace every closed rule whose AC variant is
-/// non-trivial (`isTrivialProtoVariantAC`, shared with the renderer as
-/// `pretty_theory::is_trivial_proto_variant_ac`) by its per-variant rules
-/// ([`unfold_one_rule_variants`]); trivial-variant rules stay unchanged, so
-/// the pass is the identity on a theory whose variants are all trivial.
+/// Re-express one closed AC half as the split open representation consumed by
+/// [`unfold_one_rule_variants`]. This also covers source-declared
+/// `variants (modulo AC)` blocks, whose bodies do not live in
+/// `abstracted_rule`/`variant_substs` on their parent.
+fn closed_rule_as_open(parent: &OpenProtoRule, ac: &crate::rule::ProtoRuleAC) -> OpenProtoRule {
+    let rule = crate::rule::Rule {
+        info: crate::rule::ProtoRuleEInfo {
+            name: ac.info.name,
+            attributes: ac.info.attributes.clone(),
+            restrictions: parent.rule.info.restrictions.clone(),
+        },
+        premises: ac.premises.clone(),
+        conclusions: ac.conclusions.clone(),
+        actions: ac.actions.clone(),
+        new_vars: ac.new_vars.clone(),
+    };
+    OpenProtoRule {
+        rule,
+        variant_substs: ac.info.variants.clone(),
+        abstracted_rule: None,
+        loop_breakers: ac.info.loop_breakers.clone(),
+        rule_e: Some(Box::new(parent.rule_e().clone())),
+        rule_ac: Vec::new(),
+    }
+}
+
+/// HS `unfoldRules items` (CloseRule.hs:106-110) over the theory's item
+/// list: replace every closed rule whose AC variant is non-trivial
+/// (`isTrivialProtoVariantAC`, Theory/Model/Rule.hs:789-793) by its
+/// per-variant rules ([`unfold_one_rule_variants`]); trivial-variant rules
+/// stay unchanged, so the pass is the identity on a theory whose variants are
+/// all trivial.
 ///
-/// BOTH item lists are rewritten in place, mirroring what
-/// `mergeOpenProtoRules` + `prettyOpenProtoRuleAsClosedRule` make of the
-/// unfolded items at render time (OpenTheory.hs:592-606, 827-851):
-///  * ONE variant — the merge yields `OpenProtoRule ruE [ruAC]`, rendered
-///    `prettyProtoRuleACasE ruAC` (the AC body under the `___VARIANT_1`
-///    name, as if modulo E) — so the parsed slot is REPLACED by the rule
-///    regenerated from the variant's LN body (`proto_rule_to_parsed`, as
-///    the partial-evaluation splice does).
-///  * TWO OR MORE variants — the merge groups them back under their shared
-///    `cprRuleE` and renders `prettyProtoRuleE ruE` + a ` variants` block
-///    of `rule (modulo AC)` sub-blocks (OpenTheory.hs:845-851) — so the
-///    parsed slot KEEPS the original display rule and parks the regenerated
-///    variant bodies in its `variants` field
-///    (`pretty_theory::render_unfolded_variants_block` renders them).
-///
-/// Either way the renderer's positional `(name, occurrence)` pairing
-/// (`pretty_theory::pair_elaborated_rules`) stays aligned.  A parsed
-/// leftover with no elaborated counterpart (the no-variant drop, run.rs)
-/// keeps its slot and keeps rendering as nothing.
+/// The variants take the unfolded rule's slot in item order, each carrying
+/// the original as its `cprRuleE` half.  The printer regroups them:
+/// `mergeOpenProtoRules` collapses the run sharing one `ruE`
+/// (OpenTheory.hs:592-603) and `prettyOpenProtoRuleAsClosedRule` renders a
+/// single AC body as `prettyProtoRuleACasE` (under the `___VARIANT_1` name,
+/// as if modulo E) and several as `prettyProtoRuleE ruE` plus a ` variants`
+/// block of `rule (modulo AC)` sub-blocks (OpenTheory.hs:827-850).
 ///
 /// Returns `true` iff any rule was unfolded.
-fn unfold_rule_variants(parsed: &mut p::Theory, elaborated: &mut crate::theory::Theory) -> bool {
-    let macros = crate::pretty_theory::collect_macros(parsed);
-    let arity1 = crate::elaborate::arity1_noeq_names(elaborated.signature.maude_sig());
-
-    // Parsed display rules grouped by name in item order: the k-th parsed
-    // rule named N displays the k-th elaborated rule named N
-    // (`pair_elaborated_rules`' invariant).
-    let mut parsed_by_name: tamarin_utils::FastMap<&str, Vec<&p::Rule>> = Default::default();
-    for item in &parsed.items {
-        if let p::TheoryItem::Rule(r) = item {
-            parsed_by_name.entry(r.name.as_str()).or_default().push(r);
-        }
-    }
-
-    // Decision pass over the elaborated rules in item order: one entry per
-    // rule item (`None` = trivial, keep).  `parsed_repl` keys the
-    // regenerated parsed rules by the same (name, occurrence) the rewrite
-    // below re-derives — replacing the slot for a single variant, nesting
-    // them under the kept display rule for two or more (see the fn doc).
-    enum ParsedRewrite {
-        Replace(Vec<p::Rule>),
-        Nest(Vec<p::Rule>),
-    }
+fn unfold_rule_variants(elaborated: &mut crate::theory::Theory) -> bool {
+    // Decision pass over the rules in item order: one entry per rule item
+    // (`None` = trivial, keep).
     let mut elab_repl: Vec<Option<Vec<OpenProtoRule>>> = Vec::new();
-    let mut parsed_repl: tamarin_utils::FastMap<(String, usize), ParsedRewrite> =
-        Default::default();
-    let mut elab_occ: tamarin_utils::FastMap<String, usize> = Default::default();
     for item in &elaborated.items {
         let TheoryItem::Rule(o) = item else { continue };
-        let name = o.name().to_string();
-        let k = {
-            let c = elab_occ.entry(name.clone()).or_default();
-            let k = *c;
-            *c += 1;
-            k
-        };
-        // HS tests `isTrivialProtoVariantAC ruAC ruE` with `ruE` = the
-        // original (display) rule; the parsed item is RS's display half.
-        // An elaborated rule nothing displays degenerates to the
-        // machinery-only test — synthesise the display from the elaborated
-        // body, on which the macro check is inert.
-        let trivial = match parsed_by_name.get(name.as_str()).and_then(|g| g.get(k)) {
-            Some(pr) => {
-                let (dp, da, dc) = crate::pretty_theory::display_fact_rows(pr, &arity1);
-                crate::pretty_theory::is_trivial_proto_variant_ac(&dp, &da, &dc, o, &macros)
-            }
-            None => {
-                let pr = crate::pretty_theory::proto_rule_to_parsed(&o.rule);
-                let (dp, da, dc) = crate::pretty_theory::display_fact_rows(&pr, &arity1);
-                crate::pretty_theory::is_trivial_proto_variant_ac(&dp, &da, &dc, o, &macros)
-            }
-        };
-        if trivial {
+        // HS `isTrivialProtoVariantAC ruAC ruE` over the closed rules the item
+        // closes into (lib/theory/src/Rule.hs:82-86): a rule declaring its own
+        // `variants (modulo AC)` blocks yields one closed rule per block, and
+        // the item is left alone when every one of them is trivial.
+        let closed = crate::theory::closed_rules_ac(o);
+        if closed
+            .iter()
+            .all(|ac| crate::rule::is_trivial_proto_variant_ac(ac, o.rule_e()))
+        {
             elab_repl.push(None);
             continue;
         }
-        let variants = unfold_one_rule_variants(o);
-        let parsed_variants: Vec<p::Rule> = variants
-            .iter()
-            .map(|v| crate::pretty_theory::proto_rule_to_parsed(&v.rule))
-            .collect();
-        let rewrite = if parsed_variants.len() == 1 {
-            ParsedRewrite::Replace(parsed_variants)
-        } else {
-            ParsedRewrite::Nest(parsed_variants)
-        };
-        parsed_repl.insert((name, k), rewrite);
-        elab_repl.push(Some(variants));
+        let mut unfolded = Vec::new();
+        for ac in &closed {
+            let open = closed_rule_as_open(o, ac);
+            if crate::rule::is_trivial_proto_variant_ac(ac, o.rule_e()) {
+                unfolded.push(open);
+            } else {
+                unfolded.extend(unfold_one_rule_variants(&open));
+            }
+        }
+        elab_repl.push(Some(unfolded));
     }
     if elab_repl.iter().all(|r| r.is_none()) {
         return false;
     }
 
-    // Elaborated-side rewrite: each rule item takes its replacement run.
+    // Each rule item takes its replacement run.
     let items = std::mem::take(&mut elaborated.items);
     let mut decisions = elab_repl.into_iter();
     let mut new_items = Vec::with_capacity(items.len());
@@ -833,32 +773,6 @@ fn unfold_rule_variants(parsed: &mut p::Theory, elaborated: &mut crate::theory::
         }
     }
     elaborated.items = new_items;
-
-    // Parsed-side rewrite, keyed by the same (name, occurrence).
-    let items = std::mem::take(&mut parsed.items);
-    let mut occ: tamarin_utils::FastMap<String, usize> = Default::default();
-    let mut new_items = Vec::with_capacity(items.len());
-    for item in items {
-        match item {
-            p::TheoryItem::Rule(mut r) => {
-                let c = occ.entry(r.name.clone()).or_default();
-                let k = *c;
-                *c += 1;
-                match parsed_repl.remove(&(r.name.clone(), k)) {
-                    Some(ParsedRewrite::Replace(vs)) => {
-                        new_items.extend(vs.into_iter().map(p::TheoryItem::Rule))
-                    }
-                    Some(ParsedRewrite::Nest(vs)) => {
-                        r.variants = vs;
-                        new_items.push(p::TheoryItem::Rule(r));
-                    }
-                    None => new_items.push(p::TheoryItem::Rule(r)),
-                }
-            }
-            other => new_items.push(other),
-        }
-    }
-    parsed.items = new_items;
     true
 }
 
@@ -866,15 +780,11 @@ fn unfold_rule_variants(parsed: &mut p::Theory, elaborated: &mut crate::theory::
 /// CloseRule.hs:56-137, see line 58,106-112).  When the raw sources contain
 /// partial deconstructions, unfold every rule into its AC-variant rules
 /// ([`unfold_rule_variants`]), annotate them with AUTO_* actions and append
-/// the `AUTO_typing` sources
-/// lemma — to BOTH the parser-AST theory (`parsed`, drives rendering) and the
-/// elaborated theory (`elaborated`, drives the prove loop and the
-/// trivial-AC-variant render check).  `ndc_cache` is the theory's
+/// the `AUTO_typing` sources lemma.  `ndc_cache` is the theory's
 /// once-per-load NDC-checked intruder cache, injected into the scratch
 /// contexts below so they reuse the tagged+permuted rules instead of
 /// re-running the check.  Returns `true` iff anything was added.
 pub fn apply_auto_sources(
-    parsed: &mut p::Theory,
     elaborated: &mut crate::theory::Theory,
     maude: MaudeHandle,
     pool: Option<std::sync::Arc<tamarin_term::maude_proc::MaudePool>>,
@@ -899,8 +809,8 @@ pub fn apply_auto_sources(
     // cases.
     fn collect_chains(ctx: &ProofContext) -> Vec<((NodeConc, NodePrem), System)> {
         let mut chains = Vec::new();
-        for src in &ctx.full_sources {
-            for (_name, sys) in src.cases(ctx) {
+        for src in ctx.full_sources.iter() {
+            for (_name, sys) in src.cases(ctx).iter() {
                 for ch in sys.unsolved_chains() {
                     chains.push((ch, sys.clone()));
                 }
@@ -961,7 +871,7 @@ pub fn apply_auto_sources(
     // annotations reference the `___VARIANT_<i>` rules.  The loop breakers
     // were computed before this point and are carried into each variant
     // verbatim.
-    let unfolded = unfold_rule_variants(parsed, elaborated);
+    let unfolded = unfold_rule_variants(elaborated);
     // `cache itemsModAC` (CloseRule.hs:112): `addAutoSourcesLemma` reads the
     // rule cache RECOMPUTED over the unfolded rules.  When nothing unfolded,
     // `itemsModAC == items` and the cache has the same value — reuse the
@@ -987,8 +897,7 @@ pub fn apply_auto_sources(
     // addLabels: add the AUTO actions to the matching rules. HS folds the
     // per-rule act list right-to-left over `addActionClosedProtoRule`
     // (prepend-if-absent); iterating the global list in reverse + prepend
-    // reproduces that order.  Apply to both the elaborated rule (LNFact) and
-    // the parsed rule (AST fact, for rendering).
+    // reproduces that order.
     for grp in &result.annotation_groups {
         for (rule_name, action) in grp.iter().rev() {
             for item in elaborated.items.iter_mut() {
@@ -998,40 +907,16 @@ pub fn apply_auto_sources(
                     }
                 }
             }
-            let ast_action = crate::pretty_theory::lnfact_to_parser(action);
-            for item in parsed.items.iter_mut() {
-                if let p::TheoryItem::Rule(r) = item {
-                    if &r.name == rule_name {
-                        add_action_to_parsed_rule(r, &ast_action);
-                    }
-                    // A `___VARIANT_<i>` rule of a multi-variant unfold lives
-                    // NESTED in its display rule's `variants` field (see
-                    // `unfold_rule_variants`); HS annotates the closed
-                    // variant's `cprRuleAC`, which the merged display shows.
-                    for v in r.variants.iter_mut() {
-                        if &v.name == rule_name {
-                            add_action_to_parsed_rule(v, &ast_action);
-                        }
-                    }
-                }
-            }
         }
     }
 
-    // Add the lemma unless one of the same name already exists — to both the
-    // elaborated theory (so the prove loop proves it) and the parsed theory
-    // (so it renders).
+    // Add the lemma unless one of the same name already exists
+    // (OpenTheory.hs:145-148).
     if !has_lemma_named(&elaborated.items, "AUTO_typing") {
         elaborated.items.push(TheoryItem::Lemma(build_source_lemma(
             "AUTO_typing",
-            result.formula.clone(),
+            result.formula,
         )));
-        parsed
-            .items
-            .push(p::TheoryItem::Lemma(build_parsed_source_lemma(
-                "AUTO_typing",
-                result.formula,
-            )));
     }
     true
 }
@@ -1039,15 +924,14 @@ pub fn apply_auto_sources(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pretty_formula::lemma_header_line;
+    use crate::pretty_formula::{lemma_header_line_doc, lnformula_doc};
 
     /// The `--auto-sources` unfold (`unfoldRuleVariants`,
     /// lib/theory/src/Rule.hs:63-79): a rule with a non-trivial variant
-    /// disjunction is replaced — in BOTH the parsed and elaborated item
-    /// lists — by one `___VARIANT_<i>` rule per substitution, each carrying
-    /// the trivial disjunction, the original's loop breakers, and the
-    /// original rule as its `cprRuleE` half; a trivial-variant rule stays
-    /// untouched.
+    /// disjunction is replaced in the item list by one `___VARIANT_<i>` rule
+    /// per substitution, each carrying the trivial disjunction, the
+    /// original's loop breakers, and the original rule as its `cprRuleE`
+    /// half; a trivial-variant rule stays untouched.
     #[test]
     fn unfold_replaces_nontrivial_rules_with_variant_rules() {
         use crate::fact::{fresh_fact, in_fact, out_fact};
@@ -1057,7 +941,7 @@ mod tests {
         use tamarin_term::maude_proc::MaudeHandle;
         use tamarin_term::maude_sig::pair_maude_sig;
 
-        let Some(path) = crate::test_maude::maude_path() else {
+        let Some(path) = tamarin_test_support::require_maude_path() else {
             eprintln!("skipping: no maude");
             return;
         };
@@ -1092,42 +976,23 @@ mod tests {
             vec![],
         ));
 
-        let stub = |name: &str| p::Rule {
-            name: name.to_string(),
-            modulo: p::ModuloKind::E,
-            attributes: vec![],
-            let_block: vec![],
-            premises: vec![],
-            actions: vec![],
-            conclusions: vec![],
-            embedded_restrictions: vec![],
-            variants: vec![],
-            left_right: None,
-            location: DUMMY_LOCATION,
-        };
-        let mut parsed = p::Theory {
-            is_diff: false,
-            name: "T".to_string(),
-            configuration: None,
-            items: vec![
-                p::TheoryItem::Rule(stub("NT")),
-                p::TheoryItem::Rule(stub("TR")),
-            ],
-        };
-        let mut elab: Theory = Theory::new("T", crate::signature::SignaturePure::empty(false));
+        let mut elab: Theory = Theory::new("T", tamarin_term::maude_sig::minimal_maude_sig(false));
         elab.items = vec![TheoryItem::Rule(nt), TheoryItem::Rule(tr.clone())];
 
-        assert!(unfold_rule_variants(&mut parsed, &mut elab));
+        assert!(unfold_rule_variants(&mut elab));
 
-        // Elaborated: NT expands in place into one rule per substitution;
-        // TR keeps its slot and its fields.
+        // NT expands in place into one rule per substitution; TR keeps its
+        // slot and its fields.
         let names: Vec<&str> = elab.rules().map(|r| r.name()).collect();
         let mut expect: Vec<String> = (1..=substs.len())
             .map(|i| format!("NT___VARIANT_{}", i))
             .collect();
         expect.push("TR".to_string());
         assert_eq!(names, expect);
-        let variants: Vec<&OpenProtoRule> = elab.rules().filter(|r| r.unfolded_variant).collect();
+        let variants: Vec<&OpenProtoRule> = elab
+            .rules()
+            .filter(|r| r.name().starts_with("NT___VARIANT_"))
+            .collect();
         assert_eq!(variants.len(), substs.len());
         for v in &variants {
             // `Disj [emptySubstVFresh]` + carried breakers + the ORIGINAL
@@ -1154,31 +1019,42 @@ mod tests {
         let tr_after = elab.rules().find(|r| r.name() == "TR").unwrap();
         assert_eq!(tr_after, &tr);
 
-        // Parsed: HS's merged display.  `mergeOpenProtoRules` regroups the
-        // unfolded rules under their shared `ruE` (OpenTheory.hs:592-606)
-        // and `prettyOpenProtoRuleAsClosedRule`'s multi-variant branch
-        // prints `prettyProtoRuleE ruE` + a ` variants` block of the AC
-        // bodies (OpenTheory.hs:845-851) — so with TWO variants the NT slot
-        // KEEPS the display rule and parks the regenerated `___VARIANT_<i>`
-        // bodies in its `variants` field; TR's stub is untouched.
-        let parsed_names: Vec<&str> = parsed
-            .items
-            .iter()
-            .map(|it| match it {
-                p::TheoryItem::Rule(r) => r.name.as_str(),
-                other => panic!("expected only rule items, got {:?}", other),
-            })
-            .collect();
-        assert_eq!(parsed_names, ["NT", "TR"]);
-        let p::TheoryItem::Rule(nt_parsed) = &parsed.items[0] else {
-            unreachable!("first item is NT");
-        };
-        let nested: Vec<&str> = nt_parsed.variants.iter().map(|v| v.name.as_str()).collect();
-        let expect_nested: Vec<String> = (1..=substs.len())
-            .map(|i| format!("NT___VARIANT_{}", i))
-            .collect();
-        assert_eq!(nested, expect_nested);
-        assert_eq!(parsed.items.last(), Some(&p::TheoryItem::Rule(stub("TR"))));
+        // `toClosedProtoRule` gives every variant the SAME `ruE`
+        // (lib/theory/src/Rule.hs:74-75), which is what lets
+        // `mergeOpenProtoRules` collapse the run back into one item
+        // (OpenTheory.hs:592-603).
+        assert!(variants.windows(2).all(|w| w[0].rule_e() == w[1].rule_e()));
+    }
+
+    #[test]
+    fn unfold_uses_source_declared_variant_bodies() {
+        use crate::fact::{in_fact, out_fact};
+        use crate::rule::{ProtoRuleEInfo, Rule};
+        use crate::theory::{OpenProtoRule, Theory, TheoryItem};
+        use tamarin_term::builtin::msg_var;
+
+        let original = Rule::new(
+            ProtoRuleEInfo::standard("R"),
+            vec![in_fact(msg_var("x", 0))],
+            vec![out_fact(msg_var("x", 0))],
+            vec![],
+        );
+        let declared = Rule::new(
+            ProtoRuleEInfo::standard("R"),
+            vec![in_fact(msg_var("x", 0)), in_fact(msg_var("y", 0))],
+            vec![out_fact(msg_var("x", 0))],
+            vec![],
+        );
+        let mut open = OpenProtoRule::new(original.clone());
+        open.rule_ac.push(declared.clone());
+        let mut theory = Theory::new("T", tamarin_term::maude_sig::minimal_maude_sig(false));
+        theory.items.push(TheoryItem::Rule(open));
+
+        assert!(unfold_rule_variants(&mut theory));
+        let unfolded = theory.rules().next().expect("unfolded rule");
+        assert_eq!(unfolded.name(), "R___VARIANT_1");
+        assert_eq!(unfolded.rule.premises, declared.premises);
+        assert_eq!(unfolded.rule_e.as_deref(), Some(&original));
     }
 
     // Ground truth: the `AUTO_typing` lemma body emitted by the Haskell
@@ -1188,11 +1064,8 @@ mod tests {
     fn running_example_auto_typing_renders_byte_identically() {
         let in_name = "AUTO_IN_TERM_1_0_0_1_1__Rule_R";
         let out_name = "AUTO_OUT_TERM_1_0_0_1_1__Rule_R";
-        let f = p::Formula::and(
-            p::Formula::r#true(DUMMY_LOCATION),
-            term_input_form_with_outputs(in_name, out_name),
-        );
-        let rendered = lemma_header_line("all-traces", &f);
+        let f = LNFormula::ltrue().and(term_input_form_with_outputs(in_name, out_name));
+        let rendered = lemma_header_line_doc("all-traces", lnformula_doc(&f));
         let expected = "  all-traces\n  \"(⊤) ∧\n   (∀ x m #i.\n     (AUTO_IN_TERM_1_0_0_1_1__Rule_R( m, x ) @ #i) ⇒\n     ((∃ #j. (!KU( x ) @ #j) ∧ (#j < #i)) ∨\n      (∃ #j. (AUTO_OUT_TERM_1_0_0_1_1__Rule_R( m ) @ #j) ∧ (#j < #i))))\"";
         assert_eq!(rendered, expected);
     }

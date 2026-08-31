@@ -729,7 +729,7 @@ fn bound_flag_at_a_binding_depth_truncates_the_proof() {
 }
 
 /// `--heuristic=i` (`InjRanking False`, `goalRankingIdentifiers`,
-/// Constraint/System.hs:584-595) reaches a different proof than the default
+/// Constraint/System.hs:586-597) reaches a different proof than the default
 /// `s`: on this fixture it closes `secrecy` one step sooner, which is what the
 /// `!=chan_plain` relation pins.  The bare-flag and empty-value spellings are
 /// covered by the `Args` tests; this covers the value arriving at the solver.
@@ -906,7 +906,7 @@ fn open_chains_flag_caps_the_precomputed_chain_resolution() {
 
 /// `--heuristic=o --oraclename=FILE` routes goal ranking through the named
 /// script (`maybeSetOracleRelPath`, TheoryLoader.hs:343-349; `oraclePath`
-/// resolves an ABSOLUTE name as given, Constraint/System.hs:573-574).  The
+/// resolves an ABSOLUTE name as given, Constraint/System.hs:575-576).  The
 /// fixture oracle ranks the LAST goal first, an order no built-in ranking
 /// produces, so `!=chan_plain` cannot hold unless the script really ran.
 #[test]

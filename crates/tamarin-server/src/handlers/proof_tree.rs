@@ -30,418 +30,152 @@ use std::sync::Arc;
 
 use parking_lot::Mutex;
 
-use tamarin_term::maude_proc::MaudeHandle;
 use tamarin_theory::constraint::constraints::Goal;
-use tamarin_theory::constraint::solver::context::{ProofContext, UseInduction};
-use tamarin_theory::constraint::solver::goals::GoalRanking;
+use tamarin_theory::constraint::solver::context::ProofContext;
+use tamarin_theory::constraint::solver::goals::{ranking_at_depth, GoalRanking};
 use tamarin_theory::constraint::solver::proof_method::{
     exec_proof_method, finished_subterms, is_finished, ProofMethod,
 };
 use tamarin_theory::constraint::solver::search::{
-    candidate_methods_with_expl, NodeStatus, ProofNode,
+    candidate_methods_with_expl, NodeStatus, ProofNode, ProofStatus,
 };
-use tamarin_theory::constraint::system::{formula_to_system, SourceKind, System};
-use tamarin_theory::elaborate::elaborate;
-use tamarin_theory::guarded::{formula_to_guarded, Guarded};
+use tamarin_theory::constraint::system::System;
 use tamarin_theory::pretty_system::pretty_non_graph_system;
-use tamarin_theory::theory::{LemmaAttr, OpenProtoRule, TraceQuantifier};
+use tamarin_theory::theory::TheoryItem;
 
 use crate::handlers::path_parse::{encode_sub_path, url_path_escape};
 use crate::handlers::root::html_escape;
 
 /// Per-lemma live proof state, held inside [`TheoryEntry`].
-pub struct LemmaProofState {
+pub(crate) struct LemmaProofState {
     pub root: ProofNode,
 }
 
-/// Per-lemma search settings that HS/`--prove` install into the
-/// `ProofContext` before ranking THAT lemma's applicable proof methods.
+/// The immutable part of a proof node needed by the left-hand proof index.
 ///
-/// The web server builds ONE shared `ProofContext` (`Arc<Mutex<…>>`) for a
-/// theory (so it doesn't re-precompute sources / re-boot Maude per click),
-/// but HS's per-lemma `getProofContext` sets `pcUseInduction` and
-/// `pcHeuristic` from the lemma's attributes + the theory's `heuristic:`
-/// directive.  Without these the shared ctx defaults to `AvoidInduction` +
-/// `Smart`, which diverges from HS at the display / method-index sites that
-/// recompute `candidate_methods*` / `ranking_for_depth`.
-///
-/// Mirrors `tamarin_theory::prove::prove_lemma`:
-///   - `use_induction`: `UseInduction` iff the lemma carries `[use_induction]`
-///     or `[sources]` (`prove_lemma`'s `force_induction` check); else the
-///     `AvoidInduction` default.
-///   - `heuristic`: per-lemma `[heuristic=..]` > theory-level `heuristic:`
-///     directive, parsed via `parse_heuristic_str_with_tactics`
-///     (prove.rs's `resolve_heuristic`, minus the CLI `--heuristic` the web
-///     path never has).
-///     `None` ⇒ HS default `Smart`.
-///
-/// Built ONCE in [`ProofState::new`] and never mutated → held lock-free
-/// (`Arc<BTreeMap<…>>`); each read site copies its two fields into the
-/// Mutex-locked ctx before ranking, so there is no stale read across
-/// interleaved requests.
-pub struct LemmaSearchSettings {
-    pub use_induction: UseInduction,
-    pub heuristic: Option<Vec<GoalRanking>>,
+/// In particular, this cannot retain a [`System`]. A stored proof can be
+/// replayed once for faithful first-page rendering and then reduced to this
+/// lightweight tree, leaving full systems lazy until an interactive proof
+/// route actually needs one.
+#[derive(Debug, Clone)]
+pub(crate) struct ProofIndexNode {
+    pub method: ProofMethod,
+    pub children: BTreeMap<String, ProofIndexNode>,
+    pub annotated: bool,
 }
 
-/// Each [`TheoryEntry`] carries one of these. `ctx` is shared (Arc'd)
-/// so we don't rebuild the full source-case precomputation on every
-/// click; per-lemma roots are cloned cheaply.
-///
-/// Maude handles are NOT cloneable across threads safely (the
-/// underlying child process has a single stdin/stdout); each
-/// `ProofContext` carries its own handle. We hold the context behind a
-/// `Mutex` so step application is serialised against autoprove runs.
+impl ProofIndexNode {
+    fn from_proof_node(node: &ProofNode) -> Self {
+        Self {
+            method: node.method.clone(),
+            children: node
+                .children
+                .iter()
+                .map(|(name, child)| (name.clone(), Self::from_proof_node(child)))
+                .collect(),
+            annotated: node.annotated,
+        }
+    }
+
+    /// HS `getProofStatus = foldMap proofStepStatus`, restricted to the
+    /// fields retained by the proof index snapshot.
+    pub fn proof_status(&self) -> ProofStatus {
+        fn step(node: &ProofIndexNode) -> ProofStatus {
+            if !node.annotated {
+                return ProofStatus::Undetermined;
+            }
+            match &node.method {
+                ProofMethod::Finished(
+                    tamarin_theory::constraint::solver::proof_method::Result::Solved,
+                ) => ProofStatus::TraceFound,
+                ProofMethod::Finished(
+                    tamarin_theory::constraint::solver::proof_method::Result::Unfinishable,
+                ) => ProofStatus::Unfinishable,
+                ProofMethod::Sorry(_) => ProofStatus::Incomplete,
+                ProofMethod::Invalidated => ProofStatus::Invalidated,
+                _ => ProofStatus::Complete,
+            }
+        }
+        fn combine(a: ProofStatus, b: ProofStatus) -> ProofStatus {
+            use ProofStatus::*;
+            match (a, b) {
+                (Invalidated, _) | (_, Invalidated) => Invalidated,
+                (TraceFound, _) | (_, TraceFound) => TraceFound,
+                (Incomplete, _) | (_, Incomplete) => Incomplete,
+                (Unfinishable, _) | (_, Unfinishable) => Unfinishable,
+                (Complete, _) | (_, Complete) => Complete,
+                (Undetermined, Undetermined) => Undetermined,
+            }
+        }
+
+        self.children.values().fold(step(self), |status, child| {
+            combine(status, child.proof_status())
+        })
+    }
+}
+
+/// Each theory entry carries one of these. The retained session is the sole
+/// theory-wide context owner; proof roots are materialised on first use.
 pub struct ProofState {
-    pub ctx: Arc<Mutex<ProofContext>>,
-    pub by_lemma: Arc<Mutex<BTreeMap<String, LemmaProofState>>>,
-    /// Immutable, lock-free per-lemma search settings (see
-    /// [`LemmaSearchSettings`]).  Built once in [`ProofState::new`]; read at
-    /// every display / method-index site to override the shared ctx's
-    /// `use_induction` + `heuristic` for the lemma being ranked.
-    pub lemma_settings: Arc<BTreeMap<String, LemmaSearchSettings>>,
-    /// User-declared function-symbol name sets for this theory.
-    /// `formula_to_guarded` / `term_to_gterm_free` / `term_to_lnterm` resolve
-    /// symbols through THREAD-LOCALS (HS resolves them at parse time via
-    /// `nullaryApp`, so its formulas are born resolved).  The batch path
-    /// installs them per proving thread (prove.rs `_lemma_user_funs_guard`);
-    /// web handlers run on arbitrary tokio workers, so every handler that
-    /// converts formulas or executes solver code MUST install a guard from
-    /// this via `set_user_funs_from_collected` first.  Without it a declared
-    /// nullary fun (`true/0`, `false/0`) lifts to a FREE VARIABLE: on
-    /// OIDC_Implicit that flipped `isSafetyFormula` for the two
-    /// `Verified(...,true/false)` restrictions, conjoining them into the
-    /// root formula instead of `sLemmas` — wrong sequent pane AND `ginduct`
-    /// failure (missing `induction` in Applicable Proof Methods).
-    pub user_funs: Arc<tamarin_theory::elaborate::CollectedUserFuns>,
-    /// Shared per-file prover session (batch `--prove`'s per-lemma-context
-    /// factory).  The web `autoprove`/`autoproveAll` handlers run their
-    /// searches through `prove_system_in_session`, which clones this
-    /// session's template `ProofContext` and installs the SAME per-lemma
-    /// state batch does (`typing_assumptions`-refined sources gated on
-    /// `lemmaSourceKind`, `is_exists_trace`, heuristic, `use_induction`) —
-    /// HS's `getProverR` prover likewise runs under the per-lemma
-    /// `getProofContext l thy`, NOT a shared context.  The shared [`ctx`]
-    /// (with its empty `typing_assumptions`) stays display/single-step
-    /// only.  `None` when the session build failed at load time (autoprove
-    /// then reports prover failure; skeletons render as bare sorry).
-    pub session: Option<Arc<tamarin_theory::prove::ProverSession>>,
+    pub(crate) by_lemma: Arc<Mutex<BTreeMap<String, LemmaProofState>>>,
+    proof_index_by_lemma: Arc<Mutex<BTreeMap<String, Arc<ProofIndexNode>>>>,
+    pub session: Arc<tamarin_theory::prove::ProverSession>,
 }
 
 impl ProofState {
-    /// Build the [`ProofContext`] + initial per-lemma roots for a
-    /// freshly loaded theory.  Mirrors the construction in
-    /// `tamarin_theory::prove::prove_lemma` minus the search loop.
+    /// Build the per-theory prover session. Per-lemma roots and contexts stay
+    /// lazy until an interactive route asks for them.
+    ///
+    /// `maude_sig`: the signature this theory's Maude process loads its
+    /// module from (`TheoryEntry::prover_maude_sig`) — `typed`'s signature
+    /// from before the load's NDC join.
     ///
     /// `ndc_cache`: the theory's once-per-load NDC-checked intruder cache
     /// (`theory_io` ran `check_close_intr_rule` at load), injected into
-    /// both the web session and the shared display context so neither
-    /// re-runs the check.  The borrowed handle is the same allocation the
-    /// `TheoryEntry` holds, so neither injection copies the rule list.
+    /// the session so it does not re-run the check. The borrowed handle is
+    /// the same allocation the `TheoryEntry` holds.
     pub fn new(
-        parser_theory: &tamarin_parser::ast::Theory,
+        typed: &std::sync::Arc<tamarin_theory::theory::Theory>,
+        maude_sig: tamarin_term::maude_sig::MaudeSig,
         maude_path: &str,
         cli_cut: Option<tamarin_theory::constraint::solver::context::CutStrategy>,
-        in_file: &str,
         ndc_cache: Option<&tamarin_theory::constraint::solver::context::IntrRuleCache>,
     ) -> Result<Self, String> {
         // Effective cut strategy — HS `closeTheory` precedence
         // (TheoryLoader.hs:742, :759-762): the CLI `--stop-on-trace` wins;
         // the theory's `configuration:` block is consulted only when
         // the flag is absent.  Steers the session's autoprove
-        // (`runAutoProver`'s `apCut`) and the shared web context.
+        // (`runAutoProver`'s `apCut`) and interactive contexts.
+        let config_block = typed.items.iter().find_map(|i| match i {
+            TheoryItem::ConfigBlock(c) => Some(c),
+            _ => None,
+        });
         let cut = match cli_cut {
             Some(c) => c,
-            None => match &parser_theory.configuration {
+            None => match config_block {
                 Some(cfg) => tamarin_theory::prove::config_block_options(cfg)?
                     .0
                     .unwrap_or(tamarin_theory::constraint::solver::context::CutStrategy::Dfs),
                 None => tamarin_theory::constraint::solver::context::CutStrategy::Dfs,
             },
         };
-        // Install the user-fn-symbol thread-locals for the WHOLE build —
-        // every `formula_to_guarded` below (restrictions, lemma formulas,
-        // reuse lemmas) resolves nullary/unary user funs through them.
-        // See the `user_funs` field docs.
-        let user_funs = std::sync::Arc::new(
-            tamarin_theory::elaborate::collect_user_funs_for_theory(parser_theory),
-        );
-        let _user_funs_guard = tamarin_theory::elaborate::set_user_funs_from_collected(&user_funs);
-        let mut typed =
-            elaborate(parser_theory).map_err(|e| format!("elaborate: {}", e.message))?;
-        // Oracle-path base (HS Theory/Text/Parser.hs:309): a `heuristic: o "./oracle-…"`
-        // resolves against the theory file's directory
-        // (`hs_take_directory(in_file)` in prove.rs), both in the session
-        // built below and in raw-solve replay rankings.
-        typed.in_file = in_file.to_string();
-        let sig = typed.signature.maude_sig.clone();
-        let maude =
-            MaudeHandle::start(maude_path, sig).map_err(|e| format!("maude start: {:?}", e))?;
-        let rules: Vec<OpenProtoRule> = typed.rules().cloned().collect();
-        // Build the ProofContext WITH the theory's restrictions, mirroring
-        // HS `closeRuleCache`'s `safetyRestrictions` (CloseRule.hs:425-426) and the
-        // `--prove` path (`prove.rs` `ProverSession::new`, which builds the
-        // context via `new_with_restrictions`).  Without the restrictions the
-        // precomputed source cases (`ctx.full_sources`, surfaced on the web
-        // `main/cases/{raw,refined}` pages) lack the `lemmas:` safety formulas
-        // and any restriction-driven case pruning, diverging from HS.  The
-        // initial per-lemma proof snippets are unaffected — they render the
-        // root system (which already installs restrictions via
-        // `formula_to_system`) and never graft precomputed sources.
-        // `formula_to_guarded` is a pure function of the formula (its fresh
-        // supply is seeded from that formula alone), so the ONE conversion here
-        // is reused both for the context and, cloned, for every lemma's
-        // `formula_to_system` below.
-        let restrictions_g: Vec<Guarded> = typed
-            .restrictions()
-            .filter_map(|r| formula_to_guarded(&r.formula).ok())
-            .collect();
-        // --- Close-time skeleton replay (HS `checkAndExtendProver
-        // (sorryProver Nothing)`, Theory/Proof.hs:624-630 → `checkProof`,
-        // Theory/Proof.hs:447-467). ---------------------------------------
-        // A theory that ships WITH in-file proof scripts must show the
-        // CHECKED script on load, not a bare `by sorry`: HS re-executes
-        // each stored method against the start system at theory-close
-        // time; steps that still apply keep their systems (annotated),
-        // divergent subtrees are `noSystemPrf`'d and render
-        // `/* unannotated */`, unproven leaves stay sorry-links.
-        //
-        // Delegate to the theory crate's `ProverSession` +
-        // `check_and_extend_lemma_in_session` (prove.rs — the SAME path
-        // batch `--prove` uses for non-target lemmas; with
-        // `auto_prove == false` the replay never enters
-        // `run_proof_search`) so the per-lemma context (source kind,
-        // reuse lemmas, typing assumptions, saturated sources,
-        // heuristic / use_induction) is built EXACTLY as the CLI does.
-        // Hand-wiring the shared web ctx here instead (clone +
-        // `ensure_saturated`) would diverge from batch — the web ctx has
-        // empty `typing_assumptions` and its own saturation lifecycle.
-        //
-        // Maude-handle economics: the session is built BEFORE the shared
-        // web ctx below and from a CLONE of the same handle —
-        // `MaudeHandle` clones share the child process (the reaper only
-        // fires when the last clone drops), so no second Maude process
-        // is booted and nothing leaks.  Counter neutrality:
-        // `ProverSession::build_*` is
-        // counter-neutral (it resets the shared fresh counter to its
-        // pre-build value) and each per-lemma replay clone gets its OWN
-        // counter Arc (`with_fresh_counter_from`), so (a) the web ctx
-        // below still sees the counter-0 handle it saw before this block
-        // existed, and (b) the session's `setup_counter_before` is 0,
-        // matching the CLI's fresh-handle base — replayed trees are
-        // byte-identical to batch `--prove` output.  The session is
-        // RETAINED in [`ProofState::session`] as the per-lemma-context
-        // factory for `autoprove`/`autoproveAll` (see the field docs);
-        // retention is safe for the same counter reasons — every later
-        // per-lemma clone starts from its own counter Arc floored at the
-        // same `setup_counter_before` base.
-        //
-        let session: Option<Arc<tamarin_theory::prove::ProverSession>> =
-            match tamarin_theory::prove::ProverSession::build_with_in_file_and_heuristic(
-                parser_theory,
-                maude.clone(),
-                None,
-                &typed.in_file,
-                tamarin_theory::prove::CliHeuristic::default(),
-                cut,
-                ndc_cache,
-            ) {
-                Ok(s) => Some(Arc::new(s)),
-                Err(e) => {
-                    tracing::warn!(error = %e,
-                        "ProverSession build failed; stored proof skeletons render as \
-                         bare sorry and autoprove will report failure");
-                    None
-                }
-            };
-        let mut replayed_roots: BTreeMap<String, ProofNode> = BTreeMap::new();
-        if let Some(session) = session.as_deref() {
-            for lemma in typed.lemmas() {
-                if lemma.proof.tree.is_none() {
-                    continue;
-                }
-                // Unbounded (`usize::MAX`) like the CLI's non-target
-                // replay: check-and-extend is HS's `sorryProver` pass,
-                // which carries no AutoProver and hence no `--bound`;
-                // the `run_proof_search` fall-throughs that would
-                // consume a bound never fire in this mode anyway.
-                match tamarin_theory::prove::check_and_extend_lemma_in_session(
-                    session,
-                    &lemma.name,
-                    usize::MAX,
-                ) {
-                    Ok(root) => {
-                        replayed_roots.insert(lemma.name.clone(), root);
-                    }
-                    Err(e) => {
-                        tracing::warn!(lemma = %lemma.name, error = %e,
-                            "skeleton replay failed; lemma keeps bare sorry root");
-                    }
-                }
-            }
-        }
-        // When the state-channel optimisation is on, the two pure-state facts
-        // are forced injective for the whole proof (see
-        // `tools::injective_fact_instances::pure_state_forced_fact_tags` for
-        // the upstream provenance).  The web `main/rules` pane reads
-        // `ctx.injective_fact_insts` directly, so the forced tags must be
-        // unioned here exactly as on the batch `--prove` path (prove.rs);
-        // otherwise the "Fact Symbols with Injective Instances" section renders
-        // empty on `process:` theories whose only injective facts are forced.
-        let forced_injective_facts: Vec<tamarin_theory::fact::FactTag> =
-            if typed.options.state_channel_opt {
-                tamarin_theory::tools::injective_fact_instances::pure_state_forced_fact_tags()
-            } else {
-                Vec::new()
-            };
-        let mut ctx = ProofContext::new_with_restrictions_pool_forced(
+        let maude = tamarin_term::maude_proc::MaudeHandle::start(maude_path, maude_sig)
+            .map_err(|e| format!("maude start: {:?}", e))?;
+        let session = tamarin_theory::prove::ProverSession::build_with_heuristic(
+            typed.clone(),
             maude,
             None,
-            rules,
-            restrictions_g.clone(),
-            &forced_injective_facts,
-            ndc_cache.cloned(),
-        );
-        ctx.cut = cut;
-        // Build the initial system for every lemma.
-        let mut by_lemma: BTreeMap<String, LemmaProofState> = BTreeMap::new();
-        // Per-lemma search settings HS installs before ranking each lemma's
-        // applicable methods (mirrors `prove::prove_lemma` heuristic/
-        // use_induction resolution).  Built once, read lock-free thereafter.
-        let mut lemma_settings: BTreeMap<String, LemmaSearchSettings> = BTreeMap::new();
-        for lemma in typed.lemmas() {
-            let lname = lemma.name.clone();
-            // --- Per-lemma search settings (see `LemmaSearchSettings`) ------
-            // `use_induction`: forced on by `[use_induction]` or `[sources]`.
-            let use_induction = if lemma
-                .attributes
-                .iter()
-                .any(|a| matches!(a, LemmaAttr::UseInduction | LemmaAttr::Sources))
-            {
-                UseInduction::UseInduction
-            } else {
-                UseInduction::AvoidInduction
-            };
-            // `heuristic`: per-lemma `[heuristic=..]` > theory `heuristic:`.
-            // There is no CLI `--heuristic` on the web path, so the CLI
-            // override branch of `prove::prove_lemma` is skipped entirely.
-            let lemma_heuristic: Option<&str> = lemma.attributes.iter().find_map(|a| match a {
-                LemmaAttr::Heuristic(s) => Some(s.as_str()),
-                _ => None,
-            });
-            let heuristic_raw: Option<String> = match lemma_heuristic {
-                Some(h) => Some(h.to_string()),
-                None => typed.heuristic.first().cloned(),
-            };
-            let heuristic = heuristic_raw.map(|h| {
-                let mut rankings =
-                    tamarin_theory::constraint::solver::goals::parse_heuristic_str_with_tactics(
-                        &h,
-                        &typed.in_file,
-                        &typed.tactic,
-                    );
-                // Oracle paths resolve against the theory file's directory
-                // (HS `oraclePath = workDir </> relPath`, System.hs:573-574)
-                // — same prefixing the batch session applies
-                // (prove.rs `resolve_heuristic`); without it the dmn
-                // family's `heuristic: o "./oracle-…"` exec fails cwd-relative.
-                tamarin_theory::prove::prepend_theory_dir_to_oracle_paths(
-                    &mut rankings,
-                    &typed.in_file,
-                );
-                rankings
-            });
-            lemma_settings.insert(
-                lname.clone(),
-                LemmaSearchSettings {
-                    use_induction,
-                    heuristic,
-                },
-            );
-            // Lemma shipped with an in-file proof script: install the
-            // close-time-checked replay tree (see the replay block above)
-            // instead of a bare `sorry` root.  HS shows exactly this
-            // checked tree on load (`checkAndExtendProver`).
-            if let Some(root) = replayed_roots.remove(&lname) {
-                by_lemma.insert(lname, LemmaProofState { root });
-                continue;
-            }
-            let g = match formula_to_guarded(&lemma.formula) {
-                Ok(g) => g,
-                Err(_) => continue,
-            };
-            let tq = match lemma.trace_quantifier {
-                TraceQuantifier::AllTraces => tamarin_parser::ast::TraceQuantifier::AllTraces,
-                TraceQuantifier::ExistsTrace => tamarin_parser::ast::TraceQuantifier::ExistsTrace,
-            };
-            // HS `getProofContext` / `lemmaSourceKind` (ClosedTheory.hs:97-138, see line 116,
-            // lib/theory/src/Lemma.hs:38-41): a `sources` lemma is proved under RAW sources;
-            // every other lemma under REFINED sources.  `mkSystem` builds the
-            // initial system with `pcSourceKind ctxt` (CloseRule.hs:167-176,
-            // see line 175), and
-            // the system's `sSourceKind` shows in the sequent as
-            // `allowed cases: raw|refined`.
-            let source_kind = if lemma
-                .attributes
-                .iter()
-                .any(|a| matches!(a, LemmaAttr::Sources))
-            {
-                SourceKind::RawSources
-            } else {
-                SourceKind::RefinedSources
-            };
-            let mut sys = formula_to_system(restrictions_g.clone(), source_kind, tq, false, &g);
-            // Reuse lemmas from earlier in the theory.
-            let mut reuse: Vec<Guarded> = Vec::new();
-            for prior in typed.lemmas() {
-                if prior.name == lname {
-                    break;
-                }
-                if !prior
-                    .attributes
-                    .iter()
-                    .any(|a| matches!(a, LemmaAttr::Reuse))
-                {
-                    continue;
-                }
-                if !matches!(prior.trace_quantifier, TraceQuantifier::AllTraces) {
-                    continue;
-                }
-                if let Ok(rg) = formula_to_guarded(&prior.formula) {
-                    reuse.push(rg);
-                }
-            }
-            sys.insert_lemmas(reuse);
-            // Root method is the unproven `sorry` (no reason) until the
-            // user (or autoprover) applies a method.  Mirrors HS
-            // `unproven = sorry Nothing` (Theory/Proof.hs:255-256), which
-            // `prettyProofMethod` renders as a plain `sorry`.
-            let root = ProofNode {
-                method: ProofMethod::Sorry(None),
-                sys,
-                children: BTreeMap::new(),
-                status: NodeStatus::Open,
-                annotated: true,
-            };
-            by_lemma.insert(lname, LemmaProofState { root });
-        }
+            tamarin_theory::prove::CliHeuristic::default(),
+            cut,
+            ndc_cache,
+        )
+        .map(Arc::new)
+        .map_err(|e| format!("prover session: {e}"))?;
         Ok(ProofState {
-            ctx: Arc::new(Mutex::new(ctx)),
-            by_lemma: Arc::new(Mutex::new(by_lemma)),
-            lemma_settings: Arc::new(lemma_settings),
-            user_funs,
+            by_lemma: Arc::new(Mutex::new(BTreeMap::new())),
+            proof_index_by_lemma: Arc::new(Mutex::new(BTreeMap::new())),
             session,
         })
-    }
-
-    /// Install this theory's user-fn-symbol thread-locals on the CURRENT
-    /// thread.  Every handler that runs solver code (`exec_proof_method`,
-    /// `apply_at_path`, source saturation/refinement) or converts formulas
-    /// must hold the returned guard for the duration — web handlers run on
-    /// arbitrary tokio workers whose thread-locals start empty.  See the
-    /// `user_funs` field docs.
-    pub fn install_user_funs(&self) -> tamarin_theory::elaborate::UserFunsForTheoryGuard {
-        tamarin_theory::elaborate::set_user_funs_from_collected(&self.user_funs)
     }
 
     /// Apply a `ProofMethod` at `path` in the lemma's proof tree.
@@ -453,11 +187,11 @@ impl ProofState {
         path: &[String],
         method: ProofMethod,
     ) -> Result<NodeStatus, String> {
-        // `exec_proof_method` runs solver code that resolves user fun
-        // symbols via thread-locals — install them for this call (web
-        // handlers run on arbitrary tokio workers).
-        let _user_funs_guard = self.install_user_funs();
-        let ctx_guard = self.ctx.lock();
+        self.materialize_root(lemma)?;
+        let ctx = self
+            .session
+            .context_for_lemma(lemma)
+            .map_err(|e| format!("proof context: {e}"))?;
         let mut by_lemma = self.by_lemma.lock();
         let lp = by_lemma
             .get_mut(lemma)
@@ -465,7 +199,7 @@ impl ProofState {
         let node = navigate_mut(&mut lp.root, path)
             .ok_or_else(|| format!("path not found: {:?}", path))?;
         // Run the method against the node's current system.
-        let cases = exec_proof_method(&ctx_guard, &method, &node.sys)
+        let cases = exec_proof_method(&ctx, &method, &node.sys)
             .ok_or_else(|| format!("method {:?} not applicable", method))?;
         node.method = method;
         node.children.clear();
@@ -476,7 +210,7 @@ impl ProofState {
             let mut any_open = false;
             for (name, sys) in cases {
                 // Eagerly classify each child as finished / open.
-                let (status, leaf_method) = match is_finished(&ctx_guard, &sys) {
+                let (status, leaf_method) = match is_finished(&ctx, &sys) {
                     Some(r) => {
                         let s = match &r {
                             tamarin_theory::constraint::solver::proof_method::Result::Solved =>
@@ -538,6 +272,7 @@ impl ProofState {
         path: &[String],
         subtree: ProofNode,
     ) -> Result<(), String> {
+        self.materialize_root(lemma)?;
         let mut by_lemma = self.by_lemma.lock();
         let lp = by_lemma
             .get_mut(lemma)
@@ -552,10 +287,10 @@ impl ProofState {
         Ok(())
     }
 
-    /// Fork this proof state: share the same `ProofContext` (so we
-    /// don't re-precompute sources / re-boot Maude) but deep-copy the
-    /// per-lemma proof trees so mutations on one idx don't leak to the
-    /// other.  Mirrors Haskell `modifyTheory`'s value-typed
+    /// Fork this proof state: share the same session and immutable proof-index
+    /// snapshots, but deep-copy only roots that have actually been
+    /// materialised. Unvisited full systems remain lazy in both forks.
+    /// Mirrors Haskell `modifyTheory`'s value-typed
     /// `IncrementalProof` semantics: each version-fork sees the source
     /// tree at the moment of fork, then evolves independently.
     pub fn fork(&self) -> Self {
@@ -572,43 +307,117 @@ impl ProofState {
             })
             .collect();
         ProofState {
-            ctx: self.ctx.clone(),
             by_lemma: Arc::new(Mutex::new(clone)),
-            // Share the immutable per-lemma settings map (same theory).
-            lemma_settings: self.lemma_settings.clone(),
-            user_funs: self.user_funs.clone(),
-            // Share the prover session (same theory; per-lemma contexts
-            // are cloned out of its template per search, so sharing is
-            // mutation-free apart from the internal source cache).
+            proof_index_by_lemma: Arc::new(Mutex::new(self.proof_index_by_lemma.lock().clone())),
             session: self.session.clone(),
         }
     }
 
-    /// Read the root ProofNode for a lemma.
-    pub fn get_root(&self, lemma: &str) -> Option<ProofNode> {
+    /// Read a root without causing stored-proof replay or allocating its
+    /// initial system. Used by overview panes so opening a rules/source page
+    /// does not retain every lemma's proof system.
+    pub fn peek_root(&self, lemma: &str) -> Option<ProofNode> {
         self.by_lemma.lock().get(lemma).map(|lp| lp.root.clone())
     }
 
-    /// Copy the lemma's per-lemma search settings ([`LemmaSearchSettings`])
-    /// into a locked `ProofContext` before ranking that lemma's applicable
-    /// proof methods.  A no-op when the lemma has no settings (unknown lemma).
+    /// Return the tree needed by the overview's proof index.
     ///
-    /// Call this on a `mut` ctx guard right after locking, at every display /
-    /// method-index-mapping site — it makes the shared web `ProofContext`
-    /// behave like HS's per-lemma `getProofContext` (`pcUseInduction` +
-    /// `pcHeuristic`) for the ranking that follows.  The autoprove path builds
-    /// its OWN correct per-lemma context via `prove_system_in_session`
-    /// ([`ProofState::session`]), so it must NOT call this.
-    pub fn install_lemma_settings(&self, ctx: &mut ProofContext, lemma: &str) {
-        if let Some(s) = self.lemma_settings.get(lemma) {
-            ctx.use_induction = s.use_induction;
-            ctx.heuristic = s.heuristic.clone();
+    /// A live root wins. Otherwise a stored skeleton is checked once, stripped
+    /// of every constraint system, and cached in its lightweight form. Lemmas
+    /// without a stored proof return `None`, preserving the fresh `by sorry`
+    /// fast path without allocating their initial system.
+    pub(crate) fn proof_index_root(&self, lemma: &str) -> Option<Arc<ProofIndexNode>> {
+        {
+            let live = self.by_lemma.lock();
+            if let Some(root) = live.get(lemma) {
+                return Some(Arc::new(ProofIndexNode::from_proof_node(&root.root)));
+            }
         }
-        // Oracle argv[1] (HS `runProcess oraclePath [lemmaName]`,
-        // ProofMethod.hs:597-622, see line 607): oracle scripts branch on the lemma name
-        // (e.g. oracle-dmn-basic), so an empty name selects the wrong
-        // branch and the ranking silently degenerates to the pre-sort.
-        ctx.lemma_name = lemma.to_string();
+        if let Some(root) = self.proof_index_by_lemma.lock().get(lemma).cloned() {
+            return Some(root);
+        }
+        let _stored_proof = self.session.theory.lookup_lemma(lemma)?.proof.as_ref()?;
+        let root = tamarin_theory::prove::check_and_extend_lemma_in_session(
+            &self.session,
+            lemma,
+            usize::MAX,
+        )
+        .ok()?;
+        let snapshot = Arc::new(ProofIndexNode::from_proof_node(&root));
+        // Replay ran without either map lock. Lock in the same order as
+        // materialize_root below: a concurrent live edit wins; otherwise the
+        // first concurrent snapshot wins.
+        let live = self.by_lemma.lock();
+        if let Some(root) = live.get(lemma) {
+            return Some(Arc::new(ProofIndexNode::from_proof_node(&root.root)));
+        }
+        let snapshot = self
+            .proof_index_by_lemma
+            .lock()
+            .entry(lemma.to_string())
+            .or_insert(snapshot)
+            .clone();
+        drop(live);
+        Some(snapshot)
+    }
+
+    /// Read the root ProofNode for a lemma, materialising and replaying its
+    /// stored proof on first access.
+    pub fn get_root(&self, lemma: &str) -> Option<ProofNode> {
+        self.materialize_root(lemma).ok()?;
+        self.peek_root(lemma)
+    }
+
+    fn materialize_root(&self, lemma: &str) -> Result<(), String> {
+        if self.by_lemma.lock().contains_key(lemma) {
+            return Ok(());
+        }
+        let has_stored_proof = self
+            .session
+            .theory
+            .lookup_lemma(lemma)
+            .ok_or_else(|| format!("unknown lemma: {lemma}"))?
+            .proof
+            .is_some();
+        let mut root = tamarin_theory::prove::check_and_extend_lemma_in_session(
+            &self.session,
+            lemma,
+            usize::MAX,
+        )
+        .map_err(|e| format!("initial proof for {lemma}: {e}"))?;
+        // The interactive tree historically treats a lemma with no parsed
+        // skeleton as an open root (so its action links are enabled). Batch
+        // replay labels the equivalent bare leaf `Sorry`; retain the web
+        // status while leaving genuine stored-proof replay untouched.
+        if !has_stored_proof
+            && matches!(root.method, ProofMethod::Sorry(_))
+            && root.children.is_empty()
+        {
+            root.status = NodeStatus::Open;
+        }
+        // Replay happens outside the map lock. A concurrent request may have
+        // installed or even edited the root meanwhile; preserve that winner.
+        self.by_lemma
+            .lock()
+            .entry(lemma.to_string())
+            .or_insert(LemmaProofState { root });
+        // The live root now supplies the proof index too.
+        self.proof_index_by_lemma.lock().remove(lemma);
+        Ok(())
+    }
+
+    pub fn template_context(&self) -> &ProofContext {
+        self.session.template_context()
+    }
+
+    pub fn context_for_lemma(&self, lemma: &str) -> Result<ProofContext, String> {
+        self.session
+            .context_for_lemma(lemma)
+            .map_err(|e| format!("proof context: {e}"))
+    }
+
+    pub fn context_for_raw_sources(&self) -> ProofContext {
+        self.session.context_for_raw_sources()
     }
 
     /// Find the system at the given path (root if empty).
@@ -617,6 +426,7 @@ impl ProofState {
         lemma: &str,
         path: &[String],
     ) -> Option<tamarin_theory::constraint::system::System> {
+        self.materialize_root(lemma).ok()?;
         let by_lemma = self.by_lemma.lock();
         let lp = by_lemma.get(lemma)?;
         let node = navigate_at(&lp.root, path)?;
@@ -626,7 +436,7 @@ impl ProofState {
 
 /// Walk `path`'s case names down from `node` (the node itself for an empty
 /// path); `None` when a segment names no child.
-pub fn navigate_at<'a>(node: &'a ProofNode, path: &[String]) -> Option<&'a ProofNode> {
+pub(crate) fn navigate_at<'a>(node: &'a ProofNode, path: &[String]) -> Option<&'a ProofNode> {
     let mut cur = node;
     for seg in path {
         cur = cur.children.get(seg)?;
@@ -649,7 +459,7 @@ pub fn navigate_at<'a>(node: &'a ProofNode, path: &[String]) -> Option<&'a Proof
 /// `BTreeMap`, whose iteration order matches HS's `M.toList` (sorted by
 /// `CaseName`).  Used by `next`/`prev` (`nextThyPath`/`nextSmartThyPath`) to
 /// enumerate the navigable proof positions in order.
-pub fn get_proof_paths(root: &ProofNode) -> Vec<(Vec<String>, ProofMethod)> {
+pub(crate) fn get_proof_paths(root: &ProofNode) -> Vec<(Vec<String>, ProofMethod)> {
     let mut out = vec![(Vec::new(), root.method.clone())];
     proof_paths_go(root, &mut Vec::new(), &mut out);
     out
@@ -673,7 +483,7 @@ fn proof_paths_go(
 /// Port of HS `isInterestingMethod` (`Web/Theory.hs:1968-1972`): the proof
 /// methods that `nextSmartThyPath`/`prevSmartThyPath` stop on — an open
 /// `Sorry` leaf, or a `Finished` `Solved`/`Unfinishable` terminal.
-pub fn is_interesting_method(m: &ProofMethod) -> bool {
+pub(crate) fn is_interesting_method(m: &ProofMethod) -> bool {
     use tamarin_theory::constraint::solver::proof_method::Result as R;
     matches!(
         m,
@@ -721,7 +531,7 @@ fn combine_status(a: NodeStatus, b: NodeStatus) -> NodeStatus {
 /// The method-string is split from the path-tail at the LAST segment
 /// by the caller; this fn just parses the head segment + an optional
 /// goal-id segment for `solve`.
-pub fn parse_method(
+pub(crate) fn parse_method(
     segments: &[String],
     sys: &tamarin_theory::constraint::system::System,
 ) -> Option<ProofMethod> {
@@ -750,7 +560,7 @@ pub fn parse_method(
 
 /// Render the proof tree for a lemma as nested HTML — mirrors
 /// Haskell's `prettyProof`.
-pub fn render_proof_tree_html(idx: usize, lemma: &str, root: &ProofNode) -> String {
+pub(crate) fn render_proof_tree_html(idx: usize, lemma: &str, root: &ProofNode) -> String {
     let mut out = String::new();
     out.push_str(&format!(
         "<h2>Proof of <code>{}</code></h2>\n",
@@ -775,7 +585,7 @@ pub fn render_proof_tree_html(idx: usize, lemma: &str, root: &ProofNode) -> Stri
 ///      `<div class="preformatted sequent">…prettyNonGraphSystem…</div>`
 ///   3. `<h3>N sub-case(s)</h3>`
 ///      `<h4>case <name></h4>` + `<static-graph graphSrc="…">` per child.
-pub fn render_sub_proof_snippet(
+pub(crate) fn render_sub_proof_snippet(
     idx: usize,
     lemma: &str,
     proof_path: &[String],
@@ -876,7 +686,7 @@ pub fn render_sub_proof_snippet(
     tamarin_theory::pretty_hpj::postprocess_html(&parts.join("\n"))
 }
 
-/// Mirror of Haskell `nonEmptyGraph` (`System.hs:1926-1930`):
+/// Mirror of Haskell `nonEmptyGraph` (`System.hs:1928-1932`):
 ///
 /// ```text
 /// nonEmptyGraph sys = not $
@@ -888,7 +698,7 @@ pub fn render_sub_proof_snippet(
 /// i.e. the dotted graph is non-empty iff ANY of: nodes, unsolved
 /// action atoms, unsolved chains, edges, or less-atoms is present.
 /// `unsolvedActionAtoms` / `unsolvedChains` are the unsolved-status
-/// `ActionG` / `ChainG` goals (`System.hs:1567-1571,1600-1604`).
+/// `ActionG` / `ChainG` goals (`System.hs:1569-1573,1602-1606`).
 fn has_graph_content(sys: &System) -> bool {
     if !sys.nodes.is_empty() || !sys.edges.is_empty() || !sys.less_atoms.is_empty() {
         return true;
@@ -910,10 +720,8 @@ fn write_applicable_methods(
     use tamarin_theory::pretty_hpj::{self as hpj, Doc};
     // The ranking used at this proof depth (HS `subProofSnippet`:
     // `ranking = useHeuristic heuristic (length proofPath)`,
-    // `Web/Theory.hs:606-608`).  Round-robin over the heuristic list
-    // exactly as `rank_goals_with_inner` (goals.rs) does, defaulting to
-    // `SmartRanking False` when no heuristic is configured.
-    let ranking = ranking_for_depth(ctx, depth);
+    // `Web/Theory.hs:606-608`).
+    let ranking = ranking_at_depth(Some(ctx), depth);
     // Match Haskell `rankProofMethods` (`ProofMethod.hs:519-534`):
     //   stoppingMethod = Finished <$> isFinished ctxt sys
     //   in execMethods $ maybe proofMethods ((:[]) . (,"")) stoppingMethod
@@ -1094,24 +902,6 @@ fn write_autoprove_links(
     ));
 }
 
-/// The `GoalRanking` used at proof `depth`, mirroring HS `useHeuristic
-/// (Heuristic rankings) depth = rankings !! (depth mod n)`
-/// (ProofMethod.hs:580-589) — the same selection `rank_goals_with_inner`
-/// performs (goals.rs).  Defaults to `SmartRanking False`.
-fn ranking_for_depth(ctx: &ProofContext, depth: usize) -> GoalRanking {
-    ctx.heuristic
-        .as_ref()
-        .and_then(|h| {
-            let n = h.len();
-            if n == 0 {
-                None
-            } else {
-                Some(h[depth % n].clone())
-            }
-        })
-        .unwrap_or(GoalRanking::Smart(false))
-}
-
 /// HS `usesOracle` (lib/theory/src/Theory/Constraint/System.hs:536-537):
 /// `all isOracleRanking rs`, where `isOracleRanking` is True for
 /// `OracleRanking`, `OracleSmartRanking` AND `InternalTacticRanking`
@@ -1208,7 +998,7 @@ fn render_node(out: &mut String, idx: usize, lemma: &str, path: &[String], node:
 
 /// Port of Haskell's `prettyProofMethod`
 /// (`lib/theory/src/Theory/Constraint/Solver/ProofMethod.hs:1173-1186`).
-pub fn method_label(m: &ProofMethod) -> String {
+pub(crate) fn method_label(m: &ProofMethod) -> String {
     // Delegate to the byte-faithful `--prove` renderer (HS `prettyProofMethod`)
     // so the interactive method labels carry the same fact spacing
     // (`!KU( ~ltk )`), LVar dots (`#vk.2`), and contradiction reasons as the
@@ -1290,54 +1080,7 @@ fn goal_summary(g: &Goal) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Absolute maude locations probed when `MAUDE_PATH` is unset.
-    const MAUDE_CANDIDATES: [&str; 4] = [
-        "/usr/local/bin/maude",
-        "/opt/homebrew/bin/maude",
-        "/usr/bin/maude",
-        "/home/linuxbrew/.linuxbrew/bin/maude",
-    ];
-
-    /// The maude the maude-backed tests in this module run against.
-    ///
-    /// Resolution order: `$MAUDE_PATH`, then [`MAUDE_CANDIDATES`], then a
-    /// `$PATH` walk.  Resolving nothing is a MISCONFIGURATION, not a reason
-    /// to skip: a silent `None` makes every maude-backed test here report
-    /// green having built nothing.  Panic instead, unless
-    /// `TAM_ALLOW_NO_MAUDE=1` explicitly asks for the silent skip.
-    fn maude_path() -> Option<String> {
-        if let Ok(p) = std::env::var("MAUDE_PATH") {
-            assert!(
-                std::path::Path::new(&p).exists(),
-                "MAUDE_PATH={p} does not exist; unset it to fall back to \
-                 {MAUDE_CANDIDATES:?}, or point it at a real maude"
-            );
-            return Some(p);
-        }
-        if let Some(c) = MAUDE_CANDIDATES
-            .iter()
-            .find(|c| std::path::Path::new(c).exists())
-        {
-            return Some((*c).to_string());
-        }
-        if let Some(path) = std::env::var_os("PATH") {
-            for dir in std::env::split_paths(&path) {
-                let cand = dir.join("maude");
-                if cand.exists() {
-                    return Some(cand.to_string_lossy().into_owned());
-                }
-            }
-        }
-        assert_eq!(
-            std::env::var("TAM_ALLOW_NO_MAUDE").as_deref(),
-            Ok("1"),
-            "no maude found: set MAUDE_PATH, put maude on $PATH, or set \
-             TAM_ALLOW_NO_MAUDE=1 to skip the maude-backed tests here — \
-             skipping silently would report green having run nothing"
-        );
-        None
-    }
+    use tamarin_test_support::require_maude_path;
 
     /// The theory that the two `ProofState` tests below use.  It has one
     /// rule and one exists-trace lemma.  The function closes it against `mp`.
@@ -1347,28 +1090,54 @@ theory T begin
 rule Setup: [Fr(~k)] --[Setup(~k)]-> [Out(~k)]
 lemma trivial: exists-trace
   "Ex k #i. Setup(k) @ #i"
+lemma second: exists-trace
+  "Ex k #i. Setup(k) @ #i"
+lemma stored: exists-trace
+  "Ex k #i. Setup(k) @ #i"
+  simplify
+  by sorry
 end
 "#;
-        let pt = tamarin_parser::parse_theory(src, &[]).expect("parse");
-        ProofState::new(&pt, mp, None, "", None).expect("build state")
+        let entry = crate::theory_io::load_from_source(
+            src,
+            crate::state::TheoryOrigin::Upload("trivial.spthy".to_string()),
+            mp,
+            0,
+        )
+        .expect("load");
+        ProofState::new(
+            &entry.typed_theory,
+            entry.prover_maude_sig.clone(),
+            mp,
+            None,
+            entry
+                .ndc_cache
+                .clone()
+                .map(tamarin_theory::constraint::solver::context::IntrRuleCache::from)
+                .as_ref(),
+        )
+        .expect("build state")
     }
 
     #[test]
     fn build_state_for_trivial_theory() {
-        let mp = match maude_path() {
+        let mp = match require_maude_path() {
             Some(p) => p,
             None => return,
         };
         let state = trivial_proof_state(&mp);
-        // Should have one lemma initialised.
+        assert!(state.by_lemma.lock().is_empty());
+        assert!(state.peek_root("trivial").is_none());
         let root = state.get_root("trivial").expect("trivial root");
         assert!(matches!(root.method, ProofMethod::Sorry(_)));
         assert!(matches!(root.status, NodeStatus::Open));
+        assert_eq!(state.by_lemma.lock().len(), 1);
+        assert!(state.peek_root("second").is_none());
     }
 
     #[test]
     fn apply_simplify_step() {
-        let mp = match maude_path() {
+        let mp = match require_maude_path() {
             Some(p) => p,
             None => return,
         };
@@ -1384,6 +1153,60 @@ end
             "root method after simplify: {:?}",
             root.method
         );
+    }
+
+    #[test]
+    fn proof_index_replays_stored_proof_without_materializing_systems() {
+        let Some(mp) = require_maude_path() else {
+            return;
+        };
+        let state = trivial_proof_state(&mp);
+
+        let root = state
+            .proof_index_root("stored")
+            .expect("stored proof index");
+        assert!(matches!(root.method, ProofMethod::Simplify));
+        assert!(state.peek_root("stored").is_none());
+        assert_eq!(state.by_lemma.lock().len(), 0);
+        assert_eq!(state.proof_index_by_lemma.lock().len(), 1);
+
+        // The immutable snapshot is reused until an interactive route asks
+        // for the live system-bearing tree.
+        let again = state
+            .proof_index_root("stored")
+            .expect("cached proof index");
+        assert!(Arc::ptr_eq(&root, &again));
+        let live = state.get_root("stored").expect("live stored proof");
+        assert_eq!(
+            root.proof_status(),
+            tamarin_theory::constraint::solver::search::proof_status(&live)
+        );
+        assert!(state.peek_root("stored").is_some());
+        assert!(state.proof_index_by_lemma.lock().is_empty());
+    }
+
+    #[test]
+    fn fork_copies_only_materialized_roots_and_keeps_them_independent() {
+        let mp = match require_maude_path() {
+            Some(p) => p,
+            None => return,
+        };
+        let state = trivial_proof_state(&mp);
+        state.get_root("trivial").expect("trivial root");
+        let fork = state.fork();
+
+        assert!(fork.peek_root("trivial").is_some());
+        assert!(fork.peek_root("second").is_none());
+        state.get_root("second").expect("second root");
+        assert!(fork.peek_root("second").is_none());
+
+        state
+            .apply_at_path("trivial", &[], ProofMethod::Simplify)
+            .expect("simplify original");
+        assert!(matches!(
+            fork.get_root("trivial").expect("fork root").method,
+            ProofMethod::Sorry(_)
+        ));
     }
 
     #[test]

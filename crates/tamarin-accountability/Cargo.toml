@@ -11,8 +11,12 @@ description = "Accountability extension for the Tamarin prover (Rust port)."
 publish = false
 
 [dependencies]
-tamarin-parser = { workspace = true }
+tamarin-term = { workspace = true }
 tamarin-theory = { workspace = true }
+
+[dev-dependencies]
+# The round-trip tests parse their fixture theories from source.
+tamarin-parser = { workspace = true }
 
 [lints]
 workspace = true

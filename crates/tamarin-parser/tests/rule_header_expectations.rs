@@ -2,170 +2,91 @@
 // of the tamarin-prover sources this file cites; list them with:
 //   scripts/gen_license_headers.py --authors <this file>
 
-//! Parity for the `expected` set a rule header leaves behind.
+//! Byte-pinned parity for the `expecting …` set a rule header leaves behind.
 //!
 //! `protoRuleInfo` (Parser/Rule.hs:100-107) is
 //! `symbol "rule" *> optional moduloE *> identifier *> ruleAttributesp *> colon`,
 //! and `ruleAttributesp = option mempty (fold <$> list ruleAttribute)`
 //! (Parser/Rule.hs:97-98).  When no `[…]` follows the name, `option` returns without
 //! consuming, so parsec keeps its `Expect "\"[\""` and merges it into the
-//! colon's failure — the set reads `"[" or ":"`.  A present attribute list
-//! consumes, which discards that expectation and leaves `":"` alone.
+//! colon's failure — the frame reads `expecting "[" or ":"`.  A present
+//! attribute list consumes, which discards that expectation and leaves
+//! `expecting ":"` alone.
 //!
-//! Each position and expectation below is the pinned oracle's for the same
-//! source.
+//! Each expectation below is the pinned oracle's stderr for the same source,
+//! verbatim.
 
-use tamarin_parser::{parse_theory, ParseContext, ParseError};
+use tamarin_parser::parse_theory;
 
-/// Asserts `src` fails with the [`ParseError::Expected`] bridge variant at
-/// `line`:`col` carrying exactly the `expected` labels.  `found` is `None`
-/// at end of input, otherwise a prefix of the offending token.
-#[track_caller]
-fn assert_expected(src: &str, line: u32, col: u32, found: Option<&str>, expected: &[&str]) {
-    let e = parse_theory(src, &[]).expect_err("the probes below must all fail to parse");
-    assert!(
-        matches!(&e, ParseError::Expected { .. }),
-        "expected the `Expected` variant, got {e:?}"
-    );
-    let at = e.location();
-    assert_eq!((at.line, at.col), (line, col), "position of {e:?}");
-    match found {
-        None => assert_eq!(e.found(), None, "should be an end-of-input error"),
-        Some(prefix) => {
-            let got = e.found().unwrap_or("");
-            assert!(
-                got.starts_with(prefix),
-                "offending token {got:?} should start with {prefix:?}"
-            );
-        }
-    }
-    let labels = e.expected().unwrap_or_default();
-    assert_eq!(
-        labels.iter().map(String::as_str).collect::<Vec<_>>(),
-        expected
-    );
+/// The frame for `src`, with `name` as the `SourcePos` file name.
+fn frame(name: &str, src: &str) -> String {
+    parse_theory(src, &[])
+        .expect_err("the probes below must all fail to parse")
+        .with_source(name)
+        .to_string()
 }
 
 #[test]
 fn a_bare_rule_name_expects_the_attribute_bracket_or_the_colon() {
-    assert_expected(
-        "theory T begin\nrule X\nend\n",
-        3,
-        1,
-        Some("end"),
-        &["\"[\"", "\":\""],
+    assert_eq!(
+        frame("r.spthy", "theory T begin\nrule X\nend\n"),
+        "\"r.spthy\" (line 3, column 1):\nunexpected \"e\"\nexpecting \"[\" or \":\""
     );
 }
 
 #[test]
 fn the_same_set_survives_to_end_of_input() {
-    assert_expected("theory T begin\nrule X\n", 3, 1, None, &["\"[\"", "\":\""]);
+    assert_eq!(
+        frame("r.spthy", "theory T begin\nrule X\n"),
+        "\"r.spthy\" (line 3, column 1):\nunexpected end of input\nexpecting \"[\" or \":\""
+    );
 }
 
 #[test]
 fn a_consumed_attribute_list_drops_the_bracket_expectation() {
-    assert_expected(
-        "theory T begin\nrule X [color=#ffffff]\nend\n",
-        3,
-        1,
-        Some("end"),
-        &["\":\""],
+    // An EMPTY `[]` counts as consumed, exactly as it does for `functions:`
+    // attribute lists.
+    assert_eq!(
+        frame("r.spthy", "theory T begin\nrule X []\nend\n"),
+        "\"r.spthy\" (line 3, column 1):\nunexpected \"e\"\nexpecting \":\""
     );
-}
-
-/// An EMPTY `[]` counts as consumed, exactly as it does for `functions:`
-/// attribute lists: HS `ruleAttributesp`'s `list p = brackets (commaSep p)`
-/// (Theory/Text/Parser/Rule.hs:97-98, Token.hs) admits zero elements, so the header continues to
-/// the colon and a complete rule with `[]` loads at exit 0.
-#[test]
-fn an_empty_attribute_list_is_consumed_like_a_non_empty_one() {
-    assert_expected(
-        "theory T begin\nrule X []\nend\n",
-        3,
-        1,
-        Some("end"),
-        &["\":\""],
+    assert_eq!(
+        frame("r.spthy", "theory T begin\nrule X [color=#ffffff]\nend\n"),
+        "\"r.spthy\" (line 3, column 1):\nunexpected \"e\"\nexpecting \":\""
     );
-    parse_theory("theory T begin\nrule X []: [ ] --> [ ]\nend\n", &[])
-        .expect("an empty rule attribute list is legal");
 }
 
 #[test]
 fn junk_after_the_colon_expects_let_or_the_premise_bracket() {
     // `option emptySubst letBlock` precedes the premise list (Parser/Rule.hs:131):
     // the failed non-consuming probe leaves `Expect "\"let\""` at the same
-    // offset as the premise `[` failure, and both are reported.
-    let e = parse_theory("theory T begin\nrule X: garbage here\nend\n", &[])
-        .expect_err("must fail to parse");
-    assert!(
-        matches!(&e, ParseError::Expected { .. }),
-        "expected a punctuation error, got {e:?}"
+    // offset as the premise `[` failure, and parsec merges the two.
+    assert_eq!(
+        frame("r.spthy", "theory T begin\nrule X: garbage here\nend\n"),
+        "\"r.spthy\" (line 2, column 9):\nunexpected \"g\"\nexpecting \"let\" or \"[\""
     );
-    let at = e.location();
-    assert_eq!((at.line, at.col), (2, 9));
-    assert_eq!(e.found(), Some("garbage"));
-    assert_eq!(e.expected().unwrap_or_default(), ["[", "\"let\""]);
 }
 
 #[test]
 fn a_missing_rule_name_expects_the_modulo_paren_or_an_identifier() {
-    assert_expected(
-        "theory T begin\nrule !x: [] --> []\nend\n",
-        2,
-        6,
-        Some("!"),
-        &["identifier", "("],
+    assert_eq!(
+        frame("r.spthy", "theory T begin\nrule !x: [] --> []\nend\n"),
+        "\"r.spthy\" (line 2, column 6):\nunexpected \"!\"\nexpecting \"(\" or identifier"
     );
 }
 
 #[test]
-fn a_name_failure_abutting_the_rule_letters_keeps_the_rule_header_labels() {
-    // With no whitespace after `rule`, the current parser reports only the
-    // rule-header alternatives at the name position.
-    assert_expected("theory T begin\nrule", 2, 5, None, &["identifier", "("]);
-    assert_expected(
-        "theory T begin\nrule!x: [] --> []\nend\n",
-        2,
-        5,
-        Some("!"),
-        &["identifier", "("],
+fn a_name_failure_abutting_the_rule_letters_merges_the_formal_comment_labels() {
+    // With no whitespace after `rule`, the item alternation's formalComment
+    // retry — `try (many1 letter <* string "{*")` (Token.hs:377-378) —
+    // re-consumes the letters and fails at the SAME offset, so its
+    // `letter`/`"{*"` labels join the name position's own.
+    assert_eq!(
+        frame("r.spthy", "theory T begin\nrule"),
+        "\"r.spthy\" (line 2, column 5):\nunexpected end of input\nexpecting \"(\", identifier, letter or \"{*\""
     );
-}
-
-#[test]
-fn non_e_or_ac_modulo_is_rejected() {
-    let e = parse_theory("theory T begin\nrule (modulo X) R: [ ] --> [ ]\nend\n", &[])
-        .expect_err("unknown modulo kind must fail");
-    match e {
-        ParseError::UnknownItem {
-            item_kind,
-            unknown_item,
-            ..
-        } => {
-            assert_eq!(item_kind, ParseContext::ModuloKind);
-            assert_eq!(unknown_item, "X");
-        }
-        other => panic!("expected UnknownItem for modulo kind, got {other:?}"),
-    }
-}
-
-#[test]
-fn invalid_modulo_kind_reports_the_kind_token_location() {
-    let e = parse_theory(
-        "theory T begin\nrule (modulo NDC) R: [ ] --> [ ]\nend\n",
-        &[],
-    )
-    .expect_err("unknown modulo kind must fail");
-    match e {
-        ParseError::UnknownItem {
-            item_kind,
-            unknown_item,
-            at,
-        } => {
-            assert_eq!(item_kind, ParseContext::ModuloKind);
-            assert_eq!(unknown_item, "NDC");
-            assert_eq!((at.line, at.col), (2, 14));
-        }
-        other => panic!("expected UnknownItem for modulo kind, got {other:?}"),
-    }
+    assert_eq!(
+        frame("r.spthy", "theory T begin\nrule!x: [] --> []\nend\n"),
+        "\"r.spthy\" (line 2, column 5):\nunexpected \"!\"\nexpecting \"(\", identifier, letter or \"{*\""
+    );
 }

@@ -4,7 +4,6 @@
 
 use super::*;
 use crate::fact::{apply_subst_fact, Fact};
-use tamarin_parser::{Formula, DUMMY_LOCATION};
 use tamarin_term::subst::apply_vterm;
 use tamarin_term::vterm::var_term;
 
@@ -26,22 +25,15 @@ rule Seed:\n\
   [ ]\n\n\
 end\n";
 
-/// Parse + elaborate [`XORR_PARENT`]; returns the guard (hold it for
-/// the test's whole body — production holds the parent theory's guard
-/// around the NDC pass the same way), the parent `MaudeSig`, and the
+/// Parse + elaborate [`XORR_PARENT`]; returns the parent `MaudeSig` and the
 /// Probe action's five elaborated terms.
-fn xorr_parent() -> (
-    crate::elaborate::UserFunsForTheoryGuard,
-    tamarin_term::maude_sig::MaudeSig,
-    Vec<LNTerm>,
-) {
+fn xorr_parent() -> (tamarin_term::maude_sig::MaudeSig, Vec<LNTerm>) {
     let parsed = tamarin_parser::parse_theory(XORR_PARENT, &[]).expect("parent parses");
-    let guard = crate::elaborate::set_user_funs_for_theory(&parsed);
     let elab = crate::elaborate::elaborate(&parsed).expect("parent elaborates");
     let rule = elab.rules().next().expect("Seed rule present");
     let probe = rule.rule.actions[0].terms.to_vec();
     assert_eq!(probe.len(), 5, "Probe carries five terms");
-    (guard, elab.signature.maude_sig, probe)
+    (elab.signature, probe)
 }
 
 fn kd(t: LNTerm) -> LNFact {
@@ -108,7 +100,7 @@ fn assert_structural_matches_text(
 /// restriction sets (theory-1 with `OnlyOnceD`, theory-2 without).
 #[test]
 fn structural_deduction_theory_matches_text_pipeline() {
-    let (_guard, sig, probe) = xorr_parent();
+    let (sig, probe) = xorr_parent();
     let sig_text = crate::pretty_theory::render_signature(&sig);
     let (xorr2, xorr3, h_pair, fst_c, zeroo) =
         (&probe[0], &probe[1], &probe[2], &probe[3], &probe[4]);
@@ -144,26 +136,105 @@ fn structural_deduction_theory_matches_text_pipeline() {
     }
 }
 
-/// The structural restriction ASTs are exactly what the parser
-/// produces for the restriction text the render pipeline emits.
+/// The structural restriction formulas are exactly what
+/// [`crate::formula::from_parser`] builds for the restriction text the
+/// render pipeline emits.
 #[test]
-fn restriction_asts_equal_their_parsed_text() {
+fn restriction_formulas_equal_their_parsed_text() {
     let src = "theory R\nbegin\n\
 restriction OnlyOnce:\n  \"All #ndci #ndcj. OnlyOnce() @ #ndci & OnlyOnce() @ #ndcj ==> #ndci = #ndcj\"\n\
 restriction OnlyOnceD:\n  \"All #ndci #ndcj #ndck. OnlyOnceD() @ #ndci & OnlyOnceD() @ #ndcj & OnlyOnceD() @ #ndck ==> #ndci = #ndcj | #ndci = #ndck | #ndcj = #ndck\"\n\
 end\n";
     let parsed = tamarin_parser::parse_theory(src, &[]).expect("restriction theory parses");
-    let formulas: Vec<&p::Formula> = parsed
+    // The restriction atoms are nullary facts and timepoint equalities, so
+    // no term needs a function symbol from the signature.
+    let sig = tamarin_term::maude_sig::pair_maude_sig();
+    let formulas: Vec<LNFormula> = parsed
         .items
         .iter()
         .filter_map(|it| match it {
-            p::TheoryItem::Restriction(r) => Some(&r.formula),
+            tamarin_parser::ast::TheoryItem::Restriction(r) => Some(&r.formula),
             _ => None,
+        })
+        .map(|f| {
+            let syn = crate::formula::from_parser(f, &sig).expect("restriction closes");
+            crate::formula::to_lnformula(&syn).expect("restriction carries no predicate")
         })
         .collect();
     assert_eq!(formulas.len(), 2);
-    assert_eq!(*formulas[0], only_once_restriction_ast(), "OnlyOnce");
-    assert_eq!(*formulas[1], only_once_d_restriction_ast(), "OnlyOnceD");
+    assert_eq!(formulas[0], only_once_restriction(), "OnlyOnce");
+    assert_eq!(formulas[1], only_once_d_restriction(), "OnlyOnceD");
+}
+
+/// The guarded values the NDC search runs on, pinned as text: the two
+/// restrictions HS `addRestrictions` installs (CloseRule.hs:247,252).  The
+/// binder names and their prefix order are the port's, not HS's, and a
+/// change to either moves the synthetic search and with it the `[NDC]` tags
+/// in the printed `functions:` header.
+#[test]
+fn only_once_restriction_guarded_is_unchanged() {
+    let g = &deduction_restrictions(false)[0];
+    assert_eq!(
+        crate::pretty_formula::pretty_guarded(g),
+        "∀ #ndci #ndcj. (OnlyOnce( ) @ #ndci) ∧ (OnlyOnce( ) @ #ndcj) ⇒ #ndci = #ndcj",
+    );
+}
+
+/// [`only_once_restriction_guarded_is_unchanged`] for the `OnlyOnceD`
+/// restriction, which only theory-1 carries.
+#[test]
+fn only_once_d_restriction_guarded_is_unchanged() {
+    let rs = deduction_restrictions(true);
+    assert_eq!(rs.len(), 2, "theory-1 carries both restrictions");
+    assert_eq!(
+        crate::pretty_formula::pretty_guarded(&rs[1]),
+        "∀ #ndci #ndcj #ndck. (OnlyOnceD( ) @ #ndci) ∧ (OnlyOnceD( ) @ #ndcj) ∧ (OnlyOnceD( ) @ #ndck) ⇒ ((#ndci = #ndcj) ∨ (#ndci = #ndck) ∨ (#ndcj = #ndck))",
+    );
+}
+
+/// [`only_once_restriction_guarded_is_unchanged`] for the `Deduction`
+/// lemma, over the shapes the NDC pass meets: dotted unifier indices with a
+/// cross-sort Nat variable, a user-AC term, a builtin application with a
+/// pair and fresh/public variables, and the ground zero-binder case.
+#[test]
+fn deduction_lemma_guarded_is_unchanged() {
+    let pretty = |s: &[LNFact], t: &LNTerm| {
+        crate::pretty_formula::pretty_guarded(&deduction_lemma_guarded(s, t))
+    };
+    let x0 = var_term(LVar::new("x", LSort::Msg, 0));
+    let x5 = var_term(LVar::new("x", LSort::Msg, 5));
+    let n = var_term(LVar::new("n", LSort::Nat, 0));
+    assert_eq!(
+        pretty(
+            &[
+                kd(tamarin_term::builtin::pair(x0.clone(), x5.clone())),
+                ku(n.clone()),
+            ],
+            &n,
+        ),
+        "∀ x ~n x.1 %n.1 #ndct0 #ndct1. (Generated_0( x, ~n, x.1 ) @ #ndct0) ∧ (K( %n.1 ) @ #ndct1) ⇒ ⊥",
+    );
+    let (_sig, probe) = xorr_parent();
+    let (xorr2, xorr3, h_pair, fst_c, zeroo) =
+        (&probe[0], &probe[1], &probe[2], &probe[3], &probe[4]);
+    let a = var_term(
+        tamarin_term::lterm::frees(&vec![xorr2.clone()])
+            .into_iter()
+            .next()
+            .expect("xorr(a, b) has free vars"),
+    );
+    assert_eq!(
+        pretty(&[kd(xorr2.clone()), ku(a)], xorr3),
+        "∀ a b c #ndct0 #ndct1. (Generated_0( a, b ) @ #ndct0) ∧ (K( (a xorr b xorr c) ) @ #ndct1) ⇒ ⊥",
+    );
+    assert_eq!(
+        pretty(&[kd(h_pair.clone()), ku(fst_c.clone())], h_pair),
+        "∀ $p ~k a c #ndct0 #ndct1. (Generated_0( $p, ~k, a, c ) @ #ndct0) ∧ (K( h(<~k, $p, a>) ) @ #ndct1) ⇒ ⊥",
+    );
+    assert_eq!(
+        pretty(&[kd(zeroo.clone())], zeroo),
+        "∀ #ndct0 #ndct1. (Generated_0( ) @ #ndct0) ∧ (K( zeroo ) @ #ndct1) ⇒ ⊥",
+    );
 }
 
 /// HS `landFormula` seeds the lemma conjunction with `ltrue`
@@ -174,58 +245,21 @@ end\n";
 /// invisible.
 #[test]
 fn lemma_guarded_is_invariant_to_hs_ltrue_conjunct() {
-    let x = ndc_node_var("ndct0");
-    let y = ndc_node_var("ndct1");
-    let v = p::VarSpec {
-        name: "v".to_string(),
-        idx: 0,
-        sort: p::SortHint::Untagged,
-        typ: None,
-        location: DUMMY_LOCATION,
-    };
-    let gen_at = Formula::atom(
-        p::Atom::Action(
-            p::Fact {
-                persistent: false,
-                name: "Generated_0".to_string(),
-                args: vec![p::Term::Var(v.clone())],
-                annotations: Vec::new(),
-                location: DUMMY_LOCATION,
-            },
-            p::Term::Var(x.clone()),
-        ),
-        DUMMY_LOCATION,
-    );
-    let k_at = Formula::atom(
-        p::Atom::Action(
-            p::Fact {
-                persistent: false,
-                name: "K".to_string(),
-                args: vec![p::Term::Var(v.clone())],
-                annotations: Vec::new(),
-                location: DUMMY_LOCATION,
-            },
-            p::Term::Var(y.clone()),
-        ),
-        DUMMY_LOCATION,
-    );
-    let binders = vec![v, x, y];
-    let ours = Formula::not(
-        Formula::exists(
-            binders.clone(),
-            gen_at.clone().and(k_at.clone()),
-            DUMMY_LOCATION,
-        ),
-        DUMMY_LOCATION,
-    );
-    let hs_shaped = Formula::not(
-        Formula::exists(
-            binders,
-            Formula::r#true(DUMMY_LOCATION).and(gen_at).and(k_at),
-            DUMMY_LOCATION,
-        ),
-        DUMMY_LOCATION,
-    );
+    let t0 = ndc_node_var("ndct0");
+    let t1 = ndc_node_var("ndct1");
+    let v = LVar::new("v", LSort::Msg, 0);
+    let gen_at: LNFormula = ProtoFormula::Atom(ProtoAtom::Action(
+        free_time(&t0),
+        crate::fact::proto_fact(Multiplicity::Linear, "Generated_0", vec![var_term(v)])
+            .map_ref(lift_free),
+    ));
+    let k_at: LNFormula = ProtoFormula::Atom(ProtoAtom::Action(
+        free_time(&t1),
+        crate::fact::k_log_fact(var_term(v)).map_ref(lift_free),
+    ));
+    let binders = [v, t0, t1];
+    let ours = close_ex(&binders, gen_at.clone().and(k_at.clone())).not();
+    let hs_shaped = close_ex(&binders, ProtoFormula::ltrue().and(gen_at).and(k_at)).not();
     assert_eq!(
         crate::guarded::formula_to_guarded(&ours).expect("ours converts"),
         crate::guarded::formula_to_guarded(&hs_shaped).expect("HS shape converts"),
@@ -251,13 +285,13 @@ fn structural_lemma_closes_dotted_and_cross_sort_binders() {
     ];
     let g = deduction_lemma_guarded(&s, &n);
     assert!(
-        crate::guarded::free_vars(&g).is_empty(),
+        tamarin_term::lterm::frees(&g).is_empty(),
         "every occurrence must resolve to a binder; free vars: {:?}",
-        crate::guarded::free_vars(&g)
+        tamarin_term::lterm::frees(&g)
     );
     match &g {
         Guarded::GGuarded {
-            qua: crate::guarded::Quant::All,
+            qua: crate::formula::Quantifier::All,
             vars,
             guards,
             body,
@@ -283,17 +317,17 @@ fn structural_lemma_closes_dotted_and_cross_sort_binders() {
 /// and NDC-mark every xorr destructor rule in the returned cache.
 #[test]
 fn check_close_intr_rule_tags_xorr_on_kcl07_signature() {
-    // The resolution policy lives in [`crate::test_maude::maude_path`]. That
+    // The resolution policy lives in [`tamarin_test_support::require_maude_path`]. That
     // policy covers a `MAUDE_PATH` that points nowhere, and it covers a
     // machine with no maude at all. This test calls that one helper so that a
     // private copy of the policy here cannot drift from it.
-    let Some(mp) = crate::test_maude::maude_path() else {
+    let Some(mp) = tamarin_test_support::require_maude_path() else {
         return;
     };
-    let (_guard, sig, _probe) = xorr_parent();
+    let (sig, _probe) = xorr_parent();
     let maude = tamarin_term::maude_proc::MaudeHandle::start(&mp, sig)
         .expect("maude starts on the KCL07 signature");
-    let checked = check_close_intr_rule(&maude, None, true);
+    let checked = check_close_intr_rule(&maude, None, true, &[]);
     let names: Vec<String> = checked
         .ndc_funs
         .iter()
@@ -316,6 +350,18 @@ fn check_close_intr_rule_tags_xorr_on_kcl07_signature() {
         xorr_destr.iter().all(|r| is_ndc_cache_rule(r)),
         "every xorr destructor rule carries the NDC-tagged head"
     );
+}
+
+#[test]
+fn close_keeps_source_declared_intruder_rules_first() {
+    let Some(mp) = tamarin_test_support::require_maude_path() else {
+        return;
+    };
+    let (sig, _probe) = xorr_parent();
+    let maude = tamarin_term::maude_proc::MaudeHandle::start(&mp, sig).expect("maude starts");
+    let manual = crate::rule::Rule::new(IntrRuleACInfo::IEquality, vec![], vec![], vec![]);
+    let checked = check_close_intr_rule(&maude, None, false, std::slice::from_ref(&manual));
+    assert_eq!(checked.cache.first(), Some(&manual));
 }
 
 fn pretty_term(t: &LNTerm) -> String {
@@ -508,7 +554,6 @@ fn elaborate_deduction_theory_via_text(
             theory_snippet(&src)
         )
     });
-    let _user_funs_guard = crate::elaborate::set_user_funs_for_theory(&parsed);
     let elaborated = crate::elaborate::elaborate(&parsed).unwrap_or_else(|e| {
         panic!(
             "[ndc] synthetic deduction theory failed to elaborate ({}); theory:\n{}",

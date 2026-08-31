@@ -1,0 +1,15 @@
+WARNING: the following wellformedness checks failed!
+
+Unbound variables
+=================
+
+  rule `A' has unbound variables: 
+    m
+
+Quantifier sorts
+================
+
+  Lemma `l1' uses quantifiers with wrong sort: ("y",LSortFresh)
+  
+  Restriction `R' uses quantifiers with wrong sort: ("b",LSortPub)
+*/

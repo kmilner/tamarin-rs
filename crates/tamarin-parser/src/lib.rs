@@ -7,22 +7,23 @@
 //! Port of `Theory.Text.Parser.*` from `lib/theory/src/Theory/Text/Parser/`.
 //!
 //! This is a *syntax-level* parser: it produces a loose AST that mirrors
-//! the surface syntax. Semantic enrichment that the Haskell parser does
-//! inline (arity validation, sort assignment, `_restrict` expansion,
-//! macro expansion, scope analysis) is deferred to a later elaboration
-//! pass. The goal is to recognise every well-formed `.spthy` file that
-//! Tamarin's Haskell parser accepts.
+//! the surface syntax. Variables carry the `tamarin_term::lterm::LSort`
+//! the Haskell parser assigns them, but the rest of the semantic
+//! enrichment the Haskell parser does inline (arity validation,
+//! `_restrict` expansion, macro expansion, scope analysis) is deferred to
+//! a later elaboration pass. The goal is to recognise every well-formed
+//! `.spthy` file that Tamarin's Haskell parser accepts.
 
 pub mod ast;
 pub mod lexer;
 pub mod parse_error;
 pub mod parser;
 pub mod proof_tree;
-pub mod wf;
 
 pub use ast::*;
-pub use parse_error::{Location, ParseContext, ParseError, ParseErrorLabel, DUMMY_LOCATION};
+pub use parse_error::{DiagnosticLabel, ParseContext, ParseErrorKind, Span};
 pub use parser::{
-    parse_intruder_rules, parse_theory, parse_theory_or_diff, parse_theory_with_base,
+    parse_diff_theory, parse_diff_theory_with_base, parse_intruder_rules, parse_theory,
+    parse_theory_with_base, GhcError, Message, ParseError,
 };
 pub use proof_tree::parse_proof_tree;

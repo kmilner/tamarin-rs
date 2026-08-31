@@ -81,7 +81,7 @@ pub enum NodeStatus {
 }
 
 /// Map a terminal `is_finished` result to its leaf [`NodeStatus`].
-fn node_status_of(r: &MethodResult) -> NodeStatus {
+pub(crate) fn node_status_of(r: &MethodResult) -> NodeStatus {
     match r {
         MethodResult::Solved => NodeStatus::Solved,
         MethodResult::Contradictory(_) => NodeStatus::Contradictory,
@@ -305,12 +305,8 @@ pub(crate) static SYS_RETENTION_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mut
 /// Per-child parallel expansion is ON by default;
 /// `TAM_RS_DISABLE_PARALLEL_EXPAND=1` forces serial sibling expansion
 /// (debug escape hatch).  Output-neutrality depends on every worker
-/// closure replicating the calling thread's user-fun bundle
-/// (`snapshot_user_funs` / `set_user_funs_from_collected` in the
-/// fan-out preamble): a stolen worker thread outside any lemma guard
-/// has EMPTY sets, and `term_to_lnterm` on such a thread lifts a
-/// declared nullary constant (e.g. ocsps-msr's `true/0`) to a free
-/// variable, nondeterministically changing unifier-arm survival.
+/// closure seeding its thread-locals from the fan-out preamble's
+/// snapshots: a stolen worker thread starts with the defaults.
 #[inline]
 fn disable_parallel_expand() -> bool {
     tamarin_utils::env_gate!("TAM_RS_DISABLE_PARALLEL_EXPAND")
@@ -991,7 +987,6 @@ fn expand_inner(
     deadline: &std::time::Instant,
     depth: usize,
 ) {
-    crate::state_trace::emit("expand", None, &node.sys);
     // Rust-only diagnostic [STATE] emission (gated by TAM_RS_TRACE_STATE)
     // placed at every prove entry so Simplify / Induction / Finished
     // steps are recorded, not just SolveGoal dispatch (proof_method.rs).
@@ -1196,13 +1191,6 @@ fn expand_inner(
         // own thread-local stack and produce coherent trace output.
         let path_snapshot: Vec<String> = crate::constraint::solver::trace::case_path_snapshot();
         let deadline_snapshot = *deadline;
-        // Snapshot the user-fun sets for the workers: `term_to_lnterm` /
-        // `term_to_gterm` (insert_atom, formula conversions) read them via
-        // thread-locals, and a stolen worker thread outside any lemma
-        // guard has EMPTY sets — a declared nullary constant (ocsps-msr's
-        // `true/0`) would elaborate as a free variable on that worker,
-        // nondeterministically changing unifier-arm survival.
-        let user_funs_snapshot = crate::elaborate::snapshot_user_funs();
         // `run_proof_search` runs on a rayon WORKER thread, so
         // `into_par_iter().collect()` runs the per-case closures ON THIS SAME
         // THREAD, mutating per-search thread-locals (`DEPTH_LIMIT_HIT`,
@@ -1224,8 +1212,6 @@ fn expand_inner(
                 DEPTH_LIMIT_HIT.with(|f| f.set(false));
                 DEADLINE.with(|d| d.set(Some(deadline_snapshot)));
                 crate::constraint::solver::trace::case_path_set(&path_snapshot);
-                let _user_funs_guard =
-                    crate::elaborate::set_user_funs_from_collected(&user_funs_snapshot);
                 let push_path = !name.is_empty();
                 if push_path {
                     crate::constraint::solver::trace::case_path_push(&name);
@@ -1620,7 +1606,7 @@ mod tests {
     use super::*;
     use tamarin_term::maude_sig::pair_maude_sig;
 
-    use crate::test_maude::maude_path;
+    use tamarin_test_support::require_maude_path;
 
     /// This function returns `None` only when [`maude_path`] resolves nothing.
     /// That case is the documented `TAM_ALLOW_NO_MAUDE` skip.  A maude that
@@ -1628,7 +1614,7 @@ mod tests {
     /// `MAUDE_PATH`, so this function panics for it.  A `.ok()?` here would
     /// hide that error and skip every maude-backed test in this file.
     fn ctx() -> Option<ProofContext> {
-        let path = maude_path()?;
+        let path = require_maude_path()?;
         let h = tamarin_term::maude_proc::MaudeHandle::start(&path, pair_maude_sig())
             .unwrap_or_else(|e| {
                 panic!(
@@ -1637,6 +1623,46 @@ mod tests {
                 )
             });
         Some(ProofContext::new(h, Vec::new()))
+    }
+
+    /// The per-child fan-out (`expand_children`) converts terms on rayon
+    /// worker threads.  The converter answers from the signature it is
+    /// handed, which the workers share with the caller, so a declared 0-arity
+    /// symbol is the same application on every thread.
+    #[test]
+    fn a_worker_thread_converts_a_nullary_symbol_the_same_way() {
+        use rayon::prelude::*;
+
+        let thy = tamarin_parser::parse_theory(
+            "theory T begin\n\
+             functions: true/0\n\
+             rule R: [ ] --> [ Out(true) ]\n\
+             end",
+            &[],
+        )
+        .expect("parses");
+        let msig = crate::elaborate::elaborate(&thy)
+            .expect("elaborates")
+            .signature;
+        let term = thy
+            .items
+            .iter()
+            .find_map(|i| match i {
+                tamarin_parser::ast::TheoryItem::Rule(r) => Some(r.conclusions[0].args[0].clone()),
+                _ => None,
+            })
+            .expect("rule present");
+
+        let on_caller = crate::elaborate::term_to_lnterm(&term, &msig).expect("converts");
+        assert!(
+            matches!(&on_caller, tamarin_term::term::Term::App(_, args) if args.is_empty()),
+            "`true` is a 0-arity application, not a variable: {on_caller:?}"
+        );
+        let on_workers: Vec<_> = (0..64)
+            .into_par_iter()
+            .map(|_| crate::elaborate::term_to_lnterm(&term, &msig).expect("converts"))
+            .collect();
+        assert!(on_workers.iter().all(|t| *t == on_caller));
     }
 
     #[test]
