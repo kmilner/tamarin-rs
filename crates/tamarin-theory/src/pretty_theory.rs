@@ -105,7 +105,14 @@ pub(crate) fn oracle_name_for_theory(in_file: &str) -> String {
 }
 
 fn oracle_candidate_for_theory(in_file: &str) -> String {
-    let before_dot = in_file.split('.').next().unwrap_or(in_file);
+    // `head (groupBy (\_ b -> b /= '.') inFile)` always keeps the first
+    // character, even when it is itself a dot.  Only a later dot terminates
+    // the group (`.foo.spthy` -> `.foo`, `./foo.spthy` -> `./foo`).
+    let before_dot = in_file
+        .char_indices()
+        .skip(1)
+        .find(|(_, ch)| *ch == '.')
+        .map_or(in_file, |(i, _)| &in_file[..i]);
     let final_group = before_dot
         .rfind('/')
         .map_or(before_dot, |slash| &before_dot[slash..]);
@@ -2928,6 +2935,8 @@ mod heuristic_header_tests {
         assert_eq!(oracle_candidate_for_theory("thy.spthy"), "thy.oracle");
         assert_eq!(oracle_candidate_for_theory("a.b.spthy"), "a.oracle");
         assert_eq!(oracle_candidate_for_theory("dir/thy.spthy"), "/thy.oracle");
+        assert_eq!(oracle_candidate_for_theory("./thy.spthy"), "/thy.oracle");
+        assert_eq!(oracle_candidate_for_theory(".thy.spthy"), ".thy.oracle");
         assert_eq!(
             oracle_candidate_for_theory("dir.v2/foo.spthy"),
             "dir.oracle"
