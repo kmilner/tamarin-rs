@@ -2337,7 +2337,10 @@ impl<'a> Parser<'a> {
         loop {
             let mut found = None;
             for option in DeclarableOption::ALL {
-                if self.try_kw(option.as_str()) {
+                // HS uses `symbol`, not `reserved`, here: a valid option is
+                // accepted as a prefix and any suffix is diagnosed by the
+                // enclosing top-level parser.
+                if self.try_punct(option.as_str()) {
                     found = Some(option.as_str().to_string());
                     break;
                 }

@@ -501,6 +501,12 @@ fn theory_options_are_limited_to_the_shared_declarable_set() {
          \"translation-compress-events\""
     );
 
+    let err = parse_theory("theory P begin\noptions: translation-progressx\nend", &[])
+        .expect_err("a valid option prefix must leave its suffix to the outer parser");
+    assert_eq!(
+        err.to_string(),
+        "(line 2, column 31):\nunexpected \"\\n\"\nexpecting letter or \"{*\""
+    );
 }
 
 /// HS `T.identifier` (Token.hs:393-394) rejects the reserved names
