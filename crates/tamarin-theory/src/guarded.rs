@@ -1154,9 +1154,9 @@ fn convert_all(
 /// that cannot.  Each guarding atom is read over plain variables
 /// ([`bvar_to_lvar`], HS `Left $ bvarToLVar a`, Guarded.hs:517-518), which is
 /// what [`remaining_unguarded`] and [`close_guarded`] take.
-fn split_conj_actions_eqs<'a>(
-    f: &'a crate::formula::LNFormula,
-) -> (Vec<Atom<LNTerm>>, Vec<&'a crate::formula::LNFormula>) {
+fn split_conj_actions_eqs(
+    f: &crate::formula::LNFormula,
+) -> (Vec<Atom<LNTerm>>, Vec<&crate::formula::LNFormula>) {
     use crate::formula::{Connective, ProtoFormula};
     fn rec<'a>(
         f: &'a crate::formula::LNFormula,
