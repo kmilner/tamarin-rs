@@ -5124,9 +5124,9 @@ impl<'a> Parser<'a> {
     /// Accept the shapes HS `nodevarTerm` can read after a relational
     /// alternative backtracks: a node/bare variable, or a bare identifier
     /// that the ordinary term parser had resolved as a nullary symbol.
-    fn node_operand(t: Term) -> Option<Term> {
+    fn node_operand(t: Term, explicit_sort: bool) -> Option<Term> {
         match t {
-            Term::Var(v) if matches!(v.sort, LSort::Msg | LSort::Node) => {
+            Term::Var(v) if v.sort == LSort::Node || (v.sort == LSort::Msg && !explicit_sort) => {
                 Some(Self::node_sorted(Term::Var(v)))
             }
             Term::App(_, ref args) if args.is_empty() => Some(Self::node_sorted(t)),
@@ -5197,21 +5197,24 @@ impl<'a> Parser<'a> {
         self.restore(save_f);
         // Try term-level atom: t = t / t < t / t << t / t (<) t
         let lhs = self.term(false)?;
+        let lhs_explicit_sort = self.sort_suffix_consumed;
         if self.try_punct("=") {
             let rhs = self.term(false)?;
+            let rhs_explicit_sort = self.sort_suffix_consumed;
             // `blatom`'s "term equality" alternative reads both operands with
             // `msgvar`, which rejects a node variable, so an equality whose
             // left operand is one is the LAST alternative, "node equality"
             // (Theory/Text/Parser/Formula.hs:51,56): `nodevarTerm` on both
             // sides, which reads a bare right operand as a timepoint.
-            if matches!(&lhs, Term::Var(v) if v.sort == LSort::Node)
-                || matches!(&rhs, Term::Var(v) if v.sort == LSort::Node)
-            {
-                let lhs = Self::node_operand(lhs)
+            if matches!(&lhs, Term::Var(v) if v.sort == LSort::Node) {
+                let lhs = Self::node_operand(lhs, lhs_explicit_sort)
                     .ok_or_else(|| self.err("expected node variable before `=`"))?;
-                let rhs = Self::node_operand(rhs)
+                let rhs = Self::node_operand(rhs, rhs_explicit_sort)
                     .ok_or_else(|| self.err("expected node variable after `=`"))?;
                 return Ok(Formula::Atom(Atom::Eq(lhs, rhs)));
+            }
+            if matches!(&rhs, Term::Var(v) if v.sort == LSort::Node) {
+                return Err(self.err("expected message term after `=`"));
             }
             return Ok(Formula::Atom(Atom::Eq(lhs, rhs)));
         }
@@ -5251,9 +5254,10 @@ impl<'a> Parser<'a> {
             // alternatives can share this prefix, then validate the two
             // operands against exactly the shapes `nodevarTerm` accepts.
             let rhs = self.term(false)?;
-            let lhs = Self::node_operand(lhs)
+            let rhs_explicit_sort = self.sort_suffix_consumed;
+            let lhs = Self::node_operand(lhs, lhs_explicit_sort)
                 .ok_or_else(|| self.err("expected node variable before `<`"))?;
-            let rhs = Self::node_operand(rhs)
+            let rhs = Self::node_operand(rhs, rhs_explicit_sort)
                 .ok_or_else(|| self.err("expected node variable after `<`"))?;
             return Ok(Formula::Atom(Atom::Less(lhs, rhs)));
         }
