@@ -294,8 +294,7 @@ fn dh_one_and_dh_neutral_parse_as_constants() {
                 "{}: REGRESSION — action term is a free variable {:?} \
                      instead of a 0-arity NoEq constant. The `{}` symbol \
                      was not recognised against the MaudeSig; check that \
-                     `parse_intruder_rules` threads the MaudeSig through \
-                     `MaudeSigNullaryGuard`.",
+                     `parse_intruder_rules` seeds the parser state with it.",
                 label,
                 v,
                 String::from_utf8_lossy(expected_name),
@@ -307,11 +306,10 @@ fn dh_one_and_dh_neutral_parse_as_constants() {
 
 /// Counterpart to `dh_one_and_dh_neutral_parse_as_constants`: with
 /// NO DH builtin enabled, parsing a rule containing a bare `one`
-/// must NOT magically convert it to a constant — the
-/// `USER_NULLARY_FUNS` lookup is gated on the MaudeSig.  HS
-/// behaviour: under `pairMaudeSig`, `funSyms` excludes `oneSym`, so
-/// `nullaryApp` falls through to `plit` and `one` parses as a
-/// variable.  Confirms our MaudeSig gating mirrors HS.
+/// must NOT magically convert it to a constant — the parser searches
+/// the seeded signature.  HS behaviour: under `pairMaudeSig`, `funSyms`
+/// excludes `oneSym`, so `nullaryApp` falls through to `plit` and `one`
+/// parses as a variable.  Confirms our seeding mirrors HS.
 #[test]
 fn one_is_var_when_no_dh_builtin_in_maude_sig() {
     use tamarin_term::maude_sig::pair_maude_sig;

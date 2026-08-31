@@ -43,10 +43,9 @@ MAX_NODES_DEFAULT = int(os.environ.get("WEB_CRAWL_MAX_NODES", "400"))
 # Version of the URL PLAN below, stamped into every manifest under
 # PLAN_VERSION_KEY (a top-level sibling of "manifest", never a URL row).
 # v2 = statics + source cases + per-lemma roots/next/prev + autoprove + sitemap ×4 variants.
-# web_parity.sh's HS manifest cache is keyed on sha256(theory) alone, which
-# cannot see a plan that has GROWN — an old manifest's unvisited URL families
-# read as MISSING_HS rows rather than as a cache miss.  Bump this whenever the
-# plan adds URLs; web_parity.sh then re-crawls each cached file on next use.
+# web_parity.sh includes this value in its HS cache profile. Bump it whenever
+# the plan adds URLs; the new plan then selects a distinct profile instead of
+# mistaking an old manifest's unvisited URL families for MISSING_HS rows.
 # Dropping URLs from the plan needs no bump: a cached manifest is then a
 # superset, and web_diff.py drops the unpaired rows (the graph-route 0/0
 # probes) before pairing.

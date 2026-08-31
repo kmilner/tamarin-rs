@@ -12,20 +12,20 @@
 
 use super::*;
 use crate::constraint::solver::search::NodeStatus;
-use crate::test_maude::maude_path;
 use tamarin_term::maude_proc::MaudeHandle;
 use tamarin_term::maude_sig::{pair_maude_sig, MaudeSig};
+use tamarin_test_support::require_maude_path;
 
 /// Returns a maude handle on `sig`.  Returns `None` only when the run opts
 /// out explicitly with `TAM_ALLOW_NO_MAUDE=1`.  Path resolution and the
-/// policy that panics both live in [`crate::test_maude::maude_path`].
+/// policy that panics both live in [`tamarin_test_support::require_maude_path`].
 ///
 /// A maude that resolves but does not start is the same misconfiguration as
 /// a dangling `MAUDE_PATH`.  A `.ok()` here would hide that error, and every
 /// check in this file would then skip without notice.  This function panics
 /// instead.
 fn maude_with(sig: MaudeSig) -> Option<MaudeHandle> {
-    let path = maude_path()?;
+    let path = require_maude_path()?;
     Some(MaudeHandle::start(&path, sig).unwrap_or_else(|e| {
         panic!("maude at {path} failed to start: {e:?} — every maude-backed pin here would otherwise skip silently")
     }))
@@ -48,12 +48,49 @@ fn fixture_theory(name: &str) -> tamarin_parser::ast::Theory {
     tamarin_parser::parse_theory(&src, &[]).expect("parse")
 }
 
+/// Elaborates a parsed theory into the internal theory the prover entry
+/// points take.
+fn elaborated(pt: &tamarin_parser::ast::Theory) -> crate::theory::Theory {
+    crate::elaborate::elaborate(pt).expect("elaborate")
+}
+
 #[test]
 fn prove_lemma_unknown_name_is_error() {
     let Some(h) = maude() else { return };
     let parser_theory = tamarin_parser::parse_theory("theory T begin end", &[]).expect("parse");
-    let r = prove_lemma(&parser_theory, "nonexistent", h, 5);
+    let r = prove_lemma(&elaborated(&parser_theory), "nonexistent", h, 5);
     assert!(matches!(r, Err(ProveError::LemmaNotFound(_))));
+}
+
+#[test]
+fn guarded_conversion_errors_use_haskell_default_width() {
+    let vars = (1..=25)
+        .map(|i| format!("x{i}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let src = format!(
+        "theory T begin \
+         lemma many: \"All {vars} #i. AA(x1) @ i ==> F\" \
+         end"
+    );
+    let parsed = tamarin_parser::parse_theory(&src, &[]).expect("parse");
+    let theory = elaborated(&parsed);
+    let formula = &theory.lemmas().next().expect("lemma").formula;
+    let error = formula_to_guarded(formula).expect_err("formula is unguarded");
+    let doc = error.full_doc(formula);
+    let expected = doc.clone().render_with(
+        crate::pretty_hpj::DEFAULT_LINE_LENGTH,
+        crate::pretty_hpj::DEFAULT_RIBBON,
+    );
+    assert_ne!(
+        expected,
+        doc.render(),
+        "fixture must distinguish 100 from 110 columns"
+    );
+    assert_eq!(
+        guarded_or_error(formula),
+        Err(ProveError::Guarded(expected))
+    );
 }
 
 /// The `features/injectivity` corpus example runs
@@ -77,7 +114,7 @@ fn injectivity_corpus_example_is_contradictory() {
     ))
     .expect("read features/injectivity/injectivity.spthy");
     let pt = tamarin_parser::parse_theory(&src, &[]).expect("parse");
-    let root = prove_lemma(&pt, "injectivity_check", h, 200).expect("prove");
+    let root = prove_lemma(&elaborated(&pt), "injectivity_check", h, 200).expect("prove");
     assert_eq!(root.status, NodeStatus::Contradictory);
 }
 
@@ -94,11 +131,11 @@ fn injectivity_corpus_example_is_contradictory() {
 fn cr_external_recentalive_converges_and_holds() {
     let pt = fixture_theory("CR_external.spthy");
     let elab = crate::elaborate::elaborate(&pt).expect("elaborate");
-    let Some(h) = maude_with(elab.signature.maude_sig.clone()) else {
+    let Some(h) = maude_with(elab.signature.clone()) else {
         return;
     };
     let t0 = std::time::Instant::now();
-    let root = prove_lemma(&pt, "recentalive", h, 200).expect("prove");
+    let root = prove_lemma(&elab, "recentalive", h, 200).expect("prove");
     let dt = t0.elapsed();
     assert_eq!(root.status, NodeStatus::Contradictory);
     assert!(
@@ -117,10 +154,10 @@ fn cr_external_recentalive_converges_and_holds() {
 fn sig_minimal_tautology_is_contradictory() {
     let pt = fixture_theory("sig_minimal.spthy");
     let elab = crate::elaborate::elaborate(&pt).expect("elaborate");
-    let Some(h) = maude_with(elab.signature.maude_sig.clone()) else {
+    let Some(h) = maude_with(elab.signature.clone()) else {
         return;
     };
-    let root = prove_lemma(&pt, "a_self", h, 50).expect("prove");
+    let root = prove_lemma(&elab, "a_self", h, 50).expect("prove");
     assert_eq!(root.status, NodeStatus::Contradictory);
 }
 
@@ -130,7 +167,7 @@ fn sig_minimal_tautology_is_contradictory() {
 fn two_fresh_premises_in_one_rule_reach_solved() {
     let Some(h) = maude() else { return };
     let pt = fixture_theory("needs_constructor_simple.spthy");
-    let root = prove_lemma(&pt, "sent_exists", h, 200).expect("prove");
+    let root = prove_lemma(&elaborated(&pt), "sent_exists", h, 200).expect("prove");
     assert_eq!(root.status, NodeStatus::Solved);
 }
 
@@ -142,7 +179,7 @@ fn two_fresh_premises_in_one_rule_reach_solved() {
 fn intruder_pair_construction_reaches_solved() {
     let Some(h) = maude() else { return };
     let pt = fixture_theory("needs_constructor.spthy");
-    let root = prove_lemma(&pt, "pair_arrives", h, 2000).expect("prove");
+    let root = prove_lemma(&elaborated(&pt), "pair_arrives", h, 2000).expect("prove");
     assert_eq!(root.status, NodeStatus::Solved);
 }
 
@@ -233,7 +270,7 @@ end
         crate::constraint::solver::search::SysRetention::KeepAll,
     );
     let pt = tamarin_parser::parse_theory(src, &[]).expect("parse");
-    let root = prove_lemma(&pt, "always_A", h, 200).expect("prove");
+    let root = prove_lemma(&elaborated(&pt), "always_A", h, 200).expect("prove");
     // Root = the initial constraint system (the negated goal formula),
     // with the lemma's refined source kind — NOT an empty default.
     assert!(
@@ -273,8 +310,8 @@ lemma trivial:
 end
 "#;
     let parser_theory = tamarin_parser::parse_theory(src, &[]).expect("parse");
-    let root =
-        prove_lemma(&parser_theory, "trivial", h, 100).expect("prove_lemma should not error");
+    let root = prove_lemma(&elaborated(&parser_theory), "trivial", h, 100)
+        .expect("prove_lemma should not error");
 
     // Root method: under the `AvoidInduction` default (exists-trace
     // lemmas), Haskell's `rankProofMethods` tries Simplify first.
@@ -304,16 +341,105 @@ end
 fn session_from(src: &str) -> Option<ProverSession> {
     let h = maude()?;
     let pt = tamarin_parser::parse_theory(src, &[]).expect("parse");
-    ProverSession::build_with_in_file_and_heuristic(
-        &pt,
+    ProverSession::build_with_heuristic(
+        std::sync::Arc::new(elaborated(&pt)),
         h,
         None,
-        "",
         CliHeuristic::default(),
         crate::constraint::solver::context::CutStrategy::Dfs,
         None,
     )
     .ok()
+}
+
+#[test]
+fn session_context_factory_installs_lemma_state_without_mutating_template() {
+    let Some(session) = session_from(
+        "theory T begin\n\
+rule R: [ Fr(~k) ] --[ A(~k) ]-> [ ]\n\
+lemma inductive [use_induction]: \"All k #i. A(k) @ #i ==> A(k) @ #i\"\n\
+end",
+    ) else {
+        return;
+    };
+
+    assert_eq!(
+        session.template_context().use_induction,
+        crate::constraint::solver::context::UseInduction::AvoidInduction
+    );
+    let ctx = session.context_for_lemma("inductive").expect("context");
+    assert!(std::sync::Arc::ptr_eq(
+        &session.template_context().shared,
+        &ctx.shared
+    ));
+    assert_eq!(
+        ctx.use_induction,
+        crate::constraint::solver::context::UseInduction::UseInduction
+    );
+    assert_eq!(ctx.lemma_name, "inductive");
+    assert_eq!(
+        session.template_context().use_induction,
+        crate::constraint::solver::context::UseInduction::AvoidInduction
+    );
+    assert!(matches!(
+        session.context_for_lemma("missing"),
+        Err(ProveError::LemmaNotFound(name)) if name == "missing"
+    ));
+}
+
+/// HS `closeProtoRule` (lib/theory/src/Rule.hs:82-86, see line 84) builds
+/// `ClosedProtoRule ruE <$> maybeToList (variantsProtoRule hnd ruE)`, so a
+/// rule with no variants yields NO closed rule: it is in neither the closed
+/// theory nor the proof search.  The canonical case is a rule carrying both
+/// `Fr(~x)` and `In(~x)`, where `~x` cannot be sent before it is generated.
+/// `run.rs` drops such a rule from the internal theory before the session is
+/// built, and the session's rules are that theory's, so the drop reaches the
+/// proof context.
+#[test]
+fn a_no_variant_rule_is_absent_from_the_session() {
+    let Some(h) = maude() else { return };
+    let pt = tamarin_parser::parse_theory(
+        "theory T begin\n\
+rule Contradictory: [ Fr(~x), In(~x) ] --[ C(~x) ]-> [ Out(~x) ]\n\
+rule Setup: [ Fr(~k) ] --[ Setup(~k) ]-> [ Out(~k) ]\n\
+lemma trivial: exists-trace \"Ex k #i. Setup(k) @ #i\"\n\
+end",
+        &[],
+    )
+    .expect("parse");
+    let mut theory = elaborated(&pt);
+    let no_variant: Vec<String> = theory
+        .rules()
+        .filter(|r| {
+            crate::tools::rule_variants::rule_has_no_variants_for_wf_with(&h, &r.rule, None)
+        })
+        .map(|r| r.name().to_string())
+        .collect();
+    assert_eq!(no_variant, vec!["Contradictory".to_string()]);
+    theory.items.retain(|i| match i {
+        crate::theory::TheoryItem::Rule(r) => !no_variant.iter().any(|n| n == r.name()),
+        _ => true,
+    });
+
+    let session = ProverSession::build_with_heuristic(
+        std::sync::Arc::new(theory),
+        h,
+        None,
+        CliHeuristic::default(),
+        crate::constraint::solver::context::CutStrategy::Dfs,
+        None,
+    )
+    .expect("session");
+    let names: Vec<&str> = session.theory.rules().map(|r| r.name()).collect();
+    assert_eq!(names, vec!["Setup"]);
+    assert!(
+        !session
+            .template_ctx
+            .rules
+            .iter()
+            .any(|r| r.name() == "Contradictory"),
+        "the dropped rule must not reach the template proof context"
+    );
 }
 
 const SHARED_KEY_TWO_LEMMAS: &str = "theory T begin\n\
@@ -350,6 +476,21 @@ fn presaturate_dedups_shared_source_key() {
         hit,
         "lemma b must restore from the pre-seeded shared-key cache"
     );
+    let cache = session.source_cache.lock().unwrap();
+    let cached = cache
+        .values()
+        .next()
+        .and_then(|entry| entry.sources.first())
+        .expect("cached source");
+    let restored = ctx
+        .full_sources
+        .iter()
+        .find(|source| source.goal == cached.0)
+        .expect("restored source");
+    assert!(std::sync::Arc::ptr_eq(
+        &cached.1,
+        &restored.cases_shared_or_empty()
+    ));
 }
 
 /// A lemma that would emit a bare `sorry` (not a `--prove` target and with
@@ -468,7 +609,12 @@ fn validate_cli_heuristic_accepts_and_rejects_like_filter_heuristic() {
         raw: Some(raw.to_string()),
         ..CliHeuristic::default()
     };
-    let t = |name: &str| crate::tactic::Tactic::parse(name, "");
+    let t = |name: &str| crate::tactic::Tactic {
+        name: name.to_string(),
+        presort: 's',
+        prios: Vec::new(),
+        deprios: Vec::new(),
+    };
     // Every identifier char, compact runs included; a declared tactic.
     assert_eq!(validate_cli_heuristic(&cli("sSoOpPcCiI"), &[]), Ok(()));
     assert_eq!(
@@ -501,4 +647,86 @@ fn validate_cli_heuristic_accepts_and_rejects_like_filter_heuristic() {
     // Unterminated brace.
     let e = validate_cli_heuristic(&cli("{oops"), &[]).unwrap_err();
     assert!(e.contains("unterminated '{'"), "{e}");
+}
+
+#[test]
+fn cli_oracles_are_cwd_relative() {
+    use crate::constraint::solver::goals::GoalRanking;
+
+    let root = std::env::temp_dir().join(format!(
+        "tamarin_rs_cli_default_oracle_{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let theory = root.join("protocol.spthy");
+    std::fs::write(&theory, "theory T begin end").unwrap();
+    std::fs::write(root.join("protocol.oracle"), "#!/bin/sh\n").unwrap();
+
+    let cli = CliHeuristic {
+        raw: Some("o".to_string()),
+        ..CliHeuristic::default()
+    };
+    let rankings = resolve_cli_heuristic(&cli, theory.to_str().unwrap(), &[]).unwrap();
+    assert!(matches!(
+        &rankings[0],
+        GoalRanking::Oracle { oracle_path, .. }
+            if oracle_path == "./oracle"
+    ));
+
+    let explicit = CliHeuristic {
+        raw: Some("o".to_string()),
+        oracle_name: Some("chosen.oracle".to_string()),
+        ..CliHeuristic::default()
+    };
+    let rankings = resolve_cli_heuristic(&explicit, theory.to_str().unwrap(), &[]).unwrap();
+    assert!(matches!(
+        &rankings[0],
+        GoalRanking::Oracle { oracle_path, .. } if oracle_path == "./chosen.oracle"
+    ));
+
+    let compact = CliHeuristic {
+        raw: Some("so".to_string()),
+        oracle_name: Some("chosen.oracle".to_string()),
+        ..CliHeuristic::default()
+    };
+    let rankings = resolve_cli_heuristic(&compact, theory.to_str().unwrap(), &[]).unwrap();
+    assert!(matches!(
+        &rankings[1],
+        GoalRanking::Oracle {
+            oracle_path,
+            display_path: Some(display_path),
+            ..
+        } if oracle_path == "./chosen.oracle" && display_path == "./chosen.oracle"
+    ));
+
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn in_file_oracle_work_dir_depends_on_token_form() {
+    use crate::constraint::solver::goals::GoalRanking;
+
+    let mut rankings = vec![
+        GoalRanking::Oracle {
+            quit_on_empty: false,
+            oracle_path: "oracle".to_string(),
+            display_path: None,
+        },
+        GoalRanking::Oracle {
+            quit_on_empty: false,
+            oracle_path: "oracle".to_string(),
+            display_path: Some("./oracle".to_string()),
+        },
+    ];
+    prepend_theory_dir_to_oracle_paths(&mut rankings, "dir/theory.spthy");
+
+    assert!(matches!(
+        &rankings[0],
+        GoalRanking::Oracle { oracle_path, .. } if oracle_path == "dir/oracle"
+    ));
+    assert!(matches!(
+        &rankings[1],
+        GoalRanking::Oracle { oracle_path, .. } if oracle_path == "./oracle"
+    ));
 }

@@ -1013,3 +1013,263 @@ end
     let entries: Vec<_> = std::fs::read_dir(dir.join("out")).unwrap().collect();
     assert!(entries.is_empty(), "--parse-only must write no -O files");
 }
+
+/// A `_restrict` action atom whose time point is FREE.  HS's `Traversable
+/// (ProtoAtom s)` is `Action <$> f i <*> traverse f fa`
+/// (Theory/Model/Atom.hs:139-140) and its `Foldable` folds in the same order
+/// (Theory/Model/Atom.hs:130-131), so `rewrite` abstracts the time point into
+/// the first fresh variable and `freesList` puts it first in the generated
+/// fact: the restriction reads `Restr_A_1( x, x.1 )` over `B( x.1 ) @ x`, and
+/// the rule's appended action reads `Restr_A_1( #i, f(x, y) )`.  A `_restrict`
+/// whose time point is bound mints no fresh variable for it and cannot tell
+/// the two orders apart.
+#[test]
+fn restrict_abstracts_the_timepoint_first() {
+    assert_transcript(
+        "restrict_abstracts_the_timepoint_first",
+        &[(
+            "p16_restrict_timepoint.spthy",
+            r#"theory RestrictTimepoint
+begin
+
+functions: f/2
+
+rule A:
+  [ Fr(~k), In(x), In(y) ] --[ _restrict(B(f(x,y)) @ #i), S(~k) ]-> [ Out(~k) ]
+
+end
+"#,
+        )],
+        &["p16_restrict_timepoint.spthy"],
+        r#"theory RestrictTimepoint
+
+begin
+
+// Function signature and definition of the equational theory E
+
+functions: f/2, fst/1, pair/2, snd/1
+equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
+
+function: f (Any, Any) : Any   
+
+restriction Restr_A_1:
+  "∀ x #NOW x.1. (Restr_A_1( x, x.1 ) @ #NOW) ⇒ (B( x.1 ) @ x)"
+  // safety formula
+
+rule (modulo E) A:
+   [ Fr( ~k ), In( x ), In( y ) ]
+  --[ S( ~k ), Restr_A_1( #i, f(x, y) ) ]->
+   [ Out( ~k ) ]
+
+end
+"#,
+        r#"[Theory RestrictTimepoint] Theory loaded
+"#,
+    );
+}
+
+/// A predicate use site whose argument names a variable the predicate body
+/// also binds.  HS `expandFormula` (Theory/Syntactic/Predicate.hs:82-105)
+/// splices the body under `compSubst`'s De Bruijn shift and renames nothing,
+/// so the two stay apart — the body's binder is an index, the use-site `z` is
+/// free — and the printer gives the binder the next display index, `z.1`.
+/// The multiset `(<)` reaches the same expansion through the built-in
+/// `Smaller` predicate (Theory/Text/Parser/Formula.hs:30-38), whose body binds
+/// `z` as well.  Both the quoted lemma formula and its guarded block carry
+/// that spelling.
+#[test]
+fn predicates_and_smaller_echo() {
+    assert_transcript(
+        "predicates_and_smaller_echo",
+        &[(
+            "p17_pred_capture.spthy",
+            r#"theory S6PredCapture
+begin
+
+builtins: multiset
+
+predicates: P(x) <=> Ex z #i. Act(x, z) @ #i
+
+lemma cap:
+  "All z #j. Start(z) @ #j ==> P(z)"
+
+lemma mset:
+  "All y #j. Start(y) @ #j ==> Smaller(z, y)"
+
+end
+"#,
+        )],
+        &["p17_pred_capture.spthy"],
+        r#"theory S6PredCapture
+
+begin
+
+// Function signature and definition of the equational theory E
+
+builtins: multiset
+functions: fst/1, pair/2, snd/1
+equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
+
+builtin  multiset
+
+predicate: P( x )<=>∃ z #i. Act( x, z ) @ #i
+
+lemma cap:
+  all-traces "∀ z #j. (Start( z ) @ #j) ⇒ (∃ z.1 #i. Act( z, z.1 ) @ #i)"
+/*
+guarded formula characterizing all counter-examples:
+"∃ z #j. (Start( z ) @ #j) ∧ ∀ z.1 #i. (Act( z, z.1 ) @ #i) ⇒ ⊥"
+*/
+by sorry
+
+lemma mset:
+  all-traces "∀ y #j. (Start( y ) @ #j) ⇒ (∃ z.1. y = (z++z.1))"
+/*
+guarded formula characterizing all counter-examples:
+"∃ y #j. (Start( y ) @ #j) ∧ ∀ z.1. (y = (z++z.1)) ⇒ ⊥"
+*/
+by sorry
+
+end
+"#,
+        r#"[Theory S6PredCapture] Theory loaded
+"#,
+    );
+}
+
+/// The open theory's lemma and restriction carry the formula as the source
+/// wrote it: HS's `_lOriginalFormula` / `_rstrOriginalFormula` are `Nothing`
+/// before `applyMacroInLemma` / `applyMacroInRestriction` run at close time
+/// (lib/theory/src/Lemma.hs:83-88, Theory/Model/Restriction.hs:164-166), so
+/// `prettyLemma`'s quoted line and guarded block (lib/theory/src/Lemma.hs:
+/// 116-141) and `prettyRestriction`'s body (TheoryObject.hs:889-901) all show
+/// the macro CALL, and the `expanded formula:` block that block's `Just _`
+/// guard controls is not written.
+#[test]
+fn macro_lemma_and_restriction_quote_the_unexpanded_formula() {
+    assert_transcript(
+        "macro_lemma_and_restriction_quote_the_unexpanded_formula",
+        &[(
+            "p24_macro_view.spthy",
+            r#"theory MacroView
+begin
+
+functions: h/1
+macros: m1(x) = h(x), m2(x, y) = <m1(x), y>
+
+rule A:
+  [ ] --[ A(m2('a', 'b')) ]-> [ ]
+
+restriction rst:
+  "All z #i #j. A(z) @ i & A(m2('a', 'b')) @ j ==> #i = #j"
+
+lemma lem:
+  all-traces
+  "All z #i. A(z) @ i ==> z = m2('a', 'b')"
+
+end
+"#,
+        )],
+        &["p24_macro_view.spthy"],
+        r#"theory MacroView
+
+begin
+
+// Function signature and definition of the equational theory E
+
+functions: fst/1, h/1, pair/2, snd/1
+equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
+
+function: h (Any) : Any   
+
+macros: m1( x ) =  h(x),
+        m2( x, y ) =  <m1(x), y>
+
+rule (modulo E) A:
+   [ ] --[ A( m2('a', 'b') ) ]-> [ ]
+
+restriction rst:
+  "∀ z #i #j. ((A( z ) @ #i) ∧ (A( m2('a', 'b') ) @ #j)) ⇒ (#i = #j)"
+  // safety formula
+
+lemma lem:
+  all-traces "∀ z #i. (A( z ) @ #i) ⇒ (z = m2('a', 'b'))"
+/*
+guarded formula characterizing all counter-examples:
+"∃ z #i. (A( z ) @ #i) ∧ ¬(z = m2('a', 'b'))"
+*/
+by sorry
+
+end
+"#,
+        r#"[Theory MacroView] Theory loaded
+"#,
+    );
+}
+
+/// A rule written with a manual `variants (modulo AC)` block, which the parser
+/// stores as the rule item's `_oprRuleAC` list (`protoRule`,
+/// Theory/Text/Parser/Rule.hs:126-135).  `prettyOpenProtoRule`
+/// (OpenTheory.hs:814-820) prints several variants under `kwVariants` — the
+/// bare `variants` keyword (Theory/Text/Pretty.hs:146) — below the E rule, and
+/// prints a LONE variant through `prettyProtoRuleACasE`, which shows the
+/// variant's own name and body in place of the E rule's.
+#[test]
+fn manual_rule_variants_block_round_trips() {
+    assert_transcript(
+        "manual_rule_variants_block_round_trips",
+        &[(
+            "p25_manual_variants.spthy",
+            r#"theory ManualVariants
+begin
+
+functions: f/1
+
+rule R:
+  [ In( x ) ] --[ R( f(x) ) ]-> [ Out( f(x) ) ]
+ variants
+  rule (modulo AC) R___VARIANT_1:
+     [ In( f(y) ) ] --[ R( f(f(y)) ) ]-> [ Out( f(f(y)) ) ]
+  ,
+  rule (modulo AC) R___VARIANT_2:
+     [ In( 'c' ) ] --[ R( f('c') ) ]-> [ Out( f('c') ) ]
+
+rule S:
+  [ In( z ) ] --[ S( z ) ]-> [ ]
+ variants
+  rule (modulo AC) S___VARIANT_1:
+     [ In( 'd' ) ] --[ S( 'd' ) ]-> [ ]
+
+end
+"#,
+        )],
+        &["p25_manual_variants.spthy"],
+        r#"theory ManualVariants
+
+begin
+
+// Function signature and definition of the equational theory E
+
+functions: f/1, fst/1, pair/2, snd/1
+equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
+
+function: f (Any) : Any   
+
+rule (modulo E) R:
+   [ In( x ) ] --[ R( f(x) ) ]-> [ Out( f(x) ) ]
+ variants
+  rule (modulo AC) R___VARIANT_1:
+     [ In( f(y) ) ] --[ R( f(f(y)) ) ]-> [ Out( f(f(y)) ) ]
+  ,
+  rule (modulo AC) R___VARIANT_2:
+     [ In( 'c' ) ] --[ R( f('c') ) ]-> [ Out( f('c') ) ]
+
+rule (modulo E) S___VARIANT_1:
+   [ In( 'd' ) ] --[ S( 'd' ) ]-> [ ]
+
+end
+"#,
+        r#"[Theory ManualVariants] Theory loaded
+"#,
+    );
+}

@@ -46,7 +46,7 @@ use tamarin_term::function_symbols::{AcState, FunSym};
 use tamarin_term::lterm::LNTerm;
 use tamarin_term::maude_print::{fun_sym_encode_attr, pp_maude_ac_sym, pp_theory};
 use tamarin_term::term::Term;
-use tamarin_theory::elaborate::{elaborate, set_user_funs_for_theory, term_to_lnterm};
+use tamarin_theory::elaborate::{elaborate, term_to_lnterm};
 use tamarin_theory::pretty_theory::{web_proto_rules, web_signature_block};
 
 /// The Maude operator name the head of `t` serialises to — `tam`, the
@@ -65,11 +65,11 @@ fn head_maude_op(t: &LNTerm) -> String {
 }
 
 /// The Maude operator name of every action-fact argument of rule `rule`, in
-/// source order, resolved through the theory's own user-function bundle (the
-/// same install the load pipelines perform).
+/// source order, resolved against the theory's own signature (the one the
+/// load pipelines hand the converter).
 fn action_arg_ops(src: &str, rule: &str) -> Vec<String> {
     let thy = parse_theory(src, &[]).expect("parse");
-    let _guard = set_user_funs_for_theory(&thy);
+    let msig = elaborate(&thy).expect("elaborate").signature;
     let r = thy
         .items
         .iter()
@@ -81,7 +81,7 @@ fn action_arg_ops(src: &str, rule: &str) -> Vec<String> {
     r.actions
         .iter()
         .flat_map(|f| f.args.iter())
-        .map(|t| head_maude_op(&term_to_lnterm(t).expect("term converts")))
+        .map(|t| head_maude_op(&term_to_lnterm(t, &msig).expect("term converts")))
         .collect()
 }
 
@@ -91,8 +91,8 @@ fn signature_and_module(src: &str) -> (String, String) {
     let thy = parse_theory(src, &[]).expect("parse");
     let elaborated = elaborate(&thy).expect("elaborate");
     (
-        web_signature_block(&elaborated.signature.maude_sig),
-        pp_theory(&elaborated.signature.maude_sig),
+        web_signature_block(&elaborated.signature),
+        pp_theory(&elaborated.signature),
     )
 }
 
@@ -111,9 +111,8 @@ fn assert_module_declares(module: &str, op: &str) {
 /// computation, not on term resolution).
 fn rule_echoes(src: &str) -> Vec<String> {
     let thy = parse_theory(src, &[]).expect("parse");
-    let _guard = set_user_funs_for_theory(&thy);
     let elaborated = elaborate(&thy).expect("elaborate");
-    web_proto_rules(&thy, &elaborated)
+    web_proto_rules(&elaborated)
         .into_iter()
         .map(|rule| match rule.split_once("\n\n  /*") {
             Some((echo, _annotation)) => echo.to_string(),

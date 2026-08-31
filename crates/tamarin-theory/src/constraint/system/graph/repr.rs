@@ -339,7 +339,7 @@ pub fn add_intelligent_cluster_using_similar_names(repr: &mut GraphRepr) {
 // Building a basic repr from a System
 // ---------------------------------------------------------------------
 
-use crate::constraint::constraints::{cmp_goal, Goal};
+use crate::constraint::constraints::Goal;
 use crate::constraint::system::System;
 
 /// Port of `computeBasicGraphRepr` from `Graph.hs:140-150`.
@@ -372,8 +372,8 @@ pub(crate) fn compute_basic_graph_repr(sys: &System) -> GraphRepr {
     //
     // `unsolvedActionAtoms` (System.hs:1567-1571) walks `M.toList sGoals`, so
     // its action goals arrive in ascending `Goal` order; this crate's goal
-    // store is a `Vec` in insertion order, so sort with [`cmp_goal`] first.
-    // Filtering a `cmp_goal`-sorted list down to one constructor yields the
+    // store is a `Vec` in insertion order, so sort by `Ord Goal` first.
+    // Filtering an `Ord`-sorted list down to one constructor yields the
     // same sequence as sorting that constructor's goals among themselves, so
     // only the action goals need sorting here.
     //
@@ -387,7 +387,7 @@ pub(crate) fn compute_basic_graph_repr(sys: &System) -> GraphRepr {
         .filter(|(g, st)| !st.solved && g.is_action())
         .map(|(g, _)| g)
         .collect();
-    action_goals.sort_by(|a, b| cmp_goal(a, b));
+    action_goals.sort();
     let mut by_node: BTreeMap<NodeId, Vec<LNFact>> = BTreeMap::new();
     for g in action_goals {
         if let Goal::Action(nid, fa) = g {
@@ -456,9 +456,9 @@ pub(crate) fn compute_basic_graph_repr(sys: &System) -> GraphRepr {
     // HS `unsolvedChains` (System.hs:1600-1604) walks `M.toList sGoals`, so
     // its chain goals arrive in ascending `Goal` order — see step 2 for why
     // sorting the filtered subset reproduces that.  `Ord` on the
-    // `(NodeConc, NodePrem)` pair is exactly [`cmp_goal`]'s `Chain` arm, so
+    // `(NodeConc, NodePrem)` pair is exactly `Ord Goal`'s `Chain` arm, so
     // sorting the extracted pairs is the same order as sorting the goals.
-    let mut chains = sys.unsolved_chains();
+    let mut chains: Vec<_> = sys.unsolved_chains().collect();
     chains.sort();
     for (src, tgt) in chains {
         edges.push(GEdge::UnsolvedChain(src, tgt));

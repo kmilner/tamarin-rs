@@ -24,7 +24,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use tamarin_utils::fresh::FastFreshState;
+use tamarin_utils::fresh::{FastFreshState, MonadFresh};
 
 use tamarin_term::lterm::{LSort, LVar};
 use tamarin_theory::sapic::{
@@ -240,7 +240,7 @@ fn new_states(
         let newvar = LVar {
             name: STATE_CHANNEL_NAME,
             sort: LSort::Msg,
-            idx: fresh.fresh_ident(),
+            idx: fresh.fresh_ident(""),
         };
         map.insert(v.clone(), AnVar(newvar));
         declared.push((newvar, v.clone()));
@@ -359,7 +359,7 @@ fn is_pure_state(p: &AnnotatedProc, target: &SapicTerm, lone_insert: bool) -> (b
 }
 
 /// HS `annotatePureStates` (States.hs:192-196).
-pub fn annotate_pure_states(p: AnnotatedProc) -> AnnotatedProc {
+pub(crate) fn annotate_pure_states(p: AnnotatedProc) -> AnnotatedProc {
     if exists_attacker_unpure(&p, &BTreeSet::new()) {
         add_states_channels(p)
     } else if get_all_states(&p, &BTreeSet::new()).0.is_empty() {

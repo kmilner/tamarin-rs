@@ -2,28 +2,33 @@
 // of the tamarin-prover sources this file cites; list them with:
 //   scripts/gen_license_headers.py --authors <this file>
 
-//! Port of `Term.Substitution.SubstVFree` (the *generic* part — no LTerm
-//! dependency yet) from `lib/term/src/Term/Substitution/SubstVFree.hs`.
+//! Port of `Term.Substitution.SubstVFree` from
+//! `lib/term/src/Term/Substitution/SubstVFree.hs`.
 //!
 //! We model a substitution as a `BTreeMap<V, VTerm<C, V>>` and apply it via
 //! [`apply_vterm`], which preserves AC normal form by routing through the
-//! smart constructors in [`crate::term`].
+//! smart constructors in [`crate::term`].  The locally-nameless counterparts
+//! [`apply_bvterm`] and [`apply_bvar`] apply one to a term whose variables
+//! are [`BVar`]s.
 //!
-//! The Haskell `Apply` typeclass and the `LSubst`/`LNSubst` aliases live in
-//! later modules that depend on `LTerm`.
+//! The Haskell `Apply` typeclass is [`crate::apply`]; the `LSubst`/`LNSubst`
+//! aliases live in later modules that depend on `LTerm`.
 
 use std::collections::BTreeMap;
 
-use tamarin_utils::cow::cow_map_vec;
-
-use crate::function_symbols::FunSym;
-use crate::term::{f_app_ac, f_app_c, f_app_list, f_app_no_eq, lit, Term};
+use crate::apply::Apply;
+use crate::lterm::{BVar, HasFrees, LVar};
+use crate::term::{f_app, map_lits, Term};
 use crate::vterm::{Lit, VTerm};
 
 /// A substitution mapping variables of type `V` to terms of type
 /// `VTerm<C, V>`. The Haskell newtype is kept transparent here — callers
 /// usually want to inspect or build the mapping.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// HS `newtype Subst c v = Subst { sMap :: Map v (VTerm c v) }` derives
+/// `Eq`/`Ord` over the one map field (SubstVFree.hs:85-86); `BTreeMap`'s `Ord`
+/// compares ascending entries, as `Data.Map`'s does.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Subst<C, V> {
     map: BTreeMap<V, VTerm<C, V>>,
 }
@@ -57,8 +62,8 @@ where
     }
 
     /// `substFromMap`: drop trivial `x ~> x` mappings.
-    pub fn from_map(m: BTreeMap<V, VTerm<C, V>>) -> Self {
-        let m = m.into_iter().filter(|(v, t)| !equal_to_var(t, v)).collect();
+    pub fn from_map(mut m: BTreeMap<V, VTerm<C, V>>) -> Self {
+        m.retain(|v, t| !equal_to_var(t, v));
         Subst { map: m }
     }
 
@@ -149,123 +154,106 @@ where
     }
 }
 
+/// `instance Ord c => HasFrees (LSubst c)` (SubstVFree.hs:259-264).
+///
+/// The walk is the `M.Map` instance (LTerm.hs:905-909): each entry's key
+/// before its value, in ascending key order.  The map rebuilds every entry as
+/// a pair — key then value (LTerm.hs:855-860) — and goes back through
+/// `substFromList`, which drops any binding the map turned into `x ~> x`.
+impl<C: Ord + Clone> HasFrees for Subst<C, LVar> {
+    fn for_each_free(&self, f: &mut dyn FnMut(&LVar)) {
+        for (v, t) in self.map.iter() {
+            v.for_each_free(f);
+            t.for_each_free(f);
+        }
+    }
+
+    fn map_free_with(self, f: &mut dyn FnMut(LVar) -> LVar, monotone: bool) -> Self {
+        let mut pairs = Vec::with_capacity(self.map.len());
+        for (v, t) in self.map {
+            let v = v.map_free_with(f, monotone);
+            let t = t.map_free_with(f, monotone);
+            pairs.push((v, t));
+        }
+        Subst::from_list(pairs)
+    }
+}
+
 /// Whether `t` is just the literal variable `v`.
 fn equal_to_var<C, V: PartialEq>(t: &VTerm<C, V>, v: &V) -> bool {
     matches!(t, Term::Lit(Lit::Var(w)) if w == v)
 }
 
-/// `applyLit`: substitute a single literal.
-///
-/// Intentionally retained: faithful HS port of `applyLit` (SubstVFree.hs); no
-/// caller yet (the hot substitution path uses [`apply_vterm_map`]).
-pub fn apply_lit<C: Ord + Clone, V: Ord + Clone>(s: &Subst<C, V>, l: &Lit<C, V>) -> VTerm<C, V> {
-    match l {
-        Lit::Var(v) => match s.map.get(v) {
-            Some(t) => t.clone(),
-            None => lit(Lit::Var(v.clone())),
-        },
-        Lit::Con(c) => lit(Lit::Con(c.clone())),
-    }
-}
-
 /// `applyVTerm`: substitute through a whole term, re-AC-normalising.
 pub fn apply_vterm<C: Ord + Clone, V: Ord + Clone>(s: &Subst<C, V>, t: VTerm<C, V>) -> VTerm<C, V> {
-    apply_vterm_map(&s.map, t)
+    t.apply(s)
 }
 
-/// `applyVTerm` with change detection: returns `Some(new_term)` only when
-/// `s` actually changes `t`, and `None` when `t` is left structurally
-/// unchanged.  The borrowing, non-cloning counterpart of [`apply_vterm`] —
-/// callers reuse the original `t` on `None` instead of cloning it and
-/// deep-comparing against the applied result.  Thin single-term wrapper over
-/// [`apply_vterm_map_changed`], sharing its exact `None`-when-unchanged
-/// convention (empty/absent binding ⇒ `None`).
+/// `applyVTerm` with change detection: `Some(new_term)` only when `s` actually
+/// changes `t`, and `None` when `t` is left structurally unchanged.  The
+/// borrowing, non-cloning counterpart of [`apply_vterm`] — callers reuse the
+/// original `t` on `None` instead of cloning it and deep-comparing against the
+/// applied result.
 pub fn apply_vterm_changed<C: Ord + Clone, V: Ord + Clone>(
     s: &Subst<C, V>,
     t: &VTerm<C, V>,
 ) -> Option<VTerm<C, V>> {
-    apply_vterm_map_changed(&s.map, t)
+    t.apply_changed(s)
 }
 
-/// `applyVTerm` against a raw substitution map — the borrowing
-/// counterpart of [`apply_vterm`], producing byte-identical output.
-///
-/// Two short-circuits mirror Haskell's `applyVTerm` (SubstVFree.hs) so we
-/// only allocate on the part of the term the substitution actually touches:
-///
-/// 1. **Empty-map fast path:** an empty substitution is the identity, so we
-///    return `t` untouched (it is already AC-normal).
-/// 2. **Unchanged-subterm sharing:** [`apply_vterm_map_changed`] returns
-///    `None` when the substitution leaves a subterm structurally unchanged;
-///    in that case we reuse the original `Arc<[_]>` instead of rebuilding and
-///    re-AC-sorting it.  This is sound because an unchanged term is already in
-///    AC-normal form, and the resulting *value* is identical to the
-///    full-rebuild path (only the `Arc` identity differs, which is invisible
-///    to callers and to `--prove` output).
-///
-/// They matter because the solver applies the (idempotent) eq-store
-/// substitution across the whole constraint system on every step; without
-/// the short-circuits that reallocates and re-AC-sorts every node even when
-/// nothing changed, dominating the allocator in DH/classic/xor theories.
+/// `applyVTerm` against a raw substitution map — the entry point the
+/// unification accumulator and the variant-subst walks use, where the mapping
+/// exists only as a `BTreeMap`.
 pub fn apply_vterm_map<C: Ord + Clone, V: Ord + Clone>(
     map: &BTreeMap<V, VTerm<C, V>>,
     t: VTerm<C, V>,
 ) -> VTerm<C, V> {
-    if map.is_empty() {
-        return t;
-    }
-    match apply_vterm_map_changed(map, &t) {
-        Some(changed) => changed,
-        None => t,
+    t.apply(map)
+}
+
+/// HS's overlappable `Apply s (BVar v)` (SubstVFree.hs:293-295): a bound De
+/// Bruijn index is left alone, and a free variable is rewritten by the
+/// `Apply s v` instance the caller passes in — `Apply (Subst c v) v`
+/// (SubstVFree.hs:279-285) for a plain variable, `Apply (Subst Name LVar)
+/// SapicLVar` (Theory/Sapic/Term.hs:115-117) for a variable that carries a
+/// type tag the rewrite preserves.
+pub fn apply_bvar<V>(v: &BVar<V>, apply_free: &mut dyn FnMut(&V) -> V) -> BVar<V> {
+    match v {
+        BVar::Bound(i) => BVar::Bound(*i),
+        BVar::Free(v) => BVar::Free(apply_free(v)),
     }
 }
 
-/// Apply `map` to `t`, returning `Some(new_term)` only when the substitution
-/// actually changes `t`, and `None` when `t` is left structurally unchanged.
-///
-/// Callers reuse the original term (sharing its `Arc`) on `None`.  An `App`
-/// node is rebuilt — and re-AC-normalised through the smart constructors,
-/// exactly as the non-sharing path did — only when at least one child changed.
-fn apply_vterm_map_changed<C: Ord + Clone, V: Ord + Clone>(
-    map: &BTreeMap<V, VTerm<C, V>>,
-    t: &VTerm<C, V>,
-) -> Option<VTerm<C, V>> {
+/// HS's overlapping `Apply (Subst c v) (VTerm c (BVar v))`
+/// (SubstVFree.hs:297-302): replace every free literal in the substitution's
+/// domain by its image, lifted back into `BVar` form with `fmapTerm (fmap
+/// Free)`.  A bound index is not in the domain, so a binder cannot capture an
+/// image variable.  The rebuild goes through [`f_app`], as HS's `bindTerm`
+/// (Term/Term/Raw.hs:219-221) does, so AC argument lists are flattened and
+/// re-sorted under the images.
+pub fn apply_bvterm<C: Ord + Clone, V: Ord + Clone>(
+    s: &Subst<C, V>,
+    t: &VTerm<C, BVar<V>>,
+) -> VTerm<C, BVar<V>> {
     match t {
-        Term::Lit(l) => apply_lit_map_changed(map, l),
-        Term::App(fsym, args) => {
-            // COW-rebuild the argument vector: the shared `cow_map_vec` helper
-            // clones only the unchanged prefix on the first change and returns
-            // `None` when every child is left structurally unchanged.
-            cow_map_vec(&args[..], |a| apply_vterm_map_changed(map, a)).map(|mapped| match fsym {
-                FunSym::Ac(o) => f_app_ac(*o, mapped),
-                FunSym::C(o) => f_app_c(*o, mapped),
-                FunSym::NoEq(o) => f_app_no_eq(*o, mapped),
-                FunSym::List => f_app_list(mapped),
-            })
-        }
-    }
-}
-
-/// `applyLit` against a raw map, returning `Some` only when the literal is a
-/// domain variable (and thus replaced).  The borrowing counterpart of
-/// [`apply_lit`] used by the sharing recursion above.
-///
-/// `from_map`/`from_list` drop trivial `x ~> x` entries and the unification
-/// accumulator never inserts one, so a found binding is always a genuine
-/// change — making `Some`/`None` here exactly track "did the term change".
-fn apply_lit_map_changed<C: Ord + Clone, V: Ord + Clone>(
-    map: &BTreeMap<V, VTerm<C, V>>,
-    l: &Lit<C, V>,
-) -> Option<VTerm<C, V>> {
-    match l {
-        Lit::Var(v) => map.get(v).cloned(),
-        Lit::Con(_) => None,
+        Term::Lit(Lit::Var(BVar::Free(v))) => match s.image_of(v) {
+            Some(image) => map_lits(image, &mut |l| match l {
+                Lit::Con(c) => Lit::Con(c.clone()),
+                Lit::Var(w) => Lit::Var(BVar::Free(w.clone())),
+            }),
+            None => t.clone(),
+        },
+        Term::Lit(_) => t.clone(),
+        Term::App(fsym, args) => f_app(
+            *fsym,
+            args.iter().map(|a| apply_bvterm(s, a)).collect::<Vec<_>>(),
+        ),
     }
 }
 
 /// Pass-invariant hashed lookup view over a [`Subst`].
 ///
-/// [`apply_vterm_map_changed`] pays a `BTreeMap` descent per `Lit::Var`
+/// [`apply_vterm_map`] pays a `BTreeMap` descent per `Lit::Var`
 /// leaf — `LVar`-style keys compare idx-then-sort-then-name, so each probe
 /// is ~log n pointer-chasing node hops of multi-field compares.
 /// Whole-system passes (`subst_system_once`, `rename_precise_system`
@@ -275,11 +263,11 @@ fn apply_lit_map_changed<C: Ord + Clone, V: Ord + Clone>(
 ///
 /// Value-identity: the view borrows the same `(var, term)` entries as the
 /// backing `BTreeMap` (`Hash`/`Eq` on `V` agree with the map's key
-/// equality), and [`Self::apply_changed`] mirrors
-/// [`apply_vterm_map_changed`]'s recursion and `None`-when-unchanged
-/// convention exactly — only the leaf-probe container differs, which is
-/// invisible to callers.  The view is consumed by keyed `get` only (never
-/// iterated), so the hash order cannot reach output.
+/// equality), and [`Self::apply_changed`] runs the same [`Apply`] instance
+/// as [`apply_vterm_map`] does, down to the `None`-when-unchanged
+/// convention — only the leaf-probe container differs, which is invisible
+/// to callers.  The view is consumed by keyed `get` only (never iterated),
+/// so the hash order cannot reach output.
 ///
 /// Memory: a pass-local of `subst.len()` borrowed pointer pairs, dropped
 /// with the pass — no persistence, no growth across steps.
@@ -311,34 +299,16 @@ where
         self.map.get(v).copied()
     }
 
-    /// [`apply_vterm_map`] against the view: same empty-map fast path, same
+    /// [`apply_vterm`] against the view: same empty-map fast path, same
     /// reuse-original-on-unchanged behaviour, byte-identical output.
     pub fn apply(&self, t: VTerm<C, V>) -> VTerm<C, V> {
-        if self.map.is_empty() {
-            return t;
-        }
-        match self.apply_changed(&t) {
-            Some(changed) => changed,
-            None => t,
-        }
+        t.apply(self)
     }
 
-    /// [`apply_vterm_map_changed`] against the view: identical recursion,
-    /// identical `Some`-iff-rebuilt convention; only the per-leaf probe
-    /// container differs.
+    /// [`apply_vterm_changed`] against the view: same `Some`-iff-rebuilt
+    /// convention; only the per-leaf probe container differs.
     pub fn apply_changed(&self, t: &VTerm<C, V>) -> Option<VTerm<C, V>> {
-        match t {
-            Term::Lit(Lit::Var(v)) => self.map.get(v).map(|img| (*img).clone()),
-            Term::Lit(Lit::Con(_)) => None,
-            Term::App(fsym, args) => {
-                cow_map_vec(&args[..], |a| self.apply_changed(a)).map(|mapped| match fsym {
-                    FunSym::Ac(o) => f_app_ac(*o, mapped),
-                    FunSym::C(o) => f_app_c(*o, mapped),
-                    FunSym::NoEq(o) => f_app_no_eq(*o, mapped),
-                    FunSym::List => f_app_list(mapped),
-                })
-            }
-        }
+        t.apply_changed(self)
     }
 }
 
@@ -357,6 +327,42 @@ mod tests {
         let s: Subst<C, V> = Subst::empty();
         let t: VTerm<C, V> = f_app_no_eq(pair_sym(), vec![var_term("x"), const_term(1)]);
         assert_eq!(apply_vterm(&s, t.clone()), t);
+    }
+
+    /// `foldFrees f = foldFrees f . sMap` (SubstVFree.hs:261) through the
+    /// `M.Map` instance (LTerm.hs:905-909): ascending key order, and inside an
+    /// entry the key before its value.
+    #[test]
+    fn subst_folds_key_then_value_ascending() {
+        use crate::lterm::{frees_list, LSort};
+        let v = |n: &'static str, i: u64| LVar::new(n, LSort::Msg, i);
+        // `Ord LVar` compares the index first (LTerm.hs:546-548), so `b.0` is
+        // the smaller key even though `a` sorts before `b` by name.
+        let s: Subst<C, LVar> = Subst::from_list(vec![
+            (v("a", 1), var_term(v("x", 4))),
+            (v("b", 0), var_term(v("y", 3))),
+        ]);
+        assert_eq!(
+            frees_list(&s),
+            vec![v("b", 0), v("y", 3), v("a", 1), v("x", 4)]
+        );
+    }
+
+    /// `mapFrees f = (substFromList <$>) . mapFrees f . substToList`
+    /// (SubstVFree.hs:264): the rebuild goes back through `substFromList`, so
+    /// an entry the map turned into `x ~> x` disappears.
+    #[test]
+    fn subst_map_drops_identity_bindings() {
+        use crate::lterm::LSort;
+        let v = |n: &'static str, i: u64| LVar::new(n, LSort::Msg, i);
+        let s: Subst<C, LVar> = Subst::from_list(vec![
+            (v("x", 0), var_term(v("y", 1))),
+            (v("z", 2), const_term(7)),
+        ]);
+        // Every variable goes to `y.1`, which makes the first entry
+        // `y.1 ~> y.1` and leaves the second one `y.1 ~> 7`.
+        let mapped = s.map_free(&mut |_| v("y", 1));
+        assert_eq!(mapped.to_list(), vec![(v("y", 1), const_term(7))]);
     }
 
     #[test]
@@ -413,6 +419,45 @@ mod tests {
         }
         assert_eq!(view.image_of(&"x"), s.image_of(&"x"));
         assert_eq!(view.image_of(&"w"), s.image_of(&"w"));
+    }
+
+    /// `applyBLLit` (SubstVFree.hs:299-301) replaces a `Free` literal in the
+    /// domain by its image, lifted back into `BVar` form; a `Bound` index and
+    /// a constant are literals it hands back untouched.
+    #[test]
+    fn apply_bvterm_replaces_free_lits_and_keeps_bound_indices() {
+        let s: Subst<C, V> = Subst::from_list(vec![(
+            "x",
+            f_app_no_eq(pair_sym(), vec![var_term("a"), const_term(2)]),
+        )]);
+        let inner: VTerm<C, BVar<V>> = f_app_no_eq(
+            pair_sym(),
+            vec![var_term(BVar::Bound(0)), var_term(BVar::Free("y"))],
+        );
+        let t: VTerm<C, BVar<V>> =
+            f_app_no_eq(pair_sym(), vec![var_term(BVar::Free("x")), inner.clone()]);
+        let image: VTerm<C, BVar<V>> =
+            f_app_no_eq(pair_sym(), vec![var_term(BVar::Free("a")), const_term(2)]);
+        assert_eq!(
+            apply_bvterm(&s, &t),
+            f_app_no_eq(pair_sym(), vec![image, inner])
+        );
+    }
+
+    /// `bindTerm` rebuilds every application through `fApp`
+    /// (Term/Term/Raw.hs:219-221), so an AC argument list is re-sorted under
+    /// the images instead of keeping the positions of the original arguments.
+    #[test]
+    fn apply_bvterm_resorts_ac_arguments_after_a_rewrite() {
+        // Stored AC-sorted as [Con 3, Var (Free "x")]; the image `Con 1` sorts
+        // in front of `Con 3`.
+        let t: VTerm<C, BVar<V>> =
+            f_app_ac(AcSym::Mult, vec![var_term(BVar::Free("x")), const_term(3)]);
+        let s: Subst<C, V> = Subst::from_list(vec![("x", const_term(1))]);
+        let Term::App(_, args) = apply_bvterm(&s, &t) else {
+            panic!("expected the AC application");
+        };
+        assert_eq!(&*args, &[const_term(1), const_term(3)][..]);
     }
 
     #[test]

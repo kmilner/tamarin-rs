@@ -43,14 +43,7 @@ repo_root="$(cd "$script_dir/.." && pwd)"
 DRY_RUN="${DRY_RUN:-}"
 MAUDE="${MAUDE_PATH:-/home/linuxbrew/.linuxbrew/bin/maude}"
 
-find_hs_bin() {
-    local root="$1" c
-    for c in "$root"/tamarin-prover-testing/.stack-work/install/*/*/*/bin/tamarin-prover \
-             "$root"/tamarin-prover-testing/.stack-work/dist/*/ghc-*/build/tamarin-prover/tamarin-prover; do
-        [ -x "$c" ] && { echo "$c"; return 0; }
-    done; return 1
-}
-HS_PATH="${HS_PATH:-$(find_hs_bin "$repo_root")}" || true
+HS_PATH=$(resolve_hs_oracle "$repo_root") || exit 2
 [ -x "${HS_PATH:-/nonexistent}" ] || {
     echo "migrate_hs_cache_fp: no HS oracle binary (set HS_PATH) — the new key IS its fingerprint, so there is nothing to migrate onto" >&2
     exit 2
@@ -69,8 +62,7 @@ rev_check() {
     local pin binrev
     pin=$(git -C "$repo_root" rev-parse :tamarin-prover 2>/dev/null) || pin=
     if [ -x "$MAUDE" ]; then
-        binrev=$(timeout 60 "$HS_PATH" --with-maude="$MAUDE" --version 2>/dev/null \
-                 | sed -n 's/^Git revision: \([^,]*\),.*/\1/p')
+        binrev=$(oracle_revision "$HS_PATH" "$MAUDE")
     else
         binrev=""
     fi

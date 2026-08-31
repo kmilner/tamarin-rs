@@ -4,7 +4,7 @@
 
 use super::*;
 use crate::constraint::system::System;
-use crate::test_maude::maude_path;
+use tamarin_test_support::require_maude_path;
 
 #[test]
 fn single_goal_returned() {
@@ -73,7 +73,7 @@ fn dispatch_solve_goal_marks_solved_then_routes() {
     use crate::constraint::solver::reduction::{GoalCases, Reduction};
     use tamarin_term::maude_sig::pair_maude_sig;
 
-    let path = match maude_path() {
+    let path = match require_maude_path() {
         Some(p) => p,
         None => return,
     };
@@ -91,135 +91,6 @@ fn dispatch_solve_goal_marks_solved_then_routes() {
     assert!(
         r.sys.goals.iter().any(|(gg, st)| gg == &g && st.solved),
         "the goal must be marked solved even on the contradictory route"
-    );
-}
-
-// =========================================================================
-// Haskell-faithfulness invariants for Goal-Ord.
-//
-// Haskell `data Goal` (Constraints.hs:159-172) declares variants in
-// this exact order, and derives `Ord`:
-//
-//     data Goal = ActionG _ _
-//               | ChainG _ _
-//               | PremiseG _ _
-//               | SplitG _
-//               | DisjG _
-//               | SubtermG _
-//               deriving( ..., Ord, ... )
-//
-// So the constructor tag order is:
-//     Action < Chain < Premise < Split < Disj < Subterm
-//
-// Rust's `Goal` (constraints.rs) derives no `Ord`; `goal_cmp`
-// (goals.rs) hand-codes the tag function, and it is the comparator
-// every goal sort in the solver goes through (pretty_system,
-// rename_precise, sources, reduction).  Any divergence between it and
-// the HS declaration order silently sorts goals differently than
-// Haskell.
-// =========================================================================
-
-/// Pin Haskell's Goal-Ord tag order: Action < Chain < Premise < Split
-/// < Disj < Subterm.
-///
-/// This is the exact order from Constraints.hs:159-172.  `goal_cmp`
-/// orders every goal list the solver sorts, so this tag ranking decides
-/// which goal each step picks — and hence the proof shape.
-#[test]
-fn goal_cmp_tag_order_matches_haskell_declaration() {
-    use crate::constraint::constraints::{Disj, NodeId, SplitId};
-    use crate::fact::{FactTag, LNFact, Multiplicity};
-    use crate::rule::{ConcIdx, PremIdx};
-    use std::cmp::Ordering;
-    use tamarin_term::lterm::{LSort, LVar};
-
-    // Build one minimal instance of each Goal variant.
-    let v: LVar = LVar::new("k", LSort::Msg, 0);
-    let n: NodeId = LVar::new("i", LSort::Node, 0);
-    let f: LNFact = LNFact::new(FactTag::Proto(Multiplicity::Linear, "F", 0), vec![]);
-
-    let action: Goal = Goal::Action(v, f.clone());
-    let chain: Goal = Goal::Chain((n, ConcIdx(0)), (n, PremIdx(0)));
-    let premise: Goal = Goal::Premise((n, PremIdx(0)), f.clone());
-    let split: Goal = Goal::Split(SplitId(0));
-    let disj: Goal = Goal::Disj(Disj::<crate::guarded::Guarded>::new(vec![]));
-    // Use plain msg vars for the Subterm pair.
-    let sub: Goal = Goal::Subterm((
-        tamarin_term::builtin::msg_var("a", 0),
-        tamarin_term::builtin::msg_var("b", 0),
-    ));
-
-    // The order from Constraints.hs:159-172 (deriving Ord):
-    //   ActionG < ChainG < PremiseG < SplitG < DisjG < SubtermG
-    //
-    // **THIS IS THE CONTRACT.**  If Rust's `goal_cmp` differs, every
-    // goal sort that routes through it orders differently from
-    // Haskell, causing proof-step divergences silently.
-    let order = [&action, &chain, &premise, &split, &disj, &sub];
-    let names = ["Action", "Chain", "Premise", "Split", "Disj", "Subterm"];
-    for i in 0..order.len() {
-        // Every variant compares Equal with itself.  The short-circuit on
-        // the tag must fall through to a payload comparison that agrees.
-        assert_eq!(
-            goal_cmp(order[i], order[i]),
-            Ordering::Equal,
-            "{} must compare Equal with itself",
-            names[i]
-        );
-        for j in (i + 1)..order.len() {
-            assert_eq!(
-                goal_cmp(order[i], order[j]),
-                Ordering::Less,
-                "Haskell Goal-Ord requires {} < {} \
-                     (Constraints.hs:159-172 declaration order).  \
-                     goal_cmp put them in the wrong order — this WILL \
-                     cause silent proof divergence.",
-                names[i],
-                names[j]
-            );
-            assert_eq!(
-                goal_cmp(order[j], order[i]),
-                Ordering::Greater,
-                "Haskell Goal-Ord requires {} > {}",
-                names[j],
-                names[i]
-            );
-        }
-    }
-}
-
-/// Pin that `Goal`'s variant declaration order in Rust matches Haskell's
-/// data-decl order.  The test above pins `goal_cmp`'s hand-written tag
-/// function; this pins the enum that function shadows, so reordering one
-/// without the other fails here.  `Goal` derives no `Ord` and stable Rust
-/// cannot reflect over variants, so read the declaration out of the
-/// source — `discriminant` values are opaque and stay pairwise distinct
-/// under ANY reordering, which is why they cannot pin an order.
-#[test]
-fn rust_goal_enum_variant_order_matches_haskell() {
-    let src = std::fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/src/constraint/constraints.rs"
-    ))
-    .expect("constraints.rs is readable");
-    let body = src
-        .split_once("pub enum Goal {")
-        .expect("Goal enum declaration present")
-        .1
-        .split_once("\n}")
-        .expect("Goal enum declaration closes")
-        .0;
-    let variants: Vec<&str> = body
-        .lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty() && !l.starts_with("//") && !l.starts_with('#'))
-        .map(|l| l.split(['(', '{', ',', ' ']).next().unwrap_or(l))
-        .collect();
-    assert_eq!(
-        variants,
-        ["Action", "Chain", "Premise", "Split", "Disj", "Subterm"],
-        "Goal's variants must be declared in HS's `data Goal` order \
-         (Constraints.hs:159-172); `goal_cmp` ranks tags by that order"
     );
 }
 
@@ -331,7 +202,6 @@ fn it_ranking_prio_nonranked_deprio_order() {
 
     let prio = |pat: &str| PrioBlock {
         ranking: "id".to_string(),
-        disjuncts: vec![format!("regex \"{}\"", pat)],
         selectors: vec![SelectorExpr::Leaf(SelectorLeaf {
             name: "regex".to_string(),
             params: vec![pat.to_string()],
@@ -381,7 +251,6 @@ fn it_ranking_nonranked_preserved() {
     let g_a = mk("a", 2); // matches prio → moves to front
     let prio = PrioBlock {
         ranking: "id".to_string(),
-        disjuncts: vec!["regex \"~'a'\"".to_string()],
         selectors: vec![SelectorExpr::Leaf(SelectorLeaf {
             name: "regex".to_string(),
             params: vec!["~'a'".to_string()],
@@ -484,7 +353,7 @@ fn useful_goal_nr_uses_derived_usefulness_ord() {
     assert!(Usefulness::LoopBreaker < Usefulness::ProbablyConstructible);
 }
 
-// -- goal_cmp Disj structural Ord (Constraints.hs derived Ord) -----------
+// -- `Ord Goal` Disj structural order (Constraints.hs derived Ord) -------
 
 /// HS `Disj a = Disj [a]` derives Ord = list Ord bottoming out at the
 /// structural `Ord LNGuarded`, whose var leaves use `Ord LVar = (idx,
@@ -494,31 +363,108 @@ fn useful_goal_nr_uses_derived_usefulness_ord() {
 /// `Ord LSort` (Pub<Fresh), not by the `{:?}` sort-name string
 /// (Fresh<Msg<Nat<Node<Pub).
 #[test]
-fn goal_cmp_disj_var_sort_uses_lsort_ord() {
+fn goal_ord_disj_var_sort_uses_lsort_ord() {
+    use crate::atom::ProtoAtom;
     use crate::constraint::constraints::Disj;
-    use crate::guarded::{BVar, GAtom, GTerm, Guarded};
+    use crate::guarded::Guarded;
     use std::cmp::Ordering;
-    use tamarin_parser::ast::{SortHint, VarSpec};
+    use tamarin_term::lterm::{BVar, LSort, LVar};
+    use tamarin_term::vterm::var_term;
 
     // A single-atom Disj over `Last(v)` where v differs only by sort.
-    let mk_disj = |sort: SortHint| -> Goal {
-        let v = VarSpec {
-            name: "x".to_string(),
-            idx: 0,
-            sort,
-            typ: None,
-        };
-        let atom = GAtom::Last(GTerm::Var(BVar::Free(v)));
+    let mk_disj = |sort: LSort| -> Goal {
+        let atom = ProtoAtom::Last(var_term(BVar::Free(LVar::new("x", sort, 0))));
         Goal::Disj(Disj::new(vec![Guarded::Atom(atom)]))
     };
-    let pub_disj = mk_disj(SortHint::Pub);
-    let fresh_disj = mk_disj(SortHint::Fresh);
+    let pub_disj = mk_disj(LSort::Pub);
+    let fresh_disj = mk_disj(LSort::Fresh);
     // HS LSort Ord: Pub < Fresh.  The structural comparator must put the
     // Pub-var Disj first (by sort, not by Debug-string name order).
     assert_eq!(
-        goal_cmp(&pub_disj, &fresh_disj),
+        pub_disj.cmp(&fresh_disj),
         Ordering::Less,
         "HS LSort Ord requires Pub < Fresh in Disj structural compare"
     );
-    assert_eq!(goal_cmp(&fresh_disj, &pub_disj), Ordering::Greater);
+    assert_eq!(fresh_disj.cmp(&pub_disj), Ordering::Greater);
+}
+
+/// A `{name}` ranking keeps the name written between the braces — HS
+/// `internalTacticRanking` (Parser/Signature.hs:313-318) and
+/// `filterHeuristic` (System.hs:679-683) both build
+/// `InternalTacticRanking False (Tactic <name> (SmartRanking False) [] [])`
+/// — and takes the body of the declared tactic of that name when the theory
+/// has one (HS `chosenTactic`, ProofMethod.hs:490-503).
+#[test]
+fn tactic_ranking_keeps_the_braced_name() {
+    use crate::tactic::{PrioBlock, SelectorExpr, SelectorLeaf, Tactic};
+    let declared = Tactic {
+        name: "rank".to_string(),
+        presort: 'C',
+        prios: vec![PrioBlock {
+            ranking: "id".to_string(),
+            selectors: vec![SelectorExpr::Leaf(SelectorLeaf {
+                name: "regex".to_string(),
+                params: vec!["Out".to_string()],
+            })],
+        }],
+        deprios: vec![],
+    };
+    let names = |s: &str| -> Vec<String> {
+        parse_heuristic_str_with_tactics(s, "t.spthy", std::slice::from_ref(&declared))
+            .into_iter()
+            .map(|r| match r {
+                GoalRanking::Tactic { tactic, .. } => tactic.name.clone(),
+                other => panic!("expected a tactic ranking, got {:?}", other),
+            })
+            .collect()
+    };
+    assert_eq!(names("{.}"), vec![".".to_string()]);
+    assert_eq!(names("{undeclared}"), vec!["undeclared".to_string()]);
+    assert_eq!(names("{rank}"), vec!["rank".to_string()]);
+
+    // The declared tactic supplies the body; an unknown name retains HS's
+    // `defaultTactic` placeholder body until ranking reports `chooseError`.
+    let body = |s: &str| match parse_heuristic_str_with_tactics(
+        s,
+        "t.spthy",
+        std::slice::from_ref(&declared),
+    )
+    .remove(0)
+    {
+        GoalRanking::Tactic { tactic, .. } => (tactic.presort, tactic.prios.len()),
+        other => panic!("expected a tactic ranking, got {:?}", other),
+    };
+    assert_eq!(body("{rank}"), ('C', 1));
+    assert_eq!(body("{undeclared}"), ('s', 0));
+}
+
+#[test]
+fn an_unknown_tactic_fails_when_its_ranking_is_selected() {
+    use crate::constraint::solver::context::ProofContext;
+    use tamarin_term::maude_sig::pair_maude_sig;
+
+    let Some(path) = require_maude_path() else {
+        return;
+    };
+    let ranking = parse_heuristic_str_with_tactics("{missing}", "t.spthy", &[]);
+    let handle = tamarin_term::maude_proc::MaudeHandle::start(&path, pair_maude_sig()).unwrap();
+    let mut ctx = ProofContext::new(handle, Vec::new());
+    ctx.heuristic = Some(ranking);
+    let err = rank_goals_with(&System::empty(), Some(&ctx), 0).unwrap_err();
+    assert_eq!(err.0, "No tactic has been written in the theory file");
+}
+
+/// `pretty_goal_rankings` writes back the token each stored ranking parsed
+/// from — the single letters `goalRankingIdentifiers` maps
+/// (System.hs:584-597), an oracle ranking as its letter plus the quoted
+/// path, a tactic ranking as its braced name (`prettyGoalRanking`,
+/// System.hs:709-714), joined by single spaces (`prettyGoalRankings`,
+/// System.hs:706-707).  The theory stores the parsed list, so this round
+/// trip is what keeps a `heuristic:` header's echo byte-identical.
+#[test]
+fn parsed_heuristic_renders_back_to_its_tokens() {
+    let s = r#"s S i I p P C c o "x.py" O "y.py" {t}"#;
+    let rankings = parse_heuristic_str_with_tactics(s, "t.spthy", &[]);
+    assert_eq!(rankings.len(), 11);
+    assert_eq!(crate::pretty_theory::pretty_goal_rankings(&rankings), s);
 }

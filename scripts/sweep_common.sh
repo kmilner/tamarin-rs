@@ -258,9 +258,9 @@ sweep_preflight
 # lookup.
 hs_fingerprint "$HS_BIN"
 
-# include_shas comes from gate_common.sh (it is part of ckey and of
-# rs_ref_check.sh's ikey there too); hs_run folds it into its digest below,
-# and it prints nothing for an include-free theory, keeping those keys stable.
+# include_shas / oracle_shas come from gate_common.sh (they are part of ckey
+# and of rs_ref_check.sh's ikey there too); hs_run folds them into its digest
+# below, and each prints nothing when that dependency class is absent.
 
 # hs_run <workdir> <theory> <tag> <flag...>
 #   Executes  grun $HS_BIN --with-maude=$MAUDE <flag...> <theory>
@@ -272,7 +272,7 @@ hs_run() {
   local wd=$1 f=$2 tag=$3; shift 3
   local key
   key=$( { sha256sum "$f" | cut -d' ' -f1; echo "$tag"; echo "$HS_FP"; echo "$MAUDE"
-           include_shas "$f"; } | sha256sum | cut -d' ' -f1 )
+           include_shas "$f"; oracle_shas "$f" "$*"; } | sha256sum | cut -d' ' -f1 )
   local dir="$HS_CACHE/${key:0:2}/$key"
   if [ -f "$dir/rc" ]; then
     local crc ccap
@@ -385,7 +385,7 @@ sweep_out() {
 #   turns up in sweep_finish's row-count check.
 sweep_export() {
   export -f one row grun oom_prologue norm nerr io_diff infra_abort nonempty_compared \
-            nocompare_check include_shas hs_run sweep_one "$@"
+            nocompare_check include_shas oracle_shas hs_run sweep_one "$@"
   export HS_BIN RS_BIN MAUDE OUT TIMEOUT HS_CACHE HS_FP
 }
 

@@ -1,0 +1,38 @@
+/*
+ * Two `_restrict`s on one rule whose terms come from a `let` block.
+ *
+ * `liftedAddProtoRule` numbers the generated restrictions from one
+ * (Theory/Text/Parser.hs:190-193) and calls `fromRuleRestriction` once per
+ * formula, and each call runs `rewrite` in its own `evalFreshT … 0`
+ * (Theory/Model/Restriction.hs:96): the fresh counter restarts at `x` for the
+ * second restriction instead of continuing at `x.2`.
+ *
+ * Each formula abstracts two subterms, so both generated restrictions bind
+ * `x` and `x.1`, and `frees` sorts the binder list by `LVar`'s index-first
+ * ordering (Term/LTerm.hs:546-548) into `x #NOW x.1`.
+ *
+ * The rule's `let` bindings are applied where the rule is built
+ * (Theory/Text/Parser/Rule.hs:119,133), so the abstracted terms are `h(x)`
+ * and `h(y)`, and the appended actions carry them.
+ *
+ * No corpus theory reaches this: no `let`-bearing rule in the examples tree
+ * carries more than one `_restrict`.
+ *
+ * Mode `match`: the two engines agree on this shape.
+ *
+ * Compared slice: the `theory … end` echo (see check.sh).
+ */
+theory S6RestrictLetTwo
+begin
+
+functions: h/1
+
+rule A:
+  let a = h(x)
+      b = h(y)
+  in
+  [ In( x ), In( y ) ]
+  --[ _restrict( Ex #i. Ev( a, b ) @ #i ), _restrict( a = b ) ]->
+  [ Out( a ) ]
+
+end

@@ -5,7 +5,7 @@
 # Cached, parallelised HS pipeline (same output format / classification):
 #   #1  HS canon CACHE keyed by (file-content-sha256, lemma, CACHE_VERSION,
 #       oracle-binary fingerprint).  HS is canonical and its proof depends
-#       only on the .spthy file, so its canon tree is stable across RS-fix
+#       only on the theory and its includes, so its canon tree is stable across RS-fix
 #       iterations -> on repeat runs HS is essentially free.  (The fingerprint
 #       in the key means any HS rebuild — instrumentation included — refills
 #       its entries rather than answering out of the old binary's.)
@@ -44,6 +44,8 @@ repo_root="$(cd "$script_dir/.." && pwd)"
 # fingerprint recipe the cache key carries.
 [ -r "$script_dir/gate_common.sh" ] || { echo "corpus_full_trace_diff: missing $script_dir/gate_common.sh (owns the shared gate helpers)" >&2; exit 2; }
 . "$script_dir/gate_common.sh"
+[ -r "$script_dir/proof_diff_common.sh" ] || { echo "corpus_full_trace_diff: missing proof_diff_common.sh" >&2; exit 2; }
+. "$script_dir/proof_diff_common.sh"
 # OOM discipline: every prover child inherits the cap and dies alone.
 oom_prologue
 canon="$script_dir/canon_proof_tree.py"
@@ -57,30 +59,7 @@ HS_CANON_CACHE="${HS_CANON_CACHE:-$script_dir/.hs_canon_cache}"
 NO_HS_CACHE="${NO_HS_CACHE:-}"
 [ -n "$NO_HS_CACHE" ] || mkdir -p "$HS_CANON_CACHE" 2>/dev/null || true
 
-# --- Locate the HS binary. Search worktree-local .stack-work first; fall back to
-# the main worktree's .stack-work (git worktree doesn't copy untracked dirs).
-find_hs_bin() {
-    local root="$1" c
-    for c in "$root"/tamarin-prover-testing/.stack-work/install/*/*/*/bin/tamarin-prover \
-             "$root"/tamarin-prover-testing/.stack-work/dist/*/ghc-*/build/tamarin-prover/tamarin-prover; do
-        if [ -x "$c" ]; then echo "$c"; return 0; fi
-    done
-    return 1
-}
-hs_path="$(find_hs_bin "$repo_root" 2>/dev/null || true)"
-if [ -z "$hs_path" ]; then
-    main_root="$(git -C "$repo_root" worktree list --porcelain 2>/dev/null | awk '/^worktree/{print $2; exit}')"
-    if [ -n "$main_root" ] && [ "$main_root" != "$repo_root" ]; then
-        hs_path="$(find_hs_bin "$main_root" 2>/dev/null || true)"
-    fi
-fi
-if [ -z "$hs_path" ]; then
-    hs_path="$(command -v tamarin-prover 2>/dev/null || true)"
-fi
-if [ -z "$hs_path" ]; then
-    echo "corpus_full_trace_diff.sh: no HS tamarin-prover binary found" >&2
-    exit 2
-fi
+hs_path=$(resolve_hs_oracle "$repo_root") || exit 2
 
 # --- Locate the RS dump_proof binary.
 # Always (re)build it first — plain `cargo build --release` does NOT rebuild
@@ -100,67 +79,21 @@ if [ ! -x "$rs_path" ]; then
     exit 2
 fi
 
-# --- HS canon cache key: sha256(file content) + lemma + CACHE_VERSION +
+# --- HS canon cache key: sha256(file content) + dependency digests + lemma + CACHE_VERSION +
 #     the oracle-binary fingerprint (gate_common's hs_fingerprint), so a
 #     rebuilt oracle is a MISS rather than a stale hit — the same __b suffix
 #     diff_proof_raw.sh / corpus_raw_diff.sh use and migrate_hs_cache_fp.sh
 #     rekeyed the older entries onto.
 hs_fingerprint "$hs_path"
-hs_cache_key() {
-    local f="$1" lemma="$2" h
-    h=$(sha256sum "$f" 2>/dev/null | cut -d' ' -f1)
-    printf '%s__%s__v%s__b%s.canon' "$h" "$lemma" "$CACHE_VERSION" "$HS_FP_SALT"
-}
-
-# --- Robust lemma-name list for a file (handles "lemma Foo:", "lemma Foo [..]:",
-#     "lemma Foo[..]:", "lemma Foo :").  Strips block comments first so
-#     `lemma Foo` inside `/* ... */` doesn't get enumerated (HS-faithful:
-#     both provers parse-skip these, so they'd false-categorise as
-#     "no HS skeleton" otherwise).  Block comments NEST in Tamarin's
-#     grammar (`Theory.Text.Parser.Token.commentStyle`).
-lemmas_of() {
-    awk '
-        BEGIN { depth = 0 }
-        {
-            line = $0
-            while (length(line) > 0) {
-                if (depth > 0) {
-                    o = index(line, "/*")
-                    c = index(line, "*/")
-                    if (c == 0 && o == 0) { line = ""; break }
-                    if (o > 0 && (c == 0 || o < c)) {
-                        depth++; line = substr(line, o + 2)
-                    } else {
-                        depth--; line = substr(line, c + 2)
-                    }
-                } else {
-                    # Find earliest of //, /*, *
-                    lc = index(line, "//")
-                    bc = index(line, "/*")
-                    if (lc > 0 && (bc == 0 || lc < bc)) {
-                        print substr(line, 1, lc - 1); line = ""; break
-                    }
-                    if (bc > 0) {
-                        print substr(line, 1, bc - 1)
-                        depth++; line = substr(line, bc + 2)
-                    } else {
-                        print line; line = ""; break
-                    }
-                }
-            }
-        }
-    ' "$1" 2>/dev/null \
-        | grep '^lemma ' \
-        | sed -E 's/^lemma[[:space:]]+([A-Za-z0-9_]+).*/\1/'
-}
 
 # --- Slice one lemma's proof block out of a rendered theory and canonicalize.
 slice_canon() {
     local lemma="$1" src="$2" dst="$3"
-    awk -v lem="^lemma ${lemma}( |\\[|:)" '$0 ~ lem {p=1} p && /^lemma / && !($0 ~ lem) {exit} p' \
-        "$src" | python3 "$CANON" > "$dst" 2>/dev/null
+    proof_lemma_block "$lemma" "$src" | python3 "$CANON" > "$dst" 2>/dev/null
+    local -a rc=("${PIPESTATUS[@]}")
+    [ "${rc[0]}" -eq 0 ] && [ "${rc[1]}" -eq 0 ]
 }
-export -f hs_cache_key lemmas_of slice_canon
+export -f proof_now_ms proof_cache_key proof_lemmas_of proof_lemma_block include_shas oracle_shas slice_canon
 export HS_PATH="$hs_path" RS_PATH="$rs_path" CANON="$canon" TIMEOUT EXTRA_ENV \
        HS_CANON_CACHE CACHE_VERSION NO_HS_CACHE HS_FP_SALT
 
@@ -194,7 +127,7 @@ worker() {
     local hs_canon="$tmp/hs.canon" hs_rc=0 hs_ms="-"
     local key="" key_empty="" key_timeout=""
     if [ -z "$NO_HS_CACHE" ]; then
-        key="$HS_CANON_CACHE/$(hs_cache_key "$f" "$lemma")"
+        key="$HS_CANON_CACHE/$(proof_cache_key "$f" "$lemma").canon"
         key_empty="${key%.canon}.empty"
         key_timeout="${key%.canon}.timeout"
     fi
@@ -212,18 +145,22 @@ worker() {
         # Derive the canon entry from the cached raw output (written by this
         # script or by corpus_raw_diff.sh) instead of re-running HS.
         gzip -dc "${key%.canon}.full.gz" 2>/dev/null > "$tmp/hs.full"
-        slice_canon "$lemma" "$tmp/hs.full" "$tmp/hs.canon"
-        if [ "$(grep -c . "$tmp/hs.canon")" -gt 0 ]; then
+        local slice_ok=0
+        slice_canon "$lemma" "$tmp/hs.full" "$tmp/hs.canon" && slice_ok=1
+        if [ "$slice_ok" -eq 0 ]; then
+            echo "HS proof slice failed: $f::$lemma" >&2
+        elif [ "$(grep -c . "$tmp/hs.canon")" -gt 0 ]; then
             cp -f "$tmp/hs.canon" "$key" 2>/dev/null || true
         else
             : > "$key_empty" 2>/dev/null || true
         fi
     else
-        local hs_t0; hs_t0=$(date +%s%3N)
+        local hs_t0; hs_t0=$(proof_now_ms)
         timeout "$TIMEOUT" "$HS_PATH" +RTS -N1 -RTS --prove="$lemma" "$f" 2>/dev/null > "$tmp/hs.out"
         hs_rc=$?
-        hs_ms=$(( $(date +%s%3N) - hs_t0 ))
-        slice_canon "$lemma" "$tmp/hs.out" "$tmp/hs.canon"
+        hs_ms=$(( $(proof_now_ms) - hs_t0 ))
+        local slice_ok=0
+        slice_canon "$lemma" "$tmp/hs.out" "$tmp/hs.canon" && slice_ok=1
         if [ -n "$key" ]; then
             # >=128 is a signal death (OOM's 137), which truncates stdout the
             # same way the timeout does: marker, never the partial payload.
@@ -231,7 +168,9 @@ worker() {
                 : > "$key_timeout" 2>/dev/null || true
             else
                 gzip -c "$tmp/hs.out" > "${key%.canon}.full.gz" 2>/dev/null || true
-                if [ "$(grep -c . "$tmp/hs.canon")" -gt 0 ]; then
+                if [ "$slice_ok" -eq 0 ]; then
+                    echo "HS proof slice failed: $f::$lemma" >&2
+                elif [ "$(grep -c . "$tmp/hs.canon")" -gt 0 ]; then
                     cp -f "$tmp/hs.canon" "$key" 2>/dev/null || true
                 else
                     : > "$key_empty" 2>/dev/null || true
@@ -250,10 +189,10 @@ worker() {
     fi
 
     # --- RS: dump_proof emits only the proof tree for this lemma (per-lemma).
-    local rs_t0; rs_t0=$(date +%s%3N)
+    local rs_t0; rs_t0=$(proof_now_ms)
     timeout "$TIMEOUT" env $EXTRA_ENV "$RS_PATH" "$f" "$lemma" 2>/dev/null | python3 "$CANON" > "$tmp/rs.canon" 2>/dev/null
     local rs_rc=${PIPESTATUS[0]}
-    local rs_ms=$(( $(date +%s%3N) - rs_t0 ))
+    local rs_ms=$(( $(proof_now_ms) - rs_t0 ))
 
     local hs_lines rs_lines d
     hs_lines=$(grep -c . "$hs_canon"); hs_lines=${hs_lines// /}
@@ -336,7 +275,7 @@ for f in "${files[@]}"; do
     printf '%s\n' "$f" >> "$filelist"
     while IFS= read -r lem; do
         [ -n "$lem" ] && printf '%s\t%s\n' "$f" "$lem" >> "$tasklist"
-    done < <(lemmas_of "$f")
+    done < <(proof_lemmas_of "$f")
 done
 
 n_tasks=$(wc -l < "$tasklist"); n_tasks=${n_tasks// /}

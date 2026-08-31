@@ -4,6 +4,79 @@
 
 use super::*;
 
+#[test]
+fn predicate_diagnostics_space_multiple_annotations() {
+    let fact = Fact {
+        persistent: false,
+        name: "P".into(),
+        args: Vec::new(),
+        annotations: vec![FactAnnotation::SolveLast, FactAnnotation::SolveFirst],
+    };
+    assert_eq!(pred_fact_text(&fact), "P( )[+, -]");
+}
+
+#[test]
+fn diff_theory_validates_but_does_not_lower_diff_proofs() {
+    let src = "theory D begin
+        diffLemma observational_equivalence:
+        rule-equivalence
+        case Rule
+        by sorry
+        qed
+        end";
+    let parsed = parse_diff_theory(src, &[]).expect("parse diff theory");
+    assert!(parsed.is_diff);
+    let TheoryItem::DiffLemma(lemma) = &parsed.items[0] else {
+        panic!("expected diff lemma");
+    };
+    let proof = lemma.proof.as_ref().expect("stored diff proof");
+    assert!(proof.tree.is_none());
+
+    assert!(parse_diff_theory("theory D begin diffLemma E: rule-equivalence end", &[]).is_err());
+}
+
+#[test]
+fn diff_theory_checks_each_lemma_namespace() {
+    let formula = "\"All #i. A() @ i ==> A() @ i\"";
+    for body in [
+        format!("lemma L [left]: {formula} lemma L [left]: {formula}"),
+        format!("lemma L [right]: {formula} lemma L: {formula}"),
+        "diffLemma D: by sorry diffLemma D: by sorry".to_string(),
+    ] {
+        let src = format!("theory D begin {body} end");
+        assert!(
+            parse_diff_theory(&src, &[]).is_err(),
+            "accepted duplicate namespace: {body}"
+        );
+    }
+    let src = format!("theory D begin lemma L [left]: {formula} lemma L [right]: {formula} end");
+    parse_diff_theory(&src, &[]).expect("the two side-specific stores are independent");
+}
+use tamarin_term::maude_sig::pair_maude_sig;
+
+/// [`parse_formula_str`] against the signature HS `parseString` installs
+/// (`pairMaudeSig`, Theory/Text/Parser/Token.hs:250-258).
+fn parse_formula_str_sig(s: &str) -> Result<Formula, ParseError> {
+    parse_formula_str(s, &pair_maude_sig())
+}
+
+/// A parser carrying `msig`'s symbols, standing in for the theory parser
+/// [`parse_parens_goal`] reads a stored proof's goals inside.
+fn sig_parser(msig: &tamarin_term::maude_sig::MaudeSig) -> Parser<'static> {
+    let mut p = Parser::new("", &[], false);
+    p.seed_signature(msig);
+    p
+}
+
+/// The small side of the subterm goal `<src> ⊏ y`, which is where the goal
+/// grammar reads a term.
+fn goal_term(src: &str, msig: &tamarin_term::maude_sig::MaudeSig) -> Result<Term, ParseError> {
+    parse_parens_goal(&format!("({src} \u{228F} y)"), &sig_parser(msig)).map(|(g, _)| match g {
+        GoalSpec::Subterm(small, _) => small,
+        other => panic!("expected a subterm goal for {src}, got {other:?}"),
+    })
+}
+
 // ---- GHC call-site coordinates, read back out of the pinned source --------
 //
 // The three `*_SITE` constants below are pasted verbatim into `HasCallStack`
@@ -411,6 +484,31 @@ fn matching_and_exempt_function_declarations_are_accepted() {
     }
 }
 
+#[test]
+fn theory_options_are_limited_to_the_shared_declarable_set() {
+    let all = DeclarableOption::ALL
+        .map(DeclarableOption::as_str)
+        .join(", ");
+    assert!(parse_theory(&format!("theory P begin\noptions: {all}\nend"), &[]).is_ok());
+
+    let err = parse_theory("theory P begin\noptions: unknown-option\nend", &[])
+        .expect_err("unknown option must fail");
+    assert_eq!(
+        err.to_string(),
+        "(line 2, column 10):\nunexpected \"u\"\nexpecting \
+         \"translation-progress\", \"translation-allow-pattern-lookups\", \
+         \"translation-state-optimisation\", \"translation-asynchronous-channels\" or \
+         \"translation-compress-events\""
+    );
+
+    let err = parse_theory("theory P begin\noptions: translation-progressx\nend", &[])
+        .expect_err("a valid option prefix must leave its suffix to the outer parser");
+    assert_eq!(
+        err.to_string(),
+        "(line 2, column 31):\nunexpected \"\\n\"\nexpecting letter or \"{*\""
+    );
+}
+
 /// HS `T.identifier` (Token.hs:393-394) rejects the reserved names
 /// `["in","let","rule","diff"]` (Token.hs:214-230, see line 225) with an
 /// `unexpected reserved word "…"` whose position is the word's end — the
@@ -759,6 +857,21 @@ fn show_char_token_escapes_like_haskell() {
     assert_eq!(show_char_token('\t'), "\"\\t\"");
 }
 
+/// GHC `show :: String -> String` over a whole string: the named control
+/// escapes, a decimal escape for a character above `\DEL`, and the `\&`
+/// separator before a digit that would otherwise extend that escape.
+#[test]
+fn show_lit_string_escapes_like_haskell() {
+    assert_eq!(show_lit_string("ab"), "\"ab\"");
+    assert_eq!(
+        show_lit_string("\u{0B}\u{0C}\u{07}\u{08}"),
+        "\"\\v\\f\\a\\b\""
+    );
+    assert_eq!(show_lit_string("a\"b\\c"), "\"a\\\"b\\\\c\"");
+    assert_eq!(show_lit_string("\u{100}"), "\"\\256\"");
+    assert_eq!(show_lit_string("\u{100}7"), "\"\\256\\&7\"");
+}
+
 #[test]
 fn theory_keyword_error_matches_parsec() {
     // End-to-end: the top-level `theory` keyword mismatch renders exactly
@@ -859,15 +972,14 @@ fn comment_handling() {
     assert!(t.items.is_empty(), "unexpected items: {:?}", t.items);
 }
 
+/// The one argument of a subterm goal.  The goal grammar reads it with the
+/// theory's symbols, so an arity-2 head takes a nested tuple as ONE of its
+/// two arguments.
 #[test]
 fn term_application() {
-    // Structural mode ([`parse_term_str`]'s): a theory parse resolves the
-    // head through `lookup_arity` and an undeclared `h` would backtrack
-    // to a variable (oracle probes p05/p25 — unknown operators are parse
-    // errors upstream).
-    match parse_term_str("h(<a, b>, ~k)", &[]).unwrap() {
+    match goal_term("pair(<a, b>, ~k)", &pair_maude_sig()).unwrap() {
         Term::App(name, args) => {
-            assert_eq!(name, "h");
+            assert_eq!(name, "pair");
             // The nested tuple is one argument, not two.
             assert!(
                 matches!(args.as_slice(), [Term::Pair(p), Term::Var(_)] if p.len() == 2),
@@ -881,7 +993,7 @@ fn term_application() {
 
 #[test]
 fn formula_string() {
-    let f = parse_formula_str("All x. P(x) ==> Q(x)").unwrap();
+    let f = parse_formula_str_sig("All x. P(x) ==> Q(x)").unwrap();
     match f {
         Formula::Forall(_, _) => {}
         _ => panic!("expected Forall"),
@@ -897,7 +1009,7 @@ fn formula_string() {
 #[test]
 fn fatom_fact_lhs_of_relop_is_term_atom() {
     // Equality: `Foo(x) = Foo(y)` must be Atom::Eq(App,App), not Pred.
-    let f = parse_formula_str("Foo(x) = Foo(y)").unwrap();
+    let f = parse_formula_str_sig("Foo(x) = Foo(y)").unwrap();
     match f {
         Formula::Atom(Atom::Eq(Term::App(l, _), Term::App(r, _))) => {
             assert_eq!(l, "Foo");
@@ -906,7 +1018,7 @@ fn fatom_fact_lhs_of_relop_is_term_atom() {
         other => panic!("expected Eq(App,App), got {:?}", other),
     }
     // Subterm: `A(x) << B(y)` must be Atom::Subterm, not Pred.
-    let f = parse_formula_str("A(x) << B(y)").unwrap();
+    let f = parse_formula_str_sig("A(x) << B(y)").unwrap();
     match f {
         Formula::Atom(Atom::Subterm(Term::App(l, _), Term::App(r, _))) => {
             assert_eq!(l, "A");
@@ -915,7 +1027,7 @@ fn fatom_fact_lhs_of_relop_is_term_atom() {
         other => panic!("expected Subterm(App,App), got {:?}", other),
     }
     // A genuine predicate atom (no following relational op) stays Pred.
-    let f = parse_formula_str("P(x) & Q(y)").unwrap();
+    let f = parse_formula_str_sig("P(x) & Q(y)").unwrap();
     match f {
         Formula::And(a, _) => match *a {
             Formula::Atom(Atom::Pred(ref fa)) => assert_eq!(fa.name, "P"),
@@ -924,7 +1036,7 @@ fn fatom_fact_lhs_of_relop_is_term_atom() {
         other => panic!("expected And, got {:?}", other),
     }
     // Implication after a predicate must NOT be misread as `=` (==> guard).
-    let f = parse_formula_str("P(x) ==> Q(y)").unwrap();
+    let f = parse_formula_str_sig("P(x) ==> Q(y)").unwrap();
     match f {
         Formula::Implies(a, _) => match *a {
             Formula::Atom(Atom::Pred(ref fa)) => assert_eq!(fa.name, "P"),
@@ -970,17 +1082,15 @@ fn type_p_only_capital_any_is_default() {
 // 1.13.0: `A(<>)` is a parse error; `A(<x>)` renders `A( x )`.
 #[test]
 fn empty_tuple_is_error_singleton_collapses() {
-    assert!(
-        parse_term_str("<>", &[]).is_err(),
-        "<> must be a parse error"
-    );
+    let term = |src: &str| goal_term(src, &pair_maude_sig());
+    assert!(term("<>").is_err(), "<> must be a parse error");
     // Singleton tuple collapses to the inner term.
-    match parse_term_str("<x>", &[]).unwrap() {
+    match term("<x>").unwrap() {
         Term::Var(v) => assert_eq!(v.name, "x"),
         other => panic!("expected singleton to collapse to Var, got {:?}", other),
     }
     // Two-element tuple is a Pair.
-    match parse_term_str("<x, y>", &[]).unwrap() {
+    match term("<x, y>").unwrap() {
         Term::Pair(items) => assert_eq!(items.len(), 2),
         other => panic!("expected Pair, got {:?}", other),
     }
@@ -1040,6 +1150,17 @@ fn lemma_proof_raw(thy: &Theory) -> &str {
     &l.proof.as_ref().expect("lemma has a proof skeleton").raw
 }
 
+#[test]
+fn malformed_stored_proof_fails_theory_parse() {
+    let src = "theory T begin\nlemma L: \"T\"\nsimplify\nend";
+    let err = parse_theory(src, &[]).expect_err("a bare intermediate method needs a child");
+    assert_eq!((err.line, err.col), (4, 1));
+
+    let src = "theory T begin\nlemma L: \"T\"\nby sorry trailing\nend";
+    let err = parse_theory(src, &[]).expect_err("trailing proof text must not be discarded");
+    assert!(err.to_string().contains("unexpected trailing proof text"));
+}
+
 /// Reports whether the parser split a top-level `test` CaseTest item out of
 /// the theory.  That is the symptom of a capture that stopped at a `test`
 /// token inside a proof body.
@@ -1086,18 +1207,16 @@ end"#;
     assert!(raw.contains("qed"), "proof raw missing `qed`: {raw:?}");
 }
 
-// The paren-depth guard must cover the full spread of message-argument
-// sorts a printed goal can carry — fresh `~k`, public `$A`, nat `%n`,
-// indexed `k.1` — mixed with several bare identifiers that collide with
-// top-level keywords (`test`, `rule`, `function`).  None may truncate the
-// capture.
+// The paren-depth guard must cover fresh `~k`, public `$A`, and indexed
+// message arguments alongside a bare identifier that collides with a
+// top-level keyword. None may truncate the capture while inside the goal.
 #[test]
 fn proof_skeleton_captures_mixed_sorted_indexed_and_keyword_args() {
     let s = r#"theory T begin
   lemma L:
     "All x #i. Start(x) @ #i ==> F"
   simplify
-  solve( Foo( ~k, $A, %n, k.1, test, rule, function ) @ #i1 )
+  solve( Foo( ~k, $A, k.1, test, sid ) @ #i1 )
     case c
     by sorry
   qed
@@ -1106,7 +1225,7 @@ end"#;
     assert!(!has_casetest(&t));
     let raw = lemma_proof_raw(&t);
     assert!(
-        raw.contains("Foo( ~k, $A, %n, k.1, test, rule, function )"),
+        raw.contains("Foo( ~k, $A, k.1, test, sid )"),
         "mixed-arg goal truncated: {raw:?}"
     );
     assert!(raw.contains("qed"), "missing qed: {raw:?}");
@@ -1174,18 +1293,13 @@ end"#;
             _ => None,
         })
         .expect("tactic present");
-    assert!(
-        tac.raw.contains(r#"regex "cp\(""#),
-        "tactic body truncated: {:?}",
-        tac.raw
-    );
-    // The `(` inside the regex string must not leak the following rule into
-    // the tactic capture.
-    assert!(
-        !tac.raw.contains("rule R"),
-        "next item leaked into tactic capture: {:?}",
-        tac.raw
-    );
+    assert_eq!(tac.prios.len(), 2);
+    let SelectorExpr::Leaf(second) = &tac.prios[1].selectors[0] else {
+        panic!("expected regex selector")
+    };
+    assert_eq!(second.name, "regex");
+    assert_eq!(second.params, [r#"cp\("#]);
+    // The `(` inside the regex string must not consume the following rule.
     let rule = t
         .items
         .iter()
@@ -1195,6 +1309,31 @@ end"#;
         })
         .expect("rule R must remain a separate top-level item");
     assert_eq!(rule.name, "R");
+}
+
+#[test]
+fn tactic_blocks_require_a_selector() {
+    for block in ["prio:", "deprio: {id}"] {
+        let src = format!("theory T begin\ntactic: rank\n{block}\nrule R: [ ] --> [ ]\nend");
+        let err = parse_theory(&src, &[]).expect_err("empty tactic block must fail");
+        assert_eq!(
+            err.to_string(),
+            "(line 4, column 5):\nunexpected reserved word \"rule\"\nexpecting letter or digit"
+        );
+    }
+}
+
+#[test]
+fn tactic_presort_requires_one_known_non_oracle_ranking() {
+    for presort in ["sx", "z", "o"] {
+        let src = format!("theory T begin\ntactic: rank\npresort: {presort}\nend");
+        let err = parse_theory(&src, &[]).expect_err("invalid presort must fail");
+        assert!(err.to_string().contains("unknown proof method ranking"));
+    }
+    for presort in ["s", "S", "p", "P", "c", "C", "i", "I"] {
+        let src = format!("theory T begin\ntactic: rank\npresort: {presort}\nend");
+        parse_theory(&src, &[]).unwrap_or_else(|e| panic!("valid presort {presort}: {e}"));
+    }
 }
 
 // Regression: a proof CASE LABEL that collides with a top-level keyword must
@@ -1450,23 +1589,17 @@ fn colon_suffix_is_a_sapic_type_in_a_process_and_a_sort_in_a_rule() {
     let v = process_let_binder(
         "theory T begin builtins: natural-numbers process: let x:nat = %c %+ %1 in 0 end",
     );
-    assert_eq!(
-        (v.sort, v.typ.as_deref()),
-        (SortHint::Untagged, Some("nat"))
-    );
+    assert_eq!((v.sort, v.typ.as_deref()), (LSort::Msg, Some("nat")));
     let v = process_let_binder("theory T begin process: let x:msg = y in 0 end");
-    assert_eq!(
-        (v.sort, v.typ.as_deref()),
-        (SortHint::Untagged, Some("msg"))
-    );
+    assert_eq!((v.sort, v.typ.as_deref()), (LSort::Msg, Some("msg")));
     let v = process_let_binder("theory T begin process: let x:Any = y in 0 end");
-    assert_eq!((v.sort, v.typ.as_deref()), (SortHint::Untagged, None));
+    assert_eq!((v.sort, v.typ.as_deref()), (LSort::Msg, None));
     // The `%` PREFIX still sorts a process variable (`lvarNoSuffix` keeps every
     // prefix parser), and a type may follow it.
     let v = process_let_binder(
         "theory T begin builtins: natural-numbers process: let %x:nat = %c in 0 end",
     );
-    assert_eq!((v.sort, v.typ.as_deref()), (SortHint::Nat, Some("nat")));
+    assert_eq!((v.sort, v.typ.as_deref()), (LSort::Nat, Some("nat")));
 
     // Same text in a rule: a sort suffix, no type.
     let thy = parse_theory(
@@ -1483,8 +1616,634 @@ fn colon_suffix_is_a_sapic_type_in_a_process_and_a_sort_in_a_rule() {
         }
     }
     let v = seen.expect("rule premise variable");
+    assert_eq!((v.sort, v.typ.as_deref()), (LSort::Nat, None));
+}
+
+// =============================================================================
+// The sort the parser stamps on every variable
+// =============================================================================
+
+/// The first argument of the first premise of the theory's single rule.
+fn rule_premise_term(src: &str) -> Term {
+    let thy = parse_theory(src, &[]).expect("parses");
+    for item in &thy.items {
+        if let TheoryItem::Rule(r) = item {
+            return r.premises[0].args[0].clone();
+        }
+    }
+    panic!("no rule in {src}");
+}
+
+/// `(name, idx, sort)` of every element of a tuple of variables.
+fn tuple_var_specs(t: &Term) -> Vec<(&str, u64, LSort)> {
+    let Term::Pair(items) = t else {
+        panic!("expected a tuple, got {t:?}");
+    };
+    items
+        .iter()
+        .map(|i| match i {
+            Term::Var(v) => (v.name.as_str(), v.idx, v.sort),
+            other => panic!("expected a variable, got {other:?}"),
+        })
+        .collect()
+}
+
+/// The variable a term is, or a panic naming what it is instead.
+fn var_of(t: &Term) -> &VarSpec {
+    match t {
+        Term::Var(v) => v,
+        other => panic!("expected a variable, got {other:?}"),
+    }
+}
+
+/// A sigil names the sort and a bare identifier is message-sorted, as HS
+/// `sortedLVar`'s prefix arms do — the bare `LSortMsg -> pure ()` case
+/// (Token.hs:409-433, see lines 424-426).
+#[test]
+fn bare_variable_is_msg_sorted() {
+    let t = rule_premise_term(
+        "theory T begin builtins: natural-numbers \
+         rule R: [ In(<x, x.1, ~f, $p, #i, %n>) ] --[ ]-> [ ] end",
+    );
     assert_eq!(
-        (v.sort, v.typ.as_deref()),
-        (SortHint::Suffix(SuffixSort::Nat), None)
+        tuple_var_specs(&t),
+        vec![
+            ("x", 0, LSort::Msg),
+            ("x", 1, LSort::Msg),
+            ("f", 0, LSort::Fresh),
+            ("p", 0, LSort::Pub),
+            ("i", 0, LSort::Node),
+            ("n", 0, LSort::Nat),
+        ]
+    );
+}
+
+/// HS `sortedLVar`'s suffix arm returns `LVar n s i` with `s` the suffix's
+/// sort, the same plain `LVar` the sigil arms build (Token.hs:409-421), so
+/// `x:fresh` and `~x` are one variable.
+#[test]
+fn sort_suffix_parses_to_the_plain_sort() {
+    let t = rule_premise_term(
+        "theory T begin builtins: natural-numbers \
+         rule R: [ In(<x:msg, x:fresh, x:pub, x:node, x:nat>) ] --[ ]-> [ ] end",
+    );
+    assert_eq!(
+        tuple_var_specs(&t),
+        vec![
+            ("x", 0, LSort::Msg),
+            ("x", 0, LSort::Fresh),
+            ("x", 0, LSort::Pub),
+            ("x", 0, LSort::Node),
+            ("x", 0, LSort::Nat),
+        ]
+    );
+}
+
+/// `blatom`'s timepoint operands are read with `nodevar`, which stamps
+/// `LSortNode` on a bare identifier (Theory/Text/Parser/Formula.hs:44-59,
+/// Token.hs:443-448): the argument of `last`, the operand after `@`, both
+/// operands of `<`, and both operands of an equality whose left operand is a
+/// node variable — that last one being the "node equality" alternative, which
+/// is reached only because "term equality" reads its operands with `msgvar`
+/// and `msgvar` rejects a node variable.
+#[test]
+fn timepoint_positions_are_node_sorted() {
+    let sort_of = |src: &str| -> Vec<LSort> {
+        match parse_formula_str_sig(src).expect("parses") {
+            Formula::Atom(Atom::Action(_, t)) | Formula::Atom(Atom::Last(t)) => {
+                vec![var_of(&t).sort]
+            }
+            Formula::Atom(Atom::Less(l, r)) | Formula::Atom(Atom::Eq(l, r)) => {
+                vec![var_of(&l).sort, var_of(&r).sort]
+            }
+            other => panic!("expected one atom, got {other:?}"),
+        }
+    };
+    assert_eq!(sort_of("A(x) @ i"), vec![LSort::Node]);
+    assert_eq!(sort_of("last(i)"), vec![LSort::Node]);
+    assert_eq!(sort_of("i < j"), vec![LSort::Node, LSort::Node]);
+    assert_eq!(sort_of("#k = l"), vec![LSort::Node, LSort::Node]);
+    assert_eq!(sort_of("k:node = l"), vec![LSort::Node, LSort::Node]);
+    // The "term equality" alternative reads both operands with `msgvar`, so
+    // two bare names are message variables.
+    assert_eq!(sort_of("k = l"), vec![LSort::Msg, LSort::Msg]);
+
+    for invalid in [
+        "$i < $j",
+        "x:msg < j",
+        "f(i) < j",
+        "$i = #j",
+        "f(i) = #j",
+        "k = #l",
+    ] {
+        assert!(
+            parse_formula_str_sig(invalid).is_err(),
+            "accepted non-node operands in {invalid}"
+        );
+    }
+}
+
+/// `nodevar` reads a bare name with `indexedIdentifier` (Token.hs:445-447),
+/// which does not consult the signature, so a name declared as an arity-0
+/// symbol is still a timepoint variable in a timepoint position — unlike the
+/// term parser, where `nullaryApp` claims it
+/// (Theory/Text/Parser/Term.hs:158-163).
+#[test]
+fn nullary_symbol_name_in_a_timepoint_position_is_a_variable() {
+    // `c` is an application everywhere the term parser reads it.
+    let concs =
+        rule_conclusions("theory T begin\nfunctions: c/0\nrule R:\n  [ ] --> [ Out(c) ]\nend");
+    assert!(matches!(&concs[0].args[0], Term::App(n, a) if n == "c" && a.is_empty()));
+
+    let thy = parse_theory(
+        "theory T begin\n\
+         functions: c/0\n\
+         lemma l1: \"All #i. A( ) @ c\"\n\
+         lemma l2: \"last(c)\"\n\
+         lemma l3: \"All #i. #i < c\"\n\
+         lemma l4: \"All #i. #i = c\"\n\
+         end",
+        &[],
+    )
+    .expect("parses");
+    let mut seen = 0;
+    for it in &thy.items {
+        let TheoryItem::Lemma(l) = it else { continue };
+        let f = match &l.formula {
+            Formula::Forall(_, body) => body.as_ref().clone(),
+            other => other.clone(),
+        };
+        let t = match f {
+            Formula::Atom(Atom::Action(_, t)) | Formula::Atom(Atom::Last(t)) => t,
+            Formula::Atom(Atom::Less(_, r)) | Formula::Atom(Atom::Eq(_, r)) => r,
+            other => panic!("expected one atom in {}, got {other:?}", l.name),
+        };
+        let v = var_of(&t);
+        assert_eq!(
+            (v.name.as_str(), v.idx, v.sort),
+            ("c", 0, LSort::Node),
+            "{} reads `c` as a constant",
+            l.name
+        );
+        seen += 1;
+    }
+    assert_eq!(seen, 4);
+}
+
+/// A quantifier binder is `try varp <|> nodep` with `varp = msgvar`
+/// (Theory/Text/Parser/Formula.hs:73-76), and an operand of an AC operator is
+/// a message term, so the `dif` binder and the `seq1` operand of
+/// examples/sapic/fast/SCADA/opc_ua_secure_conversation.spthy's
+/// `A_Counter_Increases` restriction are both message-sorted.  Both feed
+/// `Ord LVar`, which compares the sort second (LTerm.hs:546-548), so the
+/// printed operand order of `seq1 + dif` follows from them.
+#[test]
+fn bare_binder_and_bare_message_operand_are_msg_sorted() {
+    // That theory declares `builtins: multiset`, which is what opens the `+`
+    // level of `msetterm` (Theory/Text/Parser/Term.hs:195-200).
+    let f = parse_formula_str(
+        "All A B seq1 seq2 #i #j.(Seq_Sent(A, B, seq1) @ #i \
+         & Seq_Sent(A, B, seq2) @ #j & #i < #j ==> Ex dif. seq2 = seq1 + dif )",
+        &pair_maude_sig().merge(tamarin_term::maude_sig::mset_maude_sig()),
+    )
+    .expect("parses");
+    let Formula::Forall(_, body) = &f else {
+        panic!("expected a universal quantifier, got {f:?}");
+    };
+    let Formula::Implies(_, concl) = body.as_ref() else {
+        panic!("expected an implication, got {body:?}");
+    };
+    let Formula::Exists(vs, eq) = concl.as_ref() else {
+        panic!("expected an existential quantifier, got {concl:?}");
+    };
+    assert_eq!(
+        (vs[0].name.as_str(), vs[0].idx, vs[0].sort),
+        ("dif", 0, LSort::Msg)
+    );
+    let Formula::Atom(Atom::Eq(_, sum)) = eq.as_ref() else {
+        panic!("expected an equality, got {eq:?}");
+    };
+    let Term::BinOp(BinOp::Union, l, r) = sum else {
+        panic!("expected a multiset union, got {sum:?}");
+    };
+    assert_eq!(var_of(l).sort, LSort::Msg);
+    assert_eq!(var_of(r).sort, LSort::Msg);
+}
+
+// ---- 0-arity symbols and the DH `exp` head ----
+
+/// The conclusion facts of the first rule of `src`.
+fn rule_conclusions(src: &str) -> Vec<Fact> {
+    parse_theory(src, &[])
+        .expect("parses")
+        .items
+        .iter()
+        .find_map(|it| match it {
+            TheoryItem::Rule(r) => Some(r.conclusions.clone()),
+            _ => None,
+        })
+        .expect("the theory declares a rule")
+}
+
+/// HS `nullaryApp` (Theory/Text/Parser/Term.hs:158-163) claims a bare
+/// identifier that is an arity-0 symbol of `funSyms maudeSig ∪ macroNames
+/// maudeSig`, so it is an application, not a variable.  A sigil and a use
+/// ahead of the declaration leave a variable in HS too.  A `.idx`, a `:sort`
+/// suffix and a SAPIC `:type` leave one only here: `symbol` has no word
+/// boundary, so HS claims the name and then fails on the rest of the lexeme.
+#[test]
+fn bare_nullary_symbol_parses_as_application() {
+    let concs = rule_conclusions(
+        "theory T begin\n\
+         builtins: signing, xor, diffie-hellman, natural-numbers\n\
+         functions: c/0\n\
+         macros: m() = 'x'\n\
+         rule R:\n\
+           [ ] --> [ Out(c), Out(true), Out(zero), Out(one), Out(tone), Out(m) ]\n\
+         end",
+    );
+    for (i, name) in ["c", "true", "zero", "one", "tone", "m"].iter().enumerate() {
+        assert!(
+            matches!(&concs[i].args[0], Term::App(n, a) if n == name && a.is_empty()),
+            "{name} is not a 0-arity application: {:?}",
+            concs[i].args[0]
+        );
+    }
+
+    // The name is claimed only when the whole lexeme is it, so anything past
+    // the bare identifier leaves a variable.
+    let concs = rule_conclusions(
+        "theory T begin\n\
+         functions: c/0\n\
+         rule R:\n\
+           [ ] --> [ Out(c.1), Out(c:msg), Out(~c) ]\n\
+         end",
+    );
+    for (i, want) in [
+        (0usize, (1u64, LSort::Msg)),
+        (1, (0, LSort::Msg)),
+        (2, (0, LSort::Fresh)),
+    ] {
+        let v = var_of(&concs[i].args[0]);
+        assert_eq!((v.name.as_str(), v.idx, v.sort), ("c", want.0, want.1));
+    }
+
+    // A SAPIC `:type` annotation is the same: the lexeme continues past the
+    // symbol's name, so the name is not claimed.
+    let thy = parse_theory(
+        "theory T begin\nfunctions: c/0\nprocess: out(c:ty)\nend",
+        &[],
+    )
+    .expect("parses");
+    let out = thy
+        .items
+        .iter()
+        .find_map(|it| match it {
+            TheoryItem::TopLevelProcess(p) => Some(p.clone()),
+            _ => None,
+        })
+        .expect("the theory declares a process");
+    let Process::Action {
+        action: SapicAction::ChOut { msg, .. },
+        ..
+    } = &out
+    else {
+        panic!("expected an out action, got {out:?}");
+    };
+    assert_eq!(var_of(msg).typ.as_deref(), Some("ty"));
+
+    // `lookupArity`/`nullaryApp` read the signature declared SO FAR, so a use
+    // ahead of the declaration is a variable.
+    let concs = rule_conclusions(
+        "theory T begin\n\
+         rule R:\n\
+           [ ] --> [ Out(c) ]\n\
+         functions: c/0\n\
+         end",
+    );
+    assert_eq!(var_of(&concs[0].args[0]).name, "c");
+}
+
+/// `nullaryApp` matches through `symbol`, which has no word boundary, so HS
+/// claims any identifier that merely STARTS with a 0-arity symbol's name and
+/// then fails on the rest.  This parser requires the whole identifier
+/// instead: probe `probes/S1_nullary_prefix.spthy` loads here and is a parse
+/// error upstream.
+#[test]
+fn nullary_symbol_matches_the_whole_identifier() {
+    let concs = rule_conclusions(
+        "theory T begin\n\
+         functions: c/0\n\
+         rule R:\n\
+           [ ] --> [ Out(cx) ]\n\
+         end",
+    );
+    assert_eq!(var_of(&concs[0].args[0]).name, "cx");
+}
+
+/// A prefix (or `op{a}b`) application whose head resolves to HS `expSym`
+/// builds the same node the `^` operator does, which is what makes
+/// `prettyTerm` render it infix (Term/Term.hs:310).  A redeclaration that is
+/// a different symbol keeps the application.
+#[test]
+fn prefix_exp_resolving_to_the_dh_symbol_is_binop_exp() {
+    let concs = rule_conclusions(
+        "theory T begin\n\
+         builtins: diffie-hellman\n\
+         rule R:\n\
+           [ ] --> [ Out(exp('a', 'b')), Out(exp{'a'}'b'), Out('a' ^ 'b') ]\n\
+         end",
+    );
+    for c in &concs {
+        assert!(
+            matches!(&c.args[0], Term::BinOp(BinOp::Exp, _, _)),
+            "expected an exponentiation node, got {:?}",
+            c.args[0]
+        );
+    }
+
+    // `functions: exp/2 [private]` is a different symbol.
+    let concs = rule_conclusions(
+        "theory T begin\n\
+         functions: exp/2 [private]\n\
+         rule R:\n\
+           [ ] --> [ Out(exp('a', 'b')) ]\n\
+         end",
+    );
+    assert!(
+        matches!(&concs[0].args[0], Term::App(n, a) if n == "exp" && a.len() == 2),
+        "expected an application, got {:?}",
+        concs[0].args[0]
+    );
+
+    // A lone `[AC]` declaration resolves to the AC symbol.
+    let concs = rule_conclusions(
+        "theory T begin\n\
+         functions: exp/2 [AC]\n\
+         rule R:\n\
+           [ ] --> [ Out(exp('a', 'b')) ]\n\
+         end",
+    );
+    assert!(
+        matches!(&concs[0].args[0], Term::BinOp(BinOp::AcFct(_), _, _)),
+        "expected an AC node, got {:?}",
+        concs[0].args[0]
+    );
+}
+
+/// The goal grammar reads a stored proof's terms in the state of the parser
+/// the text came out of, so it resolves the same 0-arity constants and `[AC]`
+/// infix operators the theory parse did.
+#[test]
+fn structural_mode_resolves_nullary_names_from_the_signature() {
+    let mut msig = pair_maude_sig();
+    msig.st_fun_syms
+        .insert(tamarin_term::function_symbols::NoEqSym::new(
+            b"c".to_vec(),
+            0,
+            tamarin_term::function_symbols::Privacy::Public,
+            tamarin_term::function_symbols::Constructability::Constructor,
+        ));
+    msig.st_ac_fun_syms
+        .insert(tamarin_term::function_symbols::AcFctSym::new(
+            b"add".to_vec(),
+            tamarin_term::function_symbols::Privacy::Public,
+            tamarin_term::function_symbols::Constructability::Constructor,
+            tamarin_term::function_symbols::NdcState::NotNdc,
+        ));
+
+    assert!(matches!(goal_term("c", &msig).unwrap(), Term::App(n, a) if n == "c" && a.is_empty()));
+    assert!(matches!(
+        goal_term("(x add c)", &msig).unwrap(),
+        Term::BinOp(BinOp::AcFct(_), _, _)
+    ));
+    // Without the declarations both spellings stay what the bare grammar
+    // gives them.
+    assert!(matches!(
+        goal_term("c", &pair_maude_sig()).unwrap(),
+        Term::Var(_)
+    ));
+    assert!(goal_term("(x add c)", &pair_maude_sig()).is_err());
+}
+
+// =========================================================================
+// Rule `let` inlining
+// =========================================================================
+//
+// HS applies the `let` substitution to `(ps, as, cs, rs)` inside the rule
+// parsers themselves (Theory/Text/Parser/Rule.hs:119, 133, 153), so a parsed
+// rule carries no `let`-bound names.  `letBlock` folds the bindings with
+// `foldr1 compose` over singletons (Theory/Text/Parser/Let.hs:35) and
+// `compose s1 s2` means `s1(s2(t))` (Term/Substitution/SubstVFree.hs:186-191),
+// so the bindings apply in reverse source order.
+
+/// The single rule of a one-rule theory.
+fn only_rule(src: &str) -> Rule {
+    let thy = parse_theory(src, &[]).expect("parses");
+    thy.items
+        .iter()
+        .find_map(|i| match i {
+            TheoryItem::Rule(r) => Some(r.clone()),
+            _ => None,
+        })
+        .expect("one rule")
+}
+
+#[test]
+fn let_inlining_substitutes_in_premises() {
+    // rule R: let r = ~k in [In(r), Fr(~k)] --[]-> []
+    // The In premise holds ~k, not the local `r`.
+    let r = only_rule(
+        r#"theory T begin
+            rule R: let r = ~k in [In(r), Fr(~k)] --[]-> []
+        end"#,
+    );
+    let in_fact = &r.premises[0];
+    assert_eq!(in_fact.name, "In");
+    match &in_fact.args[0] {
+        Term::Var(vs) if vs.name == "k" && vs.sort == LSort::Fresh => {}
+        other => panic!("expected ~k after subst, got {other:?}"),
+    }
+}
+
+#[test]
+fn let_inlining_is_sequential() {
+    // let a = ~k; b = h(a) in [In(b)] --[]-> [] gives In(h(~k)): `b`'s
+    // singleton applies first, then `a`'s rewrites the `a` it introduced.
+    // `builtins: hashing` declares `h/1` — the parser resolves prefix
+    // applications through `lookupArity` and an undeclared head would
+    // reparse as a variable and fail (oracle probes p05/p25).
+    let r = only_rule(
+        r#"theory T begin
+            builtins: hashing
+            rule R: let a = ~k b = h(a) in [In(b), Fr(~k)] --[]-> []
+        end"#,
+    );
+    match &r.premises[0].args[0] {
+        Term::App(name, args) if name == "h" => match &args[0] {
+            Term::Var(vs) if vs.name == "k" && vs.sort == LSort::Fresh => {}
+            other => panic!("expected h(~k), got h({other:?})"),
+        },
+        other => panic!("expected h(~k), got {other:?}"),
+    }
+}
+
+#[test]
+fn let_inlining_leaves_a_forward_reference_free() {
+    // A binding whose right-hand side names a LATER binding keeps that name as
+    // a free variable: by the time `a`'s singleton introduces `b` into the
+    // body, `b`'s singleton has already been applied.
+    //   let a = h(b) b = ~k in [In(a), Fr(~k)]
+    // gives In(h(b)) with `b` a free Msg-var, NOT h(~k).
+    // `builtins: hashing` declares `h/1` — see `let_inlining_is_sequential`.
+    let r = only_rule(
+        r#"theory T begin
+            builtins: hashing
+            rule R: let a = h(b) b = ~k in [In(a), Fr(~k)] --[]-> []
+        end"#,
+    );
+    match &r.premises[0].args[0] {
+        Term::App(name, args) if name == "h" => match &args[0] {
+            Term::Var(vs) if vs.name == "b" && vs.sort != LSort::Fresh => {}
+            other => panic!("expected h(b) with free b, got h({other:?})"),
+        },
+        other => panic!("expected h(b), got {other:?}"),
+    }
+}
+
+#[test]
+fn let_inlining_substitutes_in_actions_and_conclusions() {
+    let r = only_rule(
+        r#"theory T begin
+            rule R: let r = ~k in [Fr(~k)] --[Use(r)]-> [Out(r)]
+        end"#,
+    );
+    match &r.actions[0].args[0] {
+        Term::Var(vs) if vs.name == "k" && vs.sort == LSort::Fresh => {}
+        other => panic!("expected Use(~k), got Use({other:?})"),
+    }
+    match &r.conclusions[0].args[0] {
+        Term::Var(vs) if vs.name == "k" && vs.sort == LSort::Fresh => {}
+        other => panic!("expected Out(~k), got Out({other:?})"),
+    }
+}
+
+/// HS substitutes into `rs0`, the rule's `_restrict` formulas, alongside the
+/// three fact rows (Theory/Text/Parser/Rule.hs:119).
+#[test]
+fn let_inlining_reaches_an_embedded_restriction() {
+    let r = only_rule(
+        r#"theory T begin
+            builtins: hashing
+            rule R: let m = h(~k) in [Fr(~k)] --[ _restrict(m = ~k) ]-> []
+        end"#,
+    );
+    match &r.embedded_restrictions[0] {
+        Formula::Atom(Atom::Eq(lhs, _)) => match lhs {
+            Term::App(name, args) if name == "h" => match &args[0] {
+                Term::Var(vs) if vs.name == "k" && vs.sort == LSort::Fresh => {}
+                other => panic!("expected h(~k), got h({other:?})"),
+            },
+            other => panic!("expected h(~k), got {other:?}"),
+        },
+        other => panic!("expected an equality atom, got {other:?}"),
+    }
+}
+
+#[test]
+fn let_inlining_respects_quantifier_shadowing() {
+    let r = only_rule(
+        r#"theory T begin
+            rule R: let x = 'value' in []
+              --[ _restrict(Ex x #i. A(x) @ i) ]-> []
+        end"#,
+    );
+    match &r.embedded_restrictions[0] {
+        Formula::Exists(vars, body) => {
+            let x = vars.iter().find(|v| v.name == "x").expect("bound x");
+            match body.as_ref() {
+                Formula::Atom(Atom::Action(fact, _)) => {
+                    assert_eq!(fact.args, vec![Term::Var(x.clone())]);
+                }
+                other => panic!("expected an action atom, got {other:?}"),
+            }
+        }
+        other => panic!("expected an existential, got {other:?}"),
+    }
+}
+
+#[test]
+fn let_inlining_avoids_capture_by_quantifiers() {
+    let r = only_rule(
+        r#"theory T begin
+            rule R: let x = y in []
+              --[ _restrict(Ex y #i. A(x,y) @ i) ]-> []
+        end"#,
+    );
+    match &r.embedded_restrictions[0] {
+        Formula::Exists(vars, body) => {
+            let bound_y = vars.iter().find(|v| v.name == "y").expect("bound y");
+            match body.as_ref() {
+                Formula::Atom(Atom::Action(fact, _)) => {
+                    let [Term::Var(inserted_y), Term::Var(original_y)] = fact.args.as_slice()
+                    else {
+                        panic!("expected two variable arguments, got {:?}", fact.args);
+                    };
+                    assert_ne!(inserted_y, bound_y, "replacement y was captured");
+                    assert_eq!(original_y, bound_y, "bound occurrence was not renamed");
+                }
+                other => panic!("expected an action atom, got {other:?}"),
+            }
+        }
+        other => panic!("expected an existential, got {other:?}"),
+    }
+}
+
+#[test]
+fn rule_let_requires_a_binding_and_in_terminator() {
+    for src in [
+        "theory T begin rule R: let in [] --[]-> [] end",
+        "theory T begin rule R: let x = y [] --[]-> [] end",
+    ] {
+        assert!(parse_theory(src, &[]).is_err(), "unexpectedly parsed {src}");
+    }
+}
+
+#[test]
+fn rule_let_rejects_sorts_outside_msg_and_nat() {
+    for binder in ["$x", "~x", "#x"] {
+        let src = format!("theory T begin rule R: let {binder} = y in [] --[]-> [] end");
+        assert!(
+            parse_theory(&src, &[]).is_err(),
+            "unexpectedly parsed {src}"
+        );
+    }
+}
+
+/// HS's rule `let` binds a variable — `sortedLVar [LSortMsg, LSortNat]` under
+/// `genericletBlock` (Theory/Text/Parser/Let.hs:24-31) — while the rule body
+/// reads a declared arity-0 symbol as `nullaryApp`'s constant
+/// (Theory/Text/Parser/Term.hs:158-163).  A binding whose name is such a
+/// symbol therefore binds a variable the body never mentions, and the oracle
+/// prints `--[ E( c ) ]->` for the theory below.
+#[test]
+fn a_let_binder_is_a_variable_not_a_nullary_constant() {
+    let thy = parse_theory(
+        "theory L\nbegin\n\nfunctions: c/0\n\nrule R:\n  let c = 'lit'\n  in\n  \
+         [ ] --[ E(c) ]-> [ ]\n\nend\n",
+        &[],
+    )
+    .expect("parses");
+    let rule = thy
+        .items
+        .iter()
+        .find_map(|i| match i {
+            TheoryItem::Rule(r) => Some(r),
+            _ => None,
+        })
+        .expect("one rule");
+    assert_eq!(
+        rule.actions[0].args,
+        vec![Term::App("c".to_string(), vec![])]
     );
 }

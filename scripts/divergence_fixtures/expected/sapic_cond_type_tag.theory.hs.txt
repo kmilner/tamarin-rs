@@ -1,0 +1,35 @@
+theory SapicCondTypeTag
+
+begin
+
+// Function signature and definition of the equational theory E
+
+functions: fst/1, pair/2, snd/1
+equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
+
+predicate: Eq( a, b )<=>a = b
+
+predicate: Pred( a, b )<=>a = a
+
+let  P (x.1:foo) = out('yes') if Eq( x.1, 'a' ) out('no')
+
+let  S (#k.1:node,#l.1:node) = out('yes') if #k.1 < #l.1 out('no')
+
+let  T (#m.1:node) = out('yes') if last(#m.1) out('no')
+
+let  U (x.1,#n.1:node) = out('yes') if Ev( x.1 ) @ #n.1 out('no')
+
+let  V (y.1,#p.1) = out('yes') if Pred( #p.1, y.1 ) out('no')
+
+process:
+  out('done')
+
+function: snd (Any) : Any   
+
+function: pair (Any, Any) : Any   
+
+function: fst (Any) : Any   
+
+
+
+end

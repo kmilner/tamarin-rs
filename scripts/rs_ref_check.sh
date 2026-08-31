@@ -171,21 +171,23 @@ if [ "$MODE" = check ]; then
     fi
 fi
 
-# strip_env / flags_for / include_shas come from gate_common.sh.  ikey is
+# strip_env / flags_for / include_shas / oracle_shas come from gate_common.sh. ikey is
 # deliberately NOT gate_common's ckey: the reference key must not carry the
 # oracle fingerprint (the header's `# oracle:` line records that separately),
 # so it is the fingerprint-free prefix of the same format. The `__i` include
 # digest IS carried: an edit to an `#include`d fragment changes the oracle's
 # input, and without it check would blame the port (DIFF) instead of the
 # input (INPUT_CHANGED).
-ikey() {  # input key: theory sha + include-shas suffix + flags-hash suffix
-    local h fl inc; h=$(sha256sum "$2" | cut -d' ' -f1); fl=$(flags_for "$1")
+ikey() {  # input key: theory sha + dependency + flags suffixes
+    local h fl inc ora; h=$(sha256sum "$2" | cut -d' ' -f1); fl=$(flags_for "$1")
     inc=$(include_shas "$2")
+    ora=$(oracle_shas "$2" "$fl")
     if [ -n "$inc" ]; then h="${h}__i$(printf '%s' "$inc" | sha256sum | cut -c1-12)"; fi
+    if [ -n "$ora" ]; then h="${h}__o$(printf '%s' "$ora" | sha256sum | cut -c1-12)"; fi
     if [ -n "$fl" ]; then printf '%s__f%s' "$h" "$(printf '%s' "$fl" | sha256sum | cut -c1-12)"
     else printf '%s' "$h"; fi
 }
-export -f strip_env flags_for include_shas ikey
+export -f strip_env flags_for include_shas oracle_shas ikey
 
 # one <rel> → "rel \t ikey \t sha|TIMEOUT|ERROR=n \t lines"
 one() {

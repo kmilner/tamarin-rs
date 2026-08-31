@@ -51,14 +51,7 @@ NO_HS_FILL="${NO_HS_FILL:-}"
 mkdir -p "$(dirname "$RESULTS_TSV")" "$HS_CACHE"
 [ -x "$RS_PATH" ] || { echo "no RS binary at $RS_PATH" >&2; exit 2; }
 
-find_hs_bin() {
-    local root="$1" c
-    for c in "$root"/tamarin-prover-testing/.stack-work/install/*/*/*/bin/tamarin-prover \
-             "$root"/tamarin-prover-testing/.stack-work/dist/*/ghc-*/build/tamarin-prover/tamarin-prover; do
-        [ -x "$c" ] && { echo "$c"; return 0; }
-    done; return 1
-}
-HS_PATH="${HS_PATH:-$(find_hs_bin "$repo_root")}" || true
+HS_PATH=$(resolve_hs_oracle "$repo_root") || exit 2
 # Required even under NO_HS_FILL: the oracle binary's fingerprint is part of
 # the cache key, so without it no entry can be ADDRESSED, let alone filled.
 [ -x "${HS_PATH:-/nonexistent}" ] || {
@@ -85,7 +78,7 @@ wf_block() {
 }
 # flags_for / ckey come from gate_common.sh — one key format for this gate,
 # pretty_gate.sh (whose cache this gate READS) and corpus_file_diff.sh.
-export -f strip_env wf_block flags_for include_shas ckey
+export -f strip_env wf_block flags_for include_shas oracle_shas ckey
 
 # --- PHASE 0: fill any MISSING <key>.load.gz with one oracle LOAD.
 # Same artifact and same key pretty_gate.sh PHASE 0 writes, so whichever gate

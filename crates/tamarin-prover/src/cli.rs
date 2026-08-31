@@ -118,8 +118,11 @@ pub struct Args {
     // Lemma selection.
     /// True iff any `--prove` (with or without value) was passed.
     pub prove_mode: bool,
-    /// Names / prefixes from `--prove` or `--lemma`. An empty entry
-    /// (e.g. bare `--prove`) means "all lemmas".
+    /// HS `lemmaNames` (TheoryLoader.hs:326): the `--prove` values followed
+    /// by the `--lemma` values, each flag's values in reverse command-line
+    /// order.  An empty entry (e.g. bare `--prove`) means "all lemmas".
+    /// `lemma_matches` reads the list as a set; the order is observable
+    /// through `_lemmasToProve`, which the wellformedness check reports in.
     pub lemma_names: Vec<String>,
 
     // Theory-load options.
@@ -534,8 +537,13 @@ pub fn parse_args(raw: &[String]) -> Result<Args, clap::Error> {
     let mut args = Args {
         prove_mode: !cli.load.prove.is_empty(),
         lemma_names: {
-            let mut v = cli.load.prove;
-            v.extend(cli.load.lemma);
+            // HS `lemmaNames = findArg "prove" as ++ findArg "lemma" as`
+            // (TheoryLoader.hs:326).  `addArg` PREPENDS each occurrence to
+            // the `Arguments` list (Console.hs:279-280) and `findArg` reads
+            // that list front to back (Console.hs:269-270), so one flag's
+            // values arrive in reverse command-line order.
+            let mut v: Vec<String> = cli.load.prove.into_iter().rev().collect();
+            v.extend(cli.load.lemma.into_iter().rev());
             v
         },
         stop_on_trace: cli.load.stop_on_trace,
@@ -631,7 +639,7 @@ impl Args {
 /// bare `""`) matches only by exact name.  Note this is NOT "drop all
 /// empties": three or more bare entries (e.g. `["","",""]`) fall
 /// through to the `any` arm and match nothing, exactly like HS.
-pub fn lemma_matches(filter: &[String], lemma_name: &str) -> bool {
+pub(crate) fn lemma_matches(filter: &[String], lemma_name: &str) -> bool {
     match filter.len() {
         0 => return true,
         1 if filter[0].is_empty() => return true,
@@ -653,12 +661,12 @@ pub fn lemma_matches(filter: &[String], lemma_name: &str) -> bool {
 
 /// The crate version; also spliced into the `Generated from:` block of
 /// emitted theories (`pretty_theory::BuildInfo`).
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+pub(crate) const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Git revision + branch + build timestamp, populated by `build.rs`.
-pub const GIT_REV: &str = env!("TAMARIN_GIT_REV");
-pub const GIT_BRANCH: &str = env!("TAMARIN_GIT_BRANCH");
-pub const BUILD_TIMESTAMP: &str = env!("TAMARIN_BUILD_TIMESTAMP");
+pub(crate) const GIT_REV: &str = env!("TAMARIN_GIT_REV");
+pub(crate) const GIT_BRANCH: &str = env!("TAMARIN_GIT_BRANCH");
+pub(crate) const BUILD_TIMESTAMP: &str = env!("TAMARIN_BUILD_TIMESTAMP");
 
 /// `--version` detail: version plus the build provenance `build.rs` records.
 const LONG_VERSION: &str = concat!(

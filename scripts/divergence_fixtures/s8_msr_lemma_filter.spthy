@@ -1,0 +1,28 @@
+// A `-m msr` run whose `--prove` selector drops the only offending lemma.
+//
+// `processOpenTheory`'s msr arm ends in `filterLemma (lemmaSelector thyOpts)`
+// (Main/TheoryLoader.hs:470-484), and `checkWellformedness`
+// (Theory/Tools/Wellformedness.hs:1270-1286) runs after it
+// (Main/TheoryLoader.hs:553-565), so `lemmaAttributeReport`
+// (Theory/Tools/Wellformedness.hs:924-932) sees only the selected lemmas.
+// `drop` carries `reuse` on an `exists-trace` lemma, which the check reports,
+// and `--prove=keep` removes it before the check runs.
+//
+// Mode `match`: both engines print no report for this selector.
+//
+// Compared slice: the wf report block.
+
+
+theory S8MsrLemmaFilter
+begin
+
+rule R:
+  [ Fr(~k) ] --[ A(~k) ]-> [ Out(~k) ]
+
+lemma keep:
+  "All k #i. A(k) @ #i ==> F"
+
+lemma drop [reuse]:
+  exists-trace "Ex k #i. A(k) @ #i"
+
+end

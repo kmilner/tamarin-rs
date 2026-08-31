@@ -1,0 +1,63 @@
+// Tuple nesting and AC nesting inside the atoms a guarded formula keeps as its
+// guard.
+//
+// `convert` splits a quantifier body with `conjActionsEqs`
+// (Theory/Constraint/System/Guarded.hs:516-519), which admits only `Action` and
+// `EqE` atoms, and hands them to `closeGuarded` (Guarded.hs:376-384); the terms
+// inside those atoms are what the `guarded formula characterizing …` block
+// prints.  Both quantifier arms are here: `Guarded`'s universal guard and
+// `Existential`'s existential one.
+//
+// Two term shapes ride in on those atoms.
+//
+//   - Pairs are BINARY in the oracle
+//     (`fAppPair (x,y) = fAppNoEq pairSym [x, y]`, Term/Term.hs:161-163), so
+//     `<a, <b, c>>` and `<a, b, c>` are one term and print alike, while
+//     `<<a, b>, c>` — a pair in a non-tail position — is a different term and
+//     keeps its brackets.  `Spliced` carries the tail pair inside an AC
+//     argument, where the splice and the AC sort meet.
+//   - `fAppAC` (Term/Term/Raw.hs:119-129) flattens an argument headed by the
+//     same AC symbol and sorts what is left, so the written nesting and the
+//     written order are both erased: `(a ++ b) ++ c`, `a ++ (b ++ c)` and
+//     `c ++ a ++ b` all print `(a++b++c)`, `a ++ a ++ b` keeps both copies of
+//     `a`, and the pair in `Spliced` sorts after the bare variable.
+//
+// A conversion that spliced a non-tail pair collapses `Deep`'s brackets, and
+// one that dropped the AC flattening or the sort separates `LeftFold` from
+// `RightFold` or leaves `Chain` in source order.  No corpus lemma puts a nested
+// tuple or a three-element AC chain in a guard.
+//
+// Mode `match`: the two engines agree on this shape.
+//
+// Compared slices: the wf report block, which pins the run clean, AND the
+// `theory … end` echo, which carries the guarded blocks and the rule the same
+// terms are written in.
+
+theory S3NestedTupleGuard
+begin
+
+builtins: multiset
+
+rule A:
+  [ In( <a, b, c> ) ]
+  --[ Flat( <a, b, c> ), Nested( <a, <b, c>> ), Deep( <<a, b>, c> ),
+      Chain( c ++ a ++ b ), Repeat( a ++ a ++ b ),
+      Spliced( <a, <b, c>> ++ a ),
+      LeftFold( (a ++ b) ++ c ), RightFold( a ++ (b ++ c) ) ]->
+  [ Out( <a, b, c> ) ]
+
+lemma Guarded:
+  "All a b c #i.
+     Flat( <a, b, c> ) @ #i &
+     Nested( <a, <b, c>> ) @ #i &
+     Deep( <<a, b>, c> ) @ #i &
+     Chain( c ++ a ++ b ) @ #i &
+     Repeat( a ++ a ++ b ) @ #i &
+     Spliced( <a, <b, c>> ++ a ) @ #i
+   ==> Ex #j. LeftFold( (a ++ b) ++ c ) @ #j & RightFold( a ++ (b ++ c) ) @ #j"
+
+lemma Existential:
+  exists-trace
+  "Ex a b c #i. Deep( <<a, b>, c> ) @ #i & Spliced( <a, <b, c>> ++ a ) @ #i"
+
+end

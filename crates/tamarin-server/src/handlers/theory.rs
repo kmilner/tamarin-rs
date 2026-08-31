@@ -56,43 +56,10 @@ fn not_found() -> Response {
     StatusCode::NOT_FOUND.into_response()
 }
 
-/// A theory looked up from the store, with its user-declared function-symbol
-/// sets installed on the request thread for as long as the value is held.
-///
-/// HS resolves a declared `[AC]` / nullary / unary symbol at PARSE time, so its
-/// terms are born resolved; the port resolves them through thread-locals, which
-/// start empty on every axum worker (see
-/// [`TheoryEntry::install_user_funs`](crate::state::TheoryEntry::install_user_funs)).
-/// Binding the sets to the looked-up theory makes that a property of the
-/// handler boundary rather than of each renderer remembering: a handler cannot
-/// hold the entry without them.  Renderers that install again nest harmlessly —
-/// the guards restore in reverse order and each installs the same sets.
-///
-/// Not held across an `.await`: the sets belong to the thread, and a suspended
-/// task can resume on another one.
-struct LoadedTheory {
-    entry: crate::state::TheoryEntry,
-    _user_funs: tamarin_theory::elaborate::UserFunsForTheoryGuard,
-}
-
-impl std::ops::Deref for LoadedTheory {
-    type Target = crate::state::TheoryEntry;
-
-    fn deref(&self) -> &Self::Target {
-        &self.entry
-    }
-}
-
-/// The theory at `idx` with its user-fn sets installed (see [`LoadedTheory`]),
-/// or `None` for an index naming no theory — HS `withTheory`'s `notFound`
-/// (`src/Web/Handler.hs:662-672`).
-fn load_theory(state: &AppState, idx: usize) -> Option<LoadedTheory> {
-    let entry = state.store.get(idx)?;
-    let user_funs = entry.install_user_funs();
-    Some(LoadedTheory {
-        entry,
-        _user_funs: user_funs,
-    })
+/// The theory at `idx`, or `None` for an index naming no theory — HS
+/// `withTheory`'s `notFound` (`src/Web/Handler.hs:662-672`).
+fn load_theory(state: &AppState, idx: usize) -> Option<crate::state::TheoryEntry> {
+    state.store.get(idx)
 }
 
 // ---------------------------------------------------------------------
@@ -210,17 +177,10 @@ fn apply_method_and_redirect(
     // Without filtering here the numbering would drift on Sorry/no-op
     // candidates that the UI omits.
     let method = {
-        // `exec_proof_method` below resolves user fun symbols via
-        // thread-locals — install them (tokio workers start empty; see
-        // `ProofState::user_funs`).
-        let _user_funs_guard = src_ps.install_user_funs();
-        let mut ctx_guard = src_ps.ctx.lock();
-        // Install this lemma's per-lemma `use_induction`/`heuristic` into the
-        // shared ctx BEFORE ranking, so the method-index → method mapping
-        // matches HS (and the numbering `write_applicable_methods` displays).
-        // Without this the mapping ranks under `AvoidInduction`/`Smart`, so a
-        // `[use_induction]` lemma's method `1` resolves to the wrong method.
-        src_ps.install_lemma_settings(&mut ctx_guard, lemma);
+        let ctx = match src_ps.context_for_lemma(lemma) {
+            Ok(ctx) => ctx,
+            Err(e) => return json_resp::alert(e),
+        };
         // Haskell `applyMethodAtPath` ranks with `useHeuristic heuristic
         // (length proofPath)` (Web/Theory.hs:96); the depth selects
         // which ranking of a multi-ranking heuristic is active
@@ -228,7 +188,7 @@ fn apply_method_and_redirect(
         // the proof-path length, not a hardcoded 0.
         let methods: Vec<_> = tamarin_theory::constraint::solver::search::candidate_methods(
             &sys_at_path,
-            &ctx_guard,
+            &ctx,
             sub.len(),
         )
         .into_iter()
@@ -237,7 +197,7 @@ fn apply_method_and_redirect(
         // selects the same method the user saw.
         .filter(|m| {
             tamarin_theory::constraint::solver::proof_method::is_applicable_for_display(
-                &ctx_guard,
+                &ctx,
                 m,
                 &sys_at_path,
             )
@@ -345,7 +305,7 @@ fn title_for(entry: &crate::state::TheoryEntry, path: &path_parse::TheoryPath) -
     use path_parse::TheoryPath::*;
     match path {
         // TheoryHelp -> "Theory: " ++ thy._thyName
-        Help => format!("Theory: {}", entry.name),
+        Help => format!("Theory: {}", entry.typed_theory.name),
         // TheoryRules -> "Multiset rewriting rules and restrictions"
         Rules => "Multiset rewriting rules and restrictions".to_string(),
         // TheoryMessage -> "Message theory"
@@ -463,10 +423,6 @@ fn title_for(entry: &crate::state::TheoryEntry, path: &path_parse::TheoryPath) -
 /// by the same pipeline `--prove` runs — via the shared `format_wf_block`,
 /// so it matches HS byte-for-byte (empty report ⇒ the "all successful" block).
 fn render_theory_source(entry: &crate::state::TheoryEntry) -> String {
-    // `pretty_closed_theory` AC-canonicalises parser-AST rule/lemma terms,
-    // which reads the user-fn thread-locals — empty on an axum worker thread.
-    // See `TheoryEntry::install_user_funs`.
-    let _user_funs_guard = entry.install_user_funs();
     let build = tamarin_theory::pretty_theory::BuildInfo {
         tamarin_version: env!("CARGO_PKG_VERSION").to_string(),
         maude_version: String::new(),
@@ -475,7 +431,6 @@ fn render_theory_source(entry: &crate::state::TheoryEntry) -> String {
         compiled_at: String::new(),
     };
     let wf_block = tamarin_theory::pretty_theory::format_wf_block(&entry.wf_report);
-    let in_file = entry.origin.label();
     // Live proof bodies (HS `prettyClosedTheory` prints the stored
     // `IncrementalProof` of every lemma; see doc comment above).
     let proved: Vec<tamarin_theory::pretty_theory::ProvedLemma> = match &entry.proof_state {
@@ -493,13 +448,10 @@ fn render_theory_source(entry: &crate::state::TheoryEntry) -> String {
         None => Vec::new(),
     };
     let mut body = tamarin_theory::pretty_theory::pretty_closed_theory(
-        &entry.parser_theory,
         &entry.typed_theory,
         &proved,
         &wf_block,
         &build,
-        &in_file,
-        false,
     );
     // `getTheorySourceR` / `getTheoryMessageDeductionR` / `getDownloadTheoryR`
     // are all `render . prettyClosedTheory` (Handler.hs:1015-1022, :1050-1055,
@@ -530,18 +482,6 @@ pub async fn source_(State(state): State<Arc<AppState>>, Path(idx): Path<usize>)
     // ensure it here (best-effort — a Maude failure falls back to the
     // `by sorry` bodies).  Mirrors the framed-page
     // handler's unconditional `ensure_proof_state`.
-    let _ = state.store.ensure_proof_state(idx, &state.cfg);
-    let Some(entry) = load_theory(&state, idx) else {
-        return not_found();
-    };
-    text_response(render_theory_source(&entry))
-}
-
-pub async fn message_deduction(
-    State(state): State<Arc<AppState>>,
-    Path(idx): Path<usize>,
-) -> Response {
-    // See `source_` — identical output, identical proof-state need.
     let _ = state.store.ensure_proof_state(idx, &state.cfg);
     let Some(entry) = load_theory(&state, idx) else {
         return not_found();
@@ -670,17 +610,12 @@ pub async fn autoprove(
     // `ProverSession` (see `ProofState::session`): HS's prover runs
     // under `getProofContext l thy` — with the `typing_assumptions`-
     // refined source cases gated on `lemmaSourceKind`, per-lemma
-    // `is_exists_trace` / heuristic / `use_induction` — NOT under the
-    // display-oriented shared web ctx (whose empty `typing_assumptions`
-    // made e.g. NSPK3's `nonce_secrecy` search blow up on unrefined
-    // KU-chain enumeration).
+    // `is_exists_trace` / heuristic / `use_induction`.
     let lemma_owned = lemma_name.clone();
     let sub_owned = sub.clone();
     let ps_for_search = new_ps.clone();
     let result = tokio::task::spawn_blocking(move || -> Result<NodeStatus, String> {
-        let Some(session) = ps_for_search.session.clone() else {
-            return Err("prover session unavailable".to_string());
-        };
+        let session = ps_for_search.session.clone();
         let subtree = tamarin_theory::prove::prove_system_in_session(
             &session,
             &lemma_owned,
@@ -884,10 +819,7 @@ pub async fn autoprove_all(
     let _ = tokio::task::spawn_blocking(move || {
         // Per-lemma contexts from the retained session, exactly as
         // `autoprove` (HS runs each fold step under `getProofContext`).
-        let Some(session) = ps_for_search.session.clone() else {
-            tracing::warn!("autoproveAll: prover session unavailable; leaving trees as-is");
-            return;
-        };
+        let session = ps_for_search.session.clone();
         for lname in &lemma_names_owned {
             // Root system for this lemma — path `[]` is HS's
             // `focus [] prover = prover`, run on `psInfo (root prf)`.
@@ -984,7 +916,7 @@ pub async fn verify(
         // synthesised Help path.
         _ => {
             let help_path = path_parse::TheoryPath::Help;
-            let title = format!("Theory: {}", entry.name);
+            let title = format!("Theory: {}", entry.typed_theory.name);
             let body = crate::handlers::theory_html::path_html(&entry, &help_path);
             json_resp::html(title, body).into_response()
         }
@@ -1595,7 +1527,7 @@ pub async fn graph(
     // the image.  There is no `fdp` retry on this branch (`_ -> return
     // False`), and a failure is `Nothing` → HS's generic `notFound`.
     if let Some(json_cmd) = state.cfg.json_path.clone() {
-        let label = resolved.json_label(&theory.name);
+        let label = resolved.json_label(&theory.typed_theory.name);
         let Some(sys) = resolved.into_system() else {
             return not_found();
         };
@@ -1694,7 +1626,7 @@ pub async fn graph_json(
         Ok(r) => r,
         Err(message) => return internal_server_error(&message),
     };
-    let label = resolved.json_label(&theory.name);
+    let label = resolved.json_label(&theory.typed_theory.name);
     match resolved {
         // HS `proofPathCode`: `fromMaybe BL.empty`, i.e. an unresolvable proof
         // path is a 200 with an empty body.
@@ -2031,16 +1963,12 @@ pub async fn proof_step(
         Some(n) => n,
         None => return json_resp::alert(format!("no node at path {:?} after step", case_path)),
     };
-    // Install this lemma's per-lemma `use_induction`/`heuristic` into the
-    // shared ctx before ranking the re-rendered snippet (HS `getProofContext`).
-    // Also the user-fn thread-locals — the snippet execs candidate methods.
-    let _user_funs_guard = ps.install_user_funs();
-    let mut ctx_guard = ps.ctx.lock();
-    ps.install_lemma_settings(&mut ctx_guard, &lemma);
-    let mut html = crate::handlers::proof_tree::render_sub_proof_snippet(
-        idx, &lemma, &case_path, node, &ctx_guard,
-    );
-    drop(ctx_guard);
+    let ctx = match ps.context_for_lemma(&lemma) {
+        Ok(ctx) => ctx,
+        Err(e) => return json_resp::alert(e),
+    };
+    let mut html =
+        crate::handlers::proof_tree::render_sub_proof_snippet(idx, &lemma, &case_path, node, &ctx);
     html.push_str("<hr><h3>Proof tree</h3>\n");
     html.push_str(&crate::handlers::proof_tree::render_proof_tree_html(
         idx, &lemma, &root,

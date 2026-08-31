@@ -26,12 +26,17 @@ fi
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
+[ -r "$script_dir/gate_common.sh" ] || { echo "diff_maude_io: missing gate_common.sh" >&2; exit 2; }
+. "$script_dir/gate_common.sh"
+oom_prologue
 
 theory="$1"
 lemma="$2"
 filter="${3:-}"
 
-HS_BIN=$(ls "$repo_root"/tamarin-prover-testing/.stack-work/install/*/*/*/bin/tamarin-prover 2>/dev/null | head -1)
+HS_BIN=$(resolve_hs_oracle "$repo_root") || exit 2
+MAUDE=$(resolve_maude) || exit 2
+maude_on_path "$MAUDE"
 RS_BIN="$repo_root/target/release/examples/dump_proof"
 
 # Rebuild dump_proof first — plain `cargo build --release` does NOT rebuild
@@ -42,8 +47,8 @@ if [ -z "${TAM_RS_NO_AUTO_BUILD:-}" ]; then
         || { echo "Error: cargo build --example dump_proof failed" >&2; exit 1; }
 fi
 
-if [ ! -x "$HS_BIN" ]; then echo "Error: HS binary not found"; exit 1; fi
 if [ ! -x "$RS_BIN" ]; then echo "Error: RS binary not found"; exit 1; fi
+oracle_rev_check "$HS_BIN" "$MAUDE" "$repo_root"
 
 outdir=$(mktemp -d)
 trap 'echo "Logs at $outdir"' EXIT
@@ -54,13 +59,19 @@ rs_log="$outdir/rs.log"
 echo "[diff_maude] Running HS..." >&2
 export TAM_HS_DBG_MAUDE_IO=full
 [ -n "$filter" ] && export TAM_HS_DBG_MAUDE_IO_FILTER="$filter"
-timeout 180 "$HS_BIN" --prove="$lemma" "$theory" 2>"$hs_log" 1>/dev/null || true
+set +e
+timeout 180 "$HS_BIN" --with-maude="$MAUDE" --prove="$lemma" "$theory" 2>"$hs_log" 1>/dev/null
+hs_rc=$?
+set -e
 unset TAM_HS_DBG_MAUDE_IO TAM_HS_DBG_MAUDE_IO_FILTER
 
 echo "[diff_maude] Running RS..." >&2
 export TAM_DBG_MAUDE_IO=full
 [ -n "$filter" ] && export TAM_DBG_MAUDE_IO_FILTER="$filter"
-timeout 180 "$RS_BIN" "$theory" "$lemma" 2>"$rs_log" 1>/dev/null || true
+set +e
+MAUDE_PATH="$MAUDE" timeout 180 "$RS_BIN" "$theory" "$lemma" 2>"$rs_log" 1>/dev/null
+rs_rc=$?
+set -e
 unset TAM_DBG_MAUDE_IO TAM_DBG_MAUDE_IO_FILTER
 
 # Normalize: extract only the maude prompt/reply lines, strip engine prefix.
@@ -94,3 +105,8 @@ fi
 echo
 echo "Files: $outdir/hs.log, $outdir/rs.log, $outdir/hs.maude.norm, $outdir/rs.maude.norm"
 trap - EXIT
+
+if [ "$hs_rc" -ne 0 ] || [ "$rs_rc" -ne 0 ]; then
+    echo "diff_maude_io: prover failure (HS=$hs_rc RS=$rs_rc); logs retained at $outdir" >&2
+    exit 1
+fi

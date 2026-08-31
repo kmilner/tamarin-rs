@@ -3,7 +3,7 @@
 //   scripts/gen_license_headers.py --authors <this file>
 
 use super::*;
-use crate::constraint::constraints::Reason;
+use crate::constraint::constraints::{LessAtom, Reason};
 use tamarin_term::lterm::{LSort, LVar};
 
 fn n(name: &str) -> NodeId {
@@ -29,7 +29,11 @@ fn cyclic_sees_closed_orderings_only() {
         ("reflexive a<a", vec![aa], true),
         ("single edge", vec![ab], false),
     ] {
-        assert_eq!(cyclic(&atoms), want, "{label}");
+        let relation = atoms
+            .iter()
+            .map(|atom| (atom.smaller, atom.larger))
+            .collect();
+        assert_eq!(tamarin_utils::dag::cyclic(&relation), want, "{label}");
     }
 }
 
@@ -104,7 +108,7 @@ fn non_injective_fact_witness_emitted() {
     sys.add_less(LessAtom::new(j, k, Reason::Adversary));
 
     // Build the proof context that knows `Inj` is injective.
-    let mp = match crate::test_maude::maude_path() {
+    let mp = match tamarin_test_support::require_maude_path() {
         Some(p) => p,
         None => return,
     };
@@ -209,7 +213,7 @@ fn nf_memo_agrees_with_unmemoized_verdicts() {
     use tamarin_term::rewriting::RRule;
     use tamarin_term::term::f_app_acfct;
 
-    let Some(mp) = crate::test_maude::maude_path() else {
+    let Some(mp) = tamarin_test_support::require_maude_path() else {
         return;
     };
 

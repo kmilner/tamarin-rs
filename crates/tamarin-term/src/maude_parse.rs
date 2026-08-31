@@ -15,6 +15,7 @@ use crate::lterm::LSort;
 use crate::maude_print::{
     fun_sym_decode, parse_lsort_sym, replace_minus, ATTR_BLOCK_LEN, FUN_SYM_PREFIX,
 };
+use crate::maude_sig::MaudeSig;
 use crate::maude_types::{MSubst, MTerm, MaudeLit};
 use crate::term::Term;
 
@@ -35,11 +36,23 @@ impl std::error::Error for ParseError {}
 struct Cursor<'a> {
     src: &'a [u8],
     pos: usize,
+    sig: Option<&'a MaudeSig>,
 }
 
 impl<'a> Cursor<'a> {
     fn new(src: &'a [u8]) -> Self {
-        Cursor { src, pos: 0 }
+        Cursor {
+            src,
+            pos: 0,
+            sig: None,
+        }
+    }
+    fn with_sig(src: &'a [u8], sig: &'a MaudeSig) -> Self {
+        Cursor {
+            src,
+            pos: 0,
+            sig: Some(sig),
+        }
     }
     fn rest(&self) -> &[u8] {
         &self.src[self.pos..]
@@ -107,26 +120,62 @@ impl<'a> Cursor<'a> {
 /// Parse a `unify` reply.
 pub fn parse_unify_reply(reply: &[u8]) -> Result<Vec<MSubst>, ParseError> {
     let mut c = Cursor::new(reply);
+    parse_unify_reply_from(&mut c)
+}
+
+pub(crate) fn parse_unify_reply_with_sig(
+    reply: &[u8],
+    sig: &MaudeSig,
+) -> Result<Vec<MSubst>, ParseError> {
+    let mut c = Cursor::with_sig(reply, sig);
+    parse_unify_reply_from(&mut c)
+}
+
+fn parse_unify_reply_from(c: &mut Cursor<'_>) -> Result<Vec<MSubst>, ParseError> {
     if c.eat_str(b"No unifier.") {
         let _ = c.skip_eol();
         return Ok(vec![]);
     }
-    parse_substitutions(&mut c)
+    parse_substitutions(c)
 }
 
 /// Parse a `match` reply.
 pub fn parse_match_reply(reply: &[u8]) -> Result<Vec<MSubst>, ParseError> {
     let mut c = Cursor::new(reply);
+    parse_match_reply_from(&mut c)
+}
+
+pub(crate) fn parse_match_reply_with_sig(
+    reply: &[u8],
+    sig: &MaudeSig,
+) -> Result<Vec<MSubst>, ParseError> {
+    let mut c = Cursor::with_sig(reply, sig);
+    parse_match_reply_from(&mut c)
+}
+
+fn parse_match_reply_from(c: &mut Cursor<'_>) -> Result<Vec<MSubst>, ParseError> {
     if c.eat_str(b"No match.") {
         let _ = c.skip_eol();
         return Ok(vec![]);
     }
-    parse_substitutions(&mut c)
+    parse_substitutions(c)
 }
 
 /// Parse a `reduce` reply: `result <Sort>: <term>\n`.
 pub fn parse_reduce_reply(reply: &[u8]) -> Result<MTerm, ParseError> {
     let mut c = Cursor::new(reply);
+    parse_reduce_reply_from(&mut c)
+}
+
+pub(crate) fn parse_reduce_reply_with_sig(
+    reply: &[u8],
+    sig: &MaudeSig,
+) -> Result<MTerm, ParseError> {
+    let mut c = Cursor::with_sig(reply, sig);
+    parse_reduce_reply_from(&mut c)
+}
+
+fn parse_reduce_reply_from(c: &mut Cursor<'_>) -> Result<MTerm, ParseError> {
     if !c.eat_str(b"result ") {
         return Err(ParseError(format!(
             "expected `result `, got: {:?}",
@@ -136,12 +185,12 @@ pub fn parse_reduce_reply(reply: &[u8]) -> Result<MTerm, ParseError> {
     // Sort: `TOP` or a named sort, either way discarded (HS
     // `parseReduceReply` comments "we ignore the sort").
     if !c.eat_str(b"TOP") {
-        parse_sort(&mut c)?;
+        parse_sort(c)?;
     }
     if !c.eat_str(b": ") {
         return Err(ParseError("expected `: ` after result sort".into()));
     }
-    let t = parse_term(&mut c)?;
+    let t = parse_term(c)?;
     let _ = c.skip_eol();
     Ok(t)
 }
@@ -149,6 +198,18 @@ pub fn parse_reduce_reply(reply: &[u8]) -> Result<MTerm, ParseError> {
 /// Parse a `get variants` reply.
 pub fn parse_variants_reply(reply: &[u8]) -> Result<Vec<MSubst>, ParseError> {
     let mut c = Cursor::new(reply);
+    parse_variants_reply_from(&mut c)
+}
+
+pub(crate) fn parse_variants_reply_with_sig(
+    reply: &[u8],
+    sig: &MaudeSig,
+) -> Result<Vec<MSubst>, ParseError> {
+    let mut c = Cursor::with_sig(reply, sig);
+    parse_variants_reply_from(&mut c)
+}
+
+fn parse_variants_reply_from(c: &mut Cursor<'_>) -> Result<Vec<MSubst>, ParseError> {
     let _ = c.skip_eol();
     let mut variants = Vec::new();
     loop {
@@ -174,12 +235,12 @@ pub fn parse_variants_reply(reply: &[u8]) -> Result<Vec<MSubst>, ParseError> {
         let _ = c.skip_eol();
         // Reprinted term (sort/TOP : term\n)
         if !c.eat_str(b"TOP") {
-            parse_sort(&mut c)?;
+            parse_sort(c)?;
         }
         if !c.eat_str(b": ") {
             return Err(ParseError("expected `: ` in reprinted term".into()));
         }
-        let _ = parse_term(&mut c)?;
+        skip_term(c)?;
         let _ = c.skip_eol();
         // Then bindings: `xN:Sort --> term\n` until empty line.
         let mut subst = MSubst::new();
@@ -188,7 +249,7 @@ pub fn parse_variants_reply(reply: &[u8]) -> Result<Vec<MSubst>, ParseError> {
                 let _ = c.skip_eol();
                 break;
             }
-            let entry = parse_entry(&mut c)?;
+            let entry = parse_entry(c)?;
             subst.push(entry);
         }
         variants.push(subst);
@@ -374,7 +435,7 @@ fn parse_term(c: &mut Cursor) -> Result<MTerm, ParseError> {
         if !c.eat(b')') {
             return Err(ParseError("expected `)` after args".into()));
         }
-        Ok(build_app(ident, args))
+        Ok(build_app(c.sig, ident, args))
     } else if c.eat_str(b":") {
         // Variable: `xN:Sort` — `ident` is `xN`.
         let s = parse_sort(c)?;
@@ -389,11 +450,67 @@ fn parse_term(c: &mut Cursor) -> Result<MTerm, ParseError> {
         }
     } else {
         // Nullary application.
-        Ok(build_app(ident, Vec::new()))
+        Ok(build_app(c.sig, ident, Vec::new()))
     }
 }
 
-fn build_app(ident: &[u8], args: Vec<MTerm>) -> MTerm {
+/// Consume one term using the same grammar as [`parse_term`] without building
+/// an AST. Variant replies repeat the input term before the bindings, and that
+/// copy is validation-only.
+fn skip_term(c: &mut Cursor) -> Result<(), ParseError> {
+    if c.eat(b'#') || c.eat(b'%') {
+        c.read_decimal()
+            .ok_or_else(|| ParseError("fresh var idx".into()))?;
+        if !c.eat_str(b":") {
+            return Err(ParseError("expected `:` after fresh idx".into()));
+        }
+        parse_sort(c)?;
+        return Ok(());
+    }
+    let ident = c.take_while(|b| !matches!(b, b':' | b'(' | b',' | b')' | b'\n' | b' '));
+    if ident.is_empty() {
+        return Err(ParseError("empty identifier".into()));
+    }
+    if c.eat(b'(') {
+        if std::str::from_utf8(ident)
+            .ok()
+            .and_then(parse_lsort_sym)
+            .is_some()
+        {
+            c.read_decimal()
+                .ok_or_else(|| ParseError("const idx".into()))?;
+            if !c.eat(b')') {
+                return Err(ParseError("expected `)` after const".into()));
+            }
+            return Ok(());
+        }
+        loop {
+            skip_term(c)?;
+            if c.eat_str(b", ") || c.eat(b',') {
+                continue;
+            }
+            break;
+        }
+        if !c.eat(b')') {
+            return Err(ParseError("expected `)` after args".into()));
+        }
+    } else if c.eat_str(b":") {
+        parse_sort(c)?;
+        let Some(rest) = ident.strip_prefix(b"x") else {
+            return Err(ParseError("variable identifier must start with `x`".into()));
+        };
+        if std::str::from_utf8(rest)
+            .ok()
+            .and_then(|s| s.parse::<u64>().ok())
+            .is_none()
+        {
+            return Err(ParseError("invalid variable index".into()));
+        }
+    }
+    Ok(())
+}
+
+fn build_app(sig: Option<&MaudeSig>, ident: &[u8], args: Vec<MTerm>) -> MTerm {
     // AC/C operators are all `tam`-prefixed.  Strip the prefix once and
     // compare the suffix against the (compile-time) symbol-name constants,
     // avoiding the per-call `Vec` allocations that `pp_maude_ac_sym` (and
@@ -413,6 +530,17 @@ fn build_app(ident: &[u8], args: Vec<MTerm>) -> MTerm {
         ] {
             if suffix == name {
                 return crate::term::f_app_ac(op, args);
+            }
+        }
+        if let Some(sym) = sig.and_then(|sig| sig.fun_sym_by_wire(ident)) {
+            match sym {
+                FunSym::NoEq(sym) if sym.arity == args.len() => {
+                    return Term::App(FunSym::NoEq(sym), args.into());
+                }
+                FunSym::Ac(AcSym::AcFct(sym)) if !args.is_empty() => {
+                    return crate::term::f_app_acfct(sym, args);
+                }
+                _ => {}
             }
         }
         // User-defined AC operator?  HS reaches this guard only from
@@ -543,6 +671,35 @@ fn flatten_cons(t: &MTerm) -> Vec<MTerm> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn skipped_terms_accept_and_consume_the_parse_term_grammar() {
+        for src in [
+            &b"x18446744073709551615:Msg"[..],
+            b"#3:Fresh",
+            b"p(0)",
+            b"tamXCFUpair(c(2), tamXCFUfst(x1:Msg))",
+            b"list(cons(c(1),cons(%2:Pub,nil)))",
+            b"tamXCFUzero",
+        ] {
+            let mut parsed = Cursor::new(src);
+            parse_term(&mut parsed).unwrap();
+            let mut skipped = Cursor::new(src);
+            skip_term(&mut skipped).unwrap();
+            assert_eq!(skipped.pos, parsed.pos, "{}", String::from_utf8_lossy(src));
+            assert!(skipped.is_eof());
+        }
+        for src in [&b"#x:Msg"[..], b"bad:Msg", b"c(x)", b"f(c(1)"] {
+            let mut parsed = Cursor::new(src);
+            let mut skipped = Cursor::new(src);
+            assert_eq!(
+                skip_term(&mut skipped).is_err(),
+                parse_term(&mut parsed).is_err(),
+                "{}",
+                String::from_utf8_lossy(src)
+            );
+        }
+    }
 
     #[test]
     fn parse_no_unifier() {

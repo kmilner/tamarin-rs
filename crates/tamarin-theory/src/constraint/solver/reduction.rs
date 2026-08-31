@@ -26,8 +26,10 @@
 use crate::constraint::constraints::{Disj, Edge, Goal, LessAtom};
 use crate::constraint::solver::context::ProofContext;
 use crate::constraint::system::System;
-use crate::guarded::Guarded;
+use crate::guarded::{bterm_to_lterm, Guarded};
 use crate::rule::RuleACInst;
+use tamarin_term::apply::Apply;
+use tamarin_term::lterm::{blterm_node_id, lterm_node_id};
 
 /// The complete set of per-pass change signals raised by
 /// [`Reduction::subst_system_once`].  Built exactly ONCE, at the pass's
@@ -153,8 +155,7 @@ pub struct Reduction<'ctx> {
     /// Fix: when step 12 returns `Cases(arms)`, install `arms[0]`
     /// in-place (the main `conjoin_system` return value), and stash a
     /// per-arm clone of the post-step-13 system here, one per `arms[i]`
-    /// where i ≥ 1.  The caller (`apply_source_case_action` /
-    /// `apply_source_case_premise`) drains this Vec after
+    /// where i ≥ 1.  The caller (`conjoin_refine_arm`) drains this Vec after
     /// `conjoin_system` returns and replays the post-conjoin work
     /// (E.5 edge_eqs, F close_trivial_chains, output push) per stashed
     /// system.  Each stashed system has had `subst_system` already run
@@ -185,14 +186,6 @@ pub struct Reduction<'ctx> {
     /// Populated alongside `Cases`; empty means "no counters recorded"
     /// (callers fall back to bounds_max seeding).
     pub last_case_counters: Vec<u64>,
-    /// σ-as-`VarSubst` cache for the Atom mark=true dedup: `(subst_stamp,
-    /// var_subst_from_eq_store(σ))` at the time it was built.  σ is a pure
-    /// function of `sys.eq_store.subst`, and every subst mutation mints a
-    /// fresh `subst_stamp` (sealed axis: `set_eq_store`/`take_eq_store`/
-    /// `eq_store_mut` are the only doors), so a matching stamp proves the
-    /// cached value is bit-identical to a rebuild.  Sub-Reductions start
-    /// `None` and rebuild on first use (conservative miss only).
-    eq_vs_cache: Option<(u64, crate::guarded::VarSubst)>,
 }
 
 /// `ChangeIndicator` mirrors the `True`/`False` flag the Haskell
@@ -305,7 +298,6 @@ impl<'ctx> Reduction<'ctx> {
             pending_eq_arms: Vec::new(),
             pending_conjoin_arm_systems: Vec::new(),
             last_case_counters: Vec::new(),
-            eq_vs_cache: None,
         }
     }
 
@@ -348,7 +340,6 @@ impl<'ctx> Reduction<'ctx> {
             pending_eq_arms: Vec::new(),
             pending_conjoin_arm_systems: Vec::new(),
             last_case_counters: Vec::new(),
-            eq_vs_cache: None,
         }
     }
 
@@ -434,30 +425,10 @@ impl<'ctx> Reduction<'ctx> {
     /// Returns `Ok(Contradictory)` when the fact unification fails so
     /// callers can skip the case cleanly (matches HS Disj-monad mzero
     /// semantics on the caller side).
-    pub fn insert_edge_labeled(
+    pub fn insert_edge(
         &mut self,
-        site: &str,
         e: Edge,
     ) -> Result<SolveOutcome, crate::tools::equation_store::AddEqsError> {
-        if tamarin_utils::env_gate!("TAM_RS_TRACE_INSERT_EDGE") {
-            let mode = if crate::constraint::solver::sources::in_precompute_mode() {
-                "saturate"
-            } else {
-                "runtime"
-            };
-            eprintln!(
-                "[INSERT_EDGE] enter site={} mode={} src={:?} tgt={:?} eqIsFalse={}",
-                site,
-                mode,
-                e.src,
-                e.tgt,
-                self.sys.eq_store.is_false()
-            );
-        }
-        // Rust-only execution trace (no Haskell counterpart).  Emitted
-        // once per edge (we're per-edge here, n=1) before running
-        // `solveFactEqs` on the edge facts, to aid divergence debugging.
-        crate::constraint::solver::trace::trace_exec("insertEdges n=1");
         // Look up the conclusion fact (source) and premise fact (target).
         let fa_conc = self
             .sys
@@ -475,10 +446,10 @@ impl<'ctx> Reduction<'ctx> {
         // `insert_edge_tail`'s `None` path does a raw insert.  Shouldn't
         // happen in practice unless the caller passes an edge for a node
         // that's not in the system.
-        self.insert_edge_tail(site, e, fa_conc.as_ref(), fa_prem.as_ref())
+        self.insert_edge_tail(e, fa_conc.as_ref(), fa_prem.as_ref())
     }
 
-    /// Shared tail of `insert_edge_labeled` / `insert_edge_labeled_with_facts`
+    /// Shared tail of `insert_edge` / `insert_edge_with_facts`
     /// once the conclusion/premise facts are in hand.  HS step 1
     /// (`solveFactEqs SplitNow`, Reduction.hs:279-284, see line 283) followed by step 2
     /// (`modM sEdges`, Reduction.hs:279-284, see line 284).  On unification failure it
@@ -488,7 +459,6 @@ impl<'ctx> Reduction<'ctx> {
     /// call would trivially succeed, so we skip straight to the insert.
     fn insert_edge_tail(
         &mut self,
-        site: &str,
         e: Edge,
         fa_conc: Option<&crate::fact::LNFact>,
         fa_prem: Option<&crate::fact::LNFact>,
@@ -509,14 +479,6 @@ impl<'ctx> Reduction<'ctx> {
             Ok(SolveOutcome::Linear(ChangeIndicator::Unchanged))
         };
         if matches!(res, Err(_) | Ok(SolveOutcome::Contradictory)) {
-            if tamarin_utils::env_gate!("TAM_RS_TRACE_INSERT_EDGE_FIRE") {
-                let mode = if crate::constraint::solver::sources::in_precompute_mode() {
-                    "saturate"
-                } else {
-                    "runtime"
-                };
-                eprintln!("[INSERT_EDGE_FIRE] site={} mode={}", site, mode);
-            }
             self.mark_contradictory();
             return res;
         }
@@ -528,37 +490,19 @@ impl<'ctx> Reduction<'ctx> {
         res
     }
 
-    /// Variant of `insert_edge_labeled` that takes explicit conc/prem
-    /// facts rather than looking them up via `sys.nodes`.  Mirrors
-    /// HS's `insertEdges [(c, faConc, faPrem, p)]` as called from
+    /// Variant of `insert_edge` that takes explicit conc/prem facts
+    /// rather than looking them up via `sys.nodes`.  Mirrors HS's
+    /// `insertEdges [(c, faConc, faPrem, p)]` as called from
     /// `solveChain`/premise solving — the live premise's fact comes
     /// from `faPrem`, not from a node lookup (the abstract goal's NodeId
-    /// has no corresponding rule in sys.nodes).  The `site` arg is a
-    /// Rust-only trace label; Haskell `insertEdges` is unlabeled.
-    pub fn insert_edge_labeled_with_facts(
+    /// has no corresponding rule in sys.nodes).
+    pub fn insert_edge_with_facts(
         &mut self,
-        site: &str,
         e: crate::constraint::constraints::Edge,
         fa_conc: &crate::fact::LNFact,
         fa_prem: &crate::fact::LNFact,
     ) -> Result<SolveOutcome, crate::tools::equation_store::AddEqsError> {
-        if tamarin_utils::env_gate!("TAM_RS_TRACE_INSERT_EDGE") {
-            let mode = if crate::constraint::solver::sources::in_precompute_mode() {
-                "saturate"
-            } else {
-                "runtime"
-            };
-            eprintln!(
-                "[INSERT_EDGE] enter site={} mode={} src={:?} tgt={:?} eqIsFalse={}",
-                site,
-                mode,
-                e.src,
-                e.tgt,
-                self.sys.eq_store.is_false()
-            );
-        }
-        crate::constraint::solver::trace::trace_exec("insertEdges n=1");
-        self.insert_edge_tail(site, e, Some(fa_conc), Some(fa_prem))
+        self.insert_edge_tail(e, Some(fa_conc), Some(fa_prem))
     }
 
     /// `insertLast` — HS-faithful port of Reduction.hs:402-407:
@@ -588,9 +532,6 @@ impl<'ctx> Reduction<'ctx> {
             }
             Some(j) if j == i => Ok(SolveOutcome::Linear(ChangeIndicator::Unchanged)),
             Some(j) => {
-                if tamarin_utils::env_gate!("TAM_DBG_INSERT_LAST") {
-                    eprintln!("[insert_last] existing={:?} new={:?} → eq", j, i);
-                }
                 let res =
                     self.solve_node_id_eqs(&[tamarin_term::rewriting::Equal { lhs: i, rhs: j }]);
                 if matches!(res, Err(_) | Ok(SolveOutcome::Contradictory)) {
@@ -647,8 +588,8 @@ impl<'ctx> Reduction<'ctx> {
             use std::sync::atomic::Ordering::Relaxed;
             let calls = FP_STATS_CALLS.fetch_add(1, Relaxed) + 1;
             if calls % 5_000 == 0 {
-                let d = FP_FACT_DESCENTS.load(Relaxed);
-                let s = FP_FACT_SKIPS.load(Relaxed);
+                let d = crate::apply::FP_FACT_DESCENTS.load(Relaxed);
+                let s = crate::apply::FP_FACT_SKIPS.load(Relaxed);
                 eprintln!(
                     "[FP_STATS] fact_descents={} fact_skips={} ({:.1}%)",
                     d,
@@ -749,23 +690,6 @@ impl<'ctx> Reduction<'ctx> {
             return false;
         }
         let subst = self.sys.eq_store.subst.clone();
-        // Hashed leaf-lookup view over the pass-invariant `subst`
-        // (`SubstView`): every term walk below probes this one fixed map at
-        // every `Lit::Var` leaf, so a single FxHash probe replaces the
-        // `BTreeMap` descent — same entries, same lookup results,
-        // byte-identical output.  Pass-local; dropped with the pass.
-        let subst_view = tamarin_term::subst::SubstView::new(&subst);
-        // Cached-bloom fact skip.  `fp_skip` is the per-pass
-        // master enable (thread-local, verify oracle force-disables it);
-        // `verify_fp`/`fp_stats` are once-read env gates.  `dom_bloom` is the
-        // once-per-pass OR of the domain vars' bits — the SAME `var_bit` the
-        // cached fact bloom uses (shared site, no divergent hash).  `subst` is
-        // non-empty here (early-returned above), so `dom_bloom != 0`, which is
-        // why the `u64::MAX` default bloom always descends (`MAX & dom != 0`).
-        let fp_skip = FP_SKIP_ENABLED.with(|c| c.get());
-        let verify_fp = verify_fp_enabled();
-        let fp_stats = fp_stats_enabled();
-        let dom_bloom: u64 = subst.dom().fold(0u64, |b, v| b | crate::fact::var_bit(v));
         // Substitution rewrites every term/fact/rule under the current
         // subst — vars in the domain get replaced (possibly by vars
         // with smaller idx), so max-var-idx can LOWER.  Invalidation of
@@ -779,8 +703,8 @@ impl<'ctx> Reduction<'ctx> {
         // and invalidates only then, so an identity pass keeps both
         // caches valid and the dozens of `bounds_max` calls per proof
         // step stay O(1) hits instead of full re-walks.
-        // Build the parser-AST `VarSubst` ONCE for the whole pass.  It is
-        // derived purely from `subst` (fixed above), so it is identical
+        // Build the chain-chased substitution ONCE for the whole pass.  It
+        // is derived purely from `subst` (fixed above), so it is identical
         // for every `Disj` goal AND the formula/lemma substitution below.
         // Building this once avoids O(num_disj_goals × subst_size) cost:
         // spdm's attack lemmas carry ~15 `All…==>#x=#y` uniqueness
@@ -788,15 +712,14 @@ impl<'ctx> Reduction<'ctx> {
         // avoidable cost in the proof/refine hot path (~7.5% of the whole
         // run in `perf`). Built once here, reused everywhere.
         //
-        // Further: the parser subst is consumed ONLY by `Disj` goals (the
-        // goal loop below) and the formula/solved-formula/lemma rewrites
-        // (after the loop).  `build_parser_subst_from_eq_store` chain-
-        // chases and `lnterm_to_term`-converts EVERY eq-store entry, which
-        // is pure waste when the system carries none of those — common in
-        // deep proof states where the lemma's formulas are already
-        // discharged.  Gate the build so it only runs when a consumer
-        // exists.
-        let needs_parser_subst = !self.sys.formulas.is_empty()
+        // Further: it is consumed ONLY by `Disj` goals (the goal loop
+        // below) and the formula/solved-formula/lemma rewrites (after the
+        // loop).  `chase_eq_store_subst` chain-chases EVERY eq-store entry,
+        // which is pure waste when the system carries none of those —
+        // common in deep proof states where the lemma's formulas are
+        // already discharged.  Gate the build so it only runs when a
+        // consumer exists.
+        let needs_formula_subst = !self.sys.formulas.is_empty()
             || !self.sys.solved_formulas.is_empty()
             || !self.sys.lemmas.is_empty()
             || self
@@ -804,21 +727,60 @@ impl<'ctx> Reduction<'ctx> {
                 .goals
                 .iter()
                 .any(|(g, _)| matches!(g, Goal::Disj(_)));
-        let parser_subst: crate::guarded::VarSubst = if needs_parser_subst {
-            build_parser_subst_from_eq_store(&subst)
+        let formula_subst: crate::tools::equation_store::LNSubst = if needs_formula_subst {
+            chase_eq_store_subst(&subst)
         } else {
-            crate::guarded::VarSubst::default()
+            crate::tools::equation_store::LNSubst::empty()
         };
-        let map_var = |v: tamarin_term::lterm::LVar| -> tamarin_term::lterm::LVar {
-            // Keyed image probe: a Var→Var binding renames the id; an
-            // app-headed or absent image keeps the original var — the same
-            // result `apply_vterm` gives on a `Lit::Var` term, minus the
-            // temporary term construction.
-            match subst_view.image_of(&v) {
-                Some(tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(w))) => *w,
-                _ => v,
+        // Disj goal rewriting: Disjs carry a `Guarded` body, the same form
+        // `formulas`/`lemmas` hold, and they get the chain-chased
+        // `formula_subst` so saturate-time Disj goals are re-narrowed when
+        // runtime unification populates the eq_store — mirrors Haskell's
+        // `substSystem` applying the substitution to ALL goal bodies including
+        // Disjs.  Without it, a Disj goal added at saturate time retains the
+        // saturate-time vars even after runtime narrowing populates
+        // `eq_store`; downstream `is_open_in_sys` then auto-solves the stale
+        // Msg-var KU arm.  Net +3 lemmas in corpus
+        // (NSLPK3_untagged::session_key_setup_possible + Destroy_charn +
+        // Loop_charn).
+        //
+        // Each alternative is re-substituted to a fixpoint because eq-store
+        // entries can form chains (e.g. `x:1 → x:13`, `x:13 → ~n:28`) and one
+        // application only reduces by one step; the bound defends against a
+        // degenerate cycle.  The list is then normalised in lockstep with the
+        // GDisj formula twin (HS 150f5eba substGoals DisjG arm: `DisjG
+        // (normaliseDisjList (apply subst disj))`) — a subst that identifies
+        // two variables can make two alts equal, and the twin's list is
+        // deduplicated by `normalise_stored_formula_cow`, so the goal key must
+        // be too or the twin stores desynchronise (gcm livelock class).
+        let disj = |alts: &[Guarded]| -> Option<Vec<Guarded>> {
+            if formula_subst.is_empty() {
+                return None;
+            }
+            let mapped = tamarin_utils::cow::cow_map_vec(alts, |alt| {
+                let mut cur = crate::guarded::subst_guarded_cow(alt, &formula_subst)?;
+                for _ in 0..15 {
+                    match crate::guarded::subst_guarded_cow(&cur, &formula_subst) {
+                        None => break,
+                        Some(nxt) => cur = nxt,
+                    }
+                }
+                Some(cur)
+            });
+            let children: &[Guarded] = mapped.as_deref().unwrap_or(alts);
+            match crate::guarded::normalise_disj_list_cow(children) {
+                Some(normalised) => Some(normalised),
+                None => mapped,
             }
         };
+        // The pass: one hashed leaf view over `subst` probed at every
+        // `Lit::Var` leaf below, plus the domain bloom the cached fact
+        // fingerprints are tested against.  `FP_SKIP_ENABLED` is the per-pass
+        // master enable for that fact fast path (thread-local; the verify
+        // oracle force-disables it).  `subst` is non-empty here (early-returned
+        // above), so the domain bloom is non-zero, which is why the `u64::MAX`
+        // default fact bloom always descends.
+        let pass = crate::apply::SystemSubst::new(&subst, FP_SKIP_ENABLED.with(|c| c.get()), &disj);
         // 1. Nodes: rewrite node ids and rule contents. When two
         //    nodes collapse to the same canonical id, queue an
         //    equality between their rules' fact lists (mirrors
@@ -857,76 +819,7 @@ impl<'ctx> Reduction<'ctx> {
         let mut prem_eqs: Vec<tamarin_term::rewriting::Equal<crate::fact::LNFact>> = Vec::new();
         let mut act_eqs: Vec<tamarin_term::rewriting::Equal<crate::fact::LNFact>> = Vec::new();
         let mut shape_mismatch = false;
-        // Helper: apply the full term substitution to a fact's terms.
-        // `map_var` above only handles Var→Var rewrites (used for
-        // node-ids), but the eq-store can also bind a var to an
-        // app-headed term (e.g. `pkR → pk(ltkR)` from a !Pk-edge
-        // unification).  For those entries, `map_free` falls back
-        // to the original var, leaving stale `pkR` in rule actions.
-        // Use `apply_vterm` on the full term to substitute through
-        // app-headed bindings.  Mirrors Haskell's `substSystem`
-        // which uses `apply` on rules' facts as full-term subst.
-        // Port of Haskell's `normDG ctxt sys` (System.hs:1285-1286) +
-        // `normRule` (Theory/Model/Rule.hs:773-774): after the eq-store substitution
-        // rewrites a fact's terms, the result may be non-normal — e.g.
-        // `verify(revealSign(~r,~sk), ~r, pk(~sk))` reduces to `true`
-        // via the signing builtin's [variant] equations.  Maude's
-        // `unify in MSG` does NOT apply [variant] eqs during
-        // unification, so downstream restrictions like
-        // `Eq_check_succeed` (`All x y. Eq(x,y) ⇒ x=y`) would
-        // erroneously contradict `verify(...) = true` even though
-        // `reduce` would close it.  HS-faithful: HS's substSystem
-        // (Reduction.hs:574-595) does NOT normalise — `normDG`
-        // (System.hs:1285-1288) runs only inside `impliedOrInitial`
-        // (System.hs:1279-1282).  Normalising here
-        // eagerly reduces e.g. `checksign(sign(m,k), pk(k))` to `m`,
-        // which loses the head shape needed by source-case matching
-        // (test4 lost c_checksign as a candidate).  Worse, the eager
-        // normalise blocked HS's `hasNonNormalTerms` contradiction from
-        // ever firing on a non-normal term shape (Responder_secrecy's
-        // split_case_3/Initiator non-normal contradiction was lost).
-        // COW walk: reuse the original Arc for every term the subst leaves
-        // structurally unchanged (dropping the per-term `t.clone()`), and
-        // return `None` when EVERY term is unchanged so the caller keeps the
-        // original fact untouched — skipping the terms `Vec` collect and the
-        // tag/annotations clones.  Byte-safe: an unchanged term is already
-        // AC-normal, so a full rebuild would produce a structurally identical
-        // fact — only `Arc` identity differs, and nothing output-bearing
-        // observes `Arc` identity.
-        let apply_to_fact = |fa: &crate::fact::LNFact| -> Option<crate::fact::LNFact> {
-            if fp_stats {
-                FP_FACT_DESCENTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            }
-            // Cached-bloom fast path: if no free var of the fact
-            // shares a bit with any domain var, the fact contains no domain var
-            // (superset invariant), so every term returns `None` — return
-            // `None` (COW-unchanged), skipping the whole per-term descent.
-            if fp_skip && fa.bloom() & dom_bloom == 0 {
-                if verify_fp {
-                    verify_fact_unchanged(fa, &subst_view);
-                }
-                if fp_stats {
-                    FP_FACT_SKIPS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                }
-                return None;
-            }
-            let mut new_terms: Option<Vec<tamarin_term::lterm::LNTerm>> = None;
-            for (i, t) in fa.terms.iter().enumerate() {
-                if let Some(changed) = subst_view.apply_changed(t) {
-                    new_terms.get_or_insert_with(|| fa.terms.to_vec())[i] = changed;
-                }
-            }
-            new_terms.map(|terms| {
-                // Subst rebuild — frees change; the computing constructor
-                // recomputes the bloom from the post-subst terms internally
-                // (never copy `fa`'s bloom: the rebuild changes the free-var set).
-                crate::fact::LNFact::fresh_annotated(fa.tag, fa.annotations.clone(), terms)
-            })
-        };
-        let dbg_set_nodes = tamarin_utils::env_gate!("TAM_DBG_SET_NODES");
-        let nodes_in = nodes.len();
         let mut collisions = 0usize;
-        let mut shape_mm = 0usize;
         // Haskell-faithful `substNodes` order (Reduction.hs:616-621):
         //   substNodes = substNodeIds <*
         //                ((modM sNodes . M.map . apply) =<< getM sSubst)
@@ -955,77 +848,35 @@ impl<'ctx> Reduction<'ctx> {
         let mut id_renamed_nodes: Vec<(crate::constraint::constraints::NodeId, RuleACInst)> =
             Vec::new();
         for (id, rule) in nodes {
-            let id_orig = id;
-            let new_id = map_var(id);
-            if new_id != id_orig {
-                nodes_value_changed = true;
-            }
-            if tamarin_utils::env_gate!("TAM_DBG_SUBST_NODE_RENAME") && new_id != id_orig {
-                let path = crate::constraint::solver::trace::case_path_string();
-                let rule_name = rule_case_name(&rule);
-                eprintln!(
-                    "[subst_node_rename] path={} {}.{} → {}.{}  rule={}",
-                    path, id_orig.name, id_orig.idx, new_id.name, new_id.idx, rule_name
-                );
-            }
+            let new_id = match id.apply_changed(&pass) {
+                Some(v) => {
+                    nodes_value_changed = true;
+                    v
+                }
+                None => id,
+            };
             // Pass 1: node-id rename only (HS `substNodeIds` `apply subst`
             // on the id, not the rule body).  Keep the rule UN-substituted.
             id_renamed_nodes.push((new_id, rule));
         }
         // Pass 1b: dedupe by new_id, detecting collisions on RAW rules.
-        let dbg_shape = tamarin_utils::env_gate!("TAM_DBG_SHAPE_MM");
         for (new_id, rule) in id_renamed_nodes {
             match id_to_index.get(&new_id).copied() {
                 Some(i) => {
                     collisions += 1;
                     let kept: &RuleACInst = &new_nodes[i].1;
-                    if kept.info != rule.info {
-                        shape_mismatch = true;
-                        shape_mm += 1;
-                        if dbg_shape {
-                            let cpath = crate::constraint::solver::trace::case_path_string();
-                            eprintln!(
-                                "[shape_mm:info] path={} collide_at={}.{} kept_rule={} new_rule={}",
-                                cpath,
-                                new_id.name,
-                                new_id.idx,
-                                rule_case_name(kept),
-                                rule_case_name(&rule)
-                            );
-                        }
-                    } else if kept.premises.len() != rule.premises.len()
+                    if kept.info != rule.info
+                        || kept.premises.len() != rule.premises.len()
                         || kept.conclusions.len() != rule.conclusions.len()
                         || kept.actions.len() != rule.actions.len()
                     {
                         shape_mismatch = true;
-                        if dbg_shape {
-                            let cpath = crate::constraint::solver::trace::case_path_string();
-                            eprintln!("[shape_mm:arity] path={} collide_at={}.{} kept={}/{}/{} new={}/{}/{}",
-                                cpath, new_id.name, new_id.idx,
-                                kept.premises.len(), kept.conclusions.len(), kept.actions.len(),
-                                rule.premises.len(), rule.conclusions.len(), rule.actions.len());
-                        }
                     } else {
                         // Collect per component; concatenated conc++prem++act
                         // after the loop to match Haskell `solveRuleEqs`.
-                        for (a, b) in kept.conclusions.iter().zip(rule.conclusions.iter()) {
-                            conc_eqs.push(tamarin_term::rewriting::Equal {
-                                lhs: a.clone(),
-                                rhs: b.clone(),
-                            });
-                        }
-                        for (a, b) in kept.premises.iter().zip(rule.premises.iter()) {
-                            prem_eqs.push(tamarin_term::rewriting::Equal {
-                                lhs: a.clone(),
-                                rhs: b.clone(),
-                            });
-                        }
-                        for (a, b) in kept.actions.iter().zip(rule.actions.iter()) {
-                            act_eqs.push(tamarin_term::rewriting::Equal {
-                                lhs: a.clone(),
-                                rhs: b.clone(),
-                            });
-                        }
+                        flatten_list_eq(&kept.conclusions, &rule.conclusions, &mut conc_eqs);
+                        flatten_list_eq(&kept.premises, &rule.premises, &mut prem_eqs);
+                        flatten_list_eq(&kept.actions, &rule.actions, &mut act_eqs);
                     }
                 }
                 None => {
@@ -1043,62 +894,21 @@ impl<'ctx> Reduction<'ctx> {
         rule_eqs.append(&mut act_eqs);
         // Pass 2: NOW apply the full term substitution to the surviving
         // rules' fact terms (mirrors HS's `M.map . apply` AFTER
-        // substNodeIds).
-        // COW over a fact list: `None` when every fact is unchanged, so the
-        // rule keeps its original `Vec` (sharing its `Arc`s) with no realloc.
-        let apply_to_facts = |facts: &[crate::fact::LNFact]| -> Option<Vec<crate::fact::LNFact>> {
-            let mut out: Option<Vec<crate::fact::LNFact>> = None;
-            for (i, fa) in facts.iter().enumerate() {
-                if let Some(changed) = apply_to_fact(fa) {
-                    out.get_or_insert_with(|| facts.to_vec())[i] = changed;
-                }
-            }
-            out
-        };
-        // COW over `new_vars`: same convention on bare terms.
-        let apply_to_new_vars =
-            |terms: &[tamarin_term::lterm::LNTerm]| -> Option<Vec<tamarin_term::lterm::LNTerm>> {
-                let mut out: Option<Vec<tamarin_term::lterm::LNTerm>> = None;
-                for (i, t) in terms.iter().enumerate() {
-                    if let Some(changed) = subst_view.apply_changed(t) {
-                        out.get_or_insert_with(|| terms.to_vec())[i] = changed;
-                    }
-                }
-                out
-            };
+        // substNodeIds).  A rule the substitution does not touch keeps its
+        // value, sharing its `Arc`s with no rebuild.
+        //
+        // The rewritten facts are NOT normalised: HS's `substSystem`
+        // (Reduction.hs:571-595) does not, and `normDG` (System.hs:1284-1288)
+        // runs only inside `impliedOrInitial` (System.hs:1279-1282) and the
+        // diff-mode mirror.  A normalise here would reduce e.g.
+        // `checksign(sign(m,k), pk(k))` to `m`, losing the head shape
+        // source-case matching reads, and would erase the non-normal term
+        // shapes `has_non_normal_terms` contradicts on.
         for (_, rule) in new_nodes.iter_mut() {
-            let new_premises = apply_to_facts(&rule.premises);
-            let new_conclusions = apply_to_facts(&rule.conclusions);
-            let new_actions = apply_to_facts(&rule.actions);
-            let new_new_vars = apply_to_new_vars(&rule.new_vars);
-            // When every component is structurally unchanged, keep the
-            // original rule value — no `Rule` rebuild, no `Vec` allocations.
-            // A rebuild would produce a structurally identical rule (only
-            // `Arc` identity would differ), so keeping it is byte-neutral.
-            if new_premises.is_none()
-                && new_conclusions.is_none()
-                && new_actions.is_none()
-                && new_new_vars.is_none()
-            {
-                continue;
+            if let Some(new_rule) = rule.apply_changed(&pass) {
+                nodes_value_changed = true;
+                *rule = new_rule;
             }
-            nodes_value_changed = true;
-            *rule = crate::rule::Rule {
-                info: rule.info.clone(),
-                premises: new_premises.unwrap_or_else(|| rule.premises.clone()),
-                conclusions: new_conclusions.unwrap_or_else(|| rule.conclusions.clone()),
-                actions: new_actions.unwrap_or_else(|| rule.actions.clone()),
-                new_vars: new_new_vars.unwrap_or_else(|| rule.new_vars.clone()),
-            };
-        }
-        if dbg_set_nodes && (nodes_in > 0) {
-            eprintln!(
-                "[SET_NODES_RS] nodes_in={} collisions={} shape_mismatches={} rule_eqs_queued={}",
-                nodes_in,
-                collisions,
-                shape_mm,
-                rule_eqs.len()
-            );
         }
         // subst_system rewrites node terms (and may merge colliding node
         // ids) — the node max can DROP, so invalidate the node component
@@ -1139,15 +949,9 @@ impl<'ctx> Reduction<'ctx> {
         // change the max free-var idx.
         let mut edges_value_changed = false;
         for e in self.sys.content_mut_untracked().edges.iter_mut() {
-            let new_src = map_var(e.src.0);
-            if new_src != e.src.0 {
+            if let Some(new_edge) = e.apply_changed(&pass) {
                 edges_value_changed = true;
-                e.src.0 = new_src;
-            }
-            let new_tgt = map_var(e.tgt.0);
-            if new_tgt != e.tgt.0 {
-                edges_value_changed = true;
-                e.tgt.0 = new_tgt;
+                *e = new_edge;
             }
         }
         // Full (non-adjacent) dedup: see comment in
@@ -1164,11 +968,14 @@ impl<'ctx> Reduction<'ctx> {
         // 3. Last-atom.
         let mut last_atom_changed = false;
         if let Some(last) = self.sys.content_mut_untracked().last_atom.take() {
-            let new_last = map_var(last);
-            if new_last != last {
-                last_atom_changed = true;
-                self.sys.invalidate_max_var_idx_cache();
-            }
+            let new_last = match last.apply_changed(&pass) {
+                Some(v) => {
+                    last_atom_changed = true;
+                    self.sys.invalidate_max_var_idx_cache();
+                    v
+                }
+                None => last,
+            };
             self.sys.content_mut_untracked().last_atom = Some(new_last);
         }
         // 4. Less atoms.
@@ -1184,10 +991,9 @@ impl<'ctx> Reduction<'ctx> {
         //
         // RS's `less_atoms: Vec<LessAtom>` doesn't auto-dedupe, so
         // post-subst duplicates survive.  Mirror HS by deduping after
-        // the in-place rewrite.  Without this, `compute_compare_systems_key`
-        // (used by `removeRedundantCases`) serialises duplicate
-        // `s<l` entries, producing different keys for systems that
-        // HS considers redundant.
+        // the in-place rewrite.  Without this, the case-dedup comparison
+        // (`removeRedundantCases`) sees duplicate `s<l` entries and keeps
+        // systems that HS considers redundant apart.
         //
         // Triggering case: Scott::key_secrecy.  Two source-cases'
         // saturated systems that HS dedupes (75→73 in
@@ -1215,17 +1021,13 @@ impl<'ctx> Reduction<'ctx> {
         // all-identity rewrite cannot change the max free-var idx.
         let mut less_value_changed = false;
         for la in std::mem::take(&mut self.sys.content_mut_untracked().less_atoms) {
-            let mut la = la;
-            let new_smaller = map_var(la.smaller);
-            if new_smaller != la.smaller {
-                less_value_changed = true;
-                la.smaller = new_smaller;
-            }
-            let new_larger = map_var(la.larger);
-            if new_larger != la.larger {
-                less_value_changed = true;
-                la.larger = new_larger;
-            }
+            let la = match la.apply_changed(&pass) {
+                Some(n) => {
+                    less_value_changed = true;
+                    n
+                }
+                None => la,
+            };
             if seen_less.insert((la.smaller, la.larger)) {
                 new_less.push(la);
             }
@@ -1253,7 +1055,7 @@ impl<'ctx> Reduction<'ctx> {
         // (8 lines each) where HS picked `KU(~nb)` first (lower
         // post-subst nr because its NodeId was smaller) while RS
         // picked `KU(~na)` first.
-        goals.sort_by(|(g1, _), (g2, _)| crate::constraint::solver::goals::goal_cmp(g1, g2));
+        goals.sort_by(|(g1, _), (g2, _)| g1.cmp(g2));
         // Mirror node-fact handling above: apply the eq-store
         // substitution to each goal term with no Maude normalization.
         // HS's `substGoals` applies subst via the `Apply` instance and
@@ -1261,83 +1063,19 @@ impl<'ctx> Reduction<'ctx> {
         // (System.hs:1252-1282, see line 1282).
         let mut new_goals: Vec<(Goal, crate::constraint::system::GoalStatus)> =
             Vec::with_capacity(goals.len());
-        // Dedup keys, kept parallel to `new_goals`: precomputing each
-        // goal's `canonical_goal_for_dedup` once (rather than re-deriving
-        // it for every accumulated goal on every iteration) keeps the
-        // merge below from being quadratic in canonicalisation cost.
-        let mut new_goal_keys: Vec<Goal> = Vec::with_capacity(goals.len());
         // Change bit for the goal section's conditional cache
-        // invalidation (`Cell` because several closures below set it
-        // while the main loop also writes it).  Goal merges and
-        // `normalise_disj_list` dedups drop only values EQUAL to kept
-        // ones, and the pre-loop sort is order-only — neither can change
-        // the max free-var idx, so only genuine term/id rewrites count.
-        let goals_value_changed = std::cell::Cell::new(false);
-        // Apply full term substitution to a fact's term list — required
-        // when the eq-store maps a var to a non-var term (e.g.
-        // `m → h(...)` from an Eq restriction), in which case
-        // `map_var` falls back to identity and the goal's terms never
-        // get rewritten.  Mirrors Haskell's `substFacts` in
-        // `substSystem`.
-        // COW: rewrite only the terms the subst actually changes and keep
-        // the original fact when none do — a full rebuild would be
-        // value-identical (mirrors `apply_to_fact` in the node section) —
-        // and let a performed rebuild double as the change bit.
-        let apply_fact = |fa: crate::fact::LNFact| -> crate::fact::LNFact {
-            if fp_stats {
-                FP_FACT_DESCENTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            }
-            // Cached-bloom fast path: unchanged fact ⇒ return `fa`
-            // as-is and do NOT set `goals_value_changed` (identical to the loop
-            // producing all-`None`).
-            if fp_skip && fa.bloom() & dom_bloom == 0 {
-                if verify_fp {
-                    verify_fact_unchanged(&fa, &subst_view);
-                }
-                if fp_stats {
-                    FP_FACT_SKIPS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                }
-                return fa;
-            }
-            let mut new_terms: Option<Vec<tamarin_term::lterm::LNTerm>> = None;
-            for (i, t) in fa.terms.iter().enumerate() {
-                if let Some(changed) = tamarin_term::subst::apply_vterm_changed(&subst, t) {
-                    new_terms.get_or_insert_with(|| fa.terms.to_vec())[i] = changed;
-                }
-            }
-            match new_terms {
-                Some(terms) => {
-                    goals_value_changed.set(true);
-                    // Subst rebuild — frees change; the computing constructor
-                    // recomputes the bloom from the post-subst terms internally
-                    // (never copy `fa`'s bloom: the rebuild changes the free-var set).
-                    crate::fact::Fact::fresh_annotated(fa.tag, fa.annotations, terms)
-                }
-                None => fa,
-            }
-        };
-        // `map_var` twin that records a genuine node-id rewrite.  Direct
-        // binding lookup, value-equivalent to `map_var` on a bare var:
-        // no binding, or a non-Var image, keeps `v` (exactly `map_var`'s
-        // `else { v }` fallback); a Var image is a genuine rename
-        // (`from_list` drops trivial `x ~> x` entries, so `w != v`).
-        let map_var_tracked =
-            |v: crate::constraint::constraints::NodeId| -> crate::constraint::constraints::NodeId {
-                match subst.image_of(&v) {
-                    Some(tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(w))) => {
-                        goals_value_changed.set(true);
-                        *w
-                    }
-                    _ => v,
-                }
-            };
+        // invalidation.  Goal merges and disjunction normalization drop
+        // only values EQUAL to kept ones, and the pre-loop sort is
+        // order-only — neither can change the max free-var idx, so only
+        // genuine term/id rewrites count.
+        let mut goals_value_changed = false;
         // Mirrors Haskell's `substGoals` (Reduction.hs:637-651) — for
         // KU action goals whose pre-subst term is a msg-var, product,
         // or union AND whose term actually changes via substitution,
         // re-insert via `insert_action`-equivalent so the pair/inv/prod
         // auto-decomp fires retroactively.  This re-insert path is sound
         // only because `system_max_idx` walks goals/formulas/eq_store: an
-        // incomplete max-idx lets `freshen_system` assign colliding idxs
+        // incomplete max-idx lets `rename_system_above` assign colliding idxs
         // across grafted instances, conflating Maude witnesses in
         // chain-saturated graft cases.
         let mut to_insert_action: Vec<(
@@ -1369,8 +1107,8 @@ impl<'ctx> Reduction<'ctx> {
                         // an AC re-sort,
                         // so the compare itself is kept).
                         (tamarin_term::lterm::is_msg_var(m_pre) || is_product_or_union(m_pre))
-                            && subst_view
-                                .apply_changed(m_pre)
+                            && m_pre
+                                .apply_changed(&pass)
                                 .is_some_and(|m_post| m_post != *m_pre)
                     } else {
                         false
@@ -1381,105 +1119,12 @@ impl<'ctx> Reduction<'ctx> {
             } else {
                 false
             };
-            // Disj goal rewriting: Disjs carry a `Guarded` body whose
-            // free variables are `VarSpec` (parser-AST), same form
-            // used in `formulas`/`lemmas`.  Route through
-            // `subst_guarded` so saturate-time Disj goals get their
-            // bodies re-narrowed when runtime unification populates
-            // the eq_store — mirrors Haskell's `substSystem`
-            // (System.hs) applying the substitution to ALL goal
-            // bodies including Disjs.  Without this, a Disj goal
-            // added to `sys.goals` at saturate-time retains the
-            // saturate-time vars even after runtime narrowing
-            // populates `eq_store`; downstream `is_open_in_sys` then
-            // auto-solves the stale Msg-var KU arm.  Net +3 lemmas
-            // in corpus (NSLPK3_untagged::session_key_setup_possible
-            // + Destroy_charn + Loop_charn).
-            let g2 = match g {
-                Goal::Action(i, fa) => Goal::Action(map_var_tracked(i), apply_fact(fa)),
-                Goal::Premise(p, fa) => Goal::Premise((map_var_tracked(p.0), p.1), apply_fact(fa)),
-                Goal::Chain(c, p) => {
-                    Goal::Chain((map_var_tracked(c.0), c.1), (map_var_tracked(p.0), p.1))
+            let g2 = match g.apply_changed(&pass) {
+                Some(n) => {
+                    goals_value_changed = true;
+                    n
                 }
-                Goal::Disj(d) => {
-                    if parser_subst.is_empty() {
-                        Goal::Disj(d)
-                    } else {
-                        let new_alts: Vec<_> =
-                            d.0.into_iter()
-                                .map(|alt| {
-                                    // COW mirror of the store rewrite's
-                                    // `apply_to_fixpoint` (below): `subst_guarded_cow
-                                    // == None` ⇔ the fixpoint loop broke immediately
-                                    // (`nxt == cur`), so reuse the owned `alt` with
-                                    // zero clones when both the subst and the trailing
-                                    // AC-canon are no-ops.  Byte-identical to the eager
-                                    // 16-round `subst_guarded` + `canonicalize_ac`.
-                                    let mut cur = match crate::guarded::subst_guarded_cow(
-                                    &alt, &parser_subst)
-                                {
-                                    None => return match crate::guarded::
-                                        canonicalize_ac_in_guarded_cow(&alt)
-                                    {
-                                        Some(c) => {
-                                            goals_value_changed.set(true);
-                                            c
-                                        }
-                                        None => alt,
-                                    },
-                                    Some(s0) => {
-                                        goals_value_changed.set(true);
-                                        s0
-                                    }
-                                };
-                                    for _ in 0..15 {
-                                        match crate::guarded::subst_guarded_cow(&cur, &parser_subst)
-                                        {
-                                            None => break,
-                                            Some(nxt) => cur = nxt,
-                                        }
-                                    }
-                                    // Re-canonicalise AC after substitution so the
-                                    // substituted Disj-goal body matches the
-                                    // flat-sorted re-derived form for the goal-store
-                                    // dedup (see the formula-subst comment in
-                                    // `subst_system_once`).
-                                    crate::guarded::canonicalize_ac_in_guarded_cow(&cur)
-                                        .unwrap_or(cur)
-                                })
-                                .collect::<Vec<_>>();
-                        // Normalise the disjunct LIST in lockstep with the
-                        // GDisj formula twin (HS 150f5eba substGoals DisjG
-                        // arm: `DisjG (normaliseDisjList (apply subst
-                        // disj))`) — a subst that identifies two variables
-                        // can make two alts equal; the formula twin's list
-                        // is deduplicated by `normalise_stored_formula`, so
-                        // the goal key must be too or the twin stores
-                        // desynchronise (gcm livelock class).
-                        let new_alts = crate::guarded::normalise_disj_list(&new_alts);
-                        Goal::Disj(crate::constraint::constraints::Disj(new_alts))
-                    }
-                }
-                Goal::Split(s) => Goal::Split(s),
-                Goal::Subterm((s, t)) => {
-                    // COW twin of `apply_term` with change tracking (same
-                    // `None`-when-unchanged contract as `apply_fact`).
-                    let ns = match tamarin_term::subst::apply_vterm_changed(&subst, &s) {
-                        Some(n) => {
-                            goals_value_changed.set(true);
-                            n
-                        }
-                        None => s,
-                    };
-                    let nt = match tamarin_term::subst::apply_vterm_changed(&subst, &t) {
-                        Some(n) => {
-                            goals_value_changed.set(true);
-                            n
-                        }
-                        None => t,
-                    };
-                    Goal::Subterm((ns, nt))
-                }
+                None => g,
             };
             if needs_reinsert {
                 if let Goal::Action(i, fa) = &g2 {
@@ -1500,13 +1145,11 @@ impl<'ctx> Reduction<'ctx> {
                 // its `min age1 age2` chooses the SMALLER nr regardless
                 // of iteration order.
                 //
-                // Comparison key: `canonical_goal_for_dedup` (mirrors
-                // HS's Map-key equality on Goal, which is structural Eq
-                // — but Rust's `VarSpec`-bound Disjs need
-                // `normalize_bound_lvars` to match HS's DeBruijn
-                // semantics, see system.rs::canonical_goal_for_dedup).
-                let canon_g2 = crate::constraint::system::canonical_goal_for_dedup(&g2);
-                if let Some(i) = new_goal_keys.iter().position(|k| *k == *canon_g2) {
+                // Comparison key: the goal itself, mirroring HS's Map-key
+                // equality on Goal, which is structural Eq; `Guarded` binders
+                // are DeBruijn on both sides, so alpha-equivalent Disjs
+                // already compare `==`.
+                if let Some(i) = new_goals.iter().position(|(k, _)| *k == g2) {
                     let st_old = &mut new_goals[i].1;
                     let merged_solved = st_old.solved || st.solved;
                     let merged_looping = st_old.looping || st.looping;
@@ -1518,25 +1161,19 @@ impl<'ctx> Reduction<'ctx> {
                         || merged_looping != st_old.looping
                         || merged_nr != st_old.nr
                     {
-                        goals_value_changed.set(true);
+                        goals_value_changed = true;
                     }
                     st_old.solved = merged_solved;
                     st_old.looping = merged_looping;
                     st_old.nr = merged_nr;
                 } else {
-                    // `new_goal_keys` is a parallel comparison-key cache; the
-                    // ACTUAL goal stored is the original `g2` (into `new_goals`).
-                    // Materialise the owned key BEFORE moving `g2` — since
-                    // canonicalisation is the identity, this key `==` `g2`.
-                    let key = canon_g2.into_owned();
                     new_goals.push((g2, st));
-                    new_goal_keys.push(key);
                 }
             }
         }
         // Conditional: a `needs_reinsert` removal always implies a changed
         // Action fact (`m_post != m_pre`), so it is covered by the flag.
-        if goals_value_changed.get() {
+        if goals_value_changed {
             self.sys.invalidate_max_var_idx_cache();
         }
         self.sys.content_mut_untracked().goals = std::sync::Arc::new(new_goals);
@@ -1546,13 +1183,10 @@ impl<'ctx> Reduction<'ctx> {
         }
         // Formulas / solved formulas / lemmas: port of Haskell's
         // `substFormulas`, `substSolvedFormulas`, `substLemmas` (all
-        // run inside `substSystem`).  Our formulas are stored as
-        // `Guarded` over parser-AST `VarSpec`, while the eq-store's
-        // substitution is over `LVar`s.  Build a parser-AST `VarSubst`
-        // by converting each LVar→LNTerm entry to (name, idx)→Term,
-        // then apply via `subst_guarded` (which already respects
-        // quantifier shadowing).  Without this, free variables in
-        // formulas (e.g. a lemma's outer Skolem `key` after the
+        // run inside `substSystem`), each `apply subst` over the stored
+        // `Guarded` (which already respects quantifier shadowing: `Bound`
+        // leaves carry no variable identity).  Without this, free variables
+        // in formulas (e.g. a lemma's outer Skolem `key` after the
         // proof has unified `key = ~k15`) never get substituted, and
         // simplify-time formula-evaluation (eval_formula_atoms,
         // insert_implied_formulas) misses contradictions like a
@@ -1561,128 +1195,17 @@ impl<'ctx> Reduction<'ctx> {
         // Hoisted out of the `if` below so it is in scope for the `raised`
         // return: set true iff a formula/solved-formula/lemma value changed.
         let mut formulas_value_changed = false;
-        if !parser_subst.is_empty() {
-            // Iterate per-formula until subst_guarded reaches a fixpoint
-            // — eq-store entries can form chains (e.g. `x:1 → x:13`,
-            // `x:13 → ~n:28`); a single application only reduces by one
-            // step.  Haskell's `substSystem` operates on a transitively-
-            // closed substitution by construction; our `compose` is
-            // closed at insert time but later `restrict_*` / cleanup
-            // passes can prune intermediate entries leaving a
-            // partially-applied formula-subst.  Bounded loop (16 steps)
-            // to defend against degenerate cycles.
-            // Copy-on-write: returns `None` when the formula is wholly
-            // unchanged (subst touches no leaf AND no AC node needs re-sorting),
-            // so the caller skips the store entirely with zero allocation.  This
-            // replaces three unconditional deep rebuilds (clone + subst + canon)
-            // per stored formula per `subst_system` call — the dominant residual
-            // guarded-clone cost after the dedup-canon hoist.  Byte-identical:
-            // `subst_guarded_cow == None` ⇔ the original loop broke immediately
-            // (`nxt == cur`), and `canonicalize_ac_in_guarded_cow == None` ⇔ the
-            // original `canonicalize` returned a value `== cur`.
-            let apply_to_fixpoint = |f: &Guarded| -> Option<Guarded> {
-                let mut cur = match crate::guarded::subst_guarded_cow(f, &parser_subst) {
-                    // Subst is a structural no-op; the only possible change is
-                    // the trailing canonicalisation (mirror `canonicalize(f)`).
-                    // A canon change can equalise sibling connectives, so
-                    // re-normalise the changed result (150f5eba boundary).
-                    None => {
-                        return crate::guarded::canonicalize_ac_in_guarded_cow(f)
-                            .map(crate::guarded::normalise_stored_formula_owned)
-                    }
-                    Some(s0) => s0,
-                };
-                // One subst pass already applied; continue to the fixpoint
-                // (the original ran up to 16 passes total).
-                for _ in 0..15 {
-                    match crate::guarded::subst_guarded_cow(&cur, &parser_subst) {
-                        None => break,
-                        Some(nxt) => cur = nxt,
-                    }
-                }
-                // Re-canonicalise AC operators after substitution.  Substituting
-                // an AC-valued var into an AC context (`rest ++ matchingComm`
-                // with `matchingComm := <a>++<b>`) leaves a nested/unsorted
-                // `Union(rest, Union(a,b))` that no longer structurally matches
-                // the flat-sorted form `impliedFormulas` produces
-                // (`implied_apply_canon_cow`, simplify.rs) — defeating
-                // the `solved_formulas` dedup, so the prover re-derives and
-                // re-solves a disjunction HS already discharged
-                // (UM_three_pass `CK_secure_UM3`).  HS's AC constructors
-                // (`fAppAC`) flatten+sort on construction, so HS never sees the
-                // nested form; mirror that here.  (Tuple pairs are already
-                // canonicalised inside `subst_gterm_cow` via `mk_gpair`.)
-                let cur = crate::guarded::canonicalize_ac_in_guarded_cow(&cur).unwrap_or(cur);
-                // Re-normalise the connective structure — the stored-state
-                // substitution boundary of HS 150f5eba (substFormulas =
-                // `S.map (normaliseStoredFormula . apply subst)`): a subst
-                // that identifies two variables can make sibling conjuncts
-                // equal, and the raw rebuild keeps both copies.
-                Some(crate::guarded::normalise_stored_formula_owned(cur))
-            };
-            // Change bit for the conditional cache invalidation — the
-            // `dedup_preserve_order` calls below drop only formulas EQUAL
-            // to kept ones, which cannot change the max free-var idx.
-            // (Declared above the enclosing `if` for the `raised` return.)
-            for f in self.sys.formulas_mut_untracked().iter_mut() {
-                if let Some(new_f) = apply_to_fixpoint(f) {
-                    if new_f != **f {
-                        *f = std::sync::Arc::new(new_f);
-                        self.changed = ChangeIndicator::Changed;
-                        formulas_value_changed = true;
-                    }
-                }
-            }
-            for f in self.sys.solved_formulas_mut_untracked().iter_mut() {
-                if let Some(new_f) = apply_to_fixpoint(f) {
-                    if new_f != **f {
-                        *f = std::sync::Arc::new(new_f);
-                        self.changed = ChangeIndicator::Changed;
-                        formulas_value_changed = true;
-                    }
-                }
-            }
-            for f in self.sys.content_mut_untracked().lemmas.iter_mut() {
-                if let Some(new_f) = apply_to_fixpoint(f) {
-                    if new_f != **f {
-                        *f = std::sync::Arc::new(new_f);
-                        self.changed = ChangeIndicator::Changed;
-                        formulas_value_changed = true;
-                    }
-                }
-            }
+        if !formula_subst.is_empty() {
+            formulas_value_changed |=
+                subst_stored_formulas(self.sys.formulas_mut_untracked(), &formula_subst);
+            formulas_value_changed |=
+                subst_stored_formulas(self.sys.solved_formulas_mut_untracked(), &formula_subst);
+            formulas_value_changed |=
+                subst_stored_formulas(&mut self.sys.content_mut_untracked().lemmas, &formula_subst);
             if formulas_value_changed {
                 self.sys.invalidate_max_var_idx_cache();
+                self.changed = ChangeIndicator::Changed;
             }
-            // HS-faithful: `substFormulas`/`substSolvedFormulas`/`substLemmas`
-            // apply via `Apply LNSubst (Set Guarded)` (Reduction.hs:598-607, see line 605),
-            // which in Haskell is `S.map (apply subst)`.  `S.map` rebuilds the
-            // Set, dropping entries that collide post-substitution.  Without
-            // this dedup, RS's Vec retains structurally-identical formulas
-            // produced by substitution-induced equality — e.g. two
-            // `impliedFormulas` matches that produced distinct
-            // `Ex.PCR_Write(h(<'pcr0',~n#1>))` and
-            // `Ex.PCR_Write(h(<'pcr0',~n#0>))` formulas which collapse to
-            // the same `Ex.PCR_Write(h(<'pcr0',~n#0>))` once eq_store binds
-            // `~n#1 → ~n#0`.  HS dedups via Set semantics; the dedup below
-            // mirrors that.
-            //
-            // Concrete trigger: Envelope.spthy::Secret_and_Denied_exclusive
-            // at path `/.../PCR_Quote/PCR_Extend/Alice2` — two distinct
-            // `Ex.PCR_Write(h(<'pcr0',~n#1>))` / `...~n#0` formulas collapse
-            // to the same formula once eq_store binds `~n#1 → ~n#0`; without
-            // dedup, both survive in RS's Vec though HS's Set stores one.
-            //
-            // Note: the dedup alone does not close the Envelope proof-tree
-            // diff — the divergent goal pick at the cascading
-            // `/Alice2/CreateLockedKey` state involves additional state
-            // differences (HS has an Action(PCR_Write('pcr0')) goal RS lacks;
-            // upstream the smart-ranker tie-breaker on Premise(PCR/1) NRs
-            // also differs).  It is nonetheless load-bearing for many other
-            // lemmas via formula-count parity.
-            dedup_preserve_order(self.sys.formulas_mut_untracked());
-            dedup_preserve_order(self.sys.solved_formulas_mut_untracked());
-            dedup_preserve_order(&mut self.sys.content_mut_untracked().lemmas);
         }
         // 5b. SubtermStore substitution — port of Haskell's
         // `instance Apply LNSubst SubtermStore` (`SubtermStore.hs:560-561`):
@@ -1702,75 +1225,50 @@ impl<'ctx> Reduction<'ctx> {
         // verdict on `Sinvalid`-class lemmas (HS reports `simplify, by
         // contradiction /* contradictory subterm store */`).
         //
-        // Use a direct subst application (not the `apply_term` closure
-        // above) so the borrow of `self.maude` from `apply_term` doesn't
-        // outlive the `self.insert_goal_with_loop_flag` call above.  HS's
-        // `Apply LNSubst SubtermStore` doesn't normalise — neither do
-        // we.  (`apply_term`'s normalise path is only used when the
-        // eager-normalise env var is set; HS-default is non-normalising.)
-        // COW probe + compare-on-rebuild: `apply_changed == None` means
+        // HS's `Apply LNSubst SubtermStore` does not normalise, and neither
+        // does this.  COW probe + compare-on-rebuild: `apply_changed == None` means
         // applying the subst leaves the term unchanged, so an `!=` compare
         // could not hold — both the pre-apply clone and the deep compare
         // are skipped on unchanged terms.  On `Some`, the value compare is
         // KEPT (an AC re-sort can rebuild a value-equal term, and
         // `changed_sst` must track VALUE change exactly as before).
         let mut changed_sst = false;
-        let pos_subs = std::mem::take(&mut self.sys.subterm_store_mut().subterms);
-        let mut new_subs = Vec::with_capacity(pos_subs.len());
-        for mut c in pos_subs {
-            if let Some(new_small) = subst_view.apply_changed(&c.small) {
-                if new_small != c.small {
-                    changed_sst = true;
-                }
-                c.small = new_small;
-            }
-            if let Some(new_big) = subst_view.apply_changed(&c.big) {
-                if new_big != c.big {
-                    changed_sst = true;
-                }
-                c.big = new_big;
-            }
-            new_subs.push(c);
-        }
-        let solved = std::mem::take(&mut self.sys.subterm_store_mut().solved_subterms);
-        let mut new_solved = Vec::with_capacity(solved.len());
-        for mut c in solved {
-            if let Some(new_small) = subst_view.apply_changed(&c.small) {
-                if new_small != c.small {
-                    changed_sst = true;
-                }
-                c.small = new_small;
-            }
-            if let Some(new_big) = subst_view.apply_changed(&c.big) {
-                if new_big != c.big {
-                    changed_sst = true;
-                }
-                c.big = new_big;
-            }
-            new_solved.push(c);
-        }
+        let mut apply_constraints =
+            |cs: Vec<crate::tools::subterm_store::SubtermConstraint>| -> Vec<_> {
+                cs.into_iter()
+                    .map(|c| match c.apply_changed(&pass) {
+                        Some(nc) => {
+                            if nc != c {
+                                changed_sst = true;
+                            }
+                            nc
+                        }
+                        None => c,
+                    })
+                    .collect()
+            };
+        let new_subs =
+            apply_constraints(std::mem::take(&mut self.sys.subterm_store_mut().subterms));
+        let new_solved = apply_constraints(std::mem::take(
+            &mut self.sys.subterm_store_mut().solved_subterms,
+        ));
         // negSubterms (HS field `a`) get substituted too; oldNegSubterms
         // (field `e`) do NOT — this is what re-arms the simpSplitNegSt
         // change-detection (`negSubterms \ oldNegSubterms`) after a
         // substitution alters a stored negative subterm.
-        let negs = std::mem::take(&mut self.sys.subterm_store_mut().neg_subterms);
-        let mut new_negs: Vec<(tamarin_term::lterm::LNTerm, tamarin_term::lterm::LNTerm)> =
-            Vec::with_capacity(negs.len());
-        for (mut s, mut t) in negs {
-            if let Some(new_s) = subst_view.apply_changed(&s) {
-                if new_s != s {
-                    changed_sst = true;
-                }
-                s = new_s;
-            }
-            if let Some(new_t) = subst_view.apply_changed(&t) {
-                if new_t != t {
-                    changed_sst = true;
-                }
-                t = new_t;
-            }
-            new_negs.push((s, t));
-        }
+        let new_negs: Vec<(tamarin_term::lterm::LNTerm, tamarin_term::lterm::LNTerm)> =
+            std::mem::take(&mut self.sys.subterm_store_mut().neg_subterms)
+                .into_iter()
+                .map(|pair| match pair.apply_changed(&pass) {
+                    Some(np) => {
+                        if np != pair {
+                            changed_sst = true;
+                        }
+                        np
+                    }
+                    None => pair,
+                })
+                .collect();
         self.sys.subterm_store_mut().subterms = new_subs;
         self.sys.subterm_store_mut().solved_subterms = new_solved;
         // `rebuild_from` sorts AND dedups, establishing the sorted-unique set
@@ -1789,22 +1287,6 @@ impl<'ctx> Reduction<'ctx> {
         //    simplify-loop iteration will pick them up.
         let had_rule_eqs = !rule_eqs.is_empty();
         if had_rule_eqs {
-            if tamarin_utils::env_gate!("TAM_DBG_SUBST_RULE_EQS") {
-                let path = crate::constraint::solver::trace::case_path_string();
-                eprintln!(
-                    "[subst_rule_eqs] path={} queueing {} rule_eqs from setNodes-style collision",
-                    path,
-                    rule_eqs.len()
-                );
-                for (i, e) in rule_eqs.iter().enumerate() {
-                    eprintln!(
-                        "[subst_rule_eqs]   eq[{}]: lhs={:?} rhs={:?}",
-                        i,
-                        format!("{:?}", e.lhs).chars().take(180).collect::<String>(),
-                        format!("{:?}", e.rhs).chars().take(180).collect::<String>()
-                    );
-                }
-            }
             // Tag/arity mismatches mean two distinct rule instances
             // collapsed to the same node id but their facts disagree
             // — the system has no model (Haskell `setNodes` →
@@ -1843,18 +1325,6 @@ impl<'ctx> Reduction<'ctx> {
             // fails on same-tag facts with incompatible terms, e.g.
             // !Key(~k) = !Key(some_other_term)).
             let res = self.solve_fact_eqs(SplitStrategy::SplitLater, &safe_eqs);
-            if tamarin_utils::env_gate!("TAM_DBG_SUBST_RULE_EQS") {
-                eprintln!(
-                    "[subst_rule_eqs] solve_fact_eqs returned: {:?}",
-                    res.as_ref()
-                        .map(|o| match o {
-                            SolveOutcome::Linear(_) => "Linear",
-                            SolveOutcome::Cases(_) => "Cases",
-                            SolveOutcome::Contradictory => "Contradictory",
-                        })
-                        .map_err(|e| format!("Err({:?})", e))
-                );
-            }
             if matches!(res, Err(_) | Ok(SolveOutcome::Contradictory)) {
                 // Mirrors Haskell `solveFactEqs` -> `solveTermEqs`
                 // ending in `noContradictoryEqStore` (Reduction.hs:731-754, see line 753)
@@ -1880,7 +1350,7 @@ impl<'ctx> Reduction<'ctx> {
             edges_value_changed,
             last_atom_changed,
             less_value_changed,
-            goals_value_changed: goals_value_changed.get(),
+            goals_value_changed,
             formulas_value_changed,
             changed_sst,
             had_rule_eqs,
@@ -1925,44 +1395,10 @@ impl<'ctx> Reduction<'ctx> {
             Some(v) if !v.is_empty() => v,
             _ => return false,
         };
-        if tamarin_utils::env_gate!("TAM_RS_DBG_SOLVE_RULE_CONSTRAINTS") {
-            eprintln!("[RS_SOLVE_RULE_CONSTRAINTS] n_substs={}", substs.len());
-        }
         // Haskell `addRuleVariants` errors if domain of variants
         // intersects with eq-store free subst — that case isn't
         // supported there either. We don't enforce it; the worst case
         // is a redundant SplitG entry that simplify will discharge.
-        if tamarin_utils::env_gate!("TAM_DBG_VS_DUMP") {
-            let path = crate::constraint::solver::trace::case_path_string();
-            eprintln!(
-                "[vs-dump] path={} solve_rule_constraints: {} substs",
-                path,
-                substs.len()
-            );
-            for (i, s) in substs.iter().enumerate() {
-                let pairs: Vec<String> = s
-                    .to_list()
-                    .iter()
-                    .map(|(k, v)| {
-                        let trunc = if tamarin_utils::env_gate!("TAM_DBG_VS_DUMP_FULL") {
-                            500
-                        } else {
-                            120
-                        };
-                        format!("{:?}→{:?}", k, v)
-                            .chars()
-                            .take(trunc)
-                            .collect::<String>()
-                    })
-                    .collect();
-                eprintln!("[vs-dump]   [{}]: {}", i, pairs.join(" ; "));
-            }
-        }
-        if crate::tools::equation_store::impure_dbg_enabled() {
-            for s in &substs {
-                crate::tools::equation_store::dbg_register_subst_origin("solveRuleConstraints", s);
-            }
-        }
         let id = self.sys.eq_store_mut().add_disj(substs);
         // HS-faithful order (Reduction.hs:788-797): `solveRuleConstraints
         // (Just eqConstr)` is
@@ -1977,7 +1413,7 @@ impl<'ctx> Reduction<'ctx> {
         // SplitG ends up orphaned and `removeSolvedSplitGoals` deletes
         // it later — but the gsNr bump persists).  Doing simp FIRST and
         // skipping `insert_goal` when folded under-bumps the counter,
-        // desynchronising RS's gsNr trace from HS's at every
+        // desynchronising RS's gsNr sequence from HS's at every
         // destructor-free `labelNodeId` call.
         //
         // Do NOT call apply_eq_store(maude, empty_subst) here to drop
@@ -1991,62 +1427,22 @@ impl<'ctx> Reduction<'ctx> {
         // `sortCompare(v.sort, lx.sort)` strict-GT guard fails when both
         // are Msg.  The fix lives in the Maude bridge, not here.
         self.insert_goal(Goal::Split(id));
-        let folded;
         {
-            use tamarin_term::lterm::HasFrees;
-            // Functionally-dead preserve set (here the deliberately narrower
-            // no-goals variant): `simp_singleton_avoiding` reads it only
-            // under the three debug gates — the fold calls
-            // `fresh_to_free_avoiding`, which ignores it — so build it only
-            // when a gate is on.  The debug-branch body performs the full
-            // inline walk, so debug traces stay identical.
-            let sys_vars: std::collections::BTreeSet<tamarin_term::lterm::LVar> =
-                if preserve_dbg_gates_enabled() {
-                    let mut sys_vars: std::collections::BTreeSet<tamarin_term::lterm::LVar> =
-                        std::collections::BTreeSet::new();
-                    let mut visit = |v: &tamarin_term::lterm::LVar| {
-                        sys_vars.insert(*v);
-                    };
-                    for (id, rule) in self.sys.nodes.iter() {
-                        id.for_each_free(&mut visit);
-                        rule.for_each_free(&mut visit);
-                    }
-                    for e in &self.sys.edges {
-                        e.src.0.for_each_free(&mut visit);
-                        e.tgt.0.for_each_free(&mut visit);
-                    }
-                    for l in &self.sys.less_atoms {
-                        l.smaller.for_each_free(&mut visit);
-                        l.larger.for_each_free(&mut visit);
-                    }
-                    if let Some(la) = &self.sys.last_atom {
-                        la.for_each_free(&mut visit);
-                    }
-                    sys_vars
-                } else {
-                    std::collections::BTreeSet::new()
-                };
             let maude = self.maude.clone();
             let store = std::sync::Arc::unwrap_or_clone(self.sys.take_eq_store());
             self.sys.invalidate_max_var_idx_cache();
-            if tamarin_utils::env_gate!("TAM_RS_DBG_FOLD_DRAWS") {
-                eprintln!("[rs-fold] ARV-SIMP counter={}", maude.fresh_counter_peek());
-            }
             self.sys
                 .set_eq_store(std::sync::Arc::new(store.simp_with_fresh_avoiding(
                     |_, _| false,
                     |n| maude.reserve_idxs(n),
-                    &sys_vars,
                     Some(&maude),
                 )));
             // eq_store simp can rewrite/drop subst entries → max may lower.
             self.sys.invalidate_max_var_idx_cache();
-            // Check if our disj was folded (singleton case).  HS leaves
-            // the orphaned SplitG goal in `sGoals` until the next
-            // `removeSolvedSplitGoals` call (Reduction.hs:561-566) which
-            // is invoked from the simplifier loop — so we don't strip
-            // the goal here, matching HS's lazy cleanup.
-            folded = !self.sys.eq_store.conj.iter().any(|d| d.split_id == id);
+            // HS leaves the orphaned SplitG goal in `sGoals` until the
+            // next `removeSolvedSplitGoals` call (Reduction.hs:561-566),
+            // which the simplifier loop invokes — so we don't strip the
+            // goal here, matching HS's lazy cleanup.
             // HS-faithful: `solveRuleConstraints` (Reduction.hs:788-797) is
             //   addRuleVariants → insertGoal (SplitG …) → setM sEqStore =<< simp …
             //   → noContradictoryEqStore
@@ -2066,56 +1462,10 @@ impl<'ctx> Reduction<'ctx> {
         // mzero if the eq_store ended up
         // contradictory after adding variants + simp.  Return that
         // signal so the caller can drop the rule branch BEFORE
-        // exploit_prems fires — matching HS's behavior where
-        // `exploitPrems rule=X` trace never emits for rules whose
-        // variants conflict with the live state.
-        let contra = self.sys.eq_store.is_false();
-        if tamarin_utils::env_gate!("TAM_DBG_VARIANT_CONTRA") && contra {
-            eprintln!("[variant_contra] solve_rule_constraints contradiction fired");
-        }
-        if tamarin_utils::env_gate!("TAM_DBG_VS_POST") {
-            for (id, ru) in self.sys.nodes.iter() {
-                let nm = rule_case_name(ru);
-                if nm == "Serv_1" {
-                    eprintln!(
-                        "[vs_post] AFTER solve_rule_constraints: id={}.{} folded={}",
-                        id.name, id.idx, folded
-                    );
-                    for (i, p) in ru.premises.iter().enumerate() {
-                        eprintln!(
-                            "[vs_post]   prem[{}]: {:?}",
-                            i,
-                            format!("{:?}", p).chars().take(400).collect::<String>()
-                        );
-                    }
-                    for (i, c) in ru.conclusions.iter().enumerate() {
-                        eprintln!(
-                            "[vs_post]   conc[{}]: {:?}",
-                            i,
-                            format!("{:?}", c).chars().take(400).collect::<String>()
-                        );
-                    }
-                    eprintln!(
-                        "[vs_post]   eq_store.subst ({} entries):",
-                        self.sys.eq_store.subst.to_list().len()
-                    );
-                    for (v, t) in self.sys.eq_store.subst.to_list().iter().take(15) {
-                        eprintln!(
-                            "[vs_post]     {}.{}/{:?} → {:?}",
-                            v.name,
-                            v.idx,
-                            v.sort,
-                            format!("{:?}", t).chars().take(120).collect::<String>()
-                        );
-                    }
-                    eprintln!(
-                        "[vs_post]   eq_store.conj ({} disjs):",
-                        self.sys.eq_store.conj.len()
-                    );
-                }
-            }
-        }
-        contra
+        // exploit_prems fires — matching HS, which never reaches
+        // `exploitPrems` for rules whose variants conflict with the
+        // live state.
+        self.sys.eq_store.is_false()
     }
 
     /// Insert a `<` atom.
@@ -2186,24 +1536,6 @@ impl<'ctx> Reduction<'ctx> {
                             // singleton variant disj, which feeds the
                             // eqsSubst RANGE) stays aligned with HS.
                             self.maude.ensure_above(next_idx);
-                            // TAM_RS_TRACE_VK_CREATE: mirror of the HS
-                            // `TAM_HS_TRACE_VK_CREATE` hook (Reduction.hs /
-                            // Goals.hs `requiresKU` + `exploitPrem`).  Logs
-                            // every `vk` fresh-node allocation so the HS-vs-RS
-                            // allocation sequences can be diffed when a `#vk.N`
-                            // index diverges.  `cnt`/`bm` expose the maude
-                            // fresh-counter and bounds_max at allocation — this
-                            // path (`ku_decomp_subterms`) derives the index
-                            // arithmetically from `max(bm, outer.idx)+1` rather
-                            // than by an HS-`freshLVar`-style counter draw, then
-                            // advances the counter past it via the `ensure_above`
-                            // above (so `cnt` here already reflects the
-                            // post-advance value).
-                            if tamarin_utils::env_gate!("TAM_RS_TRACE_VK_CREATE") {
-                                let path = crate::constraint::solver::trace::case_path_string();
-                                eprintln!("[RS_VK_CREATE] path={} site=ku_decomp_subterms vk.{} cnt={} bm={}",
-                                    path, next_idx, self.maude.fresh_counter_peek(), bounds_max(&self.sys));
-                            }
                             let sub_fa = crate::fact::ku_fact(sub);
                             self.insert_goal_with_loop_flag(
                                 Goal::Action(sub_node, sub_fa),
@@ -2239,35 +1571,21 @@ impl<'ctx> Reduction<'ctx> {
         bounds_max(&self.sys)
     }
 
-    /// Insert a parser-AST `Atom` into the system following Haskell's
-    /// `insertAtom` semantics:
+    /// HS `insertAtom` (Reduction.hs:414-421):
     ///
-    /// - `Eq(x, y)`     → `solve_term_eqs` (Maude AC unification)
-    /// - `Less(i, j)`   → push a `LessAtom` (Formula reason)
-    /// - `Last(t)`      → set `last_atom` if `t` is a node variable
-    /// - `Action(fa,t)` → push a `Goal::Action(node_id, lnfact)`
-    /// - `Subterm(s,b)` → push a subterm-store entry
-    /// - `Pred(_)`      → returns `false`: predicates are pre-expanded
-    ///   during translation and have no `LNAtom` form
-    /// - `LessMset(_,_)`→ returns `false`: multiset ordering is not a
-    ///   temporal `LNAtom`, so it never reaches here
+    /// - `EqE(x, y)`     → `solveTermEqs SplitNow`
+    /// - `Less(i, j)`    → `insertLess` with the `Formula` reason
+    /// - `Last(t)`       → `insertLast`
+    /// - `Action(t, fa)` → `insertAction`
+    /// - `Subterm(s, b)` → `insertSubterm`
+    /// - `Syntactic(_)`  → nothing
     ///
-    /// HS's `LNAtom` (Reduction.hs `insertAtom`) only has
-    /// `EqE`/`Subterm`/`Action`/`Less`/`Last`/`Syntactic`; the two
-    /// parser-AST shapes above have no counterpart and are rejected.
-    ///
-    /// Returns `true` if the atom was successfully decomposed,
-    /// `false` if it was a shape with no `LNAtom` counterpart.
-    pub fn insert_atom(&mut self, a: &tamarin_parser::ast::Atom) -> bool {
-        use tamarin_parser::ast::Atom;
+    /// HS reads the three timepoints with `ltermNodeId'`, which errors on any other sort; the
+    /// total [`lterm_node_id`] answers `None` there and the atom is dropped.
+    pub fn insert_atom(&mut self, a: &crate::atom::Atom<tamarin_term::lterm::LNTerm>) {
+        use crate::atom::ProtoAtom;
         match a {
-            Atom::Eq(x, y) => {
-                let (Some(tx), Some(ty)) = (
-                    crate::elaborate::term_to_lnterm(x),
-                    crate::elaborate::term_to_lnterm(y),
-                ) else {
-                    return false;
-                };
+            ProtoAtom::EqE(x, y) => {
                 // KNOWN COMPENSATING DIVERGENCE (pending a faithful
                 // rule-variant / normalisation pass).
                 //
@@ -2286,12 +1604,8 @@ impl<'ctx> Reduction<'ctx> {
                 // pre-normal is rule-variant computation (`variants in
                 // MSG` yields reduced action terms) plus eq-store
                 // bindings being Maude-unifier outputs.  HS's
-                // `substSystem`/`setNodes` deliberately does NOT
-                // normalise — documented at the `apply_to_fact` comment
-                // above (eager-normalise in `substNodes` was tried and
-                // reverted: it lost source-case head shapes in test4 and
-                // blocked the `hasNonNormalTerms` contradiction in
-                // Responder_secrecy).
+                // `substSystem`/`setNodes` does NOT normalise, as the node
+                // section of `subst_system_once` records.
                 //
                 // Because Rust does not yet compute reduced rule variants,
                 // a fact's terms can still carry non-normal shapes (e.g.
@@ -2304,8 +1618,8 @@ impl<'ctx> Reduction<'ctx> {
                 // these two reduces once a faithful variant/normalisation
                 // pass lands.
                 let maude = self.maude.clone();
-                let tx = maude.reduce(&tx).unwrap_or(tx);
-                let ty = maude.reduce(&ty).unwrap_or(ty);
+                let tx = maude.reduce(x).unwrap_or_else(|_| x.clone());
+                let ty = maude.reduce(y).unwrap_or_else(|_| y.clone());
                 // Haskell `insertAtom (EqE x y) = void (solveTermEqs
                 // SplitNow [Equal x y])`.  The monadic `void` ignores
                 // the ChangeIndicator but the monad propagates
@@ -2340,20 +1654,13 @@ impl<'ctx> Reduction<'ctx> {
                         for rest in it {
                             self.pending_eq_arms.push(rest);
                         }
-                        if tamarin_utils::env_gate!("TAM_RS_DBG_INSERT_ATOM_EQ_FANOUT") {
-                            eprintln!(
-                                "[insert_atom_eq_fanout] stashed {} extra arms",
-                                self.pending_eq_arms.len()
-                            );
-                        }
                     }
                 }
                 self.changed = ChangeIndicator::Changed;
-                true
             }
-            Atom::Less(i, j) => {
-                let (Some(ni), Some(nj)) = (term_to_node_id(i), term_to_node_id(j)) else {
-                    return false;
+            ProtoAtom::Less(i, j) => {
+                let (Some(ni), Some(nj)) = (lterm_node_id(i), lterm_node_id(j)) else {
+                    return;
                 };
                 // Normalise through the eq-store substitution so any
                 // earlier node-id merges propagate to this fresh atom.
@@ -2364,43 +1671,34 @@ impl<'ctx> Reduction<'ctx> {
                     nj,
                     crate::constraint::constraints::Reason::Formula,
                 ));
-                true
             }
-            Atom::Last(t) => {
-                let Some(n) = term_to_node_id(t) else {
-                    return false;
+            ProtoAtom::Last(t) => {
+                let Some(n) = lterm_node_id(t) else {
+                    return;
                 };
                 // HS-faithful insertLast (Reduction.hs:402-407).
                 let _ = self.insert_last(n);
-                true
             }
-            Atom::Action(fact, t) => {
-                let Ok(lnfact) = crate::elaborate::fact_to_lnfact(fact) else {
-                    return false;
+            ProtoAtom::Action(t, fact) => {
+                let Some(n) = lterm_node_id(t) else {
+                    return;
                 };
-                let Some(n) = term_to_node_id(t) else {
-                    return false;
-                };
-                self.insert_goal(Goal::Action(n, lnfact));
-                true
+                self.insert_goal(Goal::Action(n, fact.clone()));
             }
-            Atom::Subterm(s, b) => {
-                let (Some(ts), Some(tb)) = (
-                    crate::elaborate::term_to_lnterm(s),
-                    crate::elaborate::term_to_lnterm(b),
-                ) else {
-                    return false;
-                };
+            ProtoAtom::Subterm(s, b) => {
                 // Pure ADD (`SubtermStore::add` is a plain push, no
                 // removal): the max can only rise by the two new terms —
                 // bump both sides instead of invalidating.
-                self.sys.bump_cache_term(&ts);
-                self.sys.bump_cache_term(&tb);
-                self.sys.subterm_store_mut().add(ts, tb);
+                self.sys.bump_cache_term(s);
+                self.sys.bump_cache_term(b);
+                self.sys.subterm_store_mut().add(s.clone(), b.clone());
                 self.changed = ChangeIndicator::Changed;
-                true
             }
-            Atom::Pred(_) | Atom::LessMset(_, _) => false,
+            // HS `Syntactic _ -> return ()` (Reduction.hs:421): the sugar
+            // carries no constraint.  `to_lnformula` refuses a formula that
+            // still holds one (formula.rs), so no atom of a guarded formula
+            // reaches this arm.
+            ProtoAtom::Syntactic(_) => {}
         }
     }
 
@@ -2418,37 +1716,23 @@ impl<'ctx> Reduction<'ctx> {
     ///   (`insertNegSubterm`); otherwise kept in `formulas`
     pub fn insert_formula(&mut self, g: Guarded) {
         // Normalise at the insertion boundary so the stored-formula state
-        // is ALWAYS in `normalise_stored_formula` normal form — the dedup
+        // is ALWAYS in `normalise_stored_formula_cow` normal form — the dedup
         // checks inside `insert_formula_inner` compare against the
         // (post-substitution, normalised) stored sets.  Port of HS
         // insertFormula entry normalisation (150f5eba).
         let g = crate::guarded::normalise_stored_formula_owned(g);
+        // Every path into the store builds its atoms through `fApp`, so the
+        // AC and `C` argument lists arrive flat and sorted; a formula that
+        // reached here another way would compare unequal to its own rebuild
+        // and re-fire a discharged implied-formula disjunction.
+        debug_assert!(
+            crate::guarded::is_ac_canonical(&g),
+            "a stored formula holds an argument list `fApp` would order differently: {g:?}"
+        );
         self.insert_formula_inner(g, true);
     }
 
     fn insert_formula_inner(&mut self, g: Guarded, mark: bool) {
-        if tamarin_utils::env_gate!("TAM_DBG_INSERT_FORM") {
-            let head = match &g {
-                Guarded::Atom(_) => "Atom",
-                Guarded::Conj(_) => "Conj",
-                Guarded::Disj(items) if items.is_empty() => "Disj-EMPTY",
-                Guarded::Disj(_) => "Disj",
-                Guarded::GGuarded {
-                    qua: crate::guarded::Quant::Ex,
-                    ..
-                } => "Ex",
-                Guarded::GGuarded {
-                    qua: crate::guarded::Quant::All,
-                    ..
-                } => "All",
-            };
-            let dup_f = crate::guarded::stores_contains(&self.sys.formulas, &g);
-            let dup_s = crate::guarded::stores_contains(&self.sys.solved_formulas, &g);
-            eprintln!(
-                "[INSERT_FORM] mark={} head={} dup_f={} dup_s={}",
-                mark, head, dup_f, dup_s
-            );
-        }
         if crate::guarded::stores_contains(&self.sys.formulas, &g)
             || crate::guarded::stores_contains(&self.sys.solved_formulas, &g)
         {
@@ -2473,35 +1757,25 @@ impl<'ctx> Reduction<'ctx> {
                 // downstream contradictions check can detect it.
                 //
                 // HS-faithful: `insertFormula` (Reduction.hs:450-454) for
-                // GDisj does NOT branch on emptiness — it always traces
-                // `Disj`, inserts into sFormulas, AND inserts the DisjG
-                // goal.  When the disj is empty, the DisjG goal becomes
+                // GDisj does NOT branch on emptiness — it inserts into
+                // sFormulas AND inserts the DisjG goal.  When the disj is
+                // empty, the DisjG goal becomes
                 // `solveDisjunction (Disj [])` = mzero (Goals.hs:393-395)
                 // — a structurally-explicit contradiction that the goal
-                // ranker can pick.  Mirror by emitting the trace event,
-                // adding to formulas, AND inserting the empty DisjG goal
-                // alongside.  Both contradictions-check and goal-ranker
+                // ranker can pick.  Mirror by adding to formulas AND
+                // inserting the empty DisjG goal alongside.  Both contradictions-check and goal-ranker
                 // can then close the case (HS picks whichever fires first).
                 // The entry guard returned when `g` was already in
                 // `formulas`/`solved_formulas`, and the only statement since
                 // (`match g.clone()`) does not mutate `self.sys`, so `g` is
-                // provably not yet in `formulas` here: always trace "Disj"
-                // and push.  Mirrors HS `insertFormula` (Reduction.hs:450-454),
+                // provably not yet in `formulas` here: always push.
+                // Mirrors HS `insertFormula` (Reduction.hs:450-454),
                 // which likewise inserts without re-checking membership.
                 debug_assert!(
                     !crate::guarded::stores_contains(&self.sys.formulas, &g),
                     "insert_formula_inner empty-Disj arm: the entry guard \
                      already excludes formulas-membership"
                 );
-                crate::constraint::solver::trace::trace_form("Disj", || {
-                    crate::constraint::solver::trace::guarded_repr(&g)
-                });
-                if tamarin_utils::env_gate!("TAM_RS_TRACE_GFALSE") {
-                    eprintln!(
-                        "[RS_GFALSE] path={} gfalse inserted",
-                        crate::constraint::solver::trace::case_path_string()
-                    );
-                }
                 // Pure ADD (formula push): bump.
                 self.sys.bump_cache_guarded(&g);
                 self.sys.formulas_mut().push(std::sync::Arc::new(g.clone()));
@@ -2516,17 +1790,14 @@ impl<'ctx> Reduction<'ctx> {
                 // The entry guard returned when `g` was already in
                 // `formulas`/`solved_formulas`, and the only statement since
                 // (`match g.clone()`) does not mutate `self.sys`, so `g` is
-                // provably not yet in `formulas` here: always trace "Disj"
-                // and push.  Mirrors HS `insertFormula` (Reduction.hs:450-454),
+                // provably not yet in `formulas` here: always push.
+                // Mirrors HS `insertFormula` (Reduction.hs:450-454),
                 // which likewise inserts without re-checking membership.
                 debug_assert!(
                     !crate::guarded::stores_contains(&self.sys.formulas, &g),
                     "insert_formula_inner Disj arm: the entry guard \
                      already excludes formulas-membership"
                 );
-                crate::constraint::solver::trace::trace_form("Disj", || {
-                    crate::constraint::solver::trace::guarded_repr(&g)
-                });
                 // Pure ADD (formula push): bump.
                 self.sys.bump_cache_guarded(&g);
                 self.sys.formulas_mut().push(std::sync::Arc::new(g.clone()));
@@ -2535,11 +1806,10 @@ impl<'ctx> Reduction<'ctx> {
                 self.changed = ChangeIndicator::Changed;
             }
             Guarded::Atom(ref ga) => {
-                // Try to decompose into a constraint via insert_atom.
-                // Top-level Guarded::Atom has no Bound vars; round-trip
-                // to parser AST for the legacy `insert_atom` interface.
-                let a = crate::guarded::gatom_to_atom(ga);
-                let _ = self.insert_atom(&a);
+                // HS `GAto ato -> markAsSolved; insertAtom (bvarToLVar ato)`
+                // (Reduction.hs:441-442): a top-level atom of a stored formula
+                // has no `Bound` leaf left for `bvarToLVar` to reject.
+                self.insert_atom(&crate::guarded::bvar_to_lvar(ga));
                 // Haskell-faithful: only mark the OUTER formula as
                 // solved (mark=True at top-level `insert_formula`).
                 // Inner recursion (mark=False, from Conj/Ex body) does
@@ -2564,28 +1834,17 @@ impl<'ctx> Reduction<'ctx> {
                 // then normalize witness LVars `~mw#N → ~mw#0`, then
                 // alpha-canon GGuarded bound vars).
                 if mark {
-                    // σ rebuilt only when the subst axis moved since the
-                    // cached copy (see `eq_vs_cache`); a stamp hit is
-                    // bit-identical to `var_subst_from_eq_store` here.
-                    let stamp = self.sys.subst_stamp();
-                    if !matches!(&self.eq_vs_cache, Some((s, _)) if *s == stamp) {
-                        self.eq_vs_cache = Some((
-                            stamp,
-                            crate::guarded::var_subst_from_eq_store(&self.sys.eq_store),
-                        ));
-                    }
-                    let eq_vs = &self.eq_vs_cache.as_ref().expect("just ensured").1;
-                    // COW canon.  `normalize_bound_lvars` is an identity clone
-                    // applied to BOTH sides of the `==`, so it never changes the
-                    // dedup boolean — drop it (matching the `implied_apply_canon`
-                    // twin in simplify.rs, which deliberately skips it).  The two
-                    // remaining stages reuse the borrowed input when they touch no
-                    // leaf, so an already-canonical formula pays zero clones.
+                    // COW canon.  No bound-var canonicalisation: `Guarded`
+                    // binders are DeBruijn, so `Bound` vars carry no idx and
+                    // alpha-equivalent formulas already compare `==` (matching
+                    // the `implied_apply_canon_cow` twin in simplify.rs).  The two
+                    // stages reuse the borrowed input when they touch no leaf,
+                    // so an already-canonical formula pays zero clones.
                     // (Nested `fn` with an explicit lifetime so the returned `Cow`
                     // can borrow the input `f`; a closure cannot express that.)
                     fn apply_canon<'f>(
                         f: &'f crate::guarded::Guarded,
-                        eq_vs: &crate::guarded::VarSubst,
+                        eq_vs: &crate::tools::equation_store::LNSubst,
                     ) -> std::borrow::Cow<'f, crate::guarded::Guarded> {
                         let f1: std::borrow::Cow<crate::guarded::Guarded> = if eq_vs.is_empty() {
                             std::borrow::Cow::Borrowed(f)
@@ -2600,12 +1859,14 @@ impl<'ctx> Reduction<'ctx> {
                             Some(g) => std::borrow::Cow::Owned(g),
                         }
                     }
-                    let canon = apply_canon(&g, eq_vs);
-                    let already_solved = self
-                        .sys
-                        .solved_formulas
-                        .iter()
-                        .any(|f| apply_canon(f, eq_vs).as_ref() == canon.as_ref());
+                    let already_solved = {
+                        let eq_vs = &self.sys.eq_store.subst;
+                        let canon = apply_canon(&g, eq_vs);
+                        self.sys
+                            .solved_formulas
+                            .iter()
+                            .any(|f| apply_canon(f, eq_vs).as_ref() == canon.as_ref())
+                    };
                     if !already_solved {
                         // Pure ADD (solved-formula push under
                         // !already_solved): bump.
@@ -2616,41 +1877,15 @@ impl<'ctx> Reduction<'ctx> {
                 }
             }
             Guarded::GGuarded {
-                qua: crate::guarded::Quant::Ex,
+                qua: crate::formula::Quantifier::Ex,
                 vars,
-                guards,
-                body,
+                ..
             } => {
                 // CR-rule *S_∃*: openGuarded — allocate fresh LVars for
                 // the bound vars, substitute Bound → Free in guards/body,
                 // and recurse on `gconj([atoms..., body])`.
                 let outer = g.clone();
-                if tamarin_utils::env_gate!("TAM_RS_DBG_EX_INSERT") {
-                    eprintln!(
-                        "[RS_EX_INSERT] path={} mark={} fm={}",
-                        crate::constraint::solver::trace::case_path_string(),
-                        mark,
-                        crate::constraint::solver::trace::guarded_repr(&outer)
-                    );
-                }
-                if tamarin_utils::env_gate!("TAM_DBG_EX_DECOMP") {
-                    eprintln!(
-                        "[EX-DECOMP] ENTER mark={} vars={:?}",
-                        mark,
-                        vars.iter()
-                            .map(|b| (b.name.clone(), b.sort))
-                            .collect::<Vec<_>>()
-                    );
-                }
                 if crate::guarded::stores_contains(&self.sys.solved_formulas, &outer) {
-                    if tamarin_utils::env_gate!("TAM_DBG_EX_DECOMP") {
-                        eprintln!(
-                            "[EX-DECOMP] SKIP (already solved) vars={:?}",
-                            vars.iter()
-                                .map(|b| (b.name.clone(), b.sort))
-                                .collect::<Vec<_>>()
-                        );
-                    }
                     return;
                 }
                 // Pure ADD (solved-formula push, guarded by the
@@ -2673,43 +1908,28 @@ impl<'ctx> Reduction<'ctx> {
                     self.maude.ensure_above(avoid_max);
                 }
                 let base = self.maude.reserve_idxs(vars.len() as u64);
-                // Fresh LVars (HS `freshLVar`-style), one per binding in
-                // the original lexical order.
-                let xs: Vec<tamarin_parser::ast::VarSpec> = vars
+                // HS `openGuarded` draws one binder per `(name, sort)` from the
+                // ambient `MonadFresh`; `FastFreshState::seeded(base)` is that
+                // supply's non-precise form (`freshIdent _name = freshIdents 1`,
+                // Control/Monad/Fresh/Class.hs:38-41), so the binders take
+                // `base, base+1, …` in the original lexical order.
+                let mut fresh = tamarin_utils::fresh::FastFreshState::seeded(base);
+                let (_, _xs, ats, opened_body) =
+                    crate::guarded::open_guarded(&g, &mut fresh).expect("Ex arm matched GGuarded");
+                // HS `insertFormula (GGuarded Ex ss as gf)`: the opened guards
+                // are re-lifted (`GAto . fmap (fmapTerm (fmap Free))`,
+                // Reduction.hs:459-462) and conjoined with the opened body.
+                let mut items: Vec<Guarded> = ats
                     .iter()
-                    .enumerate()
-                    .map(|(i, b)| tamarin_parser::ast::VarSpec {
-                        name: b.name.clone(),
-                        idx: base + i as u64,
-                        sort: b.sort,
-                        typ: None,
-                    })
+                    .map(|a| Guarded::Atom(crate::guarded::lift_free_atom(a)))
                     .collect();
-                if tamarin_utils::env_gate!("TAM_DBG_EX_DECOMP") {
-                    eprintln!(
-                        "[EX-DECOMP] FIRE avoid_max={} base={} xs={:?}",
-                        avoid_max,
-                        base,
-                        xs.iter()
-                            .map(|v| (v.name.clone(), v.idx))
-                            .collect::<Vec<_>>()
-                    );
-                }
-                // HS `subst xs = zip [0..] (reverse xs)`: Bound 0 → xs[k-1].
-                let open_s = crate::guarded::open_subst(&xs);
-                let mut items: Vec<Guarded> = guards
-                    .iter()
-                    .map(|a| {
-                        Guarded::Atom(crate::guarded::subst_bound_atom_at_depth(a, &open_s, 0))
-                    })
-                    .collect();
-                items.push(crate::guarded::subst_bound_guarded(&body, &open_s));
+                items.push(opened_body);
                 let new_body = crate::guarded::gconj(items);
                 self.insert_formula_inner(new_body, false);
                 self.changed = ChangeIndicator::Changed;
             }
             Guarded::GGuarded {
-                qua: crate::guarded::Quant::All,
+                qua: crate::formula::Quantifier::All,
                 ref vars,
                 ref guards,
                 ref body,
@@ -2723,14 +1943,10 @@ impl<'ctx> Reduction<'ctx> {
                 //   ∀[].[Subterm i j].⊥     → insertNegSubterm
                 //   ∀[].[Last i].⊥          → last < i ∨ i < last
                 //
-                // Empty-binder universals: guards have no Bound vars so
-                // we can safely round-trip to parser AST for the legacy
-                // matching code below.
-                use tamarin_parser::ast::Atom as AAtom;
-                let guard_pa = crate::guarded::gatom_to_atom(&guards[0]);
-                match &guard_pa {
-                    AAtom::Less(i, j)
-                        if term_to_node_id(i).is_some() && term_to_node_id(j).is_some() =>
+                use crate::atom::ProtoAtom;
+                match &guards[0] {
+                    ProtoAtom::Less(i, j)
+                        if blterm_node_id(i).is_some() && blterm_node_id(j).is_some() =>
                     {
                         // Haskell decomposes ∀[].[Less i j].⊥ into
                         // `i = j ∨ j < i` (Reduction.hs:464-489).
@@ -2764,11 +1980,10 @@ impl<'ctx> Reduction<'ctx> {
                         }
                         let d = crate::guarded::Guarded::Disj(
                             vec![
-                                crate::guarded::Guarded::Atom(crate::guarded::atom_to_gatom_free(
-                                    &AAtom::Eq(i.clone(), j.clone()),
-                                )),
-                                crate::guarded::Guarded::Atom(crate::guarded::atom_to_gatom_free(
-                                    &AAtom::Less(j.clone(), i.clone()),
+                                crate::guarded::Guarded::Atom(ProtoAtom::EqE(i.clone(), j.clone())),
+                                crate::guarded::Guarded::Atom(ProtoAtom::Less(
+                                    j.clone(),
+                                    i.clone(),
                                 )),
                             ]
                             .into(),
@@ -2776,7 +1991,7 @@ impl<'ctx> Reduction<'ctx> {
                         self.insert_formula_inner(d, false);
                         self.changed = ChangeIndicator::Changed;
                     }
-                    AAtom::Less(_, _) => {
+                    ProtoAtom::Less(_, _) => {
                         // Less on non-node terms — keep as formula.
                         if !crate::guarded::stores_contains(&self.sys.formulas, &g)
                             && !crate::guarded::stores_contains(&self.sys.solved_formulas, &g)
@@ -2786,8 +2001,8 @@ impl<'ctx> Reduction<'ctx> {
                             self.changed = ChangeIndicator::Changed;
                         }
                     }
-                    AAtom::Eq(i, j)
-                        if term_to_node_id(i).is_some() && term_to_node_id(j).is_some() =>
+                    ProtoAtom::EqE(i, j)
+                        if blterm_node_id(i).is_some() && blterm_node_id(j).is_some() =>
                     {
                         // i = j is false (i,j are node ids) ⇒ i < j ∨ j < i
                         // HS-faithful: only mark when called from top-level
@@ -2801,11 +2016,13 @@ impl<'ctx> Reduction<'ctx> {
                         }
                         let d = crate::guarded::Guarded::Disj(
                             vec![
-                                crate::guarded::Guarded::Atom(crate::guarded::atom_to_gatom_free(
-                                    &AAtom::Less(i.clone(), j.clone()),
+                                crate::guarded::Guarded::Atom(ProtoAtom::Less(
+                                    i.clone(),
+                                    j.clone(),
                                 )),
-                                crate::guarded::Guarded::Atom(crate::guarded::atom_to_gatom_free(
-                                    &AAtom::Less(j.clone(), i.clone()),
+                                crate::guarded::Guarded::Atom(ProtoAtom::Less(
+                                    j.clone(),
+                                    i.clone(),
                                 )),
                             ]
                             .into(),
@@ -2813,7 +2030,7 @@ impl<'ctx> Reduction<'ctx> {
                         self.insert_formula_inner(d, false);
                         self.changed = ChangeIndicator::Changed;
                     }
-                    AAtom::Last(i) => {
+                    ProtoAtom::Last(i) => {
                         // Haskell `insertFormula` for `∀[].[Last i].⊥`
                         // (Reduction.hs:481-489):
                         //   markAsSolved
@@ -2852,20 +2069,18 @@ impl<'ctx> Reduction<'ctx> {
                                 j
                             }
                         };
-                        let last_term =
-                            tamarin_parser::ast::Term::Var(tamarin_parser::ast::VarSpec {
-                                name: last_node.name.to_string(),
-                                idx: last_node.idx,
-                                sort: tamarin_parser::ast::SortHint::Node,
-                                typ: None,
-                            });
+                        let last_term: crate::formula::BLNTerm = tamarin_term::vterm::var_term(
+                            tamarin_term::lterm::BVar::Free(last_node),
+                        );
                         let d = crate::guarded::Guarded::Disj(
                             vec![
-                                crate::guarded::Guarded::Atom(crate::guarded::atom_to_gatom_free(
-                                    &AAtom::Less(last_term.clone(), i.clone()),
+                                crate::guarded::Guarded::Atom(ProtoAtom::Less(
+                                    last_term.clone(),
+                                    i.clone(),
                                 )),
-                                crate::guarded::Guarded::Atom(crate::guarded::atom_to_gatom_free(
-                                    &AAtom::Less(i.clone(), last_term),
+                                crate::guarded::Guarded::Atom(ProtoAtom::Less(
+                                    i.clone(),
+                                    last_term,
                                 )),
                             ]
                             .into(),
@@ -2873,7 +2088,7 @@ impl<'ctx> Reduction<'ctx> {
                         self.insert_formula_inner(d, false);
                         self.changed = ChangeIndicator::Changed;
                     }
-                    AAtom::Subterm(s, b) => {
+                    ProtoAtom::Subterm(s, b) => {
                         // ¬(s ⊏ b) — HS `insertFormula` "negative Subterm"
                         // arm (Reduction.hs:468-471):
                         //   markAsSolved
@@ -2892,20 +2107,13 @@ impl<'ctx> Reduction<'ctx> {
                                 .solved_formulas_mut()
                                 .push(std::sync::Arc::new(g.clone()));
                         }
-                        if let (Some(ts), Some(tb)) = (
-                            crate::elaborate::term_to_lnterm(s),
-                            crate::elaborate::term_to_lnterm(b),
-                        ) {
-                            self.sys.invalidate_max_var_idx_cache();
-                            if self.sys.subterm_store_mut().add_neg(ts, tb) {
-                                self.changed = ChangeIndicator::Changed;
-                            }
-                        } else if !crate::guarded::stores_contains(&self.sys.formulas, &g) {
-                            // Defensive fallback for terms our LNTerm
-                            // conversion can't represent — keep visible
-                            // as a formula rather than dropping.
-                            self.sys.invalidate_max_var_idx_cache();
-                            self.sys.formulas_mut().push(std::sync::Arc::new(g));
+                        // HS `insertNegSubterm (bTermToLTerm i) (bTermToLTerm j)`
+                        // (Reduction.hs:468-471); the empty binder list leaves
+                        // no `Bound` leaf for `bTermToLTerm` to reject.
+                        let ts = bterm_to_lterm(s);
+                        let tb = bterm_to_lterm(b);
+                        self.sys.invalidate_max_var_idx_cache();
+                        if self.sys.subterm_store_mut().add_neg(ts, tb) {
                             self.changed = ChangeIndicator::Changed;
                         }
                     }
@@ -3075,6 +2283,41 @@ fn ku_vars(rule: &crate::rule::RuleACInst) -> IsAcConstructor {
     }
 }
 
+/// The `updateStatus` half of HS `markGoalAsSolved` (Reduction.hs:529-560)
+/// applied to one case's system: set `gsSolved` on the goal's status entry.
+/// HS's `sGoals` is a map, so its insert hits the single entry for the goal;
+/// RS's goal list can hold the same goal twice, so the first entry that still
+/// carries it unsolved is the one updated.  The `sFormulas`/`sSolvedFormulas`
+/// bookkeeping of the `DisjG` arm and the `ChainG`/KD-`PremiseG` deletes
+/// belong to [`Reduction::mark_goal_as_solved`], which `dispatch_solve_goal`
+/// runs on the live system before a goal solver forks its cases.
+fn set_goal_solved(sys: &mut crate::constraint::system::System, g: &Goal) {
+    for (existing, status) in sys.goals_mut().iter_mut() {
+        if existing == g && !status.solved {
+            status.solved = true;
+            break;
+        }
+    }
+}
+
+/// `flatten` from HS `solveListEqs` (Reduction.hs:781-786): a list equality
+/// becomes one equality per position, `zipWith Equal l r`, appended to `out`.
+/// Positions beyond the shorter list are dropped, so a caller that owes HS's
+/// `contradictoryIf (not $ all evalEqual $ map (fmap length) eqs)` checks the
+/// lengths itself before calling.
+fn flatten_list_eq<T: Clone>(
+    lhs: &[T],
+    rhs: &[T],
+    out: &mut Vec<tamarin_term::rewriting::Equal<T>>,
+) {
+    for (a, b) in lhs.iter().zip(rhs.iter()) {
+        out.push(tamarin_term::rewriting::Equal {
+            lhs: a.clone(),
+            rhs: b.clone(),
+        });
+    }
+}
+
 /// Outcome of an equality-solving step.
 #[derive(Debug)]
 pub enum SolveOutcome {
@@ -3113,40 +2356,8 @@ impl<'ctx> Reduction<'ctx> {
     ) -> Result<SolveOutcome, crate::tools::equation_store::AddEqsError> {
         // Filter out trivially-equal equations.
         let pending: Vec<_> = eqs.iter().filter(|e| e.lhs != e.rhs).cloned().collect();
-        // TAM_RS_DBG_SOLVE_TERM_EQS=1 dumps every solve_term_eqs call's
-        // caller location (via #[track_caller]), split strategy,
-        // equation count, and the equations.  Pair with HS's
-        // TAM_HS_DBG_SOLVE_TERM_EQS for HS↔Rust diffing of the
-        // goal-by-goal solver flow.
-        if tamarin_utils::env_gate!("TAM_RS_DBG_SOLVE_TERM_EQS") {
-            let loc = std::panic::Location::caller();
-            let site = format!("{}:{}", loc.file(), loc.line());
-            if pending.is_empty() {
-                eprintln!(
-                    "[rs-ste-tick] zero-eqs site={} (filtered {} trivial)",
-                    site,
-                    eqs.len()
-                );
-            } else {
-                eprintln!(
-                    "[rs-ste] === call site={} split={:?} n={}",
-                    site,
-                    strategy,
-                    pending.len()
-                );
-                for (i, eq) in pending.iter().enumerate() {
-                    eprintln!("  eq[{}]: {:?} = {:?}", i, eq.lhs, eq.rhs);
-                }
-            }
-        }
         if pending.is_empty() {
             return Ok(SolveOutcome::Linear(ChangeIndicator::Unchanged));
-        }
-        if crate::constraint::solver::trace::exec_enabled() {
-            crate::constraint::solver::trace::trace_exec(&format!(
-                "solveTermEqs n={}",
-                pending.len()
-            ));
         }
 
         // Take eq_store out of self, mutate it, put it back, then
@@ -3185,18 +2396,6 @@ impl<'ctx> Reduction<'ctx> {
         let nf_checker = has_reducible.then(|| {
             crate::constraint::solver::contradictions::SubstNfChecker::new(&maude, &self.sys)
         });
-        // Collect live system vars so `simp_singleton`'s `fresh_to_free`
-        // doesn't rename them.  Mirrors `solve_split_goal`'s approach.
-        // Functionally dead in production: `simp_singleton_avoiding` reads
-        // this set ONLY inside its three debug gates (the fold itself calls
-        // `fresh_to_free_avoiding`, which ignores it), so only pay the
-        // whole-System walk when a gate is on — see
-        // `preserve_dbg_gates_enabled`.
-        let system_vars = if preserve_dbg_gates_enabled() {
-            collect_live_system_vars(&self.sys)
-        } else {
-            std::collections::BTreeSet::new()
-        };
         let store = std::sync::Arc::unwrap_or_clone(self.sys.take_eq_store());
         // Use `simp_with_fresh_avoiding` so singleton SplitG disjunctions
         // get folded into `subst` via `simp_singleton`.  Haskell's `simp`
@@ -3207,7 +2406,7 @@ impl<'ctx> Reduction<'ctx> {
         // emits an extra `solve` step for it (e.g. issue193::debug).
         let maude_alloc = maude.clone();
         // Closure-style helper: simp one EquationStore with the same
-        // non-normal-terms predicate + system_vars.  Reused for both
+        // non-normal-terms predicate.  Reused for both
         // the no-split branch and the per-arm SplitNow loop below.
         // `nf_checker.is_some()` iff `has_reducible` (built via
         // `has_reducible.then(...)`), so the checker's presence IS the
@@ -3215,7 +2414,7 @@ impl<'ctx> Reduction<'ctx> {
         // the non-normal-terms check must run.
         let do_simp = |s: crate::tools::equation_store::EquationStore|
                 -> crate::tools::equation_store::EquationStore {
-            simp_store(s, nf_checker.as_ref(), &maude_alloc, &system_vars)
+            simp_store(s, nf_checker.as_ref(), &maude_alloc)
         };
 
         match (split, strategy) {
@@ -3252,7 +2451,6 @@ impl<'ctx> Reduction<'ctx> {
                         id
                     ))
                 })?;
-                let raw_count = arms.len();
                 let mut live_arms: Vec<crate::tools::equation_store::EquationStore> = Vec::new();
                 // HS-faithful per-arm counter fork.  HS `solveTermEqs`
                 // (Reduction.hs:742-748) runs
@@ -3275,9 +2473,6 @@ impl<'ctx> Reduction<'ctx> {
                 let mut arm_high_water = arm_fork_base;
                 for arm in arms {
                     maude_alloc.reset_counter_to(arm_fork_base);
-                    if tamarin_utils::env_gate!("TAM_RS_DBG_FOLD_DRAWS") {
-                        eprintln!("[rs-fold] STE-ARM fork_base={}", arm_fork_base);
-                    }
                     let simped = do_simp(arm);
                     arm_high_water = arm_high_water.max(maude_alloc.fresh_counter_peek());
                     if simped.is_false() {
@@ -3286,17 +2481,6 @@ impl<'ctx> Reduction<'ctx> {
                     live_arms.push(simped);
                 }
                 maude_alloc.ensure_above(arm_high_water.saturating_sub(1));
-                if tamarin_utils::env_gate!("TAM_RS_DBG_STE_RAW") {
-                    let loc = std::panic::Location::caller();
-                    eprintln!(
-                        "[STE_RAW] raw={} live={} site={}:{} pending_eqs={}",
-                        raw_count,
-                        live_arms.len(),
-                        loc.file(),
-                        loc.line(),
-                        pending.len()
-                    );
-                }
                 if live_arms.is_empty() {
                     // All arms contradicted under per-arm simp.
                     // Install a false store so downstream is_false
@@ -3318,16 +2502,6 @@ impl<'ctx> Reduction<'ctx> {
                         .set_eq_store(std::sync::Arc::new(live_arms.into_iter().next().unwrap()));
                     Ok(SolveOutcome::Linear(ChangeIndicator::Changed))
                 } else {
-                    if tamarin_utils::env_gate!("TAM_RS_DBG_STE_MULTI") {
-                        let loc = std::panic::Location::caller();
-                        eprintln!(
-                            "[STE_MULTI] arms={} site={}:{} pending_eqs={}",
-                            live_arms.len(),
-                            loc.file(),
-                            loc.line(),
-                            pending.len()
-                        );
-                    }
                     Ok(SolveOutcome::Cases(live_arms))
                 }
             }
@@ -3362,11 +2536,6 @@ impl<'ctx> Reduction<'ctx> {
     ) -> Result<SolveOutcome, crate::tools::equation_store::AddEqsError> {
         use tamarin_term::term::Term;
         use tamarin_term::vterm::Lit;
-        if tamarin_utils::env_gate!("TAM_DBG_NODE_EQS") {
-            for e in eqs {
-                eprintln!("[node_eqs] {:?} = {:?}", e.lhs, e.rhs);
-            }
-        }
         let term_eqs: Vec<tamarin_term::rewriting::Equal<tamarin_term::lterm::LNTerm>> = eqs
             .iter()
             .map(|e| tamarin_term::rewriting::Equal {
@@ -3493,12 +2662,7 @@ impl<'ctx> Reduction<'ctx> {
         }
         let mut flat = Vec::new();
         for e in eqs {
-            for (a, b) in e.lhs.terms.iter().zip(e.rhs.terms.iter()) {
-                flat.push(tamarin_term::rewriting::Equal {
-                    lhs: a.clone(),
-                    rhs: b.clone(),
-                });
-            }
+            flatten_list_eq(&e.lhs.terms, &e.rhs.terms, &mut flat);
         }
         self.solve_term_eqs_ac(strategy, is_ac, &flat)
     }
@@ -3538,24 +2702,9 @@ impl<'ctx> Reduction<'ctx> {
         let mut prem_eqs: Vec<tamarin_term::rewriting::Equal<crate::fact::LNFact>> = Vec::new();
         let mut act_eqs: Vec<tamarin_term::rewriting::Equal<crate::fact::LNFact>> = Vec::new();
         for e in eqs {
-            for (a, b) in e.lhs.conclusions.iter().zip(e.rhs.conclusions.iter()) {
-                conc_eqs.push(tamarin_term::rewriting::Equal {
-                    lhs: a.clone(),
-                    rhs: b.clone(),
-                });
-            }
-            for (a, b) in e.lhs.premises.iter().zip(e.rhs.premises.iter()) {
-                prem_eqs.push(tamarin_term::rewriting::Equal {
-                    lhs: a.clone(),
-                    rhs: b.clone(),
-                });
-            }
-            for (a, b) in e.lhs.actions.iter().zip(e.rhs.actions.iter()) {
-                act_eqs.push(tamarin_term::rewriting::Equal {
-                    lhs: a.clone(),
-                    rhs: b.clone(),
-                });
-            }
+            flatten_list_eq(&e.lhs.conclusions, &e.rhs.conclusions, &mut conc_eqs);
+            flatten_list_eq(&e.lhs.premises, &e.rhs.premises, &mut prem_eqs);
+            flatten_list_eq(&e.lhs.actions, &e.rhs.actions, &mut act_eqs);
         }
         let mut fact_eqs: Vec<tamarin_term::rewriting::Equal<crate::fact::LNFact>> =
             Vec::with_capacity(conc_eqs.len() + prem_eqs.len() + act_eqs.len());
@@ -3636,167 +2785,6 @@ impl<'ctx> Reduction<'ctx> {
         &mut self,
         sys: &System,
     ) -> Result<SolveOutcome, crate::tools::equation_store::AddEqsError> {
-        crate::state_trace::emit("conjoin_in", None, &self.sys);
-        crate::state_trace::emit("conjoin_with", None, sys);
-        if tamarin_utils::env_gate!("TAM_RS_TRACE_CONJOIN") {
-            let path = crate::constraint::solver::trace::case_path_string();
-            let live_fresh: Vec<String> = self
-                .sys
-                .nodes
-                .iter()
-                .filter(|(_, r)| {
-                    matches!(&r.info,
-                    crate::rule::RuleInfo::Proto(p) if p.name == crate::rule::ProtoRuleName::Fresh)
-                })
-                .map(|(id, r)| {
-                    format!(
-                        "{}.{}={:?}",
-                        id.name,
-                        id.idx,
-                        r.conclusions.first().map(|f| format!("{:?}", f.terms))
-                    )
-                })
-                .collect();
-            let case_fresh: Vec<String> = sys
-                .nodes
-                .iter()
-                .filter(|(_, r)| {
-                    matches!(&r.info,
-                    crate::rule::RuleInfo::Proto(p) if p.name == crate::rule::ProtoRuleName::Fresh)
-                })
-                .map(|(id, r)| {
-                    format!(
-                        "{}.{}={:?}",
-                        id.name,
-                        id.idx,
-                        r.conclusions.first().map(|f| format!("{:?}", f.terms))
-                    )
-                })
-                .collect();
-            let case_subst: Vec<String> = sys
-                .eq_store
-                .subst
-                .to_list()
-                .into_iter()
-                .map(|(v, t)| format!("{}.{}/{:?}→{:?}", v.name, v.idx, v.sort, t))
-                .collect();
-            let live_subst: Vec<String> = self
-                .sys
-                .eq_store
-                .subst
-                .to_list()
-                .into_iter()
-                .map(|(v, t)| {
-                    format!(
-                        "{}.{}/{:?}→{:?}",
-                        v.name,
-                        v.idx,
-                        v.sort,
-                        format!("{:?}", t).chars().take(70).collect::<String>()
-                    )
-                })
-                .collect();
-            eprintln!(
-                "[CONJOIN] path={} live_fresh={:?} case_fresh={:?} case_subst={:?} live_subst={:?}",
-                path, live_fresh, case_fresh, case_subst, live_subst
-            );
-            // ALL live nodes summary
-            eprintln!("[CONJOIN]   live_all_nodes:");
-            for (id, r) in self.sys.nodes.iter() {
-                eprintln!(
-                    "[CONJOIN]     {}.{} = {}",
-                    id.name,
-                    id.idx,
-                    rule_case_name(r)
-                );
-            }
-            eprintln!("[CONJOIN]   live_edges:");
-            for e in &self.sys.edges {
-                eprintln!(
-                    "[CONJOIN]     {}.{}.c{} → {}.{}.p{}",
-                    e.src.0.name, e.src.0.idx, e.src.1 .0, e.tgt.0.name, e.tgt.0.idx, e.tgt.1 .0
-                );
-            }
-            eprintln!("[CONJOIN]   case_all_nodes:");
-            for (id, r) in sys.nodes.iter() {
-                eprintln!(
-                    "[CONJOIN]     {}.{} = {}",
-                    id.name,
-                    id.idx,
-                    rule_case_name(r)
-                );
-            }
-            eprintln!("[CONJOIN]   case_edges:");
-            for e in &sys.edges {
-                eprintln!(
-                    "[CONJOIN]     {}.{}.c{} → {}.{}.p{}",
-                    e.src.0.name, e.src.0.idx, e.src.1 .0, e.tgt.0.name, e.tgt.0.idx, e.tgt.1 .0
-                );
-            }
-            // Also dump Serv_1/Register_pk-like nodes from BOTH live and case.
-            for (id, r) in self.sys.nodes.iter() {
-                let nm = rule_case_name(r);
-                if nm == "Serv_1" || nm == "Register_pk" {
-                    eprintln!(
-                        "[CONJOIN]   live {:?} → {}: prems={:?} concs={:?} acts={:?}",
-                        id,
-                        nm,
-                        r.premises
-                            .iter()
-                            .map(|f| format!("{:?}", f.terms)
-                                .chars()
-                                .take(70)
-                                .collect::<String>())
-                            .collect::<Vec<_>>(),
-                        r.conclusions
-                            .iter()
-                            .map(|f| format!("{:?}", f.terms)
-                                .chars()
-                                .take(70)
-                                .collect::<String>())
-                            .collect::<Vec<_>>(),
-                        r.actions
-                            .iter()
-                            .map(|f| format!("{:?}", f.terms)
-                                .chars()
-                                .take(70)
-                                .collect::<String>())
-                            .collect::<Vec<_>>()
-                    );
-                }
-            }
-            for (id, r) in sys.nodes.iter() {
-                let nm = rule_case_name(r);
-                if nm == "Serv_1" || nm == "Register_pk" {
-                    eprintln!(
-                        "[CONJOIN]   case {:?} → {}: prems={:?} concs={:?} acts={:?}",
-                        id,
-                        nm,
-                        r.premises
-                            .iter()
-                            .map(|f| format!("{:?}", f.terms)
-                                .chars()
-                                .take(70)
-                                .collect::<String>())
-                            .collect::<Vec<_>>(),
-                        r.conclusions
-                            .iter()
-                            .map(|f| format!("{:?}", f.terms)
-                                .chars()
-                                .take(70)
-                                .collect::<String>())
-                            .collect::<Vec<_>>(),
-                        r.actions
-                            .iter()
-                            .map(|f| format!("{:?}", f.terms)
-                                .chars()
-                                .take(70)
-                                .collect::<String>())
-                            .collect::<Vec<_>>()
-                    );
-                }
-            }
-        }
         // 1-3. joinSets: solved_formulas, lemmas, edges.  Use sets so
         // duplicates are collapsed (HasFrees-based dedup not needed —
         // syntactic equality is sufficient for these sets).
@@ -3815,8 +2803,6 @@ impl<'ctx> Reduction<'ctx> {
             }
         }
         for e in &sys.edges {
-            // Route through System::add_edge so the EXEC trace fires
-            // (mirrors HS's `insertEdges` trace on the conjoin path).
             self.sys.add_edge(e.clone());
         }
         // 4. insertLast: HS-faithful (Reduction.hs:404-412 + conjoinSystem
@@ -3842,14 +2828,14 @@ impl<'ctx> Reduction<'ctx> {
         // HS iterates `M.toList` (Goal-derived Ord), so the freshly
         // assigned `gsNr`s for NEW goals follow Goal-Ord — within a
         // single graft batch an `ActionG` therefore gets a smaller nr
-        // than a `PremiseG`.  Iterate in `goal_cmp` order to match
+        // than a `PremiseG`.  Iterate in `Ord Goal` order to match
         // (RS's `sys.goals` is a Vec in production/push order, which
         // would otherwise assign the nrs in the wrong relative order).
         let mut conjoin_goals: Vec<&(
             crate::constraint::constraints::Goal,
             crate::constraint::system::GoalStatus,
         )> = sys.goals.iter().collect();
-        conjoin_goals.sort_by(|a, b| crate::constraint::solver::goals::goal_cmp(&a.0, &b.0));
+        conjoin_goals.sort_by(|a, b| a.0.cmp(&b.0));
         for (g, st) in conjoin_goals {
             if matches!(g, crate::constraint::constraints::Goal::Split(_)) {
                 continue;
@@ -3862,14 +2848,10 @@ impl<'ctx> Reduction<'ctx> {
             // unconditionally, keeping RS's `next_goal_nr` (and the
             // goalNrRanking tie-break) aligned with HS on every conjoin
             // that hits a shared goal.
-            // Then OR-in `solved` (combineGoalStatus) on the canonically
-            // matching slot.
+            // Then OR-in `solved` (combineGoalStatus) on the matching slot.
             self.sys.add_goal_with_loop_flag(g.clone(), st.looping);
             if st.solved {
-                let canon = crate::constraint::system::canonical_goal_for_dedup(g);
-                if let Some((_, slot)) = self.sys.goals_mut().iter_mut().find(|(eg, _)| {
-                    crate::constraint::system::canonical_goal_for_dedup(eg) == canon
-                }) {
+                if let Some((_, slot)) = self.sys.goals_mut().iter_mut().find(|(eg, _)| eg == g) {
                     slot.solved = true;
                 }
             }
@@ -3900,35 +2882,6 @@ impl<'ctx> Reduction<'ctx> {
         // 9. addDisj for each case conjDisjEq entry.  Track new split-ids.
         let mut new_split_ids: Vec<crate::tools::equation_store::SplitId> = Vec::new();
         for disj in &sys.eq_store.conj {
-            // TAM_DBG_CONJOIN_DISJ=1: dump each disj being added.
-            if tamarin_utils::env_gate!("TAM_DBG_CONJOIN_DISJ") {
-                for (j, s) in disj.substs.iter().enumerate() {
-                    let pairs: Vec<String> = s
-                        .to_list()
-                        .iter()
-                        .map(|(k, v)| {
-                            format!(
-                                "{}.{}/{:?}→{:?}",
-                                k.name,
-                                k.idx,
-                                k.sort,
-                                format!("{:?}", v).chars().take(60).collect::<String>()
-                            )
-                        })
-                        .collect();
-                    eprintln!(
-                        "[conjoin_disj] sid={:?} subst[{}] entries=[{}]",
-                        disj.split_id,
-                        j,
-                        pairs.join(", ")
-                    );
-                }
-            }
-            if crate::tools::equation_store::impure_dbg_enabled() {
-                for s in &disj.substs {
-                    crate::tools::equation_store::dbg_register_subst_origin("conjoinSystem", s);
-                }
-            }
             let id = self.sys.eq_store_mut().add_disj(disj.substs.clone());
             new_split_ids.push(id);
         }
@@ -3974,13 +2927,6 @@ impl<'ctx> Reduction<'ctx> {
             } else {
                 None
             };
-        if tamarin_utils::env_gate!("TAM_RS_DBG_CONJOIN_STEP12") {
-            eprintln!(
-                "[conjoin_step12] n_eqs={} fanout_enabled={}",
-                case_subst_eqs.len(),
-                conjoin_fanout_enabled
-            );
-        }
         let r = self.solve_term_eqs(SplitStrategy::SplitNow, &case_subst_eqs);
         match r {
             Err(_) | Ok(SolveOutcome::Contradictory) => {
@@ -3994,12 +2940,6 @@ impl<'ctx> Reduction<'ctx> {
                 // Multi-arm fanout.  solve_term_eqs returned Cases
                 // without installing any arm; install arm[0] here,
                 // then build per-arm snapshots for arms[1..].
-                if tamarin_utils::env_gate!("TAM_RS_DBG_CONJOIN_FANOUT") {
-                    eprintln!(
-                        "[conjoin_fanout] arms={} (step 12 solveSubstEqs)",
-                        arms.len()
-                    );
-                }
                 let mut arm_iter = arms.into_iter();
                 let arm0 = arm_iter.next().expect("Cases has >=2 arms");
                 self.sys.invalidate_max_var_idx_cache();
@@ -4043,23 +2983,6 @@ impl<'ctx> Reduction<'ctx> {
         }
         // 13. substSystem.
         self.subst_system();
-        if tamarin_utils::env_gate!("TAM_DBG_CONJOIN_POST") {
-            let path = crate::constraint::solver::trace::case_path_string();
-            eprintln!(
-                "[conjoin_post] path={} eq_store after step 13 ({} entries):",
-                path,
-                self.sys.eq_store.subst.to_list().len()
-            );
-            for (v, t) in self.sys.eq_store.subst.to_list().iter().take(20) {
-                eprintln!(
-                    "[conjoin_post]   {}.{}/{:?} → {:?}",
-                    v.name,
-                    v.idx,
-                    v.sort,
-                    format!("{:?}", t).chars().take(80).collect::<String>()
-                );
-            }
-        }
         Ok(SolveOutcome::Linear(ChangeIndicator::Changed))
     }
 }
@@ -4137,36 +3060,13 @@ fn rule_insts_with_constrs<F: Fn(&RuleACInst) -> bool>(
 /// (ISend, IRecv) come BEFORE the protocol rules.  See
 /// `Theory/Constraint/System.hs:314-317`.
 ///
-/// HS's `isConstrRule` matches `ConstrRule _ | FreshConstrRule |
-/// PubConstrRule | NatConstrRule | CoerceRule` (Model/Rule.hs:707-708);
-/// `isDestrRule` matches `DestrRule _ _ _ _ | IEqualityRule`
-/// (Model/Rule.hs:694-695).  We use HS-local predicates here so the
-/// existing `is_constr_rule_info` / `is_destr_rule_info` callers
-/// (dot.rs, context.rs's pc_true_subterm, chain handling) keep their
-/// current — narrower — behaviour pending a separate audit.
 fn non_silent_rule_insts_with_constrs(
     ctx: &crate::constraint::solver::context::ProofContext,
 ) -> Vec<(
     RuleACInst,
     Option<Vec<tamarin_term::subst_vfresh::LNSubstVFresh>>,
 )> {
-    use crate::rule::IntrRuleACInfo;
-    let is_constr_hs = |info: &IntrRuleACInfo| {
-        matches!(
-            info,
-            IntrRuleACInfo::ConstrRule { .. }
-                | IntrRuleACInfo::FreshConstr
-                | IntrRuleACInfo::PubConstr
-                | IntrRuleACInfo::NatConstr
-                | IntrRuleACInfo::Coerce
-        )
-    };
-    let is_destr_hs = |info: &IntrRuleACInfo| {
-        matches!(
-            info,
-            IntrRuleACInfo::DestrRule { .. } | IntrRuleACInfo::IEquality
-        )
-    };
+    use crate::rule::{is_constr_rule, is_destr_rule};
 
     // crProtocol arm: intruder-non-cd ++ protocol (rulesAC order).
     let mut cr_protocol: Vec<(RuleACInst, Option<_>)> = Vec::new();
@@ -4174,7 +3074,7 @@ fn non_silent_rule_insts_with_constrs(
         if ir.actions.is_empty() {
             continue;
         }
-        if is_constr_hs(&ir.info) || is_destr_hs(&ir.info) {
+        if is_constr_rule(&ir.info) || is_destr_rule(&ir.info) {
             continue;
         }
         cr_protocol.push((intr_rule_to_rule_ac_inst(ir.clone()), None));
@@ -4190,9 +3090,9 @@ fn non_silent_rule_insts_with_constrs(
         if ir.actions.is_empty() {
             continue;
         }
-        if is_destr_hs(&ir.info) {
+        if is_destr_rule(&ir.info) {
             cr_destruct.push((intr_rule_to_rule_ac_inst(ir.clone()), None));
-        } else if is_constr_hs(&ir.info) {
+        } else if is_constr_rule(&ir.info) {
             cr_construct.push((intr_rule_to_rule_ac_inst(ir.clone()), None));
         }
     }
@@ -4225,13 +3125,59 @@ fn make_fresh_rule(m: tamarin_term::lterm::LNTerm) -> RuleACInst {
     crate::rule::Rule::new(info, vec![], vec![conc], vec![]).with_new_vars(vec![m])
 }
 
-/// Dedup a Vec in place while preserving the FIRST occurrence's position.
+/// One stored-formula list under `subst`: HS's `substFormulas`,
+/// `substSolvedFormulas` and `substLemmas` (Reduction.hs:598-607, see line
+/// 605), whose `Apply LNSubst (Set Guarded)` is `S.map (apply subst)`.
+/// Answers whether any formula's VALUE changed.
 ///
-/// Mirrors HS's `S.map` behaviour on `Set Guarded` in `substFormulas` /
-/// `substSolvedFormulas` / `substLemmas` (Reduction.hs:598-607, see line 605): when two
-/// formulas become structurally equal after substitution, `S.map` rebuilds
-/// the Set and only one survives.  Our `Vec<Guarded>` storage does NOT
-/// auto-dedup, so we need to mirror this explicitly after subst.
+/// Each formula is re-substituted until `subst_guarded` reaches a fixpoint:
+/// eq-store entries can form chains (`x:1 → x:13`, `x:13 → ~n:28`) and a
+/// single application only reduces by one step.  Haskell's `substSystem`
+/// operates on a transitively closed substitution by construction; the port's
+/// `compose` is closed at insert time, but a later `restrict_*` / cleanup pass
+/// can prune intermediate entries and leave a partially applied
+/// formula-subst.  The bound defends against a degenerate cycle.  Each
+/// rewritten formula is then re-normalised — the stored-state substitution
+/// boundary of HS 150f5eba (`substFormulas = S.map (normaliseStoredFormula .
+/// apply subst)`): a subst that identifies two variables can make sibling
+/// conjuncts equal, and the raw rebuild keeps both copies.
+///
+/// `S.map` rebuilds the Set, dropping entries that collide post-substitution,
+/// which the final dedup mirrors.  Without it the `Vec` retains
+/// structurally identical formulas produced by substitution-induced equality
+/// — e.g. Envelope.spthy::Secret_and_Denied_exclusive at path
+/// `/…/PCR_Quote/PCR_Extend/Alice2`, where distinct
+/// `Ex.PCR_Write(h(<'pcr0',~n#1>))` and `…~n#0` formulas collapse once
+/// eq_store binds `~n#1 → ~n#0`.
+fn subst_stored_formulas(
+    store: &mut Vec<std::sync::Arc<Guarded>>,
+    subst: &crate::tools::equation_store::LNSubst,
+) -> bool {
+    let mut changed = false;
+    for f in store.iter_mut() {
+        // Copy-on-write: `subst_guarded_cow == None` means the subst touches
+        // no leaf, which is exactly where the fixpoint loop would break
+        // immediately, so the formula is left untouched with no allocation.
+        let Some(mut cur) = crate::guarded::subst_guarded_cow(f, subst) else {
+            continue;
+        };
+        for _ in 0..15 {
+            match crate::guarded::subst_guarded_cow(&cur, subst) {
+                None => break,
+                Some(nxt) => cur = nxt,
+            }
+        }
+        let new_f = crate::guarded::normalise_stored_formula_owned(cur);
+        if new_f != **f {
+            *f = std::sync::Arc::new(new_f);
+            changed = true;
+        }
+    }
+    dedup_preserve_order(store);
+    changed
+}
+
+/// Dedup a Vec in place while preserving the FIRST occurrence's position.
 fn dedup_preserve_order<T: PartialEq>(v: &mut Vec<T>) {
     // Keep the FIRST occurrence of each distinct element (preserving
     // first-occurrence order).  Two-pointer in-place compaction: for each
@@ -4252,17 +3198,15 @@ fn dedup_preserve_order<T: PartialEq>(v: &mut Vec<T>) {
     v.truncate(kept);
 }
 
-/// Convert an eq-store `LSubst` (LVar → LNTerm) into a parser-AST
-/// `VarSubst` keyed by `(name, idx)`.  Used by `subst_system` to push
-/// the eq-store substitution into formulas / solved_formulas /
-/// lemmas — Haskell's `substFormulas` / `substSolvedFormulas` /
-/// `substLemmas`.  Each LVar in the subst's domain maps via its
-/// `(name, idx)` to a parser-AST term obtained from
-/// `lnterm_to_term`.  Only entries that change are recorded
-/// (skipping identity mappings keeps the per-step subst small).
-fn build_parser_subst_from_eq_store(
+/// The eq-store substitution with every binding chain chased to its end.
+/// Used by `subst_system` to push the eq-store substitution into formulas /
+/// solved_formulas / lemmas — Haskell's `substFormulas` /
+/// `substSolvedFormulas` / `substLemmas`.  Each LVar in the subst's domain
+/// maps to the term at the end of its binding chain; identity mappings are
+/// skipped, which keeps the per-step subst small.
+fn chase_eq_store_subst(
     subst: &crate::tools::equation_store::LNSubst,
-) -> crate::guarded::VarSubst {
+) -> crate::tools::equation_store::LNSubst {
     // Chain-chase to a canonical representative.  If the eq-store has both
     // `a → b` and `b → c`, the formula should rewrite `a` to `c` (not `b`).
     // Mirrors Haskell's `applyVTerm` behaviour where applying a composed
@@ -4273,8 +3217,8 @@ fn build_parser_subst_from_eq_store(
     // with lemma's `Loop(lid, k, kOrig)` binds both `k_lemma` and
     // `kOrig_lemma` to the rule's `kOrig`.  Subsequent compose may
     // funnel one through the other (e.g. `k_lemma → kOrig_rule →
-    // kOrig_lemma`); without chain-chase in the parser_subst the
-    // lemma's universal `Start(lid, kOrig)` doesn't get its `kOrig`
+    // kOrig_lemma`); without the chain-chase the lemma's universal
+    // `Start(lid, kOrig)` doesn't get its `kOrig`
     // rewritten to match the rule action's canonical form, so
     // `structural_match` fails and `impliedFormulas` misses the
     // discharge, leaving FormulasFalse unfired — wrong-Solved.
@@ -4293,12 +3237,12 @@ fn build_parser_subst_from_eq_store(
         }
         cur
     };
-    // Pre-size for the keyed-lookup-only output map (capacity is
-    // output-invisible: nothing output-bearing iterates it).  Iterate
-    // `dom()` (borrowed keys, same BTreeMap order) instead of `to_list()`,
-    // which deep-clones every `(var, term)` pair we never read.
-    let mut out =
-        crate::guarded::VarSubst::with_capacity_and_hasher(subst.len(), Default::default());
+    // Iterate `dom()` (borrowed keys, same BTreeMap order) instead of
+    // `to_list()`, which deep-clones every `(var, term)` pair we never read.
+    let mut out: std::collections::BTreeMap<
+        tamarin_term::lterm::LVar,
+        tamarin_term::lterm::LNTerm,
+    > = std::collections::BTreeMap::new();
     for lv in subst.dom() {
         let final_term = lookup_chain(lv);
         // Identity mappings are no-ops; skip.
@@ -4307,11 +3251,9 @@ fn build_parser_subst_from_eq_store(
                 continue;
             }
         }
-        let term = crate::elaborate::lnterm_to_term(&final_term);
-        // `lv.name` is an interned `&'static str` — zero-alloc key.
-        out.insert((lv.name, lv.idx), term);
+        out.insert(*lv, final_term);
     }
-    out
+    crate::tools::equation_store::LNSubst::from_map(out)
 }
 
 /// Build the implicit `ISend` rule instance:
@@ -4346,33 +3288,6 @@ fn normalise_node_id(
         v
     } else {
         id
-    }
-}
-
-/// Convert a parser-AST term to an `LVar` of node sort (for the time
-/// argument of an action atom or the operands of a `Less`/`Last`).
-/// Accepts either a `#i`-sorted variable or any unsorted variable in
-/// a position requiring a node — the sort hint check is loose to
-/// match Haskell's `ltermNodeId'`.
-fn term_to_node_id(
-    t: &tamarin_parser::ast::Term,
-) -> Option<crate::constraint::constraints::NodeId> {
-    use tamarin_parser::ast::{SortHint, SuffixSort, Term as AstTerm};
-    let v = match t {
-        AstTerm::Var(v) => v,
-        _ => return None,
-    };
-    // Mirror Haskell `bltermNodeId` (Reduction.hs ~480): returns `Just`
-    // only when the term is a Var with sort `LSortNode`. Returning
-    // `Some` for non-Node sorts causes the Eq/Less→Disj CR-rules to
-    // fire on msg-var `¬(a=b)` formulas — which Haskell leaves as
-    // formulas, producing the SOLVED vs solve divergence on
-    // MinValueEq/WrongEquality.
-    match v.sort {
-        SortHint::Node | SortHint::Suffix(SuffixSort::Node) => Some(
-            tamarin_term::lterm::LVar::new(v.name.clone(), tamarin_term::lterm::LSort::Node, v.idx),
-        ),
-        _ => None,
     }
 }
 
@@ -4429,10 +3344,7 @@ fn illegal_coerce(p_rule: &RuleACInst, fa_conc: &crate::fact::LNFact) -> bool {
 /// SplitG-aware premise-solving rule enumeration: returns the
 /// canonical (possibly abstracted) rule per `OpenProtoRule` plus its
 /// variant disjunction.  Intruder rules carry `None` (no variants).
-/// For non-K premises this favours protocol rules with non-K
-/// conclusions and honours the `UniqueSource` source-cache
-/// short-circuit (Haskell's `solveWithSource`); for K-premises it
-/// includes the intruder rules.
+/// For K-premises this includes the intruder rules.
 fn premise_solving_rule_insts_with_constrs(
     ctx: &crate::constraint::solver::context::ProofContext,
     _fa_prem: &crate::fact::LNFact,
@@ -4441,33 +3353,30 @@ fn premise_solving_rule_insts_with_constrs(
     Option<Vec<tamarin_term::subst_vfresh::LNSubstVFresh>>,
 )> {
     // HS-faithful: `solvePremise (crProtocol ++ crConstruct)` iterates
-    // crProtocol intruder rules (ISend, IRecv, IEquality) regardless of
+    // the crProtocol intruder rules (ISend, IRecv) regardless of
     // conclusion-tag — the `labelNodeId` trace `exploitPrems rule=Send`/
     // `Recv` fires before the conclusion unification mzero's.
     //
     // HS-faithful: HS iterates ALL `crProtocol ++ crConstruct` rules
-    // per `solveGoal kind=Premise ...` (Goals.hs:200-212, see line 211).  With single-
-    // threaded HS (`+RTS -N1`) the lazy ListT enumeration is
+    // per `solveGoal kind=Premise ...` (Goals.hs:200-212#solveGoal, see line 208).
+    // With single-threaded HS (`+RTS -N1`) the lazy ListT enumeration is
     // deterministic and forces all branches.  Mirror that ordering
-    // and inclusion set here:
+    // and inclusion set, as HS partitions it (CloseRule.hs:435-436):
     //   crProtocol  = non-destr, non-constr intruder rules (ISend,
-    //                  IRecv, IEquality) ++ protocol rules
+    //                  IRecv) ++ protocol rules
     //   crConstruct = constructor intruder rules (Coerce, PubConstr,
     //                  FreshConstr, NatConstr, ConstrRule(*))
-    // Note: crDestruct (destructor rules) is NOT iterated for Premise
-    // goals — those are reserved for `solveChain` (Goals.hs:284-287).
+    // Note: crDestruct (the destructor rules and `IEquality`) is NOT
+    // iterated for Premise goals — those are reserved for `solveChain`
+    // (Goals.hs:284-287#solveChain).
     let mut out: Vec<(
         RuleACInst,
         Option<Vec<tamarin_term::subst_vfresh::LNSubstVFresh>>,
     )> = Vec::new();
     // crProtocol intruder rules first.
     for ir in &ctx.intruder_rules {
-        let is_crprotocol_intr = !crate::rule::is_destr_rule_info(&ir.info)
-            && !crate::rule::is_constr_rule_info(&ir.info)
-            && !crate::rule::is_pub_constr_rule_info(&ir.info)
-            && !crate::rule::is_nat_constr_rule_info(&ir.info)
-            && !crate::rule::is_fresh_constr_rule_info(&ir.info)
-            && !crate::rule::is_coerce_rule_info(&ir.info);
+        let is_crprotocol_intr =
+            !crate::rule::is_destr_rule(&ir.info) && !crate::rule::is_constr_rule(&ir.info);
         if is_crprotocol_intr {
             out.push((intr_rule_to_rule_ac_inst(ir.clone()), None));
         }
@@ -4477,12 +3386,7 @@ fn premise_solving_rule_insts_with_constrs(
     // Then crConstruct intruder rules (Coerce, PubConstr, FreshConstr,
     // NatConstr, ConstrRule).
     for ir in &ctx.intruder_rules {
-        let is_constr = crate::rule::is_constr_rule_info(&ir.info)
-            || crate::rule::is_pub_constr_rule_info(&ir.info)
-            || crate::rule::is_nat_constr_rule_info(&ir.info)
-            || crate::rule::is_fresh_constr_rule_info(&ir.info)
-            || crate::rule::is_coerce_rule_info(&ir.info);
-        if is_constr {
+        if crate::rule::is_constr_rule(&ir.info) {
             out.push((intr_rule_to_rule_ac_inst(ir.clone()), None));
         }
     }
@@ -4593,11 +3497,11 @@ fn bm_rule(r: &crate::rule::RuleACInst, max: &mut u64) {
 // Public re-exports so `system.rs`'s incremental cache bumpers can
 // reuse the inline walkers.
 #[inline(always)]
-pub fn bm_term_pub(t: &tamarin_term::lterm::LNTerm, max: &mut u64) {
+pub(crate) fn bm_term_pub(t: &tamarin_term::lterm::LNTerm, max: &mut u64) {
     bm_term(t, max);
 }
 #[inline(always)]
-pub fn bm_fact_pub(fa: &crate::fact::LNFact, max: &mut u64) {
+pub(crate) fn bm_fact_pub(fa: &crate::fact::LNFact, max: &mut u64) {
     bm_fact(fa, max);
 }
 #[inline(always)]
@@ -4809,52 +3713,15 @@ impl Drop for FpSkipDisableGuard {
     }
 }
 
-/// Opt-in verifier for the cached-bloom fact skip (`TAM_RS_VERIFY_FP=1`).
-/// Read once per pass; when set, every bloom-miss skip ALSO runs
-/// the real per-term descent and panics on any real change — an independent
-/// oracle that fires at the skip site regardless of what the bloom said.
-#[inline]
-fn verify_fp_enabled() -> bool {
-    tamarin_utils::env_gate!("TAM_RS_VERIFY_FP")
-}
-
 /// Opt-in descent-skip counters for the cached-bloom fact skip
 /// (`TAM_RS_FP_STATS=1`).  Zero hot-path cost when unset.
 #[inline]
 fn fp_stats_enabled() -> bool {
     tamarin_utils::env_gate!("TAM_RS_FP_STATS")
 }
-/// Total fact descents reached in the two skippable sections (node + goal).
-pub(crate) static FP_FACT_DESCENTS: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(0);
-/// Descents the bloom fast-path skipped (`bloom & dom == 0`).
-pub(crate) static FP_FACT_SKIPS: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(0);
 /// `subst_system` call counter for the FP-stats print cadence.
 pub(crate) static FP_STATS_CALLS: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
-
-/// Verify oracle for one bloom-miss skip: run the real per-term
-/// descent via the pass `SubstView` and panic if any term actually changes —
-/// i.e. the fingerprint missed a domain var (unsound bit assignment).  Calls
-/// `apply_changed` DIRECTLY (never the bloom), so it is independent of the
-/// bloom decision it is checking.
-fn verify_fact_unchanged(
-    fa: &crate::fact::LNFact,
-    view: &tamarin_term::subst::SubstView<'_, tamarin_term::lterm::Name, tamarin_term::lterm::LVar>,
-) {
-    for t in fa.terms.iter() {
-        if let Some(c) = view.apply_changed(t) {
-            if c != *t {
-                panic!(
-                    "TAM_RS_VERIFY_FP: bloom-skip dropped a real change \
-                        (fact contained a domain var the fingerprint missed) \
-                        — unsound bit assignment"
-                );
-            }
-        }
-    }
-}
 
 #[inline]
 fn bounds_max_disable_enabled() -> bool {
@@ -4935,7 +3802,7 @@ pub fn system_has_any_free_var(sys: &System) -> bool {
         .chain(sys.solved_formulas.iter())
         .chain(sys.lemmas.iter())
     {
-        if !crate::guarded::free_vars(f).is_empty() {
+        if !crate::guarded::is_closed(f) {
             return true;
         }
     }
@@ -5083,24 +3950,25 @@ pub fn bounds_max_rest(sys: &System) -> u64 {
     max
 }
 
-/// Fresh-rename a `RuleACInst` so its free variables don't collide
-/// with anything below `avoid_max`.
+/// Freshen a `(RuleACInst, Option<Vec<LNSubstVFresh>>)` pair: one uniform
+/// index shift moves the rule's free variables and the substitutions' DOMAIN
+/// keys together, so the disjunction stays aligned with the renamed rule while
+/// its range terms — whose variables count as fresh (SubstVFresh.hs:196-202) —
+/// are carried over untouched, which is what keeps an AC-narrowed variant in
+/// HS's argument order (`Mult(lkI.N, lkR.N)`, not `Mult(lkI.X, lkR.Y)`).
+/// Mirrors HS `someRuleACInst = fmap extractInsts . rename`
+/// (Theory/Model/Rule.hs:1013-1028, see line 1017), where the variant
+/// disjunction sits inside the rule's info and `rename` (LTerm.hs:638-645)
+/// reaches it through `HasFrees`.
 ///
-/// **Haskell-faithful counter**: shifts use the MaudeHandle's global
-/// `fresh_counter` (mirrors `MonadFresh`).  Without a global counter,
-/// two sequential freshen_rule calls with the same `avoid_max` (e.g.
-/// during parallel source-case enumeration where the system isn't
-/// updated between calls) shift to identical idx ranges — producing
-/// the cross-call `~mw:Pub:N` / `~mw:Msg:N` collision class that
-/// breaks TESLA::authentic_reachable.  Drawing from the global
-/// counter guarantees every freshen produces a globally-unique idx
-/// range.
-/// Freshen a `(RuleACInst, Option<Vec<LNSubstVFresh>>)` pair, applying
-/// the same idx-shift to both the rule's free vars and the substs'
-/// domains+ranges. Mirrors Haskell's `someRuleACInst`'s use of
-/// `fmap extractInsts . rename` (Model/Rule.hs:1013-1028, see line 1017): the `rename` runs
-/// over the whole rule+constrs pair via `MonadFresh`, so the
-/// disjunction's vars stay aligned with the renamed rule.
+/// The shift is drawn from the MaudeHandle's counter, the port's `MonadFresh`
+/// for the solver.  Two calls made against one system — parallel source-case
+/// enumeration updates it only afterwards — see the same `avoid_max`, so a
+/// per-call counter would shift both rules into the same index range and
+/// produce the cross-call `~mw:Pub:N` / `~mw:Msg:N` collision that breaks
+/// TESLA::authentic_reachable.  `ensure_above` lifts the counter over the
+/// system's own indices before the shift; a pair with no free variable leaves
+/// it where it stands, as `rename` draws no index for one.
 fn freshen_rule_with_constrs(
     rule: RuleACInst,
     constrs: Option<Vec<tamarin_term::subst_vfresh::LNSubstVFresh>>,
@@ -5110,78 +3978,12 @@ fn freshen_rule_with_constrs(
     RuleACInst,
     Option<Vec<tamarin_term::subst_vfresh::LNSubstVFresh>>,
 ) {
-    use tamarin_term::lterm::{HasFrees, LVar};
-    // Combined bounds across rule + constrs.
-    //
-    // HS-faithful: `someRuleACInst` calls `rename` on the whole
-    // `Rule (ProtoInfo i)` where the variants Disj sits INSIDE info.
-    // `rename` uses `boundsVarIdx` (LTerm.hs:674-675), which folds via
-    // `HasFrees`. For `SubstVFresh n LVar` (SubstVFresh.hs:196-198),
-    // `foldFrees f = foldFrees f . M.keys . svMap` — DOMAIN only.
-    // Likewise `mapFrees` (line 199-202) maps the domain and leaves the
-    // range untouched.  Walking + shifting the range too
-    // produces different idxs on AC-narrowed variants vs HS
-    // (e.g. Mult(lkI.X, lkR.Y) sorted differently than HS's
-    // Mult(lkI.N, lkR.N)).
-    let mut min = u64::MAX;
-    let mut max = 0u64;
-    let mut any = false;
-    let mut acc = |v: &LVar| {
-        any = true;
-        if v.idx < min {
-            min = v.idx;
-        }
-        if v.idx > max {
-            max = v.idx;
-        }
-    };
-    rule.for_each_free(&mut acc);
-    if let Some(cs) = &constrs {
-        for s in cs {
-            for k in s.dom() {
-                acc(k);
-                // Range NOT walked (HS-faithful keys-only fold).
-            }
-        }
-    }
-    if !any {
-        return (rule, constrs);
+    let pair = (rule, constrs);
+    if tamarin_term::lterm::bounds_var_idx(&pair).is_none() {
+        return pair;
     }
     maude.ensure_above(avoid_max);
-    let span = max.saturating_sub(min).saturating_add(1);
-    let base = maude.reserve_idxs(span);
-    let shift = (base as i128) - (min as i128);
-    let shift_idx = |idx: u64| -> u64 { ((idx as i128) + shift) as u64 };
-    // HS `someRuleACInst` = `rename` (Theory/Model/Rule.hs:1013-1028, see line 1017,
-    // LTerm.hs:638-645, see line 639) is Monotone:
-    // the uniform index shift preserves AC arg order (`unsafefApp`).
-    let new_rule = rule.map_free_monotone(&mut |LVar { name, sort, idx }| LVar {
-        name,
-        sort,
-        idx: shift_idx(idx),
-    });
-    let new_constrs = constrs.map(|cs| {
-        cs.into_iter()
-            .map(|s| {
-                let pairs: Vec<_> = s
-                    .to_list()
-                    .into_iter()
-                    .map(|(k, v)| {
-                        let new_k = LVar {
-                            name: k.name,
-                            sort: k.sort,
-                            idx: shift_idx(k.idx),
-                        };
-                        // HS-faithful: SubstVFresh.hs:199-202 leaves range terms
-                        // unchanged — `(,t) <$> mapFrees f v` only maps domain.
-                        (new_k, v)
-                    })
-                    .collect();
-                tamarin_term::subst_vfresh::LNSubstVFresh::from_list(pairs)
-            })
-            .collect()
-    });
-    (new_rule, new_constrs)
+    tamarin_term::lterm::rename(pair, &mut &*maude)
 }
 
 fn freshen_rule(
@@ -5190,77 +3992,10 @@ fn freshen_rule(
     maude: &tamarin_term::maude_proc::MaudeHandle,
 ) -> RuleACInst {
     // Identical to `freshen_rule_with_constrs` with no constrs: a `None`
-    // constraints arg contributes nothing to the bounds fold and yields a
-    // `None` `new_constrs`, so the two share the exact same
-    // bounds/ensure_above/reserve_idxs/monotone-shift arithmetic.  Keep
-    // that one copy in lockstep by delegating here.
+    // contributes nothing to the pair's bounds and comes back `None`, so the
+    // two share one bounds check, one counter lift and one shift.  Keep that
+    // single copy in lockstep by delegating here.
     freshen_rule_with_constrs(rule, None, avoid_max, maude).0
-}
-
-/// True iff one of the three debug gates that actually READ the
-/// `system_vars` / `external_preserve` set is enabled: `TAM_DBG_APPLY_EQ`,
-/// `TAM_DBG_FOLD_VARIANT`, or `TAM_RS_DBG_IMPURE_FOLD`.  Everywhere else the
-/// set is functionally dead: `EquationStore::simp_singleton_avoiding` reads
-/// `external_preserve` ONLY inside those three gates, and the actual fold
-/// calls `SubstVFresh::fresh_to_free_avoiding`, which builds its own (empty)
-/// preserve and ignores the passed-in set (HS has no "preserve" concept).
-/// Gating the whole-System live-var walk on this keeps production `--prove`
-/// output byte-identical while reproducing identical debug traces when a
-/// flag is on.
-fn preserve_dbg_gates_enabled() -> bool {
-    tamarin_utils::env_gate!("TAM_DBG_APPLY_EQ")
-        || tamarin_utils::env_gate!("TAM_DBG_FOLD_VARIANT")
-        || crate::tools::equation_store::impure_dbg_enabled()
-}
-
-/// Collect the LIVE free system vars — node ids, rule
-/// premise/conclusion/action vars, edges, less atoms, last atom, and
-/// goals — into an (order-insensitive) `BTreeSet`.  Passed to
-/// `simp_with_fresh_avoiding` as `system_vars` so the singleton fold's
-/// `fresh_to_free` doesn't rename them.  Shared verbatim by
-/// `solve_term_eqs` and `solve_split_goal`; `solve_rule_constraints`
-/// keeps a deliberately narrower no-goals variant inline (adding goal
-/// vars there would change its `fresh_to_free` renaming), so it is NOT
-/// folded in here.
-fn collect_live_system_vars(sys: &System) -> std::collections::BTreeSet<tamarin_term::lterm::LVar> {
-    use tamarin_term::lterm::HasFrees;
-    let mut s = std::collections::BTreeSet::new();
-    let mut visit = |v: &tamarin_term::lterm::LVar| {
-        s.insert(*v);
-    };
-    for (id, rule) in sys.nodes.iter() {
-        id.for_each_free(&mut visit);
-        rule.for_each_free(&mut visit);
-    }
-    for e in &sys.edges {
-        e.src.0.for_each_free(&mut visit);
-        e.tgt.0.for_each_free(&mut visit);
-    }
-    for l in &sys.less_atoms {
-        l.smaller.for_each_free(&mut visit);
-        l.larger.for_each_free(&mut visit);
-    }
-    if let Some(la) = &sys.last_atom {
-        la.for_each_free(&mut visit);
-    }
-    for (g, _) in sys.goals.iter() {
-        match g {
-            crate::constraint::constraints::Goal::Action(n, fa) => {
-                n.for_each_free(&mut visit);
-                fa.for_each_free(&mut visit);
-            }
-            crate::constraint::constraints::Goal::Premise(p, fa) => {
-                p.0.for_each_free(&mut visit);
-                fa.for_each_free(&mut visit);
-            }
-            crate::constraint::constraints::Goal::Chain(c, p) => {
-                c.0.for_each_free(&mut visit);
-                p.0.for_each_free(&mut visit);
-            }
-            _ => {}
-        }
-    }
-    s
 }
 
 /// Fan a solve outcome into one system per equation-store arm.  `Cases`
@@ -5287,307 +4022,41 @@ fn fanout_arm_systems(outcome: SolveOutcome, base: System) -> Vec<System> {
     }
 }
 
-/// simp one `EquationStore` with `simp_with_fresh_avoiding`, using the
-/// shared `system_vars` fresh-avoid set and the same `reserve_idxs`
-/// counter draw.  `Some(checker)` wires the `substCreatesNonNormalTerms`
-/// predicate; `None` disables it (`|_,_| false`), mirroring the
-/// `has_reducible` gate at the call sites.  Shared by `solve_term_eqs`'s
-/// `do_simp` and `solve_split_goal`'s `simplify_picked`.
+/// simp one `EquationStore` with `simp_with_fresh_avoiding`, drawing fresh
+/// indices from the same `reserve_idxs` counter.  `Some(checker)` wires the
+/// `substCreatesNonNormalTerms` predicate; `None` disables it
+/// (`|_,_| false`), mirroring the `has_reducible` gate at the call sites.
+/// Shared by `solve_term_eqs`'s `do_simp` and `solve_split_goal`'s
+/// `simplify_picked`.
 fn simp_store(
     store: crate::tools::equation_store::EquationStore,
     checker: Option<&crate::constraint::solver::contradictions::SubstNfChecker>,
     maude: &tamarin_term::maude_proc::MaudeHandle,
-    vars: &std::collections::BTreeSet<tamarin_term::lterm::LVar>,
 ) -> crate::tools::equation_store::EquationStore {
     match checker {
         Some(checker) => store.simp_with_fresh_avoiding(
             |fs, vfs| checker.check(fs, vfs),
             |n| maude.reserve_idxs(n),
-            vars,
             Some(maude),
         ),
-        None => store.simp_with_fresh_avoiding(
-            |_, _| false,
-            |n| maude.reserve_idxs(n),
-            vars,
-            Some(maude),
-        ),
-    }
-}
-
-// =============================================================================
-// splitSubterm (HS Theory.Tools.SubtermStore.splitSubterm) — singleStep
-// variant used by `solveSubterm`.
-// =============================================================================
-
-/// One leaf of `splitSubterm` — direct port of HS `SubtermSplit`
-/// (SubtermStore.hs:250-255).  The disjunction-over-list ordering in
-/// `solveSubterm` (`SubtermSplit{i}` case names) depends on the
-/// constructor order being preserved, so the variants and their
-/// `Ord` (derived) must follow HS exactly:
-/// `SubtermD < NatSubtermD < EqualD < ACNewVarD < TrueD`.
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
-enum SubtermSplit {
-    SubtermD(tamarin_term::lterm::LNTerm, tamarin_term::lterm::LNTerm),
-    NatSubtermD(tamarin_term::lterm::LNTerm, tamarin_term::lterm::LNTerm),
-    EqualD(tamarin_term::lterm::LNTerm, tamarin_term::lterm::LNTerm),
-    /// `((small+newVar, big), newVar)` — HS `ACNewVarD`.
-    AcNewVarD(
-        tamarin_term::lterm::LNTerm,
-        tamarin_term::lterm::LNTerm,
-        tamarin_term::lterm::LVar,
-    ),
-    TrueD,
-}
-
-/// `processACSubterm f (small, big)` — HS SubtermStore.hs:313-328.
-/// Returns `Err(false)` / `Err(true)` for the trivially-false /
-/// trivially-true reductions, or `Ok((nSmall, nBig))` for the
-/// terms with common AC children removed (both re-wrapped under `f`).
-pub(crate) fn process_ac_subterm(
-    f: tamarin_term::function_symbols::AcSym,
-    small: &tamarin_term::lterm::LNTerm,
-    big: &tamarin_term::lterm::LNTerm,
-) -> Result<(tamarin_term::lterm::LNTerm, tamarin_term::lterm::LNTerm), bool> {
-    use tamarin_term::lterm::flattened_ac_terms;
-    use tamarin_term::term::f_app_ac;
-    let mut l_small: Vec<tamarin_term::lterm::LNTerm> =
-        flattened_ac_terms(f, small).into_iter().cloned().collect();
-    let mut l_big: Vec<tamarin_term::lterm::LNTerm> =
-        flattened_ac_terms(f, big).into_iter().cloned().collect();
-    l_small.sort();
-    l_big.sort();
-    // removeSame over the two sorted lists.
-    let mut s_rem: Vec<tamarin_term::lterm::LNTerm> = Vec::new();
-    let mut b_rem: Vec<tamarin_term::lterm::LNTerm> = Vec::new();
-    let mut i = 0usize;
-    let mut j = 0usize;
-    while i < l_small.len() && j < l_big.len() {
-        match l_small[i].cmp(&l_big[j]) {
-            std::cmp::Ordering::Equal => {
-                i += 1;
-                j += 1;
-            }
-            std::cmp::Ordering::Less => {
-                s_rem.push(l_small[i].clone());
-                i += 1;
-            }
-            std::cmp::Ordering::Greater => {
-                b_rem.push(l_big[j].clone());
-                j += 1;
-            }
+        None => {
+            store.simp_with_fresh_avoiding(|_, _| false, |n| maude.reserve_idxs(n), Some(maude))
         }
     }
-    while i < l_small.len() {
-        s_rem.push(l_small[i].clone());
-        i += 1;
-    }
-    while j < l_big.len() {
-        b_rem.push(l_big[j].clone());
-        j += 1;
-    }
-    // case lists of (_, []) -> Right False; ([], _) -> Right True; ...
-    if b_rem.is_empty() {
-        return Err(false);
-    }
-    if s_rem.is_empty() {
-        return Err(true);
-    }
-    Ok((f_app_ac(f, s_rem), f_app_ac(f, b_rem)))
-}
-
-/// `isTrueFalse reducible Nothing (small, big)` — HS SubtermStore.hs:335-355.
-/// Returns `Some(true)`/`Some(false)` for trivially true/false subterms,
-/// `None` when undecidable.
-fn subterm_is_true_false(
-    reducible: &tamarin_utils::FastSet<tamarin_term::function_symbols::FunSym>,
-    small: &tamarin_term::lterm::LNTerm,
-    big: &tamarin_term::lterm::LNTerm,
-) -> Option<bool> {
-    use crate::tools::subterm_store::elem_not_below_reducible;
-    use tamarin_term::function_symbols::{nat_one_sym, AcSym, FunSym};
-    use tamarin_term::lterm::{
-        flattened_ac_terms, is_fresh_var, is_msg_var, is_pub_var, sort_of_lnterm, LSort,
-    };
-    use tamarin_term::term::{f_app_ac, Term};
-    use tamarin_term::vterm::Lit;
-    // First guarded equation group (lines 335-346).
-    let small_nat_or_msg = sort_of_lnterm(small) == LSort::Nat || is_msg_var(small);
-    let big_nat = sort_of_lnterm(big) == LSort::Nat;
-    // onlyOnes small && l small < l big && big::Nat  (line 336)
-    let small_flat_np = flattened_ac_terms(AcSym::NatPlus, small);
-    let big_flat_np = flattened_ac_terms(AcSym::NatPlus, big);
-    let only_ones = small_flat_np.iter().all(|t| {
-        matches!(t, Term::App(FunSym::NoEq(s), args)
-            if args.is_empty() && *s == nat_one_sym())
-    });
-    if only_ones && small_flat_np.len() < big_flat_np.len() && big_nat {
-        return Some(true);
-    }
-    if small_nat_or_msg && big_nat {
-        // CR-rule S_nat (delayed): processACSubterm NatPlus
-        match process_ac_subterm(AcSym::NatPlus, small, big) {
-            Err(res) => return Some(res),
-            Ok(_) => return None,
-        }
-    }
-    // big `redElem` small -> False (includes big == small)
-    if elem_not_below_reducible(reducible, big, small) {
-        return Some(false);
-    }
-    // small `redElem` big -> True
-    if elem_not_below_reducible(reducible, small, big) {
-        return Some(true);
-    }
-    // nothing can be a strict subterm of a constant (line 347)
-    if let Term::Lit(Lit::Con(_)) = big {
-        return Some(false);
-    }
-    // CR-rule S_invalid (lines 348-349)
-    if let Term::Lit(Lit::Var(_)) = big {
-        let invalid = is_pub_var(big) || is_fresh_var(big) || (!small_nat_or_msg && big_nat);
-        if invalid {
-            return Some(false);
-        }
-    }
-    // CR-rule S_subterm-ac-recurse (lines 350-354)
-    if let Term::App(FunSym::Ac(f), _) = big {
-        let f = *f;
-        if !reducible.contains(&FunSym::Ac(f)) {
-            let big_flat: Vec<tamarin_term::lterm::LNTerm> =
-                flattened_ac_terms(f, big).into_iter().cloned().collect();
-            let big_norm = f_app_ac(f, big_flat);
-            match process_ac_subterm(f, small, &big_norm) {
-                Err(res) => return Some(res),
-                Ok(_) => return None,
-            }
-        }
-    }
-    None
-}
-
-/// `step` of HS `splitSubterm` (SubtermStore.hs:279-305).  Allocates a
-/// fresh `newVar` for the AC-recurse arm via `mk_fresh` (a closure
-/// mirroring `MonadFresh`'s `freshLVar "newVar" (sortOfLNTerm big)`).
-/// Returns `None` when `(small, big)` cannot be decomposed further, or
-/// `Some(set)` (deduped, HS uses `S.Set` so duplicates collapse but
-/// iteration is sorted — we keep insertion order then sort+dedup at the
-/// call site to mirror `S.toList`).
-fn subterm_step(
-    reducible: &tamarin_utils::FastSet<tamarin_term::function_symbols::FunSym>,
-    small: &tamarin_term::lterm::LNTerm,
-    big: &tamarin_term::lterm::LNTerm,
-    mk_fresh: &mut dyn FnMut(tamarin_term::lterm::LSort) -> tamarin_term::lterm::LVar,
-) -> Option<Vec<SubtermSplit>> {
-    use tamarin_term::function_symbols::{AcSym, FunSym};
-    use tamarin_term::lterm::{flattened_ac_terms, is_msg_var, sort_of_lnterm, LSort};
-    use tamarin_term::term::{f_app_ac, Term};
-    use tamarin_term::vterm::{var_term, Lit};
-    // isTrueFalse arms (lines 280-281).
-    match subterm_is_true_false(reducible, small, big) {
-        Some(true) => return Some(vec![SubtermSplit::TrueD]),
-        Some(false) => return Some(vec![]),
-        None => {}
-    }
-    // CR-rule S_nat delayed (lines 282-286).
-    let small_nat_or_msg = sort_of_lnterm(small) == LSort::Nat || is_msg_var(small);
-    if small_nat_or_msg && sort_of_lnterm(big) == LSort::Nat {
-        return match process_ac_subterm(AcSym::NatPlus, small, big) {
-            Ok((s, t)) => Some(vec![SubtermSplit::NatSubtermD(s, t)]),
-            // HS: Right _ -> error "isTrueFalse did not catch this case 1".
-            // isTrueFalse already handled the reducible cases above; treat
-            // as undecidable rather than panicking to stay total.
-            Err(_) => None,
-        };
-    }
-    match big {
-        // variable big: do not recurse further (line 287).
-        Term::Lit(Lit::Var(_)) => None,
-        // AC big, non-reducible head: S_subterm-ac-recurse (lines 289-296).
-        Term::App(FunSym::Ac(f), _) if !reducible.contains(&FunSym::Ac(*f)) => {
-            let f = *f;
-            let big_flat: Vec<tamarin_term::lterm::LNTerm> =
-                flattened_ac_terms(f, big).into_iter().cloned().collect();
-            let big_norm = f_app_ac(f, big_flat.clone());
-            match process_ac_subterm(f, small, &big_norm) {
-                // Right _ -> error "isTrueFalse did not catch this case 2".
-                Err(_) => None,
-                Ok((n_small, n_big)) => {
-                    let new_var = mk_fresh(sort_of_lnterm(big));
-                    let small_plus = f_app_ac(f, vec![n_small, var_term(new_var)]);
-                    let mut out: Vec<SubtermSplit> = Vec::new();
-                    out.push(SubtermSplit::AcNewVarD(small_plus, n_big, new_var));
-                    // map (curry SubtermD small) (flattenedACTerms f big)
-                    for child in &big_flat {
-                        out.push(SubtermSplit::SubtermD(small.clone(), child.clone()));
-                    }
-                    Some(out)
-                }
-            }
-        }
-        // NoEq big, non-reducible head: S_subterm-recurse (lines 297-299).
-        Term::App(fs @ FunSym::NoEq(_), ts) if !reducible.contains(fs) => {
-            let mut out: Vec<SubtermSplit> = Vec::new();
-            for ti in ts.iter() {
-                // eqOrSubterm small ti (line 307-308).
-                out.push(SubtermSplit::SubtermD(small.clone(), ti.clone()));
-                out.push(SubtermSplit::EqualD(small.clone(), ti.clone()));
-            }
-            Some(out)
-        }
-        // C (commutative but not associative) — reducible (line 300).
-        Term::App(FunSym::C(_), _) => None,
-        // List (line 302).
-        Term::App(FunSym::List, _) => None,
-        // reducible function symbol observed (line 304).
-        _ => None,
-    }
-}
-
-/// `splitSubterm reducible True subterm` — singleStep variant
-/// (SubtermStore.hs:262-266).  Returns the sorted-deduped leaf list
-/// (HS `S.toList`).  `mk_fresh` allocates fresh vars for the AC arm,
-/// mirroring `MonadFresh`.
-fn split_subterm_single(
-    reducible: &tamarin_utils::FastSet<tamarin_term::function_symbols::FunSym>,
-    small: &tamarin_term::lterm::LNTerm,
-    big: &tamarin_term::lterm::LNTerm,
-    mk_fresh: &mut dyn FnMut(tamarin_term::lterm::LSort) -> tamarin_term::lterm::LVar,
-) -> Vec<SubtermSplit> {
-    // singleStep (SubtermStore.hs:264-266):
-    //   fromMaybe (S.singleton (SubtermD st)) <$> step st
-    let set = match subterm_step(reducible, small, big, mk_fresh) {
-        Some(v) => v,
-        None => vec![SubtermSplit::SubtermD(small.clone(), big.clone())],
-    };
-    // Mirror `S.toList`: sort + dedup by the derived Ord.
-    let mut out = set;
-    out.sort();
-    out.dedup();
-    out
 }
 
 /// Build `closeGuarded Ex [newVar] [EqE l r] gtrue` (HS Goals.hs `closeGuarded`).
 /// `newVar` is the single existentially-bound variable; `l`/`r` are the
-/// equation sides (`lTermToBTerm`-lifted to the parser AST, becoming
-/// free then bound by `close_guarded`).
+/// equation sides, free until `close_guarded` binds them.
 fn close_guarded_ex_eq(
     new_var: &tamarin_term::lterm::LVar,
-    l: &tamarin_term::lterm::LNTerm,
-    r: &tamarin_term::lterm::LNTerm,
+    s_plus: &tamarin_term::lterm::LNTerm,
+    t: &tamarin_term::lterm::LNTerm,
 ) -> crate::guarded::Guarded {
-    let var_lt: tamarin_term::lterm::LNTerm =
-        tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(*new_var));
-    let vs = match crate::elaborate::lnterm_to_term(&var_lt) {
-        tamarin_parser::ast::Term::Var(v) => v,
-        _ => unreachable!("var_term elaborates to a Var"),
-    };
-    let l_ast = crate::elaborate::lnterm_to_term(l);
-    let r_ast = crate::elaborate::lnterm_to_term(r);
     crate::guarded::close_guarded(
-        crate::guarded::Quant::Ex,
-        vec![vs],
-        vec![tamarin_parser::ast::Atom::Eq(l_ast, r_ast)],
+        crate::formula::Quantifier::Ex,
+        vec![*new_var],
+        vec![crate::atom::ProtoAtom::EqE(s_plus.clone(), t.clone())],
         crate::guarded::gtrue(),
     )
 }
@@ -5794,65 +4263,6 @@ pub fn chain_direct_case_name(fa_conc: &crate::fact::LNFact) -> Option<String> {
     })
 }
 
-/// Emit the per-premise exploitPrem traces that HS would emit for a
-/// rule whose Disj-monad branch will mzero (action/conclusion mismatch
-/// against the goal fact).  HS `labelNodeId` runs `exploitPrems i ru`
-/// BEFORE the action-mismatch check, so each premise of every dead
-/// rule still emits a `exploitPrem InFact` or `exploitPrem FreshFact
-/// isFresh=...` trace.  We synthesise the matching traces here so the
-/// exec-trace counts align between HS and Rust without Rust actually
-/// instantiating the dead rule.
-fn emit_dead_rule_premise_traces(rule: &crate::rule::RuleACInst) {
-    // Entirely a trace-synthesis helper: every body statement is a
-    // `trace_exec` (a no-op unless TAM_RS_TRACE_EXEC is set).  Bail out
-    // before the per-premise scan / `is_fresh` computation on the common
-    // untraced path.
-    if !crate::constraint::solver::trace::exec_enabled() {
-        return;
-    }
-    use crate::fact::FactTag;
-    use tamarin_term::lterm::LSort;
-    use tamarin_term::term::Term;
-    use tamarin_term::vterm::Lit;
-    for fa in &rule.premises {
-        match &fa.tag {
-            FactTag::Fresh => {
-                // Check if the Fresh arg is already a Fresh-sorted
-                // var to determine the isFresh flag, matching HS.
-                let is_fresh = match fa.terms.first() {
-                    Some(Term::Lit(Lit::Var(v))) => v.sort == LSort::Fresh,
-                    Some(Term::Lit(Lit::Con(c))) => {
-                        matches!(c.tag, tamarin_term::lterm::NameTag::Fresh)
-                    }
-                    _ => false,
-                };
-                crate::constraint::solver::trace::trace_exec(&format!(
-                    "exploitPrem FreshFact isFresh={}",
-                    if is_fresh { "True" } else { "False" }
-                ));
-            }
-            FactTag::In => {
-                crate::constraint::solver::trace::trace_exec("exploitPrem InFact");
-                // HS-faithful (Reduction.hs:246-248): `exploitPrem
-                // InFact` does `ruKnows <- mkISendRuleAC ann m;
-                // modM sNodes (M.insert j ruKnows); modM sEdges
-                // (S.insert ...); exploitPrems j ruKnows`.  The
-                // recursive `exploitPrems` (Reduction.hs:217-270, see line 239) then runs
-                // for the ISend supplier rule `Send`
-                // — even when the OUTER rule's action mismatches
-                // the goal (HS's Disj-monad branch still runs the
-                // body before `solveFactEqs` mzero's the branch).
-                // The dead-rule path must mirror that trace.  ISend's
-                // only premise is KU(x), which goes via `insertAction`
-                // and emits no exploitPrem-* trace, so no further
-                // recursion needed.
-                crate::constraint::solver::trace::trace_exec("exploitPrems rule=Send");
-            }
-            _ => { /* HS doesn't trace other premise types */ }
-        }
-    }
-}
-
 /// Derive a Haskell-style case name for a rule-instantiation case.
 /// Matches `Theory.Constraint.Solver.Reduction.casName` conventions:
 /// protocol rules use their declared name, intruder constructors use
@@ -5894,42 +4304,6 @@ pub fn rule_case_name(rule: &crate::rule::RuleACInst) -> String {
             IntrRuleACInfo::FreshConstr => "fresh".to_string(),
             IntrRuleACInfo::IEquality => "iequality".to_string(),
         },
-    }
-}
-
-/// HS-faithful port of `Theory.Model.Rule.getRuleName`
-/// (lib/theory/src/Theory/Model/Rule.hs:796-811).  Distinct from
-/// `rule_case_name` (which mirrors HS `showRuleCaseName` ≡
-/// `prettyIntrRuleACInfo` — lowercase "isend", "c_fst", ...).
-/// HS uses `getRuleName` ONLY at the `[EXEC] exploitPrems rule=X`
-/// trace site (Reduction.hs:217-270, see line 244) and a few other internal log
-/// points; everywhere else (proof tree case names, dot rendering,
-/// HTML output) HS uses `showRuleCaseName`.  We mirror that split.
-///
-/// Naming:
-///   ConstrRule x   → "Constr" ++ prefixIfReserved('c' : x)
-///   DestrRule  x .. → "Destr" ++ prefixIfReserved('d' : x)
-///   CoerceRule     → "Coerce"
-///   IRecvRule      → "Recv"
-///   ISendRule      → "Send"
-///   PubConstrRule  → "PubConstr"
-///   NatConstrRule  → "NatConstr"
-///   FreshConstrRule→ "FreshConstr"
-///   IEqualityRule  → "Equality"
-///   FreshRule      → "FreshRule"
-///   StandRule s    → s   (no prefixIfReserved — that's the pretty path)
-///
-/// The `x` for Constr/Destr is stored with HS's leading underscore
-/// (see `intruder_rules.rs`), so `ConstrRule { name: b"_fst", .. }` yields
-/// `c` + `_fst` = `c_fst` and `prefixIfReserved` leaves it as-is.
-pub fn rule_trace_name(rule: &crate::rule::RuleACInst) -> String {
-    use crate::rule::{ProtoRuleName, RuleInfo};
-    match &rule.info {
-        RuleInfo::Proto(p) => match &p.name {
-            ProtoRuleName::Fresh => "FreshRule".to_string(),
-            ProtoRuleName::Stand(s) => s.to_string(),
-        },
-        RuleInfo::Intr(i) => crate::rule::intr_rule_name_string(i),
     }
 }
 
@@ -5992,12 +4366,7 @@ impl<'ctx> Reduction<'ctx> {
                         self.sys.clone(),
                         self.maude.fresh_counter_peek(),
                     );
-                    for (existing, status) in sub.sys.goals_mut().iter_mut() {
-                        if existing == &g && !status.solved {
-                            status.solved = true;
-                            break;
-                        }
-                    }
+                    set_goal_solved(&mut sub.sys, &g);
                     // Disj-formula bookkeeping (delete from sys.formulas,
                     // insert into sys.solved_formulas) is already done by
                     // `dispatch_solve_goal`'s `mark_goal_as_solved(g)` call
@@ -6054,12 +4423,6 @@ impl<'ctx> Reduction<'ctx> {
     ///   fresh node `j` with `j < i`.
     /// - Otherwise → insert a `Goal::Premise((i, idx), fact)`.
     pub fn exploit_prems(&mut self, i: &crate::constraint::constraints::NodeId, rule: &RuleACInst) {
-        if crate::constraint::solver::trace::exec_enabled() {
-            crate::constraint::solver::trace::trace_exec(&format!(
-                "exploitPrems rule={}",
-                rule_trace_name(rule)
-            ));
-        }
         // HS-faithful (Reduction.hs:241-268): `exploitPrem i ru (v, fa)`
         // uses `fa` from `enumPrems ru` directly — no substitution
         // applied at this point.  The substitution is applied later
@@ -6099,7 +4462,6 @@ impl<'ctx> Reduction<'ctx> {
                 self.add_fresh_supplier_for(i, idx, fa);
             }
             FactTag::In => {
-                crate::constraint::solver::trace::trace_exec("exploitPrem InFact");
                 self.add_isend_supplier_for(i, idx, fa);
             }
             FactTag::Ku => {
@@ -6158,29 +4520,20 @@ impl<'ctx> Reduction<'ctx> {
         let next = self.next_fresh_node_idx();
         let j = tamarin_term::lterm::LVar::new("vf", tamarin_term::lterm::LSort::Node, next);
         let rule = make_fresh_rule(m.clone());
-        if tamarin_utils::env_gate!("TAM_RS_TRACE_VF_CREATE") {
-            let path = crate::constraint::solver::trace::case_path_string();
-            eprintln!(
-                "[VF_CREATE] path={} site=add_fresh_supplier_for vf.{}",
-                path, next
-            );
-        }
         self.sys.add_node(j, rule);
         // HS-faithful (Reduction.hs:220-273, see line 261): `exploitPrem FreshFact` does
         // a raw `modM sEdges (S.insert $ Edge (j, ConcIdx 0) (i,v))` —
-        // NO `insertEdges` (so NO solveFactEqs).  Routing through
-        // `insert_edge_labeled` here was non-HS-faithful: it unified
-        // the supplier's conc fact with the consumer's prem fact,
-        // adding bindings to the eq_store that HS doesn't have.  On
-        // NSPK3 the extra bindings transitively chained `~ltkA = ~nr`,
-        // causing `enforce_fresh_node_uniqueness` (DG4) to merge two
-        // distinct Fresh suppliers, which then fired a false-positive
-        // `enforce_edge_uniqueness:prem_idx_clash` and dropped the
-        // Lowe-attack cases as FormulasFalse.
-        // Use `add_edge` (dedup + incremental cache bump) to mirror
-        // Haskell's `S.insert` semantics.  `j` is freshly minted so a
-        // duplicate is impossible in practice; this matches the
-        // `add_isend_supplier_for` path and avoids a full cache recompute.
+        // NO `insertEdges`, so NO solveFactEqs.  `insert_edge` would unify
+        // the supplier's conc fact with the consumer's prem fact and add
+        // bindings HS does not have; on NSPK3 those bindings transitively
+        // chain `~ltkA = ~nr`, so `enforce_fresh_node_uniqueness` (DG4)
+        // merges two distinct Fresh suppliers, fires a false-positive
+        // `enforce_edge_uniqueness:prem_idx_clash` and drops the
+        // Lowe-attack cases as FormulasFalse.  `add_edge` (dedup +
+        // incremental cache bump) mirrors Haskell's `S.insert` semantics.
+        // `j` is freshly minted so a duplicate is impossible in practice;
+        // this matches the `add_isend_supplier_for` path and avoids a full
+        // cache recompute.
         self.sys.add_edge(crate::constraint::constraints::Edge {
             src: (j, crate::rule::ConcIdx(0)),
             tgt: (*i, idx),
@@ -6198,36 +4551,11 @@ impl<'ctx> Reduction<'ctx> {
                 _ => false,
             }
         };
-        if crate::constraint::solver::trace::exec_enabled() {
-            crate::constraint::solver::trace::trace_exec(&format!(
-                "exploitPrem FreshFact isFresh={}",
-                if is_fresh_var_or_lit { "True" } else { "False" }
-            ));
-        }
         if !is_fresh_var_or_lit {
             let next_n = bounds_max(&self.sys).saturating_add(1);
             let n_var =
                 tamarin_term::lterm::LVar::new("n", tamarin_term::lterm::LSort::Fresh, next_n);
             let n_term = tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(n_var));
-            crate::constraint::solver::trace::trace_exec("FrNarrow");
-            if tamarin_utils::env_gate!("TAM_RS_TRACE_FR_NARROW") {
-                eprintln!(
-                    "[RS-FR-NARROW] Fr({}_{}:{:?}) narrowed to ~n.{}",
-                    match &m {
-                        tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(v)) => &v.name,
-                        _ => "?",
-                    },
-                    match &m {
-                        tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(v)) => v.idx,
-                        _ => 0,
-                    },
-                    match &m {
-                        tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(v)) => v.sort,
-                        _ => tamarin_term::lterm::LSort::Msg,
-                    },
-                    next_n
-                );
-            }
             let eq = tamarin_term::rewriting::Equal {
                 lhs: m,
                 rhs: n_term,
@@ -6275,22 +4603,10 @@ impl<'ctx> Reduction<'ctx> {
         let next = self.next_fresh_node_idx();
         let j = tamarin_term::lterm::LVar::new("vf", tamarin_term::lterm::LSort::Node, next);
         let rule = make_isend_rule(m.clone());
-        // Mirrors Haskell `exploitPrems j ruKnows` (Reduction.hs:217-270, see line 248) —
-        // after creating the ISend supplier node, HS recursively exploits
-        // the supplier rule's premises (which dispatches to add_ku_action
-        // for the KU(m) premise).  Rust does the equivalent inline via
-        // add_ku_action_before below, so emit the matching trace here.
-        if crate::constraint::solver::trace::exec_enabled() {
-            crate::constraint::solver::trace::trace_exec(&format!(
-                "exploitPrems rule={}",
-                rule_trace_name(&rule)
-            ));
-        }
         self.sys.add_node(j, rule);
         // HS-faithful (Reduction.hs:217-270, see line 247): `exploitPrem InFact` does a
         // RAW `modM sEdges (S.insert $ Edge (j, ConcIdx 0) (i, v))` —
-        // NO `insertEdges` call, NO `solveFactEqs` unification, NO
-        // `[EXEC] insertEdges n=1` trace.
+        // NO `insertEdges` call and NO `solveFactEqs` unification.
         self.sys.add_edge(crate::constraint::constraints::Edge {
             src: (j, crate::rule::ConcIdx(0)),
             tgt: (*i, idx),
@@ -6315,20 +4631,6 @@ impl<'ctx> Reduction<'ctx> {
     ) {
         let next = self.next_fresh_node_idx();
         let j = tamarin_term::lterm::LVar::new("vk", tamarin_term::lterm::LSort::Node, next);
-        // TAM_RS_TRACE_VK_CREATE: mirror of HS `TAM_HS_TRACE_VK_CREATE`.
-        // This path (`add_ku_action_before`, the HS `requiresKU`/`exploitPrem`
-        // analog) DOES advance the maude fresh-counter via
-        // `next_fresh_node_idx` = `max(counter, bm+1)`.
-        if tamarin_utils::env_gate!("TAM_RS_TRACE_VK_CREATE") {
-            let path = crate::constraint::solver::trace::case_path_string();
-            eprintln!(
-                "[RS_VK_CREATE] path={} site=add_ku_action_before vk.{} cnt={} bm={}",
-                path,
-                next,
-                self.maude.fresh_counter_peek(),
-                bounds_max(&self.sys)
-            );
-        }
         self.insert_less(crate::constraint::constraints::LessAtom::new(
             j,
             *i,
@@ -6413,22 +4715,6 @@ impl<'ctx> Reduction<'ctx> {
             .iter()
             .find(|(nid, _)| nid == i)
             .map(|(_, ru)| ru.clone());
-        if tamarin_utils::env_gate!("TAM_DBG_SAG") {
-            eprintln!(
-                "[sag] ENTRY i={:?} fa.tag={:?} existing={:?}",
-                i,
-                fa.tag,
-                existing.as_ref().map(rule_case_name)
-            );
-        }
-        if tamarin_utils::env_gate!("TAM_DBG_SRC_CASE") {
-            eprintln!(
-                "[src_case] solve_action_goal ENTRY: i={:?} fa.tag={:?} existing={:?}",
-                i,
-                fa.tag,
-                existing.as_ref().map(rule_case_name)
-            );
-        }
         match existing {
             Some(ru) => {
                 // HS-faithful (Goals.hs):
@@ -6494,12 +4780,7 @@ impl<'ctx> Reduction<'ctx> {
                         let mut sys = post_sys.clone();
                         sys.invalidate_max_var_idx_cache();
                         sys.set_eq_store(std::sync::Arc::new(arm_eq));
-                        for (existing, status) in sys.goals_mut().iter_mut() {
-                            if existing == &g && !status.solved {
-                                status.solved = true;
-                                break;
-                            }
-                        }
+                        set_goal_solved(&mut sys, &g);
                         cases.push((rule_name.clone(), sys));
                         case_counters.push(branch_counter);
                     }
@@ -6526,11 +4807,6 @@ impl<'ctx> Reduction<'ctx> {
                 // rule enumeration: it regresses the corpus with many
                 // timeouts.  Source-cases are the equivalent of HS's
                 // `solveWithSource`; both code paths need them.
-                if tamarin_utils::env_gate!("TAM_DBG_SRC_CASE") {
-                    eprintln!("[src_case] solve_action_goal None-branch: precompute={} tag={:?} full_sources.len={}",
-                        crate::constraint::solver::sources::in_precompute_mode(),
-                        fa.tag, self.ctx.full_sources.len());
-                }
                 // HS-faithful (Sources.hs:202-206): KU action goals are
                 // "useful" — `solveAllSafeGoals` dispatches them via
                 // `solveWithSourceAndReturn` at BOTH saturate and
@@ -6539,13 +4815,6 @@ impl<'ctx> Reduction<'ctx> {
                     !crate::constraint::solver::sources::in_initial_source_cases()
                         && matches!(fa.tag, crate::fact::FactTag::Ku)
                         && !self.ctx.full_sources.is_empty();
-                if tamarin_utils::env_gate!("TAM_DBG_SAG_SOURCE_GATE") {
-                    eprintln!("[sag-gate] tag={:?} src_dispatch_ok={} in_initial_source_cases={} ku={} full_sources_empty={}",
-                        fa.tag, src_dispatch_ok,
-                        crate::constraint::solver::sources::in_initial_source_cases(),
-                        matches!(fa.tag, crate::fact::FactTag::Ku),
-                        self.ctx.full_sources.is_empty());
-                }
                 if src_dispatch_ok {
                     let avoid_max = bounds_max(&self.sys);
                     if let Some(case_pairs) =
@@ -6772,7 +5041,6 @@ impl<'ctx> Reduction<'ctx> {
                                                 if r3.sys.eq_store.is_false() {
                                                     continue;
                                                 }
-                                                r3.sys.used_sources.push(case_name.clone());
                                                 out_counters.push(r3.maude.fresh_counter_peek());
                                                 out.push((case_name.clone(), r3.sys));
                                             }
@@ -6784,7 +5052,6 @@ impl<'ctx> Reduction<'ctx> {
                                 // Haskell-faithful: push every case
                                 // and let the next simplify+contradictions
                                 // pass catch any real impossibilities.
-                                sub.sys.used_sources.push(case_name.clone());
                                 out_counters.push(sub.maude.fresh_counter_peek());
                                 out.push((case_name.clone(), sub.sys));
                             }
@@ -6870,24 +5137,8 @@ impl<'ctx> Reduction<'ctx> {
                         .iter()
                         .any(|a| a.tag == fa.tag && a.terms.len() == fa.terms.len())
                     {
-                        // For non-matching rules: synthesise the
-                        // exploitPrems + per-Fresh/In premise traces
-                        // HS emits in the dead Disj branch before
-                        // mzero, so trace counts align.  Rust still
-                        // skips the actual instantiation work.
-                        if crate::constraint::solver::trace::exec_enabled() {
-                            crate::constraint::solver::trace::trace_exec(&format!(
-                                "exploitPrems rule={}",
-                                rule_trace_name(&rule)
-                            ));
-                            emit_dead_rule_premise_traces(&rule);
-                        }
                         continue;
                     }
-                    // Matching rules: rely on the trace emitted from
-                    // inside exploit_prems (no duplicate here).  HS
-                    // emits exactly one exploitPrems per rule (matching
-                    // or not), so we follow the same pattern.
                     for (act_idx, _) in rule.actions.iter().enumerate() {
                         // Fresh-rename the rule once per branch so
                         // each candidate has independent variables.
@@ -6917,35 +5168,6 @@ impl<'ctx> Reduction<'ctx> {
                         let mut sys = self.sys.clone();
                         sys.add_node(*i, renamed.clone());
                         let mut sub = Reduction::new(self.ctx, sys);
-                        // HS-faithful order (Goals.hs:262-265): `labelNodeId
-                        // i rules Nothing` returns the chosen `ru` AFTER
-                        // running `exploitPrems i ru`; only AFTERWARDS
-                        // does `solveAction` call
-                        //   `act <- disjunctionOfList (rActs ru)`
-                        //   `void (solveFactEqs SplitNow [Equal fa act])`.
-                        //
-                        // So `exploit_prems` must fire BEFORE
-                        // `solve_fact_eqs` — otherwise the `[EXEC]
-                        // solveTermEqs n=1` line emitted by
-                        // `solveFactEqs`'s underlying `solveTermEqsLabeled`
-                        // (Reduction.hs:767-772, see line 769) lands before the matching
-                        // rule's `exploitPrems rule=X`/`exploitPrem
-                        // InFact`/etc. trace, instead of after.
-                        // HS-faithful: solveRuleConstraints fires BEFORE
-                        // exploitPrems (Reduction.hs labelNodeId).  If
-                        // it mzeros (eq_store contradictory), the
-                        // entire branch dies — exploitPrems trace
-                        // never fires.
-                        if tamarin_utils::env_gate!("TAM_DBG_VS_DUMP") {
-                            eprintln!(
-                                "[vs-dump]   rule_case={} for goal={:?}",
-                                rule_case_name(&renamed),
-                                fa.terms.first().map(|t| format!("{:?}", t)
-                                    .chars()
-                                    .take(80)
-                                    .collect::<String>())
-                            );
-                        }
                         if sub.solve_rule_constraints(renamed_constrs) {
                             continue;
                         }
@@ -7002,12 +5224,7 @@ impl<'ctx> Reduction<'ctx> {
                             let mut sys = post_sys.clone();
                             sys.invalidate_max_var_idx_cache();
                             sys.set_eq_store(std::sync::Arc::new(arm_eq));
-                            for (existing, status) in sys.goals_mut().iter_mut() {
-                                if existing == &g && !status.solved {
-                                    status.solved = true;
-                                    break;
-                                }
-                            }
+                            set_goal_solved(&mut sys, &g);
                             cases.push((case_name.clone(), sys));
                             case_counters.push(branch_counter);
                         }
@@ -7146,8 +5363,8 @@ impl<'ctx> Reduction<'ctx> {
         // → `applySource` (Sources.hs:326-351): match the live goal
         // against the source's abstract `cdGoal`, refine the case via
         // `refineSubst`, someInst with keepVarBindings, then
-        // `conjoinSystem`.  Implemented in
-        // `apply_source_case_premise` (sources.rs).
+        // `conjoinSystem`.  Implemented in `refine_source_case` and
+        // `conjoin_refine_arm` (sources.rs).
         //
         // The returned systems are already fact-aligned + edge-coherent
         // (with a defensive `chain_eqs` pass).
@@ -7182,11 +5399,10 @@ impl<'ctx> Reduction<'ctx> {
                 // fork + THAT case's own someInst/conjoin draws — not
                 // at the shared handle's post-ALL-cases position.
                 let mut out_counters: Vec<u64> = Vec::new();
-                for (case_name, mut sys, branch_counter) in case_pairs {
+                for (case_name, sys, branch_counter) in case_pairs {
                     if has_fresh_consumer_conflation(&sys, &self.maude) {
                         continue;
                     }
-                    sys.used_sources.push(case_name.clone());
                     out.push((case_name, sys));
                     out_counters.push(branch_counter);
                 }
@@ -7243,39 +5459,20 @@ impl<'ctx> Reduction<'ctx> {
             // Mirror HS `labelNodeId` in solvePremise: HS exploits every
             // candidate rule via Disj-monad, including conclusion
             // tag-mismatched ones (mzero in solveFactEqs).
-            // If no conclusion matches, the inner loop emits 0 traces
-            // for this dead rule's premises.  HS emits one exploitPrems
-            // plus one per Fr/In premise — synthesise both here.
             let any_conc_match = rule
                 .enumerate_conclusions()
                 .any(|(_, fc)| fc.tag == fa_prem.tag && fc.terms.len() == fa_prem.terms.len());
             if !any_conc_match {
-                if crate::constraint::solver::trace::exec_enabled() {
-                    crate::constraint::solver::trace::trace_exec(&format!(
-                        "exploitPrems rule={}",
-                        rule_trace_name(rule)
-                    ));
-                    emit_dead_rule_premise_traces(rule);
-                }
-                // Rust-only trace: `insertEdges n=1` is emitted (per
-                // enumerated conclusion) before `solveFactEqs` mzero's the
-                // branch, mirroring the per-edge `insertEdges`
-                // (Reduction.hs:278-281) called from solvePremise/solveChain
-                // (Goals.hs).  Haskell emits no such trace.
-                for _ in rule.enumerate_conclusions() {
-                    crate::constraint::solver::trace::trace_exec("insertEdges n=1");
-                }
                 continue;
             }
             // HS-faithful labelNodeId order (Reduction.hs:222-230):
             //   1. solveRuleConstraints (= solve_rule_constraints)
             //   2. modM sNodes (insert rule node)
-            //   3. exploitPrems i ru (emits trace, adds vf/vk nodes)
+            //   3. exploitPrems i ru (adds vf/vk nodes)
             // THEN insertFreshNodeConc's enumConcs Disj enumerates each
             // conclusion — each conclusion gets its own sub-branch with
-            // its own insert_edge_labeled (Reduction.hs:290-387, see line 300) emitting
-            // `insertEdges n=1`.  Tag-mismatched conclusions mzero in
-            // solveFactEqs but still emit their insertEdges trace.
+            // its own `insert_edge` (Reduction.hs:290-387, see line 300).
+            // Tag-mismatched conclusions mzero in solveFactEqs.
             // Independent `Disj` fork: reset the shared fresh counter to the
             // post-`freshLVar "vr"` state so THIS rule's `importRule`
             // (= rename, LTerm.hs:638-645) reserves its var range from the
@@ -7298,14 +5495,6 @@ impl<'ctx> Reduction<'ctx> {
             label_sys.add_node(new_node, renamed.clone());
             let mut label_sub =
                 Reduction::new_inheriting(self.ctx, label_sys, self.maude.fresh_counter_peek());
-            if tamarin_utils::env_gate!("TAM_RS_DBG_SOLVE_RULE_CONSTRAINTS") {
-                let n = renamed_constrs.as_ref().map(|c| c.len()).unwrap_or(0);
-                eprintln!(
-                    "[RS_LABEL_NODE_ID] rule={} n_variant_substs={}",
-                    rule_case_name(&renamed),
-                    n
-                );
-            }
             if let Some(constrs) = &renamed_constrs {
                 if !constrs.is_empty() {
                     label_sub.solve_rule_constraints(Some(constrs.clone()));
@@ -7322,16 +5511,10 @@ impl<'ctx> Reduction<'ctx> {
                 let conc_matches =
                     fa_conc.tag == fa_prem.tag && fa_conc.terms.len() == fa_prem.terms.len();
                 if !conc_matches {
-                    // Dead-conclusion sub-branch: HS still runs the
-                    // per-edge `insertEdges` (Reduction.hs:278-281), whose
-                    // `solveFactEqs` mzero's the branch.  Emit the Rust-only
-                    // trace here to keep the per-edge count aligned.
-                    crate::constraint::solver::trace::trace_exec("insertEdges n=1");
                     continue;
                 }
                 let mut sub = Reduction::new_inheriting(self.ctx, label_sys.clone(), label_counter);
-                let res = sub.insert_edge_labeled_with_facts(
-                    "premise_goal_rule_enum",
+                let res = sub.insert_edge_with_facts(
                     crate::constraint::constraints::Edge {
                         src: (new_node, c_idx),
                         tgt: *p,
@@ -7370,12 +5553,7 @@ impl<'ctx> Reduction<'ctx> {
                         let post_edge_counter = sub.maude.fresh_counter_peek();
                         let arm_systems = fanout_arm_systems(outcome, post_edge_sys);
                         for mut sys in arm_systems {
-                            for (existing, status) in sys.goals_mut().iter_mut() {
-                                if existing == &g && !status.solved {
-                                    status.solved = true;
-                                    break;
-                                }
-                            }
+                            set_goal_solved(&mut sys, &g);
                             // Subst_system per arm so the variant subst
                             // gets baked into node/edge/goal terms before
                             // saving.  Mirrors `solve_chain_goal`'s
@@ -7438,44 +5616,16 @@ impl<'ctx> Reduction<'ctx> {
         // `insertEdges:chain_extend` / `insertEdges:chain_direct` labels).
         let _op_guard =
             crate::constraint::solver::trace::OpLabelGuard::new("insertEdges:solveChain");
-        if tamarin_utils::env_gate!("TAM_RS_TRACE_SOLVE_CHAIN") {
-            let mode = if crate::constraint::solver::sources::in_precompute_mode() {
-                "saturate"
-            } else {
-                "runtime"
-            };
-            eprintln!("[SOLVE_CHAIN] enter mode={} c={:?} p={:?}", mode, c, p);
-        }
         let g = Goal::Chain(*c, *p);
-        let c_rule = match self.sys.nodes.iter().find(|(id, _)| id == &c.0) {
-            Some((_, r)) => r.clone(),
+        let c_rule = match self.sys.node_rule_safe(&c.0) {
+            Some(r) => r.clone(),
             None => return GoalCases::Contradictory,
         };
-        let p_rule_opt = self
-            .sys
-            .nodes
-            .iter()
-            .find(|(id, _)| id == &p.0)
-            .map(|(_, r)| r.clone());
+        let p_rule_opt = self.sys.node_rule_safe(&p.0).cloned();
         let fa_conc = match c_rule.lookup_conclusion(c.1) {
             Some(f) => f.clone(),
             None => return GoalCases::Contradictory,
         };
-
-        // TAM_RS_TRACE_CHAINS: mirror Haskell `solveChain` enter trace
-        // (Goals.hs `solveChain`).  Format kept identical so a diff between
-        // [HS-CHAIN] and [RS-CHAIN] surfaces directly.
-        let trace_chains = tamarin_utils::env_gate!("TAM_RS_TRACE_CHAINS");
-        if trace_chains {
-            let n_destr = self
-                .ctx
-                .intruder_rules
-                .iter()
-                .filter(|ir| crate::rule::is_destr_rule_info(&ir.info))
-                .count();
-            eprintln!("[RS-CHAIN] ENTER faConc={:?} nRules={}", fa_conc, n_destr);
-        }
-        crate::constraint::solver::trace::trace_exec("solveChain ENTER");
 
         let mut all_cases: Vec<(String, crate::constraint::system::System)> = Vec::new();
         // HS FreshT-threading: per pushed case, the branch's final fresh
@@ -7497,7 +5647,7 @@ impl<'ctx> Reduction<'ctx> {
                 // `fa_conc.terms[0]` (== mPrem, since fa_conc is a KD fact).
                 if !forbidden_edge(&c_rule, p_rule) && !illegal_coerce(p_rule, &fa_conc) {
                     // HS-faithful `insertEdges` (Reduction.hs:278-281):
-                    // route through `insert_edge_labeled` so unification fires
+                    // route through `insert_edge` so unification fires
                     // BEFORE the edge enters sEdges.  Mirrors HS's
                     // `solveFactEqs SplitNow` + `modM sEdges` order.
                     let sys_clone = self.sys.clone();
@@ -7506,10 +5656,8 @@ impl<'ctx> Reduction<'ctx> {
                         sys_clone,
                         self.maude.fresh_counter_peek(),
                     );
-                    let res = sub.insert_edge_labeled(
-                        "chain_direct",
-                        crate::constraint::constraints::Edge { src: *c, tgt: *p },
-                    );
+                    let res =
+                        sub.insert_edge(crate::constraint::constraints::Edge { src: *c, tgt: *p });
                     if !matches!(res, Err(_) | Ok(SolveOutcome::Contradictory)) {
                         // Direct-edge chain: name by the chain conc's KD
                         // term head — not the producer rule's name
@@ -7533,21 +5681,7 @@ impl<'ctx> Reduction<'ctx> {
                             _ => vec![post_edge_sys],
                         };
                         for mut arm_sys in arm_systems {
-                            for (existing, status) in arm_sys.goals_mut().iter_mut() {
-                                if existing == &g && !status.solved {
-                                    status.solved = true;
-                                    break;
-                                }
-                            }
-                            if trace_chains {
-                                eprintln!("[RS-CHAIN] DIRECT {}", case_name);
-                            }
-                            if crate::constraint::solver::trace::exec_enabled() {
-                                crate::constraint::solver::trace::trace_exec(&format!(
-                                    "solveChain DIRECT {}",
-                                    case_name
-                                ));
-                            }
+                            set_goal_solved(&mut arm_sys, &g);
                             all_cases.push((case_name.clone(), arm_sys));
                             all_case_counters.push(post_edge_counter);
                         }
@@ -7649,13 +5783,10 @@ impl<'ctx> Reduction<'ctx> {
                 //   insertEdges [(c, faConc, faPrem, (i, v))]
                 //   markGoalAsSolved "directly" (PremiseG (i, v) faPrem)
                 //   insertChain (i, ConcIdx 0) p
-                let res = sub.insert_edge_labeled(
-                    "chain_extend",
-                    crate::constraint::constraints::Edge {
-                        src: *c,
-                        tgt: (new_node, crate::rule::PremIdx(0)),
-                    },
-                );
+                let res = sub.insert_edge(crate::constraint::constraints::Edge {
+                    src: *c,
+                    tgt: (new_node, crate::rule::PremIdx(0)),
+                });
                 if matches!(res, Err(_) | Ok(SolveOutcome::Contradictory)) {
                     continue;
                 }
@@ -7680,21 +5811,7 @@ impl<'ctx> Reduction<'ctx> {
                     arm_sub.insert_goal(Goal::Chain((new_node, crate::rule::ConcIdx(0)), *p));
                     let arm_counter = arm_sub.maude.fresh_counter_peek();
                     arm_sys = arm_sub.sys;
-                    for (existing, status) in arm_sys.goals_mut().iter_mut() {
-                        if existing == &g && !status.solved {
-                            status.solved = true;
-                            break;
-                        }
-                    }
-                    if trace_chains {
-                        eprintln!("[RS-CHAIN] UNION {}", case_name);
-                    }
-                    if crate::constraint::solver::trace::exec_enabled() {
-                        crate::constraint::solver::trace::trace_exec(&format!(
-                            "solveChain UNION {}",
-                            case_name
-                        ));
-                    }
+                    set_goal_solved(&mut arm_sys, &g);
                     all_cases.push((case_name.clone(), arm_sys));
                     all_case_counters.push(arm_counter);
                 }
@@ -7710,18 +5827,23 @@ impl<'ctx> Reduction<'ctx> {
         }
         if !conc_term_is_msg_var {
             let avoid_max = bounds_max(&self.sys);
-            // HS `solveChain` EXTEND (Goals.hs:393-397, see line 394): `insertFreshNode rules
-            // (Just cRule)` allocates `i <- freshLVar "vr"` ONCE, before the
-            // `disjunctionOfList rules` inside `labelNodeId`.  So every
-            // destructor-extension case shares the same `#vr` id, and each
-            // destructor's `importRule` (= rename) reserves its var range from
-            // the single post-`freshLVar` counter state (independent forks).
+            // HS `solveChain` EXTEND (Goals.hs:284-332#solveChain, see line 327):
+            // `insertFreshNode rules (Just cRule)` allocates
+            // `i <- freshLVar "vr"` ONCE (Reduction.hs:210-213), before the
+            // `disjunctionOfList rules` inside `labelNodeId`
+            // (Reduction.hs:220-222).  So every destructor-extension case
+            // shares the same `#vr` id, and each destructor's `importRule`
+            // (= rename) reserves its var range from the single
+            // post-`freshLVar` counter state (independent forks).
             self.maude.ensure_above(avoid_max);
             let vr_idx = self.maude.fresh_idx();
             let post_vr_counter = self.maude.fresh_counter_peek();
             let mut counter_high_water = post_vr_counter;
             for ir in &self.ctx.intruder_rules {
-                if !crate::rule::is_destr_rule_info(&ir.info) {
+                // `rules` is `crDestruct` (Goals.hs:209): the intruder rules
+                // `isDestrRule` accepts, which are the `DestrRule`s and the
+                // `IEquality` rule (CloseRule.hs:435-436).
+                if !crate::rule::is_destr_rule(&ir.info) {
                     continue;
                 }
                 let ru_inst = intr_rule_to_rule_ac_inst(ir.clone());
@@ -7755,76 +5877,21 @@ impl<'ctx> Reduction<'ctx> {
                         ru_renamed
                     }
                 };
-                // Mirror HS `insertFreshNode rules (Just cRule)` (Goals.hs `insertFreshNode`)
-                // which calls labelNodeId → exploitPrems for every destructor
-                // rule, BEFORE the forbiddenEdge / prem-tag mismatch checks
-                // mzero the branch.  For dead-branch destructors, synthesize
-                // the matching exploitPrems + per-premise traces so trace
-                // counts align; HS emits exactly one exploitPrems per rule.
-                let trace_dead = |ru: &crate::rule::RuleACInst| {
-                    if crate::constraint::solver::trace::exec_enabled() {
-                        crate::constraint::solver::trace::trace_exec(&format!(
-                            "exploitPrems rule={}",
-                            rule_trace_name(ru)
-                        ));
-                        emit_dead_rule_premise_traces(ru);
-                    }
-                };
-                let dbg_filter = tamarin_utils::env_gate!("TAM_RS_DBG_CHAIN_EXT_FILTER");
                 let prem0 = match ru_renamed.premises.first() {
                     Some(f) => f.clone(),
                     None => {
-                        if dbg_filter {
-                            eprintln!(
-                                "[CHAIN_EXT_FILTER] SKIP rule={} reason=no_premises",
-                                rule_case_name(&ru_renamed)
-                            );
-                        }
-                        trace_dead(&ru_renamed);
                         continue;
                     }
                 };
                 if prem0.tag != fa_conc.tag || prem0.terms.len() != fa_conc.terms.len() {
-                    if dbg_filter {
-                        eprintln!("[CHAIN_EXT_FILTER] SKIP rule={} reason=tag/arity_mismatch prem0={:?}/{} faConc={:?}/{}",
-                            rule_case_name(&ru_renamed),
-                            prem0.tag, prem0.terms.len(),
-                            fa_conc.tag, fa_conc.terms.len());
-                    }
-                    trace_dead(&ru_renamed);
                     continue;
                 }
                 if forbidden_edge(&c_rule, &ru_renamed) {
-                    if dbg_filter {
-                        eprintln!(
-                            "[CHAIN_EXT_FILTER] SKIP rule={} reason=forbidden_edge c_rule={}",
-                            rule_case_name(&ru_renamed),
-                            rule_case_name(&c_rule)
-                        );
-                    }
-                    trace_dead(&ru_renamed);
                     continue;
                 }
                 if ru_renamed.conclusions.is_empty() {
-                    if dbg_filter {
-                        eprintln!(
-                            "[CHAIN_EXT_FILTER] SKIP rule={} reason=no_conclusions",
-                            rule_case_name(&ru_renamed)
-                        );
-                    }
-                    trace_dead(&ru_renamed);
                     continue;
                 }
-                if dbg_filter {
-                    eprintln!(
-                        "[CHAIN_EXT_FILTER] KEEP rule={} faConc={:?}",
-                        rule_case_name(&ru_renamed),
-                        fa_conc
-                    );
-                }
-                // Matching destructor: the `exploit_prems` call below
-                // will emit its own exploitPrems trace.
-
                 let mut sys_clone = self.sys.clone();
                 let new_node =
                     tamarin_term::lterm::LVar::new("vr", tamarin_term::lterm::LSort::Node, vr_idx);
@@ -7841,7 +5908,7 @@ impl<'ctx> Reduction<'ctx> {
                 //
                 // Step 1: exploit suppliers + KU action goals + Kd/Ded
                 // Premise goals (HS `exploitPrems i ru` in labelNodeId).
-                // Suppliers route through `insert_edge_labeled`
+                // Suppliers route through `insert_edge`
                 // (fresh_supplier / isend_supplier) so any
                 // fact-unification failure sets sub.sys.eq_store.is_false()
                 // via mark_contradictory.
@@ -7860,41 +5927,16 @@ impl<'ctx> Reduction<'ctx> {
                 // falsifying the verdict.
                 sub.exploit_prems(&new_node, &ru_renamed);
                 if sub.sys.eq_store.is_false() {
-                    if dbg_filter {
-                        eprintln!(
-                            "[CHAIN_EXT_FILTER] DROP_AFTER_EXPLOIT rule={}",
-                            rule_case_name(&ru_renamed)
-                        );
-                    }
                     continue;
                 }
                 // Step 2: HS-faithful `insertEdges` chain_extend
                 // (Goals.hs:284-366, see line 337 extendAndMark) — solveFactEqs on
                 // (faConc, faPrem) BEFORE adding to sEdges.
-                let res = sub.insert_edge_labeled(
-                    "chain_extend",
-                    crate::constraint::constraints::Edge {
-                        src: *c,
-                        tgt: (new_node, crate::rule::PremIdx(0)),
-                    },
-                );
-                if tamarin_utils::env_gate!("TAM_RS_DBG_CHAIN_EXTEND_MULTI") {
-                    if let Ok(SolveOutcome::Cases(ref arms)) = res {
-                        eprintln!(
-                            "[CHAIN_EXTEND_MULTI] rule={} arms={} faConc={:?}",
-                            rule_case_name(&ru_renamed),
-                            arms.len(),
-                            fa_conc
-                        );
-                    }
-                }
+                let res = sub.insert_edge(crate::constraint::constraints::Edge {
+                    src: *c,
+                    tgt: (new_node, crate::rule::PremIdx(0)),
+                });
                 if matches!(res, Err(_) | Ok(SolveOutcome::Contradictory)) {
-                    if dbg_filter {
-                        eprintln!(
-                            "[CHAIN_EXT_FILTER] DROP_AFTER_INSERT_EDGE rule={}",
-                            rule_case_name(&ru_renamed)
-                        );
-                    }
                     continue;
                 }
                 // HS-faithful: when `insertEdges chain_extend` produces
@@ -7947,21 +5989,7 @@ impl<'ctx> Reduction<'ctx> {
                     arm_sys = arm_sub.sys;
                     // Mark the original chain goal as solved in this case
                     // (it's been extended, not closed).
-                    for (existing, status) in arm_sys.goals_mut().iter_mut() {
-                        if existing == &g && !status.solved {
-                            status.solved = true;
-                            break;
-                        }
-                    }
-                    if trace_chains {
-                        eprintln!("[RS-CHAIN] EXTEND {} prem=PremIdx(0)", case_name);
-                    }
-                    if crate::constraint::solver::trace::exec_enabled() {
-                        crate::constraint::solver::trace::trace_exec(&format!(
-                            "solveChain EXTEND {}",
-                            case_name
-                        ));
-                    }
+                    set_goal_solved(&mut arm_sys, &g);
                     all_cases.push((case_name.clone(), arm_sys));
                     all_case_counters.push(arm_counter);
                 }
@@ -8047,6 +6075,7 @@ impl<'ctx> Reduction<'ctx> {
 
         // splitList <- splitSubterm reducible True st.  Fresh vars for the
         // AC-recurse arm come from the maude counter (HS `freshLVar`).
+        use crate::tools::subterm_store::SubtermSplit;
         let reducible = self.maude.maude_sig().reducible_fun_syms_fast.clone();
         let split_list = {
             let avoid_max = self.fresh_var_baseline();
@@ -8054,7 +6083,13 @@ impl<'ctx> Reduction<'ctx> {
             let maude = self.maude.clone();
             let mut mk_fresh =
                 |sort: LSort| -> LVar { LVar::new("newVar", sort, maude.fresh_idx()) };
-            split_subterm_single(&reducible, &st.0, &st.1, &mut mk_fresh)
+            crate::tools::subterm_store::split_subterm(
+                &reducible,
+                false,
+                &st.0,
+                &st.1,
+                &mut mk_fresh,
+            )
         };
 
         // disjunctionOfList [] -> Contradictory.
@@ -8102,11 +6137,10 @@ impl<'ctx> Reduction<'ctx> {
                 }
                 SubtermSplit::EqualD(l, r) => {
                     // insertFormula $ GAto $ EqE (lTermToBTerm l) (lTermToBTerm r)
-                    let l_ast = crate::elaborate::lnterm_to_term(l);
-                    let r_ast = crate::elaborate::lnterm_to_term(r);
-                    let atom = crate::guarded::atom_to_gatom_free(&tamarin_parser::ast::Atom::Eq(
-                        l_ast, r_ast,
-                    ));
+                    let atom = crate::atom::ProtoAtom::EqE(
+                        crate::formula::lift_free(l),
+                        crate::formula::lift_free(r),
+                    );
                     sub.insert_formula(crate::guarded::Guarded::Atom(atom));
                 }
                 SubtermSplit::AcNewVarD(small_plus, big, new_var) => {
@@ -8134,13 +6168,6 @@ impl<'ctx> Reduction<'ctx> {
     /// and running `simp` so the singleton disjunction folds into the
     /// free substitution via `simpSingleton` + `applyEqStore`.
     pub fn solve_split_goal(&mut self, id: crate::tools::equation_store::SplitId) -> GoalCases {
-        if tamarin_utils::env_gate!("TAM_RS_DBG_SOLVE_SPLIT_PRECOMPUTE") {
-            let in_pre = crate::constraint::solver::sources::in_precompute_mode();
-            eprintln!(
-                "[SOLVE_SPLIT_CALL] in_precompute={} split_id={:?}",
-                in_pre, id
-            );
-        }
         let cases = match self.sys.eq_store.perform_split(id) {
             Some(cs) => cs,
             None => return GoalCases::Contradictory,
@@ -8170,39 +6197,14 @@ impl<'ctx> Reduction<'ctx> {
         let nf_checker = has_reducible.then(|| {
             crate::constraint::solver::contradictions::SubstNfChecker::new(&maude, &self.sys)
         });
-        // Collect the system's free vars — these are LIVE system vars
-        // (node ids, rule premise/conclusion/action vars, edges, less
-        // atoms, goals, formulas).  Pass to `simp_with_fresh_avoiding`
-        // so the singleton fold's `fresh_to_free` doesn't rename them.
-        // Pattern_matching::Responder_secrecy bug:  Setup_Key's `k:F#0`
-        // got baked into the variant subst's range via `apply_eq_store`,
-        // then `fresh_to_free` renamed it, desyncing the rule's two
-        // premises.
-        // Functionally dead in production: `simp_singleton_avoiding` reads
-        // this set ONLY inside its three debug gates (the fold itself calls
-        // `fresh_to_free_avoiding`, which ignores it), so only pay the
-        // whole-System walk when a gate is on — see
-        // `preserve_dbg_gates_enabled`.
-        let system_vars = if preserve_dbg_gates_enabled() {
-            collect_live_system_vars(&self.sys)
-        } else {
-            std::collections::BTreeSet::new()
-        };
         // `nf_checker.is_some()` iff `has_reducible`, so `as_ref()` is
         // `Some` exactly when the non-normal-terms check must run.
         let simplify_picked = |store: crate::tools::equation_store::EquationStore|
             -> crate::tools::equation_store::EquationStore
         {
-            simp_store(store, nf_checker.as_ref(), &maude, &system_vars)
+            simp_store(store, nf_checker.as_ref(), &maude)
         };
         if cases.len() == 1 {
-            if tamarin_utils::env_gate!("TAM_RS_DBG_FOLD_DRAWS") {
-                eprintln!(
-                    "[rs-fold] SPLITG-SINGLE id={:?} counter={}",
-                    id,
-                    self.maude.fresh_counter_peek()
-                );
-            }
             self.sys.invalidate_max_var_idx_cache();
             self.sys.set_eq_store(std::sync::Arc::new(simplify_picked(
                 cases.into_iter().next().unwrap(),
@@ -8214,15 +6216,6 @@ impl<'ctx> Reduction<'ctx> {
         }
         let mut out = Vec::with_capacity(cases.len());
         let n_cases = cases.len();
-        let fold_dbg = tamarin_utils::env_gate!("TAM_RS_DBG_FOLD_DRAWS");
-        if fold_dbg {
-            eprintln!(
-                "[rs-fold] SPLITG-ENTER id={:?} n_cases={} counter={}",
-                id,
-                n_cases,
-                self.maude.fresh_counter_peek()
-            );
-        }
         // HS FreshT-threading (`solveSplit`, Goals.hs:373-384):
         // `disjunctionOfList split` forks the DisjT layer, which sits
         // BELOW FreshT in `Reduction = StateT System (FreshT (DisjT ...))`
@@ -8233,7 +6226,7 @@ impl<'ctx> Reduction<'ctx> {
         // counter, so consecutive cases threaded each other's fold draws:
         // on csf18-xor/CH07's `splitEqs(0)` (9 xor-unifier variants) the
         // per-case folds drew 6→8, 8→12, 12→16, 16→19, ... where HS draws
-        // 6.. in EVERY case (TAM_{HS,RS}_DBG_FOLD_DRAWS traces).  The
+        // 6.. in EVERY case.  The
         // folded range vars persist in each case's system, so every case
         // after the first carried a cumulative +offset in its whole var
         // numbering — the growing ∃-witness index drift on CH07 /
@@ -8244,32 +6237,13 @@ impl<'ctx> Reduction<'ctx> {
         // HS's counter position, exactly like the other Cases producers.
         let fork_base = self.maude.fresh_counter_peek();
         let mut case_counters: Vec<u64> = Vec::with_capacity(n_cases);
-        for (ci, store) in cases.into_iter().enumerate() {
+        for store in cases.into_iter() {
             self.maude.reset_counter_to(fork_base);
             let mut sys = self.sys.clone();
             sys.invalidate_max_var_idx_cache();
-            if fold_dbg {
-                eprintln!(
-                    "[rs-fold] SPLITG-CASE id={:?} case={} before={}",
-                    id,
-                    ci,
-                    self.maude.fresh_counter_peek()
-                );
-            }
             sys.set_eq_store(std::sync::Arc::new(simplify_picked(store)));
             let branch_counter = self.maude.fresh_counter_peek();
-            if fold_dbg {
-                eprintln!(
-                    "[rs-fold] SPLITG-CASE-DONE id={:?} case={} after={}",
-                    id, ci, branch_counter
-                );
-            }
-            for (existing, status) in sys.goals_mut().iter_mut() {
-                if existing == &g && !status.solved {
-                    status.solved = true;
-                    break;
-                }
-            }
+            set_goal_solved(&mut sys, &g);
             // Propagate variant subst into nodes/edges/goals for each
             // case before saving.
             let mut sub = Reduction::new(self.ctx, sys);

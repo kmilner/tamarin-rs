@@ -4,6 +4,7 @@
 # slice   comma-separated list of blocks cut from ONE theory load:
 #           wf      the wellformedness report block (wf_gate.sh's slice)
 #           theory  the `theory … end` echo (pretty_gate.sh's slice)
+#           summary the run summary, which carries the wellformedness count
 # mode    match    the port must reproduce the captured oracle bytes
 #         diverge  the port must reproduce <name>.<slice>.rs.txt, which must
 #                  still differ from the captured oracle bytes.  mode is per
@@ -33,3 +34,38 @@ naryapp_arity_folds	wf,theory	match	--derivcheck-timeout=0
 ac_prefix_arities	wf,theory	match	--derivcheck-timeout=0
 positional_ac_prefix	wf,theory	match	--derivcheck-timeout=0
 sapic_msr_pattern_restrict	wf,theory	match	--derivcheck-timeout=0
+s1_untagged_ac_rank	theory	match	--derivcheck-timeout=0
+s1_temporal_positions	theory	match	--derivcheck-timeout=0
+s1_bare_name_node_binder	theory	match	--derivcheck-timeout=0
+s1_ac_display_order	theory	match	--derivcheck-timeout=0
+s1_sort_suffix	wf,theory	match	--derivcheck-timeout=0
+s1_nullary_late_decl	wf,theory	match	--derivcheck-timeout=0
+sapic_cond_wrap	theory	match	--derivcheck-timeout=0
+sapic_cond_type_tag	theory	match	-m=spthytyped --derivcheck-timeout=0
+sapic_msr_restrict_wrap	theory	match	--derivcheck-timeout=0
+sapic_pubname_in_restrict	wf	match	--derivcheck-timeout=0
+sapic_cond_binder	wf,theory	match	--derivcheck-timeout=0
+sapic_call_cond	wf,theory	match	--derivcheck-timeout=0
+s3_macro_lemma_header	theory	match	--derivcheck-timeout=0
+s3_acc_pred_lemma	wf,theory	match	--derivcheck-timeout=0
+s3_nested_tuple_guard	wf,theory	match	--derivcheck-timeout=0
+s3_unguardable_wide_lemma	wf,theory	match	--derivcheck-timeout=0
+s3_acc_macro_case_test	theory	match	--derivcheck-timeout=0
+s5_guarded_em_open	wf,theory	match	--derivcheck-timeout=0
+s5_guarded_ac_binder	theory	match	--derivcheck-timeout=0
+s6_let_conclusion_var	wf,theory	match	--derivcheck-timeout=0
+s6_predicate_capture	theory	match	--derivcheck-timeout=0
+s6_restrict_action_timepoint	wf,theory	match	--derivcheck-timeout=0
+s6_restrict_free_ac	theory	match	--derivcheck-timeout=0
+s6_restrict_let_two	theory	match	--derivcheck-timeout=0
+s7_pe_macro_rule	theory	match	--partial-evaluation=summary --derivcheck-timeout=0
+s7_intruder_rule_block	wf,theory	match	--derivcheck-timeout=0
+s7_sapic_macro_rule	wf,theory	match	--derivcheck-timeout=0
+s8_restrict_sort_clash	wf	match	--derivcheck-timeout=0
+s8_restrict_fresh_name	wf	match	--derivcheck-timeout=0
+s8_restrict_pub_name	wf	match	--derivcheck-timeout=0
+s8_two_reuse_exists_lemmas	summary	match	--derivcheck-timeout=0
+s8_sapic_generated_rule_wf	wf	match	--derivcheck-timeout=0
+s8_acc_generated_lemma	wf	match	--lemma=acc_verif_empty --derivcheck-timeout=0
+s8_msr_lemma_filter	wf	match	-m=msr --prove=keep --derivcheck-timeout=0
+s8_lemma_arg_order	wf	match	--prove=p1 --lemma=l1 --prove=p2 --lemma=l2 --derivcheck-timeout=0

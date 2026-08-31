@@ -1,0 +1,36 @@
+/*
+ * A rule body that reads differently before and after its `let` block is
+ * inlined.  The parser applies the substitution to the premises, actions,
+ * conclusions and `_restrict` formulas as it builds the rule
+ * (`apply subst (ps0,as0,cs0,rs0)`, Theory/Text/Parser/Rule.hs:119, 133, 153),
+ * so every wellformedness check reads the substituted body.
+ *
+ * Rule `Reuse` premises `Fr(m)`, which passes the fresh-argument check as a
+ * message variable and fails it as `Fr( h(~k) )` — the finding below exists
+ * only in the inlined reading.  Rule `Count` adds `%1` to `c`, which is nat
+ * well sorted only once `c` is the nat variable `%i`; an un-inlined reading
+ * reports a nat sort error that the oracle does not.
+ *
+ * Compared slices: the wf report block, which carries both findings, and the
+ * `theory … end` echo, which carries the substituted rule bodies.
+ */
+theory S6LetConclusionVar
+begin
+
+builtins: hashing, natural-numbers
+
+rule Reuse:
+  let m = h(~k)
+  in
+  [ Fr(m) ]
+  --[ Reuse(m) ]->
+  [ Out(m) ]
+
+rule Count:
+  let c = %i
+  in
+  [ In(<'c', %i>) ]
+  --[ Count(c %+ %1) ]->
+  [ Out(<'c', c>) ]
+
+end

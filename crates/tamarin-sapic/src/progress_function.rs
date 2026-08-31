@@ -5,7 +5,7 @@
 //! Port of `Sapic.ProgressFunction` (`lib/sapic/src/Sapic/ProgressFunction.hs`).
 //!
 //! Computes, for each process position, the set of positions a local-progress
-//! translation must move to.  Three entry points are exported:
+//! translation must move to.  Three entry points:
 //!   - `pf_from`   (HS `pfFrom`):  the domain of the progress function — the set
 //!     of "from" positions (positions that, once reached, must make progress).
 //!   - `pf`        (HS `pf`):      per from-position, the CNF set-of-sets of "to"
@@ -123,7 +123,7 @@ fn next0_or_child(p: &AProc, pos: &[i64]) -> PosSet {
 ///                 ∪ ⋃_{pos ∈ next proc} (pos <.> from' (proc@pos) (blocking proc))
 ///
 /// `pfFrom process = from' process True`.
-pub fn pf_from(process: &AProc) -> Result<PosSet, String> {
+pub(crate) fn pf_from(process: &AProc) -> Result<PosSet, String> {
     fn from(proc: &AProc, b: bool) -> Result<PosSet, String> {
         if let Process::Null(_) = proc {
             return Ok(PosSet::new());
@@ -193,7 +193,7 @@ fn f(p: &AProc) -> Result<PosSetSet, String> {
 
 /// `pf proc pos` (ProgressFunction.hs:125-128): the progress function at a
 /// position — `pos <..> f (proc@pos)`.
-pub fn pf(proc: &AProc, pos: &[i64]) -> Result<PosSetSet, String> {
+pub(crate) fn pf(proc: &AProc, pos: &[i64]) -> Result<PosSetSet, String> {
     let p_at = process_at(proc, pos).ok_or_else(|| format!("pf: invalid position {pos:?}"))?;
     let res = f(p_at)?;
     Ok(prefix_set_set(pos, &res))
@@ -228,7 +228,7 @@ fn pf_range_prime(proc: &AProc) -> Result<BTreeSet<(Pos, Pos)>, String> {
 /// the first `from` for a `to` in lexicographic pair order wins.  The pairs are
 /// ascending in `to` first, so keeping the FIRST `from` seen per `to` in a map
 /// is that same choice, answered by lookup instead of a scan per query.
-pub fn pf_inv(proc: &AProc) -> Result<impl Fn(&[i64]) -> Option<Pos>, String> {
+pub(crate) fn pf_inv(proc: &AProc) -> Result<impl Fn(&[i64]) -> Option<Pos>, String> {
     let mut inv: std::collections::BTreeMap<Pos, Pos> = std::collections::BTreeMap::new();
     for (to, from) in pf_range_prime(proc)? {
         inv.entry(to).or_insert(from);

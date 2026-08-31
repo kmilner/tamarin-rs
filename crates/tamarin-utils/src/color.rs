@@ -8,11 +8,38 @@
 //! Floats are used throughout (`f64`); the original is generic over
 //! `Fractional`/`RealFrac`.
 
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+#[derive(Debug, Clone, Copy)]
 pub struct Rgb {
     pub r: f64,
     pub g: f64,
     pub b: f64,
+}
+
+// `Rgb` is public and its fields are public, so callers can construct every
+// IEEE-754 value, including NaNs and signed zero.  Use `f64::total_cmp` for a
+// genuine total representation instead of deriving `PartialEq` and later
+// pretending incomparable colours are equal in an `Ord` consumer.
+impl PartialEq for Rgb {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other).is_eq()
+    }
+}
+
+impl Eq for Rgb {}
+
+impl PartialOrd for Rgb {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Rgb {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.r
+            .total_cmp(&other.r)
+            .then_with(|| self.g.total_cmp(&other.g))
+            .then_with(|| self.b.total_cmp(&other.b))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
@@ -92,20 +119,6 @@ pub fn hsv_to_rgb(c: Hsv) -> Rgb {
     }
 }
 
-/// `hsvToGray`: drop saturation, keeping hue and value.
-pub fn hsv_to_gray(c: Hsv) -> Hsv {
-    Hsv {
-        h: c.h,
-        s: 0.0,
-        v: c.v,
-    }
-}
-
-/// `rgbToGray`: max channel intensity.
-pub fn rgb_to_gray(c: Rgb) -> f64 {
-    c.r.max(c.g.max(c.b))
-}
-
 // -- Hex output ---------------------------------------------------------------
 
 pub fn rgb_to_hex(c: Rgb) -> String {
@@ -136,21 +149,11 @@ pub fn hex_to_rgb(s: &str) -> Option<Rgb> {
     })
 }
 
-pub fn hsv_to_hex(c: Hsv) -> String {
-    rgb_to_hex(hsv_to_rgb(c))
-}
-
 // -- Palette generation -------------------------------------------------------
 //
-// Faithful `Color.hs` port. `light_color_groups` — with its helpers
-// `light_color_group_style`, `gen_color_groups` and `ColorParams` — is live in
-// `tamarin-theory`'s `constraint::system::graph::color`, the `nodeColorMap`
-// palette both graph renderers colour rule groups through; `hex_to_rgb` is
-// live in `tamarin-theory::elaborate`; and
-// `rgb_to_hsv`/`hsv_to_rgb`/`rgb_to_hex`/`Rgb`/`Hsv` above are live in
-// `tamarin-sapic` and `tamarin-theory`. The remaining `Color.hs` helpers
-// (`color_groups`/`color_group_style`, `hsv_to_hex`, `hsv_to_gray`,
-// `rgb_to_gray`) have no caller and are retained for completeness of the port.
+// `light_color_groups` is the `nodeColorMap` palette both graph renderers
+// colour rule groups through
+// (`tamarin_theory::constraint::system::graph::color`).
 
 #[derive(Debug, Clone, Copy)]
 pub struct ColorParams {
@@ -160,17 +163,6 @@ pub struct ColorParams {
     pub v_range: f64,
     pub s_bottom: f64,
     pub s_range: f64,
-}
-
-pub fn color_group_style(zero_hue: f64) -> ColorParams {
-    ColorParams {
-        scale: 0.6,
-        zero_hue,
-        v_bottom: 0.75,
-        v_range: 0.2,
-        s_bottom: 0.4,
-        s_range: 0.0,
-    }
 }
 
 pub fn light_color_group_style(zero_hue: f64) -> ColorParams {
@@ -214,10 +206,6 @@ pub fn gen_color_groups(p: ColorParams, groups: &[usize]) -> Vec<((usize, usize)
         }
     }
     out
-}
-
-pub fn color_groups(zero_hue: f64, groups: &[usize]) -> Vec<((usize, usize), Hsv)> {
-    gen_color_groups(color_group_style(zero_hue), groups)
 }
 
 pub fn light_color_groups(zero_hue: f64, groups: &[usize]) -> Vec<((usize, usize), Hsv)> {
@@ -282,13 +270,8 @@ mod tests {
     }
 
     #[test]
-    fn rgb_to_gray_basic() {
-        assert!(approx_eq(rgb_to_gray(Rgb::new(0.2, 0.7, 0.4)), 0.7));
-    }
-
-    #[test]
     fn color_groups_index_layout() {
-        let g = color_groups(0.0, &[3, 2, 4]);
+        let g = light_color_groups(0.0, &[3, 2, 4]);
         let idxs: Vec<(usize, usize)> = g.iter().map(|(i, _)| *i).collect();
         // The order is group-major and element-minor, with no gaps.  Callers
         // zip against this order.
@@ -312,27 +295,29 @@ mod tests {
         }
         // An empty layout contributes no entries.  An empty group inside a
         // layout also contributes no entries.  Neither one divides by zero.
-        assert!(color_groups(0.0, &[]).is_empty());
-        let with_gap: Vec<(usize, usize)> =
-            color_groups(0.0, &[0, 1]).iter().map(|(i, _)| *i).collect();
+        assert!(light_color_groups(0.0, &[]).is_empty());
+        let with_gap: Vec<(usize, usize)> = light_color_groups(0.0, &[0, 1])
+            .iter()
+            .map(|(i, _)| *i)
+            .collect();
         assert_eq!(with_gap, vec![(1, 0)]);
     }
 
     #[test]
     fn color_groups_style_constants_match_hs() {
-        // Hand-computed from HS `genColorGroups (colorGroupStyle 0)`.  The
-        // params of that style are scale=0.6, vBottom=0.75, vRange=0.2,
-        // sBottom=0.4, sRange=0:
+        // Hand-computed from HS `genColorGroups (lightColorGroupStyle 0)`.  The
+        // params of that style are scale=0.6, vBottom=0.8, vRange=0.15,
+        // sBottom=0.3, sRange=0:
         //   toGroupHue g h        = (g + 0.5*(1-scale) + h*scale) / nGroups
         //   toShiftedGroupHue g h = frac (toGroupHue g h + 1 - toGroupHue 0 0.5)
         // With nGroups = 2 that makes toGroupHue 0 0.5 = 0.25.  The shift
         // therefore lands the second element of the first group exactly on
         // hue 0.
-        let g = color_groups(0.0, &[2, 1]);
+        let g = light_color_groups(0.0, &[2, 1]);
         let want = [
-            ((0, 0), 306.0, 0.4, 0.77), // 360 * (0.10 + 1 - 0.25)
-            ((0, 1), 0.0, 0.4, 0.80),   // 360 * (0.25 + 1 - 0.25) -> wraps to 0
-            ((1, 0), 126.0, 0.4, 0.87), // 360 * frac(0.60 + 1 - 0.25)
+            ((0, 0), 306.0, 0.3, 0.815), // 360 * (0.10 + 1 - 0.25)
+            ((0, 1), 0.0, 0.3, 0.8375),  // 360 * (0.25 + 1 - 0.25) -> wraps to 0
+            ((1, 0), 126.0, 0.3, 0.89),  // 360 * frac(0.60 + 1 - 0.25)
         ];
         assert_eq!(g.len(), want.len());
         for ((got_idx, got), (idx, h, s, v)) in g.iter().zip(want) {

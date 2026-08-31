@@ -5,7 +5,8 @@
 # copies (which drifted): the OOM prologue, the three environment-line
 # strip policies, flags_for, the oracle fingerprint recipe, the `#include`
 # digest + the gate cache key, the gate file list, the maude resolver, the
-# stale-RS-binary check and the oracle-rev-vs-pin preflight. Policy DIFFERENCES between the old copies
+# Haskell-oracle and Maude resolvers, stale-RS-binary check and the
+# oracle-rev-vs-pin preflight. Policy DIFFERENCES between the old copies
 # are deliberate and stay separate named functions here (the three strip
 # policies); only drifted duplicates were unified.
 #
@@ -74,7 +75,7 @@ hs_fingerprint() {
     HS_FP=$(stat -c '%s.%Y' "$1") || return 1
     HS_FP_SALT=$(printf '%s' "$HS_FP" | sha256sum | cut -c1-12)
 }
-# include_shas <theory> [depth]
+# include_shas <theory>
 #   sha + name of every file the theory pulls in with `#include "..."`, depth
 #   first and transitively, resolved against the INCLUDING file's directory
 #   (the spelling upstream uses: examples/testParser/include/include1.spthy,
@@ -87,28 +88,100 @@ hs_fingerprint() {
 #   digest in sweep_common.sh, rs_ref_check.sh's ikey) are byte-identical to
 #   the pre-include ones and the existing entries/rows stay valid.
 include_shas() {
-    local f=$1 depth=${2:-0} dir inc
-    [ "$depth" -ge 8 ] && return 0
-    dir=$(dirname "$f")
-    while IFS= read -r inc; do
-        [ -n "$inc" ] && [ -f "$dir/$inc" ] || continue
-        printf '%s %s\n' "$(sha256sum "$dir/$inc" | cut -d' ' -f1)" "$inc"
-        include_shas "$dir/$inc" $((depth + 1))
-    done < <(grep -oE '#include[[:space:]]*"[^"]+"' "$f" 2>/dev/null \
-             | sed 's/.*"\(.*\)"/\1/')
+    local -A _include_seen=()
+    _include_shas_walk() {
+        local f=$1 dir inc dep key
+        dir=$(dirname "$f")
+        while IFS= read -r inc; do
+            [ -n "$inc" ] || continue
+            dep="$dir/$inc"
+            [ -f "$dep" ] || continue
+            key=$(cd "$(dirname "$dep")" && printf '%s/%s' "$PWD" "$(basename "$dep")") \
+                || return 1
+            [ -z "${_include_seen[$key]+x}" ] || continue
+            _include_seen[$key]=1
+            printf '%s %s\n' "$(sha256sum "$dep" | cut -d' ' -f1)" "$inc"
+            _include_shas_walk "$dep" || return 1
+        done < <(grep -oE '#include[[:space:]]*"[^"]+"' "$f" 2>/dev/null \
+                 | sed 's/.*"\(.*\)"/\1/')
+    }
+    _include_shas_walk "$1"
+    local status=$?
+    unset -f _include_shas_walk
+    return "$status"
+}
+# oracle_shas <theory> [flags]
+#   Content + mode of every executable-oracle input that can affect this
+#   invocation: theory-adjacent/CWD `oracle*` files, quoted heuristic paths,
+#   the exact upstream default-oracle candidate, and CLI `--oraclename`.
+#   Some entries are conservative extras; over-invalidation is preferable to
+#   serving a proof produced by an older oracle script.
+oracle_shas() {
+    local theory=$1 flags=${2:-} theory_dir run_dir farg p q word next prefix group
+    theory_dir=$(dirname "$theory")
+    run_dir=$PWD
+    farg=$theory
+    if [[ " $flags " == *" @cd "* || "$flags" == "@cd" ]]; then
+        run_dir=$theory_dir
+        farg=$(basename "$theory")
+    fi
+    {
+        for p in "$theory_dir"/oracle* "$run_dir"/oracle*; do
+            [ -f "$p" ] || continue
+            printf '%s %s scan:%s\n' "$(sha256sum "$p" | cut -d' ' -f1)" \
+                "$(stat -c '%a' "$p")" "${p##*/}"
+        done
+
+        # HS defaultOracleNames: prefix before the first dot, then the final
+        # slash group INCLUDING its slash. Probe it from the invocation CWD.
+        prefix=${farg%%.*}
+        if [[ "$prefix" == */* ]]; then group="/${prefix##*/}"; else group=$prefix; fi
+        p="${group}.oracle"
+        [[ "$p" == /* ]] || p="$run_dir/$p"
+        if [ -f "$p" ]; then
+            printf '%s %s default:%s\n' "$(sha256sum "$p" | cut -d' ' -f1)" \
+                "$(stat -c '%a' "$p")" "$group.oracle"
+        fi
+
+        while IFS= read -r q; do
+            [ -n "$q" ] || continue
+            if [[ "$q" == /* ]]; then p=$q; else p="$theory_dir/$q"; fi
+            [ -f "$p" ] || continue
+            printf '%s %s quoted:%s\n' "$(sha256sum "$p" | cut -d' ' -f1)" \
+                "$(stat -c '%a' "$p")" "$q"
+        done < <(grep -E 'heuristic' "$theory" 2>/dev/null | grep -oE '"[^"]+"' | tr -d '"' | sort -u)
+
+        next=0
+        for word in $flags; do
+            q=
+            case "$word" in
+                --oraclename=*) q=${word#--oraclename=} ;;
+                --oraclename) next=1; continue ;;
+                *) if [ "$next" = 1 ]; then q=$word; next=0; fi ;;
+            esac
+            [ -n "$q" ] || continue
+            if [[ "$q" == /* ]]; then p=$q; else p="$run_dir/$q"; fi
+            [ -f "$p" ] || continue
+            printf '%s %s cli:%s\n' "$(sha256sum "$p" | cut -d' ' -f1)" \
+                "$(stat -c '%a' "$p")" "$q"
+        done
+    } | sort -u
 }
 # ckey <relpath> <abs-file> — the gate cache key. Uses $HS_FP_SALT (set by
-#   hs_fingerprint), include_shas and flags_for, so an entry whose included
-#   fragments changed, a flagged entry and an entry produced by a different
-#   oracle are all a MISS, never a stale hit. KEY FORMAT (shared by
+#   hs_fingerprint), include_shas, oracle_shas and flags_for, so an entry whose
+#   included fragments or oracle scripts changed, a flagged entry and an entry
+#   produced by a different oracle binary are all a MISS. KEY FORMAT (shared by
 #   corpus_file_diff.sh, wf_gate.sh, pretty_gate.sh, triage_diff_vs_hs.sh,
 #   and scripts/migrate_hs_cache_fp.sh which rekeyed older entries onto it):
 #     <sha256(theory)>[__i<12 hex of sha256(include shas)>]
+#                     [__o<12 hex of sha256(oracle shas)>]
 #                     [__f<12 hex of sha256(flags)>]__b<12 hex of sha256(HS_FP)>
 ckey() {
-    local h fl inc; h=$(sha256sum "$2" | cut -d' ' -f1); fl=$(flags_for "$1")
+    local h fl inc ora; h=$(sha256sum "$2" | cut -d' ' -f1); fl=$(flags_for "$1")
     inc=$(include_shas "$2")
+    ora=$(oracle_shas "$2" "$fl")
     if [ -n "$inc" ]; then h="${h}__i$(printf '%s' "$inc" | sha256sum | cut -c1-12)"; fi
+    if [ -n "$ora" ]; then h="${h}__o$(printf '%s' "$ora" | sha256sum | cut -c1-12)"; fi
     if [ -n "$fl" ]; then h="${h}__f$(printf '%s' "$fl" | sha256sum | cut -c1-12)"; fi
     printf '%s__b%s' "$h" "$HS_FP_SALT"
 }
@@ -133,6 +206,37 @@ filelist() {
 }
 
 # --- maude resolver ----------------------------------------------------------
+# resolve_hs_oracle [repo-root] — print the oracle binary selected for a run.
+# An explicit HS_PATH is authoritative and a broken value is a hard failure.
+# Otherwise prefer this worktree's build, then the main worktree's shared build,
+# then tamarin-prover on PATH.
+resolve_hs_oracle() {
+    local repo=${1:-$(cd "$GATE_COMMON_DIR/.." && pwd)} main c
+    if [ -n "${HS_PATH:-}" ]; then
+        if [ -x "$HS_PATH" ]; then printf '%s\n' "$HS_PATH"; return 0; fi
+        echo "resolve_hs_oracle: HS_PATH='$HS_PATH' is not executable" >&2
+        return 2
+    fi
+    for c in "$repo"/tamarin-prover-testing/.stack-work/install/*/*/*/bin/tamarin-prover \
+             "$repo"/tamarin-prover-testing/.stack-work/dist/*/ghc-*/build/tamarin-prover/tamarin-prover; do
+        if [ -x "$c" ]; then printf '%s\n' "$c"; return 0; fi
+    done
+    main=$(git -C "$repo" worktree list --porcelain 2>/dev/null \
+        | awk '/^worktree/{print $2; exit}')
+    if [ -n "$main" ] && [ "$main" != "$repo" ]; then
+        for c in "$main"/tamarin-prover-testing/.stack-work/install/*/*/*/bin/tamarin-prover \
+                 "$main"/tamarin-prover-testing/.stack-work/dist/*/ghc-*/build/tamarin-prover/tamarin-prover; do
+            if [ -x "$c" ]; then printf '%s\n' "$c"; return 0; fi
+        done
+    fi
+    if c=$(command -v tamarin-prover 2>/dev/null) && [ -n "$c" ]; then
+        printf '%s\n' "$c"; return 0
+    fi
+    echo "resolve_hs_oracle: no Haskell tamarin-prover found in this worktree," \
+         "the main worktree, or PATH" >&2
+    return 2
+}
+
 # resolve_maude — print the one maude this run uses. Resolution order:
 #     1. $MAUDE_PATH when set. Set-but-unusable is a HARD FAIL, never a
 #        silent fall-through: a wrong MAUDE_PATH must not quietly become
@@ -164,6 +268,15 @@ resolve_maude() {
 maude_on_path() { PATH="$(dirname "$1"):$PATH"; export PATH; }
 
 # --- preflights --------------------------------------------------------------
+# oracle_revision <hs-bin> <maude>
+#   Print the revision token embedded in an oracle binary. Development builds
+#   may append a dirty-worktree note before the branch comma, so parse the
+#   first token after the label rather than everything before that comma.
+oracle_revision() {
+    timeout 60 "$1" --with-maude="$2" --version 2>/dev/null \
+        | sed -n 's/^Git revision: \([^[:space:],]*\).*/\1/p'
+}
+
 # oracle_rev_check <hs-bin> <maude> <repo-root>
 #   The oracle IS the specification, so it has to be the build of the submodule
 #   pin: an oracle from another revision compares the port against a different
@@ -181,8 +294,7 @@ maude_on_path() { PATH="$(dirname "$1"):$PATH"; export PATH; }
 oracle_rev_check() {
     local hs=$1 maude=$2 repo=$3 pin binrev
     pin=$(git -C "$repo" rev-parse :tamarin-prover 2>/dev/null) || pin=
-    binrev=$(timeout 60 "$hs" --with-maude="$maude" --version 2>/dev/null \
-             | sed -n 's/^Git revision: \([^,]*\),.*/\1/p')
+    binrev=$(oracle_revision "$hs" "$maude")
     if [ -n "$pin" ] && [ -n "$binrev" ] && [ "$pin" != "$binrev" ]; then
         echo "ERROR: oracle '$hs' is revision $binrev but the submodule pin is $pin" \
              "— it would certify the port against the wrong upstream" \

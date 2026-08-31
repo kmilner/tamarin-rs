@@ -22,7 +22,11 @@ use tamarin_theory::constraint::system::System;
 /// `dot` is missing or fails, returns the DOT source instead (the frontend's
 /// `intdot-staticgraph` can render DOT client-side via viz.js, so this
 /// stays a useful response).
-pub fn render_svg_or_dot_with(sys: &System, opts: &GraphOptions, dot_cmd: &str) -> RenderResult {
+pub(crate) fn render_svg_or_dot_with(
+    sys: &System,
+    opts: &GraphOptions,
+    dot_cmd: &str,
+) -> RenderResult {
     let dot = system_to_dot_with(sys, opts);
     match try_render_dot_to_svg(&dot, dot_cmd) {
         Ok(svg) => RenderResult::Svg(svg),
@@ -31,7 +35,7 @@ pub fn render_svg_or_dot_with(sys: &System, opts: &GraphOptions, dot_cmd: &str) 
 }
 
 /// What we got back from `dot`.
-pub enum RenderResult {
+pub(crate) enum RenderResult {
     /// SVG bytes produced by `dot -Tsvg`.
     Svg(Vec<u8>),
     /// Raw DOT source, returned when the `dot` binary is unavailable or failed.

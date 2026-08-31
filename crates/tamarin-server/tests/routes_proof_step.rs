@@ -1,3 +1,7 @@
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
+
 //! Integration tests for the live proof-tree mutation route.
 //!
 //! `/thy/trace/<idx>/proof-step/<lemma>/<path…>/<method>` has no upstream
@@ -11,7 +15,9 @@
 //!   - the route keeps the change: `/main/proof/<lemma>` then shows the
 //!     sub-case that the step produced.  This is the only place that checks
 //!     that the in-memory `ProofState` survives a request;
-//!   - an unknown lemma gives an `{alert}`, not a panic.
+//!   - an unknown lemma gives an `{alert}`, not a panic;
+//!   - the root system a lemma's proof view renders carries the `[reuse]`
+//!     lemmas HS's `mkSystem` gathers, and only those.
 
 mod common;
 
@@ -121,5 +127,46 @@ async fn proof_step_unknown_lemma_returns_alert() {
     assert_eq!(
         v["alert"],
         serde_json::json!("no system at path [] in lemma NONEXISTENT"),
+    );
+}
+
+// The root system of a lemma's proof view is built by `ProofState::new`, and
+// its `lemmas:` field holds the `[reuse]` lemmas declared before that lemma.
+// HS gathers them in `mkSystem` (CloseRule.hs:167-188#mkSystem), which the
+// interactive server imports and calls (Handler.hs:160#mkSystem), so the web
+// root system honours `[hide_lemma=..]` exactly as `--prove` does.
+#[tokio::test]
+async fn proof_view_root_system_drops_a_hidden_reuse_lemma() {
+    if !maude_available() {
+        eprintln!("skipping: maude not available");
+        return;
+    }
+    let s = start_server_with_theory("hide_reuse_lemma.spthy").await;
+    let sequent = |lemma: &'static str| {
+        let client = s.client.clone();
+        let url = s.url(&format!("/thy/trace/1/main/proof/{lemma}"));
+        async move {
+            let v: serde_json::Value = client
+                .get(url)
+                .send()
+                .await
+                .expect("send")
+                .json()
+                .await
+                .expect("decode");
+            v["html"].as_str().expect("html").to_string()
+        }
+    };
+    // `helper` is `[reuse]` and guards the action `Helper( k )`, which occurs
+    // nowhere else in the fixture's formulas.
+    let keeps = sequent("keeps_helper").await;
+    assert!(
+        keeps.contains("Helper("),
+        "a lemma that hides nothing must carry the reuse lemma; got: {keeps}",
+    );
+    let hides = sequent("hides_helper").await;
+    assert!(
+        !hides.contains("Helper("),
+        "`[hide_lemma=helper]` must drop the reuse lemma from the root system; got: {hides}",
     );
 }

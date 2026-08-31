@@ -1,0 +1,8 @@
+WARNING: the following wellformedness checks failed!
+
+Unbound variables
+=================
+
+  rule `A' has unbound variables: 
+    zed
+*/

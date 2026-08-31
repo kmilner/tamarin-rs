@@ -10,17 +10,17 @@
 
 use tamarin_term::lterm::LNTerm;
 use tamarin_theory::sapic::{
-    GoodAnnotation, Process, ProcessParsedAnnotation, SapicLVar, SapicTerm,
+    map_process, GoodAnnotation, Process, ProcessParsedAnnotation, SapicLVar, SapicTerm,
 };
 
 /// Variable annotation wrapper. Semantics: when combined with itself the
 /// rightmost wins (matches Haskell `instance Semigroup AnVar`).
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct AnVar<V>(pub V);
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AnVar<V>(pub V);
 
 /// Annotations attached to a process during translation.
 #[derive(Debug, Clone, PartialEq)]
-pub struct ProcessAnnotation<V> {
+pub(crate) struct ProcessAnnotation<V> {
     /// Original parsed annotation (carries process names, location,
     /// back-substitution).
     pub parsing_ann: ProcessParsedAnnotation,
@@ -47,6 +47,9 @@ pub struct ProcessAnnotation<V> {
     pub is_state_channel: Option<SapicTerm>,
 }
 
+/// HS `instance Monoid (ProcessAnnotation v)` sets `elseBranch` to `True` in
+/// `mempty` (sapic/src/Sapic/Annotation.hs:73-74), which no derive can
+/// express, and a derive would also demand `V: Default`.
 impl<V> Default for ProcessAnnotation<V> {
     fn default() -> Self {
         ProcessAnnotation {
@@ -63,37 +66,37 @@ impl<V> Default for ProcessAnnotation<V> {
     }
 }
 
-impl<V: Clone> ProcessAnnotation<V> {
-    pub fn empty() -> Self {
+impl<V> ProcessAnnotation<V> {
+    pub(crate) fn empty() -> Self {
         Self::default()
     }
 
-    pub fn with_lock(v: V) -> Self {
+    pub(crate) fn with_lock(v: V) -> Self {
         Self {
             lock: Some(AnVar(v)),
             ..Default::default()
         }
     }
-    pub fn with_unlock(v: V) -> Self {
+    pub(crate) fn with_unlock(v: V) -> Self {
         Self {
             unlock: Some(AnVar(v)),
             ..Default::default()
         }
     }
-    pub fn with_secret_channel(v: V) -> Self {
+    pub(crate) fn with_secret_channel(v: V) -> Self {
         Self {
             secret_channel: Some(AnVar(v)),
             ..Default::default()
         }
     }
-    pub fn with_destructor_equation(t1: LNTerm, t2: LNTerm, else_branch: bool) -> Self {
+    pub(crate) fn with_destructor_equation(t1: LNTerm, t2: LNTerm, else_branch: bool) -> Self {
         Self {
             destructor_equation: Some((t1, t2)),
             else_branch,
             ..Default::default()
         }
     }
-    pub fn with_else_branch(b: bool) -> Self {
+    pub(crate) fn with_else_branch(b: bool) -> Self {
         Self {
             else_branch: b,
             ..Default::default()
@@ -111,7 +114,7 @@ impl<V: Clone> ProcessAnnotation<V> {
     /// (left-biased on `Just`/`Just`), so they keep the *left* value
     /// (`self.X.or(other.X)`). `pure_state` is OR'ed; `else_branch` is taken
     /// from the right operand.
-    pub fn append(self, other: Self) -> Self {
+    pub(crate) fn append(self, other: Self) -> Self {
         ProcessAnnotation {
             parsing_ann: self.parsing_ann.append(other.parsing_ann),
             lock: other.lock.or(self.lock),
@@ -126,7 +129,7 @@ impl<V: Clone> ProcessAnnotation<V> {
     }
 }
 
-impl<V: Clone> GoodAnnotation for ProcessAnnotation<V> {
+impl<V> GoodAnnotation for ProcessAnnotation<V> {
     fn parsed(&self) -> &ProcessParsedAnnotation {
         &self.parsing_ann
     }
@@ -136,70 +139,36 @@ impl<V: Clone> GoodAnnotation for ProcessAnnotation<V> {
             ..self
         }
     }
-    fn default_annotation() -> Self {
-        Self::default()
-    }
 }
 
 /// `AnnotatedProcess`: SAPIC process post-translation, parameterised over
 /// `V` (typically `tamarin_term::lterm::LVar`).
-pub type AnnotatedProcess<V> = Process<ProcessAnnotation<V>, SapicLVar>;
+pub(crate) type AnnotatedProcess<V> = Process<ProcessAnnotation<V>, SapicLVar>;
 
 /// `toAnProcess` (sapic/src/Sapic/Annotation.hs:135-139): lift a parsed process into a
 /// translation annotation by wrapping the parsed annotation in
 /// `ProcessAnnotation`.
-pub fn to_annotated<V: Clone>(
-    p: Process<ProcessParsedAnnotation, SapicLVar>,
+pub(crate) fn to_annotated<V>(
+    p: &Process<ProcessParsedAnnotation, SapicLVar>,
 ) -> Process<ProcessAnnotation<V>, SapicLVar> {
-    fn go<V: Clone>(
-        p: Process<ProcessParsedAnnotation, SapicLVar>,
-    ) -> Process<ProcessAnnotation<V>, SapicLVar> {
-        match p {
-            Process::Null(ann) => Process::Null(ProcessAnnotation {
-                parsing_ann: ann,
-                ..Default::default()
-            }),
-            Process::Action(a, ann, body) => Process::Action(
-                a,
-                ProcessAnnotation {
-                    parsing_ann: ann,
-                    ..Default::default()
-                },
-                Box::new(go(*body)),
-            ),
-            Process::Comb(c, ann, l, r) => Process::Comb(
-                c,
-                ProcessAnnotation {
-                    parsing_ann: ann,
-                    ..Default::default()
-                },
-                Box::new(go(*l)),
-                Box::new(go(*r)),
-            ),
+    map_process(p, &mut Clone::clone, &mut Clone::clone, &mut |ann| {
+        ProcessAnnotation {
+            parsing_ann: ann.clone(),
+            ..Default::default()
         }
-    }
-    go(p)
+    })
 }
 
-/// Drop the translation annotations and recover the parsed-stage form.
-// Intentionally retained: faithful port of HS `toProcess`
-// (sapic/src/Sapic/Annotation.hs:141-144), the symmetric inverse of
-// `to_annotated`; no non-test caller yet.
-pub fn to_parsed<V>(
-    p: Process<ProcessAnnotation<V>, SapicLVar>,
+/// `toProcess` (sapic/src/Sapic/Annotation.hs:141-144): drop the translation
+/// annotations and recover the parsed-stage form — the inverse of
+/// [`to_annotated`].  `facts::to_rule` erases with it for the rule name and
+/// the `process=` attribute (Facts.hs:391).
+pub(crate) fn to_parsed<Ann: GoodAnnotation>(
+    p: &Process<Ann, SapicLVar>,
 ) -> Process<ProcessParsedAnnotation, SapicLVar> {
-    match p {
-        Process::Null(ann) => Process::Null(ann.parsing_ann),
-        Process::Action(a, ann, body) => {
-            Process::Action(a, ann.parsing_ann, Box::new(to_parsed(*body)))
-        }
-        Process::Comb(c, ann, l, r) => Process::Comb(
-            c,
-            ann.parsing_ann,
-            Box::new(to_parsed(*l)),
-            Box::new(to_parsed(*r)),
-        ),
-    }
+    map_process(p, &mut Clone::clone, &mut Clone::clone, &mut |ann| {
+        ann.parsed().clone()
+    })
 }
 
 #[cfg(test)]
@@ -251,12 +220,12 @@ mod tests {
             )),
             Box::new(Process::Null(named("right"))),
         );
-        let annotated: Process<ProcessAnnotation<V>, SapicLVar> = to_annotated(parsed.clone());
+        let annotated: Process<ProcessAnnotation<V>, SapicLVar> = to_annotated(&parsed);
         // The lift wraps the parsed annotation, and does not replace it.  The
         // parsed part is reachable unchanged at the root.  The translation
         // fields start at their default values.
         assert_eq!(annotated.annotation().parsing_ann, named("comb"));
         assert!(annotated.annotation().lock.is_none());
-        assert_eq!(to_parsed(annotated), parsed);
+        assert_eq!(to_parsed(&annotated), parsed);
     }
 }

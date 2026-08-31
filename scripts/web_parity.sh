@@ -6,9 +6,8 @@
 # Per file, two strictly-sequential phases so HS and RS never contend:
 #   Phase 1 (HS): boot `HS tamarin-prover interactive` on a temp workdir with
 #                 the one theory, crawl it (web_crawl.py), cache the response
-#                 manifest content-keyed by sha256(file) under .web_hs_cache/
-#                 (plus web_crawl.py's PLAN_VERSION, so a manifest crawled
-#                 under an older URL plan is re-crawled, not reused).
+#                 manifest under an oracle/settings profile; source identity
+#                 includes transitive includes and oracle scripts.
 #   Phase 2 (RS): boot RS on the same workdir, crawl, diff (web_diff.py) the
 #                 two manifests semantically (web_normalize.py) → per-url rows.
 #
@@ -16,7 +15,8 @@
 #      HS_PORT (3021), RS_PORT (3022), CORPUS_ROOT (tamarin-prover/examples/),
 #      ALLOWLIST (REQUIRED: one relpath/line, or the literal `seed` for the
 #      built-in 2-file smoke list), RESULTS_TSV, MAX_NODES
-#      (400), CACHE, DIFFDIR, HS_PATH, RS_PATH, MAUDE_PATH, DERIVCHECK_TIMEOUT
+#      (400), WEB_CACHE_ROOT, CACHE (exact legacy override), DIFFDIR, HS_PATH,
+#      RS_PATH, MAUDE_PATH, DERIVCHECK_TIMEOUT
 #      (both servers, 30s), SERVER_MEM_KB (per-server address-space cap,
 #      24 GiB), TAM_RS_NO_AUTO_BUILD, WEB_LEDGER (residue ledger, or the
 #      literal `none`), FAIL_ON_CAPPED.
@@ -54,19 +54,15 @@ READY_TIMEOUT="${READY_TIMEOUT:-90}"
 HS_PORT="${HS_PORT:-3021}"
 RS_PORT="${RS_PORT:-3022}"
 CORPUS_ROOT="${CORPUS_ROOT:-$repo_root/tamarin-prover/examples}"
-CACHE="${CACHE:-$script_dir/.web_hs_cache}"
 RESULTS_TSV="${RESULTS_TSV:-/tmp/web_parity.tsv}"
 MAX_NODES="${MAX_NODES:-400}"
 DIFFDIR="${DIFFDIR:-/tmp/web_parity_diffs}"
 LEDGER="${WEB_LEDGER:-$script_dir/websweep_ledger.tsv}"
 LEDGER_REPORTS=0
-mkdir -p "$CACHE"
 
-# Crawl-plan version handshake.  The cache key is sha256(theory) alone, so it
-# cannot see a crawl PLAN that has grown (see web_crawl.py's PLAN_VERSION):
-# a manifest from an older plan lacks the new URL families, which surface as
-# MISSING_HS rows rather than as a cache miss.  Import the constant rather than
-# re-parse it, so the two sides cannot drift.
+# Crawl-plan version handshake. The version participates in the cache profile
+# and remains stamped inside each manifest as defence in depth. Import the
+# constant rather than re-parsing it, so the two sides cannot drift.
 PLAN_VERSION="$(python3 -c \
     'import sys; sys.path.insert(0,sys.argv[1]); import web_crawl; print(web_crawl.PLAN_VERSION)' \
     "$script_dir")"
@@ -97,33 +93,23 @@ print(v)' \
         "$1" "$script_dir" 2>/dev/null
 }
 
-find_hs_bin() {
-    local c
-    for c in "$repo_root"/tamarin-prover-testing/.stack-work/install/*/*/*/bin/tamarin-prover; do
-        [ -x "$c" ] && { echo "$c"; return 0; }
-    done; return 1
-}
-HS_PATH="${HS_PATH:-$(find_hs_bin)}" || { echo "no HS binary" >&2; exit 2; }
+HS_PATH=$(resolve_hs_oracle "$repo_root") || exit 2
 RS_PATH="${RS_PATH:-$repo_root/target/release/tamarin-rs}"
 # Both servers probe `maude` by name; resolve one (MAUDE_PATH > PATH >
 # linuxbrew, hard fail otherwise) and put its directory on PATH for them.
 MAUDE_PATH=$(resolve_maude) || exit 2
 maude_on_path "$MAUDE_PATH"
 
-# Oracle-binary fingerprint, gate_common's hs_fingerprint (the same size.mtime
-# recipe the flag sweeps key their caches on).  The HS manifest cache is content-keyed on
-# sha256(theory) ALONE, which cannot see WHICH oracle produced the manifest: a
-# rebuilt HS binary keeps being answered out of manifests crawled by the
-# previous one, and the gate then certifies the port against a binary that no
-# longer exists.  The fingerprint is not folded into the cache FILENAME because
-# pane_byte_check.sh derives that name itself, from sha256(theory) alone —
-# changing it here would orphan every lookup that script makes.  It is stamped
-# in a sidecar beside the manifest and checked exactly like the crawl-plan
-# version below: a manifest from another oracle is re-crawled, not reused —
-# and pane_byte_check.sh checks the same sidecar, SKIPping what it cannot
-# re-crawl.
+# Keep gate_common's legacy size.mtime fingerprint for safe adoption of old
+# flat caches. web_cache.sh additionally hashes the complete binary: that
+# stable content identity selects the profile and stamps new sidecars, while
+# pane_byte_check.sh uses the same helper and therefore cannot drift.
 hs_fingerprint "$HS_PATH" \
     || { echo "cannot fingerprint HS binary '$HS_PATH'" >&2; exit 2; }
+[ -r "$script_dir/web_cache.sh" ] || { echo "web_parity: missing $script_dir/web_cache.sh" >&2; exit 2; }
+. "$script_dir/web_cache.sh"
+web_cache_init "$repo_root" "$script_dir" "$HS_PATH" "$PLAN_VERSION" \
+    || { echo "web_parity: cannot select HS web cache" >&2; exit 2; }
 
 # Auto-build RS (opt out with TAM_RS_NO_AUTO_BUILD=1).
 if [ -z "${TAM_RS_NO_AUTO_BUILD:-}" ]; then
@@ -264,61 +250,55 @@ one_file() {
     grep -qE '^[[:space:]]*(lemma|equivLemma|diffLemma)([[:space:]]|\[|:)' "$f" \
         || CRAWL_EXTRA_ARGS="--allow-no-lemmas"
     export CRAWL_EXTRA_ARGS
-    local key; key=$(sha256sum "$f" | cut -d' ' -f1)
+    local key; key=$(web_cache_key "$rel" "$f")
     local hs_manifest="$CACHE/$key.hs.json" hs_fp_file="$CACHE/$key.hs.fp"
     local wd; wd=$(mktemp -d)
-    mkdir -p "$wd/thy"; cp "$f" "$wd/thy/"
-    # Oracle staging — three upstream resolution modes, all relative to the
-    # theory dir at EXEC time (the servers' CWD-relative `<stem>.oracle`
-    # existence probe can never hit inside a mktemp workdir, whose path
-    # contains a `.`; the effective name is always the quoted one or the
-    # plain-`oracle` fallback):
-    #   1. sibling scripts `o "./oracle-…"` — the oracle* glob;
-    #   2. an unnamed `o`/`O` ranking execs plain `oracle` in the theory
-    #      dir — stage a `<stem>.oracle` sibling under that fallback name
-    #      (upstream's default-oracle recipe, cf. regression/trace/);
-    #   3. explicit relative refs (`o "../heuristic/oracle-…"`) — stage at
-    #      the same relative location, which may sit BESIDE the thy dir.
-    local __of __q
-    for __of in "$(dirname "$f")"/oracle*; do
-        [ -f "$__of" ] && cp "$__of" "$wd/thy/"
-    done
-    if [ -f "${f%.spthy}.oracle" ] && [ ! -e "$wd/thy/oracle" ]; then
-        cp "${f%.spthy}.oracle" "$wd/thy/oracle"
+    mkdir -p "$wd/thy"
+    if ! web_stage_inputs "$f" "$wd/thy"; then
+        rm -rf "$wd"
+        printf '%s\t-\tSKIP_INPUT_STAGE\t-\t-\t-\n' "$rel"; return 0
     fi
-    while IFS= read -r __q; do
-        [ -f "$(dirname "$f")/$__q" ] || continue
-        mkdir -p "$wd/thy/$(dirname "$__q")"
-        cp "$(dirname "$f")/$__q" "$wd/thy/$__q"
-    done < <(grep -E 'heuristic' "$f" | grep -oE '"[^"]+"' | tr -d '"' | sort -u)
 
     # Phase 1: HS (cached, and only while the cached crawl plan AND the oracle
     # that produced the manifest are the current ones).  A manifest with no
     # fingerprint sidecar was crawled before the stamp existed, by an oracle
     # nothing recorded — indistinguishable from one crawled by a stale binary,
     # so it is re-crawled rather than trusted.
+    if ! web_cache_lock "$key"; then
+        rm -rf "$wd"
+        printf '%s\t-\tSKIP_CACHE_LOCK\t-\t-\t-\n' "$rel"; return 0
+    fi
+    web_cache_adopt_legacy "$key" "$f" "$PLAN_VERSION" || true
     if [ -f "$hs_manifest" ]; then
         local hs_plan; hs_plan=$(cached_plan_version "$hs_manifest")
         if [ "$hs_plan" != "$PLAN_VERSION" ]; then
             echo "  stale HS manifest (crawl plan ${hs_plan:-?} != $PLAN_VERSION) — re-crawling" >&2
-            rm -f "$hs_manifest" "$hs_fp_file"
+            web_cache_invalidate "$key"
         fi
     fi
     if [ -f "$hs_manifest" ]; then
         local hs_fp=''
         [ -f "$hs_fp_file" ] && read -r hs_fp < "$hs_fp_file"
-        if [ "$hs_fp" != "$HS_FP" ]; then
-            echo "  stale HS manifest (oracle ${hs_fp:-unstamped} != $HS_FP) — re-crawling" >&2
-            rm -f "$hs_manifest" "$hs_fp_file"
+        if [ "$hs_fp" != "$WEB_CACHE_ORACLE_STAMP" ]; then
+            echo "  stale HS manifest (oracle ${hs_fp:-unstamped} != $WEB_CACHE_ORACLE_STAMP) — re-crawling" >&2
+            web_cache_invalidate "$key"
         fi
     fi
     if [ ! -f "$hs_manifest" ]; then
-        if ! MAUDE_PATH="$MAUDE_PATH" boot_crawl "$HS_PATH" "$HS_PORT" "$wd" "$hs_manifest" hs; then
-            rm -f "$hs_manifest" "$hs_fp_file"; rm -rf "$wd"
+        if ! MAUDE_PATH="$MAUDE_PATH" boot_crawl "$HS_PATH" "$HS_PORT" "$wd" "$wd/hs-new.json" hs; then
+            web_cache_unlock; rm -rf "$wd"
             printf '%s\t-\tSKIP_HS_FAIL\t-\t-\t-\n' "$rel"; return 0
         fi
-        printf '%s\n' "$HS_FP" > "$hs_fp_file"
+        if ! web_cache_publish "$key" "$wd/hs-new.json"; then
+            web_cache_unlock; rm -rf "$wd"
+            printf '%s\t-\tSKIP_CACHE_WRITE\t-\t-\t-\n' "$rel"; return 0
+        fi
     fi
+    if ! cp "$hs_manifest" "$wd/hs.json"; then
+        web_cache_unlock; rm -rf "$wd"
+        printf '%s\t-\tSKIP_CACHE_READ\t-\t-\t-\n' "$rel"; return 0
+    fi
+    web_cache_unlock
     # Phase 2: RS
     local rs_manifest="$wd/rs.json"
     if ! boot_crawl "$RS_PATH" "$RS_PORT" "$wd" "$rs_manifest" rs; then
@@ -328,7 +308,7 @@ one_file() {
     # diff. Both crawls succeeded, so an empty or absent parity.tsv means the
     # differ itself fell over — which used to emit no rows for the file at all,
     # a file that silently left the run rather than a file that matched.
-    python3 "$script_dir/web_diff.py" "$hs_manifest" "$rs_manifest" \
+    python3 "$script_dir/web_diff.py" "$wd/hs.json" "$rs_manifest" \
         "$wd/parity.tsv" "$DIFFDIR/$rel" >/dev/null 2>&1
     if [ ! -s "$wd/parity.tsv" ]; then
         rm -rf "$wd"
@@ -415,6 +395,7 @@ apply_web_ledger() {
 
 echo "web_parity: HS=$HS_PATH  fp=$HS_FP" >&2
 echo "web_parity: RS=$RS_PATH  maude=$MAUDE_PATH" >&2
+echo "web_parity: HS-cache=$CACHE  mode=$WEB_CACHE_MODE" >&2
 echo "web_parity: ledger=$LEDGER" >&2
 mkdir -p "$(dirname "$RESULTS_TSV")"
 : > "$RESULTS_TSV" || { echo "cannot write RESULTS_TSV '$RESULTS_TSV'" >&2; exit 2; }

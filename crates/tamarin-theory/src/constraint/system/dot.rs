@@ -78,7 +78,9 @@
 use crate::constraint::system::{NodeRuleMap, System};
 use crate::fact::{FactTag, LNFact};
 use crate::pretty_hpj::{self, Doc, DEFAULT_LINE_LENGTH, DEFAULT_RIBBON};
-use crate::rule::{prefix_if_reserved, rule_name_string, ProtoRuleName, RuleACInst, RuleInfo};
+use crate::rule::{
+    prefix_if_reserved, rule_name_string, ProtoRuleName, Rule, RuleACInst, RuleInfo,
+};
 use tamarin_term::lterm::{LNTerm, LVar};
 
 use crate::constraint::system::graph::abbreviation::{
@@ -128,23 +130,19 @@ pub fn system_to_dot_with(sys: &System, opts: &GraphOptions) -> String {
 }
 
 fn abbreviate_rule(ru: &RuleACInst, abbrev: &dyn Fn(&LNTerm) -> Option<LNTerm>) -> RuleACInst {
-    let mut new_ru = ru.clone();
-    new_ru.premises = ru
-        .premises
-        .iter()
-        .map(|fa| apply_abbreviations_fact(abbrev, fa))
-        .collect();
-    new_ru.actions = ru
-        .actions
-        .iter()
-        .map(|fa| apply_abbreviations_fact(abbrev, fa))
-        .collect();
-    new_ru.conclusions = ru
-        .conclusions
-        .iter()
-        .map(|fa| apply_abbreviations_fact(abbrev, fa))
-        .collect();
-    new_ru
+    let map_facts = |facts: &[LNFact]| {
+        facts
+            .iter()
+            .map(|fact| apply_abbreviations_fact(abbrev, fact))
+            .collect()
+    };
+    Rule {
+        info: ru.info.clone(),
+        premises: map_facts(&ru.premises),
+        conclusions: map_facts(&ru.conclusions),
+        actions: map_facts(&ru.actions),
+        new_vars: ru.new_vars.clone(),
+    }
 }
 
 /// The `<TABLE …>` opening tag `abbrevLabel`'s `tableAttributes`
@@ -237,14 +235,14 @@ fn scale_indent(s: String) -> String {
 /// is dropped before rendering. `getRuleNameDiff` (Theory/Model/Rule.hs:813-827) prefixes
 /// the rule's `getRuleName` with `"Intr"`/`"Proto"` depending on the rule
 /// kind. Returns `true` when the fact should be KEPT.
-fn is_not_diff_annotation(ru: &RuleACInst, fa: &LNFact) -> bool {
-    // `getRuleNameDiff` (Theory/Model/Rule.hs:813-827) = `getRuleName` prefixed with
-    // `"Intr"`/`"Proto"`; the synthetic fact name is `"Diff" ++` that.
-    let rule_name_diff = match &ru.info {
-        RuleInfo::Intr(_) => format!("Intr{}", rule_name_string(ru)),
-        RuleInfo::Proto(_) => format!("Proto{}", rule_name_string(ru)),
-    };
-    let diff_fact_name = format!("Diff{}", rule_name_diff);
+fn diff_annotation_name(ru: &RuleACInst) -> String {
+    match &ru.info {
+        RuleInfo::Intr(_) => format!("DiffIntr{}", rule_name_string(ru)),
+        RuleInfo::Proto(_) => format!("DiffProto{}", rule_name_string(ru)),
+    }
+}
+
+fn is_not_diff_annotation(diff_fact_name: &str, fa: &LNFact) -> bool {
     let is_diff = matches!(&fa.tag,
         FactTag::Proto(crate::fact::Multiplicity::Linear, n, 0)
             if **n == *diff_fact_name)
@@ -287,10 +285,11 @@ fn is_intruder_or_fresh(ru: &RuleACInst) -> bool {
 /// `render_balanced` (HS `asM = renderRow [(Nothing, ruleLabel)]`,
 /// System/Dot.hs:323-325 — a single-doc row, i.e. width 130 / ribbon 87).
 fn rule_label_doc(nid: &LVar, ru: &RuleACInst, opts: &GraphOptions) -> Doc {
+    let diff_fact_name = diff_annotation_name(ru);
     let act_docs: Vec<Doc> = ru
         .actions
         .iter()
-        .filter(|fa| is_not_diff_annotation(ru, fa))
+        .filter(|fa| is_not_diff_annotation(&diff_fact_name, fa))
         .filter(|fa| !opts.show_auto_source || !is_auto_source(fa))
         .map(fact_doc_of)
         .collect();
@@ -342,17 +341,13 @@ fn rule_case_name(ru: &RuleACInst) -> String {
 /// Mirror Haskell `trimSapicName` (Theory/Model/Rule.hs:1300-1308): strips a
 /// trailing `_<digits>_<digits>` suffix from a SAPiC rule name.
 fn trim_sapic_name(name: &str) -> String {
-    // splitString: reverse (splitOn "_" name); if >= 3 parts, the prefix is
-    // intercalate "_" (reverse (drop 2 parts)), and the last two parts are
-    // parts[1] (n) and parts[0] (m).
-    let parts: Vec<&str> = name.split('_').collect();
-    if parts.len() >= 3 {
-        let m = parts[parts.len() - 1];
-        let n = parts[parts.len() - 2];
-        // Haskell `all isDigit s` is True for the empty string too.
-        let all_digits = |s: &str| s.chars().all(|c| c.is_ascii_digit());
-        if all_digits(n) && all_digits(m) {
-            return parts[..parts.len() - 2].join("_");
+    if let Some((prefix, m)) = name.rsplit_once('_') {
+        if let Some((base, n)) = prefix.rsplit_once('_') {
+            // Haskell `all isDigit s` is True for the empty string too.
+            let all_digits = |s: &str| s.chars().all(|c| c.is_ascii_digit());
+            if all_digits(n) && all_digits(m) {
+                return base.to_string();
+            }
         }
     }
     name.to_string()

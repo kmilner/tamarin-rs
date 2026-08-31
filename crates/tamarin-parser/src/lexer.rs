@@ -355,11 +355,30 @@ impl<'a> Lexer<'a> {
     /// Note: export bodies use a *different*, stricter character grammar — see
     /// [`Lexer::export_body`].
     pub fn string_literal(&mut self) -> Option<String> {
+        self.quoted(false, Self::string_escape)
+    }
+
+    /// A double-quoted run: every char up to the closing `"` is taken
+    /// verbatim except `\`, which is consumed and the rest of the escape
+    /// handed to `escape`.  `escape` returns `Some(Some(c))` for a produced
+    /// char, `Some(None)` for an escape that produces nothing, and `None` to
+    /// fail the whole literal. When `opening_lexeme` is true, whitespace and
+    /// comments immediately after the opening quote are consumed as part of
+    /// that delimiter. A failure — an unterminated run included — restores the
+    /// position, so the caller can offer another alternative. Trailing
+    /// whitespace after the closing quote is always consumed.
+    fn quoted<F>(&mut self, opening_lexeme: bool, mut escape: F) -> Option<String>
+    where
+        F: FnMut(&mut Self) -> Option<Option<char>>,
+    {
         self.skip_ws();
         let save = self.pos;
         if !self.eat('"') {
             self.pos = save;
             return None;
+        }
+        if opening_lexeme {
+            self.skip_ws();
         }
         let mut s = String::new();
         loop {
@@ -375,9 +394,9 @@ impl<'a> Lexer<'a> {
                 }
                 Some('\\') => {
                     self.bump();
-                    match self.string_escape() {
+                    match escape(self) {
                         Some(Some(c)) => s.push(c),
-                        Some(None) => {} // empty escape `\&` or gap `\  \`
+                        Some(None) => {}
                         None => {
                             self.pos = save;
                             return None;
@@ -562,46 +581,16 @@ impl<'a> Lexer<'a> {
     /// the backslash dropped); a bare `"` terminates the body and any other `\x`
     /// fails the whole parse. Used for `export <tag>: "..."` blocks.
     pub fn export_body(&mut self) -> Option<String> {
-        self.skip_ws();
-        let save = self.pos;
-        if !self.eat('"') {
-            self.pos = save;
-            return None;
-        }
-        let mut s = String::new();
-        loop {
-            match self.peek() {
-                None => {
-                    self.pos = save;
-                    return None;
-                }
-                Some('"') => {
-                    self.bump();
-                    self.skip_ws();
-                    return Some(s);
-                }
-                Some('\\') => {
-                    self.bump();
-                    match self.peek() {
-                        Some(c @ '\\') | Some(c @ '"') => {
-                            s.push(c);
-                            self.bump();
-                        }
-                        // Any other `\x` makes `bodyChar` (wrapped in `try`)
-                        // backtrack, so `many bodyChar` stops and the closing
-                        // `"` is never found at this position — the export fails.
-                        _ => {
-                            self.pos = save;
-                            return None;
-                        }
-                    }
-                }
-                Some(c) => {
-                    s.push(c);
-                    self.bump();
-                }
+        self.quoted(true, |lx| match lx.peek() {
+            Some(c @ ('\\' | '"')) => {
+                lx.bump();
+                Some(Some(c))
             }
-        }
+            // Any other `\x` makes `bodyChar` (wrapped in `try`) backtrack, so
+            // `many bodyChar` stops and the closing `"` is never found at this
+            // position — the export fails.
+            _ => None,
+        })
     }
 
     /// Single-quoted string literal — not allowing single-quote or newline inside.
@@ -723,14 +712,14 @@ impl<'a> Lexer<'a> {
 }
 
 #[inline]
-pub fn is_ident_char(c: char) -> bool {
+pub(crate) fn is_ident_char(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
 }
 
 /// Reserved names that `T.identifier spthy` rejects (Token.hs:214-230, see line 225). A word equal
 /// to one of these is not a valid identifier.
 #[inline]
-pub fn is_reserved_name(s: &str) -> bool {
+pub(crate) fn is_reserved_name(s: &str) -> bool {
     matches!(s, "in" | "let" | "rule" | "diff")
 }
 
@@ -860,6 +849,18 @@ mod tests {
         // HS export `bodyChar`: `\\`->`\`, `\"`->`"`.
         let mut l = Lexer::new("\"a\\\\b\\\"c\"");
         assert_eq!(l.export_body().as_deref(), Some("a\\b\"c"));
+    }
+
+    #[test]
+    fn export_body_treats_the_opening_quote_as_a_lexeme() {
+        let mut l = Lexer::new("\"  /* discarded */  body\"");
+        assert_eq!(l.export_body().as_deref(), Some("body"));
+
+        let mut literal = Lexer::new("\"  /* retained */  body\"");
+        assert_eq!(
+            literal.string_literal().as_deref(),
+            Some("  /* retained */  body")
+        );
     }
 
     #[test]

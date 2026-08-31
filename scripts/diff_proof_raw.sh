@@ -21,7 +21,7 @@
 #   NO_HS_CACHE=1     ignore the raw HS cache
 #   HS_CANON_CACHE    cache dir (default <script_dir>/.hs_canon_cache); HS raw
 #                     stdout is cached/reused as <key>.full.gz, where key is
-#                     sha256(theory)__<lemma>__v<CACHE_VERSION>[__f<flags>]
+#                     sha256(theory)[__i<includes>][__o<oracle scripts>]__<lemma>__v<CACHE_VERSION>[__f<flags>]
 #                     __b<oracle-binary fingerprint>.  corpus_raw_diff.sh and
 #                     corpus_full_trace_diff.sh fingerprint the same way, so
 #                     their FLAGLESS entries are exchanged with this script's
@@ -44,6 +44,8 @@ repo_root="$(cd "$script_dir/.." && pwd)"
 # flags_for, the oracle fingerprint recipe.
 [ -r "$script_dir/gate_common.sh" ] || { echo "diff_proof_raw: missing $script_dir/gate_common.sh (owns the shared gate helpers)" >&2; exit 2; }
 . "$script_dir/gate_common.sh"
+[ -r "$script_dir/proof_diff_common.sh" ] || { echo "diff_proof_raw: missing proof_diff_common.sh" >&2; exit 2; }
+. "$script_dir/proof_diff_common.sh"
 # OOM discipline: the provers below die alone at the cap, not the session.
 oom_prologue
 CACHE_VERSION="${CACHE_VERSION:-1}"
@@ -57,8 +59,6 @@ CACHE_VERSION="${CACHE_VERSION:-1}"
 FLAGS_MAP="${FLAGS_MAP:-$script_dir/file_flags.tsv}"
 file_rel="${file#"$repo_root"/tamarin-prover/examples/}"; file_rel="${file_rel#tamarin-prover/examples/}"
 EXTRA_FLAGS="$(flags_for "$file_rel")"
-FLAGS_SALT=""
-[ -n "$EXTRA_FLAGS" ] && FLAGS_SALT="__f$(printf '%s' "$EXTRA_FLAGS" | sha256sum | cut -c1-12)"
 [ -n "$EXTRA_FLAGS" ] && echo "diff_proof_raw: $file_rel canonical flags: $EXTRA_FLAGS" >&2
 # Deriv-check timeout (secs) passed to BOTH binaries so the message-derivation
 # section is compared deterministically.  HS's DEFAULT is 5s, which fires on
@@ -78,26 +78,7 @@ NO_HS_CACHE="${NO_HS_CACHE:-}"
 HS_RTS="${HS_RTS:--N}"
 [ -n "$NO_HS_CACHE" ] || mkdir -p "$HS_CANON_CACHE" 2>/dev/null || true
 
-find_hs_bin() {
-    local root="$1" c
-    for c in "$root"/tamarin-prover-testing/.stack-work/install/*/*/*/bin/tamarin-prover \
-             "$root"/tamarin-prover-testing/.stack-work/dist/*/ghc-*/build/tamarin-prover/tamarin-prover; do
-        if [ -x "$c" ]; then echo "$c"; return 0; fi
-    done
-    return 1
-}
-hs_path="$(find_hs_bin "$repo_root" 2>/dev/null || true)"
-if [ -z "$hs_path" ]; then
-    main_root="$(git -C "$repo_root" worktree list --porcelain 2>/dev/null | awk '/^worktree/{print $2; exit}')"
-    if [ -n "$main_root" ] && [ "$main_root" != "$repo_root" ]; then
-        hs_path="$(find_hs_bin "$main_root" 2>/dev/null || true)"
-    fi
-fi
-[ -z "$hs_path" ] && hs_path="$(command -v tamarin-prover 2>/dev/null || true)"
-if [ -z "$hs_path" ]; then
-    echo "diff_proof_raw.sh: no HS tamarin-prover binary found" >&2
-    exit 2
-fi
+hs_path=$(resolve_hs_oracle "$repo_root") || exit 2
 # Oracle-binary fingerprint (gate_common's hs_fingerprint), salted into the
 # cache key below: sha256(theory)+lemma cannot see the ORACLE changing, so a
 # rebuilt oracle would keep being answered out of the previous one's entries.
@@ -128,8 +109,7 @@ trap 'rm -rf "$tmp"' EXIT
 # --- HS (shared raw cache).
 key=""
 if [ -z "$NO_HS_CACHE" ]; then
-    h=$(sha256sum "$file" 2>/dev/null | cut -d' ' -f1)
-    key="$HS_CANON_CACHE/${h}__${lemma}__v${CACHE_VERSION}${FLAGS_SALT}__b${HS_FP_SALT}"
+    key="$HS_CANON_CACHE/$(proof_cache_key "$file" "$lemma" "$EXTRA_FLAGS")"
 fi
 if [ -n "$key" ] && [ -f "$key.full.gz" ]; then
     # The cache is keyed by file CONTENT, but HS echoes the input path verbatim

@@ -8,20 +8,22 @@
 //!   - `baseTransAction` (94-214) — every `SapicAction` arm
 //!   - `baseTransComb`   (226-306) — every `ProcessCombinator` arm
 //!   - the hardcoded restrictions `baseRestr` (449-485) selects from:
-//!     `single_session` and `predicate_eq`/`predicate_not_eq` are built
-//!     directly as parser-AST restrictions, while `set_in`/`set_notin`,
-//!     `in_event` and `locking_<idx>` go through `parse_formula_str` on HS's
-//!     verbatim restriction text (as HS's own `toEx`/`parseRestriction` does).
+//!     `single_session`, state, predicate, event and locking restrictions are
+//!     built directly in the theory's internal formula representation.
 //!
 //! `baseRestr`'s selection logic itself lives in `translate`, which owns the
 //! process-shape predicates (`contains isLookup` etc.) it dispatches on.
 
 use std::collections::BTreeSet;
 
-use tamarin_term::lterm::{LNTerm, LVar};
-use tamarin_term::vterm::{Lit, VTerm};
+use tamarin_term::lterm::{LNTerm, LSort, LVar};
+use tamarin_term::vterm::{var_term, Lit};
 
-use tamarin_theory::sapic::{ProcessPosition, SapicAction, SapicLVar, SapicTerm};
+use tamarin_theory::atom::ProtoAtom;
+use tamarin_theory::formula::{
+    for_all_var, formula_frees, lift_free, ProtoFormula, SyntacticLNFormula,
+};
+use tamarin_theory::sapic::{to_lformula, ProcessPosition, SapicAction, SapicLVar, SapicTerm};
 
 use crate::annotation::ProcessAnnotation;
 use crate::facts::{
@@ -30,18 +32,17 @@ use crate::facts::{
 
 /// A single translation "rule body": `(prems, acts, concs, restr)`.
 /// HS `([TransFact],[TransAction],[TransFact],[SyntacticLNFormula])`; the
-/// 4th element carries the embedded restriction formulas (non-empty only for
-/// the `if <formula>` arms — `Cond`), as parser-AST formulas.
-pub type RuleBody = (
+/// 4th element carries the rule's embedded restriction formulas.
+pub(crate) type RuleBody = (
     Vec<TransFact>,
     Vec<TransAction>,
     Vec<TransFact>,
-    Vec<tamarin_parser::ast::Formula>,
+    Vec<SyntacticLNFormula>,
 );
 
 /// `baseTransNull` (Basetranslation.hs:81-82):
 ///   `[([State LState p tildex], [], [], [])]`
-pub fn base_trans_null(p: &ProcessPosition, tildex: &BTreeSet<LVar>) -> Vec<RuleBody> {
+pub(crate) fn base_trans_null(p: &ProcessPosition, tildex: &BTreeSet<LVar>) -> Vec<RuleBody> {
     let st = TransFact::State(
         StateKind::LState,
         p.clone(),
@@ -53,43 +54,16 @@ pub fn base_trans_null(p: &ProcessPosition, tildex: &BTreeSet<LVar>) -> Vec<Rule
 /// Type-erase: HS works over `LNTerm` (untyped) for the rule facts; the
 /// translation calls `toLNTerm` / `toLVar` on SAPIC terms.  Convert a typed
 /// SAPIC term to a plain `LNTerm` (drop the type tag).
-pub fn to_ln_term(t: &SapicTerm) -> LNTerm {
-    match t {
-        VTerm::Lit(Lit::Var(sv)) => VTerm::Lit(Lit::Var(sv.var)),
-        VTerm::Lit(Lit::Con(c)) => VTerm::Lit(Lit::Con(*c)),
-        VTerm::App(sym, args) => {
-            let new_args: Vec<LNTerm> = args.iter().map(to_ln_term).collect();
-            use tamarin_term::function_symbols::FunSym;
-            match sym {
-                FunSym::Ac(o) => tamarin_term::term::f_app_ac(*o, new_args),
-                FunSym::C(o) => tamarin_term::term::f_app_c(*o, new_args),
-                FunSym::NoEq(o) => tamarin_term::term::f_app_no_eq(*o, new_args),
-                FunSym::List => tamarin_term::term::f_app_list(new_args),
-            }
-        }
-    }
+pub(crate) fn to_ln_term(t: &SapicTerm) -> LNTerm {
+    tamarin_term::term::map_lits(t, &mut |lit| match lit {
+        Lit::Var(sv) => Lit::Var(sv.var),
+        Lit::Con(c) => Lit::Con(*c),
+    })
 }
 
 /// `toLNFact` over a SAPIC fact (drop type tags from every term).
-pub fn to_ln_fact(f: &tamarin_theory::sapic::SapicLNFact) -> tamarin_theory::fact::LNFact {
+pub(crate) fn to_ln_fact(f: &tamarin_theory::sapic::SapicLNFact) -> tamarin_theory::fact::LNFact {
     f.map_ref(to_ln_term)
-}
-
-/// Apply a SAPIC substitution to a SAPIC term. Shared by `inline` and
-/// `let_destructors` (both substitute SAPIC terms identically).
-pub(crate) fn subst_term(
-    subst: &tamarin_term::subst::Subst<tamarin_term::lterm::Name, SapicLVar>,
-    t: &SapicTerm,
-) -> SapicTerm {
-    tamarin_term::subst::apply_vterm(subst, t.clone())
-}
-
-/// Apply a SAPIC substitution to a SAPIC fact (tag + annotations preserved).
-pub(crate) fn subst_fact(
-    subst: &tamarin_term::subst::Subst<tamarin_term::lterm::Name, SapicLVar>,
-    f: &tamarin_theory::sapic::SapicLNFact,
-) -> tamarin_theory::sapic::SapicLNFact {
-    f.map_ref(|t| subst_term(subst, t))
 }
 
 /// `Data.List.union xs ys = xs ++ filter (`notElem` xs) (nub ys)`: keep `xs` in
@@ -114,15 +88,10 @@ pub(crate) fn list_intersect<T: PartialEq + Clone>(xs: &[T], ys: &[T]) -> Vec<T>
     xs.iter().filter(|x| ys.contains(x)).cloned().collect()
 }
 
-/// `toLVar v = slvar v`.
-pub fn to_lvar(v: &SapicLVar) -> LVar {
-    v.var
-}
-
 /// `baseTransAction` (Basetranslation.hs:94-205).  Returns the rule bodies and
 /// the updated `tildex`.  `needs_ass_immediate` is the `needsInEvRes` flag;
 /// when false, `Event` emits NO extra `EventEmpty` action.
-pub fn base_trans_action(
+pub(crate) fn base_trans_action(
     async_channels: bool,
     needs_ass_immediate: bool,
     ac: &SapicAction<SapicLVar>,
@@ -172,7 +141,7 @@ pub fn base_trans_action(
         // (New v): `tx' = toLVar v `insert` tildex`
         //   [([def_state, Fr (toLVar v)], [], [def_state' tx'], [])]
         SapicAction::New(v) => {
-            let lv = to_lvar(v);
+            let lv = v.to_lvar();
             let mut tx2 = tildex.clone();
             tx2.insert(lv);
             let body: RuleBody = (
@@ -210,9 +179,9 @@ pub fn base_trans_action(
         } => {
             // `x = evalFreshAvoiding (freshLVar "x" LSortMsg) tildex`.
             let x = fresh_msg_var_avoiding("x", tildex);
-            let xt: LNTerm = VTerm::Lit(Lit::Var(x));
+            let xt: LNTerm = var_term(x);
             // `xTerm = varTerm (SapicLVar { slvar = x, stype = Nothing })`.
-            let x_sapic: SapicTerm = VTerm::Lit(Lit::Var(SapicLVar::untyped(x)));
+            let x_sapic: SapicTerm = var_term(SapicLVar::untyped(x));
             // `(rules, tx', _) = baseTransComb (Let t' xTerm matchVar) (an {elseBranch=False}) p tildex`.
             let let_comb = tamarin_theory::sapic::ProcessCombinator::Let {
                 left: msg.clone(),
@@ -404,7 +373,7 @@ pub fn base_trans_action(
             let body: RuleBody = (
                 vec![
                     def_state(tildex),
-                    TransFact::CellLocked(lt1.clone(), VTerm::Lit(Lit::Var(v))),
+                    TransFact::CellLocked(lt1.clone(), var_term(v)),
                 ],
                 vec![],
                 vec![def_state_next(&tx2), TransFact::PureCell(lt1, lt2)],
@@ -425,19 +394,10 @@ pub fn base_trans_action(
             );
             Ok((vec![body], tildex.clone()))
         }
-        // (Lock _) | pureState -> silent passthrough.
+        // (Lock _) | pureState and (Unlock _) | pureState -> silent
+        // passthrough (Basetranslation.hs:170-174 gives both the same rule):
         //   [([def_state], [], [def_state' tildex], [])]
-        SapicAction::Lock(_) if an.pure_state => {
-            let body: RuleBody = (
-                vec![def_state(tildex)],
-                vec![],
-                vec![def_state_next(tildex)],
-                vec![],
-            );
-            Ok((vec![body], tildex.clone()))
-        }
-        // (Unlock _) | pureState -> silent passthrough.
-        SapicAction::Unlock(_) if an.pure_state => {
+        SapicAction::Lock(_) | SapicAction::Unlock(_) if an.pure_state => {
             let body: RuleBody = (
                 vec![def_state(tildex)],
                 vec![],
@@ -567,8 +527,10 @@ pub fn base_trans_action(
             // conclusions: def_state' tx' : map TamarinFact r
             let mut conc_facts: Vec<TransFact> = vec![def_state_next(&tx2)];
             conc_facts.extend(r.into_iter().map(TransFact::TamarinFact));
-            // restrictions: the embedded `_restrict` formulas (parser-AST).
-            let body: RuleBody = (prems_facts, act_facts, conc_facts, rest.clone());
+            // restrictions: `map toLFormula res'` (Theory/Sapic/Term.hs:152-154
+            // drops the type tags).
+            let restr: Vec<SyntacticLNFormula> = rest.iter().map(to_lformula).collect();
+            let body: RuleBody = (prems_facts, act_facts, conc_facts, restr);
             Ok((vec![body], tx2))
         }
     }
@@ -578,11 +540,11 @@ pub fn base_trans_action(
 /// — HS `TranslationResultComb` (Basetranslation.hs:51-51).  `tildex_r` is `None`
 /// when the combinator has no right child to translate (e.g. `let` without an
 /// else branch).
-pub type CombResult = (Vec<RuleBody>, BTreeSet<LVar>, Option<BTreeSet<LVar>>);
+pub(crate) type CombResult = (Vec<RuleBody>, BTreeSet<LVar>, Option<BTreeSet<LVar>>);
 
 /// `baseTransComb` (Basetranslation.hs:226-306): `Parallel`, `NDC`, `CondEq`,
 /// `Cond` (with a formula), `Lookup` and `Let`.
-pub fn base_trans_comb(
+pub(crate) fn base_trans_comb(
     c: &tamarin_theory::sapic::ProcessCombinator<SapicLVar>,
     an: &ProcessAnnotation<LVar>,
     p: &ProcessPosition,
@@ -637,10 +599,7 @@ pub fn base_trans_comb(
             // (untyped) Eq fact.
             let vars_f = fact_vars(&fa);
             if !vars_f.is_subset(tildex) {
-                let unbound: Vec<LVar> = vars_f.difference(tildex).copied().collect();
-                return Err(format!(
-                    "process not well-formed: unbound variables in conditional: {unbound:?}"
-                ));
+                return Err(wf_unbound(vars_f.difference(tildex).copied()));
             }
             let body_eq: RuleBody = (
                 vec![def_state(tildex)],
@@ -660,27 +619,23 @@ pub fn base_trans_comb(
                 Some(tildex.clone()),
             ))
         }
-        // Cond f (Basetranslation.hs:234-242):
+        // Cond f' (Basetranslation.hs:234-242):
+        //   f <- toLFormula f'
         //   let freevars_f = fromList (freesList f)
         //   if freevars_f ⊆ tildex then
         //     ([([def_state], [], [def_state1 tildex], [f]),
         //       ([def_state], [], [def_state2 tildex], [Not f])],
         //      tildex, Just tildex)
         //   else throw (WFUnbound (freevars_f \\ tildex))
-        // The formula is the parser-AST `Cond` payload; the embedded restriction
-        // flows through `lift_rule_restrictions` (HS `liftedAddProtoRule`).
         PC::Cond(f) => {
-            // `freesList f` as LVars (the formula's free message/timepoint vars),
-            // mapped to `LVar`s to compare against `tildex :: Set LVar`.
-            let freevars_f = formula_free_lvars(f);
+            let f = to_lformula(f);
+            // `fromList (freesList f)` — the formula's free message and
+            // timepoint variables, compared against `tildex :: Set LVar`.
+            let freevars_f: BTreeSet<LVar> = formula_frees(&f).into_iter().collect();
             if !freevars_f.is_subset(tildex) {
-                let unbound: Vec<LVar> = freevars_f.difference(tildex).copied().collect();
-                return Err(format!(
-                    "process not well-formed: unbound variables in conditional: {unbound:?}"
-                ));
+                return Err(wf_unbound(freevars_f.difference(tildex).copied()));
             }
             // then-arm carries `[f]`; else-arm carries `[Not f]`.
-            let not_f = tamarin_parser::ast::Formula::Not(Box::new(f.clone()));
             let body_then: RuleBody = (
                 vec![def_state(tildex)],
                 vec![],
@@ -691,7 +646,7 @@ pub fn base_trans_comb(
                 vec![def_state(tildex)],
                 vec![],
                 vec![def_state2(tildex)],
-                vec![not_f],
+                vec![f.not()],
             );
             Ok((
                 vec![body_then, body_else],
@@ -710,20 +665,20 @@ pub fn base_trans_comb(
         PC::Lookup(t, v) if an.pure_state && an.unlock.is_some() => {
             let vs = an.unlock.as_ref().unwrap().0;
             let lt = to_ln_term(t);
-            let lv = to_lvar(v);
+            let lv = v.to_lvar();
             let mut tx_prime = tildex.clone();
             tx_prime.insert(lv);
             tx_prime.insert(vs);
             let body: RuleBody = (
                 vec![
                     def_state(tildex),
-                    TransFact::PureCell(lt.clone(), VTerm::Lit(Lit::Var(lv))),
+                    TransFact::PureCell(lt.clone(), var_term(lv)),
                     TransFact::Fr(vs),
                 ],
                 vec![],
                 vec![
                     def_state1(&tx_prime),
-                    TransFact::CellLocked(lt, VTerm::Lit(Lit::Var(vs))),
+                    TransFact::CellLocked(lt, var_term(vs)),
                 ],
                 vec![],
             );
@@ -736,7 +691,7 @@ pub fn base_trans_comb(
         //    tx', Just tildex)
         PC::Lookup(t, v) => {
             let lt = to_ln_term(t);
-            let lv = to_lvar(v);
+            let lv = v.to_lvar();
             let mut tx_prime = tildex.clone();
             tx_prime.insert(lv);
             let body_in: RuleBody = (
@@ -792,8 +747,6 @@ pub fn base_trans_comb(
             // `tildexl = frees t1or ∪ tildex`
             let mut tildexl = tildex.clone();
             tildexl.extend(ln_term_vars(&t1or));
-            // `faN = ∀ freevars. ((t1 = t2) ⇒ ⊥)`
-            let fa_n = let_else_restriction(&t1, &t2, &freevars);
             // `pos = p ++ [1]`
             let pos = p1.clone();
             let body0: RuleBody = (
@@ -806,6 +759,10 @@ pub fn base_trans_comb(
                 )],
                 vec![],
             );
+            // The failure restriction is unused when no else rule is emitted.
+            let fa_n = an
+                .else_branch
+                .then(|| let_else_restriction(&t1, &t2, &freevars));
             let body1: RuleBody = (
                 vec![TransFact::FLet(
                     pos.clone(),
@@ -821,7 +778,7 @@ pub fn base_trans_comb(
                     vec![TransFact::FLet(pos, t2, tildex.iter().copied().collect())],
                     vec![],
                     vec![def_state2(tildex)],
-                    vec![fa_n],
+                    vec![fa_n.expect("else-branch restriction was built")],
                 );
                 Ok((vec![body0, body1, body2], tildexl, Some(tildex.clone())))
             } else {
@@ -866,7 +823,6 @@ fn merge_with_state_rule(
 /// variable index already present in `tildex`.  HS `avoid` = `maybe 0 (succ .
 /// snd) . boundsVarIdx` — i.e. (max index in `tildex`) + 1, or 0 if empty.
 fn fresh_msg_var_avoiding(name: &str, tildex: &BTreeSet<LVar>) -> LVar {
-    use tamarin_term::lterm::LSort;
     let idx = tildex
         .iter()
         .map(|v| v.idx)
@@ -882,51 +838,19 @@ pub(crate) fn ln_term_vars(t: &LNTerm) -> BTreeSet<LVar> {
 }
 
 /// The else-arm restriction for a kept `let` (Basetranslation.hs:261-263):
-///   `faN = fold (hinted forAll) ((t1 = t2) ⇒ ⊥) freevars`
-/// = `∀ freevars. ¬(t1 = t2)`, rendered as a parser-AST formula so it flows
-/// through the existing restriction pipeline (HS keeps it as the rule's 4th
-/// (restriction) component).  `freevars` are quantified, in sorted order.
-fn let_else_restriction(
-    t1: &LNTerm,
-    t2: &LNTerm,
-    freevars: &BTreeSet<LVar>,
-) -> tamarin_parser::ast::Formula {
-    use tamarin_parser::ast as p;
-    let eq = p::Formula::Atom(p::Atom::Eq(ln_term_to_parser(t1), ln_term_to_parser(t2)));
-    // `Conn Imp (Ato (EqE t1 t2)) (TF False)` = `(t1 = t2) ⇒ False`.
-    let body = p::Formula::Implies(Box::new(eq), Box::new(p::Formula::False));
-    if freevars.is_empty() {
-        body
-    } else {
-        let vs: Vec<p::VarSpec> = freevars
-            .iter()
-            .map(crate::convert::lvar_to_varspec)
-            .collect();
-        p::Formula::Forall(vs, Box::new(body))
-    }
-}
-
-/// `LNTerm` → parser-AST `Term`.  The SAPIC translation's restriction bodies
-/// and `if`-predicate conditions are parser-AST formulas, so they project their
-/// terms through the same lowering the theory printer uses — the one place that
-/// materialises HS `prettyTerm`'s special shapes (infix `exp`, right-spine
-/// `pair` split, infix AC chains, `LIST(…)`).
-pub(crate) use tamarin_theory::pretty_theory::lnterm_to_parser as ln_term_to_parser;
-
-/// `fromList (freesList f)` for a parser-AST formula — the formula's FREE
-/// variables (vars not bound by an enclosing quantifier), as `LVar`s for the
-/// WFUnbound `⊆ tildex` check (HS Basetranslation.hs:226-306, see line 236).  Quantifier-bound
-/// vars are excluded; the special timepoint vars carry the `Node` sort.
-fn formula_free_lvars(f: &tamarin_parser::ast::Formula) -> BTreeSet<LVar> {
-    let mut out = BTreeSet::new();
-    crate::convert::fold_free_vars(f, &mut |v, _bound| {
-        out.insert(LVar::new(
-            v.name.clone(),
-            crate::convert::sort_of_hint(&v.sort),
-            v.idx,
-        ));
-    });
-    out
+///   `fa  = Conn Imp (Ato (EqE (fmapTerm (fmap Free) t1) (fmapTerm (fmap Free) t2))) (TF False)`
+///   `faN = fold (hinted forAll) fa freevars`
+/// = `∀ freevars. ((t1 = t2) ⇒ ⊥)`.  `fold` is `Data.Set.fold` (the module
+/// imports `Data.Set` unqualified, Basetranslation.hs:36), which is `foldr`
+/// over the ascending set, so the SMALLEST free variable carries the
+/// OUTERMOST binder.  `hinted forAll` takes the binder hint from the variable
+/// (`hint (LVar n s _) = (n, s)`, Theory/Model/Formula.hs:227-228).
+fn let_else_restriction(t1: &LNTerm, t2: &LNTerm, freevars: &BTreeSet<LVar>) -> SyntacticLNFormula {
+    let eq = ProtoFormula::Atom(ProtoAtom::EqE(lift_free(t1), lift_free(t2)));
+    let fa = eq.implies(ProtoFormula::lfalse());
+    freevars.iter().rev().fold(fa, |body, v| {
+        for_all_var((v.name.to_string(), v.sort), v, body)
+    })
 }
 
 /// `toLNFact (protoFact Linear "Eq" [t1, t2])` (Basetranslation.hs:226-306, see line 244): build
@@ -945,11 +869,19 @@ fn fact_vars(f: &tamarin_theory::fact::LNFact) -> BTreeSet<LVar> {
         .collect()
 }
 
+/// `show (WFUnbound varset)` (Sapic/Exceptions.hs:106-111): `The variable(s)
+/// <vars> are not bound.`, the variables comma-joined in set order
+/// (`prettyVarSet`, Sapic/Exceptions.hs:84-85).
+fn wf_unbound(vars: impl Iterator<Item = LVar>) -> String {
+    let vars: Vec<String> = vars.map(|v| v.to_string()).collect();
+    format!("The variable(s) {} are not bound.", vars.join(", "))
+}
+
 /// `baseInit` (Basetranslation.hs:312-318): the `Init` rule plus the empty
 /// initial `tildex`.
 ///   `[AnnotatedRule (Just "Init") anP (Right InitPosition) [] [InitEmpty]
 ///       [State LState [] empty] [] 0]`
-pub fn base_init(
+pub(crate) fn base_init(
     an_proc: &tamarin_theory::sapic::Process<ProcessAnnotation<LVar>, SapicLVar>,
 ) -> (Vec<AnnotatedRule<ProcessAnnotation<LVar>>>, BTreeSet<LVar>) {
     let rule = AnnotatedRule {
@@ -966,129 +898,53 @@ pub fn base_init(
 }
 
 // =============================================================================
-// baseRestr — the always-on `single_session` restriction (Basetranslation.hs)
+// baseRestr — the hard-coded restrictions (Basetranslation.hs)
 // =============================================================================
 
-/// The hardcoded text of `resSingleSession` (Basetranslation.hs:361-364).
-///
-/// HS parses this string with `parseRestriction` (`toEx`).  We instead build
-/// the restriction directly as a parser-AST [`tamarin_parser::ast::Restriction`]
-/// so it flows through the existing restriction renderer / solver, which is
-/// what `translate` injects into the theory.  The rendered output is
-/// byte-identical to what HS emits for `restriction single_session`.
-pub fn single_session_restriction() -> tamarin_parser::ast::Restriction {
-    use tamarin_parser::ast as p;
-    // Formula: ∀ #i #j. ((Init( ) @ #i) ∧ (Init( ) @ #j)) ⇒ (#i = #j)
-    //   = All #i #j. Init()@i & Init()@j ==> #i=#j
-    let tvar = |name: &str| p::VarSpec {
-        name: name.into(),
-        idx: 0,
-        sort: p::SortHint::Node,
-        typ: None,
-    };
-    let init_at = |tv: &str| -> p::Formula {
-        p::Formula::Atom(p::Atom::Action(
-            p::Fact {
-                persistent: false,
-                name: "Init".into(),
-                args: vec![],
-                annotations: vec![],
-            },
-            p::Term::Var(tvar(tv)),
-        ))
-    };
-    let body = p::Formula::Implies(
-        Box::new(p::Formula::And(
-            Box::new(init_at("i")),
-            Box::new(init_at("j")),
-        )),
-        Box::new(p::Formula::Atom(p::Atom::Eq(
-            p::Term::Var(tvar("i")),
-            p::Term::Var(tvar("j")),
-        ))),
-    );
-    let formula = p::Formula::Forall(vec![tvar("i"), tvar("j")], Box::new(body));
-    p::Restriction {
-        name: "single_session".to_string(),
-        formula,
-        attributes: vec![],
-    }
+/// The `single_session` restriction `resSingleSession`
+/// (Basetranslation.hs:361-364), one of the hard-coded restrictions
+/// `baseRestr` assembles (Basetranslation.hs:449-479, see line 459).  The
+/// formula body is HS's hardcoded formula.
+pub(crate) fn single_session_restriction() -> tamarin_theory::restriction::Restriction {
+    use crate::restriction_builder as rb;
+    let i = rb::node("i");
+    let j = rb::node("j");
+    rb::restriction(
+        "single_session",
+        rb::all(
+            &[i, j],
+            rb::action("Init", &[], i)
+                .and(rb::action("Init", &[], j))
+                .implies(rb::eq(i, j)),
+        ),
+    )
 }
 
-/// The two conditional-equality restrictions `predicate_eq` / `predicate_not_eq`
+/// The two conditional-equality restrictions `resEq` / `resNotEq`
 /// (Basetranslation.hs:427-436), added by `baseRestr` when the process
-/// `contains isEq` (a `CondEq` combinator).  As with `single_session`, we build
-/// them as parser-AST [`tamarin_parser::ast::Restriction`] so they render
-/// byte-identically to HS's hand-written strings:
-///   `predicate_eq:      "All #i a b. Pred_Eq(a,b)@i ==> a = b"`
-///   `predicate_not_eq:  "All #i a b. Pred_Not_Eq(a,b)@i ==> not(a = b)"`
-pub fn predicate_restrictions() -> Vec<tamarin_parser::ast::Restriction> {
-    use tamarin_parser::ast as p;
-    // `#i` is a node (timepoint) variable; `a`, `b` are message variables.
-    let tvar = |name: &str| p::VarSpec {
-        name: name.into(),
-        idx: 0,
-        sort: p::SortHint::Node,
-        typ: None,
-    };
-    let mvar = |name: &str| p::VarSpec {
-        name: name.into(),
-        idx: 0,
-        sort: p::SortHint::Untagged,
-        typ: None,
-    };
-    let pred_at = |pname: &str| -> p::Formula {
-        p::Formula::Atom(p::Atom::Action(
-            p::Fact {
-                persistent: false,
-                name: pname.into(),
-                args: vec![p::Term::Var(mvar("a")), p::Term::Var(mvar("b"))],
-                annotations: vec![],
-            },
-            p::Term::Var(tvar("i")),
-        ))
-    };
-    let eq_atom = p::Formula::Atom(p::Atom::Eq(
-        p::Term::Var(mvar("a")),
-        p::Term::Var(mvar("b")),
-    ));
-
-    // predicate_eq: All #i a b. Pred_Eq(a,b)@i ==> a = b
-    let eq_body = p::Formula::Implies(Box::new(pred_at("Pred_Eq")), Box::new(eq_atom.clone()));
-    let eq_formula = p::Formula::Forall(vec![tvar("i"), mvar("a"), mvar("b")], Box::new(eq_body));
-    let predicate_eq = p::Restriction {
-        name: "predicate_eq".to_string(),
-        formula: eq_formula,
-        attributes: vec![],
-    };
-
-    // predicate_not_eq: All #i a b. Pred_Not_Eq(a,b)@i ==> not(a = b)
-    let neq_body = p::Formula::Implies(
-        Box::new(pred_at("Pred_Not_Eq")),
-        Box::new(p::Formula::Not(Box::new(eq_atom))),
-    );
-    let neq_formula = p::Formula::Forall(vec![tvar("i"), mvar("a"), mvar("b")], Box::new(neq_body));
-    let predicate_not_eq = p::Restriction {
-        name: "predicate_not_eq".to_string(),
-        formula: neq_formula,
-        attributes: vec![],
-    };
-
-    vec![predicate_eq, predicate_not_eq]
-}
-
-/// Parse one of the hard-coded restriction strings (`parseRestriction`'s job in
-/// HS) and wrap it in a named `Restriction`.  Shared by all four hard-coded
-/// restriction builders so the parse+panic+wrap shape lives in one place.
-fn parse_restriction(name: &str, src: &str) -> tamarin_parser::ast::Restriction {
-    use tamarin_parser::ast as p;
-    let formula = tamarin_parser::parser::parse_formula_str(src)
-        .unwrap_or_else(|e| panic!("Error parsing hard-coded restriction {name}: {e:?}"));
-    p::Restriction {
-        name: name.to_string(),
-        formula,
-        attributes: vec![],
-    }
+/// `contains isEq` (a `CondEq` combinator).  The formula bodies are HS's
+/// hardcoded strings, parsed as HS's `toEx`/`parseRestriction` parses them.
+pub(crate) fn predicate_restrictions() -> Vec<tamarin_theory::restriction::Restriction> {
+    use crate::restriction_builder as rb;
+    let i = rb::node("i");
+    let a = rb::msg("a");
+    let b = rb::msg("b");
+    vec![
+        rb::restriction(
+            "predicate_eq",
+            rb::all(
+                &[i, a, b],
+                rb::action("Pred_Eq", &[a, b], i).implies(rb::eq(a, b)),
+            ),
+        ),
+        rb::restriction(
+            "predicate_not_eq",
+            rb::all(
+                &[i, a, b],
+                rb::action("Pred_Not_Eq", &[a, b], i).implies(rb::eq(a, b).not()),
+            ),
+        ),
+    ]
 }
 
 /// The `set_in` / `set_notin` restrictions (Basetranslation.hs:332-359), added
@@ -1098,38 +954,66 @@ fn parse_restriction(name: &str, src: &str) -> tamarin_parser::ast::Restriction 
 /// byte-identical to HS's hand-written strings, and AC/sort handling matches the
 /// parser path).  `has_delete` selects the full variants (the process also
 /// `contains isDelete`) over the NoDelete variants.
-pub fn state_restrictions(has_delete: bool) -> Vec<tamarin_parser::ast::Restriction> {
-    // `parseRestriction`'s formula body, verbatim from Basetranslation.hs.
-    let (set_in_src, set_notin_src) = if has_delete {
-        (
-            // resSetIn (Basetranslation.hs:333-338)
-            "All x y #t3 . IsIn(x,y)@t3 ==>\n\
-             (Ex #t2 . Insert(x,y)@t2 & #t2<#t3\n\
-             & ( All #t1 . Delete(x)@t1 ==> (#t1<#t2 |  #t3<#t1))\n\
-             & ( All #t1 yp . Insert(x,yp)@t1 ==> (#t1<#t2 | #t1=#t2 | #t3<#t1))\n\
-             )",
-            // resSetNotIn (Basetranslation.hs:341-345)
-            "All x #t3 . IsNotSet(x)@t3 ==>\n\
-             (All #t1 y . Insert(x,y)@t1 ==>  #t3<#t1 )\n\
-             | ( Ex #t1 .   Delete(x)@t1 & #t1<#t3\n\
-             &  (All #t2 y . Insert(x,y)@t2 & #t2<#t3 ==>  #t2<#t1))",
-        )
+pub(crate) fn state_restrictions(
+    has_delete: bool,
+) -> Vec<tamarin_theory::restriction::Restriction> {
+    use crate::restriction_builder as rb;
+    let x = rb::msg("x");
+    let y = rb::msg("y");
+    let yp = rb::msg("yp");
+    let t1 = rb::node("t1");
+    let t2 = rb::node("t2");
+    let t3 = rb::node("t3");
+
+    let later_insert = rb::all(
+        &[t1, yp],
+        rb::action("Insert", &[x, yp], t1)
+            .implies(rb::less(t1, t2).or(rb::eq(t1, t2)).or(rb::less(t3, t1))),
+    );
+    let mut set_in_body = rb::action("Insert", &[x, y], t2).and(rb::less(t2, t3));
+    if has_delete {
+        set_in_body = set_in_body.and(rb::all(
+            &[t1],
+            rb::action("Delete", &[x], t1).implies(rb::less(t1, t2).or(rb::less(t3, t1))),
+        ));
+    }
+    set_in_body = set_in_body.and(later_insert);
+    let set_in = rb::restriction(
+        "set_in",
+        rb::all(
+            &[x, y, t3],
+            rb::action("IsIn", &[x, y], t3).implies(rb::exists(&[t2], set_in_body)),
+        ),
+    );
+
+    let future_insert = rb::all(
+        &[t1, y],
+        rb::action("Insert", &[x, y], t1).implies(rb::less(t3, t1)),
+    );
+    let set_notin_body = if has_delete {
+        future_insert.or(rb::exists(
+            &[t1],
+            rb::action("Delete", &[x], t1)
+                .and(rb::less(t1, t3))
+                .and(rb::all(
+                    &[t2, y],
+                    rb::action("Insert", &[x, y], t2)
+                        .and(rb::less(t2, t3))
+                        .implies(rb::less(t2, t1)),
+                )),
+        ))
     } else {
-        (
-            // resSetInNoDelete (Basetranslation.hs:349-353)
-            "All x y #t3 . IsIn(x,y)@t3 ==>\n\
-             (Ex #t2 . Insert(x,y)@t2 & #t2<#t3\n\
-             & ( All #t1 yp . Insert(x,yp)@t1 ==> (#t1<#t2 | #t1=#t2 | #t3<#t1))\n\
-             )",
-            // resSetNotInNoDelete (Basetranslation.hs:356-358)
-            "All x #t3 . IsNotSet(x)@t3 ==>\n\
-             (All #t1 y . Insert(x,y)@t1 ==>  #t3<#t1 )",
-        )
+        future_insert
     };
-    vec![
-        parse_restriction("set_in", set_in_src),
-        parse_restriction("set_notin", set_notin_src),
-    ]
+    let set_notin = rb::restriction(
+        "set_notin",
+        rb::all(
+            &[x, t3],
+            rb::action("IsNotSet", &[x], t3).implies(set_notin_body),
+        ),
+    );
+
+    vec![set_in, set_notin]
 }
 
 /// The `in_event` restriction `resInEv` (Basetranslation.hs:439-444), added by
@@ -1137,98 +1021,94 @@ pub fn state_restrictions(has_delete: bool) -> Vec<tamarin_parser::ast::Restrict
 /// the other hardcoded restrictions, HS parses the string with
 /// `parseRestriction`; we parse the same formula body so the rendered output is
 /// byte-identical to HS.
-pub fn in_event_restriction() -> tamarin_parser::ast::Restriction {
-    let src = "All x #t3. ChannelIn(x)@t3 ==> (Ex #t2. K(x)@t2 & #t2 < #t3\n\
-               & (All #t1. Event()@t1  ==> #t1 < #t2 | #t3 < #t1)\n\
-               & (All #t1 xp. K(xp)@t1 ==> #t1 < #t2 | #t1 = #t2 | #t3 < #t1))";
-    parse_restriction("in_event", src)
+pub(crate) fn in_event_restriction() -> tamarin_theory::restriction::Restriction {
+    use crate::restriction_builder as rb;
+    let x = rb::msg("x");
+    let xp = rb::msg("xp");
+    let t1 = rb::node("t1");
+    let t2 = rb::node("t2");
+    let t3 = rb::node("t3");
+    let rhs = rb::action("K", &[x], t2)
+        .and(rb::less(t2, t3))
+        .and(rb::all(
+            &[t1],
+            rb::action("Event", &[], t1).implies(rb::less(t1, t2).or(rb::less(t3, t1))),
+        ))
+        .and(rb::all(
+            &[t1, xp],
+            rb::action("K", &[xp], t1)
+                .implies(rb::less(t1, t2).or(rb::eq(t1, t2)).or(rb::less(t3, t1))),
+        ));
+    rb::restriction(
+        "in_event",
+        rb::all(
+            &[x, t3],
+            rb::action("ChannelIn", &[x], t3).implies(rb::exists(&[t2], rhs)),
+        ),
+    )
 }
 
 // =============================================================================
-// resLocking / resLockingPure (Basetranslation.hs:366-425)
+// resLocking (Basetranslation.hs:366-425)
 // =============================================================================
 
 /// `resLockingPOS` (Basetranslation.hs:368-376): the per-lock locking
 /// restriction.  `LockPOS`/`UnlockPOS` are placeholder fact names that
 /// `resLocking` rewrites to `Lock_<idx>`/`Unlock_<idx>` for the given lock var.
-const RES_LOCKING_POS: &str = "All p pp l x lp #t1 #t3. LockPOS(p, l, x)@t1 & Lock(pp, lp, x)@t3 ==>\n\
-        (#t1<#t3 & (Ex #t2. UnlockPOS(p, l, x)@t2 & #t1 < #t2 & #t2 < #t3\n\
-                   & (All #t0 pp. Unlock(pp, l, x)@t0 ==> #t0 = #t2)\n\
-                   & (All pp lpp #t0. Lock(pp, lpp, x)@t0 ==> #t0 < #t1 | #t0 = #t1 | #t2 < #t0)\n\
-                   & (All pp lpp #t0. Unlock(pp, lpp, x)@t0 ==> #t0 < #t1 | #t2 < #t0 | #t2 = #t0 )))\n\
-      | #t3<#t1 | #t1=#t3";
-
-/// `resLockingPOSNoUnlock` (Basetranslation.hs:379-383): the locking
-/// restriction for a lock with no matching unlock.
-const RES_LOCKING_POS_NO_UNLOCK: &str =
-    "All p pp l x lp #t1 #t3. LockPOS(p, l, x)@t1 & Lock(pp, lp, x)@t3 ==>\n\
-        #t3<#t1 | #t1=#t3";
-
 /// `resLocking hasUnlock v` (Basetranslation.hs:406-425): produce the
-/// `locking_<idx v>` restriction by parsing `resLockingPOS` (or the NoUnlock
-/// variant) and rewriting the `LockPOS`/`UnlockPOS` action facts to
-/// `Lock_<idx>`/`Unlock_<idx>` (HS `mapAtoms subst`, with
+/// `locking_<idx v>` restriction with `Lock_<idx>`/`Unlock_<idx>` action facts
+/// (HS `mapAtoms subst`, with
 /// `hardcode s = s ++ "_" ++ show (lvarIdx v)`).
-pub fn res_locking(has_unlock: bool, v: &LVar) -> tamarin_parser::ast::Restriction {
-    let src = if has_unlock {
-        RES_LOCKING_POS
-    } else {
-        RES_LOCKING_POS_NO_UNLOCK
-    };
+pub(crate) fn res_locking(has_unlock: bool, v: &LVar) -> tamarin_theory::restriction::Restriction {
+    use crate::restriction_builder as rb;
     let idx = v.idx;
-    let mut restr = parse_restriction(&format!("locking_{idx}"), src);
-    rename_lock_pos_atoms(&mut restr.formula, idx);
-    restr
-}
+    let p = rb::msg("p");
+    let pp = rb::msg("pp");
+    let l = rb::msg("l");
+    let lpp = rb::msg("lpp");
+    let x = rb::msg("x");
+    let lp = rb::msg("lp");
+    let t0 = rb::node("t0");
+    let t1 = rb::node("t1");
+    let t2 = rb::node("t2");
+    let t3 = rb::node("t3");
+    let lock_pos = format!("Lock_{idx}");
+    let unlock_pos = format!("Unlock_{idx}");
 
-/// HS `subst` inside `resLocking` (Basetranslation.hs:414-422): rewrite the
-/// `LockPOS` 3-ary action fact name to `Lock_<idx>` and `UnlockPOS` to
-/// `Unlock_<idx>`.  Non-POS `Lock`/`Unlock` facts are left untouched.
-fn rename_lock_pos_atoms(f: &mut tamarin_parser::ast::Formula, idx: u64) {
-    use tamarin_parser::ast as p;
-    fn walk_atom(a: &mut p::Atom, idx: u64) {
-        if let p::Atom::Action(fact, _) = a {
-            if fact.name == "LockPOS" && fact.args.len() == 3 {
-                fact.name = format!("Lock_{idx}");
-            } else if fact.name == "UnlockPOS" && fact.args.len() == 3 {
-                fact.name = format!("Unlock_{idx}");
-            }
-        }
-    }
-    fn walk(f: &mut p::Formula, idx: u64) {
-        use p::Formula::*;
-        match f {
-            True | False => {}
-            Atom(a) => walk_atom(a, idx),
-            Not(g) => walk(g, idx),
-            And(a, b) | Or(a, b) | Implies(a, b) | Iff(a, b) => {
-                walk(a, idx);
-                walk(b, idx);
-            }
-            Forall(_, body) | Exists(_, body) => walk(body, idx),
-        }
-    }
-    walk(f, idx);
-}
-
-/// `resLockingPure` (Basetranslation.hs:388-402): the `locking1`/`locking2`
-/// restriction pair for the pure-state (state-channel-optimisation) case.
-///
-/// Upstream EXPORTS this but never calls it — `baseRestr` builds only the
-/// per-lock `resLocking` restrictions — so nothing reaches it here either.
-/// Kept as a faithful port so wiring it stays a one-line change if upstream
-/// ever does.
-pub fn res_locking_pure() -> Vec<tamarin_parser::ast::Restriction> {
-    let locking1 = "All p l x #t1 pp lp #t2 #t3 . Lock(p,l,x)@t1 &  Lock(pp,lp,x)@t2\n\
-                     & Unlock(p,l,x)@t3 & not(#t1=#t2)\n\
-                   ==> (t2 < t1) | (t3 < t2)";
-    let locking2 = "All p l x #t1 pp lp #t2 #t3 . Lock(p,l,x)@t1 &  Unlock(pp,lp,x)@t2\n\
-           & Unlock(p,l,x)@t3 & not(#t2=#t3)\n\
-           ==> (t3 < t2) | (t2 < t1)";
-    vec![
-        parse_restriction("locking1", locking1),
-        parse_restriction("locking2", locking2),
-    ]
+    let rhs = if has_unlock {
+        let between = rb::action(&unlock_pos, &[p, l, x], t2)
+            .and(rb::less(t1, t2))
+            .and(rb::less(t2, t3))
+            .and(rb::all(
+                &[t0, pp],
+                rb::action("Unlock", &[pp, l, x], t0).implies(rb::eq(t0, t2)),
+            ))
+            .and(rb::all(
+                &[pp, lpp, t0],
+                rb::action("Lock", &[pp, lpp, x], t0)
+                    .implies(rb::less(t0, t1).or(rb::eq(t0, t1)).or(rb::less(t2, t0))),
+            ))
+            .and(rb::all(
+                &[pp, lpp, t0],
+                rb::action("Unlock", &[pp, lpp, x], t0)
+                    .implies(rb::less(t0, t1).or(rb::less(t2, t0)).or(rb::eq(t2, t0))),
+            ));
+        rb::less(t1, t3)
+            .and(rb::exists(&[t2], between))
+            .or(rb::less(t3, t1))
+            .or(rb::eq(t1, t3))
+    } else {
+        rb::less(t3, t1).or(rb::eq(t1, t3))
+    };
+    rb::restriction(
+        format!("locking_{idx}"),
+        rb::all(
+            &[p, pp, l, x, lp, t1, t3],
+            rb::action(&lock_pos, &[p, l, x], t1)
+                .and(rb::action("Lock", &[pp, lp, x], t3))
+                .implies(rhs),
+        ),
+    )
 }
 
 #[cfg(test)]
@@ -1241,7 +1121,135 @@ mod tests {
         LVar::new(name, LSort::Msg, idx)
     }
     fn svar(name: &str) -> SapicTerm {
-        VTerm::Lit(Lit::Var(SapicLVar::untyped(lv(name, 0))))
+        var_term(SapicLVar::untyped(lv(name, 0)))
+    }
+
+    /// The hard-coded restriction strings lower to the internal formulas the
+    /// oracle prints (pinned build ef3f0468; `restriction single_session` /
+    /// `predicate_eq` / `predicate_not_eq` blocks of any translated theory).
+    /// The unsigiled `@i` references must resolve to the node variables the
+    /// `All #i` binders introduce.
+    #[test]
+    fn hardcoded_restrictions_lower_to_the_oracle_formulas() {
+        use tamarin_theory::pretty_formula::pretty_lnformula;
+        let pretty = |r: &tamarin_theory::restriction::Restriction| pretty_lnformula(&r.formula);
+        assert_eq!(
+            pretty(&single_session_restriction()),
+            "\u{2200} #i #j. ((Init( ) @ #i) \u{2227} (Init( ) @ #j)) \u{21d2} (#i = #j)"
+        );
+        let preds = predicate_restrictions();
+        assert_eq!(
+            preds
+                .iter()
+                .map(|r| (r.name.as_str(), pretty(r)))
+                .collect::<Vec<_>>(),
+            [
+                (
+                    "predicate_eq",
+                    "\u{2200} #i a b. (Pred_Eq( a, b ) @ #i) \u{21d2} (a = b)".to_string()
+                ),
+                (
+                    "predicate_not_eq",
+                    "\u{2200} #i a b. (Pred_Not_Eq( a, b ) @ #i) \u{21d2} (\u{ac}(a = b))"
+                        .to_string()
+                ),
+            ]
+        );
+    }
+
+    /// The direct internal builders preserve the exact formula trees produced
+    /// by the former hard-coded-string -> parser AST -> internal formula path.
+    /// This pins connective associativity, quantifier order and the shadowed
+    /// binders in the state and locking restrictions.
+    #[test]
+    fn direct_restriction_builders_match_previous_parser_lowering() {
+        use tamarin_theory::formula::{from_parser, to_lnformula, LNFormula};
+
+        let msig = tamarin_term::maude_sig::pair_maude_sig();
+        let lower = |src: &str| -> LNFormula {
+            let parsed = tamarin_parser::parser::parse_formula_str(src, &msig)
+                .expect("former hard-coded restriction parses");
+            to_lnformula(&from_parser(&parsed, &msig).expect("restriction lowers"))
+                .expect("hard-coded restriction contains no predicate sugar")
+        };
+        let same = |restriction: tamarin_theory::restriction::Restriction, src: &str| {
+            assert_eq!(restriction.formula, lower(src), "{}", restriction.name);
+        };
+
+        same(
+            single_session_restriction(),
+            "All #i #j. Init()@i & Init()@j ==> #i=#j",
+        );
+        let predicates = predicate_restrictions();
+        assert_eq!(
+            predicates[0].formula,
+            lower("All #i a b. Pred_Eq(a,b)@i ==> a = b")
+        );
+        assert_eq!(
+            predicates[1].formula,
+            lower("All #i a b. Pred_Not_Eq(a,b)@i ==> not(a = b)")
+        );
+
+        let with_delete = state_restrictions(true);
+        assert_eq!(
+            with_delete[0].formula,
+            lower(
+                "All x y #t3 . IsIn(x,y)@t3 ==>\n\
+                 (Ex #t2 . Insert(x,y)@t2 & #t2<#t3\n\
+                 & ( All #t1 . Delete(x)@t1 ==> (#t1<#t2 | #t3<#t1))\n\
+                 & ( All #t1 yp . Insert(x,yp)@t1 ==> (#t1<#t2 | #t1=#t2 | #t3<#t1))\n\
+                 )"
+            )
+        );
+        assert_eq!(
+            with_delete[1].formula,
+            lower(
+                "All x #t3 . IsNotSet(x)@t3 ==>\n\
+                 (All #t1 y . Insert(x,y)@t1 ==> #t3<#t1)\n\
+                 | (Ex #t1 . Delete(x)@t1 & #t1<#t3\n\
+                 & (All #t2 y . Insert(x,y)@t2 & #t2<#t3 ==> #t2<#t1))"
+            )
+        );
+
+        let without_delete = state_restrictions(false);
+        assert_eq!(
+            without_delete[0].formula,
+            lower(
+                "All x y #t3 . IsIn(x,y)@t3 ==>\n\
+                 (Ex #t2 . Insert(x,y)@t2 & #t2<#t3\n\
+                 & (All #t1 yp . Insert(x,yp)@t1 ==> (#t1<#t2 | #t1=#t2 | #t3<#t1)))"
+            )
+        );
+        assert_eq!(
+            without_delete[1].formula,
+            lower(
+                "All x #t3 . IsNotSet(x)@t3 ==>\n\
+                 (All #t1 y . Insert(x,y)@t1 ==> #t3<#t1)"
+            )
+        );
+
+        same(
+            in_event_restriction(),
+            "All x #t3. ChannelIn(x)@t3 ==> (Ex #t2. K(x)@t2 & #t2 < #t3\n\
+             & (All #t1. Event()@t1 ==> #t1 < #t2 | #t3 < #t1)\n\
+             & (All #t1 xp. K(xp)@t1 ==> #t1 < #t2 | #t1 = #t2 | #t3 < #t1))",
+        );
+
+        let lock = LVar::new("lock", LSort::Msg, 7);
+        same(
+            res_locking(true, &lock),
+            "All p pp l x lp #t1 #t3. Lock_7(p, l, x)@t1 & Lock(pp, lp, x)@t3 ==>\n\
+             (#t1<#t3 & (Ex #t2. Unlock_7(p, l, x)@t2 & #t1 < #t2 & #t2 < #t3\n\
+             & (All #t0 pp. Unlock(pp, l, x)@t0 ==> #t0 = #t2)\n\
+             & (All pp lpp #t0. Lock(pp, lpp, x)@t0 ==> #t0 < #t1 | #t0 = #t1 | #t2 < #t0)\n\
+             & (All pp lpp #t0. Unlock(pp, lpp, x)@t0 ==> #t0 < #t1 | #t2 < #t0 | #t2 = #t0)))\n\
+             | #t3<#t1 | #t1=#t3",
+        );
+        same(
+            res_locking(false, &lock),
+            "All p pp l x lp #t1 #t3. Lock_7(p, l, x)@t1 & Lock(pp, lp, x)@t3 ==>\n\
+             #t3<#t1 | #t1=#t3",
+        );
     }
 
     #[test]
@@ -1360,62 +1368,138 @@ mod tests {
     /// `process="if Eq( nil, k.1 )"`.
     #[test]
     fn cond_nullary_constant_is_not_an_unbound_var() {
-        use tamarin_parser::ast as p;
-
-        let leaf = |name: &str| {
-            p::Term::Var(p::VarSpec {
-                typ: None,
-                name: name.into(),
-                sort: p::SortHint::Untagged,
-                idx: 0,
-            })
+        let cond = |decl: &str| {
+            let thy =
+                tamarin_parser::parse_theory(&format!("theory T begin\n{decl}\nend"), &[]).unwrap();
+            let msig = tamarin_theory::elaborate::elaborate(&thy)
+                .unwrap()
+                .signature;
+            // `Eq(nil, k)` — the predicate atom the surface `if Eq(nil, k)`
+            // parses to.
+            let f = tamarin_parser::parser::parse_formula_str("Eq(nil, k)", &msig).unwrap();
+            ProcessCombinator::Cond(tamarin_theory::formula::sapic_from_parser(&f, &msig).unwrap())
         };
-        // `Eq(nil, k)` — the predicate atom the surface `if Eq(nil, k)` parses to.
-        let f = p::Formula::Atom(p::Atom::Pred(p::Fact {
-            persistent: false,
-            name: "Eq".into(),
-            args: vec![leaf("nil"), leaf("k")],
-            annotations: Vec::new(),
-        }));
-        let c = ProcessCombinator::Cond(f);
         let an = ProcessAnnotation::<LVar>::empty();
         let pos: Vec<i64> = vec![];
         // tildex binds only `k`.
         let mut tx = BTreeSet::new();
         tx.insert(lv("k", 0));
 
-        // Without the theory's 0-arity set installed `nil` is an ordinary
-        // variable and is (correctly) unbound — this is what makes the
-        // assertion below discriminating.
-        {
-            let empty = tamarin_parser::parse_theory("theory T begin end", &[]).unwrap();
-            let _guard = tamarin_theory::elaborate::set_user_funs_for_theory(&empty);
-            let err = base_trans_comb(&c, &an, &pos, &tx).unwrap_err();
-            assert!(
-                err.contains("nil"),
-                "expected WFUnbound over nil, got {err}"
-            );
-        }
+        // Undeclared, `nil` is an ordinary variable and is (correctly)
+        // unbound — this is what makes the assertion below discriminating.
+        let err = base_trans_comb(&cond(""), &an, &pos, &tx).unwrap_err();
+        assert!(
+            err.contains("nil"),
+            "expected WFUnbound over nil, got {err}"
+        );
 
-        let theory =
-            tamarin_parser::parse_theory("theory T begin functions: nil/0 end", &[]).unwrap();
-        let _guard = tamarin_theory::elaborate::set_user_funs_for_theory(&theory);
-        let (bodies, txl, txr) = base_trans_comb(&c, &an, &pos, &tx).unwrap();
+        let (bodies, txl, txr) =
+            base_trans_comb(&cond("functions: nil/0"), &an, &pos, &tx).unwrap();
         assert_eq!(bodies.len(), 2);
         assert_eq!(txl, tx);
         assert_eq!(txr, Some(tx));
     }
 
-    // User-`[AC]` symbols must lower INFIX (`BinOp::AcFct`, left-folded), as
-    // HS `prettyTerm` renders them (Term/Term.hs:305): a prefix
-    // `App("add", …)` here reaches emitted bytes un-canonicalized via
-    // `subst_cond_formula` → `pretty_sapic_comb` (SAPIC `if` predicates),
-    // diverging from the oracle in both the rendered predicate and the
-    // derived rule/restriction names.  No corpus theory combines SAPIC with a
-    // user `[AC]` symbol, so this shape is only pinned here.
+    /// `faN = fold (hinted forAll) fa freevars` (Basetranslation.hs:261-263).
+    /// `fold` is `Data.Set.fold` = `foldr` over the ASCENDING set, so the
+    /// smallest free variable is the last binder applied and therefore the
+    /// OUTERMOST one, while the largest sits next to the body and carries De
+    /// Bruijn index 0.
     #[test]
-    fn user_ac_terms_lower_infix() {
+    fn let_else_restriction_binds_the_smallest_free_variable_outermost() {
+        use tamarin_term::function_symbols::{Constructability, NoEqSym, Privacy};
+        use tamarin_term::lterm::BVar;
+        use tamarin_term::term::f_app_no_eq;
+        use tamarin_theory::formula::{Connective, Quantifier};
+
+        let x = lv("x", 0);
+        let y = lv("y", 0);
+        let pair = NoEqSym::new(
+            b"pair".to_vec(),
+            2,
+            Privacy::Public,
+            Constructability::Constructor,
+        );
+        // `<y, x>`: the two variables occur in the order that is NOT the set
+        // order, so the assertion below reads the binder depth and not the
+        // argument position.
+        let t1: LNTerm = f_app_no_eq(pair, vec![var_term(y), var_term(x)]);
+        let t2: LNTerm = tamarin_term::lterm::pub_term("c");
+        let fv: BTreeSet<LVar> = [x, y].into_iter().collect();
+
+        let f = let_else_restriction(&t1, &t2, &fv);
+
+        let ProtoFormula::Qua(Quantifier::All, outer, body) = &f else {
+            panic!("expected a universal binder, got {f:?}");
+        };
+        assert_eq!(outer, &("x".to_string(), LSort::Msg));
+        let ProtoFormula::Qua(Quantifier::All, inner, body) = body.as_ref() else {
+            panic!("expected a second universal binder, got {body:?}");
+        };
+        assert_eq!(inner, &("y".to_string(), LSort::Msg));
+        let ProtoFormula::Conn(Connective::Imp, lhs, rhs) = body.as_ref() else {
+            panic!("expected `(t1 = t2) ⇒ ⊥`, got {body:?}");
+        };
+        assert_eq!(**rhs, ProtoFormula::lfalse());
+        let ProtoFormula::Atom(ProtoAtom::EqE(a, b)) = lhs.as_ref() else {
+            panic!("expected the equality atom, got {lhs:?}");
+        };
+        // `y` is the inner binder, so it is `Bound(0)`; `x` is one binder
+        // further out.
+        assert_eq!(
+            *a,
+            f_app_no_eq(
+                pair,
+                vec![var_term(BVar::Bound(0)), var_term(BVar::Bound(1))]
+            )
+        );
+        assert_eq!(*b, lift_free(&t2));
+    }
+
+    /// A quantifier binder in a SAPIC condition is read by `sapicvar` and
+    /// carries no type tag (Theory/Text/Parser/Token.hs:506-510#sapicvar),
+    /// while a timepoint operand is read by `sapicnodevar` and is tagged
+    /// `node` (Theory/Text/Parser/Token.hs:522-525#sapicnodevar,
+    /// Theory/Sapic/Term.hs:99-100#defaultSapicNodeType).  `quantify`
+    /// compares the WHOLE variable (Theory/Model/Formula.hs:346-352), so the
+    /// binder closes nothing and the timepoint reaches the `⊆ tildex` check.
+    ///
+    /// Oracle (pinned build, Git revision ef3f0468) on
+    /// `in(x); event Foo(x); if (Ex #j. Foo(x)@#j) then out('yes') else out('no')`:
+    /// `tamarin-prover: The variable(s) #j are not bound.`, exit 1
+    /// (probe `S2_cond_quantified_timepoint`).
+    #[test]
+    fn a_quantified_timepoint_in_a_cond_is_not_bound_by_its_binder() {
+        let msig = tamarin_term::maude_sig::pair_maude_sig();
+        let cond = |src: &str| {
+            let f = tamarin_parser::parser::parse_formula_str(src, &msig).unwrap();
+            ProcessCombinator::Cond(tamarin_theory::formula::sapic_from_parser(&f, &msig).unwrap())
+        };
+        let an = ProcessAnnotation::<LVar>::empty();
+        let pos: Vec<i64> = vec![];
+        // tildex binds only `x`.
+        let mut tx = BTreeSet::new();
+        tx.insert(lv("x", 0));
+
+        // A message binder does close its occurrences — both the binder and
+        // the occurrence take `sapicvar`.  That is what makes the assertion
+        // below discriminating.
+        assert!(base_trans_comb(&cond("Ex y. Eq(y, x)"), &an, &pos, &tx).is_ok());
+
+        let err = base_trans_comb(&cond("Ex #j. Foo(x) @ #j"), &an, &pos, &tx).unwrap_err();
+        assert_eq!(err, "The variable(s) #j are not bound.");
+    }
+
+    // A user-`[AC]` symbol prints INFIX, as HS `prettyTerm` renders it
+    // (Term/Term.hs:305): the translation's restriction bodies carry these
+    // terms into emitted bytes, so a prefix `add(…)` here would diverge from
+    // the oracle in both the rendered predicate and the derived
+    // rule/restriction names.  No corpus theory combines SAPIC with a user
+    // `[AC]` symbol, so this shape is only pinned here.
+    #[test]
+    fn user_ac_terms_print_infix() {
         use tamarin_term::function_symbols::{AcFctSym, Constructability, NdcState, Privacy};
+        use tamarin_term::pretty::pretty_nterm;
         use tamarin_term::term::f_app_acfct;
 
         let add = AcFctSym::new(
@@ -1424,36 +1508,36 @@ mod tests {
             Constructability::Constructor,
             NdcState::NotNdc,
         );
-        let op = tamarin_parser::ast::BinOp::AcFct(tamarin_term::intern::intern_str("add"));
         let leaf = |n: &str| tamarin_term::term::Term::Lit(Lit::Var(lv(n, 0)));
 
         for arity in [2usize, 3] {
             let t = f_app_acfct(add, (0..arity).map(|i| leaf(&format!("x{i}"))).collect());
-            // Fold the expectation over the smart constructor's own
-            // (flattened, sorted) arg list so the test pins only the
-            // infix left-fold, not the AC argument order.
+            // Read the expectation off the smart constructor's own
+            // (flattened, sorted) argument list so the test pins the infix
+            // spelling, not the AC argument order.
             let tamarin_term::term::Term::App(_, args) = &t else {
                 panic!("f_app_acfct built a non-App term");
             };
-            let mut it = args.iter().map(ln_term_to_parser);
-            let first = it.next().unwrap();
-            let expected = it.fold(first, |acc, a| {
-                tamarin_parser::ast::Term::BinOp(op, Box::new(acc), Box::new(a))
-            });
-            assert_eq!(ln_term_to_parser(&t), expected);
+            assert_eq!(args.len(), arity);
+            let operands: Vec<String> = args.iter().map(|a| pretty_nterm(a).render()).collect();
+            assert_eq!(
+                pretty_nterm(&t).render(),
+                format!("({})", operands.join(" add "))
+            );
         }
     }
 
-    /// The lowering the SAPIC translation uses is the one HS `prettyTerm`
-    /// defines, so `exp` comes out infix and a `pair` chain is split down the
-    /// RIGHT spine only (Term/Term.hs:310,313,323-324).  Both shapes reach
-    /// emitted bytes through `let_else_restriction`: on
+    /// The terms the SAPIC translation builds print through HS `prettyTerm`,
+    /// so `exp` comes out infix and a `pair` chain is split down the RIGHT
+    /// spine only (Term/Term.hs:310,313,323-324).  Both shapes reach emitted
+    /// bytes through `let_else_restriction`: on
     /// `let <x, y> = <'g'^k, <<'a','b'>,'c'>> in … else …` the pinned oracle
     /// (ef3f0468) renders the generated action as
     /// `Restr_letxygkabc_2_1_1( <'g'^k.1, <'a', 'b'>, 'c'> )`.
     #[test]
-    fn exp_and_nested_pairs_lower_like_prettyterm() {
+    fn exp_and_nested_pairs_print_like_prettyterm() {
         use tamarin_term::function_symbols::{Constructability, NoEqSym, Privacy};
+        use tamarin_term::pretty::pretty_nterm;
         use tamarin_term::term::{f_app_list, f_app_no_eq, Term as TTerm};
 
         let sym = |n: &[u8], k| {
@@ -1466,8 +1550,7 @@ mod tests {
         };
         let leaf = |n: &str| TTerm::Lit(Lit::Var(lv(n, 0)));
         let pair = |a: LNTerm, b: LNTerm| f_app_no_eq(sym(b"pair", 2), vec![a, b]);
-        let render =
-            |t: &LNTerm| tamarin_theory::pretty_formula::term_doc(&ln_term_to_parser(t)).render();
+        let render = |t: &LNTerm| pretty_nterm(t).render();
 
         // `exp(a, b)` is the infix `a^b`, not a prefix application.
         let e = f_app_no_eq(sym(b"exp", 2), vec![leaf("a"), leaf("b")]);

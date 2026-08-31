@@ -5,10 +5,10 @@
 use super::*;
 use tamarin_term::maude_sig::pair_maude_sig;
 
-use crate::test_maude::maude_path;
+use tamarin_test_support::require_maude_path;
 
 fn ctx() -> Option<ProofContext> {
-    let path = maude_path()?;
+    let path = require_maude_path()?;
     // A maude that resolved but will not start is the same misconfiguration
     // as a dangling MAUDE_PATH: swallowing it with `.ok()?` would silently
     // skip every maude-backed test in this file, so fail loudly instead.
@@ -20,6 +20,11 @@ fn ctx() -> Option<ProofContext> {
             )
         });
     Some(ProofContext::new(h, Vec::new()))
+}
+
+/// The index-0 variable leaf of the given name and sort.
+fn mkvar_ln(name: &str, sort: tamarin_term::lterm::LSort) -> tamarin_term::lterm::LNTerm {
+    tamarin_term::vterm::var_term(tamarin_term::lterm::LVar::new(name, sort, 0))
 }
 
 /// `ku_vars` must read the two variables `removePermutations` permutes
@@ -679,8 +684,7 @@ fn solve_action_goal_no_node_with_matching_rule_unifies() {
         vec![fact_y],
     );
     let open = crate::theory::OpenProtoRule::new(rule);
-    let mut ctx2 = ctx_no.clone();
-    ctx2.rules = vec![open];
+    let ctx2 = ProofContext::new(ctx_no.maude.clone(), vec![open]);
     let mut r = Reduction::new(&ctx2, System::empty());
     // Goal: Out(x) at fresh node i.
     let i = tamarin_term::lterm::LVar::new("i", tamarin_term::lterm::LSort::Node, 0);
@@ -772,8 +776,7 @@ fn solve_premise_goal_with_matching_rule_inserts_edge() {
         vec![],
     );
     let open = crate::theory::OpenProtoRule::new(rule);
-    let mut ctx2 = base.clone();
-    ctx2.rules = vec![open];
+    let ctx2 = ProofContext::new(base.maude.clone(), vec![open]);
     let mut r = Reduction::new(&ctx2, System::empty());
     // Premise: Out(x) at node i, premise idx 0.
     let i = tamarin_term::lterm::LVar::new("i", tamarin_term::lterm::LSort::Node, 5);
@@ -903,30 +906,60 @@ fn insert_atom_action_creates_action_goal() {
         None => return,
     };
     let mut r = Reduction::new(&ctx, System::empty());
-    use tamarin_parser::ast::{Atom, Fact, SortHint, Term, VarSpec};
-    let mkvar = |n: &str, sort: SortHint| {
-        Term::Var(VarSpec {
-            name: n.to_string(),
-            idx: 0,
-            sort,
-            typ: None,
-        })
-    };
-    let action = Atom::Action(
-        Fact {
-            persistent: false,
-            annotations: Vec::new(),
-            name: "Setup".into(),
-            args: vec![mkvar("k", SortHint::Msg)],
-        },
-        mkvar("i", SortHint::Node),
+    use crate::atom::ProtoAtom;
+    use tamarin_term::lterm::LSort;
+    let action = ProtoAtom::Action(
+        mkvar_ln("i", LSort::Node),
+        crate::fact::proto_fact(
+            crate::fact::Multiplicity::Linear,
+            "Setup",
+            vec![mkvar_ln("k", LSort::Msg)],
+        ),
     );
-    let ok = r.insert_atom(&action);
-    assert!(ok);
+    r.insert_atom(&action);
     assert_eq!(r.sys.goals.len(), 1);
     assert!(matches!(&r.sys.goals[0].0, Goal::Action(_, fact)
             if fact.tag == crate::fact::FactTag::Proto(
                 crate::fact::Multiplicity::Linear, "Setup", 1)));
+}
+
+/// HS `insertAtom` answers `Syntactic _ -> return ()` (Reduction.hs:421):
+/// the sugar carries no constraint, so nothing about the system moves.
+#[test]
+fn insert_atom_ignores_a_syntactic_atom() {
+    let ctx = match ctx() {
+        Some(c) => c,
+        None => return,
+    };
+    let mut r = Reduction::new(&ctx, System::empty());
+    let a = crate::atom::ProtoAtom::Syntactic(crate::atom::Unit2);
+    r.insert_atom(&a);
+    assert!(r.sys.goals.is_empty());
+    assert!(r.sys.less_atoms.is_empty());
+    assert_eq!(r.sys.last_atom, None);
+    assert!(r.sys.eq_store.subst.is_empty());
+}
+
+/// A `NameTag::Node` constant reaches the eq-store as itself.  It is the tag
+/// Maude mints for a skolemised timepoint (maude_proc.rs).
+#[test]
+fn insert_atom_eq_keeps_the_node_name_tag() {
+    let ctx = match ctx() {
+        Some(c) => c,
+        None => return,
+    };
+    let mut r = Reduction::new(&ctx, System::empty());
+    use tamarin_term::lterm::{LSort, Name, NameTag};
+    let node_name: tamarin_term::lterm::LNTerm =
+        tamarin_term::vterm::const_term(Name::new(NameTag::Node, "n1"));
+    let a = crate::atom::ProtoAtom::EqE(mkvar_ln("i", LSort::Node), node_name.clone());
+    r.insert_atom(&a);
+    let i = tamarin_term::lterm::LVar::new("i", LSort::Node, 0);
+    assert_eq!(
+        r.sys.eq_store.subst.image_of(&i),
+        Some(&node_name),
+        "the eq-store binds the timepoint to the Node-tagged name itself"
+    );
 }
 
 #[test]
@@ -936,18 +969,10 @@ fn insert_atom_less_creates_less_atom() {
         None => return,
     };
     let mut r = Reduction::new(&ctx, System::empty());
-    use tamarin_parser::ast::{Atom, SortHint, Term, VarSpec};
-    let mkvar = |n: &str| {
-        Term::Var(VarSpec {
-            name: n.to_string(),
-            idx: 0,
-            sort: SortHint::Node,
-            typ: None,
-        })
-    };
-    let less = Atom::Less(mkvar("i"), mkvar("j"));
-    let ok = r.insert_atom(&less);
-    assert!(ok);
+    use crate::atom::ProtoAtom;
+    use tamarin_term::lterm::LSort;
+    let less = ProtoAtom::Less(mkvar_ln("i", LSort::Node), mkvar_ln("j", LSort::Node));
+    r.insert_atom(&less);
     assert_eq!(r.sys.less_atoms.len(), 1);
     // The order of the endpoints is the complete content of a `Less` atom.
     // The pretty-printer uses the reason tag to tell the user where the
@@ -966,15 +991,10 @@ fn insert_atom_last_sets_last_atom() {
         None => return,
     };
     let mut r = Reduction::new(&ctx, System::empty());
-    use tamarin_parser::ast::{Atom, SortHint, Term, VarSpec};
-    let v = Term::Var(VarSpec {
-        name: "i".into(),
-        idx: 0,
-        sort: SortHint::Node,
-        typ: None,
-    });
-    let last = Atom::Last(v);
-    assert!(r.insert_atom(&last));
+    use crate::atom::ProtoAtom;
+    use tamarin_term::lterm::LSort;
+    let last = ProtoAtom::Last(mkvar_ln("i", LSort::Node));
+    r.insert_atom(&last);
     assert_eq!(
         r.sys.last_atom,
         Some(tamarin_term::lterm::LVar::new(
@@ -1009,8 +1029,7 @@ fn solve_action_with_fresh_premise_adds_fresh_supplier() {
         vec![act],
     );
     let open = crate::theory::OpenProtoRule::new(rule);
-    let mut ctx2 = base.clone();
-    ctx2.rules = vec![open];
+    let ctx2 = ProofContext::new(base.maude.clone(), vec![open]);
     let mut r = Reduction::new(&ctx2, System::empty());
 
     // Goal: Setup(x) at fresh node i.
@@ -1106,19 +1125,14 @@ fn default_case_name_is_one_indexed() {
 /// `Less`-of-node-ids idiom HS calls `markAsSolved`+decompose on
 /// (Reduction.hs:461-486).
 fn neg_less_node_universal(i_name: &str, j_name: &str) -> Guarded {
-    use crate::guarded::{atom_to_gatom_free, GAtom, Quant};
-    use tamarin_parser::ast::{Atom, SortHint, Term, VarSpec};
-    let mkvar = |n: &str| {
-        Term::Var(VarSpec {
-            name: n.to_string(),
-            idx: 0,
-            sort: SortHint::Node,
-            typ: None,
-        })
-    };
-    let guard: GAtom = atom_to_gatom_free(&Atom::Less(mkvar(i_name), mkvar(j_name)));
+    use crate::atom::ProtoAtom;
+    use crate::formula::{BLNTerm, Quantifier};
+    use tamarin_term::lterm::{BVar, LSort, LVar};
+    use tamarin_term::vterm::var_term;
+    let mkvar = |n: &str| -> BLNTerm { var_term(BVar::Free(LVar::new(n, LSort::Node, 0))) };
+    let guard = ProtoAtom::Less(mkvar(i_name), mkvar(j_name));
     Guarded::GGuarded {
-        qua: Quant::All,
+        qua: Quantifier::All,
         vars: Vec::new().into(),
         guards: vec![guard].into(),
         body: std::sync::Arc::new(crate::guarded::gfalse()),

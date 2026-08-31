@@ -63,14 +63,7 @@ mkdir -p "$(dirname "$RESULTS_TSV")"
 NO_HS_FILL="${NO_HS_FILL:-}"
 mkdir -p "$HS_CACHE"
 
-find_hs_bin() {
-    local root="$1" c
-    for c in "$root"/tamarin-prover-testing/.stack-work/install/*/*/*/bin/tamarin-prover \
-             "$root"/tamarin-prover-testing/.stack-work/dist/*/ghc-*/build/tamarin-prover/tamarin-prover; do
-        [ -x "$c" ] && { echo "$c"; return 0; }
-    done; return 1
-}
-HS_PATH="${HS_PATH:-$(find_hs_bin "$repo_root")}" || true
+HS_PATH=$(resolve_hs_oracle "$repo_root") || exit 2
 RS_PATH="${RS_PATH:-$repo_root/target/release/tamarin-rs}"
 [ -x "$RS_PATH" ] || { echo "no RS binary at $RS_PATH" >&2; exit 2; }
 # The oracle binary is required even under NO_HS_FILL: its fingerprint is part
@@ -81,9 +74,9 @@ RS_PATH="${RS_PATH:-$repo_root/target/release/tamarin-rs}"
 }
 export RS_PATH HS_PATH HS_CACHE CORPUS_ROOT FLAGS_MAP FILE_TIMEOUT DERIVCHECK_TIMEOUT
 
-# Oracle handshake.  The cache key is sha256(theory)+flags, which cannot see an
-# ORACLE change — a bump that alters pretty output would leave stale entries
-# under unchanged keys, surfacing as false DIFFs rather than cache misses.
+# Oracle handshake. The dependency digest sees theory-side scripts, but only
+# the binary fingerprint sees a rebuilt ORACLE — without it a bump that alters
+# pretty output would leave stale entries under unchanged keys.
 # This used to be a `Git revision:` stamp on the cache dir, which could never
 # fire: setup.sh git-APPLIES patches/ without committing, so every patched
 # build bakes in exactly the submodule pin and the stamp matched an oracle it
@@ -119,7 +112,7 @@ extract_theory() {
 }
 # flags_for / ckey come from gate_common.sh — one key format for this gate,
 # wf_gate.sh (which reads THIS cache) and corpus_file_diff.sh.
-export -f strip_env extract_theory flags_for include_shas ckey
+export -f strip_env extract_theory flags_for include_shas oracle_shas ckey
 
 # --- Phase 0: fill any MISSING no-prove HS reference (fast; warm-cache reused).
 # TWO artifacts per key, from ONE oracle run:
@@ -168,7 +161,7 @@ hs_fill_one() {
     # 124 is timeout(1)'s SIGTERM; >=128 is any other signal death (the OOM
     # killer's 137, an abort's 134), which truncates stdout the same way.
     if [ "$rc" = 124 ] || [ "$rc" -ge 128 ]; then
-        echo "  HS KILLED   $rel (rc=$rc, cap ${FILE_TIMEOUT}s) — nothing cached" >&2; return 0
+        echo "  HS KILLED   $rel (rc=$rc, cap $FILE_TIMEOUT) — nothing cached" >&2; return 0
     fi
     # `.nohs` is a STICKY marker for both gates: no output at all (timeout,
     # missing maude, parse abort) records it and neither gate re-runs the

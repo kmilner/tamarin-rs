@@ -1,0 +1,35 @@
+/*
+ * The operand order of an AC operator under a binder the display renames.
+ * The bound `~x` is freshened to `~x.1` and the display variable substituted
+ * into the body before printing (reached from
+ * Theory/Model/Formula.hs:474-514#prettyLFormula, which opens the quantifier
+ * prefix through Theory/Model/Formula.hs:274-291#openFormula), and the
+ * rebuilt AC application re-sorts its arguments with the display index, which
+ * `Ord LVar` compares first (LTerm.hs:546-548#compare): `x` at index 0 stands
+ * to the left of `~x.1` at index 1.  The two lemmas write the two operands in
+ * the two possible orders and both echo `(x++~x.1)`, so the row pins that the
+ * written order does not reach the echo and that the display index — not the
+ * sort the parser records (LTerm.hs:165-170#LSort) — decides it.
+ *
+ * Mode `match`: the two engines agree on this shape.
+ *
+ * Compared slice: the `theory … end` echo, which carries both lemma formulas
+ * (see check.sh).
+ */
+theory AcDisplayOrder
+begin
+
+builtins: multiset
+
+rule A:
+  [ Fr(~x), In(y) ] --[ B(~x + y), C(y) ]-> [ ]
+
+lemma nested_same_name:
+  all-traces
+  "All x #i. C(x) @ i ==> (Ex ~x #j. B(x + ~x) @ j)"
+
+lemma nested_same_name_written_sorted:
+  all-traces
+  "All x #i. C(x) @ i ==> (Ex ~x #j. B(~x + x) @ j)"
+
+end

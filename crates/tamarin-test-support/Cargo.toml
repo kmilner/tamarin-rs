@@ -1,0 +1,16 @@
+[package]
+name = "tamarin-test-support"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Maude resolution shared by the maude-gated tests of the Tamarin prover (Rust port)."
+# Every dependant lists this crate under `[dev-dependencies]`, so it is part of
+# no published artifact.
+publish = false
+
+[dependencies]
+
+[lints]
+workspace = true
