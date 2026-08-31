@@ -2051,22 +2051,6 @@ impl<'a> Parser<'a> {
 
     // -------------------- Builtins / options / heuristic / tactic --------------------
 
-    /// `<kw>: ident-with-hyphens (, ident-with-hyphens)*` (no trailing comma).
-    /// Shared by the `builtins` and `options` declarations, which are identical
-    /// modulo the keyword and the wrapping `TheoryItem` variant.
-    fn comma_sep_hyphen_idents(&mut self, kw: &str) -> Result<Vec<String>, ParseError> {
-        self.require_kw(kw)?;
-        self.require_punct(":")?;
-        let mut names = Vec::new();
-        loop {
-            names.push(self.hyphen_identifier()?);
-            if !self.try_punct(",") {
-                break;
-            }
-        }
-        Ok(names)
-    }
-
     fn builtins(&mut self) -> Result<TheoryItem, ParseError> {
         self.require_kw("builtins")?;
         self.require_punct(":")?;
@@ -2299,12 +2283,28 @@ impl<'a> Parser<'a> {
     }
 
     fn options(&mut self) -> Result<TheoryItem, ParseError> {
-        let names = self.comma_sep_hyphen_idents("options")?;
-        if let Some(name) = names
-            .iter()
-            .find(|name| DeclarableOption::parse(name).is_none())
-        {
-            return Err(self.err(format!("unknown theory option `{name}`")));
+        self.require_kw("options")?;
+        self.require_punct(":")?;
+        let mut names = Vec::new();
+        loop {
+            let mut found = None;
+            for option in DeclarableOption::ALL {
+                if self.try_kw(option.as_str()) {
+                    found = Some(option.as_str().to_string());
+                    break;
+                }
+            }
+            let Some(name) = found else {
+                let labels: Vec<String> = DeclarableOption::ALL
+                    .map(|option| format!("\"{}\"", option.as_str()))
+                    .into();
+                let expects: Vec<&str> = labels.iter().map(String::as_str).collect();
+                return Err(self.err_expect(&expects));
+            };
+            names.push(name);
+            if !self.try_punct(",") {
+                break;
+            }
         }
         Ok(TheoryItem::Options(names))
     }

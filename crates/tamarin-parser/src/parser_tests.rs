@@ -464,9 +464,13 @@ fn theory_options_are_limited_to_the_shared_declarable_set() {
 
     let err = parse_theory("theory P begin\noptions: unknown-option\nend", &[])
         .expect_err("unknown option must fail");
-    assert!(err
-        .to_string()
-        .contains("unknown theory option `unknown-option`"));
+    assert_eq!(
+        err.to_string(),
+        "(line 2, column 10):\nunexpected \"u\"\nexpecting \
+         \"translation-progress\", \"translation-allow-pattern-lookups\", \
+         \"translation-state-optimisation\", \"translation-asynchronous-channels\" or \
+         \"translation-compress-events\""
+    );
 }
 
 /// HS `T.identifier` (Token.hs:393-394) rejects the reserved names
