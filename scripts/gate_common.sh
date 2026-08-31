@@ -89,23 +89,26 @@ hs_fingerprint() {
 #   the pre-include ones and the existing entries/rows stay valid.
 include_shas() {
     local -A _include_seen=()
+    _include_shas_walk() {
+        local f=$1 dir inc dep key
+        dir=$(dirname "$f")
+        while IFS= read -r inc; do
+            [ -n "$inc" ] || continue
+            dep="$dir/$inc"
+            [ -f "$dep" ] || continue
+            key=$(cd "$(dirname "$dep")" && printf '%s/%s' "$PWD" "$(basename "$dep")") \
+                || return 1
+            [ -z "${_include_seen[$key]+x}" ] || continue
+            _include_seen[$key]=1
+            printf '%s %s\n' "$(sha256sum "$dep" | cut -d' ' -f1)" "$inc"
+            _include_shas_walk "$dep" || return 1
+        done < <(grep -oE '#include[[:space:]]*"[^"]+"' "$f" 2>/dev/null \
+                 | sed 's/.*"\(.*\)"/\1/')
+    }
     _include_shas_walk "$1"
-}
-_include_shas_walk() {
-    local f=$1 dir inc dep key
-    dir=$(dirname "$f")
-    while IFS= read -r inc; do
-        [ -n "$inc" ] || continue
-        dep="$dir/$inc"
-        [ -f "$dep" ] || continue
-        key=$(cd "$(dirname "$dep")" && printf '%s/%s' "$PWD" "$(basename "$dep")") \
-            || return 1
-        [ -z "${_include_seen[$key]+x}" ] || continue
-        _include_seen[$key]=1
-        printf '%s %s\n' "$(sha256sum "$dep" | cut -d' ' -f1)" "$inc"
-        _include_shas_walk "$dep" || return 1
-    done < <(grep -oE '#include[[:space:]]*"[^"]+"' "$f" 2>/dev/null \
-             | sed 's/.*"\(.*\)"/\1/')
+    local status=$?
+    unset -f _include_shas_walk
+    return "$status"
 }
 # oracle_shas <theory> [flags]
 #   Content + mode of every executable-oracle input that can affect this
