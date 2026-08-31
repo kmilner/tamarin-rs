@@ -2552,18 +2552,6 @@ impl<'a> Parser<'a> {
         // examples/ake/bilinear/Scott.spthy — truncates the capture and
         // corrupts the following parse.
         let mut depth: i32 = 0;
-        // Whether we are inside a double-quoted string, and must ignore its
-        // interior for both paren-depth and keyword purposes.  Tactic filters
-        // carry regex literals such as `regex "cp\("` and `regex "In_A\( 'S'"`
-        // (examples/csf18-alethea/...): those `(`s are escaped regex text with
-        // no matching `)`, so counting them would drive `depth` permanently
-        // positive and make the scanner swallow every following item.  HS lexes
-        // these as ordinary string literals (`stringLiteral`, Token.hs:366-367), so
-        // their content is opaque to the surrounding grammar.  Only `"` needs
-        // tracking: proof skeletons contain no double-quoted strings, and
-        // single-quoted public constants (`'Init'`) never hold parens and never
-        // occur at depth 0, so they need none.
-        let mut in_string = false;
         // Whether the identifier at the NEXT depth-0 word boundary is a proof
         // CASE LABEL and must not be tested against `KW`.  HS parses the proof
         // skeleton structurally: `oneCase = symbol "case" *> identifier`
@@ -2587,79 +2575,56 @@ impl<'a> Parser<'a> {
             if self.lx.is_eof() {
                 break;
             }
-            if !in_string {
-                // Skip whitespace and comments. Block/line comments are entirely
-                // skipped by skip_ws; whitespace resets the prev-ident state.
-                let pre_ws = self.lx.pos();
-                self.lx.skip_ws();
-                if self.lx.pos() != pre_ws {
-                    // Capture skipped whitespace/comments verbatim.
-                    let skipped = &self.lx.src()[pre_ws.offset..self.lx.pos().offset];
-                    s.push_str(skipped);
-                    prev_was_ident = false;
-                }
-                if self.lx.is_eof() {
-                    break;
-                }
-                // At a word boundary AND at the top level, check for top-level
-                // keywords.  Inside a parenthesised group (`solve( ... )`, a
-                // function application, a tuple, ...) keyword identifiers are
-                // just terms, matching HS's `parens goal`.
-                if depth == 0 && !prev_was_ident {
-                    if expect_case_name {
-                        // This depth-0 identifier is a case label (see the
-                        // `expect_case_name` note above): suppress the keyword /
-                        // `#`-directive break for this one token.  The per-char
-                        // append below consumes it, and `prev_was_ident` prevents
-                        // any re-check mid-word.
-                        expect_case_name = false;
-                    } else {
-                        if let Some(id) = self.peek_hyphen_identifier() {
-                            if KW.contains(&id.as_str()) {
-                                break;
-                            }
-                            // Arm case-label suppression for the NEXT identifier.
-                            if id == "case" {
-                                expect_case_name = true;
-                            }
+            // Skip whitespace and comments. Block/line comments are entirely
+            // skipped by skip_ws; whitespace resets the prev-ident state.
+            let pre_ws = self.lx.pos();
+            self.lx.skip_ws();
+            if self.lx.pos() != pre_ws {
+                // Capture skipped whitespace/comments verbatim.
+                let skipped = &self.lx.src()[pre_ws.offset..self.lx.pos().offset];
+                s.push_str(skipped);
+                prev_was_ident = false;
+            }
+            if self.lx.is_eof() {
+                break;
+            }
+            // At a word boundary AND at the top level, check for top-level
+            // keywords.  Inside a parenthesised group (`solve( ... )`, a
+            // function application, a tuple, ...) keyword identifiers are
+            // just terms, matching HS's `parens goal`.
+            if depth == 0 && !prev_was_ident {
+                if expect_case_name {
+                    // This depth-0 identifier is a case label (see the
+                    // `expect_case_name` note above): suppress the keyword /
+                    // `#`-directive break for this one token.  The per-char
+                    // append below consumes it, and `prev_was_ident` prevents
+                    // any re-check mid-word.
+                    expect_case_name = false;
+                } else {
+                    if let Some(id) = self.peek_hyphen_identifier() {
+                        if KW.contains(&id.as_str()) {
+                            break;
                         }
-                        if self.lx.peek() == Some('#') {
-                            let mut probe = self.lx.clone();
-                            probe.bump();
-                            let name = probe.ascii_alpha_run();
-                            if matches!(
-                                name.as_str(),
-                                "ifdef" | "endif" | "else" | "define" | "include"
-                            ) {
-                                break;
-                            }
+                        // Arm case-label suppression for the NEXT identifier.
+                        if id == "case" {
+                            expect_case_name = true;
+                        }
+                    }
+                    if self.lx.peek() == Some('#') {
+                        let mut probe = self.lx.clone();
+                        probe.bump();
+                        let name = probe.ascii_alpha_run();
+                        if matches!(
+                            name.as_str(),
+                            "ifdef" | "endif" | "else" | "define" | "include"
+                        ) {
+                            break;
                         }
                     }
                 }
             }
             // Append next char.
             match self.lx.peek() {
-                Some(c) if in_string => {
-                    // Inside a double-quoted string: consume verbatim, honour
-                    // `\`-escapes (so `\"` does not close and `\(` is not a
-                    // paren), and close on an unescaped `"`.  Do NOT touch
-                    // `depth` — string interiors are opaque.
-                    if c == '\\' {
-                        s.push(c);
-                        self.lx.bump();
-                        if let Some(c2) = self.lx.peek() {
-                            s.push(c2);
-                            self.lx.bump();
-                        }
-                    } else {
-                        if c == '"' {
-                            in_string = false;
-                        }
-                        s.push(c);
-                        self.lx.bump();
-                    }
-                    prev_was_ident = false;
-                }
                 Some(c) => {
                     prev_was_ident = is_ident_char(c) || c == '-';
                     // Track parenthesis nesting so the keyword scan above only
@@ -2668,7 +2633,6 @@ impl<'a> Parser<'a> {
                     // proof) cannot drive the depth negative and re-enable the
                     // scan inside a group.
                     match c {
-                        '"' => in_string = true,
                         '(' => depth += 1,
                         ')' => depth = (depth - 1).max(0),
                         _ => {}
