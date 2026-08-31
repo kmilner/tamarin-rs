@@ -543,11 +543,8 @@ fn pretty_translation_element(el: &TranslationElement, in_file: &str) -> String 
         // double space after the colon from `"export: "`'s own trailing
         // space).  The body is emitted verbatim (embedded newlines stay at
         // column 0 — HughesPJ cannot re-indent inside one `text` chunk).
-        // HS's opening `symbol "\""` lexeme skips the whitespace right after
-        // the quote (Parser/Signature.hs:287-295), which the RS lexer keeps —
-        // trim it.
         TranslationElement::ExportInfo { tag, body } => {
-            format!("export:  {} \"{}\"", tag, body.trim_start())
+            format!("export:  {} \"{}\"", tag, body)
         }
         // `prettyAccLemma` (Items/AccLemmaItem.hs:47-57):
         //   kwLemma <-> name[attrs] <> colon $-$ nest 2 (
@@ -1019,7 +1016,7 @@ mod open_item_tests {
             pretty_translation_element(
                 &TranslationElement::ExportInfo {
                     tag: "queries".to_string(),
-                    body: " q".to_string(),
+                    body: "q".to_string(),
                 },
                 "f.spthy"
             ),

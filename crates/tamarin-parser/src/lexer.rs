@@ -355,17 +355,19 @@ impl<'a> Lexer<'a> {
     /// Note: export bodies use a *different*, stricter character grammar — see
     /// [`Lexer::export_body`].
     pub fn string_literal(&mut self) -> Option<String> {
-        self.quoted(Self::string_escape)
+        self.quoted(false, Self::string_escape)
     }
 
     /// A double-quoted run: every char up to the closing `"` is taken
     /// verbatim except `\`, which is consumed and the rest of the escape
     /// handed to `escape`.  `escape` returns `Some(Some(c))` for a produced
     /// char, `Some(None)` for an escape that produces nothing, and `None` to
-    /// fail the whole literal.  A failure — an unterminated run included —
-    /// restores the position, so the caller can offer another alternative.
-    /// Both quotes are lexemes, so trailing whitespace is consumed.
-    fn quoted<F>(&mut self, mut escape: F) -> Option<String>
+    /// fail the whole literal. When `opening_lexeme` is true, whitespace and
+    /// comments immediately after the opening quote are consumed as part of
+    /// that delimiter. A failure — an unterminated run included — restores the
+    /// position, so the caller can offer another alternative. Trailing
+    /// whitespace after the closing quote is always consumed.
+    fn quoted<F>(&mut self, opening_lexeme: bool, mut escape: F) -> Option<String>
     where
         F: FnMut(&mut Self) -> Option<Option<char>>,
     {
@@ -374,6 +376,9 @@ impl<'a> Lexer<'a> {
         if !self.eat('"') {
             self.pos = save;
             return None;
+        }
+        if opening_lexeme {
+            self.skip_ws();
         }
         let mut s = String::new();
         loop {
@@ -576,7 +581,7 @@ impl<'a> Lexer<'a> {
     /// the backslash dropped); a bare `"` terminates the body and any other `\x`
     /// fails the whole parse. Used for `export <tag>: "..."` blocks.
     pub fn export_body(&mut self) -> Option<String> {
-        self.quoted(|lx| match lx.peek() {
+        self.quoted(true, |lx| match lx.peek() {
             Some(c @ ('\\' | '"')) => {
                 lx.bump();
                 Some(Some(c))
@@ -844,6 +849,18 @@ mod tests {
         // HS export `bodyChar`: `\\`->`\`, `\"`->`"`.
         let mut l = Lexer::new("\"a\\\\b\\\"c\"");
         assert_eq!(l.export_body().as_deref(), Some("a\\b\"c"));
+    }
+
+    #[test]
+    fn export_body_treats_the_opening_quote_as_a_lexeme() {
+        let mut l = Lexer::new("\"  /* discarded */  body\"");
+        assert_eq!(l.export_body().as_deref(), Some("body"));
+
+        let mut literal = Lexer::new("\"  /* retained */  body\"");
+        assert_eq!(
+            literal.string_literal().as_deref(),
+            Some("  /* retained */  body")
+        );
     }
 
     #[test]
