@@ -28,7 +28,7 @@ use crate::fact::{
 };
 use crate::formula::{formula_facts, BLNTerm};
 use crate::pretty_hpj::{self as hpj, Doc};
-use crate::rule::{intr_rule_name_string, Rule};
+use crate::rule::Rule;
 use crate::theory::Theory;
 
 // =============================================================================
@@ -118,7 +118,10 @@ fn theory_facts(thy: &Theory) -> Vec<(String, Vec<FactCell>)> {
     let mut out: Vec<(String, Vec<FactCell>)> = Vec::new();
     for ru in &thy.intruder_rules {
         out.push((
-            format!("Rule {}", quote(&intr_rule_name_string(&ru.info))),
+            format!(
+                "Rule {}",
+                quote(&crate::pretty_formula::intr_rule_name(&ru.info))
+            ),
             rule_facts(ru).map(FactCell::of_rule_fact).collect(),
         ));
     }

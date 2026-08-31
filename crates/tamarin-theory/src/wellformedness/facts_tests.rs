@@ -130,6 +130,10 @@ fn intruder_rule_cache_contributes_to_fact_usage() {
     );
     let report = check(&t);
     assert!(topics(&report).contains("Fact arity issues"));
+    assert!(
+        only(&report, "Fact arity issues").contains("Rule `c_senc'"),
+        "intruder origins use showRuleCaseName, not getRuleName"
+    );
 }
 
 /// The fact lists of `specialFactsUsage'` and `reservedFactNameRules'` are
