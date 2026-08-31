@@ -281,7 +281,10 @@ to the submodule: `haskell_captures_match_the_submodule_pin` compares
 `tests/fixtures/haskell-responses/oracle_rev` against `git -C tamarin-prover
 rev-parse HEAD` and fails — with no skip path — when a bump lands without
 re-running `tests/capture_haskell_fixtures.sh`, which re-stamps that file on
-every successful capture.
+every successful capture. The normal `scripts/bump_submodule.sh` path runs
+that capture automatically after rebuilding the testing oracle. `SKIP_BUILD=1`
+also skips the capture and prints a warning, so that exceptional workflow must
+build the oracle and run the capture explicitly before testing or committing.
 
 `crates/tamarin-prover`'s `cli_e2e` suite byte-compares flag pins against
 committed oracle stdout under `tests/fixtures/cli_refs/`. Both sides read one
@@ -831,7 +834,7 @@ exits 2 rather than running with a private fallback.
 
 | Script | Purpose |
 |---|---|
-| `bump_submodule.sh` | submodule bump: patch rebase, oracle rebuild, cite remap, explicit 6-step re-certification checklist (the caches self-invalidate, so none is archived) |
+| `bump_submodule.sh` | submodule bump: patch rebase, oracle rebuild, automatic server-fixture refresh, cite remap, and explicit re-certification checklist (the caches self-invalidate, so none is archived) |
 | `migrate_hs_cache_fp.sh` | idempotent re-keying of older HS caches onto binary-SHA identities |
 | `bench.sh` | RS-vs-HS wall-clock + memory tables (`--write` regenerates the README block) |
 | `check_hs_cites.py` / `remap_hs_cites.py` / `extend_anchor_citations.py` | upstream line-cite validation and remapping |

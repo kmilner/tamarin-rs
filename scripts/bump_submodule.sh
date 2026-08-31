@@ -6,7 +6,8 @@
 #   scripts/bump_submodule.sh --check [<ref>]   check only; change nothing
 #
 # Environment:
-#   SKIP_BUILD=1   skip rebuilding the Haskell oracle and Rust release binary
+#   SKIP_BUILD=1   skip rebuilding the Haskell oracle, refreshing its server
+#                  fixtures, and building the Rust release binary
 #
 # Each entry in patches/series is tried independently and in order. A patch
 # whose reverse applies is reported as already upstream; remove that entry and
@@ -19,6 +20,7 @@ sub="$root/tamarin-prover"
 testdir="$root/tamarin-prover-testing"
 rebasedir="$root/tamarin-prover-rebase"
 series="$root/patches/series"
+server_captures_rel="crates/tamarin-server/tests/fixtures/haskell-responses"
 tmp="$(mktemp -d)"
 owns_rebasedir=0
 
@@ -66,8 +68,8 @@ esac
 
 old="$(git -C "$root" rev-parse HEAD:tamarin-prover)"
 if [ "$mode" = bump ]; then
-    [ -z "$(git -C "$root" status --porcelain -- tamarin-prover patches)" ] \
-        || die "uncommitted changes under tamarin-prover/patches — commit or reset first"
+    [ -z "$(git -C "$root" status --porcelain -- tamarin-prover patches "$server_captures_rel")" ] \
+        || die "uncommitted submodule, patch, or Haskell server fixture changes — commit or reset first"
     [ "$(git -C "$sub" rev-parse HEAD)" = "$old" ] \
         || die "submodule checkout does not match the recorded pin — run ./setup.sh first"
 fi
@@ -126,14 +128,20 @@ else
     echo "WARNING: check_hs_cites.py found stale cites — see $remap_report" >&2
 fi
 
+staged_outputs="tamarin-prover gitlink"
 if [ "${SKIP_BUILD:-0}" != 1 ]; then
     "$root/setup.sh" testing
+    "$root/crates/tamarin-server/tests/capture_haskell_fixtures.sh"
+    git -C "$root" add "$server_captures_rel"
+    staged_outputs="$staged_outputs and refreshed HTTP captures"
     (cd "$root" && cargo build --release)
+else
+    echo "WARNING: SKIP_BUILD=1 also skipped the Haskell server fixture capture" >&2
 fi
 
 cat <<EOF
 == bumped tamarin-prover $oldshort -> $newshort ==
-staged (not committed): tamarin-prover gitlink
+staged (not committed): $staged_outputs
 review: $remap_report and any Haskell cite rewrites
 
 The rebuilt oracle has a new fingerprint, so old cache entries are safe but
@@ -144,6 +152,7 @@ local cache generation. Re-certify the new source/cache generation:
   3. scripts/corpus_file_diff.sh 2>&1 | tee /tmp/fullgate.log
      scripts/rs_ref_check.sh generate --certified-by /tmp/fullgate.log
   4. scripts/wf_gate.sh && scripts/pretty_gate.sh; run all three flag sweeps
-  5. crates/tamarin-server/tests/capture_haskell_fixtures.sh && cargo test -p tamarin-server
+  5. cargo test -p tamarin-server (HTTP captures refreshed automatically above;
+     with SKIP_BUILD=1, build the oracle and run capture_haskell_fixtures.sh first)
   6. run web_parity.sh on the milestone list and pane_byte_check.sh on its captures
 EOF

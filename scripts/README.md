@@ -318,13 +318,13 @@ a rename-only migration.
 ## Maintenance & measurement
 
 - **`bump_submodule.sh`** — submodule bump workflow: checks each entry in
-  `patches/series`, rebuilds the oracle, remaps HS line cites across `crates/`,
-  and prints a six-step re-certification checklist covering the divergence
-  and CLI captures, batch/fast/flag gates, tamarin-server HTTP captures, and
-  web ladder. Step 5 re-stamps the server fixtures' `oracle_rev`; without it
-  `cargo test -p tamarin-server` goes red. The gate caches are
-  deliberately left alone (see the fingerprint note above — a rebuilt oracle
-  turns every pre-bump entry into a MISS by key). `-h` prints its header; it
+  `patches/series`, rebuilds the oracle, refreshes the tamarin-server HTTP
+  captures, remaps HS line cites across `crates/`, and prints a six-step
+  re-certification checklist covering the divergence and CLI captures,
+  batch/fast/flag gates, server tests, and web ladder. `SKIP_BUILD=1` also
+  skips the HTTP capture and warns that it must be run explicitly. The gate
+  caches are deliberately left alone (see the fingerprint note above — a
+  rebuilt oracle turns every pre-bump entry into a MISS by key). `-h` prints its header; it
   and `divergence_fixtures/check.sh` are the only scripts here that answer one,
   so everywhere else the header comment is the interface.
 - **`migrate_hs_cache_fp.sh`** — idempotent re-keying of
