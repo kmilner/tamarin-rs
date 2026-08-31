@@ -5,6 +5,17 @@
 use super::*;
 
 #[test]
+fn predicate_diagnostics_space_multiple_annotations() {
+    let fact = Fact {
+        persistent: false,
+        name: "P".into(),
+        args: Vec::new(),
+        annotations: vec![FactAnnotation::SolveLast, FactAnnotation::SolveFirst],
+    };
+    assert_eq!(pred_fact_text(&fact), "P( )[+, -]");
+}
+
+#[test]
 fn diff_theory_validates_but_does_not_lower_diff_proofs() {
     let src = "theory D begin
         diffLemma observational_equivalence:

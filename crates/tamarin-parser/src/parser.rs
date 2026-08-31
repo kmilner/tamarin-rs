@@ -353,7 +353,7 @@ fn pred_fact_text(f: &Fact) -> String {
                 .into_iter()
                 .map(annotation)
                 .collect::<Vec<_>>()
-                .join(","),
+                .join(", "),
         );
         s.push(']');
     }
