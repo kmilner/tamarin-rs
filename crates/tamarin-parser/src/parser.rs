@@ -1135,6 +1135,12 @@ pub struct Parser<'a> {
     /// (Theory/Text/Parser/Exceptions.hs:39).  Threaded through `#include`
     /// sub-parsers like [`Parser::seen_rules`].
     seen_lemma_names: Vec<String>,
+    /// Per-side regular-lemma namespaces used only by a true diff-theory
+    /// parse (`addLemmaDiff LHS/RHS`). An unsided lemma occupies both.
+    seen_diff_left_lemma_names: Vec<String>,
+    seen_diff_right_lemma_names: Vec<String>,
+    /// The separate `diffLemma` namespace (`addDiffLemma`).
+    seen_diff_lemma_names: Vec<String>,
     /// `(persistent, name, arity)` — the fact-tag key `lookupPredicate`
     /// compares (Theory/Syntactic/Predicate.hs:77-80, `sameName` is tag
     /// equality) — of each predicate declared so far, seeded with the builtin
@@ -1187,6 +1193,9 @@ impl<'a> Parser<'a> {
             seen_rules: Vec::new(),
             seen_restriction_names: Vec::new(),
             seen_lemma_names: Vec::new(),
+            seen_diff_left_lemma_names: Vec::new(),
+            seen_diff_right_lemma_names: Vec::new(),
+            seen_diff_lemma_names: Vec::new(),
             seen_predicates: vec![(false, "Smaller".to_string(), 2)],
         }
     }
@@ -1995,6 +2004,9 @@ impl<'a> Parser<'a> {
         sub.seen_rules = std::mem::take(&mut self.seen_rules);
         sub.seen_restriction_names = std::mem::take(&mut self.seen_restriction_names);
         sub.seen_lemma_names = std::mem::take(&mut self.seen_lemma_names);
+        sub.seen_diff_left_lemma_names = std::mem::take(&mut self.seen_diff_left_lemma_names);
+        sub.seen_diff_right_lemma_names = std::mem::take(&mut self.seen_diff_right_lemma_names);
+        sub.seen_diff_lemma_names = std::mem::take(&mut self.seen_diff_lemma_names);
         sub.seen_predicates = std::mem::take(&mut self.seen_predicates);
 
         // Parse the header-less item stream: same loop as a theory body, but it
@@ -2021,6 +2033,9 @@ impl<'a> Parser<'a> {
         self.seen_rules = sub.seen_rules;
         self.seen_restriction_names = sub.seen_restriction_names;
         self.seen_lemma_names = sub.seen_lemma_names;
+        self.seen_diff_left_lemma_names = sub.seen_diff_left_lemma_names;
+        self.seen_diff_right_lemma_names = sub.seen_diff_right_lemma_names;
+        self.seen_diff_lemma_names = sub.seen_diff_lemma_names;
         self.seen_predicates = sub.seen_predicates;
 
         Ok(items)
@@ -4259,7 +4274,29 @@ impl<'a> Parser<'a> {
         // stores enforce their own duplicate guards. In a regular parse,
         // `left`/`right` are ordinary attributes and `liftedAddLemma` still
         // checks the shared lemma namespace.
-        if !self.is_diff {
+        if self.is_diff {
+            let left = attrs.contains(&LemmaAttr::Left);
+            let right = attrs.contains(&LemmaAttr::Right);
+            let duplicate = if left {
+                self.seen_diff_left_lemma_names.contains(&name)
+            } else if right {
+                self.seen_diff_right_lemma_names.contains(&name)
+            } else {
+                self.seen_diff_right_lemma_names.contains(&name)
+                    || self.seen_diff_left_lemma_names.contains(&name)
+            };
+            if duplicate {
+                return Err(self.item_fail(format!("duplicate lemma: {name}")));
+            }
+            if left {
+                self.seen_diff_left_lemma_names.push(name.clone());
+            } else if right {
+                self.seen_diff_right_lemma_names.push(name.clone());
+            } else {
+                self.seen_diff_right_lemma_names.push(name.clone());
+                self.seen_diff_left_lemma_names.push(name.clone());
+            }
+        } else {
             if self.seen_lemma_names.iter().any(|n| n == &name) {
                 return Err(self.item_fail(format!("duplicate lemma: {name}")));
             }
@@ -4329,6 +4366,10 @@ impl<'a> Parser<'a> {
         let attributes = self.lemma_attributes()?;
         self.require_punct(":")?;
         let proof = self.try_diff_proof_skeleton()?;
+        if self.seen_diff_lemma_names.contains(&name) {
+            return Err(self.item_fail(format!("duplicate Diff Lemma: {name}")));
+        }
+        self.seen_diff_lemma_names.push(name.clone());
         Ok(TheoryItem::DiffLemma(DiffLemma {
             name,
             attributes,

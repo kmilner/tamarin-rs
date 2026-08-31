@@ -23,6 +23,24 @@ fn diff_theory_validates_but_does_not_lower_diff_proofs() {
 
     assert!(parse_diff_theory("theory D begin diffLemma E: rule-equivalence end", &[]).is_err());
 }
+
+#[test]
+fn diff_theory_checks_each_lemma_namespace() {
+    let formula = "\"All #i. A() @ i ==> A() @ i\"";
+    for body in [
+        format!("lemma L [left]: {formula} lemma L [left]: {formula}"),
+        format!("lemma L [right]: {formula} lemma L: {formula}"),
+        "diffLemma D: by sorry diffLemma D: by sorry".to_string(),
+    ] {
+        let src = format!("theory D begin {body} end");
+        assert!(
+            parse_diff_theory(&src, &[]).is_err(),
+            "accepted duplicate namespace: {body}"
+        );
+    }
+    let src = format!("theory D begin lemma L [left]: {formula} lemma L [right]: {formula} end");
+    parse_diff_theory(&src, &[]).expect("the two side-specific stores are independent");
+}
 use tamarin_term::maude_sig::pair_maude_sig;
 
 /// [`parse_formula_str`] against the signature HS `parseString` installs
