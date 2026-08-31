@@ -97,6 +97,35 @@ fn nat_literals_and_variables_need_their_builtin() {
 }
 
 #[test]
+fn disabled_nat_diagnostics_match_haskell() {
+    for (term, expected) in [
+        (
+            "1:nat",
+            "\"t.spthy\" (line 2, column 28):\nunexpected \")\"\nnatural-number literal 1:nat requires the natural-numbers builtin",
+        ),
+        (
+            "%1",
+            "\"t.spthy\" (line 2, column 25):\nunexpected \")\"\nnatural-number literal %1 requires the natural-numbers builtin",
+        ),
+        (
+            "%n",
+            "\"t.spthy\" (line 2, column 24):\nnat-sorted variables requires the natural-numbers builtin",
+        ),
+        (
+            "%'n'",
+            "\"t.spthy\" (line 2, column 24):\nunexpected \"'\"\nnat names requires the natural-numbers builtin",
+        ),
+        (
+            "n:nat",
+            "\"t.spthy\" (line 2, column 28):\nunexpected \")\"\nnat-sorted variables requires the natural-numbers builtin",
+        ),
+    ] {
+        let src = format!("theory T begin\nrule R: [ ] --> [ Out({term}) ]\nend");
+        assert_eq!(frame(&src), expected, "{term}");
+    }
+}
+
+#[test]
 fn multiset_comparison_needs_its_builtin() {
     let body = |builtin: &str| {
         format!("theory T begin\n{builtin}restriction R: \"All x y. x (<) y\"\nend")

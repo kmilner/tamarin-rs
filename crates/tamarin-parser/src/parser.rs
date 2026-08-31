@@ -1211,6 +1211,18 @@ impl<'a> Parser<'a> {
         ParseError::at(self.lx.pos(), vec![Message::Message(msg.into())])
     }
 
+    /// A raw-message parse error preceded by parsec's pending unexpected
+    /// character at the same position.
+    fn err_unexpected_message(&self, msg: impl Into<String>) -> ParseError {
+        ParseError::at(
+            self.lx.pos(),
+            vec![
+                Message::SysUnExpect(self.unexpected_token()),
+                Message::Message(msg.into()),
+            ],
+        )
+    }
+
     /// The `SysUnExpect` token parsec's Char-stream primitives fill in at the
     /// current position: `show [c]` of the next character, or empty (which
     /// renders as `end of input`) at EOF.
@@ -5794,17 +5806,17 @@ impl<'a> Parser<'a> {
         }
         if self.try_punct("1:nat") {
             if !self.sig_enable_nat {
-                return Err(
-                    self.err("natural-number literal 1:nat requires the natural-numbers builtin")
-                );
+                return Err(self.err_unexpected_message(
+                    "natural-number literal 1:nat requires the natural-numbers builtin",
+                ));
             }
             return Ok(Term::NatOne);
         }
         if self.try_punct("%1") {
             if !self.sig_enable_nat {
-                return Err(
-                    self.err("natural-number literal %1 requires the natural-numbers builtin")
-                );
+                return Err(self.err_unexpected_message(
+                    "natural-number literal %1 requires the natural-numbers builtin",
+                ));
             }
             return Ok(Term::NatOne);
         }
@@ -5863,7 +5875,10 @@ impl<'a> Parser<'a> {
             match probe.peek() {
                 Some('\'') => {
                     if !self.sig_enable_nat {
-                        return Err(self.err("nat names require the natural-numbers builtin"));
+                        self.lx.bump();
+                        return Err(self.err_unexpected_message(
+                            "nat names requires the natural-numbers builtin",
+                        ));
                     }
                     self.lx.bump();
                     let s = self
@@ -5874,8 +5889,9 @@ impl<'a> Parser<'a> {
                 }
                 Some(c) if c.is_ascii_alphabetic() => {
                     if !self.sig_enable_nat {
+                        self.lx.bump();
                         return Err(
-                            self.err("nat-sorted variables require the natural-numbers builtin")
+                            self.err("nat-sorted variables requires the natural-numbers builtin")
                         );
                     }
                     if let Some(v) = self.try_var_spec()? {
@@ -6304,9 +6320,9 @@ impl<'a> Parser<'a> {
             ] {
                 if self.try_kw(kw) {
                     if sort == LSort::Nat && !self.sig_enable_nat {
-                        return Err(
-                            self.err("nat-sorted variables require the natural-numbers builtin")
-                        );
+                        return Err(self.err_unexpected_message(
+                            "nat-sorted variables requires the natural-numbers builtin",
+                        ));
                     }
                     v.sort = sort;
                     self.sort_suffix_consumed = true;
@@ -6350,8 +6366,9 @@ impl<'a> Parser<'a> {
                     Some('\'') | Some('1') => return Ok(None), // handled by literal/atom path
                     Some(c) if c.is_ascii_alphabetic() => {
                         if !self.sig_enable_nat {
+                            self.lx.bump();
                             return Err(self
-                                .err("nat-sorted variables require the natural-numbers builtin"));
+                                .err("nat-sorted variables requires the natural-numbers builtin"));
                         }
                         self.lx.bump();
                         LSort::Nat
