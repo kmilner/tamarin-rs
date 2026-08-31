@@ -547,6 +547,8 @@ fn pretty_translation_element(el: &TranslationElement, in_file: &str) -> String 
                 .beside_sp(open_process_doc(&pd.body).nest(2))
                 .render()
         }
+        // Only builtins not recoverable from the printed signature survive
+        // here; all others deliberately render empty (TheoryObject.hs:829-836).
         TranslationElement::SignatureBuiltin(name) => match name.as_str() {
             "locations-report" | "reliable-channel" | "dest-pairing" => {
                 format!("builtins: {name}")
