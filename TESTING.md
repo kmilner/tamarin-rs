@@ -539,8 +539,9 @@ in any of it. Only the port runs: the oracle side is captured bytes committed
 under `divergence_fixtures/expected/`, stamped with the pin they came from
 (`expected/oracle_rev`) — `check.sh` refuses to run when that stamp no longer
 matches the submodule pin, so a bump forces a fresh `capture.sh`. The rows
-the manifest marks `diverge` must NOT match — the check asserts both sides of
-a deliberate divergence, which a MATCH-only corpus gate cannot express.
+currently all require a match. The manifest also supports `diverge` rows, which
+must reproduce recorded port bytes while remaining different from the oracle;
+this preserves both sides of a deliberate divergence when one exists.
 
 It is the cheapest real assertion in the tree, and the only oracle-byte
 comparison CI makes: the `test` job's `Divergence fixtures` step builds

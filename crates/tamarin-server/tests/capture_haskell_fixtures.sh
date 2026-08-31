@@ -76,13 +76,14 @@ wait_for_server() {
 
 # Spin Haskell up in its own work-dir so it doesn't dirty ours.
 WORKDIR="$(mktemp -d)"
-CAPTURE_DIR="$WORKDIR/responses"
-mkdir -p "$CAPTURE_DIR"
+# Keep the completed capture beside the destination so GNU mv can atomically
+# exchange the two directories without a cross-filesystem fallback.
+CAPTURE_DIR="$(mktemp -d "${RES_DIR}.capture.XXXXXX")"
 # BIGDIR is the second phase's work-dir (created further down); declaring it
 # here keeps the trap's `${BIGDIR:+...}` well-defined under `set -u` and
 # contributes no argument to `rm` while it is empty.
 BIGDIR=""
-trap 'rm -rf "$WORKDIR" ${BIGDIR:+"$BIGDIR"}; pkill -P $$ -f "tamarin-prover interactive --port=${PORT}" 2>/dev/null || true' EXIT
+trap 'rm -rf "$WORKDIR" "$CAPTURE_DIR" ${BIGDIR:+"$BIGDIR"}; pkill -P $$ -f "tamarin-prover interactive --port=${PORT}" 2>/dev/null || true' EXIT
 cp "$FIXTURE" "$WORKDIR/issue193.spthy"
 
 echo "starting Haskell tamarin-prover on port $PORT ..."
@@ -224,11 +225,13 @@ fetch json_proof_abbrev.json    "/thy/trace/1/json/proof/done/_/Init/Init?abbrev
 rm -rf "$BIGDIR"
 
 # Stamp the oracle these bytes came from only after every request succeeds,
-# then publish the complete capture. A transport failure leaves the committed
-# fixture directory untouched. The stamp has no trailing newline (the same
-# shape scripts/divergence_fixtures/ uses).
+# then atomically exchange the complete capture with the committed directory.
+# After the exchange CAPTURE_DIR names the old fixtures, which the EXIT trap
+# removes. A failure or interruption before the exchange leaves them untouched;
+# one after it leaves the complete new generation in place. The stamp has no
+# trailing newline (the same shape scripts/divergence_fixtures/ uses).
 printf '%s' "$pin" > "${CAPTURE_DIR}/oracle_rev"
-cp "${CAPTURE_DIR}"/* "$RES_DIR/"
+mv --exchange --no-copy --no-target-directory "$CAPTURE_DIR" "$RES_DIR"
 
 echo "done.  Captures live under: ${RES_DIR} (oracle_rev: $pin)"
 kill "$SERVER_PID" 2>/dev/null || true
