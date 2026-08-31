@@ -13,319 +13,35 @@
 //! These selectors build PCRE patterns from `map show <LVar>` and test
 //! `show <term> =~ ...`.  They use Haskell's `Show` instances, which are
 //! NOT the same as the user-facing pretty-printer:
-//!   - `show LVar`  : `sortPrefix s ++ body`  (LTerm.hs:526-533)
-//!   - `show Name`  : `~'n'` / `'n'` / `#'n'` / `%'n'` (LTerm.hs:231-235)
-//!   - `show (Term a)` (raw form, Term/Raw.hs:227-237):
-//!     ```text
-//!     Lit l                -> show l
-//!     FApp (NoEq (s,_)) [] -> s
-//!     FApp (NoEq (s,_)) as -> s ++ "(" ++ intercalate "," (map show as) ++ ")"
-//!     FApp (C EMap)     as -> "em" ++ "(" ++ ... ++ ")"
-//!     FApp List         as -> "LIST" ++ "(" ++ ... ++ ")"
-//!     FApp (AC o)       as -> show o ++ "(" ++ ... ++ ")"
-//!     ```
-//!     where `show o` is the AC constructor name (Union/Mult/Xor/NatPlus).
-//!   - `show (BVar v)` (derived, LTerm.hs:452-454): `Bound i` / `Free <show v>`.
+//!   - `show LVar`  : `sortPrefix s ++ body`  (LTerm.hs:550-557)
+//!   - `show Name`  : `~'n'` / `'n'` / `#'n'` / `%'n'` (LTerm.hs:235-240)
+//!   - `show (Term a)` (raw form, Term/Term/Raw.hs:227-237): prefix
+//!     applications whose arguments are separated by a bare comma, a `NoEq` or
+//!     user-`AC` symbol alone when it takes no arguments, and the derived
+//!     `ACSym` constructor name (Union/Mult/Xor/NatPlus) as the head of a
+//!     builtin AC application.  [`tamarin_term::term::show_term`] is that
+//!     instance.
+//!   - `show (BVar v)` (derived, LTerm.hs:476-478): `Bound i` / `Free <show v>`.
 //!
 //! `show (Term (Lit Name (BVar LVar)))` (the `VTerm Name (BVar LVar)` used by
 //! `checkFormula`) therefore renders Var leaves as `Bound i` / `Free <lvar>`.
 
-use tamarin_parser::ast as p;
-use tamarin_term::function_symbols::{AcSym, CSym, FunSym};
-use tamarin_term::lterm::{LNTerm, Name, NameTag};
-use tamarin_term::vterm::Lit;
+use tamarin_term::lterm::{LNTerm, LVar};
+use tamarin_term::term::show_term;
 
-use crate::fact::{FactTag, Multiplicity};
+use crate::atom::ProtoAtom;
+use crate::fact::{Fact, FactTag, Multiplicity};
+use crate::formula::BLNTerm;
 use crate::guarded::Guarded;
-use crate::guarded_types::{BVar, GAtom, GFact, GTerm};
-
-// =============================================================================
-// `show` of a free LVar carried in a GTerm (`p::VarSpec`)
-// =============================================================================
-
-/// HS `show LVar` (LTerm.hs:526-533): `sortPrefix s ++ body`.
-fn show_varspec(v: &p::VarSpec) -> String {
-    let mut s = String::new();
-    write_varspec(v, &mut s);
-    s
-}
-
-/// Like [`show_varspec`] but writes directly into `out`, avoiding the
-/// throwaway intermediate `String`.  Produces byte-identical output.
-fn write_varspec(v: &p::VarSpec, out: &mut String) {
-    let prefix = match v.sort {
-        p::SortHint::Fresh | p::SortHint::Suffix(p::SuffixSort::Fresh) => "~",
-        p::SortHint::Pub | p::SortHint::Suffix(p::SuffixSort::Pub) => "$",
-        p::SortHint::Node | p::SortHint::Suffix(p::SuffixSort::Node) => "#",
-        p::SortHint::Nat | p::SortHint::Suffix(p::SuffixSort::Nat) => "%",
-        // Msg / Untagged / Suffix(Msg) => "" (LSortMsg has no prefix).
-        _ => "",
-    };
-    out.push_str(prefix);
-    if v.name.is_empty() {
-        out.push_str(&v.idx.to_string());
-    } else if v.idx == 0 {
-        out.push_str(&v.name);
-    } else {
-        out.push_str(&v.name);
-        out.push('.');
-        out.push_str(&v.idx.to_string());
-    }
-}
-
-// =============================================================================
-// `show (VTerm Name (BVar LVar))` — used by `checkFormula`'s `exp('g'` probe
-// =============================================================================
-
-/// HS `Show (Term a)` applied to `VTerm Name (BVar LVar)`
-/// (Term/Raw.hs:227-237 + the derived `Show (BVar v)`).
-fn show_gterm(t: &GTerm) -> String {
-    let mut s = String::new();
-    write_gterm(t, &mut s);
-    s
-}
-
-fn write_gterm(t: &GTerm, out: &mut String) {
-    match t {
-        // Lit l -> show l. Var leaves carry a BVar, whose derived Show is
-        // `Bound <i>` / `Free <show v>` (LTerm.hs:452-454).
-        GTerm::Var(BVar::Bound(i)) => {
-            out.push_str("Bound ");
-            out.push_str(&i.to_string());
-        }
-        GTerm::Var(BVar::Free(v)) => {
-            out.push_str("Free ");
-            write_varspec(v, out);
-        }
-        // Con (Name PubName n) -> 'n'
-        GTerm::PubLit(n) => {
-            out.push('\'');
-            out.push_str(n);
-            out.push('\'');
-        }
-        // Con (Name FreshName n) -> ~'n'
-        GTerm::FreshLit(n) => {
-            out.push_str("~'");
-            out.push_str(n);
-            out.push('\'');
-        }
-        // Con (Name NatName n) -> %'n'
-        GTerm::NatLit(n) => {
-            out.push_str("%'");
-            out.push_str(n);
-            out.push('\'');
-        }
-        // Numeric / neutral literals render as their irreducible function head.
-        // `Number(n)` is an RS-only bare-integer literal with no HS counterpart;
-        // render it unquoted, matching the sibling raw-show `show_debruijn_term`
-        // (parser wf.rs `show_debruijn_term`: `Number(n) => n.to_string()`).
-        GTerm::Number(n) => out.push_str(&n.to_string()),
-        // `fAppOne` = `NoEq oneSym` with `oneSymString = "one"` and
-        // `fAppNatOne` = `NoEq natOneSym` with `natOneSymString = "tone"`
-        // (FunctionSymbols.hs:226,236,255,267). `show (FApp (NoEq (s,_)) [])` = `s`
-        // (Term/Raw.hs:227-237, see line 231), so the two nullary symbols show differently.
-        GTerm::NumberOne => out.push_str("one"),
-        GTerm::NatOne => out.push_str("tone"),
-        GTerm::DhNeutral => out.push_str("DH_neutral"),
-        // FApp (NoEq (name,_)) as
-        GTerm::App(name, args) => write_app(name, args.iter(), out),
-        // `op{a}b` == `op(a,b)` — a NoEq application.
-        GTerm::AlgApp(name, a, b) => write_app(name, [a.as_ref(), b.as_ref()], out),
-        // `<a,b,c>` is binary-nested `pair(a, pair(b,c))` in HS Term.
-        GTerm::Pair(items) => write_pair(items, out),
-        // diff is a NoEq symbol named "diff".
-        GTerm::Diff(a, b) => {
-            out.push_str("diff(");
-            write_gterm(a, out);
-            out.push(',');
-            write_gterm(b, out);
-            out.push(')');
-        }
-        // `^` (exp) is a NoEq symbol named "exp"; the AC ops render with
-        // their derived constructor name (Term/Raw.hs:227-237, see line 237 `show o`).
-        GTerm::BinOp(op, a, b) => {
-            let name = match op {
-                p::BinOp::Exp => "exp",
-                p::BinOp::Mult => "Mult",
-                p::BinOp::Union => "Union",
-                p::BinOp::Xor => "Xor",
-                p::BinOp::NatPlus => "NatPlus",
-                // `FApp (AC (ACfct (s,_))) as -> BC.unpack s ++ "(" ... ")"`
-                // (Term/Raw.hs:227-233): a user-defined AC symbol shows under
-                // its own name, not the `ACfct` constructor.
-                p::BinOp::AcFct(n) => n,
-            };
-            out.push_str(name);
-            out.push('(');
-            write_gterm(a, out);
-            out.push(',');
-            write_gterm(b, out);
-            out.push(')');
-        }
-        // Pattern-match wrapper is transparent for `show` purposes.
-        GTerm::PatMatch(inner) => write_gterm(inner, out),
-    }
-}
-
-/// HS `FApp (NoEq (s,_)) as`: `s` if no args, else `s(a1,a2,..)` with no
-/// spaces (`intercalate ","`).
-fn write_app<'a, I>(name: &str, args: I, out: &mut String)
-where
-    I: IntoIterator<Item = &'a GTerm>,
-{
-    out.push_str(name);
-    let mut iter = args.into_iter().peekable();
-    if iter.peek().is_some() {
-        out.push('(');
-        let mut first = true;
-        for a in iter {
-            if !first {
-                out.push(',');
-            }
-            first = false;
-            write_gterm(a, out);
-        }
-        out.push(')');
-    }
-}
-
-fn write_pair(items: &[GTerm], out: &mut String) {
-    // Right-nested binary `pair`: <a,b,c> = pair(a, pair(b, c)).
-    match items {
-        [] => out.push_str("pair"),
-        [single] => write_gterm(single, out),
-        [head, rest @ ..] => {
-            out.push_str("pair(");
-            write_gterm(head, out);
-            out.push(',');
-            write_pair(rest, out);
-            out.push(')');
-        }
-    }
-}
-
-// =============================================================================
-// `show (Term (Lit Name LVar))` = `show LNTerm` — used by reasonableNoncesNoise,
-// isFactName, isInFactTerms
-// =============================================================================
-
-/// HS `Show (Term a)` applied to `LNTerm = VTerm Name LVar` (Term/Raw.hs:227-237).
-pub fn show_lnterm(t: &LNTerm) -> String {
-    let mut s = String::new();
-    write_lnterm(t, &mut s);
-    s
-}
-
-fn write_lnterm(t: &LNTerm, out: &mut String) {
-    use tamarin_term::term::Term;
-    match t {
-        Term::Lit(Lit::Var(v)) => write_lvar(v, out),
-        Term::Lit(Lit::Con(n)) => write_name(n, out),
-        Term::App(sym, args) => match sym {
-            // FApp (NoEq (s,_)) [] -> s ; FApp (NoEq (s,_)) as -> s(a,..)
-            FunSym::NoEq(s) => {
-                let name = String::from_utf8_lossy(s.name);
-                out.push_str(&name);
-                if !args.is_empty() {
-                    write_args(args, out);
-                }
-            }
-            // FApp (C EMap) as -> "em"(..)
-            FunSym::C(CSym::EMap) => {
-                out.push_str("em");
-                write_args(args, out);
-            }
-            // FApp List as -> "LIST"(..)
-            FunSym::List => {
-                out.push_str("LIST");
-                write_args(args, out);
-            }
-            // FApp (AC (ACfct (s,_))) [] -> s ; FApp (AC (ACfct (s,_))) as ->
-            // s(..) ; FApp (AC o) as -> show o (..)
-            FunSym::Ac(o) => {
-                match o {
-                    AcSym::Union => out.push_str("Union"),
-                    AcSym::Mult => out.push_str("Mult"),
-                    AcSym::Xor => out.push_str("Xor"),
-                    AcSym::NatPlus => out.push_str("NatPlus"),
-                    AcSym::AcFct(s) => out.push_str(&String::from_utf8_lossy(s.name)),
-                }
-                // Only the user-defined AC symbols have a nullary arm
-                // (Term/Raw.hs:227-233) showing the bare name; the builtin AC
-                // operators always show a parenthesised argument list.
-                let nullary_acfct = args.is_empty() && matches!(o, AcSym::AcFct(_));
-                if !nullary_acfct {
-                    write_args(args, out);
-                }
-            }
-        },
-    }
-}
-
-/// The parenthesised, comma-separated argument list shared by every
-/// applied-symbol arm of [`write_lnterm`] (`(a1,a2,..)`, `()` when empty).
-fn write_args(args: &[LNTerm], out: &mut String) {
-    out.push('(');
-    for (i, a) in args.iter().enumerate() {
-        if i > 0 {
-            out.push(',');
-        }
-        write_lnterm(a, out);
-    }
-    out.push(')');
-}
-
-/// HS `show LVar` for the typed `LVar` (LTerm.hs:526-533).  Writes
-/// directly into `out`, avoiding a throwaway intermediate `String`;
-/// produces byte-identical output.
-fn write_lvar(v: &tamarin_term::lterm::LVar, out: &mut String) {
-    use tamarin_term::lterm::LSort;
-    let prefix = match v.sort {
-        LSort::Fresh => "~",
-        LSort::Pub => "$",
-        LSort::Node => "#",
-        LSort::Nat => "%",
-        LSort::Msg => "",
-    };
-    out.push_str(prefix);
-    if v.name.is_empty() {
-        out.push_str(&v.idx.to_string());
-    } else if v.idx == 0 {
-        out.push_str(v.name);
-    } else {
-        out.push_str(v.name);
-        out.push('.');
-        out.push_str(&v.idx.to_string());
-    }
-}
-
-/// HS `show Name` (LTerm.hs:235-240).  Writes directly into `out`,
-/// avoiding a throwaway intermediate `String`; byte-identical output.
-fn write_name(n: &Name, out: &mut String) {
-    match n.tag {
-        NameTag::Fresh => out.push('~'),
-        NameTag::Pub => {}
-        NameTag::Node => out.push('#'),
-        NameTag::Nat => out.push('%'),
-        // `show (Name AbbrevName n) = show n` (LTerm.hs:240) — the bare name
-        // id, with neither a sigil nor the quotes the other four tags carry.
-        NameTag::Abbrev => {
-            out.push_str(n.id.0);
-            return;
-        }
-    }
-    out.push('\'');
-    out.push_str(n.id.0);
-    out.push('\'');
-}
 
 // =============================================================================
 // `show FactTag` (derived Show, Theory/Model/Fact.hs:136-149) — used by isFactName
 // =============================================================================
 
 /// HS derived `show FactTag`.  For `ProtoFact m n a` this is
-/// `ProtoFact <show m> "<n>" <a>` (with the multiplicity constructor name
-/// and the Haskell-quoted/escaped string literal).
+/// `ProtoFact <show m> "<n>" <a>`, the multiplicity constructor name and the
+/// name through the `Show String` instance
+/// ([`tamarin_parser::parser::show_lit_string`]).
 pub fn show_fact_tag(t: &FactTag) -> String {
     match t {
         FactTag::Proto(m, n, a) => {
@@ -333,7 +49,12 @@ pub fn show_fact_tag(t: &FactTag) -> String {
                 Multiplicity::Persistent => "Persistent",
                 Multiplicity::Linear => "Linear",
             };
-            format!("ProtoFact {} {} {}", mult, show_haskell_string(n), a)
+            format!(
+                "ProtoFact {} {} {}",
+                mult,
+                tamarin_parser::parser::show_lit_string(n),
+                a
+            )
         }
         FactTag::Fresh => "FreshFact".into(),
         FactTag::Out => "OutFact".into(),
@@ -343,27 +64,6 @@ pub fn show_fact_tag(t: &FactTag) -> String {
         FactTag::Ded => "DedFact".into(),
         FactTag::Term => "TermFact".into(),
     }
-}
-
-/// Haskell's `show :: String -> String` (the `Show String` instance):
-/// surrounds with double-quotes and escapes the standard control/quote
-/// characters.  Protocol fact names are plain identifiers so the common
-/// case is just `"<name>"`, but we escape to stay faithful.
-fn show_haskell_string(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 2);
-    out.push('"');
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\t' => out.push_str("\\t"),
-            '\r' => out.push_str("\\r"),
-            _ => out.push(c),
-        }
-    }
-    out.push('"');
-    out
 }
 
 // =============================================================================
@@ -383,8 +83,8 @@ fn guard_fact_tag_names(g: &Guarded, out: &mut Vec<String>) {
         }
         Guarded::GGuarded { guards, body, .. } => {
             for a in guards.iter() {
-                if let GAtom::Action(f, _) = a {
-                    out.push(f.name.clone());
+                if let ProtoAtom::Action(_, f) = a {
+                    out.push(crate::fact::fact_tag_name(&f.tag));
                 }
             }
             guard_fact_tag_names(body, out);
@@ -394,10 +94,10 @@ fn guard_fact_tag_names(g: &Guarded, out: &mut Vec<String>) {
 
 /// HS `getFormulaTerms` (Tactics.hs:203-205): the fact terms of the single
 /// top-level guard, when the formula is exactly `GGuarded _ _ [Action _ fa] _`.
-fn formula_action_fact(g: &Guarded) -> Option<&GFact> {
+fn formula_action_fact(g: &Guarded) -> Option<&Fact<BLNTerm>> {
     if let Guarded::GGuarded { guards, .. } = g {
         if guards.len() == 1 {
-            if let GAtom::Action(fa, _) = &guards[0] {
+            if let ProtoAtom::Action(_, fa) = &guards[0] {
                 return Some(fa);
             }
         }
@@ -414,7 +114,7 @@ fn formula_action_fact(g: &Guarded) -> Option<&GFact> {
 ///
 /// The returned `VarSpec`s are `show`n by the callers to build PCRE
 /// alternations like `(~n|~s|...)`.
-fn check_formula(oracle_type: &str, f: &Guarded) -> Vec<p::VarSpec> {
+fn check_formula(oracle_type: &str, f: &Guarded) -> Vec<LVar> {
     // rev = any guard fact-tag name =~ "Reveal"
     let mut tag_names = Vec::new();
     guard_fact_tag_names(f, &mut tag_names);
@@ -429,7 +129,7 @@ fn check_formula(oracle_type: &str, f: &Guarded) -> Vec<p::VarSpec> {
         Some(fa) => fa,
         None => return Vec::new(),
     };
-    let shown_terms = show_term_list(&fact.args);
+    let shown_terms = show_term_list(&fact.terms);
     let pat = if oracle_type == "curve" {
         "grpid,exp\\('g'"
     } else {
@@ -452,27 +152,24 @@ fn check_formula(oracle_type: &str, f: &Guarded) -> Vec<p::VarSpec> {
     // formulas quantify only the temporal #reveal, so me/re/peer are Free).
     // Dropping the Bound (vs. matching HS's panic) is intentional: a crash is
     // never the desired `--prove` output.
-    let mut acc: Vec<p::VarSpec> = Vec::new();
-    for arg in fact.args.iter() {
-        let mut vars: Vec<p::VarSpec> = Vec::new();
-        crate::guarded_types::collect_free_term(arg, &mut vars);
-        // varsVTerm = sortednub (HS Ord LVar = idx, sort, name).
-        vars.sort_by(crate::guarded::cmp_varspec);
-        vars.dedup_by(|a, b| crate::guarded::cmp_varspec(a, b) == std::cmp::Ordering::Equal);
-        acc.extend(vars);
+    let mut acc: Vec<LVar> = Vec::new();
+    for arg in fact.terms.iter() {
+        // `varsVTerm` is `sortednub` over `Ord (BVar LVar)`; `frees` is that
+        // sorted, deduplicated walk restricted to the `Free` leaves.
+        acc.extend(tamarin_term::lterm::frees(arg));
     }
     acc
 }
 
 /// HS `show [VTerm Name (BVar LVar)]` — the derived `Show [a]`:
 /// `"[" ++ intercalate "," (map show xs) ++ "]"`.
-fn show_term_list(args: &[GTerm]) -> String {
+fn show_term_list(args: &[BLNTerm]) -> String {
     let mut out = String::from("[");
     for (i, a) in args.iter().enumerate() {
         if i > 0 {
             out.push(',');
         }
-        out.push_str(&show_gterm(a));
+        out.push_str(&show_term(a));
     }
     out.push(']');
     out
@@ -480,7 +177,7 @@ fn show_term_list(args: &[GTerm]) -> String {
 
 /// HS `getFactTerms_ goal` for `reasonableNoncesNoise` (Tactics.hs:184-186):
 /// the fact terms of an `ActionG _ (Fact { factTerms = ft })`, else `[]`.
-pub fn action_goal_fact_terms(goal: &crate::constraint::constraints::Goal) -> Vec<LNTerm> {
+pub(crate) fn action_goal_fact_terms(goal: &crate::constraint::constraints::Goal) -> Vec<LNTerm> {
     if let crate::constraint::constraints::Goal::Action(_, fa) = goal {
         fa.terms.to_vec()
     } else {
@@ -490,7 +187,9 @@ pub fn action_goal_fact_terms(goal: &crate::constraint::constraints::Goal) -> Ve
 
 /// Accessor for the single-term action fact used by `isInFactTerms`
 /// (Tactics.hs:218-220): `ActionG _ (Fact { factTerms = [test] })`.
-pub fn action_goal_single_term(goal: &crate::constraint::constraints::Goal) -> Option<&LNTerm> {
+pub(crate) fn action_goal_single_term(
+    goal: &crate::constraint::constraints::Goal,
+) -> Option<&LNTerm> {
     if let crate::constraint::constraints::Goal::Action(_, fa) = goal {
         if fa.terms.len() == 1 {
             return Some(&fa.terms[0]);
@@ -530,7 +229,7 @@ pub fn sys_reveal_shown(oracle_type: &str, formulas: &[std::sync::Arc<Guarded>])
     let mut out = Vec::new();
     for f in formulas {
         for v in check_formula(oracle_type, f) {
-            out.push(show_varspec(&v));
+            out.push(v.to_string());
         }
     }
     out
@@ -539,73 +238,72 @@ pub fn sys_reveal_shown(oracle_type: &str, formulas: &[std::sync::Arc<Guarded>])
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tamarin_term::function_symbols::{exp_sym, nat_one_sym, AcSym};
+    use tamarin_term::lterm::{BVar, LSort, Name, NameTag};
+    use tamarin_term::term::{f_app_ac, f_app_no_eq};
+    use tamarin_term::vterm::{const_term, var_term};
 
-    fn fresh(name: &str) -> p::VarSpec {
-        p::VarSpec {
-            name: name.into(),
-            idx: 0,
-            sort: p::SortHint::Fresh,
-            typ: None,
-        }
+    fn fresh(name: &str) -> BLNTerm {
+        var_term(BVar::Free(LVar::new(name, LSort::Fresh, 0)))
     }
 
-    /// `show LVar` is `sortPrefix s ++ body`.  Each sort has one prefix.  Msg
-    /// and Untagged have no prefix.  The `.idx` suffix appears only for an
-    /// index that is not zero.
+    fn pub_name(name: &str) -> BLNTerm {
+        const_term(Name::new(NameTag::Pub, name))
+    }
+
+    /// The derived `Show FactTag` puts the protocol fact's name through the
+    /// `Show String` instance, so a control character in the name comes out
+    /// as its GHC escape.
     #[test]
-    fn show_varspec_covers_every_sort_prefix_and_the_index_suffix() {
-        let sorted = |sort, name: &str, idx| {
-            show_varspec(&p::VarSpec {
-                name: name.into(),
-                idx,
-                sort,
-                typ: None,
-            })
-        };
-        assert_eq!(show_varspec(&fresh("s")), "~s");
-        assert_eq!(sorted(p::SortHint::Pub, "a", 0), "$a");
-        assert_eq!(sorted(p::SortHint::Node, "i", 0), "#i");
-        assert_eq!(sorted(p::SortHint::Nat, "n", 0), "%n");
-        assert_eq!(sorted(p::SortHint::Msg, "m", 0), "m");
-        assert_eq!(sorted(p::SortHint::Untagged, "m", 0), "m");
-        // Sorts that the source spells as a suffix (`s:fresh`) use the same
-        // prefixes.
-        assert_eq!(
-            sorted(p::SortHint::Suffix(p::SuffixSort::Fresh), "s", 0),
-            "~s"
-        );
+    fn show_fact_tag_escapes_the_protocol_fact_name() {
+        let tag = FactTag::Proto(Multiplicity::Linear, "a\u{0B}b", 2);
+        assert_eq!(show_fact_tag(&tag), "ProtoFact Linear \"a\\vb\" 2");
+    }
+
+    /// `show LVar` is `sortPrefix s ++ body`.  Each sort has one prefix; Msg
+    /// has none.  The `.idx` suffix appears only for an index that is not
+    /// zero.
+    #[test]
+    fn show_lvar_covers_every_sort_prefix_and_the_index_suffix() {
+        let sorted = |sort, name: &str, idx| LVar::new(name, sort, idx).to_string();
+        assert_eq!(sorted(LSort::Fresh, "s", 0), "~s");
+        assert_eq!(sorted(LSort::Pub, "a", 0), "$a");
+        assert_eq!(sorted(LSort::Node, "i", 0), "#i");
+        assert_eq!(sorted(LSort::Nat, "n", 0), "%n");
+        assert_eq!(sorted(LSort::Msg, "m", 0), "m");
         // An index that is not zero appends `.idx`.  A variable with no name
         // shows the index alone.
-        assert_eq!(sorted(p::SortHint::Fresh, "s", 3), "~s.3");
-        assert_eq!(sorted(p::SortHint::Msg, "", 7), "7");
+        assert_eq!(sorted(LSort::Fresh, "s", 3), "~s.3");
+        assert_eq!(sorted(LSort::Msg, "", 7), "7");
     }
 
     #[test]
-    fn show_gterm_exp_g() {
+    fn show_term_writes_exp_g() {
         // 'g'^~s  ==>  exp('g',Free ~s)
-        let t = GTerm::BinOp(
-            p::BinOp::Exp,
-            std::sync::Arc::new(GTerm::PubLit("g".into())),
-            std::sync::Arc::new(GTerm::Var(BVar::Free(fresh("s")))),
-        );
-        assert_eq!(show_gterm(&t), "exp('g',Free ~s)");
+        let t: BLNTerm = f_app_no_eq(exp_sym(), vec![pub_name("g"), fresh("s")]);
+        assert_eq!(show_term(&t), "exp('g',Free ~s)");
+    }
+
+    /// HS's `Show (Term a)` intercalates the WHOLE argument list of an
+    /// application (Term/Term/Raw.hs:227-237), so a three-argument AC term
+    /// shows flat rather than as a nested binary chain.
+    #[test]
+    fn show_term_writes_a_three_argument_ac_application_flat() {
+        let t: BLNTerm = f_app_ac(AcSym::Mult, vec![fresh("a"), fresh("b"), fresh("c")]);
+        assert_eq!(show_term(&t), "Mult(Free ~a,Free ~b,Free ~c)");
     }
 
     /// The derived `Show [a]` puts the items in brackets.  It separates them
     /// with a comma and no space.  It shows `[]` for an empty list.
     #[test]
     fn show_term_list_matches_exp_g() {
-        let t = GTerm::BinOp(
-            p::BinOp::Exp,
-            std::sync::Arc::new(GTerm::PubLit("g".into())),
-            std::sync::Arc::new(GTerm::Var(BVar::Free(fresh("s")))),
-        );
+        let t: BLNTerm = f_app_no_eq(exp_sym(), vec![pub_name("g"), fresh("s")]);
         assert_eq!(
             show_term_list(std::slice::from_ref(&t)),
             "[exp('g',Free ~s)]"
         );
         assert_eq!(
-            show_term_list(&[t.clone(), GTerm::NatOne]),
+            show_term_list(&[t.clone(), f_app_no_eq(nat_one_sym(), vec![])]),
             "[exp('g',Free ~s),tone]"
         );
         assert_eq!(show_term_list(&[]), "[]");
@@ -639,7 +337,7 @@ mod tests {
     /// AC operators (whose derived `show ACSym` names always take an
     /// argument list) and the user-`[AC]` nullary/applied pair.
     #[test]
-    fn show_lnterm_covers_every_applied_symbol_arm() {
+    fn show_term_covers_every_applied_symbol_arm() {
         use tamarin_term::builtin::{emap, msg_var, mult, nat_plus, union, xor};
         use tamarin_term::function_symbols::{
             AcFctSym, Constructability, NdcState, NoEqSym, Privacy,
@@ -664,52 +362,49 @@ mod tests {
             )
         };
 
-        assert_eq!(show_lnterm(&f_app_no_eq(noeq(b"g", 0), vec![])), "g");
+        let nullary: LNTerm = f_app_no_eq(noeq(b"g", 0), vec![]);
+        assert_eq!(show_term(&nullary), "g");
         assert_eq!(
-            show_lnterm(&f_app_no_eq(noeq(b"h", 2), vec![x.clone(), y.clone()])),
+            show_term(&f_app_no_eq(noeq(b"h", 2), vec![x.clone(), y.clone()])),
             "h(x,y)"
         );
-        assert_eq!(show_lnterm(&emap(x.clone(), y.clone())), "em(x,y)");
+        assert_eq!(show_term(&emap(x.clone(), y.clone())), "em(x,y)");
         assert_eq!(
-            show_lnterm(&f_app_list(vec![x.clone(), y.clone()])),
+            show_term(&f_app_list(vec![x.clone(), y.clone()])),
             "LIST(x,y)"
         );
-        assert_eq!(show_lnterm(&union(x.clone(), y.clone())), "Union(x,y)");
-        assert_eq!(show_lnterm(&mult(x.clone(), y.clone())), "Mult(x,y)");
-        assert_eq!(show_lnterm(&xor(x.clone(), y.clone())), "Xor(x,y)");
-        assert_eq!(show_lnterm(&nat_plus(x.clone(), y.clone())), "NatPlus(x,y)");
+        assert_eq!(show_term(&union(x.clone(), y.clone())), "Union(x,y)");
+        assert_eq!(show_term(&mult(x.clone(), y.clone())), "Mult(x,y)");
+        assert_eq!(show_term(&xor(x.clone(), y.clone())), "Xor(x,y)");
+        assert_eq!(show_term(&nat_plus(x.clone(), y.clone())), "NatPlus(x,y)");
         assert_eq!(
-            show_lnterm(&f_app_acfct(acfct(b"xorr"), vec![x.clone(), y.clone()])),
+            show_term(&f_app_acfct(acfct(b"xorr"), vec![x.clone(), y.clone()])),
             "xorr(x,y)"
         );
         // `FApp (AC (ACfct (s,_))) [] -> s` — the bare name, no parens.
-        assert_eq!(
-            show_lnterm(&tamarin_term::term::Term::App(
-                tamarin_term::function_symbols::FunSym::Ac(AcSym::AcFct(acfct(b"nil"))),
-                Vec::new().into(),
-            )),
-            "nil"
+        let nullary_acfct: LNTerm = tamarin_term::term::Term::App(
+            tamarin_term::function_symbols::FunSym::Ac(AcSym::AcFct(acfct(b"nil"))),
+            Vec::new().into(),
         );
+        assert_eq!(show_term(&nullary_acfct), "nil");
     }
 
     #[test]
-    fn show_gterm_nat_one_is_tone() {
+    fn show_term_writes_the_two_nullary_arithmetic_symbols_by_name() {
+        // fAppOne = FApp (NoEq oneSym) [] with oneSymString = "one" and
         // fAppNatOne = FApp (NoEq natOneSym) [] with natOneSymString = "tone"
-        // (FunctionSymbols.hs:236,267) => `show fAppNatOne == "tone"`.
-        assert_eq!(show_gterm(&GTerm::NatOne), "tone");
+        // (FunctionSymbols.hs:226,236,255,267).
+        let one: BLNTerm = f_app_no_eq(tamarin_term::function_symbols::one_sym(), vec![]);
+        assert_eq!(show_term(&one), "one");
+        let tone: BLNTerm = f_app_no_eq(nat_one_sym(), vec![]);
+        assert_eq!(show_term(&tone), "tone");
     }
 
+    /// A `Bound` leaf shows as the derived `Show (BVar v)` writes it
+    /// (LTerm.hs:476-478).
     #[test]
-    fn show_gterm_number_one_is_one() {
-        // fAppOne = FApp (NoEq oneSym) [] with oneSymString = "one"
-        // (FunctionSymbols.hs:226,255) => `show fAppOne == "one"`.
-        assert_eq!(show_gterm(&GTerm::NumberOne), "one");
-    }
-
-    #[test]
-    fn show_gterm_number_is_unquoted() {
-        // RS-only bare integer literal; raw-show unquoted to match the sibling
-        // renderer (parser wf.rs `show_debruijn_term`: `Number(n) => n.to_string()`).
-        assert_eq!(show_gterm(&GTerm::Number(5)), "5");
+    fn show_term_writes_a_bound_leaf_with_its_index() {
+        let t: BLNTerm = var_term(BVar::Bound(3));
+        assert_eq!(show_term(&t), "Bound 3");
     }
 }

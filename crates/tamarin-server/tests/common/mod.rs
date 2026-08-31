@@ -165,89 +165,22 @@ pub fn content_type(res: &reqwest::Response) -> String {
     header(res, reqwest::header::CONTENT_TYPE)
 }
 
-/// Absolute Maude locations probed by the test harness, in priority order.
-/// A `MAUDE_PATH` env var overrides the probe entirely (the convention the
-/// rest of the workspace's maude-gated tests follow, and what CI sets).
-/// `$PATH` and the linuxbrew prefix are probed after these — see
-/// [`resolve_maude`].
-const MAUDE_CANDIDATES: [&str; 3] = [
-    "/usr/local/bin/maude",
-    "/opt/homebrew/bin/maude",
-    "/usr/bin/maude",
-];
-
-/// Last resort, after the absolute candidates and `$PATH` both miss: the
-/// machines here install maude under linuxbrew, which is not on the `$PATH`
-/// every shell exports to `cargo test`.
-const MAUDE_LINUXBREW: &str = "/home/linuxbrew/.linuxbrew/bin/maude";
-
-/// The maude this crate's tests run against, or `None` when the machine has
-/// none: `$MAUDE_PATH`, else an absolute [`MAUDE_CANDIDATES`] entry, else a
-/// `maude` on `$PATH`, else [`MAUDE_LINUXBREW`].
-///
-/// A `MAUDE_PATH` naming a file that does not exist is a MISCONFIGURATION,
-/// not a reason to skip: answering `None` there would turn every
-/// maude-backed pin in this crate green on a CI whose image moved maude
-/// (`.github/workflows/ci.yml` sets `MAUDE_PATH=/opt/maude/maude`).  Panic
-/// instead, so the run goes red.
-fn resolve_maude() -> Option<String> {
-    if let Ok(p) = std::env::var("MAUDE_PATH") {
-        assert!(
-            std::path::Path::new(&p).exists(),
-            "MAUDE_PATH={p} does not exist; unset it to fall back to \
-             {MAUDE_CANDIDATES:?}, or point it at a real maude — skipping \
-             every maude-backed pin here would report green vacuously"
-        );
-        return Some(p);
-    }
-    for c in MAUDE_CANDIDATES {
-        if std::path::Path::new(c).exists() {
-            return Some(c.into());
-        }
-    }
-    let on_path = std::env::var_os("PATH").and_then(|paths| {
-        std::env::split_paths(&paths)
-            .map(|d| d.join("maude"))
-            .find(|c| c.is_file())
-            .map(|c| c.display().to_string())
-    });
-    if let Some(p) = on_path {
-        return Some(p);
-    }
-    std::path::Path::new(MAUDE_LINUXBREW)
-        .exists()
-        .then(|| MAUDE_LINUXBREW.to_string())
-}
-
+/// The maude the harness hands the server, with a bare `maude` as the last
+/// resort for a run that got past [`maude_available`] with none resolved
+/// (`TAM_ALLOW_NO_MAUDE=1`, or a test that boots a server without consulting
+/// the guard): let the spawn fail with the real error rather than inventing a
+/// path.
 fn detect_maude() -> String {
-    // The bare name is a last resort for a run that got past
-    // [`maude_available`] with no maude anywhere (`TAM_ALLOW_NO_MAUDE=1`, or a
-    // test that boots a server without consulting the guard): let the spawn
-    // fail with the real error rather than inventing a path.
-    resolve_maude().unwrap_or_else(|| "maude".into())
+    tamarin_test_support::maude_path().unwrap_or_else(|| "maude".into())
 }
 
-/// True when a Maude binary is available — [`resolve_maude`] answering
-/// `Some`.  Tests that boot a real `ProofContext` use this as a skip-guard.
-///
-/// With no maude anywhere this PANICS instead of answering `false`: a silent
-/// skip makes `cargo test` green identically with and without maude, which is
-/// how a maude-backed pin rots unnoticed.  Set `TAM_ALLOW_NO_MAUDE=1` to
-/// skip them deliberately.
+/// True when a Maude binary is available — the guard the tests that boot a
+/// real `ProofContext` open with.  With no maude anywhere this PANICS instead
+/// of answering `false`; `tamarin_test_support` documents why and names the
+/// opt-out.
 #[allow(dead_code)]
 pub fn maude_available() -> bool {
-    if resolve_maude().is_some() {
-        return true;
-    }
-    assert!(
-        matches!(std::env::var("TAM_ALLOW_NO_MAUDE").as_deref(), Ok("1")),
-        "no maude found: MAUDE_PATH is unset, none of {MAUDE_CANDIDATES:?} \
-         exists, $PATH has no `maude` and {MAUDE_LINUXBREW} is missing — the \
-         maude-backed pins in this crate would report green having compared \
-         nothing.  Install maude, point MAUDE_PATH at it, or set \
-         TAM_ALLOW_NO_MAUDE=1 to skip them deliberately."
-    );
-    false
+    tamarin_test_support::maude_available()
 }
 
 /// The oracle revision the captures under `tests/fixtures/haskell-responses/`

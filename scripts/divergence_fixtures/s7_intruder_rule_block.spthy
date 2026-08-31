@@ -1,0 +1,45 @@
+/*
+ * A top-level `rule (modulo AC)` block — an intruder rule written out in the
+ * source.
+ *
+ * The parser routes such a block into the theory's intruder-rule CACHE
+ * (`intrRule`, Theory/Text/Parser/Rule.hs:156-161; `addIntrRuleACs`,
+ * Theory/Text/Parser.hs:287, OpenTheory.hs:750-751), not into the item list,
+ * and both theory prints drop the cache: `prettyOpenTheory` passes
+ * `const emptyDoc` as `ppCache` (OpenTheory.hs:869-874) and
+ * `prettyClosedTheory` passes `ppInjectiveFactInsts`
+ * (ClosedTheory.hs:381-418), which renders only the looping-facts comment.
+ * So the block contributes nothing to the echo, and the rule joins no
+ * protocol rule set.
+ *
+ * The name has to start with `c` or `d`: `intrInfo` matches on that first
+ * character, and a destructor's remainder names the constructors it takes
+ * apart (`constrNameFunc`, Theory/Text/Parser/Rule.hs:179-193), so `d_0_sdec`
+ * resolves against `sdec` from `symmetric-encryption`.
+ *
+ * No corpus theory writes one: `grep -rlE '^rule \(modulo AC\)' examples` is
+ * empty, so the pretty gate never sees this shape.
+ *
+ * Mode `match`: the two engines agree on the echo.
+ *
+ * Compared slices: the `theory … end` echo, which is where an item built for
+ * the block would show up, and the wellformedness report — `theoryRules`
+ * folds over the items (TheoryObject.hs:304-306), so the checks read the
+ * protocol rules only and the `!KD`/`!KU` facts here raise no reserved-name
+ * error.
+ */
+theory S7IntruderRuleBlock
+begin
+
+builtins: symmetric-encryption
+
+rule (modulo AC) d_0_sdec:
+   [ !KD( senc(m, k) ), !KU( k ) ] --> [ !KD( m ) ]
+
+rule Emit:
+  [ Fr( ~m ) ] --[ Emitted( ~m ) ]-> [ Out( ~m ) ]
+
+lemma Reachable:
+  exists-trace "Ex m #i. Emitted( m ) @ #i"
+
+end

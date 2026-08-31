@@ -1,0 +1,44 @@
+/*
+ * The MSR rules the SAPIC translation generates on a theory that declares
+ * `macros:`.
+ *
+ * `Sapic.translate` runs on the OPEN theory (Main/TheoryLoader.hs:472,476) and
+ * adds each generated rule with `liftedAddProtoRule` (sapic/src/Sapic.hs:75),
+ * which runs the `_restrict` lift and nothing else
+ * (Theory/Text/Parser.hs:175-193).  `closeTheory` then maps `closeProtoRule
+ * (theoryMacros thy0)` over EVERY rule item, the generated ones included
+ * (CloseRule.hs:82-84), and `applyMacroInRestriction` over every restriction.
+ * So `wrap(m, k)` and `tag(m)` stand in the `rule (modulo E)` half of each
+ * generated rule and their expansions in the `rule (modulo AC)` half, exactly
+ * as they do for a hand-written rule.
+ *
+ * A port that hands the generated rules to Maude with the macro calls still in
+ * them makes `wrap` and `tag` uninterpreted function symbols of the module:
+ * the variants close finds none, the rule falls out of the theory, and the
+ * `Rule has no variants` wellformedness check fires for it.
+ *
+ * No corpus theory reaches this: no examples file declares both `macros:` and
+ * a `process:`.
+ *
+ * Mode `match`: the two engines agree on this shape.
+ *
+ * Compared slices: the `theory … end` echo, which carries both halves of every
+ * generated rule, and the wellformedness report (see check.sh).
+ */
+theory SapicMacroRule
+begin
+
+builtins: symmetric-encryption
+
+macros: wrap(x, k) = senc(x, k), tag(y) = <'T', y>
+
+let P(k) = in(m); event Got(tag(m)); out(wrap(m, k)); 0
+
+process:
+new k; !(P(k))
+
+lemma reach:
+  exists-trace
+  "Ex m #i. Got(m) @ i"
+
+end

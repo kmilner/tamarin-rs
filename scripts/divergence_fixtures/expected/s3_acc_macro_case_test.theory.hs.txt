@@ -1,0 +1,110 @@
+theory S3AccMacroCaseTest
+
+begin
+
+// Function signature and definition of the equational theory E
+
+functions: fst/1, pair/2, snd/1
+equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
+
+macros: tag( x ) =  <'t', x>
+
+rule (modulo E) L:
+   [ In( <x, a> ) ] --[ Log( tag(x), a ) ]-> [ ]
+
+  /*
+  rule (modulo AC) L:
+     [ In( <x, a> ) ] --[ Log( <'t', x>, a ) ]-> [ ]
+  */
+
+lemma acc_badLog_suff:
+  exists-trace
+  "∃ a #i x.
+    (Log( tag(x), a ) @ #i) ∧
+    (∀ a.1 #i.1 x.1. (Log( tag(x.1), a.1 ) @ #i.1) ⇒ (a.1 = a))"
+/*
+guarded formula characterizing all satisfying traces:
+"∃ a #i x.
+  (Log( <'t', x>, a ) @ #i)
+ ∧
+  ∀ a.1 #i.1 x.1. (Log( <'t', x.1>, a.1 ) @ #i.1) ⇒ a.1 = a"
+*/
+by sorry
+
+lemma acc_verif_empty:
+  all-traces
+  "(¬(∃ a #i x. Log( tag(x), a ) @ #i)) ⇒
+   (∀ a #i x. (Log( tag(x), a ) @ #i) ⇒ (¬(a = 'ok')))"
+/*
+guarded formula characterizing all counter-examples:
+"(∀ a #i x. (Log( <'t', x>, a ) @ #i) ⇒ ⊥) ∧
+ (∃ a #i x. (Log( <'t', x>, a ) @ #i) ∧ a = 'ok')"
+*/
+by sorry
+
+lemma acc_badLog_verif_nonempty:
+  all-traces
+  "∀ a #i x.
+    (Log( tag(x), a ) @ #i) ⇒
+    (¬(∀ a.1 #i.1 x.1. (Log( tag(x.1), a.1 ) @ #i.1) ⇒ (¬(a.1 = 'ok'))))"
+/*
+guarded formula characterizing all counter-examples:
+"∃ a #i x.
+  (Log( <'t', x>, a ) @ #i)
+ ∧
+  ∀ a.1 #i.1 x.1. (Log( <'t', x.1>, a.1 ) @ #i.1) ⇒ ¬(a.1 = 'ok')"
+*/
+by sorry
+
+lemma acc_badLog_min:
+  all-traces
+  "∀ a #i x.
+    (Log( tag(x), a ) @ #i) ⇒
+    (¬(∃ a.1 #i.1 x.1.
+        (Log( tag(x.1), a.1 ) @ #i.1) ∧ ((a.1 = a) ∧ (¬(a = a.1)))))"
+/*
+guarded formula characterizing all counter-examples:
+"∃ a #i x.
+  (Log( <'t', x>, a ) @ #i)
+ ∧
+  ∃ a.1 #i.1 x.1. (Log( <'t', x.1>, a.1 ) @ #i.1) ∧ (a.1 = a) ∧ ¬(a = a.1)"
+*/
+by sorry
+
+lemma acc_badLog_uniq:
+  all-traces
+  "∀ a #i x. (Log( tag(x), a ) @ #i) ⇒ (∃ #i.1. Corrupted( a ) @ #i.1)"
+/*
+guarded formula characterizing all counter-examples:
+"∃ a #i x.
+  (Log( <'t', x>, a ) @ #i) ∧ ∀ #i.1. (Corrupted( a ) @ #i.1) ⇒ ⊥"
+*/
+by sorry
+
+lemma acc_badLog_inj:
+  all-traces "⊤"
+/*
+guarded formula characterizing all counter-examples:
+"⊥"
+*/
+by sorry
+
+lemma acc_badLog_single:
+  exists-trace
+  "∃ a #i x.
+    (Log( tag(x), a ) @ #i) ∧
+    (∀ a.1 #i.1 x.1. (Log( tag(x.1), a.1 ) @ #i.1) ⇒ (a.1 = a))"
+/*
+guarded formula characterizing all satisfying traces:
+"∃ a #i x.
+  (Log( <'t', x>, a ) @ #i)
+ ∧
+  ∀ a.1 #i.1 x.1. (Log( <'t', x.1>, a.1 ) @ #i.1) ⇒ a.1 = a"
+*/
+by sorry
+
+predicate: BadLog( a )<=>∃ #i x. Log( tag(x), a ) @ #i
+
+
+
+end

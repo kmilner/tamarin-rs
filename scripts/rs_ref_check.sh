@@ -22,7 +22,7 @@
 # arbitrary `verdict=OK` (migrate_hs_cache_fp.sh's rename log, an RS-vs-RS
 # sweep) or a run scoped to a subset proves nothing about this corpus. Its
 # path, its verdict and the fingerprint of the oracle binary on this machine
-# (revision-checked against the submodule pin) are stamped into the reference
+# (checked against the submodule pin and current patch series) are stamped into the reference
 # header beside `# maude:`, so the committed baseline carries the evidence
 # that an oracle run justified it.
 #
@@ -145,15 +145,14 @@ if [ "$MODE" = generate ]; then
         exit 2; }
     # The oracle binary is the specification the certifying run compared
     # against; its fingerprint (gate_common's hs_fingerprint, the same
-    # size.mtime recipe the cached gates key on) is what pins WHICH oracle
+    # binary-SHA recipe the cached gates key on) is what pins WHICH oracle
     # that was.
     HS_PATH="${HS_PATH:-$(find "$ROOT/tamarin-prover-testing/.stack-work/install" \
                                -name tamarin-prover -type f 2>/dev/null | head -1)}"
     [ -n "$HS_PATH" ] && [ -x "$HS_PATH" ] || {
         echo "rs_ref_check: no oracle binary to fingerprint (HS_PATH=${HS_PATH:-unset})" >&2
         exit 2; }
-    hs_fingerprint "$HS_PATH"
-    # The fingerprint records WHICH binary; gate_common's oracle_rev_check pins
+    # gate_common's oracle_rev_check fingerprints WHICH binary and pins
     # that it is the build of the submodule pin before `# oracle:` is stamped —
     # otherwise the header could bless a baseline with the fingerprint of an
     # oracle from another upstream (ALLOW_ORACLE_REV_MISMATCH=1 to override,
@@ -171,21 +170,23 @@ if [ "$MODE" = check ]; then
     fi
 fi
 
-# strip_env / flags_for / include_shas come from gate_common.sh.  ikey is
+# strip_env / flags_for / include_shas / oracle_shas come from gate_common.sh. ikey is
 # deliberately NOT gate_common's ckey: the reference key must not carry the
 # oracle fingerprint (the header's `# oracle:` line records that separately),
 # so it is the fingerprint-free prefix of the same format. The `__i` include
 # digest IS carried: an edit to an `#include`d fragment changes the oracle's
 # input, and without it check would blame the port (DIFF) instead of the
 # input (INPUT_CHANGED).
-ikey() {  # input key: theory sha + include-shas suffix + flags-hash suffix
-    local h fl inc; h=$(sha256sum "$2" | cut -d' ' -f1); fl=$(flags_for "$1")
+ikey() {  # input key: theory sha + dependency + flags suffixes
+    local h fl inc ora; h=$(sha256sum "$2" | cut -d' ' -f1); fl=$(flags_for "$1")
     inc=$(include_shas "$2")
+    ora=$(oracle_shas "$2" "$fl")
     if [ -n "$inc" ]; then h="${h}__i$(printf '%s' "$inc" | sha256sum | cut -c1-12)"; fi
+    if [ -n "$ora" ]; then h="${h}__o$(printf '%s' "$ora" | sha256sum | cut -c1-12)"; fi
     if [ -n "$fl" ]; then printf '%s__f%s' "$h" "$(printf '%s' "$fl" | sha256sum | cut -c1-12)"
     else printf '%s' "$h"; fi
 }
-export -f strip_env flags_for include_shas ikey
+export -f strip_env flags_for include_shas oracle_shas ikey
 
 # one <rel> → "rel \t ikey \t sha|TIMEOUT|ERROR=n \t lines"
 one() {

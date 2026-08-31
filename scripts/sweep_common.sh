@@ -253,14 +253,12 @@ sweep_preflight() {
 }
 sweep_preflight
 
-# Oracle-binary fingerprint (gate_common's hs_fingerprint), part of every
-# cache key. Loop-invariant, so it is taken once here rather than per cached
-# lookup.
-hs_fingerprint "$HS_BIN"
+# sweep_preflight's source check also computes the oracle fingerprint used by
+# every cache key.
 
-# include_shas comes from gate_common.sh (it is part of ckey and of
-# rs_ref_check.sh's ikey there too); hs_run folds it into its digest below,
-# and it prints nothing for an include-free theory, keeping those keys stable.
+# include_shas / oracle_shas come from gate_common.sh (they are part of ckey
+# and of rs_ref_check.sh's ikey there too); hs_run folds them into its digest
+# below, and each prints nothing when that dependency class is absent.
 
 # hs_run <workdir> <theory> <tag> <flag...>
 #   Executes  grun $HS_BIN --with-maude=$MAUDE <flag...> <theory>
@@ -270,10 +268,24 @@ hs_fingerprint "$HS_BIN"
 #   excluding volatile paths (pass e.g. "json+dot", not the tmp-dir flags).
 hs_run() {
   local wd=$1 f=$2 tag=$3; shift 3
-  local key
+  local key legacy_key legacy_dir
   key=$( { sha256sum "$f" | cut -d' ' -f1; echo "$tag"; echo "$HS_FP"; echo "$MAUDE"
-           include_shas "$f"; } | sha256sum | cut -d' ' -f1 )
+           include_shas "$f"; oracle_shas "$f" "$*"; } | sha256sum | cut -d' ' -f1 )
   local dir="$HS_CACHE/${key:0:2}/$key"
+  if [ ! -f "$dir/rc" ]; then
+    # Preserve the costly cache generated before hs_fingerprint switched from
+    # size+mtime to binary SHA-256. This must reproduce the former key exactly,
+    # including executable-oracle inputs. Compute it only on a miss: a warm
+    # entry should not pay for a second dependency walk forever.
+    legacy_key=$( { sha256sum "$f" | cut -d' ' -f1; echo "$tag"; echo "$HS_FP_LEGACY"; echo "$MAUDE"
+                    include_shas "$f"; oracle_shas "$f" "$*"; } | sha256sum | cut -d' ' -f1 )
+    legacy_dir="$HS_CACHE/${legacy_key:0:2}/$legacy_key"
+    if [ -f "$legacy_dir/rc" ]; then
+      local promote="$dir.promote.$$"
+      mkdir -p "$(dirname "$dir")" && cp -a "$legacy_dir" "$promote" \
+        && mv -T "$promote" "$dir" || rm -rf "$promote"
+    fi
+  fi
   if [ -f "$dir/rc" ]; then
     local crc ccap
     crc=$(cat "$dir/rc"); ccap=$(cat "$dir/cap")
@@ -385,8 +397,8 @@ sweep_out() {
 #   turns up in sweep_finish's row-count check.
 sweep_export() {
   export -f one row grun oom_prologue norm nerr io_diff infra_abort nonempty_compared \
-            nocompare_check include_shas hs_run sweep_one "$@"
-  export HS_BIN RS_BIN MAUDE OUT TIMEOUT HS_CACHE HS_FP
+            nocompare_check include_shas oracle_shas hs_run sweep_one "$@"
+  export HS_BIN RS_BIN MAUDE OUT TIMEOUT HS_CACHE HS_FP HS_FP_LEGACY
 }
 
 # sweep_retry <out.tsv> <status-col>

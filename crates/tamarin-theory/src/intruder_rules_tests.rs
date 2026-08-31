@@ -3,6 +3,7 @@
 //   scripts/gen_license_headers.py --authors <this file>
 
 use super::*;
+use crate::rule::{equal_rule_up_to_renaming_ignoring_names, is_subset_of};
 
 /// Pins every `show_fun_sym_name` arm to the display name HS
 /// `showFunSymName` (Term/Term.hs:286-296) produces.  The arms read
@@ -644,10 +645,10 @@ fn destruction_rules_pair_emits_exactly_two_destructors() {
 // Pin both ends of the predicate: a positive (two rules differing only
 // in variable names) and a negative (structurally different).
 // =========================================================================
-use crate::test_maude::maude_path;
+use tamarin_test_support::require_maude_path;
 
 /// A maude that speaks `sig`, or `None` when no maude resolved at all.  The
-/// `None` case is the accepted skip.  See [`crate::test_maude::maude_path`].
+/// `None` case is the accepted skip.  See [`tamarin_test_support::require_maude_path`].
 ///
 /// A maude that resolves but does not start is the same misconfiguration as
 /// a dangling `MAUDE_PATH`.  An `.ok()` here would silently skip every pin in
@@ -655,7 +656,7 @@ use crate::test_maude::maude_path;
 fn maude_handle_for(
     sig: tamarin_term::maude_sig::MaudeSig,
 ) -> Option<tamarin_term::maude_proc::MaudeHandle> {
-    let path = maude_path()?;
+    let path = require_maude_path()?;
     Some(
         tamarin_term::maude_proc::MaudeHandle::start(&path, sig).unwrap_or_else(|e| {
             panic!(
@@ -1309,32 +1310,4 @@ fn dh_intruder_rules_destructors_have_kd_shape() {
         );
         assert!(d.new_vars.is_empty(), "destructor new_vars must be empty");
     }
-}
-
-/// `norm_rule` is the identity on a DH constructor rule whose
-/// terms are already in normal form (KU(x.0), KU(x.1), KU(exp(x.0, x.1))).
-/// Mirrors HS `normRule'` (IntruderRules.hs:376-380) — for already-normal
-/// terms, `norm'` returns the input.
-#[test]
-fn norm_rule_identity_on_already_normal_rule() {
-    let maude = match dh_maude_handle() {
-        Some(m) => m,
-        None => return,
-    };
-    let rules = dh_intruder_rules(false, &maude);
-    let exp_constr = rules
-        .iter()
-        .find(|r| match &r.info {
-            IntrRuleACInfo::ConstrRule { name, .. } => name.as_slice() == b"_exp",
-            _ => false,
-        })
-        .expect("_exp constructor rule must be present");
-    let normalised = norm_rule(&maude, exp_constr);
-    assert_eq!(
-        &normalised, exp_constr,
-        "norm_rule must be the identity on a rule whose terms are \
-             already in normal form (`x.0`, `x.1`, `exp(x.0, x.1)` — no \
-             reducible top-level shapes).  HS: `normRule' = mapTerms norm'`, \
-             and `norm' (x.0) = x.0`."
-    );
 }

@@ -23,12 +23,13 @@ tamarin-theory = { workspace = true }
 tamarin-sapic = { workspace = true }
 tamarin-server = { workspace = true }
 tamarin-accountability = { workspace = true }
-# tamarin-export is a placeholder crate not yet wired into the driver; its dep
-# will be added here when that port lands.
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 mimalloc = { version = "0.1", default-features = false }
 rayon = { workspace = true }
 clap = { workspace = true }
+
+[dev-dependencies]
+tamarin-test-support = { workspace = true }
 
 [lints]
 workspace = true

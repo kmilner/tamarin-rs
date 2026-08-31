@@ -1,0 +1,29 @@
+// A fresh public constant that only a rule's `_restrict` formula mentions.
+//
+// `freshNamesReport'` (Theory/Tools/Wellformedness.hs:444-452) collects the
+// names of a rule with `universeBi`, which reaches the `_preRestriction`
+// formula (Theory/Model/Rule.hs:424) the `_restrict` construct leaves there
+// (Theory/Text/Parser.hs:175-192).  `~'foo'` is a literal, not a free
+// variable, so `rewrite` returns it unchanged
+// (Theory/Model/Restriction.hs:96-112) and the action fact
+// `fromRuleRestriction` adds to the rule (Theory/Model/Restriction.hs:141-162)
+// carries nothing, so the name is reachable only through the rule info.
+//
+// Both engines also reach `~'foo'` through the generated `Restr_R_1`
+// restriction and report it under `Formula terms`, so the block carries two
+// topics.
+//
+// Mode `match`: the two engines agree on this shape.
+//
+// Compared slice: the wf report block.
+
+
+theory S8RestrictFreshName
+begin
+
+rule R:
+  [ Fr(~x) ]
+  --[ _restrict( not( ~'foo' = 'a' ) ) ]->
+  [ Out(~x) ]
+
+end

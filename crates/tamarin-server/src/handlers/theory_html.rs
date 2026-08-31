@@ -15,15 +15,11 @@ use crate::handlers::{default_layout, OPTIONS_MENU_ITEMS};
 use crate::state::TheoryEntry;
 
 use tamarin_theory::constraint::solver::proof_method::{ProofMethod, Result as MethodResult};
-use tamarin_theory::constraint::solver::search::{proof_status, ProofNode, ProofStatus};
+use tamarin_theory::constraint::solver::search::ProofStatus;
 use tamarin_theory::theory::{LemmaAttr, TraceQuantifier};
 
 /// Full overview/framing page (the one served at `/thy/trace/<idx>/overview/...`).
-pub fn overview_page(entry: &TheoryEntry, path: &TheoryPath) -> String {
-    // The west pane's lemma list and the centre pane both AC-canonicalise
-    // parser-AST terms, which reads the user-fn thread-locals — empty on an
-    // axum worker thread.  See `TheoryEntry::install_user_funs`.
-    let _user_funs_guard = entry.install_user_funs();
+pub(crate) fn overview_page(entry: &TheoryEntry, path: &TheoryPath) -> String {
     let header_html = header(entry);
     let proof_state = proof_state(entry);
     let main_view = path_html(entry, path);
@@ -35,7 +31,7 @@ pub fn overview_page(entry: &TheoryEntry, path: &TheoryPath) -> String {
     // ` </div></div></div>` pane closers.  Volatile substitutions: the theory
     // name in the title, and — inside `{header}` — the `{version}` field.
     default_layout(
-        &format!("Theory: {}", html_escape(&entry.name)),
+        &format!("Theory: {}", html_escape(&entry.typed_theory.name)),
         &format!(
             r##"<div class="ui-layout-north">{header}</div><div class="ui-layout-west"><h1 class="pane-head">Proof scripts</h1><div class="scroll-wrapper" id="proof-wrapper"><div class="monospace" id="proof">{proof_state} </div></div></div><div class="ui-layout-east"><h1 class="pane-head">&nbsp;Debug information</h1><div class="scroll-wrapper" id="debug-wrapper"><div id="ui-debug-display"></div></div></div><div class="ui-layout-center"><h1 class="pane-head" id="main-title">Visualization display</h1><div class="scroll-wrapper" id="main-wrapper" tabindex="0"><div id="ui-main-display">{main_view} </div></div></div>"##,
             header = header_html,
@@ -58,7 +54,7 @@ fn header(entry: &TheoryEntry) -> String {
     // the `abstr-toggle` entry.
     let is_local = matches!(entry.origin, crate::state::TheoryOrigin::Local(_));
     let idx = entry.idx;
-    let filename = html_escape(&format!("{}.spthy", entry.name));
+    let filename = html_escape(&format!("{}.spthy", entry.typed_theory.name));
     let reload_form = if is_local {
         format!(
             "<li><form class=\"ajax-form ajax-form-full reload-confirm\" method=\"POST\" action=\"/thy/trace/{idx}/reload\"><button class=\"nav-button\" type=\"submit\">Reload file</button></form></li>")
@@ -128,7 +124,7 @@ fn proof_state(entry: &TheoryEntry) -> String {
     elems.push(format!(
         "{theory} <a class=\"internal-link help\" href=\"/thy/trace/{idx}/main/help\">{name}</a> {begin}",
         theory = kw("theory"), begin = kw("begin"),
-        idx = idx, name = html_escape(&entry.name)));
+        idx = idx, name = html_escape(&entry.typed_theory.name)));
     elems.push(String::new());
     // `overview n info p = linkToPath … [] (bold n <-> info)`; `bold = withTag
     // "strong" [] . text`.  Message / Tactic pass `text ""` as info (a trailing
@@ -192,14 +188,12 @@ fn proof_state(entry: &TheoryEntry) -> String {
 /// `web_proto_rules.len()` plus the ISend/IRecv-style intruder members of
 /// `crProtocol` (`ctx.intruder_rules` minus construction/destruction rules).
 fn proto_rule_count(entry: &TheoryEntry) -> usize {
-    let proto =
-        tamarin_theory::pretty_theory::web_proto_rules(&entry.parser_theory, &entry.typed_theory)
-            .len();
+    let proto = tamarin_theory::pretty_theory::web_proto_rules(&entry.typed_theory).len();
     let extra = entry.proof_state.as_ref().map_or(0, |ps| {
-        let ctx = ps.ctx.lock();
+        let ctx = ps.template_context();
         ctx.intruder_rules
             .iter()
-            .filter(|ir| !is_constr_intr(&ir.info) && !is_destr_intr(&ir.info))
+            .filter(|ir| !is_constr_rule(&ir.info) && !is_destr_rule(&ir.info))
             .count()
     });
     proto + extra
@@ -221,11 +215,7 @@ fn cases_info(n_cases: usize, n_chains: usize) -> String {
 /// links, the `proofIndex` tree, then a trailing `add lemma`.  The header +
 /// edit/delete are wrapped by HS in `markStatus (root color)` — a `hl_*` span
 /// the normalizer unwraps, so we emit them plain.
-fn lemma_index(
-    out: &mut String,
-    entry: &TheoryEntry,
-    l: &tamarin_theory::theory::Lemma<tamarin_theory::theory::ProofSkeleton>,
-) {
+fn lemma_index(out: &mut String, entry: &TheoryEntry, l: &tamarin_theory::theory::Lemma) {
     let idx = entry.idx;
     let tq = match l.trace_quantifier {
         TraceQuantifier::AllTraces => "all-traces",
@@ -233,32 +223,20 @@ fn lemma_index(
     };
     let attrs = render_attrs(&l.attributes, &entry.typed_theory.in_file);
     // HS renders the quantifier + formula as `nest 2 (sep [tq, doubleQuotes
-    // (prettyLNFormula f)])` (Web/Theory.hs:309-313) through the
+    // (prettyLNFormula l._lFormula)])` (Web/Theory.hs:309-313) through the
     // HtmlDoc/HughesPJ engine: (1) AC argument lists (`++`/`*`/xor) are
     // stored AC-canonically (fAppAC flatten+sort, Term/Raw.hs:117-129);
     // (2) layout runs at the web width 100/67 (renderHtmlDoc,
     // Text/PrettyPrint/Html.hs:151-153); (3) fill widths are measured on
-    // entity-ESCAPED text (Html.hs:102-105).  `pretty_formula` alone kept
-    // source operand order and never wrapped, so `++`-operand order and
-    // the fcat break-spaces inside tuples/AC chains diverged (the alethea
-    // overview family).
-    // HS's theory stores every lemma predicate-EXPANDED (`liftedAddLemma` →
-    // `expandLemma`); the port's accountability `translate` injects its
-    // generated lemmas with `Pred` sugar intact, deferring expansion to
-    // consumers — apply it here exactly as the batch renderer does, or the
-    // acc-generated lemmas render `IsInvalid( a )` where HS shows the body.
-    // A no-op for ordinary lemmas (elaboration already expanded them).
-    let expanded = tamarin_theory::pretty_theory::expand_lemma_formula_for_display(
-        &entry.parser_theory,
-        &l.formula,
+    // entity-ESCAPED text (Html.hs:102-105).  The render runs under the
+    // active `HtmlDocGuard` (proof_state's), so operators become
+    // `hl_operator` spans and the formula text is entity-escaped, while the
+    // line-wrapping measures escaped fill-widths at DEFAULT_LINE_LENGTH /
+    // DEFAULT_RIBBON (the widths lib.rs installs).
+    let formula_hdr = tamarin_theory::pretty_formula::lemma_header_line_doc(
+        tq,
+        tamarin_theory::pretty_formula::lnformula_doc(&l.formula),
     );
-    let canon = tamarin_theory::elaborate::canonicalize_ac_in_formula(&expanded);
-    // `nest 2 (sep [prettyTraceQuantifier tq, doubleQuotes (prettyLNFormula f)])`
-    // — rendered under the active `HtmlDocGuard` (proof_state's), so operators
-    // become `hl_operator` spans and the formula text is entity-escaped, while
-    // the line-wrapping still measures escaped fill-widths at DEFAULT_LINE_LENGTH/
-    // DEFAULT_RIBBON (the widths lib.rs installs) exactly as HS `renderHtmlDoc`.
-    let formula_hdr = tamarin_theory::pretty_formula::lemma_header_line(tq, &canon);
     let n_url = url_path_escape(&l.name);
     use tamarin_theory::pretty_hpj as hpj;
     // HS `lemmaIndex` (Web/Theory.hs:308-320), a single Doc joined by `$-$`
@@ -285,11 +263,11 @@ fn lemma_index(
         idx = idx, n_url = n_url));
     // `proofIndex l._lName tidx renderUrl mkRoute annPrf` — the annotated
     // proof tree, rendered by `prettyProofWith ppStep ppCase . insertPaths`.
-    let live_root = entry
+    let index_root = entry
         .proof_state
         .as_ref()
-        .and_then(|ps| ps.get_root(&l.name));
-    match live_root {
+        .and_then(|ps| ps.proof_index_root(&l.name));
+    match index_root {
         Some(root) => {
             let cx = PpCtx {
                 idx,
@@ -367,11 +345,14 @@ fn interpret_color(tq: TraceQuantifier, status: ProofStatus) -> StepColor {
 ///   (Just _, Yellow)   -> hl_medium
 ///   (Just _, Unmarked) -> id               (no wrapping span)
 /// Returns the (open, close) tag pair; `("","")` for the identity case.
-fn mark_wrap(cx: &PpCtx, node: &ProofNode) -> (&'static str, &'static str) {
+fn mark_wrap(
+    cx: &PpCtx,
+    node: &crate::handlers::proof_tree::ProofIndexNode,
+) -> (&'static str, &'static str) {
     if !node.annotated {
         return ("<span class=\"hl_superfluous\">", "</span>");
     }
-    match interpret_color(cx.tq, proof_status(node)) {
+    match interpret_color(cx.tq, node.proof_status()) {
         StepColor::Unmarked => ("", ""),
         StepColor::Green => ("<span class=\"hl_good\">", "</span>"),
         StepColor::Red => ("<span class=\"hl_bad\">", "</span>"),
@@ -383,7 +364,13 @@ fn mark_wrap(cx: &PpCtx, node: &ProofNode) -> (&'static str, &'static str) {
 /// dispatch on the node's children shape.  `depth` counts the named-case
 /// `nest 2` levels the subtree sits under (HS `ppCase`), which shifts the
 /// method text's wrap budget — see `pp_step`.
-fn pp_prf(out: &mut String, cx: &PpCtx, path: &[String], node: &ProofNode, depth: usize) {
+fn pp_prf(
+    out: &mut String,
+    cx: &PpCtx,
+    path: &[String],
+    node: &crate::handlers::proof_tree::ProofIndexNode,
+    depth: usize,
+) {
     use tamarin_theory::pretty_hpj as hpj;
     // Nest indent for `next`/`qed` at this level (HS `nest 2` per named case).
     let ind = "  ".repeat(depth);
@@ -444,7 +431,7 @@ fn pp_case(
     cx: &PpCtx,
     path: &[String],
     name: &str,
-    child: &ProofNode,
+    child: &crate::handlers::proof_tree::ProofIndexNode,
     depth: usize,
 ) {
     use tamarin_theory::pretty_hpj as hpj;
@@ -488,7 +475,7 @@ fn pp_step(
     out: &mut String,
     cx: &PpCtx,
     path: &[String],
-    node: &ProofNode,
+    node: &crate::handlers::proof_tree::ProofIndexNode,
     depth: usize,
     by_prefix: bool,
 ) {
@@ -536,7 +523,7 @@ fn pp_step(
         // one empty remove-step anchor per node in HS's /overview/help.
         out.push_str(&format!("<span class=\"hl_superfluous\">{label}</span>"));
     } else {
-        let color = interpret_color(cx.tq, proof_status(node));
+        let color = interpret_color(cx.tq, node.proof_status());
         let cls = match color {
             StepColor::Unmarked => "sorry-step",
             StepColor::Green => "hl_good",
@@ -578,27 +565,22 @@ fn render_attrs(attrs: &[LemmaAttr], in_file: &str) -> String {
             // HS prints the STORED ranking value, whose oracle name was resolved
             // at parse time; RS keeps the raw source string, so it must be
             // re-rendered with the oracle name expanded — the same
-            // `pretty_goal_rankings` the batch printer's `lemma_attr_docs` uses
+            // `pretty_heuristic_str` the batch printer's `lemma_attr_docs` uses
             // (`heuristic=O` alone would drop the oracle file name).
             LemmaAttr::Heuristic(s) => format!(
                 "heuristic={}",
-                tamarin_theory::pretty_theory::pretty_goal_rankings(s, in_file)
+                tamarin_theory::pretty_theory::pretty_heuristic_str(s, in_file)
             ),
             LemmaAttr::Output(xs) => format!("output={}", xs.join(",")),
             LemmaAttr::Left => "left".into(),
             LemmaAttr::Right => "right".into(),
-            LemmaAttr::Hint(s) => s.clone(),
         })
         .collect();
     format!(" [{}]", parts.join(", "))
 }
 
 /// Main pane: render the content for a given path.
-pub fn path_html(entry: &TheoryEntry, path: &TheoryPath) -> String {
-    // The rule / lemma / restriction renderers reached below AC-canonicalise
-    // parser-AST terms, which reads the user-fn thread-locals — empty on an
-    // axum worker thread.  See `TheoryEntry::install_user_funs`.
-    let _user_funs_guard = entry.install_user_funs();
+pub(crate) fn path_html(entry: &TheoryEntry, path: &TheoryPath) -> String {
     let typed = &entry.typed_theory;
     match path {
         TheoryPath::Help => help_html(entry),
@@ -619,7 +601,11 @@ pub fn path_html(entry: &TheoryEntry, path: &TheoryPath) -> String {
             let body = typed
                 .tactic
                 .iter()
-                .map(|t| tamarin_theory::pretty_hpj::escape_html_entities(&t.render()))
+                .map(|t| {
+                    tamarin_theory::pretty_hpj::escape_html_entities(
+                        &tamarin_theory::tactic::render(t),
+                    )
+                })
                 .collect::<Vec<_>>()
                 .join("\n\n");
             assemble_pane(vec![Some(section_fragment(
@@ -766,7 +752,7 @@ fn help_html(entry: &TheoryEntry) -> String {
     // `</span>` after the Tamarin span that HS's Hamlet emits).
     let env_line = format!(
         "<p>Theory: {name} (Loaded at {time} from {origin}) {errors}</p>",
-        name = html_escape(&entry.name),
+        name = html_escape(&entry.typed_theory.name),
         time = html_escape(&time),
         origin = html_escape(&origin),
         errors = entry.errors_html,
@@ -783,7 +769,7 @@ const HELP_STATIC: &str = r#"<div id="help"><h3>Quick introduction</h3><noscript
 /// Render the proof tree pane for a lemma at a given sub-path.
 /// If a live [`ProofState`] is already built, use the actual tree;
 /// otherwise fall back to the lemma's static info plus a build hint.
-pub fn proof_html(entry: &TheoryEntry, lemma: &str, sub: &[String]) -> String {
+pub(crate) fn proof_html(entry: &TheoryEntry, lemma: &str, sub: &[String]) -> String {
     // HS `htmlThyPath` for `TheoryProof l p` (Web/Theory.hs:1025-1029):
     //   pp $ fromMaybe (text "No such lemma or proof path.") $ do
     //     lemma <- lookupLemma l thy
@@ -798,20 +784,13 @@ pub fn proof_html(entry: &TheoryEntry, lemma: &str, sub: &[String]) -> String {
     if let Some(ps) = &entry.proof_state {
         if let Some(root) = ps.get_root(lemma) {
             if let Some(n) = crate::handlers::proof_tree::navigate_at(&root, sub) {
-                // `write_applicable_methods` execs every candidate method —
-                // solver code that resolves user fun symbols via
-                // thread-locals; install them for this render (tokio
-                // workers start empty — see `ProofState::user_funs`).
-                let _user_funs_guard = ps.install_user_funs();
-                // Install this lemma's per-lemma `use_induction`/`heuristic`
-                // into the shared ctx before ranking (HS `getProofContext`);
-                // otherwise the Applicable Proof Methods order + ranking name
-                // default to `AvoidInduction`/`Smart` and diverge from HS.
-                let mut ctx_guard = ps.ctx.lock();
-                ps.install_lemma_settings(&mut ctx_guard, lemma);
-                return crate::handlers::proof_tree::render_sub_proof_snippet(
-                    entry.idx, lemma, sub, n, &ctx_guard,
-                );
+                // Build the lemma-specialised context used by batch proving
+                // before ranking (HS `getProofContext`).
+                if let Ok(ctx) = ps.context_for_lemma(lemma) {
+                    return crate::handlers::proof_tree::render_sub_proof_snippet(
+                        entry.idx, lemma, sub, n, &ctx,
+                    );
+                }
             }
         }
     }
@@ -828,28 +807,7 @@ pub fn proof_html(entry: &TheoryEntry, lemma: &str, sub: &[String]) -> String {
 // module only adds the surrounding HTML tags HS's `withTag`/`ppSection` emit.
 // ---------------------------------------------------------------------
 
-use tamarin_theory::rule::{IntrRuleAC, IntrRuleACInfo};
-
-/// HS `isConstrRule` for the message-page classification (Model/Rule.hs:707-714):
-/// `_crConstruct` = ConstrRule | FreshConstr | PubConstr | NatConstr | Coerce.
-fn is_constr_intr(info: &IntrRuleACInfo) -> bool {
-    matches!(
-        info,
-        IntrRuleACInfo::ConstrRule { .. }
-            | IntrRuleACInfo::FreshConstr
-            | IntrRuleACInfo::PubConstr
-            | IntrRuleACInfo::NatConstr
-            | IntrRuleACInfo::Coerce
-    )
-}
-
-/// HS `isDestrRule` (Model/Rule.hs:694-698): `_crDestruct` = DestrRule | IEquality.
-fn is_destr_intr(info: &IntrRuleACInfo) -> bool {
-    matches!(
-        info,
-        IntrRuleACInfo::DestrRule { .. } | IntrRuleACInfo::IEquality
-    )
-}
+use tamarin_theory::rule::{is_constr_rule, is_destr_rule, IntrRuleAC};
 
 /// HS `ppSection header s = withTag "h2" [] (text header) $$ withTag "p"
 /// [("class","monospace rules")] body` (Web/Theory.hs:934-937), rendered
@@ -902,18 +860,18 @@ fn message_html(entry: &TheoryEntry) -> String {
     // `prettySignatureWithMaude thy._thySignature` — the same signature block
     // the theory body prints.
     let sig_block =
-        tamarin_theory::pretty_theory::web_signature_block(&entry.typed_theory.signature.maude_sig);
+        tamarin_theory::pretty_theory::web_signature_block(&entry.typed_theory.signature);
     // `getClassifiedRules thy`'s `_crConstruct` / `_crDestruct`.  RS stores
     // proto rules separately, so `ctx.intruder_rules` is exactly HS's
     // `intrRulesAC`; an order-preserving filter reproduces the classification.
     let mut construct: Vec<IntrRuleAC> = Vec::new();
     let mut destruct: Vec<IntrRuleAC> = Vec::new();
     if let Some(ps) = &entry.proof_state {
-        let ctx = ps.ctx.lock();
+        let ctx = ps.template_context();
         for ir in &ctx.intruder_rules {
-            if is_constr_intr(&ir.info) {
+            if is_constr_rule(&ir.info) {
                 construct.push(ir.clone());
-            } else if is_destr_intr(&ir.info) {
+            } else if is_destr_rule(&ir.info) {
                 destruct.push(ir.clone());
             }
         }
@@ -977,13 +935,12 @@ fn rules_html(entry: &TheoryEntry) -> String {
     // HS `rulesSnippet`'s FIRST slot: `if null (theoryMacros thy) then text
     // empty else ppWithHeader "Macros" (prettyMacros ...)` — a `text ""` blank
     // line when there are no macros, else the macros section.
-    let macros_block = tamarin_theory::pretty_theory::web_macros(&entry.parser_theory);
-    let proto_rules =
-        tamarin_theory::pretty_theory::web_proto_rules(&entry.parser_theory, &entry.typed_theory);
+    let macros_block = tamarin_theory::pretty_theory::web_macros(&entry.typed_theory);
+    let proto_rules = tamarin_theory::pretty_theory::web_proto_rules(&entry.typed_theory);
     let mut inj_body = String::from("None");
     let mut extra_ac: Vec<String> = Vec::new();
     if let Some(ps) = &entry.proof_state {
-        let ctx = ps.ctx.lock();
+        let ctx = ps.template_context();
         // `getInjectiveFactInsts thy` — already computed on the context.
         if !ctx.injective_fact_insts.is_empty() {
             let items: Vec<String> = ctx
@@ -1001,7 +958,7 @@ fn rules_html(entry: &TheoryEntry) -> String {
         // (`\n`) with the other rules below.
         let comment = multi_comment_(&["has exactly the trivial AC variant"]).render();
         for ir in &ctx.intruder_rules {
-            if is_constr_intr(&ir.info) || is_destr_intr(&ir.info) {
+            if is_constr_rule(&ir.info) || is_destr_rule(&ir.info) {
                 continue;
             }
             let body =
@@ -1020,8 +977,7 @@ fn rules_html(entry: &TheoryEntry) -> String {
     // `vsep $ map prettyRestriction` (Web/Theory.hs:893-923, see line 901) = `foldr ($--$)` =
     // blank line between restrictions.
     let restr_body =
-        tamarin_theory::pretty_theory::web_restrictions(&entry.parser_theory, &entry.typed_theory)
-            .join("\n\n");
+        tamarin_theory::pretty_theory::web_restrictions(&entry.typed_theory).join("\n\n");
 
     // HS `rulesSnippet` order: Macros slot → Fact Symbols → MSR → Restrictions.
     let macros_slot = match &macros_block {
@@ -1087,26 +1043,32 @@ pub(crate) fn compute_source_lists(
     let Some(ps) = &entry.proof_state else {
         return Vec::new();
     };
-    // Saturation (`s.cases(&ctx)` → `ensure_saturated`) and
-    // `refine_with_source_asms` run solver code; `formula_to_guarded` on
-    // the `[sources]`-lemma formulas resolves user fun symbols.  All via
-    // thread-locals — install them (see `ProofState::user_funs`).
-    let _user_funs_guard = ps.install_user_funs();
-    let ctx = ps.ctx.lock();
+    let ctx = ps.context_for_raw_sources();
     let typ_asms = source_typ_asms(entry, want_refined);
+    let rendered_cases = |cases: Vec<tamarin_theory::constraint::solver::sources::SourceCase>| {
+        cases
+            .into_iter()
+            .map(|(name, system)| {
+                (
+                    tamarin_theory::constraint::solver::sources::case_name_list_to_string(&name),
+                    system,
+                )
+            })
+            .collect::<Vec<_>>()
+    };
 
     // `getSource kind thy`: raw = `ctx.full_sources` (precomputed + saturated);
     // refined = raw with `refineWithSourceAsms` applied (or relabeled).
     if want_refined && !typ_asms.is_empty() {
         refined_sources(&ctx, &typ_asms)
             .iter()
-            .map(|s| (s.goal.clone(), s.cases_or_empty()))
+            .map(|s| (s.goal.clone(), rendered_cases(s.cases_or_empty())))
             .collect()
     } else {
         ctx.full_sources
             .iter()
             .map(|s| {
-                let mut cases = s.cases(&ctx);
+                let mut cases = rendered_cases(s.cases(&ctx));
                 if want_refined {
                     for (_, sys) in cases.iter_mut() {
                         sys.source_kind = Some(SysSourceKind::RefinedSources);
@@ -1122,8 +1084,8 @@ pub(crate) fn compute_source_lists(
 /// `typAsms`, CloseRule.hs:117-119, fed to `refineWithSourceAsms`,
 /// Sources.hs:452-475) — empty for the raw list, and with no such lemma the
 /// refine is a plain relabel to `RefinedSource` (Sources.hs:458-459).
-/// `formula_to_guarded` resolves user fun symbols, so callers must hold the
-/// theory's user-fn guard.
+/// The guarded conversion resolves user fun symbols, so callers must hold
+/// the theory's user-fn guard.
 fn source_typ_asms(
     entry: &TheoryEntry,
     want_refined: bool,
@@ -1176,10 +1138,7 @@ pub(crate) fn source_list_case(
 ) -> Option<tamarin_theory::constraint::system::System> {
     use tamarin_theory::constraint::system::SourceKind as SysSourceKind;
     let ps = entry.proof_state.as_ref()?;
-    // Same thread-locals the whole-list build needs (see
-    // [`compute_source_lists`]).
-    let _user_funs_guard = ps.install_user_funs();
-    let ctx = ps.ctx.lock();
+    let ctx = ps.context_for_raw_sources();
     let typ_asms = source_typ_asms(entry, want_refined);
     if want_refined && !typ_asms.is_empty() {
         nth_case_system(&refined_sources(&ctx, &typ_asms), src_idx, case_idx)
@@ -1187,7 +1146,7 @@ pub(crate) fn source_list_case(
         // `ensure_cases` is `cases()`'s materialisation without its per-case
         // clone: the sources this request does not serve are forced exactly as
         // the whole-list build forces them, and none of them is copied out.
-        for s in &ctx.full_sources {
+        for s in ctx.full_sources.iter() {
             s.ensure_cases(&ctx);
         }
         let mut sys = nth_case_system(&ctx.full_sources, src_idx, case_idx)?;
@@ -1295,4 +1254,55 @@ fn render_html_source(
         ));
     }
     parts.join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use tamarin_test_support::require_maude_path;
+
+    #[test]
+    fn first_proof_index_render_shows_checked_stored_proof() {
+        let Some(maude) = require_maude_path() else {
+            return;
+        };
+        let src = r#"
+theory T begin
+rule Setup: [Fr(~k)] --[Setup(~k)]-> [Out(~k)]
+lemma stored: exists-trace
+  "Ex k #i. Setup(k) @ #i"
+  simplify
+  by sorry
+end
+"#;
+        let mut entry = crate::theory_io::load_from_source(
+            src,
+            crate::state::TheoryOrigin::Upload("stored.spthy".into()),
+            &maude,
+            0,
+        )
+        .expect("load");
+        entry.idx = 1;
+        let ndc_cache = entry
+            .ndc_cache
+            .clone()
+            .map(tamarin_theory::constraint::solver::context::IntrRuleCache::from);
+        let state = Arc::new(
+            crate::handlers::proof_tree::ProofState::new(
+                &entry.typed_theory,
+                entry.prover_maude_sig.clone(),
+                &maude,
+                None,
+                ndc_cache.as_ref(),
+            )
+            .expect("proof state"),
+        );
+        entry.proof_state = Some(state.clone());
+
+        let html = proof_state(&entry);
+        assert!(html.contains("/main/proof/stored"));
+        assert!(html.contains("simplify"));
+        assert!(state.peek_root("stored").is_none());
+    }
 }

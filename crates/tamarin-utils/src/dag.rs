@@ -11,26 +11,13 @@
 //! `trans_red` back the display-graph compression pass
 //! (`tamarin-theory`'s
 //! `constraint::system::graph::simplify::transitive_reduction`); `trans_red`
-//! in turn drives `toposort` (and thus `inverse`) and `reachable_set`. The
-//! remaining operations (`restrict`, `image`) are a faithful port of the
-//! rest of `Data.DAG.Simple` retained for completeness and have no live
-//! caller yet.
+//! in turn drives `toposort` (and thus `inverse`) and `reachable_set`.
+//! The remaining operations cover the subset of `Data.DAG.Simple` used by
+//! the port.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub type Relation<T> = Vec<(T, T)>;
-
-/// `restrict p rel`: keep edges where both endpoints satisfy `p`.
-pub fn restrict<T: Clone, F: FnMut(&T) -> bool>(rel: &Relation<T>, mut p: F) -> Relation<T> {
-    rel.iter().filter(|(x, y)| p(x) && p(y)).cloned().collect()
-}
-
-/// `image x rel`: every successor of `x` in `rel`.
-pub fn image<T: Eq + Clone>(x: &T, rel: &Relation<T>) -> Vec<T> {
-    rel.iter()
-        .filter_map(|(a, b)| if a == x { Some(b.clone()) } else { None })
-        .collect()
-}
 
 /// `inverse rel`: every edge reversed.
 pub fn inverse<T: Clone>(rel: &Relation<T>) -> Relation<T> {
@@ -57,40 +44,37 @@ pub fn reachable_set<T: Ord + Clone>(start: &[T], rel: &Relation<T>) -> BTreeSet
 
 /// `cyclic rel`: whether `rel` contains a directed cycle.
 pub fn cyclic<T: Ord + Clone>(rel: &Relation<T>) -> bool {
-    fn find_loop<T: Ord + Clone>(
-        rel: &Relation<T>,
-        parents: &mut BTreeSet<T>,
-        visited: &mut BTreeSet<T>,
-        x: T,
+    let mut adj: BTreeMap<T, Vec<T>> = BTreeMap::new();
+    for (a, b) in rel {
+        adj.entry(a.clone()).or_default().push(b.clone());
+    }
+
+    fn visit<T: Ord + Clone>(
+        node: &T,
+        adj: &BTreeMap<T, Vec<T>>,
+        color: &mut BTreeMap<T, u8>,
     ) -> bool {
-        if parents.contains(&x) {
-            return true;
+        match color.get(node).copied().unwrap_or(0) {
+            1 => return true,
+            2 => return false,
+            _ => {}
         }
-        if visited.contains(&x) {
-            return false;
-        }
-        parents.insert(x.clone());
-        // Inlined `image(&x, rel)`: scan `rel` front-to-back, recursing into each
-        // successor in the same order (no `visited` guard here, matching the
-        // original `image` snapshot which has none). `rel` is not mutated during
-        // the scan, so the snapshot and the inlined scan are equivalent.
-        for (a, b) in rel {
-            if a == &x && find_loop(rel, parents, visited, b.clone()) {
-                return true;
+        color.insert(node.clone(), 1);
+        if let Some(succs) = adj.get(node) {
+            for succ in succs {
+                if visit(succ, adj, color) {
+                    return true;
+                }
             }
         }
-        parents.remove(&x);
-        visited.insert(x);
+        color.insert(node.clone(), 2);
         false
     }
 
-    let mut visited = BTreeSet::new();
-    for (src, _) in rel {
-        if !visited.contains(src) {
-            let mut parents = BTreeSet::new();
-            if find_loop(rel, &mut parents, &mut visited, src.clone()) {
-                return true;
-            }
+    let mut color = BTreeMap::new();
+    for node in adj.keys() {
+        if color.get(node).copied().unwrap_or(0) == 0 && visit(node, &adj, &mut color) {
+            return true;
         }
     }
     false
@@ -268,22 +252,9 @@ mod tests {
     }
 
     #[test]
-    fn image_and_inverse() {
-        // `image` and `inverse` both scan the relation from front to back, and
-        // both keep that order.  The DFS helpers below inline that same scan,
-        // so the order matters here.  The successors of `1` come back in the
-        // order the relation lists them, not sorted.
+    fn inverse_keeps_relation_order() {
         let r = rel(&[(1, 3), (1, 2), (2, 3)]);
-        assert_eq!(image(&1, &r), vec![3, 2]);
-        assert_eq!(image(&3, &r), Vec::<i32>::new());
         assert_eq!(inverse(&r), vec![(3, 1), (2, 1), (3, 2)]);
-    }
-
-    #[test]
-    fn restrict_filters() {
-        let r = rel(&[(1, 2), (2, 3), (3, 4)]);
-        let r2 = restrict(&r, |x| *x != 3);
-        assert_eq!(r2, vec![(1, 2)]);
     }
 
     #[test]
@@ -330,7 +301,11 @@ mod tests {
         let r = rel(&[(1, 2), (2, 3), (3, 1), (3, 4), (4, 2)]);
         let breakers = dfs_loop_breakers(&r);
         assert!(!breakers.is_empty());
-        let kept: Relation<i32> = restrict(&r, |x| !breakers.contains(x));
+        let kept: Relation<i32> = r
+            .iter()
+            .filter(|(x, y)| !breakers.contains(x) && !breakers.contains(y))
+            .cloned()
+            .collect();
         assert!(!cyclic(&kept));
     }
 

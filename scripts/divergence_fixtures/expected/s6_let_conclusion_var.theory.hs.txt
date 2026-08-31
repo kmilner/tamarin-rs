@@ -1,0 +1,23 @@
+theory S6LetConclusionVar
+
+begin
+
+// Function signature and definition of the equational theory E
+
+builtins: natural-numbers
+functions: fst/1, h/1, pair/2, snd/1
+equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
+
+rule (modulo E) Reuse:
+   [ Fr( h(~k) ) ] --[ Reuse( h(~k) ) ]-> [ Out( h(~k) ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) Count:
+   [ In( <'c', %i> ) ] --[ Count( (%i%+%1) ) ]-> [ Out( <'c', %i> ) ]
+
+  /* has exactly the trivial AC variant */
+
+
+
+end

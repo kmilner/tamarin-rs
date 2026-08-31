@@ -15,8 +15,9 @@
 
 use std::collections::BTreeSet;
 
-use tamarin_parser::ast as p;
 use tamarin_term::lterm::LVar;
+use tamarin_theory::formula::LNFormula;
+use tamarin_theory::restriction::Restriction;
 use tamarin_theory::sapic::{pretty_position, Process, SapicLVar};
 
 use crate::annotation::ProcessAnnotation;
@@ -114,7 +115,7 @@ fn extend_vars(dom_pf: &PosSet, pos: &[i64], tx: &mut BTreeSet<LVar>) {
 }
 
 /// `progressInit anP (initrules, initTx)` (ProgressTranslation.hs:54-62).
-pub fn progress_init(
+pub(crate) fn progress_init(
     an_proc: &AProc,
     init_rules: Vec<AnnotatedRule<ProcessAnnotation<LVar>>>,
     init_tx: BTreeSet<LVar>,
@@ -145,7 +146,7 @@ pub fn progress_init(
 /// `progressTransAct` (ProgressTranslation.hs:111-119): post-process the base
 /// action translation result.  `dom_pf` / the inverse are computed once and
 /// threaded in.
-pub fn progress_trans_act(
+pub(crate) fn progress_trans_act(
     dom_pf: &PosSet,
     inv_pf: &impl Fn(&[i64]) -> Option<Pos>,
     pos: &[i64],
@@ -162,7 +163,7 @@ pub fn progress_trans_act(
 
 /// `progressTransComb` (ProgressTranslation.hs:122-132).  Note: HS uses the SAME
 /// `extendVars domPF pos` on both `tx1` and (fmap'd) `tx2`.
-pub fn progress_trans_comb(
+pub(crate) fn progress_trans_comb(
     dom_pf: &PosSet,
     inv_pf: &impl Fn(&[i64]) -> Option<Pos>,
     pos: &[i64],
@@ -183,39 +184,21 @@ pub fn progress_trans_comb(
 }
 
 /// `resProgressInit` (ProgressTranslation.hs:150-153): `∃ #t. Init( ) @ #t`.
-fn res_progress_init() -> p::Restriction {
-    let tvar = p::VarSpec {
-        name: "t".into(),
-        idx: 0,
-        sort: p::SortHint::Node,
-        typ: None,
-    };
-    let init_at = p::Formula::Atom(p::Atom::Action(
-        p::Fact {
-            persistent: false,
-            name: "Init".into(),
-            args: vec![],
-            annotations: vec![],
-        },
-        p::Term::Var(tvar.clone()),
-    ));
-    let formula = p::Formula::Exists(vec![tvar], Box::new(init_at));
-    p::Restriction {
-        name: "progressInit".to_string(),
-        formula,
-        attributes: vec![],
-    }
+fn res_progress_init() -> Restriction {
+    use crate::restriction_builder as rb;
+    let t = rb::node("t");
+    rb::restriction("progressInit", rb::exists(&[t], rb::action("Init", &[], t)))
 }
 
 /// `progressRestr anP restrictions` (ProgressTranslation.hs:156-177): append the
 /// per-from-position `Progress_<pos>_to_<...>` restrictions, then `progressInit`.
-pub fn progress_restr(
+pub(crate) fn progress_restr(
     an_proc: &AProc,
-    mut restrictions: Vec<p::Restriction>,
-) -> Result<Vec<p::Restriction>, String> {
+    mut restrictions: Vec<Restriction>,
+) -> Result<Vec<Restriction>, String> {
     let dom_pf = pf_from(an_proc)?;
     // `lss_to <- mapM restriction (toList domPF)` — over the ascending domain.
-    let mut lss_to: Vec<p::Restriction> = Vec::new();
+    let mut lss_to: Vec<Restriction> = Vec::new();
     for pos in &dom_pf {
         lss_to.extend(restriction_for(an_proc, pos)?);
     }
@@ -226,7 +209,7 @@ pub fn progress_restr(
 
 /// `restriction pos` (ProgressTranslation.hs:163-177): for the given from-`pos`,
 /// one restriction per element of `pf anP pos` (the CNF set-of-sets of "to"s).
-fn restriction_for(an_proc: &AProc, pos: &[i64]) -> Result<Vec<p::Restriction>, String> {
+fn restriction_for(an_proc: &AProc, pos: &[i64]) -> Result<Vec<Restriction>, String> {
     let toss = pf(an_proc, pos)?;
     let mut out = Vec::new();
     for tos in &toss {
@@ -238,7 +221,8 @@ fn restriction_for(an_proc: &AProc, pos: &[i64]) -> Result<Vec<p::Restriction>, 
 /// Build one `Progress_<pos>_to_<t1>_or_<t2>...` restriction.
 ///   `name = "Progress_" ++ prettyPosition pos ++ "_to_" ++ intercalate "_or_" (map prettyPosition (toList tos))`
 ///   `formula = ∀ prog_<pos>. ∀ #t. ProgressFrom_<pos>(prog_<pos>)@#t ⇒ bigOr [∃ #t.2. ProgressTo_<to>(prog_<pos>)@#t.2 | to ∈ tos]`
-fn make_restriction(pos: &[i64], tos: &PosSet) -> p::Restriction {
+fn make_restriction(pos: &[i64], tos: &PosSet) -> Restriction {
+    use crate::restriction_builder as rb;
     let pos_v = pos.to_vec();
     let name = format!(
         "Progress_{}_to_{}",
@@ -252,46 +236,25 @@ fn make_restriction(pos: &[i64], tos: &PosSet) -> p::Restriction {
     // `pvar = msgVarProgress pos` — the message-sort progress var (rendered
     // without the `~`), quantified universally.
     let pvar = msg_var_progress(&pos_v);
-    let pvar_spec = crate::convert::lvar_to_varspec(&pvar);
-    let pvar_term = p::Term::Var(pvar_spec.clone());
-
     // `t1var = LVar "t" LSortNode 1`, `t2var = LVar "t" LSortNode 2`.
-    let t1var = p::VarSpec {
-        name: "t".into(),
-        idx: 1,
-        sort: p::SortHint::Node,
-        typ: None,
-    };
-    let t2var = p::VarSpec {
-        name: "t".into(),
-        idx: 2,
-        sort: p::SortHint::Node,
-        typ: None,
-    };
+    let t1var = rb::indexed_node("t", 1);
+    let t2var = rb::indexed_node("t", 2);
 
     // antecedent = ProgressFrom_<pos>( prog_<pos> ) @ #t.1
-    let antecedent = p::Formula::Atom(p::Atom::Action(
-        p::Fact {
-            persistent: false,
-            name: format!("ProgressFrom_{}", pretty_position(&pos_v)),
-            args: vec![pvar_term.clone()],
-            annotations: vec![],
-        },
-        p::Term::Var(t1var.clone()),
-    ));
+    let antecedent = rb::action(
+        &format!("ProgressFrom_{}", pretty_position(&pos_v)),
+        &[pvar],
+        t1var,
+    );
 
     // progressTo to = ∃ #t.2. ProgressTo_<to>( prog_<pos> ) @ #t.2
-    let progress_to = |to: &Pos| -> p::Formula {
-        let act = p::Formula::Atom(p::Atom::Action(
-            p::Fact {
-                persistent: false,
-                name: format!("ProgressTo_{}", pretty_position(to)),
-                args: vec![pvar_term.clone()],
-                annotations: vec![],
-            },
-            p::Term::Var(t2var.clone()),
-        ));
-        p::Formula::Exists(vec![t2var.clone()], Box::new(act))
+    let progress_to = |to: &Pos| -> LNFormula {
+        let act = rb::action(
+            &format!("ProgressTo_{}", pretty_position(to)),
+            &[pvar],
+            t2var,
+        );
+        rb::exists(&[t2var], act)
     };
 
     // bigOr over `toList tos` (ascending), right-nested as in HS
@@ -299,28 +262,17 @@ fn make_restriction(pos: &[i64], tos: &PosSet) -> p::Restriction {
     let tos_list: Vec<&Pos> = tos.iter().collect();
     let conclusion = big_or(&tos_list, &progress_to);
 
-    let body = p::Formula::Implies(Box::new(antecedent), Box::new(conclusion));
+    let body = antecedent.implies(conclusion);
     // `hinted forAll pvar $ hinted forAll t1var $ ...`
-    let formula = p::Formula::Forall(
-        vec![pvar_spec],
-        Box::new(p::Formula::Forall(vec![t1var], Box::new(body))),
-    );
-    p::Restriction {
-        name,
-        formula,
-        attributes: vec![],
-    }
+    rb::restriction(name, rb::all(&[pvar, t1var], body))
 }
 
 /// `bigOr` (ProgressTranslation.hs:174-176): right-nested disjunction.  The
 /// empty case never occurs (`tos` is always non-empty here).
-fn big_or(tos: &[&Pos], progress_to: &impl Fn(&Pos) -> p::Formula) -> p::Formula {
+fn big_or(tos: &[&Pos], progress_to: &impl Fn(&Pos) -> LNFormula) -> LNFormula {
     match tos {
-        [] => p::Formula::False,
+        [] => LNFormula::lfalse(),
         [to] => progress_to(to),
-        [to, rest @ ..] => p::Formula::Or(
-            Box::new(progress_to(to)),
-            Box::new(big_or(rest, progress_to)),
-        ),
+        [to, rest @ ..] => progress_to(to).or(big_or(rest, progress_to)),
     }
 }

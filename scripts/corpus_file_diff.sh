@@ -14,9 +14,9 @@
 #
 # Two strictly-sequential phases so HS and RS never contend:
 #   Phase 1 (HS): run HS on every allowlisted file, cache stripped stdout by
-#                 ckey (theory sha + flags + ORACLE-BINARY FINGERPRINT) under
+#                 ckey (theory + dependency shas + flags + ORACLE-BINARY FINGERPRINT) under
 #                 .hs_file_cache/.  JOBS concurrent, -N$HS_N cores each.
-#                 Timeout → .timeout marker; empty/no output (diff theory /
+#                 Timeout → cap-aware .timeout marker; empty/no output (diff theory /
 #                 include fragment / error) → .nohs; the oracle's exit status
 #                 is recorded beside the entry as .rc.
 #   Phase 2 (RS): run RS on every file, diff against the cached HS output and
@@ -59,14 +59,7 @@ PREV_TSV="${PREV_TSV:-/tmp/corpus_file_diff.PREV.tsv}"
 ALLOWLIST="${ALLOWLIST:-}"
 mkdir -p "$CACHE"
 
-find_hs_bin() {
-    local root="$1" c
-    for c in "$root"/tamarin-prover-testing/.stack-work/install/*/*/*/bin/tamarin-prover \
-             "$root"/tamarin-prover-testing/.stack-work/dist/*/ghc-*/build/tamarin-prover/tamarin-prover; do
-        [ -x "$c" ] && { echo "$c"; return 0; }
-    done; return 1
-}
-HS_PATH="${HS_PATH:-$(find_hs_bin "$repo_root")}" || { echo "no HS binary" >&2; exit 2; }
+HS_PATH=$(resolve_hs_oracle "$repo_root") || exit 2
 [ -x "$HS_PATH" ] || { echo "no HS binary at $HS_PATH" >&2; exit 2; }
 RS_PATH="${RS_PATH:-$repo_root/target/release/tamarin-rs}"
 [ -x "$RS_PATH" ] || { echo "no RS binary at $RS_PATH" >&2; exit 2; }
@@ -76,13 +69,33 @@ RS_PATH="${RS_PATH:-$repo_root/target/release/tamarin-rs}"
 # maude for the whole run and put its directory on PATH for the children.
 MAUDE=$(resolve_maude) || exit 2
 maude_on_path "$MAUDE"
-# Oracle-binary fingerprint (gate_common's hs_fingerprint), folded into every
+oracle_rev_check "$HS_PATH" "$MAUDE" "$repo_root"
+# oracle_rev_check's binary fingerprint is folded into every
 # cache key below.  Without it the key is sha256(theory)+flags, which cannot
 # see the ORACLE changing: a rebuilt oracle keeps answering out of entries the
 # previous one produced, and the gate certifies the port against an upstream
-# that is no longer checked out.  Loop-invariant, so taken once.
-hs_fingerprint "$HS_PATH"
+# that is no longer checked out.
 export HS_PATH RS_PATH FILE_TIMEOUT DERIVCHECK_TIMEOUT HS_RTS CACHE CORPUS_ROOT
+
+# GNU timeout accepts integer s/m/h/d suffixes. Convert those spellings for
+# comparing a cached timeout cap with the current one; invalid legacy markers
+# return failure and are retried once.
+duration_seconds() {
+    local value=$1 number unit factor
+    if [[ "$value" =~ ^([0-9]+)([smhd]?)$ ]]; then
+        number=${BASH_REMATCH[1]}
+        unit=${BASH_REMATCH[2]}
+        case $unit in
+            ''|s) factor=1 ;;
+            m) factor=60 ;;
+            h) factor=3600 ;;
+            d) factor=86400 ;;
+        esac
+        printf '%s\n' "$((number * factor))"
+    else
+        return 1
+    fi
+}
 export HS_FP HS_FP_SALT
 
 # strip_env (gate_common.sh): DELETE the four volatile header lines.
@@ -100,7 +113,7 @@ export -f strip_env
 # the flag list before invocation; still salts the cache key.
 FLAGS_MAP="${FLAGS_MAP:-$script_dir/file_flags.tsv}"
 export FLAGS_MAP
-export -f flags_for include_shas ckey
+export -f flags_for include_shas oracle_shas ckey
 
 # --- file list (allowlist) ---
 # gate_common's filelist: explicit ALLOWLIST env > committed canonical corpus
@@ -118,11 +131,20 @@ filelist_fallback() {
 
 # --- Phase 1: HS ---
 hs_one() {
-    local rel="$1" f="$CORPUS_ROOT/$1" key out rc fl
+    local rel="$1" f="$CORPUS_ROOT/$1" key out rc fl old_cap old_seconds current_seconds
     [ -f "$f" ] || return 0
     key=$(ckey "$rel" "$f"); fl=$(flags_for "$rel")
     [ -f "$CACHE/$key.full.gz" ] && return 0
-    [ -f "$CACHE/$key.timeout" ] && return 0
+    if [ -f "$CACHE/$key.timeout" ]; then
+        old_cap=$(cat "$CACHE/$key.timeout")
+        old_seconds=$(duration_seconds "$old_cap") || old_seconds=
+        current_seconds=$(duration_seconds "$FILE_TIMEOUT") || current_seconds=
+        if [ -n "$old_seconds" ] && [ -n "$current_seconds" ] \
+                && [ "$old_seconds" -ge "$current_seconds" ]; then
+            return 0
+        fi
+        rm -f "$CACHE/$key.timeout"
+    fi
     [ -f "$CACHE/$key.nohs" ] && return 0
     # Record the flags this entry was generated with, so the cache is
     # self-documenting (we don't "lose track" of what each file needs).
@@ -151,7 +173,7 @@ hs_one() {
     # keeps its sticky .timeout marker below — same guard wf_gate.sh and
     # pretty_gate.sh apply to their load fills.)
     if [ "$rc" -ge 128 ]; then
-        echo "  HS KILLED   $rel (rc=$rc, cap ${FILE_TIMEOUT}s) — nothing cached" >&2
+        echo "  HS KILLED   $rel (rc=$rc, cap $FILE_TIMEOUT) — nothing cached" >&2
         return 0
     fi
     # Record the oracle's exit status beside the entry, BEFORE the payload, so
@@ -159,14 +181,15 @@ hs_one() {
     # Phase 2 compares RS's status against it (RC_DIFF).
     printf '%s' "$rc" > "$CACHE/$key.rc"
     if [ "$rc" = "124" ]; then
-        touch "$CACHE/$key.timeout"; echo "  HS TIMEOUT  $rel" >&2
+        printf '%s\n' "$FILE_TIMEOUT" > "$CACHE/$key.timeout"
+        echo "  HS TIMEOUT  $rel" >&2
     elif [ -z "$out" ]; then
         touch "$CACHE/$key.nohs"; echo "  HS EMPTY!   $rel${fl:+  (flags: $fl)}" >&2
     else
         printf '%s' "$out" | gzip > "$CACHE/$key.full.gz"
     fi
 }
-export -f hs_one
+export -f duration_seconds hs_one
 
 # --- Phase 2: RS + diff ---
 rs_one() {
@@ -212,7 +235,7 @@ N=$(filelist | grep -c .)
 # Zero files is the whole-run form of comparing nothing: no rows, an empty
 # summary, and a DONE line that reads exactly like a clean gate.
 [ "$N" -gt 0 ] || { echo "the file list resolved to 0 entries — nothing to compare" >&2; exit 2; }
-echo "corpus_file_diff: $N files, JOBS=$JOBS, -N$HS_N, FILE_TIMEOUT=${FILE_TIMEOUT}s, cache=$CACHE"
+echo "corpus_file_diff: $N files, JOBS=$JOBS, -N$HS_N, FILE_TIMEOUT=$FILE_TIMEOUT, cache=$CACHE"
 echo "=== PHASE 1: Haskell (all files first, no RS) ==="
 filelist | grep . | xargs -P "$JOBS" -I{} bash -c 'hs_one "$@"' _ {}
 echo "=== PHASE 2: Rust + diff ==="

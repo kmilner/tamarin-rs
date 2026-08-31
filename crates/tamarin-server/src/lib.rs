@@ -172,7 +172,7 @@ pub async fn serve(
     for p in &theory_paths {
         match theory_io::load_from_path(p, &cfg.maude_path, cfg.derivcheck_timeout) {
             Ok(entry) => {
-                let name = entry.name.clone();
+                let name = entry.typed_theory.name.clone();
                 if !entry.wf_report.is_empty() {
                     let dashes = "-".repeat(78);
                     let report =

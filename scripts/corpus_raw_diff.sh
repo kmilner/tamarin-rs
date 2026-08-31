@@ -8,10 +8,8 @@
 # no lemma slicing. Anything else that differs is a rendering or proof-search
 # divergence to fix.
 #
-# HS results are cached as RAW gzipped stdout (<key>.full.gz) in the same cache
-# dir as corpus_full_trace_diff.sh, with the same key scheme — one HS run feeds
-# both the canon and the raw comparison. Existing <key>.timeout markers are
-# honoured.
+# HS results are cached as RAW gzipped stdout (<key>.full.gz) in the cache
+# shared with diff_proof_raw.sh. Existing <key>.timeout markers are honoured.
 #
 # Usage:
 #   corpus_raw_diff.sh                 # smaller corpus (pre-expansion 17-dir list)
@@ -38,6 +36,8 @@ repo_root="$(cd "$script_dir/.." && pwd)"
 # oracle fingerprint recipe the cache key carries.
 [ -r "$script_dir/gate_common.sh" ] || { echo "corpus_raw_diff: missing $script_dir/gate_common.sh (owns the shared gate helpers)" >&2; exit 2; }
 . "$script_dir/gate_common.sh"
+[ -r "$script_dir/proof_diff_common.sh" ] || { echo "corpus_raw_diff: missing proof_diff_common.sh" >&2; exit 2; }
+. "$script_dir/proof_diff_common.sh"
 # OOM discipline: every prover child inherits the cap and dies alone.
 oom_prologue
 
@@ -65,29 +65,7 @@ HS_N="${HS_N:-4}"
 HS_RTS="${HS_RTS:--N$HS_N}"
 [ -n "$NO_HS_CACHE" ] || mkdir -p "$HS_CANON_CACHE" 2>/dev/null || true
 
-# --- Locate the HS binary (same discovery as corpus_full_trace_diff.sh).
-find_hs_bin() {
-    local root="$1" c
-    for c in "$root"/tamarin-prover-testing/.stack-work/install/*/*/*/bin/tamarin-prover \
-             "$root"/tamarin-prover-testing/.stack-work/dist/*/ghc-*/build/tamarin-prover/tamarin-prover; do
-        if [ -x "$c" ]; then echo "$c"; return 0; fi
-    done
-    return 1
-}
-hs_path="$(find_hs_bin "$repo_root" 2>/dev/null || true)"
-if [ -z "$hs_path" ]; then
-    main_root="$(git -C "$repo_root" worktree list --porcelain 2>/dev/null | awk '/^worktree/{print $2; exit}')"
-    if [ -n "$main_root" ] && [ "$main_root" != "$repo_root" ]; then
-        hs_path="$(find_hs_bin "$main_root" 2>/dev/null || true)"
-    fi
-fi
-if [ -z "$hs_path" ]; then
-    hs_path="$(command -v tamarin-prover 2>/dev/null || true)"
-fi
-if [ -z "$hs_path" ]; then
-    echo "corpus_raw_diff.sh: no HS tamarin-prover binary found" >&2
-    exit 2
-fi
+hs_path=$(resolve_hs_oracle "$repo_root") || exit 2
 
 # --- Build + locate the RS binary (the real prover, not the dump_proof example).
 # `tamarin-prover` is the PACKAGE; its only bin target is `tamarin-rs`, so
@@ -105,58 +83,16 @@ if [ ! -x "$rs_path" ]; then
     exit 2
 fi
 
-# --- Cache key: identical scheme to corpus_full_trace_diff.sh, carrying the
+# --- Cache key: identical to diff_proof_raw.sh's flagless form. It carries the
 # oracle-binary fingerprint (gate_common's hs_fingerprint) so a rebuilt oracle
-# is a MISS, not a stale hit — the same __b suffix diff_proof_raw.sh salts in
-# and scripts/migrate_hs_cache_fp.sh rekeyed the older entries onto, so the
-# three tools exchange flagless entries again.
+# is a MISS, not a stale hit; scripts/migrate_hs_cache_fp.sh rekeyed older
+# entries onto the same form.
 hs_fingerprint "$hs_path"
-hs_cache_key() {
-    local f="$1" lemma="$2" h
-    h=$(sha256sum "$f" 2>/dev/null | cut -d' ' -f1)
-    printf '%s__%s__v%s__b%s.canon' "$h" "$lemma" "$CACHE_VERSION" "$HS_FP_SALT"
-}
-
-# --- Lemma enumeration (same comment-stripping awk as corpus_full_trace_diff.sh).
-lemmas_of() {
-    awk '
-        BEGIN { depth = 0 }
-        {
-            line = $0
-            while (length(line) > 0) {
-                if (depth > 0) {
-                    o = index(line, "/*")
-                    c = index(line, "*/")
-                    if (c == 0 && o == 0) { line = ""; break }
-                    if (o > 0 && (c == 0 || o < c)) {
-                        depth++; line = substr(line, o + 2)
-                    } else {
-                        depth--; line = substr(line, c + 2)
-                    }
-                } else {
-                    lc = index(line, "//")
-                    bc = index(line, "/*")
-                    if (lc > 0 && (bc == 0 || lc < bc)) {
-                        print substr(line, 1, lc - 1); line = ""; break
-                    }
-                    if (bc > 0) {
-                        print substr(line, 1, bc - 1)
-                        depth++; line = substr(line, bc + 2)
-                    } else {
-                        print line; line = ""; break
-                    }
-                }
-            }
-        }
-    ' "$1" 2>/dev/null \
-        | grep '^lemma ' \
-        | sed -E 's/^lemma[[:space:]]+([A-Za-z0-9_]+).*/\1/'
-}
 
 # --- strip_env_lines (gate_common.sh): delete the only lines that
 # legitimately differ between the two binaries, keeping `analyzed:` visible
 # (the cache hit rewrites its path to this invocation's).
-export -f hs_cache_key lemmas_of strip_env_lines
+export -f proof_now_ms proof_cache_key proof_lemmas_of include_shas oracle_shas strip_env_lines
 export HS_PATH="$hs_path" RS_PATH="$rs_path" TIMEOUT RS_TIMEOUT EXTRA_ENV \
        HS_CANON_CACHE CACHE_VERSION NO_HS_CACHE DERIVCHECK_TIMEOUT HS_RTS HS_FP_SALT
 
@@ -171,7 +107,7 @@ worker() {
     local hs_out="$tmp/hs.out" hs_rc=0 hs_ms="-"
     local key="" key_full="" key_timeout=""
     if [ -z "$NO_HS_CACHE" ]; then
-        key="$HS_CANON_CACHE/$(hs_cache_key "$f" "$lemma")"
+        key="$HS_CANON_CACHE/$(proof_cache_key "$f" "$lemma").canon"
         key_full="${key%.canon}.full.gz"
         key_timeout="${key%.canon}.timeout"
     fi
@@ -186,10 +122,10 @@ worker() {
             | awk -v f="$f" '/^analyzed: / { print "analyzed: " f; next } { print }' \
             > "$hs_out"
     else
-        local hs_t0; hs_t0=$(date +%s%3N)
+        local hs_t0; hs_t0=$(proof_now_ms)
         timeout "$TIMEOUT" "$HS_PATH" +RTS $HS_RTS -RTS --derivcheck-timeout="$DERIVCHECK_TIMEOUT" --prove="$lemma" "$f" 2>/dev/null > "$hs_out"
         hs_rc=$?
-        hs_ms=$(( $(date +%s%3N) - hs_t0 ))
+        hs_ms=$(( $(proof_now_ms) - hs_t0 ))
         if [ -n "$key" ]; then
             # >=128 is a signal death (OOM's 137), which truncates stdout the
             # same way the timeout does: marker, never the partial payload.
@@ -214,10 +150,10 @@ worker() {
         return 0
     fi
 
-    local rs_t0; rs_t0=$(date +%s%3N)
+    local rs_t0; rs_t0=$(proof_now_ms)
     timeout "$RS_TIMEOUT" env $EXTRA_ENV "$RS_PATH" --derivcheck-timeout="$DERIVCHECK_TIMEOUT" --prove="$lemma" "$f" 2>/dev/null > "$tmp/rs.out"
     local rs_rc=$?
-    local rs_ms=$(( $(date +%s%3N) - rs_t0 ))
+    local rs_ms=$(( $(proof_now_ms) - rs_t0 ))
 
     strip_env_lines "$hs_out"    > "$tmp/hs.cmp"
     strip_env_lines "$tmp/rs.out" > "$tmp/rs.cmp"
@@ -250,7 +186,7 @@ worker() {
 }
 export -f worker
 
-# --- File-content filter (same as corpus_full_trace_diff.sh).
+# --- File-content filter.
 file_is_comparable() {
     local f="$1"
     grep -q 'diff('       "$f" 2>/dev/null && return 1
@@ -298,7 +234,7 @@ for f in "${files[@]}"; do
     fi
     while IFS= read -r lem; do
         [ -n "$lem" ] && printf '%s\t%s\n' "$f" "$lem" >> "$tasklist"
-    done < <(lemmas_of "$f")
+    done < <(proof_lemmas_of "$f")
 done
 
 n_tasks=$(wc -l < "$tasklist"); n_tasks=${n_tasks// /}

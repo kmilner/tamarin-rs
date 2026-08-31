@@ -54,11 +54,6 @@ pub struct Graph<'a> {
     /// and `getRelationType`/`colorEdge` (JSON.hs:434-435/452-453) — even for an
     /// endpoint the compression hid.
     pub system: &'a System,
-    /// The compressed/simplified copy [`Graph::repr`] was computed from.  These
-    /// nodes decide ONLY the record PORT an edge endpoint renders as, matching
-    /// the `dsConcs`/`dsPrems` state HS fills while emitting the repr's nodes
-    /// (System/Dot.hs:264-268) and reads back in `dotGenEdge` (System/Dot.hs:403-406).
-    pub simplified: RenderSystem,
     /// HS `_gRepr`.
     pub repr: GraphRepr,
     /// HS `_gAbbreviations`.
@@ -73,18 +68,26 @@ pub struct Graph<'a> {
 /// export, which lists them verbatim while leaving node terms unabbreviated
 /// (the frontend performs the substitution).
 pub fn system_to_graph<'a>(sys: &'a System, options: &GraphOptions) -> Graph<'a> {
-    // Clone-for-render boundary: the compress/simplify passes mutate their
-    // working copy in ways that leave the `subst_system` stamps meaningless,
-    // so they run on a write-sealed `RenderSystem`.
-    let working = RenderSystem::from_prover(sys.clone());
-    let working = if options.compress {
-        compress_system(working)
+    // SL0/SL1 without compression are read-only, so project the graph directly
+    // from the prover system. Mutating modes cross the clone-for-render
+    // boundary and remain sealed in RenderSystem.
+    let working = if options.compress
+        || matches!(
+            options.simplification_level,
+            SimplificationLevel::SL2 | SimplificationLevel::SL3
+        ) {
+        let working = RenderSystem::from_prover(sys.clone());
+        let working = if options.compress {
+            compress_system(working)
+        } else {
+            working
+        };
+        Some(simplify_system(options.simplification_level, working))
     } else {
-        working
+        None
     };
-    let simplified = simplify_system(options.simplification_level, working);
-    // `compute_basic_graph_repr` takes `&System`; `&RenderSystem` derefs to it.
-    let mut repr = compute_basic_graph_repr(&simplified);
+    let simplified = working.as_deref().unwrap_or(sys);
+    let mut repr = compute_basic_graph_repr(simplified);
     if options.clustering_similar_names {
         add_intelligent_cluster_using_similar_names(&mut repr);
     } else {
@@ -93,7 +96,6 @@ pub fn system_to_graph<'a>(sys: &'a System, options: &GraphOptions) -> Graph<'a>
     let abbreviations = compute_abbreviations(&repr, &AbbreviationOptions::default());
     Graph {
         system: sys,
-        simplified,
         repr,
         abbreviations,
     }

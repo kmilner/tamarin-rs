@@ -323,56 +323,59 @@ fn is_xor(t: &LNTerm) -> bool {
 /// `invalidMult` — HS `Norm.hs:115-121`.  Detects mult patterns that
 /// are not in NF due to inverse cancellation.
 fn invalid_mult(ts: &[LNTerm]) -> bool {
-    use crate::function_symbols::AcSym;
-    // Partition into (inverses, non-inverses).
-    let (inverses, factors): (Vec<&LNTerm>, Vec<&LNTerm>) =
-        ts.iter().partition(|t| crate::term::is_inverse(t));
-    match inverses.len() {
-        0 => false,
-        1 => {
-            // Single inverse: peel its inner.
-            let inv_arg = match inverses[0] {
-                Term::App(_, a) if !a.is_empty() => &a[0],
-                _ => return false,
-            };
-            // Case: inv(mult(ifactors)) — check ifactors vs factors overlap
-            if let Term::App(FunSym::Ac(AcSym::Mult), ifactors) = inv_arg {
-                let ifactors_refs: Vec<&LNTerm> = ifactors.iter().collect();
-                // (ifactors \\ factors /= ifactors) ||
-                // (factors  \\ ifactors /= factors)
-                // i.e. the multiset-difference removes something on either side.
-                return multiset_diff_changes(&ifactors_refs, &factors)
-                    || multiset_diff_changes(&factors, &ifactors_refs);
-            }
-            // Case: inv(t) — invalid if t `elem` factors.
-            factors.iter().any(|f| **f == *inv_arg)
+    use crate::function_symbols::{AcSym, INV_SYM_STRING};
+    fn inverse_args(term: &LNTerm) -> Option<&[LNTerm]> {
+        match term {
+            Term::App(FunSym::NoEq(sym), args) if sym.name == INV_SYM_STRING => Some(args.as_ref()),
+            _ => None,
         }
-        _ => true, // 2+ inverses → invalid
     }
-}
-
-/// Returns true iff multiset-difference `xs \\ ys` differs from `xs`,
-/// i.e. at least one element of `xs` is also in `ys`.  Mirrors Haskell
-/// `(\\)` (Data.List) on the underlying multisets.
-fn multiset_diff_changes(xs: &[&LNTerm], ys: &[&LNTerm]) -> bool {
-    // `xs \\ ys` drops at most one `xs` element per matching `ys` element, so
-    // it differs from `xs` exactly when some element is shared — which
-    // occurrence gets consumed never changes that verdict.
-    xs.iter().any(|x| ys.iter().any(|y| **x == **y))
+    let mut inverse_arg = None;
+    let mut saw_inverse = false;
+    for term in ts {
+        if let Some(args) = inverse_args(term) {
+            if saw_inverse {
+                return true;
+            }
+            saw_inverse = true;
+            inverse_arg = args.first();
+        }
+    }
+    let Some(inverse_arg) = inverse_arg else {
+        return false;
+    };
+    let factors = ts.iter().filter(|term| inverse_args(term).is_none());
+    if let Term::App(FunSym::Ac(AcSym::Mult), inverse_factors) = inverse_arg {
+        inverse_factors
+            .iter()
+            .any(|inverse_factor| factors.clone().any(|factor| factor == inverse_factor))
+    } else {
+        factors.into_iter().any(|factor| factor == inverse_arg)
+    }
 }
 
 /// `invalidXor` — HS `Norm.hs:123-126`.  True iff `ts` contains
 /// duplicates.
 fn invalid_xor(ts: &[LNTerm]) -> bool {
-    // O(n^2) is fine here — typical xor arities are tiny.
-    for i in 0..ts.len() {
-        for j in (i + 1)..ts.len() {
-            if ts[i] == ts[j] {
-                return true;
+    // Smart constructors keep AC arguments sorted, so duplicates are adjacent
+    // on the normal path. Keep the quadratic fallback for terms made through
+    // `unsafe_f_app` or another invariant-bypassing caller.
+    let mut canonical = true;
+    for pair in ts.windows(2) {
+        match pair[0].cmp(&pair[1]) {
+            std::cmp::Ordering::Equal => return true,
+            std::cmp::Ordering::Greater => {
+                canonical = false;
+                break;
             }
+            std::cmp::Ordering::Less => {}
         }
     }
-    false
+    !canonical
+        && ts
+            .iter()
+            .enumerate()
+            .any(|(i, term)| ts[i + 1..].contains(term))
 }
 
 /// `struleApplicable` — HS `Norm.hs:107-113`.  Returns true iff the

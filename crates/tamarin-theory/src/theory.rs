@@ -12,18 +12,14 @@
 //! where polymorphism actually matters (open vs closed, diff vs trace)
 //! we model with explicit enums or distinct types.
 
-use tamarin_term::lterm::LVar;
+use tamarin_term::maude_sig::MaudeSig;
+pub use tamarin_term::tags::{LemmaAttr, TraceQuantifier};
 
+use crate::formula::{LNFormula, SyntacticLNFormula};
 use crate::predicate::Predicate;
-use crate::restriction::ProtoRestriction;
+use crate::restriction::Restriction;
 use crate::rule::ProtoRuleE;
 use crate::sapic::PlainProcess;
-use crate::signature::SignaturePure;
-
-/// Restriction over the surface formula, used in `OpenTheory`. After
-/// elaboration this becomes [`crate::restriction::Restriction`] which
-/// carries an `LNFormula`.
-pub type OpenRestriction = ProtoRestriction<tamarin_parser::ast::Formula>;
 
 /// A protocol rule modulo E with its variant machinery.  Mirrors the
 /// `ProtoRuleE` half of HS's `OpenProtoRule = (ProtoRuleE, [ProtoRuleAC])`;
@@ -62,26 +58,32 @@ pub struct OpenProtoRule {
     /// populated by `ProofContext::new`'s `annotate_loop_breakers`
     /// pass.
     pub loop_breakers: Vec<crate::rule::PremIdx>,
-    /// This rule is a product of the `--auto-sources` variant unfold
-    /// (`unfoldRuleVariants`, lib/theory/src/Rule.hs:63-79): `rule` holds one
-    /// AC variant named `<orig>___VARIANT_<i>` while HS's `cprRuleE` half
-    /// keeps the ORIGINAL rule, so the two names differ and
-    /// `equalUpToTerms` (Theory/Model/Rule.hs:960-968) is False on the name
-    /// alone — `openProtoRule` (lib/theory/src/Rule.hs:52-59) then always
-    /// yields its non-empty `[ruAC]` branch for such a rule.  The renderer
-    /// reads this flag where it mirrors that branch choice
-    /// (`pretty_theory::rule_open_ac_nonempty`).
-    pub unfolded_variant: bool,
-    /// HS's `cprRuleE` half, kept only when the `--auto-sources` close made
-    /// `rule` diverge from it: `addActionClosedProtoRule` adds AUTO actions
-    /// to `cprRuleAC` only (lib/theory/src/Rule.hs:95-99) and
+    /// HS's `cprRuleE` half (`ClosedProtoRule`, Items/RuleItem.hs:56-59),
+    /// stored only where it differs from `rule`: **`None` iff `rule` IS that
+    /// half**.  Three steps drive them apart.  `elaborate_items` applies the
+    /// theory's macros to `rule` alone, because `closeProtoRule` narrows
+    /// `applyMacroInRule macros ruE` and keeps the unexpanded `ruE`
+    /// (lib/theory/src/Rule.hs:82-86).  `addActionClosedProtoRule` adds AUTO
+    /// actions to `cprRuleAC` only (lib/theory/src/Rule.hs:95-99).
     /// `unfoldRuleVariants` carries the ORIGINAL rule as every variant's
     /// `cprRuleE` (lib/theory/src/Rule.hs:63-79, see line 76).  Consumers of
     /// HS's `getProtoRuleEs` (`S.toList . S.fromList . map oprRuleE`,
-    /// ClosedTheory.hs:87-89) — partial evaluation — must read this half:
-    /// it carries no AUTO actions, and the Set round-trip collapses the
-    /// per-variant duplicates.  `None` whenever `rule` still IS the E-half.
+    /// ClosedTheory.hs:87-89) — partial evaluation — must read this half
+    /// through [`OpenProtoRule::rule_e`]: it is macro-unexpanded, carries no
+    /// AUTO actions, and the Set round-trip collapses the per-variant
+    /// duplicates.
     pub rule_e: Option<Box<ProtoRuleE>>,
+    /// HS's `_oprRuleAC` (Items/RuleItem.hs:34-36): the `variants (modulo
+    /// AC)` blocks the source writes out, parsed by `protoRuleAC` and
+    /// collected by `protoRule` (Theory/Text/Parser/Rule.hs:126-135, see line
+    /// 134).  A rule that declares them is closed by mapping `ClosedProtoRule
+    /// ruE` over the list rather than by computing variants, so neither the
+    /// macros nor Maude ever touch them (lib/theory/src/Rule.hs:82-86, see
+    /// line 86).  HS types them `ProtoRuleAC`; the parser fills that info's
+    /// variant and loop-breaker slots with `Disj [emptySubstVFresh]` and `[]`
+    /// (`protoRuleACInfo`, Theory/Text/Parser/Rule.hs:138-143, see line 142),
+    /// so a [`ProtoRuleE`] holds everything a parsed block carries.
+    pub rule_ac: Vec<ProtoRuleE>,
 }
 
 impl OpenProtoRule {
@@ -91,9 +93,16 @@ impl OpenProtoRule {
             variant_substs: Vec::new(),
             abstracted_rule: None,
             loop_breakers: Vec::new(),
-            unfolded_variant: false,
             rule_e: None,
+            rule_ac: Vec::new(),
         }
+    }
+
+    /// HS's `cprRuleE` — the rule as the source writes it, before the macros
+    /// and before an `--auto-sources` close annotates or unfolds it.
+    /// `getProtoRuleEs` (ClosedTheory.hs:87-89) reads exactly this.
+    pub fn rule_e(&self) -> &ProtoRuleE {
+        self.rule_e.as_deref().unwrap_or(&self.rule)
     }
 
     pub fn name(&self) -> &str {
@@ -104,10 +113,10 @@ impl OpenProtoRule {
     }
 }
 
-/// Lightweight placeholder for `Theory.Sapic.ProcessDef`, populated
-/// by the SAPIC translation pass. We carry just enough to round-trip
-/// through pretty-printing. Backs the not-yet-produced
-/// `TranslationElement::ProcessDef` variant — kept for the HS port.
+/// HS `ProcessDef` (Items/ProcessItem.hs:23-28): the payload of a
+/// `let P (v1,…,vn) = …` declaration.  `vars` is `None` for a definition
+/// written without a parameter list; the SAPIC typing pass replaces it with
+/// the inferred formals (`typeAndRenameProcessDef`, Typing.hs:217-225).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProcessDef {
     pub name: String,
@@ -115,11 +124,9 @@ pub struct ProcessDef {
     pub body: PlainProcess,
 }
 
-/// Lightweight placeholder for `Theory.Sapic.SapicFunSym` —
-/// `(UserDefinedSym, [SapicType], SapicType)` (Theory/Sapic/Term.hs:78), so a
-/// typing declaration can name a free OR a user-defined AC symbol. Backs the
-/// not-yet-produced `TranslationElement::FunctionTypingInfo` variant — kept for
-/// the HS port.
+/// `Theory.Sapic.SapicFunSym` — `(UserDefinedSym, [SapicType], SapicType)`
+/// (Theory/Sapic/Term.hs:78), so a typing declaration can name a free OR a
+/// user-defined AC symbol. Payload of `TranslationElement::FunctionTypingInfo`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SapicFunSym {
     pub sym: tamarin_term::function_symbols::UserDefinedSym,
@@ -141,11 +148,8 @@ pub type ConfigBlock = String;
 /// translation that aren't first-class top-level constructs in the
 /// surface syntax.
 ///
-/// Mirrors the full HS `TranslationElement` surface. Only
-/// `SignatureBuiltin`, `AccLemma`, `CaseTest`, and `ExportInfo` are
-/// currently produced by elaboration; the remaining variants
-/// (`Process`, `ProcessDef`, `FunctionTypingInfo`, `DiffEquivLemma`,
-/// `EquivLemma`) are not yet produced — kept for the faithful HS port.
+/// Mirrors the full HS `TranslationElement` surface (Items/TheoryItem.hs:
+/// 43-53); elaboration produces every variant.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TranslationElement {
     Process(PlainProcess),
@@ -163,57 +167,41 @@ pub enum TranslationElement {
     },
 }
 
-/// Trace quantifier on lemmas.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TraceQuantifier {
-    AllTraces,
-    ExistsTrace,
-}
-
-/// Attribute on a lemma.
-#[derive(Debug, Clone, PartialEq)]
-pub enum LemmaAttr {
-    Sources,
-    Reuse,
-    DiffReuse,
-    UseInduction,
-    HideLemma(String),
-    Heuristic(String),
-    Output(Vec<String>),
-    Left,
-    Right,
-    /// Free-form attribute we don't recognize.
-    Hint(String),
-}
-
 /// A typed lemma. `proof` is a proof skeleton the prover may attempt
 /// to discharge.
 #[derive(Debug, Clone, PartialEq)]
-pub struct Lemma<P = ProofSkeleton> {
+pub struct Lemma {
     pub name: String,
-    pub modulo: Option<String>,
     pub attributes: Vec<LemmaAttr>,
     pub trace_quantifier: TraceQuantifier,
-    /// The lemma's formula, held in the parser's `Formula` form: both the
-    /// pretty-printers and `guarded::formula_to_guarded` start from that
-    /// form, so the guarded/`LNFormula` layers are derived on demand
-    /// rather than stored here.
-    pub formula: tamarin_parser::ast::Formula,
-    pub proof: P,
+    /// `_lFormula` (Items/LemmaItem.hs:53) — the macro- and predicate-expanded
+    /// formula, which the solver converts to a guarded formula and the printer
+    /// shows in the `guarded formula characterizing ...` block.
+    pub formula: LNFormula,
+    /// `_lOriginalFormula` (Items/LemmaItem.hs:54) — the same formula before
+    /// macro application, which the printer quotes on the header line.  HS's
+    /// `applyMacroInLemma` fills it for every lemma of a closed theory, macros
+    /// or none (lib/theory/src/Lemma.hs:83-88, CloseRule.hs:85).
+    pub original_formula: Option<LNFormula>,
+    pub proof: ProofSkeleton,
     /// Verbatim source text (comments stripped) — HS `_lPlaintext`
     /// (`Items/LemmaItem.hs:48-58, see line 50`).  Carried through elaboration for the
     /// interactive web server's Edit-lemma form; never used by `--prove`.
     pub plaintext: String,
 }
 
-// Not yet ported: diff theories (needs `ClosedDiffTheory`). `DiffLemma`,
-// `DiffTheoryItem`, `Side`, and `DiffTheory` below model the HS diff-theory
-// surface but are not yet produced by elaboration or consumed by the prover.
-#[derive(Debug, Clone, PartialEq)]
-pub struct DiffLemma<P = ProofSkeleton> {
-    pub name: String,
-    pub attributes: Vec<LemmaAttr>,
-    pub proof: P,
+/// HS `applyMacroInLemma` (lib/theory/src/Lemma.hs:83-88): the theory's macros
+/// applied to the formula, with the formula as it stood recorded as the
+/// original one.  HS runs it over every lemma of a closed theory
+/// (`closeTheoryItem`, CloseRule.hs:85), macros or none, so
+/// `original_formula` ends up filled either way.
+pub fn apply_macro_in_lemma(macros: &[LNMacro], lemma: Lemma) -> Lemma {
+    let original_formula = lemma.formula.clone();
+    Lemma {
+        formula: crate::formula::apply_macro_in_formula(macros, lemma.formula),
+        original_formula: Some(original_formula),
+        ..lemma
+    }
 }
 
 /// Accountability lemma — names a list of case-test identifiers and
@@ -222,7 +210,11 @@ pub struct DiffLemma<P = ProofSkeleton> {
 pub struct AccLemma {
     pub name: String,
     pub attributes: Vec<LemmaAttr>,
-    pub formula: tamarin_parser::ast::Formula,
+    /// HS `_aFormula` (Items/AccLemmaItem.hs:32).  The `Pred` sugar stays:
+    /// `liftedAddAccLemma` adds the lemma verbatim
+    /// (Theory/Text/Parser.hs:153-157), with neither predicate nor macro
+    /// expansion.
+    pub formula: SyntacticLNFormula,
     pub case_test_idents: Vec<String>,
 }
 
@@ -230,76 +222,68 @@ pub struct AccLemma {
 #[derive(Debug, Clone, PartialEq)]
 pub struct CaseTest {
     pub name: String,
-    pub formula: tamarin_parser::ast::Formula,
+    /// HS `_cFormula` (Items/CaseTestItem.hs:27).  The `Pred` sugar stays:
+    /// `liftedAddCaseTest` adds the case test verbatim
+    /// (Theory/Text/Parser.hs:159-163), and `caseTestToPredicate` strips it
+    /// with `toLNFormula` at accountability-translation time
+    /// (Items/CaseTestItem.hs:33-37).
+    pub formula: SyntacticLNFormula,
 }
 
-/// Macro definition (`name(args) = body`).
-#[derive(Debug, Clone, PartialEq)]
-pub struct LNMacro {
-    pub name: String,
-    pub args: Vec<LVar>,
-    pub body: tamarin_term::lterm::LNTerm,
-}
+/// HS `LNMacro` (Term/Macro.hs:24): one `macros:` declaration, `name(params)
+/// = body`.
+pub use tamarin_term::macro_expand::LNMacro;
 
-/// Stored proof: either an unproven skeleton (raw text) or a
-/// completed proof tree. We keep this opaque in the typed AST.
+/// One node of a lemma's stored proof — HS `ProofSkeleton = Proof ()`, i.e.
+/// `LTree CaseName (ProofStep ())` (Theory/ProofSkeleton.hs:30,
+/// Theory/Proof.hs:187-192,238).
 ///
-/// `tree` is the structured parse of `raw`, produced by
-/// [`tamarin_parser::parse_proof_tree`].  Used by
-/// `prove::replace_sorry_prove` (the HS `replaceSorryProver` analogue,
-/// HS: Theory/Proof.hs:642-650) to walk the skeleton at proof-replay
-/// time and invoke the auto-prover only at `by sorry` leaves.
+/// `cases` keeps the source order of the `case` blocks; the printer sorts by
+/// name (HS stores them in an `M.fromList`, Theory/Text/Parser/Proof.hs:113)
+/// and replay looks each case up by name.
 #[derive(Debug, Clone, PartialEq)]
-pub struct ProofSkeleton {
-    pub raw: String,
-    pub tree: Option<tamarin_parser::ast::ParsedProofTree>,
+pub struct ProofTree {
+    pub method: crate::constraint::solver::proof_method::ProofMethod,
+    pub cases: Vec<(String, ProofTree)>,
 }
 
-impl ProofSkeleton {
-    pub fn unproven() -> Self {
-        ProofSkeleton {
-            raw: String::new(),
-            tree: None,
-        }
-    }
-}
+/// A lemma's stored proof.  `None` is a lemma written without one, which HS
+/// gives the one-node `unproven ()` skeleton
+/// (Theory/ProofSkeleton.hs:59-61); `prove::replace_sorry_prove` (HS
+/// `replaceSorryProver`, Theory/Proof.hs:641-650) walks the tree at
+/// proof-replay time and invokes the auto-prover only at `sorry` leaves.
+pub type ProofSkeleton = Option<ProofTree>;
 
 /// `TheoryItem` — one top-level construct in a (non-diff) theory.
 #[derive(Debug, Clone, PartialEq)]
-pub enum TheoryItem<R = OpenProtoRule, P = ProofSkeleton, S = TranslationElement> {
+pub enum TheoryItem<R = OpenProtoRule> {
     Rule(R),
-    Lemma(Lemma<P>),
-    Restriction(OpenRestriction),
+    Lemma(Lemma),
+    Restriction(Restriction),
     Text(FormalComment),
     ConfigBlock(ConfigBlock),
     Predicate(Predicate),
     Macros(Vec<LNMacro>),
-    Translation(S),
+    Translation(TranslationElement),
 }
 
-/// `DiffTheoryItem` — one top-level construct in a diff theory.
-#[derive(Debug, Clone, PartialEq)]
-pub enum DiffTheoryItem<
-    R = OpenProtoRule,
-    R2 = OpenProtoRule,
-    P = ProofSkeleton,
-    P2 = ProofSkeleton,
-> {
-    DiffRule(R),
-    EitherRule(Side, R2),
-    DiffLemma(DiffLemma<P>),
-    EitherLemma(Side, Lemma<P2>),
-    EitherRestriction(Side, OpenRestriction),
-    DiffMacros(Vec<LNMacro>),
-    DiffText(FormalComment),
-    DiffConfigBlock(ConfigBlock),
-}
-
-/// Side of a diff theory.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Ord, PartialOrd, Hash)]
-pub enum Side {
-    LHS,
-    RHS,
+impl<R> TheoryItem<R> {
+    /// The non-rule half of HS `mapTheoryItem f id` (TheoryObject.hs:269-271):
+    /// a rule item hands its payload back as `Err`, every other item is cloned
+    /// into the target rule type at its position.  Callers supply the rule arm,
+    /// which may yield one item or several.
+    pub fn split_rule<R2>(&self) -> Result<TheoryItem<R2>, &R> {
+        match self {
+            TheoryItem::Rule(r) => Err(r),
+            TheoryItem::Lemma(x) => Ok(TheoryItem::Lemma(x.clone())),
+            TheoryItem::Restriction(x) => Ok(TheoryItem::Restriction(x.clone())),
+            TheoryItem::Text(x) => Ok(TheoryItem::Text(x.clone())),
+            TheoryItem::ConfigBlock(x) => Ok(TheoryItem::ConfigBlock(x.clone())),
+            TheoryItem::Predicate(x) => Ok(TheoryItem::Predicate(x.clone())),
+            TheoryItem::Macros(x) => Ok(TheoryItem::Macros(x.clone())),
+            TheoryItem::Translation(x) => Ok(TheoryItem::Translation(x.clone())),
+        }
+    }
 }
 
 // =============================================================================
@@ -307,15 +291,14 @@ pub enum Side {
 // =============================================================================
 
 /// `Option` block — translation/proof-driver options set per theory.
+///
+/// HS `Option` (Items/OptionItem.hs:21-38) declares fourteen fields in another
+/// order and derives `Ord` over them.  Only equality is derived here, and it
+/// is order-insensitive, so an ordering for this struct has to be written out
+/// rather than derived.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Options {
-    pub trans_progress: bool,
-    pub trans_report: bool,
-    pub trans_reliable: bool,
-    pub trans_allow_pattern_matching_in_lookup: bool,
-    pub state_channel_opt: bool,
-    pub asynchronous_channels: bool,
-    pub compress_events: bool,
+    declarable: [bool; tamarin_parser::DeclarableOption::ALL.len()],
     /// HS `_deductionChainCheck`: run the no-deconstruction-chain (NDC)
     /// check at theory load. Enabled by default; `--no-ndc` disables it.
     /// Consulted by the load paths that run the once-per-theory
@@ -325,19 +308,50 @@ pub struct Options {
     pub lemmas_to_prove: Vec<String>,
 }
 
+/// HS `defaultOption` (OpenTheory.hs:546-547), whose tenth field is the
+/// `True` of `_deductionChainCheck`.
 impl Default for Options {
     fn default() -> Self {
         Options {
-            trans_progress: false,
-            trans_report: false,
-            trans_reliable: false,
-            trans_allow_pattern_matching_in_lookup: false,
-            state_channel_opt: false,
-            asynchronous_channels: false,
-            compress_events: false,
+            declarable: [false; tamarin_parser::DeclarableOption::ALL.len()],
             deduction_chain_check: true,
             lemmas_to_prove: Vec::new(),
         }
+    }
+}
+
+impl Options {
+    /// Record an option already validated by the surface parser.
+    pub(crate) fn set_declarable(&mut self, name: &str) -> bool {
+        let Some(option) = tamarin_parser::DeclarableOption::parse(name) else {
+            return false;
+        };
+        self.declarable[option as usize] = true;
+        true
+    }
+
+    pub(crate) fn declared(&self) -> Vec<&'static str> {
+        tamarin_parser::DeclarableOption::ALL
+            .into_iter()
+            .filter(|option| self.declarable[*option as usize])
+            .map(tamarin_parser::DeclarableOption::as_str)
+            .collect()
+    }
+
+    pub fn trans_progress(&self) -> bool {
+        self.declarable[tamarin_parser::DeclarableOption::TranslationProgress as usize]
+    }
+
+    pub fn state_channel_opt(&self) -> bool {
+        self.declarable[tamarin_parser::DeclarableOption::TranslationStateOptimisation as usize]
+    }
+
+    pub fn asynchronous_channels(&self) -> bool {
+        self.declarable[tamarin_parser::DeclarableOption::TranslationAsynchronousChannels as usize]
+    }
+
+    pub fn compress_events(&self) -> bool {
+        self.declarable[tamarin_parser::DeclarableOption::TranslationCompressEvents as usize]
     }
 }
 
@@ -347,41 +361,38 @@ impl Default for Options {
 /// underlying storage is order-preserving so pretty-printing matches
 /// Haskell's output (which preserves source order).
 #[derive(Debug, Clone, PartialEq)]
-pub struct Theory<R = OpenProtoRule, P = ProofSkeleton, S = TranslationElement> {
+pub struct Theory<R = OpenProtoRule> {
     pub name: String,
     pub in_file: String,
-    pub heuristic: Vec<String>,
+    /// The `heuristic:` header's goal rankings (HS `_thyHeuristic ::
+    /// [GoalRanking ProofContext]`, TheoryObject.hs:185), parsed when the
+    /// theory is built.
+    pub heuristic: Vec<crate::constraint::solver::goals::GoalRanking>,
     pub tactic: Vec<crate::tactic::Tactic>,
-    pub signature: SignaturePure,
-    pub items: Vec<TheoryItem<R, P, S>>,
+    pub signature: MaudeSig,
+    /// Intruder rules declared as top-level `rule (modulo AC)` blocks. HS
+    /// keeps these in `_thyCache`, outside the printable item stream.
+    pub intruder_rules: Vec<crate::rule::IntrRuleAC>,
+    pub items: Vec<TheoryItem<R>>,
     pub options: Options,
-    pub is_sapic: bool,
 }
 
-impl<R, P, S> Theory<R, P, S> {
-    pub fn new(name: impl Into<String>, signature: SignaturePure) -> Self {
+impl<R> Theory<R> {
+    pub fn new(name: impl Into<String>, signature: MaudeSig) -> Self {
         Theory {
             name: name.into(),
             in_file: String::new(),
             heuristic: Vec::new(),
             tactic: Vec::new(),
             signature,
+            intruder_rules: Vec::new(),
             items: Vec::new(),
             options: Options::default(),
-            is_sapic: false,
         }
-    }
-
-    /// Builder helper to append an item. Currently no callers inside the
-    /// port (elaboration pushes to `items` directly); retained as public
-    /// builder API.
-    pub fn add_item(&mut self, item: TheoryItem<R, P, S>) -> &mut Self {
-        self.items.push(item);
-        self
     }
 }
 
-impl<R, P, S> Theory<R, P, S> {
+impl<R> Theory<R> {
     /// Iterate every rule item. Returns references so callers can
     /// further specialise on the rule type.
     pub fn rules(&self) -> impl Iterator<Item = &R> {
@@ -391,14 +402,14 @@ impl<R, P, S> Theory<R, P, S> {
         })
     }
 
-    pub fn lemmas(&self) -> impl Iterator<Item = &Lemma<P>> {
+    pub fn lemmas(&self) -> impl Iterator<Item = &Lemma> {
         self.items.iter().filter_map(|i| match i {
             TheoryItem::Lemma(l) => Some(l),
             _ => None,
         })
     }
 
-    pub fn restrictions(&self) -> impl Iterator<Item = &OpenRestriction> {
+    pub fn restrictions(&self) -> impl Iterator<Item = &Restriction> {
         self.items.iter().filter_map(|i| match i {
             TheoryItem::Restriction(r) => Some(r),
             _ => None,
@@ -420,122 +431,270 @@ impl<R, P, S> Theory<R, P, S> {
     }
 
     /// Look up a lemma by name.
-    pub fn lookup_lemma(&self, name: &str) -> Option<&Lemma<P>> {
+    pub fn lookup_lemma(&self, name: &str) -> Option<&Lemma> {
         self.lemmas().find(|l| l.name == name)
     }
 
     /// Look up a restriction by name (HS `lookupRestriction`,
     /// TheoryObject.hs:671-672).
-    ///
-    /// Intentionally retained: faithful mirror of HS `lookupRestriction`
-    /// (TheoryObject.hs:671-672); its only caller is [`Theory::add_restriction`],
-    /// itself reached only from the equally caller-less
-    /// [`Theory::add_restrictions`].
-    pub fn lookup_restriction(&self, name: &str) -> Option<&OpenRestriction> {
+    pub fn lookup_restriction(&self, name: &str) -> Option<&Restriction> {
         self.restrictions().find(|r| r.name == name)
     }
 
-    /// HS `addRules` (TheoryObject.hs:470-471): append rule items, in order.
-    ///
-    /// Intentionally retained: faithful mirror of HS `addRules`
-    /// (TheoryObject.hs:470-471); no caller yet.
-    pub fn add_rules(&mut self, rules: impl IntoIterator<Item = R>) -> &mut Self {
-        self.items.extend(rules.into_iter().map(TheoryItem::Rule));
-        self
+    /// Whether the theory contains exactly one top-level process.
+    pub fn is_sapic(&self) -> bool {
+        let mut processes = self.processes();
+        processes.next().is_some() && processes.next().is_none()
     }
 
-    /// HS `addLemma` (TheoryObject.hs:462-465): append the lemma unless one of
-    /// that name is already present.  Returns whether it was added.
-    ///
-    /// HS returns `Maybe (Theory ...)`; the `bool` here is that `Just`/`Nothing`
-    /// distinction on an in-place update.
-    ///
-    /// Intentionally retained: faithful mirror of HS `addLemma`
-    /// (TheoryObject.hs:462-465); its only caller is the equally caller-less
-    /// [`Theory::add_lemmas`].
-    pub fn add_lemma(&mut self, l: Lemma<P>) -> bool {
-        if self.lookup_lemma(&l.name).is_some() {
-            return false;
-        }
-        self.items.push(TheoryItem::Lemma(l));
-        true
+    /// Whether a `builtins:` declaration contains `name`.
+    pub fn has_signature_builtin(&self, name: &str) -> bool {
+        self.items.iter().any(|item| {
+            matches!(item,
+                TheoryItem::Translation(TranslationElement::SignatureBuiltin(builtin))
+                    if builtin == name)
+        })
+    }
+}
+
+impl<R> Theory<R> {
+    /// HS `theoryFunctionTypingInfos` (TheoryObject.hs:368-369): the
+    /// `SapicFunSym` of every `functions:` declaration, in source order.
+    pub fn function_typing_infos(&self) -> impl Iterator<Item = &SapicFunSym> {
+        self.items.iter().filter_map(|i| match i {
+            TheoryItem::Translation(TranslationElement::FunctionTypingInfo(f)) => Some(f),
+            _ => None,
+        })
     }
 
-    /// HS `addLemmas` (TheoryObject.hs:467-468): add each lemma in turn.  HS
-    /// folds `addLemma` through a `Maybe` and `fromJust`s it, so a name clash
-    /// leaves the theory as it was (and, mid-list, is a hard error); here a
-    /// clashing lemma is simply skipped.
-    ///
-    /// Intentionally retained: faithful mirror of HS `addLemmas`
-    /// (TheoryObject.hs:467-468); no caller yet.
-    pub fn add_lemmas(&mut self, lemmas: impl IntoIterator<Item = Lemma<P>>) -> &mut Self {
-        for l in lemmas {
-            self.add_lemma(l);
-        }
-        self
+    /// HS `theoryProcesses` (TheoryObject.hs:360-361): the body of every
+    /// top-level `process:` item, in source order.  `equivLemma` and
+    /// `diffEquivLemma` processes are NOT included, matching the comprehension
+    /// over `ProcessItem` alone.
+    pub fn processes(&self) -> impl Iterator<Item = &PlainProcess> {
+        self.items.iter().filter_map(|i| match i {
+            TheoryItem::Translation(TranslationElement::Process(pr)) => Some(pr),
+            _ => None,
+        })
     }
 
-    /// HS `addRestriction` (TheoryObject.hs:453-456): append the restriction
-    /// unless one of that name is already present.  Returns whether it was
-    /// added.
-    ///
-    /// Intentionally retained: faithful mirror of HS `addRestriction`
-    /// (TheoryObject.hs:453-456); its only caller is the equally caller-less
-    /// [`Theory::add_restrictions`].
-    pub fn add_restriction(&mut self, r: OpenRestriction) -> bool {
-        if self.lookup_restriction(&r.name).is_some() {
-            return false;
-        }
-        self.items.push(TheoryItem::Restriction(r));
-        true
-    }
-
-    /// HS `addRestrictions` (TheoryObject.hs:458-459): add each restriction in
-    /// turn, skipping name clashes (see [`Theory::add_lemmas`]).
-    ///
-    /// Intentionally retained: faithful mirror of HS `addRestrictions`
-    /// (TheoryObject.hs:458-459); no caller yet.
-    pub fn add_restrictions(
-        &mut self,
-        restrictions: impl IntoIterator<Item = OpenRestriction>,
-    ) -> &mut Self {
-        for r in restrictions {
-            self.add_restriction(r);
-        }
-        self
+    /// HS `theoryProcessDefs` (TheoryObject.hs:364-365): every `let P = …`
+    /// definition, in source order.
+    pub fn process_defs(&self) -> impl Iterator<Item = &ProcessDef> {
+        self.items.iter().filter_map(|i| match i {
+            TheoryItem::Translation(TranslationElement::ProcessDef(d)) => Some(d),
+            _ => None,
+        })
     }
 }
 
 // =============================================================================
-// Diff theory
+// The render-time view of a rule item
 // =============================================================================
 
+/// HS `OpenProtoRule` (Items/RuleItem.hs:34-37): a rule modulo E together with
+/// the rules modulo AC that differ from it.  [`open_proto_rule`] builds one
+/// per rule item and [`merge_open_proto_rules`] concatenates the AC halves of
+/// consecutive items that share an E rule.
 #[derive(Debug, Clone, PartialEq)]
-pub struct DiffTheory<R = OpenProtoRule, R2 = OpenProtoRule, P = ProofSkeleton, P2 = ProofSkeleton>
-{
-    pub name: String,
-    pub in_file: String,
-    pub heuristic: Vec<String>,
-    pub tactic: Vec<crate::tactic::Tactic>,
-    pub signature: SignaturePure,
-    pub items: Vec<DiffTheoryItem<R, R2, P, P2>>,
-    pub options: Options,
-    pub is_sapic: bool,
+pub struct MergedProtoRule {
+    pub rule_e: ProtoRuleE,
+    pub rule_ac: Vec<crate::rule::ProtoRuleAC>,
 }
 
-impl<R, R2, P, P2> DiffTheory<R, R2, P, P2> {
-    pub fn new(name: impl Into<String>, signature: SignaturePure) -> Self {
-        DiffTheory {
-            name: name.into(),
-            in_file: String::new(),
-            heuristic: Vec::new(),
-            tactic: Vec::new(),
-            signature,
-            items: Vec::new(),
-            options: Options::default(),
-            is_sapic: false,
+/// HS `cprRuleAC` (Items/RuleItem.hs:56-59) rebuilt from the split
+/// representation: the `variants (modulo AC)` blocks the source writes, which
+/// `closeProtoRule` turns into one closed rule each (lib/theory/src/Rule.hs:86),
+/// otherwise the single narrowed form — the abstracted body when Maude found
+/// reducible sub-terms, else the rule itself.  The info carries the rule's own
+/// name and attributes, the variant disjunction and the loop breakers.
+///
+/// `closeProtoRule` reaches `variantsProtoRule` only for a rule that writes no
+/// `variants (modulo AC)` block (lib/theory/src/Rule.hs:82-86), so a written
+/// block keeps the disjunction its parser gave it — `Disj [emptySubstVFresh]`
+/// (`protoRuleACInfo`, Theory/Text/Parser/Rule.hs:138-143, see line 142) —
+/// and the narrowing [`crate::tools::rule_variants::populate_rule_variants`]
+/// ran on the E rule stays out of it.  For every other rule an empty
+/// `variant_substs` stands for that same trivial disjunction.
+pub fn closed_rules_ac(r: &OpenProtoRule) -> Vec<crate::rule::ProtoRuleAC> {
+    let info = |e: &ProtoRuleE, variants: Vec<tamarin_term::subst_vfresh::LNSubstVFresh>| {
+        crate::rule::ProtoRuleACInfo {
+            name: e.info.name,
+            attributes: e.info.attributes.clone(),
+            variants,
+            loop_breakers: r.loop_breakers.clone(),
+        }
+    };
+    let trivial = || vec![tamarin_term::subst_vfresh::LNSubstVFresh::empty()];
+    if r.rule_ac.is_empty() {
+        let variants = if r.variant_substs.is_empty() {
+            trivial()
+        } else {
+            r.variant_substs.clone()
+        };
+        let ac = r.abstracted_rule.as_ref().unwrap_or(&r.rule);
+        vec![rule_ac_under(ac, info(&r.rule, variants))]
+    } else {
+        r.rule_ac
+            .iter()
+            .map(|ac| rule_ac_under(ac, info(ac, trivial())))
+            .collect()
+    }
+}
+
+/// A rule's facts under a `ProtoRuleAC` info.  HS types both halves as one
+/// `Rule` over two infos (Theory/Model/Rule.hs:635-638), so only the info
+/// changes.
+fn rule_ac_under(e: &ProtoRuleE, info: crate::rule::ProtoRuleACInfo) -> crate::rule::ProtoRuleAC {
+    crate::rule::Rule {
+        info,
+        premises: e.premises.clone(),
+        conclusions: e.conclusions.clone(),
+        actions: e.actions.clone(),
+        new_vars: e.new_vars.clone(),
+    }
+}
+
+/// HS `openProtoRule` (lib/theory/src/Rule.hs:51-59): the E rule with the AC
+/// rules that `equal_up_to_terms` cannot identify with it; an AC rule that
+/// differs from the E rule only in its terms is dropped.
+pub fn open_proto_rule(r: &OpenProtoRule) -> MergedProtoRule {
+    let rule_e = r.rule_e().clone();
+    let rule_ac = closed_rules_ac(r)
+        .into_iter()
+        .filter(|ac| !crate::rule::equal_up_to_terms(ac, &rule_e))
+        .collect();
+    MergedProtoRule { rule_e, rule_ac }
+}
+
+/// HS `ClosedProtoRule` (Items/RuleItem.hs:50-59): the rule as the source
+/// writes it beside the one rule modulo AC `closeProtoRule` narrows it to.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClosedProtoRule {
+    pub rule_e: ProtoRuleE,
+    pub rule_ac: crate::rule::ProtoRuleAC,
+}
+
+/// HS `closeTheoryItem`'s rule arm followed by `unfoldClosedRules`
+/// (CloseRule.hs:82-93#unfoldClosedRules) over `closeProtoRule`
+/// (lib/theory/src/Rule.hs:82-86): a rule item becomes one closed rule per AC
+/// rule it closes into — one for a computed narrowing, one per `variants
+/// (modulo AC)` block the source writes — each carrying the item's E half.
+/// Every other item passes through at its position.
+pub fn close_proto_rules(items: &[TheoryItem<OpenProtoRule>]) -> Vec<TheoryItem<ClosedProtoRule>> {
+    let mut out: Vec<TheoryItem<ClosedProtoRule>> = Vec::new();
+    for item in items {
+        match item.split_rule() {
+            Ok(other) => out.push(other),
+            Err(r) => out.extend(closed_rules_ac(r).into_iter().map(|ac| {
+                TheoryItem::Rule(ClosedProtoRule {
+                    rule_e: r.rule_e().clone(),
+                    rule_ac: ac,
+                })
+            })),
         }
     }
+    out
+}
+
+/// HS `mergeOpenProtoRules . map (mapTheoryItem openProtoRule id)`
+/// (ClosedTheory.hs:402, OpenTheory.hs:592-603): every rule item opened, then
+/// runs of consecutive rule items sharing an E rule collapsed into one item
+/// whose AC list is their concatenation.  Every other item passes through at
+/// its position.
+pub fn merge_open_proto_rules(
+    items: &[TheoryItem<OpenProtoRule>],
+) -> Vec<TheoryItem<MergedProtoRule>> {
+    let mut out: Vec<TheoryItem<MergedProtoRule>> = Vec::new();
+    for item in items {
+        let opened = match item.split_rule() {
+            Ok(other) => {
+                out.push(other);
+                continue;
+            }
+            Err(r) => open_proto_rule(r),
+        };
+        // `groupBy comp` compares each element against the group's FIRST, and
+        // the fold leaves that element's E rule in place, so the accumulated
+        // item is what the next one is compared against.
+        match out.last_mut() {
+            Some(TheoryItem::Rule(prev)) if prev.rule_e == opened.rule_e => {
+                prev.rule_ac.extend(opened.rule_ac)
+            }
+            _ => out.push(TheoryItem::Rule(opened)),
+        }
+    }
+    out
+}
+
+/// HS `_oprRuleAC` (Items/RuleItem.hs:34-36) as `prettyOpenProtoRule` reads
+/// it: the `variants (modulo AC)` blocks the source writes, typed as the
+/// `ProtoRuleAC`s the parser builds.  `protoRuleACInfo` gives each of them the
+/// rule's own name and attributes, the identity substitution as its variant
+/// disjunction and an empty loop-breaker list
+/// (Theory/Text/Parser/Rule.hs:137-143, see line 142).
+pub(crate) fn manual_rule_variants(r: &OpenProtoRule) -> Vec<crate::rule::ProtoRuleAC> {
+    r.rule_ac
+        .iter()
+        .map(|v| {
+            rule_ac_under(
+                v,
+                crate::rule::ProtoRuleACInfo {
+                    name: v.info.name,
+                    attributes: v.info.attributes.clone(),
+                    variants: vec![tamarin_term::subst_vfresh::LNSubstVFresh::empty()],
+                    loop_breakers: Vec::new(),
+                },
+            )
+        })
+        .collect()
+}
+
+/// HS `clearFunctionTypingInfos` (TheoryObject.hs:504-508): drop every
+/// source-positioned `FunctionTypingInfo` item.
+pub fn clear_function_typing_infos<R>(thy: &mut Theory<R>) {
+    thy.items.retain(|i| {
+        !matches!(
+            i,
+            TheoryItem::Translation(TranslationElement::FunctionTypingInfo(_))
+        )
+    });
+}
+
+/// HS `containsManualRuleVariants` (OpenTheory.hs:584-589): whether any rule
+/// item carries an AC rule of its own.
+pub fn contains_manual_rule_variants(items: &[TheoryItem<MergedProtoRule>]) -> bool {
+    items
+        .iter()
+        .any(|i| matches!(i, TheoryItem::Rule(r) if !r.rule_ac.is_empty()))
+}
+
+/// Whether opening any stored rule would retain an AC half. This is the
+/// allocation-free gate for [`merge_open_proto_rules`]: `equalUpToTerms`
+/// compares only the rule name and the fact-tag shapes, so constructing and
+/// cloning the closed AC rules is unnecessary merely to choose a printer.
+pub fn contains_open_rule_variants(items: &[TheoryItem<OpenProtoRule>]) -> bool {
+    fn same_tags(xs: &[crate::fact::LNFact], ys: &[crate::fact::LNFact]) -> bool {
+        xs.len() == ys.len() && xs.iter().zip(ys).all(|(x, y)| x.tag == y.tag)
+    }
+    fn differs(ac: &ProtoRuleE, e: &ProtoRuleE) -> bool {
+        ac.info.name != e.info.name
+            || !same_tags(&ac.premises, &e.premises)
+            || !same_tags(&ac.conclusions, &e.conclusions)
+            || !same_tags(&ac.actions, &e.actions)
+    }
+
+    items.iter().any(|item| {
+        let TheoryItem::Rule(rule) = item else {
+            return false;
+        };
+        let e = rule.rule_e();
+        if rule.rule_ac.is_empty() {
+            differs(rule.abstracted_rule.as_ref().unwrap_or(&rule.rule), e)
+        } else {
+            rule.rule_ac.iter().any(|ac| differs(ac, e))
+        }
+    })
 }
 
 #[cfg(test)]
@@ -543,32 +702,39 @@ mod tests {
     use super::*;
 
     /// A theory over simple stand-in type parameters.  The accessors are
-    /// generic over `R`/`P`/`S`.  The item payloads therefore do not have to
-    /// be real rules or proofs.
-    type TestTheory = Theory<i32, (), char>;
+    /// generic over `R`, so the item payload does not have to be a real rule.
+    type TestTheory = Theory<i32>;
 
-    fn lemma(name: &str) -> Lemma<()> {
+    fn lemma(name: &str) -> Lemma {
         Lemma {
             name: name.to_string(),
-            modulo: None,
             attributes: Vec::new(),
             trace_quantifier: TraceQuantifier::AllTraces,
-            formula: tamarin_parser::ast::Formula::True,
-            proof: (),
+            formula: crate::formula::ProtoFormula::ltrue(),
+            original_formula: None,
+            proof: None,
             plaintext: String::new(),
         }
     }
 
-    fn restriction(name: &str) -> OpenRestriction {
-        OpenRestriction::new(name, tamarin_parser::ast::Formula::True)
+    fn restriction(name: &str) -> Restriction {
+        Restriction {
+            name: name.to_string(),
+            formula: crate::formula::ProtoFormula::ltrue(),
+            original_formula: None,
+        }
     }
 
     fn lnmacro(name: &str) -> LNMacro {
-        LNMacro {
-            name: name.to_string(),
-            args: Vec::new(),
-            body: tamarin_term::vterm::var_term(LVar::new("x", tamarin_term::lterm::LSort::Msg, 0)),
-        }
+        LNMacro::new(
+            name.as_bytes().to_vec(),
+            Vec::new(),
+            tamarin_term::vterm::var_term(tamarin_term::lterm::LVar::new(
+                "x",
+                tamarin_term::lterm::LSort::Msg,
+                0,
+            )),
+        )
     }
 
     /// Every accessor is a `filter_map` over one `TheoryItem` arm.  A
@@ -579,16 +745,19 @@ mod tests {
     /// list and not count the item.
     #[test]
     fn accessors_select_only_their_own_item_kind() {
-        let mut t: TestTheory = Theory::new("Foo", SignaturePure::empty(false));
+        let mut t: TestTheory =
+            Theory::new("Foo", tamarin_term::maude_sig::minimal_maude_sig(false));
         assert_eq!(t.name, "Foo");
         assert_eq!(t.items.len(), 0);
         assert_eq!(t.rules().count(), 0);
 
-        t.add_item(TheoryItem::Rule(7))
-            .add_item(TheoryItem::Lemma(lemma("L")))
-            .add_item(TheoryItem::Restriction(restriction("R")))
-            .add_item(TheoryItem::Macros(vec![lnmacro("m1"), lnmacro("m2")]))
-            .add_item(TheoryItem::Translation('t'));
+        t.items = vec![
+            TheoryItem::Rule(7),
+            TheoryItem::Lemma(lemma("L")),
+            TheoryItem::Restriction(restriction("R")),
+            TheoryItem::Macros(vec![lnmacro("m1"), lnmacro("m2")]),
+            TheoryItem::Translation(TranslationElement::SignatureBuiltin("t".to_string())),
+        ];
 
         assert_eq!(t.rules().copied().collect::<Vec<_>>(), vec![7]);
         assert_eq!(
@@ -603,8 +772,8 @@ mod tests {
         );
         assert_eq!(t.predicates().count(), 0);
         assert_eq!(
-            t.macros().map(|m| m.name.as_str()).collect::<Vec<_>>(),
-            vec!["m1", "m2"],
+            t.macros().map(|m| m.name.as_slice()).collect::<Vec<_>>(),
+            vec![b"m1".as_slice(), b"m2".as_slice()],
             "`macros()` flattens the item's macro list"
         );
         assert_eq!(t.lookup_lemma("L").map(|l| l.name.as_str()), Some("L"));
@@ -616,58 +785,17 @@ mod tests {
         assert_eq!(t.lookup_restriction("L"), None);
     }
 
-    /// HS `addLemma` and `addRestriction` (TheoryObject.hs:453-465) refuse a
-    /// name that is already present, and they report the refusal.  `addRules`
-    /// has no such check.  It always appends.
-    #[test]
-    fn add_lemma_and_add_restriction_refuse_a_duplicate_name() {
-        let mut t: TestTheory = Theory::new("Foo", SignaturePure::empty(false));
-        assert!(t.add_lemma(lemma("L")));
-        assert!(!t.add_lemma(lemma("L")), "second `L` must be refused");
-        assert!(t.add_lemma(lemma("L2")));
-        assert!(t.add_restriction(restriction("R")));
-        assert!(!t.add_restriction(restriction("R")));
-
-        // `add_lemmas` and `add_restrictions` fold the singular form.  They
-        // skip the entries whose names clash.  They add the new entries in
-        // order.
-        t.add_lemmas([lemma("L"), lemma("L3")]);
-        t.add_restrictions([restriction("R"), restriction("R2")]);
-        assert_eq!(
-            t.lemmas().map(|l| l.name.as_str()).collect::<Vec<_>>(),
-            vec!["L", "L2", "L3"]
-        );
-        assert_eq!(
-            t.restrictions()
-                .map(|r| r.name.as_str())
-                .collect::<Vec<_>>(),
-            vec!["R", "R2"]
-        );
-
-        // `add_rules` removes no duplicates.  It adds both copies after the
-        // items that are already present.
-        t.add_rules([7, 7]);
-        assert_eq!(t.rules().copied().collect::<Vec<_>>(), vec![7, 7]);
-    }
-
     #[test]
     fn options_default_flags() {
         let o = Options::default();
-        assert!(!o.trans_progress);
-        assert!(!o.compress_events);
+        assert!(!o.trans_progress());
+        assert!(!o.compress_events());
         // `--no-ndc` opts out; the check is on by default.
         assert!(o.deduction_chain_check);
         assert!(o.lemmas_to_prove.is_empty());
     }
-
-    /// An unproven lemma carries no proof text and no parsed tree.  The
-    /// pretty-printer reads `raw`.  The web and JSON paths read `tree`.  A
-    /// placeholder in either field makes the code print a proof that the
-    /// prover never found.
-    #[test]
-    fn proof_skeleton_unproven_is_empty() {
-        let p = ProofSkeleton::unproven();
-        assert!(p.raw.is_empty());
-        assert!(p.tree.is_none());
-    }
 }
+
+#[cfg(test)]
+#[path = "stored_proof_corpus_tests.rs"]
+mod stored_proof_corpus_tests;

@@ -36,15 +36,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     };
     let data_dir = first_dir(["data", "../data"]).unwrap_or_else(|| PathBuf::from("../data"));
     let frontend_dist = first_dir(["frontend/dist", "../frontend/dist"]);
-    let maude_path = [
-        "/usr/local/bin/maude",
-        "/opt/homebrew/bin/maude",
-        "/usr/bin/maude",
-    ]
-    .iter()
-    .find(|p| std::path::Path::new(p).exists())
-    .map(|s| s.to_string())
-    .unwrap_or_else(|| "maude".into());
+    let maude_path = tamarin_test_support::maude_path().unwrap_or_else(|| "maude".into());
 
     let cfg = tamarin_server::ServerConfig {
         bind_addr: SocketAddr::from(([127, 0, 0, 1], port)),

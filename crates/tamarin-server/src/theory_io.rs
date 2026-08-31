@@ -10,9 +10,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use tamarin_parser::parse_theory_with_base;
-use tamarin_parser::wf::WfError;
 use tamarin_term::maude_proc::MaudeHandle;
-use tamarin_theory::elaborate::elaborate;
+use tamarin_theory::elaborate::elaborate_with_in_file;
+use tamarin_theory::wellformedness::WfError;
 
 use crate::state::{TheoryEntry, TheoryOrigin};
 
@@ -75,6 +75,36 @@ pub fn ndc_check() -> bool {
     NDC_CHECK.load(Ordering::Relaxed)
 }
 
+/// The `--prove`/`--lemma` selection every web load applies to the theory it
+/// loads.
+///
+/// `addLemmaToProve` (TheoryLoader.hs:835-838) is the `addNdcOption` sibling
+/// inside the same `addParamsOptions` (TheoryLoader.hs:821), so the values
+/// `mkTheoryLoadOptions` collects — `findArg "prove" as ++ findArg "lemma" as`
+/// (TheoryLoader.hs:326) — land in the loaded theory's `_lemmasToProve`, which
+/// `checkIfLemmasInTheory` reads back (Wellformedness.hs:1168).  Those flags
+/// come from `theoryLoadFlags` (TheoryLoader.hs:94-107), which the interactive
+/// mode carries too (Interactive.hs:70).
+///
+/// Process-wide, like [`NDC_CHECK`]: `run_interactive` sets it from the CLI
+/// before the first load, and all three load sites read it through
+/// [`load_from_source`].
+static LEMMAS_TO_PROVE: std::sync::RwLock<Vec<String>> = std::sync::RwLock::new(Vec::new());
+
+/// Set the `--prove`/`--lemma` selection [`load_from_source`] applies.
+pub fn set_lemmas_to_prove(names: Vec<String>) {
+    *LEMMAS_TO_PROVE.write().expect("LEMMAS_TO_PROVE poisoned") = names;
+}
+
+/// The `--prove`/`--lemma` selection [`load_from_source`] applies to each
+/// loaded theory.
+pub fn lemmas_to_prove() -> Vec<String> {
+    LEMMAS_TO_PROVE
+        .read()
+        .expect("LEMMAS_TO_PROVE poisoned")
+        .clone()
+}
+
 /// The parser flags every web load parses with — HS `toParserFlags
 /// thyOpts` (TheoryLoader.hs:285-291) inside the same captured
 /// `loadTheory thyLoadOptions` closure as [`NDC_CHECK`] above, so the
@@ -121,7 +151,7 @@ pub fn load_from_path(
 /// can emit the `variants (modulo AC)` blocks byte-for-byte.  Variant
 /// computation is best-effort: if Maude can't be started the theory is
 /// still usable (rules just render without their variants block).
-pub fn load_from_source(
+pub(crate) fn load_from_source(
     src: &str,
     origin: TheoryOrigin,
     maude_path: &str,
@@ -156,137 +186,103 @@ pub fn load_from_source(
         TheoryOrigin::Local(p) => p.parent().map(|d| d.to_path_buf()),
         _ => None,
     };
-    let mut parser_theory = parse_theory_with_base(src, &flags, base_dir)
+    let parsed = parse_theory_with_base(src, &flags, base_dir)
         .map_err(|e| LoadError::Parse(e.with_source(source_name).to_string()))?;
 
-    // HS `liftedAddProtoRule` (Theory/Text/Parser.hs:175-193) expands each
-    // rule's `_restrict(φ)` into a fresh `Restr_<rule>_<i>` restriction
-    // (inserted before the rule) and rewrites the rule's actions DURING
-    // parsing.  RS captures `_restrict` into `Rule.embedded_restrictions`
-    // at parse time; run the lifting pass here, immediately after parse and
-    // BEFORE the wellformedness clone / elaboration / SAPIC translation —
-    // the exact position `run_batch` in run.rs uses — so the transformed
-    // parser theory drives every web renderer (rules / source / message /
-    // graphs / sequents).
-    tamarin_theory::rule_restriction::lift_rule_restrictions(&mut parser_theory)
-        .map_err(|e| LoadError::Parse(format!("_restrict expansion failed: {}", e.message)))?;
-
     // HS lifecycle markers, stderr via `traceM`: "Theory loaded" right
-    // after parsing (TheoryLoader.hs:449-452, see line 451; `liftedAddProtoRule` runs
-    // during parsing, so post-lift here is the same point).
-    eprintln!("[Theory {}] Theory loaded", parser_theory.name);
-
-    // Wellformedness report — computed by the SAME pipeline `--prove` runs
-    // (`run.rs`'s `checkWellformedness`, mirroring HS `TheoryLoader.hs`), so the
-    // interactive web UI surfaces exactly the warnings HS does.  HS runs
-    // `checkWellformedness` at theory load (before any proving), so running it
-    // here — including the Maude-backed derivation check in the block below — is
-    // faithful.  The result feeds two renderings: the `/* WARNING: ... */`
-    // comment in the source/message routes (`format_wf_block`) and the
-    // `<div class="wf-warning">` header banner in help/overview (`errors_html`).
-    //
-    // Static checks run on the PRE-translation parsed theory (HS runs
-    // `check_theory` BEFORE the SAPIC `translate` pass; `run_batch` opens
-    // with the same shared pass — macro-expanded clone, `check_theory`,
-    // static "Message Derivation Checks" entry dropped for the dynamic
-    // check in the maude block below).
-    let mut wf_report = tamarin_theory::translated_wf::pre_translation_wf_report(&parser_theory);
+    // after parsing (TheoryLoader.hs:449-452, see line 451).
+    eprintln!("[Theory {}] Theory loaded", parsed.name);
 
     // "Theory translated" at the START of translation (TheoryLoader.hs:494-500, see line 496
     // prints before `processOpenTheory` runs); RS's `elaborate` is that
     // translation step.
-    eprintln!("[Theory {}] Theory translated", parser_theory.name);
-    let mut typed = elaborate(&parser_theory).map_err(|e| LoadError::Elaborate(e.message))?;
+    eprintln!("[Theory {}] Theory translated", parsed.name);
+    // Oracle path resolution base: HS threads the parser's `inFile` into
+    // `defaultOracleNames` (Theory/Text/Parser.hs:249-250), so a
+    // `heuristic: o "./oracle-…"` resolves against the theory's own
+    // directory (`hs_take_directory`).  Local files carry their on-disk
+    // path; uploads keep the bare filename (dir "." — as in HS, where an
+    // uploaded theory has no on-disk home).
+    let mut typed = elaborate_with_in_file(&parsed, &origin.label())
+        .map_err(|e| LoadError::Elaborate(e.message))?;
+
+    // Everything downstream of `elaborate` reads the internal theory; the
+    // parser AST ends here.
+    drop(parsed);
     // HS `addParamsOptions`' `addNdcOption` (TheoryLoader.hs:821-826), the last
     // step of `loadTheory` (TheoryLoader.hs:449-452): the CLI's `ndcCheck`
     // becomes the loaded theory's `_deductionChainCheck`, which the NDC pass in
     // the maude block below reads back.  [`NDC_CHECK`] carries the flag here.
     typed.options.deduction_chain_check = ndc_check();
-    // Oracle path resolution base: HS threads the parser's `inFile` into
-    // `defaultOracleNames` (Theory/Text/Parser.hs:250), so a
-    // `heuristic: o "./oracle-…"` resolves against the theory's own
-    // directory (`hs_take_directory`).  Local files carry their on-disk
-    // path; uploads keep the bare filename (dir "." — as in HS, where an
-    // uploaded theory has no on-disk home).
-    typed.in_file = origin.label();
-    let maude_sig = typed.signature.maude_sig.clone();
-
-    // Subterm-convergence check on the signature's subterm-rule set (the
-    // same swap `run_batch` performs, shared in `translated_wf`).
-    tamarin_theory::translated_wf::swap_subterm_convergence_report(&mut wf_report, &maude_sig);
+    // The `addLemmaToProve` sibling of that same `addParamsOptions`
+    // (TheoryLoader.hs:835-838): the CLI's `--prove`/`--lemma` selection
+    // becomes the loaded theory's `_lemmasToProve`.  [`LEMMAS_TO_PROVE`]
+    // carries it here.
+    typed.options.lemmas_to_prove = lemmas_to_prove();
 
     // SAPIC `process:` translation — mirror `run_batch`'s CLI-side pass so
     // the web load path renders SAPIC theories exactly like `--prove`.  Runs
-    // ONLY for `is_sapic` theories (exactly one top-level `process:`);
-    // `apply_sapic` returns `Ok(vec![])` when
-    // `!typed.is_sapic`, so it is safe to call unconditionally and leaves
+    // ONLY for theories with exactly one top-level `process:`;
+    // `apply_sapic` returns `Ok(vec![])` otherwise, so it is safe to call
+    // unconditionally and leaves
     // non-process theories byte-unchanged.  It injects the generated MSR
-    // rules + `single_session` restriction + `heuristic: p` into BOTH
-    // `parser_theory` (which drives the web rules / source / message
-    // renderers) and `typed` (for AC-variant pre-computation), so it MUST run
-    // before `populate_rule_variants` below.  `user_set_heuristic` is true iff
-    // a `heuristic:` item already populated `typed.heuristic` (HS
+    // rules + `single_session` restriction + `heuristic: p` into `typed`,
+    // which the web renderers and the AC-variant pre-computation read, so it
+    // MUST run before `populate_rule_variants` below.  `user_set_heuristic`
+    // is true iff a `heuristic:` item already populated `typed.heuristic` (HS
     // `addHeuristic` returns `Nothing` in that case).
-    //
-    // Install the user/builtin function-symbol name sets
-    // (`CollectedUserFuns`'s `private` / `destructor` / …) for the duration
-    // of BOTH the SAPIC translation AND the variant pre-computation below.
-    // That thread-local bundle drives `term_to_lnterm`'s symbol resolution
-    // (privacy / constructability); `elaborate()` sets it only for its own
-    // scope, so without re-installing it here the SAPIC-injected rules'
-    // builtin symbols (`rep` private, `check_rep` / `get_rep` destructors from
-    // `locations-report`) re-elaborate with the default public-constructor
-    // flags, serialising as `tamXC..` — which Maude rejects, leaving the rule
-    // with "no variants".  The guard must therefore stay alive across the
-    // `populate_rule_variants` call in the maude block below (it does: this
-    // binding lives to the end of the function).
-    let _sapic_funs_guard = tamarin_theory::elaborate::set_user_funs_for_theory(&parser_theory);
     // HS `Acc.checkWellformedness t` (translateTheory, TheoryLoader.hs:494-500, see line 497)
     // runs on the PRE-translation theory — before `apply_sapic` injects the
     // SAPIC-generated rules (mirrors run.rs's CLI-side placement).
-    let acc_wf = tamarin_accountability::check_wellformedness(&parser_theory);
+    let acc_wf = tamarin_accountability::check_wellformedness(&typed);
     let user_set_heuristic = !typed.heuristic.is_empty();
-    // HS `Sapic.checkWellformedness` (Warnings.hs) is part of `preReport`, which
-    // is PREPENDED to the rest of the report (as in `run_batch`).  A hard
-    // translation error still propagates as `LoadError::Elaborate`.
-    let sapic_wf =
-        tamarin_sapic::apply::apply_sapic(&mut parser_theory, &mut typed, user_set_heuristic)
-            .map_err(|e| LoadError::Elaborate(e.message))?;
+    // HS `Sapic.checkWellformedness` (Warnings.hs) is the head of `preReport`
+    // (as in `run_batch`).  A hard translation error still propagates as
+    // `LoadError::Elaborate`.
+    let sapic_wf = tamarin_sapic::apply::apply_sapic(&mut typed, user_set_heuristic)
+        .map_err(|e| LoadError::Elaborate(e.message))?;
     // Accountability translation (HS `Sapic.translate >=> Acc.translate`,
     // `processOpenTheory`, TheoryLoader.hs:470-484, see line 472): expands each
     // `… accounts for` lemma into its
-    // verification-condition lemmas + case-test predicates, injecting into
-    // BOTH `parser_theory` (web renderers) and `typed` (lemma list, proof
-    // state).  Without this the web UI has no pages for the VC sub-lemmas
-    // batch `--prove` proves.  No-op for theories without accountability
-    // lemmas / case tests.
-    tamarin_accountability::translate(&mut parser_theory, &mut typed)
+    // verification-condition lemmas + case-test predicates, appending them to
+    // `typed`, which carries the lemma list, the proof state and everything
+    // the web renderers read.  Without this the web UI has no pages for the
+    // VC sub-lemmas batch `--prove` proves.  No-op for theories without
+    // accountability lemmas / case tests.
+    tamarin_accountability::translate(&mut typed)
         .map_err(|e| LoadError::Elaborate(e.to_string()))?;
-    // `preReport` order (as in `run_batch`): SAPIC warnings, then the
-    // accountability RP check, then the rest.
-    let mut pre_report = sapic_wf;
-    pre_report.extend(acc_wf);
-    tamarin_theory::translated_wf::prepend_wf_report(&mut wf_report, pre_report);
-
-    // HS re-runs the full `checkWellformedness` on the TRANSLATED theory
-    // (`checkTranslatedTheory`), i.e. after `apply_sapic` / `Acc::translate`
-    // injected the generated rules and lemmas.  The six re-runs and their
-    // splice positions are shared with the batch path (`run_batch`) — see
-    // `tamarin_theory::translated_wf`.
-    tamarin_theory::translated_wf::splice_translated_wf_reports(
-        &parser_theory,
-        &typed,
-        &maude_sig,
-        &mut wf_report,
-    );
+    // HS `preReport ++ postReport` (TheoryLoader.hs:726-732), as in
+    // `run_batch`: SAPIC warnings, then the accountability RP check, then the
+    // whole `checkWellformedness` pass over the TRANSLATED theory. The latter
+    // runs below after variant computation so `ruleVariantsReport` sees its
+    // live Maude result, and before zero-variant rules are removed.
+    //
+    // The result feeds two renderings: the `/* WARNING: ... */` comment in the
+    // source/message routes (`format_wf_block`) and the
+    // `<div class="wf-warning">` header banner in help/overview
+    // (`errors_html`).
+    let mut wf_report = sapic_wf;
+    wf_report.extend(acc_wf);
 
     // The theory's once-per-load NDC-checked intruder cache
     // (`check_close_intr_rule` below).  Stored on the `TheoryEntry` so
     // `ProofState::new` injects it into the web session / shared context
     // instead of re-running the check per context build.
     let mut ndc_cache: Option<Arc<Vec<tamarin_theory::rule::IntrRuleAC>>> = None;
-    if let Ok(maude) = MaudeHandle::start(maude_path, typed.signature.maude_sig.clone()) {
+    // The signature every Maude process for this theory loads its module
+    // from, taken before the NDC join below — see
+    // `TheoryEntry::prover_maude_sig` for why the join must not reach it.
+    let prover_maude_sig = typed.signature.clone();
+    if let Ok(maude) = MaudeHandle::start(maude_path, prover_maude_sig.clone()) {
         tamarin_theory::tools::rule_variants::populate_rule_variants(&mut typed, &maude, None);
+        // `checkTranslatedTheory` reports contradictory zero-variant rules,
+        // then `closeTheory` drops them from the closed theory. Keep that
+        // order: filtering first would erase the warning as well as the rule.
+        wf_report.extend(tamarin_theory::wellformedness::check_wellformedness(
+            &typed,
+            Some(&maude),
+        ));
+        tamarin_theory::tools::rule_variants::retain_rules_with_variants(&mut typed, &maude);
         // Annotate per-rule loop breakers on the stored theory so the web
         // rules / source / message renderers emit HS's `// loop breaker: [<n>]`
         // comments — HS `prettyClosedProtoRule` reads them from the
@@ -310,13 +306,14 @@ pub fn load_from_source(
             &maude,
             Some(&typed.name),
             typed.options.deduction_chain_check,
+            &typed.intruder_rules,
         );
         if !checked.ndc_funs.is_empty() {
-            let mut sig = std::mem::take(&mut typed.signature.maude_sig);
+            let mut sig = std::mem::take(&mut typed.signature);
             for f in &checked.ndc_funs {
                 sig = sig.join_ndc_in_sig(*f, tamarin_term::function_symbols::NdcState::IsNdc);
             }
-            typed.signature.maude_sig = sig;
+            typed.signature = sig;
         }
         ndc_cache = Some(Arc::new(checked.cache));
 
@@ -328,8 +325,8 @@ pub fn load_from_source(
         // (Main/Mode/Interactive.hs:70), so the shared
         // `--derivcheck-timeout` (TheoryLoader.hs:180-185, read at
         // TheoryLoader.hs:391-393) applies.  Needs the Maude handle; runs on
-        // the POST-translation parser theory (`parser_theory`, matching
-        // run.rs's `&parsed` at that point).
+        // the POST-translation theory (`typed`, matching run.rs's
+        // `&self.elaborated` at that point).
         // HS brackets the check with stderr markers via `traceM`
         // (TheoryLoader.hs:578-594, see line 581,594) — emitted for every close (initial
         // load, upload, reload), and only when derivChecks != 0
@@ -338,7 +335,7 @@ pub fn load_from_source(
             eprintln!("[Theory {}] Derivation checks started", typed.name);
         }
         let extra = tamarin_theory::deriv_check::check_message_derivation(
-            &parser_theory,
+            &typed,
             &maude,
             derivcheck_timeout,
             ndc_cache
@@ -349,6 +346,13 @@ pub fn load_from_source(
         if derivcheck_timeout > 0 {
             eprintln!("[Theory {}] Derivation checks ended", typed.name);
         }
+    } else {
+        // Loading remains best-effort when Maude is unavailable. All
+        // Maude-independent checks still run; only the variant report/filter
+        // and the later Maude-backed close passes are absent.
+        wf_report.extend(tamarin_theory::wellformedness::check_wellformedness(
+            &typed, None,
+        ));
     }
 
     // HS `makeWfErrorsHtml` (src/Web/Handler.hs:469-475) — the header-banner
@@ -360,9 +364,8 @@ pub fn load_from_source(
 
     Ok(TheoryEntry {
         idx: 0,
-        name: typed.name.clone(),
-        parser_theory: Arc::new(parser_theory),
         typed_theory: Arc::new(typed),
+        prover_maude_sig,
         origin,
         loaded_at: Local::now(),
         primary: true,
@@ -426,6 +429,7 @@ fn make_wf_errors_html(report: &[WfError]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tamarin_test_support::require_maude_path;
 
     /// The interactive `TheoryLoadOptions` plumbing added for HS parity:
     /// `-D` defines reach `#ifdef` evaluation via [`set_parser_flags`]
@@ -440,10 +444,10 @@ mod tests {
     fn parser_flags_and_include_base_dir_reach_the_web_load() {
         let rule_count = |entry: &TheoryEntry| {
             entry
-                .parser_theory
+                .typed_theory
                 .items
                 .iter()
-                .filter(|i| matches!(i, tamarin_parser::ast::TheoryItem::Rule(_)))
+                .filter(|i| matches!(i, tamarin_theory::theory::TheoryItem::Rule(_)))
                 .count()
         };
         let src = "theory T begin\n#ifdef FOO\nrule R: [ ] --> [ ]\n#endif\nend";
@@ -472,5 +476,32 @@ mod tests {
             .expect("include resolves against the theory's dir");
         assert_eq!(rule_count(&entry), 1);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn web_load_reports_then_drops_rules_without_variants() {
+        let Some(maude) = require_maude_path() else {
+            return;
+        };
+        let src = "theory NoVariants\n\
+                   begin\n\
+                   builtins: symmetric-encryption\n\
+                   rule NoVar:\n  [ In(~x), Fr(~x) ] --[ N(~x) ]-> [ ]\n\
+                   rule Ok:\n  [ Fr(~k), In(c) ] --[ O(~k) ]-> [ Out(sdec(c, ~k)) ]\n\
+                   end\n";
+        let entry = load_from_source(
+            src,
+            TheoryOrigin::Upload("no-variants.spthy".into()),
+            &maude,
+            0,
+        )
+        .expect("theory loads");
+
+        assert!(entry
+            .wf_report
+            .iter()
+            .any(|warning| warning.topic == "Rule has no variants"));
+        let names: Vec<&str> = entry.typed_theory.rules().map(|rule| rule.name()).collect();
+        assert_eq!(names, vec!["Ok"]);
     }
 }

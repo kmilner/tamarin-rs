@@ -9,5 +9,5 @@ pub mod cli;
 mod probe;
 pub mod run;
 
-pub use cli::{parse_args, Args, Subcommand};
-pub use run::{run, RunError};
+pub use cli::{parse_args, Args};
+pub use run::run;

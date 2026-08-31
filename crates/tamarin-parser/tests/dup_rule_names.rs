@@ -16,7 +16,16 @@
 //! Both rejections are `throwM` → `fail (show e)` (Token.hs:210-211) with
 //! `show (DuplicateItem …)` (Parser/Exceptions.hs:38-40): an ordinary parsec
 //! `fail` at the position after the rule, merging the trailing
-//! `option [] $ symbol "variants" …` label (Parser/Rule.hs:134).  Every expected
+//! `option [] $ symbol "variants" …` label (Parser/Rule.hs:134).
+//!
+//! The item-level guards work the same way: `liftedAddLemma`
+//! (Theory/Text/Parser.hs:141-147) and `liftedAddRestriction`
+//! (Theory/Text/Parser.hs:129-134) reject a reused lemma/restriction NAME,
+//! and `liftedAddPredicate` (Theory/Text/Parser/Signature.hs:328-331)
+//! rejects a redeclared predicate fact TAG — each failing at the position
+//! past its item, merging whatever labels stand there.
+//!
+//! Every expected
 //! string below is the stderr the pinned Haskell oracle (Git revision
 //! ef3f0468) prints for the same theory, minus the three `maude tool:` banner
 //! lines; every accepted theory loads with exit 0 there.
@@ -220,4 +229,186 @@ fn duplicate_across_include_is_rejected() {
          duplicate rule: R1"
     );
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A second lemma with a reused name dies at `addLemma`'s name guard
+/// (TheoryObject.hs:462-465, reached through `liftedAddLemma`,
+/// Theory/Text/Parser.hs:280-282).  Neither lemma carries a proof, so the
+/// unmatched `startProofSkeleton` alternatives
+/// (Theory/Text/Parser/Lemma.hs:85, Theory/Text/Parser/Proof.hs:76-115) leave
+/// their labels at the item's end, and the fail merges them in.
+#[test]
+fn duplicate_lemma_without_proof_carries_the_skeleton_labels() {
+    let src = "theory T begin\n\
+               rule r: [ Fr(~k) ] --> [ Out(~k) ]\n\
+               lemma l: exists-trace \"Ex #i x. K(x)@i\"\n\
+               lemma l: exists-trace \"Ex #i x. K(x)@i\"\n\
+               end\n";
+    assert_eq!(
+        err(src, "dup.spthy"),
+        "\"dup.spthy\" (line 5, column 1):\n\
+         unexpected \"e\"\n\
+         expecting \"SOLVED\", \"by\", \"sorry\", \"simplify\", \"solve\", \"contradiction\", \
+         \"induction\", \"INVALIDATED\" or \"UNFINISHABLE\"\n\
+         duplicate lemma: l"
+    );
+}
+
+/// When the second lemma DOES carry a proof, the skeleton alternatives were
+/// consumed, no labels stand at the item's end, and the frame is bare.
+#[test]
+fn duplicate_lemma_with_proof_has_a_bare_frame() {
+    let src = "theory T begin\n\
+               rule r: [ Fr(~k) ] --> [ Out(~k) ]\n\
+               lemma l: exists-trace \"Ex #i x. K(x)@i\"\n\
+               lemma l: exists-trace \"Ex #i x. K(x)@i\"\n\
+               simplify\n\
+               by sorry\n\
+               end\n";
+    assert_eq!(
+        err(src, "dup.spthy"),
+        "\"dup.spthy\" (line 7, column 1):\n\
+         unexpected \"e\"\n\
+         duplicate lemma: l"
+    );
+}
+
+#[test]
+fn sided_lemmas_still_share_the_regular_lemma_namespace() {
+    let src = "theory T begin\n\
+               lemma l [left]: exists-trace \"Ex #i. A() @ #i\"\n\
+               lemma l [left]: exists-trace \"Ex #i. A() @ #i\"\n\
+               end\n";
+    assert!(
+        err(src, "dup.spthy").contains("duplicate lemma: l"),
+        "a non-diff theory must reject duplicate sided lemmas"
+    );
+}
+
+/// A second `restriction` item with a reused name dies at `addRestriction`'s
+/// name guard (TheoryObject.hs:453-456, reached through
+/// `liftedAddRestriction`, Theory/Text/Parser.hs:129-134).  The closing
+/// quote's lexeme leaves no labels, so the frame is bare.
+#[test]
+fn duplicate_restriction_item_is_rejected() {
+    let src = "theory T begin\n\
+               rule r: [ Fr(~k) ] --> [ Out(~k) ]\n\
+               restriction one: \"All #i #j x. A(x)@i & A(x)@j ==> #i = #j\"\n\
+               restriction one: \"All #i #j x. A(x)@i & A(x)@j ==> #i = #j\"\n\
+               end\n";
+    assert_eq!(
+        err(src, "dup.spthy"),
+        "\"dup.spthy\" (line 5, column 1):\n\
+         unexpected \"e\"\n\
+         duplicate restriction: one"
+    );
+}
+
+/// Lemmas and restrictions have separate name spaces: `lookupLemma` only
+/// sees `LemmaItem`s and `lookupRestriction` only `RestrictionItem`s
+/// (TheoryObject.hs:671-676), so a lemma may reuse a restriction's name.
+#[test]
+fn lemma_and_restriction_names_do_not_collide() {
+    let src = "theory T begin\n\
+               rule r: [ Fr(~k) ] --> [ Out(~k) ]\n\
+               restriction Smaller: \"All #i #j x. A(x)@i & A(x)@j ==> #i = #j\"\n\
+               lemma l: exists-trace \"Ex #i x. K(x)@i\"\n\
+               lemma Smaller: exists-trace \"Ex #i x. K(x)@i\"\n\
+               end\n";
+    assert!(parse_theory(src, &[]).is_ok());
+}
+
+/// A predicate redeclared in a LATER block dies at `addPredicate`'s tag guard
+/// (TheoryObject.hs:540-543 via `lookupPredicate`,
+/// Theory/Syntactic/Predicate.hs:77-80), raised past the second block.  The
+/// last formula ends right after the timepoint variable `#i`, whose pending
+/// dot-index attempt contributes the leading `"."` label ahead of the formula
+/// operators and `commaSep1`'s comma.
+#[test]
+fn duplicate_predicate_across_blocks_is_rejected() {
+    let src = "theory T begin\n\
+               predicates: P(x) <=> Ex #i. A(x)@i\n\
+               predicates: P(x) <=> Ex #i. A(x)@i\n\
+               rule r: [ In(x) ] --> [ Out(x) ]\n\
+               end\n";
+    assert_eq!(
+        err(src, "dup.spthy"),
+        "\"dup.spthy\" (line 4, column 1):\n\
+         unexpected \"r\"\n\
+         expecting \".\", \"&\", \"∧\", \"|\", \"∨\", \"==>\", \"⇒\", \"<=>\", \"⇔\" or \",\"\n\
+         duplicate predicate: P( x )"
+    );
+}
+
+/// The same collision with the formula ending in a closing paren: the paren's
+/// lexeme moved past the variable's dot-index attempt, so no `"."` label.
+#[test]
+fn duplicate_predicate_after_paren_has_no_dot_label() {
+    let src = "theory T begin\n\
+               predicates: P(x) <=> (Ex #i. A(x)@i)\n\
+               predicates: P(x) <=> (Ex #i. A(x)@i)\n\
+               rule r: [ In(x) ] --> [ Out(x) ]\n\
+               end\n";
+    assert_eq!(
+        err(src, "dup.spthy"),
+        "\"dup.spthy\" (line 4, column 1):\n\
+         unexpected \"r\"\n\
+         expecting \"&\", \"∧\", \"|\", \"∨\", \"==>\", \"⇒\", \"<=>\", \"⇔\" or \",\"\n\
+         duplicate predicate: P( x )"
+    );
+}
+
+#[test]
+fn duplicate_predicate_renders_annotations() {
+    let src = "theory T begin\n\
+               predicates: P(x)[-] <=> x = x\n\
+               predicates: P(y)[+] <=> y = y\n\
+               end\n";
+    assert_eq!(
+        err(src, "dup.spthy"),
+        "\"dup.spthy\" (line 4, column 1):\n\
+         unexpected \"e\"\n\
+         expecting \".\", \"&\", \"∧\", \"|\", \"∨\", \"==>\", \"⇒\", \"<=>\", \"⇔\" or \",\"\n\
+         duplicate predicate: P( y )[+]"
+    );
+}
+
+/// `lookupPredicate` appends the builtin predicates to the lookup list
+/// (Theory/Syntactic/Predicate.hs:58-67,78), so declaring `Smaller/2`
+/// collides with the builtin.  The formula's last term ends after a message
+/// variable, so the enabled multiset operator labels sit between the dot
+/// attempt and the formula operators.
+#[test]
+fn predicate_collides_with_builtin_smaller() {
+    let src = "theory T begin\n\
+               builtins: multiset\n\
+               predicates: Smaller(x,y) <=> Ex z. y = x ++ z\n\
+               rule r: [ In(x) ] --> [ Out(x) ]\n\
+               end\n";
+    assert_eq!(
+        err(src, "dup.spthy"),
+        "\"dup.spthy\" (line 4, column 1):\n\
+         unexpected \"r\"\n\
+         expecting \".\", \"++\", \"+\", \"&\", \"∧\", \"|\", \"∨\", \"==>\", \"⇒\", \"<=>\", \"⇔\" or \",\"\n\
+         duplicate predicate: Smaller( x, y )"
+    );
+}
+
+/// The duplicate key is the fact TAG (`sameName` is tag equality,
+/// Theory/Syntactic/Predicate.hs:78-80), so a persistent head only collides
+/// with a persistent head, and the message renders `showFactTag`'s `!`.
+#[test]
+fn duplicate_persistent_predicate_renders_the_bang() {
+    let src = "theory T begin\n\
+               predicates: !P(x) <=> Ex #i. A(x)@i\n\
+               predicates: !P(x) <=> Ex #i. A(x)@i\n\
+               rule r: [ In(x) ] --> [ Out(x) ]\n\
+               end\n";
+    assert_eq!(
+        err(src, "dup.spthy"),
+        "\"dup.spthy\" (line 4, column 1):\n\
+         unexpected \"r\"\n\
+         expecting \".\", \"&\", \"∧\", \"|\", \"∨\", \"==>\", \"⇒\", \"<=>\", \"⇔\" or \",\"\n\
+         duplicate predicate: !P( x )"
+    );
 }

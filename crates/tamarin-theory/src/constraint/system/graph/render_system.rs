@@ -1,9 +1,9 @@
 //! [`RenderSystem`] — a write-sealed, display-only wrapper around a prover
 //! [`System`].
 //!
-//! The interactive graph-render pipeline (`graph::simplify`,
-//! [`crate::constraint::system::dot`]) works on a **clone** of a prover
-//! `System` that it mutates
+//! The mutating modes of the interactive graph-render pipeline
+//! (`graph::simplify`, [`crate::constraint::system::dot`]) work on a **clone**
+//! of a prover `System` that they mutate
 //! for display: it drops entailed order constraints, hides intruder/coerce
 //! nodes, and transitively reduces the `less` relation.  Those mutations go
 //! through `content_mut()`, which leaves the system's verified-identity
@@ -25,7 +25,7 @@
 
 use crate::constraint::system::System;
 
-/// A prover [`System`] clone dedicated to graph rendering — see the module docs.
+/// An owned prover [`System`] dedicated to graph rendering — see the module docs.
 pub struct RenderSystem(System);
 
 impl RenderSystem {

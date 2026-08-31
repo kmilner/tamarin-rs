@@ -1,0 +1,51 @@
+// Accountability lemmas generated from case tests that use user predicates.
+//
+// `translate` (lib/accountability/src/Accountability.hs:42-49) builds an
+// accountability lemma's lemmas with `generateAccountabilityLemmas` (line 46)
+// out of the case-test formulas as the parser stores them — predicate atoms and
+// all — and injects each one with `liftedAddLemma` (line 47).  That is where
+// the sugar goes: `liftedAddLemma` (Theory/Text/Parser.hs:141-150) runs
+// `expandLemma` (TheoryObject.hs:443-450), which replaces every predicate atom
+// through `expandFormula` (Theory/Syntactic/Predicate.hs:82-83).  So `IsBad(a)`
+// reaches the printed lemma as `a = 'bad'` and `Same(x, a)` as `x = a`, while
+// the two `predicate:` blocks stay in the echo as written.
+//
+// Both case tests carry a predicate on purpose.  Each generated lemma quotes
+// the OTHER case test as well — `acc_badLog_suff` ends in a conjunct built from
+// `sameLog`, `acc_verif_empty` disjoins both, `acc_*_min` compares them — so
+// every generated lemma here mixes the two, and an expansion that reached only
+// the lemma's own case test would leave a predicate atom behind.
+//
+// `single_session` is the restriction the SAPIC translation emits; it carries
+// no predicate and pins the plain shape of the same printer path beside the
+// generated lemmas.
+//
+// Mode `match`: the two engines agree on this shape.
+//
+// Compared slices: the wf report block, which pins the run clean — a surviving
+// predicate atom reaches `checkGuarded`
+// (Theory/Tools/Wellformedness.hs:988-993) and the formula-term checks — AND
+// the `theory … end` echo, which carries the thirteen generated lemmas.
+
+
+theory S3AccPredLemma
+begin
+
+predicates:
+  IsBad(a)   <=> a = 'bad',
+  Same(x, y) <=> x = y
+
+process:
+  in(<$x, a>); event Log($x, a)
+
+test badLog:
+  "Ex #i. Log(x, a)@i & IsBad(a)"
+
+test sameLog:
+  "Ex #i. Log(x, a)@i & Same(x, a)"
+
+lemma acc:
+  badLog, sameLog account for
+    "All x a #i. Log(x, a)@i ==> not(IsBad(a))"
+
+end

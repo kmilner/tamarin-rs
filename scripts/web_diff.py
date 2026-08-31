@@ -18,6 +18,7 @@ not read as a complete one.
 Usage: web_diff.py HS.json RS.json OUT.tsv [DIFFDIR]
 """
 import difflib
+import hashlib
 import json
 import os
 import sys
@@ -32,7 +33,12 @@ def load(p):
 
 
 def safe_name(url):
-    return url.replace("://", "_").replace("/", "_").replace("?", "_")[:180]
+    readable = url.replace("://", "_").replace("/", "_").replace("?", "_")
+    # URLs routinely share a long proof-path prefix. Truncation alone made
+    # distinct rows overwrite the same artifact; retain a readable prefix and
+    # append identity from the complete URL.
+    digest = hashlib.sha256(url.encode("utf-8")).hexdigest()[:16]
+    return f"{readable[:150]}__{digest}"
 
 
 def main():

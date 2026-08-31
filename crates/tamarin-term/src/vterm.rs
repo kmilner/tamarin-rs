@@ -7,13 +7,30 @@
 //! `VTerm<C, V>` is a term whose literals are either *constants* (of type
 //! `C`) or *variables* (of type `V`).
 
-use crate::term::{lit, Term, TermView};
+use std::fmt;
+
+use crate::term::{lit, Term};
 
 /// Literal: either a constant `Con(c)` or a variable `Var(v)`.
+///
+/// HS `data Lit c v = Con c | Var v` derives `Eq`/`Ord` in that variant order
+/// (VTerm.hs:56-57), and `Term`'s own `Ord` reads it, so `Con < Var` decides
+/// the argument order of every printed AC term.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Lit<C, V> {
     Con(C),
     Var(V),
+}
+
+/// HS `instance (Show v, Show c) => Show (Lit c v)` (VTerm.hs:98-100): a
+/// literal writes its payload, with no constructor name around it.
+impl<C: fmt::Display, V: fmt::Display> fmt::Display for Lit<C, V> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Lit::Con(c) => write!(f, "{c}"),
+            Lit::Var(v) => write!(f, "{v}"),
+        }
+    }
 }
 
 /// `VTerm<C, V>` = `Term<Lit<C, V>>`. Type alias only — all term operations
@@ -28,25 +45,6 @@ pub fn var_term<C, V>(v: V) -> VTerm<C, V> {
 /// `constTerm c`: lift a constant into a term.
 pub fn const_term<C, V>(c: C) -> VTerm<C, V> {
     lit(Lit::Con(c))
-}
-
-/// `isVar t`: whether `t` is a single variable literal.
-///
-/// Mirrors the exported `VTerm.hs` `isVar`; retained for surface parity, no
-/// caller yet.
-pub fn is_var<C, V>(t: &VTerm<C, V>) -> bool {
-    matches!(t, Term::Lit(Lit::Var(_)))
-}
-
-/// `termVar t`: the variable literal of `t`, if `t` is exactly a variable.
-///
-/// Mirrors the exported `VTerm.hs` `termVar`; retained for surface parity, no
-/// caller yet.
-pub fn term_var<C, V>(t: &VTerm<C, V>) -> Option<&V> {
-    match t.view() {
-        TermView::Lit(Lit::Var(v)) => Some(v),
-        _ => None,
-    }
 }
 
 /// `varsVTerm t`: deduplicated list of variables in `t`, in sorted order.
@@ -100,30 +98,6 @@ pub fn occurs_vterm<C, V: PartialEq>(v: &V, t: &VTerm<C, V>) -> bool {
     }
 }
 
-/// `constsVTerm t`: sorted, deduplicated list of constants in `t`.
-///
-/// Mirrors the exported `VTerm.hs` `constsVTerm`; retained for surface parity,
-/// no caller yet.
-pub fn consts_vterm<C: Ord + Clone, V>(t: &VTerm<C, V>) -> Vec<C> {
-    let mut out = Vec::new();
-    collect_consts(t, &mut out);
-    out.sort();
-    out.dedup();
-    out
-}
-
-fn collect_consts<C: Clone, V>(t: &VTerm<C, V>, out: &mut Vec<C>) {
-    match t {
-        Term::Lit(Lit::Con(c)) => out.push(c.clone()),
-        Term::Lit(Lit::Var(_)) => {}
-        Term::App(_, ts) => {
-            for t in ts.iter() {
-                collect_consts(t, out);
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -133,14 +107,14 @@ mod tests {
     type V = &'static str;
     type C = u32;
 
+    /// `Con` before `Var`, the variant order of HS's `Lit c v`.  `Term`'s
+    /// `Ord` reads this when it sorts the arguments of an AC term, so it
+    /// decides printed argument order.
     #[test]
-    fn var_and_const_terms() {
-        let v: VTerm<C, V> = var_term("x");
-        let c: VTerm<C, V> = const_term(1);
-        assert!(is_var(&v));
-        assert!(!is_var(&c));
-        assert_eq!(term_var(&v), Some(&"x"));
-        assert_eq!(term_var(&c), None);
+    fn lit_ord_puts_constants_before_variables() {
+        let c: Lit<C, V> = Lit::Con(1);
+        let v: Lit<C, V> = Lit::Var("x");
+        assert!(c < v);
     }
 
     #[test]
@@ -169,7 +143,7 @@ mod tests {
     }
 
     #[test]
-    fn consts_collected() {
+    fn ground_terms_contain_no_variables() {
         let t: VTerm<C, V> = f_app_no_eq(
             pair_sym(),
             vec![
@@ -177,7 +151,6 @@ mod tests {
                 f_app_no_eq(pair_sym(), vec![const_term(1), const_term(2)]),
             ],
         );
-        assert_eq!(consts_vterm(&t), vec![1, 2]);
         assert!(is_ground_vterm(&t), "constants only ⇒ ground");
     }
 }

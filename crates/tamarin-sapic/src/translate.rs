@@ -22,15 +22,19 @@
 //!      and `reliableChannelRestr`.
 //!
 //! The caller ([`crate::apply::apply_sapic`]) injects the rules + restrictions
-//! into both the parsed and the elaborated theory, and adds `heuristic: p` when
-//! the user set none.
+//! into the theory, and adds `heuristic: p` when the user set none.
 
 use std::collections::BTreeSet;
 
 use tamarin_term::lterm::LVar;
 
+use tamarin_theory::formula::{LNFormula, SyntacticLNFormula};
+use tamarin_theory::restriction::Restriction;
 use tamarin_theory::rule::ProtoRuleE;
-use tamarin_theory::sapic::{GoodAnnotation, PlainProcess, Process, ProcessPosition, SapicLVar};
+use tamarin_theory::sapic::{
+    process_at, GoodAnnotation, PlainProcess, Process, ProcessPosition, SapicLVar,
+};
+use tamarin_utils::prelude_ext::nub_on;
 
 use tamarin_theory::sapic::ProcessCombinator;
 
@@ -62,10 +66,10 @@ struct TransCtx {
 
 /// `propagateNames` (Facts.hs:327-341): push each node's process-names down to
 /// its children so every node carries the names of all its ancestors.
-pub fn propagate_names<A: GoodAnnotation + Clone>(
+pub(crate) fn propagate_names<A: GoodAnnotation>(
     p: Process<A, SapicLVar>,
 ) -> Process<A, SapicLVar> {
-    fn go<A: GoodAnnotation + Clone>(
+    fn go<A: GoodAnnotation>(
         prefix: Vec<String>,
         p: Process<A, SapicLVar>,
     ) -> Process<A, SapicLVar> {
@@ -101,23 +105,6 @@ fn set_names<A: GoodAnnotation>(ann: A, names: Vec<String>) -> A {
     let mut parsed = ann.parsed().clone();
     parsed.process_names = names;
     ann.set_parsed(parsed)
-}
-
-/// `processAt` over the annotated process (theory-side helper is generic).
-fn process_at<'a>(
-    p: &'a Process<ProcessAnnotation<LVar>, SapicLVar>,
-    pos: &[i64],
-) -> Option<&'a Process<ProcessAnnotation<LVar>, SapicLVar>> {
-    if pos.is_empty() {
-        return Some(p);
-    }
-    match (p, pos[0]) {
-        (Process::Null(_), _) => None,
-        (Process::Action(_, _, body), 1) => process_at(body, &pos[1..]),
-        (Process::Comb(_, _, l, _), 1) => process_at(l, &pos[1..]),
-        (Process::Comb(_, _, _, r), 2) => process_at(r, &pos[1..]),
-        _ => None,
-    }
 }
 
 /// `mapToAnnotatedRule` (sapic/src/Sapic.hs:149-150): tag each rule body with its index.
@@ -304,17 +291,17 @@ fn subst_state_pos_fact(f: TransFact, p_old: &[i64], p_new: &[i64]) -> TransFact
 /// annotation, in `pfoldMap` order, NOT deduplicated.
 fn get_lock_positions(p: &Process<ProcessAnnotation<LVar>, SapicLVar>) -> Vec<LVar> {
     use tamarin_theory::sapic::SapicAction;
-    let mut get_lock = |proc: &Process<ProcessAnnotation<LVar>, SapicLVar>| -> Vec<LVar> {
+    let mut out = Vec::new();
+    tamarin_theory::sapic::for_each_process(p, &mut |proc| {
         if let Process::Action(SapicAction::Lock(_), an, _) = proc {
             if !an.pure_state {
                 if let Some(v) = &an.lock {
-                    return vec![v.0];
+                    out.push(v.0);
                 }
             }
         }
-        vec![]
-    };
-    tamarin_theory::sapic::pfold_map(p, &mut get_lock)
+    });
+    out
 }
 
 /// `nub $ getUnlockPositions` (Basetranslation.hs:449-479, see line 463): the lock variables of
@@ -322,43 +309,35 @@ fn get_lock_positions(p: &Process<ProcessAnnotation<LVar>, SapicLVar>) -> Vec<LV
 /// `pfoldMap` order, first-occurrence deduplicated (HS `List.nub`).
 fn get_unlock_positions(p: &Process<ProcessAnnotation<LVar>, SapicLVar>) -> Vec<LVar> {
     use tamarin_theory::sapic::SapicAction;
-    let mut get_unlock = |proc: &Process<ProcessAnnotation<LVar>, SapicLVar>| -> Vec<LVar> {
+    let mut raw = Vec::new();
+    tamarin_theory::sapic::for_each_process(p, &mut |proc| {
         if let Process::Action(SapicAction::Unlock(_), an, _) = proc {
             if !an.pure_state {
                 if let Some(v) = &an.unlock {
-                    return vec![v.0];
+                    raw.push(v.0);
                 }
             }
         }
-        vec![]
-    };
-    let raw = tamarin_theory::sapic::pfold_map(p, &mut get_unlock);
-    // `List.nub` — keep first occurrence, preserve order.
-    let mut seen: Vec<LVar> = Vec::new();
-    for v in raw {
-        if !seen.contains(&v) {
-            seen.push(v);
-        }
-    }
-    seen
+    });
+    nub_on(&raw, |v| *v)
 }
 
 /// The result of translating a single top-level process.
-pub struct Translation {
-    /// The generated rules, each paired with its embedded `_restrict` formulas
-    /// (parser-AST; non-empty only for `if <formula>` arms).  HS attaches these
-    /// as the rule's `_preRestriction`; the RS port keeps them alongside the
-    /// elaborated rule so `apply_sapic` can run the `_restrict` expansion
-    /// (`lift_rule_restrictions`, HS `liftedAddProtoRule`) over both theories.
-    pub rules: Vec<(ProtoRuleE, Vec<tamarin_parser::ast::Formula>)>,
-    pub restrictions: Vec<tamarin_parser::ast::Restriction>,
+pub(crate) struct Translation {
+    /// The generated rules, each paired with its embedded `_restrict`
+    /// formulas.  HS attaches these as the rule's `_preRestriction`
+    /// (sapic/src/Sapic/Facts.hs:376-379); the port pairs them with the rule
+    /// here, and `apply_sapic` runs the `_restrict` expansion (HS
+    /// `liftedAddProtoRule`) over them.
+    pub rules: Vec<(ProtoRuleE, Vec<SyntacticLNFormula>)>,
+    pub restrictions: Vec<Restriction>,
 }
 
 /// Translation options threaded from the theory (HS `_thyOptions`).  Defaults
 /// (all-false) select the core linear pipeline (no progress / reliable / report
 /// / state-channel passes).
 #[derive(Debug, Clone, Copy, Default)]
-pub struct TranslateOptions {
+pub(crate) struct TranslateOptions {
     pub trans_progress: bool,
     pub trans_reliable: bool,
     pub async_channels: bool,
@@ -381,7 +360,7 @@ pub struct TranslateOptions {
 /// `needsInEvRes = any lemmaNeedsInEvRes (theoryLemmas th)`.  `opts` carries the
 /// `_transProgress` / `_transReliable` / `_asynchronousChannels` /
 /// `_compressEvents` gates.
-pub fn translate(
+pub(crate) fn translate(
     plain: &PlainProcess,
     needs_in_ev_res: bool,
     st_rules: &std::collections::BTreeSet<tamarin_term::subterm_rule::CtxtStRule>,
@@ -391,7 +370,7 @@ pub fn translate(
     // propagateNames, annotateSecretChannels, annotatePureStates,
     // translateTermsReport, translateLetDestr — then annotateLocks.
     let an_proc_pre: Process<ProcessAnnotation<LVar>, SapicLVar> =
-        propagate_names(to_annotated::<LVar>(plain.clone()));
+        propagate_names(to_annotated::<LVar>(plain));
     // annotateSecretChannels (sapic/src/Sapic.hs:45-101, see line 58): attach
     // `secret_channel` to every ChIn/ChOut whose channel is an always-secret
     // fresh variable.
@@ -474,7 +453,7 @@ pub fn translate(
     // restriction-by-name re-pair map; keyed lookup only, never iterated;
     // std kept (byte-inert) — iteration order never reaches output.
     #[allow(clippy::disallowed_types)]
-    let restr_by_name: std::collections::HashMap<String, Vec<tamarin_parser::ast::Formula>> = all
+    let restr_by_name: std::collections::HashMap<String, Vec<SyntacticLNFormula>> = all
         .iter()
         .filter(|r| !r.restr.is_empty())
         .map(|r| (crate::facts::rule_name(r), r.restr.clone()))
@@ -485,7 +464,7 @@ pub fn translate(
     } else {
         elaborated
     };
-    let rules: Vec<(ProtoRuleE, Vec<tamarin_parser::ast::Formula>)> = elaborated
+    let rules: Vec<(ProtoRuleE, Vec<SyntacticLNFormula>)> = elaborated
         .into_iter()
         .map(|r| {
             let name = match &r.info.name {
@@ -507,8 +486,7 @@ pub fn translate(
     // HS `isLookup`/`isDelete` (ProcessUtils.hs:46-52) only count
     // `pureState=False` nodes — a pure-state lookup/delete uses the
     // `L_PureState`/`L_CellLocked` facts and needs NO set_in/set_notin
-    // restriction.  (`is_lookup`/`is_delete` in tamarin_theory are generic
-    // over the annotation, so we inline the `pure_state` guard here.)
+    // restriction, so both closures carry that guard.
     let is_lookup_non_pure = |proc: &Process<ProcessAnnotation<LVar>, SapicLVar>| -> bool {
         matches!(proc, Process::Comb(ProcessCombinator::Lookup(_, _), an, _, _) if !an.pure_state)
     };
@@ -571,14 +549,14 @@ pub fn translate(
 /// (sapic/src/Sapic.hs:45-101, see line 101): does
 /// any of the theory's lemmas fall in the fragment that requires the `in_event`
 /// restriction?  Each lemma is classified via `lemma_needs_in_ev_res`.
-pub fn needs_in_ev_res(lemmas: &[tamarin_parser::ast::Lemma]) -> bool {
-    lemmas.iter().any(lemma_needs_in_ev_res)
+pub(crate) fn needs_in_ev_res(thy: &tamarin_theory::theory::Theory) -> bool {
+    thy.lemmas().any(lemma_needs_in_ev_res)
 }
 
 /// `lemmaNeedsInEvRes` (sapic/src/Sapic.hs:175-181): classify a lemma by its trace
 /// quantifier and the (pos, neg) polarity of its formula.
-fn lemma_needs_in_ev_res(lem: &tamarin_parser::ast::Lemma) -> bool {
-    use tamarin_parser::ast::TraceQuantifier as TQ;
+fn lemma_needs_in_ev_res(lem: &tamarin_theory::theory::Lemma) -> bool {
+    use tamarin_theory::theory::TraceQuantifier as TQ;
     let (pos, neg) = is_pos_neg_formula(&lem.formula);
     match (&lem.trace_quantifier, pos, neg) {
         (TQ::AllTraces, _, true) => false,      // L- for all-traces
@@ -593,8 +571,8 @@ fn lemma_needs_in_ev_res(lem: &tamarin_parser::ast::Lemma) -> bool {
 /// positive (L+) and/or negative (L-) fragment.  Returns `(isPos, isNeg)`.  The
 /// only special case is an `Action` atom on the `K` fact, which is `(True,
 /// False)` (a `K(..)@t` action is positive but not negative).
-fn is_pos_neg_formula(f: &tamarin_parser::ast::Formula) -> (bool, bool) {
-    use tamarin_parser::ast::Formula::*;
+fn is_pos_neg_formula(f: &LNFormula) -> (bool, bool) {
+    use tamarin_theory::formula::{Connective, ProtoFormula};
     fn and2(a: (bool, bool), b: (bool, bool)) -> (bool, bool) {
         (a.0 && b.0, a.1 && b.1)
     }
@@ -602,14 +580,18 @@ fn is_pos_neg_formula(f: &tamarin_parser::ast::Formula) -> (bool, bool) {
         (a.1, a.0)
     }
     match f {
-        True | False => (true, true),
-        Atom(a) => is_pos_neg_atom(a),
-        Not(p) => swap(is_pos_neg_formula(p)),
-        And(p, q) | Or(p, q) => and2(is_pos_neg_formula(p), is_pos_neg_formula(q)),
+        ProtoFormula::Tf(_) => (true, true),
+        ProtoFormula::Atom(a) => is_pos_neg_atom(a),
+        ProtoFormula::Not(p) => swap(is_pos_neg_formula(p)),
+        ProtoFormula::Conn(Connective::And | Connective::Or, p, q) => {
+            and2(is_pos_neg_formula(p), is_pos_neg_formula(q))
+        }
         // `Conn Imp p q -> isPosNegFormula $ Not p .||. q`, i.e. the `Or` of the
         // `Not` case — evaluated directly rather than by rebuilding the
         // desugared formula.
-        Implies(p, q) => and2(swap(is_pos_neg_formula(p)), is_pos_neg_formula(q)),
+        ProtoFormula::Conn(Connective::Imp, p, q) => {
+            and2(swap(is_pos_neg_formula(p)), is_pos_neg_formula(q))
+        }
         // `Conn Iff p q -> isPosNegFormula $ p .==>. q .&&. q .==>. p` — NOT
         // the `And` of the two `Imp` cases: `.&&.` is infixl 3 and `.==>.` is
         // infixr 1 (Theory/Model/Formula.hs:233-235), so the expression parses
@@ -617,22 +599,27 @@ fn is_pos_neg_formula(f: &tamarin_parser::ast::Formula) -> (bool, bool) {
         // `and2(swap(fp), and2(swap(fq), fp))`.  The two differ whenever `fq`
         // is asymmetric (a `K(..)@t` atom in `q`): HS keeps the second
         // component `p1 && q1 && p2`, the symmetric reading zeroes it.
-        Iff(p, q) => {
+        ProtoFormula::Conn(Connective::Iff, p, q) => {
             let (fp, fq) = (is_pos_neg_formula(p), is_pos_neg_formula(q));
             and2(swap(fp), and2(swap(fq), fp))
         }
-        Forall(_, p) | Exists(_, p) => is_pos_neg_formula(p),
+        ProtoFormula::Qua(_, _, p) => is_pos_neg_formula(p),
     }
 }
 
 /// `isPosNegFormula (Ato (Action _ f))` dispatches on `isActualKFact (factTag
-/// f)` (sapic/src/Sapic.hs:156-172, see line 159, 167-169): a `K`-fact action
-/// is `(True, False)`; every
-/// other atom is `(True, True)`.
-fn is_pos_neg_atom(a: &tamarin_parser::ast::Atom) -> (bool, bool) {
-    use tamarin_parser::ast::Atom;
+/// f)` (sapic/src/Sapic.hs:156-172, see line 159, 167-169): an action on a
+/// protocol fact named `K` is `(True, False)`; every other atom is
+/// `(True, True)`.
+fn is_pos_neg_atom(
+    a: &tamarin_theory::atom::Atom<tamarin_theory::formula::BLNTerm>,
+) -> (bool, bool) {
+    use tamarin_theory::atom::ProtoAtom;
+    use tamarin_theory::fact::FactTag;
     match a {
-        Atom::Action(fact, _) if fact.name == "K" => (true, false),
+        ProtoAtom::Action(_, fact) if matches!(fact.tag, FactTag::Proto(_, "K", _)) => {
+            (true, false)
+        }
         _ => (true, true),
     }
 }
@@ -640,21 +627,23 @@ fn is_pos_neg_atom(a: &tamarin_parser::ast::Atom) -> (bool, bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::convert::convert_process;
     use crate::typing::type_and_rename_process;
     use tamarin_parser::ast as p;
+    use tamarin_term::lterm::LSort;
+    use tamarin_theory::process_convert::convert_process;
+    use tamarin_theory::sapic::ProcessParsedAnnotation;
 
     fn typing2_process() -> p::Process {
         let xspec = p::VarSpec {
             name: "x".into(),
             idx: 0,
-            sort: p::SortHint::Untagged,
+            sort: LSort::Msg,
             typ: Some("lol".into()),
         };
         let xref = p::Term::Var(p::VarSpec {
             name: "x".into(),
             idx: 0,
-            sort: p::SortHint::Untagged,
+            sort: LSort::Msg,
             typ: None,
         });
         let ffx = p::Term::App(
@@ -682,11 +671,30 @@ mod tests {
     }
 
     #[test]
+    fn propagate_names_preserves_location() {
+        // The first patch of upstream #922: setting propagated process names
+        // updates only that field of the parsed annotation.
+        let location = tamarin_term::lterm::pub_term("site");
+        let ann = ProcessParsedAnnotation {
+            process_names: vec!["P".into()],
+            location: Some(location.clone()),
+            ..ProcessParsedAnnotation::empty()
+        };
+        let process: PlainProcess = Process::Null(ann);
+
+        let Process::Null(propagated) = propagate_names(process) else {
+            unreachable!()
+        };
+        assert_eq!(propagated.process_names, ["P"]);
+        assert_eq!(propagated.location, Some(location));
+    }
+
+    #[test]
     fn translate_typing2_rule_names_and_restriction() {
-        let plain = convert_process(&typing2_process()).unwrap();
-        // No function-typing needed for the rule-count check; type over an
-        // empty signature (defaults all funs).
+        // No function-typing needed for the rule-count check; convert and
+        // type over an empty signature (defaults all funs).
         let sig = tamarin_term::maude_sig::MaudeSig::default();
+        let plain = convert_process(&typing2_process(), &sig).unwrap();
         let typed = type_and_rename_process(&sig, &[], &plain).unwrap();
         let st_rules = std::collections::BTreeSet::new();
         let tr = translate(&typed, false, &st_rules, TranslateOptions::default()).unwrap();
@@ -719,20 +727,25 @@ mod tests {
         assert_eq!(tr.restrictions[0].name, "single_session");
     }
 
-    fn action_atom(name: &str) -> p::Formula {
-        p::Formula::Atom(p::Atom::Action(
-            p::Fact {
-                persistent: false,
-                name: name.into(),
-                args: vec![],
-                annotations: vec![],
-            },
-            p::Term::Var(p::VarSpec {
-                name: "i".into(),
-                idx: 0,
-                sort: p::SortHint::Node,
-                typ: None,
-            }),
+    /// `name()@#i` as the lemma formula holds it: a `ProtoFact` action atom
+    /// over a free node variable.
+    fn action_atom(name: &str) -> LNFormula {
+        use tamarin_term::lterm::BVar;
+        use tamarin_term::vterm::var_term;
+        use tamarin_theory::atom::ProtoAtom;
+        use tamarin_theory::fact::{Fact, FactTag, Multiplicity};
+        use tamarin_theory::formula::ProtoFormula;
+        let i = var_term(BVar::Free(LVar::new("i", LSort::Node, 0)));
+        ProtoFormula::Atom(ProtoAtom::Action(
+            i,
+            Fact::new(
+                FactTag::Proto(
+                    Multiplicity::Linear,
+                    tamarin_term::intern::intern_str(name),
+                    0,
+                ),
+                vec![],
+            ),
         ))
     }
 
@@ -745,15 +758,15 @@ mod tests {
     /// `in_event` restriction.
     #[test]
     fn iff_polarity_follows_hs_fixity_parse() {
-        let iff = p::Formula::Iff(Box::new(action_atom("A")), Box::new(action_atom("K")));
+        let iff = action_atom("A").iff(action_atom("K"));
         assert_eq!(is_pos_neg_formula(&iff), (false, true));
 
-        let lem = p::Lemma {
+        let lem = tamarin_theory::theory::Lemma {
             name: "weird".into(),
-            modulo: None,
             attributes: vec![],
-            trace_quantifier: p::TraceQuantifier::AllTraces,
+            trace_quantifier: tamarin_theory::theory::TraceQuantifier::AllTraces,
             formula: iff,
+            original_formula: None,
             proof: None,
             plaintext: String::new(),
         };

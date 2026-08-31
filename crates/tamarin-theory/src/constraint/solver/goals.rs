@@ -26,15 +26,15 @@ use tamarin_term::lterm::{contains_private, is_msg_var};
 ///   * `SmartRanking Bool`         — heuristic `s`/`S`
 ///   * `InjRanking   Bool`         — heuristic `i`/`I`
 ///   * `Oracle       { quit_on_empty, oracle_path }` — heuristic `o`
-///     (HS `OracleRanking`, System.hs:584-597, see line 588)
+///     (HS `OracleRanking`, System.hs:586-599, see line 590)
 ///   * `OracleSmart  { quit_on_empty, oracle_path }` — heuristic `O`
-///     (HS `OracleSmartRanking`, System.hs:584-597, see line 589)
+///     (HS `OracleSmartRanking`, System.hs:586-599, see line 591)
 ///
 /// `c` → `UsefulGoalNr` and `C` → `GoalNr` are implemented
-/// (System.hs:592-593 `goalRankingIdentifiers`); `{name}` tactics are
+/// (System.hs:594-595 `goalRankingIdentifiers`); `{name}` tactics are
 /// resolved via `parse_heuristic_str_with_tactics`.  `p` → `Sapic` and
 /// `P` → `SapicPKCS11` (HS `SapicRanking`/`SapicPKCS11Ranking`,
-/// System.hs:590-591) are implemented and dispatched via `sapic_ranking`.
+/// System.hs:592-593) are implemented and dispatched via `sapic_ranking`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GoalRanking {
     /// `SmartRanking useLoopBreakers` (ProofMethod.hs).
@@ -42,10 +42,10 @@ pub enum GoalRanking {
     /// `InjRanking useLoopBreakers` (ProofMethod.hs).
     Inj(bool),
     /// `SapicRanking` (ProofMethod.hs:769-846, see line 771) — heuristic char `p`.
-    /// "heuristics adapted for processes" (System.hs:685-704, see line 693).
+    /// "heuristics adapted for processes" (System.hs:687-706, see line 695).
     Sapic,
     /// `SapicPKCS11Ranking` (ProofMethod.hs:848-935, see line 850) — heuristic char `P`.
-    /// Deprecated PKCS#11-specific SAPIC ranking (System.hs:685-704, see line 694).
+    /// Deprecated PKCS#11-specific SAPIC ranking (System.hs:687-706, see line 696).
     SapicPKCS11,
     /// `GoalNrRanking` (rankGoals dispatch ProofMethod.hs:479-502, see line 481):
     /// `sortOn (fst . snd)` — presort identifier `C`.
@@ -61,11 +61,10 @@ pub enum GoalRanking {
     /// letter run (HS `regularRanking`, Text/Parser/Signature.hs:308-326,
     /// see line 311) carries the
     /// bare `defaultOracle` with `workDir = Nothing`, so `printOracle`
-    /// (System.hs:701-704) shows the `"."`-joined name (`./oracle`);
+    /// (System.hs:703-706) shows the `"."`-joined name (`./oracle`);
     /// only a STANDALONE `o`/`O` token keeps the parse-time workDir and
-    /// displays the resolved path.  (HS would also exec the compact form
-    /// CWD-relative; we exec the resolved path — the usable superset —
-    /// and keep just the display faithful.)
+    /// displays the resolved path. `defaultOracleNames` fills the relative
+    /// path without changing that workDir.
     Oracle {
         quit_on_empty: bool,
         oracle_path: String,
@@ -80,16 +79,18 @@ pub enum GoalRanking {
     },
     /// `InternalTacticRanking quitOnEmpty (Tactic …)` (rankGoals dispatch ProofMethod.hs:479-502, see line 490).
     /// The resolved per-lemma tactic (presort + prio/deprio selectors).
-    /// `quit_on_empty` is True for the `{.}` form, False for `{name}`.
+    /// `resolution_error` records a failed declaration lookup; HS raises
+    /// `chooseError` only when an unresolved ranking is selected.
     Tactic {
         quit_on_empty: bool,
         tactic: std::sync::Arc<crate::tactic::Tactic>,
+        resolution_error: Option<std::sync::Arc<str>>,
     },
 }
 
 impl GoalRanking {
     /// Parse a single heuristic character into a `GoalRanking`,
-    /// mirroring HS's `goalRankingIdentifiers` (System.hs:584-597).
+    /// mirroring HS's `goalRankingIdentifiers` (System.hs:586-599).
     /// Oracle variants use `oracle_path` for the resolved path.
     /// Unhandled identifiers fall back to the default `Smart(false)`
     /// (lenient for in-file/web callers; the batch CLI path rejects
@@ -101,7 +102,7 @@ impl GoalRanking {
             'i' => GoalRanking::Inj(false),
             'I' => GoalRanking::Inj(true),
             // HS `SapicRanking` ('p') / `SapicPKCS11Ranking` ('P')
-            // (System.hs:590-591 `goalRankingIdentifiers`).  SAPIC theories
+            // (System.hs:592-593 `goalRankingIdentifiers`).  SAPIC theories
             // declaring `heuristic: p` must use sapicRanking, NOT smartRanking
             // — they diverge in goal selection (e.g. nsl-no_as `secrecy`:
             // smart prioritises `isFreshKnowsGoal` KU(~n), sapic does NOT —
@@ -112,13 +113,13 @@ impl GoalRanking {
             'C' => GoalRanking::GoalNr,
             // HS `UsefulGoalNrRanking` ('c')
             'c' => GoalRanking::UsefulGoalNr,
-            // HS `OracleRanking False defaultOracle` (System.hs:584-597, see line 588)
+            // HS `OracleRanking False defaultOracle` (System.hs:586-599, see line 590)
             'o' => GoalRanking::Oracle {
                 quit_on_empty: false,
                 oracle_path: oracle_path.to_string(),
                 display_path: None,
             },
-            // HS `OracleSmartRanking False defaultOracle` (System.hs:584-597, see line 589)
+            // HS `OracleSmartRanking False defaultOracle` (System.hs:586-599, see line 591)
             'O' => GoalRanking::OracleSmart {
                 quit_on_empty: false,
                 oracle_path: oracle_path.to_string(),
@@ -129,7 +130,7 @@ impl GoalRanking {
     }
 
     /// Human-readable description of this ranking, mirroring HS
-    /// `goalRankingName` (System.hs:685-704).  Used by the interactive
+    /// `goalRankingName` (System.hs:687-706).  Used by the interactive
     /// web UI's "Applicable Proof Methods:" comment (`subProofSnippet`,
     /// `Web/Theory.hs:550-551`).  Oracle variants render the resolved
     /// script path (HS `printOracle`); we already store the resolved
@@ -174,7 +175,7 @@ impl GoalRanking {
     }
 }
 
-/// HS `goalRankingName`'s `loopStatus` (System.hs:685-704, see line 700).
+/// HS `goalRankingName`'s `loopStatus` (System.hs:687-706, see line 702).
 fn loop_status(b: bool) -> String {
     format!(" (loop breakers {})", if b { "allowed" } else { "delayed" })
 }
@@ -184,7 +185,7 @@ fn loop_status(b: bool) -> String {
 ///
 /// `theory_file` is the path to the `.spthy` file; used to compute
 /// the default oracle name via `oracle_name_for_theory`
-/// (pretty_theory.rs, HS `defaultOracleNames` System.hs:549-560).
+/// (pretty_theory.rs, HS `defaultOracleNames` System.hs:549-562).
 ///
 /// Grammar (mirrors HS `goalRanking` Text/Parser/Signature.hs:308-326):
 ///   heuristic   ::= ranking+
@@ -192,18 +193,11 @@ fn loop_status(b: bool) -> String {
 ///   oracle_ranking ::= ('o' | 'O') ('"' name '"')?
 ///   tactic_ranking ::= '{' [^}]* '}'
 ///   letter      ::= [a-zA-Z]
-pub fn parse_heuristic_str(s: &str, theory_file: &str) -> Vec<GoalRanking> {
-    parse_heuristic_str_with_tactics(s, theory_file, &[])
-}
-
-/// Like [`parse_heuristic_str`] but resolves `{name}` tactic rankings
-/// against the theory's tactic list (HS `chosenTactic`,
-/// ProofMethod.hs:493-495).  A `{.}` (no name) resolves to HS `defaultTactic`
-/// (`Tactic "default" (SmartRanking False) [] []`, System.hs:533-534).  An
-/// unknown `{name}` falls back to `Smart(false)` — lenient on purpose for
-/// the in-file `heuristic:` header and the web routes; the batch CLI path
-/// rejects invalid strings first (`prove::validate_cli_heuristic`), so this
-/// fallback is unreachable there.
+///
+/// `{name}` tactic rankings keep the name written between the braces and take
+/// the body of the theory's declared tactic of that name. An unresolved name
+/// retains the placeholder body but is marked so ranking can raise HS's lazy
+/// `chosenTactic` error (ProofMethod.hs:490-503).
 pub fn parse_heuristic_str_with_tactics(
     s: &str,
     theory_file: &str,
@@ -233,11 +227,17 @@ pub fn parse_heuristic_str_with_tactics(
             break;
         }
         // Tactic ranking `{name}` / `{.}` — HS `internalTacticRanking`
-        // (Parser/Signature.hs:313-318).  Resolve the name against the theory's
-        // tactic list (HS `chosenTactic`).  `{.}` (or name "." ) → HS
-        // `defaultTactic`.  quitOnEmpty is always False from parsing
-        // (HS `("{.}", InternalTacticRanking False defaultTactic)`,
-        // System.hs:584-597, see line 596).
+        // (Parser/Signature.hs:313-318) keeps the name written between the
+        // braces (`{.}` gives the name "."), which is what
+        // `prettyGoalRanking` prints (System.hs:711-716).  HS pairs that name
+        // with `defaultTactic`'s body (Smart presort, no prios) and looks the
+        // declared tactic up at ranking time (`chosenTactic`,
+        // ProofMethod.hs:490-503); resolving the body here against `tactics`
+        // is that lookup, done once. An unknown name remains marked
+        // unresolved so the ranking dispatch raises `chooseError` only if it
+        // is selected. quitOnEmpty is always
+        // False from parsing (HS `("{.}", InternalTacticRanking False
+        // defaultTactic)`, System.hs:586-599, see line 598).
         if c == '{' {
             i += 1;
             while i < chars.len() && chars[i] == ' ' {
@@ -247,39 +247,51 @@ pub fn parse_heuristic_str_with_tactics(
             while i < chars.len() && chars[i] != '}' {
                 i += 1;
             }
-            let name: String = chars[start..i]
-                .iter()
-                .collect::<String>()
-                .trim()
-                .to_string();
+            let name: String = chars[start..i].iter().collect();
             if i < chars.len() {
                 i += 1;
             } // consume '}'
             while i < chars.len() && chars[i] == ' ' {
                 i += 1;
             }
-            let resolved = if name.is_empty() || name == "." {
-                // HS defaultTactic — Smart presort, no prios.  With no
-                // prios/deprios `itRanking` leaves the presort order
-                // unchanged, so this is equivalent to Smart(false).
-                GoalRanking::Smart(false)
-            } else {
-                match tactics.iter().find(|t| t.name == name) {
-                    Some(t) => GoalRanking::Tactic {
-                        quit_on_empty: false,
-                        tactic: std::sync::Arc::new(t.clone()),
-                    },
-                    None => GoalRanking::Smart(false),
-                }
+            // HS's `noneOf` keeps a space written before the closing brace in
+            // the name, and `chosenTactic` compares it verbatim.
+            let declared = tactics.iter().find(|t| t.name == name);
+            let tactic = crate::tactic::Tactic {
+                name,
+                presort: declared.map_or('s', |t| t.presort),
+                prios: declared.map(|t| t.prios.clone()).unwrap_or_default(),
+                deprios: declared.map(|t| t.deprios.clone()).unwrap_or_default(),
             };
-            out.push(resolved);
+            let resolution_error = declared.is_none().then(|| {
+                if tactics.is_empty() {
+                    std::sync::Arc::from("No tactic has been written in the theory file")
+                } else {
+                    let names = tactics
+                        .iter()
+                        .rev()
+                        .map(|t| t.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(",");
+                    std::sync::Arc::from(format!(
+                        "The tactic specified ( {:?} ) is not written in the theory file, \
+                         please chose among the following: {:?}",
+                        tactic.name, names
+                    ))
+                }
+            });
+            out.push(GoalRanking::Tactic {
+                quit_on_empty: false,
+                tactic: std::sync::Arc::new(tactic),
+                resolution_error,
+            });
             continue;
         }
         // Standalone oracle ranking with optional quoted path.  HS's
         // `goalRanking` (Text/Parser/Signature.hs:293-311) tries `oracleRanking` FIRST
         // at each token position, so an `o`/`O` that BEGINS a token is
         // parsed alone and its Oracle keeps the parse-time workDir —
-        // `printOracle` (System.hs:701-704) then shows the workDir-joined
+        // `printOracle` (System.hs:703-706) then shows the workDir-joined
         // (resolved) path.
         if c == 'o' || c == 'O' {
             i += 1;
@@ -311,8 +323,8 @@ pub fn parse_heuristic_str_with_tactics(
         // `defaultOracle` (workDir = Nothing) and displays as the
         // `"."`-joined name (`./oracle`), unlike the standalone form
         // above.  The exec path is still resolved later
-        // (`prepend_theory_dir_to_oracle_paths`); only the display keeps
-        // the workDir-less form.
+        // (`prepend_theory_dir_to_oracle_paths`) using its absent workDir;
+        // `display_path` records that distinction from a standalone oracle.
         if c.is_ascii_alphabetic() {
             while i < chars.len() && chars[i].is_ascii_alphabetic() {
                 let mut r = GoalRanking::from_char_with_oracle(chars[i], &default_oracle);
@@ -358,11 +370,10 @@ pub fn parse_heuristic_str_with_tactics(
 /// fully overrides the `M.toList` Goal-Ord, so emitting goals in nr
 /// order here is exactly HS's post-`goalNrRanking` order — HS-faithful.
 ///
-/// The `M.toList` Goal-Ord is only material at the direct `goal_cmp`
-/// call sites: `goal_cmp` (below) is the HS-`Ord Goal`-faithful
-/// comparator, wired into the goal sorts in `reduction.rs`,
-/// `sources.rs`, and `rename_precise.rs` (~7 call sites), which already
-/// use it.
+/// The `M.toList` Goal-Ord is only material at the sites that sort a
+/// goal list by `Ord Goal` (the derived mirror of HS's, see the `Goal`
+/// enum): the goal sorts in `reduction.rs`, `sources.rs` and
+/// `rename_precise.rs`.
 pub fn open_goals(sys: &System) -> Vec<AnnotatedGoal> {
     let mut out = Vec::new();
     // HS `existingDeps = rawLessRel sys` — built ONCE per openGoals pass and
@@ -372,8 +383,9 @@ pub fn open_goals(sys: &System) -> Vec<AnnotatedGoal> {
     // the always-before adjacency are the SAME map (identical build), and
     // `sys` is read-only across this pass, so one `PrebuiltAdj` feeds both:
     // `is_open_in_sys` takes the `&PrebuiltAdj` (BFS via `always_before_with`)
-    // and `goal_usefulness_with_adj` takes its inner `&BTreeMap` via `.map()`.
+    // and `goal_usefulness_with_adj` takes its inner map via `.map()`.
     let ab_adj = sys.build_always_before_adj();
+    let has_ku_guards = has_ku_guards(sys);
     for (goal, status) in sys.goals.iter() {
         if status.solved {
             continue;
@@ -381,7 +393,7 @@ pub fn open_goals(sys: &System) -> Vec<AnnotatedGoal> {
         if !is_open_in_sys(goal, sys, &ab_adj) {
             continue;
         }
-        let u = goal_usefulness_with_adj(goal, status.looping, sys, ab_adj.map());
+        let u = goal_usefulness_with_adj(goal, status.looping, sys, ab_adj.map(), has_ku_guards);
         // Use the persistent goal-number (`_gsNr`), NOT the Vec
         // position.  Haskell's `openGoals` returns `(goal, (gsNr,
         // useful))` (Goals.hs) and the rankings begin with
@@ -397,88 +409,6 @@ pub fn open_goals(sys: &System) -> Vec<AnnotatedGoal> {
     // but defensive) keep Vec order.
     sort_goal_nr(&mut out);
     out
-}
-
-/// Manual structural compare on `Goal`, mirroring Haskell's derived
-/// `Ord Goal` (Constraints.hs:155-168).  Variant tags follow Haskell
-/// declaration order:
-///     ActionG < ChainG < PremiseG < SplitG < DisjG < SubtermG.
-///
-/// **Do NOT change this ordering without updating Haskell.**  If the
-/// tags drift from declaration order, BTreeMap-backed goal iteration
-/// (e.g. `solveUniqueActions`, `solveAllSafeGoals`) silently picks
-/// goals in a different order and the proof shape diverges.
-pub(crate) fn goal_cmp(a: &Goal, b: &Goal) -> std::cmp::Ordering {
-    let tag = |g: &Goal| -> u8 {
-        match g {
-            Goal::Action(_, _) => 0,
-            Goal::Chain(_, _) => 1,
-            Goal::Premise(_, _) => 2,
-            Goal::Split(_) => 3,
-            Goal::Disj(_) => 4,
-            Goal::Subterm(_) => 5,
-        }
-    };
-    let ta = tag(a);
-    let tb = tag(b);
-    if ta != tb {
-        return ta.cmp(&tb);
-    }
-    // Tag equality above guarantees `a` and `b` are the same variant, so each
-    // `let … else` binding of `b` is infallible.  Match `a` exhaustively (no
-    // wildcard) so a new `Goal` variant fails to compile here until its payload
-    // comparison is written.
-    match a {
-        Goal::Action(la, fa) => {
-            let Goal::Action(lb, fb) = b else {
-                unreachable!("goal tag matched Action")
-            };
-            la.cmp(lb).then_with(|| fa.cmp(fb))
-        }
-        Goal::Chain(ca, pa) => {
-            let Goal::Chain(cb, pb) = b else {
-                unreachable!("goal tag matched Chain")
-            };
-            (&ca.0, ca.1 .0)
-                .cmp(&(&cb.0, cb.1 .0))
-                .then_with(|| (&pa.0, pa.1 .0).cmp(&(&pb.0, pb.1 .0)))
-        }
-        Goal::Premise(pa, fa) => {
-            let Goal::Premise(pb, fb) = b else {
-                unreachable!("goal tag matched Premise")
-            };
-            (&pa.0, pa.1 .0)
-                .cmp(&(&pb.0, pb.1 .0))
-                .then_with(|| fa.cmp(fb))
-        }
-        Goal::Split(sa) => {
-            let Goal::Split(sb) = b else {
-                unreachable!("goal tag matched Split")
-            };
-            sa.cmp(sb)
-        }
-        Goal::Disj(da) => {
-            let Goal::Disj(db) = b else {
-                unreachable!("goal tag matched Disj")
-            };
-            // HS `Disj a = Disj [a]` derives `Ord` as the newtype over the
-            // list, i.e. plain list Ord (element-by-element, shorter < longer),
-            // bottoming out at the structural `Ord LNGuarded`.  Use the
-            // HS-faithful structural comparator `cmp_guarded` (which threads
-            // through `cmp_varspec`'s numeric idx-first LVar Ord, `cmp_atom`'s
-            // timepoint-first ProtoAtom Ord, and declaration-order sort Ord).
-            // Do NOT use a string-render approach (idx/sort via `{:?}`,
-            // length-first prefix): it diverges from HS on var sort order,
-            // decimal idx width, and Action timepoint-vs-fact order.
-            crate::guarded::cmp_slice(&da.0, &db.0, crate::guarded::cmp_guarded)
-        }
-        Goal::Subterm((sa, ta_)) => {
-            let Goal::Subterm((sb, tb_)) = b else {
-                unreachable!("goal tag matched Subterm")
-            };
-            sa.cmp(sb).then_with(|| ta_.cmp(tb_))
-        }
-    }
 }
 
 /// Error type for oracle execution failures.
@@ -518,17 +448,9 @@ impl std::error::Error for OracleError {}
 /// `isNoLargeSplitGoal` (`is_no_large_split_goal`), and `moveNatToEnd`
 /// (via `is_nat_subterm_split`, mirroring `isNatSubterm`) are all ported
 /// and wired in as live predicates in the decision tree below.
-pub fn rank_goals(sys: &System) -> Vec<AnnotatedGoal> {
-    // With `ctx = None` the ranking always resolves to `Smart(false)`
-    // (the oracle/tactic paths — the only `Err` sources — are
-    // unreachable), so this never errors.  Fall back to the unranked
-    // open-goal list rather than panicking, keeping this entry point
-    // panic-free public surface.
-    rank_goals_with(sys, None, 0).unwrap_or_else(|_| open_goals(sys))
-}
-
-/// Variant that takes a proof context for source-cache predicates
-/// and the current proof depth for round-robin heuristic scheduling.
+///
+/// Takes a proof context for source-cache predicates and the current proof
+/// depth for round-robin heuristic scheduling.
 ///
 /// Returns `Err(OracleError)` when an oracle script cannot be
 /// executed — callers must propagate this as a hard abort.
@@ -562,19 +484,16 @@ fn sort_useful_goal_nr(ags: &mut [AnnotatedGoal]) {
     });
 }
 
-fn rank_goals_with_inner(
-    sys: &System,
+/// The ranking that governs proof `depth`: HS `useHeuristic (Heuristic
+/// rankings) i = rankings !! (i `mod` n)` (ProofMethod.hs:578-589),
+/// round-robin over the lemma's ranking list.  A context with no heuristic,
+/// or none at all, gives `SmartRanking False` — HS's `defaultHeuristic False
+/// = Heuristic [SmartRanking False]` (System.hs:526-528, see line 527).
+pub fn ranking_at_depth(
     ctx: Option<&crate::constraint::solver::context::ProofContext>,
     depth: usize,
-) -> Result<Vec<AnnotatedGoal>, OracleError> {
-    // Round-robin heuristic scheduling: `useHeuristic (Heuristic rankings) depth =
-    // rankings !! (depth mod n)` (ProofMethod.hs:578-589).
-    // When no context (or no heuristic) is supplied we default to
-    // `SmartRanking False` — exactly HS's
-    // `defaultHeuristic False = Heuristic [SmartRanking False]`
-    // (System.hs:526-528, see line 527).
-    let ranking = ctx
-        .and_then(|c| c.heuristic.as_ref())
+) -> GoalRanking {
+    ctx.and_then(|c| c.heuristic.as_ref())
         .and_then(|h| {
             let n = h.len();
             if n == 0 {
@@ -584,7 +503,15 @@ fn rank_goals_with_inner(
             }
         })
         .cloned()
-        .unwrap_or(GoalRanking::Smart(false));
+        .unwrap_or(GoalRanking::Smart(false))
+}
+
+fn rank_goals_with_inner(
+    sys: &System,
+    ctx: Option<&crate::constraint::solver::context::ProofContext>,
+    depth: usize,
+) -> Result<Vec<AnnotatedGoal>, OracleError> {
+    let ranking = ranking_at_depth(ctx, depth);
     match ranking {
         GoalRanking::Inj(use_loop_breakers) => Ok(inj_ranking(sys, ctx, use_loop_breakers)),
         GoalRanking::Smart(use_loop_breakers) => Ok(smart_ranking(sys, ctx, use_loop_breakers)),
@@ -618,10 +545,14 @@ fn rank_goals_with_inner(
         GoalRanking::Tactic {
             quit_on_empty,
             tactic,
+            resolution_error,
         } => {
             // HS `InternalTacticRanking quitOnEmpty tactic ->
             //   internalTacticRanking (chosenTactic ..) quitOnEmpty ..`
             // (ProofMethod.hs:479-502, see line 490; ProofMethod.hs:694).
+            if let Some(message) = resolution_error {
+                return Err(OracleError(message.to_string()));
+            }
             internal_tactic_ranking(&tactic, quit_on_empty, ctx, sys)
         }
         GoalRanking::Oracle {
@@ -1069,7 +1000,7 @@ fn eval_leaf(
             let oracle_type = head(0);
             let nonces: Vec<String> = ts::action_goal_fact_terms(&g.goal)
                 .iter()
-                .map(ts::show_lnterm)
+                .map(tamarin_term::term::show_term)
                 .collect();
             let mut sys_pattern = vec!["~n".to_string()];
             sys_pattern.extend(ts::sys_reveal_shown(oracle_type, &sys.formulas));
@@ -1117,7 +1048,7 @@ fn eval_leaf(
         "isInFactTerms" => {
             let s = head(0);
             match ts::action_goal_single_term(&g.goal) {
-                Some(t) => regex_is_match(s, &ts::show_lnterm(t)),
+                Some(t) => regex_is_match(s, &tamarin_term::term::show_term(t)),
                 None => false,
             }
         }
@@ -1311,7 +1242,7 @@ fn smart_ranking(
     // sys.goals insertion order = nr order, and the subsequent
     // partitions here are stable too, so no extra sort is required.
     //
-    // Do NOT re-sort Disj goals by `goal_cmp` here: HS's `M.toList sGoals`
+    // Do NOT re-sort Disj goals by `Ord Goal` here: HS's `M.toList sGoals`
     // order does NOT survive to the pick (`goalNrRanking` clobbers it).
     // Re-sorting breaks HS-faithfulness for Device_Init_Use_Set
     // (case-content swap caused by Rust picking the structurally-
@@ -1434,17 +1365,16 @@ fn sapic_ranking(
 /// matching the LAST predicate, …, then goals matching the FIRST predicate.
 fn sort_decision_tree_last_dyn(
     ps: &[Box<dyn Fn(&AnnotatedGoal) -> bool + '_>],
-    xs: Vec<AnnotatedGoal>,
+    mut xs: Vec<AnnotatedGoal>,
 ) -> Vec<AnnotatedGoal> {
-    // HS: sortDecisionTreeLast (p:ps) xs = sortDecisionTreeLast ps nonsat ++ sat
-    if let Some((p, rest)) = ps.split_first() {
-        let (sat, nonsat): (Vec<_>, Vec<_>) = xs.into_iter().partition(|a| p(a));
-        let mut out = sort_decision_tree_last_dyn(rest, nonsat);
-        out.extend(sat);
-        out
-    } else {
-        xs
-    }
+    // Each item belongs to its first matching predicate. The recursive HS
+    // partitions then order unmatched items first and matched classes in
+    // reverse predicate order; a stable cached-key sort is equivalent.
+    xs.sort_by_cached_key(|a| match ps.iter().position(|p| p(a)) {
+        Some(i) => ps.len() - i,
+        None => 0,
+    });
+    xs
 }
 
 /// Port of HS `injRanking ctxt allowLoopBreakers sys`
@@ -1522,17 +1452,12 @@ fn inj_ranking(
 /// Stable partition for closure-based predicate list.
 fn sort_decision_tree_dyn(
     ps: &[Box<dyn Fn(&AnnotatedGoal) -> bool + '_>],
-    xs: Vec<AnnotatedGoal>,
+    mut xs: Vec<AnnotatedGoal>,
 ) -> Vec<AnnotatedGoal> {
-    let mut result = Vec::with_capacity(xs.len());
-    let mut rest = xs;
-    for p in ps {
-        let (sat, nonsat): (Vec<_>, Vec<_>) = rest.into_iter().partition(|a| p(a));
-        result.extend(sat);
-        rest = nonsat;
-    }
-    result.extend(rest);
-    result
+    // The repeated stable partitions classify each item by its first matching
+    // predicate. Cache that class once and perform the equivalent stable sort.
+    xs.sort_by_cached_key(|a| ps.iter().position(|p| p(a)).unwrap_or(ps.len()));
+    xs
 }
 
 /// `isSplitGoalSmall`: a `Goal::Split(id)` is small if its
@@ -1572,13 +1497,13 @@ fn is_no_large_split_goal(a: &AnnotatedGoal, sys: &System) -> bool {
 /// in the one-case set.
 fn collect_one_case_syms(
     ctx: &crate::constraint::solver::context::ProofContext,
-) -> std::collections::BTreeSet<Vec<u8>> {
+) -> std::collections::BTreeSet<&'static [u8]> {
     use crate::constraint::constraints::Goal as G;
     use crate::fact::FactTag;
     use tamarin_term::function_symbols::FunSym;
     use tamarin_term::term::Term;
     let mut out = std::collections::BTreeSet::new();
-    for src in &ctx.full_sources {
+    for src in ctx.full_sources.iter() {
         // HS-faithful order — `smartRanking.getMsgOneCase`
         // (ProofMethod.hs:1056-1059) pattern-matches on `cdGoal` BEFORE
         // touching `cdCases`:
@@ -1616,7 +1541,7 @@ fn collect_one_case_syms(
         if src.cases_len() != 1 {
             continue;
         }
-        out.insert(s.name.to_vec());
+        out.insert(s.name);
     }
     out
 }
@@ -1637,7 +1562,7 @@ fn collect_one_case_syms(
 fn lazy_one_case_syms(
     goals: &[AnnotatedGoal],
     ctx: Option<&crate::constraint::solver::context::ProofContext>,
-) -> std::collections::BTreeSet<Vec<u8>> {
+) -> std::collections::BTreeSet<&'static [u8]> {
     use crate::constraint::constraints::Goal;
     use crate::fact::FactTag;
     let any_ku_action_goal = goals
@@ -1655,7 +1580,7 @@ fn lazy_one_case_syms(
 
 fn is_msg_one_case_goal(
     a: &AnnotatedGoal,
-    one_case_syms: &std::collections::BTreeSet<Vec<u8>>,
+    one_case_syms: &std::collections::BTreeSet<&'static [u8]>,
 ) -> bool {
     use crate::constraint::constraints::Goal;
     use crate::fact::FactTag;
@@ -1677,7 +1602,7 @@ fn is_msg_one_case_goal(
         return false;
     };
     if let Term::App(FunSym::NoEq(s), _) = t {
-        return one_case_syms.contains(s.name);
+        return one_case_syms.contains(&s.name);
     }
     false
 }
@@ -1938,23 +1863,23 @@ fn is_insert_template_action(a: &AnnotatedGoal) -> bool {
     insert_action_first_key_has_prefix(a, "template")
 }
 
-/// HS `isProgressFact` (ProofMethod.hs:126-128): a Linear fact of arity 1 whose
-/// name has the `ProgressTo_` prefix.  Operates on a guarded `GFact`.
-fn gfact_is_progress(f: &crate::guarded_types::GFact) -> bool {
-    !f.persistent && f.args.len() == 1 && f.name.starts_with("ProgressTo_")
-}
-
-fn is_node_sort_hint(s: &tamarin_parser::ast::SortHint) -> bool {
-    use tamarin_parser::ast::{SortHint, SuffixSort};
-    matches!(s, SortHint::Node | SortHint::Suffix(SuffixSort::Node))
+/// HS `isProgressFact` (ProofMethod.hs:126-128): a `ProtoFact Linear name 1`
+/// whose name has the `ProgressTo_` prefix.  Operates on a guard atom's fact.
+fn gfact_is_progress(f: &crate::fact::Fact<crate::formula::BLNTerm>) -> bool {
+    matches!(
+        f.tag,
+        crate::fact::FactTag::Proto(crate::fact::Multiplicity::Linear, name, 1)
+            if name.starts_with("ProgressTo_")
+    )
 }
 
 /// HS `isProgressDisj` (ProofMethod.hs:130-135): a Disj goal all of whose
 /// disjuncts are `Ex #node. ProgressTo_…( #node )`.
 fn is_progress_disj(a: &AnnotatedGoal) -> bool {
+    use crate::atom::ProtoAtom;
     use crate::constraint::constraints::Disj;
-    use crate::guarded::Quant;
-    use crate::guarded::{GAtom, Guarded};
+    use crate::formula::Quantifier;
+    use crate::guarded::Guarded;
     let Goal::Disj(Disj(items)) = &a.goal else {
         return false;
     };
@@ -1963,12 +1888,15 @@ fn is_progress_disj(a: &AnnotatedGoal) -> bool {
     }
     items.iter().all(|g| match g {
         Guarded::GGuarded {
-            qua: Quant::Ex,
+            qua: Quantifier::Ex,
             vars,
             guards,
             ..
-        } if vars.len() == 1 && guards.len() == 1 && is_node_sort_hint(&vars[0].sort) => {
-            matches!(&guards[0], GAtom::Action(f, _) if gfact_is_progress(f))
+        } if vars.len() == 1
+            && guards.len() == 1
+            && vars[0].1 == tamarin_term::lterm::LSort::Node =>
+        {
+            matches!(&guards[0], ProtoAtom::Action(_, f) if gfact_is_progress(f))
         }
         _ => false,
     })
@@ -2012,7 +1940,7 @@ fn is_high_priority_goal(a: &AnnotatedGoal) -> bool {
 fn is_med_priority_goal(
     a: &AnnotatedGoal,
     sys: &System,
-    one_case_syms: &std::collections::BTreeSet<Vec<u8>>,
+    one_case_syms: &std::collections::BTreeSet<&'static [u8]>,
 ) -> bool {
     is_standard_action_goal(a)
         || is_disj_goal(a)
@@ -2111,21 +2039,11 @@ fn msg_premise(g: &Goal) -> Option<&tamarin_term::lterm::LNTerm> {
 
 /// Saturate-time openGoals view.  Haskell uses a single `openGoals`
 /// function for both `isFinished` and `solveAllSafeGoals`, so this is
-/// just an alias for `is_open_in_sys`.  Kept as a separate name so
-/// callers in saturate code make the intent explicit; if we ever need
-/// to diverge again, the seam is here.
-pub fn is_open_for_saturate(g: &Goal, sys: &System) -> bool {
-    // Standalone caller: build the always-before adjacency on the spot
-    // (mirrors `goal_usefulness` building `rawLessRel` for non-`open_goals`
-    // callers).  `open_goals` instead builds it once and shares it.
-    let ab_adj = sys.build_always_before_adj();
-    is_open_in_sys(g, sys, &ab_adj)
-}
-
-/// Like [`is_open_for_saturate`] but reuses a prebuilt always-before
-/// adjacency instead of rebuilding it per call.  The relation depends
-/// only on `sys` (not on `g`), so a caller scanning many goals against
-/// an unmutated system builds it once and threads it in.
+/// `is_open_in_sys` under a name that makes the intent explicit at the
+/// saturate call sites.  The prebuilt always-before adjacency is passed in
+/// rather than rebuilt per call: the relation depends only on `sys` (not on
+/// `g`), so a caller scanning many goals against an unmutated system builds
+/// it once and threads it in.
 pub fn is_open_for_saturate_with(
     g: &Goal,
     sys: &System,
@@ -2142,7 +2060,7 @@ fn chain_kd_conc_term(
 ) -> Option<tamarin_term::lterm::LNTerm> {
     use crate::fact::FactTag;
     let (id, idx) = (&c.0, &c.1);
-    let rule = sys.nodes.iter().find(|(n, _)| n == id).map(|(_, r)| r)?;
+    let rule = sys.node_rule_safe(id)?;
     let fact = rule.conclusions.get(idx.0)?;
     if fact.tag != FactTag::Kd {
         return None;
@@ -2154,7 +2072,7 @@ fn chain_kd_conc_term(
 /// `term` fires at a node strictly always-before `target`.
 ///
 /// HS `allKUActions sys = unsolvedActionAtoms sys ++ node actions`
-/// (System.hs:1575-1585): the KU action may exist only as an unsolved
+/// (System.hs:1577-1587): the KU action may exist only as an unsolved
 /// `ActionG i (KU term)` goal (node i not yet in sNodes), so scan unsolved
 /// ActionG goals in ADDITION to node rule actions.  `always_before(id,
 /// target)` does not depend on `fa` and the relation is invariant across the
@@ -2205,8 +2123,7 @@ fn chain_to_equality(
 ) -> bool {
     // Look up the premise's rule. If it's NOT an IEquality rule,
     // chainToEquality returns False (chain is auto-handled).
-    let p_rule = sys.nodes.iter().find(|(n, _)| n == &p.0).map(|(_, r)| r);
-    let Some(p_rule) = p_rule else {
+    let Some(p_rule) = sys.node_rule_safe(&p.0) else {
         return false;
     };
     let is_equality = matches!(
@@ -2431,10 +2348,10 @@ pub fn goal_usefulness(g: &Goal, looping: bool, sys: &System) -> Usefulness {
     // `goal_usefulness_with_adj` to share it across all goals (mirroring
     // HS's `existingDeps = rawLessRel sys` shared in `openGoals`).
     let adj = sys.build_always_before_adj();
-    goal_usefulness_with_adj(g, looping, sys, adj.map())
+    goal_usefulness_with_adj(g, looping, sys, adj.map(), has_ku_guards(sys))
 }
 
-/// HS `prettyGoals`'s `useful` annotation STRING (System.hs:1744-1751) for
+/// HS `prettyGoals`'s `useful` annotation STRING (System.hs:1746-1753) for
 /// the interactive sequent's per-goal comment.  UNLIKE the ranking
 /// [`Usefulness`] enum (which collapses both KU-guard and default goals
 /// into `Useful`), this distinguishes `" (useful1)"` (KU goal when the
@@ -2449,18 +2366,23 @@ pub fn goal_usefulness(g: &Goal, looping: bool, sys: &System) -> Usefulness {
 ///       | currentlyDeducible i m -> " (currently deducible)"
 ///       | probablyConstructible m -> " (probably constructible)"
 ///     _                         -> " (useful2)"
-pub fn goal_useful_annotation(g: &Goal, gs_loop_breaker: bool, sys: &System) -> &'static str {
+pub(crate) fn goal_useful_annotation(
+    g: &Goal,
+    gs_loop_breaker: bool,
+    sys: &System,
+    adj: &RawLessAdj,
+    has_ku_guards: bool,
+) -> &'static str {
     if gs_loop_breaker {
         return " (loop breaker)";
     }
     if let Goal::Action(i, fa) = g {
         if fa.is_ku() {
-            if has_ku_guards(sys) {
+            if has_ku_guards {
                 return " (useful1)";
             }
             if let Some(m) = fa.terms.first() {
-                let adj = sys.build_always_before_adj();
-                if currently_deducible(sys, adj.map(), i, m) {
+                if currently_deducible(sys, adj, i, m) {
                     return " (currently deducible)";
                 }
                 if probably_constructible(m) {
@@ -2474,7 +2396,13 @@ pub fn goal_useful_annotation(g: &Goal, gs_loop_breaker: bool, sys: &System) -> 
 
 /// Like [`goal_usefulness`] but reuses a prebuilt `rawLessRel`
 /// adjacency (`existingDeps`, Goals.hs:66-182, see line 120) instead of rebuilding it.
-fn goal_usefulness_with_adj(g: &Goal, looping: bool, sys: &System, adj: &RawLessAdj) -> Usefulness {
+fn goal_usefulness_with_adj(
+    g: &Goal,
+    looping: bool,
+    sys: &System,
+    adj: &RawLessAdj,
+    has_ku_guards: bool,
+) -> Usefulness {
     if looping {
         return Usefulness::LoopBreaker;
     }
@@ -2487,7 +2415,7 @@ fn goal_usefulness_with_adj(g: &Goal, looping: bool, sys: &System, adj: &RawLess
             // `probablyConstructible` — those tests are SHORT-CIRCUITED.
             // Typing-class IHs (`All m j. KU(m,j) ⇒ ...`) always have
             // such guards; the order matters for proof-search bias.
-            if has_ku_guards(sys) {
+            if has_ku_guards {
                 return Usefulness::Useful;
             }
             if let Some(m) = fa.terms.first() {
@@ -2520,9 +2448,10 @@ fn goal_usefulness_with_adj(g: &Goal, looping: bool, sys: &System, adj: &RawLess
 /// trigger this short-circuit, otherwise every KU action goal is
 /// promoted to `Useful` and `currentlyDeducible` / `probablyConstructible`
 /// demotion never fires.  Walks recursively, surfacing KU action atoms
-/// from inside `GGuarded`/`GAtom`/`Conj`/`Disj` structures.
-fn has_ku_guards(sys: &System) -> bool {
-    use crate::guarded::{GAtom, Guarded};
+/// from inside `GGuarded`/atom/`Conj`/`Disj` structures.
+pub(crate) fn has_ku_guards(sys: &System) -> bool {
+    use crate::atom::ProtoAtom;
+    use crate::guarded::Guarded;
     fn walk_guards(g: &Guarded) -> bool {
         match g {
             // HS `getTags _qua _ss atos inner` inspects ONLY the guard list
@@ -2531,8 +2460,8 @@ fn has_ku_guards(sys: &System) -> bool {
             // KU action atom must NOT count — only a `GGuarded`'s guards.
             Guarded::GGuarded { guards, body, .. } => {
                 for atom in guards.iter() {
-                    if let GAtom::Action(fa, _) = atom {
-                        if fa.name == "KU" {
+                    if let ProtoAtom::Action(_, fa) = atom {
+                        if fa.is_ku() {
                             return true;
                         }
                     }
@@ -2594,42 +2523,46 @@ fn extractible(
                 continue;
             }
             let Some(t) = fa.terms.first() else { continue };
-            for sub in toplevel_terms(t) {
-                if sub == *m {
-                    return true;
-                }
+            if contains_toplevel_term(t, m) {
+                return true;
             }
         }
     }
     false
 }
 
-/// `toplevelTerms t` — direct port of `Goals.hs:66-182, see line 157`. Walks pair/inv
-/// at the top level only (other function applications are leaves).
-fn toplevel_terms(t: &tamarin_term::lterm::LNTerm) -> Vec<tamarin_term::lterm::LNTerm> {
+/// Test membership in `toplevelTerms t` (`Goals.hs:66-182, see line 157`)
+/// without materializing that list. Walks pair/inv at the top level only
+/// (other function applications are leaves).
+fn contains_toplevel_term(
+    t: &tamarin_term::lterm::LNTerm,
+    needle: &tamarin_term::lterm::LNTerm,
+) -> bool {
     use tamarin_term::function_symbols::{FunSym, NoEqSym};
     use tamarin_term::term::Term;
-    let mut out = vec![t.clone()];
+    if t == needle {
+        return true;
+    }
     if let Term::App(FunSym::NoEq(NoEqSym { name, .. }), args) = t {
         match &**name {
             b"pair" if args.len() == 2 => {
-                out.extend(toplevel_terms(&args[0]));
-                out.extend(toplevel_terms(&args[1]));
+                return contains_toplevel_term(&args[0], needle)
+                    || contains_toplevel_term(&args[1], needle);
             }
             b"inv" if args.len() == 1 => {
-                out.extend(toplevel_terms(&args[0]));
+                return contains_toplevel_term(&args[0], needle);
             }
             _ => {}
         }
     }
-    out
+    false
 }
 
 /// The `rawLessRel` adjacency: `from -> [to]` successor lists.
 ///
 /// `rawLessRel se = getLessRel sLessAtoms ++ rawEdgeRel se`, and
 /// `rawEdgeRel sys = map (nodeConcNode *** nodePremNode) $ [Edge..] ++
-/// unsolvedChains sys` (System.hs:1613-1622).  So the relation has one
+/// unsolvedChains sys` (System.hs:1615-1624).  So the relation has one
 /// conc-node -> prem-node edge per *unsolved Chain goal* in addition to
 /// `sLessAtoms` and `sEdges` — mirroring `build_always_before_adj`
 /// (system.rs).  Omitting the unsolved-chain edges would mis-classify a
@@ -2643,7 +2576,7 @@ fn toplevel_terms(t: &tamarin_term::lterm::LNTerm) -> Vec<tamarin_term::lterm::L
 /// `open_goals`) via `.map()` and thread it through
 /// `goal_usefulness_with_adj` — the `rawLessRel` map and the always-before
 /// adjacency are the SAME relation, built identically.
-type RawLessAdj = std::collections::BTreeMap<
+type RawLessAdj = tamarin_utils::FastMap<
     crate::constraint::constraints::NodeId,
     Vec<crate::constraint::constraints::NodeId>,
 >;
@@ -2843,41 +2776,6 @@ pub fn dispatch_solve_goal(
             }
         }
     }
-    // TAM_RS_TRACE_EXEC mirror of Haskell `solveGoal` `T.traceExecM`
-    // (Goals.hs:200-212, see line 206).  Same canonical-data form as the Haskell side so
-    // the two outputs diff cleanly.
-    //
-    // Fact rendering mirrors Haskell `show FactTag`:
-    //   - `Ku`   → "KUFact"
-    //   - `Kd`   → "KDFact"
-    //   - `Fresh`→ "FreshFact"
-    //   - `Out`  → "OutFact"
-    //   - `In`   → "InFact"
-    //   - `Proto(mult, name, _)` → "ProtoFact <Mult> \"<name>\" <arity>"
-    // Gate the whole label build behind the cached `TAM_RS_TRACE_EXEC`
-    // flag: the `format!` + `fact_tag_haskell`/`fact_term_head` allocs fire
-    // on every goal dispatch, and are dead work unless the trace is on.
-    if crate::constraint::solver::trace::exec_enabled() {
-        use crate::constraint::solver::trace::trace_exec;
-        use tamarin_term::lterm::sort_prefix;
-        let label = match g {
-            Goal::Action(_, fa) => format!(
-                "solveGoal kind=Action fact={}({})",
-                fact_tag_haskell(fa),
-                fact_term_head(fa, sort_prefix)
-            ),
-            Goal::Premise(_, fa) => format!(
-                "solveGoal kind=Premise fact={}({})",
-                fact_tag_haskell(fa),
-                fact_term_head(fa, sort_prefix)
-            ),
-            Goal::Chain(_, _) => "solveGoal kind=Chain".to_string(),
-            Goal::Split(_) => "solveGoal kind=Split".to_string(),
-            Goal::Disj(_) => "solveGoal kind=Disj".to_string(),
-            Goal::Subterm(_) => "solveGoal kind=Subterm".to_string(),
-        };
-        trace_exec(&label);
-    }
     match g {
         Goal::Action(i, fa) => red.solve_action_goal(i, fa),
         Goal::Premise(p, fa) => red.solve_premise_goal(p, fa),
@@ -2885,63 +2783,6 @@ pub fn dispatch_solve_goal(
         Goal::Split(id) => red.solve_split_goal(*id),
         Goal::Disj(d) => red.solve_disj_goal(d),
         Goal::Subterm(st) => red.solve_subterm_goal(st),
-    }
-}
-
-// Public wrappers so sites outside this module (e.g. sources.rs's
-// direct solve_*_goal calls that bypass dispatch_solve_goal) can emit
-// the same EXEC-trace format.
-pub fn fact_tag_haskell_pub(fa: &crate::fact::LNFact) -> String {
-    fact_tag_haskell(fa)
-}
-pub fn fact_term_head_pub(fa: &crate::fact::LNFact) -> String {
-    use tamarin_term::lterm::sort_prefix;
-    fact_term_head(fa, sort_prefix)
-}
-
-// Haskell `Show FactTag` mirror (Fact.hs).  Used only by the trace; not
-// visible elsewhere.  Keep aligned with Haskell so the EXEC diff doesn't
-// show spurious format-only differences.
-fn fact_tag_haskell(fa: &crate::fact::LNFact) -> String {
-    use crate::fact::{FactTag, Multiplicity};
-    match &fa.tag {
-        FactTag::Ku => "KUFact".to_string(),
-        FactTag::Kd => "KDFact".to_string(),
-        FactTag::Fresh => "FreshFact".to_string(),
-        FactTag::Out => "OutFact".to_string(),
-        FactTag::In => "InFact".to_string(),
-        FactTag::Ded => "DedFact".to_string(),
-        FactTag::Term => "TermFact".to_string(),
-        FactTag::Proto(mult, name, arity) => {
-            let m = match mult {
-                Multiplicity::Linear => "Linear",
-                Multiplicity::Persistent => "Persistent",
-            };
-            format!("ProtoFact {} \"{}\" {}", m, name, arity)
-        }
-    }
-}
-
-// Canonical head-symbol rendering for the EXEC trace.  Mirrors Haskell's
-// `termHeadStr` in Goals.hs (Var → `sortPrefix ++ name`, Const → `<const>`,
-// App → `showFunSymName`).  Used only by the trace; not visible elsewhere.
-fn fact_term_head(
-    fa: &crate::fact::LNFact,
-    sort_prefix: fn(tamarin_term::lterm::LSort) -> &'static str,
-) -> String {
-    use tamarin_term::function_symbols::FunSym;
-    use tamarin_term::term::Term;
-    use tamarin_term::vterm::Lit;
-    match fa.terms.first() {
-        None => String::new(),
-        Some(Term::Lit(Lit::Var(v))) => format!("{}{}", sort_prefix(v.sort), v.name),
-        Some(Term::Lit(Lit::Con(_))) => "<const>".to_string(),
-        Some(Term::App(sym, _)) => match sym {
-            FunSym::NoEq(noeq) => String::from_utf8_lossy(noeq.name).into_owned(),
-            FunSym::Ac(op) => format!("{:?}", op),
-            FunSym::C(op) => format!("{:?}", op),
-            FunSym::List => "List".to_string(),
-        },
     }
 }
 

@@ -34,7 +34,7 @@ use tamarin_theory::constraint::system::System;
 
 /// HS `Web.Utils.abbrev`'s minimal term size, as passed by
 /// `graphJsonThyPath` (`src/Web/Theory.hs:1331`).
-pub const MIN_ABBREV_SIZE: usize = 30;
+pub(crate) const MIN_ABBREV_SIZE: usize = 30;
 
 /// Port of `getTerms` (Web/Utils.hs:40-41): every fact term of every rule's
 /// conclusions followed by its premises.
@@ -101,7 +101,7 @@ fn compute_legend(n: usize, sys: &System) -> Legend {
 /// place: the rewrite is top-level-only, so the guard scans exactly the terms
 /// it would consult.
 fn update_system(legend: &Legend, sys: &mut System) {
-    for (_, ru) in sys.nodes_mut().iter_mut() {
+    sys.for_each_node_rule_mut(|ru| {
         for facts in [&mut ru.premises, &mut ru.conclusions] {
             for f in facts.iter_mut() {
                 if f.terms.iter().any(|t| legend.contains_key(t)) {
@@ -109,7 +109,7 @@ fn update_system(legend: &Legend, sys: &mut System) {
                 }
             }
         }
-    }
+    });
 }
 
 /// Port of `abbrev` (Web/Utils.hs:110-116).
@@ -200,8 +200,7 @@ mod tests {
     /// A system with a single rule whose one conclusion carries `terms`.
     fn system_with(terms: Vec<LNTerm>) -> System {
         let mut sys = System::default();
-        sys.nodes_mut()
-            .push((LVar::new("i", LSort::Node, 1), rule_with(terms)));
+        sys.add_node(LVar::new("i", LSort::Node, 1), rule_with(terms));
         sys
     }
 

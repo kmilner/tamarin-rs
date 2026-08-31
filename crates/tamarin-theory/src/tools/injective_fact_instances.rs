@@ -95,8 +95,8 @@ fn get_pair_terms(t: &tamarin_term::lterm::LNTerm) -> Vec<&tamarin_term::lterm::
     let mut out = Vec::new();
     let mut cur = t;
     loop {
-        match cur.view() {
-            tamarin_term::term::TermView::App(
+        match cur {
+            tamarin_term::term::Term::App(
                 tamarin_term::function_symbols::FunSym::NoEq(s),
                 args,
             ) if *s == tamarin_term::function_symbols::pair_sym() && args.len() == 2 => {
@@ -123,8 +123,8 @@ pub fn shape_term(t: &tamarin_term::lterm::LNTerm, n: usize) -> Vec<tamarin_term
     let mut cur = t.clone();
     let mut x = n;
     while x > 1 {
-        match cur.view() {
-            tamarin_term::term::TermView::App(
+        match &cur {
+            tamarin_term::term::Term::App(
                 tamarin_term::function_symbols::FunSym::NoEq(s),
                 args,
             ) if *s == tamarin_term::function_symbols::pair_sym() && args.len() == 2 => {
@@ -247,22 +247,31 @@ pub fn simple_injective_fact_instances(
             .collect()
     }
 
-    // HS `combineShapes` (InjectiveFactInstances.hs:141-142): take the
-    // shorter list at each (outer and inner) position — `map (map fst) $
-    // zipWith zip a b`.
+    // HS `map (map f) $ zipWith zip a b`, written by `combineShapes` with
+    // `fst` (InjectiveFactInstances.hs:141-142) and by `combineAll` with
+    // `combine` (146-149).  Both `zip`s truncate to the shorter list.
+    fn zip_shapes(
+        a: &[Vec<MonotonicBehaviour>],
+        b: &[Vec<MonotonicBehaviour>],
+        f: fn(MonotonicBehaviour, MonotonicBehaviour) -> MonotonicBehaviour,
+    ) -> Vec<Vec<MonotonicBehaviour>> {
+        a.iter()
+            .zip(b.iter())
+            .map(|(ai, bi)| ai.iter().zip(bi.iter()).map(|(x, y)| f(*x, *y)).collect())
+            .collect()
+    }
+
+    // HS `combineShapes` (InjectiveFactInstances.hs:141-142): keep the left
+    // behaviour at each surviving position.
     fn combine_shapes(
         a: &[Vec<MonotonicBehaviour>],
         b: &[Vec<MonotonicBehaviour>],
     ) -> Vec<Vec<MonotonicBehaviour>> {
-        a.iter()
-            .zip(b.iter())
-            .map(|(ai, bi)| ai.iter().zip(bi.iter()).map(|(x, _)| *x).collect())
-            .collect()
+        zip_shapes(a, b, |x, _| x)
     }
 
     // HS `combineAll` (InjectiveFactInstances.hs:144-151) folded over a list
     // of `Maybe` shapes.  `Nothing` anywhere ⇒ `Nothing` (non-injective).
-    // The non-empty list folds via `map (map combine) $ zipWith zip`.
     // The empty list yields the default candidate shape.
     fn combine_all(
         list: impl IntoIterator<Item = Option<Vec<Vec<MonotonicBehaviour>>>>,
@@ -277,17 +286,7 @@ pub fn simple_injective_fact_instances(
             None => return Some(default_shape.to_vec()),
         };
         for next in it {
-            let next = next?;
-            acc = acc
-                .iter()
-                .zip(next.iter())
-                .map(|(ai, bi)| {
-                    ai.iter()
-                        .zip(bi.iter())
-                        .map(|(x, y)| combine_behaviour(*x, *y))
-                        .collect()
-                })
-                .collect();
+            acc = zip_shapes(&acc, &next?, combine_behaviour);
         }
         Some(acc)
     }
@@ -297,42 +296,17 @@ pub fn simple_injective_fact_instances(
     // atom (every other formula shape yields `[]`).  Bound variables in a
     // top-level atom are an implementation error in HS; we drop the
     // restriction instead of panicking.
-    fn extract_constraints(f: &crate::rule::SyntacticLNFormula) -> Vec<(LNTerm, LNTerm)> {
-        use crate::atom::ProtoAtom;
+    fn extract_constraints(f: &crate::formula::SyntacticLNFormula) -> Vec<(LNTerm, LNTerm)> {
+        use crate::atom::{to_atom, ProtoAtom};
         use crate::formula::ProtoFormula;
-        match f {
-            ProtoFormula::Atom(ProtoAtom::Subterm(t1, t2)) => {
-                match (bvar_term_to_lnterm(t1), bvar_term_to_lnterm(t2)) {
-                    (Some(a), Some(b)) => vec![(a, b)],
-                    _ => vec![],
-                }
-            }
-            _ => vec![],
-        }
-    }
-
-    // HS `bvarToLVar` (InjectiveFactInstances.hs:59-61): map a top-level
-    // atom term `VTerm Name (BVar LVar)` to `LNTerm`, treating every Bound
-    // var as an implementation error.  Returns `None` (drop the
-    // constraint) instead of `error`/panic.
-    fn bvar_term_to_lnterm(
-        t: &tamarin_term::vterm::VTerm<
-            tamarin_term::lterm::Name,
-            tamarin_term::lterm::BVar<tamarin_term::lterm::LVar>,
-        >,
-    ) -> Option<LNTerm> {
-        use tamarin_term::lterm::BVar;
-        use tamarin_term::term::Term;
-        use tamarin_term::vterm::Lit;
-        match t {
-            Term::Lit(Lit::Con(n)) => Some(Term::Lit(Lit::Con(*n))),
-            Term::Lit(Lit::Var(BVar::Free(v))) => Some(Term::Lit(Lit::Var(*v))),
-            Term::Lit(Lit::Var(BVar::Bound(_))) => None,
-            Term::App(sym, args) => {
-                let mapped: Option<Vec<LNTerm>> = args.iter().map(bvar_term_to_lnterm).collect();
-                mapped.map(|a| Term::App(*sym, a.into()))
-            }
-        }
+        let ProtoFormula::Atom(atom @ ProtoAtom::Subterm(_, _)) = f else {
+            return vec![];
+        };
+        let Some(ProtoAtom::Subterm(t1, t2)) = crate::guarded::unbind_atom(&to_atom(atom.clone()))
+        else {
+            return vec![];
+        };
+        vec![(t1, t2)]
     }
 
     // Candidate tags + their default shape.  Mirrors HS `candidates`

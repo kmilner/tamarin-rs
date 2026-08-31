@@ -5,8 +5,8 @@
 //! What the cases here compare against the oracle:
 //! 1. The rule and lemma counts.  The test compares ours against the counts
 //!    in the oracle's `--parse-only` echo.
-//! 2. The quantifier structure of `formula_to_guarded`.  The test compares it
-//!    against the `∃`/`∀` prefixes of the same echo.
+//! 2. The quantifier structure the guarded conversion builds.  The test
+//!    compares it against the `∃`/`∀` prefixes of the same echo.
 //! 3. The per-lemma verdicts from `prove_lemma`.  The test compares them
 //!    against the oracle's `--prove` summary line.  The fixtures are all
 //!    small lemmas, and tamarin settles each one in a few steps.
@@ -17,7 +17,7 @@
 //!
 //! The harness skips silently when the pinned oracle has not been built
 //! (`./setup.sh testing`), so the test stays fast in environments without it.
-//! A missing *maude* is a different matter — see [`maude_path`]: it panics
+//! A missing *maude* is a different matter — see [`require_maude_path`]: it panics
 //! rather than skip, because skipping there greens the whole file.
 
 #[global_allocator]
@@ -27,81 +27,13 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use tamarin_parser::parse_theory;
-use tamarin_theory::guarded::{formula_to_guarded, Guarded, Quant};
+use tamarin_test_support::{corpus_root, require_maude_path};
+use tamarin_theory::elaborate::formula_to_guarded_parsed;
+use tamarin_theory::formula::Quantifier;
+use tamarin_theory::guarded::Guarded;
 
 fn fixtures_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
-}
-
-fn corpus_root() -> PathBuf {
-    std::env::var("CORPUS_ROOT")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| {
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tamarin-prover/examples")
-        })
-}
-
-/// Absolute maude locations probed before `PATH` is walked.
-///
-/// This probe mirrors the crate-shared `src/test_maude.rs` one (an
-/// integration test cannot see a `#[cfg(test)]` module of the library it
-/// links) — keep the two in sync.
-const MAUDE_CANDIDATES: [&str; 2] = ["/usr/local/bin/maude", "/usr/bin/maude"];
-
-/// Last resort, after `PATH`: the linuxbrew prefix this project's maude lives
-/// under on the development box, which is deliberately not on `PATH`.
-const MAUDE_LINUXBREW: &str = "/home/linuxbrew/.linuxbrew/bin/maude";
-
-/// The maude every maude-gated case below runs against: `$MAUDE_PATH`, else
-/// the first existing [`MAUDE_CANDIDATES`] entry, else a `PATH` walk, else
-/// [`MAUDE_LINUXBREW`].
-///
-/// Resolving NOTHING is a misconfiguration, not a reason to skip: every
-/// maude-gated test in this file opens with `let mp = match maude_path() {
-/// Some(p) => p, None => return }`, so a `None` here reports the same green
-/// run with and without maude installed.  Panic instead — unless
-/// `TAM_ALLOW_NO_MAUDE=1` explicitly asks for the old silent skip (a box that
-/// genuinely has no maude and only wants the maude-free cases).  A
-/// `MAUDE_PATH` naming a file that does not exist is the same
-/// misconfiguration and panics too.
-fn maude_path() -> Option<String> {
-    if let Ok(p) = std::env::var("MAUDE_PATH") {
-        assert!(
-            std::path::Path::new(&p).exists(),
-            "MAUDE_PATH={p} does not exist; unset it to fall back to \
-             {MAUDE_CANDIDATES:?} / PATH / {MAUDE_LINUXBREW}, or point it at a \
-             real maude — skipping every maude-gated case here would report \
-             green vacuously"
-        );
-        return Some(p);
-    }
-    if let Some(c) = MAUDE_CANDIDATES
-        .iter()
-        .find(|c| std::path::Path::new(c).exists())
-    {
-        return Some((*c).to_string());
-    }
-    // `PATH` walk, kept dependency-free like every other copy of this probe.
-    if let Some(p) = std::env::var_os("PATH").and_then(|paths| {
-        std::env::split_paths(&paths)
-            .map(|d| d.join("maude"))
-            .find(|p| p.is_file())
-    }) {
-        return Some(p.to_string_lossy().into_owned());
-    }
-    if std::path::Path::new(MAUDE_LINUXBREW).exists() {
-        return Some(MAUDE_LINUXBREW.to_string());
-    }
-    if std::env::var("TAM_ALLOW_NO_MAUDE").as_deref() == Ok("1") {
-        return None;
-    }
-    panic!(
-        "no maude found: MAUDE_PATH unset, none of {MAUDE_CANDIDATES:?} exist, \
-         nothing named `maude` on PATH, and no {MAUDE_LINUXBREW}. Every \
-         maude-gated case in this file would skip and the run would be green \
-         having proved nothing. Install maude, set MAUDE_PATH, or set \
-         TAM_ALLOW_NO_MAUDE=1 to accept the silent skip."
-    );
 }
 
 /// The pinned oracle, discovered the way every parity script discovers it:
@@ -141,7 +73,7 @@ fn oracle_binary() -> Option<PathBuf> {
 /// `PATH` — the same `MAUDE_PATH` override the rest of the suite uses.
 fn oracle_command() -> Option<Command> {
     let mut cmd = Command::new(oracle_binary()?);
-    if let Some(m) = maude_path() {
+    if let Some(m) = require_maude_path() {
         cmd.arg(format!("--with-maude={m}"));
     }
     Some(cmd)
@@ -154,7 +86,7 @@ fn oracle_command() -> Option<Command> {
 fn oracle_command_within(secs: u32) -> Option<Command> {
     let mut cmd = Command::new("timeout");
     cmd.arg(format!("{secs}s")).arg(oracle_binary()?);
-    if let Some(m) = maude_path() {
+    if let Some(m) = require_maude_path() {
         cmd.arg(format!("--with-maude={m}"));
     }
     Some(cmd)
@@ -177,30 +109,16 @@ type ProbeLedger = Option<&'static [&'static str]>;
 
 /// Expected structural mismatches for `corpus_proof_skeleton_match_probe`.
 ///
-/// Enumerated 2026-08-10 (60s oracle timeout, release; identity-stable across
-/// two enumerations — 815/837 and 819/841 matched, same 22-identity multiset
-/// both times, corpus mirror copies listed individually).
+/// Re-enumerated 2026-08-28 on `internal-repr` (60s oracle timeout, CI
+/// profile): 825/833 matched, leaving the eight identities below. Corpus
+/// mirror copies are listed individually.
 const STRUCTURAL_MISMATCH_LEDGER: ProbeLedger = Some(&[
-    "accountability/csf21-acc-unbounded/mixvote/mixvote_SmHh-multi-session.spthy::EligVerif",
-    "accountability/csf21-acc-unbounded/mixvote/mixvote_SmHh-multi-session.spthy::TimelyP",
-    "accountability/csf21-acc-unbounded/mixvote/mixvote_SmHh-multi-session.spthy::Uniqueness",
-    "accountability/csf21-acc-unbounded/mixvote/mixvote_SmHh-multi-session.spthy::VoterC",
-    "accountability/csf21-acc-unbounded/mixvote/mixvote_SmHh-multi-session.spthy::ballotsFromVoters",
-    "accountability/csf21-acc-unbounded/mixvote/mixvote_SmHh-multi-session.spthy::indivVerif",
-    "accountability/csf21-acc-unbounded/mixvote/mixvote_SmHh-multi-session.spthy::secretSskD",
     "asiaccs20-POIDC/OIDC_Implicit.spthy::Intent_Consent_and_Correct_Browser",
     "asiaccs20-POIDC/proofs/PROOF_OIDC_Implicit.spthy::executable",
     "csf26-ac/fast/Yubikey_multiset.spthy::Login_invalidates_smaller_counters",
     "csf26-ac/multiset-UD/YubiSecure_KS_STM12/Yubikey_multiset.spthy::Login_invalidates_smaller_counters",
     "features/auto-sources/tamarin-repo/asiaccs20-POIDC/OIDC_Implicit.spthy::Intent_Consent_and_Correct_Browser",
-    "features/auto-sources/tamarin-repo/loops/JCS12_Typing_Example.spthy::Client_session_key_secrecy_raw",
-    "features/auto-sources/tamarin-repo/loops/JCS12_Typing_Example.spthy::typing_assertion",
     "features/auto-sources/tamarin-repo/thesis-SvenHammann-POIDC/OIDC_Implicit.spthy::User_Authentication",
-    "loops/JCS12_Typing_Example.spthy::Client_session_key_secrecy_raw",
-    "loops/JCS12_Typing_Example.spthy::typing_assertion",
-    "post17/foo_eligibility.spthy::eligibility",
-    "post17/foo_eligibility.spthy::exec",
-    "post17/foo_eligibility.spthy::types",
     "thesis-SvenHammann-POIDC/OIDC_Implicit.spthy::User_Authentication",
     "thesis-SvenHammann-POIDC/proofs/PROOF_OIDC_Implicit.spthy::executable",
 ]);
@@ -407,11 +325,11 @@ fn rust_rule_count(src: &str) -> usize {
 /// (root status is neither Solved nor Contradictory) — each caller keeps
 /// its own handling and logging for `None`.
 fn verdict_str(
-    tq: &tamarin_parser::ast::TraceQuantifier,
+    tq: &tamarin_theory::theory::TraceQuantifier,
     st: &tamarin_theory::constraint::solver::search::NodeStatus,
 ) -> Option<&'static str> {
-    use tamarin_parser::ast::TraceQuantifier;
     use tamarin_theory::constraint::solver::search::NodeStatus;
+    use tamarin_theory::theory::TraceQuantifier;
     match (tq, st) {
         (TraceQuantifier::ExistsTrace, NodeStatus::Solved) => Some("verified"),
         (TraceQuantifier::ExistsTrace, NodeStatus::Contradictory) => Some("falsified"),
@@ -492,12 +410,12 @@ fn spawn_kill_watchdog(
 /// signature.  The reduction and search unit cases below use this context.
 /// They test the constraint-system machinery, not rule instantiation.
 ///
-/// The result is `None` only when maude does not resolve.  [`maude_path`]
+/// The result is `None` only when maude does not resolve.  [`require_maude_path`]
 /// already restricts that case to the explicit `TAM_ALLOW_NO_MAUDE=1`
 /// opt-out.
 fn rule_free_context() -> Option<tamarin_theory::constraint::solver::context::ProofContext> {
     let h = tamarin_term::maude_proc::MaudeHandle::start(
-        &maude_path()?,
+        &require_maude_path()?,
         tamarin_term::maude_sig::pair_maude_sig(),
     )
     .unwrap();
@@ -520,14 +438,10 @@ fn fixture_lemma_system(name: &str) -> tamarin_theory::constraint::system::Syste
             _ => None,
         })
         .expect("lemma");
-    let g = formula_to_guarded(&lemma.formula).expect("guarded");
-    formula_to_system(
-        Vec::new(),
-        SourceKind::RawSources,
-        lemma.trace_quantifier.clone(),
-        false,
-        &g,
-    )
+    let elaborated = tamarin_theory::elaborate::elaborate(&theory).expect("elaborate");
+    let g = formula_to_guarded_parsed(&lemma.formula, &elaborated.signature).expect("guarded");
+    let tq = elaborated.lemmas().next().expect("lemma").trace_quantifier;
+    formula_to_system(Vec::new(), SourceKind::RawSources, tq, &g)
 }
 
 /// Our parser and the oracle's `--parse-only` echo must find the same number
@@ -666,11 +580,11 @@ fn count_quantifiers(g: &Guarded) -> (usize, usize, usize, usize) {
                 qua, vars, body, ..
             } => {
                 match qua {
-                    Quant::Ex => {
+                    Quantifier::Ex => {
                         c.0 += 1;
                         c.1 += vars.len();
                     }
-                    Quant::All => {
+                    Quantifier::All => {
                         c.2 += 1;
                         c.3 += vars.len();
                     }
@@ -697,8 +611,8 @@ fn oracle_lemma_echo<'a>(parse_only: &'a str, lemma: &str) -> &'a str {
         .unwrap_or_else(|| panic!("no source echo for lemma `{lemma}`:\n{parse_only}"))
 }
 
-/// The test checks `formula_to_guarded`'s quantifier structure against the
-/// oracle in three ways per fixture.  It pins our `(ex_blocks, ex_vars,
+/// The test checks the quantifier structure of the guarded conversion against
+/// the oracle in three ways per fixture.  It pins our `(ex_blocks, ex_vars,
 /// all_blocks, all_vars)` census.  It pins the oracle's echo of the same
 /// lemma to its bytes.  It then checks our block counts against the glyph
 /// counts in that echo.  `prettyLFormula` emits exactly one `∃`/`∀` glyph
@@ -780,7 +694,8 @@ fn guarded_quantifier_structure_matches_tamarin() {
                 _ => None,
             })
             .unwrap_or_else(|| panic!("{name}: lemma `{lemma}` present"));
-        let g = formula_to_guarded(&l.formula).expect("guarded conv");
+        let elaborated = tamarin_theory::elaborate::elaborate(&theory).expect("elaborate");
+        let g = formula_to_guarded_parsed(&l.formula, &elaborated.signature).expect("guarded conv");
         assert_eq!(
             count_quantifiers(&g),
             (*ex_blocks, *ex_vars, *all_blocks, *all_vars),
@@ -872,7 +787,7 @@ fn verdict_match_suite_all_solved_against_tamarin() {
     use tamarin_theory::constraint::solver::search::NodeStatus;
     use tamarin_theory::prove::prove_lemma;
 
-    let mp = match maude_path() {
+    let mp = match require_maude_path() {
         Some(p) => p,
         None => return,
     };
@@ -1095,7 +1010,8 @@ fn verdict_match_suite_all_solved_against_tamarin() {
         let src =
             std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {}", fixture, e));
         let theory = parse_theory(&src, &[]).expect("parse");
-        let root = prove_lemma(&theory, lemma, h, 200)
+        let elab = tamarin_theory::elaborate::elaborate(&theory).expect("elaborate");
+        let root = prove_lemma(&elab, lemma, h, 200)
             .unwrap_or_else(|e| panic!("prove_lemma({}/{}): {:?}", fixture, lemma, e));
         assert_eq!(
             root.status, *expected,
@@ -1178,7 +1094,7 @@ fn corpus_proof_skeleton_match_probe() {
         .stack_size(64 * 1024 * 1024)
         .build_global();
 
-    let mp = match maude_path() {
+    let mp = match require_maude_path() {
         Some(p) => p,
         None => return,
     };
@@ -1211,10 +1127,9 @@ fn corpus_proof_skeleton_match_probe() {
     // file gets a unique `--output=` tmp path so rayon jobs don't race.
     struct FileWork {
         path: std::path::PathBuf,
-        theory: tamarin_parser::ast::Theory,
         summary: String,
         proof_text: String,
-        elab_sig: tamarin_term::maude_sig::MaudeSig,
+        elab: tamarin_theory::theory::Theory,
     }
     let pid = std::process::id();
     let files: Vec<FileWork> = paths
@@ -1229,8 +1144,6 @@ fn corpus_proof_skeleton_match_probe() {
             if mentions_oracle_ranking(&src) {
                 return None;
             }
-            // Macros are supported via parser-AST macro expansion
-            // (tamarin_theory::macro_expand).
             if src.contains("predicates:") {
                 return None;
             }
@@ -1260,16 +1173,12 @@ fn corpus_proof_skeleton_match_probe() {
             // timed out before writing it, skip the file.
             let proof_text = std::fs::read_to_string(&out_path).ok()?;
             let _ = std::fs::remove_file(&out_path);
-            let elab_sig = match tamarin_theory::elaborate::elaborate(&theory) {
-                Ok(e) => e.signature.maude_sig.clone(),
-                Err(_) => tamarin_term::maude_sig::pair_maude_sig(),
-            };
+            let elab = tamarin_theory::elaborate::elaborate(&theory).ok()?;
             Some(FileWork {
                 path: path.clone(),
-                theory,
                 summary,
                 proof_text,
-                elab_sig,
+                elab,
             })
         })
         .collect();
@@ -1277,21 +1186,16 @@ fn corpus_proof_skeleton_match_probe() {
     // Phase 3: flatten to per-lemma work.
     struct LemmaWork<'a> {
         path: &'a std::path::PathBuf,
-        theory: &'a tamarin_parser::ast::Theory,
-        elab_sig: &'a tamarin_term::maude_sig::MaudeSig,
+        elab: &'a tamarin_theory::theory::Theory,
         proof_text: &'a str,
         lemma_name: String,
-        trace_quantifier: tamarin_parser::ast::TraceQuantifier,
+        trace_quantifier: tamarin_theory::theory::TraceQuantifier,
         tamarin_verdict: &'static str,
     }
     let lemmas: Vec<LemmaWork> = files
         .iter()
         .flat_map(|f| {
-            f.theory.items.iter().filter_map(move |it| {
-                let lemma = match it {
-                    tamarin_parser::ast::TheoryItem::Lemma(l) => l,
-                    _ => return None,
-                };
+            f.elab.lemmas().filter_map(move |lemma| {
                 let verdict_line = f
                     .summary
                     .lines()
@@ -1305,11 +1209,10 @@ fn corpus_proof_skeleton_match_probe() {
                 };
                 Some(LemmaWork {
                     path: &f.path,
-                    theory: &f.theory,
-                    elab_sig: &f.elab_sig,
+                    elab: &f.elab,
                     proof_text: &f.proof_text,
                     lemma_name: lemma.name.clone(),
-                    trace_quantifier: lemma.trace_quantifier.clone(),
+                    trace_quantifier: lemma.trace_quantifier,
                     tamarin_verdict,
                 })
             })
@@ -1335,10 +1238,11 @@ fn corpus_proof_skeleton_match_probe() {
     let outcomes: Vec<Outcome> = lemmas
         .par_iter()
         .map(|w| {
-            let h = match tamarin_term::maude_proc::MaudeHandle::start(&mp, w.elab_sig.clone()) {
-                Ok(h) => h,
-                Err(_) => return Outcome::Incomparable,
-            };
+            let h =
+                match tamarin_term::maude_proc::MaudeHandle::start(&mp, w.elab.signature.clone()) {
+                    Ok(h) => h,
+                    Err(_) => return Outcome::Incomparable,
+                };
             let watchdog = spawn_kill_watchdog(h.clone(), std::time::Duration::from_secs(20));
             // Catch panics — pre-existing overflow bugs in
             // reduction.rs::bounds_max+1 sites surface on some corpus
@@ -1346,7 +1250,7 @@ fn corpus_proof_skeleton_match_probe() {
             // panicking lemma kills the whole rayon par_iter and the
             // probe yields no number.
             let h_for_prove = h.clone();
-            let theory_ref = w.theory;
+            let theory_ref = w.elab;
             let lemma_name = w.lemma_name.clone();
             let root_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 prove_lemma(theory_ref, &lemma_name, h_for_prove, 2000)
@@ -1470,7 +1374,7 @@ fn prove_lemma_tiny_setup_verdict_matches_tamarin() {
     use tamarin_theory::constraint::solver::search::NodeStatus;
     use tamarin_theory::prove::prove_lemma;
 
-    let mp = match maude_path() {
+    let mp = match require_maude_path() {
         Some(p) => p,
         None => return,
     };
@@ -1483,7 +1387,8 @@ fn prove_lemma_tiny_setup_verdict_matches_tamarin() {
     let path = fixtures_dir().join("tiny_setup.spthy");
     let src = std::fs::read_to_string(&path).expect("read");
     let theory = parse_theory(&src, &[]).expect("parse");
-    let root = prove_lemma(&theory, "trivial", h, 100).expect("prove_lemma");
+    let elab = tamarin_theory::elaborate::elaborate(&theory).expect("elaborate");
+    let root = prove_lemma(&elab, "trivial", h, 100).expect("prove_lemma");
 
     // Our verdict.
     assert_eq!(
@@ -1507,7 +1412,7 @@ fn prove_lemma_tiny_setup_verdict_matches_tamarin() {
 }
 
 /// End-to-end: parse `tiny_setup.spthy` (whose lemma is
-/// `Ex k #i. Setup(k)@#i`), drive through formula_to_guarded +
+/// `Ex k #i. Setup(k)@#i`), drive through the guarded conversion +
 /// formula_to_system + Induction → simplify, and verify the
 /// step-case branch contains a `Goal::Action(_, Setup(_))`.
 /// This exercises Ex-decomposition.
@@ -1550,29 +1455,21 @@ fn atom_decomposition_creates_action_goal_in_simplify() {
         return;
     };
 
-    use tamarin_parser::ast::{Atom, Fact, SortHint, Term, VarSpec};
-    let mkvar = |n: &str, sort: SortHint| {
-        Term::Var(VarSpec {
-            name: n.to_string(),
-            idx: 0,
-            sort,
-            typ: None,
-        })
-    };
-    let action_atom = Atom::Action(
-        Fact {
-            persistent: false,
-            annotations: Vec::new(),
-            name: "Setup".into(),
-            args: vec![mkvar("k", SortHint::Msg)],
-        },
-        mkvar("i", SortHint::Node),
+    use tamarin_term::lterm::{BVar, LSort, LVar};
+    use tamarin_term::vterm::var_term;
+    use tamarin_theory::atom::ProtoAtom;
+    use tamarin_theory::fact::{Fact, FactTag, Multiplicity};
+    use tamarin_theory::formula::BLNTerm;
+    let mkvar = |n: &str, sort: LSort| -> BLNTerm { var_term(BVar::Free(LVar::new(n, sort, 0))) };
+    let action_atom = ProtoAtom::Action(
+        mkvar("i", LSort::Node),
+        Fact::fresh(
+            FactTag::Proto(Multiplicity::Linear, "Setup", 1),
+            vec![mkvar("k", LSort::Msg)],
+        ),
     );
     let g = tamarin_theory::guarded::Guarded::Conj(
-        vec![tamarin_theory::guarded::Guarded::Atom(
-            tamarin_theory::guarded::atom_to_gatom_free(&action_atom),
-        )]
-        .into(),
+        vec![tamarin_theory::guarded::Guarded::Atom(action_atom)].into(),
     );
     let mut sys = System::empty();
     sys.formulas_mut().push(std::sync::Arc::new(g));
@@ -1595,7 +1492,7 @@ fn atom_decomposition_creates_action_goal_in_simplify() {
 fn prove_lemma_disj_lemma_terminates_and_tamarin_verifies() {
     use tamarin_theory::prove::prove_lemma;
 
-    let mp = match maude_path() {
+    let mp = match require_maude_path() {
         Some(p) => p,
         None => return,
     };
@@ -1608,7 +1505,8 @@ fn prove_lemma_disj_lemma_terminates_and_tamarin_verifies() {
     let path = fixtures_dir().join("disj_lemma.spthy");
     let src = std::fs::read_to_string(&path).expect("read");
     let theory = parse_theory(&src, &[]).expect("parse");
-    let root = prove_lemma(&theory, "either", h, 50).expect("prove_lemma");
+    let elab = tamarin_theory::elaborate::elaborate(&theory).expect("elaborate");
+    let root = prove_lemma(&elab, "either", h, 50).expect("prove_lemma");
 
     // `either` is `exists-trace`.  A witness trace is therefore `Solved` on
     // our side and `verified` on the oracle's.  Every other status is a
@@ -1689,21 +1587,13 @@ fn simplify_conj_wrapping_disj_produces_goal() {
         return;
     };
 
-    use tamarin_parser::ast::{Atom, SortHint, Term, VarSpec};
-    let mkvar = |n: &str| {
-        Term::Var(VarSpec {
-            name: n.to_string(),
-            idx: 0,
-            sort: SortHint::Node,
-            typ: None,
-        })
-    };
-    let a1 = tamarin_theory::guarded::Guarded::Atom(tamarin_theory::guarded::atom_to_gatom_free(
-        &Atom::Last(mkvar("i")),
-    ));
-    let a2 = tamarin_theory::guarded::Guarded::Atom(tamarin_theory::guarded::atom_to_gatom_free(
-        &Atom::Last(mkvar("j")),
-    ));
+    use tamarin_term::lterm::{BVar, LSort, LVar};
+    use tamarin_term::vterm::var_term;
+    use tamarin_theory::atom::ProtoAtom;
+    use tamarin_theory::formula::BLNTerm;
+    let mkvar = |n: &str| -> BLNTerm { var_term(BVar::Free(LVar::new(n, LSort::Node, 0))) };
+    let a1 = tamarin_theory::guarded::Guarded::Atom(ProtoAtom::Last(mkvar("i")));
+    let a2 = tamarin_theory::guarded::Guarded::Atom(ProtoAtom::Last(mkvar("j")));
     let disj = tamarin_theory::guarded::Guarded::Disj(vec![a1, a2].into());
     let mut sys = System::empty();
     sys.formulas_mut()
@@ -1732,16 +1622,17 @@ fn formula_to_system_pipes_parsed_lemmas() {
         let path = fixtures_dir().join(name);
         let src = std::fs::read_to_string(&path).expect("read");
         let theory = parse_theory(&src, &[]).expect("parse");
+        let elaborated = tamarin_theory::elaborate::elaborate(&theory).expect("elaborate");
         for it in &theory.items {
             if let tamarin_parser::ast::TheoryItem::Lemma(l) = it {
-                let g = formula_to_guarded(&l.formula).expect("guarded");
-                let sys = formula_to_system(
-                    Vec::new(),
-                    SourceKind::RawSources,
-                    l.trace_quantifier.clone(),
-                    false,
-                    &g,
-                );
+                let g =
+                    formula_to_guarded_parsed(&l.formula, &elaborated.signature).expect("guarded");
+                let tq = elaborated
+                    .lemmas()
+                    .find(|el| el.name == l.name)
+                    .expect("elaborated lemma")
+                    .trace_quantifier;
+                let sys = formula_to_system(Vec::new(), SourceKind::RawSources, tq, &g);
                 // Initial system always has exactly one formula.
                 assert_eq!(sys.formulas.len(), 1, "{}: lemma {}", name, l.name);
                 // No nodes, edges, or goals yet.
@@ -1807,7 +1698,7 @@ fn solve_premise_goal_against_fixture_matches_rule_count() {
     use tamarin_theory::constraint::solver::reduction::{GoalCases, Reduction};
     use tamarin_theory::constraint::system::System;
 
-    let path = match maude_path() {
+    let path = match require_maude_path() {
         Some(p) => p,
         None => return,
     };
@@ -1866,7 +1757,7 @@ fn solve_premise_goal_against_fixture_matches_rule_count() {
     assert_eq!(r.sys.edges.len(), 1);
 }
 
-/// Cross-check our `formula_to_guarded` rejection messages against
+/// Cross-check our guarded-conversion rejection messages against
 /// tamarin's. Both should reject `Ex k #i. (A(k)@#i) | (B(k)@#i)`
 /// with an "unguarded variable(s)" error, since the existential
 /// guard is a disjunction of actions rather than a conjunction.
@@ -1922,7 +1813,9 @@ end
             }
         })
         .expect("lemma");
-    let err = formula_to_guarded(&lemma.formula).expect_err("should fail");
+    let elaborated = tamarin_theory::elaborate::elaborate(&theory).expect("elaborate");
+    let err =
+        formula_to_guarded_parsed(&lemma.formula, &elaborated.signature).expect_err("should fail");
     assert!(
         err.message.contains("unguarded variable"),
         "expected 'unguarded variable' in our error:\n{:?}",
@@ -1949,7 +1842,7 @@ fn fixture_nat_sort_reuse_lemma_derives_implied_fact() {
     use tamarin_theory::constraint::solver::search::{NodeStatus, ProofNode};
     use tamarin_theory::prove::prove_lemma;
 
-    let mp = match maude_path() {
+    let mp = match require_maude_path() {
         Some(p) => p,
         None => return,
     };
@@ -1957,9 +1850,8 @@ fn fixture_nat_sort_reuse_lemma_derives_implied_fact() {
     let src = std::fs::read_to_string(&path).expect("read fixture");
     let theory = parse_theory(&src, &[]).expect("parse");
     let elab = tamarin_theory::elaborate::elaborate(&theory).expect("elaborate");
-    let h = tamarin_term::maude_proc::MaudeHandle::start(&mp, elab.signature.maude_sig.clone())
-        .unwrap();
-    let root = prove_lemma(&theory, "CanForgeAndPost", h, 500).expect("prove_lemma");
+    let h = tamarin_term::maude_proc::MaudeHandle::start(&mp, elab.signature.clone()).unwrap();
+    let root = prove_lemma(&elab, "CanForgeAndPost", h, 500).expect("prove_lemma");
     assert_eq!(root.status, NodeStatus::Solved, "expected a witness trace");
 
     fn contains_honest_signature_key(n: &ProofNode) -> bool {

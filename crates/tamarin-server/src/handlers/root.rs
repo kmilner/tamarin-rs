@@ -125,7 +125,7 @@ pub async fn robots() -> impl IntoResponse {
 /// We don't yet wire a `tokio_util::sync::CancellationToken` registry,
 /// so the "cancel" is a soft ack — but the 400-on-missing-path
 /// semantics match Haskell exactly so frontend dispatch works.
-pub async fn kill_thread(
+pub(crate) async fn kill_thread(
     axum::extract::Query(q): axum::extract::Query<KillQuery>,
 ) -> impl IntoResponse {
     match q.path {
@@ -146,7 +146,7 @@ pub async fn kill_thread(
 }
 
 #[derive(Debug, serde::Deserialize)]
-pub struct KillQuery {
+pub(crate) struct KillQuery {
     pub path: Option<String>,
 }
 
@@ -179,7 +179,7 @@ fn render_index(state: &AppState) -> String {
             rows.push_str(&format!(
                 "<tr><td><a href=\"{link}\">{name}</a></td><td>{time}</td>{primary}<td>{origin}</td></tr>",
                 link = html_escape(&link),
-                name = html_escape(&t.name),
+                name = html_escape(&t.typed_theory.name),
                 origin = html_escape(&t.origin.label()),
             ));
         }

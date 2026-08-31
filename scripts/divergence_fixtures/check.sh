@@ -5,10 +5,10 @@
 # Environment: RS_PATH (port binary), FILE_TIMEOUT (per run, default 300s).
 #
 # Each fixture is a theory whose interesting output survives in one or more gate
-# slices (fixtures.tsv says which).  All but ac_marker_collapse must reproduce
-# the pinned oracle's captured bytes; that one must NOT, and must diverge in
-# exactly the documented upstream-bug shape — so the check goes red both when
-# the port moves and when a submodule bump moves upstream.
+# slices (fixtures.tsv says which).  A `match` row must reproduce the pinned
+# oracle's captured bytes; a `diverge` row must NOT, and must diverge in
+# exactly the shape divergence_shape below documents — so the check goes red
+# both when the port moves and when a submodule bump moves upstream.
 #
 # Only the port runs here: the oracle side is the committed capture under
 # expected/, refreshed by capture.sh at bump time.  Nothing in the corpus
@@ -38,26 +38,13 @@ report() { printf '  %-24s %-6s %-8s %s\n' "$1" "$2" "$3" "$4"; }
 # The directory and the manifest must agree before anything is loaded.
 census_fixture_dir
 
-# Extra assertions for a `diverge` fixture: the SHAPE of the divergence, not
-# just its existence, so an unrelated change to either side cannot leave the
-# fixture in a passing state for the wrong reason.  A `diverge` row with no arm
-# here asserts nothing more than "the two files differ".  The fallthrough is
-# therefore a failure.
+# Extra assertions for `diverge` fixtures: the SHAPE of each divergence, not
+# just its existence. There are currently no intentional divergences; adding
+# one requires a documented arm here so unrelated changes cannot pass it.
 divergence_shape() {
     case "$1.$2" in
-    ac_marker_collapse.theory)
-        # Documented upstream bug: upstream rebuilds the Maude reply as an AC
-        # term and `fAppAC _ [a] = a` deletes the unary application, so the
-        # oracle's closed rule outputs the bare argument; the port keeps the
-        # application.
-        grep -qF "Out( (a++y) )"            "$expected/$1.$2.hs.txt" \
-            || { echo "    oracle side no longer collapses tamXCAbar(a) — expected \`Out( (a++y) )\`" >&2; return 1; }
-        grep -qF "Out( (y++tamXCAbar(a)) )" "$expected/$1.$2.rs.txt" \
-            || { echo "    port side no longer keeps tamXCAbar(a) — expected \`Out( (y++tamXCAbar(a)) )\`" >&2; return 1; }
-        ;;
     *)  echo "    no documented shape for the $1.$2 divergence — add an arm here" >&2; return 1 ;;
     esac
-    return 0
 }
 
 # `check_slice <name> <slice> <mode> < raw` — compare one block of one load.
