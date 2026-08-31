@@ -2448,7 +2448,7 @@ impl<'a> Parser<'a> {
             // first identifier parser supplies the precise reserved-word/EOF
             // error. Reuse the same parser rather than inventing a diagnostic.
             self.ident()?;
-            unreachable!("an identifier would have produced a selector")
+            return Err(self.err_expect(&["letter or digit", "\"\\\"\""]));
         }
         Ok(PrioBlock { ranking, selectors })
     }
