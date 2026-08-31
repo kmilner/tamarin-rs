@@ -35,7 +35,12 @@ pub enum ProveError {
 /// quantifier-level errors include `ppFormula f0`, Guarded.hs:508-514 and
 /// 561-563), then "in the formula" and the quoted converted formula.
 fn guarded_or_error(f: &crate::formula::LNFormula) -> Result<Guarded, ProveError> {
-    formula_to_guarded(f).map_err(|e| ProveError::Guarded(e.full_doc(f).render()))
+    formula_to_guarded(f).map_err(|e| {
+        ProveError::Guarded(e.full_doc(f).render_with(
+            crate::pretty_hpj::DEFAULT_LINE_LENGTH,
+            crate::pretty_hpj::DEFAULT_RIBBON,
+        ))
+    })
 }
 
 impl std::fmt::Display for ProveError {

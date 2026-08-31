@@ -62,6 +62,37 @@ fn prove_lemma_unknown_name_is_error() {
     assert!(matches!(r, Err(ProveError::LemmaNotFound(_))));
 }
 
+#[test]
+fn guarded_conversion_errors_use_haskell_default_width() {
+    let vars = (1..=25)
+        .map(|i| format!("x{i}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let src = format!(
+        "theory T begin \
+         lemma many: \"All {vars} #i. AA(x1) @ i ==> F\" \
+         end"
+    );
+    let parsed = tamarin_parser::parse_theory(&src, &[]).expect("parse");
+    let theory = elaborated(&parsed);
+    let formula = &theory.lemmas().next().expect("lemma").formula;
+    let error = formula_to_guarded(formula).expect_err("formula is unguarded");
+    let doc = error.full_doc(formula);
+    let expected = doc.clone().render_with(
+        crate::pretty_hpj::DEFAULT_LINE_LENGTH,
+        crate::pretty_hpj::DEFAULT_RIBBON,
+    );
+    assert_ne!(
+        expected,
+        doc.render(),
+        "fixture must distinguish 100 from 110 columns"
+    );
+    assert_eq!(
+        guarded_or_error(formula),
+        Err(ProveError::Guarded(expected))
+    );
+}
+
 /// The `features/injectivity` corpus example runs
 /// `simple_injective_fact_instances` through a complete proof.  The
 /// injective-fact analysis supplies the less-atoms that close the negation
