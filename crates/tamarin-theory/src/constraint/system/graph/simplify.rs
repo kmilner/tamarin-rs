@@ -55,7 +55,7 @@ pub fn compress_system(mut sys: RenderSystem) -> RenderSystem {
 /// Drop `LessAtom`s that are implied by the edge relation.
 fn drop_entailed_ord_constraints(mut sys: RenderSystem) -> RenderSystem {
     // Build adjacency from `rawEdgeRel` = edges ++ unsolvedChains
-    // (Simplification.hs:33-38, see line 37 / System.hs:1613-1616).
+    // (Simplification.hs:33-38, see line 37 / System.hs:1615-1618).
     let adj = build_raw_edge_adjacency(&sys);
     // HS `entailed (LessAtom from to _) = to `S.member` reachableSet [from] edges`
     // (Simplification.hs:33-38, see line 38).  `Dag.reachableSet [from]` ALWAYS
@@ -73,13 +73,13 @@ fn drop_entailed_ord_constraints(mut sys: RenderSystem) -> RenderSystem {
 }
 
 /// Adjacency for `rawEdgeRel sys = edges ++ unsolvedChains sys`
-/// (System.hs:1613-1616).
+/// (System.hs:1615-1618).
 fn build_raw_edge_adjacency(sys: &System) -> BTreeMap<NodeId, Vec<NodeId>> {
     let mut adj: BTreeMap<NodeId, Vec<NodeId>> = BTreeMap::new();
     for e in &sys.edges {
         adj.entry(e.src.0).or_default().push(e.tgt.0);
     }
-    // `unsolvedChains` (System.hs:1601-1605) projected to node ids via
+    // `unsolvedChains` (System.hs:1603-1607) projected to node ids via
     // `nodeConcNode *** nodePremNode`.
     for (from, to) in sys.unsolved_chains() {
         adj.entry(from.0).or_default().push(to.0);
@@ -374,8 +374,8 @@ pub fn simplify_system(level: SimplificationLevel, sys: RenderSystem) -> RenderS
 fn transitive_reduction(sys: RenderSystem, total_red: bool) -> RenderSystem {
     // Haskell: `oldLesses = rawLessRel sys`, used for BOTH `Dag.cyclic`
     // and `Dag.transRed` (Simplification.hs:61-74).  `rawLessRel se =
-    // getLessRel sLessAtoms ++ rawEdgeRel se` (System.hs:1621-1622), and
-    // `rawEdgeRel = edges ++ unsolvedChains` (System.hs:1613-1616).
+    // getLessRel sLessAtoms ++ rawEdgeRel se` (System.hs:1623-1624), and
+    // `rawEdgeRel = edges ++ unsolvedChains` (System.hs:1615-1618).
     let mut old_lesses: Vec<(NodeId, NodeId)> = sys
         .less_atoms
         .iter()

@@ -55,9 +55,28 @@ fn assert_transcript(
     assert_eq!(stderr, want_stderr, "stderr must match the oracle bytes");
 }
 
-/// Signature-heavy theory: `builtins:` enable-flag vs function-adding entries,
-/// `builtin  <name>` items, `function:` typing lines (trailing-space layout),
-/// `[private,constructor]` attrs, `macros:`, let-block rule.
+fn assert_round_trip(test: &str, source: &str) -> String {
+    let source_name = "source.spthy";
+    let (first_code, first, first_err) =
+        run_parse_only(test, &[(source_name, source)], &[source_name]);
+    assert_eq!(first_code, 0, "first parse failed:\n{first_err}");
+
+    let printed_name = "printed.spthy";
+    let (second_code, second, second_err) = run_parse_only(
+        &format!("{test}_printed"),
+        &[(printed_name, &first)],
+        &[printed_name],
+    );
+    assert_eq!(
+        second_code, 0,
+        "printed theory failed to parse:\n{second_err}"
+    );
+    assert_eq!(second, first, "theory changed on its second print");
+    first
+}
+
+/// Signature-heavy theory: builtin function/equation declarations are
+/// recovered from the signature rather than repeated as translation items.
 #[test]
 fn sig_builtins_functions_macros() {
     assert_transcript(
@@ -95,20 +114,6 @@ equations:
     sdec(senc(x.1, x.2), x.2) = x.1,
     snd(<x.1, x.2>) = x.2,
     unwrap(f(x, y)) = x
-
-builtin  symmetric-encryption
-
-builtin  hashing
-
-builtin  diffie-hellman
-
-function: f (Any, Any) : Any   
-
-function: g (Any) : Any  [private]  
-
-function: unwrap (Any) : Any   [destructor] 
-
-function: mac (Any, Any) : Any   
 
 macros: m1( x ) =  h(x)
 
@@ -238,14 +243,12 @@ equations:
     sdec(senc(x.1, x.2), x.2) = x.1,
     snd(<x.1, x.2>) = x.2
 
-builtin  symmetric-encryption
-
 let  P (x) = out(x)
 
 process:
   new k;
-  !(P(k) | in(y);
-           event Recv( y ))
+  !(P(k) | (in(y);
+            event Recv( y )))
 
 lemma triv:
   exists-trace "∃ y #i. Recv( y ) @ #i"
@@ -372,8 +375,6 @@ equations:
     fst(<x.1, x.2>) = x.1,
     sdec(senc(x.1, x.2), x.2) = x.1,
     snd(<x.1, x.2>) = x.2
-
-builtin  symmetric-encryption
 
 test evid:
   "∃ #i. Evid( ) @ #i"
@@ -513,13 +514,7 @@ presort: C
 prio: {id}
   regex".*S\(.*"
 
-builtin  xor
-
-function: uni (Any, Any) : Any  [AC]   
-
-function: pw (Any) : Any  [private]  
-
-export:  queries "some export body"
+export queries : "some export body"
 
 lemma hid [hide_lemma=chain, heuristic={mytac}]:
   exists-trace "∃ k #i. S( k ) @ #i"
@@ -539,8 +534,7 @@ end
     );
 }
 
-/// prettySapic's operand order for combinators (`then-branch if-cond
-/// else-branch`), insert/lock/unlock/lookup actions.
+/// Reparsable branching-process layout and insert/lock/unlock/lookup actions.
 #[test]
 fn sapic_if_else_state_actions() {
     assert_transcript(
@@ -571,16 +565,18 @@ equations:
     sdec(senc(x.1, x.2), x.2) = x.1,
     snd(<x.1, x.2>) = x.2
 
-builtin  symmetric-encryption
-
 process:
   in(x);
-   (event Yes( );
-    out('y') if x='a' event No( );
-                      insert 'st',x;
-                      lock 'st';
-                      unlock 'st';
-                       (event Got( z ) lookup 'st' as z 0))
+  if x='a' then
+      (event Yes( );
+       out('y'))
+  else
+      event No( );
+      insert 'st',x;
+      lock 'st';
+      unlock 'st';
+      lookup 'st' as z in
+          event Got( z )
 
 end
 "#,
@@ -622,8 +618,6 @@ begin
 
 functions: fst/1, h/1, pair/2, snd/1
 equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
-
-function: h (Any) : Any   
 
 macros: m1( x ) =  h(x)
 
@@ -676,8 +670,6 @@ begin
 functions: fst/1, h/1, pair/2, snd/1
 equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
 
-function: h (Any) : Any   
-
 macros: m1( x ) =  h(x)
 
 rule (modulo E) A:
@@ -698,8 +690,8 @@ end
     );
 }
 
-/// Multi-line `export` body: the whitespace right after the opening quote is
-/// lexeme-skipped (HS `symbol "\""`), continuation lines stay at column 0.
+/// Multi-line `export` body: whitespace right after the opening quote is part
+/// of the body, and therefore survives printing.
 #[test]
 fn export_multiline_body() {
     assert_transcript(
@@ -736,9 +728,8 @@ equations:
     sdec(senc(x.1, x.2), x.2) = x.1,
     snd(<x.1, x.2>) = x.2
 
-builtin  symmetric-encryption
-
-export:  queries "free c: channel.
+export queries : "
+free c: channel.
 query attacker(s).
 "
 
@@ -749,6 +740,85 @@ end
 "#,
         r#"[Theory ExportML] Theory loaded
 "#,
+    );
+}
+
+/// The output constructs changed upstream specifically to make open theories
+/// reparsable. Exercise them together, pin the first print to the patched
+/// Haskell output, then require the second print to be identical.
+#[test]
+fn reparsable_output_round_trip() {
+    let printed = assert_round_trip(
+        "reparsable_output_round_trip",
+        r#"theory RoundTrip
+begin
+
+builtins: locations-report, reliable-channel, dest-pairing
+options: translation-progress, translation-allow-pattern-lookups,
+         translation-state-optimisation, translation-asynchronous-channels,
+         translation-compress-events
+functions: f(bitstring):skey, dec(bitstring):bitstring [destructor]
+
+export queries: "  path \\\\ and quote \\\" stay"
+
+let P(x) = out(x)
+
+process:
+  ((new x; P(x)) | (event E() + out('y')))@'loc'
+
+equivLemma:
+  (new x; out(x))
+  (out('a') | out('b'))
+
+end
+"#,
+    );
+    assert_eq!(
+        printed,
+        r#"theory RoundTrip
+
+begin
+
+// Function signature and definition of the equational theory E
+
+functions: check_rep/2 [destructor], dec/1 [destructor], f/1,
+           fst/1 [destructor], get_rep/1 [destructor], pair/2,
+           rep/2 [private,constructor], report/1, snd/1 [destructor]
+equations:
+    check_rep(rep(x.1, x.2), x.2) = x.1,
+    fst(<x.1, x.2>) = x.1,
+    get_rep(rep(x.1, x.2)) = x.1,
+    snd(<x.1, x.2>) = x.2
+
+options: translation-progress, translation-allow-pattern-lookups,
+         translation-state-optimisation, translation-asynchronous-channels,
+         translation-compress-events
+
+builtins: locations-report
+
+builtins: reliable-channel
+
+builtins: dest-pairing
+
+function: f (bitstring) : skey
+
+function: dec (bitstring) : bitstring [destructor]
+
+export queries : "  path \\\\ and quote \\\" stay"
+
+let  P (x) = out(x)
+
+process:
+  ((new x;
+    P(x)) | (event E( ) + out('y')))@'loc'
+
+equivLemma:
+  (new x;
+   out(x))
+  (out('a') | out('b'))
+
+end
+"#
     );
 }
 
@@ -1050,8 +1120,6 @@ begin
 functions: f/2, fst/1, pair/2, snd/1
 equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
 
-function: f (Any, Any) : Any   
-
 restriction Restr_A_1:
   "∀ x #NOW x.1. (Restr_A_1( x, x.1 ) @ #NOW) ⇒ (B( x.1 ) @ x)"
   // safety formula
@@ -1109,8 +1177,6 @@ begin
 builtins: multiset
 functions: fst/1, pair/2, snd/1
 equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
-
-builtin  multiset
 
 predicate: P( x )<=>∃ z #i. Act( x, z ) @ #i
 
@@ -1179,8 +1245,6 @@ begin
 
 functions: fst/1, h/1, pair/2, snd/1
 equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
-
-function: h (Any) : Any   
 
 macros: m1( x ) =  h(x),
         m2( x, y ) =  <m1(x), y>
@@ -1252,8 +1316,6 @@ begin
 
 functions: f/1, fst/1, pair/2, snd/1
 equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
-
-function: f (Any) : Any   
 
 rule (modulo E) R:
    [ In( x ) ] --[ R( f(x) ) ]-> [ Out( f(x) ) ]

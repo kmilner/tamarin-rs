@@ -56,7 +56,7 @@ use crate::constraint::system::graph::repr::{Cluster, GEdge, GNode, MissingHint,
 use crate::constraint::system::graph::{system_to_graph, Graph};
 use crate::constraint::system::NodeRuleMap;
 
-/// HS `resolveNodePremFact` (System.hs:926-927) via Graph.hs:87-90.
+/// HS `resolveNodePremFact` (System.hs:928-929) via Graph.hs:87-90.
 fn resolve_node_prem_fact<'a>(prem: &NodePrem, rules: &NodeRuleMap<'a>) -> Option<&'a LNFact> {
     rules
         .get(&prem.0)
@@ -64,7 +64,7 @@ fn resolve_node_prem_fact<'a>(prem: &NodePrem, rules: &NodeRuleMap<'a>) -> Optio
         .and_then(|ru| ru.premises.get(prem.1 .0))
 }
 
-/// HS `resolveNodeConcFact` (System.hs:930-931) via Graph.hs:93-96.
+/// HS `resolveNodeConcFact` (System.hs:932-933) via Graph.hs:93-96.
 fn resolve_node_conc_fact<'a>(conc: &NodeConc, rules: &NodeRuleMap<'a>) -> Option<&'a LNFact> {
     rules
         .get(&conc.0)

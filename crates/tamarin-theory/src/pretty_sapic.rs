@@ -344,6 +344,18 @@ fn pretty_sapic_top_level_with(p: &PlainProcess, printer: MsrPrinter) -> String 
     }
 }
 
+/// The action/combinator text consumed by the reparsable open-process
+/// printer. Unlike [`pretty_sapic_top_level`], actions carry no sequencing
+/// semicolon because that printer decides whether a continuation needs one.
+pub(crate) fn pretty_sapic_open_node(p: &PlainProcess) -> String {
+    let _plain = hpj::HtmlDocGuard::disable();
+    match p {
+        Process::Null(_) => "0".to_string(),
+        Process::Comb(c, _, _, _) => pretty_sapic_comb(c),
+        Process::Action(a, _, _) => pretty_sapic_action(a, MsrPrinter::Sapic),
+    }
+}
+
 /// `prettySapicTopLevel = prettySapicTopLevel' rulePrinter` (Print.hs:56):
 /// the `process:` / `let` / `equivLemma` block printer and the source of the
 /// SAPIC-generated rule names.

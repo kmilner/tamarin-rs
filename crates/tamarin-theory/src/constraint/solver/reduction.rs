@@ -898,8 +898,8 @@ impl<'ctx> Reduction<'ctx> {
         // value, sharing its `Arc`s with no rebuild.
         //
         // The rewritten facts are NOT normalised: HS's `substSystem`
-        // (Reduction.hs:571-595) does not, and `normDG` (System.hs:1284-1288)
-        // runs only inside `impliedOrInitial` (System.hs:1279-1282) and the
+        // (Reduction.hs:571-595) does not, and `normDG` (System.hs:1286-1290)
+        // runs only inside `impliedOrInitial` (System.hs:1281-1284) and the
         // diff-mode mirror.  A normalise here would reduce e.g.
         // `checksign(sign(m,k), pk(k))` to `m`, losing the head shape
         // source-case matching reads, and would erase the non-normal term
@@ -1060,7 +1060,7 @@ impl<'ctx> Reduction<'ctx> {
         // substitution to each goal term with no Maude normalization.
         // HS's `substGoals` applies subst via the `Apply` instance and
         // does NOT normalise; `normDG` runs only inside impliedOrInitial
-        // (System.hs:1252-1282, see line 1282).
+        // (System.hs:1254-1284, see line 1284).
         let mut new_goals: Vec<(Goal, crate::constraint::system::GoalStatus)> =
             Vec::with_capacity(goals.len());
         // Change bit for the goal section's conditional cache
@@ -1595,11 +1595,11 @@ impl<'ctx> Reduction<'ctx> {
                 // sides already in Maude normal form, so a `reduce` here
                 // would be idempotent for HS.  The pre-normalisation is
                 // NOT from `normDG`/`normRule`: those run only in the
-                // diff-mode mirror path (`getMirrorDG`, System.hs:1291-1397, see line 1292)
+                // diff-mode mirror path (`getMirrorDG`, System.hs:1293-1399, see line 1294)
                 // and inside `impliedOrInitial`'s implied systems
-                // (System.hs:1252-1282, see line 1282) — neither is on the standard `--prove`
+                // (System.hs:1254-1284, see line 1284) — neither is on the standard `--prove`
                 // solving path (the only `normRule` callers are
-                // System.hs:1285-1288 `normDG` + IntruderRules variant
+                // System.hs:1287-1290 `normDG` + IntruderRules variant
                 // computation).  The true reason HS's EqE terms are
                 // pre-normal is rule-variant computation (`variants in
                 // MSG` yields reduced action terms) plus eq-store
@@ -3862,7 +3862,7 @@ pub fn bounds_max_rest(sys: &System) -> u64 {
         bm_lvar(la, &mut max);
     }
     // HS-faithful: `HasFrees System` folds field `e` = `_sSubtermStore`
-    // (System.hs:1834-1847), and `HasFrees SubtermStore` (SubtermStore.hs:
+    // (System.hs:1836-1849), and `HasFrees SubtermStore` (SubtermStore.hs:
     // 546-548) folds `negSt <> st <> solvedSt`.  RS's SubtermStore is a
     // 3-field subset (subterms = HS's `st`, solved_subterms = HS's
     // `solvedSt`), so walk both here.  Without this, `avoid sys` (the

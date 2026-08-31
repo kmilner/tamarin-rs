@@ -69,24 +69,11 @@ fi
 [ -n "${MAUDE:-}" ] && [ -x "$MAUDE" ] || {
     echo "capture_cli_refs: no maude found (set MAUDE=/path/to/maude)" >&2; exit 2; }
 
-# --- oracle revision preflight ----------------------------------------------
-# An oracle built from a different upstream revision certifies the port against
-# the wrong specification.  Same check as sweep_common.sh's preflight.
-pin=$(git -C "$repo_root" rev-parse :tamarin-prover 2>/dev/null) || pin=
-binrev=$(oracle_revision "$HS_PATH" "$MAUDE")
-rev_note="matches submodule pin"
-if [ -n "$pin" ] && [ -n "$binrev" ] && [ "$pin" != "$binrev" ]; then
-    rev_note="MISMATCH: oracle is $binrev, submodule pin is $pin"
-    echo "capture_cli_refs: ERROR: oracle '$HS_PATH' is revision $binrev but the" \
-         "submodule pin is $pin — it would capture references for the wrong" \
-         "upstream (rebuild with ./setup.sh testing, or ALLOW_ORACLE_REV_MISMATCH=1)" >&2
-    [ "${ALLOW_ORACLE_REV_MISMATCH:-0}" = 1 ] || exit 2
-fi
-
-# Oracle-binary fingerprint — gate_common's hs_fingerprint, the same recipe
-# every cached gate keys on.  Recorded in the manifest so a reference captured
-# by a patched oracle is identifiable after the fact.
-hs_fingerprint "$HS_PATH"
+# --- oracle revision/source preflight ---------------------------------------
+# Require setup.sh's controlled build of the pin plus current patch series.
+oracle_rev_check "$HS_PATH" "$MAUDE" "$repo_root"
+binrev=${ORACLE_REVISION:-unknown}
+rev_note="$ORACLE_SOURCE_STATUS: $ORACLE_SOURCE_NOTE"
 
 # --- row selection -----------------------------------------------------------
 want=("$@")

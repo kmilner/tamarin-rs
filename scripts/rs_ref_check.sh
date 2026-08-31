@@ -22,7 +22,7 @@
 # arbitrary `verdict=OK` (migrate_hs_cache_fp.sh's rename log, an RS-vs-RS
 # sweep) or a run scoped to a subset proves nothing about this corpus. Its
 # path, its verdict and the fingerprint of the oracle binary on this machine
-# (revision-checked against the submodule pin) are stamped into the reference
+# (checked against the submodule pin and current patch series) are stamped into the reference
 # header beside `# maude:`, so the committed baseline carries the evidence
 # that an oracle run justified it.
 #
@@ -145,15 +145,14 @@ if [ "$MODE" = generate ]; then
         exit 2; }
     # The oracle binary is the specification the certifying run compared
     # against; its fingerprint (gate_common's hs_fingerprint, the same
-    # size.mtime recipe the cached gates key on) is what pins WHICH oracle
+    # binary-SHA recipe the cached gates key on) is what pins WHICH oracle
     # that was.
     HS_PATH="${HS_PATH:-$(find "$ROOT/tamarin-prover-testing/.stack-work/install" \
                                -name tamarin-prover -type f 2>/dev/null | head -1)}"
     [ -n "$HS_PATH" ] && [ -x "$HS_PATH" ] || {
         echo "rs_ref_check: no oracle binary to fingerprint (HS_PATH=${HS_PATH:-unset})" >&2
         exit 2; }
-    hs_fingerprint "$HS_PATH"
-    # The fingerprint records WHICH binary; gate_common's oracle_rev_check pins
+    # gate_common's oracle_rev_check fingerprints WHICH binary and pins
     # that it is the build of the submodule pin before `# oracle:` is stamped —
     # otherwise the header could bless a baseline with the fingerprint of an
     # oracle from another upstream (ALLOW_ORACLE_REV_MISMATCH=1 to override,

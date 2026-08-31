@@ -661,7 +661,7 @@ pub(crate) fn formulas_in_set_order(formulas: &[Arc<Guarded>]) -> Vec<&Guarded> 
 
 /// [`System::node_rule_map`]'s return: a read-only `NodeId → &RuleACInst`
 /// index into a system's nodes, standing in for HS's `M.lookup v sNodes`
-/// (System.hs:927/931) wherever a caller resolves more than one node.
+/// (System.hs:929/931) wherever a caller resolves more than one node.
 pub type NodeRuleMap<'a> = tamarin_utils::FastMap<&'a NodeId, &'a RuleACInst>;
 
 impl System {
@@ -1098,7 +1098,7 @@ impl System {
     }
 
     /// The rule instance at node `v`, if present. Port of HS `nodeRuleSafe`
-    /// (System.hs:911-913): `M.lookup v sNodes`.
+    /// (System.hs:913-915): `M.lookup v sNodes`.
     pub fn node_rule_safe(&self, v: &NodeId) -> Option<&RuleACInst> {
         self.nodes.iter().find(|(id, _)| id == v).map(|(_, r)| r)
     }
@@ -1179,7 +1179,7 @@ impl System {
 
     /// All `In`- and protocol-premise terms in the system, as
     /// `(node, premise, term-index, term)`. Port of HS `allPrems`
-    /// (System.hs:894-899).
+    /// (System.hs:896-901).
     ///
     /// ORDER: the node walk is `nodes` INSERTION order, where HS walks
     /// `M.toList sNodes` (ascending `NodeId`).  A caller whose output depends
@@ -1207,7 +1207,7 @@ impl System {
     }
 
     /// All unsolved destruction chains, as `(NodeConc, NodePrem)`. Port of HS
-    /// `unsolvedChains` (System.hs:1601-1605).
+    /// `unsolvedChains` (System.hs:1603-1607).
     ///
     /// ORDER: `goals` INSERTION order, where HS walks `M.toList sGoals`
     /// (ascending `Goal`).  A caller that needs the HS sequence sorts the
@@ -1228,7 +1228,7 @@ impl System {
     }
 
     /// All unsolved action atoms, as `(NodeId, &LNFact)`. Port of HS
-    /// `unsolvedActionAtoms` (System.hs:1567-1571).  Same insertion-order
+    /// `unsolvedActionAtoms` (System.hs:1569-1573).  Same insertion-order
     /// caveat as [`unsolved_chains`](Self::unsolved_chains).
     pub fn unsolved_action_atoms(
         &self,
@@ -1241,7 +1241,7 @@ impl System {
     }
 
     /// All unsolved premise goals, as `(NodePrem, LNFact)`. Port of HS
-    /// `unsolvedPremises` (System.hs:1505-1509).  Same insertion-order caveat
+    /// `unsolvedPremises` (System.hs:1507-1511).  Same insertion-order caveat
     /// as [`unsolved_chains`](Self::unsolved_chains).
     pub fn unsolved_premises(
         &self,
@@ -1737,7 +1737,7 @@ impl System {
         }
     }
 
-    /// Direct port of Haskell `isInitialSystem` (`System.hs:828-830`):
+    /// Direct port of Haskell `isInitialSystem` (`System.hs:830-832`):
     ///   isInitialSystem sys =
     ///     null (get sSolvedFormulas sys) && not (member bot (get sFormulas sys))
     /// where `bot = gfalse()`.  Two conditions: no solved formulas yet, and no
@@ -1773,7 +1773,7 @@ impl System {
 // HasFrees
 // =============================================================================
 
-/// `instance HasFrees GoalStatus` (System.hs:1827-1830): a goal status holds
+/// `instance HasFrees GoalStatus` (System.hs:1829-1832): a goal status holds
 /// no variable, so it folds to nothing and maps to itself.  The `sGoals` walk
 /// reaches it through the pair instance (LTerm.hs:855-860), which is how HS's
 /// `M.Map Goal GoalStatus` instance combines a key with its value
@@ -1786,7 +1786,7 @@ impl HasFrees for GoalStatus {
     }
 }
 
-/// `instance HasFrees System` (System.hs:1832-1877).
+/// `instance HasFrees System` (System.hs:1834-1879).
 ///
 /// The fold visits the thirteen fields of the Haskell record in declaration
 /// order (System.hs:383-395); the last three — `sNextGoalNr`, `sSourceKind`

@@ -5,7 +5,7 @@
 //! Pretty-printer for the constraint `System`.
 //!
 //! Port of `prettyNonGraphSystem` from
-//! `lib/theory/src/Theory/Constraint/System.hs:1672-1685`.  Emits the same
+//! `lib/theory/src/Theory/Constraint/System.hs:1674-1687`.  Emits the same
 //! ordered section list the Haskell interactive UI shows in its
 //! "Constraint system" pane:
 //!
@@ -24,7 +24,7 @@
 //! `prettyEqStore` (EquationStore.hs:650-670) — same `Contradictory` /
 //! `CONTRADICTORY` headers, numbered keyword sections and `∃`-quantified
 //! disjuncts — built on the `pretty_hpj` HughesPJ Doc engine.  The whole
-//! pane is ONE Doc (`vsep $ map combine_ …`, System.hs:1672-1685) rendered
+//! pane is ONE Doc (`vsep $ map combine_ …`, System.hs:1674-1687) rendered
 //! once, so every term/formula/goal wraps at the pane width under its
 //! real section nesting, exactly as HS.  Residual divergences documented
 //! on `pretty_subterm_store` / `pretty_eq_store` (derived term `Ord` for
@@ -41,7 +41,7 @@ use crate::pretty_formula::guarded_doc;
 use crate::pretty_hpj::{fsep, numbered_prime, punctuate, vcat, vsep, Doc};
 
 /// Emit just the non-graph-part of the system, matching Haskell's
-/// `prettyNonGraphSystem` (System.hs:1672-1685):
+/// `prettyNonGraphSystem` (System.hs:1674-1687):
 /// `vsep $ map combine_ [("last", …), …]` — the entire pane is a single
 /// Doc rendered once at the web display width.
 pub fn pretty_non_graph_system(sys: &System) -> String {
@@ -75,7 +75,7 @@ pub fn pretty_non_graph_system(sys: &System) -> String {
 // last_atom
 // ---------------------------------------------------------------------
 
-// HS `maybe (text "none") prettyNodeId $ L.get sLastAtom se` (System.hs:1672-1685, see line 1674).
+// HS `maybe (text "none") prettyNodeId $ L.get sLastAtom se` (System.hs:1674-1687, see line 1676).
 fn pretty_last(sys: &System) -> Doc {
     match &sys.last_atom {
         None => Doc::text("none"),
@@ -88,7 +88,7 @@ fn pretty_last(sys: &System) -> Doc {
 // ---------------------------------------------------------------------
 
 /// Render a guarded-formula collection whose Haskell counterpart is a
-/// `S.Set LNGuarded` (System.hs:1672-1685, see line 1678 renders `sLemmas` via `S.toList`,
+/// `S.Set LNGuarded` (System.hs:1674-1687, see line 1680 renders `sLemmas` via `S.toList`,
 /// i.e. ascending `Ord LNGuarded` with structural dedup).  RS stores
 /// `sLemmas` as a `Vec<Guarded>` in *insertion* order (see
 /// `System::insert_lemma`), so the raw Vec would render in a different
@@ -106,7 +106,7 @@ fn pretty_last(sys: &System) -> Doc {
 /// is reached only from the interactive/web constraint-system pane, never
 /// from `--prove` output.
 ///
-/// HS: `vsep $ map prettyGuarded $ S.toList` (System.hs:1672-1685, see line 1675/1678/1680) —
+/// HS: `vsep $ map prettyGuarded $ S.toList` (System.hs:1674-1687, see line 1677/1678/1680) —
 /// each formula is a real Doc (`guarded_doc`) and formulas are separated
 /// by a blank line (`vsep` = fold `$--$`).
 fn pretty_formula_set(items: &[std::sync::Arc<Guarded>]) -> Doc {
@@ -325,7 +325,7 @@ fn intersperse(sep: Doc, xs: Vec<Doc>) -> Vec<Doc> {
 // goals
 // ---------------------------------------------------------------------
 
-// Mirrors Haskell `prettyGoals` (System.hs:1734-1752):
+// Mirrors Haskell `prettyGoals` (System.hs:1736-1754):
 //   (goal, status) <- M.toList sGoals          -- Goal-Ord iteration
 //   guard (solved == gsSolved status)
 //   prettyGoal goal <-> lineComment_
@@ -455,7 +455,7 @@ mod tests {
     /// This is the all-empty shape, which no corpus proof reaches.  Every
     /// section body is `emptyDoc`.  The definition
     /// `combine_ (header, d) = fsep [keyword_ header <> colon,
-    /// nest 2 d]` (System.hs:1671-1685) therefore collapses to the bare
+    /// nest 2 d]` (System.hs:1673-1687) therefore collapses to the bare
     /// header.  The `vsep` between the nine items leaves a blank line after
     /// every item except the last one.  `last` is the only body with content
     /// (`maybe (text "none")`).  `allowed cases` is `show sSourceKind`.  The

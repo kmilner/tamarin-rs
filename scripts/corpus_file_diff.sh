@@ -69,12 +69,12 @@ RS_PATH="${RS_PATH:-$repo_root/target/release/tamarin-rs}"
 # maude for the whole run and put its directory on PATH for the children.
 MAUDE=$(resolve_maude) || exit 2
 maude_on_path "$MAUDE"
-# Oracle-binary fingerprint (gate_common's hs_fingerprint), folded into every
+oracle_rev_check "$HS_PATH" "$MAUDE" "$repo_root"
+# oracle_rev_check's binary fingerprint is folded into every
 # cache key below.  Without it the key is sha256(theory)+flags, which cannot
 # see the ORACLE changing: a rebuilt oracle keeps answering out of entries the
 # previous one produced, and the gate certifies the port against an upstream
-# that is no longer checked out.  Loop-invariant, so taken once.
-hs_fingerprint "$HS_PATH"
+# that is no longer checked out.
 export HS_PATH RS_PATH FILE_TIMEOUT DERIVCHECK_TIMEOUT HS_RTS CACHE CORPUS_ROOT
 
 # GNU timeout accepts integer s/m/h/d suffixes. Convert those spellings for

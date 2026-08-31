@@ -1,90 +1,59 @@
 #!/usr/bin/env bash
-# ONE-TIME, IDEMPOTENT re-keying of the HS oracle caches onto the
-# fingerprint-bearing key the gates now compute.
+# IDEMPOTENT re-keying of HS oracle caches onto the binary-SHA fingerprint
+# the gates now compute. It handles both pre-fingerprint entries and entries
+# keyed by the former size+mtime fingerprint.
 #
 # WHY: the caches used to be keyed by sha256(theory)[+flags hash], which cannot
 # see the ORACLE changing.  A rebuilt oracle kept being answered out of the
 # previous one's entries, so a gate could report byte parity against an
 # upstream that was no longer checked out.  corpus_file_diff.sh, pretty_gate.sh,
 # wf_gate.sh and diff_proof_raw.sh now salt the key with the oracle binary's
-# fingerprint (`stat -c '%s.%Y'`, gate_common.sh's hs_fingerprint):
+# fingerprint (binary SHA-256, gate_common.sh's hs_fingerprint):
 #
 #   .hs_file_cache / .hs_pretty_cache
 #       <sha256(theory)>[__f<12 hex flags>]__b<12 hex fingerprint>.<suffix>
 #   .hs_canon_cache
 #       <sha256(theory)>__<lemma>__v<N>[__f<12 hex flags>]__b<12 hex fp>.<suffix>
 #
-# Every existing entry becomes a MISS under those keys.  The entries are not
-# stale, though — the certified battery ran against them with the oracle that
-# is checked out right now — so this script renames them onto the new key
-# instead of making the next gate spend 30-60 min regenerating them.
+# Matching entries are not stale — the certified battery ran against them with
+# this exact attested oracle — so this script renames them onto the new key
+# instead of making the next gate regenerate them.
 #
-# It is a MIGRATION, not a gate: run it ONCE, right after the fingerprint
-# change lands and before the next gate run.  Running it again is a no-op
-# (everything is already suffixed).  It never runs the oracle on a theory and
-# never writes cache CONTENT — only `mv`.
+# It is a migration, not a gate: run it after a fingerprint-recipe change and
+# before the next gate. Re-running is a no-op. It never runs the oracle on a
+# theory or rewrites captured output; web sidecar writes change identity only.
 #
 # Env:
 #   DRY_RUN=1                    report what would move, move nothing
 #   HS_PATH                      oracle binary (default: the stack-work build)
-#   MAUDE_PATH                   maude for the `--version` revision probe
-#   ALLOW_ORACLE_REV_MISMATCH=1  migrate anyway when the oracle is not the pin
+#   MAUDE_PATH                   maude for the optional `--version` revision probe
+#   ALLOW_ORACLE_REV_MISMATCH=1  migrate despite failed source attestation
 #   CACHES="dir1 dir2 ..."       override the cache list (testing)
 set -u
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
-# gate_common.sh owns the fingerprint recipe this migration re-keys onto —
-# sourced so the two can never drift.  (The MAUDE default below is NOT the
-# shared resolver: the --version probe must tolerate a missing maude and
-# report NOT CHECKED rather than block the migration.)
+# gate_common.sh owns the fingerprint and source-attestation checks this
+# migration relies on, so source it rather than duplicating either policy.
 [ -r "$script_dir/gate_common.sh" ] || { echo "migrate_hs_cache_fp: missing $script_dir/gate_common.sh (owns the fingerprint recipe)" >&2; exit 2; }
 . "$script_dir/gate_common.sh"
 DRY_RUN="${DRY_RUN:-}"
-MAUDE="${MAUDE_PATH:-/home/linuxbrew/.linuxbrew/bin/maude}"
+MAUDE=
+if resolved_maude=$(resolve_maude 2>/dev/null); then
+    MAUDE=$resolved_maude
+fi
 
 HS_PATH=$(resolve_hs_oracle "$repo_root") || exit 2
 [ -x "${HS_PATH:-/nonexistent}" ] || {
     echo "migrate_hs_cache_fp: no HS oracle binary (set HS_PATH) — the new key IS its fingerprint, so there is nothing to migrate onto" >&2
     exit 2
 }
-hs_fingerprint "$HS_PATH"
-
-# The premise of this migration is that the CURRENT oracle produced the entries
-# being rekeyed.  If the binary is not the build of the submodule pin, that
-# premise is false and the rename would stamp another revision's output as this
-# one's.  Same policy (and same escape hatch) as sweep_common.sh's preflight.
-# The probe needs --with-maude: without it `--version` resolves `maude` on PATH,
-# dies before printing `Git revision:` on every box that keeps maude off PATH,
-# and the check would pass by having tested nothing — so the outcome is printed
-# either way.
-rev_check() {
-    local pin binrev
-    pin=$(git -C "$repo_root" rev-parse :tamarin-prover 2>/dev/null) || pin=
-    if [ -x "$MAUDE" ]; then
-        binrev=$(oracle_revision "$HS_PATH" "$MAUDE")
-    else
-        binrev=""
-    fi
-    if [ -z "$pin" ]; then echo "oracle revision: NOT CHECKED (no gitlink for tamarin-prover)"; return 0; fi
-    if [ -z "$binrev" ]; then
-        echo "oracle revision: NOT CHECKED (no 'Git revision:' from --version; maude '$MAUDE' missing?)"
-        return 0
-    fi
-    if [ "$pin" != "$binrev" ]; then
-        echo "ERROR: oracle is revision $binrev but the submodule pin is $pin — migrating would" \
-             "relabel another upstream's cached output as this one's" \
-             "(rebuild with ./setup.sh testing, or ALLOW_ORACLE_REV_MISMATCH=1)" >&2
-        [ "${ALLOW_ORACLE_REV_MISMATCH:-0}" = 1 ] || exit 2
-        echo "oracle revision: MISMATCH $binrev != $pin (overridden)"
-        return 0
-    fi
-    echo "oracle revision: OK ($binrev == submodule pin)"
-}
+oracle_rev_check "$HS_PATH" "$MAUDE" "$repo_root"
 
 echo "oracle      : $HS_PATH"
 echo "fingerprint : $HS_FP  ->  key suffix __b$HS_FP_SALT"
-rev_check
+echo "legacy      : $HS_FP_LEGACY  ->  old suffix __b$HS_FP_LEGACY_SALT"
+echo "oracle source: $ORACLE_SOURCE_STATUS ($ORACLE_SOURCE_NOTE)"
 [ -n "$DRY_RUN" ] && echo "MODE        : DRY RUN (nothing will be renamed)"
 echo
 
@@ -95,7 +64,7 @@ echo
 #   carried over untouched, so this stays correct for artifacts added later.
 migrate_dir() {
     local dir="$1"
-    local moved=0 already=0 other=0 collide=0 unknown=0 failed=0
+    local moved=0 upgraded=0 already=0 other=0 collide=0 unknown=0 failed=0
     local p base stem suffix new
     if [ ! -d "$dir" ]; then
         printf '  %-18s absent — nothing to migrate\n' "$(basename "$dir")"
@@ -113,9 +82,15 @@ migrate_dir() {
             unknown=$((unknown+1)); continue
         fi
         if [[ $stem =~ __b[0-9a-f]{12}$ ]]; then
-            # Already fingerprinted: this run's oracle (idempotent re-run) or
-            # another one's (left alone — it is that oracle's evidence).
+            # Upgrade this binary's former size+mtime key. Other binaries'
+            # entries remain their evidence and are never relabelled.
             if [ "$stem" = "${stem%__b*}__b$HS_FP_SALT" ]; then already=$((already+1))
+            elif [ "$stem" = "${stem%__b*}__b$HS_FP_LEGACY_SALT" ]; then
+                new="$dir/${stem%__b*}__b${HS_FP_SALT}.${suffix}"
+                if [ -e "$new" ]; then collide=$((collide+1))
+                elif [ -n "$DRY_RUN" ]; then upgraded=$((upgraded+1))
+                elif mv -n "$p" "$new"; then upgraded=$((upgraded+1))
+                else failed=$((failed+1)); fi
             else other=$((other+1)); fi
             continue
         fi
@@ -125,12 +100,37 @@ migrate_dir() {
         if mv -n "$p" "$new"; then moved=$((moved+1)); else failed=$((failed+1)); fi
     done
     shopt -u nullglob
-    printf '  %-18s migrated=%-5d already=%-5d other-oracle=%-4d collided=%-3d unrecognised=%-3d failed=%d\n' \
-        "$(basename "$dir")" "$moved" "$already" "$other" "$collide" "$unknown" "$failed"
+    printf '  %-18s migrated=%-5d upgraded=%-5d already=%-5d other-oracle=%-4d collided=%-3d unrecognised=%-3d failed=%d\n' \
+        "$(basename "$dir")" "$moved" "$upgraded" "$already" "$other" "$collide" "$unknown" "$failed"
     [ "$collide" = 0 ] || echo "      NOTE: $collide entr(ies) already existed under the new key; the" \
         "fingerprinted one wins and the old-key file is now unreachable — delete at leisure."
     [ "$failed" = 0 ] || { echo "      ERROR: $failed rename(s) failed" >&2; return 1; }
     return 0
+}
+
+migrate_web_sidecars() {
+    local dir="$script_dir/.web_hs_cache" p value upgraded=0 already=0 other=0 failed=0
+    [ -d "$dir" ] || return 0
+    shopt -s nullglob
+    for p in "$dir"/*.hs.fp; do
+        value=$(cat "$p" 2>/dev/null) || { failed=$((failed+1)); continue; }
+        if [ "$value" = "$HS_FP" ]; then
+            already=$((already+1))
+        elif [ "$value" = "$HS_FP_LEGACY" ]; then
+            if [ -n "$DRY_RUN" ]; then upgraded=$((upgraded+1))
+            elif printf '%s\n' "$HS_FP" > "$p.tmp.$$" && mv "$p.tmp.$$" "$p"; then
+                upgraded=$((upgraded+1))
+            else
+                rm -f "$p.tmp.$$"; failed=$((failed+1))
+            fi
+        else
+            other=$((other+1))
+        fi
+    done
+    shopt -u nullglob
+    printf '  %-18s upgraded=%-5d already=%-5d other-oracle=%-4d failed=%d\n' \
+        ".web_hs_cache" "$upgraded" "$already" "$other" "$failed"
+    [ "$failed" = 0 ]
 }
 
 CACHES="${CACHES:-$script_dir/.hs_file_cache $script_dir/.hs_pretty_cache $script_dir/.hs_canon_cache}"
@@ -143,6 +143,7 @@ for d in $CACHES; do
     # exactly the pin) and nothing reads it now.  Reported, not deleted.
     [ -f "$d/.oracle_rev" ] && echo "      NOTE: $d/.oracle_rev is the retired oracle-rev stamp — no longer read; safe to delete."
 done
+migrate_web_sidecars || rc=1
 echo
 echo "DONE_MIGRATE_HS_CACHE_FP verdict=$([ "$rc" = 0 ] && echo OK || echo FAILED)"
 exit "$rc"

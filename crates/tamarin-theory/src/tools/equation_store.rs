@@ -1765,12 +1765,9 @@ impl EquationStore {
         let new_subst = asubst.compose(&self.subst);
 
         // TAM_RS_DBG_APPLY_EQ_STORE=1: dump every call's asubst, IN/OUT
-        // disjs, per-variant applyBound input/output.  Pair with HS's
-        // TAM_HS_DBG_APPLY_EQ_STORE for HS↔Rust diffing of variant flow.
-        // Every call ticks (including precompute) so call counts can be
-        // compared apples-to-apples against HS.
+        // disjs, and per-variant applyBound input/output.
         // TAM_RS_DBG_APPLY_EQ_STORE_FILTER=substantive limits dump to
-        // calls with non-empty conj (matches HS's substantive filter).
+        // calls with non-empty conj.
         let rs_dbg = aes_dbg();
         let rs_dbg_filter_substantive = aes_dbg_filter_substantive();
         let rs_substantive = self.conj.iter().any(|d| !d.substs.is_empty());

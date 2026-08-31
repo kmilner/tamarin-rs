@@ -686,7 +686,7 @@ pub(crate) fn render_sub_proof_snippet(
     tamarin_theory::pretty_hpj::postprocess_html(&parts.join("\n"))
 }
 
-/// Mirror of Haskell `nonEmptyGraph` (`System.hs:1926-1930`):
+/// Mirror of Haskell `nonEmptyGraph` (`System.hs:1928-1932`):
 ///
 /// ```text
 /// nonEmptyGraph sys = not $
@@ -698,7 +698,7 @@ pub(crate) fn render_sub_proof_snippet(
 /// i.e. the dotted graph is non-empty iff ANY of: nodes, unsolved
 /// action atoms, unsolved chains, edges, or less-atoms is present.
 /// `unsolvedActionAtoms` / `unsolvedChains` are the unsolved-status
-/// `ActionG` / `ChainG` goals (`System.hs:1567-1571,1600-1604`).
+/// `ActionG` / `ChainG` goals (`System.hs:1569-1573,1602-1606`).
 fn has_graph_content(sys: &System) -> bool {
     if !sys.nodes.is_empty() || !sys.edges.is_empty() || !sys.less_atoms.is_empty() {
         return true;

@@ -25,10 +25,10 @@ Five, all gitignored, none keyed alike:
 | `.hs_file_cache/` | `corpus_file_diff.sh` | theory sha + every `#include`d file's sha + oracle-script digest + flags hash + **oracle-binary fingerprint**; the oracle's exit status sits beside each entry as `.rc` |
 | `.hs_pretty_cache/` | `pretty_gate.sh` and `wf_gate.sh` (either fills `.load.gz`; `pretty_gate.sh` derives `.theory.gz` from it) | theory sha + every `#include`d file's sha + oracle-script digest + flags hash + **oracle-binary fingerprint** |
 | `.web_hs_cache/` | `web_parity.sh` writes; `pane_byte_check.sh` reads | profile = **oracle + Maude binary SHA-256 + crawl plan/settings**; entry = theory + transitive includes + oracle scripts |
-| `.hs_canon_cache/` | `diff_proof_raw.sh`, `corpus_raw_diff.sh`, `corpus_full_trace_diff.sh` (one key form; flagless entries are exchanged, a `diff_proof_raw.sh` run with canonical flags salts `__f` and stays distinct) | theory sha + every `#include`d file's sha + oracle-script digest + lemma + cache version + **oracle-binary fingerprint** |
+| `.hs_canon_cache/` | `diff_proof_raw.sh` and `corpus_raw_diff.sh` (one key form; flagless entries are exchanged, a `diff_proof_raw.sh` run with canonical flags salts `__f` and stays distinct) | theory sha + every `#include`d file's sha + oracle-script digest + lemma + cache version + **oracle-binary fingerprint** |
 | `.hs_sweep_cache/` | the three flag sweeps | theory sha + every `#include`d file's sha + oracle-script digest + flags + **oracle-binary fingerprint** + the RESOLVED maude's path (so a sweep pointed at a different maude misses rather than reusing) |
 
-The general oracle-binary fingerprint is `stat -c '%s.%Y'` of the HS binary
+The oracle-binary fingerprint is the HS binary's SHA-256
 (`gate_common.sh`'s `hs_fingerprint`, the one definition every cached gate
 sources), so a rebuilt oracle — bump or patch rebuild alike — turns every
 pre-rebuild entry into a clean MISS instead of a silently stale hit. The web
@@ -44,14 +44,26 @@ atomically, so fills and readers may run concurrently across worktrees.
 override; `WEB_CACHE_ROOT=` moves the whole profile pool. Nothing is archived
 or wiped, and
 `bump_submodule.sh` deliberately leaves the caches alone.
-`scripts/migrate_hs_cache_fp.sh` is the one-time rename of pre-fingerprint
-entries onto the new keys. Every cache digests included files and executable
-oracle inputs; the web cache stages both through one helper.
+`./setup.sh testing` also stamps the binary with the submodule pin, the
+ordered patch-series SHA-256 and the binary SHA-256, both beside the executable
+and at a fixed `.stack-work/` location. Comparing gates can therefore verify a
+byte-identical `HS_PATH` copy while rejecting an arbitrary dirty-tree rebuild
+at the right base commit.
+`scripts/migrate_hs_cache_fp.sh` is the idempotent rename of pre-fingerprint
+and former size+mtime entries onto the current binary-SHA keys; it also
+updates matching web-cache fingerprint sidecars. Sweep entries use hashed
+directories, so `sweep_common.sh` promotes their legacy key on first read.
+All five caches digest transitive `#include` inputs and executable oracle
+inputs. Entries without either dependency retain their old dependency
+components, preserving the bulk of the expensive existing corpus cache. The
+web cache stages both dependency classes through one helper shared by both
+consumers.
 
 `gate_common.sh` owns the shared plumbing: the OOM prologue, the three
 environment-line strip policies (`strip_env` deletes all four volatile lines,
 `strip_env_lines` keeps `analyzed:` for the triage tools, `norm` blanks to
-placeholders for the sweeps), `flags_for`/`include_shas`/`oracle_shas`/`ckey`, `hs_fingerprint`,
+placeholders for the sweeps), `flags_for`/`include_shas`/
+`oracle_shas`/`ckey`, `binary_sha256`/`hs_fingerprint`,
 `allowlist_guard` + the gate `filelist`, `rs_stale_check`, `oracle_rev_check`,
 the Haskell-oracle resolver and the maude resolver — `MAUDE_PATH` if set
 (set-but-unusable is a hard fail,
@@ -61,13 +73,13 @@ prepends the RESOLVED binary's own directory, so an operator's maude wins over
 linuxbrew instead of being overridden by it. Every gate here sources it, the
 three flag sweeps through `sweep_common.sh`, and so do the cache-touching
 triage tools (`diff_proof_raw.sh`, `corpus_raw_diff.sh`,
-`corpus_full_trace_diff.sh`, `triage_diff_vs_hs.sh`) plus
+`triage_diff_vs_hs.sh`) plus
 `capture_cli_refs.sh` and `migrate_hs_cache_fp.sh`; a consumer that cannot
 read it exits 2 rather than falling back to a private copy. The
 `proof_diff_common.sh` additionally owns the one `.hs_canon_cache` key and
 nested-comment-aware lemma scanner shared by the raw and canonical proof-diff
-tools. The remaining structural helpers (`corpus_diff_proof_trees.sh`,
-`diff_aes_calls.sh`) and `divergence_fixtures/_common.sh` keep their own small
+tools. The remaining structural helper (`corpus_diff_proof_trees.sh`) and
+`divergence_fixtures/_common.sh` keep their own small
 setups.
 
 Two consumers deliberately do NOT use the shared maude resolver:
@@ -181,7 +193,7 @@ a rename-only migration.
   RS-vs-RS log are refused by name), and carries `files=<n>` covering at
   least every file being baselined (so a `FAMILY=1`/scoped-`ALLOWLIST` OK
   cannot certify the unscoped corpus); its path/verdict plus the oracle
-  fingerprint — revision-checked against the submodule pin via
+  fingerprint — checked against the submodule pin and ordered patch series via
   `oracle_rev_check` — are stamped into the reference header. The reference still comes from main's
   own binary, so `check` is an RS-vs-RS self-consistency check, not an
   oracle comparison — and since it is the only parity gate CI runs besides
@@ -196,10 +208,10 @@ a rename-only migration.
   a stale `target/release` binary aborts the run (`ALLOW_STALE_BIN=1`
   overrides), where "stale" spans cargo's whole dep-info list, not just
   `crates/**/*.rs` — `tamarin-prover/data/intruder_variants_{dh,bp}.spthy`
-  are `include_str!`ed into the binary. An oracle whose baked git revision is
-  not the submodule pin is refused up front (`ALLOW_ORACLE_REV_MISMATCH=1`
-  overrides), the same policy `divergence_fixtures/capture.sh` applies to its
-  captures. Documented residuals live in `sweep_expected.tsv` and report
+  are `include_str!`ed into the binary. An oracle not attested as the
+  `setup.sh` build of the submodule pin plus current patch series is refused
+  up front (`ALLOW_ORACLE_REV_MISMATCH=1` overrides). Documented residuals
+  live in `sweep_expected.tsv` and report
   as LEDGERED — any bare DIFF/ERROR row is a regression, and an entry that
   has stopped excusing anything is called out on stderr (LEDGER-STALE /
   LEDGER-UNMATCHED / LEDGER-DUP) AND counted into the verdict, so it gets
@@ -268,10 +280,9 @@ a rename-only migration.
   triage tool, not a finding.
 
   Both carry the gates' OOM prologue (`oom_score_adj=1000` plus a 24 GiB
-  `ulimit -v`, inherited by every prover child), as do
-  `corpus_full_trace_diff.sh` and `triage_diff_vs_hs.sh`: a prover that
-  outgrows the cap dies alone — in the two corpus sweeps as a `SKIP_RS_ERR`
-  row — instead of taking the session with it.
+  `ulimit -v`, inherited by every prover child), as does
+  `triage_diff_vs_hs.sh`: a prover that outgrows the cap dies alone — in the
+  corpus sweep as a `SKIP_RS_ERR` row — instead of taking the session with it.
 - **`compare_parity_tsv.py`** — diff two `corpus_raw_diff` TSVs to list
   regressions/improvements between two runs.
 - **`rs_vs_rs_diff.sh`** — sweep TWO Rust binaries (pre/post refactor, via
@@ -298,13 +309,6 @@ a rename-only migration.
   binary is required even on a warm cache — its fingerprint is part of the key
   — and missing is `exit 2`. Env: `PRE`, `POST`, `HS`, `CACHE`, `FLAGS_MAP`,
   `FT` (300 s), `DERIV` (30 s), `CORPUS`, `ROOT`.
-- **`diff_maude_io.sh`** — side-by-side HS↔RS Maude command/response trace
-  for one lemma (needs the trace-instrumented builds).
-- **`diff_aes_calls.sh`** — compare `apply_eq_store` call counts per labeled
-  site between engines; deep-solver flow triage.
-- **`corpus_full_trace_diff.sh`** — canonicalized proof-tree diffing for
-  every lemma across the corpus; the most detailed comparison, for locating
-  the exact solver step where two runs diverge.
 - **`diff_proof_tree.sh`** + **`canon_proof_tree.py`** +
   **`corpus_diff_proof_trees.sh`** — STRUCTURAL proof-tree comparison from
   the pre-byte-parity era; superseded by the byte gates (identical bytes ⇒
@@ -313,28 +317,26 @@ a rename-only migration.
 
 ## Maintenance & measurement
 
-- **`bump_submodule.sh`** — submodule bump workflow: rebases
-  `patches/tamarin-prover-fixes.patch`, rebuilds the oracle, remaps HS line
-  cites across `crates/`, and prints the 6-step re-certification checklist
-  (batch gate, web ladder, divergence fixtures, and — step 5 — re-capturing
-  the tamarin-server HTTP fixtures, which re-stamps their `oracle_rev` and
-  without which `cargo test -p tamarin-server` goes red). The gate caches are
-  deliberately left alone (see the fingerprint note above — a rebuilt oracle
-  turns every pre-bump entry into a MISS by key). `-h` prints its header; it
+- **`bump_submodule.sh`** — submodule bump workflow: checks each entry in
+  `patches/series`, rebuilds the oracle, refreshes the tamarin-server HTTP
+  captures, remaps HS line cites across `crates/`, and prints a six-step
+  re-certification checklist covering the divergence and CLI captures,
+  batch/fast/flag gates, server tests, and web ladder. `SKIP_BUILD=1` also
+  skips the HTTP capture and warns that it must be run explicitly. The gate
+  caches are deliberately left alone (see the fingerprint note above — a
+  rebuilt oracle turns every pre-bump entry into a MISS by key). `-h` prints its header; it
   and `divergence_fixtures/check.sh` are the only scripts here that answer one,
   so everywhere else the header comment is the interface.
-- **`migrate_hs_cache_fp.sh`** — the ONE-TIME, idempotent re-keying of
+- **`migrate_hs_cache_fp.sh`** — idempotent re-keying of
   `.hs_file_cache/`, `.hs_pretty_cache/` and `.hs_canon_cache/` onto the
-  fingerprint-bearing names (see the cache section above). `mv` only: it never
-  runs the oracle and never writes cache content. Run it once, before the next
-  gate run, or those gates regenerate everything from scratch. It exits 2 unless the checked-out oracle
-  is the submodule pin — that premise is what makes adopting the old entries
-  legitimate — with `ALLOW_ORACLE_REV_MISMATCH=1` to override and `DRY_RUN=1`
-  to report without moving; `HS_PATH` and `CACHES` select what it looks at,
-  and `MAUDE_PATH` (default: the linuxbrew install) feeds the revision probe
-  alone — an unreachable maude prints `oracle revision: NOT CHECKED` instead
-  of blocking a rename-only migration. Per cache it prints migrated / already
-  / other-oracle / collided / unrecognised / failed counts, reports a leftover
+  binary-SHA names and upgrades matching web fingerprint sidecars (see the
+  cache section above). It never runs the oracle or rewrites captured output.
+  Run it before the next gate, or those gates regenerate everything from
+  scratch. It exits 2 unless the oracle's setup attestation matches the pin
+  and patch series, with `ALLOW_ORACLE_REV_MISMATCH=1` to override and
+  `DRY_RUN=1` to report without moving. Per cache it prints migrated / upgraded
+  / already / other-oracle / collided / unrecognised / failed counts, reports
+  a leftover
   `.oracle_rev` stamp as safe to delete, and ends in
   `DONE_MIGRATE_HS_CACHE_FP verdict=OK|FAILED` (exit 1
   on a failed rename).
@@ -409,10 +411,10 @@ a rename-only migration.
 
 `divergence_fixtures/` covers observable behaviour that no theory under the
 submodule's `examples/` tree exercises, so every corpus gate stays green
-across a regression in it. These fixtures pin slice-level bytes — including
-one deliberate divergence, which the MATCH-only corpus gates cannot express —
-against oracle captures committed in-tree, so the check needs no oracle
-binary.
+across a regression in it. These fixtures pin slice-level bytes against oracle
+captures committed in-tree, so the check needs no oracle binary. The manifest
+can also record an intentional divergence when one exists; currently every row
+must match.
 
 - **`divergence_fixtures/capture.sh`** — records the oracle's bytes for every
   fixture into `divergence_fixtures/expected/`. It resolves the oracle inside
@@ -421,14 +423,14 @@ binary.
   `crates/tamarin-server/tests/capture_haskell_fixtures.sh`): these bytes are
   the reference, so a capture from another revision would silently redefine
   what the port is checked against. `--record-rs` additionally re-records the
-  port side of the deliberate-divergence fixture — never a side effect.
+  port side of any manifest row marked `diverge` — never a side effect.
 - **`divergence_fixtures/check.sh`** — runs only the port and compares against
-  those captures. Cheap (~5 s for all 19: no oracle, no proving), which is why
+  those captures. Cheap (~5–10 s for all 55: no oracle, no proving), which is why
   CI runs it: the `test` job's `Divergence fixtures` step builds
   `--profile ci --bin tamarin-rs`, prepends `/opt/maude` to `PATH` (the port's
   own probe does not read `MAUDE_PATH`) and invokes it with an absolute
-  `RS_PATH`, so a drift on any fixture, a lost AC-marker divergence, or an
-  `expected/oracle_rev` that is not the current submodule pin fails the build.
+  `RS_PATH`, so a drift on any fixture or an `expected/oracle_rev` that is not
+  the current submodule pin fails the build.
   It is not reachable by `cargo test` or by any corpus gate, so run it by hand
   too, next to `wf_gate.sh` and `pretty_gate.sh`.
 - **`divergence_fixtures/fixtures.tsv`** — per fixture: which output slices are
@@ -477,9 +479,8 @@ Today's fixtures, in manifest order:
   restriction of rules` check, one rule each: a product in a conclusion, and a
   reducible left-hand side whose abstraction orphans right-hand-side variables.
   The same rule is printed at two different widths in the two slices.
-- **`ac_marker_collapse`** — a `tamXCA…`-named function, where the port
-  deliberately diverges from upstream — see
-  `~/upstream-bug-ac-marker-collapse.md`.
+- **`ac_marker_collapse`** — a `tamXCA…`-named function, pinning the corrected
+  upstream handling of singleton user-AC applications.
 - **`dual_declared_names`** — one name declared BOTH as a NoEq funsym and as a
   user `[AC]` symbol: the prefix and `op{a}b` spellings resolve NoEq, the infix
   spelling stays AC, and a bare nullary name the NoEq constant.
@@ -499,9 +500,9 @@ Today's fixtures, in manifest order:
   a use between the two declarations and a use after both: prefix resolution
   reads the signature built so far, so the two uses render differently.
 
-All but `ac_marker_collapse` must reproduce the pinned oracle's bytes; that one
-must NOT. `check.sh` asserts BOTH sides of it, so it goes red if the port
-drifts, if the divergence disappears, or if it changes shape.
+Every current fixture must reproduce the pinned oracle's bytes. `check.sh`
+still requires an explicit shape assertion before any future intentional
+divergence can be added.
 
 `bump_submodule.sh`'s checklist lists both scripts: `capture.sh` re-reads the
 fixtures from the new oracle, and `git diff divergence_fixtures/expected/` is

@@ -370,7 +370,7 @@ pub(crate) fn compute_basic_graph_repr(sys: &System) -> GraphRepr {
     // unsolved ActionG goal, HS emits BOTH a SystemNode and an
     // UnsolvedActionNode.  So there is no skip-if-already-a-system-node guard.
     //
-    // `unsolvedActionAtoms` (System.hs:1567-1571) walks `M.toList sGoals`, so
+    // `unsolvedActionAtoms` (System.hs:1569-1573) walks `M.toList sGoals`, so
     // its action goals arrive in ascending `Goal` order; this crate's goal
     // store is a `Vec` in insertion order, so sort by `Ord Goal` first.
     // Filtering an `Ord`-sorted list down to one constructor yields the
@@ -453,7 +453,7 @@ pub(crate) fn compute_basic_graph_repr(sys: &System) -> GraphRepr {
     for la in sorted_less {
         edges.push(GEdge::Less(la.clone()));
     }
-    // HS `unsolvedChains` (System.hs:1600-1604) walks `M.toList sGoals`, so
+    // HS `unsolvedChains` (System.hs:1602-1606) walks `M.toList sGoals`, so
     // its chain goals arrive in ascending `Goal` order — see step 2 for why
     // sorting the filtered subset reproduces that.  `Ord` on the
     // `(NodeConc, NodePrem)` pair is exactly `Ord Goal`'s `Chain` arm, so

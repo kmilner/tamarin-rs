@@ -493,7 +493,7 @@ fn exploit_unique_msg_order(red: &mut Reduction) {
         return;
     }
     // Collect KU-action (term, node) pairs.  Haskell `allActions`
-    // (System.hs:1575-1579) combines `unsolvedActionAtoms` with `rule.acts`
+    // (System.hs:1577-1581) combines `unsolvedActionAtoms` with `rule.acts`
     // — so we MUST include open Action goals here, not just rule
     // actions.  Without this, KU goals added by existential atom
     // decomposition (e.g. `∃ #j. KU(t) @ j`) don't participate in
@@ -727,7 +727,7 @@ fn partial_atom_valuation_with(
             _ => false,
         }
     };
-    // HS-faithful `isInTrace` (System.hs:1641-1645):
+    // HS-faithful `isInTrace` (System.hs:1643-1647):
     //   isInTrace sys i =
     //        i `M.member` sNodes
     //     || isLast sys i
@@ -1043,7 +1043,7 @@ fn insert_implied_formulas_pass(red: &mut Reduction) -> ChangeIndicator {
     use crate::guarded::Guarded;
     use tamarin_term::lterm::{LNTerm, LVar};
 
-    // Mirror Haskell `impliedFormulas` (System.hs:1111-1121): `openGuarded gf`
+    // Mirror Haskell `impliedFormulas` (System.hs:1113-1123): `openGuarded gf`
     // returns `Just (All, vs, antecedent, succedent)` for ANY `GGuarded All`
     // formula — including those with empty `vs`.  Such empty-var universals
     // can arise as residuals (e.g. `gall [] otherAtoms succedent` from a
@@ -1102,7 +1102,7 @@ fn insert_implied_formulas_pass(red: &mut Reduction) -> ChangeIndicator {
     }
 
     // Collect all actions from the trace, mirroring Haskell's
-    // `allActions` (`System.hs:1575-1579`):
+    // `allActions` (`System.hs:1577-1581`):
     //
     //   allActions sys =
     //       unsolvedActionAtoms sys
@@ -1185,7 +1185,7 @@ fn insert_implied_formulas_pass(red: &mut Reduction) -> ChangeIndicator {
     let dedup_tables = ImpliedDedupTables::new(&red.sys);
     for (vars, guards, body) in &universals {
         // Mirrors Haskell's `impliedFormulas`'s `prepare` partition
-        // (`System.hs:1124-1126`): Action and Eq atoms drive matching,
+        // (`System.hs:1126-1128`): Action and Eq atoms drive matching,
         // everything else is carried as a non-Action precondition.
         //
         // Haskell sorts driving guards via `sortGAtoms`
@@ -1587,7 +1587,7 @@ fn try_match_all_guards(
         }
         match guards[guard_idx] {
             ProtoAtom::Action(g_time, g_fact) => {
-                // Haskell `applySkAction subst (a, fa)` (System.hs:1110-1144, see line 1133):
+                // Haskell `applySkAction subst (a, fa)` (System.hs:1112-1146, see line 1135):
                 // apply the accumulated `subst` to the guard's pattern
                 // BEFORE matching, so multi-guard universals where one
                 // guard binds a variable used by a later guard propagate
@@ -1613,7 +1613,7 @@ fn try_match_all_guards(
                     }
                     // HS-faithful: AC matching can yield multiple matchers
                     // per (sys_action, pattern) pair. HS's `candidateSubsts`
-                    // (System.hs:1131-1135) iterates them via the list monad
+                    // (System.hs:1133-1137) iterates them via the list monad
                     // — each match becomes its own candidate substitution.
                     let substs_here = match_atom_via_maude(
                         maude,
@@ -1648,7 +1648,7 @@ fn try_match_all_guards(
             }
             ProtoAtom::EqE(s, t) => {
                 // Mirrors Haskell's `candidateSubsts subst ((GEqE s' t'):as)`
-                // (`System.hs:1136-1145`).  Apply current substitution
+                // (`System.hs:1138-1147`).  Apply current substitution
                 // to both sides; pick whichever side has no remaining
                 // pattern vars as the subject (it's "ground" wrt the
                 // matching context); the other side is the pattern.
@@ -1661,7 +1661,7 @@ fn try_match_all_guards(
                 let (pat_term, subj_term) = match (s_has_pat, t_has_pat) {
                     // Both ground (no pattern vars).  HS-faithful: mirrors
                     // `matchTerm term pat` in `impliedFormulas`
-                    // (System.hs:1136-1145).  HS skolemizes universals
+                    // (System.hs:1138-1147).  HS skolemizes universals
                     // before matching, so system vars become SkConst —
                     // `null $ frees s` is true and matchTerm runs on
                     // structurally-fixed terms, returning the EMPTY subst
@@ -1719,7 +1719,7 @@ fn try_match_all_guards(
                 // `match_atom_via_maude` already does for Action-guard
                 // matching, but with BOTH sides skolemized (mirroring
                 // HS's `skolemizeGuarded gf0` step in `impliedFormulas`
-                // at System.hs:1110-1144, see line 1121).  HS skolemizes both pattern and
+                // at System.hs:1112-1146, see line 1123).  HS skolemizes both pattern and
                 // subject so co-occurring free system vars (e.g. `y`
                 // in both `(y++z) = ('1'++y++h(y))`) map to the same
                 // constant; skolemizing the subject alone would leave
@@ -1729,7 +1729,7 @@ fn try_match_all_guards(
                 //
                 // Each Maude matcher becomes its own continuation,
                 // mirroring HS's `candidateSubsts` list-monad iteration
-                // (System.hs:1136-1145):
+                // (System.hs:1138-1147):
                 //   subst' <- (`runReader` hnd) $ matchTerm term pat
                 //   candidateSubsts (compose subst' subst) as
                 //
@@ -1975,7 +1975,7 @@ fn structural_match(
         // `(_, Lit (Var vp))` (`Unification.hs:340-347`) — checked
         // FIRST, so an AC-headed subject under a pattern var is bound
         // natively (never `NeedsAc`).  After `skolemizeGuarded`
-        // (System.hs:1110-1144, see line 1121 + Guarded.hs:743-744) the universal's bound
+        // (System.hs:1112-1146, see line 1123 + Guarded.hs:743-744) the universal's bound
         // vars remain `Var`; free system vars become `SkConst`.
         (Term::Lit(Lit::Var(pv)), _) if pattern_vars.contains(&(pv.name, pv.idx)) => {
             let subj_sort = tamarin_term::lterm::sort_of_lnterm(subj);
@@ -2174,12 +2174,12 @@ fn match_atom_via_maude(
             // and the search enumerates spurious Sessionkey_Reveal cases.
             //
             // HS-faithful skolemization (CRITICAL): HS's `impliedFormulas`
-            // (`System.hs:1110-1144, see line 1111,1121`) runs `gf = skolemizeGuarded gf0`, which
+            // (`System.hs:1112-1146, see line 1113,1123`) runs `gf = skolemizeGuarded gf0`, which
             // turns EVERY free LVar of the guarded clause into `Con (SkConst
             // v)` — a Maude *constant* (`lTermToMTerm` ⇒ `MaudeConst`,
             // `Maude/Types.hs:74-85, see line 85`) — while the universal's BOUND vars,
             // instantiated by `openGuarded`, stay `Var lv` ⇒ `MaudeVar`
-            // (bindable).  `sysActions` (`System.hs:1127-1128`) likewise
+            // (bindable).  `sysActions` (`System.hs:1129-1130`) likewise
             // `skolemizeTerm`s the system action, so its vars are also
             // `SkConst`.  So in HS's `matchAction sysAct (guard)` the PATTERN's
             // free (non-universal) vars are GROUND CONSTANTS, not bindable.
@@ -2206,7 +2206,7 @@ fn match_atom_via_maude(
             // HS-faithful: Maude's AC `match` can return MULTIPLE matchers
             // for a single pattern/subject pair (e.g. `match Union(a,x) <=?
             // Union(b,c)` yields both `{a:=b, x:=c}` and `{a:=c, x:=b}`).
-            // HS's `candidateSubsts` (System.hs:1131-1135) iterates them via
+            // HS's `candidateSubsts` (System.hs:1133-1137) iterates them via
             // the list monad:
             //   subst' <- (`runReader` hnd) $ matchAction sysAct ...
             //   candidateSubsts (compose subst' subst) as
@@ -2520,7 +2520,7 @@ fn enforce_ku_action_uniqueness_pass(red: &mut Reduction) -> ChangeIndicator {
     let subst = &red.sys.eq_store.subst;
     let apply_subst = |t: &LNTerm| -> LNTerm { tamarin_term::subst::apply_vterm(subst, t.clone()) };
     // HS-faithful order: `allActions = unsolvedActionAtoms sys <|>
-    // <rule actions>` (System.hs:1575-1579).  Goals come FIRST so
+    // <rule actions>` (System.hs:1577-1581).  Goals come FIRST so
     // that `groupSortOn fst` keeps a goal's NodeId as `iKeep` and
     // emits `solveTermEqs [iKeep = rule_node_id]` — meaning the
     // rule node is renamed onto the goal's id, NOT vice versa.

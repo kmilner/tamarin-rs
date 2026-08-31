@@ -62,11 +62,9 @@ crates/            the Rust port (crate breakdown below)
 scripts/           parity gates, benchmarks, and divergence-debugging harnesses
 tests/             wellformedness fixture corpus
 patches/
-  tamarin-prover-fixes.patch   local Haskell fixes not yet upstream —
-                               stored-formula normalisation / gconj
-                               idempotence, assorted solver and
-                               equation-store fixes, and the solver-trace
-                               instrumentation the diff harnesses depend on
+  series                       ordered list of one Haskell patch per
+                               not-yet-merged upstream PR
+  tamarin-prover-pr-*.patch    patches applied to the testing oracle
 tamarin-prover/    upstream submodule, pinned to a known-good commit and kept
                    PRISTINE — holds the canonical Haskell sources, the
                    examples/ corpus, and the web data/ assets
@@ -89,9 +87,9 @@ embeds `tamarin-prover/data/intruder_variants_dh.spthy` and
 submodule's `data/` assets at runtime, and the tests read the
 `tamarin-prover/examples/` corpus. The submodule working tree is never
 modified, so tracking upstream is an ordinary submodule bump —
-`scripts/bump_submodule.sh` automates it (rebases the patch onto the new pin,
-rebuilds the oracle, archives the now-stale gate caches, and prints the
-verification checklist; `--check` dry-runs the patch rebase first).
+`scripts/bump_submodule.sh` automates it (checks each PR patch against the new
+pin, rebuilds the oracle, leaves fingerprinted old cache entries safely in
+place, and prints the verification checklist; `--check` changes nothing).
 
 The release profile uses `lto = "fat"` and `codegen-units = 1`.
 
@@ -103,11 +101,12 @@ Rust build itself:
 ```
 
 This materialises a git worktree of the pinned commit at
-`tamarin-prover-testing/`, applies `patches/tamarin-prover-fixes.patch` there
-(the submodule itself stays untouched), and builds it with stack. When needed,
-the testing worktree is reset to the current branch's pin; ignored
-`.stack-work/` artifacts remain as the compiler cache. The parity
-scripts discover that binary automatically; `HS_PATH=<binary>` overrides.
+`tamarin-prover-testing/`, applies the files in `patches/series` there (the
+submodule itself stays untouched), and builds it with stack. When needed, the
+testing worktree is reset to the current branch's pin; ignored `.stack-work/`
+artifacts remain as the compiler cache. The parity scripts discover that
+binary automatically; `HS_PATH=<binary>` overrides, and byte-identical copies
+are verified against setup's fixed `.stack-work/` attestation.
 
 ## Parity status
 
@@ -407,6 +406,6 @@ So, in summary:
   granted permission for relicensing by the related authors. This is indicated
   by comments at the top of those files. THE BINARY YOU BUILD IS GPL 3.0.
 - The `tamarin-prover/` submodule is a separate upstream project licensed under
-  GPL 3.0 (see `tamarin-prover/LICENSE`). `patches/tamarin-prover-fixes.patch`
-  modifies those GPL 3 sources and is therefore itself GPL-3.
+  GPL 3.0 (see `tamarin-prover/LICENSE`). The files under `patches/` modify
+  those GPL 3 sources and are therefore themselves GPL-3.
 - None of this is legal advice, consult a lawyer.

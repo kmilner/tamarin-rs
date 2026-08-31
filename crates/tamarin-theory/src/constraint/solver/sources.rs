@@ -262,7 +262,7 @@ impl IntegerParameters {
 }
 
 /// Number of unsolved-chain constraints in the system. Mirrors
-/// `length . unsolvedChains` (System.hs:1601-1605), counting unsolved Chain
+/// `length . unsolvedChains` (System.hs:1603-1607), counting unsolved Chain
 /// goals in one System. (Distinct from Haskell `unsolvedChainConstraints
 /// :: Source -> [Int]` at Sources.hs:87-89, which maps over a Source's
 /// cases.)
@@ -861,7 +861,7 @@ fn ku_source_label_for_fa(fa: &crate::fact::LNFact) -> Option<String> {
 /// `matchToGoal` rename + `refineSource` seed:
 ///
 /// * `.0` = `boundsVarIdx th0` MIN (`matchToGoal`, Sources.hs:268-317, see line 307,
-///   under `instance HasFrees Source`, System.hs:1879-1889: `cdGoal`
+///   under `instance HasFrees Source`, System.hs:1881-1891: `cdGoal`
 ///   pattern + ALL `cdCases`) — the rename's rebase origin.
 /// * `.1` = the CASES-only MAX — feeds `fs = avoid th`
 ///   (Sources.hs:113-137, see line 128) where
@@ -1003,7 +1003,7 @@ fn system_max_idx(sys: &System) -> u64 {
             }
         }
     }
-    // Subterm-store: HS `instance HasFrees System` (System.hs:1833-1847)
+    // Subterm-store: HS `instance HasFrees System` (System.hs:1835-1849)
     // folds over the subterm store too, so vars living only here must be
     // covered or a later freshen/reserve can collide with them.
     for sc in sys
@@ -2481,7 +2481,7 @@ pub fn solve_with_source_cases_ctx(
 /// draws `freshStart` from the fresh supply; saturation runs outside a
 /// `Reduction`, so the caller's bounds ceiling stands in for it.
 ///
-/// The shift runs over `instance HasFrees System` (System.hs:1864-1877), so it
+/// The shift runs over `instance HasFrees System` (System.hs:1866-1879), so it
 /// reaches every field that instance walks — the goal store's disjunctions and
 /// subterm pairs (Constraints.hs:226-232) and the subterm store's negative
 /// subterms (SubtermStore.hs:552-557) included — and leaves the ranges of the
@@ -2961,7 +2961,7 @@ fn rename_system_by(sys: &System, shift_amount: i128) -> System {
 ///
 /// `someInst` (LTerm.hs:627-632) is `mapFrees (Arbitrary importBinding)`, so
 /// the index a variable gets is decided by where `instance HasFrees System`
-/// (System.hs:1832-1877) first reaches it, and every index is drawn from the
+/// (System.hs:1834-1879) first reaches it, and every index is drawn from the
 /// step's own `MonadFresh` — here the Maude handle whose counter the live
 /// `Reduction` threads.  `keep` is HS's `frees goal`, seeded into the store as
 /// identity bindings that `importBinding` finds and reuses instead of drawing
@@ -3468,8 +3468,8 @@ fn refine_source_case(
         // branch's someInst starts where HS's DisjT-forked branch does
         // (see `fork_base` param doc).  Without the rewind, sibling
         // (case × arm) branches thread each other's import draws: on
-        // csf18-xor/CH07's KU(lh(...)) pick, HS runs c_lh 4→5 and tag1
-        // 4→18 (TAM_HS_TRACE_APPLY_SRC freshBefore=4 for BOTH), while RS
+        // csf18-xor/CH07's KU(lh(...)) pick, prior lockstep traces showed HS
+        // runs c_lh 4→5 and tag1 4→18 from the same fork base, while RS
         // ran c_lh 4→5 then tag1 5→19 — every tag1-branch var +1, which
         // the eq-store witness mints (avoid-set-derived) then compound
         // into the growing ∃-witness drift on the web proof pages.
@@ -4493,7 +4493,7 @@ fn var_occurrences_nodes(
 ///   3. `renameDropNamehint (orderedVars sys)` imports the non-`Node` variables
 ///      of `varOccurences sys` in occurrence-set order first.
 ///   4. `renameDropNamehint sys` imports the rest, in the order
-///      `instance HasFrees System` (System.hs:1832-1848) reaches them.
+///      `instance HasFrees System` (System.hs:1834-1850) reaches them.
 ///
 /// Every import draws an empty-named index of the variable's own sort
 /// (`renameDropNamehint`, LTerm.hs:737-740), so a stable variable keeps its
@@ -4599,10 +4599,10 @@ fn compare_rules_up_to_new_vars(
         .then_with(|| a.actions.cmp(&b.actions))
 }
 
-/// HS `compareSystemsUpToNewVars` (System.hs:1909-1922) over two systems that
+/// HS `compareSystemsUpToNewVars` (System.hs:1911-1924) over two systems that
 /// `norm_sys_for_compare` has already normalised.  The nodes compare through
 /// `compare_rules_up_to_new_vars` over both maps in `M.toAscList` order (HS
-/// `compareNodesUpToNewVars`/`compareListsUpToNewVars`, System.hs:1894-1907,
+/// `compareNodesUpToNewVars`/`compareListsUpToNewVars`, System.hs:1896-1909,
 /// which is the lexicographic order on the two lists).  When the nodes tie,
 /// HS blanks that field in both records and falls back to the derived
 /// `Ord System`, so the rest compares in HS's declaration order

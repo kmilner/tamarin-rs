@@ -124,7 +124,7 @@ fn map_let(
 
     // Case C (LetDestructors.hs:62-65): keep the Let, annotate `annElse
     // elsebranch`.  HS `annElse b = mempty {elseBranch = b}`
-    // (sapic/src/Sapic/Annotation.hs:131-132)
+    // (sapic/src/Sapic/Annotation.hs:132-133)
     // builds a FRESH `mempty`-based annotation, REPLACING the existing one — so
     // every other field (incl. the propagated `processnames`) is dropped back to
     // its default.  The node's incoming annotation must NOT be carried over
@@ -170,7 +170,7 @@ fn case_destructor(
             // `new_an = annDestructorEquation leftermssubst (toPairs rightterms) elsebranch`
             // — HS `annDestructorEquation v1 v2 b = mempty { destructorEquation =
             // Just (v1, v2), elseBranch = b }`
-            // (sapic/src/Sapic/Annotation.hs:128-129) builds a
+            // (sapic/src/Sapic/Annotation.hs:129-130) builds a
             // FRESH `mempty`-based annotation, REPLACING the existing one.  Every
             // other field (incl. the propagated `processnames`) is therefore reset
             // to default, so the node's incoming annotation is dropped (Case C

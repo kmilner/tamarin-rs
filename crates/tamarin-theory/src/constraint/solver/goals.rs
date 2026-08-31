@@ -26,15 +26,15 @@ use tamarin_term::lterm::{contains_private, is_msg_var};
 ///   * `SmartRanking Bool`         — heuristic `s`/`S`
 ///   * `InjRanking   Bool`         — heuristic `i`/`I`
 ///   * `Oracle       { quit_on_empty, oracle_path }` — heuristic `o`
-///     (HS `OracleRanking`, System.hs:584-597, see line 588)
+///     (HS `OracleRanking`, System.hs:586-599, see line 590)
 ///   * `OracleSmart  { quit_on_empty, oracle_path }` — heuristic `O`
-///     (HS `OracleSmartRanking`, System.hs:584-597, see line 589)
+///     (HS `OracleSmartRanking`, System.hs:586-599, see line 591)
 ///
 /// `c` → `UsefulGoalNr` and `C` → `GoalNr` are implemented
-/// (System.hs:592-593 `goalRankingIdentifiers`); `{name}` tactics are
+/// (System.hs:594-595 `goalRankingIdentifiers`); `{name}` tactics are
 /// resolved via `parse_heuristic_str_with_tactics`.  `p` → `Sapic` and
 /// `P` → `SapicPKCS11` (HS `SapicRanking`/`SapicPKCS11Ranking`,
-/// System.hs:590-591) are implemented and dispatched via `sapic_ranking`.
+/// System.hs:592-593) are implemented and dispatched via `sapic_ranking`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GoalRanking {
     /// `SmartRanking useLoopBreakers` (ProofMethod.hs).
@@ -42,10 +42,10 @@ pub enum GoalRanking {
     /// `InjRanking useLoopBreakers` (ProofMethod.hs).
     Inj(bool),
     /// `SapicRanking` (ProofMethod.hs:769-846, see line 771) — heuristic char `p`.
-    /// "heuristics adapted for processes" (System.hs:685-704, see line 693).
+    /// "heuristics adapted for processes" (System.hs:687-706, see line 695).
     Sapic,
     /// `SapicPKCS11Ranking` (ProofMethod.hs:848-935, see line 850) — heuristic char `P`.
-    /// Deprecated PKCS#11-specific SAPIC ranking (System.hs:685-704, see line 694).
+    /// Deprecated PKCS#11-specific SAPIC ranking (System.hs:687-706, see line 696).
     SapicPKCS11,
     /// `GoalNrRanking` (rankGoals dispatch ProofMethod.hs:479-502, see line 481):
     /// `sortOn (fst . snd)` — presort identifier `C`.
@@ -61,7 +61,7 @@ pub enum GoalRanking {
     /// letter run (HS `regularRanking`, Text/Parser/Signature.hs:308-326,
     /// see line 311) carries the
     /// bare `defaultOracle` with `workDir = Nothing`, so `printOracle`
-    /// (System.hs:701-704) shows the `"."`-joined name (`./oracle`);
+    /// (System.hs:703-706) shows the `"."`-joined name (`./oracle`);
     /// only a STANDALONE `o`/`O` token keeps the parse-time workDir and
     /// displays the resolved path. `defaultOracleNames` fills the relative
     /// path without changing that workDir.
@@ -90,7 +90,7 @@ pub enum GoalRanking {
 
 impl GoalRanking {
     /// Parse a single heuristic character into a `GoalRanking`,
-    /// mirroring HS's `goalRankingIdentifiers` (System.hs:584-597).
+    /// mirroring HS's `goalRankingIdentifiers` (System.hs:586-599).
     /// Oracle variants use `oracle_path` for the resolved path.
     /// Unhandled identifiers fall back to the default `Smart(false)`
     /// (lenient for in-file/web callers; the batch CLI path rejects
@@ -102,7 +102,7 @@ impl GoalRanking {
             'i' => GoalRanking::Inj(false),
             'I' => GoalRanking::Inj(true),
             // HS `SapicRanking` ('p') / `SapicPKCS11Ranking` ('P')
-            // (System.hs:590-591 `goalRankingIdentifiers`).  SAPIC theories
+            // (System.hs:592-593 `goalRankingIdentifiers`).  SAPIC theories
             // declaring `heuristic: p` must use sapicRanking, NOT smartRanking
             // — they diverge in goal selection (e.g. nsl-no_as `secrecy`:
             // smart prioritises `isFreshKnowsGoal` KU(~n), sapic does NOT —
@@ -113,13 +113,13 @@ impl GoalRanking {
             'C' => GoalRanking::GoalNr,
             // HS `UsefulGoalNrRanking` ('c')
             'c' => GoalRanking::UsefulGoalNr,
-            // HS `OracleRanking False defaultOracle` (System.hs:584-597, see line 588)
+            // HS `OracleRanking False defaultOracle` (System.hs:586-599, see line 590)
             'o' => GoalRanking::Oracle {
                 quit_on_empty: false,
                 oracle_path: oracle_path.to_string(),
                 display_path: None,
             },
-            // HS `OracleSmartRanking False defaultOracle` (System.hs:584-597, see line 589)
+            // HS `OracleSmartRanking False defaultOracle` (System.hs:586-599, see line 591)
             'O' => GoalRanking::OracleSmart {
                 quit_on_empty: false,
                 oracle_path: oracle_path.to_string(),
@@ -130,7 +130,7 @@ impl GoalRanking {
     }
 
     /// Human-readable description of this ranking, mirroring HS
-    /// `goalRankingName` (System.hs:685-704).  Used by the interactive
+    /// `goalRankingName` (System.hs:687-706).  Used by the interactive
     /// web UI's "Applicable Proof Methods:" comment (`subProofSnippet`,
     /// `Web/Theory.hs:550-551`).  Oracle variants render the resolved
     /// script path (HS `printOracle`); we already store the resolved
@@ -175,7 +175,7 @@ impl GoalRanking {
     }
 }
 
-/// HS `goalRankingName`'s `loopStatus` (System.hs:685-704, see line 700).
+/// HS `goalRankingName`'s `loopStatus` (System.hs:687-706, see line 702).
 fn loop_status(b: bool) -> String {
     format!(" (loop breakers {})", if b { "allowed" } else { "delayed" })
 }
@@ -185,7 +185,7 @@ fn loop_status(b: bool) -> String {
 ///
 /// `theory_file` is the path to the `.spthy` file; used to compute
 /// the default oracle name via `oracle_name_for_theory`
-/// (pretty_theory.rs, HS `defaultOracleNames` System.hs:549-560).
+/// (pretty_theory.rs, HS `defaultOracleNames` System.hs:549-562).
 ///
 /// Grammar (mirrors HS `goalRanking` Text/Parser/Signature.hs:308-326):
 ///   heuristic   ::= ranking+
@@ -229,7 +229,7 @@ pub fn parse_heuristic_str_with_tactics(
         // Tactic ranking `{name}` / `{.}` — HS `internalTacticRanking`
         // (Parser/Signature.hs:313-318) keeps the name written between the
         // braces (`{.}` gives the name "."), which is what
-        // `prettyGoalRanking` prints (System.hs:709-714).  HS pairs that name
+        // `prettyGoalRanking` prints (System.hs:711-716).  HS pairs that name
         // with `defaultTactic`'s body (Smart presort, no prios) and looks the
         // declared tactic up at ranking time (`chosenTactic`,
         // ProofMethod.hs:490-503); resolving the body here against `tactics`
@@ -237,7 +237,7 @@ pub fn parse_heuristic_str_with_tactics(
         // unresolved so the ranking dispatch raises `chooseError` only if it
         // is selected. quitOnEmpty is always
         // False from parsing (HS `("{.}", InternalTacticRanking False
-        // defaultTactic)`, System.hs:584-597, see line 596).
+        // defaultTactic)`, System.hs:586-599, see line 598).
         if c == '{' {
             i += 1;
             while i < chars.len() && chars[i] == ' ' {
@@ -291,7 +291,7 @@ pub fn parse_heuristic_str_with_tactics(
         // `goalRanking` (Text/Parser/Signature.hs:293-311) tries `oracleRanking` FIRST
         // at each token position, so an `o`/`O` that BEGINS a token is
         // parsed alone and its Oracle keeps the parse-time workDir —
-        // `printOracle` (System.hs:701-704) then shows the workDir-joined
+        // `printOracle` (System.hs:703-706) then shows the workDir-joined
         // (resolved) path.
         if c == 'o' || c == 'O' {
             i += 1;
@@ -2072,7 +2072,7 @@ fn chain_kd_conc_term(
 /// `term` fires at a node strictly always-before `target`.
 ///
 /// HS `allKUActions sys = unsolvedActionAtoms sys ++ node actions`
-/// (System.hs:1575-1585): the KU action may exist only as an unsolved
+/// (System.hs:1577-1587): the KU action may exist only as an unsolved
 /// `ActionG i (KU term)` goal (node i not yet in sNodes), so scan unsolved
 /// ActionG goals in ADDITION to node rule actions.  `always_before(id,
 /// target)` does not depend on `fa` and the relation is invariant across the
@@ -2351,7 +2351,7 @@ pub fn goal_usefulness(g: &Goal, looping: bool, sys: &System) -> Usefulness {
     goal_usefulness_with_adj(g, looping, sys, adj.map(), has_ku_guards(sys))
 }
 
-/// HS `prettyGoals`'s `useful` annotation STRING (System.hs:1744-1751) for
+/// HS `prettyGoals`'s `useful` annotation STRING (System.hs:1746-1753) for
 /// the interactive sequent's per-goal comment.  UNLIKE the ranking
 /// [`Usefulness`] enum (which collapses both KU-guard and default goals
 /// into `Useful`), this distinguishes `" (useful1)"` (KU goal when the
@@ -2562,7 +2562,7 @@ fn contains_toplevel_term(
 ///
 /// `rawLessRel se = getLessRel sLessAtoms ++ rawEdgeRel se`, and
 /// `rawEdgeRel sys = map (nodeConcNode *** nodePremNode) $ [Edge..] ++
-/// unsolvedChains sys` (System.hs:1613-1622).  So the relation has one
+/// unsolvedChains sys` (System.hs:1615-1624).  So the relation has one
 /// conc-node -> prem-node edge per *unsolved Chain goal* in addition to
 /// `sLessAtoms` and `sEdges` — mirroring `build_always_before_adj`
 /// (system.rs).  Omitting the unsolved-chain edges would mis-classify a

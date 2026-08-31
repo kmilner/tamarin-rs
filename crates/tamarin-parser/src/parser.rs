@@ -1086,8 +1086,8 @@ pub struct Parser<'a> {
     resolve_prefix_apps: bool,
     /// Whether a `:` after a variable names a SAPIC TYPE rather than a sort
     /// suffix.  Set while parsing a SAPIC process (and a process definition's
-    /// parameter list), where HS uses `sapicvar` — `lvarNoSuffix` plus
-    /// `option Nothing (colon *> typep)` (Token.hs:487-510) — instead of the
+    /// parameter list), where HS uses `sapicvar` — `lvarNoSuffix` plus an
+    /// optional type (defaulting node-sorted variables to `node`) — instead of the
     /// suffix-accepting `msgvar`/`lvar` used everywhere else.  So `x:nat`
     /// inside a process is `x` typed `"nat"`, while the same text in a rule is
     /// the nat-sorted `x`.
@@ -5811,10 +5811,10 @@ impl<'a> Parser<'a> {
             }
         }
         // Special tokens
-        if self.try_kw("DH_neutral") {
+        if self.lx.try_symbol("DH_neutral") {
             return Ok(Term::DhNeutral);
         }
-        if self.try_punct("1:nat") {
+        if self.lx.try_symbol("1:nat") {
             if !self.sig_enable_nat {
                 return Err(self.err_unexpected_message(
                     "natural-number literal 1:nat requires the natural-numbers builtin",
@@ -5822,7 +5822,7 @@ impl<'a> Parser<'a> {
             }
             return Ok(Term::NatOne);
         }
-        if self.try_punct("%1") {
+        if self.lx.try_symbol("%1") {
             if !self.sig_enable_nat {
                 return Err(self.err_unexpected_message(
                     "natural-number literal %1 requires the natural-numbers builtin",
@@ -5830,32 +5830,11 @@ impl<'a> Parser<'a> {
             }
             return Ok(Term::NatOne);
         }
-        // `1` only valid when DH is enabled; we accept it always at parse level.
-        // Divergence from HS, benign on the corpus: HS `term`
-        // (Theory/Text/Parser/Term.hs:137-163, see line 149) tries
-        // `symbol "1"` before the identifier path, and `symbol`/`T.symbol`
-        // (Token.hs:272-273, see line 273) has NO trailing word boundary, so HS splits the leading
-        // `1` off `1abc`/`12` (yielding fAppOne, leaving `abc`/`2`, which then
-        // fails as a stray token). Note HS identifiers CAN start with a digit
-        // (Token.hs:214-230, see line 223 `identStart = alphaNum`), so a bare `2` is the variable
-        // `2`. The word-boundary guard below only diverges on a `1` immediately
-        // followed by an alphanumeric/`_` (e.g. `1abc`, `12`) — inputs that are
-        // never valid message terms and never appear in any .spthy, so accepted
-        // valid output is identical; only the parse-error location differs.
-        {
-            let save = self.save();
-            self.skip_ws();
-            if self.lx.peek() == Some('1') {
-                let mut probe = self.lx.clone();
-                probe.bump();
-                let next = probe.peek();
-                if next.map_or(true, |c| !c.is_alphanumeric() && c != '_') {
-                    self.lx.bump();
-                    self.skip_ws();
-                    return Ok(Term::NumberOne);
-                }
-            }
-            self.restore(save);
+        // Fixed literals use the identifier boundary of upstream's
+        // `reserved`, so `1abc` remains one identifier rather than `1` plus
+        // trailing garbage.
+        if self.lx.try_symbol("1") {
+            return Ok(Term::NumberOne);
         }
         // Sigil-prefixed variables: ~x, $x, #x, %x.
         if let Some(c @ ('~' | '$' | '#')) = self.lx.peek() {
@@ -5878,8 +5857,9 @@ impl<'a> Parser<'a> {
             }
         }
         if self.lx.peek() == Some('%') {
-            // %'n' / %x — distinguish. (`%1` is already handled above via the
-            // `try_punct("%1")` token match.)
+            // %'n' / %x — distinguish. An exact `%1` is already handled above;
+            // longer digit-initial names such as `%12` are variables, matching
+            // upstream's alphanumeric `identStart`.
             let mut probe = self.lx.clone();
             probe.bump();
             match probe.peek() {
@@ -5897,7 +5877,7 @@ impl<'a> Parser<'a> {
                         .ok_or_else(|| self.err("bad nat literal"))?;
                     return Ok(Term::NatLit(s));
                 }
-                Some(c) if c.is_ascii_alphabetic() => {
+                Some(c) if c.is_alphanumeric() => {
                     if !self.sig_enable_nat {
                         self.lx.bump();
                         return Err(
@@ -6119,15 +6099,15 @@ impl<'a> Parser<'a> {
     /// (Theory/Text/Parser/Term.hs:139-153,158-163): an identifier that is an
     /// arity-0 symbol of `funSyms maudeSig ∪ macroNames maudeSig` is the
     /// application `fApp fs []`, whatever a same-named binder is in scope.
-    /// `nullaryApp` matches through `symbol`, which has no word boundary, so
-    /// HS claims the name and leaves the rest of the lexeme behind: `c.1`,
-    /// `c:msg` and a SAPIC `c:ty` are the constant `c` followed by input the
-    /// enclosing parser rejects.  This parser claims the name only when the
-    /// whole lexeme is it, and reads those three as variables instead.  A
-    /// claimed name is the symbol's lexeme rather than an
-    /// `indexedIdentifier`, so it leaves neither of the variable hangovers
-    /// [`Parser::note_var_dot_hangover`] records.
+    /// Current upstream reads a complete identifier before resolving a
+    /// nullary symbol, so a symbol named `c` cannot accidentally claim the
+    /// prefix of `cx`. Dot indices and type/sort suffixes are not identifier
+    /// characters, however: a declared `c/0` claims the `c` in `c.1` or
+    /// `c:msg`, leaving the suffix for the enclosing parser to reject.
     fn bare_ident_term(&mut self, id: String) -> Result<Term, ParseError> {
+        if self.is_nullary_sym(&id) {
+            return Ok(Term::App(id, Vec::new()));
+        }
         let idx = self.try_dot_index();
         let v = VarSpec {
             name: id,
@@ -6137,9 +6117,6 @@ impl<'a> Parser<'a> {
         };
         let v = self.attach_sort_suffix(v)?;
         self.note_var_dot_hangover(&v);
-        if self.is_plain_indexed_identifier(&v) && self.is_nullary_sym(&v.name) {
-            return Ok(Term::App(v.name, Vec::new()));
-        }
         Ok(Term::Var(v))
     }
 
@@ -6306,7 +6283,7 @@ impl<'a> Parser<'a> {
         let save = self.save();
         if self.try_punct(":") {
             // Inside a SAPIC process every variable comes from HS `sapicvar =
-            // lvarNoSuffix; option Nothing (colon *> typep)` (Token.hs:506-510).
+            // lvarNoSuffix` plus an optional type (Token.hs).
             // `lvarNoSuffix` (Token.hs:502-503) is `sortedLVarNoSuffix
             // [minBound..]` (Token.hs:486-501), which offers PREFIX sorts only, so a
             // colon there always introduces a SAPIC TYPE — `x:nat` is the
@@ -6347,6 +6324,9 @@ impl<'a> Parser<'a> {
             }
             self.restore(save);
         }
+        if self.sapic_var_types && v.sort == LSort::Node {
+            v.typ = Some("node".to_string());
+        }
         Ok(v)
     }
 
@@ -6369,12 +6349,14 @@ impl<'a> Parser<'a> {
                 LSort::Node
             }
             Some('%') => {
-                // Could be `%1` (nat one) or `%'n'` (nat name lit) or `%x` (nat var).
+                // An exact `%1` has already been consumed as nat one. A leading
+                // quote is a nat literal; every alphanumeric start, including
+                // `%12`, begins a nat-sorted variable upstream.
                 let mut probe = self.lx.clone();
                 probe.bump();
                 match probe.peek() {
-                    Some('\'') | Some('1') => return Ok(None), // handled by literal/atom path
-                    Some(c) if c.is_ascii_alphabetic() => {
+                    Some('\'') => return Ok(None), // handled by the literal/atom path
+                    Some(c) if c.is_alphanumeric() => {
                         if !self.sig_enable_nat {
                             self.lx.bump();
                             return Err(self

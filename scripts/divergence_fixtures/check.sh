@@ -38,27 +38,13 @@ report() { printf '  %-24s %-6s %-8s %s\n' "$1" "$2" "$3" "$4"; }
 # The directory and the manifest must agree before anything is loaded.
 census_fixture_dir
 
-# Extra assertions for a `diverge` fixture: the SHAPE of the divergence, not
-# just its existence, so an unrelated change to either side cannot leave the
-# fixture in a passing state for the wrong reason.  A `diverge` row with no arm
-# here asserts nothing more than "the two files differ".  The fallthrough is
-# therefore a failure.
+# Extra assertions for `diverge` fixtures: the SHAPE of each divergence, not
+# just its existence. There are currently no intentional divergences; adding
+# one requires a documented arm here so unrelated changes cannot pass it.
 divergence_shape() {
-    local hs="$expected/$1.$2.hs.txt" rs="$expected/$1.$2.rs.txt"
     case "$1.$2" in
-    ac_marker_collapse.theory)
-        # Documented upstream bug: upstream rebuilds the Maude reply as an AC
-        # term and `fAppAC _ [a] = a` deletes the unary application, so the
-        # oracle's closed rule outputs the bare argument; the port keeps the
-        # application.
-        grep -qF "Out( (a++y) )"            "$hs" \
-            || { echo "    oracle side no longer collapses tamXCAbar(a) — expected \`Out( (a++y) )\`" >&2; return 1; }
-        grep -qF "Out( (y++tamXCAbar(a)) )" "$rs" \
-            || { echo "    port side no longer keeps tamXCAbar(a) — expected \`Out( (y++tamXCAbar(a)) )\`" >&2; return 1; }
-        ;;
     *)  echo "    no documented shape for the $1.$2 divergence — add an arm here" >&2; return 1 ;;
     esac
-    return 0
 }
 
 # `check_slice <name> <slice> <mode> < raw` — compare one block of one load.

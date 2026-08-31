@@ -390,7 +390,7 @@ fn goal_ord_disj_var_sort_uses_lsort_ord() {
 
 /// A `{name}` ranking keeps the name written between the braces — HS
 /// `internalTacticRanking` (Parser/Signature.hs:313-318) and
-/// `filterHeuristic` (System.hs:679-683) both build
+/// `filterHeuristic` (System.hs:681-685) both build
 /// `InternalTacticRanking False (Tactic <name> (SmartRanking False) [] [])`
 /// — and takes the body of the declared tactic of that name when the theory
 /// has one (HS `chosenTactic`, ProofMethod.hs:490-503).
@@ -456,10 +456,10 @@ fn an_unknown_tactic_fails_when_its_ranking_is_selected() {
 
 /// `pretty_goal_rankings` writes back the token each stored ranking parsed
 /// from — the single letters `goalRankingIdentifiers` maps
-/// (System.hs:584-597), an oracle ranking as its letter plus the quoted
+/// (System.hs:586-599), an oracle ranking as its letter plus the quoted
 /// path, a tactic ranking as its braced name (`prettyGoalRanking`,
-/// System.hs:709-714), joined by single spaces (`prettyGoalRankings`,
-/// System.hs:706-707).  The theory stores the parsed list, so this round
+/// System.hs:711-716), joined by single spaces (`prettyGoalRankings`,
+/// System.hs:708-709).  The theory stores the parsed list, so this round
 /// trip is what keeps a `heuristic:` header's echo byte-identical.
 #[test]
 fn parsed_heuristic_renders_back_to_its_tokens() {

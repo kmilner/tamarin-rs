@@ -264,11 +264,9 @@ impl MaudeProcessInner {
 
     fn execute(&mut self, cmd: &[u8]) -> Result<Vec<u8>, MaudeError> {
         // `TAM_DBG_MAUDE_IO=1` — truncated trace (200 chars).
-        // `TAM_DBG_MAUDE_IO=full` — full command + response, for HS↔RS
-        //   side-by-side Maude command comparison.
+        // `TAM_DBG_MAUDE_IO=full` — full command + response.
         // `TAM_DBG_MAUDE_IO_FILTER=unify` — only dump unify calls
-        //   (suppresses set/show/reduce noise).  Matches HS's
-        //   `TAM_HS_DBG_MAUDE_IO` semantics.
+        //   (suppresses set/show/reduce noise).
         let &(trace_enabled, trace_full, ref filter) = maude_io_trace_config();
         // Only materialise the full command string when something will
         // actually read it — i.e. tracing is on, or a non-empty filter
@@ -1168,7 +1166,7 @@ impl MaudeHandle {
     /// their shared synthetic constant.
     ///
     /// This mirrors HS's `matchTerm` (Guarded.hs:812-817) called from
-    /// `impliedFormulas` (System.hs:1110-1144, see line 1143): the universal is fully
+    /// `impliedFormulas` (System.hs:1112-1146, see line 1145): the universal is fully
     /// `skolemizeGuarded`-ed before matching, so every FREE LVar
     /// (universal-non-bound vars, originating from the system context)
     /// becomes a `Con (SkConst x)`, while the universal-bound

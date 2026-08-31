@@ -470,7 +470,7 @@ fn system_with_a_variable_per_field(t: LNTerm) -> System {
 
 /// `rename th0` moves every free variable of the system by the shift, which
 /// is `mapFrees (Monotone (incVar shift))` over all thirteen fields of the
-/// Haskell record (LTerm.hs:643, System.hs:1864-1877) — the negative subterms
+/// Haskell record (LTerm.hs:643, System.hs:1866-1879) — the negative subterms
 /// included.  The two values the instance carries over stay put: the ranges
 /// of the equation store's disjunctions, whose variables count as fresh
 /// (SubstVFresh.hs:196-202), and `old_neg_subterms` (SubtermStore.hs:95).
@@ -539,7 +539,7 @@ fn shift_keeps_ac_arg_order() {
 // =========================================================================
 
 /// The saturate-time shift is `rename` over `instance HasFrees System`
-/// (System.hs:1864-1877), so the goal store's disjunctions and subterm pairs
+/// (System.hs:1866-1879), so the goal store's disjunctions and subterm pairs
 /// move with everything else (Constraints.hs:226-232) and so do the subterm
 /// store's negative subterms (SubtermStore.hs:552-557).  The ranges of the
 /// equation store's disjunctions stay put: their variables count as fresh, so
@@ -601,7 +601,7 @@ fn saturate_shift_carries_the_node_component_cache() {
 
 /// `evalBindT (someInst sysTh0) keepVarBindings` (Sources.hs:342-348) draws
 /// one identifier per free variable it has not already bound, in the order
-/// `instance HasFrees System` (System.hs:1832-1877) reaches them: the nodes,
+/// `instance HasFrees System` (System.hs:1834-1879) reaches them: the nodes,
 /// the edges, the less atoms, the last atom, the subterm store — negative
 /// subterms first (SubtermStore.hs:546-557) — the equation store's
 /// substitution and then its disjunctions' domain keys
@@ -690,7 +690,7 @@ fn some_inst_system_keeps_the_seeded_vars_and_draws_in_hs_field_order() {
 // =========================================================================
 
 /// `renameDropNameHints` (Sources.hs:252-258) imports the system's variables
-/// in the order `instance HasFrees System` (System.hs:1832-1848) reaches
+/// in the order `instance HasFrees System` (System.hs:1834-1850) reaches
 /// them, which for a disjunction of the equation store is ascending
 /// `Ord LNSubstVFresh` — HS holds it as an `S.Set` (EquationStore.hs:116-121)
 /// and the set instance folds `S.toList` (LTerm.hs:898-901).  The port stores
@@ -735,7 +735,7 @@ fn rename_map_counts_neg_subterms() {
 // =========================================================================
 
 /// `boundsVarIdx` (LTerm.hs:672-675) folds the frees of `instance HasFrees
-/// System` (System.hs:1832-1877), which reaches the subterm store's NEGATIVE
+/// System` (System.hs:1834-1879), which reaches the subterm store's NEGATIVE
 /// subterms before its positive and solved ones (SubtermStore.hs:546-549).  A
 /// variable living in a negative subterm alone therefore sets both ends of
 /// the source's bounds, and so both the `matchToGoal` rename shift and the
@@ -749,7 +749,7 @@ fn bounds_var_idx_of_system_counts_neg_subterms() {
 }
 
 /// `source_bounds` splits the two ends of `instance HasFrees Source`
-/// (System.hs:1879-1889).  The MIN is over `cdGoal` and every case, because
+/// (System.hs:1881-1891).  The MIN is over `cdGoal` and every case, because
 /// `rename th0` (Sources.hs:268-317, see line 307) rebases the whole source.
 /// The MAX is over the cases alone, because `avoid th` (Sources.hs:113-137,
 /// see line 128) sees a source whose `cdGoal` has already been overwritten

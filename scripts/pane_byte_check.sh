@@ -4,10 +4,11 @@
 # reference-cache profile. Boots RS per file
 # (reusing web_parity's boot/crawl), then compares the two URL bodies byte-for-
 # byte.  Each cached manifest carries a <key>.hs.fp sidecar naming the oracle
-# binary that crawled it — web_parity.sh stamps it and refuses to
+# binary (SHA-256) that crawled it — web_parity.sh stamps it and refuses to
 # reuse a manifest that is unstamped or stamped by another binary, and this
 # script honours the same contract (SKIP_STALE_CACHE): it cannot re-crawl the
-# HS side, and a manifest from a long-gone oracle is not a reference.
+# HS side, and a manifest from a long-gone oracle or changed transitive include
+# is not a reference.
 #
 #   scripts/pane_byte_check.sh <file-list>      (or ALLOWLIST=<file-list> ...)
 #
@@ -61,7 +62,7 @@ HS_PATH=$(resolve_hs_oracle "$repo_root") || exit 2
          "verified without it" >&2
     exit 2
 }
-hs_fingerprint "$HS_PATH"
+oracle_rev_check "$HS_PATH" "$MAUDE_PATH" "$repo_root"
 # Keep cache selection identical to web_parity.sh. The plan version is part of
 # the profile even though this script only consumes manifests.
 PLAN_VERSION="$(python3 -c \
@@ -134,7 +135,7 @@ one_file() {
     # rather than being compared against a reference nothing vouches for.
     local hs_fp=''
     [ -f "$CACHE/$key.hs.fp" ] && read -r hs_fp < "$CACHE/$key.hs.fp"
-    if [ "$hs_fp" != "$WEB_CACHE_ORACLE_STAMP" ]; then
+    if ! web_cache_stamp_matches "$hs_fp"; then
         web_cache_unlock; rm -rf "$wd"
         printf '%s\t-\tSKIP_STALE_CACHE\t-\n' "$rel"; return 0
     fi

@@ -1565,9 +1565,9 @@ fn ac_infix_requires_a_preceding_declaration() {
 // process.  Rules/formulas use `msgvar`/`lvar` = `sortedLVar`, whose
 // `mkSuffixParser` reads `x:nat` as the NAT-SORTED `x` (Token.hs:407-432);
 // processes use `sapicvar` = `lvarNoSuffix` (prefix sorts only) plus
-// `option Nothing (colon *> typep)`, so the same text is the msg-sorted `x`
-// carrying the SAPIC TYPE `"nat"` (Token.hs:487-510).  `typep`'s `Any` is the
-// untyped placeholder.
+// an optional type, so the same text is the msg-sorted `x` carrying the SAPIC
+// TYPE `"nat"` (Token.hs). Node-sorted variables default to type `node`, while
+// an explicit `Any` remains the untyped placeholder.
 #[test]
 fn colon_suffix_is_a_sapic_type_in_a_process_and_a_sort_in_a_rule() {
     fn process_let_binder(src: &str) -> VarSpec {
@@ -1600,6 +1600,10 @@ fn colon_suffix_is_a_sapic_type_in_a_process_and_a_sort_in_a_rule() {
         "theory T begin builtins: natural-numbers process: let %x:nat = %c in 0 end",
     );
     assert_eq!((v.sort, v.typ.as_deref()), (LSort::Nat, Some("nat")));
+    let v = process_let_binder("theory T begin process: let #x = y in 0 end");
+    assert_eq!((v.sort, v.typ.as_deref()), (LSort::Node, Some("node")));
+    let v = process_let_binder("theory T begin process: let #x:Any = y in 0 end");
+    assert_eq!((v.sort, v.typ.as_deref()), (LSort::Node, None));
 
     // Same text in a rule: a sort suffix, no type.
     let thy = parse_theory(
@@ -1848,9 +1852,9 @@ fn rule_conclusions(src: &str) -> Vec<Fact> {
 /// HS `nullaryApp` (Theory/Text/Parser/Term.hs:158-163) claims a bare
 /// identifier that is an arity-0 symbol of `funSyms maudeSig ∪ macroNames
 /// maudeSig`, so it is an application, not a variable.  A sigil and a use
-/// ahead of the declaration leave a variable in HS too.  A `.idx`, a `:sort`
-/// suffix and a SAPIC `:type` leave one only here: `symbol` has no word
-/// boundary, so HS claims the name and then fails on the rest of the lexeme.
+/// ahead of the declaration leave a variable in HS too. A `.idx`, a `:sort`
+/// suffix and a SAPIC `:type` are not part of the identifier, so the nullary
+/// parser claims the name and leaves the suffix to be rejected.
 #[test]
 fn bare_nullary_symbol_parses_as_application() {
     let concs = rule_conclusions(
@@ -1870,47 +1874,24 @@ fn bare_nullary_symbol_parses_as_application() {
         );
     }
 
-    // The name is claimed only when the whole lexeme is it, so anything past
-    // the bare identifier leaves a variable.
-    let concs = rule_conclusions(
-        "theory T begin\n\
-         functions: c/0\n\
-         rule R:\n\
-           [ ] --> [ Out(c.1), Out(c:msg), Out(~c) ]\n\
-         end",
-    );
-    for (i, want) in [
-        (0usize, (1u64, LSort::Msg)),
-        (1, (0, LSort::Msg)),
-        (2, (0, LSort::Fresh)),
-    ] {
-        let v = var_of(&concs[i].args[0]);
-        assert_eq!((v.name.as_str(), v.idx, v.sort), ("c", want.0, want.1));
+    for term in ["c.1", "c:msg"] {
+        let src =
+            format!("theory T begin\nfunctions: c/0\nrule R:\n  [ ] --> [ Out({term}) ]\nend");
+        assert!(parse_theory(&src, &[]).is_err(), "{term} must be rejected");
     }
 
-    // A SAPIC `:type` annotation is the same: the lexeme continues past the
-    // symbol's name, so the name is not claimed.
-    let thy = parse_theory(
+    assert!(parse_theory(
         "theory T begin\nfunctions: c/0\nprocess: out(c:ty)\nend",
         &[],
     )
-    .expect("parses");
-    let out = thy
-        .items
-        .iter()
-        .find_map(|it| match it {
-            TheoryItem::TopLevelProcess(p) => Some(p.clone()),
-            _ => None,
-        })
-        .expect("the theory declares a process");
-    let Process::Action {
-        action: SapicAction::ChOut { msg, .. },
-        ..
-    } = &out
-    else {
-        panic!("expected an out action, got {out:?}");
-    };
-    assert_eq!(var_of(msg).typ.as_deref(), Some("ty"));
+    .is_err());
+
+    // A sigil starts a variable parser before `nullaryApp`, so it remains a
+    // variable even when the unsigilled name is declared nullary.
+    let concs =
+        rule_conclusions("theory T begin\nfunctions: c/0\nrule R:\n  [ ] --> [ Out(~c) ]\nend");
+    let v = var_of(&concs[0].args[0]);
+    assert_eq!((v.name.as_str(), v.sort), ("c", LSort::Fresh));
 
     // `lookupArity`/`nullaryApp` read the signature declared SO FAR, so a use
     // ahead of the declaration is a variable.
@@ -1924,11 +1905,8 @@ fn bare_nullary_symbol_parses_as_application() {
     assert_eq!(var_of(&concs[0].args[0]).name, "c");
 }
 
-/// `nullaryApp` matches through `symbol`, which has no word boundary, so HS
-/// claims any identifier that merely STARTS with a 0-arity symbol's name and
-/// then fails on the rest.  This parser requires the whole identifier
-/// instead: probe `probes/S1_nullary_prefix.spthy` loads here and is a parse
-/// error upstream.
+/// `nullaryApp` resolves a complete identifier, so a declared `c/0` cannot
+/// claim the prefix of the distinct identifier `cx`.
 #[test]
 fn nullary_symbol_matches_the_whole_identifier() {
     let concs = rule_conclusions(
@@ -1939,6 +1917,17 @@ fn nullary_symbol_matches_the_whole_identifier() {
          end",
     );
     assert_eq!(var_of(&concs[0].args[0]).name, "cx");
+}
+
+/// Fixed literals also stop at an identifier boundary. Identifiers beginning
+/// with `1` or `DH_neutral` therefore remain intact.
+#[test]
+fn fixed_literals_do_not_claim_identifier_prefixes() {
+    for name in ["1abc", "DH_neutralx"] {
+        let src = format!("theory T begin\nrule R:\n  [ ] --> [ Out({name}) ]\nend");
+        let concs = rule_conclusions(&src);
+        assert_eq!(var_of(&concs[0].args[0]).name, name);
+    }
 }
 
 /// A prefix (or `op{a}b`) application whose head resolves to HS `expSym`

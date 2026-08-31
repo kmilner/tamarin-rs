@@ -145,7 +145,7 @@ impl<V> GoodAnnotation for ProcessAnnotation<V> {
 /// `V` (typically `tamarin_term::lterm::LVar`).
 pub(crate) type AnnotatedProcess<V> = Process<ProcessAnnotation<V>, SapicLVar>;
 
-/// `toAnProcess` (sapic/src/Sapic/Annotation.hs:135-139): lift a parsed process into a
+/// `toAnProcess` (sapic/src/Sapic/Annotation.hs:136-140): lift a parsed process into a
 /// translation annotation by wrapping the parsed annotation in
 /// `ProcessAnnotation`.
 pub(crate) fn to_annotated<V>(
@@ -159,7 +159,7 @@ pub(crate) fn to_annotated<V>(
     })
 }
 
-/// `toProcess` (sapic/src/Sapic/Annotation.hs:141-144): drop the translation
+/// `toProcess` (sapic/src/Sapic/Annotation.hs:142-145): drop the translation
 /// annotations and recover the parsed-stage form — the inverse of
 /// [`to_annotated`].  `facts::to_rule` erases with it for the rule name and
 /// the `process=` attribute (Facts.hs:391).
