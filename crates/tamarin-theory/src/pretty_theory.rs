@@ -180,7 +180,7 @@ pub fn pretty_closed_theory(
     // rule items through `prettyOpenProtoRuleAsClosedRule` when some of them
     // carries an AC rule of its own, and the closed items through
     // `prettyClosedProtoRule` otherwise.
-    let proof_bodies: std::collections::HashMap<&str, &str> = proved
+    let proof_bodies: tamarin_utils::FastMap<&str, &str> = proved
         .iter()
         .filter_map(|p| Some((p.name.as_str(), p.proof_body.as_deref()?)))
         .collect();
