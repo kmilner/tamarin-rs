@@ -271,7 +271,7 @@ index f89c5a2f10c44700d22807f068509ba545f95369..fa42bef3cf8866166e6fd4b8f827a05c
                      return (addExportInfo ei thy)
                      <?> "export block"
 diff --git a/lib/theory/src/Theory/Text/Parser/Term.hs b/lib/theory/src/Theory/Text/Parser/Term.hs
-index dfccca27d6ca0cab6ea4252c2080ff539a0fe580..87d318d1226a97777cb40464edc1127eb8fc3781 100644
+index dfccca27d6ca0cab6ea4252c2080ff539a0fe580..5a577040fd6490d0705c701561ee82d60494957e 100644
 --- a/lib/theory/src/Theory/Text/Parser/Term.hs
 +++ b/lib/theory/src/Theory/Text/Parser/Term.hs
 @@ -32,7 +32,6 @@ import           Term.Substitution
@@ -288,16 +288,16 @@ index dfccca27d6ca0cab6ea4252c2080ff539a0fe580..87d318d1226a97777cb40464edc1127e
      , parens (msetterm eqn plit)
 -    , symbol "DH_neutral" *> pure fAppDHNeutral    
 -    , symbol "1:nat"
-+    , reservedSymbol "DH_neutral" *> pure fAppDHNeutral
-+    , reservedSymbol "1:nat"
++    , reserved "DH_neutral" *> pure fAppDHNeutral
++    , reserved "1:nat"
          *> requireNaturalNumbers "natural-number literal 1:nat"
          *> pure fAppNatOne
 -    , symbol "%1"
-+    , reservedSymbol "%1"
++    , reserved "%1"
          *> requireNaturalNumbers "natural-number literal %1"
          *> pure fAppNatOne
 -    , symbol "1"          *> pure fAppOne
-+    , reservedSymbol "1"  *> pure fAppOne
++    , reserved "1"  *> pure fAppOne
      , application        <?> "function application"
      , nullaryApp
      , plit
@@ -322,30 +322,21 @@ index dfccca27d6ca0cab6ea4252c2080ff539a0fe580..87d318d1226a97777cb40464edc1127e
  -- | A left-associative sequence of user-defined AC operators.
  acterm :: Ord l => Bool -> Parser (Term l) -> Parser (Term l)
 diff --git a/lib/theory/src/Theory/Text/Parser/Token.hs b/lib/theory/src/Theory/Text/Parser/Token.hs
-index 207ec69e5ee12ac4e6a633adb61437013c3465fc..1423a6e71f6a646df373e4aafce5e0d88f42a7f0 100644
+index 207ec69e5ee12ac4e6a633adb61437013c3465fc..8ea44f882f1982fb99ce6080799ccb988decca50 100644
 --- a/lib/theory/src/Theory/Text/Parser/Token.hs
 +++ b/lib/theory/src/Theory/Text/Parser/Token.hs
-@@ -13,6 +13,7 @@ module Theory.Text.Parser.Token (
-   , symbol
-   , symbol_
-   , reserved
-+  , reservedSymbol
-   , dot
-   , comma
-   , colon
-@@ -282,6 +283,12 @@ symbol_ = void . symbol
+@@ -277,8 +277,9 @@ symbol sym = try (T.symbol spthy sym) <?> ("\"" ++ sym ++ "\"")
+ symbol_ :: String -> Parser ()
+ symbol_ = void . symbol
+ 
+--- | Parse a keyword, i.e. a symbol that must not be followed by an
+--- identifier character (so @end@ does not match a prefix of @endrule@).
++-- | Parse a keyword or fixed symbol that must end at an identifier boundary,
++-- so that it does not match a prefix of a longer identifier. Identifiers may
++-- start with a digit, so this also guards number-like symbols such as "1".
  reserved :: String -> Parser ()
  reserved = T.reserved spthy
  
-+-- | Parse a symbol that must end at an identifier boundary, so that it does
-+-- not match a prefix of a longer identifier. Identifiers may start with a
-+-- digit, so this also guards number-like symbols such as "1".
-+reservedSymbol :: String -> Parser ()
-+reservedSymbol = T.reserved spthy
-+
- -- | Between braces.
- braced :: Parser a -> Parser a
- braced = T.braces spthy
 diff --git a/lib/theory/src/TheoryObject.hs b/lib/theory/src/TheoryObject.hs
 index 66d3732a196220d2d652353fa0bb3cb170af0348..bec6c341d2034393852522a66f73edd3ae15be7e 100644
 --- a/lib/theory/src/TheoryObject.hs

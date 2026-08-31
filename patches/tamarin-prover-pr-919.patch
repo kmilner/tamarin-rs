@@ -913,7 +913,7 @@ index 0000000000000000000000000000000000000000..6c4f0bf31e583e2433b15164c006d52b
 +
 +  output:          examples/regression/trace/issue914.spthy.tmp
 +  processing time: 0.07s
-+
++  
 +  secrecy (all-traces): falsified - found trace (4 steps)
 +
 +==============================================================================

@@ -1,0 +1,14 @@
+diff --git a/lib/theory/src/Theory/Tools/Wellformedness.hs b/lib/theory/src/Theory/Tools/Wellformedness.hs
+index 47dfc48307f2a4580d96de4937c7d2abd641475f..c12787db680890c14a4f410a95f5f1c7a32d3246 100644
+--- a/lib/theory/src/Theory/Tools/Wellformedness.hs
++++ b/lib/theory/src/Theory/Tools/Wellformedness.hs
+@@ -286,7 +286,8 @@ boundTerms l (GDisj disj)             = concatMap (boundTerms l) disj
+ boundTerms l (GConj conj)             = concatMap (boundTerms l) conj
+ boundTerms l (GGuarded _ ss _ gf)     = boundTerms extendedVarAssignment gf
+   where
+-    extendedVarAssignment = zip [0..] [LVar name sort 0 | (name, sort) <- reverse ss] ++ l
++    extendedVarAssignment = zip [0..] [LVar name sort 0 | (name, sort) <- reverse ss]
++                         ++ [(i + fromIntegral (length ss), var) | (i, var) <- l]
+ boundTerms _ _                        = [] --cannot happen
+ 
+ -- | check nat-Sorting (i.e., below + is only nat)

@@ -1,5 +1,5 @@
 diff --git a/lib/theory/src/Theory/Constraint/Solver/Reduction.hs b/lib/theory/src/Theory/Constraint/Solver/Reduction.hs
-index 678460dadb0e6ea77c3854b09c13dbf00c087494..b037b5faba8730b23dd0471b3f538e68c6040e66 100644
+index 678460dadb0e6ea77c3854b09c13dbf00c087494..268142d18cbae12b8255b929b2f303d355eed01f 100644
 --- a/lib/theory/src/Theory/Constraint/Solver/Reduction.hs
 +++ b/lib/theory/src/Theory/Constraint/Solver/Reduction.hs
 @@ -426,7 +426,7 @@ insertAtom ato = case ato of
