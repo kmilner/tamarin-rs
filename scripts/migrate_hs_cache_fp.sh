@@ -26,7 +26,7 @@
 # Env:
 #   DRY_RUN=1                    report what would move, move nothing
 #   HS_PATH                      oracle binary (default: the stack-work build)
-#   MAUDE_PATH                   maude for the `--version` revision probe
+#   MAUDE_PATH                   maude for the optional `--version` revision probe
 #   ALLOW_ORACLE_REV_MISMATCH=1  migrate despite failed source attestation
 #   CACHES="dir1 dir2 ..."       override the cache list (testing)
 set -u
@@ -38,20 +38,22 @@ repo_root="$(cd "$script_dir/.." && pwd)"
 [ -r "$script_dir/gate_common.sh" ] || { echo "migrate_hs_cache_fp: missing $script_dir/gate_common.sh (owns the fingerprint recipe)" >&2; exit 2; }
 . "$script_dir/gate_common.sh"
 DRY_RUN="${DRY_RUN:-}"
-MAUDE=$(resolve_maude) || exit 2
+MAUDE=
+if resolved_maude=$(resolve_maude 2>/dev/null); then
+    MAUDE=$resolved_maude
+fi
 
 HS_PATH=$(resolve_hs_oracle "$repo_root") || exit 2
 [ -x "${HS_PATH:-/nonexistent}" ] || {
     echo "migrate_hs_cache_fp: no HS oracle binary (set HS_PATH) — the new key IS its fingerprint, so there is nothing to migrate onto" >&2
     exit 2
 }
-hs_fingerprint "$HS_PATH"
+oracle_rev_check "$HS_PATH" "$MAUDE" "$repo_root"
 
 echo "oracle      : $HS_PATH"
 echo "fingerprint : $HS_FP  ->  key suffix __b$HS_FP_SALT"
 echo "legacy      : $HS_FP_LEGACY  ->  old suffix __b$HS_FP_LEGACY_SALT"
-oracle_rev_check "$HS_PATH" "$MAUDE" "$repo_root"
-echo "oracle source: preflight complete (any override is reported above)"
+echo "oracle source: $ORACLE_SOURCE_STATUS ($ORACLE_SOURCE_NOTE)"
 [ -n "$DRY_RUN" ] && echo "MODE        : DRY RUN (nothing will be renamed)"
 echo
 

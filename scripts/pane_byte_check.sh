@@ -63,7 +63,6 @@ HS_PATH=$(resolve_hs_oracle "$repo_root") || exit 2
     exit 2
 }
 oracle_rev_check "$HS_PATH" "$MAUDE_PATH" "$repo_root"
-hs_fingerprint "$HS_PATH"
 # Keep cache selection identical to web_parity.sh. The plan version is part of
 # the profile even though this script only consumes manifests.
 PLAN_VERSION="$(python3 -c \

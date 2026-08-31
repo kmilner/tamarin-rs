@@ -58,11 +58,9 @@ HS_PATH=$(resolve_hs_oracle "$repo_root") || exit 2
     echo "wf_gate: no HS oracle binary (set HS_PATH) — the cache key carries the oracle's fingerprint, so entries cannot be looked up without it" >&2
     exit 2
 }
-# Oracle-binary fingerprint (gate_common's hs_fingerprint), folded into every
-# cache key: a rebuilt oracle must MISS, not answer out of the previous one's
-# entries.  Loop-invariant, so taken once.
+# Source verification also fingerprints the oracle for every cache key: a
+# rebuilt oracle must MISS, not answer out of the previous one's entries.
 oracle_rev_check "$HS_PATH" "$MAUDE" "$repo_root"
-hs_fingerprint "$HS_PATH"
 export RS_PATH HS_PATH HS_CACHE CORPUS_ROOT FLAGS_MAP FILE_TIMEOUT \
        HS_FILL_TIMEOUT DERIVCHECK_TIMEOUT HS_FP HS_FP_SALT
 

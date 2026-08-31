@@ -45,9 +45,10 @@ override; `WEB_CACHE_ROOT=` moves the whole profile pool. Nothing is archived
 or wiped, and
 `bump_submodule.sh` deliberately leaves the caches alone.
 `./setup.sh testing` also stamps the binary with the submodule pin, the
-ordered patch-series SHA-256 and the binary SHA-256. Comparing gates reject a
-missing or stale stamp, so an arbitrary dirty-tree rebuild at the right base
-commit cannot masquerade as the patched oracle.
+ordered patch-series SHA-256 and the binary SHA-256, both beside the executable
+and at a fixed `.stack-work/` location. Comparing gates can therefore verify a
+byte-identical `HS_PATH` copy while rejecting an arbitrary dirty-tree rebuild
+at the right base commit.
 `scripts/migrate_hs_cache_fp.sh` is the idempotent rename of pre-fingerprint
 and former size+mtime entries onto the current binary-SHA keys; it also
 updates matching web-cache fingerprint sidecars. Sweep entries use hashed
@@ -62,7 +63,7 @@ consumers.
 environment-line strip policies (`strip_env` deletes all four volatile lines,
 `strip_env_lines` keeps `analyzed:` for the triage tools, `norm` blanks to
 placeholders for the sweeps), `flags_for`/`include_shas`/
-`include_fingerprint`/`oracle_shas`/`ckey`, `hs_fingerprint`,
+`oracle_shas`/`ckey`, `binary_sha256`/`hs_fingerprint`,
 `allowlist_guard` + the gate `filelist`, `rs_stale_check`, `oracle_rev_check`,
 the Haskell-oracle resolver and the maude resolver — `MAUDE_PATH` if set
 (set-but-unusable is a hard fail,

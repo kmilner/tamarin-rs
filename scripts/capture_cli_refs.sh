@@ -71,17 +71,9 @@ fi
 
 # --- oracle revision/source preflight ---------------------------------------
 # Require setup.sh's controlled build of the pin plus current patch series.
-pin=$(git -C "$repo_root" rev-parse :tamarin-prover 2>/dev/null) || pin=
-binrev=$(oracle_revision "$HS_PATH" "$MAUDE")
-rev_note="matches submodule pin"
-[ -z "$pin" ] || [ "$binrev" = "$pin" ] \
-    || rev_note="MISMATCH: oracle is ${binrev:-unknown}, submodule pin is $pin"
 oracle_rev_check "$HS_PATH" "$MAUDE" "$repo_root"
-
-# Oracle-binary fingerprint — gate_common's hs_fingerprint, the same recipe
-# every cached gate keys on.  Recorded in the manifest so a reference captured
-# by a patched oracle is identifiable after the fact.
-hs_fingerprint "$HS_PATH"
+binrev=${ORACLE_REVISION:-unknown}
+rev_note="$ORACLE_SOURCE_STATUS: $ORACLE_SOURCE_NOTE"
 
 # --- row selection -----------------------------------------------------------
 want=("$@")

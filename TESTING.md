@@ -36,7 +36,10 @@ modified). That directory is disposable: when its revision differs, setup
 resets it to the current branch's submodule pin while retaining its ignored
 `.stack-work/` compiler cache. Parity scripts auto-discover the binary under
 `tamarin-prover-testing/.stack-work/`; set `HS_PATH` to point them at a
-specific binary instead.
+specific binary instead. A byte-identical copy of the setup-built binary is
+accepted using the fixed attestation retained under `.stack-work/`; a genuinely
+different binary needs its own adjacent `.tamarin-rs-oracle` attestation or the
+explicit `ALLOW_ORACLE_REV_MISMATCH=1` waiver.
 
 **A current release build.** Every gate but `web_parity.sh` uses
 `target/release/tamarin-rs` as-is and only checks that the file exists — a
@@ -443,11 +446,14 @@ oracle binary even on a warm cache —
 its fingerprint is part of the address — and exit 2 without one,
 `NO_HS_FILL=1` included.
 
-`./setup.sh testing` writes a source attestation beside that binary: the
-submodule pin, the ordered patch-series SHA-256 and the binary SHA-256.
-`oracle_rev_check` verifies all three. This distinguishes the intended patched
-oracle from an arbitrary dirty worktree whose `Git revision:` happens to have
-the same base commit.
+`./setup.sh testing` writes a source attestation beside that binary and at a
+fixed location under `.stack-work/`: the submodule pin, the ordered
+patch-series SHA-256 and the binary SHA-256. `oracle_rev_check` verifies all
+three, and therefore accepts a byte-identical `HS_PATH` copy without trusting
+an arbitrary unstamped binary. This distinguishes the intended patched oracle
+from a dirty-worktree build whose `Git revision:` happens to have the same base
+commit. When the generated source tree and attested binary are already current,
+setup skips the timestamp-changing relink entirely.
 
 **Migrate an older cache generation.** Entries written under the
 pre-fingerprint or former size+mtime key are otherwise unreachable.

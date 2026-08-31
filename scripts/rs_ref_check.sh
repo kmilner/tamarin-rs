@@ -152,8 +152,7 @@ if [ "$MODE" = generate ]; then
     [ -n "$HS_PATH" ] && [ -x "$HS_PATH" ] || {
         echo "rs_ref_check: no oracle binary to fingerprint (HS_PATH=${HS_PATH:-unset})" >&2
         exit 2; }
-    hs_fingerprint "$HS_PATH"
-    # The fingerprint records WHICH binary; gate_common's oracle_rev_check pins
+    # gate_common's oracle_rev_check fingerprints WHICH binary and pins
     # that it is the build of the submodule pin before `# oracle:` is stamped —
     # otherwise the header could bless a baseline with the fingerprint of an
     # oracle from another upstream (ALLOW_ORACLE_REV_MISMATCH=1 to override,

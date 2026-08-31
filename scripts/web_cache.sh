@@ -17,8 +17,12 @@
 web_cache_init() {
     local repo=$1 scripts=$2 hs=$3 plan=$4 common shared profile_text marker maude_sha
 
-    WEB_ORACLE_SHA256=$(sha256sum "$hs" | cut -d' ' -f1) || return 1
-    maude_sha=$(sha256sum "$MAUDE_PATH" | cut -d' ' -f1) || return 1
+    if [ "${HS_FP_PATH:-}" = "$hs" ] && [ -n "${HS_FP:-}" ]; then
+        WEB_ORACLE_SHA256=$HS_FP
+    else
+        WEB_ORACLE_SHA256=$(binary_sha256 "$hs") || return 1
+    fi
+    maude_sha=$(binary_sha256 "$MAUDE_PATH") || return 1
     profile_text=$(printf '%s\n' \
         "format=1" \
         "oracle_sha256=$WEB_ORACLE_SHA256" \

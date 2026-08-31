@@ -105,7 +105,8 @@ This materialises a git worktree of the pinned commit at
 submodule itself stays untouched), and builds it with stack. When needed, the
 testing worktree is reset to the current branch's pin; ignored `.stack-work/`
 artifacts remain as the compiler cache. The parity scripts discover that
-binary automatically; `HS_PATH=<binary>` overrides.
+binary automatically; `HS_PATH=<binary>` overrides, and byte-identical copies
+are verified against setup's fixed `.stack-work/` attestation.
 
 ## Parity status
 

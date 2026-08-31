@@ -104,8 +104,6 @@ maude_on_path "$MAUDE_PATH"
 # current patch series. The binary SHA-256 also keys the general gate caches;
 # web_cache.sh folds it into a profile shared with pane_byte_check.sh.
 oracle_rev_check "$HS_PATH" "$MAUDE_PATH" "$repo_root"
-hs_fingerprint "$HS_PATH" \
-    || { echo "cannot fingerprint HS binary '$HS_PATH'" >&2; exit 2; }
 [ -r "$script_dir/web_cache.sh" ] || { echo "web_parity: missing $script_dir/web_cache.sh" >&2; exit 2; }
 . "$script_dir/web_cache.sh"
 web_cache_init "$repo_root" "$script_dir" "$HS_PATH" "$PLAN_VERSION" \

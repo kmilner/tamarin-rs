@@ -78,7 +78,6 @@ export RS_PATH HS_PATH HS_CACHE CORPUS_ROOT FLAGS_MAP FILE_TIMEOUT DERIVCHECK_TI
 # provenance check verifies the submodule pin and patch series. The binary's
 # SHA-256 turns every distinct build into a cache miss per entry.
 oracle_rev_check "$HS_PATH" "$MAUDE" "$repo_root"
-hs_fingerprint "$HS_PATH"
 export HS_FP HS_FP_SALT
 
 # strip_env (gate_common.sh): DELETE the four volatile header lines.
