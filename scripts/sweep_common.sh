@@ -253,10 +253,8 @@ sweep_preflight() {
 }
 sweep_preflight
 
-# Oracle-binary fingerprint (gate_common's hs_fingerprint), part of every
-# cache key. Loop-invariant, so it is taken once here rather than per cached
-# lookup.
-hs_fingerprint "$HS_BIN"
+# sweep_preflight's source check also computes the oracle fingerprint used by
+# every cache key.
 
 # include_shas / oracle_shas come from gate_common.sh (they are part of ckey
 # and of rs_ref_check.sh's ikey there too); hs_run folds them into its digest
@@ -274,17 +272,19 @@ hs_run() {
   key=$( { sha256sum "$f" | cut -d' ' -f1; echo "$tag"; echo "$HS_FP"; echo "$MAUDE"
            include_shas "$f"; oracle_shas "$f" "$*"; } | sha256sum | cut -d' ' -f1 )
   local dir="$HS_CACHE/${key:0:2}/$key"
-  # Preserve the costly cache generated before hs_fingerprint switched from
-  # size+mtime to binary SHA-256. The source attestation preflight has already
-  # established that this exact binary is the intended oracle; copy-on-read
-  # promotes only the legacy key computed from that same executable.
-  legacy_key=$( { sha256sum "$f" | cut -d' ' -f1; echo "$tag"; echo "$HS_FP_LEGACY"; echo "$MAUDE"
-                  include_shas "$f"; } | sha256sum | cut -d' ' -f1 )
-  legacy_dir="$HS_CACHE/${legacy_key:0:2}/$legacy_key"
-  if [ ! -f "$dir/rc" ] && [ -f "$legacy_dir/rc" ]; then
-    local promote="$dir.promote.$$"
-    mkdir -p "$(dirname "$dir")" && cp -a "$legacy_dir" "$promote" \
-      && mv -T "$promote" "$dir" || rm -rf "$promote"
+  if [ ! -f "$dir/rc" ]; then
+    # Preserve the costly cache generated before hs_fingerprint switched from
+    # size+mtime to binary SHA-256. This must reproduce the former key exactly,
+    # including executable-oracle inputs. Compute it only on a miss: a warm
+    # entry should not pay for a second dependency walk forever.
+    legacy_key=$( { sha256sum "$f" | cut -d' ' -f1; echo "$tag"; echo "$HS_FP_LEGACY"; echo "$MAUDE"
+                    include_shas "$f"; oracle_shas "$f" "$*"; } | sha256sum | cut -d' ' -f1 )
+    legacy_dir="$HS_CACHE/${legacy_key:0:2}/$legacy_key"
+    if [ -f "$legacy_dir/rc" ]; then
+      local promote="$dir.promote.$$"
+      mkdir -p "$(dirname "$dir")" && cp -a "$legacy_dir" "$promote" \
+        && mv -T "$promote" "$dir" || rm -rf "$promote"
+    fi
   fi
   if [ -f "$dir/rc" ]; then
     local crc ccap
