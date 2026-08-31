@@ -95,6 +95,34 @@ fn sorry_leaf_runs_auto_prover_only_for_prove_targets() {
     assert_eq!(explained.method, ProofMethod::Sorry(Some(reason)));
 }
 
+#[test]
+fn sorry_with_children_is_replaced_as_one_node() {
+    let Some(h) = maude() else { return };
+    let ctx = ProofContext::new(h, Vec::new());
+    let child = ProofTree {
+        method: ProofMethod::Finished(MethodResult::Contradictory(None)),
+        cases: Vec::new(),
+    };
+    let skel = ProofTree {
+        method: ProofMethod::Sorry(Some("stale".into())),
+        cases: vec![("kept".into(), child)],
+    };
+
+    let replayed = replace_sorry_prove(&ctx, past_initial_system(), &skel, 50);
+    assert_eq!(replayed.status, NodeStatus::Solved);
+    assert!(replayed.children.is_empty(), "the old subtree is replaced");
+
+    let checked = check_and_extend(&ctx, past_initial_system(), &skel, 50);
+    assert_eq!(checked.method, ProofMethod::Sorry(Some("stale".into())));
+    assert!(checked.annotated);
+    let kept = &checked.children["kept"];
+    assert!(!kept.annotated, "stored children have no checked system");
+    assert_eq!(
+        kept.method,
+        ProofMethod::Finished(MethodResult::Contradictory(None))
+    );
+}
+
 /// A `by contradiction` leaf on a system with no contradictions
 /// must NOT silently emit Finished(Contradictory).  Per the
 /// walker contract (the contradiction-leaf branch, `finished_leaf`),

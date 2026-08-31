@@ -131,6 +131,25 @@ fn annotated_sorry(reason: Option<String>, sys: System) -> ProofNode {
     }
 }
 
+/// HS `sorryNode reason cs`: keep the `Sorry` node annotated while mapping
+/// every stored child through `noSystemPrf`.
+fn annotated_sorry_with_children(
+    reason: Option<String>,
+    sys: System,
+    children: &[(String, ProofTree)],
+) -> ProofNode {
+    ProofNode {
+        method: ProofMethod::Sorry(reason),
+        children: children
+            .iter()
+            .map(|(name, child)| (name.clone(), parsed_to_unannotated(child, sys.clone())))
+            .collect(),
+        sys,
+        status: NodeStatus::Sorry,
+        annotated: true,
+    }
+}
+
 /// Build the HS check-and-extend "invalid proof step" node.  When
 /// `checkProof` finds an invalid step it emits
 /// `sorryNode (Just "invalid proof step encountered") (M.singleton "" prf)`
@@ -238,20 +257,18 @@ fn replay_node(
     proof_bound: usize,
     auto_prove: bool,
 ) -> ProofNode {
-    // ---- Leaf cases first (HS `replace prf@(... Sorry ...)`). ----
-    // `by sorry` leaf → invoke the auto-prover on `sys`.  HS:
+    // ---- Sorry cases first (HS `replace prf@(... Sorry ...)`). ----
+    // Any `Sorry` node → invoke the auto-prover on `sys`. HS:
     //   replace prf@(LNode (ProofStep (Sorry _) (Just se)) _) =
     //       fromMaybe prf $ runProver prover0 ctxt d se prf
-    if node.cases.is_empty() {
-        if let ProofMethod::Sorry(reason) = &node.method {
-            // HS check-and-extend keeps a stored `Sorry` leaf annotated
-            // (Proof.hs: `sorryNode reason cs` → node carries
-            // `Just sys`), so it renders as plain `by sorry`.
-            if !auto_prove {
-                return annotated_sorry(reason.clone(), sys);
-            }
-            return run_proof_search(ctx, sys, proof_bound);
+    if let ProofMethod::Sorry(reason) = &node.method {
+        // HS check-and-extend keeps the stored `Sorry` node annotated and
+        // preserves any children without system annotations (`sorryNode
+        // reason cs`).
+        if !auto_prove {
+            return annotated_sorry_with_children(reason.clone(), sys, &node.cases);
         }
+        return run_proof_search(ctx, sys, proof_bound);
     }
 
     // A terminal leaf: `by contradiction`, `SOLVED`
