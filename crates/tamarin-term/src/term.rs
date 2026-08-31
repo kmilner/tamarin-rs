@@ -913,7 +913,7 @@ mod tests {
         let swapped = map_lits(&prod, &mut |l| match l {
             Lit::Var(v) if *v == x => Lit::Var(z),
             Lit::Var(v) if *v == z => Lit::Var(x),
-            other => other.clone(),
+            other => *other,
         });
         let Term::App(_, args) = &swapped else {
             panic!("expected an AC application");

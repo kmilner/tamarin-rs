@@ -16,7 +16,7 @@ use crate::term::{lit, Term};
 /// HS `data Lit c v = Con c | Var v` derives `Eq`/`Ord` in that variant order
 /// (VTerm.hs:56-57), and `Term`'s own `Ord` reads it, so `Con < Var` decides
 /// the argument order of every printed AC term.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Lit<C, V> {
     Con(C),
     Var(V),

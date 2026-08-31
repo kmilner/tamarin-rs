@@ -154,8 +154,8 @@ fn import_lit(l: &Lit<Name, LVar>, ctx: &mut ConvCtx) -> MaudeLit {
             MaudeLit::MaudeConst(id, s)
         }
     };
-    ctx.forward.insert(l.clone(), m.clone());
-    ctx.inverse.insert(m.clone(), l.clone());
+    ctx.forward.insert(*l, m.clone());
+    ctx.inverse.insert(m.clone(), *l);
     m
 }
 
@@ -186,7 +186,7 @@ fn import_mlit(
     next_idx: &mut u64,
 ) -> Lit<Name, LVar> {
     // A literal already in the inverse map is one we sent to Maude.
-    if let Some(orig) = ctx.inverse.get(ml).cloned() {
+    if let Some(orig) = ctx.inverse.get(ml).copied() {
         return orig;
     }
     // Sort-tolerant fallback: Maude can return a var with the same idx but a
@@ -201,7 +201,7 @@ fn import_mlit(
         MaudeLit::FreshVar(_, sort) | MaudeLit::MaudeVar(_, sort) => {
             let lit = Lit::Var(LVar::new(name_hint, *sort, *next_idx));
             *next_idx += 1;
-            ctx.inverse.insert(ml.clone(), lit.clone());
+            ctx.inverse.insert(ml.clone(), lit);
             lit
         }
         MaudeLit::MaudeConst(_, _) => panic!("mterm_to_lnterm: unknown constant {:?}", ml),
