@@ -79,6 +79,10 @@ new="$(git -C "$sub" rev-parse --verify "$ref^{commit}")" \
     || die "cannot resolve '$ref' in the submodule"
 oldshort="$(git -C "$sub" rev-parse --short "$old")"
 newshort="$(git -C "$sub" rev-parse --short "$new")"
+if [ "$mode" = bump ] && [ "$new" = "$old" ]; then
+    echo "already at $ref ($newshort) — nothing to do"
+    exit 0
+fi
 
 git -C "$sub" worktree add -q --detach "$rebasedir" "$new"
 owns_rebasedir=1

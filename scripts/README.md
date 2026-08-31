@@ -411,10 +411,10 @@ a rename-only migration.
 
 `divergence_fixtures/` covers observable behaviour that no theory under the
 submodule's `examples/` tree exercises, so every corpus gate stays green
-across a regression in it. These fixtures pin slice-level bytes — including
-one deliberate divergence, which the MATCH-only corpus gates cannot express —
-against oracle captures committed in-tree, so the check needs no oracle
-binary.
+across a regression in it. These fixtures pin slice-level bytes against oracle
+captures committed in-tree, so the check needs no oracle binary. The manifest
+can also record an intentional divergence when one exists; currently every row
+must match.
 
 - **`divergence_fixtures/capture.sh`** — records the oracle's bytes for every
   fixture into `divergence_fixtures/expected/`. It resolves the oracle inside
@@ -423,14 +423,14 @@ binary.
   `crates/tamarin-server/tests/capture_haskell_fixtures.sh`): these bytes are
   the reference, so a capture from another revision would silently redefine
   what the port is checked against. `--record-rs` additionally re-records the
-  port side of the deliberate-divergence fixture — never a side effect.
+  port side of any manifest row marked `diverge` — never a side effect.
 - **`divergence_fixtures/check.sh`** — runs only the port and compares against
-  those captures. Cheap (~5 s for all 19: no oracle, no proving), which is why
+  those captures. Cheap (~5–10 s for all 55: no oracle, no proving), which is why
   CI runs it: the `test` job's `Divergence fixtures` step builds
   `--profile ci --bin tamarin-rs`, prepends `/opt/maude` to `PATH` (the port's
   own probe does not read `MAUDE_PATH`) and invokes it with an absolute
-  `RS_PATH`, so a drift on any fixture, a lost AC-marker divergence, or an
-  `expected/oracle_rev` that is not the current submodule pin fails the build.
+  `RS_PATH`, so a drift on any fixture or an `expected/oracle_rev` that is not
+  the current submodule pin fails the build.
   It is not reachable by `cargo test` or by any corpus gate, so run it by hand
   too, next to `wf_gate.sh` and `pretty_gate.sh`.
 - **`divergence_fixtures/fixtures.tsv`** — per fixture: which output slices are

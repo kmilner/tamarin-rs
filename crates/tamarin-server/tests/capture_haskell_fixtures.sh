@@ -76,6 +76,8 @@ wait_for_server() {
 
 # Spin Haskell up in its own work-dir so it doesn't dirty ours.
 WORKDIR="$(mktemp -d)"
+CAPTURE_DIR="$WORKDIR/responses"
+mkdir -p "$CAPTURE_DIR"
 # BIGDIR is the second phase's work-dir (created further down); declaring it
 # here keeps the trap's `${BIGDIR:+...}` well-defined under `set -u` and
 # contributes no argument to `rm` while it is empty.
@@ -112,7 +114,11 @@ fetch() {
     HEAD) opts+=(-I) ;;
   esac
   local status
-  status=$(curl "${opts[@]}" -o "${RES_DIR}/${outfile}" -w "%{http_code}" "${BASE}${url}" || echo "ERR")
+  if ! status=$(curl "${opts[@]}" -o "${CAPTURE_DIR}/${outfile}" \
+      -w "%{http_code}" "${BASE}${url}"); then
+    printf "  %-30s %3s\n" "$url" ERR
+    return 1
+  fi
   printf "  %-30s %3s\n" "$url" "$status"
 }
 
@@ -217,10 +223,12 @@ wait_for_server BigTermProved
 fetch json_proof_abbrev.json    "/thy/trace/1/json/proof/done/_/Init/Init?abbrevInBackend=1"
 rm -rf "$BIGDIR"
 
-# Stamp the oracle these bytes came from, last: `set -e` aborts above on any
-# failed phase, so a half-written capture never claims a revision.  The stamp
-# has no trailing newline (the same shape scripts/divergence_fixtures/ uses).
-printf '%s' "$pin" > "${RES_DIR}/oracle_rev"
+# Stamp the oracle these bytes came from only after every request succeeds,
+# then publish the complete capture. A transport failure leaves the committed
+# fixture directory untouched. The stamp has no trailing newline (the same
+# shape scripts/divergence_fixtures/ uses).
+printf '%s' "$pin" > "${CAPTURE_DIR}/oracle_rev"
+cp "${CAPTURE_DIR}"/* "$RES_DIR/"
 
 echo "done.  Captures live under: ${RES_DIR} (oracle_rev: $pin)"
 kill "$SERVER_PID" 2>/dev/null || true
