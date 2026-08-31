@@ -358,6 +358,21 @@ fn duplicate_predicate_after_paren_has_no_dot_label() {
     );
 }
 
+#[test]
+fn duplicate_predicate_renders_annotations() {
+    let src = "theory T begin\n\
+               predicates: P(x)[-] <=> x = x\n\
+               predicates: P(y)[+] <=> y = y\n\
+               end\n";
+    assert_eq!(
+        err(src, "dup.spthy"),
+        "\"dup.spthy\" (line 4, column 1):\n\
+         unexpected \"e\"\n\
+         expecting \".\", \"&\", \"∧\", \"|\", \"∨\", \"==>\", \"⇒\", \"<=>\", \"⇔\" or \",\"\n\
+         duplicate predicate: P( y )[+]"
+    );
+}
+
 /// `lookupPredicate` appends the builtin predicates to the lookup list
 /// (Theory/Syntactic/Predicate.hs:58-67,78), so declaring `Smaller/2`
 /// collides with the builtin.  The formula's last term ends after a message

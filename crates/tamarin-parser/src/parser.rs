@@ -307,7 +307,9 @@ fn show_string_list(items: &[&str]) -> String {
 /// name, and `.<idx>` when the index is nonzero or the name ends in a digit
 /// (Term/LTerm.hs:550-557).  HS parses the head with `fact' lvar`
 /// (Theory/Text/Parser/Signature.hs:271-273), so its arguments are variables;
-/// any other argument shape renders as its `Debug` form.
+/// any other argument shape renders as its `Debug` form. The trailing
+/// annotation list is HS `ppAnn`: set-ordered and rendered as `+`, `-` and
+/// `no_precomp`.
 fn pred_fact_text(f: &Fact) -> String {
     let mut s = String::new();
     if f.persistent {
@@ -316,26 +318,45 @@ fn pred_fact_text(f: &Fact) -> String {
     s.push_str(&f.name);
     if f.args.is_empty() {
         s.push_str("( )");
-        return s;
-    }
-    s.push_str("( ");
-    for (k, a) in f.args.iter().enumerate() {
-        if k > 0 {
-            s.push_str(", ");
-        }
-        match a {
-            Term::Var(v) => {
-                s.push_str(tamarin_term::lterm::sort_prefix(v.sort));
-                s.push_str(&v.name);
-                if v.idx != 0 || v.name.ends_with(|c: char| c.is_ascii_digit()) {
-                    s.push('.');
-                    s.push_str(&v.idx.to_string());
-                }
+    } else {
+        s.push_str("( ");
+        for (k, a) in f.args.iter().enumerate() {
+            if k > 0 {
+                s.push_str(", ");
             }
-            other => s.push_str(&format!("{other:?}")),
+            match a {
+                Term::Var(v) => {
+                    s.push_str(tamarin_term::lterm::sort_prefix(v.sort));
+                    s.push_str(&v.name);
+                    if v.idx != 0 || v.name.ends_with(|c: char| c.is_ascii_digit()) {
+                        s.push('.');
+                        s.push_str(&v.idx.to_string());
+                    }
+                }
+                other => s.push_str(&format!("{other:?}")),
+            }
         }
+        s.push_str(" )");
     }
-    s.push_str(" )");
+    let mut annotations = f.annotations.clone();
+    annotations.sort();
+    annotations.dedup();
+    if !annotations.is_empty() {
+        let annotation = |a| match a {
+            FactAnnotation::SolveFirst => "+",
+            FactAnnotation::SolveLast => "-",
+            FactAnnotation::NoSources => "no_precomp",
+        };
+        s.push('[');
+        s.push_str(
+            &annotations
+                .into_iter()
+                .map(annotation)
+                .collect::<Vec<_>>()
+                .join(","),
+        );
+        s.push(']');
+    }
     s
 }
 
