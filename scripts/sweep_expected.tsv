@@ -57,9 +57,6 @@
 #    before filing one under #874.)
 #   sapic-export-echo      sapic/export corner files whose -m echo/rc diverged
 #                          before this campaign (PRE-binary evidence).
-#   oracle-path-resolution RS resolves an implicit oracle beside the theory and
-#                          renders that executable path; the pinned HS oracle
-#                          still echoes the generic `oracle` fallback.
 #   sapic-locations-report upstream #922 rewrites `report(t)` to
 #                          `rep(t, location)` throughout the translated MSR.
 #                          The pinned HS oracle predates that fix.
@@ -163,7 +160,6 @@ module	examples/accountability/csf21-acc-unbounded/mixnets/message-tracing/dmn-m
 module	examples/accountability/csf21-acc-unbounded/mixnets/message-tracing/dmn-message-tracing-first-2.spthy	stderr-oracle-calls	-		stderr
 module	examples/features/heuristic/OracleRanking.spthy	stderr-oracle-calls	-		stderr
 module	examples/features/macros/MacroTestWithOracleRanking.spthy	stderr-oracle-calls	-		stderr
-module	examples/regression/trace/defaultoracle.spthy	oracle-path-resolution	theory-adjacent defaultoracle.oracle; pre-round binary identical		stdout
 module	examples/sapic/deprecated/csf21-acc-unbounded/mixvote/mixvote_SmHh-multi-session-5-fixed.spthy	capacity	deep process recursion, rs=134 at plain load		timeout/kill
 module	examples/sapic/export/5G_AKA/5G_AKA.spthy	sapic-export-echo	all three modules		stdout
 module	examples/sapic/export/ExistingSapicModels/AKE.spthy	sapic-export-echo	-	msr	stdout
