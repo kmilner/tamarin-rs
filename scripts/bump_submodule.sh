@@ -34,7 +34,6 @@ die() { echo "ERROR: $*" >&2; exit 1; }
 
 apply_series() {
     tree="$1"
-    : > "$tmp/applied"
     : > "$tmp/upstream"
     while IFS= read -r name || [ -n "$name" ]; do
         case "$name" in ''|'#'*) continue ;; esac
@@ -45,16 +44,9 @@ apply_series() {
             echo "already upstream: $name"
         elif git -C "$tree" apply --check "$patch" 2>/dev/null; then
             git -C "$tree" apply "$patch"
-            echo "$name" >> "$tmp/applied"
             echo "applies cleanly:  $name"
-        elif git -C "$tree" apply -3 "$patch" 2>"$tmp/apply.err"; then
-            echo "$name" >> "$tmp/applied"
-            echo "applies three-way: $name"
         else
-            cat "$tmp/apply.err" >&2
-            conflicts="$(git -C "$tree" diff --name-only --diff-filter=U)"
-            [ -z "$conflicts" ] || printf 'conflicts:\n%s\n' "$conflicts" >&2
-            die "$name no longer applies; refresh this patch from its upstream PR"
+            die "$name no longer applies cleanly; refresh this patch from its upstream PR"
         fi
     done < "$series"
 }
