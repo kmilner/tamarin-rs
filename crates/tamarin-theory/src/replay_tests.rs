@@ -81,6 +81,18 @@ fn sorry_leaf_runs_auto_prover_only_for_prove_targets() {
     );
     assert!(matches!(kept.method, ProofMethod::Sorry(None)));
     assert!(kept.annotated, "a stored sorry leaf stays annotated");
+
+    let reason = "kept reason".to_string();
+    let explained = check_and_extend(
+        &ctx,
+        past_initial_system(),
+        &ProofTree {
+            method: ProofMethod::Sorry(Some(reason.clone())),
+            cases: Vec::new(),
+        },
+        50,
+    );
+    assert_eq!(explained.method, ProofMethod::Sorry(Some(reason)));
 }
 
 /// A `by contradiction` leaf on a system with no contradictions

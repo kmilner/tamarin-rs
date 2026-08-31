@@ -242,14 +242,16 @@ fn replay_node(
     // `by sorry` leaf → invoke the auto-prover on `sys`.  HS:
     //   replace prf@(LNode (ProofStep (Sorry _) (Just se)) _) =
     //       fromMaybe prf $ runProver prover0 ctxt d se prf
-    if matches!(node.method, ProofMethod::Sorry(_)) && node.cases.is_empty() {
-        // HS check-and-extend keeps a stored `Sorry` leaf annotated
-        // (Proof.hs: `sorryNode reason cs` → node carries
-        // `Just sys`), so it renders as plain `by sorry`.
-        if !auto_prove {
-            return annotated_sorry(None, sys);
+    if node.cases.is_empty() {
+        if let ProofMethod::Sorry(reason) = &node.method {
+            // HS check-and-extend keeps a stored `Sorry` leaf annotated
+            // (Proof.hs: `sorryNode reason cs` → node carries
+            // `Just sys`), so it renders as plain `by sorry`.
+            if !auto_prove {
+                return annotated_sorry(reason.clone(), sys);
+            }
+            return run_proof_search(ctx, sys, proof_bound);
         }
-        return run_proof_search(ctx, sys, proof_bound);
     }
 
     // A terminal leaf: `by contradiction`, `SOLVED`
@@ -505,7 +507,7 @@ fn exec_method_for(
 /// to nothing here.
 fn resolve_method(stored: &ProofMethod, sys: &System) -> Option<ProofMethod> {
     match stored {
-        ProofMethod::Sorry(_) => Some(ProofMethod::Sorry(None)),
+        ProofMethod::Sorry(reason) => Some(ProofMethod::Sorry(reason.clone())),
         ProofMethod::Simplify => Some(ProofMethod::Simplify),
         ProofMethod::Induction => Some(ProofMethod::Induction),
         ProofMethod::SolveGoal(g) => Some(ProofMethod::SolveGoal(match_goal(g, sys)?)),
