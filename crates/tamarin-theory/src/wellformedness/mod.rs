@@ -19,9 +19,10 @@
 //! batch CLI (`run.rs`) and the web server's theory load (`theory_io.rs`) —
 //! call it once, after the SAPIC and accountability translations, so the
 //! rules SAPIC generated and the lemmas accountability appended are in
-//! scope.  The batch path hands it the file's Maude handle, which HS's
-//! `ruleVariantsReport` needs; the web load path passes `None` and that one
-//! check reports nothing.
+//! scope.  Both paths hand it the file's live Maude handle when startup
+//! succeeds, which HS's `ruleVariantsReport` needs.  The web path falls back
+//! to `None` only when Maude is unavailable, and that one check then reports
+//! nothing.
 //!
 //! Every check reads the theory's items through `Theory::items`,
 //! [`Theory::rules`] and [`Theory::lemmas`], which hand them out in item

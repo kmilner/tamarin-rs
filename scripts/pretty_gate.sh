@@ -161,7 +161,7 @@ hs_fill_one() {
     # 124 is timeout(1)'s SIGTERM; >=128 is any other signal death (the OOM
     # killer's 137, an abort's 134), which truncates stdout the same way.
     if [ "$rc" = 124 ] || [ "$rc" -ge 128 ]; then
-        echo "  HS KILLED   $rel (rc=$rc, cap ${FILE_TIMEOUT}s) — nothing cached" >&2; return 0
+        echo "  HS KILLED   $rel (rc=$rc, cap $FILE_TIMEOUT) — nothing cached" >&2; return 0
     fi
     # `.nohs` is a STICKY marker for both gates: no output at all (timeout,
     # missing maude, parse abort) records it and neither gate re-runs the

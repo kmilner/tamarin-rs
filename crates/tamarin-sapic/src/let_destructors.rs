@@ -298,7 +298,7 @@ fn subst_annotation(
 }
 
 /// `apply subst` for a `SapicAction SapicLVar` (Sapic/Process.hs:319-321):
-/// `mapTermsAction`, with `ChIn`'s match variables rewritten by
+/// `mapTermsAction`, with `ChIn` and `Msr` match variables rewritten by
 /// [`apply_match_vars`].
 fn subst_action(
     subst: &Subst<Name, SapicLVar>,
@@ -322,6 +322,10 @@ fn subst_action(
             };
         }
         A::Msr { match_vars, .. } => {
+            // Pinned HS reaches `Set.map (apply subst)` here and aborts if a
+            // match variable maps to a compound term.  Keep the robust
+            // `ChIn`/`Let` policy instead: collect the image's free variables
+            // so a compound match pattern remains usable.
             let mut mapped = map_terms_action(
                 |t| subst_term(subst, t),
                 |f| apply_subst(subst, f.clone()),

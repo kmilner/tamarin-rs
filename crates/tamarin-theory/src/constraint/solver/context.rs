@@ -741,7 +741,7 @@ impl ProofContext {
         // and making us mechanism-identical to HS.  The runtime
         // generator (`dh_intruder_rules`) is retained as the regenerator
         // (callable when one wants to refresh the cache from local
-        // Maude); a bridge test in `intruder_variants.rs` flags any
+        // Maude); a bridge test in `tests/intruder_variants_render.rs` flags any
         // divergence.
         //
         // Ordering matches HS exactly: DH BEFORE BP, both AFTER

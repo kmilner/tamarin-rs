@@ -333,9 +333,9 @@ pub struct CliHeuristic {
 ///   3. `defaultOracleNames srcThyInFileName` (TheoryLoader.hs:744-746, see line 746) — fill any
 ///      oracle ranking that STILL has no relPath with the default `.oracle`
 ///      name (theory-basename `.oracle` if it exists on disk, else `"oracle"`).
-///   4. `defaultOracleNames` gives an unnamed oracle the theory directory as
-///      its workDir; an explicit `--oraclename` retains the CLI oracle's
-///      absent workDir and is therefore CWD-relative.
+///   4. CLI rankings have no workDir. `defaultOracleNames` preserves that
+///      absence for both default and explicit names, so execution is
+///      CWD-relative.
 ///   5. `setQuitOnEmpty` (Theory/Proof.hs:709-716) — `--oracle-only` sets
 ///      `quitOnEmpty` on every oracle / tactic ranking.
 fn resolve_cli_heuristic(

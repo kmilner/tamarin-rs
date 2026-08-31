@@ -174,10 +174,8 @@ pub fn gconj(items: Vec<Guarded>) -> Guarded {
     // implementation unwraps based on the pre-`nub` length, but that can
     // leave `GConj [a]` after `gconj [a, a]`; this representation instead
     // normalizes it to `a` because `normalise_guarded_cow` relies on one-pass
-    // idempotence:
-    // `gconj [a, a]` must be `a`, not the non-normal singleton `Conj [a]`
-    // that only a second application would unwrap.  `normalise_guarded_cow`
-    // relies on this one-pass idempotence.
+    // idempotence: `gconj [a, a]` must be `a`, not the non-normal singleton
+    // `Conj [a]` that only a second application would unwrap.
     let mut deduped: Vec<Guarded> = Vec::with_capacity(out.len());
     for x in out {
         if !deduped.contains(&x) {

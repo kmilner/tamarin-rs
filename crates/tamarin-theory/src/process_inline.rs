@@ -222,6 +222,9 @@ fn apply_m_action(
             })
         }
         SapicAction::Msr { match_vars, .. } => {
+            // Pinned HS reaches `Set.map (apply subst)` here and aborts if a
+            // call argument for a match variable is compound.  Deliberately
+            // use the same robust free-variable rewrite as `ChIn` and `Let`.
             let mut mapped = traverse_terms_action(
                 |t| Ok(subst_term(subst, t)),
                 |f| Ok(apply_subst(subst, f.clone())),
@@ -245,8 +248,8 @@ fn apply_m_action(
             // binder is a `Bound` De Bruijn index, outside the substitution's
             // domain, so it cannot capture a variable of an argument.
             |f| Ok(apply_subst(subst, f.clone())),
-            // A variable the action binds on its own is either rejected above
-            // or outside the substitution's domain.
+            // Other action binders are outside the call substitution's
+            // domain; `ChIn` and `Msr` match variables were handled above.
             |v| Ok(v.clone()),
             ac,
         ),
