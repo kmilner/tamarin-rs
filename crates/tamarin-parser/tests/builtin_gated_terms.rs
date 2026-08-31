@@ -83,7 +83,7 @@ fn nat_plus_needs_its_builtin() {
 
 #[test]
 fn nat_literals_and_variables_need_their_builtin() {
-    for term in ["1:nat", "%1", "%n", "n:nat", "%'n'"] {
+    for term in ["1:nat", "%1", "%n", "%12", "n:nat", "%'n'"] {
         let without = format!("theory T begin\nrule R: [ ] --> [ Out({term}) ]\nend");
         assert!(
             parse_theory(&without, &[]).is_err(),
@@ -94,6 +94,31 @@ fn nat_literals_and_variables_need_their_builtin() {
         );
         parse_theory(&with, &[]).unwrap_or_else(|e| panic!("rejected {term} with nat: {e}"));
     }
+}
+
+/// `reserved "%1"` backtracks at an identifier boundary, after which
+/// upstream's alphanumeric `identStart` reads `%12` as one nat variable.
+#[test]
+fn digit_initial_nat_variable_is_not_split_as_nat_one() {
+    let thy = parse_theory(
+        "theory T begin\nbuiltins: natural-numbers\nrule R: [ In(%12) ] --> [ Out(%1) ]\nend",
+        &[],
+    )
+    .expect("digit-initial nat variable");
+    let rule = thy
+        .items
+        .iter()
+        .find_map(|item| match item {
+            TheoryItem::Rule(rule) => Some(rule),
+            _ => None,
+        })
+        .expect("rule");
+
+    assert!(matches!(
+        &rule.premises[0].args[0],
+        Term::Var(var) if var.name == "12" && var.sort == tamarin_term::lterm::LSort::Nat
+    ));
+    assert_eq!(rule.conclusions[0].args[0], Term::NatOne);
 }
 
 #[test]

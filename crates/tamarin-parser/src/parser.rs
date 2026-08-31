@@ -5857,8 +5857,9 @@ impl<'a> Parser<'a> {
             }
         }
         if self.lx.peek() == Some('%') {
-            // %'n' / %x — distinguish. (`%1` is already handled above via the
-            // `try_punct("%1")` token match.)
+            // %'n' / %x — distinguish. An exact `%1` is already handled above;
+            // longer digit-initial names such as `%12` are variables, matching
+            // upstream's alphanumeric `identStart`.
             let mut probe = self.lx.clone();
             probe.bump();
             match probe.peek() {
@@ -5876,7 +5877,7 @@ impl<'a> Parser<'a> {
                         .ok_or_else(|| self.err("bad nat literal"))?;
                     return Ok(Term::NatLit(s));
                 }
-                Some(c) if c.is_ascii_alphabetic() => {
+                Some(c) if c.is_alphanumeric() => {
                     if !self.sig_enable_nat {
                         self.lx.bump();
                         return Err(
@@ -6348,12 +6349,14 @@ impl<'a> Parser<'a> {
                 LSort::Node
             }
             Some('%') => {
-                // Could be `%1` (nat one) or `%'n'` (nat name lit) or `%x` (nat var).
+                // An exact `%1` has already been consumed as nat one. A leading
+                // quote is a nat literal; every alphanumeric start, including
+                // `%12`, begins a nat-sorted variable upstream.
                 let mut probe = self.lx.clone();
                 probe.bump();
                 match probe.peek() {
-                    Some('\'') | Some('1') => return Ok(None), // handled by literal/atom path
-                    Some(c) if c.is_ascii_alphabetic() => {
+                    Some('\'') => return Ok(None), // handled by the literal/atom path
+                    Some(c) if c.is_alphanumeric() => {
                         if !self.sig_enable_nat {
                             self.lx.bump();
                             return Err(self
