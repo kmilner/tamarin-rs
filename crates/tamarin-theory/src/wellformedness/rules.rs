@@ -277,13 +277,20 @@ fn for_each_bound_guarded_term(
             }
         }
         Guarded::GGuarded { vars, body, .. } => {
+            let inner_count = u64::try_from(vars.len()).expect("guarded binder count overflow");
             let mut extended: Vec<(u64, LVar)> = vars
                 .iter()
                 .rev()
                 .enumerate()
                 .map(|(i, (name, sort))| (i as u64, LVar::new(name, *sort, 0)))
                 .collect();
-            extended.extend_from_slice(binders);
+            extended.extend(binders.iter().map(|(i, var)| {
+                (
+                    i.checked_add(inner_count)
+                        .expect("guarded binder depth overflow"),
+                    *var,
+                )
+            }));
             for_each_bound_guarded_term(body, &extended, f);
         }
     }
