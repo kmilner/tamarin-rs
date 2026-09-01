@@ -55,7 +55,7 @@ async fn not_found_page(req: Request, next: Next) -> Response {
 }
 
 /// The URL prefixes whose next segment is a theory index — the `/thy/<kind>/`
-/// of every route in [`theory_routes`] that captures `:idx`.
+/// of every route in [`theory_routes`] that captures `{idx}`.
 ///
 /// [`theory_index_piece`] probes exactly these, and
 /// `every_idx_route_sits_behind_a_probed_prefix` pins the two together, so a
@@ -96,7 +96,7 @@ fn reads_as_theory_index(piece: &str) -> bool {
 /// pairs.
 ///
 /// Kept as data rather than a `.route()` chain so the theory-index probe above
-/// can be checked against it — every path here that captures `:idx` has to sit
+/// can be checked against it — every path here that captures `{idx}` has to sit
 /// behind a prefix [`theory_index_piece`] recognises.
 fn theory_routes() -> Vec<(&'static str, MethodRouter<Arc<AppState>>)> {
     vec![
@@ -104,81 +104,84 @@ fn theory_routes() -> Vec<(&'static str, MethodRouter<Arc<AppState>>)> {
         // Theory routes (trace lemmas only — diff is stubbed).
         // ----------------------------------------------------------------
         (
-            "/thy/trace/:idx/overview/*path",
+            "/thy/trace/{idx}/overview/{*path}",
             get(handlers::theory::interactive_overview),
         ),
         (
-            "/thy/trace/:idx/main/*path",
+            "/thy/trace/{idx}/main/{*path}",
             get(handlers::theory::theory_path_main),
         ),
-        ("/thy/trace/:idx/source", get(handlers::theory::source_)),
-        ("/thy/trace/:idx/message", get(handlers::theory::source_)),
+        ("/thy/trace/{idx}/source", get(handlers::theory::source_)),
+        ("/thy/trace/{idx}/message", get(handlers::theory::source_)),
         (
-            "/thy/trace/:idx/autoprove/:extractor/:bound/:quit/*path",
+            "/thy/trace/{idx}/autoprove/{extractor}/{bound}/{quit}/{*path}",
             get(handlers::theory::autoprove),
         ),
         (
-            "/thy/trace/:idx/autoproveAll/:extractor/:bound/*path",
+            "/thy/trace/{idx}/autoproveAll/{extractor}/{bound}/{*path}",
             get(handlers::theory::autoprove_all),
         ),
         (
-            "/thy/trace/:idx/verify/*path",
+            "/thy/trace/{idx}/verify/{*path}",
             get(handlers::theory::verify),
         ),
-        ("/thy/trace/:idx/unload", get(handlers::theory::unload)),
+        ("/thy/trace/{idx}/unload", get(handlers::theory::unload)),
         (
-            "/thy/trace/:idx/next/:section/*path",
+            "/thy/trace/{idx}/next/{section}/{*path}",
             get(handlers::theory::next_path),
         ),
         (
-            "/thy/trace/:idx/prev/:section/*path",
+            "/thy/trace/{idx}/prev/{section}/{*path}",
             get(handlers::theory::prev_path),
         ),
         (
-            "/thy/trace/:idx/download/:name",
+            "/thy/trace/{idx}/download/{name}",
             get(handlers::theory::download),
         ),
         // -- graph rendering (live: DOT pipeline) --
         (
-            "/thy/trace/:idx/intdot/*path",
+            "/thy/trace/{idx}/intdot/{*path}",
             get(handlers::theory::intdot),
         ),
-        ("/thy/trace/:idx/graph/*path", get(handlers::theory::graph)),
         (
-            "/thy/trace/:idx/json/*path",
+            "/thy/trace/{idx}/graph/{*path}",
+            get(handlers::theory::graph),
+        ),
+        (
+            "/thy/trace/{idx}/json/{*path}",
             get(handlers::theory::graph_json),
         ),
         (
-            "/thy/trace/:idx/interactive-graph-def/*path",
+            "/thy/trace/{idx}/interactive-graph-def/{*path}",
             get(handlers::theory::interactive_graph_def),
         ),
         // -- live proof-tree mutation --
         (
-            "/thy/trace/:idx/proof-step/*path",
+            "/thy/trace/{idx}/proof-step/{*path}",
             get(handlers::theory::proof_step),
         ),
         (
-            "/thy/trace/:idx/edit/*path",
+            "/thy/trace/{idx}/edit/{*path}",
             post(handlers::theory::edit_stub),
         ),
         (
-            "/thy/trace/:idx/del/path/*path",
+            "/thy/trace/{idx}/del/path/{*path}",
             get(handlers::theory::delete_step),
         ),
-        ("/thy/trace/:idx/reload", post(handlers::theory::reload)),
+        ("/thy/trace/{idx}/reload", post(handlers::theory::reload)),
         (
-            "/thy/trace/:idx/get_and_append/:name",
+            "/thy/trace/{idx}/get_and_append/{name}",
             post(handlers::theory::append_new_lemmas),
         ),
         // ----------------------------------------------------------------
         // Diff theory routes — stubbed (return alert).
         // ----------------------------------------------------------------
         (
-            "/thy/equiv/:idx/overview/*path",
+            "/thy/equiv/{idx}/overview/{*path}",
             get(handlers::theory::diff_stub),
         ),
         (
-            "/thy/equiv/:idx/main/*path",
+            "/thy/equiv/{idx}/main/{*path}",
             get(handlers::theory::diff_stub),
         ),
     ]
@@ -228,24 +231,24 @@ pub fn router(state: Arc<AppState>) -> Router {
 mod tests {
     use super::*;
 
-    // A route that captures `:idx` behind a prefix `theory_index_piece` does
+    // A route that captures `{idx}` behind a prefix `theory_index_piece` does
     // not recognise would answer a non-numeric index with the `Path`
     // extractor's `400`, where Yesod's routing answers its Not Found page.
     #[test]
     fn every_idx_route_sits_behind_a_probed_prefix() {
         let mut probed = [false; THEORY_INDEX_PREFIXES.len()];
         for (path, _) in theory_routes() {
-            if !path.contains("/:idx") {
+            if !path.contains("/{idx}") {
                 continue;
             }
             let which = THEORY_INDEX_PREFIXES
                 .iter()
                 .position(|prefix| path.starts_with(prefix))
-                .unwrap_or_else(|| panic!("route {path} captures :idx behind no probed prefix"));
+                .unwrap_or_else(|| panic!("route {path} captures {{idx}} behind no probed prefix"));
             probed[which] = true;
             // End to end: an index the `usize` capture would reject is caught
             // by the probe, so the layer answers the Not Found page.
-            let url = path.replace(":idx", "1x");
+            let url = path.replace("{idx}", "1x");
             assert_eq!(theory_index_piece(&url), Some("1x"), "probing {url}");
             assert!(!reads_as_theory_index("1x"));
         }

@@ -965,7 +965,7 @@ impl System {
         if stats {
             use std::sync::atomic::Ordering::Relaxed;
             let calls = CANON_CALLS.fetch_add(1, Relaxed) + 1;
-            if calls % 20_000 == 0 {
+            if calls.is_multiple_of(20_000) {
                 let hits = CANON_HITS.load(Relaxed);
                 let incr = CANON_INCR.load(Relaxed);
                 let reused = CANON_ENTRY_REUSED.load(Relaxed);

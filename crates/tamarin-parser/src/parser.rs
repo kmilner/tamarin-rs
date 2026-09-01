@@ -5678,7 +5678,7 @@ impl<'a> Parser<'a> {
     fn lookup_arity(&self, op: &str) -> Option<ArityRes> {
         let mut best: Option<FunOptions> = None;
         let mut consider = |o: FunOptions| {
-            if best.map_or(true, |b: FunOptions| o.ord_key() < b.ord_key()) {
+            if best.is_none_or(|b: FunOptions| o.ord_key() < b.ord_key()) {
                 best = Some(o);
             }
         };

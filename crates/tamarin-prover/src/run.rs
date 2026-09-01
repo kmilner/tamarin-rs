@@ -664,10 +664,8 @@ fn ghc_exception(msg: &str) -> i32 {
 /// hand-written description `is a directory` (GHC.IO.FD), where the write
 /// side's EISDIR carries `strerror`'s capitalised `Is a directory`.  Every
 /// other reason is the shared errno rendering — [`io_exception_reason`].
-/// EISDIR is matched numerically because `ErrorKind::IsADirectory` needs Rust
-/// 1.83 and the workspace MSRV is 1.78.
 fn report_open_file_error(in_file: &str, e: &std::io::Error) -> i32 {
-    let reason = if e.raw_os_error() == Some(21) {
+    let reason = if e.kind() == std::io::ErrorKind::IsADirectory {
         "inappropriate type (is a directory)".to_string()
     } else {
         io_exception_reason(e)
@@ -722,8 +720,8 @@ fn write_io_exception(path: &str, op: &str, e: &std::io::Error) -> String {
 /// Shared with [`report_open_file_error`], which prefixes the same tail with
 /// its own `openFile` frame.
 ///
-/// The errnos are matched numerically: `ErrorKind::IsADirectory` and friends
-/// need Rust 1.83 and the workspace MSRV is 1.78.
+/// The errnos remain explicit because GHC's buckets differ from Rust's
+/// `ErrorKind` classifications (for example EROFS and ELOOP).
 fn io_exception_reason(e: &std::io::Error) -> String {
     let errno = e.raw_os_error();
     let ioe_type = match errno {

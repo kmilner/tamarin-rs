@@ -6,6 +6,17 @@ on:
   pull_request:
 
 jobs:
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      # Keep Cargo.toml's compatibility claim honest. The submodule supplies
+      # data embedded by tamarin-theory at compile time.
+      - uses: actions/checkout@v7
+        with:
+          submodules: true
+      - run: rustup toolchain install 1.88.0 --profile minimal --no-self-update
+      - run: cargo +1.88.0 check --workspace --all-targets
+
   fmt:
     runs-on: ubuntu-latest
     steps:

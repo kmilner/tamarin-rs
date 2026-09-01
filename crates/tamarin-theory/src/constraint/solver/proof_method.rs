@@ -254,7 +254,7 @@ fn simp_noop_stat(hit: bool) {
         HITS.fetch_add(1, Relaxed);
     }
     let calls = CALLS.fetch_add(1, Relaxed) + 1;
-    if calls % 1_000 == 0 {
+    if calls.is_multiple_of(1_000) {
         let h = HITS.load(Relaxed);
         eprintln!(
             "[SIMP_NOOP_STATS] simplify_execs={} noop_hits={} ({:.1}%)",

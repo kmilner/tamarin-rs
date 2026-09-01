@@ -576,7 +576,7 @@ impl<'ctx> Reduction<'ctx> {
         if stats {
             use std::sync::atomic::Ordering::Relaxed;
             let calls = SUBST_SYSTEM_CALLS.fetch_add(1, Relaxed) + 1;
-            if calls % 50_000 == 0 {
+            if calls.is_multiple_of(50_000) {
                 eprintln!(
                     "[SUBST_SKIP_STATS] calls={} skips={}",
                     calls,
@@ -587,7 +587,7 @@ impl<'ctx> Reduction<'ctx> {
         if fp_stats_enabled() {
             use std::sync::atomic::Ordering::Relaxed;
             let calls = FP_STATS_CALLS.fetch_add(1, Relaxed) + 1;
-            if calls % 5_000 == 0 {
+            if calls.is_multiple_of(5_000) {
                 let d = crate::apply::FP_FACT_DESCENTS.load(Relaxed);
                 let s = crate::apply::FP_FACT_SKIPS.load(Relaxed);
                 eprintln!(
