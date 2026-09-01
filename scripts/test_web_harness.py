@@ -81,17 +81,15 @@ set -e
 t=$HARNESS_TMP
 mkdir -p "$t/corpus"
 printf '%s\n' 'theory T begin' 'heuristic: o' 'end' > "$t/corpus/t.spthy"
-printf '%s\n' 't.spthy	@cd' > "$t/flags.tsv"
 printf '%s\n' '#!/bin/sh' 'echo first' > "$t/corpus/t.oracle"
 chmod +x "$t/corpus/t.oracle"
-FLAGS_MAP="$t/flags.tsv"
 HS_FP_SALT=fingerprint
 
 k1=$(ckey t.spthy "$t/corpus/t.spthy")
-p1=$(proof_cache_key "$t/corpus/t.spthy" lemma @cd)
+p1=$(proof_cache_key "$t/corpus/t.spthy" lemma)
 printf '%s\n' '#!/bin/sh' 'echo second' > "$t/corpus/t.oracle"
 k2=$(ckey t.spthy "$t/corpus/t.spthy")
-p2=$(proof_cache_key "$t/corpus/t.spthy" lemma @cd)
+p2=$(proof_cache_key "$t/corpus/t.spthy" lemma)
 test "$k1" != "$k2"
 test "$p1" != "$p2"
 
@@ -101,6 +99,15 @@ q1=$(ckey q.spthy "$t/corpus/q.spthy")
 printf '%s\n' '#!/bin/sh' 'echo second' > "$t/corpus/rank.sh"
 q2=$(ckey q.spthy "$t/corpus/q.spthy")
 test "$q1" != "$q2"
+
+# Haskell's takeBaseName preserves a lone leading-dot component, so the
+# default oracle for `.spthy` is `.spthy.oracle`, not `.oracle`.
+printf '%s\n' 'theory Hidden begin' 'heuristic: o' 'end' > "$t/corpus/.spthy"
+printf '%s\n' '#!/bin/sh' 'echo first' > "$t/corpus/.spthy.oracle"
+h1=$(ckey .spthy "$t/corpus/.spthy")
+printf '%s\n' '#!/bin/sh' 'echo second' > "$t/corpus/.spthy.oracle"
+h2=$(ckey .spthy "$t/corpus/.spthy")
+test "$h1" != "$h2"
 
 printf '%s\n' '#!/bin/sh' 'echo first' > "$t/custom-ranker"
 c1=$(proof_cache_key "$t/corpus/q.spthy" lemma "--oraclename=$t/custom-ranker")

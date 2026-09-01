@@ -190,13 +190,11 @@ export -f strip_env flags_for include_shas oracle_shas ikey
 
 # one <rel> → "rel \t ikey \t sha|TIMEOUT|ERROR=n \t lines"
 one() {
-    local rel="$1" f="$CORPUS/$1" fl rundir="" farg key rc out sha lines
+    local rel="$1" f="$CORPUS/$1" fl key rc out sha lines
     [ -f "$f" ] || { printf '%s\t-\tNOFILE\t0\n' "$rel"; return 0; }
-    key=$(ikey "$rel" "$f"); fl=$(flags_for "$rel"); farg="$f"
-    if [[ " $fl " == *" @cd "* ]]; then fl=${fl//@cd/}; rundir=$(dirname "$f"); farg=$(basename "$f"); fi
+    key=$(ikey "$rel" "$f"); fl=$(flags_for "$rel")
     local tmp; tmp=$(mktemp)
-    ( [ -n "$rundir" ] && cd "$rundir"
-      timeout "$TIMEOUT" "$BIN" $fl $EXTRA_FLAGS --derivcheck-timeout="$DERIV" --prove "$farg" ) >"$tmp" 2>/dev/null; rc=$?
+    timeout "$TIMEOUT" "$BIN" $fl $EXTRA_FLAGS --derivcheck-timeout="$DERIV" --prove "$f" >"$tmp" 2>/dev/null; rc=$?
     if [ "$rc" = 124 ]; then rm -f "$tmp"; printf '%s\t%s\tTIMEOUT\t0\n' "$rel" "$key"; return 0; fi
     if [ "$rc" != 0 ]; then rm -f "$tmp"; printf '%s\t%s\tERROR=%s\t0\n' "$rel" "$key" "$rc"; return 0; fi
     out=$(strip_env <"$tmp"); rm -f "$tmp"

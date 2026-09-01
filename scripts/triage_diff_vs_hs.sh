@@ -34,10 +34,6 @@ for rel in "$@"; do
   [ -f "$f" ] || { echo "MISSING $rel"; continue; }
   key=$(ckey "$rel" "$f")
   fl=$(flags_for "$rel")
-  # `@cd` token (see file_flags.tsv): run from the file's directory with the
-  # bare filename; it salts the key but is not a prover flag.
-  rundir="" farg="$f"
-  if [[ " $fl " == *" @cd "* || "$fl" == "@cd" ]]; then fl=${fl//@cd/}; rundir=$(dirname "$f"); farg=$(basename "$f"); fi
   # Haskell: prefer cache; else run fresh and cache it (the entry lands under
   # the same key corpus_file_diff.sh computes, so the batch gate reuses it).
   # The fill follows hs_one's discipline: rc captured from a temp file (a
@@ -51,8 +47,7 @@ for rel in "$@"; do
     echo "  (no HS cache for $rel — running fresh, up to ${FT}s)"
     tmp=$(mktemp)
     # shellcheck disable=SC2086  # $fl must word-split into separate flags
-    ( [ -n "$rundir" ] && cd "$rundir"
-      timeout "$FT" "$HS" +RTS -N4 -M11g -RTS $fl --derivcheck-timeout="$DERIV" --prove "$farg" ) >"$tmp" 2>/dev/null
+    timeout "$FT" "$HS" +RTS -N4 -M11g -RTS $fl --derivcheck-timeout="$DERIV" --prove "$f" >"$tmp" 2>/dev/null
     rc=$?
     hs=$(strip_env < "$tmp"); rm -f "$tmp"
     # 124 is timeout(1)'s status; >=128 is any other signal death (the OOM
@@ -68,11 +63,9 @@ for rel in "$@"; do
   fi
   if [ -z "$hs" ]; then echo "NO_HS   $rel (HS timed out/empty — cannot triage)"; continue; fi
   # shellcheck disable=SC2086
-  pre=$( ( [ -n "$rundir" ] && cd "$rundir"
-           timeout "$FT" "$PRE"  $fl --derivcheck-timeout="$DERIV" --prove "$farg" ) 2>/dev/null | strip_env)
+  pre=$(timeout "$FT" "$PRE"  $fl --derivcheck-timeout="$DERIV" --prove "$f" 2>/dev/null | strip_env)
   # shellcheck disable=SC2086
-  post=$( ( [ -n "$rundir" ] && cd "$rundir"
-            timeout "$FT" "$POST" $fl --derivcheck-timeout="$DERIV" --prove "$farg" ) 2>/dev/null | strip_env)
+  post=$(timeout "$FT" "$POST" $fl --derivcheck-timeout="$DERIV" --prove "$f" 2>/dev/null | strip_env)
   dpre=$(diff <(printf '%s\n' "$hs") <(printf '%s\n' "$pre")  | grep -c '^[<>]')
   dpost=$(diff <(printf '%s\n' "$hs") <(printf '%s\n' "$post") | grep -c '^[<>]')
   verdict="CHANGED"

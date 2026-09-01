@@ -301,7 +301,7 @@ a rename-only migration.
   did the refactor move RS toward or away from HS? It reads and fills the
   batch gate's `.hs_file_cache/` at `gate_common.sh`'s fingerprinted `ckey`,
   and runs all three binaries under the file's canonical `file_flags.tsv`
-  flags (`@cd` included) — the flags the sweep that flagged the file used — so
+  flags — the flags the sweep that flagged the file used — so
   the three-way comparison is like-for-like and an entry it writes is one
   `corpus_file_diff.sh` reuses. Its fill follows the batch gate's discipline:
   rc beside the payload, nothing cached on a timeout, but no sticky
@@ -565,7 +565,7 @@ then upstream behaviour moving under them.
   identically to both engines; consumed by every gate, and folded into the
   cache key as a hash so two flag sets on one theory are distinct entries.
   Its whole vocabulary today is `--auto-sources` (22 files),
-  `--stop-on-trace=seqdfs` (8), `--diff` (5), `@cd` (1) and `-D` (4). 32 corpus
+  `--stop-on-trace=seqdfs` (8), `--diff` (5) and `-D` (4). 32 corpus
   theories contain `#ifdef`; the four `-D` rows put the DEFINED branch of
   `testParser/define.spthy` and three `thesis-LaraSchmid-evoting` theories in
   front of every gate that reads this file — and take their bare branch out of

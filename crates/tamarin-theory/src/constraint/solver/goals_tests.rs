@@ -489,3 +489,10 @@ fn parsed_heuristic_renders_back_to_its_tokens() {
     assert_eq!(rankings.len(), 11);
     assert_eq!(crate::pretty_theory::pretty_goal_rankings(&rankings), s);
 }
+
+#[test]
+fn compact_and_standalone_default_oracles_parse_identically() {
+    let compact = parse_heuristic_str_with_tactics(r#"o so O "y" sO"#, "t.spthy", &[]);
+    let spaced = parse_heuristic_str_with_tactics(r#"o s o O "y" s O"#, "t.spthy", &[]);
+    assert_eq!(compact, spaced);
+}

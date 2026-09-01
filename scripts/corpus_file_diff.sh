@@ -107,10 +107,6 @@ export -f strip_env
 # a flags hash, so a flagged entry is a DISTINCT cache key from the bare one,
 # and then with the oracle-binary fingerprint, so entries produced by a
 # different oracle are a MISS rather than a stale hit.
-# Special token `@cd`: not a prover flag — run the prover from the file's
-# OWN directory with the bare filename (upstream's deforacle recipe,
-# Makefile:199-201: default-oracle lookup is cwd-relative). Stripped from
-# the flag list before invocation; still salts the cache key.
 FLAGS_MAP="${FLAGS_MAP:-$script_dir/file_flags.tsv}"
 export FLAGS_MAP
 export -f flags_for include_shas oracle_shas ckey
@@ -153,16 +149,10 @@ hs_one() {
     # Run HS to a temp file so we capture `timeout`'s OWN exit code (124 on
     # timeout) — piping straight into strip_env would make $? reflect grep's
     # exit, misclassifying timeouts as empty (SKIP_NO_HS).
-    # `@cd` token: run from the file's directory with the bare filename.
-    local rundir="" farg="$f"
-    if [[ " $fl " == *" @cd "* || "$fl" == "@cd" ]]; then
-        fl=${fl//@cd/}; rundir=$(dirname "$f"); farg=$(basename "$f")
-    fi
     # shellcheck disable=SC2086  # $fl must word-split into separate flags
     local tmp; tmp=$(mktemp)
-    ( [ -n "$rundir" ] && cd "$rundir"
-      timeout "$FILE_TIMEOUT" "$HS_PATH" +RTS $HS_RTS -RTS \
-            $fl --derivcheck-timeout="$DERIVCHECK_TIMEOUT" --prove "$farg" ) >"$tmp" 2>/dev/null
+    timeout "$FILE_TIMEOUT" "$HS_PATH" +RTS $HS_RTS -RTS \
+            $fl --derivcheck-timeout="$DERIVCHECK_TIMEOUT" --prove "$f" >"$tmp" 2>/dev/null
     rc=$?
     out=$(strip_env < "$tmp"); rm -f "$tmp"
     # A signal death (the OOM killer's 137, an abort's 134) truncates stdout
@@ -198,15 +188,9 @@ rs_one() {
     key=$(ckey "$rel" "$f"); fl=$(flags_for "$rel")
     if [ -f "$CACHE/$key.timeout" ]; then printf '%s\tSKIP_HS_TIMEOUT\t0\t0\t0\n' "$rel"; return 0; fi
     if [ ! -f "$CACHE/$key.full.gz" ]; then printf '%s\tSKIP_NO_HS\t0\t0\t0\n' "$rel"; return 0; fi
-    # `@cd` token: run from the file's directory with the bare filename.
-    local rundir="" farg="$f"
-    if [[ " $fl " == *" @cd "* || "$fl" == "@cd" ]]; then
-        fl=${fl//@cd/}; rundir=$(dirname "$f"); farg=$(basename "$f")
-    fi
     # shellcheck disable=SC2086  # $fl must word-split into separate flags
     local tmp; tmp=$(mktemp)
-    ( [ -n "$rundir" ] && cd "$rundir"
-      timeout "$FILE_TIMEOUT" "$RS_PATH" $fl --derivcheck-timeout="$DERIVCHECK_TIMEOUT" --prove "$farg" ) >"$tmp" 2>/dev/null
+    timeout "$FILE_TIMEOUT" "$RS_PATH" $fl --derivcheck-timeout="$DERIVCHECK_TIMEOUT" --prove "$f" >"$tmp" 2>/dev/null
     rc=$?
     rs=$(strip_env < "$tmp"); rm -f "$tmp"
     if [ "$rc" = "124" ]; then printf '%s\tSKIP_RS_TIMEOUT\t0\t0\t0\n' "$rel"; return 0; fi

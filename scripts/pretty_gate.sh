@@ -15,7 +15,7 @@
 # rendering — both sides must be no-prove.  So we keep a separate no-prove HS
 # reference cache; it is auto-filled on first run (fast) and reused warm after.
 # We reuse corpus_file_diff.sh's ckey / flags / strip_env machinery verbatim so
-# per-file canonical flags and the @cd recipe stay identical to the other gates.
+# per-file canonical flags stay identical to the other gates.
 #
 # PHASE 0 also stores the whole stripped load-time stdout as <key>.load.gz.
 # That is wf_gate.sh's reference: the wellformedness report is load-time output
@@ -140,12 +140,9 @@ hs_fill_one() {
         else printf '%s' "$out" | gzip > "$HS_CACHE/$key.theory.gz"; fi
         return 0
     fi
-    local rundir="" farg="$f"
-    if [[ " $fl " == *" @cd "* || "$fl" == "@cd" ]]; then fl=${fl//@cd/}; rundir=$(dirname "$f"); farg=$(basename "$f"); fi
     local tmp load rc; tmp=$(mktemp)
     # shellcheck disable=SC2086
-    ( [ -n "$rundir" ] && cd "$rundir"
-      timeout "$FILE_TIMEOUT" "$HS_PATH" $fl --derivcheck-timeout="$DERIVCHECK_TIMEOUT" "$farg" ) >"$tmp" 2>/dev/null
+    timeout "$FILE_TIMEOUT" "$HS_PATH" $fl --derivcheck-timeout="$DERIVCHECK_TIMEOUT" "$f" >"$tmp" 2>/dev/null
     rc=$?
     load=$(strip_env < "$tmp"); rm -f "$tmp"
     # A killed load leaves PARTIAL stdout, which is worse than none: cached, it
@@ -176,13 +173,10 @@ one() {
     [ -f "$f" ] || { printf '%s\tSKIP_NO_HS\t0\n' "$rel"; return 0; }
     key=$(ckey "$rel" "$f"); fl=$(flags_for "$rel")
     [ -f "$HS_CACHE/$key.theory.gz" ] || { printf '%s\tSKIP_NO_HS\t0\n' "$rel"; return 0; }
-    local rundir="" farg="$f"
-    if [[ " $fl " == *" @cd "* || "$fl" == "@cd" ]]; then fl=${fl//@cd/}; rundir=$(dirname "$f"); farg=$(basename "$f"); fi
     hs=$(zcat "$HS_CACHE/$key.theory.gz")
     local tmp; tmp=$(mktemp)
     # shellcheck disable=SC2086
-    ( [ -n "$rundir" ] && cd "$rundir"
-      timeout "$FILE_TIMEOUT" "$RS_PATH" $fl --derivcheck-timeout="$DERIVCHECK_TIMEOUT" "$farg" ) >"$tmp" 2>/dev/null
+    timeout "$FILE_TIMEOUT" "$RS_PATH" $fl --derivcheck-timeout="$DERIVCHECK_TIMEOUT" "$f" >"$tmp" 2>/dev/null
     if [ "$?" = "124" ]; then rm -f "$tmp"; printf '%s\tSKIP_RS_TIMEOUT\t0\n' "$rel"; return 0; fi
     rs=$(strip_env < "$tmp" | extract_theory); rm -f "$tmp"
     d=$(diff <(printf '%s\n' "$hs") <(printf '%s\n' "$rs") | grep -c '^[<>]')

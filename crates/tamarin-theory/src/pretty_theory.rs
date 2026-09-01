@@ -90,33 +90,18 @@ pub struct ProvedLemma {
 
 /// Compute the default oracle name for a theory file.
 ///
-/// Mirrors HS `defaultOracleNames` (System.hs:550-560) exactly: take the
-/// prefix before the first dot in the complete input path, then the final
-/// slash-delimited group (including its leading slash), and probe that name
-/// from the process CWD. This intentionally preserves upstream's surprising
-/// behavior for paths containing directories or multiple dots.
+/// Mirrors HS `defaultOracleNames` (System.hs:550-560): derive the candidate
+/// from `takeBaseName`, probe it beside the theory, and retain only its
+/// relative name in the ranking.
 pub(crate) fn oracle_name_for_theory(in_file: &str) -> String {
-    let candidate = oracle_candidate_for_theory(in_file);
-    if std::path::Path::new(&candidate).is_file() {
-        candidate
-    } else {
-        "oracle".to_string()
-    }
-}
-
-fn oracle_candidate_for_theory(in_file: &str) -> String {
-    // `head (groupBy (\_ b -> b /= '.') inFile)` always keeps the first
-    // character, even when it is itself a dot.  Only a later dot terminates
-    // the group (`.foo.spthy` -> `.foo`, `./foo.spthy` -> `./foo`).
-    let before_dot = in_file
-        .char_indices()
-        .skip(1)
-        .find(|(_, ch)| *ch == '.')
-        .map_or(in_file, |(i, _)| &in_file[..i]);
-    let final_group = before_dot
-        .rfind('/')
-        .map_or(before_dot, |slash| &before_dot[slash..]);
-    format!("{final_group}.oracle")
+    let candidate = std::path::Path::new(in_file).with_extension("oracle");
+    candidate
+        .is_file()
+        .then(|| candidate.file_name())
+        .flatten()
+        .and_then(std::ffi::OsStr::to_str)
+        .unwrap_or("oracle")
+        .to_string()
 }
 
 /// Render one `GoalRanking` as the heuristic token that names it, mirroring
@@ -2999,16 +2984,13 @@ mod heuristic_header_tests {
 
     #[test]
     fn default_oracle_name_matches_haskell_path_splitting() {
-        assert_eq!(oracle_candidate_for_theory("thy.spthy"), "thy.oracle");
-        assert_eq!(oracle_candidate_for_theory("a.b.spthy"), "a.oracle");
-        assert_eq!(oracle_candidate_for_theory("dir/thy.spthy"), "/thy.oracle");
-        assert_eq!(oracle_candidate_for_theory("./thy.spthy"), "/thy.oracle");
-        assert_eq!(oracle_candidate_for_theory(".thy.spthy"), ".thy.oracle");
-        assert_eq!(
-            oracle_candidate_for_theory("dir.v2/foo.spthy"),
-            "dir.oracle"
-        );
         assert_eq!(oracle_name_for_theory("missing.spthy"), "oracle");
+
+        let fixture = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tamarin-prover/examples/regression/trace/defaultoracle.spthy"
+        );
+        assert_eq!(oracle_name_for_theory(fixture), "defaultoracle.oracle");
     }
 
     /// The `heuristic:` header prints the theory's stored rankings (HS `text

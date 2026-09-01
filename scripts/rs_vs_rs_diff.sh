@@ -74,16 +74,12 @@ maude_on_path "$MAUDE"
 export -f strip_env flags_for
 
 one() {
-    local rel="$1" f="$CORPUS/$1" a b ra rb da fl rundir="" farg
+    local rel="$1" f="$CORPUS/$1" a b ra rb da fl
     [ -f "$f" ] || { printf '%s\tNOFILE\t0\n' "$rel"; return 0; }
-    fl=$(flags_for "$rel"); farg="$f"
-    # @cd: run from the theory's directory (oracle scripts resolve ./ paths).
-    if [[ " $fl " == *" @cd "* ]]; then fl=${fl//@cd/}; rundir=$(dirname "$f"); farg=$(basename "$f"); fi
+    fl=$(flags_for "$rel")
     local ta tb; ta=$(mktemp); tb=$(mktemp)
-    ( [ -n "$rundir" ] && cd "$rundir"
-      timeout "$TIMEOUT" "$PRE"  $fl --derivcheck-timeout="$DERIV" --prove "$farg" ) >"$ta" 2>/dev/null; ra=$?
-    ( [ -n "$rundir" ] && cd "$rundir"
-      timeout "$TIMEOUT" "$POST" $fl --derivcheck-timeout="$DERIV" --prove "$farg" ) >"$tb" 2>/dev/null; rb=$?
+    timeout "$TIMEOUT" "$PRE"  $fl --derivcheck-timeout="$DERIV" --prove "$f" >"$ta" 2>/dev/null; ra=$?
+    timeout "$TIMEOUT" "$POST" $fl --derivcheck-timeout="$DERIV" --prove "$f" >"$tb" 2>/dev/null; rb=$?
     if [ "$ra" = 124 ] && [ "$rb" = 124 ]; then rm -f "$ta" "$tb"; printf '%s\tTIMEOUT_BOTH\t0\n' "$rel"; return 0; fi
     if [ "$ra" = 124 ] || [ "$rb" = 124 ]; then rm -f "$ta" "$tb"; printf '%s\tTIMEOUT_ONE\tpre=%s,post=%s\n' "$rel" "$ra" "$rb"; return 0; fi
     # A prover that errors out (missing maude, bad flags, OOM-abort) must not

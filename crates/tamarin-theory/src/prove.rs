@@ -150,8 +150,7 @@ fn hs_normalise_relative(p: &str) -> String {
 }
 
 /// Resolve Oracle/OracleSmart rankings parsed from an in-file `heuristic:` or
-/// lemma attribute. A standalone oracle token carries `takeDirectory inFile`
-/// as its workDir; an `o`/`O` inside a compact letter run carries no workDir.
+/// lemma attribute against the theory directory.
 ///
 /// Mirrors HS `oraclePath oracle = fromMaybe "." workDir </> normalise relPath`
 /// (System.hs:576-577) with `workDir = takeDirectory inFile`.  Producing the
@@ -166,18 +165,9 @@ pub fn prepend_theory_dir_to_oracle_paths(
     let work_dir = hs_take_directory(in_file);
     for r in rankings.iter_mut() {
         match r {
-            GoalRanking::Oracle {
-                oracle_path,
-                display_path,
-                ..
-            }
-            | GoalRanking::OracleSmart {
-                oracle_path,
-                display_path,
-                ..
-            } => {
-                let ranking_work_dir = display_path.is_none().then_some(work_dir.as_str());
-                *oracle_path = resolve_oracle_path(oracle_path, ranking_work_dir);
+            GoalRanking::Oracle { oracle_path, .. }
+            | GoalRanking::OracleSmart { oracle_path, .. } => {
+                *oracle_path = resolve_oracle_path(oracle_path, Some(&work_dir));
             }
             _ => {}
         }
@@ -353,9 +343,9 @@ pub struct CliHeuristic {
 ///   3. `defaultOracleNames srcThyInFileName` (TheoryLoader.hs:744-746, see line 746) — fill any
 ///      oracle ranking that STILL has no relPath with the default `.oracle`
 ///      name (theory-basename `.oracle` if it exists on disk, else `"oracle"`).
-///   4. CLI rankings have no workDir. `defaultOracleNames` preserves that
-///      absence for both default and explicit names, so execution is
-///      CWD-relative.
+///   4. `defaultOracleNames` assigns the theory directory as the workDir when
+///      filling an absent path. An explicit `--oraclename` leaves the CLI
+///      ranking's workDir absent and is therefore CWD-relative.
 ///   5. `setQuitOnEmpty` (Theory/Proof.hs:709-716) — `--oracle-only` sets
 ///      `quitOnEmpty` on every oracle / tactic ranking.
 fn resolve_cli_heuristic(
@@ -382,30 +372,20 @@ fn resolve_cli_heuristic(
         match r {
             GoalRanking::Oracle {
                 oracle_path,
-                display_path,
                 quit_on_empty,
                 ..
             }
             | GoalRanking::OracleSmart {
                 oracle_path,
-                display_path,
                 quit_on_empty,
                 ..
             } => {
                 if let Some(name) = oraclename {
                     *oracle_path = name.to_string();
                     *oracle_path = resolve_oracle_path(oracle_path, None);
-                    if display_path.is_some() {
-                        *display_path = Some(oracle_path.clone());
-                    }
                 } else {
-                    // CLI rankings are parsed with `workDir = Nothing` in HS.
-                    // `defaultOracleNames` fills only the relative name and
-                    // preserves that absent workDir, so execution is CWD-relative.
-                    *oracle_path = resolve_oracle_path(oracle_path, None);
-                    if display_path.is_some() {
-                        *display_path = Some(oracle_path.clone());
-                    }
+                    *oracle_path =
+                        resolve_oracle_path(oracle_path, Some(&hs_take_directory(in_file)));
                 }
                 // Step 5: --oracle-only quitOnEmpty (Theory/Proof.hs:713-714).
                 if cli.oracle_only {

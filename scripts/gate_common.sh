@@ -57,9 +57,7 @@ norm() {
 # --- per-file canonical flags (file_flags.tsv) -------------------------------
 # flags_for <relpath> — echo the extra prover flags for a corpus relpath
 #   (empty if none, or if $FLAGS_MAP is unset/absent — a missing map means "no
-#   flags", status 0). The special token `@cd` is not a prover flag: it tells
-#   the caller to run from the file's own directory with the bare filename
-#   (upstream's cwd-relative default-oracle recipe).
+#   flags", status 0).
 flags_for() {
     [ -f "${FLAGS_MAP:-}" ] || return 0
     awk -F'\t' -v r="$1" '!/^#/ && $1==r {print $2; exit}' "$FLAGS_MAP"
@@ -147,14 +145,9 @@ include_shas() {
 #   Some entries are conservative extras; over-invalidation is preferable to
 #   serving a proof produced by an older oracle script.
 oracle_shas() {
-    local theory=$1 flags=${2:-} theory_dir run_dir farg p q word next prefix group
+    local theory=$1 flags=${2:-} theory_dir run_dir p q word next base
     theory_dir=$(dirname "$theory")
     run_dir=$PWD
-    farg=$theory
-    if [[ " $flags " == *" @cd "* || "$flags" == "@cd" ]]; then
-        run_dir=$theory_dir
-        farg=$(basename "$theory")
-    fi
     {
         for p in "$theory_dir"/oracle* "$run_dir"/oracle*; do
             [ -f "$p" ] || continue
@@ -162,15 +155,19 @@ oracle_shas() {
                 "$(stat -c '%a' "$p")" "${p##*/}"
         done
 
-        # HS defaultOracleNames: prefix before the first dot, then the final
-        # slash group INCLUDING its slash. Probe it from the invocation CWD.
-        prefix=${farg%%.*}
-        if [[ "$prefix" == */* ]]; then group="/${prefix##*/}"; else group=$prefix; fi
-        p="${group}.oracle"
-        [[ "$p" == /* ]] || p="$run_dir/$p"
+        # HS defaultOracleNames: takeBaseName of the theory path, probed in
+        # the theory directory and retained as a relative oracle name.
+        base=${theory##*/}
+        # System.FilePath.takeBaseName preserves a name made entirely of one
+        # leading-dot component (`.spthy` -> `.spthy`), unlike `${base%.*}`.
+        case "$base" in
+            .*) if [[ ${base#.} == *.* ]]; then base=${base%.*}; fi ;;
+            *) base=${base%.*} ;;
+        esac
+        p="$theory_dir/${base}.oracle"
         if [ -f "$p" ]; then
             printf '%s %s default:%s\n' "$(sha256sum "$p" | cut -d' ' -f1)" \
-                "$(stat -c '%a' "$p")" "$group.oracle"
+                "$(stat -c '%a' "$p")" "$base.oracle"
         fi
 
         while IFS= read -r q; do

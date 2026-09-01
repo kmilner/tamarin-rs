@@ -56,26 +56,16 @@ pub enum GoalRanking {
     /// `OracleRanking quitOnEmpty oracle` (rankGoals dispatch ProofMethod.hs:479-502, see line 482).
     /// preSort = `const goalNrRanking`.
     /// `oracle_path` is the resolved filesystem path of the oracle script
-    /// (what gets exec'd).  `display_path`, when set, is what
-    /// [`Self::ranking_name`] prints instead: an `o`/`O` inside a COMPACT
-    /// letter run (HS `regularRanking`, Text/Parser/Signature.hs:308-326,
-    /// see line 311) carries the
-    /// bare `defaultOracle` with `workDir = Nothing`, so `printOracle`
-    /// (System.hs:703-706) shows the `"."`-joined name (`./oracle`);
-    /// only a STANDALONE `o`/`O` token keeps the parse-time workDir and
-    /// displays the resolved path. `defaultOracleNames` fills the relative
-    /// path without changing that workDir.
+    /// (what gets exec'd and what [`Self::ranking_name`] prints).
     Oracle {
         quit_on_empty: bool,
         oracle_path: String,
-        display_path: Option<String>,
     },
     /// `OracleSmartRanking quitOnEmpty oracle` (rankGoals dispatch ProofMethod.hs:479-502, see line 483).
     /// preSort = `smartRanking ctxt False`.  Fields as in [`Self::Oracle`].
     OracleSmart {
         quit_on_empty: bool,
         oracle_path: String,
-        display_path: Option<String>,
     },
     /// `InternalTacticRanking quitOnEmpty (Tactic …)` (rankGoals dispatch ProofMethod.hs:479-502, see line 490).
     /// The resolved per-lemma tactic (presort + prio/deprio selectors).
@@ -117,13 +107,11 @@ impl GoalRanking {
             'o' => GoalRanking::Oracle {
                 quit_on_empty: false,
                 oracle_path: oracle_path.to_string(),
-                display_path: None,
             },
             // HS `OracleSmartRanking False defaultOracle` (System.hs:586-599, see line 591)
             'O' => GoalRanking::OracleSmart {
                 quit_on_empty: false,
                 oracle_path: oracle_path.to_string(),
-                display_path: None,
             },
             _ => GoalRanking::Smart(false),
         }
@@ -150,22 +138,12 @@ impl GoalRanking {
                 "heuristics adapted to stateful injective protocols{}",
                 loop_status(*lb)
             ),
-            GoalRanking::Oracle {
-                oracle_path,
-                display_path,
-                ..
-            } => format!(
-                "an oracle for ranking, located at {}",
-                display_path.as_deref().unwrap_or(oracle_path)
-            ),
-            GoalRanking::OracleSmart {
-                oracle_path,
-                display_path,
-                ..
-            } => format!(
+            GoalRanking::Oracle { oracle_path, .. } => {
+                format!("an oracle for ranking, located at {oracle_path}")
+            }
+            GoalRanking::OracleSmart { oracle_path, .. } => format!(
                 "an oracle for ranking based on 'smart' heuristic, \
-                         located at {}",
-                display_path.as_deref().unwrap_or(oracle_path)
+                         located at {oracle_path}"
             ),
             GoalRanking::Tactic { tactic, .. } => {
                 format!("the tactic written in the theory file: {}", tactic.name)
@@ -287,19 +265,16 @@ pub fn parse_heuristic_str_with_tactics(
             });
             continue;
         }
-        // Standalone oracle ranking with optional quoted path.  HS's
-        // `goalRanking` (Text/Parser/Signature.hs:293-311) tries `oracleRanking` FIRST
-        // at each token position, so an `o`/`O` that BEGINS a token is
-        // parsed alone and its Oracle keeps the parse-time workDir —
-        // `printOracle` (System.hs:703-706) then shows the workDir-joined
-        // (resolved) path.
+        // An oracle followed by a quoted path is one token. Bare `o`/`O`
+        // uses the ordinary compact-letter path below, just like every other
+        // ranking now that default oracle resolution is token-form agnostic.
         if c == 'o' || c == 'O' {
-            i += 1;
-            while i < chars.len() && chars[i] == ' ' {
-                i += 1;
+            let mut quote = i + 1;
+            while quote < chars.len() && chars[quote] == ' ' {
+                quote += 1;
             }
-            let explicit_path: Option<String> = if i < chars.len() && chars[i] == '"' {
-                i += 1;
+            if quote < chars.len() && chars[quote] == '"' {
+                i = quote + 1;
                 let start = i;
                 while i < chars.len() && chars[i] != '"' && chars[i] != '\n' {
                     i += 1;
@@ -308,44 +283,20 @@ pub fn parse_heuristic_str_with_tactics(
                 if i < chars.len() && chars[i] == '"' {
                     i += 1;
                 }
-                Some(name)
-            } else {
-                None
-            };
-            let oracle_path = explicit_path.as_deref().unwrap_or(&default_oracle);
-            out.push(GoalRanking::from_char_with_oracle(c, oracle_path));
-            continue;
+                out.push(GoalRanking::from_char_with_oracle(c, &name));
+                continue;
+            }
         }
         // Compact letter run: HS's `regularRanking` (`many1 letter` →
-        // `filterHeuristic`) consumes a MAXIMAL run of letters as one
-        // token, mapping each via `goalRankingIdentifiers` — so an `o`/`O`
-        // INSIDE a run (e.g. the middle of `soioo`) gets the bare
-        // `defaultOracle` (workDir = Nothing) and displays as the
-        // `"."`-joined name (`./oracle`), unlike the standalone form
-        // above.  The exec path is still resolved later
-        // (`prepend_theory_dir_to_oracle_paths`) using its absent workDir;
-        // `display_path` records that distinction from a standalone oracle.
+        // `filterHeuristic`) consumes a maximal run of letters as one token.
+        // `defaultOracleNames` later gives any oracle in it the same default
+        // workDir and relative path as a standalone default oracle.
         if c.is_ascii_alphabetic() {
             while i < chars.len() && chars[i].is_ascii_alphabetic() {
-                let mut r = GoalRanking::from_char_with_oracle(chars[i], &default_oracle);
-                if let GoalRanking::Oracle {
-                    display_path,
-                    oracle_path,
-                    ..
-                }
-                | GoalRanking::OracleSmart {
-                    display_path,
-                    oracle_path,
-                    ..
-                } = &mut r
-                {
-                    *display_path = Some(if oracle_path.starts_with('/') {
-                        oracle_path.clone()
-                    } else {
-                        format!("./{}", oracle_path)
-                    });
-                }
-                out.push(r);
+                out.push(GoalRanking::from_char_with_oracle(
+                    chars[i],
+                    &default_oracle,
+                ));
                 i += 1;
             }
             continue;
@@ -460,7 +411,7 @@ impl std::error::Error for RankingError {}
 ///
 /// `depth` mirrors HS's `useHeuristic (Heuristic rankings) depth =
 /// rankings !! (depth mod n)` (ProofMethod.hs:578-589).
-pub fn rank_goals_with(
+pub(crate) fn rank_goals_with(
     sys: &System,
     ctx: Option<&crate::constraint::solver::context::ProofContext>,
     depth: usize,

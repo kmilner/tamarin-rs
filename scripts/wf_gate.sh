@@ -98,12 +98,9 @@ hs_fill_one() {
     # ported"), so both gates skip them — set the marker pretty_gate.sh sets,
     # so the outcome does not depend on which gate reached the key first.
     case " $fl " in *" --diff "*) touch "$HS_CACHE/$key.nohs"; return 0;; esac
-    local rundir="" farg="$f"
-    if [[ " $fl " == *" @cd "* || "$fl" == "@cd" ]]; then fl=${fl//@cd/}; rundir=$(dirname "$f"); farg=$(basename "$f"); fi
     local tmp load rc; tmp=$(mktemp)
     # shellcheck disable=SC2086  # $fl must word-split into separate flags
-    ( [ -n "$rundir" ] && cd "$rundir"
-      timeout "$HS_FILL_TIMEOUT" "$HS_PATH" $fl --derivcheck-timeout="$DERIVCHECK_TIMEOUT" "$farg" ) >"$tmp" 2>/dev/null
+    timeout "$HS_FILL_TIMEOUT" "$HS_PATH" $fl --derivcheck-timeout="$DERIVCHECK_TIMEOUT" "$f" >"$tmp" 2>/dev/null
     rc=$?
     load=$(strip_env < "$tmp"); rm -f "$tmp"
     # A killed load leaves PARTIAL stdout, which is worse than none: cached, it
@@ -127,13 +124,10 @@ one() {
     [ -f "$f" ] || { printf '%s\tSKIP_NO_HS\t0\n' "$rel"; return 0; }
     key=$(ckey "$rel" "$f"); fl=$(flags_for "$rel")
     [ -f "$HS_CACHE/$key.load.gz" ] || { printf '%s\tSKIP_NO_HS\t0\n' "$rel"; return 0; }
-    local rundir="" farg="$f"
-    if [[ " $fl " == *" @cd "* ]]; then fl=${fl//@cd/}; rundir=$(dirname "$f"); farg=$(basename "$f"); fi
     hs=$(zcat "$HS_CACHE/$key.load.gz" | strip_env | wf_block)
     # RS: theory-load only (NO --prove) so the wf block prints fast.
     local tmp; tmp=$(mktemp)
-    ( [ -n "$rundir" ] && cd "$rundir"
-      timeout "$FILE_TIMEOUT" "$RS_PATH" $fl --derivcheck-timeout="$DERIVCHECK_TIMEOUT" "$farg" ) >"$tmp" 2>/dev/null
+    timeout "$FILE_TIMEOUT" "$RS_PATH" $fl --derivcheck-timeout="$DERIVCHECK_TIMEOUT" "$f" >"$tmp" 2>/dev/null
     if [ "$?" = "124" ]; then rm -f "$tmp"; printf '%s\tSKIP_RS_TIMEOUT\t0\n' "$rel"; return 0; fi
     rs=$(strip_env < "$tmp" | wf_block); rm -f "$tmp"
     d=$(diff <(printf '%s\n' "$hs") <(printf '%s\n' "$rs") | grep -c '^[<>]')

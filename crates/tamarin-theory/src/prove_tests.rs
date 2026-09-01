@@ -676,7 +676,7 @@ fn validate_cli_heuristic_accepts_and_rejects_like_filter_heuristic() {
 }
 
 #[test]
-fn cli_oracles_are_cwd_relative() {
+fn default_cli_oracles_are_resolved_beside_the_theory() {
     use crate::constraint::solver::goals::GoalRanking;
 
     let root = std::env::temp_dir().join(format!(
@@ -688,6 +688,7 @@ fn cli_oracles_are_cwd_relative() {
     let theory = root.join("protocol.spthy");
     std::fs::write(&theory, "theory T begin end").unwrap();
     std::fs::write(root.join("protocol.oracle"), "#!/bin/sh\n").unwrap();
+    let default_oracle = root.join("protocol.oracle").to_string_lossy().into_owned();
 
     let cli = CliHeuristic {
         raw: Some("o".to_string()),
@@ -697,7 +698,18 @@ fn cli_oracles_are_cwd_relative() {
     assert!(matches!(
         &rankings[0],
         GoalRanking::Oracle { oracle_path, .. }
-            if oracle_path == "./oracle"
+            if oracle_path == &default_oracle
+    ));
+
+    let compact_default = CliHeuristic {
+        raw: Some("so".to_string()),
+        ..CliHeuristic::default()
+    };
+    let rankings = resolve_cli_heuristic(&compact_default, theory.to_str().unwrap(), &[]).unwrap();
+    assert!(matches!(
+        &rankings[1],
+        GoalRanking::Oracle { oracle_path, .. }
+            if oracle_path == &default_oracle
     ));
 
     let explicit = CliHeuristic {
@@ -719,30 +731,24 @@ fn cli_oracles_are_cwd_relative() {
     let rankings = resolve_cli_heuristic(&compact, theory.to_str().unwrap(), &[]).unwrap();
     assert!(matches!(
         &rankings[1],
-        GoalRanking::Oracle {
-            oracle_path,
-            display_path: Some(display_path),
-            ..
-        } if oracle_path == "./chosen.oracle" && display_path == "./chosen.oracle"
+        GoalRanking::Oracle { oracle_path, .. } if oracle_path == "./chosen.oracle"
     ));
 
     std::fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
-fn in_file_oracle_work_dir_depends_on_token_form() {
+fn all_in_file_oracles_are_resolved_beside_the_theory() {
     use crate::constraint::solver::goals::GoalRanking;
 
     let mut rankings = vec![
         GoalRanking::Oracle {
             quit_on_empty: false,
             oracle_path: "oracle".to_string(),
-            display_path: None,
         },
         GoalRanking::Oracle {
             quit_on_empty: false,
             oracle_path: "oracle".to_string(),
-            display_path: Some("./oracle".to_string()),
         },
     ];
     prepend_theory_dir_to_oracle_paths(&mut rankings, "dir/theory.spthy");
@@ -753,6 +759,6 @@ fn in_file_oracle_work_dir_depends_on_token_form() {
     ));
     assert!(matches!(
         &rankings[1],
-        GoalRanking::Oracle { oracle_path, .. } if oracle_path == "./oracle"
+        GoalRanking::Oracle { oracle_path, .. } if oracle_path == "dir/oracle"
     ));
 }
