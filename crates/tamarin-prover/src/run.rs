@@ -65,12 +65,19 @@ pub fn take_deferred_hs_error_markers() -> Option<String> {
     DEFERRED_HS_ERROR_MARKERS.take()
 }
 
-#[derive(Debug)]
-pub struct RunError(pub String);
+#[derive(Debug, PartialEq, Eq)]
+pub enum RunError {
+    /// An ordinary CLI/runtime error, rendered with the port's `error:` prefix.
+    Regular(String),
+    /// An exception which escapes to Haskell's top-level runtime handler.
+    GhcException(String),
+}
 
 impl std::fmt::Display for RunError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
+        match self {
+            Self::Regular(message) | Self::GhcException(message) => f.write_str(message),
+        }
     }
 }
 
@@ -280,7 +287,7 @@ fn run_variants(args: &Args) -> Result<i32, RunError> {
     let _ = ensure_maude(args, &maude_path);
     let start_maude = |sig| {
         MaudeHandle::start(&maude_path, sig).map_err(|e| {
-            RunError(format!(
+            RunError::Regular(format!(
                 "failed to start maude at {:?}: {:?}",
                 maude_path, e
             ))
@@ -353,7 +360,7 @@ fn run_interactive(args: &Args) -> Result<i32, RunError> {
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
     if args.in_files.is_empty() {
-        return Err(RunError(
+        return Err(RunError::Regular(
             "no working directory specified — pass a directory of .spthy \
              files or one or more .spthy paths"
                 .to_string(),
@@ -363,17 +370,14 @@ fn run_interactive(args: &Args) -> Result<i32, RunError> {
     // path should fail fast, not after the maude banner).
     for f in &args.in_files {
         if !std::path::Path::new(f).exists() {
-            return Err(RunError(format!("directory '{}' does not exist", f)));
+            return Err(RunError::Regular(format!(
+                "directory '{}' does not exist",
+                f
+            )));
         }
     }
 
     init_process_globals(args);
-
-    // Oracle exec failures must not kill the server: HS confines the
-    // `readProcess` exception to the Warp request thread, so only the
-    // triggering request fails.  Batch keeps the `exit(1)` parity path.
-    tamarin_theory::constraint::solver::search::ORACLE_ERROR_UNWINDS
-        .store(true, std::sync::atomic::Ordering::Relaxed);
 
     // Haskell defaults: 3001 on 127.0.0.1.  clap has already parsed
     // `--port` as a `u16` (an unreadable value is a usage error).
@@ -389,7 +393,7 @@ fn run_interactive(args: &Args) -> Result<i32, RunError> {
         "*" | "*4" => IpAddr::V4(Ipv4Addr::UNSPECIFIED),
         "*6" => IpAddr::V6(std::net::Ipv6Addr::UNSPECIFIED),
         other => other.parse::<IpAddr>().map_err(|e| {
-            RunError(format!(
+            RunError::Regular(format!(
                 "could not parse --interface={:?} as an IP address: {}\n\
                  Use --interface=\"*4\" to bind to all IPv4 interfaces.",
                 other, e,
@@ -521,10 +525,10 @@ fn run_interactive(args: &Args) -> Result<i32, RunError> {
         .enable_all()
         .thread_stack_size(64 * 1024 * 1024)
         .build()
-        .map_err(|e| RunError(format!("failed to build tokio runtime: {}", e)))?;
+        .map_err(|e| RunError::Regular(format!("failed to build tokio runtime: {}", e)))?;
     runtime
         .block_on(tamarin_server::serve(cfg, theory_paths))
-        .map_err(|e| RunError(format!("server error: {}", e)))?;
+        .map_err(|e| RunError::Regular(format!("server error: {}", e)))?;
     Ok(0)
 }
 
@@ -538,7 +542,7 @@ fn collect_theory_paths(in_files: &[String]) -> Result<Vec<std::path::PathBuf>, 
         let p = PathBuf::from(f);
         if p.is_dir() {
             let entries = std::fs::read_dir(&p).map_err(|e| {
-                RunError(format!("could not read directory {}: {}", p.display(), e))
+                RunError::Regular(format!("could not read directory {}: {}", p.display(), e))
             })?;
             for e in entries.flatten() {
                 let ep = e.path();
@@ -583,7 +587,7 @@ fn effective_cut(
         Some(s) => Ok(stop_on_trace_cut(s)),
         None => match block.stop_on_trace.as_deref() {
             Some(raw) => tamarin_theory::prove::parse_stop_on_trace(raw)
-                .map_err(|e| RunError(format!("configuration block: {}", e))),
+                .map_err(|e| RunError::Regular(format!("configuration block: {}", e))),
             None => Ok(CutStrategy::Dfs),
         },
     }
@@ -994,7 +998,7 @@ fn mk_theory_load_options(args: &Args) -> Result<TheoryLoadOptions, RunError> {
     // A bare `--heuristic` records the default `s` in `parse_args`; only an
     // explicit `--heuristic=` reaches this with an empty ranking list.
     if args.heuristic.as_deref() == Some("") {
-        return Err(RunError(
+        return Err(RunError::Regular(
             "--heuristic: at least one ranking must be given".to_string(),
         ));
     }
@@ -1146,9 +1150,9 @@ impl TheoryPipeline<'_> {
     /// stage reports.  `file_maude` is `Some` whenever the per-file spawn in
     /// [`Self::check_translated_theory`] succeeded.
     fn require_maude(&self) -> Result<MaudeHandle, RunError> {
-        self.file_maude
-            .clone()
-            .ok_or_else(|| RunError(format!("failed to start maude at {:?}", self.maude_path)))
+        self.file_maude.clone().ok_or_else(|| {
+            RunError::Regular(format!("failed to start maude at {:?}", self.maude_path))
+        })
     }
 
     /// The CLI half of HS `constructAutoProver` (TheoryLoader.hs:802-810).
@@ -1662,7 +1666,9 @@ impl TheoryPipeline<'_> {
                 m,
                 style,
             )
-            .map_err(|e| RunError(format!("partial evaluation of {} failed: {}", in_file, e)))?;
+            .map_err(|e| {
+                RunError::Regular(format!("partial evaluation of {} failed: {}", in_file, e))
+            })?;
 
             // HS's second `closeTheoryWithMaude` (Prover.hs:237-264, see line 240).  The refined
             // rules come back as fresh open rules with empty `variant_substs`
@@ -1786,11 +1792,14 @@ impl TheoryPipeline<'_> {
             let ndc_cache = self.ndc_cache.as_ref();
             let file_maude_pool = &self.file_maude_pool;
 
-            let run_lemma = |l: &tamarin_theory::theory::Lemma| -> (
-                tamarin_theory::pretty_theory::ProvedLemma,
-                LemmaResult,
-                Vec<(String, System)>,
-            ) {
+            let run_lemma = |l: &tamarin_theory::theory::Lemma| -> Result<
+                (
+                    tamarin_theory::pretty_theory::ProvedLemma,
+                    LemmaResult,
+                    Vec<(String, System)>,
+                ),
+                RunError,
+            > {
                 let lemma_name = l.name.clone();
                 let exists_trace = matches!(
                     l.trace_quantifier,
@@ -1821,15 +1830,15 @@ impl TheoryPipeline<'_> {
                 // replays and `--prove=<no match>` runs are unaffected, as
                 // in HS.  The wording and rc are ours (plain error, exit 1),
                 // not the oracle's GHC shapes: invalid-usage output is
-                // outside the parity contract.
+                // outside the parity contract. Return it to the library
+                // boundary; the binary alone owns stderr and exit status.
                 if is_target
                     && let Err(msg) = tamarin_theory::prove::validate_cli_heuristic(
                         &cli_heuristic,
                         &elaborated.tactic,
                     )
                 {
-                    eprintln!("error: {msg}");
-                    std::process::exit(1);
+                    return Err(RunError::Regular(msg));
                 }
                 // HS does NOT print a per-lemma "proving lemma X ..."
                 // marker; the only progress lines are the `[Theory X]
@@ -1899,10 +1908,12 @@ impl TheoryPipeline<'_> {
                         // HS `formulaToGuarded_ = either (error . render) id`
                         // (Guarded.hs:466-467): a proven lemma whose formula
                         // cannot be converted to a guarded formula kills the
-                        // whole run — message on stderr, exit 1, and NO
-                        // theory output on stdout (HS renders lazily after
-                        // proving, so the abort precedes all stdout output).
-                        std::process::exit(ghc_exception(&msg));
+                        // whole run. The binary renders the GHC-style error;
+                        // output remains buffered until every lemma succeeds.
+                        return Err(RunError::GhcException(msg));
+                    }
+                    Err(tamarin_theory::prove::ProveError::Ranking(msg)) => {
+                        return Err(RunError::GhcException(msg.to_string()));
                     }
                     Err(e) => (LemmaVerdict::Error(format!("{}", e)), 0, None),
                 };
@@ -1916,7 +1927,7 @@ impl TheoryPipeline<'_> {
                     proof_steps,
                     exists_trace,
                 };
-                (pl, lr, lemma_traces)
+                Ok((pl, lr, lemma_traces))
             };
 
             if let Some(sess) = &session {
@@ -1936,23 +1947,26 @@ impl TheoryPipeline<'_> {
                 let specs: Vec<&tamarin_theory::theory::Lemma> = elaborated.lemmas().collect();
                 let mut out: Vec<(
                     usize,
-                    tamarin_theory::pretty_theory::ProvedLemma,
-                    LemmaResult,
-                    Vec<(String, System)>,
+                    Result<
+                        (
+                            tamarin_theory::pretty_theory::ProvedLemma,
+                            LemmaResult,
+                            Vec<(String, System)>,
+                        ),
+                        RunError,
+                    >,
                 )> = specs
                     .par_iter()
                     .enumerate()
-                    .map(|(i, l)| {
-                        let (pl, lr, tr) = run_lemma(l);
-                        (i, pl, lr, tr)
-                    })
+                    .map(|(i, l)| (i, run_lemma(l)))
                     .collect();
                 // Reassemble in DECLARATION order so output is identical to the
                 // sequential loop regardless of which worker finished first.
                 // That order is also HS `getLemmas thy`'s (Batch.hs:278), which
                 // is what `outputTraces` serialises the graphs in.
-                out.sort_by_key(|(i, _, _, _)| *i);
-                for (_, pl, lr, tr) in out {
+                out.sort_by_key(|(i, _)| *i);
+                for (_, result) in out {
+                    let (pl, lr, tr) = result?;
                     proved_lemmas.push(pl);
                     results.push(lr);
                     trace_systems.extend(tr);
@@ -1978,7 +1992,7 @@ impl TheoryPipeline<'_> {
                 // when the session itself failed to build.
                 for l in elaborated.lemmas() {
                     if lemma_matches(lemma_filter, &l.name) {
-                        let (pl, lr, tr) = run_lemma(l);
+                        let (pl, lr, tr) = run_lemma(l)?;
                         proved_lemmas.push(pl);
                         results.push(lr);
                         trace_systems.extend(tr);
@@ -2014,7 +2028,7 @@ impl TheoryPipeline<'_> {
 fn run_batch(args: &Args) -> Result<i32, RunError> {
     init_process_globals(args);
     if args.diff {
-        return Err(RunError(
+        return Err(RunError::Regular(
             "--diff (observational equivalence) is not yet ported to the Rust prover.".to_string(),
         ));
     }
@@ -2039,7 +2053,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         );
     }
     if args.in_files.is_empty() {
-        return Err(RunError("no input files given".to_string()));
+        return Err(RunError::Regular("no input files given".to_string()));
     }
     let mut overall_status = 0i32;
     let mut file_results: Vec<FileResult> = Vec::new();
@@ -2114,7 +2128,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         Some(
             m @ (ModuleType::ProVerifEquivalence | ModuleType::ProVerif | ModuleType::DeepSec),
         ) => {
-            return Err(RunError(format!(
+            return Err(RunError::Regular(format!(
                 "--output-module={}: the ProVerif / DeepSec export backends are not yet ported to \
                  the Rust prover.",
                 m.as_str()
@@ -2202,7 +2216,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             // fold set — elaboration is RS's signature-construction step
             // (HS builds the same pure signature during parsing).
             let elaborated = elaborate_with_in_file(&parsed, in_file).map_err(|e| {
-                RunError(format!("elaboration error in {}: {}", in_file, e.message))
+                RunError::Regular(format!("elaboration error in {}: {}", in_file, e.message))
             })?;
             let body = tamarin_theory::pretty_theory::pretty_open_theory(&elaborated);
             parse_only_docs.push(body);
@@ -2241,7 +2255,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             tamarin_theory::prove::ConfigBlock::default()
         };
         if let Some(msg) = &config_block.flag_error {
-            return Err(RunError(format!("configuration block: {}", msg)));
+            return Err(RunError::Regular(format!("configuration block: {}", msg)));
         }
         let auto_sources = opts.auto_sources || config_block.auto_sources;
         let cut = effective_cut(&opts, &config_block)?;
@@ -2263,8 +2277,9 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             }
             lines
         }));
-        let mut elaborated = elaborate_with_in_file(&parsed, in_file)
-            .map_err(|e| RunError(format!("elaboration error in {}: {}", in_file, e.message)))?;
+        let mut elaborated = elaborate_with_in_file(&parsed, in_file).map_err(|e| {
+            RunError::Regular(format!("elaboration error in {}: {}", in_file, e.message))
+        })?;
         DEFERRED_HS_ERROR_MARKERS.take();
 
         // Everything downstream of `elaborate` reads the internal theory; the
@@ -2404,7 +2419,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
                     let maude = st.require_maude()?;
                     let session = st
                         .build_prover_session(maude)
-                        .map_err(|e| RunError(e.to_string()))?;
+                        .map_err(|e| RunError::Regular(e.to_string()))?;
                     let wf_len = st.wf_report.len();
                     precompute_pending.push((session, wf_len));
                 } else {
@@ -2488,7 +2503,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             // same `showSaturation = True` close.
             let stats = session
                 .precomputation_stats()
-                .map_err(|e| RunError(e.to_string()))?;
+                .map_err(|e| RunError::Regular(e.to_string()))?;
             // HS `casesInfo` (ClosedTheory.hs:563-570).
             let chain_info = |n: usize| -> String {
                 if n == 0 {
@@ -2929,7 +2944,9 @@ mod tests {
     #[test]
     fn diff_flag_errors_cleanly() {
         let a = parse(&["--diff", "/nonexistent/in.spthy"]);
-        let RunError(msg) = run(&a).expect_err("--diff must not run");
+        let RunError::Regular(msg) = run(&a).expect_err("--diff must not run") else {
+            panic!("expected a regular error");
+        };
         assert!(msg.contains("--diff"), "{msg}");
         assert!(msg.contains("not yet ported"), "{msg}");
     }
@@ -2941,7 +2958,9 @@ mod tests {
         // one the mode errors out before it looks at `--interface`.  That is
         // why this test asserts the message, not only that an error occurs.
         let a = parse(&["interactive", "--interface=not-an-ip", "/tmp"]);
-        let RunError(msg) = run(&a).expect_err("expected interface parse error");
+        let RunError::Regular(msg) = run(&a).expect_err("expected interface parse error") else {
+            panic!("expected a regular error");
+        };
         assert!(msg.contains("--interface=\"not-an-ip\""), "{msg}");
         assert!(msg.contains("--interface=\"*4\""), "{msg}");
     }

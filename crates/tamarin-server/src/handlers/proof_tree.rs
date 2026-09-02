@@ -743,14 +743,23 @@ fn write_applicable_methods(
         // ProofMethod.hs:282-299, see line 298): never forces the SolveGoal fan-out —
         // see `is_applicable_for_display`.  Must stay in lockstep with
         // `apply_method_and_redirect`'s index filter (method numbering).
-        None => candidate_methods_with_expl(sys, ctx, depth)
-            .into_iter()
-            .filter(|(m, _)| {
-                tamarin_theory::constraint::solver::proof_method::is_applicable_for_display(
-                    ctx, m, sys,
-                )
-            })
-            .collect(),
+        None => match candidate_methods_with_expl(sys, ctx, depth) {
+            Ok(methods) => methods
+                .into_iter()
+                .filter(|(m, _)| {
+                    tamarin_theory::constraint::solver::proof_method::is_applicable_for_display(
+                        ctx, m, sys,
+                    )
+                })
+                .collect(),
+            Err(error) => {
+                out.push(format!(
+                    "<div class=\"preformatted methods\">{}</div>",
+                    html_escape(&error.to_string())
+                ));
+                return;
+            }
+        },
     };
     if methods.is_empty() {
         // Mirror Haskell `prettyApplicableProofMethods` (`Web/Theory.hs:546-548`):

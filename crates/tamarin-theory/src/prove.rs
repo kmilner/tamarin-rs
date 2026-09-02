@@ -15,10 +15,12 @@
 //! 5. Build a `ProofContext` carrying the theory's rules.
 //! 6. Drive `run_proof_search` to produce a `ProofNode` tree.
 //!
-//! Returns `Err` on lemma-lookup / guarded-conversion failures.
+//! Returns `Err` on lemma lookup, guarded conversion, or goal-ranking
+//! failures.
 
 use crate::constraint::solver::context::{IntrRuleCache, ProofContext};
-use crate::constraint::solver::search::{run_proof_search, ProofNode};
+use crate::constraint::solver::goals::RankingError;
+use crate::constraint::solver::search::{run_proof_search, run_proof_search_at_depth, ProofNode};
 use crate::constraint::system::{formula_to_system, SourceKind};
 use crate::guarded::{formula_to_guarded, Guarded};
 use crate::theory::OpenProtoRule;
@@ -27,6 +29,23 @@ use crate::theory::OpenProtoRule;
 pub enum ProveError {
     LemmaNotFound(String),
     Guarded(String),
+    Ranking(RankingError),
+}
+
+impl From<RankingError> for ProveError {
+    fn from(error: RankingError) -> Self {
+        Self::Ranking(error)
+    }
+}
+
+/// Policy local to one automatic search. Interactive requests must not
+/// mutate the theory-wide prover session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SearchOptions {
+    pub proof_bound: usize,
+    pub ranking_depth_offset: usize,
+    pub cut: crate::constraint::solver::context::CutStrategy,
+    pub oracle_only: bool,
 }
 
 /// HS `formulaToGuarded_ = either (error . render) id` (Guarded.hs:466-467):
@@ -48,6 +67,7 @@ impl std::fmt::Display for ProveError {
         match self {
             ProveError::LemmaNotFound(n) => write!(f, "lemma not found: {}", n),
             ProveError::Guarded(m) => write!(f, "guarded conversion: {}", m),
+            ProveError::Ranking(m) => write!(f, "goal ranking: {m}"),
         }
     }
 }
@@ -800,6 +820,24 @@ impl ProverSession {
         ctx
     }
 
+    /// Build the source context used by interactive raw/refined source views.
+    /// Refined views share the same fallible cache as lemma proving.
+    pub fn context_for_sources(&self, kind: SourceKind) -> Result<ProofContext, ProveError> {
+        if kind == SourceKind::RawSources {
+            return Ok(self.context_for_raw_sources());
+        }
+        let mut ctx = self.template_ctx.clone();
+        ctx.maude = ctx.maude.with_fresh_counter_from(0);
+        ctx.maude
+            .ensure_above(self.setup_counter_before.saturating_sub(1));
+        let (typing_assumptions, source_key) =
+            gather_typing_assumptions(&self.theory, "", SourceKind::RefinedSources)?;
+        ctx.typing_assumptions = typing_assumptions;
+        let cache_disabled = tamarin_utils::env_gate!("TAM_RS_NO_SOURCE_CACHE");
+        self.restore_or_saturate_sources(&mut ctx, source_key, cache_disabled);
+        Ok(ctx)
+    }
+
     /// Compute the `--precompute-only` stats (HS `prettyPrecomputation`,
     /// ClosedTheory.hs:553-575).  Forces the template's source cells
     /// (`ensure_saturated`), so it is intended for the precompute-only
@@ -1187,8 +1225,48 @@ pub fn prove_system_in_session(
     sys: crate::constraint::system::System,
     proof_bound: usize,
 ) -> Result<ProofNode, ProveError> {
-    let ctx = session.context_for_lemma(lemma_name)?;
-    Ok(run_proof_search(&ctx, sys, proof_bound))
+    prove_system_in_session_with_options(
+        session,
+        lemma_name,
+        sys,
+        SearchOptions {
+            proof_bound,
+            ranking_depth_offset: 0,
+            cut: session.cut,
+            oracle_only: false,
+        },
+    )
+}
+
+/// Prove a focused system with request-local search policy.
+pub fn prove_system_in_session_with_options(
+    session: &ProverSession,
+    lemma_name: &str,
+    sys: crate::constraint::system::System,
+    options: SearchOptions,
+) -> Result<ProofNode, ProveError> {
+    use crate::constraint::solver::goals::GoalRanking;
+
+    let mut ctx = session.context_for_lemma(lemma_name)?;
+    ctx.cut = options.cut;
+    if options.oracle_only {
+        if let Some(rankings) = &mut ctx.heuristic {
+            for ranking in rankings {
+                match ranking {
+                    GoalRanking::Oracle { quit_on_empty, .. }
+                    | GoalRanking::OracleSmart { quit_on_empty, .. }
+                    | GoalRanking::Tactic { quit_on_empty, .. } => *quit_on_empty = true,
+                    _ => {}
+                }
+            }
+        }
+    }
+    Ok(run_proof_search_at_depth(
+        &ctx,
+        sys,
+        options.proof_bound,
+        options.ranking_depth_offset,
+    )?)
 }
 
 fn prove_lemma_in_session_mode(
@@ -1276,7 +1354,7 @@ fn prove_lemma_in_session_mode(
                 sys,
                 tree,
                 proof_bound,
-            ));
+            )?);
         } else {
             // Non-target lemma: HS close-time check-and-extend
             // replay, no auto-proving of open leaves.
@@ -1285,7 +1363,7 @@ fn prove_lemma_in_session_mode(
                 sys,
                 tree,
                 proof_bound,
-            ));
+            )?);
         }
     }
     if !auto_prove {
@@ -1297,8 +1375,7 @@ fn prove_lemma_in_session_mode(
         // the start system, so it renders as plain `by sorry`).
         return Ok(crate::replay::annotated_sorry_root(sys));
     }
-    let r = run_proof_search(&ctx, sys, proof_bound);
-    Ok(r)
+    Ok(run_proof_search_at_depth(&ctx, sys, proof_bound, 0)?)
 }
 
 /// Drive a proof attempt for one lemma in an elaborated theory.
@@ -1511,9 +1588,9 @@ pub fn prove_lemma_with_pool_file_heuristic(
             sys,
             tree,
             proof_bound,
-        ));
+        )?);
     }
-    let r = run_proof_search(&ctx, sys, proof_bound);
+    let r = run_proof_search(&ctx, sys, proof_bound)?;
     Ok(r)
 }
 

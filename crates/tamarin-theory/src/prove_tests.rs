@@ -531,6 +531,32 @@ fn presaturate_disabled_is_noop() {
     );
 }
 
+#[test]
+fn replacing_stored_sorry_reports_unresolved_ranking() {
+    let session = match session_from(
+        "theory T begin\n\
+heuristic: {missing}\n\
+rule R: [ Fr(~k) ] --[ A(~k) ]-> [ Out(~k) ]\n\
+lemma open: exists-trace \"Ex k #i. A(k) @ #i\" by sorry\n\
+end",
+    ) {
+        Some(session) => session,
+        None => return,
+    };
+
+    let error = prove_lemma_in_session(&session, "open", usize::MAX)
+        .expect_err("auto-proving the stored sorry must resolve its ranking");
+    assert!(
+        matches!(
+            &error,
+        ProveError::Ranking(
+            crate::constraint::solver::goals::RankingError::Abort(message)
+        ) if message == "No tactic has been written in the theory file"
+        ),
+        "unexpected error: {error:?}"
+    );
+}
+
 /// `parse_config_block` records what cmdargs records, rejection strings
 /// byte-pinned against the oracle (`configuration: "<cfg>"` under
 /// `--prove`, stderr after `tamarin-prover: `).

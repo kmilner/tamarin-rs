@@ -186,11 +186,14 @@ fn apply_method_and_redirect(
         // which ranking of a multi-ranking heuristic is active
         // (`rankings !! (depth mod n)`, ProofMethod.hs:580-589).  Pass
         // the proof-path length, not a hardcoded 0.
-        let methods: Vec<_> = tamarin_theory::constraint::solver::search::candidate_methods(
+        let methods: Vec<_> = match tamarin_theory::constraint::solver::search::candidate_methods(
             &sys_at_path,
             &ctx,
             sub.len(),
-        )
+        ) {
+            Ok(methods) => methods,
+            Err(error) => return json_resp::alert(error.to_string()),
+        }
         .into_iter()
         // WHNF-depth applicability — MUST match the render pane's
         // filter (write_applicable_methods) so the clicked index

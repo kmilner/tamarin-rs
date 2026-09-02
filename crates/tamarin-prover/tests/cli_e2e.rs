@@ -16,6 +16,7 @@ mod common;
 
 use common::{fixture, maude_arg, maude_available, normalize_stdout, run_binary};
 use std::path::{Path, PathBuf};
+use tamarin_prover::run::RunError;
 use tamarin_prover::{parse_args, run};
 
 fn args_from(args: &[&str]) -> tamarin_prover::Args {
@@ -29,6 +30,13 @@ fn run_cli(extra: &[&str]) -> i32 {
     let mut argv: Vec<&str> = maude.as_deref().into_iter().collect();
     argv.extend_from_slice(extra);
     run(&args_from(&argv)).expect("run")
+}
+
+fn run_error(extra: &[&str]) -> RunError {
+    let maude = maude_arg();
+    let mut argv: Vec<&str> = maude.as_deref().into_iter().collect();
+    argv.extend_from_slice(extra);
+    run(&args_from(&argv)).expect_err("run should fail")
 }
 
 #[test]
@@ -119,6 +127,111 @@ fn prove_lemma_filter_excludes_other_lemmas() {
         body.contains("lemma chain") && body.contains("by sorry"),
         "filtered-out lemma should remain `by sorry` in the output; got:\n{}",
         body
+    );
+}
+
+#[test]
+fn missing_oracle_exits_unsuccessfully_without_partial_stdout() {
+    if !maude_available() {
+        eprintln!("skipping: maude not on path");
+        return;
+    }
+
+    let theory = fixture("oracle_missing.spthy");
+    let (code, stdout, stderr) = run_binary(&["--prove=test"], &[&theory]);
+    assert_ne!(code, 0, "missing oracle must fail the batch process");
+    assert!(stdout.is_empty(), "failed proof leaked stdout:\n{stdout}");
+    assert!(
+        stderr.contains("oracle exec error:"),
+        "failure should identify the oracle:\n{stderr}"
+    );
+}
+
+#[test]
+fn precompute_guarded_failures_use_the_ghc_exception_boundary() {
+    if !maude_available() {
+        eprintln!("skipping: maude not on path");
+        return;
+    }
+
+    for fixture_name in ["guarded_restriction.spthy", "guarded_source.spthy"] {
+        let theory = fixture(fixture_name);
+        let (code, stdout, stderr) = run_binary(&["--precompute-only"], &[&theory]);
+        assert_ne!(code, 0, "{fixture_name} must fail");
+        assert!(stdout.is_empty(), "{fixture_name} leaked stdout:\n{stdout}");
+        assert!(
+            stderr.contains("tamarin-prover: unguarded variable")
+                && !stderr.contains("error: guarded conversion:"),
+            "wrong error boundary for {fixture_name}:\n{stderr}"
+        );
+    }
+}
+
+#[test]
+fn stored_terminal_replay_emits_a_state_for_each_node() {
+    if !maude_available() {
+        eprintln!("skipping: maude not on path");
+        return;
+    }
+
+    let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_tamarin-rs"));
+    if let Some(maude) = maude_arg() {
+        cmd.arg(maude);
+    }
+    let output = cmd
+        .env("TAM_RS_TRACE_STATE", "1")
+        .arg(fixture("terminal_replay.spthy"))
+        .output()
+        .expect("spawn tamarin-rs");
+    assert!(output.status.success());
+    let stderr = String::from_utf8(output.stderr).expect("utf-8 stderr");
+    let (_, replay_trace) = stderr
+        .split_once("[Theory TerminalReplay] Theory closed\n")
+        .expect("closed marker before replay trace");
+    assert_eq!(replay_trace.matches("[STATE]").count(), 2, "{stderr}");
+}
+
+#[test]
+fn library_returns_batch_failures_instead_of_exiting() {
+    if !maude_available() {
+        eprintln!("skipping: maude not on path");
+        return;
+    }
+
+    for (fixture_name, lemma, expected) in [
+        ("oracle_missing.spthy", "test", "oracle exec error:"),
+        ("guarded_lemma.spthy", "bad", "unguarded variable"),
+        ("guarded_restriction.spthy", "ok", "unguarded variable"),
+    ] {
+        let theory = fixture(fixture_name);
+        let error = run_error(&[
+            &format!("--prove={lemma}"),
+            theory.to_str().expect("fixture path"),
+        ]);
+        assert!(
+            matches!(error, RunError::GhcException(ref message) if message.contains(expected)),
+            "unexpected error for {fixture_name}: {error:?}"
+        );
+    }
+
+    for fixture_name in ["guarded_restriction.spthy", "guarded_source.spthy"] {
+        let theory = fixture(fixture_name);
+        let error = run_error(&["--precompute-only", theory.to_str().expect("fixture path")]);
+        assert!(
+            matches!(error, RunError::GhcException(ref message) if message.starts_with("unguarded variable")),
+            "unexpected precompute error for {fixture_name}: {error:?}"
+        );
+    }
+
+    let theory = fixture("single_recv.spthy");
+    let error = run_error(&[
+        "--prove=chain",
+        "--heuristic=z",
+        theory.to_str().expect("fixture path"),
+    ]);
+    assert!(
+        matches!(error, RunError::Regular(ref message) if message.contains("unknown goal ranking")),
+        "unexpected heuristic error: {error:?}"
     );
 }
 

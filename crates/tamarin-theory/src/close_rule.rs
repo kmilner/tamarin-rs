@@ -528,7 +528,8 @@ fn prove_deduction_theory(
         crate::theory::TraceQuantifier::AllTraces,
         &g,
     );
-    let root = run_proof_search(&ctx, sys, usize::MAX);
+    let root = run_proof_search(&ctx, sys, usize::MAX)
+        .expect("the deduction proof context uses no fallible ranking");
     proof_status(&root) == ProofStatus::TraceFound
 }
 

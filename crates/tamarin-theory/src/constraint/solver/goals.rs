@@ -417,15 +417,18 @@ pub fn open_goals(sys: &System) -> Vec<AnnotatedGoal> {
 /// whole tamarin-prover invocation dies (ProofMethod.hs:604-620, see line 607,
 /// `readProcess` throws on non-zero exit or spawn failure).  RS
 /// mirrors this with a hard error that propagates to the top level.
-#[derive(Debug)]
-pub struct OracleError(pub String);
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RankingError {
+    Abort(String),
+}
 
-impl std::fmt::Display for OracleError {
+impl std::fmt::Display for RankingError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
+        let Self::Abort(message) = self;
+        f.write_str(message)
     }
 }
-impl std::error::Error for OracleError {}
+impl std::error::Error for RankingError {}
 
 // =============================================================================
 // smartRanking — port of `Theory.Constraint.Solver.ProofMethod.smartRanking`
@@ -452,8 +455,8 @@ impl std::error::Error for OracleError {}
 /// Takes a proof context for source-cache predicates and the current proof
 /// depth for round-robin heuristic scheduling.
 ///
-/// Returns `Err(OracleError)` when an oracle script cannot be
-/// executed — callers must propagate this as a hard abort.
+/// `Ok(None)` is the ranking's normal `ApplySorry` instruction;
+/// `RankingError::Abort` means the ranking could not be evaluated.
 ///
 /// `depth` mirrors HS's `useHeuristic (Heuristic rankings) depth =
 /// rankings !! (depth mod n)` (ProofMethod.hs:578-589).
@@ -461,7 +464,7 @@ pub fn rank_goals_with(
     sys: &System,
     ctx: Option<&crate::constraint::solver::context::ProofContext>,
     depth: usize,
-) -> Result<Vec<AnnotatedGoal>, OracleError> {
+) -> Result<Option<Vec<AnnotatedGoal>>, RankingError> {
     rank_goals_with_inner(sys, ctx, depth)
 }
 
@@ -510,25 +513,27 @@ fn rank_goals_with_inner(
     sys: &System,
     ctx: Option<&crate::constraint::solver::context::ProofContext>,
     depth: usize,
-) -> Result<Vec<AnnotatedGoal>, OracleError> {
+) -> Result<Option<Vec<AnnotatedGoal>>, RankingError> {
     let ranking = ranking_at_depth(ctx, depth);
     match ranking {
-        GoalRanking::Inj(use_loop_breakers) => Ok(inj_ranking(sys, ctx, use_loop_breakers)),
-        GoalRanking::Smart(use_loop_breakers) => Ok(smart_ranking(sys, ctx, use_loop_breakers)),
+        GoalRanking::Inj(use_loop_breakers) => Ok(Some(inj_ranking(sys, ctx, use_loop_breakers))),
+        GoalRanking::Smart(use_loop_breakers) => {
+            Ok(Some(smart_ranking(sys, ctx, use_loop_breakers)))
+        }
         GoalRanking::Sapic => {
             // HS `SapicRanking -> plainRanking (sapicRanking ctxt sys ags)`
             // (ProofMethod.hs:694-711, see line 697).
-            Ok(sapic_ranking(sys, ctx, false))
+            Ok(Some(sapic_ranking(sys, ctx, false)))
         }
         GoalRanking::SapicPKCS11 => {
             // HS `SapicPKCS11Ranking -> plainRanking (sapicPKCS11Ranking …)`
             // (ProofMethod.hs:694-711, see line 698).
-            Ok(sapic_ranking(sys, ctx, true))
+            Ok(Some(sapic_ranking(sys, ctx, true)))
         }
         GoalRanking::GoalNr => {
             // HS `goalNrRanking = sortOn (fst . snd)` (ProofMethod.hs:591-593).
             // `open_goals` already sorts by creation nr.
-            Ok(open_goals(sys))
+            Ok(Some(open_goals(sys)))
         }
         GoalRanking::UsefulGoalNr => {
             // HS `UsefulGoalNrRanking -> plainRanking . sortOn (\(_, (nr,
@@ -540,7 +545,7 @@ fn rank_goals_with_inner(
             // derives Ord in the same declaration order.
             let mut ags = open_goals(sys);
             sort_useful_goal_nr(&mut ags);
-            Ok(ags)
+            Ok(Some(ags))
         }
         GoalRanking::Tactic {
             quit_on_empty,
@@ -551,7 +556,7 @@ fn rank_goals_with_inner(
             //   internalTacticRanking (chosenTactic ..) quitOnEmpty ..`
             // (ProofMethod.hs:479-502, see line 490; ProofMethod.hs:694).
             if let Some(message) = resolution_error {
-                return Err(OracleError(message.to_string()));
+                return Err(RankingError::Abort(message.to_string()));
             }
             internal_tactic_ranking(&tactic, quit_on_empty, ctx, sys)
         }
@@ -588,18 +593,18 @@ fn rank_goals_with_inner(
 ///    out-of-range indices skipped.
 /// 5. Result = `ranked ++ (ags \\ ranked)` in original order.
 /// 6. If `quit_on_empty && !inp.is_empty() && ranked.is_empty()` →
-///    signal ApplySorry. We encode this as the `OracleError`
-///    `"__ORACLE_QUIT_ON_EMPTY__"` sentinel (matched in search.rs).
+///    `Ok(None)`, the ApplySorry instruction.
 ///
-/// On any exec failure (spawn error / non-zero exit) → `Err(OracleError)`,
-/// propagated as a hard abort (mirrors HS's uncaught IO exception).
+/// On any exec failure (spawn error / non-zero exit) →
+/// `RankingError::Abort`, propagated to the caller (mirrors HS's uncaught IO
+/// exception at the batch boundary).
 fn oracle_ranking(
     ags: Vec<AnnotatedGoal>,
     oracle_path: &str,
     quit_on_empty: bool,
     ctx: Option<&crate::constraint::solver::context::ProofContext>,
     _sys: &System,
-) -> Result<Vec<AnnotatedGoal>, OracleError> {
+) -> Result<Option<Vec<AnnotatedGoal>>, RankingError> {
     use std::io::Write;
     use std::process::{Command, Stdio};
 
@@ -626,21 +631,21 @@ fn oracle_ranking(
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
         .spawn()
-        .map_err(|e| OracleError(format!("oracle exec error: {}: {}", oracle_path, e)))?;
+        .map_err(|e| RankingError::Abort(format!("oracle exec error: {}: {}", oracle_path, e)))?;
 
     // Write stdin and close pipe
     if let Some(mut stdin) = child.stdin.take() {
         stdin
             .write_all(inp.as_bytes())
-            .map_err(|e| OracleError(format!("oracle stdin write error: {}", e)))?;
+            .map_err(|e| RankingError::Abort(format!("oracle stdin write error: {}", e)))?;
     }
 
     let output = child
         .wait_with_output()
-        .map_err(|e| OracleError(format!("oracle wait error: {}", e)))?;
+        .map_err(|e| RankingError::Abort(format!("oracle wait error: {}", e)))?;
 
     if !output.status.success() {
-        return Err(OracleError(format!(
+        return Err(RankingError::Abort(format!(
             "oracle process exited with status {}: {}",
             output.status, oracle_path
         )));
@@ -684,12 +689,12 @@ fn oracle_ranking(
     // The `guard` in the IO monad returns `mzero` when condition is True,
     // which causes the sorry instruction to fire (ProofMethod.hs:595-622, see line 620).
     if quit_on_empty && !inp.is_empty() && ranked.is_empty() {
-        return Err(OracleError("__ORACLE_QUIT_ON_EMPTY__".to_string()));
+        return Ok(None);
     }
 
     let mut result = ranked;
     result.extend(remaining);
-    Ok(result)
+    Ok(Some(result))
 }
 
 // =============================================================================
@@ -757,7 +762,7 @@ fn internal_tactic_ranking(
     quit_on_empty: bool,
     ctx: Option<&crate::constraint::solver::context::ProofContext>,
     sys: &System,
-) -> Result<Vec<AnnotatedGoal>, OracleError> {
+) -> Result<Option<Vec<AnnotatedGoal>>, RankingError> {
     let presort = presort_ranking(tactic.presort);
     let ags0 = open_goals(sys);
     let ags = apply_presort(&presort, ags0, sys, ctx);
@@ -784,7 +789,7 @@ fn it_ranking(
     quit_on_empty: bool,
     ctx: Option<&crate::constraint::solver::context::ProofContext>,
     sys: &System,
-) -> Result<Vec<AnnotatedGoal>, OracleError> {
+) -> Result<Option<Vec<AnnotatedGoal>>, RankingError> {
     let ranked_prio = rank_by_blocks(&tactic.prios, &ags, ctx, sys);
     let ranked_deprio = rank_by_blocks(&tactic.deprios, &ags, ctx, sys);
 
@@ -802,14 +807,14 @@ fn it_ranking(
     // quitOnEmpty: `guard (quitOnEmpty && null rankedPrioGoals &&
     //   null rankedDeprioGoals) *> Just ApplySorry` (ProofMethod.hs:626-687, see line 628).
     if quit_on_empty && ranked_prio.is_empty() && ranked_deprio.is_empty() {
-        return Err(OracleError("__ORACLE_QUIT_ON_EMPTY__".to_string()));
+        return Ok(None);
     }
 
     // result = rankedPrioGoals ++ nonRanked ++ rankedDeprioGoals
     let mut result = ranked_prio;
     result.extend(non_ranked);
     result.extend(ranked_deprio);
-    Ok(result)
+    Ok(Some(result))
 }
 
 /// Compute `rankedPrioGoals` (or `rankedDeprioGoals`) for one block list.

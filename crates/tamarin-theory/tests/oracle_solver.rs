@@ -213,11 +213,11 @@ fn enforce_probe_ledger(
 /// (`[heuristic=soioo]`).  Braced values (`heuristic={tactic_name}`)
 /// reference named tactics, never external scripts, and don't count.
 ///
-/// Oracle-ranked proving execs the oracle script relative to the invoker's
-/// CWD and `std::process::exit(1)`s when it is missing (HS: IO exception →
-/// dies with empty stdout; RS: `search::rank_goals_or_abort`) — one such
-/// file aborts the whole probe binary.  The abort cannot be caught.  The
-/// corpus probe therefore skips these files first.  Matches inside a
+/// Oracle-ranked proving runs an external executable whose dependencies,
+/// side effects and runtime are outside this in-process probe's control.
+/// In-file oracle paths resolve beside the theory, but a script can still
+/// block beyond the solver's cooperative deadline. The corpus probe therefore
+/// skips these files to remain bounded and hermetic. Matches inside a
 /// comment that only quotes a
 /// `--heuristic=O` command line over-exclude a few files; the
 /// `*_MIN_COMPARED` guards keep the exclusion honest.
@@ -757,7 +757,8 @@ fn proof_search_disj_lemma_picks_induction_first() {
     let Some(ctx) = rule_free_context() else {
         return;
     };
-    let root = run_proof_search(&ctx, fixture_lemma_system("disj_lemma.spthy"), 5);
+    let root = run_proof_search(&ctx, fixture_lemma_system("disj_lemma.spthy"), 5)
+        .expect("default ranking");
     // First method should be Induction — matches tamarin's
     // `induction` step at the start of the proof.
     assert!(
@@ -1077,9 +1078,8 @@ fn verdict_match_suite_all_solved_against_tamarin() {
 /// The test carries `#[ignore]`.  Run it with `cargo test -- --ignored`.
 /// This heavyweight whole-corpus probe proves every example in-process, which
 /// takes more than an hour of wall clock.  The probe skips oracle-ranked
-/// files first.  See [`mentions_oracle_ranking`]: a missing oracle script
-/// causes a `process::exit(1)` that nothing can catch, and that would abort
-/// the whole test binary.
+/// files first. See [`mentions_oracle_ranking`]: arbitrary external scripts
+/// are deliberately outside this in-process structural probe.
 #[test]
 #[ignore = "heavyweight whole-corpus probe (hour-plus). Run with --ignored"]
 fn corpus_proof_skeleton_match_probe() {
@@ -1139,7 +1139,7 @@ fn corpus_proof_skeleton_match_probe() {
             if src.contains("diff(") {
                 return None;
             }
-            // Oracle-ranked files would process::exit the probe binary.
+            // Keep the in-process probe bounded and free of external scripts.
             if mentions_oracle_ranking(&src) {
                 return None;
             }
@@ -1547,7 +1547,8 @@ fn proof_search_disj_lemma_descends_into_disj_goal() {
         return;
     };
     // Generous budget — must terminate without infinite-looping.
-    let root = run_proof_search(&ctx, fixture_lemma_system("disj_lemma.spthy"), 50);
+    let root = run_proof_search(&ctx, fixture_lemma_system("disj_lemma.spthy"), 50)
+        .expect("default ranking");
     assert!(matches!(root.method, ProofMethod::Induction));
     let non_empty = root
         .children
@@ -1680,7 +1681,7 @@ fn proof_search_end_to_end_tiny_theory() {
         tamarin_term::lterm::LVar::new("i", tamarin_term::lterm::LSort::Node, 0),
         rule,
     );
-    let root = run_proof_search(&ctx, sys, 50);
+    let root = run_proof_search(&ctx, sys, 50).expect("default ranking");
     assert_eq!(root.status, NodeStatus::Solved);
     // The trivial-Setup proof should terminate with no children.
     assert!(root.children.is_empty());

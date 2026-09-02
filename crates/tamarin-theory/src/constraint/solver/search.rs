@@ -42,6 +42,7 @@
 use std::collections::BTreeMap;
 
 use crate::constraint::solver::context::{CutStrategy, ProofContext};
+use crate::constraint::solver::goals::RankingError;
 use crate::constraint::solver::proof_method::{
     exec_proof_method, is_finished, ProofMethod, Result as MethodResult,
 };
@@ -65,7 +66,7 @@ pub struct ProofNode {
 }
 
 /// What's the proof-tree node currently saying?
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NodeStatus {
     /// Not yet finished — has open children to explore.
     Open,
@@ -81,11 +82,25 @@ pub enum NodeStatus {
 }
 
 /// Map a terminal `is_finished` result to its leaf [`NodeStatus`].
-pub(crate) fn node_status_of(r: &MethodResult) -> NodeStatus {
+pub fn node_status_of(r: &MethodResult) -> NodeStatus {
     match r {
         MethodResult::Solved => NodeStatus::Solved,
         MethodResult::Contradictory(_) => NodeStatus::Contradictory,
         MethodResult::Unfinishable => NodeStatus::Unfinishable,
+    }
+}
+
+impl NodeStatus {
+    /// Aggregate child statuses using HS `ProofStatus` precedence.
+    pub fn combine(self, other: Self) -> Self {
+        use NodeStatus::*;
+        match (self, other) {
+            (Solved, _) | (_, Solved) => Solved,
+            (Sorry, _) | (_, Sorry) => Sorry,
+            (Unfinishable, _) | (_, Unfinishable) => Unfinishable,
+            (Contradictory, _) | (_, Contradictory) => Contradictory,
+            (Open, Open) => Open,
+        }
     }
 }
 
@@ -121,7 +136,7 @@ impl ProofStatus {
     /// HS `ProofStatus` Semigroup (Theory/Proof.hs:409-420): precedence
     /// `Invalidated > TraceFound > Incomplete > Unfinishable > Complete >
     /// Undetermined`.
-    fn combine(self, other: ProofStatus) -> ProofStatus {
+    pub fn combine(self, other: ProofStatus) -> ProofStatus {
         use ProofStatus::*;
         match (self, other) {
             (Invalidated, _) | (_, Invalidated) => Invalidated,
@@ -132,6 +147,19 @@ impl ProofStatus {
             (Undetermined, Undetermined) => Undetermined,
         }
     }
+
+    pub fn from_step(method: &ProofMethod, annotated: bool) -> Self {
+        if !annotated {
+            return Self::Undetermined;
+        }
+        match method {
+            ProofMethod::Finished(MethodResult::Solved) => Self::TraceFound,
+            ProofMethod::Finished(MethodResult::Unfinishable) => Self::Unfinishable,
+            ProofMethod::Sorry(_) => Self::Incomplete,
+            ProofMethod::Invalidated => Self::Invalidated,
+            _ => Self::Complete,
+        }
+    }
 }
 
 /// HS `proofStepStatus` (Theory/Proof.hs:427-433): the status of ONE node.
@@ -139,16 +167,7 @@ impl ProofStatus {
 /// is `Undetermined` REGARDLESS of its method; otherwise it is keyed on
 /// the node's own method (NOT its aggregated `NodeStatus`).
 fn step_status(node: &ProofNode) -> ProofStatus {
-    if !node.annotated {
-        return ProofStatus::Undetermined;
-    }
-    match &node.method {
-        ProofMethod::Finished(MethodResult::Solved) => ProofStatus::TraceFound,
-        ProofMethod::Finished(MethodResult::Unfinishable) => ProofStatus::Unfinishable,
-        ProofMethod::Sorry(_) => ProofStatus::Incomplete,
-        ProofMethod::Invalidated => ProofStatus::Invalidated,
-        _ => ProofStatus::Complete,
-    }
+    ProofStatus::from_step(&node.method, node.annotated)
 }
 
 /// HS `getProofStatus` = `foldMap proofStepStatus` over every node in the
@@ -421,6 +440,9 @@ thread_local! {
     /// never re-expanded, so the deepening loops terminate once the
     /// whole frontier is bound-cut.
     static PROOF_BOUND: std::cell::Cell<usize> = const { std::cell::Cell::new(usize::MAX) };
+
+    /// Absolute proof depth represented by the root of a focused search.
+    static RANKING_DEPTH_OFFSET: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// True iff the current search is past its wall-clock deadline.
@@ -432,11 +454,41 @@ pub fn deadline_reached() -> bool {
     })
 }
 
-fn set_deadline(t: std::time::Instant) {
-    DEADLINE.with(|d| d.set(Some(t)));
+struct SearchTlsState {
+    deadline: Option<std::time::Instant>,
+    max_depth: usize,
+    depth_limit_hit: bool,
+    proof_bound: usize,
+    ranking_depth_offset: usize,
 }
-fn clear_deadline() {
-    DEADLINE.with(|d| d.set(None));
+
+fn replace_search_tls(state: SearchTlsState) -> SearchTlsState {
+    SearchTlsState {
+        deadline: DEADLINE.with(|cell| cell.replace(state.deadline)),
+        max_depth: MAX_DEPTH.with(|cell| cell.replace(state.max_depth)),
+        depth_limit_hit: DEPTH_LIMIT_HIT.with(|cell| cell.replace(state.depth_limit_hit)),
+        proof_bound: PROOF_BOUND.with(|cell| cell.replace(state.proof_bound)),
+        ranking_depth_offset: RANKING_DEPTH_OFFSET
+            .with(|cell| cell.replace(state.ranking_depth_offset)),
+    }
+}
+
+struct SearchTlsGuard {
+    previous: Option<SearchTlsState>,
+}
+
+impl SearchTlsGuard {
+    fn install(state: SearchTlsState) -> Self {
+        Self {
+            previous: Some(replace_search_tls(state)),
+        }
+    }
+}
+
+impl Drop for SearchTlsGuard {
+    fn drop(&mut self) {
+        replace_search_tls(self.previous.take().expect("search TLS guard dropped once"));
+    }
 }
 
 /// Run an iterative-deepening search.  Heuristic: try `Simplify`
@@ -486,39 +538,37 @@ fn clear_deadline() {
 /// when the longer path is alphabetically earlier — critical for
 /// NSPK3/roles `injective_agree` where Haskell renders `case c_aenc`
 /// (shorter) over `case I_2` (alphabetically earlier but deeper).
-pub fn run_proof_search(ctx: &ProofContext, initial: System, proof_bound: usize) -> ProofNode {
+pub fn run_proof_search(
+    ctx: &ProofContext,
+    initial: System,
+    proof_bound: usize,
+) -> Result<ProofNode, RankingError> {
+    run_proof_search_at_depth(ctx, initial, proof_bound, 0)
+}
+
+pub fn run_proof_search_at_depth(
+    ctx: &ProofContext,
+    initial: System,
+    proof_bound: usize,
+    ranking_depth_offset: usize,
+) -> Result<ProofNode, RankingError> {
+    run_proof_search_at_depth_inner(ctx, initial, proof_bound, ranking_depth_offset)
+}
+
+fn run_proof_search_at_depth_inner(
+    ctx: &ProofContext,
+    initial: System,
+    proof_bound: usize,
+    ranking_depth_offset: usize,
+) -> Result<ProofNode, RankingError> {
     let deadline = proof_deadline();
-    set_deadline(deadline);
-    PROOF_BOUND.with(|b| b.set(proof_bound));
-    // Optional hard-watchdog: opt-in via TAM_PROVE_DEADLINE_HARD_KILL=1.
-    // Spawns a detached thread that sleeps `deadline + grace_ms` and
-    // then calls `std::process::exit(124)`.  Catches cases where the
-    // co-operative `deadline_reached()` check misses because a single
-    // inner method (e.g. a long Maude variant enumeration in a
-    // bilinear-pairing theory) doesn't return between deadline checks.
-    // OFF by default to avoid surprising consumers (tests, library
-    // users) — only the `dump_proof` example and ProverSession callers
-    // who explicitly set it want this behaviour.  Grace defaults to
-    // 30s but is configurable via `TAM_PROVE_DEADLINE_GRACE_MS`.
-    if tamarin_utils::env_gate!("TAM_PROVE_DEADLINE_HARD_KILL") {
-        let total_ms: u64 = deadline_cap_ms().unwrap_or(30_000);
-        let grace_ms: u64 = std::env::var("TAM_PROVE_DEADLINE_GRACE_MS")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(30_000);
-        let total = std::time::Duration::from_millis(total_ms + grace_ms);
-        std::thread::Builder::new()
-            .name("prove-watchdog".into())
-            .spawn(move || {
-                std::thread::sleep(total);
-                eprintln!(
-                    "[prove-watchdog] deadline+grace ({} ms) exceeded; aborting",
-                    total_ms + grace_ms
-                );
-                std::process::exit(124);
-            })
-            .ok();
-    }
+    let _tls = SearchTlsGuard::install(SearchTlsState {
+        deadline: Some(deadline),
+        max_depth: usize::MAX,
+        depth_limit_hit: false,
+        proof_bound,
+        ranking_depth_offset,
+    });
     let mut root = ProofNode {
         method: ProofMethod::Sorry(Some("initial".into())),
         sys: initial,
@@ -544,7 +594,7 @@ pub fn run_proof_search(ctx: &ProofContext, initial: System, proof_bound: usize)
             MAX_DEPTH.with(|m| m.set(usize::MAX));
             DEPTH_LIMIT_HIT.with(|f| f.set(false));
             let mut budget = usize::MAX;
-            expand(ctx, &mut root, &mut budget, &deadline, 0);
+            expand(ctx, &mut root, &mut budget, &deadline, 0)?;
         }
         CutStrategy::Nothing => {
             // HS `CutNothing` → `id` (Theory/Proof.hs:730-750, see line 738): the full DFS proof
@@ -556,7 +606,7 @@ pub fn run_proof_search(ctx: &ProofContext, initial: System, proof_bound: usize)
             MAX_DEPTH.with(|m| m.set(usize::MAX));
             DEPTH_LIMIT_HIT.with(|f| f.set(false));
             let mut budget = usize::MAX;
-            expand(ctx, &mut root, &mut budget, &deadline, 0);
+            expand(ctx, &mut root, &mut budget, &deadline, 0)?;
         }
         CutStrategy::AfterSorry => {
             // HS `CutAfterSorry` → `cutAfterFirstSorry` (Theory/Proof.hs:987-997).
@@ -569,7 +619,7 @@ pub fn run_proof_search(ctx: &ProofContext, initial: System, proof_bound: usize)
             MAX_DEPTH.with(|m| m.set(usize::MAX));
             DEPTH_LIMIT_HIT.with(|f| f.set(false));
             let mut budget = usize::MAX;
-            expand(ctx, &mut root, &mut budget, &deadline, 0);
+            expand(ctx, &mut root, &mut budget, &deadline, 0)?;
         }
         CutStrategy::Bfs => {
             // HS `cutOnSolvedBFS` (Theory/Proof.hs:928-955): force the tree one
@@ -591,9 +641,9 @@ pub fn run_proof_search(ctx: &ProofContext, initial: System, proof_bound: usize)
                 DEPTH_LIMIT_HIT.with(|f| f.set(false));
                 let mut budget = usize::MAX;
                 if level == 1 {
-                    expand(ctx, &mut root, &mut budget, &deadline, 0);
+                    expand(ctx, &mut root, &mut budget, &deadline, 0)?;
                 } else {
-                    re_expand_depth_limited(ctx, &mut root, &mut budget, &deadline, 0);
+                    re_expand_depth_limited(ctx, &mut root, &mut budget, &deadline, 0)?;
                 }
                 // HS's poor-man's logging (Theory/Proof.hs:928-955, see line 934,941) — `trace` to
                 // stderr, unconditional.
@@ -653,14 +703,14 @@ pub fn run_proof_search(ctx: &ProofContext, initial: System, proof_bound: usize)
                 // `deadline` catching wall-clock runaway.
                 let mut budget = usize::MAX;
                 if first_iter {
-                    expand(ctx, &mut root, &mut budget, &deadline, 0);
+                    expand(ctx, &mut root, &mut budget, &deadline, 0)?;
                     first_iter = false;
                 } else {
                     // Re-expand only `Sorry: depth limit` leaves
                     // (Haskell-faithful memoization — the cached tree IS the
                     // proof tree, only the unforced "depth limit" thunks need
                     // (re-)expansion).
-                    re_expand_depth_limited(ctx, &mut root, &mut budget, &deadline, 0);
+                    re_expand_depth_limited(ctx, &mut root, &mut budget, &deadline, 0)?;
                 }
                 if matches!(root.status, NodeStatus::Solved | NodeStatus::Contradictory) {
                     break;
@@ -681,10 +731,6 @@ pub fn run_proof_search(ctx: &ProofContext, initial: System, proof_bound: usize)
             }
         }
     }
-    MAX_DEPTH.with(|m| m.set(usize::MAX));
-    DEPTH_LIMIT_HIT.with(|f| f.set(false));
-    PROOF_BOUND.with(|b| b.set(usize::MAX));
-    clear_deadline();
     // HS-faithful: `cutOnSolvedDFS` / `cutOnSolvedSingleThreadDFS`
     // (Theory/Proof.hs:854-884, 795-816) call `extractSolved path prf0` once a
     // Solved leaf is found, pruning the proof tree to JUST the
@@ -699,7 +745,7 @@ pub fn run_proof_search(ctx: &ProofContext, initial: System, proof_bound: usize)
     {
         extract_solved_path(&mut root);
     }
-    root
+    Ok(root)
 }
 
 /// HS `cutOnSolvedBFS`'s `checkLevel` (Theory/Proof.hs:943-955) over the eager
@@ -834,7 +880,7 @@ fn re_expand_depth_limited(
     budget: &mut usize,
     deadline: &std::time::Instant,
     depth: usize,
-) {
+) -> Result<(), RankingError> {
     // Was this node stalled at the depth limit on the previous iteration?
     if is_depth_limited(node) {
         // Re-expand from scratch at this depth.  The deeper `MAX_DEPTH`
@@ -842,20 +888,19 @@ fn re_expand_depth_limited(
         node.method = ProofMethod::Sorry(None);
         node.children = BTreeMap::new();
         node.status = NodeStatus::Open;
-        expand(ctx, node, budget, deadline, depth);
-        return;
+        return expand(ctx, node, budget, deadline, depth);
     }
     // Already resolved — return cached subtree.
     if matches!(
         node.status,
         NodeStatus::Solved | NodeStatus::Contradictory | NodeStatus::Unfinishable
     ) {
-        return;
+        return Ok(());
     }
     // Sorry with non-depth-limit reason and no descendants: preserve.
     // (Budget exhausted, deadline, or no-method Sorrys are terminal.)
     if matches!(node.status, NodeStatus::Sorry) && node.children.is_empty() {
-        return;
+        return Ok(());
     }
     // Recurse into children.  Any depth-limited descendant gets
     // re-expanded in place.  Match `expand`'s early-break-on-Solved —
@@ -873,22 +918,10 @@ fn re_expand_depth_limited(
         if std::time::Instant::now() >= *deadline {
             break;
         }
-        // Track proof-tree path so state-trace / lockstep emissions
-        // reflect the correct deep path during iterative-deepening
-        // re-expansion.  Without this push, state-traces from re-expanded
-        // subtrees report just the deepest pushed case (e.g. `/c_sdec`)
-        // instead of the full lemma-proof path (`/Setup_Key/.../c_sdec`).
-        // Mirrors the case_path push/pop in the serial branch of
-        // `expand_inner` (the `if push_path { case_path_push(..) }`
-        // around the recursive `expand` call further down this file).
-        let push_path = !name.is_empty();
-        if push_path {
-            crate::constraint::solver::trace::case_path_push(name);
-        }
-        re_expand_depth_limited(ctx, child, budget, deadline, depth + 1);
-        if push_path {
-            crate::constraint::solver::trace::case_path_pop();
-        }
+        // Preserve the full proof-tree path during iterative-deepening
+        // re-expansion and restore it even if solver work unwinds.
+        let _path = crate::constraint::solver::trace::CasePathGuard::push(name);
+        re_expand_depth_limited(ctx, child, budget, deadline, depth + 1)?;
         if matches!(child.status, NodeStatus::Solved) {
             found_solved = true;
         }
@@ -899,6 +932,7 @@ fn re_expand_depth_limited(
     if !node.children.is_empty() {
         node.status = rollup_from_children(&node.children);
     }
+    Ok(())
 }
 
 /// Roll a node's children up into its status, mirroring Haskell's
@@ -940,8 +974,8 @@ fn expand(
     budget: &mut usize,
     deadline: &std::time::Instant,
     depth: usize,
-) {
-    expand_inner(ctx, node, budget, deadline, depth);
+) -> Result<(), RankingError> {
+    expand_inner(ctx, node, budget, deadline, depth)?;
     // After expansion, `sys` is no longer read EXCEPT on
     // `Sorry: depth limit` leaves, which `re_expand_depth_limited`
     // (defined below in this file) re-runs `expand` on during the next
@@ -957,6 +991,7 @@ fn expand(
     if drop_sys_after_expand(node, sys_retention()) {
         node.sys = crate::constraint::system::System::default();
     }
+    Ok(())
 }
 
 /// The [`expand`] drop decision, as a pure predicate over the node and
@@ -986,12 +1021,7 @@ fn expand_inner(
     budget: &mut usize,
     deadline: &std::time::Instant,
     depth: usize,
-) {
-    // Rust-only diagnostic [STATE] emission (gated by TAM_RS_TRACE_STATE)
-    // placed at every prove entry so Simplify / Induction / Finished
-    // steps are recorded, not just SolveGoal dispatch (proof_method.rs).
-    // It has no Haskell counterpart and does not affect --prove output.
-    crate::constraint::solver::trace::trace_state(&node.sys);
+) -> Result<(), RankingError> {
     // `--bound=N` (HS `boundProofDepth`, Theory/Proof.hs:336-344): `go n`'s
     // `0 < n` guard fires before the node is even inspected, so ANY node at
     // depth `bound` — a would-be Solved leaf included — becomes
@@ -1004,8 +1034,14 @@ fn expand_inner(
     if depth >= proof_bound {
         node.method = ProofMethod::Sorry(Some(format!("bound {proof_bound} hit")));
         node.status = NodeStatus::Sorry;
-        return;
+        return Ok(());
     }
+    // Rust-only diagnostic [STATE] emission (gated by TAM_RS_TRACE_STATE)
+    // placed at every evaluated prove entry so Simplify / Induction /
+    // Finished steps are recorded, not just SolveGoal dispatch
+    // (proof_method.rs). Bound-cut nodes above remain wholly unevaluated,
+    // matching HS's `boundProofDepth`.
+    crate::constraint::solver::trace::trace_state(&node.sys);
     // ID-DFS depth limit (Haskell `cutOnSolvedDFS` Theory/Proof.hs:855-877).
     //
     // Haskell's `findSolved` checks `d >= dMax` BEFORE checking the
@@ -1032,23 +1068,23 @@ fn expand_inner(
         DEPTH_LIMIT_HIT.with(|f| f.set(true));
         node.method = ProofMethod::Sorry(Some("depth limit".into()));
         node.status = NodeStatus::Sorry;
-        return;
+        return Ok(());
     }
     // Already terminal.
     if let Some(r) = is_finished(ctx, &node.sys) {
         node.status = node_status_of(&r);
         node.method = ProofMethod::Finished(r);
-        return;
+        return Ok(());
     }
     if std::time::Instant::now() >= *deadline {
         node.method = ProofMethod::Sorry(Some("deadline reached".into()));
         node.status = NodeStatus::Sorry;
-        return;
+        return Ok(());
     }
     if *budget == 0 {
         node.method = ProofMethod::Sorry(Some("budget exhausted".into()));
         node.status = NodeStatus::Sorry;
-        return;
+        return Ok(());
     }
     *budget -= 1;
     // Mirror Haskell's `rankProofMethods` → `execMethods` flow:
@@ -1070,14 +1106,10 @@ fn expand_inner(
     // `candidate_methods_open`: the terminal check above just proved
     // `is_finished(ctx, &node.sys)` is `None`, and nothing has touched
     // `node.sys` since — skip the guarded entry's redundant re-sweep.
-    let candidates = candidate_methods_open(&node.sys, ctx, depth);
-    let Some((method, mut cases)) = candidates
-        .into_iter()
-        .find_map(|m| exec_proof_method(ctx, &m, &node.sys).map(|cs| (m, cs)))
-    else {
+    let Some((method, mut cases)) = select_open_method(&node.sys, ctx, depth)? else {
         node.method = ProofMethod::Sorry(Some("no method".into()));
         node.status = NodeStatus::Sorry;
-        return;
+        return Ok(());
     };
     node.method = method;
     if cases.is_empty() {
@@ -1094,7 +1126,7 @@ fn expand_inner(
         } else {
             NodeStatus::Contradictory
         };
-        return;
+        return Ok(());
     }
     // Early-break-on-Solved (Haskell `foldMap` semantics):
     //
@@ -1187,19 +1219,16 @@ fn expand_inner(
         // re-seed would sail past the `--bound` cut.
         let mp_snapshot = MAX_DEPTH.with(|m| m.get());
         let bound_snapshot = PROOF_BOUND.with(|b| b.get());
+        let ranking_offset_snapshot = RANKING_DEPTH_OFFSET.with(|d| d.get());
         // Snapshot the proof-tree case_path so each worker can seed its
         // own thread-local stack and produce coherent trace output.
-        let path_snapshot: Vec<String> = crate::constraint::solver::trace::case_path_snapshot();
+        let path_snapshot = crate::constraint::solver::trace::case_path_snapshot();
         let deadline_snapshot = *deadline;
-        // `run_proof_search` runs on a rayon WORKER thread, so
-        // `into_par_iter().collect()` runs the per-case closures ON THIS SAME
-        // THREAD, mutating per-search thread-locals (`DEPTH_LIMIT_HIT`,
-        // `MAX_DEPTH`, `DEADLINE`, case_path).  A sibling's `false` could
-        // clobber an earlier `true`.  Snapshot the parent's thread-locals and
-        // restore after `collect`, folding `DEPTH_LIMIT_HIT` as
-        // `prior || any_hit`, matching the serial branch.
+        // A rayon closure may run on this same thread. Its guards restore the
+        // parent's TLS and case path; retain only the worker results that must
+        // be aggregated into the parent search.
         let parent_depth_limit_hit = DEPTH_LIMIT_HIT.with(|f| f.get());
-        let results: Vec<(String, ProofNode, bool)> = cases
+        let results: Result<Vec<(String, ProofNode, bool)>, RankingError> = cases
             .into_par_iter()
             .map(|(name, sys)| {
                 // Each rayon worker has its own thread-locals.  Initialise
@@ -1207,15 +1236,17 @@ fn expand_inner(
                 // (depth-limit check, DEPTH_LIMIT_HIT bookkeeping, trace
                 // case path) sees the correct values regardless of which
                 // worker thread we land on.
-                MAX_DEPTH.with(|m| m.set(mp_snapshot));
-                PROOF_BOUND.with(|b| b.set(bound_snapshot));
-                DEPTH_LIMIT_HIT.with(|f| f.set(false));
-                DEADLINE.with(|d| d.set(Some(deadline_snapshot)));
-                crate::constraint::solver::trace::case_path_set(&path_snapshot);
-                let push_path = !name.is_empty();
-                if push_path {
-                    crate::constraint::solver::trace::case_path_push(&name);
-                }
+                let _tls = SearchTlsGuard::install(SearchTlsState {
+                    deadline: Some(deadline_snapshot),
+                    max_depth: mp_snapshot,
+                    depth_limit_hit: false,
+                    proof_bound: bound_snapshot,
+                    ranking_depth_offset: ranking_offset_snapshot,
+                });
+                let _path = crate::constraint::solver::trace::CasePathGuard::set_child(
+                    path_snapshot.clone(),
+                    &name,
+                );
                 // Per-worker MaudeHandle: siblings must not share `ctx.maude`'s
                 // `fresh_counter` -- concurrent mutation would make LVar.idx
                 // allocation (and proof-tree shape) depend on worker interleaving,
@@ -1262,18 +1293,16 @@ fn expand_inner(
                     &mut local_budget,
                     &deadline_snapshot,
                     depth + 1,
-                );
+                )?;
                 // Drop the pooled Maude back to the pool only after expand
                 // returns — any Maude IPC inside expand uses the pooled
                 // handle via `worker_ctx.maude`.
                 drop(pool_guard);
-                if push_path {
-                    crate::constraint::solver::trace::case_path_pop();
-                }
                 let local_hit = DEPTH_LIMIT_HIT.with(|f| f.get());
-                (name, child, local_hit)
+                Ok((name, child, local_hit))
             })
             .collect();
+        let results = results?;
         // Aggregate worker DEPTH_LIMIT_HIT into the parent thread —
         // run_proof_search's ID-DFS loop reads this to decide whether
         // to grow MAX_DEPTH for the next iteration.  Fold the workers'
@@ -1283,14 +1312,6 @@ fn expand_inner(
         // lowers `DEPTH_LIMIT_HIT`.
         let any_hit = results.iter().any(|(_, _, hit)| *hit);
         DEPTH_LIMIT_HIT.with(|f| f.set(parent_depth_limit_hit || any_hit));
-        // Restore the parent's per-search thread-locals that the closures
-        // may have clobbered while running on this same thread under
-        // lemma-level parallelism, so the search sees its own MAX_DEPTH /
-        // DEADLINE / case_path after the fan-out.
-        MAX_DEPTH.with(|m| m.set(mp_snapshot));
-        PROOF_BOUND.with(|b| b.set(bound_snapshot));
-        DEADLINE.with(|d| d.set(Some(deadline_snapshot)));
-        crate::constraint::solver::trace::case_path_set(&path_snapshot);
         for (name, child, _hit) in results {
             node.children.insert(name, child);
         }
@@ -1315,9 +1336,9 @@ fn expand_inner(
                 match ctx.cut {
                     CutStrategy::AfterSorry => {
                         // HS `go True` (cutAfterFirstSorry, Theory/Proof.hs:993-994)
-                        // still forces the visited node's METHOD (not its
-                        // children): a node whose method evaluates to
-                        // `Finished _` is preserved after the abort —
+                        // still exposes a cheap `Finished _` method without
+                        // forcing an open node's selected method or children:
+                        // finished nodes are preserved after the abort —
                         // NSPK3 renders `by contradiction /* cyclic */`
                         // leaves amid the sorry stubs — while every
                         // still-open node becomes a bare `sorry` leaf.
@@ -1350,17 +1371,10 @@ fn expand_inner(
                 status: NodeStatus::Open,
                 annotated: true,
             };
-            // Track proof-tree path for branch-aware lockstep tracing.
-            // Skip empty-name cases (Simplify produces a single "" case
-            // with no proof-tree label — they're transparent in HS too).
-            let push_path = !name.is_empty();
-            if push_path {
-                crate::constraint::solver::trace::case_path_push(&name);
-            }
-            expand(ctx, &mut child, budget, deadline, depth + 1);
-            if push_path {
-                crate::constraint::solver::trace::case_path_pop();
-            }
+            // Track proof-tree paths and restore them if recursive solver
+            // work unwinds. Empty Simplify cases are transparent.
+            let _path = crate::constraint::solver::trace::CasePathGuard::push(&name);
+            expand(ctx, &mut child, budget, deadline, depth + 1)?;
             abort = match ctx.cut {
                 CutStrategy::Dfs | CutStrategy::SeqDfs => {
                     matches!(child.status, NodeStatus::Solved)
@@ -1400,48 +1414,28 @@ fn expand_inner(
     node.status = rollup_from_children(&node.children);
     // Note: `Contradictory` is only reached when no child is
     // Solved/Sorry/Unfinishable — i.e. every branch closed to ⊥.
+    Ok(())
 }
 
-/// When set (interactive mode), an oracle exec failure unwinds via
-/// `panic!` instead of exiting the process.  HS has the same split by
-/// construction: `oracleRanking`'s `readProcess` exception
-/// (ProofMethod.hs:597-622, see line 607) is uncaught in batch mode and
-/// kills the invocation, but in the web server it surfaces inside a Warp
-/// request thread, so only the triggering request fails and the server
-/// keeps serving.  Batch (the default) keeps the byte-parity `exit(1)`.
-pub static ORACLE_ERROR_UNWINDS: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
-
-/// Run the goal ranker, centralising the two non-`Ok` outcomes shared
-/// by [`candidate_methods`] and [`candidate_methods_with_expl`]:
-///   * `Err("__ORACLE_QUIT_ON_EMPTY__")` → `Err(())`, signalling the
-///     caller to emit a single `ApplySorry` candidate (HS ProofMethod.hs:597-622, see line 620).
-///   * any other `Err` → oracle exec failure: mirror HS's uncaught IO
-///     exception (ProofMethod.hs:597-622, see line 607, inside
-///     `oracleRanking` under `unsafePerformIO`, where `readProcess`
-///     throws).  In batch mode that kills the invocation with EMPTY
-///     stdout: print to stderr, flush stdout (so nothing leaks before
-///     exit), exit with code 1.  In interactive mode
-///     ([`ORACLE_ERROR_UNWINDS`]) it is confined to the request: panic
-///     and let the server's task boundary absorb the unwind.
-fn rank_goals_or_abort(
+fn select_open_method(
     sys: &System,
     ctx: &ProofContext,
     depth: usize,
-) -> Result<Vec<crate::constraint::solver::annotated_goals::AnnotatedGoal>, ()> {
-    match crate::constraint::solver::goals::rank_goals_with(sys, Some(ctx), depth) {
-        Ok(gs) => Ok(gs),
-        Err(e) if e.0 == "__ORACLE_QUIT_ON_EMPTY__" => Err(()),
-        Err(e) => {
-            eprintln!("tamarin-prover: {}", e);
-            if ORACLE_ERROR_UNWINDS.load(std::sync::atomic::Ordering::Relaxed) {
-                panic!("{}", e.0);
-            }
-            use std::io::Write;
-            let _ = std::io::stdout().flush();
-            std::process::exit(1);
-        }
-    }
+) -> Result<Option<(ProofMethod, Vec<(String, System)>)>, RankingError> {
+    Ok(candidate_methods_open(sys, ctx, depth)?
+        .into_iter()
+        .find_map(|method| exec_proof_method(ctx, &method, sys).map(|cases| (method, cases))))
+}
+
+/// Run the goal ranker at the effective depth. `Ok(None)` is its ApplySorry
+/// instruction; actual oracle/tactic failures propagate to the caller.
+fn try_rank_goals(
+    sys: &System,
+    ctx: &ProofContext,
+    depth: usize,
+) -> Result<Option<Vec<crate::constraint::solver::annotated_goals::AnnotatedGoal>>, RankingError> {
+    let depth = depth.saturating_add(RANKING_DEPTH_OFFSET.with(|d| d.get()));
+    crate::constraint::solver::goals::rank_goals_with(sys, Some(ctx), depth)
 }
 
 /// Insert an `Induction` candidate at the HS-mandated position when the
@@ -1488,7 +1482,11 @@ fn insert_induction_at<T>(out: &mut Vec<T>, sys: &System, ctx: &ProofContext, mk
 /// in the list before goals so that when the system is reducible
 /// the simplifier runs first, decomposing pending formulas into
 /// goals.  Induction is only added in the initial state.
-pub fn candidate_methods(sys: &System, ctx: &ProofContext, depth: usize) -> Vec<ProofMethod> {
+pub fn candidate_methods(
+    sys: &System,
+    ctx: &ProofContext,
+    depth: usize,
+) -> Result<Vec<ProofMethod>, RankingError> {
     // HS `stoppingMethod` (rankProofMethods, ProofMethod.hs:749-751):
     // `(Finished <$> isFinished ctxt sys) <|> …` — a finished system's
     // method list is exactly `[Finished r]`, displacing Simplify and every
@@ -1497,7 +1495,7 @@ pub fn candidate_methods(sys: &System, ctx: &ProofContext, depth: usize) -> Vec<
     // `contradiction` (HS redirects on it; an empty list here made RS
     // alert "prover failed").
     if let Some(r) = is_finished(ctx, sys) {
-        return vec![ProofMethod::Finished(r)];
+        return Ok(vec![ProofMethod::Finished(r)]);
     }
     candidate_methods_open(sys, ctx, depth)
 }
@@ -1507,7 +1505,11 @@ pub fn candidate_methods(sys: &System, ctx: &ProofContext, depth: usize) -> Vec<
 /// checks the terminal case immediately before ranking): `is_finished` is
 /// the full contradiction sweep, and a second sweep here doubles its cost on
 /// every expanded node (measured +7% wall on CCITT_X509_3).
-fn candidate_methods_open(sys: &System, ctx: &ProofContext, depth: usize) -> Vec<ProofMethod> {
+fn candidate_methods_open(
+    sys: &System,
+    ctx: &ProofContext,
+    depth: usize,
+) -> Result<Vec<ProofMethod>, RankingError> {
     // Haskell-faithful: build the FULL ranked goal list, not just the
     // first one (ProofMethod.hs:520-540).  Haskell's `proofMethods`
     // includes ALL open goals as SolveGoal candidates; `execMethods`
@@ -1518,16 +1520,17 @@ fn candidate_methods_open(sys: &System, ctx: &ProofContext, depth: usize) -> Vec
     //
     // `depth` drives round-robin heuristic scheduling (ProofMethod.hs:581-590,
     // `useHeuristic`'s `rankings !! (depth `mod` n)`).
-    // Oracle ranked nothing and quitOnEmpty is set: emit ApplySorry.
+    // The selected ranking produced no matches and quitOnEmpty is set:
+    // emit ApplySorry.
     // HS: `guard (quitOnEmpty && not (null inp) && null ranked) *> Just ApplySorry`
     // (ProofMethod.hs:597-622, see line 620, inside `oracleRanking`) — stoppingMethod fires.
     // We represent this as an empty candidate list with a special Sorry.
-    let goals = match rank_goals_or_abort(sys, ctx, depth) {
-        Ok(gs) => gs,
-        Err(()) => {
-            return vec![ProofMethod::Sorry(Some(
+    let goals = match try_rank_goals(sys, ctx, depth)? {
+        Some(gs) => gs,
+        None => {
+            return Ok(vec![ProofMethod::Sorry(Some(
                 "Oracle ranked no proof methods".into(),
-            ))]
+            ))]);
         }
     };
     // Construct: [Simplify, goal_1, goal_2, ..., goal_N] (+ Induction below).
@@ -1538,7 +1541,7 @@ fn candidate_methods_open(sys: &System, ctx: &ProofContext, depth: usize) -> Vec
     }
     // Insert Induction at the appropriate position in initial state.
     insert_induction_at(&mut out, sys, ctx, || ProofMethod::Induction);
-    out
+    Ok(out)
 }
 
 /// UI-only variant of [`candidate_methods`] that also returns, for each
@@ -1557,22 +1560,23 @@ pub fn candidate_methods_with_expl(
     sys: &System,
     ctx: &ProofContext,
     depth: usize,
-) -> Vec<(ProofMethod, String)> {
+) -> Result<Vec<(ProofMethod, String)>, RankingError> {
     use crate::constraint::constraints::Goal;
     use crate::constraint::solver::annotated_goals::Usefulness;
     // HS `stoppingMethod` — see `candidate_methods`; keeps the DISPLAYED
     // numbering in lockstep with the apply path.
     if let Some(r) = is_finished(ctx, sys) {
-        return vec![(ProofMethod::Finished(r), String::new())];
+        return Ok(vec![(ProofMethod::Finished(r), String::new())]);
     }
-    // Oracle ranked nothing with quitOnEmpty → ApplySorry (expl "").
-    let goals = match rank_goals_or_abort(sys, ctx, depth) {
-        Ok(gs) => gs,
-        Err(()) => {
-            return vec![(
+    // The selected ranking produced no matches with quitOnEmpty →
+    // ApplySorry (expl "").
+    let goals = match try_rank_goals(sys, ctx, depth)? {
+        Some(gs) => gs,
+        None => {
+            return Ok(vec![(
                 ProofMethod::Sorry(Some("Oracle ranked no proof methods".into())),
                 String::new(),
-            )]
+            )]);
         }
     };
     let mut out: Vec<(ProofMethod, String)> = Vec::with_capacity(goals.len() + 2);
@@ -1598,7 +1602,7 @@ pub fn candidate_methods_with_expl(
     insert_induction_at(&mut out, sys, ctx, || {
         (ProofMethod::Induction, String::new())
     });
-    out
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -1694,7 +1698,7 @@ mod tests {
             tamarin_term::lterm::LVar::new("i", tamarin_term::lterm::LSort::Node, 0),
             rule,
         );
-        let root = run_proof_search(&ctx, sys, 10);
+        let root = run_proof_search(&ctx, sys, 10).expect("default ranking");
         assert_eq!(root.status, NodeStatus::Solved);
         // `expand_inner` consults `is_finished` before it tries `simplify`.
         // A system that is already finished therefore becomes the terminal
@@ -1726,7 +1730,7 @@ mod tests {
         sys.add_goal(crate::constraint::constraints::Goal::Disj(
             crate::constraint::constraints::Disj::new(Vec::new()),
         ));
-        let root = run_proof_search(&ctx, sys, 5);
+        let root = run_proof_search(&ctx, sys, 5).expect("default ranking");
         assert_eq!(root.status, NodeStatus::Contradictory);
         // The root is the contradiction itself.  It is not a `SolveGoal` on
         // the empty disjunction.  `is_open_in_sys` drops `DisjG (Disj [])`, so
@@ -1764,7 +1768,7 @@ mod tests {
         sys.add_goal(crate::constraint::constraints::Goal::Disj(
             crate::constraint::constraints::Disj::new(vec![f1, f2]),
         ));
-        let root = run_proof_search(&ctx, sys, 10);
+        let root = run_proof_search(&ctx, sys, 10).expect("default ranking");
         assert!(matches!(
             root.method,
             ProofMethod::SolveGoal(crate::constraint::constraints::Goal::Disj(_))
@@ -1796,7 +1800,7 @@ mod tests {
             .push(std::sync::Arc::new(crate::guarded::gtrue()));
         sys.formulas_mut()
             .push(std::sync::Arc::new(crate::guarded::gtrue()));
-        let root = run_proof_search(&ctx, sys, 5);
+        let root = run_proof_search(&ctx, sys, 5).expect("default ranking");
         assert_eq!(root.status, NodeStatus::Solved);
         // There is one `simplify` step, and its single child is the Solved
         // leaf.  The simplified system no longer holds the trivially-true
@@ -1834,7 +1838,7 @@ mod tests {
         sys.add_goal(crate::constraint::constraints::Goal::Action(i, f));
         // Add a non-empty piece so isInitialSystem returns false.
         sys.subterm_store_mut().add(ty.clone(), ty);
-        let root = run_proof_search(&ctx, sys, 1);
+        let root = run_proof_search(&ctx, sys, 1).expect("default ranking");
         // Depth 0 is the root's own `simplify`.  Depth 1 is the cut.
         assert_eq!(root.method, ProofMethod::Simplify);
         assert_eq!(root.status, NodeStatus::Sorry);
@@ -1848,6 +1852,29 @@ mod tests {
             !is_depth_limited(cut),
             "a bound-sorry must not be re-expandable as a depth-limit thunk"
         );
+    }
+
+    #[test]
+    fn proof_bound_does_not_rank_the_cut_node() {
+        let mut ctx = match ctx() {
+            Some(c) => c,
+            None => return,
+        };
+        ctx.heuristic = Some(vec![
+            crate::constraint::solver::goals::GoalRanking::Tactic {
+                quit_on_empty: false,
+                tactic: std::sync::Arc::new(crate::tactic::Tactic {
+                    name: "missing".into(),
+                    presort: 's',
+                    prios: Vec::new(),
+                    deprios: Vec::new(),
+                }),
+                resolution_error: Some(std::sync::Arc::from("must not be evaluated")),
+            },
+        ]);
+        let root = run_proof_search_at_depth(&ctx, System::empty(), 0, 0)
+            .expect("a bound-cut node never invokes its ranking");
+        assert_eq!(root.method, ProofMethod::Sorry(Some("bound 0 hit".into())));
     }
 
     // --- `solved_systems` (HS `proofSystems`) + solved-sys retention ----

@@ -217,7 +217,9 @@ fn it_ranking_prio_nonranked_deprio_order() {
     };
 
     let sys = System::empty();
-    let out = it_ranking(&tactic, ags, false, None, &sys).unwrap();
+    let out = it_ranking(&tactic, ags, false, None, &sys)
+        .unwrap()
+        .expect("ordinary ranking");
     let seqs: Vec<u64> = out.iter().map(|a| a.seq).collect();
     // rankedPrio = [~r (block0), ~skS (block1)]; nonRanked = []
     // (every goal matched a prio or deprio); rankedDeprio = [~x].
@@ -263,11 +265,27 @@ fn it_ranking_nonranked_preserved() {
         deprios: vec![],
     };
     let sys = System::empty();
-    let out = it_ranking(&tactic, vec![g_b, g_c, g_a], false, None, &sys).unwrap();
+    let out = it_ranking(&tactic, vec![g_b, g_c, g_a], false, None, &sys)
+        .unwrap()
+        .expect("ordinary ranking");
     let seqs: Vec<u64> = out.iter().map(|a| a.seq).collect();
     // ~'a' (prio, seq 2) first, then nonRanked [~'b'=0, ~'c'=1] in
     // presort order.
     assert_eq!(seqs, vec![2, 0, 1]);
+}
+
+#[test]
+fn an_empty_quitting_tactic_is_a_normal_stop() {
+    let tactic = crate::tactic::Tactic {
+        name: "empty".to_string(),
+        presort: 'C',
+        prios: vec![],
+        deprios: vec![],
+    };
+    assert_eq!(
+        it_ranking(&tactic, vec![], true, None, &System::empty()).unwrap(),
+        None
+    );
 }
 
 // -- moveNatToEnd / isNatSubtermSplit (ProofMethod.hs:1064-1066) ----------
@@ -451,7 +469,10 @@ fn an_unknown_tactic_fails_when_its_ranking_is_selected() {
     let mut ctx = ProofContext::new(handle, Vec::new());
     ctx.heuristic = Some(ranking);
     let err = rank_goals_with(&System::empty(), Some(&ctx), 0).unwrap_err();
-    assert_eq!(err.0, "No tactic has been written in the theory file");
+    assert_eq!(
+        err.to_string(),
+        "No tactic has been written in the theory file"
+    );
 }
 
 /// `pretty_goal_rankings` writes back the token each stored ranking parsed

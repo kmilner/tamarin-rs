@@ -444,11 +444,8 @@ pub fn exec_proof_method(
             Some(out)
         }
         ProofMethod::SolveGoal(g) => {
-            // State snapshot BEFORE dispatch — paired with HS's
-            // `[STATE]` line in `Theory.Constraint.Solver.ProofMethod.solve`.
-            // Emits the canonical open-goal / node set so we can see what
-            // ranking decision was available at this proof step.
-            crate::constraint::solver::trace::trace_state(sys);
+            // The node-driving search/replay/interactive caller emits the
+            // state; record the selected goal without duplicating that line.
             crate::constraint::solver::trace::trace_pick(g);
             let mut r = Reduction::new(ctx, sys.clone());
             let outcome = crate::constraint::solver::goals::dispatch_solve_goal(&mut r, g);

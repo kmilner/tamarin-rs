@@ -766,8 +766,6 @@ reference path whose output is byte-identical):
 | `TAM_MAUDE_CACHE_STATS=1` | one Maude reduce/unify/reply cache hit-rate line per subprocess at teardown |
 | `TAM_SATURATION_LIMIT=<n>` | source-saturation step cap; outranks the CLI `-s=` |
 | `TAM_PROVE_DEADLINE_MS=<n>` | per-search wall-clock cap (co-operative) |
-| `TAM_PROVE_DEADLINE_HARD_KILL=1` | arm a watchdog that aborts the process once the deadline plus grace elapses |
-| `TAM_PROVE_DEADLINE_GRACE_MS=<n>` | the watchdog's grace period (default 30000) |
 
 The `TAM_RS_VERIFY_*` hooks certify the solver's internal caches and skip
 optimisations: exporting them during a full corpus-gate run re-executes every
