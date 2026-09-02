@@ -4696,7 +4696,7 @@ impl<'ctx> Reduction<'ctx> {
     /// enumeration like any other, with `IsAcConstructor` threaded through
     /// so redundant AC-permutation unifier arms are pruned
     /// (`removePermutations`; mirrors HS `solveAction`, Goals.hs).
-    pub fn solve_action_goal(
+    pub(crate) fn solve_action_goal(
         &mut self,
         i: &crate::constraint::constraints::NodeId,
         fa: &crate::fact::LNFact,
@@ -5264,7 +5264,7 @@ impl<'ctx> Reduction<'ctx> {
     ///
     /// The KD-fact branch (which inserts an `IRecv` learning step and
     /// a chain constraint) is deferred until `insert_chain` lands.
-    pub fn solve_premise_goal(
+    pub(crate) fn solve_premise_goal(
         &mut self,
         p: &crate::constraint::constraints::NodePrem,
         fa_prem: &crate::fact::LNFact,
@@ -5423,6 +5423,13 @@ impl<'ctx> Reduction<'ctx> {
             }
             // Fall through to plain rule enumeration if every case
             // dropped — keeps the search making progress.
+        }
+        // A provider failure installs an empty placeholder to keep this deep
+        // API infallible. Do not mistake that placeholder for "no matching
+        // source" and start an expensive fallback; the enclosing solver step
+        // converts this marker back to the original error.
+        if self.ctx.has_source_error() {
+            return GoalCases::Contradictory;
         }
         let g = Goal::Premise(*p, fa_prem.clone());
         // Canonical (abstracted) rule + variant disjunction installed

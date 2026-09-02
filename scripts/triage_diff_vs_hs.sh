@@ -32,7 +32,10 @@ hs_fingerprint "$HS"
 for rel in "$@"; do
   f="$CORPUS/$rel"
   [ -f "$f" ] || { echo "MISSING $rel"; continue; }
-  key=$(ckey "$rel" "$f")
+  if ! key=$(ckey "$rel" "$f"); then
+    echo "INPUT MANIFEST FAILED $rel" >&2
+    exit 2
+  fi
   fl=$(flags_for "$rel")
   # Haskell: prefer cache; else run fresh and cache it (the entry lands under
   # the same key corpus_file_diff.sh computes, so the batch gate reuses it).

@@ -24,7 +24,7 @@ use crate::tools::equation_store::LNSubst;
 /// pass reports `Unchanged` (`Unchanged == mconcat changes0`); there is
 /// no iteration bound. (HS's `n` counter feeds `traceIfLooping` at n>10
 /// only.) The underlying `while_changing` is itself uncapped.
-pub fn simplify_system(red: &mut Reduction) {
+pub(crate) fn simplify_system(red: &mut Reduction) {
     red.while_changing(|r| {
         // One simplify iteration, factored into the same helpers the
         // fan-out driver uses so the byte-critical pass order has a
@@ -141,7 +141,7 @@ fn simp_post_loop_steps(red: &mut Reduction) {
 /// mutated `red.sys`); this version replays each case through the rest
 /// of the loop and post-loop, and returns one `System` per surviving
 /// branch.
-pub fn simplify_system_with_fanout(
+pub(crate) fn simplify_system_with_fanout(
     ctx: &crate::constraint::solver::context::ProofContext,
     sys: crate::constraint::system::System,
 ) -> Vec<crate::constraint::system::System> {
@@ -154,7 +154,7 @@ pub fn simplify_system_with_fanout(
 /// simplify with the SAME counter the branch's solve left off at; a
 /// `bounds_max(sys)` reseed silently rewinds past the branch's transient
 /// draws — task #16).  `seed = 0` degrades to `Reduction::new` exactly.
-pub fn simplify_system_with_fanout_seeded(
+pub(crate) fn simplify_system_with_fanout_seeded(
     ctx: &crate::constraint::solver::context::ProofContext,
     sys: crate::constraint::system::System,
     seed: u64,
@@ -190,9 +190,15 @@ fn simplify_system_fan_out_inner(red: &mut Reduction) -> Vec<crate::constraint::
     // HS-faithful (Simplify.hs:73-77): no iteration cap — the loop
     // terminates only when a full pass reports `Unchanged`.
     loop {
+        if ctx.has_source_error() {
+            return Vec::new();
+        }
         red.changed = ChangeIndicator::Unchanged;
         // Pre-unique-actions passes.
         let _ = simp_iteration_pre_unique_actions(red);
+        if ctx.has_source_error() {
+            return Vec::new();
+        }
         // Drain any AC-unifier fanout produced by the pre-unique-actions
         // passes (e.g. `solve_fact_eqs` in `enforce_*_uniqueness` produces
         // multiple arms when the merge equates AC-flavored facts).
@@ -210,14 +216,23 @@ fn simplify_system_fan_out_inner(red: &mut Reduction) -> Vec<crate::constraint::
                 // own FreshT counter (`bounds_max(sys)`).
                 let mut out: Vec<crate::constraint::system::System> = Vec::new();
                 for (case_sys, case_seed) in case_systems {
+                    if ctx.has_source_error() {
+                        return Vec::new();
+                    }
                     if case_sys.eq_store.is_false() {
                         continue;
                     }
                     let mut sub = simplify_system_with_fanout_seeded(ctx, case_sys, case_seed);
+                    if ctx.has_source_error() {
+                        return Vec::new();
+                    }
                     out.append(&mut sub);
                 }
                 return out;
             }
+        }
+        if ctx.has_source_error() {
+            return Vec::new();
         }
         // Drain any AC-unifier fanout produced by the solveUniqueActions
         // pass's downstream calls (exploitPrems → Fresh narrowing's
@@ -227,6 +242,9 @@ fn simplify_system_fan_out_inner(red: &mut Reduction) -> Vec<crate::constraint::
         }
         // Post-unique-actions passes.
         let _ = simp_iteration_post_unique_actions(red);
+        if ctx.has_source_error() {
+            return Vec::new();
+        }
         // Drain any AC-unifier fanout from the post-unique-actions passes
         // (reduceFormulas / evalFormulaAtoms / insertImpliedFormulas
         // are the most common fan-out sources — they call
@@ -274,10 +292,16 @@ fn fan_out_on_pending_eq_arms(
     }
     let mut out: Vec<crate::constraint::system::System> = Vec::new();
     for arm_sys in all_arm_systems {
+        if ctx.has_source_error() {
+            return Vec::new();
+        }
         if arm_sys.eq_store.is_false() {
             continue;
         }
         let mut sub = simplify_system_with_fanout_seeded(ctx, arm_sys, fork_seed);
+        if ctx.has_source_error() {
+            return Vec::new();
+        }
         out.append(&mut sub);
     }
     out
@@ -2682,6 +2706,9 @@ fn solve_unique_actions_pass_fan_out(
         // among its actions is a harmless no-op (the `Some(ru)` /
         // `ru.actions.contains(fa)` arm in `solve_action_goal`).
         let outcome = red.solve_action_goal(&i, &fa);
+        if red.ctx.has_source_error() {
+            return Err(Vec::new());
+        }
         use crate::constraint::solver::reduction::GoalCases;
         match outcome {
             GoalCases::Contradictory => {
@@ -2771,6 +2798,9 @@ fn drain_remaining_actions(
     // substSystem prematurely renames nodes/goals and breaks the
     // captured-key match in `markGoalAsSolved`.
     for (i, fa) in remaining {
+        if ctx.has_source_error() {
+            return Vec::new();
+        }
         // HS-faithful (Reduction.hs:656-680): `markGoalAsSolved` on a
         // missing key just traces a warning and returns silently; the
         // surrounding `solveGoal` proceeds with the captured (i, fa)
@@ -2797,6 +2827,9 @@ fn drain_remaining_actions(
             continue;
         }
         let outcome = red.solve_action_goal(i, fa);
+        if ctx.has_source_error() {
+            return Vec::new();
+        }
         match outcome {
             GoalCases::Contradictory => {
                 red.mark_contradictory();
@@ -2817,12 +2850,18 @@ fn drain_remaining_actions(
                 let fallback_seed = red.maude.fresh_counter_peek();
                 let mut out: Vec<(crate::constraint::system::System, u64)> = Vec::new();
                 for (ci, (_name, case_sys)) in cases.into_iter().enumerate() {
+                    if ctx.has_source_error() {
+                        return Vec::new();
+                    }
                     if case_sys.eq_store.is_false() {
                         continue;
                     }
                     let case_seed = case_counters.get(ci).copied().unwrap_or(fallback_seed);
                     let mut sub =
                         drain_remaining_actions(ctx, case_sys, &next_remaining, case_seed);
+                    if ctx.has_source_error() {
+                        return Vec::new();
+                    }
                     out.append(&mut sub);
                 }
                 return out;

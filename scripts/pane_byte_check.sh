@@ -37,6 +37,8 @@ READY_TIMEOUT="${READY_TIMEOUT:-90}"
 FILE_TIMEOUT="${FILE_TIMEOUT:-300}"
 RS_PORT="${RS_PORT:-3044}"
 CORPUS_ROOT="${CORPUS_ROOT:-$repo_root/tamarin-prover/examples}"
+WEB_FLAGS_MAP="${WEB_FLAGS_MAP:-$script_dir/web_flags.tsv}"
+[ -r "$WEB_FLAGS_MAP" ] || { echo "web flag map is not readable: $WEB_FLAGS_MAP" >&2; exit 2; }
 RESULTS_TSV="${RESULTS_TSV:-/tmp/pane_byte.tsv}"
 DIFFDIR="${DIFFDIR:-/tmp/pane_byte_diffs}"
 MAX_NODES="${MAX_NODES:-400}"
@@ -96,9 +98,11 @@ wait_port_free() {
 boot_crawl() {
     local bin="$1" port="$2" wd="$3" out="$4"
     local log="$wd/rs_server.log" pid ok="" i
+    local -a load_flags=()
+    [ -z "${theory_flags:-}" ] || read -r -a load_flags <<< "$theory_flags"
     wait_port_free "$port" || { echo "  port $port not free before boot" >&2; return 1; }
     setsid "$bin" interactive "$wd/thy" --port="$port" \
-        --derivcheck-timeout="${DERIVCHECK_TIMEOUT:-30}" >"$log" 2>&1 &
+        --derivcheck-timeout="${DERIVCHECK_TIMEOUT:-30}" "${load_flags[@]}" >"$log" 2>&1 &
     pid=$!
     for ((i=0; i<READY_TIMEOUT; i++)); do
         curl -sf -o /dev/null "http://127.0.0.1:$port/" && { ok=1; break; }
@@ -117,7 +121,16 @@ boot_crawl() {
 one_file() {
     local rel="$1" f="$CORPUS_ROOT/$1"
     [ -f "$f" ] || { printf '%s\t-\tSKIP_NO_FILE\t-\n' "$rel"; return 0; }
-    local key; key=$(web_cache_key "$rel" "$f")
+    local theory_flags
+    if ! theory_flags=$(web_flags_for "$rel"); then
+        printf '%s\t-\tSKIP_UNSUPPORTED_FLAGS\t-\n' "$rel"
+        return 0
+    fi
+    local key
+    if ! key=$(web_cache_key "$rel" "$f" "$theory_flags"); then
+        printf '%s\t-\tSKIP_INPUT_MANIFEST\t-\n' "$rel"
+        return 0
+    fi
     local hs_manifest="$CACHE/$key.hs.json"
     local wd; wd=$(mktemp -d)
     if ! web_cache_lock "$key"; then
@@ -149,7 +162,7 @@ one_file() {
         || CRAWL_EXTRA_ARGS="--allow-no-lemmas"
     export CRAWL_EXTRA_ARGS
     mkdir -p "$wd/thy"
-    if ! web_stage_inputs "$f" "$wd/thy"; then
+    if ! web_stage_inputs "$f" "$wd/thy" "$theory_flags" "$wd"; then
         rm -rf "$wd"; printf '%s\t-\tSKIP_INPUT_STAGE\t-\n' "$rel"; return 0
     fi
     if ! boot_crawl "$RS_PATH" "$RS_PORT" "$wd" "$wd/rs.json"; then

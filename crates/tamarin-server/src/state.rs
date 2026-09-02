@@ -300,16 +300,6 @@ impl TheoryStore {
         }
     }
 
-    /// Clone a theory without its proof state for an operation that invalidates
-    /// every proof, such as deleting a lemma.
-    pub fn detached_without_proof(&self, src_idx: usize) -> Result<TheoryEntry, StoreError> {
-        let mut clone = self.snapshot(src_idx)?.entry;
-        clone.idx = 0;
-        clone.primary = false;
-        clone.proof_state = None;
-        Ok(clone)
-    }
-
     /// Replace a snapshotted entry in place if it is still the current
     /// generation.  Slow reload work can therefore happen without the store
     /// lock while still being unable to overwrite an unloaded/reused index.

@@ -170,7 +170,7 @@ if [ "$MODE" = check ]; then
     fi
 fi
 
-# strip_env / flags_for / include_shas / oracle_shas come from gate_common.sh. ikey is
+# strip_env / flags_for / manifest hashing come from gate_common.sh. ikey is
 # deliberately NOT gate_common's ckey: the reference key must not carry the
 # oracle fingerprint (the header's `# oracle:` line records that separately),
 # so it is the fingerprint-free prefix of the same format. The `__i` include
@@ -178,21 +178,27 @@ fi
 # input, and without it check would blame the port (DIFF) instead of the
 # input (INPUT_CHANGED).
 ikey() {  # input key: theory sha + dependency + flags suffixes
-    local h fl inc ora; h=$(sha256sum "$2" | cut -d' ' -f1); fl=$(flags_for "$1")
-    inc=$(include_shas "$2")
-    ora=$(oracle_shas "$2" "$fl")
+    local h fl inc ora manifest; h=$(file_sha256 "$2") || return 1
+    fl=$(flags_for "$1")
+    manifest=$(input_manifest "$2" "$fl") || return 1
+    inc=$(_include_shas_from_manifest "$manifest") || return 1
+    ora=$(_oracle_shas_from_manifest "$manifest") || return 1
     if [ -n "$inc" ]; then h="${h}__i$(printf '%s' "$inc" | sha256sum | cut -c1-12)"; fi
     if [ -n "$ora" ]; then h="${h}__o$(printf '%s' "$ora" | sha256sum | cut -c1-12)"; fi
     if [ -n "$fl" ]; then printf '%s__f%s' "$h" "$(printf '%s' "$fl" | sha256sum | cut -c1-12)"
     else printf '%s' "$h"; fi
 }
-export -f strip_env flags_for include_shas oracle_shas ikey
+export -f file_sha256 strip_env flags_for input_manifest _include_shas_from_manifest _oracle_shas_from_manifest ikey
 
 # one <rel> → "rel \t ikey \t sha|TIMEOUT|ERROR=n \t lines"
 one() {
     local rel="$1" f="$CORPUS/$1" fl key rc out sha lines
     [ -f "$f" ] || { printf '%s\t-\tNOFILE\t0\n' "$rel"; return 0; }
-    key=$(ikey "$rel" "$f"); fl=$(flags_for "$rel")
+    if ! key=$(ikey "$rel" "$f"); then
+        printf '%s\t-\tERROR=2\t0\n' "$rel"
+        return 0
+    fi
+    fl=$(flags_for "$rel")
     local tmp; tmp=$(mktemp)
     timeout "$TIMEOUT" "$BIN" $fl $EXTRA_FLAGS --derivcheck-timeout="$DERIV" --prove "$f" >"$tmp" 2>/dev/null; rc=$?
     if [ "$rc" = 124 ]; then rm -f "$tmp"; printf '%s\t%s\tTIMEOUT\t0\n' "$rel" "$key"; return 0; fi
@@ -211,6 +217,29 @@ mapfile -t FILES < <(grep -v '^[[:space:]]*#' "$ALLOWLIST" | grep . | sort -u)
 [ "${#FILES[@]}" -gt 0 ] || {
     echo "rs_ref_check: ALLOWLIST '$ALLOWLIST' resolved to 0 entries — nothing to compare" >&2
     exit 2; }
+# Reject stale reference keys before spending CI time proving the corpus. The
+# full comparison below still owns missing-file/row diagnostics; this pass is
+# only the cheap invariant that every committed row describes today's inputs.
+if [ "$MODE" = check ]; then
+    stale=0
+    for rel in "${FILES[@]}"; do
+        f="$CORPUS/$rel"
+        [ -f "$f" ] || continue
+        key=$(ikey "$rel" "$f") || {
+            echo "rs_ref_check: could not compute input key for $rel" >&2
+            exit 2
+        }
+        refkey=$(awk -F'\t' -v r="$rel" '!/^#/ && $1==r {print $2; exit}' "$REF")
+        if [ -n "$refkey" ] && [ "$key" != "$refkey" ]; then
+            echo "  INPUT_CHANGED  $rel (reference key is stale)"
+            stale=$((stale+1))
+        fi
+    done
+    if [ "$stale" -ne 0 ]; then
+        echo "rs_ref_check: FAIL — $stale stale reference key(s); no proofs were run" >&2
+        exit 1
+    fi
+fi
 # The scoping check: the certifying run must have compared at least as many
 # files as this generate is about to baseline. Checked BEFORE the prover
 # burns an hour, like the flag itself.

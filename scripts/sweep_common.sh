@@ -20,7 +20,7 @@
 #   sweep_drive  — the whole driver tail: stale check, list, banner, parallel
 #                  pass, retry, verdict
 # and, via gate_common.sh (sourced below): norm, the OOM prologue grun wraps,
-# include_shas (folded into hs_run's cache key below), rs_stale_check, the
+# parser-selected dependencies (folded into hs_run's cache key below), rs_stale_check, the
 # maude resolver and the oracle preflights.
 #
 # The oracle cache (HS_CACHE, default scripts/.hs_sweep_cache/, gitignored)
@@ -256,9 +256,8 @@ sweep_preflight
 # sweep_preflight's source check also computes the oracle fingerprint used by
 # every cache key.
 
-# include_shas / oracle_shas come from gate_common.sh (they are part of ckey
-# and of rs_ref_check.sh's ikey there too); hs_run folds them into its digest
-# below, and each prints nothing when that dependency class is absent.
+# Parser-selected include/oracle hashes are part of every cache key; hs_run
+# folds the same manifest rows into its digest below.
 
 # hs_run <workdir> <theory> <tag> <flag...>
 #   Executes  grun $HS_BIN --with-maude=$MAUDE <flag...> <theory>
@@ -268,17 +267,26 @@ sweep_preflight
 #   excluding volatile paths (pass e.g. "json+dot", not the tmp-dir flags).
 hs_run() {
   local wd=$1 f=$2 tag=$3; shift 3
-  local key legacy_key legacy_dir
-  key=$( { sha256sum "$f" | cut -d' ' -f1; echo "$tag"; echo "$HS_FP"; echo "$MAUDE"
-           include_shas "$f"; oracle_shas "$f" "$*"; } | sha256sum | cut -d' ' -f1 )
+  local key legacy_key legacy_dir file_sha inc ora manifest
+  if ! file_sha=$(file_sha256 "$f") \
+      || ! manifest=$(input_manifest "$f" "$*") \
+      || ! inc=$(_include_shas_from_manifest "$manifest") \
+      || ! ora=$(_oracle_shas_from_manifest "$manifest"); then
+    : > "$wd/input-manifest.error"
+    return 1
+  fi
+  key=$( { printf '%s\n' "$file_sha" "$tag" "$HS_FP" "$MAUDE"
+           [ -z "$inc" ] || printf '%s\n' "$inc"
+           [ -z "$ora" ] || printf '%s\n' "$ora"; } | sha256sum | cut -d' ' -f1 )
   local dir="$HS_CACHE/${key:0:2}/$key"
   if [ ! -f "$dir/rc" ]; then
     # Preserve the costly cache generated before hs_fingerprint switched from
     # size+mtime to binary SHA-256. This must reproduce the former key exactly,
     # including executable-oracle inputs. Compute it only on a miss: a warm
     # entry should not pay for a second dependency walk forever.
-    legacy_key=$( { sha256sum "$f" | cut -d' ' -f1; echo "$tag"; echo "$HS_FP_LEGACY"; echo "$MAUDE"
-                    include_shas "$f"; oracle_shas "$f" "$*"; } | sha256sum | cut -d' ' -f1 )
+    legacy_key=$( { printf '%s\n' "$file_sha" "$tag" "$HS_FP_LEGACY" "$MAUDE"
+                    [ -z "$inc" ] || printf '%s\n' "$inc"
+                    [ -z "$ora" ] || printf '%s\n' "$ora"; } | sha256sum | cut -d' ' -f1 )
     legacy_dir="$HS_CACHE/${legacy_key:0:2}/$legacy_key"
     if [ -f "$legacy_dir/rc" ]; then
       local promote="$dir.promote.$$"
@@ -331,6 +339,11 @@ sweep_one() {
   # sweep_finish's row-count check report the row that never landed.
   d=$(mktemp -d) || return
   hs_run "$d" "$f" "$ctag" "$@"; hrc=$?
+  if [ -f "$d/input-manifest.error" ]; then
+    row "${k[@]}" ERROR "input manifest/hash failed${tag:+ $tag}"
+    rm -rf "$d"
+    return
+  fi
   # A broken environment is diagnosed before the cap is blamed for it: an
   # unusable maude both aborts and hangs, and "timeout" would be the wrong
   # story (and a ledgerable one).
@@ -397,7 +410,8 @@ sweep_out() {
 #   turns up in sweep_finish's row-count check.
 sweep_export() {
   export -f one row grun oom_prologue norm nerr io_diff infra_abort nonempty_compared \
-            nocompare_check include_shas oracle_shas hs_run sweep_one "$@"
+            nocompare_check file_sha256 input_manifest _include_shas_from_manifest \
+            _oracle_shas_from_manifest hs_run sweep_one "$@"
   export HS_BIN RS_BIN MAUDE OUT TIMEOUT HS_CACHE HS_FP HS_FP_LEGACY
 }
 

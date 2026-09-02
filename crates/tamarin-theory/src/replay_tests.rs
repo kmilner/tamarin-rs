@@ -228,7 +228,9 @@ fn replay_checks_induction_applicability() {
     sys.solved_formulas_mut()
         .push(std::sync::Arc::new(crate::guarded::gtrue()));
 
-    assert!(exec_method_for(&ProofMethod::Induction, &sys, &ctx).is_none());
+    assert!(exec_method_for(&ProofMethod::Induction, &sys, &ctx)
+        .expect("method check")
+        .is_none());
 }
 
 /// Two same-fact-name Action goals at different timepoints: the stored goal

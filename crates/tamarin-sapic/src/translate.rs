@@ -760,6 +760,7 @@ mod tests {
         assert_eq!(is_pos_neg_formula(&iff), (false, true));
 
         let lem = tamarin_theory::theory::Lemma {
+            heuristic_in_file: None,
             name: "weird".into(),
             attributes: vec![],
             trace_quantifier: tamarin_theory::theory::TraceQuantifier::AllTraces,

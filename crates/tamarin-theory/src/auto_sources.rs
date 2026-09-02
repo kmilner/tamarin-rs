@@ -563,6 +563,7 @@ pub(crate) fn add_auto_sources_lemma(
 pub(crate) fn build_source_lemma(name: &str, formula: LNFormula) -> crate::theory::Lemma {
     use crate::theory::{Lemma, LemmaAttr, TraceQuantifier};
     Lemma {
+        heuristic_in_file: None,
         name: name.to_string(),
         attributes: vec![LemmaAttr::Sources],
         trace_quantifier: TraceQuantifier::AllTraces,
@@ -810,7 +811,7 @@ pub fn apply_auto_sources(
     fn collect_chains(ctx: &ProofContext) -> Vec<((NodeConc, NodePrem), System)> {
         let mut chains = Vec::new();
         for src in ctx.full_sources.iter() {
-            for (_name, sys) in src.cases(ctx).iter() {
+            for (_name, sys) in src.cases_unchecked(ctx).iter() {
                 for ch in sys.unsolved_chains() {
                     chains.push((ch, sys.clone()));
                 }

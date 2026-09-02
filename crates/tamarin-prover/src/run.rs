@@ -90,6 +90,7 @@ impl From<tamarin_theory::prove::ProveError> for RunError {
             tamarin_theory::prove::ProveError::Ranking(error) => {
                 Self::GhcException(error.to_string())
             }
+            tamarin_theory::prove::ProveError::InvalidHeuristic(message) => Self::Regular(message),
             other => Self::Regular(other.to_string()),
         }
     }
@@ -118,7 +119,6 @@ pub(crate) enum LemmaVerdict {
     Skipped,
     /// Lemma was filtered out by `--prove=FOO` / `--lemma=FOO`.
     Filtered,
-    Error(String),
 }
 
 /// HS-faithful per-lemma summary line, mirroring `prettyClosedSummary`
@@ -158,7 +158,6 @@ fn format_lemma_summary_line(r: &LemmaResult) -> String {
         LemmaVerdict::Invalidated => {
             format!("proof has been invalidated ({} steps)", r.proof_steps)
         }
-        LemmaVerdict::Error(msg) => format!("error: {}", msg),
     };
     format!("{} ({}): {}", r.name, quantifier, body)
 }
@@ -227,7 +226,144 @@ pub fn run(args: &Args) -> Result<i32, RunError> {
         Subcommand::Interactive => run_interactive(args),
         Subcommand::Variants => run_variants(args),
         Subcommand::Test => run_test(args),
+        Subcommand::InputManifest => run_input_manifest(args),
     }
+}
+
+fn run_input_manifest(args: &Args) -> Result<i32, RunError> {
+    use std::collections::BTreeSet;
+    use std::path::Path;
+    use tamarin_parser::ast::TheoryItem;
+    use tamarin_parser::LemmaAttr;
+
+    let root = PathBuf::from(
+        args.in_files
+            .first()
+            .ok_or_else(|| RunError::Regular("input-manifest requires one file".into()))?,
+    );
+    let source = fs::read_to_string(&root)
+        .map_err(|error| RunError::Regular(format!("{}: {error}", root.display())))?;
+    let flags: Vec<&str> = args.defines.iter().map(String::as_str).collect();
+    let (theory, aliases) =
+        tamarin_parser::parse_theory_with_manifest(&source, &flags, root.clone(), args.diff)
+            .map_err(|error| RunError::Regular(error.to_string()))?;
+
+    let mut seen_sources = BTreeSet::new();
+    for alias in &aliases {
+        let row = format!(
+            "S\t{}\t{}",
+            alias.physical.display(),
+            alias
+                .staged
+                .as_deref()
+                .map_or_else(String::new, |path| path.display().to_string())
+        );
+        if seen_sources.insert(row.clone()) {
+            println!("{row}");
+        }
+    }
+
+    let mut oracle_rows = BTreeSet::new();
+    let mut add_heuristic = |raw: &str, source_file: Option<&str>| {
+        let source_file = source_file.unwrap_or_else(|| root.to_str().unwrap_or_default());
+        for oracle in tamarin_theory::prove::oracle_paths_for_heuristic(raw, source_file, None) {
+            let oracle = PathBuf::from(oracle);
+            if !oracle.is_file() {
+                continue;
+            }
+            let source_aliases = aliases
+                .iter()
+                .filter(|alias| alias.physical == Path::new(source_file));
+            for alias in source_aliases {
+                let staged = staged_oracle_path(alias, &oracle);
+                oracle_rows.insert(format!(
+                    "O\t{}\t{}",
+                    oracle.display(),
+                    staged
+                        .as_deref()
+                        .map_or_else(String::new, |path| path.display().to_string())
+                ));
+            }
+        }
+    };
+    if args.heuristic.is_none() {
+        for item in &theory.items {
+            match item {
+                TheoryItem::Heuristic { raw, source_file } => {
+                    add_heuristic(raw, source_file.as_deref())
+                }
+                TheoryItem::Lemma(lemma) => {
+                    for attr in &lemma.attributes {
+                        if let LemmaAttr::Heuristic(raw) = attr {
+                            add_heuristic(raw, lemma.source_file.as_deref());
+                        }
+                    }
+                }
+                TheoryItem::DiffLemma(lemma) => {
+                    for attr in &lemma.attributes {
+                        if let LemmaAttr::Heuristic(raw) = attr {
+                            add_heuristic(raw, lemma.source_file.as_deref());
+                        }
+                    }
+                }
+                TheoryItem::AccLemma(lemma) => {
+                    for attr in &lemma.attributes {
+                        if let LemmaAttr::Heuristic(raw) = attr {
+                            add_heuristic(raw, lemma.source_file.as_deref());
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    if let Some(raw) = args.heuristic.as_deref() {
+        let root_alias = aliases.first();
+        let has_oracle_override = args
+            .oracle_name
+            .as_deref()
+            .is_some_and(|name| !name.is_empty());
+        for oracle in tamarin_theory::prove::oracle_paths_for_heuristic(
+            raw,
+            root.to_str().unwrap_or_default(),
+            args.oracle_name.as_deref(),
+        ) {
+            let oracle = PathBuf::from(oracle);
+            if oracle.is_file() {
+                let staged = if has_oracle_override {
+                    None
+                } else {
+                    root_alias.and_then(|alias| staged_oracle_path(alias, &oracle))
+                };
+                oracle_rows.insert(format!(
+                    "O\t{}\t{}",
+                    oracle.display(),
+                    staged
+                        .as_deref()
+                        .map_or_else(String::new, |path| path.display().to_string())
+                ));
+            }
+        }
+    }
+    for row in oracle_rows {
+        println!("{row}");
+    }
+    Ok(0)
+}
+
+fn staged_oracle_path(
+    source: &tamarin_parser::InputAlias,
+    oracle: &std::path::Path,
+) -> Option<PathBuf> {
+    let staged = source.staged.as_ref()?;
+    let source_dir = source.physical.parent()?;
+    let relative = oracle.strip_prefix(source_dir).ok()?;
+    Some(
+        staged
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new(""))
+            .join(relative),
+    )
 }
 
 /// `tamarin-prover test` — mirror HS's installation self-test
@@ -1188,12 +1324,13 @@ impl TheoryPipeline<'_> {
     fn build_prover_session(
         &self,
         maude: MaudeHandle,
+        cli_heuristic: tamarin_theory::prove::CliHeuristic,
     ) -> Result<tamarin_theory::prove::ProverSession, tamarin_theory::prove::ProveError> {
         tamarin_theory::prove::ProverSession::build_with_heuristic(
             self.elaborated.clone(),
             maude,
             self.file_maude_pool.clone(),
-            self.cli_heuristic(),
+            cli_heuristic,
             self.cut,
             self.ndc_cache.as_ref(),
         )
@@ -1756,8 +1893,19 @@ impl TheoryPipeline<'_> {
 
             // Each lemma clones the session's cheap template and shares its
             // raw/refined source materialisation.
-            let cli_heuristic = self.cli_heuristic();
-            let session = self.build_prover_session(maude).map_err(RunError::from)?;
+            let has_target = prove_anything
+                && self
+                    .elaborated
+                    .lemmas()
+                    .any(|lemma| lemma_matches(lemma_filter, &lemma.name));
+            let cli_heuristic = if has_target {
+                self.cli_heuristic()
+            } else {
+                tamarin_theory::prove::CliHeuristic::default()
+            };
+            let session = self
+                .build_prover_session(maude, cli_heuristic)
+                .map_err(RunError::from)?;
 
             // HS prints "[Theory X] Theory closed" right after `closeTheory`
             // (TheoryLoader.hs:668-715, see line 696) and BEFORE the proof search, which it
@@ -1801,23 +1949,6 @@ impl TheoryPipeline<'_> {
                 // so stored skeletons replay (check_and_extend) but no
                 // open leaf is auto-proved.
                 let is_target = prove_anything && lemma_matches(lemma_filter, &lemma_name);
-                // A `--heuristic` value HS would refuse must not silently
-                // prove under the smart fallback and print a verdict (see
-                // `validate_cli_heuristic`).  Gated on is_target because the
-                // string only matters when a target lemma consumes it —
-                // replays and `--prove=<no match>` runs are unaffected, as
-                // in HS.  The wording and rc are ours (plain error, exit 1),
-                // not the oracle's GHC shapes: invalid-usage output is
-                // outside the parity contract. Return it to the library
-                // boundary; the binary alone owns stderr and exit status.
-                if is_target
-                    && let Err(msg) = tamarin_theory::prove::validate_cli_heuristic(
-                        &cli_heuristic,
-                        &elaborated.tactic,
-                    )
-                {
-                    return Err(RunError::Regular(msg));
-                }
                 // HS does NOT print a per-lemma "proving lemma X ..."
                 // marker; the only progress lines are the `[Theory X]
                 // ...` set above.  Stay quiet here for HS-faithful stderr.
@@ -1842,49 +1973,33 @@ impl TheoryPipeline<'_> {
                 // `check_and_extend_lemma_in_session`, which is why
                 // `_analyzed` theories carry traces without `--prove`.
                 let mut lemma_traces: Vec<(String, System)> = Vec::new();
-                let (verdict, proof_steps, proof_body) = match outcome {
-                    Ok(root) => {
-                        let steps = count_proof_steps(&root);
-                        // HS lemma verdict = `getProofStatus` (Proof.hs)
-                        // folded over the WHOLE tree, NOT the root's
-                        // per-node `NodeStatus`.  This matters for
-                        // part-replayed proofs: a stale stored-proof branch
-                        // kept verbatim is `Undetermined`, which the
-                        // Semigroup absorbs into the `Complete` of the
-                        // freshly-proved siblings (e.g. KCL07-manualproof —
-                        // `verified` not `analysis incomplete`).  For a
-                        // fully-fresh proof the fold yields the same verdict
-                        // as `root.status` did.
-                        let v = lemma_verdict(
-                            tamarin_theory::constraint::solver::search::proof_status(&root),
-                            exists_trace,
-                        );
-                        let body = tamarin_theory::pretty_theory::pretty_proof_body(&root);
-                        if want_traces {
-                            for (path, sys) in
-                                tamarin_theory::constraint::solver::search::into_solved_systems(
-                                    root,
-                                )
-                            {
-                                lemma_traces.push((
-                                    trace_output_label(theory_name, &lemma_name, &path),
-                                    sys,
-                                ));
-                            }
+                let root = outcome.map_err(RunError::from)?;
+                let (verdict, proof_steps, proof_body) = {
+                    let steps = count_proof_steps(&root);
+                    // HS lemma verdict = `getProofStatus` (Proof.hs)
+                    // folded over the WHOLE tree, NOT the root's
+                    // per-node `NodeStatus`.  This matters for
+                    // part-replayed proofs: a stale stored-proof branch
+                    // kept verbatim is `Undetermined`, which the
+                    // Semigroup absorbs into the `Complete` of the
+                    // freshly-proved siblings (e.g. KCL07-manualproof —
+                    // `verified` not `analysis incomplete`).  For a
+                    // fully-fresh proof the fold yields the same verdict
+                    // as `root.status` did.
+                    let v = lemma_verdict(
+                        tamarin_theory::constraint::solver::search::proof_status(&root),
+                        exists_trace,
+                    );
+                    let body = tamarin_theory::pretty_theory::pretty_proof_body(&root);
+                    if want_traces {
+                        for (path, sys) in
+                            tamarin_theory::constraint::solver::search::into_solved_systems(root)
+                        {
+                            lemma_traces
+                                .push((trace_output_label(theory_name, &lemma_name, &path), sys));
                         }
-                        (v, steps, Some(body))
                     }
-                    Err(
-                        error @ (tamarin_theory::prove::ProveError::Guarded(_)
-                        | tamarin_theory::prove::ProveError::Ranking(_)),
-                    ) => {
-                        // HS treats malformed guarded formulas and invalid
-                        // rankings as fatal exceptions. The binary renders the
-                        // GHC-style error; output remains buffered until every
-                        // lemma succeeds.
-                        return Err(error.into());
-                    }
-                    Err(e) => (LemmaVerdict::Error(format!("{}", e)), 0, None),
+                    (v, steps, Some(body))
                 };
                 let pl = tamarin_theory::pretty_theory::ProvedLemma {
                     name: lemma_name.clone(),
@@ -1899,11 +2014,31 @@ impl TheoryPipeline<'_> {
                 Ok((pl, lr, lemma_traces))
             };
 
-            // HS proves lemmas in declaration order. Keep the traversal
-            // sequential so a fatal oracle or ranking error stops before a
-            // later proof (and its external processes) is started.
-            for lemma in elaborated.lemmas() {
-                let (pl, lr, tr) = run_lemma(lemma)?;
+            // Fallible theories stay ordered so an oracle/guarded error cannot
+            // be trapped behind other unbounded work. Fully internal,
+            // guardable theories retain the indexed parallel fast path; Rayon
+            // preserves declaration order when collecting this iterator.
+            let ordered = session.guarded_lemmas_may_fail()
+                || elaborated.lemmas().any(|lemma| {
+                    prove_anything
+                        && lemma_matches(lemma_filter, &lemma.name)
+                        && session.lemma_ranking_may_fail(&lemma.name)
+                });
+            let lemma_results: Vec<_> = if ordered {
+                elaborated
+                    .lemmas()
+                    .map(run_lemma)
+                    .collect::<Result<Vec<_>, RunError>>()?
+            } else {
+                use rayon::prelude::*;
+                elaborated
+                    .lemmas()
+                    .collect::<Vec<_>>()
+                    .par_iter()
+                    .map(|lemma| run_lemma(lemma))
+                    .collect::<Result<Vec<_>, RunError>>()?
+            };
+            for (pl, lr, tr) in lemma_results {
                 proved_lemmas.push(pl);
                 results.push(lr);
                 trace_systems.extend(tr);
@@ -1948,7 +2083,6 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
     if args.in_files.is_empty() {
         return Err(RunError::Regular("no input files given".to_string()));
     }
-    let mut overall_status = 0i32;
     let mut file_results: Vec<FileResult> = Vec::new();
     // `--parse-only` docs, buffered and printed AFTER the file loop: HS
     // (Batch.hs:91-95) runs `mapM (processThy "") inFiles` to completion
@@ -2290,16 +2424,6 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             None => {
                 let closed = st.close_translated_theory()?;
 
-                // HS-faithful: rc=0 regardless of verdict.  Falsified is a
-                // valid analysis outcome — the prover ran successfully and
-                // found a counter-example trace.  Only true errors (parse
-                // failures, Maude crashes, IO errors) escalate to non-zero.
-                for r in &closed.results {
-                    if matches!(r.verdict, LemmaVerdict::Error(_)) {
-                        overall_status = overall_status.max(1);
-                    }
-                }
-
                 if opts.precompute_only_mode {
                     // HS `--precompute-only` (Batch.hs:96-100, 201-206): the file's
                     // doc is `ppWf report $--$ prettyPrecomputation thy''` — the
@@ -2310,7 +2434,9 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
                     // eager close — but defer forcing the sources to the print
                     // phase below, where HS's lazy renderDoc forces them.
                     let maude = st.require_maude()?;
-                    let session = st.build_prover_session(maude).map_err(RunError::from)?;
+                    let session = st
+                        .build_prover_session(maude, tamarin_theory::prove::CliHeuristic::default())
+                        .map_err(RunError::from)?;
                     let wf_len = st.wf_report.len();
                     precompute_pending.push((session, wf_len));
                 } else {
@@ -2474,7 +2600,9 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         print_overall_summary(&file_results, opts.prove_mode);
     }
 
-    Ok(overall_status)
+    // Every analysis verdict is a successful invocation. Parse, I/O, Maude,
+    // guarded-conversion and ranking failures have already returned above.
+    Ok(0)
 }
 
 /// Once-per-process globals every mode installs before theory work: the

@@ -62,8 +62,8 @@ consumers.
 `gate_common.sh` owns the shared plumbing: the OOM prologue, the three
 environment-line strip policies (`strip_env` deletes all four volatile lines,
 `strip_env_lines` keeps `analyzed:` for the triage tools, `norm` blanks to
-placeholders for the sweeps), `flags_for`/`include_shas`/
-`oracle_shas`/`ckey`, `binary_sha256`/`hs_fingerprint`,
+placeholders for the sweeps), `flags_for`/parser-backed dependency hashing/
+`ckey`, `binary_sha256`/`hs_fingerprint`,
 `allowlist_guard` + the gate `filelist`, `rs_stale_check`, `oracle_rev_check`,
 the Haskell-oracle resolver and the maude resolver — `MAUDE_PATH` if set
 (set-but-unusable is a hard fail,
@@ -562,18 +562,26 @@ then upstream behaviour moving under them.
 ## Data files (tracked)
 
 - **`file_flags.tsv`** — canonical per-file extra prover flags, applied
-  identically to both engines; consumed by every gate, and folded into the
+  identically to both engines and folded into the
   cache key as a hash so two flag sets on one theory are distinct entries.
   Its whole vocabulary today is `--auto-sources` (22 files),
   `--stop-on-trace=seqdfs` (8), `--diff` (5) and `-D` (4). 32 corpus
   theories contain `#ifdef`; the four `-D` rows put the DEFINED branch of
   `testParser/define.spthy` and three `thesis-LaraSchmid-evoting` theories in
   front of every gate that reads this file — and take their bare branch out of
-  reach in exchange. The other 28 still prove one branch only. The value must
+  reach in exchange. Web gates use the separate `web_flags.tsv` contract, so
+  batch-only `--auto-sources` and `--diff` recipes never leak into one
+  interactive server while the other runs bare. The other 28 still prove one
+  branch only. The value must
   be ATTACHED (`-D=A`, never `-D A`): `-D` is a cmdargs `flagOpt` in the
   Haskell binary, which reads a detached value as a positional input file,
   and the Rust port's clap front end deliberately mirrors that (a detached
   token stays positional there too).
+- **`web_flags.tsv`** — the much smaller canonical interactive recipe map. It
+  contains only flags accepted by both servers; unsupported entries fail as
+  `SKIP_UNSUPPORTED_FLAGS`. Files whose special recipe is batch-only are opened
+  bare in the web gate by explicit contract, rather than by filtering a batch
+  command line.
 - **`parity_corpus.txt`** — the canonical 432-file gate corpus: the
   submodule's examples plus one repo-local fixture
   (`../../crates/tamarin-theory/tests/fixtures/nat_sort_regression.spthy`,

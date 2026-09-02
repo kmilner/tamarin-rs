@@ -94,8 +94,7 @@ pub fn replace_sorry_prove(
     skeleton: &ProofTree,
     proof_bound: usize,
 ) -> Result<ProofNode, ProveError> {
-    let proof = replay_node(ctx, initial, skeleton, proof_bound, true)?;
-    ctx.source_result(proof)
+    ctx.source_result(|| replay_node(ctx, initial, skeleton, proof_bound, true))
 }
 
 /// Replay a stored skeleton WITHOUT auto-proving its open/sorry leaves —
@@ -117,8 +116,7 @@ pub fn check_and_extend(
     skeleton: &ProofTree,
     proof_bound: usize,
 ) -> Result<ProofNode, ProveError> {
-    let proof = replay_node(ctx, initial, skeleton, proof_bound, false)?;
-    ctx.source_result(proof)
+    ctx.source_result(|| replay_node(ctx, initial, skeleton, proof_bound, false))
 }
 
 /// Build an annotated `Sorry` leaf seeded with `sys`.  HS `checkProof`
@@ -239,7 +237,7 @@ fn finished_leaf(
     proof_bound: usize,
 ) -> Result<ProofNode, ProveError> {
     let same_kind = |r: &MethodResult| std::mem::discriminant(r) == std::mem::discriminant(stored);
-    match is_finished(ctx, &sys) {
+    match is_finished(ctx, &sys)? {
         Some(ref r) if same_kind(r) => Ok(ProofNode {
             method: ProofMethod::Finished(stored.clone()),
             sys,
@@ -310,7 +308,7 @@ fn replay_node(
     // HS's setup the skeleton's children take precedence (they're
     // already there from the parse), and `unprovenLookAhead` produces
     // a Sorry that gets replaced by the auto-prover.
-    let (method, cases) = match exec_method_for(&node.method, &sys, ctx) {
+    let (method, cases) = match exec_method_for(&node.method, &sys, ctx)? {
         Some(p) => p,
         None => {
             // Couldn't resolve OR the method didn't apply.  HS
@@ -497,9 +495,11 @@ fn exec_method_for(
     stored: &ProofMethod,
     sys: &System,
     ctx: &ProofContext,
-) -> Option<(ProofMethod, Vec<(String, System)>)> {
-    let method = resolve_method(stored, sys)?;
-    check_and_exec_proof_method(ctx, &method, sys).map(|cases| (method, cases))
+) -> Result<Option<(ProofMethod, Vec<(String, System)>)>, ProveError> {
+    let Some(method) = resolve_method(stored, sys) else {
+        return Ok(None);
+    };
+    Ok(check_and_exec_proof_method(ctx, &method, sys)?.map(|cases| (method, cases)))
 }
 
 /// Resolve one stored [`ProofMethod`] against `sys`.

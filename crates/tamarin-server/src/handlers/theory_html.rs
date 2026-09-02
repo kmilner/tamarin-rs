@@ -21,8 +21,12 @@ use tamarin_theory::theory::{LemmaAttr, TraceQuantifier};
 /// Full overview/framing page (the one served at `/thy/trace/<idx>/overview/...`).
 pub(crate) fn overview_page(entry: &TheoryEntry, path: &TheoryPath) -> Result<String, String> {
     let header_html = header(entry);
-    let proof_state = proof_state(entry)?;
     let main_view = path_html(entry, path)?;
+    // Materialise a selected proof before rendering the index. On first access
+    // the index can then borrow the live tree instead of replaying the stored
+    // proof into a lightweight snapshot and immediately replaying it again for
+    // the centre pane.
+    let proof_state = proof_state(entry)?;
     // Byte-faithful port of `overviewTpl` (Web/Hamlet.hs:276-303), the widget
     // body inside the shared [`default_layout`] frame: a `$newline never`
     // single line (the only embedded newlines come from the postprocessed
@@ -792,27 +796,25 @@ pub(crate) fn proof_html(
         return Ok("No such lemma or proof path.".into());
     }
     if let Some(ps) = &entry.proof_state {
-        if let Some(root) = ps.get_root(lemma)? {
-            if let Some(n) = crate::handlers::proof_tree::navigate_at(&root, sub) {
-                // A replay-divergent node has no system in HS. Rendering its
-                // fixed fallback must not force the lemma's lazy heuristic or
-                // source context merely to pass an otherwise-unused argument.
-                if !n.annotated {
-                    return crate::handlers::proof_tree::render_sub_proof_snippet(
-                        entry.idx,
-                        lemma,
-                        sub,
-                        n,
-                        ps.template_context(),
-                    );
-                }
-                // Build the lemma-specialised context used by batch proving
-                // before ranking (HS `getProofContext`).
-                let ctx = ps.context_for_lemma(lemma)?;
+        if let Some(snippet) = ps.get_snippet_at(lemma, sub)? {
+            // A replay-divergent node has no system in HS. Rendering its
+            // fixed fallback must not force the lemma's lazy heuristic or
+            // source context merely to pass an otherwise-unused argument.
+            if snippet.system.is_none() {
                 return crate::handlers::proof_tree::render_sub_proof_snippet(
-                    entry.idx, lemma, sub, n, &ctx,
+                    entry.idx,
+                    lemma,
+                    sub,
+                    &snippet,
+                    ps.template_context(),
                 );
             }
+            // Build the lemma-specialised context used by batch proving
+            // before ranking (HS `getProofContext`).
+            let ctx = ps.context_for_lemma(lemma)?;
+            return crate::handlers::proof_tree::render_sub_proof_snippet(
+                entry.idx, lemma, sub, &snippet, &ctx,
+            );
         }
     }
     Ok("No such lemma or proof path.".into())
@@ -1091,10 +1093,14 @@ pub(crate) fn compute_source_lists(
     };
 
     let sources = ctx
-        .full_sources
-        .iter()
-        .map(|source| (source.goal.clone(), rendered_cases(source.cases(&ctx))))
-        .collect();
+        .source_cases()
+        .map(|sources| {
+            sources
+                .into_iter()
+                .map(|(goal, cases)| (goal, rendered_cases(cases)))
+                .collect()
+        })
+        .map_err(|error| format!("proof context: {error}"))?;
     Ok(sources)
 }
 
@@ -1118,7 +1124,7 @@ pub(crate) fn source_list_case(
         SysSourceKind::RawSources
     };
     let ctx = ps.context_for_sources(kind)?;
-    let mut system = nth_case_system(&ctx.full_sources, src_idx, case_idx);
+    let mut system = nth_case_system(&ctx, src_idx, case_idx)?;
     if want_refined {
         if let Some(system) = &mut system {
             system.source_kind = Some(SysSourceKind::RefinedSources);
@@ -1130,13 +1136,24 @@ pub(crate) fn source_list_case(
 /// `sources !! (src_idx - 1) !! (case_idx - 1)` over a materialised source
 /// list: `None` for any index that names no case.
 fn nth_case_system(
-    sources: &[tamarin_theory::constraint::solver::sources::Source],
+    ctx: &tamarin_theory::constraint::solver::context::ProofContext,
     src_idx: i64,
     case_idx: i64,
-) -> Option<tamarin_theory::constraint::system::System> {
-    let src_nth = usize::try_from(src_idx.checked_sub(1)?).ok()?;
-    let case_nth = usize::try_from(case_idx.checked_sub(1)?).ok()?;
-    sources.get(src_nth)?.case_system_at(case_nth)
+) -> Result<Option<tamarin_theory::constraint::system::System>, String> {
+    let Some(src_nth) = src_idx
+        .checked_sub(1)
+        .and_then(|index| usize::try_from(index).ok())
+    else {
+        return Ok(None);
+    };
+    let Some(case_nth) = case_idx
+        .checked_sub(1)
+        .and_then(|index| usize::try_from(index).ok())
+    else {
+        return Ok(None);
+    };
+    ctx.source_case_system_at(src_nth, case_nth)
+        .map_err(|error| format!("proof context: {error}"))
 }
 
 /// HS `casesInfo kind` (Web/Theory.hs:405-412): `(nCases, chainInfo)` where

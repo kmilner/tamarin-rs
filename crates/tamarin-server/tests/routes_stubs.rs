@@ -131,6 +131,14 @@ async fn test_del_path_lemma_returns_redirect_envelope() {
         .nth(3)
         .and_then(|value| value.parse::<usize>().ok())
         .expect("redirect idx");
+    assert!(
+        s.state
+            .store
+            .get(idx)
+            .and_then(|entry| entry.proof_state)
+            .is_some(),
+        "direct deletion must preserve proofs from the old theory"
+    );
     let source = s
         .client
         .get(s.url(&format!("/thy/trace/{idx}/source")))
@@ -141,6 +149,51 @@ async fn test_del_path_lemma_returns_redirect_envelope() {
         .await
         .expect("source body");
     assert!(!source.contains("lemma debug"), "lemma must be removed");
+}
+
+#[tokio::test]
+async fn deleting_a_lemma_preserves_other_live_proofs() {
+    let s = start_server_with_theory("hide_reuse_lemma.spthy").await;
+    let removed_step: serde_json::Value = s
+        .client
+        .get(s.url("/thy/trace/1/del/path/proof/keeps_helper"))
+        .send()
+        .await
+        .expect("mark proof removed")
+        .json()
+        .await
+        .expect("proof redirect");
+    let edited_idx = removed_step["redirect"]
+        .as_str()
+        .and_then(|path| path.split('/').nth(3))
+        .and_then(|value| value.parse::<usize>().ok())
+        .expect("edited idx");
+
+    let deleted: serde_json::Value = s
+        .client
+        .get(s.url(&format!("/thy/trace/{edited_idx}/del/path/lemma/helper")))
+        .send()
+        .await
+        .expect("delete lemma")
+        .json()
+        .await
+        .expect("lemma redirect");
+    let final_idx = deleted["redirect"]
+        .as_str()
+        .and_then(|path| path.split('/').nth(3))
+        .and_then(|value| value.parse::<usize>().ok())
+        .expect("deleted idx");
+    let source = s
+        .client
+        .get(s.url(&format!("/thy/trace/{final_idx}/source")))
+        .send()
+        .await
+        .expect("updated source")
+        .text()
+        .await
+        .expect("source body");
+    assert!(!source.contains("lemma helper [reuse]"));
+    assert!(source.contains("sorry /* removed */"));
 }
 
 #[tokio::test]
@@ -294,6 +347,22 @@ async fn test_next_normal_help_to_message_matches_haskell() {
 }
 
 #[tokio::test]
+async fn nonproof_navigation_does_not_start_the_prover() {
+    let s = start_server_with_theory_and("issue193.spthy", |cfg| {
+        cfg.maude_path = "/definitely/missing/maude".to_string();
+    })
+    .await;
+    let res = s
+        .client
+        .get(s.url("/thy/trace/1/next/normal/help"))
+        .send()
+        .await
+        .expect("send");
+    assert_eq!(res.status(), 200);
+    assert_eq!(res.text().await.expect("read"), "/thy/trace/1/main/message");
+}
+
+#[tokio::test]
 async fn test_next_main_help_is_noop_matches_haskell() {
     // Haskell's `next "main"` is the `_ -> const id` arm — same path.
     // Captured Haskell response confirms this.
@@ -354,6 +423,18 @@ async fn test_verify_proof_returns_redirect_envelope() {
         res.text().await.expect("text"),
         haskell_capture("verify_proof.json")
     );
+}
+
+#[tokio::test]
+async fn malformed_verify_path_is_not_found_before_theory_lookup() {
+    let s = start_server_with_theory("issue193.spthy").await;
+    let res = s
+        .client
+        .get(s.url("/thy/trace/999/verify/not-a-path"))
+        .send()
+        .await
+        .expect("send");
+    assert_eq!(res.status(), 404);
 }
 
 #[tokio::test]

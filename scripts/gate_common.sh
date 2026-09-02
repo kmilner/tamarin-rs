@@ -68,26 +68,30 @@ flags_for() {
 #   Hash the ordered patch list and every listed patch. This is the source
 #   identity that setup.sh stamps beside the binary after its controlled build.
 patch_series_fingerprint() {
-    local repo=$1 series="$1/patches/series" name patch
+    local repo=$1 series="$1/patches/series" name patch payload= sha
     [ -f "$series" ] || return 1
     while IFS= read -r name || [ -n "$name" ]; do
         case "$name" in ''|'#'*) continue ;; esac
         [ -f "$repo/patches/$name" ] || return 1
     done < "$series"
-    {
-        while IFS= read -r name || [ -n "$name" ]; do
-            case "$name" in ''|'#'*) continue ;; esac
-            patch="$repo/patches/$name"
-            printf '%s\t' "$name"
-            sha256sum "$patch" | cut -d' ' -f1
-        done < "$series"
-    } | sha256sum | cut -d' ' -f1
+    while IFS= read -r name || [ -n "$name" ]; do
+        case "$name" in ''|'#'*) continue ;; esac
+        patch="$repo/patches/$name"
+        sha=$(file_sha256 "$patch") || return 1
+        payload+="$name"$'\t'"$sha"$'\n'
+    done < "$series"
+    printf '%s' "$payload" | sha256sum | cut -d' ' -f1
+}
+
+# file_sha256 <file> — hash one file without a pipeline hiding read failures.
+file_sha256() {
+    local line
+    line=$(sha256sum < "$1") || return 1
+    printf '%s\n' "${line%% *}"
 }
 
 # binary_sha256 <file> — the one executable-content fingerprint recipe.
-binary_sha256() {
-    sha256sum "$1" | cut -d' ' -f1
-}
+binary_sha256() { file_sha256 "$1"; }
 
 # hs_fingerprint <oracle-binary>
 #   Set HS_FP (the binary's SHA-256, which every cached gate keys on) and
@@ -103,99 +107,45 @@ hs_fingerprint() {
     HS_FP_SALT=${HS_FP:0:12}
     HS_FP_PATH=$1
 }
-# include_shas <theory>
-#   sha + name of every file the theory pulls in with `#include "..."`, depth
-#   first and transitively, resolved against the INCLUDING file's directory
-#   (the spelling upstream uses: examples/testParser/include/include1.spthy,
-#   which parity_corpus.txt carries, reaches include_2.spthy and
-#   include/include3.spthy that way). Those files are oracle inputs, so a
-#   theory sha alone cannot key its output: edit an included file and a cached
-#   entry keeps answering for the old one, and a reference row reads DIFF
-#   instead of INPUT_CHANGED. Prints NOTHING for a theory with no includes —
-#   every corpus file but three — so include-free keys (ckey below, hs_run's
-#   digest in sweep_common.sh, rs_ref_check.sh's ikey) are byte-identical to
-#   the pre-include ones and the existing entries/rows stay valid.
-include_shas() {
-    local -A _include_seen=()
-    _include_shas_walk() {
-        local f=$1 dir inc dep key
-        dir=$(dirname "$f")
-        while IFS= read -r inc; do
-            [ -n "$inc" ] || continue
-            dep="$dir/$inc"
-            [ -f "$dep" ] || continue
-            key=$(cd "$(dirname "$dep")" && printf '%s/%s' "$PWD" "$(basename "$dep")") \
-                || return 1
-            [ -z "${_include_seen[$key]+x}" ] || continue
-            _include_seen[$key]=1
-            printf '%s %s\n' "$(sha256sum "$dep" | cut -d' ' -f1)" "$inc"
-            _include_shas_walk "$dep" || return 1
-        done < <(grep -oE '#include[[:space:]]*"[^"]+"' "$f" 2>/dev/null \
-                 | sed 's/.*"\(.*\)"/\1/')
+# input_manifest <theory> [flags]
+#   Ask the real parser which include/preprocessor/oracle inputs are active.
+#   Tagged TSV rows are `S<TAB>source<TAB>staged` and `O<...>`. A parse error
+#   is fatal: dependency discovery must never fall back to a stale cache hit.
+input_manifest() {
+    local theory=$1 flags=${2:-}
+    local bin=${INPUT_MANIFEST_BIN:-${RS_PATH:-${RS_BIN:-${BIN:-$GATE_COMMON_DIR/../target/release/tamarin-rs}}}}
+    [ -x "$bin" ] || {
+        echo "input_manifest: no executable Rust prover at '$bin'" >&2
+        return 1
     }
-    _include_shas_walk "$1"
-    local status=$?
-    unset -f _include_shas_walk
-    return "$status"
+    local -a argv=()
+    [ -z "$flags" ] || read -r -a argv <<< "$flags"
+    "$bin" "${argv[@]}" input-manifest "$theory"
 }
-# oracle_shas <theory> [flags]
-#   Content + mode of every executable-oracle input that can affect this
-#   invocation: theory-adjacent/CWD `oracle*` files, quoted heuristic paths,
-#   the exact upstream default-oracle candidate, and CLI `--oraclename`.
-#   Some entries are conservative extras; over-invalidation is preferable to
-#   serving a proof produced by an older oracle script.
-oracle_shas() {
-    local theory=$1 flags=${2:-} theory_dir run_dir p q word next base
-    theory_dir=$(dirname "$theory")
-    run_dir=$PWD
-    {
-        for p in "$theory_dir"/oracle* "$run_dir"/oracle*; do
-            [ -f "$p" ] || continue
-            printf '%s %s scan:%s\n' "$(sha256sum "$p" | cut -d' ' -f1)" \
-                "$(stat -c '%a' "$p")" "${p##*/}"
-        done
 
-        # HS defaultOracleNames: takeBaseName of the theory path, probed in
-        # the theory directory and retained as a relative oracle name.
-        base=${theory##*/}
-        # System.FilePath.takeBaseName preserves a name made entirely of one
-        # leading-dot component (`.spthy` -> `.spthy`), unlike `${base%.*}`.
-        case "$base" in
-            .*) if [[ ${base#.} == *.* ]]; then base=${base%.*}; fi ;;
-            *) base=${base%.*} ;;
-        esac
-        p="$theory_dir/${base}.oracle"
-        if [ -f "$p" ]; then
-            printf '%s %s default:%s\n' "$(sha256sum "$p" | cut -d' ' -f1)" \
-                "$(stat -c '%a' "$p")" "$base.oracle"
-        fi
+_include_shas_from_manifest() {
+    local manifest=$1 first=1 tag src rel sha
+    while IFS=$'\t' read -r tag src rel; do
+        [ "$tag" = S ] || continue
+        if [ "$first" = 1 ]; then first=0; continue; fi
+        sha=$(file_sha256 "$src") || return 1
+        printf '%s %s\n' "$sha" "$rel"
+    done <<< "$manifest"
+}
 
-        while IFS= read -r q; do
-            [ -n "$q" ] || continue
-            if [[ "$q" == /* ]]; then p=$q; else p="$theory_dir/$q"; fi
-            [ -f "$p" ] || continue
-            printf '%s %s quoted:%s\n' "$(sha256sum "$p" | cut -d' ' -f1)" \
-                "$(stat -c '%a' "$p")" "$q"
-        done < <(grep -E 'heuristic' "$theory" 2>/dev/null | grep -oE '"[^"]+"' | tr -d '"' | sort -u)
-
-        next=0
-        for word in $flags; do
-            q=
-            case "$word" in
-                --oraclename=*) q=${word#--oraclename=} ;;
-                --oraclename) next=1; continue ;;
-                *) if [ "$next" = 1 ]; then q=$word; next=0; fi ;;
-            esac
-            [ -n "$q" ] || continue
-            if [[ "$q" == /* ]]; then p=$q; else p="$run_dir/$q"; fi
-            [ -f "$p" ] || continue
-            printf '%s %s cli:%s\n' "$(sha256sum "$p" | cut -d' ' -f1)" \
-                "$(stat -c '%a' "$p")" "$q"
-        done
-    } | sort -u
+_oracle_shas_from_manifest() {
+    local manifest=$1 src rel sha mode
+    local -a rows=()
+    while IFS=$'\t' read -r tag src rel; do
+        [ "$tag" = O ] || continue
+        sha=$(file_sha256 "$src") || return 1
+        mode=$(stat -Lc '%a' "$src") || return 1
+        rows+=("$sha $mode ${rel:-external:$src}")
+    done <<< "$manifest"
+    [ "${#rows[@]}" -eq 0 ] || printf '%s\n' "${rows[@]}" | sort -u
 }
 # ckey <relpath> <abs-file> — the gate cache key. Uses $HS_FP_SALT (set by
-#   hs_fingerprint), include_shas, oracle_shas and flags_for, so an entry whose
+#   hs_fingerprint), parser-selected dependencies and flags_for, so an entry whose
 #   included fragments or oracle scripts changed, a flagged entry and an entry
 #   produced by a different oracle binary are all a MISS. KEY FORMAT (shared by
 #   corpus_file_diff.sh, wf_gate.sh, pretty_gate.sh, triage_diff_vs_hs.sh,
@@ -204,9 +154,11 @@ oracle_shas() {
 #                     [__o<12 hex of sha256(oracle shas)>]
 #                     [__f<12 hex of sha256(flags)>]__b<first 12 hex of HS_FP>
 ckey() {
-    local h fl inc ora; h=$(sha256sum "$2" | cut -d' ' -f1); fl=$(flags_for "$1")
-    inc=$(include_shas "$2")
-    ora=$(oracle_shas "$2" "$fl")
+    local h fl inc ora manifest; h=$(file_sha256 "$2") || return 1
+    fl=$(flags_for "$1")
+    manifest=$(input_manifest "$2" "$fl") || return 1
+    inc=$(_include_shas_from_manifest "$manifest") || return 1
+    ora=$(_oracle_shas_from_manifest "$manifest") || return 1
     if [ -n "$inc" ]; then h="${h}__i$(printf '%s' "$inc" | sha256sum | cut -c1-12)"; fi
     if [ -n "$ora" ]; then h="${h}__o$(printf '%s' "$ora" | sha256sum | cut -c1-12)"; fi
     if [ -n "$fl" ]; then h="${h}__f$(printf '%s' "$fl" | sha256sum | cut -c1-12)"; fi

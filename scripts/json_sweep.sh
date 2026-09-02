@@ -36,6 +36,11 @@ one() {
   # manufactures rather than one the flags expose.
   hs_run "$d" "$f" "json+dot-dct30" --derivcheck-timeout=30 \
     --output-json="$d/hs.json" --output-dot="$d/hs.dot"; hrc=$?
+  if [ -f "$d/input-manifest.error" ]; then
+    row "$f" ERROR "input manifest/hash failed"
+    rm -rf "$d"
+    return
+  fi
   # A broken environment is diagnosed before the cap is blamed for it: an
   # unusable maude both aborts and hangs, and "timeout" would be the wrong
   # story (and a ledgerable one).

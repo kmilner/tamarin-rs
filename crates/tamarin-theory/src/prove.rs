@@ -29,6 +29,7 @@ use crate::theory::OpenProtoRule;
 pub enum ProveError {
     LemmaNotFound(String),
     Guarded(String),
+    InvalidHeuristic(String),
     Ranking(RankingError),
 }
 
@@ -67,6 +68,7 @@ impl std::fmt::Display for ProveError {
         match self {
             ProveError::LemmaNotFound(n) => write!(f, "lemma not found: {}", n),
             ProveError::Guarded(m) => write!(f, "guarded conversion: {}", m),
+            ProveError::InvalidHeuristic(m) => f.write_str(m),
             ProveError::Ranking(m) => write!(f, "goal ranking: {m}"),
         }
     }
@@ -76,7 +78,9 @@ impl std::error::Error for ProveError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             ProveError::Ranking(error) => Some(error),
-            ProveError::LemmaNotFound(_) | ProveError::Guarded(_) => None,
+            ProveError::LemmaNotFound(_)
+            | ProveError::Guarded(_)
+            | ProveError::InvalidHeuristic(_) => None,
         }
     }
 }
@@ -135,24 +139,26 @@ fn hs_combine(a: &str, b: &str) -> String {
 /// leading `./` of a CWD-relative result comes from the join with workDir
 /// `"."`, exactly as in HS.
 fn resolve_oracle_path(oracle_path: &str, work_dir: Option<&str>) -> String {
-    let p = std::path::Path::new(oracle_path);
-    if p.is_absolute() {
-        return oracle_path.to_string();
+    let normalized = hs_normalise_path(oracle_path);
+    if std::path::Path::new(oracle_path).is_absolute() {
+        return normalized;
     }
     let wd = work_dir.unwrap_or(".");
-    hs_combine(wd, &hs_normalise_relative(oracle_path))
+    hs_combine(wd, &normalized)
 }
 
-/// HS `System.FilePath.normalise` restricted to the relative-path case the
-/// caller guards (absolute paths return early): drop `.` segments and
-/// redundant separators.  (`..` is NOT collapsed, as in HS.)
-fn hs_normalise_relative(p: &str) -> String {
+/// The Unix spelling of HS `System.FilePath.normalise`: drop `.` segments and
+/// redundant separators without collapsing `..`.
+fn hs_normalise_path(p: &str) -> String {
+    let absolute = p.starts_with('/');
     let segs: Vec<&str> = p
         .split('/')
         .filter(|s| !s.is_empty() && *s != ".")
         .collect();
     if segs.is_empty() {
-        ".".to_string()
+        if absolute { "/" } else { "." }.to_string()
+    } else if absolute {
+        format!("/{}", segs.join("/"))
     } else {
         segs.join("/")
     }
@@ -166,7 +172,7 @@ fn hs_normalise_relative(p: &str) -> String {
 /// `"."`-for-no-dir prefix (via [`hs_take_directory`]) is what gives the
 /// oracle path its leading `./` so Unix `exec` resolves it from the CWD rather
 /// than doing a PATH lookup.
-pub fn prepend_theory_dir_to_oracle_paths(
+pub(crate) fn prepend_theory_dir_to_oracle_paths(
     rankings: &mut [crate::constraint::solver::goals::GoalRanking],
     in_file: &str,
 ) {
@@ -375,28 +381,12 @@ fn resolve_cli_heuristic(
         Some("") => None,
         other => other,
     };
-    // Default `.oracle` name (HS `defaultOracleNames`) for oracle rankings
-    // that carried no inline `"path"` AND get no `--oraclename`.
+    resolve_oracle_rankings(&mut rankings, in_file, oraclename);
+    // Step 5: --oracle-only quitOnEmpty.
     for r in rankings.iter_mut() {
         match r {
-            GoalRanking::Oracle {
-                oracle_path,
-                quit_on_empty,
-                ..
-            }
-            | GoalRanking::OracleSmart {
-                oracle_path,
-                quit_on_empty,
-                ..
-            } => {
-                if let Some(name) = oraclename {
-                    *oracle_path = name.to_string();
-                    *oracle_path = resolve_oracle_path(oracle_path, None);
-                } else {
-                    *oracle_path =
-                        resolve_oracle_path(oracle_path, Some(&hs_take_directory(in_file)));
-                }
-                // Step 5: --oracle-only quitOnEmpty (Theory/Proof.hs:713-714).
+            GoalRanking::Oracle { quit_on_empty, .. }
+            | GoalRanking::OracleSmart { quit_on_empty, .. } => {
                 if cli.oracle_only {
                     *quit_on_empty = true;
                 }
@@ -412,6 +402,50 @@ fn resolve_cli_heuristic(
         }
     }
     Some(rankings)
+}
+
+fn resolve_oracle_rankings(
+    rankings: &mut [crate::constraint::solver::goals::GoalRanking],
+    in_file: &str,
+    oracle_name: Option<&str>,
+) {
+    use crate::constraint::solver::goals::GoalRanking;
+    let work_dir = hs_take_directory(in_file);
+    let oracle_name = oracle_name.filter(|name| !name.is_empty());
+    for ranking in rankings {
+        let (GoalRanking::Oracle { oracle_path, .. }
+        | GoalRanking::OracleSmart { oracle_path, .. }) = ranking
+        else {
+            continue;
+        };
+        *oracle_path = if let Some(name) = oracle_name {
+            resolve_oracle_path(name, None)
+        } else {
+            resolve_oracle_path(oracle_path, Some(&work_dir))
+        };
+    }
+}
+
+/// Resolve every oracle referenced by one heuristic exactly as proving does.
+/// Used by parser-backed cache/staging manifests so dependency selection and
+/// execution cannot drift.
+pub fn oracle_paths_for_heuristic(
+    raw: &str,
+    in_file: &str,
+    oracle_name: Option<&str>,
+) -> Vec<String> {
+    use crate::constraint::solver::goals::GoalRanking;
+    let mut rankings =
+        crate::constraint::solver::goals::parse_heuristic_str_with_tactics(raw, in_file, &[]);
+    resolve_oracle_rankings(&mut rankings, in_file, oracle_name);
+    rankings
+        .iter_mut()
+        .filter_map(|ranking| match ranking {
+            GoalRanking::Oracle { oracle_path, .. }
+            | GoalRanking::OracleSmart { oracle_path, .. } => Some(std::mem::take(oracle_path)),
+            _ => None,
+        })
+        .collect()
 }
 
 /// Validate the CLI `--heuristic` string against the set HS actually
@@ -434,6 +468,9 @@ pub fn validate_cli_heuristic(
     let Some(raw) = cli.raw.as_deref() else {
         return Ok(());
     };
+    if raw.is_empty() {
+        return Err("--heuristic: at least one ranking must be given".to_string());
+    }
     let chars: Vec<char> = raw.chars().collect();
     let mut i = 0;
     while i < chars.len() {
@@ -519,12 +556,17 @@ pub struct ProverSession {
     /// Elaborated typed theory.  Used to look up lemmas, restrictions,
     /// rules, heuristic.  Shares the caller's allocation (`Arc`); the
     /// session never mutates it.
-    pub theory: std::sync::Arc<crate::theory::Theory>,
-    /// CLI `--heuristic`/`--oraclename`/`--oracle-only` (HS `AutoProver`
-    /// fields).  When `cli_heuristic.raw` is `Some`, it OVERRIDES the per-lemma
-    /// / theory heuristic for EVERY lemma (HS `selectHeuristic`,
-    /// Theory/Proof.hs:705-716, see line 707).
-    cli_heuristic: CliHeuristic,
+    theory: std::sync::Arc<crate::theory::Theory>,
+    /// Fully resolved per-lemma rankings, frozen when the session is built so
+    /// later filesystem changes cannot switch a loaded theory's oracle.
+    lemma_heuristics:
+        tamarin_utils::FastMap<String, Option<Vec<crate::constraint::solver::goals::GoalRanking>>>,
+    /// Whether converting any lemma to guarded form can fail. Every lemma is
+    /// checked or proved by the batch loop, even when `--prove` selects a
+    /// subset, so this is a genuinely session-wide ordering constraint.
+    guarded_lemmas_may_fail: bool,
+    /// Whether the shared refined-source materialisation can fail.
+    source_refinement_may_fail: bool,
     /// Solved-leaf extraction strategy (HS `apCut`, threaded from
     /// `--stop-on-trace`, TheoryLoader.hs:803-810, see line 809).  Theory-global (HS
     /// stores it once in `TheoryLoadOptions.stopOnTrace`), so it is set on
@@ -561,6 +603,7 @@ struct SessionSourceProvider {
     setup_counter_before: u64,
     source_cache: std::sync::Arc<SourceCache>,
     cache_disabled: bool,
+    may_fail: bool,
 }
 
 impl std::fmt::Debug for SessionSourceProvider {
@@ -572,6 +615,10 @@ impl std::fmt::Debug for SessionSourceProvider {
 }
 
 impl crate::constraint::solver::context::SourceProvider for SessionSourceProvider {
+    fn may_fail(&self) -> bool {
+        self.may_fail
+    }
+
     fn materialize(&self, ctx: &ProofContext) -> Result<(), ProveError> {
         let local_cache;
         let cache = if self.cache_disabled {
@@ -602,7 +649,7 @@ impl crate::constraint::solver::context::SourceProvider for SessionSourceProvide
 /// (CloseRule.hs:167-188, see line 175).  In RS `SourceKind`, `RawSources < RefinedSources`,
 /// matching HS's `RawSource < RefinedSource` Ord (System.hs:362-365), so it
 /// can be used directly as the `lemmaSourceKind lem <= kind` bound below.
-pub fn lemma_source_kind(lemma: &crate::theory::Lemma) -> SourceKind {
+pub(crate) fn lemma_source_kind(lemma: &crate::theory::Lemma) -> SourceKind {
     if lemma
         .attributes
         .iter()
@@ -618,7 +665,7 @@ pub fn lemma_source_kind(lemma: &crate::theory::Lemma) -> SourceKind {
 /// `[use_induction]` (`InvariantLemma`) or `[sources]` (`SourceLemma`) is
 /// proved with `pcUseInduction = UseInduction`, so its first proof method is
 /// Induction; every other lemma avoids it.
-pub fn induction_hint(
+pub(crate) fn induction_hint(
     lemma: &crate::theory::Lemma,
 ) -> crate::constraint::solver::context::UseInduction {
     use crate::constraint::solver::context::UseInduction;
@@ -651,15 +698,9 @@ pub fn induction_hint(
 /// non-guardable reuse formula propagates a `ProveError` rather than being
 /// silently dropped.
 ///
-/// HS keeps ONE implementation of the gather, inside `mkSystem`
-/// (CloseRule.hs:167-188#mkSystem).  The batch prover reaches it through
-/// `proveTheory` (CloseRule.hs:162#mkSystem); the interactive server reaches
-/// the same function through `modifyLemmaProof`
-/// (Prover.hs:349-360#modifyLemmaProof, see line 358) and through its own
-/// `import Prover (mkSystem)` (Handler.hs:160#mkSystem) at
-/// Handler.hs:205#mkSystem and Handler.hs:265#mkSystem.  The web server crate
-/// calls this function so that the port keeps one implementation too.
-pub fn gather_reusable_lemmas(
+/// Both batch and interactive entry points reach this one implementation
+/// through their shared [`ProverSession`].
+pub(crate) fn gather_reusable_lemmas(
     theory: &crate::theory::Theory,
     lemma_name: &str,
     kind: SourceKind,
@@ -783,36 +824,51 @@ pub struct SourceStats {
 /// present.  Otherwise fall back to per-lemma `[heuristic=..]` > theory-level
 /// `heuristic:` > None (`getProofContext.specifiedHeuristic`,
 /// ClosedTheory.hs:123-131); `None` becomes `SmartRanking False` downstream.
-/// The lemma attribute keeps its source text, so it is parsed here, with
-/// `{name}` tactic rankings resolved against `tactics`; the theory's header
-/// is already parsed.  Both have their oracle paths resolved against the
-/// theory dir.
-pub fn resolve_heuristic(
-    cli: &CliHeuristic,
+/// The lemma attribute keeps its elaboration-frozen text, so it is parsed
+/// here, with `{name}` tactic rankings resolved against `tactics`; the
+/// theory's header is already parsed. Oracle paths are resolved beside the
+/// root or included file that declared the selected heuristic.
+fn resolve_heuristic(
+    cli: Option<&[crate::constraint::solver::goals::GoalRanking]>,
     lemma: &crate::theory::Lemma,
     theory_heuristic: &[crate::constraint::solver::goals::GoalRanking],
     tactics: &[crate::tactic::Tactic],
     in_file: &str,
+    theory_heuristic_in_file: Option<&str>,
 ) -> Option<Vec<crate::constraint::solver::goals::GoalRanking>> {
-    if let Some(rankings) = resolve_cli_heuristic(cli, in_file, tactics) {
-        return Some(rankings);
+    if let Some(rankings) = cli {
+        return Some(rankings.to_vec());
     }
     let lemma_heuristic: Option<&str> = lemma.attributes.iter().find_map(|a| match a {
         crate::theory::LemmaAttr::Heuristic(s) => Some(s.as_str()),
         _ => None,
     });
-    let mut rankings = match lemma_heuristic {
+    let (mut rankings, ranking_file) = match lemma_heuristic {
         Some(h) => {
-            crate::constraint::solver::goals::parse_heuristic_str_with_tactics(h, in_file, tactics)
+            let source = lemma.heuristic_in_file.as_deref().unwrap_or(in_file);
+            (
+                crate::constraint::solver::goals::parse_heuristic_str_with_tactics(
+                    h, source, tactics,
+                ),
+                source,
+            )
         }
-        None if !theory_heuristic.is_empty() => theory_heuristic.to_vec(),
+        None if !theory_heuristic.is_empty() => (
+            theory_heuristic.to_vec(),
+            theory_heuristic_in_file.unwrap_or(in_file),
+        ),
         None => return None,
     };
-    prepend_theory_dir_to_oracle_paths(&mut rankings, in_file);
+    prepend_theory_dir_to_oracle_paths(&mut rankings, ranking_file);
     Some(rankings)
 }
 
 impl ProverSession {
+    /// The immutable theory this session and all of its caches describe.
+    pub fn theory(&self) -> &crate::theory::Theory {
+        &self.theory
+    }
+
     /// Read the theory-wide, unspecialised context built by this session.
     ///
     /// This is intended for web views which only inspect immutable
@@ -820,6 +876,19 @@ impl ProverSession {
     /// [`Self::context_for_lemma`].
     pub fn template_context(&self) -> &ProofContext {
         &self.template_ctx
+    }
+
+    /// Whether per-lemma setup can fail anywhere in the batch traversal.
+    pub fn guarded_lemmas_may_fail(&self) -> bool {
+        self.guarded_lemmas_may_fail
+    }
+
+    /// Whether this lemma's selected ranking can fail when auto-proved.
+    pub fn lemma_ranking_may_fail(&self, lemma_name: &str) -> bool {
+        self.lemma_heuristics
+            .get(lemma_name)
+            .and_then(Option::as_deref)
+            .is_some_and(crate::constraint::solver::goals::rankings_may_fail)
     }
 
     /// Build the structural per-lemma context used by batch and web replay.
@@ -950,6 +1019,43 @@ impl ProverSession {
         cut: crate::constraint::solver::context::CutStrategy,
         ndc_cache: Option<&IntrRuleCache>,
     ) -> Result<Self, ProveError> {
+        validate_cli_heuristic(&cli_heuristic, &theory.tactic)
+            .map_err(ProveError::InvalidHeuristic)?;
+        let resolved_cli = resolve_cli_heuristic(&cli_heuristic, &theory.in_file, &theory.tactic);
+        let lemma_heuristics: tamarin_utils::FastMap<
+            String,
+            Option<Vec<crate::constraint::solver::goals::GoalRanking>>,
+        > = theory
+            .lemmas()
+            .map(|lemma| {
+                (
+                    lemma.name.clone(),
+                    resolve_heuristic(
+                        resolved_cli.as_deref(),
+                        lemma,
+                        &theory.heuristic,
+                        &theory.tactic,
+                        &theory.in_file,
+                        theory.heuristic_in_file.as_deref(),
+                    ),
+                )
+            })
+            .collect();
+        let mut guarded_lemmas_may_fail = false;
+        let mut source_refinement_may_fail = false;
+        for lemma in theory.lemmas() {
+            let invalid = formula_to_guarded(&lemma.formula).is_err();
+            guarded_lemmas_may_fail |= invalid;
+            source_refinement_may_fail |= invalid
+                && lemma
+                    .attributes
+                    .iter()
+                    .any(|attribute| matches!(attribute, crate::theory::LemmaAttr::Sources))
+                && matches!(
+                    lemma.trace_quantifier,
+                    crate::theory::TraceQuantifier::AllTraces
+                );
+        }
         // HS `mkSystem` maps `formulaToGuarded_ = either (error . render) id`
         // (CloseRule.hs:167-188, see line 174, Guarded.hs:466-467) over restriction formulas — it
         // ABORTS on a non-guardable restriction rather than silently dropping
@@ -992,7 +1098,9 @@ impl ProverSession {
         maude.reset_counter_to(setup_counter_before);
         Ok(ProverSession {
             theory,
-            cli_heuristic,
+            lemma_heuristics,
+            guarded_lemmas_may_fail,
+            source_refinement_may_fail,
             cut,
             restrictions,
             template_ctx: std::sync::Arc::new(template_ctx),
@@ -1010,7 +1118,6 @@ impl ProverSession {
     /// / `lemma_name` / `theory_file`. Source conversion remains deferred
     /// behind the session provider.
     fn setup_per_lemma_ctx(&self, lemma: &crate::theory::Lemma, lemma_name: &str) -> ProofContext {
-        let theory = &self.theory;
         let source_kind = lemma_source_kind(lemma);
         let mut ctx = self.fresh_context();
         ctx.is_exists_trace = matches!(
@@ -1021,13 +1128,7 @@ impl ProverSession {
         // so stamp the session's cut onto every per-lemma context.
         ctx.cut = self.cut;
         let session_in_file = self.theory.in_file.as_str();
-        ctx.heuristic = resolve_heuristic(
-            &self.cli_heuristic,
-            lemma,
-            &theory.heuristic,
-            &theory.tactic,
-            session_in_file,
-        );
+        ctx.heuristic = self.lemma_heuristics.get(lemma_name).cloned().flatten();
         ctx.lemma_name = lemma_name.to_string();
         ctx.theory_file = session_in_file.to_string();
         self.install_source_provider(&mut ctx, source_kind);
@@ -1057,6 +1158,7 @@ impl ProverSession {
             setup_counter_before: self.setup_counter_before,
             source_cache: std::sync::Arc::clone(&self.source_cache),
             cache_disabled: self.source_cache_disabled,
+            may_fail: kind >= SourceKind::RefinedSources && self.source_refinement_may_fail,
         }));
     }
 }

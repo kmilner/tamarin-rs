@@ -54,6 +54,8 @@ READY_TIMEOUT="${READY_TIMEOUT:-90}"
 HS_PORT="${HS_PORT:-3021}"
 RS_PORT="${RS_PORT:-3022}"
 CORPUS_ROOT="${CORPUS_ROOT:-$repo_root/tamarin-prover/examples}"
+WEB_FLAGS_MAP="${WEB_FLAGS_MAP:-$script_dir/web_flags.tsv}"
+[ -r "$WEB_FLAGS_MAP" ] || { echo "web flag map is not readable: $WEB_FLAGS_MAP" >&2; exit 2; }
 RESULTS_TSV="${RESULTS_TSV:-/tmp/web_parity.tsv}"
 MAX_NODES="${MAX_NODES:-400}"
 DIFFDIR="${DIFFDIR:-/tmp/web_parity_diffs}"
@@ -202,6 +204,8 @@ fi
 boot_crawl() {
     local bin="$1" port="$2" wd="$3" out="$4" kind="$5"
     local log="$wd/${kind}_server.log" pid
+    local -a load_flags=()
+    [ -z "${theory_flags:-}" ] || read -r -a load_flags <<< "$theory_flags"
     # Pin the derivcheck budget like corpus_file_diff.sh does (30s): HS's
     # 5s default expires deterministically on ~12 corpus files even idle,
     # replacing the derivation report with a timeout block RS never emits
@@ -216,7 +220,7 @@ boot_crawl() {
     ( echo 1000 > /proc/self/oom_score_adj 2>/dev/null
       ulimit -v "${SERVER_MEM_KB:-25165824}" 2>/dev/null
       exec setsid "$bin" interactive "$wd/thy" --port="$port" \
-        --derivcheck-timeout="${DERIVCHECK_TIMEOUT:-30}" ) >"$log" 2>&1 &
+        --derivcheck-timeout="${DERIVCHECK_TIMEOUT:-30}" "${load_flags[@]}" ) >"$log" 2>&1 &
     pid=$!
     # wait for readiness
     local ok="" i
@@ -248,11 +252,20 @@ one_file() {
     grep -qE '^[[:space:]]*(lemma|equivLemma|diffLemma)([[:space:]]|\[|:)' "$f" \
         || CRAWL_EXTRA_ARGS="--allow-no-lemmas"
     export CRAWL_EXTRA_ARGS
-    local key; key=$(web_cache_key "$rel" "$f")
+    local theory_flags
+    if ! theory_flags=$(web_flags_for "$rel"); then
+        printf '%s\t-\tSKIP_UNSUPPORTED_FLAGS\t-\t-\t-\n' "$rel"
+        return 0
+    fi
+    local key
+    if ! key=$(web_cache_key "$rel" "$f" "$theory_flags"); then
+        printf '%s\t-\tSKIP_INPUT_MANIFEST\t-\t-\t-\n' "$rel"
+        return 0
+    fi
     local hs_manifest="$CACHE/$key.hs.json" hs_fp_file="$CACHE/$key.hs.fp"
     local wd; wd=$(mktemp -d)
     mkdir -p "$wd/thy"
-    if ! web_stage_inputs "$f" "$wd/thy"; then
+    if ! web_stage_inputs "$f" "$wd/thy" "$theory_flags" "$wd"; then
         rm -rf "$wd"
         printf '%s\t-\tSKIP_INPUT_STAGE\t-\t-\t-\n' "$rel"; return 0
     fi

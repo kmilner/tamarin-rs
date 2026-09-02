@@ -716,6 +716,19 @@ fn guarded_quantifier_structure_matches_tamarin() {
     }
 }
 
+fn simplify_once(
+    ctx: &tamarin_theory::constraint::solver::context::ProofContext,
+    sys: tamarin_theory::constraint::system::System,
+) -> tamarin_theory::constraint::system::System {
+    use tamarin_theory::constraint::solver::proof_method::{exec_proof_method, ProofMethod};
+
+    match exec_proof_method(ctx, &ProofMethod::Simplify, &sys).expect("source materialisation") {
+        None => sys,
+        Some(mut cases) if cases.len() == 1 => cases.remove(0).1,
+        Some(cases) => panic!("simplify unexpectedly produced {} cases", cases.len()),
+    }
+}
+
 /// End-to-end: parse the disj_lemma fixture, build the initial
 /// system, simplify, and verify the formula structure stays intact.
 /// `reducible_formula(Disj) = false` matches Haskell — top-level Disj
@@ -723,23 +736,18 @@ fn guarded_quantifier_structure_matches_tamarin() {
 /// later via `Induction` or via being nested inside a reducible parent.
 #[test]
 fn simplify_top_level_disj_lemma_left_intact() {
-    use tamarin_theory::constraint::solver::reduction::Reduction;
-    use tamarin_theory::constraint::solver::simplify::simplify_system;
-
     let Some(ctx) = rule_free_context() else {
         return;
     };
     let sys = fixture_lemma_system("disj_lemma.spthy");
     let n_formulas_before = sys.formulas.len();
-    let mut r = Reduction::new(&ctx, sys);
-    simplify_system(&mut r);
+    let simplified = simplify_once(&ctx, sys);
     // The top-level Disj is non-reducible, so the formula count
     // doesn't change.
-    assert_eq!(r.sys.formulas.len(), n_formulas_before);
+    assert_eq!(simplified.formulas.len(), n_formulas_before);
     // No Goal::Disj created during simplify alone (induction or
     // SolveGoal would trigger that).
-    assert!(!r
-        .sys
+    assert!(!simplified
         .goals
         .iter()
         .any(|(g, _)| matches!(g, tamarin_theory::constraint::constraints::Goal::Disj(_))));
@@ -1426,7 +1434,9 @@ fn ex_decomposition_produces_action_goal_via_induction() {
     let sys = fixture_lemma_system("tiny_setup.spthy");
     // Trigger induction → simplify on each fork. The non_empty_trace
     // case decomposes the Ex via reduce_formulas → insert_atom.
-    let cases = exec_proof_method(&ctx, &ProofMethod::Induction, &sys).expect("induction");
+    let cases = exec_proof_method(&ctx, &ProofMethod::Induction, &sys)
+        .expect("source materialisation")
+        .expect("induction");
     let non_empty = &cases
         .iter()
         .find(|(n, _)| n == "non_empty_trace")
@@ -1447,8 +1457,6 @@ fn ex_decomposition_produces_action_goal_via_induction() {
 /// `Action(Setup, k, #i)` in a Conj so reduce_formulas picks it up.
 #[test]
 fn atom_decomposition_creates_action_goal_in_simplify() {
-    use tamarin_theory::constraint::solver::reduction::Reduction;
-    use tamarin_theory::constraint::solver::simplify::simplify_system;
     use tamarin_theory::constraint::system::System;
 
     let Some(ctx) = rule_free_context() else {
@@ -1473,11 +1481,10 @@ fn atom_decomposition_creates_action_goal_in_simplify() {
     );
     let mut sys = System::empty();
     sys.formulas_mut().push(std::sync::Arc::new(g));
-    let mut r = Reduction::new(&ctx, sys);
-    simplify_system(&mut r);
+    let simplified = simplify_once(&ctx, sys);
     // Action atom should have produced a Goal::Action.
     assert!(
-        r.sys.goals.iter().any(|(g, _)| matches!(
+        simplified.goals.iter().any(|(g, _)| matches!(
             g,
             tamarin_theory::constraint::constraints::Goal::Action(_, _)
         )),
@@ -1580,8 +1587,6 @@ fn proof_search_disj_lemma_descends_into_disj_goal() {
 /// fires when invoked through the reducible-formula path.
 #[test]
 fn simplify_conj_wrapping_disj_produces_goal() {
-    use tamarin_theory::constraint::solver::reduction::Reduction;
-    use tamarin_theory::constraint::solver::simplify::simplify_system;
     use tamarin_theory::constraint::system::System;
 
     let Some(ctx) = rule_free_context() else {
@@ -1601,10 +1606,8 @@ fn simplify_conj_wrapping_disj_produces_goal() {
         .push(std::sync::Arc::new(tamarin_theory::guarded::Guarded::Conj(
             vec![disj].into(),
         )));
-    let mut r = Reduction::new(&ctx, sys);
-    simplify_system(&mut r);
-    assert!(r
-        .sys
+    let simplified = simplify_once(&ctx, sys);
+    assert!(simplified
         .goals
         .iter()
         .any(|(g, _)| matches!(g, tamarin_theory::constraint::constraints::Goal::Disj(_))));
@@ -1685,77 +1688,6 @@ fn proof_search_end_to_end_tiny_theory() {
     assert_eq!(root.status, NodeStatus::Solved);
     // The trivial-Setup proof should terminate with no children.
     assert!(root.children.is_empty());
-}
-
-/// Drive `solve_premise_goal` on a tiny theory and verify it picks
-/// the same number of candidate rules tamarin would consider. The
-/// fixture's premise is `Out(x)`; only the `Setup` rule produces an
-/// `Out`, so we expect exactly one case (Linear).
-#[test]
-fn solve_premise_goal_against_fixture_matches_rule_count() {
-    use tamarin_term::maude_proc::MaudeHandle;
-    use tamarin_term::maude_sig::pair_maude_sig;
-    use tamarin_theory::constraint::solver::context::ProofContext;
-    use tamarin_theory::constraint::solver::reduction::{GoalCases, Reduction};
-    use tamarin_theory::constraint::system::System;
-
-    let path = match require_maude_path() {
-        Some(p) => p,
-        None => return,
-    };
-    let h = MaudeHandle::start(&path, pair_maude_sig()).unwrap();
-
-    // Parse the tiny_setup fixture and lift its rules into the proof
-    // context. Build a Premise(Out(x)) goal and solve it.
-    let src = std::fs::read_to_string(fixtures_dir().join("tiny_setup.spthy")).expect("fixture");
-    let theory = tamarin_parser::parse_theory(&src, &[]).expect("parse");
-    // Build a `OpenProtoRule` per rule in the parsed theory. We re-use
-    // the elaboration pipeline if it's available; if not, we synthesise
-    // a minimal Setup-rule manually so the test is self-contained.
-    let mut rules = Vec::new();
-    for it in &theory.items {
-        if let tamarin_parser::ast::TheoryItem::Rule(r) = it {
-            // Tamarin's Setup rule has Out(~k) as a conclusion. Since
-            // our parser already exposes structural facts, build a
-            // OpenProtoRule shape that has at least an Out conclusion.
-            // We don't need full elaboration here — just enough for the
-            // candidate-count assertion.
-            if r.name == "Setup" {
-                let v = tamarin_term::lterm::LVar::new("k", tamarin_term::lterm::LSort::Fresh, 0);
-                use tamarin_term::vterm::Lit;
-                let tk: tamarin_term::lterm::LNTerm = tamarin_term::term::Term::Lit(Lit::Var(v));
-                let conc = tamarin_theory::fact::out_fact(tk);
-                let rule: tamarin_theory::rule::ProtoRuleE = tamarin_theory::rule::Rule::new(
-                    tamarin_theory::rule::ProtoRuleEInfo::standard("Setup"),
-                    vec![],
-                    vec![conc],
-                    vec![],
-                );
-                rules.push(tamarin_theory::theory::OpenProtoRule::new(rule));
-            }
-        }
-    }
-    assert_eq!(rules.len(), 1, "expected to find exactly one Setup rule");
-
-    let ctx = ProofContext::new(h, rules);
-    let mut r = Reduction::new(&ctx, System::empty());
-    let i = tamarin_term::lterm::LVar::new("i", tamarin_term::lterm::LSort::Node, 0);
-    let v = tamarin_term::lterm::LVar::new("x", tamarin_term::lterm::LSort::Msg, 0);
-    use tamarin_term::vterm::Lit;
-    let tx: tamarin_term::lterm::LNTerm = tamarin_term::term::Term::Lit(Lit::Var(v));
-    let fa = tamarin_theory::fact::out_fact(tx);
-    let p = (i, tamarin_theory::rule::PremIdx(0));
-    let out = r.solve_premise_goal(&p, &fa);
-    // Exactly one rule matches.  The solver returns `LinearNamed`, which
-    // carries the name of the rule that produces the fact.  HS's
-    // `prettyProof` prints that name as the single `case Setup`.  A `Linear`
-    // without a name prints no case heading.
-    assert!(
-        matches!(&out, GoalCases::LinearNamed(n) if n == "Setup"),
-        "expected LinearNamed(\"Setup\"), got {out:?}"
-    );
-    assert_eq!(r.sys.nodes.len(), 1);
-    assert_eq!(r.sys.edges.len(), 1);
 }
 
 /// Cross-check our guarded-conversion rejection messages against

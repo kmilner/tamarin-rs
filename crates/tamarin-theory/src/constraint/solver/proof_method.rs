@@ -55,7 +55,14 @@ pub enum ProofMethod {
 
 /// `isFinished`: returns the appropriate `Result` if the system is in
 /// a terminal state — solved, contradictory, or unfinishable.
-pub fn is_finished(ctx: &ProofContext, sys: &System) -> Option<Result> {
+pub fn is_finished(
+    ctx: &ProofContext,
+    sys: &System,
+) -> std::result::Result<Option<Result>, crate::prove::ProveError> {
+    ctx.source_result(|| Ok(is_finished_unchecked(ctx, sys)))
+}
+
+pub(crate) fn is_finished_unchecked(ctx: &ProofContext, sys: &System) -> Option<Result> {
     if sys.is_initial() {
         return None;
     }
@@ -156,7 +163,19 @@ pub fn finished_subterms(ctx: &ProofContext, sys: &System) -> bool {
 /// web-crawl timeouts.  Also more faithful on the deadline: HS never
 /// drops a SolveGoal at render; the eager exec's deadline entry-guard
 /// could.
-pub fn is_applicable_for_display(ctx: &ProofContext, method: &ProofMethod, sys: &System) -> bool {
+pub fn is_applicable_for_display(
+    ctx: &ProofContext,
+    method: &ProofMethod,
+    sys: &System,
+) -> std::result::Result<bool, crate::prove::ProveError> {
+    ctx.source_result(|| Ok(is_applicable_for_display_unchecked(ctx, method, sys)))
+}
+
+fn is_applicable_for_display_unchecked(
+    ctx: &ProofContext,
+    method: &ProofMethod,
+    sys: &System,
+) -> bool {
     match method {
         // `return tracedCases` — unconditionally `Just` in HS; do NOT
         // call exec_proof_method (that forces the fan-out).
@@ -164,7 +183,7 @@ pub fn is_applicable_for_display(ctx: &ProofContext, method: &ProofMethod, sys: 
         // Forced by HS at render too; cheap and can legitimately drop
         // the method (no-op Simplify / non-initial Induction).
         ProofMethod::Simplify | ProofMethod::Induction => {
-            exec_proof_method(ctx, method, sys).is_some()
+            exec_proof_method_unchecked(ctx, method, sys).is_some()
         }
         ProofMethod::Sorry(_) | ProofMethod::Finished(_) => true,
         ProofMethod::Invalidated => false,
@@ -278,6 +297,14 @@ fn simp_noop_stat(hit: bool) {
 /// reproduce Haskell's `Data.Map` (alphabetical) iteration order from
 /// `execProofMethod`'s `M.fromListWith`.
 pub fn exec_proof_method(
+    ctx: &ProofContext,
+    method: &ProofMethod,
+    sys: &System,
+) -> std::result::Result<Option<Vec<(CaseName, System)>>, crate::prove::ProveError> {
+    ctx.source_result(|| Ok(exec_proof_method_unchecked(ctx, method, sys)))
+}
+
+pub(crate) fn exec_proof_method_unchecked(
     ctx: &ProofContext,
     method: &ProofMethod,
     sys: &System,
@@ -674,10 +701,18 @@ pub fn check_and_exec_proof_method(
     ctx: &ProofContext,
     method: &ProofMethod,
     sys: &System,
+) -> std::result::Result<Option<Vec<(CaseName, System)>>, crate::prove::ProveError> {
+    ctx.source_result(|| Ok(check_and_exec_proof_method_unchecked(ctx, method, sys)))
+}
+
+pub(crate) fn check_and_exec_proof_method_unchecked(
+    ctx: &ProofContext,
+    method: &ProofMethod,
+    sys: &System,
 ) -> Option<Vec<(CaseName, System)>> {
     match method {
         ProofMethod::Finished(r) => {
-            let actual = is_finished(ctx, sys)?;
+            let actual = is_finished_unchecked(ctx, sys)?;
             if !same_kind(r, &actual) {
                 return None;
             }
@@ -708,7 +743,7 @@ pub fn check_and_exec_proof_method(
         }
         ProofMethod::Simplify | ProofMethod::Sorry(_) | ProofMethod::Invalidated => {}
     }
-    exec_proof_method(ctx, method, sys)
+    exec_proof_method_unchecked(ctx, method, sys)
 }
 
 fn same_kind(a: &Result, b: &Result) -> bool {
@@ -752,7 +787,7 @@ mod tests {
         };
         let s = System::empty();
         assert!(
-            is_finished(&ctx, &s).is_none(),
+            is_finished(&ctx, &s).unwrap().is_none(),
             "initial system shouldn't be finished"
         );
     }
@@ -784,7 +819,7 @@ mod tests {
             });
         let rule: RuleACInst = Rule::new(info, Vec::new(), Vec::new(), Vec::new());
         s.add_node(nid, rule);
-        match is_finished(&ctx, &s) {
+        match is_finished(&ctx, &s).unwrap() {
             Some(Result::Solved) => {}
             r => panic!("expected Solved, got {:?}", r),
         }
@@ -810,7 +845,7 @@ mod tests {
         // `FormulasFalse` contradiction.
         s.formulas_mut()
             .push(std::sync::Arc::new(crate::guarded::gfalse()));
-        match is_finished(&ctx, &s) {
+        match is_finished(&ctx, &s).unwrap() {
             Some(Result::Contradictory(Some(Contradiction::FormulasFalse))) => {}
             r => panic!("expected Contradictory(FormulasFalse), got {:?}", r),
         }
@@ -823,7 +858,9 @@ mod tests {
             None => return,
         };
         let s = System::empty();
-        let cases = exec_proof_method(&ctx, &ProofMethod::Sorry(None), &s).unwrap();
+        let cases = exec_proof_method(&ctx, &ProofMethod::Sorry(None), &s)
+            .unwrap()
+            .unwrap();
         assert!(cases.is_empty());
     }
 
@@ -835,7 +872,7 @@ mod tests {
         };
         let s = System::empty();
         // No formula → ginduct can't run.
-        let r = exec_proof_method(&ctx, &ProofMethod::Induction, &s);
+        let r = exec_proof_method(&ctx, &ProofMethod::Induction, &s).unwrap();
         assert!(r.is_none());
     }
 
@@ -869,7 +906,9 @@ mod tests {
         );
         let mut s = System::empty();
         s.formulas_mut().push(std::sync::Arc::new(fm));
-        let r = exec_proof_method(&ctx, &ProofMethod::Induction, &s).expect("induction");
+        let r = exec_proof_method(&ctx, &ProofMethod::Induction, &s)
+            .expect("source materialisation")
+            .expect("induction");
         // Two case names: empty_trace and non_empty_trace.
         assert_eq!(r.len(), 2);
         assert!(r.iter().any(|(n, _)| n == "empty_trace"));
@@ -887,7 +926,7 @@ mod tests {
         let v = tamarin_term::lterm::LVar::new("k", tamarin_term::lterm::LSort::Msg, 0);
         let f = crate::fact::LNFact::new(crate::fact::FactTag::Out, vec![]);
         let g = Goal::Action(v, f);
-        let r = check_and_exec_proof_method(&ctx, &ProofMethod::SolveGoal(g), &s);
+        let r = check_and_exec_proof_method(&ctx, &ProofMethod::SolveGoal(g), &s).unwrap();
         assert!(r.is_none());
     }
 }

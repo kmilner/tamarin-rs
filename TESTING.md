@@ -482,6 +482,14 @@ components, so adding these identities does not invalidate the bulk of the
 expensive corpus cache. The web cache additionally stages both dependency
 classes through one helper shared by both consumers.
 
+Dependency discovery is parser-backed: the hidden `tamarin-rs input-manifest`
+mode evaluates comments, `#ifdef`/`#define`, nested includes and heuristic
+syntax with the same flags as the prover invocation. A manifest parse failure
+is therefore a hard gate/staging failure and can never reuse a cache entry.
+Run `./setup.sh testing` (or otherwise build `target/release/tamarin-rs`)
+before the shell/Python harness checks; `INPUT_MANIFEST_BIN` may select an
+equivalent development binary while working on the manifest itself.
+
 ## Fast gates (run on every build)
 
 Both slice the *load-time* output — no `--prove` — so they cost ~45 s over
@@ -715,7 +723,8 @@ re-crawl, so a manifest from another oracle is `SKIP_STALE_CACHE`; it needs
 the oracle binary present to select and check that profile, even though it only
 boots the port.
 
-The pure diff-artifact regression checks require no server:
+The focused harness regression checks require no server (but do use the
+parser-backed Rust binary described above):
 
 ```bash
 python3 scripts/test_web_harness.py
@@ -813,7 +822,8 @@ exits 2 rather than running with a private fallback.
 |---|---|
 | `parity_corpus.txt` | canonical 432-file corpus list |
 | `parity_corpus_fast.txt` | 365-file CI subset (every file proving in ≤1.5 s) |
-| `file_flags.tsv` | per-file extra prover flags, applied to both sides |
+| `file_flags.tsv` | per-file batch flags |
+| `web_flags.tsv` | separate per-file interactive flags; unsupported entries fail the web gates |
 | `ci_ref_fast.tsv` | committed output-hash reference for `rs_ref_check.sh` |
 | `sweep_expected.tsv` | the flag sweeps' residual ledger (applied mechanically) |
 | `pe_family.txt` / `module_family.txt` / `json_family.txt` | `FAMILY=1` subsets |

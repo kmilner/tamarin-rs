@@ -183,6 +183,10 @@ pub struct ProofContext {
     /// Round-robin scheduling: depth d → `rankings[d % n]`
     /// (ProofMethod.hs).  Per-lemma, so owned.
     pub heuristic: Option<Vec<crate::constraint::solver::goals::GoalRanking>>,
+    /// Whether lazily refining this context's sources can fail. Fallible
+    /// searches stay serial so an error cannot be hidden behind an unbounded
+    /// sibling running in parallel.
+    pub(crate) sources_may_fail: bool,
     /// The name of the lemma being proved.  Passed as `argv[1]` to
     /// the oracle script (HS `L.get pcLemmaName ctxt`, ProofMethod.hs).
     /// Per-lemma, so owned.
@@ -194,14 +198,14 @@ pub struct ProofContext {
     pub theory_file: String,
     /// Source-cell layout for this context. Session-backed contexts own these
     /// lightweight cells while sharing their materialised case vectors.
-    pub full_sources: std::sync::Arc<Vec<crate::constraint::solver::sources::Source>>,
+    pub(crate) full_sources: std::sync::Arc<Vec<crate::constraint::solver::sources::Source>>,
     /// Optional session-level source materialiser. Batch/web contexts install
     /// this so the first actual `pcSources` access can populate the shared
     /// raw/refined cache; standalone contexts saturate themselves directly.
     pub(crate) source_provider: Option<std::sync::Arc<dyn SourceProvider>>,
-    /// A deferred provider failure. Source consumers are infallible deep in
-    /// the reduction stack, so the proving boundary reports this after the
-    /// attempted step rather than forcing conversion before it is needed.
+    /// A deferred provider failure. Source consumers remain infallible deep
+    /// in the reduction stack, while the first enclosing solver step reports
+    /// the error before starting more proof work.
     source_error: std::sync::Arc<std::sync::OnceLock<crate::prove::ProveError>>,
     /// Per-context lazy saturation gate.
     pub(crate) saturate_gate: SaturateGate,
@@ -212,6 +216,12 @@ pub struct ProofContext {
 }
 
 pub(crate) trait SourceProvider: std::fmt::Debug + Send + Sync {
+    /// Whether materialisation can fail for this provider. Unknown
+    /// implementations are conservatively fallible.
+    fn may_fail(&self) -> bool {
+        true
+    }
+
     fn materialize(&self, ctx: &ProofContext) -> Result<(), crate::prove::ProveError>;
 }
 
@@ -246,11 +256,70 @@ impl SaturateGate {
 }
 
 impl ProofContext {
-    pub(crate) fn source_result<T>(&self, value: T) -> Result<T, crate::prove::ProveError> {
-        match self.source_error() {
-            Some(error) => Err(error),
-            None => Ok(value),
+    pub(crate) fn check_source_error(&self) -> Result<(), crate::prove::ProveError> {
+        if !self.sources_may_fail {
+            return Ok(());
         }
+        self.source_error().map_or(Ok(()), Err)
+    }
+
+    pub(crate) fn has_source_error(&self) -> bool {
+        self.sources_may_fail && self.source_error.get().is_some()
+    }
+
+    pub(crate) fn proving_may_fail(&self) -> bool {
+        self.sources_may_fail
+            || self
+                .heuristic
+                .as_deref()
+                .is_some_and(crate::constraint::solver::goals::rankings_may_fail)
+    }
+
+    pub(crate) fn source_result<T>(
+        &self,
+        operation: impl FnOnce() -> Result<T, crate::prove::ProveError>,
+    ) -> Result<T, crate::prove::ProveError> {
+        self.check_source_error()?;
+        let result = operation();
+        self.check_source_error()?;
+        result
+    }
+
+    /// Materialise this context's sources and return independent working
+    /// copies. Source forcing belongs here so a caller cannot accidentally
+    /// pair a lazy source cell with a different context.
+    pub fn source_cases(
+        &self,
+    ) -> Result<
+        Vec<(
+            crate::constraint::constraints::Goal,
+            Vec<crate::constraint::solver::sources::SourceCase>,
+        )>,
+        crate::prove::ProveError,
+    > {
+        self.source_result(|| {
+            self.ensure_saturated();
+            Ok(self
+                .full_sources
+                .iter()
+                .map(|source| (source.goal.clone(), source.cases_or_empty()))
+                .collect())
+        })
+    }
+
+    /// Return one materialised source-case system by zero-based indices.
+    pub fn source_case_system_at(
+        &self,
+        source: usize,
+        case: usize,
+    ) -> Result<Option<crate::constraint::system::System>, crate::prove::ProveError> {
+        self.source_result(|| {
+            self.ensure_saturated();
+            Ok(self
+                .full_sources
+                .get(source)
+                .and_then(|source| source.case_system_at(case)))
+        })
     }
 
     fn copy_with_sources(
@@ -268,6 +337,7 @@ impl ProofContext {
             cut: self.cut,
             typing_assumptions: self.typing_assumptions.clone(),
             heuristic: self.heuristic.clone(),
+            sources_may_fail: self.sources_may_fail,
             lemma_name: self.lemma_name.clone(),
             theory_file: self.theory_file.clone(),
             full_sources,
@@ -479,6 +549,7 @@ impl ProofContext {
             cut: self.cut,
             typing_assumptions: self.typing_assumptions.clone(),
             heuristic: self.heuristic.clone(),
+            sources_may_fail: self.sources_may_fail,
             lemma_name: self.lemma_name.clone(),
             theory_file: self.theory_file.clone(),
             full_sources,
@@ -504,7 +575,7 @@ impl ProofContext {
     /// cases (e.g. Var-headed `KU(t:Fresh)` source on an existence
     /// lemma) never call this, so zero saturate-time `[EXEC]` lines
     /// fire — matching HS's lazy-thunk behaviour.
-    pub fn ensure_saturated(&self) {
+    pub(crate) fn ensure_saturated(&self) {
         {
             let current_thread = std::thread::current().id();
             let mut state = self
@@ -654,9 +725,9 @@ impl ProofContext {
     }
 
     /// Mark this context's sources as already saturated, bypassing the
-    /// `ensure_saturated` pass.  Used by the session-level refined-source
-    /// cache (lever #3): when the cases have been restored from a sibling
-    /// lemma's identical computation, set the state to `Done` so later
+    /// `ensure_saturated` pass. Used by the session-level refined-source
+    /// cache: when raw cases are restored into its internal refinement
+    /// context, set the state to `Done` so later
     /// `cases(ctx)` calls read the restored cells directly instead of
     /// re-running the (expensive) `saturate_sources_with_simp` pass.
     pub(crate) fn mark_saturated_done(&self) {
@@ -669,11 +740,12 @@ impl ProofContext {
     }
 
     pub(crate) fn set_source_provider(&mut self, provider: std::sync::Arc<dyn SourceProvider>) {
+        self.sources_may_fail = provider.may_fail();
         self.source_provider = Some(provider);
         self.source_error = std::sync::Arc::new(std::sync::OnceLock::new());
     }
 
-    pub fn source_error(&self) -> Option<crate::prove::ProveError> {
+    pub(crate) fn source_error(&self) -> Option<crate::prove::ProveError> {
         self.source_error.get().cloned()
     }
 
@@ -1257,6 +1329,7 @@ impl ProofContext {
             cut: CutStrategy::Dfs,
             typing_assumptions: Vec::new(),
             heuristic: None,
+            sources_may_fail: false,
             lemma_name: String::new(),
             theory_file: String::new(),
             full_sources: std::sync::Arc::new(Vec::new()),

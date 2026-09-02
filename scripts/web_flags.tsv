@@ -1,0 +1,15 @@
+# Canonical per-file flags for interactive parity. This is deliberately
+# separate from file_flags.tsv: batch-only --auto-sources/--diff recipes do
+# not define how the corresponding theory is opened in the web interface.
+regression/trace/seqdfsneeded.spthy	--stop-on-trace=seqdfs
+accountability/csf21-acc-unbounded/mixnets/message-tracing/dmn-message-tracing-all-1.spthy	--stop-on-trace=seqdfs
+accountability/csf21-acc-unbounded/mixnets/message-tracing/dmn-message-tracing-all-2.spthy	--stop-on-trace=seqdfs
+accountability/csf21-acc-unbounded/mixnets/message-tracing/dmn-message-tracing-all-3.spthy	--stop-on-trace=seqdfs
+accountability/csf21-acc-unbounded/mixnets/message-tracing/dmn-message-tracing-all-4.spthy	--stop-on-trace=seqdfs
+accountability/csf21-acc-unbounded/mixnets/message-tracing/dmn-message-tracing-all-5.spthy	--stop-on-trace=seqdfs
+accountability/csf21-acc-unbounded/mixnets/message-tracing/dmn-message-tracing-first-1.spthy	--stop-on-trace=seqdfs
+accountability/csf21-acc-unbounded/mixnets/message-tracing/dmn-message-tracing-first-2.spthy	--stop-on-trace=seqdfs
+testParser/define.spthy	-D=A -D=B -D=C
+thesis-LaraSchmid-evoting/chapter5_HumanErrors/HPagree.spthy	-D=ruleBased
+thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/Google2Step_EA.spthy	-D=infallible
+thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/OTPoverSMS_EA.spthy	-D=untrained

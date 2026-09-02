@@ -94,11 +94,16 @@ pub struct ProvedLemma {
 /// from `takeBaseName`, probe it beside the theory, and retain only its
 /// relative name in the ranking.
 pub(crate) fn oracle_name_for_theory(in_file: &str) -> String {
-    let candidate = std::path::Path::new(in_file).with_extension("oracle");
+    let path = std::path::Path::new(in_file);
+    let candidate = path.file_stem().map(|stem| {
+        let mut name = stem.to_os_string();
+        name.push(".oracle");
+        path.with_file_name(name)
+    });
     candidate
-        .is_file()
-        .then(|| candidate.file_name())
-        .flatten()
+        .as_deref()
+        .filter(|candidate| candidate.is_file())
+        .and_then(std::path::Path::file_name)
         .and_then(std::ffi::OsStr::to_str)
         .unwrap_or("oracle")
         .to_string()
@@ -138,11 +143,12 @@ pub fn pretty_goal_rankings(rankings: &[GoalRanking]) -> String {
 /// Render the verbatim text of a `heuristic=` lemma attribute in HS style.
 ///
 /// HS stores that attribute as the `[GoalRanking ProofContext]` its parser
-/// built (`LemmaHeuristic`, lib/theory/src/Lemma.hs:103); the port keeps the
-/// source text, so it is parsed here — with the theory's `in_file` for the
-/// default oracle name — and rendered through [`pretty_goal_rankings`].  A
-/// `{name}` ranking prints its name whether or not the theory declares that
-/// tactic, so the tactic list is not needed.
+/// built (`LemmaHeuristic`, lib/theory/src/Lemma.hs:103). The port retains a
+/// textual representation in the typed theory, but elaboration first freezes
+/// any filesystem-dependent default oracle selection into that text. This
+/// helper parses and renders the stored spelling; a `{name}` ranking prints
+/// its name whether or not the theory declares that tactic, so the tactic
+/// list is not needed.
 pub fn pretty_heuristic_str(raw: &str, in_file: &str) -> String {
     pretty_goal_rankings(
         &crate::constraint::solver::goals::parse_heuristic_str_with_tactics(raw, in_file, &[]),
@@ -565,7 +571,10 @@ fn pretty_translation_element(el: &TranslationElement, in_file: &str) -> String 
             let header = if al.attributes.is_empty() {
                 kw.beside_sp(name_doc).beside(Doc::text(":"))
             } else {
-                let attr_docs = lemma_attr_docs(&al.attributes, in_file);
+                let attr_docs = lemma_attr_docs(
+                    &al.attributes,
+                    al.heuristic_in_file.as_deref().unwrap_or(in_file),
+                );
                 let attrs_fsep = hpj::fsep(hpj::punctuate(Doc::text(","), attr_docs));
                 let brackets = Doc::text("[").beside(attrs_fsep).beside(Doc::text("]"));
                 kw.beside_sp(name_doc)
@@ -1833,6 +1842,10 @@ fn is_safety_formula(f: &crate::formula::LNFormula) -> bool {
 ///
 /// Mirrors `Theory.Proof.prettyProofWith` (Theory/Proof.hs:1054-1075).
 pub fn pretty_proof_body(node: &crate::constraint::solver::search::ProofNode) -> String {
+    // A proof body is source text even when a web caller happens to render it
+    // while an HTML document guard is active. Keep that ambient mode from
+    // leaking markup into cached/downloaded theory source.
+    let _plain = crate::pretty_hpj::HtmlDocGuard::disable();
     let mut out = String::new();
     pp_proof(node, &mut out, 0);
     out
@@ -2991,6 +3004,23 @@ mod heuristic_header_tests {
             "/../../tamarin-prover/examples/regression/trace/defaultoracle.spthy"
         );
         assert_eq!(oracle_name_for_theory(fixture), "defaultoracle.oracle");
+
+        let dir =
+            std::env::temp_dir().join(format!("tamarin_rs_oracle_basename_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for (theory, oracle) in [
+            (".foo", ".foo.oracle"),
+            ("..foo", "..oracle"),
+            ("...foo", "...oracle"),
+        ] {
+            std::fs::write(dir.join(oracle), "").unwrap();
+            assert_eq!(
+                oracle_name_for_theory(dir.join(theory).to_str().unwrap()),
+                oracle
+            );
+        }
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     /// The `heuristic:` header prints the theory's stored rankings (HS `text

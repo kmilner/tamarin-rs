@@ -106,7 +106,7 @@ extract_theory() {
 }
 # flags_for / ckey come from gate_common.sh — one key format for this gate,
 # wf_gate.sh (which reads THIS cache) and corpus_file_diff.sh.
-export -f strip_env extract_theory flags_for include_shas oracle_shas ckey
+export -f file_sha256 strip_env extract_theory flags_for input_manifest _include_shas_from_manifest _oracle_shas_from_manifest ckey
 
 # --- Phase 0: fill any MISSING no-prove HS reference (fast; warm-cache reused).
 # TWO artifacts per key, from ONE oracle run:
@@ -126,7 +126,11 @@ export -f strip_env extract_theory flags_for include_shas oracle_shas ckey
 hs_fill_one() {
     local rel="$1" f="$CORPUS_ROOT/$1" key fl
     [ -f "$f" ] || return 0
-    key=$(ckey "$rel" "$f"); fl=$(flags_for "$rel")
+    if ! key=$(ckey "$rel" "$f"); then
+        echo "  INPUT MANIFEST FAILED  $rel" >&2
+        return 0
+    fi
+    fl=$(flags_for "$rel")
     [ -f "$HS_CACHE/$key.nohs" ] && return 0
     # `--diff` theories are not on the RS-matchable path; skip filling them.
     # Ahead of the derive step below, so a .load.gz wf_gate left here cannot
@@ -171,7 +175,11 @@ export -f hs_fill_one
 one() {
     local rel="$1" f="$CORPUS_ROOT/$1" key fl hs rs d
     [ -f "$f" ] || { printf '%s\tSKIP_NO_HS\t0\n' "$rel"; return 0; }
-    key=$(ckey "$rel" "$f"); fl=$(flags_for "$rel")
+    if ! key=$(ckey "$rel" "$f"); then
+        printf '%s\tSKIP_INPUT_MANIFEST\t0\n' "$rel"
+        return 0
+    fi
+    fl=$(flags_for "$rel")
     [ -f "$HS_CACHE/$key.theory.gz" ] || { printf '%s\tSKIP_NO_HS\t0\n' "$rel"; return 0; }
     hs=$(zcat "$HS_CACHE/$key.theory.gz")
     local tmp; tmp=$(mktemp)

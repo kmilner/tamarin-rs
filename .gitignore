@@ -27,6 +27,7 @@ scripts/*.tsv
 # …except the committed CI parity reference (rs_ref_check.sh / rs-parity job).
 !scripts/ci_ref_fast.tsv
 !scripts/sweep_expected.tsv
+!scripts/web_flags.tsv
 # scratch workflow scripts dropped by tooling runs
 scripts/.wf_*.js
 

@@ -529,6 +529,39 @@ pub fn parse_diff_theory_with_base(
     Ok(thy)
 }
 
+/// One parser-selected source input and the path it must have when staged
+/// beside the root theory. `None` denotes an absolute input outside that tree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InputAlias {
+    pub physical: PathBuf,
+    pub staged: Option<PathBuf>,
+}
+
+/// Parse a theory while recording the root and every active include. This is
+/// the dependency authority for cache keys and web staging: inactive branches,
+/// comments and text after `end` are interpreted by the real grammar rather
+/// than a second scanner.
+pub fn parse_theory_with_manifest(
+    input: &str,
+    flags: &[&str],
+    root: PathBuf,
+    is_diff: bool,
+) -> Result<(Theory, Vec<InputAlias>), ParseError> {
+    let staged = root.file_name().map(PathBuf::from);
+    let inputs = vec![InputAlias {
+        physical: root.clone(),
+        staged: staged.clone(),
+    }];
+    let mut parser = Parser::new(input, flags, is_diff);
+    parser.base_dir = root.parent().map(PathBuf::from);
+    parser.source_file = Some(root);
+    parser.staged_file = staged;
+    parser.input_aliases = inputs;
+    parser.emit_warnings = false;
+    let theory = parser.theory()?;
+    Ok((theory, parser.input_aliases))
+}
+
 /// Parse a stream of intruder-rule declarations of the form
 ///     `rule (modulo AC) <name>[<limit>]: [..] --[..]-> [..]`
 /// (with no surrounding `theory ... begin ... end` wrapper).
@@ -944,6 +977,17 @@ pub struct Parser<'a> {
     /// HS).  `#include "file"` resolves relative to this; `None` (no source
     /// file) means includes are taken verbatim, mirroring HS's `Nothing` case.
     base_dir: Option<PathBuf>,
+    /// Exact included fragment currently being parsed. Root entry points only
+    /// receive a base directory, so `None` there falls back to the loader's
+    /// source filename during elaboration.
+    source_file: Option<PathBuf>,
+    /// Staged spelling of [`Self::source_file`] relative to the root input.
+    staged_file: Option<PathBuf>,
+    /// Active-include trace for [`parse_theory_with_manifest`].
+    input_aliases: Vec<InputAlias>,
+    /// Manifest discovery is an internal parse and must not duplicate user
+    /// diagnostics before either prover runs.
+    emit_warnings: bool,
     /// Names of the user-declared AC function symbols (`functions:` entries
     /// carrying the `[AC]` attribute), which `acterm` turns into infix
     /// operators.  This is the parse-time signature state HS reads as
@@ -1166,6 +1210,10 @@ impl<'a> Parser<'a> {
             flags: flags_set,
             is_diff,
             base_dir: None,
+            source_file: None,
+            staged_file: None,
+            input_aliases: Vec::new(),
+            emit_warnings: true,
             ac_fun_syms: Arc::new(Vec::new()),
             fun_syms: Arc::new(vec![
                 ("fst".to_string(), FunOptions::plain(1)),
@@ -1968,6 +2016,20 @@ impl<'a> Parser<'a> {
             Some(dir) => dir.join(&raw_path),
             None => PathBuf::from(&raw_path),
         };
+        let staged = if PathBuf::from(&raw_path).is_absolute() {
+            None
+        } else {
+            self.staged_file.as_ref().map(|source| {
+                source
+                    .parent()
+                    .unwrap_or_else(|| std::path::Path::new(""))
+                    .join(&raw_path)
+            })
+        };
+        self.input_aliases.push(InputAlias {
+            physical: resolved.clone(),
+            staged: staged.clone(),
+        });
 
         let content = std::fs::read_to_string(&resolved).map_err(|e| {
             self.err(format!(
@@ -1980,7 +2042,7 @@ impl<'a> Parser<'a> {
         // Nested includes in the fragment resolve relative to ITS directory
         // (HS recurses: `takeDirectory filepath`).
         let sub_base = resolved.parent().map(|p| p.to_path_buf());
-        self.parse_include_fragment(&content, sub_base)
+        self.parse_include_fragment(&content, sub_base, resolved, staged)
     }
 
     /// Parse a header-less theory-item fragment (an included file body — no
@@ -1996,6 +2058,8 @@ impl<'a> Parser<'a> {
         &mut self,
         content: &str,
         sub_base: Option<PathBuf>,
+        source_file: PathBuf,
+        staged_file: Option<PathBuf>,
     ) -> Result<Vec<TheoryItem>, ParseError> {
         let mut sub = Parser::new(content, &[], self.is_diff);
         // Thread parser state IN (HS `getState` before `parseFileWState`).
@@ -2011,6 +2075,10 @@ impl<'a> Parser<'a> {
         sub.sig_enable_mset = self.sig_enable_mset;
         sub.sig_enable_nat = self.sig_enable_nat;
         sub.base_dir = sub_base;
+        sub.source_file = Some(source_file);
+        sub.staged_file = staged_file;
+        sub.input_aliases = std::mem::take(&mut self.input_aliases);
+        sub.emit_warnings = self.emit_warnings;
         // The duplicate-rule / duplicate-restriction guards run over the whole
         // accumulated theory (HS: one `addItems` fold spans included files), so
         // the registries thread in and back out with the rest of the state.
@@ -2043,6 +2111,7 @@ impl<'a> Parser<'a> {
         self.sig_enable_xor = sub.sig_enable_xor;
         self.sig_enable_mset = sub.sig_enable_mset;
         self.sig_enable_nat = sub.sig_enable_nat;
+        self.input_aliases = sub.input_aliases;
         self.seen_rules = sub.seen_rules;
         self.seen_restriction_names = sub.seen_restriction_names;
         self.seen_lemma_names = sub.seen_lemma_names;
@@ -2367,7 +2436,13 @@ impl<'a> Parser<'a> {
         // Read until newline as raw text. Heuristic rankings are flexible; we
         // take everything up to next newline / `\n` boundary.
         let raw = self.read_to_eol();
-        Ok(TheoryItem::Heuristic(raw.trim().to_string()))
+        Ok(TheoryItem::Heuristic {
+            raw: raw.trim().to_string(),
+            source_file: self
+                .source_file
+                .as_ref()
+                .map(|path| path.to_string_lossy().into_owned()),
+        })
     }
 
     fn read_to_eol(&mut self) -> String {
@@ -3453,12 +3528,14 @@ impl<'a> Parser<'a> {
         // and it is only forced once a COMPLETE `axiom` item has been built —
         // an axiom whose formula fails to parse prints nothing.
         static AXIOM_DEPRECATION: std::sync::Once = std::sync::Once::new();
-        AXIOM_DEPRECATION.call_once(|| {
-            eprintln!(
-                "Deprecation Warning: using 'axiom' is retired notation, replace all uses of \
-                 'axiom' by 'restriction'."
-            );
-        });
+        if self.emit_warnings {
+            AXIOM_DEPRECATION.call_once(|| {
+                eprintln!(
+                    "Deprecation Warning: using 'axiom' is retired notation, replace all uses of \
+                     'axiom' by 'restriction'."
+                );
+            });
+        }
         Ok(TheoryItem::LegacyAxiom(r))
     }
 
@@ -4327,6 +4404,10 @@ impl<'a> Parser<'a> {
         }
         Ok(TheoryItem::Lemma(Lemma {
             name,
+            source_file: self
+                .source_file
+                .as_ref()
+                .map(|path| path.to_string_lossy().into_owned()),
             attributes: attrs,
             trace_quantifier,
             formula,
@@ -4377,6 +4458,10 @@ impl<'a> Parser<'a> {
         let formula = self.double_quoted_formula()?;
         Ok(Some(AccLemma {
             name: name.to_string(),
+            source_file: self
+                .source_file
+                .as_ref()
+                .map(|path| path.to_string_lossy().into_owned()),
             attributes: attrs.to_vec(),
             formula,
             case_test_idents: idents,
@@ -4395,6 +4480,10 @@ impl<'a> Parser<'a> {
         self.seen_diff_lemma_names.push(name.clone());
         Ok(TheoryItem::DiffLemma(DiffLemma {
             name,
+            source_file: self
+                .source_file
+                .as_ref()
+                .map(|path| path.to_string_lossy().into_owned()),
             attributes,
             proof,
         }))

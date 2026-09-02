@@ -172,6 +172,9 @@ pub enum TranslationElement {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Lemma {
     pub name: String,
+    /// File whose parser context supplied a lemma-local heuristic. Empty for
+    /// generated lemmas and lemmas without such an attribute.
+    pub heuristic_in_file: Option<String>,
     pub attributes: Vec<LemmaAttr>,
     pub trace_quantifier: TraceQuantifier,
     /// `_lFormula` (Items/LemmaItem.hs:53) — the macro- and predicate-expanded
@@ -209,6 +212,8 @@ pub fn apply_macro_in_lemma(macros: &[LNMacro], lemma: Lemma) -> Lemma {
 #[derive(Debug, Clone, PartialEq)]
 pub struct AccLemma {
     pub name: String,
+    /// File whose parser context supplied an accountability heuristic.
+    pub heuristic_in_file: Option<String>,
     pub attributes: Vec<LemmaAttr>,
     /// HS `_aFormula` (Items/AccLemmaItem.hs:32).  The `Pred` sugar stays:
     /// `liftedAddAccLemma` adds the lemma verbatim
@@ -368,6 +373,8 @@ pub struct Theory<R = OpenProtoRule> {
     /// [GoalRanking ProofContext]`, TheoryObject.hs:185), parsed when the
     /// theory is built.
     pub heuristic: Vec<crate::constraint::solver::goals::GoalRanking>,
+    /// File whose parser context supplied the top-level heuristic header.
+    pub heuristic_in_file: Option<String>,
     pub tactic: Vec<crate::tactic::Tactic>,
     pub signature: MaudeSig,
     /// Intruder rules declared as top-level `rule (modulo AC)` blocks. HS
@@ -383,6 +390,7 @@ impl<R> Theory<R> {
             name: name.into(),
             in_file: String::new(),
             heuristic: Vec::new(),
+            heuristic_in_file: None,
             tactic: Vec::new(),
             signature,
             intruder_rules: Vec::new(),
@@ -716,6 +724,7 @@ mod tests {
     fn lemma(name: &str) -> Lemma {
         Lemma {
             name: name.to_string(),
+            heuristic_in_file: None,
             attributes: Vec::new(),
             trace_quantifier: TraceQuantifier::AllTraces,
             formula: crate::formula::ProtoFormula::ltrue(),

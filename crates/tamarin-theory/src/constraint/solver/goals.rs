@@ -153,6 +153,17 @@ impl GoalRanking {
     }
 }
 
+/// Whether selecting any of these round-robin rankings can fail at runtime.
+pub(crate) fn rankings_may_fail(rankings: &[GoalRanking]) -> bool {
+    rankings.iter().any(|ranking| match ranking {
+        GoalRanking::Oracle { .. } | GoalRanking::OracleSmart { .. } => true,
+        GoalRanking::Tactic {
+            resolution_error, ..
+        } => resolution_error.is_some(),
+        _ => false,
+    })
+}
+
 /// HS `goalRankingName`'s `loopStatus` (System.hs:687-706, see line 702).
 fn loop_status(b: bool) -> String {
     format!(" (loop breakers {})", if b { "allowed" } else { "delayed" })
@@ -181,7 +192,7 @@ pub fn parse_heuristic_str_with_tactics(
     theory_file: &str,
     tactics: &[crate::tactic::Tactic],
 ) -> Vec<GoalRanking> {
-    let default_oracle = crate::pretty_theory::oracle_name_for_theory(theory_file);
+    let mut default_oracle = None;
     let chars: Vec<char> = s.chars().collect();
     let mut i = 0;
     let mut out = Vec::new();
@@ -293,10 +304,17 @@ pub fn parse_heuristic_str_with_tactics(
         // workDir and relative path as a standalone default oracle.
         if c.is_ascii_alphabetic() {
             while i < chars.len() && chars[i].is_ascii_alphabetic() {
-                out.push(GoalRanking::from_char_with_oracle(
-                    chars[i],
-                    &default_oracle,
-                ));
+                let ranking = chars[i];
+                let oracle = if matches!(ranking, 'o' | 'O') {
+                    default_oracle
+                        .get_or_insert_with(|| {
+                            crate::pretty_theory::oracle_name_for_theory(theory_file)
+                        })
+                        .as_str()
+                } else {
+                    "oracle"
+                };
+                out.push(GoalRanking::from_char_with_oracle(ranking, oracle));
                 i += 1;
             }
             continue;
@@ -369,14 +387,11 @@ pub fn open_goals(sys: &System) -> Vec<AnnotatedGoal> {
 /// `readProcess` throws on non-zero exit or spawn failure).  RS
 /// mirrors this with a hard error that propagates to the top level.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RankingError {
-    Abort(String),
-}
+pub struct RankingError(pub String);
 
 impl std::fmt::Display for RankingError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let Self::Abort(message) = self;
-        f.write_str(message)
+        f.write_str(&self.0)
     }
 }
 impl std::error::Error for RankingError {}
@@ -407,7 +422,8 @@ impl std::error::Error for RankingError {}
 /// depth for round-robin heuristic scheduling.
 ///
 /// `Ok(None)` is the ranking's normal `ApplySorry` instruction;
-/// `RankingError::Abort` means the ranking could not be evaluated.
+/// `ProveError` means the ranking or a lazily forced source could not be
+/// evaluated.
 ///
 /// `depth` mirrors HS's `useHeuristic (Heuristic rankings) depth =
 /// rankings !! (depth mod n)` (ProofMethod.hs:578-589).
@@ -415,7 +431,7 @@ pub(crate) fn rank_goals_with(
     sys: &System,
     ctx: Option<&crate::constraint::solver::context::ProofContext>,
     depth: usize,
-) -> Result<Option<Vec<AnnotatedGoal>>, RankingError> {
+) -> Result<Option<Vec<AnnotatedGoal>>, crate::prove::ProveError> {
     rank_goals_with_inner(sys, ctx, depth)
 }
 
@@ -464,9 +480,9 @@ fn rank_goals_with_inner(
     sys: &System,
     ctx: Option<&crate::constraint::solver::context::ProofContext>,
     depth: usize,
-) -> Result<Option<Vec<AnnotatedGoal>>, RankingError> {
+) -> Result<Option<Vec<AnnotatedGoal>>, crate::prove::ProveError> {
     let ranking = ranking_at_depth(ctx, depth);
-    match ranking {
+    let ranked = match ranking {
         GoalRanking::Inj(use_loop_breakers) => Ok(Some(inj_ranking(sys, ctx, use_loop_breakers))),
         GoalRanking::Smart(use_loop_breakers) => {
             Ok(Some(smart_ranking(sys, ctx, use_loop_breakers)))
@@ -507,9 +523,10 @@ fn rank_goals_with_inner(
             //   internalTacticRanking (chosenTactic ..) quitOnEmpty ..`
             // (ProofMethod.hs:479-502, see line 490; ProofMethod.hs:694).
             if let Some(message) = resolution_error {
-                return Err(RankingError::Abort(message.to_string()));
+                return Err(RankingError(message.to_string()).into());
             }
             internal_tactic_ranking(&tactic, quit_on_empty, ctx, sys)
+                .map_err(crate::prove::ProveError::from)
         }
         GoalRanking::Oracle {
             quit_on_empty,
@@ -520,6 +537,7 @@ fn rank_goals_with_inner(
             // (ProofMethod.hs:479-502, see line 482): preSort = goalNrRanking (open_goals is already nr-sorted)
             let ags = open_goals(sys);
             oracle_ranking(ags, &oracle_path, quit_on_empty, ctx, sys)
+                .map_err(crate::prove::ProveError::from)
         }
         GoalRanking::OracleSmart {
             quit_on_empty,
@@ -529,9 +547,19 @@ fn rank_goals_with_inner(
             // HS `oracleRanking (smartRanking ctxt False) oracle quitOnEmpty ctxt sys ags`
             // (ProofMethod.hs:479-502, see line 483): preSort = smartRanking ctxt False
             let ags = smart_ranking(sys, ctx, false);
+            // Do not start an external oracle after its smart presort has
+            // already discovered a lazy source-conversion failure.
+            if let Some(ctx) = ctx {
+                ctx.check_source_error()?;
+            }
             oracle_ranking(ags, &oracle_path, quit_on_empty, ctx, sys)
+                .map_err(crate::prove::ProveError::from)
         }
+    }?;
+    if let Some(ctx) = ctx {
+        ctx.check_source_error()?;
     }
+    Ok(ranked)
 }
 
 /// Port of HS `oracleRanking` (ProofMethod.hs:595-622).
@@ -547,7 +575,7 @@ fn rank_goals_with_inner(
 ///    `Ok(None)`, the ApplySorry instruction.
 ///
 /// On any exec failure (spawn error / non-zero exit) →
-/// `RankingError::Abort`, propagated to the caller (mirrors HS's uncaught IO
+/// `RankingError`, propagated to the caller (mirrors HS's uncaught IO
 /// exception at the batch boundary).
 fn oracle_ranking(
     ags: Vec<AnnotatedGoal>,
@@ -582,21 +610,21 @@ fn oracle_ranking(
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
         .spawn()
-        .map_err(|e| RankingError::Abort(format!("oracle exec error: {}: {}", oracle_path, e)))?;
+        .map_err(|e| RankingError(format!("oracle exec error: {}: {}", oracle_path, e)))?;
 
     // Write stdin and close pipe
     if let Some(mut stdin) = child.stdin.take() {
         stdin
             .write_all(inp.as_bytes())
-            .map_err(|e| RankingError::Abort(format!("oracle stdin write error: {}", e)))?;
+            .map_err(|e| RankingError(format!("oracle stdin write error: {}", e)))?;
     }
 
     let output = child
         .wait_with_output()
-        .map_err(|e| RankingError::Abort(format!("oracle wait error: {}", e)))?;
+        .map_err(|e| RankingError(format!("oracle wait error: {}", e)))?;
 
     if !output.status.success() {
-        return Err(RankingError::Abort(format!(
+        return Err(RankingError(format!(
             "oracle process exited with status {}: {}",
             output.status, oracle_path
         )));
@@ -2632,7 +2660,7 @@ fn lit_sort_contains(t: &tamarin_term::lterm::LNTerm, target: tamarin_term::lter
 /// Dispatch a goal to the appropriate `solve_*_goal` primitive on a
 /// `Reduction`. Mirrors the case dispatch at the top of Haskell's
 /// `solveGoal`. Returns the corresponding `GoalCases` outcome.
-pub fn dispatch_solve_goal(
+pub(crate) fn dispatch_solve_goal(
     red: &mut crate::constraint::solver::reduction::Reduction<'_>,
     g: &Goal,
 ) -> crate::constraint::solver::reduction::GoalCases {

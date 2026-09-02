@@ -20,6 +20,8 @@ use tamarin_server::{
 pub struct TestServer {
     pub base: String,
     pub client: reqwest::Client,
+    #[allow(dead_code)]
+    pub state: Arc<AppState>,
     _shutdown_tx: tokio::sync::oneshot::Sender<()>,
     _handle: tokio::task::JoinHandle<()>,
 }
@@ -143,6 +145,7 @@ pub async fn start_server_with_theory_and(
     TestServer {
         base,
         client,
+        state,
         _shutdown_tx: shutdown_tx,
         _handle: handle,
     }

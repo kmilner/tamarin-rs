@@ -222,30 +222,29 @@ fn apply_method(
         // which ranking of a multi-ranking heuristic is active
         // (`rankings !! (depth mod n)`, ProofMethod.hs:580-589).  Pass
         // the proof-path length, not a hardcoded 0.
-        let methods: Vec<_> = match tamarin_theory::constraint::solver::search::candidate_methods(
+        let candidates = match tamarin_theory::constraint::solver::search::candidate_methods(
             &sys_at_path,
             &ctx,
             sub.len(),
         ) {
             Ok(methods) => methods,
             Err(error) => return Err(crate::state::StoreError::Build(error.to_string())),
-        }
-        .into_iter()
+        };
+        let mut methods = Vec::new();
         // WHNF-depth applicability — MUST match the render pane's
         // filter (write_applicable_methods) so the clicked index
         // selects the same method the user saw.
-        .filter(|m| {
-            tamarin_theory::constraint::solver::proof_method::is_applicable_for_display(
-                &ctx,
-                m,
-                &sys_at_path,
-            )
-        })
-        .collect();
-        if let Some(error) = ctx.source_error() {
-            return Err(crate::state::StoreError::Build(format!(
-                "proof context: {error}"
-            )));
+        for method in candidates {
+            let applicable =
+                tamarin_theory::constraint::solver::proof_method::is_applicable_for_display(
+                    &ctx,
+                    &method,
+                    &sys_at_path,
+                )
+                .map_err(|error| crate::state::StoreError::Build(error.to_string()))?;
+            if applicable {
+                methods.push(method);
+            }
         }
         // The method index is read signed (`safeRead` at `ReadS Int`,
         // `src/Web/Types.hs:443`), so every `i` a client can type reaches
@@ -380,25 +379,22 @@ fn title_for(
                 let name = entry
                     .proof_state
                     .as_ref()
-                    .map(|ps| ps.get_root(lemma))
+                    .map(|ps| ps.get_method_at(lemma, sub))
                     .transpose()?
                     .flatten()
-                    .and_then(|root| {
-                        crate::handlers::proof_tree::navigate_at(&root, sub).map(|n| {
-                            // HS `methodName` = `renderHtmlDoc .
-                            // prettyProofMethod` — the HtmlDoc LAYOUT
-                            // (100/67, entity fill-widths, col 0): a
-                            // long method title WRAPS at the same
-                            // positions as HS's (the gate collapses
-                            // the newline to a space; the break
-                            // position is what must match).
-                            let _guard = tamarin_theory::pretty_hpj::HtmlEntityWidthGuard::enable();
-                            tamarin_theory::pretty_theory::pretty_proof_method_doc(&n.method)
-                                .render_with(
-                                    tamarin_theory::pretty_hpj::DEFAULT_LINE_LENGTH,
-                                    tamarin_theory::pretty_hpj::DEFAULT_RIBBON,
-                                )
-                        })
+                    .map(|method| {
+                        // HS `methodName` = `renderHtmlDoc .
+                        // prettyProofMethod` — the HtmlDoc LAYOUT
+                        // (100/67, entity fill-widths, col 0): a
+                        // long method title WRAPS at the same
+                        // positions as HS's (the gate collapses
+                        // the newline to a space; the break
+                        // position is what must match).
+                        let _guard = tamarin_theory::pretty_hpj::HtmlEntityWidthGuard::enable();
+                        tamarin_theory::pretty_theory::pretty_proof_method_doc(&method).render_with(
+                            tamarin_theory::pretty_hpj::DEFAULT_LINE_LENGTH,
+                            tamarin_theory::pretty_hpj::DEFAULT_RIBBON,
+                        )
                     })
                     .unwrap_or_else(|| "None".to_string());
                 // HS `methodName` = `renderHtmlDoc . prettyProofMethod` and
@@ -471,11 +467,11 @@ fn render_theory_source(entry: &crate::state::TheoryEntry) -> Result<String, Str
         .typed_theory
         .lemmas()
         .map(|lemma| {
-            proof.get_root(&lemma.name).map(|root| {
-                let root = root.expect("iterated lemma exists in the proof session");
+            proof.proof_body(&lemma.name).map(|body| {
+                let body = body.expect("iterated lemma exists in the proof session");
                 tamarin_theory::pretty_theory::ProvedLemma {
                     name: lemma.name.clone(),
-                    proof_body: Some(tamarin_theory::pretty_theory::pretty_proof_body(&root)),
+                    proof_body: Some(body.to_string()),
                 }
             })
         })
@@ -930,12 +926,12 @@ pub async fn verify(
     State(state): State<Arc<AppState>>,
     Path((idx, raw_path)): Path<(usize, String)>,
 ) -> Response {
-    let Some(entry) = state.store.get(idx) else {
-        return json_resp::alert(format!("theory index {} not found", idx)).into_response();
-    };
     // Unparseable path → routing-level 404 (see `parse_path`).
     let Some(path) = parse_path(&raw_path) else {
         return not_found();
+    };
+    let Some(entry) = state.store.get(idx) else {
+        return json_resp::alert(format!("theory index {} not found", idx)).into_response();
     };
     match path {
         // The success branch: re-point navigation at the same idx and
@@ -1117,7 +1113,13 @@ pub async fn next_path(
         return not_found();
     };
     match tokio::task::spawn_blocking(move || {
-        let entry = state.store.materialized_snapshot(idx, &state.cfg)?;
+        let entry = if matches!(section.as_str(), "normal" | "smart")
+            && matches!(&path, path_parse::TheoryPath::Proof { .. })
+        {
+            state.store.materialized_snapshot(idx, &state.cfg)?
+        } else {
+            state.store.snapshot(idx)?.entry
+        };
         let new_path = next_theory_path(&path, &section, &entry)?;
         Ok::<_, crate::state::StoreError>(render_main_url(idx, &new_path))
     })
@@ -1139,7 +1141,15 @@ pub async fn prev_path(
         return not_found();
     };
     match tokio::task::spawn_blocking(move || {
-        let entry = state.store.materialized_snapshot(idx, &state.cfg)?;
+        let entry = if matches!(section.as_str(), "normal" | "smart")
+            && matches!(
+                &path,
+                path_parse::TheoryPath::Proof { .. } | path_parse::TheoryPath::Lemma(_)
+            ) {
+            state.store.materialized_snapshot(idx, &state.cfg)?
+        } else {
+            state.store.snapshot(idx)?.entry
+        };
         let new_path = prev_theory_path(&path, &section, &entry)?;
         Ok::<_, crate::state::StoreError>(render_main_url(idx, &new_path))
     })
@@ -2012,7 +2022,11 @@ pub async fn delete_step(
             let delete_state = state.clone();
             let name_owned = name.clone();
             let detached = match tokio::task::spawn_blocking(move || {
-                let mut detached = delete_state.store.detached_without_proof(idx)?;
+                let mut detached = delete_state
+                    .store
+                    .materialized_snapshot(idx, &delete_state.cfg)?;
+                detached.idx = 0;
+                detached.primary = false;
                 if detached.typed_theory.lookup_lemma(&name_owned).is_none() {
                     return Err(crate::state::StoreError::Build(
                         "Sorry, but removing the selected lemma failed!".to_string(),
@@ -2022,6 +2036,23 @@ pub async fn delete_step(
                 let removed = theory.remove_lemma(&name_owned);
                 debug_assert!(removed);
                 detached.typed_theory = Arc::new(theory);
+                if let Some(previous) = detached.proof_state.take() {
+                    let ndc_cache = detached
+                        .ndc_cache
+                        .clone()
+                        .map(tamarin_theory::constraint::solver::context::IntrRuleCache::from);
+                    detached.proof_state = Some(Arc::new(
+                        previous
+                            .rebase_onto(
+                                &detached.typed_theory,
+                                detached.prover_maude_sig.clone(),
+                                &delete_state.cfg.maude_path,
+                                delete_state.cfg.stop_on_trace,
+                                ndc_cache.as_ref(),
+                            )
+                            .map_err(crate::state::StoreError::Build)?,
+                    ));
+                }
                 Ok(detached)
             })
             .await

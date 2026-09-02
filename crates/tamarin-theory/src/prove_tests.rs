@@ -391,7 +391,10 @@ end",
         session.template_context().use_induction,
         crate::constraint::solver::context::UseInduction::AvoidInduction
     );
+    assert!(!session.guarded_lemmas_may_fail());
+    assert!(!session.lemma_ranking_may_fail("inductive"));
     let ctx = session.context_for_lemma("inductive").expect("context");
+    assert!(!ctx.proving_may_fail());
     assert!(std::sync::Arc::ptr_eq(
         &session.template_context().shared,
         &ctx.shared
@@ -409,6 +412,30 @@ end",
         session.context_for_lemma("missing"),
         Err(ProveError::LemmaNotFound(name)) if name == "missing"
     ));
+}
+
+#[test]
+fn ranking_fallibility_stays_local_to_its_lemma() {
+    let Some(session) = session_from(
+        "theory T begin\n\
+         lemma safe: \"T\"\n\
+         lemma external [heuristic=o \"oracle\"]: \"T\"\n\
+         end",
+    ) else {
+        return;
+    };
+
+    assert!(!session.guarded_lemmas_may_fail());
+    assert!(!session.lemma_ranking_may_fail("safe"));
+    assert!(session.lemma_ranking_may_fail("external"));
+    assert!(!session
+        .context_for_lemma("safe")
+        .expect("safe context")
+        .proving_may_fail());
+    assert!(session
+        .context_for_lemma("external")
+        .expect("oracle context")
+        .proving_may_fail());
 }
 
 /// HS `closeProtoRule` (lib/theory/src/Rule.hs:82-86, see line 84) builds
@@ -567,9 +594,19 @@ fn low_level_search_apis_report_deferred_source_errors() {
         None => return,
     };
     let lemma = session.theory.lookup_lemma("goal").expect("goal lemma");
-    let ctx = session.setup_per_lemma_ctx(lemma, "goal");
+    let mut ctx = session.setup_per_lemma_ctx(lemma, "goal");
+    assert!(session.guarded_lemmas_may_fail());
+    assert!(ctx.proving_may_fail());
+    ctx.heuristic = Some(
+        crate::constraint::solver::goals::parse_heuristic_str_with_tactics(
+            "{missing}",
+            "test.spthy",
+            &[],
+        ),
+    );
     ctx.ensure_saturated();
     assert!(matches!(ctx.source_error(), Some(ProveError::Guarded(_))));
+    assert!(matches!(ctx.source_cases(), Err(ProveError::Guarded(_))));
 
     let sys = crate::constraint::system::System::empty();
     assert!(matches!(
@@ -578,6 +615,19 @@ fn low_level_search_apis_report_deferred_source_errors() {
     ));
     assert!(matches!(
         crate::constraint::solver::search::run_proof_search(&ctx, sys, 0),
+        Err(ProveError::Guarded(_))
+    ));
+    let sys = crate::constraint::system::System::empty();
+    assert!(matches!(
+        crate::constraint::solver::proof_method::exec_proof_method(
+            &ctx,
+            &crate::constraint::solver::proof_method::ProofMethod::Sorry(None),
+            &sys,
+        ),
+        Err(ProveError::Guarded(_))
+    ));
+    assert!(matches!(
+        crate::constraint::solver::proof_method::is_finished(&ctx, &sys),
         Err(ProveError::Guarded(_))
     ));
 }
@@ -775,7 +825,7 @@ end",
         matches!(
             &error,
         ProveError::Ranking(
-            crate::constraint::solver::goals::RankingError::Abort(message)
+            crate::constraint::solver::goals::RankingError(message)
         ) if message == "No tactic has been written in the theory file"
         ),
         "unexpected error: {error:?}"
@@ -877,6 +927,9 @@ fn validate_cli_heuristic_accepts_and_rejects_like_filter_heuristic() {
         validate_cli_heuristic(&CliHeuristic::default(), &[]),
         Ok(())
     );
+    assert!(validate_cli_heuristic(&cli(""), &[])
+        .unwrap_err()
+        .contains("at least one ranking"));
     // HS rejects whitespace, digits and quotes as unknown rankings —
     // matching the acceptance set is what keeps a typo from silently
     // proving under the smart fallback.
@@ -898,6 +951,38 @@ fn validate_cli_heuristic_accepts_and_rejects_like_filter_heuristic() {
     // Unterminated brace.
     let e = validate_cli_heuristic(&cli("{oops"), &[]).unwrap_err();
     assert!(e.contains("unterminated '{'"), "{e}");
+}
+
+#[test]
+fn prover_session_rejects_an_unvalidated_cli_heuristic() {
+    let Some(h) = maude() else { return };
+    let parsed = tamarin_parser::parse_theory("theory T begin end", &[]).expect("parse");
+    let theory = std::sync::Arc::new(elaborated(&parsed));
+    let result = ProverSession::build_with_heuristic(
+        theory.clone(),
+        h.clone(),
+        None,
+        CliHeuristic {
+            raw: Some("unknown".to_string()),
+            ..CliHeuristic::default()
+        },
+        crate::constraint::solver::context::CutStrategy::Dfs,
+        None,
+    );
+    assert!(matches!(result, Err(ProveError::InvalidHeuristic(_))));
+
+    let result = ProverSession::build_with_heuristic(
+        theory,
+        h,
+        None,
+        CliHeuristic {
+            raw: Some(String::new()),
+            ..CliHeuristic::default()
+        },
+        crate::constraint::solver::context::CutStrategy::Dfs,
+        None,
+    );
+    assert!(matches!(result, Err(ProveError::InvalidHeuristic(_))));
 }
 
 #[test]
@@ -959,7 +1044,7 @@ fn default_cli_oracles_are_resolved_beside_the_theory() {
         GoalRanking::Oracle { oracle_path, .. } if oracle_path == "./chosen.oracle"
     ));
 
-    std::fs::remove_dir_all(root).unwrap();
+    let _ = std::fs::remove_dir_all(root);
 }
 
 #[test]
@@ -986,4 +1071,95 @@ fn all_in_file_oracles_are_resolved_beside_the_theory() {
         &rankings[1],
         GoalRanking::Oracle { oracle_path, .. } if oracle_path == "dir/oracle"
     ));
+    assert_eq!(
+        resolve_oracle_path("/tmp/./nested//rank", Some("ignored")),
+        "/tmp/nested/rank"
+    );
+}
+
+#[test]
+fn included_oracle_locations_are_preserved_and_frozen() {
+    use crate::constraint::solver::goals::GoalRanking;
+
+    let root =
+        std::env::temp_dir().join(format!("tamarin_rs_included_oracle_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("sub")).unwrap();
+    let theory_file = root.join("root.spthy");
+    let include_file = root.join("sub/inc.spthy");
+    std::fs::write(
+        &theory_file,
+        "theory T begin\n#include \"sub/inc.spthy\"\nend\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &include_file,
+        "heuristic: o\n\
+         lemma header: \"T\"\n\
+         lemma local [heuristic=o \"rank\"]: \"T\"\n\
+         lemma local_default [heuristic=o, heuristic=o]: \"T\"\n",
+    )
+    .unwrap();
+    std::fs::write(root.join("sub/inc.oracle"), "").unwrap();
+    std::fs::write(root.join("sub/rank"), "").unwrap();
+
+    let source = std::fs::read_to_string(&theory_file).unwrap();
+    let parsed = tamarin_parser::parse_theory_with_base(&source, &[], Some(root.clone())).unwrap();
+    let theory =
+        crate::elaborate::elaborate_with_in_file(&parsed, theory_file.to_str().unwrap()).unwrap();
+    assert!(matches!(
+        &theory.heuristic[0],
+        GoalRanking::Oracle { oracle_path, .. } if oracle_path == "inc.oracle"
+    ));
+    let local_default = theory.lookup_lemma("local_default").unwrap();
+    assert_eq!(
+        local_default
+            .attributes
+            .iter()
+            .filter_map(|attribute| match attribute {
+                crate::theory::LemmaAttr::Heuristic(raw) => Some(raw.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>(),
+        ["o \"inc.oracle\"", "o \"inc.oracle\""]
+    );
+
+    // Changing the filesystem after elaboration must not switch either the
+    // header or lemma-local default to the fallback `oracle` executable.
+    std::fs::remove_file(root.join("sub/inc.oracle")).unwrap();
+    std::fs::write(root.join("sub/oracle"), "").unwrap();
+    let Some(maude) = maude_with(theory.signature.clone()) else {
+        std::fs::remove_dir_all(root).unwrap();
+        return;
+    };
+    let session = ProverSession::build_with_heuristic(
+        std::sync::Arc::new(theory),
+        maude,
+        None,
+        CliHeuristic::default(),
+        crate::constraint::solver::context::CutStrategy::Dfs,
+        None,
+    )
+    .unwrap();
+    let oracle_path = |lemma: &str| {
+        let ctx = session.context_for_lemma(lemma).unwrap();
+        match &ctx.heuristic.as_ref().unwrap()[0] {
+            GoalRanking::Oracle { oracle_path, .. } => oracle_path.clone(),
+            other => panic!("expected oracle ranking, got {other:?}"),
+        }
+    };
+    assert_eq!(
+        oracle_path("header"),
+        root.join("sub/inc.oracle").to_string_lossy()
+    );
+    assert_eq!(
+        oracle_path("local"),
+        root.join("sub/rank").to_string_lossy()
+    );
+    assert_eq!(
+        oracle_path("local_default"),
+        root.join("sub/inc.oracle").to_string_lossy()
+    );
+
+    let _ = std::fs::remove_dir_all(root);
 }

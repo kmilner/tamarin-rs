@@ -128,6 +128,29 @@ web_cache_invalidate() {
     rm -f "$CACHE/$key.hs.fp" "$CACHE/$key.hs.json"
 }
 
+# web_flags_for <corpus-relative-path>
+# Return the separately declared interactive recipe. Keeping this map distinct
+# from file_flags.tsv prevents batch-only modes from leaking into one server.
+# Unknown flags in the web map are a hard scope miss, not silently dropped.
+web_flags_for() {
+    local map=${WEB_FLAGS_MAP:-} raw word
+    local -a words=() kept=()
+    [ -n "$map" ] || return 0
+    [ -r "$map" ] || {
+        echo "web_flags_for: map is not readable: $map" >&2
+        return 1
+    }
+    raw=$(awk -F'\t' -v r="$1" '!/^#/ && $1==r {print $2; exit}' "$map") || return 1
+    [ -z "$raw" ] || read -r -a words <<< "$raw"
+    for word in "${words[@]}"; do
+        case "$word" in
+            -D=*|--stop-on-trace=*|--no-ndc|--quit-on-warning) kept+=("$word");;
+            *) echo "web_flags_for: unsupported interactive flag for $1: $word" >&2; return 1;;
+        esac
+    done
+    printf '%s' "${kept[*]}"
+}
+
 # web_cache_stamp_matches <stamp>
 # Profiled caches require their stable content stamp. An explicitly selected
 # old flat cache may still carry the former size+mtime stamp; accept it only in
@@ -138,47 +161,32 @@ web_cache_stamp_matches() {
     [ "$WEB_CACHE_MODE" = legacy-explicit ] && [ "$1" = "$HS_FP_LEGACY" ]
 }
 
-# web_stage_inputs <source-theory> <destination-directory>
+# web_stage_inputs <source-theory> <destination-directory> [flags] [staging-root]
 # Copy the theory, its transitive includes, and its executable oracle inputs
 # into the temporary server tree. Both web consumers use this one spelling so
-# cache identity and staged inputs cannot drift apart.
+# cache identity and staged inputs cannot drift apart. Relative dependencies
+# may leave the theory directory, but never the caller's private staging root.
 web_stage_inputs() {
-    local src=$1 dest_dir=$2
-    local -A _web_include_seen=()
-    web_stage_includes "$src" "$dest_dir/$(basename "$src")" || return 1
-    web_stage_oracles "$src" "$dest_dir"
-}
-
-web_stage_includes() {
-    local src=$1 dst=$2 inc key
-    key="$src|$dst"
-    [ -z "${_web_include_seen[$key]+x}" ] || return 0
-    _web_include_seen[$key]=1
-    mkdir -p "$(dirname "$dst")" && cp "$src" "$dst" || return 1
-    while IFS= read -r inc; do
-        [ -n "$inc" ] || continue
-        [ -f "$(dirname "$src")/$inc" ] || {
-            echo "web cache: missing include '$inc' from $src" >&2; return 1;
-        }
-        web_stage_includes "$(dirname "$src")/$inc" "$(dirname "$dst")/$inc" \
-            || return 1
-    done < <(grep -oE '#include[[:space:]]*"[^"]+"' "$src" 2>/dev/null \
-             | sed 's/.*"\(.*\)"/\1/')
-}
-
-web_stage_oracles() {
-    local src=$1 dest_dir=$2 f q
-    for f in "$(dirname "$src")"/oracle*; do
-        if [ -f "$f" ]; then cp "$f" "$dest_dir/" || return 1; fi
-    done
-    if [ -f "${src%.spthy}.oracle" ] && [ ! -e "$dest_dir/oracle" ]; then
-        cp "${src%.spthy}.oracle" "$dest_dir/oracle" || return 1
-    fi
-    while IFS= read -r q; do
-        [ -f "$(dirname "$src")/$q" ] || continue
-        mkdir -p "$dest_dir/$(dirname "$q")" || return 1
-        cp "$(dirname "$src")/$q" "$dest_dir/$q" || return 1
-    done < <(grep -E 'heuristic' "$src" 2>/dev/null | grep -oE '"[^"]+"' | tr -d '"' | sort -u)
+    local src=$1 dest_dir=$2 flags=${3:-} stage_root=${4:-$2}
+    local tag input rel manifest stage_root_abs target
+    manifest=$(input_manifest "$src" "$flags") || return 1
+    stage_root_abs=$(realpath -m -- "$stage_root") || return 1
+    while IFS=$'\t' read -r tag input rel; do
+        case "$tag" in S|O) ;; *) continue;; esac
+        # Absolute inputs remain absolute at runtime and need no staged alias.
+        [ -n "$rel" ] || continue
+        target=$(realpath -m -- "$dest_dir/$rel") || return 1
+        case "$target" in
+            "$stage_root_abs"/*) ;;
+            *) echo "web_stage_inputs: staged path escapes destination: $rel" >&2; return 1;;
+        esac
+        mkdir -p "$dest_dir/$(dirname "$rel")" || return 1
+        if [ "$tag" = O ]; then
+            cp -p "$input" "$dest_dir/$rel" || return 1
+        else
+            cp "$input" "$dest_dir/$rel" || return 1
+        fi
+    done <<< "$manifest"
 }
 
 # web_cache_key <corpus-relative-path> <absolute-theory>
@@ -189,27 +197,22 @@ web_stage_oracles() {
 # quoted heuristic paths. The relpath argument is reserved for future
 # path-sensitive inputs and keeps this API parallel with gate_common's ckey.
 web_cache_key() {
-    local _rel=$1 theory=$2 h deps dir q p
-    h=$(sha256sum "$theory" | cut -d' ' -f1) || return 1
-    dir=$(dirname "$theory")
-    deps=$(include_shas "$theory")
-
-    for p in "$dir"/oracle*; do
-        [ -f "$p" ] && deps="${deps}${deps:+$'\n'}$(sha256sum "$p" | cut -d' ' -f1) ${p#"$dir"/}"
-    done
-    p="${theory%.spthy}.oracle"
-    if [ -f "$p" ]; then
-        deps="${deps}${deps:+$'\n'}$(sha256sum "$p" | cut -d' ' -f1) ${p#"$dir"/}"
+    local rel=$1 theory=$2 flags= h deps oracles manifest
+    if [ "$#" -ge 3 ]; then
+        flags=$3
+    else
+        flags=$(web_flags_for "$rel") || return 1
     fi
-    while IFS= read -r q; do
-        p="$dir/$q"
-        [ -f "$p" ] || continue
-        deps="${deps}${deps:+$'\n'}$(sha256sum "$p" | cut -d' ' -f1) $q"
-    done < <(grep -E 'heuristic' "$theory" 2>/dev/null | grep -oE '"[^"]+"' | tr -d '"' | sort -u)
-
-    deps=$(printf '%s' "$deps" | sed '/^[[:space:]]*$/d' | sort -u)
+    h=$(file_sha256 "$theory") || return 1
+    manifest=$(input_manifest "$theory" "$flags") || return 1
+    deps=$(_include_shas_from_manifest "$manifest") || return 1
+    oracles=$(_oracle_shas_from_manifest "$manifest") || return 1
+    deps=$(printf '%s\n%s' "$deps" "$oracles" | sed '/^[[:space:]]*$/d' | sort -u)
     if [ -n "$deps" ]; then
         h="${h}__d$(printf '%s' "$deps" | sha256sum | cut -c1-12)"
+    fi
+    if [ -n "$flags" ]; then
+        h="${h}__f$(printf '%s' "$flags" | sha256sum | cut -c1-12)"
     fi
     printf '%s' "$h"
 }
@@ -225,7 +228,7 @@ web_cache_adopt_legacy() {
     local key=$1 theory=$2 plan=$3 old_key legacy manifest stamp cached_plan
     [ "$WEB_CACHE_MODE" = profiled ] || return 1
     [ ! -e "$CACHE/$key.hs.json" ] || return 0
-    old_key=$(sha256sum "$theory" | cut -d' ' -f1) || return 1
+    old_key=$(file_sha256 "$theory") || return 1
     [ "$key" = "$old_key" ] || return 1
 
     for legacy in "$WEB_CACHE_ROOT" "$WEB_CACHE_ROOT"_* \

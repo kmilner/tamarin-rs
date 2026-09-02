@@ -471,8 +471,88 @@ fn an_unknown_tactic_fails_when_its_ranking_is_selected() {
     let err = rank_goals_with(&System::empty(), Some(&ctx), 0).unwrap_err();
     assert_eq!(
         err.to_string(),
-        "No tactic has been written in the theory file"
+        "goal ranking: No tactic has been written in the theory file"
     );
+}
+
+#[test]
+fn runtime_fallibility_scans_the_whole_round_robin_heuristic() {
+    use std::sync::Arc;
+
+    let tactic = Arc::new(crate::tactic::Tactic {
+        name: "resolved".into(),
+        presort: 's',
+        prios: Vec::new(),
+        deprios: Vec::new(),
+    });
+    assert!(!rankings_may_fail(&[
+        GoalRanking::Smart(false),
+        GoalRanking::Tactic {
+            quit_on_empty: false,
+            tactic: Arc::clone(&tactic),
+            resolution_error: None,
+        },
+    ]));
+    assert!(rankings_may_fail(&[
+        GoalRanking::Smart(false),
+        GoalRanking::Oracle {
+            quit_on_empty: false,
+            oracle_path: "oracle".into(),
+        },
+    ]));
+    assert!(rankings_may_fail(&[GoalRanking::Tactic {
+        quit_on_empty: false,
+        tactic,
+        resolution_error: Some("missing".into()),
+    }]));
+}
+
+#[test]
+fn smart_oracle_stops_before_launch_when_source_materialisation_fails() {
+    use crate::constraint::solver::context::{ProofContext, SourceProvider};
+    use crate::constraint::solver::sources::Source;
+    use crate::fact::ku_fact;
+    use std::sync::Arc;
+    use tamarin_term::function_symbols::{Constructability, FunSym, NoEqSym, Privacy};
+    use tamarin_term::lterm::{pub_term, LSort, LVar};
+    use tamarin_term::maude_sig::pair_maude_sig;
+    use tamarin_term::term::Term;
+
+    #[derive(Debug)]
+    struct FailingProvider;
+    impl SourceProvider for FailingProvider {
+        fn materialize(&self, _ctx: &ProofContext) -> Result<(), crate::prove::ProveError> {
+            Err(crate::prove::ProveError::Guarded("bad source".into()))
+        }
+    }
+
+    let Some(path) = require_maude_path() else {
+        return;
+    };
+    let handle = tamarin_term::maude_proc::MaudeHandle::start(&path, pair_maude_sig()).unwrap();
+    let mut ctx = ProofContext::new(handle, Vec::new());
+    let f = FunSym::NoEq(NoEqSym::new(
+        b"f".to_vec(),
+        1,
+        Privacy::Public,
+        Constructability::Constructor,
+    ));
+    let term = Term::App(f, vec![pub_term("x")].into());
+    let goal = Goal::Action(LVar::new("i", LSort::Node, 0), ku_fact(term));
+    ctx.full_sources = Arc::new(vec![Source::lazy(goal.clone())]);
+    ctx.set_source_provider(Arc::new(FailingProvider));
+    assert!(ctx.proving_may_fail());
+    ctx.heuristic = Some(vec![GoalRanking::OracleSmart {
+        quit_on_empty: false,
+        oracle_path: "/definitely/missing/oracle".into(),
+    }]);
+    let mut sys = System::empty();
+    sys.add_goal(goal);
+
+    assert!(matches!(
+        rank_goals_with(&sys, Some(&ctx), 0),
+        Err(crate::prove::ProveError::Guarded(message)) if message == "bad source"
+    ));
 }
 
 /// `pretty_goal_rankings` writes back the token each stored ranking parsed

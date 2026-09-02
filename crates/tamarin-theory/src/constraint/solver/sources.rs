@@ -153,11 +153,11 @@ fn subst_arms_into(
     }
 }
 
-pub fn in_precompute_mode() -> bool {
+pub(crate) fn in_precompute_mode() -> bool {
     IN_PRECOMPUTE.with(|c| c.get())
 }
 
-pub fn in_initial_source_cases() -> bool {
+pub(crate) fn in_initial_source_cases() -> bool {
     IN_INITIAL_SOURCE_CASES.with(|c| c.get())
 }
 
@@ -278,11 +278,11 @@ pub fn unsolved_chain_constraints(sys: &System) -> usize {
 /// `smartRanking.getMsgOneCase` pattern-matches on `FApp o _` before
 /// touching `cdCases`, so Var-headed sources never trigger the thunk);
 /// Rust matches by deferring `solve_action_goal` / `solve_premise_goal`
-/// out of `precompute_full_sources` into the lazy initialiser.
+/// out of `precompute_full_sources` until the owning context forces them.
 pub type SourceCase = (Vec<String>, System);
 pub(crate) type SourceCases = std::sync::Arc<std::sync::Mutex<Vec<SourceCase>>>;
 
-pub struct Source {
+pub(crate) struct Source {
     pub goal: crate::constraint::constraints::Goal,
     /// Lazy cases — wrapped in `Mutex<Option<…>>` for interior
     /// mutability. The inner shared backing lets session cache hits and
@@ -331,9 +331,9 @@ impl Clone for Source {
 
 impl Source {
     /// Build a Source whose cases will be computed lazily via
-    /// `initial_source_cases(goal, ctx)` on the first `cases(ctx)`
-    /// call.  Matches HS's `initialSource` (Sources.hs:97-110, see line 103) thunk.
-    pub fn lazy(goal: crate::constraint::constraints::Goal) -> Self {
+    /// `initial_source_cases(goal, ctx)` when the owning context is first
+    /// forced. Matches HS's `initialSource` (Sources.hs:97-110, see line 103) thunk.
+    pub(crate) fn lazy(goal: crate::constraint::constraints::Goal) -> Self {
         Source {
             goal,
             cases_cell: std::sync::Mutex::new(None),
@@ -342,7 +342,10 @@ impl Source {
 
     /// Build a Source with cases already computed. Case-name component
     /// boundaries are retained until the rendering boundary.
-    pub fn eager(goal: crate::constraint::constraints::Goal, cases: Vec<SourceCase>) -> Self {
+    pub(crate) fn eager(
+        goal: crate::constraint::constraints::Goal,
+        cases: Vec<SourceCase>,
+    ) -> Self {
         Source {
             goal,
             cases_cell: std::sync::Mutex::new(Some(std::sync::Arc::new(std::sync::Mutex::new(
@@ -358,7 +361,10 @@ impl Source {
     /// Returns an owned working copy. The stored list itself remains shared
     /// across context clones and cache hits; solver consumers generally mutate
     /// their returned systems while grafting them into a branch.
-    pub fn cases(&self, ctx: &crate::constraint::solver::context::ProofContext) -> Vec<SourceCase> {
+    pub(crate) fn cases_unchecked(
+        &self,
+        ctx: &crate::constraint::solver::context::ProofContext,
+    ) -> Vec<SourceCase> {
         ctx.ensure_saturated();
         self.cases_cell
             .lock()
@@ -371,7 +377,7 @@ impl Source {
     }
 
     /// Shared read-only cases, or an empty list when still lazy.
-    pub fn cases_or_empty(&self) -> Vec<SourceCase> {
+    pub(crate) fn cases_or_empty(&self) -> Vec<SourceCase> {
         self.cases_cell
             .lock()
             .unwrap()
@@ -392,7 +398,7 @@ impl Source {
     /// Number of materialised cases — equal to `cases_or_empty().len()`
     /// but WITHOUT deep-cloning every case `System` to count them.
     /// Returns 0 when the cell hasn't been forced yet.  O(1).
-    pub fn cases_len(&self) -> usize {
+    pub(crate) fn cases_len(&self) -> usize {
         self.cases_cell
             .lock()
             .unwrap()
@@ -403,7 +409,7 @@ impl Source {
     /// The `n`-th materialised case's system — `cases_or_empty()[n].1`
     /// WITHOUT deep-cloning the cases either side of it.  Returns `None`
     /// when the cell hasn't been forced yet or `n` is past the end.
-    pub fn case_system_at(&self, n: usize) -> Option<System> {
+    pub(crate) fn case_system_at(&self, n: usize) -> Option<System> {
         let g = self.cases_cell.lock().unwrap();
         let cases = g.as_ref()?.lock().unwrap();
         let (_, sys) = cases.get(n)?;
@@ -411,7 +417,7 @@ impl Source {
     }
 
     /// Drain the materialised cases out of the cell, leaving it lazy again.
-    pub fn cases_take(&self) -> Vec<SourceCase> {
+    pub(crate) fn cases_take(&self) -> Vec<SourceCase> {
         self.cases_cell
             .lock()
             .unwrap()
@@ -427,7 +433,7 @@ impl Source {
     /// install a refined case set, AND by `ensure_saturated`'s post-
     /// saturate writeback.  Takes `&self` (not `&mut`) so it works
     /// through immutable `ctx.full_sources` borrows.
-    pub fn cases_set(&self, cases: Vec<SourceCase>) {
+    pub(crate) fn cases_set(&self, cases: Vec<SourceCase>) {
         self.cases_set_shared(std::sync::Arc::new(std::sync::Mutex::new(cases)));
     }
 
@@ -566,7 +572,7 @@ fn initial_source_cases_impl(
 /// At runtime, `solve_premise_goal` consults this cache before
 /// enumerating rules: the precomputed cases let the search graft a
 /// pre-instantiated subsystem rather than re-deriving it every time.
-pub fn precompute_full_sources(
+pub(crate) fn precompute_full_sources(
     ctx: &crate::constraint::solver::context::ProofContext,
 ) -> Vec<Source> {
     use crate::constraint::constraints::Goal;
@@ -1000,7 +1006,7 @@ fn system_max_idx(sys: &System) -> u64 {
 /// violate the user's typing/`[sources]` invariants — at runtime,
 /// our search explores those spurious cases and reports false
 /// counterexamples.
-pub fn refine_with_source_asms(
+pub(crate) fn refine_with_source_asms(
     sources: Vec<Source>,
     assumptions: &[crate::guarded::Guarded],
     ctx: &crate::constraint::solver::context::ProofContext,
@@ -1263,7 +1269,7 @@ pub fn set_show_saturation_steps(on: bool) {
 
 /// Re-simplify every grafted source case so newly-fired implied formulas can
 /// prune it. Mirrors Haskell's `saturateSources`, including its iteration cap.
-pub fn saturate_sources_with_simp(
+pub(crate) fn saturate_sources_with_simp(
     sources: Vec<Source>,
     limit: usize,
     ctx: &crate::constraint::solver::context::ProofContext,
@@ -2327,7 +2333,7 @@ fn string_to_name_list(name: &str) -> Vec<String> {
 /// continuation = the pick-time fork + that branch's OWN
 /// someInst/conjoin/close-chains draws — not the shared handle's
 /// post-all-cases position).
-pub fn solve_with_source_cases_ctx(
+pub(crate) fn solve_with_source_cases_ctx(
     ctx: &crate::constraint::solver::context::ProofContext,
     sources: &[Source],
     sys: &System,
@@ -2407,7 +2413,7 @@ pub fn solve_with_source_cases_ctx(
     };
 
     let mut out: Vec<(String, System, u64)> = Vec::new();
-    let cases = src.cases(ctx);
+    let cases = src.cases_unchecked(ctx);
     // HS `matchToGoal` renames th0 ONCE for the whole source; the shift's
     // min is over `cdGoal` + ALL cases (HasFrees Source).  Compute it here
     // so every case shares the same rebase, mirroring HS exactly.
@@ -2501,7 +2507,7 @@ fn rename_system_above(sys: &System, avoid_max: u64) -> System {
 /// fa_live }])` on each returned tuple — that runs Maude AC
 /// unification across the case's abstract terms and the concrete
 /// `m_live`, exactly mirroring Haskell's `someInst >> conjoinSystem`.
-pub fn solve_with_source_cases_action(
+pub(crate) fn solve_with_source_cases_action(
     sources: &[Source],
     sys: &System,
     goal_node: &crate::constraint::constraints::NodeId,
@@ -2520,7 +2526,7 @@ pub fn solve_with_source_cases_action(
 /// older behaviour for callers that don't have a context — e.g.
 /// saturate-time helpers).
 #[track_caller]
-pub fn solve_with_source_cases_action_with_ctx(
+pub(crate) fn solve_with_source_cases_action_with_ctx(
     sources: &[Source],
     sys: &System,
     goal_node: &crate::constraint::constraints::NodeId,
@@ -2585,7 +2591,7 @@ pub fn solve_with_source_cases_action_with_ctx(
     // — sort mismatch, no match) the saturate work is never triggered,
     // matching HS's lazy-thunk behaviour.
     let cases_iter = if let Some(c) = ctx_opt {
-        src.cases(c)
+        src.cases_unchecked(c)
     } else {
         src.cases_or_empty()
     };
@@ -4825,7 +4831,7 @@ where
 /// alpha-duplicates) this keeps the LAST member and, after `sortOn fst`,
 /// emits survivors in original-index order — the exact flip the Joux/Scott
 /// mirror needed.
-pub fn remove_redundant_cases<T, F>(
+pub(crate) fn remove_redundant_cases<T, F>(
     enable_bp: bool,
     enable_mset: bool,
     stable_vars: &std::collections::BTreeSet<tamarin_term::lterm::LVar>,

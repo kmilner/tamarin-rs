@@ -92,14 +92,14 @@ hs_fingerprint "$hs_path"
 # --- strip_env_lines (gate_common.sh): delete the only lines that
 # legitimately differ between the two binaries, keeping `analyzed:` visible
 # (the cache hit rewrites its path to this invocation's).
-export -f proof_now_ms proof_cache_key proof_lemmas_of include_shas oracle_shas strip_env_lines
+export -f file_sha256 proof_now_ms proof_cache_key proof_lemmas_of input_manifest _include_shas_from_manifest _oracle_shas_from_manifest strip_env_lines
 export HS_PATH="$hs_path" RS_PATH="$rs_path" TIMEOUT RS_TIMEOUT EXTRA_ENV \
        HS_CANON_CACHE CACHE_VERSION NO_HS_CACHE DERIVCHECK_TIMEOUT HS_RTS HS_FP_SALT
 
 # --- Per-lemma worker. Emits ONE machine-parseable line:
 #       <file>\t<lemma>\t<status>\t<hs_lines>\t<rs_lines>\t<diff>\t<hs_ms>\t<rs_ms>
 worker() {
-    local f="$1" lemma="$2"
+    local f="$1" lemma="$2" cache_template="$3"
     local tmp; tmp="$(mktemp -d)"
     # shellcheck disable=SC2064
     trap "rm -rf '$tmp'" RETURN
@@ -107,7 +107,12 @@ worker() {
     local hs_out="$tmp/hs.out" hs_rc=0 hs_ms="-"
     local key="" key_full="" key_timeout=""
     if [ -z "$NO_HS_CACHE" ]; then
-        key="$HS_CANON_CACHE/$(proof_cache_key "$f" "$lemma").canon"
+        if [ "$cache_template" = "!" ]; then
+            printf '%s\t%s\tSKIP_INPUT_MANIFEST\t0\t0\t-\t-\t-\n' "$f" "$lemma"
+            return 0
+        fi
+        local cache_id=${cache_template/__LEMMA__/$lemma}
+        key="$HS_CANON_CACHE/$cache_id.canon"
         key_full="${key%.canon}.full.gz"
         key_timeout="${key%.canon}.timeout"
     fi
@@ -232,8 +237,14 @@ for f in "${files[@]}"; do
         filtered_files=$((filtered_files+1))
         continue
     fi
+    cache_template="-"
+    if [ -z "$NO_HS_CACHE" ] \
+        && ! cache_template=$(proof_cache_key "$f" "__LEMMA__"); then
+        cache_template="!"
+    fi
     while IFS= read -r lem; do
-        [ -n "$lem" ] && printf '%s\t%s\n' "$f" "$lem" >> "$tasklist"
+        [ -n "$lem" ] && printf '%s\t%s\t%s\n' \
+            "$f" "$lem" "$cache_template" >> "$tasklist"
     done < <(proof_lemmas_of "$f")
 done
 
@@ -242,7 +253,7 @@ echo "# corpus_raw_diff: $n_tasks lemmas across $((total_files-filtered_files)) 
 
 results="$(mktemp)"
 trap "rm -f '$tasklist' '$results'" EXIT
-tr '\t' '\n' < "$tasklist" | xargs -d '\n' -P "$JOBS" -n 2 bash -c 'worker "$0" "$1"' > "$results"
+tr '\t' '\n' < "$tasklist" | xargs -d '\n' -P "$JOBS" -n 3 bash -c 'worker "$0" "$1" "$2"' > "$results"
 
 sort -t$'\t' -k1,1 -k2,2 "$results" > "$results.sorted"
 
@@ -262,6 +273,7 @@ while IFS=$'\t' read -r f lem status hs rs d hs_ms rs_ms; do
         MATCH)        match=$((match+1));        echo "$f::$lem: MATCH (HS:$hs, RS:$rs)$t";;
         DIFF)         diffn=$((diffn+1));         echo "$f::$lem: $d diff lines (HS:$hs, RS:$rs)$t"; divergent+=("$d"$'\t'"$f::$lem (HS:$hs, RS:$rs)");;
         SKIP_NO_HS)   skip_no_hs=$((skip_no_hs+1));   echo "$f::$lem: SKIP (no HS output)$t";;
+        SKIP_INPUT_MANIFEST) skip_no_hs=$((skip_no_hs+1)); echo "$f::$lem: SKIP (input manifest failed)$t";;
         SKIP_RS_ERR)  skip_rs_err=$((skip_rs_err+1)); echo "$f::$lem: SKIP (RS produced no output; HS:$hs)$t";;
         SKIP_TIMEOUT) skip_timeout=$((skip_timeout+1)); echo "$f::$lem: SKIP (timeout HS:${TIMEOUT}s/RS:${RS_TIMEOUT}s)$t";;
         *)            echo "$f::$lem: SKIP (unknown status '$status')"; skip_no_hs=$((skip_no_hs+1));;

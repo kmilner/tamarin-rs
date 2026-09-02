@@ -257,20 +257,47 @@ pub fn elaborate_with_in_file(parser_thy: &p::Theory, in_file: &str) -> Result<T
     // (`heuristic`, Theory/Text/Parser/Signature.hs:305-306) and stores that
     // list (`addHeuristic`, TheoryObject.hs:598-600).
     let mut heuristic_headers = parser_thy.items.iter().filter_map(|item| match item {
-        p::TheoryItem::Heuristic(h) => Some(h),
+        p::TheoryItem::Heuristic { raw, source_file } => Some((raw, source_file)),
         _ => None,
     });
-    if let Some(h) = heuristic_headers.next() {
+    if let Some((h, source_file)) = heuristic_headers.next() {
+        let source_file = source_file.as_deref().unwrap_or(in_file);
         thy.heuristic = crate::constraint::solver::goals::parse_heuristic_str_with_tactics(
             h,
-            in_file,
+            source_file,
             &thy.tactic,
         );
+        thy.heuristic_in_file = Some(source_file.to_string());
     }
     if heuristic_headers.next().is_some() {
         return Err(ElabError {
             message: "default heuristic already defined".to_string(),
         });
+    }
+
+    // Freeze every lemma-local ranking after the full tactic list is known.
+    // The declaring file was copied directly during elaboration, so this
+    // needs no fragile parser-item/name join and handles repeated attributes.
+    let tactics = &thy.tactic;
+    for item in &mut thy.items {
+        let (attributes, source_file) = match item {
+            TheoryItem::Lemma(lemma) => (&mut lemma.attributes, &lemma.heuristic_in_file),
+            TheoryItem::Translation(TranslationElement::AccLemma(lemma)) => {
+                (&mut lemma.attributes, &lemma.heuristic_in_file)
+            }
+            _ => continue,
+        };
+        let source_file = source_file.as_deref().unwrap_or(in_file);
+        for attribute in attributes {
+            if let crate::theory::LemmaAttr::Heuristic(raw) = attribute {
+                let rankings = crate::constraint::solver::goals::parse_heuristic_str_with_tactics(
+                    raw,
+                    source_file,
+                    tactics,
+                );
+                *raw = crate::pretty_theory::pretty_goal_rankings(&rankings);
+            }
+        }
     }
     Ok(thy)
 }
@@ -568,7 +595,7 @@ fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), Elab
             }
             // The `heuristic:` header is parsed after the item walk, where
             // the theory's whole tactic list is known.
-            p::TheoryItem::Heuristic(_) => {}
+            p::TheoryItem::Heuristic { .. } => {}
             p::TheoryItem::Tactic(t) => {
                 out.tactic.push(t.clone());
             }
@@ -624,8 +651,14 @@ fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), Elab
             }
             p::TheoryItem::Lemma(l) => {
                 let msig = &out.signature;
+                let heuristic_in_file = l
+                    .attributes
+                    .iter()
+                    .any(|attr| matches!(attr, crate::theory::LemmaAttr::Heuristic(_)))
+                    .then(|| l.source_file.clone().unwrap_or_else(|| out.in_file.clone()));
                 let lem: Lemma = Lemma {
                     name: l.name.clone(),
+                    heuristic_in_file,
                     attributes: l.attributes.clone(),
                     trace_quantifier: l.trace_quantifier,
                     formula: item_formula(&l.formula, msig, &preds)?,
@@ -653,8 +686,14 @@ fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), Elab
                 // never yields a DiffLemma item. Defensive no-op.
             }
             p::TheoryItem::AccLemma(a) => {
+                let heuristic_in_file = a
+                    .attributes
+                    .iter()
+                    .any(|attr| matches!(attr, crate::theory::LemmaAttr::Heuristic(_)))
+                    .then(|| a.source_file.clone().unwrap_or_else(|| out.in_file.clone()));
                 let acc = AccLemma {
                     name: a.name.clone(),
+                    heuristic_in_file,
                     attributes: a.attributes.clone(),
                     formula: crate::formula::from_parser(&a.formula, &out.signature)?,
                     case_test_idents: a.case_test_idents.clone(),

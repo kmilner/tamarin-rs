@@ -77,7 +77,7 @@ wf_block() {
 }
 # flags_for / ckey come from gate_common.sh — one key format for this gate,
 # pretty_gate.sh (whose cache this gate READS) and corpus_file_diff.sh.
-export -f strip_env wf_block flags_for include_shas oracle_shas ckey
+export -f file_sha256 strip_env wf_block flags_for input_manifest _include_shas_from_manifest _oracle_shas_from_manifest ckey
 
 # --- PHASE 0: fill any MISSING <key>.load.gz with one oracle LOAD.
 # Same artifact and same key pretty_gate.sh PHASE 0 writes, so whichever gate
@@ -88,7 +88,11 @@ export -f strip_env wf_block flags_for include_shas oracle_shas ckey
 hs_fill_one() {
     local rel="$1" f="$CORPUS_ROOT/$1" key fl
     [ -f "$f" ] || return 0
-    key=$(ckey "$rel" "$f"); fl=$(flags_for "$rel")
+    if ! key=$(ckey "$rel" "$f"); then
+        echo "  INPUT MANIFEST FAILED  $rel" >&2
+        return 0
+    fi
+    fl=$(flags_for "$rel")
     [ -f "$HS_CACHE/$key.load.gz" ] && return 0
     # `.nohs` is pretty_gate.sh's sticky "the oracle gave nothing here" marker
     # (also set for the RS-unported --diff theories); honour it rather than
@@ -122,7 +126,11 @@ export -f hs_fill_one
 one() {
     local rel="$1" f="$CORPUS_ROOT/$1" key fl hs rs d
     [ -f "$f" ] || { printf '%s\tSKIP_NO_HS\t0\n' "$rel"; return 0; }
-    key=$(ckey "$rel" "$f"); fl=$(flags_for "$rel")
+    if ! key=$(ckey "$rel" "$f"); then
+        printf '%s\tSKIP_INPUT_MANIFEST\t0\n' "$rel"
+        return 0
+    fi
+    fl=$(flags_for "$rel")
     [ -f "$HS_CACHE/$key.load.gz" ] || { printf '%s\tSKIP_NO_HS\t0\n' "$rel"; return 0; }
     hs=$(zcat "$HS_CACHE/$key.load.gz" | strip_env | wf_block)
     # RS: theory-load only (NO --prove) so the wf block prints fast.

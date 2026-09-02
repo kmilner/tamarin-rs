@@ -109,7 +109,11 @@ trap 'rm -rf "$tmp"' EXIT
 # --- HS (shared raw cache).
 key=""
 if [ -z "$NO_HS_CACHE" ]; then
-    key="$HS_CANON_CACHE/$(proof_cache_key "$file" "$lemma" "$EXTRA_FLAGS")"
+    if ! cache_id=$(proof_cache_key "$file" "$lemma" "$EXTRA_FLAGS"); then
+        echo "$lemma: input manifest failed" >&2
+        exit 2
+    fi
+    key="$HS_CANON_CACHE/$cache_id"
 fi
 if [ -n "$key" ] && [ -f "$key.full.gz" ]; then
     # The cache is keyed by file CONTENT, but HS echoes the input path verbatim

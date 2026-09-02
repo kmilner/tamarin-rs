@@ -109,7 +109,7 @@ export -f strip_env
 # different oracle are a MISS rather than a stale hit.
 FLAGS_MAP="${FLAGS_MAP:-$script_dir/file_flags.tsv}"
 export FLAGS_MAP
-export -f flags_for include_shas oracle_shas ckey
+export -f file_sha256 flags_for input_manifest _include_shas_from_manifest _oracle_shas_from_manifest ckey
 
 # --- file list (allowlist) ---
 # gate_common's filelist: explicit ALLOWLIST env > committed canonical corpus
@@ -129,7 +129,11 @@ filelist_fallback() {
 hs_one() {
     local rel="$1" f="$CORPUS_ROOT/$1" key out rc fl old_cap old_seconds current_seconds
     [ -f "$f" ] || return 0
-    key=$(ckey "$rel" "$f"); fl=$(flags_for "$rel")
+    if ! key=$(ckey "$rel" "$f"); then
+        echo "  INPUT MANIFEST FAILED  $rel" >&2
+        return 0
+    fi
+    fl=$(flags_for "$rel")
     [ -f "$CACHE/$key.full.gz" ] && return 0
     if [ -f "$CACHE/$key.timeout" ]; then
         old_cap=$(cat "$CACHE/$key.timeout")
@@ -185,7 +189,11 @@ export -f duration_seconds hs_one
 rs_one() {
     local rel="$1" f="$CORPUS_ROOT/$1" key hs rs d rc fl
     [ -f "$f" ] || { printf '%s\tSKIP_NO_HS\t0\t0\t0\n' "$rel"; return 0; }
-    key=$(ckey "$rel" "$f"); fl=$(flags_for "$rel")
+    if ! key=$(ckey "$rel" "$f"); then
+        printf '%s\tSKIP_INPUT_MANIFEST\t0\t0\t0\n' "$rel"
+        return 0
+    fi
+    fl=$(flags_for "$rel")
     if [ -f "$CACHE/$key.timeout" ]; then printf '%s\tSKIP_HS_TIMEOUT\t0\t0\t0\n' "$rel"; return 0; fi
     if [ ! -f "$CACHE/$key.full.gz" ]; then printf '%s\tSKIP_NO_HS\t0\t0\t0\n' "$rel"; return 0; fi
     # shellcheck disable=SC2086  # $fl must word-split into separate flags
@@ -236,7 +244,11 @@ rc_unknown=0
 while IFS=$'\t' read -r rel st _; do
     case "$st" in MATCH|DIFF|RC_DIFF) ;; *) continue;; esac
     [ -f "$CORPUS_ROOT/$rel" ] || continue
-    [ -f "$CACHE/$(ckey "$rel" "$CORPUS_ROOT/$rel").rc" ] || rc_unknown=$((rc_unknown+1))
+    if ! key=$(ckey "$rel" "$CORPUS_ROOT/$rel"); then
+        rc_unknown=$((rc_unknown+1))
+        continue
+    fi
+    [ -f "$CACHE/$key.rc" ] || rc_unknown=$((rc_unknown+1))
 done < "$RESULTS_TSV"
 printf '  %-18s %d\n' "RC_UNKNOWN" "$rc_unknown"
 echo "  results: $RESULTS_TSV"

@@ -110,7 +110,7 @@ fn precompute_full_sources_emits_per_tag_entries() {
     assert!(a_src.cases_or_empty().is_empty());
     // A forced cell lists the two rules that conclude `A(x)`.
     let names: Vec<String> = a_src
-        .cases(&ctx)
+        .cases_unchecked(&ctx)
         .iter()
         .map(|(n, _)| case_name_list_to_string(n))
         .collect();

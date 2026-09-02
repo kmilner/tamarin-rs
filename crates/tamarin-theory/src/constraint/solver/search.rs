@@ -42,9 +42,8 @@
 use std::collections::BTreeMap;
 
 use crate::constraint::solver::context::{CutStrategy, ProofContext};
-use crate::constraint::solver::goals::RankingError;
 use crate::constraint::solver::proof_method::{
-    exec_proof_method, is_finished, ProofMethod, Result as MethodResult,
+    exec_proof_method_unchecked, is_finished_unchecked, ProofMethod, Result as MethodResult,
 };
 use crate::constraint::system::System;
 use crate::prove::ProveError;
@@ -88,20 +87,6 @@ pub fn node_status_of(r: &MethodResult) -> NodeStatus {
         MethodResult::Solved => NodeStatus::Solved,
         MethodResult::Contradictory(_) => NodeStatus::Contradictory,
         MethodResult::Unfinishable => NodeStatus::Unfinishable,
-    }
-}
-
-impl NodeStatus {
-    /// Aggregate child statuses using HS `ProofStatus` precedence.
-    pub fn combine(self, other: Self) -> Self {
-        use NodeStatus::*;
-        match (self, other) {
-            (Solved, _) | (_, Solved) => Solved,
-            (Sorry, _) | (_, Sorry) => Sorry,
-            (Unfinishable, _) | (_, Unfinishable) => Unfinishable,
-            (Contradictory, _) | (_, Contradictory) => Contradictory,
-            (Open, Open) => Open,
-        }
     }
 }
 
@@ -332,6 +317,21 @@ fn disable_parallel_expand() -> bool {
     tamarin_utils::env_gate!("TAM_RS_DISABLE_PARALLEL_EXPAND")
 }
 
+#[inline]
+fn should_parallel_expand(
+    ctx: &ProofContext,
+    n_cases: usize,
+    depth: usize,
+    serial_only: bool,
+) -> bool {
+    !serial_only
+        && !ctx.is_exists_trace
+        && !ctx.proving_may_fail()
+        && matches!(ctx.cut, CutStrategy::Dfs)
+        && n_cases >= 2
+        && depth <= 16
+}
+
 /// Per-lemma wall-clock cap on `run_proof_search`. This is a Rust-only,
 /// opt-in cap (`TAM_PROVE_DEADLINE_MS`) with NO Haskell counterpart — HS
 /// has no `--prove-timeout`-style flag. It exists so that when the search
@@ -547,15 +547,15 @@ pub fn run_proof_search(
     run_proof_search_at_depth(ctx, initial, proof_bound, 0)
 }
 
-pub fn run_proof_search_at_depth(
+pub(crate) fn run_proof_search_at_depth(
     ctx: &ProofContext,
     initial: System,
     proof_bound: usize,
     ranking_depth_offset: usize,
 ) -> Result<ProofNode, ProveError> {
-    let proof =
-        run_proof_search_at_depth_unchecked(ctx, initial, proof_bound, ranking_depth_offset)?;
-    ctx.source_result(proof)
+    ctx.source_result(|| {
+        run_proof_search_at_depth_unchecked(ctx, initial, proof_bound, ranking_depth_offset)
+    })
 }
 
 fn run_proof_search_at_depth_unchecked(
@@ -563,7 +563,7 @@ fn run_proof_search_at_depth_unchecked(
     initial: System,
     proof_bound: usize,
     ranking_depth_offset: usize,
-) -> Result<ProofNode, RankingError> {
+) -> Result<ProofNode, ProveError> {
     let deadline = proof_deadline();
     let _tls = SearchTlsGuard::install(SearchTlsState {
         deadline: Some(deadline),
@@ -810,7 +810,7 @@ fn bfs_check_level(
         }
     }
     build.then(|| {
-        let status = rollup_from_children(&new_children);
+        let status = rollup_status(&new_children);
         ProofNode {
             method: node.method.clone(),
             sys: node.sys.clone(),
@@ -883,7 +883,7 @@ fn re_expand_depth_limited(
     budget: &mut usize,
     deadline: &std::time::Instant,
     depth: usize,
-) -> Result<(), RankingError> {
+) -> Result<(), ProveError> {
     // Was this node stalled at the depth limit on the previous iteration?
     if is_depth_limited(node) {
         // Re-expand from scratch at this depth.  The deeper `MAX_DEPTH`
@@ -933,7 +933,7 @@ fn re_expand_depth_limited(
     // `expand_inner`'s `node.status = if any_solved ...` rollup
     // (the `Semigroup ProofStatus` port below).
     if !node.children.is_empty() {
-        node.status = rollup_from_children(&node.children);
+        node.status = rollup_status(&node.children);
     }
     Ok(())
 }
@@ -941,10 +941,10 @@ fn re_expand_depth_limited(
 /// Roll a node's children up into its status, mirroring Haskell's
 /// `Semigroup ProofStatus` precedence (`Theory.Proof:409`):
 /// `Solved` > `Sorry` > `Unfinishable` > `Contradictory`.  Returns
-/// `Sorry` for an empty child set (the defensive fallback both call
-/// sites already used); a caller that must leave `status` untouched on
+/// `Sorry` for an empty child set (the defensive fallback used by its
+/// callers); a caller that must leave `status` untouched on
 /// empty children guards the call itself.
-fn rollup_from_children(children: &BTreeMap<String, ProofNode>) -> NodeStatus {
+pub fn rollup_status(children: &BTreeMap<String, ProofNode>) -> NodeStatus {
     let mut any_solved = false;
     let mut any_contra = false;
     let mut any_unfin = false;
@@ -977,7 +977,7 @@ fn expand(
     budget: &mut usize,
     deadline: &std::time::Instant,
     depth: usize,
-) -> Result<(), RankingError> {
+) -> Result<(), ProveError> {
     expand_inner(ctx, node, budget, deadline, depth)?;
     // After expansion, `sys` is no longer read EXCEPT on
     // `Sorry: depth limit` leaves, which `re_expand_depth_limited`
@@ -1024,7 +1024,7 @@ fn expand_inner(
     budget: &mut usize,
     deadline: &std::time::Instant,
     depth: usize,
-) -> Result<(), RankingError> {
+) -> Result<(), ProveError> {
     // `--bound=N` (HS `boundProofDepth`, Theory/Proof.hs:336-344): `go n`'s
     // `0 < n` guard fires before the node is even inspected, so ANY node at
     // depth `bound` — a would-be Solved leaf included — becomes
@@ -1073,8 +1073,11 @@ fn expand_inner(
         node.status = NodeStatus::Sorry;
         return Ok(());
     }
-    // Already terminal.
-    if let Some(r) = is_finished(ctx, &node.sys) {
+    // Already terminal. Contradiction checks can lazily force sources, so
+    // report a provider failure before accepting their provisional result.
+    let finished = is_finished_unchecked(ctx, &node.sys);
+    ctx.check_source_error()?;
+    if let Some(r) = finished {
         node.status = node_status_of(&r);
         node.method = ProofMethod::Finished(r);
         return Ok(());
@@ -1196,23 +1199,13 @@ fn expand_inner(
     // All-traces lemmas never short-circuit on Solved (Solved means a
     // counter-example was found; valid lemmas never see this), so for
     // those parallel exploration of every sibling matches HS exactly.
-    let parallel = !serial_only
-        && !ctx.is_exists_trace
-        // Only `Dfs` (HS `cutOnSolvedDFS`, itself `parTraversable`-parallel)
-        // expands siblings in parallel.  seqdfs (HS
-        // `cutOnSolvedSingleThreadDFS`) is single-threaded by definition —
-        // it descends the leftmost branch to completion and short-circuits
-        // on the first solved leaf; parallel sibling exploration would
-        // defeat that early-break, exploring (and possibly hanging on)
-        // branches HS's `foldMap` prunes.  The bfs/none/sorry extractors
-        // route through the serial branch's per-strategy abort policy
-        // (below), which the parallel branch does not implement.
-        && matches!(ctx.cut, CutStrategy::Dfs)
-        && n_cases >= 2
-        && depth <= 16; // bound recursion-level parallel splits; deeper
-                        // splits hurt more than help under rayon's
-                        // work-stealing — see HS's parLTreeDFS which
-                        // is similarly shallow in practice.
+    // Fallible rankings and guarded conversions also stay serial: Rayon
+    // waits for every in-flight sibling before returning an error, so an
+    // unbounded sibling could otherwise hide a prompt failure indefinitely.
+    // Only `Dfs` uses HS's parallel extractor; the other cuts depend on the
+    // serial branch's abort policy. Limit fan-out to shallow levels because
+    // deeper splits cost more than they save under work stealing.
+    let parallel = should_parallel_expand(ctx, n_cases, depth, serial_only);
     if parallel {
         use rayon::prelude::*;
         // Snapshot data needed by each worker.  MAX_DEPTH is a per-
@@ -1231,7 +1224,7 @@ fn expand_inner(
         // parent's TLS and case path; retain only the worker results that must
         // be aggregated into the parent search.
         let parent_depth_limit_hit = DEPTH_LIMIT_HIT.with(|f| f.get());
-        let results: Result<Vec<(String, ProofNode, bool)>, RankingError> = cases
+        let results: Result<Vec<(String, ProofNode, bool)>, ProveError> = cases
             .into_par_iter()
             .map(|(name, sys)| {
                 // Each rayon worker has its own thread-locals.  Initialise
@@ -1345,7 +1338,7 @@ fn expand_inner(
                         // NSPK3 renders `by contradiction /* cyclic */`
                         // leaves amid the sorry stubs — while every
                         // still-open node becomes a bare `sorry` leaf.
-                        let (method, status) = match is_finished(ctx, &sys) {
+                        let (method, status) = match is_finished_unchecked(ctx, &sys) {
                             Some(r) => {
                                 let st = node_status_of(&r);
                                 (ProofMethod::Finished(r), st)
@@ -1414,7 +1407,7 @@ fn expand_inner(
     // (`Contradictory` = all children closed without a Solved; the
     // empty-children fallback is `Sorry`, but the empty case-set was
     // already handled earlier as `Contradictory`.)
-    node.status = rollup_from_children(&node.children);
+    node.status = rollup_status(&node.children);
     // Note: `Contradictory` is only reached when no child is
     // Solved/Sorry/Unfinishable — i.e. every branch closed to ⊥.
     Ok(())
@@ -1424,10 +1417,15 @@ fn select_open_method(
     sys: &System,
     ctx: &ProofContext,
     depth: usize,
-) -> Result<Option<(ProofMethod, Vec<(String, System)>)>, RankingError> {
-    Ok(candidate_methods_open(sys, ctx, depth)?
-        .into_iter()
-        .find_map(|method| exec_proof_method(ctx, &method, sys).map(|cases| (method, cases))))
+) -> Result<Option<(ProofMethod, Vec<(String, System)>)>, ProveError> {
+    let methods = ctx.source_result(|| candidate_methods_open(sys, ctx, depth))?;
+    for method in methods {
+        let cases = ctx.source_result(|| Ok(exec_proof_method_unchecked(ctx, &method, sys)))?;
+        if let Some(cases) = cases {
+            return Ok(Some((method, cases)));
+        }
+    }
+    Ok(None)
 }
 
 /// Run the goal ranker at the effective depth. `Ok(None)` is its ApplySorry
@@ -1436,7 +1434,7 @@ fn try_rank_goals(
     sys: &System,
     ctx: &ProofContext,
     depth: usize,
-) -> Result<Option<Vec<crate::constraint::solver::annotated_goals::AnnotatedGoal>>, RankingError> {
+) -> Result<Option<Vec<crate::constraint::solver::annotated_goals::AnnotatedGoal>>, ProveError> {
     let depth = depth.saturating_add(RANKING_DEPTH_OFFSET.with(|d| d.get()));
     crate::constraint::solver::goals::rank_goals_with(sys, Some(ctx), depth)
 }
@@ -1490,15 +1488,14 @@ pub fn candidate_methods(
     ctx: &ProofContext,
     depth: usize,
 ) -> Result<Vec<ProofMethod>, ProveError> {
-    let methods = candidate_methods_unchecked(sys, ctx, depth)?;
-    ctx.source_result(methods)
+    ctx.source_result(|| candidate_methods_unchecked(sys, ctx, depth))
 }
 
 fn candidate_methods_unchecked(
     sys: &System,
     ctx: &ProofContext,
     depth: usize,
-) -> Result<Vec<ProofMethod>, RankingError> {
+) -> Result<Vec<ProofMethod>, ProveError> {
     // HS `stoppingMethod` (rankProofMethods, ProofMethod.hs:749-751):
     // `(Finished <$> isFinished ctxt sys) <|> …` — a finished system's
     // method list is exactly `[Finished r]`, displacing Simplify and every
@@ -1506,7 +1503,7 @@ fn candidate_methods_unchecked(
     // accountability `⊤` VC lemma's root, whose one applicable method is
     // `contradiction` (HS redirects on it; an empty list here made RS
     // alert "prover failed").
-    if let Some(r) = is_finished(ctx, sys) {
+    if let Some(r) = is_finished_unchecked(ctx, sys) {
         return Ok(vec![ProofMethod::Finished(r)]);
     }
     candidate_methods_open(sys, ctx, depth)
@@ -1521,7 +1518,7 @@ fn candidate_methods_open(
     sys: &System,
     ctx: &ProofContext,
     depth: usize,
-) -> Result<Vec<ProofMethod>, RankingError> {
+) -> Result<Vec<ProofMethod>, ProveError> {
     // Haskell-faithful: build the FULL ranked goal list, not just the
     // first one (ProofMethod.hs:520-540).  Haskell's `proofMethods`
     // includes ALL open goals as SolveGoal candidates; `execMethods`
@@ -1573,20 +1570,19 @@ pub fn candidate_methods_with_expl(
     ctx: &ProofContext,
     depth: usize,
 ) -> Result<Vec<(ProofMethod, String)>, ProveError> {
-    let methods = candidate_methods_with_expl_unchecked(sys, ctx, depth)?;
-    ctx.source_result(methods)
+    ctx.source_result(|| candidate_methods_with_expl_unchecked(sys, ctx, depth))
 }
 
 fn candidate_methods_with_expl_unchecked(
     sys: &System,
     ctx: &ProofContext,
     depth: usize,
-) -> Result<Vec<(ProofMethod, String)>, RankingError> {
+) -> Result<Vec<(ProofMethod, String)>, ProveError> {
     use crate::constraint::constraints::Goal;
     use crate::constraint::solver::annotated_goals::Usefulness;
     // HS `stoppingMethod` — see `candidate_methods`; keeps the DISPLAYED
     // numbering in lockstep with the apply path.
-    if let Some(r) = is_finished(ctx, sys) {
+    if let Some(r) = is_finished_unchecked(ctx, sys) {
         return Ok(vec![(ProofMethod::Finished(r), String::new())]);
     }
     // The selected ranking produced no matches with quitOnEmpty →
@@ -1688,6 +1684,26 @@ mod tests {
             .map(|_| crate::elaborate::term_to_lnterm(&term, &msig).expect("converts"))
             .collect();
         assert!(on_workers.iter().all(|t| *t == on_caller));
+    }
+
+    #[test]
+    fn fallible_searches_do_not_fan_out_siblings() {
+        let Some(mut ctx) = ctx() else { return };
+        ctx.cut = CutStrategy::Dfs;
+        ctx.is_exists_trace = false;
+        assert!(should_parallel_expand(&ctx, 2, 0, false));
+
+        ctx.sources_may_fail = true;
+        assert!(!should_parallel_expand(&ctx, 2, 0, false));
+        ctx.sources_may_fail = false;
+        ctx.heuristic = Some(vec![
+            crate::constraint::solver::goals::GoalRanking::Smart(false),
+            crate::constraint::solver::goals::GoalRanking::Oracle {
+                quit_on_empty: false,
+                oracle_path: "oracle".into(),
+            },
+        ]);
+        assert!(!should_parallel_expand(&ctx, 2, 0, false));
     }
 
     #[test]
