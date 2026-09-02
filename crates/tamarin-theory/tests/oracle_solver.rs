@@ -1012,7 +1012,7 @@ fn verdict_match_suite_all_solved_against_tamarin() {
             std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {}", fixture, e));
         let theory = parse_theory(&src, &[]).expect("parse");
         let elab = tamarin_theory::elaborate::elaborate(&theory).expect("elaborate");
-        let root = prove_lemma(&elab, lemma, h, 200)
+        let root = prove_lemma(std::sync::Arc::new(elab), lemma, h, 200)
             .unwrap_or_else(|e| panic!("prove_lemma({}/{}): {:?}", fixture, lemma, e));
         assert_eq!(
             root.status, *expected,
@@ -1128,7 +1128,7 @@ fn corpus_proof_skeleton_match_probe() {
         path: std::path::PathBuf,
         summary: String,
         proof_text: String,
-        elab: tamarin_theory::theory::Theory,
+        elab: std::sync::Arc<tamarin_theory::theory::Theory>,
     }
     let pid = std::process::id();
     let files: Vec<FileWork> = paths
@@ -1177,7 +1177,7 @@ fn corpus_proof_skeleton_match_probe() {
                 path: path.clone(),
                 summary,
                 proof_text,
-                elab,
+                elab: std::sync::Arc::new(elab),
             })
         })
         .collect();
@@ -1185,7 +1185,7 @@ fn corpus_proof_skeleton_match_probe() {
     // Phase 3: flatten to per-lemma work.
     struct LemmaWork<'a> {
         path: &'a std::path::PathBuf,
-        elab: &'a tamarin_theory::theory::Theory,
+        elab: std::sync::Arc<tamarin_theory::theory::Theory>,
         proof_text: &'a str,
         lemma_name: String,
         trace_quantifier: tamarin_theory::theory::TraceQuantifier,
@@ -1208,7 +1208,7 @@ fn corpus_proof_skeleton_match_probe() {
                 };
                 Some(LemmaWork {
                     path: &f.path,
-                    elab: &f.elab,
+                    elab: std::sync::Arc::clone(&f.elab),
                     proof_text: &f.proof_text,
                     lemma_name: lemma.name.clone(),
                     trace_quantifier: lemma.trace_quantifier,
@@ -1250,10 +1250,10 @@ fn corpus_proof_skeleton_match_probe() {
             // panicking lemma kills the whole rayon par_iter and the
             // probe yields no number.
             let h_for_prove = h.clone();
-            let theory_ref = w.elab;
+            let theory = std::sync::Arc::clone(&w.elab);
             let lemma_name = w.lemma_name.clone();
             let root_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                prove_lemma(theory_ref, &lemma_name, h_for_prove, 2000)
+                prove_lemma(theory, &lemma_name, h_for_prove, 2000)
             }));
             let _ = watchdog.finish();
             let root = match root_result {
@@ -1388,7 +1388,7 @@ fn prove_lemma_tiny_setup_verdict_matches_tamarin() {
     let src = std::fs::read_to_string(&path).expect("read");
     let theory = parse_theory(&src, &[]).expect("parse");
     let elab = tamarin_theory::elaborate::elaborate(&theory).expect("elaborate");
-    let root = prove_lemma(&elab, "trivial", h, 100).expect("prove_lemma");
+    let root = prove_lemma(std::sync::Arc::new(elab), "trivial", h, 100).expect("prove_lemma");
 
     // Our verdict.
     assert_eq!(
@@ -1506,7 +1506,7 @@ fn prove_lemma_disj_lemma_terminates_and_tamarin_verifies() {
     let src = std::fs::read_to_string(&path).expect("read");
     let theory = parse_theory(&src, &[]).expect("parse");
     let elab = tamarin_theory::elaborate::elaborate(&theory).expect("elaborate");
-    let root = prove_lemma(&elab, "either", h, 50).expect("prove_lemma");
+    let root = prove_lemma(std::sync::Arc::new(elab), "either", h, 50).expect("prove_lemma");
 
     // `either` is `exists-trace`.  A witness trace is therefore `Solved` on
     // our side and `verified` on the oracle's.  Every other status is a
@@ -1852,7 +1852,8 @@ fn fixture_nat_sort_reuse_lemma_derives_implied_fact() {
     let theory = parse_theory(&src, &[]).expect("parse");
     let elab = tamarin_theory::elaborate::elaborate(&theory).expect("elaborate");
     let h = tamarin_term::maude_proc::MaudeHandle::start(&mp, elab.signature.clone()).unwrap();
-    let root = prove_lemma(&elab, "CanForgeAndPost", h, 500).expect("prove_lemma");
+    let root =
+        prove_lemma(std::sync::Arc::new(elab), "CanForgeAndPost", h, 500).expect("prove_lemma");
     assert_eq!(root.status, NodeStatus::Solved, "expected a witness trace");
 
     fn contains_honest_signature_key(n: &ProofNode) -> bool {

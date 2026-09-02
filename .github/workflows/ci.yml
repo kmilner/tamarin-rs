@@ -95,6 +95,14 @@ jobs:
       - run: export PATH="/opt/maude:$PATH" && cargo test --profile ci --workspace
         env:
           MAUDE_PATH: /opt/maude/maude
+      # The bypass path deliberately recomputes sources per context. Keep it
+      # in a separate process: environment-gate changes are not thread-safe
+      # inside the parallel Rust test harness.
+      - name: Source-cache bypass
+        run: export PATH="/opt/maude:$PATH" && cargo test --profile ci -p tamarin-theory prove::tests --lib
+        env:
+          MAUDE_PATH: /opt/maude/maude
+          TAM_RS_NO_SOURCE_CACHE: "1"
       # Wellformedness fixture roster, port side (~2s; the step above has
       # already built this example). `cargo test` runs the same 18 fixtures
       # through tamarin-theory's wellformedness fixture tests. The one thing

@@ -529,7 +529,7 @@ fn prove_deduction_theory(
         &g,
     );
     let root = run_proof_search(&ctx, sys, usize::MAX)
-        .expect("the deduction proof context uses no fallible ranking");
+        .expect("the deduction proof context has no fallible ranking or source provider");
     proof_status(&root) == ProofStatus::TraceFound
 }
 

@@ -192,16 +192,27 @@ pub struct ProofContext {
     /// (HS Theory/Text/Parser.hs:309, System.hs:575-576).  Stored as the absolute
     /// path passed to `--prove`.  Per-lemma, so owned.
     pub theory_file: String,
-    /// Per-lemma source cells. Their materialised case vectors are immutable
-    /// `Arc`s, so context clones share the heavy systems while keeping their
-    /// own lazy cell.
+    /// Source-cell layout for this context. Session-backed contexts own these
+    /// lightweight cells while sharing their materialised case vectors.
     pub full_sources: std::sync::Arc<Vec<crate::constraint::solver::sources::Source>>,
+    /// Optional session-level source materialiser. Batch/web contexts install
+    /// this so the first actual `pcSources` access can populate the shared
+    /// raw/refined cache; standalone contexts saturate themselves directly.
+    pub(crate) source_provider: Option<std::sync::Arc<dyn SourceProvider>>,
+    /// A deferred provider failure. Source consumers are infallible deep in
+    /// the reduction stack, so the proving boundary reports this after the
+    /// attempted step rather than forcing conversion before it is needed.
+    source_error: std::sync::Arc<std::sync::OnceLock<crate::prove::ProveError>>,
     /// Per-context lazy saturation gate.
     pub(crate) saturate_gate: SaturateGate,
     /// Read-only theory data (`intruder_rules`, `restrictions`, …), shared
     /// behind an `Arc`. Field reads are
     /// transparent through the [`std::ops::Deref`] implementation below.
     pub shared: std::sync::Arc<ProofContextShared>,
+}
+
+pub(crate) trait SourceProvider: std::fmt::Debug + Send + Sync {
+    fn materialize(&self, ctx: &ProofContext) -> Result<(), crate::prove::ProveError>;
 }
 
 /// Transparent read access to immutable theory data.
@@ -234,8 +245,44 @@ impl SaturateGate {
     }
 }
 
-impl Clone for ProofContext {
-    fn clone(&self) -> Self {
+impl ProofContext {
+    pub(crate) fn source_result<T>(&self, value: T) -> Result<T, crate::prove::ProveError> {
+        match self.source_error() {
+            Some(error) => Err(error),
+            None => Ok(value),
+        }
+    }
+
+    fn copy_with_sources(
+        &self,
+        full_sources: std::sync::Arc<Vec<crate::constraint::solver::sources::Source>>,
+        source_error: std::sync::Arc<std::sync::OnceLock<crate::prove::ProveError>>,
+        saturate_state: SaturateState,
+    ) -> Self {
+        Self {
+            maude: self.maude.clone(),
+            maude_pool: self.maude_pool.clone(),
+            use_induction: self.use_induction,
+            injective_fact_insts: self.injective_fact_insts.clone(),
+            is_exists_trace: self.is_exists_trace,
+            cut: self.cut,
+            typing_assumptions: self.typing_assumptions.clone(),
+            heuristic: self.heuristic.clone(),
+            lemma_name: self.lemma_name.clone(),
+            theory_file: self.theory_file.clone(),
+            full_sources,
+            source_provider: self.source_provider.clone(),
+            source_error,
+            saturate_gate: SaturateGate::new(saturate_state),
+            shared: std::sync::Arc::clone(&self.shared),
+        }
+    }
+
+    fn clone_with_sources(
+        &self,
+        full_sources: std::sync::Arc<Vec<crate::constraint::solver::sources::Source>>,
+        source_error: std::sync::Arc<std::sync::OnceLock<crate::prove::ProveError>>,
+    ) -> Self {
         let current_thread = std::thread::current().id();
         let mut state = self
             .saturate_gate
@@ -262,21 +309,29 @@ impl Clone for ProofContext {
             }
         };
         drop(state);
-        ProofContext {
-            maude: self.maude.clone(),
-            maude_pool: self.maude_pool.clone(),
-            use_induction: self.use_induction,
-            injective_fact_insts: self.injective_fact_insts.clone(),
-            is_exists_trace: self.is_exists_trace,
-            cut: self.cut,
-            typing_assumptions: self.typing_assumptions.clone(),
-            heuristic: self.heuristic.clone(),
-            lemma_name: self.lemma_name.clone(),
-            theory_file: self.theory_file.clone(),
-            full_sources: std::sync::Arc::new(self.full_sources.iter().cloned().collect()),
-            saturate_gate: SaturateGate::new(cloned_state),
-            shared: std::sync::Arc::clone(&self.shared),
-        }
+        self.copy_with_sources(full_sources, source_error, cloned_state)
+    }
+
+    /// Build an independent context around a fresh set of lazy source cells.
+    /// Materialised cases may still be shared by a session source provider.
+    pub(crate) fn fresh_with_sources(
+        &self,
+        full_sources: std::sync::Arc<Vec<crate::constraint::solver::sources::Source>>,
+    ) -> Self {
+        self.copy_with_sources(
+            full_sources,
+            std::sync::Arc::new(std::sync::OnceLock::new()),
+            SaturateState::Pending,
+        )
+    }
+}
+
+impl Clone for ProofContext {
+    fn clone(&self) -> Self {
+        self.clone_with_sources(
+            std::sync::Arc::new(self.full_sources.iter().cloned().collect()),
+            std::sync::Arc::clone(&self.source_error),
+        )
     }
 }
 
@@ -427,6 +482,8 @@ impl ProofContext {
             lemma_name: self.lemma_name.clone(),
             theory_file: self.theory_file.clone(),
             full_sources,
+            source_provider: self.source_provider.clone(),
+            source_error: std::sync::Arc::clone(&self.source_error),
             // Saturation workers read the previous iteration's source cells;
             // proof-search workers inherit an already-complete set. Both are
             // O(1) refcount bumps. A defensive pre-saturation call instead
@@ -448,7 +505,6 @@ impl ProofContext {
     /// lemma) never call this, so zero saturate-time `[EXEC]` lines
     /// fire — matching HS's lazy-thunk behaviour.
     pub fn ensure_saturated(&self) {
-        let saturate_cnt_before = self.maude.fresh_counter_peek();
         {
             let current_thread = std::thread::current().id();
             let mut state = self
@@ -481,7 +537,26 @@ impl ProofContext {
                 }
             }
         }
+        // Snapshot only after this thread owns the saturation run. A waiter
+        // may observe the shared Maude counter while the owner is using it;
+        // taking the snapshot before the gate would then restore that
+        // transient value instead of the caller's counter.
+        let saturate_cnt_before = self.maude.fresh_counter_peek();
         let run = SaturationRun::new(self, saturate_cnt_before);
+        if let Some(provider) = &self.source_provider {
+            if let Err(error) = provider.materialize(self) {
+                let _ = self.source_error.set(error);
+                // Keep the infallible deep solver API from falling through to
+                // a second, standalone source computation after the provider
+                // failed. The public proving boundary reports `source_error`.
+                let empty = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+                for source in self.full_sources.iter() {
+                    source.cases_set_shared(std::sync::Arc::clone(&empty));
+                }
+            }
+            run.finish();
+            return;
+        }
         // HS-FAITHFUL PURITY: source refinement (`precomputeSources` /
         // `saturateSources` / `refineWithSourceAsms`, Sources.hs) is a PURE
         // `[Source] -> [Source]` computation with LOCAL `evalFresh (avoid
@@ -591,6 +666,15 @@ impl ProofContext {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = SaturateState::Done;
         self.saturate_gate.ready.notify_all();
+    }
+
+    pub(crate) fn set_source_provider(&mut self, provider: std::sync::Arc<dyn SourceProvider>) {
+        self.source_provider = Some(provider);
+        self.source_error = std::sync::Arc::new(std::sync::OnceLock::new());
+    }
+
+    pub fn source_error(&self) -> Option<crate::prove::ProveError> {
+        self.source_error.get().cloned()
     }
 
     /// Variant that accepts the theory-level restrictions.  Mirrors
@@ -1176,6 +1260,8 @@ impl ProofContext {
             lemma_name: String::new(),
             theory_file: String::new(),
             full_sources: std::sync::Arc::new(Vec::new()),
+            source_provider: None,
+            source_error: std::sync::Arc::new(std::sync::OnceLock::new()),
             saturate_gate: SaturateGate::new(SaturateState::Pending),
             shared: std::sync::Arc::new(ProofContextShared {
                 rules,
@@ -1573,6 +1659,32 @@ mod tests {
             *worker.saturate_gate.state.lock().unwrap(),
             SaturateState::Done
         );
+    }
+
+    #[test]
+    fn fresh_session_layout_resets_saturation_and_error() {
+        let Some(path) = require_maude_path() else {
+            return;
+        };
+        let ctx = ProofContext::new(
+            tamarin_term::maude_proc::MaudeHandle::start(
+                &path,
+                tamarin_term::maude_sig::pair_maude_sig(),
+            )
+            .unwrap(),
+            Vec::new(),
+        );
+        ctx.mark_saturated_done();
+        ctx.source_error
+            .set(crate::prove::ProveError::Guarded("old".into()))
+            .unwrap();
+
+        let fresh = ctx.fresh_with_sources(std::sync::Arc::clone(&ctx.full_sources));
+        assert_eq!(
+            *fresh.saturate_gate.state.lock().unwrap(),
+            SaturateState::Pending
+        );
+        assert!(fresh.source_error().is_none());
     }
 
     #[test]

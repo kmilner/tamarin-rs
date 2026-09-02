@@ -351,63 +351,23 @@ impl Source {
         }
     }
 
-    /// Materialise + return the cases.  `prove_lemma` runs
-    /// `ProofContext::ensure_saturated` eagerly before any lemma proof
-    /// starts, so the cached value is normally already populated.
-    /// The defensive `ensure_saturated()` call below is idempotent
-    /// (state machine returns immediately when Done) and handles
-    /// odd code paths that bypass `prove_lemma` (tests, probes).
+    /// Materialise + return the cases. Session-backed contexts resolve their
+    /// shared raw/refined slot here; standalone contexts perform their own
+    /// saturation. The state machine makes repeated calls inexpensive.
     ///
     /// Returns an owned working copy. The stored list itself remains shared
     /// across context clones and cache hits; solver consumers generally mutate
     /// their returned systems while grafting them into a branch.
     pub fn cases(&self, ctx: &crate::constraint::solver::context::ProofContext) -> Vec<SourceCase> {
         ctx.ensure_saturated();
-        let g = self.cases_cell.lock().unwrap();
-        match &*g {
-            Some(v) => v.lock().unwrap().clone(),
-            None => {
-                drop(g);
-                let init_list = self.compute_cases(ctx);
-                *self.cases_cell.lock().unwrap() = Some(std::sync::Arc::new(
-                    std::sync::Mutex::new(init_list.clone()),
-                ));
-                init_list
-            }
-        }
-    }
-
-    /// Compute this source's initial case set: `initial_source_cases`
-    /// (HS's `initialSource` thunk body) with each joined case name split
-    /// into the internal list representation.  Runs the goal-specific
-    /// solvers, so callers must not hold the `cases_cell` lock across
-    /// this call.
-    fn compute_cases(
-        &self,
-        ctx: &crate::constraint::solver::context::ProofContext,
-    ) -> Vec<(Vec<String>, System)> {
-        initial_source_cases(&self.goal, ctx)
-            .into_iter()
-            .map(|(n, s)| (string_to_name_list(&n), s))
-            .collect()
-    }
-
-    /// Force materialisation WITHOUT returning the cases: callers that
-    /// only need the cell forced (e.g. to then read [`Source::cases_len`])
-    /// skip returning even a shared case-list handle.
-    /// The already-materialised path is a lock/check/unlock; the compute
-    /// path mirrors `cases` exactly — `initial_source_cases` runs
-    /// the goal-specific solvers, so it must not execute under the cell
-    /// lock, and the unconditional re-lock/overwrite is deterministic
-    /// because the computed value is.
-    pub fn ensure_cases(&self, ctx: &crate::constraint::solver::context::ProofContext) {
-        ctx.ensure_saturated();
-        if self.cases_cell.lock().unwrap().is_some() {
-            return;
-        }
-        let init_list = self.compute_cases(ctx);
-        *self.cases_cell.lock().unwrap() =
-            Some(std::sync::Arc::new(std::sync::Mutex::new(init_list)));
+        self.cases_cell
+            .lock()
+            .unwrap()
+            .as_ref()
+            .expect("saturated source must have a materialised case list")
+            .lock()
+            .unwrap()
+            .clone()
     }
 
     /// Shared read-only cases, or an empty list when still lazy.
@@ -517,6 +477,7 @@ fn initial_source_cases_impl(
     use crate::constraint::solver::reduction::{GoalCases, Reduction};
 
     let mut sys = System::empty();
+    sys.source_kind = Some(crate::constraint::system::SourceKind::RawSources);
     // HS-faithful (CloseRule.hs:422-426): source precomputation gets ONLY
     // safety restrictions.  Non-safety restrictions (e.g.
     // `Start_implies_Stop = All x #i. Start(x)@i ⇒ Ex #j. Stop(x)@j`)
@@ -1045,7 +1006,24 @@ pub fn refine_with_source_asms(
     ctx: &crate::constraint::solver::context::ProofContext,
 ) -> Vec<Source> {
     if assumptions.is_empty() {
-        return sources;
+        // HS `refineWithSourceAsms _ []` still applies `updateSystem`, so
+        // refined consumers see `RefinedSource` even though no formulas need
+        // to be added and no second saturation can change the cases.
+        return sources
+            .into_iter()
+            .map(|src| {
+                let cases = src
+                    .cases_take()
+                    .into_iter()
+                    .map(|(name, mut sys)| {
+                        sys.source_kind =
+                            Some(crate::constraint::system::SourceKind::RefinedSources);
+                        (name, sys)
+                    })
+                    .collect();
+                Source::eager(src.goal, cases)
+            })
+            .collect();
     }
 
     // Step 1: match Haskell's `updateSystem` (Sources.hs:466-468):
@@ -1410,8 +1388,8 @@ pub fn saturate_sources_with_simp(
         let per_source: Vec<(Vec<(Vec<String>, System)>, bool, usize)> = saturated_indexed
             .into_par_iter()
             .map(|(_i, src)| {
-                if let Some(pool) = &ctx.maude_pool {
-                    let pooled = pool.acquire();
+                let pooled = ctx.maude_pool.as_ref().and_then(|pool| pool.try_acquire());
+                if let Some(pooled) = pooled {
                     // Give the worker a FRESH counter (not the pooled handle's
                     // accumulating one) so `refine_one_source`'s internal
                     // `ensure_above(avoid_max)` reseeds it to the source's OWN
@@ -1425,6 +1403,9 @@ pub fn saturate_sources_with_simp(
                         ctx.with_swapped_maude(pooled.handle().with_fresh_counter_from(0));
                     refine_one_source(&task_ctx, src, &ths_snapshot, branch_cap)
                 } else {
+                    // Source materialisation can be forced by a search worker
+                    // which already owns a pool entry. Blocking here could
+                    // deadlock when every entry is held by such a worker.
                     refine_one_source(ctx, src, &ths_snapshot, branch_cap)
                 }
             })

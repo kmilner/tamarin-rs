@@ -68,7 +68,6 @@ use std::collections::BTreeMap;
 
 use crate::constraint::constraints::Goal;
 use crate::constraint::solver::context::ProofContext;
-use crate::constraint::solver::goals::RankingError;
 use crate::constraint::solver::proof_method::{
     check_and_exec_proof_method, is_finished, ProofMethod, Result as MethodResult,
 };
@@ -76,6 +75,7 @@ use crate::constraint::solver::search::{
     node_status_of, run_proof_search_at_depth, NodeStatus, ProofNode,
 };
 use crate::constraint::system::System;
+use crate::prove::ProveError;
 use crate::theory::ProofTree;
 
 /// Drive a single lemma's skeleton.  Equivalent of HS
@@ -93,8 +93,9 @@ pub fn replace_sorry_prove(
     initial: System,
     skeleton: &ProofTree,
     proof_bound: usize,
-) -> Result<ProofNode, RankingError> {
-    replay_node(ctx, initial, skeleton, proof_bound, true)
+) -> Result<ProofNode, ProveError> {
+    let proof = replay_node(ctx, initial, skeleton, proof_bound, true)?;
+    ctx.source_result(proof)
 }
 
 /// Replay a stored skeleton WITHOUT auto-proving its open/sorry leaves —
@@ -115,8 +116,9 @@ pub fn check_and_extend(
     initial: System,
     skeleton: &ProofTree,
     proof_bound: usize,
-) -> Result<ProofNode, RankingError> {
-    replay_node(ctx, initial, skeleton, proof_bound, false)
+) -> Result<ProofNode, ProveError> {
+    let proof = replay_node(ctx, initial, skeleton, proof_bound, false)?;
+    ctx.source_result(proof)
 }
 
 /// Build an annotated `Sorry` leaf seeded with `sys`.  HS `checkProof`
@@ -235,7 +237,7 @@ fn finished_leaf(
     stored: &MethodResult,
     auto_prove: bool,
     proof_bound: usize,
-) -> Result<ProofNode, RankingError> {
+) -> Result<ProofNode, ProveError> {
     let same_kind = |r: &MethodResult| std::mem::discriminant(r) == std::mem::discriminant(stored);
     match is_finished(ctx, &sys) {
         Some(ref r) if same_kind(r) => Ok(ProofNode {
@@ -259,7 +261,7 @@ fn replay_node(
     node: &ProofTree,
     proof_bound: usize,
     auto_prove: bool,
-) -> Result<ProofNode, RankingError> {
+) -> Result<ProofNode, ProveError> {
     // ---- Sorry cases first (HS `replace prf@(... Sorry ...)`). ----
     // Any `Sorry` node → invoke the auto-prover on `sys`. HS:
     //   replace prf@(LNode (ProofStep (Sorry _) (Just se)) _) =

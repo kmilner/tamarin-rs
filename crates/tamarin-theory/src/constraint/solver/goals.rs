@@ -1493,7 +1493,7 @@ fn collect_one_case_syms(
         // the disjunct COUNT here, so force once (idempotent) and read
         // the cell length in O(1) instead of deep-cloning every case
         // `System`.
-        src.ensure_cases(ctx);
+        ctx.ensure_saturated();
         if src.cases_len() != 1 {
             continue;
         }

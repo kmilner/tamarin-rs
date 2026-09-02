@@ -83,6 +83,18 @@ impl std::fmt::Display for RunError {
 
 impl std::error::Error for RunError {}
 
+impl From<tamarin_theory::prove::ProveError> for RunError {
+    fn from(error: tamarin_theory::prove::ProveError) -> Self {
+        match error {
+            tamarin_theory::prove::ProveError::Guarded(message) => Self::GhcException(message),
+            tamarin_theory::prove::ProveError::Ranking(error) => {
+                Self::GhcException(error.to_string())
+            }
+            other => Self::Regular(other.to_string()),
+        }
+    }
+}
+
 /// Outcome of proving a single lemma. Mirrors the columns of Haskell's
 /// `summary of summaries:` block.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1571,29 +1583,6 @@ impl TheoryPipeline<'_> {
         // `--precompute-only` forcing that runs after the per-file loop —
         // traces.
         //
-        // KNOWN RESIDUAL DIVERGENCES. HS traces once per FORCE of one of the
-        // two `ClosedRuleCache` thunks (`crcRawSources`, `crcRefinedSources =
-        // refineWithSourceAsms … crcRawSources`, CloseRule.hs:426-427), and
-        // this port's source lifecycle neither shares nor defers identically:
-        //  1. A theory with a `[sources]` lemma emits one EXTRA sequence. HS
-        //     forces the single shared `crcRawSources` thunk once and the
-        //     refine reuses it; the port saturates the raw set once per
-        //     distinct `source_key`
-        //     (`ProverSession::presaturate_shared_sources`), so the raw pass
-        //     runs for the `[]` key and again inside the refined key's
-        //     `ensure_saturated`.
-        //  2. A theory whose proofs never consult a source case emits one
-        //     sequence where HS emits none: HS never forces the thunk, while
-        //     `presaturate_shared_sources` saturates eagerly for every lemma
-        //     carrying a stored skeleton.
-        //  3. Under `--auto-sources` the counts differ both ways. HS closes the
-        //     rule cache up to three times (`cache items` for the trigger
-        //     check, `cache itemsModAC` inside `addAutoSourcesLemma`, then
-        //     `cache items'`, CloseRule.hs:56-112) where `apply_auto_sources`
-        //     builds one probe context, plus one more per non-empty typing-
-        //     assumption trigger and one per non-identity unfold, and the
-        //     port's probe saturation lands BEFORE the `Theory closed` marker
-        //     instead of after it.
         tamarin_theory::constraint::solver::sources::set_show_saturation_steps(true);
 
         // Adopt the NDC verdicts into the printed signature
@@ -1765,17 +1754,10 @@ impl TheoryPipeline<'_> {
             // `usize::MAX` (unbounded, HS `Nothing`).
             let target_bound: usize = self.args.bound.map_or(usize::MAX, |b| b as usize);
 
-            // Each lemma clones the session's cheap template and runs only
-            // the per-lemma `ensure_saturated` refinement against its own
-            // typing assumptions.
-            //
-            // Fall-through path: if `build_prover_session` errors we
-            // fall back to the per-lemma
-            // `prove_lemma_with_pool_file_heuristic` path, which re-runs
-            // the same setup for each lemma.  Almost never hits in
-            // practice.
+            // Each lemma clones the session's cheap template and shares its
+            // raw/refined source materialisation.
             let cli_heuristic = self.cli_heuristic();
-            let session = self.build_prover_session(maude.clone()).ok();
+            let session = self.build_prover_session(maude).map_err(RunError::from)?;
 
             // HS prints "[Theory X] Theory closed" right after `closeTheory`
             // (TheoryLoader.hs:668-715, see line 696) and BEFORE the proof search, which it
@@ -1788,10 +1770,6 @@ impl TheoryPipeline<'_> {
 
             let elaborated = &self.elaborated;
             let theory_name = self.elaborated.name.as_str();
-            let cut = self.cut;
-            let ndc_cache = self.ndc_cache.as_ref();
-            let file_maude_pool = &self.file_maude_pool;
-
             let run_lemma = |l: &tamarin_theory::theory::Lemma| -> Result<
                 (
                     tamarin_theory::pretty_theory::ProvedLemma,
@@ -1843,26 +1821,18 @@ impl TheoryPipeline<'_> {
                 // HS does NOT print a per-lemma "proving lemma X ..."
                 // marker; the only progress lines are the `[Theory X]
                 // ...` set above.  Stay quiet here for HS-faithful stderr.
-                let outcome = match (session.as_ref(), is_target) {
-                    (Some(s), true) => {
-                        tamarin_theory::prove::prove_lemma_in_session(s, &lemma_name, target_bound)
-                    }
-                    (Some(s), false) => tamarin_theory::prove::check_and_extend_lemma_in_session(
-                        s,
+                let outcome = if is_target {
+                    tamarin_theory::prove::prove_lemma_in_session(
+                        &session,
+                        &lemma_name,
+                        target_bound,
+                    )
+                } else {
+                    tamarin_theory::prove::check_and_extend_lemma_in_session(
+                        &session,
                         &lemma_name,
                         usize::MAX,
-                    ),
-                    (None, _) => tamarin_theory::prove::prove_lemma_with_pool_file_heuristic(
-                        elaborated,
-                        &lemma_name,
-                        maude.clone(),
-                        file_maude_pool.clone(),
-                        if is_target { target_bound } else { usize::MAX },
-                        &in_file,
-                        &cli_heuristic,
-                        cut,
-                        ndc_cache,
-                    ),
+                    )
                 };
                 // HS `systemsWithMetadata` (Batch.hs:274-280) reads the proof
                 // tree of every lemma, so the collection has to happen here —
@@ -1904,16 +1874,15 @@ impl TheoryPipeline<'_> {
                         }
                         (v, steps, Some(body))
                     }
-                    Err(tamarin_theory::prove::ProveError::Guarded(msg)) => {
-                        // HS `formulaToGuarded_ = either (error . render) id`
-                        // (Guarded.hs:466-467): a proven lemma whose formula
-                        // cannot be converted to a guarded formula kills the
-                        // whole run. The binary renders the GHC-style error;
-                        // output remains buffered until every lemma succeeds.
-                        return Err(RunError::GhcException(msg));
-                    }
-                    Err(tamarin_theory::prove::ProveError::Ranking(msg)) => {
-                        return Err(RunError::GhcException(msg.to_string()));
+                    Err(
+                        error @ (tamarin_theory::prove::ProveError::Guarded(_)
+                        | tamarin_theory::prove::ProveError::Ranking(_)),
+                    ) => {
+                        // HS treats malformed guarded formulas and invalid
+                        // rankings as fatal exceptions. The binary renders the
+                        // GHC-style error; output remains buffered until every
+                        // lemma succeeds.
+                        return Err(error.into());
                     }
                     Err(e) => (LemmaVerdict::Error(format!("{}", e)), 0, None),
                 };
@@ -1930,90 +1899,14 @@ impl TheoryPipeline<'_> {
                 Ok((pl, lr, lemma_traces))
             };
 
-            if let Some(sess) = &session {
-                use rayon::prelude::*;
-                // Single-flight per-source-key saturation: compute each
-                // distinct refined-source key ONCE and seed the session cache
-                // before the lemma fan-out below, so its concurrent workers all
-                // hit the restore path rather than each recomputing the
-                // identical saturation (HS computes `_crcRefinedSources` once
-                // per `ClosedRuleCache`, RuleItem.hs:64-69).  The predicate mirrors
-                // `run_lemma`'s `is_target`; the session skips lemmas that would
-                // emit a bare sorry (they never saturate).
-                let cache_disabled = tamarin_utils::env_gate!("TAM_RS_NO_SOURCE_CACHE");
-                sess.presaturate_shared_sources(cache_disabled, |name| {
-                    prove_anything && lemma_matches(lemma_filter, name)
-                });
-                let specs: Vec<&tamarin_theory::theory::Lemma> = elaborated.lemmas().collect();
-                let mut out: Vec<(
-                    usize,
-                    Result<
-                        (
-                            tamarin_theory::pretty_theory::ProvedLemma,
-                            LemmaResult,
-                            Vec<(String, System)>,
-                        ),
-                        RunError,
-                    >,
-                )> = specs
-                    .par_iter()
-                    .enumerate()
-                    .map(|(i, l)| (i, run_lemma(l)))
-                    .collect();
-                // Reassemble in DECLARATION order so output is identical to the
-                // sequential loop regardless of which worker finished first.
-                // That order is also HS `getLemmas thy`'s (Batch.hs:278), which
-                // is what `outputTraces` serialises the graphs in.
-                out.sort_by_key(|(i, _)| *i);
-                for (_, result) in out {
-                    let (pl, lr, tr) = result?;
-                    proved_lemmas.push(pl);
-                    results.push(lr);
-                    trace_systems.extend(tr);
-                }
-            } else if !prove_anything {
-                // The plain-load check pass needs the session's
-                // check_and_extend arm; the pool fallback below always
-                // auto-proves.  If the session failed to build, keep the
-                // no-solver behaviour instead of launching searches nobody
-                // asked for.
-                results = skipped_results(elaborated, lemma_filter);
-            } else {
-                // Session-build failure under --prove.  The pool fallback has
-                // no check-and-extend arm, so it must not launch searches on
-                // lemmas the selector excludes: HS `proveTheory` applies the
-                // prover only to selector matches (CloseRule.hs:142-163, see line 158) and
-                // leaves the rest their stored/sorry proofs.  Excluded lemmas
-                // keep the parsed skeleton (rendered verbatim via the
-                // `proof_body: None` fall-through) and report the sorry
-                // placeholder's status — a stored COMPLETE proof therefore
-                // reads "analysis incomplete" here where the session path
-                // would replay it to "verified", but this path only runs
-                // when the session itself failed to build.
-                for l in elaborated.lemmas() {
-                    if lemma_matches(lemma_filter, &l.name) {
-                        let (pl, lr, tr) = run_lemma(l)?;
-                        proved_lemmas.push(pl);
-                        results.push(lr);
-                        trace_systems.extend(tr);
-                    } else {
-                        proved_lemmas.push(tamarin_theory::pretty_theory::ProvedLemma {
-                            name: l.name.clone(),
-                            proof_body: None,
-                        });
-                        results.push(LemmaResult {
-                            name: l.name.clone(),
-                            verdict: LemmaVerdict::Filtered,
-                            // The sorry placeholder counts as 1 step (see
-                            // `skipped_results`).
-                            proof_steps: 1,
-                            exists_trace: matches!(
-                                l.trace_quantifier,
-                                tamarin_theory::theory::TraceQuantifier::ExistsTrace,
-                            ),
-                        });
-                    }
-                }
+            // HS proves lemmas in declaration order. Keep the traversal
+            // sequential so a fatal oracle or ranking error stops before a
+            // later proof (and its external processes) is started.
+            for lemma in elaborated.lemmas() {
+                let (pl, lr, tr) = run_lemma(lemma)?;
+                proved_lemmas.push(pl);
+                results.push(lr);
+                trace_systems.extend(tr);
             }
         }
 
@@ -2417,9 +2310,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
                     // eager close — but defer forcing the sources to the print
                     // phase below, where HS's lazy renderDoc forces them.
                     let maude = st.require_maude()?;
-                    let session = st
-                        .build_prover_session(maude)
-                        .map_err(|e| RunError::Regular(e.to_string()))?;
+                    let session = st.build_prover_session(maude).map_err(RunError::from)?;
                     let wf_len = st.wf_report.len();
                     precompute_pending.push((session, wf_len));
                 } else {
@@ -2501,9 +2392,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             // The trace is already armed: each file's `close_translated_theory`
             // left it on, matching HS, where this forcing happens inside the
             // same `showSaturation = True` close.
-            let stats = session
-                .precomputation_stats()
-                .map_err(|e| RunError::Regular(e.to_string()))?;
+            let stats = session.precomputation_stats().map_err(RunError::from)?;
             // HS `casesInfo` (ClosedTheory.hs:563-570).
             let chain_info = |n: usize| -> String {
                 if n == 0 {

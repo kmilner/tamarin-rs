@@ -58,7 +58,12 @@ fn elaborated(pt: &tamarin_parser::ast::Theory) -> crate::theory::Theory {
 fn prove_lemma_unknown_name_is_error() {
     let Some(h) = maude() else { return };
     let parser_theory = tamarin_parser::parse_theory("theory T begin end", &[]).expect("parse");
-    let r = prove_lemma(&elaborated(&parser_theory), "nonexistent", h, 5);
+    let r = prove_lemma(
+        std::sync::Arc::new(elaborated(&parser_theory)),
+        "nonexistent",
+        h,
+        5,
+    );
     assert!(matches!(r, Err(ProveError::LemmaNotFound(_))));
 }
 
@@ -114,7 +119,13 @@ fn injectivity_corpus_example_is_contradictory() {
     ))
     .expect("read features/injectivity/injectivity.spthy");
     let pt = tamarin_parser::parse_theory(&src, &[]).expect("parse");
-    let root = prove_lemma(&elaborated(&pt), "injectivity_check", h, 200).expect("prove");
+    let root = prove_lemma(
+        std::sync::Arc::new(elaborated(&pt)),
+        "injectivity_check",
+        h,
+        200,
+    )
+    .expect("prove");
     assert_eq!(root.status, NodeStatus::Contradictory);
 }
 
@@ -135,7 +146,7 @@ fn cr_external_recentalive_converges_and_holds() {
         return;
     };
     let t0 = std::time::Instant::now();
-    let root = prove_lemma(&elab, "recentalive", h, 200).expect("prove");
+    let root = prove_lemma(std::sync::Arc::new(elab), "recentalive", h, 200).expect("prove");
     let dt = t0.elapsed();
     assert_eq!(root.status, NodeStatus::Contradictory);
     assert!(
@@ -157,7 +168,7 @@ fn sig_minimal_tautology_is_contradictory() {
     let Some(h) = maude_with(elab.signature.clone()) else {
         return;
     };
-    let root = prove_lemma(&elab, "a_self", h, 50).expect("prove");
+    let root = prove_lemma(std::sync::Arc::new(elab), "a_self", h, 50).expect("prove");
     assert_eq!(root.status, NodeStatus::Contradictory);
 }
 
@@ -167,7 +178,8 @@ fn sig_minimal_tautology_is_contradictory() {
 fn two_fresh_premises_in_one_rule_reach_solved() {
     let Some(h) = maude() else { return };
     let pt = fixture_theory("needs_constructor_simple.spthy");
-    let root = prove_lemma(&elaborated(&pt), "sent_exists", h, 200).expect("prove");
+    let root =
+        prove_lemma(std::sync::Arc::new(elaborated(&pt)), "sent_exists", h, 200).expect("prove");
     assert_eq!(root.status, NodeStatus::Solved);
 }
 
@@ -179,7 +191,13 @@ fn two_fresh_premises_in_one_rule_reach_solved() {
 fn intruder_pair_construction_reaches_solved() {
     let Some(h) = maude() else { return };
     let pt = fixture_theory("needs_constructor.spthy");
-    let root = prove_lemma(&elaborated(&pt), "pair_arrives", h, 2000).expect("prove");
+    let root = prove_lemma(
+        std::sync::Arc::new(elaborated(&pt)),
+        "pair_arrives",
+        h,
+        2000,
+    )
+    .expect("prove");
     assert_eq!(root.status, NodeStatus::Solved);
 }
 
@@ -270,7 +288,8 @@ end
         crate::constraint::solver::search::SysRetention::KeepAll,
     );
     let pt = tamarin_parser::parse_theory(src, &[]).expect("parse");
-    let root = prove_lemma(&elaborated(&pt), "always_A", h, 200).expect("prove");
+    let root =
+        prove_lemma(std::sync::Arc::new(elaborated(&pt)), "always_A", h, 200).expect("prove");
     // Root = the initial constraint system (the negated goal formula),
     // with the lemma's refined source kind — NOT an empty default.
     assert!(
@@ -310,8 +329,13 @@ lemma trivial:
 end
 "#;
     let parser_theory = tamarin_parser::parse_theory(src, &[]).expect("parse");
-    let root = prove_lemma(&elaborated(&parser_theory), "trivial", h, 100)
-        .expect("prove_lemma should not error");
+    let root = prove_lemma(
+        std::sync::Arc::new(elaborated(&parser_theory)),
+        "trivial",
+        h,
+        100,
+    )
+    .expect("prove_lemma should not error");
 
     // Root method: under the `AvoidInduction` default (exists-trace
     // lemmas), Haskell's `rankProofMethods` tries Simplify first.
@@ -442,93 +466,294 @@ end",
     );
 }
 
-const SHARED_KEY_TWO_LEMMAS: &str = "theory T begin\n\
+const RAW_AND_REFINED_LEMMAS: &str = "theory T begin\n\
 rule R: [ Fr(~k) ] --[ A(~k) ]-> [ Out(~k) ]\n\
-lemma a: all-traces \"All k #i. A(k) @ #i ==> Ex #j. A(k) @ #j\"\n\
-lemma b: all-traces \"All k #i. A(k) @ #i ==> Ex #j. A(k) @ #j\"\n\
+lemma typing [sources]: \"All k #i. A(k) @ #i ==> A(k) @ #i\"\n\
+lemma goal: \"All k #i. A(k) @ #i ==> A(k) @ #i\"\n\
 end";
 
-/// Two lemmas with the same (empty) `source_key` saturate ONCE in the
-/// pre-pass, seed one cache entry, and a same-key lemma then restores it.
+fn source_cache_disabled() -> bool {
+    tamarin_utils::env_gate!("TAM_RS_NO_SOURCE_CACHE")
+}
+
 #[test]
-fn presaturate_dedups_shared_source_key() {
-    let session = match session_from(SHARED_KEY_TWO_LEMMAS) {
+fn source_cache_is_lazy() {
+    let session = match session_from(RAW_AND_REFINED_LEMMAS) {
         Some(s) => s,
         None => return,
     };
-    // Both lemmas are RefinedSource with no prior `[sources]` lemma, so
-    // both carry the identical empty key — one saturation covers both.
-    let n = session.presaturate_shared_sources(false, |_| true);
-    assert_eq!(n, 1, "two lemmas sharing a key must saturate once");
+    assert!(session.source_cache.is_empty());
+
+    let lemma = session.theory.lookup_lemma("goal").expect("goal lemma");
+    let ctx = session.setup_per_lemma_ctx(lemma, "goal");
+    let second_ctx = session.setup_per_lemma_ctx(lemma, "goal");
+    assert!(!std::sync::Arc::ptr_eq(
+        &ctx.full_sources,
+        &second_ctx.full_sources
+    ));
+    assert!(session.source_cache.is_empty());
+}
+
+#[test]
+fn terminal_system_does_not_force_sources() {
+    let session = match session_from(RAW_AND_REFINED_LEMMAS) {
+        Some(s) => s,
+        None => return,
+    };
+    let mut terminal = crate::constraint::system::System::default();
+    terminal
+        .formulas_mut()
+        .push(std::sync::Arc::new(crate::guarded::gfalse()));
+
+    prove_system_in_session(&session, "goal", terminal, usize::MAX)
+        .expect("terminal system bypasses sources");
+    assert!(session.source_cache.is_empty());
+}
+
+#[test]
+fn interactive_source_views_use_the_session_provider() {
+    let session = match session_from(RAW_AND_REFINED_LEMMAS) {
+        Some(s) => s,
+        None => return,
+    };
+
+    session
+        .context_for_sources(SourceKind::RawSources)
+        .expect("raw source view");
+    if !source_cache_disabled() {
+        assert!(session.source_cache.raw.get().is_some());
+        assert!(session.source_cache.refined.get().is_none());
+    }
+
+    session
+        .context_for_sources(SourceKind::RefinedSources)
+        .expect("refined source view");
+    assert!(session.source_stats().refined.is_ok());
     assert_eq!(
-        session.source_cache.lock().unwrap().len(),
-        1,
-        "exactly one refined-source set is cached"
+        session.source_cache.len(),
+        if source_cache_disabled() { 0 } else { 2 }
     );
-    // A fan-out lemma of the same key restores from the pre-seeded cache.
-    let lemma_b = session.theory.lookup_lemma("b").expect("lemma b");
-    let kind = lemma_source_kind(lemma_b);
-    let (mut ctx, key) = session
-        .setup_per_lemma_ctx(lemma_b, "b", kind)
-        .expect("ctx");
-    let hit = session.restore_or_saturate_sources(&mut ctx, key, false);
-    assert!(
-        hit,
-        "lemma b must restore from the pre-seeded shared-key cache"
-    );
-    let cache = session.source_cache.lock().unwrap();
-    let cached = cache
-        .values()
-        .next()
-        .and_then(|entry| entry.sources.first())
-        .expect("cached source");
-    let restored = ctx
-        .full_sources
-        .iter()
-        .find(|source| source.goal == cached.0)
-        .expect("restored source");
+}
+
+#[test]
+fn interactive_refined_source_errors_cross_the_provider_boundary() {
+    let session = match session_from(
+        "theory T begin\n\
+         rule R: [] --[ A() ]-> []\n\
+         lemma typing [sources]: \"All x #i. A() @ #i ==> x = x\"\n\
+         lemma goal: \"Ex #i. A() @ #i\"\n\
+         end",
+    ) {
+        Some(s) => s,
+        None => return,
+    };
+
+    assert!(matches!(
+        session.context_for_sources(SourceKind::RefinedSources),
+        Err(ProveError::Guarded(_))
+    ));
+}
+
+#[test]
+fn low_level_search_apis_report_deferred_source_errors() {
+    let session = match session_from(
+        "theory T begin\n\
+         rule R: [] --[ A() ]-> []\n\
+         lemma typing [sources]: \"All x #i. A() @ #i ==> x = x\"\n\
+         lemma goal: \"Ex #i. A() @ #i\"\n\
+         end",
+    ) {
+        Some(s) => s,
+        None => return,
+    };
+    let lemma = session.theory.lookup_lemma("goal").expect("goal lemma");
+    let ctx = session.setup_per_lemma_ctx(lemma, "goal");
+    ctx.ensure_saturated();
+    assert!(matches!(ctx.source_error(), Some(ProveError::Guarded(_))));
+
+    let sys = crate::constraint::system::System::empty();
+    assert!(matches!(
+        crate::constraint::solver::search::candidate_methods(&sys, &ctx, 0),
+        Err(ProveError::Guarded(_))
+    ));
+    assert!(matches!(
+        crate::constraint::solver::search::run_proof_search(&ctx, sys, 0),
+        Err(ProveError::Guarded(_))
+    ));
+}
+
+#[test]
+fn simplify_only_proof_does_not_force_malformed_source_assumption() {
+    let src = "theory T begin\n\
+rule R: [] --[ A() ]-> []\n\
+lemma typing [sources]: \"All x #i. A() @ #i ==> x = x\"\n\
+lemma done: \"All #i. A() @ #i ==> A() @ #i\"\n\
+end";
+    let session = match session_from(src) {
+        Some(s) => s,
+        None => return,
+    };
+    let typing = session.theory.lookup_lemma("typing").expect("typing lemma");
+    assert!(guarded_or_error(&typing.formula).is_err());
+
+    let proof = prove_lemma_in_session(&session, "done", usize::MAX)
+        .expect("simplification must not force unrelated sources");
+    assert_eq!(proof.status, NodeStatus::Contradictory);
+    assert!(session.source_cache.is_empty());
+}
+
+#[test]
+fn refined_slot_derives_from_the_single_raw_slot() {
+    let session = match session_from(RAW_AND_REFINED_LEMMAS) {
+        Some(s) => s,
+        None => return,
+    };
+    let lemma = session.theory.lookup_lemma("goal").expect("goal lemma");
+    let ctx = session.setup_per_lemma_ctx(lemma, "goal");
+    ctx.ensure_saturated();
+    assert!(ctx.source_error().is_none());
+
+    if source_cache_disabled() {
+        assert!(session.source_cache.is_empty());
+        return;
+    }
+    assert!(session.source_cache.raw.get().is_some());
+    assert!(session.source_cache.refined.get().is_some());
+    assert_eq!(session.source_cache.len(), 2);
+
+    let cached = session
+        .source_cache
+        .refined
+        .get()
+        .and_then(|result| result.as_ref().ok())
+        .and_then(|sources| sources.first())
+        .expect("cached refined source");
+    let restored = ctx.full_sources.iter().next().expect("restored source");
     assert!(std::sync::Arc::ptr_eq(
-        &cached.1,
+        cached,
         &restored.cases_shared_or_empty()
     ));
 }
 
-/// A lemma that would emit a bare `sorry` (not a `--prove` target and with
-/// no stored proof tree) never saturates in the fan-out, so the pre-pass
-/// must skip it — the spdm121 `--prove=<no match>` regression precedent.
 #[test]
-fn presaturate_skips_bare_sorry_lemmas() {
-    let session = match session_from(SHARED_KEY_TWO_LEMMAS) {
+fn empty_refinement_still_labels_source_systems_refined() {
+    let session = match session_from(
+        "theory T begin\n\
+         rule R: [ Fr(~k) ] --[ A(~k) ]-> [ Out(~k) ]\n\
+         lemma goal: \"All k #i. A(k) @ #i ==> A(k) @ #i\"\n\
+         end",
+    ) {
         Some(s) => s,
         None => return,
     };
-    // Freshly parsed lemmas have no stored proof tree; with no target
-    // selected they emit a bare sorry and never consult a source.
-    let n = session.presaturate_shared_sources(false, |_| false);
-    assert_eq!(n, 0, "bare-sorry lemmas must not be pre-saturated");
-    assert!(
-        session.source_cache.lock().unwrap().is_empty(),
-        "no key is seeded for bare-sorry lemmas"
-    );
-    // The SAME lemmas do saturate once they are `--prove` targets.
-    let n2 = session.presaturate_shared_sources(false, |_| true);
-    assert_eq!(n2, 1, "targeted lemmas saturate their shared key once");
+    let refined = session
+        .context_for_sources(SourceKind::RefinedSources)
+        .expect("refined sources");
+    let mut systems = 0;
+    for source in refined.full_sources.iter() {
+        let cases = source.cases_shared_or_empty();
+        for (_, system) in cases
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+        {
+            systems += 1;
+            assert_eq!(system.source_kind, Some(SourceKind::RefinedSources));
+        }
+    }
+    assert!(systems > 0, "fixture must produce source cases");
 }
 
-/// `cache_disabled` (`TAM_RS_NO_SOURCE_CACHE`) bypasses the pre-pass
-/// entirely, falling back to the per-lemma compute path.
 #[test]
-fn presaturate_disabled_is_noop() {
-    let session = match session_from(SHARED_KEY_TWO_LEMMAS) {
+fn concurrent_refined_consumers_share_one_materialisation() {
+    let session = match session_from(RAW_AND_REFINED_LEMMAS) {
         Some(s) => s,
         None => return,
     };
-    let n = session.presaturate_shared_sources(true, |_| true);
-    assert_eq!(n, 0, "the disabled pre-pass saturates nothing");
-    assert!(
-        session.source_cache.lock().unwrap().is_empty(),
-        "the disabled pre-pass seeds no cache entries"
+    let shared = std::thread::scope(|scope| {
+        let workers: Vec<_> = (0..4)
+            .map(|_| {
+                scope.spawn(|| {
+                    let lemma = session.theory.lookup_lemma("goal").expect("goal lemma");
+                    let ctx = session.setup_per_lemma_ctx(lemma, "goal");
+                    ctx.ensure_saturated();
+                    assert!(ctx.source_error().is_none());
+                    ctx.full_sources
+                        .iter()
+                        .next()
+                        .expect("source")
+                        .cases_shared_or_empty()
+                })
+            })
+            .collect();
+        workers
+            .into_iter()
+            .map(|worker| worker.join().expect("source worker"))
+            .collect::<Vec<_>>()
+    });
+
+    assert_eq!(
+        shared
+            .iter()
+            .skip(1)
+            .all(|cases| std::sync::Arc::ptr_eq(&shared[0], cases)),
+        !source_cache_disabled()
     );
+    assert_eq!(
+        session.source_cache.len(),
+        if source_cache_disabled() { 0 } else { 2 }
+    );
+}
+
+#[test]
+fn restoring_cached_sources_does_not_publish_completion() {
+    #[derive(Debug)]
+    struct CountingProvider(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+    impl crate::constraint::solver::context::SourceProvider for CountingProvider {
+        fn materialize(&self, _ctx: &ProofContext) -> Result<(), ProveError> {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Ok(())
+        }
+    }
+
+    let h = match maude() {
+        Some(h) => h,
+        None => return,
+    };
+    let mut ctx = ProofContext::new(h, Vec::new());
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    ctx.set_source_provider(std::sync::Arc::new(CountingProvider(
+        std::sync::Arc::clone(&calls),
+    )));
+    let cached = ctx
+        .full_sources
+        .iter()
+        .map(|_| std::sync::Arc::new(std::sync::Mutex::new(Vec::new())))
+        .collect();
+
+    restore_sources(&ctx, &cached);
+    ctx.ensure_saturated();
+    assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 1);
+}
+
+const STORED_TERMINAL_LEMMAS: &str = "theory T begin\n\
+rule R: [ Fr(~k) ] --[ A(~k) ]-> [ Out(~k) ]\n\
+lemma open: all-traces \"All k #i. A(k) @ #i ==> Ex #j. A(k) @ #j\" by sorry\n\
+lemma terminal: all-traces \"All k #i. A(k) @ #i ==> Ex #j. A(k) @ #j\" by contradiction\n\
+end";
+
+#[test]
+fn replay_of_terminal_roots_leaves_sources_lazy() {
+    let session = match session_from(STORED_TERMINAL_LEMMAS) {
+        Some(s) => s,
+        None => return,
+    };
+
+    for name in ["open", "terminal"] {
+        check_and_extend_lemma_in_session(&session, name, usize::MAX).expect("replay");
+    }
+    assert!(session.source_cache.is_empty());
 }
 
 #[test]

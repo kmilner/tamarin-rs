@@ -430,7 +430,7 @@ fn prove_probe(
         );
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             run_proof_search(&ctx, sys, 1000)
-                .expect("the derivation proof context uses no fallible ranking")
+                .expect("the derivation proof context has no fallible ranking or source provider")
         }));
         // A panic inside the prover is an INTERNAL bug, not a timeout
         // (timeouts return a non-Solved status, not a panic).  Log it to

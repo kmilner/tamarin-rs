@@ -1113,15 +1113,7 @@ fn refined_sources(
     ctx: &tamarin_theory::constraint::solver::context::ProofContext,
     typ_asms: &[tamarin_theory::guarded::Guarded],
 ) -> Vec<tamarin_theory::constraint::solver::sources::Source> {
-    // `ensure_cases` is `cases()`'s materialisation without its per-case clone.
-    let forced: Vec<_> = ctx
-        .full_sources
-        .iter()
-        .map(|s| {
-            s.ensure_cases(ctx);
-            s.clone()
-        })
-        .collect();
+    let forced = ctx.full_sources.to_vec();
     tamarin_theory::constraint::solver::sources::refine_with_source_asms(forced, typ_asms, ctx)
 }
 
@@ -1142,12 +1134,6 @@ pub(crate) fn source_list_case(
     if want_refined && !typ_asms.is_empty() {
         nth_case_system(&refined_sources(&ctx, &typ_asms), src_idx, case_idx)
     } else {
-        // `ensure_cases` is `cases()`'s materialisation without its per-case
-        // clone: the sources this request does not serve are forced exactly as
-        // the whole-list build forces them, and none of them is copied out.
-        for s in ctx.full_sources.iter() {
-            s.ensure_cases(&ctx);
-        }
         let mut sys = nth_case_system(&ctx.full_sources, src_idx, case_idx)?;
         if want_refined {
             sys.source_kind = Some(SysSourceKind::RefinedSources);

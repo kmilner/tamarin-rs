@@ -47,6 +47,7 @@ use crate::constraint::solver::proof_method::{
     exec_proof_method, is_finished, ProofMethod, Result as MethodResult,
 };
 use crate::constraint::system::System;
+use crate::prove::ProveError;
 
 /// One node in the proof tree.
 #[derive(Debug, Clone)]
@@ -542,7 +543,7 @@ pub fn run_proof_search(
     ctx: &ProofContext,
     initial: System,
     proof_bound: usize,
-) -> Result<ProofNode, RankingError> {
+) -> Result<ProofNode, ProveError> {
     run_proof_search_at_depth(ctx, initial, proof_bound, 0)
 }
 
@@ -551,11 +552,13 @@ pub fn run_proof_search_at_depth(
     initial: System,
     proof_bound: usize,
     ranking_depth_offset: usize,
-) -> Result<ProofNode, RankingError> {
-    run_proof_search_at_depth_inner(ctx, initial, proof_bound, ranking_depth_offset)
+) -> Result<ProofNode, ProveError> {
+    let proof =
+        run_proof_search_at_depth_unchecked(ctx, initial, proof_bound, ranking_depth_offset)?;
+    ctx.source_result(proof)
 }
 
-fn run_proof_search_at_depth_inner(
+fn run_proof_search_at_depth_unchecked(
     ctx: &ProofContext,
     initial: System,
     proof_bound: usize,
@@ -1486,6 +1489,15 @@ pub fn candidate_methods(
     sys: &System,
     ctx: &ProofContext,
     depth: usize,
+) -> Result<Vec<ProofMethod>, ProveError> {
+    let methods = candidate_methods_unchecked(sys, ctx, depth)?;
+    ctx.source_result(methods)
+}
+
+fn candidate_methods_unchecked(
+    sys: &System,
+    ctx: &ProofContext,
+    depth: usize,
 ) -> Result<Vec<ProofMethod>, RankingError> {
     // HS `stoppingMethod` (rankProofMethods, ProofMethod.hs:749-751):
     // `(Finished <$> isFinished ctxt sys) <|> …` — a finished system's
@@ -1557,6 +1569,15 @@ fn candidate_methods_open(
 /// `candidate_methods` so the search hot path never allocates these
 /// strings.
 pub fn candidate_methods_with_expl(
+    sys: &System,
+    ctx: &ProofContext,
+    depth: usize,
+) -> Result<Vec<(ProofMethod, String)>, ProveError> {
+    let methods = candidate_methods_with_expl_unchecked(sys, ctx, depth)?;
+    ctx.source_result(methods)
+}
+
+fn candidate_methods_with_expl_unchecked(
     sys: &System,
     ctx: &ProofContext,
     depth: usize,

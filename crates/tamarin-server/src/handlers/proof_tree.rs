@@ -417,7 +417,9 @@ impl ProofState {
     }
 
     pub fn context_for_raw_sources(&self) -> ProofContext {
-        self.session.context_for_raw_sources()
+        self.session
+            .context_for_sources(tamarin_theory::constraint::system::SourceKind::RawSources)
+            .expect("raw source materialisation is infallible")
     }
 
     /// Find the system at the given path (root if empty).
