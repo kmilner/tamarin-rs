@@ -901,10 +901,10 @@ pub fn apply_auto_sources(
     for grp in &result.annotation_groups {
         for (rule_name, action) in grp.iter().rev() {
             for item in elaborated.items.iter_mut() {
-                if let TheoryItem::Rule(o) = item {
-                    if o.name() == rule_name {
-                        add_action_to_open_rule(o, action.clone());
-                    }
+                if let TheoryItem::Rule(o) = item
+                    && o.name() == rule_name
+                {
+                    add_action_to_open_rule(o, action.clone());
                 }
             }
         }

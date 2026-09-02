@@ -401,15 +401,15 @@ pub fn abstract_rule_and_variants(
         maude: &MaudeHandle,
     ) -> LNTerm {
         // Irreducible head: recurse into args.
-        if let Term::App(f, args) = t {
-            if irreducible.contains(f) {
-                return Term::App(
-                    *f,
-                    args.iter()
-                        .map(|a| abstr_term(a, irreducible, bindings, maude))
-                        .collect(),
-                );
-            }
+        if let Term::App(f, args) = t
+            && irreducible.contains(f)
+        {
+            return Term::App(
+                *f,
+                args.iter()
+                    .map(|a| abstr_term(a, irreducible, bindings, maude))
+                    .collect(),
+            );
         }
         // Catch-all: import binding (handles leaf vars AND reducible-head
         // App).  HS: `abstrTerm t = do at <- varTerm <$> importBinding ...`.

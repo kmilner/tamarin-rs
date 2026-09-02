@@ -756,12 +756,12 @@ fn io_exception_reason(e: &std::io::Error) -> String {
 /// so a failure escapes as the [`write_io_exception`] text — returned here for
 /// the caller to report through [`ghc_exception`].
 fn write_file_with_dirs(path: &str, body: &str) -> Result<(), String> {
-    if let Some(parent) = std::path::Path::new(path).parent() {
-        if !parent.as_os_str().is_empty() {
-            create_dirs(parent).map_err(|(dir, e)| {
-                write_io_exception(&dir.to_string_lossy(), "createDirectory", &e)
-            })?;
-        }
+    if let Some(parent) = std::path::Path::new(path).parent()
+        && !parent.as_os_str().is_empty()
+    {
+        create_dirs(parent).map_err(|(dir, e)| {
+            write_io_exception(&dir.to_string_lossy(), "createDirectory", &e)
+        })?;
     }
     fs::write(path, body).map_err(|e| write_io_exception(path, "withFile", &e))
 }
@@ -1283,21 +1283,21 @@ impl TheoryPipeline<'_> {
             // formulas resolve their user function symbols with the theory's
             // private/destructor flags.  Not part of `processOpenTheory`'s
             // `spthy` / `spthytyped` arms, so those translate modes skip it.
-            if !skip_translation {
-                if let Err(e) = tamarin_accountability::translate(std::sync::Arc::make_mut(
+            if !skip_translation
+                && let Err(e) = tamarin_accountability::translate(std::sync::Arc::make_mut(
                     &mut self.elaborated,
-                )) {
-                    // HS: the exceptions `Acc.translate` throws — `CaseTestsUndefined`
-                    // (lib/accountability/src/Accountability.hs:42-49, see line 45) and the `UndefinedPredicate` /
-                    // `DuplicateItem` parsing exceptions its `liftedAddLemma` /
-                    // `liftedAddPredicate` folds raise (Theory/Text/Parser.hs:141-152,
-                    // Parser/Signature.hs:328-331) — escape to GHC's runtime, which
-                    // writes `tamarin-prover: <show exception>` to stderr and exits
-                    // 1 — no batch `error:` / `[Theory …]` wrapper (the maude banner
-                    // + the `Theory loaded`/`Theory translated` markers already
-                    // printed).
-                    return Err(ghc_exception(&e.to_string()));
-                }
+                ))
+            {
+                // HS: the exceptions `Acc.translate` throws — `CaseTestsUndefined`
+                // (lib/accountability/src/Accountability.hs:42-49, see line 45) and the `UndefinedPredicate` /
+                // `DuplicateItem` parsing exceptions its `liftedAddLemma` /
+                // `liftedAddPredicate` folds raise (Theory/Text/Parser.hs:141-152,
+                // Parser/Signature.hs:328-331) — escape to GHC's runtime, which
+                // writes `tamarin-prover: <show exception>` to stderr and exits
+                // 1 — no batch `error:` / `[Theory …]` wrapper (the maude banner
+                // + the `Theory loaded`/`Theory translated` markers already
+                // printed).
+                return Err(ghc_exception(&e.to_string()));
             }
 
             // HS `preReport = Sapic.checkWellformedness t ++ Acc.checkWellformedness t`
@@ -1822,14 +1822,14 @@ impl TheoryPipeline<'_> {
                 // in HS.  The wording and rc are ours (plain error, exit 1),
                 // not the oracle's GHC shapes: invalid-usage output is
                 // outside the parity contract.
-                if is_target {
-                    if let Err(msg) = tamarin_theory::prove::validate_cli_heuristic(
+                if is_target
+                    && let Err(msg) = tamarin_theory::prove::validate_cli_heuristic(
                         &cli_heuristic,
                         &elaborated.tactic,
-                    ) {
-                        eprintln!("error: {msg}");
-                        std::process::exit(1);
-                    }
+                    )
+                {
+                    eprintln!("error: {msg}");
+                    std::process::exit(1);
                 }
                 // HS does NOT print a per-lemma "proving lemma X ..."
                 // marker; the only progress lines are the `[Theory X]
@@ -2418,10 +2418,10 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
                     // It precedes the theory render, matching HS's force order: the
                     // write is an `IO` action inside `processThy`, while the doc is
                     // rendered later in `Batch.hs`'s output phase.
-                    if wants_trace_output(args) {
-                        if let Err(io) = write_output_traces(args, closed.trace_systems) {
-                            return Ok(ghc_exception(&io));
-                        }
+                    if wants_trace_output(args)
+                        && let Err(io) = write_output_traces(args, closed.trace_systems)
+                    {
+                        return Ok(ghc_exception(&io));
                     }
                     // Build the HS-faithful theory pretty-print body.  This replaces
                     // the verbatim source dump with HS's `prettyClosedTheory`
@@ -2652,10 +2652,10 @@ fn emit_output(args: &Args, in_file: &str, body: &str) -> Result<(), String> {
 /// Resolve the output path for `in_file` given the user's `-o` / `-O`
 /// flags. Returns `None` when output should go to stdout.
 pub(crate) fn out_path_for(args: &Args, in_file: &str) -> Option<String> {
-    if let Some(of) = &args.output_file {
-        if !of.is_empty() {
-            return Some(of.clone());
-        }
+    if let Some(of) = &args.output_file
+        && !of.is_empty()
+    {
+        return Some(of.clone());
     }
     if let Some(dir) = &args.output_dir {
         let stem = std::path::Path::new(in_file)

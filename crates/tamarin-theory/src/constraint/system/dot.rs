@@ -341,13 +341,13 @@ fn rule_case_name(ru: &RuleACInst) -> String {
 /// Mirror Haskell `trimSapicName` (Theory/Model/Rule.hs:1300-1308): strips a
 /// trailing `_<digits>_<digits>` suffix from a SAPiC rule name.
 fn trim_sapic_name(name: &str) -> String {
-    if let Some((prefix, m)) = name.rsplit_once('_') {
-        if let Some((base, n)) = prefix.rsplit_once('_') {
-            // Haskell `all isDigit s` is True for the empty string too.
-            let all_digits = |s: &str| s.chars().all(|c| c.is_ascii_digit());
-            if all_digits(n) && all_digits(m) {
-                return base.to_string();
-            }
+    if let Some((prefix, m)) = name.rsplit_once('_')
+        && let Some((base, n)) = prefix.rsplit_once('_')
+    {
+        // Haskell `all isDigit s` is True for the empty string too.
+        let all_digits = |s: &str| s.chars().all(|c| c.is_ascii_digit());
+        if all_digits(n) && all_digits(m) {
+            return base.to_string();
         }
     }
     name.to_string()
@@ -356,10 +356,10 @@ fn trim_sapic_name(name: &str) -> String {
 /// HS `ruleColor'` (System/Dot.hs:251-256): `rgbToHex` of the proto rule's explicit
 /// `color:` attribute, if any. `None` for intruder rules / no attribute.
 fn explicit_rule_color(ru: &RuleACInst) -> Option<String> {
-    if let RuleInfo::Proto(p) = &ru.info {
-        if let Some(rgb) = p.attributes.color {
-            return Some(tamarin_utils::color::rgb_to_hex(rgb));
-        }
+    if let RuleInfo::Proto(p) = &ru.info
+        && let Some(rgb) = p.attributes.color
+    {
+        return Some(tamarin_utils::color::rgb_to_hex(rgb));
     }
     None
 }

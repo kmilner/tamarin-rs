@@ -284,10 +284,10 @@ fn replay_node(
     // re-runs the auto-prover on that annotated sorry (CloseRule.hs:57-71, see
     // line 71 → TheoryLoader.hs:705-707, see line 706).  A skeleton's `SOLVED`
     // is HS's claim; RS verifies it with its own solver.
-    if let ProofMethod::Finished(stored) = &node.method {
-        if node.cases.is_empty() {
-            return finished_leaf(ctx, sys, node, stored, auto_prove, proof_bound);
-        }
+    if let ProofMethod::Finished(stored) = &node.method
+        && node.cases.is_empty()
+    {
+        return finished_leaf(ctx, sys, node, stored, auto_prove, proof_bound);
     }
 
     // ---- Non-leaf nodes: pick a method, exec it, recurse. ----

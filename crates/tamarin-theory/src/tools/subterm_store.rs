@@ -646,10 +646,10 @@ pub fn is_true_false_structural(
     }
     // CR-rule S_subterm-ac-recurse: an AC big side goes through
     // processACSubterm; the rebuilt `Ok` terms are the caller's business.
-    if let Term::App(FunSym::Ac(ac_sym), _) = big {
-        if !reducible.contains(&FunSym::Ac(*ac_sym)) {
-            return process_ac_subterm(*ac_sym, small, big).err();
-        }
+    if let Term::App(FunSym::Ac(ac_sym), _) = big
+        && !reducible.contains(&FunSym::Ac(*ac_sym))
+    {
+        return process_ac_subterm(*ac_sym, small, big).err();
     }
     None
 }
@@ -736,10 +736,10 @@ pub(crate) fn has_subterm_cycle_with(
             .iter()
             .map(|c| (c.small.clone(), c.big.clone())),
     );
-    if let Some((small, big)) = extra {
-        if !dag.iter().any(|(s, t)| s == small && t == big) {
-            dag.push((small.clone(), big.clone()));
-        }
+    if let Some((small, big)) = extra
+        && !dag.iter().any(|(s, t)| s == small && t == big)
+    {
+        dag.push((small.clone(), big.clone()));
     }
     has_subterm_cycle_in_dag(reducible, &dag)
 }

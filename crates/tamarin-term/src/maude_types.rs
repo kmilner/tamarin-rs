@@ -192,10 +192,10 @@ fn import_mlit(
     // Sort-tolerant fallback: Maude can return a var with the same idx but a
     // widened sort.  This Rust-side compensation is intentionally stricter
     // than minting a second logical variable; TESLA Scheme1/2 are sensitive.
-    if let MaudeLit::MaudeVar(idx, sort) = ml {
-        if let Some(orig) = lookup_canonical_var_lit(ctx, *sort, *idx) {
-            return orig;
-        }
+    if let MaudeLit::MaudeVar(idx, sort) = ml
+        && let Some(orig) = lookup_canonical_var_lit(ctx, *sort, *idx)
+    {
+        return orig;
     }
     match ml {
         MaudeLit::FreshVar(_, sort) | MaudeLit::MaudeVar(_, sort) => {

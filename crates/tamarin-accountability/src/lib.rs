@@ -227,25 +227,25 @@ pub fn translate(thy: &mut Theory) -> Result<(), AccError> {
                 })
                 .collect(),
         };
-        for gen in generate_accountability_lemmas(&acc_data) {
+        for generated in generate_accountability_lemmas(&acc_data) {
             // HS `liftedAddLemma` first predicate-expands the lemma
             // (`expandLemma`, throws `UndefinedPredicate`), then rejects
             // duplicate names (`DuplicateItem`).
-            if let Some(tag) = undefined_predicate(&gen.formula, &defined_preds) {
+            if let Some(tag) = undefined_predicate(&generated.formula, &defined_preds) {
                 return Err(AccError::UndefinedPredicate(tag));
             }
-            if lemma_names.iter().any(|n| n == &gen.name) {
-                return Err(AccError::DuplicateLemma(gen.name));
+            if lemma_names.iter().any(|n| n == &generated.name) {
+                return Err(AccError::DuplicateLemma(generated.name));
             }
-            lemma_names.push(gen.name.clone());
+            lemma_names.push(generated.name.clone());
             inject_lemma(
                 thy,
                 &declared_preds,
                 &declared_macros,
                 &acc.attributes,
-                &gen.name,
-                gen.quantifier,
-                &gen.formula,
+                &generated.name,
+                generated.quantifier,
+                &generated.formula,
             );
         }
     }

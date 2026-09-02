@@ -76,12 +76,12 @@ async fn dist_or_data(
     method: Method,
     headers: HeaderMap,
 ) -> Response {
-    if name.starts_with("intdot-") && name.ends_with(suffix) {
-        if let Some(dist) = &state.cfg.frontend_dist {
-            if let Some(resp) = try_file(&dist.join(&name), &method, &headers).await {
-                return resp;
-            }
-        }
+    if name.starts_with("intdot-")
+        && name.ends_with(suffix)
+        && let Some(dist) = &state.cfg.frontend_dist
+        && let Some(resp) = try_file(&dist.join(&name), &method, &headers).await
+    {
+        return resp;
     }
     fallback_to_data(state, subdir, &name, &method, &headers).await
 }

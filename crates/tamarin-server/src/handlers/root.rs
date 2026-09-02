@@ -32,7 +32,10 @@ pub async fn post(State(state): State<Arc<AppState>>, mut mp: Multipart) -> Resp
     // success → "Loaded new theory!".
     let mut alert_msg: Option<String> = None;
     let mut found_field = false;
-    while let Some(field) = mp.next_field().await.unwrap_or(None) {
+    loop {
+        let Some(field) = mp.next_field().await.unwrap_or(None) else {
+            break;
+        };
         if field.name() != Some("uploadedTheory") {
             continue;
         }
@@ -183,7 +186,9 @@ fn render_index(state: &AppState) -> String {
                 origin = html_escape(&t.origin.label()),
             ));
         }
-        format!("<table><thead><th>Theory name</th><th>Time</th><th>Version</th><th>Origin</th></thead>{rows}</table><br>")
+        format!(
+            "<table><thead><th>Theory name</th><th>Time</th><th>Version</th><th>Origin</th></thead>{rows}</table><br>"
+        )
     };
     // Byte-faithful port of `rootTpl` + `introTpl` (Web/Hamlet.hs), the widget
     // body inside the shared [`default_layout`] frame.  Volatile substitutions:

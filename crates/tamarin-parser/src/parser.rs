@@ -1456,10 +1456,10 @@ impl<'a> Parser<'a> {
         // the term's own hangovers ([`Parser::term_carry`]) were accumulated
         // even earlier and render first.
         let mut prefix: Vec<Message> = self.term_carry_labels(e.offset);
-        if let Some((at, labels)) = self.item_hangover {
-            if at == e.offset {
-                prefix.extend(labels.iter().map(|l| Message::Expect((*l).to_string())));
-            }
+        if let Some((at, labels)) = self.item_hangover
+            && at == e.offset
+        {
+            prefix.extend(labels.iter().map(|l| Message::Expect((*l).to_string())));
         }
         if !prefix.is_empty() {
             let mut messages = vec![e.messages.remove(0)];
@@ -1502,7 +1502,8 @@ impl<'a> Parser<'a> {
         build: impl Fn(O, T, T) -> T,
     ) -> Result<T, ParseError> {
         let mut lhs = operand(self)?;
-        while let Some(o) = op(self) {
+        loop {
+            let Some(o) = op(self) else { break };
             let rhs = operand(self)?;
             lhs = build(o, lhs, rhs);
         }
@@ -2194,10 +2195,10 @@ impl<'a> Parser<'a> {
             let mut macro_clashes: Vec<&str> = Vec::new();
             for s in syms {
                 let want = FunOptions::of_no_eq(s);
-                if let Some((_, o)) = self.macro_syms.iter().find(|(n, _)| n.as_bytes() == s.name) {
-                    if *o != want {
-                        macro_clashes.push(sym_name(s));
-                    }
+                if let Some((_, o)) = self.macro_syms.iter().find(|(n, _)| n.as_bytes() == s.name)
+                    && *o != want
+                {
+                    macro_clashes.push(sym_name(s));
                 }
             }
             if !macro_clashes.is_empty() {
@@ -3656,11 +3657,11 @@ impl<'a> Parser<'a> {
     /// the oracle byte-for-byte for the duplicate-rule/-restriction guards.
     fn item_fail(&mut self, msg: String) -> ParseError {
         let mut e = self.err_fail(msg);
-        if let Some((at, labels)) = self.item_hangover {
-            if at == e.offset {
-                for (k, l) in labels.iter().enumerate() {
-                    e.messages.insert(1 + k, Message::Expect((*l).to_string()));
-                }
+        if let Some((at, labels)) = self.item_hangover
+            && at == e.offset
+        {
+            for (k, l) in labels.iter().enumerate() {
+                e.messages.insert(1 + k, Message::Expect((*l).to_string()));
             }
         }
         e
@@ -5223,10 +5224,10 @@ impl<'a> Parser<'a> {
             let save_p = self.save();
             self.lx.bump();
             self.skip_ws();
-            if let Ok(f) = self.iff() {
-                if self.try_punct(")") {
-                    return Ok(f);
-                }
+            if let Ok(f) = self.iff()
+                && self.try_punct(")")
+            {
+                return Ok(f);
             }
             self.restore(save_p);
         }
@@ -5730,7 +5731,7 @@ impl<'a> Parser<'a> {
 
     /// The theory-level `NoEq` symbols the enabled signature bits fold into
     /// `funSyms` — see [`TheoryNoEqSyms`].
-    fn enabled_theory_noeq_syms(&self) -> impl Iterator<Item = &'static NoEqSym> {
+    fn enabled_theory_noeq_syms(&self) -> impl Iterator<Item = &'static NoEqSym> + use<> {
         let syms = theory_noeq_syms();
         [
             (self.sig_enable_dh, &syms.dh),
