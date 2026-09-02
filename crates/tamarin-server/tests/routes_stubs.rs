@@ -126,6 +126,21 @@ async fn test_del_path_lemma_returns_redirect_envelope() {
         "del/path must allocate a fresh idx; got {:?}",
         redir
     );
+    let idx = redir
+        .split('/')
+        .nth(3)
+        .and_then(|value| value.parse::<usize>().ok())
+        .expect("redirect idx");
+    let source = s
+        .client
+        .get(s.url(&format!("/thy/trace/{idx}/source")))
+        .send()
+        .await
+        .expect("deleted theory source")
+        .text()
+        .await
+        .expect("source body");
+    assert!(!source.contains("lemma debug"), "lemma must be removed");
 }
 
 #[tokio::test]
@@ -146,6 +161,71 @@ async fn test_del_path_unsupported_returns_alert() {
         res.text().await.expect("text"),
         haskell_capture("del_path_bad.json")
     );
+
+    let missing = s
+        .client
+        .get(s.url("/thy/trace/999/del/path/rules"))
+        .send()
+        .await
+        .expect("missing theory");
+    assert_eq!(missing.status(), 404);
+}
+
+#[tokio::test]
+async fn test_del_path_missing_targets_return_canonical_alerts() {
+    let s = start_server_with_theory("issue193.spthy").await;
+    let missing_lemma = s
+        .client
+        .get(s.url("/thy/trace/1/del/path/lemma/notALemma"))
+        .send()
+        .await
+        .expect("missing lemma");
+    assert_eq!(missing_lemma.status(), 200);
+    assert_eq!(
+        missing_lemma.json::<serde_json::Value>().await.unwrap(),
+        serde_json::json!({"alert": "Sorry, but removing the selected lemma failed!"})
+    );
+
+    let missing_step = s
+        .client
+        .get(s.url("/thy/trace/1/del/path/proof/debug/_missing"))
+        .send()
+        .await
+        .expect("missing proof path");
+    assert_eq!(missing_step.status(), 200);
+    assert_eq!(
+        missing_step.json::<serde_json::Value>().await.unwrap(),
+        serde_json::json!({"alert": "Sorry, but removing the selected proof step failed!"})
+    );
+}
+
+#[tokio::test]
+async fn test_del_path_proof_marks_removed() {
+    let s = start_server_with_theory("issue193.spthy").await;
+    let response: serde_json::Value = s
+        .client
+        .get(s.url("/thy/trace/1/del/path/proof/debug"))
+        .send()
+        .await
+        .expect("delete proof root")
+        .json()
+        .await
+        .expect("redirect JSON");
+    let idx = response["redirect"]
+        .as_str()
+        .and_then(|path| path.split('/').nth(3))
+        .and_then(|value| value.parse::<usize>().ok())
+        .expect("redirect idx");
+    let source = s
+        .client
+        .get(s.url(&format!("/thy/trace/{idx}/source")))
+        .send()
+        .await
+        .expect("updated source")
+        .text()
+        .await
+        .expect("source body");
+    assert!(source.contains("sorry /* removed */"));
 }
 
 // ---------------------------------------------------------------------

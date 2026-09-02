@@ -277,6 +277,30 @@ async fn graph_json_unresolvable_proof_path_is_empty_body() {
 }
 
 #[tokio::test]
+async fn unknown_lemma_is_an_unresolvable_graph_path() {
+    let s = start_server_with_theory("issue193.spthy").await;
+
+    let json = s
+        .client
+        .get(s.url("/thy/trace/1/json/proof/notALemma"))
+        .send()
+        .await
+        .expect("JSON graph");
+    assert_eq!(json.status(), 200);
+    assert_eq!(json.text().await.expect("JSON body"), "");
+
+    for route in ["graph", "interactive-graph-def"] {
+        let response = s
+            .client
+            .get(s.url(&format!("/thy/trace/1/{route}/proof/notALemma")))
+            .send()
+            .await
+            .expect("graph");
+        assert_eq!(response.status(), 404, "{route}");
+    }
+}
+
+#[tokio::test]
 async fn graph_json_unhandled_path_is_internal_error() {
     // `graphJsonThyPath` handles only `TheorySource` / `TheoryProof`;
     // everything else hits `error "Unhandled theory path. This is a bug."`

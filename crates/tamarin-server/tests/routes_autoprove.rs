@@ -104,6 +104,38 @@ async fn test_autoprove_url_with_lowercase_quit_returns_404() {
 }
 
 #[tokio::test]
+async fn test_autoprove_bound_uses_haskell_int_syntax() {
+    let s = start_server_with_theory("issue193.spthy").await;
+    let negative = s
+        .client
+        .get(s.url("/thy/trace/1/autoprove/idfs/-1/False/proof/debug"))
+        .send()
+        .await
+        .expect("negative bound");
+    assert_eq!(negative.status(), 200, "negative means unbounded");
+
+    let malformed = s
+        .client
+        .get(s.url("/thy/trace/1/autoprove/idfs/nope/False/proof/debug"))
+        .send()
+        .await
+        .expect("malformed bound");
+    assert_eq!(malformed.status(), 404);
+}
+
+#[tokio::test]
+async fn test_autoprove_all_rejects_malformed_theory_paths() {
+    let s = start_server_with_theory("issue193.spthy").await;
+    let res = s
+        .client
+        .get(s.url("/thy/trace/1/autoproveAll/idfs/0/not-a-path"))
+        .send()
+        .await
+        .expect("malformed path");
+    assert_eq!(res.status(), 404);
+}
+
+#[tokio::test]
 async fn test_autoprove_on_bad_path_returns_alert() {
     let s = start_server_with_theory("issue193.spthy").await;
     // `rules` is not a valid path target for autoprove (it's not a
@@ -122,6 +154,14 @@ async fn test_autoprove_on_bad_path_returns_alert() {
         res.text().await.expect("text"),
         haskell_capture("autoprove_on_rules.json"),
     );
+
+    let missing = s
+        .client
+        .get(s.url("/thy/trace/99/autoprove/idfs/0/False/rules"))
+        .send()
+        .await
+        .expect("missing theory");
+    assert_eq!(missing.status(), 404);
 }
 
 // ---------------------------------------------------------------------
@@ -259,9 +299,8 @@ async fn test_autoprove_proof_view_retains_systems() {
 // that forced the ranking, exactly as HS's `readProcess` exception is
 // caught by the Warp request thread — the server process must survive.
 // The fixture's `heuristic=o` execs `./oracle` relative to the theory
-// dir and no such script exists, so the first ranking call fails
-// (`ORACLE_ERROR_UNWINDS` panics instead of `exit(1)`); the autoprove
-// handler's spawn_blocking boundary absorbs the unwind.
+// dir and no such script exists, so the interactive search API returns a
+// typed ranking failure to the route.
 #[tokio::test]
 async fn test_autoprove_missing_oracle_keeps_server_alive() {
     let s = start_server_with_theory("oracle_missing.spthy").await;
@@ -272,6 +311,17 @@ async fn test_autoprove_missing_oracle_keeps_server_alive() {
         200,
         "failure surfaces as an alert, not a dead socket"
     );
+    let unpublished = s
+        .client
+        .get(s.url("/thy/trace/2/main/help"))
+        .send()
+        .await
+        .expect("failed version probe");
+    assert_eq!(
+        unpublished.status(),
+        404,
+        "a failed search must not publish a new theory version"
+    );
     let root = s
         .client
         .get(s.url("/"))
@@ -279,4 +329,27 @@ async fn test_autoprove_missing_oracle_keeps_server_alive() {
         .await
         .expect("server still serving");
     assert_eq!(root.status(), 200, "server must survive the oracle failure");
+}
+
+#[tokio::test]
+async fn terminal_proof_view_does_not_force_its_heuristic() {
+    let s = start_server_with_theory("terminal_bad_heuristic.spthy").await;
+    let res = s
+        .client
+        .get(s.url("/thy/trace/1/main/proof/done"))
+        .send()
+        .await
+        .expect("terminal proof view");
+    assert_eq!(res.status(), 200);
+    let body: serde_json::Value = res.json().await.expect("JSON response");
+    let html = body["html"].as_str().expect("HTML body");
+    assert!(
+        html.contains("contradiction") && html.contains("Constraint system"),
+        "terminal node should render without resolving the unused missing tactic: {html}"
+    );
+    assert!(
+        html.contains("the tactic written in the theory file: missing"),
+        "the view should retain the selected, lazily-invalid ranking: {html}"
+    );
+    assert!(!html.contains("No such lemma or proof path"));
 }

@@ -1,0 +1,10 @@
+theory terminal_bad_heuristic
+begin
+
+heuristic: {missing}
+
+lemma done:
+  "T"
+by contradiction
+
+end

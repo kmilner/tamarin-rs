@@ -435,6 +435,14 @@ impl<R> Theory<R> {
         self.lemmas().find(|l| l.name == name)
     }
 
+    /// Remove the named lemma while preserving the order of every other item.
+    pub fn remove_lemma(&mut self, name: &str) -> bool {
+        let len = self.items.len();
+        self.items
+            .retain(|item| !matches!(item, TheoryItem::Lemma(lemma) if lemma.name == name));
+        self.items.len() != len
+    }
+
     /// Look up a restriction by name (HS `lookupRestriction`,
     /// TheoryObject.hs:671-672).
     pub fn lookup_restriction(&self, name: &str) -> Option<&Restriction> {

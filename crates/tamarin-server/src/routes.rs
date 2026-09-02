@@ -157,10 +157,6 @@ fn theory_routes() -> Vec<(&'static str, MethodRouter<Arc<AppState>>)> {
         ),
         // -- live proof-tree mutation --
         (
-            "/thy/trace/{idx}/proof-step/{*path}",
-            get(handlers::theory::proof_step),
-        ),
-        (
             "/thy/trace/{idx}/edit/{*path}",
             post(handlers::theory::edit_stub),
         ),

@@ -9,9 +9,7 @@
 //! modifying any frontend code.  The route shape closely mirrors
 //! Haskell's `Web.Dispatch` — same URL layout and the same JSON
 //! response envelope (`{ html, title }` / `{ alert }` / `{ redirect }`)
-//! — with one Rust-specific addition: `/thy/trace/:idx/proof-step/*path`
-//! for the progressive UI, which has no counterpart in Haskell's route
-//! table (`Web/Types.hs`).
+//! used by the progressive UI.
 //!
 //! Wiring:
 //!
@@ -38,7 +36,7 @@
 //! Implemented: most trace-theory routes are wired (see `routes.rs`),
 //! including `overview`, `main`, `source`, `message`, `autoprove`,
 //! `autoproveAll`, `verify`, `next`, `prev`, `download`, `reload`,
-//! `get_and_append`, `proof-step`, `del/path`, `unload`, and graph
+//! `get_and_append`, `del/path`, `unload`, and graph
 //! rendering (`intdot`/`graph`/`interactive-graph-def` render live SVG
 //! via the DOT pipeline, with a DOT-text fallback).
 //!
@@ -62,7 +60,7 @@ pub mod theory_io;
 pub(crate) mod web_utils_abbrev;
 
 pub use routes::router;
-pub use state::{AppState, TheoryEntry, TheoryStore};
+pub use state::{AppState, StoreError, TheoryEntry, TheorySnapshot, TheoryStore};
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
