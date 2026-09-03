@@ -186,10 +186,8 @@ fn stamps_and_marker_excluded_from_partial_eq() {
 /// the caller-name set is within the whitelist.  Separately it FORBIDS any
 /// raw `content_mut_untracked().formulas` / `.solved_formulas` write, which
 /// would bypass the per-store formula stamp bump — those must route through
-/// the bumping accessors.  And it flags any content-door call whose
-/// `&mut SystemContent` ESCAPES (not immediately projected to a `.field`),
-/// since formula writes through an escaped binding are invisible to the
-/// single-line forbid scan.
+/// the bumping accessors. Every remaining content-door call immediately
+/// projects one field, so no raw `&mut SystemContent` can escape.
 #[test]
 fn content_untracked_callers_are_enumerated() {
     const ALLOWED: &[&str] = &[
@@ -198,11 +196,6 @@ fn content_untracked_callers_are_enumerated() {
         "rename_precise_system",
         "normalise_less_atoms_pass",
     ];
-    // Fns where the content door's `&mut SystemContent` may escape into a
-    // binding (each audited to write no formula store through it):
-    // `normalise_less_atoms_pass` binds it to borrow-split `eq_store.subst`
-    // reads from `less_atoms` writes.
-    const ESCAPE_ALLOWED: &[&str] = &["normalise_less_atoms_pass"];
     let src_root = concat!(env!("CARGO_MANIFEST_DIR"), "/src");
     // Build the call needles by concatenation so THIS test's own source
     // (and the accessors' doc comments) never contain a literal verbatim and
@@ -234,7 +227,6 @@ fn content_untracked_callers_are_enumerated() {
     // shape matched.  A scan that matches nothing asserts nothing.  So the
     // code below checks that these counts are not zero.
     let mut seen = [0usize; 3];
-    let mut escaping = 0usize;
     let mut files: Vec<std::path::PathBuf> = Vec::new();
     let mut stack = vec![std::path::PathBuf::from(src_root)];
     while let Some(dir) = stack.pop() {
@@ -323,18 +315,9 @@ fn content_untracked_callers_are_enumerated() {
             if forbid_needles.iter().any(|n| line.contains(n)) {
                 forbidden.push(format!("{} in fn {}", path.display(), cur_fn));
             }
-            // Escape check (content door only — the formula doors bump
-            // before handing out their `&mut Vec`, so escaping those is
-            // harmless): a call NOT followed by `.` hands the raw
-            // `&mut SystemContent` to a binding/argument, where a later
-            // formula write would evade the forbid needles above.
             for (pos, _) in line.match_indices(&call_needles[0]) {
-                let next = line[pos + call_needles[0].len()..].chars().next();
-                if next != Some('.') {
-                    escaping += 1;
-                    if !ESCAPE_ALLOWED.contains(&cur_fn.as_str()) {
-                        escapes.push(format!("{} in fn {}", path.display(), cur_fn));
-                    }
+                if !line[pos + call_needles[0].len()..].starts_with('.') {
+                    escapes.push(format!("{} in fn {}", path.display(), cur_fn));
                 }
             }
         }
@@ -352,9 +335,7 @@ fn content_untracked_callers_are_enumerated() {
     );
     assert!(
         escapes.is_empty(),
-        "the untracked content door's &mut SystemContent escapes without a \
-             field projection — audit that no formula store is written through \
-             it, then add the fn to ESCAPE_ALLOWED: {escapes:?}"
+        "the untracked content door must project a field immediately: {escapes:?}"
     );
     // A scan that matches nothing also satisfies the three assertions above.
     // A renamed accessor gives that result.  So does a `src` walk that
@@ -366,12 +347,6 @@ fn content_untracked_callers_are_enumerated() {
         "a door needle matched no call at all — the accessor was renamed or \
              the scan reached no production file, which silences this test: \
              {call_needles:?} hits {seen:?}"
-    );
-    assert!(
-        escaping > 0,
-        "no content-door call hands out an unprojected &mut SystemContent any \
-             more, so the escape scan proves nothing — drop ESCAPE_ALLOWED and \
-             this check together with the last escaping caller"
     );
 }
 

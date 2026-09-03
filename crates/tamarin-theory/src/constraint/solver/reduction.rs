@@ -21,7 +21,8 @@
 //! are surfaced as `Vec`s rather than a monad-level `DisjT` layer. This
 //! module implements the full reduction surface: `substSystem`,
 //! `conjoinSystem`, the `solve*Eqs` family, `insertFormula`, and the
-//! associated CR-rules.
+//! associated CR-rules. See `constraint/solver/BRANCHING.md` for the
+//! branch-state and fresh-counter invariants.
 
 use crate::constraint::constraints::{Disj, Edge, Goal, LessAtom};
 use crate::constraint::solver::context::ProofContext;
@@ -120,72 +121,6 @@ pub struct Reduction<'ctx> {
     /// Whether the system has been mutated since the last
     /// `whileChanging` checkpoint.
     pub changed: ChangeIndicator,
-    /// Multi-arm eq-store fanout produced inside an `insert_atom`
-    /// `Atom::Eq` call (or, recursively, an `insert_formula`
-    /// invocation that opened to an Eq atom).  Mirrors HS's
-    /// `disjunctionOfList $ performSplit eqs2 splitId` inside
-    /// `solveTermEqs SplitNow` (Reduction.hs): each AC
-    /// unifier arm forks the surrounding `Reduction` (`DisjT`)
-    /// continuation.  Our port doesn't have a monad-level Disj layer,
-    /// so we surface the extra arms here: `insert_atom` Atom::Eq
-    /// installs arm[0] into `sys.eq_store` and stores arms[1..] in
-    /// `pending_eq_arms`.  Callers that wrap an `insert_formula`
-    /// invocation in a per-case fork (e.g. `solve_disj_goal`,
-    /// `insert_implied_formulas_pass`) drain `pending_eq_arms` after
-    /// the call and emit one additional case per arm with `sys`
-    /// cloned and `eq_store = arm`.  This mirrors HS's behaviour
-    /// where each AC unifier arm produces its own downstream
-    /// `Goals.hs:393-395` `case_N` entry — i.e. `case_2` of an outer
-    /// `solveDisjunction` further fans into `case_2_case_1`,
-    /// `case_2_case_2` via `uniqueListBy ... distinguish`
-    /// (ProofMethod.hs:283-340, see line 307,334).
-    pub pending_eq_arms: Vec<crate::tools::equation_store::EquationStore>,
-    /// Fanout of `conjoinSystem`'s step 12 `solveSubstEqs SplitNow`
-    /// (Reduction.hs:669-698, see line 683).  HS runs this inside the `Reduction` monad
-    /// whose `DisjT` layer replicates the surrounding `_applySource`
-    /// continuation per AC unifier arm — each arm flows into its own
-    /// post-conjoin `someInst`/`E.5 edge_eqs`/`close_trivial_chains`
-    /// computation.
-    ///
-    /// RS's `solve_term_eqs` collapses multi-arm `Cases` into the bare
-    /// eq_store without installing them; step 12 silently dropped the
-    /// extra arms.  Empirically: HS ≅ 26 `solveSubstEqs arms=3` events
-    /// on Scott::key_secrecy vs RS ≅ 18 — i.e. 8 lost fanout sites.
-    ///
-    /// Fix: when step 12 returns `Cases(arms)`, install `arms[0]`
-    /// in-place (the main `conjoin_system` return value), and stash a
-    /// per-arm clone of the post-step-13 system here, one per `arms[i]`
-    /// where i ≥ 1.  The caller (`conjoin_refine_arm`) drains this Vec after
-    /// `conjoin_system` returns and replays the post-conjoin work
-    /// (E.5 edge_eqs, F close_trivial_chains, output push) per stashed
-    /// system.  Each stashed system has had `subst_system` already run
-    /// with that arm's eq_store, mirroring HS's per-arm `substSystem`
-    /// at Reduction.hs:669-701, see line 698.
-    ///
-    /// HS FreshT-threading: the `u64` is the arm's
-    /// continuation counter — the step-12 fork position plus the arm's
-    /// own `substSystem` draws (node-merge `solveRuleEqs` witness
-    /// mints).  HS's `disjunctionOfList` fork sits BELOW `FreshT`
-    /// (Reduction.hs:115-118, see line 118), so each solveSubstEqs arm's post-conjoin
-    /// continuation (E.5 / close chains / output) proceeds from an
-    /// independent copy of the counter — NOT from `bounds_max` of the
-    /// stashed system (which silently rewinds past every transient
-    /// draw of the step so far).  The drain site
-    /// (`conjoin_refine_arm`) seeds each replayed arm's Reduction
-    /// from this value via `Reduction::new_inheriting`.
-    pub pending_conjoin_arm_systems: Vec<(crate::constraint::system::System, u64)>,
-    /// HS FreshT-threading for multi-case (`GoalCases::Cases`) outcomes:
-    /// per returned case, the producing branch's final fresh-counter
-    /// position (parallel to the `Cases` vec).  HS's `runReduction
-    /// (solveGoal >> simplifySystem)` continues each DisjT branch's
-    /// simplify with THAT branch's counter; seeding RS's per-case
-    /// continuation (exec_proof_method's per-case
-    /// `simplify_system_with_fanout`) from `bounds_max(case_sys)` alone
-    /// would silently rewind past the branch's transient draws, so the
-    /// goal solvers record each branch's final counter here.
-    /// Populated alongside `Cases`; empty means "no counters recorded"
-    /// (callers fall back to bounds_max seeding).
-    pub last_case_counters: Vec<u64>,
 }
 
 /// `ChangeIndicator` mirrors the `True`/`False` flag the Haskell
@@ -295,9 +230,6 @@ impl<'ctx> Reduction<'ctx> {
             sys,
             maude,
             changed: ChangeIndicator::Unchanged,
-            pending_eq_arms: Vec::new(),
-            pending_conjoin_arm_systems: Vec::new(),
-            last_case_counters: Vec::new(),
         }
     }
 
@@ -337,9 +269,21 @@ impl<'ctx> Reduction<'ctx> {
             sys,
             maude,
             changed: ChangeIndicator::Unchanged,
-            pending_eq_arms: Vec::new(),
-            pending_conjoin_arm_systems: Vec::new(),
-            last_case_counters: Vec::new(),
+        }
+    }
+
+    /// Clone the complete reduction state for speculative work, but give the
+    /// clone an independent FreshT counter.  The caller may atomically adopt
+    /// the returned value on success or drop it without leaking partial
+    /// system, counter, change-indicator, or fan-out state.
+    pub(crate) fn speculative_branch(&self) -> Self {
+        Reduction {
+            ctx: self.ctx,
+            sys: self.sys.clone(),
+            maude: self
+                .maude
+                .with_fresh_counter_next(self.maude.fresh_counter_peek()),
+            changed: self.changed,
         }
     }
 
@@ -380,13 +324,7 @@ impl<'ctx> Reduction<'ctx> {
     /// only flags `Changed` if at least one marker actually toggled.
     pub fn mark_contradictory(&mut self) {
         let bot = crate::guarded::gfalse();
-        let added_bot = if !crate::guarded::stores_contains(&self.sys.formulas, &bot) {
-            self.sys.invalidate_max_var_idx_cache();
-            self.sys.formulas_mut().push(std::sync::Arc::new(bot));
-            true
-        } else {
-            false
-        };
+        let added_bot = self.sys.insert_open_formula(bot);
         let flipped_eq = self.set_eq_store_false();
         if added_bot || flipped_eq {
             self.changed = ChangeIndicator::Changed;
@@ -1074,10 +1012,9 @@ impl<'ctx> Reduction<'ctx> {
         // or union AND whose term actually changes via substitution,
         // re-insert via `insert_action`-equivalent so the pair/inv/prod
         // auto-decomp fires retroactively.  This re-insert path is sound
-        // only because `system_max_idx` walks goals/formulas/eq_store: an
-        // incomplete max-idx lets `rename_system_above` assign colliding idxs
-        // across grafted instances, conflating Maude witnesses in
-        // chain-saturated graft cases.
+        // only because the system's max-index accounting walks
+        // goals/formulas/eq_store; an incomplete maximum lets later fresh
+        // instances collide and conflate Maude witnesses.
         let mut to_insert_action: Vec<(
             crate::constraint::constraints::NodeId,
             crate::fact::LNFact,
@@ -1577,44 +1514,13 @@ impl<'ctx> Reduction<'ctx> {
     ///
     /// HS reads the three timepoints with `ltermNodeId'`, which errors on any other sort; the
     /// total [`lterm_node_id`] answers `None` there and the atom is dropped.
-    pub fn insert_atom(&mut self, a: &crate::atom::Atom<tamarin_term::lterm::LNTerm>) {
+    pub fn insert_atom(
+        &mut self,
+        a: &crate::atom::Atom<tamarin_term::lterm::LNTerm>,
+    ) -> SystemOutcome {
         use crate::atom::ProtoAtom;
         match a {
             ProtoAtom::EqE(x, y) => {
-                // KNOWN COMPENSATING DIVERGENCE (pending a faithful
-                // rule-variant / normalisation pass).
-                //
-                // HS's `insertAtom (EqE x y)` does NOT reduce x/y — it is
-                // literally `void $ solveTermEqs SplitNow [Equal x y]`
-                // (Reduction.hs:414-421, see line 416).  HS reaches this point with both
-                // sides already in Maude normal form, so a `reduce` here
-                // would be idempotent for HS.  The pre-normalisation is
-                // NOT from `normDG`/`normRule`: those run only in the
-                // diff-mode mirror path (`getMirrorDG`, System.hs:1293-1399, see line 1294)
-                // and inside `impliedOrInitial`'s implied systems
-                // (System.hs:1254-1284, see line 1284) — neither is on the standard `--prove`
-                // solving path (the only `normRule` callers are
-                // System.hs:1287-1290 `normDG` + IntruderRules variant
-                // computation).  The true reason HS's EqE terms are
-                // pre-normal is rule-variant computation (`variants in
-                // MSG` yields reduced action terms) plus eq-store
-                // bindings being Maude-unifier outputs.  HS's
-                // `substSystem`/`setNodes` does NOT normalise, as the node
-                // section of `subst_system_once` records.
-                //
-                // Because Rust does not yet compute reduced rule variants,
-                // a fact's terms can still carry non-normal shapes (e.g.
-                // `verify(sign(...),...,pk(...))`) when this atom fires.
-                // We therefore reduce the two sides HERE so a restriction
-                // like `Equality(verify(sign(...),...,pk(...)), true)` is
-                // seen as `Eq(true, true)` and closes as it does in HS.
-                // For HS-normal inputs this `reduce` is a no-op; it only
-                // corrects Rust-specific residual non-normality.  Remove
-                // these two reduces once a faithful variant/normalisation
-                // pass lands.
-                let maude = self.maude.clone();
-                let tx = maude.reduce(x).unwrap_or_else(|_| x.clone());
-                let ty = maude.reduce(y).unwrap_or_else(|_| y.clone());
                 // Haskell `insertAtom (EqE x y) = void (solveTermEqs
                 // SplitNow [Equal x y])`.  The monadic `void` ignores
                 // the ChangeIndicator but the monad propagates
@@ -1624,38 +1530,39 @@ impl<'ctx> Reduction<'ctx> {
                 // both markers via `mark_contradictory` so the
                 // SolveGoal-arm mzero proxy AND post-simplify
                 // contradictions check both fire.
+                let branch_base = self.sys.clone();
                 let res = self.solve_term_eqs(
                     SplitStrategy::SplitNow,
-                    &[tamarin_term::rewriting::Equal { lhs: tx, rhs: ty }],
+                    &[tamarin_term::rewriting::Equal::new(x.clone(), y.clone())],
                 );
                 match res {
                     Err(_) | Ok(SolveOutcome::Contradictory) => {
                         self.mark_contradictory();
+                        return SystemOutcome::Contradictory;
                     }
                     Ok(SolveOutcome::Linear(_)) => {}
                     Ok(SolveOutcome::Cases(arms)) => {
-                        // HS-faithful fanout (Reduction.hs):
-                        // `disjunctionOfList $ performSplit eqs2 splitId`
-                        // forks the surrounding `Reduction` continuation
-                        // once per AC unifier arm.  We install arm[0]
-                        // as the current eq_store and stash arms[1..]
-                        // in `pending_eq_arms` for the outer-case caller
-                        // (e.g. `solve_disj_goal`) to drain.
-                        let mut it = arms.into_iter();
-                        if let Some(first) = it.next() {
-                            self.sys.invalidate_max_var_idx_cache();
-                            self.sys.set_eq_store(std::sync::Arc::new(first));
-                        }
-                        for rest in it {
-                            self.pending_eq_arms.push(rest);
-                        }
+                        self.changed = ChangeIndicator::Changed;
+                        return SystemOutcome::Cases(
+                            arms.into_iter()
+                                .map(|arm| {
+                                    let mut sys = branch_base.clone();
+                                    sys.invalidate_max_var_idx_cache();
+                                    sys.set_eq_store(std::sync::Arc::new(arm.eq_store));
+                                    SystemBranch {
+                                        sys,
+                                        counter: arm.counter,
+                                    }
+                                })
+                                .collect(),
+                        );
                     }
                 }
                 self.changed = ChangeIndicator::Changed;
             }
             ProtoAtom::Less(i, j) => {
                 let (Some(ni), Some(nj)) = (lterm_node_id(i), lterm_node_id(j)) else {
-                    return;
+                    return SystemOutcome::Linear;
                 };
                 // Normalise through the eq-store substitution so any
                 // earlier node-id merges propagate to this fresh atom.
@@ -1669,14 +1576,14 @@ impl<'ctx> Reduction<'ctx> {
             }
             ProtoAtom::Last(t) => {
                 let Some(n) = lterm_node_id(t) else {
-                    return;
+                    return SystemOutcome::Linear;
                 };
                 // HS-faithful insertLast (Reduction.hs:402-407).
                 let _ = self.insert_last(n);
             }
             ProtoAtom::Action(t, fact) => {
                 let Some(n) = lterm_node_id(t) else {
-                    return;
+                    return SystemOutcome::Linear;
                 };
                 self.insert_goal(Goal::Action(n, fact.clone()));
             }
@@ -1695,6 +1602,7 @@ impl<'ctx> Reduction<'ctx> {
             // reaches this arm.
             ProtoAtom::Syntactic(_) => {}
         }
+        SystemOutcome::Linear
     }
 
     /// Decompose a guarded formula via the structural cases of
@@ -1709,7 +1617,7 @@ impl<'ctx> Reduction<'ctx> {
     /// - `All` (¬, single guard, body=⊥) → CR-rules for `Less`/`Eq`/`Last`
     ///   (split into ordering disjunctions), `Subterm`
     ///   (`insertNegSubterm`); otherwise kept in `formulas`
-    pub fn insert_formula(&mut self, g: Guarded) {
+    pub fn insert_formula(&mut self, g: Guarded) -> SystemOutcome {
         // Normalise at the insertion boundary so the stored-formula state
         // is ALWAYS in `normalise_stored_formula_cow` normal form — the dedup
         // checks inside `insert_formula_inner` compare against the
@@ -1724,14 +1632,52 @@ impl<'ctx> Reduction<'ctx> {
             crate::guarded::is_ac_canonical(&g),
             "a stored formula holds an argument list `fApp` would order differently: {g:?}"
         );
-        self.insert_formula_inner(g, true);
+        self.insert_formula_inner(g, true)
     }
 
-    fn insert_formula_inner(&mut self, g: Guarded, mark: bool) {
+    /// Insert top-level formulas in order, distributing the remaining work
+    /// over every equality branch.
+    pub(crate) fn insert_formulas(&mut self, formulas: &[Guarded]) -> SystemOutcome {
+        let formulas = formulas
+            .iter()
+            .cloned()
+            .map(crate::guarded::normalise_stored_formula_owned)
+            .collect::<Vec<_>>();
+        self.insert_formula_sequence(&formulas, true)
+    }
+
+    /// Insert a sequence with the same top-level marking policy, distributing
+    /// the remaining formulas over every branch as soon as a split occurs.
+    fn insert_formula_sequence(&mut self, formulas: &[Guarded], mark: bool) -> SystemOutcome {
+        let Some((first, rest)) = formulas.split_first() else {
+            return SystemOutcome::Linear;
+        };
+        match self.insert_formula_inner(first.clone(), mark) {
+            SystemOutcome::Linear => self.insert_formula_sequence(rest, mark),
+            SystemOutcome::Contradictory => SystemOutcome::Contradictory,
+            SystemOutcome::Cases(arms) => {
+                let mut completed = Vec::new();
+                for arm in arms {
+                    let mut branch = Reduction::new_inheriting(self.ctx, arm.sys, arm.counter);
+                    match branch.insert_formula_sequence(rest, mark) {
+                        SystemOutcome::Linear => completed.push(SystemBranch {
+                            sys: branch.sys,
+                            counter: branch.maude.fresh_counter_peek(),
+                        }),
+                        SystemOutcome::Cases(arms) => completed.extend(arms),
+                        SystemOutcome::Contradictory => {}
+                    }
+                }
+                self.finish_system_cases(completed)
+            }
+        }
+    }
+
+    fn insert_formula_inner(&mut self, g: Guarded, mark: bool) -> SystemOutcome {
         if crate::guarded::stores_contains(&self.sys.formulas, &g)
             || crate::guarded::stores_contains(&self.sys.solved_formulas, &g)
         {
-            return;
+            return SystemOutcome::Linear;
         }
         match g.clone() {
             Guarded::Conj(items) => {
@@ -1740,12 +1686,10 @@ impl<'ctx> Reduction<'ctx> {
                 // `solved_formulas_mut()` bumps `content_stamp` on handout,
                 // breaking a stale skip marker.
                 if mark {
-                    self.sys.solved_formulas_mut().push(std::sync::Arc::new(g));
-                }
-                for it in items.iter() {
-                    self.insert_formula_inner(it.clone(), false);
+                    self.sys.insert_solved_formula(g);
                 }
                 self.changed = ChangeIndicator::Changed;
+                self.insert_formula_sequence(&items, false)
             }
             Guarded::Disj(items) if items.is_empty() => {
                 // Empty disjunction = ⊥ — store the formula so a
@@ -1771,12 +1715,11 @@ impl<'ctx> Reduction<'ctx> {
                     "insert_formula_inner empty-Disj arm: the entry guard \
                      already excludes formulas-membership"
                 );
-                // Pure ADD (formula push): bump.
-                self.sys.bump_cache_guarded(&g);
-                self.sys.formulas_mut().push(std::sync::Arc::new(g.clone()));
+                self.sys.insert_formula(g.clone());
                 self.changed = ChangeIndicator::Changed;
                 let goal = Goal::Disj(crate::constraint::constraints::Disj::new(items.to_vec()));
                 self.insert_goal(goal);
+                SystemOutcome::Linear
             }
             Guarded::Disj(items) => {
                 // Store the formula AND insert a corresponding split
@@ -1793,18 +1736,16 @@ impl<'ctx> Reduction<'ctx> {
                     "insert_formula_inner Disj arm: the entry guard \
                      already excludes formulas-membership"
                 );
-                // Pure ADD (formula push): bump.
-                self.sys.bump_cache_guarded(&g);
-                self.sys.formulas_mut().push(std::sync::Arc::new(g.clone()));
+                self.sys.insert_formula(g.clone());
                 let goal = Goal::Disj(crate::constraint::constraints::Disj::new(items.to_vec()));
                 self.insert_goal(goal);
                 self.changed = ChangeIndicator::Changed;
+                SystemOutcome::Linear
             }
             Guarded::Atom(ref ga) => {
                 // HS `GAto ato -> markAsSolved; insertAtom (bvarToLVar ato)`
                 // (Reduction.hs:441-442): a top-level atom of a stored formula
                 // has no `Bound` leaf left for `bvarToLVar` to reject.
-                self.insert_atom(&crate::guarded::bvar_to_lvar(ga));
                 // Haskell-faithful: only mark the OUTER formula as
                 // solved (mark=True at top-level `insert_formula`).
                 // Inner recursion (mark=False, from Conj/Ex body) does
@@ -1863,13 +1804,15 @@ impl<'ctx> Reduction<'ctx> {
                             .any(|f| apply_canon(f, eq_vs).as_ref() == canon.as_ref())
                     };
                     if !already_solved {
-                        // Pure ADD (solved-formula push under
-                        // !already_solved): bump.
-                        self.sys.bump_cache_guarded(&g);
-                        self.sys.solved_formulas_mut().push(std::sync::Arc::new(g));
+                        self.sys.insert_solved_formula(g);
                         self.changed = ChangeIndicator::Changed;
                     }
                 }
+                // Keep this after markAsSolved, as in HS.  `insert_atom` may
+                // split equality solving into several pending branches; each
+                // branch must inherit the solved-formula bookkeeping that
+                // precedes the split.
+                self.insert_atom(&crate::guarded::bvar_to_lvar(ga))
             }
             Guarded::GGuarded {
                 qua: crate::formula::Quantifier::Ex,
@@ -1881,14 +1824,9 @@ impl<'ctx> Reduction<'ctx> {
                 // and recurse on `gconj([atoms..., body])`.
                 let outer = g.clone();
                 if crate::guarded::stores_contains(&self.sys.solved_formulas, &outer) {
-                    return;
+                    return SystemOutcome::Linear;
                 }
-                // Pure ADD (solved-formula push, guarded by the
-                // `contains(&outer)` early-return above): bump.
-                self.sys.bump_cache_guarded(&outer);
-                self.sys
-                    .solved_formulas_mut()
-                    .push(std::sync::Arc::new(outer));
+                self.sys.insert_solved_formula(outer);
                 // HS (Reduction.hs:427-494, see line 459) draws `xs <- mapM (uncurry freshLVar) ss`
                 // straight from the ambient MonadFresh counter — no clamp; the
                 // threaded counter is above every system var by construction
@@ -1920,8 +1858,8 @@ impl<'ctx> Reduction<'ctx> {
                     .collect();
                 items.push(opened_body);
                 let new_body = crate::guarded::gconj(items);
-                self.insert_formula_inner(new_body, false);
                 self.changed = ChangeIndicator::Changed;
+                self.insert_formula_inner(new_body, false)
             }
             Guarded::GGuarded {
                 qua: crate::formula::Quantifier::All,
@@ -1968,10 +1906,7 @@ impl<'ctx> Reduction<'ctx> {
                         // IH-Disj reads as already-solved, skeleton
                         // replay picks the wrong open goal.
                         if mark && !crate::guarded::stores_contains(&self.sys.solved_formulas, &g) {
-                            self.sys.invalidate_max_var_idx_cache();
-                            self.sys
-                                .solved_formulas_mut()
-                                .push(std::sync::Arc::new(g.clone()));
+                            self.sys.insert_solved_formula(g.clone());
                         }
                         let d = crate::guarded::Guarded::Disj(
                             vec![
@@ -1983,18 +1918,18 @@ impl<'ctx> Reduction<'ctx> {
                             ]
                             .into(),
                         );
-                        self.insert_formula_inner(d, false);
                         self.changed = ChangeIndicator::Changed;
+                        self.insert_formula_inner(d, false)
                     }
                     ProtoAtom::Less(_, _) => {
                         // Less on non-node terms — keep as formula.
                         if !crate::guarded::stores_contains(&self.sys.formulas, &g)
                             && !crate::guarded::stores_contains(&self.sys.solved_formulas, &g)
                         {
-                            self.sys.invalidate_max_var_idx_cache();
-                            self.sys.formulas_mut().push(std::sync::Arc::new(g));
+                            self.sys.insert_formula(g);
                             self.changed = ChangeIndicator::Changed;
                         }
+                        SystemOutcome::Linear
                     }
                     ProtoAtom::EqE(i, j)
                         if blterm_node_id(i).is_some() && blterm_node_id(j).is_some() =>
@@ -2004,10 +1939,7 @@ impl<'ctx> Reduction<'ctx> {
                         // (`mark=True`), mirroring `markAsSolved = when mark
                         // ...` (Reduction.hs:427-494, see line 494).
                         if mark && !crate::guarded::stores_contains(&self.sys.solved_formulas, &g) {
-                            self.sys.invalidate_max_var_idx_cache();
-                            self.sys
-                                .solved_formulas_mut()
-                                .push(std::sync::Arc::new(g.clone()));
+                            self.sys.insert_solved_formula(g.clone());
                         }
                         let d = crate::guarded::Guarded::Disj(
                             vec![
@@ -2022,8 +1954,8 @@ impl<'ctx> Reduction<'ctx> {
                             ]
                             .into(),
                         );
-                        self.insert_formula_inner(d, false);
                         self.changed = ChangeIndicator::Changed;
+                        self.insert_formula_inner(d, false)
                     }
                     ProtoAtom::Last(i) => {
                         // Haskell `insertFormula` for `∀[].[Last i].⊥`
@@ -2045,10 +1977,7 @@ impl<'ctx> Reduction<'ctx> {
                         // (`mark=True`), mirroring `markAsSolved = when mark
                         // ...` (Reduction.hs:427-494, see line 494).
                         if mark && !crate::guarded::stores_contains(&self.sys.solved_formulas, &g) {
-                            self.sys.invalidate_max_var_idx_cache();
-                            self.sys
-                                .solved_formulas_mut()
-                                .push(std::sync::Arc::new(g.clone()));
+                            self.sys.insert_solved_formula(g.clone());
                         }
                         let last_node = match &self.sys.last_atom {
                             Some(j) => *j,
@@ -2080,8 +2009,8 @@ impl<'ctx> Reduction<'ctx> {
                             ]
                             .into(),
                         );
-                        self.insert_formula_inner(d, false);
                         self.changed = ChangeIndicator::Changed;
+                        self.insert_formula_inner(d, false)
                     }
                     ProtoAtom::Subterm(s, b) => {
                         // ¬(s ⊏ b) — HS `insertFormula` "negative Subterm"
@@ -2097,10 +2026,7 @@ impl<'ctx> Reduction<'ctx> {
                         // (`mark=True`), mirroring `markAsSolved = when mark
                         // ...` (Reduction.hs:427-494, see line 494).
                         if mark && !crate::guarded::stores_contains(&self.sys.solved_formulas, &g) {
-                            self.sys.invalidate_max_var_idx_cache();
-                            self.sys
-                                .solved_formulas_mut()
-                                .push(std::sync::Arc::new(g.clone()));
+                            self.sys.insert_solved_formula(g.clone());
                         }
                         // HS `insertNegSubterm (bTermToLTerm i) (bTermToLTerm j)`
                         // (Reduction.hs:468-471); the empty binder list leaves
@@ -2111,16 +2037,17 @@ impl<'ctx> Reduction<'ctx> {
                         if self.sys.subterm_store_mut().add_neg(ts, tb) {
                             self.changed = ChangeIndicator::Changed;
                         }
+                        SystemOutcome::Linear
                     }
                     _ => {
                         // Unhandled single-guard universal: keep in formulas.
                         if !crate::guarded::stores_contains(&self.sys.formulas, &g)
                             && !crate::guarded::stores_contains(&self.sys.solved_formulas, &g)
                         {
-                            self.sys.invalidate_max_var_idx_cache();
-                            self.sys.formulas_mut().push(std::sync::Arc::new(g));
+                            self.sys.insert_formula(g);
                             self.changed = ChangeIndicator::Changed;
                         }
+                        SystemOutcome::Linear
                     }
                 }
             }
@@ -2137,10 +2064,10 @@ impl<'ctx> Reduction<'ctx> {
                 if !crate::guarded::stores_contains(&self.sys.formulas, &g)
                     && !crate::guarded::stores_contains(&self.sys.solved_formulas, &g)
                 {
-                    self.sys.invalidate_max_var_idx_cache();
-                    self.sys.formulas_mut().push(std::sync::Arc::new(g));
+                    self.sys.insert_formula(g);
                     self.changed = ChangeIndicator::Changed;
                 }
+                SystemOutcome::Linear
             }
         }
     }
@@ -2176,8 +2103,7 @@ impl<'ctx> Reduction<'ctx> {
                 self.sys.invalidate_max_var_idx_cache();
                 self.sys.formulas_mut().remove(idx);
                 if !crate::guarded::stores_contains(&self.sys.solved_formulas, &f) {
-                    self.sys.invalidate_max_var_idx_cache();
-                    self.sys.solved_formulas_mut().push(std::sync::Arc::new(f));
+                    self.sys.insert_solved_formula(f);
                 }
                 self.changed = ChangeIndicator::Changed;
             }
@@ -2318,14 +2244,61 @@ fn flatten_list_eq<T: Clone>(
 pub enum SolveOutcome {
     /// Single case — the same `Reduction` continues.
     Linear(ChangeIndicator),
-    /// Multiple cases — the caller picks one and continues. Mirrors
-    /// the disjunctive branching of the Haskell `Reduction` monad.
-    Cases(Vec<crate::tools::equation_store::EquationStore>),
+    /// Multiple cases — the caller continues every branch with its inherited
+    /// FreshT counter, preserving the Haskell `Reduction` monad's disjunction.
+    Cases(Vec<SolveBranch>),
     /// Equation store became contradictory.
     Contradictory,
 }
 
+/// One branch of a disjunctive equality solve.  Keeping the equation store
+/// and its FreshT continuation together makes it impossible for callers to
+/// truncate, reorder, or silently fall back when propagating the fan-out.
+#[derive(Debug)]
+pub struct SolveBranch {
+    pub eq_store: crate::tools::equation_store::EquationStore,
+    pub counter: u64,
+}
+
+/// Outcome of an operation that can split complete systems.
+#[derive(Debug)]
+#[must_use = "every split branch must be continued or deliberately discarded"]
+pub enum SystemOutcome {
+    /// Single case — the same `Reduction` continues.
+    Linear,
+    /// Complete systems for every surviving case.
+    Cases(Vec<SystemBranch>),
+    /// The conjunction is contradictory in every case.
+    Contradictory,
+}
+
+/// One complete branch returned by [`Reduction::conjoin_system`].
+#[derive(Debug)]
+pub struct SystemBranch {
+    pub sys: System,
+    pub counter: u64,
+}
+
 impl<'ctx> Reduction<'ctx> {
+    /// Normalize complete-system alternatives at a branching boundary.
+    /// A singleton is a linear continuation, so adopt both its system and
+    /// exact FreshT position in the caller. Thus every `Cases` returned by
+    /// this helper contains at least two branches; source-error sentinels and
+    /// other producers remain outside this invariant.
+    pub(crate) fn finish_system_cases(&mut self, mut cases: Vec<SystemBranch>) -> SystemOutcome {
+        match cases.len() {
+            0 => SystemOutcome::Contradictory,
+            1 => {
+                let branch = cases.pop().unwrap();
+                self.sys = branch.sys;
+                self.maude.reset_counter_to(branch.counter);
+                self.changed = ChangeIndicator::Changed;
+                SystemOutcome::Linear
+            }
+            _ => SystemOutcome::Cases(cases),
+        }
+    }
+
     /// `solveTermEqs` — add a list of term equalities to the equation
     /// store, optionally splitting if the unifier produced more than
     /// one disjunct. Mirrors the Haskell function in
@@ -2446,7 +2419,7 @@ impl<'ctx> Reduction<'ctx> {
                         id
                     ))
                 })?;
-                let mut live_arms: Vec<crate::tools::equation_store::EquationStore> = Vec::new();
+                let mut live_arms: Vec<SolveBranch> = Vec::new();
                 // HS-faithful per-arm counter fork.  HS `solveTermEqs`
                 // (Reduction.hs:742-748) runs
                 //   `disjunctionOfList (performSplit eqs2 splitId)` and THEN
@@ -2469,11 +2442,15 @@ impl<'ctx> Reduction<'ctx> {
                 for arm in arms {
                     maude_alloc.reset_counter_to(arm_fork_base);
                     let simped = do_simp(arm);
-                    arm_high_water = arm_high_water.max(maude_alloc.fresh_counter_peek());
+                    let arm_counter = maude_alloc.fresh_counter_peek();
+                    arm_high_water = arm_high_water.max(arm_counter);
                     if simped.is_false() {
                         continue;
                     }
-                    live_arms.push(simped);
+                    live_arms.push(SolveBranch {
+                        eq_store: simped,
+                        counter: arm_counter,
+                    });
                 }
                 maude_alloc.ensure_above(arm_high_water.saturating_sub(1));
                 if live_arms.is_empty() {
@@ -2493,8 +2470,9 @@ impl<'ctx> Reduction<'ctx> {
                     // eq_store and return Linear (no caller-side fork
                     // needed).
                     self.sys.invalidate_max_var_idx_cache();
-                    self.sys
-                        .set_eq_store(std::sync::Arc::new(live_arms.into_iter().next().unwrap()));
+                    let arm = live_arms.into_iter().next().unwrap();
+                    self.sys.set_eq_store(std::sync::Arc::new(arm.eq_store));
+                    self.maude.reset_counter_to(arm.counter);
                     Ok(SolveOutcome::Linear(ChangeIndicator::Changed))
                 } else {
                     Ok(SolveOutcome::Cases(live_arms))
@@ -2539,75 +2517,6 @@ impl<'ctx> Reduction<'ctx> {
             })
             .collect();
         self.solve_term_eqs(SplitStrategy::SplitNow, &term_eqs)
-    }
-
-    /// `solveNodeIdEqs` applied to arm0 (`self.sys`) AND to every arm
-    /// stashed in `pending_eq_arms`.
-    ///
-    /// HS `enforceNodeUniqueness`/`enforceFreshAndKuNodeUniqueness`
-    /// (Simplify.hs:175-176, 213-214) merges each candidate group with
-    /// `solver <*> solveTermEqsLabeled SplitNow (node-id-eqs)`: the fact/
-    /// rule `solver` runs FIRST (and, on AC-multiunifiers, forks the whole
-    /// `DisjT` continuation via `disjunctionOfList $ performSplit`,
-    /// Reduction.hs:742-748), and the node-id equalities are then solved
-    /// INSIDE each forked arm's continuation.  So every arm of the fact/
-    /// rule split gets the same node-id merges applied.
-    ///
-    /// RS lacks lazy `DisjT`: a fact/rule split stashes arms in
-    /// `pending_eq_arms` and only `self.sys` (arm0) continues in place, so
-    /// the node-id eqs that HS runs per arm would reach arm0 ONLY.  A
-    /// pending arm then re-enters `simplify` missing those node-id
-    /// bindings; its first `subst_system` sees fewer node collisions and
-    /// re-cascades the setNodes drain differently, re-emitting a duplicate
-    /// multiset split (Joux Session_Key_Secrecy_PFS Proto1: the pending KD-
-    /// merge arm re-drained the $B/$C `Union` disjunction as a second
-    /// `splitEqs(10)` byte-identical to `splitEqs(9)`, so `removeRedundant-
-    /// Cases` kept 18 cases where HS keeps 10).  Broadcasting the node-id
-    /// eqs to the pending arms makes each arm's store carry the identical
-    /// node-id bindings HS's per-arm continuation applies.
-    ///
-    /// Node-id (Var=Var) unification never forks (single unifier) and draws
-    /// no fresh witness indices, so the per-arm application is counter-
-    /// neutral (the shared counter is restored afterwards; the pending arms
-    /// re-seed from the fan-out fork counter in any case).
-    pub fn solve_node_id_eqs_broadcast(
-        &mut self,
-        eqs: &[tamarin_term::rewriting::Equal<crate::constraint::constraints::NodeId>],
-    ) -> Result<SolveOutcome, crate::tools::equation_store::AddEqsError> {
-        // Fork base: the counter position BEFORE arm0's own node-id
-        // merge, i.e. the position HS's `DisjT` copies to every arm at the
-        // preceding fact/rule split.  Each arm's node-id merge must start
-        // from this same base (HS threads an independent FreshT copy per
-        // arm), so rewind to it before each pending arm and restore arm0's
-        // post-merge position at the end.
-        let fork_base = self.maude.fresh_counter_peek();
-        let out = self.solve_node_id_eqs(eqs);
-        if self.pending_eq_arms.is_empty() {
-            return out;
-        }
-        let arm0_end = self.maude.fresh_counter_peek();
-        let arm0_store = self.sys.take_eq_store();
-        let pending = std::mem::take(&mut self.pending_eq_arms);
-        let mut new_pending = Vec::with_capacity(pending.len());
-        for arm in pending {
-            self.maude.reset_counter_to(fork_base);
-            self.sys.invalidate_max_var_idx_cache();
-            self.sys.set_eq_store(std::sync::Arc::new(arm));
-            // Ignore the outcome: a contradictory arm keeps its `is_false`
-            // store and is dropped at the `fan_out_on_pending_eq_arms`
-            // is_false filter, exactly as HS's per-arm `noContradictory-
-            // EqStore` mzero drops that arm from the `DisjT`.
-            let _ = self.solve_node_id_eqs(eqs);
-            let updated = self.sys.take_eq_store();
-            new_pending.push(std::sync::Arc::unwrap_or_clone(updated));
-        }
-        self.sys.invalidate_max_var_idx_cache();
-        self.sys.set_eq_store(arm0_store);
-        self.pending_eq_arms = new_pending;
-        // Restore arm0's post-merge counter (fan-out then re-seeds every
-        // arm from this position, matching arm0's continuation).
-        self.maude.reset_counter_to(arm0_end);
-        out
     }
 
     /// `solveFactEqs` — equate two fact lists. Returns
@@ -2779,17 +2688,12 @@ impl<'ctx> Reduction<'ctx> {
     pub fn conjoin_system(
         &mut self,
         sys: &System,
-    ) -> Result<SolveOutcome, crate::tools::equation_store::AddEqsError> {
+    ) -> Result<SystemOutcome, crate::tools::equation_store::AddEqsError> {
         // 1-3. joinSets: solved_formulas, lemmas, edges.  Use sets so
         // duplicates are collapsed (HasFrees-based dedup not needed —
         // syntactic equality is sufficient for these sets).
         for f in &sys.solved_formulas {
-            if !crate::guarded::stores_contains(&self.sys.solved_formulas, f) {
-                // Pure ADD (joinSets solved-formula merge under
-                // !contains): bump.
-                self.sys.bump_cache_guarded(f);
-                self.sys.solved_formulas_mut().push(f.clone());
-            }
+            self.sys.insert_solved_formula(f.clone());
         }
         for l in &sys.lemmas {
             if !crate::guarded::stores_contains(&self.sys.lemmas, l) {
@@ -2803,9 +2707,12 @@ impl<'ctx> Reduction<'ctx> {
         // 4. insertLast: HS-faithful (Reduction.hs:404-412 + conjoinSystem
         // Reduction.hs:669-701, see line 680 `F.mapM_ insertLast $ get sLastAtom sys`).
         if let Some(case_last) = &sys.last_atom {
-            let r = self.insert_last(*case_last);
-            if matches!(r, Err(_) | Ok(SolveOutcome::Contradictory)) {
-                return r;
+            match self.insert_last(*case_last) {
+                Err(error) => return Err(error),
+                Ok(SolveOutcome::Contradictory) => {
+                    return Ok(SystemOutcome::Contradictory);
+                }
+                Ok(SolveOutcome::Linear(_) | SolveOutcome::Cases(_)) => {}
             }
         }
         // 5. insertLess.
@@ -2864,15 +2771,54 @@ impl<'ctx> Reduction<'ctx> {
         // `EqE i j ∨ Less j i`, so downstream FormulasFalse /
         // cyclic-LessAtom checks miss the contradiction even though
         // the algebra is already incompatible.
-        for f in &sys.formulas {
-            self.insert_formula(f.as_ref().clone());
+        let formulas = sys
+            .formulas
+            .iter()
+            .map(|formula| formula.as_ref().clone())
+            .collect::<Vec<_>>();
+        match self.insert_formulas(&formulas) {
+            SystemOutcome::Linear => self.conjoin_system_tail(sys),
+            SystemOutcome::Contradictory => Ok(SystemOutcome::Contradictory),
+            SystemOutcome::Cases(inputs) => {
+                let mut completed = Vec::new();
+                for input in inputs {
+                    let mut branch = Reduction::new_inheriting(self.ctx, input.sys, input.counter);
+                    match branch.conjoin_system_tail(sys) {
+                        Err(error) => return Err(error),
+                        Ok(SystemOutcome::Contradictory) => continue,
+                        Ok(SystemOutcome::Linear) => completed.push(SystemBranch {
+                            sys: branch.sys,
+                            counter: branch.maude.fresh_counter_peek(),
+                        }),
+                        Ok(SystemOutcome::Cases(arms)) => completed.extend(arms),
+                    }
+                }
+                let outcome = self.finish_system_cases(completed);
+                if matches!(outcome, SystemOutcome::Contradictory) {
+                    self.mark_contradictory();
+                }
+                Ok(outcome)
+            }
         }
+    }
+
+    /// Continue `conjoinSystem` after its formula-decomposition step. Formula
+    /// equality splits call this once per complete branch, so node merging,
+    /// substitution solving, and substitution propagation cannot be lost or
+    /// accidentally evaluated only against arm zero.
+    fn conjoin_system_tail(
+        &mut self,
+        sys: &System,
+    ) -> Result<SystemOutcome, crate::tools::equation_store::AddEqsError> {
         // 8. setNodes (case_nodes ++ live_nodes).
         let mut all_nodes: Vec<_> = (*sys.nodes).clone();
         all_nodes.extend(self.sys.nodes.iter().cloned());
-        let r = self.set_nodes(all_nodes);
-        if matches!(r, Err(_) | Ok(SolveOutcome::Contradictory)) {
-            return r;
+        match self.set_nodes(all_nodes) {
+            Err(error) => return Err(error),
+            Ok(SolveOutcome::Contradictory) => {
+                return Ok(SystemOutcome::Contradictory);
+            }
+            Ok(SolveOutcome::Linear(_) | SolveOutcome::Cases(_)) => {}
         }
         // 9. addDisj for each case conjDisjEq entry.  Track new split-ids.
         let mut new_split_ids: Vec<crate::tools::equation_store::SplitId> = Vec::new();
@@ -2898,10 +2844,8 @@ impl<'ctx> Reduction<'ctx> {
         // `solve_term_eqs` may return `Cases(arms)`.  We mirror the HS
         // semantics by snapshotting the post-step-11 system (this is the
         // `Reduction` state at the moment `solveSubstEqs` is entered, so
-        // it's what each arm's `DisjT` branch sees), installing arm[0]
-        // for the main return path, and stashing per-arm snapshots
-        // (with `substSystem` already applied) in
-        // `pending_conjoin_arm_systems` for the caller to drain.
+        // it's what each arm's `DisjT` branch sees), then returning every
+        // complete, substituted arm explicitly.
         let case_subst_eqs: Vec<_> = sys
             .eq_store
             .subst
@@ -2922,63 +2866,41 @@ impl<'ctx> Reduction<'ctx> {
             } else {
                 None
             };
-        let r = self.solve_term_eqs(SplitStrategy::SplitNow, &case_subst_eqs);
-        match r {
-            Err(_) | Ok(SolveOutcome::Contradictory) => {
-                return r;
+        match self.solve_term_eqs(SplitStrategy::SplitNow, &case_subst_eqs) {
+            Err(error) => return Err(error),
+            Ok(SolveOutcome::Contradictory) => {
+                return Ok(SystemOutcome::Contradictory);
             }
             Ok(SolveOutcome::Linear(_)) => {
-                // Single-arm path: solve_term_eqs already installed
-                // arm[0]; just proceed to step 13.
+                // Single-arm path: solve_term_eqs installed the result.
             }
             Ok(SolveOutcome::Cases(arms)) => {
-                // Multi-arm fanout.  solve_term_eqs returned Cases
-                // without installing any arm; install arm[0] here,
-                // then build per-arm snapshots for arms[1..].
-                let mut arm_iter = arms.into_iter();
-                let arm0 = arm_iter.next().expect("Cases has >=2 arms");
-                self.sys.invalidate_max_var_idx_cache();
-                self.sys.set_eq_store(std::sync::Arc::new(arm0));
-                // Build per-arm fanout snapshots from the pre-step-12 sys.
-                // Each snapshot gets the arm's eq_store installed and
-                // step 13 (substSystem) applied locally.
-                if let Some(snapshot) = &pre_step12_snapshot {
-                    // HS FreshT-threading: each solveSubstEqs arm is a
-                    // DisjT branch BELOW FreshT
-                    // (Reduction.hs:742-748 `disjunctionOfList $ performSplit`),
-                    // so its substSystem (and everything after) draws
-                    // from a fork-point COPY of the counter — not from
-                    // `bounds_max(arm_sys)`.  `self.maude` here sits at
-                    // the step-12 across-arm high water (solve_term_eqs
-                    // restored it after its per-arm rewind loop); use
-                    // that as the interim fork seed (faithful would be
-                    // fork + arm_i's OWN eq-simp draws; the high water
-                    // differs only when sibling arms draw unequal
-                    // amounts).  Record each arm's continuation (seed +
-                    // its substSystem node-merge witness draws) next to
-                    // the stashed system for the drain site.
-                    let step12_cont = self.maude.fresh_counter_peek();
-                    for arm_i in arm_iter {
+                let snapshot = pre_step12_snapshot
+                    .expect("a non-trivial equality solve has a pre-solve snapshot");
+                let completed = arms
+                    .into_iter()
+                    .filter_map(|arm| {
                         let mut arm_sys = snapshot.clone();
                         arm_sys.invalidate_max_var_idx_cache();
-                        arm_sys.set_eq_store(std::sync::Arc::new(arm_i));
-                        // Replicate step 13 substSystem locally on the
-                        // arm-i sys by spinning a transient Reduction
-                        // that CONTINUES the step's counter thread.
-                        let mut arm_red = Reduction::new_inheriting(self.ctx, arm_sys, step12_cont);
+                        arm_sys.set_eq_store(std::sync::Arc::new(arm.eq_store));
+                        let mut arm_red = Reduction::new_inheriting(self.ctx, arm_sys, arm.counter);
                         arm_red.subst_system();
-                        if !arm_red.sys.eq_store.is_false() {
-                            let arm_cont = arm_red.maude.fresh_counter_peek();
-                            self.pending_conjoin_arm_systems
-                                .push((arm_red.sys, arm_cont));
-                        }
-                    }
+                        (!arm_red.sys.eq_store.is_false()).then(|| SystemBranch {
+                            sys: arm_red.sys,
+                            counter: arm_red.maude.fresh_counter_peek(),
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                let outcome = self.finish_system_cases(completed);
+                if matches!(outcome, SystemOutcome::Contradictory) {
+                    self.mark_contradictory();
                 }
+                return Ok(outcome);
             }
         }
         // 13. substSystem.
         self.subst_system();
-        Ok(SolveOutcome::Linear(ChangeIndicator::Changed))
+        Ok(SystemOutcome::Linear)
     }
 }
 
@@ -4005,22 +3927,26 @@ fn freshen_rule(
 /// same `Arc` wrapping); every other outcome yields the single `base`.
 /// Shared by the `solve_chain` direct/union/extend producers and
 /// `solve_premise`.
-fn fanout_arm_systems(outcome: SolveOutcome, base: System) -> Vec<System> {
+fn fanout_arm_systems(
+    outcome: SolveOutcome,
+    base: System,
+    linear_counter: u64,
+) -> Vec<(System, u64)> {
     match outcome {
         SolveOutcome::Cases(arms) => {
             arms.into_iter()
-                .map(|arm_eq| {
+                .map(|arm| {
                     let mut s = base.clone();
                     // The arm store carries fresh Maude witnesses (and lost
                     // `base`'s taken-out store), so `base`'s copied max-var
                     // cache is stale in BOTH directions — invalidate.
                     s.invalidate_max_var_idx_cache();
-                    s.set_eq_store(std::sync::Arc::new(arm_eq));
-                    s
+                    s.set_eq_store(std::sync::Arc::new(arm.eq_store));
+                    (s, arm.counter)
                 })
                 .collect()
         }
-        _ => vec![base],
+        _ => vec![(base, linear_counter)],
     }
 }
 
@@ -4084,73 +4010,18 @@ pub enum GoalCases {
     /// forked `System`. Case names match Haskell's `prettyProof`:
     /// rule-instantiation cases use the rule name; disjunction /
     /// other splits use `case_1`/`case_2`/...
-    Cases(Vec<(String, System)>),
+    Cases(Vec<GoalBranch>),
     /// Dead branch — the goal is false.
     Contradictory,
 }
 
-/// Returns true if the system has two distinct non-AC-unifiable
-/// nodes consuming the same Fresh value as their `Fr(~x)` premise.
-/// Such a state is logically inconsistent (Fresh is linear, so the
-/// same fresh value can have at most one consumer) — but our
-/// source-case graft pipeline can produce it via Maude-witness
-/// conflation across chain-saturated cases.  Detecting it lets the
-/// caller skip the conflated case so the search doesn't close a
-/// branch as Cyclic on the spurious shared-fresh ordering and roll
-/// up to Verified.
-fn has_fresh_consumer_conflation(
-    sys: &crate::constraint::system::System,
-    maude: &tamarin_term::maude_proc::MaudeHandle,
-) -> bool {
-    use crate::fact::FactTag;
-    use tamarin_term::lterm::{LSort, LVar};
-    use tamarin_term::term::Term;
-    use tamarin_term::vterm::Lit;
-    let subst = &sys.eq_store.subst;
-    // Capture the rule reference alongside each consumer at build time —
-    // it is exactly the node's rule we are already iterating, so the
-    // inner pair loop need not re-scan `sys.nodes` (O(consumers^2 * nodes)
-    // → O(consumers^2)).
-    let mut consumers: Vec<(
-        crate::constraint::constraints::NodeId,
-        LVar,
-        &crate::rule::RuleACInst,
-    )> = Vec::new();
-    for (id, rule) in sys.nodes.iter() {
-        for prem in &rule.premises {
-            if !matches!(prem.tag, FactTag::Fresh) {
-                continue;
-            }
-            let t = match prem.terms.first() {
-                Some(t) => t,
-                None => continue,
-            };
-            let t_norm = tamarin_term::subst::apply_vterm(subst, t.clone());
-            if let Term::Lit(Lit::Var(v)) = t_norm
-                && v.sort == LSort::Fresh
-            {
-                consumers.push((*id, v, rule));
-            }
-        }
-    }
-    // Look for two consumers with the same fresh-var, non-unifiable rules.
-    for i in 0..consumers.len() {
-        for j in (i + 1)..consumers.len() {
-            if consumers[i].1 != consumers[j].1 {
-                continue;
-            }
-            if consumers[i].0 == consumers[j].0 {
-                continue;
-            }
-            let (ri, rj) = (consumers[i].2, consumers[j].2);
-            match crate::rule::unifiable_rule_ac_insts(maude, ri, rj) {
-                Ok(true) => continue,     // could be merged; not a conflation
-                Ok(false) => return true, // distinct rules, same fresh → conflation
-                Err(_) => continue,       // be conservative on Maude errors
-            }
-        }
-    }
-    false
+/// One named branch of a goal solve, including the FreshT position from
+/// which its simplify continuation must resume.
+#[derive(Debug)]
+pub struct GoalBranch {
+    pub name: String,
+    pub sys: System,
+    pub counter: u64,
 }
 
 /// True iff the term is an AC product (Mult) or union.
@@ -4342,21 +4213,19 @@ impl<'ctx> Reduction<'ctx> {
                 // own sub-goals (Haskell `insertFormula`).  Raw-pushing
                 // leaks Disj/Ex bodies past is_finished (see the
                 // companion fix in `insert_implied_formulas_pass`).
-                self.insert_formula(alts[0].clone());
-                // NOTE: if `insert_formula` opened to an `Atom::Eq`
-                // that produced AC unifier arms, `pending_eq_arms` is
-                // non-empty.  In the singleton-Disj path we cannot
-                // emit additional `case_N` entries (the caller treats a
-                // single LinearNamed as no-fork); the arms are lost.
-                // HS reaches the branch verdict directly here (e.g.
-                // `by contradiction /* from formulas */`) rather than
-                // forking the lone disjunct, so draining the arms is the
-                // corpus-faithful behavior (a fan-out here diverges from
-                // HS on csf18-alethea individualVerifiability_sel).
-                self.pending_eq_arms.clear();
-                // Haskell names a lone disjunct `case_1` (no singleton
-                // special-case in `solveDisjunction`), so emit the name.
-                GoalCases::LinearNamed("case_1".to_string())
+                match self.insert_formula(alts[0].clone()) {
+                    SystemOutcome::Linear => GoalCases::LinearNamed("case_1".to_string()),
+                    SystemOutcome::Cases(arms) => GoalCases::Cases(
+                        arms.into_iter()
+                            .map(|arm| GoalBranch {
+                                name: "case_1".to_string(),
+                                sys: arm.sys,
+                                counter: arm.counter,
+                            })
+                            .collect(),
+                    ),
+                    SystemOutcome::Contradictory => GoalCases::Contradictory,
+                }
             }
             _ => {
                 let mut cases = Vec::with_capacity(alts.len());
@@ -4379,34 +4248,29 @@ impl<'ctx> Reduction<'ctx> {
                     // Decompose the chosen alternative — see comment in
                     // singleton branch.  Mirrors Haskell `solveDisjunction`
                     // → `insertFormula alt`.
-                    sub.insert_formula(gfm.clone());
-                    // HS-faithful multi-arm fanout (Reduction.hs):
-                    // if the chosen disjunct opened to an `Atom::Eq` whose
-                    // `solveTermEqs SplitNow` returned multiple AC unifier
-                    // arms, each arm forks the surrounding `Reduction`
-                    // continuation.  In HS this is invisible: the `DisjT`
-                    // monad replicates the rest of `solveDisjunction` per
-                    // arm and `solveGoal` returns one `(case_name, sys)`
-                    // entry per arm.  Sibling cases sharing `case_name`
-                    // get `_case_N` suffixes via `distinguish`
-                    // (ProofMethod.hs:283-340, see line 307,334) — that's the source of HS's
-                    // `case_2_case_1` / `case_2_case_2` pair on multiset
-                    // EqE disjuncts.  Drain `pending_eq_arms` and emit
-                    // one extra case per arm with the same base label
-                    // and the arm's eq_store installed.
-                    let pending = std::mem::take(&mut sub.pending_eq_arms);
                     let base_name = default_case_name(i);
-                    let post_sys = sub.sys.clone();
-                    cases.push((base_name.clone(), sub.sys));
-                    for arm_eq in pending {
-                        let mut arm_sys = post_sys.clone();
-                        arm_sys.invalidate_max_var_idx_cache();
-                        arm_sys.set_eq_store(std::sync::Arc::new(arm_eq));
-                        cases.push((base_name.clone(), arm_sys));
+                    match sub.insert_formula(gfm.clone()) {
+                        SystemOutcome::Linear => cases.push(GoalBranch {
+                            name: base_name,
+                            sys: sub.sys,
+                            counter: sub.maude.fresh_counter_peek(),
+                        }),
+                        SystemOutcome::Cases(arms) => {
+                            cases.extend(arms.into_iter().map(|arm| GoalBranch {
+                                name: base_name.clone(),
+                                sys: arm.sys,
+                                counter: arm.counter,
+                            }));
+                        }
+                        SystemOutcome::Contradictory => {}
                     }
                 }
                 self.changed = ChangeIndicator::Changed;
-                GoalCases::Cases(cases)
+                if cases.is_empty() {
+                    GoalCases::Contradictory
+                } else {
+                    GoalCases::Cases(cases)
+                }
             }
         }
     }
@@ -4653,31 +4517,26 @@ impl<'ctx> Reduction<'ctx> {
         self.maude.fresh_idx()
     }
 
-    /// Collapse a computed `cases`/`case_counters` pair into a `GoalCases`
+    /// Collapse computed branches into a `GoalCases`
     /// result, shared by the goal solvers whose fork loops end the same
     /// way.  Empty ⇒ `Contradictory`.  Single case ⇒ adopt it in place
     /// (`self.sys` swap + `reset_counter_to` to carry the branch's HS
     /// FreshT counter forward) and return `LinearNamed(single_name)`.
-    /// Two or more ⇒ record `last_case_counters` and return `Cases`.
+    /// Two or more ⇒ return self-contained branches.
     /// `single_name` is caller-supplied because it reaches stdout and is
     /// the rule name at some sites but the case's own name at others.
-    fn finish_goal_cases(
-        &mut self,
-        cases: Vec<(String, System)>,
-        case_counters: Vec<u64>,
-        single_name: String,
-    ) -> GoalCases {
+    fn finish_goal_cases(&mut self, mut cases: Vec<GoalBranch>, single_name: String) -> GoalCases {
         if cases.is_empty() {
             return GoalCases::Contradictory;
         }
         if cases.len() == 1 {
-            self.sys = cases.into_iter().next().unwrap().1;
-            self.maude.reset_counter_to(case_counters[0]);
+            let branch = cases.pop().unwrap();
+            self.sys = branch.sys;
+            self.maude.reset_counter_to(branch.counter);
             self.changed = ChangeIndicator::Changed;
             return GoalCases::LinearNamed(single_name);
         }
         self.changed = ChangeIndicator::Changed;
-        self.last_case_counters = case_counters;
         GoalCases::Cases(cases)
     }
 
@@ -4754,7 +4613,6 @@ impl<'ctx> Reduction<'ctx> {
                 let mut cases = Vec::new();
                 // HS FreshT-threading: per pushed case, the branch's final
                 // fresh counter (see `new_inheriting`).
-                let mut case_counters: Vec<u64> = Vec::new();
                 for act in &ru.actions {
                     let sys = self.sys.clone();
                     let mut sub =
@@ -4770,21 +4628,28 @@ impl<'ctx> Reduction<'ctx> {
                     // When `solveFactEqs SplitNow` produces multiple AC
                     // unifier arms, fan-out one branch per arm; otherwise
                     // use `sub.sys`'s already-installed Linear eq_store.
-                    let arm_eq_stores: Vec<crate::tools::equation_store::EquationStore> = match res
-                    {
-                        Err(_) | Ok(SolveOutcome::Contradictory) => continue,
-                        Ok(SolveOutcome::Cases(arms)) => arms,
-                        Ok(SolveOutcome::Linear(_)) => vec![(**sub.sys.eq_store).clone()],
-                    };
+                    let arm_eq_stores: Vec<(crate::tools::equation_store::EquationStore, u64)> =
+                        match res {
+                            Err(_) | Ok(SolveOutcome::Contradictory) => continue,
+                            Ok(SolveOutcome::Cases(arms)) => arms
+                                .into_iter()
+                                .map(|arm| (arm.eq_store, arm.counter))
+                                .collect(),
+                            Ok(SolveOutcome::Linear(_)) => {
+                                vec![((**sub.sys.eq_store).clone(), sub.maude.fresh_counter_peek())]
+                            }
+                        };
                     let post_sys = sub.sys.clone();
-                    let branch_counter = sub.maude.fresh_counter_peek();
-                    for arm_eq in arm_eq_stores {
+                    for (arm_eq, branch_counter) in arm_eq_stores {
                         let mut sys = post_sys.clone();
                         sys.invalidate_max_var_idx_cache();
                         sys.set_eq_store(std::sync::Arc::new(arm_eq));
                         set_goal_solved(&mut sys, &g);
-                        cases.push((rule_name.clone(), sys));
-                        case_counters.push(branch_counter);
+                        cases.push(GoalBranch {
+                            name: rule_name.clone(),
+                            sys,
+                            counter: branch_counter,
+                        });
                     }
                 }
                 // Single-case adoption mutates `self.sys` in place and
@@ -4792,289 +4657,9 @@ impl<'ctx> Reduction<'ctx> {
                 // qed); simplify-pass callers ignore the return and look
                 // at `self.sys`.  HS FreshT-threading — see the
                 // candidate-loop single-case adoption below.
-                self.finish_goal_cases(cases, case_counters, rule_name)
+                self.finish_goal_cases(cases, rule_name)
             }
             None => {
-                // Source-case dispatch for KU action goals — mirrors
-                // Haskell's `solveWithSource` (ProofMethod.hs:283-340, see line 319)
-                // which is called from `solve` BEFORE falling back to
-                // plain `solveGoal`.  HS picks a source whose pattern
-                // matches the goal, then `applySource` does
-                // `markGoalAsSolved >> disjunctionOfList cases >>
-                // someInst >> conjoinSystem` — i.e. grafts the case's
-                // entire sub-system (nodes/edges/goals) into the live
-                // system.
-                //
-                // Do NOT remove this path in favour of pure labelNodeId
-                // rule enumeration: it regresses the corpus with many
-                // timeouts.  Source-cases are the equivalent of HS's
-                // `solveWithSource`; both code paths need them.
-                // HS-faithful (Sources.hs:202-206): KU action goals are
-                // "useful" — `solveAllSafeGoals` dispatches them via
-                // `solveWithSourceAndReturn` at BOTH saturate and
-                // runtime.  Skipped only during HS's `initialSource`.
-                let src_dispatch_ok =
-                    !crate::constraint::solver::sources::in_initial_source_cases()
-                        && matches!(fa.tag, crate::fact::FactTag::Ku)
-                        && !self.ctx.full_sources.is_empty();
-                if src_dispatch_ok {
-                    let avoid_max = bounds_max(&self.sys);
-                    if let Some(case_pairs) =
-                        crate::constraint::solver::sources::solve_with_source_cases_action_with_ctx(
-                            &self.ctx.full_sources,
-                            &self.sys,
-                            i,
-                            fa,
-                            avoid_max,
-                            Some(self.ctx),
-                            Some(&self.maude),
-                        )
-                    {
-                        // HS-faithful `solveWithSource` returned `Just []`:
-                        // the source pattern MATCHED the live goal but has
-                        // ZERO precomputed cases (e.g. a builtin destructor
-                        // `KU(check_rep(..))` / `KU(get_rep(..))` whose only
-                        // source — the `coerce`→`KD`→chain — was contradicted
-                        // during saturation).  HS's `maybe (solveGoal) ... ws`
-                        // takes the `Just` branch → the reduction yields 0
-                        // branches → the node closes (`by`).  RS must mirror
-                        // by returning `Contradictory` here, NOT falling
-                        // through to runtime rule enumeration (which re-opens
-                        // the `coerce` case HS prunes).  `Some([])` is emitted
-                        // ONLY when the matched source has no cases at all (see
-                        // `solve_with_source_cases_action_with_ctx`); a matched
-                        // source with cases that all fail the live graft still
-                        // returns `None` and falls through as before.
-                        if case_pairs.is_empty() {
-                            return GoalCases::Contradictory;
-                        }
-                        let live_goal = Goal::Action(*i, fa.clone());
-                        let mut out: Vec<(String, crate::constraint::system::System)> = Vec::new();
-                        // HS FreshT-threading: per-out-case branch counters.
-                        let mut out_counters: Vec<u64> = Vec::new();
-                        // Runtime filterCases (mirroring Haskell's
-                        // `filterCases` in
-                        // `Theory.Constraint.Solver.Sources`, which skips
-                        // already-used chain-saturated source cases) is
-                        // disabled here.  The right fix is
-                        // N5_u-driven KU action-node unification on
-                        // identical terms, which surfaces a
-                        // cyclic-ordering contradiction.
-                        for (case_label, mut sys, case_action, branch_counter) in
-                            case_pairs.into_iter()
-                        {
-                            if let Some(slot) =
-                                sys.goals_mut().iter_mut().find(|(g, _)| g == &live_goal)
-                            {
-                                slot.1.solved = true;
-                            }
-                            // Use the saturated case's name (the
-                            // chain-root rule label from
-                            // `saturate_out_premise`).  Fall back to
-                            // the rule at the live goal node only if
-                            // the source-case carried no chain info.
-                            // `coerce_case_N` (no trailing rule) is an
-                            // un-folded intruder-chain artifact from
-                            // our chain-fold pipeline.  Haskell's
-                            // source-case enumeration doesn't produce
-                            // these labels; it shows the producer
-                            // rule's name directly.  Fall back to the
-                            // live node's rule name when the label is
-                            // empty, a default `case_N`, or a bare
-                            // chain-fold marker.
-                            let is_chain_fold_artifact = case_label.is_empty()
-                                || case_label == "case_1"
-                                || (case_label.starts_with("coerce_case_")
-                                    && !case_label[12..].contains('_'));
-                            let case_name = if is_chain_fold_artifact {
-                                sys.nodes
-                                    .iter()
-                                    .find(|(nid, _)| nid == i)
-                                    .map(|(_, r)| rule_case_name(r))
-                                    .unwrap_or_else(|| default_case_name(out.len()))
-                            } else {
-                                case_label
-                            };
-                            // HS FreshT-threading: continue THIS branch's
-                            // counter thread (the source pick's fork + the
-                            // branch's OWN someInst+conjoin draws, recorded
-                            // per output entry by
-                            // `solve_with_source_cases_action_with_ctx`).
-                            // `self.maude.fresh_counter_peek()` here would be
-                            // the LAST branch's post-conjoin position — HS's
-                            // DisjT fork gives every branch its own thread.
-                            let mut sub = Reduction::new_inheriting(self.ctx, sys, branch_counter);
-                            let res = sub.solve_fact_eqs(
-                                SplitStrategy::SplitNow,
-                                &[tamarin_term::rewriting::Equal {
-                                    lhs: case_action.clone(),
-                                    rhs: fa.clone(),
-                                }],
-                            );
-                            // Mirror Haskell `refineSubst`'s
-                            // `solveSubstEqs >> substSystem` — propagate
-                            // the action-unify bindings into the grafted
-                            // case's nodes/edges BEFORE computing
-                            // chain_eqs.
-                            //
-                            // The action-unify `solveFactEqs SplitNow`
-                            // can fan out into multiple AC unifier arms
-                            // (HS forks the `Reduction`/`DisjT`
-                            // continuation per arm via `disjunctionOfList
-                            // performSplit`, Reduction.hs:742-748).  On
-                            // `Cases`, `solve_term_eqs` returns the arms
-                            // WITHOUT installing any into `sub.sys`
-                            // (it leaves the default eq-store that
-                            // `System::take_eq_store` swapped in) — so we
-                            // MUST install an arm per continuation,
-                            // otherwise `sub.sys` carries a wiped
-                            // eq-store (conj=[], next_split=0) that drops
-                            // every live disjunction (the Joux_EphkRev
-                            // `splitEqs` cascade collapse).
-                            let action_arm_systems: Vec<(crate::constraint::system::System, u64)> =
-                                match res {
-                                    Err(_) | Ok(SolveOutcome::Contradictory) => continue,
-                                    Ok(SolveOutcome::Linear(_)) => {
-                                        sub.subst_system();
-                                        vec![(sub.sys.clone(), sub.maude.fresh_counter_peek())]
-                                    }
-                                    Ok(SolveOutcome::Cases(arms)) => {
-                                        let template = sub.sys.clone();
-                                        let post_solve_counter = sub.maude.fresh_counter_peek();
-                                        let mut v = Vec::new();
-                                        for arm_eq in arms {
-                                            let mut arm_sys = template.clone();
-                                            arm_sys.invalidate_max_var_idx_cache();
-                                            arm_sys.set_eq_store(std::sync::Arc::new(arm_eq));
-                                            let mut arm_red = Reduction::new_inheriting(
-                                                self.ctx,
-                                                arm_sys,
-                                                post_solve_counter,
-                                            );
-                                            arm_red.subst_system();
-                                            if arm_red.sys.eq_store.is_false() {
-                                                continue;
-                                            }
-                                            let c = arm_red.maude.fresh_counter_peek();
-                                            v.push((arm_red.sys, c));
-                                        }
-                                        v
-                                    }
-                                };
-                            // Live node ids (as of this solve_action_goal
-                            // entry): chain_eqs below must NOT re-solve
-                            // pre-existing live edges (HS conjoinSystem
-                            // runs no edge fact-eqs; re-solving live edges
-                            // re-narrows live disjunctions HS keeps).
-                            let action_live_node_ids: std::collections::BTreeSet<
-                                crate::constraint::constraints::NodeId,
-                            > = self.sys.nodes.iter().map(|(n, _)| *n).collect();
-                            'arm: for (arm_sys, arm_counter) in action_arm_systems {
-                                let mut sub =
-                                    Reduction::new_inheriting(self.ctx, arm_sys, arm_counter);
-                                // Edge-induced fact unification over
-                                // GRAFTED edges only (skip live-live
-                                // edges — see action_live_node_ids
-                                // note above).
-                                // Build chain_eqs in a block so the
-                                // node-id → rule map (which borrows
-                                // `sub.sys.nodes`) drops before the later
-                                // `&mut sub` uses.  The map makes the
-                                // per-edge src/tgt resolution O(1) instead
-                                // of two linear `nodes.iter().find` scans
-                                // (O(arms*edges*nodes) → O(arms*(nodes+edges))).
-                                let (chain_eqs, tag_mismatch_edge): (Vec<_>, bool) = {
-                                    let mut tag_mismatch_edge = false;
-                                    let node_rule_map = sub.sys.node_rule_map();
-                                    let chain_eqs: Vec<_> = sub
-                                        .sys
-                                        .edges
-                                        .iter()
-                                        .filter_map(|e| {
-                                            if action_live_node_ids.contains(&e.src.0)
-                                                && action_live_node_ids.contains(&e.tgt.0)
-                                            {
-                                                return None;
-                                            }
-                                            let src_rule = *node_rule_map.get(&e.src.0)?;
-                                            let tgt_rule = *node_rule_map.get(&e.tgt.0)?;
-                                            let fc = src_rule.conclusions.get(e.src.1 .0)?.clone();
-                                            let fp = tgt_rule.premises.get(e.tgt.1 .0)?.clone();
-                                            if fc.tag != fp.tag || fc.terms.len() != fp.terms.len()
-                                            {
-                                                tag_mismatch_edge = true;
-                                                return None;
-                                            }
-                                            if fc == fp {
-                                                return None;
-                                            }
-                                            Some(tamarin_term::rewriting::Equal {
-                                                lhs: fc,
-                                                rhs: fp,
-                                            })
-                                        })
-                                        .collect();
-                                    (chain_eqs, tag_mismatch_edge)
-                                };
-                                if tag_mismatch_edge {
-                                    continue 'arm;
-                                }
-                                if !chain_eqs.is_empty() {
-                                    let r2 =
-                                        sub.solve_fact_eqs(SplitStrategy::SplitNow, &chain_eqs);
-                                    match r2 {
-                                        Err(_) | Ok(SolveOutcome::Contradictory) => continue 'arm,
-                                        Ok(SolveOutcome::Linear(_)) => {}
-                                        Ok(SolveOutcome::Cases(arms2)) => {
-                                            // chain_eqs fan-out: install
-                                            // each arm and recurse the push.
-                                            let template2 = sub.sys.clone();
-                                            let post_chain_counter = sub.maude.fresh_counter_peek();
-                                            for arm2 in arms2 {
-                                                let mut s2 = template2.clone();
-                                                s2.invalidate_max_var_idx_cache();
-                                                s2.set_eq_store(std::sync::Arc::new(arm2));
-                                                let mut r3 = Reduction::new_inheriting(
-                                                    self.ctx,
-                                                    s2,
-                                                    post_chain_counter,
-                                                );
-                                                r3.subst_system();
-                                                if r3.sys.eq_store.is_false() {
-                                                    continue;
-                                                }
-                                                out_counters.push(r3.maude.fresh_counter_peek());
-                                                out.push((case_name.clone(), r3.sys));
-                                            }
-                                            continue 'arm;
-                                        }
-                                    }
-                                }
-                                sub.subst_system();
-                                // Haskell-faithful: push every case
-                                // and let the next simplify+contradictions
-                                // pass catch any real impossibilities.
-                                out_counters.push(sub.maude.fresh_counter_peek());
-                                out.push((case_name.clone(), sub.sys));
-                            }
-                        }
-                        if !out.is_empty() {
-                            self.changed = ChangeIndicator::Changed;
-                            if out.len() == 1 {
-                                let (name, sys) = out.into_iter().next().unwrap();
-                                self.sys = sys;
-                                // HS FreshT-threading — single-case adoption
-                                // (see the candidate-loop rationale below).
-                                self.maude.reset_counter_to(out_counters[0]);
-                                return GoalCases::LinearNamed(name);
-                            }
-                            self.last_case_counters = out_counters;
-                            return GoalCases::Cases(out);
-                        }
-                        // If source-cases yielded nothing applicable,
-                        // fall back to plain rule enumeration below.
-                    }
-                }
                 // `KU` goals headed by an AC operator go through the
                 // generic rule enumeration below, with `IsAcConstructor`
                 // threading so redundant AC-permutation unifier arms are
@@ -5110,11 +4695,7 @@ impl<'ctx> Reduction<'ctx> {
                 self.maude.ensure_above(avoid_max);
                 let base_counter = self.maude.fresh_counter_peek();
                 let mut counter_high_water = base_counter;
-                let mut cases: Vec<(String, crate::constraint::system::System)> = Vec::new();
-                // HS FreshT-threading: per pushed case, the branch's fresh
-                // counter position at the end of its solve work (see the
-                // single-case adoption below).  Parallel to `cases`.
-                let mut case_counters: Vec<u64> = Vec::new();
+                let mut cases: Vec<GoalBranch> = Vec::new();
                 let goal_ac_headed = matches!(fa.tag, crate::fact::FactTag::Ku)
                     && fa.terms.len() == 1
                     && matches!(
@@ -5141,48 +4722,41 @@ impl<'ctx> Reduction<'ctx> {
                     {
                         continue;
                     }
-                    for (act_idx, _) in rule.actions.iter().enumerate() {
-                        // Fresh-rename the rule once per branch so
-                        // each candidate has independent variables.
-                        // When the SplitG path is on, freshen both the
-                        // rule and any accompanying variant substs
-                        // consistently — Haskell `someRuleACInst` runs
-                        // `rename` over the whole (rule, constrs) pair
-                        // via `fmap extractInsts . rename`.
-                        // Independent `Disj` fork (see the base_counter note
-                        // above): rewind the shared counter so THIS candidate's
-                        // rename reserves its var range from the same base every
-                        // sibling sees.
-                        self.maude.reset_counter_to(base_counter);
-                        let (renamed, renamed_constrs) = freshen_rule_with_constrs(
-                            rule.clone(),
-                            constrs.clone(),
-                            avoid_max,
-                            &self.maude,
-                        );
-                        counter_high_water =
-                            counter_high_water.max(self.maude.fresh_counter_peek());
-                        let act = renamed.actions[act_idx].clone();
-                        if act.tag != fa.tag || act.terms.len() != fa.terms.len() {
-                            continue;
-                        }
-                        let case_name = rule_case_name(&renamed);
-                        let mut sys = self.sys.clone();
-                        sys.add_node(*i, renamed.clone());
-                        let mut sub = Reduction::new(self.ctx, sys);
-                        if sub.solve_rule_constraints(renamed_constrs) {
-                            continue;
-                        }
-                        sub.exploit_prems(i, &renamed);
-                        // #883 `solveAction`: for `KU` goals headed by an AC
-                        // operator, pass the chosen rule's first two premise
-                        // variables (`getKUVars`) so the SplitNow fan-out can
-                        // drop unifier arms that only permute them.
-                        let is_ac = if goal_ac_headed {
-                            ku_vars(&renamed)
-                        } else {
-                            IsAcConstructor::OtherRule
-                        };
+                    // Haskell's `labelNodeId` imports, constrains and exploits
+                    // the selected rule before `disjunctionOfList rActs` forks
+                    // over its actions. Do that prefix once per rule, then
+                    // clone only the completed prefix for compatible actions.
+                    self.maude.reset_counter_to(base_counter);
+                    let (renamed, renamed_constrs) =
+                        freshen_rule_with_constrs(rule, constrs, avoid_max, &self.maude);
+                    let renamed_counter = self.maude.fresh_counter_peek();
+                    counter_high_water = counter_high_water.max(renamed_counter);
+                    let case_name = rule_case_name(&renamed);
+                    let mut sys = self.sys.clone();
+                    sys.add_node(*i, renamed.clone());
+                    let mut prefix = Reduction::new_inheriting(self.ctx, sys, renamed_counter);
+                    if prefix.solve_rule_constraints(renamed_constrs) {
+                        continue;
+                    }
+                    prefix.exploit_prems(i, &renamed);
+                    let fork_counter = prefix.maude.fresh_counter_peek();
+                    counter_high_water = counter_high_water.max(fork_counter);
+                    // #883 `solveAction`: for `KU` goals headed by an AC
+                    // operator, pass the chosen rule's first two premise
+                    // variables (`getKUVars`) so the SplitNow fan-out can
+                    // drop unifier arms that only permute them.
+                    let is_ac = if goal_ac_headed {
+                        ku_vars(&renamed)
+                    } else {
+                        IsAcConstructor::OtherRule
+                    };
+                    for act in renamed
+                        .actions
+                        .iter()
+                        .filter(|act| act.tag == fa.tag && act.terms.len() == fa.terms.len())
+                    {
+                        let mut sub =
+                            Reduction::new_inheriting(self.ctx, prefix.sys.clone(), fork_counter);
                         let res = sub.solve_fact_eqs_ac(
                             SplitStrategy::SplitNow,
                             is_ac,
@@ -5207,28 +4781,30 @@ impl<'ctx> Reduction<'ctx> {
                         // makes TAK1::session_key_establish show only `case
                         // Proto2` after simplify where HS shows `case 17`
                         // (the 17th surviving AC-unifier arm).
-                        let arm_eq_stores: Vec<crate::tools::equation_store::EquationStore> =
+                        let arm_eq_stores: Vec<(crate::tools::equation_store::EquationStore, u64)> =
                             match res {
                                 Err(_) | Ok(SolveOutcome::Contradictory) => continue,
-                                Ok(SolveOutcome::Cases(arms)) => arms,
-                                Ok(SolveOutcome::Linear(_)) => vec![(**sub.sys.eq_store).clone()],
+                                Ok(SolveOutcome::Cases(arms)) => arms
+                                    .into_iter()
+                                    .map(|arm| (arm.eq_store, arm.counter))
+                                    .collect(),
+                                Ok(SolveOutcome::Linear(_)) => vec![(
+                                    (**sub.sys.eq_store).clone(),
+                                    sub.maude.fresh_counter_peek(),
+                                )],
                             };
+                        counter_high_water = counter_high_water.max(sub.maude.fresh_counter_peek());
                         let post_sys = sub.sys.clone();
-                        // Branch counter for HS FreshT-threading (see the
-                        // single-case adoption below): the sub-Reduction's
-                        // final fresh-counter position after exploit_prems +
-                        // solve_fact_eqs (including its eq-store simp fold
-                        // draws).  Multi-arm: `sub.solve_term_eqs`'s SplitNow
-                        // path already restored sub's counter to the
-                        // across-arm high water, so all arms share it.
-                        let branch_counter = sub.maude.fresh_counter_peek();
-                        for arm_eq in arm_eq_stores {
+                        for (arm_eq, branch_counter) in arm_eq_stores {
                             let mut sys = post_sys.clone();
                             sys.invalidate_max_var_idx_cache();
                             sys.set_eq_store(std::sync::Arc::new(arm_eq));
                             set_goal_solved(&mut sys, &g);
-                            cases.push((case_name.clone(), sys));
-                            case_counters.push(branch_counter);
+                            cases.push(GoalBranch {
+                                name: case_name.clone(),
+                                sys,
+                                counter: branch_counter,
+                            });
                         }
                     }
                 }
@@ -5246,8 +4822,11 @@ impl<'ctx> Reduction<'ctx> {
                 // enclosing exec (e.g. insertImpliedFormulas' eq-store simp
                 // fold draws) stay aligned with HS.  Case name reaches
                 // stdout, hence passed explicitly.
-                let name = cases.first().map(|(n, _)| n.clone()).unwrap_or_default();
-                self.finish_goal_cases(cases, case_counters, name)
+                let name = cases
+                    .first()
+                    .map(|branch| branch.name.clone())
+                    .unwrap_or_default();
+                self.finish_goal_cases(cases, name)
             }
         }
     }
@@ -5361,69 +4940,6 @@ impl<'ctx> Reduction<'ctx> {
             // (`Simplify.hs:56-158, see line 82`) handles it.
             return self.solve_premise_goal(&p_learn, &prem_learn);
         }
-        // Source-case short-circuit.  Mirrors Haskell's `solveWithSource`
-        // → `applySource` (Sources.hs:326-351): match the live goal
-        // against the source's abstract `cdGoal`, refine the case via
-        // `refineSubst`, someInst with keepVarBindings, then
-        // `conjoinSystem`.  Implemented in `refine_source_case` and
-        // `conjoin_refine_arm` (sources.rs).
-        //
-        // The returned systems are already fact-aligned + edge-coherent
-        // (with a defensive `chain_eqs` pass).
-        //
-        // HS-faithful (Sources.hs:202-206): `solveAllSafeGoals` only
-        // calls `solveWithSourceAndReturn` on "useful" goals (KU
-        // actions).  Premise goals are "safe goals" — dispatched via
-        // `solveGoal` directly (rule enumeration), NOT through
-        // `solveWithSource`.  So Rust's saturate-time Premise dispatch
-        // should be skipped; runtime dispatch (via ProofMethod.solve)
-        // still fires.  Gate on `!in_precompute_mode()`.
-        if !crate::constraint::solver::sources::in_precompute_mode()
-            && !self.ctx.full_sources.is_empty()
-            && let Some(case_pairs) =
-                crate::constraint::solver::sources::solve_with_source_cases_ctx(
-                    self.ctx,
-                    &self.ctx.full_sources,
-                    &self.sys,
-                    &p.0,
-                    p.1,
-                    fa_prem,
-                    Some(&self.maude),
-                )
-        {
-            let mut out: Vec<(String, crate::constraint::system::System)> = Vec::new();
-            // HS FreshT-threading: per-branch continuation counters,
-            // parallel to `out`.
-            // HS `_applySource` forks the counter per case
-            // (`disjunctionOfList cdCases` BELOW FreshT); each
-            // adopted case's post-solve simplify must continue at
-            // fork + THAT case's own someInst/conjoin draws — not
-            // at the shared handle's post-ALL-cases position.
-            let mut out_counters: Vec<u64> = Vec::new();
-            for (case_name, sys, branch_counter) in case_pairs {
-                if has_fresh_consumer_conflation(&sys, &self.maude) {
-                    continue;
-                }
-                out.push((case_name, sys));
-                out_counters.push(branch_counter);
-            }
-            if !out.is_empty() {
-                self.changed = ChangeIndicator::Changed;
-                if out.len() == 1 {
-                    let (name, sys) = out.into_iter().next().unwrap();
-                    self.sys = sys;
-                    // Single-case adoption: continue THIS branch's
-                    // thread (mirrors the action-path source-case
-                    // adoption above).
-                    self.maude.reset_counter_to(out_counters[0]);
-                    return GoalCases::LinearNamed(name);
-                }
-                self.last_case_counters = out_counters;
-                return GoalCases::Cases(out);
-            }
-            // Fall through to plain rule enumeration if every case
-            // dropped — keeps the search making progress.
-        }
         // A provider failure installs an empty placeholder to keep this deep
         // API infallible. Do not mistake that placeholder for "no matching
         // source" and start an expensive fallback; the enclosing solver step
@@ -5440,10 +4956,9 @@ impl<'ctx> Reduction<'ctx> {
             Option<Vec<tamarin_term::subst_vfresh::LNSubstVFresh>>,
         )> = premise_solving_rule_insts_with_constrs(self.ctx, fa_prem);
         let avoid_max = bounds_max(&self.sys);
-        let mut cases: Vec<(String, crate::constraint::system::System)> = Vec::new();
+        let mut cases: Vec<GoalBranch> = Vec::new();
         // HS FreshT-threading: per pushed case, the branch's final fresh
         // counter (see `new_inheriting` and the single-case adoption below).
-        let mut case_counters: Vec<u64> = Vec::new();
         // HS `insertFreshNode` (Reduction.hs:238-241): `i <- freshLVar "vr"`
         // is evaluated ONCE, in the shared prefix BEFORE the
         // `disjunctionOfList rules` inside `labelNodeId`.  So EVERY candidate
@@ -5558,18 +5073,22 @@ impl<'ctx> Reduction<'ctx> {
                         // Branch counter after insertEdges (incl. its
                         // eq-store simp draws) — continues into each arm.
                         let post_edge_counter = sub.maude.fresh_counter_peek();
-                        let arm_systems = fanout_arm_systems(outcome, post_edge_sys);
-                        for mut sys in arm_systems {
+                        let arm_systems =
+                            fanout_arm_systems(outcome, post_edge_sys, post_edge_counter);
+                        for (mut sys, arm_counter) in arm_systems {
                             set_goal_solved(&mut sys, &g);
                             // Subst_system per arm so the variant subst
                             // gets baked into node/edge/goal terms before
                             // saving.  Mirrors `solve_chain_goal`'s
                             // post-arm substitution.
                             let mut sub_per_arm =
-                                Reduction::new_inheriting(self.ctx, sys, post_edge_counter);
+                                Reduction::new_inheriting(self.ctx, sys, arm_counter);
                             sub_per_arm.subst_system();
-                            case_counters.push(sub_per_arm.maude.fresh_counter_peek());
-                            cases.push((case_name.clone(), sub_per_arm.sys));
+                            cases.push(GoalBranch {
+                                name: case_name.clone(),
+                                sys: sub_per_arm.sys,
+                                counter: sub_per_arm.maude.fresh_counter_peek(),
+                            });
                         }
                     }
                 }
@@ -5586,8 +5105,11 @@ impl<'ctx> Reduction<'ctx> {
         // not the outer counter that only saw the freshen reservation.  See
         // `solve_action_goal`'s single-case adoption for the full rationale.
         // Case name reaches stdout, hence passed explicitly.
-        let name = cases.first().map(|(n, _)| n.clone()).unwrap_or_default();
-        self.finish_goal_cases(cases, case_counters, name)
+        let name = cases
+            .first()
+            .map(|branch| branch.name.clone())
+            .unwrap_or_default();
+        self.finish_goal_cases(cases, name)
     }
 
     /// `solveChain` — direct port of Haskell's `Goals.solveChain`
@@ -5634,12 +5156,7 @@ impl<'ctx> Reduction<'ctx> {
             None => return GoalCases::Contradictory,
         };
 
-        let mut all_cases: Vec<(String, crate::constraint::system::System)> = Vec::new();
-        // HS FreshT-threading: per pushed case, the branch's final fresh
-        // counter (parallel to `all_cases`; see `new_inheriting` and the
-        // single-case adoptions below).
-        let mut all_case_counters: Vec<u64> = Vec::new();
-
+        let mut all_cases: Vec<GoalBranch> = Vec::new();
         // ---------------- Branch 1: direct edge ----------------
         if let Some(p_rule) = &p_rule_opt {
             let fa_prem_opt = p_rule.lookup_premise(p.1).cloned();
@@ -5684,13 +5201,18 @@ impl<'ctx> Reduction<'ctx> {
                         let post_edge_sys = sub.sys.clone();
                         let post_edge_counter = sub.maude.fresh_counter_peek();
                         let arm_systems = match res {
-                            Ok(outcome) => fanout_arm_systems(outcome, post_edge_sys),
-                            _ => vec![post_edge_sys],
+                            Ok(outcome) => {
+                                fanout_arm_systems(outcome, post_edge_sys, post_edge_counter)
+                            }
+                            _ => vec![(post_edge_sys, post_edge_counter)],
                         };
-                        for mut arm_sys in arm_systems {
+                        for (mut arm_sys, arm_counter) in arm_systems {
                             set_goal_solved(&mut arm_sys, &g);
-                            all_cases.push((case_name.clone(), arm_sys));
-                            all_case_counters.push(post_edge_counter);
+                            all_cases.push(GoalBranch {
+                                name: case_name.clone(),
+                                sys: arm_sys,
+                                counter: arm_counter,
+                            });
                         }
                     }
                 }
@@ -5801,16 +5323,15 @@ impl<'ctx> Reduction<'ctx> {
                 let post_edge_sys = sub.sys.clone();
                 let post_edge_counter = sub.maude.fresh_counter_peek();
                 let arm_systems = match res {
-                    Ok(outcome) => fanout_arm_systems(outcome, post_edge_sys),
-                    _ => vec![post_edge_sys],
+                    Ok(outcome) => fanout_arm_systems(outcome, post_edge_sys, post_edge_counter),
+                    _ => vec![(post_edge_sys, post_edge_counter)],
                 };
                 let prem0 = match ru_inst.premises.first() {
                     Some(f) => f.clone(),
                     None => continue,
                 };
-                for mut arm_sys in arm_systems {
-                    let mut arm_sub =
-                        Reduction::new_inheriting(self.ctx, arm_sys, post_edge_counter);
+                for (mut arm_sys, arm_counter) in arm_systems {
+                    let mut arm_sub = Reduction::new_inheriting(self.ctx, arm_sys, arm_counter);
                     arm_sub.mark_goal_as_solved(&Goal::Premise(
                         (new_node, crate::rule::PremIdx(0)),
                         prem0.clone(),
@@ -5819,8 +5340,11 @@ impl<'ctx> Reduction<'ctx> {
                     let arm_counter = arm_sub.maude.fresh_counter_peek();
                     arm_sys = arm_sub.sys;
                     set_goal_solved(&mut arm_sys, &g);
-                    all_cases.push((case_name.clone(), arm_sys));
-                    all_case_counters.push(arm_counter);
+                    all_cases.push(GoalBranch {
+                        name: case_name.clone(),
+                        sys: arm_sys,
+                        counter: arm_counter,
+                    });
                 }
             }
             // HS short-circuits the generic destructor loop in the FUnion
@@ -5828,9 +5352,9 @@ impl<'ctx> Reduction<'ctx> {
             // generic loop below.
             let name = all_cases
                 .first()
-                .map(|(n, _)| n.clone())
+                .map(|branch| branch.name.clone())
                 .unwrap_or_default();
-            return self.finish_goal_cases(all_cases, all_case_counters, name);
+            return self.finish_goal_cases(all_cases, name);
         }
         if !conc_term_is_msg_var {
             let avoid_max = bounds_max(&self.sys);
@@ -5966,10 +5490,10 @@ impl<'ctx> Reduction<'ctx> {
                 let post_edge_sys = sub.sys.clone();
                 let post_edge_counter = sub.maude.fresh_counter_peek();
                 let arm_systems = match res {
-                    Ok(outcome) => fanout_arm_systems(outcome, post_edge_sys),
-                    _ => vec![post_edge_sys],
+                    Ok(outcome) => fanout_arm_systems(outcome, post_edge_sys, post_edge_counter),
+                    _ => vec![(post_edge_sys, post_edge_counter)],
                 };
-                for mut arm_sys in arm_systems {
+                for (mut arm_sys, arm_counter) in arm_systems {
                     // Step 3 (HS-faithful): leave sub.sys raw post-insertEdges.
                     // HS's simplifySystem (`Simplify.hs:56-158, see line 82`) calls substSystem
                     // exactly ONCE at the start of each simplify iteration,
@@ -5984,8 +5508,7 @@ impl<'ctx> Reduction<'ctx> {
                     // The freshly-added prem-0 goal now has an incoming
                     // edge from `c`, so mark it solved (Haskell's
                     // `markGoalAsSolved "directly" (PremiseG (i, v) ...)`).
-                    let mut arm_sub =
-                        Reduction::new_inheriting(self.ctx, arm_sys, post_edge_counter);
+                    let mut arm_sub = Reduction::new_inheriting(self.ctx, arm_sys, arm_counter);
                     arm_sub.mark_goal_as_solved(&Goal::Premise(
                         (new_node, crate::rule::PremIdx(0)),
                         prem0.clone(),
@@ -5997,8 +5520,11 @@ impl<'ctx> Reduction<'ctx> {
                     // Mark the original chain goal as solved in this case
                     // (it's been extended, not closed).
                     set_goal_solved(&mut arm_sys, &g);
-                    all_cases.push((case_name.clone(), arm_sys));
-                    all_case_counters.push(arm_counter);
+                    all_cases.push(GoalBranch {
+                        name: case_name.clone(),
+                        sys: arm_sys,
+                        counter: arm_counter,
+                    });
                 }
             }
             // Restore the shared counter to the high-water mark reached
@@ -6010,9 +5536,9 @@ impl<'ctx> Reduction<'ctx> {
 
         let name = all_cases
             .first()
-            .map(|(n, _)| n.clone())
+            .map(|branch| branch.name.clone())
             .unwrap_or_default();
-        self.finish_goal_cases(all_cases, all_case_counters, name)
+        self.finish_goal_cases(all_cases, name)
     }
 
     /// `solveSubterm` — full port of Haskell `solveSubterm`
@@ -6107,7 +5633,7 @@ impl<'ctx> Reduction<'ctx> {
 
         let single = split_list.len() == 1;
         let base_sys = self.sys.clone();
-        let mut cases: Vec<(String, crate::constraint::system::System)> = Vec::new();
+        let mut cases: Vec<GoalBranch> = Vec::new();
         for (i, split) in split_list.iter().enumerate() {
             let case_name = format!("SubtermSplit{}", i + 1);
             // Fork the system; mutate per the split arm via a fresh
@@ -6120,11 +5646,12 @@ impl<'ctx> Reduction<'ctx> {
             let mut sub = Reduction::new(self.ctx, base_sys.clone());
             sub.maude
                 .ensure_above(self.maude.fresh_counter_peek().saturating_sub(1));
-            match split {
-                SubtermSplit::TrueD => { /* return () */ }
+            let outcome = match split {
+                SubtermSplit::TrueD => SystemOutcome::Linear,
                 SubtermSplit::SubtermD(s, t) => {
                     sub.sys.invalidate_max_var_idx_cache();
                     sub.sys.subterm_store_mut().add(s.clone(), t.clone());
+                    SystemOutcome::Linear
                 }
                 SubtermSplit::NatSubtermD(s, t) => {
                     if single {
@@ -6136,10 +5663,11 @@ impl<'ctx> Reduction<'ctx> {
                         let s_plus = f_app_ac(AcSym::NatPlus, vec![s.clone(), var_term(new_var)]);
                         // insertFormula $ closeGuarded Ex [newVar] [EqE sPlus t] gtrue
                         let f = close_guarded_ex_eq(&new_var, &s_plus, t);
-                        sub.insert_formula(f);
+                        sub.insert_formula(f)
                     } else {
                         sub.sys.invalidate_max_var_idx_cache();
                         sub.sys.subterm_store_mut().add(s.clone(), t.clone());
+                        SystemOutcome::Linear
                     }
                 }
                 SubtermSplit::EqualD(l, r) => {
@@ -6148,23 +5676,38 @@ impl<'ctx> Reduction<'ctx> {
                         crate::formula::lift_free(l),
                         crate::formula::lift_free(r),
                     );
-                    sub.insert_formula(crate::guarded::Guarded::Atom(atom));
+                    sub.insert_formula(crate::guarded::Guarded::Atom(atom))
                 }
                 SubtermSplit::AcNewVarD(small_plus, big, new_var) => {
                     // insertFormula $ closeGuarded Ex [newVar] [EqE smallPlus big] gtrue
                     let f = close_guarded_ex_eq(new_var, small_plus, big);
-                    sub.insert_formula(f);
+                    sub.insert_formula(f)
                 }
-            }
+            };
             sub.changed = ChangeIndicator::Changed;
-            cases.push((case_name, sub.sys));
+            match outcome {
+                SystemOutcome::Linear => cases.push(GoalBranch {
+                    name: case_name,
+                    sys: sub.sys,
+                    counter: sub.maude.fresh_counter_peek(),
+                }),
+                SystemOutcome::Cases(arms) => {
+                    cases.extend(arms.into_iter().map(|arm| GoalBranch {
+                        name: case_name.clone(),
+                        sys: arm.sys,
+                        counter: arm.counter,
+                    }));
+                }
+                SystemOutcome::Contradictory => {}
+            }
         }
 
         self.changed = ChangeIndicator::Changed;
         if cases.len() == 1 {
-            let (name, sys) = cases.into_iter().next().unwrap();
-            self.sys = sys;
-            return GoalCases::LinearNamed(name);
+            let branch = cases.into_iter().next().unwrap();
+            self.sys = branch.sys;
+            self.maude.reset_counter_to(branch.counter);
+            return GoalCases::LinearNamed(branch.name);
         }
         GoalCases::Cases(cases)
     }
@@ -6213,16 +5756,18 @@ impl<'ctx> Reduction<'ctx> {
         };
         if cases.len() == 1 {
             self.sys.invalidate_max_var_idx_cache();
-            self.sys.set_eq_store(std::sync::Arc::new(simplify_picked(
-                cases.into_iter().next().unwrap(),
-            )));
+            let store = simplify_picked(cases.into_iter().next().unwrap());
+            if store.is_false() {
+                self.mark_contradictory();
+                return GoalCases::Contradictory;
+            }
+            self.sys.set_eq_store(std::sync::Arc::new(store));
             self.mark_goal_as_solved(&g);
             // Push the resulting free subst back into the system.
             self.subst_system();
             return GoalCases::Linear;
         }
         let mut out = Vec::with_capacity(cases.len());
-        let n_cases = cases.len();
         // HS FreshT-threading (`solveSplit`, Goals.hs:373-384):
         // `disjunctionOfList split` forks the DisjT layer, which sits
         // BELOW FreshT in `Reduction = StateT System (FreshT (DisjT ...))`
@@ -6239,33 +5784,36 @@ impl<'ctx> Reduction<'ctx> {
         // numbering — the growing ∃-witness index drift on CH07 /
         // sapic feature-xor CH07 web proof pages.  Rewind to the fork
         // base before each case and record the per-case continuation
-        // counter (fork + that case's OWN draws) in `last_case_counters`
-        // so the post-solve `simplifySystem` continues each branch at
+        // counter (fork + that case's OWN draws) in each `GoalBranch`, so
+        // the post-solve `simplifySystem` continues each branch at
         // HS's counter position, exactly like the other Cases producers.
         let fork_base = self.maude.fresh_counter_peek();
-        let mut case_counters: Vec<u64> = Vec::with_capacity(n_cases);
         for store in cases.into_iter() {
             self.maude.reset_counter_to(fork_base);
+            let store = simplify_picked(store);
+            if store.is_false() {
+                continue;
+            }
             let mut sys = self.sys.clone();
             sys.invalidate_max_var_idx_cache();
-            sys.set_eq_store(std::sync::Arc::new(simplify_picked(store)));
-            let branch_counter = self.maude.fresh_counter_peek();
+            sys.set_eq_store(std::sync::Arc::new(store));
             set_goal_solved(&mut sys, &g);
             // Propagate variant subst into nodes/edges/goals for each
             // case before saving.
-            let mut sub = Reduction::new(self.ctx, sys);
+            let mut sub = Reduction::new_inheriting(self.ctx, sys, self.maude.fresh_counter_peek());
             sub.subst_system();
             // Haskell `solveSplit` (Goals.hs:373-384, see line 384): returns `"split"` for
             // EVERY alternative.  Disambiguation to `split_case_1`,
             // `split_case_2`, ... happens in `distinguish`
             // (ProofMethod.hs:283-340, see line 307,334) when multiple sibling cases share the
             // same name.  Mirror by emitting plain `"split"` here.
-            out.push(("split".to_string(), sub.sys));
-            case_counters.push(branch_counter);
+            out.push(GoalBranch {
+                name: "split".to_string(),
+                sys: sub.sys,
+                counter: sub.maude.fresh_counter_peek(),
+            });
         }
-        self.changed = ChangeIndicator::Changed;
-        self.last_case_counters = case_counters;
-        GoalCases::Cases(out)
+        self.finish_goal_cases(out, "split".to_string())
     }
 }
 

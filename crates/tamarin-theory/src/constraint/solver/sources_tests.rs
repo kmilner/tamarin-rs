@@ -108,6 +108,14 @@ fn precompute_full_sources_emits_per_tag_entries() {
     // The cell is empty while nothing forces it.  That is what makes the
     // precompute lazy.
     assert!(a_src.cases_or_empty().is_empty());
+    {
+        let _guard = PrecomputeModeGuard::enter();
+        assert!(a_src.cases_for_apply(&ctx).is_empty());
+    }
+    assert!(
+        a_src.cases_cell.lock().unwrap().is_none(),
+        "saturation workers consume their iteration snapshot without forcing the context"
+    );
     // A forced cell lists the two rules that conclude `A(x)`.
     let names: Vec<String> = a_src
         .cases_unchecked(&ctx)
@@ -535,67 +543,6 @@ fn shift_keeps_ac_arg_order() {
 }
 
 // =========================================================================
-// rename_system_above
-// =========================================================================
-
-/// The saturate-time shift is `rename` over `instance HasFrees System`
-/// (System.hs:1866-1879), so the goal store's disjunctions and subterm pairs
-/// move with everything else (Constraints.hs:226-232) and so do the subterm
-/// store's negative subterms (SubtermStore.hs:552-557).  The ranges of the
-/// equation store's disjunctions stay put: their variables count as fresh, so
-/// the instance maps the domain only (SubstVFresh.hs:196-202).
-#[test]
-fn saturate_shift_moves_disj_and_subterm_goals_and_leaves_conj_ranges() {
-    let sys = system_with_a_variable_per_field(mterm(11));
-    let out = rename_system_above(&sys, 999);
-
-    let expected: Vec<LVar> = frees_list(&sys)
-        .into_iter()
-        .map(|v| LVar::new(v.name, v.sort, v.idx + 1000))
-        .collect();
-    assert_eq!(frees_list(&out), expected);
-
-    assert_eq!(
-        out.goals[1].0,
-        Goal::Disj(Disj::new(vec![last_formula(1170)])),
-        "a disjunction goal's formula moves with the system"
-    );
-    assert_eq!(
-        out.goals[2].0,
-        Goal::Subterm((mterm(1180), mterm(1181))),
-        "a subterm goal's pair moves with the system"
-    );
-    assert_eq!(
-        out.subterm_store.neg_subterms.to_vec(),
-        vec![(mterm(1090), mterm(1091))],
-        "the negative subterms move with the rest of the store"
-    );
-    assert_eq!(
-        out.eq_store.conj[0].substs[0].to_list(),
-        vec![(mvar(1110), mterm(111))],
-        "a disjunction's domain key moves and its range does not"
-    );
-}
-
-/// The map invalidates the node-component cache, and the wrapper re-establishes
-/// it from the pre-shift value: every node variable's index rises by the same
-/// shift, so the maximum over them does too.
-#[test]
-fn saturate_shift_carries_the_node_component_cache() {
-    use crate::constraint::solver::reduction::{bounds_max, bounds_max_uncached};
-    let sys = system_with_a_variable_per_field(mterm(11));
-    bounds_max(&sys);
-    let before = sys
-        .node_max_cache
-        .get()
-        .expect("bounds_max populates the node component");
-
-    let out = rename_system_above(&sys, 999);
-    assert_eq!(out.node_max_cache.get(), Some(before + 1000));
-    assert_eq!(bounds_max(&out), bounds_max_uncached(&out));
-}
-
-// =========================================================================
 // some_inst_system
 // =========================================================================
 
@@ -621,7 +568,7 @@ fn some_inst_system_keeps_the_seeded_vars_and_draws_in_hs_field_order() {
     let keep = [nvar(10), mvar(11)];
 
     maude.reset_counter_to(500);
-    let out = some_inst_system(&sys, &keep, &maude);
+    let out = some_inst_system(sys, &keep, &maude);
 
     let node = |idx: u64| nvar(idx);
     let msg = |idx: u64| mvar(idx);
@@ -765,6 +712,170 @@ fn source_bounds_takes_the_max_over_cases_only() {
 
     let cases = vec![(vec!["case".to_string()], case_sys)];
     assert_eq!(source_bounds(&src, &cases), (Some(5), Some(61)));
+}
+
+#[test]
+fn source_saturation_avoid_includes_the_source_goal() {
+    let goal = Goal::Action(nvar(90), LNFact::new(FactTag::Out, vec![mterm(80)]));
+    let mut case_sys = System::empty();
+    case_sys.content_mut().last_atom = Some(nvar(12));
+    let src = Source::eager(goal, vec![(vec!["case".to_string()], case_sys.clone())]);
+    let cases = vec![(vec!["case".to_string()], case_sys)];
+
+    assert_eq!(source_avoid(&src, &cases), 90);
+}
+
+#[test]
+fn source_probe_distinguishes_no_match_from_matched_empty() {
+    let path = match require_maude_path() {
+        Some(path) => path,
+        None => return,
+    };
+    let maude = start_maude(&path, tamarin_term::maude_sig::pair_maude_sig());
+    let ctx = crate::constraint::solver::context::ProofContext::new(maude, Vec::new());
+    let node = nvar(7);
+    let live = crate::fact::ku_fact(mterm(8));
+    let matched = Source::eager(
+        Goal::Action(nvar(0), crate::fact::ku_fact(mterm(0))),
+        Vec::new(),
+    );
+
+    assert!(matches!(
+        solve_with_source_cases_action(
+            &ctx,
+            &[matched],
+            &System::empty(),
+            &node,
+            &live,
+            &ctx.maude,
+            None,
+        ),
+        SourceMatch::Matched(cases) if cases.is_empty()
+    ));
+    assert!(matches!(
+        solve_with_source_cases_action(
+            &ctx,
+            &[Source::eager(
+                Goal::Action(nvar(0), LNFact::new(FactTag::Out, vec![mterm(0)])),
+                Vec::new(),
+            )],
+            &System::empty(),
+            &node,
+            &live,
+            &ctx.maude,
+            None,
+        ),
+        SourceMatch::NoMatch
+    ));
+}
+
+#[test]
+fn source_probe_rejects_incompatible_action_heads_early() {
+    use tamarin_term::function_symbols::AcSym;
+    use tamarin_term::term::f_app_ac;
+
+    let action = |head| {
+        Goal::Action(
+            nvar(0),
+            crate::fact::ku_fact(f_app_ac(head, vec![mterm(0), mterm(1)])),
+        )
+    };
+    let mult = action(AcSym::Mult);
+    let xor = action(AcSym::Xor);
+
+    assert!(source_goal_may_match(&mult, &mult));
+    assert!(!source_goal_may_match(&mult, &xor));
+}
+
+#[test]
+fn source_probe_preserves_haskell_fresh_pattern_semantics() {
+    let source = Goal::Action(
+        nvar(0),
+        crate::fact::ku_fact(Term::Lit(Lit::Var(LVar::new("t", LSort::Fresh, 1)))),
+    );
+    let live = Goal::Action(nvar(2), crate::fact::ku_fact(mterm(3)));
+
+    assert!(source_goal_may_match(&source, &live));
+}
+
+#[test]
+fn premise_source_conjoin_preserves_ac_fanout() {
+    use crate::rule::PremIdx;
+    use tamarin_term::function_symbols::AcSym;
+    use tamarin_term::subst::Subst;
+    use tamarin_term::term::f_app_ac;
+
+    let path = match require_maude_path() {
+        Some(path) => path,
+        None => return,
+    };
+    let maude = start_maude(&path, tamarin_term::maude_sig::dh_maude_sig());
+    let ctx = crate::constraint::solver::context::ProofContext::new(maude, Vec::new());
+    let shared = mvar(0);
+    let product = |a, b| f_app_ac(AcSym::Mult, vec![mterm(a), mterm(b)]);
+    let mut live = System::empty();
+    live.eq_store_mut().subst = Subst::from_list(vec![(shared, product(1, 2))]);
+    let goal = Goal::Premise((nvar(0), PremIdx(0)), LNFact::new(FactTag::Out, Vec::new()));
+    live.add_goal(goal.clone());
+    let mut case = System::empty();
+    case.eq_store_mut().subst = Subst::from_list(vec![(shared, product(3, 4))]);
+    let arm = RefineArm {
+        freshened_case: case.clone(),
+        branch_counter: ctx.maude.fresh_counter_peek(),
+    };
+
+    let _precompute = PrecomputeModeGuard::enter();
+    let outputs = conjoin_refine_arm(&ctx, &live, &goal, arm, Some(&ctx.maude));
+    assert!(outputs.len() > 1, "premise conjoin collapsed AC arms");
+}
+
+#[test]
+fn source_application_uses_complete_conjoin_state() {
+    let path = match require_maude_path() {
+        Some(path) => path,
+        None => return,
+    };
+    let maude = start_maude(&path, tamarin_term::maude_sig::pair_maude_sig());
+    let ctx = crate::constraint::solver::context::ProofContext::new(maude, Vec::new());
+    let goal = Goal::Premise((nvar(0), PremIdx(0)), LNFact::new(FactTag::Out, Vec::new()));
+    let mut live = System::empty();
+    live.add_goal(goal.clone());
+    let solved = Arc::new(last_formula(20));
+    let lemma = Arc::new(last_formula(21));
+    let mut case = System::empty();
+    case.content_mut().last_atom = Some(nvar(22));
+    case.content_mut().solved_formulas.push(solved.clone());
+    case.content_mut().lemmas.push(lemma.clone());
+    case.subterm_store_mut().neg_subterms =
+        SortedPairSet::rebuild_from(vec![(mterm(23), mterm(24))]);
+    case.eq_store_mut().conj.push(EqDisj {
+        split_id: SplitId(0),
+        substs: vec![SubstVFresh::from_list(vec![(mvar(25), mterm(26))])],
+    });
+    let arm = RefineArm {
+        freshened_case: case.clone(),
+        branch_counter: ctx.maude.fresh_counter_peek(),
+    };
+
+    let _precompute = PrecomputeModeGuard::enter();
+    let output = conjoin_refine_arm(&ctx, &live, &goal, arm, Some(&ctx.maude));
+    assert_eq!(output.len(), 1);
+    let joined = &output[0].sys;
+    assert_eq!(joined.last_atom, Some(nvar(22)));
+    assert!(crate::guarded::stores_contains(
+        &joined.solved_formulas,
+        &solved
+    ));
+    assert!(crate::guarded::stores_contains(&joined.lemmas, &lemma));
+    assert_eq!(
+        joined.subterm_store.neg_subterms.to_vec(),
+        vec![(mterm(23), mterm(24))]
+    );
+    assert_eq!(joined.eq_store.conj.len(), 1);
+    assert!(joined
+        .goals
+        .iter()
+        .any(|(goal, _)| matches!(goal, Goal::Split(_))));
 }
 
 #[test]

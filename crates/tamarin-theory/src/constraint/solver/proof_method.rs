@@ -476,11 +476,6 @@ pub(crate) fn exec_proof_method_unchecked(
             crate::constraint::solver::trace::trace_pick(g);
             let mut r = Reduction::new(ctx, sys.clone());
             let outcome = crate::constraint::solver::goals::dispatch_solve_goal(&mut r, g);
-            // HS FreshT-threading: per-case branch counters for
-            // the post-solve simplify continuation.  Single-case adoptions
-            // already reset `r.maude`; multi-case outcomes recorded their
-            // per-branch counters in `last_case_counters`.
-            let goal_case_counters = std::mem::take(&mut r.last_case_counters);
             let adopted_counter = r.maude.fresh_counter_peek();
             // Run simplify after every goal-solving step — mirrors
             // Haskell's `m <* simplifySystem` pattern in `process`
@@ -553,14 +548,7 @@ pub(crate) fn exec_proof_method_unchecked(
                 GoalCases::LinearNamed(name) => vec![(name, r.sys, adopted_counter)],
                 GoalCases::Cases(cases) => cases
                     .into_iter()
-                    .enumerate()
-                    .map(|(ci, (n, s))| {
-                        let seed = goal_case_counters
-                            .get(ci)
-                            .copied()
-                            .unwrap_or(adopted_counter);
-                        (n, s, seed)
-                    })
+                    .map(|branch| (branch.name, branch.sys, branch.counter))
                     .collect(),
                 GoalCases::Contradictory => return Some(Vec::new()),
             };
@@ -657,9 +645,8 @@ pub(crate) fn exec_proof_method_unchecked(
                 // write, NOT `insertFormula` (see the `insert_formula`
                 // rationale above).
                 let mut case_sys = sys.clone();
-                case_sys.invalidate_max_var_idx_cache();
-                case_sys.formulas_mut().clear();
-                case_sys.formulas_mut().push(std::sync::Arc::new(fm_case));
+                case_sys.clear_formulas();
+                case_sys.insert_open_formula(fm_case);
                 let sub_systems: Vec<System> =
                     crate::constraint::solver::simplify::simplify_system_with_fanout(ctx, case_sys);
                 for s in sub_systems {

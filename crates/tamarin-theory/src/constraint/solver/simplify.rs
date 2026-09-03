@@ -13,88 +13,51 @@
 //! `simplify_system` loop below.
 //!
 //! Each pass is a `Reduction` step that may modify the system. This Rust
-//! port implements the full fixpoint loop and every pass.
+//! port implements the full fixpoint loop and every pass. Branch and fresh-
+//! counter ownership follows `constraint/solver/BRANCHING.md`.
 
-use crate::constraint::solver::reduction::{ChangeIndicator, Reduction};
+use crate::constraint::solver::reduction::{
+    ChangeIndicator, GoalCases, Reduction, SystemBranch, SystemOutcome,
+};
 use crate::tools::equation_store::LNSubst;
 
-/// `simplifySystem` — run all non-case-splitting CR-rules to a fixpoint.
-///
-/// HS-faithful (Simplify.hs:73-77): the loop terminates ONLY when a full
-/// pass reports `Unchanged` (`Unchanged == mconcat changes0`); there is
-/// no iteration bound. (HS's `n` counter feeds `traceIfLooping` at n>10
-/// only.) The underlying `while_changing` is itself uncapped.
-pub(crate) fn simplify_system(red: &mut Reduction) {
-    red.while_changing(|r| {
-        // One simplify iteration, factored into the same helpers the
-        // fan-out driver uses so the byte-critical pass order has a
-        // single source of truth: pre-unique-actions passes, then
-        // `solveUniqueActions`, then post-unique-actions passes.  See
-        // `simp_iteration_pre_unique_actions` /
-        // `simp_iteration_post_unique_actions` for the documented order.
-        let mut c = simp_iteration_pre_unique_actions(r);
-        c = c.or(solve_unique_actions_pass(r));
-        c = c.or(simp_iteration_post_unique_actions(r));
-        c
-    });
-    // Post-loop steps (exploitUniqueMsgOrder, removeSolvedSplitGoals,
-    // addNonInjectiveFactInstances) — see `simp_post_loop_steps`.
-    simp_post_loop_steps(red);
+type SimplifyPass = fn(&mut Reduction<'_>) -> ChangeIndicator;
+type BranchingPass = fn(&mut Reduction<'_>) -> SystemOutcome;
+
+#[derive(Clone, Copy)]
+enum Pass {
+    Linear(SimplifyPass),
+    Branching(BranchingPass),
 }
 
-/// Run the simplify-loop passes BEFORE `solveUniqueActions`.  Used by
-/// both the in-place `simplify_system` (where the in-place
-/// `solve_unique_actions_pass` is called separately) and the fan-out
-/// variant (which uses `solve_unique_actions_pass_fan_out`).
-///
-/// Pass order ported from Haskell `Simplify.hs:124-132` (non-diff
-/// branch):
-///   substSystem              -- consume the eq-store substitution into
-///                               nodes/edges/less/goals so the per-pass
-///                               reasoning sees canonical node ids
-///   enforceNodeUniqueness    -- {fresh, ku, kd}-node uniqueness (DG4, N5↑, N5↓)
-///   enforceEdgeUniqueness    -- DG2+DG3
-/// followed (in `simp_iteration_post_unique_actions`) by:
-///   reduceFormulas           -- decompose trace formula
-///   evalFormulaAtoms         -- propagate atom valuation
-///   insertImpliedFormulas    -- saturate ∀
-///   freshOrdering            -- S_fresh-order
-///   simpSubterms             -- subterm-store simplification
-///   simpInjectiveFactEqMon   -- injective-fact equations
-///
-/// Our extra Rust-specific passes (remove_solved_split_goals,
-/// propagate_subterm_obvious, dedupe_formulas, drop_trivially_true,
-/// normalise_less_atoms) run after their nearest Haskell analog
-/// — they don't have direct Haskell counterparts but are necessary for
-/// our slightly-different data structures.
-///
-/// `enforceNodeUniqueness` returns (c1, c2, c3) = (fresh-DG4, KD-N5↓,
-/// KU-N5↑), here the fresh/kd/ku passes.
-fn simp_iteration_pre_unique_actions(r: &mut Reduction) -> ChangeIndicator {
-    r.subst_system();
-    let mut c = ChangeIndicator::Unchanged;
-    c = c.or(enforce_fresh_node_uniqueness_pass(r));
-    c = c.or(enforce_kd_fact_uniqueness_pass(r));
-    c = c.or(enforce_ku_action_uniqueness_pass(r));
-    c = c.or(enforce_edge_uniqueness_pass(r));
-    c
+impl Pass {
+    fn run(self, red: &mut Reduction<'_>) -> SystemOutcome {
+        match self {
+            Pass::Linear(pass) => {
+                pass(red);
+                SystemOutcome::Linear
+            }
+            Pass::Branching(pass) => pass(red),
+        }
+    }
 }
 
-/// Run the simplify-loop passes AFTER `solveUniqueActions`.  Shared
-/// between `simplify_system` and `simplify_system_fan_out`.
-fn simp_iteration_post_unique_actions(r: &mut Reduction) -> ChangeIndicator {
-    let mut c = ChangeIndicator::Unchanged;
-    c = c.or(reduce_formulas_pass(r));
-    c = c.or(eval_formula_atoms_pass(r));
-    c = c.or(insert_implied_formulas_pass(r));
-    c = c.or(enforce_fresh_ordering_pass(r));
-    c = c.or(propagate_subterm_obvious(r));
-    c = c.or(simp_injective_fact_eq_mon_pass(r));
-    c = c.or(dedupe_formulas_pass(r));
-    c = c.or(drop_trivially_true_formulas_pass(r));
-    c = c.or(normalise_less_atoms_pass(r));
-    c
-}
+const SIMPLIFY_PASSES: &[Pass] = &[
+    Pass::Branching(enforce_fresh_node_uniqueness_pass),
+    Pass::Branching(enforce_kd_fact_uniqueness_pass),
+    Pass::Branching(enforce_ku_action_uniqueness_pass),
+    Pass::Branching(enforce_edge_uniqueness_pass),
+    Pass::Branching(solve_unique_actions_pass_fan_out),
+    Pass::Branching(reduce_formulas_pass),
+    Pass::Branching(eval_formula_atoms_pass),
+    Pass::Branching(insert_implied_formulas_pass),
+    Pass::Linear(enforce_fresh_ordering_pass),
+    Pass::Linear(propagate_subterm_obvious),
+    Pass::Branching(simp_injective_fact_eq_mon_pass),
+    Pass::Linear(dedupe_formulas_pass),
+    Pass::Linear(drop_trivially_true_formulas_pass),
+    Pass::Linear(normalise_less_atoms_pass),
+];
 
 /// Post-loop steps shared between `simplify_system` and `simplify_system_fan_out`.
 ///
@@ -128,19 +91,8 @@ fn simp_post_loop_steps(red: &mut Reduction) {
     add_non_injective_fact_instances(red);
 }
 
-/// Fan-out variant of `simplify_system` — port of HS's `simplifySystem`
-/// (Simplify.hs:56-71) run inside the `Reduction = StateT (FreshT (DisjT ...))`
-/// monad.  When `solveUniqueActions` internally calls `disjunctionOfList`
-/// (via `solveGoal (ActionG i fa)` → source-cases / variants / Maude
-/// AC unifiers), the DisjT layer fans the entire enclosing `simplifySystem`
-/// computation into N branches — one per fan-out case.  Each branch
-/// continues independently through the rest of that loop iteration AND
-/// any subsequent iterations + the post-loop steps.
-///
-/// Our `simplify_system` discards the fan-out (keeps only the in-place
-/// mutated `red.sys`); this version replays each case through the rest
-/// of the loop and post-loop, and returns one `System` per surviving
-/// branch.
+/// Port of HS `simplifySystem` (Simplify.hs:56-71), returning every branch
+/// produced by its goal and equality solves after running each to a fixpoint.
 pub(crate) fn simplify_system_with_fanout(
     ctx: &crate::constraint::solver::context::ProofContext,
     sys: crate::constraint::system::System,
@@ -148,17 +100,25 @@ pub(crate) fn simplify_system_with_fanout(
     simplify_system_with_fanout_seeded(ctx, sys, 0)
 }
 
-/// Like [`simplify_system_with_fanout`] but continues an enclosing
-/// FreshT thread: `seed` = the producing branch's fresh-counter position
-/// (HS's `runReduction (solveGoal >> simplifySystem)` runs the per-case
-/// simplify with the SAME counter the branch's solve left off at; a
-/// `bounds_max(sys)` reseed silently rewinds past the branch's transient
-/// draws — task #16).  `seed = 0` degrades to `Reduction::new` exactly.
+/// Like [`simplify_system_with_fanout`] but continues from the producing
+/// branch's fresh-counter position. `seed = 0` starts a detached reduction.
 pub(crate) fn simplify_system_with_fanout_seeded(
     ctx: &crate::constraint::solver::context::ProofContext,
     sys: crate::constraint::system::System,
     seed: u64,
 ) -> Vec<crate::constraint::system::System> {
+    simplify_system_with_fanout_seeded_with_counters(ctx, sys, seed)
+        .into_iter()
+        .map(|(sys, _)| sys)
+        .collect()
+}
+
+/// Counter-preserving form used by source saturation.
+pub(crate) fn simplify_system_with_fanout_seeded_with_counters(
+    ctx: &crate::constraint::solver::context::ProofContext,
+    sys: crate::constraint::system::System,
+    seed: u64,
+) -> Vec<(crate::constraint::system::System, u64)> {
     use crate::constraint::solver::reduction::Reduction;
     // `new_inheriting` consults the `REFINE_FLOOR` thread-local so this
     // sub-reduction inherits the source precompute's `avoid th` seed (HS
@@ -171,19 +131,20 @@ pub(crate) fn simplify_system_with_fanout_seeded(
 /// fan-out from two sources:
 ///   1. `solve_unique_actions_pass_fan_out` — when `solveGoal (ActionG)`
 ///      returns `GoalCases::Cases`.
-///   2. `red.pending_eq_arms` — when any pass calls `insert_formula`
-///      whose `Atom::Eq` triggers `solve_term_eqs SplitNow` with
-///      multiple AC unifier arms.  This is the fan-out site for
-///      Yubikey's `no_replay` and `slightly_weaker_invariant`: the
-///      `reduceFormulas` / `insertImpliedFormulas` pass processes
-///      `Smaller(otc, tc)` ⇒ `Ex z. otc++z = tc`, whose `Atom::Eq`
-///      fans into 7 AC unifiers (one per partition of the multiset
-///      `tc`).
+///   2. `SystemOutcome::Cases` from any branching simplify pass.
 ///
-/// The takes-ownership pattern (consumes `red`, returns systems) lets
-/// the recursive cases each start with a fresh `Reduction` whose
-/// FreshT counter is properly aligned to that case's `bounds_max`.
-fn simplify_system_fan_out_inner(red: &mut Reduction) -> Vec<crate::constraint::system::System> {
+/// Each branch continues with its own system and inherited FreshT counter,
+/// including allocations that are no longer visible in the system.
+fn simplify_system_fan_out_inner(
+    red: &mut Reduction,
+) -> Vec<(crate::constraint::system::System, u64)> {
+    simplify_system_fan_out_inner_with_passes(red, SIMPLIFY_PASSES)
+}
+
+fn simplify_system_fan_out_inner_with_passes(
+    red: &mut Reduction,
+    passes: &[Pass],
+) -> Vec<(crate::constraint::system::System, u64)> {
     let ctx = red.ctx;
 
     // Manual while_changing loop so we can break out on fan-out.
@@ -194,64 +155,12 @@ fn simplify_system_fan_out_inner(red: &mut Reduction) -> Vec<crate::constraint::
             return Vec::new();
         }
         red.changed = ChangeIndicator::Unchanged;
-        // Pre-unique-actions passes.
-        let _ = simp_iteration_pre_unique_actions(red);
+        red.subst_system();
         if ctx.has_source_error() {
             return Vec::new();
         }
-        // Drain any AC-unifier fanout produced by the pre-unique-actions
-        // passes (e.g. `solve_fact_eqs` in `enforce_*_uniqueness` produces
-        // multiple arms when the merge equates AC-flavored facts).
-        if !red.pending_eq_arms.is_empty() {
-            return fan_out_on_pending_eq_arms(red, ctx);
-        }
-        // solveUniqueActions — may fan out.
-        match solve_unique_actions_pass_fan_out(red) {
-            Ok(_c) => { /* no fan-out, continue */ }
-            Err(case_systems) => {
-                // FAN-OUT: per HS, each case continues independently
-                // through the rest of the simplify computation.
-                // Recursively run `simplify_system_with_fanout` per
-                // case; each call rebuilds a fresh Reduction with its
-                // own FreshT counter (`bounds_max(sys)`).
-                let mut out: Vec<crate::constraint::system::System> = Vec::new();
-                for (case_sys, case_seed) in case_systems {
-                    if ctx.has_source_error() {
-                        return Vec::new();
-                    }
-                    if case_sys.eq_store.is_false() {
-                        continue;
-                    }
-                    let mut sub = simplify_system_with_fanout_seeded(ctx, case_sys, case_seed);
-                    if ctx.has_source_error() {
-                        return Vec::new();
-                    }
-                    out.append(&mut sub);
-                }
-                return out;
-            }
-        }
-        if ctx.has_source_error() {
-            return Vec::new();
-        }
-        // Drain any AC-unifier fanout produced by the solveUniqueActions
-        // pass's downstream calls (exploitPrems → Fresh narrowing's
-        // solveTermEqs SplitNow).
-        if !red.pending_eq_arms.is_empty() {
-            return fan_out_on_pending_eq_arms(red, ctx);
-        }
-        // Post-unique-actions passes.
-        let _ = simp_iteration_post_unique_actions(red);
-        if ctx.has_source_error() {
-            return Vec::new();
-        }
-        // Drain any AC-unifier fanout from the post-unique-actions passes
-        // (reduceFormulas / evalFormulaAtoms / insertImpliedFormulas
-        // are the most common fan-out sources — they call
-        // `insert_formula` which routes EqE atoms through
-        // `solve_term_eqs SplitNow`).
-        if !red.pending_eq_arms.is_empty() {
-            return fan_out_on_pending_eq_arms(red, ctx);
+        if let Err(branches) = continue_simplify_iteration(red, passes, 0) {
+            return branches;
         }
         if red.changed == ChangeIndicator::Unchanged {
             break;
@@ -259,104 +168,112 @@ fn simplify_system_fan_out_inner(red: &mut Reduction) -> Vec<crate::constraint::
     }
     // Post-loop steps — same as `simplify_system`.
     simp_post_loop_steps(red);
-    vec![std::mem::replace(
-        &mut red.sys,
-        crate::constraint::system::System::empty(),
+    vec![(
+        std::mem::replace(&mut red.sys, crate::constraint::system::System::empty()),
+        red.maude.fresh_counter_peek(),
     )]
 }
 
-/// Drain `red.pending_eq_arms`, fork the system for each arm, and
-/// recursively continue `simplify_system_with_fanout` for each fork.
-///
-/// At drain time, `red.sys.eq_store` already contains arm[0]'s
-/// eq-store (installed in-place by `insert_atom`'s Eq arm); we keep
-/// that as the first fork and reset `red.sys` for arms[1..] using a
-/// snapshot of the current system with the arm's eq_store substituted.
-fn fan_out_on_pending_eq_arms(
+/// Continue from the operation immediately after a split. Haskell's DisjT
+/// resumes the lexical continuation before starting the next fixpoint
+/// iteration; restarting at `substSystem` here changes both pass order and
+/// fresh-allocation order.
+fn continue_simplify_iteration(
     red: &mut Reduction,
-    ctx: &crate::constraint::solver::context::ProofContext,
-) -> Vec<crate::constraint::system::System> {
-    // HS FreshT-threading (task #16): every eq-store arm continues from
-    // the fork point's counter (HS's DisjT copies the FreshT state).
-    let fork_seed = red.maude.fresh_counter_peek();
-    let pending = std::mem::take(&mut red.pending_eq_arms);
-    let arm0_sys = std::mem::replace(&mut red.sys, crate::constraint::system::System::empty());
-    let mut all_arm_systems: Vec<crate::constraint::system::System> =
-        Vec::with_capacity(1 + pending.len());
-    all_arm_systems.push(arm0_sys.clone());
-    for arm_eq in pending {
-        let mut arm_sys = arm0_sys.clone();
-        arm_sys.invalidate_max_var_idx_cache();
-        arm_sys.set_eq_store(std::sync::Arc::new(arm_eq));
-        all_arm_systems.push(arm_sys);
+    passes: &[Pass],
+    mut next_pass: usize,
+) -> Result<(), Vec<(crate::constraint::system::System, u64)>> {
+    while let Some(pass) = passes.get(next_pass) {
+        if red.ctx.has_source_error() {
+            return Err(Vec::new());
+        }
+        let outcome = pass.run(red);
+        if red.ctx.has_source_error() {
+            return Err(Vec::new());
+        }
+        next_pass += 1;
+        let arms = match outcome {
+            SystemOutcome::Linear => continue,
+            SystemOutcome::Contradictory => return Err(Vec::new()),
+            SystemOutcome::Cases(arms) => arms,
+        };
+        let changed = red.changed.or(ChangeIndicator::Changed);
+        return Err(continue_simplify_branches(
+            arms, red.ctx, passes, next_pass, changed,
+        ));
     }
-    let mut out: Vec<crate::constraint::system::System> = Vec::new();
-    for arm_sys in all_arm_systems {
+    Ok(())
+}
+
+fn continue_simplify_branches(
+    arms: Vec<SystemBranch>,
+    ctx: &crate::constraint::solver::context::ProofContext,
+    passes: &[Pass],
+    next_pass: usize,
+    changed: ChangeIndicator,
+) -> Vec<(crate::constraint::system::System, u64)> {
+    let mut out = Vec::new();
+    for arm in arms {
+        let mut branch_out = continue_simplify_branch(arm, ctx, passes, next_pass, changed);
         if ctx.has_source_error() {
             return Vec::new();
         }
-        if arm_sys.eq_store.is_false() {
-            continue;
-        }
-        let mut sub = simplify_system_with_fanout_seeded(ctx, arm_sys, fork_seed);
-        if ctx.has_source_error() {
-            return Vec::new();
-        }
-        out.append(&mut sub);
+        out.append(&mut branch_out);
     }
     out
 }
 
-/// Install a multi-arm `SolveOutcome::Cases` result produced inside a
-/// simplify pass: arm[0] becomes the current eq-store, arms[1..] are
-/// stashed in `pending_eq_arms` for `simplify_system_fan_out_inner`'s
-/// drain points to fork on.
-///
-/// HS-faithful: `enforceNodeUniqueness` (Simplify.hs) merges
-/// KD-conclusions via `solveRuleEqs SplitNow`, KU-actions via
-/// `solveFactEqs SplitNow` and node-ids via `solveNodeIdEqs` — all of
-/// which run `disjunctionOfList $ performSplit eqs2 splitId`
-/// (Reduction.hs:723-725) when Maude returns multiple AC unifiers,
-/// forking the WHOLE remaining simplify continuation per arm in the
-/// `DisjT` layer.  RS's `solve_term_eqs` returns `Cases(arms)` WITHOUT
-/// installing any arm (the `mem::take`'d default store stays in
-/// `sys.eq_store`); a caller that ignores `Cases` therefore both DROPS
-/// every arm's bindings AND continues with a wiped store
-/// (conj=[], next_split=0) — the "DisjT fan-out" family.
-fn install_pass_cases_arms(
-    red: &mut Reduction,
-    arms: Vec<crate::tools::equation_store::EquationStore>,
-) {
-    let mut it = arms.into_iter();
-    if let Some(first) = it.next() {
-        red.sys.invalidate_max_var_idx_cache();
-        red.sys.set_eq_store(std::sync::Arc::new(first));
+fn continue_simplify_branch(
+    arm: SystemBranch,
+    ctx: &crate::constraint::solver::context::ProofContext,
+    passes: &[Pass],
+    next_pass: usize,
+    changed: ChangeIndicator,
+) -> Vec<(crate::constraint::system::System, u64)> {
+    if arm.sys.eq_store.is_false() || ctx.has_source_error() {
+        return Vec::new();
     }
-    for rest in it {
-        red.pending_eq_arms.push(rest);
+    let mut branch = Reduction::new_inheriting(ctx, arm.sys, arm.counter);
+    branch.changed = changed;
+    match continue_simplify_iteration(&mut branch, passes, next_pass) {
+        Err(branches) => branches,
+        Ok(()) if branch.changed == ChangeIndicator::Changed => {
+            simplify_system_fan_out_inner_with_passes(&mut branch, passes)
+        }
+        Ok(()) => {
+            simp_post_loop_steps(&mut branch);
+            vec![(branch.sys, branch.maude.fresh_counter_peek())]
+        }
     }
 }
 
-/// Shared `SolveOutcome` dispatch for the uniqueness passes
-/// (`enforceFreshNodeUniqueness`, `enforceKuActionUniqueness`,
-/// `enforceKdFactUniqueness`).  Installs a multi-arm `Cases` result
-/// (arm[0] → eq-store, rest → `pending_eq_arms`; see
-/// `install_pass_cases_arms`) and funnels `Contradictory`/`Err` into
-/// `*hit_contra` — the mzero proxy, with each caller's
-/// `mark_contradictory` firing once at the end.
-fn absorb_solve_outcome<E>(
+/// Attach a low-level equality result to its common pre-solve system.
+fn complete_solve<E>(
     red: &mut Reduction,
+    base: crate::constraint::system::System,
     res: std::result::Result<crate::constraint::solver::reduction::SolveOutcome, E>,
-    hit_contra: &mut bool,
-) {
+) -> SystemOutcome {
     match res {
         Ok(crate::constraint::solver::reduction::SolveOutcome::Contradictory) | Err(_) => {
-            *hit_contra = true;
+            red.mark_contradictory();
+            SystemOutcome::Contradictory
         }
+        Ok(crate::constraint::solver::reduction::SolveOutcome::Linear(_)) => SystemOutcome::Linear,
         Ok(crate::constraint::solver::reduction::SolveOutcome::Cases(arms)) => {
-            install_pass_cases_arms(red, arms);
+            let cases = arms
+                .into_iter()
+                .map(|arm| {
+                    let mut sys = base.clone();
+                    sys.invalidate_max_var_idx_cache();
+                    sys.set_eq_store(std::sync::Arc::new(arm.eq_store));
+                    SystemBranch {
+                        sys,
+                        counter: arm.counter,
+                    }
+                })
+                .collect();
+            red.finish_system_cases(cases)
         }
-        Ok(crate::constraint::solver::reduction::SolveOutcome::Linear(_)) => {}
     }
 }
 
@@ -567,7 +484,7 @@ fn exploit_unique_msg_order(red: &mut Reduction) {
 /// atoms, and re-inserts the simplified result. Atoms that evaluate
 /// to a known truth value collapse to `gtrue`/`gfalse`, dropping
 /// out of disjunctions or short-circuiting conjunctions.
-fn eval_formula_atoms_pass(red: &mut Reduction) -> ChangeIndicator {
+fn eval_formula_atoms_pass(red: &mut Reduction) -> SystemOutcome {
     use crate::guarded::{simplify_guarded_with, Guarded};
     // HS-faithful: `evalFormulaAtoms` iterates `S.toList sFormulas` —
     // Simplify.hs — ascending Guarded Ord.  Rust's Vec is in
@@ -622,7 +539,6 @@ fn eval_formula_atoms_pass(red: &mut Reduction) -> ChangeIndicator {
             change_list.push((fm.clone(), simp));
         }
     }
-    let mut changed = ChangeIndicator::Unchanged;
     for (fm, simp) in change_list {
         // Haskell `evalFormulaAtoms` (Simplify.hs):
         //   case fm of
@@ -664,10 +580,7 @@ fn eval_formula_atoms_pass(red: &mut Reduction) -> ChangeIndicator {
         // Solve (injectivity_check class).
         red.sys.invalidate_max_var_idx_cache();
         red.sys.formulas_mut().retain(|f| **f != fm);
-        if !crate::guarded::stores_contains(&red.sys.solved_formulas, &fm) {
-            red.sys.invalidate_max_var_idx_cache();
-            red.sys.solved_formulas_mut().push(std::sync::Arc::new(fm));
-        }
+        red.sys.insert_solved_formula(fm);
         // HS-faithful: `evalFormulaAtoms` (Simplify.hs) ALWAYS
         // calls `insertFormula fm'` regardless of whether `fm'` is gtrue,
         // gfalse, or any other shape.  Critical for the empty-Conj
@@ -691,10 +604,13 @@ fn eval_formula_atoms_pass(red: &mut Reduction) -> ChangeIndicator {
         // iteration sees the empty Conj as already-solved and
         // short-circuits the dedup check.  Without parity here we get +1
         // step counts at every checkpoint inside the affected proof subtree.
-        red.insert_formula(simp);
-        changed = ChangeIndicator::Changed;
+        red.changed = ChangeIndicator::Changed;
+        match red.insert_formula(simp) {
+            SystemOutcome::Linear => {}
+            outcome => return outcome,
+        }
     }
-    changed
+    SystemOutcome::Linear
 }
 
 /// Partial atom valuation. Mirrors Haskell's `partialAtomValuation`
@@ -1059,7 +975,7 @@ fn eq_node_id(t: &tamarin_term::lterm::LNTerm) -> Option<crate::constraint::cons
 /// action's terms become matching subjects. Maude returns a list of
 /// `(LVar, LNTerm)` substitutions, each an [`LNSubst`] applied to the
 /// implied body.
-fn insert_implied_formulas_pass(red: &mut Reduction) -> ChangeIndicator {
+fn insert_implied_formulas_pass(red: &mut Reduction) -> SystemOutcome {
     use crate::atom::Atom as AAtom;
     use crate::atom::ProtoAtom;
     use crate::constraint::constraints::Goal;
@@ -1122,7 +1038,7 @@ fn insert_implied_formulas_pass(red: &mut Reduction) -> ChangeIndicator {
         })
         .collect();
     if universals.is_empty() {
-        return ChangeIndicator::Unchanged;
+        return SystemOutcome::Linear;
     }
 
     // Collect all actions from the trace, mirroring Haskell's
@@ -1166,7 +1082,7 @@ fn insert_implied_formulas_pass(red: &mut Reduction) -> ChangeIndicator {
     let mut sys_actions = unsolved_actions;
     sys_actions.extend(node_actions);
     if sys_actions.is_empty() {
-        return ChangeIndicator::Unchanged;
+        return SystemOutcome::Linear;
     }
 
     // Group `sys_actions` indices by fact name, once per pass.  Without the
@@ -1265,7 +1181,7 @@ fn insert_implied_formulas_pass(red: &mut Reduction) -> ChangeIndicator {
         );
     }
     if new_formulas.is_empty() {
-        return ChangeIndicator::Unchanged;
+        return SystemOutcome::Linear;
     }
     // Route each implied-formula body through `insert_formula`
     // so Disj / Ex / Conj bodies generate the matching `Goal::Disj`,
@@ -1276,38 +1192,8 @@ fn insert_implied_formulas_pass(red: &mut Reduction) -> ChangeIndicator {
     // satisfies both — so `is_finished` returns `Solved` even though the
     // disjunction is undecomposed.  Mirrors Haskell `insertFormula`'s
     // case dispatch (`Reduction.hs:insertFormula`).
-    for f in new_formulas {
-        red.insert_formula(f);
-        // HS-faithful DisjT fan-out: in HS, `insertImpliedFormulas`'s
-        // `applyChangeList` runs each `insertFormula implied` as a
-        // separate action inside the `Reduction = StateT (FreshT DisjT)`
-        // monad.  The moment one `insertFormula` decomposes a `GGuarded Ex`
-        // whose `EqE` `solveTermEqs SplitNow` returns multiple AC unifiers,
-        // `disjunctionOfList arms` FORKS THE ENTIRE REMAINING CONTINUATION
-        // — including the rest of this formula loop — once per arm.  Each
-        // arm therefore (re)processes the remaining implied formulas with
-        // ITS OWN eq-store binding.
-        //
-        // If we instead kept iterating after a fan-out, all remaining
-        // implied formulas would be solved (and `markAsSolved`-tagged)
-        // against arm[0]'s eq-store only; `fan_out_on_pending_eq_arms`
-        // then clones arm[0]'s `solved_formulas` into every other arm, so
-        // a later existential (e.g. the SharedKey `LessThan('1'+'1'+'1',
-        // lvl)` ⇒ `Ex z. '1'+'1'+'1'+z = lvl`) never re-fires in arms
-        // whose counter `n` binds to a value that would make it
-        // eq-store-false.  That is exactly the gcm/siv `Wrap` over-gen:
-        // the SharedKey-Lesser instance is solved while `n` is still free
-        // in arm[0] (single unifier, arm kept), but HS would have bound
-        // `n` first in the forked arm and dropped it.  Breaking here lets
-        // the drain fork the arms BEFORE the next existential is solved,
-        // so each arm re-derives the remaining implied formulas under its
-        // own binding — matching HS's per-arm continuation.
-        if !red.pending_eq_arms.is_empty() {
-            break;
-        }
-    }
     red.changed = ChangeIndicator::Changed;
-    ChangeIndicator::Changed
+    red.insert_formulas(&new_formulas)
 }
 
 /// Canonicalising key for implied-formula dedup: AC `BinOp` permutations
@@ -2274,43 +2160,11 @@ fn match_atom_via_maude(
 /// Apply the eq-store substitution to existing `less_atoms` so any
 /// mid-loop node merges propagate to atoms that were inserted earlier.
 fn normalise_less_atoms_pass(red: &mut Reduction) -> ChangeIndicator {
-    let mut changed = ChangeIndicator::Unchanged;
-    // Fast path: an empty eq-store subst makes `normalize` the identity
-    // (`apply_vterm` returns each NodeId unchanged), so no atom can change.
-    // Skip the clone and the per-atom normalize loop; the dedup below still
-    // runs unconditionally to stay byte-faithful.
-    if !red.sys.eq_store.subst.is_empty() {
-        // `eq_store` and `less_atoms` are disjoint `SystemContent` fields, so a
-        // shared borrow of the subst coexists with the `less_atoms.iter_mut()`
-        // below — no per-pass BTreeMap+Term deep clone of the subst.  Bind ONE
-        // untracked content ref and read the subst THROUGH it (design Finding
-        // 1): a bare Deref read of the subst beside a `content_mut_untracked`
-        // borrow of `less_atoms` would collapse field-disjointness into a
-        // whole-System borrow and fail to compile.
-        let c = red.sys.content_mut_untracked();
-        let subst = &c.eq_store.subst;
-        let normalize = |id: &crate::constraint::constraints::NodeId| match subst.image_of(id) {
-            Some(tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(v))) => *v,
-            _ => *id,
-        };
-        for la in c.less_atoms.iter_mut() {
-            let new_smaller = normalize(&la.smaller);
-            let new_larger = normalize(&la.larger);
-            if new_smaller != la.smaller || new_larger != la.larger {
-                la.smaller = new_smaller;
-                la.larger = new_larger;
-                changed = ChangeIndicator::Changed;
-            }
-        }
-    }
-    // CONTENT-axis gap: the in-place less-atom endpoint rewrite above changes
-    // values without touching a cache-maintenance helper (the author proved
-    // the max-var idx cannot rise), so bump `content_stamp` here to break a
-    // stale skip marker.  (The dedup below invalidates the cache on a length
-    // change, which bumps too — this covers the value-only rewrite.)
-    if matches!(changed, ChangeIndicator::Changed) {
-        red.sys.bump_content_stamp();
-    }
+    let mut changed = if red.sys.normalise_less_atoms() {
+        ChangeIndicator::Changed
+    } else {
+        ChangeIndicator::Unchanged
+    };
     // HS-faithful dedup post-normalise: HS's `sLessAtoms` is a `Set`;
     // post-subst image collapsing two distinct atoms is auto-deduped.
     // See `subst_system_once` (reduction.rs) for full rationale.
@@ -2357,41 +2211,38 @@ fn normalise_less_atoms_pass(red: &mut Reduction) -> ChangeIndicator {
 /// `BTreeMap` grouping: ascending key, and within a key the order the pass
 /// appends its candidates in, so the group's first entry is `xKeep` /
 /// `iKeep` and the rest are merged onto it.  `solve_payload_eqs` is the
-/// per-pass `solver`; the node-id equalities go through
-/// `solve_node_id_eqs_broadcast`, which reaches the arms a payload split
-/// stashed as well as arm0 (HS solves them inside each forked `DisjT`
-/// continuation).  Trivial equalities are dropped, and `Contradictory`/`Err`
-/// from either solver fires one `mark_contradictory` — the mzero proxy.
-fn merge_candidates<K, P, E>(
+/// per-pass `solver`; node-id equalities are then applied to every payload
+/// branch. Trivial equalities are dropped, and `Contradictory`/`Err` removes
+/// the affected branch.
+fn merge_candidates<K, P, E, F>(
     red: &mut Reduction,
     candidates: Vec<(K, P, crate::constraint::constraints::NodeId)>,
-    solve_payload_eqs: impl FnOnce(
-        &mut Reduction,
-        &[tamarin_term::rewriting::Equal<P>],
-    ) -> std::result::Result<
-        crate::constraint::solver::reduction::SolveOutcome,
-        E,
-    >,
-) -> ChangeIndicator
+    solve_payload_eqs: F,
+) -> SystemOutcome
 where
     K: Ord,
     P: Clone + PartialEq,
+    F: Fn(
+        &mut Reduction,
+        &[tamarin_term::rewriting::Equal<P>],
+    ) -> std::result::Result<crate::constraint::solver::reduction::SolveOutcome, E>,
 {
     use crate::constraint::constraints::NodeId;
     if candidates.len() < 2 {
-        return ChangeIndicator::Unchanged;
+        return SystemOutcome::Linear;
     }
     let mut by_key: std::collections::BTreeMap<K, Vec<(NodeId, P)>> =
         std::collections::BTreeMap::new();
     for (key, payload, i) in candidates {
         by_key.entry(key).or_default().push((i, payload));
     }
-    let mut node_eqs: Vec<tamarin_term::rewriting::Equal<NodeId>> = Vec::new();
-    let mut payload_eqs: Vec<tamarin_term::rewriting::Equal<P>> = Vec::new();
+    let mut groups = Vec::new();
     for (_key, group) in by_key {
         if group.len() < 2 {
             continue;
         }
+        let mut node_eqs: Vec<tamarin_term::rewriting::Equal<NodeId>> = Vec::new();
+        let mut payload_eqs: Vec<tamarin_term::rewriting::Equal<P>> = Vec::new();
         let (keep_id, keep_payload) = &group[0];
         for (i, payload) in group.iter().skip(1) {
             if i != keep_id {
@@ -2407,31 +2258,137 @@ where
                 });
             }
         }
+        node_eqs.retain(|e| e.lhs != e.rhs);
+        if !node_eqs.is_empty() || !payload_eqs.is_empty() {
+            groups.push((payload_eqs, node_eqs));
+        }
     }
-    node_eqs.retain(|e| e.lhs != e.rhs);
-    if node_eqs.is_empty() && payload_eqs.is_empty() {
-        return ChangeIndicator::Unchanged;
+    if groups.is_empty() {
+        return SystemOutcome::Linear;
     }
-    let mut hit_contra = false;
-    if !payload_eqs.is_empty() {
-        let res = solve_payload_eqs(red, &payload_eqs);
-        absorb_solve_outcome(red, res, &mut hit_contra);
+    merge_candidate_groups(red, &groups, &solve_payload_eqs)
+}
+
+type MergeGroup<P> = (
+    Vec<tamarin_term::rewriting::Equal<P>>,
+    Vec<tamarin_term::rewriting::Equal<crate::constraint::constraints::NodeId>>,
+);
+
+fn merge_candidate_groups<P, E, F>(
+    red: &mut Reduction,
+    mut groups: &[MergeGroup<P>],
+    solve_payload_eqs: &F,
+) -> SystemOutcome
+where
+    P: Clone,
+    F: Fn(
+        &mut Reduction,
+        &[tamarin_term::rewriting::Equal<P>],
+    ) -> std::result::Result<crate::constraint::solver::reduction::SolveOutcome, E>,
+{
+    while let Some(((payload_eqs, node_eqs), rest)) = groups.split_first() {
+        match merge_candidate_group(red, payload_eqs, node_eqs, solve_payload_eqs) {
+            SystemOutcome::Linear => groups = rest,
+            SystemOutcome::Contradictory => return SystemOutcome::Contradictory,
+            SystemOutcome::Cases(arms) => {
+                return continue_merge_groups(red, arms, rest, solve_payload_eqs);
+            }
+        }
     }
-    if !node_eqs.is_empty() {
-        let res = red.solve_node_id_eqs_broadcast(&node_eqs);
-        absorb_solve_outcome(red, res, &mut hit_contra);
+    SystemOutcome::Linear
+}
+
+fn merge_candidate_group<P, E, F>(
+    red: &mut Reduction,
+    payload_eqs: &[tamarin_term::rewriting::Equal<P>],
+    node_eqs: &[tamarin_term::rewriting::Equal<crate::constraint::constraints::NodeId>],
+    solve_payload_eqs: &F,
+) -> SystemOutcome
+where
+    P: Clone,
+    F: Fn(
+        &mut Reduction,
+        &[tamarin_term::rewriting::Equal<P>],
+    ) -> std::result::Result<crate::constraint::solver::reduction::SolveOutcome, E>,
+{
+    if payload_eqs.is_empty() {
+        return merge_candidate_node_eqs(red, node_eqs);
     }
-    if hit_contra {
-        red.mark_contradictory();
+    let base = red.sys.clone();
+    let res = solve_payload_eqs(red, payload_eqs);
+    match complete_solve(red, base, res) {
+        SystemOutcome::Linear => merge_candidate_node_eqs(red, node_eqs),
+        SystemOutcome::Contradictory => SystemOutcome::Contradictory,
+        SystemOutcome::Cases(arms) if node_eqs.is_empty() => SystemOutcome::Cases(arms),
+        SystemOutcome::Cases(arms) => continue_merge_nodes(red, arms, node_eqs),
     }
-    ChangeIndicator::Changed
+}
+
+fn merge_candidate_node_eqs(
+    red: &mut Reduction,
+    node_eqs: &[tamarin_term::rewriting::Equal<crate::constraint::constraints::NodeId>],
+) -> SystemOutcome {
+    if node_eqs.is_empty() {
+        return SystemOutcome::Linear;
+    }
+    let base = red.sys.clone();
+    let res = red.solve_node_id_eqs(node_eqs);
+    complete_solve(red, base, res)
+}
+
+fn continue_merge_nodes(
+    red: &mut Reduction,
+    arms: Vec<SystemBranch>,
+    node_eqs: &[tamarin_term::rewriting::Equal<crate::constraint::constraints::NodeId>],
+) -> SystemOutcome {
+    let mut completed = Vec::new();
+    for arm in arms {
+        let mut branch = Reduction::new_inheriting(red.ctx, arm.sys, arm.counter);
+        match merge_candidate_node_eqs(&mut branch, node_eqs) {
+            SystemOutcome::Linear => completed.push(SystemBranch {
+                sys: branch.sys,
+                counter: branch.maude.fresh_counter_peek(),
+            }),
+            SystemOutcome::Cases(arms) => completed.extend(arms),
+            SystemOutcome::Contradictory => {}
+        }
+    }
+    red.finish_system_cases(completed)
+}
+
+fn continue_merge_groups<P, E, F>(
+    red: &mut Reduction,
+    arms: Vec<SystemBranch>,
+    groups: &[MergeGroup<P>],
+    solve_payload_eqs: &F,
+) -> SystemOutcome
+where
+    P: Clone,
+    F: Fn(
+        &mut Reduction,
+        &[tamarin_term::rewriting::Equal<P>],
+    ) -> std::result::Result<crate::constraint::solver::reduction::SolveOutcome, E>,
+{
+    let mut completed = Vec::new();
+    for arm in arms {
+        let mut branch = Reduction::new_inheriting(red.ctx, arm.sys, arm.counter);
+        match merge_candidate_groups(&mut branch, groups, solve_payload_eqs) {
+            SystemOutcome::Linear => completed.push(SystemBranch {
+                sys: branch.sys,
+                counter: branch.maude.fresh_counter_peek(),
+            }),
+            SystemOutcome::Cases(arms) => completed.extend(arms),
+            SystemOutcome::Contradictory => {}
+        }
+    }
+    red.finish_system_cases(completed)
 }
 
 /// CR-rule *DG4*: every `Fr(~k)` value is produced by exactly one
 /// node. Find pairs of Fresh-rule nodes whose conclusion term matches
 /// (after applying the eq-store's free substitution) and equate their
 /// node ids via `solve_node_id_eqs`.
-fn enforce_fresh_node_uniqueness_pass(red: &mut Reduction) -> ChangeIndicator {
+fn enforce_fresh_node_uniqueness_pass(red: &mut Reduction) -> SystemOutcome {
     use crate::rule::{ProtoRuleName, RuleInfo};
     // Haskell-faithful (`Simplify.hs:220-230`): group by the raw
     // `RuleACInst` — two Fresh-rule instances merge only if their
@@ -2457,8 +2414,6 @@ fn enforce_fresh_node_uniqueness_pass(red: &mut Reduction) -> ChangeIndicator {
             buckets.push((rule.clone(), vec![*id]));
         }
     }
-    let mut changed = ChangeIndicator::Unchanged;
-    let mut hit_contra = false;
     for (_rule, mut ids) in buckets {
         if ids.len() < 2 {
             continue;
@@ -2486,11 +2441,13 @@ fn enforce_fresh_node_uniqueness_pass(red: &mut Reduction) -> ChangeIndicator {
         // `noContradictoryEqStore` (Reduction.hs:720-723, see line 723) which fires
         // mzero on `eqsIsFalse`.  Funnel both `Ok(Contradictory)` and
         // `Err(_)` through `mark_contradictory` so the mzero proxy stays
-        // in sync.  `Cases(arms)` must install arm[0]
-        // + stash the rest (see `install_pass_cases_arms`); ignoring it
-        // leaves the `mem::take`'d default eq-store installed.
+        // in sync. Multi-arm results return every complete system.
+        let base = red.sys.clone();
         let res = red.solve_node_id_eqs(&eqs);
-        absorb_solve_outcome(red, res, &mut hit_contra);
+        match complete_solve(red, base, res) {
+            SystemOutcome::Linear => {}
+            outcome => return outcome,
+        }
         // HS-faithful: HS's `enforceNodeUniqueness` freshRuleInsts
         // branch (Simplify.hs) uses `solver = const $ return
         // Unchanged` — calls solveNodeIdEqs ONLY, never merges inline.
@@ -2500,13 +2457,8 @@ fn enforce_fresh_node_uniqueness_pass(red: &mut Reduction) -> ChangeIndicator {
         // defers the rename + collision-detection to subst_system_once's
         // Pass1/Pass2 split, matching HS's `substNodes = substNodeIds
         // <* (M.map . apply)` ordering.
-        changed = changed.or(ChangeIndicator::Changed);
     }
-    if hit_contra {
-        red.mark_contradictory();
-        changed = ChangeIndicator::Changed;
-    }
-    changed
+    SystemOutcome::Linear
 }
 
 /// CR-rule *N5_u*: KU-action uniqueness. For every term `m` that
@@ -2523,7 +2475,7 @@ fn enforce_fresh_node_uniqueness_pass(red: &mut Reduction) -> ChangeIndicator {
 /// `solve_fact_eqs` filter `lhs == rhs` themselves, but we mirror the
 /// pattern from `enforce_edge_uniqueness_pass` to avoid spurious
 /// `Changed` flags that would re-fire the simplify loop forever).
-fn enforce_ku_action_uniqueness_pass(red: &mut Reduction) -> ChangeIndicator {
+fn enforce_ku_action_uniqueness_pass(red: &mut Reduction) -> SystemOutcome {
     use crate::constraint::constraints::NodeId;
     use crate::fact::{FactTag, LNFact};
     use tamarin_term::lterm::LNTerm;
@@ -2591,95 +2543,36 @@ fn enforce_ku_action_uniqueness_pass(red: &mut Reduction) -> ChangeIndicator {
     })
 }
 
-/// CR-rule *S_@* (`solveUniqueActions`).  Mirrors Haskell's
-/// `solveUniqueActions` in `Simplify.hs:276-297`:
-///
-///   - Count `(fact_tag, arity)` occurrences across non-silent rules
-///     (proto + intruder rules with at least one action).
-///   - An action shape `(tag, arity)` is *unique* if it appears in
-///     exactly one rule.
-///   - For every open Action goal whose fact is unique (and whose
-///     terms contain no AC-Union heads — multiset would split), call
-///     `solve_action_goal` directly.  Since the action is unique,
-///     the call returns `Linear` and removes the goal.
-///
-/// This is a search optimization: instead of waiting for the goal
-/// picker to surface the Action goal and then forking once per
-/// rule (with all but one case failing the unification), we
-/// resolve it in-place during simplify.  Removes a level of
-/// case-fork per unique action across the entire proof.
-fn solve_unique_actions_pass(red: &mut Reduction) -> ChangeIndicator {
-    // Snapshot the unsolved unique Action goals up-front (sorted in
-    // Haskell `Goal`-Ord); calling solve_action_goal mutates the goal
-    // list.  Stop_unique (Minimal_Loop) hits a spurious Cyclic if
-    // Action(j) is solved before Action(i) because the InjectiveFacts +
-    // reuse-lemma constraints cycle on a one-Loop state — see
-    // `collect_unique_action_candidates` for the full ordering rationale.
-    let candidates = collect_unique_action_candidates(red);
-    if candidates.is_empty() {
-        return ChangeIndicator::Unchanged;
-    }
-    let mut changed = ChangeIndicator::Unchanged;
-    for (i, fa) in candidates {
-        // HS `solveUniqueActions`/`trySolve` (Simplify.hs:293-297) runs
-        // `solveGoal (ActionG i fa)` UNCONDITIONALLY on every captured
-        // `isUnique` action atom — there is no goal-status re-check.
-        // `solveAction` branches on NODE existence, not goal status, so a
-        // previous iteration's eq-store substitution that renamed the live
-        // goal must NOT cause this captured atom to be skipped (skipping
-        // this captured atom would suppress node creation and flip the
-        // witness-trace pick — see the matching rationale in
-        // `solve_unique_actions_pass_fan_out` below).  An already-solved
-        // atom whose node exists with `fa` among its actions is a harmless
-        // no-op in `solve_action_goal`.
-        // Haskell's `solveUniqueActions` uses monadic `>>` which
-        // propagates Contradictory upstream.  In our pass form, we
-        // surface the Contradictory by injecting gfalse so the next
-        // contradictions check picks it up (`FormulasFalse`).
-        let outcome = red.solve_action_goal(&i, &fa);
-        if matches!(
-            outcome,
-            crate::constraint::solver::reduction::GoalCases::Contradictory
-        ) {
-            red.mark_contradictory();
-        }
-        changed = ChangeIndicator::Changed;
-    }
-    changed
-}
-
-/// Fan-out variant of `solve_unique_actions_pass`.  Mirrors HS's
+/// CR-rule *S_@* (`solveUniqueActions`). Mirrors HS's
 /// `solveUniqueActions` (Simplify.hs:276-297) running inside the
 /// `Reduction = StateT System (FreshT (DisjT ...))` monad — when
 /// `solveGoal (ActionG i fa)` internally calls `disjunctionOfList`
 /// (over source-cases / variants / rule actions / Maude unifiers),
-/// the resulting `Disj` fans the entire simplify computation out
-/// into multiple branches.  Our in-place version above discards the
-/// `Cases` outcome and keeps only the mutated `red.sys`; this version
-/// returns the fan-out so the caller (`simplify_system_fan_out`) can
-/// continue the simplify loop for each branch independently.
+/// the resulting `Disj` fans the entire simplify computation out into
+/// multiple branches. The caller continues the simplify loop for each
+/// branch independently.
 ///
-/// Return shape:
-///   - `Ok(ChangeIndicator)` — pass ran to completion with no fan-out;
-///     `red.sys` mutated in place.
-///   - `Err(Vec<System>)` — the first action goal that fanned out
-///     produced multiple cases.  Each entry is the post-action-solve
-///     system for that case; subsequent action goals in the candidate
-///     list have NOT been processed and remain in each case's goal set
-///     (the caller will re-run this pass per case as part of the
-///     surrounding fixpoint).
-fn solve_unique_actions_pass_fan_out(
-    red: &mut Reduction,
-) -> std::result::Result<ChangeIndicator, Vec<(crate::constraint::system::System, u64)>> {
-    use crate::fact::LNFact;
-
+/// A fan-out carries complete systems after the remaining captured action
+/// goals have been processed in each arm.
+fn solve_unique_actions_pass_fan_out(red: &mut Reduction) -> SystemOutcome {
     let candidates = collect_unique_action_candidates(red);
-    if candidates.is_empty() {
-        return Ok(ChangeIndicator::Unchanged);
-    }
-    let mut changed = ChangeIndicator::Unchanged;
-    let mut iter = candidates.into_iter();
-    while let Some((i, fa)) = iter.next() {
+    execute_captured_actions(red, &candidates)
+}
+
+/// Execute one Haskell `mapM trySolve actionAtoms` continuation.
+///
+/// `remaining` is the pre-pass snapshot of the unique action atoms.  Keep
+/// walking that borrowed snapshot after a split: re-collecting from a branch
+/// would observe substitutions that Haskell does not apply until the next
+/// outer simplify iteration.
+fn execute_captured_actions(
+    red: &mut Reduction<'_>,
+    mut remaining: &[(crate::constraint::constraints::NodeId, crate::fact::LNFact)],
+) -> SystemOutcome {
+    while let Some(((i, fa), suffix)) = remaining.split_first() {
+        if red.ctx.has_source_error() {
+            return SystemOutcome::Cases(Vec::new());
+        }
         // HS-faithful (`solveUniqueActions`, Simplify.hs:276-297): the
         // captured `actionAtoms` list is processed by `mapM trySolve`,
         // and `trySolve (i, fa) = solveGoal (ActionG i fa)` runs
@@ -2705,19 +2598,15 @@ fn solve_unique_actions_pass_fan_out(
         // semantics; an already-solved atom whose node exists with `fa`
         // among its actions is a harmless no-op (the `Some(ru)` /
         // `ru.actions.contains(fa)` arm in `solve_action_goal`).
-        let outcome = red.solve_action_goal(&i, &fa);
+        let outcome = red.solve_action_goal(i, fa);
         if red.ctx.has_source_error() {
-            return Err(Vec::new());
+            return SystemOutcome::Cases(Vec::new());
         }
-        use crate::constraint::solver::reduction::GoalCases;
         match outcome {
-            GoalCases::Contradictory => {
-                red.mark_contradictory();
-                changed = ChangeIndicator::Changed;
-            }
+            GoalCases::Contradictory => return SystemOutcome::Contradictory,
             GoalCases::Linear | GoalCases::LinearNamed(_) => {
                 // `red.sys` is already mutated in place by `solve_action_goal`.
-                changed = ChangeIndicator::Changed;
+                remaining = suffix;
             }
             GoalCases::Cases(cases) => {
                 // HS-faithful fan-out (Simplify.hs:276-297):
@@ -2743,136 +2632,42 @@ fn solve_unique_actions_pass_fan_out(
                 // Fix: process the REMAINING captured candidates in
                 // EACH fanned arm using the ORIGINAL (i, fa) values
                 // (not re-collected from the substituted goal set).
-                // Recursively call `solve_unique_actions_pass_fan_out`
-                // analog: drain `iter` into each arm.
-                let remaining: Vec<(crate::constraint::constraints::NodeId, LNFact)> =
-                    iter.collect();
-                // HS FreshT-threading (task #16): per-case branch counters
-                // recorded by `solve_action_goal` alongside its Cases.
-                let case_counters = std::mem::take(&mut red.last_case_counters);
-                let fallback_seed = red.maude.fresh_counter_peek();
-                let mut out_systems: Vec<(crate::constraint::system::System, u64)> = Vec::new();
-                for (ci, (_name, case_sys)) in cases.into_iter().enumerate() {
-                    if case_sys.eq_store.is_false() {
+                // Continue over the borrowed suffix in each arm.
+                let mut completed = Vec::new();
+                for branch in cases {
+                    if red.ctx.has_source_error() {
+                        return SystemOutcome::Cases(Vec::new());
+                    }
+                    if branch.sys.eq_store.is_false() {
                         continue;
                     }
-                    let seed = case_counters.get(ci).copied().unwrap_or(fallback_seed);
-                    let mut case_sub = drain_remaining_actions(red.ctx, case_sys, &remaining, seed);
-                    out_systems.append(&mut case_sub);
-                }
-                return Err(out_systems);
-            }
-        }
-    }
-    Ok(changed)
-}
 
-/// Process the remaining (i, fa) action candidates in `case_sys`,
-/// mirroring HS's `mapM trySolve actionAtoms` continuation inside a
-/// DisjT-fanned branch.  Each remaining candidate's `solve_action_goal`
-/// call may itself fan out, producing more systems.  Returns the final
-/// list of systems after all remaining candidates have been processed.
-///
-/// The captured `(i, fa)` is the PRE-fan-out value.  HS's `mapM
-/// trySolve` does not call substSystem between iterations inside one
-/// `solveUniqueActions` call — only the outer simplify-iteration's
-/// `substSystem` (once at the start of `go`) propagates eq-store
-/// changes into nodes/edges.
-fn drain_remaining_actions(
-    ctx: &crate::constraint::solver::context::ProofContext,
-    case_sys: crate::constraint::system::System,
-    remaining: &[(crate::constraint::constraints::NodeId, crate::fact::LNFact)],
-    seed: u64,
-) -> Vec<(crate::constraint::system::System, u64)> {
-    use crate::constraint::constraints::Goal;
-    use crate::constraint::solver::reduction::GoalCases;
-    // HS FreshT-threading (task #16): continue the producing branch's
-    // counter through the remaining trySolve calls of this fanned branch.
-    let mut red = Reduction::new_inheriting(ctx, case_sys, seed);
-    // HS-faithful: do NOT call subst_system here.  HS's `mapM trySolve
-    // actionAtoms` runs each subsequent solveAction inside the
-    // DisjT-fanned branch WITHOUT a substSystem in between — only the
-    // outer simplify-iteration's substSystem (called once at the start
-    // of `go`) propagates eq-store changes into nodes/edges.  The
-    // captured (i, fa) is what gets fed to solveAction.  Calling
-    // substSystem prematurely renames nodes/goals and breaks the
-    // captured-key match in `markGoalAsSolved`.
-    for (i, fa) in remaining {
-        if ctx.has_source_error() {
-            return Vec::new();
-        }
-        // HS-faithful (Reduction.hs:656-680): `markGoalAsSolved` on a
-        // missing key just traces a warning and returns silently; the
-        // surrounding `solveGoal` proceeds with the captured (i, fa)
-        // regardless of whether the goal still exists post-subst.  Do NOT
-        // short-circuit on a `still_present` check here: that drops the
-        // action goal's fan-out in branches where substSystem renamed the
-        // goal key.
-        //
-        // We DO want to skip if the goal exists but is solved (HS's
-        // `mayStatus = Just status` path) — that prevents double-solving
-        // the captured atom in branches where an earlier pass already
-        // resolved it.  In particular: when the previous fan-out's
-        // per-arm eq_store collapses sb's and sc's Accept-goal keys to
-        // the same structural form, marking sb's goal also marks the
-        // matching sc-goal entry as solved.  Without this skip, the
-        // outer `solve_action_goal` redispatches the same atom and
-        // emits an extra `Proto3` step in the proof tree.
-        let goal_solved = red.sys.goals.iter().any(|(g, st)| {
-            st.solved
-                && matches!(g, Goal::Action(gi, gfa)
-                if gi == i && gfa == fa)
-        });
-        if goal_solved {
-            continue;
-        }
-        let outcome = red.solve_action_goal(i, fa);
-        if ctx.has_source_error() {
-            return Vec::new();
-        }
-        match outcome {
-            GoalCases::Contradictory => {
-                red.mark_contradictory();
-            }
-            GoalCases::Linear | GoalCases::LinearNamed(_) => {
-                // `red.sys` mutated in place — continue.
-            }
-            GoalCases::Cases(cases) => {
-                // Nested fan-out — recurse with remaining candidates.
-                let idx = remaining
-                    .iter()
-                    .position(|(ii, ffa)| ii == i && ffa == fa)
-                    .unwrap();
-                let next_remaining: Vec<_> = remaining[idx + 1..].to_vec();
-                // HS FreshT-threading (task #16): per-case branch counters
-                // recorded by `solve_action_goal` alongside its Cases.
-                let case_counters = std::mem::take(&mut red.last_case_counters);
-                let fallback_seed = red.maude.fresh_counter_peek();
-                let mut out: Vec<(crate::constraint::system::System, u64)> = Vec::new();
-                for (ci, (_name, case_sys)) in cases.into_iter().enumerate() {
-                    if ctx.has_source_error() {
-                        return Vec::new();
+                    // Keep each branch's FreshT continuation paired with its
+                    // system. Deliberately do not call `subst_system`:
+                    // Haskell applies it only at the start of the next outer
+                    // simplify iteration.
+                    let mut branch_red =
+                        Reduction::new_inheriting(red.ctx, branch.sys, branch.counter);
+                    let outcome = execute_captured_actions(&mut branch_red, suffix);
+                    if red.ctx.has_source_error() {
+                        // Source materialisation errors are fatal to the
+                        // shared context, so discard completed siblings too.
+                        return SystemOutcome::Cases(Vec::new());
                     }
-                    if case_sys.eq_store.is_false() {
-                        continue;
+                    match outcome {
+                        SystemOutcome::Linear => completed.push(SystemBranch {
+                            sys: branch_red.sys,
+                            counter: branch_red.maude.fresh_counter_peek(),
+                        }),
+                        SystemOutcome::Cases(arms) => completed.extend(arms),
+                        SystemOutcome::Contradictory => {}
                     }
-                    let case_seed = case_counters.get(ci).copied().unwrap_or(fallback_seed);
-                    let mut sub =
-                        drain_remaining_actions(ctx, case_sys, &next_remaining, case_seed);
-                    if ctx.has_source_error() {
-                        return Vec::new();
-                    }
-                    out.append(&mut sub);
                 }
-                return out;
+                return red.finish_system_cases(completed);
             }
         }
     }
-    let final_counter = red.maude.fresh_counter_peek();
-    vec![(
-        std::mem::replace(&mut red.sys, crate::constraint::system::System::empty()),
-        final_counter,
-    )]
+    SystemOutcome::Linear
 }
 
 /// Collect the unsolved unique Action-goal candidates in Haskell
@@ -2895,19 +2690,14 @@ fn drain_remaining_actions(
 /// execProofMethod's pick.
 ///
 /// Returns an empty Vec when there are no unsolved Action goals — the
-/// count-map build over `ctx.rules`/`ctx.intruder_rules` (with a
-/// `FactTag` clone per action) is skipped in that case, output-equivalent
-/// to the callers' prior early return.
+/// static shape lookup is skipped in that case.
 fn collect_unique_action_candidates(
     red: &Reduction,
 ) -> Vec<(crate::constraint::constraints::NodeId, crate::fact::LNFact)> {
     use crate::constraint::constraints::Goal;
-    use crate::fact::{FactTag, LNFact};
+    use crate::fact::LNFact;
 
-    // Bail before building the (static) count map when there are no
-    // unsolved Action goals to test — the full `ctx.rules`/`ctx.intruder_rules`
-    // scan otherwise runs every simplify pass even on systems with zero
-    // action goals.
+    // Bail before examining shapes when there are no unsolved Action goals.
     if !red
         .sys
         .goals
@@ -2917,22 +2707,6 @@ fn collect_unique_action_candidates(
         return Vec::new();
     }
 
-    // Count `(tag, arity)` occurrences across all non-silent rules
-    // — both protocol rules and intruder rules.  Cached per call;
-    // Haskell notes this is a static computation per theory but
-    // doesn't cache it either.
-    let mut counts: std::collections::BTreeMap<(FactTag, usize), usize> =
-        std::collections::BTreeMap::new();
-    for r in &red.ctx.rules {
-        for fa in &r.rule.actions {
-            *counts.entry((fa.tag, fa.terms.len())).or_insert(0) += 1;
-        }
-    }
-    for r in &red.ctx.intruder_rules {
-        for fa in &r.actions {
-            *counts.entry((fa.tag, fa.terms.len())).or_insert(0) += 1;
-        }
-    }
     let is_unique = |fa: &LNFact| -> bool {
         // Skip FUnion-headed terms — multiset unions can produce
         // multiple unifiers (Haskell's `null [ () | t <- ts, FUnion _ <- viewTerm2 t]`).
@@ -2941,7 +2715,9 @@ fn collect_unique_action_candidates(
                 return false;
             }
         }
-        counts.get(&(fa.tag, fa.terms.len())).copied() == Some(1)
+        red.ctx
+            .unique_action_shapes
+            .contains(&(fa.tag, fa.terms.len()))
     };
 
     let mut candidates: Vec<(crate::constraint::constraints::NodeId, LNFact)> = red
@@ -2994,7 +2770,7 @@ fn has_funion_head(t: &tamarin_term::lterm::LNTerm) -> bool {
 /// passes assume KD-producing nodes are unique per term.  Without
 /// this pass, the search can keep branching on multiple `IRecv`
 /// nodes for the same term, blowing up the tree.
-fn enforce_kd_fact_uniqueness_pass(red: &mut Reduction) -> ChangeIndicator {
+fn enforce_kd_fact_uniqueness_pass(red: &mut Reduction) -> SystemOutcome {
     use crate::constraint::constraints::NodeId;
     use crate::fact::FactTag;
     use crate::rule::RuleACInst;
@@ -3020,7 +2796,7 @@ fn enforce_kd_fact_uniqueness_pass(red: &mut Reduction) -> ChangeIndicator {
     // Haskell uses `solveRuleEqs SplitNow` for the kdConcs merger
     // (Simplify.hs `merge (solveRuleEqs SplitNow) kdConcs`).  Multi-arm AC
     // unifications fork the DisjT continuation in HS (Reduction.hs:723-725);
-    // `merge_candidates` mirrors that via install + pending_eq_arms.
+    // `merge_candidates` mirrors that via install + pending branches.
     // Joux_EphkRev: dropping a `Cases` result here leaves the `mem::take`'d
     // default eq-store (conj=[], next_split=0) installed — the next
     // substSystem then parks its setNodes rule-eq disjunctions at
@@ -3455,7 +3231,7 @@ fn enforce_fresh_ordering_pass(red: &mut Reduction) -> ChangeIndicator {
 /// flags `!AIK(~aik)` feeding both `Alice_Init.PremIdx(2)` and
 /// `PCR_CertKey.PremIdx(0)` as a contradictory premise-index clash
 /// — observed in TPM_Exclusive_Secrets::left_reachable.
-fn enforce_edge_uniqueness_pass(red: &mut Reduction) -> ChangeIndicator {
+fn enforce_edge_uniqueness_pass(red: &mut Reduction) -> SystemOutcome {
     use crate::fact::FactTag;
     // Lookup: is this conclusion of this node a persistent fact?
     // Haskell `factTagMultiplicity` (Theory/Model/Fact.hs:383-388):
@@ -3523,7 +3299,7 @@ fn enforce_edge_uniqueness_pass(red: &mut Reduction) -> ChangeIndicator {
     }
     if conc_idx_clash {
         red.mark_contradictory();
-        return ChangeIndicator::Changed;
+        return SystemOutcome::Contradictory;
     }
     // Pass 2 (Haskell's second `mergeNodes eTgt eSrc` filtered to
     // linear conclusions): a single linear conclusion can feed only
@@ -3549,26 +3325,14 @@ fn enforce_edge_uniqueness_pass(red: &mut Reduction) -> ChangeIndicator {
     }
     if prem_idx_clash {
         red.mark_contradictory();
-        return ChangeIndicator::Changed;
+        return SystemOutcome::Contradictory;
     }
     node_eqs.retain(|e| e.lhs != e.rhs);
     if node_eqs.is_empty() {
-        return ChangeIndicator::Unchanged;
+        return SystemOutcome::Linear;
     }
-    let res = red.solve_node_id_eqs_broadcast(&node_eqs);
-    if matches!(
-        res,
-        Err(_) | Ok(crate::constraint::solver::reduction::SolveOutcome::Contradictory)
-    ) {
-        red.mark_contradictory();
-        return ChangeIndicator::Changed;
-    }
-    if let Ok(crate::constraint::solver::reduction::SolveOutcome::Cases(arms)) = res {
-        // Multi-arm node-id unification: install arm[0] + stash the
-        // rest (HS DisjT fork, Reduction.hs:723-725).  Falling through
-        // would leave the `mem::take`'d default eq-store installed.
-        install_pass_cases_arms(red, arms);
-    }
+    let base = red.sys.clone();
+    let res = red.solve_node_id_eqs(&node_eqs);
     // HS-faithful: HS's `enforceEdgeUniqueness` only calls
     // `solveTermEqs SplitNow` (via `solveNodeIdEqs`) — it adds node-id
     // bindings to the eq-store but does NOT immediately rename node
@@ -3581,7 +3345,7 @@ fn enforce_edge_uniqueness_pass(red: &mut Reduction) -> ChangeIndicator {
     // matches HS's `substNodes = substNodeIds <* (M.map . apply)`
     // ordering exactly.
     red.changed = ChangeIndicator::Changed;
-    ChangeIndicator::Changed
+    complete_solve(red, base, res)
 }
 
 /// Lift a `NodeId` (an `LVar` of sort Node) to an `LNTerm` variable —
@@ -3611,11 +3375,11 @@ fn node_id_to_lnterm(n: &crate::constraint::constraints::NodeId) -> tamarin_term
 /// block at 581-583 are commented out upstream), so nothing active is missing. The
 /// `Decreasing`/`StrictlyDecreasing` arms are handled by the i<->j
 /// swap below.
-fn simp_injective_fact_eq_mon_pass(red: &mut Reduction) -> ChangeIndicator {
+fn simp_injective_fact_eq_mon_pass(red: &mut Reduction) -> SystemOutcome {
     use crate::tools::injective_fact_instances::MonotonicBehaviour;
 
     if red.ctx.injective_fact_insts.is_empty() {
-        return ChangeIndicator::Unchanged;
+        return SystemOutcome::Linear;
     }
     // Collect (node_id, tag, first_term, [(behaviour, leaf-term)]) for every
     // premise of every node whose tag is an injective tag — i.e. HS
@@ -3659,7 +3423,7 @@ fn simp_injective_fact_eq_mon_pass(red: &mut Reduction) -> ChangeIndicator {
         }
     }
     if by_inj.len() < 2 {
-        return ChangeIndicator::Unchanged;
+        return SystemOutcome::Linear;
     }
 
     // Pre-collect the existing `gnotAtom (EqE s t)` inequalities from
@@ -4021,41 +3785,53 @@ fn simp_injective_fact_eq_mon_pass(red: &mut Reduction) -> ChangeIndicator {
     // `insertFormula` for an `EqE` atom routes through `insertAtom`→
     // `solveTermEqs SplitNow`, which performs the same contradiction
     // checks as `solve_term_eqs`/`solve_node_id_eqs` (Contradictory →
-    // `mark_contradictory`; AC-multi-unifier → `pending_eq_arms` DisjT
+    // `mark_contradictory`; AC-multi-unifier → pending-branch DisjT
     // fork, drained by the outer simplify fan-out loop).  The node
     // merge for case (2) is realised by the
     // next iteration's `substSystem` once the `i := j` binding lands
     // in the eq-store — so NO eager node-id rename is needed here.
-    for f in new_formulas {
-        red.insert_formula(f);
-    }
-    // Insert case (3)/(5) less-atoms with `InjectiveFacts` reason,
-    // mirroring HS `mapM_ (\(x, y) -> insertLess (LessAtom x y
-    // InjectiveFacts)) newLesses` (Simplify.hs).
     let any_new_lesses = !new_lesses.is_empty();
-    for (sm, lg) in new_lesses {
-        red.insert_less(crate::constraint::constraints::LessAtom::new(
-            sm,
-            lg,
-            crate::constraint::constraints::Reason::InjectiveFacts,
-        ));
+    let insert_lesses = |red: &mut Reduction| {
+        for &(sm, lg) in &new_lesses {
+            red.insert_less(crate::constraint::constraints::LessAtom::new(
+                sm,
+                lg,
+                crate::constraint::constraints::Reason::InjectiveFacts,
+            ));
+        }
+    };
+    match red.insert_formulas(&new_formulas) {
+        SystemOutcome::Linear => insert_lesses(red),
+        SystemOutcome::Contradictory => return SystemOutcome::Contradictory,
+        SystemOutcome::Cases(arms) => {
+            return SystemOutcome::Cases(
+                arms.into_iter()
+                    .map(|arm| {
+                        let mut branch = Reduction::new_inheriting(red.ctx, arm.sys, arm.counter);
+                        insert_lesses(&mut branch);
+                        SystemBranch {
+                            sys: branch.sys,
+                            counter: branch.maude.fresh_counter_peek(),
+                        }
+                    })
+                    .collect(),
+            );
+        }
     }
     // HS change-detection (Simplify.hs):
     //   updatedFormulas = sFormulas ∪ sSolvedFormulas (AFTER inserts)
     //   Changed iff (updatedFormulas /= oldFormulas) || not (null newLesses)
     let updated_formulas = formula_set(red);
-    if updated_formulas == old_formulas && !any_new_lesses {
-        ChangeIndicator::Unchanged
-    } else {
+    if updated_formulas != old_formulas || any_new_lesses {
         red.changed = ChangeIndicator::Changed;
-        ChangeIndicator::Changed
     }
+    SystemOutcome::Linear
 }
 
 /// `reduceFormulas` — decompose every reducible formula in the open
 /// set. Mirrors the Haskell pass. The decomposition itself happens in
 /// `Reduction::insert_formula`.
-fn reduce_formulas_pass(red: &mut Reduction) -> ChangeIndicator {
+fn reduce_formulas_pass(red: &mut Reduction) -> SystemOutcome {
     use crate::guarded::reducible_formula;
     // Pull out reducible formulas in one pass; otherwise we'd have
     // overlapping borrows (read+modify on `sys.formulas`).
@@ -4073,16 +3849,13 @@ fn reduce_formulas_pass(red: &mut Reduction) -> ChangeIndicator {
         .collect();
     to_decompose.sort();
     if to_decompose.is_empty() {
-        return ChangeIndicator::Unchanged;
+        return SystemOutcome::Linear;
     }
     // Remove them, then re-insert via the decomposition logic.
     red.sys.invalidate_max_var_idx_cache();
     red.sys.formulas_mut().retain(|f| !reducible_formula(f));
-    for f in to_decompose {
-        red.insert_formula(f);
-    }
     red.changed = ChangeIndicator::Changed;
-    ChangeIndicator::Changed
+    red.insert_formulas(&to_decompose)
 }
 
 /// `removeSolvedSplitGoals` lifted into a one-shot pass.
@@ -4115,8 +3888,7 @@ fn drop_trivially_true_formulas_pass(red: &mut Reduction) -> ChangeIndicator {
     red.sys.invalidate_max_var_idx_cache();
     red.sys.formulas_mut().retain(|f| **f != gt);
     if had_gtrue && !crate::guarded::stores_contains(&red.sys.solved_formulas, &gt) {
-        red.sys.invalidate_max_var_idx_cache();
-        red.sys.solved_formulas_mut().push(std::sync::Arc::new(gt));
+        red.sys.insert_solved_formula(gt);
     }
     if red.sys.formulas.len() != before {
         red.changed = ChangeIndicator::Changed;
@@ -4639,14 +4411,7 @@ fn propagate_subterm_obvious(red: &mut Reduction) -> ChangeIndicator {
     // in `_negSubterms`; we mirror the same single-pass placement by
     // keeping the formula in `sys.formulas` only.
     for f in new_formulas {
-        // Stored-state boundary (150f5eba): normalise before the dedup
-        // check and the push, so the comparison is normal-to-normal.
-        let f = crate::guarded::normalise_stored_formula_owned(f);
-        if !crate::guarded::stores_contains(&red.sys.formulas, &f)
-            && !crate::guarded::stores_contains(&red.sys.solved_formulas, &f)
-        {
-            red.sys.invalidate_max_var_idx_cache();
-            red.sys.formulas_mut().push(std::sync::Arc::new(f));
+        if red.sys.insert_formula(f) {
             red.changed = ChangeIndicator::Changed;
             changed = ChangeIndicator::Changed;
         }

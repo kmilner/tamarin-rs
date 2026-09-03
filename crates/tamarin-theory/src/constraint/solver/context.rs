@@ -79,7 +79,7 @@ impl<'a> IntoIterator for &'a IntrRuleCache {
 /// These fields are computed once at theory-load time and shared unchanged by
 /// every lemma and proof-search worker. Mutable source materialisation lives
 /// directly on [`ProofContext`], outside this bundle.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ProofContextShared {
     /// Protocol rules after loop-breaker and variant annotation. They become
     /// immutable before source precomputation and are shared by every lemma
@@ -96,6 +96,10 @@ pub struct ProofContextShared {
     /// shared [`IntrRuleCache`] handle, so cloning the bundle shares the
     /// rule list instead of copying it.
     pub intruder_rules: IntrRuleCache,
+    /// Action `(tag, arity)` shapes that occur in exactly one protocol or
+    /// intruder rule. `solveUniqueActions` consults this on every simplify
+    /// iteration, so derive it once with the immutable rule bundle.
+    pub(crate) unique_action_shapes: std::collections::BTreeSet<(crate::fact::FactTag, usize)>,
     /// Theory-level restrictions (safety formulas), in guarded form.
     /// Mirrors Haskell's `pcRestrictions` — passed to `initialSource`
     /// so each precomputed source-case starts from a system with the
@@ -105,6 +109,12 @@ pub struct ProofContextShared {
     /// Pattern_matching::Responder_secrecy) that Haskell would have
     /// dropped via the restriction's implied-formula propagation.
     pub restrictions: Vec<crate::guarded::Guarded>,
+    /// Fact tags whose instances are uniquely identified by their first
+    /// argument. Computed once from the theory and immutable thereafter.
+    pub injective_fact_insts: Vec<(
+        crate::fact::FactTag,
+        Vec<Vec<crate::tools::injective_fact_instances::MonotonicBehaviour>>,
+    )>,
     /// `pcTrueSubterm` — True iff every destructor rule has its
     /// RHS as a proper subterm of its LHS (`all isSubtermRule $
     /// filter isDestrRule $ intruder_rules`).  Mirrors Haskell's
@@ -141,14 +151,6 @@ pub struct ProofContext {
     /// proof. Mirrors Haskell's `pcUseInduction` flag.  Set per-lemma
     /// (`force_induction`), so owned rather than shared.
     pub use_induction: UseInduction,
-    /// Set of fact tags whose instances we know to be uniquely
-    /// identified by their first argument (the "injective" facts).
-    /// Mirrors Haskell's `pcInjectiveFactInsts`.  Owned (not shared)
-    /// because a few unit tests replace it after construction.
-    pub injective_fact_insts: Vec<(
-        crate::fact::FactTag,
-        Vec<Vec<crate::tools::injective_fact_instances::MonotonicBehaviour>>,
-    )>,
     /// Set when the current proof is for an exists-trace lemma.
     /// Used by `is_finished` to decide whether the Fresh-conflation
     /// case-drop should convert Contradictory→Unfinishable: for
@@ -332,7 +334,6 @@ impl ProofContext {
             maude: self.maude.clone(),
             maude_pool: self.maude_pool.clone(),
             use_induction: self.use_induction,
-            injective_fact_insts: self.injective_fact_insts.clone(),
             is_exists_trace: self.is_exists_trace,
             cut: self.cut,
             typing_assumptions: self.typing_assumptions.clone(),
@@ -544,7 +545,6 @@ impl ProofContext {
             maude,
             maude_pool: None,
             use_induction: self.use_induction,
-            injective_fact_insts: self.injective_fact_insts.clone(),
             is_exists_trace: self.is_exists_trace,
             cut: self.cut,
             typing_assumptions: self.typing_assumptions.clone(),
@@ -658,8 +658,7 @@ impl ProofContext {
             }
         }
         for src in self.full_sources.iter() {
-            let init =
-                crate::constraint::solver::sources::initial_source_cases_pub(&src.goal, self);
+            let init = crate::constraint::solver::sources::initial_source_cases(&src.goal, self);
             src.cases_set(init);
         }
         // HS-faithful `saturate_sources_with_simp` (mirrors HS's
@@ -1320,11 +1319,26 @@ impl ProofContext {
             rules[idx].abstracted_rule = Some(abstr);
             rules[idx].variant_substs = av_substs;
         }
+        let unique_action_shapes = {
+            let mut counts = std::collections::BTreeMap::new();
+            for action in rules
+                .iter()
+                .flat_map(|rule| &rule.rule.actions)
+                .chain(intruder_rules.iter().flat_map(|rule| &rule.actions))
+            {
+                *counts
+                    .entry((action.tag, action.terms.len()))
+                    .or_insert(0usize) += 1;
+            }
+            counts
+                .into_iter()
+                .filter_map(|(shape, count)| (count == 1).then_some(shape))
+                .collect()
+        };
         let mut ctx = ProofContext {
             maude,
             maude_pool,
             use_induction: UseInduction::AvoidInduction,
-            injective_fact_insts,
             is_exists_trace: false,
             cut: CutStrategy::Dfs,
             typing_assumptions: Vec::new(),
@@ -1339,7 +1353,9 @@ impl ProofContext {
             shared: std::sync::Arc::new(ProofContextShared {
                 rules,
                 intruder_rules,
+                unique_action_shapes,
                 restrictions,
+                injective_fact_insts,
                 pc_true_subterm,
                 // The debug env knob outranks the CLI `-s` (a developer
                 // setting it mid-bisect expects it to win); `current()`

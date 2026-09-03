@@ -60,70 +60,17 @@ pub enum Contradiction {
     NodeAfterLast(NodeId, NodeId),
 }
 
-/// Push a node id through the eq-store substitution, keeping it as-is when the
-/// substitution does not map it to another variable.  The rationale for
-/// resolving at all — RS-only compensation for `subst_system` lagging HS's
-/// pre-check `substSystem` — is spelled out at the [`contradictions`] call
-/// site.
-fn resolve_node_id(subst: &crate::tools::equation_store::LNSubst, v: &NodeId) -> NodeId {
-    use tamarin_term::term::Term;
-    use tamarin_term::vterm::Lit;
-    match tamarin_term::subst::apply_vterm(subst, Term::Lit(Lit::Var(*v))) {
-        Term::Lit(Lit::Var(w)) => w,
-        _ => *v,
-    }
-}
-
 /// Collect every contradiction currently witnessed by the system.
 pub fn contradictions(_ctxt: &ProofContext, sys: &System) -> Vec<Contradiction> {
     let mut out = Vec::new();
-    // Mirror Haskell's `rawLessRel = sLessAtoms ++ rawEdgeRel` —
-    // every graph edge induces a strict ordering src < tgt, and the
-    // cyclic check has to fold both relations together.
-    //
-    // **Apply eq_store subst before cycle detection** (RS-only
-    // compensation; NOT a step HS performs inside the cyclic check).
-    // HS's `contradictions` calls `D.cyclic $ rawLessRel sys` directly
-    // (Contradictions.hs), and `rawLessRel`/`rawEdgeRel`/`nodeConcNode`/
-    // `nodePremNode` are pure projections that apply NO eq-store subst
-    // (System.hs:1615-1624 `rawEdgeRel`/`rawLessRel`, 923-942
-    // `nodePremNode = fst`/`nodeConcNode = fst`; Constraints.hs:133-138
-    // `lessAtomToEdge`/`getLessRel`).  HS achieves canonical node
-    // identity instead by running `substSystem` — which applies the
-    // eq-store subst to sEdges/sLessAtoms/sNodes (Reduction.hs:571-602)
-    // — BEFORE the contradiction check (e.g. `solve` → `simplifySystem`
-    // ends in `void substSystem`, Simplify.hs:56-158, see line 82, immediately before
-    // `contradictorySystem`, Sources.hs:176-178).
-    //
-    // RS's `subst_system` does the same propagation, but isn't always
-    // called between every reduction step (e.g. between `solve_fact_eqs`
-    // and the next `contradictions(...)` call from `is_finished`).  This
-    // `resolve` reproduces HS's already-substituted state: it uses the
-    // identical `apply_vterm`-on-Var op as `subst_system_once`'s `map_var`
-    // (reduction.rs map_var), so it is a no-op (idempotent) when subst has
-    // already run and a faithful compensation when it lags — never
-    // producing a Cyclic that HS's post-substSystem state wouldn't. Pure
-    // node-id lookups (LVar variable terms) — no term traversal needed. Do
-    // not remove without proving RS always runs `subst_system` before
-    // every `contradictions` call.
-    let subst = &sys.eq_store.subst;
-    let resolve = |v: &NodeId| resolve_node_id(subst, v);
-    let mut all_less: tamarin_utils::dag::Relation<NodeId> = sys
-        .less_atoms
+    // Build Haskell's `rawLessRel = sLessAtoms ++ sEdges ++ unsolvedChains`
+    // once for cycle detection and every ordering-dependent check below.
+    let ab_adj = sys.build_always_before_adj();
+    let all_less = ab_adj
+        .map()
         .iter()
-        .map(|l| (resolve(&l.smaller), resolve(&l.larger)))
+        .flat_map(|(from, tos)| tos.iter().map(|to| (*from, *to)))
         .collect();
-    for e in &sys.edges {
-        all_less.push((resolve(&e.src.0), resolve(&e.tgt.0)));
-    }
-    // HS-faithful: `rawEdgeRel = sEdges ++ unsolvedChains` (System.hs:1615-
-    // 1616) — unsolved chain goals contribute (c.0, p.0) to the less-
-    // relation for cycle detection. Without this, RS misses cycles HS
-    // catches when the cycle goes through an open chain. Root cause of
-    // StatVerif KU(pcs) saturate over-enumeration.
-    for (c, p) in sys.unsolved_chains() {
-        all_less.push((resolve(&c.0), resolve(&p.0)));
-    }
     if tamarin_utils::dag::cyclic(&all_less) {
         out.push(Contradiction::Cyclic);
     }
@@ -140,18 +87,6 @@ pub fn contradictions(_ctxt: &ProofContext, sys: &System) -> Vec<Contradiction> 
     // pruned the branch at CONSTRUCTION time (sort-aware unification, edge
     // tag-matching) so HS's `contradictions` never sees these systems. See
     // the per-check notes below.
-
-    // The `rawLessRel` adjacency (`build_always_before_adj`) is the SAME
-    // relation used by all four ordering-dependent checks below —
-    // `has_forbidden_exp`, `has_forbidden_chain` (both via
-    // `always_before_with`), and `non_injective_fact_instances` /
-    // `node_after_last` (both via direct `.map()` walks). `contradictions`
-    // holds `sys` immutable for its whole body with no early return, so the
-    // relation is invariant across all four; build it ONCE and thread it
-    // down. This is a distinct relation from the substituted `all_less`
-    // used for the cyclic check above (that one applies the eq-store subst;
-    // this one does not), so it is built separately.
-    let ab_adj = sys.build_always_before_adj();
 
     // Shared node-id → rule index for the map-consuming checks below
     // (`has_impossible_chain`, `has_forbidden_constr_chain`,
@@ -826,30 +761,6 @@ fn extract_ac_constr_pairs<'a>(
 ) -> Vec<AcConstrPair> {
     use crate::constraint::constraints::Reason;
     use crate::rule::is_ac_constr_rule;
-    use std::borrow::Cow;
-
-    // Resolve less-atom endpoints through the eq-store subst before node
-    // lookup — the same RS-only compensation the cyclic check applies
-    // (HS runs post-`substSystem`, so its `sLessAtoms` are already
-    // canonical; RS's may lag one `subst_system` behind).
-    let subst = &sys.eq_store.subst;
-    let resolve = |v: &NodeId| resolve_node_id(subst, v);
-
-    // Facts are compared under the pending eq-store subst as well — same
-    // rationale as the endpoint resolve above (HS compares post-substSystem
-    // rule instances).  Comparison-only copies; `Fact` equality ignores the
-    // fingerprint cache, so `map_ref`'s placeholder fingerprints are fine.
-    // An empty subst is the identity (`apply_vterm`'s empty-map fast path,
-    // subst.rs), so a rebuild reproduces the stored fact term for term; the
-    // borrowed arm hands back that fact instead, and only a subst with
-    // bindings pays the per-candidate rebuild.
-    let subst_fact = |fa: &'a crate::fact::LNFact| -> Cow<'a, crate::fact::LNFact> {
-        if subst.is_empty() {
-            Cow::Borrowed(fa)
-        } else {
-            Cow::Owned(fa.map_ref(|t| tamarin_term::subst::apply_vterm(subst, t.clone())))
-        }
-    };
 
     let node_rules = node_rules.get_or_init(|| sys.node_rule_map());
     sys.less_atoms
@@ -858,8 +769,8 @@ fn extract_ac_constr_pairs<'a>(
             if la.reason != Reason::Adversary {
                 return None;
             }
-            let n1 = resolve(&la.smaller);
-            let n2 = resolve(&la.larger);
+            let n1 = la.smaller;
+            let n2 = la.larger;
             let r1 = node_rules.get(&n1).copied()?;
             let r2 = node_rules.get(&n2).copied()?;
             let name1 = is_ac_constr_rule(r1)?;
@@ -867,18 +778,9 @@ fn extract_ac_constr_pairs<'a>(
             if name1 != name2 {
                 return None;
             }
-            let conc = subst_fact(r1.conclusions.first()?);
-            let prems2: Vec<Cow<'a, crate::fact::LNFact>> =
-                r2.premises.iter().map(&subst_fact).collect();
-            if prems2.contains(&conc) {
-                let prems1: Vec<crate::fact::LNFact> = r1
-                    .premises
-                    .iter()
-                    .map(|fa| subst_fact(fa).into_owned())
-                    .collect();
-                let prems2: Vec<crate::fact::LNFact> =
-                    prems2.into_iter().map(Cow::into_owned).collect();
-                Some((n1, prems1, n2, prems2, name1))
+            let conc = r1.conclusions.first()?;
+            if r2.premises.contains(conc) {
+                Some((n1, r1.premises.clone(), n2, r2.premises.clone(), name1))
             } else {
                 None
             }
@@ -1095,22 +997,10 @@ fn has_forbidden_chain<'a>(
         if !matches!(prem_fact.tag, FactTag::Kd) {
             continue;
         }
-        // Mirror HS `substNodes` — node conc terms are kept eq-store-
-        // substituted by `substSystem` (Reduction.hs:609-611 `modM sNodes . M.map
-        // . apply =<< getM sSubst`, run after every reduction/variant fold),
-        // and the contradiction check runs after simplifySystem→substSystem
-        // (Sources.hs:177-178), so HS's `nodeConcFact` (System.hs:939-940, a
-        // plain `nodeRule` lookup that does NOT apply eqsSubst at read time)
-        // already returns the canonical term.  RS mirrors substNodes in
-        // `subst_system_once`; apply eq_store.subst here so t_start matches
-        // HS's already-substituted value.  Idempotent on the canonical path;
-        // compensates only if RS's subst_system lagged.
-        let raw_t_start = match conc_fact.terms.first() {
-            Some(t) => t.clone(),
+        let t_start = match conc_fact.terms.first() {
+            Some(t) => t,
             None => continue,
         };
-        let t_start_owned = tamarin_term::subst::apply_vterm(&sys.eq_store.subst, raw_t_start);
-        let t_start = &t_start_owned;
         // (1) Chain starts at a message variable.
         if !is_msg_var(t_start) {
             continue;
@@ -2031,7 +1921,6 @@ fn has_fresh_fact_sort_violation(sys: &System) -> bool {
     use tamarin_term::lterm::LSort;
     use tamarin_term::term::Term;
     use tamarin_term::vterm::Lit;
-    let subst = &sys.eq_store.subst;
     for (_, rule) in sys.nodes.iter() {
         // Check premises (where Fr lives) and conclusions/actions
         // for completeness — any Fresh-tagged fact with a non-Fresh
@@ -2049,8 +1938,7 @@ fn has_fresh_fact_sort_violation(sys: &System) -> bool {
                 Some(t) => t,
                 None => continue,
             };
-            let t_norm = tamarin_term::subst::apply_vterm(subst, t.clone());
-            match t_norm {
+            match t {
                 Term::Lit(Lit::Var(v)) if v.sort == LSort::Fresh => {}
                 Term::Lit(Lit::Var(v)) if v.sort == LSort::Msg => {
                     // Msg can narrow to Fresh later — don't flag.

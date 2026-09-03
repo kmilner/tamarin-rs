@@ -57,9 +57,6 @@
 #    before filing one under #874.)
 #   sapic-export-echo      sapic/export corner files whose -m echo/rc diverged
 #                          before this campaign (PRE-binary evidence).
-#   sapic-locations-report upstream #922 rewrites `report(t)` to
-#                          `rep(t, location)` throughout the translated MSR.
-#                          The pinned HS oracle predates that fix.
 #   stored-proof-echo      stored-proof replay divergence: RS adds an unmatched
 #                          `by sorry` branch and `/* unannotated */` markers to
 #                          the echoed proof. The exported JSON and DOT agree;
@@ -165,17 +162,6 @@ module	examples/sapic/export/5G_AKA/5G_AKA.spthy	sapic-export-echo	all three mod
 module	examples/sapic/export/ExistingSapicModels/AKE.spthy	sapic-export-echo	-	msr	stdout
 module	examples/sapic/export/KEMTLS/kemtls-noaead.spthy	sapic-export-echo	-	msr	stdout
 module	examples/sapic/export/KEMTLS/kemtls.spthy	sapic-export-echo	-	msr	stdout
-module	examples/sapic/export/ExistingSapicModels/AC.spthy	sapic-locations-report	upstream #922 behavior; pre-round binary identical	msr	stdout
-module	examples/sapic/export/ExistingSapicModels/AC_counter_with_attack.spthy	sapic-locations-report	upstream #922 behavior; pre-round binary identical	msr	stdout
-module	examples/sapic/export/ExistingSapicModels/AC_sid_with_attack.spthy	sapic-locations-report	upstream #922 behavior; pre-round binary identical	msr	stdout
-module	examples/sapic/export/ExistingSapicModels/OTP.spthy	sapic-locations-report	upstream #922 behavior; pre-round binary identical	msr	stdout
-module	examples/sapic/fast/feature-locations/AC.spthy	sapic-locations-report	upstream #922 behavior; pre-round binary identical	msr	stdout
-module	examples/sapic/fast/feature-locations/AC_counter_with_attack.spthy	sapic-locations-report	upstream #922 behavior; pre-round binary identical	msr	stdout
-module	examples/sapic/fast/feature-locations/AKE.spthy	sapic-locations-report	upstream #922 behavior; pre-round binary identical	msr	stdout
-module	examples/sapic/fast/feature-locations/OTP.spthy	sapic-locations-report	upstream #922 behavior; pre-round binary identical	msr	stdout
-module	examples/sapic/fast/feature-locations/SOC.spthy	sapic-locations-report	upstream #922 behavior; pre-round binary identical	msr	stdout
-module	examples/sapic/fast/feature-locations/licensing.spthy	sapic-locations-report	upstream #922 behavior; pre-round binary identical	msr	stdout
-module	examples/sapic/slow/feature-locations/AC_sid_with_attack.spthy	sapic-locations-report	upstream #922 behavior; pre-round binary identical	msr	stdout
 module	examples/sapic/manual-proofs/fairexchange-gjm/GJMLocks_a1b1.spthy	stderr-open-chains	rs prints the warning during deriv checks, hs never does		stderr
 module	examples/sapic/manual-proofs/fairexchange-gjm/GJMLocks_a2b2.spthy	stderr-open-chains	rs prints the warning during deriv checks, hs never does		stderr
 module	examples/sapic/manual-proofs/fairexchange-gjm/GJMLocks_a3b3.spthy	stderr-open-chains	rs prints the warning during deriv checks, hs never does		stderr

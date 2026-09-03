@@ -874,6 +874,101 @@ impl System {
         &mut self.content.solved_formulas
     }
 
+    /// Normalize and insert an open formula unless either formula store
+    /// already contains it. Returns whether the store changed.
+    pub fn insert_formula(&mut self, formula: impl Into<Arc<Guarded>>) -> bool {
+        let formula = Self::normalize_formula(formula.into());
+        if crate::guarded::stores_contains(&self.content.solved_formulas, &formula) {
+            return false;
+        }
+        self.insert_open_formula_normalized(formula)
+    }
+
+    /// Normalize and insert into the open store regardless of solved-store
+    /// membership. This is the direct set-write operation used when Haskell
+    /// updates the two stores independently.
+    pub fn insert_open_formula(&mut self, formula: impl Into<Arc<Guarded>>) -> bool {
+        let formula = Self::normalize_formula(formula.into());
+        self.insert_open_formula_normalized(formula)
+    }
+
+    fn insert_open_formula_normalized(&mut self, formula: Arc<Guarded>) -> bool {
+        if crate::guarded::stores_contains(&self.content.formulas, &formula) {
+            return false;
+        }
+        self.bump_cache_guarded(&formula);
+        self.formulas_mut().push(formula);
+        true
+    }
+
+    /// Normalize and insert a solved formula unless it is already solved.
+    /// Open-store membership is deliberately independent: callers moving a
+    /// formula between stores remove the open entry first, while set joins may
+    /// preserve membership in both stores.
+    pub fn insert_solved_formula(&mut self, formula: impl Into<Arc<Guarded>>) -> bool {
+        let formula = Self::normalize_formula(formula.into());
+        if crate::guarded::stores_contains(&self.content.solved_formulas, &formula) {
+            return false;
+        }
+        self.bump_cache_guarded(&formula);
+        self.solved_formulas_mut().push(formula);
+        true
+    }
+
+    fn normalize_formula(formula: Arc<Guarded>) -> Arc<Guarded> {
+        match crate::guarded::normalise_stored_formula_cow(&formula) {
+            Some(normalized) => Arc::new(normalized),
+            None => formula,
+        }
+    }
+
+    /// Clear the open formula store, including every cache/stamp update the
+    /// removal requires.
+    pub fn clear_formulas(&mut self) {
+        if !self.content.formulas.is_empty() {
+            self.invalidate_max_var_idx_cache();
+            self.formulas_mut().clear();
+        }
+    }
+
+    /// Clear both formula stores through their tracked write doors.
+    pub fn clear_formula_stores(&mut self) {
+        self.clear_formulas();
+        if !self.content.solved_formulas.is_empty() {
+            self.invalidate_max_var_idx_cache();
+            self.solved_formulas_mut().clear();
+        }
+    }
+
+    /// Apply the equation-store substitution to less-atom endpoints. The
+    /// fields are borrowed together here so no raw `SystemContent` reference
+    /// has to escape through the untracked solver door.
+    pub(crate) fn normalise_less_atoms(&mut self) -> bool {
+        if self.content.eq_store.subst.is_empty() {
+            return false;
+        }
+        let content = &mut self.content;
+        let subst = &content.eq_store.subst;
+        let mut changed = false;
+        let normalize = |id: &NodeId| match subst.image_of(id) {
+            Some(tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(var))) => *var,
+            _ => *id,
+        };
+        for atom in &mut content.less_atoms {
+            let smaller = normalize(&atom.smaller);
+            let larger = normalize(&atom.larger);
+            changed |= smaller != atom.smaller || larger != atom.larger;
+            atom.smaller = smaller;
+            atom.larger = larger;
+        }
+        if changed {
+            // Substitution cannot increase the cached maximum here, but the
+            // content stamp must invalidate a stale simplification marker.
+            self.bump_content_stamp();
+        }
+        changed
+    }
+
     /// Bump `formulas_stamp` ONLY (NOT `content_stamp`) and hand out
     /// `&mut Vec<Arc<Guarded>>` for `formulas`.  The untracked-door analog of
     /// [`formulas_mut`](Self::formulas_mut) for whole-system rewriters
@@ -1886,7 +1981,7 @@ pub fn formula_to_system(
     let mut conj_items = vec![gf1];
     conj_items.extend(other_restrictions);
     let gf2 = gconj(conj_items);
-    sys.formulas_mut().push(Arc::new(gf2));
+    sys.insert_formula(gf2);
     // Safety restrictions are added as known-true lemmas.
     sys.insert_lemmas(safety);
     sys

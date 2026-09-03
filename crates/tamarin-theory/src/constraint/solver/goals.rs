@@ -2686,29 +2686,34 @@ pub(crate) fn dispatch_solve_goal(
     // trigger: Minimal_HashChain Loop_Start source-case Check0 left
     // its abstract Loop goal open, which then triggered another graft
     // iteration adding a duplicate Check0 node.
-    red.mark_goal_as_solved(g);
     // HS-faithful `solve goal = maybe (solveGoal goal) ...
     // (solveWithSource ctxt ths goal)` (ProofMethod.hs:315-319).
     // HS tries source-case dispatch FIRST; only if it returns
     // `Nothing` does it fall back to `solveGoal` (which emits the
     // `traceExecM ("solveGoal " ++ goalKind goal)` line).  Mirror
-    // here for `Premise` goals: try `solve_with_source_cases_ctx`,
+    // here for source-backed goals: try the source application once,
     // and if it returns `Some(cases)`, return them directly without
     // emitting the `solveGoal kind=Premise fact=...` trace.
     //
-    // Limited to `Premise` goals for now (HS uses `solveWithSource`
-    // for both Action-KU and Premise; we leave Action to its
-    // existing inner source-case path pending further audit).
-    if let Goal::Premise(p, fa) = g {
-        // HS-faithful (Sources.hs:201-205): `solveAllSafeGoals` only
-        // calls `solveWithSourceAndReturn` on "useful" goals (KU
-        // actions), routing safe goals (Premise) through `solveGoal`
-        // directly.  At runtime (`ProofMethod.solve` line 315-319),
-        // dispatch fires for any goal.  Gate Premise dispatch on
-        // `!in_precompute_mode()` so saturate skips it.
-        if !crate::constraint::solver::sources::in_precompute_mode()
-            && !red.ctx.full_sources.is_empty()
-            && let Some(case_pairs) =
+    // During saturation only KU source picks use `solveWithSource`; safe
+    // premise goals go directly through `solveGoal`.
+    if !crate::constraint::solver::sources::in_precompute_mode() && !red.ctx.full_sources.is_empty()
+    {
+        use crate::constraint::solver::reduction::GoalCases;
+        use crate::constraint::solver::sources::SourceMatch;
+        let source_result = match g {
+            Goal::Action(i, fa) => {
+                crate::constraint::solver::sources::solve_with_source_cases_action(
+                    red.ctx,
+                    &red.ctx.full_sources,
+                    &red.sys,
+                    i,
+                    fa,
+                    &red.maude,
+                    None,
+                )
+            }
+            Goal::Premise(p, fa) => {
                 crate::constraint::solver::sources::solve_with_source_cases_ctx(
                     red.ctx,
                     &red.ctx.full_sources,
@@ -2718,46 +2723,27 @@ pub(crate) fn dispatch_solve_goal(
                     fa,
                     Some(&red.maude),
                 )
-        {
-            use crate::constraint::solver::reduction::GoalCases;
+            }
+            _ => SourceMatch::NoMatch,
+        };
+        if let SourceMatch::Matched(case_pairs) = source_result {
+            if case_pairs.is_empty() {
+                return GoalCases::Contradictory;
+            }
             if case_pairs.len() == 1 {
                 let (name, sys, branch_counter) = case_pairs.into_iter().next().unwrap();
                 red.sys = sys;
-                // HS FreshT-threading: single-case adoption continues
-                // THIS branch's counter thread (fork + its own
-                // someInst/conjoin draws), not the shared handle's
-                // post-all-cases position.
                 red.maude.reset_counter_to(branch_counter);
                 return GoalCases::LinearNamed(name);
             }
-            if !case_pairs.is_empty() {
-                // Multi-case: record per-branch continuation
-                // counters for the post-solve simplify (consumed
-                // via `last_case_counters`, parallel to the Cases
-                // vec — same contract as the action-path source
-                // adoption in `solve_action_goal`).
-                let mut out: Vec<(String, crate::constraint::system::System)> =
-                    Vec::with_capacity(case_pairs.len());
-                let mut out_counters: Vec<u64> = Vec::with_capacity(case_pairs.len());
-                for (name, sys, branch_counter) in case_pairs {
-                    out.push((name, sys));
-                    out_counters.push(branch_counter);
-                }
-                red.last_case_counters = out_counters;
-                return GoalCases::Cases(out);
+            let mut out = Vec::with_capacity(case_pairs.len());
+            for (name, sys, counter) in case_pairs {
+                out.push(crate::constraint::solver::reduction::GoalBranch { name, sys, counter });
             }
-            // HS-faithful: `solveWithSource` returned `Just` (the
-            // abstract `matchToGoal` matched) but every case was
-            // contradictory at conjoin → zero surviving cases.  HS
-            // renders this `by` (no children, Theory/Proof.hs:1062-1071,
-            // see line 1065); the
-            // node is contradictory.  Return `Contradictory` instead
-            // of falling through to runtime `solve_premise_goal`,
-            // which would re-introduce a shallow producer case HS
-            // never explores.
-            return GoalCases::Contradictory;
+            return GoalCases::Cases(out);
         }
     }
+    red.mark_goal_as_solved(g);
     match g {
         Goal::Action(i, fa) => red.solve_action_goal(i, fa),
         Goal::Premise(p, fa) => red.solve_premise_goal(p, fa),

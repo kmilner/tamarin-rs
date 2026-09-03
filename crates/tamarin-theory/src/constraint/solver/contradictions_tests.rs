@@ -114,7 +114,9 @@ fn non_injective_fact_witness_emitted() {
     };
     let h = MaudeHandle::start(&mp, tamarin_term::maude_sig::pair_maude_sig()).unwrap();
     let mut ctx = ProofContext::new(h, Vec::new());
-    ctx.injective_fact_insts = vec![(inj_tag, Vec::new())];
+    std::sync::Arc::get_mut(&mut ctx.shared)
+        .expect("a fresh context uniquely owns its shared data")
+        .injective_fact_insts = vec![(inj_tag, Vec::new())];
 
     let cs = contradictions(&ctx, &sys);
     let injs: Vec<_> = cs

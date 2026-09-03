@@ -121,6 +121,52 @@ fn insert_goal_marks_changed() {
 }
 
 #[test]
+fn solve_split_prunes_non_normal_arms_before_returning_cases() {
+    use crate::constraint::constraints::Goal;
+    use crate::fact::{Fact, FactTag};
+    use crate::rule::{
+        IntrRuleACInfo, ProtoRuleACInstInfo, ProtoRuleName, Rule, RuleACInst, RuleAttributes,
+        RuleInfo,
+    };
+    use tamarin_term::builtin::{fst, msg_var, pair};
+    use tamarin_term::lterm::{LSort, LVar};
+    use tamarin_term::subst_vfresh::SubstVFresh;
+    use tamarin_term::vterm::var_term;
+
+    let ctx = match ctx() {
+        Some(c) => c,
+        None => return,
+    };
+    let x = LVar::new("x", LSort::Msg, 0);
+    let rule: RuleACInst = Rule::new(
+        RuleInfo::<ProtoRuleACInstInfo, IntrRuleACInfo>::Proto(ProtoRuleACInstInfo {
+            name: ProtoRuleName::Stand("R"),
+            attributes: RuleAttributes::empty(),
+            loop_breakers: Vec::new(),
+        }),
+        Vec::new(),
+        vec![Fact::new(FactTag::Out, vec![fst(var_term(x))])],
+        Vec::new(),
+    );
+    let mut sys = System::empty();
+    sys.add_node(LVar::new("i", LSort::Node, 0), rule);
+    let split = sys.eq_store_mut().add_disj(vec![
+        // This makes the live `fst(x)` reducible and must therefore die.
+        SubstVFresh::from_list(vec![(x, pair(msg_var("a", 1), msg_var("b", 2)))]),
+        // This leaves `fst(x)` in normal form and is the sole survivor.
+        SubstVFresh::from_list(vec![(x, msg_var("y", 3))]),
+    ]);
+    let mut red = Reduction::new(&ctx, sys);
+    red.insert_goal(Goal::Split(split));
+
+    assert!(matches!(
+        red.solve_split_goal(split),
+        GoalCases::LinearNamed(ref name) if name == "split"
+    ));
+    assert!(!red.sys.eq_store.is_false());
+}
+
+#[test]
 fn solve_term_eqs_trivial_equation_no_change() {
     let ctx = match ctx() {
         Some(c) => c,
@@ -493,6 +539,67 @@ fn solve_disj_goal_empty_is_contradictory() {
 }
 
 #[test]
+fn speculative_branch_isolates_reduction_state() {
+    let ctx = match ctx() {
+        Some(c) => c,
+        None => return,
+    };
+    let r = Reduction::new(&ctx, System::empty());
+    let counter = r.maude.fresh_counter_peek();
+
+    let mut trial = r.speculative_branch();
+    trial.maude.fresh_idx();
+    trial.sys.add_goal(Goal::Action(
+        tamarin_term::lterm::LVar::new("i", tamarin_term::lterm::LSort::Node, 0),
+        crate::fact::LNFact::new(crate::fact::FactTag::Out, vec![]),
+    ));
+
+    assert_eq!(r.maude.fresh_counter_peek(), counter);
+    assert!(r.sys.goals.is_empty());
+}
+
+#[test]
+fn equality_formula_split_inherits_solved_bookkeeping() {
+    let Some(path) = require_maude_path() else {
+        return;
+    };
+    let handle = tamarin_term::maude_proc::MaudeHandle::start(
+        &path,
+        tamarin_term::maude_sig::xor_maude_sig(),
+    )
+    .expect("start xor maude");
+    let ctx = ProofContext::new(handle, Vec::new());
+    use crate::atom::ProtoAtom;
+    use crate::guarded::Guarded;
+    use tamarin_term::function_symbols::AcSym;
+    use tamarin_term::lterm::{BVar, LSort, LVar};
+    use tamarin_term::term::f_app_ac;
+    use tamarin_term::vterm::var_term;
+    let var = |name| var_term(BVar::Free(LVar::new(name, LSort::Msg, 0)));
+    let formula = Guarded::Atom(ProtoAtom::EqE(
+        f_app_ac(AcSym::Xor, vec![var("x"), var("a")]),
+        f_app_ac(AcSym::Xor, vec![var("b"), var("y")]),
+    ));
+    let mut red = Reduction::new(&ctx, System::empty());
+
+    let SystemOutcome::Cases(arms) = red.insert_formula(formula.clone()) else {
+        panic!("precondition: XOR equality must split");
+    };
+    assert!(arms
+        .iter()
+        .all(|arm| crate::guarded::stores_contains(&arm.sys.solved_formulas, &formula)));
+
+    let false_formula = crate::guarded::gfalse();
+    let mut red = Reduction::new(&ctx, System::empty());
+    let SystemOutcome::Cases(arms) = red.insert_formulas(&[formula, false_formula.clone()]) else {
+        panic!("formula sequence must preserve the XOR split");
+    };
+    assert!(arms
+        .iter()
+        .all(|arm| crate::guarded::stores_contains(&arm.sys.formulas, &false_formula)));
+}
+
+#[test]
 fn solve_disj_goal_singleton_is_linear() {
     let ctx = match ctx() {
         Some(c) => c,
@@ -536,11 +643,15 @@ fn solve_disj_goal_two_branches_forks() {
         GoalCases::Cases(systems) => {
             assert_eq!(systems.len(), 2);
             assert!(crate::guarded::stores_contains(
-                &systems[0].1.solved_formulas,
+                &systems[0].sys.solved_formulas,
                 &f1
             ));
-            assert!(crate::guarded::stores_contains(&systems[1].1.formulas, &f2));
-            for (_, s) in &systems {
+            assert!(crate::guarded::stores_contains(
+                &systems[1].sys.formulas,
+                &f2
+            ));
+            for branch in &systems {
+                let s = &branch.sys;
                 assert!(s
                     .goals
                     .iter()
@@ -916,7 +1027,7 @@ fn insert_atom_action_creates_action_goal() {
             vec![mkvar_ln("k", LSort::Msg)],
         ),
     );
-    r.insert_atom(&action);
+    assert!(matches!(r.insert_atom(&action), SystemOutcome::Linear));
     assert_eq!(r.sys.goals.len(), 1);
     assert!(matches!(&r.sys.goals[0].0, Goal::Action(_, fact)
             if fact.tag == crate::fact::FactTag::Proto(
@@ -933,7 +1044,7 @@ fn insert_atom_ignores_a_syntactic_atom() {
     };
     let mut r = Reduction::new(&ctx, System::empty());
     let a = crate::atom::ProtoAtom::Syntactic(crate::atom::Unit2);
-    r.insert_atom(&a);
+    assert!(matches!(r.insert_atom(&a), SystemOutcome::Linear));
     assert!(r.sys.goals.is_empty());
     assert!(r.sys.less_atoms.is_empty());
     assert_eq!(r.sys.last_atom, None);
@@ -953,7 +1064,7 @@ fn insert_atom_eq_keeps_the_node_name_tag() {
     let node_name: tamarin_term::lterm::LNTerm =
         tamarin_term::vterm::const_term(Name::new(NameTag::Node, "n1"));
     let a = crate::atom::ProtoAtom::EqE(mkvar_ln("i", LSort::Node), node_name.clone());
-    r.insert_atom(&a);
+    assert!(matches!(r.insert_atom(&a), SystemOutcome::Linear));
     let i = tamarin_term::lterm::LVar::new("i", LSort::Node, 0);
     assert_eq!(
         r.sys.eq_store.subst.image_of(&i),
@@ -972,7 +1083,7 @@ fn insert_atom_less_creates_less_atom() {
     use crate::atom::ProtoAtom;
     use tamarin_term::lterm::LSort;
     let less = ProtoAtom::Less(mkvar_ln("i", LSort::Node), mkvar_ln("j", LSort::Node));
-    r.insert_atom(&less);
+    assert!(matches!(r.insert_atom(&less), SystemOutcome::Linear));
     assert_eq!(r.sys.less_atoms.len(), 1);
     // The order of the endpoints is the complete content of a `Less` atom.
     // The pretty-printer uses the reason tag to tell the user where the
@@ -994,7 +1105,7 @@ fn insert_atom_last_sets_last_atom() {
     use crate::atom::ProtoAtom;
     use tamarin_term::lterm::LSort;
     let last = ProtoAtom::Last(mkvar_ln("i", LSort::Node));
-    r.insert_atom(&last);
+    assert!(matches!(r.insert_atom(&last), SystemOutcome::Linear));
     assert_eq!(
         r.sys.last_atom,
         Some(tamarin_term::lterm::LVar::new(
@@ -1165,7 +1276,10 @@ fn insert_formula_negated_less_mark_false_does_not_push_solved() {
         "precondition: solved_formulas starts empty"
     );
     // mark=false (the Conj/Ex-body-recursion case).
-    r.insert_formula_inner(g.clone(), false);
+    assert!(matches!(
+        r.insert_formula_inner(g.clone(), false),
+        SystemOutcome::Linear
+    ));
     assert!(
         !crate::guarded::stores_contains(&r.sys.solved_formulas, &g),
         "mark=false MUST NOT push the negated-Less universal into \
@@ -1212,7 +1326,10 @@ fn insert_formula_negated_less_mark_true_pushes_solved() {
     let mut r = Reduction::new(&ctx, System::empty());
     let g = neg_less_node_universal("i", "j");
     // mark=true (the top-level entrypoint).
-    r.insert_formula_inner(g.clone(), true);
+    assert!(matches!(
+        r.insert_formula_inner(g.clone(), true),
+        SystemOutcome::Linear
+    ));
     assert!(
         crate::guarded::stores_contains(&r.sys.solved_formulas, &g),
         "mark=true (top-level `insert_formula`) MUST push the \

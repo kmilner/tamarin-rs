@@ -602,8 +602,6 @@ pub struct ProverSession {
     /// stores it once in `TheoryLoadOptions.stopOnTrace`), so it is set on
     /// every per-lemma `ProofContext` in [`Self::setup_per_lemma_ctx`].
     cut: crate::constraint::solver::context::CutStrategy,
-    /// Guarded-form restrictions (constructed once from theory).
-    restrictions: Vec<Guarded>,
     /// Template `ProofContext` carrying the expensive precompute:
     /// `rules` (with variants installed), `intruder_rules`,
     /// `full_sources` (raw, unsaturated cells), etc.
@@ -974,7 +972,7 @@ impl ProverSession {
             raw_chains: raw.chains,
             refined_cases: refined.cases,
             refined_chains: refined.chains,
-            has_restrictions: !self.restrictions.is_empty(),
+            has_restrictions: !self.template_ctx.restrictions.is_empty(),
         })
     }
 
@@ -1121,7 +1119,7 @@ impl ProverSession {
             maude.clone(),
             pool,
             rules,
-            restrictions.clone(),
+            restrictions,
             &forced_injective_facts,
             ndc_cache.cloned(),
         );
@@ -1132,7 +1130,6 @@ impl ProverSession {
             guarded_lemmas_may_fail,
             source_refinement_may_fail,
             cut,
-            restrictions,
             template_ctx: std::sync::Arc::new(template_ctx),
             setup_counter_before,
             source_cache: std::sync::Arc::new(SourceCache::default()),
@@ -1400,7 +1397,7 @@ fn prove_lemma_in_session_mode(
     let reuse_lemmas = gather_reusable_lemmas(theory, lemma_name, lemma_source_kind)?;
 
     let mut sys = formula_to_system(
-        session.restrictions.clone(),
+        session.template_ctx.restrictions.clone(),
         lemma_source_kind,
         lemma.trace_quantifier,
         &g,
