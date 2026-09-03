@@ -23,9 +23,10 @@
 # parser-selected dependencies (folded into hs_run's cache key below), rs_stale_check, the
 # maude resolver and the oracle preflights.
 #
-# The oracle cache (HS_CACHE, default scripts/.hs_sweep_cache/, gitignored)
+# The oracle cache (HS_CACHE, default scripts/.gate_cache/sweep/, gitignored)
 # keys on sha256(theory) + the sweep-provided flag tag + the oracle binary
-# fingerprint + the maude path — oracle output is deterministic for that key,
+# fingerprint + the shared Maude/derivation execution fingerprint — oracle
+# output is deterministic for that key,
 # so iterating on the Rust side never re-runs the oracle. Timeouts are cached
 # WITH their cap: a timeout at cap T satisfies any request with cap <= T
 # (it would time out again), while a finished run satisfies every cap.
@@ -43,7 +44,8 @@ RS_BIN=${RS_BIN:-${RS_PATH:-$REPO/target/release/tamarin-rs}}
 TIMEOUT=${TIMEOUT:-120}
 RETRY_TIMEOUT=${RETRY_TIMEOUT:-600}
 JOBS=${JOBS:-3}
-HS_CACHE=${HS_CACHE:-$REPO/scripts/.hs_sweep_cache}
+HS_CACHE=${HS_CACHE:-$(shared_cache_dir "$REPO" sweep "$REPO/scripts/.hs_sweep_cache")} || exit 2
+SWEEP_DERIVCHECK_TIMEOUT=30
 # Overridable so the ledger machinery can be exercised against a mutated copy
 # without editing the real one.
 LEDGER=${LEDGER:-$REPO/scripts/sweep_expected.tsv}
@@ -100,8 +102,19 @@ nerr() {
 #   when both match.
 io_diff() {
   local d=$1
-  if ! diff -q <(norm < "$d/hs.out") <(norm < "$d/rs.out") >/dev/null; then echo stdout; return 1; fi
-  if ! diff -q <(norm < "$d/hs.err" | nerr) <(norm < "$d/rs.err" | nerr) >/dev/null; then echo stderr; return 1; fi
+  if ! diff -q <(norm < "$d/hs.out" 2>/dev/null) \
+               <(norm < "$d/rs.out" 2>/dev/null) >/dev/null; then
+    echo stdout
+    return 1
+  fi
+  # diff -q deliberately stops reading at the first mismatch. Suppress the
+  # resulting EPIPE diagnostics from the normalizer feeding its process
+  # substitutions; they describe diff's early exit, not a gate failure.
+  if ! diff -q <({ norm < "$d/hs.err" | nerr; } 2>/dev/null) \
+               <({ norm < "$d/rs.err" | nerr; } 2>/dev/null) >/dev/null; then
+    echo stderr
+    return 1
+  fi
   return 0
 }
 
@@ -250,6 +263,7 @@ sweep_preflight() {
   # its captures (rationale, skip conditions and the ALLOW_ORACLE_REV_MISMATCH
   # escape hatch are documented at the definition).
   oracle_rev_check "$HS_BIN" "$MAUDE" "$REPO"
+  execution_fingerprint "$MAUDE" "$SWEEP_DERIVCHECK_TIMEOUT" || exit 2
 }
 sweep_preflight
 
@@ -267,33 +281,31 @@ sweep_preflight
 #   excluding volatile paths (pass e.g. "json+dot", not the tmp-dir flags).
 hs_run() {
   local wd=$1 f=$2 tag=$3; shift 3
-  local key legacy_key legacy_dir file_sha inc ora manifest
-  if ! file_sha=$(file_sha256 "$f") \
-      || ! manifest=$(input_manifest "$f" "$*") \
-      || ! inc=$(_include_shas_from_manifest "$manifest") \
-      || ! ora=$(_oracle_shas_from_manifest "$manifest"); then
+  local key input_key checked_key arg deriv= lock_fd
+  local -a identity_args=()
+  for arg in "$@"; do
+    case "$arg" in
+      --derivcheck-timeout=*) deriv=${arg#*=}; identity_args+=("$arg");;
+      # Export destinations are volatile workdir plumbing. The stable tag
+      # already identifies which artifact-producing mode is requested.
+      --output-json=*|--output-dot=*) ;;
+      *) identity_args+=("$arg");;
+    esac
+  done
+  if [ "$deriv" != "$SWEEP_DERIVCHECK_TIMEOUT" ]; then
+    echo "ERROR: hs_run derivation timeout '${deriv:-missing}' differs from cache identity '$SWEEP_DERIVCHECK_TIMEOUT'" >&2
     : > "$wd/input-manifest.error"
     return 1
   fi
-  key=$( { printf '%s\n' "$file_sha" "$tag" "$HS_FP" "$MAUDE"
-           [ -z "$inc" ] || printf '%s\n' "$inc"
-           [ -z "$ora" ] || printf '%s\n' "$ora"; } | sha256sum | cut -d' ' -f1 )
-  local dir="$HS_CACHE/${key:0:2}/$key"
-  if [ ! -f "$dir/rc" ]; then
-    # Preserve the costly cache generated before hs_fingerprint switched from
-    # size+mtime to binary SHA-256. This must reproduce the former key exactly,
-    # including executable-oracle inputs. Compute it only on a miss: a warm
-    # entry should not pay for a second dependency walk forever.
-    legacy_key=$( { printf '%s\n' "$file_sha" "$tag" "$HS_FP_LEGACY" "$MAUDE"
-                    [ -z "$inc" ] || printf '%s\n' "$inc"
-                    [ -z "$ora" ] || printf '%s\n' "$ora"; } | sha256sum | cut -d' ' -f1 )
-    legacy_dir="$HS_CACHE/${legacy_key:0:2}/$legacy_key"
-    if [ -f "$legacy_dir/rc" ]; then
-      local promote="$dir.promote.$$"
-      mkdir -p "$(dirname "$dir")" && cp -a "$legacy_dir" "$promote" \
-        && mv -T "$promote" "$dir" || rm -rf "$promote"
-    fi
+  if ! input_key=$(input_content_key "$f" "${identity_args[*]}"); then
+    : > "$wd/input-manifest.error"
+    return 1
   fi
+  key=$(printf '%s\n%s\n%s\n%s\n' "$input_key" "$tag" "$HS_FP" "$EXEC_FP" \
+      | sha256sum | cut -d' ' -f1)
+  mkdir -p "$HS_CACHE/${key:0:2}" || return 1
+  cache_entry_lock "$HS_CACHE/${key:0:2}" "$key" lock_fd || return 1
+  local dir="$HS_CACHE/${key:0:2}/$key"
   if [ -f "$dir/rc" ]; then
     local crc ccap
     crc=$(cat "$dir/rc"); ccap=$(cat "$dir/cap")
@@ -302,7 +314,13 @@ hs_run() {
       # would keep doing so after the environment is repaired: drop it and
       # re-run rather than serving it forever.
       if cp "$dir"/hs.* "$wd/"; then
-        if infra_abort "$wd/hs.err"; then rm -rf "$dir"; else return "$crc"; fi
+        if infra_abort "$wd/hs.err" \
+            || transient_silent_failure "$crc" "$wd/hs.out" "$wd/hs.err"; then
+          rm -rf "$dir"
+        else
+          cache_entry_unlock "$lock_fd"
+          return "$crc"
+        fi
       fi
     fi
   fi
@@ -310,11 +328,22 @@ hs_run() {
   local rc=$?
   # Same reason in the other direction: an abort is a property of this
   # environment, so storing it would poison every later sweep at this key.
-  infra_abort "$wd/hs.err" && return "$rc"
+  if infra_abort "$wd/hs.err" \
+      || transient_silent_failure "$rc" "$wd/hs.out" "$wd/hs.err"; then
+    cache_entry_unlock "$lock_fd"
+    return "$rc"
+  fi
+  if ! checked_key=$(input_content_key "$f" "${identity_args[*]}") || [ "$checked_key" != "$input_key" ] \
+      || ! producer_identity_unchanged; then
+    : > "$wd/input-manifest.error"
+    cache_entry_unlock "$lock_fd"
+    return 1
+  fi
   local tmp="$dir.tmp.$$"
   mkdir -p "$tmp" && cp "$wd"/hs.* "$tmp/" \
     && echo "$TIMEOUT" > "$tmp/cap" && echo "$rc" > "$tmp/rc" \
     && mkdir -p "$(dirname "$dir")" && rm -rf "$dir" && mv "$tmp" "$dir"
+  cache_entry_unlock "$lock_fd"
   return "$rc"
 }
 
@@ -340,7 +369,7 @@ sweep_one() {
   d=$(mktemp -d) || return
   hs_run "$d" "$f" "$ctag" "$@"; hrc=$?
   if [ -f "$d/input-manifest.error" ]; then
-    row "${k[@]}" ERROR "input manifest/hash failed${tag:+ $tag}"
+    row "${k[@]}" ERROR "input or producer identity changed${tag:+ $tag}"
     rm -rf "$d"
     return
   fi
@@ -352,7 +381,9 @@ sweep_one() {
   # the RS side would burn the full cap producing nothing to compare against.
   if [ "$hrc" -ge 124 ]; then row "${k[@]}" ERROR "timeout/kill hs=$hrc rs=skipped${tag:+ $tag}"; rm -rf "$d"; return; fi
   grun "$RS_BIN" --with-maude="$MAUDE" "$@" "$f" > "$d/rs.out" 2> "$d/rs.err"; rrc=$?
-  if [ "$rrc" -ge 124 ]; then row "${k[@]}" ERROR "timeout/kill hs=$hrc rs=$rrc${tag:+ $tag}"
+  if ! comparison_identity_unchanged; then
+    row "${k[@]}" ERROR "producer changed during comparison${tag:+ $tag}"
+  elif [ "$rrc" -ge 124 ]; then row "${k[@]}" ERROR "timeout/kill hs=$hrc rs=$rrc${tag:+ $tag}"
   elif nc=$(nocompare_check "$hrc" "$rrc" "$d" "$d/hs.out" "$d/rs.out"); then row "${k[@]}" NO-COMPARE "$nc${tag:+ $tag}"
   elif [ "$hrc" -ne "$rrc" ]; then row "${k[@]}" DIFF "rc hs=$hrc rs=$rrc${tag:+ $tag}"
   elif ! io=$(io_diff "$d"); then row "${k[@]}" DIFF "$io${tag:+ $tag}"
@@ -396,7 +427,7 @@ resolve_list() {
 #   stderr and the sweep reaching sweep_finish with no file at all.
 sweep_out() {
   OUT=${OUT:-$1}
-  mkdir -p "$(dirname "$OUT")" && : > "$OUT" || {
+  claim_output "$OUT" SWEEP_OUT_LOCK_FD || {
     echo "ERROR: cannot write OUT '$OUT' — no row of this sweep would land" >&2
     exit 2
   }
@@ -410,9 +441,16 @@ sweep_out() {
 #   turns up in sweep_finish's row-count check.
 sweep_export() {
   export -f one row grun oom_prologue norm nerr io_diff infra_abort nonempty_compared \
-            nocompare_check file_sha256 input_manifest _include_shas_from_manifest \
-            _oracle_shas_from_manifest hs_run sweep_one "$@"
-  export HS_BIN RS_BIN MAUDE OUT TIMEOUT HS_CACHE HS_FP HS_FP_LEGACY
+            transient_silent_failure \
+            nocompare_check file_sha256 parser_input_manifest manifest_encode manifest_normalize \
+            manifest_decode_into input_manifest \
+            _include_shas_from_manifest _oracle_shas_from_manifest input_content_key \
+            cache_entry_lock cache_entry_unlock binary_sha256 binary_identity_unchanged \
+            execution_identity_unchanged producer_identity_unchanged rs_identity_unchanged \
+            comparison_identity_unchanged hs_run sweep_one "$@"
+  export HS_BIN RS_BIN MAUDE OUT TIMEOUT HS_CACHE HS_FP HS_FP_PATH EXEC_FP \
+         MAUDE_FP MAUDE_FP_PATH RS_FP RS_FP_PATH GATE_COMMON_DIR \
+         SWEEP_DERIVCHECK_TIMEOUT
 }
 
 # sweep_retry <out.tsv> <status-col>

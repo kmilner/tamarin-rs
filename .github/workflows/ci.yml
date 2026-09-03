@@ -147,6 +147,10 @@ jobs:
           submodules: true
       - run: rustup update stable --no-self-update && rustup default stable
       - uses: Swatinem/rust-cache@v2
+      # The focused harness tests fingerprint Graphviz as part of web-cache
+      # producer identity; keep that dependency explicit in this job too.
+      - name: Install Graphviz
+        run: command -v dot >/dev/null || (sudo apt-get update -qq && sudo apt-get install -y -qq graphviz)
       # Pinned Maude — must match the '# maude:' header in
       # scripts/ci_ref_fast.tsv (rs_ref_check.sh enforces this; unifier
       # enumeration order can change between Maude versions).  The release zip
@@ -159,6 +163,8 @@ jobs:
           sudo chmod +x /opt/maude/maude
           echo /opt/maude >> "$GITHUB_PATH"
       - run: cargo build --release
+      - name: Parity harness regression tests
+        run: python3 scripts/test_web_harness.py
       # Prove-output parity: this branch's binary vs the committed reference
       # of main's outputs (scripts/ci_ref_fast.tsv over
       # scripts/parity_corpus_fast.txt).  On DIFF: reproduce locally with

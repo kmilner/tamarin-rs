@@ -16,19 +16,28 @@ proof_now_ms() {
 }
 
 # proof_cache_key <theory> <lemma> [flags]
-#   The extension-free key shared by all three .hs_canon_cache users.
+#   The extension-free key shared by all three .gate_cache/raw users.
 proof_cache_key() {
-    local theory=$1 lemma=$2 flags=${3:-} h inc ora manifest flag_salt=
-    h=$(file_sha256 "$theory" 2>/dev/null) || return 1
-    manifest=$(input_manifest "$theory" "$flags") || return 1
-    inc=$(_include_shas_from_manifest "$manifest") || return 1
-    ora=$(_oracle_shas_from_manifest "$manifest") || return 1
-    if [ -n "$inc" ]; then h="${h}__i$(printf '%s' "$inc" | sha256sum | cut -c1-12)"; fi
-    if [ -n "$ora" ]; then h="${h}__o$(printf '%s' "$ora" | sha256sum | cut -c1-12)"; fi
-    if [ -n "$flags" ]; then
-        flag_salt="__f$(printf '%s' "$flags" | sha256sum | cut -c1-12)"
-    fi
-    printf '%s__%s__v%s%s__b%s' "$h" "$lemma" "$CACHE_VERSION" "$flag_salt" "$HS_FP_SALT"
+    local theory=$1 lemma=$2 flags=${3:-} h
+    [ -n "${EXEC_FP_SALT:-}" ] || {
+        echo "proof_cache_key: execution_fingerprint has not been computed" >&2
+        return 1
+    }
+    h=$(input_content_key "$theory" "$flags") || return 1
+    printf '%s__%s__v%s__e%s__b%s' \
+        "$h" "$lemma" "$CACHE_VERSION" "$EXEC_FP_SALT" "$HS_FP_SALT"
+}
+
+# proof_cache_result <status-file> <payload-file> <variable>
+#   Load a complete, reusable raw-proof result. Statuses at or above timeout's
+#   reserved range are never cacheable: their stdout may have been truncated.
+proof_cache_result() {
+    local status_file=$1 payload_file=$2 variable=$3 cached_status
+    [ -f "$status_file" ] && cache_gzip_valid "$payload_file" || return 1
+    cached_status=$(cat "$status_file") || return 1
+    case "$cached_status" in ''|*[!0-9]*) return 1;; esac
+    [ "$cached_status" -lt 124 ] || return 1
+    printf -v "$variable" '%s' "$cached_status"
 }
 
 # proof_lemmas_of <theory>

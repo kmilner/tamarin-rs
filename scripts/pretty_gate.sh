@@ -6,8 +6,8 @@
 # `--prove` (~1s/file vs minutes) — fast enough to run on every build, and it
 # is exactly the observable the pretty-printer produces on the batch path.
 #
-# WHY A DEDICATED NON-PROVE HS CACHE (scripts/.hs_pretty_cache) and NOT the
-# batch --prove cache (scripts/.hs_file_cache):  the batch cache is `--prove`
+# WHY A DEDICATED NON-PROVE HS CACHE (scripts/.gate_cache/load) and NOT the
+# batch --prove cache (scripts/.gate_cache/proof): the batch cache is `--prove`
 # output, so each lemma there is followed by its full PROOF TREE (solve(...) …
 # qed).  That proof text is SOLVER output, not pretty-printer surface, and it
 # does not appear on the no-prove echo path (lemmas render `by sorry`).  To
@@ -42,13 +42,11 @@ repo_root=$(dirname "$script_dir")
 [ -r "$script_dir/gate_common.sh" ] || { echo "pretty_gate: missing $script_dir/gate_common.sh (owns the shared gate helpers)" >&2; exit 2; }
 . "$script_dir/gate_common.sh"
 oom_prologue
-# Both provers resolve `maude` by NAME from PATH when no --with-maude is
-# passed; the resolver honours the operator's MAUDE_PATH/PATH before falling
-# back to this box's off-PATH linuxbrew install.
+# Resolve one Maude and pass its exact path to both provers.
 MAUDE=$(resolve_maude) || exit 2
 maude_on_path "$MAUDE"
 RS_PATH="${RS_PATH:-$repo_root/target/release/tamarin-rs}"
-HS_CACHE="${HS_CACHE:-$script_dir/.hs_pretty_cache}"
+HS_CACHE="${HS_CACHE:-$(shared_cache_dir "$repo_root" load "$script_dir/.hs_pretty_cache")}" || exit 2
 CORPUS_ROOT="${CORPUS_ROOT:-$repo_root/tamarin-prover/examples}"
 FLAGS_MAP="${FLAGS_MAP:-$script_dir/file_flags.tsv}"
 JOBS="${JOBS:-4}"
@@ -66,19 +64,21 @@ mkdir -p "$HS_CACHE"
 HS_PATH=$(resolve_hs_oracle "$repo_root") || exit 2
 RS_PATH="${RS_PATH:-$repo_root/target/release/tamarin-rs}"
 [ -x "$RS_PATH" ] || { echo "no RS binary at $RS_PATH" >&2; exit 2; }
+rs_stale_check "$RS_PATH" "$repo_root"
 # The oracle binary is required even under NO_HS_FILL: its fingerprint is part
 # of the cache key, so without it no entry can be ADDRESSED, let alone filled.
 [ -x "${HS_PATH:-/nonexistent}" ] || {
     echo "pretty_gate: no HS oracle binary (set HS_PATH) — the cache key carries the oracle's fingerprint, so entries cannot be looked up without it" >&2
     exit 2
 }
-export RS_PATH HS_PATH HS_CACHE CORPUS_ROOT FLAGS_MAP FILE_TIMEOUT DERIVCHECK_TIMEOUT
+export RS_PATH HS_PATH MAUDE HS_CACHE CORPUS_ROOT FLAGS_MAP FILE_TIMEOUT DERIVCHECK_TIMEOUT GATE_COMMON_DIR
 
 # Oracle handshake. The dependency digest sees theory-side scripts, while the
 # provenance check verifies the submodule pin and patch series. The binary's
 # SHA-256 turns every distinct build into a cache miss per entry.
 oracle_rev_check "$HS_PATH" "$MAUDE" "$repo_root"
-export HS_FP HS_FP_SALT
+execution_fingerprint "$MAUDE" "$DERIVCHECK_TIMEOUT" || exit 2
+export HS_FP HS_FP_PATH HS_FP_SALT EXEC_FP EXEC_FP_SALT MAUDE_FP MAUDE_FP_PATH
 
 # strip_env (gate_common.sh): DELETE the four volatile header lines.
 # Isolate the pretty-printed theory echo: `theory … begin … end`, minus the
@@ -106,7 +106,13 @@ extract_theory() {
 }
 # flags_for / ckey come from gate_common.sh — one key format for this gate,
 # wf_gate.sh (which reads THIS cache) and corpus_file_diff.sh.
-export -f file_sha256 strip_env extract_theory flags_for input_manifest _include_shas_from_manifest _oracle_shas_from_manifest ckey
+export -f file_sha256 strip_env extract_theory flags_for parser_input_manifest manifest_encode manifest_normalize \
+    manifest_decode_into input_manifest \
+    _include_shas_from_manifest _oracle_shas_from_manifest input_content_key ckey \
+    cache_entry_lock cache_entry_unlock cache_publish_gzip cache_gzip_valid \
+    hs_load_cache_fill \
+    binary_sha256 binary_identity_unchanged execution_identity_unchanged \
+    producer_identity_unchanged rs_identity_unchanged comparison_identity_unchanged
 
 # --- Phase 0: fill any MISSING no-prove HS reference (fast; warm-cache reused).
 # TWO artifacts per key, from ONE oracle run:
@@ -124,69 +130,58 @@ export -f file_sha256 strip_env extract_theory flags_for input_manifest _include
 # function of .load.gz, so a cache wf_gate filled first is completed by
 # extracting, not by re-loading.
 hs_fill_one() {
-    local rel="$1" f="$CORPUS_ROOT/$1" key fl
+    local rel="$1" f="$CORPUS_ROOT/$1" key fl lock_fd
     [ -f "$f" ] || return 0
     if ! key=$(ckey "$rel" "$f"); then
         echo "  INPUT MANIFEST FAILED  $rel" >&2
         return 0
     fi
     fl=$(flags_for "$rel")
-    [ -f "$HS_CACHE/$key.nohs" ] && return 0
     # `--diff` theories are not on the RS-matchable path; skip filling them.
     # Ahead of the derive step below, so a .load.gz wf_gate left here cannot
     # promote a diff theory into this gate's comparison set.
-    case " $fl " in *" --diff "*) touch "$HS_CACHE/$key.nohs"; return 0;; esac
-    [ -f "$HS_CACHE/$key.theory.gz" ] && [ -f "$HS_CACHE/$key.load.gz" ] && return 0
-    local out
-    if [ -f "$HS_CACHE/$key.load.gz" ]; then
-        out=$(zcat "$HS_CACHE/$key.load.gz" | extract_theory)
-        if [ -z "$out" ]; then touch "$HS_CACHE/$key.nohs"
-        else printf '%s' "$out" | gzip > "$HS_CACHE/$key.theory.gz"; fi
-        return 0
+    case " $fl " in *" --diff "*) return 0;; esac
+    cache_gzip_valid "$HS_CACHE/$key.theory.gz" \
+        && cache_gzip_valid "$HS_CACHE/$key.load.gz" && return 0
+    hs_load_cache_fill "$rel" "$f" "$key" "$fl" "$FILE_TIMEOUT"
+    cache_entry_lock "$HS_CACHE" "$key" lock_fd || return 0
+    if ! cache_gzip_valid "$HS_CACHE/$key.theory.gz" \
+            && cache_gzip_valid "$HS_CACHE/$key.load.gz"; then
+        local derived
+        derived=$(mktemp) || { cache_entry_unlock "$lock_fd"; return 0; }
+        zcat "$HS_CACHE/$key.load.gz" | extract_theory > "$derived"
+        if [ -s "$derived" ]; then
+            cache_publish_gzip "$HS_CACHE/$key.theory.gz" "$derived" || true
+        fi
+        rm -f "$derived"
     fi
-    local tmp load rc; tmp=$(mktemp)
-    # shellcheck disable=SC2086
-    timeout "$FILE_TIMEOUT" "$HS_PATH" $fl --derivcheck-timeout="$DERIVCHECK_TIMEOUT" "$f" >"$tmp" 2>/dev/null
-    rc=$?
-    load=$(strip_env < "$tmp"); rm -f "$tmp"
-    # A killed load leaves PARTIAL stdout, which is worse than none: cached, it
-    # is a reference both gates would diff against forever.  Cache nothing and
-    # leave no marker — the file reports SKIP (a failing verdict) and is
-    # retried, instead of reporting a DIFF against a truncated oracle.
-    # 124 is timeout(1)'s SIGTERM; >=128 is any other signal death (the OOM
-    # killer's 137, an abort's 134), which truncates stdout the same way.
-    if [ "$rc" = 124 ] || [ "$rc" -ge 128 ]; then
-        echo "  HS KILLED   $rel (rc=$rc, cap $FILE_TIMEOUT) — nothing cached" >&2; return 0
-    fi
-    # `.nohs` is a STICKY marker for both gates: no output at all (timeout,
-    # missing maude, parse abort) records it and neither gate re-runs the
-    # oracle at this key.  An environment that was broken during a fill
-    # therefore shows up as SKIP rows in both gates — never as MATCH — and is
-    # cleared with `find <cache> -name '*.nohs' -delete`.
-    if [ -z "$load" ]; then touch "$HS_CACHE/$key.nohs"; return 0; fi
-    printf '%s' "$load" | gzip > "$HS_CACHE/$key.load.gz"
-    out=$(printf '%s\n' "$load" | extract_theory)
-    if [ -z "$out" ]; then touch "$HS_CACHE/$key.nohs"
-    else printf '%s' "$out" | gzip > "$HS_CACHE/$key.theory.gz"; fi
+    cache_entry_unlock "$lock_fd"
 }
 export -f hs_fill_one
 
 # --- Phase 1: RS no-prove + diff vs cached HS theory echo.
 one() {
-    local rel="$1" f="$CORPUS_ROOT/$1" key fl hs rs d
+    local rel="$1" f="$CORPUS_ROOT/$1" key checked_key fl hs rs d rrc
     [ -f "$f" ] || { printf '%s\tSKIP_NO_HS\t0\n' "$rel"; return 0; }
     if ! key=$(ckey "$rel" "$f"); then
         printf '%s\tSKIP_INPUT_MANIFEST\t0\n' "$rel"
         return 0
     fi
     fl=$(flags_for "$rel")
-    [ -f "$HS_CACHE/$key.theory.gz" ] || { printf '%s\tSKIP_NO_HS\t0\n' "$rel"; return 0; }
+    case " $fl " in *" --diff "*) printf '%s\tSKIP_UNSUPPORTED_DIFF\t0\n' "$rel"; return 0;; esac
+    cache_gzip_valid "$HS_CACHE/$key.theory.gz" || { printf '%s\tSKIP_NO_HS\t0\n' "$rel"; return 0; }
     hs=$(zcat "$HS_CACHE/$key.theory.gz")
     local tmp; tmp=$(mktemp)
     # shellcheck disable=SC2086
-    timeout "$FILE_TIMEOUT" "$RS_PATH" $fl --derivcheck-timeout="$DERIVCHECK_TIMEOUT" "$f" >"$tmp" 2>/dev/null
-    if [ "$?" = "124" ]; then rm -f "$tmp"; printf '%s\tSKIP_RS_TIMEOUT\t0\n' "$rel"; return 0; fi
+    timeout "$FILE_TIMEOUT" "$RS_PATH" --with-maude="$MAUDE" $fl --derivcheck-timeout="$DERIVCHECK_TIMEOUT" "$f" >"$tmp" 2>/dev/null
+    rrc=$?
+    if [ "$rrc" = 124 ]; then rm -f "$tmp"; printf '%s\tSKIP_RS_TIMEOUT\t0\n' "$rel"; return 0; fi
+    if [ "$rrc" -ne 0 ]; then rm -f "$tmp"; printf '%s\tSKIP_RS_ERROR\t0\n' "$rel"; return 0; fi
     rs=$(strip_env < "$tmp" | extract_theory); rm -f "$tmp"
+    if ! checked_key=$(ckey "$rel" "$f") || [ "$checked_key" != "$key" ] \
+            || ! comparison_identity_unchanged; then
+        printf '%s\tSKIP_INPUT_CHANGED\t0\n' "$rel"; return 0
+    fi
     d=$(diff <(printf '%s\n' "$hs") <(printf '%s\n' "$rs") | grep -c '^[<>]')
     if [ "$d" = 0 ]; then printf '%s\tMATCH\t0\n' "$rel"; else printf '%s\tDIFF\t%s\n' "$rel" "$d"; fi
 }
@@ -202,6 +197,7 @@ N=$(filelist | grep -c .)
 # Zero files is the whole-run form of comparing nothing: no rows, MATCH=DIFF=0,
 # and a verdict line that reads exactly like a clean gate.
 [ "$N" -gt 0 ] || { echo "the file list resolved to 0 entries — nothing to compare" >&2; exit 2; }
+claim_output "$RESULTS_TSV" RESULTS_LOCK_FD || exit 2
 if [ -z "$NO_HS_FILL" ]; then
     echo "=== PHASE 0: fill missing no-prove HS theory cache ($HS_CACHE) ==="
     filelist | grep . | xargs -P"$JOBS" -I{} bash -c 'hs_fill_one "$@"' _ {}

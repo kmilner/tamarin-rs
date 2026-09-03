@@ -232,9 +232,27 @@ pub fn run(args: &Args) -> Result<i32, RunError> {
 
 fn run_input_manifest(args: &Args) -> Result<i32, RunError> {
     use std::collections::BTreeSet;
+    use std::os::unix::ffi::OsStrExt;
     use std::path::Path;
     use tamarin_parser::ast::TheoryItem;
     use tamarin_parser::LemmaAttr;
+
+    // Manifest rows are line-oriented, so raw paths cannot safely contain a
+    // tab or newline. Prefix a byte-for-byte hex encoding with `x:`; the shared
+    // shell reader decodes it only when a path is actually consumed. Besides
+    // making the delimiters unambiguous, this avoids `Path::display()`'s lossy
+    // replacement of non-UTF-8 Unix path bytes.
+    let path_field = |path: &Path| {
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        let bytes = path.as_os_str().as_bytes();
+        let mut encoded = String::with_capacity(2 + bytes.len() * 2);
+        encoded.push_str("x:");
+        for &byte in bytes {
+            encoded.push(HEX[(byte >> 4) as usize] as char);
+            encoded.push(HEX[(byte & 0x0f) as usize] as char);
+        }
+        encoded
+    };
 
     let root = PathBuf::from(
         args.in_files
@@ -252,11 +270,11 @@ fn run_input_manifest(args: &Args) -> Result<i32, RunError> {
     for alias in &aliases {
         let row = format!(
             "S\t{}\t{}",
-            alias.physical.display(),
+            path_field(&alias.physical),
             alias
                 .staged
                 .as_deref()
-                .map_or_else(String::new, |path| path.display().to_string())
+                .map_or_else(String::new, &path_field)
         );
         if seen_sources.insert(row.clone()) {
             println!("{row}");
@@ -278,10 +296,8 @@ fn run_input_manifest(args: &Args) -> Result<i32, RunError> {
                 let staged = staged_oracle_path(alias, &oracle);
                 oracle_rows.insert(format!(
                     "O\t{}\t{}",
-                    oracle.display(),
-                    staged
-                        .as_deref()
-                        .map_or_else(String::new, |path| path.display().to_string())
+                    path_field(&oracle),
+                    staged.as_deref().map_or_else(String::new, &path_field)
                 ));
             }
         }
@@ -337,10 +353,8 @@ fn run_input_manifest(args: &Args) -> Result<i32, RunError> {
                 };
                 oracle_rows.insert(format!(
                     "O\t{}\t{}",
-                    oracle.display(),
-                    staged
-                        .as_deref()
-                        .map_or_else(String::new, |path| path.display().to_string())
+                    path_field(&oracle),
+                    staged.as_deref().map_or_else(String::new, &path_field)
                 ));
             }
         }

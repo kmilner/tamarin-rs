@@ -11,7 +11,8 @@
 #   Phase 2 (RS): boot RS on the same workdir, crawl, diff (web_diff.py) the
 #                 two manifests semantically (web_normalize.py) → per-url rows.
 #
-# Env: FILE_TIMEOUT (per-file cap, 300s), READY_TIMEOUT (server-boot wait, 90s),
+# Env: FILE_TIMEOUT (per-file cap, 420s), WEB_CRAWL_TIMEOUT (per-request cap,
+#      180s), READY_TIMEOUT (server-boot wait, 90s),
 #      HS_PORT (3021), RS_PORT (3022), CORPUS_ROOT (tamarin-prover/examples/),
 #      ALLOWLIST (REQUIRED: one relpath/line, or the literal `seed` for the
 #      built-in 2-file smoke list), RESULTS_TSV, MAX_NODES
@@ -48,8 +49,12 @@ repo_root="$(cd "$script_dir/.." && pwd)"
 # server, with their own SERVER_MEM_KB cap.)
 [ -r "$script_dir/gate_common.sh" ] || { echo "web_parity: missing $script_dir/gate_common.sh (owns the shared gate helpers)" >&2; exit 2; }
 . "$script_dir/gate_common.sh"
+[ -r "$script_dir/web_cache.sh" ] || { echo "web_parity: missing $script_dir/web_cache.sh" >&2; exit 2; }
+. "$script_dir/web_cache.sh"
 
-FILE_TIMEOUT="${FILE_TIMEOUT:-300}"
+FILE_TIMEOUT="${FILE_TIMEOUT:-420}"
+WEB_CRAWL_TIMEOUT="${WEB_CRAWL_TIMEOUT:-180}"
+export WEB_CRAWL_TIMEOUT
 READY_TIMEOUT="${READY_TIMEOUT:-90}"
 HS_PORT="${HS_PORT:-3021}"
 RS_PORT="${RS_PORT:-3022}"
@@ -63,12 +68,12 @@ LEDGER="${WEB_LEDGER:-$script_dir/websweep_ledger.tsv}"
 LEDGER_REPORTS=0
 
 # Crawl-plan version handshake. The version participates in the cache profile
-# and remains stamped inside each manifest as defence in depth. Import the
-# constant rather than re-parsing it, so the two sides cannot drift.
-PLAN_VERSION="$(python3 -c \
-    'import sys; sys.path.insert(0,sys.argv[1]); import web_crawl; print(web_crawl.PLAN_VERSION)' \
-    "$script_dir")"
+# and remains stamped inside each manifest as defence in depth. Read the
+# literal from the crawler source without importing potentially stale bytecode.
+PLAN_VERSION="$(web_crawl_constant "$script_dir/web_crawl.py" PLAN_VERSION)"
+PLAN_VERSION_KEY="$(web_crawl_constant "$script_dir/web_crawl.py" PLAN_VERSION_KEY)"
 [ -n "$PLAN_VERSION" ] || { echo "cannot read PLAN_VERSION from web_crawl.py" >&2; exit 2; }
+[ -n "$PLAN_VERSION_KEY" ] || { echo "cannot read PLAN_VERSION_KEY from web_crawl.py" >&2; exit 2; }
 
 # Plan version of a cached HS manifest.  A stamp is authoritative.  An ABSENT
 # stamp is NOT evidence of the current plan: stamping was introduced together
@@ -83,22 +88,19 @@ PLAN_VERSION="$(python3 -c \
 cached_plan_version() {
     python3 -c '
 import json, sys
-sys.path.insert(0, sys.argv[2])
-import web_crawl
 d = json.load(open(sys.argv[1]))
-v = d.get(web_crawl.PLAN_VERSION_KEY)
+v = d.get(sys.argv[2])
 if v is None:
     urls = d.get("manifest", {})
     v = 2 if (any("/json/cases/" in u for u in urls)
               and any(u.endswith("/main/cases/raw/1/1") for u in urls)) else 1
-print(v)' \
-        "$1" "$script_dir" 2>/dev/null
+print(v)' "$1" "$PLAN_VERSION_KEY" 2>/dev/null
 }
 
 HS_PATH=$(resolve_hs_oracle "$repo_root") || exit 2
 RS_PATH="${RS_PATH:-$repo_root/target/release/tamarin-rs}"
-# Both servers probe `maude` by name; resolve one (MAUDE_PATH > PATH >
-# linuxbrew, hard fail otherwise) and put its directory on PATH for them.
+# Resolve one Maude (MAUDE_PATH > PATH > linuxbrew, hard fail otherwise) and
+# pass its exact path to both servers.
 MAUDE_PATH=$(resolve_maude) || exit 2
 maude_on_path "$MAUDE_PATH"
 
@@ -106,10 +108,12 @@ maude_on_path "$MAUDE_PATH"
 # current patch series. The binary SHA-256 also keys the general gate caches;
 # web_cache.sh folds it into a profile shared with pane_byte_check.sh.
 oracle_rev_check "$HS_PATH" "$MAUDE_PATH" "$repo_root"
-[ -r "$script_dir/web_cache.sh" ] || { echo "web_parity: missing $script_dir/web_cache.sh" >&2; exit 2; }
-. "$script_dir/web_cache.sh"
 web_cache_init "$repo_root" "$script_dir" "$HS_PATH" "$PLAN_VERSION" \
     || { echo "web_parity: cannot select HS web cache" >&2; exit 2; }
+web_comparator_init "$script_dir" \
+    || { echo "web_parity: cannot capture web comparator identity" >&2; exit 2; }
+WEB_ACTIVE_WORKDIR=
+trap 'web_abort_active_boot; [ -z "$WEB_ACTIVE_WORKDIR" ] || rm -rf -- "$WEB_ACTIVE_WORKDIR"; exit 130' HUP INT TERM
 
 # Auto-build RS (opt out with TAM_RS_NO_AUTO_BUILD=1).
 if [ -z "${TAM_RS_NO_AUTO_BUILD:-}" ]; then
@@ -118,6 +122,7 @@ if [ -z "${TAM_RS_NO_AUTO_BUILD:-}" ]; then
         echo "RS build failed" >&2; exit 2; }
 fi
 [ -x "$RS_PATH" ] || { echo "no RS binary at $RS_PATH" >&2; exit 2; }
+rs_stale_check "$RS_PATH" "$repo_root"
 
 # --- file list ---
 # ALLOWLIST is mandatory. It used to fall back to the seed list whenever it was
@@ -199,60 +204,15 @@ if [ "$LEDGER" != none ]; then
     done < <(grep -v '^[[:space:]]*#' "$LEDGER" | cut -f1 | grep . | sort -u)
 fi
 
-# Boot a server, wait until it answers on / , run the crawl, then kill it
-# (whole process group, to reap maude children).  Args: bin port workdir out.
-boot_crawl() {
-    local bin="$1" port="$2" wd="$3" out="$4" kind="$5"
-    local log="$wd/${kind}_server.log" pid
-    local -a load_flags=()
-    [ -z "${theory_flags:-}" ] || read -r -a load_flags <<< "$theory_flags"
-    # Pin the derivcheck budget like corpus_file_diff.sh does (30s): HS's
-    # 5s default expires deterministically on ~12 corpus files even idle,
-    # replacing the derivation report with a timeout block RS never emits
-    # (48 bogus DIFF rows in the 2026-07-05 sweep).  RS honours the flag on
-    # its web path too: `run_interactive` writes it into `ServerConfig`, and
-    # every theory load reads it from there.
-    # OOM containment: the server (and the maude children that inherit
-    # these settings) is the sacrificial process, not the session — a
-    # theory whose source computation heap-exhausts (LAK06-class) must
-    # die at the cap and yield a SKIP/MISSING row, never take the
-    # machine down.  Same guards as wf_gate.sh / pretty_gate.sh.
-    ( echo 1000 > /proc/self/oom_score_adj 2>/dev/null
-      ulimit -v "${SERVER_MEM_KB:-25165824}" 2>/dev/null
-      exec setsid "$bin" interactive "$wd/thy" --port="$port" \
-        --derivcheck-timeout="${DERIVCHECK_TIMEOUT:-30}" "${load_flags[@]}" ) >"$log" 2>&1 &
-    pid=$!
-    # wait for readiness
-    local ok="" i
-    for ((i=0; i<READY_TIMEOUT; i++)); do
-        if curl -sf -o /dev/null "http://127.0.0.1:$port/"; then ok=1; break; fi
-        kill -0 "$pid" 2>/dev/null || break
-        sleep 1
-    done
-    if [ -z "$ok" ]; then
-        echo "  $kind server not ready ($wd)" >&2
-        kill -- -"$pid" 2>/dev/null; wait "$pid" 2>/dev/null
-        return 1
-    fi
-    # shellcheck disable=SC2086  # CRAWL_EXTRA_ARGS must word-split
-    timeout "$FILE_TIMEOUT" python3 "$script_dir/web_crawl.py" \
-        "http://127.0.0.1:$port" "$out" --max-nodes "$MAX_NODES" ${CRAWL_EXTRA_ARGS:-} 2>>"$log"
-    local rc=$?
-    kill -- -"$pid" 2>/dev/null; wait "$pid" 2>/dev/null
-    return $rc
-}
-
 one_file() {
     local rel="$1" f="$CORPUS_ROOT/$1"
     [ -f "$f" ] || { printf '%s\t-\tSKIP_NO_FILE\t-\t-\t-\n' "$rel"; return 0; }
     # A theory with no lemma declaration legitimately discovers 0 lemmas —
     # allow it; otherwise 0 discovered lemmas is a transient failure and
     # web_crawl.py exits 3 (→ SKIP_*_FAIL below, manifest never cached).
-    local CRAWL_EXTRA_ARGS=""
-    grep -qE '^[[:space:]]*(lemma|equivLemma|diffLemma)([[:space:]]|\[|:)' "$f" \
-        || CRAWL_EXTRA_ARGS="--allow-no-lemmas"
-    export CRAWL_EXTRA_ARGS
-    local theory_flags
+    local CRAWL_EXTRA_ARGS
+    CRAWL_EXTRA_ARGS=$(web_crawl_args_for_theory "$f")
+    local theory_flags diagnostics
     if ! theory_flags=$(web_flags_for "$rel"); then
         printf '%s\t-\tSKIP_UNSUPPORTED_FLAGS\t-\t-\t-\n' "$rel"
         return 0
@@ -263,11 +223,20 @@ one_file() {
         return 0
     fi
     local hs_manifest="$CACHE/$key.hs.json" hs_fp_file="$CACHE/$key.hs.fp"
-    local wd; wd=$(mktemp -d)
+    local wd; wd=$(web_make_workdir) || {
+        printf '%s\t-\tSKIP_WORKDIR\t-\t-\t-\n' "$rel"; return 0
+    }
+    WEB_ACTIVE_WORKDIR=$wd
     mkdir -p "$wd/thy"
     if ! web_stage_inputs "$f" "$wd/thy" "$theory_flags" "$wd"; then
         rm -rf "$wd"
         printf '%s\t-\tSKIP_INPUT_STAGE\t-\t-\t-\n' "$rel"; return 0
+    fi
+    local checked_key
+    if ! checked_key=$(web_cache_key "$rel" "$f" "$theory_flags") \
+            || [ "$checked_key" != "$key" ] || ! web_producer_identity_unchanged; then
+        rm -rf "$wd"
+        printf '%s\t-\tSKIP_INPUT_CHANGED\t-\t-\t-\n' "$rel"; return 0
     fi
 
     # Phase 1: HS (cached, and only while the cached crawl plan AND the oracle
@@ -279,8 +248,7 @@ one_file() {
         rm -rf "$wd"
         printf '%s\t-\tSKIP_CACHE_LOCK\t-\t-\t-\n' "$rel"; return 0
     fi
-    web_cache_adopt_legacy "$key" "$f" "$PLAN_VERSION" || true
-    if [ -f "$hs_manifest" ]; then
+    if [ "$WEB_CACHE_MODE" = legacy-explicit ] && [ -f "$hs_manifest" ]; then
         local hs_plan; hs_plan=$(cached_plan_version "$hs_manifest")
         if [ "$hs_plan" != "$PLAN_VERSION" ]; then
             echo "  stale HS manifest (crawl plan ${hs_plan:-?} != $PLAN_VERSION) — re-crawling" >&2
@@ -296,34 +264,67 @@ one_file() {
         fi
     fi
     if [ ! -f "$hs_manifest" ]; then
-        if ! MAUDE_PATH="$MAUDE_PATH" boot_crawl "$HS_PATH" "$HS_PORT" "$wd" "$wd/hs-new.json" hs; then
+        if ! web_boot_crawl "$HS_PATH" "$HS_PORT" \
+                "$wd" "$wd/hs-new.json" hs "$theory_flags" "$CRAWL_EXTRA_ARGS"; then
             web_cache_unlock; rm -rf "$wd"
             printf '%s\t-\tSKIP_HS_FAIL\t-\t-\t-\n' "$rel"; return 0
+        fi
+        local new_plan
+        if ! new_plan=$(web_manifest_plan_version "$wd/hs-new.json" "$PLAN_VERSION_KEY") \
+                || [ "$new_plan" != "$PLAN_VERSION" ]; then
+            echo "  invalid HS manifest plan (${new_plan:-missing} != $PLAN_VERSION)" >&2
+            web_cache_unlock; rm -rf "$wd"
+            printf '%s\t-\tSKIP_HS_PLAN\t-\t-\t-\n' "$rel"; return 0
+        fi
+        if ! checked_key=$(web_cache_key "$rel" "$f" "$theory_flags") \
+                || [ "$checked_key" != "$key" ] || ! web_producer_identity_unchanged; then
+            web_cache_unlock; rm -rf "$wd"
+            printf '%s\t-\tSKIP_INPUT_CHANGED\t-\t-\t-\n' "$rel"; return 0
         fi
         if ! web_cache_publish "$key" "$wd/hs-new.json"; then
             web_cache_unlock; rm -rf "$wd"
             printf '%s\t-\tSKIP_CACHE_WRITE\t-\t-\t-\n' "$rel"; return 0
         fi
     fi
-    if ! cp "$hs_manifest" "$wd/hs.json"; then
+    if ! web_cache_snapshot "$hs_manifest" "$wd/hs.json"; then
         web_cache_unlock; rm -rf "$wd"
         printf '%s\t-\tSKIP_CACHE_READ\t-\t-\t-\n' "$rel"; return 0
     fi
     web_cache_unlock
     # Phase 2: RS
     local rs_manifest="$wd/rs.json"
-    if ! boot_crawl "$RS_PATH" "$RS_PORT" "$wd" "$rs_manifest" rs; then
+    if ! web_boot_crawl "$RS_PATH" "$RS_PORT" "$wd" "$rs_manifest" rs \
+            "$theory_flags" "$CRAWL_EXTRA_ARGS"; then
         rm -rf "$wd"
         printf '%s\t-\tSKIP_RS_FAIL\t-\t-\t-\n' "$rel"; return 0
     fi
     # diff. Both crawls succeeded, so an empty or absent parity.tsv means the
     # differ itself fell over — which used to emit no rows for the file at all,
     # a file that silently left the run rather than a file that matched.
-    python3 "$script_dir/web_diff.py" "$wd/hs.json" "$rs_manifest" \
-        "$wd/parity.tsv" "$DIFFDIR/$rel" >/dev/null 2>&1
-    if [ ! -s "$wd/parity.tsv" ]; then
+    if ! checked_key=$(web_cache_key "$rel" "$f" "$theory_flags") \
+            || [ "$checked_key" != "$key" ] || ! web_comparison_identity_unchanged; then
+        rm -rf "$wd"
+        printf '%s\t-\tSKIP_INPUT_CHANGED\t-\t-\t-\n' "$rel"; return 0
+    fi
+    if ! web_python_isolated "$wd/diff-pycache" \
+            python3 "$script_dir/web_diff.py" "$wd/hs.json" "$rs_manifest" \
+            "$wd/parity.tsv" "$wd/diffs" >/dev/null 2>&1 \
+            || [ ! -s "$wd/parity.tsv" ]; then
         rm -rf "$wd"
         printf '%s\t-\tSKIP_DIFF_FAIL\t-\t-\t-\n' "$rel"; return 0
+    fi
+    if ! checked_key=$(web_cache_key "$rel" "$f" "$theory_flags") \
+            || [ "$checked_key" != "$key" ] || ! web_comparison_identity_unchanged; then
+        rm -rf "$wd"
+        printf '%s\t-\tSKIP_INPUT_CHANGED\t-\t-\t-\n' "$rel"; return 0
+    fi
+    diagnostics=$(web_diagnostic_target "$DIFFDIR" "$rel") || {
+        rm -rf "$wd"
+        printf '%s\t-\tSKIP_DIFF_WRITE\t-\t-\t-\n' "$rel"; return 0
+    }
+    if ! web_publish_diagnostics "$wd/diffs" "$diagnostics"; then
+        rm -rf "$wd"
+        printf '%s\t-\tSKIP_DIFF_WRITE\t-\t-\t-\n' "$rel"; return 0
     fi
     # prefix each row with the file
     awk -F'\t' -v r="$rel" '{print r"\t"$0}' "$wd/parity.tsv"
@@ -408,12 +409,11 @@ echo "web_parity: HS=$HS_PATH  fp=$HS_FP" >&2
 echo "web_parity: RS=$RS_PATH  maude=$MAUDE_PATH" >&2
 echo "web_parity: HS-cache=$CACHE  mode=$WEB_CACHE_MODE" >&2
 echo "web_parity: ledger=$LEDGER" >&2
-mkdir -p "$(dirname "$RESULTS_TSV")"
-: > "$RESULTS_TSV" || { echo "cannot write RESULTS_TSV '$RESULTS_TSV'" >&2; exit 2; }
 N=$(filelist | grep -c .)
 # Zero files is the whole-run form of comparing nothing: no rows, an empty
 # summary, and a DONE line that looks exactly like a clean sweep.
 [ "$N" -gt 0 ] || { echo "ALLOWLIST '$ALLOWLIST' has no entries — nothing to crawl" >&2; exit 2; }
+claim_output "$RESULTS_TSV" RESULTS_LOCK_FD || exit 2
 i=0
 while IFS= read -r rel; do
     [ -n "$rel" ] || continue

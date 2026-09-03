@@ -8,8 +8,10 @@
 # no lemma slicing. Anything else that differs is a rendering or proof-search
 # divergence to fix.
 #
-# HS results are cached as RAW gzipped stdout (<key>.full.gz) in the cache
-# shared with diff_proof_raw.sh. Existing <key>.timeout markers are honoured.
+# HS results are cached as paired RAW stdout and exit status
+# (<key>.full.gz + <key>.rc) in the cache shared with diff_proof_raw.sh. Only
+# cap-bearing timeout markers written by the current harness are honoured;
+# incomplete result pairs and ambiguous legacy markers are retried.
 #
 # Usage:
 #   corpus_raw_diff.sh                 # smaller corpus (pre-expansion 17-dir list)
@@ -52,7 +54,7 @@ CACHE_VERSION="${CACHE_VERSION:-1}"
 # (records a "Derivation checks timed out" placeholder) while RS computes fully
 # — a spurious DIFF.  30s lets both compute fully (deriv-check verified faithful).
 DERIVCHECK_TIMEOUT="${DERIVCHECK_TIMEOUT:-30}"
-HS_CANON_CACHE="${HS_CANON_CACHE:-$script_dir/.hs_canon_cache}"
+HS_CANON_CACHE="${HS_CANON_CACHE:-$(shared_cache_dir "$repo_root" raw "$script_dir/.hs_canon_cache")}" || exit 2
 NO_HS_CACHE="${NO_HS_CACHE:-}"
 # HS RTS flags. Upstream commit 00a282da ("Canonicalise maude's returned
 # substitution entries", Maude/Types.hs:134) made HS proofs schedule-
@@ -82,19 +84,29 @@ if [ ! -x "$rs_path" ]; then
     echo "corpus_raw_diff.sh: RS binary not built at $rs_path" >&2
     exit 2
 fi
+rs_stale_check "$rs_path" "$repo_root"
 
 # --- Cache key: identical to diff_proof_raw.sh's flagless form. It carries the
-# oracle-binary fingerprint (gate_common's hs_fingerprint) so a rebuilt oracle
-# is a MISS, not a stale hit; scripts/migrate_hs_cache_fp.sh rekeyed older
-# entries onto the same form.
-hs_fingerprint "$hs_path"
+# oracle and execution fingerprints, so a rebuilt oracle, changed Maude or
+# derivation timeout is a MISS rather than a stale hit.
+MAUDE=$(resolve_maude) || exit 2
+maude_on_path "$MAUDE"
+oracle_rev_check "$hs_path" "$MAUDE" "$repo_root"
+execution_fingerprint "$MAUDE" "$DERIVCHECK_TIMEOUT" || exit 2
 
 # --- strip_env_lines (gate_common.sh): delete the only lines that
 # legitimately differ between the two binaries, keeping `analyzed:` visible
 # (the cache hit rewrites its path to this invocation's).
-export -f file_sha256 proof_now_ms proof_cache_key proof_lemmas_of input_manifest _include_shas_from_manifest _oracle_shas_from_manifest strip_env_lines
+export -f file_sha256 proof_now_ms proof_cache_key proof_cache_result proof_lemmas_of parser_input_manifest \
+    manifest_encode manifest_normalize manifest_decode_into input_manifest _include_shas_from_manifest _oracle_shas_from_manifest \
+    input_content_key strip_env_lines cache_entry_lock cache_entry_unlock \
+    cache_publish_text cache_publish_gzip cache_publish_proof cache_gzip_valid binary_sha256 \
+    binary_identity_unchanged execution_identity_unchanged \
+    producer_identity_unchanged rs_identity_unchanged comparison_identity_unchanged \
+    duration_seconds
 export HS_PATH="$hs_path" RS_PATH="$rs_path" TIMEOUT RS_TIMEOUT EXTRA_ENV \
-       HS_CANON_CACHE CACHE_VERSION NO_HS_CACHE DERIVCHECK_TIMEOUT HS_RTS HS_FP_SALT
+       HS_CANON_CACHE CACHE_VERSION NO_HS_CACHE DERIVCHECK_TIMEOUT HS_RTS \
+       HS_FP HS_FP_PATH HS_FP_SALT EXEC_FP_SALT MAUDE_FP MAUDE_FP_PATH MAUDE GATE_COMMON_DIR
 
 # --- Per-lemma worker. Emits ONE machine-parseable line:
 #       <file>\t<lemma>\t<status>\t<hs_lines>\t<rs_lines>\t<diff>\t<hs_ms>\t<rs_ms>
@@ -104,61 +116,93 @@ worker() {
     # shellcheck disable=SC2064
     trap "rm -rf '$tmp'" RETURN
 
-    local hs_out="$tmp/hs.out" hs_rc=0 hs_ms="-"
-    local key="" key_full="" key_timeout=""
+    local hs_out="$tmp/hs.out" hs_rc=0 hs_ms="-" hs_ready=0
+    local key="" key_full="" key_rc="" key_timeout="" lock_fd=""
+    if [ "$cache_template" = "!" ]; then
+        printf '%s\t%s\tSKIP_INPUT_MANIFEST\t0\t0\t-\t-\t-\n' "$f" "$lemma"
+        return 0
+    fi
+    local cache_id=${cache_template/__LEMMA__/$lemma}
     if [ -z "$NO_HS_CACHE" ]; then
-        if [ "$cache_template" = "!" ]; then
-            printf '%s\t%s\tSKIP_INPUT_MANIFEST\t0\t0\t-\t-\t-\n' "$f" "$lemma"
-            return 0
-        fi
-        local cache_id=${cache_template/__LEMMA__/$lemma}
         key="$HS_CANON_CACHE/$cache_id.canon"
         key_full="${key%.canon}.full.gz"
+        key_rc="${key%.canon}.rc"
         key_timeout="${key%.canon}.timeout"
+        cache_entry_lock "$HS_CANON_CACHE" "$cache_id" lock_fd || {
+            printf '%s\t%s\tSKIP_CACHE_LOCK\t0\t0\t-\t-\t-\n' "$f" "$lemma"
+            return 0
+        }
     fi
     if [ -n "$key" ] && [ -f "$key_timeout" ]; then
-        hs_rc=124
-        : > "$hs_out"
-    elif [ -n "$key" ] && [ -f "$key_full" ]; then
-        # Content-keyed cache: rewrite the path-echoing "analyzed:" line to
-        # THIS invocation's path (a hit recorded from another checkout/worktree
-        # would otherwise produce a spurious path-only diff).
+        local old_cap old_seconds current_seconds
+        old_cap=$(cat "$key_timeout")
+        case "$old_cap" in timeout:*) old_cap=${old_cap#timeout:};; *) old_cap=;; esac
+        old_seconds=$(duration_seconds "$old_cap") || old_seconds=
+        current_seconds=$(duration_seconds "$TIMEOUT") || current_seconds=
+        if [ -n "$old_seconds" ] && [ -n "$current_seconds" ] \
+                && [ "$old_seconds" -ge "$current_seconds" ]; then
+            hs_rc=124
+            hs_ready=1
+            : > "$hs_out"
+        else
+            rm -f "$key_timeout"
+        fi
+    fi
+    if [ "$hs_ready" -eq 0 ] && [ -n "$key" ] \
+            && proof_cache_result "$key_rc" "$key_full" hs_rc; then
         gzip -dc "$key_full" 2>/dev/null \
             | awk -v f="$f" '/^analyzed: / { print "analyzed: " f; next } { print }' \
             > "$hs_out"
-    else
+        hs_ready=1
+    elif [ "$hs_ready" -eq 0 ]; then
+        # A payload without status is a legacy partial result, not a cache hit.
+        [ -z "$key" ] || rm -f "$key_full" "$key_rc"
         local hs_t0; hs_t0=$(proof_now_ms)
-        timeout "$TIMEOUT" "$HS_PATH" +RTS $HS_RTS -RTS --derivcheck-timeout="$DERIVCHECK_TIMEOUT" --prove="$lemma" "$f" 2>/dev/null > "$hs_out"
+        timeout "$TIMEOUT" "$HS_PATH" +RTS $HS_RTS -RTS --with-maude="$MAUDE" --derivcheck-timeout="$DERIVCHECK_TIMEOUT" --prove="$lemma" "$f" 2>/dev/null > "$hs_out"
         hs_rc=$?
         hs_ms=$(( $(proof_now_ms) - hs_t0 ))
         if [ -n "$key" ]; then
-            # >=128 is a signal death (OOM's 137), which truncates stdout the
-            # same way the timeout does: marker, never the partial payload.
-            if [ "$hs_rc" -eq 124 ] || [ "$hs_rc" -ge 128 ]; then
-                : > "$key_timeout" 2>/dev/null || true
-            elif [ -s "$hs_out" ]; then
-                # Never cache EMPTY HS output: empty means HS failed to start
-                # (missing maude on PATH, unset LANG, OOM, ...) and caching it
-                # poisons every later sweep (642 entries on 2026-06-11).
-                # Leave uncached so the lemma is retried next run.
-                gzip -c "$hs_out" > "$key_full" 2>/dev/null || true
+            local checked_id
+            if ! checked_id=$(proof_cache_key "$f" "$lemma") \
+                    || [ "$checked_id" != "$cache_id" ] \
+                    || ! producer_identity_unchanged; then
+                cache_entry_unlock "$lock_fd"
+                printf '%s\t%s\tSKIP_INPUT_CHANGED\t0\t0\t-\t%s\t-\n' "$f" "$lemma" "$hs_ms"
+                return 0
+            fi
+            # timeout's reserved status range includes both its own 124 and
+            # signal deaths (for example OOM's 137): never cache their partial
+            # stdout.
+            if [ "$hs_rc" -eq 124 ]; then
+                cache_publish_text "$key_timeout" "timeout:${TIMEOUT}" 2>/dev/null || true
+            elif [ "$hs_rc" -lt 124 ]; then
+                cache_publish_proof "$key_rc" "$key_full" "$hs_rc" "$hs_out" 2>/dev/null || true
             fi
         fi
     fi
+    [ -z "$lock_fd" ] || cache_entry_unlock "$lock_fd"
 
-    # HS timed out or was signal-killed (cached marker or live run): the
+    # HS timed out or was signal-killed (cached timeout or live run): the
     # comparison is void, so do NOT run RS at all. The lemmas where HS times
     # out are exactly the jcs18-class monsters where RS's 300s of unbounded
     # search OOMs the machine (observed 17-43 GB RSS per worker, 2026-06-10).
-    if [ "$hs_rc" -eq 124 ] || [ "$hs_rc" -ge 128 ]; then
+    if [ "$hs_rc" -ge 124 ]; then
         printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$f" "$lemma" "SKIP_TIMEOUT" "0" "0" "-" "$hs_ms" "-"
         return 0
     fi
 
     local rs_t0; rs_t0=$(proof_now_ms)
-    timeout "$RS_TIMEOUT" env $EXTRA_ENV "$RS_PATH" --derivcheck-timeout="$DERIVCHECK_TIMEOUT" --prove="$lemma" "$f" 2>/dev/null > "$tmp/rs.out"
+    timeout "$RS_TIMEOUT" env $EXTRA_ENV "$RS_PATH" --with-maude="$MAUDE" --derivcheck-timeout="$DERIVCHECK_TIMEOUT" --prove="$lemma" "$f" 2>/dev/null > "$tmp/rs.out"
     local rs_rc=$?
     local rs_ms=$(( $(proof_now_ms) - rs_t0 ))
+
+    if ! checked_id=$(proof_cache_key "$f" "$lemma") \
+            || [ "$checked_id" != "$cache_id" ] \
+            || ! comparison_identity_unchanged; then
+        printf '%s\t%s\tSKIP_INPUT_CHANGED\t0\t0\t-\t%s\t%s\n' \
+            "$f" "$lemma" "$hs_ms" "$rs_ms"
+        return 0
+    fi
 
     strip_env_lines "$hs_out"    > "$tmp/hs.cmp"
     strip_env_lines "$tmp/rs.out" > "$tmp/rs.cmp"
@@ -167,16 +211,19 @@ worker() {
     hs_lines=$(grep -c . "$tmp/hs.cmp"); hs_lines=${hs_lines// /}
     rs_lines=$(grep -c . "$tmp/rs.cmp"); rs_lines=${rs_lines// /}
 
-    if [ "$hs_rc" -eq 124 ] || [ "$hs_rc" -ge 128 ] \
-       || [ "$rs_rc" -eq 124 ] || [ "$rs_rc" -ge 128 ]; then
+    if [ "$hs_rc" -ge 124 ] || [ "$rs_rc" -ge 124 ]; then
         printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$f" "$lemma" "SKIP_TIMEOUT" "$hs_lines" "$rs_lines" "-" "$hs_ms" "$rs_ms"
         return 0
     fi
-    if [ "$hs_lines" -eq 0 ]; then
+    if [ "$hs_rc" -ne "$rs_rc" ]; then
+        printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$f" "$lemma" "RC_DIFF" "$hs_lines" "$rs_lines" "$hs_rc/$rs_rc" "$hs_ms" "$rs_ms"
+        return 0
+    fi
+    if [ "$hs_rc" -eq 0 ] && [ "$hs_lines" -eq 0 ]; then
         printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$f" "$lemma" "SKIP_NO_HS" "$hs_lines" "$rs_lines" "-" "$hs_ms" "$rs_ms"
         return 0
     fi
-    if [ "$rs_lines" -eq 0 ]; then
+    if [ "$rs_rc" -eq 0 ] && [ "$rs_lines" -eq 0 ]; then
         printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$f" "$lemma" "SKIP_RS_ERR" "$hs_lines" "$rs_lines" "-" "$hs_ms" "$rs_ms"
         return 0
     fi
@@ -237,9 +284,7 @@ for f in "${files[@]}"; do
         filtered_files=$((filtered_files+1))
         continue
     fi
-    cache_template="-"
-    if [ -z "$NO_HS_CACHE" ] \
-        && ! cache_template=$(proof_cache_key "$f" "__LEMMA__"); then
+    if ! cache_template=$(proof_cache_key "$f" "__LEMMA__"); then
         cache_template="!"
     fi
     while IFS= read -r lem; do
@@ -263,7 +308,7 @@ RESULTS_TSV="${RESULTS_TSV:-/tmp/corpus_raw_diff_results.tsv}"
 cp "$results.sorted" "$RESULTS_TSV" 2>/dev/null || true
 echo "# per-lemma results: $RESULTS_TSV" >&2
 
-match=0; diffn=0; skip_no_hs=0; skip_rs_err=0; skip_timeout=0
+match=0; diffn=0; rc_diff=0; skip_no_hs=0; skip_rs_err=0; skip_timeout=0
 declare -a divergent=() rs_times=() hs_times=()
 declare -a rs_slow=() hs_slow=()
 while IFS=$'\t' read -r f lem status hs rs d hs_ms rs_ms; do
@@ -272,6 +317,7 @@ while IFS=$'\t' read -r f lem status hs rs d hs_ms rs_ms; do
     case "$status" in
         MATCH)        match=$((match+1));        echo "$f::$lem: MATCH (HS:$hs, RS:$rs)$t";;
         DIFF)         diffn=$((diffn+1));         echo "$f::$lem: $d diff lines (HS:$hs, RS:$rs)$t"; divergent+=("$d"$'\t'"$f::$lem (HS:$hs, RS:$rs)");;
+        RC_DIFF)      rc_diff=$((rc_diff+1));      echo "$f::$lem: RC_DIFF $d (HS:$hs, RS:$rs)$t";;
         SKIP_NO_HS)   skip_no_hs=$((skip_no_hs+1));   echo "$f::$lem: SKIP (no HS output)$t";;
         SKIP_INPUT_MANIFEST) skip_no_hs=$((skip_no_hs+1)); echo "$f::$lem: SKIP (input manifest failed)$t";;
         SKIP_RS_ERR)  skip_rs_err=$((skip_rs_err+1)); echo "$f::$lem: SKIP (RS produced no output; HS:$hs)$t";;
@@ -305,12 +351,13 @@ print_timing() {
     rm -f "$sorted"
 }
 
-total=$((match+diffn+skip_no_hs+skip_rs_err+skip_timeout))
+total=$((match+diffn+rc_diff+skip_no_hs+skip_rs_err+skip_timeout))
 echo ""
 echo "================ SUMMARY ================"
 echo "total lemmas enumerated : $total"
 echo "  0 diff (MATCH)        : $match"
 echo "  divergent (DIFF)      : $diffn"
+echo "  status mismatch       : $rc_diff"
 echo "  skipped               : $((skip_no_hs+skip_rs_err+skip_timeout))"
 echo "      no HS output      : $skip_no_hs"
 echo "      RS no output/err  : $skip_rs_err"
