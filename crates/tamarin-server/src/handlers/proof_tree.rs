@@ -7,11 +7,12 @@
 //!
 //! Haskell's interactive UI keeps a mutable proof tree per lemma; user
 //! clicks dispatch a `ProofMethod` at a path in that tree and the
-//! result is spliced back in.
+//! result is spliced back in. Rust keeps each root lazy until first use and
+//! shares materialised roots copy-on-write between theory versions.
 //!
 //! In the Rust port we model this with:
 //!
-//! - One [`ProofNode`] root per lemma, including the lemma's initial system.
+//! - One lazy, copy-on-write [`ProofNode`] root per lemma.
 //! - [`apply_at_path`]: navigate by case-name path, run the requested
 //!   `ProofMethod` via `exec_proof_method`, replace that subtree's
 //!   children, return the new root.
@@ -25,7 +26,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use parking_lot::Mutex;
+use parking_lot::{Mutex, MutexGuard};
 
 use tamarin_theory::constraint::solver::context::ProofContext;
 use tamarin_theory::constraint::solver::goals::{ranking_at_depth, GoalRanking};
@@ -41,12 +42,10 @@ use tamarin_theory::theory::TheoryItem;
 
 use crate::handlers::path_parse::{encode_sub_path, url_path_escape};
 
-/// The immutable part of a proof node needed by the left-hand proof index.
+/// The immutable, system-free part of a replayed proof node.
 ///
-/// In particular, this cannot retain a [`System`]. A stored proof can be
-/// replayed once for faithful first-page rendering and then reduced to this
-/// lightweight tree, leaving full systems lazy until an interactive proof
-/// route actually needs one.
+/// Both the left-hand index and the source renderer use this lightweight
+/// tree, leaving full systems lazy until an interactive proof route needs one.
 #[derive(Debug)]
 pub(crate) struct ProofIndexNode {
     pub method: ProofMethod,
@@ -59,16 +58,46 @@ pub(crate) struct ProofIndexNode {
 /// rendering share it, so neither has to retain solver systems or replay the
 /// same skeleton independently.
 struct ProofSnapshot {
-    index: Arc<ProofIndexNode>,
-    body: Arc<str>,
+    root: Arc<ProofIndexNode>,
+    body: std::sync::OnceLock<Arc<str>>,
+}
+
+#[derive(Clone)]
+enum LemmaProofState {
+    Lazy,
+    Snapshot(Arc<ProofSnapshot>),
+    // `System` uses thread-local mutation caches and is `Send` but not
+    // `Sync`, so the shared root needs its own mutex rather than a bare
+    // `Arc<ProofNode>`.
+    Live(Arc<Mutex<ProofNode>>),
+}
+
+fn copy_on_write(root: &mut Arc<Mutex<ProofNode>>) -> &mut ProofNode {
+    if Arc::get_mut(root).is_none() {
+        let cloned = root.lock().clone();
+        *root = Arc::new(Mutex::new(cloned));
+    }
+    Arc::get_mut(root)
+        .expect("the copied root is uniquely owned")
+        .get_mut()
 }
 
 impl ProofSnapshot {
     fn from_proof_node(node: &ProofNode) -> Self {
         Self {
-            index: Arc::new(ProofIndexNode::from_proof_node(node)),
-            body: Arc::from(tamarin_theory::pretty_theory::pretty_proof_body(node)),
+            root: Arc::new(ProofIndexNode::from_proof_node(node)),
+            body: std::sync::OnceLock::new(),
         }
+    }
+
+    fn body(&self) -> Arc<str> {
+        self.body
+            .get_or_init(|| {
+                Arc::from(tamarin_theory::pretty_theory::pretty_proof_body(
+                    self.root.as_ref(),
+                ))
+            })
+            .clone()
     }
 }
 
@@ -118,15 +147,33 @@ impl ProofIndexNode {
     }
 }
 
+impl tamarin_theory::pretty_theory::ProofBody for ProofIndexNode {
+    fn method(&self) -> &ProofMethod {
+        &self.method
+    }
+
+    fn annotated(&self) -> bool {
+        self.annotated
+    }
+
+    fn cases(&self) -> Vec<(&String, &Self)> {
+        self.children.iter().collect()
+    }
+}
+
 /// Each theory entry carries one of these. The retained session is the sole
 /// theory-wide context owner; proof roots are materialised on first use.
 /// Published states are read-only. Mutations are crate-private and operate on
 /// one unpublished [`ProofState::fork`], so their expensive solver work needs
 /// no optimistic generation/retry machinery.
 pub struct ProofState {
-    by_lemma: Mutex<BTreeMap<String, ProofNode>>,
-    proof_snapshot_by_lemma: Mutex<BTreeMap<String, Arc<ProofSnapshot>>>,
+    /// One independent lock per lemma. Replay may be expensive, but requests
+    /// for unrelated lemmas never wait for it and concurrent requests for the
+    /// same lemma share the result.
+    by_lemma: BTreeMap<String, Mutex<LemmaProofState>>,
     pub(crate) session: Arc<tamarin_theory::prove::ProverSession>,
+    #[cfg(test)]
+    replay_calls: std::sync::atomic::AtomicUsize,
 }
 
 impl ProofState {
@@ -178,10 +225,15 @@ impl ProofState {
         )
         .map(Arc::new)
         .map_err(|e| format!("prover session: {e}"))?;
+        let by_lemma = typed
+            .lemmas()
+            .map(|lemma| (lemma.name.clone(), Mutex::new(LemmaProofState::Lazy)))
+            .collect();
         Ok(ProofState {
-            by_lemma: Mutex::new(BTreeMap::new()),
-            proof_snapshot_by_lemma: Mutex::new(BTreeMap::new()),
+            by_lemma,
             session,
+            #[cfg(test)]
+            replay_calls: std::sync::atomic::AtomicUsize::new(0),
         })
     }
 
@@ -194,26 +246,29 @@ impl ProofState {
         path: &[String],
         method: ProofMethod,
     ) -> Result<NodeStatus, String> {
-        if !self.materialize_root(lemma)? {
-            return Err(format!("unknown lemma: {lemma}"));
-        }
         let ctx = self
             .session
             .context_for_lemma(lemma)
             .map_err(|e| format!("proof context: {e}"))?;
-        // Mutation happens only on an unpublished fork, so keep its map lock
-        // while the method runs and borrow the selected system in place.
-        let mut by_lemma = self.by_lemma.lock();
-        let root = by_lemma
-            .get_mut(lemma)
-            .ok_or_else(|| format!("unknown lemma: {}", lemma))?;
-        let node = navigate_mut(root, path).ok_or_else(|| format!("path not found: {:?}", path))?;
-        if !node.annotated {
+        // Mutation happens only on an unpublished fork. Keep the lemma slot
+        // locked, but release the root shared between forks before running a
+        // potentially long solver step. `System` cloning is copy-on-write.
+        let Some(mut state) = self.live_state(lemma)? else {
+            return Err(format!("unknown lemma: {lemma}"));
+        };
+        let LemmaProofState::Live(root) = &mut *state else {
+            return Err(format!("unknown lemma: {lemma}"));
+        };
+        let root_guard = root.lock();
+        let selected =
+            navigate_at(&root_guard, path).ok_or_else(|| format!("path not found: {:?}", path))?;
+        if !selected.annotated {
             return Err(format!("no annotated system at path: {:?}", path));
         }
-        // Run the method against the node's current system.
-        tamarin_theory::constraint::solver::trace::trace_state_at_path(&node.sys, path);
-        let cases = exec_proof_method(&ctx, &method, &node.sys)
+        let selected_sys = selected.sys.clone();
+        drop(root_guard);
+        tamarin_theory::constraint::solver::trace::trace_state_at_path(&selected_sys, path);
+        let cases = exec_proof_method(&ctx, &method, &selected_sys)
             .map_err(|error| format!("proof context: {error}"))?;
         let cases = cases.ok_or_else(|| format!("method {:?} not applicable", method))?;
         let (status, children) = if cases.is_empty() {
@@ -249,6 +304,8 @@ impl ProofState {
             }
             (rollup_status(&children), children)
         };
+        let root = copy_on_write(root);
+        let node = navigate_mut(root, path).expect("path was checked before copy-on-write");
         node.method = method;
         node.children = children;
         node.status = status;
@@ -265,19 +322,22 @@ impl ProofState {
         lemma: &str,
         path: &[String],
     ) -> Result<bool, String> {
-        if !self.materialize_root(lemma)? {
-            return Ok(false);
-        }
-        let mut by_lemma = self.by_lemma.lock();
-        let Some(root) = by_lemma.get_mut(lemma) else {
+        let Some(mut state) = self.live_state(lemma)? else {
             return Ok(false);
         };
-        let Some(node) = navigate_mut(root, path) else {
+        let LemmaProofState::Live(root) = &mut *state else {
             return Ok(false);
         };
-        if !node.annotated && !path.is_empty() {
+        let root_guard = root.lock();
+        let Some(selected) = navigate_at(&root_guard, path) else {
+            return Ok(false);
+        };
+        if !selected.annotated && !path.is_empty() {
             return Ok(false);
         }
+        drop(root_guard);
+        let root = copy_on_write(root);
+        let node = navigate_mut(root, path).expect("path was checked before copy-on-write");
         node.method = ProofMethod::Sorry(Some("removed".to_string()));
         node.children.clear();
         node.status = NodeStatus::Sorry;
@@ -301,42 +361,47 @@ impl ProofState {
         path: &[String],
         subtree: ProofNode,
     ) -> Result<(), String> {
-        if !self.materialize_root(lemma)? {
+        let Some(mut state) = self.live_state(lemma)? else {
             return Err(format!("unknown lemma: {lemma}"));
+        };
+        let LemmaProofState::Live(root) = &mut *state else {
+            return Err(format!("unknown lemma: {lemma}"));
+        };
+        let root_guard = root.lock();
+        let selected =
+            navigate_at(&root_guard, path).ok_or_else(|| format!("path not found: {:?}", path))?;
+        if !selected.annotated {
+            return Err(format!("no annotated system at path: {:?}", path));
         }
-        let mut by_lemma = self.by_lemma.lock();
-        let root = by_lemma
-            .get_mut(lemma)
-            .ok_or_else(|| format!("unknown lemma: {}", lemma))?;
+        drop(root_guard);
+        let root = copy_on_write(root);
         if path.is_empty() {
-            if !root.annotated {
-                return Err("no annotated system at path: []".to_string());
-            }
             *root = subtree;
             return Ok(());
         }
-        let node = navigate_mut(root, path).ok_or_else(|| format!("path not found: {:?}", path))?;
-        if !node.annotated {
-            return Err(format!("no annotated system at path: {:?}", path));
-        }
+        let node = navigate_mut(root, path).expect("path was checked before copy-on-write");
         *node = subtree;
         recompute_ancestor_statuses(root, path);
         Ok(())
     }
 
     /// Fork this proof state: share the same session and immutable proof-index
-    /// snapshots, but deep-copy only roots that have actually been
-    /// materialised. Unvisited full systems remain lazy in both forks.
+    /// snapshots and materialised roots. A root is cloned only when one fork
+    /// first mutates it; unvisited full systems remain lazy in both forks.
     /// Mirrors Haskell `modifyTheory`'s value-typed
     /// `IncrementalProof` semantics: each version-fork sees the source
     /// tree at the moment of fork, then evolves independently.
     pub(crate) fn fork(&self) -> Self {
-        let src = self.by_lemma.lock();
-        let clone = src.clone();
+        let by_lemma = self
+            .by_lemma
+            .iter()
+            .map(|(name, state)| (name.clone(), Mutex::new(state.lock().clone())))
+            .collect();
         ProofState {
-            by_lemma: Mutex::new(clone),
-            proof_snapshot_by_lemma: Mutex::new(self.proof_snapshot_by_lemma.lock().clone()),
+            by_lemma,
             session: self.session.clone(),
+            #[cfg(test)]
+            replay_calls: std::sync::atomic::AtomicUsize::new(0),
         }
     }
 
@@ -352,25 +417,29 @@ impl ProofState {
         cli_cut: Option<tamarin_theory::constraint::solver::context::CutStrategy>,
         ndc_cache: Option<&tamarin_theory::constraint::solver::context::IntrRuleCache>,
     ) -> Result<Self, String> {
-        let mut roots: BTreeMap<String, ProofNode> = self
-            .by_lemma
-            .lock()
-            .iter()
-            .filter(|(name, _)| typed.lookup_lemma(name).is_some())
-            .map(|(name, root)| (name.clone(), root.clone()))
-            .collect();
+        let mut roots = BTreeMap::new();
         for lemma in typed.lemmas() {
-            if roots.contains_key(&lemma.name) {
-                continue;
-            }
-            let Some((mut root, has_stored_proof)) = self.replay_root(&lemma.name)? else {
+            let Some(slot) = self.by_lemma.get(&lemma.name) else {
                 continue;
             };
-            prepare_interactive_root(&mut root, has_stored_proof);
+            let state = slot.lock();
+            let root = match &*state {
+                LemmaProofState::Live(root) => root.clone(),
+                LemmaProofState::Lazy | LemmaProofState::Snapshot(_) => {
+                    let Some(root) = self.replay_interactive_root(&lemma.name)? else {
+                        continue;
+                    };
+                    Arc::new(Mutex::new(root))
+                }
+            };
             roots.insert(lemma.name.clone(), root);
         }
         let rebased = Self::new(typed, maude_sig, maude_path, cli_cut, ndc_cache)?;
-        *rebased.by_lemma.lock() = roots;
+        for (name, root) in roots {
+            if let Some(slot) = rebased.by_lemma.get(&name) {
+                *slot.lock() = LemmaProofState::Live(root);
+            }
+        }
         Ok(rebased)
     }
 
@@ -379,15 +448,40 @@ impl ProofState {
     /// does not retain every lemma's proof system.
     #[cfg(test)]
     pub(crate) fn peek_root(&self, lemma: &str) -> Option<ProofNode> {
-        self.by_lemma.lock().get(lemma).cloned()
+        let state = self.by_lemma.get(lemma)?.lock();
+        match &*state {
+            LemmaProofState::Live(root) => Some(root.lock().clone()),
+            _ => None,
+        }
     }
 
     #[cfg(test)]
     fn get_root(&self, lemma: &str) -> Result<Option<ProofNode>, String> {
-        if !self.materialize_root(lemma)? {
+        let Some(state) = self.live_state(lemma)? else {
             return Ok(None);
-        }
-        Ok(self.by_lemma.lock().get(lemma).cloned())
+        };
+        let LemmaProofState::Live(root) = &*state else {
+            unreachable!("live_state materialises its result")
+        };
+        let root = root.lock().clone();
+        Ok(Some(root))
+    }
+
+    #[cfg(test)]
+    fn state_count(&self, predicate: impl Fn(&LemmaProofState) -> bool) -> usize {
+        self.by_lemma
+            .values()
+            .filter(|state| predicate(&state.lock()))
+            .count()
+    }
+
+    #[cfg(test)]
+    fn with_live_root_mut(&self, lemma: &str, f: impl FnOnce(&mut ProofNode)) {
+        let mut state = self.by_lemma.get(lemma).expect("lemma").lock();
+        let LemmaProofState::Live(root) = &mut *state else {
+            panic!("lemma root is not materialised");
+        };
+        f(copy_on_write(root));
     }
 
     /// Return the tree needed by the overview's proof index.
@@ -400,69 +494,57 @@ impl ProofState {
         &self,
         lemma: &str,
     ) -> Result<Option<Arc<ProofIndexNode>>, String> {
-        if let Some(root) = self.by_lemma.lock().get(lemma) {
-            return Ok(Some(Arc::new(ProofIndexNode::from_proof_node(root))));
-        }
-        if self
-            .session
-            .theory()
-            .lookup_lemma(lemma)
-            .is_none_or(|lemma| lemma.proof.is_none())
-        {
+        let Some(lemma_item) = self.session.theory().lookup_lemma(lemma) else {
             return Ok(None);
+        };
+        let slot = self
+            .by_lemma
+            .get(lemma)
+            .expect("the proof-state map covers every session lemma");
+        let mut state = slot.lock();
+        match &*state {
+            LemmaProofState::Live(root) => Ok(Some(Arc::new(ProofIndexNode::from_proof_node(
+                &root.lock(),
+            )))),
+            LemmaProofState::Snapshot(snapshot) if lemma_item.proof.is_some() => {
+                Ok(Some(snapshot.root.clone()))
+            }
+            LemmaProofState::Snapshot(_) => Ok(None),
+            LemmaProofState::Lazy if lemma_item.proof.is_none() => Ok(None),
+            LemmaProofState::Lazy => {
+                let Some(snapshot) = self.snapshot_locked(lemma, &mut state)? else {
+                    return Ok(None);
+                };
+                Ok(Some(snapshot.root.clone()))
+            }
         }
-        Ok(self
-            .proof_snapshot(lemma)?
-            .map(|snapshot| snapshot.index.clone()))
     }
 
     /// Render a lemma proof without cloning or retaining any solver systems.
     pub(crate) fn proof_body(&self, lemma: &str) -> Result<Option<Arc<str>>, String> {
-        if let Some(root) = self.by_lemma.lock().get(lemma) {
-            return Ok(Some(Arc::from(
-                tamarin_theory::pretty_theory::pretty_proof_body(root),
-            )));
-        }
-        let Some(lemma_item) = self.session.theory().lookup_lemma(lemma) else {
+        if self.session.theory().lookup_lemma(lemma).is_none() {
             return Ok(None);
-        };
-        if lemma_item.proof.is_none() {
-            let Some((root, _)) = self.replay_root(lemma)? else {
-                return Ok(None);
-            };
-            return Ok(Some(Arc::from(
-                tamarin_theory::pretty_theory::pretty_proof_body(&root),
-            )));
         }
-        Ok(self
-            .proof_snapshot(lemma)?
-            .map(|snapshot| snapshot.body.clone()))
-    }
-
-    fn proof_snapshot(&self, lemma: &str) -> Result<Option<Arc<ProofSnapshot>>, String> {
-        if let Some(snapshot) = self.proof_snapshot_by_lemma.lock().get(lemma).cloned() {
-            return Ok(Some(snapshot));
+        let slot = self
+            .by_lemma
+            .get(lemma)
+            .expect("the proof-state map covers every session lemma");
+        let mut state = slot.lock();
+        match &*state {
+            LemmaProofState::Snapshot(snapshot) => Ok(Some(snapshot.body())),
+            LemmaProofState::Live(root) => {
+                let root = root.lock();
+                Ok(Some(Arc::from(
+                    tamarin_theory::pretty_theory::pretty_proof_body(&*root),
+                )))
+            }
+            LemmaProofState::Lazy => {
+                let Some(snapshot) = self.snapshot_locked(lemma, &mut state)? else {
+                    return Ok(None);
+                };
+                Ok(Some(snapshot.body()))
+            }
         }
-        let Some((root, has_stored_proof)) = self.replay_root(lemma)? else {
-            return Ok(None);
-        };
-        debug_assert!(has_stored_proof);
-        let snapshot = Arc::new(ProofSnapshot::from_proof_node(&root));
-        // Replay ran without either map lock. Lock in the same order as
-        // materialize_root below: a concurrently materialised root wins;
-        // otherwise the first concurrent snapshot wins.
-        let live = self.by_lemma.lock();
-        if let Some(root) = live.get(lemma) {
-            return Ok(Some(Arc::new(ProofSnapshot::from_proof_node(root))));
-        }
-        let snapshot = self
-            .proof_snapshot_by_lemma
-            .lock()
-            .entry(lemma.to_string())
-            .or_insert(snapshot)
-            .clone();
-        drop(live);
-        Ok(Some(snapshot))
     }
 
     /// Clone only the selected system and immediate child metadata.
@@ -471,15 +553,9 @@ impl ProofState {
         lemma: &str,
         path: &[String],
     ) -> Result<Option<ProofSnippet>, String> {
-        if !self.materialize_root(lemma)? {
-            return Ok(None);
-        }
-        Ok(self
-            .by_lemma
-            .lock()
-            .get(lemma)
-            .and_then(|root| navigate_at(root, path))
-            .map(ProofSnippet::from_proof_node))
+        self.filter_map_node_at(lemma, path, |node| {
+            Some(ProofSnippet::from_proof_node(node))
+        })
     }
 
     /// Read the selected method for page titles without cloning its subtree.
@@ -488,43 +564,68 @@ impl ProofState {
         lemma: &str,
         path: &[String],
     ) -> Result<Option<ProofMethod>, String> {
-        if !self.materialize_root(lemma)? {
-            return Ok(None);
-        }
-        Ok(self
-            .by_lemma
-            .lock()
-            .get(lemma)
-            .and_then(|root| navigate_at(root, path))
-            .map(|node| node.method.clone()))
+        self.filter_map_node_at(lemma, path, |node| Some(node.method.clone()))
     }
 
-    /// Materialise a known lemma, returning `false` for an unknown name and an
-    /// error only when replay of an existing lemma fails.
-    fn materialize_root(&self, lemma: &str) -> Result<bool, String> {
-        if self.by_lemma.lock().contains_key(lemma) {
-            return Ok(true);
-        }
-        let Some((mut root, has_stored_proof)) = self.replay_root(lemma)? else {
-            return Ok(false);
+    /// Lock and materialise a known lemma in one lookup.
+    fn live_state(&self, lemma: &str) -> Result<Option<MutexGuard<'_, LemmaProofState>>, String> {
+        let Some(slot) = self.by_lemma.get(lemma) else {
+            return Ok(None);
         };
-        // The interactive tree historically treats a lemma with no parsed
-        // skeleton as an open root (so its action links are enabled). Batch
-        // replay labels the equivalent bare leaf `Sorry`; retain the web
-        // status while leaving genuine stored-proof replay untouched.
-        prepare_interactive_root(&mut root, has_stored_proof);
-        // Replay happens outside the map lock. A concurrent request may have
-        // installed the same root meanwhile; preserve that winner.
-        self.by_lemma
-            .lock()
-            .entry(lemma.to_string())
-            .or_insert(root);
-        // The live root now supplies the proof index too.
-        self.proof_snapshot_by_lemma.lock().remove(lemma);
-        Ok(true)
+        let mut state = slot.lock();
+        self.materialize_locked(lemma, &mut state)?;
+        Ok(Some(state))
+    }
+
+    fn materialize_locked(&self, lemma: &str, state: &mut LemmaProofState) -> Result<(), String> {
+        if matches!(state, LemmaProofState::Live(_)) {
+            return Ok(());
+        }
+        let Some(root) = self.replay_interactive_root(lemma)? else {
+            return Err(format!("unknown lemma: {lemma}"));
+        };
+        *state = LemmaProofState::Live(Arc::new(Mutex::new(root)));
+        Ok(())
+    }
+
+    /// Replay and cache the system-free representation of a lazy proof.
+    fn snapshot_locked(
+        &self,
+        lemma: &str,
+        state: &mut LemmaProofState,
+    ) -> Result<Option<Arc<ProofSnapshot>>, String> {
+        if let LemmaProofState::Snapshot(snapshot) = state {
+            return Ok(Some(snapshot.clone()));
+        }
+        let LemmaProofState::Lazy = state else {
+            return Ok(None);
+        };
+        let Some((root, _)) = self.replay_root(lemma)? else {
+            return Ok(None);
+        };
+        let snapshot = Arc::new(ProofSnapshot::from_proof_node(&root));
+        *state = LemmaProofState::Snapshot(snapshot.clone());
+        Ok(Some(snapshot))
+    }
+
+    fn replay_interactive_root(&self, lemma: &str) -> Result<Option<ProofNode>, String> {
+        self.replay_root(lemma).map(|replayed| {
+            replayed.map(|(mut root, has_stored_proof)| {
+                // The interactive tree historically treats a lemma with no
+                // parsed skeleton as an open root (so its action links are
+                // enabled). Batch replay labels the equivalent bare leaf
+                // `Sorry`; retain the web status while leaving genuine
+                // stored-proof replay untouched.
+                prepare_interactive_root(&mut root, has_stored_proof);
+                root
+            })
+        })
     }
 
     fn replay_root(&self, lemma: &str) -> Result<Option<(ProofNode, bool)>, String> {
+        #[cfg(test)]
+        self.replay_calls
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let Some(lemma_item) = self.session.theory().lookup_lemma(lemma) else {
             return Ok(None);
         };
@@ -559,17 +660,26 @@ impl ProofState {
         lemma: &str,
         path: &[String],
     ) -> Result<Option<tamarin_theory::constraint::system::System>, String> {
-        if !self.materialize_root(lemma)? {
-            return Ok(None);
-        }
-        let by_lemma = self.by_lemma.lock();
-        let Some(root) = by_lemma.get(lemma) else {
+        self.filter_map_node_at(lemma, path, |node| node.annotated.then(|| node.sys.clone()))
+    }
+
+    fn filter_map_node_at<R>(
+        &self,
+        lemma: &str,
+        path: &[String],
+        f: impl FnOnce(&ProofNode) -> Option<R>,
+    ) -> Result<Option<R>, String> {
+        let Some(state) = self.live_state(lemma)? else {
             return Ok(None);
         };
-        let Some(node) = navigate_at(root, path) else {
+        let LemmaProofState::Live(root) = &*state else {
+            unreachable!("live_state materialises its result")
+        };
+        let root = root.lock();
+        let Some(node) = navigate_at(&root, path) else {
             return Ok(None);
         };
-        Ok(node.annotated.then(|| node.sys.clone()))
+        Ok(f(node))
     }
 }
 
@@ -1077,6 +1187,15 @@ end
         proof_state_from_source(src, mp)
     }
 
+    fn roots_are_shared(left: &ProofState, right: &ProofState, lemma: &str) -> bool {
+        let left = left.by_lemma[lemma].lock();
+        let right = right.by_lemma[lemma].lock();
+        let (LemmaProofState::Live(left), LemmaProofState::Live(right)) = (&*left, &*right) else {
+            panic!("both roots should be live");
+        };
+        Arc::ptr_eq(left, right)
+    }
+
     #[test]
     fn build_state_for_trivial_theory() {
         let mp = match require_maude_path() {
@@ -1084,7 +1203,7 @@ end
             None => return,
         };
         let state = trivial_proof_state(&mp);
-        assert!(state.by_lemma.lock().is_empty());
+        assert_eq!(state.state_count(|s| matches!(s, LemmaProofState::Lazy)), 3);
         assert!(state.peek_root("trivial").is_none());
         let root = state
             .get_root("trivial")
@@ -1092,7 +1211,14 @@ end
             .expect("trivial root");
         assert!(matches!(root.method, ProofMethod::Sorry(_)));
         assert!(matches!(root.status, NodeStatus::Open));
-        assert_eq!(state.by_lemma.lock().len(), 1);
+        assert!(state
+            .proof_index_root("trivial")
+            .expect("live proof index")
+            .is_some());
+        assert_eq!(
+            state.state_count(|s| matches!(s, LemmaProofState::Live(_))),
+            1
+        );
         assert!(state.peek_root("second").is_none());
         assert!(state.get_root("missing").unwrap().is_none());
         assert!(state.get_system_at("missing", &[]).unwrap().is_none());
@@ -1148,13 +1274,8 @@ end
         };
         let state = trivial_proof_state(&mp);
         state.get_root("trivial").expect("materialize root");
-        state
-            .by_lemma
-            .lock()
-            .get_mut("trivial")
-            .expect("lemma")
-            .children
-            .insert(
+        state.with_live_root_mut("trivial", |root| {
+            root.children.insert(
                 "child".to_string(),
                 ProofNode {
                     method: ProofMethod::Sorry(None),
@@ -1164,6 +1285,7 @@ end
                     annotated: false,
                 },
             );
+        });
 
         assert_eq!(state.mark_removed_at_path("missing", &[]), Ok(false));
         assert_eq!(
@@ -1174,7 +1296,7 @@ end
             state.mark_removed_at_path("trivial", &["child".to_string()]),
             Ok(false)
         );
-        state.by_lemma.lock().get_mut("trivial").unwrap().annotated = false;
+        state.with_live_root_mut("trivial", |root| root.annotated = false);
         assert_eq!(state.mark_removed_at_path("trivial", &[]), Ok(true));
 
         let root = state.get_root("trivial").unwrap().unwrap();
@@ -1203,8 +1325,21 @@ end
         };
         assert!(matches!(root.method, ProofMethod::Simplify));
         assert!(state.peek_root("stored").is_none());
-        assert_eq!(state.by_lemma.lock().len(), 0);
-        assert_eq!(state.proof_snapshot_by_lemma.lock().len(), 1);
+        assert_eq!(
+            state.state_count(|s| matches!(s, LemmaProofState::Live(_))),
+            0
+        );
+        assert_eq!(
+            state.state_count(|s| matches!(s, LemmaProofState::Snapshot(_))),
+            1
+        );
+        {
+            let snapshot = state.by_lemma["stored"].lock();
+            let LemmaProofState::Snapshot(snapshot) = &*snapshot else {
+                panic!("stored proof should have a system-free snapshot");
+            };
+            assert!(snapshot.body.get().is_none());
+        }
         let body = state
             .proof_body("stored")
             .expect("stored proof body")
@@ -1213,6 +1348,13 @@ end
         assert!(body.contains("by sorry"));
         assert!(!body.contains("<span"));
         assert!(state.peek_root("stored").is_none());
+        {
+            let snapshot = state.by_lemma["stored"].lock();
+            let LemmaProofState::Snapshot(snapshot) = &*snapshot else {
+                panic!("stored proof should have a system-free snapshot");
+            };
+            assert!(snapshot.body.get().is_some());
+        }
 
         // The immutable snapshot is reused until an interactive route asks
         // for the live system-bearing tree.
@@ -1226,11 +1368,55 @@ end
             .expect("replay live stored proof")
             .expect("live stored proof");
         assert_eq!(
+            body.as_ref(),
+            tamarin_theory::pretty_theory::pretty_proof_body(&live)
+        );
+        assert_eq!(
             root.proof_status(),
             tamarin_theory::constraint::solver::search::proof_status(&live)
         );
         assert!(state.peek_root("stored").is_some());
-        assert!(state.proof_snapshot_by_lemma.lock().is_empty());
+        assert_eq!(
+            state.state_count(|s| matches!(s, LemmaProofState::Snapshot(_))),
+            0
+        );
+    }
+
+    #[test]
+    fn concurrent_stored_proof_requests_replay_once() {
+        let Some(mp) = require_maude_path() else {
+            return;
+        };
+        let state = trivial_proof_state(&mp);
+        let barrier = std::sync::Barrier::new(4);
+        let roots = std::thread::scope(|scope| {
+            let workers: Vec<_> = (0..4)
+                .map(|_| {
+                    scope.spawn(|| {
+                        barrier.wait();
+                        state
+                            .proof_index_root("stored")
+                            .expect("stored proof replay")
+                            .expect("stored proof index")
+                    })
+                })
+                .collect();
+            workers
+                .into_iter()
+                .map(|worker| worker.join().expect("proof worker"))
+                .collect::<Vec<_>>()
+        });
+
+        assert!(roots
+            .iter()
+            .skip(1)
+            .all(|root| Arc::ptr_eq(&roots[0], root)));
+        assert_eq!(
+            state
+                .replay_calls
+                .load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
     }
 
     #[test]
@@ -1268,6 +1454,14 @@ end"#,
         );
 
         assert!(state.proof_body("bad").is_err());
+        assert!(state.proof_body("bad").is_err());
+        assert_eq!(state.state_count(|s| matches!(s, LemmaProofState::Lazy)), 1);
+        assert_eq!(
+            state
+                .replay_calls
+                .load(std::sync::atomic::Ordering::Relaxed),
+            2
+        );
         assert!(state.peek_root("bad").is_none());
     }
 
@@ -1282,6 +1476,12 @@ end"#,
         let fork = state.fork();
 
         assert!(fork.peek_root("trivial").is_some());
+        assert!(roots_are_shared(&state, &fork, "trivial"));
+        assert_eq!(
+            state.mark_removed_at_path("trivial", &["missing".to_string()]),
+            Ok(false)
+        );
+        assert!(roots_are_shared(&state, &fork, "trivial"));
         assert!(fork.peek_root("second").is_none());
         state.get_root("second").expect("second root");
         assert!(fork.peek_root("second").is_none());
@@ -1289,6 +1489,7 @@ end"#,
         state
             .apply_at_path("trivial", &[], ProofMethod::Simplify)
             .expect("simplify original");
+        assert!(!roots_are_shared(&state, &fork, "trivial"));
         assert!(matches!(
             fork.get_root("trivial")
                 .expect("replay fork root")
@@ -1305,12 +1506,7 @@ end"#,
         };
         let state = trivial_proof_state(&mp);
         state.get_root("trivial").expect("materialize root");
-        state
-            .by_lemma
-            .lock()
-            .get_mut("trivial")
-            .expect("lemma")
-            .annotated = false;
+        state.with_live_root_mut("trivial", |root| root.annotated = false);
 
         assert!(state
             .get_system_at("trivial", &[])

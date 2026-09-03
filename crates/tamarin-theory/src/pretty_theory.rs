@@ -1841,7 +1841,7 @@ fn is_safety_formula(f: &crate::formula::LNFormula) -> bool {
 /// - Multiple children                   → `<step>\n  case A\n  ...\nnext\n  case B\n  ...\nqed`
 ///
 /// Mirrors `Theory.Proof.prettyProofWith` (Theory/Proof.hs:1054-1075).
-pub fn pretty_proof_body(node: &crate::constraint::solver::search::ProofNode) -> String {
+pub fn pretty_proof_body<T: ProofBody>(node: &T) -> String {
     // A proof body is source text even when a web caller happens to render it
     // while an HTML document guard is active. Keep that ambient mode from
     // leaking markup into cached/downloaded theory source.
@@ -1855,7 +1855,7 @@ pub fn pretty_proof_body(node: &crate::constraint::solver::search::ProofNode) ->
 /// and the tree a lemma's stored skeleton elaborated into.  HS prints both
 /// with `prettyProofWith` over a `Proof a = LTree CaseName (ProofStep a)`
 /// (Theory/Proof.hs:1054-1075).
-trait ProofBody {
+pub trait ProofBody {
     fn method(&self) -> &crate::constraint::solver::proof_method::ProofMethod;
 
     /// False for a step whose constraint system is HS's `Nothing`, which
