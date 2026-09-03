@@ -21,7 +21,7 @@
 use crate::constraint::solver::context::{IntrRuleCache, ProofContext};
 use crate::constraint::solver::goals::RankingError;
 use crate::constraint::solver::search::{run_proof_search_at_depth, ProofNode};
-use crate::constraint::system::{formula_to_system, SourceKind};
+use crate::constraint::system::SourceKind;
 use crate::guarded::{formula_to_guarded, Guarded};
 use crate::theory::OpenProtoRule;
 
@@ -591,12 +591,15 @@ pub struct ProverSession {
     /// later filesystem changes cannot switch a loaded theory's oracle.
     lemma_heuristics:
         tamarin_utils::FastMap<String, Option<Vec<crate::constraint::solver::goals::GoalRanking>>>,
+    /// Guarded conversions aligned with `theory.lemmas()`, computed once and
+    /// shared by target, reuse and source-assumption consumers.
+    guarded_lemmas: Vec<Result<std::sync::Arc<Guarded>, ProveError>>,
+    /// The `[sources]` subset of `guarded_lemmas`, retained as shared handles.
+    source_assumptions: std::sync::Arc<Result<Vec<std::sync::Arc<Guarded>>, ProveError>>,
     /// Whether converting any lemma to guarded form can fail. Every lemma is
     /// checked or proved by the batch loop, even when `--prove` selects a
     /// subset, so this is a genuinely session-wide ordering constraint.
     guarded_lemmas_may_fail: bool,
-    /// Whether the shared refined-source materialisation can fail.
-    source_refinement_may_fail: bool,
     /// Solved-leaf extraction strategy (HS `apCut`, threaded from
     /// `--stop-on-trace`, TheoryLoader.hs:803-810, see line 809).  Theory-global (HS
     /// stores it once in `TheoryLoadOptions.stopOnTrace`), so it is set on
@@ -626,12 +629,11 @@ pub struct ProverSession {
 #[derive(Clone)]
 struct SessionSourceProvider {
     kind: SourceKind,
-    theory: std::sync::Arc<crate::theory::Theory>,
     template_ctx: std::sync::Arc<ProofContext>,
     setup_counter_before: u64,
     source_cache: std::sync::Arc<SourceCache>,
     cache_disabled: bool,
-    may_fail: bool,
+    source_assumptions: std::sync::Arc<Result<Vec<std::sync::Arc<Guarded>>, ProveError>>,
 }
 
 impl std::fmt::Debug for SessionSourceProvider {
@@ -644,7 +646,7 @@ impl std::fmt::Debug for SessionSourceProvider {
 
 impl crate::constraint::solver::context::SourceProvider for SessionSourceProvider {
     fn may_fail(&self) -> bool {
-        self.may_fail
+        self.kind >= SourceKind::RefinedSources && self.source_assumptions.is_err()
     }
 
     fn materialize(&self, ctx: &ProofContext) -> Result<(), ProveError> {
@@ -657,10 +659,10 @@ impl crate::constraint::solver::context::SourceProvider for SessionSourceProvide
         };
         let cached = session_sources(
             self.kind,
-            &self.theory,
             &self.template_ctx,
             self.setup_counter_before,
             cache,
+            &self.source_assumptions,
         )?;
         restore_sources(ctx, cached);
         Ok(())
@@ -730,9 +732,10 @@ pub(crate) fn induction_hint(
 /// through their shared [`ProverSession`].
 pub(crate) fn gather_reusable_lemmas(
     theory: &crate::theory::Theory,
+    guarded_lemmas: &[Result<std::sync::Arc<Guarded>, ProveError>],
     lemma_name: &str,
     kind: SourceKind,
-) -> Result<Vec<Guarded>, ProveError> {
+) -> Result<Vec<std::sync::Arc<Guarded>>, ProveError> {
     // HS `pcHiddenLemmas` = the proved lemma's `[hide_lemma=h]` names.
     let hidden: Vec<&str> = theory
         .lookup_lemma(lemma_name)
@@ -747,8 +750,8 @@ pub(crate) fn gather_reusable_lemmas(
         })
         .unwrap_or_default();
     let hide_all = hidden.contains(&"ALL");
-    let mut reuse_lemmas: Vec<Guarded> = Vec::new();
-    for prior in theory.lemmas() {
+    let mut reuse_lemmas = Vec::new();
+    for (prior, guarded) in theory.lemmas().zip(guarded_lemmas) {
         if prior.name == lemma_name {
             break;
         }
@@ -771,7 +774,12 @@ pub(crate) fn gather_reusable_lemmas(
         if hide_all || hidden.contains(&prior.name.as_str()) {
             continue;
         }
-        reuse_lemmas.push(guarded_or_error(&prior.formula)?);
+        reuse_lemmas.push(
+            guarded
+                .as_ref()
+                .map(std::sync::Arc::clone)
+                .map_err(Clone::clone)?,
+        );
     }
     Ok(reuse_lemmas)
 }
@@ -793,11 +801,12 @@ pub(crate) fn gather_reusable_lemmas(
 /// per-lemma self-exclusion: every refined-source consumer uses this same set.
 fn gather_typing_assumptions(
     theory: &crate::theory::Theory,
+    guarded_lemmas: &[Result<std::sync::Arc<Guarded>, ProveError>],
     kind: SourceKind,
-) -> Result<Vec<Guarded>, ProveError> {
-    let mut typing_assumptions: Vec<Guarded> = Vec::new();
+) -> Result<Vec<std::sync::Arc<Guarded>>, ProveError> {
+    let mut typing_assumptions = Vec::new();
     if kind >= SourceKind::RefinedSources {
-        for prior in theory.lemmas() {
+        for (prior, guarded) in theory.lemmas().zip(guarded_lemmas) {
             if !prior
                 .attributes
                 .iter()
@@ -811,7 +820,12 @@ fn gather_typing_assumptions(
             ) {
                 continue;
             }
-            typing_assumptions.push(guarded_or_error(&prior.formula)?);
+            typing_assumptions.push(
+                guarded
+                    .as_ref()
+                    .map(std::sync::Arc::clone)
+                    .map_err(Clone::clone)?,
+            );
         }
     }
     Ok(typing_assumptions)
@@ -911,6 +925,18 @@ impl ProverSession {
         self.guarded_lemmas_may_fail
     }
 
+    fn guarded_lemma(&self, lemma_name: &str) -> Result<std::sync::Arc<Guarded>, ProveError> {
+        self.theory
+            .lemmas()
+            .zip(&self.guarded_lemmas)
+            .find(|(lemma, _)| lemma.name == lemma_name)
+            .ok_or_else(|| ProveError::LemmaNotFound(lemma_name.to_string()))?
+            .1
+            .as_ref()
+            .map(std::sync::Arc::clone)
+            .map_err(Clone::clone)
+    }
+
     /// Whether this lemma's selected ranking can fail when auto-proved.
     pub fn lemma_ranking_may_fail(&self, lemma_name: &str) -> bool {
         self.lemma_heuristics
@@ -972,7 +998,8 @@ impl ProverSession {
             raw_chains: raw.chains,
             refined_cases: refined.cases,
             refined_chains: refined.chains,
-            has_restrictions: !self.template_ctx.restrictions.is_empty(),
+            has_restrictions: !self.template_ctx.safety_restrictions.is_empty()
+                || !self.template_ctx.other_restrictions.is_empty(),
         })
     }
 
@@ -1014,10 +1041,10 @@ impl ProverSession {
             )),
             refined: session_sources(
                 SourceKind::RefinedSources,
-                &self.theory,
                 &self.template_ctx,
                 self.setup_counter_before,
                 cache,
+                &self.source_assumptions,
             )
             .map(count),
         }
@@ -1047,6 +1074,28 @@ impl ProverSession {
         cut: crate::constraint::solver::context::CutStrategy,
         ndc_cache: Option<&IntrRuleCache>,
     ) -> Result<Self, ProveError> {
+        Self::build_with_heuristic_and_parameters(
+            theory,
+            maude,
+            pool,
+            cli_heuristic,
+            cut,
+            ndc_cache,
+            crate::constraint::solver::sources::IntegerParameters::default(),
+        )
+    }
+
+    /// Build a session with explicit source-solver limits. Keeping these on
+    /// the shared context lets independent sessions coexist in one process.
+    pub fn build_with_heuristic_and_parameters(
+        theory: std::sync::Arc<crate::theory::Theory>,
+        maude: tamarin_term::maude_proc::MaudeHandle,
+        pool: Option<std::sync::Arc<tamarin_term::maude_proc::MaudePool>>,
+        cli_heuristic: CliHeuristic,
+        cut: crate::constraint::solver::context::CutStrategy,
+        ndc_cache: Option<&IntrRuleCache>,
+        parameters: crate::constraint::solver::sources::IntegerParameters,
+    ) -> Result<Self, ProveError> {
         validate_cli_heuristic(&cli_heuristic, &theory.tactic)
             .map_err(ProveError::InvalidHeuristic)?;
         let resolved_cli = resolve_cli_heuristic(&cli_heuristic, &theory.in_file, &theory.tactic);
@@ -1069,21 +1118,19 @@ impl ProverSession {
                 )
             })
             .collect();
+        let guarded_lemmas: Vec<_> = theory
+            .lemmas()
+            .map(|lemma| guarded_or_error(&lemma.formula).map(std::sync::Arc::new))
+            .collect();
         let mut guarded_lemmas_may_fail = false;
-        let mut source_refinement_may_fail = false;
-        for lemma in theory.lemmas() {
-            let invalid = formula_to_guarded(&lemma.formula).is_err();
-            guarded_lemmas_may_fail |= invalid;
-            source_refinement_may_fail |= invalid
-                && lemma
-                    .attributes
-                    .iter()
-                    .any(|attribute| matches!(attribute, crate::theory::LemmaAttr::Sources))
-                && matches!(
-                    lemma.trace_quantifier,
-                    crate::theory::TraceQuantifier::AllTraces
-                );
+        for guarded in &guarded_lemmas {
+            guarded_lemmas_may_fail |= guarded.is_err();
         }
+        let source_assumptions = std::sync::Arc::new(gather_typing_assumptions(
+            &theory,
+            &guarded_lemmas,
+            SourceKind::RefinedSources,
+        ));
         // HS `mkSystem` maps `formulaToGuarded_ = either (error . render) id`
         // (CloseRule.hs:167-188, see line 174, Guarded.hs:466-467) over restriction formulas — it
         // ABORTS on a non-guardable restriction rather than silently dropping
@@ -1115,20 +1162,22 @@ impl ProverSession {
         // base and template vars are re-freshened from `avoid sys` on
         // instantiation.
         let setup_counter_before = maude.fresh_counter_peek();
-        let template_ctx = ProofContext::new_with_restrictions_pool_forced(
+        let template_ctx = ProofContext::new_with_restrictions_pool_forced_and_parameters(
             maude.clone(),
             pool,
             rules,
             restrictions,
             &forced_injective_facts,
             ndc_cache.cloned(),
+            parameters,
         );
         maude.reset_counter_to(setup_counter_before);
         Ok(ProverSession {
             theory,
             lemma_heuristics,
+            guarded_lemmas,
+            source_assumptions,
             guarded_lemmas_may_fail,
-            source_refinement_may_fail,
             cut,
             template_ctx: std::sync::Arc::new(template_ctx),
             setup_counter_before,
@@ -1139,7 +1188,8 @@ impl ProverSession {
 
     /// Build the per-lemma `ProofContext` shared verbatim by both session
     /// entry points (`prove_lemma_in_session_mode` and
-    /// `prove_system_in_session`): clone the template ctx, give it its own
+    /// `prove_system_in_session`): derive a fresh context from the template,
+    /// give it its own
     /// fresh-counter floored at the shared `setup_counter_before` base (B1
     /// lemma-level parallelism), then stamp `is_exists_trace` / `heuristic`
     /// / `lemma_name` / `theory_file`. Source conversion remains deferred
@@ -1180,18 +1230,18 @@ impl ProverSession {
     fn install_source_provider(&self, ctx: &mut ProofContext, kind: SourceKind) {
         ctx.set_source_provider(std::sync::Arc::new(SessionSourceProvider {
             kind,
-            theory: std::sync::Arc::clone(&self.theory),
             template_ctx: std::sync::Arc::clone(&self.template_ctx),
             setup_counter_before: self.setup_counter_before,
             source_cache: std::sync::Arc::clone(&self.source_cache),
             cache_disabled: self.source_cache_disabled,
-            may_fail: kind >= SourceKind::RefinedSources && self.source_refinement_may_fail,
+            source_assumptions: std::sync::Arc::clone(&self.source_assumptions),
         }));
     }
 }
 
 fn fresh_source_context(template: &ProofContext, setup_counter_before: u64) -> ProofContext {
-    let mut ctx = template.clone();
+    let sources = std::sync::Arc::new(template.full_sources.iter().cloned().collect());
+    let mut ctx = template.fresh_with_sources(sources);
     ctx.maude = ctx.maude.with_fresh_counter_from(0);
     ctx.maude
         .ensure_above(setup_counter_before.saturating_sub(1));
@@ -1214,10 +1264,10 @@ fn raw_sources<'a>(
 
 fn session_sources<'a>(
     kind: SourceKind,
-    theory: &crate::theory::Theory,
     template: &ProofContext,
     setup_counter_before: u64,
     cache: &'a SourceCache,
+    source_assumptions: &Result<Vec<std::sync::Arc<Guarded>>, ProveError>,
 ) -> Result<&'a CachedSources, ProveError> {
     if kind == SourceKind::RawSources {
         return Ok(raw_sources(template, setup_counter_before, cache));
@@ -1225,7 +1275,7 @@ fn session_sources<'a>(
     cache
         .refined
         .get_or_init(|| {
-            let assumptions = gather_typing_assumptions(theory, SourceKind::RefinedSources)?;
+            let assumptions = source_assumptions.as_ref().map_err(Clone::clone)?;
             // Resolve the raw dependency before entering the source pool.
             // `ThreadPool::install` may execute another installed job while
             // its caller waits, even in a one-thread pool. Waiting for an
@@ -1240,7 +1290,7 @@ fn session_sources<'a>(
                 refinement_ctx.mark_saturated_done();
                 let refined = crate::constraint::solver::sources::refine_with_source_asms(
                     refinement_ctx.full_sources.to_vec(),
-                    &assumptions,
+                    assumptions,
                     &refinement_ctx,
                 );
                 Ok(snapshot_sources(&refined))
@@ -1277,8 +1327,8 @@ fn restore_sources(ctx: &ProofContext, cached: &CachedSources) {
 
 /// Prove a single lemma using a pre-built `ProverSession`.  Skips the
 /// expensive theory-level setup (which `ProverSession::build_with_heuristic`
-/// did) and runs only the per-lemma work: guarded conversion of lemma+reuse
-/// formulas, `formula_to_system`, ProofContext clone +
+/// did) and runs only the per-lemma work: select the cached guarded lemma and
+/// reuse formulas, `formula_to_system`, fresh ProofContext derivation plus
 /// per-lemma-field setup, `ensure_saturated` (typing-asm refinement),
 /// and proof-tree search.
 pub fn prove_lemma_in_session(
@@ -1382,7 +1432,7 @@ fn prove_lemma_in_session_mode(
         .lookup_lemma(lemma_name)
         .ok_or_else(|| ProveError::LemmaNotFound(lemma_name.to_string()))?;
 
-    let g = guarded_or_error(&lemma.formula)?;
+    let g = session.guarded_lemma(lemma_name)?;
 
     // Per-lemma source kind, mirroring HS `lemmaSourceKind`
     // (lib/theory/src/Lemma.hs:38-41):
@@ -1394,17 +1444,23 @@ fn prove_lemma_in_session_mode(
 
     // `[reuse]` lemmas declared BEFORE this one.  Same gather logic as
     // the one-shot and shared-session entry points.
-    let reuse_lemmas = gather_reusable_lemmas(theory, lemma_name, lemma_source_kind)?;
+    let reuse_lemmas = gather_reusable_lemmas(
+        theory,
+        &session.guarded_lemmas,
+        lemma_name,
+        lemma_source_kind,
+    )?;
 
-    let mut sys = formula_to_system(
-        session.template_ctx.restrictions.clone(),
+    let mut sys = crate::constraint::system::formula_to_system_partitioned(
+        &session.template_ctx.safety_restrictions,
+        &session.template_ctx.other_restrictions,
         lemma_source_kind,
         lemma.trace_quantifier,
         &g,
     );
     sys.insert_lemmas(reuse_lemmas);
 
-    // Per-lemma ProofContext: clone the template (built once at session
+    // Per-lemma ProofContext: derive from the template (built once at session
     // construction with raw, unsaturated `full_sources` — each source's
     // `cases_cell = None`), give it its OWN fresh-counter Arc floored at the
     // shared `setup_counter_before` base (B1 lemma-level parallelism: still

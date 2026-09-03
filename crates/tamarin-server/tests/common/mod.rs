@@ -95,6 +95,7 @@ pub async fn start_server_with_theory_and(
         maude_path: maude_path.clone(),
         // Match ServerConfig::new's default (HS interactive default 5s).
         derivcheck_timeout: 5,
+        solver_parameters: Default::default(),
         stop_on_trace: None,
         // Match ServerConfig::new's defaults (HS `dotPath`,
         // Environment.hs:37-38, and an absent `--with-json`).
@@ -109,6 +110,7 @@ pub async fn start_server_with_theory_and(
         &theory_path,
         &maude_path,
         cfg.derivcheck_timeout,
+        cfg.solver_parameters,
     )
     .expect("fixture should parse + elaborate");
     let _idx = store.insert(entry);

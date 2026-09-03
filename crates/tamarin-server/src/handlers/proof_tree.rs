@@ -194,6 +194,7 @@ impl ProofState {
         maude_path: &str,
         cli_cut: Option<tamarin_theory::constraint::solver::context::CutStrategy>,
         ndc_cache: Option<&tamarin_theory::constraint::solver::context::IntrRuleCache>,
+        parameters: tamarin_theory::constraint::solver::sources::IntegerParameters,
     ) -> Result<Self, String> {
         // Effective cut strategy — HS `closeTheory` precedence
         // (TheoryLoader.hs:742, :759-762): the CLI `--stop-on-trace` wins;
@@ -215,13 +216,14 @@ impl ProofState {
         };
         let maude = tamarin_term::maude_proc::MaudeHandle::start(maude_path, maude_sig)
             .map_err(|e| format!("maude start: {:?}", e))?;
-        let session = tamarin_theory::prove::ProverSession::build_with_heuristic(
+        let session = tamarin_theory::prove::ProverSession::build_with_heuristic_and_parameters(
             typed.clone(),
             maude,
             None,
             tamarin_theory::prove::CliHeuristic::default(),
             cut,
             ndc_cache,
+            parameters,
         )
         .map(Arc::new)
         .map_err(|e| format!("prover session: {e}"))?;
@@ -416,6 +418,7 @@ impl ProofState {
         maude_path: &str,
         cli_cut: Option<tamarin_theory::constraint::solver::context::CutStrategy>,
         ndc_cache: Option<&tamarin_theory::constraint::solver::context::IntrRuleCache>,
+        parameters: tamarin_theory::constraint::solver::sources::IntegerParameters,
     ) -> Result<Self, String> {
         let mut roots = BTreeMap::new();
         for lemma in typed.lemmas() {
@@ -434,7 +437,7 @@ impl ProofState {
             };
             roots.insert(lemma.name.clone(), root);
         }
-        let rebased = Self::new(typed, maude_sig, maude_path, cli_cut, ndc_cache)?;
+        let rebased = Self::new(typed, maude_sig, maude_path, cli_cut, ndc_cache, parameters)?;
         for (name, root) in roots {
             if let Some(slot) = rebased.by_lemma.get(&name) {
                 *slot.lock() = LemmaProofState::Live(root);
@@ -1152,18 +1155,16 @@ mod tests {
             crate::state::TheoryOrigin::Upload("trivial.spthy".to_string()),
             mp,
             0,
+            Default::default(),
         )
         .expect("load");
         ProofState::new(
             &entry.typed_theory,
-            entry.prover_maude_sig.clone(),
+            (*entry.prover_maude_sig).clone(),
             mp,
             None,
-            entry
-                .ndc_cache
-                .clone()
-                .map(tamarin_theory::constraint::solver::context::IntrRuleCache::from)
-                .as_ref(),
+            entry.ndc_cache.as_ref(),
+            tamarin_theory::constraint::solver::sources::IntegerParameters::default(),
         )
         .expect("build state")
     }
@@ -1431,7 +1432,14 @@ end
         let typed = Arc::new(typed);
 
         let rebased = state
-            .rebase_onto(&typed, maude_sig, &mp, None, None)
+            .rebase_onto(
+                &typed,
+                maude_sig,
+                &mp,
+                None,
+                None,
+                tamarin_theory::constraint::solver::sources::IntegerParameters::default(),
+            )
             .expect("rebase");
 
         assert!(state.peek_root("stored").is_none());

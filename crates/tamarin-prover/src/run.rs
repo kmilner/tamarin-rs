@@ -539,7 +539,7 @@ fn run_interactive(args: &Args) -> Result<i32, RunError> {
         }
     }
 
-    init_process_globals(args);
+    init_rayon_pool(args);
 
     // Haskell defaults: 3001 on 127.0.0.1.  clap has already parsed
     // `--port` as a `u16` (an unreadable value is a usage error).
@@ -583,6 +583,11 @@ fn run_interactive(args: &Args) -> Result<i32, RunError> {
     // `-d/--derivcheck-timeout` — same default expression as the batch
     // path's derivation-check block (default 5).
     cfg.derivcheck_timeout = args.derivcheck_timeout.unwrap_or(5);
+    cfg.solver_parameters =
+        tamarin_theory::constraint::solver::sources::IntegerParameters::with_overrides(
+            args.open_chains,
+            args.saturation,
+        );
     // CLI `--stop-on-trace` — merged with each theory's `configuration:`
     // block at load time (`ProofState::new`), HS `closeTheory` precedence.
     cfg.stop_on_trace = cli_cut(args);
@@ -1110,8 +1115,7 @@ enum TranslateModule {
 /// construction and the end of the batch run stay on [`Args`]:
 /// `proofBound` (`--bound`, read directly by the prove loop),
 /// `verboseMode`, `maudePath` (the banner needs the raw
-/// user-supplied/None distinction), `diffMode`, `openChain`/`saturation`
-/// (read before the maude banner), and the ProVerif/DeepSec export knobs
+/// user-supplied/None distinction), `diffMode`, and the ProVerif/DeepSec export knobs
 /// (backends unported).
 #[derive(Debug, Clone)]
 struct TheoryLoadOptions {
@@ -1150,6 +1154,8 @@ struct TheoryLoadOptions {
     /// HS `ndcCheck` — enabled by default, `--no-ndc` clears it
     /// (TheoryLoader.hs:365-366).
     ndc_check: bool,
+    /// HS `openChain`/`saturation`, carried into each prover context.
+    parameters: tamarin_theory::constraint::solver::sources::IntegerParameters,
 }
 
 /// Port of HS `mkTheoryLoadOptions` (TheoryLoader.hs:295-395): assemble the
@@ -1184,6 +1190,10 @@ fn mk_theory_load_options(args: &Args) -> Result<TheoryLoadOptions, RunError> {
         precompute_only_mode: args.precompute_only,
         derivation_checks: args.derivcheck_timeout.unwrap_or(5),
         ndc_check: !args.no_ndc,
+        parameters: tamarin_theory::constraint::solver::sources::IntegerParameters::with_overrides(
+            args.open_chains,
+            args.saturation,
+        ),
     })
 }
 
@@ -1340,13 +1350,14 @@ impl TheoryPipeline<'_> {
         maude: MaudeHandle,
         cli_heuristic: tamarin_theory::prove::CliHeuristic,
     ) -> Result<tamarin_theory::prove::ProverSession, tamarin_theory::prove::ProveError> {
-        tamarin_theory::prove::ProverSession::build_with_heuristic(
+        tamarin_theory::prove::ProverSession::build_with_heuristic_and_parameters(
             self.elaborated.clone(),
             maude,
             self.file_maude_pool.clone(),
             cli_heuristic,
             self.cut,
             self.ndc_cache.as_ref(),
+            self.opts.parameters,
         )
     }
 
@@ -1686,6 +1697,7 @@ impl TheoryPipeline<'_> {
                 Some(self.elaborated.name.as_str()),
                 self.elaborated.options.deduction_chain_check,
                 &self.elaborated.intruder_rules,
+                self.opts.parameters,
             );
             self.ndc_funs = checked.ndc_funs;
             self.ndc_cache = Some(checked.cache.into());
@@ -1707,6 +1719,7 @@ impl TheoryPipeline<'_> {
                     m,
                     deriv_timeout,
                     self.ndc_cache.clone(),
+                    self.opts.parameters,
                 );
                 self.wf_report.extend(extra);
             }
@@ -1773,6 +1786,7 @@ impl TheoryPipeline<'_> {
                 m,
                 self.file_maude_pool.clone(),
                 self.ndc_cache.as_ref(),
+                self.opts.parameters,
             );
         }
 
@@ -1848,6 +1862,7 @@ impl TheoryPipeline<'_> {
                     m2,
                     self.file_maude_pool.clone(),
                     self.ndc_cache.as_ref(),
+                    self.opts.parameters,
                 );
             }
         }
@@ -2069,7 +2084,7 @@ impl TheoryPipeline<'_> {
 }
 
 fn run_batch(args: &Args) -> Result<i32, RunError> {
-    init_process_globals(args);
+    init_rayon_pool(args);
     if args.diff {
         return Err(RunError::Regular(
             "--diff (observational equivalence) is not yet ported to the Rust prover.".to_string(),
@@ -2620,19 +2635,6 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
     Ok(0)
 }
 
-/// Once-per-process globals every mode installs before theory work: the
-/// rayon worker pool and the `-c/--open-chains` / `-s/--saturation` limits
-/// (HS `TheoryLoadOptions` openChainsLimit/saturationLimit, threaded into
-/// every close; one helper for both modes because HS shares one
-/// `TheoryLoadOptions` across them).
-fn init_process_globals(args: &Args) {
-    init_rayon_pool(args);
-    tamarin_theory::constraint::solver::sources::set_cli_solver_limits(
-        args.open_chains,
-        args.saturation,
-    );
-}
-
 /// HS-equivalent: GHC's `+RTS -N RTS_FLAG` sets the worker capacity for
 /// the `par*`/`Strategies` sites HS uses (`using parList` / `parMap`:
 /// CloseRule.hs:81, Prover.hs:105, Theory/Constraint/Solver/Sources.hs:362,
@@ -2952,7 +2954,13 @@ mod tests {
 
     #[test]
     fn mk_theory_load_options_accepts_valid_values() {
-        let a = parse(&["--partial-evaluation=Verbose", "-m=msr", "x.spthy"]);
+        let a = parse(&[
+            "--partial-evaluation=Verbose",
+            "-m=msr",
+            "-c=7",
+            "-s=3",
+            "x.spthy",
+        ]);
         let o = mk_theory_load_options(&a).expect("valid values");
         assert_eq!(o.partial_evaluation, Some(crate::cli::PartialEval::Verbose),);
         assert_eq!(o.output_module, Some(ModuleType::Msr));
@@ -2960,6 +2968,8 @@ mod tests {
         // the record; `ndcCheck` defaults on.
         assert_eq!(o.derivation_checks, 5);
         assert!(o.ndc_check);
+        assert_eq!(o.parameters.open_chains_limit(), 7);
+        assert_eq!(o.parameters.saturation_limit(), 3);
         let a = parse(&["--no-ndc", "-d=0", "x.spthy"]);
         let o = mk_theory_load_options(&a).expect("valid values");
         assert_eq!(o.derivation_checks, 0);

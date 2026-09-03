@@ -1007,6 +1007,7 @@ pub async fn reload(
             &path,
             &worker_state.cfg.maude_path,
             worker_state.cfg.derivcheck_timeout,
+            worker_state.cfg.solver_parameters,
         )
         .map_err(|error| (path, error))
     })
@@ -2037,18 +2038,15 @@ pub async fn delete_step(
                 debug_assert!(removed);
                 detached.typed_theory = Arc::new(theory);
                 if let Some(previous) = detached.proof_state.take() {
-                    let ndc_cache = detached
-                        .ndc_cache
-                        .clone()
-                        .map(tamarin_theory::constraint::solver::context::IntrRuleCache::from);
                     detached.proof_state = Some(Arc::new(
                         previous
                             .rebase_onto(
                                 &detached.typed_theory,
-                                detached.prover_maude_sig.clone(),
+                                (*detached.prover_maude_sig).clone(),
                                 &delete_state.cfg.maude_path,
                                 delete_state.cfg.stop_on_trace,
-                                ndc_cache.as_ref(),
+                                detached.ndc_cache.as_ref(),
+                                delete_state.cfg.solver_parameters,
                             )
                             .map_err(crate::state::StoreError::Build)?,
                     ));

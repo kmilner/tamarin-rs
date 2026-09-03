@@ -62,16 +62,14 @@ fn insert_continuation_marker(red: &mut Reduction<'_>, name: &'static str, idx: 
     }
 }
 
-fn insert_pre_marker_after_split(red: &mut Reduction<'_>) -> ChangeIndicator {
+fn insert_pre_marker_after_split(red: &mut Reduction<'_>) {
     if red.sys.last_atom.is_some() {
         insert_continuation_marker(red, "pre", 10);
     }
-    red.changed
 }
 
-fn insert_post_marker(red: &mut Reduction<'_>) -> ChangeIndicator {
+fn insert_post_marker(red: &mut Reduction<'_>) {
     insert_continuation_marker(red, "post", 20);
-    red.changed
 }
 
 fn mark_split_arm(sys: System) -> System {
@@ -105,11 +103,10 @@ fn split_into_success_then_failure(red: &mut Reduction<'_>) -> SystemOutcome {
     ])
 }
 
-fn fail_sources_in_second_arm(red: &mut Reduction<'_>) -> ChangeIndicator {
+fn fail_sources_in_second_arm(red: &mut Reduction<'_>) {
     if red.sys.last_atom.is_some_and(|marker| marker.idx == 31) {
         red.ctx.ensure_saturated();
     }
-    ChangeIndicator::Unchanged
 }
 
 fn split_once(red: &mut Reduction<'_>) -> SystemOutcome {
@@ -404,7 +401,7 @@ fn merge_candidates_finishes_each_group_before_starting_the_next() {
                     !red.sys.eq_store.subst.is_empty(),
                     "the first group's node equality must precede the second payload solve"
                 );
-                Ok(SolveOutcome::Linear(ChangeIndicator::Changed))
+                Ok(SolveOutcome::Linear)
             }
         },
     );
@@ -528,10 +525,8 @@ fn fresh_ordering_follows_transitive_positive_subterms() {
     ];
 
     let mut reduction = Reduction::new(&ctx, sys);
-    assert_eq!(
-        enforce_fresh_ordering_pass(&mut reduction),
-        ChangeIndicator::Changed
-    );
+    enforce_fresh_ordering_pass(&mut reduction);
+    assert_eq!(reduction.changed, ChangeIndicator::Changed);
     assert!(reduction
         .sys
         .less_atoms
@@ -1164,9 +1159,9 @@ fn simp_split_neg_ac_recurse_emits_ac_formula() {
     assert!(sys.subterm_store_mut().add_neg(small.clone(), big.clone()));
     let mut r = Reduction::new(&ctx, sys);
 
-    let res = propagate_subterm_obvious(&mut r);
+    propagate_subterm_obvious(&mut r);
     assert_eq!(
-        res,
+        r.changed,
         ChangeIndicator::Changed,
         "negative AC subterm should drive a change (acFormula emission)"
     );
@@ -1201,12 +1196,14 @@ fn simp_injective_eq_mon_emits_constant_eq() {
     let s_tag = crate::fact::FactTag::Proto(crate::fact::Multiplicity::Linear, "S", 2);
     std::sync::Arc::get_mut(&mut ctx.shared)
         .expect("a fresh context uniquely owns its shared data")
-        .injective_fact_insts = vec![(
+        .injective_fact_insts = [(
         s_tag,
         vec![vec![
             crate::tools::injective_fact_instances::MonotonicBehaviour::Constant,
         ]],
-    )];
+    )]
+    .into_iter()
+    .collect();
 
     let id = tamarin_term::lterm::LVar::new("id", tamarin_term::lterm::LSort::Fresh, 0);
     let id_t: tamarin_term::lterm::LNTerm =
@@ -1273,7 +1270,9 @@ fn simp_injective_eq_mon_pairs_tuple_leaves() {
     let s_tag = crate::fact::FactTag::Proto(crate::fact::Multiplicity::Linear, "S", 2);
     std::sync::Arc::get_mut(&mut ctx.shared)
         .expect("a fresh context uniquely owns its shared data")
-        .injective_fact_insts = vec![(s_tag, vec![vec![Unstable, Constant]])];
+        .injective_fact_insts = [(s_tag, vec![vec![Unstable, Constant]])]
+        .into_iter()
+        .collect();
 
     let mk_var = |n: &str, sort, idx| -> tamarin_term::lterm::LNTerm {
         tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(
@@ -1409,7 +1408,8 @@ fn dedupe_formulas_drops_a_repeated_formula() {
     sys.formulas_mut().push(first.clone());
     sys.formulas_mut().push(second);
     let mut r = Reduction::new(&ctx, sys);
-    assert_eq!(dedupe_formulas_pass(&mut r), ChangeIndicator::Changed);
+    dedupe_formulas_pass(&mut r);
+    assert_eq!(r.changed, ChangeIndicator::Changed);
     assert_eq!(r.sys.formulas.len(), 1, "the equal pair collapses");
     assert!(
         std::sync::Arc::ptr_eq(&r.sys.formulas[0], &first),
@@ -1434,7 +1434,8 @@ fn dedupe_formulas_keeps_formulas_of_different_sort() {
     sys.formulas_mut().push(std::sync::Arc::new(f1.clone()));
     sys.formulas_mut().push(std::sync::Arc::new(f2.clone()));
     let mut r = Reduction::new(&ctx, sys);
-    assert_eq!(dedupe_formulas_pass(&mut r), ChangeIndicator::Unchanged);
+    dedupe_formulas_pass(&mut r);
+    assert_eq!(r.changed, ChangeIndicator::Unchanged);
     assert_eq!(
         r.sys
             .formulas

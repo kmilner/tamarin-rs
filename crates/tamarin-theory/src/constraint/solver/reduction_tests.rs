@@ -96,9 +96,9 @@ fn insert_goal_marks_changed() {
     let mut r = Reduction::new(&ctx, System::empty());
     // A fresh `Reduction` starts `Unchanged`.  Without that precondition the
     // assertion after the insert below would hold whatever `insert_goal`
-    // does.  `while_changing` resets and re-reads this flag on every
-    // iteration.  Without the precondition, `while_changing` would also run
-    // forever on its first step.
+    // does. The simplifier fixpoint resets and re-reads this flag on every
+    // iteration; without the precondition, it would also run forever on its
+    // first step.
     assert_eq!(r.changed, ChangeIndicator::Unchanged);
     let v = tamarin_term::lterm::LVar::new("k", tamarin_term::lterm::LSort::Msg, 0);
     let f = crate::fact::LNFact::new(crate::fact::FactTag::Out, vec![]);
@@ -112,8 +112,8 @@ fn insert_goal_marks_changed() {
     // `M.insertWith combineGoalStatus` keyed by the goal.  The second
     // insert therefore merges into the first slot and raises no change
     // signal.  If the deduplication failed, the insert would append a
-    // second copy with `solved=false`.  The `while_changing` fixpoints
-    // above it would then never converge.
+    // second copy with `solved=false`. The enclosing fixpoints would then
+    // never converge.
     r.changed = ChangeIndicator::Unchanged;
     r.insert_goal(g);
     assert_eq!(r.sys.goals.len(), 1, "duplicate goal must not be re-added");
@@ -186,10 +186,7 @@ fn solve_term_eqs_trivial_equation_no_change() {
             }],
         )
         .expect("solve");
-    assert!(matches!(
-        r_out,
-        SolveOutcome::Linear(ChangeIndicator::Unchanged)
-    ));
+    assert!(matches!(r_out, SolveOutcome::Linear));
 }
 
 #[test]
@@ -211,10 +208,7 @@ fn solve_term_eqs_unifies_two_vars() {
             &[tamarin_term::rewriting::Equal { lhs: tx, rhs: ty }],
         )
         .expect("solve");
-    assert!(matches!(
-        r_out,
-        SolveOutcome::Linear(ChangeIndicator::Changed)
-    ));
+    assert!(matches!(r_out, SolveOutcome::Linear));
     assert_eq!(r.changed, ChangeIndicator::Changed);
 }
 
@@ -1166,43 +1160,6 @@ fn solve_action_with_fresh_premise_adds_fresh_supplier() {
         r.sys.nodes.len()
     );
     assert_eq!(r.sys.edges.len(), 1, "expected 1 edge");
-}
-
-/// `while_changing` runs its step again until a run leaves `self.changed`
-/// at `Unchanged`.  It resets that flag on every iteration, and it discards
-/// the return value of the step.  HS threads the indicator through the
-/// monad.  RS reads it off the `Reduction`.  The step below always returns
-/// `Unchanged`, but it still mutates the system on its first two calls.  A
-/// loop that trusted the return value would stop after one iteration.
-#[test]
-fn while_changing_loops_on_the_reduction_flag_not_the_step_result() {
-    let ctx = match ctx() {
-        Some(c) => c,
-        None => return,
-    };
-    let mut r = Reduction::new(&ctx, System::empty());
-    let mut count = 0;
-    r.while_changing(|red| {
-        count += 1;
-        if count < 3 {
-            let v =
-                tamarin_term::lterm::LVar::new("k", tamarin_term::lterm::LSort::Msg, count as u64);
-            let f = crate::fact::LNFact::new(crate::fact::FactTag::Out, vec![]);
-            red.insert_goal(Goal::Action(v, f));
-        }
-        ChangeIndicator::Unchanged
-    });
-    assert_eq!(
-        count, 3,
-        "two mutating steps then one quiet step: the loop must run exactly \
-         three times and stop at the first quiet one"
-    );
-    assert_eq!(r.sys.goals.len(), 2);
-    assert_eq!(
-        r.changed,
-        ChangeIndicator::Unchanged,
-        "the loop exits with the flag the final quiet step left"
-    );
 }
 
 // =========================================================================

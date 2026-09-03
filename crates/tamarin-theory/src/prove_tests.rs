@@ -233,8 +233,12 @@ fn gather_reusable_lemmas_matches_hs_guards() {
     );
     let pt = tamarin_parser::parse_theory(&src, &[]).expect("parse");
     let thy = crate::elaborate::elaborate(&pt).expect("elaborate");
+    let guarded: Vec<_> = thy
+        .lemmas()
+        .map(|lemma| guarded_or_error(&lemma.formula).map(std::sync::Arc::new))
+        .collect();
     let gathered = |name: &str| {
-        gather_reusable_lemmas(&thy, name, SourceKind::RefinedSources)
+        gather_reusable_lemmas(&thy, &guarded, name, SourceKind::RefinedSources)
             .expect("gather")
             .len()
     };

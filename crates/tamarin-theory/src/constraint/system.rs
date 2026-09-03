@@ -901,6 +901,22 @@ impl System {
         true
     }
 
+    /// Append an already-normalized formula whose absence from both stores
+    /// was established by the caller.
+    pub(crate) fn push_open_formula_normalized_absent(&mut self, formula: impl Into<Arc<Guarded>>) {
+        let formula = formula.into();
+        debug_assert!(!crate::guarded::stores_contains(
+            &self.content.formulas,
+            &formula
+        ));
+        debug_assert!(!crate::guarded::stores_contains(
+            &self.content.solved_formulas,
+            &formula
+        ));
+        self.bump_cache_guarded(&formula);
+        self.formulas_mut().push(formula);
+    }
+
     /// Normalize and insert a solved formula unless it is already solved.
     /// Open-store membership is deliberately independent: callers moving a
     /// formula between stores remove the open entry first, while set joins may
@@ -913,6 +929,21 @@ impl System {
         self.bump_cache_guarded(&formula);
         self.solved_formulas_mut().push(formula);
         true
+    }
+
+    /// Append an already-normalized solved formula after a caller-owned
+    /// membership check.
+    pub(crate) fn push_solved_formula_normalized_absent(
+        &mut self,
+        formula: impl Into<Arc<Guarded>>,
+    ) {
+        let formula = formula.into();
+        debug_assert!(!crate::guarded::stores_contains(
+            &self.content.solved_formulas,
+            &formula
+        ));
+        self.bump_cache_guarded(&formula);
+        self.solved_formulas_mut().push(formula);
     }
 
     fn normalize_formula(formula: Arc<Guarded>) -> Arc<Guarded> {
@@ -1810,23 +1841,24 @@ impl System {
 
     /// `insertLemma`: flatten a top-level `Conj` into individual lemma
     /// entries. Mirrors the Haskell `insertLemma` recursion.
-    pub fn insert_lemma(&mut self, l: Guarded) {
-        match l {
+    pub fn insert_lemma(&mut self, l: impl Into<Arc<Guarded>>) {
+        let l = l.into();
+        match l.as_ref() {
             Guarded::Conj(items) => {
                 for item in items.iter() {
                     self.insert_lemma(item.clone());
                 }
             }
-            other => {
-                if !crate::guarded::stores_contains(&self.lemmas, &other) {
-                    self.bump_cache_guarded(&other);
-                    self.content.lemmas.push(Arc::new(other));
+            _ => {
+                if !crate::guarded::stores_contains(&self.lemmas, &l) {
+                    self.bump_cache_guarded(&l);
+                    self.content.lemmas.push(l);
                 }
             }
         }
     }
 
-    pub fn insert_lemmas(&mut self, ls: Vec<Guarded>) {
+    pub fn insert_lemmas<T: Into<Arc<Guarded>>>(&mut self, ls: impl IntoIterator<Item = T>) {
         for l in ls {
             self.insert_lemma(l);
         }
@@ -1963,15 +1995,27 @@ pub fn formula_to_system(
     trace_quantifier: crate::theory::TraceQuantifier,
     fm: &Guarded,
 ) -> System {
-    use crate::guarded::{gconj, gnot, is_safety_formula};
+    let (safety, other): (Vec<_>, Vec<_>) = restrictions
+        .into_iter()
+        .map(Arc::new)
+        .partition(|restriction| crate::guarded::is_safety_formula(restriction));
+    formula_to_system_partitioned(&safety, &other, source_kind, trace_quantifier, fm)
+}
+
+/// [`formula_to_system`] for contexts that have already partitioned their
+/// immutable restrictions once.
+pub fn formula_to_system_partitioned(
+    safety_restrictions: &[Arc<Guarded>],
+    other_restrictions: &[Arc<Guarded>],
+    source_kind: SourceKind,
+    trace_quantifier: crate::theory::TraceQuantifier,
+    fm: &Guarded,
+) -> System {
+    use crate::guarded::{gconj, gnot};
     use crate::theory::TraceQuantifier;
 
     let mut sys = System::empty();
     sys.source_kind = Some(source_kind);
-    // Partition restrictions into safety / non-safety.
-    let (safety, other_restrictions): (Vec<Guarded>, Vec<Guarded>) =
-        restrictions.into_iter().partition(is_safety_formula);
-
     // Negate AllTraces lemmas; keep ExistsTrace as-is.
     let gf1 = match trace_quantifier {
         TraceQuantifier::ExistsTrace => fm.clone(),
@@ -1979,11 +2023,15 @@ pub fn formula_to_system(
     };
     // Conjoin non-safety restrictions.
     let mut conj_items = vec![gf1];
-    conj_items.extend(other_restrictions);
+    conj_items.extend(
+        other_restrictions
+            .iter()
+            .map(|restriction| (**restriction).clone()),
+    );
     let gf2 = gconj(conj_items);
     sys.insert_formula(gf2);
     // Safety restrictions are added as known-true lemmas.
-    sys.insert_lemmas(safety);
+    sys.insert_lemmas(safety_restrictions.iter().cloned());
     sys
 }
 

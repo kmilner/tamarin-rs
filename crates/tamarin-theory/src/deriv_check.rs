@@ -84,6 +84,7 @@ pub fn check_message_derivation(
     maude: &MaudeHandle,
     timeout_secs: u32,
     ndc_cache: Option<IntrRuleCache>,
+    parameters: crate::constraint::solver::sources::IntegerParameters,
 ) -> Vec<WfError> {
     if timeout_secs == 0 {
         return Vec::new();
@@ -131,6 +132,7 @@ pub fn check_message_derivation(
             timeout,
             rule_name,
             ndc_cache.as_ref(),
+            parameters,
         );
         if !undecidable.is_empty() {
             per_rule.push((rule_name.to_string(), undecidable));
@@ -382,6 +384,7 @@ fn prove_probe(
     timeout: Duration,
     rule_name: &str,
     ndc_cache: Option<&IntrRuleCache>,
+    parameters: crate::constraint::solver::sources::IntegerParameters,
 ) -> Vec<String> {
     use crate::constraint::solver::context::ProofContext;
     use crate::constraint::solver::search::{run_proof_search, NodeStatus};
@@ -403,12 +406,15 @@ fn prove_probe(
     // (HS keeps `_thyCache` on the probe theory; `closeRuleCache`
     // consumes it as-is), so the NDC tags — and the permutation — carry
     // into probe proofs without re-running the check per probe.
-    let mut ctx = match ndc_cache {
-        Some(cache) => {
-            ProofContext::new_with_injected_intruder_rules(maude, rules, Vec::new(), cache.clone())
-        }
-        None => ProofContext::new_with_restrictions(maude, rules, Vec::new()),
-    };
+    let mut ctx = ProofContext::new_with_restrictions_pool_forced_and_parameters(
+        maude,
+        None,
+        rules,
+        Vec::new(),
+        &[],
+        ndc_cache.cloned(),
+        parameters,
+    );
     ctx.is_exists_trace = true;
     // Probes have no `[sources]`-tagged lemmas, so no typing
     // assumptions — but `ensure_saturated()` still must run to compute
@@ -540,7 +546,7 @@ mod tests {
               lemma trivial: "T"
             end
         "#;
-        let report = check_message_derivation(&theory(src), &m, 5, None);
+        let report = check_message_derivation(&theory(src), &m, 5, None, Default::default());
         // `x` appears in `In(x)` which is intruder-known → derivable.
         assert!(report.is_empty(), "expected no warnings, got {:?}", report);
     }
@@ -554,7 +560,7 @@ mod tests {
               lemma trivial: "T"
             end
         "#;
-        let report = check_message_derivation(&theory(src), &m, 5, None);
+        let report = check_message_derivation(&theory(src), &m, 5, None, Default::default());
         // Free `unbound` has no premise → not derivable.
         assert_eq!(report.len(), 1);
         assert!(
@@ -573,7 +579,7 @@ mod tests {
               lemma trivial: "T"
             end
         "#;
-        let report = check_message_derivation(&theory(src), &m, 0, None);
+        let report = check_message_derivation(&theory(src), &m, 0, None, Default::default());
         assert!(report.is_empty(), "timeout=0 should disable the check");
     }
 
@@ -589,7 +595,7 @@ mod tests {
               lemma trivial: "T"
             end
         "#;
-        let report = check_message_derivation(&theory(src), &m, 5, None);
+        let report = check_message_derivation(&theory(src), &m, 5, None, Default::default());
         assert!(
             report.is_empty(),
             "a no_derivcheck rule is not reported, got {:?}",
@@ -682,7 +688,7 @@ mod tests {
         let Some((thy, m)) = theory_and_maude(src) else {
             return;
         };
-        let report = check_message_derivation(&thy, &m, 10, None);
+        let report = check_message_derivation(&thy, &m, 10, None, Default::default());
         assert_eq!(report.len(), 1, "expected one report, got {:?}", report);
         assert!(
             report[0].message.contains("Reveal")
@@ -712,7 +718,7 @@ mod tests {
         let Some((thy, m)) = theory_and_maude(src) else {
             return;
         };
-        let report = check_message_derivation(&thy, &m, 10, None);
+        let report = check_message_derivation(&thy, &m, 10, None, Default::default());
         assert!(
             report.is_empty(),
             "public `dec` → `m` derivable; expected no report, got {:?}",

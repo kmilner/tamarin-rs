@@ -44,6 +44,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         frontend_dist,
         maude_path,
         derivcheck_timeout: 5,
+        solver_parameters: Default::default(),
         stop_on_trace: None,
         dot_path: "dot".to_string(),
         json_path: None,

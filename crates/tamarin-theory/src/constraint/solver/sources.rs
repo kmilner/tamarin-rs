@@ -77,15 +77,15 @@ impl Drop for PrecomputeModeGuard {
 }
 
 /// Solver-tuning parameters mirroring Haskell's `IntegerParameters`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct IntegerParameters {
     /// Maximum number of open destruction chains `solveAllSafeGoals` may
     /// solve during saturation before chain goals stop being safe (HS
     /// `paramOpenChainsLimit`, fed from `-c/--open-chains`).
-    pub open_chains_limit: i64,
+    open_chains_limit: i64,
     /// Maximum saturation iterations during source refinement (HS
     /// `paramSaturationLimit`, fed from `-s/--saturation`).
-    pub saturation_limit: i64,
+    saturation_limit: usize,
 }
 
 impl Default for IntegerParameters {
@@ -99,46 +99,33 @@ impl Default for IntegerParameters {
     }
 }
 
-/// CLI overrides for [`IntegerParameters`] (HS threads `-c`/`-s` from
-/// `TheoryLoadOptions` into every `closeRuleCache`; the port's contexts are
-/// built in too many places to thread a value through each, so the CLI layer
-/// stores the overrides process-globally and [`IntegerParameters::current`]
-/// folds them over the defaults).  `-1` = unset; the CLI parser range-checks
-/// the flags to `0..=i64::MAX` (cli.rs), so every real override is `>= 0`
-/// and the `try_from` below cannot fail.
-static CLI_OPEN_CHAINS_LIMIT: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(-1);
-static CLI_SATURATION_LIMIT: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(-1);
-
-/// Install the `-c/--open-chains` and `-s/--saturation` CLI values (`None`
-/// leaves the HS default in force).  Called once per process by the CLI
-/// entry points before any theory is loaded.
-pub fn set_cli_solver_limits(open_chains: Option<u64>, saturation: Option<u64>) {
-    use std::sync::atomic::Ordering;
-    if let Some(c) = open_chains {
-        let c = i64::try_from(c).expect("clap range-checks -c/--open-chains to 0..=i64::MAX");
-        CLI_OPEN_CHAINS_LIMIT.store(c, Ordering::Relaxed);
-    }
-    if let Some(s) = saturation {
-        let s = i64::try_from(s).expect("clap range-checks -s/--saturation to 0..=i64::MAX");
-        CLI_SATURATION_LIMIT.store(s, Ordering::Relaxed);
-    }
-}
-
 impl IntegerParameters {
-    /// The parameters in force for this process: HS defaults with any CLI
-    /// overrides applied.
-    pub fn current() -> Self {
-        use std::sync::atomic::Ordering;
+    /// Build the Haskell defaults with any non-negative overrides applied.
+    /// Values wider than the corresponding internal representation saturate;
+    /// the CLI rejects values beyond Haskell's `Int` domain earlier, while
+    /// library callers remain panic-free.
+    pub fn with_overrides(open_chains: Option<u64>, saturation: Option<u64>) -> Self {
         let mut p = IntegerParameters::default();
-        let c = CLI_OPEN_CHAINS_LIMIT.load(Ordering::Relaxed);
-        if c >= 0 {
-            p.open_chains_limit = c;
+        if let Some(value) = open_chains {
+            p.open_chains_limit = i64::try_from(value).unwrap_or(i64::MAX);
         }
-        let s = CLI_SATURATION_LIMIT.load(Ordering::Relaxed);
-        if s >= 0 {
-            p.saturation_limit = s;
+        if let Some(value) = saturation {
+            p.saturation_limit = usize::try_from(value).unwrap_or(usize::MAX);
         }
         p
+    }
+
+    pub fn open_chains_limit(self) -> i64 {
+        self.open_chains_limit
+    }
+
+    pub fn saturation_limit(self) -> usize {
+        self.saturation_limit
+    }
+
+    pub(crate) fn with_saturation_limit(mut self, limit: usize) -> Self {
+        self.saturation_limit = limit;
+        self
     }
 }
 
@@ -364,13 +351,7 @@ pub(crate) fn initial_source_cases(
     // premise → another Step → another A premise → another Start →
     // restriction fires again → Cyclic.  HS skips this entire chain by
     // filtering to safety formulas at `CloseRule.hs:425`.
-    let safety_restrictions: Vec<_> = ctx
-        .restrictions
-        .iter()
-        .filter(|r| crate::guarded::is_safety_formula(r))
-        .cloned()
-        .collect();
-    sys.insert_lemmas(safety_restrictions);
+    sys.insert_lemmas(ctx.safety_restrictions.iter().cloned());
     let mut red = Reduction::new(ctx, sys);
     red.insert_goal(goal.clone());
     // HS-faithful: `solveGoal goal` (Goals.hs:201-213) marks the goal
@@ -811,7 +792,7 @@ impl Drop for RefineFsScope {
 /// counterexamples.
 pub(crate) fn refine_with_source_asms(
     sources: Vec<Source>,
-    assumptions: &[crate::guarded::Guarded],
+    assumptions: &[std::sync::Arc<crate::guarded::Guarded>],
     ctx: &crate::constraint::solver::context::ProofContext,
 ) -> Vec<Source> {
     if assumptions.is_empty() {
@@ -879,7 +860,7 @@ pub(crate) fn refine_with_source_asms(
     // (`refineWithSourceAsms parameters … = saturateSources parameters …`,
     // Sources.hs:460-462), so a `-s` override applies here too — the
     // ctx carries it.
-    let limit: usize = ctx.saturation_limit;
+    let limit = ctx.parameters.saturation_limit();
     let saturated = saturate_sources_with_simp(intermediate, limit, ctx);
 
     // Step 3 (Haskell `removeFormulas`): strip formulas + solved
@@ -977,7 +958,7 @@ fn refine_one_source(
                 // HS `solveAllSafeGoals (filter goodTh ths) (get
                 // paramOpenChainsLimit parameters)` (Sources.hs:382-383):
                 // the `-c/--open-chains` limit, default 10.
-                IntegerParameters::current().open_chains_limit,
+                ctx.parameters.open_chains_limit(),
                 outer_cap,
                 branch_cap,
                 name_list,
@@ -2725,7 +2706,7 @@ fn refine_source_case(
                 Err(_) | Ok(SolveOutcome::Contradictory) => {
                     return Vec::new();
                 }
-                Ok(SolveOutcome::Linear(_)) => {
+                Ok(SolveOutcome::Linear) => {
                     // Single arm: solve_term_eqs already installed it
                     // into refined.sys.eq_store.  Mirror as a single-arm
                     // Vec so the post-continuation runs once with that
@@ -2991,7 +2972,7 @@ fn close_trivial_chains_in_graft(r: &mut crate::constraint::solver::reduction::R
                 // restores all Reduction state atomically.
                 break;
             }
-            Ok(SolveOutcome::Linear(_)) => {
+            Ok(SolveOutcome::Linear) => {
                 *r = trial;
                 // Single arm: `solve_term_eqs` installed it.  Mark the
                 // chain solved.

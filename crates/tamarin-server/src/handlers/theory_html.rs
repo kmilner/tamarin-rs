@@ -1273,20 +1273,18 @@ end
             crate::state::TheoryOrigin::Upload("stored.spthy".into()),
             &maude,
             0,
+            Default::default(),
         )
         .expect("load");
         entry.idx = 1;
-        let ndc_cache = entry
-            .ndc_cache
-            .clone()
-            .map(tamarin_theory::constraint::solver::context::IntrRuleCache::from);
         let state = Arc::new(
             crate::handlers::proof_tree::ProofState::new(
                 &entry.typed_theory,
-                entry.prover_maude_sig.clone(),
+                (*entry.prover_maude_sig).clone(),
                 &maude,
                 None,
-                ndc_cache.as_ref(),
+                entry.ndc_cache.as_ref(),
+                tamarin_theory::constraint::solver::sources::IntegerParameters::default(),
             )
             .expect("proof state"),
         );

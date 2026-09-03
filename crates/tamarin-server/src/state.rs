@@ -43,7 +43,7 @@ pub struct TheoryEntry {
     /// state is part of its Maude operator name, while the signature's rewrite
     /// rules and the theory's terms keep their untagged symbols, so a module
     /// built from the joined signature declares operators nothing else names.
-    pub prover_maude_sig: tamarin_term::maude_sig::MaudeSig,
+    pub prover_maude_sig: Arc<tamarin_term::maude_sig::MaudeSig>,
     /// Where the theory came from.
     pub origin: TheoryOrigin,
     /// Load time for the UI.
@@ -72,12 +72,21 @@ pub struct TheoryEntry {
     /// the derivation checks). Injected into the lazily built prover session,
     /// whose context factory reuses it for every operation. `None` when the
     /// load-time Maude boot failed.
-    pub ndc_cache: Option<Arc<Vec<tamarin_theory::rule::IntrRuleAC>>>,
-    /// Live proof state — built lazily on first request that needs a
-    /// materialized snapshot. `None` here means "not yet built"; on first
-    /// access we boot Maude and construct the theory-wide context. Sources
-    /// and per-lemma systems remain lazy until a proof operation needs them.
+    pub ndc_cache: Option<tamarin_theory::constraint::solver::context::IntrRuleCache>,
+    /// A detached/materialized proof state. Stored entries always keep this
+    /// `None`: their generation cell is the sole authoritative proof owner.
+    /// Materialized snapshots attach that generation's state here so existing
+    /// rendering and detached-edit code can consume one self-contained value.
     pub proof_state: Option<Arc<ProofState>>,
+}
+
+/// Lightweight data needed by the theory index page.
+pub struct TheorySummary {
+    pub idx: usize,
+    pub name: String,
+    pub origin: String,
+    pub loaded_at: DateTime<Local>,
+    pub primary: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -204,7 +213,7 @@ impl TheoryStore {
         let idx = next_free_idx(&inner);
         entry.idx = idx;
         entry.loaded_at = Local::now();
-        let generation = Arc::new(StoredGeneration::new(entry.proof_state.clone()));
+        let generation = Arc::new(StoredGeneration::new(entry.proof_state.take()));
         inner.by_idx.insert(idx, StoredTheory { generation, entry });
         idx
     }
@@ -246,12 +255,18 @@ impl TheoryStore {
             .map(|stored| stored.entry.typed_theory.name.clone())
     }
 
-    pub fn list(&self) -> Vec<TheoryEntry> {
+    pub fn list(&self) -> Vec<TheorySummary> {
         self.inner
             .lock()
             .by_idx
             .values()
-            .map(|stored| stored.entry.clone())
+            .map(|stored| TheorySummary {
+                idx: stored.entry.idx,
+                name: stored.entry.typed_theory.name.clone(),
+                origin: stored.entry.origin.label(),
+                loaded_at: stored.entry.loaded_at,
+                primary: stored.entry.primary,
+            })
             .collect()
     }
 
@@ -323,7 +338,7 @@ impl TheoryStore {
         }
         entry.idx = idx;
         entry.primary = false;
-        let generation = Arc::new(StoredGeneration::new(entry.proof_state.clone()));
+        let generation = Arc::new(StoredGeneration::new(entry.proof_state.take()));
         inner.by_idx.insert(idx, StoredTheory { generation, entry });
         Ok(idx)
     }
@@ -354,28 +369,23 @@ impl TheoryStore {
             // will retry from a fresh snapshot. The post-build check below
             // still closes the race with replacement during the build.
             self.validate_generation(idx, &generation)?;
-            let ndc_cache = snapshot
-                .entry
-                .ndc_cache
-                .clone()
-                .map(tamarin_theory::constraint::solver::context::IntrRuleCache::from);
             let built = ProofState::new(
                 &snapshot.entry.typed_theory,
-                snapshot.entry.prover_maude_sig.clone(),
+                (*snapshot.entry.prover_maude_sig).clone(),
                 &cfg.maude_path,
                 cfg.stop_on_trace,
-                ndc_cache.as_ref(),
+                snapshot.entry.ndc_cache.as_ref(),
+                cfg.solver_parameters,
             );
 
             // Publish only into the exact generation that elected this
             // builder.  Removal, reload, and index reuse all replace the Arc.
-            let mut inner = self.inner.lock();
-            let stored = inner.by_idx.get_mut(&idx).ok_or(StoreError::Stale(idx))?;
+            let inner = self.inner.lock();
+            let stored = inner.by_idx.get(&idx).ok_or(StoreError::Stale(idx))?;
             if !Arc::ptr_eq(&stored.generation, &generation) {
                 return Err(StoreError::Stale(idx));
             }
             let proof = Arc::new(built.map_err(StoreError::Build)?);
-            stored.entry.proof_state = Some(proof.clone());
             Ok(proof)
         })
     }
@@ -408,7 +418,7 @@ mod tests {
         TheoryEntry {
             idx: 0,
             typed_theory: Arc::new(typed_theory),
-            prover_maude_sig,
+            prover_maude_sig: Arc::new(prover_maude_sig),
             origin: TheoryOrigin::Interactive,
             loaded_at: Local::now(),
             primary: true,

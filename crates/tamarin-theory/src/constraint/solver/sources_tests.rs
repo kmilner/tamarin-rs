@@ -9,8 +9,15 @@ use tamarin_test_support::require_maude_path;
 #[test]
 fn default_parameters_match_haskell() {
     let p = IntegerParameters::default();
-    assert_eq!(p.open_chains_limit, 10);
-    assert_eq!(p.saturation_limit, 5);
+    assert_eq!(p.open_chains_limit(), 10);
+    assert_eq!(p.saturation_limit(), 5);
+}
+
+#[test]
+fn oversized_library_parameters_saturate_without_wrapping() {
+    let p = IntegerParameters::with_overrides(Some(u64::MAX), Some(u64::MAX));
+    assert_eq!(p.open_chains_limit(), i64::MAX);
+    assert_eq!(p.saturation_limit(), usize::MAX);
 }
 
 /// `unsolved_chain_constraints` counts exactly the open `Chain` goals.  It

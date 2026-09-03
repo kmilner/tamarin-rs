@@ -21,7 +21,7 @@ use crate::constraint::solver::reduction::{
 };
 use crate::tools::equation_store::LNSubst;
 
-type SimplifyPass = fn(&mut Reduction<'_>) -> ChangeIndicator;
+type SimplifyPass = fn(&mut Reduction<'_>);
 type BranchingPass = fn(&mut Reduction<'_>) -> SystemOutcome;
 
 #[derive(Clone, Copy)]
@@ -69,7 +69,7 @@ const SIMPLIFY_PASSES: &[Pass] = &[
 ///
 /// `removeSolvedSplitGoals`: Haskell `simplifySystem` non-diff branch
 /// (Simplify.hs:65-71) runs it AFTER `exploitUniqueMsgOrder` and once at
-/// the end of the pipeline — NOT inside the while_changing loop.  Do NOT
+/// the end of the pipeline — NOT inside the main fixpoint loop. Do NOT
 /// move it into the loop body: that is non-Haskell-faithful and can
 /// cause non-idempotent oscillation with downstream passes that add
 /// goals.
@@ -147,7 +147,7 @@ fn simplify_system_fan_out_inner_with_passes(
 ) -> Vec<(crate::constraint::system::System, u64)> {
     let ctx = red.ctx;
 
-    // Manual while_changing loop so we can break out on fan-out.
+    // Explicit fixpoint loop so we can break out on fan-out.
     // HS-faithful (Simplify.hs:73-77): no iteration cap — the loop
     // terminates only when a full pass reports `Unchanged`.
     loop {
@@ -258,7 +258,7 @@ fn complete_solve<E>(
             red.mark_contradictory();
             SystemOutcome::Contradictory
         }
-        Ok(crate::constraint::solver::reduction::SolveOutcome::Linear(_)) => SystemOutcome::Linear,
+        Ok(crate::constraint::solver::reduction::SolveOutcome::Linear) => SystemOutcome::Linear,
         Ok(crate::constraint::solver::reduction::SolveOutcome::Cases(arms)) => {
             let cases = arms
                 .into_iter()
@@ -304,14 +304,10 @@ fn non_injective_fact_instances_pairs(
     crate::constraint::constraints::NodeId,
 )> {
     use crate::constraint::constraints::NodeId;
-    use std::collections::BTreeSet;
     let sys = &red.sys;
     let ctxt = red.ctx;
     let mut out: Vec<(NodeId, NodeId)> = Vec::new();
-    // Injective fact tags from the proof context.
-    let inj_tags: BTreeSet<&crate::fact::FactTag> =
-        ctxt.injective_fact_insts.iter().map(|(t, _)| t).collect();
-    if inj_tags.is_empty() {
+    if ctxt.injective_fact_insts.is_empty() {
         return out;
     }
 
@@ -360,7 +356,7 @@ fn non_injective_fact_instances_pairs(
             Some(f) => f,
             None => continue,
         };
-        if !inj_tags.contains(&k_fa_prem.tag) {
+        if !ctxt.injective_fact_insts.contains_key(&k_fa_prem.tag) {
             continue;
         }
         let k_term = match k_fa_prem.terms.first() {
@@ -2159,7 +2155,7 @@ fn match_atom_via_maude(
 
 /// Apply the eq-store substitution to existing `less_atoms` so any
 /// mid-loop node merges propagate to atoms that were inserted earlier.
-fn normalise_less_atoms_pass(red: &mut Reduction) -> ChangeIndicator {
+fn normalise_less_atoms_pass(red: &mut Reduction) {
     let mut changed = if red.sys.normalise_less_atoms() {
         ChangeIndicator::Changed
     } else {
@@ -2192,7 +2188,6 @@ fn normalise_less_atoms_pass(red: &mut Reduction) -> ChangeIndicator {
     if changed == ChangeIndicator::Changed {
         red.changed = ChangeIndicator::Changed;
     }
-    changed
 }
 
 /// HS's `merge solver candidates` (Simplify.hs:194-207):
@@ -2904,7 +2899,7 @@ fn terms_containing_fresh(
 /// producer as supplier: that gives only the weaker
 /// `Fresh-node < {consumers}` relation, missing the
 /// `consumer_a < consumer_b` ordering Haskell derives via this rule.
-fn enforce_fresh_ordering_pass(red: &mut Reduction) -> ChangeIndicator {
+fn enforce_fresh_ordering_pass(red: &mut Reduction) {
     use crate::constraint::constraints::{LessAtom, Reason};
     use crate::fact::FactTag;
     use tamarin_term::lterm::LVar;
@@ -2950,7 +2945,7 @@ fn enforce_fresh_ordering_pass(red: &mut Reduction) -> ChangeIndicator {
         }
     }
     if suppliers.is_empty() {
-        return ChangeIndicator::Unchanged;
+        return;
     }
 
     // Step 2: for each (consumer_id, ~x), find every OTHER node whose
@@ -2974,7 +2969,6 @@ fn enforce_fresh_ordering_pass(red: &mut Reduction) -> ChangeIndicator {
     // every node's `RuleACInst` up front (a large per-pass allocation).
     let nodes_snapshot = red.sys.nodes.clone();
     let maude = red.ctx.maude.clone();
-    let mut changed = ChangeIndicator::Unchanged;
 
     // Precompute, ONCE, the set of nodes whose rule has exactly one, LINEAR
     // conclusion — the only rule property `plain_route` (`getRoute`/`plainRoute`,
@@ -3139,7 +3133,6 @@ fn enforce_fresh_ordering_pass(red: &mut Reduction) -> ChangeIndicator {
                 less_idx.as_mut().unwrap(),
             ) {
                 red.changed = ChangeIndicator::Changed;
-                changed = ChangeIndicator::Changed;
             }
             new_lesses.push((*sup_id, *other_id));
         }
@@ -3213,11 +3206,8 @@ fn enforce_fresh_ordering_pass(red: &mut Reduction) -> ChangeIndicator {
             less_idx.as_mut().unwrap(),
         ) {
             red.changed = ChangeIndicator::Changed;
-            changed = ChangeIndicator::Changed;
         }
     }
-
-    changed
 }
 
 /// CR-rules *DG2_1* and *DG3*: a single conclusion can only feed one
@@ -3410,11 +3400,7 @@ fn simp_injective_fact_eq_mon_pass(red: &mut Reduction) -> SystemOutcome {
     sorted_nodes.sort_by_key(|a| a.0);
     for (id, rule) in sorted_nodes {
         for prem in &rule.premises {
-            if let Some((_, behaviours)) = red
-                .ctx
-                .injective_fact_insts
-                .iter()
-                .find(|(t, _)| t == &prem.tag)
+            if let Some(behaviours) = red.ctx.injective_fact_insts.get(&prem.tag)
                 && let Some((first, pairs)) =
                     crate::tools::injective_fact_instances::trimmed_pair_terms(prem, behaviours)
             {
@@ -3859,14 +3845,8 @@ fn reduce_formulas_pass(red: &mut Reduction) -> SystemOutcome {
 }
 
 /// `removeSolvedSplitGoals` lifted into a one-shot pass.
-fn remove_solved_split_goals_pass(red: &mut Reduction) -> ChangeIndicator {
-    let before = red.sys.goals.len();
+fn remove_solved_split_goals_pass(red: &mut Reduction) {
     red.remove_solved_split_goals();
-    if red.sys.goals.len() != before {
-        ChangeIndicator::Changed
-    } else {
-        ChangeIndicator::Unchanged
-    }
 }
 
 /// Drop `gtrue` (`Conj []`) entries from the formula list — those are
@@ -3881,7 +3861,7 @@ fn remove_solved_split_goals_pass(red: &mut Reduction) -> ChangeIndicator {
 /// "no method" Sorry, even though the proof is trivially Solved.
 /// This matches Haskell's `insertFormula` which calls `markAsSolved`
 /// on every formula it inserts, including `gtrue`.
-fn drop_trivially_true_formulas_pass(red: &mut Reduction) -> ChangeIndicator {
+fn drop_trivially_true_formulas_pass(red: &mut Reduction) {
     let before = red.sys.formulas.len();
     let gt = crate::guarded::gtrue();
     let had_gtrue = crate::guarded::stores_contains(&red.sys.formulas, &gt);
@@ -3892,16 +3872,13 @@ fn drop_trivially_true_formulas_pass(red: &mut Reduction) -> ChangeIndicator {
     }
     if red.sys.formulas.len() != before {
         red.changed = ChangeIndicator::Changed;
-        ChangeIndicator::Changed
-    } else {
-        ChangeIndicator::Unchanged
     }
 }
 
 /// Deduplicate the formula list, keeping the first `Arc` of each group of
 /// equal formulas. Haskell uses `Set` storage so this is implicit; we use
 /// `Vec` so a manual pass is needed.
-fn dedupe_formulas_pass(red: &mut Reduction) -> ChangeIndicator {
+fn dedupe_formulas_pass(red: &mut Reduction) {
     use crate::guarded::Guarded;
     let before = red.sys.formulas.len();
     let mut seen: Vec<std::sync::Arc<Guarded>> = Vec::new();
@@ -3919,9 +3896,6 @@ fn dedupe_formulas_pass(red: &mut Reduction) -> ChangeIndicator {
         // A real drop: `formulas_mut()` bumps `content_stamp` on handout.
         *red.sys.formulas_mut() = seen;
         red.changed = ChangeIndicator::Changed;
-        ChangeIndicator::Changed
-    } else {
-        ChangeIndicator::Unchanged
     }
 }
 
@@ -3977,12 +3951,12 @@ fn dedupe_formulas_pass(red: &mut Reduction) -> ChangeIndicator {
 /// difference (HS `oldNegSubterms`, SubtermStore.hs:90-97, see line 95; taken
 /// by `simpSplitNegSt`, SubtermStore.hs:187-204, see line 189) decides
 /// which entries this pass (re-)splits.
-fn propagate_subterm_obvious(red: &mut Reduction) -> ChangeIndicator {
+fn propagate_subterm_obvious(red: &mut Reduction) {
     use crate::tools::subterm_store::{split_subterm, subterm_step, SubtermSplit};
     use tamarin_term::lterm::{is_msg_var, sort_of_lnterm, LSort};
     let mut changed = ChangeIndicator::Unchanged;
     if red.sys.subterm_store.contradictory {
-        return changed;
+        return;
     }
     let reducible = red.ctx.maude.maude_sig().reducible_fun_syms_fast.clone();
 
@@ -4419,7 +4393,6 @@ fn propagate_subterm_obvious(red: &mut Reduction) -> ChangeIndicator {
     if matches!(changed, ChangeIndicator::Changed) {
         red.changed = ChangeIndicator::Changed;
     }
-    changed
 }
 
 /// `natSubtermEqualities` — UTVPI-based cycle detection and equality

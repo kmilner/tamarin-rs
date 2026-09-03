@@ -94,7 +94,8 @@ fn ndc_check_flag_gates_the_web_load_ndc_pass() {
 
     // Flag absent — HS `ndcCheck = True` (TheoryLoader.hs:279), the pass runs.
     theory_io::set_ndc_check(true);
-    let checked = theory_io::load_from_path(&path, &maude, deriv_off).expect("fixture loads");
+    let checked = theory_io::load_from_path(&path, &maude, deriv_off, Default::default())
+        .expect("fixture loads");
     assert_eq!(
         functions_line(&checked),
         "functions: fst/1, pair/2, snd/1, zeroo/0, xorr/2 [AC,NDC]",
@@ -107,7 +108,8 @@ fn ndc_check_flag_gates_the_web_load_ndc_pass() {
     // `--no-ndc` — HS's `else (sign, intrRules)` branch (TheoryLoader.hs:517):
     // no verdicts, no signature tags, cache in raw assembly order.
     theory_io::set_ndc_check(false);
-    let skipped = theory_io::load_from_path(&path, &maude, deriv_off).expect("fixture loads");
+    let skipped = theory_io::load_from_path(&path, &maude, deriv_off, Default::default())
+        .expect("fixture loads");
     assert_eq!(
         functions_line(&skipped),
         "functions: fst/1, pair/2, snd/1, zeroo/0, xorr/2 [AC]",

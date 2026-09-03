@@ -134,7 +134,8 @@ async fn test_del_path_lemma_returns_redirect_envelope() {
     assert!(
         s.state
             .store
-            .get(idx)
+            .materialized_snapshot(idx, &s.state.cfg)
+            .ok()
             .and_then(|entry| entry.proof_state)
             .is_some(),
         "direct deletion must preserve proofs from the old theory"

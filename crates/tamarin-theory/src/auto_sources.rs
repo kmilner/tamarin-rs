@@ -790,6 +790,7 @@ pub fn apply_auto_sources(
     maude: MaudeHandle,
     pool: Option<std::sync::Arc<tamarin_term::maude_proc::MaudePool>>,
     ndc_cache: Option<&crate::constraint::solver::context::IntrRuleCache>,
+    parameters: crate::constraint::solver::sources::IntegerParameters,
 ) -> bool {
     use crate::constraint::solver::context::ProofContext;
     use crate::guarded::formula_to_guarded;
@@ -822,13 +823,14 @@ pub fn apply_auto_sources(
 
     // GENERATION chains: the RAW (saturated, unrefined) sources — HS
     // `addAutoSourcesLemma` uses `crcRawSources` (RuleItem.hs:64-70, see line 66).
-    let ctx_raw = ProofContext::new_with_restrictions_pool_forced(
+    let ctx_raw = ProofContext::new_with_restrictions_pool_forced_and_parameters(
         maude.clone(),
         pool.clone(),
         rules.clone(),
         restrictions.clone(),
         &[],
         ndc_cache.clone(),
+        parameters,
     );
     let raw_chains = collect_chains(&ctx_raw);
 
@@ -851,15 +853,16 @@ pub fn apply_auto_sources(
         // refined == raw
         !raw_chains.is_empty()
     } else {
-        let mut ctx_ref = ProofContext::new_with_restrictions_pool_forced(
+        let mut ctx_ref = ProofContext::new_with_restrictions_pool_forced_and_parameters(
             maude.clone(),
             pool.clone(),
             rules.clone(),
             restrictions.clone(),
             &[],
             ndc_cache.clone(),
+            parameters,
         );
-        ctx_ref.typing_assumptions = typing_asms;
+        ctx_ref.typing_assumptions = typing_asms.into_iter().map(std::sync::Arc::new).collect();
         !collect_chains(&ctx_ref).is_empty()
     };
     if !trigger {
@@ -879,13 +882,14 @@ pub fn apply_auto_sources(
     // original context's chains (and its saturation trace count).
     let (rules, gen_chains) = if unfolded {
         let rules: Vec<OpenProtoRule> = elaborated.rules().cloned().collect();
-        let ctx_mod = ProofContext::new_with_restrictions_pool_forced(
+        let ctx_mod = ProofContext::new_with_restrictions_pool_forced_and_parameters(
             maude.clone(),
             pool,
             rules.clone(),
             restrictions,
             &[],
             ndc_cache,
+            parameters,
         );
         let chains = collect_chains(&ctx_mod);
         (rules, chains)

@@ -81,6 +81,8 @@ pub struct ServerConfig {
     /// run at theory load (HS interactive default 5s; 0 disables).  Set
     /// from the CLI flag by `interactive` setup.
     pub derivcheck_timeout: u32,
+    /// Source-solver limits from `-c/--open-chains` and `-s/--saturation`.
+    pub solver_parameters: tamarin_theory::constraint::solver::sources::IntegerParameters,
     /// CLI `--stop-on-trace` (None = flag absent).  Merged with each
     /// theory's in-file `configuration:` block at `ProofState::new` time
     /// per HS `closeTheory`'s `configStopOnTrace` (TheoryLoader.hs:759-763):
@@ -109,6 +111,8 @@ impl ServerConfig {
             frontend_dist: None,
             maude_path,
             derivcheck_timeout: 5,
+            solver_parameters:
+                tamarin_theory::constraint::solver::sources::IntegerParameters::default(),
             stop_on_trace: None,
             dot_path: "dot".to_string(),
             json_path: None,
@@ -168,7 +172,12 @@ pub async fn serve(
     // (Dispatch.hs:203-212), and a load failure prints the dashed
     // `reportFailure` block (Dispatch.hs:194-201) and skips the theory.
     for p in &theory_paths {
-        match theory_io::load_from_path(p, &cfg.maude_path, cfg.derivcheck_timeout) {
+        match theory_io::load_from_path(
+            p,
+            &cfg.maude_path,
+            cfg.derivcheck_timeout,
+            cfg.solver_parameters,
+        ) {
             Ok(entry) => {
                 let name = entry.typed_theory.name.clone();
                 if !entry.wf_report.is_empty() {

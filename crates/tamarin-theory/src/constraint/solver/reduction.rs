@@ -287,21 +287,6 @@ impl<'ctx> Reduction<'ctx> {
         }
     }
 
-    /// Run a reduction step until it stops mutating the system. The
-    /// `step` closure returns the new `ChangeIndicator`.
-    pub fn while_changing<F>(&mut self, mut step: F)
-    where
-        F: FnMut(&mut Reduction<'ctx>) -> ChangeIndicator,
-    {
-        loop {
-            self.changed = ChangeIndicator::Unchanged;
-            let _ = step(self);
-            if self.changed == ChangeIndicator::Unchanged {
-                break;
-            }
-        }
-    }
-
     /// Mark the system contradictory via the eq-store *and* via gfalse
     /// in formulas.  Mirrors Haskell's `contradictoryIf True` /
     /// `mzero`-via-`contradictoryIf` semantics: in Haskell, hitting
@@ -411,10 +396,10 @@ impl<'ctx> Reduction<'ctx> {
                     }],
                 )
             } else {
-                Ok(SolveOutcome::Linear(ChangeIndicator::Unchanged))
+                Ok(SolveOutcome::Linear)
             }
         } else {
-            Ok(SolveOutcome::Linear(ChangeIndicator::Unchanged))
+            Ok(SolveOutcome::Linear)
         };
         if matches!(res, Err(_) | Ok(SolveOutcome::Contradictory)) {
             self.mark_contradictory();
@@ -466,9 +451,9 @@ impl<'ctx> Reduction<'ctx> {
                 self.sys.bump_cache_lvar(&i);
                 self.sys.set_last_atom(Some(i));
                 self.changed = ChangeIndicator::Changed;
-                Ok(SolveOutcome::Linear(ChangeIndicator::Unchanged))
+                Ok(SolveOutcome::Linear)
             }
-            Some(j) if j == i => Ok(SolveOutcome::Linear(ChangeIndicator::Unchanged)),
+            Some(j) if j == i => Ok(SolveOutcome::Linear),
             Some(j) => {
                 let res =
                     self.solve_node_id_eqs(&[tamarin_term::rewriting::Equal { lhs: i, rhs: j }]);
@@ -1540,7 +1525,7 @@ impl<'ctx> Reduction<'ctx> {
                         self.mark_contradictory();
                         return SystemOutcome::Contradictory;
                     }
-                    Ok(SolveOutcome::Linear(_)) => {}
+                    Ok(SolveOutcome::Linear) => {}
                     Ok(SolveOutcome::Cases(arms)) => {
                         self.changed = ChangeIndicator::Changed;
                         return SystemOutcome::Cases(
@@ -1686,7 +1671,7 @@ impl<'ctx> Reduction<'ctx> {
                 // `solved_formulas_mut()` bumps `content_stamp` on handout,
                 // breaking a stale skip marker.
                 if mark {
-                    self.sys.insert_solved_formula(g);
+                    self.sys.push_solved_formula_normalized_absent(g);
                 }
                 self.changed = ChangeIndicator::Changed;
                 self.insert_formula_sequence(&items, false)
@@ -1715,7 +1700,7 @@ impl<'ctx> Reduction<'ctx> {
                     "insert_formula_inner empty-Disj arm: the entry guard \
                      already excludes formulas-membership"
                 );
-                self.sys.insert_formula(g.clone());
+                self.sys.push_open_formula_normalized_absent(g.clone());
                 self.changed = ChangeIndicator::Changed;
                 let goal = Goal::Disj(crate::constraint::constraints::Disj::new(items.to_vec()));
                 self.insert_goal(goal);
@@ -1736,7 +1721,7 @@ impl<'ctx> Reduction<'ctx> {
                     "insert_formula_inner Disj arm: the entry guard \
                      already excludes formulas-membership"
                 );
-                self.sys.insert_formula(g.clone());
+                self.sys.push_open_formula_normalized_absent(g.clone());
                 let goal = Goal::Disj(crate::constraint::constraints::Disj::new(items.to_vec()));
                 self.insert_goal(goal);
                 self.changed = ChangeIndicator::Changed;
@@ -1804,7 +1789,7 @@ impl<'ctx> Reduction<'ctx> {
                             .any(|f| apply_canon(f, eq_vs).as_ref() == canon.as_ref())
                     };
                     if !already_solved {
-                        self.sys.insert_solved_formula(g);
+                        self.sys.push_solved_formula_normalized_absent(g);
                         self.changed = ChangeIndicator::Changed;
                     }
                 }
@@ -1826,7 +1811,7 @@ impl<'ctx> Reduction<'ctx> {
                 if crate::guarded::stores_contains(&self.sys.solved_formulas, &outer) {
                     return SystemOutcome::Linear;
                 }
-                self.sys.insert_solved_formula(outer);
+                self.sys.push_solved_formula_normalized_absent(outer);
                 // HS (Reduction.hs:427-494, see line 459) draws `xs <- mapM (uncurry freshLVar) ss`
                 // straight from the ambient MonadFresh counter — no clamp; the
                 // threaded counter is above every system var by construction
@@ -1905,8 +1890,8 @@ impl<'ctx> Reduction<'ctx> {
                         // guard RS would bump it to 4 (+ ¬Less, ¬Eq) →
                         // IH-Disj reads as already-solved, skeleton
                         // replay picks the wrong open goal.
-                        if mark && !crate::guarded::stores_contains(&self.sys.solved_formulas, &g) {
-                            self.sys.insert_solved_formula(g.clone());
+                        if mark {
+                            self.sys.push_solved_formula_normalized_absent(g.clone());
                         }
                         let d = crate::guarded::Guarded::Disj(
                             vec![
@@ -1923,12 +1908,8 @@ impl<'ctx> Reduction<'ctx> {
                     }
                     ProtoAtom::Less(_, _) => {
                         // Less on non-node terms — keep as formula.
-                        if !crate::guarded::stores_contains(&self.sys.formulas, &g)
-                            && !crate::guarded::stores_contains(&self.sys.solved_formulas, &g)
-                        {
-                            self.sys.insert_formula(g);
-                            self.changed = ChangeIndicator::Changed;
-                        }
+                        self.sys.push_open_formula_normalized_absent(g);
+                        self.changed = ChangeIndicator::Changed;
                         SystemOutcome::Linear
                     }
                     ProtoAtom::EqE(i, j)
@@ -1938,8 +1919,8 @@ impl<'ctx> Reduction<'ctx> {
                         // HS-faithful: only mark when called from top-level
                         // (`mark=True`), mirroring `markAsSolved = when mark
                         // ...` (Reduction.hs:427-494, see line 494).
-                        if mark && !crate::guarded::stores_contains(&self.sys.solved_formulas, &g) {
-                            self.sys.insert_solved_formula(g.clone());
+                        if mark {
+                            self.sys.push_solved_formula_normalized_absent(g.clone());
                         }
                         let d = crate::guarded::Guarded::Disj(
                             vec![
@@ -1976,8 +1957,8 @@ impl<'ctx> Reduction<'ctx> {
                         // HS-faithful: only mark when called from top-level
                         // (`mark=True`), mirroring `markAsSolved = when mark
                         // ...` (Reduction.hs:427-494, see line 494).
-                        if mark && !crate::guarded::stores_contains(&self.sys.solved_formulas, &g) {
-                            self.sys.insert_solved_formula(g.clone());
+                        if mark {
+                            self.sys.push_solved_formula_normalized_absent(g.clone());
                         }
                         let last_node = match &self.sys.last_atom {
                             Some(j) => *j,
@@ -2025,8 +2006,8 @@ impl<'ctx> Reduction<'ctx> {
                         // HS-faithful: only mark when called from top-level
                         // (`mark=True`), mirroring `markAsSolved = when mark
                         // ...` (Reduction.hs:427-494, see line 494).
-                        if mark && !crate::guarded::stores_contains(&self.sys.solved_formulas, &g) {
-                            self.sys.insert_solved_formula(g.clone());
+                        if mark {
+                            self.sys.push_solved_formula_normalized_absent(g.clone());
                         }
                         // HS `insertNegSubterm (bTermToLTerm i) (bTermToLTerm j)`
                         // (Reduction.hs:468-471); the empty binder list leaves
@@ -2041,12 +2022,8 @@ impl<'ctx> Reduction<'ctx> {
                     }
                     _ => {
                         // Unhandled single-guard universal: keep in formulas.
-                        if !crate::guarded::stores_contains(&self.sys.formulas, &g)
-                            && !crate::guarded::stores_contains(&self.sys.solved_formulas, &g)
-                        {
-                            self.sys.insert_formula(g);
-                            self.changed = ChangeIndicator::Changed;
-                        }
+                        self.sys.push_open_formula_normalized_absent(g);
+                        self.changed = ChangeIndicator::Changed;
                         SystemOutcome::Linear
                     }
                 }
@@ -2061,12 +2038,8 @@ impl<'ctx> Reduction<'ctx> {
                 // their universals into a dead store and the body
                 // never fires (Start_before_Loop &c. mistakenly
                 // reach Solved).
-                if !crate::guarded::stores_contains(&self.sys.formulas, &g)
-                    && !crate::guarded::stores_contains(&self.sys.solved_formulas, &g)
-                {
-                    self.sys.insert_formula(g);
-                    self.changed = ChangeIndicator::Changed;
-                }
+                self.sys.push_open_formula_normalized_absent(g);
+                self.changed = ChangeIndicator::Changed;
                 SystemOutcome::Linear
             }
         }
@@ -2243,7 +2216,7 @@ fn flatten_list_eq<T: Clone>(
 #[derive(Debug)]
 pub enum SolveOutcome {
     /// Single case — the same `Reduction` continues.
-    Linear(ChangeIndicator),
+    Linear,
     /// Multiple cases — the caller continues every branch with its inherited
     /// FreshT counter, preserving the Haskell `Reduction` monad's disjunction.
     Cases(Vec<SolveBranch>),
@@ -2325,7 +2298,7 @@ impl<'ctx> Reduction<'ctx> {
         // Filter out trivially-equal equations.
         let pending: Vec<_> = eqs.iter().filter(|e| e.lhs != e.rhs).cloned().collect();
         if pending.is_empty() {
-            return Ok(SolveOutcome::Linear(ChangeIndicator::Unchanged));
+            return Ok(SolveOutcome::Linear);
         }
 
         // Take eq_store out of self, mutate it, put it back, then
@@ -2473,7 +2446,7 @@ impl<'ctx> Reduction<'ctx> {
                     let arm = live_arms.into_iter().next().unwrap();
                     self.sys.set_eq_store(std::sync::Arc::new(arm.eq_store));
                     self.maude.reset_counter_to(arm.counter);
-                    Ok(SolveOutcome::Linear(ChangeIndicator::Changed))
+                    Ok(SolveOutcome::Linear)
                 } else {
                     Ok(SolveOutcome::Cases(live_arms))
                 }
@@ -2487,7 +2460,7 @@ impl<'ctx> Reduction<'ctx> {
                 }
                 self.insert_goal(crate::constraint::constraints::Goal::Split(id));
                 self.changed = ChangeIndicator::Changed;
-                Ok(SolveOutcome::Linear(ChangeIndicator::Changed))
+                Ok(SolveOutcome::Linear)
             }
             (None, _) => {
                 // No split — simp once.
@@ -2497,7 +2470,7 @@ impl<'ctx> Reduction<'ctx> {
                     return Ok(SolveOutcome::Contradictory);
                 }
                 self.changed = ChangeIndicator::Changed;
-                Ok(SolveOutcome::Linear(ChangeIndicator::Changed))
+                Ok(SolveOutcome::Linear)
             }
         }
     }
@@ -2661,7 +2634,7 @@ impl<'ctx> Reduction<'ctx> {
         self.sys.invalidate_node_max_cache();
         self.sys.content_mut_untracked().nodes = std::sync::Arc::new(canonical);
         if rule_eqs.is_empty() {
-            return Ok(SolveOutcome::Linear(ChangeIndicator::Unchanged));
+            return Ok(SolveOutcome::Linear);
         }
         self.changed = ChangeIndicator::Changed;
         self.solve_rule_eqs(SplitStrategy::SplitLater, &rule_eqs)
@@ -2712,7 +2685,7 @@ impl<'ctx> Reduction<'ctx> {
                 Ok(SolveOutcome::Contradictory) => {
                     return Ok(SystemOutcome::Contradictory);
                 }
-                Ok(SolveOutcome::Linear(_) | SolveOutcome::Cases(_)) => {}
+                Ok(SolveOutcome::Linear | SolveOutcome::Cases(_)) => {}
             }
         }
         // 5. insertLess.
@@ -2818,7 +2791,7 @@ impl<'ctx> Reduction<'ctx> {
             Ok(SolveOutcome::Contradictory) => {
                 return Ok(SystemOutcome::Contradictory);
             }
-            Ok(SolveOutcome::Linear(_) | SolveOutcome::Cases(_)) => {}
+            Ok(SolveOutcome::Linear | SolveOutcome::Cases(_)) => {}
         }
         // 9. addDisj for each case conjDisjEq entry.  Track new split-ids.
         let mut new_split_ids: Vec<crate::tools::equation_store::SplitId> = Vec::new();
@@ -2871,7 +2844,7 @@ impl<'ctx> Reduction<'ctx> {
             Ok(SolveOutcome::Contradictory) => {
                 return Ok(SystemOutcome::Contradictory);
             }
-            Ok(SolveOutcome::Linear(_)) => {
+            Ok(SolveOutcome::Linear) => {
                 // Single-arm path: solve_term_eqs installed the result.
             }
             Ok(SolveOutcome::Cases(arms)) => {
@@ -4635,7 +4608,7 @@ impl<'ctx> Reduction<'ctx> {
                                 .into_iter()
                                 .map(|arm| (arm.eq_store, arm.counter))
                                 .collect(),
-                            Ok(SolveOutcome::Linear(_)) => {
+                            Ok(SolveOutcome::Linear) => {
                                 vec![((**sub.sys.eq_store).clone(), sub.maude.fresh_counter_peek())]
                             }
                         };
@@ -4788,7 +4761,7 @@ impl<'ctx> Reduction<'ctx> {
                                     .into_iter()
                                     .map(|arm| (arm.eq_store, arm.counter))
                                     .collect(),
-                                Ok(SolveOutcome::Linear(_)) => vec![(
+                                Ok(SolveOutcome::Linear) => vec![(
                                     (**sub.sys.eq_store).clone(),
                                     sub.maude.fresh_counter_peek(),
                                 )],

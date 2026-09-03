@@ -518,7 +518,7 @@ pub(crate) fn exec_proof_method_unchecked(
             // pruned on here.
             //
             // Cases with *other* contradictions (FormulasFalse, Cyclic,
-            // NodeAfterLast, sort-conflation, edge-fact-tag mismatch, …)
+            // NodeAfterLast, edge-fact-tag mismatch, …)
             // survive `runReduction` in Haskell and are picked up by the
             // next iteration's contradictions check as explicit
             // `Finished(Contradictory(_))` leaves.  Do *not* filter those

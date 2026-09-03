@@ -13,10 +13,10 @@
 //! (matching HS Contradictions.hs `contradictions`); everything has a
 //! faithful port below.
 //!
-//! In addition to the HS-ported conditions, RS emits several RS-only
+//! In addition to the HS-ported conditions, RS emits two RS-only
 //! soundness backstops at the IncompatibleEqs slot
-//! (`has_sort_conflated_lvars`, `has_incompatible_edge_facts`,
-//! `has_fresh_fact_sort_violation`) that have no Haskell counterpart;
+//! (`has_incompatible_edge_facts`, `has_fresh_fact_sort_violation`)
+//! that have no Haskell counterpart;
 //! see the per-check note at the IncompatibleEqs push in `contradictions`.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -141,23 +141,15 @@ pub fn contradictions(_ctxt: &ProofContext, sys: &System) -> Vec<Contradiction> 
         out.push(Contradiction::ForbiddenACConstrChain);
     }
     // 9. IncompatibleEqs — HS-faithful: `eqsIsFalse sEqStore`
-    //    (Contradictions.hs `contradictions`). The three preceding probes are RS-only
+    //    (Contradictions.hs `contradictions`). The two preceding probes are RS-only
     //    soundness backstops, NOT a port of the eqsIsFalse check: each fires
     //    where HS's Maude unifier / `solveFactEqs` would have already pruned
     //    this branch at construction time. The real fix is upstream — make
     //    RS's edge insertion / fact-eq solving reject these systems at
-    //    construction (as HS does), after which all three become dead code.
-    //    - has_sort_conflated_lvars: MOST suspect — under HS semantics
-    //      `~x:Pub.58` and `~x:Fresh.58` are DISTINCT, legitimately-coexisting
-    //      vars (LVar Eq is `i1==i2 && s1==s2 && n1==n2`, LTerm.hs:516-517), so
-    //      this has genuine over-fire risk relative to HS; if RS conflates them
-    //      it is an RS renaming/node-id bug this probe is masking.
+    //    construction (as HS does), after which both become dead code.
     //    - has_incompatible_edge_facts / has_fresh_fact_sort_violation: lower
     //      risk — mirror real HS invariants (edges connect equal fact tags;
     //      Fr requires Fresh sort) that the unifier/solveFactEqs enforce.
-    if has_sort_conflated_lvars(sys) {
-        out.push(Contradiction::IncompatibleEqs);
-    }
     if has_incompatible_edge_facts(sys, &node_rules) {
         out.push(Contradiction::IncompatibleEqs);
     }
@@ -1712,9 +1704,7 @@ fn non_injective_fact_instances<'a>(
     node_rules: &std::cell::OnceCell<NodeRuleMap<'a>>,
 ) -> Vec<Contradiction> {
     let mut out = Vec::new();
-    let inj_tags: BTreeSet<&crate::fact::FactTag> =
-        ctxt.injective_fact_insts.iter().map(|(t, _)| t).collect();
-    if inj_tags.is_empty() {
+    if ctxt.injective_fact_insts.is_empty() {
         return out;
     }
 
@@ -1744,7 +1734,7 @@ fn non_injective_fact_instances<'a>(
     }
     let mut reach_cache: BTreeMap<NodeId, Rc<BTreeSet<NodeId>>> = BTreeMap::new();
     // Resolve node-id → rule via the pass-shared map (forced here, after
-    // the `inj_tags` early-out) instead of a linear `nodes.iter().find`
+    // the injective-tag early-out) instead of a linear `nodes.iter().find`
     // per `i`/`j`.
     let node_rule_map = node_rules.get_or_init(|| sys.node_rule_map());
     let lookup_node =
@@ -1762,7 +1752,7 @@ fn non_injective_fact_instances<'a>(
             Some(f) => f,
             None => continue,
         };
-        if !inj_tags.contains(&k_fa_prem.tag) {
+        if !ctxt.injective_fact_insts.contains_key(&k_fa_prem.tag) {
             continue;
         }
         let k_term = match k_fa_prem.terms.first() {
@@ -1798,106 +1788,6 @@ fn non_injective_fact_instances<'a>(
         }
     }
     out
-}
-
-/// Detect two LVars sharing `(name, idx)` but with disjoint sub-sorts.
-/// Pub/Fresh/Nat are pairwise disjoint sub-sorts of Msg; if the system
-/// contains both `~mw:Pub 58` and `~mw:Fresh 58`, no model can satisfy
-/// both occurrences simultaneously.  Returns true if any such conflict
-/// exists.
-fn has_sort_conflated_lvars(sys: &System) -> bool {
-    use tamarin_term::lterm::{HasFrees, LSort, LVar};
-    // `LVar.name` is an interned `&'static str` (Copy), so the seen-map key
-    // is allocation-free; `&str` hashing/equality is by content, so equal
-    // names share one entry even across distinct interned pointers.  The
-    // first-seen sort wins for each `(name, idx)` key.
-    struct SortSeen {
-        seen: tamarin_utils::FastMap<(&'static str, u64), LSort>,
-        conflict: bool,
-    }
-    impl SortSeen {
-        fn visit(&mut self, v: &LVar) {
-            if self.conflict {
-                return;
-            }
-            match self.seen.get(&(v.name, v.idx)).copied() {
-                None => {
-                    self.seen.insert((v.name, v.idx), v.sort);
-                }
-                Some(prev) if prev == v.sort => {}
-                Some(prev) => {
-                    // Two distinct sorts at same (name, idx).  Pub/Fresh/
-                    // Nat are disjoint; pairs that include Msg can be
-                    // narrowed (Msg is the join), so don't flag those.
-                    let disjoint = matches!(
-                        (prev, v.sort),
-                        (LSort::Pub, LSort::Fresh)
-                            | (LSort::Fresh, LSort::Pub)
-                            | (LSort::Pub, LSort::Nat)
-                            | (LSort::Nat, LSort::Pub)
-                            | (LSort::Fresh, LSort::Nat)
-                            | (LSort::Nat, LSort::Fresh)
-                    );
-                    if disjoint {
-                        self.conflict = true;
-                    }
-                }
-            }
-        }
-        /// [`SortSeen::visit`] every free `LVar` of `x`.
-        fn scan(&mut self, x: &impl HasFrees) {
-            x.for_each_free(&mut |v: &LVar| self.visit(v));
-        }
-    }
-    let mut st = SortSeen {
-        seen: tamarin_utils::FastMap::default(),
-        conflict: false,
-    };
-    for (id, rule) in sys.nodes.iter() {
-        st.scan(id);
-        st.scan(rule);
-        if st.conflict {
-            return true;
-        }
-    }
-    for e in &sys.edges {
-        st.scan(&e.src.0);
-        st.scan(&e.tgt.0);
-        if st.conflict {
-            return true;
-        }
-    }
-    for l in &sys.less_atoms {
-        st.scan(&l.smaller);
-        st.scan(&l.larger);
-        if st.conflict {
-            return true;
-        }
-    }
-    if let Some(la) = &sys.last_atom {
-        st.scan(la);
-    }
-    for (g, _) in sys.goals.iter() {
-        match g {
-            crate::constraint::constraints::Goal::Action(n, fa) => {
-                st.scan(n);
-                st.scan(fa);
-            }
-            crate::constraint::constraints::Goal::Premise(p, fa) => {
-                st.scan(&p.0);
-                st.scan(fa);
-            }
-            crate::constraint::constraints::Goal::Chain(c, p) => {
-                st.scan(&c.0);
-                st.scan(&p.0);
-            }
-            _ => {}
-        }
-        if st.conflict {
-            return true;
-        }
-    }
-    st.conflict
 }
 
 /// Has the system's formula list been forced to ⊥?

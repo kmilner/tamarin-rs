@@ -134,6 +134,7 @@ pub fn load_from_path(
     path: &Path,
     maude_path: &str,
     derivcheck_timeout: u32,
+    parameters: tamarin_theory::constraint::solver::sources::IntegerParameters,
 ) -> Result<TheoryEntry, LoadError> {
     let src = std::fs::read_to_string(path)
         .map_err(|e| LoadError::Io(format!("{}: {}", path.display(), e)))?;
@@ -142,6 +143,7 @@ pub fn load_from_path(
         TheoryOrigin::Local(PathBuf::from(path)),
         maude_path,
         derivcheck_timeout,
+        parameters,
     )
 }
 
@@ -156,6 +158,7 @@ pub(crate) fn load_from_source(
     origin: TheoryOrigin,
     maude_path: &str,
     derivcheck_timeout: u32,
+    parameters: tamarin_theory::constraint::solver::sources::IntegerParameters,
 ) -> Result<TheoryEntry, LoadError> {
     // Inject the parsec `SourcePos` name (the path HS prints in the frame
     // header) from the origin: a local file's on-disk path, or the uploaded
@@ -268,7 +271,7 @@ pub(crate) fn load_from_source(
     // (`check_close_intr_rule` below).  Stored on the `TheoryEntry` so
     // `ProofState::new` injects it into the web session / shared context
     // instead of re-running the check per context build.
-    let mut ndc_cache: Option<Arc<Vec<tamarin_theory::rule::IntrRuleAC>>> = None;
+    let mut ndc_cache: Option<tamarin_theory::constraint::solver::context::IntrRuleCache> = None;
     // The signature every Maude process for this theory loads its module
     // from, taken before the NDC join below — see
     // `TheoryEntry::prover_maude_sig` for why the join must not reach it.
@@ -308,6 +311,7 @@ pub(crate) fn load_from_source(
             Some(&typed.name),
             typed.options.deduction_chain_check,
             &typed.intruder_rules,
+            parameters,
         );
         if !checked.ndc_funs.is_empty() {
             let mut sig = std::mem::take(&mut typed.signature);
@@ -316,7 +320,7 @@ pub(crate) fn load_from_source(
             }
             typed.signature = sig;
         }
-        ndc_cache = Some(Arc::new(checked.cache));
+        ndc_cache = Some(checked.cache.into());
 
         // Dynamic Message Derivation Checks (as in `run_batch`): HS
         // `checkVariableDeducability`, gated by `--derivcheck-timeout` (HS
@@ -339,9 +343,8 @@ pub(crate) fn load_from_source(
             &typed,
             &maude,
             derivcheck_timeout,
-            ndc_cache
-                .clone()
-                .map(tamarin_theory::constraint::solver::context::IntrRuleCache::from),
+            ndc_cache.clone(),
+            parameters,
         );
         wf_report.extend(extra);
         if derivcheck_timeout > 0 {
@@ -366,7 +369,7 @@ pub(crate) fn load_from_source(
     Ok(TheoryEntry {
         idx: 0,
         typed_theory: Arc::new(typed),
-        prover_maude_sig,
+        prover_maude_sig: Arc::new(prover_maude_sig),
         origin,
         loaded_at: Local::now(),
         primary: true,
@@ -453,8 +456,14 @@ mod tests {
         };
         let src = "theory T begin\n#ifdef FOO\nrule R: [ ] --> [ ]\n#endif\nend";
         let load = |src: &str, origin: TheoryOrigin| {
-            load_from_source(src, origin, "/nonexistent/maude-for-test", 0)
-                .expect("tiny theory loads")
+            load_from_source(
+                src,
+                origin,
+                "/nonexistent/maude-for-test",
+                0,
+                Default::default(),
+            )
+            .expect("tiny theory loads")
         };
 
         // Flag absent: the #ifdef block is dropped.
@@ -473,7 +482,7 @@ mod tests {
         std::fs::write(dir.join("inc.spthy"), "rule Inc: [ ] --> [ ]\n").expect("write include");
         let main = dir.join("main.spthy");
         std::fs::write(&main, "theory M begin\n#include \"inc.spthy\"\nend").expect("write main");
-        let entry = load_from_path(&main, "/nonexistent/maude-for-test", 0)
+        let entry = load_from_path(&main, "/nonexistent/maude-for-test", 0, Default::default())
             .expect("include resolves against the theory's dir");
         assert_eq!(rule_count(&entry), 1);
         let _ = std::fs::remove_dir_all(&dir);
@@ -495,6 +504,7 @@ mod tests {
             TheoryOrigin::Upload("no-variants.spthy".into()),
             &maude,
             0,
+            Default::default(),
         )
         .expect("theory loads");
 
