@@ -715,44 +715,74 @@ fn empty_refinement_still_labels_source_systems_refined() {
 }
 
 #[test]
-fn concurrent_refined_consumers_share_one_materialisation() {
+fn concurrent_raw_and_refined_consumers_share_each_materialisation() {
     let session = match session_from(RAW_AND_REFINED_LEMMAS) {
         Some(s) => s,
         None => return,
     };
+    let barrier = std::sync::Barrier::new(4);
     let shared = std::thread::scope(|scope| {
-        let workers: Vec<_> = (0..4)
-            .map(|_| {
-                scope.spawn(|| {
-                    let lemma = session.theory.lookup_lemma("goal").expect("goal lemma");
-                    let ctx = session.setup_per_lemma_ctx(lemma, "goal");
-                    ctx.ensure_saturated();
-                    assert!(ctx.source_error().is_none());
-                    ctx.full_sources
-                        .iter()
-                        .next()
-                        .expect("source")
-                        .cases_shared_or_empty()
-                })
+        let workers: Vec<_> = [
+            SourceKind::RawSources,
+            SourceKind::RefinedSources,
+            SourceKind::RawSources,
+            SourceKind::RefinedSources,
+        ]
+        .into_iter()
+        .map(|kind| {
+            let session = &session;
+            let barrier = &barrier;
+            scope.spawn(move || {
+                barrier.wait();
+                let ctx = session.context_for_sources(kind).expect("source context");
+                let cases = ctx
+                    .full_sources
+                    .iter()
+                    .next()
+                    .expect("source")
+                    .cases_shared_or_empty();
+                (kind, cases)
             })
-            .collect();
+        })
+        .collect();
         workers
             .into_iter()
             .map(|worker| worker.join().expect("source worker"))
             .collect::<Vec<_>>()
     });
 
-    assert_eq!(
-        shared
+    for kind in [SourceKind::RawSources, SourceKind::RefinedSources] {
+        let mut matching = shared
             .iter()
-            .skip(1)
-            .all(|cases| std::sync::Arc::ptr_eq(&shared[0], cases)),
-        !source_cache_disabled()
-    );
+            .filter(|(candidate, _)| *candidate == kind)
+            .map(|(_, cases)| cases);
+        let first = matching.next().expect("first consumer");
+        assert_eq!(
+            matching.all(|cases| std::sync::Arc::ptr_eq(first, cases)),
+            !source_cache_disabled()
+        );
+    }
     assert_eq!(
         session.source_cache.len(),
         if source_cache_disabled() { 0 } else { 2 }
     );
+}
+
+#[test]
+fn source_pool_work_returns_to_a_lemma_pool_worker() {
+    use rayon::prelude::*;
+
+    let lemma_pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(2)
+        .build()
+        .expect("lemma pool");
+    let sums = lemma_pool.install(|| {
+        (0..2)
+            .into_par_iter()
+            .map(|_| in_source_pool(|| (0..8).into_par_iter().sum::<usize>()))
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(sums, vec![28, 28]);
 }
 
 #[test]
@@ -803,6 +833,28 @@ fn replay_of_terminal_roots_leaves_sources_lazy() {
     for name in ["open", "terminal"] {
         check_and_extend_lemma_in_session(&session, name, usize::MAX).expect("replay");
     }
+    assert!(session.source_cache.is_empty());
+}
+
+#[test]
+fn parallel_replay_of_terminal_roots_leaves_sources_lazy() {
+    use rayon::prelude::*;
+
+    let session = match session_from(STORED_TERMINAL_LEMMAS) {
+        Some(s) => s,
+        None => return,
+    };
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(2)
+        .build()
+        .expect("lemma pool");
+    pool.install(|| {
+        ["open", "terminal"].par_iter().try_for_each(|name| {
+            check_and_extend_lemma_in_session(&session, name, usize::MAX).map(drop)
+        })
+    })
+    .expect("parallel replay");
+
     assert!(session.source_cache.is_empty());
 }
 

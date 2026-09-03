@@ -2018,22 +2018,23 @@ impl TheoryPipeline<'_> {
             // be trapped behind other unbounded work. Fully internal,
             // guardable theories retain the indexed parallel fast path; Rayon
             // preserves declaration order when collecting this iterator.
+            let lemmas: Vec<_> = elaborated.lemmas().collect();
             let ordered = session.guarded_lemmas_may_fail()
-                || elaborated.lemmas().any(|lemma| {
+                || lemmas.iter().any(|lemma| {
                     prove_anything
                         && lemma_matches(lemma_filter, &lemma.name)
                         && session.lemma_ranking_may_fail(&lemma.name)
                 });
             let lemma_results: Vec<_> = if ordered {
-                elaborated
-                    .lemmas()
+                lemmas
+                    .into_iter()
                     .map(run_lemma)
                     .collect::<Result<Vec<_>, RunError>>()?
             } else {
+                // Source saturation uses its own pool, so workers can wait on
+                // the shared lazy cache without starving its nested work.
                 use rayon::prelude::*;
-                elaborated
-                    .lemmas()
-                    .collect::<Vec<_>>()
+                lemmas
                     .par_iter()
                     .map(|lemma| run_lemma(lemma))
                     .collect::<Result<Vec<_>, RunError>>()?

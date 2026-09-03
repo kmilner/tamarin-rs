@@ -540,6 +540,36 @@ impl SourceCache {
     }
 }
 
+/// Source saturation fans out internally. Keep that work off the global
+/// Rayon pool whose workers may all be waiting for a shared cache entry from
+/// parallel lemma proofs. One process-wide pool avoids creating a full set of
+/// persistent threads for every loaded theory.
+fn source_pool() -> &'static rayon::ThreadPool {
+    static POOL: std::sync::OnceLock<rayon::ThreadPool> = std::sync::OnceLock::new();
+    POOL.get_or_init(|| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(rayon::current_num_threads())
+            .stack_size(64 * 1024 * 1024)
+            .thread_name(|i| format!("tamarin-source-{i}"))
+            .build()
+            .expect("build source saturation pool")
+    })
+}
+
+/// Enter the source pool from an ordinary scoped thread. Calling
+/// `ThreadPool::install` directly from a worker of the lemma pool can leave
+/// that cross-pool caller parked after the installed job completes. A tiny
+/// coordinator thread keeps the two Rayon schedulers independent; source
+/// initialization happens at most twice per theory.
+fn in_source_pool<R: Send>(f: impl FnOnce() -> R + Send) -> R {
+    std::thread::scope(
+        |scope| match scope.spawn(|| source_pool().install(f)).join() {
+            Ok(result) => result,
+            Err(panic) => std::panic::resume_unwind(panic),
+        },
+    )
+}
+
 /// Per-file shared prover state — the bits of work that depend only on
 /// the theory, not on which lemma is being proved.  Built once via
 /// [`ProverSession::build_with_heuristic`] and reused across
@@ -1177,9 +1207,11 @@ fn raw_sources<'a>(
     cache: &'a SourceCache,
 ) -> &'a CachedSources {
     cache.raw.get_or_init(|| {
-        let raw_ctx = fresh_source_context(template, setup_counter_before);
-        raw_ctx.ensure_saturated();
-        snapshot_sources(&raw_ctx.full_sources)
+        in_source_pool(|| {
+            let raw_ctx = fresh_source_context(template, setup_counter_before);
+            raw_ctx.ensure_saturated();
+            snapshot_sources(&raw_ctx.full_sources)
+        })
     })
 }
 
@@ -1197,20 +1229,25 @@ fn session_sources<'a>(
         .refined
         .get_or_init(|| {
             let assumptions = gather_typing_assumptions(theory, SourceKind::RefinedSources)?;
-            let refinement_ctx = fresh_source_context(template, setup_counter_before);
-            restore_sources(
-                &refinement_ctx,
-                raw_sources(template, setup_counter_before, cache),
-            );
-            // This internal refinement starts from a fully restored raw snapshot;
-            // no outer saturation run owns its gate.
-            refinement_ctx.mark_saturated_done();
-            let refined = crate::constraint::solver::sources::refine_with_source_asms(
-                refinement_ctx.full_sources.to_vec(),
-                &assumptions,
-                &refinement_ctx,
-            );
-            Ok(snapshot_sources(&refined))
+            // Resolve the raw dependency before entering the source pool.
+            // `ThreadPool::install` may execute another installed job while
+            // its caller waits, even in a one-thread pool. Waiting for an
+            // in-progress raw OnceLock from inside that pool could therefore
+            // wait on a suspended raw initializer on the same worker.
+            let raw = raw_sources(template, setup_counter_before, cache);
+            in_source_pool(|| {
+                let refinement_ctx = fresh_source_context(template, setup_counter_before);
+                restore_sources(&refinement_ctx, raw);
+                // This internal refinement starts from a fully restored raw snapshot;
+                // no outer saturation run owns its gate.
+                refinement_ctx.mark_saturated_done();
+                let refined = crate::constraint::solver::sources::refine_with_source_asms(
+                    refinement_ctx.full_sources.to_vec(),
+                    &assumptions,
+                    &refinement_ctx,
+                );
+                Ok(snapshot_sources(&refined))
+            })
         })
         .as_ref()
         .map_err(Clone::clone)
