@@ -116,7 +116,7 @@ async fn test_del_path_lemma_returns_redirect_envelope() {
 }
 
 #[tokio::test]
-async fn deleting_a_lemma_preserves_other_live_proofs() {
+async fn deleting_a_reuse_lemma_invalidates_later_live_proofs() {
     let s = start_server_with_theory("hide_reuse_lemma.spthy").await;
     let removed_step: serde_json::Value = s
         .get("/thy/trace/1/del/path/proof/keeps_helper")
@@ -140,7 +140,19 @@ async fn deleting_a_lemma_preserves_other_live_proofs() {
         .await
         .expect("source body");
     assert!(!source.contains("lemma helper [reuse]"));
+    assert!(source.contains("proof may have been invalidated by editing a reuse lemma above"));
     assert!(source.contains("sorry /* removed */"));
+}
+
+#[tokio::test]
+async fn deleting_a_source_lemma_is_rejected() {
+    let s = start_server_with_theory("source_lemma.spthy").await;
+    let response = s.get("/thy/trace/1/del/path/lemma/typing").await;
+    assert_eq!(response.status(), 200);
+    assert_eq!(
+        response.json::<serde_json::Value>().await.unwrap(),
+        serde_json::json!({"alert": "Can't edit or remove source lemmas for now"})
+    );
 }
 
 #[tokio::test]

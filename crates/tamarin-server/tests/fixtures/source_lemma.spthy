@@ -1,0 +1,12 @@
+theory SourceLemma
+begin
+
+lemma typing [sources]:
+  all-traces
+  "not Ex x #i. K( x ) @ #i"
+
+lemma goal:
+  all-traces
+  "not Ex x #i. K( x ) @ #i"
+
+end

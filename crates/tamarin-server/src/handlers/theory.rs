@@ -2022,11 +2022,34 @@ pub async fn delete_step(
                     .materialized_snapshot(idx, &delete_state.cfg)?;
                 detached.idx = 0;
                 detached.primary = false;
-                if detached.typed_theory.lookup_lemma(&name_owned).is_none() {
+                let lemmas: Vec<_> = detached.typed_theory.lemmas().collect();
+                let Some((removed_idx, removed_lemma)) = lemmas
+                    .iter()
+                    .enumerate()
+                    .find(|(_, lemma)| lemma.name == name_owned)
+                else {
                     return Err(crate::state::StoreError::Build(
                         "Sorry, but removing the selected lemma failed!".to_string(),
                     ));
+                };
+                if removed_lemma.attributes.iter().any(|attribute| {
+                    matches!(attribute, tamarin_theory::theory::LemmaAttr::Sources)
+                }) {
+                    return Err(crate::state::StoreError::Build(
+                        "Can't edit or remove source lemmas for now".to_string(),
+                    ));
                 }
+                let invalidated: std::collections::BTreeSet<String> =
+                    if removed_lemma.attributes.iter().any(|attribute| {
+                        matches!(attribute, tamarin_theory::theory::LemmaAttr::Reuse)
+                    }) {
+                        lemmas[removed_idx + 1..]
+                            .iter()
+                            .map(|lemma| lemma.name.clone())
+                            .collect()
+                    } else {
+                        std::collections::BTreeSet::new()
+                    };
                 let mut theory = (*detached.typed_theory).clone();
                 let removed = theory.remove_lemma(&name_owned);
                 debug_assert!(removed);
@@ -2036,9 +2059,9 @@ pub async fn delete_step(
                         previous
                             .rebase_onto(
                                 &detached.typed_theory,
-                                (*detached.prover_maude_sig).clone(),
                                 detached.ndc_cache.as_ref(),
                                 &delete_state.cfg,
+                                &invalidated,
                             )
                             .map_err(crate::state::StoreError::Build)?,
                     ));
