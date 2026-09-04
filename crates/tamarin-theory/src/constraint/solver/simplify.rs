@@ -22,38 +22,38 @@ use crate::constraint::solver::reduction::{
 use crate::tools::equation_store::LNSubst;
 
 type SimplifyPass = fn(&mut Reduction<'_>);
-type BranchingPass = fn(&mut Reduction<'_>) -> SystemOutcome;
+type FalliblePass = fn(&mut Reduction<'_>) -> Result<SystemOutcome, crate::prove::ProveError>;
 
 #[derive(Clone, Copy)]
 enum Pass {
     Linear(SimplifyPass),
-    Branching(BranchingPass),
+    Fallible(FalliblePass),
 }
 
 impl Pass {
-    fn run(self, red: &mut Reduction<'_>) -> SystemOutcome {
-        match self {
+    fn run(self, red: &mut Reduction<'_>) -> Result<SystemOutcome, crate::prove::ProveError> {
+        Ok(match self {
             Pass::Linear(pass) => {
                 pass(red);
                 SystemOutcome::Linear
             }
-            Pass::Branching(pass) => pass(red),
-        }
+            Pass::Fallible(pass) => return pass(red),
+        })
     }
 }
 
 const SIMPLIFY_PASSES: &[Pass] = &[
-    Pass::Branching(enforce_fresh_node_uniqueness_pass),
-    Pass::Branching(enforce_kd_fact_uniqueness_pass),
-    Pass::Branching(enforce_ku_action_uniqueness_pass),
-    Pass::Branching(enforce_edge_uniqueness_pass),
-    Pass::Branching(solve_unique_actions_pass_fan_out),
-    Pass::Branching(reduce_formulas_pass),
-    Pass::Branching(eval_formula_atoms_pass),
-    Pass::Branching(insert_implied_formulas_pass),
+    Pass::Fallible(enforce_fresh_node_uniqueness_pass),
+    Pass::Fallible(enforce_kd_fact_uniqueness_pass),
+    Pass::Fallible(enforce_ku_action_uniqueness_pass),
+    Pass::Fallible(enforce_edge_uniqueness_pass),
+    Pass::Fallible(solve_unique_actions_pass_fan_out),
+    Pass::Fallible(reduce_formulas_pass),
+    Pass::Fallible(eval_formula_atoms_pass),
+    Pass::Fallible(insert_implied_formulas_pass),
     Pass::Linear(enforce_fresh_ordering_pass),
     Pass::Linear(propagate_subterm_obvious),
-    Pass::Branching(simp_injective_fact_eq_mon_pass),
+    Pass::Fallible(simp_injective_fact_eq_mon_pass),
     Pass::Linear(dedupe_formulas_pass),
     Pass::Linear(drop_trivially_true_formulas_pass),
     Pass::Linear(normalise_less_atoms_pass),
@@ -96,7 +96,7 @@ fn simp_post_loop_steps(red: &mut Reduction) {
 pub(crate) fn simplify_system_with_fanout(
     ctx: &crate::constraint::solver::context::ProofContext,
     sys: crate::constraint::system::System,
-) -> Vec<crate::constraint::system::System> {
+) -> Result<Vec<crate::constraint::system::System>, crate::prove::ProveError> {
     simplify_system_with_fanout_seeded(ctx, sys, 0)
 }
 
@@ -106,11 +106,13 @@ pub(crate) fn simplify_system_with_fanout_seeded(
     ctx: &crate::constraint::solver::context::ProofContext,
     sys: crate::constraint::system::System,
     seed: u64,
-) -> Vec<crate::constraint::system::System> {
-    simplify_system_with_fanout_seeded_with_counters(ctx, sys, seed)
-        .into_iter()
-        .map(|(sys, _)| sys)
-        .collect()
+) -> Result<Vec<crate::constraint::system::System>, crate::prove::ProveError> {
+    Ok(
+        simplify_system_with_fanout_seeded_with_counters(ctx, sys, seed)?
+            .into_iter()
+            .map(|(sys, _)| sys)
+            .collect(),
+    )
 }
 
 /// Counter-preserving form used by source saturation.
@@ -118,7 +120,7 @@ pub(crate) fn simplify_system_with_fanout_seeded_with_counters(
     ctx: &crate::constraint::solver::context::ProofContext,
     sys: crate::constraint::system::System,
     seed: u64,
-) -> Vec<(crate::constraint::system::System, u64)> {
+) -> Result<Vec<(crate::constraint::system::System, u64)>, crate::prove::ProveError> {
     use crate::constraint::solver::reduction::Reduction;
     // `new_inheriting` consults the `REFINE_FLOOR` thread-local so this
     // sub-reduction inherits the source precompute's `avoid th` seed (HS
@@ -137,30 +139,22 @@ pub(crate) fn simplify_system_with_fanout_seeded_with_counters(
 /// including allocations that are no longer visible in the system.
 fn simplify_system_fan_out_inner(
     red: &mut Reduction,
-) -> Vec<(crate::constraint::system::System, u64)> {
+) -> Result<Vec<(crate::constraint::system::System, u64)>, crate::prove::ProveError> {
     simplify_system_fan_out_inner_with_passes(red, SIMPLIFY_PASSES)
 }
 
 fn simplify_system_fan_out_inner_with_passes(
     red: &mut Reduction,
     passes: &[Pass],
-) -> Vec<(crate::constraint::system::System, u64)> {
-    let ctx = red.ctx;
-
+) -> Result<Vec<(crate::constraint::system::System, u64)>, crate::prove::ProveError> {
     // Explicit fixpoint loop so we can break out on fan-out.
     // HS-faithful (Simplify.hs:73-77): no iteration cap — the loop
     // terminates only when a full pass reports `Unchanged`.
     loop {
-        if ctx.has_source_error() {
-            return Vec::new();
-        }
         red.changed = ChangeIndicator::Unchanged;
-        red.subst_system();
-        if ctx.has_source_error() {
-            return Vec::new();
-        }
-        if let Err(branches) = continue_simplify_iteration(red, passes, 0) {
-            return branches;
+        red.subst_system()?;
+        if let Some(branches) = continue_simplify_iteration(red, passes, 0)? {
+            return Ok(branches);
         }
         if red.changed == ChangeIndicator::Unchanged {
             break;
@@ -168,10 +162,10 @@ fn simplify_system_fan_out_inner_with_passes(
     }
     // Post-loop steps — same as `simplify_system`.
     simp_post_loop_steps(red);
-    vec![(
+    Ok(vec![(
         std::mem::replace(&mut red.sys, crate::constraint::system::System::empty()),
         red.maude.fresh_counter_peek(),
-    )]
+    )])
 }
 
 /// Continue from the operation immediately after a split. Haskell's DisjT
@@ -182,27 +176,21 @@ fn continue_simplify_iteration(
     red: &mut Reduction,
     passes: &[Pass],
     mut next_pass: usize,
-) -> Result<(), Vec<(crate::constraint::system::System, u64)>> {
+) -> Result<Option<Vec<(crate::constraint::system::System, u64)>>, crate::prove::ProveError> {
     while let Some(pass) = passes.get(next_pass) {
-        if red.ctx.has_source_error() {
-            return Err(Vec::new());
-        }
-        let outcome = pass.run(red);
-        if red.ctx.has_source_error() {
-            return Err(Vec::new());
-        }
+        let outcome = pass.run(red)?;
         next_pass += 1;
         let arms = match outcome {
             SystemOutcome::Linear => continue,
-            SystemOutcome::Contradictory => return Err(Vec::new()),
+            SystemOutcome::Contradictory => return Ok(Some(Vec::new())),
             SystemOutcome::Cases(arms) => arms,
         };
         let changed = red.changed.or(ChangeIndicator::Changed);
-        return Err(continue_simplify_branches(
+        return Ok(Some(continue_simplify_branches(
             arms, red.ctx, passes, next_pass, changed,
-        ));
+        )?));
     }
-    Ok(())
+    Ok(None)
 }
 
 fn continue_simplify_branches(
@@ -211,16 +199,13 @@ fn continue_simplify_branches(
     passes: &[Pass],
     next_pass: usize,
     changed: ChangeIndicator,
-) -> Vec<(crate::constraint::system::System, u64)> {
+) -> Result<Vec<(crate::constraint::system::System, u64)>, crate::prove::ProveError> {
     let mut out = Vec::new();
     for arm in arms {
-        let mut branch_out = continue_simplify_branch(arm, ctx, passes, next_pass, changed);
-        if ctx.has_source_error() {
-            return Vec::new();
-        }
+        let mut branch_out = continue_simplify_branch(arm, ctx, passes, next_pass, changed)?;
         out.append(&mut branch_out);
     }
-    out
+    Ok(out)
 }
 
 fn continue_simplify_branch(
@@ -229,32 +214,36 @@ fn continue_simplify_branch(
     passes: &[Pass],
     next_pass: usize,
     changed: ChangeIndicator,
-) -> Vec<(crate::constraint::system::System, u64)> {
-    if arm.sys.eq_store.is_false() || ctx.has_source_error() {
-        return Vec::new();
+) -> Result<Vec<(crate::constraint::system::System, u64)>, crate::prove::ProveError> {
+    if arm.sys.eq_store().is_false() {
+        return Ok(Vec::new());
     }
     let mut branch = Reduction::new_inheriting(ctx, arm.sys, arm.counter);
     branch.changed = changed;
-    match continue_simplify_iteration(&mut branch, passes, next_pass) {
-        Err(branches) => branches,
-        Ok(()) if branch.changed == ChangeIndicator::Changed => {
+    match continue_simplify_iteration(&mut branch, passes, next_pass)? {
+        Some(branches) => Ok(branches),
+        None if branch.changed == ChangeIndicator::Changed => {
             simplify_system_fan_out_inner_with_passes(&mut branch, passes)
         }
-        Ok(()) => {
+        None => {
             simp_post_loop_steps(&mut branch);
-            vec![(branch.sys, branch.maude.fresh_counter_peek())]
+            Ok(vec![(branch.sys, branch.maude.fresh_counter_peek())])
         }
     }
 }
 
 /// Attach a low-level equality result to its common pre-solve system.
-fn complete_solve<E>(
+fn complete_solve(
     red: &mut Reduction,
     base: crate::constraint::system::System,
-    res: std::result::Result<crate::constraint::solver::reduction::SolveOutcome, E>,
-) -> SystemOutcome {
-    match res {
-        Ok(crate::constraint::solver::reduction::SolveOutcome::Contradictory) | Err(_) => {
+    res: std::result::Result<
+        crate::constraint::solver::reduction::SolveOutcome,
+        crate::prove::ProveError,
+    >,
+) -> Result<SystemOutcome, crate::prove::ProveError> {
+    Ok(match res {
+        Err(error) => return Err(error),
+        Ok(crate::constraint::solver::reduction::SolveOutcome::Contradictory) => {
             red.mark_contradictory();
             SystemOutcome::Contradictory
         }
@@ -274,7 +263,7 @@ fn complete_solve<E>(
                 .collect();
             red.finish_system_cases(cases)
         }
-    }
+    })
 }
 
 /// Direct port of Haskell `addNonInjectiveFactInstances`
@@ -480,7 +469,7 @@ fn exploit_unique_msg_order(red: &mut Reduction) {
 /// atoms, and re-inserts the simplified result. Atoms that evaluate
 /// to a known truth value collapse to `gtrue`/`gfalse`, dropping
 /// out of disjunctions or short-circuiting conjunctions.
-fn eval_formula_atoms_pass(red: &mut Reduction) -> SystemOutcome {
+fn eval_formula_atoms_pass(red: &mut Reduction) -> Result<SystemOutcome, crate::prove::ProveError> {
     use crate::guarded::{simplify_guarded_with, Guarded};
     // HS-faithful: `evalFormulaAtoms` iterates `S.toList sFormulas` —
     // Simplify.hs — ascending Guarded Ord.  Rust's Vec is in
@@ -601,12 +590,12 @@ fn eval_formula_atoms_pass(red: &mut Reduction) -> SystemOutcome {
         // short-circuits the dedup check.  Without parity here we get +1
         // step counts at every checkpoint inside the affected proof subtree.
         red.changed = ChangeIndicator::Changed;
-        match red.insert_formula(simp) {
+        match red.insert_formula(simp)? {
             SystemOutcome::Linear => {}
-            outcome => return outcome,
+            outcome => return Ok(outcome),
         }
     }
-    SystemOutcome::Linear
+    Ok(SystemOutcome::Linear)
 }
 
 /// Partial atom valuation. Mirrors Haskell's `partialAtomValuation`
@@ -971,7 +960,9 @@ fn eq_node_id(t: &tamarin_term::lterm::LNTerm) -> Option<crate::constraint::cons
 /// action's terms become matching subjects. Maude returns a list of
 /// `(LVar, LNTerm)` substitutions, each an [`LNSubst`] applied to the
 /// implied body.
-fn insert_implied_formulas_pass(red: &mut Reduction) -> SystemOutcome {
+fn insert_implied_formulas_pass(
+    red: &mut Reduction,
+) -> Result<SystemOutcome, crate::prove::ProveError> {
     use crate::atom::Atom as AAtom;
     use crate::atom::ProtoAtom;
     use crate::constraint::constraints::Goal;
@@ -1034,7 +1025,7 @@ fn insert_implied_formulas_pass(red: &mut Reduction) -> SystemOutcome {
         })
         .collect();
     if universals.is_empty() {
-        return SystemOutcome::Linear;
+        return Ok(SystemOutcome::Linear);
     }
 
     // Collect all actions from the trace, mirroring Haskell's
@@ -1078,7 +1069,7 @@ fn insert_implied_formulas_pass(red: &mut Reduction) -> SystemOutcome {
     let mut sys_actions = unsolved_actions;
     sys_actions.extend(node_actions);
     if sys_actions.is_empty() {
-        return SystemOutcome::Linear;
+        return Ok(SystemOutcome::Linear);
     }
 
     // Group `sys_actions` indices by fact name, once per pass.  Without the
@@ -1174,10 +1165,10 @@ fn insert_implied_formulas_pass(red: &mut Reduction) -> SystemOutcome {
             &other_guards,
             &mut new_formulas,
             &mut new_formulas_canon,
-        );
+        )?;
     }
     if new_formulas.is_empty() {
-        return SystemOutcome::Linear;
+        return Ok(SystemOutcome::Linear);
     }
     // Route each implied-formula body through `insert_formula`
     // so Disj / Ex / Conj bodies generate the matching `Goal::Disj`,
@@ -1331,7 +1322,7 @@ fn try_match_all_guards(
     // and threaded across universals by the caller (so each candidate's canon
     // is computed once).
     out_canon: &mut Vec<(crate::guarded::Guarded, u64)>,
-) {
+) -> Result<(), crate::prove::ProveError> {
     use crate::atom::ProtoAtom;
     use crate::guarded::subst_guarded;
 
@@ -1358,7 +1349,7 @@ fn try_match_all_guards(
         other_guards: &[&crate::atom::Atom<tamarin_term::lterm::LNTerm>],
         out: &mut Vec<crate::guarded::Guarded>,
         out_canon: &mut Vec<(crate::guarded::Guarded, u64)>,
-    ) {
+    ) -> Result<(), crate::prove::ProveError> {
         if guard_idx == guards.len() {
             // All Action guards matched.  Now decide what the implied
             // formula looks like.  Haskell's `impliedFormulas` wraps
@@ -1489,7 +1480,7 @@ fn try_match_all_guards(
                 out.push(implied);
                 out_canon.push((canon, canon_hash));
             }
-            return;
+            return Ok(());
         }
         match guards[guard_idx] {
             ProtoAtom::Action(g_time, g_fact) => {
@@ -1529,7 +1520,7 @@ fn try_match_all_guards(
                         &g_time_subst,
                         i,
                         &fa_sys.terms,
-                    );
+                    )?;
                     for subst_here in substs_here {
                         let Some(combined) = combine_substs(acc, &subst_here) else {
                             continue;
@@ -1548,7 +1539,7 @@ fn try_match_all_guards(
                             other_guards,
                             out,
                             out_canon,
-                        );
+                        )?;
                     }
                 }
             }
@@ -1591,9 +1582,9 @@ fn try_match_all_guards(
                                 other_guards,
                                 out,
                                 out_canon,
-                            );
+                            )?;
                         }
-                        return;
+                        return Ok(());
                     }
                     // s has pattern vars → s is the pattern.
                     (true, false) => (s_subst, t_subst),
@@ -1603,7 +1594,7 @@ fn try_match_all_guards(
                     // this case.  We bail out: drop this assignment
                     // rather than trying to match unbound-vs-unbound,
                     // which can't soundly produce a unique sigma.
-                    (true, true) => return,
+                    (true, true) => return Ok(()),
                 };
                 // Run the structural match, with the recursion-invariant
                 // `pattern_vars` set hoisted to `try_match_all_guards` (it
@@ -1612,49 +1603,10 @@ fn try_match_all_guards(
                 let mut struct_subst = std::collections::BTreeMap::new();
                 let struct_outcome =
                     structural_match(&pat_lnt, &subj_lnt, pattern_vars, &mut struct_subst);
-                // HS-faithful: HS's `matchTerm` (Guarded.hs:810-815)
-                // delegates to `solveMatchLTerm` → Maude, which does AC
-                // matching modulo the equational theory.  Our pure
-                // `structural_match` succeeds only on syntactic match —
-                // it FAILS for AC-symbol patterns (e.g. multiset
-                // `y++z` against `'1'++y++h(y)` cannot be aligned
-                // element-wise even though the AC matcher binds
-                // `z = '1'++h(y)`).  When structural match fails, fall
-                // back to Maude's AC matcher via
-                // `match_eqs_skolemize_both` — analogous to what
-                // `match_atom_via_maude` already does for Action-guard
-                // matching, but with BOTH sides skolemized (mirroring
-                // HS's `skolemizeGuarded gf0` step in `impliedFormulas`
-                // at System.hs:1112-1146, see line 1123).  HS skolemizes both pattern and
-                // subject so co-occurring free system vars (e.g. `y`
-                // in both `(y++z) = ('1'++y++h(y))`) map to the same
-                // constant; skolemizing the subject alone would leave
-                // the pattern's free non-pattern LVars as Maude
-                // variables that Maude binds freely, producing a
-                // different match.
-                //
-                // Each Maude matcher becomes its own continuation,
-                // mirroring HS's `candidateSubsts` list-monad iteration
-                // (System.hs:1138-1147):
-                //   subst' <- (`runReader` hnd) $ matchTerm term pat
-                //   candidateSubsts (compose subst' subst) as
-                //
-                // Concrete fix: counter.spthy::lesser_senc_secret's
-                // `case_2_case_1` arm contains the IH-derived universal
-                //   ∀ z. (y++z) = ('1'++y++h(y)) ⇒ ⊥
-                // After multiset/AC EqE fanout, `insertImpliedFormulas`
-                // needs to match `y++z` against `'1'++y++h(y)` to
-                // instantiate the body `⊥` (gfalse), producing
-                // FormulasFalse.  HS's Maude-backed matchTerm binds
-                // `z = '1'++h(y)`; RS's structural matcher rejects the
-                // AC-shape mismatch.  Without this fallback the arm
-                // closes with extra `case_2`/`case_1` solves instead of
-                // HS's `by contradiction /* from formulas */`.
-                // HS `matchTerm term pat` = `solveMatchLNTerm` (Guarded.hs:
-                // 810-815): native-match first, Maude only on `ACProblem`.
-                // Mirror the 3-way dispatch exactly — `NoMatcher` returns
-                // no candidate WITHOUT a Maude round-trip (HS `[]`); only
-                // `NeedsAc` (HS `Left ACProblem`) shells out to Maude.
+                // Use native matching unless the terms require AC matching.
+                // Skolemize free system variables on both sides with the same
+                // map; only universal-bound variables may receive bindings.
+                // Each AC matcher produces a separate continuation.
                 let candidates: Vec<
                     std::collections::BTreeMap<
                         tamarin_term::lterm::LVar,
@@ -1662,7 +1614,7 @@ fn try_match_all_guards(
                     >,
                 > = match struct_outcome {
                     StructMatch::Matched => vec![struct_subst],
-                    StructMatch::NoMatcher => return,
+                    StructMatch::NoMatcher => return Ok(()),
                     StructMatch::NeedsAc => {
                         let eqs = vec![tamarin_term::rewriting::Equal {
                             lhs: pat_lnt,
@@ -1673,12 +1625,14 @@ fn try_match_all_guards(
                                 .into_iter()
                                 .map(|m| m.into_iter().collect())
                                 .collect(),
-                            Err(_) => return,
+                            Err(error) => {
+                                return Err(crate::prove::ProveError::Maude(error.to_string()))
+                            }
                         }
                     }
                 };
                 if candidates.is_empty() {
-                    return;
+                    return Ok(());
                 }
                 for struct_subst in candidates {
                     // Keep the LVar → LNTerm bindings of the universal's own
@@ -1711,11 +1665,12 @@ fn try_match_all_guards(
                         other_guards,
                         out,
                         out_canon,
-                    );
+                    )?;
                 }
             }
             _ => (),
         }
+        Ok(())
     }
 
     // `dedup_tables` arrives from the caller (its canon tables are built at
@@ -1736,7 +1691,8 @@ fn try_match_all_guards(
         other_guards,
         out,
         out_canon,
-    );
+    )?;
+    Ok(())
 }
 
 /// Combine two substitutions. If they map the same key to different
@@ -1966,7 +1922,7 @@ fn match_atom_via_maude(
     g_time: &tamarin_term::lterm::LNTerm,
     i: &crate::constraint::constraints::NodeId,
     sys_args: &[tamarin_term::lterm::LNTerm],
-) -> Vec<LNSubst> {
+) -> Result<Vec<LNSubst>, crate::prove::ProveError> {
     use tamarin_term::term::Term as LTerm;
     use tamarin_term::vterm::Lit as LLit;
     let mut base_subst: std::collections::BTreeMap<
@@ -1998,7 +1954,7 @@ fn match_atom_via_maude(
     //       regression witness: alethea Universal_VerProofV/Y_v1..v8
     //       falsify under RS where HS verifies.
     let LTerm::Lit(LLit::Var(g_t)) = g_time else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
     if vars.iter().any(|v| v.name == g_t.name && v.idx == g_t.idx) {
         base_subst.insert(
@@ -2011,7 +1967,7 @@ fn match_atom_via_maude(
         );
     } else if !(g_t.name == i.name && g_t.idx == i.idx) {
         // Bound (ground) time that is not this system node — no match.
-        return Vec::new();
+        return Ok(Vec::new());
     }
 
     // AC-match the guard fact's term arguments against `sys_args`.  We send
@@ -2025,7 +1981,7 @@ fn match_atom_via_maude(
         });
     }
     if eqs.is_empty() {
-        return vec![LNSubst::from_map(base_subst)];
+        return Ok(vec![LNSubst::from_map(base_subst)]);
     }
 
     // Structural matching: Haskell's `solveMatchLTerm` (Term/Subsumption.hs)
@@ -2065,69 +2021,21 @@ fn match_atom_via_maude(
         // `NoMatcher` into the `NeedsAc` fallback would issue one Maude
         // `match` per structurally-failing attempt — the surplus `match in
         // MSG` flood (see `MatchOutcome`, tamarin-term/src/unification.rs).
-        StructMatch::NoMatcher => return Vec::new(),
+        StructMatch::NoMatcher => return Ok(Vec::new()),
         // HS `(Left ACProblem, _) -> matchViaMaude hnd sortOf matchProblem`
         // (Unification.hs:212-213): an AC-/C-headed pair appeared on BOTH
         // sides — only NOW shell out to Maude, on the WHOLE problem.
         StructMatch::NeedsAc => {
-            // AC-fallback: structural matcher can't handle AC-symbol
-            // arguments (e.g. `exp(g, Mult(a, b))` vs
-            // `exp(g, Mult(b, a))`).  HS's `matchAction` calls
-            // `solveMatchLNTerm` (`runReader` over MaudeHandle) which
-            // delegates to Maude for AC.  Without this, DH-protocol lemmas
-            // like MTI_C0::Secrecy_..._Initiator fail to fire
-            // `impliedFormulas` on `AcceptedR(... exp(g, ~tid*~x.5) ...)`
-            // and the search enumerates spurious Sessionkey_Reveal cases.
-            //
-            // HS-faithful skolemization (CRITICAL): HS's `impliedFormulas`
-            // (`System.hs:1112-1146, see line 1113,1123`) runs `gf = skolemizeGuarded gf0`, which
-            // turns EVERY free LVar of the guarded clause into `Con (SkConst
-            // v)` — a Maude *constant* (`lTermToMTerm` ⇒ `MaudeConst`,
-            // `Maude/Types.hs:74-85, see line 85`) — while the universal's BOUND vars,
-            // instantiated by `openGuarded`, stay `Var lv` ⇒ `MaudeVar`
-            // (bindable).  `sysActions` (`System.hs:1129-1130`) likewise
-            // `skolemizeTerm`s the system action, so its vars are also
-            // `SkConst`.  So in HS's `matchAction sysAct (guard)` the PATTERN's
-            // free (non-universal) vars are GROUND CONSTANTS, not bindable.
-            //
-            // Therefore both sides must be skolemized with a SHARED map (same
-            // LVar ⇒ same constant on both sides, so a free var occurring in
-            // BOTH still matches itself) — exactly `match_eqs_skolemize_both`.
-            // Skolemizing only the SUBJECT would leave the pattern's free
-            // non-universal vars as Maude VARIABLES that Maude binds to
-            // anything, so it would over-match here.  On DH
-            // key-exchange lemmas (csf12/STS_MAC_fix2, sp14/group_joux,
-            // csf12/JKL_TS1_*) the multi-guard `∀ … SesskRev(tpartner)@i3 ∧
-            // AcceptedR(tpartner,I,R,hki,hkr,kpartner)@i4 ⇒ ⊥` universal faces
-            // a system `AcceptedR(tid,I.16,R.17,exp(g,x.21),
-            // exp(g,tid),KDF(exp(g,ekI*ekR)))`: under subject-only
-            // skolemization the pattern's free system vars `I,R,ekI,ekR` (NOT
-            // in the universal's bound set) bind freely to the action's
-            // *different* skolem constants, firing `gfalse` one node early (at
-            // /Init_1/…/Resp_1 instead of under the `splitEqs(1)` `case
-            // split`) and verifying in fewer steps than HS.  Under shared
-            // skolemization those positions are constant-vs-constant and the
-            // match correctly fails there — matching HS.
-            //
-            // HS-faithful: Maude's AC `match` can return MULTIPLE matchers
-            // for a single pattern/subject pair (e.g. `match Union(a,x) <=?
-            // Union(b,c)` yields both `{a:=b, x:=c}` and `{a:=c, x:=b}`).
-            // HS's `candidateSubsts` (System.hs:1133-1137) iterates them via
-            // the list monad:
-            //   subst' <- (`runReader` hnd) $ matchAction sysAct ...
-            //   candidateSubsts (compose subst' subst) as
-            // Iterate all Maude matchers — a pattern/subject pair can have
-            // multiple AC unifiers, and each becomes its own candidate
-            // substitution propagated into the next guard's matching call;
-            // `structural_match` returns the precise `NeedsAc`/`NoMatcher`
-            // distinction so Maude is only invoked for genuine AC-/C-vs-AC-/C
-            // pairs.
-            let maude_res = maude.match_eqs_skolemize_both(&eqs, pattern_vars);
-            let Ok(matches) = maude_res else {
-                return Vec::new();
-            };
+            // Match the entire problem modulo AC. Shared skolemization keeps
+            // free system variables fixed on both sides, while universal-bound
+            // variables remain bindable. Preserve every returned matcher.
+            // A backend failure must not be interpreted as an absent match:
+            // doing so could omit a restriction and admit an impossible trace.
+            let matches = maude
+                .match_eqs_skolemize_both(&eqs, pattern_vars)
+                .map_err(|error| crate::prove::ProveError::Maude(error.to_string()))?;
             if matches.is_empty() {
-                return Vec::new();
+                return Ok(Vec::new());
             }
             matches
         }
@@ -2150,7 +2058,7 @@ fn match_atom_via_maude(
         }
         out.push(LNSubst::from_map(subst));
     }
-    out
+    Ok(out)
 }
 
 /// Apply the eq-store substitution to existing `less_atoms` so any
@@ -2209,22 +2117,25 @@ fn normalise_less_atoms_pass(red: &mut Reduction) {
 /// per-pass `solver`; node-id equalities are then applied to every payload
 /// branch. Trivial equalities are dropped, and `Contradictory`/`Err` removes
 /// the affected branch.
-fn merge_candidates<K, P, E, F>(
+fn merge_candidates<K, P, F>(
     red: &mut Reduction,
     candidates: Vec<(K, P, crate::constraint::constraints::NodeId)>,
     solve_payload_eqs: F,
-) -> SystemOutcome
+) -> Result<SystemOutcome, crate::prove::ProveError>
 where
     K: Ord,
     P: Clone + PartialEq,
     F: Fn(
         &mut Reduction,
         &[tamarin_term::rewriting::Equal<P>],
-    ) -> std::result::Result<crate::constraint::solver::reduction::SolveOutcome, E>,
+    ) -> std::result::Result<
+        crate::constraint::solver::reduction::SolveOutcome,
+        crate::prove::ProveError,
+    >,
 {
     use crate::constraint::constraints::NodeId;
     if candidates.len() < 2 {
-        return SystemOutcome::Linear;
+        return Ok(SystemOutcome::Linear);
     }
     let mut by_key: std::collections::BTreeMap<K, Vec<(NodeId, P)>> =
         std::collections::BTreeMap::new();
@@ -2259,7 +2170,7 @@ where
         }
     }
     if groups.is_empty() {
-        return SystemOutcome::Linear;
+        return Ok(SystemOutcome::Linear);
     }
     merge_candidate_groups(red, &groups, &solve_payload_eqs)
 }
@@ -2269,62 +2180,68 @@ type MergeGroup<P> = (
     Vec<tamarin_term::rewriting::Equal<crate::constraint::constraints::NodeId>>,
 );
 
-fn merge_candidate_groups<P, E, F>(
+fn merge_candidate_groups<P, F>(
     red: &mut Reduction,
     mut groups: &[MergeGroup<P>],
     solve_payload_eqs: &F,
-) -> SystemOutcome
+) -> Result<SystemOutcome, crate::prove::ProveError>
 where
     P: Clone,
     F: Fn(
         &mut Reduction,
         &[tamarin_term::rewriting::Equal<P>],
-    ) -> std::result::Result<crate::constraint::solver::reduction::SolveOutcome, E>,
+    ) -> std::result::Result<
+        crate::constraint::solver::reduction::SolveOutcome,
+        crate::prove::ProveError,
+    >,
 {
     while let Some(((payload_eqs, node_eqs), rest)) = groups.split_first() {
-        match merge_candidate_group(red, payload_eqs, node_eqs, solve_payload_eqs) {
+        match merge_candidate_group(red, payload_eqs, node_eqs, solve_payload_eqs)? {
             SystemOutcome::Linear => groups = rest,
-            SystemOutcome::Contradictory => return SystemOutcome::Contradictory,
+            SystemOutcome::Contradictory => return Ok(SystemOutcome::Contradictory),
             SystemOutcome::Cases(arms) => {
                 return continue_merge_groups(red, arms, rest, solve_payload_eqs);
             }
         }
     }
-    SystemOutcome::Linear
+    Ok(SystemOutcome::Linear)
 }
 
-fn merge_candidate_group<P, E, F>(
+fn merge_candidate_group<P, F>(
     red: &mut Reduction,
     payload_eqs: &[tamarin_term::rewriting::Equal<P>],
     node_eqs: &[tamarin_term::rewriting::Equal<crate::constraint::constraints::NodeId>],
     solve_payload_eqs: &F,
-) -> SystemOutcome
+) -> Result<SystemOutcome, crate::prove::ProveError>
 where
     P: Clone,
     F: Fn(
         &mut Reduction,
         &[tamarin_term::rewriting::Equal<P>],
-    ) -> std::result::Result<crate::constraint::solver::reduction::SolveOutcome, E>,
+    ) -> std::result::Result<
+        crate::constraint::solver::reduction::SolveOutcome,
+        crate::prove::ProveError,
+    >,
 {
     if payload_eqs.is_empty() {
         return merge_candidate_node_eqs(red, node_eqs);
     }
     let base = red.sys.clone();
     let res = solve_payload_eqs(red, payload_eqs);
-    match complete_solve(red, base, res) {
-        SystemOutcome::Linear => merge_candidate_node_eqs(red, node_eqs),
+    Ok(match complete_solve(red, base, res)? {
+        SystemOutcome::Linear => merge_candidate_node_eqs(red, node_eqs)?,
         SystemOutcome::Contradictory => SystemOutcome::Contradictory,
         SystemOutcome::Cases(arms) if node_eqs.is_empty() => SystemOutcome::Cases(arms),
-        SystemOutcome::Cases(arms) => continue_merge_nodes(red, arms, node_eqs),
-    }
+        SystemOutcome::Cases(arms) => continue_merge_nodes(red, arms, node_eqs)?,
+    })
 }
 
 fn merge_candidate_node_eqs(
     red: &mut Reduction,
     node_eqs: &[tamarin_term::rewriting::Equal<crate::constraint::constraints::NodeId>],
-) -> SystemOutcome {
+) -> Result<SystemOutcome, crate::prove::ProveError> {
     if node_eqs.is_empty() {
-        return SystemOutcome::Linear;
+        return Ok(SystemOutcome::Linear);
     }
     let base = red.sys.clone();
     let res = red.solve_node_id_eqs(node_eqs);
@@ -2335,11 +2252,11 @@ fn continue_merge_nodes(
     red: &mut Reduction,
     arms: Vec<SystemBranch>,
     node_eqs: &[tamarin_term::rewriting::Equal<crate::constraint::constraints::NodeId>],
-) -> SystemOutcome {
+) -> Result<SystemOutcome, crate::prove::ProveError> {
     let mut completed = Vec::new();
     for arm in arms {
         let mut branch = Reduction::new_inheriting(red.ctx, arm.sys, arm.counter);
-        match merge_candidate_node_eqs(&mut branch, node_eqs) {
+        match merge_candidate_node_eqs(&mut branch, node_eqs)? {
             SystemOutcome::Linear => completed.push(SystemBranch {
                 sys: branch.sys,
                 counter: branch.maude.fresh_counter_peek(),
@@ -2348,26 +2265,29 @@ fn continue_merge_nodes(
             SystemOutcome::Contradictory => {}
         }
     }
-    red.finish_system_cases(completed)
+    Ok(red.finish_system_cases(completed))
 }
 
-fn continue_merge_groups<P, E, F>(
+fn continue_merge_groups<P, F>(
     red: &mut Reduction,
     arms: Vec<SystemBranch>,
     groups: &[MergeGroup<P>],
     solve_payload_eqs: &F,
-) -> SystemOutcome
+) -> Result<SystemOutcome, crate::prove::ProveError>
 where
     P: Clone,
     F: Fn(
         &mut Reduction,
         &[tamarin_term::rewriting::Equal<P>],
-    ) -> std::result::Result<crate::constraint::solver::reduction::SolveOutcome, E>,
+    ) -> std::result::Result<
+        crate::constraint::solver::reduction::SolveOutcome,
+        crate::prove::ProveError,
+    >,
 {
     let mut completed = Vec::new();
     for arm in arms {
         let mut branch = Reduction::new_inheriting(red.ctx, arm.sys, arm.counter);
-        match merge_candidate_groups(&mut branch, groups, solve_payload_eqs) {
+        match merge_candidate_groups(&mut branch, groups, solve_payload_eqs)? {
             SystemOutcome::Linear => completed.push(SystemBranch {
                 sys: branch.sys,
                 counter: branch.maude.fresh_counter_peek(),
@@ -2376,14 +2296,16 @@ where
             SystemOutcome::Contradictory => {}
         }
     }
-    red.finish_system_cases(completed)
+    Ok(red.finish_system_cases(completed))
 }
 
 /// CR-rule *DG4*: every `Fr(~k)` value is produced by exactly one
 /// node. Find pairs of Fresh-rule nodes whose conclusion term matches
 /// (after applying the eq-store's free substitution) and equate their
 /// node ids via `solve_node_id_eqs`.
-fn enforce_fresh_node_uniqueness_pass(red: &mut Reduction) -> SystemOutcome {
+fn enforce_fresh_node_uniqueness_pass(
+    red: &mut Reduction,
+) -> Result<SystemOutcome, crate::prove::ProveError> {
     use crate::rule::{ProtoRuleName, RuleInfo};
     // Haskell-faithful (`Simplify.hs:220-230`): group by the raw
     // `RuleACInst` — two Fresh-rule instances merge only if their
@@ -2434,14 +2356,13 @@ fn enforce_fresh_node_uniqueness_pass(red: &mut Reduction) -> SystemOutcome {
         // (Simplify.hs) calls `solveNodeIdEqs` via the `merge`
         // helper.  The monadic bind through `solveTermEqs` ends in
         // `noContradictoryEqStore` (Reduction.hs:720-723, see line 723) which fires
-        // mzero on `eqsIsFalse`.  Funnel both `Ok(Contradictory)` and
-        // `Err(_)` through `mark_contradictory` so the mzero proxy stays
-        // in sync. Multi-arm results return every complete system.
+        // mzero on `eqsIsFalse`. Mark contradictions while propagating
+        // execution errors. Multi-arm results return every complete system.
         let base = red.sys.clone();
         let res = red.solve_node_id_eqs(&eqs);
-        match complete_solve(red, base, res) {
+        match complete_solve(red, base, res)? {
             SystemOutcome::Linear => {}
-            outcome => return outcome,
+            outcome => return Ok(outcome),
         }
         // HS-faithful: HS's `enforceNodeUniqueness` freshRuleInsts
         // branch (Simplify.hs) uses `solver = const $ return
@@ -2453,7 +2374,7 @@ fn enforce_fresh_node_uniqueness_pass(red: &mut Reduction) -> SystemOutcome {
         // Pass1/Pass2 split, matching HS's `substNodes = substNodeIds
         // <* (M.map . apply)` ordering.
     }
-    SystemOutcome::Linear
+    Ok(SystemOutcome::Linear)
 }
 
 /// CR-rule *N5_u*: KU-action uniqueness. For every term `m` that
@@ -2470,7 +2391,9 @@ fn enforce_fresh_node_uniqueness_pass(red: &mut Reduction) -> SystemOutcome {
 /// `solve_fact_eqs` filter `lhs == rhs` themselves, but we mirror the
 /// pattern from `enforce_edge_uniqueness_pass` to avoid spurious
 /// `Changed` flags that would re-fire the simplify loop forever).
-fn enforce_ku_action_uniqueness_pass(red: &mut Reduction) -> SystemOutcome {
+fn enforce_ku_action_uniqueness_pass(
+    red: &mut Reduction,
+) -> Result<SystemOutcome, crate::prove::ProveError> {
     use crate::constraint::constraints::NodeId;
     use crate::fact::{FactTag, LNFact};
     use tamarin_term::lterm::LNTerm;
@@ -2488,7 +2411,7 @@ fn enforce_ku_action_uniqueness_pass(red: &mut Reduction) -> SystemOutcome {
     // action terms may have bare vars (x.19 from requiresKU on
     // pair-components) that haven't been rewritten by substSystem when
     // the substitution is in eq_store but not yet applied.
-    let subst = &red.sys.eq_store.subst;
+    let subst = &red.sys.eq_store().subst;
     let apply_subst = |t: &LNTerm| -> LNTerm { tamarin_term::subst::apply_vterm(subst, t.clone()) };
     // HS-faithful order: `allActions = unsolvedActionAtoms sys <|>
     // <rule actions>` (System.hs:1577-1581).  Goals come FIRST so
@@ -2549,7 +2472,9 @@ fn enforce_ku_action_uniqueness_pass(red: &mut Reduction) -> SystemOutcome {
 ///
 /// A fan-out carries complete systems after the remaining captured action
 /// goals have been processed in each arm.
-fn solve_unique_actions_pass_fan_out(red: &mut Reduction) -> SystemOutcome {
+fn solve_unique_actions_pass_fan_out(
+    red: &mut Reduction,
+) -> Result<SystemOutcome, crate::prove::ProveError> {
     let candidates = collect_unique_action_candidates(red);
     execute_captured_actions(red, &candidates)
 }
@@ -2563,11 +2488,8 @@ fn solve_unique_actions_pass_fan_out(red: &mut Reduction) -> SystemOutcome {
 fn execute_captured_actions(
     red: &mut Reduction<'_>,
     mut remaining: &[(crate::constraint::constraints::NodeId, crate::fact::LNFact)],
-) -> SystemOutcome {
+) -> Result<SystemOutcome, crate::prove::ProveError> {
     while let Some(((i, fa), suffix)) = remaining.split_first() {
-        if red.ctx.has_source_error() {
-            return SystemOutcome::Cases(Vec::new());
-        }
         // HS-faithful (`solveUniqueActions`, Simplify.hs:276-297): the
         // captured `actionAtoms` list is processed by `mapM trySolve`,
         // and `trySolve (i, fa) = solveGoal (ActionG i fa)` runs
@@ -2593,12 +2515,9 @@ fn execute_captured_actions(
         // semantics; an already-solved atom whose node exists with `fa`
         // among its actions is a harmless no-op (the `Some(ru)` /
         // `ru.actions.contains(fa)` arm in `solve_action_goal`).
-        let outcome = red.solve_action_goal(i, fa);
-        if red.ctx.has_source_error() {
-            return SystemOutcome::Cases(Vec::new());
-        }
+        let outcome = red.solve_action_goal(i, fa)?;
         match outcome {
-            GoalCases::Contradictory => return SystemOutcome::Contradictory,
+            GoalCases::Contradictory => return Ok(SystemOutcome::Contradictory),
             GoalCases::Linear | GoalCases::LinearNamed(_) => {
                 // `red.sys` is already mutated in place by `solve_action_goal`.
                 remaining = suffix;
@@ -2630,10 +2549,7 @@ fn execute_captured_actions(
                 // Continue over the borrowed suffix in each arm.
                 let mut completed = Vec::new();
                 for branch in cases {
-                    if red.ctx.has_source_error() {
-                        return SystemOutcome::Cases(Vec::new());
-                    }
-                    if branch.sys.eq_store.is_false() {
+                    if branch.sys.eq_store().is_false() {
                         continue;
                     }
 
@@ -2643,12 +2559,7 @@ fn execute_captured_actions(
                     // simplify iteration.
                     let mut branch_red =
                         Reduction::new_inheriting(red.ctx, branch.sys, branch.counter);
-                    let outcome = execute_captured_actions(&mut branch_red, suffix);
-                    if red.ctx.has_source_error() {
-                        // Source materialisation errors are fatal to the
-                        // shared context, so discard completed siblings too.
-                        return SystemOutcome::Cases(Vec::new());
-                    }
+                    let outcome = execute_captured_actions(&mut branch_red, suffix)?;
                     match outcome {
                         SystemOutcome::Linear => completed.push(SystemBranch {
                             sys: branch_red.sys,
@@ -2658,11 +2569,11 @@ fn execute_captured_actions(
                         SystemOutcome::Contradictory => {}
                     }
                 }
-                return red.finish_system_cases(completed);
+                return Ok(red.finish_system_cases(completed));
             }
         }
     }
-    SystemOutcome::Linear
+    Ok(SystemOutcome::Linear)
 }
 
 /// Collect the unsolved unique Action-goal candidates in Haskell
@@ -2765,7 +2676,9 @@ fn has_funion_head(t: &tamarin_term::lterm::LNTerm) -> bool {
 /// passes assume KD-producing nodes are unique per term.  Without
 /// this pass, the search can keep branching on multiple `IRecv`
 /// nodes for the same term, blowing up the tree.
-fn enforce_kd_fact_uniqueness_pass(red: &mut Reduction) -> SystemOutcome {
+fn enforce_kd_fact_uniqueness_pass(
+    red: &mut Reduction,
+) -> Result<SystemOutcome, crate::prove::ProveError> {
     use crate::constraint::constraints::NodeId;
     use crate::fact::FactTag;
     use crate::rule::RuleACInst;
@@ -2920,7 +2833,7 @@ fn enforce_fresh_ordering_pass(red: &mut Reduction) {
     // clone of the subst.
     let mut suppliers: Vec<(crate::constraint::constraints::NodeId, LVar)> = Vec::new();
     {
-        let subst = &red.sys.eq_store.subst;
+        let subst = &red.sys.eq_store().subst;
         let subst_empty = subst.is_empty();
         for (id, rule) in red.sys.nodes.iter() {
             for prem in &rule.premises {
@@ -3221,7 +3134,9 @@ fn enforce_fresh_ordering_pass(red: &mut Reduction) {
 /// flags `!AIK(~aik)` feeding both `Alice_Init.PremIdx(2)` and
 /// `PCR_CertKey.PremIdx(0)` as a contradictory premise-index clash
 /// — observed in TPM_Exclusive_Secrets::left_reachable.
-fn enforce_edge_uniqueness_pass(red: &mut Reduction) -> SystemOutcome {
+fn enforce_edge_uniqueness_pass(
+    red: &mut Reduction,
+) -> Result<SystemOutcome, crate::prove::ProveError> {
     use crate::fact::FactTag;
     // Lookup: is this conclusion of this node a persistent fact?
     // Haskell `factTagMultiplicity` (Theory/Model/Fact.hs:383-388):
@@ -3289,7 +3204,7 @@ fn enforce_edge_uniqueness_pass(red: &mut Reduction) -> SystemOutcome {
     }
     if conc_idx_clash {
         red.mark_contradictory();
-        return SystemOutcome::Contradictory;
+        return Ok(SystemOutcome::Contradictory);
     }
     // Pass 2 (Haskell's second `mergeNodes eTgt eSrc` filtered to
     // linear conclusions): a single linear conclusion can feed only
@@ -3315,11 +3230,11 @@ fn enforce_edge_uniqueness_pass(red: &mut Reduction) -> SystemOutcome {
     }
     if prem_idx_clash {
         red.mark_contradictory();
-        return SystemOutcome::Contradictory;
+        return Ok(SystemOutcome::Contradictory);
     }
     node_eqs.retain(|e| e.lhs != e.rhs);
     if node_eqs.is_empty() {
-        return SystemOutcome::Linear;
+        return Ok(SystemOutcome::Linear);
     }
     let base = red.sys.clone();
     let res = red.solve_node_id_eqs(&node_eqs);
@@ -3365,11 +3280,13 @@ fn node_id_to_lnterm(n: &crate::constraint::constraints::NodeId) -> tamarin_term
 /// block at 581-583 are commented out upstream), so nothing active is missing. The
 /// `Decreasing`/`StrictlyDecreasing` arms are handled by the i<->j
 /// swap below.
-fn simp_injective_fact_eq_mon_pass(red: &mut Reduction) -> SystemOutcome {
+fn simp_injective_fact_eq_mon_pass(
+    red: &mut Reduction,
+) -> Result<SystemOutcome, crate::prove::ProveError> {
     use crate::tools::injective_fact_instances::MonotonicBehaviour;
 
     if red.ctx.injective_fact_insts.is_empty() {
-        return SystemOutcome::Linear;
+        return Ok(SystemOutcome::Linear);
     }
     // Collect (node_id, tag, first_term, [(behaviour, leaf-term)]) for every
     // premise of every node whose tag is an injective tag — i.e. HS
@@ -3409,7 +3326,7 @@ fn simp_injective_fact_eq_mon_pass(red: &mut Reduction) -> SystemOutcome {
         }
     }
     if by_inj.len() < 2 {
-        return SystemOutcome::Linear;
+        return Ok(SystemOutcome::Linear);
     }
 
     // Pre-collect the existing `gnotAtom (EqE s t)` inequalities from
@@ -3786,11 +3703,11 @@ fn simp_injective_fact_eq_mon_pass(red: &mut Reduction) -> SystemOutcome {
             ));
         }
     };
-    match red.insert_formulas(&new_formulas) {
+    match red.insert_formulas(&new_formulas)? {
         SystemOutcome::Linear => insert_lesses(red),
-        SystemOutcome::Contradictory => return SystemOutcome::Contradictory,
+        SystemOutcome::Contradictory => return Ok(SystemOutcome::Contradictory),
         SystemOutcome::Cases(arms) => {
-            return SystemOutcome::Cases(
+            return Ok(SystemOutcome::Cases(
                 arms.into_iter()
                     .map(|arm| {
                         let mut branch = Reduction::new_inheriting(red.ctx, arm.sys, arm.counter);
@@ -3801,7 +3718,7 @@ fn simp_injective_fact_eq_mon_pass(red: &mut Reduction) -> SystemOutcome {
                         }
                     })
                     .collect(),
-            );
+            ));
         }
     }
     // HS change-detection (Simplify.hs):
@@ -3811,13 +3728,13 @@ fn simp_injective_fact_eq_mon_pass(red: &mut Reduction) -> SystemOutcome {
     if updated_formulas != old_formulas || any_new_lesses {
         red.changed = ChangeIndicator::Changed;
     }
-    SystemOutcome::Linear
+    Ok(SystemOutcome::Linear)
 }
 
 /// `reduceFormulas` — decompose every reducible formula in the open
 /// set. Mirrors the Haskell pass. The decomposition itself happens in
 /// `Reduction::insert_formula`.
-fn reduce_formulas_pass(red: &mut Reduction) -> SystemOutcome {
+fn reduce_formulas_pass(red: &mut Reduction) -> Result<SystemOutcome, crate::prove::ProveError> {
     use crate::guarded::reducible_formula;
     // Pull out reducible formulas in one pass; otherwise we'd have
     // overlapping borrows (read+modify on `sys.formulas`).
@@ -3835,7 +3752,7 @@ fn reduce_formulas_pass(red: &mut Reduction) -> SystemOutcome {
         .collect();
     to_decompose.sort();
     if to_decompose.is_empty() {
-        return SystemOutcome::Linear;
+        return Ok(SystemOutcome::Linear);
     }
     // Remove them, then re-insert via the decomposition logic.
     red.sys.invalidate_max_var_idx_cache();

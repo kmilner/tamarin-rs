@@ -196,7 +196,7 @@ async fn graph_json_returns_json_graph_with_dot_json_content_type() {
 /// root, which carries no rule instances, so its assertions hold over an EMPTY
 /// graph and cannot see whether the solved systems survive.  Autoprove `debug`
 /// and re-read the witness node: its system must actually be there.  This is
-/// the regression guard for `init_process_globals`' `SysRetention::KeepAll` —
+/// the regression guard for the web session's `SysRetention::KeepAll` —
 /// without it every searched proof node drops its `System` and every
 /// post-autoprove graph renders empty.
 #[tokio::test]

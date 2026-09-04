@@ -94,7 +94,7 @@ pub fn replace_sorry_prove(
     skeleton: &ProofTree,
     proof_bound: usize,
 ) -> Result<ProofNode, ProveError> {
-    ctx.source_result(|| replay_node(ctx, initial, skeleton, proof_bound, true))
+    replay_node(ctx, initial, skeleton, proof_bound, true)
 }
 
 /// Replay a stored skeleton WITHOUT auto-proving its open/sorry leaves —
@@ -116,7 +116,7 @@ pub fn check_and_extend(
     skeleton: &ProofTree,
     proof_bound: usize,
 ) -> Result<ProofNode, ProveError> {
-    ctx.source_result(|| replay_node(ctx, initial, skeleton, proof_bound, false))
+    replay_node(ctx, initial, skeleton, proof_bound, false)
 }
 
 /// Build an annotated `Sorry` leaf seeded with `sys`.  HS `checkProof`
@@ -237,7 +237,7 @@ fn finished_leaf(
     proof_bound: usize,
 ) -> Result<ProofNode, ProveError> {
     let same_kind = |r: &MethodResult| std::mem::discriminant(r) == std::mem::discriminant(stored);
-    match is_finished(ctx, &sys)? {
+    match is_finished(ctx, &sys) {
         Some(ref r) if same_kind(r) => Ok(ProofNode {
             method: ProofMethod::Finished(stored.clone()),
             sys,

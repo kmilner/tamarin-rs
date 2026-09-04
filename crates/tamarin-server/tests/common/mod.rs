@@ -140,7 +140,9 @@ pub async fn start_server_with_theory_and(
         // Environment.hs:37-38, and an absent `--with-json`).
         dot_path: "dot".to_string(),
         json_path: None,
-        theory_load: Default::default(),
+        ndc_check: true,
+        lemmas_to_prove: Vec::new(),
+        parser_flags: Vec::new(),
     };
     mutate(&mut cfg);
 

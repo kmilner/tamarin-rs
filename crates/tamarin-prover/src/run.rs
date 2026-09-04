@@ -36,7 +36,6 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use tamarin_term::maude_proc::{MaudeHandle, MaudePool, SharedMaudeCaches};
-use tamarin_theory::constraint::solver::context::annotate_theory_loop_breakers;
 use tamarin_theory::constraint::system::System;
 use tamarin_theory::elaborate::elaborate_with_in_file;
 use tamarin_theory::module::ModuleType;
@@ -93,6 +92,12 @@ impl From<tamarin_theory::prove::ProveError> for RunError {
             tamarin_theory::prove::ProveError::InvalidHeuristic(message) => Self::Regular(message),
             other => Self::Regular(other.to_string()),
         }
+    }
+}
+
+impl From<tamarin_theory::tools::rule_variants::VariantsError> for RunError {
+    fn from(error: tamarin_theory::tools::rule_variants::VariantsError) -> Self {
+        Self::Regular(error.to_string())
     }
 }
 
@@ -604,13 +609,13 @@ fn run_interactive(args: &Args) -> Result<i32, RunError> {
     // (Interactive.hs:135); `addNdcOption` (TheoryLoader.hs:821-826) then writes
     // `ndcCheck` = `not (--no-ndc)` (TheoryLoader.hs:365-366) into each loaded
     // theory's `_deductionChainCheck`.  Set before the eager load below.
-    cfg.theory_load.ndc_check = !args.no_ndc;
+    cfg.ndc_check = !args.no_ndc;
     // `--prove` / `--lemma` — `addLemmaToProve` (TheoryLoader.hs:835-838) is
     // the `addNdcOption` sibling in that same `addParamsOptions`, and
     // `theoryLoadFlags` (TheoryLoader.hs:94-107) is part of this mode's flag
     // set (Interactive.hs:70), so the selection reaches every web load's
     // `_lemmasToProve`.
-    cfg.theory_load.lemmas_to_prove = args.lemma_names.clone();
+    cfg.lemmas_to_prove = args.lemma_names.clone();
     // `-D/--defines` + `--quit-on-warning` — the rest of `toParserFlags
     // thyOpts` (TheoryLoader.hs:285-291) in that same captured closure, so
     // every web load (startup, upload, reload) evaluates `#ifdef` blocks
@@ -622,7 +627,7 @@ fn run_interactive(args: &Args) -> Result<i32, RunError> {
     if args.quit_on_warning {
         parser_flags.push("quit-on-warning".to_string());
     }
-    cfg.theory_load.parser_flags = parser_flags;
+    cfg.parser_flags = parser_flags;
 
     // Positional args are theory files (Haskell uses a working
     // directory, but we accept either: a single dir arg, or one-or-more
@@ -1365,6 +1370,7 @@ impl TheoryPipeline<'_> {
                     tamarin_theory::constraint::solver::search::SysRetention::DropAll
                 },
                 show_saturation_steps: true,
+                loop_breakers_prepared: true,
             },
         )
     }
@@ -1535,7 +1541,7 @@ impl TheoryPipeline<'_> {
     ///
     /// [`Self::translate_module`] gates only the loop-breaker annotation —
     /// see the comment at that block.
-    fn check_translated_theory(&mut self) {
+    fn check_translated_theory(&mut self) -> Result<(), RunError> {
         // Spawn a single Maude handle for this file.  Used by:
         //   - the rule-variants computation that populates each rule's
         //     `variant_substs` + `abstracted_rule` (so the pretty-printer
@@ -1602,73 +1608,25 @@ impl TheoryPipeline<'_> {
             None
         };
 
-        // Populate variant_substs + abstracted_rule for each protocol
-        // rule whose RHS contains reducible-headed sub-terms.  Without
-        // this the pretty-printer always emits `/* has exactly the
-        // trivial AC variant */` even when the signature carries
-        // destructors (e.g. `aenc/adec`).  HS-faithful: matches
-        // `closeTheoryWithMaude`'s variant pre-computation
-        // (ClosedTheory.hs `closeTheory`).
-        if let Some(m) = self.file_maude.as_ref() {
-            tamarin_theory::tools::rule_variants::populate_rule_variants(
-                std::sync::Arc::make_mut(&mut self.elaborated),
-                m,
-                self.file_maude_pool.as_deref(),
-            );
-        }
-
-        // HS `postReport`: the full `checkWellformedness` over the TRANSLATED
-        // theory (TheoryLoader.hs:553-565, `checkTranslatedTheory`), i.e. after
-        // SAPIC `translate` injected the generated rules and `Acc.translate`
-        // the generated lemmas, and after the `-m msr` lemma filter.  The pass
-        // is shared with the web load path — see
-        // `tamarin_theory::wellformedness`.  Its `ruleVariantsReport` member
-        // reads the variants `populate_rule_variants` recorded above, so the
-        // pass sits between that call and the three stages below.  That is the
-        // HS Maude call ORDER: the variant queries first, then the loop-breaker
-        // annotation, the NDC pass and the derivation checks, all of which
-        // consume `file_maude`'s shared fresh-variable counter.
-        self.wf_report
-            .extend(tamarin_theory::wellformedness::check_wellformedness(
-                &self.elaborated,
-                self.file_maude.as_ref(),
-            ));
-
-        // HS `closeProtoRule` (lib/theory/src/Rule.hs:82-86, see line 84):
-        // `ClosedProtoRule ruE <$> maybeToList (variantsProtoRule hnd ruE)` — a
-        // rule with NO variants produces NO closed rule.  It is dropped from
-        // the closed theory entirely: it participates in neither rendering nor
-        // proof search.  The drop reads the same verdict
-        // `wellformedness::rules::rule_variants_report` reports on, and runs
-        // after it, because HS warns on the OPEN theory and drops while
-        // closing.
-        if let Some(wf_maude) = self.file_maude.as_ref() {
-            tamarin_theory::tools::rule_variants::retain_rules_with_variants(
-                std::sync::Arc::make_mut(&mut self.elaborated),
-                wf_maude,
-            );
-        }
-
-        // Annotate per-rule loop breakers on the OUTER theory so
-        // `pretty_closed_theory` can render HS's `// loop breaker:
-        // [<idx>]` comments at the rule output.  HS faithfulness:
-        // `prettyClosedProtoRule` (ClosedTheory.hs:332-366, see line 337,353) reads
-        // `prettyLoopBreakers` from the `ProtoRuleACInfo` baked into
-        // every closed rule by `closeTheoryWithMaude`.  Our prover
-        // computes them inside `ProofContext::new` on a LOCAL copy
-        // of the rules — so we re-run the same `annotate_loop_breakers`
-        // pass on the outer theory to mirror the closed-theory
-        // structure HS persists.  HS does this work in
-        // `closeTheoryWithMaude`, but the pass stays HERE, anchored before
-        // the NDC and derivation stages: all three consume `file_maude`'s
-        // shared fresh-variable counter, so re-ordering them could renumber
-        // later allocations.  Translate mode never closes the theory
-        // (`translateAndCheckTheory` skips `closeTranslatedTheory`,
-        // TheoryLoader.hs:768-781) and the open renderer prints no
-        // loop-breaker comments, so the pass is skipped there.
+        // Close protocol rules in the same shared order as the web loader:
+        // variants, post-translation wellformedness, zero-variant filtering,
+        // then loop breakers. Translate mode runs the first three but does not
+        // persist breaker annotations on its open theory.
         let translate_mode = self.translate_module.is_some();
-        if let Some(m) = self.file_maude.as_ref().filter(|_| !translate_mode) {
-            annotate_theory_loop_breakers(std::sync::Arc::make_mut(&mut self.elaborated), m);
+        if let Some(m) = self.file_maude.as_ref() {
+            self.wf_report
+                .extend(tamarin_theory::tools::rule_variants::prepare_theory_rules(
+                    std::sync::Arc::make_mut(&mut self.elaborated),
+                    m,
+                    self.file_maude_pool.as_deref(),
+                    !translate_mode,
+                )?);
+        } else {
+            self.wf_report
+                .extend(tamarin_theory::wellformedness::check_wellformedness(
+                    &self.elaborated,
+                    None,
+                ));
         }
 
         // `showSaturation` is the last argument of `closeTheoryWithMaude`
@@ -1705,7 +1663,7 @@ impl TheoryPipeline<'_> {
                 self.elaborated.options.deduction_chain_check,
                 &self.elaborated.intruder_rules,
                 self.opts.parameters,
-            );
+            )?;
             self.ndc_funs = checked.ndc_funs;
             self.ndc_cache = Some(checked.cache.into());
         }
@@ -1727,11 +1685,12 @@ impl TheoryPipeline<'_> {
                     deriv_timeout,
                     self.ndc_cache.clone(),
                     self.opts.parameters,
-                );
+                )?;
                 self.wf_report.extend(extra);
             }
             self.marker("Derivation checks ended");
         }
+        Ok(())
     }
 
     /// HS `closeTranslatedTheory` (TheoryLoader.hs:668-715) plus the parts of
@@ -1793,7 +1752,7 @@ impl TheoryPipeline<'_> {
                 self.file_maude_pool.clone(),
                 self.ndc_cache.as_ref(),
                 self.opts.parameters,
-            );
+            )?;
         }
 
         // `--partial-evaluation` (HS `closeTranslatedTheory`,
@@ -1844,16 +1803,11 @@ impl TheoryPipeline<'_> {
             // `closeProtoRule`, so refined rules whose own variant set is
             // empty must be dropped independently even when several refined
             // items share a name.
-            tamarin_theory::tools::rule_variants::populate_rule_variants(
+            tamarin_theory::tools::rule_variants::reprepare_theory_rules(
                 std::sync::Arc::make_mut(&mut self.elaborated),
                 m,
                 self.file_maude_pool.as_deref(),
-            );
-            tamarin_theory::tools::rule_variants::retain_rules_with_variants(
-                std::sync::Arc::make_mut(&mut self.elaborated),
-                m,
-            );
-            annotate_theory_loop_breakers(std::sync::Arc::make_mut(&mut self.elaborated), m);
+            )?;
 
             // HS's re-close passes `autoSources` again
             // (`applyPartialEvaluation style autoSources`, TheoryLoader.hs:684-688;
@@ -1869,7 +1823,7 @@ impl TheoryPipeline<'_> {
                     self.file_maude_pool.clone(),
                     self.ndc_cache.as_ref(),
                     self.opts.parameters,
-                );
+                )?;
             }
         }
 
@@ -2377,7 +2331,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             return Ok(code);
         }
 
-        st.check_translated_theory();
+        st.check_translated_theory()?;
 
         // `--quit-on-warning` (HS `withVersionAndReport`, TheoryLoader.hs:
         // 643-660, see line 656): a non-empty report throws `WarningError`

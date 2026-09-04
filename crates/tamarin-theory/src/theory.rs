@@ -45,18 +45,16 @@ pub struct OpenProtoRule {
     /// `variant_substs` disjunction is keyed by those fresh vars,
     /// so applying any picked variant subst yields a fully-narrowed
     /// rule.  `None` when no reducible-headed sub-terms exist
-    /// (canonical rule equals raw rule).  Populated by
-    /// `ProofContext::new` for every rule with reducible-headed
-    /// conclusions — this is the Haskell-faithful `someRuleACInst`
-    /// path (always on).
+    /// (canonical rule equals raw rule). Populated while closing the theory,
+    /// or by a standalone `ProofContext` on demand.
     pub abstracted_rule: Option<ProtoRuleE>,
     /// Premise indices marked as loop breakers by the dataflow
     /// analysis (`useAutoLoopBreakersAC`).  In Haskell these live on
     /// `praciLoopBreakers` of `ProtoRuleACInfo`; we attach them to
     /// the parent `OpenProtoRule` so both the E-rule and any AC
     /// variants share a single source of truth.  The field is
-    /// populated by `ProofContext::new`'s `annotate_loop_breakers`
-    /// pass.
+    /// populated while closing the theory, or by a standalone
+    /// `ProofContext` on demand.
     pub loop_breakers: Vec<crate::rule::PremIdx>,
     /// HS's `cprRuleE` half (`ClosedProtoRule`, Items/RuleItem.hs:56-59),
     /// stored only where it differs from `rule`: **`None` iff `rule` IS that

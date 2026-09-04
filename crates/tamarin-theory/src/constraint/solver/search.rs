@@ -43,7 +43,7 @@ use std::collections::BTreeMap;
 
 use crate::constraint::solver::context::{CutStrategy, ProofContext};
 use crate::constraint::solver::proof_method::{
-    exec_proof_method_unchecked, is_finished_unchecked, ProofMethod, Result as MethodResult,
+    exec_proof_method, is_finished, ProofMethod, Result as MethodResult,
 };
 use crate::constraint::system::System;
 use crate::prove::ProveError;
@@ -184,9 +184,8 @@ pub fn proof_status(node: &ProofNode) -> ProofStatus {
 /// is recursed into like any other node.  `M.toList` is ascending
 /// `CaseName` order == `BTreeMap<String>` iteration order.
 ///
-/// The systems only survive a `--prove` run when the process-wide
-/// [`SysRetention`] was raised to at least
-/// [`KeepSolved`](SysRetention::KeepSolved) beforehand; on the stored-proof
+/// The systems only survive a `--prove` run when its proof context uses at
+/// least [`KeepSolved`](SysRetention::KeepSolved); on the stored-proof
 /// replay path (`replay::check_and_extend_lemma_in_session`) they are
 /// always live.
 ///
@@ -220,12 +219,9 @@ fn collect_solved_systems_owned(
 // `expand`/`expand_inner` run once per proof-tree node (thousands of
 // times per lemma); these env vars are constant for the process, so cache
 // each behind a `OnceLock<bool>` (mirroring `trace::flag()`).
-// `TAM_RS_KEEP_SYS` is `var_os`-presence, cached as the affirmative
-// `keep_sys_env()`.
-
 /// How much of a proof tree keeps its per-node constraint `System` once
-/// [`expand`] has returned — a process-wide switch, since the three front
-/// ends want three different answers:
+/// [`expand`] has returned. Each proof context owns the policy because the
+/// three front ends want three different answers:
 ///
 /// * [`DropAll`](SysRetention::DropAll) — `--prove`, which never reprints
 ///   a per-node system in its text proof and so trades them for a low
@@ -248,20 +244,15 @@ fn collect_solved_systems_owned(
 ///
 /// A `Sorry: depth limit` frontier stub keeps its system under every
 /// policy: the next ID-DFS iteration re-expands it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum SysRetention {
     /// Drop every expanded node's `System`.
+    #[default]
     DropAll = 0,
     /// Retain the `System` of `Finished(Solved)` nodes only.
     KeepSolved = 1,
     /// Retain every node's `System`.
     KeepAll = 2,
-}
-
-impl Default for SysRetention {
-    fn default() -> Self {
-        Self::DropAll
-    }
 }
 
 /// Per-child parallel expansion is ON by default;
@@ -505,17 +496,6 @@ pub fn run_proof_search(
 }
 
 pub(crate) fn run_proof_search_at_depth(
-    ctx: &ProofContext,
-    initial: System,
-    proof_bound: usize,
-    ranking_depth_offset: usize,
-) -> Result<ProofNode, ProveError> {
-    ctx.source_result(|| {
-        run_proof_search_at_depth_unchecked(ctx, initial, proof_bound, ranking_depth_offset)
-    })
-}
-
-fn run_proof_search_at_depth_unchecked(
     ctx: &ProofContext,
     initial: System,
     proof_bound: usize,
@@ -1030,10 +1010,8 @@ fn expand_inner(
         node.status = NodeStatus::Sorry;
         return Ok(());
     }
-    // Already terminal. Contradiction checks can lazily force sources, so
-    // report a provider failure before accepting their provisional result.
-    let finished = is_finished_unchecked(ctx, &node.sys);
-    ctx.check_source_error()?;
+    // Already terminal.
+    let finished = is_finished(ctx, &node.sys);
     if let Some(r) = finished {
         node.status = node_status_of(&r);
         node.method = ProofMethod::Finished(r);
@@ -1295,7 +1273,7 @@ fn expand_inner(
                         // NSPK3 renders `by contradiction /* cyclic */`
                         // leaves amid the sorry stubs — while every
                         // still-open node becomes a bare `sorry` leaf.
-                        let (method, status) = match is_finished_unchecked(ctx, &sys) {
+                        let (method, status) = match is_finished(ctx, &sys) {
                             Some(r) => {
                                 let st = node_status_of(&r);
                                 (ProofMethod::Finished(r), st)
@@ -1375,9 +1353,9 @@ fn select_open_method(
     ctx: &ProofContext,
     depth: usize,
 ) -> Result<Option<(ProofMethod, Vec<(String, System)>)>, ProveError> {
-    let methods = ctx.source_result(|| candidate_methods_open(sys, ctx, depth))?;
+    let methods = candidate_methods_open(sys, ctx, depth)?;
     for method in methods {
-        let cases = ctx.source_result(|| Ok(exec_proof_method_unchecked(ctx, &method, sys)))?;
+        let cases = exec_proof_method(ctx, &method, sys)?;
         if let Some(cases) = cases {
             return Ok(Some((method, cases)));
         }
@@ -1445,14 +1423,6 @@ pub fn candidate_methods(
     ctx: &ProofContext,
     depth: usize,
 ) -> Result<Vec<ProofMethod>, ProveError> {
-    ctx.source_result(|| candidate_methods_unchecked(sys, ctx, depth))
-}
-
-fn candidate_methods_unchecked(
-    sys: &System,
-    ctx: &ProofContext,
-    depth: usize,
-) -> Result<Vec<ProofMethod>, ProveError> {
     // HS `stoppingMethod` (rankProofMethods, ProofMethod.hs:749-751):
     // `(Finished <$> isFinished ctxt sys) <|> …` — a finished system's
     // method list is exactly `[Finished r]`, displacing Simplify and every
@@ -1460,7 +1430,7 @@ fn candidate_methods_unchecked(
     // accountability `⊤` VC lemma's root, whose one applicable method is
     // `contradiction` (HS redirects on it; an empty list here made RS
     // alert "prover failed").
-    if let Some(r) = is_finished_unchecked(ctx, sys) {
+    if let Some(r) = is_finished(ctx, sys) {
         return Ok(vec![ProofMethod::Finished(r)]);
     }
     candidate_methods_open(sys, ctx, depth)
@@ -1527,19 +1497,11 @@ pub fn candidate_methods_with_expl(
     ctx: &ProofContext,
     depth: usize,
 ) -> Result<Vec<(ProofMethod, String)>, ProveError> {
-    ctx.source_result(|| candidate_methods_with_expl_unchecked(sys, ctx, depth))
-}
-
-fn candidate_methods_with_expl_unchecked(
-    sys: &System,
-    ctx: &ProofContext,
-    depth: usize,
-) -> Result<Vec<(ProofMethod, String)>, ProveError> {
     use crate::constraint::constraints::Goal;
     use crate::constraint::solver::annotated_goals::Usefulness;
     // HS `stoppingMethod` — see `candidate_methods`; keeps the DISPLAYED
     // numbering in lockstep with the apply path.
-    if let Some(r) = is_finished_unchecked(ctx, sys) {
+    if let Some(r) = is_finished(ctx, sys) {
         return Ok(vec![(ProofMethod::Finished(r), String::new())]);
     }
     // The selected ranking produced no matches with quitOnEmpty →
@@ -1645,14 +1607,32 @@ mod tests {
 
     #[test]
     fn fallible_searches_do_not_fan_out_siblings() {
+        #[derive(Debug)]
+        struct FallibleProvider;
+
+        impl crate::constraint::solver::context::SourceProvider for FallibleProvider {
+            fn may_fail(&self) -> bool {
+                true
+            }
+
+            fn materialize(&self, _ctx: &ProofContext) -> Result<(), crate::prove::ProveError> {
+                Ok(())
+            }
+        }
+
+        let Some(mut parallel_ctx) = ctx() else {
+            return;
+        };
+        parallel_ctx.cut = CutStrategy::Dfs;
+        parallel_ctx.is_exists_trace = false;
+        assert!(should_parallel_expand(&parallel_ctx, 2, 0, false));
+
+        parallel_ctx.set_source_provider(std::sync::Arc::new(FallibleProvider));
+        assert!(!should_parallel_expand(&parallel_ctx, 2, 0, false));
+
         let Some(mut ctx) = ctx() else { return };
         ctx.cut = CutStrategy::Dfs;
         ctx.is_exists_trace = false;
-        assert!(should_parallel_expand(&ctx, 2, 0, false));
-
-        ctx.sources_may_fail = true;
-        assert!(!should_parallel_expand(&ctx, 2, 0, false));
-        ctx.sources_may_fail = false;
         ctx.heuristic = Some(vec![
             crate::constraint::solver::goals::GoalRanking::Smart(false),
             crate::constraint::solver::goals::GoalRanking::Oracle {

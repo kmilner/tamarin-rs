@@ -85,9 +85,9 @@ pub fn check_message_derivation(
     timeout_secs: u32,
     ndc_cache: Option<IntrRuleCache>,
     parameters: crate::constraint::solver::sources::IntegerParameters,
-) -> Vec<WfError> {
+) -> Result<Vec<WfError>, crate::prove::ProveError> {
     if timeout_secs == 0 {
-        return Vec::new();
+        return Ok(Vec::new());
     }
     let timeout = Duration::from_secs(timeout_secs as u64);
     let mut per_rule: Vec<(String, Vec<String>)> = Vec::new();
@@ -130,15 +130,14 @@ pub fn check_message_derivation(
             maude.clone(),
             &free_vars,
             timeout,
-            rule_name,
             ndc_cache.as_ref(),
             parameters,
-        );
+        )?;
         if !undecidable.is_empty() {
             per_rule.push((rule_name.to_string(), undecidable));
         }
     }
-    format_deriv_report(&per_rule)
+    Ok(format_deriv_report(&per_rule))
 }
 
 /// All variables that appear anywhere in a rule's premise / action /
@@ -382,10 +381,9 @@ fn prove_probe(
     maude: MaudeHandle,
     free_vars: &[LVar],
     timeout: Duration,
-    rule_name: &str,
     ndc_cache: Option<&IntrRuleCache>,
     parameters: crate::constraint::solver::sources::IntegerParameters,
-) -> Vec<String> {
+) -> Result<Vec<String>, crate::prove::ProveError> {
     use crate::constraint::solver::context::{ProofContext, ProofContextOptions};
     use crate::constraint::solver::search::{run_proof_search, NodeStatus};
     use crate::constraint::system::{formula_to_system, SourceKind};
@@ -406,7 +404,7 @@ fn prove_probe(
     // (HS keeps `_thyCache` on the probe theory; `closeRuleCache`
     // consumes it as-is), so the NDC tags — and the permutation — carry
     // into probe proofs without re-running the check per probe.
-    let mut ctx = ProofContext::with_options(
+    let mut ctx = ProofContext::try_with_options(
         maude,
         rules,
         ProofContextOptions {
@@ -414,45 +412,26 @@ fn prove_probe(
             parameters,
             ..Default::default()
         },
-    );
+    )?;
     ctx.is_exists_trace = true;
     // Probes have no `[sources]`-tagged lemmas, so no typing
     // assumptions — but `ensure_saturated()` still must run to compute
     // the source-case cache exactly as HS's `closeTheoryWithMaude`
     // does once per modified theory (CloseRule.hs:56-70).
-    ctx.ensure_saturated();
+    ctx.ensure_saturated()?;
 
     let mut undecidable = Vec::new();
     for (v, fm) in free_vars.iter().zip(probe.lemmas.iter()) {
-        let g = match formula_to_guarded(fm) {
-            Ok(g) => g,
-            Err(_) => continue,
-        };
+        let g = formula_to_guarded(fm)
+            .map_err(|error| crate::prove::ProveError::Guarded(error.to_string()))?;
         let sys = formula_to_system(
             Vec::new(),
             SourceKind::RawSources,
             TraceQuantifier::ExistsTrace,
             &g,
         );
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            run_proof_search(&ctx, sys, 1000)
-                .expect("the derivation proof context has no fallible ranking or source provider")
-        }));
-        // A panic inside the prover is an INTERNAL bug, not a timeout
-        // (timeouts return a non-Solved status, not a panic).  Log it to
-        // stderr so it isn't silently mis-reported to the user as a
-        // "Failed to derive Variable(s)" wellformedness result.  We still
-        // fall through to `ok = false`, the conservative verdict that leaves
-        // the variable in the report.
-        if result.is_err() {
-            eprintln!(
-                "[deriv] WARNING: solver panicked while checking derivability of \
-                 variable `{}` in rule `{}`; reporting it as non-derivable. \
-                 This is an internal prover bug, not necessarily a theory problem.",
-                v.name, rule_name,
-            );
-        }
-        let ok = matches!(result, Ok(ref n) if matches!(n.status, NodeStatus::Solved));
+        let result = run_proof_search(&ctx, sys, 1000)?;
+        let ok = matches!(result.status, NodeStatus::Solved);
         if !ok {
             // HS reports `show LVar` for the undecidable variable
             // (MessageDerivationChecks.hs:131-133, see line 133); `Display
@@ -461,7 +440,7 @@ fn prove_probe(
         }
     }
 
-    undecidable
+    Ok(undecidable)
 }
 
 fn format_deriv_report(per_rule: &[(String, Vec<String>)]) -> Vec<WfError> {
@@ -546,7 +525,8 @@ mod tests {
               lemma trivial: "T"
             end
         "#;
-        let report = check_message_derivation(&theory(src), &m, 5, None, Default::default());
+        let report = check_message_derivation(&theory(src), &m, 5, None, Default::default())
+            .expect("solver operation");
         // `x` appears in `In(x)` which is intruder-known → derivable.
         assert!(report.is_empty(), "expected no warnings, got {:?}", report);
     }
@@ -560,7 +540,8 @@ mod tests {
               lemma trivial: "T"
             end
         "#;
-        let report = check_message_derivation(&theory(src), &m, 5, None, Default::default());
+        let report = check_message_derivation(&theory(src), &m, 5, None, Default::default())
+            .expect("solver operation");
         // Free `unbound` has no premise → not derivable.
         assert_eq!(report.len(), 1);
         assert!(
@@ -579,7 +560,8 @@ mod tests {
               lemma trivial: "T"
             end
         "#;
-        let report = check_message_derivation(&theory(src), &m, 0, None, Default::default());
+        let report = check_message_derivation(&theory(src), &m, 0, None, Default::default())
+            .expect("solver operation");
         assert!(report.is_empty(), "timeout=0 should disable the check");
     }
 
@@ -595,7 +577,8 @@ mod tests {
               lemma trivial: "T"
             end
         "#;
-        let report = check_message_derivation(&theory(src), &m, 5, None, Default::default());
+        let report = check_message_derivation(&theory(src), &m, 5, None, Default::default())
+            .expect("solver operation");
         assert!(
             report.is_empty(),
             "a no_derivcheck rule is not reported, got {:?}",
@@ -688,7 +671,8 @@ mod tests {
         let Some((thy, m)) = theory_and_maude(src) else {
             return;
         };
-        let report = check_message_derivation(&thy, &m, 10, None, Default::default());
+        let report = check_message_derivation(&thy, &m, 10, None, Default::default())
+            .expect("solver operation");
         assert_eq!(report.len(), 1, "expected one report, got {:?}", report);
         assert!(
             report[0].message.contains("Reveal")
@@ -718,7 +702,8 @@ mod tests {
         let Some((thy, m)) = theory_and_maude(src) else {
             return;
         };
-        let report = check_message_derivation(&thy, &m, 10, None, Default::default());
+        let report = check_message_derivation(&thy, &m, 10, None, Default::default())
+            .expect("solver operation");
         assert!(
             report.is_empty(),
             "public `dec` → `m` derivable; expected no report, got {:?}",

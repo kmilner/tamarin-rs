@@ -207,7 +207,7 @@ fn pretty_subterm_store(sys: &System) -> Doc {
 // `equivClasses` map iteration order, which may differ from Haskell's
 // `Ord (VTerm c v)` in edge cases.
 fn pretty_eq_store(sys: &System) -> Doc {
-    let eq = &sys.eq_store;
+    let eq = &sys.eq_store();
     let mut lines: Vec<Doc> = Vec::new();
 
     if eq.is_false() {

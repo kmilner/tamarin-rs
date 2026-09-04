@@ -233,9 +233,15 @@ fn parse_variants_reply_from(c: &mut Cursor<'_>) -> Result<Vec<MSubst>, ParseErr
         }
         let _ = c.read_decimal();
         let _ = c.skip_eol();
-        // Reprinted term (sort/TOP : term\n)
+        // Reprinted term (`Sort: term` or `[Kind]: term`). Maude brackets
+        // the kind when a variant's reprinted subject is ill-sorted, for
+        // example `[TOP]: list(...)`.
+        let kind = c.eat(b'[');
         if !c.eat_str(b"TOP") {
             parse_sort(c)?;
+        }
+        if kind && !c.eat(b']') {
+            return Err(ParseError("expected `]` after reprinted kind".into()));
         }
         if !c.eat_str(b": ") {
             return Err(ParseError("expected `: ` in reprinted term".into()));
@@ -888,6 +894,18 @@ mod tests {
                 )],
             ]
         );
+    }
+
+    #[test]
+    fn parse_variant_reply_accepts_a_bracketed_kind() {
+        let variants = parse_variants_reply(
+            b"\nVariant 1\nrewrites: 0\n[TOP]: list(#1:Fresh)\n\
+              x0:Fresh --> #1:Fresh\n\
+              \nNo more variants.\nrewrites: 0\n",
+        )
+        .unwrap();
+        assert_eq!(variants.len(), 1);
+        assert_eq!(variants[0].len(), 1);
     }
 
     /// The `many1` and `endOfInput` guards of `parse_variants_reply`.  A reply

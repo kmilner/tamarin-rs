@@ -75,21 +75,15 @@ pub(crate) fn load_from_source(
     // through the normal parse-error surface — `Display for ParseError` renders
     // a GHC `error` as its bare message, without the parsec frame the position
     // would fake or the `HasCallStack` block that only the CLI reproduces.
-    // Parser flags (`-D` defines + the `quit-on-warning` element) from the
-    // interactive CLI, via [`PARSER_FLAGS`]; `#include` paths resolve
-    // server configuration; `#include` paths resolve against the theory file's
-    // own directory — HS threads `Just inFile`
+    // Parser flags (`-D` defines + the `quit-on-warning` element) come from
+    // the server configuration. `#include` paths resolve against the theory
+    // file's own directory — HS threads `Just inFile`
     // into the `theory` parser (`loadTheory`, TheoryLoader.hs:449-458) and
     // `include` resolves against `takeDirectory <$> inFile0`
     // (Theory/Text/Parser.hs:306-343).  An upload has no on-disk home
     // (HS's bare filename gives `takeDirectory = "."`), so it resolves
     // CWD-relative, the no-base default.
-    let flags: Vec<&str> = cfg
-        .theory_load
-        .parser_flags
-        .iter()
-        .map(String::as_str)
-        .collect();
+    let flags: Vec<&str> = cfg.parser_flags.iter().map(String::as_str).collect();
     let base_dir = match &origin {
         TheoryOrigin::Local(p) => p.parent().map(|d| d.to_path_buf()),
         _ => None,
@@ -121,11 +115,11 @@ pub(crate) fn load_from_source(
     // step of `loadTheory` (TheoryLoader.hs:449-452): the CLI's `ndcCheck`
     // becomes the loaded theory's `_deductionChainCheck`, which the NDC pass in
     // the maude block below reads back.
-    typed.options.deduction_chain_check = cfg.theory_load.ndc_check;
+    typed.options.deduction_chain_check = cfg.ndc_check;
     // The `addLemmaToProve` sibling of that same `addParamsOptions`
     // (TheoryLoader.hs:835-838): the CLI's `--prove`/`--lemma` selection
     // becomes the loaded theory's `_lemmasToProve`.
-    typed.options.lemmas_to_prove = cfg.theory_load.lemmas_to_prove.clone();
+    typed.options.lemmas_to_prove = cfg.lemmas_to_prove.clone();
 
     // SAPIC `process:` translation — mirror `run_batch`'s CLI-side pass so
     // the web load path renders SAPIC theories exactly like `--prove`.  Runs
@@ -182,24 +176,11 @@ pub(crate) fn load_from_source(
     let prover_maude_sig = typed.signature.clone();
     let started_maude = MaudeHandle::start(&cfg.maude_path, prover_maude_sig.clone());
     if let Ok(maude) = started_maude {
-        tamarin_theory::tools::rule_variants::populate_rule_variants(&mut typed, &maude, None);
-        // `checkTranslatedTheory` reports contradictory zero-variant rules,
-        // then `closeTheory` drops them from the closed theory. Keep that
-        // order: filtering first would erase the warning as well as the rule.
-        wf_report.extend(tamarin_theory::wellformedness::check_wellformedness(
-            &typed,
-            Some(&maude),
-        ));
-        tamarin_theory::tools::rule_variants::retain_rules_with_variants(&mut typed, &maude);
-        // Annotate per-rule loop breakers on the stored theory so the web
-        // rules / source / message renderers emit HS's `// loop breaker: [<n>]`
-        // comments — HS `prettyClosedProtoRule` reads them from the
-        // `ProtoRuleACInfo` baked into every closed rule.  Our prover computes
-        // them inside `ProofContext::new` on a local copy; run the same
-        // whole-theory pass `run.rs` runs on the CLI side so the
-        // byte-faithful `web_proto_rules` printer has them.
-        tamarin_theory::constraint::solver::context::annotate_theory_loop_breakers(
-            &mut typed, &maude,
+        wf_report.extend(
+            tamarin_theory::tools::rule_variants::prepare_theory_rules(
+                &mut typed, &maude, None, true,
+            )
+            .map_err(|error| LoadError::Elaborate(error.to_string()))?,
         );
 
         // Once-per-theory NDC pass (HS `checkCloseIntrRule` inside
@@ -216,7 +197,8 @@ pub(crate) fn load_from_source(
             typed.options.deduction_chain_check,
             &typed.intruder_rules,
             cfg.solver_parameters,
-        );
+        )
+        .map_err(|error| LoadError::Elaborate(error.to_string()))?;
         if !checked.ndc_funs.is_empty() {
             let mut sig = std::mem::take(&mut typed.signature);
             for f in &checked.ndc_funs {
@@ -249,7 +231,8 @@ pub(crate) fn load_from_source(
             cfg.derivcheck_timeout,
             ndc_cache.clone(),
             cfg.solver_parameters,
-        );
+        )
+        .map_err(|error| LoadError::Elaborate(error.to_string()))?;
         wf_report.extend(extra);
         if cfg.derivcheck_timeout > 0 {
             eprintln!("[Theory {}] Derivation checks ended", typed.name);
@@ -374,7 +357,7 @@ mod tests {
             .expect("tiny theory loads");
         assert_eq!(rule_count(&entry), 0);
         // Flag set: the block parses, exactly as batch `-D=FOO`.
-        cfg.theory_load.parser_flags.push("FOO".to_string());
+        cfg.parser_flags.push("FOO".to_string());
         let entry = load_from_source(src, TheoryOrigin::Upload("t.spthy".into()), &cfg)
             .expect("tiny theory loads");
         assert_eq!(rule_count(&entry), 1);

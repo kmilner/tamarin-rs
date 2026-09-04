@@ -303,7 +303,8 @@ impl TheoryStore {
     ) -> Result<TheoryEntry, StoreError> {
         loop {
             let mut snapshot = self.snapshot(idx)?;
-            match self.ensure_snapshot_proof(&snapshot, cfg) {
+            let proof = self.ensure_snapshot_proof(&snapshot, cfg);
+            match proof {
                 Ok(proof) => {
                     snapshot.entry.proof_state = Some(proof);
                     return Ok(snapshot.entry);

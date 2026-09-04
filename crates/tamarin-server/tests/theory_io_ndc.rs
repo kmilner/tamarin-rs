@@ -110,7 +110,7 @@ fn ndc_check_flag_gates_the_web_load_ndc_pass() {
 
     // `--no-ndc` — HS's `else (sign, intrRules)` branch (TheoryLoader.hs:517):
     // no verdicts, no signature tags, cache in raw assembly order.
-    cfg.theory_load.ndc_check = false;
+    cfg.ndc_check = false;
     let skipped = theory_io::load_from_path(&path, &cfg).expect("fixture loads");
     assert_eq!(
         functions_line(&skipped),

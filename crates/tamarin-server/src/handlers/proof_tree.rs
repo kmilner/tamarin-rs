@@ -223,6 +223,7 @@ impl ProofState {
                 parameters: cfg.solver_parameters,
                 sys_retention: tamarin_theory::constraint::solver::search::SysRetention::KeepAll,
                 show_saturation_steps: true,
+                loop_breakers_prepared: ndc_cache.is_some(),
                 ..Default::default()
             },
         )
@@ -280,9 +281,7 @@ impl ProofState {
             let mut children = BTreeMap::new();
             for (name, sys) in cases {
                 // Eagerly classify each child as finished / open.
-                let (status, leaf_method) = match is_finished(&ctx, &sys)
-                    .map_err(|error| format!("proof context: {error}"))?
-                {
+                let (status, leaf_method) = match is_finished(&ctx, &sys) {
                     Some(r) => {
                         let s = match &r {
                             tamarin_theory::constraint::solver::proof_method::Result::Solved =>

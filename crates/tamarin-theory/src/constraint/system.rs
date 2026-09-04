@@ -96,56 +96,6 @@ pub enum Side {
 }
 
 // =============================================================================
-// Write-sealed equation-store field
-// =============================================================================
-
-/// Write-sealed newtype around the system's equation-store `Arc`.
-///
-/// The `eq_store` field of [`SystemContent`] stays `pub` so every READ site
-/// keeps compiling unchanged — `sys.eq_store.subst` (double-deref
-/// `SealedEqStore` → `Arc<EquationStore>` → `EquationStore`),
-/// `Arc::ptr_eq(&a.eq_store, …)` (deref-coercion `&SealedEqStore` →
-/// `&Arc<EquationStore>`), etc. — via the `Deref<Target = Arc<EquationStore>>`
-/// below.
-///
-/// But it cannot be WRITTEN outside this module: the tuple field is private
-/// and the wrapper implements **no** `Default`, `Clone`, `DerefMut`, or public
-/// constructor, so a `SealedEqStore` VALUE cannot be produced anywhere except
-/// `system.rs`.  That closes the residual subst-stamp hole at COMPILE time:
-/// the escape-hatch `content_mut_untracked()` hands out `&mut SystemContent`
-/// with the `pub eq_store` field visible, but `c.eq_store = …` has no
-/// expressible right-hand side (no value to assign, no `mem::take`/`replace`
-/// target, no struct-literal field), so the only reachable write path is
-/// `System::set_eq_store` / `take_eq_store` / `eq_store_mut`, each of which
-/// bumps `subst_stamp`.
-///
-/// `Debug` is implemented manually and `PartialEq` is derived; both delegate
-/// to the inner `Arc`, so `SystemContent`'s derived `Debug`/`PartialEq` behave
-/// exactly as they would over a bare `Arc<EquationStore>` field.  The derived
-/// comparison is a content comparison (`Arc`'s `PartialEq` forwards to the
-/// inner `EquationStore` value), preserving goal/case dedup equality
-/// semantics.
-#[derive(PartialEq, Eq, PartialOrd, Ord)]
-pub struct SealedEqStore(Arc<EquationStore>);
-
-impl std::ops::Deref for SealedEqStore {
-    type Target = Arc<EquationStore>;
-    #[inline]
-    fn deref(&self) -> &Arc<EquationStore> {
-        &self.0
-    }
-}
-
-// Delegate to the inner `Arc` so `{:?}` output (and any Debug-derived
-// serialisation) is identical to that of a bare `Arc<EquationStore>` field.
-impl std::fmt::Debug for SealedEqStore {
-    #[inline]
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Debug::fmt(&self.0, f)
-    }
-}
-
-// =============================================================================
 // System
 // =============================================================================
 
@@ -160,20 +110,12 @@ impl std::fmt::Debug for SealedEqStore {
 /// hatch).  A raw write that forgets the stamp/cache bookkeeping no
 /// longer type-checks — that is the enforcement pivot for the
 /// verified-identity `subst_system` skip.
-// `Default` and `Clone` are IMPL'D MANUALLY (below), not derived: the
-// `eq_store` field is a `SealedEqStore`, which deliberately implements neither
-// `Default` nor `Clone` (that is what makes an out-of-module `SealedEqStore`
-// value unproducible → the write-seal).  The manual impls rebuild the field
-// through the module-private tuple constructor, so their behaviour is
-// byte-identical to the derived versions (an `Arc` refcount bump / a fresh
-// default `Arc`).  `Debug`/`PartialEq` are still derived (the wrapper provides
-// both, delegating to the inner `Arc`).
 /// The fields of HS `System` (System.hs:382-400) plus the port's own
 /// `Arc` wrappers, in a different order from HS's declaration.  Only equality
 /// is derived here, which is order-insensitive; HS's ordering chain is spelled
 /// out by `compare_systems_up_to_new_vars`, so no order may be derived on this
 /// struct.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct SystemContent {
     /// Node id → rule instance providing its conclusion.
     ///
@@ -217,11 +159,9 @@ pub struct SystemContent {
     /// `Arc`-wrapped for copy-on-write structural sharing (see `nodes`).
     /// Cloned at every proof fork; mutated through `eq_store_mut`.
     ///
-    /// Write-sealed via [`SealedEqStore`]: reads deref through unchanged; the
-    /// only write path is `set_eq_store`/`take_eq_store`/`eq_store_mut` (each
-    /// bumps `subst_stamp`) because no `SealedEqStore` value is constructible
-    /// outside this module.
-    pub eq_store: SealedEqStore,
+    /// Private so writes must use `set_eq_store`, `take_eq_store`, or
+    /// `eq_store_mut`, which maintain `subst_stamp`.
+    eq_store: Arc<EquationStore>,
     /// Subterm store.
     ///
     /// `Arc`-wrapped for copy-on-write structural sharing (see `nodes`).
@@ -234,48 +174,45 @@ pub struct SystemContent {
     pub goals: Arc<Vec<(Goal, GoalStatus)>>,
 }
 
-// Manual `Default` — the derived one is unavailable because `SealedEqStore`
-// has no `Default` (part of the write-seal).  Rebuilds `eq_store` through the
-// module-private constructor with a default `Arc<EquationStore>`; every other
-// field takes its own `Default`, so the result is byte-identical to a derive.
-impl Default for SystemContent {
-    fn default() -> Self {
-        Self {
-            nodes: Arc::default(),
-            edges: Vec::default(),
-            less_atoms: Vec::default(),
-            formulas: Vec::default(),
-            solved_formulas: Vec::default(),
-            lemmas: Vec::default(),
-            last_atom: None,
-            eq_store: SealedEqStore(Arc::default()),
-            subterm_store: Arc::default(),
-            goals: Arc::default(),
-        }
-    }
-}
-
-// Manual `Clone` — the derived one is unavailable because `SealedEqStore` has
-// no `Clone` (part of the write-seal; `.clone()` on the field falls through
-// `Deref` to `Arc::clone`, yielding `Arc<EquationStore>`, not another sealed
-// value — so a clone can never be assigned back into an `eq_store` slot).
-// Every field clones exactly as the derive would (`Arc` refcount bumps for the
-// shared collections, `eq_store` rebuilt through the private constructor from
-// an `Arc::clone`).  Byte-identical to a derived `Clone`.
-impl Clone for SystemContent {
-    fn clone(&self) -> Self {
-        Self {
-            nodes: self.nodes.clone(),
-            edges: self.edges.clone(),
-            less_atoms: self.less_atoms.clone(),
-            formulas: self.formulas.clone(),
-            solved_formulas: self.solved_formulas.clone(),
-            lemmas: self.lemmas.clone(),
-            last_atom: self.last_atom,
-            eq_store: SealedEqStore(self.eq_store.0.clone()),
-            subterm_store: self.subterm_store.clone(),
-            goals: self.goals.clone(),
-        }
+impl SystemContent {
+    /// Compare the fields following `nodes` in Haskell's `System` declaration
+    /// order. The exhaustive destructures make additions fail to compile until
+    /// their ordering role is decided.
+    pub(crate) fn compare_hs_fields_after_nodes(&self, other: &Self) -> std::cmp::Ordering {
+        let Self {
+            nodes: _,
+            edges,
+            less_atoms,
+            formulas,
+            solved_formulas,
+            lemmas,
+            last_atom,
+            eq_store,
+            subterm_store,
+            goals,
+        } = self;
+        let Self {
+            nodes: _,
+            edges: other_edges,
+            less_atoms: other_less_atoms,
+            formulas: other_formulas,
+            solved_formulas: other_solved_formulas,
+            lemmas: other_lemmas,
+            last_atom: other_last_atom,
+            eq_store: other_eq_store,
+            subterm_store: other_subterm_store,
+            goals: other_goals,
+        } = other;
+        edges
+            .cmp(other_edges)
+            .then_with(|| less_atoms.cmp(other_less_atoms))
+            .then_with(|| last_atom.cmp(other_last_atom))
+            .then_with(|| subterm_store.cmp_hs(other_subterm_store))
+            .then_with(|| eq_store.cmp(other_eq_store))
+            .then_with(|| formulas.cmp(other_formulas))
+            .then_with(|| solved_formulas.cmp(other_solved_formulas))
+            .then_with(|| lemmas.cmp(other_lemmas))
+            .then_with(|| goals.cmp(other_goals))
     }
 }
 
@@ -557,8 +494,8 @@ impl PartialEq for System {
 }
 
 /// Read access to the [`SystemContent`] fields.  Field reads auto-deref
-/// through the `.` operator, so `sys.nodes`, `sys.eq_store.subst`, … keep
-/// compiling unchanged both cross-module and inside `impl System`.
+/// through the `.` operator, so ordinary reads such as `sys.nodes` remain
+/// direct. The private equation store uses [`System::eq_store`].
 ///
 /// There is DELIBERATELY no `DerefMut`: this is a "smart field container",
 /// not a pointer.  Every write must go through a stamp/cache-maintaining
@@ -771,30 +708,27 @@ impl System {
         *self.solved_formulas_canon_cache.borrow_mut() = None;
     }
 
-    /// Install a new equation store, bumping `subst_stamp`.  The ONLY
-    /// sanctioned path for `self.eq_store = Arc::new(..)` reassignment — the
-    /// `eq_store_direct_assignment_is_routed` guard test fails the build on any
-    /// raw `.eq_store =` write in the solver that bypasses this.
+    /// Install a new equation store, bumping `subst_stamp`. The private field
+    /// makes this the only whole-store assignment path.
     #[inline]
     pub fn set_eq_store(&mut self, es: Arc<EquationStore>) {
-        // Module-private `SealedEqStore` constructor: the only place (with
-        // `take_eq_store`/`eq_store_mut`) a sealed value is produced.
-        self.content.eq_store = SealedEqStore(es);
+        self.content.eq_store = es;
         self.bump_subst_stamp();
     }
 
+    /// Read the equation store without exposing a writable field.
+    #[inline]
+    pub fn eq_store(&self) -> &EquationStore {
+        &self.content.eq_store
+    }
+
     /// Take the `eq_store` `Arc` out (leaving a `Default` in its place),
-    /// bumping `subst_stamp`.  Sole sanctioned `mem::take(&mut …eq_store)`
-    /// door for the "unwrap → rebuild → `set_eq_store`" pattern; the
-    /// `eq_store_installs_route_through_set_eq_store` guard test forbids a raw
-    /// `mem::take(&mut sys.eq_store)` elsewhere (the take is a subst mutation).
+    /// bumping `subst_stamp`. This supports the "unwrap → rebuild →
+    /// `set_eq_store`" pattern without exposing the field.
     #[inline]
     pub fn take_eq_store(&mut self) -> Arc<EquationStore> {
         self.bump_subst_stamp();
-        // `SealedEqStore` has no `Default`, so `mem::take` is unavailable (by
-        // design — that unavailability is what seals the field).  Swap in a
-        // freshly-constructed default sealed store and unwrap the taken value.
-        std::mem::replace(&mut self.content.eq_store, SealedEqStore(Arc::default())).0
+        std::mem::take(&mut self.content.eq_store)
     }
 
     // ====== content-write choke doors (the enforcement surface) ======
@@ -835,9 +769,8 @@ impl System {
     /// The closed set of callers is pinned by the
     /// `content_untracked_callers_are_enumerated` guard test.  A new call site
     /// fails the build until its stamp reasoning is established.  The
-    /// subst axis is sealed independently of this list: the `eq_store` field
-    /// this door exposes is a `SealedEqStore`, so a raw assignment has no
-    /// expressible right-hand side and every write path bumps `subst_stamp`.
+    /// subst axis is sealed independently: `eq_store` is private, so every
+    /// write path bumps `subst_stamp`.
     ///
     /// VISIBILITY: `pub(crate)`, not `pub` — unnameable from `tamarin-server`
     /// and any other downstream crate (only the tracked `content_mut` door is
@@ -1429,9 +1362,7 @@ impl System {
         // clones `eq_store.subst` once), so a fired skip is never invalidated
         // by the pass's own bookkeeping.
         self.bump_subst_stamp();
-        // Reach through the sealed wrapper's private field to the inner `Arc`
-        // (in-module access) for copy-on-write mutation.
-        Arc::make_mut(&mut self.content.eq_store.0)
+        Arc::make_mut(&mut self.content.eq_store)
     }
 
     /// Copy-on-write mutable access to `subterm_store` (see `nodes_mut`).

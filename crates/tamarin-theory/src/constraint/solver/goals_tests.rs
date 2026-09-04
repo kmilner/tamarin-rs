@@ -86,7 +86,7 @@ fn dispatch_solve_goal_marks_solved_then_routes() {
     sys.add_goal(g.clone());
     let mut r = Reduction::new(&ctx, sys);
     let out = dispatch_solve_goal(&mut r, &g);
-    assert!(matches!(out, GoalCases::Contradictory));
+    assert!(matches!(out, Ok(GoalCases::Contradictory)));
     assert!(
         r.sys.goals.iter().any(|(gg, st)| gg == &g && st.solved),
         "the goal must be marked solved even on the contradictory route"

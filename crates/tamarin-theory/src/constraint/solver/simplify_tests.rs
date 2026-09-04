@@ -39,7 +39,7 @@ fn ctx() -> Option<ProofContext> {
 /// Run the production simplifier in tests that intentionally construct a
 /// linear case. A surprise split is itself a regression in these fixtures.
 fn simplify_one(ctx: &ProofContext, sys: System) -> System {
-    let mut systems = simplify_system_with_fanout(ctx, sys);
+    let mut systems = simplify_system_with_fanout(ctx, sys).expect("infallible test context");
     assert_eq!(systems.len(), 1, "expected one simplified system");
     systems.pop().unwrap()
 }
@@ -85,13 +85,15 @@ fn mark_split_arm_at(mut sys: System, idx: u64) -> System {
     sys
 }
 
-fn split_into_success_then_failure(red: &mut Reduction<'_>) -> SystemOutcome {
+fn split_into_success_then_failure(
+    red: &mut Reduction<'_>,
+) -> Result<SystemOutcome, crate::prove::ProveError> {
     if red.sys.last_atom.is_some() {
-        return SystemOutcome::Linear;
+        return Ok(SystemOutcome::Linear);
     }
     red.changed = ChangeIndicator::Changed;
     let counter = red.maude.fresh_counter_peek();
-    SystemOutcome::Cases(vec![
+    Ok(SystemOutcome::Cases(vec![
         SystemBranch {
             sys: mark_split_arm_at(red.sys.clone(), 30),
             counter,
@@ -100,22 +102,25 @@ fn split_into_success_then_failure(red: &mut Reduction<'_>) -> SystemOutcome {
             sys: mark_split_arm_at(red.sys.clone(), 31),
             counter,
         },
-    ])
+    ]))
 }
 
-fn fail_sources_in_second_arm(red: &mut Reduction<'_>) {
+fn fail_sources_in_second_arm(
+    red: &mut Reduction<'_>,
+) -> Result<SystemOutcome, crate::prove::ProveError> {
     if red.sys.last_atom.is_some_and(|marker| marker.idx == 31) {
-        red.ctx.ensure_saturated();
+        red.ctx.ensure_saturated()?;
     }
+    Ok(SystemOutcome::Linear)
 }
 
-fn split_once(red: &mut Reduction<'_>) -> SystemOutcome {
+fn split_once(red: &mut Reduction<'_>) -> Result<SystemOutcome, crate::prove::ProveError> {
     if red.sys.last_atom.is_some() {
-        return SystemOutcome::Linear;
+        return Ok(SystemOutcome::Linear);
     }
     red.changed = ChangeIndicator::Changed;
     let counter = red.maude.fresh_counter_peek();
-    SystemOutcome::Cases(vec![
+    Ok(SystemOutcome::Cases(vec![
         SystemBranch {
             sys: mark_split_arm(red.sys.clone()),
             counter,
@@ -124,15 +129,17 @@ fn split_once(red: &mut Reduction<'_>) -> SystemOutcome {
             sys: mark_split_arm(red.sys.clone()),
             counter,
         },
-    ])
+    ]))
 }
 
-fn split_with_distinct_counters(red: &mut Reduction<'_>) -> SystemOutcome {
+fn split_with_distinct_counters(
+    red: &mut Reduction<'_>,
+) -> Result<SystemOutcome, crate::prove::ProveError> {
     if red.sys.last_atom.is_some() {
-        return SystemOutcome::Linear;
+        return Ok(SystemOutcome::Linear);
     }
     red.changed = ChangeIndicator::Changed;
-    SystemOutcome::Cases(vec![
+    Ok(SystemOutcome::Cases(vec![
         SystemBranch {
             sys: mark_split_arm_at(red.sys.clone(), 30),
             counter: 100,
@@ -141,7 +148,7 @@ fn split_with_distinct_counters(red: &mut Reduction<'_>) -> SystemOutcome {
             sys: mark_split_arm_at(red.sys.clone(), 31),
             counter: 200,
         },
-    ])
+    ]))
 }
 
 fn allocate_counter_marker_once(red: &mut Reduction<'_>) {
@@ -153,9 +160,11 @@ fn allocate_counter_marker_once(red: &mut Reduction<'_>) {
     }
 }
 
-fn adopt_singleton_once(red: &mut Reduction<'_>) -> SystemOutcome {
+fn adopt_singleton_once(
+    red: &mut Reduction<'_>,
+) -> Result<SystemOutcome, crate::prove::ProveError> {
     if red.sys.last_atom.is_some() {
-        return SystemOutcome::Linear;
+        return Ok(SystemOutcome::Linear);
     }
     let outcome = red.finish_system_cases(vec![SystemBranch {
         sys: mark_split_arm(red.sys.clone()),
@@ -163,7 +172,7 @@ fn adopt_singleton_once(red: &mut Reduction<'_>) -> SystemOutcome {
     }]);
     assert!(matches!(outcome, SystemOutcome::Linear));
     assert_eq!(red.changed, ChangeIndicator::Changed);
-    outcome
+    Ok(outcome)
 }
 
 fn assert_continuation_order(systems: Vec<(System, u64)>) {
@@ -189,10 +198,13 @@ fn branching_pass_resumes_at_its_lexical_continuation() {
     let mut red = Reduction::new(&ctx, System::empty());
     let passes = [
         Pass::Linear(insert_pre_marker_after_split),
-        Pass::Branching(split_once),
+        Pass::Fallible(split_once),
         Pass::Linear(insert_post_marker),
     ];
-    assert_continuation_order(simplify_system_fan_out_inner_with_passes(&mut red, &passes));
+    assert_continuation_order(
+        simplify_system_fan_out_inner_with_passes(&mut red, &passes)
+            .expect("infallible test passes"),
+    );
 }
 
 #[test]
@@ -200,11 +212,12 @@ fn split_arms_resume_with_their_own_fresh_counters() {
     let Some(ctx) = ctx() else { return };
     let mut red = Reduction::new(&ctx, System::empty());
     let passes = [
-        Pass::Branching(split_with_distinct_counters),
+        Pass::Fallible(split_with_distinct_counters),
         Pass::Linear(allocate_counter_marker_once),
     ];
 
-    let systems = simplify_system_fan_out_inner_with_passes(&mut red, &passes);
+    let systems = simplify_system_fan_out_inner_with_passes(&mut red, &passes)
+        .expect("infallible test passes");
     assert_eq!(systems.len(), 2);
     for (sys, counter) in systems {
         let arm = sys.last_atom.expect("split arm").idx;
@@ -258,11 +271,13 @@ fn contradictory_unique_action_discards_the_continuation() {
     let mut red = Reduction::new(&ctx, sys);
 
     let passes = [
-        Pass::Branching(solve_unique_actions_pass_fan_out),
+        Pass::Fallible(solve_unique_actions_pass_fan_out),
         Pass::Linear(insert_post_marker),
     ];
     assert!(
-        simplify_system_fan_out_inner_with_passes(&mut red, &passes).is_empty(),
+        simplify_system_fan_out_inner_with_passes(&mut red, &passes)
+            .expect("infallible test passes")
+            .is_empty(),
         "a contradictory mapM element must discard its later continuation"
     );
 }
@@ -334,7 +349,7 @@ fn later_unique_action_contradiction_discards_every_fanned_arm() {
     let mut first_only = System::empty();
     first_only.add_goal(first_goal.clone());
     let mut red = Reduction::new(&ctx, first_only);
-    let first_outcome = solve_unique_actions_pass_fan_out(&mut red);
+    let first_outcome = solve_unique_actions_pass_fan_out(&mut red).expect("infallible context");
     let SystemOutcome::Cases(first_arms) = first_outcome else {
         panic!("the first captured action must genuinely fan out: {first_outcome:?}");
     };
@@ -346,7 +361,7 @@ fn later_unique_action_contradiction_discards_every_fanned_arm() {
     let mut red = Reduction::new(&ctx, combined);
     assert!(matches!(
         solve_unique_actions_pass_fan_out(&mut red),
-        SystemOutcome::Contradictory
+        Ok(SystemOutcome::Contradictory)
     ));
 }
 
@@ -356,10 +371,11 @@ fn singleton_system_case_is_adopted_as_a_linear_continuation() {
     let mut red = Reduction::new(&ctx, System::empty());
     let passes = [
         Pass::Linear(insert_pre_marker_after_split),
-        Pass::Branching(adopt_singleton_once),
+        Pass::Fallible(adopt_singleton_once),
         Pass::Linear(insert_post_marker),
     ];
-    let mut systems = simplify_system_fan_out_inner_with_passes(&mut red, &passes);
+    let mut systems = simplify_system_fan_out_inner_with_passes(&mut red, &passes)
+        .expect("infallible test passes");
 
     assert_eq!(systems.len(), 1);
     let (sys, counter) = systems.pop().unwrap();
@@ -392,15 +408,14 @@ fn fatal_source_error_discards_completed_sibling_arms() {
     ctx.set_source_provider(std::sync::Arc::new(FailingProvider));
     let mut red = Reduction::new(&ctx, System::empty());
     let passes = [
-        Pass::Branching(split_into_success_then_failure),
-        Pass::Linear(fail_sources_in_second_arm),
+        Pass::Fallible(split_into_success_then_failure),
+        Pass::Fallible(fail_sources_in_second_arm),
     ];
 
-    assert!(
-        simplify_system_fan_out_inner_with_passes(&mut red, &passes).is_empty(),
-        "a later fatal source error must invalidate earlier sibling outputs"
-    );
-    assert!(ctx.has_source_error());
+    assert!(matches!(
+        simplify_system_fan_out_inner_with_passes(&mut red, &passes),
+        Err(crate::prove::ProveError::Guarded(message)) if message == "bad source"
+    ));
 }
 
 #[test]
@@ -426,9 +441,9 @@ fn merge_candidates_finishes_each_group_before_starting_the_next() {
             calls.set(call + 1);
             if call == 0 {
                 assert_eq!((eqs[0].lhs, eqs[0].rhs), (10, 11));
-                let store = red.sys.eq_store.as_ref().clone();
+                let store = red.sys.eq_store().clone();
                 let counter = red.maude.fresh_counter_peek();
-                Ok::<_, ()>(SolveOutcome::Cases(vec![
+                Ok::<_, crate::prove::ProveError>(SolveOutcome::Cases(vec![
                     SolveBranch {
                         eq_store: store.clone(),
                         counter,
@@ -441,20 +456,21 @@ fn merge_candidates_finishes_each_group_before_starting_the_next() {
             } else {
                 assert_eq!((eqs[0].lhs, eqs[0].rhs), (20, 21));
                 assert!(
-                    !red.sys.eq_store.subst.is_empty(),
+                    !red.sys.eq_store().subst.is_empty(),
                     "the first group's node equality must precede the second payload solve"
                 );
                 Ok(SolveOutcome::Linear)
             }
         },
-    );
+    )
+    .expect("solver operation");
     let SystemOutcome::Cases(arms) = outcome else {
         panic!("first-group fanout must remain a two-arm outcome");
     };
     assert_eq!(calls.get(), 3, "second group must run once in each arm");
     assert_eq!(arms.len(), 2);
     for arm in arms {
-        assert_eq!(arm.sys.eq_store.subst.dom().count(), 2);
+        assert_eq!(arm.sys.eq_store().subst.dom().count(), 2);
     }
 }
 
@@ -923,7 +939,8 @@ fn match_atom_via_maude_simple_var_to_var() {
         &g_time,
         &i_node,
         &[sys_arg],
-    );
+    )
+    .expect("solver operation");
     // There is one matcher, and it binds both pattern vars.  It binds the
     // time directly, because the matcher sets the time before it calls
     // Maude.  It binds the fact argument structurally, in the pure phase of
@@ -986,7 +1003,8 @@ fn match_atom_via_maude_pattern_with_pair_against_pair() {
         &g_time,
         &i_node,
         &[sys_pair],
-    );
+    )
+    .expect("solver operation");
     // The matcher goes into the pair.  It binds each component var to the
     // subject component at the same position.  `a` and `b` must get distinct
     // subject terms, in position order.  A matcher that binds the complete
@@ -1032,7 +1050,8 @@ fn match_atom_via_maude_zero_subject_args_binds_only_the_time() {
         &g_time,
         &i_node,
         &[],
-    );
+    )
+    .expect("solver operation");
     assert_eq!(substs.len(), 1, "empty equation list ⇒ one trivial matcher");
     let subst = &substs[0];
     match subst.image_of(&tamarin_term::lterm::LVar::new(
@@ -1076,7 +1095,8 @@ fn match_atom_via_maude_rejects_non_var_time() {
         &g_time,
         &i_node,
         &[],
-    );
+    )
+    .expect("solver operation");
     assert!(substs.is_empty());
 }
 
@@ -1111,14 +1131,14 @@ fn ku_action_uniqueness_merges_two_nodes_with_same_term() {
     sys.add_node(id_a, mk_rule());
     sys.add_node(id_b, mk_rule());
     let mut r = Reduction::new(&ctx, sys);
-    let res = enforce_ku_action_uniqueness_pass(&mut r);
+    let res = enforce_ku_action_uniqueness_pass(&mut r).expect("solver operation");
     assert!(matches!(res, SystemOutcome::Linear));
     assert_eq!(r.changed, ChangeIndicator::Changed);
     // The eq-store should now equate `a` and `b`.
     let id_term_a = tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(id_a));
     let id_term_b = tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(id_b));
-    let mapped_a = tamarin_term::subst::apply_vterm(&r.sys.eq_store.subst, id_term_a);
-    let mapped_b = tamarin_term::subst::apply_vterm(&r.sys.eq_store.subst, id_term_b);
+    let mapped_a = tamarin_term::subst::apply_vterm(&r.sys.eq_store().subst, id_term_a);
+    let mapped_b = tamarin_term::subst::apply_vterm(&r.sys.eq_store().subst, id_term_b);
     assert_eq!(
         mapped_a, mapped_b,
         "a and b should map to the same canonical id"
@@ -1242,12 +1262,12 @@ fn simp_injective_eq_mon_emits_constant_eq() {
     );
 
     let mut r = Reduction::new(&ctx, sys);
-    let res = simp_injective_fact_eq_mon_pass(&mut r);
+    let res = simp_injective_fact_eq_mon_pass(&mut r).expect("solver operation");
     assert!(matches!(res, SystemOutcome::Linear));
     assert_eq!(r.changed, ChangeIndicator::Changed);
     // After the pass, k1 and k2 should be equated in the eq-store.
-    let m1 = tamarin_term::subst::apply_vterm(&r.sys.eq_store.subst, k1_t);
-    let m2 = tamarin_term::subst::apply_vterm(&r.sys.eq_store.subst, k2_t);
+    let m1 = tamarin_term::subst::apply_vterm(&r.sys.eq_store().subst, k1_t);
+    let m2 = tamarin_term::subst::apply_vterm(&r.sys.eq_store().subst, k2_t);
     assert_eq!(
         m1, m2,
         "k_1 and k_2 should have the same canonical image after merge"
@@ -1313,19 +1333,19 @@ fn simp_injective_eq_mon_pairs_tuple_leaves() {
     );
 
     let mut r = Reduction::new(&ctx, sys);
-    let res = simp_injective_fact_eq_mon_pass(&mut r);
+    let res = simp_injective_fact_eq_mon_pass(&mut r).expect("solver operation");
     assert!(matches!(res, SystemOutcome::Linear));
     assert_eq!(r.changed, ChangeIndicator::Changed);
     // The Constant leaf (k1, k2) is equated...
-    let m_k1 = tamarin_term::subst::apply_vterm(&r.sys.eq_store.subst, k1);
-    let m_k2 = tamarin_term::subst::apply_vterm(&r.sys.eq_store.subst, k2);
+    let m_k1 = tamarin_term::subst::apply_vterm(&r.sys.eq_store().subst, k1);
+    let m_k2 = tamarin_term::subst::apply_vterm(&r.sys.eq_store().subst, k2);
     assert_eq!(
         m_k1, m_k2,
         "k_1 and k_2 (Constant leaf 2.2) should be merged"
     );
     // ...but the Unstable leaf (a1, a2) is NOT.
-    let m_a1 = tamarin_term::subst::apply_vterm(&r.sys.eq_store.subst, a1);
-    let m_a2 = tamarin_term::subst::apply_vterm(&r.sys.eq_store.subst, a2);
+    let m_a1 = tamarin_term::subst::apply_vterm(&r.sys.eq_store().subst, a1);
+    let m_a2 = tamarin_term::subst::apply_vterm(&r.sys.eq_store().subst, a2);
     assert_ne!(
         m_a1, m_a2,
         "a_1 and a_2 (Unstable leaf 2.1) must NOT be merged — the consumer \
@@ -1364,7 +1384,7 @@ fn ku_action_uniqueness_unchanged_when_terms_differ() {
         crate::rule::Rule::new(info(), vec![], vec![], vec![mk_ku("k2", 0)]),
     );
     let mut r = Reduction::new(&ctx, sys);
-    let res = enforce_ku_action_uniqueness_pass(&mut r);
+    let res = enforce_ku_action_uniqueness_pass(&mut r).expect("solver operation");
     assert!(matches!(res, SystemOutcome::Linear));
     assert_eq!(r.changed, ChangeIndicator::Unchanged);
 }
@@ -1436,4 +1456,67 @@ fn dedupe_formulas_keeps_formulas_of_different_sort() {
         vec![f1, f2],
         "both formulas are retained, in order"
     );
+}
+
+#[test]
+fn restriction_guard_matching_preserves_backend_errors() {
+    use crate::atom::ProtoAtom;
+    use crate::fact::{proto_fact, Multiplicity};
+    use tamarin_term::function_symbols::{AcSym, FunSym};
+    use tamarin_term::lterm::{LSort, LVar};
+    use tamarin_term::term::Term;
+    use tamarin_term::vterm::var_term;
+
+    let x = LVar::new("x", LSort::Msg, 0);
+    let y = LVar::new("y", LSort::Msg, 0);
+    let t = LVar::new("t", LSort::Node, 0);
+    let i = LVar::new("i", LSort::Node, 0);
+    let union = |a, b| {
+        Term::App(
+            FunSym::Ac(AcSym::Union),
+            vec![var_term(a), var_term(b)].into(),
+        )
+    };
+    let pattern = union(x, y);
+    let subject = union(LVar::new("a", LSort::Msg, 0), LVar::new("b", LSort::Msg, 0));
+    let fact = |term| proto_fact(Multiplicity::Linear, "A", vec![term]);
+    let guards = [
+        ProtoAtom::Action(var_term(t), fact(pattern.clone())),
+        ProtoAtom::EqE(pattern, subject.clone()),
+    ];
+    let actions = vec![(i, fact(subject))];
+    let mut by_name = tamarin_utils::FastMap::default();
+    by_name.insert("A".to_string(), vec![0]);
+    for guard in guards {
+        for failed in [false, true] {
+            // Fresh handles prevent a healthy query's memoized answer from
+            // hiding the broken backend in the failure case.
+            let Some(h) = maude_with_sig(tamarin_term::maude_sig::mset_maude_sig()) else {
+                return;
+            };
+            if failed {
+                h.kill_subprocess();
+            }
+            let sys = System::empty();
+            let mut out = Vec::new();
+            let result = try_match_all_guards(
+                &h,
+                &[x, y, t],
+                &[&guard],
+                &actions,
+                &by_name,
+                &crate::guarded::gfalse(),
+                &ImpliedDedupTables::new(&sys),
+                &[],
+                &mut out,
+                &mut Vec::new(),
+            );
+            if failed {
+                assert!(matches!(result, Err(crate::prove::ProveError::Maude(_))));
+            } else {
+                result.unwrap();
+                assert_eq!(out, vec![crate::guarded::gfalse()]);
+            }
+        }
+    }
 }

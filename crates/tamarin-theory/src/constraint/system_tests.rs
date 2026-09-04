@@ -177,8 +177,8 @@ fn stamps_and_marker_excluded_from_partial_eq() {
 /// `content_stamp` bump, no max-cache invalidation) may be called ONLY from
 /// the closed set of whole-system rewriters that manage the
 /// stamps/caches themselves.  A new caller fails the build until its stamp
-/// reasoning is established (the subst axis is sealed separately:
-/// `SealedEqStore` makes a raw `eq_store` assignment inexpressible).
+/// reasoning is established (the subst axis is sealed separately by the
+/// private `eq_store` field).
 ///
 /// Scans the WHOLE crate `src/` (the methods are `pub(crate)`, so their
 /// visibility scope is the whole crate — the scan scope must match).  For
@@ -406,7 +406,7 @@ fn deref_reads_reach_content_fields() {
     assert_eq!(s.formulas.len(), 0);
     assert_eq!(s.goals.len(), 0);
     assert!(s.last_atom.is_none());
-    assert!(s.eq_store.subst.is_empty());
+    assert!(s.eq_store().subst.is_empty());
 }
 
 #[test]
@@ -1023,7 +1023,7 @@ fn map_free_keeps_storage_order_and_conj_ranges() {
         SortedPairSet::rebuild_from(vec![(mterm(98), mterm(99))])
     );
     assert_eq!(
-        mapped.eq_store.conj[0].substs[0].to_list(),
+        mapped.eq_store().conj[0].substs[0].to_list(),
         vec![(mvar(1110), mterm(111))],
         "a disjunction rebuilds set order while keeping its ranges"
     );

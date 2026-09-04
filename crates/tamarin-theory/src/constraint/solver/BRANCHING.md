@@ -10,7 +10,9 @@ The order matters. A disjunction copies both the current `System` and the
 current fresh-variable counter. Each arm then advances its own counter. A
 continuation after the split must run once per arm, in arm order; a later
 split forms a cross-product. Contradictory arms disappear without affecting
-their siblings.
+their siblings. Execution errors are separate from contradictions: a Maude
+failure must propagate as `Err`, never as an empty case list or a contradictory
+store. This also applies during equation simplification and source caching.
 
 Rust represents those effects explicitly. A branch therefore carries its
 system and its counter together. Code continuing a branch must use

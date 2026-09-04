@@ -22,6 +22,92 @@ fn ctx() -> Option<ProofContext> {
     Some(ProofContext::new(h, Vec::new()))
 }
 
+#[test]
+fn maude_failure_is_not_a_closed_action_or_formula_branch() {
+    use crate::atom::ProtoAtom;
+    use crate::constraint::solver::proof_method::{exec_proof_method, ProofMethod};
+    use crate::fact::{proto_fact, Multiplicity};
+    use crate::prove::ProveError;
+    use crate::rule::{ProtoRuleACInstInfo, ProtoRuleName, Rule, RuleAttributes, RuleInfo};
+    use tamarin_term::function_symbols::{AcSym, FunSym};
+    use tamarin_term::lterm::{LSort, LVar};
+    use tamarin_term::term::Term;
+    use tamarin_term::vterm::var_term;
+
+    let Some(path) = require_maude_path() else {
+        return;
+    };
+    let maude = tamarin_term::maude_proc::MaudeHandle::start(
+        &path,
+        tamarin_term::maude_sig::mset_maude_sig(),
+    )
+    .unwrap();
+    let ctx = ProofContext::new(maude.clone(), Vec::new());
+    let union = |a, b| {
+        Term::App(
+            FunSym::Ac(AcSym::Union),
+            vec![
+                var_term(LVar::new(a, LSort::Msg, 0)),
+                var_term(LVar::new(b, LSort::Msg, 0)),
+            ]
+            .into(),
+        )
+    };
+    let left = union("a", "b");
+    let right = union("x", "y");
+    let fact = |term| proto_fact(Multiplicity::Linear, "A", vec![term]);
+    let node = LVar::new("i", LSort::Node, 0);
+    let mut action_system = System::empty();
+    action_system.add_node(
+        node,
+        Rule::new(
+            RuleInfo::Proto(ProtoRuleACInstInfo {
+                name: ProtoRuleName::Stand("R"),
+                attributes: RuleAttributes::empty(),
+                loop_breakers: Vec::new(),
+            }),
+            Vec::new(),
+            Vec::new(),
+            vec![fact(left.clone())],
+        ),
+    );
+    let goal = Goal::Action(node, fact(right.clone()));
+    action_system.add_goal(goal.clone());
+    let mut formula_system = System::empty();
+    formula_system.insert_formula(Guarded::Atom(crate::guarded::lift_free_atom(
+        &ProtoAtom::EqE(left, right),
+    )));
+
+    let operations = [
+        (ProofMethod::SolveGoal(goal), action_system),
+        (ProofMethod::Simplify, formula_system),
+    ];
+    for (method, system) in &operations {
+        let cases = exec_proof_method(&ctx, method, system).unwrap().unwrap();
+        assert!(
+            !cases.is_empty(),
+            "the healthy operation has valid branches"
+        );
+    }
+    // Use a separate handle so the healthy control cannot warm its caches.
+    let maude = tamarin_term::maude_proc::MaudeHandle::start(
+        &path,
+        tamarin_term::maude_sig::mset_maude_sig(),
+    )
+    .unwrap();
+    let ctx = ProofContext::new(maude.clone(), Vec::new());
+    maude.kill_subprocess();
+    for (method, system) in &operations {
+        assert!(
+            matches!(
+                exec_proof_method(&ctx, method, system),
+                Err(ProveError::Maude(_))
+            ),
+            "transport failure must not close {method:?}"
+        );
+    }
+}
+
 /// The index-0 variable leaf of the given name and sort.
 fn mkvar_ln(name: &str, sort: tamarin_term::lterm::LSort) -> tamarin_term::lterm::LNTerm {
     tamarin_term::vterm::var_term(tamarin_term::lterm::LVar::new(name, sort, 0))
@@ -154,10 +240,10 @@ fn solve_split_prunes_non_normal_arms_before_returning_cases() {
     red.insert_goal(Goal::Split(split));
 
     assert!(matches!(
-        red.solve_split_goal(split),
+        red.solve_split_goal(split).expect("split solve"),
         GoalCases::LinearNamed(ref name) if name == "split"
     ));
-    assert!(!red.sys.eq_store.is_false());
+    assert!(!red.sys.eq_store().is_false());
 }
 
 #[test]
@@ -238,7 +324,7 @@ fn eqstore_binds_j_to_i(
     .expect("solve");
     assert_eq!(
         tamarin_term::subst::apply_vterm(
-            &r.sys.eq_store.subst,
+            &r.sys.eq_store().subst,
             tamarin_term::term::Term::Lit(Lit::Var(j)),
         ),
         tamarin_term::term::Term::Lit(Lit::Var(i)),
@@ -273,7 +359,7 @@ fn subst_system_rewrites_edge_node_ids_through_eqstore() {
             tgt: (j, crate::rule::PremIdx(0)),
         });
     eqstore_binds_j_to_i(&mut r, i, j);
-    r.subst_system();
+    r.subst_system().expect("solver operation");
     // `substEdges` rewrites both endpoints.  The sort after the pass
     // compares the source first, and `Ord LVar` compares the index first.
     // `i.2` therefore comes before `t.99`.
@@ -319,7 +405,7 @@ fn subst_system_rewrites_less_atom_node_ids() {
         r.sys.content_mut().less_atoms.push(la);
     }
     eqstore_binds_j_to_i(&mut r, i, j);
-    r.subst_system();
+    r.subst_system().expect("solver operation");
     assert_eq!(
         r.sys
             .less_atoms
@@ -376,10 +462,10 @@ fn subst_system_idempotent_on_empty_substitution() {
     let before = r.sys.clone();
     let before_changed = r.changed;
     assert!(
-        r.sys.eq_store.subst.is_empty(),
+        r.sys.eq_store().subst.is_empty(),
         "precondition: nothing to substitute"
     );
-    r.subst_system();
+    r.subst_system().expect("solver operation");
     assert_eq!(r.changed, before_changed, "a no-op pass raises no signal");
     assert_eq!(
         r.sys.nodes.iter().map(|(n, _)| *n).collect::<Vec<_>>(),
@@ -425,7 +511,7 @@ fn subst_system_marks_contradiction_on_shape_mismatch() {
         &[tamarin_term::rewriting::Equal { lhs: ti, rhs: tj }],
     )
     .expect("solve");
-    r.subst_system();
+    r.subst_system().expect("solver operation");
     let bot = crate::guarded::gfalse();
     assert!(
         crate::guarded::stores_contains(&r.sys.formulas, &bot),
@@ -467,7 +553,7 @@ fn subst_system_merges_collided_nodes_and_equates_their_rules() {
         &[tamarin_term::rewriting::Equal { lhs: ti, rhs: tj }],
     )
     .expect("solve");
-    r.subst_system();
+    r.subst_system().expect("solver operation");
     assert_eq!(
         r.sys.nodes.len(),
         1,
@@ -495,7 +581,7 @@ fn solve_disj_goal_empty_is_contradictory() {
     let Some(ctx) = ctx() else { return };
     let mut r = Reduction::new(&ctx, System::empty());
     let d = Disj(Vec::<Guarded>::new());
-    let out = r.solve_disj_goal(&d);
+    let out = r.solve_disj_goal(&d).expect("solver operation");
     assert!(matches!(out, GoalCases::Contradictory));
 }
 
@@ -586,7 +672,10 @@ fn equality_formula_split_inherits_solved_bookkeeping() {
     ));
     let mut red = Reduction::new(&ctx, System::empty());
 
-    let SystemOutcome::Cases(arms) = red.insert_formula(formula.clone()) else {
+    let SystemOutcome::Cases(arms) = red
+        .insert_formula(formula.clone())
+        .expect("solver operation")
+    else {
         panic!("precondition: XOR equality must split");
     };
     assert!(arms
@@ -595,7 +684,10 @@ fn equality_formula_split_inherits_solved_bookkeeping() {
 
     let false_formula = crate::guarded::gfalse();
     let mut red = Reduction::new(&ctx, System::empty());
-    let SystemOutcome::Cases(arms) = red.insert_formulas(&[formula, false_formula.clone()]) else {
+    let SystemOutcome::Cases(arms) = red
+        .insert_formulas(&[formula, false_formula.clone()])
+        .expect("solver operation")
+    else {
         panic!("formula sequence must preserve the XOR split");
     };
     assert!(arms
@@ -612,7 +704,7 @@ fn solve_disj_goal_singleton_is_linear() {
     let f = crate::guarded::gtrue();
     let d = Disj(vec![f.clone()]);
     r.insert_goal(Goal::Disj(d.clone()));
-    let out = r.solve_disj_goal(&d);
+    let out = r.solve_disj_goal(&d).expect("solver operation");
     // Haskell `solveDisjunction` has no singleton special-case: a lone
     // alternative is named `case_1` (and `ppCases` only elides the
     // heading for the empty name), so the Rust continuation is a
@@ -636,7 +728,7 @@ fn solve_disj_goal_two_branches_forks() {
     let f2 = crate::guarded::gfalse(); // Disj([]) → formulas (gfalse sentinel)
     let d = Disj(vec![f1.clone(), f2.clone()]);
     r.insert_goal(Goal::Disj(d.clone()));
-    let out = r.solve_disj_goal(&d);
+    let out = r.solve_disj_goal(&d).expect("solver operation");
     match out {
         GoalCases::Cases(systems) => {
             assert_eq!(systems.len(), 2);
@@ -674,7 +766,9 @@ fn solve_subterm_goal_marks_solved_and_moves() {
     sys.subterm_store_mut().add(tx.clone(), ty.clone());
     sys.add_goal(Goal::Subterm((tx.clone(), ty.clone())));
     let mut r = Reduction::new(&ctx, sys);
-    let out = r.solve_subterm_goal(&(tx.clone(), ty.clone()));
+    let out = r
+        .solve_subterm_goal(&(tx.clone(), ty.clone()))
+        .expect("solver operation");
     // `x:msg ⊏ y:msg`: big is a bare variable, so `splitSubterm`
     // (singleStep) cannot decompose ⇒ a single `SubtermD (x,y)` leaf.
     // HS `solveSubterm` therefore emits ONE case `SubtermSplit1`,
@@ -701,7 +795,9 @@ fn solve_subterm_self_is_contradictory() {
     sys.invalidate_max_var_idx_cache();
     sys.subterm_store_mut().add(tx.clone(), tx.clone());
     let mut r = Reduction::new(&ctx, sys);
-    let out = r.solve_subterm_goal(&(tx.clone(), tx));
+    let out = r
+        .solve_subterm_goal(&(tx.clone(), tx))
+        .expect("solver operation");
     assert!(matches!(out, GoalCases::Contradictory));
     assert!(r.sys.subterm_store.contradictory);
 }
@@ -731,7 +827,7 @@ fn solve_action_goal_existing_node_with_action_is_linear_named() {
     sys.add_node(i, ru);
     sys.add_goal(Goal::Action(i, fa.clone()));
     let mut r = Reduction::new(&ctx, sys);
-    let out = r.solve_action_goal(&i, &fa);
+    let out = r.solve_action_goal(&i, &fa).expect("solver operation");
     // The case name is `showRuleCaseName ru`.  For the `ISend` intruder
     // rule that is the rule name in lower case, `isend`.  The proof tree
     // renders this name after `case `.  The test compares the complete
@@ -758,7 +854,7 @@ fn solve_action_goal_no_node_no_rules_is_contradictory() {
     use tamarin_term::vterm::Lit;
     let tx: tamarin_term::lterm::LNTerm = tamarin_term::term::Term::Lit(Lit::Var(v));
     let fa = crate::fact::out_fact(tx);
-    let out = r.solve_action_goal(&i, &fa);
+    let out = r.solve_action_goal(&i, &fa).expect("solver operation");
     // No rules in the context → no candidates.
     assert!(matches!(out, GoalCases::Contradictory));
 }
@@ -785,7 +881,7 @@ fn solve_action_goal_no_node_with_matching_rule_unifies() {
     let v2 = tamarin_term::lterm::LVar::new("x", tamarin_term::lterm::LSort::Msg, 0);
     let tx: tamarin_term::lterm::LNTerm = tamarin_term::term::Term::Lit(Lit::Var(v2));
     let fa = crate::fact::out_fact(tx);
-    let out = r.solve_action_goal(&i, &fa);
+    let out = r.solve_action_goal(&i, &fa).expect("solver operation");
     // One matching rule with one matching action ⇒ LinearNamed
     // (the rule name); node added in-place to r.sys.
     assert!(
@@ -810,7 +906,7 @@ fn solve_premise_goal_no_user_rules_uses_intruder() {
     let tx: tamarin_term::lterm::LNTerm = tamarin_term::term::Term::Lit(Lit::Var(v));
     let fa = crate::fact::in_fact(tx);
     let p = (i, crate::rule::PremIdx(0));
-    let out = r.solve_premise_goal(&p, &fa);
+    let out = r.solve_premise_goal(&p, &fa).expect("solver operation");
     // In an empty context only the `ISend` intruder rule supplies `In(x)`.
     // Its `showRuleCaseName` is `isend`.  The solver applies the node and
     // the edge into the premise in place.
@@ -842,7 +938,7 @@ fn solve_premise_goal_no_user_rules_unmatchable_fact_is_contradictory() {
         vec![tx],
     );
     let p = (i, crate::rule::PremIdx(0));
-    let out = r.solve_premise_goal(&p, &fa);
+    let out = r.solve_premise_goal(&p, &fa).expect("solver operation");
     assert!(matches!(out, GoalCases::Contradictory));
 }
 
@@ -869,7 +965,7 @@ fn solve_premise_goal_with_matching_rule_inserts_edge() {
     let tx: tamarin_term::lterm::LNTerm = tamarin_term::term::Term::Lit(Lit::Var(v2));
     let fa = crate::fact::out_fact(tx);
     let p = (i, crate::rule::PremIdx(0));
-    let out = r.solve_premise_goal(&p, &fa);
+    let out = r.solve_premise_goal(&p, &fa).expect("solver operation");
     // Single matching rule → LinearNamed("Producer"); node + edge
     // applied in-place to r.sys.
     assert!(
@@ -892,7 +988,7 @@ fn solve_premise_goal_kd_fact_inserts_irecv_chain() {
     let tx: tamarin_term::lterm::LNTerm = tamarin_term::term::Term::Lit(Lit::Var(v));
     let fa = crate::fact::kd_fact(tx);
     let p = (i, crate::rule::PremIdx(0));
-    let _out = r.solve_premise_goal(&p, &fa);
+    let _out = r.solve_premise_goal(&p, &fa).expect("solver operation");
     // KD branch inserts IRecv + Chain goal; the Out(mLearn) premise
     // is recursively solved inline (Haskell's solvePremise behaviour)
     // so it does NOT remain as a queued Premise goal.  The recursive
@@ -918,7 +1014,7 @@ fn solve_chain_goal_missing_node_is_contradictory() {
     let j = tamarin_term::lterm::LVar::new("j", tamarin_term::lterm::LSort::Node, 0);
     let c = (i, crate::rule::ConcIdx(0));
     let p = (j, crate::rule::PremIdx(0));
-    let out = r.solve_chain_goal(&c, &p);
+    let out = r.solve_chain_goal(&c, &p).expect("solver operation");
     assert!(matches!(out, GoalCases::Contradictory));
 }
 
@@ -954,7 +1050,7 @@ fn solve_chain_goal_compatible_facts_inserts_edge() {
     let p = (j, crate::rule::PremIdx(0));
     sys.add_goal(Goal::Chain(c, p));
     let mut r = Reduction::new(&ctx, sys);
-    let out = r.solve_chain_goal(&c, &p);
+    let out = r.solve_chain_goal(&c, &p).expect("solver operation");
     // The facts are compatible, so there is one case.
     // `chain_direct_case_name` names that case from the message of the KD
     // conclusion.  HS `showLitName` spells the name `Var_<sort>_<name>` for
@@ -989,7 +1085,10 @@ fn insert_atom_action_creates_action_goal() {
             vec![mkvar_ln("k", LSort::Msg)],
         ),
     );
-    assert!(matches!(r.insert_atom(&action), SystemOutcome::Linear));
+    assert!(matches!(
+        r.insert_atom(&action).expect("atom insertion"),
+        SystemOutcome::Linear
+    ));
     assert_eq!(r.sys.goals.len(), 1);
     assert!(matches!(&r.sys.goals[0].0, Goal::Action(_, fact)
             if fact.tag == crate::fact::FactTag::Proto(
@@ -1003,11 +1102,14 @@ fn insert_atom_ignores_a_syntactic_atom() {
     let Some(ctx) = ctx() else { return };
     let mut r = Reduction::new(&ctx, System::empty());
     let a = crate::atom::ProtoAtom::Syntactic(crate::atom::Unit2);
-    assert!(matches!(r.insert_atom(&a), SystemOutcome::Linear));
+    assert!(matches!(
+        r.insert_atom(&a).expect("atom insertion"),
+        SystemOutcome::Linear
+    ));
     assert!(r.sys.goals.is_empty());
     assert!(r.sys.less_atoms.is_empty());
     assert_eq!(r.sys.last_atom, None);
-    assert!(r.sys.eq_store.subst.is_empty());
+    assert!(r.sys.eq_store().subst.is_empty());
 }
 
 /// A `NameTag::Node` constant reaches the eq-store as itself.  It is the tag
@@ -1020,10 +1122,13 @@ fn insert_atom_eq_keeps_the_node_name_tag() {
     let node_name: tamarin_term::lterm::LNTerm =
         tamarin_term::vterm::const_term(Name::new(NameTag::Node, "n1"));
     let a = crate::atom::ProtoAtom::EqE(mkvar_ln("i", LSort::Node), node_name.clone());
-    assert!(matches!(r.insert_atom(&a), SystemOutcome::Linear));
+    assert!(matches!(
+        r.insert_atom(&a).expect("atom insertion"),
+        SystemOutcome::Linear
+    ));
     let i = tamarin_term::lterm::LVar::new("i", LSort::Node, 0);
     assert_eq!(
-        r.sys.eq_store.subst.image_of(&i),
+        r.sys.eq_store().subst.image_of(&i),
         Some(&node_name),
         "the eq-store binds the timepoint to the Node-tagged name itself"
     );
@@ -1036,7 +1141,10 @@ fn insert_atom_less_creates_less_atom() {
     use crate::atom::ProtoAtom;
     use tamarin_term::lterm::LSort;
     let less = ProtoAtom::Less(mkvar_ln("i", LSort::Node), mkvar_ln("j", LSort::Node));
-    assert!(matches!(r.insert_atom(&less), SystemOutcome::Linear));
+    assert!(matches!(
+        r.insert_atom(&less).expect("atom insertion"),
+        SystemOutcome::Linear
+    ));
     assert_eq!(r.sys.less_atoms.len(), 1);
     // The order of the endpoints is the complete content of a `Less` atom.
     // The pretty-printer uses the reason tag to tell the user where the
@@ -1055,7 +1163,10 @@ fn insert_atom_last_sets_last_atom() {
     use crate::atom::ProtoAtom;
     use tamarin_term::lterm::LSort;
     let last = ProtoAtom::Last(mkvar_ln("i", LSort::Node));
-    assert!(matches!(r.insert_atom(&last), SystemOutcome::Linear));
+    assert!(matches!(
+        r.insert_atom(&last).expect("atom insertion"),
+        SystemOutcome::Linear
+    ));
     assert_eq!(
         r.sys.last_atom,
         Some(tamarin_term::lterm::LVar::new(
@@ -1098,7 +1209,7 @@ fn solve_action_with_fresh_premise_adds_fresh_supplier() {
         crate::fact::FactTag::Proto(crate::fact::Multiplicity::Linear, "Setup", 1),
         vec![tx],
     );
-    let out = r.solve_action_goal(&i, &fa);
+    let out = r.solve_action_goal(&i, &fa).expect("solver operation");
     // LinearNamed("Setup") with in-place mutation: 2 nodes (Setup
     // instance + Fresh supplier) and 1 edge in r.sys.
     assert!(
@@ -1184,7 +1295,8 @@ fn insert_formula_negated_less_mark_false_does_not_push_solved() {
     );
     // mark=false (the Conj/Ex-body-recursion case).
     assert!(matches!(
-        r.insert_formula_inner(g.clone(), false),
+        r.insert_formula_inner(g.clone(), false)
+            .expect("formula insertion"),
         SystemOutcome::Linear
     ));
     assert!(
@@ -1231,7 +1343,8 @@ fn insert_formula_negated_less_mark_true_pushes_solved() {
     let g = neg_less_node_universal("i", "j");
     // mark=true (the top-level entrypoint).
     assert!(matches!(
-        r.insert_formula_inner(g.clone(), true),
+        r.insert_formula_inner(g.clone(), true)
+            .expect("formula insertion"),
         SystemOutcome::Linear
     ));
     assert!(

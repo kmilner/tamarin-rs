@@ -145,7 +145,10 @@ fn precompute_full_sources_emits_per_tag_entries() {
     assert!(a_src.cases_or_empty().is_empty());
     {
         let _guard = PrecomputeModeGuard::enter();
-        assert!(a_src.cases_for_apply(&ctx).is_empty());
+        assert!(a_src
+            .cases_for_apply(&ctx)
+            .expect("infallible test context")
+            .is_empty());
     }
     assert!(
         a_src.cases_cell.lock().unwrap().is_none(),
@@ -153,7 +156,8 @@ fn precompute_full_sources_emits_per_tag_entries() {
     );
     // A forced cell lists the two rules that conclude `A(x)`.
     let names: Vec<String> = a_src
-        .cases_unchecked(&ctx)
+        .cases(&ctx)
+        .expect("infallible test context")
         .iter()
         .map(|(n, _)| case_name_list_to_string(n))
         .collect();
@@ -255,15 +259,15 @@ fn restrict_eq_store_keeps_only_stable_keyed_bindings() {
 
     // t1 binding kept; m19 + sk28 bindings dropped.
     assert!(
-        sys.eq_store.subst.image_of(&t1).is_some(),
+        sys.eq_store().subst.image_of(&t1).is_some(),
         "stable-keyed binding (t.1) is kept"
     );
     assert!(
-        sys.eq_store.subst.image_of(&m19).is_none(),
+        sys.eq_store().subst.image_of(&m19).is_none(),
         "non-stable-keyed binding (m.19) is dropped"
     );
     assert!(
-        sys.eq_store.subst.image_of(&sk28).is_none(),
+        sys.eq_store().subst.image_of(&sk28).is_none(),
         "non-stable-keyed binding (sk.28) is dropped, EVEN THOUGH \
                  its VALUE mentions stable t.2 — restrict is key-only."
     );
@@ -298,7 +302,7 @@ fn restrict_eq_store_does_not_chain_chase() {
     // t.1's binding must be exactly e.10 (the var), NOT chain-chased
     // to blind_arg.
     assert_eq!(
-        sys.eq_store.subst.image_of(&t1),
+        sys.eq_store().subst.image_of(&t1),
         Some(&Term::Lit(Lit::Var(e10))),
         "restrict must NOT chain-chase t.1 → e.10 → blind_arg \
                     into t.1 → blind_arg"
@@ -330,7 +334,7 @@ fn restrict_eq_store_empties_subst_when_no_keys_are_stable() {
     );
 
     assert!(
-        sys.eq_store.subst.is_empty(),
+        sys.eq_store().subst.is_empty(),
         "When no key is in stable set (Haskell shape: keys are \
                  rule-internal large-idx vars, stable are lemma small-idx \
                  vars), restrict produces empty subst.  This is what \
@@ -524,7 +528,7 @@ fn rename_system_by_shifts_every_field_including_neg_subterms() {
         "the negative subterms move with the rest of the store"
     );
     assert_eq!(
-        out.eq_store.conj[0].substs[0].to_list(),
+        out.eq_store().conj[0].substs[0].to_list(),
         vec![(mvar(1110), mterm(111))],
         "a disjunction's domain key moves and its range does not"
     );
@@ -646,7 +650,7 @@ fn some_inst_system_keeps_the_seeded_vars_and_draws_in_hs_field_order() {
         "the negative subterms are imported before the positive ones"
     );
     assert_eq!(
-        out.eq_store.conj[0].substs[0].to_list(),
+        out.eq_store().conj[0].substs[0].to_list(),
         vec![(mvar(513), mterm(111))],
         "a disjunction's domain key is imported and its range is not"
     );
@@ -776,14 +780,14 @@ fn source_probe_distinguishes_no_match_from_matched_empty() {
 
     assert!(matches!(
         probe(&[matched]),
-        SourceMatch::Matched(cases) if cases.is_empty()
+        Ok(SourceMatch::Matched(cases)) if cases.is_empty()
     ));
     assert!(matches!(
         probe(&[Source::eager(
             Goal::Action(nvar(0), LNFact::new(FactTag::Out, vec![mterm(0)])),
             Vec::new(),
         )]),
-        SourceMatch::NoMatch
+        Ok(SourceMatch::NoMatch)
     ));
 }
 
@@ -803,6 +807,31 @@ fn source_probe_rejects_incompatible_action_heads_early() {
 
     assert!(source_goal_may_match(&mult, &mult));
     assert!(!source_goal_may_match(&mult, &xor));
+}
+
+#[test]
+fn source_probe_reports_ac_match_transport_failure() {
+    use tamarin_term::function_symbols::AcSym;
+    use tamarin_term::term::f_app_ac;
+
+    let Some(path) = require_maude_path() else {
+        return;
+    };
+    let maude = start_maude(&path, tamarin_term::maude_sig::dh_maude_sig());
+    let ctx = crate::constraint::solver::context::ProofContext::new(maude, Vec::new());
+    let product = |a, b| f_app_ac(AcSym::Mult, vec![mterm(a), mterm(b)]);
+    let source = Source::eager(
+        Goal::Action(nvar(0), crate::fact::ku_fact(product(1, 2))),
+        Vec::new(),
+    );
+    let live = Goal::Action(nvar(3), crate::fact::ku_fact(product(4, 5)));
+
+    ctx.maude.kill_subprocess();
+    assert!(matches!(
+        prepare_source_match(&ctx, &source, &[], &live),
+        Err(crate::prove::ProveError::Maude(message))
+            if message.starts_with("source matching failed:")
+    ));
 }
 
 #[test]
@@ -842,7 +871,8 @@ fn premise_source_conjoin_preserves_ac_fanout() {
     };
 
     let _precompute = PrecomputeModeGuard::enter();
-    let outputs = conjoin_refine_arm(&ctx, &live, &goal, arm, Some(&ctx.maude));
+    let outputs =
+        conjoin_refine_arm(&ctx, &live, &goal, arm, Some(&ctx.maude)).expect("solver operation");
     assert!(outputs.len() > 1, "premise conjoin collapsed AC arms");
 }
 
@@ -868,14 +898,15 @@ fn source_application_uses_complete_conjoin_state() {
         split_id: SplitId(0),
         substs: vec![SubstVFresh::from_list(vec![(mvar(25), mterm(26))])],
     });
-    let expected_substs = case.eq_store.conj[0].substs.clone();
+    let expected_substs = case.eq_store().conj[0].substs.clone();
     let arm = RefineArm {
         freshened_case: case.clone(),
         branch_counter: ctx.maude.fresh_counter_peek(),
     };
 
     let _precompute = PrecomputeModeGuard::enter();
-    let output = conjoin_refine_arm(&ctx, &live, &goal, arm, Some(&ctx.maude));
+    let output =
+        conjoin_refine_arm(&ctx, &live, &goal, arm, Some(&ctx.maude)).expect("solver operation");
     assert_eq!(output.len(), 1);
     let joined = &output[0].sys;
     assert_eq!(joined.last_atom, Some(nvar(22)));
@@ -888,7 +919,7 @@ fn source_application_uses_complete_conjoin_state() {
         joined.subterm_store.neg_subterms.to_vec(),
         vec![(mterm(23), mterm(24))]
     );
-    let [disjunction] = joined.eq_store.conj.as_slice() else {
+    let [disjunction] = joined.eq_store().conj.as_slice() else {
         panic!("conjoin must preserve the case's equation disjunction");
     };
     assert_eq!(disjunction.substs, expected_substs);

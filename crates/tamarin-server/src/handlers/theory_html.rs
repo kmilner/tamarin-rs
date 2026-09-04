@@ -61,13 +61,15 @@ fn header(entry: &TheoryEntry) -> String {
     let filename = html_escape(&format!("{}.spthy", entry.typed_theory.name));
     let reload_form = if is_local {
         format!(
-            "<li><form class=\"ajax-form ajax-form-full reload-confirm\" method=\"POST\" action=\"/thy/trace/{idx}/reload\"><button class=\"nav-button\" type=\"submit\">Reload file</button></form></li>")
+            "<li><form class=\"ajax-form ajax-form-full reload-confirm\" method=\"POST\" action=\"/thy/trace/{idx}/reload\"><button class=\"nav-button\" type=\"submit\">Reload file</button></form></li>"
+        )
     } else {
         String::new()
     };
     let append_form = if is_local {
         format!(
-            "<li><form class=\"ajax-form\" method=\"POST\" action=\"/thy/trace/{idx}/get_and_append/{filename}\"><button class=\"link-button\" type=\"submit\">Append modified lemmas to file</button></form></li>")
+            "<li><form class=\"ajax-form\" method=\"POST\" action=\"/thy/trace/{idx}/get_and_append/{filename}\"><button class=\"link-button\" type=\"submit\">Append modified lemmas to file</button></form></li>"
+        )
     } else {
         String::new()
     };
@@ -795,27 +797,27 @@ pub(crate) fn proof_html(
     if entry.typed_theory.lookup_lemma(lemma).is_none() {
         return Ok("No such lemma or proof path.".into());
     }
-    if let Some(ps) = &entry.proof_state {
-        if let Some(snippet) = ps.get_snippet_at(lemma, sub)? {
-            // A replay-divergent node has no system in HS. Rendering its
-            // fixed fallback must not force the lemma's lazy heuristic or
-            // source context merely to pass an otherwise-unused argument.
-            if snippet.system.is_none() {
-                return crate::handlers::proof_tree::render_sub_proof_snippet(
-                    entry.idx,
-                    lemma,
-                    sub,
-                    &snippet,
-                    ps.template_context(),
-                );
-            }
-            // Build the lemma-specialised context used by batch proving
-            // before ranking (HS `getProofContext`).
-            let ctx = ps.context_for_lemma(lemma)?;
+    if let Some(ps) = &entry.proof_state
+        && let Some(snippet) = ps.get_snippet_at(lemma, sub)?
+    {
+        // A replay-divergent node has no system in HS. Rendering its
+        // fixed fallback must not force the lemma's lazy heuristic or
+        // source context merely to pass an otherwise-unused argument.
+        if snippet.system.is_none() {
             return crate::handlers::proof_tree::render_sub_proof_snippet(
-                entry.idx, lemma, sub, &snippet, &ctx,
+                entry.idx,
+                lemma,
+                sub,
+                &snippet,
+                ps.template_context(),
             );
         }
+        // Build the lemma-specialised context used by batch proving
+        // before ranking (HS `getProofContext`).
+        let ctx = ps.context_for_lemma(lemma)?;
+        return crate::handlers::proof_tree::render_sub_proof_snippet(
+            entry.idx, lemma, sub, &snippet, &ctx,
+        );
     }
     Ok("No such lemma or proof path.".into())
 }
@@ -1125,10 +1127,8 @@ pub(crate) fn source_list_case(
     };
     let ctx = ps.context_for_sources(kind)?;
     let mut system = nth_case_system(&ctx, src_idx, case_idx)?;
-    if want_refined {
-        if let Some(system) = &mut system {
-            system.source_kind = Some(SysSourceKind::RefinedSources);
-        }
+    if want_refined && let Some(system) = &mut system {
+        system.source_kind = Some(SysSourceKind::RefinedSources);
     }
     Ok(system)
 }
@@ -1170,7 +1170,10 @@ fn source_case_counts(
         return (Ok((0, 0)), Ok((0, 0)));
     };
     let stats = proof.session.source_stats();
-    let raw = Ok((stats.raw.cases, stats.raw.chains));
+    let raw = stats
+        .raw
+        .map(|stats| (stats.cases, stats.chains))
+        .map_err(|error| format!("proof context: {error}"));
     let refined = stats
         .refined
         .map(|stats| (stats.cases, stats.chains))

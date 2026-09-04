@@ -156,7 +156,7 @@ pub fn contradictions(_ctxt: &ProofContext, sys: &System) -> Vec<Contradiction> 
     if has_fresh_fact_sort_violation(sys) {
         out.push(Contradiction::IncompatibleEqs);
     }
-    if sys.eq_store.is_false() {
+    if sys.eq_store().is_false() {
         out.push(Contradiction::IncompatibleEqs);
     }
     // 10. FormulasFalse — `gfalse ∈ sFormulas` (our `Disj([])`).
@@ -929,7 +929,7 @@ fn has_forbidden_chain<'a>(
             _ => None,
         }
     };
-    for disj in &sys.eq_store.conj {
+    for disj in &sys.eq_store().conj {
         for subst in &disj.substs {
             // Group Msg-vars by their image's outermost function symbol.
             let mut by_head: tamarin_utils::FastMap<Vec<u8>, Vec<tamarin_term::lterm::LVar>> =

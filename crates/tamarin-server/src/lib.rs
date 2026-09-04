@@ -101,29 +101,12 @@ pub struct ServerConfig {
     /// (`imgThyPath` → `renderGraphCode`, Web/Theory.hs:1404-1412, 1484-1491).
     /// `None` = flag absent, the `dot` pipeline above.
     pub json_path: Option<String>,
-    /// Options applied consistently to every startup, upload, and reload.
-    pub theory_load: TheoryLoadOptions,
-}
-
-/// CLI-derived options captured by the interactive theory loader.
-#[derive(Debug, Clone)]
-pub struct TheoryLoadOptions {
     /// Run the no-deconstruction-chain check.
     pub ndc_check: bool,
     /// CLI `--prove`/`--lemma` selections copied into each theory.
     pub lemmas_to_prove: Vec<String>,
     /// Parser defines and warning behavior.
     pub parser_flags: Vec<String>,
-}
-
-impl Default for TheoryLoadOptions {
-    fn default() -> Self {
-        Self {
-            ndc_check: true,
-            lemmas_to_prove: Vec::new(),
-            parser_flags: Vec::new(),
-        }
-    }
 }
 
 impl ServerConfig {
@@ -139,7 +122,9 @@ impl ServerConfig {
             stop_on_trace: None,
             dot_path: "dot".to_string(),
             json_path: None,
-            theory_load: TheoryLoadOptions::default(),
+            ndc_check: true,
+            lemmas_to_prove: Vec::new(),
+            parser_flags: Vec::new(),
         }
     }
 }
