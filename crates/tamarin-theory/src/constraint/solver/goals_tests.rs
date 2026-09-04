@@ -73,9 +73,8 @@ fn dispatch_solve_goal_marks_solved_then_routes() {
     use crate::constraint::solver::reduction::{GoalCases, Reduction};
     use tamarin_term::maude_sig::pair_maude_sig;
 
-    let path = match require_maude_path() {
-        Some(p) => p,
-        None => return,
+    let Some(path) = require_maude_path() else {
+        return;
     };
     let h = tamarin_term::maude_proc::MaudeHandle::start(&path, pair_maude_sig()).unwrap();
     let ctx = ProofContext::new(h, Vec::new());

@@ -53,10 +53,7 @@ fn past_initial_system() -> System {
 /// vacuously between two `Sorry`s.
 #[test]
 fn sorry_leaf_runs_auto_prover_only_for_prove_targets() {
-    let h = match maude() {
-        Some(m) => m,
-        None => return,
-    };
+    let Some(h) = maude() else { return };
     let ctx = ProofContext::new(h, Vec::new());
     // Skeleton = `by sorry`.
     let skel = ProofTree {
@@ -141,10 +138,7 @@ fn sorry_with_children_is_replaced_as_one_node() {
 /// here is `status != Contradictory`.
 #[test]
 fn contradiction_leaf_without_contradiction_falls_back_to_auto() {
-    let h = match maude() {
-        Some(m) => m,
-        None => return,
-    };
+    let Some(h) = maude() else { return };
     let ctx = ProofContext::new(h, Vec::new());
     let sys = past_initial_system();
     let skel = ProofTree {
@@ -217,10 +211,7 @@ fn match_goal_includes_a_solved_goal() {
 /// `exec_proof_method` can apply `ginduct` to a remaining formula.
 #[test]
 fn replay_checks_induction_applicability() {
-    let h = match maude() {
-        Some(m) => m,
-        None => return,
-    };
+    let Some(h) = maude() else { return };
     let ctx = ProofContext::new(h, Vec::new());
     let mut sys = System::empty();
     sys.formulas_mut()

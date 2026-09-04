@@ -462,6 +462,10 @@ mod tests {
         let replacement = store.get(idx).unwrap();
         assert_eq!(replacement.typed_theory.name, "replacement");
         assert!(!replacement.primary);
+        assert_eq!(
+            store.validate_generation(idx, &snapshot.generation),
+            Err(StoreError::Stale(idx))
+        );
     }
 
     #[test]

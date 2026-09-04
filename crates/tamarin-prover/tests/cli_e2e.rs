@@ -131,7 +131,7 @@ fn prove_lemma_filter_excludes_other_lemmas() {
 }
 
 #[test]
-fn missing_oracle_exits_unsuccessfully_without_partial_stdout() {
+fn missing_oracle_fails_without_emitting_the_failed_theory() {
     if !maude_available() {
         eprintln!("skipping: maude not on path");
         return;
@@ -139,7 +139,7 @@ fn missing_oracle_exits_unsuccessfully_without_partial_stdout() {
 
     let theory = fixture("oracle_missing.spthy");
     let (code, stdout, stderr) = run_binary(&["--prove=test"], &[&theory]);
-    assert_ne!(code, 0, "missing oracle must fail the batch process");
+    assert_eq!(code, 1, "missing oracle must be a handled batch failure");
     assert!(stdout.is_empty(), "failed proof leaked stdout:\n{stdout}");
     assert!(
         stderr.contains("oracle exec error:"),
@@ -157,7 +157,7 @@ fn precompute_guarded_failures_use_the_ghc_exception_boundary() {
     for fixture_name in ["guarded_restriction.spthy", "guarded_source.spthy"] {
         let theory = fixture(fixture_name);
         let (code, stdout, stderr) = run_binary(&["--precompute-only"], &[&theory]);
-        assert_ne!(code, 0, "{fixture_name} must fail");
+        assert_eq!(code, 1, "{fixture_name} must be a handled batch failure");
         assert!(stdout.is_empty(), "{fixture_name} leaked stdout:\n{stdout}");
         assert!(
             stderr.contains("tamarin-prover: unguarded variable")
@@ -188,7 +188,20 @@ fn stored_terminal_replay_emits_a_state_for_each_node() {
     let (_, replay_trace) = stderr
         .split_once("[Theory TerminalReplay] Theory closed\n")
         .expect("closed marker before replay trace");
-    assert_eq!(replay_trace.matches("[STATE]").count(), 2, "{stderr}");
+    let states: Vec<_> = replay_trace
+        .lines()
+        .filter(|line| line.starts_with("[STATE]"))
+        .collect();
+    assert_eq!(states.len(), 2, "{stderr}");
+    assert_ne!(states[0], states[1], "replay emitted the same state twice");
+    assert!(
+        states[0].contains("nodes=[]"),
+        "unexpected root state: {stderr}"
+    );
+    assert!(
+        states[1].contains("nodes=[A,Fresh]"),
+        "unexpected child state: {stderr}"
+    );
 }
 
 #[test]

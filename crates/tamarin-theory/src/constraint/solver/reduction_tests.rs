@@ -89,10 +89,7 @@ fn ku_vars_reads_the_ac_constructor_premise_variables() {
 
 #[test]
 fn insert_goal_marks_changed() {
-    let ctx = match ctx() {
-        Some(c) => c,
-        None => return,
-    };
+    let Some(ctx) = ctx() else { return };
     let mut r = Reduction::new(&ctx, System::empty());
     // A fresh `Reduction` starts `Unchanged`.  Without that precondition the
     // assertion after the insert below would hold whatever `insert_goal`
@@ -133,10 +130,7 @@ fn solve_split_prunes_non_normal_arms_before_returning_cases() {
     use tamarin_term::subst_vfresh::SubstVFresh;
     use tamarin_term::vterm::var_term;
 
-    let ctx = match ctx() {
-        Some(c) => c,
-        None => return,
-    };
+    let Some(ctx) = ctx() else { return };
     let x = LVar::new("x", LSort::Msg, 0);
     let rule: RuleACInst = Rule::new(
         RuleInfo::<ProtoRuleACInstInfo, IntrRuleACInfo>::Proto(ProtoRuleACInstInfo {
@@ -168,10 +162,7 @@ fn solve_split_prunes_non_normal_arms_before_returning_cases() {
 
 #[test]
 fn solve_term_eqs_trivial_equation_no_change() {
-    let ctx = match ctx() {
-        Some(c) => c,
-        None => return,
-    };
+    let Some(ctx) = ctx() else { return };
     let mut r = Reduction::new(&ctx, System::empty());
     // x =? x is trivially true.
     let v = tamarin_term::lterm::LVar::new("x", tamarin_term::lterm::LSort::Msg, 0);
@@ -191,10 +182,7 @@ fn solve_term_eqs_trivial_equation_no_change() {
 
 #[test]
 fn solve_term_eqs_unifies_two_vars() {
-    let ctx = match ctx() {
-        Some(c) => c,
-        None => return,
-    };
+    let Some(ctx) = ctx() else { return };
     let mut r = Reduction::new(&ctx, System::empty());
     // x =? y produces a single mgu.
     use tamarin_term::vterm::Lit;
@@ -260,10 +248,7 @@ fn eqstore_binds_j_to_i(
 
 #[test]
 fn subst_system_rewrites_edge_node_ids_through_eqstore() {
-    let ctx = match ctx() {
-        Some(c) => c,
-        None => return,
-    };
+    let Some(ctx) = ctx() else { return };
     let mut r = Reduction::new(&ctx, System::empty());
     use tamarin_term::lterm::{LSort, LVar};
     let i = LVar::new("i", LSort::Node, 2);
@@ -310,10 +295,7 @@ fn subst_system_rewrites_edge_node_ids_through_eqstore() {
 
 #[test]
 fn subst_system_rewrites_less_atom_node_ids() {
-    let ctx = match ctx() {
-        Some(c) => c,
-        None => return,
-    };
+    let Some(ctx) = ctx() else { return };
     let mut r = Reduction::new(&ctx, System::empty());
     use tamarin_term::lterm::{LSort, LVar};
     let i = LVar::new("i", LSort::Node, 2);
@@ -359,10 +341,7 @@ fn subst_system_rewrites_less_atom_node_ids() {
 
 #[test]
 fn subst_system_idempotent_on_empty_substitution() {
-    let ctx = match ctx() {
-        Some(c) => c,
-        None => return,
-    };
+    let Some(ctx) = ctx() else { return };
     // This system has content, but its eq-store is empty.  The early return
     // in `subst_system_once` must leave every component byte-for-byte
     // identical.  The pass reorders the nodes (it mirrors `M.toList`), it
@@ -417,10 +396,7 @@ fn subst_system_marks_contradiction_on_shape_mismatch() {
     // merged consistently — Haskell's `setNodes` reaches the same
     // conclusion via `solveRuleEqs` failing. Our port pushes
     // `gfalse` so the next contradictions check trips.
-    let ctx = match ctx() {
-        Some(c) => c,
-        None => return,
-    };
+    let Some(ctx) = ctx() else { return };
     let mut r = Reduction::new(&ctx, System::empty());
     use tamarin_term::lterm::{LSort, LVar};
     use tamarin_term::vterm::Lit;
@@ -464,10 +440,7 @@ fn subst_system_merges_collided_nodes_and_equates_their_rules() {
     // those into solve_fact_eqs at the tail of subst_system. Verify
     // that the merge happens and only one node remains under the
     // canonical id.
-    let ctx = match ctx() {
-        Some(c) => c,
-        None => return,
-    };
+    let Some(ctx) = ctx() else { return };
     let mut r = Reduction::new(&ctx, System::empty());
     use tamarin_term::lterm::{LSort, LVar};
     use tamarin_term::vterm::Lit;
@@ -504,10 +477,7 @@ fn subst_system_merges_collided_nodes_and_equates_their_rules() {
 
 #[test]
 fn solve_fact_eqs_tag_mismatch_is_contradictory() {
-    let ctx = match ctx() {
-        Some(c) => c,
-        None => return,
-    };
+    let Some(ctx) = ctx() else { return };
     let mut r = Reduction::new(&ctx, System::empty());
     let f1 = crate::fact::LNFact::new(crate::fact::FactTag::Out, vec![]);
     let f2 = crate::fact::LNFact::new(crate::fact::FactTag::In, vec![]);
@@ -522,10 +492,7 @@ fn solve_fact_eqs_tag_mismatch_is_contradictory() {
 
 #[test]
 fn solve_disj_goal_empty_is_contradictory() {
-    let ctx = match ctx() {
-        Some(c) => c,
-        None => return,
-    };
+    let Some(ctx) = ctx() else { return };
     let mut r = Reduction::new(&ctx, System::empty());
     let d = Disj(Vec::<Guarded>::new());
     let out = r.solve_disj_goal(&d);
@@ -534,10 +501,7 @@ fn solve_disj_goal_empty_is_contradictory() {
 
 #[test]
 fn speculative_branch_isolates_reduction_state() {
-    let ctx = match ctx() {
-        Some(c) => c,
-        None => return,
-    };
+    let Some(ctx) = ctx() else { return };
     let r = Reduction::new(&ctx, System::empty());
     let counter = r.maude.fresh_counter_peek();
 
@@ -550,6 +514,52 @@ fn speculative_branch_isolates_reduction_state() {
 
     assert_eq!(r.maude.fresh_counter_peek(), counter);
     assert!(r.sys.goals.is_empty());
+}
+
+#[test]
+fn goal_cases_preserve_each_branch_counter_and_adopt_the_singleton() {
+    let Some(ctx) = ctx() else { return };
+    let mut red = Reduction::new(&ctx, System::empty());
+    let start = red.maude.fresh_counter_peek();
+    let branches = vec![
+        GoalBranch {
+            name: "left".into(),
+            sys: System::empty(),
+            counter: start + 10,
+        },
+        GoalBranch {
+            name: "right".into(),
+            sys: System::empty(),
+            counter: start + 20,
+        },
+    ];
+    let GoalCases::Cases(branches) = red.finish_goal_cases(branches, "unused".into()) else {
+        panic!("multiple goal arms must remain separate cases");
+    };
+    assert_eq!(
+        branches
+            .iter()
+            .map(|branch| branch.counter)
+            .collect::<Vec<_>>(),
+        [start + 10, start + 20]
+    );
+
+    let marker = tamarin_term::lterm::LVar::new("i", tamarin_term::lterm::LSort::Node, 99);
+    let mut singleton = System::empty();
+    singleton.content_mut().last_atom = Some(marker);
+    assert!(matches!(
+        red.finish_goal_cases(
+            vec![GoalBranch {
+                name: "only".into(),
+                sys: singleton,
+                counter: start + 30,
+            }],
+            "only".into(),
+        ),
+        GoalCases::LinearNamed(name) if name == "only"
+    ));
+    assert_eq!(red.sys.last_atom, Some(marker));
+    assert_eq!(red.maude.fresh_counter_peek(), start + 30);
 }
 
 #[test]
@@ -595,10 +605,7 @@ fn equality_formula_split_inherits_solved_bookkeeping() {
 
 #[test]
 fn solve_disj_goal_singleton_is_linear() {
-    let ctx = match ctx() {
-        Some(c) => c,
-        None => return,
-    };
+    let Some(ctx) = ctx() else { return };
     let mut r = Reduction::new(&ctx, System::empty());
     // Use gtrue() = Conj([]): it gets decomposed into solved_formulas
     // by insert_formula (not raw-pushed to formulas).
@@ -623,10 +630,7 @@ fn solve_disj_goal_singleton_is_linear() {
 
 #[test]
 fn solve_disj_goal_two_branches_forks() {
-    let ctx = match ctx() {
-        Some(c) => c,
-        None => return,
-    };
+    let Some(ctx) = ctx() else { return };
     let mut r = Reduction::new(&ctx, System::empty());
     let f1 = crate::guarded::gtrue(); // Conj([]) → solved_formulas
     let f2 = crate::guarded::gfalse(); // Disj([]) → formulas (gfalse sentinel)
@@ -658,10 +662,7 @@ fn solve_disj_goal_two_branches_forks() {
 
 #[test]
 fn solve_subterm_goal_marks_solved_and_moves() {
-    let ctx = match ctx() {
-        Some(c) => c,
-        None => return,
-    };
+    let Some(ctx) = ctx() else { return };
     let mut sys = System::empty();
     let v = tamarin_term::lterm::LVar::new("x", tamarin_term::lterm::LSort::Msg, 0);
     let w = tamarin_term::lterm::LVar::new("y", tamarin_term::lterm::LSort::Msg, 0);
@@ -692,10 +693,7 @@ fn solve_subterm_goal_marks_solved_and_moves() {
 
 #[test]
 fn solve_subterm_self_is_contradictory() {
-    let ctx = match ctx() {
-        Some(c) => c,
-        None => return,
-    };
+    let Some(ctx) = ctx() else { return };
     let mut sys = System::empty();
     let v = tamarin_term::lterm::LVar::new("x", tamarin_term::lterm::LSort::Msg, 0);
     let tx: tamarin_term::lterm::LNTerm =
@@ -715,10 +713,7 @@ fn solve_subterm_self_is_contradictory() {
 /// <$>` (Goals.hs:217-252, see line 223) unconditionally emits the rule's case name.
 #[test]
 fn solve_action_goal_existing_node_with_action_is_linear_named() {
-    let ctx = match ctx() {
-        Some(c) => c,
-        None => return,
-    };
+    let Some(ctx) = ctx() else { return };
     // Build a system with a node already labelled by a rule that
     // produces the action `Out(x)`.
     let mut sys = System::empty();
@@ -756,10 +751,7 @@ fn solve_action_goal_existing_node_with_action_is_linear_named() {
 
 #[test]
 fn solve_action_goal_no_node_no_rules_is_contradictory() {
-    let ctx = match ctx() {
-        Some(c) => c,
-        None => return,
-    };
+    let Some(ctx) = ctx() else { return };
     let mut r = Reduction::new(&ctx, System::empty());
     let i = tamarin_term::lterm::LVar::new("i", tamarin_term::lterm::LSort::Node, 0);
     let v = tamarin_term::lterm::LVar::new("x", tamarin_term::lterm::LSort::Msg, 0);
@@ -773,10 +765,7 @@ fn solve_action_goal_no_node_no_rules_is_contradictory() {
 
 #[test]
 fn solve_action_goal_no_node_with_matching_rule_unifies() {
-    let ctx_no = match ctx() {
-        Some(c) => c,
-        None => return,
-    };
+    let Some(ctx_no) = ctx() else { return };
     // Build a context with one rule that has an Out(y) action.
     let v = tamarin_term::lterm::LVar::new("y", tamarin_term::lterm::LSort::Msg, 0);
     use tamarin_term::vterm::Lit;
@@ -813,10 +802,7 @@ fn solve_premise_goal_no_user_rules_uses_intruder() {
     // With the intruder rules wired into ProofContext, an `In(x)`
     // premise can be discharged via `ISend` even when no user
     // rules exist. Tests that the intruder-rule fallback works.
-    let ctx = match ctx() {
-        Some(c) => c,
-        None => return,
-    };
+    let Some(ctx) = ctx() else { return };
     let mut r = Reduction::new(&ctx, System::empty());
     let i = tamarin_term::lterm::LVar::new("i", tamarin_term::lterm::LSort::Node, 0);
     let v = tamarin_term::lterm::LVar::new("x", tamarin_term::lterm::LSort::Msg, 0);
@@ -845,10 +831,7 @@ fn solve_premise_goal_no_user_rules_uses_intruder() {
 fn solve_premise_goal_no_user_rules_unmatchable_fact_is_contradictory() {
     // Use a fact tag that no intruder rule produces (e.g. a
     // user-defined linear `Foo(x)` fact in an empty context).
-    let ctx = match ctx() {
-        Some(c) => c,
-        None => return,
-    };
+    let Some(ctx) = ctx() else { return };
     let mut r = Reduction::new(&ctx, System::empty());
     let i = tamarin_term::lterm::LVar::new("i", tamarin_term::lterm::LSort::Node, 0);
     let v = tamarin_term::lterm::LVar::new("x", tamarin_term::lterm::LSort::Msg, 0);
@@ -865,10 +848,7 @@ fn solve_premise_goal_no_user_rules_unmatchable_fact_is_contradictory() {
 
 #[test]
 fn solve_premise_goal_with_matching_rule_inserts_edge() {
-    let base = match ctx() {
-        Some(c) => c,
-        None => return,
-    };
+    let Some(base) = ctx() else { return };
     // Rule that produces an Out(y) conclusion.
     let v = tamarin_term::lterm::LVar::new("y", tamarin_term::lterm::LSort::Msg, 0);
     use tamarin_term::vterm::Lit;
@@ -904,10 +884,7 @@ fn solve_premise_goal_with_matching_rule_inserts_edge() {
 
 #[test]
 fn solve_premise_goal_kd_fact_inserts_irecv_chain() {
-    let ctx = match ctx() {
-        Some(c) => c,
-        None => return,
-    };
+    let Some(ctx) = ctx() else { return };
     let mut r = Reduction::new(&ctx, System::empty());
     let i = tamarin_term::lterm::LVar::new("i", tamarin_term::lterm::LSort::Node, 0);
     let v = tamarin_term::lterm::LVar::new("x", tamarin_term::lterm::LSort::Msg, 0);
@@ -935,10 +912,7 @@ fn solve_premise_goal_kd_fact_inserts_irecv_chain() {
 
 #[test]
 fn solve_chain_goal_missing_node_is_contradictory() {
-    let ctx = match ctx() {
-        Some(c) => c,
-        None => return,
-    };
+    let Some(ctx) = ctx() else { return };
     let mut r = Reduction::new(&ctx, System::empty());
     let i = tamarin_term::lterm::LVar::new("i", tamarin_term::lterm::LSort::Node, 0);
     let j = tamarin_term::lterm::LVar::new("j", tamarin_term::lterm::LSort::Node, 0);
@@ -950,10 +924,7 @@ fn solve_chain_goal_missing_node_is_contradictory() {
 
 #[test]
 fn solve_chain_goal_compatible_facts_inserts_edge() {
-    let ctx = match ctx() {
-        Some(c) => c,
-        None => return,
-    };
+    let Some(ctx) = ctx() else { return };
     // Build two nodes whose conc/prem facts are compatible.
     let mut sys = System::empty();
     let i = tamarin_term::lterm::LVar::new("i", tamarin_term::lterm::LSort::Node, 0);
@@ -1006,10 +977,7 @@ fn solve_chain_goal_compatible_facts_inserts_edge() {
 
 #[test]
 fn insert_atom_action_creates_action_goal() {
-    let ctx = match ctx() {
-        Some(c) => c,
-        None => return,
-    };
+    let Some(ctx) = ctx() else { return };
     let mut r = Reduction::new(&ctx, System::empty());
     use crate::atom::ProtoAtom;
     use tamarin_term::lterm::LSort;
@@ -1032,10 +1000,7 @@ fn insert_atom_action_creates_action_goal() {
 /// the sugar carries no constraint, so nothing about the system moves.
 #[test]
 fn insert_atom_ignores_a_syntactic_atom() {
-    let ctx = match ctx() {
-        Some(c) => c,
-        None => return,
-    };
+    let Some(ctx) = ctx() else { return };
     let mut r = Reduction::new(&ctx, System::empty());
     let a = crate::atom::ProtoAtom::Syntactic(crate::atom::Unit2);
     assert!(matches!(r.insert_atom(&a), SystemOutcome::Linear));
@@ -1049,10 +1014,7 @@ fn insert_atom_ignores_a_syntactic_atom() {
 /// Maude mints for a skolemised timepoint (maude_proc.rs).
 #[test]
 fn insert_atom_eq_keeps_the_node_name_tag() {
-    let ctx = match ctx() {
-        Some(c) => c,
-        None => return,
-    };
+    let Some(ctx) = ctx() else { return };
     let mut r = Reduction::new(&ctx, System::empty());
     use tamarin_term::lterm::{LSort, Name, NameTag};
     let node_name: tamarin_term::lterm::LNTerm =
@@ -1069,10 +1031,7 @@ fn insert_atom_eq_keeps_the_node_name_tag() {
 
 #[test]
 fn insert_atom_less_creates_less_atom() {
-    let ctx = match ctx() {
-        Some(c) => c,
-        None => return,
-    };
+    let Some(ctx) = ctx() else { return };
     let mut r = Reduction::new(&ctx, System::empty());
     use crate::atom::ProtoAtom;
     use tamarin_term::lterm::LSort;
@@ -1091,10 +1050,7 @@ fn insert_atom_less_creates_less_atom() {
 
 #[test]
 fn insert_atom_last_sets_last_atom() {
-    let ctx = match ctx() {
-        Some(c) => c,
-        None => return,
-    };
+    let Some(ctx) = ctx() else { return };
     let mut r = Reduction::new(&ctx, System::empty());
     use crate::atom::ProtoAtom;
     use tamarin_term::lterm::LSort;
@@ -1113,10 +1069,7 @@ fn insert_atom_last_sets_last_atom() {
 
 #[test]
 fn solve_action_with_fresh_premise_adds_fresh_supplier() {
-    let base = match ctx() {
-        Some(c) => c,
-        None => return,
-    };
+    let Some(base) = ctx() else { return };
     // Setup-like rule: [ Fr(~k) ] --[ Setup(~k) ]-> [ Out(~k) ]
     let v = tamarin_term::lterm::LVar::new("k", tamarin_term::lterm::LSort::Fresh, 0);
     use tamarin_term::vterm::Lit;
@@ -1222,10 +1175,7 @@ fn neg_less_node_universal(i_name: &str, j_name: &str) -> Guarded {
 ///     Both calls produce the same decomposition (`#i = #j ∨ #j < #i`).
 #[test]
 fn insert_formula_negated_less_mark_false_does_not_push_solved() {
-    let ctx = match ctx() {
-        Some(c) => c,
-        None => return,
-    };
+    let Some(ctx) = ctx() else { return };
     let mut r = Reduction::new(&ctx, System::empty());
     let g = neg_less_node_universal("i", "j");
     assert!(
@@ -1276,10 +1226,7 @@ fn assert_disj_decomposition(r: &Reduction<'_>) {
 
 #[test]
 fn insert_formula_negated_less_mark_true_pushes_solved() {
-    let ctx = match ctx() {
-        Some(c) => c,
-        None => return,
-    };
+    let Some(ctx) = ctx() else { return };
     let mut r = Reduction::new(&ctx, System::empty());
     let g = neg_less_node_universal("i", "j");
     // mark=true (the top-level entrypoint).

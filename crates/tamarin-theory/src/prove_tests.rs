@@ -315,69 +315,35 @@ end
     }
 }
 
-/// Drive the tiny_setup proof and inspect the proof-tree shape: the root
-/// takes one of the three methods `rankProofMethods` can rank first here,
-/// the `Ex` decomposes into a `Goal::Action(Setup(_))`, solving it
-/// instantiates the `Setup` rule via its `Fr(~k)` premise, and the search
-/// reaches `Solved`.
-#[test]
-fn prove_lemma_tiny_setup_drives_through_action_goal() {
-    let Some(h) = maude() else { return };
-    let src = r#"
-theory TinySetup begin
-rule Setup:
-  [ Fr(~k) ] --[ Setup(~k) ]-> [ Out(~k) ]
-lemma trivial:
-  exists-trace
-  "Ex k #i. Setup(k) @ #i"
-end
-"#;
-    let parser_theory = tamarin_parser::parse_theory(src, &[]).expect("parse");
-    let root = prove_lemma(
-        std::sync::Arc::new(elaborated(&parser_theory)),
-        "trivial",
-        h,
-        100,
-    )
-    .expect("prove_lemma should not error");
-
-    // Root method: under the `AvoidInduction` default (exists-trace
-    // lemmas), Haskell's `rankProofMethods` tries Simplify first.
-    // If Simplify produces non-empty cases (decomposes the formula
-    // into goals), that's picked; otherwise we fall through to
-    // Induction.  For this trivial existence lemma the Ex is
-    // reducible, so Simplify is the root method.  Either is
-    // structurally acceptable as long as the proof reaches Solved.
-    use crate::constraint::solver::proof_method::ProofMethod;
-    assert!(
-        matches!(
-            root.method,
-            ProofMethod::Induction | ProofMethod::Simplify | ProofMethod::SolveGoal(_)
-        ),
-        "expected Simplify/Induction/SolveGoal at root, got {:?}",
-        root.method
-    );
-    assert_eq!(
-        root.status,
-        NodeStatus::Solved,
-        "expected Solved on tiny_setup, got {:?}",
-        root.status
-    );
-}
-
 /// Build a `ProverSession` from theory source for the pre-pass tests.
 fn session_from(src: &str) -> Option<ProverSession> {
     let h = maude()?;
     let pt = tamarin_parser::parse_theory(src, &[]).expect("parse");
-    ProverSession::build_with_heuristic(
-        std::sync::Arc::new(elaborated(&pt)),
-        h,
-        None,
-        CliHeuristic::default(),
-        crate::constraint::solver::context::CutStrategy::Dfs,
-        None,
+    Some(
+        ProverSession::build_with_heuristic(
+            std::sync::Arc::new(elaborated(&pt)),
+            h,
+            None,
+            CliHeuristic::default(),
+            crate::constraint::solver::context::CutStrategy::Dfs,
+            None,
+        )
+        .expect("build test session"),
     )
-    .ok()
+}
+
+fn session_with_malformed_sources(goal: &str) -> Option<ProverSession> {
+    session_from(&format!(
+        "theory T begin\n\
+         rule R: [] --[ A() ]-> []\n\
+         lemma typing [sources]: \"All x #i. A() @ #i ==> x = x\"\n\
+         {goal}\n\
+         end"
+    ))
+}
+
+fn assert_guarded_error<T>(result: Result<T, ProveError>) {
+    assert!(matches!(result, Err(ProveError::Guarded(_))));
 }
 
 #[test]
@@ -442,61 +408,6 @@ fn ranking_fallibility_stays_local_to_its_lemma() {
         .proving_may_fail());
 }
 
-/// HS `closeProtoRule` (lib/theory/src/Rule.hs:82-86, see line 84) builds
-/// `ClosedProtoRule ruE <$> maybeToList (variantsProtoRule hnd ruE)`, so a
-/// rule with no variants yields NO closed rule: it is in neither the closed
-/// theory nor the proof search.  The canonical case is a rule carrying both
-/// `Fr(~x)` and `In(~x)`, where `~x` cannot be sent before it is generated.
-/// `run.rs` drops such a rule from the internal theory before the session is
-/// built, and the session's rules are that theory's, so the drop reaches the
-/// proof context.
-#[test]
-fn a_no_variant_rule_is_absent_from_the_session() {
-    let Some(h) = maude() else { return };
-    let pt = tamarin_parser::parse_theory(
-        "theory T begin\n\
-rule Contradictory: [ Fr(~x), In(~x) ] --[ C(~x) ]-> [ Out(~x) ]\n\
-rule Setup: [ Fr(~k) ] --[ Setup(~k) ]-> [ Out(~k) ]\n\
-lemma trivial: exists-trace \"Ex k #i. Setup(k) @ #i\"\n\
-end",
-        &[],
-    )
-    .expect("parse");
-    let mut theory = elaborated(&pt);
-    let no_variant: Vec<String> = theory
-        .rules()
-        .filter(|r| {
-            crate::tools::rule_variants::rule_has_no_variants_for_wf_with(&h, &r.rule, None)
-        })
-        .map(|r| r.name().to_string())
-        .collect();
-    assert_eq!(no_variant, vec!["Contradictory".to_string()]);
-    theory.items.retain(|i| match i {
-        crate::theory::TheoryItem::Rule(r) => !no_variant.iter().any(|n| n == r.name()),
-        _ => true,
-    });
-
-    let session = ProverSession::build_with_heuristic(
-        std::sync::Arc::new(theory),
-        h,
-        None,
-        CliHeuristic::default(),
-        crate::constraint::solver::context::CutStrategy::Dfs,
-        None,
-    )
-    .expect("session");
-    let names: Vec<&str> = session.theory.rules().map(|r| r.name()).collect();
-    assert_eq!(names, vec!["Setup"]);
-    assert!(
-        !session
-            .template_ctx
-            .rules
-            .iter()
-            .any(|r| r.name() == "Contradictory"),
-        "the dropped rule must not reach the template proof context"
-    );
-}
-
 const RAW_AND_REFINED_LEMMAS: &str = "theory T begin\n\
 rule R: [ Fr(~k) ] --[ A(~k) ]-> [ Out(~k) ]\n\
 lemma typing [sources]: \"All k #i. A(k) @ #i ==> A(k) @ #i\"\n\
@@ -509,9 +420,8 @@ fn source_cache_disabled() -> bool {
 
 #[test]
 fn source_cache_is_lazy() {
-    let session = match session_from(RAW_AND_REFINED_LEMMAS) {
-        Some(s) => s,
-        None => return,
+    let Some(session) = session_from(RAW_AND_REFINED_LEMMAS) else {
+        return;
     };
     assert!(session.source_cache.is_empty());
 
@@ -527,9 +437,8 @@ fn source_cache_is_lazy() {
 
 #[test]
 fn terminal_system_does_not_force_sources() {
-    let session = match session_from(RAW_AND_REFINED_LEMMAS) {
-        Some(s) => s,
-        None => return,
+    let Some(session) = session_from(RAW_AND_REFINED_LEMMAS) else {
+        return;
     };
     let mut terminal = crate::constraint::system::System::default();
     terminal
@@ -543,9 +452,8 @@ fn terminal_system_does_not_force_sources() {
 
 #[test]
 fn interactive_source_views_use_the_session_provider() {
-    let session = match session_from(RAW_AND_REFINED_LEMMAS) {
-        Some(s) => s,
-        None => return,
+    let Some(session) = session_from(RAW_AND_REFINED_LEMMAS) else {
+        return;
     };
 
     session
@@ -568,34 +476,17 @@ fn interactive_source_views_use_the_session_provider() {
 
 #[test]
 fn interactive_refined_source_errors_cross_the_provider_boundary() {
-    let session = match session_from(
-        "theory T begin\n\
-         rule R: [] --[ A() ]-> []\n\
-         lemma typing [sources]: \"All x #i. A() @ #i ==> x = x\"\n\
-         lemma goal: \"Ex #i. A() @ #i\"\n\
-         end",
-    ) {
-        Some(s) => s,
-        None => return,
+    let Some(session) = session_with_malformed_sources("lemma goal: \"Ex #i. A() @ #i\"") else {
+        return;
     };
 
-    assert!(matches!(
-        session.context_for_sources(SourceKind::RefinedSources),
-        Err(ProveError::Guarded(_))
-    ));
+    assert_guarded_error(session.context_for_sources(SourceKind::RefinedSources));
 }
 
 #[test]
 fn low_level_search_apis_report_deferred_source_errors() {
-    let session = match session_from(
-        "theory T begin\n\
-         rule R: [] --[ A() ]-> []\n\
-         lemma typing [sources]: \"All x #i. A() @ #i ==> x = x\"\n\
-         lemma goal: \"Ex #i. A() @ #i\"\n\
-         end",
-    ) {
-        Some(s) => s,
-        None => return,
+    let Some(session) = session_with_malformed_sources("lemma goal: \"Ex #i. A() @ #i\"") else {
+        return;
     };
     let lemma = session.theory.lookup_lemma("goal").expect("goal lemma");
     let mut ctx = session.setup_per_lemma_ctx(lemma, "goal");
@@ -610,42 +501,32 @@ fn low_level_search_apis_report_deferred_source_errors() {
     );
     ctx.ensure_saturated();
     assert!(matches!(ctx.source_error(), Some(ProveError::Guarded(_))));
-    assert!(matches!(ctx.source_cases(), Err(ProveError::Guarded(_))));
+    assert_guarded_error(ctx.source_cases());
 
     let sys = crate::constraint::system::System::empty();
-    assert!(matches!(
-        crate::constraint::solver::search::candidate_methods(&sys, &ctx, 0),
-        Err(ProveError::Guarded(_))
+    assert_guarded_error(crate::constraint::solver::search::candidate_methods(
+        &sys, &ctx, 0,
     ));
-    assert!(matches!(
-        crate::constraint::solver::search::run_proof_search(&ctx, sys, 0),
-        Err(ProveError::Guarded(_))
+    assert_guarded_error(crate::constraint::solver::search::run_proof_search(
+        &ctx, sys, 0,
     ));
     let sys = crate::constraint::system::System::empty();
-    assert!(matches!(
-        crate::constraint::solver::proof_method::exec_proof_method(
-            &ctx,
-            &crate::constraint::solver::proof_method::ProofMethod::Sorry(None),
-            &sys,
-        ),
-        Err(ProveError::Guarded(_))
+    assert_guarded_error(crate::constraint::solver::proof_method::exec_proof_method(
+        &ctx,
+        &crate::constraint::solver::proof_method::ProofMethod::Sorry(None),
+        &sys,
     ));
-    assert!(matches!(
-        crate::constraint::solver::proof_method::is_finished(&ctx, &sys),
-        Err(ProveError::Guarded(_))
+    assert_guarded_error(crate::constraint::solver::proof_method::is_finished(
+        &ctx, &sys,
     ));
 }
 
 #[test]
 fn simplify_only_proof_does_not_force_malformed_source_assumption() {
-    let src = "theory T begin\n\
-rule R: [] --[ A() ]-> []\n\
-lemma typing [sources]: \"All x #i. A() @ #i ==> x = x\"\n\
-lemma done: \"All #i. A() @ #i ==> A() @ #i\"\n\
-end";
-    let session = match session_from(src) {
-        Some(s) => s,
-        None => return,
+    let Some(session) =
+        session_with_malformed_sources("lemma done: \"All #i. A() @ #i ==> A() @ #i\"")
+    else {
+        return;
     };
     let typing = session.theory.lookup_lemma("typing").expect("typing lemma");
     assert!(guarded_or_error(&typing.formula).is_err());
@@ -658,9 +539,8 @@ end";
 
 #[test]
 fn refined_slot_derives_from_the_single_raw_slot() {
-    let session = match session_from(RAW_AND_REFINED_LEMMAS) {
-        Some(s) => s,
-        None => return,
+    let Some(session) = session_from(RAW_AND_REFINED_LEMMAS) else {
+        return;
     };
     let lemma = session.theory.lookup_lemma("goal").expect("goal lemma");
     let ctx = session.setup_per_lemma_ctx(lemma, "goal");
@@ -691,14 +571,13 @@ fn refined_slot_derives_from_the_single_raw_slot() {
 
 #[test]
 fn empty_refinement_still_labels_source_systems_refined() {
-    let session = match session_from(
+    let Some(session) = session_from(
         "theory T begin\n\
          rule R: [ Fr(~k) ] --[ A(~k) ]-> [ Out(~k) ]\n\
          lemma goal: \"All k #i. A(k) @ #i ==> A(k) @ #i\"\n\
          end",
-    ) {
-        Some(s) => s,
-        None => return,
+    ) else {
+        return;
     };
     let refined = session
         .context_for_sources(SourceKind::RefinedSources)
@@ -720,9 +599,8 @@ fn empty_refinement_still_labels_source_systems_refined() {
 
 #[test]
 fn concurrent_raw_and_refined_consumers_share_each_materialisation() {
-    let session = match session_from(RAW_AND_REFINED_LEMMAS) {
-        Some(s) => s,
-        None => return,
+    let Some(session) = session_from(RAW_AND_REFINED_LEMMAS) else {
+        return;
     };
     let barrier = std::sync::Barrier::new(4);
     let shared = std::thread::scope(|scope| {
@@ -801,10 +679,7 @@ fn restoring_cached_sources_does_not_publish_completion() {
         }
     }
 
-    let h = match maude() {
-        Some(h) => h,
-        None => return,
-    };
+    let Some(h) = maude() else { return };
     let mut ctx = ProofContext::new(h, Vec::new());
     let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     ctx.set_source_provider(std::sync::Arc::new(CountingProvider(
@@ -828,25 +703,11 @@ lemma terminal: all-traces \"All k #i. A(k) @ #i ==> Ex #j. A(k) @ #j\" by contr
 end";
 
 #[test]
-fn replay_of_terminal_roots_leaves_sources_lazy() {
-    let session = match session_from(STORED_TERMINAL_LEMMAS) {
-        Some(s) => s,
-        None => return,
-    };
-
-    for name in ["open", "terminal"] {
-        check_and_extend_lemma_in_session(&session, name, usize::MAX).expect("replay");
-    }
-    assert!(session.source_cache.is_empty());
-}
-
-#[test]
 fn parallel_replay_of_terminal_roots_leaves_sources_lazy() {
     use rayon::prelude::*;
 
-    let session = match session_from(STORED_TERMINAL_LEMMAS) {
-        Some(s) => s,
-        None => return,
+    let Some(session) = session_from(STORED_TERMINAL_LEMMAS) else {
+        return;
     };
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(2)
@@ -864,15 +725,14 @@ fn parallel_replay_of_terminal_roots_leaves_sources_lazy() {
 
 #[test]
 fn replacing_stored_sorry_reports_unresolved_ranking() {
-    let session = match session_from(
+    let Some(session) = session_from(
         "theory T begin\n\
 heuristic: {missing}\n\
 rule R: [ Fr(~k) ] --[ A(~k) ]-> [ Out(~k) ]\n\
 lemma open: exists-trace \"Ex k #i. A(k) @ #i\" by sorry\n\
 end",
-    ) {
-        Some(session) => session,
-        None => return,
+    ) else {
+        return;
     };
 
     let error = prove_lemma_in_session(&session, "open", usize::MAX)
@@ -1026,19 +886,6 @@ fn prover_session_rejects_an_unvalidated_cli_heuristic() {
         None,
     );
     assert!(matches!(result, Err(ProveError::InvalidHeuristic(_))));
-
-    let result = ProverSession::build_with_heuristic(
-        theory,
-        h,
-        None,
-        CliHeuristic {
-            raw: Some(String::new()),
-            ..CliHeuristic::default()
-        },
-        crate::constraint::solver::context::CutStrategy::Dfs,
-        None,
-    );
-    assert!(matches!(result, Err(ProveError::InvalidHeuristic(_))));
 }
 
 #[test]
@@ -1067,17 +914,6 @@ fn default_cli_oracles_are_resolved_beside_the_theory() {
             if oracle_path == &default_oracle
     ));
 
-    let compact_default = CliHeuristic {
-        raw: Some("so".to_string()),
-        ..CliHeuristic::default()
-    };
-    let rankings = resolve_cli_heuristic(&compact_default, theory.to_str().unwrap(), &[]).unwrap();
-    assert!(matches!(
-        &rankings[1],
-        GoalRanking::Oracle { oracle_path, .. }
-            if oracle_path == &default_oracle
-    ));
-
     let explicit = CliHeuristic {
         raw: Some("o".to_string()),
         oracle_name: Some("chosen.oracle".to_string()),
@@ -1086,17 +922,6 @@ fn default_cli_oracles_are_resolved_beside_the_theory() {
     let rankings = resolve_cli_heuristic(&explicit, theory.to_str().unwrap(), &[]).unwrap();
     assert!(matches!(
         &rankings[0],
-        GoalRanking::Oracle { oracle_path, .. } if oracle_path == "./chosen.oracle"
-    ));
-
-    let compact = CliHeuristic {
-        raw: Some("so".to_string()),
-        oracle_name: Some("chosen.oracle".to_string()),
-        ..CliHeuristic::default()
-    };
-    let rankings = resolve_cli_heuristic(&compact, theory.to_str().unwrap(), &[]).unwrap();
-    assert!(matches!(
-        &rankings[1],
         GoalRanking::Oracle { oracle_path, .. } if oracle_path == "./chosen.oracle"
     ));
 

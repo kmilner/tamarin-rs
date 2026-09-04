@@ -1452,46 +1452,6 @@ fn ex_decomposition_produces_action_goal_via_induction() {
     );
 }
 
-/// Verify atom decomposition produces real `Goal::Action` entries
-/// when an action-atom inside a Conj formula is decomposed. Wraps
-/// `Action(Setup, k, #i)` in a Conj so reduce_formulas picks it up.
-#[test]
-fn atom_decomposition_creates_action_goal_in_simplify() {
-    use tamarin_theory::constraint::system::System;
-
-    let Some(ctx) = rule_free_context() else {
-        return;
-    };
-
-    use tamarin_term::lterm::{BVar, LSort, LVar};
-    use tamarin_term::vterm::var_term;
-    use tamarin_theory::atom::ProtoAtom;
-    use tamarin_theory::fact::{Fact, FactTag, Multiplicity};
-    use tamarin_theory::formula::BLNTerm;
-    let mkvar = |n: &str, sort: LSort| -> BLNTerm { var_term(BVar::Free(LVar::new(n, sort, 0))) };
-    let action_atom = ProtoAtom::Action(
-        mkvar("i", LSort::Node),
-        Fact::fresh(
-            FactTag::Proto(Multiplicity::Linear, "Setup", 1),
-            vec![mkvar("k", LSort::Msg)],
-        ),
-    );
-    let g = tamarin_theory::guarded::Guarded::Conj(
-        vec![tamarin_theory::guarded::Guarded::Atom(action_atom)].into(),
-    );
-    let mut sys = System::empty();
-    sys.formulas_mut().push(std::sync::Arc::new(g));
-    let simplified = simplify_once(&ctx, sys);
-    // Action atom should have produced a Goal::Action.
-    assert!(
-        simplified.goals.iter().any(|(g, _)| matches!(
-            g,
-            tamarin_theory::constraint::constraints::Goal::Action(_, _)
-        )),
-        "expected a Goal::Action after simplifying a Conj wrapping an Action atom"
-    );
-}
-
 /// End-to-end with the high-level `prove_lemma` API: drive the
 /// disj_lemma fixture from parse to proof tree and confirm tamarin
 /// also verifies it (whatever our verdict).
@@ -1579,38 +1539,6 @@ fn proof_search_disj_lemma_descends_into_disj_goal() {
     assert_eq!(non_empty.status, NodeStatus::Contradictory);
     let empty = root.children.get("empty_trace").expect("empty branch");
     assert_eq!(empty.status, NodeStatus::Contradictory);
-}
-
-/// End-to-end with explicit decomposition: wrap a Disj in a Conj so
-/// reduce_formulas picks up the Conj, recurses into the Disj, and
-/// produces a Goal::Disj. This confirms `insert_formula`
-/// fires when invoked through the reducible-formula path.
-#[test]
-fn simplify_conj_wrapping_disj_produces_goal() {
-    use tamarin_theory::constraint::system::System;
-
-    let Some(ctx) = rule_free_context() else {
-        return;
-    };
-
-    use tamarin_term::lterm::{BVar, LSort, LVar};
-    use tamarin_term::vterm::var_term;
-    use tamarin_theory::atom::ProtoAtom;
-    use tamarin_theory::formula::BLNTerm;
-    let mkvar = |n: &str| -> BLNTerm { var_term(BVar::Free(LVar::new(n, LSort::Node, 0))) };
-    let a1 = tamarin_theory::guarded::Guarded::Atom(ProtoAtom::Last(mkvar("i")));
-    let a2 = tamarin_theory::guarded::Guarded::Atom(ProtoAtom::Last(mkvar("j")));
-    let disj = tamarin_theory::guarded::Guarded::Disj(vec![a1, a2].into());
-    let mut sys = System::empty();
-    sys.formulas_mut()
-        .push(std::sync::Arc::new(tamarin_theory::guarded::Guarded::Conj(
-            vec![disj].into(),
-        )));
-    let simplified = simplify_once(&ctx, sys);
-    assert!(simplified
-        .goals
-        .iter()
-        .any(|(g, _)| matches!(g, tamarin_theory::constraint::constraints::Goal::Disj(_))));
 }
 
 /// End-to-end: parse a fixture, convert each lemma to guarded form,

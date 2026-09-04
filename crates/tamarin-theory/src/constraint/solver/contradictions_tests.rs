@@ -108,9 +108,8 @@ fn non_injective_fact_witness_emitted() {
     sys.add_less(LessAtom::new(j, k, Reason::Adversary));
 
     // Build the proof context that knows `Inj` is injective.
-    let mp = match tamarin_test_support::require_maude_path() {
-        Some(p) => p,
-        None => return,
+    let Some(mp) = tamarin_test_support::require_maude_path() else {
+        return;
     };
     let h = MaudeHandle::start(&mp, tamarin_term::maude_sig::pair_maude_sig()).unwrap();
     let mut ctx = ProofContext::new(h, Vec::new());

@@ -6,6 +6,7 @@ import importlib.util
 import json
 import os
 import pathlib
+import socket
 import subprocess
 import tempfile
 import unittest
@@ -20,7 +21,6 @@ URL_SPEC = importlib.util.spec_from_file_location("web_url_key", HERE / "web_url
 WEB_URL_KEY = importlib.util.module_from_spec(URL_SPEC)
 assert URL_SPEC.loader is not None
 URL_SPEC.loader.exec_module(WEB_URL_KEY)
-
 
 # Gate configuration is explicit test input, never ambient process state.
 # Keep ordinary tool discovery (notably PATH), but prevent a developer's cache
@@ -81,7 +81,10 @@ class DiffArtifactNames(unittest.TestCase):
 
     def test_name_and_url_keys_are_stable(self):
         url = "/thy/trace/1/main/message?proof=1"
-        self.assertEqual(WEB_DIFF.safe_name(url), WEB_DIFF.safe_name(url))
+        self.assertEqual(
+            WEB_DIFF.safe_name(url),
+            "_thy_trace_1_main_message_proof=1__c21ac20dd08016f7",
+        )
         self.assertEqual(
             WEB_URL_KEY.norm_url_key(url), "/thy/trace/#/main/message?proof=1"
         )
@@ -131,45 +134,61 @@ class DiffArtifactNames(unittest.TestCase):
             return html.escape(root, quote=True).replace("&#x27;", apostrophe)
 
         for apostrophe in ("&#x27;", "&#39;", "&apos;"):
-            self.assertEqual(
+            hs = WEB_DIFF.canon(
+                "html",
+                f'<a href="{escaped(hs_root, apostrophe)}/x">'
+                f"{escaped(hs_root, apostrophe)}</a>",
+                roots,
+            )
+            rs = WEB_DIFF.canon(
+                "html",
+                f'<a href="{escaped(rs_root, apostrophe)}/x">'
+                f"{escaped(rs_root, apostrophe)}</a>",
+                roots,
+            )
+            self.assertEqual(hs, "<a href=/WEB-WORKDIR/x>\nT:/WEB-WORKDIR\n</a>")
+            self.assertEqual(rs, hs)
+            self.assertNotEqual(
                 WEB_DIFF.canon(
                     "html",
-                    f'<a href="{escaped(hs_root, apostrophe)}/x">'
-                    f"{escaped(hs_root, apostrophe)}</a>",
+                    f'<a href="{escaped(rs_root, apostrophe)}/x">changed</a>',
                     roots,
                 ),
-                WEB_DIFF.canon(
-                    "html",
-                    f'<a href="{escaped(rs_root, apostrophe)}/x">'
-                    f"{escaped(rs_root, apostrophe)}</a>",
-                    roots,
-                ),
+                hs,
             )
 
         hs_json_root = '/cache/web\\oracle"hs'
         rs_json_root = '/cache/web\\oracle"rs'
         json_roots = (hs_json_root, rs_json_root)
+        hs = WEB_DIFF.canon(
+            "json",
+            json.dumps({"nested": [{"path": f"{hs_json_root}/x"}]}),
+            json_roots,
+        )
+        rs = WEB_DIFF.canon(
+            "json",
+            json.dumps({"nested": [{"path": f"{rs_json_root}/x"}]}),
+            json_roots,
+        )
         self.assertEqual(
+            hs,
+            '{\n "nested": [\n  {\n   "path": "/WEB-WORKDIR/x"\n  }\n ]\n}',
+        )
+        self.assertEqual(rs, hs)
+        self.assertNotEqual(
             WEB_DIFF.canon(
                 "json",
-                json.dumps({"nested": [{"path": f"{hs_json_root}/x"}]}),
+                json.dumps({"nested": [{"path": f"{rs_json_root}/changed"}]}),
                 json_roots,
             ),
-            WEB_DIFF.canon(
-                "json",
-                json.dumps({"nested": [{"path": f"{rs_json_root}/x"}]}),
-                json_roots,
-            ),
+            hs,
         )
 
 
 class CacheProfiles(unittest.TestCase):
-    def test_manifest_fields_round_trip_delimiter_bytes(self):
-        subprocess.run(
-            [
-                "bash",
-                "-c",
-                r'''
+    def test_manifest_fields_round_trip_and_external_path_identity(self):
+        run_shell(
+            r'''
 set -e
 . scripts/gate_common.sh
 original=$'dir/with\ttab/and\nnewline'
@@ -186,7 +205,7 @@ if manifest_decode_into x:7000 invalid; then exit 1; fi
 
 # Absolute includes have no staged alias, but their physical identity still
 # distinguishes equal-content files in different locations.
-t=$(mktemp -d)
+t=$HARNESS_TMP
 printf same > "$t/a"; printf same > "$t/b"
 root=$(manifest_encode "$t/root")
 a=$(manifest_encode "$t/a")
@@ -195,21 +214,59 @@ empty=$(manifest_encode '')
 ha=$(_include_shas_from_manifest "$(printf 'S\t%s\t%s\nS\t%s\t%s\n' "$root" "$root" "$a" "$empty")")
 hb=$(_include_shas_from_manifest "$(printf 'S\t%s\t%s\nS\t%s\t%s\n' "$root" "$root" "$b" "$empty")")
 test "$ha" != "$hb"
-''',
-            ],
-            cwd=HERE.parent,
-            check=True,
+'''
         )
 
+    def test_execution_identity_uses_versions_across_binary_builds(self):
+        run_shell(r'''
+set -e
+. scripts/gate_common.sh
+t=$HARNESS_TMP
+printf '%s\n' '#!/bin/sh' 'echo 3.5.1' > "$t/maude-a"
+printf '%s\n' '#!/bin/sh' '# another platform build' 'echo 3.5.1' > "$t/maude-b"
+chmod +x "$t/maude-a" "$t/maude-b"
+execution_fingerprint "$t/maude-a" 30
+first=$EXEC_FP
+execution_fingerprint "$t/maude-b" 30
+test "$first" = "$EXEC_FP"
+execution_fingerprint "$t/maude-b" 31
+test "$first" != "$EXEC_FP"
+printf '%s\n' '#!/bin/sh' 'echo 3.6.0' > "$t/maude-b"
+execution_fingerprint "$t/maude-b" 30
+test "$first" != "$EXEC_FP"
+printf '%s\n' '#!/bin/sh' 'exit 1' > "$t/maude-b"
+if execution_fingerprint "$t/maude-b" 30; then exit 1; fi
+''')
+
+    def test_oracle_identity_tracks_revision_and_patches_across_rebuilds(self):
+        run_shell(r'''
+set -e
+. scripts/gate_common.sh
+t=$HARNESS_TMP
+for build in a b; do
+    printf '%s\n' '#!/bin/sh' "# build $build" 'echo tamarin-prover 1.13.0' \
+        'echo "Git revision: abc123, branch: main"' > "$t/hs-$build"
+    chmod +x "$t/hs-$build"
+    printf 'binary_sha256=%s\npatch_series_sha256=patch-a\n' \
+        "$(binary_sha256 "$t/hs-$build")" > "$t/hs-$build.tamarin-rs-oracle"
+done
+hs_fingerprint "$t/hs-a"
+first=$HS_FP
+hs_fingerprint "$t/hs-b"
+test "$first" = "$HS_FP"
+sed -i 's/patch-a/patch-b/' "$t/hs-b.tamarin-rs-oracle"
+hs_fingerprint "$t/hs-b"
+test "$first" != "$HS_FP"
+sed -i 's/abc123/def456/' "$t/hs-a"
+printf 'binary_sha256=%s\npatch_series_sha256=patch-a\n' \
+    "$(binary_sha256 "$t/hs-a")" > "$t/hs-a.tamarin-rs-oracle"
+hs_fingerprint "$t/hs-a"
+test "$first" != "$HS_FP"
+''')
+
     def test_producer_and_comparison_identities_detect_their_own_tools(self):
-        with tempfile.TemporaryDirectory() as td:
-            env = os.environ.copy()
-            env["HARNESS_TMP"] = td
-            subprocess.run(
-                [
-                    "bash",
-                    "-c",
-                    r'''
+        run_shell(
+            r'''
 set -e
 . scripts/gate_common.sh
 t=$HARNESS_TMP
@@ -227,22 +284,12 @@ printf rs > "$t/rs"
 rs_fingerprint "$t/rs"
 printf changed > "$t/maude"
 if producer_identity_unchanged; then exit 1; fi
-''',
-                ],
-                cwd=HERE.parent,
-                env=env,
-                check=True,
-            )
+'''
+        )
 
     def test_web_profile_initialization_is_serialized(self):
-        with tempfile.TemporaryDirectory() as td:
-            env = os.environ.copy()
-            env["HARNESS_TMP"] = td
-            subprocess.run(
-                [
-                    "bash",
-                    "-c",
-                    r'''
+        run_shell(
+            r'''
 set -e
 t=$HARNESS_TMP
 mkdir -p "$t/cache"
@@ -263,24 +310,12 @@ wait "$b"; rb=$?
 set -e
 test $((ra == 0)) -ne $((rb == 0))
 test -s "$t/cache/PROFILE"
-''',
-                ],
-                cwd=HERE.parent,
-                env=env,
-                check=True,
-                capture_output=True,
-                text=True,
-            )
+'''
+        )
 
     def test_web_shutdown_waits_for_the_complete_process_group(self):
-        with tempfile.TemporaryDirectory() as td:
-            env = os.environ.copy()
-            env["HARNESS_TMP"] = td
-            subprocess.run(
-                [
-                    "bash",
-                    "-c",
-                    r'''
+        run_shell(
+            r'''
 set -e
 . scripts/web_cache.sh
 setsid bash -c 'trap "" TERM; sleep 30 & echo $! > "$1/child"' _ "$HARNESS_TMP" &
@@ -295,71 +330,49 @@ for _ in {1..20}; do
   sleep .1
 done
 exit 1
-''',
-                ],
-                cwd=HERE.parent,
-                env=env,
-                check=True,
-            )
+'''
+        )
 
     def test_shared_web_lifecycle_refuses_an_occupied_port(self):
-        subprocess.run(
-            [
-                "bash",
-                "-c",
+        with socket.socket() as listener:
+            listener.bind(("127.0.0.1", 0))
+            listener.listen()
+            port = listener.getsockname()[1]
+            run_shell(
                 r'''
 set -e
 . scripts/web_cache.sh
-python3() { return 1; }
-if web_port_free 12345; then exit 1; fi
-python3() { return 0; }
-web_port_free 12345
+if web_port_free "$WEB_TEST_PORT"; then exit 1; fi
 declare -F web_boot_crawl >/dev/null
 ''',
-            ],
-            cwd=HERE.parent,
-            check=True,
-        )
+                env={"WEB_TEST_PORT": str(port)},
+            )
 
     def test_isolated_python_ignores_a_stale_local_bytecode_cache(self):
         with tempfile.TemporaryDirectory() as td:
             root = pathlib.Path(td)
             module = root / "value.py"
             module.write_text("VALUE = 1\n")
-            env = os.environ.copy()
+            env = clean_environment()
             env["PYTHONPATH"] = td
             subprocess.run(["python3", "-c", "import value"], env=env, check=True)
             old_mtime = module.stat().st_mtime
             module.write_text("VALUE = 2\n")  # same size as the cached source
             os.utime(module, (old_mtime, old_mtime))
-            env["HARNESS_TMP"] = td
-            run = subprocess.run(
-                [
-                    "bash",
-                    "-c",
-                    r'''
+            run = run_shell(
+                r'''
 . scripts/web_cache.sh
 web_python_isolated "$HARNESS_TMP/fresh-pycache" \
     python3 -c 'import value; print(value.VALUE)'
 ''',
-                ],
-                cwd=HERE.parent,
+                temp_dir=td,
                 env=env,
-                check=True,
-                capture_output=True,
-                text=True,
             )
             self.assertEqual(run.stdout.strip(), "2")
 
     def test_diagnostics_publish_only_from_staging(self):
-        with tempfile.TemporaryDirectory() as td:
-            env = os.environ.copy()
-            env["HARNESS_TMP"] = td
-            subprocess.run(
-                [
-                    "bash",
-                    "-c",
-                    r'''
+        run_shell(
+            r'''
 set -e
 . scripts/gate_common.sh
 . scripts/web_cache.sh
@@ -420,22 +433,12 @@ test "$(cat "$target/other.diff")" = replacement
 rm "$t/staged/other.diff"
 web_publish_diagnostics "$t/staged" "$target"
 test ! -e "$target"
-''',
-                ],
-                cwd=HERE.parent,
-                env=env,
-                check=True,
-            )
+'''
+        )
 
     def test_conservative_manifest_catches_parser_omissions(self):
-        with tempfile.TemporaryDirectory() as td:
-            env = os.environ.copy()
-            env["HARNESS_TMP"] = td
-            subprocess.run(
-                [
-                    "bash",
-                    "-c",
-                    r'''
+        run_shell(
+            r'''
 set -e
 . scripts/gate_common.sh
 t=$HARNESS_TMP
@@ -460,24 +463,12 @@ k5=$(input_content_key "$t/root.spthy")
 printf 'third\n' > "$t/sub/hidden.spthy"
 k6=$(input_content_key "$t/root.spthy")
 test "$k5" != "$k6"
-''',
-                ],
-                cwd=HERE.parent,
-                env=env,
-                check=True,
-                capture_output=True,
-                text=True,
-            )
+'''
+        )
 
     def test_cache_root_is_shared_and_migrates_main_legacy_directory(self):
-        with tempfile.TemporaryDirectory() as td:
-            env = os.environ.copy()
-            env["HARNESS_TMP"] = td
-            subprocess.run(
-                [
-                    "bash",
-                    "-c",
-                    r'''
+        run_shell(
+            r'''
 set -e
 . scripts/gate_common.sh
 t=$HARNESS_TMP
@@ -488,24 +479,12 @@ resolved=$(shared_cache_dir "$t/repo" proof "$t/repo/scripts/.old")
 test "$resolved" = "$t/repo/scripts/.gate_cache/proof"
 test -f "$resolved/entry"
 test ! -e "$t/repo/scripts/.old"
-''',
-                ],
-                cwd=HERE.parent,
-                env=env,
-                check=True,
-                capture_output=True,
-                text=True,
-            )
+'''
+        )
 
-    def test_nonweb_publication_is_locked_atomic_and_validated(self):
-        with tempfile.TemporaryDirectory() as td:
-            env = os.environ.copy()
-            env["HARNESS_TMP"] = td
-            subprocess.run(
-                [
-                    "bash",
-                    "-c",
-                    r'''
+    def test_nonweb_proof_cache_publication_and_validation(self):
+        run_shell(
+            r'''
 set -e
 . scripts/gate_common.sh
 . scripts/proof_diff_common.sh
@@ -529,14 +508,8 @@ if cache_publish_proof "$t/key.rc" "$t/key.full.gz" 0 "$t/source"; then exit 1; 
 test ! -e "$t/key.full.gz"
 printf broken > "$t/broken.gz"
 if cache_gzip_valid "$t/broken.gz"; then exit 1; fi
-''',
-                ],
-                cwd=HERE.parent,
-                env=env,
-                check=True,
-                capture_output=True,
-                text=True,
-            )
+'''
+        )
 
     def test_silent_nonzero_run_is_transient(self):
         run_shell(
@@ -573,14 +546,8 @@ test ! -s "$t/result.tsv"
         )
 
     def test_missing_dep_info_input_marks_release_binary_stale(self):
-        with tempfile.TemporaryDirectory() as td:
-            env = os.environ.copy()
-            env["HARNESS_TMP"] = td
-            run = subprocess.run(
-                [
-                    "bash",
-                    "-c",
-                    r'''
+        run = run_shell(
+            r'''
 . scripts/gate_common.sh
 t=$HARNESS_TMP
 mkdir -p "$t/repo/crates"
@@ -600,14 +567,10 @@ chmod +x "$bin"
 printf '%s: missing.rs\n' "$bin" > "$bin.d"
 rs_stale_check "$bin" "$t/repo"
 ''',
-                ],
-                cwd=HERE.parent,
-                env=env,
-                capture_output=True,
-                text=True,
-            )
-            self.assertEqual(run.returncode, 2)
-            self.assertIn("dep-info names missing source", run.stderr)
+            check=False,
+        )
+        self.assertEqual(run.returncode, 2)
+        self.assertIn("dep-info names missing source", run.stderr)
 
     def test_reference_generation_rejects_uncertified_proof_bytes(self):
         with tempfile.TemporaryDirectory() as td:
@@ -633,7 +596,7 @@ rs_stale_check "$bin" "$t/repo"
             fake_maude.write_text("#!/bin/sh\necho fake-maude\n")
             for path in (fake_bin, fake_hs, fake_maude):
                 path.chmod(0o755)
-            env = os.environ.copy()
+            env = clean_environment()
             env.update(
                 BIN=str(fake_bin),
                 MAUDE_PATH=str(fake_maude),
@@ -715,14 +678,8 @@ printf '%s\n%s\n%s\n%s\n' "$scope" "$proof" "$HS_FP" "$EXEC_FP"
             )
 
     def test_scope_certificate_includes_per_file_flags(self):
-        with tempfile.TemporaryDirectory() as td:
-            env = os.environ.copy()
-            env["HARNESS_TMP"] = td
-            subprocess.run(
-                [
-                    "bash",
-                    "-c",
-                    r'''
+        run_shell(
+            r'''
 set -e
 . scripts/gate_common.sh
 t=$HARNESS_TMP
@@ -736,14 +693,8 @@ first=$(input_scope_fingerprint "$t/corpus" "$t/flags.tsv" t.spthy)
 printf 't.spthy\t-D=B\n' > "$t/flags.tsv"
 second=$(input_scope_fingerprint "$t/corpus" "$t/flags.tsv" t.spthy)
 test "$first" != "$second"
-''',
-                ],
-                cwd=HERE.parent,
-                env=env,
-                check=True,
-                capture_output=True,
-                text=True,
-            )
+'''
+        )
 
     def test_rs_reference_requires_full_certificate_before_proofs(self):
         with tempfile.TemporaryDirectory() as td:
@@ -770,7 +721,7 @@ test "$first" != "$second"
             fake_maude.write_text("#!/bin/sh\necho fake-maude\n")
             fake_bin.chmod(0o755)
             fake_maude.chmod(0o755)
-            env = os.environ.copy()
+            env = clean_environment()
             env.update(
                 BIN=str(fake_bin),
                 MAUDE_PATH=str(fake_maude),
@@ -791,14 +742,8 @@ test "$first" != "$second"
             self.assertFalse((root / "proved").exists())
 
     def test_web_flags_exclude_batch_only_modes(self):
-        with tempfile.TemporaryDirectory() as td:
-            env = os.environ.copy()
-            env["HARNESS_TMP"] = td
-            subprocess.run(
-                [
-                    "bash",
-                    "-c",
-                    r'''
+        run_shell(
+            r'''
 set -e
 . scripts/gate_common.sh
 . scripts/web_cache.sh
@@ -816,24 +761,12 @@ if web_flags_for define.spthy 2>"$t/error"; then
     exit 1
 fi
 grep -F "map is not readable: $t/missing.tsv" "$t/error"
-''',
-                ],
-                cwd=HERE.parent,
-                env=env,
-                check=True,
-                capture_output=True,
-                text=True,
-            )
+'''
+        )
 
     def test_manifest_follows_parser_preprocessing_and_heuristics(self):
-        with tempfile.TemporaryDirectory() as td:
-            env = os.environ.copy()
-            env["HARNESS_TMP"] = td
-            subprocess.run(
-                [
-                    "bash",
-                    "-c",
-                    r'''
+        run_shell(
+            r'''
 set -e
 . scripts/gate_common.sh
 t=$HARNESS_TMP
@@ -846,34 +779,49 @@ printf '%s\n' \
   '#else' \
   '#include /* gap */ "live.spthy"' \
   '#endif' \
+  '#include "diff-item.spthy"' \
+  '#include "acc-item.spthy"' \
   'lemma x [heuristic=o   "rank"]: "T"' \
   'end' \
   '#include "trailing-missing.spthy"' > "$t/corpus/t.spthy"
 : > "$t/corpus/live.spthy"
-printf '#!/bin/sh\n' > "$t/corpus/rank"
+printf '%s\n' 'diffLemma observational [heuristic=o "diff-rank"]:' \
+    > "$t/corpus/diff-item.spthy"
+printf '%s\n' \
+  'test blamed: "T"' \
+  'lemma acc [heuristic=o "acc-rank"]:' \
+  '  blamed accounts for "T"' > "$t/corpus/acc-item.spthy"
+for rank in rank diff-rank acc-rank; do
+    printf '#!/bin/sh\n' > "$t/corpus/$rank"
+done
 
-manifest=$(input_manifest "$t/corpus/t.spthy")
-paths=
+# This scenario targets parser provenance rather than the conservative fallback.
+parser_input_manifest "$t/corpus/t.spthy" '--diff' > "$t/exact.tsv"
+manifest=$(input_manifest "$t/corpus/t.spthy" '--diff')
+sources= oracles= staged_oracles=
 while IFS=$'\t' read -r tag source_field staged_field; do
     manifest_decode_into "$source_field" source
-    paths+="$source"$'\n'
+    manifest_decode_into "$staged_field" staged
+    case "$tag" in
+      S) sources+="$source"$'\n' ;;
+      O) oracles+="$source"$'\n'; staged_oracles+="$staged"$'\n' ;;
+    esac
 done <<< "$manifest"
-grep -F "$t/corpus/live.spthy" <<< "$paths"
-grep -F "$t/corpus/rank" <<< "$paths"
-! grep -F 'commented-missing' <<< "$paths"
-! grep -F 'trailing-missing' <<< "$paths"
-if input_manifest "$t/corpus/t.spthy" '-D=ACTIVE' 2>"$t/error"; then
+for include in live.spthy diff-item.spthy acc-item.spthy; do
+    grep -F "$t/corpus/$include" <<< "$sources"
+done
+for rank in rank diff-rank acc-rank; do
+    grep -F "$t/corpus/$rank" <<< "$oracles"
+    grep -F "$rank" <<< "$staged_oracles"
+done
+! grep -F 'commented-missing' <<< "$sources"
+! grep -F 'trailing-missing' <<< "$sources"
+if input_manifest "$t/corpus/t.spthy" '-D=ACTIVE --diff' 2>"$t/error"; then
     exit 1
 fi
 grep -F 'active-missing.spthy' "$t/error"
-''',
-                ],
-                cwd=HERE.parent,
-                env=env,
-                check=True,
-                capture_output=True,
-                text=True,
-            )
+'''
+        )
 
     def test_deep_includes_are_fully_keyed_and_staged(self):
         with tempfile.TemporaryDirectory() as td:
@@ -884,13 +832,8 @@ grep -F 'active-missing.spthy' "$t/error"
             for i in range(1, 11):
                 next_include = f'#include "i{i + 1}.spthy"\n' if i < 10 else ""
                 (root / f"i{i}.spthy").write_text(next_include)
-            env = os.environ.copy()
-            env["HARNESS_TMP"] = td
-            subprocess.run(
-                [
-                    "bash",
-                    "-c",
-                    r'''
+            run_shell(
+                r'''
 set -e
 . scripts/gate_common.sh
 . scripts/web_cache.sh
@@ -907,23 +850,12 @@ mkdir "$t/staged"
 web_stage_inputs "$t/root.spthy" "$t/staged"
 test -f "$t/staged/i10.spthy"
 ''',
-                ],
-                cwd=HERE.parent,
-                env=env,
-                check=True,
-                capture_output=True,
-                text=True,
+                temp_dir=td,
             )
 
     def test_nonweb_cache_keys_include_oracle_scripts(self):
-        with tempfile.TemporaryDirectory() as td:
-            env = os.environ.copy()
-            env["HARNESS_TMP"] = td
-            subprocess.run(
-                [
-                    "bash",
-                    "-c",
-                    r'''
+        run_shell(
+            r'''
 set -e
 . scripts/gate_common.sh
 . scripts/proof_diff_common.sh
@@ -971,24 +903,12 @@ test "$c1" != "$c2"
 mkdir "$t/staged"
 web_stage_inputs "$t/corpus/t.spthy" "$t/staged" '--heuristic=o'
 test -f "$t/staged/t.oracle"
-''',
-                ],
-                cwd=HERE.parent,
-                env=env,
-                check=True,
-                capture_output=True,
-                text=True,
-            )
+'''
+        )
 
     def test_included_oracles_are_keyed_and_staged_with_their_modes(self):
-        with tempfile.TemporaryDirectory() as td:
-            env = os.environ.copy()
-            env["HARNESS_TMP"] = td
-            subprocess.run(
-                [
-                    "bash",
-                    "-c",
-                    r'''
+        run_shell(
+            r'''
 set -e
 . scripts/gate_common.sh
 . scripts/proof_diff_common.sh
@@ -1028,14 +948,8 @@ m1=$(web_cache_key t.spthy "$t/corpus/t.spthy")
 chmod 644 "$t/target-oracle"
 m2=$(web_cache_key t.spthy "$t/corpus/t.spthy")
 test "$m1" != "$m2"
-''',
-                ],
-                cwd=HERE.parent,
-                env=env,
-                check=True,
-                capture_output=True,
-                text=True,
-            )
+'''
+        )
 
     def test_staging_preserves_trailing_newlines_in_paths(self):
         run_shell(
@@ -1063,14 +977,8 @@ test "$first" != "$(input_content_key "$t/corpus/$name")"
         )
 
     def test_staging_preserves_each_lexical_include_alias(self):
-        with tempfile.TemporaryDirectory() as td:
-            env = os.environ.copy()
-            env["HARNESS_TMP"] = td
-            subprocess.run(
-                [
-                    "bash",
-                    "-c",
-                    r'''
+        run_shell(
+            r'''
 set -e
 . scripts/gate_common.sh
 . scripts/web_cache.sh
@@ -1083,14 +991,8 @@ web_stage_inputs "$t/corpus/t.spthy" "$t/staged"
 test -d "$t/staged/b"
 test -f "$t/staged/a/inc.spthy"
 test -f "$t/staged/b/../a/inc.spthy"
-''',
-                ],
-                cwd=HERE.parent,
-                env=env,
-                check=True,
-                capture_output=True,
-                text=True,
-            )
+'''
+        )
 
     def test_staging_preserves_symlink_include_resolution(self):
         run_shell(
@@ -1163,14 +1065,8 @@ test ! -e "$t/staged/sub"
         )
 
     def test_staging_rejects_relative_inputs_outside_destination(self):
-        with tempfile.TemporaryDirectory() as td:
-            env = os.environ.copy()
-            env["HARNESS_TMP"] = td
-            subprocess.run(
-                [
-                    "bash",
-                    "-c",
-                    r'''
+        run_shell(
+            r'''
 set -e
 . scripts/gate_common.sh
 . scripts/web_cache.sh
@@ -1183,24 +1079,12 @@ if web_stage_inputs "$t/corpus/nested/a/t.spthy" "$t/staged/s1/s2" 2>"$t/error";
     exit 1
 fi
 grep -F 'staged path escapes destination: ../../../outside.spthy' "$t/error"
-''',
-                ],
-                cwd=HERE.parent,
-                env=env,
-                check=True,
-                capture_output=True,
-                text=True,
-            )
+'''
+        )
 
     def test_staging_allows_dependencies_within_explicit_root(self):
-        with tempfile.TemporaryDirectory() as td:
-            env = os.environ.copy()
-            env["HARNESS_TMP"] = td
-            subprocess.run(
-                [
-                    "bash",
-                    "-c",
-                    r'''
+        run_shell(
+            r'''
 set -e
 . scripts/gate_common.sh
 . scripts/web_cache.sh
@@ -1212,24 +1096,12 @@ printf '#!/bin/sh\n' > "$t/corpus/heuristic/rank"
 chmod 755 "$t/corpus/heuristic/rank"
 web_stage_inputs "$t/corpus/macros/t.spthy" "$t/staged/thy" '' "$t/staged"
 test -x "$t/staged/heuristic/rank"
-''',
-                ],
-                cwd=HERE.parent,
-                env=env,
-                check=True,
-                capture_output=True,
-                text=True,
-            )
+'''
+        )
 
     def test_missing_include_fails_manifest_keys_and_staging(self):
-        with tempfile.TemporaryDirectory() as td:
-            env = os.environ.copy()
-            env["HARNESS_TMP"] = td
-            subprocess.run(
-                [
-                    "bash",
-                    "-c",
-                    r'''
+        run_shell(
+            r'''
 set -e
 . scripts/gate_common.sh
 . scripts/proof_diff_common.sh
@@ -1266,14 +1138,8 @@ if input_manifest "$t/corpus/absent.spthy" 2>"$t/error"; then
     exit 1
 fi
 grep -F "$t/corpus/absent.spthy" "$t/error"
-''',
-                ],
-                cwd=HERE.parent,
-                env=env,
-                check=True,
-                capture_output=True,
-                text=True,
-            )
+'''
+        )
 
     def test_profiles_cover_execution_and_do_not_adopt_unproven_legacy(self):
         with tempfile.TemporaryDirectory() as td:
@@ -1296,13 +1162,8 @@ grep -F "$t/corpus/absent.spthy" "$t/error"
                 (scripts / name).write_bytes((HERE / name).read_bytes())
             (root / "hs").chmod(0o755)
             (root / "dot").chmod(0o755)
-            env = os.environ.copy()
-            env["HARNESS_TMP"] = td
-            subprocess.run(
-                [
-                    "bash",
-                    "-c",
-                    r'''
+            run_shell(
+                r'''
 set -e
 . scripts/gate_common.sh
 . scripts/web_cache.sh
@@ -1417,23 +1278,12 @@ web_cache_init "$PWD" "$t/scripts" "$t/hs" 2
 web_comparator_init "$t/scripts"
 test "$comparator_cache" = "$CACHE"
 ''',
-                ],
-                cwd=HERE.parent,
-                env=env,
-                check=True,
-                capture_output=True,
-                text=True,
+                temp_dir=td,
             )
 
     def test_blank_haskell_load_is_not_cached(self):
-        with tempfile.TemporaryDirectory() as td:
-            env = os.environ.copy()
-            env["HARNESS_TMP"] = td
-            subprocess.run(
-                [
-                    "bash",
-                    "-c",
-                    r'''
+        run_shell(
+            r'''
 set -e
 . scripts/gate_common.sh
 HS_CACHE=$HARNESS_TMP/cache
@@ -1459,24 +1309,12 @@ printf '#!/usr/bin/env bash\nprintf "payload\\n"\n' > "$HS_PATH"
 strip_env() { printf 'partial\n'; return 1; }
 hs_load_cache_fill input "$HARNESS_TMP/input.spthy" key '' 5
 test ! -e "$HS_CACHE/key.load.gz"
-''',
-                ],
-                cwd=HERE.parent,
-                env=env,
-                check=True,
-                capture_output=True,
-                text=True,
-            )
+'''
+        )
 
     def test_manifest_plan_probe_reads_only_declared_prefix(self):
-        with tempfile.TemporaryDirectory() as td:
-            env = os.environ.copy()
-            env["HARNESS_TMP"] = td
-            subprocess.run(
-                [
-                    "bash",
-                    "-c",
-                    r'''
+        run_shell(
+            r'''
 set -e
 . scripts/gate_common.sh
 . scripts/web_cache.sh
@@ -1484,24 +1322,12 @@ printf '%s\n' '{"base":"x","__plan_version__":2,"manifest":{"body":"__plan_versi
 test "$(web_manifest_plan_version "$HARNESS_TMP/manifest.json" __plan_version__)" = 2
 printf '%s\n' '{"base":"x","manifest":{},"__plan_version__":2}' > "$HARNESS_TMP/late.json"
 if web_manifest_plan_version "$HARNESS_TMP/late.json" __plan_version__; then exit 1; fi
-''',
-                ],
-                cwd=HERE.parent,
-                env=env,
-                check=True,
-                capture_output=True,
-                text=True,
-            )
+'''
+        )
 
     def test_cache_publication_is_atomic_and_locked(self):
-        with tempfile.TemporaryDirectory() as td:
-            env = os.environ.copy()
-            env["HARNESS_TMP"] = td
-            subprocess.run(
-                [
-                    "bash",
-                    "-c",
-                    r'''
+        run_shell(
+            r'''
 set -e
 . scripts/gate_common.sh
 . scripts/web_cache.sh
@@ -1577,14 +1403,8 @@ writer & writer_pid=$!
 reader & reader_pid=$!
 wait "$writer_pid"
 wait "$reader_pid"
-''',
-                ],
-                cwd=HERE.parent,
-                env=env,
-                check=True,
-                capture_output=True,
-                text=True,
-            )
+'''
+        )
 
 
 if __name__ == "__main__":

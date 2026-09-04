@@ -20,6 +20,36 @@ fn oversized_library_parameters_saturate_without_wrapping() {
     assert_eq!(p.saturation_limit(), usize::MAX);
 }
 
+#[test]
+fn proof_contexts_keep_their_own_integer_parameters() {
+    let Some(path) = require_maude_path() else {
+        return;
+    };
+    let maude = start_maude(&path, tamarin_term::maude_sig::pair_maude_sig());
+    let context = |maude, open_chains| {
+        crate::constraint::solver::context::ProofContext::new_with_restrictions_pool_forced_and_parameters(
+            maude,
+            None,
+            Vec::new(),
+            Vec::new(),
+            &[],
+            None,
+            IntegerParameters::with_overrides(Some(open_chains), None),
+        )
+    };
+    let narrow = context(maude.clone(), 1);
+    let wide = context(maude, 17);
+    assert_eq!(narrow.parameters.open_chains_limit(), 1);
+    assert_eq!(wide.parameters.open_chains_limit(), 17);
+}
+
+fn system_with_subst(bindings: Vec<(LVar, LNTerm)>) -> System {
+    let mut sys = System::empty();
+    sys.invalidate_max_var_idx_cache();
+    sys.eq_store_mut().subst = Subst::from_list(bindings);
+    sys
+}
+
 /// `unsolved_chain_constraints` counts exactly the open `Chain` goals.  It
 /// does not see a solved chain, and it does not see a non-chain goal.  This
 /// matches HS `openChainGoals`, which is the input of the `-c/--open-chains`
@@ -69,9 +99,8 @@ fn precompute_full_sources_emits_per_tag_entries() {
     use crate::rule::{ProtoRuleE, ProtoRuleEInfo, Rule};
     use tamarin_term::builtin::msg_var;
 
-    let path = match require_maude_path() {
-        Some(p) => p,
-        None => return,
+    let Some(path) = require_maude_path() else {
+        return;
     };
     let h = start_maude(&path, tamarin_term::maude_sig::pair_maude_sig());
 
@@ -147,9 +176,8 @@ fn precompute_full_sources_emits_em_only_when_bp_enabled() {
     use crate::rule::{ProtoRuleE, ProtoRuleEInfo, Rule};
     use tamarin_term::builtin::msg_var;
 
-    let path = match require_maude_path() {
-        Some(p) => p,
-        None => return,
+    let Some(path) = require_maude_path() else {
+        return;
     };
 
     // Minimal protocol so there's at least one proto rule (so
@@ -208,7 +236,6 @@ fn precompute_full_sources_emits_em_only_when_bp_enabled() {
 #[test]
 fn restrict_eq_store_keeps_only_stable_keyed_bindings() {
     use tamarin_term::lterm::{LSort, LVar};
-    use tamarin_term::subst::Subst;
     use tamarin_term::term::Term;
     use tamarin_term::vterm::Lit;
 
@@ -219,9 +246,7 @@ fn restrict_eq_store_keeps_only_stable_keyed_bindings() {
 
     let pub_a = LVar::new("a", LSort::Pub, 0);
     let pub_b = LVar::new("b", LSort::Pub, 0);
-    let mut sys = System::empty();
-    sys.invalidate_max_var_idx_cache();
-    sys.eq_store_mut().subst = Subst::from_list(vec![
+    let mut sys = system_with_subst(vec![
         (t1, Term::Lit(Lit::Var(pub_a))),
         (m19, Term::Lit(Lit::Var(pub_b))),
         (sk28, Term::Lit(Lit::Var(t2))),
@@ -253,7 +278,6 @@ fn restrict_eq_store_keeps_only_stable_keyed_bindings() {
 #[test]
 fn restrict_eq_store_does_not_chain_chase() {
     use tamarin_term::lterm::{LSort, LVar};
-    use tamarin_term::subst::Subst;
     use tamarin_term::term::Term;
     use tamarin_term::vterm::Lit;
 
@@ -265,9 +289,7 @@ fn restrict_eq_store_does_not_chain_chase() {
     let e10 = LVar::new("e", LSort::Msg, 10);
     let blind_arg = LVar::new("m", LSort::Msg, 28);
 
-    let mut sys = System::empty();
-    sys.invalidate_max_var_idx_cache();
-    sys.eq_store_mut().subst = Subst::from_list(vec![
+    let mut sys = system_with_subst(vec![
         (t1, Term::Lit(Lit::Var(e10))),
         (e10, Term::Lit(Lit::Var(blind_arg))),
     ]);
@@ -291,7 +313,6 @@ fn restrict_eq_store_does_not_chain_chase() {
 #[test]
 fn restrict_eq_store_empties_subst_when_no_keys_are_stable() {
     use tamarin_term::lterm::{LSort, LVar};
-    use tamarin_term::subst::Subst;
     use tamarin_term::term::Term;
     use tamarin_term::vterm::Lit;
 
@@ -299,9 +320,7 @@ fn restrict_eq_store_empties_subst_when_no_keys_are_stable() {
     let sk28 = LVar::new("sk", LSort::Msg, 28);
     let pub_a = LVar::new("a", LSort::Pub, 0);
     let pub_b = LVar::new("b", LSort::Pub, 0);
-    let mut sys = System::empty();
-    sys.invalidate_max_var_idx_cache();
-    sys.eq_store_mut().subst = Subst::from_list(vec![
+    let mut sys = system_with_subst(vec![
         (m19, Term::Lit(Lit::Var(pub_a))),
         (sk28, Term::Lit(Lit::Var(pub_b))),
     ]);
@@ -564,9 +583,8 @@ fn shift_keeps_ac_arg_order() {
 /// charged nothing (Control/Monad/Bind.hs:134-140).
 #[test]
 fn some_inst_system_keeps_the_seeded_vars_and_draws_in_hs_field_order() {
-    let path = match require_maude_path() {
-        Some(p) => p,
-        None => return,
+    let Some(path) = require_maude_path() else {
+        return;
     };
     let maude = start_maude(&path, tamarin_term::maude_sig::pair_maude_sig());
     let sys = system_with_a_variable_per_field(mterm(11));
@@ -734,9 +752,8 @@ fn source_saturation_avoid_includes_the_source_goal() {
 
 #[test]
 fn source_probe_distinguishes_no_match_from_matched_empty() {
-    let path = match require_maude_path() {
-        Some(path) => path,
-        None => return,
+    let Some(path) = require_maude_path() else {
+        return;
     };
     let maude = start_maude(&path, tamarin_term::maude_sig::pair_maude_sig());
     let ctx = crate::constraint::solver::context::ProofContext::new(maude, Vec::new());
@@ -746,32 +763,27 @@ fn source_probe_distinguishes_no_match_from_matched_empty() {
         Goal::Action(nvar(0), crate::fact::ku_fact(mterm(0))),
         Vec::new(),
     );
-
-    assert!(matches!(
+    let probe = |sources: &[Source]| {
         solve_with_source_cases_action(
             &ctx,
-            &[matched],
+            sources,
             &System::empty(),
             &node,
             &live,
             &ctx.maude,
             None,
-        ),
+        )
+    };
+
+    assert!(matches!(
+        probe(&[matched]),
         SourceMatch::Matched(cases) if cases.is_empty()
     ));
     assert!(matches!(
-        solve_with_source_cases_action(
-            &ctx,
-            &[Source::eager(
-                Goal::Action(nvar(0), LNFact::new(FactTag::Out, vec![mterm(0)])),
-                Vec::new(),
-            )],
-            &System::empty(),
-            &node,
-            &live,
-            &ctx.maude,
-            None,
-        ),
+        probe(&[Source::eager(
+            Goal::Action(nvar(0), LNFact::new(FactTag::Out, vec![mterm(0)])),
+            Vec::new(),
+        )]),
         SourceMatch::NoMatch
     ));
 }
@@ -812,9 +824,8 @@ fn premise_source_conjoin_preserves_ac_fanout() {
     use tamarin_term::subst::Subst;
     use tamarin_term::term::f_app_ac;
 
-    let path = match require_maude_path() {
-        Some(path) => path,
-        None => return,
+    let Some(path) = require_maude_path() else {
+        return;
     };
     let maude = start_maude(&path, tamarin_term::maude_sig::dh_maude_sig());
     let ctx = crate::constraint::solver::context::ProofContext::new(maude, Vec::new());
@@ -838,9 +849,8 @@ fn premise_source_conjoin_preserves_ac_fanout() {
 
 #[test]
 fn source_application_uses_complete_conjoin_state() {
-    let path = match require_maude_path() {
-        Some(path) => path,
-        None => return,
+    let Some(path) = require_maude_path() else {
+        return;
     };
     let maude = start_maude(&path, tamarin_term::maude_sig::pair_maude_sig());
     let ctx = crate::constraint::solver::context::ProofContext::new(maude, Vec::new());
@@ -859,6 +869,7 @@ fn source_application_uses_complete_conjoin_state() {
         split_id: SplitId(0),
         substs: vec![SubstVFresh::from_list(vec![(mvar(25), mterm(26))])],
     });
+    let expected_substs = case.eq_store.conj[0].substs.clone();
     let arm = RefineArm {
         freshened_case: case.clone(),
         branch_counter: ctx.maude.fresh_counter_peek(),
@@ -878,11 +889,14 @@ fn source_application_uses_complete_conjoin_state() {
         joined.subterm_store.neg_subterms.to_vec(),
         vec![(mterm(23), mterm(24))]
     );
-    assert_eq!(joined.eq_store.conj.len(), 1);
+    let [disjunction] = joined.eq_store.conj.as_slice() else {
+        panic!("conjoin must preserve the case's equation disjunction");
+    };
+    assert_eq!(disjunction.substs, expected_substs);
     assert!(joined
         .goals
         .iter()
-        .any(|(goal, _)| matches!(goal, Goal::Split(_))));
+        .any(|(goal, _)| matches!(goal, Goal::Split(id) if id == &disjunction.split_id)));
 }
 
 #[test]

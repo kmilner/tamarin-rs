@@ -127,6 +127,32 @@ fn split_once(red: &mut Reduction<'_>) -> SystemOutcome {
     ])
 }
 
+fn split_with_distinct_counters(red: &mut Reduction<'_>) -> SystemOutcome {
+    if red.sys.last_atom.is_some() {
+        return SystemOutcome::Linear;
+    }
+    red.changed = ChangeIndicator::Changed;
+    SystemOutcome::Cases(vec![
+        SystemBranch {
+            sys: mark_split_arm_at(red.sys.clone(), 30),
+            counter: 100,
+        },
+        SystemBranch {
+            sys: mark_split_arm_at(red.sys.clone(), 31),
+            counter: 200,
+        },
+    ])
+}
+
+fn allocate_counter_marker_once(red: &mut Reduction<'_>) {
+    let already_allocated = red.sys.goals.iter().any(|(goal, _)| {
+        matches!(goal, crate::constraint::constraints::Goal::Action(node, _) if node.name == "fresh")
+    });
+    if !already_allocated {
+        insert_continuation_marker(red, "fresh", red.maude.fresh_idx());
+    }
+}
+
 fn adopt_singleton_once(red: &mut Reduction<'_>) -> SystemOutcome {
     if red.sys.last_atom.is_some() {
         return SystemOutcome::Linear;
@@ -159,10 +185,7 @@ fn assert_continuation_order(systems: Vec<(System, u64)>) {
 
 #[test]
 fn branching_pass_resumes_at_its_lexical_continuation() {
-    let ctx = match ctx() {
-        Some(c) => c,
-        None => return,
-    };
+    let Some(ctx) = ctx() else { return };
     let mut red = Reduction::new(&ctx, System::empty());
     let passes = [
         Pass::Linear(insert_pre_marker_after_split),
@@ -170,6 +193,39 @@ fn branching_pass_resumes_at_its_lexical_continuation() {
         Pass::Linear(insert_post_marker),
     ];
     assert_continuation_order(simplify_system_fan_out_inner_with_passes(&mut red, &passes));
+}
+
+#[test]
+fn split_arms_resume_with_their_own_fresh_counters() {
+    let Some(ctx) = ctx() else { return };
+    let mut red = Reduction::new(&ctx, System::empty());
+    let passes = [
+        Pass::Branching(split_with_distinct_counters),
+        Pass::Linear(allocate_counter_marker_once),
+    ];
+
+    let systems = simplify_system_fan_out_inner_with_passes(&mut red, &passes);
+    assert_eq!(systems.len(), 2);
+    for (sys, counter) in systems {
+        let arm = sys.last_atom.expect("split arm").idx;
+        let expected = match arm {
+            30 => 100,
+            31 => 200,
+            other => panic!("unexpected split arm {other}"),
+        };
+        let allocated = sys
+            .goals
+            .iter()
+            .find_map(|(goal, _)| match goal {
+                crate::constraint::constraints::Goal::Action(node, _) if node.name == "fresh" => {
+                    Some(node.idx)
+                }
+                _ => None,
+            })
+            .expect("fresh-counter marker");
+        assert_eq!(allocated, expected);
+        assert_eq!(counter, expected + 1);
+    }
 }
 
 #[test]
@@ -181,10 +237,7 @@ fn contradictory_unique_action_discards_the_continuation() {
     use tamarin_term::lterm::{LSort, LVar, Name, NameTag};
     use tamarin_term::vterm::const_term;
 
-    let base = match ctx() {
-        Some(c) => c,
-        None => return,
-    };
+    let Some(base) = ctx() else { return };
     let action = |name| {
         proto_fact(
             Multiplicity::Linear,
@@ -229,9 +282,8 @@ fn later_unique_action_contradiction_discards_every_fanned_arm() {
     let mut sig = tamarin_term::maude_sig::mset_maude_sig();
     sig.st_fun_syms
         .extend(tamarin_term::function_symbols::pair_fun_sig());
-    let maude = match maude_with_sig(sig.refresh()) {
-        Some(maude) => maude,
-        None => return,
+    let Some(maude) = maude_with_sig(sig.refresh()) else {
+        return;
     };
     let action = |tag, term| proto_fact(Multiplicity::Linear, tag, vec![term]);
     let marker = || const_term(Name::new(NameTag::Pub, "marker"));
@@ -300,10 +352,7 @@ fn later_unique_action_contradiction_discards_every_fanned_arm() {
 
 #[test]
 fn singleton_system_case_is_adopted_as_a_linear_continuation() {
-    let ctx = match ctx() {
-        Some(ctx) => ctx,
-        None => return,
-    };
+    let Some(ctx) = ctx() else { return };
     let mut red = Reduction::new(&ctx, System::empty());
     let passes = [
         Pass::Linear(insert_pre_marker_after_split),
@@ -339,10 +388,7 @@ fn fatal_source_error_discards_completed_sibling_arms() {
         }
     }
 
-    let mut ctx = match ctx() {
-        Some(c) => c,
-        None => return,
-    };
+    let Some(mut ctx) = ctx() else { return };
     ctx.set_source_provider(std::sync::Arc::new(FailingProvider));
     let mut red = Reduction::new(&ctx, System::empty());
     let passes = [
@@ -363,10 +409,7 @@ fn merge_candidates_finishes_each_group_before_starting_the_next() {
     use std::cell::Cell;
     use tamarin_term::lterm::{LSort, LVar};
 
-    let ctx = match ctx() {
-        Some(c) => c,
-        None => return,
-    };
+    let Some(ctx) = ctx() else { return };
     let node = |idx| LVar::new("i", LSort::Node, idx);
     let mut red = Reduction::new(&ctx, System::empty());
     let calls = Cell::new(0);
@@ -417,10 +460,7 @@ fn merge_candidates_finishes_each_group_before_starting_the_next() {
 
 #[test]
 fn simplify_empty_is_no_op() {
-    let ctx = match ctx() {
-        Some(c) => c,
-        None => return,
-    };
+    let Some(ctx) = ctx() else { return };
     let before = System::empty();
     let sys = simplify_one(&ctx, before.clone());
     // Every CR-rule pass runs over an empty system.  No pass may make a
@@ -470,10 +510,7 @@ fn fresh_ordering_follows_transitive_positive_subterms() {
     use tamarin_term::term::Term;
     use tamarin_term::vterm::Lit;
 
-    let ctx = match ctx() {
-        Some(c) => c,
-        None => return,
-    };
+    let Some(ctx) = ctx() else { return };
     let term = |name, sort| Term::Lit(Lit::Var(LVar::new(name, sort, 0)));
     let fresh = term("x", LSort::Fresh);
     let middle = term("middle", LSort::Msg);
@@ -546,10 +583,7 @@ fn fresh_ordering_follows_transitive_positive_subterms() {
 /// (regression/trace/issue515.spthy).
 #[test]
 fn exploit_unique_msg_order_inserts_the_reflexive_self_edge() {
-    let ctx = match ctx() {
-        Some(c) => c,
-        None => return,
-    };
+    let Some(ctx) = ctx() else { return };
     use tamarin_term::builtin::msg_var;
     let info = || {
         crate::rule::RuleInfo::Proto(crate::rule::ProtoRuleACInstInfo {
@@ -649,10 +683,7 @@ fn exploit_unique_msg_order_inserts_the_reflexive_self_edge() {
 
 #[test]
 fn simplify_decomposes_top_level_conj() {
-    let ctx = match ctx() {
-        Some(c) => c,
-        None => return,
-    };
+    let Some(ctx) = ctx() else { return };
     let mut sys = System::empty();
     // Conj([Atom1, Atom2]) — Atom1/Atom2 are reducible-formula leaves
     // when wrapped in Conj of size 2 since the Conj itself is
@@ -708,10 +739,7 @@ fn simplify_decomposes_top_level_conj() {
 
 #[test]
 fn simplify_disj_decomposes_into_goal() {
-    let ctx = match ctx() {
-        Some(c) => c,
-        None => return,
-    };
+    let Some(ctx) = ctx() else { return };
     let mut sys = System::empty();
     use crate::atom::ProtoAtom;
     use crate::formula::BLNTerm;
@@ -747,10 +775,7 @@ fn simplify_disj_decomposes_into_goal() {
 /// alone must NOT collapse `Last(n)` to `Some(false)`.
 #[test]
 fn partial_atom_valuation_last_returns_none_when_successor_not_in_trace() {
-    let h = match maude() {
-        Some(h) => h,
-        None => return,
-    };
+    let Some(h) = maude() else { return };
     use crate::atom::ProtoAtom;
     let mkvar_l = |n: &str, idx: u64| {
         tamarin_term::lterm::LVar::new(n, tamarin_term::lterm::LSort::Node, idx)
@@ -828,10 +853,7 @@ fn partial_atom_valuation_last_returns_none_when_successor_not_in_trace() {
 
 #[test]
 fn simplify_marks_subterm_self_contradiction() {
-    let ctx = match ctx() {
-        Some(c) => c,
-        None => return,
-    };
+    let Some(ctx) = ctx() else { return };
     let mut sys = System::empty();
     // Add `x ⊏ x` — contradiction.
     let v = tamarin_term::lterm::LVar::new("x", tamarin_term::lterm::LSort::Msg, 0);
@@ -879,10 +901,7 @@ fn subst_pairs(s: &crate::tools::equation_store::LNSubst) -> Vec<(String, u64, S
 
 #[test]
 fn match_atom_via_maude_simple_var_to_var() {
-    let h = match maude() {
-        Some(h) => h,
-        None => return,
-    };
+    let Some(h) = maude() else { return };
     // Pattern: All k #i. Setup(k)@i — guard: Action(Setup(k), #i).
     let vars = vec![
         tamarin_term::lterm::LVar::new("k", tamarin_term::lterm::LSort::Msg, 0),
@@ -923,10 +942,7 @@ fn match_atom_via_maude_simple_var_to_var() {
 
 #[test]
 fn match_atom_via_maude_pattern_with_pair_against_pair() {
-    let h = match maude() {
-        Some(h) => h,
-        None => return,
-    };
+    let Some(h) = maude() else { return };
     // Pattern: All a b #i. Action(<a, b>) @ i.
     let vars = vec![
         tamarin_term::lterm::LVar::new("a", tamarin_term::lterm::LSort::Msg, 0),
@@ -995,10 +1011,7 @@ fn match_atom_via_maude_pattern_with_pair_against_pair() {
 /// future rewrite cannot start silently binding unmatched pattern vars.
 #[test]
 fn match_atom_via_maude_zero_subject_args_binds_only_the_time() {
-    let h = match maude() {
-        Some(h) => h,
-        None => return,
-    };
+    let Some(h) = maude() else { return };
     // Pattern wants 1 arg; system has 0.
     let vars = vec![
         tamarin_term::lterm::LVar::new("k", tamarin_term::lterm::LSort::Msg, 0),
@@ -1046,10 +1059,7 @@ fn match_atom_via_maude_zero_subject_args_binds_only_the_time() {
 
 #[test]
 fn match_atom_via_maude_rejects_non_var_time() {
-    let h = match maude() {
-        Some(h) => h,
-        None => return,
-    };
+    let Some(h) = maude() else { return };
     // Time is a literal — pattern matcher should reject.
     let vars: Vec<tamarin_term::lterm::LVar> = Vec::new();
     let g_fact = crate::fact::proto_fact(crate::fact::Multiplicity::Linear, "F", vec![]);
@@ -1080,10 +1090,7 @@ fn match_atom_via_maude_rejects_non_var_time() {
 
 #[test]
 fn ku_action_uniqueness_merges_two_nodes_with_same_term() {
-    let ctx = match ctx() {
-        Some(c) => c,
-        None => return,
-    };
+    let Some(ctx) = ctx() else { return };
     let mut sys = System::empty();
     // Two protocol-rule instances at distinct node ids, both
     // emitting `KU(~k)` as an action.
@@ -1137,9 +1144,8 @@ fn simp_split_neg_ac_recurse_emits_ac_formula() {
     use tamarin_term::term::{f_app_ac, Term};
     use tamarin_term::vterm::Lit;
     // The multiset signature makes `++` (AC Union) a non-reducible AC head.
-    let h = match maude_with_sig(tamarin_term::maude_sig::mset_maude_sig()) {
-        Some(h) => h,
-        None => return,
+    let Some(h) = maude_with_sig(tamarin_term::maude_sig::mset_maude_sig()) else {
+        return;
     };
     let ctx = ProofContext::new(h, Vec::new());
 
@@ -1188,10 +1194,7 @@ fn simp_split_neg_ac_recurse_emits_ac_formula() {
 /// emit a term equation merging `k_1 = k_2`.
 #[test]
 fn simp_injective_eq_mon_emits_constant_eq() {
-    let mut ctx = match ctx() {
-        Some(c) => c,
-        None => return,
-    };
+    let Some(mut ctx) = ctx() else { return };
     // Wire S as injective with one Constant behaviour position.
     let s_tag = crate::fact::FactTag::Proto(crate::fact::Multiplicity::Linear, "S", 2);
     std::sync::Arc::get_mut(&mut ctx.shared)
@@ -1262,10 +1265,7 @@ fn simp_injective_eq_mon_emits_constant_eq() {
 /// argument position.
 #[test]
 fn simp_injective_eq_mon_pairs_tuple_leaves() {
-    let mut ctx = match ctx() {
-        Some(c) => c,
-        None => return,
-    };
+    let Some(mut ctx) = ctx() else { return };
     use crate::tools::injective_fact_instances::MonotonicBehaviour::{Constant, Unstable};
     let s_tag = crate::fact::FactTag::Proto(crate::fact::Multiplicity::Linear, "S", 2);
     std::sync::Arc::get_mut(&mut ctx.shared)
@@ -1335,10 +1335,7 @@ fn simp_injective_eq_mon_pairs_tuple_leaves() {
 
 #[test]
 fn ku_action_uniqueness_unchanged_when_terms_differ() {
-    let ctx = match ctx() {
-        Some(c) => c,
-        None => return,
-    };
+    let Some(ctx) = ctx() else { return };
     let mut sys = System::empty();
     let mk_ku = |name: &str, idx: u64| {
         let v = tamarin_term::lterm::LVar::new(name, tamarin_term::lterm::LSort::Fresh, idx);
@@ -1388,10 +1385,7 @@ fn eq_pub_lit_with_sort(sort: tamarin_term::lterm::LSort) -> crate::guarded::Gua
 /// `Arc` of each group of equal formulas.
 #[test]
 fn dedupe_formulas_drops_a_repeated_formula() {
-    let ctx = match ctx() {
-        Some(c) => c,
-        None => return,
-    };
+    let Some(ctx) = ctx() else { return };
     use tamarin_term::lterm::LSort;
     let first = std::sync::Arc::new(eq_pub_lit_with_sort(LSort::Msg));
     let second = std::sync::Arc::new(eq_pub_lit_with_sort(LSort::Msg));
@@ -1421,10 +1415,7 @@ fn dedupe_formulas_drops_a_repeated_formula() {
 /// formulas that differ only in it stay apart and the pass drops nothing.
 #[test]
 fn dedupe_formulas_keeps_formulas_of_different_sort() {
-    let ctx = match ctx() {
-        Some(c) => c,
-        None => return,
-    };
+    let Some(ctx) = ctx() else { return };
     use tamarin_term::lterm::LSort;
     let f1 = eq_pub_lit_with_sort(LSort::Msg);
     let f2 = eq_pub_lit_with_sort(LSort::Fresh);
