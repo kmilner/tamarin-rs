@@ -475,9 +475,6 @@ pub(crate) fn precompute_full_sources(
     // run here.  This precompute function does not run it; `context.rs`
     // invokes `saturate_sources_with_simp` separately.
     //
-    // The guard drops at function return, restoring the saved `IN_PRECOMPUTE`
-    // value; nothing between the final `out` build and the return reads the flag.
-    let _precompute_guard = PrecomputeModeGuard::enter();
     let mut out: Vec<Source> = Vec::new();
     // -----------------------------------------------------------------
     // protoGoals — PremiseG for each proto-fact tag seen in the rules.
@@ -1030,18 +1027,6 @@ fn refine_one_source(
 /// proofs never force `crcRawSources`/`crcRefinedSources`, since `trace`
 /// fires at thunk-force time.
 ///
-/// The port's contexts are built in too many places to thread a value
-/// through each, so the gate is process-global:
-/// `TheoryPipeline::check_translated_theory` disarms it for the NDC and
-/// derivation-check stages, and `close_translated_theory` arms it for the
-/// close proper.
-static SHOW_SATURATION_STEPS: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
-
-pub fn set_show_saturation_steps(on: bool) {
-    SHOW_SATURATION_STEPS.store(on, std::sync::atomic::Ordering::Relaxed);
-}
-
 /// Re-simplify every grafted source case so newly-fired implied formulas can
 /// prune it. Mirrors Haskell's `saturateSources`, including its iteration cap.
 pub(crate) fn saturate_sources_with_simp(
@@ -1050,7 +1035,7 @@ pub(crate) fn saturate_sources_with_simp(
     ctx: &crate::constraint::solver::context::ProofContext,
 ) -> Vec<Source> {
     use rayon::prelude::*;
-    let show_steps = SHOW_SATURATION_STEPS.load(std::sync::atomic::Ordering::Relaxed);
+    let show_steps = ctx.show_saturation_steps;
     let mut current = sources;
     // HS-faithful: ONE pass per saturate iter via `refineSource solver`
     // where `solver = solveAllSafeGoals` (`Sources.hs`).  The
@@ -1191,6 +1176,7 @@ pub(crate) fn saturate_sources_with_simp(
                 }
             })
             .collect();
+        assert_eq!(per_source.len(), src_goals.len());
         for ((new_cases, per_changed, _), src_goal) in per_source.into_iter().zip(src_goals) {
             // HS `saturateSources` (Sources.hs:355-384) derives its
             // per-source change bit SOLELY from the solver's result:

@@ -59,13 +59,8 @@ pub async fn post(State(state): State<Arc<AppState>>, mut mp: Multipart) -> Resp
                 break;
             }
         };
-        match theory_io::load_from_source(
-            &src,
-            TheoryOrigin::Upload(filename.clone()),
-            &state.cfg.maude_path,
-            state.cfg.derivcheck_timeout,
-            state.cfg.solver_parameters,
-        ) {
+        match theory_io::load_from_source(&src, TheoryOrigin::Upload(filename.clone()), &state.cfg)
+        {
             Ok(entry) => {
                 let idx = state.store.insert(entry);
                 tracing::info!(idx, file = %filename, "uploaded theory");

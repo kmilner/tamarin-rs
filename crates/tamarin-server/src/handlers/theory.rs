@@ -1003,13 +1003,7 @@ pub async fn reload(
     };
     let worker_state = state.clone();
     let load = tokio::task::spawn_blocking(move || {
-        crate::theory_io::load_from_path(
-            &path,
-            &worker_state.cfg.maude_path,
-            worker_state.cfg.derivcheck_timeout,
-            worker_state.cfg.solver_parameters,
-        )
-        .map_err(|error| (path, error))
+        crate::theory_io::load_from_path(&path, &worker_state.cfg).map_err(|error| (path, error))
     })
     .await;
     match load {
@@ -2043,10 +2037,8 @@ pub async fn delete_step(
                             .rebase_onto(
                                 &detached.typed_theory,
                                 (*detached.prover_maude_sig).clone(),
-                                &delete_state.cfg.maude_path,
-                                delete_state.cfg.stop_on_trace,
                                 detached.ndc_cache.as_ref(),
-                                delete_state.cfg.solver_parameters,
+                                &delete_state.cfg,
                             )
                             .map_err(crate::state::StoreError::Build)?,
                     ));

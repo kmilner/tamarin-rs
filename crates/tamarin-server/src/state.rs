@@ -57,7 +57,7 @@ pub struct TheoryEntry {
     /// the `source`/`message` routes (`format_wf_block`) and the
     /// `<div class="wf-warning">` header banner in the `help`/`overview` routes
     /// (`errors_html`).  Empty ⇒ no warnings (theory is well-formed).
-    pub wf_report: Vec<tamarin_theory::wellformedness::WfError>,
+    pub wf_report: Arc<[tamarin_theory::wellformedness::WfError]>,
     /// HTML for the wellformedness warning banner shown in the theory
     /// page header (HS `errorsHtml`, rendered raw via
     /// `preEscapedToMarkup info.errorsHtml` at `src/Web/Theory.hs`).
@@ -66,7 +66,7 @@ pub struct TheoryEntry {
     /// `renderHtmlDoc (htmlDoc $ prettyWfErrorReport report)` of the
     /// *closed* theory's wellformedness report in a `<div class="wf-warning">`.
     /// Empty string when the report is empty (HS `makeWfErrorsHtml [] = ""`).
-    pub errors_html: String,
+    pub errors_html: Arc<str>,
     /// The theory's once-per-load NDC-checked intruder cache
     /// (`close_rule::check_close_intr_rule`, run in `theory_io` before
     /// the derivation checks). Injected into the lazily built prover session,
@@ -242,9 +242,8 @@ impl TheoryStore {
     }
 
     /// The stored theory's name at `idx`, or `None` when no theory is stored
-    /// there.  This is what the handlers that only label a page with the name
-    /// take instead of [`get`], whose clone deep-copies `wf_report` and
-    /// `errors_html`.
+    /// there. This avoids cloning the rest of the entry when only its label is
+    /// needed.
     ///
     /// [`get`]: Self::get
     pub fn name(&self, idx: usize) -> Option<String> {
@@ -372,10 +371,8 @@ impl TheoryStore {
             let built = ProofState::new(
                 &snapshot.entry.typed_theory,
                 (*snapshot.entry.prover_maude_sig).clone(),
-                &cfg.maude_path,
-                cfg.stop_on_trace,
                 snapshot.entry.ndc_cache.as_ref(),
-                cfg.solver_parameters,
+                cfg,
             );
 
             // Publish only into the exact generation that elected this
@@ -422,8 +419,8 @@ mod tests {
             origin: TheoryOrigin::Interactive,
             loaded_at: Local::now(),
             primary: true,
-            wf_report: Vec::new(),
-            errors_html: String::new(),
+            wf_report: Arc::default(),
+            errors_html: Arc::default(),
             ndc_cache: None,
             proof_state: None,
         }

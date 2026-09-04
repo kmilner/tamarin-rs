@@ -862,7 +862,7 @@ pub fn multiset_intruder_rules() -> Vec<IntrRuleAC> {
 /// `x⊕z` is not a syntactic subterm of `x⊕y`; only `mkDXorRuleSubterm`
 /// (the `[x,y] [y] → x` rule) is a true subterm destructor.
 ///
-/// Wired in `ProofContext::new_with_restrictions_and_pool` when
+/// Wired in `ProofContext::with_options` when
 /// `sig.enable_xor`, after `special_intruder_rules` and before the
 /// DH/BP intruder variants — mirroring HS `addMessageDeductionRule
 /// Variants` (TheoryLoader.hs).
@@ -1758,7 +1758,7 @@ fn intr_mk_empty(_: LNFact) -> Vec<LNFact> {
 /// `mkDhIntruderVariants` — see [`crate::intruder_variants::mk_dh_intruder_variants`].
 ///
 /// In production the Rust port likewise takes the cached-file path
-/// (see `constraint::solver::context::ProofContext::new_with_restrictions`,
+/// (see `constraint::solver::context::ProofContext::with_options`,
 /// the `intruder_variants::mk_dh_intruder_variants` call); this
 /// function stays here as the regenerator.  The test
 /// `intruder_rules::tests::dh_intruder_rules_emits_five_constructors_and_some_destructors`

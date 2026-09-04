@@ -101,6 +101,29 @@ pub struct ServerConfig {
     /// (`imgThyPath` → `renderGraphCode`, Web/Theory.hs:1404-1412, 1484-1491).
     /// `None` = flag absent, the `dot` pipeline above.
     pub json_path: Option<String>,
+    /// Options applied consistently to every startup, upload, and reload.
+    pub theory_load: TheoryLoadOptions,
+}
+
+/// CLI-derived options captured by the interactive theory loader.
+#[derive(Debug, Clone)]
+pub struct TheoryLoadOptions {
+    /// Run the no-deconstruction-chain check.
+    pub ndc_check: bool,
+    /// CLI `--prove`/`--lemma` selections copied into each theory.
+    pub lemmas_to_prove: Vec<String>,
+    /// Parser defines and warning behavior.
+    pub parser_flags: Vec<String>,
+}
+
+impl Default for TheoryLoadOptions {
+    fn default() -> Self {
+        Self {
+            ndc_check: true,
+            lemmas_to_prove: Vec::new(),
+            parser_flags: Vec::new(),
+        }
+    }
 }
 
 impl ServerConfig {
@@ -116,22 +139,12 @@ impl ServerConfig {
             stop_on_trace: None,
             dot_path: "dot".to_string(),
             json_path: None,
+            theory_load: TheoryLoadOptions::default(),
         }
     }
 }
 
-/// Apply the process-wide `tamarin-theory` settings the web UI depends on.
-///
-/// Both statics default to what the `--prove` CLI wants, so a process that
-/// serves HTTP must opt out of those defaults BEFORE the first request —
-/// the [`SysRetention`](tamarin_theory::constraint::solver::search::SysRetention)
-/// policy in particular before the first `autoprove` search, since a search
-/// that runs under the default leaves every proof node's `System` dropped and
-/// the `/json/` and constraint-system panes render empty.
-///
-/// Every entry point that stands this server up calls this: [`serve`] and the
-/// `tests/common` harness.  Anything process-wide the server relies on belongs
-/// here rather than inline in `serve`, so the two cannot drift.
+/// Apply the process-wide rendering width the web UI depends on.
 pub fn init_process_globals() {
     // The web UI renders every HTTP response at HS's web width (100/67),
     // not the CLI console width (110/73) — HS `getTheorySourceR` uses
@@ -142,16 +155,6 @@ pub fn init_process_globals() {
     tamarin_theory::pretty_hpj::set_display_width(
         tamarin_theory::pretty_hpj::DEFAULT_LINE_LENGTH,
         tamarin_theory::pretty_hpj::DEFAULT_RIBBON,
-    );
-
-    // Retain each proof node's constraint `System` after expansion.  The
-    // `--prove` CLI drops them post-expansion to keep RSS low (the text
-    // proof never reprints a per-node system), but the interactive UI
-    // renders the annotated system + applicable proof methods at every
-    // proof path — HS keeps a `Just System` on every `IncrementalProof`
-    // node.
-    tamarin_theory::constraint::solver::search::set_sys_retention(
-        tamarin_theory::constraint::solver::search::SysRetention::KeepAll,
     );
 }
 
@@ -172,12 +175,7 @@ pub async fn serve(
     // (Dispatch.hs:203-212), and a load failure prints the dashed
     // `reportFailure` block (Dispatch.hs:194-201) and skips the theory.
     for p in &theory_paths {
-        match theory_io::load_from_path(
-            p,
-            &cfg.maude_path,
-            cfg.derivcheck_timeout,
-            cfg.solver_parameters,
-        ) {
+        match theory_io::load_from_path(p, &cfg) {
             Ok(entry) => {
                 let name = entry.typed_theory.name.clone();
                 if !entry.wf_report.is_empty() {

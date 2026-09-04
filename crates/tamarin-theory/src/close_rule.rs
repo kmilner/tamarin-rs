@@ -510,21 +510,22 @@ fn prove_deduction_theory(
     with_only_once_d: bool,
     parameters: crate::constraint::solver::sources::IntegerParameters,
 ) -> bool {
-    use crate::constraint::solver::context::ProofContext;
+    use crate::constraint::solver::context::{ProofContext, ProofContextOptions};
     use crate::constraint::solver::search::{proof_status, run_proof_search, ProofStatus};
     use crate::constraint::system::{formula_to_system, SourceKind};
 
     let rules = vec![deduction_rule(s)];
     let restrictions = deduction_restrictions(with_only_once_d);
     let g = deduction_lemma_guarded(s, fact_term);
-    let ctx = ProofContext::new_with_restrictions_pool_forced_and_parameters(
+    let ctx = ProofContext::with_options(
         maude.clone(),
-        None,
         rules,
-        restrictions.clone(),
-        &[],
-        Some(intr_modified.clone()),
-        parameters,
+        ProofContextOptions {
+            restrictions: restrictions.clone(),
+            intruder_rules: Some(intr_modified.clone()),
+            parameters,
+            ..Default::default()
+        },
     );
     ctx.ensure_saturated();
     let sys = formula_to_system(

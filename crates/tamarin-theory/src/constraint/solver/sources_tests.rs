@@ -27,14 +27,13 @@ fn proof_contexts_keep_their_own_integer_parameters() {
     };
     let maude = start_maude(&path, tamarin_term::maude_sig::pair_maude_sig());
     let context = |maude, open_chains| {
-        crate::constraint::solver::context::ProofContext::new_with_restrictions_pool_forced_and_parameters(
+        crate::constraint::solver::context::ProofContext::with_options(
             maude,
-            None,
             Vec::new(),
-            Vec::new(),
-            &[],
-            None,
-            IntegerParameters::with_overrides(Some(open_chains), None),
+            crate::constraint::solver::context::ProofContextOptions {
+                parameters: IntegerParameters::with_overrides(Some(open_chains), None),
+                ..Default::default()
+            },
         )
     };
     let narrow = context(maude.clone(), 1);

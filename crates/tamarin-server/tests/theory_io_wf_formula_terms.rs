@@ -68,8 +68,13 @@ fn web_load_reports_formula_terms_for_sapic_else_restriction() {
     // the `--derivcheck-timeout=0` oracle probe (HS `compare derivChecks 0`
     // returns `Just []` on EQ, TheoryLoader.hs:578-579), so the report holds
     // the static checks only.
-    let entry = theory_io::load_from_path(&fixture(), NO_MAUDE, 0, Default::default())
-        .expect("fixture loads");
+    let mut cfg = tamarin_server::ServerConfig::new(
+        "127.0.0.1:0".parse().unwrap(),
+        std::path::PathBuf::new(),
+        NO_MAUDE.to_string(),
+    );
+    cfg.derivcheck_timeout = 0;
+    let entry = theory_io::load_from_path(&fixture(), &cfg).expect("fixture loads");
 
     assert!(
         entry.wf_report.iter().any(|e| e.topic == "Formula terms"),

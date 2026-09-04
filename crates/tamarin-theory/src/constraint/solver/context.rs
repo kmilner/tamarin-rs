@@ -140,6 +140,10 @@ pub struct ProofContext {
     /// pool member's `with_fresh_counter_from(avoid_max)` still gives
     /// HS-faithful per-call witness allocation.
     pub maude_pool: Option<std::sync::Arc<MaudePool>>,
+    /// Which expanded proof nodes retain their constraint systems.
+    pub(crate) sys_retention: crate::constraint::solver::search::SysRetention,
+    /// Emit Haskell-compatible source-saturation progress messages.
+    pub(crate) show_saturation_steps: bool,
     /// Whether the solver should attempt induction at the start of a
     /// proof. Mirrors Haskell's `pcUseInduction` flag.  Set per-lemma
     /// (`force_induction`), so owned rather than shared.
@@ -208,6 +212,18 @@ pub struct ProofContext {
     /// behind an `Arc`. Field reads are
     /// transparent through the [`std::ops::Deref`] implementation below.
     pub shared: std::sync::Arc<ProofContextShared>,
+}
+
+/// Theory-wide inputs used to build a proof context.
+#[derive(Default)]
+pub struct ProofContextOptions {
+    pub maude_pool: Option<std::sync::Arc<MaudePool>>,
+    pub restrictions: Vec<crate::guarded::Guarded>,
+    pub forced_injective_facts: Vec<crate::fact::FactTag>,
+    pub intruder_rules: Option<IntrRuleCache>,
+    pub parameters: crate::constraint::solver::sources::IntegerParameters,
+    pub sys_retention: crate::constraint::solver::search::SysRetention,
+    pub show_saturation_steps: bool,
 }
 
 pub(crate) trait SourceProvider: std::fmt::Debug + Send + Sync {
@@ -326,6 +342,8 @@ impl ProofContext {
         Self {
             maude: self.maude.clone(),
             maude_pool: self.maude_pool.clone(),
+            sys_retention: self.sys_retention,
+            show_saturation_steps: self.show_saturation_steps,
             use_induction: self.use_induction,
             is_exists_trace: self.is_exists_trace,
             cut: self.cut,
@@ -455,9 +473,15 @@ pub enum CutStrategy {
     AfterSorry,
 }
 
+impl Default for CutStrategy {
+    fn default() -> Self {
+        Self::Dfs
+    }
+}
+
 impl ProofContext {
     pub fn new(maude: MaudeHandle, rules: Vec<OpenProtoRule>) -> Self {
-        Self::new_with_restrictions(maude, rules, Vec::new())
+        Self::with_options(maude, rules, ProofContextOptions::default())
     }
 
     /// Cheap clone with `maude` replaced.  Used at the rayon parallel
@@ -494,6 +518,8 @@ impl ProofContext {
         ProofContext {
             maude,
             maude_pool: None,
+            sys_retention: self.sys_retention,
+            show_saturation_steps: self.show_saturation_steps,
             use_induction: self.use_induction,
             is_exists_trace: self.is_exists_trace,
             cut: self.cut,
@@ -696,40 +722,6 @@ impl ProofContext {
 
     pub(crate) fn source_error(&self) -> Option<crate::prove::ProveError> {
         self.source_error.get().cloned()
-    }
-
-    /// Variant that accepts the theory-level restrictions.  Mirrors
-    /// Haskell's `precomputeSources parameters ctxt restrictions`
-    /// which threads restrictions into each `initialSource`'s system
-    /// via `insertLemmas`.  Restrictions then fire on rule actions
-    /// during saturate, dropping cases that violate them — e.g.
-    /// `True_is_true` on Responder's `IsTrue(z)` action drops the
-    /// Responder case for `KU(senc(...))` in Pattern_matching.
-    pub fn new_with_restrictions(
-        maude: MaudeHandle,
-        rules: Vec<OpenProtoRule>,
-        restrictions: Vec<crate::guarded::Guarded>,
-    ) -> Self {
-        Self::new_with_restrictions_and_pool(maude, None, rules, restrictions)
-    }
-
-    /// Like [`new_with_restrictions`] but also installs a
-    /// `MaudePool` on the constructed context so the precompute /
-    /// saturate phase (which happens INSIDE this constructor via
-    /// `precompute_full_sources`) can dispatch work across the pool
-    /// rather than serialising on the single shared Maude.
-    ///
-    /// Callers without a pool should keep calling
-    /// `new_with_restrictions` — the precompute will use the single
-    /// `maude` for every parallel task, which is correct (just
-    /// contended).
-    pub fn new_with_restrictions_and_pool(
-        maude: MaudeHandle,
-        maude_pool: Option<std::sync::Arc<MaudePool>>,
-        rules: Vec<OpenProtoRule>,
-        restrictions: Vec<crate::guarded::Guarded>,
-    ) -> Self {
-        Self::new_with_restrictions_pool_forced(maude, maude_pool, rules, restrictions, &[], None)
     }
 
     /// HS-faithful assembly of the intruder-rule cache
@@ -991,72 +983,25 @@ impl ProofContext {
         )
     }
 
-    /// Like [`new_with_restrictions_and_pool`] but also unions the FORCED
-    /// injective fact tags into `injective_fact_insts` BEFORE source
-    /// precomputation — mirroring HS `closeRuleCache` (CloseRule.hs:402-427,
-    /// see line 419), where `injFactInstances` (forced ∪ simple) seeds
-    /// `ctxt0`, which then drives `precomputeSources`.  Used for the SAPIC
-    /// state-channel optimisation
-    /// (`setforcedInjectiveFacts {L_PureState, L_CellLocked}`,
-    /// lib/sapic/src/Sapic.hs:84).
-    ///
-    /// `intr_override`: the theory's once-per-load NDC-checked intruder
-    /// cache (`close_rule::check_close_intr_rule`), injected so this
-    /// context reuses the tagged+permuted rules instead of re-assembling —
-    /// HS `closeRuleCache` consumes `_thyCache` verbatim.  `None`
-    /// assembles from the signature with the cache permutation applied
-    /// (no property check).  A `Some` argument shares the caller's rule
-    /// list rather than copying it.
-    pub fn new_with_restrictions_pool_forced(
+    /// Build a context with explicit theory-wide options.
+    pub fn with_options(
         maude: MaudeHandle,
-        maude_pool: Option<std::sync::Arc<MaudePool>>,
         rules: Vec<OpenProtoRule>,
-        restrictions: Vec<crate::guarded::Guarded>,
-        forced_injective_facts: &[crate::fact::FactTag],
-        intr_override: Option<IntrRuleCache>,
+        options: ProofContextOptions,
     ) -> Self {
-        Self::new_with_restrictions_pool_forced_and_parameters(
-            maude,
+        let ProofContextOptions {
             maude_pool,
-            rules,
             restrictions,
             forced_injective_facts,
-            intr_override,
-            crate::constraint::solver::sources::IntegerParameters::default(),
-        )
-    }
-
-    /// Parameterised form used by frontends that expose Haskell's source
-    /// saturation limits. Standalone solver contexts use the defaults above.
-    pub fn new_with_restrictions_pool_forced_and_parameters(
-        maude: MaudeHandle,
-        maude_pool: Option<std::sync::Arc<MaudePool>>,
-        rules: Vec<OpenProtoRule>,
-        restrictions: Vec<crate::guarded::Guarded>,
-        forced_injective_facts: &[crate::fact::FactTag],
-        intr_override: Option<IntrRuleCache>,
-        parameters: crate::constraint::solver::sources::IntegerParameters,
-    ) -> Self {
-        Self::new_impl(
-            maude,
-            maude_pool,
-            rules,
-            restrictions,
-            forced_injective_facts,
-            intr_override,
-            parameters,
-        )
-    }
-
-    fn new_impl(
-        maude: MaudeHandle,
-        maude_pool: Option<std::sync::Arc<MaudePool>>,
-        mut rules: Vec<OpenProtoRule>,
-        restrictions: Vec<crate::guarded::Guarded>,
-        forced_injective_facts: &[crate::fact::FactTag],
-        intr_override: Option<IntrRuleCache>,
-        mut parameters: crate::constraint::solver::sources::IntegerParameters,
-    ) -> Self {
+            intruder_rules: intr_override,
+            mut parameters,
+            mut sys_retention,
+            show_saturation_steps,
+        } = options;
+        let mut rules = rules;
+        if std::env::var_os("TAM_RS_KEEP_SYS").is_some() {
+            sys_retention = crate::constraint::solver::search::SysRetention::KeepAll;
+        }
         let (safety_restrictions, other_restrictions) = restrictions
             .into_iter()
             .map(std::sync::Arc::new)
@@ -1092,7 +1037,7 @@ impl ProofContext {
             injective_fact_insts =
                 crate::tools::injective_fact_instances::union_forced_injective_fact_instances(
                     injective_fact_insts,
-                    forced_injective_facts,
+                    &forced_injective_facts,
                 );
         }
         let injective_fact_insts = injective_fact_insts.into_iter().collect();
@@ -1304,6 +1249,8 @@ impl ProofContext {
         let mut ctx = ProofContext {
             maude,
             maude_pool,
+            sys_retention,
+            show_saturation_steps,
             use_induction: UseInduction::AvoidInduction,
             is_exists_trace: false,
             cut: CutStrategy::Dfs,

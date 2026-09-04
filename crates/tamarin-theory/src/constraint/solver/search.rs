@@ -249,7 +249,6 @@ fn collect_solved_systems_owned(
 /// A `Sorry: depth limit` frontier stub keeps its system under every
 /// policy: the next ID-DFS iteration re-expands it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
 pub enum SysRetention {
     /// Drop every expanded node's `System`.
     DropAll = 0,
@@ -259,53 +258,11 @@ pub enum SysRetention {
     KeepAll = 2,
 }
 
-impl SysRetention {
-    /// Inverse of the `#[repr(u8)]` discriminant, for [`SYS_RETENTION`].
-    #[inline]
-    fn from_u8(v: u8) -> SysRetention {
-        match v {
-            0 => SysRetention::DropAll,
-            1 => SysRetention::KeepSolved,
-            _ => SysRetention::KeepAll,
-        }
+impl Default for SysRetention {
+    fn default() -> Self {
+        Self::DropAll
     }
 }
-
-/// The process-wide [`SysRetention`], held as its discriminant.  Default
-/// [`SysRetention::DropAll`] → CLI behaviour unchanged; the interactive
-/// server (at startup) and the batch trace writers (before the first
-/// lemma) raise it via [`set_sys_retention`].
-static SYS_RETENTION: std::sync::atomic::AtomicU8 =
-    std::sync::atomic::AtomicU8::new(SysRetention::DropAll as u8);
-
-/// Set the process-wide `System` retention policy.  Call before any
-/// `run_proof_search`.
-pub fn set_sys_retention(policy: SysRetention) {
-    SYS_RETENTION.store(policy as u8, std::sync::atomic::Ordering::Relaxed);
-}
-
-/// The policy in force: [`SYS_RETENTION`], raised to
-/// [`SysRetention::KeepAll`] by the `TAM_RS_KEEP_SYS` env presence
-/// (diagnostic).
-#[inline]
-fn sys_retention() -> SysRetention {
-    if keep_sys_env() {
-        return SysRetention::KeepAll;
-    }
-    SysRetention::from_u8(SYS_RETENTION.load(std::sync::atomic::Ordering::Relaxed))
-}
-
-#[inline]
-fn keep_sys_env() -> bool {
-    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *V.get_or_init(|| std::env::var_os("TAM_RS_KEEP_SYS").is_some())
-}
-
-/// Serialises the tests that write [`SYS_RETENTION`] against each other:
-/// the slot is process-wide, and a policy stored mid-search changes what
-/// a concurrently running proof retains.
-#[cfg(test)]
-pub(crate) static SYS_RETENTION_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Per-child parallel expansion is ON by default;
 /// `TAM_RS_DISABLE_PARALLEL_EXPAND=1` forces serial sibling expansion
@@ -991,7 +948,7 @@ fn expand(
     // peak; this drain reduces peak RSS to ~14 MB (~ same as small
     // lemmas — most of HS's residue is the closed branches we can
     // now free).
-    if drop_sys_after_expand(node, sys_retention()) {
+    if drop_sys_after_expand(node, ctx.sys_retention) {
         node.sys = crate::constraint::system::System::default();
     }
     Ok(())
@@ -2134,29 +2091,5 @@ mod tests {
             true,
         );
         assert!(drop_sys_after_expand(&terminal, SysRetention::DropAll));
-    }
-
-    #[test]
-    fn sys_retention_switch_round_trips() {
-        // `TAM_RS_KEEP_SYS` pins every reading to `KeepAll`, which is not
-        // what this asserts.
-        if keep_sys_env() {
-            return;
-        }
-        // Process-global: hold the lock the other writer takes, and
-        // restore the policy a concurrently running proof search expects.
-        let _guard = SYS_RETENTION_TEST_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let before = sys_retention();
-        for policy in [
-            SysRetention::KeepAll,
-            SysRetention::KeepSolved,
-            SysRetention::DropAll,
-        ] {
-            set_sys_retention(policy);
-            assert_eq!(sys_retention(), policy);
-        }
-        set_sys_retention(before);
     }
 }

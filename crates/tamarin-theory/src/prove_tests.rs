@@ -283,17 +283,18 @@ lemma always_A:
   "All k #i. A(k) @ #i ==> Ex #j. A(k) @ #j"
 end
 "#;
-    // The policy is process-wide; hold the lock its other writer takes so
-    // no concurrent test stores a lower one mid-search.
-    let _guard = crate::constraint::solver::search::SYS_RETENTION_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    crate::constraint::solver::search::set_sys_retention(
-        crate::constraint::solver::search::SysRetention::KeepAll,
-    );
     let pt = tamarin_parser::parse_theory(src, &[]).expect("parse");
-    let root =
-        prove_lemma(std::sync::Arc::new(elaborated(&pt)), "always_A", h, 200).expect("prove");
+    let session = ProverSession::build(
+        std::sync::Arc::new(elaborated(&pt)),
+        h,
+        ProverSessionOptions {
+            sys_retention: crate::constraint::solver::search::SysRetention::KeepAll,
+            show_saturation_steps: true,
+            ..Default::default()
+        },
+    )
+    .expect("session");
+    let root = prove_lemma_in_session(&session, "always_A", 200).expect("prove");
     // Root = the initial constraint system (the negated goal formula),
     // with the lemma's refined source kind — NOT an empty default.
     assert!(
@@ -320,13 +321,10 @@ fn session_from(src: &str) -> Option<ProverSession> {
     let h = maude()?;
     let pt = tamarin_parser::parse_theory(src, &[]).expect("parse");
     Some(
-        ProverSession::build_with_heuristic(
+        ProverSession::build(
             std::sync::Arc::new(elaborated(&pt)),
             h,
-            None,
-            CliHeuristic::default(),
-            crate::constraint::solver::context::CutStrategy::Dfs,
-            None,
+            ProverSessionOptions::default(),
         )
         .expect("build test session"),
     )
@@ -874,16 +872,16 @@ fn prover_session_rejects_an_unvalidated_cli_heuristic() {
     let Some(h) = maude() else { return };
     let parsed = tamarin_parser::parse_theory("theory T begin end", &[]).expect("parse");
     let theory = std::sync::Arc::new(elaborated(&parsed));
-    let result = ProverSession::build_with_heuristic(
+    let result = ProverSession::build(
         theory.clone(),
         h.clone(),
-        None,
-        CliHeuristic {
-            raw: Some("unknown".to_string()),
-            ..CliHeuristic::default()
+        ProverSessionOptions {
+            cli_heuristic: CliHeuristic {
+                raw: Some("unknown".to_string()),
+                ..CliHeuristic::default()
+            },
+            ..Default::default()
         },
-        crate::constraint::solver::context::CutStrategy::Dfs,
-        None,
     );
     assert!(matches!(result, Err(ProveError::InvalidHeuristic(_))));
 }
@@ -1013,13 +1011,10 @@ fn included_oracle_locations_are_preserved_and_frozen() {
         std::fs::remove_dir_all(root).unwrap();
         return;
     };
-    let session = ProverSession::build_with_heuristic(
+    let session = ProverSession::build(
         std::sync::Arc::new(theory),
         maude,
-        None,
-        CliHeuristic::default(),
-        crate::constraint::solver::context::CutStrategy::Dfs,
-        None,
+        ProverSessionOptions::default(),
     )
     .unwrap();
     let oracle_path = |lemma: &str| {

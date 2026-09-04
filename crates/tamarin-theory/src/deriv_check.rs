@@ -386,7 +386,7 @@ fn prove_probe(
     ndc_cache: Option<&IntrRuleCache>,
     parameters: crate::constraint::solver::sources::IntegerParameters,
 ) -> Vec<String> {
-    use crate::constraint::solver::context::ProofContext;
+    use crate::constraint::solver::context::{ProofContext, ProofContextOptions};
     use crate::constraint::solver::search::{run_proof_search, NodeStatus};
     use crate::constraint::system::{formula_to_system, SourceKind};
     use crate::guarded::formula_to_guarded;
@@ -406,14 +406,14 @@ fn prove_probe(
     // (HS keeps `_thyCache` on the probe theory; `closeRuleCache`
     // consumes it as-is), so the NDC tags — and the permutation — carry
     // into probe proofs without re-running the check per probe.
-    let mut ctx = ProofContext::new_with_restrictions_pool_forced_and_parameters(
+    let mut ctx = ProofContext::with_options(
         maude,
-        None,
         rules,
-        Vec::new(),
-        &[],
-        ndc_cache.cloned(),
-        parameters,
+        ProofContextOptions {
+            intruder_rules: ndc_cache.cloned(),
+            parameters,
+            ..Default::default()
+        },
     );
     ctx.is_exists_trace = true;
     // Probes have no `[sources]`-tagged lemmas, so no typing

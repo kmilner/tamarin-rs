@@ -572,7 +572,7 @@ fn in_source_pool<R: Send>(f: impl FnOnce() -> R + Send) -> R {
 
 /// Per-file shared prover state — the bits of work that depend only on
 /// the theory, not on which lemma is being proved.  Built once via
-/// [`ProverSession::build_with_heuristic`] and reused across
+/// [`ProverSession::build`] and reused across
 /// `prove_lemma_in_session` calls so each lemma in a multi-lemma `--prove`
 /// run pays the heavy setup cost only ONCE.
 ///
@@ -624,6 +624,33 @@ pub struct ProverSession {
     /// Snapshot the process-wide diagnostic gate when the session is built so
     /// all contexts in one session follow the same cache policy.
     source_cache_disabled: bool,
+}
+
+/// Frontend policy for one shared prover session.
+pub struct ProverSessionOptions {
+    pub maude_pool: Option<std::sync::Arc<tamarin_term::maude_proc::MaudePool>>,
+    pub cli_heuristic: CliHeuristic,
+    pub cut: crate::constraint::solver::context::CutStrategy,
+    pub ndc_cache: Option<IntrRuleCache>,
+    pub parameters: crate::constraint::solver::sources::IntegerParameters,
+    pub sys_retention: crate::constraint::solver::search::SysRetention,
+    /// Primary theory closes trace source-saturation progress; auxiliary
+    /// deduction and derivation checks use `ProofContextOptions::default()`.
+    pub show_saturation_steps: bool,
+}
+
+impl Default for ProverSessionOptions {
+    fn default() -> Self {
+        Self {
+            maude_pool: None,
+            cli_heuristic: CliHeuristic::default(),
+            cut: crate::constraint::solver::context::CutStrategy::Dfs,
+            ndc_cache: None,
+            parameters: crate::constraint::solver::sources::IntegerParameters::default(),
+            sys_retention: crate::constraint::solver::search::SysRetention::DropAll,
+            show_saturation_steps: true,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -802,31 +829,28 @@ pub(crate) fn gather_reusable_lemmas(
 fn gather_typing_assumptions(
     theory: &crate::theory::Theory,
     guarded_lemmas: &[Result<std::sync::Arc<Guarded>, ProveError>],
-    kind: SourceKind,
 ) -> Result<Vec<std::sync::Arc<Guarded>>, ProveError> {
     let mut typing_assumptions = Vec::new();
-    if kind >= SourceKind::RefinedSources {
-        for (prior, guarded) in theory.lemmas().zip(guarded_lemmas) {
-            if !prior
-                .attributes
-                .iter()
-                .any(|a| matches!(a, crate::theory::LemmaAttr::Sources))
-            {
-                continue;
-            }
-            if !matches!(
-                prior.trace_quantifier,
-                crate::theory::TraceQuantifier::AllTraces
-            ) {
-                continue;
-            }
-            typing_assumptions.push(
-                guarded
-                    .as_ref()
-                    .map(std::sync::Arc::clone)
-                    .map_err(Clone::clone)?,
-            );
+    for (prior, guarded) in theory.lemmas().zip(guarded_lemmas) {
+        if !prior
+            .attributes
+            .iter()
+            .any(|a| matches!(a, crate::theory::LemmaAttr::Sources))
+        {
+            continue;
         }
+        if !matches!(
+            prior.trace_quantifier,
+            crate::theory::TraceQuantifier::AllTraces
+        ) {
+            continue;
+        }
+        typing_assumptions.push(
+            guarded
+                .as_ref()
+                .map(std::sync::Arc::clone)
+                .map_err(Clone::clone)?,
+        );
     }
     Ok(typing_assumptions)
 }
@@ -1066,36 +1090,20 @@ impl ProverSession {
     /// context so the session reuses the tagged+permuted rules instead of
     /// re-running the check.  Taken as a borrowed handle: the caller keeps
     /// the one cache and the template context shares its allocation.
-    pub fn build_with_heuristic(
+    pub fn build(
         theory: std::sync::Arc<crate::theory::Theory>,
         maude: tamarin_term::maude_proc::MaudeHandle,
-        pool: Option<std::sync::Arc<tamarin_term::maude_proc::MaudePool>>,
-        cli_heuristic: CliHeuristic,
-        cut: crate::constraint::solver::context::CutStrategy,
-        ndc_cache: Option<&IntrRuleCache>,
+        options: ProverSessionOptions,
     ) -> Result<Self, ProveError> {
-        Self::build_with_heuristic_and_parameters(
-            theory,
-            maude,
-            pool,
+        let ProverSessionOptions {
+            maude_pool,
             cli_heuristic,
             cut,
             ndc_cache,
-            crate::constraint::solver::sources::IntegerParameters::default(),
-        )
-    }
-
-    /// Build a session with explicit source-solver limits. Keeping these on
-    /// the shared context lets independent sessions coexist in one process.
-    pub fn build_with_heuristic_and_parameters(
-        theory: std::sync::Arc<crate::theory::Theory>,
-        maude: tamarin_term::maude_proc::MaudeHandle,
-        pool: Option<std::sync::Arc<tamarin_term::maude_proc::MaudePool>>,
-        cli_heuristic: CliHeuristic,
-        cut: crate::constraint::solver::context::CutStrategy,
-        ndc_cache: Option<&IntrRuleCache>,
-        parameters: crate::constraint::solver::sources::IntegerParameters,
-    ) -> Result<Self, ProveError> {
+            parameters,
+            sys_retention,
+            show_saturation_steps,
+        } = options;
         validate_cli_heuristic(&cli_heuristic, &theory.tactic)
             .map_err(ProveError::InvalidHeuristic)?;
         let resolved_cli = resolve_cli_heuristic(&cli_heuristic, &theory.in_file, &theory.tactic);
@@ -1126,11 +1134,8 @@ impl ProverSession {
         for guarded in &guarded_lemmas {
             guarded_lemmas_may_fail |= guarded.is_err();
         }
-        let source_assumptions = std::sync::Arc::new(gather_typing_assumptions(
-            &theory,
-            &guarded_lemmas,
-            SourceKind::RefinedSources,
-        ));
+        let source_assumptions =
+            std::sync::Arc::new(gather_typing_assumptions(&theory, &guarded_lemmas));
         // HS `mkSystem` maps `formulaToGuarded_ = either (error . render) id`
         // (CloseRule.hs:167-188, see line 174, Guarded.hs:466-467) over restriction formulas — it
         // ABORTS on a non-guardable restriction rather than silently dropping
@@ -1162,14 +1167,18 @@ impl ProverSession {
         // base and template vars are re-freshened from `avoid sys` on
         // instantiation.
         let setup_counter_before = maude.fresh_counter_peek();
-        let template_ctx = ProofContext::new_with_restrictions_pool_forced_and_parameters(
+        let template_ctx = ProofContext::with_options(
             maude.clone(),
-            pool,
             rules,
-            restrictions,
-            &forced_injective_facts,
-            ndc_cache.cloned(),
-            parameters,
+            crate::constraint::solver::context::ProofContextOptions {
+                maude_pool,
+                restrictions,
+                forced_injective_facts,
+                intruder_rules: ndc_cache,
+                parameters,
+                sys_retention,
+                show_saturation_steps,
+            },
         );
         maude.reset_counter_to(setup_counter_before);
         Ok(ProverSession {
@@ -1326,7 +1335,7 @@ fn restore_sources(ctx: &ProofContext, cached: &CachedSources) {
 }
 
 /// Prove a single lemma using a pre-built `ProverSession`.  Skips the
-/// expensive theory-level setup (which `ProverSession::build_with_heuristic`
+/// expensive theory-level setup (which `ProverSession::build`
 /// did) and runs only the per-lemma work: select the cached guarded lemma and
 /// reuse formulas, `formula_to_system`, fresh ProofContext derivation plus
 /// per-lemma-field setup, `ensure_saturated` (typing-asm refinement),
@@ -1533,13 +1542,13 @@ pub fn prove_lemma(
     // prover session.
     guarded_or_error(&lemma.formula)?;
 
-    let session = ProverSession::build_with_heuristic(
+    let session = ProverSession::build(
         theory,
         maude,
-        None,
-        CliHeuristic::default(),
-        crate::constraint::solver::context::CutStrategy::Dfs,
-        None,
+        ProverSessionOptions {
+            show_saturation_steps: true,
+            ..Default::default()
+        },
     )?;
     prove_lemma_in_session(&session, lemma_name, proof_bound)
 }

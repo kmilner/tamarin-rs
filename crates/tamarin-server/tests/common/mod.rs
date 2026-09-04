@@ -140,18 +140,14 @@ pub async fn start_server_with_theory_and(
         // Environment.hs:37-38, and an absent `--with-json`).
         dot_path: "dot".to_string(),
         json_path: None,
+        theory_load: Default::default(),
     };
     mutate(&mut cfg);
 
     // Load theory before starting server.
     let store = TheoryStore::default();
-    let entry = tamarin_server::theory_io::load_from_path(
-        &theory_path,
-        &maude_path,
-        cfg.derivcheck_timeout,
-        cfg.solver_parameters,
-    )
-    .expect("fixture should parse + elaborate");
+    let entry = tamarin_server::theory_io::load_from_path(&theory_path, &cfg)
+        .expect("fixture should parse + elaborate");
     let _idx = store.insert(entry);
 
     let state = Arc::new(AppState { cfg, store });

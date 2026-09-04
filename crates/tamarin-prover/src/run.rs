@@ -604,13 +604,13 @@ fn run_interactive(args: &Args) -> Result<i32, RunError> {
     // (Interactive.hs:135); `addNdcOption` (TheoryLoader.hs:821-826) then writes
     // `ndcCheck` = `not (--no-ndc)` (TheoryLoader.hs:365-366) into each loaded
     // theory's `_deductionChainCheck`.  Set before the eager load below.
-    tamarin_server::theory_io::set_ndc_check(!args.no_ndc);
+    cfg.theory_load.ndc_check = !args.no_ndc;
     // `--prove` / `--lemma` — `addLemmaToProve` (TheoryLoader.hs:835-838) is
     // the `addNdcOption` sibling in that same `addParamsOptions`, and
     // `theoryLoadFlags` (TheoryLoader.hs:94-107) is part of this mode's flag
     // set (Interactive.hs:70), so the selection reaches every web load's
     // `_lemmasToProve`.
-    tamarin_server::theory_io::set_lemmas_to_prove(args.lemma_names.clone());
+    cfg.theory_load.lemmas_to_prove = args.lemma_names.clone();
     // `-D/--defines` + `--quit-on-warning` — the rest of `toParserFlags
     // thyOpts` (TheoryLoader.hs:285-291) in that same captured closure, so
     // every web load (startup, upload, reload) evaluates `#ifdef` blocks
@@ -622,7 +622,7 @@ fn run_interactive(args: &Args) -> Result<i32, RunError> {
     if args.quit_on_warning {
         parser_flags.push("quit-on-warning".to_string());
     }
-    tamarin_server::theory_io::set_parser_flags(parser_flags);
+    cfg.theory_load.parser_flags = parser_flags;
 
     // Positional args are theory files (Haskell uses a working
     // directory, but we accept either: a single dir arg, or one-or-more
@@ -1350,14 +1350,22 @@ impl TheoryPipeline<'_> {
         maude: MaudeHandle,
         cli_heuristic: tamarin_theory::prove::CliHeuristic,
     ) -> Result<tamarin_theory::prove::ProverSession, tamarin_theory::prove::ProveError> {
-        tamarin_theory::prove::ProverSession::build_with_heuristic_and_parameters(
+        tamarin_theory::prove::ProverSession::build(
             self.elaborated.clone(),
             maude,
-            self.file_maude_pool.clone(),
-            cli_heuristic,
-            self.cut,
-            self.ndc_cache.as_ref(),
-            self.opts.parameters,
+            tamarin_theory::prove::ProverSessionOptions {
+                maude_pool: self.file_maude_pool.clone(),
+                cli_heuristic,
+                cut: self.cut,
+                ndc_cache: self.ndc_cache.clone(),
+                parameters: self.opts.parameters,
+                sys_retention: if wants_trace_output(self.args) {
+                    tamarin_theory::constraint::solver::search::SysRetention::KeepSolved
+                } else {
+                    tamarin_theory::constraint::solver::search::SysRetention::DropAll
+                },
+                show_saturation_steps: true,
+            },
         )
     }
 
@@ -1669,9 +1677,8 @@ impl TheoryPipeline<'_> {
         // CloseRule.hs:246,251) and the message-derivation check
         // (`closeTheoryWithMaude sig t sources False`,
         // MessageDerivationChecks.hs:42). Both are what this method runs, so
-        // the trace is silent across it; `close_translated_theory` re-arms it
+        // the trace is silent across it; the close contexts below enable it
         // for the close proper.
-        tamarin_theory::constraint::solver::sources::set_show_saturation_steps(false);
 
         // Once-per-theory NDC pass (HS `checkCloseIntrRule` inside
         // `checkTranslatedTheory`, TheoryLoader.hs — BEFORE the
@@ -1747,7 +1754,6 @@ impl TheoryPipeline<'_> {
         // `--precompute-only` forcing that runs after the per-file loop —
         // traces.
         //
-        tamarin_theory::constraint::solver::sources::set_show_saturation_steps(true);
 
         // Adopt the NDC verdicts into the printed signature
         // (`joinNDCinSigWMaude`): `check_translated_theory` stashed the
@@ -2097,19 +2103,6 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
     // so the effective strategy is resolved inside the file loop by
     // `effective_cut` once the theory is parsed.
 
-    // `--output-json` / `--output-dot`: HS `outputTraces` (Batch.hs:249-317)
-    // serialises the constraint system of every `Finished Solved` proof node.
-    // The solver drops each node's `System` after expansion unless told
-    // otherwise, so the retention policy has to be raised for the whole
-    // process BEFORE the first lemma is proved.  `KeepSolved` (not
-    // `KeepAll`) is scoped to solved nodes, so a run without these flags
-    // pays nothing and a run with them retains only the systems
-    // `outputTraces` actually reads.
-    if wants_trace_output(args) {
-        tamarin_theory::constraint::solver::search::set_sys_retention(
-            tamarin_theory::constraint::solver::search::SysRetention::KeepSolved,
-        );
-    }
     if args.in_files.is_empty() {
         return Err(RunError::Regular("no input files given".to_string()));
     }
@@ -2347,8 +2340,8 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         //
         // HS applies it inside `loadTheory` (TheoryLoader.hs:449-452), which both
         // modes call; the interactive path reaches it through
-        // `tamarin_server::theory_io::set_ndc_check` (wired in
-        // `run_interactive`), which writes the same field on every web load.
+        // the server load configuration, which writes the same field on every
+        // web load.
         if !opts.ndc_check {
             elaborated.options.deduction_chain_check = false;
         }
@@ -2357,7 +2350,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         // become the theory's own
         // `_lemmasToProve`, which `checkIfLemmasInTheory` reads back
         // (Wellformedness.hs:1168).  The interactive path writes the same
-        // field through `tamarin_server::theory_io::set_lemmas_to_prove`.
+        // field through the server load configuration.
         elaborated.options.lemmas_to_prove = opts.lemma_names.clone();
         let maude_sig = elaborated.signature.clone();
 

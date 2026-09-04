@@ -1254,6 +1254,16 @@ mod tests {
     use std::sync::Arc;
     use tamarin_test_support::require_maude_path;
 
+    fn test_config(maude: &str) -> crate::ServerConfig {
+        let mut cfg = crate::ServerConfig::new(
+            "127.0.0.1:0".parse().unwrap(),
+            std::path::PathBuf::new(),
+            maude.to_string(),
+        );
+        cfg.derivcheck_timeout = 0;
+        cfg
+    }
+
     #[test]
     fn first_proof_index_render_shows_checked_stored_proof() {
         let Some(maude) = require_maude_path() else {
@@ -1271,9 +1281,7 @@ end
         let mut entry = crate::theory_io::load_from_source(
             src,
             crate::state::TheoryOrigin::Upload("stored.spthy".into()),
-            &maude,
-            0,
-            Default::default(),
+            &test_config(&maude),
         )
         .expect("load");
         entry.idx = 1;
@@ -1281,10 +1289,8 @@ end
             crate::handlers::proof_tree::ProofState::new(
                 &entry.typed_theory,
                 (*entry.prover_maude_sig).clone(),
-                &maude,
-                None,
                 entry.ndc_cache.as_ref(),
-                tamarin_theory::constraint::solver::sources::IntegerParameters::default(),
+                &test_config(&maude),
             )
             .expect("proof state"),
         );
