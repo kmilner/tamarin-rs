@@ -422,6 +422,29 @@ web_python_isolated "$HARNESS_TMP/fresh-pycache" \
             )
             self.assertEqual(run.stdout.strip(), "2")
 
+    def test_crawl_lemma_metadata_is_required_and_uses_load_flags(self):
+        run_shell(
+            r'''
+set -e
+. scripts/web_cache.sh
+parser_input_manifest() {
+    test "$1" = theory.spthy
+    test "$2" = '-D=ACTIVE'
+    printf 'M\thas_lemmas\t%s\n' "$present"
+}
+present=0
+test "$(web_crawl_args_for_theory theory.spthy '-D=ACTIVE')" = --allow-no-lemmas
+present=1
+test -z "$(web_crawl_args_for_theory theory.spthy '-D=ACTIVE')"
+present=invalid
+if web_crawl_args_for_theory theory.spthy '-D=ACTIVE'; then exit 1; fi
+parser_input_manifest() { return 1; }
+if web_crawl_args_for_theory theory.spthy; then exit 1; fi
+parser_input_manifest() { printf 'S\troot\troot\n'; }
+if web_crawl_args_for_theory theory.spthy; then exit 1; fi
+'''
+        )
+
     def test_diagnostics_publish_only_from_staging(self):
         run_shell(
             r'''

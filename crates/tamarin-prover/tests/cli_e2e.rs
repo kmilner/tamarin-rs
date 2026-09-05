@@ -1213,3 +1213,51 @@ fn cli_ref_cases_files_and_manifest_are_in_sync() {
         );
     }
 }
+
+#[test]
+fn input_manifest_lemma_metadata_uses_preprocessed_theory() {
+    let dir = std::env::temp_dir().join(format!("tamarin_lemma_metadata_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let theory = dir.join("root.spthy");
+    std::fs::write(dir.join("fragment.inc"), "lemma included: \"T\" by sorry\n").unwrap();
+    for (source, flags, expected) in [
+        (
+            "theory T begin\n#include \"fragment.inc\"\nend",
+            vec![],
+            "1",
+        ),
+        (
+            "theory T begin lemma inline: \"T\" by sorry end",
+            vec![],
+            "1",
+        ),
+        (
+            "theory T begin\n/*\nlemma commented: \"T\"\n*/\nend",
+            vec![],
+            "0",
+        ),
+        (
+            "theory T begin\n#ifdef ACTIVE\nlemma active: \"T\"\n#endif\nend",
+            vec![],
+            "0",
+        ),
+        (
+            "theory T begin\n#ifdef ACTIVE\nlemma active: \"T\"\n#endif\nend",
+            vec!["-D=ACTIVE"],
+            "1",
+        ),
+    ] {
+        std::fs::write(&theory, source).unwrap();
+        let mut args = flags;
+        args.push("input-manifest");
+        let (code, stdout, stderr) = run_binary(&args, &[&theory]);
+        assert_eq!(code, 0, "{stderr}");
+        assert!(
+            stdout
+                .lines()
+                .any(|line| line == format!("M\thas_lemmas\t{expected}")),
+            "{stdout}"
+        );
+    }
+    std::fs::remove_dir_all(&dir).unwrap();
+}

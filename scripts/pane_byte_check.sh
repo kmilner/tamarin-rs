@@ -98,6 +98,11 @@ one_file() {
         printf '%s\t-\tSKIP_INPUT_MANIFEST\t-\n' "$rel"
         return 0
     fi
+    local CRAWL_EXTRA_ARGS
+    if ! CRAWL_EXTRA_ARGS=$(web_crawl_args_for_theory "$f" "$theory_flags"); then
+        printf '%s\t-\tSKIP_INPUT_MANIFEST\t-\n' "$rel"
+        return 0
+    fi
     local hs_manifest="$CACHE/$key.hs.json"
     local wd; wd=$(web_make_workdir) || {
         printf '%s\t-\tSKIP_WORKDIR\t-\n' "$rel"; return 0
@@ -126,8 +131,6 @@ one_file() {
         printf '%s\t-\tSKIP_CACHE_READ\t-\n' "$rel"; return 0
     fi
     web_cache_unlock
-    local CRAWL_EXTRA_ARGS
-    CRAWL_EXTRA_ARGS=$(web_crawl_args_for_theory "$f")
     mkdir -p "$wd/thy"
     if ! web_stage_inputs "$f" "$wd/thy" "$theory_flags" "$wd"; then
         rm -rf "$wd"; printf '%s\t-\tSKIP_INPUT_STAGE\t-\n' "$rel"; return 0

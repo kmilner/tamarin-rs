@@ -230,12 +230,17 @@ web_make_workdir() {
     mktemp -d "$WEB_WORK_ROOT/run.XXXXXX"
 }
 
-# A no-lemma theory is a valid crawl, while an unexpectedly empty discovery is
-# a failed producer. Keep the one decision shared by both web-cache consumers
-# and in the fingerprinted producer protocol.
+# Read parser metadata with the same flags used to load the theory. Missing
+# metadata (including an older prover) must not waive empty lemma discovery.
 web_crawl_args_for_theory() {
-    grep -qE '^[[:space:]]*(lemma|equivLemma|diffLemma)([[:space:]]|\[|:)' "$1" \
-        || printf '%s\n' --allow-no-lemmas
+    local manifest has_lemmas
+    manifest=$(parser_input_manifest "$1" "${2:-}") || return 1
+    has_lemmas=$(awk -F'\t' '$1 == "M" && $2 == "has_lemmas" {print $3}' <<< "$manifest")
+    case "$has_lemmas" in
+        0) printf '%s\n' --allow-no-lemmas ;;
+        1) ;;
+        *) echo "web crawl: missing or invalid lemma metadata for $1" >&2; return 1 ;;
+    esac
 }
 
 # Byte-affecting invocations are kept separate from lifecycle orchestration so

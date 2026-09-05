@@ -271,6 +271,18 @@ fn run_input_manifest(args: &Args) -> Result<i32, RunError> {
         tamarin_parser::parse_theory_with_manifest(&source, &flags, root.clone(), args.diff)
             .map_err(|error| RunError::Regular(error.to_string()))?;
 
+    let has_lemmas = theory.items.iter().any(|item| {
+        matches!(
+            item,
+            TheoryItem::Lemma(_)
+                | TheoryItem::DiffLemma(_)
+                | TheoryItem::AccLemma(_)
+                | TheoryItem::EquivLemma(_, _)
+                | TheoryItem::DiffEquivLemma(_)
+        )
+    });
+    println!("M\thas_lemmas\t{}", u8::from(has_lemmas));
+
     let mut seen_sources = BTreeSet::new();
     for alias in &aliases {
         let row = format!(

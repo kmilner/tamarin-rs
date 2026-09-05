@@ -185,11 +185,6 @@ fi
 one_file() {
     local rel="$1" f="$CORPUS_ROOT/$1"
     [ -f "$f" ] || { printf '%s\t-\tSKIP_NO_FILE\t-\t-\t-\n' "$rel"; return 0; }
-    # A theory with no lemma declaration legitimately discovers 0 lemmas —
-    # allow it; otherwise 0 discovered lemmas is a transient failure and
-    # web_crawl.py exits 3 (→ SKIP_*_FAIL below, manifest never cached).
-    local CRAWL_EXTRA_ARGS
-    CRAWL_EXTRA_ARGS=$(web_crawl_args_for_theory "$f")
     local theory_flags diagnostics
     if ! theory_flags=$(web_flags_for "$rel"); then
         printf '%s\t-\tSKIP_UNSUPPORTED_FLAGS\t-\t-\t-\n' "$rel"
@@ -197,6 +192,11 @@ one_file() {
     fi
     local key
     if ! key=$(web_cache_key "$rel" "$f" "$theory_flags"); then
+        printf '%s\t-\tSKIP_INPUT_MANIFEST\t-\t-\t-\n' "$rel"
+        return 0
+    fi
+    local CRAWL_EXTRA_ARGS
+    if ! CRAWL_EXTRA_ARGS=$(web_crawl_args_for_theory "$f" "$theory_flags"); then
         printf '%s\t-\tSKIP_INPUT_MANIFEST\t-\t-\t-\n' "$rel"
         return 0
     fi

@@ -500,7 +500,9 @@ ordinary syntax errors use the conservative identity so intentionally
 malformed parity fixtures can still compare the two provers' diagnostics.
 Manifest path fields are byte-preserving hex rather than raw TSV text, so a
 valid Unix filename containing tabs, newlines, or non-UTF-8 bytes cannot alias
-another dependency or corrupt web staging.
+another dependency or corrupt web staging. The parser also reports whether the
+active theory declares lemmas; web crawls use that metadata to permit empty
+lemma discovery only for theories without lemma declarations.
 Run `./setup.sh testing` (or otherwise build `target/release/tamarin-rs`)
 before the shell/Python harness checks; `INPUT_MANIFEST_BIN` may select an
 equivalent development binary while working on the manifest itself.
