@@ -652,10 +652,21 @@ impl<'a> Lexer<'a> {
     /// Single-quoted string literal — not allowing single-quote or newline inside.
     pub fn single_quoted(&mut self) -> Option<String> {
         self.skip_ws();
-        let save = self.pos;
+        let save = self.clone();
+        match self.single_quoted_checked() {
+            Ok(text) => Some(text),
+            Err(_) => {
+                *self = save;
+                None
+            }
+        }
+    }
+
+    /// Preserve the real failure position for callers that report diagnostics.
+    pub(crate) fn single_quoted_checked(&mut self) -> Result<String, Pos> {
+        self.skip_ws();
         if !self.eat('\'') {
-            self.pos = save;
-            return None;
+            return Err(self.pos);
         }
         // Haskell `singleQuoted = between (symbol "'") (symbol "'")` (Token.hs:296-297):
         // the opening `symbol "'"` is `lexeme (string "'")`, so it consumes whitespace
@@ -677,15 +688,13 @@ impl<'a> Lexer<'a> {
         // (Token.hs:452-453): `many1` requires at least one body char, so `''`
         // must fail.
         if s.is_empty() {
-            self.pos = save;
-            return None;
+            return Err(self.pos);
         }
         if !self.eat('\'') {
-            self.pos = save;
-            return None;
+            return Err(self.pos);
         }
         self.skip_ws();
-        Some(s)
+        Ok(s)
     }
 
     /// Formal comment: `<header>{* body *}` (header is one or more letters).

@@ -4455,15 +4455,21 @@ impl<'a> Parser<'a> {
         Ok(code)
     }
 
+    fn single_quoted(&mut self, message: &str) -> Result<String, ParseError> {
+        let result = self
+            .lx
+            .single_quoted_checked()
+            .map_err(|position| ParseError::at(position, vec![Message::Message(message.into())]));
+        // Publish consumed comments before enclosing alternatives rewind.
+        self.lx.finish(result)
+    }
+
     fn string_literal_or_squoted(&mut self) -> Result<String, ParseError> {
         self.skip_ws();
         if let Some(s) = self.lx.string_literal() {
             return Ok(s);
         }
-        if let Some(s) = self.lx.single_quoted() {
-            return Ok(s);
-        }
-        Err(self.err("expected quoted string"))
+        self.single_quoted("expected quoted string")
     }
 
     /// Read an identifier or a balanced parenthesised token (for `process=...`).
@@ -6346,10 +6352,7 @@ impl<'a> Parser<'a> {
             probe.bump();
             if c == '~' && probe.peek() == Some('\'') {
                 self.lx.bump();
-                let s = self
-                    .lx
-                    .single_quoted()
-                    .ok_or_else(|| self.err("bad fresh literal"))?;
+                let s = self.single_quoted("bad fresh literal")?;
                 return Ok(Term::FreshLit(s));
             }
             // Otherwise: variable.
@@ -6374,10 +6377,7 @@ impl<'a> Parser<'a> {
                         ));
                     }
                     self.lx.bump();
-                    let s = self
-                        .lx
-                        .single_quoted()
-                        .ok_or_else(|| self.err("bad nat literal"))?;
+                    let s = self.single_quoted("bad nat literal")?;
                     return Ok(Term::NatLit(s));
                 }
                 Some(c) if c.is_alphanumeric() => {
@@ -6398,10 +6398,7 @@ impl<'a> Parser<'a> {
         }
         // Literal `'foo'` is a public name term.
         if self.lx.peek() == Some('\'') {
-            let s = self
-                .lx
-                .single_quoted()
-                .ok_or_else(|| self.err("bad public literal"))?;
+            let s = self.single_quoted("bad public literal")?;
             return Ok(Term::PubLit(s));
         }
         // diff(a, b) — HS `diffOp = symbol "diff" *> parens ...`

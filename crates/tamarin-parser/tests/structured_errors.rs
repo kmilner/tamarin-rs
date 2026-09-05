@@ -1052,3 +1052,31 @@ fn relation_errors_preserve_application_causes() {
         .expect("a fact's arity is independent of a same-named function");
     }
 }
+
+#[test]
+fn literal_comment_failures_keep_the_consumed_position() {
+    for (prefix, context) in [
+        ("", "rule R: [Out("),
+        ("", "lemma L: \"T\" by solve(Out("),
+        ("", "lemma L: \"Out("),
+        ("", "rule R: [Out(~"),
+        ("builtins: natural-numbers ", "rule R: [Out(%"),
+    ] {
+        let source = format!("theory T begin {prefix}{context}'/* unfinished");
+        let error = parse_theory(&source, &[]).unwrap_err();
+        assert!(
+            matches!(error.kind(), ParseErrorKind::UnclosedBlockComment { .. }),
+            "{source}: {error:?}"
+        );
+        assert_eq!(error.span().start, source.len());
+        let labels = error.diagnostic_labels_with_source(&source);
+        assert_eq!(&source[labels[1].span.clone()], "/*");
+    }
+    let source = "theory T begin lemma L: \"T\" by solve(Out('bad\n)) /* later";
+    let error = parse_theory(source, &[]).unwrap_err();
+    assert!(
+        !matches!(error.kind(), ParseErrorKind::UnclosedBlockComment { .. }),
+        "{error:?}"
+    );
+    assert_eq!(error.span().start, source.find('\n').unwrap());
+}
