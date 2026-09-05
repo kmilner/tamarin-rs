@@ -948,3 +948,107 @@ fn included_errors_take_precedence_over_root_comments_regardless_of_padding() {
     }
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn grouped_uppercase_function_terms_parse_as_relations() {
+    use tamarin_parser::ast::TheoryItem;
+    for operator in ["=", "<<", "⊏"] {
+        for name in ["f", "G"] {
+            let body = format!("{name}(x) {operator} x");
+            let grouped = format!("(({name}(x))) {operator} x");
+            let parse = |formula: &str| {
+                let source =
+                    format!("theory T begin functions: {name}/1 lemma L: \"{formula}\" end");
+                let theory = parse_theory(&source, &[]).unwrap();
+                let TheoryItem::Lemma(lemma) = &theory.items[1] else {
+                    panic!("expected lemma");
+                };
+                lemma.formula.clone()
+            };
+            assert_eq!(parse(&grouped), parse(&body), "{grouped}");
+        }
+    }
+    for formula in ["(G(x)) ==> G(x)", "(G(x)) <=> G(x)"] {
+        parse_theory(&format!("theory T begin lemma L: \"{formula}\" end"), &[])
+            .expect("logical operators must preserve the grouped formula");
+    }
+}
+
+#[test]
+fn malformed_goal_heads_preserve_the_furthest_failure() {
+    for (goal, message) in [
+        ("G(x) ▶x #i", "expected a subscript premise index"),
+        ("(#i, x) ~~> (#j, 0)", "expected a node index"),
+    ] {
+        let source = format!("theory T begin lemma L: \"T\" by solve({goal}) end");
+        let error = parse_theory(&source, &[]).expect_err("invalid goal head");
+        assert!(
+            error.diagnostic_message().contains(message),
+            "{goal}: {error:?}"
+        );
+        assert_eq!(error.span().start, source.rfind('x').unwrap());
+    }
+    for goal in ["G(x) ▶₀ #i", "(#i, 0) ~~> (#j, 0)", "G(x) @ #i", "x = y"] {
+        parse_theory(
+            &format!("theory T begin lemma L: \"T\" by solve({goal}) end"),
+            &[],
+        )
+        .expect("valid alternative must still succeed");
+    }
+}
+
+#[test]
+fn compound_function_operands_use_the_complete_term_grammar() {
+    use tamarin_parser::ast::TheoryItem;
+    for (signature, operator) in [
+        ("builtins: diffie-hellman", "^"),
+        ("builtins: diffie-hellman", "*"),
+        ("builtins: multiset", "++"),
+        ("builtins: xor", "⊕"),
+        ("functions: X/2 [AC]", "X"),
+    ] {
+        for name in ["g", "G"] {
+            let parse = |operand: &str| {
+                let source = format!("theory T begin {signature} functions: {name}/1 lemma L: \"{operand} {operator} y = z\" end");
+                let theory = parse_theory(&source, &[])
+                    .unwrap_or_else(|error| panic!("{source}: {error:?}"));
+                let TheoryItem::Lemma(lemma) = theory.items.last().unwrap() else {
+                    panic!("expected lemma");
+                };
+                lemma.formula.clone()
+            };
+            let bare = format!("{name}(x)");
+            for grouped in [format!("({bare})"), format!("(({bare}))")] {
+                assert_eq!(parse(&grouped), parse(&bare));
+            }
+        }
+    }
+}
+
+#[test]
+fn relation_errors_preserve_application_causes() {
+    for expression in ["g(x)", "(g(x))", "g{x}x", "G(x)"] {
+        let source = format!("theory T begin lemma L: \"{expression} = x\" end");
+        let error = parse_theory(&source, &[]).unwrap_err();
+        assert!(
+            matches!(error.kind(), ParseErrorKind::UndeclaredFunction { .. }),
+            "{error:?}"
+        );
+    }
+    for expression in ["G(x)", "(G(x))"] {
+        let source = format!("theory T begin functions: G/2 lemma L: \"{expression} = x\" end");
+        let error = parse_theory(&source, &[]).unwrap_err();
+        assert!(
+            matches!(error.kind(), ParseErrorKind::WrongFunctionArity { .. }),
+            "{error:?}"
+        );
+        assert_eq!(error.diagnostic_labels_with_source(&source).len(), 2);
+    }
+    for formula in ["G(x)", "(G(x))", "G(x) @ #i", "G(x) ==> G(x)"] {
+        parse_theory(
+            &format!("theory T begin functions: G/2 lemma L: \"{formula}\" end"),
+            &[],
+        )
+        .expect("a fact's arity is independent of a same-named function");
+    }
+}

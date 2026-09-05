@@ -1086,14 +1086,17 @@ fn fatom_fact_lhs_of_relop_is_term_atom() {
 }
 
 #[test]
-fn fatom_keeps_a_valid_fact_when_term_reinterpretation_fails() {
+fn relational_application_errors_outweigh_predicate_prefixes() {
     let source = "theory T begin\nlemma L: \"Foo(x) = y\"\nend\n";
-    let error = parse_theory(source, &[]).expect_err("a predicate cannot precede equality");
+    let error = parse_theory(source, &[]).expect_err("a relation requires a declared function");
     assert!(
-        !matches!(error.kind(), ParseErrorKind::UndeclaredFunction { .. }),
-        "the successful Foo(x) fact parse must outrank term reinterpretation: {error:?}"
+        matches!(
+            error.kind(),
+            ParseErrorKind::UndeclaredFunction { name } if name == "Foo"
+        ),
+        "{error:?}"
     );
-    assert!(source[error.span().start..].starts_with('='));
+    assert_eq!(&source[error.span()], "Foo");
 }
 
 // HS `typep` (Token.hs:471-473) maps only the literal `Any` to the default

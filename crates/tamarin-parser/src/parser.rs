@@ -5709,27 +5709,29 @@ impl<'a> Parser<'a> {
             let f = self.iff()?;
             return Ok(Formula::Exists(vs, Box::new(f)));
         }
-        // Parenthesised formula — backtrack to term-relational on failure,
-        // since e.g. `(a+z) = b` should parse as a relational equality atom
-        // whose LHS happens to be a parenthesised term.
-        if self.lx.peek() == Some('(') {
-            let save_p = self.save();
-            self.lx.bump();
-            self.skip_ws();
-            let result = self.iff().and_then(|formula| {
+        // Try a complete atom before grouping a formula. A grouped term can
+        // continue through any of the term grammar's operators before reaching
+        // its relation, so inspecting just the next operator is insufficient.
+        let start = self.save();
+        let atom_error = match self.formula_atom() {
+            Ok(formula) => return Ok(formula),
+            Err(error) => error,
+        };
+        self.restore(start);
+        if self.try_punct("(") {
+            let grouped = self.iff().and_then(|formula| {
                 self.require_punct(")")?;
                 Ok(formula)
             });
-            let error = match result {
-                Ok(formula) => return Ok(formula),
-                Err(error) => error,
+            return match grouped {
+                // A predicate prefix before a relation cannot rescue a
+                // failed application in that relation.
+                Ok(_) if self.peek_atom_relop() => Err(atom_error),
+                Ok(formula) => Ok(formula),
+                Err(error) => Err(Self::merge_alt_errors(atom_error, error)),
             };
-            self.restore(save_p);
-            return self
-                .formula_atom()
-                .map_err(|alternate| Self::merge_alt_errors(error, alternate));
         }
-        self.formula_atom()
+        Err(atom_error)
     }
 
     fn formula_atom(&mut self) -> Result<Formula, ParseError> {
@@ -5740,49 +5742,36 @@ impl<'a> Parser<'a> {
             self.require_punct(")")?;
             return Ok(Formula::Atom(Atom::Last(Self::node_sorted(t))));
         }
-        // Try fact@t (action atom)
-        let save_f = self.save();
-        let mut fact_candidate = None;
-        let fact_error = match self.fact() {
-            Ok(f) => {
-                if self.try_punct("@") {
-                    let t = self.term(false)?;
-                    return Ok(Formula::Atom(Atom::Action(f, Self::node_sorted(t))));
-                }
-                // HS `blatom` (Theory/Text/Parser/Formula.hs:45-57) tries the
-                // term-relational atoms
-                // (Subterm/Less/smallerp/EqE, alts 3-6, all `try`-guarded) BEFORE
-                // the bare-fact `Pred` alternative (alt 7). So a name like `Foo(x)`
-                // that is also a function symbol must be re-parsed as a term when a
-                // relational operator follows. A genuine predicate atom is never
-                // followed by such an operator, so this only diverts on what HS
-                // already treats as a term relation.
-                if !self.peek_atom_relop() {
-                    // Predicate atom (no @, no following relational operator)
-                    return Ok(Formula::Atom(Atom::Pred(f)));
-                }
-                fact_candidate = Some((f, self.save()));
-                None
+        // An action commits after @. A bare fact remains a candidate until
+        // the complete relational-term alternative has been tried.
+        let start = self.save();
+        let fact = match self.fact() {
+            Ok(fact) if self.try_punct("@") => {
+                let node = self.term(false)?;
+                return Ok(Formula::Atom(Atom::Action(fact, Self::node_sorted(node))));
             }
-            Err(error) => Some(error),
+            result => result,
         };
-        self.restore(save_f);
-        // Try term-level atom: t = t / t < t / t << t / t (<) t
-        let lhs = match self.term(false) {
-            Ok(lhs) => lhs,
-            Err(term_error) => {
-                if let Some((fact, fact_end)) = fact_candidate {
-                    self.restore(fact_end);
-                    return Ok(Formula::Atom(Atom::Pred(fact)));
-                }
-                return Err(match fact_error {
-                    Some(fact_error) if fact_error.pos.offset >= term_error.pos.offset => {
-                        fact_error
-                    }
-                    _ => term_error,
-                });
-            }
+        let fact_end = self.save();
+        self.restore(start);
+        let term_error = match self.relational_atom() {
+            Ok(formula) => return Ok(formula),
+            Err(error) => error,
         };
+        self.restore(fact_end);
+        match fact {
+            Ok(fact) if !self.peek_atom_relop() => Ok(Formula::Atom(Atom::Pred(fact))),
+            Ok(_) => Err(term_error),
+            // On ties, an application error is more useful than a rejected
+            // lowercase fact head. Deeper fact errors still retain their cause.
+            Err(fact_error) if fact_error.pos.offset > term_error.pos.offset => Err(fact_error),
+            Err(_) => Err(term_error),
+        }
+    }
+
+    fn relational_atom(&mut self) -> Result<Formula, ParseError> {
+        let start = self.save();
+        let lhs = self.term(false)?;
         let lhs_explicit_sort = self.sort_suffix_consumed;
         if self.try_punct("=") {
             let rhs = self.term(false)?;
@@ -5847,25 +5836,8 @@ impl<'a> Parser<'a> {
                 .ok_or_else(|| self.err("expected node variable after `<`"))?;
             return Ok(Formula::Atom(Atom::Less(lhs, rhs)));
         }
-        // No relational operator follows the term.  HS `blatom`'s remaining
-        // alternatives (Theory/Text/Parser/Formula.hs:45-57): the `Pred` fact
-        // (alt 7 — reachable
-        // here when `peek_atom_relop` diverted a fact whose relop turned out
-        // to belong AFTER it, e.g. `P3(x) = y` with `P3` not a function), then
-        // the UN-try'd node-equality `nodevarTerm <* opEqual` (alt 8), whose
-        // consumed failure aborts the whole formula parse and is the frame
-        // the user sees.
         let after_lhs = self.save();
-        if let Some((fact, fact_end)) = fact_candidate {
-            self.restore(fact_end);
-            return Ok(Formula::Atom(Atom::Pred(fact)));
-        }
-        self.restore(save_f);
-        if let Ok(f) = self.fact() {
-            return Ok(Formula::Atom(Atom::Pred(f)));
-        }
-        self.restore(save_f);
-        Err(self.formula_atom_tail_error(save_f, after_lhs))
+        Err(self.formula_atom_tail_error(start, after_lhs))
     }
 
     /// The error HS's formula-atom alternation reports once every `blatom`
@@ -7100,9 +7072,9 @@ impl<'a> Parser<'a> {
     ///
     /// Each of the first four alternatives wraps only its LEADING operator in
     /// a `try`, so once that operator is read the alternative is committed and
-    /// a failure after it fails the whole goal; [`Parser::attempt`] is that
-    /// `try` and the `?` after each call is that commitment.  `disjSplitGoal`
-    /// backtracks on its own because HS's `plainFormula`
+    /// a failure after it fails the whole goal; [`Parser::goal_after`] preserves
+    /// that commitment while retaining failed heads for error selection.
+    /// `disjSplitGoal` backtracks on its own because HS's `plainFormula`
     /// (Theory/Text/Parser/Formula.hs:112-117) is `try`-wrapped whole, and
     /// `eqSplitGoal` is `try $ do ...`.
     ///
@@ -7111,17 +7083,16 @@ impl<'a> Parser<'a> {
     /// fails on `splitEqs(N)`, and the keyword form does not depend on how
     /// [`Parser::formula`] reads a lower-case predicate-shaped atom.
     fn goal(&mut self) -> Result<GoalSpec, ParseError> {
-        if let Some(g) = self.subterm_goal()? {
-            return Ok(g);
-        }
-        if let Some(g) = self.premise_goal()? {
-            return Ok(g);
-        }
-        if let Some(g) = self.action_goal()? {
-            return Ok(g);
-        }
-        if let Some(g) = self.chain_goal()? {
-            return Ok(g);
+        let mut head_error = None;
+        for parse in [
+            Self::subterm_goal,
+            Self::premise_goal,
+            Self::action_goal,
+            Self::chain_goal,
+        ] {
+            if let Some(goal) = parse(self, &mut head_error)? {
+                return Ok(goal);
+            }
         }
         let save = self.save();
         let error = match self.eq_split_goal() {
@@ -7129,7 +7100,21 @@ impl<'a> Parser<'a> {
             Err(error) => error,
         };
         self.restore(save);
+        let error = match head_error {
+            Some(head_error) => Self::merge_alt_errors(head_error, error),
+            None => error,
+        };
         self.disj_split_goal()
+            .and_then(|goal| {
+                // A formula prefix is not a complete solve goal. Include the
+                // enclosing closer in failure selection so an earlier head's
+                // useful error survives a shorter, partial formula parse.
+                if self.lx.peek_symbol(")") {
+                    Ok(goal)
+                } else {
+                    Err(self.err("expected `)` after the goal"))
+                }
+            })
             .map_err(|alternate| Self::merge_alt_errors(error, alternate))
     }
 
@@ -7149,17 +7134,26 @@ impl<'a> Parser<'a> {
     /// The `try (head <* sep) *> tail` shape of `stSplitGoal`, `premiseGoal`,
     /// `actionGoal` and `chainGoal` (Theory/Text/Parser/Proof.hs:49-68):
     /// `head` reads the goal's first operand AND its separator under one
-    /// `try`, so failing either restores the input and yields `None` for
-    /// [`Self::goal`] to move on to the next alternative, while `tail` reads
+    /// `try`, so failing either restores the input and retains the error for
+    /// [`Self::goal`] to compare if later alternatives fail, while `tail` reads
     /// the rest outside the `try`, where a failure is the whole goal's.
     fn goal_after<H>(
         &mut self,
+        head_error: &mut Option<ParseError>,
         head: impl FnOnce(&mut Self) -> Result<H, ParseError>,
         tail: impl FnOnce(&mut Self, H) -> Result<GoalSpec, ParseError>,
     ) -> Result<Option<GoalSpec>, ParseError> {
-        match self.attempt(head) {
-            Some(h) => tail(self, h).map(Some),
-            None => Ok(None),
+        let save = self.save();
+        match head(self) {
+            Ok(h) => tail(self, h).map(Some),
+            Err(error) => {
+                self.restore(save);
+                *head_error = Some(match head_error.take() {
+                    Some(previous) => Self::merge_alt_errors(previous, error),
+                    None => error,
+                });
+                Ok(None)
+            }
         }
     }
 
@@ -7179,8 +7173,12 @@ impl<'a> Parser<'a> {
     /// HS `stSplitGoal` (Theory/Text/Parser/Proof.hs:63-68): two
     /// `msetterm False (vlit msgvar)` terms around `opSubterm`
     /// (`<<` or `⊏`, Token.hs:574-576), the first of them under the `try`.
-    fn subterm_goal(&mut self) -> Result<Option<GoalSpec>, ParseError> {
+    fn subterm_goal(
+        &mut self,
+        head_error: &mut Option<ParseError>,
+    ) -> Result<Option<GoalSpec>, ParseError> {
         self.goal_after(
+            head_error,
             |p| {
                 let t = p.msetterm(false)?;
                 if !p.try_punct("<<") && !p.try_punct("\u{228F}") {
@@ -7195,8 +7193,12 @@ impl<'a> Parser<'a> {
     /// HS `premiseGoal` (Theory/Text/Parser/Proof.hs:54-57): a `fact llit`
     /// followed by `opRequires` (`▶` and a subscript natural,
     /// Token.hs:618-619), both under the `try`, then a `nodevar`.
-    fn premise_goal(&mut self) -> Result<Option<GoalSpec>, ParseError> {
+    fn premise_goal(
+        &mut self,
+        head_error: &mut Option<ParseError>,
+    ) -> Result<Option<GoalSpec>, ParseError> {
         self.goal_after(
+            head_error,
             |p| {
                 let fa = p.fact()?;
                 p.skip_ws();
@@ -7215,8 +7217,12 @@ impl<'a> Parser<'a> {
     /// HS `actionGoal` (Theory/Text/Parser/Proof.hs:49-52): a `fact llit`
     /// followed by `opAt` (`@`, Token.hs:566-568) under the `try`, then a
     /// `nodevar`.
-    fn action_goal(&mut self) -> Result<Option<GoalSpec>, ParseError> {
+    fn action_goal(
+        &mut self,
+        head_error: &mut Option<ParseError>,
+    ) -> Result<Option<GoalSpec>, ParseError> {
         self.goal_after(
+            head_error,
             |p| {
                 let fa = p.fact()?;
                 if !p.try_punct("@") {
@@ -7232,8 +7238,12 @@ impl<'a> Parser<'a> {
     /// `opChain` (`~~>`, Token.hs:621-623) under the `try`, then a `nodePrem`.
     /// Each endpoint is `parens ((,) <$> nodevar <*> (comma *> natural))`
     /// (Theory/Text/Parser/Proof.hs:28-36).
-    fn chain_goal(&mut self) -> Result<Option<GoalSpec>, ParseError> {
+    fn chain_goal(
+        &mut self,
+        head_error: &mut Option<ParseError>,
+    ) -> Result<Option<GoalSpec>, ParseError> {
         self.goal_after(
+            head_error,
             |p| {
                 let conc = p.node_idx_pair()?;
                 if !p.try_punct("~~>") {
