@@ -160,13 +160,17 @@ The focused regression suites are:
 ```bash
 cargo test -p tamarin-parser --test structured_errors --test lookup_arity_errors
 cargo test -p tamarin-prover parser_diagnostic_ --lib
-cargo test -p tamarin-server theory_io::tests::web_parse_diagnostics_have_an_independent_response_limit --lib
 cargo test -p tamarin-server --test routes_upload
 ```
 
 The parity gates still require matching acceptance, exit status, and successful
 `--prove` output. They deliberately do not require byte-identical parser-error
-stderr.
+stderr. The flag sweeps normalize Rust's explicit `error[parse]` frame and
+Haskell's Parsec header plus `unexpected`/`expecting` lines. They retain any
+unrecognized lines, including runtime errors before or after a diagnostic.
+Unrecognized Haskell semantic-message formats remain visible for review rather
+than being silently treated as parser presentation. Focused normalization tests
+run as part of `python3 scripts/test_web_harness.py`.
 
 ## The verification ladder
 

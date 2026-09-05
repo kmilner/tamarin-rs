@@ -36,7 +36,7 @@ fn assert_reserved_diagnostic(code: i32, stderr: &str, stdout_len: usize, name: 
     assert_eq!(code, 1);
     assert_eq!(stdout_len, 0, "no stdout on a parser error");
     assert!(
-        stderr.contains("error: Reserved builtin used in term")
+        stderr.contains("error[parse]: Reserved builtin used in term")
             && stderr.contains(&format!("builtin function `{name}` is reserved")),
         "unexpected stderr:\n{stderr}"
     );

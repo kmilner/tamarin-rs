@@ -95,7 +95,7 @@ fn reserved_macro_name_prints_a_diagnostic_and_exits_1() {
     assert_diagnostic(
         &stderr,
         &[
-            "error: Reserved builtin used in macro",
+            "error[parse]: Reserved builtin used in macro",
             "builtin function `exp` is reserved",
         ],
     );
@@ -117,7 +117,7 @@ fn duplicate_macro_arguments_print_a_diagnostic_and_exit_1() {
     assert_diagnostic(
         &stderr,
         &[
-            "error: Duplicate macro argument",
+            "error[parse]: Duplicate macro argument",
             "macro argument `x` is listed more than once",
         ],
     );

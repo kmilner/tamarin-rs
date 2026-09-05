@@ -2822,6 +2822,7 @@ fn emit_parser_error(
         )
         .collect();
     let diagnostic = Diagnostic::error()
+        .with_code("parse")
         .with_message(message)
         .with_labels(labels)
         .with_notes(err.diagnostic_notes());
@@ -2862,7 +2863,7 @@ mod tests {
         emit_parser_error(&mut buffer, &error, "bad.spthy", source).expect("render diagnostic");
         let rendered = std::str::from_utf8(buffer.as_slice()).expect("UTF-8 diagnostic");
 
-        assert!(rendered.contains("error: Unknown builtin `hasing`"));
+        assert!(rendered.contains("error[parse]: Unknown builtin `hasing`"));
         assert_eq!(rendered.matches("Unknown builtin `hasing`").count(), 1);
         assert!(rendered.contains("bad.spthy:2:11"));
         assert!(rendered.contains("hasing"));

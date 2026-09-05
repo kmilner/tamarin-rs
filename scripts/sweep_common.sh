@@ -2,7 +2,7 @@
 # json_sweep.sh). Source me. Provides:
 #   grun         — OOM-guarded, memory-capped, time-capped run
 #   norm         — blank the volatile banner lines (same set as corpus_file_diff.sh)
-#   nerr         — collapse the duplicated [Open Chains] stderr line
+#   nerr         — normalize known warnings and parser diagnostic frames
 #   io_diff      — first of stdout/stderr that differs after normalization
 #   row          — append one tab-separated row to $OUT
 #   infra_abort / nocompare_check — detect a row that compared NOTHING
@@ -90,10 +90,24 @@ row() { local IFS=$'\t'; printf '%s\n' "$*" >> "$OUT"; }
 # beginning "[Saturating Sources]" is invisible to every sweep whatever it says,
 # and so is any difference in how many times the [Open Chains] warning repeats
 # CONSECUTIVELY (the ledger's stderr-open-chains rows are the non-consecutive
-# count differences, which do still surface). Any other stderr byte is caught.
+# count differences, which do still surface). The parser-frame exception follows.
+# Parser presentation differs deliberately. Only consume recognized frame lines;
+# unexpected stderr, even after a parser error, must still reach the comparison.
+# The Rust diagnostic code is emitted exclusively by report_parser_error.
 nerr() {
-  awk '!(/^\[Open Chains\] Too many chain constraints/ && $0 == prev) { print } { prev = $0 }' \
-    | grep -v '^\[Saturating Sources\]'
+  awk '
+    { duplicate_open = /^\[Open Chains\] Too many chain constraints/ && $0 == previous; previous = $0 }
+    duplicate_open || /^\[Saturating Sources\]/ { next }
+    rs_parser && /^$/ { rs_parser = 0; next }
+    rs_parser && /^[[:space:]]*([[:digit:]]+[[:space:]]*)?(┌─|│|·|= )/ { next }
+    hs_parser && /^(unexpected|expecting) / { next }
+    { rs_parser = 0; hs_parser = 0 }
+    /^error\[parse\]: / { print "<parser diagnostic>"; rs_parser = 1; next }
+    /^".*" \(line [[:digit:]]+, column [[:digit:]]+\):$/ {
+      print "<parser diagnostic>"; hs_parser = 1; next
+    }
+    { print }
+  '
 }
 
 # io_diff <workdir>
