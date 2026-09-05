@@ -33,6 +33,11 @@ pub struct Lexer<'a> {
     unterminated_comment: Option<Pos>,
 }
 
+pub(crate) struct QuotedError {
+    pub position: Pos,
+    pub unterminated: bool,
+}
+
 impl<'a> Lexer<'a> {
     pub fn new(src: &'a str) -> Self {
         Lexer {
@@ -385,7 +390,9 @@ impl<'a> Lexer<'a> {
 
     /// Parse a string literal and also return its exact half-open source range,
     /// including the quotes but excluding trailing whitespace.
-    pub(crate) fn string_literal_spanned(&mut self) -> Option<(String, std::ops::Range<usize>)> {
+    pub(crate) fn string_literal_spanned(
+        &mut self,
+    ) -> Result<(String, std::ops::Range<usize>), QuotedError> {
         self.quoted_spanned(Self::string_escape)
     }
 
@@ -400,10 +407,15 @@ impl<'a> Lexer<'a> {
     where
         F: FnMut(&mut Self) -> Option<Option<char>>,
     {
-        self.quoted_spanned(&mut escape).map(|(value, _)| value)
+        self.quoted_spanned(&mut escape)
+            .ok()
+            .map(|(value, _)| value)
     }
 
-    fn quoted_spanned<F>(&mut self, mut escape: F) -> Option<(String, std::ops::Range<usize>)>
+    fn quoted_spanned<F>(
+        &mut self,
+        mut escape: F,
+    ) -> Result<(String, std::ops::Range<usize>), QuotedError>
     where
         F: FnMut(&mut Self) -> Option<Option<char>>,
     {
@@ -411,20 +423,27 @@ impl<'a> Lexer<'a> {
         let save = self.pos;
         if !self.eat('"') {
             self.pos = save;
-            return None;
+            return Err(QuotedError {
+                position: save,
+                unterminated: false,
+            });
         }
         let mut s = String::new();
         loop {
             match self.peek() {
                 None => {
+                    let position = self.pos;
                     self.pos = save;
-                    return None;
+                    return Err(QuotedError {
+                        position,
+                        unterminated: true,
+                    });
                 }
                 Some('"') => {
                     self.bump();
                     let end = self.pos.offset;
                     self.skip_ws();
-                    return Some((s, save.offset..end));
+                    return Ok((s, save.offset..end));
                 }
                 Some('\\') => {
                     self.bump();
@@ -432,8 +451,12 @@ impl<'a> Lexer<'a> {
                         Some(Some(c)) => s.push(c),
                         Some(None) => {}
                         None => {
+                            let position = self.pos;
                             self.pos = save;
-                            return None;
+                            return Err(QuotedError {
+                                position,
+                                unterminated: false,
+                            });
                         }
                     }
                 }

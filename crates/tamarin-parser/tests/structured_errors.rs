@@ -743,6 +743,29 @@ fn declaration_labels_use_the_original_source_positions() {
 }
 
 #[test]
+fn quoted_path_errors_keep_the_actual_failure_position() {
+    let source = r#"theory T begin
+#include "bad\q"
+end"#;
+    let error = parse_theory(source, &[]).expect_err("invalid escape");
+    common::assert_span(&error, source, "q");
+    let source = "theory T begin #include \"unfinished";
+    let error = parse_theory(source, &[]).expect_err("unclosed path");
+    assert!(matches!(
+        error.kind(),
+        ParseErrorKind::UnclosedDelimiter { opening: '"', .. }
+    ));
+    assert_eq!(error.span().start, source.len());
+}
+
+#[test]
+fn lemma_attribute_labels_cover_the_keyword_only() {
+    let source = "theory T begin lemma L [bogus=something]: \"T\" end";
+    let error = parse_theory(source, &[]).expect_err("unknown attribute");
+    common::assert_span(&error, source, "bogus");
+}
+
+#[test]
 fn identifier_spans_do_not_erase_comment_failures() {
     for source in [
         "x = y /* unfinished",
@@ -825,7 +848,6 @@ fn malformed_equation_split_preserves_its_cause() {
     )
     .expect("numeric split id remains valid");
 }
-
 
 #[test]
 fn long_duplicate_names_keep_the_original_declaration_label() {

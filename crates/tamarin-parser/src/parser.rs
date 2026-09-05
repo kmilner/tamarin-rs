@@ -1706,9 +1706,27 @@ impl<'a> Parser<'a> {
     }
 
     fn string_literal(&mut self) -> Result<String, ParseError> {
-        self.lx
-            .string_literal()
-            .ok_or_else(|| self.err("expected string literal"))
+        self.string_literal_spanned().map(|(text, _)| text)
+    }
+
+    fn string_literal_spanned(&mut self) -> Result<(String, std::ops::Range<usize>), ParseError> {
+        self.skip_ws();
+        let opening = self.save();
+        self.lx.string_literal_spanned().map_err(|failure| {
+            let error = ParseError::at(
+                failure.position,
+                vec![Message::Message("expected a valid string literal".into())],
+            );
+            if failure.unterminated {
+                error.with_kind(ParseErrorKind::UnclosedDelimiter {
+                    opening: '"',
+                    opening_span: opening.offset..opening.offset + 1,
+                    closing: '"',
+                })
+            } else {
+                error
+            }
+        })
     }
 
     // =========================================================================
@@ -2015,10 +2033,7 @@ impl<'a> Parser<'a> {
         }
         self.skip_ws();
         let path_start = self.save();
-        let (raw_path, path_span) = self
-            .lx
-            .string_literal_spanned()
-            .ok_or_else(|| self.err("expected string literal"))?;
+        let (raw_path, path_span) = self.string_literal_spanned()?;
 
         // HS `filePathParser`: resolve relative to the including file's dir when
         // we know it (`Just s -> s </> path`), else verbatim (`Nothing`).
@@ -4906,14 +4921,20 @@ impl<'a> Parser<'a> {
                 if raw.is_empty() {
                     break;
                 }
-                let item = diagnostic_lexeme(&raw);
+                let token_len = raw
+                    .char_indices()
+                    .take_while(|(_, c)| is_ident_char(*c) || *c == '-')
+                    .map(|(offset, c)| offset + c.len_utf8())
+                    .last()
+                    .unwrap_or_else(|| raw.chars().next().map_or(0, char::len_utf8));
+                let item = diagnostic_lexeme(&raw[..token_len]);
                 return Err(self
                     .err(format!("unknown lemma attribute: {item}"))
                     .with_kind(ParseErrorKind::UnknownItem {
                         item,
                         context: ParseContext::LemmaAttribute,
                     })
-                    .with_location(attribute_start, raw.len()));
+                    .with_location(attribute_start, token_len));
             }
             if !self.try_punct(",") {
                 break;
