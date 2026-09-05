@@ -191,14 +191,16 @@ duration_seconds() {
     fi
 }
 
-# hs_fingerprint <oracle-binary>
+# hs_fingerprint <oracle-binary> [maude-binary]
 # Cache identity is the release/revision plus the attested patch series, not
 # platform-specific executable bytes. Keep those bytes only for run integrity.
 hs_fingerprint() {
     local output version revision series=unattested stamp main
     HS_FP_LEGACY=$(stat -c '%s.%Y' "$1") || return 1
     HS_BINARY_FP=$(binary_sha256 "$1") || return 1
-    output=$("$1" --version 2>/dev/null) || return 1
+    local -a maude_args=()
+    [ -z "${2:-}" ] || maude_args=("--with-maude=$2")
+    output=$(timeout 60 "$1" "${maude_args[@]}" --version 2>/dev/null) || return 1
     version=$(printf '%s\n' "$output" | head -1)
     [ -n "$version" ] || return 1
     revision=$(printf '%s\n' "$output" | sed -n 's/^Git revision: \([^ ,]*\).*/\1/p')
@@ -692,7 +694,7 @@ oracle_revision() {
 oracle_rev_check() {
     local hs=$1 maude=$2 repo=$3 pin binrev= stamp= expected_series main candidate
     local stamp_pin stamp_series stamp_binary reason= saw_stamp=0
-    hs_fingerprint "$hs" || {
+    hs_fingerprint "$hs" "$maude" || {
         echo "ERROR: cannot fingerprint oracle '$hs'" >&2
         exit 2
     }

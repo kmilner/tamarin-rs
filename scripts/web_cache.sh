@@ -21,7 +21,7 @@ web_cache_init() {
     if [ "${HS_FP_PATH:-}" = "$hs" ] && [ -n "${HS_FP:-}" ]; then
         WEB_ORACLE_SHA256=$HS_FP
     else
-        hs_fingerprint "$hs" || return 1
+        hs_fingerprint "$hs" "$MAUDE_PATH" || return 1
         WEB_ORACLE_SHA256=$HS_FP
     fi
     execution_fingerprint "$MAUDE_PATH" "${DERIVCHECK_TIMEOUT:-30}" || return 1

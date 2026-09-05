@@ -264,6 +264,27 @@ hs_fingerprint "$t/hs-a"
 test "$first" != "$HS_FP"
 ''')
 
+    def test_oracle_version_probe_uses_the_configured_maude(self):
+        run_shell(r'''
+set -e
+. scripts/gate_common.sh
+. scripts/web_cache.sh
+t=$HARNESS_TMP
+printf '%s\n' '#!/bin/sh' 'echo 3.5.1' > "$t/backend"
+cat > "$t/hs" <<'SH'
+#!/bin/sh
+case "$1" in --with-maude=*) backend=${1#*=} ;; *) exit 1 ;; esac
+"$backend" --version >/dev/null || exit 1
+echo 'tamarin-prover 1.13.0'
+SH
+chmod +x "$t/backend" "$t/hs"
+# The backend has no default executable name; only the explicit path works.
+oracle_rev_check "$t/hs" "$t/backend" "$t"
+MAUDE_PATH="$t/backend" WEB_WORK_ROOT="$t/work" WEB_CACHE_ROOT="$t/cache"
+unset HS_FP
+web_cache_init "$t" scripts "$t/hs" 2
+''')
+
     def test_producer_and_comparison_identities_detect_their_own_tools(self):
         run_shell(
             r'''
