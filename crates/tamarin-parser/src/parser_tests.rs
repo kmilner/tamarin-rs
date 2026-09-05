@@ -1613,10 +1613,10 @@ fn colon_suffix_is_a_sapic_type_in_a_process_and_a_sort_in_a_rule() {
     .expect("parses");
     let mut seen = None;
     for item in &thy.items {
-        if let TheoryItem::Rule(r) = item {
-            if let Term::Var(v) = &r.premises[0].args[0] {
-                seen = Some(v.clone());
-            }
+        if let TheoryItem::Rule(r) = item
+            && let Term::Var(v) = &r.premises[0].args[0]
+        {
+            seen = Some(v.clone());
         }
     }
     let v = seen.expect("rule premise variable");

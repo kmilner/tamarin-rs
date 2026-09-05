@@ -2376,18 +2376,18 @@ pub(crate) fn goal_useful_annotation(
     if gs_loop_breaker {
         return " (loop breaker)";
     }
-    if let Goal::Action(i, fa) = g {
-        if fa.is_ku() {
-            if has_ku_guards {
-                return " (useful1)";
+    if let Goal::Action(i, fa) = g
+        && fa.is_ku()
+    {
+        if has_ku_guards {
+            return " (useful1)";
+        }
+        if let Some(m) = fa.terms.first() {
+            if currently_deducible(sys, adj, i, m) {
+                return " (currently deducible)";
             }
-            if let Some(m) = fa.terms.first() {
-                if currently_deducible(sys, adj, i, m) {
-                    return " (currently deducible)";
-                }
-                if probably_constructible(m) {
-                    return " (probably constructible)";
-                }
+            if probably_constructible(m) {
+                return " (probably constructible)";
             }
         }
     }
@@ -2406,28 +2406,28 @@ fn goal_usefulness_with_adj(
     if looping {
         return Usefulness::LoopBreaker;
     }
-    if let Goal::Action(i, fa) = g {
-        if fa.is_ku() {
-            // Haskell `hasKUGuards` (Goals.hs): if ANY system
-            // formula has a `KUFact`-tagged action atom in its guards
-            // (`KU(?) @ ?` quantifier-binding), every KU goal is
-            // **Useful** regardless of `currentlyDeducible` /
-            // `probablyConstructible` — those tests are SHORT-CIRCUITED.
-            // Typing-class IHs (`All m j. KU(m,j) ⇒ ...`) always have
-            // such guards; the order matters for proof-search bias.
-            if has_ku_guards {
-                return Usefulness::Useful;
+    if let Goal::Action(i, fa) = g
+        && fa.is_ku()
+    {
+        // Haskell `hasKUGuards` (Goals.hs): if ANY system
+        // formula has a `KUFact`-tagged action atom in its guards
+        // (`KU(?) @ ?` quantifier-binding), every KU goal is
+        // **Useful** regardless of `currentlyDeducible` /
+        // `probablyConstructible` — those tests are SHORT-CIRCUITED.
+        // Typing-class IHs (`All m j. KU(m,j) ⇒ ...`) always have
+        // such guards; the order matters for proof-search bias.
+        if has_ku_guards {
+            return Usefulness::Useful;
+        }
+        if let Some(m) = fa.terms.first() {
+            // Order matters — `currentlyDeducible` subsumes
+            // `probablyConstructible` for Pub/Nat-only terms but
+            // also catches the `extractible` case.
+            if currently_deducible(sys, adj, i, m) {
+                return Usefulness::CurrentlyDeducible;
             }
-            if let Some(m) = fa.terms.first() {
-                // Order matters — `currentlyDeducible` subsumes
-                // `probablyConstructible` for Pub/Nat-only terms but
-                // also catches the `extractible` case.
-                if currently_deducible(sys, adj, i, m) {
-                    return Usefulness::CurrentlyDeducible;
-                }
-                if probably_constructible(m) {
-                    return Usefulness::ProbablyConstructible;
-                }
+            if probably_constructible(m) {
+                return Usefulness::ProbablyConstructible;
             }
         }
     }
@@ -2460,10 +2460,10 @@ pub(crate) fn has_ku_guards(sys: &System) -> bool {
             // KU action atom must NOT count — only a `GGuarded`'s guards.
             Guarded::GGuarded { guards, body, .. } => {
                 for atom in guards.iter() {
-                    if let ProtoAtom::Action(_, fa) = atom {
-                        if fa.is_ku() {
-                            return true;
-                        }
+                    if let ProtoAtom::Action(_, fa) = atom
+                        && fa.is_ku()
+                    {
+                        return true;
                     }
                 }
                 walk_guards(body)
@@ -2724,8 +2724,7 @@ pub fn dispatch_solve_goal(
         // `!in_precompute_mode()` so saturate skips it.
         if !crate::constraint::solver::sources::in_precompute_mode()
             && !red.ctx.full_sources.is_empty()
-        {
-            if let Some(case_pairs) =
+            && let Some(case_pairs) =
                 crate::constraint::solver::sources::solve_with_source_cases_ctx(
                     red.ctx,
                     &red.ctx.full_sources,
@@ -2735,45 +2734,44 @@ pub fn dispatch_solve_goal(
                     fa,
                     Some(&red.maude),
                 )
-            {
-                use crate::constraint::solver::reduction::GoalCases;
-                if case_pairs.len() == 1 {
-                    let (name, sys, branch_counter) = case_pairs.into_iter().next().unwrap();
-                    red.sys = sys;
-                    // HS FreshT-threading: single-case adoption continues
-                    // THIS branch's counter thread (fork + its own
-                    // someInst/conjoin draws), not the shared handle's
-                    // post-all-cases position.
-                    red.maude.reset_counter_to(branch_counter);
-                    return GoalCases::LinearNamed(name);
-                }
-                if !case_pairs.is_empty() {
-                    // Multi-case: record per-branch continuation
-                    // counters for the post-solve simplify (consumed
-                    // via `last_case_counters`, parallel to the Cases
-                    // vec — same contract as the action-path source
-                    // adoption in `solve_action_goal`).
-                    let mut out: Vec<(String, crate::constraint::system::System)> =
-                        Vec::with_capacity(case_pairs.len());
-                    let mut out_counters: Vec<u64> = Vec::with_capacity(case_pairs.len());
-                    for (name, sys, branch_counter) in case_pairs {
-                        out.push((name, sys));
-                        out_counters.push(branch_counter);
-                    }
-                    red.last_case_counters = out_counters;
-                    return GoalCases::Cases(out);
-                }
-                // HS-faithful: `solveWithSource` returned `Just` (the
-                // abstract `matchToGoal` matched) but every case was
-                // contradictory at conjoin → zero surviving cases.  HS
-                // renders this `by` (no children, Theory/Proof.hs:1062-1071,
-                // see line 1065); the
-                // node is contradictory.  Return `Contradictory` instead
-                // of falling through to runtime `solve_premise_goal`,
-                // which would re-introduce a shallow producer case HS
-                // never explores.
-                return GoalCases::Contradictory;
+        {
+            use crate::constraint::solver::reduction::GoalCases;
+            if case_pairs.len() == 1 {
+                let (name, sys, branch_counter) = case_pairs.into_iter().next().unwrap();
+                red.sys = sys;
+                // HS FreshT-threading: single-case adoption continues
+                // THIS branch's counter thread (fork + its own
+                // someInst/conjoin draws), not the shared handle's
+                // post-all-cases position.
+                red.maude.reset_counter_to(branch_counter);
+                return GoalCases::LinearNamed(name);
             }
+            if !case_pairs.is_empty() {
+                // Multi-case: record per-branch continuation
+                // counters for the post-solve simplify (consumed
+                // via `last_case_counters`, parallel to the Cases
+                // vec — same contract as the action-path source
+                // adoption in `solve_action_goal`).
+                let mut out: Vec<(String, crate::constraint::system::System)> =
+                    Vec::with_capacity(case_pairs.len());
+                let mut out_counters: Vec<u64> = Vec::with_capacity(case_pairs.len());
+                for (name, sys, branch_counter) in case_pairs {
+                    out.push((name, sys));
+                    out_counters.push(branch_counter);
+                }
+                red.last_case_counters = out_counters;
+                return GoalCases::Cases(out);
+            }
+            // HS-faithful: `solveWithSource` returned `Just` (the
+            // abstract `matchToGoal` matched) but every case was
+            // contradictory at conjoin → zero surviving cases.  HS
+            // renders this `by` (no children, Theory/Proof.hs:1062-1071,
+            // see line 1065); the
+            // node is contradictory.  Return `Contradictory` instead
+            // of falling through to runtime `solve_premise_goal`,
+            // which would re-introduce a shallow producer case HS
+            // never explores.
+            return GoalCases::Contradictory;
         }
     }
     match g {

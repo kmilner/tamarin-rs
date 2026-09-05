@@ -69,15 +69,15 @@ fn main() {
         if path.extension().and_then(|s| s.to_str()) != Some("spthy") {
             continue;
         }
-        if let Some(f) = &filter {
-            if !path.to_string_lossy().contains(f) {
-                continue;
-            }
+        if let Some(f) = &filter
+            && !path.to_string_lossy().contains(f)
+        {
+            continue;
         }
-        if let Some(n) = limit {
-            if total >= n {
-                break;
-            }
+        if let Some(n) = limit
+            && total >= n
+        {
+            break;
         }
         let src = match fs::read_to_string(path) {
             Ok(s) => s,

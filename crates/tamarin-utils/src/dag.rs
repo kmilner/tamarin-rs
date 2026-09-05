@@ -28,7 +28,8 @@ pub fn inverse<T: Clone>(rel: &Relation<T>) -> Relation<T> {
 pub fn reachable_set<T: Ord + Clone>(start: &[T], rel: &Relation<T>) -> BTreeSet<T> {
     let mut visited: BTreeSet<T> = BTreeSet::new();
     let mut stack: Vec<T> = start.to_vec();
-    while let Some(x) = stack.pop() {
+    loop {
+        let Some(x) = stack.pop() else { break };
         if visited.insert(x.clone()) {
             // Inlined `image(&x, rel)`: scan `rel` front-to-back, cloning only
             // the unvisited successors actually pushed (avoids a per-node Vec).

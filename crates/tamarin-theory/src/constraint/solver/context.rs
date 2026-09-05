@@ -1101,12 +1101,12 @@ impl ProofContext {
                 // when `ProofContext::new` is driven on rules that never went
                 // through elaboration's variant pass).  Either way the
                 // abstracted form is computed AT MOST ONCE — no RAW query.
-                if o.abstracted_rule.is_none() && o.variant_substs.is_empty() {
-                    if let Ok(Some((abstr, av_substs))) =
+                if o.abstracted_rule.is_none()
+                    && o.variant_substs.is_empty()
+                    && let Ok(Some((abstr, av_substs))) =
                         crate::tools::rule_variants::abstract_rule_and_variants(&maude, &o.rule)
-                    {
-                        computed_abstracted_rules.push((idx, abstr, av_substs));
-                    }
+                {
+                    computed_abstracted_rules.push((idx, abstr, av_substs));
                 }
             } else {
                 // Non-reducible rule: HS's `variantsProtoRule` still runs and
@@ -1138,10 +1138,9 @@ impl ProofContext {
                         ));
                     } else if let Ok(substs) =
                         crate::tools::rule_variants::variant_substs_for_rule(&maude, &o.rule)
+                        && !substs.is_empty()
                     {
-                        if !substs.is_empty() {
-                            computed_variant_substs.push((idx, substs));
-                        }
+                        computed_variant_substs.push((idx, substs));
                     }
                 }
             }

@@ -228,7 +228,7 @@ fn pf_range_prime(proc: &AProc) -> Result<BTreeSet<(Pos, Pos)>, String> {
 /// the first `from` for a `to` in lexicographic pair order wins.  The pairs are
 /// ascending in `to` first, so keeping the FIRST `from` seen per `to` in a map
 /// is that same choice, answered by lookup instead of a scan per query.
-pub(crate) fn pf_inv(proc: &AProc) -> Result<impl Fn(&[i64]) -> Option<Pos>, String> {
+pub(crate) fn pf_inv(proc: &AProc) -> Result<impl Fn(&[i64]) -> Option<Pos> + use<>, String> {
     let mut inv: std::collections::BTreeMap<Pos, Pos> = std::collections::BTreeMap::new();
     for (to, from) in pf_range_prime(proc)? {
         inv.entry(to).or_insert(from);

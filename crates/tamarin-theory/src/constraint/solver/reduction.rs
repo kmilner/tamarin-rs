@@ -576,7 +576,7 @@ impl<'ctx> Reduction<'ctx> {
         if stats {
             use std::sync::atomic::Ordering::Relaxed;
             let calls = SUBST_SYSTEM_CALLS.fetch_add(1, Relaxed) + 1;
-            if calls % 50_000 == 0 {
+            if calls.is_multiple_of(50_000) {
                 eprintln!(
                     "[SUBST_SKIP_STATS] calls={} skips={}",
                     calls,
@@ -587,7 +587,7 @@ impl<'ctx> Reduction<'ctx> {
         if fp_stats_enabled() {
             use std::sync::atomic::Ordering::Relaxed;
             let calls = FP_STATS_CALLS.fetch_add(1, Relaxed) + 1;
-            if calls % 5_000 == 0 {
+            if calls.is_multiple_of(5_000) {
                 let d = crate::apply::FP_FACT_DESCENTS.load(Relaxed);
                 let s = crate::apply::FP_FACT_SKIPS.load(Relaxed);
                 eprintln!(
@@ -1497,60 +1497,55 @@ impl<'ctx> Reduction<'ctx> {
         // not-open assuming the decomposition already happened)
         // would hide the actual unsolved sub-goals, leaving the
         // search stuck with "no method".
-        if let Goal::Action(node_id, fa) = &g {
-            if fa.tag == crate::fact::FactTag::Ku {
-                if let Some(top) = fa.terms.first() {
-                    if let Some(sub_terms) = ku_decomp_subterms(top) {
-                        // Skip if outer goal already present (avoid
-                        // re-decomposition on re-insertion).
-                        if self.sys.goals.iter().any(|(eg, _)| eg == &g) {
-                            return;
-                        }
-                        let outer_node = *node_id;
-                        // HS-faithful order (Reduction.hs:364-366):
-                        //   insertGoal goal False                     -- outer FIRST
-                        //   requiresKU m1 *> requiresKU m2 ...        -- sub-goals after
-                        let before = self.sys.goals.len();
-                        self.sys.add_goal_with_loop_flag(g.clone(), looping);
-                        if self.sys.goals.len() != before {
-                            self.changed = ChangeIndicator::Changed;
-                        }
-                        for sub in sub_terms {
-                            let next_idx = std::cmp::max(bounds_max(&self.sys), outer_node.idx)
-                                .saturating_add(1);
-                            let sub_node = tamarin_term::lterm::LVar::new(
-                                "vk",
-                                tamarin_term::lterm::LSort::Node,
-                                next_idx,
-                            );
-                            // HS-faithful counter side-effect: HS's
-                            // `requiresKU` (Reduction.hs:286-392, see line 386, insertAction
-                            // pair/inv/mult decomposition) draws each sub-KU
-                            // node id via `freshLVar "vk" LSortNode`, ADVANCING
-                            // the ambient FreshT counter past the drawn idx.
-                            // RS derives the same VALUE from
-                            // `max(bounds_max, outer.idx)+1`, but must also
-                            // advance the shared counter so every LATER
-                            // counter draw in the same Reduction (in
-                            // particular simp's `freshToFree` fold of a
-                            // singleton variant disj, which feeds the
-                            // eqsSubst RANGE) stays aligned with HS.
-                            self.maude.ensure_above(next_idx);
-                            let sub_fa = crate::fact::ku_fact(sub);
-                            self.insert_goal_with_loop_flag(
-                                Goal::Action(sub_node, sub_fa),
-                                looping,
-                            );
-                            self.insert_less(crate::constraint::constraints::LessAtom::new(
-                                sub_node,
-                                outer_node,
-                                crate::constraint::constraints::Reason::Adversary,
-                            ));
-                        }
-                        return;
-                    }
-                }
+        if let Goal::Action(node_id, fa) = &g
+            && fa.tag == crate::fact::FactTag::Ku
+            && let Some(top) = fa.terms.first()
+            && let Some(sub_terms) = ku_decomp_subterms(top)
+        {
+            // Skip if outer goal already present (avoid
+            // re-decomposition on re-insertion).
+            if self.sys.goals.iter().any(|(eg, _)| eg == &g) {
+                return;
             }
+            let outer_node = *node_id;
+            // HS-faithful order (Reduction.hs:364-366):
+            //   insertGoal goal False                     -- outer FIRST
+            //   requiresKU m1 *> requiresKU m2 ...        -- sub-goals after
+            let before = self.sys.goals.len();
+            self.sys.add_goal_with_loop_flag(g.clone(), looping);
+            if self.sys.goals.len() != before {
+                self.changed = ChangeIndicator::Changed;
+            }
+            for sub in sub_terms {
+                let next_idx =
+                    std::cmp::max(bounds_max(&self.sys), outer_node.idx).saturating_add(1);
+                let sub_node = tamarin_term::lterm::LVar::new(
+                    "vk",
+                    tamarin_term::lterm::LSort::Node,
+                    next_idx,
+                );
+                // HS-faithful counter side-effect: HS's
+                // `requiresKU` (Reduction.hs:286-392, see line 386, insertAction
+                // pair/inv/mult decomposition) draws each sub-KU
+                // node id via `freshLVar "vk" LSortNode`, ADVANCING
+                // the ambient FreshT counter past the drawn idx.
+                // RS derives the same VALUE from
+                // `max(bounds_max, outer.idx)+1`, but must also
+                // advance the shared counter so every LATER
+                // counter draw in the same Reduction (in
+                // particular simp's `freshToFree` fold of a
+                // singleton variant disj, which feeds the
+                // eqsSubst RANGE) stays aligned with HS.
+                self.maude.ensure_above(next_idx);
+                let sub_fa = crate::fact::ku_fact(sub);
+                self.insert_goal_with_loop_flag(Goal::Action(sub_node, sub_fa), looping);
+                self.insert_less(crate::constraint::constraints::LessAtom::new(
+                    sub_node,
+                    outer_node,
+                    crate::constraint::constraints::Reason::Adversary,
+                ));
+            }
+            return;
         }
         let before = self.sys.goals.len();
         self.sys.add_goal_with_loop_flag(g, looping);
@@ -2850,10 +2845,10 @@ impl<'ctx> Reduction<'ctx> {
             // that hits a shared goal.
             // Then OR-in `solved` (combineGoalStatus) on the matching slot.
             self.sys.add_goal_with_loop_flag(g.clone(), st.looping);
-            if st.solved {
-                if let Some((_, slot)) = self.sys.goals_mut().iter_mut().find(|(eg, _)| eg == g) {
-                    slot.solved = true;
-                }
+            if st.solved
+                && let Some((_, slot)) = self.sys.goals_mut().iter_mut().find(|(eg, _)| eg == g)
+            {
+                slot.solved = true;
             }
         }
         // 7. insertFormula.  Haskell-faithful: `insertFormula` in
@@ -3246,10 +3241,10 @@ fn chase_eq_store_subst(
     for lv in subst.dom() {
         let final_term = lookup_chain(lv);
         // Identity mappings are no-ops; skip.
-        if let tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(w)) = &final_term {
-            if w == lv {
-                continue;
-            }
+        if let tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(w)) = &final_term
+            && w == lv
+        {
+            continue;
         }
         out.insert(*lv, final_term);
     }
@@ -3653,8 +3648,15 @@ fn bounds_max_dump_fields(sys: &System) {
     }
     eprintln!(
         "[BOUNDS_VERIFY] nodes={} edges={} less={} last={} subterm={} goals={} formulas={} eq_subst={} eq_conj_dom={}",
-        bounds_max_nodes(sys), m_edges, m_less, m_last, m_st, m_goals,
-        m_formulas, m_eq, m_conj,
+        bounds_max_nodes(sys),
+        m_edges,
+        m_less,
+        m_last,
+        m_st,
+        m_goals,
+        m_formulas,
+        m_eq,
+        m_conj,
     );
 }
 
@@ -4124,10 +4126,10 @@ fn has_fresh_consumer_conflation(
                 None => continue,
             };
             let t_norm = tamarin_term::subst::apply_vterm(subst, t.clone());
-            if let Term::Lit(Lit::Var(v)) = t_norm {
-                if v.sort == LSort::Fresh {
-                    consumers.push((*id, v, rule));
-                }
+            if let Term::Lit(Lit::Var(v)) = t_norm
+                && v.sort == LSort::Fresh
+            {
+                consumers.push((*id, v, rule));
             }
         }
     }
@@ -5378,8 +5380,7 @@ impl<'ctx> Reduction<'ctx> {
         // still fires.  Gate on `!in_precompute_mode()`.
         if !crate::constraint::solver::sources::in_precompute_mode()
             && !self.ctx.full_sources.is_empty()
-        {
-            if let Some(case_pairs) =
+            && let Some(case_pairs) =
                 crate::constraint::solver::sources::solve_with_source_cases_ctx(
                     self.ctx,
                     &self.ctx.full_sources,
@@ -5389,40 +5390,39 @@ impl<'ctx> Reduction<'ctx> {
                     fa_prem,
                     Some(&self.maude),
                 )
-            {
-                let mut out: Vec<(String, crate::constraint::system::System)> = Vec::new();
-                // HS FreshT-threading: per-branch continuation counters,
-                // parallel to `out`.
-                // HS `_applySource` forks the counter per case
-                // (`disjunctionOfList cdCases` BELOW FreshT); each
-                // adopted case's post-solve simplify must continue at
-                // fork + THAT case's own someInst/conjoin draws — not
-                // at the shared handle's post-ALL-cases position.
-                let mut out_counters: Vec<u64> = Vec::new();
-                for (case_name, sys, branch_counter) in case_pairs {
-                    if has_fresh_consumer_conflation(&sys, &self.maude) {
-                        continue;
-                    }
-                    out.push((case_name, sys));
-                    out_counters.push(branch_counter);
+        {
+            let mut out: Vec<(String, crate::constraint::system::System)> = Vec::new();
+            // HS FreshT-threading: per-branch continuation counters,
+            // parallel to `out`.
+            // HS `_applySource` forks the counter per case
+            // (`disjunctionOfList cdCases` BELOW FreshT); each
+            // adopted case's post-solve simplify must continue at
+            // fork + THAT case's own someInst/conjoin draws — not
+            // at the shared handle's post-ALL-cases position.
+            let mut out_counters: Vec<u64> = Vec::new();
+            for (case_name, sys, branch_counter) in case_pairs {
+                if has_fresh_consumer_conflation(&sys, &self.maude) {
+                    continue;
                 }
-                if !out.is_empty() {
-                    self.changed = ChangeIndicator::Changed;
-                    if out.len() == 1 {
-                        let (name, sys) = out.into_iter().next().unwrap();
-                        self.sys = sys;
-                        // Single-case adoption: continue THIS branch's
-                        // thread (mirrors the action-path source-case
-                        // adoption above).
-                        self.maude.reset_counter_to(out_counters[0]);
-                        return GoalCases::LinearNamed(name);
-                    }
-                    self.last_case_counters = out_counters;
-                    return GoalCases::Cases(out);
-                }
-                // Fall through to plain rule enumeration if every case
-                // dropped — keeps the search making progress.
+                out.push((case_name, sys));
+                out_counters.push(branch_counter);
             }
+            if !out.is_empty() {
+                self.changed = ChangeIndicator::Changed;
+                if out.len() == 1 {
+                    let (name, sys) = out.into_iter().next().unwrap();
+                    self.sys = sys;
+                    // Single-case adoption: continue THIS branch's
+                    // thread (mirrors the action-path source-case
+                    // adoption above).
+                    self.maude.reset_counter_to(out_counters[0]);
+                    return GoalCases::LinearNamed(name);
+                }
+                self.last_case_counters = out_counters;
+                return GoalCases::Cases(out);
+            }
+            // Fall through to plain rule enumeration if every case
+            // dropped — keeps the search making progress.
         }
         let g = Goal::Premise(*p, fa_prem.clone());
         // Canonical (abstracted) rule + variant disjunction installed
@@ -5495,10 +5495,10 @@ impl<'ctx> Reduction<'ctx> {
             label_sys.add_node(new_node, renamed.clone());
             let mut label_sub =
                 Reduction::new_inheriting(self.ctx, label_sys, self.maude.fresh_counter_peek());
-            if let Some(constrs) = &renamed_constrs {
-                if !constrs.is_empty() {
-                    label_sub.solve_rule_constraints(Some(constrs.clone()));
-                }
+            if let Some(constrs) = &renamed_constrs
+                && !constrs.is_empty()
+            {
+                label_sub.solve_rule_constraints(Some(constrs.clone()));
             }
             label_sub.exploit_prems(&new_node, &renamed);
             // Branch counter after labelNodeId (rule constraints +

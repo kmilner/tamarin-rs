@@ -130,13 +130,13 @@ pub fn extract_base_name(name: &str) -> Option<String> {
 /// reserved rule name or already starts with `_`.  This is plain
 /// `showRuleCaseName`, NOT the SAPiC-trimming `showDotRuleCaseName`.
 pub fn rule_name_by_node(n: &GNode) -> Option<String> {
-    if let NodeType::System(ru) = &n.ty {
-        if let RuleInfo::Proto(p) = &ru.info {
-            return Some(match &p.name {
-                ProtoRuleName::Stand(s) => crate::rule::prefix_if_reserved(s),
-                ProtoRuleName::Fresh => "Fresh".to_string(),
-            });
-        }
+    if let NodeType::System(ru) = &n.ty
+        && let RuleInfo::Proto(p) = &ru.info
+    {
+        return Some(match &p.name {
+            ProtoRuleName::Stand(s) => crate::rule::prefix_if_reserved(s),
+            ProtoRuleName::Fresh => "Fresh".to_string(),
+        });
     }
     None
 }
@@ -146,10 +146,10 @@ pub fn rule_name_by_node(n: &GNode) -> Option<String> {
 fn group_by_similar_name<'a>(nodes: &'a [GNode]) -> BTreeMap<String, Vec<&'a GNode>> {
     let mut out: BTreeMap<String, Vec<&'a GNode>> = BTreeMap::new();
     for n in nodes {
-        if let Some(rn) = rule_name_by_node(n) {
-            if let Some(base) = extract_base_name(&rn) {
-                out.entry(base).or_default().push(n);
-            }
+        if let Some(rn) = rule_name_by_node(n)
+            && let Some(base) = extract_base_name(&rn)
+        {
+            out.entry(base).or_default().push(n);
         }
     }
     out

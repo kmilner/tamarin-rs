@@ -222,35 +222,34 @@ fn decompose(facts: &[LNFact]) -> Vec<Vec<LNFact>> {
         return vec![vec![]];
     };
     let rest_d = decompose(rest);
-    if f.tag == FactTag::Ku && f.terms.len() == 1 {
-        if let Term::App(head, args) = &f.terms[0] {
-            let as_kd = Fact::fresh_annotated(FactTag::Kd, f.annotations.clone(), f.terms.to_vec());
-            let mut out: Vec<Vec<LNFact>> = rest_d
+    if f.tag == FactTag::Ku
+        && f.terms.len() == 1
+        && let Term::App(head, args) = &f.terms[0]
+    {
+        let as_kd = Fact::fresh_annotated(FactTag::Kd, f.annotations.clone(), f.terms.to_vec());
+        let mut out: Vec<Vec<LNFact>> = rest_d
+            .iter()
+            .map(|l| {
+                let mut l2 = Vec::with_capacity(l.len() + 1);
+                l2.push(as_kd.clone());
+                l2.extend(l.iter().cloned());
+                l2
+            })
+            .collect();
+        if !fun_sym_private(head) {
+            let arg_kus: Vec<LNFact> = args
                 .iter()
-                .map(|l| {
-                    let mut l2 = Vec::with_capacity(l.len() + 1);
-                    l2.push(as_kd.clone());
-                    l2.extend(l.iter().cloned());
-                    l2
-                })
+                .map(|a| Fact::fresh_annotated(FactTag::Ku, f.annotations.clone(), vec![a.clone()]))
                 .collect();
-            if !fun_sym_private(head) {
-                let arg_kus: Vec<LNFact> = args
-                    .iter()
-                    .map(|a| {
-                        Fact::fresh_annotated(FactTag::Ku, f.annotations.clone(), vec![a.clone()])
-                    })
-                    .collect();
-                for x1 in decompose(&arg_kus) {
-                    for y in &rest_d {
-                        let mut l = x1.clone();
-                        l.extend(y.iter().cloned());
-                        out.push(l);
-                    }
+            for x1 in decompose(&arg_kus) {
+                for y in &rest_d {
+                    let mut l = x1.clone();
+                    l.extend(y.iter().cloned());
+                    out.push(l);
                 }
             }
-            return out;
         }
+        return out;
     }
     rest_d
         .into_iter()
@@ -819,10 +818,10 @@ fn apply_ndc_check(
             eprintln!("Function {} has the NDC property.", fun_name);
             tagged.push(f);
             for mut r in group {
-                if let IntrRuleACInfo::DestrRule { funs, .. } = &mut r.info {
-                    if let Some(h) = funs.first_mut() {
-                        *h = h.add_ndc(NdcState::IsNdc);
-                    }
+                if let IntrRuleACInfo::DestrRule { funs, .. } = &mut r.info
+                    && let Some(h) = funs.first_mut()
+                {
+                    *h = h.add_ndc(NdcState::IsNdc);
                 }
                 out.push(r);
             }

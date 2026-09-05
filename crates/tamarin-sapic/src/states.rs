@@ -265,20 +265,21 @@ fn exists_attacker_unpure(p: &AnnotatedProc, bound_names: &BTreeSet<LVar>) -> bo
         // `insert t; unlock t` (the pure write pattern) skips the pair; any
         // other lone insert on an unbound identifier raises the warning.
         Process::Action(SapicAction::Insert(t, _), _, body) => {
-            if let Process::Action(SapicAction::Unlock(t2), _, pl) = &**body {
-                if t == t2 {
-                    return exists_attacker_unpure(pl, bound_names);
-                }
+            if let Process::Action(SapicAction::Unlock(t2), _, pl) = &**body
+                && t == t2
+            {
+                return exists_attacker_unpure(pl, bound_names);
             }
             !is_bound(bound_names, t) || exists_attacker_unpure(body, bound_names)
         }
         // `lock t; lookup t as _ in .. else 0` (the pure read pattern) skips to
         // the lookup body; any other lone lock on an unbound identifier warns.
         Process::Action(SapicAction::Lock(t), _, body) => {
-            if let Process::Comb(ProcessCombinator::Lookup(t2, _), _, pl, r) = &**body {
-                if t == t2 && matches!(&**r, Process::Null(_)) {
-                    return exists_attacker_unpure(pl, bound_names);
-                }
+            if let Process::Comb(ProcessCombinator::Lookup(t2, _), _, pl, r) = &**body
+                && t == t2
+                && matches!(&**r, Process::Null(_))
+            {
+                return exists_attacker_unpure(pl, bound_names);
             }
             !is_bound(bound_names, t) || exists_attacker_unpure(body, bound_names)
         }
@@ -306,10 +307,10 @@ fn is_pure_state(p: &AnnotatedProc, target: &SapicTerm, lone_insert: bool) -> (b
         // `insert t; unlock t` — skip the pure write pair.  Otherwise a lone
         // insert on the target: a second lone insert anywhere ⇒ not pure.
         Process::Action(SapicAction::Insert(t, _), _, body) => {
-            if let Process::Action(SapicAction::Unlock(t2), _, pl) = &**body {
-                if t == t2 {
-                    return is_pure_state(pl, target, lone_insert);
-                }
+            if let Process::Action(SapicAction::Unlock(t2), _, pl) = &**body
+                && t == t2
+            {
+                return is_pure_state(pl, target, lone_insert);
             }
             if t != target {
                 return is_pure_state(body, target, lone_insert);
@@ -324,10 +325,11 @@ fn is_pure_state(p: &AnnotatedProc, target: &SapicTerm, lone_insert: bool) -> (b
         // `lock t; lookup t as _ in .. else 0` — skip the pure read pair.
         // Otherwise a lone lock on the target ⇒ not pure.
         Process::Action(SapicAction::Lock(t), _, body) => {
-            if let Process::Comb(ProcessCombinator::Lookup(t2, _), _, pl, r) = &**body {
-                if t == t2 && matches!(&**r, Process::Null(_)) {
-                    return is_pure_state(pl, target, lone_insert);
-                }
+            if let Process::Comb(ProcessCombinator::Lookup(t2, _), _, pl, r) = &**body
+                && t == t2
+                && matches!(&**r, Process::Null(_))
+            {
+                return is_pure_state(pl, target, lone_insert);
             }
             if t == target {
                 return (false, false);

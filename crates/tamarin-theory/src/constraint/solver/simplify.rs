@@ -480,12 +480,12 @@ fn exploit_unique_msg_order(red: &mut Reduction) {
     let mut kd_conc: BTreeMap<LNTerm, NodeId> = BTreeMap::new();
     for (id, rule) in red.sys.nodes.iter() {
         for fa in &rule.conclusions {
-            if matches!(fa.tag, FactTag::Kd) {
-                if let Some(m) = fa.terms.first() {
-                    // First occurrence wins; N5↓ has already merged
-                    // duplicates by this point.
-                    kd_conc.entry(m.clone()).or_insert_with(|| *id);
-                }
+            if matches!(fa.tag, FactTag::Kd)
+                && let Some(m) = fa.terms.first()
+            {
+                // First occurrence wins; N5↓ has already merged
+                // duplicates by this point.
+                kd_conc.entry(m.clone()).or_insert_with(|| *id);
             }
         }
     }
@@ -501,10 +501,10 @@ fn exploit_unique_msg_order(red: &mut Reduction) {
     let mut ku_act: BTreeMap<LNTerm, NodeId> = BTreeMap::new();
     for (id, rule) in red.sys.nodes.iter() {
         for fa in &rule.actions {
-            if matches!(fa.tag, FactTag::Ku) {
-                if let Some(m) = fa.terms.first() {
-                    ku_act.entry(m.clone()).or_insert_with(|| *id);
-                }
+            if matches!(fa.tag, FactTag::Ku)
+                && let Some(m) = fa.terms.first()
+            {
+                ku_act.entry(m.clone()).or_insert_with(|| *id);
             }
         }
     }
@@ -512,12 +512,11 @@ fn exploit_unique_msg_order(red: &mut Reduction) {
         if st.solved {
             continue;
         }
-        if let crate::constraint::constraints::Goal::Action(i, fa) = goal {
-            if matches!(fa.tag, FactTag::Ku) {
-                if let Some(m) = fa.terms.first() {
-                    ku_act.entry(m.clone()).or_insert_with(|| *i);
-                }
-            }
+        if let crate::constraint::constraints::Goal::Action(i, fa) = goal
+            && matches!(fa.tag, FactTag::Ku)
+            && let Some(m) = fa.terms.first()
+        {
+            ku_act.entry(m.clone()).or_insert_with(|| *i);
         }
     }
     if ku_act.is_empty() {
@@ -840,10 +839,11 @@ fn partial_atom_valuation_with(
             // solved and unsolved Action goals at (n, fa) imply the
             // action exists in every model.
             for (g, _st) in sys.goals.iter() {
-                if let crate::constraint::constraints::Goal::Action(gi, gfa) = g {
-                    if gi == &n && gfa == lnfa {
-                        return Some(true);
-                    }
+                if let crate::constraint::constraints::Goal::Action(gi, gfa) = g
+                    && gi == &n
+                    && gfa == lnfa
+                {
+                    return Some(true);
                 }
             }
             // `node_rule` holds the FIRST `sys.nodes` entry per id
@@ -897,10 +897,10 @@ fn partial_atom_valuation_with(
             // unsolvedActionAtoms) — see `is_in_trace` above.  Do NOT add
             // extra "successor exists → Some(false)" checks: HS returns
             // `Nothing` when a successor is a free variable not in trace.
-            if let Some(la) = &sys.last_atom {
-                if la == &n {
-                    return Some(true);
-                }
+            if let Some(la) = &sys.last_atom
+                && la == &n
+            {
+                return Some(true);
             }
             // Build lessRel = less_atoms ∪ edges-as-less.
             let less_rel: Vec<(
@@ -931,10 +931,10 @@ fn partial_atom_valuation_with(
             }
             // Final fallback: if there's a recorded last_atom and it's
             // non-unifiable with n, then n cannot be last.
-            if let Some(la) = &sys.last_atom {
-                if non_unifiable_nodes(&n, la) {
-                    return Some(false);
-                }
+            if let Some(la) = &sys.last_atom
+                && non_unifiable_nodes(&n, la)
+            {
+                return Some(false);
             }
             None
         }
@@ -2530,10 +2530,10 @@ fn enforce_ku_action_uniqueness_pass(red: &mut Reduction) -> ChangeIndicator {
     // <$> allKUActions se`).
     let mut acts: Vec<(LNTerm, LNFact, NodeId)> = Vec::new();
     for (i, fa) in red.sys.unsolved_action_atoms() {
-        if matches!(fa.tag, FactTag::Ku) {
-            if let Some(m) = fa.terms.first() {
-                acts.push((apply_subst(m), fa.clone(), i));
-            }
+        if matches!(fa.tag, FactTag::Ku)
+            && let Some(m) = fa.terms.first()
+        {
+            acts.push((apply_subst(m), fa.clone(), i));
         }
     }
     // HS-faithful order: HS `allKUActions` draws rule actions from
@@ -2550,10 +2550,10 @@ fn enforce_ku_action_uniqueness_pass(red: &mut Reduction) -> ChangeIndicator {
     sorted_nodes.sort_by_key(|a| a.0);
     for (id, rule) in sorted_nodes {
         for fa in &rule.actions {
-            if matches!(fa.tag, FactTag::Ku) {
-                if let Some(m) = fa.terms.first() {
-                    acts.push((apply_subst(m), fa.clone(), *id));
-                }
+            if matches!(fa.tag, FactTag::Ku)
+                && let Some(m) = fa.terms.first()
+            {
+                acts.push((apply_subst(m), fa.clone(), *id));
             }
         }
     }
@@ -2971,10 +2971,10 @@ fn enforce_kd_fact_uniqueness_pass(red: &mut Reduction) -> ChangeIndicator {
     let mut kd_concs: Vec<(LNTerm, RuleACInst, NodeId)> = Vec::new();
     for (id, rule) in red.sys.nodes.iter() {
         for fa in &rule.conclusions {
-            if matches!(fa.tag, FactTag::Kd) {
-                if let Some(m) = fa.terms.first() {
-                    kd_concs.push((m.clone(), rule.clone(), *id));
-                }
+            if matches!(fa.tag, FactTag::Kd)
+                && let Some(m) = fa.terms.first()
+            {
+                kd_concs.push((m.clone(), rule.clone(), *id));
             }
         }
     }
@@ -3126,10 +3126,10 @@ fn enforce_fresh_ordering_pass(red: &mut Reduction) -> ChangeIndicator {
                 } else {
                     tamarin_term::subst::apply_vterm(subst, t.clone())
                 };
-                if let Term::Lit(Lit::Var(v)) = t_norm {
-                    if v.sort == tamarin_term::lterm::LSort::Fresh {
-                        suppliers.push((*id, v));
-                    }
+                if let Term::Lit(Lit::Var(v)) = t_norm
+                    && v.sort == tamarin_term::lterm::LSort::Fresh
+                {
+                    suppliers.push((*id, v));
                 }
             }
         }
@@ -3612,12 +3612,10 @@ fn simp_injective_fact_eq_mon_pass(red: &mut Reduction) -> ChangeIndicator {
                 .injective_fact_insts
                 .iter()
                 .find(|(t, _)| t == &prem.tag)
-            {
-                if let Some((first, pairs)) =
+                && let Some((first, pairs)) =
                     crate::tools::injective_fact_instances::trimmed_pair_terms(prem, behaviours)
-                {
-                    by_inj.push((*id, prem.tag, first, pairs));
-                }
+            {
+                by_inj.push((*id, prem.tag, first, pairs));
             }
         }
     }
@@ -4422,24 +4420,25 @@ fn propagate_subterm_obvious(red: &mut Reduction) -> ChangeIndicator {
                 let ss = &splits;
                 if let (Some(SubtermSplit::SubtermD(s1, b1)), Some(SubtermSplit::EqualD(s2, b2))) =
                     (ss.first(), ss.get(1))
+                    && ss.len() == 2
+                    && s1 == s2
+                    && b1 == b2
                 {
-                    if ss.len() == 2 && s1 == s2 && b1 == b2 {
-                        // st = (s1, b1)
-                        let st_pair = (s1.clone(), b1.clone());
-                        if red
-                            .sys
-                            .subterm_store
-                            .neg_subterms
-                            .binary_search(&st_pair)
-                            .is_ok()
-                        {
-                            // emit l = r as positive equality
-                            let atom = mk_eq_atom(s1, b1);
-                            let f = crate::guarded::Guarded::Atom(atom);
-                            if !new_formulas.contains(&f) {
-                                new_formulas.push(f);
-                                changed = ChangeIndicator::Changed;
-                            }
+                    // st = (s1, b1)
+                    let st_pair = (s1.clone(), b1.clone());
+                    if red
+                        .sys
+                        .subterm_store
+                        .neg_subterms
+                        .binary_search(&st_pair)
+                        .is_ok()
+                    {
+                        // emit l = r as positive equality
+                        let atom = mk_eq_atom(s1, b1);
+                        let f = crate::guarded::Guarded::Atom(atom);
+                        if !new_formulas.contains(&f) {
+                            new_formulas.push(f);
+                            changed = ChangeIndicator::Changed;
                         }
                     }
                 }

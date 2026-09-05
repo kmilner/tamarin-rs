@@ -1255,10 +1255,11 @@ fn has_forbidden_exp(sys: &System, ab_adj: &crate::constraint::system::PrebuiltA
 
     // `kFactView` is shared at module scope (returns `KDir`/term).
     fn view_exp(t: &LNTerm) -> Option<(&LNTerm, &LNTerm)> {
-        if let Term::App(FunSym::NoEq(s), args) = t {
-            if s.name == EXP_SYM_STRING && args.len() == 2 {
-                return Some((&args[0], &args[1]));
-            }
+        if let Term::App(FunSym::NoEq(s), args) = t
+            && s.name == EXP_SYM_STRING
+            && args.len() == 2
+        {
+            return Some((&args[0], &args[1]));
         }
         None
     }
@@ -1269,18 +1270,18 @@ fn has_forbidden_exp(sys: &System, ab_adj: &crate::constraint::system::PrebuiltA
     // For "knownEarlier" we only need (NodeId, term).
     let mut all_ku: Vec<(NodeId, LNTerm)> = Vec::new();
     for (i, fa) in sys.unsolved_action_atoms() {
-        if matches!(fa.tag, FactTag::Ku) {
-            if let Some(m) = fa.terms.first() {
-                all_ku.push((i, m.clone()));
-            }
+        if matches!(fa.tag, FactTag::Ku)
+            && let Some(m) = fa.terms.first()
+        {
+            all_ku.push((i, m.clone()));
         }
     }
     for (id, rule) in sys.nodes.iter() {
         for fa in &rule.actions {
-            if matches!(fa.tag, FactTag::Ku) {
-                if let Some(m) = fa.terms.first() {
-                    all_ku.push((*id, m.clone()));
-                }
+            if matches!(fa.tag, FactTag::Ku)
+                && let Some(m) = fa.terms.first()
+            {
+                all_ku.push((*id, m.clone()));
             }
         }
     }
@@ -1748,10 +1749,11 @@ fn bp_view_pmult(
 ) -> Option<(&tamarin_term::lterm::LNTerm, &tamarin_term::lterm::LNTerm)> {
     use tamarin_term::function_symbols::{FunSym, PMULT_SYM_STRING};
     use tamarin_term::term::Term;
-    if let Term::App(FunSym::NoEq(s), args) = t {
-        if s.name == PMULT_SYM_STRING && args.len() == 2 {
-            return Some((&args[0], &args[1]));
-        }
+    if let Term::App(FunSym::NoEq(s), args) = t
+        && s.name == PMULT_SYM_STRING
+        && args.len() == 2
+    {
+        return Some((&args[0], &args[1]));
     }
     None
 }

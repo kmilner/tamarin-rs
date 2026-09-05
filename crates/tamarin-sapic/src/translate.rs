@@ -133,7 +133,7 @@ fn map_to_annotated_rule(
 /// replication action), and the `Comb` combinators in scope — `Parallel`,
 /// `NDC` (with the `substStatePos` shared-position rewrite), and `CondEq`.
 /// `Cond`-with-a-formula / `Lookup` / `Let` are rejected in `base_trans_comb`.
-fn gen(
+fn generate_rules(
     ctx: &TransCtx,
     an_proc: &Process<ProcessAnnotation<LVar>, SapicLVar>,
     p: &ProcessPosition,
@@ -151,7 +151,7 @@ fn gen(
             let mut here = map_to_annotated_rule(proc, p, bodies);
             let mut child_pos = p.clone();
             child_pos.push(1);
-            let rest = gen(ctx, an_proc, &child_pos, &tildex2)?;
+            let rest = generate_rules(ctx, an_proc, &child_pos, &tildex2)?;
             here.extend(rest);
             Ok(here)
         }
@@ -166,8 +166,8 @@ fn gen(
             pl.push(1);
             let mut pr = p.clone();
             pr.push(2);
-            let l = gen(ctx, an_proc, &pl, tildex)?;
-            let r = gen(ctx, an_proc, &pr, tildex)?;
+            let l = generate_rules(ctx, an_proc, &pl, tildex)?;
+            let r = generate_rules(ctx, an_proc, &pr, tildex)?;
             let mut out = subst_state_pos_rules(l, &pl, p);
             out.extend(subst_state_pos_rules(r, &pr, p));
             Ok(out)
@@ -180,12 +180,12 @@ fn gen(
             let mut here = map_to_annotated_rule(proc, p, bodies);
             let mut pl = p.clone();
             pl.push(1);
-            let msrs_l = gen(ctx, an_proc, &pl, &tildex_l)?;
+            let msrs_l = generate_rules(ctx, an_proc, &pl, &tildex_l)?;
             here.extend(msrs_l);
             if let Some(tx_r) = tildex_r {
                 let mut pr = p.clone();
                 pr.push(2);
-                let msrs_r = gen(ctx, an_proc, &pr, &tx_r)?;
+                let msrs_r = generate_rules(ctx, an_proc, &pr, &tx_r)?;
                 here.extend(msrs_r);
             }
             Ok(here)
@@ -293,12 +293,11 @@ fn get_lock_positions(p: &Process<ProcessAnnotation<LVar>, SapicLVar>) -> Vec<LV
     use tamarin_theory::sapic::SapicAction;
     let mut out = Vec::new();
     tamarin_theory::sapic::for_each_process(p, &mut |proc| {
-        if let Process::Action(SapicAction::Lock(_), an, _) = proc {
-            if !an.pure_state {
-                if let Some(v) = &an.lock {
-                    out.push(v.0);
-                }
-            }
+        if let Process::Action(SapicAction::Lock(_), an, _) = proc
+            && !an.pure_state
+            && let Some(v) = &an.lock
+        {
+            out.push(v.0);
         }
     });
     out
@@ -311,12 +310,11 @@ fn get_unlock_positions(p: &Process<ProcessAnnotation<LVar>, SapicLVar>) -> Vec<
     use tamarin_theory::sapic::SapicAction;
     let mut raw = Vec::new();
     tamarin_theory::sapic::for_each_process(p, &mut |proc| {
-        if let Process::Action(SapicAction::Unlock(_), an, _) = proc {
-            if !an.pure_state {
-                if let Some(v) = &an.unlock {
-                    raw.push(v.0);
-                }
-            }
+        if let Process::Action(SapicAction::Unlock(_), an, _) = proc
+            && !an.pure_state
+            && let Some(v) = &an.unlock
+        {
+            raw.push(v.0);
         }
     });
     nub_on(&raw, |v| *v)
@@ -437,7 +435,7 @@ pub(crate) fn translate(
     }
 
     // protocol rules
-    let proto_rules = gen(&ctx, &an_proc, &Vec::new(), &init_tx)?;
+    let proto_rules = generate_rules(&ctx, &an_proc, &Vec::new(), &init_tx)?;
 
     // toRule over (initRules ++ protoRules); HS then applies pathCompression
     // (gated on progress) over the ELABORATED rules, BEFORE pairing with the

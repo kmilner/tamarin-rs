@@ -965,7 +965,7 @@ impl System {
         if stats {
             use std::sync::atomic::Ordering::Relaxed;
             let calls = CANON_CALLS.fetch_add(1, Relaxed) + 1;
-            if calls % 20_000 == 0 {
+            if calls.is_multiple_of(20_000) {
                 let hits = CANON_HITS.load(Relaxed);
                 let incr = CANON_INCR.load(Relaxed);
                 let reused = CANON_ENTRY_REUSED.load(Relaxed);
@@ -990,26 +990,26 @@ impl System {
         // Snapshot the current cached generation (an `Arc` clone) so the
         // `RefCell` borrow ends before a rebuild borrows it mutably below.
         let current = slot.borrow().clone();
-        if let Some(cached) = &current {
-            if cached.stamp == stamp {
-                // Oracle: a stamp hit asserts the store is value/order-identical
-                // to the generation that built `cached`.  Rebuild from scratch
-                // and assert byte-equality — a mismatch means a `formulas`
-                // change did not mint a fresh stamp (an under-bumped write path).
-                if tamarin_utils::env_gate!("TAM_RS_VERIFY_CANON_TABLES") {
-                    let fresh = Self::build_canon_full(store, stamp, &canon);
-                    assert!(
-                        canon_entries_eq(&cached.entries, &fresh.entries),
-                        "TAM_RS_VERIFY_CANON_TABLES: cached canon table diverges \
+        if let Some(cached) = &current
+            && cached.stamp == stamp
+        {
+            // Oracle: a stamp hit asserts the store is value/order-identical
+            // to the generation that built `cached`.  Rebuild from scratch
+            // and assert byte-equality — a mismatch means a `formulas`
+            // change did not mint a fresh stamp (an under-bumped write path).
+            if tamarin_utils::env_gate!("TAM_RS_VERIFY_CANON_TABLES") {
+                let fresh = Self::build_canon_full(store, stamp, &canon);
+                assert!(
+                    canon_entries_eq(&cached.entries, &fresh.entries),
+                    "TAM_RS_VERIFY_CANON_TABLES: cached canon table diverges \
                          from a fresh rebuild at a matching stamp — a formula \
                          store write did not bump its per-store stamp"
-                    );
-                }
-                if stats {
-                    CANON_HITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                }
-                return Arc::clone(cached);
+                );
             }
+            if stats {
+                CANON_HITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+            return Arc::clone(cached);
         }
         if stats {
             CANON_INCR.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -1355,10 +1355,10 @@ impl System {
     /// if invalidated (mirrors `bump_cache_lvar`).
     #[inline]
     pub fn bump_node_max_lvar(&self, v: &tamarin_term::lterm::LVar) {
-        if let Some(cur) = self.node_max_cache.get() {
-            if v.idx > cur {
-                self.node_max_cache.set(Some(v.idx));
-            }
+        if let Some(cur) = self.node_max_cache.get()
+            && v.idx > cur
+        {
+            self.node_max_cache.set(Some(v.idx));
         }
     }
 

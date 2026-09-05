@@ -1,5 +1,5 @@
 [workspace]
-resolver = "2"
+resolver = "3"
 members = [
     "crates/tamarin-utils",
     "crates/tamarin-term",
@@ -14,8 +14,8 @@ members = [
 
 [workspace.package]
 version = "1.13.0"
-edition = "2021"
-rust-version = "1.78"
+edition = "2024"
+rust-version = "1.88"
 license = "GPL-3.0"
 repository = "https://github.com/tamarin-prover/tamarin-prover"
 

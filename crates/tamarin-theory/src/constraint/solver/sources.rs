@@ -2082,10 +2082,10 @@ fn run_solve_all_safe_goals_disj_with_progress(
                     {
                         return None;
                     }
-                    if let Some(label) = ku_source_label_for_fa(fa) {
-                        if used.contains(&label) {
-                            return None;
-                        }
+                    if let Some(label) = ku_source_label_for_fa(fa)
+                        && used.contains(&label)
+                    {
+                        return None;
                     }
                     Some((*i, fa.clone()))
                 }
@@ -2112,11 +2112,11 @@ fn run_solve_all_safe_goals_disj_with_progress(
         for (i_cand, fa_cand) in useful_kus {
             let case_pairs_opt =
                 solve_with_source_cases_action(ths, &red.sys, &i_cand, &fa_cand, avoid_max);
-            if let Some(case_pairs) = case_pairs_opt {
-                if !case_pairs.is_empty() {
-                    picked = Some((i_cand, fa_cand, case_pairs));
-                    break;
-                }
+            if let Some(case_pairs) = case_pairs_opt
+                && !case_pairs.is_empty()
+            {
+                picked = Some((i_cand, fa_cand, case_pairs));
+                break;
             }
         }
         let Some((i, fa, case_pairs)) = picked else {
@@ -3609,10 +3609,10 @@ fn conjoin_refine_arm(
         SourceGoalKind::Action => !in_precompute_mode(),
         SourceGoalKind::Premise => true,
     };
-    if let Some(slot) = r.sys.goals_mut().iter_mut().find(|(g, _)| g == live_goal) {
-        if mark_solved {
-            slot.1.solved = true;
-        }
+    if let Some(slot) = r.sys.goals_mut().iter_mut().find(|(g, _)| g == live_goal)
+        && mark_solved
+    {
+        slot.1.solved = true;
     }
     let res = r.conjoin_system(&freshened_case);
     if matches!(res, Err(_) | Ok(SolveOutcome::Contradictory)) {
@@ -3925,12 +3925,11 @@ fn close_trivial_chains_in_graft(r: &mut crate::constraint::solver::reduction::R
             // them.  Mirroring that here prevents over-eager closure
             // that breaks SplitG resolution downstream (NSPK3/NSLPK3
             // R_1 + I_2 case regressions).
-            if fa_conc.tag == crate::fact::FactTag::Kd {
-                if let Some(t) = fa_conc.terms.first() {
-                    if is_msg_var_for_chain_filter(t) {
-                        return None;
-                    }
-                }
+            if fa_conc.tag == crate::fact::FactTag::Kd
+                && let Some(t) = fa_conc.terms.first()
+                && is_msg_var_for_chain_filter(t)
+            {
+                return None;
             }
             // HS-faithful: never auto-close a chain that `openChainGoals`
             // (Goals.hs:99-108) keeps as an OPEN ranked goal.  A DnK
@@ -4731,15 +4730,15 @@ where
         C: Fn(&T, &T) -> std::cmp::Ordering,
     {
         loop {
-            if let Some(b_ref) = bs.first() {
-                if cmp(&a, b_ref) == Greater {
-                    let mut it = bs.into_iter();
-                    let b = it.next().unwrap();
-                    bs = it.collect();
-                    acc.insert(0, a); // a:as  (acc holds run in ascending order)
-                    a = b;
-                    continue;
-                }
+            if let Some(b_ref) = bs.first()
+                && cmp(&a, b_ref) == Greater
+            {
+                let mut it = bs.into_iter();
+                let b = it.next().unwrap();
+                bs = it.collect();
+                acc.insert(0, a); // a:as  (acc holds run in ascending order)
+                a = b;
+                continue;
             }
             // (a:as) : run is acc with a prepended; acc already ascending, so result ascending
             acc.insert(0, a);
@@ -4754,15 +4753,15 @@ where
         C: Fn(&T, &T) -> std::cmp::Ordering,
     {
         loop {
-            if let Some(b_ref) = bs.first() {
-                if cmp(&a, b_ref) == Less {
-                    let mut it = bs.into_iter();
-                    let b = it.next().unwrap();
-                    bs = it.collect();
-                    acc.push(a); // as ++ [a]
-                    a = b;
-                    continue;
-                }
+            if let Some(b_ref) = bs.first()
+                && cmp(&a, b_ref) == Less
+            {
+                let mut it = bs.into_iter();
+                let b = it.next().unwrap();
+                bs = it.collect();
+                acc.push(a); // as ++ [a]
+                a = b;
+                continue;
             }
             acc.push(a); // as [a]
             return (acc, bs);

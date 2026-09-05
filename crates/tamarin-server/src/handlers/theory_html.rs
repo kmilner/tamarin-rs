@@ -781,17 +781,16 @@ pub(crate) fn proof_html(entry: &TheoryEntry, lemma: &str, sub: &[String]) -> St
     if entry.typed_theory.lookup_lemma(lemma).is_none() {
         return "No such lemma or proof path.".into();
     }
-    if let Some(ps) = &entry.proof_state {
-        if let Some(root) = ps.get_root(lemma) {
-            if let Some(n) = crate::handlers::proof_tree::navigate_at(&root, sub) {
-                // Build the lemma-specialised context used by batch proving
-                // before ranking (HS `getProofContext`).
-                if let Ok(ctx) = ps.context_for_lemma(lemma) {
-                    return crate::handlers::proof_tree::render_sub_proof_snippet(
-                        entry.idx, lemma, sub, n, &ctx,
-                    );
-                }
-            }
+    if let Some(ps) = &entry.proof_state
+        && let Some(root) = ps.get_root(lemma)
+        && let Some(n) = crate::handlers::proof_tree::navigate_at(&root, sub)
+    {
+        // Build the lemma-specialised context used by batch proving
+        // before ranking (HS `getProofContext`).
+        if let Ok(ctx) = ps.context_for_lemma(lemma) {
+            return crate::handlers::proof_tree::render_sub_proof_snippet(
+                entry.idx, lemma, sub, n, &ctx,
+            );
         }
     }
     "No such lemma or proof path.".into()

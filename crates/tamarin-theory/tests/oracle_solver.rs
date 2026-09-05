@@ -1084,6 +1084,7 @@ fn verdict_match_suite_all_solved_against_tamarin() {
 #[ignore = "heavyweight whole-corpus probe (hour-plus). Run with --ignored"]
 fn corpus_proof_skeleton_match_probe() {
     use rayon::prelude::*;
+    use tamarin_theory::constraint::solver::search::ProofDeadlineGuard;
     use tamarin_theory::proof_skeleton::{extract_from_haskell, first_divergence, render};
     use tamarin_theory::prove::prove_lemma;
 
@@ -1101,8 +1102,6 @@ fn corpus_proof_skeleton_match_probe() {
     if !tamarin_available() {
         return;
     }
-
-    std::env::set_var("TAM_PROVE_DEADLINE_MS", "10000");
 
     let corpus_root = corpus_root();
 
@@ -1238,6 +1237,7 @@ fn corpus_proof_skeleton_match_probe() {
     let outcomes: Vec<Outcome> = lemmas
         .par_iter()
         .map(|w| {
+            let _deadline = ProofDeadlineGuard::set_ms(10_000);
             let h =
                 match tamarin_term::maude_proc::MaudeHandle::start(&mp, w.elab.signature.clone()) {
                     Ok(h) => h,
@@ -1855,10 +1855,10 @@ fn fixture_nat_sort_reuse_lemma_derives_implied_fact() {
     assert_eq!(root.status, NodeStatus::Solved, "expected a witness trace");
 
     fn contains_honest_signature_key(n: &ProofNode) -> bool {
-        if let ProofMethod::SolveGoal(Goal::Action(_, fa)) = &n.method {
-            if tamarin_theory::fact::fact_tag_name(&fa.tag) == "HonestSignatureKey" {
-                return true;
-            }
+        if let ProofMethod::SolveGoal(Goal::Action(_, fa)) = &n.method
+            && tamarin_theory::fact::fact_tag_name(&fa.tag) == "HonestSignatureKey"
+        {
+            return true;
         }
         n.children.values().any(contains_honest_signature_key)
     }

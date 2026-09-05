@@ -273,7 +273,8 @@ pub(crate) fn load_from_source(
     // from, taken before the NDC join below — see
     // `TheoryEntry::prover_maude_sig` for why the join must not reach it.
     let prover_maude_sig = typed.signature.clone();
-    if let Ok(maude) = MaudeHandle::start(maude_path, prover_maude_sig.clone()) {
+    let started_maude = MaudeHandle::start(maude_path, prover_maude_sig.clone());
+    if let Ok(maude) = started_maude {
         tamarin_theory::tools::rule_variants::populate_rule_variants(&mut typed, &maude, None);
         // `checkTranslatedTheory` reports contradictory zero-variant rules,
         // then `closeTheory` drops them from the closed theory. Keep that

@@ -79,21 +79,22 @@ pub fn extract_topics(s: &str) -> BTreeSet<String> {
     let mut out = BTreeSet::new();
     let mut prev: Option<&str> = None;
     for line in s.lines() {
-        if !line.is_empty() && line.chars().all(|c| c == '=') {
-            if let Some(p) = prev {
-                let p = p.trim();
-                if !p.is_empty() {
-                    // Filter banner lines that aren't actual topics.
-                    if !p.starts_with("analyzed:")
-                        && !p.starts_with("summary of summaries")
-                        && !p.contains("Tamarin version")
-                        && !p.contains("Maude version")
-                        && !p.starts_with("theory ")
-                        && !p.starts_with("Generated from:")
-                        && !p.starts_with("Compiled at")
-                    {
-                        out.insert(p.to_string());
-                    }
+        if !line.is_empty()
+            && line.chars().all(|c| c == '=')
+            && let Some(p) = prev
+        {
+            let p = p.trim();
+            if !p.is_empty() {
+                // Filter banner lines that aren't actual topics.
+                if !p.starts_with("analyzed:")
+                    && !p.starts_with("summary of summaries")
+                    && !p.contains("Tamarin version")
+                    && !p.contains("Maude version")
+                    && !p.starts_with("theory ")
+                    && !p.starts_with("Generated from:")
+                    && !p.starts_with("Compiled at")
+                {
+                    out.insert(p.to_string());
                 }
             }
         }

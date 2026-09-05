@@ -104,22 +104,21 @@ fn map_let(
 
     // Dispatch on the shape of (t1, viewTerm t1', viewTerm t2') — Case A first
     // (LetDestructors.hs:34-58): t1 a var AND t2 a Destructor application.
-    if let VTerm::Lit(Lit::Var(_)) = &left {
-        if let VTerm::App(FunSym::NoEq(funsym), rightterms) = &t2_ln {
-            if funsym.constructability == Constructability::Destructor {
-                return case_destructor(rules, &t1_ln, *funsym, rightterms, pl, pr, elsebranch);
-            }
-        }
+    if let VTerm::Lit(Lit::Var(_)) = &left
+        && let VTerm::App(FunSym::NoEq(funsym), rightterms) = &t2_ln
+        && funsym.constructability == Constructability::Destructor
+    {
+        return case_destructor(rules, &t1_ln, *funsym, rightterms, pl, pr, elsebranch);
     }
 
     // Case B (LetDestructors.hs:59-61): t1 a plain variable NOT in match-vars.
-    if let VTerm::Lit(Lit::Var(svar)) = &left {
-        if !match_vars.contains(svar) {
-            // `applyM (substFromList ((,t2) <$> make_untyped_variant svar)) pl`.
-            let subst = make_let_subst(svar, &right);
-            let pl1 = apply_subst_process(&subst, pl);
-            return map_proc(rules, pl1);
-        }
+    if let VTerm::Lit(Lit::Var(svar)) = &left
+        && !match_vars.contains(svar)
+    {
+        // `applyM (substFromList ((,t2) <$> make_untyped_variant svar)) pl`.
+        let subst = make_let_subst(svar, &right);
+        let pl1 = apply_subst_process(&subst, pl);
+        return map_proc(rules, pl1);
     }
 
     // Case C (LetDestructors.hs:62-65): keep the Let, annotate `annElse
@@ -233,12 +232,11 @@ fn find_rule(
     for rule in rules {
         let rr = rule.to_rrule();
         // `case (viewTerm fhs, viewTerm rhs) of (FApp fs y, Lit (Var v)) | fs == funsym`
-        if let VTerm::App(FunSym::NoEq(fs), y) = &rr.lhs {
-            if let VTerm::Lit(Lit::Var(v)) = &rr.rhs {
-                if fs == funsym {
-                    acc = Some((y.to_vec(), *v));
-                }
-            }
+        if let VTerm::App(FunSym::NoEq(fs), y) = &rr.lhs
+            && let VTerm::Lit(Lit::Var(v)) = &rr.rhs
+            && fs == funsym
+        {
+            acc = Some((y.to_vec(), *v));
         }
     }
     acc

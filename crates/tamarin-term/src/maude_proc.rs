@@ -991,10 +991,10 @@ impl MaudeHandle {
         // local scope, never reading or advancing `self`'s session counter.
         let mut input_max = 0u64;
         for lit in ctx.bindings().values() {
-            if let crate::vterm::Lit::Var(lv) = lit {
-                if lv.idx > input_max {
-                    input_max = lv.idx;
-                }
+            if let crate::vterm::Lit::Var(lv) = lit
+                && lv.idx > input_max
+            {
+                input_max = lv.idx;
             }
         }
         let mut out = Vec::with_capacity(msubsts.len());
@@ -1596,10 +1596,11 @@ fn msubst_to_lnsubst_with_avoid(
     let mut next: u64 = {
         let mut n = avoid_max.saturating_add(1);
         for lit in ctx.bindings().values() {
-            if let crate::vterm::Lit::Var(lv) = lit {
-                if lv.name == "x" && lv.idx >= n {
-                    n = lv.idx + 1;
-                }
+            if let crate::vterm::Lit::Var(lv) = lit
+                && lv.name == "x"
+                && lv.idx >= n
+            {
+                n = lv.idx + 1;
             }
         }
         n
@@ -1761,7 +1762,8 @@ impl MaudePool {
         let mut try_spawn = true;
         let mut state = self.state.lock().unwrap();
         loop {
-            if let Some(h) = state.free.pop() {
+            let idle = state.free.pop();
+            if let Some(h) = idle {
                 return PooledMaude {
                     pool: self,
                     inner: Some(h),
@@ -1781,7 +1783,7 @@ impl MaudePool {
                         return PooledMaude {
                             pool: self,
                             inner: Some(h),
-                        }
+                        };
                     }
                     Err(e) => {
                         try_spawn = false;
@@ -1831,7 +1833,7 @@ impl MaudePool {
                     return Some(PooledMaude {
                         pool: self,
                         inner: Some(h),
-                    })
+                    });
                 }
                 Err(e) => {
                     let mut relock = self.state.lock().unwrap();
