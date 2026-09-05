@@ -676,20 +676,23 @@ pub fn parse_intruder_rules(msig: &MaudeSig, input: &str) -> Result<Vec<Rule>, P
     // (`KnownFuns`), so accept them structurally, which admits exactly the
     // same rules.
     p.resolve_prefix_apps = false;
-    let mut rules = Vec::new();
-    loop {
-        p.skip_ws();
-        if p.lx.is_eof() {
-            break;
+    let result = (|| {
+        let mut rules = Vec::new();
+        loop {
+            p.skip_ws();
+            if p.lx.is_eof() {
+                break;
+            }
+            // HS `intrRule` uses `try (symbol "rule" *> moduloAC *> intrInfo <* colon)`
+            // (Theory/Text/Parser/Rule.hs:156-161, see line 159) — i.e. requires the
+            // `rule (modulo AC) name:` head.
+            // `parse_rule_ac` enforces the same shape.
+            let r = p.parse_rule_ac()?;
+            rules.push(r);
         }
-        // HS `intrRule` uses `try (symbol "rule" *> moduloAC *> intrInfo <* colon)`
-        // (Theory/Text/Parser/Rule.hs:156-161, see line 159) — i.e. requires the
-        // `rule (modulo AC) name:` head.
-        // `parse_rule_ac` enforces the same shape.
-        let r = p.parse_rule_ac()?;
-        rules.push(r);
-    }
-    Ok(rules)
+        Ok(rules)
+    })();
+    p.lx.finish(result)
 }
 
 /// Strip `//` line comments and `/* */` block comments from a lemma's verbatim
@@ -7677,13 +7680,16 @@ pub(crate) fn parse_parens_goal(
 ) -> Result<(GoalSpec, usize), ParseError> {
     let mut p = Parser::new(s, &[], false);
     p.seed_from(parent);
-    p.require_punct("(")?;
-    let g = p.goal()?;
-    p.skip_ws();
-    if !p.lx.eat_str(")") {
-        return Err(p.err("expected `)` after the goal"));
-    }
-    Ok((g, p.lx.pos().offset))
+    let result = (|| {
+        p.require_punct("(")?;
+        let g = p.goal()?;
+        p.skip_ws();
+        if !p.lx.eat_str(")") {
+            return Err(p.err("expected `)` after the goal"));
+        }
+        Ok((g, p.lx.pos().offset))
+    })();
+    p.lx.finish(result)
 }
 
 #[cfg(test)]

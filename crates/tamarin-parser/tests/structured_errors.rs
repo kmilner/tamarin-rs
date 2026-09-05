@@ -634,6 +634,19 @@ fn unterminated_comments_have_their_own_diagnostic() {
         error.kind(),
         ParseErrorKind::UnclosedBlockComment { .. }
     ));
+    let error = tamarin_parser::parse_intruder_rules(&pair_maude_sig(), "/* unfinished")
+        .expect_err("intruder-rule comments must close");
+    assert!(matches!(
+        error.kind(),
+        ParseErrorKind::UnclosedBlockComment { .. }
+    ));
+    let parent = tamarin_parser::parser::Parser::new("", &[], false);
+    let error = tamarin_parser::parse_proof_tree("by solve( /* unfinished", &parent)
+        .expect_err("standalone proof comments must close");
+    assert!(matches!(
+        error.kind(),
+        ParseErrorKind::UnclosedBlockComment { .. }
+    ));
 }
 
 #[test]
@@ -763,6 +776,29 @@ fn lemma_attribute_labels_cover_the_keyword_only() {
     let source = "theory T begin lemma L [bogus=something]: \"T\" end";
     let error = parse_theory(source, &[]).expect_err("unknown attribute");
     common::assert_span(&error, source, "bogus");
+}
+
+#[test]
+fn parenthesized_terms_remain_valid_formula_operands() {
+    for operator in ["=", "<<"] {
+        let source =
+            format!("theory T begin\nfunctions: F/1\nlemma L: \"(F(x)) {operator} F(x)\"\nend\n");
+        parse_theory(&source, &[]).expect("parenthesized relational operand must parse");
+    }
+}
+
+#[test]
+fn parenthesized_terms_preserve_semantic_failures() {
+    let source = "theory T begin\nfunctions: F/2\nlemma L: \"(F(x)) = x\"\nend\n";
+    let error = parse_theory(source, &[]).expect_err("wrong arity must fail");
+    assert_eq!(
+        error.kind(),
+        &ParseErrorKind::WrongFunctionArity {
+            name: "F".into(),
+            declared: 2,
+            used: 1,
+        }
+    );
 }
 
 #[test]
