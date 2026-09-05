@@ -30,14 +30,16 @@
 //! it does in HS.
 
 use crate::ast::{ParsedMethod, ParsedProofTree};
-use crate::lexer::{is_ident_char, Lexer};
-use crate::parser::Parser;
+use crate::lexer::{is_ident_char, Lexer, Pos};
+use crate::parser::{Message, ParseError, Parser};
 
 #[derive(Debug, Clone)]
 pub struct ProofTreeParseError {
+    pub offset: usize,
     pub line: u32,
     pub col: u32,
     pub msg: String,
+    inner: Option<ParseError>,
 }
 
 impl std::fmt::Display for ProofTreeParseError {
@@ -49,7 +51,13 @@ impl std::fmt::Display for ProofTreeParseError {
         )
     }
 }
-impl std::error::Error for ProofTreeParseError {}
+impl std::error::Error for ProofTreeParseError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.inner
+            .as_ref()
+            .map(|error| error as &(dyn std::error::Error + 'static))
+    }
+}
 
 /// Parse the raw skeleton text into a [`ParsedProofTree`]. Returns `Err` if
 /// the complete token stream does not conform to the HS grammar.
@@ -101,11 +109,25 @@ struct TreeParser<'a> {
 
 impl<'a> TreeParser<'a> {
     fn err(&self, msg: impl Into<String>) -> ProofTreeParseError {
-        let (line, col) = self.lx.line_col();
+        let pos = self.lx.pos();
         ProofTreeParseError {
+            offset: pos.offset,
+            line: pos.line,
+            col: pos.col,
+            msg: msg.into(),
+            inner: None,
+        }
+    }
+
+    fn nested_error(&self, error: ParseError, base: Pos) -> ProofTreeParseError {
+        let error = error.shifted(base.offset, self.lx.src());
+        let (line, col) = error.line_column();
+        ProofTreeParseError {
+            offset: error.span().start as usize,
             line,
             col,
-            msg: msg.into(),
+            msg: format!("in solve( ... ): {}", error.diagnostic_message()),
+            inner: Some(error),
         }
     }
 
@@ -206,10 +228,10 @@ impl<'a> TreeParser<'a> {
             // is and this lexer walks to the offset it stopped at, character
             // by character to keep its line and column right.
             self.lx.skip_ws();
-            let start = self.lx.pos().offset;
+            let start = self.lx.pos();
             let (spec, len) = crate::parser::parse_parens_goal(self.lx.rest(), self.parent)
-                .map_err(|e| self.err(format!("in solve( ... ): {}", e)))?;
-            let end = start + len;
+                .map_err(|error| self.nested_error(error, start))?;
+            let end = start.offset + len;
             while self.lx.pos().offset < end {
                 self.lx.bump();
             }
@@ -318,6 +340,17 @@ impl<'a> TreeParser<'a> {
         }
         self.lx.skip_ws();
         Ok(s)
+    }
+}
+
+impl ProofTreeParseError {
+    pub(crate) fn into_parse_error(self, base_offset: usize, source: &str) -> ParseError {
+        if let Some(error) = self.inner {
+            return error.shifted(base_offset, source);
+        }
+        let offset = base_offset.saturating_add(self.offset);
+        let (line, col) = crate::parse_error::line_column(source, offset);
+        ParseError::at(Pos { offset, line, col }, vec![Message::Message(self.msg)])
     }
 }
 

@@ -207,6 +207,25 @@ impl ParseError {
         &self.kind
     }
 
+    pub(crate) fn shifted(mut self, base_offset: usize, source: &str) -> Self {
+        // Included-file failures already use an independent coordinate system.
+        if self.diagnostic_source.is_some() {
+            return self;
+        }
+        self.offset = self.offset.saturating_add(base_offset);
+        (self.line, self.col) = line_column(source, self.offset);
+        let shift = |span: &mut Span| {
+            let base = u32::try_from(base_offset).unwrap_or(u32::MAX);
+            span.start = span.start.saturating_add(base);
+            span.end = span.end.saturating_add(base);
+        };
+        shift(&mut self.span);
+        if let ParseErrorKind::UnclosedDelimiter { opening_span, .. } = &mut self.kind {
+            shift(opening_span);
+        }
+        self
+    }
+
     pub fn span(&self) -> Span {
         let mut span = self.span;
         if span.start == span.end
@@ -419,7 +438,7 @@ impl ParseError {
     }
 }
 
-fn line_column(source: &str, offset: usize) -> (u32, u32) {
+pub(crate) fn line_column(source: &str, offset: usize) -> (u32, u32) {
     let mut line = 1u32;
     let mut col = 1u32;
     for ch in source[..offset.min(source.len())].chars() {

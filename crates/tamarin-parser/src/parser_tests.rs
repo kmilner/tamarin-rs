@@ -1047,6 +1047,17 @@ fn fatom_fact_lhs_of_relop_is_term_atom() {
     }
 }
 
+#[test]
+fn fatom_keeps_a_valid_fact_when_term_reinterpretation_fails() {
+    let source = "theory T begin\nlemma L: \"Foo(x) = y\"\nend\n";
+    let error = parse_theory(source, &[]).expect_err("a predicate cannot precede equality");
+    assert!(
+        !matches!(error.kind(), ParseErrorKind::UndeclaredFunction { .. }),
+        "the successful Foo(x) fact parse must outrank term reinterpretation: {error:?}"
+    );
+    assert!(source[error.span().start as usize..].starts_with('='));
+}
+
 // HS `typep` (Token.hs:471-473) maps only the literal `Any` to the default
 // (Nothing); lowercase `any` is `Just "any"`. Verified against
 // tamarin-prover 1.13.0: `new x:any` renders with `:any` preserved.
@@ -1160,6 +1171,37 @@ fn malformed_stored_proof_fails_theory_parse() {
     let src = "theory T begin\nlemma L: \"T\"\nby sorry trailing\nend";
     let err = parse_theory(src, &[]).expect_err("trailing proof text must not be discarded");
     assert!(err.to_string().contains("unexpected trailing proof text"));
+}
+
+#[test]
+fn stored_proof_stops_before_top_level_process_definition() {
+    let source = r#"theory T begin
+lemma L: "T"
+by sorry
+let P = 0
+process: P
+end"#;
+    parse_theory(source, &[]).expect("top-level let after a proof must remain a theory item");
+}
+
+#[test]
+fn stored_proof_ignores_structure_inside_public_literals() {
+    let source = r#"theory T begin
+lemma L: "T"
+by solve( Foo('a)) rule') @ #i )
+end"#;
+    let theory = parse_theory(source, &[]).expect("literal punctuation cannot truncate a proof");
+    assert!(lemma_proof_raw(&theory).contains("'a)) rule'"));
+}
+
+#[test]
+fn stored_proof_treats_backslashes_as_public_literal_data() {
+    let source = r#"theory T begin
+lemma L: "T"
+by solve( Foo('a\') @ #i )
+end"#;
+    let theory = parse_theory(source, &[]).expect("backslash does not escape a public quote");
+    assert!(lemma_proof_raw(&theory).contains("'a\\'"));
 }
 
 /// Reports whether the parser split a top-level `test` CaseTest item out of

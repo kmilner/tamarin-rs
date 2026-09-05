@@ -64,6 +64,32 @@ fn nested_failure_reports_the_inner_application() {
 }
 
 #[test]
+fn nested_wrong_arity_keeps_the_inner_application_span() {
+    let source = "theory T begin\nfunctions: f/1, g/2\nrule R: [ ] --> [ Out(f(g('a'))) ]\nend\n";
+    let error = parse_theory(source, &[]).expect_err("inner arity mismatch must fail");
+    assert_eq!(
+        error.kind(),
+        &ParseErrorKind::WrongFunctionArity {
+            name: "g".into(),
+            declared: 2,
+            used: 1,
+        }
+    );
+    assert_eq!(&source[error.span().as_range()], "g");
+}
+
+#[test]
+fn nested_reserved_builtin_keeps_the_inner_application_span() {
+    let source = "theory T begin\nfunctions: g/2\nequations: g{x}exp = x\nend\n";
+    let error = parse_theory(source, &[]).expect_err("reserved builtin must fail");
+    assert!(matches!(
+        error.kind(),
+        ParseErrorKind::ReservedBuiltin { name, .. } if name == "exp"
+    ));
+    assert_eq!(&source[error.span().as_range()], "exp");
+}
+
+#[test]
 fn wrong_arity_reports_the_declaration_and_use_counts() {
     assert_wrong_arity(
         "theory T\nbegin\nfunctions: g/3\nrule R: [ ] --> [ Out(g('a','b')) ]\nend\n",

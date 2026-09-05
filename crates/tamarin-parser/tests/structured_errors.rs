@@ -53,11 +53,8 @@ fn applications_report_the_real_failure() {
         "g"
     );
 
-    let wrong_arity = parse_theory(
-        "theory T begin\nfunctions: g/3\nrule R: [ ] --> [ Out(g('a','b')) ]\nend\n",
-        &[],
-    )
-    .expect_err("wrong arity must fail");
+    let source = "theory T begin\nfunctions: g/3\nrule R: [ ] --> [ Out(g('a','b')) ]\nend\n";
+    let wrong_arity = parse_theory(source, &[]).expect_err("wrong arity must fail");
     assert_eq!(
         wrong_arity.kind(),
         &ParseErrorKind::WrongFunctionArity {
@@ -70,6 +67,59 @@ fn applications_report_the_real_failure() {
         &wrong_arity.source_text().unwrap()[wrong_arity.span().as_range()],
         "g"
     );
+}
+
+#[test]
+fn formula_facts_preserve_nested_and_arity_errors() {
+    let source = "theory T begin\nlemma L: \"All #i. Foo(g('a')) @ #i\"\nend\n";
+    let error = parse_theory(source, &[]).expect_err("nested application must fail");
+    assert_eq!(
+        error.kind(),
+        &ParseErrorKind::UndeclaredFunction { name: "g".into() }
+    );
+    assert_eq!(&source[error.span().as_range()], "g");
+
+    let source = "theory T begin\nlemma L: \"All #i. Out() @ #i\"\nend\n";
+    let error = parse_theory(source, &[]).expect_err("wrong fact arity must fail");
+    assert_eq!(
+        error.kind(),
+        &ParseErrorKind::FactArity {
+            name: "Out".into(),
+            arity: 0,
+        }
+    );
+    assert_eq!(&source[error.span().as_range()], "Out");
+}
+
+#[test]
+fn proof_errors_keep_their_exact_nested_and_tabbed_spans() {
+    let source =
+        "theory T begin\nfunctions: Foo/1\nlemma L: \"T\"\nby solve( Foo(g('a')) @ #i )\nend\n";
+    let error = parse_theory(source, &[]).expect_err("invalid solve goal must fail");
+    assert_eq!(
+        error.kind(),
+        &ParseErrorKind::UndeclaredFunction { name: "g".into() }
+    );
+    assert_eq!(&source[error.span().as_range()], "g");
+
+    let source = "theory T begin\nlemma L: \"T\"\nby\t?\nend\n";
+    let error = parse_theory(source, &[]).expect_err("invalid proof method must fail");
+    assert_eq!(error.line_column(), (3, 9));
+    assert_eq!(&source[error.span().as_range()], "?");
+
+    let source = "theory T begin\nlemma L: \"T\"\n    by\t?\nend\n";
+    let error = parse_theory(source, &[]).expect_err("indented invalid proof method must fail");
+    assert_eq!(error.line_column(), (3, 9));
+
+    let source = "theory T begin\nfunctions: Foo/1\nlemma L: \"T\"\n    by solve(\tFoo(g('a')) @ #i )\nend\n";
+    let error = parse_theory(source, &[]).expect_err("indented solve goal must fail");
+    assert_eq!(error.line_column(), (4, 21));
+    assert_eq!(&source[error.span().as_range()], "g");
+
+    let source = "theory D begin\ndiffLemma E:\n    rule-equivalence\n    case R\n    by step(\t? )\n    qed\nend\n";
+    let error = tamarin_parser::parse_diff_theory(source, &[])
+        .expect_err("indented invalid diff proof method must fail");
+    assert_eq!(error.line_column(), (5, 17));
 }
 
 #[test]
@@ -314,6 +364,23 @@ fn empty_and_trailing_comma_lists_report_the_opening_delimiter() {
 }
 
 #[test]
+fn stray_closers_are_not_reported_as_unclosed_lists() {
+    let source = "theory T begin\nrule R: [ In('a') } ] --> [ ]\nend\n";
+    let error = parse_theory(source, &[]).expect_err("stray closer must fail");
+    assert!(
+        !matches!(error.kind(), ParseErrorKind::UnclosedDelimiter { .. }),
+        "unexpected delimiter diagnostic: {error:?}"
+    );
+}
+
+#[test]
+fn builtin_spans_preserve_whitespace_before_hyphens() {
+    let source = "theory T begin\nbuiltins: diffie -helman\nend\n";
+    let error = parse_theory(source, &[]).expect_err("misspelled builtin must fail");
+    assert_eq!(&source[error.span().as_range()], "diffie -helman");
+}
+
+#[test]
 fn duplicate_macro_arguments_point_at_the_name_after_a_sigil() {
     let source = "theory T begin\nmacros: m($foobar, $foobar) = $foobar\nend\n";
     let error = parse_theory(source, &[]).expect_err("duplicate argument must fail");
@@ -329,4 +396,43 @@ fn line_columns_are_derived_from_source_text() {
     let source = "theory T begin\n\tunknown: x\nend\n";
     let error = parse_theory(source, &[]).expect_err("unknown item must fail");
     assert_eq!(error.line_column(), (2, 9));
+}
+
+#[test]
+fn parenthesized_formulas_preserve_inner_failures() {
+    for (formula, token) in [("(Out(g(x)) @ #i)", "g"), ("(Out(x,y) @ #i)", "Out")] {
+        let source = format!("theory T begin lemma L: \"{formula}\" end");
+        let error = parse_theory(&source, &[]).expect_err("invalid fact");
+        if token == "g" {
+            assert!(
+                matches!(error.kind(), ParseErrorKind::UndeclaredFunction { name } if name == "g"),
+                "{error:?}"
+            );
+        } else {
+            assert!(
+                matches!(error.kind(), ParseErrorKind::FactArity { .. }),
+                "{error:?}"
+            );
+        }
+        assert_eq!(&source[error.span().as_range()], token);
+    }
+    let source = "theory T begin lemma L: \"(P(x) & ?)\" end";
+    let error = parse_theory(source, &[]).expect_err("missing formula operand");
+    assert!((error.span().start as usize) >= source.find('?').unwrap(), "{error:?}");
+}
+
+#[test]
+fn malformed_equation_split_preserves_its_cause() {
+    let source = "theory T begin lemma L: \"T\" by solve(splitEqs(x)) end";
+    let error = parse_theory(source, &[]).expect_err("split id must be numeric");
+    assert!(
+        error.diagnostic_message().contains("expected a split id"),
+        "{error:?}"
+    );
+    assert_eq!(&source[error.span().as_range()], "x");
+    parse_theory(
+        "theory T begin lemma L: \"T\" by solve(splitEqs(1)) end",
+        &[],
+    )
+    .expect("numeric split id remains valid");
 }
