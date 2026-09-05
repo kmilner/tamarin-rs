@@ -4453,10 +4453,11 @@ impl<'a> Parser<'a> {
 
     fn string_literal_or_squoted(&mut self) -> Result<String, ParseError> {
         self.skip_ws();
-        if let Some(s) = self.lx.string_literal() {
-            return Ok(s);
+        if self.lx.peek() == Some('"') {
+            self.string_literal()
+        } else {
+            self.single_quoted("expected quoted string")
         }
-        self.single_quoted("expected quoted string")
     }
 
     /// Read an identifier or a balanced parenthesised token (for `process=...`).

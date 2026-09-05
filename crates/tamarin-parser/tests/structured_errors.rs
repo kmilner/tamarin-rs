@@ -1175,6 +1175,35 @@ fn malformed_compound_operands_keep_application_errors() {
 }
 
 #[test]
+fn role_strings_keep_checked_literal_failures() {
+    let source = "theory T begin rule R [role=\"abc\\q\"]: [] --> [] end";
+    let error = parse_theory(source, &[]).unwrap_err();
+    assert_eq!(error.span().start, source.find("\\q").unwrap() + 1);
+    assert_eq!(
+        error.diagnostic_message(),
+        "expected a valid string literal"
+    );
+
+    let source = "theory T begin rule R [role=\"unfinished";
+    let error = parse_theory(source, &[]).unwrap_err();
+    assert!(
+        matches!(
+            error.kind(),
+            ParseErrorKind::UnclosedDelimiter { opening: '"', .. }
+        ),
+        "{error:?}"
+    );
+    assert_eq!(error.span().start, source.len());
+    let labels = error.diagnostic_labels_with_source(source);
+    assert_eq!(&source[labels[1].span.clone()], "\"");
+
+    for literal in ["\"abc\\n\"", "'abc'", "\"\"", "'/* ignored */ abc'"] {
+        let source = format!("theory T begin rule R [role={literal}]: [] --> [] end");
+        parse_theory(&source, &[]).unwrap();
+    }
+}
+
+#[test]
 fn predicate_syntax_errors_do_not_become_function_errors() {
     for signature in ["", "functions: G/2"] {
         let prefix = format!("theory T begin {signature} predicates: G(x) <=> T lemma L: \"");
