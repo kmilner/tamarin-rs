@@ -1041,8 +1041,18 @@ struct ParserState {
     seen_predicates: Vec<(bool, String, usize)>,
 }
 
+struct FunctionSite {
+    name: String,
+    options: FunOptions,
+    span: std::ops::Range<usize>,
+    builtin: bool,
+}
+
 pub struct Parser<'a> {
     lx: Lexer<'a>,
+    // These positions belong to this parser's source, not the shared include state.
+    function_sites: Vec<FunctionSite>,
+    named_sites: std::collections::BTreeMap<(&'static str, String), std::ops::Range<usize>>,
     state: ParserState,
     /// Whether we're parsing a diff theory. Set only from the `Parser::new`
     /// argument supplied by the caller and echoed into `Theory::is_diff`.
@@ -1169,6 +1179,8 @@ impl<'a> Parser<'a> {
         }
         Parser {
             lx: Lexer::new(src),
+            function_sites: Vec::new(),
+            named_sites: std::collections::BTreeMap::new(),
             state: ParserState {
                 enable_diff: is_diff || flags_set.contains("diff"),
                 flags: flags_set,
@@ -1705,7 +1717,9 @@ impl<'a> Parser<'a> {
 
     pub fn theory(&mut self) -> Result<Theory, ParseError> {
         let result = self.theory_inner();
-        self.lx.finish(result)
+        self.lx
+            .finish(result)
+            .map_err(|error| self.with_arity_site(error))
     }
 
     fn theory_inner(&mut self) -> Result<Theory, ParseError> {
@@ -2084,7 +2098,9 @@ impl<'a> Parser<'a> {
 
         // Thread parser state BACK (HS `putState st'` + `sig st'` merge).
         self.swap_include_state(&mut sub);
-        sub.lx.finish(result)
+        sub.lx
+            .finish(result)
+            .map_err(|error| sub.with_arity_site(error))
     }
 
     fn skip_until(&mut self, terminator: &str) {
@@ -2156,6 +2172,15 @@ impl<'a> Parser<'a> {
             // `symbol`, so a conflict is diagnosed against the signature the
             // EARLIER names in the same list already merged, at the position
             // that name's lexeme reached.
+            let introduced: Vec<_> = builtin_st_fun_syms(&name)
+                .unwrap_or(&[])
+                .iter()
+                .filter(|sym| {
+                    !self.state.fun_syms.iter().any(|(n, options)| {
+                        n.as_bytes() == sym.name && *options == FunOptions::of_no_eq(sym)
+                    })
+                })
+                .collect();
             self.enable_builtin(&name).map_err(|error| {
                 error
                     .with_kind(ParseErrorKind::ConflictingDeclaration {
@@ -2164,6 +2189,14 @@ impl<'a> Parser<'a> {
                     })
                     .with_location(name_start, name_len)
             })?;
+            for sym in introduced {
+                self.function_sites.push(FunctionSite {
+                    name: sym_name(sym).to_string(),
+                    options: FunOptions::of_no_eq(sym),
+                    span: name_start.offset..name_start.offset + name_len,
+                    builtin: true,
+                });
+            }
             names.push(name);
             if !self.try_punct(",") {
                 break;
@@ -2230,13 +2263,30 @@ impl<'a> Parser<'a> {
                     }
                 }
                 if !clashes.is_empty() {
-                    return Err(self.err_fail(format!(
+                    let error = self.err_fail(format!(
                         "Builtin '{}' conflicts with existing function(s) (same name, \
                          different arity or function options): {}. Please remove these \
                          function definitions or use different names.",
                         name,
                         show_string_list(&clashes)
-                    )));
+                    ));
+                    let site = self.function_sites.iter().find(|site| {
+                        syms.iter().any(|sym| {
+                            site.name.as_bytes() == sym.name
+                                && site.options != FunOptions::of_no_eq(sym)
+                        }) && self
+                            .state
+                            .fun_syms
+                            .iter()
+                            .any(|(n, o)| n == &site.name && *o == site.options)
+                    });
+                    return Err(match site {
+                        Some(site) => error.with_related_span(
+                            site.span.clone(),
+                            "conflicting function declared here",
+                        ),
+                        None => error,
+                    });
                 }
             }
             // `macroConflicts` (Theory/Text/Parser/Signature.hs:117-122): the
@@ -3114,7 +3164,7 @@ impl<'a> Parser<'a> {
                     context: ParseContext::FunctionDeclaration,
                 })
                 .with_location(name_pos, name.len());
-                return Err(error);
+                return Err(self.with_function_site(error, &name, b));
             }
         }
         // Check (2), Theory/Text/Parser/Signature.hs:212-217: the general
@@ -3142,7 +3192,7 @@ impl<'a> Parser<'a> {
                     context: ParseContext::FunctionDeclaration,
                 })
                 .with_location(name_pos, name.len());
-                return Err(error);
+                return Err(self.with_function_site(error, &name, prev));
             }
             if name == "fst" || name == "snd" {
                 // Theory/Text/Parser/Signature.hs:217-218 returns
@@ -3169,6 +3219,11 @@ impl<'a> Parser<'a> {
                 ));
             }
         }
+        let new_symbol = !self
+            .state
+            .fun_syms
+            .iter()
+            .any(|(n, opts)| n == &name && *opts == requested);
         if ac {
             // HS rejects a non-binary `[AC]` symbol outright
             // (Theory/Text/Parser/Signature.hs:220)
@@ -3199,6 +3254,14 @@ impl<'a> Parser<'a> {
             // (`addFunSym (NoEqUser ...)`, Theory/Text/Parser/Signature.hs:224),
             // a set insert.
             self.insert_fun_sym(&name, requested);
+        }
+        if !ac && new_symbol {
+            self.function_sites.push(FunctionSite {
+                name: name.clone(),
+                options: requested,
+                span: name_pos.offset..name_end,
+                builtin: false,
+            });
         }
         Ok((
             FunctionDecl {
@@ -3717,6 +3780,11 @@ impl<'a> Parser<'a> {
         // checks new `Restr_<rule>_<i>` names against ALL restrictions,
         // user-declared ones included (TheoryObject.hs:453-456).
         self.state.seen_restriction_names.push(name.clone());
+        if !self.is_diff {
+            self.named_sites
+                .entry(("restriction", name.clone()))
+                .or_insert(name_start.offset..name_start.offset + name_len);
+        }
         Ok(Restriction {
             name,
             formula: phi,
@@ -3896,6 +3964,41 @@ impl<'a> Parser<'a> {
         e
     }
 
+    fn with_function_site(&self, error: ParseError, name: &str, options: FunOptions) -> ParseError {
+        let site = self
+            .function_sites
+            .iter()
+            .rev()
+            .find(|site| site.name == name && site.options == options);
+        match site {
+            Some(site) => error.with_related_span(
+                site.span.clone(),
+                if site.builtin {
+                    "function introduced by this builtin"
+                } else {
+                    "function declared here"
+                },
+            ),
+            None => error,
+        }
+    }
+
+    fn with_arity_site(&self, error: ParseError) -> ParseError {
+        // Included-file errors already carry their own source and labels.
+        if error.source_text().is_some()
+            || !matches!(error.kind(), ParseErrorKind::WrongFunctionArity { .. })
+        {
+            return error;
+        }
+        let Some(name) = self.lx.src().get(error.span()) else {
+            return error;
+        };
+        match self.lookup_arity(name) {
+            Some(ArityRes::NoEq { opts }) => self.with_function_site(error, name, opts),
+            _ => error,
+        }
+    }
+
     fn duplicate_declaration(
         &mut self,
         label: &str,
@@ -3904,10 +4007,16 @@ impl<'a> Parser<'a> {
         position: Pos,
         span_len: usize,
     ) -> ParseError {
+        let site = self.named_sites.get(&(label, name.clone())).cloned();
         let name = diagnostic_lexeme(&name);
-        self.item_fail(format!("duplicate {label}: {name}"))
+        let error = self
+            .item_fail(format!("duplicate {label}: {name}"))
             .with_kind(ParseErrorKind::DuplicateDeclaration { name, context })
-            .with_location(position, span_len)
+            .with_location(position, span_len);
+        match site {
+            Some(span) => error.with_related_span(span, "first declaration is here"),
+            None => error,
+        }
     }
 
     /// Parse the middle arrow of a rule: either the `-->` shortcut (no
@@ -4588,13 +4697,25 @@ impl<'a> Parser<'a> {
                     || self.state.seen_diff_left_lemma_names.contains(&name)
             };
             if duplicate {
-                return Err(self.duplicate_declaration(
+                let namespace = if left {
+                    "left lemma"
+                } else if right || self.state.seen_diff_right_lemma_names.contains(&name) {
+                    "right lemma"
+                } else {
+                    "left lemma"
+                };
+                let site = self.named_sites.get(&(namespace, name.clone())).cloned();
+                let error = self.duplicate_declaration(
                     "lemma",
                     name,
                     ParseContext::Lemma,
                     name_start,
                     name_len,
-                ));
+                );
+                return Err(match site {
+                    Some(span) => error.with_related_span(span, "first declaration is here"),
+                    None => error,
+                });
             }
             if left {
                 self.state.seen_diff_left_lemma_names.push(name.clone());
@@ -4603,6 +4724,14 @@ impl<'a> Parser<'a> {
             } else {
                 self.state.seen_diff_right_lemma_names.push(name.clone());
                 self.state.seen_diff_left_lemma_names.push(name.clone());
+            }
+
+            for (namespace, active) in [("left lemma", left || !right), ("right lemma", !left)] {
+                if active {
+                    self.named_sites
+                        .entry((namespace, name.clone()))
+                        .or_insert(name_start.offset..name_start.offset + name_len);
+                }
             }
         } else {
             if self.state.seen_lemma_names.iter().any(|n| n == &name) {
@@ -4615,6 +4744,9 @@ impl<'a> Parser<'a> {
                 ));
             }
             self.state.seen_lemma_names.push(name.clone());
+            self.named_sites
+                .entry(("lemma", name.clone()))
+                .or_insert(name_start.offset..name_start.offset + name_len);
         }
         Ok(TheoryItem::Lemma(Lemma {
             name,
@@ -4701,6 +4833,9 @@ impl<'a> Parser<'a> {
             ));
         }
         self.state.seen_diff_lemma_names.push(name.clone());
+        self.named_sites
+            .entry(("Diff Lemma", name.clone()))
+            .or_insert(name_start.offset..name_start.offset + name_len);
         Ok(TheoryItem::DiffLemma(DiffLemma {
             name,
             source_file: self

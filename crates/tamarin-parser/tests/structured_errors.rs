@@ -637,44 +637,110 @@ fn unterminated_comments_have_their_own_diagnostic() {
 }
 
 #[test]
-fn parenthesized_formulas_preserve_inner_failures() {
-    for (formula, token) in [("(Out(g(x)) @ #i)", "g"), ("(Out(x,y) @ #i)", "Out")] {
-        let source = format!("theory T begin lemma L: \"{formula}\" end");
-        let error = parse_theory(&source, &[]).expect_err("invalid fact");
-        if token == "g" {
-            assert!(
-                matches!(error.kind(), ParseErrorKind::UndeclaredFunction { name } if name == "g"),
-                "{error:?}"
-            );
-        } else {
-            assert!(
-                matches!(error.kind(), ParseErrorKind::FactArity { .. }),
-                "{error:?}"
-            );
-        }
-        common::assert_span(&error, &source, token);
+fn dual_function_names_label_the_resolved_declaration() {
+    for (declarations, expected_site) in [("f/2 [AC], f/2", 1), ("f/2, f/2 [AC]", 0)] {
+        let source = format!(
+            "theory T begin\nfunctions: {declarations}\nrule R: [ ] --> [ Out(f(x)) ]\nend\n"
+        );
+        let sites: Vec<_> = source.match_indices("f/2").map(|(site, _)| site).collect();
+        let error = parse_theory(&source, &[]).expect_err("wrong arity must fail");
+        let labels = error.diagnostic_labels_with_source(&source);
+        assert_eq!(labels.len(), 2, "{error:?}");
+        assert_eq!(labels[1].span.start, sites[expected_site]);
     }
-    let source = "theory T begin lemma L: \"(P(x) & ?)\" end";
-    let error = parse_theory(source, &[]).expect_err("missing formula operand");
-    assert!(error.span().start >= source.find('?').unwrap(), "{error:?}");
 }
 
 #[test]
-fn malformed_equation_split_preserves_its_cause() {
-    let source = "theory T begin lemma L: \"T\" by solve(splitEqs(x)) end";
-    let error = parse_theory(source, &[]).expect_err("split id must be numeric");
-    assert!(
-        error.diagnostic_message().contains("expected a split id"),
-        "{error:?}"
-    );
-    common::assert_span(&error, source, "x");
-    parse_theory(
-        "theory T begin lemma L: \"T\" by solve(splitEqs(1)) end",
-        &[],
-    )
-    .expect("numeric split id remains valid");
+fn builtin_conflicts_label_the_exact_function_variant() {
+    let source =
+        "theory T begin\nfunctions: senc/2 [AC], senc/1\nbuiltins: symmetric-encryption\nend\n";
+    let declarations: Vec<_> = source
+        .match_indices("senc/")
+        .map(|(offset, _)| offset)
+        .collect();
+    let error = parse_theory(source, &[]).expect_err("builtin conflict must fail");
+    let labels = error.diagnostic_labels_with_source(source);
+    assert_eq!(labels.len(), 2, "{error:?}");
+    assert_eq!(labels[1].span.start, declarations[1]);
 }
 
+#[test]
+fn diff_lemma_declarations_are_secondary_labels() {
+    for source in [
+        "theory D begin\nlemma L [left]: \"T\"\nlemma L [left]: \"T\"\nend\n",
+        "theory D begin\nlemma L [right]: \"T\"\nlemma L [right]: \"T\"\nend\n",
+        "theory D begin\nlemma L [left]: \"T\"\nlemma L: \"T\"\nend\n",
+        "theory D begin\ndiffLemma L: by sorry\ndiffLemma L: by sorry\nend\n",
+    ] {
+        let error = tamarin_parser::parse_diff_theory(source, &[])
+            .expect_err("duplicate diff-theory lemma must fail");
+        let labels = error.diagnostic_labels_with_source(source);
+        assert_eq!(labels.len(), 2, "{error:?}");
+        assert_eq!(&source[labels[0].span.clone()], "L");
+        assert_eq!(&source[labels[1].span.clone()], "L");
+        assert!(labels[1].span.start < labels[0].span.start);
+    }
+}
+
+#[test]
+fn related_labels_do_not_cross_include_boundaries() {
+    let dir = std::env::temp_dir().join(format!(
+        "tamarin_structured_related_sources_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).expect("create scratch directory");
+    let included = dir.join("decl.spthy");
+
+    std::fs::write(&included, "functions: f/2\n").expect("write included theory");
+    let root = "theory T begin\nfunctions: f/1\n#include \"decl.spthy\"\nend\n";
+    let error = parse_theory_with_base(root, &[], Some(dir.clone()))
+        .expect_err("included conflict must fail");
+    assert_eq!(error.diagnostic_labels().len(), 1);
+
+    std::fs::write(&included, "functions: g/1\n").expect("write included theory");
+    let root = "theory T begin\n#include \"decl.spthy\"\nfunctions: g/2\nend\n";
+    let error =
+        parse_theory_with_base(root, &[], Some(dir.clone())).expect_err("root conflict must fail");
+    assert_eq!(error.diagnostic_labels_with_source(root).len(), 1);
+
+    std::fs::write(&included, "functions: h/1\n").expect("write included theory");
+    let root = "theory T begin\n#include \"decl.spthy\"\nfunctions: h/1, h/2\nend\n";
+    let error = parse_theory_with_base(root, &[], Some(dir.clone()))
+        .expect_err("redundant local declaration must not become the first site");
+    assert_eq!(error.diagnostic_labels_with_source(root).len(), 1);
+
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn declaration_labels_use_the_original_source_positions() {
+    for (source, token) in [
+        (
+            "theory T begin functions: f/2 rule R: [] --> [Out(f(x))] end",
+            "f",
+        ),
+        ("theory T begin functions: f/2, f/3 end", "f"),
+        ("theory T begin lemma L: \"T\" lemma L: \"T\" end", "L"),
+        (
+            "theory T begin restriction R: \"T\" restriction R: \"T\" end",
+            "R",
+        ),
+        (
+            "theory T begin builtins: symmetric-encryption rule R: [] --> [Out(senc(x))] end",
+            "symmetric-encryption",
+        ),
+        (
+            "theory T begin functions: f/2 lemma L: \"T\" by solve(Out(f(x)) @ #i) end",
+            "f",
+        ),
+    ] {
+        let error = parse_theory(source, &[]).expect_err("invalid use");
+        let labels = error.diagnostic_labels_with_source(source);
+        assert_eq!(labels.len(), 2, "{error:?}");
+        assert_eq!(&source[labels[1].span.clone()], token);
+        assert!(labels[1].span.start < labels[0].span.start);
+    }
+}
 
 #[test]
 fn identifier_spans_do_not_erase_comment_failures() {
@@ -721,3 +787,55 @@ fn later_proof_comments_do_not_replace_earlier_failures() {
     assert!(error.diagnostic_message().contains("proof"), "{error:?}");
 }
 
+#[test]
+fn parenthesized_formulas_preserve_inner_failures() {
+    for (formula, token) in [("(Out(g(x)) @ #i)", "g"), ("(Out(x,y) @ #i)", "Out")] {
+        let source = format!("theory T begin lemma L: \"{formula}\" end");
+        let error = parse_theory(&source, &[]).expect_err("invalid fact");
+        if token == "g" {
+            assert!(
+                matches!(error.kind(), ParseErrorKind::UndeclaredFunction { name } if name == "g"),
+                "{error:?}"
+            );
+        } else {
+            assert!(
+                matches!(error.kind(), ParseErrorKind::FactArity { .. }),
+                "{error:?}"
+            );
+        }
+        common::assert_span(&error, &source, token);
+    }
+    let source = "theory T begin lemma L: \"(P(x) & ?)\" end";
+    let error = parse_theory(source, &[]).expect_err("missing formula operand");
+    assert!(error.span().start >= source.find('?').unwrap(), "{error:?}");
+}
+
+#[test]
+fn malformed_equation_split_preserves_its_cause() {
+    let source = "theory T begin lemma L: \"T\" by solve(splitEqs(x)) end";
+    let error = parse_theory(source, &[]).expect_err("split id must be numeric");
+    assert!(
+        error.diagnostic_message().contains("expected a split id"),
+        "{error:?}"
+    );
+    common::assert_span(&error, source, "x");
+    parse_theory(
+        "theory T begin lemma L: \"T\" by solve(splitEqs(1)) end",
+        &[],
+    )
+    .expect("numeric split id remains valid");
+}
+
+
+#[test]
+fn long_duplicate_names_keep_the_original_declaration_label() {
+    for name in ["L".repeat(81), "λ".repeat(81)] {
+        let source = format!("theory T begin lemma {name}: \"T\" lemma {name}: \"T\" end");
+        let error = parse_theory(&source, &[]).expect_err("duplicate lemma");
+        let labels = error.diagnostic_labels_with_source(&source);
+        assert_eq!(labels.len(), 2, "{error:?}");
+        assert_eq!(&source[labels[1].span.clone()], name);
+        assert_eq!(labels[1].span.start, source.find(&name).unwrap());
+        assert!(labels[1].span.start < labels[0].span.start);
+    }
+}

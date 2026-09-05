@@ -194,6 +194,7 @@ pub(crate) struct DiagnosticInfo {
     location: Option<(u32, u32)>,
     source: Option<String>,
     ghc_error: Option<crate::parser::GhcError>,
+    related: Option<DiagnosticLabel>,
 }
 
 impl ParseErrorKind {
@@ -279,6 +280,14 @@ impl ParseError {
         self
     }
 
+    pub(crate) fn with_related_span(mut self, span: Range<usize>, message: &str) -> Self {
+        self.diagnostic_mut().related = Some(DiagnosticLabel {
+            span,
+            message: message.into(),
+        });
+        self
+    }
+
     pub(crate) fn with_ghc_error(mut self, error: crate::parser::GhcError) -> Self {
         self.diagnostic_mut().ghc_error = Some(error);
         self
@@ -347,6 +356,10 @@ impl ParseError {
                 diagnostic.source.is_none(),
                 "cannot shift an error attached to an independent source"
             );
+            if let Some(label) = diagnostic.related.as_mut() {
+                label.span.start = label.span.start.saturating_add(base.offset);
+                label.span.end = label.span.end.saturating_add(base.offset);
+            }
             if let Some(span) = diagnostic.span.as_mut() {
                 span.start = span.start.saturating_add(base.offset);
                 span.end = span.end.saturating_add(base.offset);
@@ -509,7 +522,7 @@ impl ParseError {
                 span: opening_span.clone(),
                 message: "block comment opened here".into(),
             }),
-            _ => None,
+            _ => self.diagnostic.as_ref().and_then(|d| d.related.clone()),
         }
     }
 
