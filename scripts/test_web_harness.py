@@ -27,7 +27,7 @@ URL_SPEC.loader.exec_module(WEB_URL_KEY)
 # or corpus overrides from redirecting supposedly isolated scenarios.
 GATE_ENV_KEYS = set("""
     ALLOWLIST ALLOW_ORACLE_REV_MISMATCH ALLOW_STALE_BIN
-    ALLOW_UNVERIFIED_WEB_CACHE BIN CACHE CORPUS CORPUS_ROOT DERIV
+    BIN CACHE CORPUS CORPUS_ROOT DERIV
     DERIVCHECK_TIMEOUT DIFFDIR DOT_FP EXEC_FP EXEC_FP_SALT EXTRA_FLAGS
     FAIL_ON_CAPPED FAMILY FILE_TIMEOUT FLAGS_MAP HS_CACHE HS_FP HS_FP_SALT
     HS_PATH HS_PORT INPUT_MANIFEST_BIN JOBS MAUDE_PATH MAX_NODES OUT
@@ -1249,8 +1249,13 @@ CACHE="$t/legacy"
 if web_cache_init "$PWD" "$t/scripts" "$t/hs" 2 2>"$t/legacy-error"; then
     exit 1
 fi
-grep -F 'ALLOW_UNVERIFIED_WEB_CACHE=1' "$t/legacy-error"
-ALLOW_UNVERIFIED_WEB_CACHE=1 web_cache_init "$PWD" "$t/scripts" "$t/hs" 2
+grep -F 'has no complete producer profile' "$t/legacy-error"
+test ! -e "$CACHE/PROFILE"
+test "$(cat "$CACHE/old.hs.json")" = '{"manifest":{}}'
+
+CACHE="$first_cache"
+web_cache_init "$PWD" "$t/scripts" "$t/hs" 2
+test "$CACHE" = "$first_cache"
 
 # Request deadlines do not affect a successful manifest and therefore do not
 # fork the cache. Graphviz versions and derivation limits do.

@@ -60,9 +60,8 @@ atomically, so fills and readers may run concurrently across worktrees. Rust
 binaries are not cache producers and therefore do not enter these keys; each
 gate fingerprints its selected Rust executable separately and rejects a
 verdict if those bytes change while the comparison is in flight.
-`CACHE=` remains an exact-directory compatibility override, but unstamped web
-data is refused unless `ALLOW_UNVERIFIED_WEB_CACHE=1` explicitly waives its
-incomplete provenance. `WEB_CACHE_ROOT=` moves the web profile pool. Large per-run
+`CACHE=` overrides the exact directory, with the same producer-profile checks
+as default caches. Existing web manifests without a `PROFILE` are refused. `WEB_CACHE_ROOT=` moves the web profile pool. Large per-run
 manifest copies live under `target/web-work` rather than `/tmp`; set
 `WEB_WORK_ROOT=` to move them. Nothing is archived or wiped, and
 `bump_submodule.sh` deliberately leaves the caches alone.

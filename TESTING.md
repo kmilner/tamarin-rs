@@ -728,8 +728,7 @@ shutdown; they also reject a source whose input key changes while it is being
 staged. Env knobs:
 `FILE_TIMEOUT`, `READY_TIMEOUT`, `HS_PORT`, `RS_PORT`, `MAX_NODES` (400
 proof-node visits per theory), `WEB_CACHE_ROOT`, `CACHE` (exact-directory
-compatibility override; unstamped legacy data requires the explicit unsafe
-waiver `ALLOW_UNVERIFIED_WEB_CACHE=1`), `WEB_WORK_ROOT` (large per-run manifests; defaults
+override; existing manifests require a matching `PROFILE`), `WEB_WORK_ROOT` (large per-run manifests; defaults
 under `target/`, not a size-limited `/tmp`),
 `DIFFDIR`, `DERIVCHECK_TIMEOUT`, `SERVER_MEM_KB` (per-server address-space
 cap, 24 GiB), `HS_PATH`, `RS_PATH`, `MAUDE_PATH`, `CORPUS_ROOT`,

@@ -199,7 +199,6 @@ hs_fingerprint() {
     local hs=$1 repo=${3:-$GATE_COMMON_DIR/..} output main stamp key value
     local stamp_binary stamp_pin stamp_series
     local -a maude_args=()
-    HS_FP_LEGACY=$(stat -c '%s.%Y' "$hs") || return 1
     HS_BINARY_FP=$(binary_sha256 "$hs") || return 1
     [ -z "${2:-}" ] || maude_args=("--with-maude=$2")
     output=$(timeout 60 "$hs" "${maude_args[@]}" --version 2>/dev/null) || return 1

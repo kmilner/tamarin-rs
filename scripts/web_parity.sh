@@ -75,28 +75,6 @@ PLAN_VERSION_KEY="$(web_crawl_constant "$script_dir/web_crawl.py" PLAN_VERSION_K
 [ -n "$PLAN_VERSION" ] || { echo "cannot read PLAN_VERSION from web_crawl.py" >&2; exit 2; }
 [ -n "$PLAN_VERSION_KEY" ] || { echo "cannot read PLAN_VERSION_KEY from web_crawl.py" >&2; exit 2; }
 
-# Plan version of a cached HS manifest.  A stamp is authoritative.  An ABSENT
-# stamp is NOT evidence of the current plan: stamping was introduced together
-# with PLAN_VERSION 2, so a stampless manifest is a v1 or v2 crawl, and the two
-# are told apart by CONTENT — v2 added the source-case routes, so it visits
-# `json/cases/…` and `main/cases/…/1/1`, which a v1 crawl never requested.
-# Missing either ⇒ 1, i.e. stale, so a cache predating the plan growth is
-# re-crawled instead of surfacing its unvisited URL families as MISSING_HS.
-# The probe never needs extending for a future plan: every crawl from v2 on
-# stamps itself, so "stampless" can only ever mean "v1 or v2".  A manifest that
-# fails to parse yields nothing and is likewise treated as stale.
-cached_plan_version() {
-    python3 -c '
-import json, sys
-d = json.load(open(sys.argv[1]))
-v = d.get(sys.argv[2])
-if v is None:
-    urls = d.get("manifest", {})
-    v = 2 if (any("/json/cases/" in u for u in urls)
-              and any(u.endswith("/main/cases/raw/1/1") for u in urls)) else 1
-print(v)' "$1" "$PLAN_VERSION_KEY" 2>/dev/null
-}
-
 HS_PATH=$(resolve_hs_oracle "$repo_root") || exit 2
 RS_PATH="${RS_PATH:-$repo_root/target/release/tamarin-rs}"
 # Resolve one Maude (MAUDE_PATH > PATH > linuxbrew, hard fail otherwise) and
@@ -247,13 +225,6 @@ one_file() {
     if ! web_cache_lock "$key"; then
         rm -rf "$wd"
         printf '%s\t-\tSKIP_CACHE_LOCK\t-\t-\t-\n' "$rel"; return 0
-    fi
-    if [ "$WEB_CACHE_MODE" = legacy-explicit ] && [ -f "$hs_manifest" ]; then
-        local hs_plan; hs_plan=$(cached_plan_version "$hs_manifest")
-        if [ "$hs_plan" != "$PLAN_VERSION" ]; then
-            echo "  stale HS manifest (crawl plan ${hs_plan:-?} != $PLAN_VERSION) — re-crawling" >&2
-            web_cache_invalidate "$key"
-        fi
     fi
     if [ -f "$hs_manifest" ]; then
         local hs_fp=''

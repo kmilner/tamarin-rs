@@ -11,9 +11,7 @@
 # profile directories inside it.  Thus testing a second Tamarin build cannot
 # evict or overwrite the first build's manifests.
 #
-# CACHE remains an exact-directory compatibility override.  A non-empty
-# unstamped directory is treated as a legacy cache and retains the old
-# size.mtime sidecar contract; new/default profiles use the version identity.
+# CACHE overrides the exact directory, with the same producer-profile checks.
 web_cache_init() {
     local repo=$1 scripts=$2 hs=$3 plan=$4 profile_text marker
     local dot_path dot_sha dot_version crawl_path="$scripts/web_crawl.py" url_key_path="$scripts/web_url_key.py"
@@ -73,24 +71,11 @@ web_cache_init() {
 
     if [ -z "${CACHE:-}" ]; then
         CACHE="$WEB_CACHE_ROOT/oracle-${WEB_ORACLE_SHA256:0:16}/profile-$WEB_CACHE_PROFILE"
-        WEB_CACHE_ORACLE_STAMP="$WEB_ORACLE_SHA256"
         WEB_CACHE_MODE=profiled
     else
         WEB_CACHE_MODE=explicit
-        # Preserve deliberately selected legacy caches without rewriting every
-        # old manifest. New empty CACHE overrides still receive a profile
-        # marker and use the stable content stamp.
-        if find "$CACHE" -maxdepth 1 -name '*.hs.json' -print -quit 2>/dev/null | grep -q . \
-                && [ ! -f "$CACHE/PROFILE" ]; then
-            WEB_CACHE_MODE=legacy-explicit
-            if [ "${ALLOW_UNVERIFIED_WEB_CACHE:-0}" != 1 ]; then
-                echo "web cache '$CACHE' has no complete producer profile" >&2
-                echo "Use a profiled cache, or set ALLOW_UNVERIFIED_WEB_CACHE=1 for a deliberate unsafe legacy comparison." >&2
-                return 2
-            fi
-        fi
-        WEB_CACHE_ORACLE_STAMP="$WEB_ORACLE_SHA256"
     fi
+    WEB_CACHE_ORACLE_STAMP="$WEB_ORACLE_SHA256"
 
     mkdir -p "$CACHE" || return 1
     marker="$CACHE/PROFILE"
@@ -104,7 +89,13 @@ web_cache_init() {
             flock -u "$profile_lock_fd"; exec {profile_lock_fd}>&-
             return 2
         fi
-    elif [ "$WEB_CACHE_MODE" != legacy-explicit ]; then
+    else
+        if find "$CACHE" -maxdepth 1 -name '*.hs.json' -print -quit | grep -q .; then
+            echo "web cache '$CACHE' has no complete producer profile" >&2
+            echo "Choose an empty CACHE directory or a cache with a matching PROFILE." >&2
+            flock -u "$profile_lock_fd"; exec {profile_lock_fd}>&-
+            return 2
+        fi
         profile_tmp=$(mktemp "$CACHE/.PROFILE.XXXXXX") || {
             flock -u "$profile_lock_fd"; exec {profile_lock_fd}>&-; return 1
         }
@@ -518,13 +509,8 @@ web_flags_for() {
 }
 
 # web_cache_stamp_matches <stamp>
-# Profiled caches require their version identity stamp. An explicitly selected
-# old flat cache may still carry the former size+mtime stamp; accept it only in
-# the explicit unsafe compatibility mode, while stamping every newly crawled
-# manifest with the content SHA-256.
 web_cache_stamp_matches() {
-    [ "$1" = "$WEB_CACHE_ORACLE_STAMP" ] && return 0
-    [ "$WEB_CACHE_MODE" = legacy-explicit ] && [ "$1" = "$HS_FP_LEGACY" ]
+    [ "$1" = "$WEB_CACHE_ORACLE_STAMP" ]
 }
 
 # web_stage_inputs <source-theory> <destination-directory> [flags] [staging-root]
