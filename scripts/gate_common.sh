@@ -191,34 +191,50 @@ duration_seconds() {
     fi
 }
 
-# hs_fingerprint <oracle-binary> [maude-binary]
-# Cache identity is the release/revision plus the attested patch series, not
-# platform-specific executable bytes. Keep those bytes only for run integrity.
+# hs_fingerprint <oracle-binary> [maude-binary] [repo-root]
+# Capture version and source attestation once for both cache selection and
+# oracle_rev_check. Executable bytes only verify the attestation and detect
+# replacement during a run; persistent identities remain version-based.
 hs_fingerprint() {
-    local output version revision series=unattested stamp main
-    HS_FP_LEGACY=$(stat -c '%s.%Y' "$1") || return 1
-    HS_BINARY_FP=$(binary_sha256 "$1") || return 1
+    local hs=$1 repo=${3:-$GATE_COMMON_DIR/..} output main stamp key value
+    local stamp_binary stamp_pin stamp_series
     local -a maude_args=()
+    HS_FP_LEGACY=$(stat -c '%s.%Y' "$hs") || return 1
+    HS_BINARY_FP=$(binary_sha256 "$hs") || return 1
     [ -z "${2:-}" ] || maude_args=("--with-maude=$2")
-    output=$(timeout 60 "$1" "${maude_args[@]}" --version 2>/dev/null) || return 1
-    version=$(printf '%s\n' "$output" | head -1)
-    [ -n "$version" ] || return 1
-    revision=$(printf '%s\n' "$output" | sed -n 's/^Git revision: \([^ ,]*\).*/\1/p')
-    main=$(git -C "$GATE_COMMON_DIR/.." worktree list --porcelain 2>/dev/null \
+    output=$(timeout 60 "$hs" "${maude_args[@]}" --version 2>/dev/null) || return 1
+    HS_VERSION=$(printf '%s\n' "$output" | head -1)
+    [ -n "$HS_VERSION" ] || return 1
+    HS_REVISION=$(printf '%s\n' "$output" | sed -n 's/^Git revision: \([^ ,]*\).*/\1/p')
+    HS_ATTESTATION_STATUS=missing
+    HS_ATTESTATION_PIN=
+    HS_PATCH_SERIES=unattested
+    main=$(git -C "$repo" worktree list --porcelain 2>/dev/null \
         | awk '/^worktree/{print $2; exit}') || main=
-    for stamp in "${1}.tamarin-rs-oracle" \
-            "$GATE_COMMON_DIR/../tamarin-prover-testing/.stack-work/tamarin-rs-oracle" \
+    for stamp in "${hs}.tamarin-rs-oracle" \
+            "$repo/tamarin-prover-testing/.stack-work/tamarin-rs-oracle" \
             "${main:+$main/tamarin-prover-testing/.stack-work/tamarin-rs-oracle}"; do
-        [ -f "$stamp" ] || continue
-        if [ "$(sed -n 's/^binary_sha256=//p' "$stamp")" = "$HS_BINARY_FP" ]; then
-            series=$(sed -n 's/^patch_series_sha256=//p' "$stamp")
+        [ -r "$stamp" ] || continue
+        HS_ATTESTATION_STATUS=mismatch
+        stamp_binary= stamp_pin= stamp_series=
+        while IFS='=' read -r key value || [ -n "$key" ]; do
+            case "$key" in
+                binary_sha256) stamp_binary=$value ;;
+                pin) stamp_pin=$value ;;
+                patch_series_sha256) stamp_series=$value ;;
+            esac
+        done < "$stamp"
+        if [ "$stamp_binary" = "$HS_BINARY_FP" ]; then
+            HS_ATTESTATION_STATUS=matched
+            HS_ATTESTATION_PIN=$stamp_pin
+            HS_PATCH_SERIES=$stamp_series
             break
         fi
     done
     HS_FP=$(printf 'format=2\nversion=%s\nrevision=%s\npatch_series=%s\n' \
-        "$version" "$revision" "$series" | sha256sum | cut -d' ' -f1) || return 1
+        "$HS_VERSION" "$HS_REVISION" "$HS_PATCH_SERIES" | sha256sum | cut -d' ' -f1) || return 1
     HS_FP_SALT=${HS_FP:0:12}
-    HS_FP_PATH=$1
+    HS_FP_PATH=$hs
     export HS_BINARY_FP
 }
 # parser_input_manifest <theory> [flags]
@@ -663,16 +679,7 @@ resolve_maude() {
 maude_on_path() { PATH="$(dirname "$1"):$PATH"; export PATH; }
 
 # --- preflights --------------------------------------------------------------
-# oracle_revision <hs-bin> <maude>
-#   Print the revision token embedded in an oracle binary. Development builds
-#   may append a dirty-worktree note before the branch comma, so parse the
-#   first token after the label rather than everything before that comma.
-oracle_revision() {
-    timeout 60 "$1" --with-maude="$2" --version 2>/dev/null \
-        | sed -n 's/^Git revision: \([^[:space:],]*\).*/\1/p'
-}
-
-# oracle_rev_check <hs-bin> <maude-or-empty> <repo-root>
+# oracle_rev_check <hs-bin> <maude> <repo-root>
 #   The oracle IS the specification, so it must be the controlled setup.sh
 #   build of the submodule pin plus the current ordered patch series. setup.sh
 #   writes an attestation beside the executable containing those two source
@@ -681,24 +688,16 @@ oracle_revision() {
 #   skipped only when the repo has no readable gitlink. A binary built outside
 #   a git checkout stamps `UNKNOWN`, which is rejected. Set
 #   ALLOW_ORACLE_REV_MISMATCH=1 only for a deliberate cross-source comparison.
-#   A byte-identical HS_PATH copy may use the canonical attestation under
-#   tamarin-prover-testing/.stack-work; arbitrary unstamped binaries remain
-#   rejected. The empty maude spelling is reserved for the rename-only cache
-#   migration: source attestation is still checked, but the revision probe is
-#   reported as not run.
-#   `--version` prints the `Git revision:` line
-#   as part of `ensureMaudeAndGetVersion`'s block (Console.hs:333-338), so the
-#   probe needs `--with-maude=<maude>`: without it the probe resolves `maude`
-#   on PATH, dies before the line, and the guard would skip on exactly the
-#   boxes that keep maude off PATH.
+#   A byte-identical HS_PATH copy may use the canonical setup attestation.
+#   Fingerprinting captures the version/revision using the explicit backend,
+#   so no second process or attestation lookup is needed here.
 oracle_rev_check() {
-    local hs=$1 maude=$2 repo=$3 pin binrev= stamp= expected_series main candidate
-    local stamp_pin stamp_series stamp_binary reason= saw_stamp=0
-    hs_fingerprint "$hs" "$maude" || {
+    local hs=$1 maude=$2 repo=$3 pin expected_series reason=
+    hs_fingerprint "$hs" "$maude" "$repo" || {
         echo "ERROR: cannot fingerprint oracle '$hs'" >&2
         exit 2
     }
-    ORACLE_REVISION=
+    ORACLE_REVISION=$HS_REVISION
     ORACLE_SOURCE_STATUS=verified
     ORACLE_SOURCE_NOTE=
     pin=$(git -C "$repo" rev-parse :tamarin-prover 2>/dev/null) || pin=
@@ -707,44 +706,21 @@ oracle_rev_check() {
         ORACLE_SOURCE_NOTE="no readable tamarin-prover gitlink"
         return 0
     fi
-    if [ -n "$maude" ] && [ -x "$maude" ]; then
-        binrev=$(oracle_revision "$hs" "$maude")
-        ORACLE_REVISION=$binrev
-        if [ -z "$binrev" ]; then
-            reason="prints no Git revision"
-        elif [ "$binrev" != "$pin" ]; then
-            reason="is revision $binrev but the submodule pin is $pin"
+    if [ -z "$HS_REVISION" ]; then
+        reason="prints no Git revision"
+    elif [ "$HS_REVISION" != "$pin" ]; then
+        reason="is revision $HS_REVISION but the submodule pin is $pin"
+    elif [ "$HS_ATTESTATION_STATUS" = matched ]; then
+        expected_series=$(patch_series_fingerprint "$repo") || expected_series=
+        if [ "$HS_ATTESTATION_PIN" != "$pin" ]; then
+            reason="attests pin ${HS_ATTESTATION_PIN:-missing}, expected $pin"
+        elif [ -z "$expected_series" ] || [ "$HS_PATCH_SERIES" != "$expected_series" ]; then
+            reason="was built with a different patch series"
         fi
-    fi
-
-    if [ -z "$reason" ]; then
-        main=$(git -C "$repo" worktree list --porcelain 2>/dev/null \
-            | awk '/^worktree/{print $2; exit}') || main=
-        for candidate in "${hs}.tamarin-rs-oracle" \
-                "$repo/tamarin-prover-testing/.stack-work/tamarin-rs-oracle" \
-                "${main:+$main/tamarin-prover-testing/.stack-work/tamarin-rs-oracle}"; do
-            [ -n "$candidate" ] && [ -r "$candidate" ] || continue
-            saw_stamp=1
-            stamp_binary=$(sed -n 's/^binary_sha256=//p' "$candidate")
-            if [ "$stamp_binary" = "$HS_BINARY_FP" ]; then
-                stamp=$candidate
-                break
-            fi
-        done
-        if [ -n "$stamp" ]; then
-            stamp_pin=$(sed -n 's/^pin=//p' "$stamp")
-            stamp_series=$(sed -n 's/^patch_series_sha256=//p' "$stamp")
-            expected_series=$(patch_series_fingerprint "$repo") || expected_series=
-            if [ "$stamp_pin" != "$pin" ]; then
-                reason="attests pin ${stamp_pin:-missing}, expected $pin"
-            elif [ -z "$expected_series" ] || [ "$stamp_series" != "$expected_series" ]; then
-                reason="was built with a different patch series"
-            fi
-        elif [ "$saw_stamp" = 1 ]; then
-            reason="does not match any available setup.sh source attestation"
-        else
-            reason="has no setup.sh source attestation"
-        fi
+    elif [ "$HS_ATTESTATION_STATUS" = mismatch ]; then
+        reason="does not match any available setup.sh source attestation"
+    else
+        reason="has no setup.sh source attestation"
     fi
     if [ -n "$reason" ]; then
         ORACLE_SOURCE_STATUS=failed
@@ -758,8 +734,6 @@ oracle_rev_check() {
         else
             exit 2
         fi
-    elif [ -z "$maude" ] || [ ! -x "$maude" ]; then
-        ORACLE_SOURCE_NOTE="setup attestation matches; revision probe not run (maude unavailable)"
     else
         ORACLE_SOURCE_NOTE="revision and setup attestation match the submodule pin"
     fi

@@ -285,6 +285,37 @@ unset HS_FP
 web_cache_init "$t" scripts "$t/hs" 2
 ''')
 
+    def test_oracle_validation_reuses_one_probe_and_checks_the_attestation(self):
+        run_shell(r'''
+set -e
+. scripts/gate_common.sh
+t=$HARNESS_TMP
+export TEST_ORACLE_PIN=$(git rev-parse :tamarin-prover)
+export TEST_ORACLE_CALLS="$t/calls"
+printf '%s\n' '#!/bin/sh' 'echo 3.5.1' > "$t/backend"
+cat > "$t/hs" <<'SH'
+#!/bin/sh
+case "$1" in --with-maude=*) ;; *) exit 1 ;; esac
+echo called >> "$TEST_ORACLE_CALLS"
+echo 'tamarin-prover 1.13.0'
+echo "Git revision: $TEST_ORACLE_PIN (with uncommited changes), branch: HEAD"
+SH
+chmod +x "$t/hs" "$t/backend"
+series=$(patch_series_fingerprint "$PWD")
+printf 'binary_sha256=%s\npin=%s\npatch_series_sha256=%s\n' \
+    "$(binary_sha256 "$t/hs")" "$TEST_ORACLE_PIN" "$series" > "$t/hs.tamarin-rs-oracle"
+oracle_rev_check "$t/hs" "$t/backend" "$PWD"
+test "$(wc -l < "$TEST_ORACLE_CALLS")" = 1
+test "$ORACLE_SOURCE_STATUS" = verified
+test "$ORACLE_REVISION" = "$TEST_ORACLE_PIN"
+sed -i 's/^patch_series_sha256=.*/patch_series_sha256=wrong/' "$t/hs.tamarin-rs-oracle"
+if (oracle_rev_check "$t/hs" "$t/backend" "$PWD") 2>"$t/error"; then exit 1; fi
+grep -F 'different patch series' "$t/error"
+printf '\n# replaced binary\n' >> "$t/hs"
+if (oracle_rev_check "$t/hs" "$t/backend" "$PWD") 2>"$t/error"; then exit 1; fi
+grep -F 'does not match any available setup.sh source attestation' "$t/error"
+''')
+
     def test_producer_and_comparison_identities_detect_their_own_tools(self):
         run_shell(
             r'''
