@@ -544,6 +544,99 @@ fn line_columns_are_derived_from_source_text() {
 }
 
 #[test]
+fn semantic_errors_survive_a_missing_outer_delimiter() {
+    let invalid_fact = "theory T begin\nrule R: [ lower()\nend\n";
+    let error = parse_theory(invalid_fact, &[]).expect_err("lowercase fact must fail");
+    assert_eq!(
+        error.kind(),
+        &ParseErrorKind::InvalidFactName {
+            name: "lower".into(),
+        }
+    );
+
+    let wrong_arity = "theory T begin\nfunctions: f/2\nrule R: [ Out(f(x))\nend\n";
+    let error = parse_theory(wrong_arity, &[]).expect_err("wrong arity must fail");
+    assert_eq!(
+        error.kind(),
+        &ParseErrorKind::WrongFunctionArity {
+            name: "f".into(),
+            declared: 2,
+            used: 1,
+        }
+    );
+}
+
+#[test]
+fn raw_semantic_failures_are_not_relabelled_as_unclosed_delimiters() {
+    for (item, message) in [
+        (
+            "process: out(%x",
+            "nat-sorted variables requires the natural-numbers builtin",
+        ),
+        (
+            "process: out(%1",
+            "natural-number literal %1 requires the natural-numbers builtin",
+        ),
+        (
+            "process: out(1:nat",
+            "natural-number literal 1:nat requires the natural-numbers builtin",
+        ),
+    ] {
+        let source = format!("theory T begin\n{item}\nend\n");
+        let error = parse_theory(&source, &[]).expect_err("missing builtin must fail");
+        assert!(matches!(error.kind(), ParseErrorKind::Custom), "{error:?}");
+        assert!(error.to_string().contains(message), "{error:?}");
+    }
+}
+
+#[test]
+fn balanced_malformed_symmetric_delimiters_keep_the_syntax_error() {
+    for item in [
+        "restriction A: \"x=x lemma L: all-traces\"",
+        "restriction A: \"x=x rule R: [ ] --> [ ]\"",
+        "restriction A: \"x=x garbage\"\nrestriction B: \"T",
+        "rule R [color='#12 rule X: [']: [ ] --> [ ]",
+    ] {
+        let source = format!("theory T begin\n{item}\nend\n");
+        let error = parse_theory(&source, &[]).expect_err("malformed item must fail");
+        assert!(
+            !matches!(error.kind(), ParseErrorKind::UnclosedDelimiter { .. }),
+            "{item}: {error:?}"
+        );
+    }
+}
+
+#[test]
+fn pipe_delimited_process_attributes_do_not_panic() {
+    parse_theory("theory T begin process: 0 | bogus", &[])
+        .expect_err("malformed process attributes must fail without recovery panics");
+}
+
+#[test]
+fn unterminated_comments_have_their_own_diagnostic() {
+    for source in [
+        "theory T begin /* unfinished",
+        "theory T begin end /* unfinished",
+        "theory T begin rule R: [ /* unfinished",
+        "theory T begin lemma L: \"T\" by sorry /* unfinished",
+    ] {
+        let error = parse_theory(source, &[]).expect_err("comment must close");
+        assert!(
+            matches!(error.kind(), ParseErrorKind::UnclosedBlockComment { .. }),
+            "{error:?}"
+        );
+        let labels = error.diagnostic_labels_with_source(source);
+        assert_eq!(&source[labels[1].span.clone()], "/*");
+    }
+    let error = tamarin_parser::parser::parse_formula_str("T /* unfinished", &pair_maude_sig())
+        .expect_err("formula comment must close");
+    assert!(matches!(
+        error.kind(),
+        ParseErrorKind::UnclosedBlockComment { .. }
+    ));
+}
+
+#[test]
 fn parenthesized_formulas_preserve_inner_failures() {
     for (formula, token) in [("(Out(g(x)) @ #i)", "g"), ("(Out(x,y) @ #i)", "Out")] {
         let source = format!("theory T begin lemma L: \"{formula}\" end");
@@ -580,5 +673,51 @@ fn malformed_equation_split_preserves_its_cause() {
         &[],
     )
     .expect("numeric split id remains valid");
+}
+
+
+#[test]
+fn identifier_spans_do_not_erase_comment_failures() {
+    for source in [
+        "x = y /* unfinished",
+        "P(x) @ #i /* unfinished",
+        "T /* unfinished",
+    ] {
+        let error = tamarin_parser::parser::parse_formula_str(source, &pair_maude_sig())
+            .expect_err("unterminated comment must fail");
+        assert!(
+            matches!(error.kind(), ParseErrorKind::UnclosedBlockComment { .. }),
+            "{error:?}"
+        );
+    }
+    for source in [
+        "theory T begin lemma L: \"x = y /* unfinished",
+        "theory T begin rule R: [Out(x /* unfinished",
+    ] {
+        let error = parse_theory(source, &[]).expect_err("unterminated comment must fail");
+        assert!(
+            matches!(error.kind(), ParseErrorKind::UnclosedBlockComment { .. }),
+            "{error:?}"
+        );
+    }
+}
+
+#[test]
+fn later_proof_comments_do_not_replace_earlier_failures() {
+    let source =
+        "theory T begin functions: f/2 lemma L: \"T\" by solve(Out(f(x)) @ #i) /* unfinished";
+    let error = parse_theory(source, &[]).expect_err("wrong arity");
+    assert!(
+        matches!(error.kind(), ParseErrorKind::WrongFunctionArity { .. }),
+        "{error:?}"
+    );
+    common::assert_span(&error, source, "f");
+    let source = "theory T begin lemma L: \"T\" by nonsense /* unfinished";
+    let error = parse_theory(source, &[]).expect_err("invalid proof method");
+    assert!(
+        !matches!(error.kind(), ParseErrorKind::UnclosedBlockComment { .. }),
+        "{error:?}"
+    );
+    assert!(error.diagnostic_message().contains("proof"), "{error:?}");
 }
 

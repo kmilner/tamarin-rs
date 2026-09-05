@@ -157,6 +157,9 @@ pub enum ParseErrorKind {
         opening_span: Range<usize>,
         closing: char,
     },
+    UnclosedBlockComment {
+        opening_span: Range<usize>,
+    },
     UnknownItem {
         item: String,
         context: ParseContext,
@@ -248,6 +251,7 @@ impl ParseErrorKind {
             }
             Self::NonBinaryAcFunction { .. } => "Non-binary AC function declaration".into(),
             Self::UnclosedDelimiter { .. } => "Unclosed delimiter".into(),
+            Self::UnclosedBlockComment { .. } => "Unclosed block comment".into(),
             Self::UnknownItem { context, item } => {
                 format!("Unknown {} `{item}`", context.description())
             }
@@ -360,8 +364,10 @@ impl ParseError {
                         .unwrap_or(""),
                 );
             }
-            if let Some(ParseErrorKind::UnclosedDelimiter { opening_span, .. }) =
-                diagnostic.kind.as_mut()
+            if let Some(
+                ParseErrorKind::UnclosedDelimiter { opening_span, .. }
+                | ParseErrorKind::UnclosedBlockComment { opening_span },
+            ) = diagnostic.kind.as_mut()
             {
                 opening_span.start = opening_span.start.saturating_add(base.offset);
                 opening_span.end = opening_span.end.saturating_add(base.offset);
@@ -499,6 +505,10 @@ impl ParseError {
                 span: opening_span.clone(),
                 message: format!("`{opening}` opened here"),
             }),
+            ParseErrorKind::UnclosedBlockComment { opening_span } => Some(DiagnosticLabel {
+                span: opening_span.clone(),
+                message: "block comment opened here".into(),
+            }),
             _ => None,
         }
     }
@@ -546,6 +556,7 @@ impl ParseError {
             ParseErrorKind::UnclosedDelimiter { closing, .. } => {
                 vec![format!("expected closing delimiter `{closing}`")]
             }
+            ParseErrorKind::UnclosedBlockComment { .. } => vec!["expected closing `*/`".into()],
             ParseErrorKind::UnknownItem { item, .. } => {
                 vec![format!("`{item}` is not valid in this context")]
             }

@@ -30,6 +30,7 @@ impl Pos {
 pub struct Lexer<'a> {
     src: &'a str,
     pos: Pos,
+    unterminated_comment: Option<Pos>,
 }
 
 impl<'a> Lexer<'a> {
@@ -37,6 +38,30 @@ impl<'a> Lexer<'a> {
         Lexer {
             src,
             pos: Pos::ZERO,
+            unterminated_comment: None,
+        }
+    }
+
+    /// Whitespace parsing cannot return an error directly. Publish a consumed
+    /// unterminated comment at the enclosing parser boundary.
+    pub(crate) fn finish<T>(
+        &self,
+        result: Result<T, crate::parser::ParseError>,
+    ) -> Result<T, crate::parser::ParseError> {
+        if let (Some(opening), Err(error)) = (self.unterminated_comment, &result)
+            && error.pos.offset < opening.offset
+        {
+            return result;
+        }
+        match self.unterminated_comment {
+            Some(opening) => Err(
+                crate::parser::ParseError::at(self.pos, Vec::new()).with_kind(
+                    crate::parse_error::ParseErrorKind::UnclosedBlockComment {
+                        opening_span: opening.offset..opening.offset + 2,
+                    },
+                ),
+            ),
+            None => result,
         }
     }
 
@@ -44,6 +69,9 @@ impl<'a> Lexer<'a> {
         self.pos
     }
     pub fn set_pos(&mut self, p: Pos) {
+        if p.offset < self.pos.offset {
+            self.unterminated_comment = None;
+        }
         self.pos = p;
     }
     pub fn src(&self) -> &'a str {
@@ -145,12 +173,16 @@ impl<'a> Lexer<'a> {
                             self.bump();
                         }
                     } else if self.rest().starts_with("/*") {
+                        let opening = self.pos;
                         self.bump();
                         self.bump();
                         let mut depth = 1usize;
                         while depth > 0 {
                             match self.peek() {
-                                None => return, // unterminated, stop
+                                None => {
+                                    self.unterminated_comment = Some(opening);
+                                    return;
+                                }
                                 Some('/') if self.rest().starts_with("/*") => {
                                     self.bump();
                                     self.bump();
@@ -201,20 +233,20 @@ impl<'a> Lexer<'a> {
 
     /// Like [`symbol`], but does not consume on failure.
     pub fn try_symbol(&mut self, s: &str) -> bool {
-        let save = self.pos;
+        let save = self.clone();
         if self.symbol(s) {
             true
         } else {
-            self.pos = save;
+            *self = save;
             false
         }
     }
 
     /// Peek for a symbol (with word-boundary check) without consuming.
     pub fn peek_symbol(&mut self, s: &str) -> bool {
-        let save = self.pos;
+        let save = self.clone();
         let r = self.try_symbol(s);
-        self.pos = save;
+        *self = save;
         r
     }
 
@@ -265,9 +297,9 @@ impl<'a> Lexer<'a> {
 
     /// Peek an identifier without consuming.
     pub fn peek_identifier(&mut self) -> Option<String> {
-        let save = self.pos;
+        let save = self.clone();
         let id = self.identifier();
-        self.pos = save;
+        *self = save;
         id
     }
 

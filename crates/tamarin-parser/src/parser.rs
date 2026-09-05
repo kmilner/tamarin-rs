@@ -1126,8 +1126,7 @@ pub struct Parser<'a> {
     /// whose heads their callers resolve, where every application must be
     /// accepted structurally.
     resolve_prefix_apps: bool,
-    /// Closing delimiters of active comma-separated lists. Used only to
-    /// distinguish a missing inner close from an unrelated stray closer.
+    /// Grammar-owned list closers; never scan ahead to guess delimiter ownership.
     list_closers: Vec<char>,
     /// Whether a `:` after a variable names a SAPIC TYPE rather than a sort
     /// suffix.  Set while parsing a SAPIC process (and a process definition's
@@ -1327,22 +1326,6 @@ impl<'a> Parser<'a> {
         parse: impl FnOnce(&mut Self) -> Result<T, ParseError>,
     ) -> Result<T, ParseError> {
         parse(self).map_err(|error| error.with_context(context))
-    }
-
-    /// Byte offset just past `name`'s characters for the identifier lexeme
-    /// that began at `start` — i.e. BEFORE the lexeme's trailing whitespace,
-    /// which `Lexer::identifier` has already skipped.  Replays the lexeme like
-    /// [`Self::fact`]'s uppercase check does; the parser position is restored.
-    fn ident_end_from(&mut self, start: Pos, name: &str) -> usize {
-        let after = self.save();
-        self.restore(start);
-        self.skip_ws();
-        for _ in name.chars() {
-            self.lx.bump();
-        }
-        let end = self.lx.pos().offset;
-        self.restore(after);
-        end
     }
 
     /// Record [`Parser::term_carry`] for the term chain that just finished:
@@ -1721,6 +1704,11 @@ impl<'a> Parser<'a> {
     // =========================================================================
 
     pub fn theory(&mut self) -> Result<Theory, ParseError> {
+        let result = self.theory_inner();
+        self.lx.finish(result)
+    }
+
+    fn theory_inner(&mut self) -> Result<Theory, ParseError> {
         self.skip_ws();
         // Optional leading `#` directives. Handle them as items inside the body
         // — `theory` keyword must come first.
@@ -2096,7 +2084,7 @@ impl<'a> Parser<'a> {
 
         // Thread parser state BACK (HS `putState st'` + `sig st'` merge).
         self.swap_include_state(&mut sub);
-        result
+        sub.lx.finish(result)
     }
 
     fn skip_until(&mut self, terminator: &str) {
@@ -2396,13 +2384,13 @@ impl<'a> Parser<'a> {
         self.skip_ws();
         let start = self.save();
         let mut s = self.ident()?;
-        let mut end = self.ident_end_from(start, &s);
+        let mut end = start.offset + s.len();
         while self.at_hyphen_join() {
             self.lx.bump(); // consume `-`
             s.push('-');
             let segment_start = self.save();
             let id = self.ident()?;
-            end = self.ident_end_from(segment_start, &id);
+            end = segment_start.offset + id.len();
             s.push_str(&id);
         }
         Ok((s, start, end - start.offset))
@@ -5748,7 +5736,7 @@ impl<'a> Parser<'a> {
         }
         let pre_ident = self.save();
         if let Some(id) = self.lx.identifier() {
-            let ident_end = self.ident_end_from(pre_ident, &id);
+            let ident_end = pre_ident.offset + id.len();
             self.try_dot_index();
             let idx_spent = self.dot_index_consumed;
             self.skip_ws();
@@ -6400,7 +6388,7 @@ impl<'a> Parser<'a> {
                     })
                     .with_location(save_id, id.len()));
             }
-            self.last_ident_end = Some(self.ident_end_from(save_id, &id));
+            self.last_ident_end = Some(save_id.offset + id.len());
             self.skip_ws();
             if self.lx.peek() == Some('(') {
                 // Look one token ahead inside `(`: if it's `<)` (the multiset
@@ -6477,7 +6465,7 @@ impl<'a> Parser<'a> {
             // (only consumes `.` if followed by a digit) and optionally with
             // sort suffix `:msg|pub|fresh|node|nat` or a SAPIC type annotation.
             // Record this name for `note_var_dot_hangover`.
-            self.last_ident_end = Some(self.ident_end_from(save_id, &id));
+            self.last_ident_end = Some(save_id.offset + id.len());
             return self.bare_ident_term(id);
         }
         self.restore(save_id);
@@ -6811,7 +6799,7 @@ impl<'a> Parser<'a> {
                 return Ok(None);
             }
         };
-        self.last_ident_end = Some(self.ident_end_from(name_start, &id));
+        self.last_ident_end = Some(name_start.offset + id.len());
         let idx = self.try_dot_index();
         Ok(Some((
             VarSpec {
@@ -7503,12 +7491,15 @@ pub fn parse_formula_str(s: &str, msig: &MaudeSig) -> Result<Formula, ParseError
     // Rendered formula text carries applications of symbols this fresh
     // parser has no declarations for — accept them structurally.
     p.resolve_prefix_apps = false;
-    let f = p.formula()?;
-    p.skip_ws();
-    if !p.lx.is_eof() {
-        return Err(p.err("trailing garbage in formula string"));
-    }
-    Ok(f)
+    let result = (|| {
+        let f = p.formula()?;
+        p.skip_ws();
+        if !p.lx.is_eof() {
+            return Err(p.err("trailing garbage in formula string"));
+        }
+        Ok(f)
+    })();
+    p.lx.finish(result)
 }
 
 /// Parse the `( <goal> )` of a stored `solve` step at the head of `s`, and

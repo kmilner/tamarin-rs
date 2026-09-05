@@ -48,12 +48,15 @@ pub fn parse_proof_tree<'a>(
         lx: Lexer::new(raw),
         parent,
     };
-    let tree = p.proof_skeleton()?;
-    p.lx.skip_ws();
-    if !p.lx.is_eof() {
-        return Err(p.err("unexpected trailing proof text"));
-    }
-    Ok(tree)
+    let result = (|| {
+        let tree = p.proof_skeleton()?;
+        p.lx.skip_ws();
+        if !p.lx.is_eof() {
+            return Err(p.err("unexpected trailing proof text"));
+        }
+        Ok(tree)
+    })();
+    p.lx.finish(result)
 }
 
 /// Validate a stored diff-proof skeleton against HS `diffProofSkeleton`
@@ -68,12 +71,15 @@ pub(crate) fn validate_diff_proof_tree<'a>(
         lx: Lexer::new(raw),
         parent,
     };
-    p.diff_proof_skeleton()?;
-    p.lx.skip_ws();
-    if !p.lx.is_eof() {
-        return Err(p.err("unexpected trailing proof text"));
-    }
-    Ok(())
+    let result = (|| {
+        p.diff_proof_skeleton()?;
+        p.lx.skip_ws();
+        if !p.lx.is_eof() {
+            return Err(p.err("unexpected trailing proof text"));
+        }
+        Ok(())
+    })();
+    p.lx.finish(result)
 }
 
 struct TreeParser<'a> {
