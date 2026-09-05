@@ -2,8 +2,8 @@
 
 A Rust port of the [Tamarin Prover](https://tamarin-prover.github.io/) with the goal
 of reproducing the Haskell prover's output byte-for-byte. Across the README's
-representative suite it is 4.3–88× faster than the most recent Tamarin
-release (median 19×), with 2.2–22× lower peak process-tree memory at one
+representative suite it is 4.6–116× faster than the most recent Tamarin
+release (median 23×), with 2.1–21× lower peak process-tree memory at one
 core.
 
 ## Important notes
@@ -43,10 +43,10 @@ See [License](#license) if you are interested in future prospects for redistribu
   a small documented cosmetic residue, enumerated theory-by-theory in
   `scripts/websweep_residual.txt` (77 files) and re-checked by a ≈69,600-page
   crawl sweep — see [Parity status](#parity-status).
-- **Performance:** 4.3–88× faster than the most recent Tamarin release
-  (1.12.0) across 1–16 cores (median 19×). At one core, peak process-tree
-  memory is 2.2–22× lower; at sixteen cores it ranges from 18% higher on
-  tiny `NSPK3` to 13× lower on `CCITT_X509_3` — see
+- **Performance:** 4.6–116× faster than the most recent Tamarin release
+  (1.12.0) across 1–16 cores (median 23×). At one core, peak process-tree
+  memory is 2.1–21× lower; at sixteen cores it ranges from 25% higher on
+  tiny `NSPK3` to 12.5× lower on `CCITT_X509_3` — see
   [Performance](#performance).
 - **Not yet ported:** observational equivalence (`--diff`) and the
   ProVerif / DeepSec export modules — see
@@ -194,49 +194,49 @@ the scripts/bench.sh header).
 
 | Theory | HS time | RS+HS time | RS time | HS memory | RS+HS memory | RS memory |
 |--------|--------:|-----------:|--------:|----------:|-------------:|----------:|
-| `NSPK3` | 4.9 s | 2.3 s (-53%) | **0.5 s (-90%)** | 105 MB | 92 MB (-12%) | **48 MB (-54%)** |
-| `Joux` | 22.2 s | not supported ([#871](https://github.com/tamarin-prover/tamarin-prover/issues/871), [#881](https://github.com/tamarin-prover/tamarin-prover/issues/881); see below) | **4.3 s (-81%)** | 294 MB | — | **77 MB (-74%)** |
-| `stateverif_left_right` | 47.6 s | 39.2 s (-18%) | **2.6 s (-95%)** | 1052 MB | 1143 MB (+9%) | **60 MB (-94%)** |
-| `Yubikey` | 66.4 s | 50.3 s (-24%) | **4.2 s (-94%)** | 426 MB | 378 MB (-11%) | **96 MB (-77%)** |
-| `mixvote_SmHh-multi-session` | 73.9 s | 53.8 s (-27%) | **3.6 s (-95%)** | 1051 MB | 1450 MB (+38%) | **61 MB (-94%)** |
-| `gcm` | 134.6 s | 134.8 s (+0%) | **9.4 s (-93%)** | 1492 MB | 1543 MB (+3%) | **117 MB (-92%)** |
-| `wireguard` | 166.1 s | not supported ([#871](https://github.com/tamarin-prover/tamarin-prover/issues/871), [#881](https://github.com/tamarin-prover/tamarin-prover/issues/881); see below) | **5.9 s (-96%)** | 2146 MB | — | **99 MB (-95%)** |
-| `CCITT_X509_3` | 574.3 s | 35.6 s (-94%) | **24.2 s (-96%)** | 4905 MB | 309 MB (-94%) | **306 MB (-94%)** |
+| `NSPK3` | 4.8 s | 2.2 s (-54%) | **0.4 s (-92%)** | 108 MB | 93 MB (-14%) | **51 MB (-53%)** |
+| `Joux` | 21.8 s | not supported ([#871](https://github.com/tamarin-prover/tamarin-prover/issues/871), [#881](https://github.com/tamarin-prover/tamarin-prover/issues/881); see below) | **4.0 s (-82%)** | 299 MB | — | **85 MB (-72%)** |
+| `stateverif_left_right` | 45.3 s | 37.9 s (-16%) | **2.2 s (-95%)** | 986 MB | 1246 MB (+26%) | **64 MB (-94%)** |
+| `Yubikey` | 66.5 s | 48.0 s (-28%) | **2.8 s (-96%)** | 414 MB | 371 MB (-10%) | **95 MB (-77%)** |
+| `mixvote_SmHh-multi-session` | 71.6 s | 51.4 s (-28%) | **3.0 s (-96%)** | 1041 MB | 1356 MB (+30%) | **63 MB (-94%)** |
+| `gcm` | 131.6 s | 129.4 s (-2%) | **6.3 s (-95%)** | 1460 MB | 1568 MB (+7%) | **116 MB (-92%)** |
+| `wireguard` | 161.7 s | not supported ([#871](https://github.com/tamarin-prover/tamarin-prover/issues/871), [#881](https://github.com/tamarin-prover/tamarin-prover/issues/881); see below) | **4.8 s (-97%)** | 2163 MB | — | **102 MB (-95%)** |
+| `CCITT_X509_3` | 562.4 s | 28.7 s (-95%) | **17.5 s (-97%)** | 4924 MB | 316 MB (-94%) | **312 MB (-94%)** |
 
 **4 cores**
 
 | Theory | HS time | RS+HS time | RS time | HS memory | RS+HS memory | RS memory |
 |--------|--------:|-----------:|--------:|----------:|-------------:|----------:|
-| `NSPK3` | 2.6 s | 1.8 s (-31%) | **0.4 s (-85%)** | 140 MB | 120 MB (-14%) | **117 MB (-16%)** |
-| `Joux` | 18.1 s | not supported ([#871](https://github.com/tamarin-prover/tamarin-prover/issues/871), [#881](https://github.com/tamarin-prover/tamarin-prover/issues/881); see below) | **4.2 s (-77%)** | 346 MB | — | **140 MB (-60%)** |
-| `stateverif_left_right` | 26.2 s | 34.6 s (+32%) | **1.6 s (-94%)** | 992 MB | 1258 MB (+27%) | **145 MB (-85%)** |
-| `Yubikey` | 48.0 s | 40.2 s (-16%) | **2.5 s (-95%)** | 425 MB | 389 MB (-8%) | **182 MB (-57%)** |
-| `mixvote_SmHh-multi-session` | 37.8 s | 33.6 s (-11%) | **1.5 s (-96%)** | 1053 MB | 1465 MB (+39%) | **144 MB (-86%)** |
-| `gcm` | 107.0 s | 86.0 s (-20%) | **4.3 s (-96%)** | 1477 MB | 1578 MB (+7%) | **219 MB (-85%)** |
-| `wireguard` | 107.7 s | not supported ([#871](https://github.com/tamarin-prover/tamarin-prover/issues/871), [#881](https://github.com/tamarin-prover/tamarin-prover/issues/881); see below) | **2.9 s (-97%)** | 2228 MB | — | **185 MB (-92%)** |
-| `CCITT_X509_3` | 236.9 s | 13.8 s (-94%) | **6.7 s (-97%)** | 9325 MB | 601 MB (-94%) | **640 MB (-93%)** |
+| `NSPK3` | 2.6 s | 1.5 s (-42%) | **0.3 s (-88%)** | 135 MB | 133 MB (-1%) | **125 MB (-7%)** |
+| `Joux` | 18.1 s | not supported ([#871](https://github.com/tamarin-prover/tamarin-prover/issues/871), [#881](https://github.com/tamarin-prover/tamarin-prover/issues/881); see below) | **3.9 s (-78%)** | 336 MB | — | **150 MB (-55%)** |
+| `stateverif_left_right` | 25.9 s | 34.7 s (+34%) | **1.4 s (-95%)** | 1048 MB | 1248 MB (+19%) | **154 MB (-85%)** |
+| `Yubikey` | 48.5 s | 39.9 s (-18%) | **2.2 s (-95%)** | 436 MB | 377 MB (-14%) | **184 MB (-58%)** |
+| `mixvote_SmHh-multi-session` | 37.2 s | 29.3 s (-21%) | **1.3 s (-97%)** | 1066 MB | 1489 MB (+40%) | **156 MB (-85%)** |
+| `gcm` | 91.3 s | 83.8 s (-8%) | **3.4 s (-96%)** | 1506 MB | 1605 MB (+7%) | **229 MB (-85%)** |
+| `wireguard` | 103.7 s | not supported ([#871](https://github.com/tamarin-prover/tamarin-prover/issues/871), [#881](https://github.com/tamarin-prover/tamarin-prover/issues/881); see below) | **2.3 s (-98%)** | 2213 MB | — | **198 MB (-91%)** |
+| `CCITT_X509_3` | 241.7 s | 12.3 s (-95%) | **5.0 s (-98%)** | 8829 MB | 553 MB (-94%) | **658 MB (-93%)** |
 
 **16 cores**
 
 | Theory | HS time | RS+HS time | RS time | HS memory | RS+HS memory | RS memory |
 |--------|--------:|-----------:|--------:|----------:|-------------:|----------:|
-| `NSPK3` | 2.6 s | 1.8 s (-31%) | **0.4 s (-85%)** | 196 MB | 235 MB (+20%) | **231 MB (+18%)** |
-| `Joux` | 19.3 s | not supported ([#871](https://github.com/tamarin-prover/tamarin-prover/issues/871), [#881](https://github.com/tamarin-prover/tamarin-prover/issues/881); see below) | **4.4 s (-77%)** | 395 MB | — | **262 MB (-34%)** |
-| `stateverif_left_right` | 25.9 s | 35.3 s (+36%) | **1.6 s (-94%)** | 1081 MB | 1197 MB (+11%) | **369 MB (-66%)** |
-| `Yubikey` | 45.0 s | 39.3 s (-13%) | **2.4 s (-95%)** | 466 MB | 588 MB (+26%) | **401 MB (-14%)** |
-| `mixvote_SmHh-multi-session` | 29.9 s | 26.7 s (-11%) | **1.4 s (-95%)** | 1100 MB | 1469 MB (+34%) | **402 MB (-63%)** |
-| `gcm` | 71.8 s | 76.0 s (+6%) | **3.4 s (-95%)** | 1563 MB | 1611 MB (+3%) | **487 MB (-69%)** |
-| `wireguard` | 84.5 s | not supported ([#871](https://github.com/tamarin-prover/tamarin-prover/issues/871), [#881](https://github.com/tamarin-prover/tamarin-prover/issues/881); see below) | **2.6 s (-97%)** | 2508 MB | — | **397 MB (-84%)** |
-| `CCITT_X509_3` | 220.2 s | 9.0 s (-96%) | **2.5 s (-99%)** | 11607 MB | 860 MB (-93%) | **891 MB (-92%)** |
+| `NSPK3` | 2.6 s | 1.7 s (-35%) | **0.4 s (-85%)** | 198 MB | 233 MB (+18%) | **248 MB (+25%)** |
+| `Joux` | 18.9 s | not supported ([#871](https://github.com/tamarin-prover/tamarin-prover/issues/871), [#881](https://github.com/tamarin-prover/tamarin-prover/issues/881); see below) | **3.9 s (-79%)** | 394 MB | — | **162 MB (-59%)** |
+| `stateverif_left_right` | 25.3 s | 31.5 s (+25%) | **1.3 s (-95%)** | 1044 MB | 1279 MB (+23%) | **388 MB (-63%)** |
+| `Yubikey` | 44.5 s | 37.3 s (-16%) | **2.2 s (-95%)** | 550 MB | 417 MB (-24%) | **370 MB (-33%)** |
+| `mixvote_SmHh-multi-session` | 28.9 s | 26.8 s (-7%) | **1.2 s (-96%)** | 1102 MB | 1468 MB (+33%) | **418 MB (-62%)** |
+| `gcm` | 76.1 s | 80.4 s (+6%) | **2.2 s (-97%)** | 1590 MB | 1647 MB (+4%) | **467 MB (-71%)** |
+| `wireguard` | 79.2 s | not supported ([#871](https://github.com/tamarin-prover/tamarin-prover/issues/871), [#881](https://github.com/tamarin-prover/tamarin-prover/issues/881); see below) | **2.1 s (-97%)** | 2327 MB | — | **333 MB (-86%)** |
+| `CCITT_X509_3` | 221.1 s | 8.2 s (-96%) | **1.9 s (-99%)** | 11420 MB | 891 MB (-92%) | **914 MB (-92%)** |
 
 <!-- BENCH:END -->
 
 Memory in the tables above is the largest simultaneous RSS sum across the
 prover's complete process tree, sampled every 20 ms; see the methodology note
 in the generated block. Across all theories and core counts the Rust port is
-4.3–88× faster than the 1.12.0 release (median 19×). At one core, peak
-memory is 2.2–22× lower. At sixteen cores the fixed worker-pool overhead is
-visible on small theories: memory ranges from 18% higher on `NSPK3` to 13×
+4.6–116× faster than the 1.12.0 release (median 23×). At one core, peak
+memory is 2.1–21× lower. At sixteen cores the fixed worker-pool overhead is
+visible on small theories: memory ranges from 25% higher on `NSPK3` to 12.5×
 lower on `CCITT_X509_3`. The smallest speed gains are on `Joux`, whose runtime
 is dominated by AC-heavy Maude queries both provers pay for equally.
 
