@@ -168,6 +168,23 @@ fn precompute_guarded_failures_use_the_ghc_exception_boundary() {
 }
 
 #[test]
+fn auto_sources_does_not_use_existential_source_lemmas_as_assumptions() {
+    if !maude_available() {
+        return;
+    }
+    let theory = fixture("guarded_existential_source.spthy");
+    let (code, stdout, stderr) = run_binary(&["--auto-sources"], &[&theory]);
+    assert_eq!(
+        code, 0,
+        "existential source annotation must not abort loading: {stderr}"
+    );
+    assert!(
+        stdout.contains("typing"),
+        "loaded theory was not rendered: {stdout}"
+    );
+}
+
+#[test]
 fn stored_terminal_replay_emits_a_state_for_each_node() {
     if !maude_available() {
         eprintln!("skipping: maude not on path");

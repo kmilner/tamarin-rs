@@ -855,17 +855,7 @@ fn gather_typing_assumptions(
 ) -> Result<Vec<std::sync::Arc<Guarded>>, ProveError> {
     let mut typing_assumptions = Vec::new();
     for (prior, prepared) in theory.lemmas().zip(prepared_lemmas) {
-        if !prior
-            .attributes
-            .iter()
-            .any(|a| matches!(a, crate::theory::LemmaAttr::Sources))
-        {
-            continue;
-        }
-        if !matches!(
-            prior.trace_quantifier,
-            crate::theory::TraceQuantifier::AllTraces
-        ) {
+        if !prior.is_source_assumption() {
             continue;
         }
         typing_assumptions.push(

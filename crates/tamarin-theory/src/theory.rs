@@ -191,6 +191,17 @@ pub struct Lemma {
     pub plaintext: String,
 }
 
+impl Lemma {
+    /// Only universal source lemmas can refine source cases.
+    pub(crate) fn is_source_assumption(&self) -> bool {
+        self.trace_quantifier == TraceQuantifier::AllTraces
+            && self
+                .attributes
+                .iter()
+                .any(|attr| matches!(attr, LemmaAttr::Sources))
+    }
+}
+
 /// HS `applyMacroInLemma` (lib/theory/src/Lemma.hs:83-88): the theory's macros
 /// applied to the formula, with the formula as it stood recorded as the
 /// original one.  HS runs it over every lemma of a closed theory

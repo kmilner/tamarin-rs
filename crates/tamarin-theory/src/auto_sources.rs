@@ -846,11 +846,7 @@ pub fn apply_auto_sources(
     // context whose typing assumptions are those lemmas and check ITS chains.
     let typing_asms: Vec<crate::guarded::Guarded> = elaborated
         .lemmas()
-        .filter(|l| {
-            l.attributes
-                .iter()
-                .any(|a| matches!(a, crate::theory::LemmaAttr::Sources))
-        })
+        .filter(|l| l.is_source_assumption())
         .map(|l| formula_to_guarded(&l.formula))
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| crate::prove::ProveError::Guarded(error.to_string()))?;
