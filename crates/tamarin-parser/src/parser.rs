@@ -5712,10 +5712,7 @@ impl<'a> Parser<'a> {
             .any(|(enabled, op)| enabled && self.try_term_operator(op).is_some())
             || {
                 let symbols = self.state.ac_fun_syms.clone();
-                symbols.iter().any(|name| {
-                    self.try_term_operator(BinOp::AcFct(tamarin_term::intern::intern_str(name)))
-                        .is_some()
-                })
+                symbols.iter().any(|name| self.try_kw(name))
             };
         self.lx = lexer;
         continuation
@@ -6147,7 +6144,10 @@ impl<'a> Parser<'a> {
             // the following token (`f(x) fg(y)` parsing as `f(f(x), g(y))` for
             // an AC symbol `f`); such input is not valid syntax in any theory
             // and errors here instead.
-            |p| p.try_term_operator(BinOp::AcFct(tamarin_term::intern::intern_str(&op))),
+            |p| {
+                p.try_kw(&op)
+                    .then(|| BinOp::AcFct(tamarin_term::intern::intern_str(&op)))
+            },
             Self::bin_op_term,
         )
     }
